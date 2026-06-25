@@ -1,0 +1,469 @@
+/* SettingsPanel — VS Code–style layout */
+
+.settings-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg-secondary);
+  color: var(--fg-primary);
+}
+
+/* Header */
+.settings-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 16px;
+  height: 35px;
+  background: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border-default);
+  flex-shrink: 0;
+}
+
+.settings-header-icon {
+  width: 16px;
+  height: 16px;
+  color: var(--accent-light);
+}
+
+.settings-header-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-primary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Content area */
+.settings-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0;
+  max-width: 600px;
+}
+
+/* Section groups */
+.settings-group {
+  padding: 16px;
+  border-bottom: 1px solid var(--border-default);
+}
+
+.settings-group:last-child {
+  border-bottom: none;
+}
+
+.settings-group-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  margin-bottom: 16px;
+}
+
+.settings-group-title svg {
+  width: 14px;
+  height: 14px;
+  color: var(--fg-muted);
+}
+
+/* Form fields */
+.settings-field {
+  margin-bottom: 16px;
+}
+
+.settings-field:last-child {
+  margin-bottom: 0;
+}
+
+.settings-label {
+  display: block;
+  font-size: 12px;
+  color: var(--fg-secondary);
+  margin-bottom: 6px;
+}
+
+.settings-label-hint {
+  font-size: 11px;
+  color: var(--fg-muted);
+  margin-left: 8px;
+  font-weight: 400;
+}
+
+/* Text inputs */
+.settings-input {
+  width: 100%;
+  padding: 8px 12px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--fg-primary);
+  font-size: 13px;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.settings-input:focus {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 1px var(--accent-primary);
+}
+
+.settings-input::placeholder {
+  color: var(--fg-muted);
+}
+
+.settings-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Textareas (agents.md / memory.md) */
+.settings-textarea {
+  width: 100%;
+  min-height: 140px;
+  padding: 8px 12px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--fg-primary);
+  font-size: 13px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  line-height: 1.5;
+  resize: vertical;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.settings-textarea:focus {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 1px var(--accent-primary);
+}
+
+/* Select dropdowns */
+.settings-select {
+  width: 100%;
+  padding: 8px 12px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--fg-primary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color var(--transition-fast);
+}
+
+.settings-select:focus {
+  border-color: var(--accent-primary);
+  outline: none;
+}
+
+/* Buttons */
+.settings-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.settings-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.settings-btn-primary {
+  background: var(--accent-primary);
+  color: #fff;
+  border: none;
+}
+
+.settings-btn-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.settings-btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.settings-btn-secondary {
+  background: var(--bg-input);
+  color: var(--fg-primary);
+  border: 1px solid var(--border-default);
+}
+
+.settings-btn-secondary:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--border-hover);
+}
+
+.settings-btn-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.settings-btn-full {
+  width: 100%;
+}
+
+.settings-inline-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.settings-inline-actions .settings-btn-full {
+  flex: 1;
+  width: auto;
+}
+
+.settings-stream-output {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  font-family: "Cascadia Code", "Fira Code", Consolas, monospace;
+  font-size: 12px;
+  color: var(--fg-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+/* Model list */
+.settings-models-list {
+  max-height: 180px;
+  overflow-y: auto;
+  margin-bottom: 12px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+}
+
+.settings-model-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-default);
+  transition: background var(--transition-fast);
+}
+
+.settings-model-item:last-child {
+  border-bottom: none;
+}
+
+.settings-model-item:hover {
+  background: var(--bg-hover);
+}
+
+.settings-model-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.settings-model-id {
+  font-size: 13px;
+  color: var(--fg-primary);
+  font-family: "Cascadia Code", "Fira Code", Consolas, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-model-name {
+  font-size: 11px;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-model-remove {
+  padding: 4px 8px;
+  color: var(--fg-muted);
+  font-size: 11px;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+}
+
+.settings-model-remove:hover {
+  color: var(--error);
+  background: rgba(241, 76, 76, 0.1);
+}
+
+/* Manual model add */
+.settings-add-model {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.settings-add-model .settings-input {
+  flex: 1;
+}
+
+/* Empty state */
+.settings-empty {
+  padding: 24px 16px;
+  text-align: center;
+  color: var(--fg-muted);
+  font-size: 13px;
+}
+
+.settings-empty-icon {
+  width: 32px;
+  height: 32px;
+  color: var(--fg-muted);
+  opacity: 0.5;
+  margin: 0 auto 8px;
+}
+
+/* Error message */
+.settings-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: rgba(241, 76, 76, 0.1);
+  border: 1px solid var(--error);
+  border-radius: var(--radius-sm);
+  margin-bottom: 12px;
+  font-size: 12px;
+  color: var(--error);
+}
+
+.settings-error-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+/* Success message */
+.settings-success {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: rgba(78, 201, 176, 0.1);
+  border: 1px solid var(--success);
+  border-radius: var(--radius-sm);
+  margin-bottom: 12px;
+  font-size: 12px;
+  color: var(--success);
+}
+
+.settings-success svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+/* Status indicator */
+.settings-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: var(--bg-input);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  color: var(--fg-secondary);
+  margin-bottom: 16px;
+}
+
+.settings-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--success);
+}
+
+.settings-status-dot.error {
+  background: var(--error);
+}
+
+/* Loading state */
+.settings-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--fg-muted);
+}
+
+.settings-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border-default);
+  border-top-color: var(--accent-primary);
+  border-radius: 50%;
+  animation: settings-spin 0.8s linear infinite;
+}
+
+@keyframes settings-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Divider */
+.settings-divider {
+  height: 1px;
+  background: var(--border-default);
+  margin: 16px 0;
+}
+
+/* Help text */
+.settings-help {
+  font-size: 11px;
+  color: var(--fg-muted);
+  margin-top: 6px;
+  line-height: 1.5;
+}
+
+/* Inline form group */
+.settings-inline-group {
+  display: flex;
+  gap: 12px;
+}
+
+.settings-inline-group .settings-field {
+  flex: 1;
+}
+
+@media (max-width: 768px) {
+  .settings-content {
+    max-width: none;
+  }
+
+  .settings-inline-group {
+    flex-direction: column;
+    gap: 0;
+  }
+
+  .settings-add-model {
+    flex-direction: column;
+  }
+
+  .settings-inline-actions {
+    flex-direction: column;
+  }
+}
+
+@media (max-width: 480px) {
+  .settings-group {
+    padding: 12px;
+  }
+
+  .settings-header {
+    padding: 0 12px;
+  }
+}

@@ -1,0 +1,53 @@
+/* Terminal Container - VS Code 风格 */
+
+.terminal-container {
+  width: 100%;
+  height: 100%;
+  background-color: var(--terminal-bg);
+  overflow: hidden;
+}
+
+/* xterm.js 内部样式 */
+.terminal-container .xterm {
+  height: 100%;
+  padding: 8px;
+}
+
+.terminal-container .xterm-viewport {
+  overflow-y: auto;
+}
+
+.terminal-container .xterm-screen {
+  display: block;
+}
+
+/* 滚动条样式 - 与全局统一 */
+.terminal-container .xterm-viewport::-webkit-scrollbar {
+  width: 10px;
+}
+
+.terminal-container .xterm-viewport::-webkit-scrollbar-thumb {
+  background: rgba(121, 121, 121, 0.4);
+}
+
+.terminal-container .xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background: rgba(121, 121, 121, 0.7);
+}
+
+.terminal-container .xterm-viewport::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* 终端选中样式 */
+.terminal-container .xterm-selection div {
+  background-color: var(--bg-selection) !important;
+}
+
+/* 手机端：缩小内边距与滚动条，给终端留出更多可视区域 */
+.terminal-container-compact .xterm {
+  padding: 2px 4px;
+}
+
+.terminal-container-compact .xterm-viewport::-webkit-scrollbar {
+  width: 6px;
+}
