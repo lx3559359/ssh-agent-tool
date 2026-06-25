@@ -6,6 +6,11 @@ import sys
 from pathlib import Path
 from typing import Sequence, TextIO
 
+from product.cli.runtime import (
+    configure_console_encoding,
+    default_reports_dir,
+    product_root,
+)
 from product.diagnose.executors import AgentApiExecutor, ExecutionResponse, FakeExecutor
 from product.diagnose.loaders import load_policy, load_skill
 from product.diagnose.models import DiagnosisPlan
@@ -17,6 +22,7 @@ SUPPORTED_PROFILES = {"linux-basic": "linux-basic-health"}
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    configure_console_encoding()
     args = _parser().parse_args(argv)
     if args.command == "diagnose":
         return _run_diagnose(args, stdout=sys.stdout, stderr=sys.stderr)
@@ -33,7 +39,7 @@ def _parser() -> argparse.ArgumentParser:
     diagnose.add_argument("--base-url", default="http://127.0.0.1:8000")
     diagnose.add_argument("--token", default="")
     diagnose.add_argument("--connection-id", default="")
-    diagnose.add_argument("--reports-dir", default="reports")
+    diagnose.add_argument("--reports-dir", default=None)
     diagnose.add_argument("--json", action="store_true")
     diagnose.add_argument("--yes", action="store_true")
     diagnose.add_argument("--fake", action="store_true")
@@ -99,7 +105,8 @@ def _run_diagnose(args: argparse.Namespace, *, stdout: TextIO, stderr: TextIO) -
     )
 
     try:
-        session = run_diagnosis(plan, executor, args.reports_dir)
+        reports_dir = Path(args.reports_dir) if args.reports_dir else default_reports_dir()
+        session = run_diagnosis(plan, executor, reports_dir)
     except RuntimeError as exc:
         return _emit_error(
             "ssh_execution_failed",
@@ -140,7 +147,7 @@ def _confirm(prompt: str, *, prompt_stream: TextIO) -> str:
 
 
 def _load_plan(host: str, profile_name: str) -> DiagnosisPlan:
-    root = Path(__file__).resolve().parents[1]
+    root = product_root()
     skill = load_skill(root / "skills" / profile_name / "checks.yaml")
     policy = load_policy(root / "policy" / "risk_rules.yaml")
     return build_plan(host, skill, policy)

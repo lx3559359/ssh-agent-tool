@@ -226,3 +226,26 @@ def test_cli_diagnose_agent_runtime_error_returns_execution_failed(
     assert payload["exit_code"] == 4
     assert payload["error"]["code"] == "ssh_execution_failed"
     assert payload["error"]["message"] == "SSH 命令接口调用失败：网络不可达"
+
+
+def test_cli_default_reports_dir_uses_user_data_location(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("SSH_AI_REPORTS_DIR", str(tmp_path / "user-reports"))
+
+    exit_code = main(
+        [
+            "diagnose",
+            "prod-1",
+            "--profile",
+            "linux-basic",
+            "--yes",
+            "--fake",
+            "--json",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+
+    assert exit_code == 0
+    assert Path(payload["report_path"]).parent == tmp_path / "user-reports"
+    assert Path(payload["report_path"]).exists()
