@@ -1,0 +1,29 @@
+version: 1
+default_mode: readonly
+command_timeout_seconds: 10
+safe_exact:
+  - "uptime"
+  - "df -hT"
+  - "free -h"
+  - "ps -eo pid,user,pcpu,pmem,stat,comm --sort=-pcpu | head -n 16"
+  - "journalctl -p err -n 80 --no-pager"
+  - "systemctl --failed --no-pager"
+  - "ss -tulpn | head -n 80"
+blocked_prefixes:
+  - "rm"
+  - "shred"
+  - "mkfs"
+  - "dd"
+  - "systemctl restart"
+  - "systemctl stop"
+  - "systemctl disable"
+  - "apt install"
+  - "apt remove"
+  - "yum install"
+  - "dnf install"
+  - "reboot"
+  - "shutdown"
+  - "poweroff"
+  - "iptables"
+  - "ufw"
+  - "firewall-cmd"
