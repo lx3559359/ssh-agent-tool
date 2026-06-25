@@ -72,6 +72,28 @@ approval-required plan.
 8. Write a Markdown report to `reports/<session-id>.md`.
 9. Print the report path and final summary.
 
+## Check Result Boundary
+
+A diagnosis session can complete even when one or more approved checks returns
+a non-zero exit code. The CLI records each check independently:
+
+- `completed`: the command ran to completion with exit code `0`.
+- `failed`: the command ran to completion with a non-zero exit code.
+- `timed_out`: the command exceeded its 10-second timeout.
+- `skipped`: the command was not run because it is unsupported for the target,
+  such as a systemd-specific check on a non-systemd host.
+
+Single-check `failed`, `timed_out`, or `skipped` results are evidence in the
+report and JSON output. They are not automatically fatal to the CLI process. If
+the SSH connection and execution lifecycle remained usable enough to complete
+the diagnosis session and write the report, the CLI can still exit `0`.
+
+Exit code `4` is reserved for fatal SSH execution failure where the CLI cannot
+establish or maintain SSH execution sufficiently to complete the diagnosis
+session. Examples include host connection failure before checks, authentication
+failure, transport failure, or connection loss that prevents continuing. If all
+checks fail because the SSH session is unusable, the CLI exits `4`.
+
 ## Systemd-Unavailable Hosts
 
 `journalctl` and `systemctl` are systemd-specific checks. If the target host
@@ -106,13 +128,47 @@ JSON output is supported for automation:
 ssh-ai diagnose prod-1 --profile linux-basic --json
 ```
 
+In `--json` mode, stdout must contain exactly one JSON object after diagnosis
+completion or fatal error. Human prompts may still be interactive before
+execution unless a future non-interactive flag such as `--yes` exists. Prompt
+text, approval text, progress messages, and human-readable errors go to stderr;
+the final JSON object goes to stdout.
+
+Required JSON fields:
+
+- `status`: `completed`, `rejected`, or `error`.
+- `exit_code`: integer process exit code.
+- `host`: resolved host/profile name from the command input.
+- `profile`: diagnosis profile, such as `linux-basic`.
+- `session_id`: session identifier used for report naming, or `null` if no
+  session could be created.
+- `report_path`: `reports/<session-id>.md`, or `null` if no report was written.
+- `summary`: final diagnosis summary string, or `null` for fatal errors before
+  diagnosis evidence exists.
+- `counts`: object with `completed`, `skipped`, `failed`, and `timed_out`
+  integer counts.
+- `checks`: array of per-check result objects.
+- `error`: `null` for completed diagnosis, otherwise an object with `code` and
+  `message`.
+
+Each item in `checks` includes:
+
+- `id`: check ID from `checks.yaml`.
+- `command`: exact approved command.
+- `status`: `completed`, `skipped`, `failed`, or `timed_out`.
+- `exit_code`: command exit code, or `null` when skipped or timed out before an
+  exit code is available.
+- `duration_ms`: command duration in milliseconds, or `null` if not run.
+- `reason`: check reason from `checks.yaml`.
+- `message`: short result explanation.
+
 ## Exit Codes
 
 | Code | Meaning |
 |---:|---|
-| 0 | diagnosis completed; skipped unsupported systemd checks are allowed |
+| 0 | diagnosis session completed and report/JSON was produced; individual checks may be completed, skipped, failed, or timed out |
 | 1 | user rejected plan |
 | 2 | host not found |
 | 3 | policy blocked command |
-| 4 | SSH execution failed |
+| 4 | fatal SSH execution failure prevented session completion; includes connection failure, authentication failure, transport failure, connection loss that prevents continuing, or all checks failing because the SSH session is unusable |
 | 5 | report generation failed |
