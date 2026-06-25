@@ -6,27 +6,34 @@ checks:
     command: uptime
     reason: load average and uptime
     risk: safe
+    timeout_seconds: 10
   - id: disk
     command: df -hT
     reason: disk pressure and filesystem types
     risk: safe
+    timeout_seconds: 10
   - id: memory
     command: free -h
     reason: memory and swap pressure
     risk: safe
+    timeout_seconds: 10
   - id: top_cpu
-    command: ps aux --sort=-%cpu | head -n 15
-    reason: top CPU consumers
+    command: ps -eo pid,user,pcpu,pmem,stat,comm --sort=-pcpu | head -n 16
+    reason: top CPU consumers without full command arguments
     risk: safe
+    timeout_seconds: 10
   - id: journal_errors
     command: journalctl -p err -n 80 --no-pager
     reason: recent system errors
     risk: safe
+    timeout_seconds: 10
   - id: failed_services
     command: systemctl --failed --no-pager
     reason: failed systemd units
     risk: safe
+    timeout_seconds: 10
   - id: listening_ports
-    command: ss -tulpn
-    reason: listening TCP and UDP services
+    command: ss -tulpn | head -n 80
+    reason: bounded listening TCP and UDP services
     risk: safe
+    timeout_seconds: 10
