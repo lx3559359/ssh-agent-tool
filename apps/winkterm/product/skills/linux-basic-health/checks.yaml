@@ -1,0 +1,32 @@
+version: 1
+name: linux-basic-health
+mode: readonly
+checks:
+  - id: uptime
+    command: uptime
+    reason: load average and uptime
+    risk: safe
+  - id: disk
+    command: df -hT
+    reason: disk pressure and filesystem types
+    risk: safe
+  - id: memory
+    command: free -h
+    reason: memory and swap pressure
+    risk: safe
+  - id: top_cpu
+    command: ps aux --sort=-%cpu | head -n 15
+    reason: top CPU consumers
+    risk: safe
+  - id: journal_errors
+    command: journalctl -p err -n 80 --no-pager
+    reason: recent system errors
+    risk: safe
+  - id: failed_services
+    command: systemctl --failed --no-pager
+    reason: failed systemd units
+    risk: safe
+  - id: listening_ports
+    command: ss -tulpn
+    reason: listening TCP and UDP services
+    risk: safe
