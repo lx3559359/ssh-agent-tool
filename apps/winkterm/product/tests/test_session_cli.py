@@ -1,8 +1,10 @@
+import json
 from pathlib import Path
 
 from product.diagnose.executors import ExecutionResponse, FakeExecutor
 from product.diagnose.models import CheckDefinition, DiagnosisPlan
 from product.diagnose.session import run_diagnosis
+from product.cli.ssh_ai import main
 
 
 def _check(check_id, command):
@@ -77,3 +79,150 @@ def test_run_diagnosis_maps_timeout_response(tmp_path):
     assert session.results[0].status == "timed_out"
     assert session.results[0].message == "命令执行超时"
     assert session.summary == "1 项检查完成，0 项失败，1 项超时"
+
+
+def test_cli_diagnose_fake_json_writes_plan_to_stderr_and_json_to_stdout(
+    tmp_path, capsys
+):
+    exit_code = main(
+        [
+            "diagnose",
+            "prod-1",
+            "--profile",
+            "linux-basic",
+            "--yes",
+            "--fake",
+            "--json",
+            "--reports-dir",
+            str(tmp_path),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+
+    assert exit_code == 0
+    assert payload["status"] == "completed"
+    assert payload["exit_code"] == 0
+    assert payload["host"] == "prod-1"
+    assert payload["profile"] == "linux-basic-health"
+    assert payload["report_path"]
+    assert Path(payload["report_path"]).exists()
+    assert payload["counts"]["completed"] == 7
+    assert "诊断计划" in captured.err
+    assert captured.out.strip().startswith("{")
+
+
+def test_cli_diagnose_rejects_when_user_declines(tmp_path, monkeypatch, capsys):
+    prompts = []
+    monkeypatch.setattr(
+        "builtins.input",
+        lambda prompt="": prompts.append(prompt) or "n",
+    )
+
+    exit_code = main(
+        [
+            "diagnose",
+            "prod-1",
+            "--profile",
+            "linux-basic",
+            "--fake",
+            "--json",
+            "--reports-dir",
+            str(tmp_path),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+
+    assert exit_code == 1
+    assert payload["status"] == "error"
+    assert payload["exit_code"] == 1
+    assert payload["error"]["message"] == "用户取消执行诊断计划"
+    assert prompts == [""]
+    assert "是否执行以上只读诊断计划？[y/N]" in captured.err
+
+
+def test_cli_diagnose_requires_token_and_connection_id_without_fake(tmp_path, capsys):
+    exit_code = main(
+        [
+            "diagnose",
+            "prod-1",
+            "--profile",
+            "linux-basic",
+            "--yes",
+            "--json",
+            "--reports-dir",
+            str(tmp_path),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+
+    assert exit_code == 2
+    assert "非 fake 模式必须提供 --token 和 --connection-id" in captured.err
+    assert payload["error"]["message"] == "非 fake 模式必须提供 --token 和 --connection-id"
+
+
+def test_cli_diagnose_rejects_unsupported_profile(tmp_path, capsys):
+    exit_code = main(
+        [
+            "diagnose",
+            "prod-1",
+            "--profile",
+            "ubuntu-full",
+            "--yes",
+            "--fake",
+            "--json",
+            "--reports-dir",
+            str(tmp_path),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+
+    assert exit_code == 2
+    assert "不支持的诊断配置" in captured.err
+    assert payload["error"]["message"] == "不支持的诊断配置：ubuntu-full"
+
+
+def test_cli_diagnose_agent_runtime_error_returns_execution_failed(
+    tmp_path, monkeypatch, capsys
+):
+    class BrokenExecutor:
+        def __init__(self, base_url, connection_id, *, token=None):
+            pass
+
+        def run(self, command, timeout_seconds):
+            raise RuntimeError("SSH 命令接口调用失败：网络不可达")
+
+    monkeypatch.setattr("product.cli.ssh_ai.AgentApiExecutor", BrokenExecutor)
+
+    exit_code = main(
+        [
+            "diagnose",
+            "prod-1",
+            "--profile",
+            "linux-basic",
+            "--yes",
+            "--json",
+            "--token",
+            "secret",
+            "--connection-id",
+            "conn-1",
+            "--reports-dir",
+            str(tmp_path),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+
+    assert exit_code == 4
+    assert payload["status"] == "error"
+    assert payload["exit_code"] == 4
+    assert payload["error"]["code"] == "ssh_execution_failed"
+    assert payload["error"]["message"] == "SSH 命令接口调用失败：网络不可达"
