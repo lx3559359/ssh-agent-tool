@@ -21,6 +21,12 @@ venv/
 .next/
 coverage/
 
+# Product packaging outputs
+/apps/winkterm/product/build/
+/apps/winkterm/product/dist/
+/apps/winkterm/product/package-smoke-reports/
+/apps/winkterm/product/preview-reports/
+
 # Logs
 *.log
 logs
