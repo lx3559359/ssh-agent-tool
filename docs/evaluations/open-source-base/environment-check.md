@@ -1,4 +1,4 @@
-﻿# Environment Check
+# Environment Check
 
 Date: 2026-06-25
 Machine: Windows workspace in the project worktree.
