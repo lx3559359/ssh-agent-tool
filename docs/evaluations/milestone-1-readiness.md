@@ -40,3 +40,9 @@ The next implementation slice should add code inside `apps/winkterm/product/` to
 ## Deferred Gates
 
 Docker Compose packaging validation remains deferred until BIOS/UEFI virtualization is enabled and Docker Desktop's Linux engine is healthy. Do not mark Docker packaging as passed until `docker compose config`, `docker compose up -d`, and container health/status checks pass in that environment.
+
+## Milestone 2 Follow-up
+
+截至 2026-06-25，fake-mode 诊断闭环已完成：`ssh-ai diagnose` 可以加载 `linux-basic-health` YAML、执行策略评估、渲染审批计划、通过 FakeExecutor 完成 7 项只读检查、生成中文 JSON 摘要与 Markdown 报告。该闭环已由 `product/tests` 和 fake smoke 验证覆盖。
+
+真实 SSH smoke 与 Windows `.exe` 打包仍为后续工作；在这些验证完成前，不应把真实远端执行路径或 Windows 桌面交付物标记为已完成。
