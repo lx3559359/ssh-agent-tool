@@ -3,8 +3,15 @@ from pathlib import Path
 import pytest
 
 from product.diagnose.loaders import load_policy, load_skill
-from product.diagnose.models import CheckDefinition, PolicyRules, SkillDefinition
+from product.diagnose.models import (
+    CheckDefinition,
+    CheckResult,
+    DiagnosisSession,
+    PolicyRules,
+    SkillDefinition,
+)
 from product.diagnose.planner import build_plan, render_plan_text
+from product.diagnose.reports import render_markdown_report
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -81,3 +88,64 @@ def test_build_plan_rejects_disallowed_commands_and_timeout_mismatch(
 ):
     with pytest.raises(ValueError, match=message):
         build_plan("prod-web-01", skill, policy)
+
+
+def test_render_markdown_report_uses_chinese_sections_and_preserves_output():
+    plan = build_plan("prod-1", _skill([_check("uptime")]), _policy(safe_exact=["uptime"]))
+    session = DiagnosisSession(
+        session_id="session-1",
+        host="prod-1",
+        profile="linux-basic-health",
+        plan=plan,
+        summary="1 项检查完成，0 项失败，0 项超时",
+        results=[
+            CheckResult(
+                id="uptime",
+                command="uptime",
+                status="completed",
+                reason="load average and uptime",
+                timeout_seconds=10,
+                exit_code=0,
+                duration_ms=25,
+                stdout=" 12:00:00 up 10 days\n",
+                message="执行成功",
+            )
+        ],
+    )
+
+    report = render_markdown_report(session)
+
+    assert report.startswith("# 诊断报告")
+    assert "## 执行计划" in report
+    assert "## 证据" in report
+    assert "## 后续检查" in report
+    assert "主机：prod-1" in report
+    assert "概要：1 项检查完成，0 项失败，0 项超时" in report
+    assert "```console\nuptime\n```" in report
+    assert "```text\n 12:00:00 up 10 days\n\n```" in report
+
+
+def test_render_markdown_report_truncates_long_stdout():
+    plan = build_plan("prod-1", _skill([_check("uptime")]), _policy(safe_exact=["uptime"]))
+    session = DiagnosisSession(
+        session_id="session-1",
+        host="prod-1",
+        profile="linux-basic-health",
+        plan=plan,
+        results=[
+            CheckResult(
+                id="uptime",
+                command="uptime",
+                status="completed",
+                reason="load average and uptime",
+                timeout_seconds=10,
+                exit_code=0,
+                stdout="x" * 13000,
+            )
+        ],
+    )
+
+    report = render_markdown_report(session)
+
+    assert "输出已截断" in report
+    assert len(report) < 12500
