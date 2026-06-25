@@ -1,6 +1,7 @@
 .worktrees/
 
-# Local upstream clones used during evaluation
+# Local upstream clones used during evaluation and runtime validation
+/external
 /external/
 
 # Local environment and secrets
@@ -10,6 +11,7 @@
 *.local
 
 # Dependency/build outputs
+node_modules
 node_modules/
 .venv/
 venv/
@@ -21,4 +23,5 @@ coverage/
 
 # Logs
 *.log
+logs
 logs/
