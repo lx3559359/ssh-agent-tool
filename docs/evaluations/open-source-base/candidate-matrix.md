@@ -4,8 +4,8 @@ Scoring: 1 = poor, 3 = usable, 5 = strong. Scores are evidence-backed only for e
 
 | Candidate | License | Local Build | SSH/PTTY | Agent API | Skills | MCP | Extensibility | Windows Fit | Fork Risk | Total | Recommendation |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| WinkTerm | MIT | 2 | 5 | 5 | 5 | 2 | 4 | 2 | 3 | 28 | Primary candidate for Task 2 evidence: strong SSH/PTTY and Agent API base, but local runtime is blocked by missing Docker/Python/Node and MCP is not native. |
-| Chaterm | GPL-3.0 | 1 | 5 | 4 | 5 | 5 | 4 | 2 | 1 | 27 | Product and architecture reference. Static evidence is strong for SSH/PTTY, Agent, Skills, and MCP, but runtime is blocked by missing Node/npm and direct fork risk is high because of GPL-3.0 and broad Electron app scope. |
+| WinkTerm | MIT | 2 | 5 | 5 | 5 | 2 | 4 | 2 | 3 | 28 | Selected primary base for the first fork. Static evidence shows strong SSH/PTTY and Agent API reuse; runtime validation remains required after installing Docker, Python, Node.js, and npm, and MCP must be added as an integration layer. |
+| Chaterm | GPL-3.0 | 1 | 5 | 4 | 5 | 5 | 4 | 2 | 1 | 27 | Product and architecture reference only. Static evidence is strong for SSH/PTTY, Agent, Skills, and MCP, but runtime is blocked by missing Node/npm and direct fork risk is high because of GPL-3.0 and broad Electron app scope. |
 | mcp-ssh-manager | MIT | 1 | 4 | 4 | 1 | 5 | 4 | 3 | 4 | 26 | Supporting component only: reuse MCP tool schema, SFTP/sync, health checks, tool activation, and audit ideas; not a primary product base because it is a broad MCP utility without product UI or built-in skill workflow. |
 | mcp-ssh-orchestrator | Apache-2.0 | 1 | 3 | 4 | 2 | 5 | 4 | 2 | 4 | 25 | Supporting component only: reuse deny-by-default policy, `ssh_plan`, structured denials, host/tag resources, async task pattern, and audit design; not a primary product base because it intentionally omits PTY, file transfer, and product UI. |
 
