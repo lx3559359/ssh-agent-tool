@@ -3,6 +3,8 @@ from pathlib import Path
 import pytest
 
 from product.diagnose.loaders import load_policy, load_skill
+from product.diagnose.models import PolicyRules
+from product.diagnose.policy import evaluate_command
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -121,3 +123,57 @@ def test_load_policy_wraps_malformed_yaml(tmp_path):
 
     with pytest.raises(ValueError, match="YAML"):
         load_policy(path)
+
+
+def test_policy_evaluator_allows_exact_safe_command():
+    policy = load_policy(POLICY_PATH)
+
+    decision = evaluate_command("uptime", policy)
+
+    assert decision.allowed is True
+    assert decision.reason == "safe_exact"
+
+
+def test_policy_evaluator_blocked_prefix_takes_priority_over_unknown():
+    policy = load_policy(POLICY_PATH)
+
+    decision = evaluate_command("rm -rf /tmp/example", policy)
+
+    assert decision.allowed is False
+    assert decision.reason == "blocked_prefix:rm"
+
+
+def test_policy_evaluator_does_not_block_similar_prefix_commands():
+    policy = load_policy(POLICY_PATH)
+
+    rmdir_decision = evaluate_command("rmdir /tmp/x", policy)
+    restartx_decision = evaluate_command("systemctl restartx nginx", policy)
+
+    assert rmdir_decision.allowed is False
+    assert rmdir_decision.reason == "not_in_safe_exact"
+    assert restartx_decision.allowed is False
+    assert restartx_decision.reason == "not_in_safe_exact"
+
+
+def test_policy_evaluator_blocked_prefix_takes_priority_over_safe_exact():
+    policy = PolicyRules(
+        version=1,
+        default_mode="readonly",
+        command_timeout_seconds=10,
+        safe_exact=["rm -rf /tmp/example"],
+        blocked_prefixes=["rm"],
+    )
+
+    decision = evaluate_command("rm -rf /tmp/example", policy)
+
+    assert decision.allowed is False
+    assert decision.reason == "blocked_prefix:rm"
+
+
+def test_policy_evaluator_rejects_unknown_command():
+    policy = load_policy(POLICY_PATH)
+
+    decision = evaluate_command("whoami", policy)
+
+    assert decision.allowed is False
+    assert decision.reason == "not_in_safe_exact"
