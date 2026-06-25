@@ -1,7 +1,7 @@
-# Environment Check
+﻿# Environment Check
 
 Date: 2026-06-25
-Machine: Windows workspace at `F:\SSH工具开发`
+Machine: Windows workspace in the project worktree.
 
 ## Required Tools
 
