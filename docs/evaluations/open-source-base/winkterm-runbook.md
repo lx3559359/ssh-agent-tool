@@ -95,7 +95,7 @@ Result:
 
 - Status: BLOCKED.
 - Backend start command: README documents `python -m uvicorn backend.main:app --reload --port 8000`.
-- Error output: `Get-Command python` resolves to `C:\Users\luojixiang1\AppData\Local\Microsoft\WindowsApps\python.exe`, but `python --version` exits with `LASTEXITCODE=9009`; Task 1 also recorded no usable Python runtime.
+- Error output: `Get-Command python` resolves to the Windows Store Python shim (`%LOCALAPPDATA%\Microsoft\WindowsApps\python.exe`), but `python --version` exits with `LASTEXITCODE=9009`; Task 1 also recorded no usable Python runtime.
 - Workaround: install Python 3.12+, then run `python -m venv .venv`, activate it, install `backend/requirements.txt`, and start Uvicorn.
 
 Backend stack evidence:
@@ -129,12 +129,12 @@ Frontend stack evidence:
 
 | Capability | Result | Evidence |
 |---|---|---|
-| SSH connection management | YES | README lists SSH remote connections; `backend/api/agent_routes.py` has `GET/POST/PUT/DELETE /api/agent/ssh/connections[/{conn_id}]`; `backend/ssh/connection_manager.py` persists profiles in `~/.winkterm/config.json` and masks secrets. |
-| PTY terminal | YES | README describes a shared PTY session; `backend/terminal/pty_manager.py` uses `pywinpty` on Windows and `ptyprocess` on Unix; `frontend/package.json` uses xterm.js; `backend/ssh/paramiko_channel.py` adapts Paramiko shells to the PTY manager interface. |
-| SFTP/file transfer | YES | `backend/api/agent_routes.py` exposes `/api/agent/ssh/{conn_id}/files`, `/upload`, `/download`, `/directories`, and `/paths`; `backend/ssh/file_transfer.py` uses Paramiko SFTP for list/read/write/upload/download/delete. |
-| Agent API | YES | `backend/api/agent_routes.py` declares `prefix="/api/agent"` and routes for `/terminals`, `/terminals/{id}/exec`, `/terminals/{id}/input`, `/terminals/{id}/snapshot`, `/ssh/{conn_id}/run`, async jobs, and event streams. |
-| Skill support | YES | `agent-skill/SKILL.md` exists with frontmatter `name: winkterm-remote`; `backend/api/agent_routes.py` serves `/api/agent/skill.md`, `/api/agent/http.md`, and `/api/agent/install.md`; README documents downloading a raw skill from `/api/agent/skill.md`. |
-| OpenAI-compatible model provider | YES | README and `.env.example` document `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENAI_BASE_URL`, and `MODEL_NAME`; `backend/agent/core/builder.py` imports `ChatOpenAI` and `ChatAnthropic`; `backend/config.py` labels the LLM settings as OpenAI-compatible. |
+| SSH connection management | STATIC YES | README lists SSH remote connections; `backend/api/agent_routes.py` has `GET/POST/PUT/DELETE /api/agent/ssh/connections[/{conn_id}]`; `backend/ssh/connection_manager.py` persists profiles in `~/.winkterm/config.json` and masks secrets. |
+| PTY terminal | STATIC YES | README describes a shared PTY session; `backend/terminal/pty_manager.py` uses `pywinpty` on Windows and `ptyprocess` on Unix; `frontend/package.json` uses xterm.js; `backend/ssh/paramiko_channel.py` adapts Paramiko shells to the PTY manager interface. |
+| SFTP/file transfer | STATIC YES | `backend/api/agent_routes.py` exposes `/api/agent/ssh/{conn_id}/files`, `/upload`, `/download`, `/directories`, and `/paths`; `backend/ssh/file_transfer.py` uses Paramiko SFTP for list/read/write/upload/download/delete. |
+| Agent API | STATIC YES | `backend/api/agent_routes.py` declares `prefix="/api/agent"` and routes for `/terminals`, `/terminals/{id}/exec`, `/terminals/{id}/input`, `/terminals/{id}/snapshot`, `/ssh/{conn_id}/run`, async jobs, and event streams. |
+| Skill support | STATIC YES | `agent-skill/SKILL.md` exists with frontmatter `name: winkterm-remote`; `backend/api/agent_routes.py` serves `/api/agent/skill.md`, `/api/agent/http.md`, and `/api/agent/install.md`; README documents downloading a raw skill from `/api/agent/skill.md`. |
+| OpenAI-compatible model provider | STATIC YES | README and `.env.example` document `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENAI_BASE_URL`, and `MODEL_NAME`; `backend/agent/core/builder.py` imports `ChatOpenAI` and `ChatAnthropic`; `backend/config.py` labels the LLM settings as OpenAI-compatible. |
 | Windows local run feasibility | BLOCKED | Source includes Windows PTY support through `pywinpty` and README requires Python 3.12+ and Node.js 20+, but this machine lacks usable Python, Node.js/npm, and Docker, so no backend/frontend/container runtime could be started. |
 | Fork complexity | MEDIUM | The repository is modular (`backend`, `frontend`, `cli`, `agent-skill`, `desktop`), but product behavior spans FastAPI routes, WebSocket/PTY sessions, Paramiko SSH, Next.js UI, npm CLI, and PyInstaller desktop packaging. |
 
