@@ -42,6 +42,13 @@ def test_load_policy_matches_skill_commands():
     assert "systemctl restart" in policy.blocked_prefixes
 
 
+def test_load_skill_uses_chinese_user_visible_reasons():
+    skill = load_skill(SKILL_PATH)
+
+    assert all(_contains_cjk(check.reason) for check in skill.checks)
+    assert "load average" not in {check.reason for check in skill.checks}
+
+
 def test_load_skill_rejects_non_readonly_mode(tmp_path):
     path = tmp_path / "checks.yaml"
     path.write_text(
@@ -177,3 +184,7 @@ def test_policy_evaluator_rejects_unknown_command():
 
     assert decision.allowed is False
     assert decision.reason == "not_in_safe_exact"
+
+
+def _contains_cjk(value: str) -> bool:
+    return any("\u4e00" <= char <= "\u9fff" for char in value)
