@@ -1,7 +1,7 @@
 .worktrees/
 
 # Local upstream clones used during evaluation
-external/
+/external/
 
 # Local environment and secrets
 .env

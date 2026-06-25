@@ -8,14 +8,14 @@ Machine: Windows workspace at `F:\SSH工具开发`
 | Tool | Command | Required For | Installed Version | Status | Notes |
 |---|---|---|---|---|---|
 | Git | `git --version` | cloning repositories | `git version 2.54.0.windows.1` | PASS | Available for cloning repositories and committing evaluation notes. |
-| Node.js | `node --version` | web/desktop builds | MISSING | MISSING | Command error: `node : The term 'node' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again.` |
-| npm | `npm --version` | Node dependencies | MISSING | MISSING | Command error: `npm : The term 'npm' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again.` |
-| pnpm | `pnpm --version` | Chaterm/WinkTerm if required | MISSING | MISSING | Command error: `pnpm : The term 'pnpm' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again.` |
-| Python | `python --version` | WinkTerm backend if Python-based | MISSING | MISSING | Exact command printed no stdout/stderr and exited non-zero; follow-up showed `LASTEXITCODE=9009` and `Get-Command python` resolves to `C:\Users\luojixiang1\AppData\Local\Microsoft\WindowsApps\python.exe`, the Windows Store app execution alias. |
-| Docker | `docker --version` | Docker-based quickstart | MISSING | MISSING | Command error: `docker : The term 'docker' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again.` Docker Desktop CLI is not available on PATH. |
-| Docker Compose | `docker compose version` | Docker-based quickstart | MISSING | MISSING | Command error: `docker : The term 'docker' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again.` Docker Desktop CLI is not available on PATH. |
-| Rust | `rustc --version` | Tauri/Rust candidates | MISSING | MISSING | Command error: `rustc : The term 'rustc' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again.` |
-| Go | `go version` | Go MCP candidates | MISSING | MISSING | Command error: `go : The term 'go' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again.` |
+| Node.js | `node --version` | web/desktop builds | MISSING | MISSING | Command not found; see details below. |
+| npm | `npm --version` | Node dependencies | MISSING | MISSING | Command not found; see details below. |
+| pnpm | `pnpm --version` | Chaterm/WinkTerm if required | MISSING | MISSING | Command not found; see details below. |
+| Python | `python --version` | WinkTerm backend if Python-based | MISSING | MISSING | Windows Store app execution alias found, but no usable Python runtime; see details below. |
+| Docker | `docker --version` | Docker-based quickstart | MISSING | MISSING | Docker CLI not found on PATH; see details below. |
+| Docker Compose | `docker compose version` | Docker-based quickstart | MISSING | MISSING | Docker CLI not found on PATH; see details below. |
+| Rust | `rustc --version` | Tauri/Rust candidates | MISSING | MISSING | Command not found; see details below. |
+| Go | `go version` | Go MCP candidates | MISSING | MISSING | Command not found; see details below. |
 
 ## Summary
 
@@ -81,7 +81,7 @@ LASTEXITCODE=9009
 `Get-Command python` resolves to:
 
 ```text
-C:\Users\luojixiang1\AppData\Local\Microsoft\WindowsApps\python.exe
+%LOCALAPPDATA%\Microsoft\WindowsApps\python.exe
 ```
 
 ### `docker --version`
