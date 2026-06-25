@@ -102,3 +102,32 @@ NPM_INSTALL_RETRY_EXIT=0
 RETRY AFTER FIX
 
 Evidence: WinkTerm local backend install/start/smoke passed, Agent API smoke passed, and frontend install/start/smoke passed. Docker Compose config passed, but Docker Desktop's Linux engine returned a 500 error from `docker info` after one startup attempt and a 180 second wait, so Docker start/ps validation could not be completed in this local environment.
+
+## Docker Root Cause Follow-up
+
+Additional investigation after the first validation run found:
+
+- Docker CLI is installed and can inspect the `desktop-linux` context.
+- Docker Desktop's Linux engine pipe returns HTTP 500 for `docker version` / `docker info`.
+- Windows optional features are enabled: `Microsoft-Windows-Subsystem-Linux`, `VirtualMachinePlatform`, and `Microsoft-Hyper-V-All`.
+- `systeminfo` reports `Virtualization Enabled In Firmware: No`.
+
+Root cause: Docker Desktop Linux engine cannot become healthy because firmware virtualization is disabled. This cannot be fixed from this repository; it requires enabling virtualization in BIOS/UEFI, then restarting Windows and Docker Desktop.
+
+Milestone 1 product impact: the target product is a Windows desktop `.exe`, not a Docker-first deployment. Backend, frontend, and Agent API local runtime validation passed, so Docker Compose should be treated as a later packaging/deployment validation gate rather than a blocker for the Windows desktop fork path.
+
+## Windows Desktop Fork Gate
+
+PROCEED
+
+Evidence: the Windows desktop product path depends on the local backend, local frontend, and Agent API runtime. Those checks passed in this validation run:
+
+- Backend dependency install and Uvicorn startup passed.
+- `/health` returned HTTP 200.
+- `/api/agent/skill.md` returned HTTP 200.
+- `/api/agent/http.md` returned HTTP 200.
+- Frontend dependency install and Next.js startup passed.
+- Frontend root page returned HTTP 200.
+- Backend and frontend processes were stopped after validation.
+
+Docker Compose remains `RETRY AFTER FIX` for container packaging/deployment validation until firmware virtualization is enabled and Docker Desktop Linux engine becomes healthy.

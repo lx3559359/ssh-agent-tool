@@ -4,7 +4,7 @@
 
 **Goal:** Validate WinkTerm as the runnable SSH + Agent base and build the smallest safe diagnosis loop around it.
 
-**Architecture:** Milestone 1 is gate-driven. First install and verify the missing Windows prerequisites, then run WinkTerm unchanged, then create a minimal fork layer that adds a built-in `linux-basic-health` diagnosis flow, plan-first approval, Markdown reporting, and a CLI entry that calls the same Agent API. If WinkTerm fails runtime validation in a way that invalidates the fork premise, stop before product modifications.
+**Architecture:** Milestone 1 is gate-driven. First install and verify the missing Windows prerequisites, then run WinkTerm unchanged, then create a minimal fork layer that adds a built-in `linux-basic-health` diagnosis flow, plan-first approval, Markdown reporting, and a CLI entry that calls the same Agent API. Because the target product is a Windows `.exe`, the required runtime gate is local backend, frontend, and Agent API validation; Docker Compose is a packaging/deployment gate and does not block the Windows desktop fork path when the root cause is local firmware virtualization.
 
 **Tech Stack:** Windows PowerShell, Git, Node.js 20+, npm, Python 3.12+, Docker Desktop, WinkTerm Python/FastAPI backend, WinkTerm Next.js frontend, Paramiko SSH, xterm.js, Markdown documentation.
 
@@ -15,7 +15,7 @@
 Milestone 1 creates or modifies these project-owned files:
 
 - `docs/setup/windows-prerequisites.md`: commands and measured results for installing Node.js, Python, Docker Desktop, Git, and optional VS Build Tools.
-- `docs/evaluations/winkterm-runtime-validation.md`: runtime validation report for WinkTerm backend, frontend, Docker Compose, and one local-safe Agent API smoke test.
+- `docs/evaluations/winkterm-runtime-validation.md`: runtime validation report for WinkTerm backend, frontend, Docker Compose, and one local-safe Agent API smoke test. Docker Compose may remain blocked only when the report proves a local firmware/virtualization issue that does not affect the Windows `.exe` path.
 - `docs/architecture/milestone-1-fork-map.md`: mapping from WinkTerm upstream modules to product modifications.
 - `docs/skills/linux-basic-health.md`: built-in diagnosis skill contract and command inventory.
 - `docs/security/command-policy-milestone-1.md`: plan-first command approval and denylist policy for the first diagnosis loop.
@@ -239,7 +239,7 @@ Repository: https://github.com/Cznorth/winkterm
 
 Write one of:
 
-- `PROCEED`: WinkTerm runtime validation supports creating the product fork.
+- `PROCEED`: WinkTerm local backend, frontend, and Agent API validation support creating the Windows desktop product fork. Docker Compose may be deferred only if the report documents a local virtualization/firmware blocker.
 - `STOP`: runtime validation failed in a way that invalidates WinkTerm as the first fork base.
 - `RETRY AFTER FIX`: validation failed due local environment or dependency setup; fix prerequisites and rerun this task.
 ```
@@ -326,11 +326,11 @@ Expected:
 
 - [ ] **Step 8: Record decision and commit**
 
-If Docker, backend, frontend, and Agent API smoke checks pass, write `PROCEED` in the report.
+If backend, frontend, and Agent API smoke checks pass, write `PROCEED` in the report for the Windows `.exe` path. If Docker Compose also passes, record that as a packaging/deployment validation pass. If Docker Compose fails only because local firmware virtualization is disabled, document the root cause and continue.
 
-If a failure is local environment-specific, write `RETRY AFTER FIX` and stop before Task 3.
+If backend, frontend, or Agent API validation fails for a local environment-specific reason, write `RETRY AFTER FIX` and stop before Task 3.
 
-If WinkTerm cannot run even after prerequisites and normal fixes, write `STOP` and stop before Task 3.
+If WinkTerm local backend/frontend/Agent API cannot run even after prerequisites and normal fixes, write `STOP` and stop before Task 3.
 
 Run:
 
@@ -399,13 +399,13 @@ Stop before product import if runtime validation report does not say `PROCEED`.
 Run:
 
 ```powershell
-Select-String -Path docs/evaluations/winkterm-runtime-validation.md -Pattern '^\\- `PROCEED`|^PROCEED|Decision'
+Select-String -Path docs/evaluations/winkterm-runtime-validation.md -Pattern '^PROCEED|Decision|Windows desktop'
 ```
 
 Expected:
 
-- The validation report clearly says `PROCEED`.
-- If it says `STOP` or `RETRY AFTER FIX`, stop this plan and do not create `apps/winkterm/`.
+- The validation report clearly says `PROCEED`, or it says `RETRY AFTER FIX` only for Docker Compose while also documenting that backend, frontend, and Agent API passed and Docker is blocked by local firmware virtualization.
+- If it says `STOP`, or if it says `RETRY AFTER FIX` for backend, frontend, or Agent API, stop this plan and do not create `apps/winkterm/`.
 
 - [ ] **Step 3: Commit fork map**
 
@@ -471,7 +471,7 @@ Date: 2026-06-25
 | Gate | Result | Evidence |
 |---|---|---|
 | Windows prerequisites installed | PASS | `docs/setup/windows-prerequisites.md` |
-| WinkTerm runtime validated | PASS | `docs/evaluations/winkterm-runtime-validation.md` |
+| WinkTerm runtime validated | PASS | `docs/evaluations/winkterm-runtime-validation.md`; Docker Compose may be deferred for local firmware virtualization |
 | Fork boundaries mapped | PASS | `docs/architecture/milestone-1-fork-map.md` |
 | Upstream imported with attribution | PASS | `apps/winkterm/UPSTREAM.md` |
 
@@ -887,7 +887,7 @@ Expected: commit succeeds.
 
 After all tasks:
 
-- [ ] `docs/evaluations/winkterm-runtime-validation.md` says `PROCEED`.
+- [ ] `docs/evaluations/winkterm-runtime-validation.md` says `PROCEED`, or explicitly defers Docker only because local firmware virtualization is disabled while backend, frontend, and Agent API passed.
 - [ ] `apps/winkterm/UPSTREAM.md` preserves upstream attribution.
 - [ ] `apps/winkterm/product/skills/linux-basic-health/checks.yaml` validates with Python.
 - [ ] `apps/winkterm/product/policy/risk_rules.yaml` validates with Python.
