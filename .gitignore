@@ -1,1 +1,24 @@
 .worktrees/
+
+# Local upstream clones used during evaluation
+external/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.local
+
+# Dependency/build outputs
+node_modules/
+.venv/
+venv/
+dist/
+build/
+out/
+.next/
+coverage/
+
+# Logs
+*.log
+logs/
