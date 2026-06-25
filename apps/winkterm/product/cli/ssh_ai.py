@@ -23,7 +23,10 @@ SUPPORTED_PROFILES = {"linux-basic": "linux-basic-health"}
 
 def main(argv: Sequence[str] | None = None) -> int:
     configure_console_encoding()
-    args = _parser().parse_args(argv)
+    raw_args = list(sys.argv[1:] if argv is None else argv)
+    if not raw_args:
+        return _run_double_click_preview(stdout=sys.stdout, stderr=sys.stderr)
+    args = _parser().parse_args(raw_args)
     if args.command == "diagnose":
         return _run_diagnose(args, stdout=sys.stdout, stderr=sys.stderr)
     return 2
@@ -139,6 +142,38 @@ def _run_diagnose(args: argparse.Namespace, *, stdout: TextIO, stderr: TextIO) -
         print(f"摘要：{session.summary}", file=stdout)
         print(f"报告路径：{session.report_path}", file=stdout)
     return 0
+
+
+def _run_double_click_preview(*, stdout: TextIO, stderr: TextIO) -> int:
+    print("SSH AI 诊断工具", file=stdout)
+    print("=" * 18, file=stdout)
+    print("双击预览模式：无需 Python 环境，当前使用 fake 数据演示完整诊断流程。", file=stdout)
+    print("未连接真实服务器；真实模式后续需要配置 WinkTerm token 和 connection-id。", file=stdout)
+    print("", file=stdout)
+
+    host = _ask("请输入要显示的主机名，直接回车使用 prod-1：", default="prod-1", stdout=stdout)
+    args = argparse.Namespace(
+        command="diagnose",
+        host=host,
+        profile="linux-basic",
+        base_url="http://127.0.0.1:8000",
+        token="",
+        connection_id="",
+        reports_dir=None,
+        json=False,
+        yes=True,
+        fake=True,
+    )
+    exit_code = _run_diagnose(args, stdout=stdout, stderr=stderr)
+    print("", file=stdout)
+    _ask("按回车退出。", default="", stdout=stdout)
+    return exit_code
+
+
+def _ask(prompt: str, *, default: str, stdout: TextIO) -> str:
+    print(prompt, end="", file=stdout, flush=True)
+    answer = input("").strip()
+    return answer or default
 
 
 def _confirm(prompt: str, *, prompt_stream: TextIO) -> str:

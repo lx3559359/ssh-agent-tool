@@ -26,4 +26,4 @@ if ($LASTEXITCODE -ne 0) {
     throw "PyInstaller packaging failed with exit code: $LASTEXITCODE"
 }
 
-Write-Host "ssh-ai.exe generated: $(Join-Path $WinkTermRoot 'product\dist\ssh-ai\ssh-ai.exe')"
+Write-Host "ssh-ai.exe generated: $(Join-Path $WinkTermRoot 'product\dist\ssh-ai.exe')"

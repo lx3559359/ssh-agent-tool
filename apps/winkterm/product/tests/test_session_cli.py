@@ -249,3 +249,21 @@ def test_cli_default_reports_dir_uses_user_data_location(tmp_path, monkeypatch, 
     assert exit_code == 0
     assert Path(payload["report_path"]).parent == tmp_path / "user-reports"
     assert Path(payload["report_path"]).exists()
+
+
+def test_cli_no_args_runs_double_click_preview(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("SSH_AI_REPORTS_DIR", str(tmp_path))
+    answers = iter(["", ""])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+
+    exit_code = main([])
+
+    captured = capsys.readouterr()
+    reports = list(tmp_path.glob("*.md"))
+
+    assert exit_code == 0
+    assert "双击预览模式" in captured.out
+    assert "未连接真实服务器" in captured.out
+    assert "诊断完成" in captured.out
+    assert "按回车退出" in captured.out
+    assert len(reports) == 1

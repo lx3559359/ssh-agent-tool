@@ -61,7 +61,7 @@ def test_pyinstaller_spec_includes_product_data_files():
     text = SPEC.read_text(encoding="utf-8")
 
     assert "ssh_ai_entry.py" in text
-    assert "COLLECT(" in text
+    assert "COLLECT(" not in text
     assert "pathex=[str(WINKTERM_ROOT)]" in text
     assert "product/skills" in text
     assert "product/policy" in text
@@ -88,7 +88,8 @@ def test_pyinstaller_spec_configures_paths_from_executed_spec():
     assert (datas[1][0] / "risk_rules.yaml").exists()
 
     assert analysis["pathex"] == [str(ROOT)]
-    assert calls["collect"]["kwargs"]["name"] == "ssh-ai"
+    assert calls["exe"]["kwargs"]["name"] == "ssh-ai"
+    assert calls["exe"]["args"][4] == analysis["datas"]
 
 
 def test_build_script_uses_project_venv_and_utf8():
@@ -102,5 +103,7 @@ def test_build_script_uses_project_venv_and_utf8():
     assert "utf-8" in text.lower()
     assert "PyInstaller" in text
     assert "ssh-ai.spec" in text
+    assert "product\\dist\\ssh-ai.exe" in text
+    assert "--onefile" not in text
     assert '--distpath "product\\dist"' in text
     assert '--workpath "product\\build"' in text

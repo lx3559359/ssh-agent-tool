@@ -10,12 +10,13 @@
 - 新增 PyInstaller entry script、spec 文件和 PowerShell build script。
 - `skills/` 和 `policy/` 数据文件随 `ssh-ai.exe` 打包。
 - 已生成 Windows 预览可执行文件。
+- `ssh-ai.exe` 已改为单文件打包，并支持无参数双击进入中文预览向导。
 
 ## 构建信息
 
 - PyInstaller 版本：6.21.0
-- EXE 路径：`apps/winkterm/product/dist/ssh-ai/ssh-ai.exe`
-- EXE 大小：1,997,687 bytes
+- EXE 路径：`apps/winkterm/product/dist/ssh-ai.exe`
+- EXE 大小：8,160,667 bytes
 
 ## 测试结果
 
@@ -42,7 +43,7 @@ $env:PYTHONIOENCODING = "utf-8"
 
 ```powershell
 Set-Location apps/winkterm
-.\product\dist\ssh-ai\ssh-ai.exe diagnose prod-1 --profile linux-basic --fake --yes --json --reports-dir product/package-smoke-reports
+.\product\dist\ssh-ai.exe diagnose prod-1 --profile linux-basic --fake --yes --json --reports-dir product/package-smoke-reports
 ```
 
 结果：
@@ -61,7 +62,7 @@ report_exists=True
 
 ```powershell
 Set-Location $env:TEMP
-& "<worktree>\apps\winkterm\product\dist\ssh-ai\ssh-ai.exe" diagnose prod-1 --profile linux-basic --fake --yes --json --reports-dir "$env:TEMP\ssh-ai-package-smoke-reports"
+& "<worktree>\apps\winkterm\product\dist\ssh-ai.exe" diagnose prod-1 --profile linux-basic --fake --yes --json --reports-dir "$env:TEMP\ssh-ai-package-smoke-reports"
 ```
 
 结果：

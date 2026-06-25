@@ -31,7 +31,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\product\packaging\build-ss
 构建完成后，可执行文件位于：
 
 ```text
-apps/winkterm/product/dist/ssh-ai/ssh-ai.exe
+apps/winkterm/product/dist/ssh-ai.exe
 ```
 
 `product/dist` 和 `product/build` 是本地构建产物，不提交到 git。
@@ -41,17 +41,19 @@ apps/winkterm/product/dist/ssh-ai/ssh-ai.exe
 ```powershell
 Set-Location apps/winkterm
 $env:PYTHONIOENCODING = "utf-8"
-.\product\dist\ssh-ai\ssh-ai.exe diagnose prod-1 --profile linux-basic --fake --yes --json --reports-dir product\preview-reports
+.\product\dist\ssh-ai.exe diagnose prod-1 --profile linux-basic --fake --yes --json --reports-dir product\preview-reports
 ```
 
-`--fake` 不连接真实服务器，只用于验证 CLI、JSON 输出和 Markdown 报告生成。
+- 这是单文件 exe 预览版，不需要目标机器安装 Python。
+- 直接双击 `ssh-ai.exe` 会进入中文预览向导，并在结束时停留窗口等待回车。
+- `--fake` 不连接真实服务器，只用于验证 CLI、JSON 输出和 Markdown 报告生成。
 
 ## 真实模式
 
 真实诊断需要传入 WinkTerm Agent API 的 token 和 connection id：
 
 ```powershell
-.\product\dist\ssh-ai\ssh-ai.exe diagnose prod-1 --profile linux-basic --token <token> --connection-id <connection-id>
+.\product\dist\ssh-ai.exe diagnose prod-1 --profile linux-basic --token <token> --connection-id <connection-id>
 ```
 
 如果不指定 `--reports-dir`，默认报告目录为：
