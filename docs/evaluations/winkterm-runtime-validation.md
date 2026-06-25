@@ -12,7 +12,7 @@ Repository: https://github.com/Cznorth/winkterm
 ## Docker Compose Validation
 
 - Command: `docker info`
-- Result: FAIL. In the non-profile PowerShell session, bare `docker` was not on PATH. Retried with the installed Docker CLI at `C:\Program Files\Docker\Docker\resources\bin\docker.exe` after starting Docker Desktop once with `Start-Process -WindowStyle Hidden`. The Docker client was available (`Version: 29.5.3`, context `desktop-linux`, Compose plugin `v5.1.4`), but the daemon did not become healthy within the 180 second wait:
+- Result: FAIL. In the non-profile PowerShell session, bare `docker` was not on PATH. Retried with the Docker CLI from the standard Docker Desktop install directory after starting Docker Desktop once with `Start-Process -WindowStyle Hidden`. The Docker client was available (`Version: 29.5.3`, context `desktop-linux`, Compose plugin `v5.1.4`), but the daemon did not become healthy within the 180 second wait:
 
 ```text
 ERROR: request returned 500 Internal Server Error for API route and version http://%2F%2F.%2Fpipe%2FdockerDesktopLinuxEngine/v1.54/info, check if the server supports the requested API version
@@ -70,7 +70,7 @@ PIP_INSTALL_EXIT=0
 ## Frontend Validation
 
 - Command: `npm.cmd install`
-- Result: PASS after local PATH correction. The first install attempt failed because package lifecycle scripts invoked bare `node` and `npm` while Node was not on PATH in this shell. Retried with `C:\Program Files\nodejs` prepended to `PATH`; `npm.cmd install` then completed:
+- Result: PASS after local PATH correction. The first install attempt failed because package lifecycle scripts invoked bare `node` and `npm` while Node was not on PATH in this shell. Retried with the standard Node.js install directory prepended to `PATH`; `npm.cmd install` then completed:
 
 ```text
 v24.18.0
