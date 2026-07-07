@@ -184,14 +184,15 @@ exports.testConnection = async function (initOptions, ws, uid) {
     })
   }
 
-  const res = await sendMsgToChildProcess(child, {
-    id: uid,
-    action: 'test-terminal',
-    body: initOptions
-  })
-
-  child.kill()
-  return res
+  try {
+    return await sendMsgToChildProcess(child, {
+      id: uid,
+      action: 'test-terminal',
+      body: initOptions
+    })
+  } finally {
+    child.kill()
+  }
 }
 
 /**
