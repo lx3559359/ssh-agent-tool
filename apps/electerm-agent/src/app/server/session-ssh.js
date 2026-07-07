@@ -78,6 +78,12 @@ function getSshDiagnosis (err = {}) {
       suggestion: '请检查网络连通性、防火墙、安全组、堡垒机链路和服务器端口。'
     }
   }
+  if (/too many authentication failures/i.test(message)) {
+    return {
+      title: 'SSH 认证尝试次数过多',
+      suggestion: '通常是 SSH Agent 中加载了过多钥匙，服务端在尝试到正确钥匙前已断开；请指定正确私钥、减少 Agent 钥匙，或关闭本连接的 SSH Agent。'
+    }
+  }
   if (
     message.includes(failMsg) ||
     /authentication.*failed/i.test(message) ||

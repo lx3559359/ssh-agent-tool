@@ -131,4 +131,20 @@ describe('session-ssh connection error diagnostics', () => {
     assert.match(normalized.message, /兼容算法/)
     assert.match(normalized.message, /原始错误：Handshake failed: no matching key exchange algorithm/)
   })
+
+  test('adds a chinese diagnosis for too many ssh authentication attempts', () => {
+    const error = new Error('Received disconnect from 10.0.1.23 port 22:2: Too many authentication failures')
+
+    const normalized = normalizeSshConnectionError(error, {
+      host: '10.0.1.23',
+      port: 22,
+      username: 'deploy'
+    })
+
+    assert.match(normalized.message, /SSH 认证尝试次数过多/)
+    assert.match(normalized.message, /deploy@10\.0\.1\.23:22/)
+    assert.match(normalized.message, /SSH Agent/)
+    assert.match(normalized.message, /钥匙/)
+    assert.match(normalized.message, /原始错误：Received disconnect/)
+  })
 })
