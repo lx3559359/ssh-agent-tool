@@ -13,9 +13,11 @@ Initial upstream snapshot: 2db0c56
 - Keep Chinese UI copy in localization files where Electerm already supports localization.
 - Use Electerm's MCP bridge and terminal context APIs before introducing new IPC contracts.
 
-## Prototype Reference
+## Historical Prototype Lessons
 
-The previous prototype at `apps/ssh-agent-ui-preview` is reference-only for:
+The previous self-built prototype has been removed from the repository. Its role was requirement discovery only; do not reintroduce it as a client base.
+
+Preserve only these product lessons while implementing them on Electerm:
 
 - Chinese layout and copy.
 - Model API configuration.
@@ -23,4 +25,4 @@ The previous prototype at `apps/ssh-agent-ui-preview` is reference-only for:
 - Online update release lessons.
 - Agent approval and audit workflow ideas.
 
-It is not the formal SSH terminal base.
+Electerm remains the formal SSH terminal base.

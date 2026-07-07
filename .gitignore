@@ -25,17 +25,6 @@ tmp/
 release/
 
 # Product packaging outputs
-/apps/winkterm/product/build/
-/apps/winkterm/product/dist/
-/apps/winkterm/product/package-smoke-reports/
-/apps/winkterm/product/preview-reports/
-/apps/winkterm/.tmp/
-/apps/ssh-agent-ui-preview/.build-temp/
-/apps/ssh-agent-ui-preview/.npm-cache/
-/apps/ssh-agent-ui-preview/*.tmp*/
-/apps/ssh-agent-ui-preview/frontend-test-output.txt
-/apps/ssh-agent-ui-preview/build/
-/apps/ssh-agent-ui-preview/dist/
 /apps/electerm-agent/node_modules/
 /apps/electerm-agent/dist/
 /apps/electerm-agent/build/Release/

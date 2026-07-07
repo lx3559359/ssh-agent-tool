@@ -4,7 +4,7 @@ Date: 2026-07-07
 
 ## Reason
 
-The current self-built SSH client prototype does not meet formal SSH client expectations. It is kept as a requirement prototype only. The formal product must be based on a mature open-source SSH client.
+The previous self-built SSH client prototype did not meet formal SSH client expectations. It has been removed from the repository and the formal product must be based on a mature open-source SSH client.
 
 ## Decision
 
@@ -38,4 +38,4 @@ Fallback/reference: Tabby.
 
 ## Product Impact
 
-The formal client will be rebuilt from Electerm. `apps/ssh-agent-ui-preview` remains a reference for Chinese product copy, model API flows, backup flows, and release/update lessons.
+The formal client will be rebuilt from Electerm. Reuse the product lessons from the old prototype only as requirements, then implement them on Electerm's SSH, SFTP, terminal, tab, shortcut, update, and MCP foundations.
