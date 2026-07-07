@@ -3,6 +3,10 @@ import copy from 'json-deep-copy'
 export const bookmarkBackupFormat = 'AIGShell.bookmarks.backup'
 export const bookmarkBackupFormatVersion = 1
 
+const invalidJsonError = '备份文件内容不是有效的 JSON'
+const noImportableBookmarksError = '备份文件中没有可导入的服务器连接'
+const invalidBookmarkBackupShapeError = '备份文件中的服务器或分组格式不正确'
+
 export function createBookmarkBackup ({
   bookmarks = [],
   bookmarkGroups = [],
@@ -24,12 +28,28 @@ export function createBookmarkBackup ({
   }
 }
 
+function normalizeBookmarkBackupData (data) {
+  if (!Array.isArray(data?.bookmarks) && !Array.isArray(data?.bookmarkGroups)) {
+    throw new Error(noImportableBookmarksError)
+  }
+  if (
+    (data.bookmarks !== undefined && !Array.isArray(data.bookmarks)) ||
+    (data.bookmarkGroups !== undefined && !Array.isArray(data.bookmarkGroups))
+  ) {
+    throw new Error(invalidBookmarkBackupShapeError)
+  }
+  return {
+    bookmarks: data.bookmarks || [],
+    bookmarkGroups: data.bookmarkGroups || []
+  }
+}
+
 export function parseBookmarkBackup (text) {
   let content
   try {
     content = typeof text === 'string' ? JSON.parse(text) : text
   } catch (_) {
-    throw new Error('备份文件内容不是有效的 JSON')
+    throw new Error(invalidJsonError)
   }
 
   if (Array.isArray(content)) {
@@ -40,21 +60,8 @@ export function parseBookmarkBackup (text) {
   }
 
   if (content?.format === bookmarkBackupFormat && content?.data) {
-    if (!Array.isArray(content.data.bookmarks) && !Array.isArray(content.data.bookmarkGroups)) {
-      throw new Error('备份文件中没有可导入的服务器连接')
-    }
-    return {
-      bookmarks: content.data.bookmarks || [],
-      bookmarkGroups: content.data.bookmarkGroups || []
-    }
+    return normalizeBookmarkBackupData(content.data)
   }
 
-  if (!Array.isArray(content?.bookmarks) && !Array.isArray(content?.bookmarkGroups)) {
-    throw new Error('备份文件中没有可导入的服务器连接')
-  }
-
-  return {
-    bookmarks: content?.bookmarks || [],
-    bookmarkGroups: content?.bookmarkGroups || []
-  }
+  return normalizeBookmarkBackupData(content)
 }

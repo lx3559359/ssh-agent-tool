@@ -83,6 +83,23 @@ test('rejects invalid bookmark backup content with a clear error', async () => {
     () => parseBookmarkBackup(JSON.stringify({ hello: 'world' })),
     /备份文件中没有可导入的服务器连接/
   )
+  assert.throws(
+    () => parseBookmarkBackup(JSON.stringify({
+      format: 'AIGShell.bookmarks.backup',
+      data: {
+        bookmarks: { id: 'server-1' },
+        bookmarkGroups: []
+      }
+    })),
+    /备份文件中的服务器或分组格式不正确/
+  )
+  assert.throws(
+    () => parseBookmarkBackup(JSON.stringify({
+      bookmarks: [],
+      bookmarkGroups: { id: 'group-1' }
+    })),
+    /备份文件中的服务器或分组格式不正确/
+  )
 })
 
 test('uses the AIGShell bookmark backup package from every toolbar export entry', () => {
