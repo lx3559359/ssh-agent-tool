@@ -1,6 +1,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const path = require('node:path')
+const fs = require('node:fs')
 
 test('creates an AIGShell bookmark backup package with metadata and credentials intact', async () => {
   const {
@@ -82,6 +83,18 @@ test('rejects invalid bookmark backup content with a clear error', async () => {
     () => parseBookmarkBackup(JSON.stringify({ hello: 'world' })),
     /备份文件中没有可导入的服务器连接/
   )
+})
+
+test('uses the AIGShell bookmark backup package from every toolbar export entry', () => {
+  const source = fs.readFileSync(
+    path.resolve(__dirname, '../../src/client/components/tree-list/bookmark-toolbar.jsx'),
+    'utf8'
+  )
+
+  assert.match(source, /createBookmarkBackup/)
+  assert.match(source, /download\('aigshell-bookmarks-backup-/)
+  assert.match(source, /label:\s*e\('export'\)[\s\S]*?onClick:\s*handleDownload/)
+  assert.doesNotMatch(source, /onClick:\s*onExport/)
 })
 
 function pathToFileURL (filePath) {

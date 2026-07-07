@@ -21,7 +21,6 @@ export default function BookmarkToolbar (props) {
   const {
     onNewBookmark,
     onNewBookmarkGroup,
-    onExport,
     onSshConfigs,
     bookmarkGroups,
     bookmarks
@@ -71,7 +70,7 @@ export default function BookmarkToolbar (props) {
     },
     {
       label: e('export'),
-      onClick: onExport,
+      onClick: handleDownload,
       icon: <ExportOutlined />
     },
     {
