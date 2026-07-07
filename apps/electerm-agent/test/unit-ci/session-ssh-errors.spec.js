@@ -115,4 +115,20 @@ describe('session-ssh connection error diagnostics', () => {
     assert.match(normalized.message, /协议/)
     assert.match(normalized.message, /原始错误：Socket closed before SSH handshake/)
   })
+
+  test('adds a chinese diagnosis for incompatible ssh algorithms', () => {
+    const error = new Error('Handshake failed: no matching key exchange algorithm')
+
+    const normalized = normalizeSshConnectionError(error, {
+      host: 'legacy-linux.example.com',
+      port: 22,
+      username: 'root'
+    })
+
+    assert.match(normalized.message, /SSH 算法不兼容/)
+    assert.match(normalized.message, /root@legacy-linux\.example\.com:22/)
+    assert.match(normalized.message, /旧服务器/)
+    assert.match(normalized.message, /兼容算法/)
+    assert.match(normalized.message, /原始错误：Handshake failed: no matching key exchange algorithm/)
+  })
 })

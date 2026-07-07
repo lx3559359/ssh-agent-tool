@@ -66,6 +66,12 @@ function getSshDiagnosis (err = {}) {
       suggestion: '请检查服务器 sshd、堡垒机/代理、连接数限制、协议是否为 SSH，以及安全设备是否在握手前断开连接。'
     }
   }
+  if (message.includes(csFailMsg) || /no matching .*?(algorithm|cipher|key exchange|host key|kex)|unsupported .*?(algorithm|cipher|key exchange|host key|kex)/i.test(message)) {
+    return {
+      title: 'SSH 算法不兼容',
+      suggestion: '通常是旧服务器或安全策略只支持特定 KEX、HostKey、Cipher 算法；请在连接配置中启用兼容算法，或升级服务器 SSH 配置。'
+    }
+  }
   if (code === 'ETIMEDOUT' || /timed? ?out|handshake timeout/i.test(message)) {
     return {
       title: 'SSH 连接超时',
