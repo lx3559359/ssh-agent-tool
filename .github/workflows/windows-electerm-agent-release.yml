@@ -45,6 +45,9 @@ jobs:
       - name: Install dependencies and rebuild native modules
         run: npm ci
 
+      - name: Run unit tests
+        run: npm run test-unit-ci
+
       - name: Build renderer and prepare packaged app
         run: npm run b
 

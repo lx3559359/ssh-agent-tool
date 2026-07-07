@@ -42,6 +42,26 @@ test('windows release workflow smoke tests the packaged app before uploading art
   assert.ok(smokeTestIndex < artifactUploadIndex, 'smoke test should run before release artifacts are uploaded')
 })
 
+test('windows release workflow runs unit tests before packaging', () => {
+  const workflow = fs.readFileSync(
+    path.resolve(__dirname, '../../../../.github/workflows/windows-electerm-agent-release.yml'),
+    'utf8'
+  )
+
+  const dependencyInstallIndex = workflow.indexOf('name: Install dependencies and rebuild native modules')
+  const unitTestIndex = workflow.indexOf('npm run test-unit-ci')
+  const rendererBuildIndex = workflow.indexOf('name: Build renderer and prepare packaged app')
+  const installerBuildIndex = workflow.indexOf('name: Build NSIS installer')
+
+  assert.ok(dependencyInstallIndex !== -1, 'workflow should install dependencies before testing')
+  assert.ok(unitTestIndex !== -1, 'workflow should run unit tests')
+  assert.ok(rendererBuildIndex !== -1, 'workflow should build the renderer')
+  assert.ok(installerBuildIndex !== -1, 'workflow should build the installer')
+  assert.ok(unitTestIndex > dependencyInstallIndex, 'unit tests should run after dependencies are installed')
+  assert.ok(unitTestIndex < rendererBuildIndex, 'unit tests should run before renderer packaging begins')
+  assert.ok(unitTestIndex < installerBuildIndex, 'unit tests should run before installer packaging begins')
+})
+
 test('builds a stable GitHub release tag from package version', () => {
   assert.equal(buildReleaseTag('3.15.105'), 'v3.15.105')
   assert.equal(buildReleaseTag('v3.15.105'), 'v3.15.105')
