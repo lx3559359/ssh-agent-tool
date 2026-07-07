@@ -342,8 +342,9 @@ export default class Upgrade extends PureComponent {
 
   renderUpgradeContent = () => {
     const { installSrc } = this.props
+    const { canAutoUpgrade } = this.props.upgradeInfo
     const skip = checkSkipSrc(installSrc)
-    if (skip) {
+    if (skip || !canAutoUpgrade) {
       return this.renderLinks()
     }
     return (

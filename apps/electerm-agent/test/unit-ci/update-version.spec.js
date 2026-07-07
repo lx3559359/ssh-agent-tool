@@ -127,6 +127,19 @@ test('upgrade flow uses classified release status for manual update guidance', (
   assert.match(upgradeSource, /releaseStatus\.message/)
 })
 
+test('upgrade panel hides the automatic upgrade action when only manual download is available', () => {
+  const upgradeSource = fs.readFileSync(
+    path.resolve(__dirname, '../../src/client/components/main/upgrade.jsx'),
+    'utf8'
+  )
+
+  assert.match(upgradeSource, /canAutoUpgrade/)
+  assert.match(
+    upgradeSource,
+    /if\s*\([^)]*!canAutoUpgrade[^)]*\)\s*{\s*return\s+this\.renderLinks\(\)/s
+  )
+})
+
 function pathToFileURL (filePath) {
   return new URL(`file://${filePath.replace(/\\/g, '/')}`).href
 }
