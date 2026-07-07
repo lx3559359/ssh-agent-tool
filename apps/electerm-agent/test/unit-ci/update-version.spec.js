@@ -162,6 +162,17 @@ test('upgrade panel hides the automatic upgrade action when only manual download
   )
 })
 
+test('upgrade panel links manual downloads to the concrete release when available', () => {
+  const upgradeSource = fs.readFileSync(
+    path.resolve(__dirname, '../../src/client/components/main/upgrade.jsx'),
+    'utf8'
+  )
+
+  assert.match(upgradeSource, /manualDownloadUrl:\s*releaseStatus\.html_url/)
+  assert.match(upgradeSource, /manualDownloadUrl\s*=\s*packInfo\.releases/)
+  assert.match(upgradeSource, /const\s+links\s*=\s*\[\s*{\s*name:\s*'GitHub Releases',\s*url:\s*manualDownloadUrl\s*}\s*\]/s)
+})
+
 function pathToFileURL (filePath) {
   return new URL(`file://${filePath.replace(/\\/g, '/')}`).href
 }

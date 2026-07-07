@@ -15,7 +15,6 @@ import { checkSkipSrc } from '../../common/check-skip-src'
 import { debounce } from 'lodash-es'
 import newTerm from '../../common/new-terminal'
 import Markdown from '../common/markdown'
-import downloadMirrors from '../../common/download-mirrors'
 import { refsStatic } from '../common/ref'
 import message from '../common/message'
 import './upgrade.styl'
@@ -212,6 +211,7 @@ export default class Upgrade extends PureComponent {
       shouldUpgrade,
       releaseInfo,
       remoteVersion: latestVer,
+      manualDownloadUrl: releaseStatus.html_url,
       canAutoUpgrade,
       showUpgradeModal: true
     })
@@ -273,12 +273,16 @@ export default class Upgrade extends PureComponent {
   }
 
   renderLinks = () => {
+    const { manualDownloadUrl = packInfo.releases } = this.props.upgradeInfo
+    const links = [
+      { name: 'GitHub Releases', url: manualDownloadUrl }
+    ]
     return (
       <div>
         <p>
           {e('manuallyDownloadFrom')}:
           {
-            downloadMirrors.map((d) => {
+            links.map((d) => {
               return (
                 <Link to={d.url} className='mg1l' key={d.url}>{d.name}</Link>
               )
