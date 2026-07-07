@@ -37,6 +37,16 @@ Manual CI build:
 2. Run `Windows Electerm Agent Release`.
 3. Download the uploaded artifact from the workflow run.
 
+Local development environment check:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File test\local\check-windows-dev-env.ps1
+```
+
+The local machine is only suitable for building or running the development app
+when this check reports Node.js 22, Yarn Classic, Visual C++ compiler, MSBuild
+and local dependencies as ready. End-user machines do not need these tools.
+
 ## How To Verify The Uploaded Artifact
 
 After a successful workflow run, download the artifact and check the package
