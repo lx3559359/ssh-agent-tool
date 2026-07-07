@@ -150,6 +150,9 @@ function getAIChoiceContent (choice) {
   if (choice.message && Object.prototype.hasOwnProperty.call(choice.message, 'content')) {
     return choice.message.content
   }
+  if (choice.delta && Object.prototype.hasOwnProperty.call(choice.delta, 'content')) {
+    return choice.delta.content
+  }
   return choice.text || ''
 }
 
@@ -375,8 +378,9 @@ function processStream (sessionId, sessionData) {
 
       try {
         const data = JSON.parse(payload)
-        if (data.choices && data.choices[0] && data.choices[0].delta && data.choices[0].delta.content) {
-          sessionData.content += data.choices[0].delta.content
+        const content = getAIChoiceContent(data.choices && data.choices[0])
+        if (content) {
+          sessionData.content += normalizeAIMessageContent(content)
         }
       } catch (e) {
         log.error('Error parsing stream data:', e)

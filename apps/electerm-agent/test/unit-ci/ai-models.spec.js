@@ -315,3 +315,53 @@ test('parses stream chunks from relays that omit the space after data colon', as
     delete require.cache[aiPath]
   }
 })
+
+test('normalizes stream chat content arrays to readable text', async () => {
+  const axios = require('axios')
+  const originalCreate = axios.create
+
+  axios.create = () => ({
+    post: async () => ({
+      data: Readable.from([
+        Buffer.from('data: {"choices":[{"delta":{"content":[{"type":"text","text":"流式"},{"type":"text","text":"片段"}]}}]}\n\n'),
+        Buffer.from('data: [DONE]\n\n')
+      ])
+    })
+  })
+
+  delete require.cache[aiPath]
+  const {
+    AIchat,
+    getStreamContent
+  } = require(aiPath)
+
+  try {
+    const res = await AIchat(
+      'hello',
+      'test-model',
+      'system',
+      'https://relay.example.com/v1',
+      '',
+      'test-key',
+      '',
+      true,
+      'Authorization: Bearer'
+    )
+
+    let streamState
+    for (let i = 0; i < 20; i++) {
+      await new Promise(resolve => setTimeout(resolve, 10))
+      streamState = getStreamContent(res.sessionId)
+      if (!streamState.hasMore || streamState.error) {
+        break
+      }
+    }
+
+    assert.equal(streamState.error, undefined)
+    assert.equal(streamState.content, '流式片段')
+    assert.equal(streamState.hasMore, false)
+  } finally {
+    axios.create = originalCreate
+    delete require.cache[aiPath]
+  }
+})
