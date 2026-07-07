@@ -1,5 +1,6 @@
 export const CHAT_PATH = '/chat/completions'
 export const RESPONSE_PATH = '/responses'
+export const MODELS_PATH = '/models'
 
 const NO_V1_HOSTS = new Set([
   'api.deepseek.com'
@@ -34,7 +35,7 @@ function splitFullEndpoint (baseURL) {
   const url = new URL(baseURL)
   const cleanPath = trimEndSlash(url.pathname)
   const lowerPath = cleanPath.toLowerCase()
-  const knownPaths = [CHAT_PATH, RESPONSE_PATH]
+  const knownPaths = [CHAT_PATH, RESPONSE_PATH, MODELS_PATH]
   const matched = knownPaths.find(path => lowerPath.endsWith(path))
 
   if (!matched) {
@@ -49,7 +50,9 @@ function splitFullEndpoint (baseURL) {
 
   return {
     baseURL: trimEndSlash(url.toString()),
-    path: `${matched}${endpointSearch}`
+    path: matched === MODELS_PATH
+      ? CHAT_PATH
+      : `${matched}${endpointSearch}`
   }
 }
 

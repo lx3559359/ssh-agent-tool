@@ -38,6 +38,20 @@ test('accepts a full chat completions URL in the API address field', () => {
   )
 })
 
+test('accepts a full models URL in the API address field', () => {
+  assert.deepEqual(
+    normalizeAIEndpoint('https://relay.example.com/v1/models', ''),
+    {
+      baseURL: 'https://relay.example.com/v1',
+      path: '/chat/completions'
+    }
+  )
+  assert.equal(
+    normalizeAIModelBaseURL('https://relay.example.com/v1/models'),
+    'https://relay.example.com/v1'
+  )
+})
+
 test('preserves query parameters from a full chat completions URL', () => {
   assert.deepEqual(
     normalizeAIEndpoint('https://example.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2026-01-01', ''),
