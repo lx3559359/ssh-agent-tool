@@ -5,7 +5,8 @@ const path = require('node:path')
 const {
   buildReleaseTag,
   selectReleaseAssets,
-  buildGitHubReleaseCommands
+  buildGitHubReleaseCommands,
+  createSpawnOptions
 } = require(path.resolve(__dirname, '../../build/bin/github-release-utils'))
 
 test('builds a stable GitHub release tag from package version', () => {
@@ -52,4 +53,11 @@ test('creates deterministic gh commands for release create and upload', () => {
     ['gh', ['release', 'create', 'v3.15.105', '--repo', 'lx3559359/ssh-agent-tool', '--title', 'AIGShell v3.15.105', '--notes', 'AIGShell Windows release']],
     ['gh', ['release', 'upload', 'v3.15.105', 'dist/AIGShell-3.15.105-win-x64-installer.exe', 'dist/AIGShell-3.15.105-win-x64-installer.exe.blockmap', 'dist/latest.yml', '--repo', 'lx3559359/ssh-agent-tool', '--clobber']]
   ])
+})
+
+test('uses direct spawn options so gh arguments with spaces stay intact on Windows', () => {
+  assert.deepEqual(createSpawnOptions({ stdio: 'ignore' }), {
+    stdio: 'ignore',
+    shell: false
+  })
 })

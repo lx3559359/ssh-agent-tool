@@ -29,8 +29,17 @@ function buildGitHubReleaseCommands ({
   ]
 }
 
+function createSpawnOptions (options = {}) {
+  return {
+    stdio: 'inherit',
+    shell: false,
+    ...options
+  }
+}
+
 module.exports = {
   buildReleaseTag,
   selectReleaseAssets,
-  buildGitHubReleaseCommands
+  buildGitHubReleaseCommands,
+  createSpawnOptions
 }

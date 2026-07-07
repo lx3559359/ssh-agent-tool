@@ -5,7 +5,8 @@ const pack = require('../../package.json')
 const {
   buildReleaseTag,
   selectReleaseAssets,
-  buildGitHubReleaseCommands
+  buildGitHubReleaseCommands,
+  createSpawnOptions
 } = require('./github-release-utils')
 
 const repo = process.env.GITHUB_REPOSITORY || 'lx3559359/ssh-agent-tool'
@@ -13,11 +14,7 @@ const distDir = path.resolve(__dirname, '../../dist')
 const dryRun = process.argv.includes('--dry-run')
 
 function run (command, args, options = {}) {
-  const res = spawnSync(command, args, {
-    stdio: 'inherit',
-    shell: process.platform === 'win32',
-    ...options
-  })
+  const res = spawnSync(command, args, createSpawnOptions(options))
   return res.status || 0
 }
 
