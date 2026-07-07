@@ -1,6 +1,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const path = require('node:path')
+const { pathToFileURL } = require('node:url')
 
 const {
   normalizeAIEndpoint,
@@ -74,4 +75,25 @@ test('normalizes popular provider root URLs to their OpenAI-compatible base path
     )
     assert.equal(normalizeAIModelBaseURL(input), expectedBaseURL, input)
   }
+})
+
+test('client endpoint preview uses the same popular provider root URL rules', async () => {
+  const {
+    normalizeAIEndpoint: normalizeClientAIEndpoint
+  } = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/common/ai-endpoint.js')))
+
+  assert.deepEqual(
+    normalizeClientAIEndpoint('https://openrouter.ai', ''),
+    {
+      baseURL: 'https://openrouter.ai/api/v1',
+      path: '/chat/completions'
+    }
+  )
+  assert.deepEqual(
+    normalizeClientAIEndpoint('https://dashscope.aliyuncs.com', ''),
+    {
+      baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+      path: '/chat/completions'
+    }
+  )
 })

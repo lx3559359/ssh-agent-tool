@@ -5,6 +5,14 @@ const NO_V1_HOSTS = new Set([
   'api.deepseek.com'
 ])
 
+const PROVIDER_BASE_PATHS = new Map([
+  ['openrouter.ai', '/api/v1'],
+  ['dashscope.aliyuncs.com', '/compatible-mode/v1'],
+  ['open.bigmodel.cn', '/api/paas/v4'],
+  ['api.groq.com', '/openai/v1'],
+  ['generativelanguage.googleapis.com', '/v1beta/openai']
+])
+
 function trimEndSlash (str) {
   return String(str || '').replace(/\/+$/, '')
 }
@@ -47,12 +55,20 @@ function shouldAppendV1 (url) {
   return cleanPath === '' || cleanPath === '/'
 }
 
-function appendV1 (baseURL) {
+function appendPath (baseURL, path) {
   const url = new URL(baseURL)
-  url.pathname = '/v1'
+  url.pathname = path
   url.search = ''
   url.hash = ''
   return trimEndSlash(url.toString())
+}
+
+function getProviderBasePath (url) {
+  const cleanPath = trimEndSlash(url.pathname).toLowerCase()
+  if (cleanPath !== '' && cleanPath !== '/') {
+    return ''
+  }
+  return PROVIDER_BASE_PATHS.get(url.hostname.toLowerCase()) || ''
 }
 
 export function normalizeAIEndpoint (baseURL, apiPath) {
@@ -73,11 +89,14 @@ export function normalizeAIEndpoint (baseURL, apiPath) {
   }
 
   const url = new URL(rawBaseURL)
-  const normalizedBaseURL = explicitPath
-    ? trimEndSlash(rawBaseURL)
-    : shouldAppendV1(url)
-      ? appendV1(rawBaseURL)
-      : trimEndSlash(rawBaseURL)
+  const providerBasePath = getProviderBasePath(url)
+  let normalizedBaseURL = trimEndSlash(rawBaseURL)
+
+  if (!explicitPath && providerBasePath) {
+    normalizedBaseURL = appendPath(rawBaseURL, providerBasePath)
+  } else if (!explicitPath && shouldAppendV1(url)) {
+    normalizedBaseURL = appendPath(rawBaseURL, '/v1')
+  }
 
   return {
     baseURL: normalizedBaseURL,
