@@ -7,6 +7,7 @@ process.env.NODE_ENV = 'development'
 const {
   buildUpgradeEndMessage,
   buildUpgradeErrorMessage,
+  finishUpgradeDownload,
   getRequiredReleaseAsset,
   selectReleaseAsset
 } = require(path.resolve(__dirname, '../../src/app/server/download-upgrade'))
@@ -128,4 +129,35 @@ test('throws a clear error when the release has no usable asset for this platfor
     }),
     /未找到适用于当前系统的 AIGShell 更新安装包/
   )
+})
+
+test('finishes update downloads only when the installer file is complete', () => {
+  const calls = []
+
+  finishUpgradeDownload({
+    transferred: 1024,
+    expectedSize: 1024,
+    onEnd: () => calls.push('end'),
+    onError: err => calls.push(err.message)
+  })
+
+  finishUpgradeDownload({
+    transferred: 128,
+    expectedSize: undefined,
+    onEnd: () => calls.push('unknown-size-ok'),
+    onError: err => calls.push(err.message)
+  })
+
+  finishUpgradeDownload({
+    transferred: 512,
+    expectedSize: 1024,
+    onEnd: () => calls.push('bad-end'),
+    onError: err => calls.push(err.message)
+  })
+
+  assert.deepEqual(calls, [
+    'end',
+    'unknown-size-ok',
+    'AIGShell 更新安装包下载不完整：已下载 512 字节，期望 1024 字节。请重新下载。'
+  ])
 })

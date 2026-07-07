@@ -39,6 +39,21 @@ function buildUpgradeErrorMessage (id, err) {
   }
 }
 
+function finishUpgradeDownload ({
+  transferred,
+  expectedSize,
+  onEnd,
+  onError
+}) {
+  const size = Number(expectedSize)
+  if (size > 0 && Number(transferred) < size) {
+    return onError(new Error(
+      `AIGShell 更新安装包下载不完整：已下载 ${transferred} 字节，期望 ${size} 字节。请重新下载。`
+    ))
+  }
+  return onEnd()
+}
+
 function selectReleaseAsset (release, platformInfo = {}) {
   const assets = release?.assets || []
   const win = platformInfo.isWin ?? isWin
@@ -169,7 +184,15 @@ class Upgrade {
     })
 
     readSteam.on('close', () => {
-      writeSteam.end('', () => this.onEnd(id, ws))
+      if (this.onDestroy) {
+        return writeSteam.end()
+      }
+      writeSteam.end('', () => finishUpgradeDownload({
+        transferred: count,
+        expectedSize: size,
+        onEnd: () => this.onEnd(id, ws),
+        onError: err => this.onError(err, id, ws)
+      }))
     })
 
     readSteam.on('error', (err) => this.onError(err, id, ws))
@@ -217,5 +240,6 @@ class Upgrade {
 exports.Upgrade = Upgrade
 exports.buildUpgradeEndMessage = buildUpgradeEndMessage
 exports.buildUpgradeErrorMessage = buildUpgradeErrorMessage
+exports.finishUpgradeDownload = finishUpgradeDownload
 exports.getRequiredReleaseAsset = getRequiredReleaseAsset
 exports.selectReleaseAsset = selectReleaseAsset
