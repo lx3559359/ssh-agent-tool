@@ -14,6 +14,7 @@ import {
   CaretRightOutlined
 } from '@ant-design/icons'
 import { copy } from '../../common/clipboard'
+import aiAgentCopy from './ai-agent-copy.json'
 
 export default function AIChatHistoryItem ({ item }) {
   const [showOutput, setShowOutput] = useState(true)
@@ -28,6 +29,7 @@ export default function AIChatHistoryItem ({ item }) {
     baseURLAI,
     apiPathAI,
     apiKeyAI,
+    authHeaderNameAI,
     proxyAI,
     languageAI,
     mode,
@@ -117,11 +119,12 @@ export default function AIChatHistoryItem ({ item }) {
       baseURLAI,
       apiPathAI,
       apiKeyAI,
+      authHeaderNameAI,
       proxyAI,
       languageAI
     }
     await runAgentLoop(item, config, abortRef, setIsStreaming)
-  }, [modelAI, roleAI, baseURLAI, apiPathAI, apiKeyAI, proxyAI, languageAI, item.id])
+  }, [modelAI, roleAI, baseURLAI, apiPathAI, apiKeyAI, authHeaderNameAI, proxyAI, languageAI, item.id])
 
   useEffect(() => {
     if (item.pending) {
@@ -161,7 +164,7 @@ export default function AIChatHistoryItem ({ item }) {
     return (
       <AIStopIcon
         onClick={handleStop}
-        title='Stop this AI request'
+        title={aiAgentCopy.stopTitle}
       />
     )
   }

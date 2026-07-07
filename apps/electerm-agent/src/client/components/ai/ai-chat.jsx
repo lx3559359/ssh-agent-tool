@@ -16,6 +16,7 @@ import {
 import { getItem, setItem } from '../../common/safe-local-storage.js'
 import HelpIcon from '../common/help-icon'
 import { refsStatic } from '../common/ref'
+import aiAgentCopy from './ai-agent-copy.json'
 import './ai.styl'
 
 const { TextArea } = Input
@@ -32,7 +33,7 @@ export default function AIChat (props) {
   }
 
   function handleModeChange (val) {
-    const m = val === 'Ask' ? 'ask' : 'agent'
+    const m = val === aiAgentCopy.modeLabels.ask ? 'ask' : 'agent'
     setItem(aiChatModeLsKey, m)
     setMode(m)
   }
@@ -59,6 +60,7 @@ export default function AIChat (props) {
         'baseURLAI',
         'apiPathAI',
         'apiKeyAI',
+        'authHeaderNameAI',
         'proxyAI',
         'languageAI'
       ]),
@@ -108,7 +110,7 @@ export default function AIChat (props) {
       return (
         <SendOutlined
           className='mg1l send-to-ai-icon disabled'
-          title='Agent is running, please wait'
+          title={aiAgentCopy.runningTitle}
         />
       )
     }
@@ -116,7 +118,7 @@ export default function AIChat (props) {
       <SendOutlined
         onClick={handleSubmit}
         className='mg1l pointer icon-hover send-to-ai-icon'
-        title='Enter to send, Shift+Enter for new line'
+        title={aiAgentCopy.sendTitle}
       />
     )
   }
@@ -158,15 +160,15 @@ export default function AIChat (props) {
           value={prompt}
           onChange={handlePromptChange}
           onPressEnter={handleKeyPress}
-          placeholder='Enter your prompt here'
+          placeholder={aiAgentCopy.inputPlaceholder}
           autoSize={{ minRows: 3, maxRows: 10 }}
           className='ai-chat-textarea'
         />
         <Flex className='ai-chat-terminals' justify='space-between' align='center'>
           <Flex align='center'>
             <Segmented
-              options={['Ask', 'Agent']}
-              value={mode === 'ask' ? 'Ask' : 'Agent'}
+              options={[aiAgentCopy.modeLabels.ask, aiAgentCopy.modeLabels.agent]}
+              value={mode === 'ask' ? aiAgentCopy.modeLabels.ask : aiAgentCopy.modeLabels.agent}
               onChange={handleModeChange}
               size='small'
             />
@@ -183,7 +185,7 @@ export default function AIChat (props) {
             >
               <UnorderedListOutlined
                 className='mg2x pointer clear-ai-icon icon-hover'
-                title='Clear AI chat history'
+                title={aiAgentCopy.clearHistoryTitle}
               />
             </Popconfirm>
             <HelpIcon

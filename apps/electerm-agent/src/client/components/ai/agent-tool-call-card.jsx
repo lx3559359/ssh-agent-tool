@@ -9,6 +9,7 @@ import {
   CodeOutlined,
   DatabaseOutlined
 } from '@ant-design/icons'
+import aiAgentCopy from './ai-agent-copy.json'
 
 const toolIcons = {
   send_terminal_command: CodeOutlined,
@@ -52,7 +53,7 @@ export default function AgentToolCallCard ({ toolCall }) {
     const color = status === 'running' ? 'processing' : status === 'completed' ? 'success' : 'error'
     return (
       <Tag color={color} className='agent-tool-tag'>
-        {status}
+        {aiAgentCopy.toolCall.status[status] || status}
       </Tag>
     )
   }
@@ -73,13 +74,13 @@ export default function AgentToolCallCard ({ toolCall }) {
         <div className='agent-tool-detail'>
           {args && Object.keys(args).length > 0 && (
             <div className='agent-tool-args'>
-              <div className='agent-tool-label'>Arguments:</div>
+              <div className='agent-tool-label'>{aiAgentCopy.toolCall.argumentsLabel}:</div>
               <pre className='agent-tool-pre'>{JSON.stringify(args, null, 2)}</pre>
             </div>
           )}
           {result && (
             <div className='agent-tool-result'>
-              <div className='agent-tool-label'>Result:</div>
+              <div className='agent-tool-label'>{aiAgentCopy.toolCall.resultLabel}:</div>
               <pre className='agent-tool-pre'>{formatResult(result)}</pre>
             </div>
           )}
