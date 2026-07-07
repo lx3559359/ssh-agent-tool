@@ -7,11 +7,13 @@ const os = require('os')
 const { resolve } = require('path')
 const { version } = pack
 const { mkdir, rm, exec, echo, cp } = require('shelljs')
+const { execFileSync } = require('child_process')
 const dir = 'dist/v' + version
 const cwd = process.cwd()
 
 const platform = os.platform()
 const isWin = platform === 'win32'
+const useExistingNodeModules = process.env.SSH_AGENT_TOOL_USE_EXISTING_NODE_MODULES === '1'
 
 pack.main = 'app.js'
 delete pack.scripts
@@ -50,7 +52,34 @@ require('fs').writeFileSync(
   )
 )
 
-exec(`cd work/app && npm i --omit=dev && cd ${cwd}`)
+if (useExistingNodeModules) {
+  echo('reuse existing node_modules for local package prepare')
+  rm('-rf', 'work/app/node_modules')
+  cp('-f', 'package-lock.json', 'work/app/package-lock.json')
+  if (isWin) {
+    try {
+      execFileSync('robocopy', [
+        'node_modules',
+        'work\\app\\node_modules',
+        '/MIR',
+        '/NFL',
+        '/NDL',
+        '/NJH',
+        '/NJS',
+        '/NP'
+      ], { stdio: 'inherit' })
+    } catch (error) {
+      if (typeof error.status !== 'number' || error.status > 7) {
+        throw error
+      }
+    }
+  } else {
+    cp('-r', 'node_modules', 'work/app/')
+  }
+  exec(`cd work/app && npm prune --omit=dev --ignore-scripts --no-audit --no-fund && cd ${cwd}`)
+} else {
+  exec(`cd work/app && npm i --omit=dev && cd ${cwd}`)
+}
 rm('-rf', 'work/app/node_modules/.bin')
 // Remove axios browser/ESM builds and unnecessary files (keep only lib/ and node CJS)
 rm('-rf', 'work/app/node_modules/axios/dist/esm')

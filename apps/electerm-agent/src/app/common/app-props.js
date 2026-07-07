@@ -2,7 +2,7 @@
  * app path
  */
 const { app } = require('electron')
-const { resolve } = require('path')
+const { dirname, resolve } = require('path')
 const constants = require('./runtime-constants')
 const installSrc = require('../lib/install-src')
 
@@ -14,7 +14,7 @@ function getDataPath () {
   if (!constants.isWin) {
     return defaultValue
   }
-  const exePath = app.getPath('exe').replace('\\electerm.exe', '')
+  const exePath = dirname(app.getPath('exe'))
   const p = exePath + '\\' + 'electerm'
   if (
     installSrc === 'win-x64-portable.tar.gz' ||
