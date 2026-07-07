@@ -100,6 +100,20 @@ test('rejects invalid bookmark backup content with a clear error', async () => {
     })),
     /备份文件中的服务器或分组格式不正确/
   )
+  assert.throws(
+    () => parseBookmarkBackup(JSON.stringify({
+      bookmarks: ['not-a-server'],
+      bookmarkGroups: []
+    })),
+    /备份文件中的服务器或分组格式不正确/
+  )
+  assert.throws(
+    () => parseBookmarkBackup(JSON.stringify({
+      bookmarks: [],
+      bookmarkGroups: [null]
+    })),
+    /备份文件中的服务器或分组格式不正确/
+  )
 })
 
 test('uses the AIGShell bookmark backup package from every toolbar export entry', () => {

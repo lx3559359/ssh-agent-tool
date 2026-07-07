@@ -38,10 +38,25 @@ function normalizeBookmarkBackupData (data) {
   ) {
     throw new Error(invalidBookmarkBackupShapeError)
   }
+  if (
+    !isBackupItemList(data.bookmarks) ||
+    !isBackupItemList(data.bookmarkGroups)
+  ) {
+    throw new Error(invalidBookmarkBackupShapeError)
+  }
   return {
     bookmarks: data.bookmarks || [],
     bookmarkGroups: data.bookmarkGroups || []
   }
+}
+
+function isBackupItemList (items) {
+  if (items === undefined) {
+    return true
+  }
+  return items.every(item => {
+    return item && typeof item === 'object' && !Array.isArray(item)
+  })
 }
 
 export function parseBookmarkBackup (text) {
