@@ -329,21 +329,26 @@ function processStream (sessionId, sessionData) {
     const linesToProcess = shouldFlush ? lines.filter(Boolean).concat(buffer ? [buffer] : []) : lines
 
     for (const line of linesToProcess) {
-      if (line.trim() === '') continue
-      if (line.trim() === 'data: [DONE]') {
+      const trimmed = line.trim()
+      if (trimmed === '') continue
+
+      if (!trimmed.startsWith('data:')) {
+        continue
+      }
+
+      const payload = trimmed.replace(/^data:\s*/, '')
+      if (payload === '[DONE]') {
         sessionData.completed = true
         return
       }
 
-      if (line.startsWith('data: ')) {
-        try {
-          const data = JSON.parse(line.slice(6))
-          if (data.choices && data.choices[0] && data.choices[0].delta && data.choices[0].delta.content) {
-            sessionData.content += data.choices[0].delta.content
-          }
-        } catch (e) {
-          log.error('Error parsing stream data:', e)
+      try {
+        const data = JSON.parse(payload)
+        if (data.choices && data.choices[0] && data.choices[0].delta && data.choices[0].delta.content) {
+          sessionData.content += data.choices[0].delta.content
         }
+      } catch (e) {
+        log.error('Error parsing stream data:', e)
       }
     }
   }

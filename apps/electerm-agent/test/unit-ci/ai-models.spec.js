@@ -1,6 +1,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const path = require('node:path')
+const { Readable } = require('node:stream')
 
 process.env.NODE_ENV = 'development'
 
@@ -170,6 +171,56 @@ test('normalizes custom AI auth header spacing for chat requests', async () => {
     assert.equal(res.response, 'ok')
     assert.equal(capturedConfig.headers.Authorization, 'Bearer test-key')
     assert.equal(capturedConfig.headers['Authorization:Bearer'], undefined)
+  } finally {
+    axios.create = originalCreate
+    delete require.cache[aiPath]
+  }
+})
+
+test('parses stream chunks from relays that omit the space after data colon', async () => {
+  const axios = require('axios')
+  const originalCreate = axios.create
+
+  axios.create = () => ({
+    post: async () => ({
+      data: Readable.from([
+        Buffer.from('data:{"choices":[{"delta":{"content":"中转站"}}]}\n\n'),
+        Buffer.from('data:[DONE]\n\n')
+      ])
+    })
+  })
+
+  delete require.cache[aiPath]
+  const {
+    AIchat,
+    getStreamContent
+  } = require(aiPath)
+
+  try {
+    const res = await AIchat(
+      'hello',
+      'test-model',
+      'system',
+      'https://relay.example.com/v1',
+      '',
+      'test-key',
+      '',
+      true,
+      'Authorization: Bearer'
+    )
+
+    let streamState
+    for (let i = 0; i < 20; i++) {
+      await new Promise(resolve => setTimeout(resolve, 10))
+      streamState = getStreamContent(res.sessionId)
+      if (!streamState.hasMore || streamState.error) {
+        break
+      }
+    }
+
+    assert.equal(streamState.error, undefined)
+    assert.equal(streamState.content, '中转站')
+    assert.equal(streamState.hasMore, false)
   } finally {
     axios.create = originalCreate
     delete require.cache[aiPath]
