@@ -157,7 +157,9 @@ function getAIChoiceContent (choice) {
 }
 
 function getAIErrorMessage (error) {
-  const data = error && error.response && error.response.data
+  const data = error && error.response
+    ? error.response.data
+    : error
   if (data) {
     if (data.error && typeof data.error.message === 'string') {
       return data.error.message
@@ -169,7 +171,7 @@ function getAIErrorMessage (error) {
       return data.error
     }
   }
-  return error.message
+  return error && error.message
 }
 
 async function fetchOpenAIModels (baseURL, apiKey, proxy, authHeaderName) {
@@ -394,6 +396,11 @@ function processStream (sessionId, sessionData) {
 
       try {
         const data = JSON.parse(payload)
+        if (data.error) {
+          sessionData.error = getAIErrorMessage(data)
+          sessionData.completed = true
+          return
+        }
         const content = getAIChoiceContent(data.choices && data.choices[0])
         if (content) {
           sessionData.content += normalizeAIMessageContent(content)
