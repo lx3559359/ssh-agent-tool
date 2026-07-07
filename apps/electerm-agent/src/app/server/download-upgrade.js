@@ -55,7 +55,9 @@ function finishUpgradeDownload ({
 }
 
 function selectReleaseAsset (release, platformInfo = {}) {
-  const assets = release?.assets || []
+  const assets = (release?.assets || []).filter(asset => {
+    return asset?.name && asset?.browser_download_url
+  })
   const win = platformInfo.isWin ?? isWin
   const mac = platformInfo.isMac ?? isMac
   const arm = platformInfo.isArm ?? isArm

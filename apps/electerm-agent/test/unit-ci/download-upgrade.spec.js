@@ -109,6 +109,30 @@ test('keeps legacy asset selection as a fallback', () => {
   )
 })
 
+test('skips release assets without a download URL', () => {
+  const release = {
+    assets: [
+      {
+        name: 'AIGShell-3.15.105-win-x64-installer.exe'
+      },
+      {
+        name: 'AIGShell-3.15.105-win-x64-installer.exe',
+        browser_download_url: 'https://example.com/installer.exe'
+      }
+    ]
+  }
+
+  assert.deepEqual(
+    selectReleaseAsset(release, {
+      isWin: true,
+      isMac: false,
+      isArm: false,
+      installSrc: 'win-x64.tar.gz'
+    }),
+    release.assets[1]
+  )
+})
+
 test('throws a clear error when the release has no usable asset for this platform', () => {
   const release = {
     tag_name: 'v3.15.106',
