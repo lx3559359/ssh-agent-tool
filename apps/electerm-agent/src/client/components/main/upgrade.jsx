@@ -83,20 +83,32 @@ export default class Upgrade extends PureComponent {
     })
   }
 
-  onData = (upgradePercent) => {
+  resetDownloadTimer = () => {
     clearTimeout(this.downloadTimer)
+    this.downloadTimer = setTimeout(this.timeout, downloadUpgradeTimeout)
+  }
+
+  clearDownloadTimer = () => {
+    clearTimeout(this.downloadTimer)
+    this.downloadTimer = null
+  }
+
+  onData = (upgradePercent) => {
+    this.resetDownloadTimer()
     this.changeProps({
       upgradePercent: Math.min(upgradePercent, 100)
     })
   }
 
   onError = (e) => {
+    this.clearDownloadTimer()
     this.changeProps({
       error: e.message || '更新下载失败'
     })
   }
 
   cancel = () => {
+    this.clearDownloadTimer()
     this.update && this.update.destroy()
     this.changeProps({
       upgrading: false,
@@ -110,7 +122,7 @@ export default class Upgrade extends PureComponent {
   }
 
   onEnd = () => {
-    clearTimeout(this.downloadTimer)
+    this.clearDownloadTimer()
     this.handleClose()
   }
 
@@ -140,7 +152,7 @@ export default class Upgrade extends PureComponent {
       onEnd: this.onEnd,
       onError: this.onError
     })
-    this.downloadTimer = setTimeout(this.timeout, downloadUpgradeTimeout)
+    this.resetDownloadTimer()
   }, 100)
 
   handleSkipVersion = () => {
