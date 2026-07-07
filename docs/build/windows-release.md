@@ -47,6 +47,16 @@ The local machine is only suitable for building or running the development app
 when this check reports Node.js 22, Yarn Classic, Visual C++ compiler, MSBuild
 and local dependencies as ready. End-user machines do not need these tools.
 
+Start and stop the local development client:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File test\local\start-electerm-dev.ps1
+powershell -ExecutionPolicy Bypass -File test\local\stop-electerm-dev.ps1
+```
+
+The start script launches the Vite dev server on `http://127.0.0.1:5570` and
+then opens the Electron client. Logs are written under `.artifacts\local-dev`.
+
 ## How To Verify The Uploaded Artifact
 
 After a successful workflow run, download the artifact and check the package
