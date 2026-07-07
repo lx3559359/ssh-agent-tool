@@ -223,6 +223,7 @@ function pickAIErrorMessage (data) {
 
   const nestedKeys = [
     'error',
+    'errors',
     'detail',
     'details'
   ]
