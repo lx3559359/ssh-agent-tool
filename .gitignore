@@ -25,6 +25,7 @@ tmp/
 release/
 
 # Product packaging outputs
+.artifacts/
 /apps/electerm-agent/node_modules/
 /apps/electerm-agent/dist/
 /apps/electerm-agent/build/Release/

@@ -37,6 +37,30 @@ Manual CI build:
 2. Run `Windows Electerm Agent Release`.
 3. Download the uploaded artifact from the workflow run.
 
+## How To Verify The Uploaded Artifact
+
+After a successful workflow run, download the artifact and check the package
+structure before handing it to testers:
+
+```powershell
+$runId = '28866311621'
+$artifact = 'ssh-agent-tool-windows-master'
+$out = ".artifacts\run-$runId"
+New-Item -ItemType Directory -Force -Path $out | Out-Null
+gh run download $runId --name $artifact --dir $out
+powershell -ExecutionPolicy Bypass -File test\packaging\verify-windows-artifact.ps1 -ArtifactPath $out
+```
+
+The script accepts either the extracted artifact directory or the zip downloaded
+from the artifact API. Confirm manually only if the script cannot run. The
+artifact must contain:
+
+- `SSH-Agent-Tool-*-win-x64-installer.exe`
+- `SSH-Agent-Tool-*-win-x64-portable.tar.gz`
+
+Passing this check only proves that the CI artifact has the expected Windows
+client packages. It does not replace the clean-machine SSH/SFTP smoke test.
+
 Tagged release build:
 
 ```powershell
