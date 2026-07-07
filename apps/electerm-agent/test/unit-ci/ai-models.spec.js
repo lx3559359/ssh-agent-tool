@@ -70,6 +70,10 @@ test('normalizes model aliases used by popular relays', () => {
       data: [
         { model_id: 'hunyuan-turbos-latest' },
         { modelId: 'gemini-2.5-flash' },
+        { modelName: 'kimi-k2-0711-preview' },
+        { displayName: 'MiniMax-M1' },
+        { slug: 'x-ai/grok-4' },
+        { key: 'mistral-large-latest' },
         { value: 'claude-3-5-sonnet-latest' },
         { deployment_id: 'azure-gpt-4.1-mini' }
       ]
@@ -77,6 +81,10 @@ test('normalizes model aliases used by popular relays', () => {
     [
       'hunyuan-turbos-latest',
       'gemini-2.5-flash',
+      'kimi-k2-0711-preview',
+      'MiniMax-M1',
+      'x-ai/grok-4',
+      'mistral-large-latest',
       'claude-3-5-sonnet-latest',
       'azure-gpt-4.1-mini'
     ]

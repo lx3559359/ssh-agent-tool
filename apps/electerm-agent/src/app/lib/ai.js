@@ -83,9 +83,13 @@ function getModelName (item) {
     item.model_name ||
     item.model_id ||
     item.modelId ||
+    item.modelName ||
     item.value ||
     item.deployment_id ||
     item.display_name ||
+    item.displayName ||
+    item.slug ||
+    item.key ||
     ''
 }
 
