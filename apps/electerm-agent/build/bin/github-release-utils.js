@@ -47,6 +47,30 @@ function buildLocalReleaseAssetReport ({
   }
 }
 
+function buildValidatedLocalReleaseAssets ({
+  distDir,
+  localFiles = [],
+  version
+}) {
+  const report = buildLocalReleaseAssetReport({
+    localFiles,
+    version
+  })
+  const errors = []
+
+  if (report.missingLocal.length) {
+    errors.push(`缺少本地发布文件：${report.missingLocal.join(', ')}`)
+  }
+  if (report.emptyLocal.length) {
+    errors.push(`本地发布文件为空：${report.emptyLocal.join(', ')}`)
+  }
+  if (errors.length) {
+    throw new Error(errors.join('\n'))
+  }
+
+  return report.requiredNames.map(name => path.join(distDir, name))
+}
+
 function buildReleaseAssetReport ({
   localFiles = [],
   remoteAssets = [],
@@ -106,6 +130,7 @@ module.exports = {
   buildLocalReleaseAssetReport,
   buildReleaseTag,
   buildReleaseAssetReport,
+  buildValidatedLocalReleaseAssets,
   getRequiredReleaseAssetNames,
   selectUnexpectedReleaseAssets,
   selectReleaseAssets,

@@ -4,7 +4,7 @@ const { spawnSync } = require('child_process')
 const pack = require('../../package.json')
 const {
   buildReleaseTag,
-  selectReleaseAssets,
+  buildValidatedLocalReleaseAssets,
   buildGitHubReleaseCommands,
   createSpawnOptions
 } = require('./github-release-utils')
@@ -23,13 +23,15 @@ function main () {
     throw new Error(`dist 目录不存在，请先运行 Windows 打包：${distDir}`)
   }
 
-  const files = fs.readdirSync(distDir)
-  const selected = selectReleaseAssets(files, pack.version)
-  if (selected.length !== 3) {
-    throw new Error(`缺少发布文件，应包含安装器、blockmap 和 latest.yml，当前匹配：${selected.join(', ') || '无'}`)
-  }
-
-  const assets = selected.map(file => path.join(distDir, file))
+  const localFiles = fs.readdirSync(distDir).map(name => ({
+    name,
+    size: fs.statSync(path.join(distDir, name)).size
+  }))
+  const assets = buildValidatedLocalReleaseAssets({
+    distDir,
+    localFiles,
+    version: pack.version
+  })
   const tag = buildReleaseTag(pack.version)
   const commands = buildGitHubReleaseCommands({
     repo,

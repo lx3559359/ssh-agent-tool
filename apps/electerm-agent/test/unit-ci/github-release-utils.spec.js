@@ -7,6 +7,7 @@ const {
   buildLocalReleaseAssetReport,
   buildReleaseTag,
   buildReleaseAssetReport,
+  buildValidatedLocalReleaseAssets,
   getRequiredReleaseAssetNames,
   selectUnexpectedReleaseAssets,
   selectReleaseAssets,
@@ -290,6 +291,39 @@ test('reports missing and empty local update assets before upload', () => {
       emptyLocal: ['AIGShell-3.15.105-win-x64-installer.exe'],
       ok: false
     }
+  )
+})
+
+test('builds validated local release asset paths only when update files are ready', () => {
+  const goodFiles = [
+    { name: 'AIGShell-3.15.105-win-x64-installer.exe', size: 100 },
+    { name: 'AIGShell-3.15.105-win-x64-installer.exe.blockmap', size: 10 },
+    { name: 'latest.yml', size: 3 }
+  ]
+
+  assert.deepEqual(
+    buildValidatedLocalReleaseAssets({
+      distDir: 'dist',
+      localFiles: goodFiles,
+      version: '3.15.105'
+    }),
+    [
+      path.join('dist', 'AIGShell-3.15.105-win-x64-installer.exe'),
+      path.join('dist', 'AIGShell-3.15.105-win-x64-installer.exe.blockmap'),
+      path.join('dist', 'latest.yml')
+    ]
+  )
+
+  assert.throws(
+    () => buildValidatedLocalReleaseAssets({
+      distDir: 'dist',
+      localFiles: [
+        { name: 'AIGShell-3.15.105-win-x64-installer.exe', size: 0 },
+        { name: 'latest.yml', size: 3 }
+      ],
+      version: '3.15.105'
+    }),
+    /缺少本地发布文件.*AIGShell-3\.15\.105-win-x64-installer\.exe\.blockmap.*本地发布文件为空.*AIGShell-3\.15\.105-win-x64-installer\.exe/s
   )
 })
 
