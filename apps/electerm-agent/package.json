@@ -30,6 +30,8 @@
     "test3": "./node_modules/.bin/playwright test test/e2e/02*.js --workers=1 && npm run test-unit-ci",
     "b": "npm run clean && npm run compile && npm run prepare-file",
     "r": "./build/bin/release",
+    "release:github": "node build/bin/release-github.js",
+    "release:github:dry": "node build/bin/release-github.js --dry-run",
     "w": "./build/bin/web-release",
     "t": "./node_modules/.bin/electron work/app/app.js",
     "lock": "npm i --package-lock-only"
