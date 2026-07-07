@@ -60,7 +60,12 @@ function getSshDiagnosis (err = {}) {
       suggestion: '请检查网络连通性、防火墙、安全组、堡垒机链路和服务器端口。'
     }
   }
-  if (message.includes(failMsg) || /authentication.*failed/i.test(message)) {
+  if (
+    message.includes(failMsg) ||
+    /authentication.*failed/i.test(message) ||
+    /permission denied/i.test(message) ||
+    /no supported authentication/i.test(message)
+  ) {
     return {
       title: 'SSH 认证失败',
       suggestion: '请检查用户名、密码、私钥、密钥口令或 SSH Agent 凭据是否正确。'

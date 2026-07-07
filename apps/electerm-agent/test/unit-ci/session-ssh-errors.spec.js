@@ -36,6 +36,21 @@ describe('session-ssh connection error diagnostics', () => {
     assert.match(normalized.message, /检查用户名、密码、私钥、密钥口令或 SSH Agent/)
   })
 
+  test('adds a chinese diagnosis for permission denied authentication errors', () => {
+    const error = new Error('Permission denied (publickey,password).')
+
+    const normalized = normalizeSshConnectionError(error, {
+      host: 'prod-web-02',
+      port: 2222,
+      username: 'ops'
+    })
+
+    assert.match(normalized.message, /SSH 认证失败/)
+    assert.match(normalized.message, /ops@prod-web-02:2222/)
+    assert.match(normalized.message, /检查用户名、密码、私钥、密钥口令或 SSH Agent/)
+    assert.match(normalized.message, /原始错误：Permission denied/)
+  })
+
   test('adds a chinese diagnosis for changed host keys', () => {
     const error = new Error('Host key verification failed: REMOTE HOST IDENTIFICATION HAS CHANGED')
 
