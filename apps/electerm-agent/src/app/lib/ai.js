@@ -156,6 +156,22 @@ function getAIChoiceContent (choice) {
   return choice.text || ''
 }
 
+function getAIErrorMessage (error) {
+  const data = error && error.response && error.response.data
+  if (data) {
+    if (data.error && typeof data.error.message === 'string') {
+      return data.error.message
+    }
+    if (typeof data.message === 'string') {
+      return data.message
+    }
+    if (typeof data.error === 'string') {
+      return data.error
+    }
+  }
+  return error.message
+}
+
 async function fetchOpenAIModels (baseURL, apiKey, proxy, authHeaderName) {
   const client = createAIClient(normalizeAIModelBaseURL(baseURL), apiKey, proxy, authHeaderName)
   const response = await client.get('/models')
@@ -204,7 +220,7 @@ exports.AIModels = async (baseURL, apiKey, proxy, authHeaderName) => {
       log.error('AI models error')
       log.error(e)
       return {
-        error: e.message,
+        error: getAIErrorMessage(e),
         stack: e.stack
       }
     }
@@ -216,7 +232,7 @@ exports.AIModels = async (baseURL, apiKey, proxy, authHeaderName) => {
       log.error('AI models error')
       log.error(err)
       return {
-        error: err.message,
+        error: getAIErrorMessage(err),
         stack: err.stack
       }
     }
@@ -242,7 +258,7 @@ exports.AIchatWithTools = async (messages, model, baseURL, path, apiKey, proxy, 
     }
   } catch (e) {
     log.error('AI chat with tools error', e)
-    return { error: e.message }
+    return { error: getAIErrorMessage(e) }
   }
 }
 
@@ -319,7 +335,7 @@ exports.AIchat = async (
     log.error('AI chat error')
     log.error(e)
     return {
-      error: e.message,
+      error: getAIErrorMessage(e),
       stack: e.stack
     }
   }

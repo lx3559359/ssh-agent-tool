@@ -131,6 +131,77 @@ test('keeps remote model list errors instead of masking them with Ollama fallbac
   }
 })
 
+test('returns provider error messages from model list requests', async () => {
+  const axios = require('axios')
+  const originalCreate = axios.create
+
+  axios.create = () => ({
+    get: async () => {
+      const err = new Error('Request failed with status code 401')
+      err.response = {
+        data: {
+          error: {
+            message: 'API Key 无效或额度不足'
+          }
+        }
+      }
+      throw err
+    }
+  })
+
+  delete require.cache[aiPath]
+  const { AIModels } = require(aiPath)
+
+  try {
+    const res = await AIModels('https://relay.example.com/v1', 'bad-key', '', 'Authorization: Bearer')
+    assert.equal(res.error, 'API Key 无效或额度不足')
+  } finally {
+    axios.create = originalCreate
+    delete require.cache[aiPath]
+  }
+})
+
+test('returns provider error messages from chat requests', async () => {
+  const axios = require('axios')
+  const originalCreate = axios.create
+
+  axios.create = () => ({
+    post: async () => {
+      const err = new Error('Request failed with status code 400')
+      err.response = {
+        data: {
+          error: {
+            message: '模型名称不存在'
+          }
+        }
+      }
+      throw err
+    }
+  })
+
+  delete require.cache[aiPath]
+  const { AIchat } = require(aiPath)
+
+  try {
+    const res = await AIchat(
+      'hello',
+      'bad-model',
+      'system',
+      'https://relay.example.com/v1',
+      '',
+      'test-key',
+      '',
+      false,
+      'Authorization: Bearer'
+    )
+
+    assert.equal(res.error, '模型名称不存在')
+  } finally {
+    axios.create = originalCreate
+    delete require.cache[aiPath]
+  }
+})
+
 test('normalizes custom AI auth header spacing for chat requests', async () => {
   const axios = require('axios')
   const originalCreate = axios.create
