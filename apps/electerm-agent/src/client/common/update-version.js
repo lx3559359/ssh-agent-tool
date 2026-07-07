@@ -56,3 +56,31 @@ export function getReleaseUpdate (release, currentVersion, options = {}) {
     tag_name: tagName
   }
 }
+
+export function getReleaseUpdateStatus (release, currentVersion, options = {}) {
+  const tagName = release?.tag_name
+  if (!tagName) {
+    return {
+      status: 'unavailable',
+      message: '无法获取版本信息，请检查网络、代理设置，或前往 GitHub Releases 手动查看。'
+    }
+  }
+  if (compareVersions(tagName, currentVersion) <= 0) {
+    return {
+      status: 'current',
+      message: '当前已经是最新版本。'
+    }
+  }
+  if (options.requireWindowsAssets && !hasWindowsUpdateAssets(release, tagName)) {
+    return {
+      status: 'manualDownloadRequired',
+      tag_name: tagName,
+      html_url: release.html_url,
+      message: `检测到新版本 ${tagName}，但缺少 Windows 自动更新文件，请前往 GitHub Releases 手动下载。`
+    }
+  }
+  return {
+    status: 'update',
+    tag_name: tagName
+  }
+}

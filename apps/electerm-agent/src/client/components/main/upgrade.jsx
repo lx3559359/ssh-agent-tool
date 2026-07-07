@@ -1,7 +1,7 @@
 import { PureComponent } from 'react'
 import { CloseOutlined, MinusSquareOutlined, UpCircleOutlined } from '@ant-design/icons'
 import { Button, Select, Space } from 'antd'
-import { getLatestReleaseInfo, getLatestReleaseVersion } from '../../common/update-check'
+import { getLatestReleaseInfo, getLatestReleaseStatus } from '../../common/update-check'
 import upgrade from '../../common/upgrade'
 import compare from '../../common/version-compare'
 import Link from '../common/external-link'
@@ -170,19 +170,25 @@ export default class Upgrade extends PureComponent {
       checkingRemoteVersion: true,
       error: ''
     })
-    const releaseVer = await getLatestReleaseVersion()
+    const releaseStatus = await getLatestReleaseStatus()
     this.changeProps({
       checkingRemoteVersion: false
     })
-    if (!releaseVer) {
+    if (releaseStatus.status === 'unavailable') {
       if (isManual) {
-        this.showNoUpdateInfo('暂未获取到在线更新版本，请稍后重试或前往 GitHub Releases 手动查看。')
+        this.showNoUpdateInfo(releaseStatus.message)
       }
       return
     }
     const { skipVersion = 'v0.0.0' } = this.props
     const currentVer = 'v' + window.et.version.split('-')[0]
-    const latestVer = releaseVer.tag_name
+    const latestVer = releaseStatus.tag_name
+    if (!latestVer) {
+      if (isManual) {
+        this.showNoUpdateInfo(releaseStatus.message || e('noNeed'))
+      }
+      return
+    }
     if (!isManual && compare(skipVersion, latestVer) >= 0) {
       return
     }
@@ -193,10 +199,14 @@ export default class Upgrade extends PureComponent {
       }
       return
     }
-    const canAutoUpgrade = installSrc || isWin || isMac
+    const needsManualDownload = releaseStatus.status === 'manualDownloadRequired'
+    const canAutoUpgrade = !needsManualDownload && (installSrc || isWin || isMac)
     let releaseInfo
     if (canAutoUpgrade) {
       releaseInfo = await getLatestReleaseInfo()
+    }
+    if (needsManualDownload && isManual) {
+      this.showNoUpdateInfo(releaseStatus.message)
     }
     this.changeProps({
       shouldUpgrade,
