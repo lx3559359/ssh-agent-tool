@@ -122,6 +122,37 @@ function normalizeAIModelsResponse (data) {
 
 exports.normalizeAIModelsResponse = normalizeAIModelsResponse
 
+function normalizeAIMessageContent (content) {
+  if (typeof content === 'string') {
+    return content
+  }
+  if (Array.isArray(content)) {
+    return content.map(item => {
+      if (typeof item === 'string') {
+        return item
+      }
+      if (item && typeof item === 'object') {
+        return normalizeAIMessageContent(item.text || item.content || '')
+      }
+      return ''
+    }).join('')
+  }
+  if (content == null) {
+    return ''
+  }
+  return String(content)
+}
+
+function getAIChoiceContent (choice) {
+  if (!choice || typeof choice !== 'object') {
+    return ''
+  }
+  if (choice.message && Object.prototype.hasOwnProperty.call(choice.message, 'content')) {
+    return choice.message.content
+  }
+  return choice.text || ''
+}
+
 async function fetchOpenAIModels (baseURL, apiKey, proxy, authHeaderName) {
   const client = createAIClient(normalizeAIModelBaseURL(baseURL), apiKey, proxy, authHeaderName)
   const response = await client.get('/models')
@@ -277,7 +308,7 @@ exports.AIchat = async (
       const response = await client.post(endpoint.path, requestData)
 
       return {
-        response: response.data.choices[0].message.content,
+        response: normalizeAIMessageContent(getAIChoiceContent(response.data.choices[0])),
         isStream: false
       }
     }

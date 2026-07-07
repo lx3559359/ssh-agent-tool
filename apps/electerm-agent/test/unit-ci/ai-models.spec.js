@@ -177,6 +177,95 @@ test('normalizes custom AI auth header spacing for chat requests', async () => {
   }
 })
 
+test('normalizes non-stream chat content arrays to readable text', async () => {
+  const axios = require('axios')
+  const originalCreate = axios.create
+
+  axios.create = () => ({
+    post: async () => ({
+      data: {
+        choices: [
+          {
+            message: {
+              content: [
+                {
+                  type: 'text',
+                  text: '第一段'
+                },
+                {
+                  type: 'text',
+                  text: '第二段'
+                }
+              ]
+            }
+          }
+        ]
+      }
+    })
+  })
+
+  delete require.cache[aiPath]
+  const { AIchat } = require(aiPath)
+
+  try {
+    const res = await AIchat(
+      'hello',
+      'test-model',
+      'system',
+      'https://relay.example.com/v1',
+      '',
+      'test-key',
+      '',
+      false,
+      'Authorization: Bearer'
+    )
+
+    assert.equal(res.response, '第一段第二段')
+  } finally {
+    axios.create = originalCreate
+    delete require.cache[aiPath]
+  }
+})
+
+test('uses text fallback from non-stream relay responses', async () => {
+  const axios = require('axios')
+  const originalCreate = axios.create
+
+  axios.create = () => ({
+    post: async () => ({
+      data: {
+        choices: [
+          {
+            text: '兼容接口回复'
+          }
+        ]
+      }
+    })
+  })
+
+  delete require.cache[aiPath]
+  const { AIchat } = require(aiPath)
+
+  try {
+    const res = await AIchat(
+      'hello',
+      'test-model',
+      'system',
+      'https://relay.example.com/v1',
+      '',
+      'test-key',
+      '',
+      false,
+      'Authorization: Bearer'
+    )
+
+    assert.equal(res.response, '兼容接口回复')
+  } finally {
+    axios.create = originalCreate
+    delete require.cache[aiPath]
+  }
+})
+
 test('parses stream chunks from relays that omit the space after data colon', async () => {
   const axios = require('axios')
   const originalCreate = axios.create
