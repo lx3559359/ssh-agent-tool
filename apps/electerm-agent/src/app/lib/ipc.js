@@ -70,6 +70,10 @@ const { initCommandLine } = require('./command-line')
 const { watchFile, unwatchFile } = require('./watch-file')
 const lookup = require('../common/lookup')
 const { AIchat, AIchatWithTools, AIModels, getStreamContent, stopStream } = require('./ai')
+const log = require('../common/log')
+const {
+  exportDiagnosticPack
+} = require('./diagnostic-pack')
 
 // Security: whitelist of safe environment variables for Linux/Mac/Windows
 const SAFE_ENV_KEYS = [
@@ -209,6 +213,14 @@ function initIpc () {
     AIModels,
     getStreamContent,
     stopStream,
+    exportDiagnosticPack: (outputPath) => exportDiagnosticPack({
+      outputPath,
+      packInfo,
+      appPath,
+      exePath,
+      isPortable,
+      logFilePath: log.transports.file.getFile().path
+    }),
     setTitle: (title) => {
       const win = globalState.get('win')
       win && win.setTitle(packInfo.name + ' - ' + title)
