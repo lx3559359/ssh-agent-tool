@@ -45,6 +45,11 @@ jobs:
       - name: Install dependencies and rebuild native modules
         run: npm ci
 
+      - name: Start Windows OpenSSH agent service
+        run: |
+          Set-Service ssh-agent -StartupType Manual
+          Start-Service ssh-agent
+
       - name: Run unit tests
         run: npm run test-unit-ci
 

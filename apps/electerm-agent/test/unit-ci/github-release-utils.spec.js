@@ -63,6 +63,20 @@ test('windows release workflow runs unit tests before packaging', () => {
   assert.ok(unitTestIndex < installerBuildIndex, 'unit tests should run before installer packaging begins')
 })
 
+test('windows release workflow enables ssh-agent before unit tests', () => {
+  const workflow = fs.readFileSync(
+    path.resolve(__dirname, '../../../../.github/workflows/windows-electerm-agent-release.yml'),
+    'utf8'
+  )
+
+  const sshAgentIndex = workflow.indexOf('Start-Service ssh-agent')
+  const unitTestIndex = workflow.indexOf('npm run test-unit-ci')
+
+  assert.ok(sshAgentIndex !== -1, 'release workflow should start the Windows ssh-agent service')
+  assert.ok(unitTestIndex !== -1, 'release workflow should run unit tests')
+  assert.ok(sshAgentIndex < unitTestIndex, 'ssh-agent service should start before unit tests')
+})
+
 test('windows release workflow verifies local update assets before upload', () => {
   const workflow = fs.readFileSync(
     path.resolve(__dirname, '../../../../.github/workflows/windows-electerm-agent-release.yml'),
@@ -98,6 +112,20 @@ test('windows ci workflow runs unit tests for normal code changes without publis
   assert.doesNotMatch(workflow, /softprops\/action-gh-release/)
   assert.doesNotMatch(workflow, /electron-builder --win/)
   assert.doesNotMatch(workflow, /upload-artifact/)
+})
+
+test('windows ci workflow enables ssh-agent before unit tests', () => {
+  const workflow = fs.readFileSync(
+    path.resolve(__dirname, '../../../../.github/workflows/windows-electerm-agent-ci.yml'),
+    'utf8'
+  )
+
+  const sshAgentIndex = workflow.indexOf('Start-Service ssh-agent')
+  const unitTestIndex = workflow.indexOf('npm run test-unit-ci')
+
+  assert.ok(sshAgentIndex !== -1, 'ci workflow should start the Windows ssh-agent service')
+  assert.ok(unitTestIndex !== -1, 'ci workflow should run unit tests')
+  assert.ok(sshAgentIndex < unitTestIndex, 'ssh-agent service should start before unit tests')
 })
 
 test('builds a stable GitHub release tag from package version', () => {
