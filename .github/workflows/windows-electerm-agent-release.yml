@@ -20,7 +20,7 @@ jobs:
     env:
       CI: true
       WORKFLOW_NAME: windows-electerm-agent
-      npm_config_msvs_version: "2022"
+      npm_config_msvs_version: "2026"
       npm_config_build_from_source: "true"
 
     steps:
@@ -36,6 +36,8 @@ jobs:
 
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
+        with:
+          msbuild-architecture: x64
 
       - name: Install Yarn Classic for Electerm packaging
         run: npm install -g yarn@1.22.22
