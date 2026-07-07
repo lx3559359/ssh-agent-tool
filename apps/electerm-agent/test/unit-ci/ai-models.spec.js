@@ -280,6 +280,42 @@ test('returns provider error messages from chat requests', async () => {
   }
 })
 
+test('returns provider error messages from tool chat response bodies', async () => {
+  const axios = require('axios')
+  const originalCreate = axios.create
+
+  axios.create = () => ({
+    post: async () => ({
+      data: {
+        error: {
+          message: 'tool calling is disabled for this model'
+        }
+      }
+    })
+  })
+
+  delete require.cache[aiPath]
+  const { AIchatWithTools } = require(aiPath)
+
+  try {
+    const res = await AIchatWithTools(
+      [{ role: 'user', content: 'check server' }],
+      'test-model',
+      'https://relay.example.com/v1',
+      '',
+      'test-key',
+      '',
+      [{ type: 'function', function: { name: 'noop', parameters: {} } }],
+      'Authorization: Bearer'
+    )
+
+    assert.equal(res.error, 'tool calling is disabled for this model')
+  } finally {
+    axios.create = originalCreate
+    delete require.cache[aiPath]
+  }
+})
+
 test('normalizes custom AI auth header spacing for chat requests', async () => {
   const axios = require('axios')
   const originalCreate = axios.create

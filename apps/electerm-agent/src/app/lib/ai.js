@@ -324,7 +324,13 @@ exports.AIchatWithTools = async (messages, model, baseURL, path, apiKey, proxy, 
       requestData.tools = tools
     }
     const response = await client.post(endpoint.path, requestData)
-    const choice = response.data.choices[0]
+    const choice = response.data?.choices?.[0]
+    if (!choice?.message) {
+      const errorMessage = getAIErrorMessage(response.data)
+      return {
+        error: errorMessage || '模型 API 返回异常，未包含可用的 Agent 消息'
+      }
+    }
     return {
       message: choice.message
     }
