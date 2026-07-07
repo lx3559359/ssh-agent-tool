@@ -35,4 +35,36 @@ describe('session-ssh connection error diagnostics', () => {
     assert.match(normalized.message, /deploy@prod-web-01:22/)
     assert.match(normalized.message, /检查用户名、密码、私钥、密钥口令或 SSH Agent/)
   })
+
+  test('adds a chinese diagnosis for changed host keys', () => {
+    const error = new Error('Host key verification failed: REMOTE HOST IDENTIFICATION HAS CHANGED')
+
+    const normalized = normalizeSshConnectionError(error, {
+      host: 'prod-web-01',
+      port: 22,
+      username: 'root'
+    })
+
+    assert.match(normalized.message, /SSH 主机密钥校验失败/)
+    assert.match(normalized.message, /root@prod-web-01:22/)
+    assert.match(normalized.message, /服务器指纹/)
+    assert.match(normalized.message, /known_hosts/)
+  })
+
+  test('adds a chinese diagnosis for reset ssh connections', () => {
+    const error = new Error('read ECONNRESET')
+    error.code = 'ECONNRESET'
+
+    const normalized = normalizeSshConnectionError(error, {
+      host: 'jump.example.com',
+      port: 2222,
+      username: 'ops'
+    })
+
+    assert.match(normalized.message, /SSH 连接被远端重置/)
+    assert.match(normalized.message, /ops@jump\.example\.com:2222/)
+    assert.match(normalized.message, /检查服务器 sshd/)
+    assert.match(normalized.message, /防火墙/)
+    assert.match(normalized.message, /原始错误：read ECONNRESET/)
+  })
 })

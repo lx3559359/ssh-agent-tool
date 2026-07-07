@@ -48,6 +48,12 @@ function getSshDiagnosis (err = {}) {
       suggestion: '请检查服务器地址、DNS、代理配置或当前网络连接。'
     }
   }
+  if (code === 'ECONNRESET' || /ECONNRESET|connection reset/i.test(message)) {
+    return {
+      title: 'SSH 连接被远端重置',
+      suggestion: '请检查服务器 sshd、堡垒机/代理、防火墙、安全组或连接数限制是否主动断开连接。'
+    }
+  }
   if (code === 'ETIMEDOUT' || /timed? ?out|handshake timeout/i.test(message)) {
     return {
       title: 'SSH 连接超时',
