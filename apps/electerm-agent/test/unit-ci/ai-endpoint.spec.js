@@ -53,3 +53,25 @@ test('normalizes model list URL for relay root URL', () => {
     'https://api.aigh.store/v1'
   )
 })
+
+test('normalizes popular provider root URLs to their OpenAI-compatible base paths', () => {
+  const cases = [
+    ['https://openrouter.ai', 'https://openrouter.ai/api/v1'],
+    ['https://dashscope.aliyuncs.com', 'https://dashscope.aliyuncs.com/compatible-mode/v1'],
+    ['https://open.bigmodel.cn', 'https://open.bigmodel.cn/api/paas/v4'],
+    ['https://api.groq.com', 'https://api.groq.com/openai/v1'],
+    ['https://generativelanguage.googleapis.com', 'https://generativelanguage.googleapis.com/v1beta/openai']
+  ]
+
+  for (const [input, expectedBaseURL] of cases) {
+    assert.deepEqual(
+      normalizeAIEndpoint(input, ''),
+      {
+        baseURL: expectedBaseURL,
+        path: '/chat/completions'
+      },
+      input
+    )
+    assert.equal(normalizeAIModelBaseURL(input), expectedBaseURL, input)
+  }
+})
