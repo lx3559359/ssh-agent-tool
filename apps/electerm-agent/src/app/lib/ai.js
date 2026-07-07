@@ -126,6 +126,20 @@ async function fetchOllamaModels (baseURL, apiKey, proxy, authHeaderName) {
   return normalizeAIModelsResponse(response.data)
 }
 
+function shouldTryOllamaModels (baseURL) {
+  try {
+    const url = new URL(String(baseURL || ''))
+    const host = url.hostname.toLowerCase()
+    return host === 'localhost' ||
+      host === '::1' ||
+      host.startsWith('127.') ||
+      url.port === '11434' ||
+      host.includes('ollama')
+  } catch (_) {
+    return false
+  }
+}
+
 exports.AIModels = async (baseURL, apiKey, proxy, authHeaderName) => {
   try {
     const models = await fetchOpenAIModels(baseURL, apiKey, proxy, authHeaderName)
@@ -134,10 +148,23 @@ exports.AIModels = async (baseURL, apiKey, proxy, authHeaderName) => {
         models
       }
     }
+    if (!shouldTryOllamaModels(baseURL)) {
+      return {
+        models: []
+      }
+    }
     return {
       models: await fetchOllamaModels(baseURL, apiKey, proxy, authHeaderName)
     }
   } catch (e) {
+    if (!shouldTryOllamaModels(baseURL)) {
+      log.error('AI models error')
+      log.error(e)
+      return {
+        error: e.message,
+        stack: e.stack
+      }
+    }
     try {
       return {
         models: await fetchOllamaModels(baseURL, apiKey, proxy, authHeaderName)

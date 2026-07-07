@@ -93,3 +93,39 @@ test('tries Ollama tags endpoint when OpenAI models endpoint returns empty list'
     delete require.cache[aiPath]
   }
 })
+
+test('keeps remote model list errors instead of masking them with Ollama fallback', async () => {
+  const axios = require('axios')
+  const originalCreate = axios.create
+  const calls = []
+
+  axios.create = (config) => ({
+    get: async (urlPath) => {
+      calls.push({
+        baseURL: config.baseURL,
+        path: urlPath
+      })
+      if (urlPath === '/models') {
+        throw new Error('remote /models requires a valid API key')
+      }
+      throw new Error('unexpected Ollama fallback')
+    }
+  })
+
+  delete require.cache[aiPath]
+  const { AIModels } = require(aiPath)
+
+  try {
+    const res = await AIModels('https://api.example.com/v1', 'bad-key', '', 'Authorization: Bearer')
+    assert.equal(res.error, 'remote /models requires a valid API key')
+    assert.deepEqual(calls, [
+      {
+        baseURL: 'https://api.example.com/v1',
+        path: '/models'
+      }
+    ])
+  } finally {
+    axios.create = originalCreate
+    delete require.cache[aiPath]
+  }
+})
