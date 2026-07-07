@@ -7,8 +7,9 @@ function parseVersion (value) {
 }
 
 function cleanVersion (value) {
-  const version = parseVersion(value)
-  return version ? version.join('.') : ''
+  const raw = String(value || '').trim()
+  const match = raw.match(/^v?(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)$/i)
+  return match ? match[1] : ''
 }
 
 export function compareVersions (left, right) {

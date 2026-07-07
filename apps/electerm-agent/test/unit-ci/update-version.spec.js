@@ -57,6 +57,28 @@ test('requires Windows update assets when validating an automatic update release
   )
 })
 
+test('recognizes Windows update assets for prerelease versions', async () => {
+  const {
+    getReleaseUpdate,
+    hasWindowsUpdateAssets
+  } = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/common/update-version.js')))
+
+  const prerelease = {
+    tag_name: 'v3.15.106-beta.1',
+    assets: [
+      { name: 'AIGShell-3.15.106-beta.1-win-x64-installer.exe' },
+      { name: 'AIGShell-3.15.106-beta.1-win-x64-installer.exe.blockmap' },
+      { name: 'latest.yml' }
+    ]
+  }
+
+  assert.equal(hasWindowsUpdateAssets(prerelease, prerelease.tag_name), true)
+  assert.deepEqual(
+    getReleaseUpdate(prerelease, '3.15.105', { requireWindowsAssets: true }),
+    { tag_name: 'v3.15.106-beta.1' }
+  )
+})
+
 test('classifies release check results for actionable update messages', async () => {
   const {
     getReleaseUpdateStatus

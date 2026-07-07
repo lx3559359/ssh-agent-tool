@@ -62,6 +62,31 @@ test('selects the Windows installer asset for AIGShell releases before legacy ta
   )
 })
 
+test('selects the Windows installer asset for AIGShell prerelease builds', () => {
+  const release = {
+    assets: [
+      {
+        name: 'AIGShell-3.15.106-beta.1-win-x64-installer.exe',
+        browser_download_url: 'https://example.com/installer-beta.exe'
+      },
+      {
+        name: 'AIGShell-3.15.106-beta.1-win-x64-installer.exe.blockmap',
+        browser_download_url: 'https://example.com/installer-beta.exe.blockmap'
+      }
+    ]
+  }
+
+  assert.deepEqual(
+    selectReleaseAsset(release, {
+      isWin: true,
+      isMac: false,
+      isArm: false,
+      installSrc: 'win-x64.tar.gz'
+    }),
+    release.assets[0]
+  )
+})
+
 test('keeps legacy asset selection as a fallback', () => {
   const release = {
     assets: [
