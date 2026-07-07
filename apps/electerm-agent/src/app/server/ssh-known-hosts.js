@@ -287,17 +287,17 @@ function buildUnknownHostPrompt (options) {
     : normalizeHost(host)
   return {
     mode: 'confirm',
-    name: `Trust SSH host key for ${target}?`,
+    name: `信任 SSH 主机指纹：${target}？`,
     instructions: [
-      `The authenticity of host '${target}' can't be established.`,
-      `Key type: ${meta.keyType}`,
-      `Fingerprint: ${formatSha256Fingerprint(meta.sha256)}`,
-      `Known hosts file: ${knownHostsPath}`,
-      'Trust this host key and add it to known_hosts?'
+      `首次连接到主机 '${target}'，当前工具还没有保存它的 SSH 主机指纹。`,
+      `密钥类型：${meta.keyType}`,
+      `指纹：${formatSha256Fingerprint(meta.sha256)}`,
+      `known_hosts 文件：${knownHostsPath}`,
+      '如果你确认这是正确的服务器，可以信任并保存该主机指纹。'
     ],
     prompts: [],
-    submitText: 'Trust and Save',
-    cancelText: 'Reject',
+    submitText: '信任并保存',
+    cancelText: '拒绝连接',
     confirmResult: 'trust'
   }
 }
@@ -314,9 +314,9 @@ function buildHostMismatchError (options) {
     : normalizeHost(host)
   return new Error(
     [
-      `SSH host key verification failed for ${target}.`,
-      `Presented ${meta.keyType} fingerprint ${formatSha256Fingerprint(meta.sha256)} does not match ${knownHostsPath}.`,
-      'Remove the old known_hosts entry if you trust the new host key.'
+      `SSH 主机指纹校验失败：${target}。`,
+      `服务器返回的 ${meta.keyType} 指纹 ${formatSha256Fingerprint(meta.sha256)} 与 ${knownHostsPath} 中保存的记录不一致。`,
+      '如果你确认服务器已重装或指纹已更换，请先删除旧记录或在确认提示中更新指纹。'
     ].join(' ')
   )
 }
@@ -333,19 +333,19 @@ function buildHostMismatchPrompt (options) {
     : normalizeHost(host)
   return {
     mode: 'confirm',
-    name: `SSH host key changed for ${target}`,
+    name: `SSH 主机指纹已变化：${target}`,
     instructions: [
-      'WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!',
-      `The host key for '${target}' has changed.`,
-      `New key type: ${meta.keyType}`,
-      `New fingerprint: ${formatSha256Fingerprint(meta.sha256)}`,
-      `Known hosts file: ${knownHostsPath}`,
-      'This could indicate a man-in-the-middle attack, or the remote host was reinstalled (e.g. router reboot).',
-      'Update the known_hosts entry with the new key?'
+      '警告：远端主机身份标识发生变化。',
+      `主机 '${target}' 的 SSH 主机指纹与本地记录不一致。`,
+      `新密钥类型：${meta.keyType}`,
+      `新指纹：${formatSha256Fingerprint(meta.sha256)}`,
+      `known_hosts 文件：${knownHostsPath}`,
+      '这可能表示中间人攻击，也可能是服务器重装、系统重建或主机密钥被管理员更换。',
+      '如果你确认这是可信服务器，是否更新本地 known_hosts 记录？'
     ],
     prompts: [],
-    submitText: 'Update Key',
-    cancelText: 'Reject',
+    submitText: '更新指纹',
+    cancelText: '拒绝连接',
     confirmResult: 'trust'
   }
 }

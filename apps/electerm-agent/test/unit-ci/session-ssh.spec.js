@@ -506,8 +506,8 @@ describe('session-ssh auth flows', () => {
       const ws = createPromptWs((options, prompts) => {
         firstPromptCount = prompts.length
         assert.equal(options.mode, 'confirm')
-        assert.match(options.name, /trust ssh host key/i)
-        assert.match(options.instructions.join('\n'), /Fingerprint: SHA256:/)
+        assert.match(options.name, /信任 SSH 主机指纹/)
+        assert.match(options.instructions.join('\n'), /指纹：SHA256:/)
         return ['trust']
       }, {
         includeConfirmPrompts: true

@@ -7,7 +7,9 @@ const { join } = require('path')
 
 const {
   appendKnownHost,
+  buildHostMismatchError,
   buildHostMismatchPrompt,
+  buildUnknownHostPrompt,
   checkKnownHosts,
   getHostKeyMeta,
   matchesKnownHostField,
@@ -169,7 +171,7 @@ describe('ssh known_hosts verification', () => {
     }
   })
 
-  test('buildHostMismatchPrompt returns a confirm prompt with warning', () => {
+  test('buildHostMismatchPrompt returns a Chinese confirm prompt with warning', () => {
     const meta = {
       keyType: 'ssh-ed25519',
       sha256: 'AAABBBCCC123'
@@ -181,9 +183,47 @@ describe('ssh known_hosts verification', () => {
       knownHostsPath: '/home/user/.ssh/known_hosts'
     })
     assert.equal(prompt.mode, 'confirm')
-    assert.equal(prompt.submitText, 'Update Key')
-    assert.equal(prompt.cancelText, 'Reject')
-    assert.ok(prompt.instructions.some(i => i.includes('WARNING')))
+    assert.equal(prompt.submitText, '更新指纹')
+    assert.equal(prompt.cancelText, '拒绝连接')
+    assert.ok(prompt.instructions.some(i => i.includes('警告')))
     assert.ok(prompt.instructions.some(i => i.includes('router.test')))
+  })
+
+  test('host key prompts and errors use Chinese copy', () => {
+    const meta = {
+      keyType: 'ssh-ed25519',
+      sha256: 'AAABBBCCC123'
+    }
+    const unknownPrompt = buildUnknownHostPrompt({
+      host: 'new-host.test',
+      port: 22,
+      meta,
+      knownHostsPath: 'C:\\Users\\test\\.ssh\\known_hosts'
+    })
+    assert.equal(unknownPrompt.submitText, '信任并保存')
+    assert.equal(unknownPrompt.cancelText, '拒绝连接')
+    assert.match(unknownPrompt.name, /信任 SSH 主机指纹/)
+    assert.ok(unknownPrompt.instructions.some(i => i.includes('首次连接')))
+    assert.ok(unknownPrompt.instructions.some(i => i.includes('SHA256:AAABBBCCC123')))
+
+    const mismatchPrompt = buildHostMismatchPrompt({
+      host: 'router.test',
+      port: 2222,
+      meta,
+      knownHostsPath: 'C:\\Users\\test\\.ssh\\known_hosts'
+    })
+    assert.equal(mismatchPrompt.submitText, '更新指纹')
+    assert.equal(mismatchPrompt.cancelText, '拒绝连接')
+    assert.match(mismatchPrompt.name, /SSH 主机指纹已变化/)
+    assert.ok(mismatchPrompt.instructions.some(i => i.includes('中间人攻击')))
+
+    const mismatchError = buildHostMismatchError({
+      host: 'router.test',
+      port: 2222,
+      meta,
+      knownHostsPath: 'C:\\Users\\test\\.ssh\\known_hosts'
+    })
+    assert.match(mismatchError.message, /SSH 主机指纹校验失败/)
+    assert.match(mismatchError.message, /如果你确认服务器已重装或指纹已更换/)
   })
 })
