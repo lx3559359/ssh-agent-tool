@@ -4,9 +4,11 @@
 
 import fetch from './fetch-from-server'
 import {
-  baseUpdateCheckUrls, packInfo
+  packInfo
 } from './constants'
 import dayjs from 'dayjs'
+
+const releaseApiUrl = 'https://api.github.com/repos/lx3559359/ssh-agent-tool/releases/latest'
 
 async function fetchData (url, options) {
   const data = {
@@ -37,32 +39,9 @@ function getInfo (url) {
 }
 
 export async function getLatestReleaseVersion (n) {
-  let q = ''
-  if (n) {
-    const { store } = window
-    const info = {
-      load_time: store.loadTime,
-      bookmark_count: store.bookmarks.length,
-      lang: store.config.language,
-      sync_with_github: !!store.config.syncSetting?.githubGistId,
-      sync_with_gitee: !!store.config.syncSetting?.giteeGistId,
-      version: packInfo.version,
-      installSrc: store.installSrc,
-      n: Date.now()
-    }
-    q = Object.keys(info).reduce((p, k, i) => {
-      const pre = i ? '&' : '?'
-      return p + pre + k + '=' + encodeURIComponent(info[k])
-    }, '')
-  }
-
-  let url = `${baseUpdateCheckUrls[0]}/version.html${q}`
-  let tagName = await getInfo(url)
-  if (!tagName) {
-    url = `${baseUpdateCheckUrls[1]}/version.html${q}`
-    tagName = await getInfo(url)
-  }
-  if (tagName) {
+  const release = await getInfo(releaseApiUrl)
+  const tagName = release?.tag_name
+  if (tagName && tagName !== `v${packInfo.version}`) {
     return {
       tag_name: tagName
     }
@@ -70,16 +49,11 @@ export async function getLatestReleaseVersion (n) {
 }
 
 export async function getLatestReleaseInfo () {
-  let url = `${baseUpdateCheckUrls[0]}/data/electerm-github-release.json`
-  let res = await getInfo(url)
-  if (!res?.release?.body) {
-    url = `${baseUpdateCheckUrls[1]}/data/electerm-github-release.json`
-    res = await getInfo(url)
-  }
-  return res && res.release
+  const release = await getInfo(releaseApiUrl)
+  return release?.body
     ? {
-        body: res.release.body,
-        date: dayjs(res.release.published_at).format('YYYY-MM-DD')
+        body: release.body,
+        date: dayjs(release.published_at).format('YYYY-MM-DD')
       }
     : undefined
 }

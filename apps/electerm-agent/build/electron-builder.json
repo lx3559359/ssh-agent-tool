@@ -1,5 +1,5 @@
 {
-  "appId": "org.electerm.electerm",
+  "appId": "com.lx3559359.sshagenttool",
   "directories": {
     "app": "work/app",
     "output": "dist",
@@ -9,7 +9,7 @@
     "en-US"
   ],
   "asar": true,
-  "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+  "artifactName": "SSH-Agent-Tool-${version}-${os}-${arch}.${ext}",
   "win": {
     "target": [
       "tar.gz",
@@ -19,6 +19,8 @@
     "icon": "node_modules/@electerm/electerm-resource/build/icons-win.ico",
     "publish": {
       "provider": "github",
+      "owner": "lx3559359",
+      "repo": "ssh-agent-tool",
       "channel": "${env.WORKFLOW_NAME}"
     }
   },
@@ -60,21 +62,21 @@
       ]
     },
     {
-      "name": "Electerm Protocol",
+      "name": "SSH Agent Tool Protocol",
       "schemes": [
-        "electerm"
+        "ssh-agent-tool"
       ]
     }
   ],
   "appx": {
-    "applicationId": "electerm",
-    "identityName": "64159ZHAOXudong.electerm",
+    "applicationId": "sshagenttool",
+    "identityName": "lx3559359.sshagenttool",
     "publisher": "CN=9F481654-170A-434C-8259-984D2EB1FD7F",
     "publisherDisplayName": "ZHAO Xudong"
   },
   "nsis": {
     "oneClick": false,
-    "artifactName": "${productName}-${version}-${os}-${arch}-installer.${ext}",
+    "artifactName": "SSH-Agent-Tool-${version}-${os}-${arch}-installer.${ext}",
     "allowToChangeInstallationDirectory": true
   },
   "mac": {

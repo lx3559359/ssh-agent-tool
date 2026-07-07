@@ -1,6 +1,6 @@
 export default [
   {
-    name: 'homepage',
-    url: 'https://electerm.org'
+    name: 'GitHub Releases',
+    url: 'https://github.com/lx3559359/ssh-agent-tool/releases'
   }
 ]

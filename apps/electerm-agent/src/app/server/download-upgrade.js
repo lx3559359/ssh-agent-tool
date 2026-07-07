@@ -16,18 +16,10 @@ const globalState = require('./global-state')
 
 rp.defaults.proxy = false
 
-function getUrl (url, mirror) {
-  if (mirror === 'gh-proxy') {
-    return `https://electerm-mirror.html5beta.com/${url}`
-  } if (mirror === 'sourceforge') {
-    const arr = url.split('/')
-    const len = arr.length
-    return `https://master.dl.sourceforge.net/project/electerm.mirror/${arr[len - 2]}/${arr[len - 1]}?viasf=1`
-  } else if (mirror === 'r2') {
-    return `https://electerm-store.html5beta.com/r/${url.split('/').pop()}`
-  } else {
-    return url
-  }
+const releaseApiUrl = 'https://api.github.com/repos/lx3559359/ssh-agent-tool/releases/latest'
+
+function getUrl (url) {
+  return url
 }
 
 function getReleaseInfo (
@@ -42,8 +34,8 @@ function getReleaseInfo (
   }
   return rp(conf)
     .then((res) => {
-      return res.data
-        .release
+      const release = res.data.release || res.data
+      return release
         .assets
         .filter(filter)[0]
     })
@@ -58,11 +50,10 @@ class Upgrade {
     const {
       id,
       ws,
-      proxy,
-      mirror
+      proxy
     } = this.options
     const agent = createProxyAgent(proxy)
-    const releaseInfoUrl = `${packInfo.homepage}/data/electerm-github-release.json?_=${+new Date()}`
+    const releaseInfoUrl = `${releaseApiUrl}?_=${+new Date()}`
     const filter = r => {
       return r.name.endsWith(installSrc)
     }
@@ -83,7 +74,7 @@ class Upgrade {
       return
     }
     const localPath = resolve(tempDir, releaseInfo.name)
-    const remotePath = getUrl(releaseInfo.browser_download_url, mirror)
+    const remotePath = getUrl(releaseInfo.browser_download_url)
     await rmrf(localPath).catch(log.error)
     const { size } = releaseInfo
     this.id = id

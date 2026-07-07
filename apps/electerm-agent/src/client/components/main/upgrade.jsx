@@ -26,10 +26,7 @@ const {
 } = packInfo
 
 const downloadMirrorList = [
-  'github',
-  'gh-proxy',
-  'sourceforge',
-  'r2'
+  'github'
 ]
 
 export default class Upgrade extends PureComponent {
@@ -129,7 +126,7 @@ export default class Upgrade extends PureComponent {
           ...newTerm(undefined, true),
           runScripts: [
             {
-              script: 'npm install -g electerm',
+              script: 'npm install -g ssh-agent-tool',
               delay: 500
             }
           ]

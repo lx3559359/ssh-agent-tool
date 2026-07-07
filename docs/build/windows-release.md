@@ -25,8 +25,8 @@ Workflow:
 
 Outputs:
 
-- NSIS installer: `*-installer.exe`
-- Portable package: `*-portable.tar.gz`
+- NSIS installer: `SSH-Agent-Tool-*-win-x64-installer.exe`
+- Portable package: `SSH-Agent-Tool-*-win-x64-portable.tar.gz`
 - Additional electron-builder metadata under `apps/electerm-agent/dist/`
 
 ## How To Build
@@ -45,6 +45,20 @@ git push origin v0.1.0-electerm-agent
 ```
 
 Tag builds create a draft GitHub Release. Keep the release as draft until SSH/SFTP manual smoke tests pass.
+
+## Online Update Channel
+
+The client checks GitHub Releases from:
+
+- `https://api.github.com/repos/lx3559359/ssh-agent-tool/releases/latest`
+
+Draft releases are not returned by this API. To make a version visible to the in-app update checker:
+
+1. Build from a version tag.
+2. Download and smoke test the draft Release artifact on a clean Windows machine.
+3. Publish the GitHub Release after the installer and portable package pass.
+
+The updater matches assets by installer source suffix, such as `win-x64-installer.exe` or `win-x64-portable.tar.gz`, so the branded file prefix can change without breaking update downloads.
 
 ## Why This Solves Other-PC Usage
 
@@ -89,6 +103,7 @@ Before publishing a release as non-draft, verify on a clean Windows machine:
 The 2026-07-07 local runtime validation found two local machine issues:
 
 - `npm install` failed locally because Visual Studio C++ Build Tools were not installed.
+- `npm ci` with Node 24 also failed locally on `node-pty`; use Node 22 plus Visual Studio C++ Build Tools, matching CI.
 - SSH-agent-only unit tests need Windows OpenSSH Agent behavior review.
 
 The CI workflow is the next verification point because it provides the correct Windows native build environment.
