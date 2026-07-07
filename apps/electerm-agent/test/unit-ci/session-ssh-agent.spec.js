@@ -72,6 +72,10 @@ function runCommand (command, args, options = {}) {
   return result.stdout
 }
 
+function isSshAgentTestUnavailable (err) {
+  return err?.code === 'ENOENT' || err?.code === 'SSH_AGENT_ENV_UNAVAILABLE'
+}
+
 function generateKey ({ dir, name, type = 'ed25519', passphrase = '', bits }) {
   const keyPath = path.join(dir, name)
   const args = ['-q', '-t', type]
@@ -99,7 +103,13 @@ function startAgent (keyPath) {
   const sockMatch = output.match(/SSH_AUTH_SOCK=([^;]+)/)
   const pidMatch = output.match(/SSH_AGENT_PID=([^;]+)/)
   if (!sockMatch || !pidMatch) {
-    throw new Error(`Cannot parse ssh-agent output:\n${output}`)
+    const err = new Error(
+      'ssh-agent did not provide an isolated SSH_AUTH_SOCK environment. ' +
+      'This usually means the platform uses a system agent service instead of a Unix-style agent process.'
+    )
+    err.code = 'SSH_AGENT_ENV_UNAVAILABLE'
+    err.output = output
+    throw err
   }
   const env = {
     ...process.env,
@@ -277,8 +287,8 @@ describe('SSH agent auth', () => {
       try {
         agent = startAgent() // start without a key first – we load it below
       } catch (err) {
-        if (err.code === 'ENOENT') {
-          t.skip('ssh-agent / ssh-keygen not available')
+        if (isSshAgentTestUnavailable(err)) {
+          t.skip('isolated ssh-agent process not available on this platform')
           return
         }
         throw err
@@ -336,8 +346,8 @@ describe('SSH agent auth', () => {
       try {
         agent = startAgent()
       } catch (err) {
-        if (err.code === 'ENOENT') {
-          t.skip('ssh-agent / ssh-keygen not available')
+        if (isSshAgentTestUnavailable(err)) {
+          t.skip('isolated ssh-agent process not available on this platform')
           return
         }
         throw err
@@ -388,8 +398,8 @@ describe('SSH agent auth', () => {
       try {
         agent = startAgent()
       } catch (err) {
-        if (err.code === 'ENOENT') {
-          t.skip('ssh-agent / ssh-keygen not available')
+        if (isSshAgentTestUnavailable(err)) {
+          t.skip('isolated ssh-agent process not available on this platform')
           return
         }
         throw err
@@ -433,8 +443,8 @@ describe('SSH agent auth', () => {
       try {
         agent = startAgent()
       } catch (err) {
-        if (err.code === 'ENOENT') {
-          t.skip('ssh-agent / ssh-keygen not available')
+        if (isSshAgentTestUnavailable(err)) {
+          t.skip('isolated ssh-agent process not available on this platform')
           return
         }
         throw err

@@ -238,7 +238,13 @@ function startAgent () {
   const pid = output.match(/SSH_AGENT_PID=([^;]+)/)
 
   if (!sock || !pid) {
-    throw new Error(`Unable to parse ssh-agent output: ${output}`)
+    const error = new Error(
+      'ssh-agent did not provide an isolated SSH_AUTH_SOCK environment. ' +
+      'This platform may use a system agent service instead.'
+    )
+    error.code = 'SSH_AGENT_ENV_UNAVAILABLE'
+    error.output = output
+    throw error
   }
 
   const env = {
@@ -420,8 +426,9 @@ describe('session-ssh auth flows', () => {
     try {
       agent = startAgent()
     } catch (error) {
-      if (error.code === 'ENOENT') {
-        t.skip('ssh-agent is not available in this environment')
+      if (error.code === 'ENOENT' || error.code === 'SSH_AGENT_ENV_UNAVAILABLE') {
+        t.skip('isolated ssh-agent process is not available in this environment')
+        return
       }
       throw error
     }

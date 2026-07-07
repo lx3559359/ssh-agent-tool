@@ -17,6 +17,7 @@ const { TerminalBase } = require('./session-base')
 const { commonExtends } = require('./session-common')
 const globalState = require('./global-state')
 const iconv = require('iconv-lite')
+const { resolveSshAgent } = require('./ssh-agent-resolver')
 
 // Encodings that are equivalent to UTF-8 (no conversion needed)
 const utf8Aliases = new Set(['utf-8', 'utf8', 'utf-8-strict'])
@@ -51,8 +52,7 @@ class TerminalSshBase extends TerminalBase {
   }
 
   getAgent () {
-    const { initOptions } = this
-    return initOptions.useSshAgent !== false ? (initOptions.sshAgent || process.env.SSH_AUTH_SOCK) : undefined
+    return resolveSshAgent(this.initOptions)
   }
 
   getAuthOrder (connectOptions) {
