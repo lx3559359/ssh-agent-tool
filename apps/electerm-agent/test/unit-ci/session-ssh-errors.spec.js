@@ -99,4 +99,20 @@ describe('session-ssh connection error diagnostics', () => {
     assert.match(normalized.message, /路由/)
     assert.match(normalized.message, /原始错误：connect EHOSTUNREACH/)
   })
+
+  test('adds a chinese diagnosis when the server closes before ssh is ready', () => {
+    const error = new Error('Socket closed before SSH handshake')
+
+    const normalized = normalizeSshConnectionError(error, {
+      host: 'bastion.example.com',
+      port: 22,
+      username: 'ops'
+    })
+
+    assert.match(normalized.message, /SSH 连接被提前关闭/)
+    assert.match(normalized.message, /ops@bastion\.example\.com:22/)
+    assert.match(normalized.message, /堡垒机/)
+    assert.match(normalized.message, /协议/)
+    assert.match(normalized.message, /原始错误：Socket closed before SSH handshake/)
+  })
 })

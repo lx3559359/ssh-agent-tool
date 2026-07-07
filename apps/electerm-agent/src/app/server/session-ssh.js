@@ -60,6 +60,12 @@ function getSshDiagnosis (err = {}) {
       suggestion: '请检查本机网络、VPN、路由、代理/堡垒机、防火墙和安全组是否允许访问目标服务器。'
     }
   }
+  if (/socket closed|connection closed|closed before|handshake.*closed|server.*closed/i.test(message)) {
+    return {
+      title: 'SSH 连接被提前关闭',
+      suggestion: '请检查服务器 sshd、堡垒机/代理、连接数限制、协议是否为 SSH，以及安全设备是否在握手前断开连接。'
+    }
+  }
   if (code === 'ETIMEDOUT' || /timed? ?out|handshake timeout/i.test(message)) {
     return {
       title: 'SSH 连接超时',
