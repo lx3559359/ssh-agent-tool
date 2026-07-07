@@ -119,6 +119,9 @@ function normalizeAIModelsResponse (data, allowModelMap = false) {
   if (direct) {
     return [direct]
   }
+  if (Array.isArray(data)) {
+    return uniqueModels(data.flatMap(item => normalizeAIModelsResponse(item)))
+  }
   if (!data || typeof data !== 'object') {
     return []
   }

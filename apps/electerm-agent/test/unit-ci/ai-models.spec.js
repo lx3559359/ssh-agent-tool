@@ -13,6 +13,19 @@ test('normalizes model list responses from common providers and relays', () => {
   } = require(aiPath)
 
   assert.deepEqual(
+    normalizeAIModelsResponse([
+      'deepseek-chat',
+      { id: 'qwen-plus' },
+      { model_name: 'glm-4-plus' }
+    ]),
+    [
+      'deepseek-chat',
+      'qwen-plus',
+      'glm-4-plus'
+    ]
+  )
+
+  assert.deepEqual(
     normalizeAIModelsResponse({
       data: [
         { id: 'gpt-4.1-mini' },
