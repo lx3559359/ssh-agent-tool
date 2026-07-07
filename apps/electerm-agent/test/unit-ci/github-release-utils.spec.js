@@ -4,6 +4,8 @@ const path = require('node:path')
 
 const {
   buildReleaseTag,
+  getRequiredReleaseAssetNames,
+  selectUnexpectedReleaseAssets,
   selectReleaseAssets,
   buildGitHubReleaseCommands,
   createSpawnOptions
@@ -31,6 +33,37 @@ test('selects only AIGShell Windows update assets from dist files', () => {
       'AIGShell-3.15.105-win-x64-installer.exe',
       'AIGShell-3.15.105-win-x64-installer.exe.blockmap',
       'latest.yml'
+    ]
+  )
+})
+
+test('identifies the exact release assets required for Windows online updates', () => {
+  assert.deepEqual(
+    getRequiredReleaseAssetNames('3.15.105'),
+    [
+      'AIGShell-3.15.105-win-x64-installer.exe',
+      'AIGShell-3.15.105-win-x64-installer.exe.blockmap',
+      'latest.yml'
+    ]
+  )
+})
+
+test('selects unexpected release assets without deleting update files', () => {
+  const assets = [
+    { name: 'AIGShell-3.15.105-win-x64-installer.exe', id: 'installer' },
+    { name: 'AIGShell-3.15.105-win-x64-installer.exe.blockmap', id: 'blockmap' },
+    { name: 'latest.yml', id: 'latest' },
+    { name: 'AIGShell.exe', id: 'loose-exe' },
+    { name: 'app.asar', id: 'asar' },
+    { name: 'windows-electerm-agent.yml', id: 'legacy-channel' }
+  ]
+
+  assert.deepEqual(
+    selectUnexpectedReleaseAssets(assets, '3.15.105'),
+    [
+      { name: 'AIGShell.exe', id: 'loose-exe' },
+      { name: 'app.asar', id: 'asar' },
+      { name: 'windows-electerm-agent.yml', id: 'legacy-channel' }
     ]
   )
 })

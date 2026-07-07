@@ -5,14 +5,23 @@ function buildReleaseTag (version) {
   return value.startsWith('v') ? value : `v${value}`
 }
 
-function selectReleaseAssets (files, version) {
+function getRequiredReleaseAssetNames (version) {
   const prefix = `AIGShell-${version}-win-x64-installer.exe`
-  const wanted = new Set([
+  return [
     prefix,
     `${prefix}.blockmap`,
     'latest.yml'
-  ])
+  ]
+}
+
+function selectReleaseAssets (files, version) {
+  const wanted = new Set(getRequiredReleaseAssetNames(version))
   return files.filter(file => wanted.has(path.basename(file)))
+}
+
+function selectUnexpectedReleaseAssets (assets, version) {
+  const required = new Set(getRequiredReleaseAssetNames(version))
+  return (assets || []).filter(asset => !required.has(path.basename(asset.name)))
 }
 
 function buildGitHubReleaseCommands ({
@@ -39,6 +48,8 @@ function createSpawnOptions (options = {}) {
 
 module.exports = {
   buildReleaseTag,
+  getRequiredReleaseAssetNames,
+  selectUnexpectedReleaseAssets,
   selectReleaseAssets,
   buildGitHubReleaseCommands,
   createSpawnOptions
