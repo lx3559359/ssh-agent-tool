@@ -56,6 +56,11 @@ jobs:
           node -e "const c = require('./build/bin/build-common'); c.patchNsisKeepShortcuts(); c.writeSrc('win-x64-installer.exe')"
           npx electron-builder --win nsis --publish never
 
+      - name: Smoke test packaged AIGShell app
+        run: npm run test-package-smoke
+        env:
+          AIGSHELL_PACKAGE_SMOKE_TIMEOUT: "30000"
+
       - name: Build portable package
         run: |
           node build/bin/prepare-win-portable-ci.js

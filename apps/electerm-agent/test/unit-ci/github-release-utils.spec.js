@@ -25,6 +25,23 @@ test('windows release workflow publishes only online update assets', () => {
   assert.match(workflow, /apps\/electerm-agent\/dist\/latest\.yml/)
 })
 
+test('windows release workflow smoke tests the packaged app before uploading artifacts', () => {
+  const workflow = fs.readFileSync(
+    path.resolve(__dirname, '../../../../.github/workflows/windows-electerm-agent-release.yml'),
+    'utf8'
+  )
+
+  const installerBuildIndex = workflow.indexOf('name: Build NSIS installer')
+  const smokeTestIndex = workflow.indexOf('npm run test-package-smoke')
+  const artifactUploadIndex = workflow.indexOf('name: Upload Windows artifacts')
+
+  assert.ok(installerBuildIndex !== -1, 'workflow should build the NSIS installer')
+  assert.ok(smokeTestIndex !== -1, 'workflow should run the packaged app smoke test')
+  assert.ok(artifactUploadIndex !== -1, 'workflow should upload Windows artifacts')
+  assert.ok(smokeTestIndex > installerBuildIndex, 'smoke test should run after the packaged app is built')
+  assert.ok(smokeTestIndex < artifactUploadIndex, 'smoke test should run before release artifacts are uploaded')
+})
+
 test('builds a stable GitHub release tag from package version', () => {
   assert.equal(buildReleaseTag('3.15.105'), 'v3.15.105')
   assert.equal(buildReleaseTag('v3.15.105'), 'v3.15.105')
