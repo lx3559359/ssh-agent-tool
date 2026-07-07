@@ -10,6 +10,9 @@ const globalState = require('./glob-state')
 const {
   packInfo
 } = require('../common/runtime-constants')
+const {
+  defaultLang
+} = require('../common/runtime-constants')
 const buildMenu = require('./menu')
 
 function capitalizeFirstLetter (string) {
@@ -18,7 +21,7 @@ function capitalizeFirstLetter (string) {
 
 function initApp (langMap, config) {
   globalState.set('langMap', langMap)
-  globalState.set('getLang', (lang = config.language || 'en_us') => {
+  globalState.set('getLang', (lang = config.language || defaultLang) => {
     return langMap[lang].lang
   })
   globalState.set('translate', txt => {

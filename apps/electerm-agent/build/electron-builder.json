@@ -6,6 +6,7 @@
     "buildResources": "node_modules/@electerm/electerm-resource/build-res"
   },
   "electronLanguages": [
+    "zh-CN",
     "en-US"
   ],
   "asar": true,
@@ -26,43 +27,43 @@
   },
   "protocols": [
     {
-      "name": "SSH Protocol",
+      "name": "SSH 协议",
       "schemes": [
         "ssh"
       ]
     },
     {
-      "name": "Telnet Protocol",
+      "name": "Telnet 协议",
       "schemes": [
         "telnet"
       ]
     },
     {
-      "name": "RDP Protocol",
+      "name": "RDP 协议",
       "schemes": [
         "rdp"
       ]
     },
     {
-      "name": "VNC Protocol",
+      "name": "VNC 协议",
       "schemes": [
         "vnc"
       ]
     },
     {
-      "name": "Serial Protocol",
+      "name": "串口协议",
       "schemes": [
         "serial"
       ]
     },
     {
-      "name": "Spice Protocol",
+      "name": "Spice 协议",
       "schemes": [
         "spice"
       ]
     },
     {
-      "name": "SSH Agent Tool Protocol",
+      "name": "SSH Agent 工具协议",
       "schemes": [
         "ssh-agent-tool"
       ]
@@ -77,7 +78,12 @@
   "nsis": {
     "oneClick": false,
     "artifactName": "SSH-Agent-Tool-${version}-${os}-${arch}-installer.${ext}",
-    "allowToChangeInstallationDirectory": true
+    "allowToChangeInstallationDirectory": true,
+    "language": "2052",
+    "installerLanguages": [
+      "zh_CN"
+    ],
+    "multiLanguageInstaller": false
   },
   "mac": {
     "category": "public.app-category.developer-tools",

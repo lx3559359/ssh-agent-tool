@@ -22,10 +22,10 @@ const EVENT_NAME_CONFIG = 'ai-config-history-update'
 const e = window.translate
 const defaultRoles = [
   {
-    value: 'Terminal expert, provide commands for different OS, explain usage briefly, use markdown format'
+    value: 'SSH 运维专家，优先排查服务器、网络、日志、进程、端口、磁盘、内存、Nginx、Docker 和部署问题。回答使用中文和 Markdown。'
   },
   {
-    value: '终端专家,提供不同系统下命令,简要解释用法,用markdown格式'
+    value: '终端专家，提供不同系统下的命令，简要解释用法，默认使用中文回答。'
   }
 ]
 
@@ -69,7 +69,7 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
       setTesting(true)
       const res = await window.pre.runGlobalAsync(
         'AIchat',
-        'Hi',
+        '你好',
         values.modelAI,
         values.roleAI,
         values.baseURLAI,
@@ -82,9 +82,9 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
       if (res && res.error) {
         message.error(res.error)
       } else if (res && res.response) {
-        message.success('AI config works!')
+        message.success('模型 API 配置可用')
       } else {
-        message.error('Unexpected response from AI API')
+        message.error('模型 API 返回异常')
       }
     } catch (e) {
       if (e.message) {
@@ -102,22 +102,22 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
   }
 
   function renderHistoryItem (item) {
-    if (!item || typeof item !== 'object') return { label: 'Unknown', title: 'Unknown' }
+    if (!item || typeof item !== 'object') return { label: '未知配置', title: '未知配置' }
     const name = item.nameAI || ''
-    const model = item.modelAI || 'Default Model'
+    const model = item.modelAI || '默认模型'
     const rolePrefix = item.roleAI ? item.roleAI.substring(0, 15) + '...' : ''
     const label = name || `[${model}] ${rolePrefix}`
     const title = name
-      ? `${name}\nModel: ${item.modelAI}\nURL: ${item.baseURLAI}`
-      : `Model: ${item.modelAI}\nRole: ${item.roleAI}\nURL: ${item.baseURLAI}`
+      ? `${name}\n模型：${item.modelAI}\n地址：${item.baseURLAI}`
+      : `模型：${item.modelAI}\n角色：${item.roleAI}\n地址：${item.baseURLAI}`
     return { label, title }
   }
 
   function renderApiUrlLabel () {
     if (baseURLAI === 'https://api.atlascloud.ai/v1') {
-      return <span>API URL (<Link to='https://atlascloud.ai'>AtlasCloud</Link>)</span>
+      return <span>API 地址 (<Link to='https://atlascloud.ai'>AtlasCloud</Link>)</span>
     }
-    return 'API URL'
+    return 'API 地址'
   }
 
   if (!showAIConfig) {
@@ -128,13 +128,13 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
     <>
       <Alert
         title={
-          <Link to={aiConfigWikiLink}>WIKI: {aiConfigWikiLink}</Link>
+          <Link to={aiConfigWikiLink}>模型 API 配置说明：{aiConfigWikiLink}</Link>
         }
         type='info'
         className='mg2y'
       />
       <p>
-        Full Url: {initialValues?.baseURLAI}{initialValues?.apiPathAI}
+        完整地址：{initialValues?.baseURLAI}{initialValues?.apiPathAI}
       </p>
       <Form
         form={form}
@@ -144,34 +144,34 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
         className='ai-config-form'
       >
         <Form.Item
-          label='Name'
+          label='配置名称'
           name='nameAI'
         >
           <Input
-            placeholder='e.g. DeepSeek Relay, Local Ollama (optional)'
+            placeholder='例如：DeepSeek 中转、Ollama 本地（可选）'
           />
         </Form.Item>
         <Form.Item label={renderApiUrlLabel()} required>
           <Space.Compact className='width-100'>
             <Form.Item
-              label='API URL'
+              label='API 地址'
               name='baseURLAI'
               noStyle
               rules={[
-                { required: true, message: 'Please input or select API provider URL!' },
-                { type: 'url', message: 'Please enter a valid URL!' }
+                { required: true, message: '请输入或选择 API 服务地址' },
+                { type: 'url', message: '请输入有效的 URL' }
               ]}
             >
               <Input
-                placeholder='Enter API provider URL'
+                placeholder='输入 API 服务地址'
                 style={{ width: '75%' }}
               />
             </Form.Item>
             <Form.Item
-              label='API PATH'
+              label='API 路径'
               name='apiPathAI'
               rules={[
-                { required: true, message: 'Please input API PATH' }
+                { required: true, message: '请输入 API 路径' }
               ]}
               noStyle
             >
@@ -185,41 +185,41 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
         <Form.Item
           label={e('modelAi')}
           name='modelAI'
-          rules={[{ required: true, message: 'Please input or select a model!' }]}
+          rules={[{ required: true, message: '请输入或选择模型' }]}
         >
           <Input
-            placeholder='Enter or select AI model'
+            placeholder='输入或选择模型'
           />
         </Form.Item>
 
         <Form.Item
-          label='API Key'
+          label='API 密钥'
           name='apiKeyAI'
         >
-          <Password placeholder='Enter your API key' />
+          <Password placeholder='输入你的 API 密钥' />
         </Form.Item>
 
         <Form.Item
-          label='Auth Header'
+          label='认证 Header'
           name='authHeaderNameAI'
-          tooltip='Header format for API authentication. e.g. "Authorization: Bearer" sends "Authorization: Bearer <key>", "x-api-key" sends "x-api-key: <key>"'
+          tooltip='API 认证 Header 格式。例如：Authorization: Bearer 会发送 Authorization: Bearer <key>，x-api-key 会发送 x-api-key: <key>'
         >
           <AutoComplete
             options={authHeaderOptions}
             filterOption={filter}
           >
-            <Input placeholder='e.g. Authorization: Bearer' />
+            <Input placeholder='例如：Authorization: Bearer' />
           </AutoComplete>
         </Form.Item>
 
         <Form.Item
           label={e('roleAI')}
           name='roleAI'
-          rules={[{ required: true, message: 'Please input the AI role!' }]}
+          rules={[{ required: true, message: '请输入 AI 角色或系统提示词' }]}
         >
           <AutoComplete options={defaultRoles} placement='topLeft'>
             <Input.TextArea
-              placeholder='Enter AI role/system prompt'
+              placeholder='输入 AI 角色或系统提示词'
               rows={1}
             />
           </AutoComplete>
@@ -228,7 +228,7 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
         <Form.Item
           label={e('language')}
           name='languageAI'
-          rules={[{ required: true, message: 'Please input language' }]}
+          rules={[{ required: true, message: '请输入回答语言' }]}
         >
           <AutoComplete options={defaultLangs} placement='topLeft'>
             <Input
@@ -240,14 +240,14 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
         <Form.Item
           label={e('proxy')}
           name='proxyAI'
-          tooltip='Proxy for AI API requests (e.g., socks5://127.0.0.1:1080)'
+          tooltip='模型 API 请求使用的代理，例如 socks5://127.0.0.1:1080'
         >
           <AutoComplete
             options={proxyOptions}
             filterOption={filter}
             allowClear
           >
-            <Input placeholder='Enter proxy URL (optional)' />
+            <Input placeholder='输入代理地址（可选）' />
           </AutoComplete>
         </Form.Item>
 

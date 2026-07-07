@@ -58,7 +58,7 @@ const getLang = (config, sysLocale, langs) => {
   if (config.language) {
     return config.language
   }
-  let l = sysLocale
+  let l = defaultLang || sysLocale
   l = l ? l.toLowerCase().replace('-', '_') : defaultLang
   return findLang(langs, l) || defaultLang
 }

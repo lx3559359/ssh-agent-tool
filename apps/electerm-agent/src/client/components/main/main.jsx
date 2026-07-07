@@ -20,6 +20,7 @@ import classnames from 'classnames'
 import ShortcutControl from '../shortcuts/shortcut-control.jsx'
 import { isMac, isWin, textTerminalBgValue } from '../../common/constants'
 import { ConfigProvider } from 'antd'
+import zhCN from 'antd/locale/zh_CN'
 import { NotificationContainer } from '../common/notification'
 import InfoModal from '../sidebar/info-modal.jsx'
 import RightSidePanel from '../side-panel-r/side-panel-r'
@@ -242,6 +243,7 @@ export default auto(function Index (props) {
   return (
     <ConfigProvider
       theme={uiThemeConfig}
+      locale={zhCN}
     >
       <div {...ext1}>
         <InputContextMenu />

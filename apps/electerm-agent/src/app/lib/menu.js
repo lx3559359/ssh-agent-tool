@@ -157,14 +157,14 @@ function buildMenu () {
           label: e('reportIssue'),
           click () {
             shell
-              .openExternal('https://github.com/electerm/electerm/issues/new')
+              .openExternal('https://github.com/lx3559359/ssh-agent-tool/issues/new')
           }
         },
         {
-          label: 'github',
+          label: 'GitHub',
           click () {
             shell
-              .openExternal('https://github.com/electerm/electerm')
+              .openExternal('https://github.com/lx3559359/ssh-agent-tool')
           }
         },
         {
@@ -224,7 +224,7 @@ function buildMenu () {
     template[1].submenu.push({
       type: 'separator'
     }, {
-      label: 'Speech',
+      label: '语音',
       submenu: [
         {
           role: 'startspeaking',

@@ -163,7 +163,7 @@ const bookmarkSchema = {
 }
 
 export function buildPrompt (description) {
-  const lang = window.store.config.languageAI || window.store.getLangName()
+  const lang = window.store.config.languageAI || window.store.getLangName() || '简体中文'
   const schemaDescription = Object.entries(bookmarkSchema)
     .map(([type, fields]) => {
       const fieldList = Object.entries(fields)
@@ -173,29 +173,29 @@ export function buildPrompt (description) {
     })
     .join('\n\n')
 
-  return `You are a bookmark configuration generator. Based on the user's natural language description, generate bookmark configurations in JSON format.
+  return `你是连接书签配置生成器。请根据用户的自然语言描述，生成 JSON 格式的书签配置。
 
-Available bookmark types and their fields:
+可用书签类型和字段：
 ${schemaDescription}
 
-Important rules:
-1. Analyze the user's description to determine the most appropriate connection type
-2. For SSH connections, use type "ssh" and default port 22 unless specified
-3. For Telnet connections, use type "telnet" and default port 23 unless specified
-4. For VNC connections, use type "vnc" and default port 5900 unless specified
-5. For RDP connections, use type "rdp" and default port 3389 unless specified
-6. For FTP connections, use type "ftp" and default port 21 unless specified
-7. For Serial connections, use type "serial"
-8. For Web/Browser connections, use type "web" with a URL field
-9. For Local terminal, use type "local"
-10. Only include fields that are relevant to the connection type
-11. Always include a meaningful title if not specified
-12. Respond ONLY with valid JSON, no markdown formatting or explanations
-13. Reply in ${lang} language
+重要规则：
+1. 分析用户描述，判断最合适的连接类型。
+2. SSH 连接使用 type "ssh"，未指定端口时默认 22。
+3. Telnet 连接使用 type "telnet"，未指定端口时默认 23。
+4. VNC 连接使用 type "vnc"，未指定端口时默认 5900。
+5. RDP 连接使用 type "rdp"，未指定端口时默认 3389。
+6. FTP 连接使用 type "ftp"，未指定端口时默认 21。
+7. 串口连接使用 type "serial"。
+8. Web/浏览器连接使用 type "web"，并提供 url 字段。
+9. 本地终端使用 type "local"。
+10. 只包含当前连接类型相关字段。
+11. 未指定标题时，生成有意义的 title。
+12. 只返回有效 JSON，不要返回 Markdown 或解释。
+13. 使用${lang}处理文本字段。
 
-User description: ${description}
+用户描述：${description}
 
-Generate the bookmark JSON:`
+生成书签 JSON：`
 }
 
 export default bookmarkSchema

@@ -31,7 +31,7 @@ const downloadMirrorList = [
 
 export default class Upgrade extends PureComponent {
   state = {
-    mirror: downloadMirrorList[1]
+    mirror: downloadMirrorList[0]
   }
 
   downloadTimer = null
@@ -111,7 +111,7 @@ export default class Upgrade extends PureComponent {
 
   timeout = () => {
     this.cancel()
-    message.error('Download timeout, please try again')
+    message.error('下载超时，请重试')
   }
 
   onEnd = () => {
@@ -169,7 +169,7 @@ export default class Upgrade extends PureComponent {
     })
     if (!releaseVer) {
       return this.changeProps({
-        error: 'Can not get version info'
+        error: '无法获取版本信息'
       })
     }
     const { skipVersion = 'v0.0.0' } = this.props
@@ -214,12 +214,12 @@ export default class Upgrade extends PureComponent {
           </span>
         </div>
         <div className='upgrade-panel-body'>
-          You can visit
+          你可以访问
           <Link
             to={homepage}
             className='mg1x'
           >{homepage}
-          </Link> to download new version.
+          </Link>手动下载新版本。
         </div>
       </div>
     )
@@ -234,7 +234,7 @@ export default class Upgrade extends PureComponent {
     }
     return (
       <div className='pd1t'>
-        <div className='bold'>Changelog:</div>
+        <div className='bold'>更新日志：</div>
         <Markdown text={releaseInfo.body} />
         <Link
           to={packInfo.releases}

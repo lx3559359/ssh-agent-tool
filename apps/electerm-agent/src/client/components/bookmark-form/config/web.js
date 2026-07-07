@@ -24,12 +24,12 @@ const webConfig = {
           name: 'url',
           label: () => e('URL'),
           rules: [
-            { required: true, message: e('Please input URL') },
+            { required: true, message: '请输入 URL' },
             {
               validator: (_, value) =>
                 /^[a-z\d.+-]+:\/\/[^\s/$.?#].[^\s]*$/i.test(value)
                   ? Promise.resolve()
-                  : Promise.reject(new Error(e('URL must start with http:// or https://')))
+                  : Promise.reject(new Error('URL 必须以 http:// 或 https:// 开头'))
             }
           ]
         },

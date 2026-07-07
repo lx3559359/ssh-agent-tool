@@ -2,65 +2,49 @@
 function generateErrorHtml (port) {
   return `
     <!DOCTYPE html>
-    <html lang="en">
+    <html lang="zh-CN">
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Connection Error</title>
+      <title>连接错误</title>
       <style>
         body {
-          font-family: Arial, sans-serif;
+          font-family: "Microsoft YaHei", "PingFang SC", Arial, sans-serif;
           margin: 40px;
-          line-height: 1.6;
+          line-height: 1.7;
           background: #fff;
-          color: #333;
+          color: #1f2937;
         }
         h1 {
           color: #d32f2f;
         }
         .section {
           margin-bottom: 20px;
+          max-width: 760px;
         }
         ul {
           margin: 10px 0;
-          padding-left: 20px;
+          padding-left: 22px;
         }
-        .chinese {
-          font-family: 'Noto Sans SC', sans-serif;
-        }
-        img {
-          max-width: 200px;
+        code {
+          background: #f3f4f6;
+          border-radius: 4px;
+          padding: 2px 6px;
         }
       </style>
     </head>
     <body>
       <div class="section">
-        <h1>Connection Issue Detected</h1>
-        <p>Unable to connect to the local server at http://127.0.0.1:${port}. This is often caused by applications (such as proxy software, VPNs, or network tools) intercepting or blocking localhost (127.0.0.1) traffic.</p>
-        <p><strong>Suggested fixes:</strong></p>
+        <h1>检测到本地连接问题</h1>
+        <p>工具无法连接到本地服务 <code>http://127.0.0.1:${port}</code>。这通常是代理软件、VPN、安全软件或防火墙拦截了本机回环地址导致的。</p>
+        <p><strong>建议按下面顺序排查：</strong></p>
         <ul>
-          <li>Check if proxy software (e.g., Proxifier) is running. Ensure it excludes localhost (127.0.0.1) or this app's executable from proxying.</li>
-          <li>Verify that VPNs or other network tools are not redirecting localhost traffic.</li>
-          <li>Check firewall rules or antivirus software that might block local ports.</li>
+          <li>检查代理软件，确保 <code>127.0.0.1</code>、<code>localhost</code> 或本工具可执行文件已加入直连/排除列表。</li>
+          <li>临时关闭 VPN、网络加速器或流量接管工具，再重新启动本工具。</li>
+          <li>检查 Windows 防火墙、杀毒软件或终端安全策略是否阻止了本地端口。</li>
+          <li>如果刚刚更新过工具，请完全退出后重新打开。</li>
         </ul>
-        <p>Restart the app after making changes. If the problem persists, contact author: zxdong@gmail.com.</p>
-      </div>
-
-      <div class="section chinese">
-        <h1>检测到连接问题</h1>
-        <p>无法连接到本地服务器 http://127.0.0.1:${port}。这通常是由于应用程序（如代理软件、VPN 或网络工具）拦截或阻止了本地 (127.0.0.1) 流量。</p>
-        <p><strong>建议的解决方法：</strong></p>
-        <ul>
-          <li>检查是否正在运行代理软件（如 Proxifier）。确保其设置排除本地连接 (127.0.0.1) 或此应用程序的可执行文件。</li>
-          <li>确认 VPN 或其他网络工具未重定向本地流量。</li>
-          <li>检查防火墙规则或防病毒软件是否阻止了本地端口。</li>
-        </ul>
-        <p>更改设置后重启应用程序。如果问题仍然存在，请联系作者：zxdong@gmail.com。</p>
-        <p>
-          <img
-            src='https://electerm.org/electerm-wechat-group-qr.jpg'
-          />
-        </p>
+        <p>问题仍存在时，请打开工具日志，把日志内容和当前系统环境一起提交到项目 Issue。</p>
       </div>
     </body>
     </html>

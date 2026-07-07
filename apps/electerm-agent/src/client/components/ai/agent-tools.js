@@ -13,12 +13,12 @@ function buildAddBookmarkParameters () {
       type: {
         type: 'string',
         enum: Object.keys(bookmarkSchemas),
-        description: 'Bookmark type'
+        description: '书签类型'
       },
       ...Object.fromEntries(
         Object.entries(typeProperties).map(([type, schema]) => [
           type,
-          { type: 'object', description: `Fields for ${type} bookmark`, ...schema }
+          { type: 'object', description: `${type} 书签字段`, ...schema }
         ])
       )
     },
@@ -31,17 +31,17 @@ export const agentTools = [
     type: 'function',
     function: {
       name: 'send_terminal_command',
-      description: 'Send a command to a terminal tab and wait for it to finish. Returns the command output. For long-running commands (builds, deployments, installations), use run_background_command instead to avoid timeouts.',
+      description: '向终端标签页发送命令并等待执行结束，返回命令输出。构建、部署、安装等长时间运行命令请改用 run_background_command，避免超时。',
       parameters: {
         type: 'object',
         properties: {
           command: {
             type: 'string',
-            description: 'The shell command to execute'
+            description: '要执行的 Shell 命令'
           },
           tabId: {
             type: 'string',
-            description: 'Terminal tab ID. Omit to use the active terminal.'
+            description: '终端标签页 ID。省略时使用当前活动终端。'
           }
         },
         required: ['command']
@@ -52,17 +52,17 @@ export const agentTools = [
     type: 'function',
     function: {
       name: 'get_terminal_output',
-      description: 'Read the current visible output from a terminal.',
+      description: '读取终端当前可见输出。',
       parameters: {
         type: 'object',
         properties: {
           tabId: {
             type: 'string',
-            description: 'Terminal tab ID. Omit for active terminal.'
+            description: '终端标签页 ID。省略时使用当前活动终端。'
           },
           lines: {
             type: 'number',
-            description: 'Number of recent lines to read (default 50).'
+            description: '读取最近多少行，默认 50 行。'
           }
         }
       }
@@ -72,7 +72,7 @@ export const agentTools = [
     type: 'function',
     function: {
       name: 'open_local_terminal',
-      description: 'Open a new local terminal tab. Returns the new tab ID.',
+      description: '打开新的本地终端标签页，返回新标签页 ID。',
       parameters: {
         type: 'object',
         properties: {}
@@ -83,7 +83,7 @@ export const agentTools = [
     type: 'function',
     function: {
       name: 'list_tabs',
-      description: 'List all open terminal tabs with their IDs, titles, hosts, and types.',
+      description: '列出所有已打开终端标签页，包括 ID、标题、主机和类型。',
       parameters: {
         type: 'object',
         properties: {}
@@ -94,7 +94,7 @@ export const agentTools = [
     type: 'function',
     function: {
       name: 'get_active_tab',
-      description: 'Get the currently active terminal tab.',
+      description: '获取当前活动终端标签页。',
       parameters: {
         type: 'object',
         properties: {}
@@ -105,13 +105,13 @@ export const agentTools = [
     type: 'function',
     function: {
       name: 'switch_tab',
-      description: 'Switch to a different terminal tab.',
+      description: '切换到指定终端标签页。',
       parameters: {
         type: 'object',
         properties: {
           tabId: {
             type: 'string',
-            description: 'The tab ID to switch to.'
+            description: '要切换到的标签页 ID。'
           }
         },
         required: ['tabId']
@@ -122,13 +122,13 @@ export const agentTools = [
     type: 'function',
     function: {
       name: 'close_tab',
-      description: 'Close a terminal tab by its ID. Use this to clean up tabs after a task is finished.',
+      description: '按 ID 关闭终端标签页。任务结束后可用它清理不需要的标签页。',
       parameters: {
         type: 'object',
         properties: {
           tabId: {
             type: 'string',
-            description: 'The tab ID to close.'
+            description: '要关闭的标签页 ID。'
           }
         },
         required: ['tabId']
@@ -139,7 +139,7 @@ export const agentTools = [
     type: 'function',
     function: {
       name: 'list_bookmarks',
-      description: 'List all saved bookmarks (SSH, Telnet, VNC, etc.).',
+      description: '列出所有已保存书签，包括 SSH、Telnet、VNC 等。',
       parameters: {
         type: 'object',
         properties: {}
@@ -150,13 +150,13 @@ export const agentTools = [
     type: 'function',
     function: {
       name: 'open_bookmark',
-      description: 'Open a saved bookmark as a new terminal tab.',
+      description: '以新的终端标签页打开已保存书签。',
       parameters: {
         type: 'object',
         properties: {
           id: {
             type: 'string',
-            description: 'The bookmark ID to open.'
+            description: '要打开的书签 ID。'
           }
         },
         required: ['id']
@@ -167,7 +167,7 @@ export const agentTools = [
     type: 'function',
     function: {
       name: 'add_bookmark',
-      description: 'Create a new bookmark. Specify the type and provide type-specific fields. Supported types: ' + Object.keys(bookmarkSchemas).join(', ') + '.',
+      description: '创建新书签。需要指定类型并提供该类型对应字段。支持类型：' + Object.keys(bookmarkSchemas).join(', ') + '。',
       parameters: buildAddBookmarkParameters()
     }
   },
@@ -175,7 +175,7 @@ export const agentTools = [
     type: 'function',
     function: {
       name: 'open_tab',
-      description: 'Open a terminal tab directly with connection parameters without creating a bookmark. Supported types: ' + Object.keys(bookmarkSchemas).join(', ') + '.',
+      description: '使用连接参数直接打开终端标签页，不创建书签。支持类型：' + Object.keys(bookmarkSchemas).join(', ') + '。',
       parameters: buildAddBookmarkParameters()
     }
   },
@@ -183,17 +183,17 @@ export const agentTools = [
     type: 'function',
     function: {
       name: 'sftp_list',
-      description: 'List files and directories at a remote path via SFTP. Requires an SSH/FTP tab.',
+      description: '通过 SFTP 列出远程路径下的文件和目录，需要 SSH/FTP 标签页。',
       parameters: {
         type: 'object',
         properties: {
           remotePath: {
             type: 'string',
-            description: 'Remote directory path to list.'
+            description: '要列出的远程目录路径。'
           },
           tabId: {
             type: 'string',
-            description: 'SSH/FTP tab ID. Omit to use the active tab.'
+            description: 'SSH/FTP 标签页 ID。省略时使用当前活动标签页。'
           }
         },
         required: ['remotePath']
@@ -204,17 +204,17 @@ export const agentTools = [
     type: 'function',
     function: {
       name: 'sftp_stat',
-      description: 'Get file/directory stats (size, permissions, etc.) at a remote path via SFTP.',
+      description: '通过 SFTP 获取远程文件或目录信息，包括大小、权限等。',
       parameters: {
         type: 'object',
         properties: {
           remotePath: {
             type: 'string',
-            description: 'Remote path to stat.'
+            description: '要读取信息的远程路径。'
           },
           tabId: {
             type: 'string',
-            description: 'SSH/FTP tab ID. Omit to use the active tab.'
+            description: 'SSH/FTP 标签页 ID。省略时使用当前活动标签页。'
           }
         },
         required: ['remotePath']
@@ -225,17 +225,17 @@ export const agentTools = [
     type: 'function',
     function: {
       name: 'sftp_read_file',
-      description: 'Read the contents of a remote file via SFTP.',
+      description: '通过 SFTP 读取远程文件内容。',
       parameters: {
         type: 'object',
         properties: {
           remotePath: {
             type: 'string',
-            description: 'Remote file path to read.'
+            description: '要读取的远程文件路径。'
           },
           tabId: {
             type: 'string',
-            description: 'SSH/FTP tab ID. Omit to use the active tab.'
+            description: 'SSH/FTP 标签页 ID。省略时使用当前活动标签页。'
           }
         },
         required: ['remotePath']
@@ -246,17 +246,17 @@ export const agentTools = [
     type: 'function',
     function: {
       name: 'sftp_del',
-      description: 'Delete a remote file or directory via SFTP.',
+      description: '通过 SFTP 删除远程文件或目录。',
       parameters: {
         type: 'object',
         properties: {
           remotePath: {
             type: 'string',
-            description: 'Remote file or directory path to delete.'
+            description: '要删除的远程文件或目录路径。'
           },
           tabId: {
             type: 'string',
-            description: 'SSH/FTP tab ID. Omit to use the active tab.'
+            description: 'SSH/FTP 标签页 ID。省略时使用当前活动标签页。'
           }
         },
         required: ['remotePath']
@@ -267,21 +267,21 @@ export const agentTools = [
     type: 'function',
     function: {
       name: 'sftp_upload',
-      description: 'Upload a local file to a remote server via SFTP.',
+      description: '通过 SFTP 上传本地文件到远程服务器。',
       parameters: {
         type: 'object',
         properties: {
           localPath: {
             type: 'string',
-            description: 'Local file path to upload.'
+            description: '要上传的本地文件路径。'
           },
           remotePath: {
             type: 'string',
-            description: 'Remote destination path.'
+            description: '远程目标路径。'
           },
           tabId: {
             type: 'string',
-            description: 'SSH/FTP tab ID. Omit to use the active tab.'
+            description: 'SSH/FTP 标签页 ID。省略时使用当前活动标签页。'
           }
         },
         required: ['localPath', 'remotePath']
@@ -292,21 +292,21 @@ export const agentTools = [
     type: 'function',
     function: {
       name: 'sftp_download',
-      description: 'Download a remote file to a local path via SFTP.',
+      description: '通过 SFTP 下载远程文件到本地路径。',
       parameters: {
         type: 'object',
         properties: {
           remotePath: {
             type: 'string',
-            description: 'Remote file path to download.'
+            description: '要下载的远程文件路径。'
           },
           localPath: {
             type: 'string',
-            description: 'Local destination path.'
+            description: '本地目标路径。'
           },
           tabId: {
             type: 'string',
-            description: 'SSH/FTP tab ID. Omit to use the active tab.'
+            description: 'SSH/FTP 标签页 ID。省略时使用当前活动标签页。'
           }
         },
         required: ['remotePath', 'localPath']
@@ -317,7 +317,7 @@ export const agentTools = [
     type: 'function',
     function: {
       name: 'sftp_transfer_list',
-      description: 'List current active SFTP file transfers.',
+      description: '列出当前正在进行的 SFTP 文件传输任务。',
       parameters: {
         type: 'object',
         properties: {}
@@ -328,7 +328,7 @@ export const agentTools = [
     type: 'function',
     function: {
       name: 'sftp_transfer_history',
-      description: 'List past SFTP file transfer history.',
+      description: '列出历史 SFTP 文件传输记录。',
       parameters: {
         type: 'object',
         properties: {}
@@ -339,13 +339,13 @@ export const agentTools = [
     type: 'function',
     function: {
       name: 'get_terminal_status',
-      description: 'Check terminal status: running (actively receiving data), idle, or password prompt. Returns last 20 lines of output. Lightweight, non-blocking.',
+      description: '检查终端状态：运行中、空闲或密码提示。返回最近 20 行输出，轻量且非阻塞。',
       parameters: {
         type: 'object',
         properties: {
           tabId: {
             type: 'string',
-            description: 'Tab ID. Omit for active terminal.'
+            description: '标签页 ID。省略时使用当前活动终端。'
           }
         }
       }
@@ -355,13 +355,13 @@ export const agentTools = [
     type: 'function',
     function: {
       name: 'cancel_terminal_command',
-      description: 'Cancel the running command in a terminal by sending Ctrl+C.',
+      description: '向终端发送 Ctrl+C，取消正在运行的命令。',
       parameters: {
         type: 'object',
         properties: {
           tabId: {
             type: 'string',
-            description: 'Tab ID. Omit for active terminal.'
+            description: '标签页 ID。省略时使用当前活动终端。'
           }
         }
       }
@@ -371,17 +371,17 @@ export const agentTools = [
     type: 'function',
     function: {
       name: 'run_background_command',
-      description: 'Run a command in the background using nohup. The terminal is freed immediately. Returns a taskId for monitoring. Use get_background_task_status and get_background_task_log to check progress.',
+      description: '使用 nohup 在后台运行命令，终端会立即释放。返回 taskId 以便监控，可用 get_background_task_status 和 get_background_task_log 查看进度。',
       parameters: {
         type: 'object',
         properties: {
           command: {
             type: 'string',
-            description: 'The shell command to run in the background.'
+            description: '要在后台运行的 Shell 命令。'
           },
           tabId: {
             type: 'string',
-            description: 'Tab ID. Omit for active terminal.'
+            description: '标签页 ID。省略时使用当前活动终端。'
           }
         },
         required: ['command']
@@ -392,13 +392,13 @@ export const agentTools = [
     type: 'function',
     function: {
       name: 'get_background_task_status',
-      description: 'Check if a background task is running, completed (with exit code), or unknown.',
+      description: '检查后台任务状态：运行中、已完成（含退出码）或未知。',
       parameters: {
         type: 'object',
         properties: {
           taskId: {
             type: 'string',
-            description: 'Task ID from run_background_command.'
+            description: 'run_background_command 返回的任务 ID。'
           }
         },
         required: ['taskId']
@@ -409,17 +409,17 @@ export const agentTools = [
     type: 'function',
     function: {
       name: 'get_background_task_log',
-      description: 'Read the output log of a background task. Returns the last N lines.',
+      description: '读取后台任务输出日志，返回最近 N 行。',
       parameters: {
         type: 'object',
         properties: {
           taskId: {
             type: 'string',
-            description: 'Task ID from run_background_command.'
+            description: 'run_background_command 返回的任务 ID。'
           },
           lines: {
             type: 'number',
-            description: 'Number of recent lines to read (default 100).'
+            description: '读取最近多少行，默认 100 行。'
           }
         },
         required: ['taskId']
@@ -430,13 +430,13 @@ export const agentTools = [
     type: 'function',
     function: {
       name: 'cancel_background_task',
-      description: 'Cancel a running background task by killing its process.',
+      description: '通过结束进程取消正在运行的后台任务。',
       parameters: {
         type: 'object',
         properties: {
           taskId: {
             type: 'string',
-            description: 'Task ID from run_background_command.'
+            description: 'run_background_command 返回的任务 ID。'
           }
         },
         required: ['taskId']
@@ -512,6 +512,6 @@ export async function executeToolCall (toolName, args) {
     case 'cancel_background_task':
       return JSON.stringify(await store.mcpCancelBackgroundTask(args))
     default:
-      throw new Error(`Unknown agent tool: ${toolName}`)
+      throw new Error(`未知 Agent 工具：${toolName}`)
   }
 }

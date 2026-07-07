@@ -46,7 +46,7 @@ async function load () {
     }
     document.body.appendChild(rcs)
   }
-  window.getLang = (lang = window.store?.config.language || 'en_us') => {
+  window.getLang = (lang = window.store?.config.language || 'zh_cn') => {
     return _get(window.langMap, `[${lang}].lang`)
   }
   window.translate = txt => {

@@ -41,8 +41,8 @@ export default function AIChatHistoryItem ({ item }) {
   }
 
   function buildRole () {
-    const lang = languageAI || window.store.getLangName()
-    return roleAI + `;用[${lang}]回复`
+    const lang = languageAI || window.store.getLangName() || '简体中文'
+    return `${roleAI}; 请使用${lang}回复`
   }
 
   const pollStreamContent = useCallback(async (sid) => {
@@ -195,20 +195,20 @@ export default function AIChatHistoryItem ({ item }) {
       <div>
         {nameAI && (
           <p>
-            <b>Name:</b> {nameAI}
+            <b>名称：</b> {nameAI}
           </p>
         )}
         <p>
-          <b>Model:</b> {modelAI}
+          <b>模型：</b> {modelAI}
         </p>
         <p>
-          <b>Role:</b> {roleAI}
+          <b>角色：</b> {roleAI}
         </p>
         <p>
-          <b>Base URL:</b> {baseURLAI}
+          <b>基础地址：</b> {baseURLAI}
         </p>
         <p>
-          <b>Time:</b> {new Date(item.timestamp).toLocaleString()}
+          <b>时间：</b> {new Date(item.timestamp).toLocaleString()}
         </p>
         <p>
           <CopyOutlined

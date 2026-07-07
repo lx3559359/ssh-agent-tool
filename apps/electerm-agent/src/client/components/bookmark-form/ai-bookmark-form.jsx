@@ -77,7 +77,7 @@ export default function AIBookmarkForm (props) {
         'AIchat',
         prompt,
         config.modelAI,
-        'You are a helpful assistant that generates bookmark configurations in JSON format.',
+        '你是一个只生成 JSON 书签配置的中文助手。',
         config.baseURLAI,
         config.apiPathAI,
         config.apiKeyAI,
@@ -125,7 +125,7 @@ export default function AIBookmarkForm (props) {
       }
     } catch (error) {
       console.error('AI bookmark generation error:', error)
-      message.error('Can not generate bookmarks from AI response: ' + error.message)
+      message.error('无法根据 AI 返回内容生成书签：' + error.message)
     } finally {
       setLoading(false)
     }
@@ -194,7 +194,7 @@ export default function AIBookmarkForm (props) {
       message.success(e('Done'))
     } catch (error) {
       console.error('AI bookmark creation error:', error)
-      message.error('Can not create bookmarks from AI response: ' + error.message)
+      message.error('无法根据 AI 返回内容创建书签：' + error.message)
     } finally {
       setConfirmProgress(null)
     }

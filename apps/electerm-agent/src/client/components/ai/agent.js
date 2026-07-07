@@ -4,20 +4,20 @@ import aiAgentCopy from './ai-agent-copy.json'
 const MAX_ITERATIONS = 150
 
 function buildAgentSystemPrompt (config) {
-  const lang = config.languageAI || window.store.getLangName()
-  const baseRole = config.roleAI || 'You are a helpful assistant.'
+  const lang = config.languageAI || window.store.getLangName() || '简体中文'
+  const baseRole = config.roleAI || '你是一个中文 SSH 运维排查助手。'
   return `${baseRole}
 
 ${aiAgentCopy.agentPromptRules.join('\n')}
 
-Available tools:
-- Run commands in terminal tabs and read their output
-- Open new terminal tabs (local or SSH)
-- Manage bookmarks (create, list, open connections)
-- Switch between tabs
-- Transfer files via SFTP (upload, download, list, read, delete remote files)
+可用工具：
+- 在终端标签页执行命令并读取输出
+- 打开新的本地或 SSH 终端标签页
+- 管理连接书签，包括创建、列出和打开连接
+- 在标签页之间切换
+- 通过 SFTP 传输文件，包括上传、下载、列目录、读取和删除远程文件
 
-Reply in ${lang} language.`
+请使用${lang}回答。`
 }
 
 function updateChatEntry (chatEntry, updates) {
