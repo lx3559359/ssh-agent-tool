@@ -25,6 +25,72 @@ const utf8Aliases = new Set(['utf-8', 'utf8', 'utf-8-strict'])
 const failMsg = 'All configured authentication methods failed'
 const csFailMsg = 'no matching C->S cipher'
 
+function getSshTargetLabel (options = {}) {
+  const host = options.host || '未知主机'
+  const port = options.port || 22
+  return options.username
+    ? `${options.username}@${host}:${port}`
+    : `${host}:${port}`
+}
+
+function getSshDiagnosis (err = {}) {
+  const message = err.message || String(err)
+  const code = err.code || ''
+  if (code === 'ECONNREFUSED' || message.includes('ECONNREFUSED')) {
+    return {
+      title: 'SSH 连接被拒绝',
+      suggestion: '请检查服务器地址、端口、sshd 服务、防火墙或安全组是否允许访问。'
+    }
+  }
+  if (code === 'ENOTFOUND' || code === 'EAI_AGAIN' || message.includes('ENOTFOUND') || message.includes('EAI_AGAIN')) {
+    return {
+      title: 'SSH 主机无法解析',
+      suggestion: '请检查服务器地址、DNS、代理配置或当前网络连接。'
+    }
+  }
+  if (code === 'ETIMEDOUT' || /timed? ?out|handshake timeout/i.test(message)) {
+    return {
+      title: 'SSH 连接超时',
+      suggestion: '请检查网络连通性、防火墙、安全组、堡垒机链路和服务器端口。'
+    }
+  }
+  if (message.includes(failMsg) || /authentication.*failed/i.test(message)) {
+    return {
+      title: 'SSH 认证失败',
+      suggestion: '请检查用户名、密码、私钥、密钥口令或 SSH Agent 凭据是否正确。'
+    }
+  }
+  if (/host key|known_hosts|fingerprint/i.test(message)) {
+    return {
+      title: 'SSH 主机密钥校验失败',
+      suggestion: '请确认服务器指纹是否可信；如果服务器重装或 IP 被复用，请检查 known_hosts 记录。'
+    }
+  }
+  return {
+    title: 'SSH 连接失败',
+    suggestion: '请检查服务器地址、端口、认证方式、代理/堡垒机配置和网络连通性。'
+  }
+}
+
+function normalizeSshConnectionError (err, options = {}) {
+  if (!err) {
+    return err
+  }
+  if (err.sshConnectionErrorNormalized) {
+    return err
+  }
+  const originalMessage = err.message || String(err)
+  const diagnosis = getSshDiagnosis(err)
+  err.originalMessage = originalMessage
+  err.sshConnectionErrorNormalized = true
+  err.message = [
+    `${diagnosis.title}：${getSshTargetLabel(options)}`,
+    `建议：${diagnosis.suggestion}`,
+    `原始错误：${originalMessage}`
+  ].join('\n')
+  return err
+}
+
 class TerminalSshBase extends TerminalBase {
   async remoteInitProcess () {
     this.adjustConnectionOrder()
@@ -882,7 +948,7 @@ class TerminalSshBase extends TerminalBase {
       }
       return this.sshConnect()
     } else {
-      throw err
+      throw normalizeSshConnectionError(err, this.connectOptions || this.initOptions)
     }
   }
 
@@ -999,6 +1065,8 @@ exports.session = function (initOptions, ws) {
   return (new TerminalSsh(initOptions, ws)).init()
 }
 
+exports.normalizeSshConnectionError = normalizeSshConnectionError
+
 /**
  * test ssh connection
  * @param {object} options
@@ -1008,7 +1076,8 @@ exports.test = (options, ws) => {
     .init()
     .then(() => true)
     .catch((err) => {
-      log.error('test ssh error', err)
-      return false
+      const normalized = normalizeSshConnectionError(err, options)
+      log.error('test ssh error', normalized)
+      throw normalized
     })
 }
