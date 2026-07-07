@@ -12,12 +12,17 @@ function Resolve-ToolPath {
         [string]$EnvironmentVariable,
         [Parameter(Mandatory = $true)]
         [string]$CommandName,
-        [string]$FallbackPath = ""
+        [string]$FallbackPath = "",
+        [bool]$PreferFallback = $false
     )
 
     $ConfiguredPath = [Environment]::GetEnvironmentVariable($EnvironmentVariable)
     if (-not [string]::IsNullOrWhiteSpace($ConfiguredPath)) {
         return $ConfiguredPath
+    }
+
+    if ($PreferFallback -and -not [string]::IsNullOrWhiteSpace($FallbackPath) -and (Test-Path -LiteralPath $FallbackPath)) {
+        return $FallbackPath
     }
 
     $ResolvedCommand = Get-Command $CommandName -ErrorAction SilentlyContinue
@@ -43,7 +48,7 @@ if (Test-Path -LiteralPath $NodePath -PathType Container) {
 }
 
 $Pnpm = Resolve-ToolPath -EnvironmentVariable "SSH_AGENT_PNPM" -CommandName "pnpm.cmd" -FallbackPath (Join-Path $DefaultRuntimeDependencies "bin\pnpm.cmd")
-$PyInstaller = Resolve-ToolPath -EnvironmentVariable "SSH_AGENT_PYINSTALLER" -CommandName "pyinstaller.exe" -FallbackPath (Join-Path $ProjectRoot "..\winkterm\.venv\Scripts\pyinstaller.exe")
+$PyInstaller = Resolve-ToolPath -EnvironmentVariable "SSH_AGENT_PYINSTALLER" -CommandName "pyinstaller.exe" -FallbackPath (Join-Path $ProjectRoot "..\winkterm\.venv\Scripts\pyinstaller.exe") -PreferFallback $true
 $ExePath = Join-Path $ProjectRoot "dist\SSH-Agent-Tool.exe"
 $BuildInfoPath = Join-Path $ProjectRoot "build_info.py"
 $WindowsVersionInfoPath = Join-Path $ProjectRoot "build\windows-version-info.txt"

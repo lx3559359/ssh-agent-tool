@@ -20,12 +20,17 @@ function Resolve-ToolPath {
         [string]$EnvironmentVariable,
         [Parameter(Mandatory = $true)]
         [string]$CommandName,
-        [string]$FallbackPath = ""
+        [string]$FallbackPath = "",
+        [bool]$PreferFallback = $false
     )
 
     $ConfiguredPath = [Environment]::GetEnvironmentVariable($EnvironmentVariable)
     if (-not [string]::IsNullOrWhiteSpace($ConfiguredPath)) {
         return $ConfiguredPath
+    }
+
+    if ($PreferFallback -and -not [string]::IsNullOrWhiteSpace($FallbackPath) -and (Test-Path -LiteralPath $FallbackPath)) {
+        return $FallbackPath
     }
 
     $ResolvedCommand = Get-Command $CommandName -ErrorAction SilentlyContinue
@@ -51,7 +56,7 @@ if (Test-Path -LiteralPath $NodePath -PathType Container) {
 }
 
 $Pnpm = Resolve-ToolPath -EnvironmentVariable "SSH_AGENT_PNPM" -CommandName "pnpm.cmd" -FallbackPath (Join-Path $DefaultRuntimeDependencies "bin\pnpm.cmd")
-$Python = Resolve-ToolPath -EnvironmentVariable "SSH_AGENT_PYTHON" -CommandName "python.exe" -FallbackPath (Join-Path $ProjectRoot "..\winkterm\.venv\Scripts\python.exe")
+$Python = Resolve-ToolPath -EnvironmentVariable "SSH_AGENT_PYTHON" -CommandName "python.exe" -FallbackPath (Join-Path $ProjectRoot "..\winkterm\.venv\Scripts\python.exe") -PreferFallback $true
 $BuildExeScript = Join-Path $ProjectRoot "build-windows-exe.ps1"
 $WinktermRoot = Join-Path $ProjectRoot "..\winkterm"
 $TerminalPytestTempRoot = Join-Path $ProjectRoot ".build-temp\winkterm-pytest-runs"

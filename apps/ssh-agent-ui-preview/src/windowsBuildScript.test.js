@@ -65,6 +65,8 @@ test("Windows build scripts resolve tool paths without a developer-specific user
   assert.match(releaseScript, /SSH_AGENT_NODE_BIN/);
   assert.match(releaseScript, /SSH_AGENT_PNPM/);
   assert.match(releaseScript, /SSH_AGENT_PYTHON/);
+  assert.match(buildScript, /SSH_AGENT_PYINSTALLER"[\s\S]*-PreferFallback\s+\$true/);
+  assert.match(releaseScript, /SSH_AGENT_PYTHON"[\s\S]*-PreferFallback\s+\$true/);
 });
 
 test("Windows build script stops stale release exe before rebuilding dist", () => {
