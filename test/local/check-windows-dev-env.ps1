@@ -56,6 +56,46 @@ function Get-PathState {
   }
 }
 
+function Get-VsBuildTools {
+  $vswhere = 'C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe'
+  if (-not (Test-Path -LiteralPath $vswhere)) {
+    return [pscustomobject]@{
+      found = $false
+      installationPath = $null
+      msbuildPath = $null
+      clPath = $null
+      spectreLibPath = $null
+    }
+  }
+
+  $installationPath = (& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath) | Select-Object -First 1
+  if (-not $installationPath) {
+    return [pscustomobject]@{
+      found = $false
+      installationPath = $null
+      msbuildPath = $null
+      clPath = $null
+      spectreLibPath = $null
+    }
+  }
+
+  $msbuildPath = Join-Path $installationPath 'MSBuild\Current\Bin\MSBuild.exe'
+  $vcRoot = Join-Path $installationPath 'VC\Tools\MSVC'
+  $latestMsvc = Get-ChildItem -LiteralPath $vcRoot -Directory -ErrorAction SilentlyContinue |
+    Sort-Object Name -Descending |
+    Select-Object -First 1
+  $clPath = if ($latestMsvc) { Join-Path $latestMsvc.FullName 'bin\Hostx64\x64\cl.exe' } else { $null }
+  $spectreLibPath = if ($latestMsvc) { Join-Path $latestMsvc.FullName 'lib\spectre' } else { $null }
+
+  [pscustomobject]@{
+    found = $true
+    installationPath = $installationPath
+    msbuildPath = $msbuildPath
+    clPath = $clPath
+    spectreLibPath = $spectreLibPath
+  }
+}
+
 $node = Get-CommandInfo node
 $npm = Get-CommandInfo npm
 $yarn = Get-CommandInfo yarn
@@ -63,9 +103,15 @@ $cl = Get-CommandInfo cl
 $msbuild = Get-CommandInfo msbuild
 $gh = Get-CommandInfo gh
 $nodeMajor = Get-NodeMajor $node.version
+$vsBuildTools = Get-VsBuildTools
 
 $repoRoot = (Resolve-Path -LiteralPath '.').Path
 $resolvedAppPath = Join-Path $repoRoot $AppPath
+$hasCl = $cl.found -or ($vsBuildTools.clPath -and (Test-Path -LiteralPath $vsBuildTools.clPath))
+$hasMsbuild = $msbuild.found -or ($vsBuildTools.msbuildPath -and (Test-Path -LiteralPath $vsBuildTools.msbuildPath))
+$hasSpectreLibs = $vsBuildTools.spectreLibPath -and (Test-Path -LiteralPath $vsBuildTools.spectreLibPath)
+$hasDependencies = Test-Path -LiteralPath (Join-Path $resolvedAppPath 'node_modules')
+$hasDist = Test-Path -LiteralPath (Join-Path $resolvedAppPath 'dist')
 
 $checks = @(
   [pscustomobject]@{
@@ -88,15 +134,21 @@ $checks = @(
   },
   [pscustomobject]@{
     name = 'Visual C++ compiler'
-    ok = $cl.found
-    detail = if ($cl.found) { $cl.path } else { 'cl.exe not found in PATH' }
+    ok = $hasCl
+    detail = if ($cl.found) { $cl.path } elseif ($vsBuildTools.clPath) { "$($vsBuildTools.clPath) (via VS Build Tools)" } else { 'cl.exe not found' }
     fix = 'Install Visual Studio Build Tools with Desktop development with C++.'
   },
   [pscustomobject]@{
     name = 'MSBuild'
-    ok = $msbuild.found
-    detail = if ($msbuild.found) { $msbuild.path } else { 'msbuild.exe not found in PATH' }
-    fix = 'Install Visual Studio Build Tools and open a Developer PowerShell, or add MSBuild to PATH.'
+    ok = $hasMsbuild
+    detail = if ($msbuild.found) { $msbuild.path } elseif ($vsBuildTools.msbuildPath) { "$($vsBuildTools.msbuildPath) (via VS Build Tools)" } else { 'msbuild.exe not found' }
+    fix = 'Install Visual Studio Build Tools with MSBuild.'
+  },
+  [pscustomobject]@{
+    name = 'MSVC Spectre libraries'
+    ok = $hasSpectreLibs
+    detail = if ($hasSpectreLibs) { $vsBuildTools.spectreLibPath } else { 'Spectre libraries not found under VC Tools MSVC lib directory' }
+    fix = 'Install Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre and matching v143 Spectre libraries.'
   },
   [pscustomobject]@{
     name = 'GitHub CLI'
@@ -112,22 +164,26 @@ $checks = @(
   },
   [pscustomobject]@{
     name = 'Local dependencies'
-    ok = Test-Path -LiteralPath (Join-Path $resolvedAppPath 'node_modules')
+    ok = $hasDependencies
     detail = Join-Path $resolvedAppPath 'node_modules'
     fix = 'Run npm ci after Node.js 22 and Visual C++ Build Tools are ready.'
   },
   [pscustomobject]@{
     name = 'Local packaged dist'
-    ok = Test-Path -LiteralPath (Join-Path $resolvedAppPath 'dist')
+    ok = $hasDist
     detail = Join-Path $resolvedAppPath 'dist'
     fix = 'Run the Windows release workflow or local package build after dependencies are ready.'
   }
 )
 
+$devChecks = $checks | Where-Object { $_.name -ne 'Local packaged dist' }
+
 $summary = [pscustomobject]@{
-  status = if (($checks | Where-Object { -not $_.ok }).Count -eq 0) { 'ready' } else { 'not-ready' }
+  status = if (($devChecks | Where-Object { -not $_.ok }).Count -eq 0) { 'dev-ready' } else { 'not-ready' }
+  packaged = $hasDist
   repoRoot = $repoRoot
   appPath = $resolvedAppPath
+  vsBuildTools = $vsBuildTools
   checks = $checks
   paths = @(
     Get-PathState (Join-Path $resolvedAppPath 'package.json')
