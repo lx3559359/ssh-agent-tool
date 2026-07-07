@@ -7,6 +7,7 @@ import {
   packInfo
 } from './constants'
 import dayjs from 'dayjs'
+import { getReleaseUpdate } from './update-version'
 
 const releaseApiUrl = 'https://api.github.com/repos/lx3559359/ssh-agent-tool/releases/latest'
 
@@ -40,12 +41,7 @@ function getInfo (url) {
 
 export async function getLatestReleaseVersion (n) {
   const release = await getInfo(releaseApiUrl)
-  const tagName = release?.tag_name
-  if (tagName && tagName !== `v${packInfo.version}`) {
-    return {
-      tag_name: tagName
-    }
-  }
+  return getReleaseUpdate(release, packInfo.version)
 }
 
 export async function getLatestReleaseInfo () {
