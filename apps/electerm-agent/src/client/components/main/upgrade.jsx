@@ -85,12 +85,8 @@ export default class Upgrade extends PureComponent {
 
   onData = (upgradePercent) => {
     clearTimeout(this.downloadTimer)
-    if (upgradePercent >= 100) {
-      this.update && this.update.destroy()
-      return this.handleClose()
-    }
     this.changeProps({
-      upgradePercent
+      upgradePercent: Math.min(upgradePercent, 100)
     })
   }
 
@@ -114,6 +110,7 @@ export default class Upgrade extends PureComponent {
   }
 
   onEnd = () => {
+    clearTimeout(this.downloadTimer)
     this.handleClose()
   }
 
