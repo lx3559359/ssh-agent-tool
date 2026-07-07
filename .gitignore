@@ -38,10 +38,16 @@ release/
 /apps/ssh-agent-ui-preview/dist/
 /apps/electerm-agent/node_modules/
 /apps/electerm-agent/dist/
-/apps/electerm-agent/build/
+/apps/electerm-agent/build/Release/
+/apps/electerm-agent/build/web-app/client/
 /apps/electerm-agent/out/
 /apps/electerm-agent/release/
 /apps/electerm-agent/.tmp/
+/apps/electerm-agent/work/
+/apps/electerm-agent/temp/
+/apps/electerm-agent/test-results/
+/apps/electerm-agent/dist-loong64/
+/apps/electerm-agent/work-loong64/
 
 # Logs
 *.log
