@@ -36,6 +36,12 @@ release/
 /apps/ssh-agent-ui-preview/frontend-test-output.txt
 /apps/ssh-agent-ui-preview/build/
 /apps/ssh-agent-ui-preview/dist/
+/apps/electerm-agent/node_modules/
+/apps/electerm-agent/dist/
+/apps/electerm-agent/build/
+/apps/electerm-agent/out/
+/apps/electerm-agent/release/
+/apps/electerm-agent/.tmp/
 
 # Logs
 *.log
