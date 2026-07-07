@@ -10,7 +10,8 @@ const PROVIDER_BASE_PATHS = new Map([
   ['dashscope.aliyuncs.com', '/compatible-mode/v1'],
   ['open.bigmodel.cn', '/api/paas/v4'],
   ['api.groq.com', '/openai/v1'],
-  ['generativelanguage.googleapis.com', '/v1beta/openai']
+  ['generativelanguage.googleapis.com', '/v1beta/openai'],
+  ['ark.cn-beijing.volces.com', '/api/v3']
 ])
 
 function trimEndSlash (str) {

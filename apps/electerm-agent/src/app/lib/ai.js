@@ -61,34 +61,86 @@ const createAIClient = (baseURL, apiKey, proxy, authHeaderName) => {
   return axios.create(config)
 }
 
-function normalizeModels (data) {
-  if (Array.isArray(data?.data)) {
-    return data.data
-      .map(item => typeof item === 'string' ? item : item.id)
-      .filter(Boolean)
+function getModelName (item) {
+  if (typeof item === 'string') {
+    return item
   }
-  if (Array.isArray(data?.models)) {
-    return data.models
-      .map(item => typeof item === 'string' ? item : (item.id || item.name || item.model))
-      .filter(Boolean)
+  if (!item || typeof item !== 'object') {
+    return ''
   }
+  return item.id || item.name || item.model || item.model_name || item.display_name || ''
+}
+
+function uniqueModels (models) {
+  return [...new Set(models.filter(Boolean))]
+}
+
+function normalizeAIModelsResponse (data) {
+  const direct = getModelName(data)
+  if (direct) {
+    return [direct]
+  }
+  if (!data || typeof data !== 'object') {
+    return []
+  }
+
+  const modelKeys = [
+    'data',
+    'models',
+    'result',
+    'items',
+    'list'
+  ]
+
+  for (const key of modelKeys) {
+    const value = data[key]
+    if (Array.isArray(value)) {
+      const models = value.flatMap(item => normalizeAIModelsResponse(item))
+      if (models.length) {
+        return uniqueModels(models)
+      }
+    }
+    if (value && typeof value === 'object') {
+      const models = normalizeAIModelsResponse(value)
+      if (models.length) {
+        return uniqueModels(models)
+      }
+    }
+  }
+
   return []
+}
+
+exports.normalizeAIModelsResponse = normalizeAIModelsResponse
+
+async function fetchOpenAIModels (baseURL, apiKey, proxy, authHeaderName) {
+  const client = createAIClient(normalizeAIModelBaseURL(baseURL), apiKey, proxy, authHeaderName)
+  const response = await client.get('/models')
+  return normalizeAIModelsResponse(response.data)
+}
+
+async function fetchOllamaModels (baseURL, apiKey, proxy, authHeaderName) {
+  const nativeBaseURL = String(baseURL || '').replace(/\/v1\/?$/, '')
+  const client = createAIClient(nativeBaseURL, apiKey, proxy, authHeaderName)
+  const response = await client.get('/api/tags')
+  return normalizeAIModelsResponse(response.data)
 }
 
 exports.AIModels = async (baseURL, apiKey, proxy, authHeaderName) => {
   try {
-    const client = createAIClient(normalizeAIModelBaseURL(baseURL), apiKey, proxy, authHeaderName)
-    const response = await client.get('/models')
+    const models = await fetchOpenAIModels(baseURL, apiKey, proxy, authHeaderName)
+    if (models.length) {
+      return {
+        models
+      }
+    }
     return {
-      models: normalizeModels(response.data)
+      models: await fetchOllamaModels(baseURL, apiKey, proxy, authHeaderName)
     }
   } catch (e) {
     try {
-      const nativeBaseURL = String(baseURL || '').replace(/\/v1\/?$/, '')
-      const client = createAIClient(nativeBaseURL, apiKey, proxy, authHeaderName)
-      const response = await client.get('/api/tags')
       return {
-        models: normalizeModels(response.data)
+        models: await fetchOllamaModels(baseURL, apiKey, proxy, authHeaderName)
       }
     } catch (err) {
       log.error('AI models error')
