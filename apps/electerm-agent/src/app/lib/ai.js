@@ -186,20 +186,60 @@ function getAIChoiceContent (choice) {
   return choice.text || ''
 }
 
+function pickAIErrorMessage (data) {
+  if (!data) {
+    return ''
+  }
+  if (typeof data === 'string') {
+    return data
+  }
+  if (Array.isArray(data)) {
+    for (const item of data) {
+      const message = pickAIErrorMessage(item)
+      if (message) {
+        return message
+      }
+    }
+    return ''
+  }
+  if (typeof data !== 'object') {
+    return ''
+  }
+
+  const nestedKeys = [
+    'error',
+    'detail',
+    'details'
+  ]
+  for (const key of nestedKeys) {
+    const message = pickAIErrorMessage(data[key])
+    if (message) {
+      return message
+    }
+  }
+
+  const messageKeys = [
+    'message',
+    'msg',
+    'error_description',
+    'errorDescription'
+  ]
+  for (const key of messageKeys) {
+    if (typeof data[key] === 'string' && data[key].trim()) {
+      return data[key]
+    }
+  }
+
+  return ''
+}
+
 function getAIErrorMessage (error) {
   const data = error && error.response
     ? error.response.data
     : error
-  if (data) {
-    if (data.error && typeof data.error.message === 'string') {
-      return data.error.message
-    }
-    if (typeof data.message === 'string') {
-      return data.message
-    }
-    if (typeof data.error === 'string') {
-      return data.error
-    }
+  const message = pickAIErrorMessage(data)
+  if (message) {
+    return message
   }
   return error && error.message
 }

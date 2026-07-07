@@ -209,6 +209,36 @@ test('returns provider error messages from model list requests', async () => {
   }
 })
 
+test('returns nested provider detail messages from model list requests', async () => {
+  const axios = require('axios')
+  const originalCreate = axios.create
+
+  axios.create = () => ({
+    get: async () => {
+      const err = new Error('Request failed with status code 403')
+      err.response = {
+        data: {
+          detail: {
+            message: 'upstream account has no model permission'
+          }
+        }
+      }
+      throw err
+    }
+  })
+
+  delete require.cache[aiPath]
+  const { AIModels } = require(aiPath)
+
+  try {
+    const res = await AIModels('https://relay.example.com/v1', 'bad-key', '', 'Authorization: Bearer')
+    assert.equal(res.error, 'upstream account has no model permission')
+  } finally {
+    axios.create = originalCreate
+    delete require.cache[aiPath]
+  }
+})
+
 test('returns provider error messages from chat requests', async () => {
   const axios = require('axios')
   const originalCreate = axios.create
