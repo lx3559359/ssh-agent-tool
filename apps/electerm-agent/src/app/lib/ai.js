@@ -3,6 +3,10 @@ const { StringDecoder } = require('string_decoder')
 const log = require('../common/log')
 const defaultSettings = require('../common/config-default')
 const { createProxyAgent } = require('./proxy-agent')
+const {
+  normalizeAIEndpoint,
+  normalizeAIModelBaseURL
+} = require('../common/ai-endpoint')
 
 // Store for ongoing streaming sessions
 const streamingSessions = new Map()
@@ -73,7 +77,7 @@ function normalizeModels (data) {
 
 exports.AIModels = async (baseURL, apiKey, proxy, authHeaderName) => {
   try {
-    const client = createAIClient(baseURL, apiKey, proxy, authHeaderName)
+    const client = createAIClient(normalizeAIModelBaseURL(baseURL), apiKey, proxy, authHeaderName)
     const response = await client.get('/models')
     return {
       models: normalizeModels(response.data)
@@ -99,7 +103,8 @@ exports.AIModels = async (baseURL, apiKey, proxy, authHeaderName) => {
 
 exports.AIchatWithTools = async (messages, model, baseURL, path, apiKey, proxy, tools, authHeaderName) => {
   try {
-    const client = createAIClient(baseURL, apiKey, proxy, authHeaderName)
+    const endpoint = normalizeAIEndpoint(baseURL, path)
+    const client = createAIClient(endpoint.baseURL, apiKey, proxy, authHeaderName)
     const requestData = {
       model,
       messages,
@@ -108,7 +113,7 @@ exports.AIchatWithTools = async (messages, model, baseURL, path, apiKey, proxy, 
     if (tools && tools.length) {
       requestData.tools = tools
     }
-    const response = await client.post(path, requestData)
+    const response = await client.post(endpoint.path, requestData)
     const choice = response.data.choices[0]
     return {
       message: choice.message
@@ -131,7 +136,8 @@ exports.AIchat = async (
   authHeaderName = defaultSettings.authHeaderNameAI
 ) => {
   try {
-    const client = createAIClient(baseURL, apiKey, proxy, authHeaderName)
+    const endpoint = normalizeAIEndpoint(baseURL, path)
+    const client = createAIClient(endpoint.baseURL, apiKey, proxy, authHeaderName)
 
     // Determine if we should use streaming based on the prompt content
     // Command suggestions should not use streaming for quick response
@@ -155,7 +161,7 @@ exports.AIchat = async (
 
     if (useStream) {
       // For streaming responses, initiate streaming and return session info
-      const response = await client.post(path, requestData, {
+      const response = await client.post(endpoint.path, requestData, {
         responseType: 'stream'
       })
 
@@ -180,7 +186,7 @@ exports.AIchat = async (
       }
     } else {
       // For non-streaming responses (command suggestions and when stream=false)
-      const response = await client.post(path, requestData)
+      const response = await client.post(endpoint.path, requestData)
 
       return {
         response: response.data.choices[0].message.content,

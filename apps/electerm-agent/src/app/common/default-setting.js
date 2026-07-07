@@ -65,7 +65,7 @@ module.exports = exports.default = {
   baseURLAI: 'https://api.atlascloud.ai/v1',
   modelAI: 'deepseek-chat',
   roleAI: 'SSH 运维专家，优先排查服务器、网络、日志、进程、端口、磁盘、内存、Nginx、Docker 和部署问题。回答使用中文和 Markdown。',
-  apiPathAI: '/chat/completions',
+  apiPathAI: '',
   authHeaderNameAI: 'Authorization: Bearer',
   proxyAI: '',
   sessionLogPath: '',
