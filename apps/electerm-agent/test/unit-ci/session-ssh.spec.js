@@ -90,7 +90,7 @@ function generateClientKey ({ dir, name, type, passphrase, bits }) {
   }
 }
 
-async function startServer (authHandler) {
+async function startServer (authHandler, options = {}) {
   const clients = new Set()
   const server = new Server({
     hostKeys: [HOST_KEY.private]
@@ -106,10 +106,18 @@ async function startServer (authHandler) {
     client.on('ready', () => {
       client.on('session', (accept) => {
         const sshSession = accept()
-        sshSession.on('env', (accept) => accept())
+        sshSession.on('env', (accept) => {
+          if (typeof accept === 'function') {
+            accept()
+          }
+        })
         sshSession.on('pty', (accept) => accept())
         sshSession.on('shell', (accept) => {
           const stream = accept()
+          if (options.onShell) {
+            options.onShell(stream)
+            return
+          }
           stream.write('electerm ready\n')
         })
       })
@@ -178,6 +186,18 @@ function publicKeyOnlyAuth (publicKey) {
       return ctx.accept()
     }
     return ctx.reject(['publickey'])
+  }
+}
+
+function passwordOnlyAuth () {
+  return (ctx) => {
+    if (ctx.method === 'none') {
+      return ctx.reject(['password'])
+    }
+    if (ctx.method === 'password' && ctx.username === USERNAME && ctx.password === PASSWORD) {
+      return ctx.accept()
+    }
+    return ctx.reject(['password'])
   }
 }
 
@@ -579,6 +599,55 @@ describe('session-ssh auth flows', () => {
         results: ['trust']
       })
       term = await sessionPromise
+    } finally {
+      term && term.kill()
+      await server.close()
+    }
+  })
+
+  test('forwards normal shell input and ctrl-c to the ssh channel', async () => {
+    let received = ''
+    let resolveInput
+    const inputSeen = new Promise(resolve => {
+      resolveInput = resolve
+    })
+    const server = await startServer(passwordOnlyAuth(), {
+      onShell (stream) {
+        stream.write('ready\n')
+        stream.on('data', (chunk) => {
+          received += chunk.toString('utf8')
+          if (received.includes('uptime\r') && received.includes('\x03')) {
+            resolveInput()
+          }
+        })
+      }
+    })
+
+    let term
+    try {
+      term = await session({
+        host: '127.0.0.1',
+        port: server.port,
+        username: USERNAME,
+        password: PASSWORD,
+        useSshAgent: false,
+        readyTimeout: 5000
+      }, createPromptWs(() => {
+        throw new Error('password shell login should not prompt')
+      }))
+
+      term.write('uptime\r')
+      term.write('\x03')
+
+      await Promise.race([
+        inputSeen,
+        delay(2000).then(() => {
+          throw new Error(`Timed out waiting for shell input. Received: ${JSON.stringify(received)}`)
+        })
+      ])
+
+      assert.match(received, /uptime\r/)
+      assert.equal(received.includes('\x03'), true)
     } finally {
       term && term.kill()
       await server.close()
