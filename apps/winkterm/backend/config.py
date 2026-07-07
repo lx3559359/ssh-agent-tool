@@ -95,6 +95,7 @@ class UserConfig:
             "api_format": "openai",
             "base_url": "",
             "api_key": "",
+            "extra_headers": [],
             "models": [],
             "selected_model": "",
             "language": "",

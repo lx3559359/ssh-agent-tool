@@ -1,0 +1,23 @@
+{
+  "name": "ssh-agent-tool",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "test": "node --test",
+    "test:full": "node --test",
+    "test:release": "node --test ./src/agentCapabilities.test.js ./src/agentChatUi.test.js ./src/agentExecution.test.js ./src/agentSuggestions.test.js ./src/agentTaskCancellationUi.test.js ./src/agentTasks.test.js ./src/backupData.test.js ./src/backupModalLayout.test.js ./src/backupUi.test.js ./src/commandPolicy.test.js ./src/connectionCheckRepairUi.test.js ./src/connectionQuickFixUi.test.js ./src/connectionState.test.js ./src/contextMenuActions.test.js ./src/contextMenuBehaviorUi.test.js ./src/contextMenuPosition.test.js ./src/contextMenuStyle.test.js ./src/desktopApiContract.test.js ./src/desktopCriticalLayoutUi.test.js ./src/frontendRuntimeLogUi.test.js ./src/hostConnectionModalUi.test.js ./src/hostEditorAuthUi.test.js ./src/hostKeyTrustUi.test.js ./src/layoutResizerKeyboardUi.test.js ./src/localizationQuality.test.js ./src/logExportUi.test.js ./src/modelSettings.test.js ./src/modelSettingsSaveFetchUi.test.js ./src/modelSettingsUi.test.js ./src/portForwardSettings.test.js ./src/releaseInfo.test.js ./src/releaseInfoUi.test.js ./src/runtimeSafety.test.js ./src/serverManagement.test.js ./src/serverRemovalUi.test.js ./src/serverRowActionsUi.test.js ./src/sftpBookmarks.test.js ./src/sftpNavigation.test.js ./src/sftpOverwrite.test.js ./src/sftpUiLayout.test.js ./src/sshAutoPortForwardUi.test.js ./src/sshConfigImport.test.js ./src/sshInterruptUi.test.js ./src/sshSmokeTest.test.js ./src/sshSmokeTestUi.test.js ./src/terminalAutocompleteUi.test.js ./src/terminalAutoConnectFailureUi.test.js ./src/terminalCommandInputEscapeUi.test.js ./src/terminalCommandInputLayoutUi.test.js ./src/terminalCommandKillBufferUi.test.js ./src/terminalContextMenuCompactUi.test.js ./src/terminalContextMenuServerActionsUi.test.js ./src/terminalCopyShortcutUi.test.js ./src/terminalDisconnectUi.test.js ./src/terminalExportToolbarUi.test.js ./src/terminalHistory.test.js ./src/terminalHistorySearchShortcutUi.test.js ./src/terminalInputFailureUi.test.js ./src/terminalInputSuccessUi.test.js ./src/terminalOutput.test.js ./src/terminalPasteShortcutUi.test.js ./src/terminalRecoveryUi.test.js ./src/terminalResizeUi.test.js ./src/terminalSensitivePromptUi.test.js ./src/terminalSurfaceScrollPriorityUi.test.js ./src/terminalSurfaceSelectionUi.test.js ./src/terminalTabs.test.js ./src/windowsBuildScript.test.js ./src/windowsClientActionsUi.test.js ./src/windowsClientTitle.test.js",
+    "build": "vite build",
+    "package:release": "powershell -NoProfile -ExecutionPolicy Bypass -File ./build-release-package.ps1",
+    "preview": "vite preview --host 127.0.0.1"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "5.0.4",
+    "lucide-react": "^0.475.0",
+    "vite": "6.4.2",
+    "react": "19.2.0",
+    "react-dom": "19.2.0"
+  },
+  "devDependencies": {}
+}

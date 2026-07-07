@@ -83,6 +83,7 @@ class SSHLocalDownloadRequest(BaseModel):
 
     remote_path: str
     local_path: str
+    overwrite: bool = False
 
 
 class SSHDirectoryCreateRequest(BaseModel):
@@ -343,6 +344,16 @@ def get_transfer_job(conn_id: str, job_id: str) -> dict:
     return {"job": job}
 
 
+@router.delete("/connections/{conn_id}/transfer/jobs/{job_id}")
+def cancel_transfer_job(conn_id: str, job_id: str) -> dict:
+    """Cancel a running transfer job."""
+    _get_connection_or_404(conn_id)
+    job = TransferJobManager.cancel(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="传输任务不存在")
+    return {"job": job}
+
+
 @router.get("/connections/{conn_id}/transfer/download")
 def download_file(
     conn_id: str,
@@ -375,7 +386,7 @@ def download_local_file_job(conn_id: str, data: SSHLocalDownloadRequest) -> dict
     conn = _get_connection_or_404(conn_id)
 
     try:
-        job = TransferJobManager.start_download_job(conn, data.remote_path, data.local_path)
+        job = TransferJobManager.start_download_job(conn, data.remote_path, data.local_path, overwrite=data.overwrite)
         return {
             "success": True,
             "job": job,
@@ -390,7 +401,7 @@ def download_local_file(conn_id: str, data: SSHLocalDownloadRequest) -> dict:
     conn = _get_connection_or_404(conn_id)
 
     try:
-        source = SSHFileTransfer.download_to_local_file(conn, data.remote_path, data.local_path)
+        source = SSHFileTransfer.download_to_local_file(conn, data.remote_path, data.local_path, overwrite=data.overwrite)
         return {
             "success": True,
             "remote_path": source,

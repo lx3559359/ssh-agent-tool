@@ -325,9 +325,12 @@ class SSHFileTransfer:
         remote_path: str,
         local_path: str,
         progress_callback: Callable[[int, int], None] | None = None,
+        overwrite: bool = False,
     ) -> str:
         """Download a remote file to a local path."""
         destination = Path(local_path).expanduser()
+        if destination.exists() and not overwrite:
+            raise SSHFileExistsError(f"本地文件已存在: {destination}")
         destination.parent.mkdir(parents=True, exist_ok=True)
 
         client, sftp = cls._connect(conn)
@@ -439,7 +442,7 @@ class SSHFileTransfer:
         client, sftp = cls._connect(conn)
         deleted: list[str] = []
 
-        def remove_recursive(target_path: str) -> None:
+        def remove_single_path(target_path: str) -> None:
             try:
                 attr = sftp.stat(target_path)
             except FileNotFoundError as exc:
@@ -447,18 +450,20 @@ class SSHFileTransfer:
             except OSError as exc:
                 raise SSHFileTransferError(str(exc)) from exc
 
-            if stat.S_ISDIR(attr.st_mode):
-                for entry in sftp.listdir_attr(target_path):
-                    child_path = cls._join_remote_path(target_path, entry.filename)
-                    remove_recursive(child_path)
-                sftp.rmdir(target_path)
-            else:
-                sftp.remove(target_path)
+            try:
+                if stat.S_ISDIR(attr.st_mode):
+                    sftp.rmdir(target_path)
+                else:
+                    sftp.remove(target_path)
+            except OSError as exc:
+                raise SSHFileTransferError(str(exc)) from exc
 
         try:
             for path in paths:
                 target = cls._resolve_remote_path(sftp, path)
-                remove_recursive(target)
+                if target == "/":
+                    raise SSHInvalidPathError("宸查樆姝㈠垹闄ゆ牴鐩綍")
+                remove_single_path(target)
                 deleted.append(target)
 
             return {

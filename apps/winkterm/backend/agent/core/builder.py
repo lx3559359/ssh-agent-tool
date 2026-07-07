@@ -14,6 +14,7 @@ from langgraph.graph import END, StateGraph
 from backend.agent.core.approval import request_approval
 from backend.agent.core.state import AgentState
 from backend.config import settings, UserConfig
+from backend.model_api import normalize_extra_headers, resolve_model_api_key_for_request
 from backend.terminal.session_manager import get_session_manager
 
 logger = logging.getLogger("agent.builder")
@@ -97,7 +98,12 @@ class AgentBuilder:
         user_config = UserConfig.load()
         api_format = user_config.get("api_format", "openai")
         base_url = user_config.get("base_url") or settings.effective_base_url
-        api_key = user_config.get("api_key") or settings.effective_api_key
+        api_key = resolve_model_api_key_for_request(
+            api_format,
+            base_url,
+            user_config.get("api_key") or settings.effective_api_key,
+        )
+        safe_extra_headers = normalize_extra_headers(user_config.get("extra_headers"))
         selected_model = user_config.get("selected_model")
 
         model_name = selected_model or (
@@ -117,6 +123,7 @@ class AgentBuilder:
                 temperature=0,
                 api_key=api_key,
                 base_url=base_url if base_url else None,
+                default_headers=safe_extra_headers,
             )
         bound = llm.bind_tools(self.tools)
         logger.debug(

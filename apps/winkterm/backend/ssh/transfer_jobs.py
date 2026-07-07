@@ -12,6 +12,10 @@ from backend.ssh.file_transfer import SSHFileTransfer
 from backend.ssh.models import SSHConnection
 
 
+class TransferJobCancelled(Exception):
+    """Raised inside transfer workers when the user cancels a job."""
+
+
 @dataclass
 class TransferJob:
     """File transfer job."""
@@ -28,6 +32,7 @@ class TransferJob:
     local_path: str | None = None
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now().isoformat())
+    cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
 
     def to_dict(self) -> dict:
         return {
@@ -35,6 +40,7 @@ class TransferJob:
             "direction": self.direction,
             "file_name": self.file_name,
             "status": self.status,
+            "done": self.status not in {"pending", "running"},
             "progress": self.progress,
             "bytes_transferred": self.bytes_transferred,
             "total_bytes": self.total_bytes,
@@ -80,6 +86,8 @@ class TransferJobManager:
             job = cls._jobs.get(job_id)
             if not job:
                 return
+            if job.cancel_event.is_set() or job.status == "canceled":
+                return
             job.status = "running"
             job.bytes_transferred = transferred
             job.total_bytes = total
@@ -87,10 +95,20 @@ class TransferJobManager:
             cls._touch(job)
 
     @classmethod
+    def _update_progress_or_raise(cls, job: TransferJob, transferred: int, total: int) -> None:
+        if job.cancel_event.is_set():
+            raise TransferJobCancelled()
+        cls._update_progress(job.id, transferred, total)
+        if job.cancel_event.is_set():
+            raise TransferJobCancelled()
+
+    @classmethod
     def _mark_success(cls, job_id: str) -> None:
         with cls._lock:
             job = cls._jobs.get(job_id)
             if not job:
+                return
+            if job.cancel_event.is_set() or job.status == "canceled":
                 return
             job.status = "success"
             if job.total_bytes is not None:
@@ -104,9 +122,25 @@ class TransferJobManager:
             job = cls._jobs.get(job_id)
             if not job:
                 return
+            if job.cancel_event.is_set() or job.status == "canceled":
+                return
             job.status = "error"
             job.error = message
             cls._touch(job)
+
+    @classmethod
+    def _mark_canceled(cls, job_id: str) -> dict | None:
+        with cls._lock:
+            job = cls._jobs.get(job_id)
+            if not job:
+                return None
+            if job.status in {"success", "error"}:
+                return job.to_dict()
+            job.cancel_event.set()
+            job.status = "canceled"
+            job.error = "传输任务已取消"
+            cls._touch(job)
+            return job.to_dict()
 
     @classmethod
     def get_job(cls, job_id: str) -> dict | None:
@@ -115,7 +149,12 @@ class TransferJobManager:
             return job.to_dict() if job else None
 
     @classmethod
-    def start_download_job(cls, conn: SSHConnection, remote_path: str, local_path: str) -> dict:
+    def cancel(cls, job_id: str) -> dict | None:
+        """Request cancellation for a running upload/download job."""
+        return cls._mark_canceled(job_id)
+
+    @classmethod
+    def start_download_job(cls, conn: SSHConnection, remote_path: str, local_path: str, overwrite: bool = False) -> dict:
         """Start a local download job."""
         file_name = PurePosixPath(remote_path).name or "download"
         job = cls._create_job(
@@ -131,9 +170,16 @@ class TransferJobManager:
                     conn,
                     remote_path,
                     local_path,
-                    progress_callback=lambda transferred, total: cls._update_progress(job.id, transferred, total),
+                    progress_callback=lambda transferred, total: cls._update_progress_or_raise(
+                        job,
+                        transferred,
+                        total,
+                    ),
+                    overwrite=overwrite,
                 )
                 cls._mark_success(job.id)
+            except TransferJobCancelled:
+                cls._mark_canceled(job.id)
             except Exception as exc:
                 cls._mark_error(job.id, str(exc))
 
@@ -163,10 +209,16 @@ class TransferJobManager:
                     conn,
                     local_path,
                     remote_path,
-                    progress_callback=lambda transferred, total: cls._update_progress(job.id, transferred, total),
+                    progress_callback=lambda transferred, total: cls._update_progress_or_raise(
+                        job,
+                        transferred,
+                        total,
+                    ),
                     overwrite=overwrite,
                 )
                 cls._mark_success(job.id)
+            except TransferJobCancelled:
+                cls._mark_canceled(job.id)
             except Exception as exc:
                 cls._mark_error(job.id, str(exc))
 

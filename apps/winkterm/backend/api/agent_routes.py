@@ -216,6 +216,7 @@ class FileUploadRequest(BaseModel):
 class FileDownloadRequest(BaseModel):
     remote_path: str
     local_path: str
+    overwrite: bool = False
 
 
 class DirectoryCreateRequest(BaseModel):
@@ -749,7 +750,7 @@ def upload_file(conn_id: str, req: FileUploadRequest) -> dict:
 def download_file(conn_id: str, req: FileDownloadRequest) -> dict:
     conn = _get_connection_or_404(conn_id)
     try:
-        source = SSHFileTransfer.download_to_local_file(conn, req.remote_path, req.local_path)
+        source = SSHFileTransfer.download_to_local_file(conn, req.remote_path, req.local_path, overwrite=req.overwrite)
         get_event_log().emit("ssh_file_download", connection_id=conn_id, remote_path=source)
         return {"success": True, "remote_path": source, "local_path": req.local_path}
     except Exception as exc:

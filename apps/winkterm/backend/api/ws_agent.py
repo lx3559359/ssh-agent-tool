@@ -620,7 +620,7 @@ class AgentWSHandler:
                 conn,
                 p.get("local_path"),
                 p.get("remote_path"),
-                bool(p.get("overwrite", False)),
+                overwrite=bool(p.get("overwrite", False)),
             )
         except Exception as exc:
             raise _map_transfer_error(exc) from exc
@@ -631,7 +631,11 @@ class AgentWSHandler:
         conn = self._connection_or_raise(p.get("conn_id", ""))
         try:
             source = await asyncio.to_thread(
-                SSHFileTransfer.download_to_local_file, conn, p.get("remote_path"), p.get("local_path")
+                SSHFileTransfer.download_to_local_file,
+                conn,
+                p.get("remote_path"),
+                p.get("local_path"),
+                overwrite=bool(p.get("overwrite", False)),
             )
         except Exception as exc:
             raise _map_transfer_error(exc) from exc

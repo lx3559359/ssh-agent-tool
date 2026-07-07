@@ -11,7 +11,7 @@ logger = logging.getLogger("routes")
 import json
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
@@ -19,6 +19,15 @@ from langchain_anthropic import ChatAnthropic
 from backend.agent.graph import get_graph
 from backend.agent.tools.terminal_legacy import get_terminal_context_raw
 from backend.config import UserConfig, AgentDocs, settings
+from backend.model_api import (
+    build_model_list_endpoints,
+    build_model_list_headers,
+    extract_model_list,
+    format_model_list_error_message,
+    model_api_requires_key,
+    normalize_extra_headers,
+    resolve_model_api_key_for_request,
+)
 
 router = APIRouter()
 
@@ -42,12 +51,19 @@ class ModelInfo(BaseModel):
     name: str = ""
 
 
+class ModelHeader(BaseModel):
+    name: str
+    value: str = ""
+    enabled: bool = True
+
+
 class SettingsModel(BaseModel):
     # All fields optional: only update fields explicitly provided in the request,
     # so partial saves (e.g. language only) do not clear other fields
     api_format: Optional[Literal["openai", "anthropic"]] = None
     base_url: Optional[str] = None
     api_key: Optional[str] = None
+    extra_headers: Optional[list[ModelHeader]] = Field(default=None, alias="extraHeaders")
     models: Optional[list[ModelInfo]] = None
     selected_model: Optional[str] = None
     language: Optional[str] = None
@@ -60,6 +76,7 @@ class ModelsRequest(BaseModel):
     base_url: str
     api_key: str
     api_format: Literal["openai", "anthropic"]
+    extra_headers: Optional[list[ModelHeader]] = Field(default=None, alias="extraHeaders")
 
 
 class StreamTestRequest(BaseModel):
@@ -67,6 +84,7 @@ class StreamTestRequest(BaseModel):
     api_key: str
     api_format: Literal["openai", "anthropic"]
     model: str = ""
+    extra_headers: Optional[list[ModelHeader]] = Field(default=None, alias="extraHeaders")
 
 
 @router.get("/settings")
@@ -159,33 +177,44 @@ async def fetch_models(req: ModelsRequest) -> dict:
         config = UserConfig.load()
         api_key = config.get("api_key", "")
 
-    try:
-        if req.api_format == "anthropic":
-            # ChatAnthropic SDK appends /v1 automatically, so strip user-supplied /v1 before building URL
-            url = req.base_url.rstrip("/").split("/v1")[0] + "/v1/models"
-            headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01"}
-        else:
-            url = req.base_url.rstrip("/") + "/models"
-            headers = {"Authorization": f"Bearer {api_key}"}
+    endpoints = build_model_list_endpoints(req.base_url, req.api_format)
+    extra_headers = [item.model_dump() for item in (req.extra_headers or [])]
+    headers = build_model_list_headers(req.api_format, api_key, req.base_url, extra_headers)
 
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(url, headers=headers)
-            resp.raise_for_status()
-            text = resp.text
-            if not text.strip():
-                return {"models": [], "error": "Empty response from API"}
-            data = resp.json()
+    last_error = ""
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        for url in endpoints:
+            try:
+                resp = await client.get(url, headers=headers)
+                text = resp.text
+                if resp.status_code >= 400:
+                    last_error = format_model_list_error_message(url, status_code=resp.status_code, response_text=text)
+                    continue
+                if not text.strip():
+                    last_error = format_model_list_error_message(url, status_code=resp.status_code, response_text=text)
+                    continue
+                try:
+                    payload = resp.json()
+                except json.JSONDecodeError as error:
+                    last_error = format_model_list_error_message(url, status_code=resp.status_code, response_text=text, error=error)
+                    continue
+                models = extract_model_list(payload)
+                if models:
+                    return {
+                        "models": models,
+                        "attemptedEndpoints": endpoints,
+                        "usedEndpoint": url,
+                    }
+                last_error = format_model_list_error_message(url, status_code=resp.status_code, response_text=text)
+            except Exception as e:
+                last_error = format_model_list_error_message(url, error=e)
 
-        # Support both {"data": [...]} (OpenAI) and [...] (plain list) formats
-        if isinstance(data, list):
-            items = data
-        else:
-            items = data.get("data", [])
-
-        models = [{"id": m["id"], "name": m.get("id")} for m in items if isinstance(m, dict) and "id" in m]
-        return {"models": models}
-    except Exception as e:
-        return {"models": [], "error": str(e)}
+    return {
+        "models": [],
+        "error": last_error or "No model endpoints were available",
+        "attemptedEndpoints": endpoints,
+        "lastError": last_error or "No model endpoints were available",
+    }
 
 
 @router.post("/models/stream-test")
@@ -195,14 +224,17 @@ async def stream_test(req: StreamTestRequest) -> StreamingResponse:
     if "****" in api_key:
         config = UserConfig.load()
         api_key = config.get("api_key", "")
+    api_key = resolve_model_api_key_for_request(req.api_format, req.base_url, api_key)
 
     model = req.model.strip()
     if not model:
         user_config = UserConfig.load()
         model = user_config.get("selected_model") or settings.effective_model
 
-    if not api_key or not req.base_url or not model:
+    if not req.base_url or not model or (model_api_requires_key(req.api_format, req.base_url) and not api_key):
         raise HTTPException(status_code=400, detail="缺少 base_url、api_key 或 model")
+    extra_headers = [item.model_dump() for item in (req.extra_headers or [])]
+    safe_extra_headers = normalize_extra_headers(extra_headers)
 
     async def gen():
         try:
@@ -222,6 +254,7 @@ async def stream_test(req: StreamTestRequest) -> StreamingResponse:
                     max_tokens=32,
                     api_key=api_key,
                     base_url=req.base_url if req.base_url else None,
+                    default_headers=safe_extra_headers,
                 )
 
             messages = [HumanMessage(content="Reply with exactly: OK")]
@@ -300,10 +333,15 @@ async def generate_title(req: TitleRequest) -> dict:
     user_config = UserConfig.load()
     api_format = user_config.get("api_format", "openai")
     base_url = user_config.get("base_url") or settings.effective_base_url
-    api_key = user_config.get("api_key") or settings.effective_api_key
+    api_key = resolve_model_api_key_for_request(
+        api_format,
+        base_url,
+        user_config.get("api_key") or settings.effective_api_key,
+    )
+    safe_extra_headers = normalize_extra_headers(user_config.get("extra_headers"))
     model = user_config.get("selected_model") or settings.effective_model
 
-    if not api_key or not model or not req.messages:
+    if not model or not req.messages or (model_api_requires_key(api_format, base_url) and not api_key):
         return {"title": ""}
 
     try:
@@ -323,6 +361,7 @@ async def generate_title(req: TitleRequest) -> dict:
                 max_tokens=20,
                 api_key=api_key,
                 base_url=base_url if base_url else None,
+                default_headers=safe_extra_headers,
             )
 
         recent = req.messages[:8]
@@ -359,10 +398,15 @@ async def generate_suggestions(req: SuggestionsRequest) -> dict:
     user_config = UserConfig.load()
     api_format = user_config.get("api_format", "openai")
     base_url = user_config.get("base_url") or settings.effective_base_url
-    api_key = user_config.get("api_key") or settings.effective_api_key
+    api_key = resolve_model_api_key_for_request(
+        api_format,
+        base_url,
+        user_config.get("api_key") or settings.effective_api_key,
+    )
+    safe_extra_headers = normalize_extra_headers(user_config.get("extra_headers"))
     model = user_config.get("selected_model") or settings.effective_model
 
-    if not api_key or not model or not req.messages:
+    if not model or not req.messages or (model_api_requires_key(api_format, base_url) and not api_key):
         return {"suggestions": []}
 
     # Use recent turns as context (avoid excessive tokens)
@@ -389,6 +433,7 @@ async def generate_suggestions(req: SuggestionsRequest) -> dict:
                 max_tokens=200,
                 api_key=api_key,
                 base_url=base_url if base_url else None,
+                default_headers=safe_extra_headers,
             )
 
         system = SystemMessage(content=(
