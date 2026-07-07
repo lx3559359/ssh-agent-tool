@@ -1,5 +1,7 @@
 import { loadAttachAddon } from './xterm-loader.js'
 
+const terminalControlFlag = '__aigshellTerminalControl'
+
 export default class AttachAddonCustom {
   constructor (term, socket, isWindowsShell) {
     this.term = term
@@ -289,7 +291,10 @@ export default class AttachAddonCustom {
       const sock = this._socket
       if (sock && sock.readyState === 1 /* OPEN */) {
         this.startOutputSuppression(500, null, true)
-        sock.send(JSON.stringify({ action: 'keepalive' }))
+        sock.send(JSON.stringify({
+          [terminalControlFlag]: true,
+          action: 'keepalive'
+        }))
       }
     }
   }

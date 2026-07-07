@@ -7,6 +7,8 @@
 import { getItem, setItem } from '../../common/safe-local-storage.js'
 import { getLocalFileInfo } from '../sftp/file-read.js'
 
+const terminalControlFlag = '__aigshellTerminalControl'
+
 /**
  * TransferClientBase class - abstract base for file transfer protocols
  */
@@ -78,6 +80,7 @@ export class TransferClientBase {
   sendToServer (msg) {
     if (this.socket && this.socket.readyState === WebSocket.OPEN) {
       this.socket.send(JSON.stringify({
+        [terminalControlFlag]: true,
         action: this.getActionName(),
         ...msg
       }))

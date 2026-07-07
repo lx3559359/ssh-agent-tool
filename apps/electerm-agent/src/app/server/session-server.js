@@ -31,6 +31,7 @@ const wsDec = require('./ws-dec')
 const { zmodemManager } = require('./zmodem')
 const { trzszManager } = require('./trzsz')
 const { xmodemManager } = require('./xmodem')
+const { parseTerminalControlMessage } = require('./terminal-control-message')
 
 const {
   tokenElecterm,
@@ -293,34 +294,27 @@ if (type === 'rdp') {
 
     ws.on('message', function (msg) {
       try {
-        // Check if message is a zmodem or trzsz control message (JSON)
-        if (typeof msg === 'string') {
-          try {
-            const parsed = JSON.parse(msg)
-            if (parsed.action === 'zmodem-event') {
-              zmodemManager.handleMessage(pid, parsed, term, ws)
-              return
-            }
-            if (parsed.action === 'trzsz-event') {
-              trzszManager.handleMessage(pid, parsed, term, ws)
-              return
-            }
-            if (parsed.action === 'xmodem-event') {
-              xmodemManager.handleMessage(pid, parsed, term, ws)
-              return
-            }
-            if (parsed.action === 'keepalive') {
-              // Write \n to the PTY.  In canonical mode the TTY line discipline
-              // only delivers data to read() when a newline completes the line,
-              // so \x00 (NUL) sits in the buffer and never wakes bash up.
-              // A newline wakes bash's read(), resets the TMOUT alarm, and bash
-              // simply re-displays the prompt.  The client suppresses that echo.
-              term.write('\n\r\x1b[K')
-              return
-            }
-          } catch (e) {
-            // Not JSON, treat as regular terminal input
-          }
+        const parsed = parseTerminalControlMessage(msg)
+        if (parsed?.action === 'zmodem-event') {
+          zmodemManager.handleMessage(pid, parsed, term, ws)
+          return
+        }
+        if (parsed?.action === 'trzsz-event') {
+          trzszManager.handleMessage(pid, parsed, term, ws)
+          return
+        }
+        if (parsed?.action === 'xmodem-event') {
+          xmodemManager.handleMessage(pid, parsed, term, ws)
+          return
+        }
+        if (parsed?.action === 'keepalive') {
+          // Write \n to the PTY.  In canonical mode the TTY line discipline
+          // only delivers data to read() when a newline completes the line,
+          // so \x00 (NUL) sits in the buffer and never wakes bash up.
+          // A newline wakes bash's read(), resets the TMOUT alarm, and bash
+          // simply re-displays the prompt.  The client suppresses that echo.
+          term.write('\n\r\x1b[K')
+          return
         }
         term.write(msg)
       } catch (ex) {
