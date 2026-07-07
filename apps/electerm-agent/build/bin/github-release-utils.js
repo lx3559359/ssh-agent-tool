@@ -24,6 +24,43 @@ function selectUnexpectedReleaseAssets (assets, version) {
   return (assets || []).filter(asset => !required.has(path.basename(asset.name)))
 }
 
+function byName (items = []) {
+  return new Map(items.map(item => [path.basename(item.name), item]))
+}
+
+function buildReleaseAssetReport ({
+  localFiles = [],
+  remoteAssets = [],
+  version
+}) {
+  const requiredNames = getRequiredReleaseAssetNames(version)
+  const localByName = byName(localFiles)
+  const remoteByName = byName(remoteAssets)
+  const missingLocal = requiredNames.filter(name => !localByName.has(name))
+  const missingRemote = requiredNames.filter(name => !remoteByName.has(name))
+  const sizeMismatches = requiredNames
+    .filter(name => localByName.has(name) && remoteByName.has(name))
+    .map(name => ({
+      name,
+      localSize: Number(localByName.get(name).size),
+      remoteSize: Number(remoteByName.get(name).size)
+    }))
+    .filter(item => item.localSize !== item.remoteSize)
+  const unexpectedRemote = selectUnexpectedReleaseAssets(remoteAssets, version)
+
+  return {
+    requiredNames,
+    missingLocal,
+    missingRemote,
+    sizeMismatches,
+    unexpectedRemote,
+    ok: !missingLocal.length &&
+      !missingRemote.length &&
+      !sizeMismatches.length &&
+      !unexpectedRemote.length
+  }
+}
+
 function buildGitHubReleaseCommands ({
   repo,
   tag,
@@ -48,6 +85,7 @@ function createSpawnOptions (options = {}) {
 
 module.exports = {
   buildReleaseTag,
+  buildReleaseAssetReport,
   getRequiredReleaseAssetNames,
   selectUnexpectedReleaseAssets,
   selectReleaseAssets,

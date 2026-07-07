@@ -4,6 +4,7 @@ const path = require('node:path')
 
 const {
   buildReleaseTag,
+  buildReleaseAssetReport,
   getRequiredReleaseAssetNames,
   selectUnexpectedReleaseAssets,
   selectReleaseAssets,
@@ -65,6 +66,64 @@ test('selects unexpected release assets without deleting update files', () => {
       { name: 'app.asar', id: 'asar' },
       { name: 'windows-electerm-agent.yml', id: 'legacy-channel' }
     ]
+  )
+})
+
+test('builds a release asset report for local and remote update files', () => {
+  const localFiles = [
+    { name: 'AIGShell-3.15.105-win-x64-installer.exe', size: 100 },
+    { name: 'AIGShell-3.15.105-win-x64-installer.exe.blockmap', size: 10 },
+    { name: 'latest.yml', size: 3 }
+  ]
+  const remoteAssets = [
+    { name: 'AIGShell-3.15.105-win-x64-installer.exe', size: 100 },
+    { name: 'AIGShell-3.15.105-win-x64-installer.exe.blockmap', size: 9 },
+    { name: 'AIGShell.exe', size: 200 }
+  ]
+
+  assert.deepEqual(
+    buildReleaseAssetReport({
+      localFiles,
+      remoteAssets,
+      version: '3.15.105'
+    }),
+    {
+      requiredNames: [
+        'AIGShell-3.15.105-win-x64-installer.exe',
+        'AIGShell-3.15.105-win-x64-installer.exe.blockmap',
+        'latest.yml'
+      ],
+      missingLocal: [],
+      missingRemote: ['latest.yml'],
+      sizeMismatches: [
+        {
+          name: 'AIGShell-3.15.105-win-x64-installer.exe.blockmap',
+          localSize: 10,
+          remoteSize: 9
+        }
+      ],
+      unexpectedRemote: [
+        { name: 'AIGShell.exe', size: 200 }
+      ],
+      ok: false
+    }
+  )
+})
+
+test('reports ok when local and remote update assets match exactly', () => {
+  const files = [
+    { name: 'AIGShell-3.15.105-win-x64-installer.exe', size: 100 },
+    { name: 'AIGShell-3.15.105-win-x64-installer.exe.blockmap', size: 10 },
+    { name: 'latest.yml', size: 3 }
+  ]
+
+  assert.equal(
+    buildReleaseAssetReport({
+      localFiles: files,
+      remoteAssets: files,
+      version: '3.15.105'
+    }).ok,
+    true
   )
 })
 
