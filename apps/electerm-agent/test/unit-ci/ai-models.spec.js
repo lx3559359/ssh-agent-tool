@@ -280,6 +280,43 @@ test('returns provider error messages from chat requests', async () => {
   }
 })
 
+test('returns provider error messages from non-stream chat response bodies', async () => {
+  const axios = require('axios')
+  const originalCreate = axios.create
+
+  axios.create = () => ({
+    post: async () => ({
+      data: {
+        error: {
+          message: 'model is not available on this relay'
+        }
+      }
+    })
+  })
+
+  delete require.cache[aiPath]
+  const { AIchat } = require(aiPath)
+
+  try {
+    const res = await AIchat(
+      'hello',
+      'relay-model',
+      'system',
+      'https://relay.example.com/v1',
+      '',
+      'test-key',
+      '',
+      false,
+      'Authorization: Bearer'
+    )
+
+    assert.equal(res.error, 'model is not available on this relay')
+  } finally {
+    axios.create = originalCreate
+    delete require.cache[aiPath]
+  }
+})
+
 test('returns provider error messages from tool chat response bodies', async () => {
   const axios = require('axios')
   const originalCreate = axios.create

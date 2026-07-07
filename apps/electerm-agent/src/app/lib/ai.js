@@ -403,9 +403,16 @@ exports.AIchat = async (
     } else {
       // For non-streaming responses (command suggestions and when stream=false)
       const response = await client.post(endpoint.path, requestData)
+      const choice = response.data?.choices?.[0]
+      if (!choice) {
+        const errorMessage = getAIErrorMessage(response.data)
+        return {
+          error: errorMessage || '模型 API 返回异常，未包含可用的对话消息'
+        }
+      }
 
       return {
-        response: normalizeAIMessageContent(getAIChoiceContent(response.data.choices[0])),
+        response: normalizeAIMessageContent(getAIChoiceContent(choice)),
         isStream: false
       }
     }
