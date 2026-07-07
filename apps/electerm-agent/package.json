@@ -36,6 +36,7 @@
     "release:github:clean": "node build/bin/cleanup-github-release.js --yes",
     "release:github:clean:dry": "node build/bin/cleanup-github-release.js",
     "release:github:verify": "node build/bin/verify-github-release.js",
+    "release:local:verify": "node build/bin/verify-local-release-assets.js",
     "w": "./build/bin/web-release",
     "t": "./node_modules/.bin/electron work/app/app.js",
     "lock": "npm i --package-lock-only"

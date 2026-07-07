@@ -28,6 +28,25 @@ function byName (items = []) {
   return new Map(items.map(item => [path.basename(item.name), item]))
 }
 
+function buildLocalReleaseAssetReport ({
+  localFiles = [],
+  version
+}) {
+  const requiredNames = getRequiredReleaseAssetNames(version)
+  const localByName = byName(localFiles)
+  const missingLocal = requiredNames.filter(name => !localByName.has(name))
+  const emptyLocal = requiredNames
+    .filter(name => localByName.has(name))
+    .filter(name => Number(localByName.get(name).size) <= 0)
+
+  return {
+    requiredNames,
+    missingLocal,
+    emptyLocal,
+    ok: !missingLocal.length && !emptyLocal.length
+  }
+}
+
 function buildReleaseAssetReport ({
   localFiles = [],
   remoteAssets = [],
@@ -84,6 +103,7 @@ function createSpawnOptions (options = {}) {
 }
 
 module.exports = {
+  buildLocalReleaseAssetReport,
   buildReleaseTag,
   buildReleaseAssetReport,
   getRequiredReleaseAssetNames,

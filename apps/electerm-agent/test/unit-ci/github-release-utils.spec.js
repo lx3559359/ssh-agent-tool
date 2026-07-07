@@ -4,6 +4,7 @@ const fs = require('node:fs')
 const path = require('node:path')
 
 const {
+  buildLocalReleaseAssetReport,
   buildReleaseTag,
   buildReleaseAssetReport,
   getRequiredReleaseAssetNames,
@@ -60,6 +61,23 @@ test('windows release workflow runs unit tests before packaging', () => {
   assert.ok(unitTestIndex > dependencyInstallIndex, 'unit tests should run after dependencies are installed')
   assert.ok(unitTestIndex < rendererBuildIndex, 'unit tests should run before renderer packaging begins')
   assert.ok(unitTestIndex < installerBuildIndex, 'unit tests should run before installer packaging begins')
+})
+
+test('windows release workflow verifies local update assets before upload', () => {
+  const workflow = fs.readFileSync(
+    path.resolve(__dirname, '../../../../.github/workflows/windows-electerm-agent-release.yml'),
+    'utf8'
+  )
+
+  const localVerifyIndex = workflow.indexOf('npm run release:local:verify')
+  const portableBuildIndex = workflow.indexOf('name: Build portable package')
+  const artifactUploadIndex = workflow.indexOf('name: Upload Windows artifacts')
+
+  assert.ok(localVerifyIndex !== -1, 'workflow should verify local release assets')
+  assert.ok(portableBuildIndex !== -1, 'workflow should build the portable package')
+  assert.ok(artifactUploadIndex !== -1, 'workflow should upload Windows artifacts')
+  assert.ok(localVerifyIndex > portableBuildIndex, 'local release verification should run after all package builds')
+  assert.ok(localVerifyIndex < artifactUploadIndex, 'local release verification should run before artifacts are uploaded')
 })
 
 test('builds a stable GitHub release tag from package version', () => {
@@ -174,6 +192,56 @@ test('reports ok when local and remote update assets match exactly', () => {
       version: '3.15.105'
     }).ok,
     true
+  )
+})
+
+test('reports local update assets as valid only when all required files are present and non-empty', () => {
+  const files = [
+    { name: 'AIGShell-3.15.105-win-x64-installer.exe', size: 100 },
+    { name: 'AIGShell-3.15.105-win-x64-installer.exe.blockmap', size: 10 },
+    { name: 'latest.yml', size: 3 },
+    { name: 'win-unpacked', size: 0 }
+  ]
+
+  assert.deepEqual(
+    buildLocalReleaseAssetReport({
+      localFiles: files,
+      version: '3.15.105'
+    }),
+    {
+      requiredNames: [
+        'AIGShell-3.15.105-win-x64-installer.exe',
+        'AIGShell-3.15.105-win-x64-installer.exe.blockmap',
+        'latest.yml'
+      ],
+      missingLocal: [],
+      emptyLocal: [],
+      ok: true
+    }
+  )
+})
+
+test('reports missing and empty local update assets before upload', () => {
+  const files = [
+    { name: 'AIGShell-3.15.105-win-x64-installer.exe', size: 0 },
+    { name: 'latest.yml', size: 3 }
+  ]
+
+  assert.deepEqual(
+    buildLocalReleaseAssetReport({
+      localFiles: files,
+      version: '3.15.105'
+    }),
+    {
+      requiredNames: [
+        'AIGShell-3.15.105-win-x64-installer.exe',
+        'AIGShell-3.15.105-win-x64-installer.exe.blockmap',
+        'latest.yml'
+      ],
+      missingLocal: ['AIGShell-3.15.105-win-x64-installer.exe.blockmap'],
+      emptyLocal: ['AIGShell-3.15.105-win-x64-installer.exe'],
+      ok: false
+    }
   )
 })
 
