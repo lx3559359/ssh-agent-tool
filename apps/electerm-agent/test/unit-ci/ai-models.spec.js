@@ -129,3 +129,49 @@ test('keeps remote model list errors instead of masking them with Ollama fallbac
     delete require.cache[aiPath]
   }
 })
+
+test('normalizes custom AI auth header spacing for chat requests', async () => {
+  const axios = require('axios')
+  const originalCreate = axios.create
+  let capturedConfig
+
+  axios.create = (config) => {
+    capturedConfig = config
+    return {
+      post: async () => ({
+        data: {
+          choices: [
+            {
+              message: {
+                content: 'ok'
+              }
+            }
+          ]
+        }
+      })
+    }
+  }
+
+  delete require.cache[aiPath]
+  const { AIchat } = require(aiPath)
+
+  try {
+    const res = await AIchat(
+      'hello',
+      'test-model',
+      'system',
+      'https://api.example.com/v1',
+      '',
+      'test-key',
+      '',
+      false,
+      'Authorization:Bearer'
+    )
+    assert.equal(res.response, 'ok')
+    assert.equal(capturedConfig.headers.Authorization, 'Bearer test-key')
+    assert.equal(capturedConfig.headers['Authorization:Bearer'], undefined)
+  } finally {
+    axios.create = originalCreate
+    delete require.cache[aiPath]
+  }
+})

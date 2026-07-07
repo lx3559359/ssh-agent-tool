@@ -33,11 +33,20 @@ exports.stopStream = (sessionId) => {
   return { stopped: true }
 }
 
+function parseAuthHeader (authHeaderName) {
+  const headerStr = String(authHeaderName || 'Authorization: Bearer').trim()
+  const match = headerStr.match(/^([^:]+?)(?:\s*:\s*(.*))?$/)
+  return {
+    headerKey: match?.[1]?.trim() || 'Authorization',
+    headerPrefix: match?.[2]?.trim() || ''
+  }
+}
+
 const createAIClient = (baseURL, apiKey, proxy, authHeaderName) => {
-  const headerStr = authHeaderName || 'Authorization: Bearer'
-  const parts = headerStr.split(': ')
-  const headerKey = parts[0]
-  const headerPrefix = parts.length > 1 ? parts[1] : ''
+  const {
+    headerKey,
+    headerPrefix
+  } = parseAuthHeader(authHeaderName)
   const headerValue = headerPrefix
     ? `${headerPrefix} ${apiKey}`
     : apiKey
