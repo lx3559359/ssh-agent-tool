@@ -52,10 +52,14 @@ jobs:
         run: npm run pb
 
       - name: Build NSIS installer
-        run: node build/bin/build-win-nsis.js
+        run: |
+          node -e "const c = require('./build/bin/build-common'); c.patchNsisKeepShortcuts(); c.writeSrc('win-x64-installer.exe')"
+          npx electron-builder --win nsis --publish never
 
       - name: Build portable package
-        run: node build/bin/build-win-portable.js
+        run: |
+          node -e "const fs = require('fs'); const c = require('./build/bin/build-common'); c.writeSrc('win-x64-portable.tar.gz'); const p = 'electron-builder.json'; const j = JSON.parse(fs.readFileSync(p, 'utf8')); j.win.target = ['tar.gz']; j.artifactName = '${productName}-${version}-${os}-${arch}-portable.${ext}'; fs.writeFileSync(p, JSON.stringify(j, null, 2))"
+          npx electron-builder --win tar.gz --publish never
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4

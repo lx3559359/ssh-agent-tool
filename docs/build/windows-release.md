@@ -17,7 +17,7 @@ Primary packaging path:
 - Windows runner: GitHub Actions `windows-latest`
 - Node.js: Node 22
 - Native build toolchain: Visual Studio C++ Build Tools from the hosted Windows runner
-- Packaging tool: Electerm's existing `electron-builder` scripts
+- Packaging tool: Electerm's existing `electron-builder` configuration
 
 Workflow:
 
@@ -66,6 +66,8 @@ The native modules are compiled and bundled during packaging, so the user does n
 ## CI Toolchain Note
 
 The first workflow run on 2026-07-07 used `windows-latest`, which resolved to Windows Server 2025 with Visual Studio 2026. `node-gyp` rejected a forced `msvs_version=2022` because the valid detected version was `2026`. The workflow therefore sets `npm_config_msvs_version=2026` and uses x64 MSBuild on the hosted runner.
+
+The second workflow run compiled native modules and prepared the packaged app successfully, but the NSIS step failed after creating the installer because Electerm's upstream build script allowed electron-builder's CI auto-publish behavior. It tried to publish against the upstream `electerm/electerm` release target. The workflow now calls `electron-builder --publish never` directly so CI produces repository artifacts only.
 
 ## Required Acceptance Before Public Release
 
