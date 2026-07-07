@@ -1,5 +1,6 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
+const fs = require('node:fs')
 const path = require('node:path')
 
 const {
@@ -11,6 +12,18 @@ const {
   buildGitHubReleaseCommands,
   createSpawnOptions
 } = require(path.resolve(__dirname, '../../build/bin/github-release-utils'))
+
+test('windows release workflow publishes only online update assets', () => {
+  const workflow = fs.readFileSync(
+    path.resolve(__dirname, '../../../../.github/workflows/windows-electerm-agent-release.yml'),
+    'utf8'
+  )
+
+  assert.doesNotMatch(workflow, /apps\/electerm-agent\/dist\/\*\*\/\*/)
+  assert.match(workflow, /apps\/electerm-agent\/dist\/AIGShell-\*-win-x64-installer\.exe/)
+  assert.match(workflow, /apps\/electerm-agent\/dist\/AIGShell-\*-win-x64-installer\.exe\.blockmap/)
+  assert.match(workflow, /apps\/electerm-agent\/dist\/latest\.yml/)
+})
 
 test('builds a stable GitHub release tag from package version', () => {
   assert.equal(buildReleaseTag('3.15.105'), 'v3.15.105')

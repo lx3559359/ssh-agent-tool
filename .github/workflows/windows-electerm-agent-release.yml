@@ -66,7 +66,9 @@ jobs:
         with:
           name: ssh-agent-tool-windows-${{ github.ref_name }}
           path: |
-            apps/electerm-agent/dist/**/*
+            apps/electerm-agent/dist/AIGShell-*-win-x64-installer.exe
+            apps/electerm-agent/dist/AIGShell-*-win-x64-installer.exe.blockmap
+            apps/electerm-agent/dist/latest.yml
           if-no-files-found: error
           retention-days: 14
 
@@ -76,4 +78,6 @@ jobs:
         with:
           draft: true
           files: |
-            apps/electerm-agent/dist/**/*
+            apps/electerm-agent/dist/AIGShell-*-win-x64-installer.exe
+            apps/electerm-agent/dist/AIGShell-*-win-x64-installer.exe.blockmap
+            apps/electerm-agent/dist/latest.yml
