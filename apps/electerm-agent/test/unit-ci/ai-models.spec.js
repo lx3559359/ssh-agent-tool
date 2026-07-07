@@ -70,6 +70,31 @@ test('normalizes model aliases used by popular relays', () => {
   )
 })
 
+test('normalizes model map responses used by relays and gateways', () => {
+  const {
+    normalizeAIModelsResponse
+  } = require(aiPath)
+
+  assert.deepEqual(
+    normalizeAIModelsResponse({
+      models: {
+        'deepseek-chat': {
+          owned_by: 'deepseek'
+        },
+        'qwen-plus': {
+          context_length: 131072
+        },
+        'gpt-4.1-mini': true
+      }
+    }),
+    [
+      'deepseek-chat',
+      'qwen-plus',
+      'gpt-4.1-mini'
+    ]
+  )
+})
+
 test('tries Ollama tags endpoint when OpenAI models endpoint returns empty list', async () => {
   const axios = require('axios')
   const originalCreate = axios.create

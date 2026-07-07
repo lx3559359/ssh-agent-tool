@@ -93,7 +93,28 @@ function uniqueModels (models) {
   return [...new Set(models.filter(Boolean))]
 }
 
-function normalizeAIModelsResponse (data) {
+function normalizeModelMapKeys (data) {
+  const ignoredKeys = new Set([
+    'error',
+    'message',
+    'code',
+    'status',
+    'request_id',
+    'requestId'
+  ])
+  return Object.entries(data)
+    .filter(([key, value]) => {
+      if (ignoredKeys.has(key)) {
+        return false
+      }
+      return value === true ||
+        typeof value === 'string' ||
+        (value && typeof value === 'object')
+    })
+    .map(([key]) => key)
+}
+
+function normalizeAIModelsResponse (data, allowModelMap = false) {
   const direct = getModelName(data)
   if (direct) {
     return [direct]
@@ -119,14 +140,14 @@ function normalizeAIModelsResponse (data) {
       }
     }
     if (value && typeof value === 'object') {
-      const models = normalizeAIModelsResponse(value)
+      const models = normalizeAIModelsResponse(value, true)
       if (models.length) {
         return uniqueModels(models)
       }
     }
   }
 
-  return []
+  return allowModelMap ? uniqueModels(normalizeModelMapKeys(data)) : []
 }
 
 exports.normalizeAIModelsResponse = normalizeAIModelsResponse
