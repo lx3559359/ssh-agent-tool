@@ -8,11 +8,12 @@ import {
   EditOutlined
 } from '@ant-design/icons'
 import { Button, Space, Dropdown, Flex } from 'antd'
-import copy from 'json-deep-copy'
 import time from '../../common/time'
 import download from '../../common/download'
 import Upload from '../common/upload'
 import { beforeBookmarkUpload } from './bookmark-upload'
+import { createBookmarkBackup } from '../../common/bookmark-backup'
+import { packInfo } from '../../common/constants'
 
 const e = window.translate
 
@@ -28,12 +29,14 @@ export default function BookmarkToolbar (props) {
   const beforeUpload = beforeBookmarkUpload
 
   const handleDownload = () => {
-    const txt = JSON.stringify({
-      bookmarkGroups: copy(bookmarkGroups || []),
-      bookmarks: copy(bookmarks || [])
-    }, null, 2)
+    const backup = createBookmarkBackup({
+      bookmarkGroups,
+      bookmarks,
+      version: packInfo.version
+    })
+    const txt = JSON.stringify(backup, null, 2)
     const stamp = time(undefined, 'YYYY-MM-DD-HH-mm-ss')
-    download('bookmarks-' + stamp + '.json', txt)
+    download('aigshell-bookmarks-backup-' + stamp + '.json', txt)
   }
   const handleToggleEdit = () => {
     window.store.bookmarkSelectMode = true

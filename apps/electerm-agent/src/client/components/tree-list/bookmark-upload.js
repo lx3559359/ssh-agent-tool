@@ -9,6 +9,7 @@ import uid from '../../common/uid'
 import time from '../../common/time'
 import { fixBookmarks } from '../../common/db-fix'
 import delay from '../../common/wait'
+import { parseBookmarkBackup } from '../../common/bookmark-backup'
 
 function fixBookmarksId (bookmarks) {
   return bookmarks.map(item => {
@@ -29,11 +30,10 @@ export const bookmarkUpload = action(async (file) => {
     ? file.fileContent
     : await window.fs.readFile(file.filePath)
 
-  const content = JSON.parse(txt)
-  let bookmarkGroups1 = []
-  let bookmarks1 = []
-  if (Array.isArray(content)) {
-    bookmarks1 = fixBookmarksId(content)
+  const content = parseBookmarkBackup(txt)
+  let bookmarkGroups1 = content.bookmarkGroups || []
+  const bookmarks1 = fixBookmarksId(content.bookmarks || [])
+  if (!bookmarkGroups1.length && bookmarks1.length) {
     bookmarkGroups1 = [{
       id: uid(),
       title: 'imported_' + time(),
@@ -41,9 +41,6 @@ export const bookmarkUpload = action(async (file) => {
       bookmarkGroupIds: [],
       bookmarkIds: bookmarks1.map(b => b.id)
     }]
-  } else {
-    bookmarkGroups1 = content.bookmarkGroups || []
-    bookmarks1 = fixBookmarksId(content.bookmarks || [])
   }
 
   const bookmarkGroups0 = copy(bookmarkGroups)
