@@ -10,6 +10,8 @@ import time from '../../common/time'
 import { fixBookmarks } from '../../common/db-fix'
 import delay from '../../common/wait'
 import { parseBookmarkBackup } from '../../common/bookmark-backup'
+import message from '../common/message'
+import { runBookmarkUploadWithWatchers } from './bookmark-upload-guard'
 
 function fixBookmarksId (bookmarks) {
   return bookmarks.map(item => {
@@ -93,12 +95,11 @@ export async function beforeBookmarkUpload (file) {
     'bookmarks',
     'bookmarkGroups'
   ]
-  for (const name of names) {
-    window[`watch${name}`].stop()
-  }
-  bookmarkUpload(file)
-  await delay(1000)
-  for (const name of names) {
-    window[`watch${name}`].start()
-  }
+  return runBookmarkUploadWithWatchers({
+    file,
+    upload: bookmarkUpload,
+    watchers: names.map(name => window[`watch${name}`]),
+    showError: (content) => message.error(content),
+    waitAfterUpload: () => delay(1000)
+  })
 }
