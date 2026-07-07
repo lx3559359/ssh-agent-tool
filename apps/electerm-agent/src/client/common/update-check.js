@@ -41,7 +41,9 @@ function getInfo (url) {
 
 export async function getLatestReleaseVersion (n) {
   const release = await getInfo(releaseApiUrl)
-  return getReleaseUpdate(release, packInfo.version)
+  return getReleaseUpdate(release, packInfo.version, {
+    requireWindowsAssets: true
+  })
 }
 
 export async function getLatestReleaseInfo () {
