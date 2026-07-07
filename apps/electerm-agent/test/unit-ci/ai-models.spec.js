@@ -47,6 +47,29 @@ test('normalizes model list responses from common providers and relays', () => {
   )
 })
 
+test('normalizes model aliases used by popular relays', () => {
+  const {
+    normalizeAIModelsResponse
+  } = require(aiPath)
+
+  assert.deepEqual(
+    normalizeAIModelsResponse({
+      data: [
+        { model_id: 'hunyuan-turbos-latest' },
+        { modelId: 'gemini-2.5-flash' },
+        { value: 'claude-3-5-sonnet-latest' },
+        { deployment_id: 'azure-gpt-4.1-mini' }
+      ]
+    }),
+    [
+      'hunyuan-turbos-latest',
+      'gemini-2.5-flash',
+      'claude-3-5-sonnet-latest',
+      'azure-gpt-4.1-mini'
+    ]
+  )
+})
+
 test('tries Ollama tags endpoint when OpenAI models endpoint returns empty list', async () => {
   const axios = require('axios')
   const originalCreate = axios.create

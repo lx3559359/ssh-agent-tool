@@ -77,7 +77,16 @@ function getModelName (item) {
   if (!item || typeof item !== 'object') {
     return ''
   }
-  return item.id || item.name || item.model || item.model_name || item.display_name || ''
+  return item.id ||
+    item.name ||
+    item.model ||
+    item.model_name ||
+    item.model_id ||
+    item.modelId ||
+    item.value ||
+    item.deployment_id ||
+    item.display_name ||
+    ''
 }
 
 function uniqueModels (models) {
