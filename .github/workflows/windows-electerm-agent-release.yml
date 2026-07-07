@@ -1,0 +1,73 @@
+name: Windows Electerm Agent Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows installer and portable package
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: apps/electerm-agent
+
+    env:
+      CI: true
+      WORKFLOW_NAME: windows-electerm-agent
+      npm_config_msvs_version: "2022"
+      npm_config_build_from_source: "true"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/electerm-agent/package-lock.json
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Install Yarn Classic for Electerm packaging
+        run: npm install -g yarn@1.22.22
+
+      - name: Install dependencies and rebuild native modules
+        run: npm ci
+
+      - name: Build renderer and prepare packaged app
+        run: npm run b
+
+      - name: Prepare electron-builder config
+        run: npm run pb
+
+      - name: Build NSIS installer
+        run: node build/bin/build-win-nsis.js
+
+      - name: Build portable package
+        run: node build/bin/build-win-portable.js
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ssh-agent-tool-windows-${{ github.ref_name }}
+          path: |
+            apps/electerm-agent/dist/**/*
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Create draft GitHub Release for tags
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: |
+            apps/electerm-agent/dist/**/*
