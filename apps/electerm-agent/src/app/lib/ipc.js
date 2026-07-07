@@ -74,6 +74,9 @@ const log = require('../common/log')
 const {
   exportDiagnosticPack
 } = require('./diagnostic-pack')
+const {
+  reportRendererError
+} = require('./renderer-error-report')
 
 // Security: whitelist of safe environment variables for Linux/Mac/Windows
 const SAFE_ENV_KEYS = [
@@ -221,6 +224,7 @@ function initIpc () {
       isPortable,
       logFilePath: log.transports.file.getFile().path
     }),
+    reportRendererError: (payload) => reportRendererError(payload, log),
     setTitle: (title) => {
       const win = globalState.get('win')
       win && win.setTitle(packInfo.name + ' - ' + title)

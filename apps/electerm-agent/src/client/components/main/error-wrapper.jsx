@@ -59,8 +59,15 @@ export default class ErrorBoundary extends React.PureComponent {
     }
   }
 
-  componentDidCatch (error) {
+  componentDidCatch (error, errorInfo) {
     console.error(error)
+    window.pre?.runGlobalAsync?.('reportRendererError', {
+      message: error?.message || String(error),
+      stack: error?.stack || '',
+      componentStack: errorInfo?.componentStack || '',
+      location: window.location?.href || '',
+      userAgent: window.navigator?.userAgent || ''
+    }).catch(() => {})
     this.setState({
       hasError: true,
       error
