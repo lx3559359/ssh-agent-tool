@@ -42,13 +42,14 @@ function splitFullEndpoint (baseURL) {
   }
 
   const basePath = cleanPath.slice(0, cleanPath.length - matched.length)
+  const endpointSearch = url.search
   url.pathname = basePath || '/'
   url.search = ''
   url.hash = ''
 
   return {
     baseURL: trimEndSlash(url.toString()),
-    path: matched
+    path: `${matched}${endpointSearch}`
   }
 }
 
