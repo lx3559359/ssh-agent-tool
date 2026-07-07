@@ -65,6 +65,25 @@ test('parses legacy bookmark exports for backwards compatibility', async () => {
   })
 })
 
+test('rejects invalid bookmark backup content with a clear error', async () => {
+  const {
+    parseBookmarkBackup
+  } = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/common/bookmark-backup.js')))
+
+  assert.throws(
+    () => parseBookmarkBackup(''),
+    /备份文件内容不是有效的 JSON/
+  )
+  assert.throws(
+    () => parseBookmarkBackup('{bad json'),
+    /备份文件内容不是有效的 JSON/
+  )
+  assert.throws(
+    () => parseBookmarkBackup(JSON.stringify({ hello: 'world' })),
+    /备份文件中没有可导入的服务器连接/
+  )
+})
+
 function pathToFileURL (filePath) {
   return new URL(`file://${filePath.replace(/\\/g, '/')}`).href
 }

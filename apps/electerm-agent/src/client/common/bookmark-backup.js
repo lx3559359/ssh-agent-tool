@@ -25,7 +25,12 @@ export function createBookmarkBackup ({
 }
 
 export function parseBookmarkBackup (text) {
-  const content = typeof text === 'string' ? JSON.parse(text) : text
+  let content
+  try {
+    content = typeof text === 'string' ? JSON.parse(text) : text
+  } catch (_) {
+    throw new Error('备份文件内容不是有效的 JSON')
+  }
 
   if (Array.isArray(content)) {
     return {
@@ -35,10 +40,17 @@ export function parseBookmarkBackup (text) {
   }
 
   if (content?.format === bookmarkBackupFormat && content?.data) {
+    if (!Array.isArray(content.data.bookmarks) && !Array.isArray(content.data.bookmarkGroups)) {
+      throw new Error('备份文件中没有可导入的服务器连接')
+    }
     return {
       bookmarks: content.data.bookmarks || [],
       bookmarkGroups: content.data.bookmarkGroups || []
     }
+  }
+
+  if (!Array.isArray(content?.bookmarks) && !Array.isArray(content?.bookmarkGroups)) {
+    throw new Error('备份文件中没有可导入的服务器连接')
   }
 
   return {
