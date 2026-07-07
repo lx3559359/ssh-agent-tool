@@ -13,7 +13,9 @@ const PROVIDER_BASE_PATHS = new Map([
   ['qianfan.bj.baidubce.com', '/v2'],
   ['api.groq.com', '/openai/v1'],
   ['generativelanguage.googleapis.com', '/v1beta/openai'],
-  ['ark.cn-beijing.volces.com', '/api/v3']
+  ['ark.cn-beijing.volces.com', '/api/v3'],
+  ['api.deepinfra.com', '/v1/openai'],
+  ['api.fireworks.ai', '/inference/v1']
 ])
 
 function trimEndSlash (str) {

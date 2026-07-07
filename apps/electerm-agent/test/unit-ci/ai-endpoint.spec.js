@@ -80,6 +80,25 @@ test('normalizes popular provider root URLs to their OpenAI-compatible base path
   }
 })
 
+test('normalizes provider roots that use non-v1 OpenAI-compatible base paths', () => {
+  const cases = [
+    ['https://api.deepinfra.com', 'https://api.deepinfra.com/v1/openai'],
+    ['https://api.fireworks.ai', 'https://api.fireworks.ai/inference/v1']
+  ]
+
+  for (const [input, expectedBaseURL] of cases) {
+    assert.deepEqual(
+      normalizeAIEndpoint(input, ''),
+      {
+        baseURL: expectedBaseURL,
+        path: '/chat/completions'
+      },
+      input
+    )
+    assert.equal(normalizeAIModelBaseURL(input), expectedBaseURL, input)
+  }
+})
+
 test('client endpoint preview uses the same popular provider root URL rules', async () => {
   const {
     normalizeAIEndpoint: normalizeClientAIEndpoint
