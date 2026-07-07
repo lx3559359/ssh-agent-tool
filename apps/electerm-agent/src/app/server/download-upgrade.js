@@ -72,6 +72,15 @@ function selectReleaseAsset (release, platformInfo = {}) {
   }
 }
 
+function getRequiredReleaseAsset (release, platformInfo = {}) {
+  const asset = selectReleaseAsset(release, platformInfo)
+  if (asset) {
+    return asset
+  }
+  const tag = release?.tag_name ? ` ${release.tag_name}` : ''
+  throw new Error(`未找到适用于当前系统的 AIGShell 更新安装包${tag}，请前往 GitHub Releases 手动下载。`)
+}
+
 function getReleaseInfo (
   releaseInfoUrl, agent
 ) {
@@ -85,7 +94,7 @@ function getReleaseInfo (
   return rp(conf)
     .then((res) => {
       const release = res.data.release || res.data
-      return selectReleaseAsset(release)
+      return getRequiredReleaseAsset(release)
     })
 }
 
@@ -208,4 +217,5 @@ class Upgrade {
 exports.Upgrade = Upgrade
 exports.buildUpgradeEndMessage = buildUpgradeEndMessage
 exports.buildUpgradeErrorMessage = buildUpgradeErrorMessage
+exports.getRequiredReleaseAsset = getRequiredReleaseAsset
 exports.selectReleaseAsset = selectReleaseAsset

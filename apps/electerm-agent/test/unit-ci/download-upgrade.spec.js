@@ -7,6 +7,7 @@ process.env.NODE_ENV = 'development'
 const {
   buildUpgradeEndMessage,
   buildUpgradeErrorMessage,
+  getRequiredReleaseAsset,
   selectReleaseAsset
 } = require(path.resolve(__dirname, '../../src/app/server/download-upgrade'))
 
@@ -79,5 +80,27 @@ test('keeps legacy asset selection as a fallback', () => {
       installSrc: 'win-x64.tar.gz'
     }),
     release.assets[0]
+  )
+})
+
+test('throws a clear error when the release has no usable asset for this platform', () => {
+  const release = {
+    tag_name: 'v3.15.106',
+    assets: [
+      {
+        name: 'latest.yml',
+        browser_download_url: 'https://example.com/latest.yml'
+      }
+    ]
+  }
+
+  assert.throws(
+    () => getRequiredReleaseAsset(release, {
+      isWin: true,
+      isMac: false,
+      isArm: false,
+      installSrc: 'win-x64.tar.gz'
+    }),
+    /未找到适用于当前系统的 AIGShell 更新安装包/
   )
 })
