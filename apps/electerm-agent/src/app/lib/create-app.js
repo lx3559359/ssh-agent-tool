@@ -13,6 +13,9 @@ const {
 } = require('./deep-link')
 const { handleSingleInstance } = require('./single-instance')
 const log = require('../common/log')
+const {
+  installProcessErrorLogging
+} = require('./process-error-logging')
 
 let conf = {}
 
@@ -39,33 +42,10 @@ Example:
 ================================================================================
 `
 
-// Handle GPU process crashes
-app.on('gpu-process-crashed', (event, killed) => {
-  log.error(`GPU process crashed, killed: ${killed}`)
-  console.error(GPU_ERROR_SUGGESTION)
-})
-
-// Handle render process gone events
-app.on('render-process-gone', (event, webContents, details) => {
-  if (details.reason === 'crashed' || details.reason === 'abnormal-exit') {
-    log.error(`Render process gone: ${details.reason}`, details)
-    console.error(GPU_ERROR_SUGGESTION)
-  }
-})
-
-// Handle uncaught exceptions
-process.on('uncaughtException', (error) => {
-  const errorMsg = error?.message || ''
-  // Check if it's GPU related
-  if (
-    errorMsg.includes('GPU') ||
-    errorMsg.includes('gpu') ||
-    errorMsg.includes('graphics') ||
-    errorMsg.includes('Vulkan') ||
-    errorMsg.includes('DXGI')
-  ) {
-    console.error(GPU_ERROR_SUGGESTION)
-  }
+installProcessErrorLogging({
+  app,
+  log,
+  gpuSuggestion: GPU_ERROR_SUGGESTION
 })
 
 exports.createApp = async function () {
