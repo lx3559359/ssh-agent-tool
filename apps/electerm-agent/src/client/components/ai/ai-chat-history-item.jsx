@@ -83,7 +83,8 @@ export default function AIChatHistoryItem ({ item }) {
         apiPathAI,
         apiKeyAI,
         proxyAI,
-        true
+        true,
+        authHeaderNameAI
       )
 
       if (aiResponse && aiResponse.error) {
@@ -109,7 +110,7 @@ export default function AIChatHistoryItem ({ item }) {
       window.store.removeAiHistory(item.id)
       window.store.onError(error)
     }
-  }, [prompt, modelAI, baseURLAI, apiPathAI, apiKeyAI, proxyAI, item.id, pollStreamContent])
+  }, [prompt, modelAI, baseURLAI, apiPathAI, apiKeyAI, authHeaderNameAI, proxyAI, item.id, pollStreamContent])
 
   const startAgentRequest = useCallback(async () => {
     abortRef.current = false

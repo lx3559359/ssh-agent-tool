@@ -36,3 +36,10 @@ test('Agent chat preserves custom API auth header configuration', () => {
   assert.match(aiChatSource, /'authHeaderNameAI'/)
   assert.match(aiHistoryItemSource, /authHeaderNameAI/)
 })
+
+test('normal AI chat passes custom API auth header to backend requests', () => {
+  assert.match(
+    aiHistoryItemSource,
+    /window\.pre\.runGlobalAsync\(\s*'AIchat'[\s\S]*?true,\s*authHeaderNameAI\s*\)/
+  )
+})
