@@ -73,3 +73,14 @@ test('main process exposes diagnostic pack export through async IPC globals', ()
   assert.match(ipcSource, /exportDiagnosticPack/)
   assert.match(ipcSource, /log\.transports\.file\.getFile/)
 })
+
+test('about dialog exposes diagnostic pack export to users', () => {
+  const infoModalSource = fs.readFileSync(
+    path.resolve(__dirname, '../../src/client/components/sidebar/info-modal.jsx'),
+    'utf8'
+  )
+
+  assert.match(infoModalSource, /exportDiagnosticPack/)
+  assert.match(infoModalSource, /saveDialog/)
+  assert.match(infoModalSource, /导出诊断包/)
+})

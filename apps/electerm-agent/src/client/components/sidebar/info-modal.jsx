@@ -8,7 +8,8 @@ import {
   AlignLeftOutlined,
   BugOutlined,
   HeartOutlined,
-  CloudOutlined
+  CloudOutlined,
+  DownloadOutlined
 } from '@ant-design/icons'
 import { Tabs, Button } from 'antd'
 import Modal from '../common/modal'
@@ -16,6 +17,7 @@ import Link from '../common/external-link'
 import LogoElem from '../common/logo-elem'
 import Placeholder from '../common/placeholder'
 import RunningTime from './app-running-time'
+import message from '../common/message'
 import { auto } from 'manate/react'
 import { useState } from 'react'
 
@@ -30,6 +32,7 @@ const e = window.translate
 
 export default auto(function InfoModal (props) {
   const [runtimeEnv, setRuntimeEnv] = useState(null)
+  const [exportingDiagnosticPack, setExportingDiagnosticPack] = useState(false)
 
   const handleChangeTab = key => {
     window.store.infoModalTab = key
@@ -63,6 +66,48 @@ export default auto(function InfoModal (props) {
         {showMessage && (
           <span className='mg1l update-msg'>{noUpdateMessage}</span>
         )}
+      </div>
+    )
+  }
+
+  const handleExportDiagnosticPack = async () => {
+    const result = await window.api.saveDialog({
+      title: '导出诊断包',
+      defaultPath: `AIGShell-diagnostic-${Date.now()}.tar`,
+      filters: [
+        { name: 'AIGShell 诊断包', extensions: ['tar'] }
+      ],
+      properties: ['createDirectory', 'showOverwriteConfirmation']
+    })
+    if (result?.canceled || !result?.filePath) {
+      return
+    }
+    setExportingDiagnosticPack(true)
+    try {
+      const output = await window.pre.runGlobalAsync('exportDiagnosticPack', result.filePath)
+      const outputPath = output?.outputPath || result.filePath
+      message.success('诊断包已导出')
+      window.pre.showItemInFolder(outputPath)
+    } catch (err) {
+      message.error('导出诊断包失败：' + (err?.message || err))
+    } finally {
+      setExportingDiagnosticPack(false)
+    }
+  }
+
+  const renderDiagnosticExport = () => {
+    if (window.et.isWebApp) {
+      return null
+    }
+    return (
+      <div className='mg1b'>
+        <Button
+          icon={<DownloadOutlined />}
+          loading={exportingDiagnosticPack}
+          onClick={handleExportDiagnosticPack}
+        >
+          导出诊断包
+        </Button>
       </div>
     )
   }
@@ -230,6 +275,7 @@ export default auto(function InfoModal (props) {
           <p className='mg1b'>
             <InfoCircleOutlined /> <b className='mg1r'>{window.store.installSrc}</b>
           </p>
+          {renderDiagnosticExport()}
           {renderCheckUpdate()}
           <Placeholder />
         </>
