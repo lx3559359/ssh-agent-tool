@@ -84,6 +84,8 @@ function getModelName (item) {
     item.model_id ||
     item.modelId ||
     item.modelName ||
+    item.model_code ||
+    item.modelCode ||
     item.value ||
     item.deployment_id ||
     item.display_name ||
@@ -135,7 +137,13 @@ function normalizeAIModelsResponse (data, allowModelMap = false) {
     'models',
     'result',
     'items',
-    'list'
+    'list',
+    'model_list',
+    'modelList',
+    'available_models',
+    'availableModels',
+    'model_infos',
+    'modelInfos'
   ]
 
   for (const key of modelKeys) {

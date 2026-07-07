@@ -116,6 +116,40 @@ test('normalizes model map responses used by relays and gateways', () => {
   )
 })
 
+test('normalizes relay model list container aliases', () => {
+  const {
+    normalizeAIModelsResponse
+  } = require(aiPath)
+
+  assert.deepEqual(
+    normalizeAIModelsResponse({
+      model_list: [
+        { model_code: 'qwen-max-latest' },
+        { modelCode: 'hunyuan-large-latest' }
+      ]
+    }),
+    [
+      'qwen-max-latest',
+      'hunyuan-large-latest'
+    ]
+  )
+
+  assert.deepEqual(
+    normalizeAIModelsResponse({
+      result: {
+        availableModels: [
+          { name: 'MiniMax-M1' },
+          { id: 'kimi-k2-0711-preview' }
+        ]
+      }
+    }),
+    [
+      'MiniMax-M1',
+      'kimi-k2-0711-preview'
+    ]
+  )
+})
+
 test('tries Ollama tags endpoint when OpenAI models endpoint returns empty list', async () => {
   const axios = require('axios')
   const originalCreate = axios.create
