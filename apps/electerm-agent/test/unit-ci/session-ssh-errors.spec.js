@@ -82,4 +82,21 @@ describe('session-ssh connection error diagnostics', () => {
     assert.match(normalized.message, /防火墙/)
     assert.match(normalized.message, /原始错误：read ECONNRESET/)
   })
+
+  test('adds a chinese diagnosis for unreachable networks', () => {
+    const error = new Error('connect EHOSTUNREACH 10.0.9.9:22')
+    error.code = 'EHOSTUNREACH'
+
+    const normalized = normalizeSshConnectionError(error, {
+      host: '10.0.9.9',
+      port: 22,
+      username: 'root'
+    })
+
+    assert.match(normalized.message, /SSH 网络不可达/)
+    assert.match(normalized.message, /root@10\.0\.9\.9:22/)
+    assert.match(normalized.message, /VPN/)
+    assert.match(normalized.message, /路由/)
+    assert.match(normalized.message, /原始错误：connect EHOSTUNREACH/)
+  })
 })

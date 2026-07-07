@@ -54,6 +54,12 @@ function getSshDiagnosis (err = {}) {
       suggestion: '请检查服务器 sshd、堡垒机/代理、防火墙、安全组或连接数限制是否主动断开连接。'
     }
   }
+  if (code === 'EHOSTUNREACH' || code === 'ENETUNREACH' || /EHOSTUNREACH|ENETUNREACH|no route to host|network is unreachable/i.test(message)) {
+    return {
+      title: 'SSH 网络不可达',
+      suggestion: '请检查本机网络、VPN、路由、代理/堡垒机、防火墙和安全组是否允许访问目标服务器。'
+    }
+  }
   if (code === 'ETIMEDOUT' || /timed? ?out|handshake timeout/i.test(message)) {
     return {
       title: 'SSH 连接超时',
