@@ -55,7 +55,13 @@ function isBackupItemList (items) {
     return true
   }
   return items.every(item => {
-    return item && typeof item === 'object' && !Array.isArray(item)
+    return (
+      item &&
+      typeof item === 'object' &&
+      !Array.isArray(item) &&
+      typeof item.id === 'string' &&
+      Boolean(item.id.trim())
+    )
   })
 }
 
