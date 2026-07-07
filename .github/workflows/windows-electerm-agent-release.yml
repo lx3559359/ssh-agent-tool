@@ -58,7 +58,7 @@ jobs:
 
       - name: Build portable package
         run: |
-          node -e "const fs = require('fs'); const c = require('./build/bin/build-common'); c.writeSrc('win-x64-portable.tar.gz'); const p = 'electron-builder.json'; const j = JSON.parse(fs.readFileSync(p, 'utf8')); j.win.target = ['tar.gz']; j.artifactName = '${productName}-${version}-${os}-${arch}-portable.${ext}'; fs.writeFileSync(p, JSON.stringify(j, null, 2))"
+          node build/bin/prepare-win-portable-ci.js
           npx electron-builder --win tar.gz --publish never
 
       - name: Upload Windows artifacts
