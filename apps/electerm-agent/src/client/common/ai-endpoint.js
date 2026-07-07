@@ -9,6 +9,8 @@ const PROVIDER_BASE_PATHS = new Map([
   ['openrouter.ai', '/api/v1'],
   ['dashscope.aliyuncs.com', '/compatible-mode/v1'],
   ['open.bigmodel.cn', '/api/paas/v4'],
+  ['qianfan.baidubce.com', '/v2'],
+  ['qianfan.bj.baidubce.com', '/v2'],
   ['api.groq.com', '/openai/v1'],
   ['generativelanguage.googleapis.com', '/v1beta/openai'],
   ['ark.cn-beijing.volces.com', '/api/v3']

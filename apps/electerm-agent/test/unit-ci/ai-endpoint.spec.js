@@ -60,6 +60,8 @@ test('normalizes popular provider root URLs to their OpenAI-compatible base path
     ['https://openrouter.ai', 'https://openrouter.ai/api/v1'],
     ['https://dashscope.aliyuncs.com', 'https://dashscope.aliyuncs.com/compatible-mode/v1'],
     ['https://open.bigmodel.cn', 'https://open.bigmodel.cn/api/paas/v4'],
+    ['https://qianfan.baidubce.com', 'https://qianfan.baidubce.com/v2'],
+    ['https://qianfan.bj.baidubce.com', 'https://qianfan.bj.baidubce.com/v2'],
     ['https://api.groq.com', 'https://api.groq.com/openai/v1'],
     ['https://generativelanguage.googleapis.com', 'https://generativelanguage.googleapis.com/v1beta/openai'],
     ['https://ark.cn-beijing.volces.com', 'https://ark.cn-beijing.volces.com/api/v3']
@@ -94,6 +96,13 @@ test('client endpoint preview uses the same popular provider root URL rules', as
     normalizeClientAIEndpoint('https://dashscope.aliyuncs.com', ''),
     {
       baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+      path: '/chat/completions'
+    }
+  )
+  assert.deepEqual(
+    normalizeClientAIEndpoint('https://qianfan.baidubce.com', ''),
+    {
+      baseURL: 'https://qianfan.baidubce.com/v2',
       path: '/chat/completions'
     }
   )
