@@ -1,5 +1,7 @@
 # Open Source Base Decision
 
+> Superseded on 2026-07-07: The formal product direction is now Electerm-based secondary development. The earlier WinkTerm/prototype route is retained only as historical evaluation context because the self-built SSH client path did not satisfy formal SSH client expectations.
+
 Date: 2026-06-25
 
 ## Decision
