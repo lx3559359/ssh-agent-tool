@@ -6,7 +6,7 @@ const fs = require('fs')
 const { resolve } = require('path')
 const _ = require('../lib/lodash.js')
 const rp = require('axios')
-const { packInfo, tempDir } = require('../common/runtime-constants')
+const { tempDir, isWin, isMac, isArm } = require('../common/runtime-constants')
 const installSrc = require('../lib/install-src')
 const { fsExport } = require('../lib/fs')
 const { createProxyAgent } = require('../lib/proxy-agent')
@@ -22,8 +22,58 @@ function getUrl (url) {
   return url
 }
 
+function buildUpgradeEndMessage (id, data) {
+  return {
+    id: 'upgrade:end:' + id,
+    data
+  }
+}
+
+function buildUpgradeErrorMessage (id, err) {
+  return {
+    id: 'upgrade:err:' + id,
+    error: {
+      message: err.message,
+      stack: err.stack
+    }
+  }
+}
+
+function selectReleaseAsset (release, platformInfo = {}) {
+  const assets = release?.assets || []
+  const win = platformInfo.isWin ?? isWin
+  const mac = platformInfo.isMac ?? isMac
+  const arm = platformInfo.isArm ?? isArm
+  const src = platformInfo.installSrc || installSrc
+  const candidates = []
+
+  if (win) {
+    candidates.push(
+      r => /AIGShell-\d+\.\d+\.\d+-win-x64-installer\.exe$/i.test(r.name),
+      r => /win-x64-installer\.exe$/i.test(r.name)
+    )
+  } else if (mac || arm) {
+    candidates.push(
+      r => /mac.*\.dmg$/i.test(r.name)
+    )
+  } else {
+    candidates.push(
+      r => /linux.*\.tar\.gz$/i.test(r.name)
+    )
+  }
+
+  candidates.push(r => r.name.endsWith(src))
+
+  for (const filter of candidates) {
+    const asset = assets.find(filter)
+    if (asset) {
+      return asset
+    }
+  }
+}
+
 function getReleaseInfo (
-  filter, releaseInfoUrl, agent
+  releaseInfoUrl, agent
 ) {
   const conf = {
     url: releaseInfoUrl,
@@ -35,9 +85,7 @@ function getReleaseInfo (
   return rp(conf)
     .then((res) => {
       const release = res.data.release || res.data
-      return release
-        .assets
-        .filter(filter)[0]
+      return selectReleaseAsset(release)
     })
 }
 
@@ -54,22 +102,8 @@ class Upgrade {
     } = this.options
     const agent = createProxyAgent(proxy)
     const releaseInfoUrl = `${releaseApiUrl}?_=${+new Date()}`
-    const filter = r => {
-      return r.name.endsWith(installSrc)
-    }
-    // if (isWin) {
-    //   filter = r => /electerm-\d+\.\d+\.\d+-win-x64\.tar\.gz/.test(r.name)
-    // } else if (isArm) {
-    //   filter = r => {
-    //     return /arm64\.dmg$/.test(r.name)
-    //   }
-    // } else if (isMac) {
-    //   filter = r => {
-    //     return /mac\.dmg$/.test(r.name)
-    //   }
-    // }
-    const releaseInfo = await getReleaseInfo(filter, releaseInfoUrl, agent)
-      .catch(this.onError)
+    const releaseInfo = await getReleaseInfo(releaseInfoUrl, agent)
+      .catch(err => this.onError(err, id, ws))
     if (!releaseInfo) {
       return
     }
@@ -143,21 +177,12 @@ class Upgrade {
       process.send({
         showFileInFolder: this.localPath
       })
-      ws.s({
-        id: 'transfer:end:' + id,
-        data: this.dir
-      })
+      ws.s(buildUpgradeEndMessage(id, this.localPath))
     }
   }
 
   onError (err, id, ws) {
-    ws.s({
-      wid: 'upgrade:err:' + id,
-      error: {
-        message: err.message,
-        stack: err.stack
-      }
-    })
+    ws.s(buildUpgradeErrorMessage(id, err))
   }
 
   pause () {
@@ -181,3 +206,6 @@ class Upgrade {
 }
 
 exports.Upgrade = Upgrade
+exports.buildUpgradeEndMessage = buildUpgradeEndMessage
+exports.buildUpgradeErrorMessage = buildUpgradeErrorMessage
+exports.selectReleaseAsset = selectReleaseAsset
