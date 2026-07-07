@@ -108,7 +108,7 @@ class Store {
       }
     } = window.store
     if (rightPanelTab === 'ai') {
-      return getBrand(baseURLAI).brand || 'Custom AI Model'
+      return getBrand(baseURLAI).brand || '自定义模型'
     }
     return createTitle(window.store.currentTab)
   }

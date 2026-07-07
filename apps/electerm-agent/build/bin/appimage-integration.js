@@ -19,7 +19,7 @@ function installDesktopFile () {
 
   const appImagePath = process.env.APPIMAGE
   const home = os.homedir()
-  const desktopId = 'electerm'
+  const desktopId = 'aigshell'
   const appsDir = path.join(home, '.local', 'share', 'applications')
   const iconsDir = path.join(
     home, '.local', 'share', 'icons',
@@ -32,23 +32,23 @@ function installDesktopFile () {
   // module transparently reads from inside app.asar)
   const srcIconPath = path.join(
     process.resourcesPath,
-    'app.asar', 'assets', 'images', 'electerm-round-128x128.png'
+    'app.asar', 'assets', 'images', 'aigshell-round-128x128.png'
   )
 
   const desktopContent = [
     '[Desktop Entry]',
-    'Name=electerm',
-    'Comment=Terminal/SSH/SFTP client',
+    'Name=AIGShell',
+    'Comment=SSH/SFTP 和 AI Agent 客户端',
     `Exec=${appImagePath} %U`,
     `Icon=${iconFilePath}`,
     'Terminal=false',
     'Type=Application',
     'Categories=Development;System;TerminalEmulator;',
-    'StartupWMClass=electerm',
+    'StartupWMClass=AIGShell',
     'MimeType=x-scheme-handler/ssh;x-scheme-handler/telnet;' +
       'x-scheme-handler/rdp;x-scheme-handler/vnc;' +
       'x-scheme-handler/serial;x-scheme-handler/spice;' +
-      'x-scheme-handler/electerm;',
+      'x-scheme-handler/aigshell;x-scheme-handler/electerm;',
     ''
   ].join('\n')
 

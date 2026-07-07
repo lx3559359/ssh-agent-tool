@@ -14,7 +14,7 @@ export default function DeepLinkControl () {
       const status = await window.pre.runGlobalAsync('checkProtocolRegistration')
       setRegistrationStatus(status)
     } catch (error) {
-      console.error('Failed to check protocol registration:', error)
+      console.error('检查协议注册状态失败:', error)
     }
   }
 
@@ -27,14 +27,14 @@ export default function DeepLinkControl () {
     try {
       const result = await window.pre.runGlobalAsync('registerDeepLink', true)
       if (result.registered) {
-        message.success('Protocol handlers registered successfully')
+        message.success('协议处理器已注册')
         await checkRegistrationStatus()
       } else {
-        message.warning(e('deepLinkSkipped') || 'Registration skipped: ' + result.reason)
+        message.warning(e('deepLinkSkipped') || '已跳过注册：' + result.reason)
       }
     } catch (error) {
-      message.error('Failed to register protocol handlers')
-      console.error('Registration error:', error)
+      message.error('协议处理器注册失败')
+      console.error('协议注册失败:', error)
     } finally {
       setLoading(false)
     }
@@ -44,11 +44,11 @@ export default function DeepLinkControl () {
     setLoading(true)
     try {
       await window.pre.runGlobalAsync('unregisterDeepLink')
-      message.success('Protocol handlers unregistered successfully')
+      message.success('协议处理器已取消注册')
       await checkRegistrationStatus()
     } catch (error) {
-      message.error('Failed to unregister protocol handlers')
-      console.error('Unregistration error:', error)
+      message.error('协议处理器取消注册失败')
+      console.error('协议取消注册失败:', error)
     } finally {
       setLoading(false)
     }
@@ -65,8 +65,8 @@ export default function DeepLinkControl () {
   }
 
   const renderTooltipContent = () => {
-    const protocols = ['ssh', 'telnet', 'rdp', 'vnc', 'serial', 'spice', 'electerm', 'ftp']
-    const tip = `Register electerm to handle protocol URLs (${protocols.join('://, ')})`
+    const protocols = ['ssh', 'telnet', 'rdp', 'vnc', 'serial', 'spice', 'aigshell', 'electerm', 'ftp']
+    const tip = `注册 AIGShell 以打开协议链接（${protocols.join('://, ')}://）`
 
     return (
       <div>
@@ -77,7 +77,7 @@ export default function DeepLinkControl () {
         {registrationStatus && (
           <>
             <div className='pd1b'>
-              Protocol Status
+              协议状态
             </div>
             <div className='pd1b'>
               <Space size='small' wrap>

@@ -420,15 +420,15 @@ build_deb() {
     cp -r "$output_dir"/* "$deb_dir/opt/electerm/"
 
     # Install icon
-    local icon_src="$PROJECT_ROOT/node_modules/@electerm/electerm-resource/res/imgs/electerm-round-128x128.png"
+    local icon_src="$PROJECT_ROOT/src/client/assets/images/aigshell-round-128x128.png"
     if [ -f "$icon_src" ]; then
-        cp "$icon_src" "$deb_dir/usr/share/icons/hicolor/128x128/apps/electerm.png"
+        cp "$icon_src" "$deb_dir/usr/share/icons/hicolor/128x128/apps/aigshell.png"
     fi
 
     # Install desktop file
-    cat > "$deb_dir/usr/share/applications/electerm.desktop" <<'DESKTOP'
+    cat > "$deb_dir/usr/share/applications/aigshell.desktop" <<'DESKTOP'
 [Desktop Entry]
-Name=electerm
+Name=AIGShell
 Comment=Terminal/SSH/SFTP client
 Exec=/opt/electerm/electerm %U
 Icon=electerm

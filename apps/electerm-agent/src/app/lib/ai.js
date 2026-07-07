@@ -40,9 +40,11 @@ const createAIClient = (baseURL, apiKey, proxy, authHeaderName) => {
   const config = {
     baseURL,
     headers: {
-      'Content-Type': 'application/json',
-      [headerKey]: headerValue
+      'Content-Type': 'application/json'
     }
+  }
+  if (apiKey) {
+    config.headers[headerKey] = headerValue
   }
 
   // Add proxy agent if proxy is provided
@@ -53,6 +55,46 @@ const createAIClient = (baseURL, apiKey, proxy, authHeaderName) => {
   }
 
   return axios.create(config)
+}
+
+function normalizeModels (data) {
+  if (Array.isArray(data?.data)) {
+    return data.data
+      .map(item => typeof item === 'string' ? item : item.id)
+      .filter(Boolean)
+  }
+  if (Array.isArray(data?.models)) {
+    return data.models
+      .map(item => typeof item === 'string' ? item : (item.id || item.name || item.model))
+      .filter(Boolean)
+  }
+  return []
+}
+
+exports.AIModels = async (baseURL, apiKey, proxy, authHeaderName) => {
+  try {
+    const client = createAIClient(baseURL, apiKey, proxy, authHeaderName)
+    const response = await client.get('/models')
+    return {
+      models: normalizeModels(response.data)
+    }
+  } catch (e) {
+    try {
+      const nativeBaseURL = String(baseURL || '').replace(/\/v1\/?$/, '')
+      const client = createAIClient(nativeBaseURL, apiKey, proxy, authHeaderName)
+      const response = await client.get('/api/tags')
+      return {
+        models: normalizeModels(response.data)
+      }
+    } catch (err) {
+      log.error('AI models error')
+      log.error(err)
+      return {
+        error: err.message,
+        stack: err.stack
+      }
+    }
+  }
 }
 
 exports.AIchatWithTools = async (messages, model, baseURL, path, apiKey, proxy, tools, authHeaderName) => {

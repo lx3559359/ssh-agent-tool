@@ -6,7 +6,7 @@ import { PureComponent } from 'react'
 import {
   Popover
 } from 'antd'
-import logoSvg from '@electerm/electerm-resource/res/imgs/electerm.svg?raw'
+import logoPath from '../../assets/images/aigshell-round-128x128.png'
 import { shortcutDescExtend } from '../shortcuts/shortcut-handler.js'
 import MenuRender from './sys-menu.jsx'
 import { refsStatic } from '../common/ref.js'
@@ -203,8 +203,9 @@ class MenuBtn extends PureComponent {
         >
           <span
             className='menu-logo'
-            dangerouslySetInnerHTML={{ __html: logoSvg }}
-          />
+          >
+            <img src={logoPath} alt='AIGShell' />
+          </span>
         </div>
       </Popover>
     )

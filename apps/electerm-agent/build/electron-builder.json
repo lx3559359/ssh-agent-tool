@@ -1,5 +1,5 @@
 {
-  "appId": "com.lx3559359.sshagenttool",
+  "appId": "com.lx3559359.aigshell",
   "directories": {
     "app": "work/app",
     "output": "dist",
@@ -10,14 +10,14 @@
     "en-US"
   ],
   "asar": true,
-  "artifactName": "SSH-Agent-Tool-${version}-${os}-${arch}.${ext}",
+  "artifactName": "AIGShell-${version}-${os}-${arch}.${ext}",
   "win": {
     "target": [
       "tar.gz",
       "appx",
       "nsis"
     ],
-    "icon": "node_modules/@electerm/electerm-resource/build/icons-win.ico",
+    "icon": "build/assets/aigshell.ico",
     "publish": {
       "provider": "github",
       "owner": "lx3559359",
@@ -63,8 +63,9 @@
       ]
     },
     {
-      "name": "SSH Agent 工具协议",
+      "name": "AIGShell 协议",
       "schemes": [
+        "aigshell",
         "ssh-agent-tool"
       ]
     }
@@ -77,7 +78,7 @@
   },
   "nsis": {
     "oneClick": false,
-    "artifactName": "SSH-Agent-Tool-${version}-${os}-${arch}-installer.${ext}",
+    "artifactName": "AIGShell-${version}-${os}-${arch}-installer.${ext}",
     "allowToChangeInstallationDirectory": true,
     "language": "2052",
     "installerLanguages": [

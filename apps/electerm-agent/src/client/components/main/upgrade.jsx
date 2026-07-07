@@ -97,7 +97,7 @@ export default class Upgrade extends PureComponent {
 
   onError = (e) => {
     this.changeProps({
-      error: e.message
+      error: e.message || '更新下载失败'
     })
   }
 
@@ -126,7 +126,7 @@ export default class Upgrade extends PureComponent {
           ...newTerm(undefined, true),
           runScripts: [
             {
-              script: 'npm install -g ssh-agent-tool',
+              script: 'npm install -g aigshell',
               delay: 500
             }
           ]
@@ -154,6 +154,13 @@ export default class Upgrade extends PureComponent {
     this.handleClose()
   }
 
+  showNoUpdateInfo = (text) => {
+    this.changeProps({
+      noUpdateMessage: text,
+      noUpdateMessageExpires: Date.now() + 3000
+    })
+  }
+
   getLatestRelease = async (isManual = false) => {
     const { installSrc } = this.props
     if (checkSkipSrc(installSrc)) {
@@ -168,9 +175,10 @@ export default class Upgrade extends PureComponent {
       checkingRemoteVersion: false
     })
     if (!releaseVer) {
-      return this.changeProps({
-        error: '无法获取版本信息'
-      })
+      if (isManual) {
+        this.showNoUpdateInfo('暂未获取到在线更新版本，请稍后重试或前往 GitHub Releases 手动查看。')
+      }
+      return
     }
     const { skipVersion = 'v0.0.0' } = this.props
     const currentVer = 'v' + window.et.version.split('-')[0]
@@ -181,10 +189,7 @@ export default class Upgrade extends PureComponent {
     const shouldUpgrade = compare(currentVer, latestVer) < 0
     if (!shouldUpgrade) {
       if (isManual) {
-        this.changeProps({
-          noUpdateMessage: e('noNeed'),
-          noUpdateMessageExpires: Date.now() + 3000
-        })
+        this.showNoUpdateInfo(e('noNeed'))
       }
       return
     }
@@ -207,7 +212,7 @@ export default class Upgrade extends PureComponent {
       <div className='upgrade-panel'>
         <div className='upgrade-panel-title fix'>
           <span className='fleft'>
-            {e('fail')}: {err}
+            检查升级失败：{err}
           </span>
           <span className='fright'>
             <CloseOutlined className='pointer font16 close-upgrade-panel' onClick={this.handleClose} />
@@ -219,7 +224,8 @@ export default class Upgrade extends PureComponent {
             to={homepage}
             className='mg1x'
           >{homepage}
-          </Link>手动下载新版本。
+          </Link>
+          手动下载新版本。
         </div>
       </div>
     )
@@ -350,7 +356,7 @@ export default class Upgrade extends PureComponent {
       <div className={cls}>
         <div className='upgrade-panel-title fix'>
           <span className='fleft'>
-            {e('newVersion')} <b>{remoteVersion} [{releaseInfo.date}]</b>
+            {e('newVersion')} <b>{remoteVersion} [{releaseInfo?.date || '未知日期'}]</b>
           </span>
           <span className='fright'>
             <MinusSquareOutlined className='pointer font16 close-upgrade-panel' onClick={this.handleMinimize} />

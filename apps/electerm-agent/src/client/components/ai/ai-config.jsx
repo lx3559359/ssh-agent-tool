@@ -43,14 +43,23 @@ const authHeaderOptions = [
   { value: 'Authorization' }
 ]
 
+function uniqueOptions (items = []) {
+  return [...new Set(items.filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b))
+    .map(value => ({ value }))
+}
+
 export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig }) {
   const [form] = Form.useForm()
   const [testing, setTesting] = useState(false)
+  const [loadingModels, setLoadingModels] = useState(false)
+  const [modelOptions, setModelOptions] = useState([])
   const baseURLAI = Form.useWatch('baseURLAI', form)
 
   useEffect(() => {
     if (initialValues) {
       form.setFieldsValue(initialValues)
+      setModelOptions(uniqueOptions([initialValues.modelAI]))
     }
   }, [initialValues])
 
@@ -86,18 +95,54 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
       } else {
         message.error('模型 API 返回异常')
       }
-    } catch (e) {
-      if (e.message) {
-        message.error(e.message)
+    } catch (err) {
+      if (err.message) {
+        message.error(err.message)
       }
     } finally {
       setTesting(false)
     }
   }
 
+  const handleLoadModels = async () => {
+    try {
+      const values = await form.validateFields(['baseURLAI'])
+      const allValues = form.getFieldsValue()
+      setLoadingModels(true)
+      const res = await window.pre.runGlobalAsync(
+        'AIModels',
+        values.baseURLAI,
+        allValues.apiKeyAI,
+        allValues.proxyAI,
+        allValues.authHeaderNameAI
+      )
+      if (res?.error) {
+        return message.error(`拉取模型失败：${res.error}`)
+      }
+      const models = res?.models || []
+      if (!models.length) {
+        return message.warning('未获取到模型列表，请确认该接口是否兼容 /models。')
+      }
+      const options = uniqueOptions(models)
+      setModelOptions(options)
+      const currentModel = form.getFieldValue('modelAI')
+      if (!currentModel && options[0]) {
+        form.setFieldsValue({ modelAI: options[0].value })
+      }
+      message.success(`已获取 ${options.length} 个模型`)
+    } catch (err) {
+      if (err.message) {
+        message.error(err.message)
+      }
+    } finally {
+      setLoadingModels(false)
+    }
+  }
+
   function handleSelectHistory (item) {
     if (item && typeof item === 'object') {
       form.setFieldsValue(item)
+      setModelOptions(uniqueOptions([item.modelAI]))
     }
   }
 
@@ -184,12 +229,30 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
         </Form.Item>
         <Form.Item
           label={e('modelAi')}
-          name='modelAI'
-          rules={[{ required: true, message: '请输入或选择模型' }]}
+          required
         >
-          <Input
-            placeholder='输入或选择模型'
-          />
+          <Space.Compact className='width-100'>
+            <Form.Item
+              name='modelAI'
+              noStyle
+              rules={[{ required: true, message: '请输入或选择模型' }]}
+            >
+              <AutoComplete
+                options={modelOptions}
+                filterOption={filter}
+                style={{ width: '75%' }}
+              >
+                <Input placeholder='输入或选择模型' />
+              </AutoComplete>
+            </Form.Item>
+            <Button
+              loading={loadingModels}
+              onClick={handleLoadModels}
+              style={{ width: '25%' }}
+            >
+              拉取模型
+            </Button>
+          </Space.Compact>
         </Form.Item>
 
         <Form.Item

@@ -18,16 +18,16 @@ const iconPath = resolve(
   __dirname,
   (
     isDev
-      ? '../../../node_modules/@electerm/electerm-resource/res/imgs/electerm-round-128x128.png'
-      : '../assets/images/electerm-round-128x128.png'
+      ? '../../../src/client/assets/images/aigshell-round-128x128.png'
+      : '../assets/images/aigshell-round-128x128.png'
   )
 )
 const trayIconPath = resolve(
   __dirname,
   (
     isDev
-      ? '../../../node_modules/@electerm/electerm-resource/tray-icons/electerm-tray.png'
-      : '../assets/images/electerm-tray.png'
+      ? '../../../src/client/assets/images/aigshell-tray.png'
+      : '../assets/images/aigshell-tray.png'
   )
 )
 const extIconPath = isDev

@@ -105,7 +105,7 @@ async function createGlobalStyle (props) {
   const st = await createBackgroundStyle(props.terminalBackgroundImagePath)
   if (!st) {
     return '#container .session-batch-active .xterm-screen::before {' +
-    'background-image: url("./images/electerm-watermark.png");' +
+    'background-image: url("./images/aigshell-watermark.png");' +
     '}'
   }
 

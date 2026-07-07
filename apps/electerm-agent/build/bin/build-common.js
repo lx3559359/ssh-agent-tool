@@ -71,7 +71,7 @@ exports.writeSrc = function (src) {
  * Patch work/app to include AppImage desktop integration.
  * Copies the integration module and wires it into create-app.js
  * so the .desktop file + icon are installed on first run.
- * Only called for AppImage builds — zero overhead for other targets.
+ * Only called for AppImage builds.
  */
 exports.patchAppImage = function patchAppImage () {
   const fs = require('fs')
@@ -85,9 +85,9 @@ exports.patchAppImage = function patchAppImage () {
 
   // Copy icon for desktop integration (outside asar, accessible at runtime)
   const iconSrc = resolve(
-    __dirname, '../../node_modules/@electerm/electerm-resource/res/imgs/electerm-round-128x128.png'
+    __dirname, '../../src/client/assets/images/aigshell-round-128x128.png'
   )
-  const iconDst = resolve(workAssets, 'electerm-round-128x128.png')
+  const iconDst = resolve(workAssets, 'aigshell-round-128x128.png')
   if (fs.existsSync(iconSrc)) {
     fs.copyFileSync(iconSrc, iconDst)
   }

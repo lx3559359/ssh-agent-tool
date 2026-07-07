@@ -16,6 +16,7 @@ const version = packInfo.version
 const os = isMac ? 'mac' : isWin ? 'windows' : 'linux'
 const isVersion2OrAbove = compare(version, '2.0.0') >= 0
 
+// 历史兼容：底层仍沿用 Electerm 的数据目录，避免用户升级后丢失原有连接配置。
 const userDataPath = {
   mac: '~/Library/Application\\ Support/electerm/users/default_user',
   linux: '~/.config/electerm/users/default_user',
@@ -24,11 +25,13 @@ const userDataPath = {
 
 const troubleshootContent = {
   runInCommandLine: {
-    mac: '/Applications/electerm.app/Contents/MacOS/electerm',
-    linux: 'path/to/electerm',
-    windows: 'path\\to\\electerm.exe'
+    title: '从命令行启动',
+    mac: '/Applications/AIGShell.app/Contents/MacOS/AIGShell',
+    linux: 'path/to/AIGShell',
+    windows: 'path\\to\\AIGShell.exe'
   },
   clearConfig: {
+    title: '清理本地配置',
     mac: isVersion2OrAbove
       ? `rm -rf ${userDataPath.mac}/electerm_data.db`
       : `rm -rf ${userDataPath.mac}/electerm.data.nedb`,
@@ -36,13 +39,14 @@ const troubleshootContent = {
       ? `rm -rf ${userDataPath.linux}/electerm_data.db`
       : `rm -rf ${userDataPath.linux}/electerm.data.nedb`,
     windows: isVersion2OrAbove
-      ? `Delete ${userDataPath.windows}\\electerm_data.db`
-      : `Delete ${userDataPath.windows}\\electerm.data.nedb`
+      ? `删除 ${userDataPath.windows}\\electerm_data.db`
+      : `删除 ${userDataPath.windows}\\electerm.data.nedb`
   },
   backupData: {
-    mac: `cp -r ${userDataPath.mac} ~/Desktop/electerm_backup_${Date.now()}`,
-    linux: `cp -r ${userDataPath.linux} ~/Desktop/electerm_backup_${Date.now()}`,
-    windows: `xcopy "${userDataPath.windows}\\*" "%USERPROFILE%\\Desktop\\electerm_backup_${Date.now()}" /E /I`
+    title: '备份本地数据',
+    mac: `cp -r ${userDataPath.mac} ~/Desktop/aigshell_backup_${Date.now()}`,
+    linux: `cp -r ${userDataPath.linux} ~/Desktop/aigshell_backup_${Date.now()}`,
+    windows: `xcopy "${userDataPath.windows}\\*" "%USERPROFILE%\\Desktop\\aigshell_backup_${Date.now()}" /E /I`
   }
 }
 
@@ -82,15 +86,16 @@ export default class ErrorBoundary extends React.PureComponent {
     }
     return (
       <div className='pd1y wordbreak'>
-        <h2>{e('troubleShoot')}</h2>
-        <p>Electerm Version: {packInfo.version}, OS: {os}</p>
+        <h2>排查建议</h2>
+        <p>AIGShell 版本：{packInfo.version}，系统：{os}</p>
+        <p>说明：为兼容 Electerm 底座和历史数据，部分本地数据目录名称仍保留 electerm。</p>
         {
-          Object.keys(troubleshootContent).map((k, i) => {
+          Object.keys(troubleshootContent).map((k) => {
             const v = troubleshootContent[k]
             const cmd = v[os]
             return (
               <div className='pd1b' key={k}>
-                <h3>{e(k)} {this.renderIconCopy(cmd)}</h3>
+                <h3>{v.title} {this.renderIconCopy(cmd)}</h3>
                 <p><code>{cmd}</code></p>
               </div>
             )
@@ -111,18 +116,7 @@ export default class ErrorBoundary extends React.PureComponent {
     return (
       <>
         <div className='pd1b'>
-          <Link to={bugUrl}>{e('bugReport')}</Link>
-        </div>
-        <div className='pd1b'>
-          <span>Contact author: </span>
-          <Link to='mailto:zxdong@gmail.com'>zxdong@gmail.com</Link>
-        </div>
-        <div className='pd3y'>
-          <img
-            src='https://electerm.org/electerm-wechat-group-qr.jpg'
-            className='mwm-100'
-            width={200}
-          />
+          <Link to={bugUrl}>提交问题反馈</Link>
         </div>
       </>
     )
@@ -138,7 +132,7 @@ export default class ErrorBoundary extends React.PureComponent {
           </div>
           <h1>
             <FrownOutlined className='mg1r iblock' />
-            <span className='iblock mg1r'>{e('error')}</span>
+            <span className='iblock mg1r'>界面发生错误</span>
             <Button
               onClick={this.handleReload}
               icon={<ReloadOutlined />}
