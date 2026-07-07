@@ -3,17 +3,23 @@
  */
 import React, { useState, useEffect } from 'react'
 import {
+  Empty,
   Input,
-  Tabs
+  Tabs,
+  Tag
 } from 'antd'
+import {
+  AppstoreOutlined,
+  SearchOutlined
+} from '@ant-design/icons'
 import WidgetInstances from './widget-instances'
 import classnames from 'classnames'
 import highlight from '../common/highlight'
+import { getWidgetDisplay } from './widget-i18n'
+import './widgets.styl'
 import {
   auto
 } from 'manate/react'
-
-const e = window.translate
 
 export default auto(function WidgetsList ({ activeItemId, store }) {
   const { widgetInstances } = store
@@ -37,7 +43,7 @@ export default auto(function WidgetsList ({ activeItemId, store }) {
       const widgets = await window.store.listWidgets()
       setWidgets(widgets)
     } catch (error) {
-      console.error('Failed to load widgets:', error)
+      console.error('加载工具列表失败:', error)
     }
   }
 
@@ -54,10 +60,12 @@ export default auto(function WidgetsList ({ activeItemId, store }) {
   }
 
   const renderWidgetItem = (widget, i) => {
-    const title = widget.info.name
-    const tag = ''
+    const meta = getWidgetDisplay(widget)
+    const title = meta.title
+    const running = widgetInstances.some(item => item.widgetId === widget.id)
     const cls = classnames(
-      'item-list-unit',
+      'widget-card',
+      `widget-card-${meta.accent}`,
       {
         active: activeItemId === widget.id
       }
@@ -72,11 +80,27 @@ export default auto(function WidgetsList ({ activeItemId, store }) {
         className={cls}
         onClick={() => onClickWidget(widget)}
       >
-        <div
-          title={title}
-          className='elli pd1y pd2x list-item-title'
-        >
-          {tag}{titleHighlight || e('new')}
+        <div className='widget-card-icon'>
+          <AppstoreOutlined />
+        </div>
+        <div className='widget-card-main'>
+          <div className='widget-card-head'>
+            <div title={title} className='elli widget-card-title'>
+              {titleHighlight || title}
+            </div>
+            {
+              running && (
+                <Tag color='success' className='widget-card-tag'>运行中</Tag>
+              )
+            }
+          </div>
+          <div className='widget-card-desc'>
+            {meta.description}
+          </div>
+          <div className='widget-card-meta'>
+            <span>{meta.scene}</span>
+            <span>{meta.typeLabel}</span>
+          </div>
         </div>
       </div>
     )
@@ -84,33 +108,52 @@ export default auto(function WidgetsList ({ activeItemId, store }) {
 
   const renderWidgetsList = () => {
     const filteredWidgets = keyword
-      ? widgets.filter(widget => widget.info.name.toLowerCase().includes(keyword.toLowerCase()))
+      ? widgets.filter(widget => {
+        const meta = getWidgetDisplay(widget)
+        const text = [
+          widget.info.name,
+          meta.title,
+          meta.description,
+          meta.scene,
+          ...(meta.keywords || [])
+        ].join(' ').toLowerCase()
+        return text.includes(keyword.toLowerCase())
+      })
       : widgets
 
     return (
-      <div className='item-list item-type-widgets'>
-        <div className='pd1y'>
+      <div className='widgets-tool-list item-list item-type-widgets'>
+        <div className='widgets-search-wrap'>
           <Input.Search
             type='text'
-            placeholder='Search widgets...'
+            placeholder='搜索工具、场景或关键词'
             value={keyword}
             onChange={handleSearch}
             className='form-control'
+            prefix={<SearchOutlined />}
           />
         </div>
-        <div className='item-list-wrap pd1y'>
-          {filteredWidgets.map(renderWidgetItem)}
+        <div className='widgets-list-summary'>
+          <span>内置工具 {filteredWidgets.length} 个</span>
+          <span>运行中 {widgetInstances.length} 个</span>
+        </div>
+        <div className='widgets-card-list item-list-wrap pd1y'>
+          {
+            filteredWidgets.length
+              ? filteredWidgets.map(renderWidgetItem)
+              : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description='没有找到匹配的工具' />
+          }
         </div>
       </div>
     )
   }
 
   const renderTabs = () => {
-    const instancesTag = e('runningInstances') + ` (${widgetInstances.length})`
+    const instancesTag = `运行中 (${widgetInstances.length})`
     const items = [
       {
         key: 'widgets',
-        label: e('widgets'),
+        label: '工具',
         children: null
       },
       {
@@ -141,7 +184,13 @@ export default auto(function WidgetsList ({ activeItemId, store }) {
   }
 
   return (
-    <div>
+    <div className='widgets-shell'>
+      <div className='widgets-panel-title'>
+        <div>
+          <h3>工具中心</h3>
+          <p>面向 SSH 运维、文件传输和 AI 集成的本地工具</p>
+        </div>
+      </div>
       {renderTabs()}
       <div className='pd2x pd1y'>
         {

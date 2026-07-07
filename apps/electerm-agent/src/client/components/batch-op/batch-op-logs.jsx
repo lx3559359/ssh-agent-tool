@@ -3,6 +3,11 @@ import { refsStatic } from '../common/ref'
 
 const STATIC_KEY = 'batch-op-logs'
 
+const statusIcon = {
+  success: '✓',
+  error: '×'
+}
+
 const BatchOpLogs = forwardRef(function BatchOpLogs (_, ref) {
   const [logs, setLogsState] = useState(null)
 
@@ -23,14 +28,12 @@ const BatchOpLogs = forwardRef(function BatchOpLogs (_, ref) {
     return null
   }
 
-  const statusIcon = { success: '✓', error: '✗' }
-
   return (
     <div className='batch-op-logs mg1t pd1 font13'>
-      <div className='bold mg1b'>Execution Log</div>
+      <div className='bold mg1b'>执行日志</div>
       {logs.steps.map((step, i) => (
         <div key={i} className={`batch-op-log-entry ${step.status}`}>
-          <span className='log-icon mg1r'>{statusIcon[step.status] || '○'}</span>
+          <span className='log-icon mg1r'>{statusIcon[step.status] || '•'}</span>
           <span className='log-name'>{step.name}</span>
           {step.error && <span className='log-error mg1l color-red'>{step.error}</span>}
         </div>
@@ -43,7 +46,7 @@ const BatchOpLogs = forwardRef(function BatchOpLogs (_, ref) {
       )}
       {logs.status === 'completed' && (
         <div className='batch-op-log-entry completed color-green mg1t'>
-          ✓ Workflow completed
+          ✓ 任务执行完成
         </div>
       )}
     </div>

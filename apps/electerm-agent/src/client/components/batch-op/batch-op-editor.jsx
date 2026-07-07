@@ -19,7 +19,7 @@ import { safeGetItem, safeSetItem } from '../../common/safe-local-storage'
 const batchOpEditorKey = 'batch-op-editor-content'
 const workflowExample = `[
   {
-    "name": "Connect SSH",
+    "name": "连接 SSH",
     "action": "connect",
     "params": {
       "host": "192.168.1.100",
@@ -30,51 +30,51 @@ const workflowExample = `[
     }
   },
   {
-    "name": "Create 5M Test File",
+    "name": "创建 5M 测试文件",
     "action": "command",
     "afterDelay": 500,
     "prevDelay": 500,
     "command": "fallocate -l 5M /tmp/test_5m_file.bin && rm -f /tmp/test_log.log && echo '[LOG] Created 5M test file at $(date)' >> /tmp/test_log.log"
   },
   {
-    "name": "Log creation",
+    "name": "记录文件信息",
     "action": "command",
     "command": "ls -la /tmp/test_5m_file.bin >> /tmp/test_log.log 2>&1 && echo '[LOG] File size logged at $(date)' >> /tmp/test_log.log"
   },
   {
-    "name": "Download 5M File",
+    "name": "下载 5M 文件",
     "action": "sftp_download",
     "afterDelay": 200,
     "remotePath": "/tmp/test_5m_file.bin",
     "localPath": "/tmp/test_5m_file.bin"
   },
   {
-    "name": "Log after download",
+    "name": "记录下载结果",
     "action": "command",
     "afterDelay": 200,
     "command": "echo '[LOG] Download complete at $(date)' >> /tmp/test_log.log"
   },
   {
-    "name": "Delete Remote 5M File",
+    "name": "删除远程测试文件",
     "action": "command",
     "afterDelay": 200,
     "command": "rm /tmp/test_5m_file.bin && echo '[LOG] Deleted remote 5M file at $(date)' >> /tmp/test_log.log"
   },
   {
-    "name": "Upload Downloaded File to Remote",
+    "name": "上传文件到远程服务器",
     "action": "sftp_upload",
     "afterDelay": 200,
     "localPath": "/tmp/test_5m_file.bin",
     "remotePath": "/tmp/test_5m_file_uploaded.bin"
   },
   {
-    "name": "Log after upload",
+    "name": "记录上传结果",
     "action": "command",
     "afterDelay": 200,
     "command": "echo '[LOG] Upload complete at $(date)' >> /tmp/test_log.log"
   },
   {
-    "name": "Verify and clean up",
+    "name": "校验并清理",
     "action": "command",
     "command": "ls -la /tmp/test_5m_file_uploaded.bin >> /tmp/test_log.log 2>&1 && rm -f /tmp/test_5m_file*.bin && echo '[LOG] Cleaned up at $(date)' >> /tmp/test_log.log"
   }
@@ -109,17 +109,17 @@ export default function BatchOpEditor ({ widget }) {
       let workflows
       try {
         workflows = JSON.parse(value)
-        if (!Array.isArray(workflows)) throw new Error('Workflow must be an array')
+        if (!Array.isArray(workflows)) throw new Error('任务流必须是数组')
       } catch (e) {
-        message.error('Invalid workflow JSON: ' + e.message)
+        message.error('任务 JSON 无效：' + e.message)
         refsStatic.get('batch-op-logs')?.reset()
         return
       }
       await runner.executeWorkflow(workflows)
-      message.success('Workflow execution completed')
+      message.success('任务执行完成')
     } catch (err) {
       if (err.message !== 'Workflow aborted') {
-        message.error('Workflow execution failed: ' + err.message)
+        message.error('任务执行失败：' + err.message)
       }
     } finally {
       setExecuting(false)
@@ -168,7 +168,7 @@ export default function BatchOpEditor ({ widget }) {
       <BatchOpAlert />
       <Flex className='mg2y' gap='small'>
         <Button onClick={handleTemplate} type='dashed'>
-          Load Template
+          载入模板
         </Button>
         <Button
           onClick={handleExecute}
@@ -177,7 +177,7 @@ export default function BatchOpEditor ({ widget }) {
           disabled={executing}
           icon={<PlayCircleOutlined />}
         >
-          Execute Workflow
+          执行任务
         </Button>
       </Flex>
       <SimpleEditor

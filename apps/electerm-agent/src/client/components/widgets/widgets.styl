@@ -1,0 +1,171 @@
+.widgets-shell
+  padding 0 0 12px
+  .ant-tabs-nav
+    margin 0 0 14px
+  .ant-tabs-tab
+    padding 8px 14px
+
+.widgets-panel-title
+  margin 0 0 14px
+  padding 14px 16px
+  border 1px solid var(--border)
+  background rgba(255, 255, 255, .03)
+  h3
+    margin 0 0 4px
+    font-size 16px
+    font-weight 700
+  p
+    margin 0
+    opacity .72
+    line-height 1.6
+
+.widgets-search-wrap
+  margin-bottom 12px
+
+.widgets-list-summary
+  display flex
+  justify-content space-between
+  gap 8px
+  font-size 12px
+  opacity .72
+  padding 0 2px 10px
+
+.widgets-card-list
+  display flex
+  flex-direction column
+  gap 10px
+  padding-right 2px
+
+.widget-card
+  display flex
+  gap 12px
+  padding 13px
+  border 1px solid var(--border)
+  background rgba(255, 255, 255, .035)
+  cursor pointer
+  transition background .16s ease, border-color .16s ease
+  &:hover
+  &.active
+    background rgba(0, 145, 255, .11)
+    border-color var(--primary)
+  &.active
+    .widget-card-title
+      color var(--primary)
+
+.widget-card-icon
+  flex 0 0 34px
+  width 34px
+  height 34px
+  display flex
+  align-items center
+  justify-content center
+  border-radius 8px
+  background rgba(0, 145, 255, .12)
+  color var(--primary)
+  font-size 17px
+
+.widget-card-main
+  min-width 0
+  flex 1
+
+.widget-card-head
+  display flex
+  align-items center
+  gap 8px
+  min-width 0
+
+.widget-card-title
+  flex 1
+  min-width 0
+  font-weight 700
+  line-height 1.5
+
+.widget-card-tag
+  margin-inline-end 0
+
+.widget-card-desc
+  margin-top 4px
+  line-height 1.55
+  font-size 12px
+  opacity .76
+
+.widget-card-meta
+  display flex
+  gap 8px
+  margin-top 10px
+  span
+    display inline-flex
+    align-items center
+    height 22px
+    padding 0 8px
+    border-radius 4px
+    background rgba(255, 255, 255, .06)
+    font-size 12px
+    opacity .86
+
+.widget-form
+  max-width 860px
+
+.widget-form-hero
+  display flex
+  justify-content space-between
+  gap 16px
+  margin 0 0 18px
+  padding 18px
+  border 1px solid var(--border)
+  background rgba(255, 255, 255, .035)
+  h3
+    margin 2px 0 8px
+    font-size 20px
+    font-weight 700
+  p
+    margin 0
+    line-height 1.7
+    opacity .76
+
+.widget-form-kicker
+  font-size 12px
+  color var(--primary)
+  font-weight 700
+
+.widget-form-actions
+  flex 0 0 auto
+
+.widget-config-form
+  padding 2px 0
+
+.widget-control-empty
+  height 100%
+  min-height 360px
+  display flex
+  align-items center
+  justify-content center
+
+.widget-control-empty-inner
+  max-width 420px
+  padding 28px
+  border 1px dashed var(--border)
+  text-align center
+  background rgba(255, 255, 255, .025)
+  h3
+    margin 0 0 10px
+    font-size 18px
+  p
+    margin 0
+    line-height 1.8
+    opacity .72
+
+.widget-instances-empty
+  padding 36px 0
+
+.widget-instances-list
+  display flex
+  flex-direction column
+  gap 8px
+
+@media (max-width: 1100px)
+  .widget-form
+    max-width none
+  .widgets-panel-title
+  .widget-form-hero
+    padding 14px

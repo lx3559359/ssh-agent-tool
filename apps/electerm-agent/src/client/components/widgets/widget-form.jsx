@@ -7,6 +7,7 @@ import { formItemLayout, tailFormItemLayout } from '../../common/form-layout'
 import HelpIcon from '../common/help-icon'
 import { nanoid } from 'nanoid'
 import BatchOpEditor from '../batch-op/batch-op-editor'
+import { getConfigDisplay, getWidgetDisplay } from './widget-i18n'
 
 export default function WidgetForm ({ widget, onSubmit, loading, hasRunningInstance }) {
   const [form] = Form.useForm()
@@ -36,7 +37,8 @@ export default function WidgetForm ({ widget, onSubmit, loading, hasRunningInsta
   const { configs, type, singleInstance } = info
   const isInstanceWidget = type === 'instance'
   const isFrontendWidget = type === 'frontend'
-  const txt = isInstanceWidget ? 'Start widget' : 'Run widget'
+  const meta = getWidgetDisplay(widget)
+  const txt = meta.actionText || (isInstanceWidget ? '启动服务' : '运行工具')
   const isDisabled = loading || (singleInstance && hasRunningInstance)
 
   const handleSubmit = async (values) => {
@@ -44,7 +46,9 @@ export default function WidgetForm ({ widget, onSubmit, loading, hasRunningInsta
   }
 
   const renderFormItem = (config) => {
-    const { name, type, description, choices, showGenerator } = config
+    const { name, type, choices, showGenerator } = config
+    const display = getConfigDisplay(config)
+    const { label, description } = display
     let control = null
 
     switch (type) {
@@ -55,7 +59,7 @@ export default function WidgetForm ({ widget, onSubmit, loading, hasRunningInsta
             <Form.Item
               key={name}
               {...formItemLayout}
-              label={name}
+              label={label}
               tooltip={description}
             >
               <Space.Compact style={{ width: '100%' }}>
@@ -68,7 +72,7 @@ export default function WidgetForm ({ widget, onSubmit, loading, hasRunningInsta
                 <Button
                   onClick={() => form.setFieldValue(name, 'ett_' + nanoid())}
                 >
-                  Generate
+                  生成
                 </Button>
               </Space.Compact>
             </Form.Item>
@@ -86,7 +90,7 @@ export default function WidgetForm ({ widget, onSubmit, loading, hasRunningInsta
           <Form.Item
             key={name}
             {...formItemLayout}
-            label={name}
+            label={label}
             name={name}
             valuePropName='checked'
             tooltip={description}
@@ -114,7 +118,7 @@ export default function WidgetForm ({ widget, onSubmit, loading, hasRunningInsta
       <Form.Item
         key={name}
         {...formItemLayout}
-        label={name}
+        label={label}
         name={name}
         tooltip={description}
       >
@@ -129,7 +133,7 @@ export default function WidgetForm ({ widget, onSubmit, loading, hasRunningInsta
     }
     return (
       <Alert
-        title='Downloading package may take some time on first use...'
+        title='首次使用可能需要准备依赖，请稍等。'
         type='warning'
         showIcon
         className='mg1t'
@@ -148,14 +152,19 @@ export default function WidgetForm ({ widget, onSubmit, loading, hasRunningInsta
 
   return (
     <div className='widget-form'>
-      <div className='pd1b alignright'>
-        <h4>
-          {info.name}
+      <div className='widget-form-hero'>
+        <div>
+          <div className='widget-form-kicker'>{meta.scene} / {meta.typeLabel}</div>
+          <h3>
+            {meta.title}
+          </h3>
+          <p>{meta.description}</p>
+        </div>
+        <div className='widget-form-actions'>
           {info.name === 'MCP Server' && (
             <HelpIcon link='https://github.com/electerm/electerm/wiki/MCP-Widget-Usage-Guide' />
           )}
-        </h4>
-        <p>{info.description}</p>
+        </div>
       </div>
 
       <Form
@@ -163,12 +172,13 @@ export default function WidgetForm ({ widget, onSubmit, loading, hasRunningInsta
         onFinish={handleSubmit}
         initialValues={initialValues}
         layout='horizontal'
+        className='widget-config-form'
       >
         {configs.map(renderFormItem)}
         <Form.Item
           {...tailFormItemLayout}
         >
-          <Tooltip title={isDisabled && singleInstance && hasRunningInstance ? 'Already running, only one instance allowed' : ''}>
+          <Tooltip title={isDisabled && singleInstance && hasRunningInstance ? '该服务已经运行，当前只允许启动一个实例' : ''}>
             <Button
               type='primary'
               htmlType='submit'

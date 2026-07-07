@@ -15,13 +15,13 @@ export function showMsg (message, type = 'success', serverInfo = null, duration 
       <div>
         {description && <div>{description}</div>}
         <div style={{ display: 'flex', alignItems: 'center' }}>
-          <span>URL: {serverInfo.url}</span>
+          <span>访问地址：{serverInfo.url}</span>
           <CopyOutlined
             className='pointer mg1l'
             onClick={handleCopy}
           />
         </div>
-        <div>Path: {serverInfo.path}</div>
+        <div>目录：{serverInfo.path}</div>
       </div>
     )
   }

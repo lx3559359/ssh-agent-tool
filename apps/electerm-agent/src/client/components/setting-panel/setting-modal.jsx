@@ -102,7 +102,7 @@ export default auto(function SettingModalWrap (props) {
       },
       {
         key: settingMap.widgets,
-        label: <>{e(settingMap.widgets)} <sup>Beta</sup></>,
+        label: <>工具中心 <sup>Beta</sup></>,
         children: null
       }
     ]

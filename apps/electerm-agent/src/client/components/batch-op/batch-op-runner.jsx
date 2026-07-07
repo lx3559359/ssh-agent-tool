@@ -56,24 +56,24 @@ export default class BatchOpRunner extends Component {
       try {
         workflows = JSON.parse(content)
         if (!Array.isArray(workflows)) {
-          throw new Error('Workflow must be an array')
+          throw new Error('任务流必须是数组')
         }
       } catch (e) {
-        console.error('Invalid batch operation JSON:', e.message)
+        console.error('批量任务 JSON 无效:', e.message)
         return
       }
 
       this.reset()
       await this._executeWorkflow(workflows)
-      console.log('Batch operation completed from file')
+      console.log('已从文件完成批量任务')
     } catch (e) {
-      console.error('Failed to run batch operation from file:', e.message)
+      console.error('从文件运行批量任务失败:', e.message)
     }
   }
 
   async _executeWorkflow (workflows) {
     if (!Array.isArray(workflows)) {
-      throw new Error('Workflow must be an array')
+      throw new Error('任务流必须是数组')
     }
 
     this.steps = []
@@ -116,7 +116,7 @@ export default class BatchOpRunner extends Component {
     const { action, prevDelay, afterDelay } = step
 
     if (!action) {
-      throw new Error('Step must have an "action" field')
+      throw new Error('步骤必须包含 action 字段')
     }
 
     if (prevDelay > 0) {
@@ -141,7 +141,7 @@ export default class BatchOpRunner extends Component {
         result = await this._batchStepSftpDownload(s)
         break
       default:
-        throw new Error(`Unknown action: ${action}`)
+        throw new Error(`未知动作：${action}`)
     }
 
     if (afterDelay > 0) {
@@ -207,7 +207,7 @@ export default class BatchOpRunner extends Component {
           this._refWait.stop()
           delete this._refWait
         }
-        reject(new Error('Connection timeout'))
+        reject(new Error('连接超时'))
       }, 30000)
 
       this._refWait = autoRun(() => {
@@ -222,7 +222,7 @@ export default class BatchOpRunner extends Component {
           clearTimeout(timeout)
           this._refWait && this._refWait.stop()
           delete this._refWait
-          reject(new Error('Connection failed: ' + (tab.errorMsg || 'unknown error')))
+          reject(new Error('连接失败：' + (tab.errorMsg || '未知错误')))
         }
         return window.store.tabs
       })
@@ -234,12 +234,12 @@ export default class BatchOpRunner extends Component {
     const tabId = this.currentTabId
 
     if (!tabId) {
-      throw new Error('No active tab. Please connect first.')
+      throw new Error('没有可用的活动标签，请先连接服务器。')
     }
 
     const term = refs.get('term-' + tabId)
     if (!term || !term.term) {
-      throw new Error('Terminal not found')
+      throw new Error('未找到终端')
     }
 
     let waited = 0
@@ -248,7 +248,7 @@ export default class BatchOpRunner extends Component {
       waited += 200
     }
     if (!term.attachAddon) {
-      throw new Error('Terminal not ready: attach addon not initialized')
+      throw new Error('终端未就绪：attach 插件尚未初始化')
     }
 
     term.runQuickCommand(step.command)
@@ -286,7 +286,7 @@ export default class BatchOpRunner extends Component {
           this._refTransferWait.stop()
           delete this._refTransferWait
         }
-        reject(new Error('Transfer timeout (1 hour)'))
+        reject(new Error('传输超时（1 小时）'))
       }, 60 * 60 * 1000)
 
       this._refTransferWait = autoRun(() => {
@@ -297,7 +297,7 @@ export default class BatchOpRunner extends Component {
           this._refTransferWait && this._refTransferWait.stop()
           delete this._refTransferWait
           if (item.error) {
-            reject(new Error('Transfer failed: ' + item.error))
+            reject(new Error('传输失败：' + item.error))
           } else {
             resolve(item)
           }
