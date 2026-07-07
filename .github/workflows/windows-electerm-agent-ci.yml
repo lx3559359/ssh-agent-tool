@@ -1,0 +1,47 @@
+name: Windows Electerm Agent CI
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    name: Run Windows unit tests
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: apps/electerm-agent
+
+    env:
+      CI: true
+      WORKFLOW_NAME: windows-electerm-agent-ci
+      npm_config_msvs_version: "2026"
+      npm_config_build_from_source: "true"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/electerm-agent/package-lock.json
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+        with:
+          msbuild-architecture: x64
+
+      - name: Install dependencies and rebuild native modules
+        run: npm ci
+
+      - name: Run unit tests
+        run: npm run test-unit-ci

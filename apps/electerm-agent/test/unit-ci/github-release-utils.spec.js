@@ -80,6 +80,26 @@ test('windows release workflow verifies local update assets before upload', () =
   assert.ok(localVerifyIndex < artifactUploadIndex, 'local release verification should run before artifacts are uploaded')
 })
 
+test('windows ci workflow runs unit tests for normal code changes without publishing', () => {
+  const workflow = fs.readFileSync(
+    path.resolve(__dirname, '../../../../.github/workflows/windows-electerm-agent-ci.yml'),
+    'utf8'
+  )
+
+  assert.match(workflow, /push:/)
+  assert.match(workflow, /branches:\s*\n\s+- master/)
+  assert.match(workflow, /pull_request:/)
+  assert.match(workflow, /workflow_dispatch:/)
+  assert.match(workflow, /node-version:\s*"22"/)
+  assert.match(workflow, /cache-dependency-path:\s+apps\/electerm-agent\/package-lock\.json/)
+  assert.match(workflow, /working-directory:\s+apps\/electerm-agent/)
+  assert.match(workflow, /npm ci/)
+  assert.match(workflow, /npm run test-unit-ci/)
+  assert.doesNotMatch(workflow, /softprops\/action-gh-release/)
+  assert.doesNotMatch(workflow, /electron-builder --win/)
+  assert.doesNotMatch(workflow, /upload-artifact/)
+})
+
 test('builds a stable GitHub release tag from package version', () => {
   assert.equal(buildReleaseTag('3.15.105'), 'v3.15.105')
   assert.equal(buildReleaseTag('v3.15.105'), 'v3.15.105')
