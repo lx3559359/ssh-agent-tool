@@ -41,7 +41,9 @@ function normalizeBookmarkBackupData (data) {
   }
   if (
     !isBackupBookmarkList(data.bookmarks) ||
-    !isBackupGroupList(data.bookmarkGroups)
+    !isBackupGroupList(data.bookmarkGroups) ||
+    hasDangerousBackupKey(data.bookmarks) ||
+    hasDangerousBackupKey(data.bookmarkGroups)
   ) {
     throw new Error(invalidBookmarkBackupShapeError)
   }
@@ -62,6 +64,25 @@ function isPlainBackupObject (item) {
   return item &&
     typeof item === 'object' &&
     !Array.isArray(item)
+}
+
+const dangerousBackupKeys = new Set([
+  '__proto__',
+  'constructor',
+  'prototype'
+])
+
+function hasDangerousBackupKey (item) {
+  if (!item || typeof item !== 'object') {
+    return false
+  }
+  if (Array.isArray(item)) {
+    return item.some(hasDangerousBackupKey)
+  }
+  return Object.keys(item).some(key => {
+    return dangerousBackupKeys.has(key) ||
+      hasDangerousBackupKey(item[key])
+  })
 }
 
 function isBackupBookmarkList (items) {

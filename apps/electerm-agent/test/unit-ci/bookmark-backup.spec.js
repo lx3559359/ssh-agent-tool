@@ -188,6 +188,24 @@ test('rejects invalid bookmark backup content with a clear error', async () => {
   )
 })
 
+test('rejects bookmark backups with prototype pollution keys', async () => {
+  const {
+    parseBookmarkBackup
+  } = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/common/bookmark-backup.js')))
+
+  const maliciousBookmark = '{"bookmarks":[{"id":"server-1","host":"10.0.1.23","__proto__":{"polluted":true}}],"bookmarkGroups":[]}'
+  const maliciousGroup = '{"bookmarks":[{"id":"server-1","host":"10.0.1.23"}],"bookmarkGroups":[{"id":"group-1","constructor":{"prototype":{"polluted":true}}}]}'
+
+  assert.throws(
+    () => parseBookmarkBackup(maliciousBookmark),
+    /服务器或分组格式不正确/
+  )
+  assert.throws(
+    () => parseBookmarkBackup(maliciousGroup),
+    /服务器或分组格式不正确/
+  )
+})
+
 test('uses the AIGShell bookmark backup package from every toolbar export entry', () => {
   const source = fs.readFileSync(
     path.resolve(__dirname, '../../src/client/components/tree-list/bookmark-toolbar.jsx'),
