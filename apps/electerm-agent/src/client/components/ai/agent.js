@@ -2,6 +2,7 @@ import { agentTools, executeToolCall } from './agent-tools'
 import { buildAgentSkillPrompt } from './agent-skills'
 import { buildAgentMcpServerPrompt } from './agent-mcp-servers'
 import { buildAgentLocalCliPrompt } from './agent-local-cli-tools'
+import { buildAgentTaskModePrompt } from './agent-task-mode.js'
 import aiAgentCopy from './ai-agent-copy.json'
 
 const MAX_ITERATIONS = 150
@@ -16,6 +17,7 @@ function buildAgentSystemPrompt (config) {
     mcpServers: config.mcpServers || window.store.config?.mcpServers || []
   })
   const localCliPrompt = buildAgentLocalCliPrompt()
+  const taskModePrompt = buildAgentTaskModePrompt()
   return `${baseRole}
 
 ${aiAgentCopy.agentPromptRules.join('\n')}
@@ -25,6 +27,8 @@ ${skillPrompt}
 ${mcpServerPrompt}
 
 ${localCliPrompt}
+
+${taskModePrompt}
 
 可用工具：
 - 在终端标签页执行命令并读取输出
@@ -66,6 +70,9 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming)
       { role: 'user', content: chatEntry.prompt }
     ]
     const toolCallsLog = []
+    const agentRuntime = {
+      planConfirmed: false
+    }
     let accumulatedContent = ''
 
     setIsStreaming(true)
@@ -149,7 +156,7 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming)
 
         let toolResult
         try {
-          toolResult = await executeToolCall(toolCall.function.name, args)
+          toolResult = await executeToolCall(toolCall.function.name, args, agentRuntime)
           toolEntry.status = 'completed'
           toolEntry.result = toolResult
         } catch (err) {

@@ -1,22 +1,10 @@
-const COMMAND_TOOL_NAMES = new Set([
-  'send_terminal_command',
-  'run_background_command',
-  'run_local_cli'
-])
+import {
+  classifyAgentCommand,
+  getAgentToolCommandText,
+  isAgentCommandTool
+} from './agent-task-mode.js'
 
-export function isAgentCommandTool (toolName) {
-  return COMMAND_TOOL_NAMES.has(toolName)
-}
-
-function getAgentToolCommandText (toolName, args = {}) {
-  if (toolName === 'run_local_cli') {
-    return [
-      String(args.tool || '').trim(),
-      ...(Array.isArray(args.args) ? args.args.map(arg => String(arg)) : [])
-    ].filter(Boolean).join(' ')
-  }
-  return String(args.command || '').trim()
-}
+export { isAgentCommandTool }
 
 export async function confirmAgentToolExecution ({
   toolName,
@@ -35,17 +23,31 @@ export async function confirmAgentToolExecution ({
     return {
       accepted: false,
       cancelled: true,
+      risk: 'empty',
       message: 'Agent 命令为空，已取消执行。'
     }
   }
 
+  const risk = classifyAgentCommand(command)
   const ask = typeof confirm === 'function'
     ? confirm
     : message => window.confirm(message)
-  const accepted = await ask(`Agent 请求执行以下命令，请确认：\n\n${command}`)
+  const accepted = await ask(`Agent 请求执行以下命令，请确认：\n\n${command}\n\n风险判断：${risk.reason}`)
+
+  if (accepted && risk.needsSecondConfirmation) {
+    const secondAccepted = await ask(`危险命令二次确认：\n\n${command}\n\n${risk.reason}\n\n确认继续执行吗？`)
+    return {
+      accepted: secondAccepted,
+      cancelled: !secondAccepted,
+      risk: risk.risk,
+      message: secondAccepted ? '' : '用户已取消危险 Agent 命令执行。'
+    }
+  }
+
   return {
     accepted,
     cancelled: !accepted,
+    risk: risk.risk,
     message: accepted ? '' : '用户已取消 Agent 命令执行。'
   }
 }

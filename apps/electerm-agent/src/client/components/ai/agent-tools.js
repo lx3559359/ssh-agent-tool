@@ -1,6 +1,11 @@
 import { z } from '../../common/zod'
 import { bookmarkSchemas } from '../../common/bookmark-schemas'
 import { confirmAgentToolExecution } from './agent-tool-confirm'
+import {
+  confirmAgentPlan,
+  ensureAgentPlanConfirmed,
+  markAgentPlanConfirmed
+} from './agent-task-mode.js'
 
 function buildAddBookmarkParameters () {
   const typeProperties = {}
@@ -28,6 +33,33 @@ function buildAddBookmarkParameters () {
 }
 
 export const agentTools = [
+  {
+    type: 'function',
+    function: {
+      name: 'confirm_agent_plan',
+      description: '向用户提交 Agent 分析计划。计划确认前不得执行终端命令、本机 CLI 或后台命令。',
+      parameters: {
+        type: 'object',
+        properties: {
+          goal: {
+            type: 'string',
+            description: '本次排查或操作目标'
+          },
+          steps: {
+            type: 'array',
+            items: { type: 'string' },
+            description: '计划步骤'
+          },
+          readonlyCommands: {
+            type: 'array',
+            items: { type: 'string' },
+            description: '计划执行的只读命令列表'
+          }
+        },
+        required: ['goal']
+      }
+    }
+  },
   {
     type: 'function',
     function: {
@@ -477,10 +509,19 @@ export const agentTools = [
   }
 ]
 
-export async function executeToolCall (toolName, args) {
+export async function executeToolCall (toolName, args, runtime) {
   const store = window.store
   switch (toolName) {
+    case 'confirm_agent_plan': {
+      const confirmation = await confirmAgentPlan({ args })
+      markAgentPlanConfirmed(runtime, confirmation)
+      return JSON.stringify(confirmation)
+    }
     case 'send_terminal_command': {
+      const planGuard = ensureAgentPlanConfirmed({ toolName, runtime })
+      if (planGuard) {
+        return JSON.stringify(planGuard)
+      }
       const confirmation = await confirmAgentToolExecution({
         toolName,
         args
@@ -543,6 +584,10 @@ export async function executeToolCall (toolName, args) {
     case 'cancel_terminal_command':
       return JSON.stringify(store.mcpCancelTerminalCommand(args))
     case 'run_local_cli': {
+      const planGuard = ensureAgentPlanConfirmed({ toolName, runtime })
+      if (planGuard) {
+        return JSON.stringify(planGuard)
+      }
       const confirmation = await confirmAgentToolExecution({
         toolName,
         args
@@ -553,6 +598,10 @@ export async function executeToolCall (toolName, args) {
       return JSON.stringify(await window.pre.runGlobalAsync('runLocalCli', args))
     }
     case 'run_background_command': {
+      const planGuard = ensureAgentPlanConfirmed({ toolName, runtime })
+      if (planGuard) {
+        return JSON.stringify(planGuard)
+      }
       const confirmation = await confirmAgentToolExecution({
         toolName,
         args
