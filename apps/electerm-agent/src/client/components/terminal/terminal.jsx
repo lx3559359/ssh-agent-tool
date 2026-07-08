@@ -655,7 +655,18 @@ class Term extends Component {
 
   onReconnect = () => {
     this.handleCancelAutoReconnect()
+    this.manualDisconnect = false
     this.props.reloadTab(this.props.tab)
+  }
+
+  onDisconnect = () => {
+    this.handleCancelAutoReconnect()
+    this.manualDisconnect = true
+    if (this.socket) {
+      this.socket.close()
+    }
+    this.setStatus(statusMap.error)
+    this.term?.focus()
   }
 
   isRemote = () => {
@@ -878,6 +889,11 @@ class Term extends Component {
         key: 'onReconnect',
         icon: <iconsMap.RetweetOutlined />,
         label: e('reload')
+      },
+      {
+        key: 'onDisconnect',
+        icon: <iconsMap.CloseCircleOutlined />,
+        label: e('disconnect')
       },
       {
         key: 'toggleSearch',
@@ -1687,6 +1703,9 @@ class Term extends Component {
     this.setStatus(
       statusMap.error
     )
+    if (this.manualDisconnect) {
+      return
+    }
     if (this.userTypeExit) {
       return this.props.delTab(this.props.tab.id)
     }
