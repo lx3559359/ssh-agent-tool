@@ -40,6 +40,7 @@ export default function AIChat (props) {
   const handleSubmit = useCallback(function () {
     if (window.store.aiConfigMissing()) {
       window.store.toggleAIConfig()
+      return
     }
     if (!prompt.trim()) return
 
@@ -140,9 +141,6 @@ export default function AIChat (props) {
       setPrompt,
       handleSubmit
     })
-    if (props.rightPanelTab === 'ai' && window.store.aiConfigMissing()) {
-      window.store.toggleAIConfig()
-    }
     return () => {
       refsStatic.remove('AIChat')
     }

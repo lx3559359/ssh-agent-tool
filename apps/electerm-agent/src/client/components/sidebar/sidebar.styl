@@ -19,7 +19,7 @@
   position absolute
   left 0
   top 44px
-  width 36px
+  width 72px
   z-index 100
   bottom 0
   background #f7f8fa
@@ -82,19 +82,34 @@
   &:hover
     color var(--success)
 .control-icon-wrap
-  padding 14px 0
+  padding 8px 0
   text-align center
   &.active
     .control-icon
-      color var(--text-light)
+      color #2563eb
+    .control-icon-label
+      color #2563eb
+      font-weight 650
+  .control-icon-main
+    display flex
+    flex-direction column
+    align-items center
+    justify-content center
+    gap 3px
+    min-height 42px
   .control-icon
-    color var(--text-dark)
+    color #4b5563
     cursor pointer
     &:hover
-      color var(--text-light)
+      color #2563eb
+  .control-icon-label
+    color #4b5563
+    font-size 12px
+    line-height 14px
+    white-space nowrap
 .sidebar-list
   position absolute
-  left 43px
+  left 72px
   top 44px
   bottom 0
   z-index 200
@@ -115,7 +130,7 @@
   background #f7f8fa
   border-color #dfe3ea
   .control-icon-wrap
-    padding 12px 0
+    padding 8px 0
     .control-icon
       color #4b5563
       &:hover

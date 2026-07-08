@@ -116,10 +116,10 @@ export default () => {
     activeTabId2: '',
     activeTabId3: '',
     terminalInfoProps: {},
-    rightPanelVisible: false,
-    rightPanelTab: 'info',
-    rightPanelPinned: false,
-    rightPanelWidth: parseInt(ls.getItem(rightSidebarWidthKey), 10) || 500,
+    rightPanelVisible: true,
+    rightPanelTab: 'ai',
+    rightPanelPinned: true,
+    rightPanelWidth: parseInt(ls.getItem(rightSidebarWidthKey), 10) || 360,
     showAIConfigModal: false,
 
     // for settings related

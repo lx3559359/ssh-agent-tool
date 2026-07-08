@@ -5,6 +5,7 @@ export default function SideIcon (props) {
     show,
     className,
     title = '',
+    label,
     active,
     children
   } = props
@@ -19,7 +20,14 @@ export default function SideIcon (props) {
       className={cls}
       title={title}
     >
-      {children}
+      <div className='control-icon-main'>
+        {children}
+        {
+          label
+            ? <span className='control-icon-label'>{label}</span>
+            : null
+        }
+      </div>
     </div>
   )
 }
