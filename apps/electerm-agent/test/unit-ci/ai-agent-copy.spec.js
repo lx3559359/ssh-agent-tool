@@ -15,6 +15,7 @@ test('AI panel copy uses Chinese labels for the SSH Agent product', () => {
   assert.equal(copy.sendTitle, 'Enter 发送，Shift+Enter 换行')
   assert.equal(copy.clearHistoryTitle, '清空 AI 对话历史')
   assert.equal(copy.stopTitle, '停止当前 AI 请求')
+  assert.equal(copy.copyPromptTitle, '复制问题')
   assert.equal(copy.copyAnswerTitle, '复制回答')
   assert.equal(copy.retryTitle, '重试')
   assert.equal(copy.deleteTitle, '删除')
@@ -30,9 +31,10 @@ test('Agent tool call copy is localized', () => {
 
 test('Agent default rules are SSH operations focused and safety aware', () => {
   const rules = copy.agentPromptRules.join('\n')
-  assert.match(rules, /SSH/)
+  assert.match(rules, /AIGShell/)
   assert.match(rules, /当前终端/)
   assert.match(rules, /高风险命令/)
+  assert.match(rules, /必须等待用户确认/)
   assert.match(rules, /中文/)
 })
 
