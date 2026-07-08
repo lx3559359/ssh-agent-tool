@@ -3,6 +3,7 @@ process.env.NODE_ENV = 'development'
 const { describe, test, beforeEach, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
+const net = require('node:net')
 const os = require('node:os')
 const path = require('node:path')
 const { once } = require('node:events')
@@ -96,6 +97,9 @@ async function startServer (authHandler, options = {}) {
     hostKeys: [HOST_KEY.private]
   }, (client) => {
     clients.add(client)
+    if (options.onClient) {
+      options.onClient(client)
+    }
     const cleanup = () => clients.delete(client)
 
     client.on('close', cleanup)
@@ -118,7 +122,7 @@ async function startServer (authHandler, options = {}) {
         sshSession.on('shell', (accept) => {
           const stream = accept()
           if (options.onShell) {
-            options.onShell(stream)
+            options.onShell(stream, client, sshSession)
             return
           }
           stream.write('electerm ready\n')
@@ -189,6 +193,29 @@ function publicKeyOnlyAuth (publicKey) {
       return ctx.accept()
     }
     return ctx.reject(['publickey'])
+  }
+}
+
+async function startSilentTcpServer () {
+  const sockets = new Set()
+  const server = net.createServer((socket) => {
+    sockets.add(socket)
+    socket.on('close', () => sockets.delete(socket))
+  })
+
+  server.listen(0, '127.0.0.1')
+  await once(server, 'listening')
+
+  return {
+    port: server.address().port,
+    async close () {
+      for (const socket of sockets) {
+        socket.destroy()
+      }
+      await new Promise((resolve, reject) => {
+        server.close((err) => err ? reject(err) : resolve())
+      })
+    }
   }
 }
 
@@ -745,6 +772,51 @@ describe('session-ssh auth flows', () => {
     }
   })
 
+  test('emits close when an established ssh session is disconnected by the server', async () => {
+    const server = await startServer(passwordOnlyAuth(), {
+      onShell (stream, client) {
+        stream.write('server will disconnect\n')
+        setTimeout(() => {
+          client.end()
+        }, 20)
+      }
+    })
+
+    let term
+    try {
+      term = await session({
+        host: '127.0.0.1',
+        port: server.port,
+        username: USERNAME,
+        password: PASSWORD,
+        useSshAgent: false,
+        readyTimeout: 5000
+      }, createPromptWs(() => {
+        throw new Error('password shell login should not prompt')
+      }))
+
+      let output = ''
+      const closeSeen = new Promise(resolve => {
+        term.on('close', resolve)
+      })
+      term.on('data', (chunk) => {
+        output += chunk.toString('utf8')
+      })
+
+      await Promise.race([
+        closeSeen,
+        delay(2000).then(() => {
+          throw new Error(`Timed out waiting for SSH close event. Output: ${JSON.stringify(output)}`)
+        })
+      ])
+
+      assert.match(output, /server will disconnect/)
+    } finally {
+      term && term.kill()
+      await server.close()
+    }
+  })
+
   test('rejects wrong password with a normalized authentication error', async () => {
     const server = await startServer(passwordOnlyAuth())
 
@@ -765,6 +837,34 @@ describe('session-ssh auth flows', () => {
           assert.match(err.message, /SSH 认证失败/)
           assert.match(err.message, /tester@127\.0\.0\.1/)
           assert.match(err.message, /原始错误/)
+          return true
+        }
+      )
+    } finally {
+      await server.close()
+    }
+  })
+
+  test('rejects a silent tcp endpoint with a normalized handshake timeout', async () => {
+    const server = await startSilentTcpServer()
+
+    try {
+      await assert.rejects(
+        () => session({
+          host: '127.0.0.1',
+          port: server.port,
+          username: USERNAME,
+          password: PASSWORD,
+          useSshAgent: false,
+          enableSsh: false,
+          readyTimeout: 200
+        }, createPromptWs(() => {
+          throw new Error('silent tcp endpoint should not prompt')
+        })),
+        (err) => {
+          assert.equal(err.sshConnectionErrorNormalized, true)
+          assert.match(err.message, /tester@127\.0\.0\.1/)
+          assert.match(err.originalMessage || err.message, /timed out|timeout/i)
           return true
         }
       )
