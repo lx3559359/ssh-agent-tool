@@ -72,6 +72,7 @@ import {
   handleTerminalColorQuery
 } from './terminal-color-query.mjs'
 import { buildTerminalContextMenuItems } from './terminal-context-menu.js'
+import { shouldRetryAutoReconnectError } from './ssh-reconnect-policy.js'
 
 const e = window.translate
 
@@ -1499,10 +1500,16 @@ class Term extends Component {
         : typeMap.local
     })
     const isAutoReconnect = !!(tab.autoReConnect && this.props.config.autoReconnectTerminal)
+    let autoReconnectBlocked = false
     const r = await createTerm(opts)
       .catch(err => {
+        const text = err.message
+        if (isAutoReconnect && !shouldRetryAutoReconnectError(text)) {
+          autoReconnectBlocked = true
+          this.handleError({ message: text, from, srcId })
+          return
+        }
         if (!isAutoReconnect) {
-          const text = err.message
           this.handleError({ message: text, from, srcId })
         }
       })
@@ -1527,6 +1534,10 @@ class Term extends Component {
       loading: false
     })
     if (!r) {
+      if (autoReconnectBlocked) {
+        this.setStatus(statusMap.error)
+        return
+      }
       if (isAutoReconnect) {
         this.scheduleAutoReconnect(3000)
         return
