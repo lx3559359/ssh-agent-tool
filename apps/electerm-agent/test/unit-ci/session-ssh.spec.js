@@ -106,6 +106,9 @@ async function startServer (authHandler, options = {}) {
     client.on('ready', () => {
       client.on('session', (accept) => {
         const sshSession = accept()
+        if (options.onSession) {
+          options.onSession(sshSession)
+        }
         sshSession.on('env', (accept) => {
           if (typeof accept === 'function') {
             accept()
@@ -648,6 +651,94 @@ describe('session-ssh auth flows', () => {
 
       assert.match(received, /uptime\r/)
       assert.equal(received.includes('\x03'), true)
+    } finally {
+      term && term.kill()
+      await server.close()
+    }
+  })
+
+  test('forwards interactive control keys and resize events to the ssh channel', async () => {
+    let received = ''
+    let resizeInfo
+    let resolveInput
+    let resolveResize
+    const inputSeen = new Promise(resolve => {
+      resolveInput = resolve
+    })
+    const resizeSeen = new Promise(resolve => {
+      resolveResize = resolve
+    })
+    const server = await startServer(passwordOnlyAuth(), {
+      onSession (sshSession) {
+        sshSession.on('window-change', (accept, reject, info) => {
+          if (typeof accept === 'function') {
+            accept()
+          }
+          resizeInfo = info
+          if (info?.cols === 132 && info?.rows === 43) {
+            resolveResize(info)
+          }
+        })
+      },
+      onShell (stream) {
+        stream.write('interactive ready\n')
+        stream.on('data', (chunk) => {
+          received += chunk.toString('utf8')
+          if (
+            received.includes('\x1b[A') &&
+            received.includes('\x1b[B') &&
+            received.includes('\x1b[C') &&
+            received.includes('\x1b[D') &&
+            received.includes('\x0c') &&
+            received.includes('\x04')
+          ) {
+            resolveInput()
+          }
+        })
+      }
+    })
+
+    let term
+    try {
+      term = await session({
+        host: '127.0.0.1',
+        port: server.port,
+        username: USERNAME,
+        password: PASSWORD,
+        useSshAgent: false,
+        cols: 80,
+        rows: 24,
+        readyTimeout: 5000
+      }, createPromptWs(() => {
+        throw new Error('password shell login should not prompt')
+      }))
+
+      term.write('\x1b[A')
+      term.write('\x1b[B')
+      term.write('\x1b[C')
+      term.write('\x1b[D')
+      term.write('\x0c')
+      term.write('\x04')
+      term.resize(132, 43)
+
+      await Promise.race([
+        Promise.all([inputSeen, resizeSeen]),
+        delay(2000).then(() => {
+          throw new Error(
+            'Timed out waiting for interactive SSH input or resize. ' +
+            `Received: ${JSON.stringify(received)}, resize: ${JSON.stringify(resizeInfo)}`
+          )
+        })
+      ])
+
+      assert.equal(received.includes('\x1b[A'), true)
+      assert.equal(received.includes('\x1b[B'), true)
+      assert.equal(received.includes('\x1b[C'), true)
+      assert.equal(received.includes('\x1b[D'), true)
+      assert.equal(received.includes('\x0c'), true)
+      assert.equal(received.includes('\x04'), true)
+      assert.equal(resizeInfo.cols, 132)
+      assert.equal(resizeInfo.rows, 43)
     } finally {
       term && term.kill()
       await server.close()
