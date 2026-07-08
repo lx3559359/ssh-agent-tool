@@ -48,6 +48,22 @@ test('app quick connect parses bracketed IPv6 SSH shortcuts with username', () =
   assert.equal(result.port, 2201)
 })
 
+test('app quick connect parses bracketed IPv6 SSH URLs with username and default port', () => {
+  const result = parseQuickConnect('ssh://deploy@[2001:db8::6]')
+
+  assert.equal(result.username, 'deploy')
+  assert.equal(result.host, '2001:db8::6')
+  assert.equal(result.port, 22)
+})
+
+test('app quick connect parses bracketed IPv6 SSH shortcuts with username and default port', () => {
+  const result = parseQuickConnect('deploy@[2001:db8::7]')
+
+  assert.equal(result.username, 'deploy')
+  assert.equal(result.host, '2001:db8::7')
+  assert.equal(result.port, 22)
+})
+
 test('app quick connect keeps unbracketed IPv6 SSH shortcuts as hosts', () => {
   const result = parseQuickConnect('2001:db8::4')
 
@@ -109,6 +125,30 @@ test('client quick connect parses bracketed IPv6 SSH shortcuts with username', a
   assert.equal(result.username, 'deploy')
   assert.equal(result.host, '2001:db8::3')
   assert.equal(result.port, 2201)
+})
+
+test('client quick connect parses bracketed IPv6 SSH URLs with username and default port', async () => {
+  const {
+    parseQuickConnect: parseClientQuickConnect
+  } = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/common/parse-quick-connect.js')))
+
+  const result = parseClientQuickConnect('ssh://deploy@[2001:db8::6]')
+
+  assert.equal(result.username, 'deploy')
+  assert.equal(result.host, '2001:db8::6')
+  assert.equal(result.port, 22)
+})
+
+test('client quick connect parses bracketed IPv6 SSH shortcuts with username and default port', async () => {
+  const {
+    parseQuickConnect: parseClientQuickConnect
+  } = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/common/parse-quick-connect.js')))
+
+  const result = parseClientQuickConnect('deploy@[2001:db8::7]')
+
+  assert.equal(result.username, 'deploy')
+  assert.equal(result.host, '2001:db8::7')
+  assert.equal(result.port, 22)
 })
 
 test('client quick connect keeps unbracketed IPv6 SSH shortcuts as hosts', async () => {

@@ -125,6 +125,17 @@ function isUnbracketedIPv6Host (host) {
   return !value.startsWith('[') && colonCount >= 2 && /^[0-9a-fA-F:.]+$/.test(value)
 }
 
+function parseBracketedHostAndPort (host) {
+  const match = String(host || '').match(/^(\[[^\]]+\])(?::(\d+))?$/)
+  if (!match) {
+    return null
+  }
+  return {
+    host: match[1],
+    port: match[2] || ''
+  }
+}
+
 /**
  * Parse a quick connect string into connection options
  * @param {string} str - The connection string
@@ -237,7 +248,11 @@ function parseQuickConnect (str) {
       }
       // Parse host:port from hostPart
       const hostColonIndex = hostPart.lastIndexOf(':')
-      if (isUnbracketedIPv6Host(hostPart)) {
+      const bracketedHost = parseBracketedHostAndPort(hostPart)
+      if (bracketedHost) {
+        hostOrPath = bracketedHost.host
+        port = bracketedHost.port
+      } else if (isUnbracketedIPv6Host(hostPart)) {
         hostOrPath = hostPart
       } else if (hostColonIndex !== -1) {
         hostOrPath = hostPart.slice(0, hostColonIndex)
