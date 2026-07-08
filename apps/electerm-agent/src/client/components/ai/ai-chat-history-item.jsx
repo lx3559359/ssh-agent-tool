@@ -5,18 +5,22 @@ import AgentToolCallCard from './agent-tool-call-card'
 import { runAgentLoop } from './agent'
 import {
   Alert,
+  Dropdown,
   Tooltip
 } from 'antd'
 import {
   CopyOutlined,
   CloseOutlined,
+  DownloadOutlined,
   ReloadOutlined,
   CaretDownOutlined,
   CaretRightOutlined
 } from '@ant-design/icons'
 import { copy } from '../../common/clipboard'
+import download from '../../common/download'
 import aiAgentCopy from './ai-agent-copy.json'
 import uid from '../../common/uid'
+import { buildAgentDiagnosticReportFiles } from './agent-diagnostic-report'
 import {
   appendAIChatHistory,
   buildAIChatRole,
@@ -182,6 +186,49 @@ export default function AIChatHistoryItem ({ item }) {
     )
   }
 
+  const reportExportItems = [
+    {
+      key: 'markdown',
+      label: 'Markdown'
+    },
+    {
+      key: 'html',
+      label: 'HTML'
+    },
+    {
+      key: 'json',
+      label: 'JSON'
+    }
+  ]
+
+  async function handleExportReport (format, e) {
+    e?.stopPropagation?.()
+    const files = buildAgentDiagnosticReportFiles({ item })
+    const file = files[format]
+    if (!file) {
+      return
+    }
+    await download(file.filename, file.content)
+  }
+
+  function renderReportExportAction () {
+    return (
+      <Dropdown
+        menu={{
+          items: reportExportItems,
+          onClick: ({ key, domEvent }) => handleExportReport(key, domEvent)
+        }}
+        trigger={['click']}
+      >
+        <DownloadOutlined
+          className='pointer mg1l'
+          onClick={e => e.stopPropagation()}
+          title='导出诊断报告'
+        />
+      </Dropdown>
+    )
+  }
+
   const alertProps = {
     title: (
       <div className='ai-history-item-title'>
@@ -200,6 +247,7 @@ export default function AIChatHistoryItem ({ item }) {
             onClick={handleRetry}
             title={aiAgentCopy.retryTitle}
           />
+          {renderReportExportAction()}
           <CloseOutlined
             className='pointer mg1l'
             onClick={handleDel}
@@ -271,6 +319,7 @@ export default function AIChatHistoryItem ({ item }) {
             onClick={handleRetry}
             title={aiAgentCopy.retryTitle}
           />
+          {renderReportExportAction()}
           <CloseOutlined
             className='pointer mg1l'
             onClick={handleDel}
