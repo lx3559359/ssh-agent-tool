@@ -109,6 +109,12 @@ function safeDecodeURIValue (value) {
   }
 }
 
+function normalizeHostValue (host) {
+  const value = String(host || '')
+  const match = value.match(/^\[([^\]]+)\]$/)
+  return match ? match[1] : value
+}
+
 /**
  * Parse a quick connect string into connection options
  * @param {string} str - The connection string
@@ -383,7 +389,7 @@ function parseQuickConnect (str) {
       opts.url = url
     } else {
       // SSH, Telnet, VNC, RDP, Spice, FTP
-      opts.host = hostOrPath
+      opts.host = normalizeHostValue(hostOrPath)
       if (port) {
         opts.port = parseInt(port, 10)
       }
