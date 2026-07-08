@@ -28,6 +28,20 @@ test('keeps DeepSeek official root URL without forcing /v1', () => {
   )
 })
 
+test('keeps Perplexity OpenAI-compatible root URL without forcing /v1', () => {
+  assert.deepEqual(
+    normalizeAIEndpoint('https://api.perplexity.ai', ''),
+    {
+      baseURL: 'https://api.perplexity.ai',
+      path: '/chat/completions'
+    }
+  )
+  assert.equal(
+    normalizeAIModelBaseURL('https://api.perplexity.ai'),
+    'https://api.perplexity.ai'
+  )
+})
+
 test('accepts a full chat completions URL in the API address field', () => {
   assert.deepEqual(
     normalizeAIEndpoint('https://openrouter.ai/api/v1/chat/completions', ''),
@@ -146,6 +160,13 @@ test('client endpoint preview uses the same popular provider root URL rules', as
     normalizeClientAIEndpoint('https://qianfan.baidubce.com', ''),
     {
       baseURL: 'https://qianfan.baidubce.com/v2',
+      path: '/chat/completions'
+    }
+  )
+  assert.deepEqual(
+    normalizeClientAIEndpoint('https://api.perplexity.ai', ''),
+    {
+      baseURL: 'https://api.perplexity.ai',
       path: '/chat/completions'
     }
   )

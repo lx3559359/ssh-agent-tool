@@ -3,7 +3,8 @@ export const RESPONSE_PATH = '/responses'
 export const MODELS_PATH = '/models'
 
 const NO_V1_HOSTS = new Set([
-  'api.deepseek.com'
+  'api.deepseek.com',
+  'api.perplexity.ai'
 ])
 
 const PROVIDER_BASE_PATHS = new Map([
