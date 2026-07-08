@@ -25,6 +25,7 @@ import {
   clearAIChatContext
 } from './ai-chat-actions'
 import {
+  buildCommandSuggestionPrompt,
   buildSftpFileContextPrompt,
   buildTerminalContextPrompt
 } from './ai-ssh-context'
@@ -144,6 +145,25 @@ export default function AIChat (props) {
     setContextPrompt('selection', getTerminalSelectionText(termRef))
   }
 
+  function handleGenerateCommand () {
+    const termRef = getActiveTerminalRef({
+      store: window.store,
+      refs
+    })
+    const selection = getTerminalSelectionText(termRef)
+    const output = selection || getTerminalOutputText(termRef)
+    const source = selection ? 'selection' : 'terminal'
+    const value = String(output || '').trim()
+    if (!value) {
+      message.warning(getAIContextUnavailableMessage(source))
+      return
+    }
+    setPrompt(buildCommandSuggestionPrompt({
+      source,
+      text: value
+    }))
+  }
+
   async function handleQuoteSftpFile () {
     const result = await readSelectedSftpFileContext({
       sftpRef: getActiveSftpRef({
@@ -237,6 +257,12 @@ export default function AIChat (props) {
         text: '引用文件',
         icon: <FileTextOutlined />,
         handleClick: handleQuoteSftpFile
+      },
+      {
+        key: 'command',
+        text: '生成命令',
+        icon: <ToolOutlined />,
+        handleClick: handleGenerateCommand
       },
       {
         key: 'web',

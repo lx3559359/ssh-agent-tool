@@ -173,7 +173,7 @@ test('AI chat context actions build user-facing Chinese unavailable messages', a
   )
 })
 
-test('AI chat panel wires terminal context and unfinished capability buttons with Chinese labels', () => {
+test('AI chat panel wires terminal context and command generation buttons with Chinese labels', () => {
   const source = fs.readFileSync(
     path.resolve(__dirname, '../../src/client/components/ai/ai-chat.jsx'),
     'utf8'
@@ -181,9 +181,11 @@ test('AI chat panel wires terminal context and unfinished capability buttons wit
 
   assert.match(source, /handleQuoteTerminalOutput/)
   assert.match(source, /handleQuoteTerminalSelection/)
+  assert.match(source, /handleGenerateCommand/)
   assert.match(source, /引用终端/)
   assert.match(source, /引用选中/)
   assert.match(source, /引用文件/)
+  assert.match(source, /生成命令/)
   assert.match(source, /联网搜索/)
   assert.match(source, /MCP/)
   assert.match(source, /CLI/)

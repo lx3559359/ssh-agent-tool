@@ -53,6 +53,24 @@ test('AI SSH context builds SFTP file prompts with bounded content', async () =>
   assert.match(prompt, /内容已截断/)
 })
 
+test('AI SSH context builds command generation prompts without executing commands', async () => {
+  const {
+    buildCommandSuggestionPrompt
+  } = await import(moduleUrl)
+
+  const prompt = buildCommandSuggestionPrompt({
+    source: 'terminal',
+    text: 'nginx: [emerg] bind() to 0.0.0.0:80 failed',
+    maxChars: 120
+  })
+
+  assert.match(prompt, /请根据当前 SSH 终端输出生成排查命令/)
+  assert.match(prompt, /bind\(\)/)
+  assert.match(prompt, /只生成必要命令/)
+  assert.match(prompt, /不要直接执行命令/)
+  assert.match(prompt, /执行前必须由用户确认/)
+})
+
 test('AI SSH context filters command blocks before running', async () => {
   const {
     prepareAICommandForTerminal

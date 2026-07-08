@@ -27,6 +27,19 @@ export function buildTerminalContextPrompt ({
   return `${title}，请给出结论、证据和下一步建议。\n\n\`\`\`text\n${context.text}\n\`\`\`${truncatedTip}`
 }
 
+export function buildCommandSuggestionPrompt ({
+  source = 'terminal',
+  text = '',
+  maxChars = DEFAULT_MAX_CONTEXT_CHARS
+} = {}) {
+  const context = trimContextText(text, maxChars)
+  const title = source === 'selection'
+    ? '请根据下面选中的终端内容生成排查命令'
+    : '请根据当前 SSH 终端输出生成排查命令'
+  const truncatedTip = context.truncated ? '\n\n注意：内容已截断，请先基于可见部分生成命令。' : ''
+  return `${title}。只生成必要命令，并简要说明每条命令用途；不要直接执行命令，执行前必须由用户确认。\n\n\`\`\`text\n${context.text}\n\`\`\`${truncatedTip}`
+}
+
 export function buildSftpFileContextPrompt ({
   path = '',
   content = '',
@@ -57,7 +70,7 @@ export async function confirmAndRunAICommand ({
   const ask = typeof confirm === 'function'
     ? confirm
     : message => window.confirm(message)
-  const accepted = await ask(`确认发送以下命令到当前终端？\n\n${command}`)
+  const accepted = await ask(`确认发送以下命令到当前终端：\n\n${command}`)
   if (!accepted) {
     return false
   }
