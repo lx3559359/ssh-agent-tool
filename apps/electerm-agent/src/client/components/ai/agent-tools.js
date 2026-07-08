@@ -371,6 +371,37 @@ export const agentTools = [
   {
     type: 'function',
     function: {
+      name: 'run_local_cli',
+      description: '在本机受控执行白名单 CLI 工具。仅支持 ssh-keygen、scp、ping/traceroute/tracert、kubectl、docker、git；执行前必须由用户确认。',
+      parameters: {
+        type: 'object',
+        properties: {
+          tool: {
+            type: 'string',
+            enum: ['ssh-keygen', 'scp', 'ping', 'traceroute', 'tracert', 'kubectl', 'docker', 'git'],
+            description: '要执行的本机 CLI 工具'
+          },
+          args: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'CLI 参数数组；不要拼接成一整条 shell 字符串'
+          },
+          cwd: {
+            type: 'string',
+            description: '可选工作目录'
+          },
+          timeoutMs: {
+            type: 'number',
+            description: '可选超时时间，单位毫秒'
+          }
+        },
+        required: ['tool']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'run_background_command',
       description: '使用 nohup 在后台运行命令，终端会立即释放。返回 taskId 以便监控，可用 get_background_task_status 和 get_background_task_log 查看进度。',
       parameters: {
@@ -511,6 +542,16 @@ export async function executeToolCall (toolName, args) {
       return JSON.stringify(store.mcpGetTerminalStatus(args))
     case 'cancel_terminal_command':
       return JSON.stringify(store.mcpCancelTerminalCommand(args))
+    case 'run_local_cli': {
+      const confirmation = await confirmAgentToolExecution({
+        toolName,
+        args
+      })
+      if (!confirmation.accepted) {
+        return JSON.stringify(confirmation)
+      }
+      return JSON.stringify(await window.pre.runGlobalAsync('runLocalCli', args))
+    }
     case 'run_background_command': {
       const confirmation = await confirmAgentToolExecution({
         toolName,

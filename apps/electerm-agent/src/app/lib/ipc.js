@@ -71,6 +71,7 @@ const { initCommandLine } = require('./command-line')
 const { watchFile, unwatchFile } = require('./watch-file')
 const lookup = require('../common/lookup')
 const { AIchat, AIchatWithTools, AIModels, getStreamContent, stopStream } = require('./ai')
+const { runLocalCli } = require('./local-cli')
 const log = require('../common/log')
 const {
   exportDiagnosticPack
@@ -233,6 +234,7 @@ function initIpc () {
     AIModels,
     getStreamContent,
     stopStream,
+    runLocalCli,
     exportDiagnosticPack: async (outputPath) => exportDiagnosticPack({
       outputPath,
       packInfo,

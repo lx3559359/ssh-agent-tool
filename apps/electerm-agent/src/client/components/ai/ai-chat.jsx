@@ -32,6 +32,9 @@ import {
   buildMcpServerContextPrompt
 } from './agent-mcp-servers'
 import {
+  buildLocalCliContextPrompt
+} from './agent-local-cli-tools'
+import {
   getActiveSftpRef,
   getActiveTerminalRef,
   getAIContextUnavailableMessage,
@@ -176,6 +179,10 @@ export default function AIChat (props) {
     setPrompt(text)
   }
 
+  function handleQuoteLocalCliTools () {
+    setPrompt(buildLocalCliContextPrompt())
+  }
+
   function showUnavailableContextAction (type) {
     message.warning(getAIContextUnavailableMessage(type))
   }
@@ -247,7 +254,7 @@ export default function AIChat (props) {
         key: 'cli',
         text: 'CLI',
         icon: <ToolOutlined />,
-        handleClick: () => showUnavailableContextAction('cli')
+        handleClick: handleQuoteLocalCliTools
       }
     ]
 

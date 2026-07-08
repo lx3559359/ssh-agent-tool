@@ -1,10 +1,21 @@
 const COMMAND_TOOL_NAMES = new Set([
   'send_terminal_command',
-  'run_background_command'
+  'run_background_command',
+  'run_local_cli'
 ])
 
 export function isAgentCommandTool (toolName) {
   return COMMAND_TOOL_NAMES.has(toolName)
+}
+
+function getAgentToolCommandText (toolName, args = {}) {
+  if (toolName === 'run_local_cli') {
+    return [
+      String(args.tool || '').trim(),
+      ...(Array.isArray(args.args) ? args.args.map(arg => String(arg)) : [])
+    ].filter(Boolean).join(' ')
+  }
+  return String(args.command || '').trim()
 }
 
 export async function confirmAgentToolExecution ({
@@ -19,7 +30,7 @@ export async function confirmAgentToolExecution ({
     }
   }
 
-  const command = String(args.command || '').trim()
+  const command = getAgentToolCommandText(toolName, args)
   if (!command) {
     return {
       accepted: false,
