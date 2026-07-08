@@ -28,12 +28,12 @@ async function main () {
   const pb = builder
   echo('running build for win part 3')
 
-  echo('build portable tar.gz')
+  echo('build portable zip')
   await replaceRun()
   rm('-rf', 'dist')
-  const src = 'win-x64-portable.tar.gz'
+  const src = 'win-x64-portable.zip'
   writeSrc(src)
-  await run(`${pb} --win tar.gz`)
+  await run(`${pb} --win zip`)
   await uploadToR2(src)
 }
 

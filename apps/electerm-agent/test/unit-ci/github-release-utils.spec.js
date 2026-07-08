@@ -103,6 +103,57 @@ test('windows release workflow verifies local update assets before upload', () =
   assert.ok(localVerifyIndex < artifactUploadIndex, 'local release verification should run before artifacts are uploaded')
 })
 
+test('windows release workflow builds and publishes a portable zip separately from update assets', () => {
+  const workflow = fs.readFileSync(
+    path.resolve(__dirname, '../../../../.github/workflows/windows-electerm-agent-release.yml'),
+    'utf8'
+  )
+
+  const portableBuildIndex = workflow.indexOf('name: Build portable package')
+  const localVerifyIndex = workflow.indexOf('npm run release:local:verify')
+  const artifactUploadIndex = workflow.indexOf('name: Upload Windows artifacts')
+  const releaseIndex = workflow.indexOf('name: Create draft GitHub Release for tags')
+
+  assert.match(workflow, /AIGShell-\*-win-x64-portable\.zip/)
+  assert.match(workflow, /npx electron-builder --win zip --publish never/)
+  assert.ok(portableBuildIndex !== -1, 'workflow should build the portable package')
+  assert.ok(localVerifyIndex !== -1, 'workflow should verify update assets')
+  assert.ok(artifactUploadIndex !== -1, 'workflow should upload artifacts')
+  assert.ok(releaseIndex !== -1, 'workflow should create a draft release')
+  assert.ok(portableBuildIndex < localVerifyIndex, 'portable zip should be built before verification')
+  assert.ok(localVerifyIndex < artifactUploadIndex, 'verification should run before artifact upload')
+  assert.ok(artifactUploadIndex < releaseIndex, 'artifacts should be prepared before release creation')
+})
+
+test('portable zip is not required for online update asset validation', () => {
+  const names = getRequiredReleaseAssetNames('3.15.105')
+
+  assert.deepEqual(names, [
+    'AIGShell-3.15.105-win-x64-installer.exe',
+    'AIGShell-3.15.105-win-x64-installer.exe.blockmap',
+    'latest.yml',
+    'aigshell-update.json'
+  ])
+  assert.equal(names.some(name => name.includes('portable.zip')), false)
+})
+
+test('local Windows portable build scripts create zip packages', () => {
+  const ciSource = fs.readFileSync(
+    path.resolve(__dirname, '../../build/bin/prepare-win-portable-ci.js'),
+    'utf8'
+  )
+  const localSource = fs.readFileSync(
+    path.resolve(__dirname, '../../build/bin/build-win-portable.js'),
+    'utf8'
+  )
+
+  assert.match(ciSource, /win-x64-portable\.zip/)
+  assert.match(ciSource, /config\.win\.target\s*=\s*\['zip'\]/)
+  assert.match(localSource, /win-x64-portable\.zip/)
+  assert.match(localSource, /--win zip/)
+  assert.doesNotMatch(localSource, /win-x64-portable\.tar\.gz/)
+})
+
 test('release verification scripts accept an explicit Windows release architecture', () => {
   const localVerifySource = fs.readFileSync(
     path.resolve(__dirname, '../../build/bin/verify-local-release-assets.js'),

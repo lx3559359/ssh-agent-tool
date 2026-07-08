@@ -38,6 +38,22 @@ test('portable Windows builds keep user data beside the unpacked app folder', ()
   })
 })
 
+test('portable Windows zip builds keep user data beside the unpacked app folder', () => {
+  const props = resolveAppDataProps({
+    isWin: true,
+    appDataPath: 'C:\\Users\\alice\\AppData\\Roaming',
+    exePath: 'D:\\tools\\AIGShell\\AIGShell.exe',
+    installSrc: 'win-x64-portable.zip',
+    existsSync: () => false
+  })
+
+  assert.deepEqual(props, {
+    appPath: 'D:\\tools\\AIGShell',
+    exePath: 'D:\\tools\\AIGShell',
+    isPortable: true
+  })
+})
+
 test('Windows ARM portable builds use the unpacked app folder too', () => {
   const props = resolveAppDataProps({
     isWin: true,

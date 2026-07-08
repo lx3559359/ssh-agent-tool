@@ -72,7 +72,7 @@ jobs:
       - name: Build portable package
         run: |
           node build/bin/prepare-win-portable-ci.js
-          npx electron-builder --win tar.gz --publish never
+          npx electron-builder --win zip --publish never
 
       - name: Create update approval manifest
         run: npm run release:approval
@@ -87,6 +87,7 @@ jobs:
           path: |
             apps/electerm-agent/dist/AIGShell-*-win-x64-installer.exe
             apps/electerm-agent/dist/AIGShell-*-win-x64-installer.exe.blockmap
+            apps/electerm-agent/dist/AIGShell-*-win-x64-portable.zip
             apps/electerm-agent/dist/latest.yml
             apps/electerm-agent/dist/aigshell-update.json
           if-no-files-found: error
@@ -100,5 +101,6 @@ jobs:
           files: |
             apps/electerm-agent/dist/AIGShell-*-win-x64-installer.exe
             apps/electerm-agent/dist/AIGShell-*-win-x64-installer.exe.blockmap
+            apps/electerm-agent/dist/AIGShell-*-win-x64-portable.zip
             apps/electerm-agent/dist/latest.yml
             apps/electerm-agent/dist/aigshell-update.json
