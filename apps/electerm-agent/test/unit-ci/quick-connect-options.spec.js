@@ -43,3 +43,23 @@ test('omits empty optional quick connect fields', async () => {
   assert.equal(opts.username, undefined)
   assert.equal(opts.password, undefined)
 })
+
+test('rejects invalid quick connect ports before opening an SSH tab', async () => {
+  const {
+    buildQuickConnectOptions
+  } = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/components/tabs/quick-connect-options.js')))
+
+  assert.equal(buildQuickConnectOptions({
+    protocol: 'ssh',
+    host: '10.0.1.23',
+    port: 'abc',
+    username: 'root'
+  }), null)
+
+  assert.equal(buildQuickConnectOptions({
+    protocol: 'ssh',
+    host: '10.0.1.23',
+    port: '70000',
+    username: 'root'
+  }), null)
+})

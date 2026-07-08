@@ -17,3 +17,13 @@ test('quick connect form uses beginner friendly Chinese SSH labels', () => {
   assert.doesNotMatch(source, /Format error, please check the input/)
   assert.doesNotMatch(source, /ssh\|rdp\|vnc\|spice/)
 })
+
+test('add menu uses the beginner quick connect form instead of the command-line input', () => {
+  const source = fs.readFileSync(
+    path.resolve(__dirname, '../../src/client/components/tabs/add-btn-menu.jsx'),
+    'utf8'
+  )
+
+  assert.match(source, /<QuickConnect batch=\{batch\} formOnly \/>/)
+  assert.doesNotMatch(source, /<QuickConnect batch=\{batch\} inputOnly \/>/)
+})

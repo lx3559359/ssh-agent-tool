@@ -109,7 +109,7 @@ export default function AddBtnMenu ({
         >
           <RobotOutlined /> {e('createBookmarkByAI')}
         </div>
-        <QuickConnect batch={batch} inputOnly />
+        <QuickConnect batch={batch} formOnly />
         <Tabs
           activeKey={activeTab}
           onChange={setActiveTab}

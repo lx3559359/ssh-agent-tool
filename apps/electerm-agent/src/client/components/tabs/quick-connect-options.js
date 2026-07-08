@@ -18,6 +18,17 @@ function clean (value) {
   return (value || '').trim()
 }
 
+function isValidPort (port) {
+  if (!port) {
+    return true
+  }
+  if (!/^\d+$/.test(port)) {
+    return false
+  }
+  const value = Number(port)
+  return value >= 1 && value <= 65535
+}
+
 function titleFor (opts) {
   if (opts.username) {
     return `${opts.username}@${opts.host}`
@@ -31,6 +42,9 @@ export function buildQuickConnectOptions (values) {
   const port = clean(values.port)
   const username = clean(values.username)
   const password = values.password || ''
+  if (!isValidPort(port)) {
+    return null
+  }
   const auth = username
     ? `${encodeURIComponent(username)}${password ? ':' + encodeURIComponent(password) : ''}@`
     : ''
