@@ -60,6 +60,12 @@ function getSshDiagnosis (err = {}) {
       suggestion: '请检查本机网络、VPN、路由、代理/堡垒机、防火墙和安全组是否允许访问目标服务器。'
     }
   }
+  if (/maxstartups|drop connection|too many connections|connection rate exceeded|connection limit|banner exchange.*connection closed/i.test(message)) {
+    return {
+      title: 'SSH 服务端连接数或安全策略限制',
+      suggestion: '服务端可能因 MaxStartups、并发连接数、堡垒机限流、防火墙或安全设备策略主动拒绝握手；请稍后重试，或检查 sshd 与安全策略配置。'
+    }
+  }
   if (/kex_exchange_identification|banner line contains invalid characters|protocol mismatch|bad packet length|expected ssh/i.test(message)) {
     return {
       title: 'SSH 目标端口不是 SSH 服务',

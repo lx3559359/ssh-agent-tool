@@ -133,6 +133,23 @@ describe('session-ssh connection error diagnostics', () => {
     assert.match(normalized.message, /原始错误：kex_exchange_identification/)
   })
 
+  test('adds a chinese diagnosis for ssh server connection limits', () => {
+    const error = new Error('kex_exchange_identification: Connection closed by remote host banner exchange: Connection from 10.0.1.8 port 52101: drop connection #12 from [10.0.1.8]: MaxStartups')
+
+    const normalized = normalizeSshConnectionError(error, {
+      host: 'prod-bastion-01',
+      port: 22,
+      username: 'ops'
+    })
+
+    assert.match(normalized.message, /SSH 服务端连接数或安全策略限制/)
+    assert.match(normalized.message, /ops@prod-bastion-01:22/)
+    assert.match(normalized.message, /MaxStartups/)
+    assert.match(normalized.message, /并发连接/)
+    assert.match(normalized.message, /安全设备/)
+    assert.match(normalized.message, /原始错误：kex_exchange_identification/)
+  })
+
   test('adds a chinese diagnosis for incompatible ssh algorithms', () => {
     const error = new Error('Handshake failed: no matching key exchange algorithm')
 
