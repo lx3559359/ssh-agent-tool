@@ -93,6 +93,26 @@ test('AI chat actions clear conversation context from the store', async () => {
   assert.deepEqual(store.aiChatHistory, [])
 })
 
+test('AI chat actions append new entries while keeping the newest history items', async () => {
+  const {
+    appendAIChatHistory
+  } = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/components/ai/ai-chat-actions.js')))
+
+  const store = {
+    aiChatHistory: Array.from({ length: 100 }, (_, index) => ({
+      id: `old-${index}`
+    }))
+  }
+
+  appendAIChatHistory(store, {
+    id: 'new-chat'
+  }, 100)
+
+  assert.equal(store.aiChatHistory.length, 100)
+  assert.equal(store.aiChatHistory[0].id, 'old-1')
+  assert.equal(store.aiChatHistory.at(-1).id, 'new-chat')
+})
+
 test('AI chat actions resolve the latest stream session id from store history', async () => {
   const {
     getAIChatStreamSessionId

@@ -18,6 +18,7 @@ import { copy } from '../../common/clipboard'
 import aiAgentCopy from './ai-agent-copy.json'
 import uid from '../../common/uid'
 import {
+  appendAIChatHistory,
   buildAIChatRole,
   createRetryChatEntry,
   getAIChatCopyText,
@@ -231,8 +232,7 @@ export default function AIChatHistoryItem ({ item }) {
       id: uid(),
       timestamp: Date.now()
     })
-    window.store.aiChatHistory.push(retryEntry)
-    window.store.aiChatHistory = [...window.store.aiChatHistory]
+    appendAIChatHistory(window.store, retryEntry)
   }
 
   function renderTitle () {

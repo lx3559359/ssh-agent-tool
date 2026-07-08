@@ -41,6 +41,19 @@ export function clearAIChatContext (store) {
   store.aiChatHistory = []
 }
 
+export function appendAIChatHistory (store, entry, maxHistory = 100) {
+  if (!store || !entry) {
+    return
+  }
+  const history = Array.isArray(store.aiChatHistory) ? store.aiChatHistory : []
+  history.push(entry)
+  const overflow = history.length - maxHistory
+  if (overflow > 0) {
+    history.splice(0, overflow)
+  }
+  store.aiChatHistory = [...history]
+}
+
 export function getAIChatStreamSessionId (item = {}, store) {
   const latest = store?.aiChatHistory?.find(chat => chat.id === item.id)
   return latest?.sessionId || item.sessionId || ''

@@ -20,7 +20,10 @@ import {
 } from '../../common/constants'
 import { refs, refsStatic } from '../common/ref'
 import { getAIChatSubmitAction } from './ai-chat-submit'
-import { clearAIChatContext } from './ai-chat-actions'
+import {
+  appendAIChatHistory,
+  clearAIChatContext
+} from './ai-chat-actions'
 import {
   buildSftpFileContextPrompt,
   buildTerminalContextPrompt
@@ -86,12 +89,8 @@ export default function AIChat (props) {
       id: chatId
     }
 
-    window.store.aiChatHistory.push(chatEntry)
+    appendAIChatHistory(window.store, chatEntry, MAX_HISTORY)
     setPrompt('')
-
-    if (window.store.aiChatHistory.length > MAX_HISTORY) {
-      window.store.aiChatHistory.splice(MAX_HISTORY)
-    }
   }, [prompt, mode, props.config])
 
   function renderHistory () {
