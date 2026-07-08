@@ -29,6 +29,7 @@ module.exports = exports.default = {
   keepaliveCountMax: 10,
   saveTerminalLogToFile: false,
   checkUpdateOnStart: true,
+  updateChannel: 'stable',
   cursorBlink: false,
   cursorStyle: 'block',
   useSystemTitleBar: false,

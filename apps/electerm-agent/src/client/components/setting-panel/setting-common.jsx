@@ -437,6 +437,26 @@ export default class SettingCommon extends Component {
     )
   }
 
+  renderUpdateChannel () {
+    const value = this.props.config.updateChannel || defaultSettings.updateChannel
+    return (
+      <div className='pd2b'>
+        <span className='inline-title mg1r'>更新通道</span>
+        <Select
+          onChange={v => this.onChangeValue(v, 'updateChannel')}
+          popupMatchSelectWidth={false}
+          value={value}
+        >
+          <Option value='stable'>稳定版</Option>
+          <Option value='beta'>测试版</Option>
+        </Select>
+        <span className='mg1l color-grey'>
+          稳定版只接收已确认发布的正式更新，测试版用于提前验证新功能。
+        </span>
+      </div>
+    )
+  }
+
   render () {
     const { ready } = this.state
     if (!ready) {
@@ -505,6 +525,7 @@ export default class SettingCommon extends Component {
             cls: 'opacity'
           }, e('opacity'))
         }
+        {this.renderUpdateChannel()}
 
         <div className='pd2b'>
           <span className='inline-title mg1r'>{e('uiThemes')}</span>

@@ -34,6 +34,7 @@ export default {
   keyword2FA: 'verification code,otp,one-time,two-factor,2fa,totp,authenticator,duo,yubikey,security code,mfa,passcode',
   saveTerminalLogToFile: false,
   checkUpdateOnStart: true,
+  updateChannel: 'stable',
   cursorBlink: false,
   cursorStyle: 'block',
   useSystemTitleBar: false,
