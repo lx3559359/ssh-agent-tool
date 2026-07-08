@@ -14,15 +14,16 @@
     .list-item-remove
       display none !important
 .sidebar-panel
-  top 36px
+  top 44px
 .sidebar
   position absolute
   left 0
-  top 0
+  top 44px
   width 36px
   z-index 100
   bottom 0
-  background var(--main-dark)
+  background #f7f8fa
+  border-right 1px solid #dfe3ea
 
   .item-list
     padding-right 0
@@ -94,17 +95,16 @@
 .sidebar-list
   position absolute
   left 43px
-  top 0
+  top 44px
   bottom 0
   z-index 200
   width 0
 
 .pinned
   .sidebar-list
-    top 0
+    top 44px
     .sidebar-panel
       top 0
-      padding-top 36px
   .drag-handle
     display block
   .sidebar-panel
@@ -112,16 +112,22 @@
       color var(--success)
 //btns
 .btns
-  background var(--main-dark)
-  border-color var(--primary)
+  background #f7f8fa
+  border-color #dfe3ea
+  .control-icon-wrap
+    padding 12px 0
+    .control-icon
+      color #4b5563
+      &:hover
+        color #2563eb
   .open-about-icon
-    color var(--text-dark)
+    color #4b5563
     &:hover
-      color var(--text-light)
+      color #2563eb
   .zoom-reset-icon
-    color var(--primary)
+    color #2563eb
     &:hover
-      color var(--text-light)
+      color #1d4ed8
 
 .btns .upgrade-icon
   color var(--success)

@@ -4,7 +4,8 @@ import TabsWrap from '../tabs/index'
 import {
   splitConfig,
   quickCommandBoxHeight,
-  footerHeight
+  footerHeight,
+  sidebarWidth
 } from '../../common/constants'
 import layoutAlg from './layout-alg'
 import calcSessionSize from './session-size-alg'
@@ -13,6 +14,7 @@ import Footer from '../footer/footer-entry'
 import SessionsWrap from '../session/sessions'
 import QuickCommandsFooterBox from '../quick-commands/quick-commands-box'
 import pixed from './pixed'
+import { aigshellTopBarHeight, getAIGShellContentFrame } from '../main/aigshell-layout'
 import { pick } from 'lodash-es'
 import './layout.styl'
 
@@ -42,15 +44,21 @@ export default auto(function Layout (props) {
       resizeTrigger,
       inActiveTerminal
     } = props.store
-    const h = height - footerHeight - (inActiveTerminal && pinnedQuickCommandBar ? quickCommandBoxHeight : 0) + resizeTrigger
-    const l = pinned ? 43 + leftSidebarWidth : 43
-    const r = rightPanelVisible && rightPanelPinned ? rightPanelWidth : 0
-    return {
-      height: h,
-      top: 0,
-      left: l,
-      width: width - l - r
-    }
+    return getAIGShellContentFrame({
+      width,
+      height,
+      footerHeight,
+      sidebarWidth,
+      leftSidebarWidth,
+      rightPanelWidth,
+      pinned,
+      rightPanelVisible,
+      rightPanelPinned,
+      pinnedQuickCommandBar,
+      inActiveTerminal,
+      quickCommandBoxHeight,
+      resizeTrigger
+    })
   }
 
   const buildLayoutStyles = () => {
@@ -68,7 +76,7 @@ export default auto(function Layout (props) {
     const l = pinned ? leftSidebarWidth : 0
     const r = rightPanelPinned && rightPanelVisible ? rightPanelWidth : 0
     const w = width - l - r - 42
-    const h = height - footerHeight - (pinnedQuickCommandBar ? quickCommandBoxHeight : 0)
+    const h = height - aigshellTopBarHeight - footerHeight - (pinnedQuickCommandBar ? quickCommandBoxHeight : 0)
     return layoutAlg(layout, w, h)
   }
   const layoutSize = calcLayoutStyle()

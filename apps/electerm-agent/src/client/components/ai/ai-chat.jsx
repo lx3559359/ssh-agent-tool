@@ -14,7 +14,6 @@ import {
   aiChatModeLsKey
 } from '../../common/constants'
 import { getItem, setItem } from '../../common/safe-local-storage.js'
-import HelpIcon from '../common/help-icon'
 import { refsStatic } from '../common/ref'
 import aiAgentCopy from './ai-agent-copy.json'
 import './ai.styl'
@@ -105,6 +104,19 @@ export default function AIChat (props) {
     )
   }
 
+  function renderContextChips () {
+    const chips = ['终端', '选中', '文件', '联网', 'MCP', 'CLI']
+    return (
+      <Flex className='ai-context-chips' wrap='wrap' gap={6}>
+        {
+          chips.map(chip => (
+            <span key={chip} className='ai-context-chip'>{chip}</span>
+          ))
+        }
+      </Flex>
+    )
+  }
+
   function renderSendIcon () {
     if (submitDisabled) {
       return (
@@ -155,7 +167,8 @@ export default function AIChat (props) {
         {renderHistory()}
       </Flex>
 
-      <Flex className='ai-chat-input'>
+      <Flex vertical className='ai-chat-input'>
+        {renderContextChips()}
         <TextArea
           value={prompt}
           onChange={handlePromptChange}
@@ -188,9 +201,7 @@ export default function AIChat (props) {
                 title={aiAgentCopy.clearHistoryTitle}
               />
             </Popconfirm>
-            <HelpIcon
-              link={aiConfigWikiLink}
-            />
+            <span className='ai-help-link' onClick={() => window.open(aiConfigWikiLink)}>帮助</span>
           </Flex>
           {renderSendIcon()}
         </Flex>

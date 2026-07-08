@@ -19,7 +19,8 @@ export default memo(function RightSidePanel (
     rightPanelWidth,
     children,
     title,
-    rightPanelTab
+    rightPanelTab,
+    config = {}
   }
 ) {
   const panelRef = useRef(null)
@@ -27,8 +28,9 @@ export default memo(function RightSidePanel (
   if (!rightPanelVisible) {
     return null
   }
-  const tag = rightPanelTab === 'ai'
-    ? <Tag className='mg1r'>AI</Tag>
+  const isAI = rightPanelTab === 'ai'
+  const tag = isAI
+    ? <Tag className='mg1r aigshell-ai-tag'>AI</Tag>
     : <InfoCircleOutlined className='mg1r' />
 
   function onDragEnd (nw) {
@@ -74,15 +76,27 @@ export default memo(function RightSidePanel (
       {...panelProps}
     >
       <DragHandle {...dragProps} />
-      <Flex
-        className='right-panel-title pd2'
-        justify='space-between'
-        align='center'
-      >
-        <Typography.Text level={4} ellipsis style={{ margin: 0, flex: 1 }}>
-          {tag} {title}
-        </Typography.Text>
+      <Flex className='right-panel-title pd2' justify='space-between' align='center'>
+        <div className='right-panel-title-main'>
+          <Typography.Text className='right-panel-title-text' ellipsis>
+            {tag} {isAI ? 'AI 助手' : title}
+          </Typography.Text>
+          {
+            isAI
+              ? (
+                <div className='right-panel-subtitle'>
+                  {config.nameAI || title || '自定义模型'} / {config.modelAI || '未配置模型'}
+                </div>
+                )
+              : null
+          }
+        </div>
         <Flex>
+          {
+            isAI
+              ? <Tag className='right-panel-online'>在线</Tag>
+              : null
+          }
           <PushpinOutlined
             {...pinProps}
           />

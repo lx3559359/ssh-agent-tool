@@ -1,36 +1,64 @@
 .right-side-panel
   position absolute
   right 0
-  top 36px
+  top 44px
   bottom 0
   z-index 200
-  background var(--main)
-  color var(--text)
-  border-left 1px solid var(--main-darker)
+  background #f8fafc
+  color #1f2937
+  border-left 1px solid #dfe3ea
   &.right-side-panel-pinned
-    top 0
+    top 44px
 
   .drag-handle
     left 0
     right auto
     display block
 .right-panel-title
-  border-bottom 1px solid var(--main-darker)
+  min-height 52px
+  border-bottom 1px solid #dfe3ea
+  background #f8fafc
+.right-panel-title-main
+  min-width 0
+  flex 1
+.right-panel-title-text
+  display block
+  color #111827
+  font-size 15px
+  font-weight 650
+.right-panel-subtitle
+  margin-top 2px
+  color #64748b
+  font-size 12px
+  white-space nowrap
+  overflow hidden
+  text-overflow ellipsis
+.aigshell-ai-tag
+  margin-right 6px
+  border-color #bfdbfe
+  color #2563eb
+  background #eff6ff
+.right-panel-online
+  height 24px
+  line-height 22px
+  border-color #bbf7d0
+  color #16a34a
+  background #f0fdf4
 .right-side-panel-controls
-  color var(--text)
-  font-size 16px
+  color #4b5563
+  font-size 15px
   &:hover
-    color var(--success)
+    color #2563eb
     cursor pointer
   &.right-side-panel-pin
     &.pinned
-      color var(--success)
+      color #22c55e
 .right-side-panel-content
   padding 10px
   overflow-y scroll
   position absolute
   left 0
-  top 55px
+  top 53px
   right 0
   bottom 0
 .animate-fast

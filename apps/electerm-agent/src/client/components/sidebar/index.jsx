@@ -140,7 +140,7 @@ export default function Sidebar (props) {
           <MenuBtn store={store} config={store.config} />
         </div>
         <SideIcon
-          title={e('newBookmark')}
+          title='新建连接'
         >
           <PlusCircleOutlined
             className='font22 iblock control-icon'
@@ -152,14 +152,14 @@ export default function Sidebar (props) {
           trigger='click'
           placement='right'
         >
-          <div className='control-icon-wrap' title={e('quickConnect')}>
+          <div className='control-icon-wrap' title='快速连接'>
             <ThunderboltOutlined
               className='font20 iblock control-icon'
             />
           </div>
         </Popover>
         <SideIcon
-          title={e(settingMap.bookmarks)}
+          title='服务器'
           active={bookmarksActive}
         >
           <BookOutlined
@@ -169,7 +169,7 @@ export default function Sidebar (props) {
         </SideIcon>
         <TransferList {...transferProps} />
         <SideIcon
-          title={e(settingMap.terminalThemes)}
+          title='主题'
           active={themeActive}
         >
           <PictureOutlined
@@ -178,13 +178,13 @@ export default function Sidebar (props) {
           />
         </SideIcon>
         <SideIcon
-          title={e(settingMap.setting)}
+          title='设置'
           active={settingActive}
         >
           <SettingOutlined className='iblock font20 control-icon' onClick={openSetting} />
         </SideIcon>
         <SideIcon
-          title={e('settingSync')}
+          title='备份与同步'
           active={syncActive}
         >
           <CloudSyncOutlined
@@ -194,14 +194,14 @@ export default function Sidebar (props) {
           />
         </SideIcon>
         <SideIcon
-          title={e('widgets')}
+          title='工具'
           active={widgetsActive}
         >
           <AppstoreOutlined className='iblock font20 control-icon' onClick={openWidgetsModal} />
         </SideIcon>
 
         <SideIcon
-          title={e('about')}
+          title='关于'
           active={showInfoModal}
         >
           <InfoCircleOutlined

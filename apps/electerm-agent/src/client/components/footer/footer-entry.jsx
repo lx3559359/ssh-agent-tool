@@ -85,6 +85,27 @@ export default auto(function FooterEntry (props) {
     )
   }
 
+  function renderConnectionStatus () {
+    const tab = props.store.currentTab || {}
+    const connected = tab.status === statusMap.success
+    const userHost = [
+      tab.username,
+      tab.host
+    ].filter(Boolean).join('@')
+    return (
+      <div className='terminal-footer-unit terminal-footer-status'>
+        <span className={'terminal-footer-dot ' + (connected ? 'online' : '')} />
+        <span>{connected ? 'SSH 已连接' : 'SSH 未连接'}</span>
+        {
+          userHost
+            ? <span className='terminal-footer-muted'>{userHost}</span>
+            : null
+        }
+        <span className='terminal-footer-muted'>日志正常</span>
+      </div>
+    )
+  }
+
   function renderEncodingInfo () {
     const selectProps = {
       style: {
@@ -166,6 +187,7 @@ export default auto(function FooterEntry (props) {
   return (
     <div {...sideProps}>
       <div className='terminal-footer-flex'>
+        {renderConnectionStatus()}
         {renderAIIcon()}
         {renderCmdHistory()}
         {renderQuickCommands()}

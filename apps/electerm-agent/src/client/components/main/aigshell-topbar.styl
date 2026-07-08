@@ -1,0 +1,79 @@
+.aigshell-topbar
+  position absolute
+  left 0
+  right 0
+  top 0
+  height 44px
+  z-index 260
+  display flex
+  align-items center
+  justify-content space-between
+  padding 0 14px
+  background #f7f8fa
+  border-bottom 1px solid #dfe3ea
+  color #1f2937
+  -webkit-app-region drag
+
+.aigshell-topbar-brand
+  display flex
+  align-items center
+  gap 10px
+  min-width 0
+  height 100%
+  font-size 13px
+  img
+    width 24px
+    height 24px
+    border-radius 5px
+    flex none
+
+.aigshell-topbar-name
+  font-weight 650
+  color #111827
+  white-space nowrap
+
+.aigshell-topbar-separator
+  width 1px
+  height 18px
+  background #c9ced8
+  flex none
+
+.aigshell-topbar-current
+  max-width 260px
+  overflow hidden
+  text-overflow ellipsis
+  white-space nowrap
+  color #374151
+  font-weight 500
+
+.aigshell-topbar-dot
+  width 7px
+  height 7px
+  border-radius 50%
+  background #aeb6c2
+  flex none
+  &.online
+    background #22c55e
+    box-shadow 0 0 0 3px rgba(34, 197, 94, .12)
+
+.aigshell-topbar-actions
+  display flex
+  align-items center
+  gap 6px
+  height 100%
+  -webkit-app-region no-drag
+
+.aigshell-topbar-action-wrap
+  display inline-flex
+  align-items center
+
+.aigshell-topbar-action
+  height 30px
+  padding 0 10px
+  color #1f2937
+  border-radius 6px
+  font-size 13px
+  font-weight 500
+  &:hover
+    color #2563eb !important
+    background #e8f0ff !important

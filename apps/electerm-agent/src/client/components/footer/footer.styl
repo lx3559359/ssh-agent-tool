@@ -1,11 +1,13 @@
 .main-footer
-  background var(--main)
+  background #f7f8fa
   height 36px
   position absolute
   left 44px
   right 0
   bottom 0
   z-index 200
+  border-top 1px solid #dfe3ea
+  color #374151
 .pinned
   .main-footer
   .qm-wrap-tooltip
@@ -13,11 +15,14 @@
 
 .terminal-footer-flex
   display flex
+  align-items center
+  height 100%
   .terminal-footer-unit .ant-select-selector .ant-select-selection-placeholder
     line-height 24px
 .terminal-footer-unit
   margin-left 10px
-  line-height 39px
+  line-height 34px
+  font-size 12px
   textarea.ant-input
     min-height 26px
     height 26px
@@ -30,7 +35,7 @@
   flex-grow 1
 .terminal-footer-info
   margin-right 10px
-  line-height 39px
+  line-height 34px
 .terminal-footer-history
   display flex
   align-items center
@@ -38,6 +43,21 @@
   // Q is now an icon-only button (5px internal padding); reduce left
   // margin so the history icon stays roughly equidistant from AI and Q
   margin-left 3px
+.terminal-footer-status
+  display flex
+  align-items center
+  gap 8px
+  min-width 260px
+  white-space nowrap
+.terminal-footer-muted
+  color #64748b
+.terminal-footer-dot
+  width 8px
+  height 8px
+  border-radius 50%
+  background #aeb6c2
+  &.online
+    background #22c55e
 .batch-input-outer
   .bi-full
     display none

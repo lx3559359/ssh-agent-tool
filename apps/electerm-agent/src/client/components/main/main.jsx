@@ -29,6 +29,7 @@ import SshConfigLoadNotify from '../ssh-config/ssh-config-load-notify'
 import LoadSshConfigs from '../ssh-config/load-ssh-configs'
 import AIChat from '../ai/ai-chat-entry'
 import AIConfigModal from '../ai/ai-config-modal'
+import AIGShellTopBar from './aigshell-topbar'
 import Opacity from '../common/opacity'
 import MoveItemModal from '../tree-list/move-item-modal'
 import InputContextMenu from '../common/input-context-menu'
@@ -200,7 +201,8 @@ export default auto(function Index (props) {
     rightPanelPinned: store.rightPanelPinned,
     rightPanelWidth: store.rightPanelWidth,
     title: rightPanelTitle,
-    rightPanelTab
+    rightPanelTab,
+    config
   }
   const terminalInfoProps = {
     rightPanelTab,
@@ -270,6 +272,7 @@ export default auto(function Index (props) {
         <div
           id='outside-context'
         >
+          <AIGShellTopBar store={store} />
           <Sidebar {...sidebarProps} />
           <Layout
             store={store}
