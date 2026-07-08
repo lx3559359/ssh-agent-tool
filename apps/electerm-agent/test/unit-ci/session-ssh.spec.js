@@ -979,6 +979,99 @@ describe('session-ssh auth flows', () => {
     }
   })
 
+  test('passes vim top htop interactive program input and alternate screen frames', async () => {
+    let received = ''
+    let resolveInput
+    const inputSeen = new Promise(resolve => {
+      resolveInput = resolve
+    })
+    const server = await startServer(passwordOnlyAuth(), {
+      onShell (stream) {
+        stream.write('interactive apps ready\r\n')
+        stream.on('data', (chunk) => {
+          received += chunk.toString('utf8')
+
+          if (received.includes('top\r')) {
+            stream.write('\x1b[?1049hTOP frame cpu=12% load=0.42\r\n')
+          }
+          if (received.includes('htop\r')) {
+            stream.write('HTOP frame pid=123 sshd\r\n')
+          }
+          if (received.includes('vim /tmp/app.log\r')) {
+            stream.write('VIM frame INSERT app.log\r\n')
+          }
+          if (
+            received.includes('top\r') &&
+            received.includes('htop\r') &&
+            received.includes('vim /tmp/app.log\r') &&
+            received.includes('\x03') &&
+            received.includes('\x1b:q\r')
+          ) {
+            stream.write('\x1b[?1049lINTERACTIVE_PROGRAMS_DONE\r\n')
+            resolveInput()
+          }
+        })
+      }
+    })
+
+    let term
+    try {
+      term = await session({
+        host: '127.0.0.1',
+        port: server.port,
+        username: USERNAME,
+        password: PASSWORD,
+        useSshAgent: false,
+        readyTimeout: 5000
+      }, createPromptWs(() => {
+        throw new Error('password shell login should not prompt')
+      }))
+
+      let output = ''
+      const outputSeen = new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          reject(new Error(`Timed out waiting for interactive program frames. Output: ${JSON.stringify(output)}`))
+        }, 3000)
+        term.on('data', (chunk) => {
+          output += chunk.toString('utf8')
+          if (output.includes('INTERACTIVE_PROGRAMS_DONE')) {
+            clearTimeout(timer)
+            resolve()
+          }
+        })
+      })
+
+      term.write('top\r')
+      term.write('\x03')
+      term.write('htop\r')
+      term.write('\x03')
+      term.write('vim /tmp/app.log\r')
+      term.write('\x1b')
+      term.write(':q\r')
+
+      await Promise.race([
+        Promise.all([inputSeen, outputSeen]),
+        delay(4000).then(() => {
+          throw new Error(`Timed out waiting for interactive commands. Received: ${JSON.stringify(received)}`)
+        })
+      ])
+
+      assert.match(received, /top\r/)
+      assert.match(received, /htop\r/)
+      assert.match(received, /vim \/tmp\/app\.log\r/)
+      assert.equal(received.includes('\x03'), true)
+      assert.equal(received.includes('\x1b:q\r'), true)
+      assert.ok(output.includes('\x1b[?1049h'))
+      assert.ok(output.includes('\x1b[?1049l'))
+      assert.match(output, /TOP frame/)
+      assert.match(output, /HTOP frame/)
+      assert.match(output, /VIM frame/)
+    } finally {
+      term && term.kill()
+      await server.close()
+    }
+  })
+
   test('streams long command output and terminal UI frames over the ssh channel', async () => {
     const expectedLines = 1500
     const server = await startServer(passwordOnlyAuth(), {
