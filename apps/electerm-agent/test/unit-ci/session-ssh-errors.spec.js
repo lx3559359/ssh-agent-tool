@@ -93,6 +93,25 @@ describe('session-ssh connection error diagnostics', () => {
     assert.match(normalized.message, /原始错误：read ECONNRESET/)
   })
 
+  test('adds a chinese diagnosis for unreachable proxy hosts', () => {
+    const error = new Error('connect EHOSTUNREACH 10.0.0.10:1080')
+    error.code = 'EHOSTUNREACH'
+
+    const normalized = normalizeSshConnectionError(error, {
+      host: '10.0.1.23',
+      port: 22,
+      username: 'root',
+      proxy: 'socks5://10.0.0.10:1080'
+    })
+
+    assert.match(normalized.message, /SSH 代理连接失败/)
+    assert.match(normalized.message, /root@10\.0\.1\.23:22/)
+    assert.match(normalized.message, /socks5:\/\/10\.0\.0\.10:1080/)
+    assert.match(normalized.message, /代理地址/)
+    assert.doesNotMatch(normalized.message, /SSH 网络不可达/)
+    assert.match(normalized.message, /原始错误：connect EHOSTUNREACH/)
+  })
+
   test('keeps target ssh port refusals distinct from proxy failures', () => {
     const error = new Error('connect ECONNREFUSED 10.0.1.23:22')
     error.code = 'ECONNREFUSED'

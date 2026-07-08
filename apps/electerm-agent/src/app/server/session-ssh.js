@@ -63,7 +63,10 @@ function isProxyConnectionError (message, code, proxy) {
     code === 'EAI_AGAIN' ||
     code === 'ETIMEDOUT' ||
     code === 'ECONNRESET' ||
-    /ECONNREFUSED|connection refused|ENOTFOUND|EAI_AGAIN|ECONNRESET|connection reset|timed? ?out/i.test(message)
+    code === 'EHOSTUNREACH' ||
+    code === 'ENETUNREACH' ||
+    code === 'EHOSTDOWN' ||
+    /ECONNREFUSED|connection refused|ENOTFOUND|EAI_AGAIN|ECONNRESET|connection reset|EHOSTUNREACH|ENETUNREACH|EHOSTDOWN|no route to host|network is unreachable|host is down|timed? ?out/i.test(message)
   )) {
     return false
   }
