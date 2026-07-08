@@ -101,6 +101,14 @@ const TYPE_DEFAULT_VALUES = {
   local: {}
 }
 
+function safeDecodeURIValue (value) {
+  try {
+    return decodeURIComponent(value)
+  } catch (_) {
+    return value
+  }
+}
+
 /**
  * Parse a quick connect string into connection options
  * @param {string} str - The connection string
@@ -202,10 +210,10 @@ function parseQuickConnect (str) {
       const hostPart = connectionString.slice(atIndex + 1)
       const colonIndex = authPart.indexOf(':')
       if (colonIndex !== -1) {
-        username = authPart.slice(0, colonIndex)
-        password = authPart.slice(colonIndex + 1)
+        username = safeDecodeURIValue(authPart.slice(0, colonIndex))
+        password = safeDecodeURIValue(authPart.slice(colonIndex + 1))
       } else {
-        username = authPart
+        username = safeDecodeURIValue(authPart)
       }
       // Parse host:port from hostPart
       const hostColonIndex = hostPart.lastIndexOf(':')
