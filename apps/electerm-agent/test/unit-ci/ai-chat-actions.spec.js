@@ -92,3 +92,25 @@ test('AI chat actions clear conversation context from the store', async () => {
 
   assert.deepEqual(store.aiChatHistory, [])
 })
+
+test('AI chat actions resolve the latest stream session id from store history', async () => {
+  const {
+    getAIChatStreamSessionId
+  } = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/components/ai/ai-chat-actions.js')))
+
+  const item = {
+    id: 'chat-1',
+    sessionId: null
+  }
+  const store = {
+    aiChatHistory: [
+      {
+        id: 'chat-1',
+        sessionId: 'stream-current'
+      }
+    ]
+  }
+
+  assert.equal(getAIChatStreamSessionId(item, store), 'stream-current')
+  assert.equal(getAIChatStreamSessionId({ id: 'chat-2', sessionId: 'stream-original' }, store), 'stream-original')
+})

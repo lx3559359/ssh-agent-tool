@@ -40,3 +40,8 @@ export function clearAIChatContext (store) {
   }
   store.aiChatHistory = []
 }
+
+export function getAIChatStreamSessionId (item = {}, store) {
+  const latest = store?.aiChatHistory?.find(chat => chat.id === item.id)
+  return latest?.sessionId || item.sessionId || ''
+}

@@ -20,7 +20,8 @@ import uid from '../../common/uid'
 import {
   buildAIChatRole,
   createRetryChatEntry,
-  getAIChatCopyText
+  getAIChatCopyText,
+  getAIChatStreamSessionId
 } from './ai-chat-actions'
 
 export default function AIChatHistoryItem ({ item }) {
@@ -29,7 +30,6 @@ export default function AIChatHistoryItem ({ item }) {
   const abortRef = useRef(false)
   const {
     prompt,
-    sessionId,
     nameAI,
     modelAI,
     roleAI,
@@ -158,10 +158,11 @@ export default function AIChatHistoryItem ({ item }) {
       setIsStreaming(false)
       return
     }
-    if (!sessionId) return
+    const activeSessionId = getAIChatStreamSessionId(item, window.store)
+    if (!activeSessionId) return
 
     try {
-      await window.pre.runGlobalAsync('stopStream', sessionId)
+      await window.pre.runGlobalAsync('stopStream', activeSessionId)
       setIsStreaming(false)
     } catch (error) {
       console.error('Error stopping stream:', error)
