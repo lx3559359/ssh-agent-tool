@@ -11,6 +11,8 @@ const SECRET_PATTERNS = [
   /((?:api[-_ ]?key|apikey|apiKeyAI|token|secret|password|passphrase)\s*[:=]\s*["']?)[^"'\r\n]+/ig
 ]
 
+const PRIVATE_KEY_BLOCK_PATTERN = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g
+
 function escapeRegExp (value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
@@ -32,6 +34,7 @@ function redactPath (text, value) {
 
 function redactDiagnosticText (text, options = {}) {
   let next = String(text || '')
+  next = next.replace(PRIVATE_KEY_BLOCK_PATTERN, REDACTED)
   for (const pattern of SECRET_PATTERNS) {
     next = next.replace(pattern, `$1${REDACTED}`)
   }

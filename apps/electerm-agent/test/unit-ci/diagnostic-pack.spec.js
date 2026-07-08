@@ -30,6 +30,25 @@ test('redacts secrets and local user paths from diagnostic text', () => {
   assert.match(redacted, /\[已脱敏\]/)
 })
 
+test('redacts ssh private key blocks from diagnostic text', () => {
+  const text = [
+    'loading key',
+    '-----BEGIN OPENSSH PRIVATE KEY-----',
+    'b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQ==',
+    '-----END OPENSSH PRIVATE KEY-----',
+    'done'
+  ].join('\n')
+
+  const redacted = redactDiagnosticText(text)
+
+  assert.equal(redacted.includes('b3BlbnNzaC1rZXktdjE'), false)
+  assert.equal(redacted.includes('BEGIN OPENSSH PRIVATE KEY'), false)
+  assert.equal(redacted.includes('END OPENSSH PRIVATE KEY'), false)
+  assert.match(redacted, /\[已脱敏\]/)
+  assert.match(redacted, /loading key/)
+  assert.match(redacted, /done/)
+})
+
 test('builds a diagnostic report with safe metadata and truncated logs', () => {
   const report = buildDiagnosticReport({
     now: '2026-07-08T00:00:00.000Z',
