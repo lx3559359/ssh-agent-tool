@@ -119,6 +119,12 @@ function isBracketedHostShortcut (input) {
   return /^(?:[\w.-]+@)?\[[^\]]+\](?::\d+)?$/.test(input)
 }
 
+function isUnbracketedIPv6Host (host) {
+  const value = String(host || '')
+  const colonCount = (value.match(/:/g) || []).length
+  return !value.startsWith('[') && colonCount >= 2 && /^[0-9a-fA-F:.]+$/.test(value)
+}
+
 /**
  * Parse a quick connect string into connection options
  * @param {string} str - The connection string
@@ -231,7 +237,9 @@ function parseQuickConnect (str) {
       }
       // Parse host:port from hostPart
       const hostColonIndex = hostPart.lastIndexOf(':')
-      if (hostColonIndex !== -1) {
+      if (isUnbracketedIPv6Host(hostPart)) {
+        hostOrPath = hostPart
+      } else if (hostColonIndex !== -1) {
         hostOrPath = hostPart.slice(0, hostColonIndex)
         port = hostPart.slice(hostColonIndex + 1)
       } else {
@@ -314,7 +322,9 @@ function parseQuickConnect (str) {
       } else {
         // Normal case - just host:port
         const hostColonIndex = connectionString.lastIndexOf(':')
-        if (hostColonIndex !== -1) {
+        if (isUnbracketedIPv6Host(connectionString)) {
+          hostOrPath = connectionString
+        } else if (hostColonIndex !== -1) {
           // Make sure it's a port number (all digits)
           const potentialPort = connectionString.slice(hostColonIndex + 1)
           if (/^\d+$/.test(potentialPort)) {
