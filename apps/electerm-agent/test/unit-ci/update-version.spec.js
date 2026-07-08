@@ -87,6 +87,28 @@ test('recognizes Windows update assets for prerelease versions', async () => {
   )
 })
 
+test('recognizes Windows update assets for Windows ARM64 builds', async () => {
+  const {
+    getReleaseUpdate,
+    hasWindowsUpdateAssets
+  } = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/common/update-version.js')))
+
+  const armRelease = {
+    tag_name: 'v3.15.106',
+    assets: [
+      { name: 'AIGShell-3.15.106-win-arm64-installer.exe' },
+      { name: 'AIGShell-3.15.106-win-arm64-installer.exe.blockmap' },
+      { name: 'latest.yml' }
+    ]
+  }
+
+  assert.equal(hasWindowsUpdateAssets(armRelease, '3.15.106', { arch: 'arm64' }), true)
+  assert.deepEqual(
+    getReleaseUpdate(armRelease, '3.15.105', { requireWindowsAssets: true, arch: 'arm64' }),
+    { tag_name: 'v3.15.106' }
+  )
+})
+
 test('classifies release check results for actionable update messages', async () => {
   const {
     getReleaseUpdateStatus

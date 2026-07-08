@@ -88,6 +88,35 @@ test('selects the Windows installer asset for AIGShell prerelease builds', () =>
   )
 })
 
+test('selects the Windows ARM64 installer asset on Windows ARM devices', () => {
+  const release = {
+    assets: [
+      {
+        name: 'AIGShell-3.15.106-win-x64-installer.exe',
+        browser_download_url: 'https://example.com/installer-x64.exe'
+      },
+      {
+        name: 'AIGShell-3.15.106-win-arm64-installer.exe',
+        browser_download_url: 'https://example.com/installer-arm64.exe'
+      },
+      {
+        name: 'AIGShell-3.15.106-win-arm64-installer.exe.blockmap',
+        browser_download_url: 'https://example.com/installer-arm64.exe.blockmap'
+      }
+    ]
+  }
+
+  assert.deepEqual(
+    selectReleaseAsset(release, {
+      isWin: true,
+      isMac: false,
+      isArm: true,
+      installSrc: 'win-arm64.tar.gz'
+    }),
+    release.assets[1]
+  )
+})
+
 test('keeps legacy asset selection as a fallback', () => {
   const release = {
     assets: [

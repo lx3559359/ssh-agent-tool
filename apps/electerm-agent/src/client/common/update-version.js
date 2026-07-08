@@ -77,13 +77,17 @@ export function compareVersions (left, right) {
   return 0
 }
 
-export function hasWindowsUpdateAssets (release, version) {
+function getWindowsUpdateArch (options = {}) {
+  return options.arch === 'arm64' ? 'arm64' : 'x64'
+}
+
+export function hasWindowsUpdateAssets (release, version, options = {}) {
   const clean = cleanVersion(version || release?.tag_name)
   if (!clean) {
     return false
   }
   const names = new Set((release?.assets || []).map(asset => asset.name))
-  const installer = `AIGShell-${clean}-win-x64-installer.exe`
+  const installer = `AIGShell-${clean}-win-${getWindowsUpdateArch(options)}-installer.exe`
   return names.has(installer) &&
     names.has(`${installer}.blockmap`) &&
     names.has('latest.yml')
@@ -97,7 +101,7 @@ export function getReleaseUpdate (release, currentVersion, options = {}) {
   if (compareVersions(tagName, currentVersion) <= 0) {
     return undefined
   }
-  if (options.requireWindowsAssets && !hasWindowsUpdateAssets(release, tagName)) {
+  if (options.requireWindowsAssets && !hasWindowsUpdateAssets(release, tagName, options)) {
     return undefined
   }
   return {
@@ -119,7 +123,7 @@ export function getReleaseUpdateStatus (release, currentVersion, options = {}) {
       message: '当前已经是最新版本。'
     }
   }
-  if (options.requireWindowsAssets && !hasWindowsUpdateAssets(release, tagName)) {
+  if (options.requireWindowsAssets && !hasWindowsUpdateAssets(release, tagName, options)) {
     return {
       status: 'manualDownloadRequired',
       tag_name: tagName,

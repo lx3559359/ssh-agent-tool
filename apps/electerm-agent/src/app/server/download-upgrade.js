@@ -65,9 +65,9 @@ function selectReleaseAsset (release, platformInfo = {}) {
   const candidates = []
 
   if (win) {
+    const winArch = arm ? 'arm64' : 'x64'
     candidates.push(
-      r => /AIGShell-\d+\.\d+\.\d+-win-x64-installer\.exe$/i.test(r.name),
-      r => /win-x64-installer\.exe$/i.test(r.name)
+      r => new RegExp(`win-${winArch}-installer\\.exe$`, 'i').test(r.name)
     )
   } else if (mac || arm) {
     candidates.push(

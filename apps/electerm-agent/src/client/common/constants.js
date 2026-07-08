@@ -81,6 +81,7 @@ export const footerHeight = 36
 export const quickCommandBoxHeight = 180
 export const isWin = typeof window.et.isWin === 'undefined' ? window.pre.isWin : window.et.isWin
 export const isMac = typeof window.et.isMac === 'undefined' ? window.pre.isMac : window.et.isMac
+export const isArm = typeof window.et.isArm === 'undefined' ? window.pre.isArm : window.et.isArm
 export const isMacJs = /Macintosh|Mac|Mac OS|MacIntel|MacPPC|Mac68K/gi.test(window.navigator.userAgent)
 export const ctrlOrCmd = isMacJs ? 'cmd' : 'ctrl'
 export const typeMap = buildConst([

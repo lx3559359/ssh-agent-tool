@@ -4,6 +4,7 @@
 
 import fetch from './fetch-from-server'
 import {
+  isArm,
   packInfo
 } from './constants'
 import dayjs from 'dayjs'
@@ -45,6 +46,7 @@ function getInfo (url) {
 export async function getLatestReleaseVersion (n) {
   const release = await getInfo(releaseApiUrl)
   return getReleaseUpdate(release, packInfo.version, {
+    arch: isArm ? 'arm64' : 'x64',
     requireWindowsAssets: true
   })
 }
@@ -52,6 +54,7 @@ export async function getLatestReleaseVersion (n) {
 export async function getLatestReleaseStatus () {
   const release = await getInfo(releaseApiUrl)
   return getReleaseUpdateStatus(release, packInfo.version, {
+    arch: isArm ? 'arm64' : 'x64',
     requireWindowsAssets: true
   })
 }
