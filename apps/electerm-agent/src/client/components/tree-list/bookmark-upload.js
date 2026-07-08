@@ -9,7 +9,7 @@ import uid from '../../common/uid'
 import time from '../../common/time'
 import { fixBookmarks } from '../../common/db-fix'
 import delay from '../../common/wait'
-import { parseBookmarkBackup } from '../../common/bookmark-backup'
+import { parseBookmarkBackupForImport } from '../../common/bookmark-backup'
 import message from '../common/message'
 import { runBookmarkUploadWithWatchers } from './bookmark-upload-guard'
 
@@ -32,7 +32,9 @@ export const bookmarkUpload = action(async (file) => {
     ? file.fileContent
     : await window.fs.readFile(file.filePath)
 
-  const content = parseBookmarkBackup(txt)
+  const content = await parseBookmarkBackupForImport(txt, {
+    requestPassphrase: async () => window.prompt('请输入备份加密密码')
+  })
   let bookmarkGroups1 = content.bookmarkGroups || []
   const bookmarks1 = fixBookmarksId(content.bookmarks || [])
   if (!bookmarkGroups1.length && bookmarks1.length) {

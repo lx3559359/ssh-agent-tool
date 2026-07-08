@@ -2,6 +2,15 @@ import copy from 'json-deep-copy'
 
 export const bookmarkBackupFormat = 'AIGShell.bookmarks.backup'
 export const bookmarkBackupFormatVersion = 1
+export const encryptedBookmarkBackupFormat = 'AIGShell.bookmarks.encrypted-backup'
+export const encryptedBookmarkBackupFormatVersion = 1
+
+const encryptedBackupIterations = 210000
+const encryptedBackupNeedsPassphraseError = '备份文件已加密，请使用加密导入入口并输入密码'
+const missingBackupPassphraseError = '请输入备份加密密码'
+const invalidEncryptedBackupError = '加密备份文件格式不正确'
+const decryptFailedError = '备份解密失败，请检查密码是否正确'
+const cryptoUnavailableError = '当前环境不支持安全加密备份'
 
 const credentialKeys = new Set([
   'password',
@@ -205,12 +214,198 @@ function isBackupGroupList (items) {
   })
 }
 
-export function parseBookmarkBackup (text) {
-  let content
+function parseBackupJson (text) {
   try {
-    content = typeof text === 'string' ? JSON.parse(text.replace(/^\uFEFF/, '')) : text
+    return typeof text === 'string' ? JSON.parse(text.replace(/^\uFEFF/, '')) : text
   } catch (_) {
     throw new Error(invalidJsonError)
+  }
+}
+
+function getWebCrypto () {
+  const cryptoApi = globalThis.crypto
+  if (!cryptoApi?.subtle || !cryptoApi?.getRandomValues) {
+    throw new Error(cryptoUnavailableError)
+  }
+  return cryptoApi
+}
+
+function textToBytes (value) {
+  return new TextEncoder().encode(value)
+}
+
+function bytesToText (value) {
+  return new TextDecoder().decode(value)
+}
+
+function bytesToBase64 (bytes) {
+  if (typeof Buffer !== 'undefined') {
+    return Buffer.from(bytes).toString('base64')
+  }
+  let binary = ''
+  const chunkSize = 0x8000
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.slice(index, index + chunkSize))
+  }
+  return btoa(binary)
+}
+
+function base64ToBytes (value) {
+  if (typeof Buffer !== 'undefined') {
+    return new Uint8Array(Buffer.from(value, 'base64'))
+  }
+  const binary = atob(value)
+  const bytes = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index++) {
+    bytes[index] = binary.charCodeAt(index)
+  }
+  return bytes
+}
+
+async function deriveBackupKey ({
+  passphrase,
+  salt,
+  iterations
+}) {
+  const cryptoApi = getWebCrypto()
+  const keyMaterial = await cryptoApi.subtle.importKey(
+    'raw',
+    textToBytes(passphrase),
+    'PBKDF2',
+    false,
+    ['deriveKey']
+  )
+  return cryptoApi.subtle.deriveKey(
+    {
+      name: 'PBKDF2',
+      salt,
+      iterations,
+      hash: 'SHA-256'
+    },
+    keyMaterial,
+    {
+      name: 'AES-GCM',
+      length: 256
+    },
+    false,
+    ['encrypt', 'decrypt']
+  )
+}
+
+function assertBackupPassphrase (passphrase) {
+  if (typeof passphrase !== 'string' || !passphrase.trim()) {
+    throw new Error(missingBackupPassphraseError)
+  }
+}
+
+export async function createEncryptedBookmarkBackup ({
+  passphrase,
+  ...backupOptions
+} = {}) {
+  assertBackupPassphrase(passphrase)
+  const cryptoApi = getWebCrypto()
+  const backup = createBookmarkBackup(backupOptions)
+  const salt = cryptoApi.getRandomValues(new Uint8Array(16))
+  const iv = cryptoApi.getRandomValues(new Uint8Array(12))
+  const key = await deriveBackupKey({
+    passphrase,
+    salt,
+    iterations: encryptedBackupIterations
+  })
+  const ciphertext = await cryptoApi.subtle.encrypt(
+    {
+      name: 'AES-GCM',
+      iv
+    },
+    key,
+    textToBytes(JSON.stringify(backup))
+  )
+  return {
+    format: encryptedBookmarkBackupFormat,
+    formatVersion: encryptedBookmarkBackupFormatVersion,
+    app: backup.app,
+    exportedAt: backup.exportedAt,
+    encryption: {
+      algorithm: 'AES-GCM',
+      kdf: 'PBKDF2-SHA256',
+      iterations: encryptedBackupIterations,
+      salt: bytesToBase64(salt),
+      iv: bytesToBase64(iv)
+    },
+    ciphertext: bytesToBase64(new Uint8Array(ciphertext))
+  }
+}
+
+function isEncryptedBackupContent (content) {
+  return content?.format === encryptedBookmarkBackupFormat
+}
+
+export function isEncryptedBookmarkBackup (text) {
+  try {
+    return isEncryptedBackupContent(parseBackupJson(text))
+  } catch (_) {
+    return false
+  }
+}
+
+export async function parseEncryptedBookmarkBackup (text, {
+  passphrase
+} = {}) {
+  assertBackupPassphrase(passphrase)
+  const content = parseBackupJson(text)
+  if (!isEncryptedBackupContent(content)) {
+    return parseBookmarkBackup(content)
+  }
+  if ((content.formatVersion || 1) > encryptedBookmarkBackupFormatVersion) {
+    throw new Error(unsupportedBookmarkBackupVersionError)
+  }
+  const { encryption, ciphertext } = content
+  if (
+    encryption?.algorithm !== 'AES-GCM' ||
+    encryption?.kdf !== 'PBKDF2-SHA256' ||
+    typeof encryption?.salt !== 'string' ||
+    typeof encryption?.iv !== 'string' ||
+    typeof encryption?.iterations !== 'number' ||
+    typeof ciphertext !== 'string'
+  ) {
+    throw new Error(invalidEncryptedBackupError)
+  }
+  try {
+    const key = await deriveBackupKey({
+      passphrase,
+      salt: base64ToBytes(encryption.salt),
+      iterations: encryption.iterations
+    })
+    const plaintext = await getWebCrypto().subtle.decrypt(
+      {
+        name: 'AES-GCM',
+        iv: base64ToBytes(encryption.iv)
+      },
+      key,
+      base64ToBytes(ciphertext)
+    )
+    return parseBookmarkBackup(bytesToText(plaintext))
+  } catch (_) {
+    throw new Error(decryptFailedError)
+  }
+}
+
+export async function parseBookmarkBackupForImport (text, {
+  requestPassphrase
+} = {}) {
+  const content = parseBackupJson(text)
+  if (!isEncryptedBackupContent(content)) {
+    return parseBookmarkBackup(content)
+  }
+  const passphrase = await requestPassphrase?.()
+  return parseEncryptedBookmarkBackup(content, { passphrase })
+}
+
+export function parseBookmarkBackup (text) {
+  const content = parseBackupJson(text)
+
+  if (isEncryptedBackupContent(content)) {
+    throw new Error(encryptedBackupNeedsPassphraseError)
   }
 
   if (Array.isArray(content)) {

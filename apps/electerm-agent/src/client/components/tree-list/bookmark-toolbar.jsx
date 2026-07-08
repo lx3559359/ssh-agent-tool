@@ -12,7 +12,10 @@ import time from '../../common/time'
 import download from '../../common/download'
 import Upload from '../common/upload'
 import { beforeBookmarkUpload } from './bookmark-upload'
-import { createBookmarkBackup } from '../../common/bookmark-backup'
+import {
+  createBookmarkBackup,
+  createEncryptedBookmarkBackup
+} from '../../common/bookmark-backup'
 import { packInfo } from '../../common/constants'
 
 const e = window.translate
@@ -47,6 +50,21 @@ export default function BookmarkToolbar (props) {
     const txt = JSON.stringify(backup, null, 2)
     const stamp = time(undefined, 'YYYY-MM-DD-HH-mm-ss')
     download('aigshell-bookmarks-no-credentials-' + stamp + '.json', txt)
+  }
+  const handleDownloadEncrypted = async () => {
+    const passphrase = window.prompt('请输入备份加密密码')
+    if (!passphrase) {
+      return
+    }
+    const backup = await createEncryptedBookmarkBackup({
+      bookmarkGroups,
+      bookmarks,
+      version: packInfo.version,
+      passphrase
+    })
+    const txt = JSON.stringify(backup, null, 2)
+    const stamp = time(undefined, 'YYYY-MM-DD-HH-mm-ss')
+    download('aigshell-bookmarks-encrypted-' + stamp + '.json', txt)
   }
   const handleToggleEdit = () => {
     window.store.bookmarkSelectMode = true
@@ -87,6 +105,11 @@ export default function BookmarkToolbar (props) {
     {
       label: `${e('export')} (不含凭据)`,
       onClick: handleDownloadWithoutCredentials,
+      icon: <ExportOutlined />
+    },
+    {
+      label: `${e('export')} (加密)`,
+      onClick: handleDownloadEncrypted,
       icon: <ExportOutlined />
     },
     {

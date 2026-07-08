@@ -98,6 +98,113 @@ test('creates a bookmark backup without credentials when requested', async () =>
   assert.equal(serialized.includes('passphrase'), false)
 })
 
+test('creates an encrypted bookmark backup that hides server details and decrypts with the passphrase', async () => {
+  const {
+    createEncryptedBookmarkBackup,
+    parseEncryptedBookmarkBackup
+  } = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/common/bookmark-backup.js')))
+
+  const bookmarks = [
+    {
+      id: 'server-1',
+      title: 'prod-web-01',
+      host: '10.0.1.23',
+      username: 'root',
+      password: 'secret',
+      privateKey: '-----BEGIN OPENSSH PRIVATE KEY-----'
+    }
+  ]
+  const bookmarkGroups = [
+    {
+      id: 'group-1',
+      title: 'production',
+      bookmarkIds: ['server-1'],
+      bookmarkGroupIds: []
+    }
+  ]
+
+  const backup = await createEncryptedBookmarkBackup({
+    bookmarks,
+    bookmarkGroups,
+    passphrase: 'backup-password',
+    now: '2026-07-08T00:00:00.000Z',
+    version: '3.15.105'
+  })
+
+  assert.equal(backup.format, 'AIGShell.bookmarks.encrypted-backup')
+  assert.equal(backup.formatVersion, 1)
+  assert.equal(backup.app.name, 'AIGShell')
+  assert.equal(backup.app.version, '3.15.105')
+  assert.equal(backup.exportedAt, '2026-07-08T00:00:00.000Z')
+  assert.equal(backup.encryption.algorithm, 'AES-GCM')
+  assert.equal(backup.encryption.kdf, 'PBKDF2-SHA256')
+  assert.equal(typeof backup.ciphertext, 'string')
+
+  const serialized = JSON.stringify(backup)
+  assert.equal(serialized.includes('prod-web-01'), false)
+  assert.equal(serialized.includes('10.0.1.23'), false)
+  assert.equal(serialized.includes('secret'), false)
+  assert.equal(serialized.includes('OPENSSH PRIVATE KEY'), false)
+
+  const parsed = await parseEncryptedBookmarkBackup(serialized, {
+    passphrase: 'backup-password'
+  })
+  assert.deepEqual(parsed.bookmarks, bookmarks)
+  assert.deepEqual(parsed.bookmarkGroups, bookmarkGroups)
+})
+
+test('rejects encrypted bookmark backups without the correct passphrase', async () => {
+  const {
+    createEncryptedBookmarkBackup,
+    parseBookmarkBackup,
+    parseEncryptedBookmarkBackup
+  } = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/common/bookmark-backup.js')))
+
+  const backup = await createEncryptedBookmarkBackup({
+    bookmarks: [{ id: 'server-1', host: '10.0.1.23', password: 'secret' }],
+    passphrase: 'backup-password'
+  })
+  const serialized = JSON.stringify(backup)
+
+  assert.throws(
+    () => parseBookmarkBackup(serialized),
+    /加密/
+  )
+  await assert.rejects(
+    () => parseEncryptedBookmarkBackup(serialized),
+    /密码/
+  )
+  await assert.rejects(
+    () => parseEncryptedBookmarkBackup(serialized, { passphrase: 'wrong-password' }),
+    /密码/
+  )
+})
+
+test('parses encrypted bookmark backups through the import helper after requesting a passphrase', async () => {
+  const {
+    createEncryptedBookmarkBackup,
+    parseBookmarkBackupForImport
+  } = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/common/bookmark-backup.js')))
+
+  const bookmarks = [{ id: 'server-1', host: '10.0.1.23', password: 'secret' }]
+  const backup = await createEncryptedBookmarkBackup({
+    bookmarks,
+    passphrase: 'backup-password'
+  })
+  const requested = []
+
+  const parsed = await parseBookmarkBackupForImport(JSON.stringify(backup), {
+    requestPassphrase: async () => {
+      requested.push('passphrase')
+      return 'backup-password'
+    }
+  })
+
+  assert.deepEqual(parsed.bookmarks, bookmarks)
+  assert.deepEqual(parsed.bookmarkGroups, [])
+  assert.deepEqual(requested, ['passphrase'])
+})
+
 test('parses legacy bookmark exports for backwards compatibility', async () => {
   const {
     parseBookmarkBackup
@@ -349,11 +456,16 @@ test('uses the AIGShell bookmark backup package from every toolbar export entry'
   )
 
   assert.match(source, /createBookmarkBackup/)
+  assert.match(source, /createEncryptedBookmarkBackup/)
   assert.match(source, /download\('aigshell-bookmarks-backup-/)
   assert.match(source, /download\('aigshell-bookmarks-no-credentials-/)
+  assert.match(source, /download\('aigshell-bookmarks-encrypted-/)
+  assert.match(source, /window\.prompt/)
   assert.match(source, /includeCredentials:\s*false/)
   assert.match(source, /label:\s*e\('export'\)[\s\S]*?onClick:\s*handleDownload/)
   assert.match(source, /label:\s*`\$\{e\('export'\)\} \(不含凭据\)`[\s\S]*?onClick:\s*handleDownloadWithoutCredentials/)
+  assert.match(source, /handleDownloadEncrypted/)
+  assert.match(source, /\(加密\)/)
   assert.doesNotMatch(source, /onClick:\s*onExport/)
 })
 
