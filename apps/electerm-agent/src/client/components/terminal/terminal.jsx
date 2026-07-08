@@ -653,6 +653,11 @@ class Term extends Component {
     }
   }
 
+  onReconnect = () => {
+    this.handleCancelAutoReconnect()
+    this.props.reloadTab(this.props.tab)
+  }
+
   isRemote = () => {
     return this.props.tab?.host
   }
@@ -868,6 +873,11 @@ class Term extends Component {
         icon: <iconsMap.ReloadOutlined />,
         label: e('clear'),
         extra: clearShortcut
+      },
+      {
+        key: 'onReconnect',
+        icon: <iconsMap.RetweetOutlined />,
+        label: e('reload')
       },
       {
         key: 'toggleSearch',
