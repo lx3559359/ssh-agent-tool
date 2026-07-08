@@ -25,6 +25,15 @@ test('AI chat submit only opens config when a non-empty prompt is missing requir
   assert.equal(getAIChatSubmitAction({
     prompt: 'explain current terminal output',
     config: {
+      baseURLAI: 'https://api.example.com/v1',
+      modelAI: 'deepseek-chat',
+      roleAI: ''
+    }
+  }), 'submit')
+
+  assert.equal(getAIChatSubmitAction({
+    prompt: 'explain current terminal output',
+    config: {
       baseURLAI: '',
       modelAI: 'deepseek-chat',
       roleAI: 'SSH assistant'
