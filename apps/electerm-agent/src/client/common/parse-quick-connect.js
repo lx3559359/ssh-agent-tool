@@ -203,7 +203,7 @@ function parseQuickConnect (str) {
     let hostOrPath = ''
     let port = ''
 
-    const atIndex = connectionString.indexOf('@')
+    const atIndex = connectionString.lastIndexOf('@')
     if (atIndex !== -1) {
       // Has auth
       const authPart = connectionString.slice(0, atIndex)

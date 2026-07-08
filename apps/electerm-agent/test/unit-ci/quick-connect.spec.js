@@ -16,6 +16,15 @@ test('app quick connect decodes URL-encoded SSH username and password', () => {
   assert.equal(result.port, 22)
 })
 
+test('app quick connect keeps raw @ characters inside SSH passwords', () => {
+  const result = parseQuickConnect('ssh://deploy:p@ssword@10.0.1.23:22')
+
+  assert.equal(result.username, 'deploy')
+  assert.equal(result.password, 'p@ssword')
+  assert.equal(result.host, '10.0.1.23')
+  assert.equal(result.port, 22)
+})
+
 test('client quick connect decodes URL-encoded SSH username and password', async () => {
   const {
     parseQuickConnect: parseClientQuickConnect
@@ -25,6 +34,19 @@ test('client quick connect decodes URL-encoded SSH username and password', async
 
   assert.equal(result.username, 'deploy+ops')
   assert.equal(result.password, 'p@ss:word')
+  assert.equal(result.host, '10.0.1.23')
+  assert.equal(result.port, 22)
+})
+
+test('client quick connect keeps raw @ characters inside SSH passwords', async () => {
+  const {
+    parseQuickConnect: parseClientQuickConnect
+  } = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/common/parse-quick-connect.js')))
+
+  const result = parseClientQuickConnect('ssh://deploy:p@ssword@10.0.1.23:22')
+
+  assert.equal(result.username, 'deploy')
+  assert.equal(result.password, 'p@ssword')
   assert.equal(result.host, '10.0.1.23')
   assert.equal(result.port, 22)
 })
