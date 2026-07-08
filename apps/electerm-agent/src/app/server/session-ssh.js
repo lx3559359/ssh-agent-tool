@@ -33,9 +33,25 @@ function getSshTargetLabel (options = {}) {
     : `${host}:${port}`
 }
 
-function getSshDiagnosis (err = {}) {
+function getSshDiagnosis (err = {}, options = {}) {
   const message = err.message || String(err)
   const code = err.code || ''
+  const proxy = typeof options.proxy === 'string' ? options.proxy.trim() : ''
+  if (
+    proxy &&
+    (
+      code === 'ECONNREFUSED' ||
+      code === 'ENOTFOUND' ||
+      code === 'EAI_AGAIN' ||
+      code === 'ETIMEDOUT' ||
+      /ECONNREFUSED|ENOTFOUND|EAI_AGAIN|timed? ?out|proxy|socks/i.test(message)
+    )
+  ) {
+    return {
+      title: 'SSH 代理连接失败',
+      suggestion: `请检查代理地址 ${proxy}、代理类型、代理认证、代理服务是否运行，以及代理到目标服务器的网络连通性。`
+    }
+  }
   if (code === 'ECONNREFUSED' || message.includes('ECONNREFUSED')) {
     return {
       title: 'SSH 连接被拒绝',
@@ -133,7 +149,7 @@ function normalizeSshConnectionError (err, options = {}) {
     return err
   }
   const originalMessage = err.message || String(err)
-  const diagnosis = getSshDiagnosis(err)
+  const diagnosis = getSshDiagnosis(err, options)
   err.originalMessage = originalMessage
   err.sshConnectionErrorNormalized = true
   err.message = [

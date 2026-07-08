@@ -22,6 +22,25 @@ describe('session-ssh connection error diagnostics', () => {
     assert.match(normalized.message, /原始错误：connect ECONNREFUSED/)
   })
 
+  test('adds a chinese diagnosis for ssh proxy connection failures', () => {
+    const error = new Error('connect ECONNREFUSED 127.0.0.1:1080')
+    error.code = 'ECONNREFUSED'
+
+    const normalized = normalizeSshConnectionError(error, {
+      host: '10.0.1.23',
+      port: 22,
+      username: 'root',
+      proxy: 'socks5://127.0.0.1:1080'
+    })
+
+    assert.match(normalized.message, /SSH 代理连接失败/)
+    assert.match(normalized.message, /root@10\.0\.1\.23:22/)
+    assert.match(normalized.message, /socks5:\/\/127\.0\.0\.1:1080/)
+    assert.match(normalized.message, /代理地址/)
+    assert.match(normalized.message, /代理认证/)
+    assert.match(normalized.message, /原始错误：connect ECONNREFUSED/)
+  })
+
   test('adds a chinese diagnosis for failed authentication', () => {
     const error = new Error('All configured authentication methods failed')
 
