@@ -71,6 +71,7 @@ import {
   createRendererThemeConfig,
   handleTerminalColorQuery
 } from './terminal-color-query.mjs'
+import { buildTerminalContextMenuItems } from './terminal-context-menu.js'
 
 const e = window.translate
 
@@ -743,6 +744,14 @@ class Term extends Component {
     )
   }
 
+  copyCurrentPath = () => {
+    const cwd = this.cmdAddon?.getCwd?.()
+    if (cwd) {
+      copy(cwd)
+    }
+    this.term.focus()
+  }
+
   getTerminalBufferText = () => {
     const { addTimeStampToTermLog } = this.state
     const buffer = this.term.buffer.active
@@ -838,98 +847,41 @@ class Term extends Component {
 
   renderContextMenu = () => {
     const { hasSelection, recording } = this.state
-    const copyed = true
     const copyShortcut = this.getShortcut('terminal_copy')
     const pasteShortcut = this.getShortcut('terminal_paste')
     const clearShortcut = this.getShortcut('terminal_clear')
     const searchShortcut = this.getShortcut('terminal_search')
     const selectAllShortcut = isMacJs ? 'meta+a' : 'ctrl+shift+a'
     const isSerial = this.props.tab?.type === connectionMap.serial
-    const items = [
-      {
-        key: 'onCopy',
-        icon: <iconsMap.CopyOutlined />,
-        label: e('copy'),
-        disabled: !hasSelection,
-        extra: copyShortcut
-      },
-      {
-        key: 'onPaste',
-        icon: <iconsMap.SwitcherOutlined />,
-        label: e('paste'),
-        disabled: !copyed,
-        extra: pasteShortcut
-      },
-      {
-        key: 'onPasteSelected',
-        icon: <iconsMap.SwitcherOutlined />,
-        label: e('pasteSelected'),
-        disabled: !hasSelection
-      },
-      {
-
-        key: 'onSelectAll',
-        icon: <iconsMap.CheckSquareOutlined />,
-        label: e('selectall'),
-        extra: selectAllShortcut
-      },
-      {
-        key: 'explainWithAi',
-        icon: <AIIcon />,
-        label: e('explainWithAi'),
-        disabled: !hasSelection
-      },
-      {
-        key: 'onClear',
-        icon: <iconsMap.ReloadOutlined />,
-        label: e('clear'),
-        extra: clearShortcut
-      },
-      {
-        key: 'onReconnect',
-        icon: <iconsMap.RetweetOutlined />,
-        label: e('reload')
-      },
-      {
-        key: 'onDisconnect',
-        icon: <iconsMap.CloseCircleOutlined />,
-        label: e('disconnect')
-      },
-      {
-        key: 'toggleSearch',
-        icon: <iconsMap.SearchOutlined />,
-        label: e('search'),
-        extra: searchShortcut
-      },
-      {
-        key: 'onSaveTerminalLog',
-        icon: <iconsMap.SaveOutlined />,
-        label: e('saveTerminalLogToFile')
-      },
-      {
-        key: recording ? 'onStopRecord' : 'onRecord',
-        icon: recording ? <iconsMap.StopOutlined /> : <iconsMap.PlayCircleFilled />,
-        label: e(recording ? 'stopRecord' : 'record')
+    const currentPath = this.cmdAddon?.getCwd?.() || ''
+    const items = buildTerminalContextMenuItems({
+      hasSelection,
+      recording,
+      currentPath,
+      isSerial,
+      shortcuts: {
+        copy: copyShortcut,
+        paste: pasteShortcut,
+        clear: clearShortcut,
+        search: searchShortcut,
+        selectAll: selectAllShortcut
       }
-    ]
-    if (isSerial) {
-      items.push(
-        {
-          type: 'divider'
-        },
-        {
-          key: 'onXmodemSend',
-          icon: <iconsMap.CloudUploadOutlined />,
-          label: 'XMODEM Send'
-        },
-        {
-          key: 'onXmodemReceive',
-          icon: <iconsMap.CloudDownloadOutlined />,
-          label: 'XMODEM Receive'
-        }
-      )
-    }
-    return items
+    })
+    return items.map(menuItem => {
+      if (menuItem.type) {
+        return menuItem
+      }
+      const Icon = menuItem.iconKey === 'AIIcon'
+        ? AIIcon
+        : iconsMap[menuItem.iconKey]
+      return {
+        key: menuItem.key,
+        icon: Icon ? <Icon /> : null,
+        label: menuItem.labelText || e(menuItem.labelKey),
+        disabled: menuItem.disabled,
+        extra: menuItem.extra
+      }
+    })
   }
 
   onContextMenu = ({ key }) => {

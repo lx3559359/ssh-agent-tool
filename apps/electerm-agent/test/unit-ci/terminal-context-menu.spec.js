@@ -1,27 +1,68 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const path = require('node:path')
-const fs = require('node:fs')
+const { pathToFileURL } = require('node:url')
 
-test('terminal context menu exposes reconnect for SSH sessions', () => {
-  const source = fs.readFileSync(
-    path.resolve(__dirname, '../../src/client/components/terminal/terminal.jsx'),
-    'utf8'
-  )
+const moduleUrl = pathToFileURL(
+  path.resolve(__dirname, '../../src/client/components/terminal/terminal-context-menu.js')
+).href
 
-  assert.match(source, /key:\s*'onReconnect'/)
-  assert.match(source, /label:\s*e\('reload'\)/)
-  assert.match(source, /onReconnect\s*=\s*\(\)\s*=>\s*{[\s\S]{0,240}this\.props\.reloadTab\(this\.props\.tab\)/)
+test('terminal context menu includes daily SSH operations and copy current path', async () => {
+  const { buildTerminalContextMenuItems } = await import(moduleUrl)
+
+  const items = buildTerminalContextMenuItems({
+    hasSelection: true,
+    recording: false,
+    currentPath: '/var/www/app',
+    shortcuts: {
+      copy: 'ctrl+shift+c',
+      paste: 'ctrl+shift+v',
+      clear: 'ctrl+l',
+      search: 'ctrl+f',
+      selectAll: 'ctrl+shift+a'
+    }
+  })
+
+  assert.deepEqual(items.map(item => item.key), [
+    'onCopy',
+    'onPaste',
+    'onPasteSelected',
+    'onSelectAll',
+    'explainWithAi',
+    'copyCurrentPath',
+    'onClear',
+    'onReconnect',
+    'onDisconnect',
+    'toggleSearch',
+    'onSaveTerminalLog',
+    'onRecord'
+  ])
+  assert.equal(items.find(item => item.key === 'copyCurrentPath').disabled, false)
+  assert.equal(items.find(item => item.key === 'explainWithAi').disabled, false)
 })
 
-test('terminal context menu exposes disconnect without closing the tab', () => {
-  const source = fs.readFileSync(
-    path.resolve(__dirname, '../../src/client/components/terminal/terminal.jsx'),
-    'utf8'
-  )
+test('terminal context menu disables selection and cwd actions when unavailable', async () => {
+  const { buildTerminalContextMenuItems } = await import(moduleUrl)
 
-  assert.match(source, /key:\s*'onDisconnect'/)
-  assert.match(source, /label:\s*e\('disconnect'\)/)
-  assert.match(source, /onDisconnect\s*=\s*\(\)\s*=>\s*{[\s\S]{0,220}this\.socket\.close\(\)/)
-  assert.doesNotMatch(source, /onDisconnect\s*=\s*\(\)\s*=>\s*{[\s\S]{0,220}this\.props\.delTab/)
+  const items = buildTerminalContextMenuItems({
+    hasSelection: false,
+    recording: true,
+    currentPath: ''
+  })
+
+  assert.equal(items.find(item => item.key === 'onCopy').disabled, true)
+  assert.equal(items.find(item => item.key === 'explainWithAi').disabled, true)
+  assert.equal(items.find(item => item.key === 'copyCurrentPath').disabled, true)
+  assert.equal(items.find(item => item.key === 'onStopRecord').labelKey, 'stopRecord')
+})
+
+test('terminal context menu keeps serial transfer actions only for serial sessions', async () => {
+  const { buildTerminalContextMenuItems } = await import(moduleUrl)
+
+  const normalKeys = buildTerminalContextMenuItems({ isSerial: false }).map(item => item.key)
+  const serialKeys = buildTerminalContextMenuItems({ isSerial: true }).map(item => item.key)
+
+  assert.equal(normalKeys.includes('onXmodemSend'), false)
+  assert.equal(serialKeys.includes('onXmodemSend'), true)
+  assert.equal(serialKeys.includes('onXmodemReceive'), true)
 })
