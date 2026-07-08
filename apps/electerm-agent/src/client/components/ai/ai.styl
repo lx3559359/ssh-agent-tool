@@ -118,8 +118,23 @@
 .ai-history-item-title
   display flex
   align-items center
+  gap 4px
+  width 100%
   .ai-stop-icon-square
     margin-left auto
+
+.ai-history-item-prompt
+  flex 1
+  min-width 0
+  overflow hidden
+  text-overflow ellipsis
+  white-space nowrap
+
+.ai-history-item-actions
+  display inline-flex
+  align-items center
+  flex none
+  color #64748b
 
 .agent-tool-calls
   margin 8px 0

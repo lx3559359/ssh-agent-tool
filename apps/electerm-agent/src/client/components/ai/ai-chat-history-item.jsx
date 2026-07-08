@@ -10,11 +10,18 @@ import {
 import {
   CopyOutlined,
   CloseOutlined,
+  ReloadOutlined,
   CaretDownOutlined,
   CaretRightOutlined
 } from '@ant-design/icons'
 import { copy } from '../../common/clipboard'
 import aiAgentCopy from './ai-agent-copy.json'
+import uid from '../../common/uid'
+import {
+  buildAIChatRole,
+  createRetryChatEntry,
+  getAIChatCopyText
+} from './ai-chat-actions'
 
 export default function AIChatHistoryItem ({ item }) {
   const [showOutput, setShowOutput] = useState(true)
@@ -41,8 +48,11 @@ export default function AIChatHistoryItem ({ item }) {
   }
 
   function buildRole () {
-    const lang = languageAI || window.store.getLangName() || '简体中文'
-    return `${roleAI}; 请使用${lang}回复`
+    return buildAIChatRole({
+      roleAI,
+      languageAI,
+      getLangName: () => window.store.getLangName()
+    })
   }
 
   const pollStreamContent = useCallback(async (sid) => {
@@ -176,7 +186,24 @@ export default function AIChatHistoryItem ({ item }) {
         <span className='pointer mg1r' onClick={toggleOutput}>
           {showOutput ? <CaretDownOutlined /> : <CaretRightOutlined />}
         </span>
-        <span>{prompt}</span>
+        <span className='ai-history-item-prompt'>{prompt}</span>
+        <span className='ai-history-item-actions'>
+          <CopyOutlined
+            className='pointer'
+            onClick={handleCopyAnswer}
+            title={aiAgentCopy.copyAnswerTitle}
+          />
+          <ReloadOutlined
+            className='pointer mg1l'
+            onClick={handleRetry}
+            title={aiAgentCopy.retryTitle}
+          />
+          <CloseOutlined
+            className='pointer mg1l'
+            onClick={handleDel}
+            title={aiAgentCopy.deleteTitle}
+          />
+        </span>
       </div>
     ),
     type: 'info'
@@ -187,8 +214,24 @@ export default function AIChatHistoryItem ({ item }) {
     window.store.removeAiHistory(item.id)
   }
 
-  function handleCopy () {
+  function handleCopyPrompt (e) {
+    e.stopPropagation()
     copy(prompt)
+  }
+
+  function handleCopyAnswer (e) {
+    e.stopPropagation()
+    copy(getAIChatCopyText(item))
+  }
+
+  function handleRetry (e) {
+    e.stopPropagation()
+    const retryEntry = createRetryChatEntry(item, {
+      id: uid(),
+      timestamp: Date.now()
+    })
+    window.store.aiChatHistory.push(retryEntry)
+    window.store.aiChatHistory = [...window.store.aiChatHistory]
   }
 
   function renderTitle () {
@@ -214,11 +257,23 @@ export default function AIChatHistoryItem ({ item }) {
         <p>
           <CopyOutlined
             className='pointer'
-            onClick={handleCopy}
+            onClick={handleCopyPrompt}
+            title={aiAgentCopy.copyPromptTitle}
+          />
+          <CopyOutlined
+            className='pointer mg1l'
+            onClick={handleCopyAnswer}
+            title={aiAgentCopy.copyAnswerTitle}
+          />
+          <ReloadOutlined
+            className='pointer mg1l'
+            onClick={handleRetry}
+            title={aiAgentCopy.retryTitle}
           />
           <CloseOutlined
             className='pointer mg1l'
             onClick={handleDel}
+            title={aiAgentCopy.deleteTitle}
           />
         </p>
       </div>

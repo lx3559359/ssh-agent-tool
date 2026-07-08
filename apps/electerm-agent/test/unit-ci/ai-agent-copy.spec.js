@@ -14,6 +14,10 @@ test('AI panel copy uses Chinese labels for the SSH Agent product', () => {
   assert.equal(copy.runningTitle, 'Agent 正在执行，请稍候')
   assert.equal(copy.sendTitle, 'Enter 发送，Shift+Enter 换行')
   assert.equal(copy.clearHistoryTitle, '清空 AI 对话历史')
+  assert.equal(copy.stopTitle, '停止当前 AI 请求')
+  assert.equal(copy.copyAnswerTitle, '复制回答')
+  assert.equal(copy.retryTitle, '重试')
+  assert.equal(copy.deleteTitle, '删除')
 })
 
 test('Agent tool call copy is localized', () => {

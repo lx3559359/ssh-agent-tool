@@ -14,6 +14,7 @@ import {
 } from '../../common/constants'
 import { refsStatic } from '../common/ref'
 import { getAIChatSubmitAction } from './ai-chat-submit'
+import { clearAIChatContext } from './ai-chat-actions'
 import aiAgentCopy from './ai-agent-copy.json'
 import './ai.styl'
 
@@ -86,7 +87,7 @@ export default function AIChat (props) {
   }
 
   function clearHistory () {
-    window.store.aiChatHistory = []
+    clearAIChatContext(window.store)
   }
 
   function renderTabSelect () {
