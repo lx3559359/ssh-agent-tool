@@ -64,6 +64,21 @@ describe('session-ssh connection error diagnostics', () => {
     assert.match(normalized.message, /原始错误：connect ECONNREFUSED/)
   })
 
+  test('redacts proxy credentials from ssh connection diagnostics', () => {
+    const error = new Error('proxy socks5://proxy-user:proxy-password@127.0.0.1:1080 refused')
+    error.code = 'ECONNREFUSED'
+
+    const normalized = normalizeSshConnectionError(error, {
+      host: '10.0.1.23',
+      port: 22,
+      username: 'root',
+      proxy: 'socks5://proxy-user:proxy-password@127.0.0.1:1080'
+    })
+
+    assert.match(normalized.message, /socks5:\/\/proxy-user:\[redacted\]@127\.0\.0\.1:1080/)
+    assert.doesNotMatch(normalized.message, /proxy-password/)
+  })
+
   test('adds a chinese diagnosis for proxy connection refused messages without errno code', () => {
     const error = new Error('connect: Connection refused 127.0.0.1:1080')
 

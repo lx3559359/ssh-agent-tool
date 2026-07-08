@@ -50,6 +50,13 @@ function getProxyNeedles (proxy) {
     .filter(Boolean)
 }
 
+function redactUrlCredentials (text) {
+  return String(text || '').replace(
+    /\b([a-z][a-z0-9+.-]*:\/\/[^:@\s/]+):([^@\s/]+)@/gi,
+    '$1:[redacted]@'
+  )
+}
+
 function isProxyConnectionError (message, code, proxy) {
   if (!proxy) {
     return false
@@ -80,10 +87,11 @@ function getSshDiagnosis (err = {}, options = {}) {
   const message = err.message || String(err)
   const code = err.code || ''
   const proxy = typeof options.proxy === 'string' ? options.proxy.trim() : ''
+  const proxyDisplay = redactUrlCredentials(proxy)
   if (isProxyConnectionError(message, code, proxy)) {
     return {
       title: 'SSH 代理连接失败',
-      suggestion: `请检查代理地址 ${proxy}、代理类型、代理认证、代理服务是否运行，以及代理到目标服务器的网络连通性。`
+      suggestion: `请检查代理地址 ${proxyDisplay}、代理类型、代理认证、代理服务是否运行，以及代理到目标服务器的网络连通性。`
     }
   }
   if (code === 'ECONNREFUSED' || /ECONNREFUSED|connection refused/i.test(message)) {
@@ -213,7 +221,7 @@ function normalizeSshConnectionError (err, options = {}) {
   if (err.sshConnectionErrorNormalized) {
     return err
   }
-  const originalMessage = err.message || String(err)
+  const originalMessage = redactUrlCredentials(err.message || String(err))
   const diagnosis = getSshDiagnosis(err, options)
   err.originalMessage = originalMessage
   err.sshConnectionErrorNormalized = true
