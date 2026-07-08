@@ -148,6 +148,22 @@ test('normalizes relay model list container aliases', () => {
       'kimi-k2-0711-preview'
     ]
   )
+
+  assert.deepEqual(
+    normalizeAIModelsResponse({
+      data: {
+        total: 2,
+        records: [
+          { modelName: 'deepseek-chat' },
+          { model_name: 'qwen-plus' }
+        ]
+      }
+    }),
+    [
+      'deepseek-chat',
+      'qwen-plus'
+    ]
+  )
 })
 
 test('tries Ollama tags endpoint when OpenAI models endpoint returns empty list', async () => {

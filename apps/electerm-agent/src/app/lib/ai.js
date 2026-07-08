@@ -138,6 +138,7 @@ function normalizeAIModelsResponse (data, allowModelMap = false) {
     'result',
     'items',
     'list',
+    'records',
     'model_list',
     'modelList',
     'available_models',
