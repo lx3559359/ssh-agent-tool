@@ -321,6 +321,20 @@ class Term extends Component {
     term.focus()
   }
 
+  onZoomInTerminal = () => {
+    this.zoom(1)
+    this.term?.focus()
+  }
+
+  onZoomOutTerminal = () => {
+    this.zoom(-1)
+    this.term?.focus()
+  }
+
+  onResetTerminalFontSize = () => {
+    this.handleResetFontSize()
+  }
+
   isActiveTerminal = () => {
     return this.props.tab.id === this.props.activeTabId &&
     this.props.tab.pane === paneMap.terminal
@@ -868,6 +882,7 @@ class Term extends Component {
       recording,
       currentPath,
       isSerial,
+      fontSizeChanged: this.state.fontSizeChanged,
       shortcuts: {
         copy: copyShortcut,
         paste: pasteShortcut,

@@ -23,7 +23,8 @@ export function buildTerminalContextMenuItems ({
   recording = false,
   currentPath = '',
   shortcuts = defaultShortcuts,
-  isSerial = false
+  isSerial = false,
+  fontSizeChanged = false
 } = {}) {
   const items = [
     item({
@@ -73,6 +74,22 @@ export function buildTerminalContextMenuItems ({
       iconKey: 'ReloadOutlined',
       labelKey: 'clear',
       extra: shortcuts.clear
+    }),
+    item({
+      key: 'onZoomInTerminal',
+      iconKey: 'PlusCircleOutlined',
+      labelText: '放大终端字体'
+    }),
+    item({
+      key: 'onZoomOutTerminal',
+      iconKey: 'MinusCircleOutlined',
+      labelText: '缩小终端字体'
+    }),
+    item({
+      key: 'onResetTerminalFontSize',
+      iconKey: 'AimOutlined',
+      labelText: '重置终端字体',
+      disabled: !fontSizeChanged
     }),
     item({
       key: 'onReconnect',

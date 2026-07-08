@@ -32,6 +32,9 @@ test('terminal context menu includes daily SSH operations and copy current path'
     'analyzeTerminalWithAi',
     'copyCurrentPath',
     'onClear',
+    'onZoomInTerminal',
+    'onZoomOutTerminal',
+    'onResetTerminalFontSize',
     'onReconnect',
     'onDisconnect',
     'toggleSearch',
@@ -41,6 +44,7 @@ test('terminal context menu includes daily SSH operations and copy current path'
   assert.equal(items.find(item => item.key === 'copyCurrentPath').disabled, false)
   assert.equal(items.find(item => item.key === 'explainWithAi').disabled, false)
   assert.equal(items.find(item => item.key === 'analyzeTerminalWithAi').labelText, 'AI 分析当前终端')
+  assert.equal(items.find(item => item.key === 'onResetTerminalFontSize').disabled, true)
 })
 
 test('terminal context menu disables selection and cwd actions when unavailable', async () => {
@@ -49,13 +53,15 @@ test('terminal context menu disables selection and cwd actions when unavailable'
   const items = buildTerminalContextMenuItems({
     hasSelection: false,
     recording: true,
-    currentPath: ''
+    currentPath: '',
+    fontSizeChanged: true
   })
 
   assert.equal(items.find(item => item.key === 'onCopy').disabled, true)
   assert.equal(items.find(item => item.key === 'explainWithAi').disabled, true)
   assert.equal(items.find(item => item.key === 'analyzeTerminalWithAi').disabled, false)
   assert.equal(items.find(item => item.key === 'copyCurrentPath').disabled, true)
+  assert.equal(items.find(item => item.key === 'onResetTerminalFontSize').disabled, false)
   assert.equal(items.find(item => item.key === 'onStopRecord').labelKey, 'stopRecord')
 })
 
