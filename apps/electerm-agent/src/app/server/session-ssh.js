@@ -110,6 +110,12 @@ function getSshDiagnosis (err = {}, options = {}) {
       suggestion: '服务端可能因 MaxStartups、并发连接数、堡垒机限流、防火墙或安全设备策略主动拒绝握手；请稍后重试，或检查 sshd 与安全策略配置。'
     }
   }
+  if (/administratively prohibited|open failed|channel open failure|forwarding.*(disabled|denied|prohibited)|port forwarding.*(disabled|denied|prohibited)/i.test(message)) {
+    return {
+      title: 'SSH 端口转发或跳板策略禁止',
+      suggestion: '请检查 sshd 的 AllowTcpForwarding、PermitOpen、网关转发配置，以及堡垒机、代理或安全策略是否允许当前端口转发/跳板连接。'
+    }
+  }
   if (/kex_exchange_identification|banner line contains invalid characters|protocol mismatch|bad packet length|expected ssh/i.test(message)) {
     return {
       title: 'SSH 目标端口不是 SSH 服务',

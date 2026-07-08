@@ -186,6 +186,22 @@ describe('session-ssh connection error diagnostics', () => {
     assert.match(normalized.message, /原始错误：kex_exchange_identification/)
   })
 
+  test('adds a chinese diagnosis for prohibited ssh forwarding', () => {
+    const error = new Error('Channel open failure: open failed: administratively prohibited: open failed')
+
+    const normalized = normalizeSshConnectionError(error, {
+      host: 'bastion.example.com',
+      port: 22,
+      username: 'ops'
+    })
+
+    assert.match(normalized.message, /SSH 端口转发或跳板策略禁止/)
+    assert.match(normalized.message, /ops@bastion\.example\.com:22/)
+    assert.match(normalized.message, /AllowTcpForwarding/)
+    assert.match(normalized.message, /堡垒机/)
+    assert.match(normalized.message, /原始错误：Channel open failure/)
+  })
+
   test('adds a chinese diagnosis for incompatible ssh algorithms', () => {
     const error = new Error('Handshake failed: no matching key exchange algorithm')
 
