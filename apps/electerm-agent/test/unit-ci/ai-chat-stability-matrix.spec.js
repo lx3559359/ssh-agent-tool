@@ -1,0 +1,53 @@
+const test = require('node:test')
+const assert = require('node:assert/strict')
+const path = require('node:path')
+const fs = require('node:fs')
+
+function readTest (name) {
+  return fs.readFileSync(path.resolve(__dirname, name), 'utf8')
+}
+
+function readSource (relativePath) {
+  return fs.readFileSync(path.resolve(__dirname, '../../src/client/components/ai', relativePath), 'utf8')
+}
+
+function assertEvidence (source, pattern, label) {
+  assert.match(source, pattern, `Missing AI chat stability evidence: ${label}`)
+}
+
+test('P1 AI chat stability matrix covers submit stream stop retry copy and clear', () => {
+  const submitTest = readTest('ai-chat-submit.spec.js')
+  const configTest = readTest('ai-config-required.spec.js')
+  const actionsTest = readTest('ai-chat-actions.spec.js')
+  const copyTest = readTest('ai-agent-copy.spec.js')
+  const aiChat = readSource('ai-chat.jsx')
+  const historyItem = readSource('ai-chat-history-item.jsx')
+
+  assertEvidence(submitTest, /AI chat submit only opens config when a non-empty prompt is missing required config/, 'empty prompt no-op and valid config submit')
+  assertEvidence(configTest, /does not require optional endpoint path or credentials before sending/, 'optional API path and credentials do not block chat')
+  assertEvidence(aiChat, /const\s+submitAction\s*=\s*getAIChatSubmitAction/, 'chat submit goes through submit policy')
+  assertEvidence(aiChat, /appendAIChatHistory\(window\.store,\s*chatEntry,\s*MAX_HISTORY\)/, 'new chat entry append')
+  assertEvidence(aiChat, /onPressEnter=\{handleKeyPress\}/, 'enter sends from textarea')
+  assertEvidence(historyItem, /'AIchat'[\s\S]*?true,[\s\S]*?authHeaderNameAI/, 'streaming AI request and auth header forwarding')
+  assertEvidence(historyItem, /getStreamContent/, 'stream polling')
+  assertEvidence(historyItem, /stopStream/, 'stop generation')
+  assertEvidence(historyItem, /window\.store\.aiChatHistory = \[\.\.\.window\.store\.aiChatHistory\]/, 'history refresh after AI response')
+  assertEvidence(actionsTest, /copy the answer first and fall back to prompt/, 'copy answer fallback')
+  assertEvidence(actionsTest, /create a clean retry entry without stale stream state/, 'retry clears stale stream state')
+  assertEvidence(actionsTest, /clear conversation context from the store/, 'clear context')
+  assertEvidence(copyTest, /copyAnswerTitle/, 'copy action visible')
+  assertEvidence(copyTest, /retryTitle/, 'retry action visible')
+  assertEvidence(copyTest, /stopTitle/, 'stop action visible')
+})
+
+test('AI chat publishes history after non-stream responses are written', () => {
+  const historyItem = readSource('ai-chat-history-item.jsx')
+  const branchStart = historyItem.indexOf('} else if (aiResponse && aiResponse.response) {')
+  const catchStart = historyItem.indexOf('} catch (error) {', branchStart)
+  const branch = historyItem.slice(branchStart, catchStart)
+
+  assert.notEqual(branchStart, -1)
+  assert.notEqual(catchStart, -1)
+  assertEvidence(branch, /window\.store\.aiChatHistory\[index\]\.response = aiResponse\.response/, 'non-stream response write')
+  assertEvidence(branch, /window\.store\.aiChatHistory = \[\.\.\.window\.store\.aiChatHistory\]/, 'non-stream response history refresh')
+})

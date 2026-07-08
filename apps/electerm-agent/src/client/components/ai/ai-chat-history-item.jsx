@@ -120,6 +120,7 @@ export default function AIChatHistoryItem ({ item }) {
         const index = window.store.aiChatHistory.findIndex(i => i.id === item.id)
         if (index !== -1) {
           window.store.aiChatHistory[index].response = aiResponse.response
+          window.store.aiChatHistory = [...window.store.aiChatHistory]
         }
       }
     } catch (error) {
