@@ -125,12 +125,12 @@ export function buildTerminalContextMenuItems ({
       item({
         key: 'onXmodemSend',
         iconKey: 'CloudUploadOutlined',
-        labelText: 'XMODEM Send'
+        labelText: 'XMODEM 发送'
       }),
       item({
         key: 'onXmodemReceive',
         iconKey: 'CloudDownloadOutlined',
-        labelText: 'XMODEM Receive'
+        labelText: 'XMODEM 接收'
       })
     )
   }
