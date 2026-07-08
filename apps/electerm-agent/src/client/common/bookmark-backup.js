@@ -39,8 +39,8 @@ function normalizeBookmarkBackupData (data) {
     throw new Error(invalidBookmarkBackupShapeError)
   }
   if (
-    !isBackupItemList(data.bookmarks) ||
-    !isBackupItemList(data.bookmarkGroups)
+    !isBackupBookmarkList(data.bookmarks) ||
+    !isBackupGroupList(data.bookmarkGroups)
   ) {
     throw new Error(invalidBookmarkBackupShapeError)
   }
@@ -50,17 +50,39 @@ function normalizeBookmarkBackupData (data) {
   }
 }
 
-function isBackupItemList (items) {
+function hasNonEmptyString (item, key) {
+  return typeof item[key] === 'string' && Boolean(item[key].trim())
+}
+
+function isPlainBackupObject (item) {
+  return item &&
+    typeof item === 'object' &&
+    !Array.isArray(item)
+}
+
+function isBackupBookmarkList (items) {
   if (items === undefined) {
     return true
   }
   return items.every(item => {
     return (
-      item &&
-      typeof item === 'object' &&
-      !Array.isArray(item) &&
-      typeof item.id === 'string' &&
-      Boolean(item.id.trim())
+      isPlainBackupObject(item) &&
+      (
+        hasNonEmptyString(item, 'id') ||
+        hasNonEmptyString(item, 'host')
+      )
+    )
+  })
+}
+
+function isBackupGroupList (items) {
+  if (items === undefined) {
+    return true
+  }
+  return items.every(item => {
+    return (
+      isPlainBackupObject(item) &&
+      hasNonEmptyString(item, 'id')
     )
   })
 }

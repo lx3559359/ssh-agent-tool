@@ -66,6 +66,26 @@ test('parses legacy bookmark exports for backwards compatibility', async () => {
   })
 })
 
+test('parses legacy bookmark exports whose connections do not have ids yet', async () => {
+  const {
+    parseBookmarkBackup
+  } = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/common/bookmark-backup.js')))
+
+  const legacyObject = {
+    bookmarks: [
+      {
+        title: 'prod-web-01',
+        host: '10.0.1.23',
+        username: 'root',
+        password: 'secret'
+      }
+    ],
+    bookmarkGroups: []
+  }
+
+  assert.deepEqual(parseBookmarkBackup(JSON.stringify(legacyObject)), legacyObject)
+})
+
 test('rejects invalid bookmark backup content with a clear error', async () => {
   const {
     parseBookmarkBackup
@@ -116,7 +136,7 @@ test('rejects invalid bookmark backup content with a clear error', async () => {
   )
   assert.throws(
     () => parseBookmarkBackup(JSON.stringify({
-      bookmarks: [{ title: 'prod-web-01', host: '10.0.1.23' }],
+      bookmarks: [{ title: 'prod-web-01' }],
       bookmarkGroups: []
     })),
     /备份文件中的服务器或分组格式不正确/
