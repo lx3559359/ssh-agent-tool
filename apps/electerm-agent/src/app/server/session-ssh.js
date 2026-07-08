@@ -134,7 +134,7 @@ function getSshDiagnosis (err = {}, options = {}) {
       suggestion: '通常是旧服务器或安全策略只支持特定 KEX、HostKey、Cipher 算法；请在连接配置中启用兼容算法，或升级服务器 SSH 配置。'
     }
   }
-  if (/cannot parse privatekey|invalid privatekey|invalid private key|unsupported key format|malformed .*private key|private key.*(parse|format)/i.test(message)) {
+  if (/cannot parse privatekey|invalid privatekey|invalid private key|unsupported key format|malformed .*private key|private key.*(parse|format)|encrypted private key|passphrase/i.test(message)) {
     return {
       title: 'SSH 私钥无法使用',
       suggestion: '通常是私钥格式不支持、内容损坏、复制不完整，或密钥口令填写错误；请确认私钥为 OpenSSH/PEM 格式并重新选择正确私钥。'

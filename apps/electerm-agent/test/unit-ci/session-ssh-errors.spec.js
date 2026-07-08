@@ -234,6 +234,21 @@ describe('session-ssh connection error diagnostics', () => {
     assert.match(normalized.message, /原始错误：Cannot parse privateKey/)
   })
 
+  test('adds a chinese diagnosis for encrypted private keys without passphrase', () => {
+    const error = new Error('Encrypted private key detected, but no passphrase given')
+
+    const normalized = normalizeSshConnectionError(error, {
+      host: 'prod-web-04',
+      port: 22,
+      username: 'deploy'
+    })
+
+    assert.match(normalized.message, /SSH 私钥无法使用/)
+    assert.match(normalized.message, /deploy@prod-web-04:22/)
+    assert.match(normalized.message, /密钥口令/)
+    assert.match(normalized.message, /原始错误：Encrypted private key/)
+  })
+
   test('adds a chinese diagnosis for too many ssh authentication attempts', () => {
     const error = new Error('Received disconnect from 10.0.1.23 port 22:2: Too many authentication failures')
 
