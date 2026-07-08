@@ -31,9 +31,10 @@ export default function AIChat (props) {
     setPrompt(e.target.value)
   }
 
-  const handleSubmit = useCallback(function () {
+  const handleSubmit = useCallback(function (submitPromptOverride) {
+    const submitPrompt = typeof submitPromptOverride === 'string' ? submitPromptOverride : prompt
     const submitAction = getAIChatSubmitAction({
-      prompt,
+      prompt: submitPrompt,
       config: props.config
     })
     if (submitAction === 'noop') return
@@ -44,7 +45,7 @@ export default function AIChat (props) {
 
     const chatId = uid()
     const chatEntry = {
-      prompt,
+      prompt: submitPrompt,
       response: '',
       isStreaming: false,
       pending: true,

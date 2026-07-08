@@ -244,7 +244,7 @@ export default Store => {
       refsStatic.get('AIChat')?.setPrompt(prompt)
     }, 500)
     setTimeout(() => {
-      refsStatic.get('AIChat')?.handleSubmit()
+      refsStatic.get('AIChat')?.handleSubmit(prompt)
     }, 1200)
   }
 
