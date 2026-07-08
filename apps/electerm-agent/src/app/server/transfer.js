@@ -328,7 +328,11 @@ class Transfer {
         }
 
         total += nb
-        onstep && onstep(total, nb, fsize)
+        onstep && onstep({
+          transferred: total,
+          chunk: nb,
+          total: fsize
+        })
 
         if (nb < origChunkLen) {
           return singleRead(datapos, dstpos + nb, origChunkLen - nb)
