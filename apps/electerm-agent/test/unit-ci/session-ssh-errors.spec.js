@@ -198,6 +198,21 @@ describe('session-ssh connection error diagnostics', () => {
     assert.match(normalized.message, /原始错误：queryA ETIMEOUT/)
   })
 
+  test('adds a chinese diagnosis when ssh cannot resolve hostname', () => {
+    const error = new Error('Could not resolve hostname prod-web.internal: Name or service not known')
+
+    const normalized = normalizeSshConnectionError(error, {
+      host: 'prod-web.internal',
+      port: 22,
+      username: 'root'
+    })
+
+    assert.match(normalized.message, /SSH 主机无法解析/)
+    assert.match(normalized.message, /root@prod-web\.internal:22/)
+    assert.match(normalized.message, /DNS/)
+    assert.match(normalized.message, /原始错误：Could not resolve hostname/)
+  })
+
   test('adds a chinese diagnosis when the server closes before ssh is ready', () => {
     const error = new Error('Socket closed before SSH handshake')
 

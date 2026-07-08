@@ -89,7 +89,7 @@ function getSshDiagnosis (err = {}, options = {}) {
   if (
     code === 'ENOTFOUND' ||
     code === 'EAI_AGAIN' ||
-    /ENOTFOUND|EAI_AGAIN|getaddrinfo|queryA|querySrv|queryTxt|DNS/i.test(message)
+    /ENOTFOUND|EAI_AGAIN|getaddrinfo|queryA|querySrv|queryTxt|DNS|could not resolve hostname|name or service not known/i.test(message)
   ) {
     return {
       title: 'SSH 主机无法解析',
