@@ -114,6 +114,19 @@ test('normalizes model map responses used by relays and gateways', () => {
       'gpt-4.1-mini'
     ]
   )
+
+  assert.deepEqual(
+    normalizeAIModelsResponse({
+      data: {
+        pagination: {
+          total: 0,
+          page: 1
+        },
+        hasMore: false
+      }
+    }),
+    []
+  )
 })
 
 test('normalizes relay model list container aliases', () => {
