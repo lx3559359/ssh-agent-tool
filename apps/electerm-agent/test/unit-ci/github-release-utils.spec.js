@@ -166,6 +166,36 @@ test('identifies the exact release assets required for Windows online updates', 
   )
 })
 
+test('identifies Windows ARM64 release assets when requested', () => {
+  assert.deepEqual(
+    getRequiredReleaseAssetNames('3.15.105', { arch: 'arm64' }),
+    [
+      'AIGShell-3.15.105-win-arm64-installer.exe',
+      'AIGShell-3.15.105-win-arm64-installer.exe.blockmap',
+      'latest.yml'
+    ]
+  )
+})
+
+test('selects only Windows ARM64 update assets when requested', () => {
+  const files = [
+    'AIGShell-3.15.105-win-x64-installer.exe',
+    'AIGShell-3.15.105-win-x64-installer.exe.blockmap',
+    'AIGShell-3.15.105-win-arm64-installer.exe',
+    'AIGShell-3.15.105-win-arm64-installer.exe.blockmap',
+    'latest.yml'
+  ]
+
+  assert.deepEqual(
+    selectReleaseAssets(files, '3.15.105', { arch: 'arm64' }),
+    [
+      'AIGShell-3.15.105-win-arm64-installer.exe',
+      'AIGShell-3.15.105-win-arm64-installer.exe.blockmap',
+      'latest.yml'
+    ]
+  )
+})
+
 test('selects unexpected release assets without deleting update files', () => {
   const assets = [
     { name: 'AIGShell-3.15.105-win-x64-installer.exe', id: 'installer' },

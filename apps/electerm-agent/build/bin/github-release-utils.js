@@ -5,8 +5,12 @@ function buildReleaseTag (version) {
   return value.startsWith('v') ? value : `v${value}`
 }
 
-function getRequiredReleaseAssetNames (version) {
-  const prefix = `AIGShell-${version}-win-x64-installer.exe`
+function getReleaseArch (options = {}) {
+  return options.arch === 'arm64' ? 'arm64' : 'x64'
+}
+
+function getRequiredReleaseAssetNames (version, options = {}) {
+  const prefix = `AIGShell-${version}-win-${getReleaseArch(options)}-installer.exe`
   return [
     prefix,
     `${prefix}.blockmap`,
@@ -14,13 +18,13 @@ function getRequiredReleaseAssetNames (version) {
   ]
 }
 
-function selectReleaseAssets (files, version) {
-  const wanted = new Set(getRequiredReleaseAssetNames(version))
+function selectReleaseAssets (files, version, options = {}) {
+  const wanted = new Set(getRequiredReleaseAssetNames(version, options))
   return files.filter(file => wanted.has(path.basename(file)))
 }
 
-function selectUnexpectedReleaseAssets (assets, version) {
-  const required = new Set(getRequiredReleaseAssetNames(version))
+function selectUnexpectedReleaseAssets (assets, version, options = {}) {
+  const required = new Set(getRequiredReleaseAssetNames(version, options))
   return (assets || []).filter(asset => !required.has(path.basename(asset.name)))
 }
 
@@ -30,9 +34,11 @@ function byName (items = []) {
 
 function buildLocalReleaseAssetReport ({
   localFiles = [],
-  version
+  version,
+  arch
 }) {
-  const requiredNames = getRequiredReleaseAssetNames(version)
+  const options = { arch }
+  const requiredNames = getRequiredReleaseAssetNames(version, options)
   const localByName = byName(localFiles)
   const missingLocal = requiredNames.filter(name => !localByName.has(name))
   const emptyLocal = requiredNames
@@ -50,11 +56,13 @@ function buildLocalReleaseAssetReport ({
 function buildValidatedLocalReleaseAssets ({
   distDir,
   localFiles = [],
-  version
+  version,
+  arch
 }) {
   const report = buildLocalReleaseAssetReport({
     localFiles,
-    version
+    version,
+    arch
   })
   const errors = []
 
@@ -74,9 +82,11 @@ function buildValidatedLocalReleaseAssets ({
 function buildReleaseAssetReport ({
   localFiles = [],
   remoteAssets = [],
-  version
+  version,
+  arch
 }) {
-  const requiredNames = getRequiredReleaseAssetNames(version)
+  const options = { arch }
+  const requiredNames = getRequiredReleaseAssetNames(version, options)
   const localByName = byName(localFiles)
   const remoteByName = byName(remoteAssets)
   const missingLocal = requiredNames.filter(name => !localByName.has(name))
@@ -89,7 +99,7 @@ function buildReleaseAssetReport ({
       remoteSize: Number(remoteByName.get(name).size)
     }))
     .filter(item => item.localSize !== item.remoteSize)
-  const unexpectedRemote = selectUnexpectedReleaseAssets(remoteAssets, version)
+  const unexpectedRemote = selectUnexpectedReleaseAssets(remoteAssets, version, options)
 
   return {
     requiredNames,
