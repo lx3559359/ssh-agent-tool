@@ -716,6 +716,68 @@ test('returns provider error messages from non-stream chat response bodies', asy
   }
 })
 
+test('logs AI chat request errors with safe diagnostic context', async () => {
+  const axios = require('axios')
+  const log = require(path.resolve(__dirname, '../../src/app/common/log'))
+  const originalCreate = axios.create
+  const originalError = log.error
+  const logs = []
+
+  axios.create = () => ({
+    post: async () => {
+      const err = new Error('Request failed with status code 401')
+      err.response = {
+        status: 401,
+        data: {
+          error: {
+            message: 'invalid api key'
+          }
+        }
+      }
+      err.config = {
+        headers: {
+          Authorization: 'Bearer sk-live-secret'
+        },
+        baseURL: 'https://relay.example.com/v1',
+        url: '/chat/completions'
+      }
+      throw err
+    }
+  })
+  log.error = (...args) => logs.push(args)
+
+  delete require.cache[aiPath]
+  const { AIchat } = require(aiPath)
+
+  try {
+    const res = await AIchat(
+      'hello',
+      'relay-model',
+      'system',
+      'https://relay.example.com/v1',
+      '/chat/completions',
+      'sk-live-secret',
+      '',
+      false,
+      'Authorization: Bearer'
+    )
+
+    const serialized = JSON.stringify(logs)
+    assert.equal(res.error, 'invalid api key')
+    assert.match(serialized, /AI request error/)
+    assert.match(serialized, /chat/)
+    assert.match(serialized, /relay-model/)
+    assert.match(serialized, /https:\/\/relay\.example\.com\/v1/)
+    assert.match(serialized, /\/chat\/completions/)
+    assert.match(serialized, /401/)
+    assert.equal(serialized.includes('sk-live-secret'), false)
+  } finally {
+    axios.create = originalCreate
+    log.error = originalError
+    delete require.cache[aiPath]
+  }
+})
+
 test('returns provider error messages from tool chat response bodies', async () => {
   const axios = require('axios')
   const originalCreate = axios.create

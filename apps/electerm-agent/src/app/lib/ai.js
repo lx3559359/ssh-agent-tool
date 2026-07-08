@@ -277,6 +277,22 @@ function getAIErrorMessage (error) {
   return error && error.message
 }
 
+function getAIRequestErrorLog (kind, error, context = {}) {
+  return {
+    kind,
+    model: context.model,
+    baseURL: context.baseURL,
+    apiPath: context.apiPath,
+    status: error?.response?.status,
+    code: error?.code,
+    message: getAIErrorMessage(error)
+  }
+}
+
+function logAIRequestError (kind, error, context) {
+  log.error('AI request error', getAIRequestErrorLog(kind, error, context))
+}
+
 const builtInProviderModels = new Map([
   ['api.openai.com', ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini']],
   ['api.deepseek.com', ['deepseek-chat', 'deepseek-reasoner']],
@@ -377,8 +393,10 @@ exports.AIModels = async (baseURL, apiKey, proxy, authHeaderName) => {
           return builtInResult
         }
       }
-      log.error('AI models error')
-      log.error(e)
+      logAIRequestError('models', e, {
+        baseURL: normalizeAIModelBaseURL(baseURL),
+        apiPath: '/models'
+      })
       return {
         error: getAIErrorMessage(e),
         stack: e.stack
@@ -389,8 +407,10 @@ exports.AIModels = async (baseURL, apiKey, proxy, authHeaderName) => {
         models: await fetchOllamaModels(baseURL, apiKey, proxy, authHeaderName)
       }
     } catch (err) {
-      log.error('AI models error')
-      log.error(err)
+      logAIRequestError('models', err, {
+        baseURL: String(baseURL || '').replace(/\/v1\/?$/, ''),
+        apiPath: '/api/tags'
+      })
       return {
         error: getAIErrorMessage(err),
         stack: err.stack
@@ -400,8 +420,9 @@ exports.AIModels = async (baseURL, apiKey, proxy, authHeaderName) => {
 }
 
 exports.AIchatWithTools = async (messages, model, baseURL, path, apiKey, proxy, tools, authHeaderName) => {
+  let endpoint
   try {
-    const endpoint = normalizeAIEndpoint(baseURL, path)
+    endpoint = normalizeAIEndpoint(baseURL, path)
     const client = createAIClient(endpoint.baseURL, apiKey, proxy, authHeaderName)
     const requestData = {
       model,
@@ -423,7 +444,11 @@ exports.AIchatWithTools = async (messages, model, baseURL, path, apiKey, proxy, 
       message: choice.message
     }
   } catch (e) {
-    log.error('AI chat with tools error', e)
+    logAIRequestError('agent-tools', e, {
+      model,
+      baseURL: endpoint?.baseURL || baseURL,
+      apiPath: endpoint?.path || path
+    })
     return { error: getAIErrorMessage(e) }
   }
 }
@@ -439,8 +464,9 @@ exports.AIchat = async (
   stream = true,
   authHeaderName = defaultSettings.authHeaderNameAI
 ) => {
+  let endpoint
   try {
-    const endpoint = normalizeAIEndpoint(baseURL, path)
+    endpoint = normalizeAIEndpoint(baseURL, path)
     const client = createAIClient(endpoint.baseURL, apiKey, proxy, authHeaderName)
 
     // Determine if we should use streaming based on the prompt content
@@ -505,8 +531,11 @@ exports.AIchat = async (
       }
     }
   } catch (e) {
-    log.error('AI chat error')
-    log.error(e)
+    logAIRequestError('chat', e, {
+      model,
+      baseURL: endpoint?.baseURL || baseURL,
+      apiPath: endpoint?.path || path
+    })
     return {
       error: getAIErrorMessage(e),
       stack: e.stack
