@@ -33,20 +33,48 @@ function getSshTargetLabel (options = {}) {
     : `${host}:${port}`
 }
 
+function getProxyNeedles (proxy) {
+  const needles = [proxy]
+  try {
+    const url = new URL(proxy)
+    if (url.hostname) {
+      needles.push(url.hostname)
+      if (url.port) {
+        needles.push(`${url.hostname}:${url.port}`)
+      }
+    }
+  } catch (_) {
+  }
+  return needles
+    .map(item => String(item || '').trim().toLowerCase())
+    .filter(Boolean)
+}
+
+function isProxyConnectionError (message, code, proxy) {
+  if (!proxy) {
+    return false
+  }
+  if (/proxy|socks/i.test(message)) {
+    return true
+  }
+  if (!(
+    code === 'ECONNREFUSED' ||
+    code === 'ENOTFOUND' ||
+    code === 'EAI_AGAIN' ||
+    code === 'ETIMEDOUT' ||
+    /ECONNREFUSED|ENOTFOUND|EAI_AGAIN|timed? ?out/i.test(message)
+  )) {
+    return false
+  }
+  const lowerMessage = message.toLowerCase()
+  return getProxyNeedles(proxy).some(needle => lowerMessage.includes(needle))
+}
+
 function getSshDiagnosis (err = {}, options = {}) {
   const message = err.message || String(err)
   const code = err.code || ''
   const proxy = typeof options.proxy === 'string' ? options.proxy.trim() : ''
-  if (
-    proxy &&
-    (
-      code === 'ECONNREFUSED' ||
-      code === 'ENOTFOUND' ||
-      code === 'EAI_AGAIN' ||
-      code === 'ETIMEDOUT' ||
-      /ECONNREFUSED|ENOTFOUND|EAI_AGAIN|timed? ?out|proxy|socks/i.test(message)
-    )
-  ) {
+  if (isProxyConnectionError(message, code, proxy)) {
     return {
       title: 'SSH 代理连接失败',
       suggestion: `请检查代理地址 ${proxy}、代理类型、代理认证、代理服务是否运行，以及代理到目标服务器的网络连通性。`
