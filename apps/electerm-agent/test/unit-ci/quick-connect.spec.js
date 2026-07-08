@@ -33,6 +33,21 @@ test('app quick connect parses bracketed IPv6 SSH hosts', () => {
   assert.equal(result.port, 2222)
 })
 
+test('app quick connect parses bracketed IPv6 SSH shortcuts', () => {
+  const result = parseQuickConnect('[2001:db8::2]:2200')
+
+  assert.equal(result.host, '2001:db8::2')
+  assert.equal(result.port, 2200)
+})
+
+test('app quick connect parses bracketed IPv6 SSH shortcuts with username', () => {
+  const result = parseQuickConnect('deploy@[2001:db8::3]:2201')
+
+  assert.equal(result.username, 'deploy')
+  assert.equal(result.host, '2001:db8::3')
+  assert.equal(result.port, 2201)
+})
+
 test('client quick connect decodes URL-encoded SSH username and password', async () => {
   const {
     parseQuickConnect: parseClientQuickConnect
@@ -56,6 +71,29 @@ test('client quick connect parses bracketed IPv6 SSH hosts', async () => {
   assert.equal(result.username, 'deploy')
   assert.equal(result.host, '2001:db8::1')
   assert.equal(result.port, 2222)
+})
+
+test('client quick connect parses bracketed IPv6 SSH shortcuts', async () => {
+  const {
+    parseQuickConnect: parseClientQuickConnect
+  } = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/common/parse-quick-connect.js')))
+
+  const result = parseClientQuickConnect('[2001:db8::2]:2200')
+
+  assert.equal(result.host, '2001:db8::2')
+  assert.equal(result.port, 2200)
+})
+
+test('client quick connect parses bracketed IPv6 SSH shortcuts with username', async () => {
+  const {
+    parseQuickConnect: parseClientQuickConnect
+  } = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/common/parse-quick-connect.js')))
+
+  const result = parseClientQuickConnect('deploy@[2001:db8::3]:2201')
+
+  assert.equal(result.username, 'deploy')
+  assert.equal(result.host, '2001:db8::3')
+  assert.equal(result.port, 2201)
 })
 
 test('client quick connect keeps raw @ characters inside SSH passwords', async () => {

@@ -115,6 +115,10 @@ function normalizeHostValue (host) {
   return match ? match[1] : value
 }
 
+function isBracketedHostShortcut (input) {
+  return /^(?:[\w.-]+@)?\[[^\]]+\](?::\d+)?$/.test(input)
+}
+
 /**
  * Parse a quick connect string into connection options
  * @param {string} str - The connection string
@@ -153,7 +157,11 @@ function parseQuickConnect (str) {
       // Shortcut format - default to SSH
       // Match user@host or user@host:port or just host or host:port
       // Use last colon to determine port for host:port format
-      if (/^[\w.-]+@[\w.-]+/.test(input)) {
+      if (isBracketedHostShortcut(input)) {
+        // IPv6 shortcut format: [2001:db8::1]:22 or user@[2001:db8::1]:22
+        protocol = 'ssh'
+        connectionString = input
+      } else if (/^[\w.-]+@[\w.-]+/.test(input)) {
         // user@host or user@host:port
         protocol = 'ssh'
         connectionString = input
