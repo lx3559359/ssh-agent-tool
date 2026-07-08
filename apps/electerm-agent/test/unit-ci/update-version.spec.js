@@ -255,7 +255,13 @@ test('upgrade flow uses classified release status for manual update guidance', (
   assert.match(updateCheckSource, /requireApprovalManifest:\s*true/)
   assert.match(upgradeSource, /getLatestReleaseStatus/)
   assert.match(upgradeSource, /manualDownloadRequired/)
+  assert.match(upgradeSource, /waitingForApproval/)
   assert.match(upgradeSource, /releaseStatus\.message/)
+  assert.ok(
+    upgradeSource.indexOf("releaseStatus.status === 'waitingForApproval'") <
+    upgradeSource.indexOf('const shouldUpgrade = compare(currentVer, latestVer) < 0'),
+    'unapproved releases must be stopped before the upgrade modal can be shown'
+  )
 })
 
 test('upgrade panel hides the automatic upgrade action when only manual download is available', () => {

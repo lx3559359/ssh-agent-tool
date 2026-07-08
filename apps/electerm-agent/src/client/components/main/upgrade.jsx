@@ -188,6 +188,12 @@ export default class Upgrade extends PureComponent {
       }
       return
     }
+    if (releaseStatus.status === 'waitingForApproval') {
+      if (isManual) {
+        this.showNoUpdateInfo(releaseStatus.message)
+      }
+      return
+    }
     const { skipVersion = 'v0.0.0' } = this.props
     const currentVer = 'v' + window.et.version.split('-')[0]
     const latestVer = releaseStatus.tag_name
