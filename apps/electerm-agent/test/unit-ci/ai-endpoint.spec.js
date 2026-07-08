@@ -42,6 +42,16 @@ test('keeps Perplexity OpenAI-compatible root URL without forcing /v1', () => {
   )
 })
 
+test('accepts the full Perplexity sonar URL in the API address field', () => {
+  assert.deepEqual(
+    normalizeAIEndpoint('https://api.perplexity.ai/v1/sonar', ''),
+    {
+      baseURL: 'https://api.perplexity.ai',
+      path: '/v1/sonar'
+    }
+  )
+})
+
 test('accepts a full chat completions URL in the API address field', () => {
   assert.deepEqual(
     normalizeAIEndpoint('https://openrouter.ai/api/v1/chat/completions', ''),
@@ -168,6 +178,13 @@ test('client endpoint preview uses the same popular provider root URL rules', as
     {
       baseURL: 'https://api.perplexity.ai',
       path: '/chat/completions'
+    }
+  )
+  assert.deepEqual(
+    normalizeClientAIEndpoint('https://api.perplexity.ai/v1/sonar', ''),
+    {
+      baseURL: 'https://api.perplexity.ai',
+      path: '/v1/sonar'
     }
   )
 })

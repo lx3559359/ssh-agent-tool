@@ -1,4 +1,5 @@
 const CHAT_PATH = '/chat/completions'
+const PERPLEXITY_SONAR_PATH = '/v1/sonar'
 const RESPONSE_PATH = '/responses'
 const MODELS_PATH = '/models'
 
@@ -36,7 +37,7 @@ function splitFullEndpoint (baseURL) {
   const url = new URL(baseURL)
   const cleanPath = trimEndSlash(url.pathname)
   const lowerPath = cleanPath.toLowerCase()
-  const knownPaths = [CHAT_PATH, RESPONSE_PATH, MODELS_PATH]
+  const knownPaths = [CHAT_PATH, PERPLEXITY_SONAR_PATH, RESPONSE_PATH, MODELS_PATH]
   const matched = knownPaths.find(path => lowerPath.endsWith(path))
 
   if (!matched) {
@@ -121,6 +122,7 @@ function normalizeAIModelBaseURL (baseURL) {
 module.exports = {
   CHAT_PATH,
   MODELS_PATH,
+  PERPLEXITY_SONAR_PATH,
   RESPONSE_PATH,
   normalizeAIEndpoint,
   normalizeAIModelBaseURL
