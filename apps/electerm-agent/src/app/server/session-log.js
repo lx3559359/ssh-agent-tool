@@ -4,6 +4,7 @@
 
 const { resolve } = require('path')
 const { existsSync, mkdirSync, createWriteStream } = require('fs')
+const { redactLogValue } = require('../lib/log-redaction')
 
 function mkLogDir (logDir) {
   try {
@@ -25,7 +26,7 @@ class SessionLog {
   }
 
   write (text) {
-    this.stream.write(text)
+    this.stream.write(typeof text === 'string' ? redactLogValue(text) : text)
   }
 
   destroy () {
