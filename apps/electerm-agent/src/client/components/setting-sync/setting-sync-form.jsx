@@ -87,8 +87,8 @@ export default function SyncForm (props) {
     const test = await window.store.testSyncToken(syncType, res.gistId)
     if (isError(test)) {
       return notification.error({
-        message: test.message || 'Request failed',
-        description: test.stack || 'Request failed'
+        message: test.message || '请求失败',
+        description: test.stack || '请求失败'
       })
     }
     // if (!res.gistId && syncType !== syncTypes.custom && syncType !== syncTypes.cloud) {
@@ -125,7 +125,7 @@ export default function SyncForm (props) {
       return null
     }
     return (
-      <Link to={props.formData.url}>Check gist</Link>
+      <Link to={props.formData.url}>查看 Gist</Link>
     )
   }
 
@@ -138,12 +138,12 @@ export default function SyncForm (props) {
     ? dayjs(lastSyncTime).format('YYYY-MM-DD HH:mm:ss')
     : '-'
   const customNameMapper = {
-    token: 'JWT Secret',
-    gist: 'User ID'
+    token: 'JWT 密钥',
+    gist: '用户 ID'
   }
   const otherNameMapper = {
-    token: 'access token',
-    gistId: 'gist id'
+    token: '访问令牌',
+    gistId: 'Gist ID'
   }
   function createLabel (name, text) {
     return (
@@ -168,11 +168,11 @@ export default function SyncForm (props) {
         <Alert
           title={
             <span>
-              Gitee data sync is not recommended. For more information, please refer to the
+              不建议继续使用 Gitee 数据同步。更多信息请查看
               <Link to='https://github.com/electerm/electerm/wiki/gitee-data-sync-warning' className='mg1l'>
-                wiki
+                说明文档
               </Link>
-              .
+              。
             </span>
           }
           type='warning'
@@ -188,7 +188,7 @@ export default function SyncForm (props) {
       return (
         <p>
           <Link to='https://sync.electerm.org'>
-            https://sync.electerm.org[Beta]
+            https://sync.electerm.org（预览）
           </Link>
         </p>
       )
@@ -205,11 +205,11 @@ export default function SyncForm (props) {
         name='apiUrl'
         normalize={trim}
         rules={[{
-          max: 200, message: '200 chars max'
+          max: 200, message: '最多 200 个字符'
         }]}
       >
         <Input
-          placeholder='API Url'
+          placeholder='API 地址'
           id='sync-input-url-custom'
         />
       </FormItem>
@@ -223,9 +223,9 @@ export default function SyncForm (props) {
           name='serverUrl'
           normalize={trim}
           rules={[{
-            max: 500, message: '500 chars max'
+            max: 500, message: '最多 500 个字符'
           }, {
-            required: true, message: 'Server URL is required'
+            required: true, message: '请填写服务器 URL'
           }]}
         >
           <Input
@@ -238,18 +238,18 @@ export default function SyncForm (props) {
           name='username'
           normalize={trim}
           rules={[{
-            max: 200, message: '200 chars max'
+            max: 200, message: '最多 200 个字符'
           }, {
-            required: true, message: 'Username is required'
+            required: true, message: '请填写用户名'
           }]}
         >
           <Input
-            placeholder='WebDAV username'
+            placeholder='WebDAV 用户名'
             id='sync-input-webdav-username'
           />
         </FormItem>
         <FormItem
-          label={createLabel('Skip SSL verify')}
+          label={createLabel('跳过 SSL 校验')}
           name='skipVerify'
           valuePropName='checked'
         >
@@ -260,13 +260,13 @@ export default function SyncForm (props) {
           name='password'
           normalize={trim}
           rules={[{
-            max: 200, message: '200 chars max'
+            max: 200, message: '最多 200 个字符'
           }, {
-            required: true, message: 'Password is required'
+            required: true, message: '请填写密码'
           }]}
         >
           <Password
-            placeholder='WebDAV password'
+            placeholder='WebDAV 密码'
             id='sync-input-webdav-password'
           />
         </FormItem>
@@ -274,14 +274,14 @@ export default function SyncForm (props) {
     )
   }
   const desc = syncType === syncTypes.custom
-    ? 'jwt secret'
+    ? 'JWT 密钥'
     : syncType === syncTypes.webdav
-      ? 'WebDAV credentials'
-      : 'personal access token'
+      ? 'WebDAV 凭据'
+      : '个人访问令牌'
   const idDesc = syncType === syncTypes.custom
-    ? 'user id'
+    ? '用户 ID'
     : syncType === syncTypes.webdav
-      ? 'WebDAV server'
+      ? 'WebDAV 服务器'
       : 'gist ID'
   const tokenLabel = createLabel('token', desc)
   const gistLabel = createLabel('gist', idDesc)
@@ -298,7 +298,7 @@ export default function SyncForm (props) {
         required
         normalize={trim}
         rules={[{
-          max: 100, message: '100 chars max'
+          max: 100, message: '最多 100 个字符'
         }]}
       >
         <Input
@@ -319,11 +319,11 @@ export default function SyncForm (props) {
         name='syncPassword'
         normalize={trim}
         rules={[{
-          max: 100, message: '100 chars max'
+          max: 100, message: '最多 100 个字符'
         }]}
       >
         <Password
-          placeholder={syncType + ' ' + syncPasswordName}
+          placeholder={`${syncType} ${syncPasswordName}`}
         />
       </FormItem>
     )
@@ -331,11 +331,11 @@ export default function SyncForm (props) {
   function createProxyItem () {
     return (
       <FormItem
-        label='Proxy'
+        label='代理'
         name='proxy'
         normalize={trim}
         rules={[{
-          max: 200, message: '200 chars max'
+          max: 200, message: '最多 200 个字符'
         }]}
       >
         <Input
@@ -360,9 +360,9 @@ export default function SyncForm (props) {
         name='token'
         normalize={trim}
         rules={[{
-          max: 1100, message: '1100 chars max'
+          max: 1100, message: '最多 1100 个字符'
         }, {
-          required: true, message: createPlaceHolder('token') + ' required'
+          required: true, message: `请填写${createPlaceHolder('token')}`
         }]}
       >
         <Password
