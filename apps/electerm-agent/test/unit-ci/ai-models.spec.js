@@ -410,6 +410,58 @@ test('returns built-in models for popular providers when their model list is emp
   }
 })
 
+test('returns built-in models for required official providers when their model list is empty', async () => {
+  const axios = require('axios')
+  const originalCreate = axios.create
+  const calls = []
+
+  axios.create = (config) => ({
+    get: async (urlPath) => {
+      calls.push({
+        baseURL: config.baseURL,
+        path: urlPath
+      })
+      return {
+        data: {
+          data: []
+        }
+      }
+    }
+  })
+
+  delete require.cache[aiPath]
+  const { AIModels } = require(aiPath)
+
+  try {
+    const cases = [
+      ['https://api.openai.com/v1', ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini']],
+      ['https://api.deepseek.com', ['deepseek-chat', 'deepseek-reasoner']],
+      ['https://dashscope.aliyuncs.com', ['qwen-plus', 'qwen-max', 'qwen-turbo', 'qwen-long']],
+      ['https://open.bigmodel.cn', ['glm-4-plus', 'glm-4-air', 'glm-4-flash']],
+      ['https://api.moonshot.cn/v1', ['moonshot-v1-8k', 'moonshot-v1-32k', 'moonshot-v1-128k']],
+      ['https://api.siliconflow.cn/v1', ['Qwen/Qwen3-32B', 'deepseek-ai/DeepSeek-V3', 'deepseek-ai/DeepSeek-R1']],
+      ['https://openrouter.ai', ['openai/gpt-4o-mini', 'anthropic/claude-3.5-sonnet']]
+    ]
+
+    for (const [baseURL, models] of cases) {
+      const res = await AIModels(baseURL, 'test-key', '', 'Authorization: Bearer')
+      assert.deepEqual(res, {
+        models,
+        source: 'built-in'
+      }, baseURL)
+    }
+
+    assert.equal(calls.length, cases.length)
+    assert.deepEqual(
+      calls.map(call => call.path),
+      cases.map(() => '/models')
+    )
+  } finally {
+    axios.create = originalCreate
+    delete require.cache[aiPath]
+  }
+})
+
 test('keeps remote model list errors instead of masking them with Ollama fallback', async () => {
   const axios = require('axios')
   const originalCreate = axios.create

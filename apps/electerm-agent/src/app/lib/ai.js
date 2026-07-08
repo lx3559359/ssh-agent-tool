@@ -278,6 +278,7 @@ function getAIErrorMessage (error) {
 }
 
 const builtInProviderModels = new Map([
+  ['api.openai.com', ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini']],
   ['api.deepseek.com', ['deepseek-chat', 'deepseek-reasoner']],
   ['api.moonshot.cn', ['moonshot-v1-8k', 'moonshot-v1-32k', 'moonshot-v1-128k']],
   ['open.bigmodel.cn', ['glm-4-plus', 'glm-4-air', 'glm-4-flash']],
