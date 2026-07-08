@@ -260,6 +260,30 @@ function getAIErrorMessage (error) {
   return error && error.message
 }
 
+const builtInProviderModels = new Map([
+  ['api.deepseek.com', ['deepseek-chat', 'deepseek-reasoner']],
+  ['api.moonshot.cn', ['moonshot-v1-8k', 'moonshot-v1-32k', 'moonshot-v1-128k']],
+  ['open.bigmodel.cn', ['glm-4-plus', 'glm-4-air', 'glm-4-flash']],
+  ['dashscope.aliyuncs.com', ['qwen-plus', 'qwen-max', 'qwen-turbo', 'qwen-long']],
+  ['api.siliconflow.cn', ['Qwen/Qwen3-32B', 'deepseek-ai/DeepSeek-V3', 'deepseek-ai/DeepSeek-R1']],
+  ['api.siliconflow.com', ['Qwen/Qwen3-32B', 'deepseek-ai/DeepSeek-V3', 'deepseek-ai/DeepSeek-R1']],
+  ['api.hunyuan.cloud.tencent.com', ['hunyuan-turbos-latest']]
+])
+
+function getBuiltInProviderModels (baseURL) {
+  try {
+    const host = new URL(String(baseURL || '')).hostname.toLowerCase()
+    return builtInProviderModels.get(host) || []
+  } catch (_) {
+    return []
+  }
+}
+
+function shouldUseBuiltInProviderModels (error) {
+  const status = error?.response?.status
+  return status === 404 || status === 405 || status === 501
+}
+
 async function fetchOpenAIModels (baseURL, apiKey, proxy, authHeaderName) {
   const client = createAIClient(normalizeAIModelBaseURL(baseURL), apiKey, proxy, authHeaderName)
   const response = await client.get('/models')
@@ -305,6 +329,15 @@ exports.AIModels = async (baseURL, apiKey, proxy, authHeaderName) => {
     }
   } catch (e) {
     if (!shouldTryOllamaModels(baseURL)) {
+      const models = shouldUseBuiltInProviderModels(e)
+        ? getBuiltInProviderModels(baseURL)
+        : []
+      if (models.length) {
+        return {
+          models,
+          source: 'built-in'
+        }
+      }
       log.error('AI models error')
       log.error(e)
       return {

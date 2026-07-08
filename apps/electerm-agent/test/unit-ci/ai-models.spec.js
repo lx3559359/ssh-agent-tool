@@ -234,6 +234,54 @@ test('keeps remote model list errors instead of masking them with Ollama fallbac
   }
 })
 
+test('returns built-in provider models when a known provider has no models endpoint', async () => {
+  const axios = require('axios')
+  const originalCreate = axios.create
+  const calls = []
+
+  axios.create = (config) => ({
+    get: async (urlPath) => {
+      calls.push({
+        baseURL: config.baseURL,
+        path: urlPath
+      })
+      const err = new Error('Request failed with status code 404')
+      err.response = {
+        status: 404,
+        data: {
+          error: {
+            message: 'models endpoint not found'
+          }
+        }
+      }
+      throw err
+    }
+  })
+
+  delete require.cache[aiPath]
+  const { AIModels } = require(aiPath)
+
+  try {
+    const res = await AIModels('https://api.deepseek.com', 'test-key', '', 'Authorization: Bearer')
+    assert.deepEqual(res, {
+      models: [
+        'deepseek-chat',
+        'deepseek-reasoner'
+      ],
+      source: 'built-in'
+    })
+    assert.deepEqual(calls, [
+      {
+        baseURL: 'https://api.deepseek.com',
+        path: '/models'
+      }
+    ])
+  } finally {
+    axios.create = originalCreate
+    delete require.cache[aiPath]
+  }
+})
+
 test('returns provider error messages from model list requests', async () => {
   const axios = require('axios')
   const originalCreate = axios.create
