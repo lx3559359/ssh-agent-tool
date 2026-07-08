@@ -19,6 +19,7 @@ import uid from '../common/uid'
 import deepCopy from 'json-deep-copy'
 import { isAIConfigMissing } from '../components/ai/ai-config-props'
 import { normalizeRightPanelWidth } from '../components/main/aigshell-layout'
+import { buildTerminalContextPrompt } from '../components/ai/ai-ssh-context'
 
 const e = window.translate
 const { assign } = Object
@@ -232,11 +233,15 @@ export default Store => {
     store.rightPanelTab = 'ai'
   }
 
-  Store.prototype.explainWithAi = function (txt) {
+  Store.prototype.explainWithAi = function (txt, source = 'selection') {
     const { store } = window
     store.handleOpenAIPanel()
+    const prompt = buildTerminalContextPrompt({
+      source,
+      text: txt
+    })
     setTimeout(() => {
-      refsStatic.get('AIChat')?.setPrompt(`explain terminal output: ${txt}`)
+      refsStatic.get('AIChat')?.setPrompt(prompt)
     }, 500)
     setTimeout(() => {
       refsStatic.get('AIChat')?.handleSubmit()

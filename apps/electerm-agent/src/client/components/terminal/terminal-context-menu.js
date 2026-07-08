@@ -58,6 +58,11 @@ export function buildTerminalContextMenuItems ({
       disabled: !hasSelection
     }),
     item({
+      key: 'analyzeTerminalWithAi',
+      iconKey: 'AIIcon',
+      labelText: 'AI 分析当前终端'
+    }),
+    item({
       key: 'copyCurrentPath',
       iconKey: 'CopyOutlined',
       labelText: '复制当前路径',

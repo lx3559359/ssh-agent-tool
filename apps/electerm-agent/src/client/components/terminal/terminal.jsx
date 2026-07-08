@@ -741,7 +741,15 @@ class Term extends Component {
 
   explainWithAi = () => {
     window.store.explainWithAi(
-      this.term.getSelection()
+      this.term.getSelection(),
+      'selection'
+    )
+  }
+
+  analyzeTerminalWithAi = () => {
+    window.store.explainWithAi(
+      this.getTerminalBufferText(),
+      'terminal'
     )
   }
 

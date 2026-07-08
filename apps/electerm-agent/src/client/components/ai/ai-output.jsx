@@ -5,6 +5,7 @@ import Link from '../common/external-link'
 import { Tag } from 'antd'
 import { CopyOutlined, PlayCircleOutlined } from '@ant-design/icons'
 import getBrand from './get-brand'
+import { confirmAndRunAICommand } from './ai-ssh-context'
 
 const e = window.translate
 
@@ -45,26 +46,11 @@ export default function AIOutput ({ item }) {
       copy(code)
     }
 
-    const runInTerminal = () => {
-      // Filter out comments from the code before running
-      const filteredCode = code
-        .split('\n')
-        .map(line => line.trim())
-        .filter(line => {
-          // Remove empty lines and comments
-          if (!line) {
-            return false
-          }
-          if (line.startsWith('#')) {
-            return false
-          }
-          return true
-        })
-        .join('\n') // Join multiple commands with &&
-
-      if (filteredCode) {
-        window.store.runCommandInTerminal(filteredCode)
-      }
+    const runInTerminal = async () => {
+      await confirmAndRunAICommand({
+        code,
+        store: window.store
+      })
     }
 
     return (

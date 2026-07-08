@@ -29,6 +29,7 @@ test('terminal context menu includes daily SSH operations and copy current path'
     'onPasteSelected',
     'onSelectAll',
     'explainWithAi',
+    'analyzeTerminalWithAi',
     'copyCurrentPath',
     'onClear',
     'onReconnect',
@@ -39,6 +40,7 @@ test('terminal context menu includes daily SSH operations and copy current path'
   ])
   assert.equal(items.find(item => item.key === 'copyCurrentPath').disabled, false)
   assert.equal(items.find(item => item.key === 'explainWithAi').disabled, false)
+  assert.equal(items.find(item => item.key === 'analyzeTerminalWithAi').labelText, 'AI 分析当前终端')
 })
 
 test('terminal context menu disables selection and cwd actions when unavailable', async () => {
@@ -52,6 +54,7 @@ test('terminal context menu disables selection and cwd actions when unavailable'
 
   assert.equal(items.find(item => item.key === 'onCopy').disabled, true)
   assert.equal(items.find(item => item.key === 'explainWithAi').disabled, true)
+  assert.equal(items.find(item => item.key === 'analyzeTerminalWithAi').disabled, false)
   assert.equal(items.find(item => item.key === 'copyCurrentPath').disabled, true)
   assert.equal(items.find(item => item.key === 'onStopRecord').labelKey, 'stopRecord')
 })

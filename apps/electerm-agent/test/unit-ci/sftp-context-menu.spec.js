@@ -6,6 +6,10 @@ const { pathToFileURL } = require('node:url')
 const moduleUrl = pathToFileURL(
   path.resolve(__dirname, '../../src/client/components/sftp/context-menu-utils.js')
 ).href
+const fileItemSource = require('node:fs').readFileSync(
+  path.resolve(__dirname, '../../src/client/components/sftp/file-item.jsx'),
+  'utf8'
+)
 
 function createItems (count) {
   return Array.from({ length: count }, (_, index) => ({
@@ -45,4 +49,11 @@ test('sftp context menu does not create an overflow submenu for short menus', as
     splitOverflowMenu({ items, clientY: 590, windowHeight: 600 }),
     items
   )
+})
+
+test('sftp file context menu exposes AI file reference for editable files', () => {
+  assert.match(fileItemSource, /func:\s*'askAiAboutFile'/)
+  assert.match(fileItemSource, /text:\s*'AI 引用文件'/)
+  assert.match(fileItemSource, /buildSftpFileContextPrompt/)
+  assert.match(fileItemSource, /fetchEditorText\(filePath,\s*type\)/)
 })

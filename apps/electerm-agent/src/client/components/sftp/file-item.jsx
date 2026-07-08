@@ -39,6 +39,7 @@ import sanitizeFilename from '../../common/sanitize-filename'
 import { refsStatic, refs, filesRef } from '../common/ref'
 import iconsMap from '../sys-menu/icons-map'
 import { splitOverflowMenu } from './context-menu-utils.js'
+import { buildSftpFileContextPrompt } from '../ai/ai-ssh-context'
 
 const e = window.translate
 
@@ -727,6 +728,21 @@ export default class FileSection extends React.Component {
     })
   }
 
+  askAiAboutFile = async () => {
+    const { path, name, type } = this.state.file
+    const filePath = resolve(path, name)
+    try {
+      const text = await this.fetchEditorText(filePath, type)
+      window.store.handleOpenAIPanel()
+      refsStatic.get('AIChat')?.setPrompt(buildSftpFileContextPrompt({
+        path: filePath,
+        content: text
+      }))
+    } catch (err) {
+      window.store.onError(err)
+    }
+  }
+
   transferOrEnterDirectory = async (e, edit) => {
     const { file } = this.state
     const { isDirectory, type, size } = file
@@ -1059,6 +1075,11 @@ export default class FileSection extends React.Component {
       })
     }
     if (showEdit) {
+      res.push({
+        func: 'askAiAboutFile',
+        icon: 'CodeOutlined',
+        text: 'AI 引用文件'
+      })
       res.push({
         func: 'editFile',
         icon: 'EditOutlined',
