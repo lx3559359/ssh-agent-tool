@@ -13,6 +13,7 @@ import {
   aiConfigWikiLink
 } from '../../common/constants'
 import { refsStatic } from '../common/ref'
+import { getAIChatSubmitAction } from './ai-chat-submit'
 import aiAgentCopy from './ai-agent-copy.json'
 import './ai.styl'
 
@@ -30,11 +31,15 @@ export default function AIChat (props) {
   }
 
   const handleSubmit = useCallback(function () {
-    if (window.store.aiConfigMissing()) {
+    const submitAction = getAIChatSubmitAction({
+      prompt,
+      config: props.config
+    })
+    if (submitAction === 'noop') return
+    if (submitAction === 'open-config') {
       window.store.toggleAIConfig()
       return
     }
-    if (!prompt.trim()) return
 
     const chatId = uid()
     const chatEntry = {
@@ -66,7 +71,7 @@ export default function AIChat (props) {
     if (window.store.aiChatHistory.length > MAX_HISTORY) {
       window.store.aiChatHistory.splice(MAX_HISTORY)
     }
-  }, [prompt, mode])
+  }, [prompt, mode, props.config])
 
   function renderHistory () {
     return (
