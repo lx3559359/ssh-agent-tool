@@ -164,6 +164,22 @@ test('normalizes relay model list container aliases', () => {
       'qwen-plus'
     ]
   )
+
+  assert.deepEqual(
+    normalizeAIModelsResponse({
+      data: {
+        page: 1,
+        rows: [
+          { id: 'moonshot-v1-8k' },
+          { modelCode: 'glm-4-flash' }
+        ]
+      }
+    }),
+    [
+      'moonshot-v1-8k',
+      'glm-4-flash'
+    ]
+  )
 })
 
 test('tries Ollama tags endpoint when OpenAI models endpoint returns empty list', async () => {
