@@ -285,7 +285,14 @@ const builtInProviderModels = new Map([
   ['api.siliconflow.cn', ['Qwen/Qwen3-32B', 'deepseek-ai/DeepSeek-V3', 'deepseek-ai/DeepSeek-R1']],
   ['api.siliconflow.com', ['Qwen/Qwen3-32B', 'deepseek-ai/DeepSeek-V3', 'deepseek-ai/DeepSeek-R1']],
   ['api.minimax.io', ['MiniMax-M3']],
-  ['api.hunyuan.cloud.tencent.com', ['hunyuan-turbos-latest']]
+  ['api.hunyuan.cloud.tencent.com', ['hunyuan-turbos-latest']],
+  ['openrouter.ai', ['openai/gpt-4o-mini', 'anthropic/claude-3.5-sonnet']],
+  ['ark.cn-beijing.volces.com', ['doubao-seed-1-6']],
+  ['api.groq.com', ['llama-3.3-70b-versatile']],
+  ['generativelanguage.googleapis.com', ['gemini-2.5-flash', 'gemini-2.5-pro']],
+  ['api.together.xyz', ['meta-llama/Llama-3.3-70B-Instruct-Turbo']],
+  ['qianfan.baidubce.com', ['ernie-4.5-turbo-128k']],
+  ['qianfan.bj.baidubce.com', ['ernie-4.5-turbo-128k']]
 ])
 
 function getBuiltInProviderModels (baseURL) {

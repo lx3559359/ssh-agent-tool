@@ -358,6 +358,57 @@ test('returns built-in MiniMax model when its model list is empty', async () => 
   }
 })
 
+test('returns built-in models for popular providers when their model list is empty', async () => {
+  const axios = require('axios')
+  const originalCreate = axios.create
+  const calls = []
+
+  axios.create = (config) => ({
+    get: async (urlPath) => {
+      calls.push({
+        baseURL: config.baseURL,
+        path: urlPath
+      })
+      return {
+        data: {
+          data: []
+        }
+      }
+    }
+  })
+
+  delete require.cache[aiPath]
+  const { AIModels } = require(aiPath)
+
+  try {
+    const cases = [
+      ['https://openrouter.ai', ['openai/gpt-4o-mini', 'anthropic/claude-3.5-sonnet']],
+      ['https://ark.cn-beijing.volces.com', ['doubao-seed-1-6']],
+      ['https://api.groq.com', ['llama-3.3-70b-versatile']],
+      ['https://generativelanguage.googleapis.com', ['gemini-2.5-flash', 'gemini-2.5-pro']],
+      ['https://api.together.xyz', ['meta-llama/Llama-3.3-70B-Instruct-Turbo']],
+      ['https://qianfan.baidubce.com', ['ernie-4.5-turbo-128k']]
+    ]
+
+    for (const [baseURL, models] of cases) {
+      const res = await AIModels(baseURL, 'test-key', '', 'Authorization: Bearer')
+      assert.deepEqual(res, {
+        models,
+        source: 'built-in'
+      }, baseURL)
+    }
+
+    assert.equal(calls.length, cases.length)
+    assert.deepEqual(
+      calls.map(call => call.path),
+      cases.map(() => '/models')
+    )
+  } finally {
+    axios.create = originalCreate
+    delete require.cache[aiPath]
+  }
+})
+
 test('keeps remote model list errors instead of masking them with Ollama fallback', async () => {
   const axios = require('axios')
   const originalCreate = axios.create
