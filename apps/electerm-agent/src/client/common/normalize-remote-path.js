@@ -8,13 +8,20 @@
  */
 export default function normalizeRemotePath (path) {
   if (!path) return path
+  const normalized = String(path).replace(/\\/g, '/')
+  if (normalized === '~' || normalized.startsWith('~/')) {
+    return normalized
+  }
   // Fix mixed separators: /c:\windows → /c:/windows
-  if (/^\/[a-zA-Z]:\\/.test(path)) {
-    return path.replace(/\\/g, '/')
+  if (/^\/[a-zA-Z]:\//.test(normalized)) {
+    return normalized
   }
   // Add leading / to bare drive letters: c: → /c:, c:\windows → /c:/windows
-  if (/^[a-zA-Z]:/.test(path)) {
-    return '/' + path.replace(/\\/g, '/')
+  if (/^[a-zA-Z]:/.test(normalized)) {
+    return '/' + normalized
   }
-  return path
+  if (normalized.startsWith('/')) {
+    return normalized
+  }
+  return '/' + normalized.replace(/^(\.\/)+/, '').replace(/^(\.\.\/)+/, '')
 }
