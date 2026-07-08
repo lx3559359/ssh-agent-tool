@@ -4,6 +4,9 @@ const pack = require('../../package.json')
 const {
   buildLocalReleaseAssetReport
 } = require('./github-release-utils')
+const {
+  validateUpdateApprovalManifest
+} = require('./write-update-approval-manifest')
 
 const distDir = path.resolve(__dirname, '../../dist')
 const releaseArch = process.env.AIGSHELL_RELEASE_ARCH
@@ -19,6 +22,12 @@ function readLocalFiles () {
       size: fs.statSync(filePath).size
     }
   })
+}
+
+function validateLocalUpdateApprovalManifest () {
+  const manifestPath = path.join(distDir, 'aigshell-update.json')
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
+  validateUpdateApprovalManifest(manifest, pack.version)
 }
 
 function printList (title, list) {
@@ -37,6 +46,7 @@ function main () {
   })
 
   if (report.ok) {
+    validateLocalUpdateApprovalManifest()
     console.log('Local AIGShell update assets are ready for upload.')
     report.requiredNames.forEach(name => console.log(`- ${name}`))
     return

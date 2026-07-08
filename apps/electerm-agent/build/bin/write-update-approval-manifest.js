@@ -12,6 +12,29 @@ function buildUpdateApprovalManifest (version = pack.version) {
   }
 }
 
+function normalizeVersion (version) {
+  return String(version || '').trim().replace(/^v/i, '')
+}
+
+function validateUpdateApprovalManifest (manifest, version = pack.version) {
+  if (!manifest || typeof manifest !== 'object') {
+    throw new Error('aigshell-update.json must contain an object')
+  }
+  if (manifest.product !== 'AIGShell') {
+    throw new Error('aigshell-update.json product must be AIGShell')
+  }
+  if (manifest.channel !== 'stable') {
+    throw new Error('aigshell-update.json channel must be stable')
+  }
+  if (manifest.publishApproved !== true) {
+    throw new Error('aigshell-update.json publishApproved must be true')
+  }
+  if (normalizeVersion(manifest.version) !== normalizeVersion(version)) {
+    throw new Error('aigshell-update.json version must match package version')
+  }
+  return true
+}
+
 function main () {
   const distDir = path.resolve(__dirname, '../../dist')
   fs.mkdirSync(distDir, { recursive: true })
@@ -26,5 +49,6 @@ if (require.main === module) {
 }
 
 module.exports = {
-  buildUpdateApprovalManifest
+  buildUpdateApprovalManifest,
+  validateUpdateApprovalManifest
 }

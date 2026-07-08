@@ -15,7 +15,8 @@ const {
   createSpawnOptions
 } = require(path.resolve(__dirname, '../../build/bin/github-release-utils'))
 const {
-  buildUpdateApprovalManifest
+  buildUpdateApprovalManifest,
+  validateUpdateApprovalManifest
 } = require(path.resolve(__dirname, '../../build/bin/write-update-approval-manifest'))
 
 test('windows release workflow publishes only online update assets', () => {
@@ -188,6 +189,17 @@ test('release verification scripts accept an explicit Windows release architectu
   assert.match(githubVerifySource, /buildReleaseAssetReport\(\{[\s\S]*arch:\s*releaseArch/s)
 })
 
+test('local release verification validates the update approval manifest content', () => {
+  const localVerifySource = fs.readFileSync(
+    path.resolve(__dirname, '../../build/bin/verify-local-release-assets.js'),
+    'utf8'
+  )
+
+  assert.match(localVerifySource, /validateUpdateApprovalManifest/)
+  assert.match(localVerifySource, /aigshell-update\.json/)
+  assert.match(localVerifySource, /pack\.version/)
+})
+
 test('windows ci workflow runs unit tests for normal code changes without publishing', () => {
   const workflow = fs.readFileSync(
     path.resolve(__dirname, '../../../../.github/workflows/windows-electerm-agent-ci.yml'),
@@ -240,6 +252,46 @@ test('builds the stable update approval manifest required by clients', () => {
       version: '3.15.105',
       generatedAt: '<dynamic>'
     }
+  )
+})
+
+test('validates update approval manifest content before release upload', () => {
+  assert.doesNotThrow(() => validateUpdateApprovalManifest({
+    product: 'AIGShell',
+    channel: 'stable',
+    publishApproved: true,
+    version: '3.15.105',
+    generatedAt: '2026-07-09T00:00:00.000Z'
+  }, '3.15.105'))
+
+  assert.throws(
+    () => validateUpdateApprovalManifest({
+      product: 'AIGShell',
+      channel: 'beta',
+      publishApproved: true,
+      version: '3.15.105'
+    }, '3.15.105'),
+    /stable/
+  )
+
+  assert.throws(
+    () => validateUpdateApprovalManifest({
+      product: 'AIGShell',
+      channel: 'stable',
+      publishApproved: false,
+      version: '3.15.105'
+    }, '3.15.105'),
+    /publishApproved/
+  )
+
+  assert.throws(
+    () => validateUpdateApprovalManifest({
+      product: 'AIGShell',
+      channel: 'stable',
+      publishApproved: true,
+      version: '3.15.104'
+    }, '3.15.105'),
+    /version/
   )
 })
 
