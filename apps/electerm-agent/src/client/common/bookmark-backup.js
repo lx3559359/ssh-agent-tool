@@ -90,7 +90,7 @@ function isBackupGroupList (items) {
 export function parseBookmarkBackup (text) {
   let content
   try {
-    content = typeof text === 'string' ? JSON.parse(text) : text
+    content = typeof text === 'string' ? JSON.parse(text.replace(/^\uFEFF/, '')) : text
   } catch (_) {
     throw new Error(invalidJsonError)
   }

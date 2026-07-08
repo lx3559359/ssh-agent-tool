@@ -86,6 +86,19 @@ test('parses legacy bookmark exports whose connections do not have ids yet', asy
   assert.deepEqual(parseBookmarkBackup(JSON.stringify(legacyObject)), legacyObject)
 })
 
+test('parses bookmark backup json with a utf-8 bom prefix', async () => {
+  const {
+    parseBookmarkBackup
+  } = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/common/bookmark-backup.js')))
+
+  const legacyObject = {
+    bookmarks: [{ id: 'server-1', title: 'prod-web-01' }],
+    bookmarkGroups: []
+  }
+
+  assert.deepEqual(parseBookmarkBackup('\uFEFF' + JSON.stringify(legacyObject)), legacyObject)
+})
+
 test('rejects invalid bookmark backup content with a clear error', async () => {
   const {
     parseBookmarkBackup
