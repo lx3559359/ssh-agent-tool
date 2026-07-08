@@ -29,6 +29,9 @@ import {
   buildTerminalContextPrompt
 } from './ai-ssh-context'
 import {
+  buildMcpServerContextPrompt
+} from './agent-mcp-servers'
+import {
   getActiveSftpRef,
   getActiveTerminalRef,
   getAIContextUnavailableMessage,
@@ -83,7 +86,8 @@ export default function AIChat (props) {
         'apiKeyAI',
         'authHeaderNameAI',
         'proxyAI',
-        'languageAI'
+        'languageAI',
+        'mcpServers'
       ]),
       timestamp: Date.now(),
       id: chatId
@@ -161,6 +165,17 @@ export default function AIChat (props) {
     }))
   }
 
+  function handleQuoteMcpServers () {
+    const text = buildMcpServerContextPrompt({
+      mcpServers: props.config?.mcpServers || window.store.config?.mcpServers || []
+    })
+    if (!text) {
+      message.warning(getAIContextUnavailableMessage('mcp'))
+      return
+    }
+    setPrompt(text)
+  }
+
   function showUnavailableContextAction (type) {
     message.warning(getAIContextUnavailableMessage(type))
   }
@@ -226,7 +241,7 @@ export default function AIChat (props) {
         key: 'mcp',
         text: 'MCP',
         icon: <ApiOutlined />,
-        handleClick: () => showUnavailableContextAction('mcp')
+        handleClick: handleQuoteMcpServers
       },
       {
         key: 'cli',

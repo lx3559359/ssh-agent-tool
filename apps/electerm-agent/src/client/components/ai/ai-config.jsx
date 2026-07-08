@@ -210,6 +210,35 @@ const skillFields = [
   }
 ]
 
+const mcpServerFields = [
+  {
+    name: 'name',
+    label: '名称',
+    placeholder: '例如：Prometheus、CMDB、知识库',
+    required: true
+  },
+  {
+    name: 'command',
+    label: '启动命令',
+    placeholder: 'stdio 模式，例如：prometheus-mcp'
+  },
+  {
+    name: 'url',
+    label: 'HTTP 地址',
+    placeholder: 'HTTP 模式，例如：https://cmdb.example.com/mcp'
+  },
+  {
+    name: 'description',
+    label: '用途',
+    placeholder: '例如：查询监控指标、服务器资产、内部文档'
+  }
+]
+
+const mcpTransportOptions = [
+  { value: 'stdio', label: 'stdio' },
+  { value: 'http', label: 'HTTP' }
+]
+
 function getCleanAgentSkills (skills = []) {
   return skills
     .filter(skill => skill && (skill.id || skill.title || skill.description || skill.prompt))
@@ -219,6 +248,20 @@ function getCleanAgentSkills (skills = []) {
       description: String(skill.description || '').trim(),
       prompt: String(skill.prompt || '').trim(),
       disabled: Boolean(skill.disabled)
+    }))
+}
+
+function getCleanMcpServers (servers = []) {
+  return servers
+    .filter(server => server && (server.name || server.command || server.url || server.description))
+    .map(server => ({
+      name: String(server.name || '').trim(),
+      transport: String(server.transport || 'stdio').trim(),
+      command: String(server.command || '').trim(),
+      args: String(server.args || '').trim(),
+      url: String(server.url || '').trim(),
+      description: String(server.description || '').trim(),
+      disabled: Boolean(server.disabled)
     }))
 }
 
@@ -268,7 +311,8 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
     const nextValues = {
       ...values,
       apiPathAI: values.apiPathAI || '',
-      agentSkills: getCleanAgentSkills(values.agentSkills)
+      agentSkills: getCleanAgentSkills(values.agentSkills),
+      mcpServers: getCleanMcpServers(values.mcpServers)
     }
     onSubmit({
       ...nextValues
@@ -603,6 +647,81 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
                   })}
                 >
                   新增 Skill
+                </Button>
+              </Space>
+            )}
+          </Form.List>
+        </Form.Item>
+
+        <Form.Item label='MCP Server'>
+          <Form.List name='mcpServers'>
+            {(fields, { add, remove }) => (
+              <Space direction='vertical' className='width-100'>
+                {
+                  fields.map(({ key, name }) => (
+                    <div className='pd1 border' key={key}>
+                      <Space align='start' className='width-100'>
+                        <Form.Item
+                          name={[name, 'transport']}
+                          label='连接方式'
+                          className='width-100'
+                        >
+                          <Select options={mcpTransportOptions} />
+                        </Form.Item>
+                        <Form.Item
+                          name={[name, 'disabled']}
+                          label='状态'
+                          valuePropName='checked'
+                        >
+                          <Checkbox>禁用</Checkbox>
+                        </Form.Item>
+                        <Button
+                          danger
+                          icon={<MinusCircleOutlined />}
+                          onClick={() => remove(name)}
+                        >
+                          删除
+                        </Button>
+                      </Space>
+                      <Space align='start' className='width-100'>
+                        {
+                          mcpServerFields.map(item => (
+                            <Form.Item
+                              key={item.name}
+                              name={[name, item.name]}
+                              label={item.label}
+                              rules={item.required
+                                ? [{ required: true, message: `请输入${item.label}` }]
+                                : []}
+                              className='flex1'
+                            >
+                              <Input placeholder={item.placeholder} />
+                            </Form.Item>
+                          ))
+                        }
+                      </Space>
+                      <Form.Item
+                        name={[name, 'args']}
+                        label='启动参数'
+                      >
+                        <Input placeholder='stdio 模式可选，例如：--url http://127.0.0.1:9090' />
+                      </Form.Item>
+                    </div>
+                  ))
+                }
+                <Button
+                  icon={<PlusOutlined />}
+                  onClick={() => add({
+                    name: '',
+                    transport: 'stdio',
+                    command: '',
+                    args: '',
+                    url: '',
+                    description: '',
+                    disabled: false
+                  })}
+                >
+                  新增 MCP Server
                 </Button>
               </Space>
             )}

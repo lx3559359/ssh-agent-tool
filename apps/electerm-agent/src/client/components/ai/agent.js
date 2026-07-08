@@ -1,5 +1,6 @@
 import { agentTools, executeToolCall } from './agent-tools'
 import { buildAgentSkillPrompt } from './agent-skills'
+import { buildAgentMcpServerPrompt } from './agent-mcp-servers'
 import aiAgentCopy from './ai-agent-copy.json'
 
 const MAX_ITERATIONS = 150
@@ -10,11 +11,16 @@ function buildAgentSystemPrompt (config) {
   const skillPrompt = buildAgentSkillPrompt({
     customSkills: config.agentSkills || window.store.config?.agentSkills || []
   })
+  const mcpServerPrompt = buildAgentMcpServerPrompt({
+    mcpServers: config.mcpServers || window.store.config?.mcpServers || []
+  })
   return `${baseRole}
 
 ${aiAgentCopy.agentPromptRules.join('\n')}
 
 ${skillPrompt}
+
+${mcpServerPrompt}
 
 可用工具：
 - 在终端标签页执行命令并读取输出

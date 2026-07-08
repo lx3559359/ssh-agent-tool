@@ -7,6 +7,7 @@ export const aiConfigsArr = [
   'authHeaderNameAI',
   'apiPathAI',
   'agentSkills',
+  'mcpServers',
   'languageAI',
   'proxyAI'
 ]

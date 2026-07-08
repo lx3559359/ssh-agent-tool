@@ -44,6 +44,7 @@ export default function AIChatHistoryItem ({ item }) {
     authHeaderNameAI,
     proxyAI,
     languageAI,
+    mcpServers,
     mode,
     toolCalls
   } = item
@@ -137,10 +138,11 @@ export default function AIChatHistoryItem ({ item }) {
       apiKeyAI,
       authHeaderNameAI,
       proxyAI,
-      languageAI
+      languageAI,
+      mcpServers
     }
     await runAgentLoop(item, config, abortRef, setIsStreaming)
-  }, [modelAI, roleAI, baseURLAI, apiPathAI, apiKeyAI, authHeaderNameAI, proxyAI, languageAI, item.id])
+  }, [modelAI, roleAI, baseURLAI, apiPathAI, apiKeyAI, authHeaderNameAI, proxyAI, languageAI, mcpServers, item.id])
 
   useEffect(() => {
     if (item.pending) {
