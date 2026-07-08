@@ -254,6 +254,23 @@ describe('session-ssh connection error diagnostics', () => {
     assert.match(normalized.message, /原始错误：read ECONNRESET/)
   })
 
+  test('adds a chinese diagnosis for broken ssh pipes', () => {
+    const error = new Error('write EPIPE')
+    error.code = 'EPIPE'
+
+    const normalized = normalizeSshConnectionError(error, {
+      host: 'jump.example.com',
+      port: 2222,
+      username: 'ops'
+    })
+
+    assert.match(normalized.message, /SSH 连接被远端重置/)
+    assert.match(normalized.message, /ops@jump\.example\.com:2222/)
+    assert.match(normalized.message, /服务器 sshd/)
+    assert.match(normalized.message, /连接数限制/)
+    assert.match(normalized.message, /原始错误：write EPIPE/)
+  })
+
   test('adds a chinese diagnosis for unreachable networks', () => {
     const error = new Error('connect EHOSTUNREACH 10.0.9.9:22')
     error.code = 'EHOSTUNREACH'

@@ -101,7 +101,7 @@ function getSshDiagnosis (err = {}, options = {}) {
       suggestion: '请检查服务器地址、DNS、代理配置或当前网络连接。'
     }
   }
-  if (code === 'ECONNRESET' || /ECONNRESET|connection reset/i.test(message)) {
+  if (code === 'ECONNRESET' || code === 'EPIPE' || /ECONNRESET|connection reset|EPIPE|broken pipe/i.test(message)) {
     return {
       title: 'SSH 连接被远端重置',
       suggestion: '请检查服务器 sshd、堡垒机/代理、防火墙、安全组或连接数限制是否主动断开连接。'
