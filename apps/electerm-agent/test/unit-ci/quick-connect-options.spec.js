@@ -63,3 +63,53 @@ test('rejects invalid quick connect ports before opening an SSH tab', async () =
     username: 'root'
   }), null)
 })
+
+test('builds SSH quick connect options for private key auth', async () => {
+  const {
+    buildQuickConnectOptions
+  } = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/components/tabs/quick-connect-options.js')))
+
+  const opts = buildQuickConnectOptions({
+    protocol: 'ssh',
+    host: '10.0.1.25',
+    port: '22',
+    username: 'deploy',
+    authType: 'privateKey',
+    privateKey: '-----BEGIN OPENSSH PRIVATE KEY-----\nkey\n-----END OPENSSH PRIVATE KEY-----',
+    passphrase: 'key-pass'
+  })
+
+  assert.equal(opts.type, 'ssh')
+  assert.equal(opts.authType, 'privateKey')
+  assert.equal(opts.privateKey.includes('OPENSSH PRIVATE KEY'), true)
+  assert.equal(opts.passphrase, 'key-pass')
+  assert.equal(opts.password, undefined)
+})
+
+test('builds bookmark payload when quick connect is saved as a connection', async () => {
+  const {
+    buildQuickConnectBookmark,
+    buildQuickConnectOptions
+  } = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/components/tabs/quick-connect-options.js')))
+
+  const opts = buildQuickConnectOptions({
+    protocol: 'ssh',
+    host: '10.0.1.26',
+    port: '2222',
+    username: 'root',
+    password: 'secret',
+    saveAsBookmark: true,
+    title: '生产 web'
+  })
+  const bookmark = buildQuickConnectBookmark(opts, { id: 'quick-1' })
+
+  assert.equal(bookmark.id, 'quick-1')
+  assert.equal(bookmark.title, '生产 web')
+  assert.equal(bookmark.host, '10.0.1.26')
+  assert.equal(bookmark.port, 2222)
+  assert.equal(bookmark.username, 'root')
+  assert.equal(bookmark.password, 'secret')
+  assert.equal(bookmark.authType, 'password')
+  assert.equal(bookmark.from, undefined)
+  assert.equal(bookmark.batch, undefined)
+})

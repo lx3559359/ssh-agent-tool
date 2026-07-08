@@ -27,3 +27,14 @@ test('add menu uses the beginner quick connect form instead of the command-line 
   assert.match(source, /<QuickConnect batch=\{batch\} formOnly \/>/)
   assert.doesNotMatch(source, /<QuickConnect batch=\{batch\} inputOnly \/>/)
 })
+
+test('quick connect form exposes SSH auth method and save controls', () => {
+  const source = fs.readFileSync(
+    path.resolve(__dirname, '../../src/client/components/tabs/quick-connect.jsx'),
+    'utf8'
+  )
+
+  assert.match(source, /认证方式/)
+  assert.match(source, /私钥/)
+  assert.match(source, /保存为连接/)
+})

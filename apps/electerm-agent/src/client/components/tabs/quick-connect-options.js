@@ -1,6 +1,7 @@
 import {
   parseQuickConnect
 } from '../../common/parse-quick-connect.js'
+import uid from '../../common/uid.js'
 
 export const QUICK_CONNECT_PROTOCOLS = [
   { value: 'ssh', label: 'SSH', port: 22 },
@@ -36,6 +37,23 @@ function titleFor (opts) {
   return opts.host
 }
 
+function applySshAuth (opts, values) {
+  const authType = clean(values.authType) || 'password'
+  opts.authType = authType
+  if (authType === 'privateKey') {
+    delete opts.password
+    opts.privateKey = values.privateKey || ''
+    opts.passphrase = values.passphrase || ''
+    return
+  }
+  if (authType === 'profiles') {
+    delete opts.password
+    opts.profile = clean(values.profile)
+    return
+  }
+  opts.authType = 'password'
+}
+
 export function buildQuickConnectOptions (values) {
   const protocol = clean(values.protocol) || 'ssh'
   const host = clean(values.host)
@@ -54,8 +72,24 @@ export function buildQuickConnectOptions (values) {
     return null
   }
   if (protocol === 'ssh') {
-    opts.authType = 'password'
+    applySshAuth(opts, values)
   }
-  opts.title = titleFor(opts)
+  opts.title = clean(values.title) || titleFor(opts)
   return opts
+}
+
+export function buildQuickConnectBookmark (opts, options = {}) {
+  const {
+    from,
+    batch,
+    status,
+    tabCount,
+    saveAsBookmark,
+    ...bookmark
+  } = opts
+  return {
+    ...bookmark,
+    id: options.id || `bookmark:${Date.now()}:${uid()}`,
+    title: clean(bookmark.title) || titleFor(bookmark)
+  }
 }

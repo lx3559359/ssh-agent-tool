@@ -1,10 +1,11 @@
 import { useState, useRef, useEffect } from 'react'
-import { Button, Space, Input, Select } from 'antd'
+import { Button, Space, Input, Select, Checkbox } from 'antd'
 import { ArrowRightOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import message from '../common/message'
 import InputAutoFocus from '../common/input-auto-focus'
 import HelpIcon from '../common/help-icon'
 import {
+  buildQuickConnectBookmark,
   buildQuickConnectOptions,
   QUICK_CONNECT_DEFAULT_PORTS,
   QUICK_CONNECT_PROTOCOLS
@@ -12,6 +13,7 @@ import {
 import './quick-connect.styl'
 
 const e = window.translate
+const { TextArea } = Input
 
 /**
  * Connect using parsed options
@@ -38,7 +40,13 @@ export default function QuickConnect ({ batch, inputOnly, formOnly }) {
     host: '',
     port: '22',
     username: '',
-    password: ''
+    password: '',
+    authType: 'password',
+    privateKey: '',
+    passphrase: '',
+    profile: '',
+    title: '',
+    saveAsBookmark: false
   })
   const inputRef = useRef(null)
 
@@ -69,6 +77,9 @@ export default function QuickConnect ({ batch, inputOnly, formOnly }) {
     }
     if (key === 'protocol') {
       next.port = String(QUICK_CONNECT_DEFAULT_PORTS[value] || '')
+      if (value !== 'ssh') {
+        next.authType = 'password'
+      }
     }
     setFormValues(next)
   }
@@ -96,11 +107,16 @@ export default function QuickConnect ({ batch, inputOnly, formOnly }) {
     if (!opts) {
       return message.error('连接信息格式不正确，请检查主机和端口')
     }
+    if (formValues.saveAsBookmark) {
+      window.store.addItem(buildQuickConnectBookmark(opts), 'bookmarks')
+    }
     connectWithOptions(opts, batch)
     setFormValues({
       ...formValues,
       host: '',
-      password: ''
+      password: '',
+      privateKey: '',
+      passphrase: ''
     })
     setShowInput(false)
   }
@@ -144,6 +160,11 @@ export default function QuickConnect ({ batch, inputOnly, formOnly }) {
     if (!showInput && !formOnly) {
       return null
     }
+    const isSsh = formValues.protocol === 'ssh'
+    const profileOptions = (window.store.profiles || []).map(item => ({
+      value: item.id,
+      label: item.name || item.id
+    }))
     return (
       <div className='quick-connect-form'>
         <div className='quick-connect-form-title'>
@@ -178,13 +199,95 @@ export default function QuickConnect ({ batch, inputOnly, formOnly }) {
             placeholder='用户名，选填'
             onPressEnter={handleFormConnect}
           />
-          <Input.Password
-            value={formValues.password}
-            onChange={e => updateFormValue('password', e.target.value)}
-            placeholder='密码，选填'
+          {
+            isSsh
+              ? (
+                <Select
+                  value={formValues.authType}
+                  onChange={value => updateFormValue('authType', value)}
+                  className='quick-connect-auth-type'
+                  placeholder='认证方式'
+                  options={[
+                    { value: 'password', label: '密码' },
+                    { value: 'privateKey', label: '私钥' },
+                    { value: 'profiles', label: '凭据档案' }
+                  ]}
+                />
+                )
+              : (
+                <Input.Password
+                  value={formValues.password}
+                  onChange={e => updateFormValue('password', e.target.value)}
+                  placeholder='密码，选填'
+                  onPressEnter={handleFormConnect}
+                />
+                )
+          }
+        </Space.Compact>
+        {
+          isSsh && formValues.authType === 'password'
+            ? (
+              <Input.Password
+                value={formValues.password}
+                onChange={e => updateFormValue('password', e.target.value)}
+                placeholder='密码，选填'
+                className='width-100 mg1b'
+                onPressEnter={handleFormConnect}
+              />
+              )
+            : null
+        }
+        {
+          isSsh && formValues.authType === 'privateKey'
+            ? (
+              <>
+                <TextArea
+                  value={formValues.privateKey}
+                  onChange={e => updateFormValue('privateKey', e.target.value)}
+                  placeholder='私钥，可粘贴 OpenSSH 私钥内容'
+                  className='width-100 mg1b'
+                  autoSize={{ minRows: 3, maxRows: 6 }}
+                />
+                <Input.Password
+                  value={formValues.passphrase}
+                  onChange={e => updateFormValue('passphrase', e.target.value)}
+                  placeholder='私钥口令，选填'
+                  className='width-100 mg1b'
+                  onPressEnter={handleFormConnect}
+                />
+              </>
+              )
+            : null
+        }
+        {
+          isSsh && formValues.authType === 'profiles'
+            ? (
+              <Select
+                value={formValues.profile || undefined}
+                onChange={value => updateFormValue('profile', value)}
+                className='width-100 mg1b'
+                placeholder='选择凭据档案'
+                options={profileOptions}
+                allowClear
+              />
+              )
+            : null
+        }
+        <Space.Compact className='width-100 mg1b'>
+          <Input
+            value={formValues.title}
+            onChange={e => updateFormValue('title', e.target.value)}
+            placeholder='连接名称，保存时使用'
             onPressEnter={handleFormConnect}
           />
         </Space.Compact>
+        <Checkbox
+          checked={formValues.saveAsBookmark}
+          onChange={e => updateFormValue('saveAsBookmark', e.target.checked)}
+          className='mg1b'
+        >
+          保存为连接
+        </Checkbox>
         <Button
           type='primary'
           icon={<ArrowRightOutlined />}
