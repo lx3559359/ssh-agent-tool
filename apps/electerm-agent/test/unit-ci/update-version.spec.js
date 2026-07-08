@@ -14,9 +14,17 @@ test('detects only newer GitHub release versions as updates', async () => {
   assert.equal(compareVersions('3.15.104', '3.15.105'), -1)
   assert.equal(compareVersions('3.16.0', '3.15.105'), 1)
   assert.equal(compareVersions('4.0.0', '3.15.105'), 1)
+  assert.equal(compareVersions('3.15.106', '3.15.106-beta.1'), 1)
+  assert.equal(compareVersions('3.15.106-beta.1', '3.15.106'), -1)
+  assert.equal(compareVersions('3.15.106-beta.2', '3.15.106-beta.1'), 1)
+  assert.equal(compareVersions('3.15.106-beta.1', '3.15.106-beta.2'), -1)
 
   assert.deepEqual(
     getReleaseUpdate({ tag_name: 'v3.15.106' }, '3.15.105'),
+    { tag_name: 'v3.15.106' }
+  )
+  assert.deepEqual(
+    getReleaseUpdate({ tag_name: 'v3.15.106' }, '3.15.106-beta.1'),
     { tag_name: 'v3.15.106' }
   )
   assert.equal(getReleaseUpdate({ tag_name: 'v3.15.105' }, '3.15.105'), undefined)

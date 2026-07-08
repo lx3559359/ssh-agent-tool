@@ -1,15 +1,53 @@
 function parseVersion (value) {
-  const match = String(value || '').trim().match(/^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/i)
+  const match = String(value || '').trim().match(/^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+.*)?$/i)
   if (!match) {
     return null
   }
-  return match.slice(1, 4).map(n => Number(n))
+  return {
+    numbers: match.slice(1, 4).map(n => Number(n)),
+    prerelease: match[4] || ''
+  }
 }
 
 function cleanVersion (value) {
   const raw = String(value || '').trim()
   const match = raw.match(/^v?(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)$/i)
   return match ? match[1] : ''
+}
+
+function comparePrerelease (left, right) {
+  const a = left.split('.')
+  const b = right.split('.')
+  const len = Math.max(a.length, b.length)
+
+  for (let i = 0; i < len; i++) {
+    const leftPart = a[i]
+    const rightPart = b[i]
+    if (leftPart === undefined) {
+      return -1
+    }
+    if (rightPart === undefined) {
+      return 1
+    }
+    if (leftPart === rightPart) {
+      continue
+    }
+
+    const leftNumber = /^\d+$/.test(leftPart) ? Number(leftPart) : null
+    const rightNumber = /^\d+$/.test(rightPart) ? Number(rightPart) : null
+    if (leftNumber !== null && rightNumber !== null) {
+      return leftNumber > rightNumber ? 1 : -1
+    }
+    if (leftNumber !== null) {
+      return -1
+    }
+    if (rightNumber !== null) {
+      return 1
+    }
+    return leftPart > rightPart ? 1 : -1
+  }
+
+  return 0
 }
 
 export function compareVersions (left, right) {
@@ -20,12 +58,21 @@ export function compareVersions (left, right) {
   }
 
   for (let i = 0; i < 3; i++) {
-    if (a[i] > b[i]) {
+    if (a.numbers[i] > b.numbers[i]) {
       return 1
     }
-    if (a[i] < b[i]) {
+    if (a.numbers[i] < b.numbers[i]) {
       return -1
     }
+  }
+  if (!a.prerelease && b.prerelease) {
+    return 1
+  }
+  if (a.prerelease && !b.prerelease) {
+    return -1
+  }
+  if (a.prerelease && b.prerelease) {
+    return comparePrerelease(a.prerelease, b.prerelease)
   }
   return 0
 }
