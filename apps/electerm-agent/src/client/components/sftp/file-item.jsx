@@ -38,6 +38,7 @@ import generate from '../../common/uid'
 import sanitizeFilename from '../../common/sanitize-filename'
 import { refsStatic, refs, filesRef } from '../common/ref'
 import iconsMap from '../sys-menu/icons-map'
+import { splitOverflowMenu } from './context-menu-utils.js'
 
 const e = window.translate
 
@@ -946,34 +947,19 @@ export default class FileSection extends React.Component {
 
   renderContextMenu = () => {
     const items = this.renderContextItems()
-
-    // Check if we need to split the menu
-    if (this.contextMenuPosition) {
-      const windowHeight = window.innerHeight
-      const { clientY } = this.contextMenuPosition
-      const estimatedMenuHeight = items.length * 32 // Approximate height per menu item
-      const availableHeight = windowHeight - clientY
-
-      // If menu would extend beyond window, split into two parts
-      if (estimatedMenuHeight > availableHeight && items.length > 6) {
-        const firstHalf = items.slice(0, Math.ceil(items.length / 2))
-        const secondHalf = items.slice(Math.ceil(items.length / 2))
-
-        // Create "More..." submenu with second half of items
-        const moreSubmenu = {
-          key: 'more-submenu',
-          label: '…',
-          icon: <ArrowRightOutlined />,
-          children: secondHalf.map(this.itemToMenuFormat)
+    const clientY = this.contextMenuPosition?.clientY
+    const windowHeight = typeof window === 'undefined' ? 0 : window.innerHeight
+    return splitOverflowMenu({ items, clientY, windowHeight })
+      .map(item => {
+        if (item.key !== 'more-submenu') {
+          return this.itemToMenuFormat(item)
         }
-
-        // Return first half + "More..." submenu
-        return [...firstHalf.map(this.itemToMenuFormat), moreSubmenu]
-      }
-    }
-
-    // Otherwise return normal menu
-    return items.map(this.itemToMenuFormat)
+        return {
+          ...item,
+          icon: <ArrowRightOutlined />,
+          children: item.children.map(this.itemToMenuFormat)
+        }
+      })
   }
 
   renderContextItems () {
