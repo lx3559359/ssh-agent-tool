@@ -102,6 +102,21 @@ describe('session-ssh connection error diagnostics', () => {
     assert.match(normalized.message, /原始错误：Access denied/)
   })
 
+  test('adds a chinese diagnosis for authentication failure errors', () => {
+    const error = new Error('Authentication failure')
+
+    const normalized = normalizeSshConnectionError(error, {
+      host: 'prod-web-06',
+      port: 22,
+      username: 'deploy'
+    })
+
+    assert.match(normalized.message, /SSH 认证失败/)
+    assert.match(normalized.message, /deploy@prod-web-06:22/)
+    assert.match(normalized.message, /检查用户名、密码、私钥/)
+    assert.match(normalized.message, /原始错误：Authentication failure/)
+  })
+
   test('adds a chinese diagnosis for changed host keys', () => {
     const error = new Error('Host key verification failed: REMOTE HOST IDENTIFICATION HAS CHANGED')
 
