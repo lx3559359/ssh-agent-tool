@@ -6,6 +6,7 @@ import {
   defaultBookmarkGroupId,
   settingMap
 } from '../common/constants'
+import { removeCyclicBookmarkGroupIds } from '../common/bookmark-group-tree'
 import { action } from 'manate'
 
 export default Store => {
@@ -132,6 +133,8 @@ export default Store => {
         group.bookmarkGroupIds = []
       }
     }
+
+    removeCyclicBookmarkGroupIds(bookmarkGroups)
 
     // Find stray bookmarks (not belonging to any group)
     const assignedBookmarkIds = new Set(
