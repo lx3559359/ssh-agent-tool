@@ -118,7 +118,12 @@ async function startServer (authHandler, options = {}) {
             accept()
           }
         })
-        sshSession.on('pty', (accept) => accept())
+        sshSession.on('pty', (accept, reject, info) => {
+          if (options.onPty) {
+            options.onPty(info)
+          }
+          accept()
+        })
         sshSession.on('shell', (accept) => {
           const stream = accept()
           if (options.onShell) {
@@ -766,6 +771,56 @@ describe('session-ssh auth flows', () => {
       assert.equal(received.includes('\x04'), true)
       assert.equal(resizeInfo.cols, 132)
       assert.equal(resizeInfo.rows, 43)
+    } finally {
+      term && term.kill()
+      await server.close()
+    }
+  })
+
+  test('requests an initial pty size and terminal type for interactive programs', async () => {
+    let ptyInfo
+    let resolvePty
+    const ptySeen = new Promise(resolve => {
+      resolvePty = resolve
+    })
+    const server = await startServer(passwordOnlyAuth(), {
+      onPty (info) {
+        ptyInfo = info
+        if (info?.cols === 120 && info?.rows === 40 && info?.term === 'xterm-256color') {
+          resolvePty(info)
+        }
+      },
+      onShell (stream) {
+        stream.write('pty ready\n')
+      }
+    })
+
+    let term
+    try {
+      term = await session({
+        host: '127.0.0.1',
+        port: server.port,
+        username: USERNAME,
+        password: PASSWORD,
+        useSshAgent: false,
+        term: 'xterm-256color',
+        cols: 120,
+        rows: 40,
+        readyTimeout: 5000
+      }, createPromptWs(() => {
+        throw new Error('password shell login should not prompt')
+      }))
+
+      await Promise.race([
+        ptySeen,
+        delay(2000).then(() => {
+          throw new Error(`Timed out waiting for SSH pty request. Received: ${JSON.stringify(ptyInfo)}`)
+        })
+      ])
+
+      assert.equal(ptyInfo.term, 'xterm-256color')
+      assert.equal(ptyInfo.cols, 120)
+      assert.equal(ptyInfo.rows, 40)
     } finally {
       term && term.kill()
       await server.close()
