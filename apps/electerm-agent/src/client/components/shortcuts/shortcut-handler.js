@@ -2,7 +2,7 @@ import { getKeyCharacter } from './get-key-char.js'
 import shortcutsDefaultsGen from './shortcuts-defaults.js'
 import {
   isMacJs
-} from '../../common/constants'
+} from '../../common/constants.js'
 import keyControlPressed from '../../common/key-control-pressed.js'
 
 function processEscapeSequences (text) {

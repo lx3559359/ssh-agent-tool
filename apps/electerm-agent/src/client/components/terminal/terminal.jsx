@@ -357,6 +357,7 @@ class Term extends Component {
       this.copySelectionToClipboard()
       return false
     }
+    return true
   }
 
   searchShortcut = (e) => {
