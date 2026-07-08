@@ -133,12 +133,16 @@ test('windows release workflow requires an explicit manual stable release confir
   )
 
   assert.match(workflow, /workflow_dispatch:/)
+  assert.match(workflow, /release_channel:/)
+  assert.match(workflow, /options:\s*\n\s+- stable\s*\n\s+- beta/)
   assert.match(workflow, /confirm_stable_release:/)
   assert.match(workflow, /type:\s+string/)
   assert.match(workflow, /AIGShell stable release/)
   assert.doesNotMatch(workflow, /push:\s*\n\s+tags:/)
+  assert.match(workflow, /github\.event\.inputs\.release_channel/)
   assert.match(workflow, /github\.event\.inputs\.confirm_stable_release/)
   assert.match(workflow, /发布确认失败/)
+  assert.match(workflow, /AIGSHELL_UPDATE_CHANNEL/)
   assert.match(workflow, /id:\s+package-version/)
   assert.match(workflow, /tag=v\$version/)
   assert.match(workflow, /tag_name:\s+\$\{\{ steps\.package-version\.outputs\.tag \}\}/)
@@ -216,6 +220,8 @@ test('local release verification validates the update approval manifest content'
   assert.match(localVerifySource, /validateUpdateApprovalManifest/)
   assert.match(localVerifySource, /aigshell-update\.json/)
   assert.match(localVerifySource, /pack\.version/)
+  assert.match(localVerifySource, /AIGSHELL_UPDATE_CHANNEL/)
+  assert.match(localVerifySource, /channel:\s*releaseChannel/)
 })
 
 test('windows ci workflow runs unit tests for normal code changes without publishing', () => {
@@ -271,6 +277,30 @@ test('builds the stable update approval manifest required by clients', () => {
       generatedAt: '<dynamic>'
     }
   )
+})
+
+test('builds and validates beta update approval manifests for prerelease channel', () => {
+  assert.deepEqual(
+    {
+      ...buildUpdateApprovalManifest('3.15.106-beta.1', { channel: 'beta' }),
+      generatedAt: '<dynamic>'
+    },
+    {
+      product: 'AIGShell',
+      channel: 'beta',
+      publishApproved: true,
+      version: '3.15.106-beta.1',
+      generatedAt: '<dynamic>'
+    }
+  )
+
+  assert.doesNotThrow(() => validateUpdateApprovalManifest({
+    product: 'AIGShell',
+    channel: 'beta',
+    publishApproved: true,
+    version: '3.15.106-beta.1',
+    generatedAt: '2026-07-09T00:00:00.000Z'
+  }, '3.15.106-beta.1', { channel: 'beta' }))
 })
 
 test('validates update approval manifest content before release upload', () => {

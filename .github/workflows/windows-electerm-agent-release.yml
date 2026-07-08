@@ -3,6 +3,14 @@ name: Windows Electerm Agent Release
 on:
   workflow_dispatch:
     inputs:
+      release_channel:
+        description: "Release channel"
+        required: true
+        default: stable
+        type: choice
+        options:
+          - stable
+          - beta
       confirm_stable_release:
         description: "输入 AIGShell stable release 确认创建稳定版发布草稿"
         required: true
@@ -22,6 +30,7 @@ jobs:
     env:
       CI: true
       WORKFLOW_NAME: windows-electerm-agent
+      AIGSHELL_UPDATE_CHANNEL: ${{ github.event.inputs.release_channel }}
       npm_config_msvs_version: "2026"
       npm_config_build_from_source: "true"
 
@@ -32,7 +41,7 @@ jobs:
       - name: Verify manual stable release confirmation
         shell: pwsh
         run: |
-          if ("${{ github.event.inputs.confirm_stable_release }}" -ne "AIGShell stable release") {
+          if ("${{ github.event.inputs.release_channel }}" -eq "stable" -and "${{ github.event.inputs.confirm_stable_release }}" -ne "AIGShell stable release") {
             throw "发布确认失败：请在手动触发 workflow 时输入 AIGShell stable release"
           }
 

@@ -10,6 +10,7 @@ const {
 
 const distDir = path.resolve(__dirname, '../../dist')
 const releaseArch = process.env.AIGSHELL_RELEASE_ARCH
+const releaseChannel = process.env.AIGSHELL_UPDATE_CHANNEL
 
 function readLocalFiles () {
   if (!fs.existsSync(distDir)) {
@@ -27,7 +28,7 @@ function readLocalFiles () {
 function validateLocalUpdateApprovalManifest () {
   const manifestPath = path.join(distDir, 'aigshell-update.json')
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
-  validateUpdateApprovalManifest(manifest, pack.version)
+  validateUpdateApprovalManifest(manifest, pack.version, { channel: releaseChannel })
 }
 
 function printList (title, list) {

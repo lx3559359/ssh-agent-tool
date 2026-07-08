@@ -94,13 +94,18 @@ function findApprovalManifest (release) {
     ?.updateApproval
 }
 
+function getUpdateChannel (options = {}) {
+  return options.updateChannel === 'beta' ? 'beta' : 'stable'
+}
+
 export function hasApprovedUpdateManifest (release, options = {}) {
   const manifest = findApprovalManifest(release)
   const version = cleanVersion(options.version || release?.tag_name)
+  const updateChannel = getUpdateChannel(options)
   return Boolean(
     manifest &&
     manifest.product === 'AIGShell' &&
-    manifest.channel === 'stable' &&
+    manifest.channel === updateChannel &&
     manifest.publishApproved === true &&
     cleanVersion(manifest.version) === version
   )
@@ -132,7 +137,7 @@ export function getReleaseUpdate (release, currentVersion, options = {}) {
   if (options.requireWindowsAssets && !hasWindowsUpdateAssets(release, tagName, options)) {
     return undefined
   }
-  if (options.requireApprovalManifest && !hasApprovedUpdateManifest(release, { version: tagName })) {
+  if (options.requireApprovalManifest && !hasApprovedUpdateManifest(release, { ...options, version: tagName })) {
     return undefined
   }
   return {
@@ -168,7 +173,7 @@ export function getReleaseUpdateStatus (release, currentVersion, options = {}) {
       message: `检测到新版本 ${tagName}，但缺少 Windows 自动更新文件，请前往 GitHub Releases 手动下载。`
     }
   }
-  if (options.requireApprovalManifest && !hasApprovedUpdateManifest(release, { version: tagName })) {
+  if (options.requireApprovalManifest && !hasApprovedUpdateManifest(release, { ...options, version: tagName })) {
     return {
       status: 'waitingForApproval',
       tag_name: tagName,

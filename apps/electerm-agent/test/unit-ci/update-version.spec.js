@@ -164,6 +164,70 @@ test('ignores prerelease versions unless explicitly allowed', async () => {
   )
 })
 
+test('validates update approval manifest against the selected release channel', async () => {
+  const {
+    getReleaseUpdate,
+    hasApprovedUpdateManifest
+  } = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/common/update-version.js')))
+
+  const betaRelease = {
+    tag_name: 'v3.15.106-beta.1',
+    prerelease: true,
+    assets: [
+      { name: 'AIGShell-3.15.106-beta.1-win-x64-installer.exe' },
+      { name: 'AIGShell-3.15.106-beta.1-win-x64-installer.exe.blockmap' },
+      { name: 'latest.yml' },
+      {
+        name: 'aigshell-update.json',
+        updateApproval: {
+          product: 'AIGShell',
+          channel: 'beta',
+          publishApproved: true,
+          version: '3.15.106-beta.1'
+        }
+      }
+    ]
+  }
+  const stableRelease = {
+    tag_name: 'v3.15.106',
+    assets: [
+      { name: 'AIGShell-3.15.106-win-x64-installer.exe' },
+      { name: 'AIGShell-3.15.106-win-x64-installer.exe.blockmap' },
+      { name: 'latest.yml' },
+      {
+        name: 'aigshell-update.json',
+        updateApproval: {
+          product: 'AIGShell',
+          channel: 'stable',
+          publishApproved: true,
+          version: '3.15.106'
+        }
+      }
+    ]
+  }
+
+  assert.equal(hasApprovedUpdateManifest(betaRelease, { version: betaRelease.tag_name }), false)
+  assert.equal(hasApprovedUpdateManifest(betaRelease, { version: betaRelease.tag_name, updateChannel: 'beta' }), true)
+  assert.equal(hasApprovedUpdateManifest(stableRelease, { version: stableRelease.tag_name, updateChannel: 'beta' }), false)
+  assert.equal(
+    getReleaseUpdate(betaRelease, '3.15.105', {
+      requireWindowsAssets: true,
+      requireApprovalManifest: true,
+      allowPrerelease: true,
+      updateChannel: 'beta'
+    }).tag_name,
+    'v3.15.106-beta.1'
+  )
+  assert.equal(
+    getReleaseUpdate(betaRelease, '3.15.105', {
+      requireWindowsAssets: true,
+      requireApprovalManifest: true,
+      allowPrerelease: true
+    }),
+    undefined
+  )
+})
+
 test('recognizes Windows update assets for Windows ARM64 builds', async () => {
   const {
     getReleaseUpdate,
@@ -253,6 +317,9 @@ test('upgrade flow uses classified release status for manual update guidance', (
   assert.match(updateCheckSource, /getReleaseUpdateStatus/)
   assert.match(updateCheckSource, /attachUpdateApprovalManifest/)
   assert.match(updateCheckSource, /requireApprovalManifest:\s*true/)
+  assert.match(updateCheckSource, /getConfiguredUpdateChannel/)
+  assert.match(updateCheckSource, /updateChannel/)
+  assert.match(updateCheckSource, /allowPrerelease:\s*updateChannel === 'beta'/)
   assert.match(upgradeSource, /getLatestReleaseStatus/)
   assert.match(upgradeSource, /manualDownloadRequired/)
   assert.match(upgradeSource, /waitingForApproval/)

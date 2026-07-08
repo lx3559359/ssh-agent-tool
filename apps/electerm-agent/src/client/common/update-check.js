@@ -49,21 +49,31 @@ async function getApprovedReleaseInfo () {
   return attachUpdateApprovalManifest(release, getInfo)
 }
 
+function getConfiguredUpdateChannel () {
+  return window.store?.config?.updateChannel === 'beta' ? 'beta' : 'stable'
+}
+
 export async function getLatestReleaseVersion (n) {
   const release = await getApprovedReleaseInfo()
+  const updateChannel = getConfiguredUpdateChannel()
   return getReleaseUpdate(release, packInfo.version, {
     arch: isArm ? 'arm64' : 'x64',
     requireWindowsAssets: true,
-    requireApprovalManifest: true
+    requireApprovalManifest: true,
+    allowPrerelease: updateChannel === 'beta',
+    updateChannel
   })
 }
 
 export async function getLatestReleaseStatus () {
   const release = await getApprovedReleaseInfo()
+  const updateChannel = getConfiguredUpdateChannel()
   return getReleaseUpdateStatus(release, packInfo.version, {
     arch: isArm ? 'arm64' : 'x64',
     requireWindowsAssets: true,
-    requireApprovalManifest: true
+    requireApprovalManifest: true,
+    allowPrerelease: updateChannel === 'beta',
+    updateChannel
   })
 }
 
