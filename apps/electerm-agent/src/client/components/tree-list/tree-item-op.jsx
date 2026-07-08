@@ -4,7 +4,9 @@ import {
   EditOutlined,
   FolderAddOutlined,
   FolderOpenOutlined,
-  RightSquareOutlined
+  RightSquareOutlined,
+  StarFilled,
+  StarOutlined
 } from '@ant-design/icons'
 import {
   Popconfirm,
@@ -14,6 +16,9 @@ import { useState } from 'react'
 import {
   defaultBookmarkGroupId
 } from '../../common/constants'
+import {
+  isBookmarkFavorite
+} from './bookmark-favorite'
 
 const e = window.translate
 
@@ -28,7 +33,8 @@ export default function TreeItemOp (props) {
     openMoveModal,
     editItem,
     addSubCat,
-    duplicateItem
+    duplicateItem,
+    toggleFavorite
   } = props
 
   if (!item) {
@@ -63,6 +69,10 @@ export default function TreeItemOp (props) {
     duplicateItem(event, item)
   }
 
+  const handleToggleFavorite = (event) => {
+    toggleFavorite(event, item)
+  }
+
   const handleOpenAll = () => {
     openAll(item)
   }
@@ -93,6 +103,15 @@ export default function TreeItemOp (props) {
   }
 
   if (!isGroup && !staticList && item.id) {
+    const FavoriteIcon = isBookmarkFavorite(item) ? StarFilled : StarOutlined
+    buttons.push(
+      <FavoriteIcon
+        key='favorite-tree'
+        title={isBookmarkFavorite(item) ? '取消收藏' : '收藏'}
+        className='pointer tree-control-btn'
+        onClick={handleToggleFavorite}
+      />
+    )
     buttons.push(
       <CopyOutlined
         key='duplicate-tree'

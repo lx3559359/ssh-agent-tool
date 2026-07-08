@@ -20,6 +20,7 @@ export default function TreeListRow (props) {
     openMoveModal,
     editItem,
     addSubCat,
+    toggleFavorite,
     onSelect,
     duplicateItem,
     onDragStart,
@@ -78,6 +79,7 @@ export default function TreeListRow (props) {
           openMoveModal={openMoveModal}
           editItem={editItem}
           addSubCat={addSubCat}
+          toggleFavorite={toggleFavorite}
           duplicateItem={duplicateItem}
         />
       </div>
@@ -108,6 +110,7 @@ export default function TreeListRow (props) {
           openMoveModal={openMoveModal}
           editItem={editItem}
           addSubCat={addSubCat}
+          toggleFavorite={toggleFavorite}
           duplicateItem={duplicateItem}
         />
       </div>

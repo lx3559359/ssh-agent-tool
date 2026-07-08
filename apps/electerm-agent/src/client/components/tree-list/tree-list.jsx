@@ -443,6 +443,13 @@ export default class ItemListTree extends Component {
     }
   }
 
+  toggleFavorite = (e, item) => {
+    e.stopPropagation()
+    window.store.editItem(item.id, {
+      favorite: !Boolean(item.favorite)
+    }, settingMap.bookmarks)
+  }
+
   addSubCat = (e, item) => {
     this.setState(old => {
       return {
@@ -736,6 +743,7 @@ export default class ItemListTree extends Component {
             'openMoveModal',
             'editItem',
             'addSubCat',
+            'toggleFavorite',
             'onSelect',
             'duplicateItem',
             'onDragStart',
