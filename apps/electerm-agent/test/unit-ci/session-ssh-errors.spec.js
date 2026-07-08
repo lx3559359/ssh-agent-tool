@@ -132,6 +132,22 @@ describe('session-ssh connection error diagnostics', () => {
     assert.match(normalized.message, /原始错误：Handshake failed: no matching key exchange algorithm/)
   })
 
+  test('adds a chinese diagnosis for invalid private keys', () => {
+    const error = new Error('Cannot parse privateKey: Unsupported key format')
+
+    const normalized = normalizeSshConnectionError(error, {
+      host: 'prod-web-03',
+      port: 22,
+      username: 'deploy'
+    })
+
+    assert.match(normalized.message, /SSH 私钥无法使用/)
+    assert.match(normalized.message, /deploy@prod-web-03:22/)
+    assert.match(normalized.message, /私钥格式/)
+    assert.match(normalized.message, /密钥口令/)
+    assert.match(normalized.message, /原始错误：Cannot parse privateKey/)
+  })
+
   test('adds a chinese diagnosis for too many ssh authentication attempts', () => {
     const error = new Error('Received disconnect from 10.0.1.23 port 22:2: Too many authentication failures')
 
