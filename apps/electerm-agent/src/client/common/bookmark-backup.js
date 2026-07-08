@@ -62,6 +62,14 @@ function hasNonEmptyString (item, key) {
   return typeof item[key] === 'string' && Boolean(item[key].trim())
 }
 
+function hasOptionalStringArray (item, key) {
+  if (item[key] === undefined) {
+    return true
+  }
+  return Array.isArray(item[key]) &&
+    item[key].every(value => typeof value === 'string' && Boolean(value.trim()))
+}
+
 function isPlainBackupObject (item) {
   return item &&
     typeof item === 'object' &&
@@ -127,7 +135,9 @@ function isBackupGroupList (items) {
   return items.every(item => {
     return (
       isPlainBackupObject(item) &&
-      hasNonEmptyString(item, 'id')
+      hasNonEmptyString(item, 'id') &&
+      hasOptionalStringArray(item, 'bookmarkIds') &&
+      hasOptionalStringArray(item, 'bookmarkGroupIds')
     )
   })
 }
