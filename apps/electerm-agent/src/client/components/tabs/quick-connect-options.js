@@ -39,6 +39,18 @@ function titleFor (opts) {
 
 function applySshAuth (opts, values) {
   const authType = clean(values.authType) || 'password'
+  if (authType === 'sshAgent') {
+    delete opts.authType
+    delete opts.password
+    delete opts.privateKey
+    delete opts.passphrase
+    opts.useSshAgent = true
+    const sshAgent = clean(values.sshAgent)
+    if (sshAgent) {
+      opts.sshAgent = sshAgent
+    }
+    return
+  }
   opts.authType = authType
   if (authType === 'privateKey') {
     delete opts.password

@@ -44,6 +44,7 @@ export default function QuickConnect ({ batch, inputOnly, formOnly }) {
     authType: 'password',
     privateKey: '',
     passphrase: '',
+    sshAgent: '',
     profile: '',
     title: '',
     saveAsBookmark: false
@@ -210,6 +211,7 @@ export default function QuickConnect ({ batch, inputOnly, formOnly }) {
                   options={[
                     { value: 'password', label: '密码' },
                     { value: 'privateKey', label: '私钥' },
+                    { value: 'sshAgent', label: 'SSH Agent' },
                     { value: 'profiles', label: '凭据档案' }
                   ]}
                 />
@@ -256,6 +258,19 @@ export default function QuickConnect ({ batch, inputOnly, formOnly }) {
                   onPressEnter={handleFormConnect}
                 />
               </>
+              )
+            : null
+        }
+        {
+          isSsh && formValues.authType === 'sshAgent'
+            ? (
+              <Input
+                value={formValues.sshAgent}
+                onChange={e => updateFormValue('sshAgent', e.target.value)}
+                placeholder='SSH Agent 路径，留空自动使用系统 Agent'
+                className='width-100 mg1b'
+                onPressEnter={handleFormConnect}
+              />
               )
             : null
         }

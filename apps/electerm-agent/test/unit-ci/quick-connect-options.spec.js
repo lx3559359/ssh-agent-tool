@@ -86,6 +86,30 @@ test('builds SSH quick connect options for private key auth', async () => {
   assert.equal(opts.password, undefined)
 })
 
+test('builds SSH quick connect options for SSH agent auth', async () => {
+  const {
+    buildQuickConnectOptions
+  } = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/components/tabs/quick-connect-options.js')))
+
+  const opts = buildQuickConnectOptions({
+    protocol: 'ssh',
+    host: '10.0.1.27',
+    port: '22',
+    username: 'deploy',
+    authType: 'sshAgent',
+    sshAgent: '\\\\.\\pipe\\openssh-ssh-agent',
+    password: 'should-not-be-used',
+    privateKey: 'should-not-be-used'
+  })
+
+  assert.equal(opts.type, 'ssh')
+  assert.equal(opts.useSshAgent, true)
+  assert.equal(opts.sshAgent, '\\\\.\\pipe\\openssh-ssh-agent')
+  assert.equal(opts.password, undefined)
+  assert.equal(opts.privateKey, undefined)
+  assert.equal(opts.authType, undefined)
+})
+
 test('builds bookmark payload when quick connect is saved as a connection', async () => {
   const {
     buildQuickConnectBookmark,

@@ -36,5 +36,6 @@ test('quick connect form exposes SSH auth method and save controls', () => {
 
   assert.match(source, /认证方式/)
   assert.match(source, /私钥/)
+  assert.match(source, /SSH Agent/)
   assert.match(source, /保存为连接/)
 })
