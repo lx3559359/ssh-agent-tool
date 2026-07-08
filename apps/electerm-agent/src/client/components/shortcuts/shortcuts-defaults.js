@@ -73,7 +73,7 @@ export default () => {
     },
     {
       name: 'terminal_clear',
-      shortcut: 'ctrl+l,ctrl+shift+l',
+      shortcut: 'ctrl+shift+l',
       shortcutMac: 'meta+l'
     },
     // {
