@@ -56,6 +56,24 @@ describe('session-ssh connection error diagnostics', () => {
     assert.match(normalized.message, /原始错误：connect ECONNREFUSED/)
   })
 
+  test('adds a chinese diagnosis for proxy connection refused messages without errno code', () => {
+    const error = new Error('connect: Connection refused 127.0.0.1:1080')
+
+    const normalized = normalizeSshConnectionError(error, {
+      host: '10.0.1.23',
+      port: 22,
+      username: 'root',
+      proxy: 'socks5://127.0.0.1:1080'
+    })
+
+    assert.match(normalized.message, /SSH 代理连接失败/)
+    assert.match(normalized.message, /root@10\.0\.1\.23:22/)
+    assert.match(normalized.message, /socks5:\/\/127\.0\.0\.1:1080/)
+    assert.match(normalized.message, /代理地址/)
+    assert.doesNotMatch(normalized.message, /SSH 连接被拒绝/)
+    assert.match(normalized.message, /原始错误：connect: Connection refused/)
+  })
+
   test('keeps target ssh port refusals distinct from proxy failures', () => {
     const error = new Error('connect ECONNREFUSED 10.0.1.23:22')
     error.code = 'ECONNREFUSED'

@@ -62,7 +62,7 @@ function isProxyConnectionError (message, code, proxy) {
     code === 'ENOTFOUND' ||
     code === 'EAI_AGAIN' ||
     code === 'ETIMEDOUT' ||
-    /ECONNREFUSED|ENOTFOUND|EAI_AGAIN|timed? ?out/i.test(message)
+    /ECONNREFUSED|connection refused|ENOTFOUND|EAI_AGAIN|timed? ?out/i.test(message)
   )) {
     return false
   }
