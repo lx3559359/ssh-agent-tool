@@ -117,6 +117,20 @@ test('rejects invalid bookmark backup content with a clear error', async () => {
     /备份文件中没有可导入的服务器连接/
   )
   assert.throws(
+    () => parseBookmarkBackup(JSON.stringify([])),
+    /备份文件中没有可导入的服务器连接/
+  )
+  assert.throws(
+    () => parseBookmarkBackup(JSON.stringify({
+      format: 'AIGShell.bookmarks.backup',
+      data: {
+        bookmarks: [],
+        bookmarkGroups: []
+      }
+    })),
+    /备份文件中没有可导入的服务器连接/
+  )
+  assert.throws(
     () => parseBookmarkBackup(JSON.stringify({
       format: 'AIGShell.bookmarks.backup',
       data: {

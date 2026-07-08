@@ -45,6 +45,9 @@ function normalizeBookmarkBackupData (data) {
   ) {
     throw new Error(invalidBookmarkBackupShapeError)
   }
+  if (!(data.bookmarks || []).length) {
+    throw new Error(noImportableBookmarksError)
+  }
   return {
     bookmarks: data.bookmarks || [],
     bookmarkGroups: data.bookmarkGroups || []
@@ -97,10 +100,10 @@ export function parseBookmarkBackup (text) {
   }
 
   if (Array.isArray(content)) {
-    return {
+    return normalizeBookmarkBackupData({
       bookmarks: content,
       bookmarkGroups: []
-    }
+    })
   }
 
   if (content?.format === bookmarkBackupFormat && content?.data) {
