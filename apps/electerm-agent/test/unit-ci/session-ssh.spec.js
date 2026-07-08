@@ -10,6 +10,7 @@ const { once } = require('node:events')
 const { spawnSync } = require('node:child_process')
 const { setTimeout: delay } = require('node:timers/promises')
 const { Server, utils } = require('@electerm/ssh2')
+const iconv = require('iconv-lite')
 const { session } = require('../../src/app/server/session-ssh')
 
 const USERNAME = 'tester'
@@ -683,6 +684,56 @@ describe('session-ssh auth flows', () => {
 
       assert.match(received, /uptime\r/)
       assert.equal(received.includes('\x03'), true)
+    } finally {
+      term && term.kill()
+      await server.close()
+    }
+  })
+
+  test('encodes terminal input with the configured ssh session encoding', async () => {
+    const expected = iconv.encode('中文\r', 'gbk')
+    const chunks = []
+    let resolveInput
+    const inputSeen = new Promise(resolve => {
+      resolveInput = resolve
+    })
+    const server = await startServer(passwordOnlyAuth(), {
+      onShell (stream) {
+        stream.write('encoding ready\n')
+        stream.on('data', (chunk) => {
+          chunks.push(chunk)
+          const received = Buffer.concat(chunks)
+          if (received.length >= expected.length) {
+            resolveInput(received)
+          }
+        })
+      }
+    })
+
+    let term
+    try {
+      term = await session({
+        host: '127.0.0.1',
+        port: server.port,
+        username: USERNAME,
+        password: PASSWORD,
+        useSshAgent: false,
+        encode: 'gbk',
+        readyTimeout: 5000
+      }, createPromptWs(() => {
+        throw new Error('password shell login should not prompt')
+      }))
+
+      term.write('中文\r')
+
+      const received = await Promise.race([
+        inputSeen,
+        delay(2000).then(() => {
+          throw new Error(`Timed out waiting for encoded shell input. Received: ${Buffer.concat(chunks).toString('hex')}`)
+        })
+      ])
+
+      assert.equal(received.subarray(0, expected.length).equals(expected), true)
     } finally {
       term && term.kill()
       await server.close()
