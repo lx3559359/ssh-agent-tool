@@ -1,4 +1,5 @@
 import { agentTools, executeToolCall } from './agent-tools'
+import { buildAgentSkillPrompt } from './agent-skills'
 import aiAgentCopy from './ai-agent-copy.json'
 
 const MAX_ITERATIONS = 150
@@ -6,9 +7,14 @@ const MAX_ITERATIONS = 150
 function buildAgentSystemPrompt (config) {
   const lang = config.languageAI || window.store.getLangName() || '简体中文'
   const baseRole = config.roleAI || '你是一个中文 SSH 运维排查助手。'
+  const skillPrompt = buildAgentSkillPrompt({
+    customSkills: config.agentSkills || window.store.config?.agentSkills || []
+  })
   return `${baseRole}
 
 ${aiAgentCopy.agentPromptRules.join('\n')}
+
+${skillPrompt}
 
 可用工具：
 - 在终端标签页执行命令并读取输出
