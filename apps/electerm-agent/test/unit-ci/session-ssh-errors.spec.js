@@ -79,6 +79,29 @@ describe('session-ssh connection error diagnostics', () => {
     assert.doesNotMatch(normalized.message, /proxy-password/)
   })
 
+  test('redacts inline secrets from ssh connection diagnostics', () => {
+    const error = new Error([
+      'connect failed password=root-secret apiKeyAI=relay-secret',
+      '-----BEGIN OPENSSH PRIVATE KEY-----',
+      'private-key-body',
+      '-----END OPENSSH PRIVATE KEY-----'
+    ].join('\n'))
+    error.code = 'ETIMEDOUT'
+
+    const normalized = normalizeSshConnectionError(error, {
+      host: '10.0.1.23',
+      port: 22,
+      username: 'root'
+    })
+
+    assert.match(normalized.message, /SSH 连接超时/)
+    assert.doesNotMatch(normalized.message, /root-secret/)
+    assert.doesNotMatch(normalized.message, /relay-secret/)
+    assert.doesNotMatch(normalized.message, /private-key-body/)
+    assert.doesNotMatch(normalized.message, /BEGIN OPENSSH PRIVATE KEY/)
+    assert.match(normalized.message, /\[已脱敏\]/)
+  })
+
   test('adds a chinese diagnosis for proxy connection refused messages without errno code', () => {
     const error = new Error('connect: Connection refused 127.0.0.1:1080')
 

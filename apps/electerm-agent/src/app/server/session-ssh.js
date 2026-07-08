@@ -18,6 +18,9 @@ const { commonExtends } = require('./session-common')
 const globalState = require('./global-state')
 const iconv = require('iconv-lite')
 const { resolveSshAgent } = require('./ssh-agent-resolver')
+const {
+  redactDiagnosticText
+} = require('../lib/diagnostic-pack')
 
 // Encodings that are equivalent to UTF-8 (no conversion needed)
 const utf8Aliases = new Set(['utf-8', 'utf8', 'utf-8-strict'])
@@ -221,7 +224,9 @@ function normalizeSshConnectionError (err, options = {}) {
   if (err.sshConnectionErrorNormalized) {
     return err
   }
-  const originalMessage = redactUrlCredentials(err.message || String(err))
+  const originalMessage = redactDiagnosticText(
+    redactUrlCredentials(err.message || String(err))
+  )
   const diagnosis = getSshDiagnosis(err, options)
   err.originalMessage = originalMessage
   err.sshConnectionErrorNormalized = true
