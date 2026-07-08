@@ -12,6 +12,7 @@ const {
 const repo = process.env.GITHUB_REPOSITORY || 'lx3559359/ssh-agent-tool'
 const tag = buildReleaseTag(pack.version)
 const distDir = path.resolve(__dirname, '../../dist')
+const releaseArch = process.env.AIGSHELL_RELEASE_ARCH
 
 function ghJson (args) {
   const res = spawnSync('gh', args, {
@@ -25,7 +26,7 @@ function ghJson (args) {
 }
 
 function readLocalFiles () {
-  return getRequiredReleaseAssetNames(pack.version).map(name => {
+  return getRequiredReleaseAssetNames(pack.version, { arch: releaseArch }).map(name => {
     const filePath = path.join(distDir, name)
     if (!fs.existsSync(filePath)) {
       return {
@@ -61,7 +62,8 @@ function main () {
   const report = buildReleaseAssetReport({
     localFiles: readLocalFiles(),
     remoteAssets: release.assets,
-    version: pack.version
+    version: pack.version,
+    arch: releaseArch
   })
 
   if (report.ok) {

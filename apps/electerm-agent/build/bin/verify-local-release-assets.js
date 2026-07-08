@@ -6,6 +6,7 @@ const {
 } = require('./github-release-utils')
 
 const distDir = path.resolve(__dirname, '../../dist')
+const releaseArch = process.env.AIGSHELL_RELEASE_ARCH
 
 function readLocalFiles () {
   if (!fs.existsSync(distDir)) {
@@ -31,7 +32,8 @@ function printList (title, list) {
 function main () {
   const report = buildLocalReleaseAssetReport({
     localFiles: readLocalFiles(),
-    version: pack.version
+    version: pack.version,
+    arch: releaseArch
   })
 
   if (report.ok) {

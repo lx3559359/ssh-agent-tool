@@ -95,6 +95,23 @@ test('windows release workflow verifies local update assets before upload', () =
   assert.ok(localVerifyIndex < artifactUploadIndex, 'local release verification should run before artifacts are uploaded')
 })
 
+test('release verification scripts accept an explicit Windows release architecture', () => {
+  const localVerifySource = fs.readFileSync(
+    path.resolve(__dirname, '../../build/bin/verify-local-release-assets.js'),
+    'utf8'
+  )
+  const githubVerifySource = fs.readFileSync(
+    path.resolve(__dirname, '../../build/bin/verify-github-release.js'),
+    'utf8'
+  )
+
+  assert.match(localVerifySource, /AIGSHELL_RELEASE_ARCH/)
+  assert.match(localVerifySource, /buildLocalReleaseAssetReport\(\{[\s\S]*arch:\s*releaseArch/s)
+  assert.match(githubVerifySource, /AIGSHELL_RELEASE_ARCH/)
+  assert.match(githubVerifySource, /getRequiredReleaseAssetNames\(pack\.version,\s*\{[\s\S]*arch:\s*releaseArch/s)
+  assert.match(githubVerifySource, /buildReleaseAssetReport\(\{[\s\S]*arch:\s*releaseArch/s)
+})
+
 test('windows ci workflow runs unit tests for normal code changes without publishing', () => {
   const workflow = fs.readFileSync(
     path.resolve(__dirname, '../../../../.github/workflows/windows-electerm-agent-ci.yml'),
