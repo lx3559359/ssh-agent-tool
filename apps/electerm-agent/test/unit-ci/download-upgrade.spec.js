@@ -9,7 +9,8 @@ const {
   buildUpgradeErrorMessage,
   finishUpgradeDownload,
   getRequiredReleaseAsset,
-  selectReleaseAsset
+  selectReleaseAsset,
+  writeUpgradeLog
 } = require(path.resolve(__dirname, '../../src/app/server/download-upgrade'))
 
 test('upgrade websocket messages use the upgrade channel expected by the client', () => {
@@ -32,6 +33,34 @@ test('upgrade websocket messages use the upgrade channel expected by the client'
       }
     }
   )
+})
+
+test('writes structured update logs for diagnostics', () => {
+  const logs = []
+  const logRef = {
+    info: (...args) => logs.push(['info', ...args]),
+    error: (...args) => logs.push(['error', ...args])
+  }
+  const err = new Error('network failed')
+
+  writeUpgradeLog(logRef, 'info', 'download-start', {
+    tag: 'v3.15.106',
+    asset: 'AIGShell-3.15.106-win-x64-installer.exe'
+  })
+  writeUpgradeLog(logRef, 'error', 'download-failed', err)
+
+  assert.equal(logs.length, 2)
+  assert.deepEqual(logs[0], [
+    'info',
+    'AIGShell update download-start',
+    {
+      tag: 'v3.15.106',
+      asset: 'AIGShell-3.15.106-win-x64-installer.exe'
+    }
+  ])
+  assert.equal(logs[1][0], 'error')
+  assert.equal(logs[1][1], 'AIGShell update download-failed')
+  assert.equal(logs[1][2], err)
 })
 
 test('selects the Windows installer asset for AIGShell releases before legacy tar archives', () => {

@@ -4,6 +4,7 @@ const fsp = require('fs/promises')
 
 const REDACTED = '[已脱敏]'
 const DEFAULT_MAX_LOG_CHARS = 200 * 1024
+const DEFAULT_MAX_ADDITIONAL_LOG_FILES = 8
 
 const SECRET_PATTERNS = [
   /(Authorization\s*:\s*Bearer\s+)[^\s"'`]+/ig,
@@ -89,6 +90,23 @@ function limitLogText (logText, maxLogChars = DEFAULT_MAX_LOG_CHARS) {
   return `[日志已截断，仅保留最后 ${maxLogChars} 个字符]\n` + text.slice(-maxLogChars)
 }
 
+function sanitizeDiagnosticPath (name) {
+  const parts = String(name || '')
+    .replace(/\\/g, '/')
+    .split('/')
+    .map(part => part.trim())
+    .filter(part => part && part !== '.' && part !== '..' && part !== 'logs')
+    .map(part => [...part].map(char => {
+      return '<>:"|?*'.includes(char) || char.charCodeAt(0) < 32
+        ? '_'
+        : char
+    }).join(''))
+
+  return parts.length
+    ? path.posix.join('logs', ...parts)
+    : ''
+}
+
 function buildDiagnosticReport (options = {}) {
   const redactOptions = {
     homeDir: options.homeDir || os.homedir(),
@@ -123,13 +141,25 @@ function buildDiagnosticReport (options = {}) {
     options.maxLogChars
   )
   const manifestText = JSON.stringify(manifest, null, 2)
+  const files = {
+    'manifest.json': manifestText,
+    'logs/main.log': safeLog
+  }
+
+  for (const item of options.additionalLogs || []) {
+    const fileName = sanitizeDiagnosticPath(item?.name)
+    if (!fileName || files[fileName]) {
+      continue
+    }
+    files[fileName] = limitLogText(
+      redactDiagnosticText(item.text, redactOptions),
+      options.maxLogChars
+    )
+  }
 
   return {
     manifest,
-    files: {
-      'manifest.json': manifestText,
-      'logs/main.log': safeLog
-    }
+    files
   }
 }
 
@@ -144,12 +174,48 @@ async function readLogText (logFilePath) {
   }
 }
 
+async function readRecentLogFiles (logDir, prefix, options = {}) {
+  if (!logDir) {
+    return []
+  }
+  try {
+    const entries = await fsp.readdir(logDir, { withFileTypes: true })
+    const files = []
+    for (const entry of entries) {
+      if (!entry.isFile()) {
+        continue
+      }
+      const fullPath = path.join(logDir, entry.name)
+      const stat = await fsp.stat(fullPath)
+      files.push({
+        name: path.posix.join(prefix, entry.name),
+        fullPath,
+        mtimeMs: stat.mtimeMs
+      })
+    }
+    files.sort((a, b) => b.mtimeMs - a.mtimeMs)
+    const limit = Number(options.additionalLogLimit || DEFAULT_MAX_ADDITIONAL_LOG_FILES)
+    const selected = files.slice(0, limit)
+    return await Promise.all(selected.map(async item => ({
+      name: item.name,
+      text: await readLogText(item.fullPath)
+    })))
+  } catch {
+    return []
+  }
+}
+
 async function exportDiagnosticPack (options = {}) {
   const logFilePath = options.logFilePath
   const logText = options.logText ?? await readLogText(logFilePath)
+  const additionalLogs = [
+    ...(options.additionalLogs || []),
+    ...await readRecentLogFiles(options.sessionLogDir, 'session', options)
+  ]
   const report = buildDiagnosticReport({
     ...options,
-    logText
+    logText,
+    additionalLogs
   })
   const outputPath = options.outputPath || path.join(
     os.tmpdir(),
@@ -159,7 +225,9 @@ async function exportDiagnosticPack (options = {}) {
   await fsp.mkdir(path.join(tempDir, 'logs'), { recursive: true })
   await Promise.all(
     Object.entries(report.files).map(([name, content]) => {
-      return fsp.writeFile(path.join(tempDir, name), content, 'utf8')
+      const target = path.join(tempDir, name)
+      return fsp.mkdir(path.dirname(target), { recursive: true })
+        .then(() => fsp.writeFile(target, content, 'utf8'))
     })
   )
 
@@ -181,5 +249,6 @@ module.exports = {
   buildDiagnosticReport,
   exportDiagnosticPack,
   limitLogText,
+  readRecentLogFiles,
   redactDiagnosticText
 }

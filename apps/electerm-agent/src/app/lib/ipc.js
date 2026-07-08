@@ -11,6 +11,7 @@ const {
   globalShortcut,
   shell
 } = require('electron')
+const path = require('path')
 const globalState = require('./glob-state')
 const ipcSyncFuncs = require('./ipc-sync')
 const { dbAction } = require('./db')
@@ -100,6 +101,22 @@ const SAFE_ENV_KEYS = [
   'DBUS_SESSION_BUS_ADDRESS', 'DESKTOP_SESSION', 'GNOME_DESKTOP_SESSION_ID', 'KDE_FULL_SESSION',
   'CI', 'DOCKER_HOST', 'CONTAINER'
 ]
+
+async function getDiagnosticSessionLogDir () {
+  const stateConfig = globalState.get('config') || {}
+  if (stateConfig.sessionLogPath) {
+    return stateConfig.sessionLogPath
+  }
+  try {
+    const {
+      config
+    } = await getConfig(globalState.get('serverInited'))
+    return config.sessionLogPath || path.join(appPath, 'AIGShell', 'session_logs')
+  } catch (e) {
+    log.error('Read diagnostic session log config failed', e)
+    return path.join(appPath, 'AIGShell', 'session_logs')
+  }
+}
 
 async function initAppServer () {
   const {
@@ -216,13 +233,14 @@ function initIpc () {
     AIModels,
     getStreamContent,
     stopStream,
-    exportDiagnosticPack: (outputPath) => exportDiagnosticPack({
+    exportDiagnosticPack: async (outputPath) => exportDiagnosticPack({
       outputPath,
       packInfo,
       appPath,
       exePath,
       isPortable,
-      logFilePath: log.transports.file.getFile().path
+      logFilePath: log.transports.file.getFile().path,
+      sessionLogDir: await getDiagnosticSessionLogDir()
     }),
     reportRendererError: (payload) => reportRendererError(payload, log),
     setTitle: (title) => {

@@ -39,6 +39,13 @@ function buildUpgradeErrorMessage (id, err) {
   }
 }
 
+function writeUpgradeLog (logRef, level, eventName, data) {
+  const method = typeof logRef?.[level] === 'function'
+    ? level
+    : 'info'
+  logRef[method](`AIGShell update ${eventName}`, data)
+}
+
 function finishUpgradeDownload ({
   transferred,
   expectedSize,
@@ -135,8 +142,13 @@ class Upgrade {
     }
     const localPath = resolve(tempDir, releaseInfo.name)
     const remotePath = getUrl(releaseInfo.browser_download_url)
-    await rmrf(localPath).catch(log.error)
     const { size } = releaseInfo
+    writeUpgradeLog(log, 'info', 'download-start', {
+      asset: releaseInfo.name,
+      size,
+      remotePath
+    })
+    await rmrf(localPath).catch(log.error)
     this.id = id
     this.localPath = localPath
     const readSteam = await rp({
@@ -207,6 +219,9 @@ class Upgrade {
 
   onEnd (id, ws) {
     if (!this.onDestroy) {
+      writeUpgradeLog(log, 'info', 'download-finished', {
+        localPath: this.localPath
+      })
       openFile(this.localPath)
       process.send({
         showFileInFolder: this.localPath
@@ -216,6 +231,7 @@ class Upgrade {
   }
 
   onError (err, id, ws) {
+    writeUpgradeLog(log, 'error', 'download-failed', err)
     ws.s(buildUpgradeErrorMessage(id, err))
   }
 
@@ -245,3 +261,4 @@ exports.buildUpgradeErrorMessage = buildUpgradeErrorMessage
 exports.finishUpgradeDownload = finishUpgradeDownload
 exports.getRequiredReleaseAsset = getRequiredReleaseAsset
 exports.selectReleaseAsset = selectReleaseAsset
+exports.writeUpgradeLog = writeUpgradeLog

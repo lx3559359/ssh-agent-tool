@@ -1,12 +1,15 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const path = require('node:path')
+const os = require('node:os')
 
 const {
   buildDiagnosticReport,
+  exportDiagnosticPack,
   redactDiagnosticText
 } = require(path.resolve(__dirname, '../../src/app/lib/diagnostic-pack'))
 const fs = require('node:fs')
+const fsp = require('node:fs/promises')
 
 test('redacts secrets and local user paths from diagnostic text', () => {
   const text = [
@@ -120,6 +123,53 @@ test('builds a diagnostic report with safe metadata and truncated logs', () => {
   assert.equal(report.files['manifest.json'].includes('secret-token'), false)
 })
 
+test('builds a diagnostic report with redacted session and update logs', () => {
+  const report = buildDiagnosticReport({
+    logText: 'main log',
+    additionalLogs: [
+      {
+        name: 'session/prod-web-01.log',
+        text: 'ssh://root:server-password@10.0.1.23\nterminal output'
+      },
+      {
+        name: 'update/update.log',
+        text: 'Authorization: Bearer update-secret\nupdate failed'
+      }
+    ]
+  })
+
+  assert.match(report.files['logs/session/prod-web-01.log'], /terminal output/)
+  assert.equal(report.files['logs/session/prod-web-01.log'].includes('server-password'), false)
+  assert.match(report.files['logs/update/update.log'], /update failed/)
+  assert.equal(report.files['logs/update/update.log'].includes('update-secret'), false)
+})
+
+test('export diagnostic pack includes recent ssh session logs', async () => {
+  const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'aigshell-diagnostic-test-'))
+  const sessionLogDir = path.join(tempRoot, 'session_logs')
+  const outputPath = path.join(tempRoot, 'diagnostic.tar')
+  await fsp.mkdir(sessionLogDir, { recursive: true })
+  await fsp.writeFile(
+    path.join(sessionLogDir, 'prod-web-01.log'),
+    'Authorization: Bearer session-secret\nssh output',
+    'utf8'
+  )
+
+  try {
+    const result = await exportDiagnosticPack({
+      outputPath,
+      logText: 'main log',
+      sessionLogDir
+    })
+
+    assert.equal(fs.existsSync(outputPath), true)
+    assert.ok(result.files.includes('logs/main.log'))
+    assert.ok(result.files.includes('logs/session/prod-web-01.log'))
+  } finally {
+    await fsp.rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
 test('main process exposes diagnostic pack export through async IPC globals', () => {
   const ipcSource = fs.readFileSync(
     path.resolve(__dirname, '../../src/app/lib/ipc.js'),
@@ -128,6 +178,9 @@ test('main process exposes diagnostic pack export through async IPC globals', ()
 
   assert.match(ipcSource, /exportDiagnosticPack/)
   assert.match(ipcSource, /log\.transports\.file\.getFile/)
+  assert.match(ipcSource, /config\.sessionLogPath/)
+  assert.match(ipcSource, /path\.join\(appPath,\s*'AIGShell',\s*'session_logs'\)/)
+  assert.match(ipcSource, /sessionLogDir/)
 })
 
 test('about dialog exposes diagnostic pack export to users', () => {
