@@ -3,6 +3,7 @@
  */
 
 import uid from '../common/uid'
+import { removeBookmarkIdFromGroups } from '../common/bookmark-management'
 
 export default Store => {
   Store.prototype.handleGetSerials = async function () {
@@ -24,6 +25,17 @@ export default Store => {
     ids.forEach(id => {
       store.onSelectBookmark(id)
     })
+  }
+
+  Store.prototype.delBookmark = function (item) {
+    const { store } = window
+    const id = typeof item === 'string' ? item : item?.id
+    if (!id) {
+      return
+    }
+    store.onDelItem({ id }, 'bookmarks')
+    store.delItem({ id }, 'bookmarks')
+    removeBookmarkIdFromGroups(store.bookmarkGroups, id)
   }
 
   Store.prototype.addSshConfigs = function (items) {

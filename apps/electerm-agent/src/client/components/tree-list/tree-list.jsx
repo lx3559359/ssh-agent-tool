@@ -366,6 +366,9 @@ export default class ItemListTree extends Component {
     if (item.bookmarkIds) {
       return store.delBookmarkGroup(item)
     }
+    if (this.props.type === settingMap.bookmarks) {
+      return store.delBookmark(item)
+    }
     store.onDelItem(item, this.props.type)
     store.delItem(item, this.props.type)
   }

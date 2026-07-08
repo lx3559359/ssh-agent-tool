@@ -274,7 +274,7 @@ export default Store => {
 
   Store.prototype.mcpDeleteBookmark = function (args) {
     const { store } = window
-    store.delItem({ id: args.id }, settingMap.bookmarks)
+    store.delBookmark({ id: args.id })
 
     return {
       success: true,
