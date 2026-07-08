@@ -1,5 +1,6 @@
 import { z } from '../../common/zod'
 import { bookmarkSchemas } from '../../common/bookmark-schemas'
+import { confirmAgentToolExecution } from './agent-tool-confirm'
 
 function buildAddBookmarkParameters () {
   const typeProperties = {}
@@ -449,6 +450,13 @@ export async function executeToolCall (toolName, args) {
   const store = window.store
   switch (toolName) {
     case 'send_terminal_command': {
+      const confirmation = await confirmAgentToolExecution({
+        toolName,
+        args
+      })
+      if (!confirmation.accepted) {
+        return JSON.stringify(confirmation)
+      }
       store.mcpSendTerminalCommand(args)
       const idleResult = await store.mcpWaitForTerminalIdle({
         tabId: args.tabId || store.activeTabId,
@@ -503,8 +511,16 @@ export async function executeToolCall (toolName, args) {
       return JSON.stringify(store.mcpGetTerminalStatus(args))
     case 'cancel_terminal_command':
       return JSON.stringify(store.mcpCancelTerminalCommand(args))
-    case 'run_background_command':
+    case 'run_background_command': {
+      const confirmation = await confirmAgentToolExecution({
+        toolName,
+        args
+      })
+      if (!confirmation.accepted) {
+        return JSON.stringify(confirmation)
+      }
       return JSON.stringify(store.mcpRunBackgroundCommand(args))
+    }
     case 'get_background_task_status':
       return JSON.stringify(await store.mcpGetBackgroundTaskStatus(args))
     case 'get_background_task_log':
