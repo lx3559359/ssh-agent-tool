@@ -156,6 +156,19 @@ function getSshDiagnosis (err = {}, options = {}) {
       suggestion: '通常是私钥格式不支持、内容损坏、复制不完整，或密钥口令填写错误；请确认私钥为 OpenSSH/PEM 格式并重新选择正确私钥。'
     }
   }
+  if (
+    (code === 'ENOENT' || code === 'EISDIR' || code === 'EPERM') ||
+    (
+      code === 'EACCES' &&
+      /private ?key|identity|\.ssh|\.pem|\.key|open .*ssh|open .*pem|open .*key/i.test(message)
+    ) ||
+    /ENOENT|EISDIR|EPERM|no such file or directory|is a directory|permission denied.*(?:private ?key|identity|\.ssh|\.pem|\.key)|open .*?(?:\.ssh|\.pem|\.key)/i.test(message)
+  ) {
+    return {
+      title: 'SSH 私钥文件无法读取',
+      suggestion: '请检查私钥路径是否存在、文件是否被移动或删除、是否误选了文件夹，以及当前 Windows 用户的文件权限是否允许读取该私钥。'
+    }
+  }
   if (code === 'ETIMEDOUT' || /timed? ?out|handshake timeout/i.test(message)) {
     return {
       title: 'SSH 连接超时',

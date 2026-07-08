@@ -486,6 +486,23 @@ describe('session-ssh connection error diagnostics', () => {
     assert.match(normalized.message, /原始错误：Encrypted private key/)
   })
 
+  test('adds a chinese diagnosis for unreadable private key files', () => {
+    const error = new Error("ENOENT: no such file or directory, open 'C:\\Users\\ops\\.ssh\\prod.pem'")
+    error.code = 'ENOENT'
+
+    const normalized = normalizeSshConnectionError(error, {
+      host: 'prod-web-08',
+      port: 22,
+      username: 'deploy'
+    })
+
+    assert.match(normalized.message, /SSH 私钥文件无法读取/)
+    assert.match(normalized.message, /deploy@prod-web-08:22/)
+    assert.match(normalized.message, /私钥路径/)
+    assert.match(normalized.message, /文件权限/)
+    assert.match(normalized.message, /原始错误：ENOENT/)
+  })
+
   test('adds a chinese diagnosis for too many ssh authentication attempts', () => {
     const error = new Error('Received disconnect from 10.0.1.23 port 22:2: Too many authentication failures')
 
