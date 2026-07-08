@@ -6,10 +6,21 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 const { once } = require('node:events')
+const Module = require('node:module')
 const { Server, utils } = require('@electerm/ssh2')
 const { STATUS_CODE, OPEN_MODE } = require('@electerm/ssh2/lib/protocol/SFTP.js')
 const { session } = require('../../src/app/server/session-ssh')
 const { Sftp } = require('../../src/app/server/session-sftp')
+
+const originalLoad = Module._load
+Module._load = function (request, parent, isMain) {
+  if (request === 'original-fs') {
+    return fs
+  }
+  return originalLoad.call(this, request, parent, isMain)
+}
+const { Transfer } = require('../../src/app/server/transfer')
+Module._load = originalLoad
 
 const USERNAME = 'tester'
 const PASSWORD = 'electerm-test'
@@ -57,6 +68,43 @@ function longnameFor (localPath, name) {
   const stat = fs.statSync(localPath)
   const type = stat.isDirectory() ? 'd' : '-'
   return `${type}rw-r--r-- 1 tester tester ${stat.size} Jan 01 00:00 ${name}`
+}
+
+function createPatternBuffer (size, multiplier = 17) {
+  const buffer = Buffer.alloc(size)
+  for (let index = 0; index < buffer.length; index++) {
+    buffer[index] = (index * multiplier) % 251
+  }
+  return buffer
+}
+
+function waitForTransfer (buildTransfer, endId) {
+  const messages = []
+  let transfer
+  const end = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`Timed out waiting for transfer end. Messages: ${JSON.stringify(messages)}`))
+    }, 5000)
+    const ws = {
+      s (message) {
+        messages.push(message)
+        if (message.id === endId) {
+          clearTimeout(timer)
+          resolve(message)
+        }
+        if (message.id.startsWith('transfer:err:')) {
+          clearTimeout(timer)
+          reject(new Error(message.error?.message || 'transfer failed'))
+        }
+      }
+    }
+    transfer = buildTransfer(ws)
+  })
+  return end.then(message => ({
+    message,
+    messages,
+    transfer
+  }))
 }
 
 async function startSftpServer (root) {
@@ -166,6 +214,19 @@ async function startSftpServer (root) {
           })
           sftp.on('STAT', (reqId, remotePath) => {
             sftp.attrs(reqId, attrsFor(toLocalPath(root, remotePath)))
+          })
+          sftp.on('FSTAT', (reqId, handle) => {
+            const item = handles.get(handle.toString('hex'))
+            if (!item || item.type !== 'file') {
+              return sftp.status(reqId, STATUS_CODE.FAILURE)
+            }
+            sftp.attrs(reqId, attrsFor(item.localPath))
+          })
+          sftp.on('FSETSTAT', (reqId) => {
+            sftp.status(reqId, STATUS_CODE.OK)
+          })
+          sftp.on('SETSTAT', (reqId) => {
+            sftp.status(reqId, STATUS_CODE.OK)
           })
           sftp.on('MKDIR', (reqId, remotePath) => {
             fs.mkdirSync(toLocalPath(root, remotePath), { recursive: true })
@@ -295,6 +356,90 @@ describe('session-sftp transport flows', () => {
       term && term.kill()
       await server.close()
       fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('uploads and downloads large binary files over the SSH SFTP transfer path', async () => {
+    const root = makeTmpDir()
+    const server = await startSftpServer(root)
+    const localDir = makeTmpDir()
+    let term
+    let sftp
+    try {
+      term = await session({
+        host: '127.0.0.1',
+        port: server.port,
+        username: USERNAME,
+        password: PASSWORD,
+        useSshAgent: false,
+        enableSsh: true,
+        readyTimeout: 5000
+      }, createPromptWs())
+      sftp = new Sftp({
+        uid: 'sftp-transfer-session-ci',
+        terminalId: term.pid,
+        enableSsh: true
+      })
+      await sftp.connect(sftp.initOptions)
+      await sftp.mkdir('/transfer')
+
+      const uploadSource = createPatternBuffer(512 * 1024, 19)
+      const uploadLocalPath = path.join(localDir, 'upload-large.bin')
+      const uploadRemotePath = '/transfer/upload-large.bin'
+      fs.writeFileSync(uploadLocalPath, uploadSource)
+
+      const uploadResult = await waitForTransfer((ws) => new Transfer({
+        id: 'ssh-sftp-upload-large',
+        type: 'upload',
+        localPath: uploadLocalPath,
+        remotePath: uploadRemotePath,
+        sftp: sftp.sftp,
+        conn: term.conn,
+        options: {
+          chunkSize: 64 * 1024,
+          concurrency: 4
+        },
+        ws
+      }), 'transfer:end:ssh-sftp-upload-large')
+
+      uploadResult.transfer.kill()
+      assert.deepEqual(fs.readFileSync(toLocalPath(root, uploadRemotePath)), uploadSource)
+      assert.ok(
+        uploadResult.messages.some(message => message.id === 'transfer:data:ssh-sftp-upload-large'),
+        'upload should emit transfer progress'
+      )
+
+      const downloadSource = createPatternBuffer(640 * 1024, 23)
+      const downloadRemotePath = '/transfer/download-source.bin'
+      const downloadLocalPath = path.join(localDir, 'downloaded-large.bin')
+      fs.writeFileSync(toLocalPath(root, downloadRemotePath), downloadSource)
+
+      const downloadResult = await waitForTransfer((ws) => new Transfer({
+        id: 'ssh-sftp-download-large',
+        type: 'download',
+        localPath: downloadLocalPath,
+        remotePath: downloadRemotePath,
+        sftp: sftp.sftp,
+        conn: term.conn,
+        options: {
+          chunkSize: 80 * 1024,
+          concurrency: 3
+        },
+        ws
+      }), 'transfer:end:ssh-sftp-download-large')
+
+      downloadResult.transfer.kill()
+      assert.deepEqual(fs.readFileSync(downloadLocalPath), downloadSource)
+      assert.ok(
+        downloadResult.messages.some(message => message.id === 'transfer:data:ssh-sftp-download-large'),
+        'download should emit transfer progress'
+      )
+    } finally {
+      sftp && sftp.kill()
+      term && term.kill()
+      await server.close()
+      fs.rmSync(root, { recursive: true, force: true })
+      fs.rmSync(localDir, { recursive: true, force: true })
     }
   })
 
