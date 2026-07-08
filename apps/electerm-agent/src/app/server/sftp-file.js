@@ -43,6 +43,23 @@ function writeRemoteFile (sftp, path, str, mode) {
 function readRemoteFile (sftp, path) {
   return new Promise((resolve, reject) => {
     let final = Buffer.alloc(0)
+    let readClosed = false
+    let writeFinished = false
+    let settled = false
+    const settle = (err) => {
+      if (settled) {
+        return
+      }
+      if (err) {
+        settled = true
+        reject(err)
+        return
+      }
+      if (readClosed && writeFinished) {
+        settled = true
+        resolve(final.toString())
+      }
+    }
     const writeStream = new FakeWrite({
       onData: data => {
         final = Buffer.concat(
@@ -51,14 +68,23 @@ function readRemoteFile (sftp, path) {
       }
     })
     writeStream.on('finish', () => {
-      resolve(final.toString())
+      writeFinished = true
+      settle()
     })
     writeStream.on('error', (e) => {
-      reject(e)
+      settle(e)
     })
-    sftp.createReadStream(path, {
+    const readStream = sftp.createReadStream(path, {
       highWaterMark: 64 * 1024 * 4 * 4
-    }).pipe(writeStream)
+    })
+    readStream.on('close', () => {
+      readClosed = true
+      settle()
+    })
+    readStream.on('error', (e) => {
+      settle(e)
+    })
+    readStream.pipe(writeStream)
   })
 }
 

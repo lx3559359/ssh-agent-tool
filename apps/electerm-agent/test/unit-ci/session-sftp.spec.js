@@ -90,11 +90,17 @@ async function startSftpServer (root) {
         sshSession.on('sftp', (accept) => {
           const sftp = accept()
           sftp.on('REALPATH', (reqId, remotePath) => {
-            sftp.name(reqId, [{
-              filename: '/',
-              longname: longnameFor(root, '/'),
-              attrs: attrsFor(root)
-            }])
+            try {
+              const normalizedPath = path.posix.normalize(`/${remotePath || ''}`)
+              const localPath = toLocalPath(root, normalizedPath)
+              sftp.name(reqId, [{
+                filename: normalizedPath,
+                longname: longnameFor(localPath, normalizedPath),
+                attrs: attrsFor(localPath)
+              }])
+            } catch (err) {
+              sftp.status(reqId, STATUS_CODE.FAILURE, err.message)
+            }
           })
           sftp.on('OPENDIR', (reqId, remotePath) => {
             const localPath = toLocalPath(root, remotePath)
@@ -284,6 +290,55 @@ describe('session-sftp transport flows', () => {
       const stat = await sftp.stat(file)
       assert.equal(stat.isDirectory, false)
       assert.equal(stat.size, Buffer.byteLength(content))
+    } finally {
+      sftp && sftp.kill()
+      term && term.kill()
+      await server.close()
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('resolves remote paths and lists nested directories for navigation', async () => {
+    const root = makeTmpDir()
+    const server = await startSftpServer(root)
+    let term
+    let sftp
+    try {
+      term = await session({
+        host: '127.0.0.1',
+        port: server.port,
+        username: USERNAME,
+        password: PASSWORD,
+        useSshAgent: false,
+        enableSsh: true,
+        readyTimeout: 5000
+      }, createPromptWs())
+      sftp = new Sftp({
+        uid: 'sftp-navigation-session-ci',
+        terminalId: term.pid,
+        enableSsh: true
+      })
+      await sftp.connect(sftp.initOptions)
+
+      assert.equal(await sftp.getHomeDir(), '/')
+
+      await sftp.mkdir('/projects')
+      await sftp.mkdir('/projects/releases')
+      await sftp.writeFile('/projects/releases/build.log', 'release ok')
+
+      const normalizedReleasePath = await sftp.realpath('/projects/../projects/releases')
+      assert.equal(normalizedReleasePath, '/projects/releases')
+
+      const projectList = await sftp.list('/projects')
+      assert.deepEqual(projectList.map(item => [item.name, item.type]), [
+        ['releases', 'd']
+      ])
+
+      const releaseList = await sftp.list(normalizedReleasePath)
+      assert.deepEqual(releaseList.map(item => [item.name, item.type]), [
+        ['build.log', '-']
+      ])
+      assert.equal(await sftp.readFile(`${normalizedReleasePath}/build.log`), 'release ok')
     } finally {
       sftp && sftp.kill()
       term && term.kill()
