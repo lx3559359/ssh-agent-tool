@@ -86,7 +86,11 @@ function getSshDiagnosis (err = {}, options = {}) {
       suggestion: '请检查服务器地址、端口、sshd 服务、防火墙或安全组是否允许访问。'
     }
   }
-  if (code === 'ENOTFOUND' || code === 'EAI_AGAIN' || message.includes('ENOTFOUND') || message.includes('EAI_AGAIN')) {
+  if (
+    code === 'ENOTFOUND' ||
+    code === 'EAI_AGAIN' ||
+    /ENOTFOUND|EAI_AGAIN|getaddrinfo|queryA|querySrv|queryTxt|DNS/i.test(message)
+  ) {
     return {
       title: 'SSH 主机无法解析',
       suggestion: '请检查服务器地址、DNS、代理配置或当前网络连接。'

@@ -136,6 +136,23 @@ describe('session-ssh connection error diagnostics', () => {
     assert.match(normalized.message, /原始错误：connect EHOSTUNREACH/)
   })
 
+  test('adds a chinese diagnosis for DNS lookup timeouts', () => {
+    const error = new Error('queryA ETIMEOUT prod-web.internal')
+    error.code = 'ETIMEOUT'
+
+    const normalized = normalizeSshConnectionError(error, {
+      host: 'prod-web.internal',
+      port: 22,
+      username: 'root'
+    })
+
+    assert.match(normalized.message, /SSH 主机无法解析/)
+    assert.match(normalized.message, /root@prod-web\.internal:22/)
+    assert.match(normalized.message, /DNS/)
+    assert.match(normalized.message, /网络/)
+    assert.match(normalized.message, /原始错误：queryA ETIMEOUT/)
+  })
+
   test('adds a chinese diagnosis when the server closes before ssh is ready', () => {
     const error = new Error('Socket closed before SSH handshake')
 
