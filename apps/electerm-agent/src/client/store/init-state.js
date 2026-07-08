@@ -28,6 +28,7 @@ import * as ls from '../common/safe-local-storage'
 import { exclude } from 'manate'
 import initSettingItem from '../common/init-setting-item'
 import { getRandomDefaultColor } from '../common/rand-hex-color'
+import { normalizeRightPanelWidth } from '../components/main/aigshell-layout'
 
 const e = window.translate
 
@@ -119,7 +120,7 @@ export default () => {
     rightPanelVisible: true,
     rightPanelTab: 'ai',
     rightPanelPinned: true,
-    rightPanelWidth: parseInt(ls.getItem(rightSidebarWidthKey), 10) || 360,
+    rightPanelWidth: normalizeRightPanelWidth(ls.getItem(rightSidebarWidthKey)),
     showAIConfigModal: false,
 
     // for settings related

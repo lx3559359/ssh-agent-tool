@@ -7,7 +7,7 @@ import { get as _get } from 'lodash-es'
 import '../common/pre'
 
 const { isDev } = window.et
-const { version } = window.pre.packInfo
+const version = process.env.VER || window.pre.packInfo.version
 
 async function loadWorker () {
   return new Promise((resolve) => {

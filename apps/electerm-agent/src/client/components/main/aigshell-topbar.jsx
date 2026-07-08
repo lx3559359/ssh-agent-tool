@@ -1,6 +1,7 @@
 import {
   ApiOutlined,
   FolderAddOutlined,
+  MessageOutlined,
   MoonOutlined,
   PlusCircleOutlined,
   ReloadOutlined,
@@ -50,6 +51,12 @@ export default function AIGShellTopBar ({ store }) {
       icon: <ThunderboltOutlined />,
       popover: <QuickConnect formOnly />,
       onClick: handleFastNew
+    },
+    {
+      key: 'ai',
+      label: 'AI助手',
+      icon: <MessageOutlined />,
+      onClick: window.store.handleOpenAIPanel
     },
     {
       key: 'model',

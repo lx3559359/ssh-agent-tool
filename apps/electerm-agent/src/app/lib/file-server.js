@@ -5,7 +5,14 @@ module.exports = (app) => {
   return new Promise((resolve) => {
     const assetsPath = path.resolve(__dirname, '../assets')
     const conf = {
-      maxAge: 1000 * 60 * 60 * 24 * 365
+      etag: false,
+      lastModified: false,
+      maxAge: 0,
+      setHeaders: (res) => {
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+        res.setHeader('Pragma', 'no-cache')
+        res.setHeader('Expires', '0')
+      }
     }
 
     // Handle _temp_*.css files - return empty CSS to prevent MIME type errors

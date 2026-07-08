@@ -14,7 +14,11 @@ import Footer from '../footer/footer-entry'
 import SessionsWrap from '../session/sessions'
 import QuickCommandsFooterBox from '../quick-commands/quick-commands-box'
 import pixed from './pixed'
-import { aigshellTopBarHeight, getAIGShellContentFrame } from '../main/aigshell-layout'
+import {
+  aigshellTopBarHeight,
+  getAIGShellContentFrame,
+  normalizeRightPanelWidth
+} from '../main/aigshell-layout'
 import { pick } from 'lodash-es'
 import './layout.styl'
 
@@ -74,7 +78,9 @@ export default auto(function Layout (props) {
       pinned
     } = props.store
     const l = pinned ? leftSidebarWidth : 0
-    const r = rightPanelPinned && rightPanelVisible ? rightPanelWidth : 0
+    const r = rightPanelPinned && rightPanelVisible
+      ? normalizeRightPanelWidth(rightPanelWidth)
+      : 0
     const w = width - l - r - 42
     const h = height - aigshellTopBarHeight - footerHeight - (pinnedQuickCommandBar ? quickCommandBoxHeight : 0)
     return layoutAlg(layout, w, h)

@@ -18,6 +18,7 @@ import { action } from 'manate'
 import uid from '../common/uid'
 import deepCopy from 'json-deep-copy'
 import { isAIConfigMissing } from '../components/ai/ai-config-props'
+import { normalizeRightPanelWidth } from '../components/main/aigshell-layout'
 
 const e = window.translate
 const { assign } = Object
@@ -105,8 +106,9 @@ export default Store => {
   }
 
   Store.prototype.setRightSidePanelWidth = function (v) {
-    ls.setItem(rightSidebarWidthKey, v)
-    window.store.rightPanelWidth = v
+    const width = normalizeRightPanelWidth(v)
+    ls.setItem(rightSidebarWidthKey, width)
+    window.store.rightPanelWidth = width
   }
   Store.prototype.dismissDelKeyTip = function (v) {
     ls.setItem(dismissDelKeyTipLsKey, 'y')

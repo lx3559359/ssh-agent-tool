@@ -11,6 +11,10 @@ import {
   Flex,
   Tag
 } from 'antd'
+import {
+  minRightPanelWidth,
+  normalizeRightPanelWidth
+} from '../main/aigshell-layout'
 
 export default memo(function RightSidePanel (
   {
@@ -32,6 +36,7 @@ export default memo(function RightSidePanel (
   const tag = isAI
     ? <Tag className='mg1r aigshell-ai-tag'>AI</Tag>
     : <InfoCircleOutlined className='mg1r' />
+  const width = normalizeRightPanelWidth(rightPanelWidth)
 
   function onDragEnd (nw) {
     window.store.setRightSidePanelWidth(nw)
@@ -55,7 +60,7 @@ export default memo(function RightSidePanel (
     className: 'right-side-panel animate-fast' + (rightPanelPinned ? ' right-side-panel-pinned' : ''),
     ref: panelRef,
     style: {
-      width: `${rightPanelWidth}px`
+      width: `${width}px`
     }
   }
 
@@ -64,9 +69,9 @@ export default memo(function RightSidePanel (
     onClick: togglePin
   }
   const dragProps = {
-    min: 400,
+    min: minRightPanelWidth,
     max: 1000,
-    width: rightPanelWidth,
+    width,
     onDragEnd,
     onDragMove,
     left: false

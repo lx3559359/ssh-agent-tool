@@ -2,7 +2,35 @@
  * build
  */
 
-const { exec, echo } = require('shelljs')
+const { exec, echo, cp } = require('shelljs')
+const fs = require('fs')
+const os = require('os')
+const { resolve } = require('path')
+
+function syncRuntimeFiles () {
+  const packPath = resolve(__dirname, '../../package.json')
+  const targetPackPath = resolve(__dirname, '../../work/app/package.json')
+  const pack = JSON.parse(fs.readFileSync(packPath, 'utf8'))
+
+  pack.main = 'app.js'
+  delete pack.scripts
+  delete pack.standard
+  delete pack.files
+  delete pack.engines
+  delete pack.preferGlobal
+
+  if (os.platform() === 'win32') {
+    delete pack.dependencies['node-bash']
+  } else {
+    delete pack.dependencies['node-powershell']
+  }
+
+  cp('-r', 'src/app', 'work/')
+  fs.writeFileSync(
+    targetPackPath,
+    JSON.stringify(pack, null, 2) + '\n'
+  )
+}
 
 echo('start build')
 
@@ -15,6 +43,8 @@ echo('js/css file')
 exec('npm run vite-build')
 echo('copy file')
 exec('node ./build/bin/copy.js')
+echo('runtime file')
+syncRuntimeFiles()
 echo('html file')
 exec('node ./build/bin/pug.js')
 

@@ -62,3 +62,14 @@ test('keeps unpinned layout on narrow icon rail only', async () => {
     height: 460
   })
 })
+
+test('clamps invalid right panel width so AI chat remains visible', async () => {
+  const {
+    normalizeRightPanelWidth
+  } = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/components/main/aigshell-layout.js')))
+
+  assert.equal(normalizeRightPanelWidth(0), 360)
+  assert.equal(normalizeRightPanelWidth(120), 360)
+  assert.equal(normalizeRightPanelWidth('abc'), 360)
+  assert.equal(normalizeRightPanelWidth(520), 520)
+})
