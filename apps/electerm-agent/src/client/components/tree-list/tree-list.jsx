@@ -446,7 +446,7 @@ export default class ItemListTree extends Component {
   toggleFavorite = (e, item) => {
     e.stopPropagation()
     window.store.editItem(item.id, {
-      favorite: !Boolean(item.favorite)
+      favorite: !item.favorite
     }, settingMap.bookmarks)
   }
 

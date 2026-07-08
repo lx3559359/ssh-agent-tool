@@ -30,4 +30,3 @@ export function shouldRetryTransfer (error, state = createTransferRetryState()) 
   state.attempt += 1
   return true
 }
-
