@@ -5,16 +5,30 @@ import AiChatHistory from './ai-chat-history'
 import uid from '../../common/uid'
 import { pick } from 'lodash-es'
 import {
+  ApiOutlined,
+  CodeOutlined,
+  FileTextOutlined,
+  HighlightOutlined,
+  SearchOutlined,
   SettingOutlined,
   SendOutlined,
+  ToolOutlined,
   UnorderedListOutlined
 } from '@ant-design/icons'
 import {
   aiConfigWikiLink
 } from '../../common/constants'
-import { refsStatic } from '../common/ref'
+import { refs, refsStatic } from '../common/ref'
 import { getAIChatSubmitAction } from './ai-chat-submit'
 import { clearAIChatContext } from './ai-chat-actions'
+import { buildTerminalContextPrompt } from './ai-ssh-context'
+import {
+  getActiveTerminalRef,
+  getAIContextUnavailableMessage,
+  getTerminalOutputText,
+  getTerminalSelectionText
+} from './ai-chat-context-actions'
+import message from '../common/message'
 import aiAgentCopy from './ai-agent-copy.json'
 import './ai.styl'
 
@@ -91,6 +105,38 @@ export default function AIChat (props) {
     clearAIChatContext(window.store)
   }
 
+  function setContextPrompt (source, text) {
+    const value = String(text || '').trim()
+    if (!value) {
+      message.warning(getAIContextUnavailableMessage(source))
+      return
+    }
+    setPrompt(buildTerminalContextPrompt({
+      source,
+      text: value
+    }))
+  }
+
+  function handleQuoteTerminalOutput () {
+    const termRef = getActiveTerminalRef({
+      store: window.store,
+      refs
+    })
+    setContextPrompt('terminal', getTerminalOutputText(termRef))
+  }
+
+  function handleQuoteTerminalSelection () {
+    const termRef = getActiveTerminalRef({
+      store: window.store,
+      refs
+    })
+    setContextPrompt('selection', getTerminalSelectionText(termRef))
+  }
+
+  function showUnavailableContextAction (type) {
+    message.warning(getAIContextUnavailableMessage(type))
+  }
+
   function renderTabSelect () {
     if (isAgent) {
       return null
@@ -119,6 +165,66 @@ export default function AIChat (props) {
         className='mg1l pointer icon-hover send-to-ai-icon'
         title={aiAgentCopy.sendTitle}
       />
+    )
+  }
+
+  function renderContextActions () {
+    const items = [
+      {
+        key: 'terminal',
+        text: '引用终端',
+        icon: <CodeOutlined />,
+        handleClick: handleQuoteTerminalOutput
+      },
+      {
+        key: 'selection',
+        text: '引用选中',
+        icon: <HighlightOutlined />,
+        handleClick: handleQuoteTerminalSelection
+      },
+      {
+        key: 'file',
+        text: '引用文件',
+        icon: <FileTextOutlined />,
+        handleClick: () => showUnavailableContextAction('file')
+      },
+      {
+        key: 'web',
+        text: '联网搜索',
+        icon: <SearchOutlined />,
+        handleClick: () => showUnavailableContextAction('web')
+      },
+      {
+        key: 'mcp',
+        text: 'MCP',
+        icon: <ApiOutlined />,
+        handleClick: () => showUnavailableContextAction('mcp')
+      },
+      {
+        key: 'cli',
+        text: 'CLI',
+        icon: <ToolOutlined />,
+        handleClick: () => showUnavailableContextAction('cli')
+      }
+    ]
+
+    return (
+      <Flex className='ai-context-actions' wrap='wrap' gap={6}>
+        {
+          items.map(item => (
+            <button
+              key={item.key}
+              type='button'
+              className='ai-context-action'
+              onClick={item.handleClick}
+              title={item.text}
+            >
+              {item.icon}
+              <span>{item.text}</span>
+            </button>
+          ))
+        }
+      </Flex>
     )
   }
 
@@ -152,6 +258,7 @@ export default function AIChat (props) {
       </Flex>
 
       <Flex vertical className='ai-chat-input'>
+        {renderContextActions()}
         <TextArea
           value={prompt}
           onChange={handlePromptChange}
