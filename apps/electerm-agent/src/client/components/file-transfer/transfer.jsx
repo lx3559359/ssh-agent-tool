@@ -12,6 +12,10 @@ import {
 import resolve from '../../common/resolve'
 import { refsTransfers, refsStatic, refs } from '../common/ref'
 import {
+  createTransferRetryState,
+  shouldRetryTransfer
+} from '../../common/transfer-retry'
+import {
   zipCmd,
   unzipCmd,
   rmCmd,
@@ -39,6 +43,7 @@ export default class TransportAction extends Component {
     this.currentProgress = 1
     this.isFtp = sftp?.type === 'ftp'
     this.terminalId = sftp?.terminalId
+    this.transferRetryState = createTransferRetryState(props.transfer?.retry)
   }
 
   componentDidMount () {
@@ -66,6 +71,8 @@ export default class TransportAction extends Component {
   }
 
   componentWillUnmount () {
+    clearTimeout(this.retryTimer)
+    this.retryTimer = null
     this.transport && this.transport.destroy()
     this.transport = null
     this.fromFile = null
@@ -212,6 +219,8 @@ export default class TransportAction extends Component {
       return
     }
     this.onCancel = true
+    clearTimeout(this.retryTimer)
+    this.retryTimer = null
     this.transport && this.transport.destroy()
     this.transport = null
     // window.store.cancelTransfer(this.props.transfer.id)
@@ -293,15 +302,19 @@ export default class TransportAction extends Component {
       : toPath
     const mode = toFile.mode || fromMode
     const sftp = refs.get('sftp-' + this.tabId).sftp
-    this.transport = await sftp[transferType]({
-      remotePath,
-      localPath,
-      isDirectory: !!fromFile.isDirectory,
-      options: { mode },
-      onData: this.onData,
-      onError: this.onError,
-      onEnd
-    })
+    try {
+      this.transport = await sftp[transferType]({
+        remotePath,
+        localPath,
+        isDirectory: !!fromFile.isDirectory,
+        options: { mode },
+        onData: this.onData,
+        onError: this.onError,
+        onEnd
+      })
+    } catch (e) {
+      this.onError(e)
+    }
   }
 
   isTransferAction = (action) => {
@@ -526,25 +539,29 @@ export default class TransportAction extends Component {
   }
 
   startTransfer = async () => {
-    const { fromFile = this.fromFile, zip } = this.props.transfer
-    if (!fromFile) {
-      return
+    try {
+      const { fromFile = this.fromFile, zip } = this.props.transfer
+      if (!fromFile) {
+        return
+      }
+      if (!fromFile.isDirectory) {
+        return await this.transferFile()
+      }
+      if (zip) {
+        return await this.zipTransferFolder()
+      }
+      if (!this.isFtp) {
+        return await this.transferFile()
+      } else {
+        await this.transferFolderRecursive()
+      }
+      this.onEnd({
+        transferred: this.transferred,
+        size: this.total
+      })
+    } catch (e) {
+      this.onError(e)
     }
-    if (!fromFile.isDirectory) {
-      return this.transferFile()
-    }
-    if (zip) {
-      return this.zipTransferFolder()
-    }
-    if (!this.isFtp) {
-      return this.transferFile()
-    } else {
-      await this.transferFolderRecursive()
-    }
-    this.onEnd({
-      transferred: this.transferred,
-      size: this.total
-    })
   }
 
   list = async (type, path, tabId) => {
@@ -804,7 +821,30 @@ export default class TransportAction extends Component {
     await this.transferFolders(folders, foldersBatch, transfer)
   }
 
+  scheduleRetry = (e) => {
+    if (
+      this.onCancel ||
+      !shouldRetryTransfer(e, this.transferRetryState)
+    ) {
+      return false
+    }
+    this.transport && this.transport.destroy()
+    this.transport = null
+    this.update({
+      status: 'active',
+      error: '',
+      retrying: true,
+      retryAttempt: this.transferRetryState.attempt,
+      retryMax: this.transferRetryState.maxRetries
+    })
+    this.retryTimer = setTimeout(() => this.startTransfer(), this.transferRetryState.retryDelay)
+    return true
+  }
+
   onError = (e) => {
+    if (this.scheduleRetry(e)) {
+      return
+    }
     const up = {
       status: 'exception',
       error: e.message
