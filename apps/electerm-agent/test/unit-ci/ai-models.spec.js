@@ -316,6 +316,48 @@ test('returns built-in provider models when a known provider returns an empty mo
   }
 })
 
+test('returns built-in MiniMax model when its model list is empty', async () => {
+  const axios = require('axios')
+  const originalCreate = axios.create
+  const calls = []
+
+  axios.create = (config) => ({
+    get: async (urlPath) => {
+      calls.push({
+        baseURL: config.baseURL,
+        path: urlPath
+      })
+      return {
+        data: {
+          data: []
+        }
+      }
+    }
+  })
+
+  delete require.cache[aiPath]
+  const { AIModels } = require(aiPath)
+
+  try {
+    const res = await AIModels('https://api.minimax.io', 'test-key', '', 'Authorization: Bearer')
+    assert.deepEqual(res, {
+      models: [
+        'MiniMax-M3'
+      ],
+      source: 'built-in'
+    })
+    assert.deepEqual(calls, [
+      {
+        baseURL: 'https://api.minimax.io/v1',
+        path: '/models'
+      }
+    ])
+  } finally {
+    axios.create = originalCreate
+    delete require.cache[aiPath]
+  }
+})
+
 test('keeps remote model list errors instead of masking them with Ollama fallback', async () => {
   const axios = require('axios')
   const originalCreate = axios.create

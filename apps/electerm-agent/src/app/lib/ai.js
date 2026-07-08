@@ -284,6 +284,7 @@ const builtInProviderModels = new Map([
   ['dashscope.aliyuncs.com', ['qwen-plus', 'qwen-max', 'qwen-turbo', 'qwen-long']],
   ['api.siliconflow.cn', ['Qwen/Qwen3-32B', 'deepseek-ai/DeepSeek-V3', 'deepseek-ai/DeepSeek-R1']],
   ['api.siliconflow.com', ['Qwen/Qwen3-32B', 'deepseek-ai/DeepSeek-V3', 'deepseek-ai/DeepSeek-R1']],
+  ['api.minimax.io', ['MiniMax-M3']],
   ['api.hunyuan.cloud.tencent.com', ['hunyuan-turbos-latest']]
 ])
 
