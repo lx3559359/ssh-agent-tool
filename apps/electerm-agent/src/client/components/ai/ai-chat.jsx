@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from 'react'
-import { Flex, Input, Popconfirm, Segmented } from 'antd'
+import { Flex, Input, Popconfirm } from 'antd'
 import TabSelect from '../footer/tab-select'
 import AiChatHistory from './ai-chat-history'
 import uid from '../../common/uid'
@@ -10,10 +10,8 @@ import {
   UnorderedListOutlined
 } from '@ant-design/icons'
 import {
-  aiConfigWikiLink,
-  aiChatModeLsKey
+  aiConfigWikiLink
 } from '../../common/constants'
-import { getItem, setItem } from '../../common/safe-local-storage.js'
 import { refsStatic } from '../common/ref'
 import aiAgentCopy from './ai-agent-copy.json'
 import './ai.styl'
@@ -23,18 +21,12 @@ const MAX_HISTORY = 100
 
 export default function AIChat (props) {
   const [prompt, setPrompt] = useState('')
-  const [mode, setMode] = useState(() => getItem(aiChatModeLsKey) || 'ask')
+  const mode = 'ask'
   const isAgent = mode === 'agent'
   const submitDisabled = isAgent && props.agentRunning
 
   function handlePromptChange (e) {
     setPrompt(e.target.value)
-  }
-
-  function handleModeChange (val) {
-    const m = val === aiAgentCopy.modeLabels.ask ? 'ask' : 'agent'
-    setItem(aiChatModeLsKey, m)
-    setMode(m)
   }
 
   const handleSubmit = useCallback(function () {
@@ -105,19 +97,6 @@ export default function AIChat (props) {
     )
   }
 
-  function renderContextChips () {
-    const chips = ['终端', '选中', '文件', '联网', 'MCP', 'CLI']
-    return (
-      <Flex className='ai-context-chips' wrap='wrap' gap={6}>
-        {
-          chips.map(chip => (
-            <span key={chip} className='ai-context-chip'>{chip}</span>
-          ))
-        }
-      </Flex>
-    )
-  }
-
   function renderSendIcon () {
     if (submitDisabled) {
       return (
@@ -166,7 +145,6 @@ export default function AIChat (props) {
       </Flex>
 
       <Flex vertical className='ai-chat-input'>
-        {renderContextChips()}
         <TextArea
           value={prompt}
           onChange={handlePromptChange}
@@ -177,12 +155,6 @@ export default function AIChat (props) {
         />
         <Flex className='ai-chat-terminals' justify='space-between' align='center'>
           <Flex align='center'>
-            <Segmented
-              options={[aiAgentCopy.modeLabels.ask, aiAgentCopy.modeLabels.agent]}
-              value={mode === 'ask' ? aiAgentCopy.modeLabels.ask : aiAgentCopy.modeLabels.agent}
-              onChange={handleModeChange}
-              size='small'
-            />
             {renderTabSelect()}
             <SettingOutlined
               onClick={toggleConfig}

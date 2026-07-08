@@ -9,3 +9,13 @@ export const aiConfigsArr = [
   'languageAI',
   'proxyAI'
 ]
+
+export const requiredAIConfigsArr = [
+  'baseURLAI',
+  'modelAI',
+  'roleAI'
+]
+
+export function isAIConfigMissing (config = {}) {
+  return requiredAIConfigsArr.some(k => !String(config[k] || '').trim())
+}

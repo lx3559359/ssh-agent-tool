@@ -17,7 +17,7 @@ import { refs, refsStatic } from '../components/common/ref'
 import { action } from 'manate'
 import uid from '../common/uid'
 import deepCopy from 'json-deep-copy'
-import { aiConfigsArr } from '../components/ai/ai-config-props'
+import { isAIConfigMissing } from '../components/ai/ai-config-props'
 
 const e = window.translate
 const { assign } = Object
@@ -298,7 +298,7 @@ export default Store => {
   }
 
   Store.prototype.aiConfigMissing = function () {
-    return aiConfigsArr.filter(k => k !== 'apiKeyAI' && k !== 'proxyAI' && k !== 'nameAI').some(k => !window.store.config[k])
+    return isAIConfigMissing(window.store.config)
   }
 
   Store.prototype.clearHistory = function () {
