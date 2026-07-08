@@ -43,6 +43,7 @@ function normalizeBookmarkBackupData (data) {
     !isBackupBookmarkList(data.bookmarks) ||
     !isBackupGroupList(data.bookmarkGroups) ||
     hasDuplicatedBackupId(data.bookmarks) ||
+    hasDuplicatedBackupId(data.bookmarkGroups) ||
     hasDangerousBackupKey(data.bookmarks) ||
     hasDangerousBackupKey(data.bookmarkGroups)
   ) {

@@ -223,6 +223,23 @@ test('rejects bookmark backups with duplicated bookmark ids', async () => {
   )
 })
 
+test('rejects bookmark backups with duplicated bookmark group ids', async () => {
+  const {
+    parseBookmarkBackup
+  } = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/common/bookmark-backup.js')))
+
+  assert.throws(
+    () => parseBookmarkBackup(JSON.stringify({
+      bookmarks: [{ id: 'server-1', host: '10.0.1.23' }],
+      bookmarkGroups: [
+        { id: 'group-1', title: '生产环境', bookmarkIds: ['server-1'] },
+        { id: 'group-1', title: '测试环境', bookmarkIds: [] }
+      ]
+    })),
+    /服务器或分组格式不正确/
+  )
+})
+
 test('uses the AIGShell bookmark backup package from every toolbar export entry', () => {
   const source = fs.readFileSync(
     path.resolve(__dirname, '../../src/client/components/tree-list/bookmark-toolbar.jsx'),
