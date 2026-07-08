@@ -1,4 +1,5 @@
 import copy from 'json-deep-copy'
+import { removeCyclicBookmarkGroupIds } from './bookmark-group-tree.js'
 
 export const bookmarkBackupFormat = 'AIGShell.bookmarks.backup'
 export const bookmarkBackupFormatVersion = 1
@@ -108,7 +109,7 @@ function normalizeBookmarkBackupData (data) {
   }
   return {
     bookmarks: data.bookmarks || [],
-    bookmarkGroups: data.bookmarkGroups || []
+    bookmarkGroups: removeCyclicBookmarkGroupIds(copy(data.bookmarkGroups || []))
   }
 }
 

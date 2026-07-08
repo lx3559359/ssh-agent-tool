@@ -449,6 +449,45 @@ test('rejects bookmark backups with dangling group references', async () => {
   )
 })
 
+test('removes cyclic bookmark group references when importing backups', async () => {
+  const {
+    parseBookmarkBackup
+  } = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/common/bookmark-backup.js')))
+
+  const parsed = parseBookmarkBackup(JSON.stringify({
+    bookmarks: [{ id: 'server-1', host: '10.0.1.23' }],
+    bookmarkGroups: [
+      {
+        id: 'group-a',
+        title: '生产环境',
+        bookmarkIds: ['server-1'],
+        bookmarkGroupIds: ['group-b']
+      },
+      {
+        id: 'group-b',
+        title: '子分组',
+        bookmarkIds: [],
+        bookmarkGroupIds: ['group-a']
+      }
+    ]
+  }))
+
+  assert.deepEqual(parsed.bookmarkGroups, [
+    {
+      id: 'group-a',
+      title: '生产环境',
+      bookmarkIds: ['server-1'],
+      bookmarkGroupIds: ['group-b']
+    },
+    {
+      id: 'group-b',
+      title: '子分组',
+      bookmarkIds: [],
+      bookmarkGroupIds: []
+    }
+  ])
+})
+
 test('uses the AIGShell bookmark backup package from every toolbar export entry', () => {
   const source = fs.readFileSync(
     path.resolve(__dirname, '../../src/client/components/tree-list/bookmark-toolbar.jsx'),
