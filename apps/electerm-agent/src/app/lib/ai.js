@@ -284,6 +284,17 @@ function shouldUseBuiltInProviderModels (error) {
   return status === 404 || status === 405 || status === 501
 }
 
+function getBuiltInProviderModelsResult (baseURL) {
+  const models = getBuiltInProviderModels(baseURL)
+  if (!models.length) {
+    return null
+  }
+  return {
+    models,
+    source: 'built-in'
+  }
+}
+
 async function fetchOpenAIModels (baseURL, apiKey, proxy, authHeaderName) {
   const client = createAIClient(normalizeAIModelBaseURL(baseURL), apiKey, proxy, authHeaderName)
   const response = await client.get('/models')
@@ -319,6 +330,10 @@ exports.AIModels = async (baseURL, apiKey, proxy, authHeaderName) => {
         models
       }
     }
+    const builtInResult = getBuiltInProviderModelsResult(baseURL)
+    if (builtInResult) {
+      return builtInResult
+    }
     if (!shouldTryOllamaModels(baseURL)) {
       return {
         models: []
@@ -329,13 +344,10 @@ exports.AIModels = async (baseURL, apiKey, proxy, authHeaderName) => {
     }
   } catch (e) {
     if (!shouldTryOllamaModels(baseURL)) {
-      const models = shouldUseBuiltInProviderModels(e)
-        ? getBuiltInProviderModels(baseURL)
-        : []
-      if (models.length) {
-        return {
-          models,
-          source: 'built-in'
+      if (shouldUseBuiltInProviderModels(e)) {
+        const builtInResult = getBuiltInProviderModelsResult(baseURL)
+        if (builtInResult) {
+          return builtInResult
         }
       }
       log.error('AI models error')
