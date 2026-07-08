@@ -125,6 +125,23 @@ test('windows release workflow builds and publishes a portable zip separately fr
   assert.ok(artifactUploadIndex < releaseIndex, 'artifacts should be prepared before release creation')
 })
 
+test('windows release workflow verifies the portable zip contents before upload', () => {
+  const workflow = fs.readFileSync(
+    path.resolve(__dirname, '../../../../.github/workflows/windows-electerm-agent-release.yml'),
+    'utf8'
+  )
+
+  const portableBuildIndex = workflow.indexOf('name: Build portable package')
+  const portableVerifyIndex = workflow.indexOf('npm run verify-win-portable')
+  const artifactUploadIndex = workflow.indexOf('name: Upload Windows artifacts')
+
+  assert.ok(portableBuildIndex !== -1, 'workflow should build the portable package')
+  assert.ok(portableVerifyIndex !== -1, 'workflow should verify the portable package')
+  assert.ok(artifactUploadIndex !== -1, 'workflow should upload artifacts')
+  assert.ok(portableVerifyIndex > portableBuildIndex, 'portable zip should be verified after it is built')
+  assert.ok(portableVerifyIndex < artifactUploadIndex, 'portable zip should be verified before upload')
+})
+
 test('portable zip is not required for online update asset validation', () => {
   const names = getRequiredReleaseAssetNames('3.15.105')
 

@@ -20,6 +20,23 @@ function resolveSmokePaths ({
   }
 }
 
+function resolvePortableZipPaths ({
+  projectRoot = path.resolve(__dirname, '../..'),
+  tmpRoot,
+  version,
+  arch = 'x64'
+} = {}) {
+  const root = tmpRoot || path.join(
+    require('os').tmpdir(),
+    `aigshell-portable-verify-${process.pid}-${Date.now()}`
+  )
+  return {
+    tmpRoot: root,
+    zipPath: path.join(projectRoot, 'dist', `AIGShell-${version}-win-${arch}-portable.zip`),
+    extractPath: path.join(root, 'extract')
+  }
+}
+
 function buildSmokeEnvironment (baseEnv, dataPath) {
   return {
     ...baseEnv,
@@ -42,8 +59,45 @@ function validateSmokeResult ({
   }
 }
 
+function normalizeZipEntry (file) {
+  return String(file || '').replace(/\\/g, '/').replace(/^\/+/, '')
+}
+
+function validatePortableZipExtractedFiles (files = []) {
+  const entries = files.map(normalizeZipEntry).filter(Boolean)
+  const lowerEntries = entries.map(file => file.toLowerCase())
+  const hasBatLauncher = lowerEntries.some(file => /\.(bat|cmd)$/.test(file))
+  const hasExe = lowerEntries.some(file => path.basename(file) === 'aigshell.exe')
+  const hasAppAsar = lowerEntries.includes('resources/app.asar')
+
+  if (hasBatLauncher) {
+    throw new Error('便携包不应包含 BAT/CMD 启动脚本')
+  }
+  if (!hasExe) {
+    throw new Error('便携包缺少 AIGShell.exe')
+  }
+  if (!hasAppAsar) {
+    throw new Error('便携包缺少 resources/app.asar')
+  }
+}
+
+function listFilesRecursive (rootDir, dir = rootDir) {
+  return require('fs').readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
+    const fullPath = path.join(dir, entry.name)
+    if (entry.isDirectory()) {
+      return listFilesRecursive(rootDir, fullPath)
+    }
+    return entry.isFile()
+      ? [path.relative(rootDir, fullPath)]
+      : []
+  })
+}
+
 module.exports = {
   buildSmokeEnvironment,
+  listFilesRecursive,
+  resolvePortableZipPaths,
   resolveSmokePaths,
+  validatePortableZipExtractedFiles,
   validateSmokeResult
 }

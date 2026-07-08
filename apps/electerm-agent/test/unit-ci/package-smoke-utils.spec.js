@@ -5,6 +5,7 @@ const path = require('node:path')
 const {
   buildSmokeEnvironment,
   resolveSmokePaths,
+  validatePortableZipExtractedFiles,
   validateSmokeResult
 } = require(path.resolve(__dirname, '../../build/bin/package-smoke-utils'))
 
@@ -67,5 +68,28 @@ test('package smoke validation requires a running app and both sqlite files', ()
       dataDbExists: false
     }),
     /did not create sqlite databases/
+  )
+})
+
+test('portable zip validation requires a normal Windows client layout without bat launchers', () => {
+  assert.doesNotThrow(() => validatePortableZipExtractedFiles([
+    'AIGShell.exe',
+    'resources/app.asar',
+    'resources/electron.asar'
+  ]))
+
+  assert.throws(
+    () => validatePortableZipExtractedFiles([
+      'start-aigshell.bat',
+      'resources/app.asar'
+    ]),
+    /BAT|CMD/
+  )
+
+  assert.throws(
+    () => validatePortableZipExtractedFiles([
+      'resources/app.asar'
+    ]),
+    /AIGShell\.exe/
   )
 })
