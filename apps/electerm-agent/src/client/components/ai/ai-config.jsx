@@ -4,9 +4,14 @@ import {
   Button,
   AutoComplete,
   Alert,
+  Checkbox,
   Space,
   Select
 } from 'antd'
+import {
+  MinusCircleOutlined,
+  PlusOutlined
+} from '@ant-design/icons'
 import { useEffect, useMemo, useState } from 'react'
 import Link from '../common/external-link'
 import AiCache from './ai-cache'
@@ -185,6 +190,38 @@ const authHeaderOptions = [
   { value: 'Authorization' }
 ]
 
+const skillFields = [
+  {
+    name: 'id',
+    label: 'Skill ID',
+    placeholder: '例如：redis-troubleshooting',
+    required: true
+  },
+  {
+    name: 'title',
+    label: '技能名称',
+    placeholder: '例如：Redis 排查',
+    required: true
+  },
+  {
+    name: 'description',
+    label: '适用场景',
+    placeholder: '例如：连接异常、慢查询、内存占用'
+  }
+]
+
+function getCleanAgentSkills (skills = []) {
+  return skills
+    .filter(skill => skill && (skill.id || skill.title || skill.description || skill.prompt))
+    .map(skill => ({
+      id: String(skill.id || '').trim(),
+      title: String(skill.title || '').trim(),
+      description: String(skill.description || '').trim(),
+      prompt: String(skill.prompt || '').trim(),
+      disabled: Boolean(skill.disabled)
+    }))
+}
+
 function uniqueOptions (items = []) {
   return [...new Set(items.filter(Boolean))]
     .sort((a, b) => a.localeCompare(b))
@@ -228,11 +265,15 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
   }
 
   const handleSubmit = async (values) => {
-    onSubmit({
+    const nextValues = {
       ...values,
-      apiPathAI: values.apiPathAI || ''
+      apiPathAI: values.apiPathAI || '',
+      agentSkills: getCleanAgentSkills(values.agentSkills)
+    }
+    onSubmit({
+      ...nextValues
     })
-    addHistoryItem(STORAGE_KEY_CONFIG, values, EVENT_NAME_CONFIG)
+    addHistoryItem(STORAGE_KEY_CONFIG, nextValues, EVENT_NAME_CONFIG)
   }
 
   const handlePresetChange = (value) => {
@@ -498,6 +539,74 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
               placeholder={e('language')}
             />
           </AutoComplete>
+        </Form.Item>
+
+        <Form.Item label='Agent Skill'>
+          <Form.List name='agentSkills'>
+            {(fields, { add, remove }) => (
+              <Space direction='vertical' className='width-100'>
+                {
+                  fields.map(({ key, name }) => (
+                    <div className='pd1 border' key={key}>
+                      <Space align='start' className='width-100'>
+                        {
+                          skillFields.map(item => (
+                            <Form.Item
+                              key={item.name}
+                              name={[name, item.name]}
+                              label={item.label}
+                              rules={item.required
+                                ? [{ required: true, message: `请输入${item.label}` }]
+                                : []}
+                              className='flex1'
+                            >
+                              <Input placeholder={item.placeholder} />
+                            </Form.Item>
+                          ))
+                        }
+                        <Form.Item
+                          name={[name, 'disabled']}
+                          label='状态'
+                          valuePropName='checked'
+                        >
+                          <Checkbox>禁用</Checkbox>
+                        </Form.Item>
+                        <Button
+                          danger
+                          icon={<MinusCircleOutlined />}
+                          onClick={() => remove(name)}
+                        >
+                          删除
+                        </Button>
+                      </Space>
+                      <Form.Item
+                        name={[name, 'prompt']}
+                        label='排查方法'
+                        rules={[{ required: true, message: '请输入排查方法' }]}
+                      >
+                        <Input.TextArea
+                          rows={3}
+                          placeholder='描述 Agent 使用这个 Skill 时应该关注的日志、命令、上下文和排查顺序'
+                        />
+                      </Form.Item>
+                    </div>
+                  ))
+                }
+                <Button
+                  icon={<PlusOutlined />}
+                  onClick={() => add({
+                    id: '',
+                    title: '',
+                    description: '',
+                    prompt: '',
+                    disabled: false
+                  })}
+                >
+                  新增 Skill
+                </Button>
+              </Space>
+            )}
+          </Form.List>
         </Form.Item>
 
         <Form.Item

@@ -6,6 +6,7 @@ export const aiConfigsArr = [
   'apiKeyAI',
   'authHeaderNameAI',
   'apiPathAI',
+  'agentSkills',
   'languageAI',
   'proxyAI'
 ]
