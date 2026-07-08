@@ -1,9 +1,11 @@
 import {
   ApiOutlined,
   FolderAddOutlined,
+  MoonOutlined,
   PlusCircleOutlined,
   ReloadOutlined,
   SettingOutlined,
+  SunOutlined,
   ThunderboltOutlined
 } from '@ant-design/icons'
 import { Button, Popover, Tooltip } from 'antd'
@@ -29,6 +31,12 @@ export default function AIGShellTopBar ({ store }) {
     window.store.onCheckUpdate(true)
   }
 
+  const isLightTheme = store.config.theme === 'defaultLight'
+
+  function handleToggleTheme () {
+    window.store.setTheme(isLightTheme ? 'default' : 'defaultLight')
+  }
+
   const actions = [
     {
       key: 'new',
@@ -40,7 +48,7 @@ export default function AIGShellTopBar ({ store }) {
       key: 'quick',
       label: '快连',
       icon: <ThunderboltOutlined />,
-      popover: <QuickConnect inputOnly />,
+      popover: <QuickConnect formOnly />,
       onClick: handleFastNew
     },
     {
@@ -60,6 +68,12 @@ export default function AIGShellTopBar ({ store }) {
       label: '更新',
       icon: <ReloadOutlined />,
       onClick: handleCheckUpdate
+    },
+    {
+      key: 'theme',
+      label: isLightTheme ? '夜间' : '日间',
+      icon: isLightTheme ? <MoonOutlined /> : <SunOutlined />,
+      onClick: handleToggleTheme
     },
     {
       key: 'setting',

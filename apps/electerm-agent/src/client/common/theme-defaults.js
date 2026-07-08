@@ -50,27 +50,27 @@ const defaultThemeLightFunc = () => {
 
 const defaultThemeLightTerminal = () => {
   return parsor(`
-background=#121214
-foreground=#af9a91
-cursor=#af9a91
-selectionBackground=#575256
-cursorAccent=#121214
-black=#572100
-red=#ba3934
-green=#91773f
-yellow=#b55600
-blue=#5f63b4
-magenta=#a17c7b
-cyan=#8faea9
-white=#af9a91
-brightBlack=#4e4b61
-brightRed=#d9443f
-brightGreen=#d6b04e
-brightYellow=#f66813
-brightBlue=#8086ef
-brightMagenta=#e2c2bb
-brightCyan=#a4dce7
-brightWhite=#d2c7a9
+background=#f7f8fa
+foreground=#1f2937
+cursor=#2563eb
+selectionBackground=rgba(37, 99, 235, 0.18)
+cursorAccent=#ffffff
+black=#111827
+red=#dc2626
+green=#15803d
+yellow=#b45309
+blue=#2563eb
+magenta=#7c3aed
+cyan=#0891b2
+white=#e5e7eb
+brightBlack=#6b7280
+brightRed=#ef4444
+brightGreen=#16a34a
+brightYellow=#d97706
+brightBlue=#3b82f6
+brightMagenta=#8b5cf6
+brightCyan=#06b6d4
+brightWhite=#ffffff
     `
   )
 }
