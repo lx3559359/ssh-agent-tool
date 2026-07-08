@@ -74,6 +74,9 @@ jobs:
           node build/bin/prepare-win-portable-ci.js
           npx electron-builder --win tar.gz --publish never
 
+      - name: Create update approval manifest
+        run: npm run release:approval
+
       - name: Verify local update assets
         run: npm run release:local:verify
 
@@ -85,6 +88,7 @@ jobs:
             apps/electerm-agent/dist/AIGShell-*-win-x64-installer.exe
             apps/electerm-agent/dist/AIGShell-*-win-x64-installer.exe.blockmap
             apps/electerm-agent/dist/latest.yml
+            apps/electerm-agent/dist/aigshell-update.json
           if-no-files-found: error
           retention-days: 14
 
@@ -97,3 +101,4 @@ jobs:
             apps/electerm-agent/dist/AIGShell-*-win-x64-installer.exe
             apps/electerm-agent/dist/AIGShell-*-win-x64-installer.exe.blockmap
             apps/electerm-agent/dist/latest.yml
+            apps/electerm-agent/dist/aigshell-update.json

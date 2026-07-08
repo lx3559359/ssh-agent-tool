@@ -12,6 +12,7 @@ import {
   getReleaseUpdate,
   getReleaseUpdateStatus
 } from './update-version'
+import { attachUpdateApprovalManifest } from './update-approval'
 
 const releaseApiUrl = 'https://api.github.com/repos/lx3559359/ssh-agent-tool/releases/latest'
 
@@ -43,19 +44,26 @@ function getInfo (url) {
     })
 }
 
-export async function getLatestReleaseVersion (n) {
+async function getApprovedReleaseInfo () {
   const release = await getInfo(releaseApiUrl)
+  return attachUpdateApprovalManifest(release, getInfo)
+}
+
+export async function getLatestReleaseVersion (n) {
+  const release = await getApprovedReleaseInfo()
   return getReleaseUpdate(release, packInfo.version, {
     arch: isArm ? 'arm64' : 'x64',
-    requireWindowsAssets: true
+    requireWindowsAssets: true,
+    requireApprovalManifest: true
   })
 }
 
 export async function getLatestReleaseStatus () {
-  const release = await getInfo(releaseApiUrl)
+  const release = await getApprovedReleaseInfo()
   return getReleaseUpdateStatus(release, packInfo.version, {
     arch: isArm ? 'arm64' : 'x64',
-    requireWindowsAssets: true
+    requireWindowsAssets: true,
+    requireApprovalManifest: true
   })
 }
 

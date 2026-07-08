@@ -14,6 +14,9 @@ const {
   buildGitHubReleaseCommands,
   createSpawnOptions
 } = require(path.resolve(__dirname, '../../build/bin/github-release-utils'))
+const {
+  buildUpdateApprovalManifest
+} = require(path.resolve(__dirname, '../../build/bin/write-update-approval-manifest'))
 
 test('windows release workflow publishes only online update assets', () => {
   const workflow = fs.readFileSync(
@@ -25,6 +28,7 @@ test('windows release workflow publishes only online update assets', () => {
   assert.match(workflow, /apps\/electerm-agent\/dist\/AIGShell-\*-win-x64-installer\.exe/)
   assert.match(workflow, /apps\/electerm-agent\/dist\/AIGShell-\*-win-x64-installer\.exe\.blockmap/)
   assert.match(workflow, /apps\/electerm-agent\/dist\/latest\.yml/)
+  assert.match(workflow, /apps\/electerm-agent\/dist\/aigshell-update\.json/)
 })
 
 test('windows release workflow smoke tests the packaged app before uploading artifacts', () => {
@@ -85,12 +89,16 @@ test('windows release workflow verifies local update assets before upload', () =
   )
 
   const localVerifyIndex = workflow.indexOf('npm run release:local:verify')
+  const approvalManifestIndex = workflow.indexOf('npm run release:approval')
   const portableBuildIndex = workflow.indexOf('name: Build portable package')
   const artifactUploadIndex = workflow.indexOf('name: Upload Windows artifacts')
 
   assert.ok(localVerifyIndex !== -1, 'workflow should verify local release assets')
+  assert.ok(approvalManifestIndex !== -1, 'workflow should create the approval manifest')
   assert.ok(portableBuildIndex !== -1, 'workflow should build the portable package')
   assert.ok(artifactUploadIndex !== -1, 'workflow should upload Windows artifacts')
+  assert.ok(approvalManifestIndex > portableBuildIndex, 'approval manifest should be created after all package builds')
+  assert.ok(approvalManifestIndex < localVerifyIndex, 'approval manifest should be created before local release verification')
   assert.ok(localVerifyIndex > portableBuildIndex, 'local release verification should run after all package builds')
   assert.ok(localVerifyIndex < artifactUploadIndex, 'local release verification should run before artifacts are uploaded')
 })
@@ -151,11 +159,28 @@ test('builds a stable GitHub release tag from package version', () => {
   assert.equal(buildReleaseTag('v3.15.105'), 'v3.15.105')
 })
 
+test('builds the stable update approval manifest required by clients', () => {
+  assert.deepEqual(
+    {
+      ...buildUpdateApprovalManifest('3.15.105'),
+      generatedAt: '<dynamic>'
+    },
+    {
+      product: 'AIGShell',
+      channel: 'stable',
+      publishApproved: true,
+      version: '3.15.105',
+      generatedAt: '<dynamic>'
+    }
+  )
+})
+
 test('selects only AIGShell Windows update assets from dist files', () => {
   const files = [
     'AIGShell-3.15.105-win-x64-installer.exe',
     'AIGShell-3.15.105-win-x64-installer.exe.blockmap',
     'latest.yml',
+    'aigshell-update.json',
     'builder-debug.yml',
     'SSH-Agent-Tool-3.15.105-win-x64-installer.exe',
     'win-unpacked',
@@ -167,7 +192,8 @@ test('selects only AIGShell Windows update assets from dist files', () => {
     [
       'AIGShell-3.15.105-win-x64-installer.exe',
       'AIGShell-3.15.105-win-x64-installer.exe.blockmap',
-      'latest.yml'
+      'latest.yml',
+      'aigshell-update.json'
     ]
   )
 })
@@ -178,7 +204,8 @@ test('identifies the exact release assets required for Windows online updates', 
     [
       'AIGShell-3.15.105-win-x64-installer.exe',
       'AIGShell-3.15.105-win-x64-installer.exe.blockmap',
-      'latest.yml'
+      'latest.yml',
+      'aigshell-update.json'
     ]
   )
 })
@@ -189,7 +216,8 @@ test('identifies Windows ARM64 release assets when requested', () => {
     [
       'AIGShell-3.15.105-win-arm64-installer.exe',
       'AIGShell-3.15.105-win-arm64-installer.exe.blockmap',
-      'latest.yml'
+      'latest.yml',
+      'aigshell-update.json'
     ]
   )
 })
@@ -200,7 +228,8 @@ test('selects only Windows ARM64 update assets when requested', () => {
     'AIGShell-3.15.105-win-x64-installer.exe.blockmap',
     'AIGShell-3.15.105-win-arm64-installer.exe',
     'AIGShell-3.15.105-win-arm64-installer.exe.blockmap',
-    'latest.yml'
+    'latest.yml',
+    'aigshell-update.json'
   ]
 
   assert.deepEqual(
@@ -208,7 +237,8 @@ test('selects only Windows ARM64 update assets when requested', () => {
     [
       'AIGShell-3.15.105-win-arm64-installer.exe',
       'AIGShell-3.15.105-win-arm64-installer.exe.blockmap',
-      'latest.yml'
+      'latest.yml',
+      'aigshell-update.json'
     ]
   )
 })
@@ -237,11 +267,13 @@ test('builds a release asset report for local and remote update files', () => {
   const localFiles = [
     { name: 'AIGShell-3.15.105-win-x64-installer.exe', size: 100 },
     { name: 'AIGShell-3.15.105-win-x64-installer.exe.blockmap', size: 10 },
-    { name: 'latest.yml', size: 3 }
+    { name: 'latest.yml', size: 3 },
+    { name: 'aigshell-update.json', size: 88 }
   ]
   const remoteAssets = [
     { name: 'AIGShell-3.15.105-win-x64-installer.exe', size: 100 },
     { name: 'AIGShell-3.15.105-win-x64-installer.exe.blockmap', size: 9 },
+    { name: 'aigshell-update.json', size: 88 },
     { name: 'AIGShell.exe', size: 200 }
   ]
 
@@ -255,7 +287,8 @@ test('builds a release asset report for local and remote update files', () => {
       requiredNames: [
         'AIGShell-3.15.105-win-x64-installer.exe',
         'AIGShell-3.15.105-win-x64-installer.exe.blockmap',
-        'latest.yml'
+        'latest.yml',
+        'aigshell-update.json'
       ],
       missingLocal: [],
       missingRemote: ['latest.yml'],
@@ -278,7 +311,8 @@ test('reports ok when local and remote update assets match exactly', () => {
   const files = [
     { name: 'AIGShell-3.15.105-win-x64-installer.exe', size: 100 },
     { name: 'AIGShell-3.15.105-win-x64-installer.exe.blockmap', size: 10 },
-    { name: 'latest.yml', size: 3 }
+    { name: 'latest.yml', size: 3 },
+    { name: 'aigshell-update.json', size: 88 }
   ]
 
   assert.equal(
@@ -296,6 +330,7 @@ test('reports local update assets as valid only when all required files are pres
     { name: 'AIGShell-3.15.105-win-x64-installer.exe', size: 100 },
     { name: 'AIGShell-3.15.105-win-x64-installer.exe.blockmap', size: 10 },
     { name: 'latest.yml', size: 3 },
+    { name: 'aigshell-update.json', size: 88 },
     { name: 'win-unpacked', size: 0 }
   ]
 
@@ -308,7 +343,8 @@ test('reports local update assets as valid only when all required files are pres
       requiredNames: [
         'AIGShell-3.15.105-win-x64-installer.exe',
         'AIGShell-3.15.105-win-x64-installer.exe.blockmap',
-        'latest.yml'
+        'latest.yml',
+        'aigshell-update.json'
       ],
       missingLocal: [],
       emptyLocal: [],
@@ -332,9 +368,13 @@ test('reports missing and empty local update assets before upload', () => {
       requiredNames: [
         'AIGShell-3.15.105-win-x64-installer.exe',
         'AIGShell-3.15.105-win-x64-installer.exe.blockmap',
-        'latest.yml'
+        'latest.yml',
+        'aigshell-update.json'
       ],
-      missingLocal: ['AIGShell-3.15.105-win-x64-installer.exe.blockmap'],
+      missingLocal: [
+        'AIGShell-3.15.105-win-x64-installer.exe.blockmap',
+        'aigshell-update.json'
+      ],
       emptyLocal: ['AIGShell-3.15.105-win-x64-installer.exe'],
       ok: false
     }
@@ -345,7 +385,8 @@ test('builds validated local release asset paths only when update files are read
   const goodFiles = [
     { name: 'AIGShell-3.15.105-win-x64-installer.exe', size: 100 },
     { name: 'AIGShell-3.15.105-win-x64-installer.exe.blockmap', size: 10 },
-    { name: 'latest.yml', size: 3 }
+    { name: 'latest.yml', size: 3 },
+    { name: 'aigshell-update.json', size: 88 }
   ]
 
   assert.deepEqual(
@@ -357,7 +398,8 @@ test('builds validated local release asset paths only when update files are read
     [
       path.join('dist', 'AIGShell-3.15.105-win-x64-installer.exe'),
       path.join('dist', 'AIGShell-3.15.105-win-x64-installer.exe.blockmap'),
-      path.join('dist', 'latest.yml')
+      path.join('dist', 'latest.yml'),
+      path.join('dist', 'aigshell-update.json')
     ]
   )
 
@@ -383,14 +425,15 @@ test('creates deterministic gh commands for release create and upload', () => {
     assets: [
       'dist/AIGShell-3.15.105-win-x64-installer.exe',
       'dist/AIGShell-3.15.105-win-x64-installer.exe.blockmap',
-      'dist/latest.yml'
+      'dist/latest.yml',
+      'dist/aigshell-update.json'
     ]
   })
 
   assert.deepEqual(commands, [
     ['gh', ['release', 'view', 'v3.15.105', '--repo', 'lx3559359/ssh-agent-tool']],
     ['gh', ['release', 'create', 'v3.15.105', '--repo', 'lx3559359/ssh-agent-tool', '--title', 'AIGShell v3.15.105', '--notes', 'AIGShell Windows release']],
-    ['gh', ['release', 'upload', 'v3.15.105', 'dist/AIGShell-3.15.105-win-x64-installer.exe', 'dist/AIGShell-3.15.105-win-x64-installer.exe.blockmap', 'dist/latest.yml', '--repo', 'lx3559359/ssh-agent-tool', '--clobber']]
+    ['gh', ['release', 'upload', 'v3.15.105', 'dist/AIGShell-3.15.105-win-x64-installer.exe', 'dist/AIGShell-3.15.105-win-x64-installer.exe.blockmap', 'dist/latest.yml', 'dist/aigshell-update.json', '--repo', 'lx3559359/ssh-agent-tool', '--clobber']]
   ])
 })
 

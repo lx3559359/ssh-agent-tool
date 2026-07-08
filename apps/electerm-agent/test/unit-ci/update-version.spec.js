@@ -65,7 +65,80 @@ test('requires Windows update assets when validating an automatic update release
   )
 })
 
-test('recognizes Windows update assets for prerelease versions', async () => {
+test('requires an approved stable release manifest before allowing online updates', async () => {
+  const {
+    getReleaseUpdate,
+    getReleaseUpdateStatus,
+    hasApprovedUpdateManifest
+  } = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/common/update-version.js')))
+
+  const baseRelease = {
+    tag_name: 'v3.15.106',
+    assets: [
+      { name: 'AIGShell-3.15.106-win-x64-installer.exe' },
+      { name: 'AIGShell-3.15.106-win-x64-installer.exe.blockmap' },
+      { name: 'latest.yml' }
+    ]
+  }
+  const approvedRelease = {
+    ...baseRelease,
+    assets: [
+      ...baseRelease.assets,
+      {
+        name: 'aigshell-update.json',
+        browser_download_url: 'https://example.com/aigshell-update.json',
+        updateApproval: {
+          product: 'AIGShell',
+          channel: 'stable',
+          publishApproved: true,
+          version: '3.15.106'
+        }
+      }
+    ]
+  }
+  const unapprovedRelease = {
+    ...baseRelease,
+    assets: [
+      ...baseRelease.assets,
+      {
+        name: 'aigshell-update.json',
+        updateApproval: {
+          product: 'AIGShell',
+          channel: 'stable',
+          publishApproved: false,
+          version: '3.15.106'
+        }
+      }
+    ]
+  }
+
+  assert.equal(hasApprovedUpdateManifest(baseRelease), false)
+  assert.equal(hasApprovedUpdateManifest(unapprovedRelease), false)
+  assert.equal(hasApprovedUpdateManifest(approvedRelease), true)
+  assert.equal(
+    getReleaseUpdate(baseRelease, '3.15.105', { requireWindowsAssets: true, requireApprovalManifest: true }),
+    undefined
+  )
+  assert.equal(
+    getReleaseUpdate(unapprovedRelease, '3.15.105', { requireWindowsAssets: true, requireApprovalManifest: true }),
+    undefined
+  )
+  assert.deepEqual(
+    getReleaseUpdate(approvedRelease, '3.15.105', { requireWindowsAssets: true, requireApprovalManifest: true }),
+    { tag_name: 'v3.15.106' }
+  )
+  assert.deepEqual(
+    getReleaseUpdateStatus(baseRelease, '3.15.105', { requireWindowsAssets: true, requireApprovalManifest: true }),
+    {
+      status: 'waitingForApproval',
+      tag_name: 'v3.15.106',
+      html_url: undefined,
+      message: '检测到新版本 v3.15.106，但该版本尚未被标记为正式可更新版本。'
+    }
+  )
+})
+
+test('ignores prerelease versions unless explicitly allowed', async () => {
   const {
     getReleaseUpdate,
     hasWindowsUpdateAssets
@@ -81,8 +154,12 @@ test('recognizes Windows update assets for prerelease versions', async () => {
   }
 
   assert.equal(hasWindowsUpdateAssets(prerelease, prerelease.tag_name), true)
-  assert.deepEqual(
+  assert.equal(
     getReleaseUpdate(prerelease, '3.15.105', { requireWindowsAssets: true }),
+    undefined
+  )
+  assert.deepEqual(
+    getReleaseUpdate(prerelease, '3.15.105', { requireWindowsAssets: true, allowPrerelease: true }),
     { tag_name: 'v3.15.106-beta.1' }
   )
 })
@@ -174,6 +251,8 @@ test('upgrade flow uses classified release status for manual update guidance', (
 
   assert.match(updateCheckSource, /getLatestReleaseStatus/)
   assert.match(updateCheckSource, /getReleaseUpdateStatus/)
+  assert.match(updateCheckSource, /attachUpdateApprovalManifest/)
+  assert.match(updateCheckSource, /requireApprovalManifest:\s*true/)
   assert.match(upgradeSource, /getLatestReleaseStatus/)
   assert.match(upgradeSource, /manualDownloadRequired/)
   assert.match(upgradeSource, /releaseStatus\.message/)

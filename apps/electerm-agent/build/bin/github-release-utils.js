@@ -14,7 +14,8 @@ function getRequiredReleaseAssetNames (version, options = {}) {
   return [
     prefix,
     `${prefix}.blockmap`,
-    'latest.yml'
+    'latest.yml',
+    'aigshell-update.json'
   ]
 }
 

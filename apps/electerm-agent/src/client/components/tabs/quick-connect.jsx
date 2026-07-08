@@ -80,7 +80,7 @@ export default function QuickConnect ({ batch, inputOnly, formOnly }) {
 
     const opts = window.store.parseQuickConnect(inputValue)
     if (!opts) {
-      return message.error('Format error, please check the input', 10)
+      return message.error('连接信息格式不正确，请检查服务器地址、用户名、端口或协议', 10)
     }
 
     connectWithOptions(opts, batch)
@@ -115,7 +115,7 @@ export default function QuickConnect ({ batch, inputOnly, formOnly }) {
       onChange: handleChange,
       className: 'width-100 quick-connect-input',
       onPressEnter: handleConnect,
-      placeholder: 'ssh|rdp|vnc|spice|serial|http|https://[username]:[password]@host:port?opts={...}',
+      placeholder: '粘贴连接字符串，或使用上方快速连接表单填写服务器信息',
       prefix: inputOnly ? <HelpIcon link={wiki} /> : undefined
     }
     const iconProps = {
@@ -175,13 +175,13 @@ export default function QuickConnect ({ batch, inputOnly, formOnly }) {
           <Input
             value={formValues.username}
             onChange={e => updateFormValue('username', e.target.value)}
-            placeholder='用户名，可选'
+            placeholder='用户名，选填'
             onPressEnter={handleFormConnect}
           />
           <Input.Password
             value={formValues.password}
             onChange={e => updateFormValue('password', e.target.value)}
-            placeholder='密码，可选'
+            placeholder='密码，选填'
             onPressEnter={handleFormConnect}
           />
         </Space.Compact>

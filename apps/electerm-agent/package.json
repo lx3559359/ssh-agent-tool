@@ -1,6 +1,6 @@
 {
   "name": "ssh-agent-tool",
-  "version": "3.15.106",
+  "version": "3.15.107",
   "productName": "AIGShell",
   "description": "基于 Electerm 二次开发的 Windows 优先 SSH、SFTP 和 AI Agent 客户端",
   "main": "app.js",
@@ -36,6 +36,7 @@
     "release:github:clean": "node build/bin/cleanup-github-release.js --yes",
     "release:github:clean:dry": "node build/bin/cleanup-github-release.js",
     "release:github:verify": "node build/bin/verify-github-release.js",
+    "release:approval": "node build/bin/write-update-approval-manifest.js",
     "release:local:verify": "node build/bin/verify-local-release-assets.js",
     "w": "./build/bin/web-release",
     "t": "electron work/app/app.js",
