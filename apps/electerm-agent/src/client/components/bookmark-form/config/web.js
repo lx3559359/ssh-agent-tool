@@ -19,6 +19,7 @@ const webConfig = {
       fields: [
         commonFields.category,
         commonFields.colorTitle,
+        commonFields.labels,
         {
           type: 'input',
           name: 'url',

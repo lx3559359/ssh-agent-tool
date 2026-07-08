@@ -30,6 +30,7 @@ const vncConfig = {
       fields: [
         commonFields.category,
         commonFields.colorTitle,
+        commonFields.labels,
         { type: 'input', name: 'host', label: () => e('host'), rules: [{ required: true, message: e('host') + ' required' }] },
         commonFields.port,
         { type: 'switch', name: 'viewOnly', label: () => e('viewOnly'), valuePropName: 'checked' },

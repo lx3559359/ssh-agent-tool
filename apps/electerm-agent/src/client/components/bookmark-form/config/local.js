@@ -30,6 +30,7 @@ const localConfig = {
       fields: [
         commonFields.category,
         commonFields.colorTitle,
+        commonFields.labels,
         commonFields.description,
         commonFields.enableTerminalImage,
         commonFields.runScripts,

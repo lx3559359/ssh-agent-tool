@@ -35,6 +35,7 @@ const serialConfig = {
       fields: [
         commonFields.category,
         commonFields.colorTitle,
+        commonFields.labels,
         { type: 'serialPathSelector', name: 'path', label: 'path', rules: [{ required: true, message: 'path required' }] },
         {
           type: 'autocomplete',

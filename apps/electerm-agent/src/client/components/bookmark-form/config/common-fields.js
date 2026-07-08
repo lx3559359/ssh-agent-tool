@@ -102,6 +102,17 @@ export const commonFields = {
     label: () => e('category')
   },
 
+  labels: {
+    type: 'select',
+    name: 'labels',
+    label: () => e('labels'),
+    props: {
+      mode: 'tags',
+      tokenSeparators: [',', '，'],
+      placeholder: e('labels')
+    }
+  },
+
   type: {
     type: 'input',
     name: 'type',
@@ -293,6 +304,7 @@ export const basicAuthFields = [
   commonFields.port,
   commonFields.category,
   commonFields.title,
+  commonFields.labels,
   commonFields.description,
   commonFields.type
 ]
@@ -300,6 +312,7 @@ export const basicAuthFields = [
 export const sshAuthFields = [
   commonFields.category,
   commonFields.title,
+  commonFields.labels,
   { ...commonFields.host, type: 'sshHostSelector' },
   commonFields.username,
   { type: 'sshAuthTypeSelector', name: 'authType', label: '' },
@@ -325,6 +338,7 @@ export const sshAuthFields = [
 export const telnetAuthFields = [
   commonFields.category,
   commonFields.title,
+  commonFields.labels,
   commonFields.host,
   commonFields.username,
   commonFields.password,

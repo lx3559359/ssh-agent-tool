@@ -29,6 +29,7 @@ const rdpConfig = {
         },
         commonFields.category,
         commonFields.colorTitle,
+        commonFields.labels,
         { type: 'input', name: 'host', label: () => e('host'), rules: [{ required: true, message: e('host') + ' required' }] },
         commonFields.port,
         { type: 'profileItem', name: '__profile__', label: '', profileFilter: d => !isEmpty(d.rdp) },
