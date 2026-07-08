@@ -10,6 +10,9 @@ const {
   isLinux
 } = require('../common/runtime-constants')
 const globalState = require('./glob-state')
+const {
+  normalizeWindowBounds
+} = require('./window-bounds')
 
 exports.getScreenCurrent = () => {
   const rect = globalState.get('win')
@@ -52,22 +55,27 @@ exports.unmaximize = () => {
 
 exports.getWindowSize = async () => {
   const rect = await exports.getWindowSizeDep()
+  const { screen } = require('electron')
+  const normalized = normalizeWindowBounds(rect, screen.getAllDisplays(), {
+    minWidth: minWindowWidth,
+    minHeight: minWindowHeight
+  })
   if (!isLinux) {
-    return rect
+    return normalized
   }
   const {
     width,
     height
   } = exports.getScreenSize()
-  if (rect.width >= width - 200) {
-    rect.width = width - 200
-    rect.x = 100
+  if (normalized.width >= width - 200) {
+    normalized.width = width - 200
+    normalized.x = 100
   }
-  if (rect.height >= height - 200) {
-    rect.height = height - 200
-    rect.y = 100
+  if (normalized.height >= height - 200) {
+    normalized.height = height - 200
+    normalized.y = 100
   }
-  return rect
+  return normalized
 }
 
 exports.getWindowSizeDep = async () => {

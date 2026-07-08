@@ -8,6 +8,7 @@ import {
 } from '@ant-design/icons'
 import { Button, Popover, Tooltip } from 'antd'
 import QuickConnect from '../tabs/quick-connect'
+import WindowControl from '../tabs/window-control'
 import { logoPath1, statusMap } from '../../common/constants'
 import './aigshell-topbar.styl'
 
@@ -114,6 +115,7 @@ export default function AIGShellTopBar ({ store }) {
           ))
         }
       </div>
+      <WindowControl store={store} />
     </div>
   )
 }
