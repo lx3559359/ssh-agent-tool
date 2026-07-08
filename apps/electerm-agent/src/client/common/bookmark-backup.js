@@ -42,6 +42,7 @@ function normalizeBookmarkBackupData (data) {
   if (
     !isBackupBookmarkList(data.bookmarks) ||
     !isBackupGroupList(data.bookmarkGroups) ||
+    hasDuplicatedBackupId(data.bookmarks) ||
     hasDangerousBackupKey(data.bookmarks) ||
     hasDangerousBackupKey(data.bookmarkGroups)
   ) {
@@ -64,6 +65,24 @@ function isPlainBackupObject (item) {
   return item &&
     typeof item === 'object' &&
     !Array.isArray(item)
+}
+
+function hasDuplicatedBackupId (items) {
+  if (!Array.isArray(items)) {
+    return false
+  }
+  const seen = new Set()
+  return items.some(item => {
+    if (!isPlainBackupObject(item) || !hasNonEmptyString(item, 'id')) {
+      return false
+    }
+    const id = item.id.trim()
+    if (seen.has(id)) {
+      return true
+    }
+    seen.add(id)
+    return false
+  })
 }
 
 const dangerousBackupKeys = new Set([
