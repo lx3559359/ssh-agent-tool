@@ -1,4 +1,7 @@
-import createName from '../../common/create-title'
+import {
+  bookmarkMatchesKeyword,
+  groupMatchesKeyword
+} from './bookmark-search'
 
 function isTopLevelGroup (group) {
   return !group?.level || group.level < 2
@@ -50,12 +53,7 @@ export function buildVisibleTreeRows ({
       return bookmarkMatchCache.get(bookmarkId)
     }
     const item = bookmarksMap.get(bookmarkId)
-    const matched = Boolean(
-      item &&
-      (!lowerKeyword ||
-        createName(item).toLowerCase().includes(lowerKeyword) ||
-        (item.description || '').toLowerCase().includes(lowerKeyword))
-    )
+    const matched = Boolean(item && bookmarkMatchesKeyword(item, lowerKeyword))
     bookmarkMatchCache.set(bookmarkId, matched)
     return matched
   }
@@ -70,7 +68,8 @@ export function buildVisibleTreeRows ({
     if (groupMatchCache.has(group.id)) {
       return groupMatchCache.get(group.id)
     }
-    const hasMatch = (group.bookmarkIds || []).some(bookmarkMatches) ||
+    const hasMatch = groupMatchesKeyword(group, lowerKeyword) ||
+      (group.bookmarkIds || []).some(bookmarkMatches) ||
       (group.bookmarkGroupIds || []).some(id => {
         return groupHasMatchedBookmarks(groupTree[id])
       })
