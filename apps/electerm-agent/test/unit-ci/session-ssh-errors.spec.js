@@ -2,9 +2,17 @@ process.env.NODE_ENV = 'development'
 
 const { describe, test } = require('node:test')
 const assert = require('node:assert/strict')
-const { normalizeSshConnectionError } = require('../../src/app/server/session-ssh')
+const {
+  normalizeSshConnectionError,
+  shouldLogSshConnectErrorAsError
+} = require('../../src/app/server/session-ssh')
 
 describe('session-ssh connection error diagnostics', () => {
+  test('does not log expected two factor auth retry as an ssh error', () => {
+    assert.equal(shouldLogSshConnectErrorAsError(new Error('2FA_RETRY')), false)
+    assert.equal(shouldLogSshConnectErrorAsError(new Error('connect ECONNREFUSED 10.0.1.23:22')), true)
+  })
+
   test('adds a chinese diagnosis for refused ssh ports', () => {
     const error = new Error('connect ECONNREFUSED 10.0.1.23:22')
     error.code = 'ECONNREFUSED'

@@ -225,6 +225,10 @@ function normalizeSshConnectionError (err, options = {}) {
   return err
 }
 
+function shouldLogSshConnectErrorAsError (err) {
+  return err?.message !== '2FA_RETRY'
+}
+
 class TerminalSshBase extends TerminalBase {
   async remoteInitProcess () {
     this.adjustConnectionOrder()
@@ -999,7 +1003,9 @@ class TerminalSshBase extends TerminalBase {
       return this.onInitSshReady()
     }
     const err = result
-    log.error('error when do sshConnect', err, this.privateKeyPath)
+    if (shouldLogSshConnectErrorAsError(err)) {
+      log.error('error when do sshConnect', err, this.privateKeyPath)
+    }
     if (
       err.message.includes(csFailMsg) &&
       !this.altAlg
@@ -1200,6 +1206,7 @@ exports.session = function (initOptions, ws) {
 }
 
 exports.normalizeSshConnectionError = normalizeSshConnectionError
+exports.shouldLogSshConnectErrorAsError = shouldLogSshConnectErrorAsError
 
 /**
  * test ssh connection
