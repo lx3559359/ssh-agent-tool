@@ -1,4 +1,20 @@
 const DEFAULT_CONTEXT_LINES = 120
+const REMOTE_TYPE = 'remote'
+
+function joinPath (base = '', name = '') {
+  const left = String(base || '')
+  const right = String(name || '')
+  if (!left) {
+    return right
+  }
+  if (!right) {
+    return left
+  }
+  const separator = left.includes('\\') ? '\\' : '/'
+  return left.endsWith('/') || left.endsWith('\\')
+    ? left + right
+    : left + separator + right
+}
 
 export function getActiveTerminalRef ({
   store = window.store,
@@ -9,6 +25,17 @@ export function getActiveTerminalRef ({
     return null
   }
   return refs.get('term-' + tabId) || null
+}
+
+export function getActiveSftpRef ({
+  store = window.store,
+  refs = window.refs
+} = {}) {
+  const tabId = store?.activeTabId
+  if (!tabId || !refs?.get) {
+    return null
+  }
+  return refs.get('sftp-' + tabId) || null
 }
 
 export function getTerminalSelectionText (termRef) {
@@ -51,4 +78,34 @@ export function getAIContextUnavailableMessage (type) {
     cli: 'CLI 工具入口还在开发中，危险命令会要求用户确认。'
   }
   return messages[type] || '该能力还在开发中。'
+}
+
+export async function readSelectedSftpFileContext ({
+  sftpRef,
+  fsApi
+} = {}) {
+  const files = sftpRef?.getSelectedFiles?.() || []
+  if (!files.length) {
+    return {
+      ok: false,
+      message: '当前 SFTP 没有选中文件，请先选择一个文件。'
+    }
+  }
+  const file = files[0]
+  if (file.isDirectory) {
+    return {
+      ok: false,
+      message: '当前选择的是目录，请选择一个文件后再引用。'
+    }
+  }
+  const filePath = joinPath(file.path, file.name)
+  const content = file.type === REMOTE_TYPE
+    ? await sftpRef.sftp.readFile(filePath)
+    : await (fsApi || window.fs).readFile(filePath)
+
+  return {
+    ok: true,
+    path: filePath,
+    content
+  }
 }

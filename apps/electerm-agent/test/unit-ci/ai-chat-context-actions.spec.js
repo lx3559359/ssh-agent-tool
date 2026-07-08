@@ -42,6 +42,109 @@ test('AI chat context actions read current terminal selection and output', async
   assert.equal(getTerminalOutputText(termRef), 'uptime\ndf -h\n/dev/sda1 90%')
 })
 
+test('AI chat context actions read the current selected remote SFTP file', async () => {
+  const {
+    getActiveSftpRef,
+    readSelectedSftpFileContext
+  } = await import(moduleUrl)
+
+  const sftpRef = {
+    getSelectedFiles: () => [{
+      name: 'error.log',
+      path: '/var/log/nginx',
+      type: 'remote',
+      isDirectory: false
+    }],
+    sftp: {
+      readFile: async (filePath) => `remote:${filePath}`
+    }
+  }
+  const refs = {
+    get: (key) => key === 'sftp-tab-1' ? sftpRef : null
+  }
+
+  assert.equal(getActiveSftpRef({
+    store: { activeTabId: 'tab-1' },
+    refs
+  }), sftpRef)
+
+  const result = await readSelectedSftpFileContext({
+    sftpRef,
+    fsApi: {
+      readFile: async () => {
+        throw new Error('should not read local fs for remote file')
+      }
+    }
+  })
+
+  assert.deepEqual(result, {
+    ok: true,
+    path: '/var/log/nginx/error.log',
+    content: 'remote:/var/log/nginx/error.log'
+  })
+})
+
+test('AI chat context actions read the current selected local SFTP file', async () => {
+  const {
+    readSelectedSftpFileContext
+  } = await import(moduleUrl)
+
+  const result = await readSelectedSftpFileContext({
+    sftpRef: {
+      getSelectedFiles: () => [{
+        name: 'app.conf',
+        path: 'C:/tmp',
+        type: 'local',
+        isDirectory: false
+      }]
+    },
+    fsApi: {
+      readFile: async (filePath) => `local:${filePath}`
+    }
+  })
+
+  assert.deepEqual(result, {
+    ok: true,
+    path: 'C:/tmp/app.conf',
+    content: 'local:C:/tmp/app.conf'
+  })
+})
+
+test('AI chat context actions return Chinese messages when selected SFTP file is unavailable', async () => {
+  const {
+    readSelectedSftpFileContext
+  } = await import(moduleUrl)
+
+  assert.deepEqual(
+    await readSelectedSftpFileContext({
+      sftpRef: {
+        getSelectedFiles: () => []
+      }
+    }),
+    {
+      ok: false,
+      message: '当前 SFTP 没有选中文件，请先选择一个文件。'
+    }
+  )
+
+  assert.deepEqual(
+    await readSelectedSftpFileContext({
+      sftpRef: {
+        getSelectedFiles: () => [{
+          name: 'logs',
+          path: '/var',
+          type: 'remote',
+          isDirectory: true
+        }]
+      }
+    }),
+    {
+      ok: false,
+      message: '当前选择的是目录，请选择一个文件后再引用。'
+    }
+  )
+})
+
 test('AI chat context actions prefer terminal component buffer helper when available', async () => {
   const {
     getTerminalOutputText

@@ -21,12 +21,17 @@ import {
 import { refs, refsStatic } from '../common/ref'
 import { getAIChatSubmitAction } from './ai-chat-submit'
 import { clearAIChatContext } from './ai-chat-actions'
-import { buildTerminalContextPrompt } from './ai-ssh-context'
 import {
+  buildSftpFileContextPrompt,
+  buildTerminalContextPrompt
+} from './ai-ssh-context'
+import {
+  getActiveSftpRef,
   getActiveTerminalRef,
   getAIContextUnavailableMessage,
   getTerminalOutputText,
-  getTerminalSelectionText
+  getTerminalSelectionText,
+  readSelectedSftpFileContext
 } from './ai-chat-context-actions'
 import message from '../common/message'
 import aiAgentCopy from './ai-agent-copy.json'
@@ -133,6 +138,30 @@ export default function AIChat (props) {
     setContextPrompt('selection', getTerminalSelectionText(termRef))
   }
 
+  async function handleQuoteSftpFile () {
+    const result = await readSelectedSftpFileContext({
+      sftpRef: getActiveSftpRef({
+        store: window.store,
+        refs
+      }),
+      fsApi: window.fs
+    }).catch(err => {
+      window.store.onError(err)
+      return null
+    })
+    if (!result) {
+      return
+    }
+    if (!result.ok) {
+      message.warning(result.message)
+      return
+    }
+    setPrompt(buildSftpFileContextPrompt({
+      path: result.path,
+      content: result.content
+    }))
+  }
+
   function showUnavailableContextAction (type) {
     message.warning(getAIContextUnavailableMessage(type))
   }
@@ -186,7 +215,7 @@ export default function AIChat (props) {
         key: 'file',
         text: '引用文件',
         icon: <FileTextOutlined />,
-        handleClick: () => showUnavailableContextAction('file')
+        handleClick: handleQuoteSftpFile
       },
       {
         key: 'web',
