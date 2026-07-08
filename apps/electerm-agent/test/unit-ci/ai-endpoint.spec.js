@@ -147,6 +147,20 @@ test('normalizes provider roots that use non-v1 OpenAI-compatible base paths', (
   }
 })
 
+test('normalizes xAI root URL to its OpenAI-compatible base URL', () => {
+  assert.deepEqual(
+    normalizeAIEndpoint('https://api.x.ai', ''),
+    {
+      baseURL: 'https://api.x.ai/v1',
+      path: '/chat/completions'
+    }
+  )
+  assert.equal(
+    normalizeAIModelBaseURL('https://api.x.ai'),
+    'https://api.x.ai/v1'
+  )
+})
+
 test('client endpoint preview uses the same popular provider root URL rules', async () => {
   const {
     normalizeAIEndpoint: normalizeClientAIEndpoint

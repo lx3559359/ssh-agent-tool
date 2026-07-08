@@ -385,6 +385,7 @@ test('returns built-in models for popular providers when their model list is emp
       ['https://openrouter.ai', ['openai/gpt-4o-mini', 'anthropic/claude-3.5-sonnet']],
       ['https://ark.cn-beijing.volces.com', ['doubao-seed-1-6']],
       ['https://api.groq.com', ['llama-3.3-70b-versatile']],
+      ['https://api.x.ai', ['grok-4.5', 'grok-4.1-fast-reasoning']],
       ['https://generativelanguage.googleapis.com', ['gemini-2.5-flash', 'gemini-2.5-pro']],
       ['https://api.together.xyz', ['meta-llama/Llama-3.3-70B-Instruct-Turbo']],
       ['https://qianfan.baidubce.com', ['ernie-4.5-turbo-128k']]

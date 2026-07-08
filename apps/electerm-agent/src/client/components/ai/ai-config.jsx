@@ -123,6 +123,15 @@ const providerPresets = [
     authHeaderNameAI: 'Authorization: Bearer'
   },
   {
+    label: 'xAI Grok',
+    value: 'xai-grok',
+    nameAI: 'xAI Grok',
+    baseURLAI: 'https://api.x.ai/v1',
+    apiPathAI: '',
+    modelAI: 'grok-4.5',
+    authHeaderNameAI: 'Authorization: Bearer'
+  },
+  {
     label: 'Together AI',
     value: 'together',
     nameAI: 'Together AI',
@@ -155,6 +164,8 @@ const popularModels = [
   'moonshot-v1-8k',
   'doubao-seed-1-6',
   'llama-3.3-70b-versatile',
+  'grok-4.5',
+  'grok-4.1-fast-reasoning',
   'meta-llama/Llama-3.3-70B-Instruct-Turbo',
   'openai/gpt-4o-mini',
   'anthropic/claude-3.5-sonnet'
