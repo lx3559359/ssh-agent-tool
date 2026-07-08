@@ -80,7 +80,7 @@ function getSshDiagnosis (err = {}, options = {}) {
       suggestion: `请检查代理地址 ${proxy}、代理类型、代理认证、代理服务是否运行，以及代理到目标服务器的网络连通性。`
     }
   }
-  if (code === 'ECONNREFUSED' || message.includes('ECONNREFUSED')) {
+  if (code === 'ECONNREFUSED' || /ECONNREFUSED|connection refused/i.test(message)) {
     return {
       title: 'SSH 连接被拒绝',
       suggestion: '请检查服务器地址、端口、sshd 服务、防火墙或安全组是否允许访问。'

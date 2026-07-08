@@ -22,6 +22,21 @@ describe('session-ssh connection error diagnostics', () => {
     assert.match(normalized.message, /原始错误：connect ECONNREFUSED/)
   })
 
+  test('adds a chinese diagnosis for connection refused messages without errno code', () => {
+    const error = new Error('connect: Connection refused')
+
+    const normalized = normalizeSshConnectionError(error, {
+      host: '10.0.1.24',
+      port: 22,
+      username: 'root'
+    })
+
+    assert.match(normalized.message, /SSH 连接被拒绝/)
+    assert.match(normalized.message, /root@10\.0\.1\.24:22/)
+    assert.match(normalized.message, /检查服务器地址、端口、sshd 服务/)
+    assert.match(normalized.message, /原始错误：connect: Connection refused/)
+  })
+
   test('adds a chinese diagnosis for ssh proxy connection failures', () => {
     const error = new Error('connect ECONNREFUSED 127.0.0.1:1080')
     error.code = 'ECONNREFUSED'
