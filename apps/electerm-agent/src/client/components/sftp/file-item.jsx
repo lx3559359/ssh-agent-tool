@@ -40,6 +40,8 @@ import { refsStatic, refs, filesRef } from '../common/ref'
 import iconsMap from '../sys-menu/icons-map'
 import { splitOverflowMenu } from './context-menu-utils.js'
 import { buildSftpFileContextPrompt } from '../ai/ai-ssh-context'
+import { validateSftpFileName } from './file-name-validation.js'
+import message from '../common/message'
 
 const e = window.translate
 
@@ -522,7 +524,20 @@ export default class FileSection extends React.Component {
   handleBlur = () => {
     const file = copy(this.state.file)
     const { nameTemp, name, type, id } = this.state.file
-    if (name === nameTemp) {
+    const validation = validateSftpFileName(nameTemp)
+    if (!validation.ok) {
+      message.warning(validation.message)
+      if (!id) {
+        return this.cancelNew(type)
+      }
+      delete file.nameTemp
+      delete file.isEditing
+      return this.setState({
+        file
+      })
+    }
+    file.nameTemp = validation.name
+    if (name === validation.name) {
       if (!id) {
         return this.cancelNew(type)
       }
@@ -535,7 +550,7 @@ export default class FileSection extends React.Component {
     if (!id) {
       return this.createNew(file)
     }
-    this.rename(name, nameTemp)
+    this.rename(name, validation.name)
   }
 
   rename = (oldname, newname) => {
