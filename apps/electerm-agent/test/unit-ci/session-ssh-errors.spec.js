@@ -116,6 +116,23 @@ describe('session-ssh connection error diagnostics', () => {
     assert.match(normalized.message, /原始错误：Socket closed before SSH handshake/)
   })
 
+  test('adds a chinese diagnosis when target port is not an ssh service', () => {
+    const error = new Error('kex_exchange_identification: banner line contains invalid characters')
+
+    const normalized = normalizeSshConnectionError(error, {
+      host: '10.0.1.80',
+      port: 80,
+      username: 'root'
+    })
+
+    assert.match(normalized.message, /SSH 目标端口不是 SSH 服务/)
+    assert.match(normalized.message, /root@10\.0\.1\.80:80/)
+    assert.match(normalized.message, /端口/)
+    assert.match(normalized.message, /HTTP/)
+    assert.match(normalized.message, /sshd/)
+    assert.match(normalized.message, /原始错误：kex_exchange_identification/)
+  })
+
   test('adds a chinese diagnosis for incompatible ssh algorithms', () => {
     const error = new Error('Handshake failed: no matching key exchange algorithm')
 

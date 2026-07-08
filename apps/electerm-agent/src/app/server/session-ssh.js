@@ -60,6 +60,12 @@ function getSshDiagnosis (err = {}) {
       suggestion: '请检查本机网络、VPN、路由、代理/堡垒机、防火墙和安全组是否允许访问目标服务器。'
     }
   }
+  if (/kex_exchange_identification|banner line contains invalid characters|protocol mismatch|bad packet length|expected ssh/i.test(message)) {
+    return {
+      title: 'SSH 目标端口不是 SSH 服务',
+      suggestion: '请确认连接端口确实运行 sshd；如果该端口返回 HTTP、HTTPS、数据库或代理协议，请改用服务器真实 SSH 端口。'
+    }
+  }
   if (/socket closed|connection closed|closed before|handshake.*closed|server.*closed/i.test(message)) {
     return {
       title: 'SSH 连接被提前关闭',
