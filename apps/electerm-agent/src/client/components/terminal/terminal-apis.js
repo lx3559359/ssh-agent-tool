@@ -3,6 +3,7 @@
  */
 
 import fetch from '../../common/fetch-from-server'
+import { normalizeTerminalResizeSize } from '../../common/terminal-resize-size.js'
 
 export function createTerm (body) {
   return fetch({
@@ -20,10 +21,11 @@ export function runCmd (pid, cmd) {
 }
 
 export function resizeTerm (pid, cols, rows) {
+  const size = normalizeTerminalResizeSize(cols, rows)
   return fetch({
     pid,
-    cols,
-    rows,
+    cols: size.cols,
+    rows: size.rows,
     action: 'resize-terminal'
   })
 }
