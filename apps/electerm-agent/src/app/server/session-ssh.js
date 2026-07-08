@@ -86,6 +86,17 @@ function isProxyConnectionError (message, code, proxy) {
   return getProxyNeedles(proxy).some(needle => lowerMessage.includes(needle))
 }
 
+function formatReadyTimeout (readyTimeout) {
+  const timeout = Number(readyTimeout)
+  if (!Number.isFinite(timeout) || timeout <= 0) {
+    return ''
+  }
+  if (timeout >= 1000 && timeout % 1000 === 0) {
+    return `${timeout / 1000} 秒`
+  }
+  return `${timeout} 毫秒`
+}
+
 function getSshDiagnosis (err = {}, options = {}) {
   const message = err.message || String(err)
   const code = err.code || ''
@@ -181,9 +192,12 @@ function getSshDiagnosis (err = {}, options = {}) {
     }
   }
   if (code === 'ETIMEDOUT' || /timed? ?out|handshake timeout/i.test(message)) {
+    const timeoutText = formatReadyTimeout(options.readyTimeout)
     return {
       title: 'SSH 连接超时',
-      suggestion: '请检查网络连通性、防火墙、安全组、堡垒机链路和服务器端口。'
+      suggestion: timeoutText
+        ? `请检查网络连通性、防火墙、安全组、堡垒机链路和服务器端口。当前超时设置为 ${timeoutText}，如果网络较慢可在连接设置中适当调大。`
+        : '请检查网络连通性、防火墙、安全组、堡垒机链路和服务器端口。'
     }
   }
   if (/too many authentication failures/i.test(message)) {

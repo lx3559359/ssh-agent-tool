@@ -102,6 +102,23 @@ describe('session-ssh connection error diagnostics', () => {
     assert.match(normalized.message, /\[已脱敏\]/)
   })
 
+  test('adds the configured ssh timeout seconds to timeout diagnostics', () => {
+    const error = new Error('Timed out while waiting for handshake')
+    error.code = 'ETIMEDOUT'
+
+    const normalized = normalizeSshConnectionError(error, {
+      host: '10.0.1.23',
+      port: 22,
+      username: 'root',
+      readyTimeout: 5000
+    })
+
+    assert.match(normalized.message, /SSH 连接超时/)
+    assert.match(normalized.message, /root@10\.0\.1\.23:22/)
+    assert.match(normalized.message, /当前超时设置为 5 秒/)
+    assert.match(normalized.message, /原始错误：Timed out while waiting for handshake/)
+  })
+
   test('adds a chinese diagnosis for proxy connection refused messages without errno code', () => {
     const error = new Error('connect: Connection refused 127.0.0.1:1080')
 
