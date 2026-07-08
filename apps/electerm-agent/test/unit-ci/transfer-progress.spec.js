@@ -95,3 +95,57 @@ test('file transfer progress includes transferred bytes, chunk bytes, and total 
 
   fs.rmSync(tmp, { recursive: true, force: true })
 })
+
+test('file transfer downloads large binary files with progress and byte integrity', async () => {
+  const tmp = makeTmpDir()
+  const remotePath = path.join(tmp, 'remote-source-large.bin')
+  const localPath = path.join(tmp, 'downloaded-large.bin')
+  const source = Buffer.alloc(384 * 1024)
+  for (let index = 0; index < source.length; index++) {
+    source[index] = (index * 17) % 251
+  }
+  fs.writeFileSync(remotePath, source)
+
+  const messages = []
+  let transfer
+  const endMessage = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`Timed out waiting for transfer end. Messages: ${JSON.stringify(messages)}`))
+    }, 3000)
+    const ws = {
+      s (message) {
+        messages.push(message)
+        if (message.id === 'transfer:end:large-download') {
+          clearTimeout(timer)
+          resolve(message)
+        }
+      }
+    }
+
+    transfer = new Transfer({
+      id: 'large-download',
+      type: 'download',
+      localPath,
+      remotePath,
+      sftp: createFsLikeSftp(),
+      options: {
+        chunkSize: 48 * 1024,
+        concurrency: 3
+      },
+      ws
+    })
+  })
+  transfer.kill()
+
+  const progressMessages = messages.filter(message => message.id === 'transfer:data:large-download')
+  assert.ok(progressMessages.length > 0, 'download should emit progress messages')
+  assert.deepEqual(progressMessages[0].data, {
+    transferred: 48 * 1024,
+    chunk: 48 * 1024,
+    total: source.length
+  })
+  assert.equal(endMessage.id, 'transfer:end:large-download')
+  assert.deepEqual(fs.readFileSync(localPath), source)
+
+  fs.rmSync(tmp, { recursive: true, force: true })
+})

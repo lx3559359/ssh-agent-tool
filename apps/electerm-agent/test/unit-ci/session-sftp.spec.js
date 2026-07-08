@@ -245,4 +245,50 @@ describe('session-sftp transport flows', () => {
       fs.rmSync(root, { recursive: true, force: true })
     }
   })
+
+  test('handles unicode paths and large text files over an SSH SFTP session', async () => {
+    const root = makeTmpDir()
+    const server = await startSftpServer(root)
+    let term
+    let sftp
+    try {
+      term = await session({
+        host: '127.0.0.1',
+        port: server.port,
+        username: USERNAME,
+        password: PASSWORD,
+        useSshAgent: false,
+        enableSsh: true,
+        readyTimeout: 5000
+      }, createPromptWs())
+      sftp = new Sftp({
+        uid: 'sftp-unicode-large-session-ci',
+        terminalId: term.pid,
+        enableSsh: true
+      })
+      await sftp.connect(sftp.initOptions)
+
+      const dir = '/日志目录'
+      const file = `${dir}/部署输出-大文件.log`
+      const content = Array.from({ length: 4096 }, (_, index) => {
+        return `第 ${index + 1} 行：AIGShell SFTP 中文路径和大文件传输验证 ${'x'.repeat(80)}`
+      }).join('\n')
+
+      await sftp.mkdir(dir)
+      await sftp.writeFile(file, content)
+
+      const list = await sftp.list(dir)
+      assert.deepEqual(list.map(item => item.name), ['部署输出-大文件.log'])
+      assert.equal(await sftp.readFile(file), content)
+
+      const stat = await sftp.stat(file)
+      assert.equal(stat.isDirectory, false)
+      assert.equal(stat.size, Buffer.byteLength(content))
+    } finally {
+      sftp && sftp.kill()
+      term && term.kill()
+      await server.close()
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
 })
