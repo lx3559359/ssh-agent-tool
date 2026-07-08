@@ -49,6 +49,23 @@ test('redacts ssh private key blocks from diagnostic text', () => {
   assert.match(redacted, /done/)
 })
 
+test('redacts passwords embedded in diagnostic URLs', () => {
+  const text = [
+    'ssh://root:server-password@10.0.1.23:22',
+    'socks5://proxy-user:proxy-password@127.0.0.1:1080',
+    'https://api-user:api-password@example.com/v1'
+  ].join('\n')
+
+  const redacted = redactDiagnosticText(text)
+
+  assert.equal(redacted.includes('server-password'), false)
+  assert.equal(redacted.includes('proxy-password'), false)
+  assert.equal(redacted.includes('api-password'), false)
+  assert.match(redacted, /ssh:\/\/root:\[已脱敏\]@10\.0\.1\.23:22/)
+  assert.match(redacted, /socks5:\/\/proxy-user:\[已脱敏\]@127\.0\.0\.1:1080/)
+  assert.match(redacted, /https:\/\/api-user:\[已脱敏\]@example\.com\/v1/)
+})
+
 test('builds a diagnostic report with safe metadata and truncated logs', () => {
   const report = buildDiagnosticReport({
     now: '2026-07-08T00:00:00.000Z',
