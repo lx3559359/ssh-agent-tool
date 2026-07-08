@@ -196,6 +196,23 @@ describe('session-ssh connection error diagnostics', () => {
     assert.match(normalized.message, /原始错误：connect EHOSTUNREACH/)
   })
 
+  test('adds a chinese diagnosis for local network permission errors', () => {
+    const error = new Error('connect EACCES 10.0.1.23:22')
+    error.code = 'EACCES'
+
+    const normalized = normalizeSshConnectionError(error, {
+      host: '10.0.1.23',
+      port: 22,
+      username: 'root'
+    })
+
+    assert.match(normalized.message, /SSH 本机网络权限受限/)
+    assert.match(normalized.message, /root@10\.0\.1\.23:22/)
+    assert.match(normalized.message, /Windows 防火墙/)
+    assert.match(normalized.message, /安全软件/)
+    assert.match(normalized.message, /原始错误：connect EACCES/)
+  })
+
   test('adds a chinese diagnosis for DNS lookup timeouts', () => {
     const error = new Error('queryA ETIMEOUT prod-web.internal')
     error.code = 'ETIMEOUT'

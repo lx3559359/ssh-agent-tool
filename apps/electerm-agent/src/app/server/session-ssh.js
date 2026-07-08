@@ -108,6 +108,12 @@ function getSshDiagnosis (err = {}, options = {}) {
       suggestion: '请检查本机网络、VPN、路由、代理/堡垒机、防火墙和安全组是否允许访问目标服务器。'
     }
   }
+  if (/\bconnect\b.*\bEACCES\b|\bEACCES\b.*\bconnect\b/i.test(message)) {
+    return {
+      title: 'SSH 本机网络权限受限',
+      suggestion: '本机系统或安全软件拒绝建立网络连接，请检查 Windows 防火墙、杀毒软件、公司终端安全策略、代理/VPN，或是否需要管理员权限。'
+    }
+  }
   if (/maxstartups|drop connection|too many connections|connection rate exceeded|connection limit|banner exchange.*connection closed/i.test(message)) {
     return {
       title: 'SSH 服务端连接数或安全策略限制',
