@@ -128,6 +128,17 @@ test('rejects invalid bookmark backup content with a clear error', async () => {
   )
   assert.throws(
     () => parseBookmarkBackup(JSON.stringify({
+      format: 'AIGShell.bookmarks.backup',
+      formatVersion: 2,
+      data: {
+        bookmarks: [{ id: 'server-1', title: 'prod-web-01' }],
+        bookmarkGroups: []
+      }
+    })),
+    /备份文件版本过新/
+  )
+  assert.throws(
+    () => parseBookmarkBackup(JSON.stringify({
       bookmarks: [],
       bookmarkGroups: { id: 'group-1' }
     })),

@@ -6,6 +6,7 @@ export const bookmarkBackupFormatVersion = 1
 const invalidJsonError = '备份文件内容不是有效的 JSON'
 const noImportableBookmarksError = '备份文件中没有可导入的服务器连接'
 const invalidBookmarkBackupShapeError = '备份文件中的服务器或分组格式不正确'
+const unsupportedBookmarkBackupVersionError = '备份文件版本过新，请升级 AIGShell 后再导入'
 
 export function createBookmarkBackup ({
   bookmarks = [],
@@ -103,6 +104,9 @@ export function parseBookmarkBackup (text) {
   }
 
   if (content?.format === bookmarkBackupFormat && content?.data) {
+    if ((content.formatVersion || 1) > bookmarkBackupFormatVersion) {
+      throw new Error(unsupportedBookmarkBackupVersionError)
+    }
     return normalizeBookmarkBackupData(content.data)
   }
 
