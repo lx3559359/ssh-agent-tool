@@ -288,6 +288,19 @@ test('upgrade panel links manual downloads to the concrete release when availabl
   assert.match(upgradeSource, /const\s+links\s*=\s*\[\s*{\s*name:\s*'GitHub Releases',\s*url:\s*manualDownloadUrl\s*}\s*\]/s)
 })
 
+test('upgrade panel gives users a rollback hint after manual or automatic updates', () => {
+  const upgradeSource = fs.readFileSync(
+    path.resolve(__dirname, '../../src/client/components/main/upgrade.jsx'),
+    'utf8'
+  )
+
+  assert.match(upgradeSource, /renderRollbackHint/)
+  assert.match(upgradeSource, /回滚/)
+  assert.match(upgradeSource, /上一稳定版本/)
+  assert.match(upgradeSource, /覆盖安装/)
+  assert.match(upgradeSource, /this\.renderRollbackHint\(\)/)
+})
+
 function pathToFileURL (filePath) {
   return new URL(`file://${filePath.replace(/\\/g, '/')}`).href
 }

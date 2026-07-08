@@ -287,6 +287,14 @@ export default class Upgrade extends PureComponent {
     )
   }
 
+  renderRollbackHint = () => {
+    return (
+      <p className='upgrade-rollback-hint'>
+        回滚提示：如果新版本安装后出现异常，可以在 GitHub Releases 下载上一稳定版本，并覆盖安装到当前目录。
+      </p>
+    )
+  }
+
   renderLinks = () => {
     const { manualDownloadUrl = packInfo.releases } = this.props.upgradeInfo
     const links = [
@@ -304,6 +312,7 @@ export default class Upgrade extends PureComponent {
             })
           }
         </p>
+        {this.renderRollbackHint()}
         {this.renderChangeLog()}
       </div>
     )
