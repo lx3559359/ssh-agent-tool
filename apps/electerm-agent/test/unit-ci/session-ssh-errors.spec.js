@@ -196,6 +196,23 @@ describe('session-ssh connection error diagnostics', () => {
     assert.match(normalized.message, /原始错误：connect EHOSTUNREACH/)
   })
 
+  test('adds a chinese diagnosis when the target host is down', () => {
+    const error = new Error('connect EHOSTDOWN 10.0.9.10:22')
+    error.code = 'EHOSTDOWN'
+
+    const normalized = normalizeSshConnectionError(error, {
+      host: '10.0.9.10',
+      port: 22,
+      username: 'root'
+    })
+
+    assert.match(normalized.message, /SSH 网络不可达/)
+    assert.match(normalized.message, /root@10\.0\.9\.10:22/)
+    assert.match(normalized.message, /VPN/)
+    assert.match(normalized.message, /安全组/)
+    assert.match(normalized.message, /原始错误：connect EHOSTDOWN/)
+  })
+
   test('adds a chinese diagnosis for local network permission errors', () => {
     const error = new Error('connect EACCES 10.0.1.23:22')
     error.code = 'EACCES'
