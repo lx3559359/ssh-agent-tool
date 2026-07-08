@@ -193,6 +193,36 @@ test('normalizes relay model list container aliases', () => {
       'glm-4-flash'
     ]
   )
+
+  assert.deepEqual(
+    normalizeAIModelsResponse({
+      data: {
+        model_names: [
+          'deepseek-chat',
+          'qwen-plus'
+        ]
+      }
+    }),
+    [
+      'deepseek-chat',
+      'qwen-plus'
+    ]
+  )
+
+  assert.deepEqual(
+    normalizeAIModelsResponse({
+      result: {
+        modelNames: [
+          'glm-4-flash',
+          'moonshot-v1-8k'
+        ]
+      }
+    }),
+    [
+      'glm-4-flash',
+      'moonshot-v1-8k'
+    ]
+  )
 })
 
 test('tries Ollama tags endpoint when OpenAI models endpoint returns empty list', async () => {
