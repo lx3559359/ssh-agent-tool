@@ -19,7 +19,7 @@ function resolveAppDataProps ({
   const exeDir = dirname(exePath)
   const portableDataPath = resolve(exeDir, 'electerm')
   if (
-    installSrc === 'win-x64-portable.tar.gz' ||
+    /^win-.+-portable\.tar\.gz$/i.test(installSrc || '') ||
     existsSync(portableDataPath)
   ) {
     return {

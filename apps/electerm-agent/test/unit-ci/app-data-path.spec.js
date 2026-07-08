@@ -38,6 +38,22 @@ test('portable Windows builds keep user data beside the unpacked app folder', ()
   })
 })
 
+test('Windows ARM portable builds use the unpacked app folder too', () => {
+  const props = resolveAppDataProps({
+    isWin: true,
+    appDataPath: 'C:\\Users\\alice\\AppData\\Roaming',
+    exePath: 'D:\\tools\\AIGShell-arm64\\AIGShell.exe',
+    installSrc: 'win-arm64-portable.tar.gz',
+    existsSync: () => false
+  })
+
+  assert.deepEqual(props, {
+    appPath: 'D:\\tools\\AIGShell-arm64',
+    exePath: 'D:\\tools\\AIGShell-arm64',
+    isPortable: true
+  })
+})
+
 test('existing portable data folder marks Windows builds as portable', () => {
   const checked = []
   const props = resolveAppDataProps({
