@@ -66,6 +66,26 @@ test('redacts passwords embedded in diagnostic URLs', () => {
   assert.match(redacted, /https:\/\/api-user:\[已脱敏\]@example\.com\/v1/)
 })
 
+test('redacts cookie and inline key material from diagnostic text', () => {
+  const text = [
+    'Cookie: session=browser-cookie-secret; csrf=csrf-secret',
+    'Set-Cookie: token=session-cookie-secret; HttpOnly',
+    'privateKey=inline-private-key-secret',
+    'certificate: "inline-certificate-secret"',
+    'proxyPassword=proxy-password-secret'
+  ].join('\n')
+
+  const redacted = redactDiagnosticText(text)
+
+  assert.equal(redacted.includes('browser-cookie-secret'), false)
+  assert.equal(redacted.includes('csrf-secret'), false)
+  assert.equal(redacted.includes('session-cookie-secret'), false)
+  assert.equal(redacted.includes('inline-private-key-secret'), false)
+  assert.equal(redacted.includes('inline-certificate-secret'), false)
+  assert.equal(redacted.includes('proxy-password-secret'), false)
+  assert.notEqual(redacted, text)
+})
+
 test('builds a diagnostic report with safe metadata and truncated logs', () => {
   const report = buildDiagnosticReport({
     now: '2026-07-08T00:00:00.000Z',

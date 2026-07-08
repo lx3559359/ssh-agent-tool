@@ -8,7 +8,8 @@ const DEFAULT_MAX_LOG_CHARS = 200 * 1024
 const SECRET_PATTERNS = [
   /(Authorization\s*:\s*Bearer\s+)[^\s"'`]+/ig,
   /(Authorization\s*:\s*)[^\r\n]+/ig,
-  /((?:api[-_ ]?key|apikey|apiKeyAI|token|secret|password|passphrase)\s*[:=]\s*["']?)[^"'\r\n]+/ig
+  /((?:Set-)?Cookie\s*:\s*)[^\r\n]+/ig,
+  /((?:api[-_ ]?key|apikey|apiKeyAI|token|secret|password|passphrase|private[-_ ]?key|proxy[-_ ]?password|certificate)\s*[:=]\s*["']?)[^"'\r\n]+/ig
 ]
 
 const PRIVATE_KEY_BLOCK_PATTERN = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g
