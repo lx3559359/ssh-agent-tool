@@ -653,4 +653,82 @@ describe('session-ssh auth flows', () => {
       await server.close()
     }
   })
+
+  test('rejects wrong password with a normalized authentication error', async () => {
+    const server = await startServer(passwordOnlyAuth())
+
+    try {
+      await assert.rejects(
+        () => session({
+          host: '127.0.0.1',
+          port: server.port,
+          username: USERNAME,
+          password: 'wrong-password',
+          useSshAgent: false,
+          enableSsh: false,
+          readyTimeout: 5000
+        }, createPromptWs(() => {
+          throw new Error('wrong saved password should not prompt during failed login')
+        })),
+        (err) => {
+          assert.match(err.message, /SSH 认证失败/)
+          assert.match(err.message, /tester@127\.0\.0\.1/)
+          assert.match(err.message, /原始错误/)
+          return true
+        }
+      )
+    } finally {
+      await server.close()
+    }
+  })
+
+  test('streams long command output and terminal UI frames over the ssh channel', async () => {
+    const expectedLines = 1500
+    const server = await startServer(passwordOnlyAuth(), {
+      onShell (stream) {
+        stream.write('\x1b[?1049h')
+        for (let index = 0; index < expectedLines; index++) {
+          stream.write(`line-${index.toString().padStart(4, '0')} 中文输出 ${'x'.repeat(48)}\r\n`)
+        }
+        stream.write('AIGSHELL_LONG_OUTPUT_DONE\r\n')
+        stream.write('\x1b[?1049l')
+      }
+    })
+
+    let term
+    try {
+      term = await session({
+        host: '127.0.0.1',
+        port: server.port,
+        username: USERNAME,
+        password: PASSWORD,
+        useSshAgent: false,
+        readyTimeout: 5000
+      }, createPromptWs(() => {
+        throw new Error('password shell login should not prompt')
+      }))
+
+      let output = ''
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          reject(new Error(`Timed out waiting for long SSH output. Received ${output.length} bytes`))
+        }, 5000)
+        term.on('data', (chunk) => {
+          output += chunk.toString('utf8')
+          if (output.includes('AIGSHELL_LONG_OUTPUT_DONE')) {
+            clearTimeout(timer)
+            resolve()
+          }
+        })
+      })
+
+      assert.ok(output.includes('\x1b[?1049h'))
+      assert.ok(output.includes('\x1b[?1049l'))
+      assert.match(output, /line-0000 中文输出/)
+      assert.match(output, /line-1499 中文输出/)
+    } finally {
+      term && term.kill()
+      await server.close()
+    }
+  })
 })
