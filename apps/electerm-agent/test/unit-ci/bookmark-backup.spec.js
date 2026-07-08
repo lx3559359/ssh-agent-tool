@@ -48,6 +48,56 @@ test('creates an AIGShell bookmark backup package with metadata and credentials 
   assert.deepEqual(parsed.bookmarkGroups, bookmarkGroups)
 })
 
+test('creates a bookmark backup without credentials when requested', async () => {
+  const {
+    createBookmarkBackup
+  } = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/common/bookmark-backup.js')))
+
+  const backup = createBookmarkBackup({
+    bookmarks: [
+      {
+        id: 'server-1',
+        title: 'prod-web-01',
+        host: '10.0.1.23',
+        username: 'root',
+        password: 'secret',
+        privateKey: '-----BEGIN OPENSSH PRIVATE KEY-----',
+        passphrase: 'key-passphrase',
+        certificate: 'ssh-certificate',
+        proxy: 'socks5://proxy-user:proxy-secret@127.0.0.1:1080',
+        connectionHoppings: [
+          {
+            host: 'jump.example.com',
+            username: 'jump',
+            password: 'jump-secret',
+            privateKey: 'jump-private-key',
+            passphrase: 'jump-passphrase'
+          }
+        ]
+      }
+    ],
+    bookmarkGroups: [],
+    includeCredentials: false
+  })
+
+  const [bookmark] = backup.data.bookmarks
+  assert.equal(bookmark.password, undefined)
+  assert.equal(bookmark.privateKey, undefined)
+  assert.equal(bookmark.passphrase, undefined)
+  assert.equal(bookmark.certificate, undefined)
+  assert.equal(bookmark.connectionHoppings[0].password, undefined)
+  assert.equal(bookmark.connectionHoppings[0].privateKey, undefined)
+  assert.equal(bookmark.connectionHoppings[0].passphrase, undefined)
+  assert.equal(bookmark.host, '10.0.1.23')
+  assert.equal(bookmark.username, 'root')
+  assert.equal(bookmark.proxy, 'socks5://proxy-user@127.0.0.1:1080')
+
+  const serialized = JSON.stringify(backup)
+  assert.equal(serialized.includes('secret'), false)
+  assert.equal(serialized.includes('PRIVATE KEY'), false)
+  assert.equal(serialized.includes('passphrase'), false)
+})
+
 test('parses legacy bookmark exports for backwards compatibility', async () => {
   const {
     parseBookmarkBackup
@@ -300,7 +350,10 @@ test('uses the AIGShell bookmark backup package from every toolbar export entry'
 
   assert.match(source, /createBookmarkBackup/)
   assert.match(source, /download\('aigshell-bookmarks-backup-/)
+  assert.match(source, /download\('aigshell-bookmarks-no-credentials-/)
+  assert.match(source, /includeCredentials:\s*false/)
   assert.match(source, /label:\s*e\('export'\)[\s\S]*?onClick:\s*handleDownload/)
+  assert.match(source, /label:\s*`\$\{e\('export'\)\} \(不含凭据\)`[\s\S]*?onClick:\s*handleDownloadWithoutCredentials/)
   assert.doesNotMatch(source, /onClick:\s*onExport/)
 })
 

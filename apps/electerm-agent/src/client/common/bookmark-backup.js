@@ -3,6 +3,14 @@ import copy from 'json-deep-copy'
 export const bookmarkBackupFormat = 'AIGShell.bookmarks.backup'
 export const bookmarkBackupFormatVersion = 1
 
+const credentialKeys = new Set([
+  'password',
+  'privateKey',
+  'passphrase',
+  'certificate',
+  'proxyPassword'
+])
+
 const invalidJsonError = '备份文件内容不是有效的 JSON'
 const noImportableBookmarksError = '备份文件中没有可导入的服务器连接'
 const invalidBookmarkBackupShapeError = '备份文件中的服务器或分组格式不正确'
@@ -12,8 +20,12 @@ export function createBookmarkBackup ({
   bookmarks = [],
   bookmarkGroups = [],
   now = new Date().toISOString(),
-  version = ''
+  version = '',
+  includeCredentials = true
 } = {}) {
+  const backupBookmarks = includeCredentials
+    ? copy(bookmarks || [])
+    : stripCredentials(bookmarks || [])
   return {
     format: bookmarkBackupFormat,
     formatVersion: bookmarkBackupFormatVersion,
@@ -23,10 +35,42 @@ export function createBookmarkBackup ({
     },
     exportedAt: now,
     data: {
-      bookmarks: copy(bookmarks || []),
+      bookmarks: backupBookmarks,
       bookmarkGroups: copy(bookmarkGroups || [])
     }
   }
+}
+
+function sanitizeProxyUrl (value) {
+  if (typeof value !== 'string' || !value.includes('@')) {
+    return value
+  }
+  try {
+    const url = new URL(value)
+    url.password = ''
+    return url.toString()
+  } catch (_) {
+    return value.replace(/:\/\/([^:@/]+):[^@/]*@/, '://$1@')
+  }
+}
+
+function stripCredentials (value) {
+  if (Array.isArray(value)) {
+    return value.map(stripCredentials)
+  }
+  if (!value || typeof value !== 'object') {
+    return value
+  }
+  return Object.keys(value).reduce((result, key) => {
+    if (credentialKeys.has(key)) {
+      return result
+    }
+    const nextValue = key === 'proxy'
+      ? sanitizeProxyUrl(value[key])
+      : stripCredentials(value[key])
+    result[key] = nextValue
+    return result
+  }, {})
 }
 
 function normalizeBookmarkBackupData (data) {

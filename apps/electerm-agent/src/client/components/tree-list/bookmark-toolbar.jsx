@@ -37,6 +37,17 @@ export default function BookmarkToolbar (props) {
     const stamp = time(undefined, 'YYYY-MM-DD-HH-mm-ss')
     download('aigshell-bookmarks-backup-' + stamp + '.json', txt)
   }
+  const handleDownloadWithoutCredentials = () => {
+    const backup = createBookmarkBackup({
+      bookmarkGroups,
+      bookmarks,
+      version: packInfo.version,
+      includeCredentials: false
+    })
+    const txt = JSON.stringify(backup, null, 2)
+    const stamp = time(undefined, 'YYYY-MM-DD-HH-mm-ss')
+    download('aigshell-bookmarks-no-credentials-' + stamp + '.json', txt)
+  }
   const handleToggleEdit = () => {
     window.store.bookmarkSelectMode = true
   }
@@ -71,6 +82,11 @@ export default function BookmarkToolbar (props) {
     {
       label: e('export'),
       onClick: handleDownload,
+      icon: <ExportOutlined />
+    },
+    {
+      label: `${e('export')} (不含凭据)`,
+      onClick: handleDownloadWithoutCredentials,
       icon: <ExportOutlined />
     },
     {
