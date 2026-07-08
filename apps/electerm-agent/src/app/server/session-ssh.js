@@ -160,6 +160,7 @@ function getSshDiagnosis (err = {}, options = {}) {
     message.includes(failMsg) ||
     /authentication.*failed/i.test(message) ||
     /permission denied/i.test(message) ||
+    /access denied/i.test(message) ||
     /no supported authentication/i.test(message)
   ) {
     return {
