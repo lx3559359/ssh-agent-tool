@@ -2,9 +2,11 @@ name: Windows Electerm Agent Release
 
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - "v*"
+    inputs:
+      confirm_stable_release:
+        description: "输入 AIGShell stable release 确认创建稳定版发布草稿"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -27,6 +29,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Verify manual stable release confirmation
+        shell: pwsh
+        run: |
+          if ("${{ github.event.inputs.confirm_stable_release }}" -ne "AIGShell stable release") {
+            throw "发布确认失败：请在手动触发 workflow 时输入 AIGShell stable release"
+          }
+
       - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
@@ -44,6 +53,14 @@ jobs:
 
       - name: Install dependencies and rebuild native modules
         run: npm ci
+
+      - name: Read package version
+        id: package-version
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=v$version" >> $env:GITHUB_OUTPUT
 
       - name: Start Windows OpenSSH agent service
         run: |
@@ -96,11 +113,12 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Create draft GitHub Release for tags
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Create draft GitHub Release after manual confirmation
         uses: softprops/action-gh-release@v2
         with:
           draft: true
+          tag_name: ${{ steps.package-version.outputs.tag }}
+          name: AIGShell ${{ steps.package-version.outputs.tag }}
           files: |
             apps/electerm-agent/dist/AIGShell-*-win-x64-installer.exe
             apps/electerm-agent/dist/AIGShell-*-win-x64-installer.exe.blockmap

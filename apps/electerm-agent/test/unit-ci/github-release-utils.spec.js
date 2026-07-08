@@ -113,7 +113,7 @@ test('windows release workflow builds and publishes a portable zip separately fr
   const portableBuildIndex = workflow.indexOf('name: Build portable package')
   const localVerifyIndex = workflow.indexOf('npm run release:local:verify')
   const artifactUploadIndex = workflow.indexOf('name: Upload Windows artifacts')
-  const releaseIndex = workflow.indexOf('name: Create draft GitHub Release for tags')
+  const releaseIndex = workflow.indexOf('name: Create draft GitHub Release after manual confirmation')
 
   assert.match(workflow, /AIGShell-\*-win-x64-portable\.zip/)
   assert.match(workflow, /npx electron-builder --win zip --publish never/)
@@ -124,6 +124,24 @@ test('windows release workflow builds and publishes a portable zip separately fr
   assert.ok(portableBuildIndex < localVerifyIndex, 'portable zip should be built before verification')
   assert.ok(localVerifyIndex < artifactUploadIndex, 'verification should run before artifact upload')
   assert.ok(artifactUploadIndex < releaseIndex, 'artifacts should be prepared before release creation')
+})
+
+test('windows release workflow requires an explicit manual stable release confirmation', () => {
+  const workflow = fs.readFileSync(
+    path.resolve(__dirname, '../../../../.github/workflows/windows-electerm-agent-release.yml'),
+    'utf8'
+  )
+
+  assert.match(workflow, /workflow_dispatch:/)
+  assert.match(workflow, /confirm_stable_release:/)
+  assert.match(workflow, /type:\s+string/)
+  assert.match(workflow, /AIGShell stable release/)
+  assert.doesNotMatch(workflow, /push:\s*\n\s+tags:/)
+  assert.match(workflow, /github\.event\.inputs\.confirm_stable_release/)
+  assert.match(workflow, /发布确认失败/)
+  assert.match(workflow, /id:\s+package-version/)
+  assert.match(workflow, /tag=v\$version/)
+  assert.match(workflow, /tag_name:\s+\$\{\{ steps\.package-version\.outputs\.tag \}\}/)
 })
 
 test('windows release workflow verifies the portable zip contents before upload', () => {
