@@ -5,6 +5,7 @@ import '../css/basic.styl'
 import '../css/mobile.styl'
 import { get as _get } from 'lodash-es'
 import '../common/pre'
+import { getShellPilotTranslation } from '../common/shellpilot-i18n-overrides.js'
 
 const { isDev } = window.et
 const version = process.env.VER || window.pre.packInfo.version
@@ -50,8 +51,11 @@ async function load () {
     return _get(window.langMap, `[${lang}].lang`)
   }
   window.translate = txt => {
+    const langId = window.store?.config.language || 'zh_cn'
     const lang = window.getLang()
-    const str = _get(lang, `[${txt}]`) || txt
+    const str = _get(lang, `[${txt}]`) ||
+      getShellPilotTranslation(txt, langId) ||
+      txt
     return window.capitalizeFirstLetter(str)
   }
   await loadWorker()
