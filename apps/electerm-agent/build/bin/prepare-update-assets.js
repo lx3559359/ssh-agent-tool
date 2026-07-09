@@ -16,6 +16,19 @@ function readUpdateMetadataVersion (filePath) {
   return match ? match[1] : ''
 }
 
+function shouldCopyLatestMetadata (latestPath, localMetadataPath, version) {
+  if (!fs.existsSync(latestPath)) {
+    return true
+  }
+  if (readUpdateMetadataVersion(latestPath) !== version) {
+    return true
+  }
+  if (!fs.existsSync(localMetadataPath)) {
+    return false
+  }
+  return fs.readFileSync(latestPath, 'utf8') !== fs.readFileSync(localMetadataPath, 'utf8')
+}
+
 function prepareUpdateAssets (options = {}) {
   const distDir = options.distDir || path.resolve(__dirname, '../../dist')
   const version = options.version || pack.version
@@ -27,7 +40,7 @@ function prepareUpdateAssets (options = {}) {
 
   fs.mkdirSync(distDir, { recursive: true })
 
-  if (!fs.existsSync(latestPath) || readUpdateMetadataVersion(latestPath) !== version) {
+  if (shouldCopyLatestMetadata(latestPath, localMetadataPath, version)) {
     if (!fs.existsSync(localMetadataPath)) {
       throw new Error('Missing update metadata: dist/latest.yml or dist/aigshell-local.yml')
     }
@@ -59,5 +72,6 @@ if (require.main === module) {
 
 module.exports = {
   readUpdateMetadataVersion,
+  shouldCopyLatestMetadata,
   prepareUpdateAssets
 }

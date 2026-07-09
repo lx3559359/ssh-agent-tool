@@ -54,6 +54,34 @@ test('does not overwrite matching latest.yml while preparing approval metadata',
   }
 })
 
+test('replaces stale latest.yml when same version metadata changed after repackaging', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigshell-update-assets-'))
+  try {
+    fs.writeFileSync(
+      path.join(tempDir, 'aigshell-local.yml'),
+      'version: 3.15.108\npath: AIGShell-3.15.108-win-x64-installer.exe\nsha512: new\nsize: 2\n'
+    )
+    fs.writeFileSync(
+      path.join(tempDir, 'latest.yml'),
+      'version: 3.15.108\npath: AIGShell-3.15.108-win-x64-installer.exe\nsha512: old\nsize: 1\n'
+    )
+
+    const result = prepareUpdateAssets({
+      distDir: tempDir,
+      version: '3.15.108',
+      channel: 'stable'
+    })
+
+    assert.equal(result.copiedLatest, true)
+    assert.equal(
+      fs.readFileSync(path.join(tempDir, 'latest.yml'), 'utf8'),
+      'version: 3.15.108\npath: AIGShell-3.15.108-win-x64-installer.exe\nsha512: new\nsize: 2\n'
+    )
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true })
+  }
+})
+
 test('replaces stale latest.yml when preparing a new release version', () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigshell-update-assets-'))
   try {
