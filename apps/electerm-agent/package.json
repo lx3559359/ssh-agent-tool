@@ -38,6 +38,7 @@
     "release:github:clean:dry": "node build/bin/cleanup-github-release.js",
     "release:github:verify": "node build/bin/verify-github-release.js",
     "release:approval": "node build/bin/write-update-approval-manifest.js",
+    "release:prepare-assets": "node build/bin/prepare-update-assets.js",
     "release:local:verify": "node build/bin/verify-local-release-assets.js",
     "w": "./build/bin/web-release",
     "t": "electron work/app/app.js",

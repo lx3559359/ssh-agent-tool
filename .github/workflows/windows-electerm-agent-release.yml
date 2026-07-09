@@ -103,8 +103,8 @@ jobs:
       - name: Verify portable package
         run: npm run verify-win-portable
 
-      - name: Create update approval manifest
-        run: npm run release:approval
+      - name: Prepare approved online update assets
+        run: npm run release:prepare-assets
 
       - name: Verify local update assets
         run: npm run release:local:verify
