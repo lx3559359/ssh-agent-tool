@@ -12,7 +12,7 @@ import {
 import { Button, Popover, Tooltip } from 'antd'
 import QuickConnect from '../tabs/quick-connect'
 import WindowControl from '../tabs/window-control'
-import { logoPath1, statusMap } from '../../common/constants'
+import { logoPath1, packInfo, statusMap } from '../../common/constants'
 import './aigshell-topbar.styl'
 
 export default function AIGShellTopBar ({ store }) {
@@ -121,6 +121,7 @@ export default function AIGShellTopBar ({ store }) {
       <div className='aigshell-topbar-brand'>
         <img src={logoPath1} alt='ShellPilot' />
         <span className='aigshell-topbar-name'>ShellPilot</span>
+        <span className='aigshell-topbar-version' title={`当前版本 ${packInfo.version}`}>v{packInfo.version}</span>
         <span className='aigshell-topbar-separator' />
         <span className='aigshell-topbar-current' title={title}>{title}</span>
         <Tooltip title={online ? '已连接' : '未连接'}>

@@ -18,6 +18,16 @@ test('ShellPilot branding is used for the Windows client shell', () => {
   assert.match(topbar, />ShellPilot</)
 })
 
+test('ShellPilot top bar shows the current app version', () => {
+  const topbar = read('src/client/components/main/aigshell-topbar.jsx')
+  const style = read('src/client/components/main/aigshell-topbar.styl')
+
+  assert.match(topbar, /packInfo/)
+  assert.match(topbar, /packInfo\.version/)
+  assert.match(topbar, /aigshell-topbar-version/)
+  assert.match(style, /\.aigshell-topbar-version/)
+})
+
 test('ShellPilot release assets use the public ShellPilot file prefix', () => {
   const builder = JSON.parse(read('build/electron-builder.json'))
   const releaseVerifier = read('build/bin/verify-local-release-assets.js')
