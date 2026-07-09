@@ -2,6 +2,7 @@ const fs = require('fs')
 const path = require('path')
 const { spawn } = require('child_process')
 const {
+  appExecutableName,
   buildSmokeEnvironment,
   resolveSmokePaths,
   validateSmokeResult
@@ -68,7 +69,7 @@ async function main () {
     exePath: args.app ? path.resolve(args.app) : undefined
   })
   if (!fs.existsSync(paths.exePath)) {
-    throw new Error(`AIGShell package not found: ${paths.exePath}. Run npm run b first.`)
+    throw new Error(`${appExecutableName} package not found: ${paths.exePath}. Run npm run b first.`)
   }
 
   fs.mkdirSync(paths.dataPath, { recursive: true })

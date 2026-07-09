@@ -3,6 +3,7 @@ const assert = require('node:assert/strict')
 const path = require('node:path')
 
 const {
+  appExecutableName,
   buildSmokeEnvironment,
   resolveSmokePaths,
   validatePortableZipExtractedFiles,
@@ -12,7 +13,7 @@ const {
   parseArgs
 } = require(path.resolve(__dirname, '../../build/bin/package-smoke-test'))
 
-test('package smoke paths target the unpacked AIGShell app and isolated data folder', () => {
+test('package smoke paths target the unpacked ShellPilot app and isolated data folder', () => {
   const paths = resolveSmokePaths({
     projectRoot: 'C:\\work\\aigshell',
     tmpRoot: 'C:\\Temp\\aigshell-package-smoke-test'
@@ -20,7 +21,7 @@ test('package smoke paths target the unpacked AIGShell app and isolated data fol
 
   assert.equal(
     paths.exePath,
-    'C:\\work\\aigshell\\dist\\win-unpacked\\AIGShell.exe'
+    'C:\\work\\aigshell\\dist\\win-unpacked\\ShellPilot.exe'
   )
   assert.equal(
     paths.dataPath,
@@ -99,7 +100,7 @@ test('package smoke validation requires a running app and both sqlite files', ()
 
 test('portable zip validation requires a normal Windows client layout without bat launchers', () => {
   assert.doesNotThrow(() => validatePortableZipExtractedFiles([
-    'AIGShell.exe',
+    appExecutableName,
     'resources/app.asar',
     'resources/electron.asar'
   ]))
@@ -116,6 +117,6 @@ test('portable zip validation requires a normal Windows client layout without ba
     () => validatePortableZipExtractedFiles([
       'resources/app.asar'
     ]),
-    /AIGShell\.exe/
+    /ShellPilot\.exe/
   )
 })

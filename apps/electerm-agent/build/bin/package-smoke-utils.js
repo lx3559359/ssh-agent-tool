@@ -1,4 +1,7 @@
 const path = require('path')
+const pack = require('../../package.json')
+
+const appExecutableName = `${pack.productName || 'AIGShell'}.exe`
 
 function resolveSmokePaths ({
   projectRoot = path.resolve(__dirname, '../..'),
@@ -14,7 +17,7 @@ function resolveSmokePaths ({
 
   return {
     tmpRoot: root,
-    exePath: exePath || path.join(projectRoot, 'dist', 'win-unpacked', 'AIGShell.exe'),
+    exePath: exePath || path.join(projectRoot, 'dist', 'win-unpacked', appExecutableName),
     dataPath,
     mainDbPath: path.join(userPath, 'electerm.db'),
     dataDbPath: path.join(userPath, 'electerm_data.db')
@@ -53,10 +56,10 @@ function validateSmokeResult ({
   exitCode
 }) {
   if (!runningAfterWait) {
-    throw new Error(`AIGShell exited before startup completed. Exit code: ${exitCode}`)
+    throw new Error(`${pack.productName || 'AIGShell'} exited before startup completed. Exit code: ${exitCode}`)
   }
   if (!mainDbExists || !dataDbExists) {
-    throw new Error('AIGShell did not create sqlite databases in DATA_PATH')
+    throw new Error(`${pack.productName || 'AIGShell'} did not create sqlite databases in DATA_PATH`)
   }
 }
 
@@ -68,14 +71,14 @@ function validatePortableZipExtractedFiles (files = []) {
   const entries = files.map(normalizeZipEntry).filter(Boolean)
   const lowerEntries = entries.map(file => file.toLowerCase())
   const hasBatLauncher = lowerEntries.some(file => /\.(bat|cmd)$/.test(file))
-  const hasExe = lowerEntries.some(file => path.basename(file) === 'aigshell.exe')
+  const hasExe = lowerEntries.some(file => path.basename(file) === appExecutableName.toLowerCase())
   const hasAppAsar = lowerEntries.includes('resources/app.asar')
 
   if (hasBatLauncher) {
     throw new Error('便携包不应包含 BAT/CMD 启动脚本')
   }
   if (!hasExe) {
-    throw new Error('便携包缺少 AIGShell.exe')
+    throw new Error(`便携包缺少 ${appExecutableName}`)
   }
   if (!hasAppAsar) {
     throw new Error('便携包缺少 resources/app.asar')
@@ -95,6 +98,7 @@ function listFilesRecursive (rootDir, dir = rootDir) {
 }
 
 module.exports = {
+  appExecutableName,
   buildSmokeEnvironment,
   listFilesRecursive,
   resolvePortableZipPaths,
