@@ -43,7 +43,8 @@
     "release:local:verify": "node build/bin/verify-local-release-assets.js",
     "w": "./build/bin/web-release",
     "t": "electron work/app/app.js",
-    "lock": "npm i --package-lock-only"
+    "lock": "npm i --package-lock-only",
+    "smoke:ai": "cross-env NODE_ENV=development electron build/bin/smoke-ai.js"
   },
   "license": "MIT",
   "langugeRepo": "https://github.com/electerm/electerm-locales",

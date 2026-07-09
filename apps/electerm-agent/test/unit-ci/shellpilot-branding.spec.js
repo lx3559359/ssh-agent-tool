@@ -70,8 +70,10 @@ test('ShellPilot product name is used for app and window titles', () => {
   const initApp = read('src/app/lib/init-app.js')
 
   assert.match(runtimeConstants, /appDisplayName: packInfo\.productName \|\| packInfo\.name/)
+  assert.match(runtimeConstants, /safeStorageAppName:\s*'AIGShell'/)
   assert.match(createWindow, /title: appDisplayName/)
-  assert.match(createApp, /app\.setName\(appDisplayName\)/)
+  assert.match(createApp, /app\.setName\(safeStorageAppName\)/)
+  assert.match(createApp, /before the ShellPilot rebrand/)
   assert.match(createApp, /app\.setDesktopName\(appDisplayName\)/)
   assert.match(ipc, /\(packInfo\.productName \|\| packInfo\.name\) \+ ' - ' \+ title/)
   assert.match(initApp, /\$\{appDisplayName\} \$\{e\('isRunning'\)\}/)

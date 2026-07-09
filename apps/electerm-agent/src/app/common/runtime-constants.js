@@ -54,5 +54,6 @@ module.exports = {
   tempDir: require('os').tmpdir(),
   homeOrTmp: os.homedir() || os.tmpdir(),
   packInfo,
-  appDisplayName: packInfo.productName || packInfo.name
+  appDisplayName: packInfo.productName || packInfo.name,
+  safeStorageAppName: 'AIGShell'
 }

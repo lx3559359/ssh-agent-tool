@@ -6,7 +6,7 @@ const {
   Menu,
   shell
 } = require('electron')
-const { packInfo } = require('../common/runtime-constants')
+const { appDisplayName, packInfo } = require('../common/runtime-constants')
 const globalState = require('./glob-state')
 
 function buildMenu () {
@@ -186,7 +186,7 @@ function buildMenu () {
 
   if (process.platform === 'darwin') {
     template.unshift({
-      label: app.name,
+      label: appDisplayName,
       submenu: [
         {
           role: 'services',

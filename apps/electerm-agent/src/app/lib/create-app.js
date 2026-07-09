@@ -3,7 +3,8 @@ const {
 } = require('electron')
 const { createWindow } = require('./create-window')
 const {
-  appDisplayName
+  appDisplayName,
+  safeStorageAppName
 } = require('../common/runtime-constants')
 const { initCommandLine } = require('./command-line')
 const globalState = require('./glob-state')
@@ -49,7 +50,9 @@ installProcessErrorLogging({
 })
 
 exports.createApp = async function () {
-  app.setName(appDisplayName)
+  // Keep the legacy internal app name so Electron safeStorage can decrypt
+  // API keys and SSH settings saved before the ShellPilot rebrand.
+  app.setName(safeStorageAppName)
   // Set desktop name so Linux taskbars (e.g. UOS/Deepin dde-dock) can match
   // the window to the .desktop file embedded in the AppImage.
   if (process.platform === 'linux' && app.setDesktopName) {
