@@ -234,21 +234,25 @@ async function accessFolderFromTerminal (client, type, folderName) {
 }
 
 async function openNewConnectionForm (client) {
-  await client.click('.btns .anticon-plus-circle')
+  const aigshellNewButton = client.locator('.aigshell-topbar-action').filter({ hasText: /新建|New/i }).first()
+  await aigshellNewButton.waitFor({ state: 'visible', timeout: 10000 })
+  await aigshellNewButton.click()
   await delay(500)
 }
 
 async function confirmSshHostKeyVerificationIfNeeded (client, timeout = 4000) {
-  const trustButton = client.locator('.custom-modal-wrap button:has-text("Trust and Save")').first()
-  try {
-    await trustButton.waitFor({ state: 'visible', timeout })
-  } catch {
-    return false
+  const trustButtons = [
+    client.locator('.custom-modal-wrap button:has-text("Trust and Save")').first(),
+    client.locator('.custom-modal-wrap button:has-text("信任并保存")').first()
+  ]
+  for (const trustButton of trustButtons) {
+    if (await trustButton.isVisible({ timeout }).catch(() => false)) {
+      await trustButton.click()
+      await delay(500)
+      return true
+    }
   }
-
-  await trustButton.click()
-  await delay(500)
-  return true
+  return false
 }
 
 /**
@@ -288,7 +292,7 @@ async function setupSshConnection (client, options = {}) {
 async function setupSftpConnection (client) {
   await setupSshConnection(client)
   // Click sftp tab
-  await client.click('.session-current .term-sftp-tabs .type-tab', 1)
+  await client.locator('.session-current .term-sftp-tabs .type-tab:visible').nth(1).click()
   await delay(2500)
 }
 
@@ -368,7 +372,7 @@ async function verifyCurrentPath (client, type, expectedPath) {
  * @param {Object} client - The Playwright client
  */
 async function clickSftpTab (client) {
-  await client.click('.session-current .term-sftp-tabs .type-tab', 1)
+  await client.locator('.session-current .term-sftp-tabs .type-tab:visible').nth(1).click()
   await delay(3500)
 }
 

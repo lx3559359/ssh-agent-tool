@@ -32,6 +32,7 @@ describe('Terminal Suggestions Dropdown', function () {
     await delay(1500)
     // Type the partial command and check initial suggestions count
     const partialCommand = 'test-unique'
+    await client.locator('.xterm-helper-textarea').first().click({ force: true })
     await client.keyboard.type(partialCommand)
     await delay(100)
     await client.keyboard.press('ArrowRight')
@@ -51,7 +52,7 @@ describe('Terminal Suggestions Dropdown', function () {
     // Verify AI suggestions button
     const aiSuggestionsButton = await client.locator('.terminal-suggestions-sticky div').first()
     await expect(aiSuggestionsButton).toBeVisible()
-    await expect(aiSuggestionsButton).toHaveText('Get AI suggestions')
+    await expect(aiSuggestionsButton).toHaveText(/获取\s*AI\s*建议/)
 
     // Press Enter to execute command
     await client.keyboard.press('Enter')

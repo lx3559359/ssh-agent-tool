@@ -43,19 +43,16 @@ describe('AI Config and Suggestions', function () {
   })
 
   it('should open AI setting page and fill configuration', async function () {
-    // Click AI button to open settings
     await client.evaluate(() => {
       return window.store.setConfig({
         showCmdSuggestions: true
       })
     })
-    await client.click('.terminal-footer-ai .ai-icon')
+    await client.locator('.aigshell-topbar-action').nth(3).click()
     await delay(1000)
 
-    // Verify AI setting page is open
     await expect(client.locator('.ai-config-modal .ai-config-form')).toBeVisible()
 
-    // Fill in the AI configuration form
     await client.fill('#baseURLAI', 'http://localhost:43434')
     await client.fill('#apiPathAI', '/chat/completions')
     await client.fill('#modelAI', 'gpt-3.5-turbo')
@@ -63,42 +60,45 @@ describe('AI Config and Suggestions', function () {
     await client.fill('#roleAI', 'You are a helpful assistant')
     await client.fill('#languageAI', 'English')
 
-    // Save the configuration
     await client.click('.ai-config-form button[type="submit"]')
     await delay(1000)
 
-    // Verify the setting panel is closed
-    await expect(client.locator('.setting-wrap')).not.toBeVisible()
+    await expect(client.locator('.ai-config-modal .ai-config-form')).not.toBeVisible()
   })
 
   it('should verify AI functionality after configuration', async function () {
-    // Click AI button after configuration
     await client.evaluate(() => {
       return window.store.setConfig({
-        showCmdSuggestions: true
+        showCmdSuggestions: true,
+        baseURLAI: 'http://localhost:43434',
+        apiPathAI: '/chat/completions',
+        modelAI: 'gpt-3.5-turbo',
+        apiKeyAI: 'test-api-key',
+        authHeaderNameAI: 'Authorization: Bearer'
       })
     })
-    await client.click('.terminal-footer-ai .ai-icon')
     await delay(1000)
 
-    // Verify that the AI setting page does not open this time
     await expect(client.locator('.ai-config-modal .ai-config-form')).not.toBeVisible()
-
-    // Verify that AI functionality is triggered instead
     await expect(client.locator('.ai-chat-container')).toBeVisible()
   })
 
   it('should test AI suggestions functionality', async function () {
     // Open a terminal or ensure we're in a context where we can input commands
     // You might need to add steps here to open a terminal tab if it's not open by default
-    // Click AI button after configuration
     await client.evaluate(() => {
       return window.store.setConfig({
-        showCmdSuggestions: true
+        showCmdSuggestions: true,
+        baseURLAI: 'http://localhost:43434',
+        apiPathAI: '/chat/completions',
+        modelAI: 'gpt-3.5-turbo',
+        apiKeyAI: 'test-api-key',
+        authHeaderNameAI: 'Authorization: Bearer'
       })
     })
     // Input a command
     const testCommand = 'test'
+    await client.locator('.xterm-helper-textarea').first().click({ force: true })
     await client.keyboard.type(testCommand)
     await delay(100)
     await client.keyboard.press('ArrowRight')
@@ -109,8 +109,7 @@ describe('AI Config and Suggestions', function () {
     // Get the initial count of suggestions
     const initialSuggestionsCount = await client.locator('.suggestion-item').count()
 
-    // Click the "Get AI suggestions" button
-    await client.click('.terminal-suggestions-sticky div:has-text("Get AI suggestions")')
+    await client.locator('.terminal-suggestions-sticky div').filter({ hasText: /获取\s*AI\s*建议/ }).first().click()
     await delay(2000) // Wait for suggestions to load
 
     // Get the new count of suggestions

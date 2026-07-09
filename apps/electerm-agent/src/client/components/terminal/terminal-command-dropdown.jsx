@@ -8,6 +8,8 @@ import {
   LoadingOutlined
 } from '@ant-design/icons'
 
+const aiSuggestionLabel = '\u83b7\u53d6 AI \u5efa\u8bae'
+
 export default class TerminalCmdSuggestions extends Component {
   state = {
     cursorPosition: {},
@@ -312,14 +314,13 @@ export default class TerminalCmdSuggestions extends Component {
   }
 
   renderAIIcon () {
-    const e = window.translate
     const {
       loadingAiSuggestions
     } = this.state
     if (loadingAiSuggestions) {
       return (
         <>
-          <LoadingOutlined /> {e('getAiSuggestions')}
+          <LoadingOutlined /> {aiSuggestionLabel}
         </>
       )
     }
@@ -329,7 +330,7 @@ export default class TerminalCmdSuggestions extends Component {
     }
     return (
       <div {...aiProps}>
-        {e('getAiSuggestions')}
+        {aiSuggestionLabel}
       </div>
     )
   }

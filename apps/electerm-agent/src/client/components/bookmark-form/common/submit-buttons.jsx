@@ -30,8 +30,13 @@ export default function SubmitButtons ({
         </Button>
       </p>
       <p>
-        <Button type='dashed' onClick={onConnect} className='mg1r mg1b'>
-          {e('connect')}
+        <Button
+          type='dashed'
+          onClick={onConnect}
+          className='mg1r mg1b'
+          title='不保存配置，直接打开临时连接'
+        >
+          仅连接
         </Button>
         <Button type='dashed' onClick={onTestConnection} className='mg1r mg1b'>
           {e('testConnection')}

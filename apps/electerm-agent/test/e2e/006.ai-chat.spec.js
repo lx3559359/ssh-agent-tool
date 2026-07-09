@@ -38,44 +38,44 @@ describe('AI Config and Suggestions', function () {
   })
 
   it('should verify AI functionality after configuration', async function () {
-    // Open AI chat
-    await client.click('.terminal-footer-ai .ai-icon')
+    await client.evaluate(() => {
+      window.store.aiChatHistory = []
+      return window.store.setConfig({
+        baseURLAI: 'http://localhost:43434',
+        apiPathAI: '/chat/completions',
+        modelAI: 'gpt-3.5-turbo',
+        apiKeyAI: 'test-api-key',
+        authHeaderNameAI: 'Authorization: Bearer',
+        roleAI: 'You are a helpful assistant',
+        languageAI: '简体中文'
+      })
+    })
     await delay(1000)
 
-    // Verify AI chat is open
     await expect(client.locator('.ai-chat-container')).toBeVisible()
 
-    // Get initial chat history count
     const initialHistoryCount = await client.locator('.chat-history-item').count()
 
-    // Enter a test prompt
-    const testPrompt = 'Hello, AI assistant! Please provide a long response.'
+    const testPrompt = 'Please reply with a short AIGShell AI smoke response.'
     await client.fill('.ai-chat-textarea', testPrompt)
 
-    // Submit the prompt
     await client.click('.ai-chat-terminals .anticon-send')
 
-    // Wait for response (adjust delay if needed)
-    await delay(5000)
+    await expect(client.locator('.chat-history-item')).toHaveCount(initialHistoryCount + 1, { timeout: 10000 })
+    await expect(client.locator('.chat-history-item').last()).toContainText('Response to your query', { timeout: 10000 })
 
-    // Get new chat history count
     const newHistoryCount = await client.locator('.chat-history-item').count()
-
-    // Verify chat history increased by 1
     expect(newHistoryCount).toBe(initialHistoryCount + 1)
 
-    // Verify the last chat history item contains the test prompt
     const lastChatItem = await client.locator('.chat-history-item').last()
-    const promptContent = await lastChatItem.locator('.ant-alert-title').textContent()
+    const promptContent = await lastChatItem.locator('.ai-history-item-prompt').textContent()
     expect(promptContent).toContain(testPrompt)
 
-    // Test clear history functionality
     await client.click('.ai-chat-terminals .clear-ai-icon')
     await delay(500)
     await client.click('.ant-popover .ant-btn-primary')
     await delay(1000)
 
-    // Verify that the chat history is now empty
     const finalHistoryCount = await client.locator('.chat-history-item').count()
     expect(finalHistoryCount).toBe(0)
   })
