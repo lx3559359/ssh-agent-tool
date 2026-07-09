@@ -58,7 +58,11 @@ test('AI terminal context submit passes the generated prompt directly instead of
   )
   assert.match(
     aiChatSource,
-    /const\s+submitPrompt\s*=\s*typeof\s+submitPromptOverride\s*===\s*'string'\s*\?\s*submitPromptOverride\s*:\s*prompt/
+    /let\s+submitPrompt\s*=\s*typeof\s+submitPromptOverride\s*===\s*'string'\s*\?\s*submitPromptOverride\s*:\s*prompt/
+  )
+  assert.match(
+    aiChatSource,
+    /shouldAutoAttachSelectedSftpFileContext\(submitPrompt\)/
   )
   assert.match(
     storeCommonSource,

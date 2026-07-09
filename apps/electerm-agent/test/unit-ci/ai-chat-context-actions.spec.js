@@ -145,6 +145,18 @@ test('AI chat context actions return Chinese messages when selected SFTP file is
   )
 })
 
+test('AI chat context actions detect prompts that refer to the selected SFTP file', async () => {
+  const {
+    shouldAutoAttachSelectedSftpFileContext
+  } = await import(moduleUrl)
+
+  assert.equal(shouldAutoAttachSelectedSftpFileContext('查看这个文件'), true)
+  assert.equal(shouldAutoAttachSelectedSftpFileContext('帮我分析当前配置'), true)
+  assert.equal(shouldAutoAttachSelectedSftpFileContext('explain current file'), true)
+  assert.equal(shouldAutoAttachSelectedSftpFileContext('帮我看下磁盘使用情况'), false)
+  assert.equal(shouldAutoAttachSelectedSftpFileContext('请分析下面的 SFTP 文件内容\n\n远程路径：/root/a.log'), false)
+})
+
 test('AI chat context actions prefer terminal component buffer helper when available', async () => {
   const {
     getTerminalOutputText

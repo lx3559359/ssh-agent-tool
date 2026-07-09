@@ -80,6 +80,21 @@ export function getAIContextUnavailableMessage (type) {
   return messages[type] || '该能力还在开发中。'
 }
 
+export function shouldAutoAttachSelectedSftpFileContext (prompt = '') {
+  const text = String(prompt || '').trim()
+  if (!text) {
+    return false
+  }
+  if (/SFTP\s+文件内容|远程路径：|本地路径：/.test(text)) {
+    return false
+  }
+  return [
+    /(查看|看看|看下|分析|解释|读取|检查|审查|总结|帮我看).{0,16}(这个|当前|选中|所选).{0,12}(文件|脚本|配置|日志)/,
+    /(这个|当前|选中|所选).{0,12}(文件|脚本|配置|日志).{0,16}(查看|看看|看下|分析|解释|读取|检查|审查|总结)/,
+    /(this|current|selected)\s+(file|script|config|configuration|log)/i
+  ].some(pattern => pattern.test(text))
+}
+
 export async function readSelectedSftpFileContext ({
   sftpRef,
   fsApi

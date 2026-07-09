@@ -41,7 +41,8 @@ import {
   getAIContextUnavailableMessage,
   getTerminalOutputText,
   getTerminalSelectionText,
-  readSelectedSftpFileContext
+  readSelectedSftpFileContext,
+  shouldAutoAttachSelectedSftpFileContext
 } from './ai-chat-context-actions'
 import message from '../common/message'
 import aiAgentCopy from './ai-agent-copy.json'
@@ -60,8 +61,8 @@ export default function AIChat (props) {
     setPrompt(e.target.value)
   }
 
-  const handleSubmit = useCallback(function (submitPromptOverride) {
-    const submitPrompt = typeof submitPromptOverride === 'string' ? submitPromptOverride : prompt
+  const handleSubmit = useCallback(async function (submitPromptOverride) {
+    let submitPrompt = typeof submitPromptOverride === 'string' ? submitPromptOverride : prompt
     const submitAction = getAIChatSubmitAction({
       prompt: submitPrompt,
       config: props.config
@@ -70,6 +71,30 @@ export default function AIChat (props) {
     if (submitAction === 'open-config') {
       window.store.toggleAIConfig()
       return
+    }
+
+    if (shouldAutoAttachSelectedSftpFileContext(submitPrompt)) {
+      const result = await readSelectedSftpFileContext({
+        sftpRef: getActiveSftpRef({
+          store: window.store,
+          refs
+        }),
+        fsApi: window.fs
+      }).catch(err => {
+        window.store.onError(err)
+        return null
+      })
+      if (!result) {
+        return
+      }
+      if (!result.ok) {
+        message.warning(result.message)
+        return
+      }
+      submitPrompt = `${submitPrompt}\n\n${buildSftpFileContextPrompt({
+        path: result.path,
+        content: result.content
+      })}`
     }
 
     const chatId = uid()
