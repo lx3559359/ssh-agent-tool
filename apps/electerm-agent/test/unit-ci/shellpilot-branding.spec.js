@@ -68,6 +68,7 @@ test('ShellPilot product name is used for app and window titles', () => {
   const createApp = read('src/app/lib/create-app.js')
   const ipc = read('src/app/lib/ipc.js')
   const initApp = read('src/app/lib/init-app.js')
+  const pugBuild = read('build/bin/pug.js')
 
   assert.match(runtimeConstants, /appDisplayName: packInfo\.productName \|\| packInfo\.name/)
   assert.match(runtimeConstants, /safeStorageAppName:\s*'AIGShell'/)
@@ -77,6 +78,7 @@ test('ShellPilot product name is used for app and window titles', () => {
   assert.match(createApp, /app\.setDesktopName\(appDisplayName\)/)
   assert.match(ipc, /\(packInfo\.productName \|\| packInfo\.name\) \+ ' - ' \+ title/)
   assert.match(initApp, /\$\{appDisplayName\} \$\{e\('isRunning'\)\}/)
+  assert.match(pugBuild, /siteName: pack\.productName \|\| 'ShellPilot'/)
   assert.doesNotMatch(createWindow, /title: packInfo\.name/)
   assert.doesNotMatch(ipc, /setTitle\(packInfo\.name/)
 })

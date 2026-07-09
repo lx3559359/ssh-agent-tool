@@ -103,6 +103,10 @@ export function buildBookmarkContextMenuItems ({
       label: label('移动到分组')
     },
     {
+      key: 'viewConnectionInfo',
+      label: label('查看连接信息')
+    },
+    {
       key: 'copyPublicInfo',
       label: label('复制连接信息')
     },

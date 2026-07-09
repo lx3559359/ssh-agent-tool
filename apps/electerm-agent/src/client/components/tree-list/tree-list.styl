@@ -192,3 +192,28 @@
   &.is-active
     opacity 1
     pointer-events auto
+
+.connection-info-list
+  display flex
+  flex-direction column
+  gap 8px
+
+.connection-info-row
+  display grid
+  grid-template-columns 96px minmax(0, 1fr) 70px
+  gap 8px
+  align-items center
+  min-height 32px
+  padding 6px 0
+  border-bottom 1px solid var(--main)
+
+.connection-info-label
+  color var(--text-color-2)
+  font-size 12px
+
+.connection-info-value
+  min-width 0
+  overflow hidden
+  text-overflow ellipsis
+  white-space nowrap
+  font-family var(--font-mono, monospace)

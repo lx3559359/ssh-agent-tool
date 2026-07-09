@@ -21,6 +21,7 @@ import { action } from 'manate'
 import './tree-list.styl'
 import TreeListRow from './tree-list-row'
 import TreeListEditorOverlay from './tree-list-editor-overlay.jsx'
+import ConnectionInfoModal from './connection-info-modal'
 import TreeSearch from './tree-search'
 import VirtualTreeList from './virtual-tree-list'
 import { buildVisibleTreeRows } from './tree-list-rows'
@@ -45,7 +46,8 @@ export default class ItemListTree extends Component {
       categoryColor: '',
       categoryId: '',
       searchSelectedRowKey: '',
-      sort: null
+      sort: null,
+      connectionInfoBookmark: null
     }
     this.listRef = React.createRef()
   }
@@ -446,6 +448,19 @@ export default class ItemListTree extends Component {
     }
   }
 
+  viewConnectionInfo = (e, item) => {
+    e.stopPropagation()
+    this.setState({
+      connectionInfoBookmark: item
+    })
+  }
+
+  handleCloseConnectionInfo = () => {
+    this.setState({
+      connectionInfoBookmark: null
+    })
+  }
+
   toggleFavorite = (e, item) => {
     e.stopPropagation()
     window.store.editItem(item.id, {
@@ -745,6 +760,7 @@ export default class ItemListTree extends Component {
             'openAll',
             'openMoveModal',
             'editItem',
+            'viewConnectionInfo',
             'addSubCat',
             'toggleFavorite',
             'onSelect',
@@ -909,6 +925,10 @@ export default class ItemListTree extends Component {
           {this.renderVirtualTreeContent(rows, editor)}
           {this.renderEditorOverlay(editor)}
         </div>
+        <ConnectionInfoModal
+          bookmark={this.state.connectionInfoBookmark}
+          onClose={this.handleCloseConnectionInfo}
+        />
       </div>
     )
   }

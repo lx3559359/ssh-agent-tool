@@ -17,46 +17,9 @@ import {
   createEncryptedBookmarkBackup
 } from '../../common/bookmark-backup'
 import { packInfo } from '../../common/constants'
+import { createConnectionInventoryCsv } from '../../common/connection-inventory'
 
 const e = window.translate
-
-function csvCell (value) {
-  const text = String(value ?? '')
-  return `"${text.replace(/"/g, '""')}"`
-}
-
-function getConnectionInventoryCsv (bookmarks = []) {
-  const headers = [
-    'title',
-    'type',
-    'host',
-    'port',
-    'username',
-    'authType',
-    'password',
-    'privateKey',
-    'passphrase',
-    'profileId',
-    'description'
-  ]
-  const rows = (bookmarks || []).map(item => [
-    item.title || item.name || '',
-    item.type || 'ssh',
-    item.host || '',
-    item.port || '',
-    item.username || '',
-    item.authType || '',
-    item.password || '',
-    item.privateKey || '',
-    item.passphrase || '',
-    item.profile || item.profileId || item.sshProfile || '',
-    item.description || ''
-  ])
-  return [
-    headers.map(csvCell).join(','),
-    ...rows.map(row => row.map(csvCell).join(','))
-  ].join('\n')
-}
 
 export default function BookmarkToolbar (props) {
   const {
@@ -109,7 +72,7 @@ export default function BookmarkToolbar (props) {
     if (!ok) {
       return
     }
-    const txt = '\uFEFF' + getConnectionInventoryCsv(bookmarks)
+    const txt = '\uFEFF' + createConnectionInventoryCsv(bookmarks)
     const stamp = time(undefined, 'YYYY-MM-DD-HH-mm-ss')
     download('shellpilot-connections-with-credentials-' + stamp + '.csv', txt)
   }

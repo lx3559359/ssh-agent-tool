@@ -38,6 +38,7 @@ test('bookmark context menu exposes common server actions without leaking creden
     'toggleFavorite',
     'duplicate',
     'move',
+    'viewConnectionInfo',
     'copyPublicInfo',
     'delete'
   ])
@@ -81,6 +82,7 @@ test('bookmark tree rows wire the context menu to row actions', () => {
   assert.match(source, /Dropdown/)
   assert.match(source, /trigger:\s*\['contextMenu'\]/)
   assert.match(source, /buildBookmarkContextMenuItems/)
+  assert.match(source, /viewConnectionInfo/)
   assert.match(source, /copyPublicInfo/)
   assert.match(source, /onContextMenuAction/)
 })

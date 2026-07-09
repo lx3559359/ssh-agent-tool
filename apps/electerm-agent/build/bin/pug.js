@@ -19,7 +19,7 @@ const targetFilePath = resolve(
 const pugContent = fs.readFileSync(entryPug, 'utf-8')
 const data = {
   version: pack.version,
-  siteName: pack.name,
+  siteName: pack.productName || 'ShellPilot',
   isDev: false
 }
 const htmlContent = pug.render(pugContent, {
