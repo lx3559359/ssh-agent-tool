@@ -81,6 +81,12 @@ const {
 const {
   reportRendererError
 } = require('./renderer-error-report')
+const {
+  nativeUpdateCheck,
+  nativeUpdateDownload,
+  nativeUpdateInstall,
+  nativeUpdateState
+} = require('./native-updater')
 
 // Security: whitelist of safe environment variables for Linux/Mac/Windows
 const SAFE_ENV_KEYS = [
@@ -257,6 +263,10 @@ function initIpc () {
       sessionLogDir: await getDiagnosticSessionLogDir()
     }),
     reportRendererError: (payload) => reportRendererError(payload, log),
+    nativeUpdateCheck,
+    nativeUpdateDownload,
+    nativeUpdateInstall,
+    nativeUpdateState,
     setTitle: (title) => {
       const win = globalState.get('win')
       win && win.setTitle((packInfo.productName || packInfo.name) + ' - ' + title)

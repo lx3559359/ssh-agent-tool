@@ -122,6 +122,7 @@
     "diffie-hellman": "^5.0.3",
     "electerm-sync": "2.0.0",
     "electron-log": "4.3.5",
+    "electron-updater": "^6.8.9",
     "express": "5.2.1",
     "express-ws": "5.0.2",
     "fast-deep-equal": "3.1.3",
