@@ -8,7 +8,6 @@ const {
 } = require('../common/runtime-constants')
 const { initCommandLine } = require('./command-line')
 const globalState = require('./glob-state')
-const { getUserConfigNoEnc, getDbConfig } = require('./get-config')
 const {
   setupDeepLinkHandlers
 } = require('./deep-link')
@@ -53,6 +52,7 @@ exports.createApp = async function () {
   // Keep the legacy internal app name so Electron safeStorage can decrypt
   // API keys and SSH settings saved before the ShellPilot rebrand.
   app.setName(safeStorageAppName)
+  const { getUserConfigNoEnc, getDbConfig } = require('./get-config')
   // Set desktop name so Linux taskbars (e.g. UOS/Deepin dde-dock) can match
   // the window to the .desktop file embedded in the AppImage.
   if (process.platform === 'linux' && app.setDesktopName) {

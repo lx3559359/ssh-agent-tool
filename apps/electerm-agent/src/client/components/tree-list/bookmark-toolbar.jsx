@@ -20,6 +20,44 @@ import { packInfo } from '../../common/constants'
 
 const e = window.translate
 
+function csvCell (value) {
+  const text = String(value ?? '')
+  return `"${text.replace(/"/g, '""')}"`
+}
+
+function getConnectionInventoryCsv (bookmarks = []) {
+  const headers = [
+    'title',
+    'type',
+    'host',
+    'port',
+    'username',
+    'authType',
+    'password',
+    'privateKey',
+    'passphrase',
+    'profileId',
+    'description'
+  ]
+  const rows = (bookmarks || []).map(item => [
+    item.title || item.name || '',
+    item.type || 'ssh',
+    item.host || '',
+    item.port || '',
+    item.username || '',
+    item.authType || '',
+    item.password || '',
+    item.privateKey || '',
+    item.passphrase || '',
+    item.profile || item.profileId || item.sshProfile || '',
+    item.description || ''
+  ])
+  return [
+    headers.map(csvCell).join(','),
+    ...rows.map(row => row.map(csvCell).join(','))
+  ].join('\n')
+}
+
 export default function BookmarkToolbar (props) {
   const {
     onNewBookmark,
@@ -66,6 +104,15 @@ export default function BookmarkToolbar (props) {
     const stamp = time(undefined, 'YYYY-MM-DD-HH-mm-ss')
     download('aigshell-bookmarks-encrypted-' + stamp + '.json', txt)
   }
+  const handleDownloadConnectionInventory = () => {
+    const ok = window.confirm('将导出包含明文密码/密钥路径的连接清单 CSV，请只保存在可信位置。是否继续？')
+    if (!ok) {
+      return
+    }
+    const txt = '\uFEFF' + getConnectionInventoryCsv(bookmarks)
+    const stamp = time(undefined, 'YYYY-MM-DD-HH-mm-ss')
+    download('shellpilot-connections-with-credentials-' + stamp + '.csv', txt)
+  }
   const handleToggleEdit = () => {
     window.store.bookmarkSelectMode = true
   }
@@ -110,6 +157,11 @@ export default function BookmarkToolbar (props) {
     {
       label: `${e('export')} (加密)`,
       onClick: handleDownloadEncrypted,
+      icon: <ExportOutlined />
+    },
+    {
+      label: '导出连接清单 CSV（含账号密码）',
+      onClick: handleDownloadConnectionInventory,
       icon: <ExportOutlined />
     },
     {

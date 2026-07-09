@@ -14,7 +14,7 @@ export const aiConfigsArr = [
 
 export const requiredAIConfigsArr = [
   'baseURLAI',
-  'modelAI'
+  'apiKeyAI'
 ]
 
 export function isAIConfigMissing (config = {}) {

@@ -81,6 +81,40 @@ test('ShellPilot product name is used for app and window titles', () => {
   assert.doesNotMatch(ipc, /setTitle\(packInfo\.name/)
 })
 
+test('safe storage app name is set before encrypted config modules load', () => {
+  const createApp = read('src/app/lib/create-app.js')
+  const appEntry = read('src/app/app.js')
+  const setNameIndex = createApp.indexOf('app.setName(safeStorageAppName)')
+  const getConfigRequireIndex = createApp.indexOf("require('./get-config')")
+  const entrySetNameIndex = appEntry.indexOf('electronApp.setName(safeStorageAppName)')
+  const entrySetPathIndex = appEntry.indexOf("electronApp.setPath('userData'")
+  const entryLogRequireIndex = appEntry.indexOf("require('./common/log')")
+  const entryCreateAppRequireIndex = appEntry.indexOf("require('./lib/create-app')")
+
+  assert.notEqual(setNameIndex, -1)
+  assert.notEqual(getConfigRequireIndex, -1)
+  assert.notEqual(entrySetNameIndex, -1)
+  assert.notEqual(entrySetPathIndex, -1)
+  assert.notEqual(entryLogRequireIndex, -1)
+  assert.notEqual(entryCreateAppRequireIndex, -1)
+  assert.ok(
+    getConfigRequireIndex > setNameIndex,
+    'get-config must load after app.setName(safeStorageAppName)'
+  )
+  assert.ok(
+    entrySetPathIndex > entrySetNameIndex,
+    'app entry must set legacy userData after the safe storage app name'
+  )
+  assert.ok(
+    entryLogRequireIndex > entrySetPathIndex,
+    'app entry must set legacy userData before loading log'
+  )
+  assert.ok(
+    entryCreateAppRequireIndex > entrySetPathIndex,
+    'app entry must set legacy userData before loading create-app'
+  )
+})
+
 test('ShellPilot icon assets are present for app chrome and packaging', () => {
   const files = [
     'build/assets/shellpilot.ico',

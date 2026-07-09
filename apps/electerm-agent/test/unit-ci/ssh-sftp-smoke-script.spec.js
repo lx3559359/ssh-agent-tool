@@ -20,7 +20,7 @@ test('SSH/SFTP smoke script is reusable and keeps credentials out of source', ()
   assert.match(source, /sftpOp\(sftp,\s*'rename'/)
   assert.match(source, /sftpOp\(sftp,\s*'unlink'/)
   assert.doesNotMatch(source, /23\.94\.104\.203/)
-  assert.doesNotMatch(source, /g4jJ6qcT41YWY3yfX1/)
+  assert.doesNotMatch(source, /example-secret-password/)
 })
 
 test('package exposes SSH/SFTP smoke test command', () => {

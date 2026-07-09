@@ -514,13 +514,11 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
         </Form.Item>
         <Form.Item
           label={e('modelAi')}
-          required
         >
           <Space.Compact className='width-100'>
             <Form.Item
               name='modelAI'
               noStyle
-              rules={[{ required: true, message: '请输入、选择或拉取模型' }]}
             >
               <AutoComplete
                 options={modelOptions}
@@ -543,6 +541,7 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
         <Form.Item
           label='API 密钥'
           name='apiKeyAI'
+          rules={[{ required: true, message: '请输入 API 密钥' }]}
         >
           <Password placeholder='输入你的 API 密钥' />
         </Form.Item>
@@ -563,7 +562,6 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
         <Form.Item
           label={e('roleAI')}
           name='roleAI'
-          rules={[{ required: true, message: '请输入 AI 角色或系统提示词' }]}
         >
           <AutoComplete options={defaultRoles} placement='topLeft'>
             <Input.TextArea
@@ -576,7 +574,6 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
         <Form.Item
           label={e('language')}
           name='languageAI'
-          rules={[{ required: true, message: '请输入回答语言' }]}
         >
           <AutoComplete options={defaultLangs} placement='topLeft'>
             <Input
