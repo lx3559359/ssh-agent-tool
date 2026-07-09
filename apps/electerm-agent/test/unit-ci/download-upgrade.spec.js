@@ -9,6 +9,8 @@ const {
   buildUpgradeErrorMessage,
   finishUpgradeDownload,
   getRequiredReleaseAsset,
+  buildUpgradeInstallPlan,
+  launchUpgradeInstaller,
   selectReleaseAsset,
   writeUpgradeLog
 } = require(path.resolve(__dirname, '../../src/app/server/download-upgrade'))
@@ -52,14 +54,14 @@ test('writes structured update logs for diagnostics', () => {
   assert.equal(logs.length, 2)
   assert.deepEqual(logs[0], [
     'info',
-    'AIGShell update download-start',
+    'ShellPilot update download-start',
     {
       tag: 'v3.15.106',
       asset: 'AIGShell-3.15.106-win-x64-installer.exe'
     }
   ])
   assert.equal(logs[1][0], 'error')
-  assert.equal(logs[1][1], 'AIGShell update download-failed')
+  assert.equal(logs[1][1], 'ShellPilot update download-failed')
   assert.equal(logs[1][2], err)
 })
 
@@ -241,5 +243,73 @@ test('finishes update downloads only when the installer file is complete', () =>
     'end',
     'unknown-size-ok',
     'AIGShell 更新安装包下载不完整：已下载 512 字节，期望 1024 字节。请重新下载。'
+  ])
+})
+
+test('builds a silent Windows installer launch plan for smooth in-app updates', () => {
+  const installerPath = 'C:\\Temp\\ShellPilot-0.2.5-win-x64-installer.exe'
+
+  assert.deepEqual(
+    buildUpgradeInstallPlan(installerPath, {
+      isWin: true
+    }),
+    {
+      command: installerPath,
+      args: ['/S'],
+      options: {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true
+      },
+      shouldQuitApp: true
+    }
+  )
+
+  assert.equal(
+    buildUpgradeInstallPlan('/tmp/ShellPilot-0.2.5-mac-x64.dmg', {
+      isWin: false
+    }),
+    null
+  )
+})
+
+test('launches the downloaded Windows installer detached and asks the parent app to quit', async () => {
+  const installerPath = 'C:\\Temp\\ShellPilot-0.2.5-win-x64-installer.exe'
+  const calls = []
+  const fakeChild = {
+    once: (eventName, handler) => {
+      calls.push(['once', eventName, typeof handler])
+    },
+    unref: () => {
+      calls.push(['unref'])
+    }
+  }
+
+  const result = await launchUpgradeInstaller({
+    localPath: installerPath,
+    platformInfo: {
+      isWin: true
+    },
+    spawnImpl: (command, args, options) => {
+      calls.push(['spawn', command, args, options])
+      return fakeChild
+    },
+    notifyParent: message => calls.push(['notify', message]),
+    waitMs: 0
+  })
+
+  assert.equal(result.mode, 'smooth-install')
+  assert.deepEqual(calls, [
+    ['spawn', installerPath, ['/S'], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true
+    }],
+    ['once', 'error', 'function'],
+    ['unref'],
+    ['notify', {
+      quitForUpgrade: true,
+      installerPath
+    }]
   ])
 })

@@ -138,6 +138,14 @@ async function initAppServer () {
       sshKeysPath
     }, sysLocale)
     child.on('message', (m) => {
+      if (m && m.quitForUpgrade) {
+        log.info('ShellPilot update requested app quit', {
+          installerPath: m.installerPath
+        })
+        const win = globalState.get('win')
+        win && win.close()
+        return
+      }
       if (m && m.showFileInFolder) {
         if (!isMac) {
           shell.showItemInFolder(m.showFileInFolder)
