@@ -2,7 +2,8 @@ const path = require('path')
 
 function resolveSmokePaths ({
   projectRoot = path.resolve(__dirname, '../..'),
-  tmpRoot
+  tmpRoot,
+  exePath
 } = {}) {
   const root = tmpRoot || path.join(
     require('os').tmpdir(),
@@ -13,7 +14,7 @@ function resolveSmokePaths ({
 
   return {
     tmpRoot: root,
-    exePath: path.join(projectRoot, 'dist', 'win-unpacked', 'AIGShell.exe'),
+    exePath: exePath || path.join(projectRoot, 'dist', 'win-unpacked', 'AIGShell.exe'),
     dataPath,
     mainDbPath: path.join(userPath, 'electerm.db'),
     dataDbPath: path.join(userPath, 'electerm_data.db')

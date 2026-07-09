@@ -8,6 +8,9 @@ const {
   validatePortableZipExtractedFiles,
   validateSmokeResult
 } = require(path.resolve(__dirname, '../../build/bin/package-smoke-utils'))
+const {
+  parseArgs
+} = require(path.resolve(__dirname, '../../build/bin/package-smoke-test'))
 
 test('package smoke paths target the unpacked AIGShell app and isolated data folder', () => {
   const paths = resolveSmokePaths({
@@ -30,6 +33,29 @@ test('package smoke paths target the unpacked AIGShell app and isolated data fol
   assert.equal(
     paths.dataDbPath,
     'C:\\Temp\\aigshell-package-smoke-test\\data\\users\\default_user\\electerm_data.db'
+  )
+})
+
+test('package smoke paths can target an installed or portable AIGShell executable', () => {
+  const paths = resolveSmokePaths({
+    projectRoot: 'C:\\work\\aigshell',
+    tmpRoot: 'C:\\Temp\\aigshell-package-smoke-test',
+    exePath: 'D:\\AIGShell\\AIGShell.exe'
+  })
+
+  assert.equal(paths.exePath, 'D:\\AIGShell\\AIGShell.exe')
+  assert.equal(
+    paths.dataPath,
+    'C:\\Temp\\aigshell-package-smoke-test\\data'
+  )
+})
+
+test('package smoke cli parser accepts an explicit app path', () => {
+  assert.deepEqual(
+    parseArgs(['--app', 'D:\\AIGShell\\AIGShell.exe']),
+    {
+      app: 'D:\\AIGShell\\AIGShell.exe'
+    }
   )
 })
 

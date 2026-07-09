@@ -10,6 +10,13 @@ const {
 const timeoutMs = Number(process.env.AIGSHELL_PACKAGE_SMOKE_TIMEOUT || 15000)
 const intervalMs = 500
 
+function parseArgs (argv = process.argv.slice(2)) {
+  const appIndex = argv.indexOf('--app')
+  return {
+    app: appIndex >= 0 ? argv[appIndex + 1] : undefined
+  }
+}
+
 function sleep (ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
@@ -56,7 +63,10 @@ async function main () {
     return
   }
 
-  const paths = resolveSmokePaths()
+  const args = parseArgs()
+  const paths = resolveSmokePaths({
+    exePath: args.app ? path.resolve(args.app) : undefined
+  })
   if (!fs.existsSync(paths.exePath)) {
     throw new Error(`AIGShell package not found: ${paths.exePath}. Run npm run b first.`)
   }
@@ -88,7 +98,14 @@ async function main () {
   }
 }
 
-main().catch((err) => {
-  console.error(err.stack || err.message)
-  process.exit(1)
-})
+if (require.main === module) {
+  main().catch((err) => {
+    console.error(err.stack || err.message)
+    process.exit(1)
+  })
+}
+
+module.exports = {
+  main,
+  parseArgs
+}
