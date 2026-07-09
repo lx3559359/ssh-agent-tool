@@ -8,7 +8,8 @@ function normalizeChannel (channel) {
 
 function buildUpdateApprovalManifest (version = pack.version, options = {}) {
   return {
-    product: 'AIGShell',
+    product: 'ShellPilot',
+    compatibleProducts: ['ShellPilot', 'AIGShell'],
     channel: normalizeChannel(options.channel),
     publishApproved: true,
     version,
@@ -25,8 +26,11 @@ function validateUpdateApprovalManifest (manifest, version = pack.version, optio
   if (!manifest || typeof manifest !== 'object') {
     throw new Error('aigshell-update.json must contain an object')
   }
-  if (manifest.product !== 'AIGShell') {
-    throw new Error('aigshell-update.json product must be AIGShell')
+  const compatibleProducts = Array.isArray(manifest.compatibleProducts)
+    ? manifest.compatibleProducts
+    : [manifest.product]
+  if (!compatibleProducts.includes('ShellPilot') && !compatibleProducts.includes('AIGShell')) {
+    throw new Error('aigshell-update.json product must be compatible with ShellPilot or AIGShell')
   }
   if (manifest.channel !== channel) {
     throw new Error(`aigshell-update.json channel must be ${channel}`)

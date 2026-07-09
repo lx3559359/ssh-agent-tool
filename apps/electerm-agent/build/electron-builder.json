@@ -1,5 +1,5 @@
 {
-  "appId": "com.lx3559359.aigshell",
+  "appId": "com.lx3559359.shellpilot",
   "directories": {
     "app": "work/app",
     "output": "dist",
@@ -18,7 +18,7 @@
       "appx",
       "nsis"
     ],
-    "icon": "build/assets/aigshell.ico",
+    "icon": "build/assets/shellpilot.ico",
     "publish": {
       "provider": "github",
       "owner": "lx3559359",

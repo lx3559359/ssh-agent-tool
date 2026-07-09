@@ -102,9 +102,12 @@ export function hasApprovedUpdateManifest (release, options = {}) {
   const manifest = findApprovalManifest(release)
   const version = cleanVersion(options.version || release?.tag_name)
   const updateChannel = getUpdateChannel(options)
+  const compatibleProducts = Array.isArray(manifest?.compatibleProducts)
+    ? manifest.compatibleProducts
+    : [manifest?.product]
   return Boolean(
     manifest &&
-    manifest.product === 'AIGShell' &&
+    (compatibleProducts.includes('ShellPilot') || compatibleProducts.includes('AIGShell')) &&
     manifest.channel === updateChannel &&
     manifest.publishApproved === true &&
     cleanVersion(manifest.version) === version

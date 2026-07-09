@@ -119,8 +119,8 @@ export default function AIGShellTopBar ({ store }) {
   return (
     <div className='aigshell-topbar'>
       <div className='aigshell-topbar-brand'>
-        <img src={logoPath1} alt='AIGShell' />
-        <span className='aigshell-topbar-name'>AIGShell</span>
+        <img src={logoPath1} alt='ShellPilot' />
+        <span className='aigshell-topbar-name'>ShellPilot</span>
         <span className='aigshell-topbar-separator' />
         <span className='aigshell-topbar-current' title={title}>{title}</span>
         <Tooltip title={online ? '已连接' : '未连接'}>

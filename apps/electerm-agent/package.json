@@ -1,7 +1,7 @@
 {
   "name": "ssh-agent-tool",
   "version": "0.2.1",
-  "productName": "AIGShell",
+  "productName": "ShellPilot",
   "description": "基于 Electerm 二次开发的 Windows 优先 SSH、SFTP 和 AI Agent 客户端",
   "main": "app.js",
   "bin": {

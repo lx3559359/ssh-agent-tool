@@ -281,7 +281,8 @@ test('builds the stable update approval manifest required by clients', () => {
       generatedAt: '<dynamic>'
     },
     {
-      product: 'AIGShell',
+      product: 'ShellPilot',
+      compatibleProducts: ['ShellPilot', 'AIGShell'],
       channel: 'stable',
       publishApproved: true,
       version: '3.15.105',
@@ -297,7 +298,8 @@ test('builds and validates beta update approval manifests for prerelease channel
       generatedAt: '<dynamic>'
     },
     {
-      product: 'AIGShell',
+      product: 'ShellPilot',
+      compatibleProducts: ['ShellPilot', 'AIGShell'],
       channel: 'beta',
       publishApproved: true,
       version: '3.15.106-beta.1',
