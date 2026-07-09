@@ -1,4 +1,6 @@
 const { execFile } = require('child_process')
+const fs = require('fs')
+const path = require('path')
 
 const ALLOWED_LOCAL_CLI_TOOLS = [
   'ssh-keygen',
@@ -88,17 +90,119 @@ function buildErrorMessage (result) {
   )
 }
 
-function createCodexCliStatusChecker ({
-  execFileImpl = execFile,
-  platform = process.platform
+function getCodexDesktopCandidatePaths ({
+  platform = process.platform,
+  env = process.env
 } = {}) {
-  return async function getCodexCliStatus () {
+  if (platform !== 'win32' || !env.LOCALAPPDATA) {
+    return []
+  }
+
+  const binRoot = path.join(env.LOCALAPPDATA, 'OpenAI', 'Codex', 'bin')
+  try {
+    return fs.readdirSync(binRoot, { withFileTypes: true })
+      .filter(entry => entry.isDirectory())
+      .map(entry => path.join(binRoot, entry.name, 'codex.exe'))
+      .filter(file => fs.existsSync(file))
+      .map(file => {
+        let mtimeMs = 0
+        try {
+          mtimeMs = fs.statSync(file).mtimeMs
+        } catch (error) {
+          mtimeMs = 0
+        }
+        return { file, mtimeMs }
+      })
+      .sort((a, b) => b.mtimeMs - a.mtimeMs)
+      .map(item => item.file)
+  } catch (error) {
+    return []
+  }
+}
+
+function createCodexCliResolver ({
+  execFileImpl = execFile,
+  platform = process.platform,
+  env = process.env,
+  codexDesktopCandidatePaths
+} = {}) {
+  return async function resolveCodexCli () {
     const locator = platform === 'win32'
       ? { file: 'where.exe', args: ['codex'] }
       : { file: 'which', args: ['codex'] }
     const located = await execFileSafe(execFileImpl, locator.file, locator.args)
-    const installPath = firstOutputLine(located.stdout)
-    if (located.error || !installPath) {
+    const systemInstallPath = firstOutputLine(located.stdout)
+    const desktopCandidatePaths = codexDesktopCandidatePaths || getCodexDesktopCandidatePaths({ platform, env })
+    const candidates = [
+      {
+        file: 'codex',
+        argsPrefix: [],
+        installPath: systemInstallPath || 'codex',
+        source: 'system'
+      },
+      ...desktopCandidatePaths
+        .map(file => ({
+          file,
+          argsPrefix: [],
+          installPath: file,
+          source: 'codex-desktop'
+        }))
+    ]
+    const errors = []
+
+    for (const candidate of candidates) {
+      const version = await execFileSafe(
+        execFileImpl,
+        candidate.file,
+        [...candidate.argsPrefix, '--version'],
+        { timeoutMs: candidate.source === 'system' ? 5000 : 15000 }
+      )
+      if (!version.error) {
+        return {
+          ...candidate,
+          installed: true,
+          available: true,
+          version: firstOutputLine(version.stdout) || firstOutputLine(version.stderr),
+          locatedError: buildErrorMessage(located),
+          error: ''
+        }
+      }
+      errors.push({
+        source: candidate.source,
+        installPath: candidate.installPath,
+        error: buildErrorMessage(version)
+      })
+    }
+
+    return {
+      file: '',
+      argsPrefix: [],
+      installPath: systemInstallPath || firstOutputLine(codexDesktopCandidatePaths?.join('\n') || ''),
+      source: '',
+      installed: Boolean(systemInstallPath || desktopCandidatePaths.length),
+      available: false,
+      version: '',
+      locatedError: buildErrorMessage(located),
+      error: errors.map(item => `${item.installPath}: ${item.error}`).filter(Boolean).join('\n') || buildErrorMessage(located)
+    }
+  }
+}
+
+function createCodexCliStatusChecker ({
+  execFileImpl = execFile,
+  platform = process.platform,
+  env = process.env,
+  codexDesktopCandidatePaths
+} = {}) {
+  return async function getCodexCliStatus () {
+    const resolved = await createCodexCliResolver({
+      execFileImpl,
+      platform,
+      env,
+      codexDesktopCandidatePaths
+    })()
+
+    if (!resolved.installed) {
       return {
         provider: 'codex',
         name: 'Codex CLI',
@@ -109,24 +213,23 @@ function createCodexCliStatusChecker ({
         authMode: 'official-cli',
         loginStatus: 'unknown',
         canUseExistingLogin: false,
-        error: buildErrorMessage(located),
+        error: resolved.error,
         guidance: '未检测到 Codex CLI。请先安装官方 Codex CLI，并在系统终端中运行 codex login 完成 ChatGPT 账号或 API Key 登录。'
       }
     }
 
-    const version = await execFileSafe(execFileImpl, 'codex', ['--version'])
-    if (version.error) {
+    if (!resolved.available) {
       return {
         provider: 'codex',
         name: 'Codex CLI',
         installed: true,
         available: false,
         version: '',
-        installPath,
+        installPath: resolved.installPath,
         authMode: 'official-cli',
         loginStatus: 'unknown',
         canUseExistingLogin: false,
-        error: buildErrorMessage(version),
+        error: resolved.error,
         guidance: 'Codex CLI 已安装，但当前无法执行。请在系统终端运行 codex --version 和 codex login，确认安装、权限和登录状态正常后重试。'
       }
     }
@@ -136,21 +239,26 @@ function createCodexCliStatusChecker ({
       name: 'Codex CLI',
       installed: true,
       available: true,
-      version: firstOutputLine(version.stdout) || firstOutputLine(version.stderr),
-      installPath,
+      version: resolved.version,
+      installPath: resolved.installPath,
       authMode: 'official-cli',
       loginStatus: 'managed-by-official-cli',
       canUseExistingLogin: true,
       error: '',
-      guidance: 'Codex CLI 可用。AIGShell 将通过官方 codex 命令复用其登录态，不保存账号密码。'
+      guidance: resolved.source === 'codex-desktop'
+        ? 'Codex CLI 可用。AIGShell 将通过 Codex Desktop 自带命令复用官方登录态，不保存账号密码。'
+        : 'Codex CLI 可用。AIGShell 将通过官方 codex 命令复用其登录态，不保存账号密码。'
     }
   }
 }
 
 function createLocalCliRunner ({
-  execFileImpl = execFile
+  execFileImpl = execFile,
+  platform = process.platform,
+  env = process.env,
+  codexDesktopCandidatePaths
 } = {}) {
-  return function runLocalCli ({
+  return async function runLocalCli ({
     tool,
     args = [],
     cwd,
@@ -165,8 +273,36 @@ function createLocalCliRunner ({
       })
     }
 
+    let executable = command
+    let executableArgs = normalizeArgs(args)
+    let resolvedTool = command
+    if (command === 'codex') {
+      const resolved = await createCodexCliResolver({
+        execFileImpl,
+        platform,
+        env,
+        codexDesktopCandidatePaths
+      })()
+      if (!resolved.available) {
+        return {
+          ok: false,
+          tool: command,
+          args: executableArgs,
+          cwd: cwd || '',
+          exitCode: 1,
+          signal: '',
+          stdout: '',
+          stderr: '',
+          error: resolved.error || 'Codex CLI 当前不可用，请先安装或登录官方 Codex CLI。'
+        }
+      }
+      executable = resolved.file
+      executableArgs = [...resolved.argsPrefix, ...executableArgs]
+      resolvedTool = resolved.installPath || resolved.file
+    }
+
     return new Promise(resolve => {
-      execFileImpl(command, normalizeArgs(args), {
+      execFileImpl(executable, executableArgs, {
         cwd: cwd || undefined,
         timeout: normalizeTimeout(timeoutMs),
         windowsHide: true,
@@ -177,6 +313,7 @@ function createLocalCliRunner ({
         resolve({
           ok: !error,
           tool: command,
+          resolvedTool,
           args: normalizeArgs(args),
           cwd: cwd || '',
           exitCode: error?.code ?? 0,
@@ -195,6 +332,7 @@ const getCodexCliStatus = createCodexCliStatusChecker()
 
 exports.getAllowedLocalCliTools = getAllowedLocalCliTools
 exports.isAllowedLocalCliTool = isAllowedLocalCliTool
+exports.createCodexCliResolver = createCodexCliResolver
 exports.createCodexCliStatusChecker = createCodexCliStatusChecker
 exports.getCodexCliStatus = getCodexCliStatus
 exports.createLocalCliRunner = createLocalCliRunner

@@ -70,6 +70,41 @@ test('Codex CLI status checker reports official CLI availability without reading
   assert.doesNotMatch(source, /\.codex[\\/]auth/)
 })
 
+test('Codex CLI status checker falls back to the Codex Desktop bundled CLI on Windows', async () => {
+  const {
+    createCodexCliStatusChecker
+  } = require(localCliPath)
+  const calls = []
+  const checker = createCodexCliStatusChecker({
+    platform: 'win32',
+    codexDesktopCandidatePaths: ['C:\\Users\\me\\AppData\\Local\\OpenAI\\Codex\\bin\\hash\\codex.exe'],
+    execFileImpl: (file, args, options, callback) => {
+      calls.push({ file, args, options })
+      if (file === 'where.exe') {
+        callback(null, 'C:\\Program Files\\WindowsApps\\OpenAI.Codex\\codex.exe\n', '')
+        return
+      }
+      if (file === 'codex') {
+        const error = new Error('Access is denied')
+        error.code = 'EACCES'
+        callback(error, '', 'Access is denied')
+        return
+      }
+      callback(null, 'codex-cli 0.142.5\n', '')
+    }
+  })
+
+  const result = await checker()
+
+  assert.equal(result.installed, true)
+  assert.equal(result.available, true)
+  assert.equal(result.canUseExistingLogin, true)
+  assert.equal(result.installPath, 'C:\\Users\\me\\AppData\\Local\\OpenAI\\Codex\\bin\\hash\\codex.exe')
+  assert.match(result.version, /0\.142\.5/)
+  assert.equal(calls[2].file, 'C:\\Users\\me\\AppData\\Local\\OpenAI\\Codex\\bin\\hash\\codex.exe')
+  assert.equal(calls[2].options.shell, false)
+})
+
 test('Codex CLI status checker distinguishes installed but unusable clients', async () => {
   const {
     createCodexCliStatusChecker
@@ -94,6 +129,44 @@ test('Codex CLI status checker distinguishes installed but unusable clients', as
   assert.equal(result.canUseExistingLogin, false)
   assert.match(result.error, /Access is denied/)
   assert.match(result.guidance, /Codex CLI/)
+})
+
+test('local CLI runner executes codex through the resolved Codex Desktop CLI when needed', async () => {
+  const {
+    createLocalCliRunner
+  } = require(localCliPath)
+  const calls = []
+  const runner = createLocalCliRunner({
+    platform: 'win32',
+    codexDesktopCandidatePaths: ['C:\\Users\\me\\AppData\\Local\\OpenAI\\Codex\\bin\\hash\\codex.exe'],
+    execFileImpl: (file, args, options, callback) => {
+      calls.push({ file, args, options })
+      if (file === 'codex' && args[0] === '--version') {
+        const error = new Error('Access is denied')
+        error.code = 'EACCES'
+        callback(error, '', 'Access is denied')
+        return
+      }
+      if (file.endsWith('codex.exe') && args[0] === '--version') {
+        callback(null, 'codex-cli 0.142.5\n', '')
+        return
+      }
+      callback(null, 'codex ran\n', '')
+    }
+  })
+
+  const result = await runner({
+    tool: 'codex',
+    args: ['--help']
+  })
+
+  assert.equal(result.ok, true)
+  assert.equal(result.tool, 'codex')
+  assert.equal(result.resolvedTool, 'C:\\Users\\me\\AppData\\Local\\OpenAI\\Codex\\bin\\hash\\codex.exe')
+  assert.equal(result.stdout, 'codex ran\n')
+  assert.equal(calls.at(-1).file, 'C:\\Users\\me\\AppData\\Local\\OpenAI\\Codex\\bin\\hash\\codex.exe')
+  assert.deepEqual(calls.at(-1).args, ['--help'])
+  assert.equal(calls.at(-1).options.shell, false)
 })
 
 test('local CLI runner rejects tools outside the allowlist', async () => {
