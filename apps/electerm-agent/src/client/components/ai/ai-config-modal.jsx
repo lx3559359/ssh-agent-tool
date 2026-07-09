@@ -37,7 +37,7 @@ export default auto(function AIConfigModal ({ store }) {
       open={showAIConfigModal}
       onCancel={handleClose}
       footer={null}
-      title='AI Config'
+      title='模型 API 配置'
       width='80%'
       destroyOnClose
       maskClosable={false}
