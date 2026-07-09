@@ -44,7 +44,8 @@
     "w": "./build/bin/web-release",
     "t": "electron work/app/app.js",
     "lock": "npm i --package-lock-only",
-    "smoke:ai": "cross-env NODE_ENV=development electron build/bin/smoke-ai.js"
+    "smoke:ai": "cross-env NODE_ENV=development electron build/bin/smoke-ai.js",
+    "configure:ai": "cross-env NODE_ENV=development electron build/bin/configure-ai.js"
   },
   "license": "MIT",
   "langugeRepo": "https://github.com/electerm/electerm-locales",
