@@ -73,6 +73,33 @@ test('bookmark group context menu exposes group actions', async () => {
   ])
 })
 
+test('sidebar bookmark context menu exposes direct connection management actions', async () => {
+  const {
+    buildBookmarkContextMenuItems
+  } = await import(moduleUrl)
+
+  const items = buildBookmarkContextMenuItems({
+    item: {
+      id: 'server-1',
+      title: 'prod-web-01',
+      type: 'ssh',
+      host: '10.0.1.23',
+      port: 22,
+      username: 'root'
+    },
+    isGroup: false,
+    staticList: true
+  })
+
+  assert.deepEqual(items.map(item => item.key), [
+    'open',
+    'edit',
+    'viewConnectionInfo',
+    'copyPublicInfo',
+    'delete'
+  ])
+})
+
 test('bookmark tree rows wire the context menu to row actions', () => {
   const source = fs.readFileSync(
     path.resolve(__dirname, '../../src/client/components/tree-list/tree-list-row.jsx'),

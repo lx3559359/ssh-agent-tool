@@ -75,8 +75,21 @@ export function buildBookmarkContextMenuItems ({
         label: label('打开连接')
       },
       {
+        key: 'edit',
+        label: label('编辑连接')
+      },
+      {
+        key: 'viewConnectionInfo',
+        label: label('查看连接信息')
+      },
+      {
         key: 'copyPublicInfo',
         label: label('复制连接信息')
+      },
+      {
+        key: 'delete',
+        label: label('删除连接'),
+        danger: true
       }
     ]
   }
