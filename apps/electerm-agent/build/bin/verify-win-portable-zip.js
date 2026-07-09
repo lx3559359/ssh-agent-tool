@@ -1,4 +1,5 @@
 const fs = require('fs')
+const path = require('path')
 const { spawnSync } = require('child_process')
 const pack = require('../../package.json')
 const {
@@ -8,7 +9,7 @@ const {
 } = require('./package-smoke-utils')
 
 function cleanupVerifyDir (tmpRoot) {
-  const base = require('path').basename(tmpRoot)
+  const base = path.basename(tmpRoot)
   if (!base.startsWith('aigshell-portable-verify-')) {
     return
   }
@@ -18,6 +19,34 @@ function cleanupVerifyDir (tmpRoot) {
   })
 }
 
+function buildExpandArchiveArgs ({
+  scriptPath,
+  zipPath,
+  extractPath
+}) {
+  return [
+    '-NoProfile',
+    '-ExecutionPolicy',
+    'Bypass',
+    '-File',
+    scriptPath,
+    zipPath,
+    extractPath
+  ]
+}
+
+function writeExpandArchiveScript (scriptPath) {
+  fs.mkdirSync(path.dirname(scriptPath), { recursive: true })
+  fs.writeFileSync(scriptPath, [
+    'param(',
+    '  [Parameter(Mandatory=$true)][string]$ZipPath,',
+    '  [Parameter(Mandatory=$true)][string]$ExtractPath',
+    ')',
+    'Expand-Archive -LiteralPath $ZipPath -DestinationPath $ExtractPath -Force',
+    ''
+  ].join('\r\n'))
+}
+
 function expandZip (zipPath, extractPath) {
   fs.rmSync(extractPath, {
     recursive: true,
@@ -25,15 +54,14 @@ function expandZip (zipPath, extractPath) {
   })
   fs.mkdirSync(extractPath, { recursive: true })
 
-  const result = spawnSync('powershell.exe', [
-    '-NoProfile',
-    '-ExecutionPolicy',
-    'Bypass',
-    '-Command',
-    'Expand-Archive -LiteralPath $args[0] -DestinationPath $args[1] -Force',
+  const scriptPath = path.join(path.dirname(extractPath), 'expand-aigshell-portable.ps1')
+  writeExpandArchiveScript(scriptPath)
+
+  const result = spawnSync('powershell.exe', buildExpandArchiveArgs({
+    scriptPath,
     zipPath,
     extractPath
-  ], {
+  }), {
     stdio: 'inherit',
     windowsHide: true
   })
@@ -67,4 +95,14 @@ function main () {
   }
 }
 
-main()
+if (require.main === module) {
+  main()
+}
+
+module.exports = {
+  buildExpandArchiveArgs,
+  cleanupVerifyDir,
+  expandZip,
+  main,
+  writeExpandArchiveScript
+}

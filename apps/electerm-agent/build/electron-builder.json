@@ -10,6 +10,7 @@
     "en-US"
   ],
   "asar": true,
+  "afterPack": "build/bin/after-pack-cleanup.js",
   "artifactName": "AIGShell-${version}-${os}-${arch}.${ext}",
   "win": {
     "target": [
