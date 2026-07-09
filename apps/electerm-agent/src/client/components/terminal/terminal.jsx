@@ -1609,7 +1609,7 @@ class Term extends Component {
   handleError = ({ message: errorMessage, from, srcId }) => {
     this.setState({
       terminalError: {
-        message: errorMessage || 'Failed to create terminal session',
+        message: errorMessage || '创建终端会话失败',
         from,
         srcId
       }

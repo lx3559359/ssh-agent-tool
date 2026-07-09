@@ -131,10 +131,10 @@ export default function FormRenderer ({ config, props }) {
       })
     setTesting(false)
     if (res) {
-      message.success('connection ok')
+      message.success('连接成功')
     } else {
-      const err = 'connection fails' +
-        (msg ? `: ${msg}` : '')
+      const err = '连接失败' +
+        (msg ? `：${msg}` : '')
       message.error(err)
     }
   }
@@ -152,7 +152,7 @@ export default function FormRenderer ({ config, props }) {
 
   const handleSubmit = async (evt, res, isTest = false) => {
     if (res.enableSsh === false && res.enableSftp === false) {
-      return message.warning('SSH and SFTP all disabled')
+      return message.warning('SSH 和 SFTP 不能同时禁用')
     }
     const obj = {
       ...props.formData,
