@@ -5,7 +5,8 @@ import {
   ExportOutlined,
   CodeOutlined,
   MenuOutlined,
-  EditOutlined
+  EditOutlined,
+  ProfileOutlined
 } from '@ant-design/icons'
 import { Button, Space, Dropdown, Flex } from 'antd'
 import time from '../../common/time'
@@ -26,6 +27,7 @@ export default function BookmarkToolbar (props) {
     onNewBookmark,
     onNewBookmarkGroup,
     onSshConfigs,
+    onConnectionInventory,
     bookmarkGroups,
     bookmarks
   } = props
@@ -126,6 +128,11 @@ export default function BookmarkToolbar (props) {
       label: '导出连接清单 CSV（含账号密码）',
       onClick: handleDownloadConnectionInventory,
       icon: <ExportOutlined />
+    },
+    {
+      label: '服务器详情 / 连接信息',
+      onClick: onConnectionInventory,
+      icon: <ProfileOutlined />
     },
     {
       label: e('loadSshConfigs'),

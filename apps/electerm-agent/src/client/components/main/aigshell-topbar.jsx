@@ -4,18 +4,24 @@ import {
   MessageOutlined,
   MoonOutlined,
   PlusCircleOutlined,
+  ProfileOutlined,
   ReloadOutlined,
   SettingOutlined,
   SunOutlined,
   ThunderboltOutlined
 } from '@ant-design/icons'
+import { useState } from 'react'
 import { Button, Popover, Tooltip } from 'antd'
 import QuickConnect from '../tabs/quick-connect'
 import WindowControl from '../tabs/window-control'
+import ConnectionInventoryModal from '../tree-list/connection-inventory-modal'
+import ConnectionInfoModal from '../tree-list/connection-info-modal'
 import { logoPath1, packInfo, statusMap } from '../../common/constants'
 import './aigshell-topbar.styl'
 
 export default function AIGShellTopBar ({ store }) {
+  const [showConnectionInventory, setShowConnectionInventory] = useState(false)
+  const [connectionInfoBookmark, setConnectionInfoBookmark] = useState(null)
   const currentTab = store.currentTab || {}
   const title = currentTab.title || currentTab.name || currentTab.host || '未连接'
   const online = currentTab.status === statusMap.success
@@ -30,6 +36,22 @@ export default function AIGShellTopBar ({ store }) {
 
   function handleCheckUpdate () {
     window.store.onCheckUpdate(true)
+  }
+
+  function handleOpenConnectionInventory () {
+    setShowConnectionInventory(true)
+  }
+
+  function handleCloseConnectionInventory () {
+    setShowConnectionInventory(false)
+  }
+
+  function handleViewConnectionInfo (bookmark) {
+    setConnectionInfoBookmark(bookmark)
+  }
+
+  function handleCloseConnectionInfo () {
+    setConnectionInfoBookmark(null)
   }
 
   const isLightTheme = store.config.theme === 'defaultLight'
@@ -69,6 +91,12 @@ export default function AIGShellTopBar ({ store }) {
       label: '备份同步',
       icon: <FolderAddOutlined />,
       onClick: window.store.openSettingSync
+    },
+    {
+      key: 'connections',
+      label: '连接信息',
+      icon: <ProfileOutlined />,
+      onClick: handleOpenConnectionInventory
     },
     {
       key: 'update',
@@ -138,6 +166,21 @@ export default function AIGShellTopBar ({ store }) {
         }
       </div>
       <WindowControl store={store} />
+      {
+        showConnectionInventory
+          ? (
+            <ConnectionInventoryModal
+              bookmarks={store.bookmarks}
+              onClose={handleCloseConnectionInventory}
+              onViewConnectionInfo={handleViewConnectionInfo}
+            />
+            )
+          : null
+      }
+      <ConnectionInfoModal
+        bookmark={connectionInfoBookmark}
+        onClose={handleCloseConnectionInfo}
+      />
     </div>
   )
 }

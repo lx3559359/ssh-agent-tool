@@ -24,6 +24,7 @@ import TreeListEditorOverlay from './tree-list-editor-overlay.jsx'
 import ConnectionInfoModal from './connection-info-modal'
 import TreeSearch from './tree-search'
 import VirtualTreeList from './virtual-tree-list'
+import ConnectionInventoryModal from './connection-inventory-modal'
 import { buildVisibleTreeRows } from './tree-list-rows'
 import { getRandomDefaultColor } from '../../common/rand-hex-color.js'
 import {
@@ -47,7 +48,8 @@ export default class ItemListTree extends Component {
       categoryId: '',
       searchSelectedRowKey: '',
       sort: null,
-      connectionInfoBookmark: null
+      connectionInfoBookmark: null,
+      showConnectionInventory: false
     }
     this.listRef = React.createRef()
   }
@@ -458,6 +460,18 @@ export default class ItemListTree extends Component {
   handleCloseConnectionInfo = () => {
     this.setState({
       connectionInfoBookmark: null
+    })
+  }
+
+  handleOpenConnectionInventory = () => {
+    this.setState({
+      showConnectionInventory: true
+    })
+  }
+
+  handleCloseConnectionInventory = () => {
+    this.setState({
+      showConnectionInventory: false
     })
   }
 
@@ -883,6 +897,7 @@ export default class ItemListTree extends Component {
         onNewBookmarkGroup={this.handleNewBookmarkGroup}
         onExport={this.handleExport}
         onSshConfigs={this.handleSshConfigs}
+        onConnectionInventory={this.handleOpenConnectionInventory}
         bookmarkGroups={this.props.bookmarkGroups}
         bookmarks={this.props.bookmarks}
       />
@@ -929,6 +944,17 @@ export default class ItemListTree extends Component {
           bookmark={this.state.connectionInfoBookmark}
           onClose={this.handleCloseConnectionInfo}
         />
+        {
+          this.state.showConnectionInventory
+            ? (
+              <ConnectionInventoryModal
+                bookmarks={this.props.bookmarks}
+                onClose={this.handleCloseConnectionInventory}
+                onViewConnectionInfo={bookmark => this.setState({ connectionInfoBookmark: bookmark })}
+              />
+              )
+            : null
+        }
       </div>
     )
   }
