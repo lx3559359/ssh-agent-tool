@@ -135,6 +135,7 @@ rm('-rf', 'work/app/.yarnclean')
 rm('-rf', 'work/app/package-lock.json')
 rm('-rf', 'work/app/yarn.lock')
 require('./clean-empty-folders').main()
+require('./verify-runtime-package').main()
 
 const endTime = +new Date()
 echo(`done pack prepare in ${(endTime - timeStart) / 1000} s`)

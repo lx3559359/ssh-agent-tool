@@ -3,8 +3,9 @@ const path = require('path')
 
 const TIMEOUT_MS = Number(process.env.SHELLPILOT_AI_SMOKE_TIMEOUT_MS || 45000)
 const USER_DATA_NAME = process.env.SHELLPILOT_USER_DATA_NAME || 'AIGShell'
+const SAFE_STORAGE_NAME = process.env.SHELLPILOT_SAFE_STORAGE_NAME || USER_DATA_NAME
 
-app.setName(USER_DATA_NAME)
+app.setName(SAFE_STORAGE_NAME)
 app.setPath('userData', path.join(app.getPath('appData'), USER_DATA_NAME))
 
 function withTimeout (promise, label, timeoutMs = TIMEOUT_MS) {
