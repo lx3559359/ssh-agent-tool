@@ -35,6 +35,7 @@ const extIconPath = isDev
   : 'icons/'
 
 const defaultUserName = require('./default-user-name')
+const packInfo = require(isDev ? '../../../package.json' : '../package.json')
 
 module.exports = {
   isTest: !!NODE_TEST,
@@ -52,5 +53,6 @@ module.exports = {
   defaultLang: 'zh_cn',
   tempDir: require('os').tmpdir(),
   homeOrTmp: os.homedir() || os.tmpdir(),
-  packInfo: require(isDev ? '../../../package.json' : '../package.json')
+  packInfo,
+  appDisplayName: packInfo.productName || packInfo.name
 }

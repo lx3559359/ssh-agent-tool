@@ -3,7 +3,7 @@ const {
 } = require('electron')
 const { createWindow } = require('./create-window')
 const {
-  packInfo
+  appDisplayName
 } = require('../common/runtime-constants')
 const { initCommandLine } = require('./command-line')
 const globalState = require('./glob-state')
@@ -49,11 +49,11 @@ installProcessErrorLogging({
 })
 
 exports.createApp = async function () {
-  app.setName(packInfo.name)
+  app.setName(appDisplayName)
   // Set desktop name so Linux taskbars (e.g. UOS/Deepin dde-dock) can match
   // the window to the .desktop file embedded in the AppImage.
   if (process.platform === 'linux' && app.setDesktopName) {
-    app.setDesktopName(packInfo.name)
+    app.setDesktopName(appDisplayName)
   }
   // Handle GPU issues on Linux
   // On Linux, disable GPU for compatibility

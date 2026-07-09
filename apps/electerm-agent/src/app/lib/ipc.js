@@ -251,7 +251,7 @@ function initIpc () {
     reportRendererError: (payload) => reportRendererError(payload, log),
     setTitle: (title) => {
       const win = globalState.get('win')
-      win && win.setTitle(packInfo.name + ' - ' + title)
+      win && win.setTitle((packInfo.productName || packInfo.name) + ' - ' + title)
     },
     setBackgroundColor: (color = '#33333300') => {
       const win = globalState.get('win')

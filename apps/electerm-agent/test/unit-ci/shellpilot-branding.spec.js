@@ -52,6 +52,23 @@ test('ShellPilot icons are used by app chrome, tray, loading screen, and waterma
   }
 })
 
+test('ShellPilot product name is used for app and window titles', () => {
+  const runtimeConstants = read('src/app/common/runtime-constants.js')
+  const createWindow = read('src/app/lib/create-window.js')
+  const createApp = read('src/app/lib/create-app.js')
+  const ipc = read('src/app/lib/ipc.js')
+  const initApp = read('src/app/lib/init-app.js')
+
+  assert.match(runtimeConstants, /appDisplayName: packInfo\.productName \|\| packInfo\.name/)
+  assert.match(createWindow, /title: appDisplayName/)
+  assert.match(createApp, /app\.setName\(appDisplayName\)/)
+  assert.match(createApp, /app\.setDesktopName\(appDisplayName\)/)
+  assert.match(ipc, /\(packInfo\.productName \|\| packInfo\.name\) \+ ' - ' \+ title/)
+  assert.match(initApp, /\$\{appDisplayName\} \$\{e\('isRunning'\)\}/)
+  assert.doesNotMatch(createWindow, /title: packInfo\.name/)
+  assert.doesNotMatch(ipc, /setTitle\(packInfo\.name/)
+})
+
 test('ShellPilot icon assets are present for app chrome and packaging', () => {
   const files = [
     'build/assets/shellpilot.ico',

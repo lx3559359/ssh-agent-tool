@@ -8,7 +8,7 @@ const {
 } = require('electron')
 const globalState = require('./glob-state')
 const {
-  packInfo
+  appDisplayName
 } = require('../common/runtime-constants')
 const {
   defaultLang
@@ -41,7 +41,7 @@ function initApp (langMap, config) {
     globalState.set('timer', setTimeout(() => globalState.get('win').minimize(), 500))
     if (Notification.isSupported()) {
       const notice = new Notification({
-        title: `${packInfo.name} ${e('isRunning')}, ${e('press')} ${config.hotkey} ${e('toShow')}`
+        title: `${appDisplayName} ${e('isRunning')}, ${e('press')} ${config.hotkey} ${e('toShow')}`
       })
       notice.show()
     }

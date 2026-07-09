@@ -3,7 +3,7 @@ const {
 } = require('electron')
 const { resolve } = require('path')
 const {
-  isDev, packInfo, iconPath, isMac,
+  isDev, packInfo, appDisplayName, iconPath, isMac,
   minWindowWidth, minWindowHeight
 } = require('../common/runtime-constants')
 const defaults = require('../common/default-setting')
@@ -32,7 +32,7 @@ exports.createWindow = async function (userConfig) {
     fullscreenable: true,
     minWidth: minWindowWidth,
     minHeight: minWindowHeight,
-    title: packInfo.name,
+    title: appDisplayName,
     frame: useSystemTitleBar,
     transparent: !useSystemTitleBar,
     backgroundColor: '#333333',
