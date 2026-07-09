@@ -35,6 +35,16 @@ test('windows nsis package is one-click so in-client updates do not show setup w
   assert.equal(config.nsis.allowToChangeInstallationDirectory, undefined)
 })
 
+test('windows nsis build refreshes the effective electron-builder config before packaging', () => {
+  const source = fs.readFileSync(
+    path.join(root, 'build/bin/build-win-nsis.js'),
+    'utf8'
+  )
+
+  assert.match(source, /prepareElectronBuilderConfig/)
+  assert.match(source, /prepareElectronBuilderConfig\(\)/)
+})
+
 test('renderer upgrade panel defaults to native updater instead of installer mirror download', () => {
   const source = fs.readFileSync(
     path.join(root, 'src/client/components/main/upgrade.jsx'),

@@ -6,11 +6,15 @@ const {
   builder,
   patchNsisKeepShortcuts
 } = require('./build-common')
+const {
+  prepareElectronBuilderConfig
+} = require('./prepare-electron-build')
 
 async function main () {
   const pb = builder
   echo('running build for win part nsis installer')
 
+  prepareElectronBuilderConfig()
   patchNsisKeepShortcuts()
 
   echo('build nsis')
