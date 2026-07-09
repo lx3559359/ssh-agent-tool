@@ -64,3 +64,9 @@ test('AIGShell top bar labels avoid ambiguous unfinished actions', () => {
   assert.match(topbar, /label:\s*'检查更新'/)
   assert.doesNotMatch(topbar, /label:\s*'备份'/)
 })
+test('right AI panel title avoids duplicate AI wording', () => {
+  const sidePanel = read('src/client/components/side-panel-r/side-panel-r.jsx')
+
+  assert.doesNotMatch(sidePanel, /\{tag\}\s*\{isAI\s*\?\s*'AI\s/)
+  assert.match(sidePanel, /isAI\s*\?\s*'助手'/)
+})

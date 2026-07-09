@@ -84,7 +84,7 @@ export default memo(function RightSidePanel (
       <Flex className='right-panel-title pd2' justify='space-between' align='center'>
         <div className='right-panel-title-main'>
           <Typography.Text className='right-panel-title-text' ellipsis>
-            {tag} {isAI ? 'AI 助手' : title}
+            {tag} {isAI ? '助手' : title}
           </Typography.Text>
           {
             isAI
