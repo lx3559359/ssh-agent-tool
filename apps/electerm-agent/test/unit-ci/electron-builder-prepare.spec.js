@@ -31,7 +31,7 @@ test('electron builder prepare script writes a local default publish channel', (
 
   const config = JSON.parse(fs.readFileSync(path.join(tmpRoot, 'electron-builder.json'), 'utf8'))
 
-  assert.equal(config.win.publish.channel, 'aigshell-local')
+  assert.equal(config.win.publish.channel, 'shellpilot-local')
 })
 
 test('electron builder prepare script keeps CI publish channel explicit', () => {
@@ -70,4 +70,27 @@ test('electron builder config cleans packaged batch scripts after native rebuild
   ))
 
   assert.equal(config.afterPack, 'build/bin/after-pack-cleanup.js')
+})
+
+test('after-pack cleanup rewrites updater cache name to ShellPilot', () => {
+  const {
+    patchPackagedUpdateConfig
+  } = require(path.resolve(__dirname, '../../build/bin/prepare-cleanup-utils'))
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'shellpilot-after-pack-'))
+  const resourcesDir = path.join(tmpRoot, 'resources')
+  fs.mkdirSync(resourcesDir, { recursive: true })
+  const updateConfigPath = path.join(resourcesDir, 'app-update.yml')
+  fs.writeFileSync(updateConfigPath, [
+    'owner: lx3559359',
+    'repo: ssh-agent-tool',
+    'updaterCacheDirName: ssh-agent-tool-updater',
+    ''
+  ].join('\n'))
+
+  try {
+    assert.equal(patchPackagedUpdateConfig(tmpRoot), true)
+    assert.match(fs.readFileSync(updateConfigPath, 'utf8'), /updaterCacheDirName: ShellPilot-updater/)
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true })
+  }
 })

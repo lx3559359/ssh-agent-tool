@@ -1,5 +1,9 @@
-const { removePackagedBatchScripts } = require('./prepare-cleanup-utils')
+const {
+  patchPackagedUpdateConfig,
+  removePackagedBatchScripts
+} = require('./prepare-cleanup-utils')
 
 module.exports = async function afterPackCleanup (context) {
   removePackagedBatchScripts(context.appOutDir)
+  patchPackagedUpdateConfig(context.appOutDir)
 }

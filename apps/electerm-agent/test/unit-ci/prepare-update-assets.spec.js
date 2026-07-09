@@ -14,7 +14,7 @@ const {
 test('prepares approved online update assets from the local electron-builder metadata', () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigshell-update-assets-'))
   try {
-    fs.writeFileSync(path.join(tempDir, 'aigshell-local.yml'), 'version: 3.15.107\n')
+    fs.writeFileSync(path.join(tempDir, 'shellpilot-local.yml'), 'version: 3.15.107\n')
 
     const result = prepareUpdateAssets({
       distDir: tempDir,
@@ -32,10 +32,55 @@ test('prepares approved online update assets from the local electron-builder met
   }
 })
 
-test('does not overwrite matching latest.yml while preparing approval metadata', () => {
+test('prepares update assets from legacy aigshell-local metadata as a fallback', () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigshell-update-assets-'))
   try {
     fs.writeFileSync(path.join(tempDir, 'aigshell-local.yml'), 'version: 3.15.107\n')
+
+    const result = prepareUpdateAssets({
+      distDir: tempDir,
+      version: '3.15.107',
+      channel: 'stable'
+    })
+
+    assert.equal(result.copiedLatest, true)
+    assert.equal(path.basename(result.localMetadataPath), 'aigshell-local.yml')
+    assert.equal(fs.readFileSync(path.join(tempDir, 'latest.yml'), 'utf8'), 'version: 3.15.107\n')
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('prepares update assets from the CI workflow metadata when present', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigshell-update-assets-'))
+  const oldWorkflowName = process.env.WORKFLOW_NAME
+  process.env.WORKFLOW_NAME = 'windows-electerm-agent'
+  try {
+    fs.writeFileSync(path.join(tempDir, 'windows-electerm-agent.yml'), 'version: 3.15.109\n')
+
+    const result = prepareUpdateAssets({
+      distDir: tempDir,
+      version: '3.15.109',
+      channel: 'stable'
+    })
+
+    assert.equal(result.copiedLatest, true)
+    assert.equal(path.basename(result.localMetadataPath), 'windows-electerm-agent.yml')
+    assert.equal(fs.readFileSync(path.join(tempDir, 'latest.yml'), 'utf8'), 'version: 3.15.109\n')
+  } finally {
+    if (oldWorkflowName === undefined) {
+      delete process.env.WORKFLOW_NAME
+    } else {
+      process.env.WORKFLOW_NAME = oldWorkflowName
+    }
+    fs.rmSync(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('does not overwrite matching latest.yml while preparing approval metadata', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigshell-update-assets-'))
+  try {
+    fs.writeFileSync(path.join(tempDir, 'shellpilot-local.yml'), 'version: 3.15.107\n')
     fs.writeFileSync(path.join(tempDir, 'latest.yml'), 'version: 3.15.107\n')
 
     const result = prepareUpdateAssets({
@@ -58,12 +103,12 @@ test('replaces stale latest.yml when same version metadata changed after repacka
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigshell-update-assets-'))
   try {
     fs.writeFileSync(
-      path.join(tempDir, 'aigshell-local.yml'),
-      'version: 3.15.108\npath: AIGShell-3.15.108-win-x64-installer.exe\nsha512: new\nsize: 2\n'
+      path.join(tempDir, 'shellpilot-local.yml'),
+      'version: 3.15.108\npath: ShellPilot-3.15.108-win-x64-installer.exe\nsha512: new\nsize: 2\n'
     )
     fs.writeFileSync(
       path.join(tempDir, 'latest.yml'),
-      'version: 3.15.108\npath: AIGShell-3.15.108-win-x64-installer.exe\nsha512: old\nsize: 1\n'
+      'version: 3.15.108\npath: ShellPilot-3.15.108-win-x64-installer.exe\nsha512: old\nsize: 1\n'
     )
 
     const result = prepareUpdateAssets({
@@ -75,7 +120,7 @@ test('replaces stale latest.yml when same version metadata changed after repacka
     assert.equal(result.copiedLatest, true)
     assert.equal(
       fs.readFileSync(path.join(tempDir, 'latest.yml'), 'utf8'),
-      'version: 3.15.108\npath: AIGShell-3.15.108-win-x64-installer.exe\nsha512: new\nsize: 2\n'
+      'version: 3.15.108\npath: ShellPilot-3.15.108-win-x64-installer.exe\nsha512: new\nsize: 2\n'
     )
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true })
@@ -85,7 +130,7 @@ test('replaces stale latest.yml when same version metadata changed after repacka
 test('replaces stale latest.yml when preparing a new release version', () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigshell-update-assets-'))
   try {
-    fs.writeFileSync(path.join(tempDir, 'aigshell-local.yml'), 'version: 3.15.108\n')
+    fs.writeFileSync(path.join(tempDir, 'shellpilot-local.yml'), 'version: 3.15.108\n')
     fs.writeFileSync(path.join(tempDir, 'latest.yml'), 'version: 3.15.107\n')
 
     const result = prepareUpdateAssets({

@@ -2,7 +2,7 @@ const fs = require('fs')
 const path = require('path')
 const { cp } = require('shelljs')
 
-const defaultLocalWorkflowName = 'aigshell-local'
+const defaultLocalWorkflowName = 'shellpilot-local'
 const workflowNamePlaceholder = '${' + 'env.WORKFLOW_NAME}'
 
 function replacePublishChannelPlaceholders (value, workflowName) {

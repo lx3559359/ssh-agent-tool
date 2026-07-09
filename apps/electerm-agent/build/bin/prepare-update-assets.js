@@ -29,20 +29,37 @@ function shouldCopyLatestMetadata (latestPath, localMetadataPath, version) {
   return fs.readFileSync(latestPath, 'utf8') !== fs.readFileSync(localMetadataPath, 'utf8')
 }
 
+function uniqueNames (names) {
+  return [...new Set(names.filter(Boolean))]
+}
+
+function findUpdateMetadataPath (distDir, version, options = {}) {
+  const names = uniqueNames([
+    ...(options.metadataNames || []),
+    process.env.WORKFLOW_NAME ? `${process.env.WORKFLOW_NAME}.yml` : '',
+    'shellpilot-local.yml',
+    'aigshell-local.yml'
+  ])
+  const existing = names
+    .map(name => path.join(distDir, name))
+    .filter(filePath => fs.existsSync(filePath))
+  return existing.find(filePath => readUpdateMetadataVersion(filePath) === version) || existing[0] || ''
+}
+
 function prepareUpdateAssets (options = {}) {
   const distDir = options.distDir || path.resolve(__dirname, '../../dist')
   const version = options.version || pack.version
   const channel = normalizeChannel(options.channel || process.env.AIGSHELL_UPDATE_CHANNEL)
   const latestPath = path.join(distDir, 'latest.yml')
-  const localMetadataPath = path.join(distDir, 'aigshell-local.yml')
+  const localMetadataPath = findUpdateMetadataPath(distDir, version, options)
   const manifestPath = path.join(distDir, 'aigshell-update.json')
   let copiedLatest = false
 
   fs.mkdirSync(distDir, { recursive: true })
 
   if (shouldCopyLatestMetadata(latestPath, localMetadataPath, version)) {
-    if (!fs.existsSync(localMetadataPath)) {
-      throw new Error('Missing update metadata: dist/latest.yml or dist/aigshell-local.yml')
+    if (!localMetadataPath || !fs.existsSync(localMetadataPath)) {
+      throw new Error('Missing update metadata: dist/latest.yml, dist/shellpilot-local.yml, workflow channel yml, or dist/aigshell-local.yml')
     }
     fs.copyFileSync(localMetadataPath, latestPath)
     copiedLatest = true
@@ -55,6 +72,7 @@ function prepareUpdateAssets (options = {}) {
   return {
     copiedLatest,
     latestPath,
+    localMetadataPath,
     manifestPath
   }
 }
@@ -62,7 +80,7 @@ function prepareUpdateAssets (options = {}) {
 function main () {
   const result = prepareUpdateAssets()
   console.log('ShellPilot online update assets are prepared.')
-  console.log(`- latest.yml: ${result.copiedLatest ? 'created from aigshell-local.yml' : 'kept existing file'}`)
+  console.log(`- latest.yml: ${result.copiedLatest ? `created from ${path.basename(result.localMetadataPath)}` : 'kept existing file'}`)
   console.log('- aigshell-update.json: created and validated')
 }
 
@@ -72,6 +90,7 @@ if (require.main === module) {
 
 module.exports = {
   readUpdateMetadataVersion,
+  findUpdateMetadataPath,
   shouldCopyLatestMetadata,
   prepareUpdateAssets
 }
