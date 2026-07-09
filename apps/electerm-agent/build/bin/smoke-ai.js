@@ -74,7 +74,7 @@ async function main () {
   await app.whenReady()
 
   const { getConfig } = require('../../src/app/lib/get-config')
-  const { AIModels, AIchat } = require('../../src/app/lib/ai')
+  const { AIModels, AIchat, AIchatWithTools } = require('../../src/app/lib/ai')
   const { getCodexCliStatus, runLocalCli } = require('../../src/app/lib/local-cli')
 
   const { config: loadedConfig } = await getConfig(false)
@@ -171,6 +171,54 @@ async function main () {
         }
       })),
       '普通 AI 对话'
+    ))
+
+    checks.push(await withTimeout(
+      AIchatWithTools(
+        [
+          {
+            role: 'system',
+            content: '你是 ShellPilot 的 Agent 工具调用验收助手。'
+          },
+          {
+            role: 'user',
+            content: '请调用 get_codex_cli_status 工具检查 Codex CLI 状态。'
+          }
+        ],
+        config.modelAI,
+        config.baseURLAI,
+        config.apiPathAI,
+        config.apiKeyAI,
+        config.proxyAI,
+        [
+          {
+            type: 'function',
+            function: {
+              name: 'get_codex_cli_status',
+              description: '检查本机 Codex CLI 是否安装并可执行。',
+              parameters: {
+                type: 'object',
+                properties: {},
+                additionalProperties: false
+              }
+            }
+          }
+        ],
+        config.authHeaderNameAI
+      ).then(result => {
+        const toolCalls = result.message?.tool_calls || []
+        return {
+          name: 'Agent 工具对话',
+          ok: Boolean(result.message && !result.error),
+          detail: {
+            hasToolCalls: toolCalls.length > 0,
+            toolNames: toolCalls.map(item => item.function?.name || item.name).filter(Boolean),
+            responsePreview: String(result.message?.content || '').slice(0, 120),
+            error: errorPreview(result)
+          }
+        }
+      }),
+      'Agent 工具对话'
     ))
   }
 
