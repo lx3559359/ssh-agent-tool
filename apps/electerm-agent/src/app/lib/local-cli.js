@@ -2,10 +2,15 @@ const { execFile } = require('child_process')
 
 const ALLOWED_LOCAL_CLI_TOOLS = [
   'ssh-keygen',
+  'ssh',
   'scp',
   'ping',
   'traceroute',
   'tracert',
+  'nslookup',
+  'curl',
+  'ipconfig',
+  'where',
   'kubectl',
   'docker',
   'git'

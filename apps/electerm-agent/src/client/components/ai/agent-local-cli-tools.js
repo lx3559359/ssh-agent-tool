@@ -1,9 +1,14 @@
 export const allowedLocalCliTools = [
   'ssh-keygen',
+  'ssh',
   'scp',
   'ping',
   'traceroute',
   'tracert',
+  'nslookup',
+  'curl',
+  'ipconfig',
+  'where',
   'kubectl',
   'docker',
   'git'

@@ -50,6 +50,44 @@ test('MCP server prompt lists enabled user configured servers only', async () =>
   assert.doesNotMatch(prompt, /cmdb\.example\.com/)
 })
 
+test('MCP server config validation explains missing required connection fields', async () => {
+  const {
+    getMcpServerConfigIssues,
+    buildMcpServerContextPrompt
+  } = await import(moduleUrl)
+
+  const issues = getMcpServerConfigIssues([
+    {
+      name: 'Prometheus',
+      transport: 'stdio'
+    },
+    {
+      name: 'CMDB',
+      transport: 'http'
+    },
+    {
+      name: '',
+      transport: 'stdio',
+      command: 'demo-mcp'
+    }
+  ])
+
+  assert.deepEqual(issues.map(item => item.field), ['command', 'url', 'name'])
+
+  const prompt = buildMcpServerContextPrompt({
+    mcpServers: [
+      {
+        name: 'Prometheus',
+        transport: 'stdio',
+        command: 'prometheus-mcp'
+      }
+    ]
+  })
+
+  assert.match(prompt, /当前为 MCP 配置引用/)
+  assert.match(prompt, /尚未内置直接调用外部 MCP Server/)
+})
+
 test('AI chat exposes MCP context action and no longer treats it as unavailable only', () => {
   const source = readSource('src/client/components/ai/ai-chat.jsx')
 

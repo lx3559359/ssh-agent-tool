@@ -26,6 +26,13 @@ test('local CLI runner exposes a controlled allowlist for common ops tools', () 
   assert.ok(tools.includes('kubectl'))
   assert.ok(tools.includes('docker'))
   assert.ok(tools.includes('git'))
+  assert.ok(tools.includes('curl'))
+  assert.ok(tools.includes('ssh'))
+  assert.ok(tools.includes('nslookup'))
+  assert.ok(tools.includes('ipconfig'))
+  assert.ok(tools.includes('where'))
+  assert.equal(tools.includes('powershell'), false)
+  assert.equal(tools.includes('cmd'), false)
 })
 
 test('local CLI runner rejects tools outside the allowlist', async () => {
@@ -105,6 +112,17 @@ test('Agent tools expose and route run_local_cli through confirmation and IPC', 
   assert.match(source, /case 'run_local_cli':[\s\S]*runGlobalAsync\('runLocalCli'/)
 })
 
+test('Agent tools expose local CLI discovery without command confirmation', () => {
+  const source = fs.readFileSync(
+    path.resolve(__dirname, '../../src/client/components/ai/agent-tools.js'),
+    'utf8'
+  )
+
+  assert.match(source, /name:\s*'list_local_cli_tools'/)
+  assert.match(source, /case 'list_local_cli_tools':[\s\S]*runGlobalAsync\('getAllowedLocalCliTools'/)
+  assert.doesNotMatch(source, /case 'list_local_cli_tools':[\s\S]{0,160}confirmAgentToolExecution/)
+})
+
 test('main process exposes runLocalCli through the async IPC allowlist', () => {
   const source = fs.readFileSync(
     path.resolve(__dirname, '../../src/app/lib/ipc.js'),
@@ -112,6 +130,7 @@ test('main process exposes runLocalCli through the async IPC allowlist', () => {
   )
 
   assert.match(source, /runLocalCli/)
+  assert.match(source, /getAllowedLocalCliTools/)
   assert.match(source, /const \{ runLocalCli \} = require\('\.\/local-cli'\)/)
 })
 

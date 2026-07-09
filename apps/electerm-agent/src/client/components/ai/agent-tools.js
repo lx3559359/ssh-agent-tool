@@ -6,6 +6,9 @@ import {
   ensureAgentPlanConfirmed,
   markAgentPlanConfirmed
 } from './agent-task-mode.js'
+import {
+  allowedLocalCliTools
+} from './agent-local-cli-tools'
 
 function buildAddBookmarkParameters () {
   const typeProperties = {}
@@ -404,13 +407,13 @@ export const agentTools = [
     type: 'function',
     function: {
       name: 'run_local_cli',
-      description: '在本机受控执行白名单 CLI 工具。仅支持 ssh-keygen、scp、ping/traceroute/tracert、kubectl、docker、git；执行前必须由用户确认。',
+      description: '在本机受控执行白名单 CLI 工具。执行前必须由用户确认；不要请求 powershell/cmd 这类通用 shell。',
       parameters: {
         type: 'object',
         properties: {
           tool: {
             type: 'string',
-            enum: ['ssh-keygen', 'scp', 'ping', 'traceroute', 'tracert', 'kubectl', 'docker', 'git'],
+            enum: allowedLocalCliTools,
             description: '要执行的本机 CLI 工具'
           },
           args: {
@@ -428,6 +431,17 @@ export const agentTools = [
           }
         },
         required: ['tool']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_local_cli_tools',
+      description: '列出 Agent 当前允许调用的本机 CLI 白名单。该工具只读取能力清单，不执行命令，不需要用户确认。',
+      parameters: {
+        type: 'object',
+        properties: {}
       }
     }
   },
@@ -583,6 +597,8 @@ export async function executeToolCall (toolName, args, runtime) {
       return JSON.stringify(store.mcpGetTerminalStatus(args))
     case 'cancel_terminal_command':
       return JSON.stringify(store.mcpCancelTerminalCommand(args))
+    case 'list_local_cli_tools':
+      return JSON.stringify(await window.pre.runGlobalAsync('getAllowedLocalCliTools'))
     case 'run_local_cli': {
       const planGuard = ensureAgentPlanConfirmed({ toolName, runtime })
       if (planGuard) {
