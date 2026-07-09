@@ -26,6 +26,7 @@ test('local CLI runner exposes a controlled allowlist for common ops tools', () 
   assert.ok(tools.includes('kubectl'))
   assert.ok(tools.includes('docker'))
   assert.ok(tools.includes('git'))
+  assert.ok(tools.includes('codex'))
   assert.ok(tools.includes('curl'))
   assert.ok(tools.includes('ssh'))
   assert.ok(tools.includes('nslookup'))
@@ -33,6 +34,66 @@ test('local CLI runner exposes a controlled allowlist for common ops tools', () 
   assert.ok(tools.includes('where'))
   assert.equal(tools.includes('powershell'), false)
   assert.equal(tools.includes('cmd'), false)
+})
+
+test('Codex CLI status checker reports official CLI availability without reading credentials', async () => {
+  const {
+    createCodexCliStatusChecker
+  } = require(localCliPath)
+  const calls = []
+  const checker = createCodexCliStatusChecker({
+    platform: 'win32',
+    execFileImpl: (file, args, options, callback) => {
+      calls.push({ file, args, options })
+      if (file === 'where.exe') {
+        callback(null, 'C:\\Tools\\codex.exe\n', '')
+        return
+      }
+      callback(null, 'codex-cli 0.128.0\n', '')
+    }
+  })
+
+  const result = await checker()
+
+  assert.equal(result.provider, 'codex')
+  assert.equal(result.installed, true)
+  assert.equal(result.available, true)
+  assert.equal(result.authMode, 'official-cli')
+  assert.equal(result.canUseExistingLogin, true)
+  assert.match(result.version, /0\.128\.0/)
+  assert.equal(calls[0].file, 'where.exe')
+  assert.equal(calls[1].file, 'codex')
+  assert.equal(calls[1].options.shell, false)
+
+  const source = fs.readFileSync(localCliPath, 'utf8')
+  assert.doesNotMatch(source, /auth\.json/)
+  assert.doesNotMatch(source, /\.codex[\\/]auth/)
+})
+
+test('Codex CLI status checker distinguishes installed but unusable clients', async () => {
+  const {
+    createCodexCliStatusChecker
+  } = require(localCliPath)
+  const checker = createCodexCliStatusChecker({
+    platform: 'win32',
+    execFileImpl: (file, args, options, callback) => {
+      if (file === 'where.exe') {
+        callback(null, 'C:\\WindowsApps\\codex.exe\n', '')
+        return
+      }
+      const error = new Error('Access is denied')
+      error.code = 'EACCES'
+      callback(error, '', 'Access is denied')
+    }
+  })
+
+  const result = await checker()
+
+  assert.equal(result.installed, true)
+  assert.equal(result.available, false)
+  assert.equal(result.canUseExistingLogin, false)
+  assert.match(result.error, /Access is denied/)
+  assert.match(result.guidance, /Codex CLI/)
 })
 
 test('local CLI runner rejects tools outside the allowlist', async () => {
@@ -123,6 +184,17 @@ test('Agent tools expose local CLI discovery without command confirmation', () =
   assert.doesNotMatch(source, /case 'list_local_cli_tools':[\s\S]{0,160}confirmAgentToolExecution/)
 })
 
+test('Agent tools expose Codex CLI status discovery without command confirmation', () => {
+  const source = fs.readFileSync(
+    path.resolve(__dirname, '../../src/client/components/ai/agent-tools.js'),
+    'utf8'
+  )
+
+  assert.match(source, /name:\s*'get_codex_cli_status'/)
+  assert.match(source, /case 'get_codex_cli_status':[\s\S]*runGlobalAsync\('getCodexCliStatus'/)
+  assert.doesNotMatch(source, /case 'get_codex_cli_status':[\s\S]{0,180}confirmAgentToolExecution/)
+})
+
 test('main process exposes runLocalCli through the async IPC allowlist', () => {
   const source = fs.readFileSync(
     path.resolve(__dirname, '../../src/app/lib/ipc.js'),
@@ -131,6 +203,7 @@ test('main process exposes runLocalCli through the async IPC allowlist', () => {
 
   assert.match(source, /runLocalCli/)
   assert.match(source, /getAllowedLocalCliTools/)
+  assert.match(source, /getCodexCliStatus/)
   assert.match(source, /const \{ runLocalCli \} = require\('\.\/local-cli'\)/)
 })
 
@@ -140,6 +213,7 @@ test('AI chat exposes a usable local CLI context action', async () => {
   } = await import(clientLocalCliModuleUrl)
   const prompt = buildLocalCliContextPrompt()
   assert.match(prompt, /ssh-keygen/)
+  assert.match(prompt, /Codex CLI/)
   assert.match(prompt, /kubectl/)
   assert.match(prompt, /用户确认/)
 

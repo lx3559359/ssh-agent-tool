@@ -448,6 +448,17 @@ export const agentTools = [
   {
     type: 'function',
     function: {
+      name: 'get_codex_cli_status',
+      description: '只读检测本机 Codex CLI 是否安装、是否可执行，以及是否可以复用官方 CLI 登录态。不会读取或保存账号凭据，不执行任务命令。',
+      parameters: {
+        type: 'object',
+        properties: {}
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'run_background_command',
       description: '使用 nohup 在后台运行命令，终端会立即释放。返回 taskId 以便监控，可用 get_background_task_status 和 get_background_task_log 查看进度。',
       parameters: {
@@ -599,6 +610,8 @@ export async function executeToolCall (toolName, args, runtime) {
       return JSON.stringify(store.mcpCancelTerminalCommand(args))
     case 'list_local_cli_tools':
       return JSON.stringify(await window.pre.runGlobalAsync('getAllowedLocalCliTools'))
+    case 'get_codex_cli_status':
+      return JSON.stringify(await window.pre.runGlobalAsync('getCodexCliStatus'))
     case 'run_local_cli': {
       const planGuard = ensureAgentPlanConfirmed({ toolName, runtime })
       if (planGuard) {

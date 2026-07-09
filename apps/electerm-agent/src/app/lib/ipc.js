@@ -73,6 +73,7 @@ const lookup = require('../common/lookup')
 const { AIchat, AIchatWithTools, AIModels, getStreamContent, stopStream } = require('./ai')
 const { runLocalCli } = require('./local-cli')
 const { getAllowedLocalCliTools } = require('./local-cli')
+const { getCodexCliStatus } = require('./local-cli')
 const log = require('../common/log')
 const {
   exportDiagnosticPack
@@ -237,6 +238,7 @@ function initIpc () {
     stopStream,
     runLocalCli,
     getAllowedLocalCliTools,
+    getCodexCliStatus,
     exportDiagnosticPack: async (outputPath) => exportDiagnosticPack({
       outputPath,
       packInfo,

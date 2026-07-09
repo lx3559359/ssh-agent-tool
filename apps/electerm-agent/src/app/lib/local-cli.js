@@ -13,7 +13,8 @@ const ALLOWED_LOCAL_CLI_TOOLS = [
   'where',
   'kubectl',
   'docker',
-  'git'
+  'git',
+  'codex'
 ]
 
 const MAX_OUTPUT_LENGTH = 12000
@@ -46,6 +47,104 @@ function trimOutput (text = '') {
     return str
   }
   return str.slice(0, MAX_OUTPUT_LENGTH) + '\n...输出已截断...'
+}
+
+function execFileSafe (execFileImpl, file, args, options = {}) {
+  return new Promise(resolve => {
+    try {
+      execFileImpl(file, args, {
+        timeout: normalizeTimeout(options.timeoutMs || 5000),
+        windowsHide: true,
+        shell: false,
+        encoding: 'utf8',
+        maxBuffer: 256 * 1024
+      }, (error, stdout = '', stderr = '') => {
+        resolve({
+          error,
+          stdout: String(stdout || ''),
+          stderr: String(stderr || '')
+        })
+      })
+    } catch (error) {
+      resolve({
+        error,
+        stdout: '',
+        stderr: ''
+      })
+    }
+  })
+}
+
+function firstOutputLine (text = '') {
+  return String(text || '').split(/\r?\n/).find(Boolean) || ''
+}
+
+function buildErrorMessage (result) {
+  return String(
+    result?.stderr ||
+    result?.error?.message ||
+    result?.error ||
+    ''
+  )
+}
+
+function createCodexCliStatusChecker ({
+  execFileImpl = execFile,
+  platform = process.platform
+} = {}) {
+  return async function getCodexCliStatus () {
+    const locator = platform === 'win32'
+      ? { file: 'where.exe', args: ['codex'] }
+      : { file: 'which', args: ['codex'] }
+    const located = await execFileSafe(execFileImpl, locator.file, locator.args)
+    const installPath = firstOutputLine(located.stdout)
+    if (located.error || !installPath) {
+      return {
+        provider: 'codex',
+        name: 'Codex CLI',
+        installed: false,
+        available: false,
+        version: '',
+        installPath: '',
+        authMode: 'official-cli',
+        loginStatus: 'unknown',
+        canUseExistingLogin: false,
+        error: buildErrorMessage(located),
+        guidance: '未检测到 Codex CLI。请先安装官方 Codex CLI，并在系统终端中运行 codex login 完成 ChatGPT 账号或 API Key 登录。'
+      }
+    }
+
+    const version = await execFileSafe(execFileImpl, 'codex', ['--version'])
+    if (version.error) {
+      return {
+        provider: 'codex',
+        name: 'Codex CLI',
+        installed: true,
+        available: false,
+        version: '',
+        installPath,
+        authMode: 'official-cli',
+        loginStatus: 'unknown',
+        canUseExistingLogin: false,
+        error: buildErrorMessage(version),
+        guidance: 'Codex CLI 已安装，但当前无法执行。请在系统终端运行 codex --version 和 codex login，确认安装、权限和登录状态正常后重试。'
+      }
+    }
+
+    return {
+      provider: 'codex',
+      name: 'Codex CLI',
+      installed: true,
+      available: true,
+      version: firstOutputLine(version.stdout) || firstOutputLine(version.stderr),
+      installPath,
+      authMode: 'official-cli',
+      loginStatus: 'managed-by-official-cli',
+      canUseExistingLogin: true,
+      error: '',
+      guidance: 'Codex CLI 可用。AIGShell 将通过官方 codex 命令复用其登录态，不保存账号密码。'
+    }
+  }
 }
 
 function createLocalCliRunner ({
@@ -92,8 +191,11 @@ function createLocalCliRunner ({
 }
 
 const runLocalCli = createLocalCliRunner()
+const getCodexCliStatus = createCodexCliStatusChecker()
 
 exports.getAllowedLocalCliTools = getAllowedLocalCliTools
 exports.isAllowedLocalCliTool = isAllowedLocalCliTool
+exports.createCodexCliStatusChecker = createCodexCliStatusChecker
+exports.getCodexCliStatus = getCodexCliStatus
 exports.createLocalCliRunner = createLocalCliRunner
 exports.runLocalCli = runLocalCli
