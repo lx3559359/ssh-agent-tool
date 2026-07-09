@@ -18,16 +18,16 @@ const iconPath = resolve(
   __dirname,
   (
     isDev
-      ? '../../../src/client/assets/images/aigshell-round-128x128.png'
-      : '../assets/images/aigshell-round-128x128.png'
+      ? '../../../src/client/assets/images/shellpilot-round-128x128.png'
+      : '../assets/images/shellpilot-round-128x128.png'
   )
 )
 const trayIconPath = resolve(
   __dirname,
   (
     isDev
-      ? '../../../src/client/assets/images/aigshell-tray.png'
-      : '../assets/images/aigshell-tray.png'
+      ? '../../../src/client/assets/images/shellpilot-tray.png'
+      : '../assets/images/shellpilot-tray.png'
   )
 )
 const extIconPath = isDev

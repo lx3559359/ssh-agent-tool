@@ -61,7 +61,7 @@ function prepareUpdateAssets (options = {}) {
 
 function main () {
   const result = prepareUpdateAssets()
-  console.log('AIGShell online update assets are prepared.')
+  console.log('ShellPilot online update assets are prepared.')
   console.log(`- latest.yml: ${result.copiedLatest ? 'created from aigshell-local.yml' : 'kept existing file'}`)
   console.log('- aigshell-update.json: created and validated')
 }

@@ -1,7 +1,8 @@
 const path = require('path')
 const pack = require('../../package.json')
 
-const appExecutableName = `${pack.productName || 'AIGShell'}.exe`
+const appProductName = pack.productName || 'ShellPilot'
+const appExecutableName = `${appProductName}.exe`
 
 function resolveSmokePaths ({
   projectRoot = path.resolve(__dirname, '../..'),
@@ -36,7 +37,7 @@ function resolvePortableZipPaths ({
   )
   return {
     tmpRoot: root,
-    zipPath: path.join(projectRoot, 'dist', `AIGShell-${version}-win-${arch}-portable.zip`),
+    zipPath: path.join(projectRoot, 'dist', `${appProductName}-${version}-win-${arch}-portable.zip`),
     extractPath: path.join(root, 'extract')
   }
 }
@@ -56,10 +57,10 @@ function validateSmokeResult ({
   exitCode
 }) {
   if (!runningAfterWait) {
-    throw new Error(`${pack.productName || 'AIGShell'} exited before startup completed. Exit code: ${exitCode}`)
+    throw new Error(`${appProductName} exited before startup completed. Exit code: ${exitCode}`)
   }
   if (!mainDbExists || !dataDbExists) {
-    throw new Error(`${pack.productName || 'AIGShell'} did not create sqlite databases in DATA_PATH`)
+    throw new Error(`${appProductName} did not create sqlite databases in DATA_PATH`)
   }
 }
 

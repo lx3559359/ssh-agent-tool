@@ -9,8 +9,12 @@ function getReleaseArch (options = {}) {
   return options.arch === 'arm64' ? 'arm64' : 'x64'
 }
 
+function getReleaseAssetPrefix (options = {}) {
+  return options.assetPrefix || require('../../package.json').productName || 'ShellPilot'
+}
+
 function getRequiredReleaseAssetNames (version, options = {}) {
-  const prefix = `AIGShell-${version}-win-${getReleaseArch(options)}-installer.exe`
+  const prefix = `${getReleaseAssetPrefix(options)}-${version}-win-${getReleaseArch(options)}-installer.exe`
   return [
     prefix,
     `${prefix}.blockmap`,

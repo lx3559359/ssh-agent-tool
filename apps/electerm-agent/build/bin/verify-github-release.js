@@ -67,7 +67,7 @@ function main () {
   })
 
   if (report.ok) {
-    console.log(`GitHub release ${tag} matches local AIGShell update assets.`)
+    console.log(`GitHub release ${tag} matches local ${pack.productName || 'ShellPilot'} update assets.`)
     report.requiredNames.forEach(name => console.log(`- ${name}`))
     return
   }

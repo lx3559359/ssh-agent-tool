@@ -6,7 +6,7 @@ import { PureComponent } from 'react'
 import {
   Popover
 } from 'antd'
-import logoPath from '../../assets/images/aigshell-round-128x128.png'
+import logoPath from '../../assets/images/shellpilot-round-128x128.png'
 import { shortcutDescExtend } from '../shortcuts/shortcut-handler.js'
 import MenuRender from './sys-menu.jsx'
 import { refsStatic } from '../common/ref.js'
@@ -204,7 +204,7 @@ class MenuBtn extends PureComponent {
           <span
             className='menu-logo'
           >
-            <img src={logoPath} alt='AIGShell' />
+            <img src={logoPath} alt='ShellPilot' />
           </span>
         </div>
       </Popover>

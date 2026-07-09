@@ -98,6 +98,14 @@ function getUpdateChannel (options = {}) {
   return options.updateChannel === 'beta' ? 'beta' : 'stable'
 }
 
+function getWindowsInstallerAssetNames (version, options = {}) {
+  const arch = getWindowsUpdateArch(options)
+  return [
+    `ShellPilot-${version}-win-${arch}-installer.exe`,
+    `AIGShell-${version}-win-${arch}-installer.exe`
+  ]
+}
+
 export function hasApprovedUpdateManifest (release, options = {}) {
   const manifest = findApprovalManifest(release)
   const version = cleanVersion(options.version || release?.tag_name)
@@ -120,9 +128,9 @@ export function hasWindowsUpdateAssets (release, version, options = {}) {
     return false
   }
   const names = new Set((release?.assets || []).map(asset => asset.name))
-  const installer = `AIGShell-${clean}-win-${getWindowsUpdateArch(options)}-installer.exe`
-  return names.has(installer) &&
-    names.has(`${installer}.blockmap`) &&
+  return getWindowsInstallerAssetNames(clean, options).some(installer =>
+    names.has(installer) && names.has(`${installer}.blockmap`)
+  ) &&
     names.has('latest.yml')
 }
 

@@ -11,6 +11,7 @@ const {
 const distDir = path.resolve(__dirname, '../../dist')
 const releaseArch = process.env.AIGSHELL_RELEASE_ARCH
 const releaseChannel = process.env.AIGSHELL_UPDATE_CHANNEL
+const releaseAssetPrefix = pack.productName || 'ShellPilot'
 
 function readLocalFiles () {
   if (!fs.existsSync(distDir)) {
@@ -34,7 +35,7 @@ function validateLocalUpdateApprovalManifest () {
 function validateLocalLatestMetadata () {
   const latestPath = path.join(distDir, 'latest.yml')
   const content = fs.readFileSync(latestPath, 'utf8')
-  const installer = `AIGShell-${pack.version}-win-${releaseArch || 'x64'}-installer.exe`
+  const installer = `${releaseAssetPrefix}-${pack.version}-win-${releaseArch || 'x64'}-installer.exe`
   if (!new RegExp(`^version:\\s*['"]?${pack.version.replace(/\./g, '\\.')}['"]?\\s*$`, 'm').test(content)) {
     throw new Error(`latest.yml version must match package version ${pack.version}`)
   }
@@ -61,7 +62,7 @@ function main () {
   if (report.ok) {
     validateLocalUpdateApprovalManifest()
     validateLocalLatestMetadata()
-    console.log('Local AIGShell update assets are ready for upload.')
+    console.log(`Local ${releaseAssetPrefix} update assets are ready for upload.`)
     report.requiredNames.forEach(name => console.log(`- ${name}`))
     return
   }
