@@ -224,6 +224,17 @@ test('local release verification validates the update approval manifest content'
   assert.match(localVerifySource, /channel:\s*releaseChannel/)
 })
 
+test('local release verification validates latest.yml matches the package version and installer', () => {
+  const localVerifySource = fs.readFileSync(
+    path.resolve(__dirname, '../../build/bin/verify-local-release-assets.js'),
+    'utf8'
+  )
+
+  assert.match(localVerifySource, /validateLocalLatestMetadata/)
+  assert.match(localVerifySource, /latest\.yml/)
+  assert.match(localVerifySource, /AIGShell-\$\{pack\.version\}-win-\$\{releaseArch \|\| 'x64'\}-installer\.exe/)
+})
+
 test('windows ci workflow runs unit tests for normal code changes without publishing', () => {
   const workflow = fs.readFileSync(
     path.resolve(__dirname, '../../../../.github/workflows/windows-electerm-agent-ci.yml'),

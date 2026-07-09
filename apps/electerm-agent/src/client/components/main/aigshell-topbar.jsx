@@ -72,7 +72,7 @@ export default function AIGShellTopBar ({ store }) {
     },
     {
       key: 'update',
-      label: '更新',
+      label: '检查更新',
       icon: <ReloadOutlined />,
       onClick: handleCheckUpdate
     },

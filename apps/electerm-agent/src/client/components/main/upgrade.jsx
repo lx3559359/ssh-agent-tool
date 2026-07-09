@@ -162,11 +162,20 @@ export default class Upgrade extends PureComponent {
     this.handleClose()
   }
 
-  showNoUpdateInfo = (text) => {
+  showNoUpdateInfo = (text, type = 'info') => {
     this.changeProps({
       noUpdateMessage: text,
       noUpdateMessageExpires: Date.now() + 3000
     })
+    if (type === 'success') {
+      message.success(text)
+    } else if (type === 'warning') {
+      message.warning(text)
+    } else if (type === 'error') {
+      message.error(text)
+    } else {
+      message.info(text)
+    }
   }
 
   getLatestRelease = async (isManual = false) => {
@@ -174,23 +183,44 @@ export default class Upgrade extends PureComponent {
     if (checkSkipSrc(installSrc)) {
       return
     }
+    const checkingMessage = isManual ? message.info('正在检查更新...', 0) : null
     this.changeProps({
       checkingRemoteVersion: true,
       error: ''
     })
-    const releaseStatus = await getLatestReleaseStatus()
+    let releaseStatus
+    try {
+      releaseStatus = await getLatestReleaseStatus()
+    } catch (err) {
+      const errorMessage = err?.message || '检查更新失败，请稍后重试。'
+      checkingMessage?.destroy()
+      this.changeProps({
+        checkingRemoteVersion: false
+      })
+      if (isManual) {
+        this.showNoUpdateInfo(errorMessage, 'error')
+      }
+      return
+    }
+    checkingMessage?.destroy()
     this.changeProps({
       checkingRemoteVersion: false
     })
     if (releaseStatus.status === 'unavailable') {
       if (isManual) {
-        this.showNoUpdateInfo(releaseStatus.message)
+        this.showNoUpdateInfo(releaseStatus.message, 'error')
       }
       return
     }
     if (releaseStatus.status === 'waitingForApproval') {
       if (isManual) {
-        this.showNoUpdateInfo(releaseStatus.message)
+        this.showNoUpdateInfo(releaseStatus.message, 'warning')
+      }
+      return
+    }
+    if (releaseStatus.status === 'current') {
+      if (isManual) {
+        this.showNoUpdateInfo(releaseStatus.message || e('noNeed'), 'success')
       }
       return
     }
@@ -199,7 +229,7 @@ export default class Upgrade extends PureComponent {
     const latestVer = releaseStatus.tag_name
     if (!latestVer) {
       if (isManual) {
-        this.showNoUpdateInfo(releaseStatus.message || e('noNeed'))
+        this.showNoUpdateInfo(releaseStatus.message || e('noNeed'), 'success')
       }
       return
     }
@@ -209,7 +239,7 @@ export default class Upgrade extends PureComponent {
     const shouldUpgrade = compare(currentVer, latestVer) < 0
     if (!shouldUpgrade) {
       if (isManual) {
-        this.showNoUpdateInfo(e('noNeed'))
+        this.showNoUpdateInfo(e('noNeed'), 'success')
       }
       return
     }
@@ -220,7 +250,7 @@ export default class Upgrade extends PureComponent {
       releaseInfo = await getLatestReleaseInfo()
     }
     if (needsManualDownload && isManual) {
-      this.showNoUpdateInfo(releaseStatus.message)
+      this.showNoUpdateInfo(releaseStatus.message, 'warning')
     }
     this.changeProps({
       shouldUpgrade,

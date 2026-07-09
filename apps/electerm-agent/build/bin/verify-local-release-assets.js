@@ -31,6 +31,18 @@ function validateLocalUpdateApprovalManifest () {
   validateUpdateApprovalManifest(manifest, pack.version, { channel: releaseChannel })
 }
 
+function validateLocalLatestMetadata () {
+  const latestPath = path.join(distDir, 'latest.yml')
+  const content = fs.readFileSync(latestPath, 'utf8')
+  const installer = `AIGShell-${pack.version}-win-${releaseArch || 'x64'}-installer.exe`
+  if (!new RegExp(`^version:\\s*['"]?${pack.version.replace(/\./g, '\\.')}['"]?\\s*$`, 'm').test(content)) {
+    throw new Error(`latest.yml version must match package version ${pack.version}`)
+  }
+  if (!content.includes(`url: ${installer}`) || !content.includes(`path: ${installer}`)) {
+    throw new Error(`latest.yml must point to ${installer}`)
+  }
+}
+
 function printList (title, list) {
   if (!list.length) {
     return
@@ -48,6 +60,7 @@ function main () {
 
   if (report.ok) {
     validateLocalUpdateApprovalManifest()
+    validateLocalLatestMetadata()
     console.log('Local AIGShell update assets are ready for upload.')
     report.requiredNames.forEach(name => console.log(`- ${name}`))
     return

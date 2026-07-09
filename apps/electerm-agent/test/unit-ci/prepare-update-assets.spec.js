@@ -32,11 +32,11 @@ test('prepares approved online update assets from the local electron-builder met
   }
 })
 
-test('does not overwrite existing latest.yml while preparing approval metadata', () => {
+test('does not overwrite matching latest.yml while preparing approval metadata', () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigshell-update-assets-'))
   try {
-    fs.writeFileSync(path.join(tempDir, 'aigshell-local.yml'), 'version: local\n')
-    fs.writeFileSync(path.join(tempDir, 'latest.yml'), 'version: published\n')
+    fs.writeFileSync(path.join(tempDir, 'aigshell-local.yml'), 'version: 3.15.107\n')
+    fs.writeFileSync(path.join(tempDir, 'latest.yml'), 'version: 3.15.107\n')
 
     const result = prepareUpdateAssets({
       distDir: tempDir,
@@ -45,10 +45,29 @@ test('does not overwrite existing latest.yml while preparing approval metadata',
     })
 
     assert.equal(result.copiedLatest, false)
-    assert.equal(fs.readFileSync(path.join(tempDir, 'latest.yml'), 'utf8'), 'version: published\n')
+    assert.equal(fs.readFileSync(path.join(tempDir, 'latest.yml'), 'utf8'), 'version: 3.15.107\n')
 
     const manifest = JSON.parse(fs.readFileSync(path.join(tempDir, 'aigshell-update.json'), 'utf8'))
     assert.doesNotThrow(() => validateUpdateApprovalManifest(manifest, '3.15.107', { channel: 'beta' }))
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('replaces stale latest.yml when preparing a new release version', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigshell-update-assets-'))
+  try {
+    fs.writeFileSync(path.join(tempDir, 'aigshell-local.yml'), 'version: 3.15.108\n')
+    fs.writeFileSync(path.join(tempDir, 'latest.yml'), 'version: 3.15.107\n')
+
+    const result = prepareUpdateAssets({
+      distDir: tempDir,
+      version: '3.15.108',
+      channel: 'stable'
+    })
+
+    assert.equal(result.copiedLatest, true)
+    assert.equal(fs.readFileSync(path.join(tempDir, 'latest.yml'), 'utf8'), 'version: 3.15.108\n')
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true })
   }

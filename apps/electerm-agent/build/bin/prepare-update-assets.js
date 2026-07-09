@@ -7,6 +7,15 @@ const {
   validateUpdateApprovalManifest
 } = require('./write-update-approval-manifest')
 
+function readUpdateMetadataVersion (filePath) {
+  if (!fs.existsSync(filePath)) {
+    return ''
+  }
+  const content = fs.readFileSync(filePath, 'utf8')
+  const match = content.match(/^version:\s*['"]?([^'"\s]+)['"]?/m)
+  return match ? match[1] : ''
+}
+
 function prepareUpdateAssets (options = {}) {
   const distDir = options.distDir || path.resolve(__dirname, '../../dist')
   const version = options.version || pack.version
@@ -18,7 +27,7 @@ function prepareUpdateAssets (options = {}) {
 
   fs.mkdirSync(distDir, { recursive: true })
 
-  if (!fs.existsSync(latestPath)) {
+  if (!fs.existsSync(latestPath) || readUpdateMetadataVersion(latestPath) !== version) {
     if (!fs.existsSync(localMetadataPath)) {
       throw new Error('Missing update metadata: dist/latest.yml or dist/aigshell-local.yml')
     }
@@ -49,5 +58,6 @@ if (require.main === module) {
 }
 
 module.exports = {
+  readUpdateMetadataVersion,
   prepareUpdateAssets
 }
