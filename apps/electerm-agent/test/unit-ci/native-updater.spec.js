@@ -25,7 +25,14 @@ test('main updater service uses native autoUpdater behind release approval', () 
   assert.match(source, /publishApproved/)
   assert.match(source, /checkForUpdates/)
   assert.match(source, /downloadUpdate/)
-  assert.match(source, /quitAndInstall/)
+  assert.match(source, /quitAndInstall\(true,\s*true\)/)
+})
+
+test('windows nsis package is one-click so in-client updates do not show setup wizard', () => {
+  const config = require(path.join(root, 'build/electron-builder.json'))
+
+  assert.equal(config.nsis.oneClick, true)
+  assert.equal(config.nsis.allowToChangeInstallationDirectory, undefined)
 })
 
 test('renderer upgrade panel defaults to native updater instead of installer mirror download', () => {

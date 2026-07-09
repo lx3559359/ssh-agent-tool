@@ -296,7 +296,7 @@ function nativeUpdateInstall () {
       message: '更新文件尚未下载完成。'
     })
   }
-  autoUpdater.quitAndInstall(false, true)
+  autoUpdater.quitAndInstall(true, true)
   return cloneState({
     status: 'installing'
   })
