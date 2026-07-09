@@ -66,7 +66,7 @@ export default function AIGShellTopBar ({ store }) {
     },
     {
       key: 'backup',
-      label: '备份',
+      label: '备份同步',
       icon: <FolderAddOutlined />,
       onClick: window.store.openSettingSync
     },

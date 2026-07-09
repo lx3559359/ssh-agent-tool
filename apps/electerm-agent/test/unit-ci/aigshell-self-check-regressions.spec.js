@@ -56,3 +56,11 @@ test('AI chat copy is readable Simplified Chinese', () => {
   assert.match(chat, /生成命令/)
   assert.match(chat, />帮助</)
 })
+
+test('AIGShell top bar labels avoid ambiguous unfinished actions', () => {
+  const topbar = read('src/client/components/main/aigshell-topbar.jsx')
+
+  assert.match(topbar, /label:\s*'备份同步'/)
+  assert.match(topbar, /label:\s*'检查更新'/)
+  assert.doesNotMatch(topbar, /label:\s*'备份'/)
+})

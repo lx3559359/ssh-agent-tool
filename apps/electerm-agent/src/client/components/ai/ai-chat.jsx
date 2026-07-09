@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from 'react'
-import { Flex, Input, Popconfirm } from 'antd'
+import { Flex, Input, Popconfirm, Segmented } from 'antd'
 import TabSelect from '../footer/tab-select'
 import AiChatHistory from './ai-chat-history'
 import uid from '../../common/uid'
@@ -9,7 +9,6 @@ import {
   CodeOutlined,
   FileTextOutlined,
   HighlightOutlined,
-  SearchOutlined,
   SettingOutlined,
   SendOutlined,
   ToolOutlined,
@@ -53,7 +52,7 @@ const MAX_HISTORY = 100
 
 export default function AIChat (props) {
   const [prompt, setPrompt] = useState('')
-  const mode = 'ask'
+  const [mode, setMode] = useState('ask')
   const isAgent = mode === 'agent'
   const submitDisabled = isAgent && props.agentRunning
 
@@ -228,10 +227,6 @@ export default function AIChat (props) {
     setPrompt(buildLocalCliContextPrompt())
   }
 
-  function showUnavailableContextAction (type) {
-    message.warning(getAIContextUnavailableMessage(type))
-  }
-
   function renderTabSelect () {
     if (isAgent) {
       return null
@@ -241,6 +236,27 @@ export default function AIChat (props) {
         selectedTabIds={props.selectedTabIds}
         tabs={props.tabs}
         activeTabId={props.activeTabId}
+      />
+    )
+  }
+
+  function renderModeSwitch () {
+    return (
+      <Segmented
+        size='small'
+        value={mode}
+        onChange={value => setMode(value)}
+        options={[
+          {
+            label: '对话',
+            value: 'ask'
+          },
+          {
+            label: 'Agent',
+            value: 'agent',
+            disabled: props.agentRunning
+          }
+        ]}
       />
     )
   }
@@ -290,20 +306,14 @@ export default function AIChat (props) {
         handleClick: handleGenerateCommand
       },
       {
-        key: 'web',
-        text: '联网搜索',
-        icon: <SearchOutlined />,
-        handleClick: () => showUnavailableContextAction('web')
-      },
-      {
         key: 'mcp',
-        text: 'MCP',
+        text: '引用 MCP 配置',
         icon: <ApiOutlined />,
         handleClick: handleQuoteMcpServers
       },
       {
         key: 'cli',
-        text: 'CLI',
+        text: '引用 CLI 能力',
         icon: <ToolOutlined />,
         handleClick: handleQuoteLocalCliTools
       }
@@ -369,7 +379,8 @@ export default function AIChat (props) {
           className='ai-chat-textarea'
         />
         <Flex className='ai-chat-terminals' justify='space-between' align='center'>
-          <Flex align='center'>
+          <Flex align='center' gap={6}>
+            {renderModeSwitch()}
             {renderTabSelect()}
             <SettingOutlined
               onClick={toggleConfig}
