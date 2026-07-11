@@ -3,6 +3,7 @@ import {
   Button,
   Alert
 } from 'antd'
+import { buildTerminalErrorTips } from './terminal-error-help'
 
 const e = window.translate
 
@@ -30,6 +31,32 @@ export default memo(function TerminalErrorHandle ({
     )
   }
 
+  function renderTips () {
+    const tips = buildTerminalErrorTips(errorMessage)
+    if (!tips.length) {
+      return null
+    }
+    return (
+      <ul className='terminal-error-tips'>
+        {tips.map(tip => <li key={tip}>{tip}</li>)}
+      </ul>
+    )
+  }
+
+  function renderDescription () {
+    const tips = renderTips()
+    const actions = renderEditBookmarkButton()
+    if (!tips && !actions) {
+      return null
+    }
+    return (
+      <>
+        {tips}
+        {actions}
+      </>
+    )
+  }
+
   return (
     <Alert
       className='terminal-error-handle'
@@ -37,7 +64,7 @@ export default memo(function TerminalErrorHandle ({
       type='error'
       showIcon
       banner
-      description={renderEditBookmarkButton()}
+      description={renderDescription()}
     />
   )
 })
