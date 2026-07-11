@@ -46,13 +46,20 @@ async function readFileRange (filePath, options) {
       },
       async read (offset, length) {
         const buffer = Buffer.alloc(length)
-        const { bytesRead } = await handle.read(
-          buffer,
-          0,
-          buffer.length,
-          offset
-        )
-        return buffer.subarray(0, bytesRead)
+        let totalRead = 0
+        while (totalRead < buffer.length) {
+          const { bytesRead } = await handle.read(
+            buffer,
+            totalRead,
+            buffer.length - totalRead,
+            offset + totalRead
+          )
+          if (bytesRead === 0) {
+            break
+          }
+          totalRead += bytesRead
+        }
+        return buffer.subarray(0, totalRead)
       }
     }, options)
   } finally {

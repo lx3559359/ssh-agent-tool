@@ -1,5 +1,6 @@
 const { isLikelyBinaryBuffer } = require('./file-preview')
 
+const MIN_RANGE_BYTES = 4
 const DEFAULT_RANGE_BYTES = 256 * 1024
 const MAX_RANGE_BYTES = 1024 * 1024
 
@@ -8,7 +9,7 @@ function normalizeRangeOptions (options = {}) {
     ? options.offset
     : 0
   const maxBytes = Number.isSafeInteger(options.maxBytes) && options.maxBytes > 0
-    ? Math.min(options.maxBytes, MAX_RANGE_BYTES)
+    ? Math.max(MIN_RANGE_BYTES, Math.min(options.maxBytes, MAX_RANGE_BYTES))
     : DEFAULT_RANGE_BYTES
   return { offset, maxBytes }
 }
@@ -33,7 +34,32 @@ function getUtf8SequenceLength (byte) {
   return 1
 }
 
-function findContentEnd (buffer, start, byteLimit) {
+function isValidUtf8Sequence (buffer, start, length) {
+  const sequence = buffer.subarray(start, start + length)
+  return sequence.length === length &&
+    Buffer.from(sequence.toString('utf8'), 'utf8').equals(sequence)
+}
+
+function findSafeStart (buffer, requestedIndex) {
+  if (!isContinuationByte(buffer[requestedIndex])) {
+    return requestedIndex
+  }
+  const contextStart = Math.max(0, requestedIndex - 3)
+  for (let start = contextStart; start < requestedIndex; start += 1) {
+    const sequenceLength = getUtf8SequenceLength(buffer[start])
+    const sequenceEnd = start + sequenceLength
+    if (
+      sequenceLength > 1 &&
+      sequenceEnd > requestedIndex &&
+      isValidUtf8Sequence(buffer, start, sequenceLength)
+    ) {
+      return sequenceEnd
+    }
+  }
+  return requestedIndex
+}
+
+function findContentEnd (buffer, start, byteLimit, atFileEnd) {
   let cursor = start
   while (cursor < buffer.length && cursor < byteLimit) {
     const sequenceLength = getUtf8SequenceLength(buffer[cursor])
@@ -42,9 +68,15 @@ function findContentEnd (buffer, start, byteLimit) {
       continue
     }
     const sequenceEnd = cursor + sequenceLength
+    if (sequenceEnd > buffer.length) {
+      if (atFileEnd) {
+        cursor += 1
+        continue
+      }
+      break
+    }
     const sequence = buffer.subarray(cursor + 1, sequenceEnd)
     if (
-      sequenceEnd <= buffer.length &&
       sequence.length === sequenceLength - 1 &&
       sequence.every(isContinuationByte)
     ) {
@@ -76,26 +108,44 @@ async function readTextRange (reader, options) {
     }
   }
 
+  const contextBytes = Math.min(3, requestedOffset)
+  const readOffset = requestedOffset - contextBytes
   const readLength = Math.min(
-    totalBytes - requestedOffset,
+    totalBytes - readOffset,
     normalized.maxBytes + 4
   )
-  const value = await reader.read(requestedOffset, readLength)
+  const value = await reader.read(readOffset, readLength)
   const buffer = Buffer.isBuffer(value) ? value : Buffer.from(value || '')
-  const byteLimit = Math.min(buffer.length, normalized.maxBytes)
-  let start = 0
-
-  if (requestedOffset > 0) {
-    while (start < buffer.length && isContinuationByte(buffer[start])) {
-      start += 1
+  if (buffer.length === 0) {
+    const currentTotalBytes = Math.max(0, await reader.size())
+    const currentOffset = Math.min(requestedOffset, currentTotalBytes)
+    return {
+      content: '',
+      binary: false,
+      offset: currentOffset,
+      nextOffset: currentOffset,
+      totalBytes: currentTotalBytes,
+      bytesRead: 0,
+      hasMore: false
     }
   }
+  const requestedIndex = Math.min(contextBytes, buffer.length)
+  const byteLimit = Math.min(
+    buffer.length,
+    requestedIndex + normalized.maxBytes
+  )
+  const start = findSafeStart(buffer, requestedIndex)
 
-  const end = findContentEnd(buffer, start, byteLimit)
+  const end = findContentEnd(
+    buffer,
+    start,
+    byteLimit,
+    readOffset + buffer.length >= totalBytes
+  )
   const contentBuffer = buffer.subarray(start, end)
   const binary = isLikelyBinaryBuffer(contentBuffer)
-  const offset = requestedOffset + start
-  const nextOffset = requestedOffset + end
+  const offset = readOffset + start
+  const nextOffset = readOffset + end
 
   return {
     content: binary ? '' : contentBuffer.toString('utf8'),
@@ -109,6 +159,7 @@ async function readTextRange (reader, options) {
 }
 
 module.exports = {
+  MIN_RANGE_BYTES,
   DEFAULT_RANGE_BYTES,
   MAX_RANGE_BYTES,
   normalizeRangeOptions,

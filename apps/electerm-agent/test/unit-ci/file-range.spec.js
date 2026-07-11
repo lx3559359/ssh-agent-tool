@@ -76,15 +76,135 @@ describe('local file range reading', () => {
       fss.open = originalOpen
     }
   })
+
+  test('combines short reads until the requested range or EOF', async () => {
+    const originalOpen = fss.open
+    const value = Buffer.from('short read text')
+    let readCalls = 0
+    fss.open = async () => ({
+      async stat () {
+        return { size: value.length }
+      },
+      async read (buffer, bufferOffset, length, position) {
+        const bytesRead = Math.min(2, length, value.length - position)
+        value.copy(buffer, bufferOffset, position, position + bytesRead)
+        readCalls += 1
+        return { bytesRead, buffer }
+      },
+      async close () {}
+    })
+
+    try {
+      const result = await fsExport.readFileRange('unused.txt', {
+        maxBytes: value.length
+      })
+      assert.equal(result.content, value.toString())
+      assert.equal(result.hasMore, false)
+      assert.ok(readCalls > 1)
+    } finally {
+      fss.open = originalOpen
+    }
+  })
+
+  test('rechecks size after a zero-byte read caused by truncation', async () => {
+    const originalOpen = fss.open
+    let statCalls = 0
+    fss.open = async () => ({
+      async stat () {
+        statCalls += 1
+        return { size: statCalls === 1 ? 10 : 0 }
+      },
+      async read () {
+        return { bytesRead: 0, buffer: Buffer.alloc(0) }
+      },
+      async close () {}
+    })
+
+    try {
+      assert.deepEqual(await fsExport.readFileRange('unused.txt'), {
+        content: '',
+        binary: false,
+        offset: 0,
+        nextOffset: 0,
+        totalBytes: 0,
+        bytesRead: 0,
+        hasMore: false
+      })
+      assert.equal(statCalls, 2)
+    } finally {
+      fss.open = originalOpen
+    }
+  })
+
+  test('reassembles a large real UTF-8 file from bounded ranges', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'electerm-file-range-'))
+    const filePath = path.join(root, 'large.txt')
+    const content = '行甲乙丙\n'.repeat(2000)
+    fs.writeFileSync(filePath, content)
+    const parts = []
+    let offset = 0
+
+    try {
+      while (offset < Buffer.byteLength(content)) {
+        const range = await fsExport.readFileRange(filePath, {
+          offset,
+          maxBytes: 257
+        })
+        assert.ok(range.nextOffset > offset)
+        assert.ok(Buffer.byteLength(range.content) <= 257)
+        parts.push(range.content)
+        offset = range.nextOffset
+      }
+      assert.equal(parts.join(''), content)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('corrects a non-zero UTF-8 offset in a real file', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'electerm-file-range-'))
+    const filePath = path.join(root, 'utf8.txt')
+    fs.writeFileSync(filePath, '甲乙丙')
+
+    try {
+      const range = await fsExport.readFileRange(filePath, {
+        offset: 1,
+        maxBytes: 5
+      })
+      assert.equal(range.binary, false)
+      assert.equal(range.offset, 3)
+      assert.equal(range.content, '乙')
+      assert.equal(range.nextOffset, 6)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('rejects binary content from a real file', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'electerm-file-range-'))
+    const filePath = path.join(root, 'binary.bin')
+    fs.writeFileSync(filePath, Buffer.from([0x61, 0x00, 0x62]))
+
+    try {
+      const range = await fsExport.readFileRange(filePath)
+      assert.equal(range.binary, true)
+      assert.equal(range.content, '')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('file range helpers', () => {
   test('normalizes invalid options and caps maxBytes at 1 MiB', () => {
     const {
       DEFAULT_RANGE_BYTES,
+      MIN_RANGE_BYTES,
       MAX_RANGE_BYTES,
       normalizeRangeOptions
     } = loadRangeHelpers()
+
+    assert.equal(MIN_RANGE_BYTES, 4)
 
     for (const offset of [
       undefined,
@@ -116,6 +236,9 @@ describe('file range helpers', () => {
       offset: 12,
       maxBytes: 128
     })
+    for (const maxBytes of [1, 2, 3]) {
+      assert.equal(normalizeRangeOptions({ maxBytes }).maxBytes, MIN_RANGE_BYTES)
+    }
     assert.equal(
       normalizeRangeOptions({ maxBytes: 2 * MAX_RANGE_BYTES }).maxBytes,
       MAX_RANGE_BYTES
@@ -210,6 +333,28 @@ describe('file range helpers', () => {
     assert.equal(parts.join(''), original)
   })
 
+  test('normalizes tiny ranges and always advances while more text remains', async () => {
+    const { readTextRange } = loadRangeHelpers()
+    const original = '甲乙丙丁戊'
+
+    for (const maxBytes of [1, 2, 3]) {
+      const { reader } = createReader(original)
+      const parts = []
+      let offset = 0
+
+      while (offset < Buffer.byteLength(original)) {
+        const range = await readTextRange(reader, { offset, maxBytes })
+        if (range.hasMore) {
+          assert.ok(range.nextOffset > offset)
+        }
+        parts.push(range.content)
+        offset = range.nextOffset
+      }
+
+      assert.equal(parts.join(''), original)
+    }
+  })
+
   test('advances an offset inside a UTF-8 character to the next character', async () => {
     const { readTextRange } = loadRangeHelpers()
     const { reader } = createReader('甲乙丙')
@@ -248,5 +393,26 @@ describe('file range helpers', () => {
       bytesRead: value.length,
       hasMore: false
     })
+  })
+
+  test('does not skip unproven continuation bytes at a non-zero offset', async () => {
+    const { readTextRange } = loadRangeHelpers()
+    const value = Buffer.from([0x61, 0x80, 0x80, 0x80, 0x80, 0x80, 0x62])
+    const source = createReader(value)
+    let offset = 1
+    let sawBinary = false
+
+    while (offset < value.length) {
+      const range = await readTextRange(source.reader, {
+        offset,
+        maxBytes: 4
+      })
+      sawBinary = sawBinary || range.binary
+      assert.ok(range.nextOffset > offset)
+      offset = range.nextOffset
+    }
+
+    assert.equal(sawBinary, true)
+    assert.ok(source.reads.every(read => read.length <= 8))
   })
 })
