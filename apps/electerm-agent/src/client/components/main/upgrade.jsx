@@ -1,7 +1,7 @@
 import { PureComponent } from 'react'
 import { CloseOutlined, MinusSquareOutlined, UpCircleOutlined } from '@ant-design/icons'
 import { Button } from 'antd'
-import { getLatestReleaseInfo, getLatestReleaseStatus } from '../../common/update-check'
+import { getLatestReleaseStatus } from '../../common/update-check'
 import compare from '../../common/version-compare'
 import Link from '../common/external-link'
 import {
@@ -111,13 +111,26 @@ export default class Upgrade extends PureComponent {
         return
       }
       this.trackNativeUpdateProgress()
-      await window.pre.runGlobalAsync('nativeUpdateDownload', updateOptions)
+      const downloadState = await window.pre.runGlobalAsync('nativeUpdateDownload', updateOptions)
+      if (downloadState?.status && downloadState.status !== 'downloading' && !downloadState.downloaded) {
+        this.clearNativeUpdatePoll()
+        this.changeProps({
+          upgrading: false,
+          upgradePercent: 0,
+          upgradeReady: false,
+          error: downloadState.message || '该版本暂时不能在线更新。'
+        })
+        return
+      }
       const finalState = await window.pre.runGlobalAsync('nativeUpdateState')
       this.clearNativeUpdatePoll()
+      if (!finalState?.downloaded) {
+        throw new Error(finalState?.error || '更新文件尚未下载完成，请稍后重试。')
+      }
       this.changeProps({
         upgrading: false,
         upgradePercent: finalState?.percent || 100,
-        upgradeReady: true
+        upgradeReady: Boolean(finalState?.downloaded)
       })
       message.success('更新已下载完成，重启客户端即可完成更新。')
     } catch (err) {
@@ -192,7 +205,11 @@ export default class Upgrade extends PureComponent {
       const errorMessage = err?.message || '检查更新失败，请稍后重试。'
       checkingMessage?.destroy()
       this.changeProps({
-        checkingRemoteVersion: false
+        checkingRemoteVersion: false,
+        lastCheckStatus: 'unavailable',
+        updateMessage: errorMessage,
+        lastCheckedAt: Date.now(),
+        remoteVersion: ''
       })
       if (isManual) {
         this.showNoUpdateInfo(errorMessage, 'error')
@@ -200,8 +217,20 @@ export default class Upgrade extends PureComponent {
       return
     }
     checkingMessage?.destroy()
+    const remoteVersion = releaseStatus.tag_name || ''
+    const releaseInfo = releaseStatus.body
+      ? { body: releaseStatus.body, date: releaseStatus.date || '未知日期' }
+      : undefined
     this.changeProps({
-      checkingRemoteVersion: false
+      checkingRemoteVersion: false,
+      lastCheckStatus: releaseStatus.status,
+      updateMessage: releaseStatus.message || '',
+      lastCheckedAt: Date.now(),
+      remoteVersion,
+      manualDownloadUrl: releaseStatus.html_url,
+      releaseInfo,
+      shouldUpgrade: false,
+      canAutoUpgrade: false
     })
     if (releaseStatus.status === 'unavailable') {
       if (isManual) {
@@ -223,7 +252,7 @@ export default class Upgrade extends PureComponent {
     }
     const { skipVersion = 'v0.0.0' } = this.props
     const currentVer = 'v' + window.et.version.split('-')[0]
-    const latestVer = releaseStatus.tag_name
+    const latestVer = remoteVersion
     if (!latestVer) {
       if (isManual) {
         this.showNoUpdateInfo(releaseStatus.message || e('noNeed'), 'success')
@@ -242,10 +271,6 @@ export default class Upgrade extends PureComponent {
     }
     const needsManualDownload = releaseStatus.status === 'manualDownloadRequired'
     const canAutoUpgrade = !needsManualDownload && (installSrc || isWin || isMac)
-    let releaseInfo
-    if (canAutoUpgrade) {
-      releaseInfo = await getLatestReleaseInfo()
-    }
     if (needsManualDownload && isManual) {
       this.showNoUpdateInfo(releaseStatus.message, 'warning')
     }
@@ -255,7 +280,7 @@ export default class Upgrade extends PureComponent {
       remoteVersion: latestVer,
       manualDownloadUrl: releaseStatus.html_url,
       canAutoUpgrade,
-      showUpgradeModal: true
+      showUpgradeModal: !window.store.upgradeInfo.showUpdateCenter
     })
   }
 

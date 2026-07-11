@@ -16,7 +16,8 @@ test('native updater waits for downloaded state before offering install', () => 
   )
   assert.match(upgradeSource, /nativeUpdateDownload/)
   assert.match(upgradeSource, /nativeUpdateState/)
-  assert.match(upgradeSource, /upgradeReady:\s*true/)
+  assert.match(upgradeSource, /if \(!finalState\?\.downloaded\)/)
+  assert.match(upgradeSource, /upgradeReady:\s*Boolean\(finalState\?\.downloaded\)/)
   assert.match(upgradeSource, /nativeUpdateInstall/)
 })
 

@@ -15,12 +15,14 @@ import { Button, Popover, Tooltip } from 'antd'
 import QuickConnect from '../tabs/quick-connect'
 import WindowControl from '../tabs/window-control'
 import ConnectionInventoryModal from '../tree-list/connection-inventory-modal'
+import UpdateCenterModal from './update-center-modal'
 import ConnectionInfoModal from '../tree-list/connection-info-modal'
 import { logoPath1, packInfo, statusMap } from '../../common/constants'
 import './aigshell-topbar.styl'
 
 export default function AIGShellTopBar ({ store }) {
   const [showConnectionInventory, setShowConnectionInventory] = useState(false)
+  const [showUpdateCenter, setShowUpdateCenter] = useState(false)
   const [connectionInfoBookmark, setConnectionInfoBookmark] = useState(null)
   const currentTab = store.currentTab || {}
   const title = currentTab.title || currentTab.name || currentTab.host || '未连接'
@@ -35,7 +37,14 @@ export default function AIGShellTopBar ({ store }) {
   }
 
   function handleCheckUpdate () {
+    setShowUpdateCenter(true)
+    window.store.upgradeInfo.showUpdateCenter = true
     window.store.onCheckUpdate(true)
+  }
+
+  function handleCloseUpdateCenter () {
+    setShowUpdateCenter(false)
+    window.store.upgradeInfo.showUpdateCenter = false
   }
 
   function handleOpenConnectionInventory () {
@@ -182,6 +191,10 @@ export default function AIGShellTopBar ({ store }) {
         bookmark={connectionInfoBookmark}
         bookmarkGroups={store.bookmarkGroups}
         onClose={handleCloseConnectionInfo}
+      />
+      <UpdateCenterModal
+        open={showUpdateCenter}
+        onClose={handleCloseUpdateCenter}
       />
     </div>
   )

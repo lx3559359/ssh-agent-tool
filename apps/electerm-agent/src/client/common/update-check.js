@@ -68,13 +68,22 @@ export async function getLatestReleaseVersion (n) {
 export async function getLatestReleaseStatus () {
   const release = await getApprovedReleaseInfo()
   const updateChannel = getConfiguredUpdateChannel()
-  return getReleaseUpdateStatus(release, packInfo.version, {
+  const status = getReleaseUpdateStatus(release, packInfo.version, {
     arch: isArm ? 'arm64' : 'x64',
     requireWindowsAssets: true,
     requireApprovalManifest: true,
     allowPrerelease: updateChannel === 'beta',
     updateChannel
   })
+  return {
+    ...status,
+    tag_name: status.tag_name || release?.tag_name || '',
+    html_url: status.html_url || release?.html_url || '',
+    body: release?.body || '',
+    date: release?.published_at
+      ? dayjs(release.published_at).format('YYYY-MM-DD')
+      : ''
+  }
 }
 
 export async function getLatestReleaseInfo () {

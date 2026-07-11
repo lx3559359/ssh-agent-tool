@@ -1,0 +1,41 @@
+.update-center-modal
+  color var(--text)
+
+.update-center-summary
+  display grid
+  grid-template-columns repeat(auto-fit, minmax(150px, 1fr))
+  gap 12px 20px
+  padding-bottom 16px
+  border-bottom 1px solid var(--border)
+
+  div
+    display grid
+    gap 4px
+
+  span
+    color var(--text-light)
+    font-size 12px
+
+  b
+    overflow-wrap anywhere
+
+.update-center-message
+  margin 14px 0 0
+
+.update-center-section
+  padding-top 16px
+
+.update-center-section-title
+  margin-bottom 8px
+  font-weight 600
+
+.update-center-actions
+  display flex
+  align-items center
+  flex-wrap wrap
+  gap 8px
+  padding-top 14px
+
+.update-center-changelog
+  max-height min(38vh, 360px)
+  overflow auto
