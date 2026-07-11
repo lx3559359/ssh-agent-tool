@@ -64,7 +64,7 @@ function buildReportData ({ item = {}, now } = {}) {
   ].map(redactText))
 
   return {
-    app: 'AIGShell',
+    app: 'ShellPilot',
     createdAt: now || new Date().toISOString(),
     model: item.modelAI || '',
     provider: item.nameAI || '',
@@ -79,7 +79,7 @@ function buildMarkdown (data) {
     ? data.suggestedActions.map(action => '- ' + markdownCode(action, 'bash')).join('\n')
     : '- 暂无明确建议操作。'
   return [
-    '# AIGShell Agent 诊断报告',
+    '# ShellPilot Agent 诊断报告',
     '',
     `生成时间：${data.createdAt}`,
     data.provider || data.model ? `模型：${[data.provider, data.model].filter(Boolean).join(' / ')}` : '',
@@ -108,11 +108,11 @@ function buildHtml (data) {
     '<html lang="zh-CN">',
     '<head>',
     '<meta charset="utf-8">',
-    '<title>AIGShell Agent 诊断报告</title>',
+    '<title>ShellPilot Agent 诊断报告</title>',
     '<style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;line-height:1.6;padding:24px;color:#1f2937}pre{background:#0f172a;color:#e5e7eb;padding:12px;border-radius:6px;overflow:auto}</style>',
     '</head>',
     '<body>',
-    '<h1>AIGShell Agent 诊断报告</h1>',
+    '<h1>ShellPilot Agent 诊断报告</h1>',
     `<p>生成时间：${escapeHtml(data.createdAt)}</p>`,
     `<p>模型：${escapeHtml([data.provider, data.model].filter(Boolean).join(' / '))}</p>`,
     '<h2>终端输出摘要</h2>',
@@ -131,15 +131,15 @@ export function buildAgentDiagnosticReportFiles (options = {}) {
   const stamp = formatStamp(options.now || data.createdAt)
   return {
     markdown: {
-      filename: `AIGShell-agent-report-${stamp}.md`,
+      filename: `ShellPilot-agent-report-${stamp}.md`,
       content: buildMarkdown(data)
     },
     html: {
-      filename: `AIGShell-agent-report-${stamp}.html`,
+      filename: `ShellPilot-agent-report-${stamp}.html`,
       content: buildHtml(data)
     },
     json: {
-      filename: `AIGShell-agent-report-${stamp}.json`,
+      filename: `ShellPilot-agent-report-${stamp}.json`,
       content: JSON.stringify(data, null, 2)
     }
   }

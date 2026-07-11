@@ -32,21 +32,21 @@ test('Agent diagnostic report builds Markdown HTML and JSON exports with redacti
     now: '2026-07-08T00:00:00.000Z'
   })
 
-  assert.equal(files.markdown.filename, 'AIGShell-agent-report-20260708-000000.md')
-  assert.equal(files.html.filename, 'AIGShell-agent-report-20260708-000000.html')
-  assert.equal(files.json.filename, 'AIGShell-agent-report-20260708-000000.json')
+  assert.equal(files.markdown.filename, 'ShellPilot-agent-report-20260708-000000.md')
+  assert.equal(files.html.filename, 'ShellPilot-agent-report-20260708-000000.html')
+  assert.equal(files.json.filename, 'ShellPilot-agent-report-20260708-000000.json')
 
-  assert.match(files.markdown.content, /# AIGShell Agent 诊断报告/)
+  assert.match(files.markdown.content, /# ShellPilot Agent 诊断报告/)
   assert.match(files.markdown.content, /## 终端输出摘要/)
   assert.match(files.markdown.content, /\/dev\/sda1 91%/)
   assert.match(files.markdown.content, /## AI 分析/)
   assert.match(files.markdown.content, /磁盘使用率较高/)
   assert.match(files.markdown.content, /## 建议操作/)
   assert.match(files.markdown.content, /du -sh \/var\/log\/\*/)
-  assert.match(files.html.content, /<h1>AIGShell Agent 诊断报告<\/h1>/)
+  assert.match(files.html.content, /<h1>ShellPilot Agent 诊断报告<\/h1>/)
 
   const data = JSON.parse(files.json.content)
-  assert.equal(data.app, 'AIGShell')
+  assert.equal(data.app, 'ShellPilot')
   assert.equal(data.model, 'deepseek-chat')
   assert.equal(data.terminalSummary.includes('/dev/sda1 91%'), true)
   assert.equal(data.aiAnalysis.includes('磁盘使用率较高'), true)
