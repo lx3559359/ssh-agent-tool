@@ -13,6 +13,7 @@ import {
 } from 'antd'
 import {
   minRightPanelWidth,
+  getMaxRightPanelWidth,
   normalizeRightPanelWidth
 } from '../main/aigshell-layout'
 
@@ -33,10 +34,12 @@ export default memo(function RightSidePanel (
     return null
   }
   const isAI = rightPanelTab === 'ai'
+  const aiConfigured = Boolean(config.baseURLAI && config.apiKeyAI)
   const tag = isAI
     ? <Tag className='mg1r aigshell-ai-tag'>AI</Tag>
     : <InfoCircleOutlined className='mg1r' />
-  const width = normalizeRightPanelWidth(rightPanelWidth)
+  const maxWidth = getMaxRightPanelWidth(window.innerWidth)
+  const width = Math.min(normalizeRightPanelWidth(rightPanelWidth), maxWidth)
 
   function onDragEnd (nw) {
     window.store.setRightSidePanelWidth(nw)
@@ -70,7 +73,7 @@ export default memo(function RightSidePanel (
   }
   const dragProps = {
     min: minRightPanelWidth,
-    max: 1000,
+    max: maxWidth,
     width,
     onDragEnd,
     onDragMove,
@@ -99,7 +102,11 @@ export default memo(function RightSidePanel (
         <Flex>
           {
             isAI
-              ? <Tag className='right-panel-online'>在线</Tag>
+              ? (
+                <Tag className={'right-panel-online' + (aiConfigured ? '' : ' not-configured')}>
+                  {aiConfigured ? '已配置' : '未配置'}
+                </Tag>
+                )
               : null
           }
           <PushpinOutlined
@@ -111,7 +118,7 @@ export default memo(function RightSidePanel (
           />
         </Flex>
       </Flex>
-      <div className='right-side-panel-content'>
+      <div className={'right-side-panel-content' + (isAI ? ' right-side-panel-content-ai' : '')}>
         {children}
       </div>
     </div>

@@ -24,7 +24,7 @@ export default auto(function AIConfigModal ({ store }) {
 
   function handleSubmit (values) {
     window.store.updateConfig(values)
-    message.success(e('saved') || 'Saved')
+    message.success(e('saved') || '已保存')
     window.store.showAIConfigModal = false
   }
 

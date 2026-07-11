@@ -136,7 +136,7 @@ export default function AIGShellTopBar ({ store }) {
         onClick={item.popover ? undefined : item.onClick}
         className='aigshell-topbar-action'
       >
-        {item.label}
+        <span className='aigshell-topbar-action-label'>{item.label}</span>
       </Button>
     )
     if (!item.popover) {

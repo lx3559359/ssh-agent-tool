@@ -22,6 +22,13 @@ exports.normalizeWindowBounds = function normalizeWindowBounds (rect, displays, 
   const areas = displays.map(getWorkArea)
   const minWidth = limits.minWidth
   const minHeight = limits.minHeight
+  if (areas.length === 0) {
+    return {
+      ...rect,
+      width: Math.max(rect.width, minWidth),
+      height: Math.max(rect.height, minHeight)
+    }
+  }
   const width = Math.max(Math.min(rect.width, areas[0].width), minWidth)
   const height = Math.max(Math.min(rect.height, areas[0].height), minHeight)
   const next = {

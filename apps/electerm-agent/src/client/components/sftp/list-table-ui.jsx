@@ -346,7 +346,7 @@ export default class FileListTable extends Component {
 
   render () {
     const { fileList, height, type } = this.props
-    const containerHeight = height - 42 - 30 - 32 - 90
+    const containerHeight = Math.max(0, height - 42 - 30 - 32 - 90)
     const props = {
       ref: this.containerRef,
       className: 'sftp-table-content overscroll-y relative',

@@ -9,9 +9,9 @@
   align-items center
   justify-content space-between
   padding 0 14px
-  background #f7f8fa
-  border-bottom 1px solid #dfe3ea
-  color #1f2937
+  background var(--main-light)
+  border-bottom 1px solid var(--main-darker)
+  color var(--text)
   -webkit-app-region drag
 
 .aigshell-topbar-brand
@@ -29,7 +29,7 @@
 
 .aigshell-topbar-name
   font-weight 650
-  color #111827
+  color var(--text-light)
   white-space nowrap
 
 .aigshell-topbar-version
@@ -37,8 +37,8 @@
   line-height 20px
   padding 0 7px
   border-radius 999px
-  color #2563eb
-  background #e8f0ff
+  color var(--primary)
+  background var(--main)
   font-size 12px
   font-weight 600
   white-space nowrap
@@ -47,7 +47,7 @@
 .aigshell-topbar-separator
   width 1px
   height 18px
-  background #c9ced8
+  background var(--main-darker)
   flex none
 
 .aigshell-topbar-current
@@ -55,23 +55,23 @@
   overflow hidden
   text-overflow ellipsis
   white-space nowrap
-  color #374151
+  color var(--text)
   font-weight 500
 
 .aigshell-topbar-dot
   width 7px
   height 7px
   border-radius 50%
-  background #aeb6c2
+  background var(--text-disabled)
   flex none
   &.online
-    background #22c55e
-    box-shadow 0 0 0 3px rgba(34, 197, 94, .12)
+    background var(--success)
 
 .aigshell-topbar-actions
   display flex
   align-items center
   gap 6px
+  min-width 0
   height 100%
   padding-right 138px
   -webkit-app-region no-drag
@@ -83,13 +83,13 @@
 .aigshell-topbar-action
   height 30px
   padding 0 10px
-  color #1f2937
+  color var(--text)
   border-radius 6px
   font-size 13px
   font-weight 500
   &:hover
-    color #2563eb !important
-    background #e8f0ff !important
+    color var(--primary) !important
+    background var(--main) !important
 
 .aigshell-topbar
   .window-controls
@@ -107,10 +107,29 @@
     display flex
     align-items center
     justify-content center
-    color #1f2937
+    color var(--text)
     &:hover
-      color #2563eb
-      background #e8f0ff
+      color var(--primary)
+      background var(--main)
   .window-control-close:hover
     color #fff
-    background #ef4444
+    background var(--error)
+
+@media (max-width: 1280px)
+  .aigshell-topbar-actions
+    gap 2px
+  .aigshell-topbar-action
+    width 30px
+    padding 0
+  .aigshell-topbar-action-label
+    display none
+
+@media (max-width: 900px)
+  .aigshell-topbar
+    padding-left 8px
+  .aigshell-topbar-current
+  .aigshell-topbar-separator
+  .aigshell-topbar-dot
+    display none
+  .aigshell-topbar-brand
+    gap 6px

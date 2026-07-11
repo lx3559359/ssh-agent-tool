@@ -99,7 +99,7 @@ export class XmodemClient extends TransferClientBase {
       })
     } else {
       this.isActive = false
-      this.writeToTerminal('\r\n\x1b[33mXMODEM Receive cancelled\x1b[0m\r\n')
+      this.writeToTerminal('\r\n\x1b[33mXMODEM 接收已取消\x1b[0m\r\n')
     }
   }
 
@@ -127,7 +127,7 @@ export class XmodemClient extends TransferClientBase {
       })
     } else {
       this.isActive = false
-      this.writeToTerminal('\r\n\x1b[33mXMODEM Send cancelled\x1b[0m\r\n')
+      this.writeToTerminal('\r\n\x1b[33mXMODEM 发送已取消\x1b[0m\r\n')
     }
   }
 
@@ -137,7 +137,7 @@ export class XmodemClient extends TransferClientBase {
    */
   async initiateReceive () {
     if (this.isActive) {
-      this.writeToTerminal('\r\n\x1b[33m\x1b[1mXMODEM: Transfer already in progress\x1b[0m\r\n')
+      this.writeToTerminal('\r\n\x1b[33m\x1b[1mXMODEM：已有传输任务正在进行\x1b[0m\r\n')
       return
     }
 
@@ -168,7 +168,7 @@ export class XmodemClient extends TransferClientBase {
    */
   async initiateSend () {
     if (this.isActive) {
-      this.writeToTerminal('\r\n\x1b[33m\x1b[1mXMODEM: Transfer already in progress\x1b[0m\r\n')
+      this.writeToTerminal('\r\n\x1b[33m\x1b[1mXMODEM：已有传输任务正在进行\x1b[0m\r\n')
       return
     }
 
@@ -200,7 +200,7 @@ export class XmodemClient extends TransferClientBase {
    */
   onReceiveStart () {
     // Server confirmed it's ready to receive
-    this.writeToTerminal('\r\n\x1b[36mWaiting for remote to start sending file...\x1b[0m\r\n')
+    this.writeToTerminal('\r\n\x1b[36m正在等待远端开始发送文件...\x1b[0m\r\n')
   }
 
   /**
@@ -208,7 +208,7 @@ export class XmodemClient extends TransferClientBase {
    */
   onSendStart () {
     // Server confirmed it's ready to send
-    this.writeToTerminal('\r\n\x1b[36mWaiting for remote to request file (NAK/C)...\x1b[0m\r\n')
+    this.writeToTerminal('\r\n\x1b[36m正在等待远端请求文件（NAK/C）...\x1b[0m\r\n')
   }
 
   /**
@@ -271,7 +271,7 @@ export class XmodemClient extends TransferClientBase {
    * @param {string} error - Error message
    */
   onError (error) {
-    this.writeToTerminal(`\r\n\x1b[31m\x1b[1mXMODEM Error: ${error}\x1b[0m\r\n`)
+    this.writeToTerminal(`\r\n\x1b[31m\x1b[1mXMODEM 错误：${error}\x1b[0m\r\n`)
   }
 
   /**

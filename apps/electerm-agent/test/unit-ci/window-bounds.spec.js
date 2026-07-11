@@ -49,3 +49,22 @@ test('keeps restored window on a valid secondary display', () => {
   assert.equal(rect.x, 2200)
   assert.equal(rect.y, 80)
 })
+
+test('keeps a usable window size when Electron has not reported a display yet', () => {
+  const rect = normalizeWindowBounds({
+    width: 1200,
+    height: 800,
+    x: 0,
+    y: 0
+  }, [], {
+    minWidth: 590,
+    minHeight: 400
+  })
+
+  assert.deepEqual(rect, {
+    width: 1200,
+    height: 800,
+    x: 0,
+    y: 0
+  })
+})

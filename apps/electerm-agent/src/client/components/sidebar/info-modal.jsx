@@ -73,9 +73,9 @@ export default auto(function InfoModal (props) {
   const handleExportDiagnosticPack = async () => {
     const result = await window.api.saveDialog({
       title: '导出诊断包',
-      defaultPath: `AIGShell-diagnostic-${Date.now()}.tar`,
+      defaultPath: `ShellPilot-diagnostic-${Date.now()}.tar`,
       filters: [
-        { name: 'AIGShell 诊断包', extensions: ['tar'] }
+        { name: 'ShellPilot 诊断包', extensions: ['tar'] }
       ],
       properties: ['createDirectory', 'showOverwriteConfirmation']
     })

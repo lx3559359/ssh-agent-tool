@@ -38,7 +38,7 @@ export function startTerminalRecording ({
       filePath,
       addTimeStampToTermLog
     ),
-    failureMessage: 'Failed to start terminal recording',
+    failureMessage: '启动终端录制失败',
     onError,
     onSuccess
   })
@@ -52,7 +52,7 @@ export function stopTerminalRecording ({
 }) {
   return runTerminalLogAction({
     action: () => toggleTerminalLog(pid),
-    failureMessage: 'Failed to stop terminal recording',
+    failureMessage: '停止终端录制失败',
     onError,
     onSuccess
   })
@@ -74,7 +74,7 @@ export async function saveTerminalLog ({
       normalizeTerminalLogContent(content)
     )
     if (writeResult === false) {
-      throw new Error('Failed to write terminal log file')
+      throw new Error('写入终端日志文件失败')
     }
     const startResult = await startTerminalLogFile(
       pid,
@@ -82,7 +82,7 @@ export async function saveTerminalLog ({
       addTimeStampToTermLog
     )
     if (startResult === false) {
-      throw new Error('Failed to start terminal log file')
+      throw new Error('启动终端日志文件失败')
     }
     onSuccess()
     return true

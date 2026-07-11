@@ -165,7 +165,7 @@ test('a false terminal log write result reports an error without starting or suc
   })
 
   assert.equal(result, false)
-  assert.match(errors[0].message, /write terminal log/i)
+  assert.match(errors[0].message, /写入终端日志文件失败/)
   assert.equal(startCalls, 0)
   assert.equal(successCalls, 0)
 })
@@ -209,7 +209,7 @@ test('a false terminal log start result reports an error without succeeding', as
   })
 
   assert.equal(result, false)
-  assert.match(errors[0].message, /start terminal log/i)
+  assert.match(errors[0].message, /启动终端日志文件失败/)
   assert.equal(successCalls, 0)
 })
 

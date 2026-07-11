@@ -144,7 +144,7 @@ export class TrzszClient extends TransferClientBase {
    * @param {number} count - Number of files
    */
   onFileCount (count) {
-    this.writeToTerminal(`\r\n\x1b[36mReceiving ${count} file${count > 1 ? 's' : ''}...\x1b[0m\r\n`)
+    this.writeToTerminal(`\r\n\x1b[36m正在接收 ${count} 个文件...\x1b[0m\r\n`)
   }
 
   /**
@@ -271,13 +271,13 @@ export class TrzszClient extends TransferClientBase {
         const totalSize = formatSize(msg.totalBytes)
         const elapsed = msg.totalElapsed ? msg.totalElapsed.toFixed(1) : '0.0'
         const speed = msg.avgSpeed ? formatSize(msg.avgSpeed) : '0 B'
-        this.writeToTerminal(`\x1b[32m\x1b[1mTransferred ${fileCount} ${fileCount > 1 ? 'files' : 'file'} (${totalSize}) in ${elapsed}s, avg speed: ${speed}/s\x1b[0m\r\n`)
+        this.writeToTerminal(`\x1b[32m\x1b[1m已传输 ${fileCount} 个文件（${totalSize}），耗时 ${elapsed} 秒，平均速度：${speed}/s\x1b[0m\r\n`)
       } else {
-        this.writeToTerminal(`\x1b[32m\x1b[1mSaved ${fileCount} ${fileCount > 1 ? 'files' : 'file'}\x1b[0m\r\n`)
+        this.writeToTerminal(`\x1b[32m\x1b[1m已保存 ${fileCount} 个文件\x1b[0m\r\n`)
       }
 
       if (savePath) {
-        this.writeToTerminal(`\x1b[36mDestination: ${savePath}\x1b[0m\r\n`)
+        this.writeToTerminal(`\x1b[36m保存位置：${savePath}\x1b[0m\r\n`)
       }
 
       // Display file list with sizes
@@ -303,7 +303,7 @@ export class TrzszClient extends TransferClientBase {
    * @param {string} message - Error message
    */
   onError (message) {
-    this.writeToTerminal(`\r\n\x1b[31m\x1b[1mTRZSZ Error: ${message}\x1b[0m\r\n`)
+    this.writeToTerminal(`\r\n\x1b[31m\x1b[1mTRZSZ 错误：${message}\x1b[0m\r\n`)
     this.onSessionEnd()
   }
 }
