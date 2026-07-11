@@ -8,6 +8,38 @@ function isDefaultGroup (item) {
   return item?.id === defaultGroupId
 }
 
+function shellArg (value) {
+  const text = String(value ?? '').trim()
+  if (!text) {
+    return ''
+  }
+  if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(text)) {
+    return text
+  }
+  return `"${text.replace(/(["\\])/g, '\\$1')}"`
+}
+
+export function formatBookmarkSshCommand (bookmark = {}) {
+  const type = bookmark.type || 'ssh'
+  if (type !== 'ssh') {
+    return ''
+  }
+  const host = bookmark.host || bookmark.hostname || bookmark.url || bookmark.path
+  if (!host) {
+    return ''
+  }
+  const username = bookmark.username || bookmark.user
+  const target = username ? `${username}@${host}` : host
+  const parts = ['ssh']
+  if (bookmark.privateKey) {
+    parts.push('-i', shellArg(bookmark.privateKey))
+  }
+  if (bookmark.port) {
+    parts.push('-p', String(bookmark.port))
+  }
+  parts.push(shellArg(target))
+  return parts.join(' ')
+}
 export function formatBookmarkPublicInfo (bookmark = {}) {
   const lines = [
     ['名称', bookmark.title],
@@ -95,6 +127,11 @@ export function buildBookmarkContextMenuItems ({
         label: label('复制连接信息')
       },
       {
+        key: 'copySshCommand',
+        label: label('复制 SSH 命令'),
+        disabled: item.type && item.type !== 'ssh'
+      },
+      {
         key: 'delete',
         label: label('删除连接'),
         danger: true
@@ -138,6 +175,11 @@ export function buildBookmarkContextMenuItems ({
     {
       key: 'copyPublicInfo',
       label: label('复制连接信息')
+    },
+    {
+      key: 'copySshCommand',
+      label: label('复制 SSH 命令'),
+      disabled: item.type && item.type !== 'ssh'
     },
     {
       key: 'delete',

@@ -11,7 +11,8 @@ const moduleUrl = pathToFileURL(
 test('bookmark context menu exposes common server actions without leaking credentials', async () => {
   const {
     buildBookmarkContextMenuItems,
-    formatBookmarkPublicInfo
+    formatBookmarkPublicInfo,
+    formatBookmarkSshCommand
   } = await import(moduleUrl)
 
   const bookmark = {
@@ -42,6 +43,7 @@ test('bookmark context menu exposes common server actions without leaking creden
     'viewConnectionInfo',
     'exportConnection',
     'copyPublicInfo',
+    'copySshCommand',
     'delete'
   ])
 
@@ -53,6 +55,10 @@ test('bookmark context menu exposes common server actions without leaking creden
   assert.match(info, /prod/)
   assert.equal(info.includes('secret'), false)
   assert.equal(info.includes('PRIVATE KEY'), false)
+
+  const command = formatBookmarkSshCommand(bookmark)
+  assert.equal(command, 'ssh -i "PRIVATE KEY" -p 22 root@10.0.1.23')
+  assert.equal(command.includes('secret'), false)
 })
 
 test('bookmark group context menu exposes group actions', async () => {
@@ -100,6 +106,7 @@ test('sidebar bookmark context menu exposes direct connection management actions
     'viewConnectionInfo',
     'exportConnection',
     'copyPublicInfo',
+    'copySshCommand',
     'delete'
   ])
 })
@@ -117,5 +124,7 @@ test('bookmark tree rows wire the context menu to row actions', () => {
   assert.match(source, /testConnection/)
   assert.match(source, /exportConnection/)
   assert.match(source, /copyPublicInfo/)
+  assert.match(source, /copySshCommand/)
+  assert.match(source, /formatBookmarkSshCommand/)
   assert.match(source, /onContextMenuAction/)
 })

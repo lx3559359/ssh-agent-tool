@@ -7,7 +7,8 @@ import { Dropdown } from 'antd'
 import { copy } from '../../common/clipboard'
 import {
   buildBookmarkContextMenuItems,
-  formatBookmarkPublicInfo
+  formatBookmarkPublicInfo,
+  formatBookmarkSshCommand
 } from './bookmark-context-menu'
 
 export default function TreeListRow (props) {
@@ -131,6 +132,9 @@ export default function TreeListRow (props) {
     }
     if (key === 'copyPublicInfo') {
       return copy(formatBookmarkPublicInfo(item))
+    }
+    if (key === 'copySshCommand') {
+      return copy(formatBookmarkSshCommand(item))
     }
     if (key === 'delete' && confirmDelete()) {
       return del(item, safeEvent(domEvent))
