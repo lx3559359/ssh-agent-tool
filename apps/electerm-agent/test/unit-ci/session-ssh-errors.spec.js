@@ -2,10 +2,152 @@ process.env.NODE_ENV = 'development'
 
 const { describe, test } = require('node:test')
 const assert = require('node:assert/strict')
+const Module = require('module')
+const sessionSshPath = require.resolve('../../src/app/server/session-ssh')
 const {
   normalizeSshConnectionError,
   shouldLogSshConnectErrorAsError
-} = require('../../src/app/server/session-ssh')
+} = require(sessionSshPath)
+
+async function withSessionSshMocks ({ proxySock, clientScenarios = [] }, run) {
+  const originalLoad = Module._load
+  delete require.cache[sessionSshPath]
+  class MockSshClient {
+    constructor () {
+      this.scenario = clientScenarios.shift() || {}
+      this.listeners = {}
+    }
+
+    on (event, listener) {
+      this.listeners[event] = listener
+      return this
+    }
+
+    connect () {
+      queueMicrotask(() => {
+        const event = this.scenario.connectError ? 'error' : 'ready'
+        this.listeners[event]?.(this.scenario.connectError)
+      })
+      return this
+    }
+
+    forwardOut (sourceHost, sourcePort, host, port, callback) {
+      queueMicrotask(() => callback(this.scenario.forwardError, { end () {} }))
+    }
+
+    shell (window, options, callback) {
+      queueMicrotask(() => callback(this.scenario.shellError))
+    }
+
+    end () {}
+  }
+  Module._load = function (request, parent, isMain) {
+    if (request === './socks' && parent?.filename === sessionSshPath && proxySock) return proxySock
+    if (request === '@electerm/ssh2') return { Client: MockSshClient }
+    return originalLoad.call(this, request, parent, isMain)
+  }
+  try {
+    return await run(require(sessionSshPath))
+  } finally {
+    Module._load = originalLoad
+    delete require.cache[sessionSshPath]
+  }
+}
+
+function getSessionOptions (overrides = {}) {
+  return {
+    uid: 'session-ssh-error-test',
+    host: 'target.example.com',
+    port: 22,
+    username: 'deploy',
+    password: 'target-password-secret',
+    ...overrides
+  }
+}
+
+describe('session-ssh production session error boundary', () => {
+  test('normalizes proxy establishment rejections without leaking credentials', async () => {
+    const error = new Error('proxy socks5://proxy-user:proxy-password-secret@127.0.0.1:1080 refused')
+    error.code = 'ECONNREFUSED'
+    const options = getSessionOptions({ proxy: 'socks5://proxy-user:proxy-password-secret@127.0.0.1:1080' })
+    await withSessionSshMocks({
+      proxySock: async () => { throw error },
+      clientScenarios: [{}]
+    }, async ({ session }) => {
+      await assert.rejects(session(options), err => {
+        assert.equal(err, error)
+        assert.equal(err.sshConnectionErrorNormalized, true)
+        assert.match(err.message, /SSH 代理连接失败/)
+        assert.doesNotMatch(err.message, /proxy-password-secret|target-password-secret/)
+        return true
+      })
+    })
+  })
+
+  test('normalizes jump forwarding rejections from session()', async () => {
+    const error = new Error('Channel open failure: administratively prohibited')
+    const options = getSessionOptions({
+      connectionHoppings: [{ host: 'final.example.com', port: 22, username: 'final-user', password: 'final-password-secret' }]
+    })
+    await withSessionSshMocks({ clientScenarios: [{ forwardError: error }] }, async ({ session }) => {
+      await assert.rejects(session(options), err => {
+        assert.equal(err, error)
+        assert.equal(err.sshConnectionErrorNormalized, true)
+        assert.match(err.message, /SSH 端口转发或跳板策略禁止/)
+        assert.doesNotMatch(err.message, /target-password-secret|final-password-secret/)
+        return true
+      })
+    })
+  })
+
+  test('normalizes jump authentication rejections from session()', async () => {
+    const error = new Error('Authentication failed password=jump-password-secret')
+    const options = getSessionOptions({
+      connectionHoppings: [{ host: 'final.example.com', port: 22, username: 'final-user', password: 'jump-password-secret' }]
+    })
+    await withSessionSshMocks({ clientScenarios: [{}, { connectError: error }] }, async ({ session }) => {
+      await assert.rejects(session(options), err => {
+        assert.equal(err, error)
+        assert.equal(err.sshConnectionErrorNormalized, true)
+        assert.match(err.message, /SSH 认证失败/)
+        assert.doesNotMatch(err.message, /jump-password-secret|target-password-secret/)
+        return true
+      })
+    })
+  })
+
+  test('normalizes final shell creation rejections from session()', async () => {
+    const error = new Error([
+      'Unable to open shell password=shell-password-secret',
+      '-----BEGIN OPENSSH PRIVATE KEY-----',
+      'shell-private-key-secret',
+      '-----END OPENSSH PRIVATE KEY-----'
+    ].join('\n'))
+    await withSessionSshMocks({ clientScenarios: [{ shellError: error }] }, async ({ session }) => {
+      await assert.rejects(session(getSessionOptions()), err => {
+        assert.equal(err, error)
+        assert.equal(err.sshConnectionErrorNormalized, true)
+        assert.match(err.message, /SSH 连接失败/)
+        assert.doesNotMatch(err.message, /shell-password-secret|shell-private-key-secret|target-password-secret/)
+        return true
+      })
+    })
+  })
+
+  test('does not wrap an already normalized session rejection again', async () => {
+    const options = getSessionOptions()
+    const error = normalizeSshConnectionError(new Error('connect ECONNREFUSED target.example.com:22'), options)
+    const message = error.message
+    await withSessionSshMocks({ clientScenarios: [{ shellError: error }] }, async ({ session }) => {
+      await assert.rejects(session(options), err => {
+        assert.equal(err, error)
+        assert.equal(err.message, message)
+        assert.equal((err.message.match(/原始错误：/g) || []).length, 1)
+        return true
+      })
+    })
+  })
+})
 
 describe('session-ssh connection error diagnostics', () => {
   test('does not log expected two factor auth retry as an ssh error', () => {
@@ -28,6 +170,21 @@ describe('session-ssh connection error diagnostics', () => {
     assert.match(normalized.message, /10\.0\.1\.23:22/)
     assert.match(normalized.message, /检查服务器地址、端口、sshd 服务/)
     assert.match(normalized.message, /原始错误：connect ECONNREFUSED/)
+  })
+
+  test('adds next-step log guidance to ssh connection failures', () => {
+    const error = new Error('connect ECONNREFUSED 10.0.1.23:22')
+    error.code = 'ECONNREFUSED'
+
+    const normalized = normalizeSshConnectionError(error, {
+      host: '10.0.1.23',
+      port: 22,
+      username: 'root'
+    })
+
+    assert.match(normalized.message, /下一步：/)
+    assert.match(normalized.message, /打开会话日志目录/)
+    assert.match(normalized.message, /导出诊断包/)
   })
 
   test('adds a chinese diagnosis for connection refused messages without errno code', () => {

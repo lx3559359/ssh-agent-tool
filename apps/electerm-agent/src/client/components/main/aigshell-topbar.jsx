@@ -171,6 +171,7 @@ export default function AIGShellTopBar ({ store }) {
           ? (
             <ConnectionInventoryModal
               bookmarks={store.bookmarks}
+              bookmarkGroups={store.bookmarkGroups}
               onClose={handleCloseConnectionInventory}
               onViewConnectionInfo={handleViewConnectionInfo}
             />
@@ -179,6 +180,7 @@ export default function AIGShellTopBar ({ store }) {
       }
       <ConnectionInfoModal
         bookmark={connectionInfoBookmark}
+        bookmarkGroups={store.bookmarkGroups}
         onClose={handleCloseConnectionInfo}
       />
     </div>

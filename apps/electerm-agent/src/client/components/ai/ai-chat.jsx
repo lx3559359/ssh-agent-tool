@@ -25,7 +25,6 @@ import {
 } from './ai-chat-actions'
 import {
   buildCommandSuggestionPrompt,
-  buildSftpFileContextPrompt,
   buildTerminalContextPrompt
 } from './ai-ssh-context'
 import {
@@ -40,7 +39,8 @@ import {
   getAIContextUnavailableMessage,
   getTerminalOutputText,
   getTerminalSelectionText,
-  readSelectedSftpFileContext,
+  buildSelectedSftpFileAnalysisPrompt,
+  replacePromptIfUnchanged,
   shouldAutoAttachSelectedSftpFileContext
 } from './ai-chat-context-actions'
 import message from '../common/message'
@@ -61,6 +61,7 @@ export default function AIChat (props) {
   }
 
   const handleSubmit = useCallback(async function (submitPromptOverride) {
+    const promptAtSubmit = prompt
     let submitPrompt = typeof submitPromptOverride === 'string' ? submitPromptOverride : prompt
     const submitAction = getAIChatSubmitAction({
       prompt: submitPrompt,
@@ -73,8 +74,12 @@ export default function AIChat (props) {
     }
 
     if (shouldAutoAttachSelectedSftpFileContext(submitPrompt)) {
-      const result = await readSelectedSftpFileContext({
+      const result = await buildSelectedSftpFileAnalysisPrompt({
         sftpRef: getActiveSftpRef({
+          store: window.store,
+          refs
+        }),
+        termRef: getActiveTerminalRef({
           store: window.store,
           refs
         }),
@@ -90,10 +95,7 @@ export default function AIChat (props) {
         message.warning(result.message)
         return
       }
-      submitPrompt = `${submitPrompt}\n\n${buildSftpFileContextPrompt({
-        path: result.path,
-        content: result.content
-      })}`
+      submitPrompt = `${submitPrompt}\n\n${result.prompt}`
     }
 
     const chatId = uid()
@@ -122,7 +124,9 @@ export default function AIChat (props) {
     }
 
     appendAIChatHistory(window.store, chatEntry, MAX_HISTORY)
-    setPrompt('')
+    setPrompt(current =>
+      replacePromptIfUnchanged(current, promptAtSubmit, '')
+    )
   }, [prompt, mode, props.config])
 
   function renderHistory () {
@@ -189,8 +193,13 @@ export default function AIChat (props) {
   }
 
   async function handleQuoteSftpFile () {
-    const result = await readSelectedSftpFileContext({
+    const promptAtStart = prompt
+    const result = await buildSelectedSftpFileAnalysisPrompt({
       sftpRef: getActiveSftpRef({
+        store: window.store,
+        refs
+      }),
+      termRef: getActiveTerminalRef({
         store: window.store,
         refs
       }),
@@ -206,10 +215,9 @@ export default function AIChat (props) {
       message.warning(result.message)
       return
     }
-    setPrompt(buildSftpFileContextPrompt({
-      path: result.path,
-      content: result.content
-    }))
+    setPrompt(current =>
+      replacePromptIfUnchanged(current, promptAtStart, result.prompt)
+    )
   }
 
   function handleQuoteMcpServers () {

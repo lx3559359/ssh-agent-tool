@@ -8,11 +8,31 @@ const { promisify } = require('util')
 const { exec, spawn } = require('child_process')
 const execAsync = promisify(exec)
 const { getSizeCount, getSizeCountWin } = require('../common/get-folder-size-and-file-count.js')
+const {
+  normalizePreviewMaxBytes,
+  createTextFilePreview
+} = require('../common/file-preview')
 
 const ROOT_PATH = '/'
 
 function encodeUtf8Base64 (value) {
   return Buffer.from(String(value), 'utf8').toString('base64')
+}
+
+async function readFilePreview (filePath, maxBytes) {
+  const limit = normalizePreviewMaxBytes(maxBytes)
+  const handle = await fss.open(filePath, 'r')
+  try {
+    const buffer = Buffer.alloc(limit + 1)
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0)
+    const value = buffer.subarray(0, bytesRead)
+    return createTextFilePreview(value, {
+      maxBytes: limit,
+      truncated: bytesRead > limit
+    })
+  } finally {
+    await handle.close()
+  }
 }
 
 // Encoding function
@@ -387,6 +407,7 @@ const fsExport = Object.assign(
           }
         })
     },
+    readFilePreview,
     readFile: (...args) => {
       return fss.readFile(...args, 'utf8')
     },

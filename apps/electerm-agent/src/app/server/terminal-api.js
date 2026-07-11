@@ -29,18 +29,34 @@ function resize (ws, msg) {
   })
 }
 
-function toggleTerminalLog (ws, msg) {
+async function handleTerminalLogControl (ws, msg, operation) {
   const { id, pid } = msg
-  const term = terminals(pid)
-  if (term) {
-    term.toggleTerminalLog(id)
+  try {
+    const term = terminals(pid)
+    if (!term) {
+      throw new Error(`Terminal with PID ${pid} not found`)
+    }
+    await operation(term)
+    ws.s({
+      id,
+      data: 'ok'
+    })
+  } catch (err) {
+    ws.s({
+      id,
+      error: {
+        message: err.message,
+        stack: err.stack
+      }
+    })
   }
-  ws.s({
-    id,
-    data: 'ok'
-  })
 }
 
+function toggleTerminalLog (ws, msg) {
+  return handleTerminalLogControl(ws, msg, term => {
+    return term.toggleTerminalLog(msg.id)
+  })
+}
 function toggleTerminalLogTimestamp (ws, msg) {
   const { id, pid } = msg
   const term = terminals(pid)
@@ -104,29 +120,19 @@ function testTerm (ws, msg) {
 }
 
 function setTerminalLogPath (ws, msg) {
-  const { id, pid, logPath } = msg
-  const term = terminals(pid)
-  if (term) {
-    term.setTerminalLogPath(id, logPath)
-  }
-  ws.s({
-    id,
-    data: 'ok'
+  return handleTerminalLogControl(ws, msg, term => {
+    return term.setTerminalLogPath(msg.id, msg.logPath)
   })
 }
-
 function startTerminalLogFile (ws, msg) {
-  const { id, pid, logFilePath, addTimeStampToTermLog } = msg
-  const term = terminals(pid)
-  if (term) {
-    term.startTerminalLogFile(id, logFilePath, addTimeStampToTermLog)
-  }
-  ws.s({
-    id,
-    data: 'ok'
+  return handleTerminalLogControl(ws, msg, term => {
+    return term.startTerminalLogFile(
+      msg.id,
+      msg.logFilePath,
+      msg.addTimeStampToTermLog
+    )
   })
 }
-
 exports.createTerm = createTerm
 exports.testTerm = testTerm
 exports.resize = resize

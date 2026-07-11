@@ -1,53 +1,119 @@
-const { _electron: electron } = require('@playwright/test')
-const {
-  test: it
-} = require('@playwright/test')
+const { test: it, expect } = require('@playwright/test')
 const { describe } = it
-it.setTimeout(100000)
-const delay = require('./common/wait')
-const log = require('./common/log')
-const { expect } = require('./common/expect')
-const appOptions = require('./common/app-options')
-const e = require('./common/lang')
-const extendClient = require('./common/client-extend')
+const {
+  launchBookmarkApp,
+  cleanupBookmarkArtifacts,
+  closeBookmarkApp,
+  cleanupBookmarkProfile
+} = require('./common/bookmark-lifecycle')
+
+it.setTimeout(120000)
+
+async function groupIdByTitle (client, title) {
+  return client.evaluate((expectedTitle) => {
+    return window.store.bookmarkGroups.find(item => item.title === expectedTitle)?.id || ''
+  }, title)
+}
+
+async function openContextMenu (client, groupId) {
+  const item = client.locator(`.setting-wrap .tree-item.is-category[data-item-id="${groupId}"]`)
+  await expect(item).toBeVisible()
+  await item.click({ button: 'right' })
+  const menu = client.locator('.ant-dropdown:not(.ant-dropdown-hidden) .ant-dropdown-menu:visible').last()
+  await expect(menu).toBeVisible()
+  await expect(menu.locator('[role="menuitem"]')).not.toHaveCount(0)
+  return menu
+}
 
 describe('bookmark groups', function () {
-  it('all buttons open proper bookmark tab', async function () {
-    const electronApp = await electron.launch(appOptions)
-    const client = await electronApp.firstWindow()
-    extendClient(client, electronApp)
-    await delay(3500)
+  it('creates, edits, searches and permanently deletes a group', async function () {
+    const suffix = `${Date.now()}-${process.pid}`
+    const originalTitle = `E2E-G-${suffix}`
+    const editedTitle = `E2E-G2-${suffix}`
+    const artifacts = {
+      groupIds: [],
+      groupTitles: [originalTitle, editedTitle]
+    }
+    let electronApp
+    let client
 
-    log('button:edit')
-    await client.click('.btns .anticon-plus-circle')
-    await delay(2500)
-    const sel = '.setting-wrap .ant-tabs-nav-list .ant-tabs-tab-active'
-    await client.hasElem(sel)
-    const text = await client.getText(sel)
-    expect(text).equal(e('bookmarks'))
+    try {
+      const launched = await launchBookmarkApp()
+      electronApp = launched.electronApp
+      client = launched.client
+      await client.locator('.aigshell-topbar-action .anticon-plus-circle').click()
+      await client.locator('.setting-wrap .tree-list.item-type-bookmarks').waitFor({
+        state: 'visible',
+        timeout: 10000
+      })
 
-    log('click add category button')
-    await client.click('.setting-wrap .anticon-folder.with-plus')
+      await client.locator('.setting-wrap .anticon-folder.with-plus').click()
+      const editorInput = client.locator('.setting-wrap .tree-list-editor-overlay input.ant-input')
+      await editorInput.fill(originalTitle)
+      await client.locator('.setting-wrap .tree-list-editor-overlay .anticon-check').click()
+      await expect.poll(() => groupIdByTitle(client, originalTitle)).not.toBe('')
+      const groupId = await groupIdByTitle(client, originalTitle)
+      artifacts.groupIds.push(groupId)
 
-    const id = 'u567'
-    await client.setValue('.setting-wrap .item-list-wrap input.ant-input', id)
+      let menu = await openContextMenu(client, groupId)
+      await menu.locator('[role="menuitem"]').nth(1).click()
+      await expect(editorInput).toHaveValue(originalTitle)
+      await editorInput.fill(editedTitle)
+      await client.locator('.setting-wrap .tree-list-editor-overlay .anticon-check').click()
+      await expect.poll(() => groupIdByTitle(client, editedTitle)).toBe(groupId)
 
-    log('save it')
-    const bookmarkGroupsCountPrev = await client.evaluate(() => {
-      return window.store.bookmarkGroups.length
-    })
-    await delay(200)
-    await client.click('.setting-wrap .ant-input-suffix .anticon-check')
-    await delay(1200)
-    const bookmarkGroupsCount = await client.evaluate(() => {
-      return window.store.bookmarkGroups.length
-    })
-    expect(bookmarkGroupsCountPrev + 1).equal(bookmarkGroupsCount)
-    await client.evaluate(() => {
-      return window.store.setBookmarkGroups(
-        window.store.bookmarkGroups.filter(d => d !== 'u567')
-      )
-    })
-    await electronApp.close().catch(console.log)
+      await client.locator('.setting-wrap .tree-sort-wrap input').fill(editedTitle)
+      const result = client.locator(`.setting-wrap .tree-item.is-category[data-item-id="${groupId}"]`)
+      await expect(result).toBeVisible()
+      await expect(result).toContainText(editedTitle)
+
+      menu = await openContextMenu(client, groupId)
+      const deleteItem = menu.locator('.ant-dropdown-menu-item-danger')
+      await expect(deleteItem).toBeVisible()
+      let deleteConfirmed = false
+      await Promise.all([
+        client.waitForEvent('dialog').then(async dialog => {
+          expect(dialog.type()).toBe('confirm')
+          expect(dialog.message()).not.toBe('')
+          deleteConfirmed = true
+          await dialog.accept()
+        }),
+        deleteItem.click()
+      ])
+      expect(deleteConfirmed).toBe(true)
+      await expect.poll(() => groupIdByTitle(client, editedTitle)).toBe('')
+      await expect(result).toHaveCount(0)
+
+      await client.waitForTimeout(750)
+      await closeBookmarkApp(electronApp, __filename)
+      electronApp = null
+      client = null
+
+      const restarted = await launchBookmarkApp()
+      electronApp = restarted.electronApp
+      client = restarted.client
+      expect(await groupIdByTitle(client, editedTitle)).toBe('')
+      expect(await client.evaluate(id => window.store.bookmarkGroups.some(item => item.id === id), groupId)).toBe(false)
+
+      await client.locator('.aigshell-topbar-action .anticon-plus-circle').click()
+      await client.locator('.setting-wrap .tree-list.item-type-bookmarks').waitFor({
+        state: 'visible',
+        timeout: 10000
+      })
+      await client.locator('.setting-wrap .tree-sort-wrap input').fill(editedTitle)
+      await expect(client.locator(`.setting-wrap .tree-item.is-category[data-item-id="${groupId}"]`)).toHaveCount(0)
+    } finally {
+      if (!client || client.isClosed()) {
+        await closeBookmarkApp(electronApp, __filename).catch(() => {})
+        const relaunched = await launchBookmarkApp().catch(() => null)
+        electronApp = relaunched?.electronApp
+        client = relaunched?.client
+      }
+      if (client && !client.isClosed()) {
+        await cleanupBookmarkArtifacts(client, artifacts).catch(() => {})
+      }
+      await closeBookmarkApp(electronApp, __filename).catch(() => {})
+      await cleanupBookmarkProfile().catch(() => {})
+    }
   })
 })

@@ -107,6 +107,21 @@ function sanitizeDiagnosticPath (name) {
     : ''
 }
 
+function buildDiagnosticSummary (included = [], omitted = []) {
+  const lines = [
+    'Included files:',
+    ...included.map(name => `- ${name}`),
+    '',
+    'Omitted files:'
+  ]
+  if (!omitted.length) {
+    lines.push('- None')
+  } else {
+    lines.push(...omitted.map(item => `- ${item.path}: ${item.reason}`))
+  }
+  return lines.join('\n') + '\n'
+}
+
 function buildDiagnosticReport (options = {}) {
   const redactOptions = {
     homeDir: options.homeDir || os.homedir(),
@@ -140,21 +155,31 @@ function buildDiagnosticReport (options = {}) {
     redactDiagnosticText(options.logText, redactOptions),
     options.maxLogChars
   )
-  const manifestText = JSON.stringify(manifest, null, 2)
-  const files = {
-    'manifest.json': manifestText,
+  const logFiles = {
     'logs/main.log': safeLog
   }
 
   for (const item of options.additionalLogs || []) {
     const fileName = sanitizeDiagnosticPath(item?.name)
-    if (!fileName || files[fileName]) {
+    if (!fileName || logFiles[fileName]) {
       continue
     }
-    files[fileName] = limitLogText(
+    logFiles[fileName] = limitLogText(
       redactDiagnosticText(item.text, redactOptions),
       options.maxLogChars
     )
+  }
+
+  const omitted = (options.omissions || []).map(item => ({
+    path: sanitizeDiagnosticPath(item?.path) || 'logs/unknown.log',
+    reason: String(item?.reason || 'unknown')
+  }))
+  const included = ['manifest.json', 'summary.txt', ...Object.keys(logFiles)]
+  manifest.files = { included, omitted }
+  const files = {
+    'manifest.json': JSON.stringify(manifest, null, 2),
+    'summary.txt': buildDiagnosticSummary(included, omitted),
+    ...logFiles
   }
 
   return {
@@ -174,74 +199,112 @@ async function readLogText (logFilePath) {
   }
 }
 
-async function readRecentLogFiles (logDir, prefix, options = {}) {
+async function collectRecentLogFiles (logDir, prefix, options = {}) {
+  const logs = []
+  const omissions = []
   if (!logDir) {
-    return []
+    return { logs, omissions }
   }
+  let entries
   try {
-    const entries = await fsp.readdir(logDir, { withFileTypes: true })
-    const files = []
-    for (const entry of entries) {
-      if (!entry.isFile()) {
-        continue
-      }
+    entries = await fsp.readdir(logDir, { withFileTypes: true })
+  } catch {
+    omissions.push({
+      path: sanitizeDiagnosticPath(path.posix.join(prefix, 'directory.log')),
+      reason: 'directory_read_failed'
+    })
+    return { logs, omissions }
+  }
+
+  const files = []
+  for (const entry of entries) {
+    if (!entry.isFile()) {
+      continue
+    }
+    const diagnosticPath = sanitizeDiagnosticPath(path.posix.join(prefix, entry.name))
+    if (path.extname(entry.name).toLowerCase() !== '.log') {
+      omissions.push({ path: diagnosticPath, reason: 'unsupported_file_type' })
+      continue
+    }
+    try {
       const fullPath = path.join(logDir, entry.name)
       const stat = await fsp.stat(fullPath)
       files.push({
         name: path.posix.join(prefix, entry.name),
+        diagnosticPath,
         fullPath,
         mtimeMs: stat.mtimeMs
       })
+    } catch {
+      omissions.push({ path: diagnosticPath, reason: 'read_failed' })
     }
-    files.sort((a, b) => b.mtimeMs - a.mtimeMs)
-    const limit = Number(options.additionalLogLimit || DEFAULT_MAX_ADDITIONAL_LOG_FILES)
-    const selected = files.slice(0, limit)
-    return await Promise.all(selected.map(async item => ({
-      name: item.name,
-      text: await readLogText(item.fullPath)
-    })))
-  } catch {
-    return []
   }
+
+  files.sort((a, b) => b.mtimeMs - a.mtimeMs)
+  const limit = Number(options.additionalLogLimit || DEFAULT_MAX_ADDITIONAL_LOG_FILES)
+  for (const item of files.slice(limit)) {
+    omissions.push({ path: item.diagnosticPath, reason: 'file_limit_exceeded' })
+  }
+  for (const item of files.slice(0, limit)) {
+    try {
+      logs.push({ name: item.name, text: await fsp.readFile(item.fullPath, 'utf8') })
+    } catch {
+      omissions.push({ path: item.diagnosticPath, reason: 'read_failed' })
+    }
+  }
+  return { logs, omissions }
+}
+
+async function readRecentLogFiles (logDir, prefix, options = {}) {
+  return (await collectRecentLogFiles(logDir, prefix, options)).logs
 }
 
 async function exportDiagnosticPack (options = {}) {
   const logFilePath = options.logFilePath
   const logText = options.logText ?? await readLogText(logFilePath)
+  const collected = await collectRecentLogFiles(options.sessionLogDir, 'session', options)
   const additionalLogs = [
     ...(options.additionalLogs || []),
-    ...await readRecentLogFiles(options.sessionLogDir, 'session', options)
+    ...collected.logs
   ]
   const report = buildDiagnosticReport({
     ...options,
     logText,
-    additionalLogs
+    additionalLogs,
+    omissions: [...(options.omissions || []), ...collected.omissions]
   })
   const outputPath = options.outputPath || path.join(
     os.tmpdir(),
     `AIGShell-diagnostic-${Date.now()}.tar`
   )
-  const tempDir = path.join(os.tmpdir(), `aigshell-diagnostic-${Date.now()}`)
-  await fsp.mkdir(path.join(tempDir, 'logs'), { recursive: true })
-  await Promise.all(
-    Object.entries(report.files).map(([name, content]) => {
-      const target = path.join(tempDir, name)
-      return fsp.mkdir(path.dirname(target), { recursive: true })
-        .then(() => fsp.writeFile(target, content, 'utf8'))
-    })
-  )
+  const tempRoot = options.tempRoot || os.tmpdir()
+  const tempDir = await fsp.mkdtemp(path.join(tempRoot, 'aigshell-diagnostic-'))
 
-  const tar = require('tar')
-  await tar.c({
-    gzip: false,
-    file: outputPath,
-    cwd: tempDir
-  }, Object.keys(report.files))
-  await fsp.rm(tempDir, { recursive: true, force: true })
+  try {
+    await Promise.all(
+      Object.entries(report.files).map(([name, content]) => {
+        const target = path.join(tempDir, name)
+        return fsp.mkdir(path.dirname(target), { recursive: true })
+          .then(() => fsp.writeFile(target, content, 'utf8'))
+      })
+    )
 
-  return {
-    outputPath,
-    files: Object.keys(report.files)
+    const tar = require('tar')
+    await tar.c({
+      gzip: false,
+      file: outputPath,
+      cwd: tempDir
+    }, Object.keys(report.files))
+
+    const omittedCount = report.manifest.files.omitted.length
+    return {
+      outputPath,
+      files: Object.keys(report.files),
+      hasOmissions: omittedCount > 0,
+      omittedCount
+    }
+  } finally {
+    await fsp.rm(tempDir, { recursive: true, force: true })
   }
 }
 
@@ -250,5 +313,6 @@ module.exports = {
   exportDiagnosticPack,
   limitLogText,
   readRecentLogFiles,
+  collectRecentLogFiles,
   redactDiagnosticText
 }

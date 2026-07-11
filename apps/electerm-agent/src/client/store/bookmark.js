@@ -4,6 +4,8 @@
 
 import uid from '../common/uid'
 import { removeBookmarkIdFromGroups } from '../common/bookmark-management'
+import { deleteBookmarkSelection } from '../common/bookmark-deletion'
+import { defaultBookmarkGroupId } from '../common/constants'
 
 export default Store => {
   Store.prototype.handleGetSerials = async function () {
@@ -36,6 +38,10 @@ export default Store => {
     store.onDelItem({ id }, 'bookmarks')
     store.delItem({ id }, 'bookmarks')
     removeBookmarkIdFromGroups(store.bookmarkGroups, id)
+  }
+
+  Store.prototype.delBookmarkSelection = function (ids) {
+    return deleteBookmarkSelection(window.store, ids, defaultBookmarkGroupId)
   }
 
   Store.prototype.addSshConfigs = function (items) {

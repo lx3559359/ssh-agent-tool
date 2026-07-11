@@ -51,9 +51,18 @@ test('sftp context menu does not create an overflow submenu for short menus', as
   )
 })
 
-test('sftp file context menu exposes AI file reference for editable files', () => {
+test('sftp file context menu uses safe AI analysis outside the edit-size guard', () => {
+  const methodSource = fileItemSource.slice(
+    fileItemSource.indexOf('askAiAboutFile = async'),
+    fileItemSource.indexOf('transferOrEnterDirectory = async')
+  )
+  const aiMenuIndex = fileItemSource.indexOf("func: 'askAiAboutFile'")
+  const showEditIndex = fileItemSource.indexOf('if (showEdit)')
+
   assert.match(fileItemSource, /func:\s*'askAiAboutFile'/)
-  assert.match(fileItemSource, /text:\s*'AI 引用文件'/)
-  assert.match(fileItemSource, /buildSftpFileContextPrompt/)
-  assert.match(fileItemSource, /fetchEditorText\(filePath,\s*type\)/)
+  assert.match(fileItemSource, /text:\s*'让 AI 分析此文件'/)
+  assert.match(fileItemSource, /buildSftpFileTerminalAnalysisPrompt/)
+  assert.ok(aiMenuIndex > -1 && aiMenuIndex < showEditIndex)
+  assert.match(methodSource, /readSftpFileContext/)
+  assert.doesNotMatch(methodSource, /fetchEditorText\(filePath,\s*type\)/)
 })

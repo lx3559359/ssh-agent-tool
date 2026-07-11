@@ -25,7 +25,12 @@ export default function SubmitButtons ({
         <Button type='primary' className='mg1r mg1b' onClick={onSaveAndCreateNew}>
           {e('saveAndCreateNew')}
         </Button>
-        <Button type='dashed' className='mg1r mg1b' onClick={onSave}>
+        <Button
+          type='dashed'
+          className='mg1r mg1b'
+          data-testid='bookmark-save'
+          onClick={onSave}
+        >
           {e('save')}
         </Button>
       </p>

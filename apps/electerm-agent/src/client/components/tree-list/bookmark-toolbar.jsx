@@ -74,7 +74,10 @@ export default function BookmarkToolbar (props) {
     if (!ok) {
       return
     }
-    const txt = '\uFEFF' + createConnectionInventoryCsv(bookmarks)
+    const txt = '\uFEFF' + createConnectionInventoryCsv(bookmarks, {
+      headerType: 'label',
+      bookmarkGroups
+    })
     const stamp = time(undefined, 'YYYY-MM-DD-HH-mm-ss')
     download('shellpilot-connections-with-credentials-' + stamp + '.csv', txt)
   }

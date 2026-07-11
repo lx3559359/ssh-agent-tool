@@ -222,7 +222,7 @@ exports.terminals = function (pid) {
       })// Ignore errors for resize
     },
     toggleTerminalLog: (id) => {
-      sendMsgToChildProcess(pid, {
+      return sendMsgToChildProcess(pid, {
         id,
         action: 'toggle-terminal-log',
         body: { pid }
@@ -236,14 +236,14 @@ exports.terminals = function (pid) {
       })
     },
     setTerminalLogPath: (id, logPath) => {
-      sendMsgToChildProcess(pid, {
+      return sendMsgToChildProcess(pid, {
         id,
         action: 'set-terminal-log-path',
         body: { pid, logPath }
       })
     },
     startTerminalLogFile: (id, logFilePath, addTimeStampToTermLog) => {
-      sendMsgToChildProcess(pid, {
+      return sendMsgToChildProcess(pid, {
         id,
         action: 'start-terminal-log-file',
         body: { pid, logFilePath, addTimeStampToTermLog }

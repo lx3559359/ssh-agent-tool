@@ -10,6 +10,22 @@ const {
 } = require(path.resolve(__dirname, '../../src/app/lib/diagnostic-pack'))
 const fs = require('node:fs')
 const fsp = require('node:fs/promises')
+const tar = require('tar')
+
+async function extractDiagnosticPack (archivePath, parentDir) {
+  const extractDir = await fsp.mkdtemp(path.join(parentDir, 'extracted-'))
+  await tar.x({ file: archivePath, cwd: extractDir })
+  return extractDir
+}
+
+async function readExtractedFile (extractDir, relativePath) {
+  return fsp.readFile(path.join(extractDir, ...relativePath.split('/')), 'utf8')
+}
+
+async function listPackingTempDirs (tempRoot) {
+  return (await fsp.readdir(tempRoot))
+    .filter(name => name.startsWith('aigshell-diagnostic-'))
+}
 
 test('redacts secrets and local user paths from diagnostic text', () => {
   const text = [
@@ -144,29 +160,109 @@ test('builds a diagnostic report with redacted session and update logs', () => {
   assert.equal(report.files['logs/update/update.log'].includes('update-secret'), false)
 })
 
-test('export diagnostic pack includes recent ssh session logs', async () => {
+test('export diagnostic pack records tar contents, omissions, redaction and success cleanup', async () => {
   const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'aigshell-diagnostic-test-'))
   const sessionLogDir = path.join(tempRoot, 'session_logs')
   const outputPath = path.join(tempRoot, 'diagnostic.tar')
   await fsp.mkdir(sessionLogDir, { recursive: true })
-  await fsp.writeFile(
-    path.join(sessionLogDir, 'prod-web-01.log'),
-    'Authorization: Bearer session-secret\nssh output',
-    'utf8'
-  )
+  await fsp.writeFile(path.join(sessionLogDir, 'prod-web-01.log'), 'Authorization: Bearer session-secret\nssh output', 'utf8')
+  await fsp.writeFile(path.join(sessionLogDir, 'notes.txt'), 'password=must-not-be-collected', 'utf8')
 
   try {
     const result = await exportDiagnosticPack({
       outputPath,
-      logText: 'main log',
-      sessionLogDir
+      logText: 'main log\napiKeyAI=main-secret',
+      sessionLogDir,
+      tempRoot
     })
+    const extractDir = await extractDiagnosticPack(outputPath, tempRoot)
+    const manifestText = await readExtractedFile(extractDir, 'manifest.json')
+    const manifest = JSON.parse(manifestText)
+    const summaryText = await readExtractedFile(extractDir, 'summary.txt')
+    const mainLog = await readExtractedFile(extractDir, 'logs/main.log')
+    const sessionLog = await readExtractedFile(extractDir, 'logs/session/prod-web-01.log')
 
-    assert.equal(fs.existsSync(outputPath), true)
-    assert.ok(result.files.includes('logs/main.log'))
-    assert.ok(result.files.includes('logs/session/prod-web-01.log'))
+    assert.deepEqual(manifest.files.included, result.files)
+    assert.deepEqual(result.files, [
+      'manifest.json',
+      'summary.txt',
+      'logs/main.log',
+      'logs/session/prod-web-01.log'
+    ])
+    assert.deepEqual(manifest.files.omitted, [
+      { path: 'logs/session/notes.txt', reason: 'unsupported_file_type' }
+    ])
+    assert.equal(result.hasOmissions, true)
+    assert.equal(result.omittedCount, 1)
+    assert.match(summaryText, /Included files:/)
+    assert.match(summaryText, /logs\/session\/prod-web-01\.log/)
+    assert.match(summaryText, /Omitted files:/)
+    assert.match(summaryText, /logs\/session\/notes\.txt: unsupported_file_type/)
+    assert.equal(mainLog.includes('main-secret'), false)
+    assert.equal(sessionLog.includes('session-secret'), false)
+    assert.equal(manifestText.includes(tempRoot), false)
+    assert.equal(manifestText.includes('must-not-be-collected'), false)
+    assert.deepEqual(await listPackingTempDirs(tempRoot), [])
   } finally {
     await fsp.rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('export diagnostic pack reports unreadable session logs without leaking errors', async () => {
+  const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'aigshell-diagnostic-read-failure-'))
+  const sessionLogDir = path.join(tempRoot, 'session_logs')
+  const outputPath = path.join(tempRoot, 'diagnostic.tar')
+  const unreadablePath = path.join(sessionLogDir, 'unreadable.log')
+  await fsp.mkdir(sessionLogDir, { recursive: true })
+  await fsp.writeFile(unreadablePath, 'session output', 'utf8')
+  const originalReadFile = fsp.readFile
+  fsp.readFile = async (filePath, ...args) => {
+    if (path.resolve(filePath) === path.resolve(unreadablePath)) {
+      throw new Error('EACCES: ' + unreadablePath + '; password=read-error-secret')
+    }
+    return originalReadFile(filePath, ...args)
+  }
+
+  try {
+    const result = await exportDiagnosticPack({ outputPath, logText: 'main log', sessionLogDir, tempRoot })
+    const extractDir = await extractDiagnosticPack(outputPath, tempRoot)
+    const manifestText = await readExtractedFile(extractDir, 'manifest.json')
+    const manifest = JSON.parse(manifestText)
+
+    assert.equal(result.hasOmissions, true)
+    assert.equal(result.omittedCount, 1)
+    assert.deepEqual(manifest.files.omitted, [
+      { path: 'logs/session/unreadable.log', reason: 'read_failed' }
+    ])
+    assert.equal(result.files.includes('logs/session/unreadable.log'), false)
+    assert.equal(manifestText.includes(tempRoot), false)
+    assert.equal(manifestText.includes('read-error-secret'), false)
+    assert.deepEqual(await listPackingTempDirs(tempRoot), [])
+  } finally {
+    fsp.readFile = originalReadFile
+    await fsp.rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('export diagnostic pack cleans its temporary directory when tar creation fails', async () => {
+  const testRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'aigshell-diagnostic-tar-failure-'))
+  const before = new Set(await listPackingTempDirs(os.tmpdir()))
+  let leakedTempDirs = []
+
+  try {
+    await assert.rejects(exportDiagnosticPack({
+      outputPath: path.join(testRoot, 'missing-parent', 'diagnostic.tar'),
+      logText: 'main log',
+      tempRoot: os.tmpdir()
+    }))
+    leakedTempDirs = (await listPackingTempDirs(os.tmpdir()))
+      .filter(name => !before.has(name))
+    assert.deepEqual(leakedTempDirs, [])
+  } finally {
+    await Promise.all(leakedTempDirs.map(name => {
+      return fsp.rm(path.join(os.tmpdir(), name), { recursive: true, force: true })
+    }))
+    await fsp.rm(testRoot, { recursive: true, force: true })
   }
 })
 
@@ -192,4 +288,6 @@ test('about dialog exposes diagnostic pack export to users', () => {
   assert.match(infoModalSource, /exportDiagnosticPack/)
   assert.match(infoModalSource, /saveDialog/)
   assert.match(infoModalSource, /导出诊断包/)
+  assert.match(infoModalSource, /hasOmissions/)
+  assert.match(infoModalSource, /诊断包已导出，但有/)
 })

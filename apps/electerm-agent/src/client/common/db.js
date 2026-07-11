@@ -20,6 +20,10 @@ const dbAction = (...args) => {
     .catch(handleError)
 }
 
+const dbActionOrThrow = (...args) => {
+  return window.pre.runGlobalAsync('dbAction', ...args)
+}
+
 /**
  * standalone db names
  */
@@ -55,7 +59,7 @@ export const dbNamesForWatch = [
  * @param {string} dbName
  * @param {object or array} inst
  */
-export function insert (dbName, inst) {
+export function insert (dbName, inst, propagateError = false) {
   let arr = isArray(inst) ? inst : [inst]
   arr = arr.map(obj => {
     const { id, _id, ...rest } = obj
@@ -64,7 +68,8 @@ export function insert (dbName, inst) {
       ...rest
     }
   })
-  return dbAction(dbName, 'insert', safeParse(arr))
+  const action = propagateError ? dbActionOrThrow : dbAction
+  return action(dbName, 'insert', safeParse(arr))
 }
 
 /**
@@ -72,14 +77,15 @@ export function insert (dbName, inst) {
  * @param {string} dbName
  * @param {string} id
  */
-export async function remove (dbName, id) {
+export async function remove (dbName, id, propagateError = false) {
   const q = id
     ? {
         _id: id
       }
     : {}
   const multi = !id
-  await dbAction(dbName, 'remove', q, { multi })
+  const action = propagateError ? dbActionOrThrow : dbAction
+  await action(dbName, 'remove', q, { multi })
 }
 
 /**
@@ -88,7 +94,7 @@ export async function remove (dbName, id) {
  * @param {any} value
  * @param {string} db default is 'data'
  */
-export function update (_id, value, db = 'data', upsert = true) {
+export function update (_id, value, db = 'data', upsert = true, propagateError = false) {
   const updates = dbNames.includes(db)
     ? {
         $set: value
@@ -98,7 +104,8 @@ export function update (_id, value, db = 'data', upsert = true) {
           value
         }
       }
-  return dbAction(db, 'update', {
+  const action = propagateError ? dbActionOrThrow : dbAction
+  return action(db, 'update', {
     _id
   }, safeParse(updates), {
     upsert

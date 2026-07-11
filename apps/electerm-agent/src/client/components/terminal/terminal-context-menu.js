@@ -113,6 +113,11 @@ export function buildTerminalContextMenuItems ({
       labelKey: 'saveTerminalLogToFile'
     }),
     item({
+      key: 'onOpenSessionLogFolder',
+      iconKey: 'FolderOpenOutlined',
+      labelText: '打开会话日志目录'
+    }),
+    item({
       key: recording ? 'onStopRecord' : 'onRecord',
       iconKey: recording ? 'StopOutlined' : 'PlayCircleFilled',
       labelKey: recording ? 'stopRecord' : 'record'

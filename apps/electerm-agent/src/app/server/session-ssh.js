@@ -247,6 +247,7 @@ function normalizeSshConnectionError (err, options = {}) {
   err.message = [
     `${diagnosis.title}：${getSshTargetLabel(options)}`,
     `建议：${diagnosis.suggestion}`,
+    '下一步：可在终端右键选择“打开会话日志目录”，或在版本信息/关于页面导出诊断包继续排查。',
     `原始错误：${originalMessage}`
   ].join('\n')
   return err
@@ -1228,8 +1229,12 @@ class TerminalSshBase extends TerminalBase {
 
 const TerminalSsh = commonExtends(TerminalSshBase)
 
-exports.session = function (initOptions, ws) {
-  return (new TerminalSsh(initOptions, ws)).init()
+exports.session = async function (initOptions, ws) {
+  try {
+    return await (new TerminalSsh(initOptions, ws)).init()
+  } catch (err) {
+    throw normalizeSshConnectionError(err, initOptions)
+  }
 }
 
 exports.normalizeSshConnectionError = normalizeSshConnectionError

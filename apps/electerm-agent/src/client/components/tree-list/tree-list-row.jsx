@@ -26,6 +26,8 @@ export default function TreeListRow (props) {
     openMoveModal,
     editItem,
     viewConnectionInfo,
+    testConnection,
+    exportConnection,
     addSubCat,
     toggleFavorite,
     onSelect,
@@ -120,6 +122,12 @@ export default function TreeListRow (props) {
     }
     if (key === 'viewConnectionInfo') {
       return viewConnectionInfo(safeEvent(domEvent), item)
+    }
+    if (key === 'testConnection') {
+      return testConnection(safeEvent(domEvent), item)
+    }
+    if (key === 'exportConnection') {
+      return exportConnection(safeEvent(domEvent), item)
     }
     if (key === 'copyPublicInfo') {
       return copy(formatBookmarkPublicInfo(item))

@@ -31,7 +31,9 @@ test('connection inventory exposes visible account fields and copy text', async 
 
   assert.deepEqual(hiddenFields.map(item => item.key), [
     'title',
+    'groupName',
     'type',
+    'connectionAddress',
     'host',
     'port',
     'username',
@@ -40,6 +42,10 @@ test('connection inventory exposes visible account fields and copy text', async 
     'privateKey',
     'passphrase',
     'profileId',
+    'hoppingCount',
+    'proxy',
+    'createdAt',
+    'updatedAt',
     'description'
   ])
   assert.equal(hiddenFields.find(item => item.key === 'password').value, '••••••••')
@@ -68,8 +74,70 @@ test('connection inventory exports a single connection csv with credentials', as
     }
   ])
 
-  assert.match(csv, /^"title","type","host","port","username","authType","password"/)
-  assert.match(csv, /"prod,web","ssh","10\.0\.1\.23","22","root","","secret""password"/)
+  assert.match(csv, /^"title","groupName","type","connectionAddress","host","port","username","authType","password"/)
+  assert.match(csv, /"prod,web","","ssh","root@10\.0\.1\.23:22","10\.0\.1\.23","22","root","","secret""password"/)
+})
+
+test('connection inventory can export Chinese csv headers for client users', async () => {
+  const {
+    createConnectionInventoryCsv
+  } = await import(moduleUrl)
+
+  const csv = createConnectionInventoryCsv([
+    {
+      title: 'prod-web-01',
+      type: 'ssh',
+      host: '10.0.1.23',
+      port: 22,
+      username: 'root',
+      password: 'secret-password'
+    }
+  ], {
+    headerType: 'label'
+  })
+
+  assert.match(csv, /^"名称","所在分组","类型","连接地址","IP \/ 主机","端口","账号","认证方式","密码"/)
+  assert.match(csv, /"prod-web-01","","ssh","root@10\.0\.1\.23:22","10\.0\.1\.23","22","root","","secret-password"/)
+})
+
+test('connection inventory csv includes migration fields and bookmark group names', async () => {
+  const {
+    createConnectionInventoryCsv
+  } = await import(moduleUrl)
+
+  const csv = createConnectionInventoryCsv([
+    {
+      id: 'server-1',
+      title: 'prod-web-01',
+      type: 'ssh',
+      host: '10.0.1.23',
+      port: 2222,
+      username: 'root',
+      authType: 'password',
+      password: 'secret-password',
+      proxy: 'socks5://127.0.0.1:1080',
+      connectionHoppings: [
+        { host: 'jump-01' },
+        { host: 'jump-02' }
+      ],
+      createdAt: '2026-07-01T08:00:00.000Z',
+      updatedAt: '2026-07-09T09:30:00.000Z'
+    }
+  ], {
+    headerType: 'label',
+    bookmarkGroups: [
+      {
+        id: 'group-prod',
+        title: '生产环境',
+        bookmarkIds: ['server-1'],
+        bookmarkGroupIds: []
+      }
+    ]
+  })
+
+  assert.match(csv, /^"名称","所在分组","类型","连接地址","IP \/ 主机","端口","账号"/)
+  assert.match(csv, /"prod-web-01","生产环境","ssh","root@10\.0\.1\.23:2222","10\.0\.1\.23","2222","root"/)
+  assert.match(csv, /"2","socks5:\/\/127\.0\.0\.1:1080","2026-07-01T08:00:00\.000Z","2026-07-09T09:30:00\.000Z"/)
 })
 
 test('connection inventory center is reachable from bookmark UI', () => {
@@ -88,4 +156,5 @@ test('connection inventory center is reachable from bookmark UI', () => {
   assert.match(inventoryModal, /title='服务器详情'/)
   assert.match(inventoryModal, /查看连接信息/)
   assert.match(inventoryModal, /导出连接清单 CSV/)
+  assert.match(inventoryModal, /headerType:\s*'label'/)
 })

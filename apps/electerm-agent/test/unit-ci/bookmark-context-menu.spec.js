@@ -34,11 +34,13 @@ test('bookmark context menu exposes common server actions without leaking creden
 
   assert.deepEqual(keys, [
     'open',
+    'testConnection',
     'edit',
     'toggleFavorite',
     'duplicate',
     'move',
     'viewConnectionInfo',
+    'exportConnection',
     'copyPublicInfo',
     'delete'
   ])
@@ -93,8 +95,10 @@ test('sidebar bookmark context menu exposes direct connection management actions
 
   assert.deepEqual(items.map(item => item.key), [
     'open',
+    'testConnection',
     'edit',
     'viewConnectionInfo',
+    'exportConnection',
     'copyPublicInfo',
     'delete'
   ])
@@ -110,6 +114,8 @@ test('bookmark tree rows wire the context menu to row actions', () => {
   assert.match(source, /trigger:\s*\['contextMenu'\]/)
   assert.match(source, /buildBookmarkContextMenuItems/)
   assert.match(source, /viewConnectionInfo/)
+  assert.match(source, /testConnection/)
+  assert.match(source, /exportConnection/)
   assert.match(source, /copyPublicInfo/)
   assert.match(source, /onContextMenuAction/)
 })

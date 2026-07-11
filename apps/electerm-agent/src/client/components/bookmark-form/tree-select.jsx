@@ -5,9 +5,10 @@ import {
   Input
 } from 'antd'
 import { useState, useMemo } from 'react'
-import { defaultBookmarkGroupId, settingMap } from '../../common/constants'
+import { defaultBookmarkGroupId } from '../../common/constants'
 import deepCopy from 'json-deep-copy'
 import createTitle, { createTitleWithTag } from '../../common/create-title'
+import { confirmBookmarkSelectionDeletion } from '../../common/bookmark-deletion'
 
 const e = window.translate
 
@@ -121,8 +122,14 @@ export default function BookmarkTreeSelect (props) {
     const { store } = window
     const arr = checkedKeys.filter(d => d !== defaultBookmarkGroupId)
     if (type === 'delete') {
-      store.delItems(arr, settingMap.bookmarks)
-      store.delItems(arr, settingMap.bookmarkGroups)
+      const confirmed = confirmBookmarkSelectionDeletion(
+        arr,
+        message => window.confirm(message),
+        ids => store.delBookmarkSelection(ids)
+      )
+      if (!confirmed) {
+        return
+      }
       setRefreshKey(k => k + 1)
     } else {
       store.openBookmarks(arr)

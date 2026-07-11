@@ -24,7 +24,7 @@ test('P1 AI chat stability matrix covers submit stream stop retry copy and clear
   const historyItem = readSource('ai-chat-history-item.jsx')
 
   assertEvidence(submitTest, /AI chat submit only opens config when a non-empty prompt is missing required config/, 'empty prompt no-op and valid config submit')
-  assertEvidence(configTest, /does not require optional endpoint path or credentials before sending/, 'optional API path and credentials do not block chat')
+  assertEvidence(configTest, /does not require optional model role endpoint path or auth header before sending/, 'optional model role API path and auth header do not block chat')
   assertEvidence(aiChat, /const\s+submitAction\s*=\s*getAIChatSubmitAction/, 'chat submit goes through submit policy')
   assertEvidence(aiChat, /appendAIChatHistory\(window\.store,\s*chatEntry,\s*MAX_HISTORY\)/, 'new chat entry append')
   assertEvidence(aiChat, /onPressEnter=\{handleKeyPress\}/, 'enter sends from textarea')

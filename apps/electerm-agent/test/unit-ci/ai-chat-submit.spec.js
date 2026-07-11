@@ -19,7 +19,8 @@ test('AI chat submit only opens config when a non-empty prompt is missing requir
     config: {
       baseURLAI: 'https://api.example.com/v1',
       modelAI: 'deepseek-chat',
-      roleAI: 'SSH assistant'
+      roleAI: 'SSH assistant',
+      apiKeyAI: 'sk-example'
     }
   }), 'submit')
 
@@ -27,8 +28,11 @@ test('AI chat submit only opens config when a non-empty prompt is missing requir
     prompt: 'explain current terminal output',
     config: {
       baseURLAI: 'https://api.example.com/v1',
-      modelAI: 'deepseek-chat',
-      roleAI: ''
+      modelAI: '',
+      roleAI: '',
+      apiPathAI: '',
+      authHeaderNameAI: '',
+      apiKeyAI: 'sk-example'
     }
   }), 'submit')
 
@@ -37,7 +41,18 @@ test('AI chat submit only opens config when a non-empty prompt is missing requir
     config: {
       baseURLAI: '',
       modelAI: 'deepseek-chat',
-      roleAI: 'SSH assistant'
+      roleAI: 'SSH assistant',
+      apiKeyAI: 'sk-example'
+    }
+  }), 'open-config')
+
+  assert.equal(getAIChatSubmitAction({
+    prompt: 'explain current terminal output',
+    config: {
+      baseURLAI: 'https://api.example.com/v1',
+      modelAI: 'deepseek-chat',
+      roleAI: 'SSH assistant',
+      apiKeyAI: ''
     }
   }), 'open-config')
 })

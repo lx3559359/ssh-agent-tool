@@ -4,7 +4,9 @@
 
 import createTitle from '../common/create-title'
 import { autoRun } from 'manate'
-import { update, remove, insert, dbNamesForWatch, dbNamesForSync } from '../common/db'
+import { update, remove, dbNamesForWatch, dbNamesForSync } from '../common/db'
+import handleError from '../common/error-handler'
+import { createStatePersistenceQueue, persistStateSnapshot } from './state-persistence-queue'
 import {
   sftpDefaultSortSettingKey,
   checkedKeysLsKey,
@@ -15,59 +17,62 @@ import {
 } from '../common/constants'
 import * as ls from '../common/safe-local-storage'
 import { debounce, isEmpty } from 'lodash-es'
-import deepCopy from 'json-deep-copy'
 import { refsStatic } from '../components/common/ref'
 import dataCompare from '../common/data-compare'
 
 export default store => {
+  const persistenceQueue = createStatePersistenceQueue({
+    persist: (name, oldState, snapshot) => persistStateSnapshot({
+      oldState,
+      snapshot,
+      getChanges: dataCompare,
+      removeItem: item => remove(name, item.id, true),
+      upsertItem: item => update(item.id, item, name, true, true),
+      writeOrder: order => update(
+        `${name}:order`,
+        order,
+        'data',
+        true,
+        true
+      )
+    }),
+    getCommittedState: name => refsStatic.get('oldState-' + name),
+    commitState: (name, snapshot) => {
+      refsStatic.add('oldState-' + name, snapshot)
+      if (name === 'bookmarks') {
+        store.bookmarksMap = new Map(
+          snapshot.map(item => [item.id, item])
+        )
+      }
+      Promise.resolve().then(async () => {
+        await store.updateLastDataUpdateTime()
+        if (dbNamesForSync.includes(name)) {
+          const syncSetting = store.config.syncSetting || {}
+          const { autoSync, autoSyncInterval, autoSyncDirection } = syncSetting
+          if (autoSync && autoSyncInterval === 0) {
+            if (autoSyncDirection === 'download') {
+              await store.downloadSettingAll()
+            } else {
+              await store.uploadSettingAll()
+            }
+          }
+        }
+      }).catch(handleError)
+    },
+    onError: handleError
+  })
+
   for (const name of dbNamesForWatch) {
     window[`watch${name}`] = autoRun(async () => {
-      const n = store.getItems(name)
+      const snapshot = store.getItems(name)
       if (window.migrating) {
         return
       }
-      const old = refsStatic.get('oldState-' + name)
-      const { updated, added, removed } = dataCompare(
-        old,
-        n
-      )
-      // Update snapshot immediately before async DB writes to prevent
-      // race conditions: a second autoRun firing before the first
-      // completes would see stale oldState and re-insert the same items,
-      // causing NeDB unique constraint errors.
-      refsStatic.add('oldState-' + name, deepCopy(n) || [])
-      await Promise.all([
-        ...removed.map(item => remove(name, item.id)),
-        ...updated.map(item => update(item.id, item, name, false)),
-        added.length ? insert(name, added) : Promise.resolve()
-      ])
-      const newOrder = (n || []).map(d => d.id)
-      await update(
-        `${name}:order`,
-        newOrder
-      )
-      if (name === 'bookmarks') {
-        store.bookmarksMap = new Map(
-          n.map(d => [d.id, d])
-        )
-      }
-      await store.updateLastDataUpdateTime()
-      if (dbNamesForSync.includes(name)) {
-        const syncSetting = store.config.syncSetting || {}
-        const { autoSync, autoSyncInterval, autoSyncDirection } = syncSetting
-        if (autoSync && autoSyncInterval === 0) {
-          if (autoSyncDirection === 'download') {
-            await store.downloadSettingAll()
-          } else {
-            await store.uploadSettingAll()
-          }
-        }
-      }
+      await persistenceQueue.enqueue(name, snapshot)
       return store[name]
     })
     window[`watch${name}`].start()
   }
-
   autoRun(async () => {
     ls.setItemJSON(resolutionsLsKey, store.resolutions)
     return store.resolutions

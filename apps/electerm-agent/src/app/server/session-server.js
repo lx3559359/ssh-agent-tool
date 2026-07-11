@@ -353,12 +353,20 @@ if (type === 'rdp') {
         const { id, args, func, uid } = msg
         const inst = sftp(id)
         if (inst) {
-          inst[func](...args)
+          const handler = inst[func]
+          if (typeof handler !== 'function') {
+            ws.s({
+              id: uid,
+              error: {
+                message: `SFTP method is not supported: ${func}`
+              }
+            })
+            return
+          }
+          Promise.resolve()
+            .then(() => handler.apply(inst, args))
             .then(data => {
-              ws.s({
-                id: uid,
-                data
-              })
+              ws.s({ id: uid, data })
             })
             .catch(err => {
               ws.s({

@@ -344,6 +344,14 @@ describe('session-sftp transport flows', () => {
       await sftp.mkdir(dir)
       await sftp.writeFile(file, content)
 
+      const preview = await sftp.readFilePreview(file, 64)
+      assert.deepEqual(preview, {
+        content: Buffer.from(content).subarray(0, 64).toString('utf8'),
+        truncated: true,
+        binary: false,
+        bytesRead: 64
+      })
+
       const list = await sftp.list(dir)
       assert.deepEqual(list.map(item => item.name), ['部署输出-大文件.log'])
       assert.equal(await sftp.readFile(file), content)

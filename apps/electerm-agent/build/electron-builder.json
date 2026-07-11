@@ -78,7 +78,8 @@
     "publisherDisplayName": "ZHAO Xudong"
   },
   "nsis": {
-    "oneClick": true,
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
     "artifactName": "ShellPilot-${version}-${os}-${arch}-installer.${ext}",
     "language": "2052",
     "installerLanguages": [

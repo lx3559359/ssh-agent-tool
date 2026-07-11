@@ -25,12 +25,13 @@ function safeName (value = 'connection') {
 
 export default function ConnectionInfoModal ({
   bookmark,
+  bookmarkGroups = [],
   onClose
 }) {
   const [showSecrets, setShowSecrets] = useState(false)
   const fields = useMemo(
-    () => getConnectionInfoFields(bookmark || {}, { showSecrets }),
-    [bookmark, showSecrets]
+    () => getConnectionInfoFields(bookmark || {}, { showSecrets, bookmarkGroups }),
+    [bookmark, showSecrets, bookmarkGroups]
   )
 
   if (!bookmark) {
@@ -49,7 +50,10 @@ export default function ConnectionInfoModal ({
     if (!window.confirm('将导出当前连接的明文账号、密码和密钥路径，请只保存在可信位置。是否继续？')) {
       return
     }
-    const txt = '\uFEFF' + createConnectionInventoryCsv([bookmark])
+    const txt = '\uFEFF' + createConnectionInventoryCsv([bookmark], {
+      headerType: 'label',
+      bookmarkGroups
+    })
     const stamp = time(undefined, 'YYYY-MM-DD-HH-mm-ss')
     download(`shellpilot-connection-${safeName(bookmark.title || bookmark.host)}-${stamp}.csv`, txt)
   }

@@ -5,12 +5,20 @@ import Link from '../common/external-link'
 import { Tag } from 'antd'
 import { CopyOutlined, PlayCircleOutlined } from '@ant-design/icons'
 import getBrand from './get-brand'
-import { confirmAndRunAICommand } from './ai-ssh-context'
+import { refsStatic } from '../common/ref'
+import {
+  acquireAICommandExecutionLock,
+  buildAICommandResultSummaryPrompt,
+  confirmAndRunAICommand,
+  isShellCodeBlock,
+  releaseAICommandExecutionLock
+} from './ai-ssh-context'
 
 const e = window.translate
 
 export default function AIOutput ({ item }) {
   const outputRef = useRef(null)
+  const runningCommandsRef = useRef(new Set())
   const {
     response,
     baseURLAI,
@@ -30,6 +38,11 @@ export default function AIOutput ({ item }) {
 
   const { brand, brandUrl } = getBrand(baseURLAI)
 
+  const handleCommandResult = ({ command, result }) => {
+    const prompt = buildAICommandResultSummaryPrompt({ command, result })
+    refsStatic.get('AIChat')?.handleSubmit(prompt)
+  }
+
   const renderCode = (props) => {
     const { node, className = '', children, ...rest } = props
     const code = String(children).replace(/\n$/, '')
@@ -47,10 +60,20 @@ export default function AIOutput ({ item }) {
     }
 
     const runInTerminal = async () => {
-      await confirmAndRunAICommand({
-        code,
-        store: window.store
-      })
+      if (!acquireAICommandExecutionLock(runningCommandsRef.current, code)) {
+        return
+      }
+      try {
+        await confirmAndRunAICommand({
+          code,
+          store: window.store,
+          onResult: handleCommandResult
+        })
+      } catch (error) {
+        window.store.onError(error)
+      } finally {
+        releaseAICommandExecutionLock(runningCommandsRef.current, code)
+      }
     }
 
     return (
@@ -61,10 +84,12 @@ export default function AIOutput ({ item }) {
             onClick={copyToClipboard}
             title={e('copy')}
           />
-          <PlayCircleOutlined
-            className='code-action-icon pointer mg1l iblock'
-            onClick={runInTerminal}
-          />
+          {isShellCodeBlock(className) && (
+            <PlayCircleOutlined
+              className='code-action-icon pointer mg1l iblock'
+              onClick={runInTerminal}
+            />
+          )}
         </div>
         <pre>
           <code className={className} {...rest}>

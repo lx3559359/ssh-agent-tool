@@ -75,12 +75,20 @@ export function buildBookmarkContextMenuItems ({
         label: label('打开连接')
       },
       {
+        key: 'testConnection',
+        label: label('测试连接')
+      },
+      {
         key: 'edit',
         label: label('编辑连接')
       },
       {
         key: 'viewConnectionInfo',
         label: label('查看连接信息')
+      },
+      {
+        key: 'exportConnection',
+        label: label('导出当前连接')
       },
       {
         key: 'copyPublicInfo',
@@ -98,6 +106,10 @@ export function buildBookmarkContextMenuItems ({
     {
       key: 'open',
       label: label('打开连接')
+    },
+    {
+      key: 'testConnection',
+      label: label('测试连接')
     },
     {
       key: 'edit',
@@ -118,6 +130,10 @@ export function buildBookmarkContextMenuItems ({
     {
       key: 'viewConnectionInfo',
       label: label('查看连接信息')
+    },
+    {
+      key: 'exportConnection',
+      label: label('导出当前连接')
     },
     {
       key: 'copyPublicInfo',

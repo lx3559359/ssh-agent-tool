@@ -28,3 +28,37 @@ test('ssh session log redacts secrets before writing terminal output to disk', a
   assert.equal(written.includes('BEGIN OPENSSH PRIVATE KEY'), false)
   assert.match(written, /normal terminal output/)
 })
+
+test('ssh session log recursively creates nested log directories', async () => {
+  const SessionLog = require(path.resolve(__dirname, '../../src/app/server/session-log'))
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aigshell-session-log-nested-'))
+  const logDir = path.join(root, 'year', 'month', 'day')
+  const logger = new SessionLog({ logDir, fileName: 'session.log' })
+
+  logger.write('normal terminal output')
+  await new Promise(resolve => logger.stream.end(resolve))
+
+  assert.equal(fs.readFileSync(path.join(logDir, 'session.log'), 'utf8'), 'normal terminal output')
+})
+
+test('ssh session log propagates file open errors synchronously', () => {
+  const SessionLog = require(path.resolve(__dirname, '../../src/app/server/session-log'))
+  const logDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigshell-session-log-open-'))
+  fs.mkdirSync(path.join(logDir, 'blocked.log'))
+
+  assert.throws(
+    () => new SessionLog({ logDir, fileName: 'blocked.log' }),
+    /EISDIR|EPERM|EACCES/
+  )
+})
+
+test('ssh session log controls stream errors instead of emitting them unhandled', () => {
+  const SessionLog = require(path.resolve(__dirname, '../../src/app/server/session-log'))
+  const logDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigshell-session-log-stream-'))
+  const logger = new SessionLog({ logDir, fileName: 'session.log' })
+  const expectedError = new Error('stream failed')
+
+  assert.doesNotThrow(() => logger.stream.emit('error', expectedError))
+  assert.throws(() => logger.write('more output'), expectedError)
+  logger.destroy()
+})

@@ -72,6 +72,16 @@ test('electron builder config cleans packaged batch scripts after native rebuild
   assert.equal(config.afterPack, 'build/bin/after-pack-cleanup.js')
 })
 
+test('windows installer lets users choose the installation directory', () => {
+  const config = JSON.parse(fs.readFileSync(
+    path.resolve(__dirname, '../../build/electron-builder.json'),
+    'utf8'
+  ))
+
+  assert.equal(config.nsis.oneClick, false)
+  assert.equal(config.nsis.allowToChangeInstallationDirectory, true)
+})
+
 test('after-pack cleanup rewrites updater cache name to ShellPilot', () => {
   const {
     patchPackagedUpdateConfig

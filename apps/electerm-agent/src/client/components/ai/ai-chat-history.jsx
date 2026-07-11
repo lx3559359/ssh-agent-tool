@@ -5,19 +5,20 @@ import AIChatHistoryItem from './ai-chat-history-item'
 
 export default auto(function AIChatHistory ({ history }) {
   const historyRef = useRef(null)
+  const list = Array.isArray(history) ? history : []
 
   useLayoutEffect(() => {
     if (historyRef.current) {
       historyRef.current.scrollTop = historyRef.current.scrollHeight
     }
   }, [history])
-  if (!history.length) {
-    return <div />
+  if (!list.length) {
+    return <div ref={historyRef} className='ai-history-wrap ai-history-empty' />
   }
   return (
     <div ref={historyRef} className='ai-history-wrap'>
       {
-        history.map((item) => {
+        list.map((item) => {
           return (
             <AIChatHistoryItem
               key={item.id}

@@ -53,10 +53,16 @@ test('AI chat context actions read the current selected remote SFTP file', async
       name: 'error.log',
       path: '/var/log/nginx',
       type: 'remote',
+      size: 100,
       isDirectory: false
     }],
     sftp: {
-      readFile: async (filePath) => `remote:${filePath}`
+      readFilePreview: async (filePath) => ({
+        content: `remote:${filePath}`,
+        truncated: false,
+        binary: false,
+        bytesRead: Buffer.byteLength(`remote:${filePath}`)
+      })
     }
   }
   const refs = {
@@ -80,7 +86,12 @@ test('AI chat context actions read the current selected remote SFTP file', async
   assert.deepEqual(result, {
     ok: true,
     path: '/var/log/nginx/error.log',
-    content: 'remote:/var/log/nginx/error.log'
+    source: '远程 SFTP',
+    size: 100,
+    content: 'remote:/var/log/nginx/error.log',
+    truncated: false,
+    binary: false,
+    bytesRead: Buffer.byteLength('remote:/var/log/nginx/error.log')
   })
 })
 
@@ -95,18 +106,29 @@ test('AI chat context actions read the current selected local SFTP file', async 
         name: 'app.conf',
         path: 'C:/tmp',
         type: 'local',
+        size: 100,
         isDirectory: false
       }]
     },
     fsApi: {
-      readFile: async (filePath) => `local:${filePath}`
+      readFilePreview: async (filePath) => ({
+        content: `local:${filePath}`,
+        truncated: false,
+        binary: false,
+        bytesRead: Buffer.byteLength(`local:${filePath}`)
+      })
     }
   })
 
   assert.deepEqual(result, {
     ok: true,
     path: 'C:/tmp/app.conf',
-    content: 'local:C:/tmp/app.conf'
+    source: '本地文件',
+    size: 100,
+    content: 'local:C:/tmp/app.conf',
+    truncated: false,
+    binary: false,
+    bytesRead: Buffer.byteLength('local:C:/tmp/app.conf')
   })
 })
 
@@ -181,7 +203,7 @@ test('AI chat context actions build user-facing Chinese unavailable messages', a
   )
   assert.equal(
     getAIContextUnavailableMessage('file'),
-    '请在 SFTP 文件上右键选择“AI 引用文件”。'
+    '请在 SFTP 文件上右键选择“让 AI 分析此文件”。'
   )
 })
 

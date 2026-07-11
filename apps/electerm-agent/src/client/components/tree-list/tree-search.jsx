@@ -1,9 +1,8 @@
 import React, { useState, memo, useCallback, useEffect, useRef } from 'react'
-import { debounce } from 'lodash-es'
 import { Space, Button } from 'antd'
 import { SortAscendingOutlined, CaretUpOutlined, CaretDownOutlined } from '@ant-design/icons'
 import Search from '../common/search'
-import runIdle from '../../common/run-idle'
+import { createBookmarkSearchScheduler } from './bookmark-search-scheduler'
 
 function cycleSort (currentField, currentDir, clickedField) {
   if (currentField === clickedField) {
@@ -28,18 +27,24 @@ export default memo(function TreeSearchComponent ({
   const [searchTerm, setSearchTerm] = useState(keyword)
   const [open, setOpen] = useState(false)
   const wrapRef = useRef(null)
-
-  const performSearch = debounce((term) => {
-    runIdle(() => {
-      onSearch(term)
+  const onSearchRef = useRef(onSearch)
+  const searchSchedulerRef = useRef(null)
+  onSearchRef.current = onSearch
+  if (!searchSchedulerRef.current) {
+    searchSchedulerRef.current = createBookmarkSearchScheduler({
+      onSearch: term => onSearchRef.current(term)
     })
-  })
+  }
 
   const handleChange = (e) => {
     const term = e.target.value
     setSearchTerm(term)
-    performSearch(term)
+    searchSchedulerRef.current.schedule(term)
   }
+
+  useEffect(() => {
+    return () => searchSchedulerRef.current?.cancel()
+  }, [])
 
   const handleKeyDown = (e) => {
     if (onKeyDown) {

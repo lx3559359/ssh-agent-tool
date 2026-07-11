@@ -7,6 +7,7 @@ import {
   settingMap
 } from '../common/constants'
 import { removeCyclicBookmarkGroupIds } from '../common/bookmark-group-tree'
+import { deleteBookmarkGroupState } from '../common/bookmark-deletion'
 import { action } from 'manate'
 
 export default Store => {
@@ -47,63 +48,13 @@ export default Store => {
 
   Store.prototype.delBookmarkGroup = action(function ({ id }) {
     const { store } = window
-
-    // Cannot delete default group
-    if (id === defaultBookmarkGroupId) {
-      return
-    }
-
-    const { bookmarkGroups } = store
-    const index = bookmarkGroups.findIndex(bg => bg.id === id)
-
-    // If group not found, return
-    if (index === -1) {
-      return
-    }
-
-    const tobeDel = bookmarkGroups[index]
-
-    // Find parent group
-    let parentGroup = null
-    if (tobeDel.level === 2) {
-      parentGroup = bookmarkGroups.find(bg =>
-        (bg.bookmarkGroupIds || []).includes(tobeDel.id)
-      )
-    }
-
-    // If no parent found, use default group
-    if (!parentGroup) {
-      parentGroup = bookmarkGroups.find(bg => bg.id === defaultBookmarkGroupId)
-    }
-
-    // Ensure parent group has bookmarkIds and bookmarkGroupIds arrays
-    if (!parentGroup.bookmarkIds) {
-      parentGroup.bookmarkIds = []
-    }
-    if (!parentGroup.bookmarkGroupIds) {
-      parentGroup.bookmarkGroupIds = []
-    }
-
-    // Transfer bookmarkIds to parent
-    if (tobeDel.bookmarkIds && tobeDel.bookmarkIds.length) {
-      parentGroup.bookmarkIds = [
-        ...new Set([...parentGroup.bookmarkIds, ...tobeDel.bookmarkIds])
-      ]
-    }
-
-    // Transfer child groups to parent
-    if (tobeDel.bookmarkGroupIds && tobeDel.bookmarkGroupIds.length) {
-      parentGroup.bookmarkGroupIds = [
-        ...new Set([...parentGroup.bookmarkGroupIds, ...tobeDel.bookmarkGroupIds])
-      ]
-    }
-
-    // Remove the group from bookmarkGroups
-    bookmarkGroups.splice(index, 1)
-
-    // Reset current group if it was deleted
-    if (id === store.currentBookmarkGroupId) {
-      store.currentBookmarkGroupId = parentGroup.id
+    const result = deleteBookmarkGroupState(
+      store.bookmarkGroups,
+      id,
+      defaultBookmarkGroupId
+    )
+    if (result.deleted && id === store.currentBookmarkGroupId) {
+      store.currentBookmarkGroupId = result.parentGroupId
     }
   })
 

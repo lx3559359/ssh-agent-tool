@@ -16,9 +16,11 @@
 const { test, describe, beforeEach, afterEach } = require('node:test')
 const assert = require('node:assert')
 const { resolve } = require('node:path')
+const { pathToFileURL } = require('node:url')
 const fs = require('node:fs')
 const os = require('node:os')
 
+let createStatePersistenceQueue
 let dbAction
 let cleanup
 
@@ -154,35 +156,44 @@ async function simulateWatcherOld (dbName, action, { added, updated, removed }) 
  * Matches the updated src/client/store/watch.js.
  */
 function createWatcherNew (action) {
-  const running = {}
-  return async function simulateWatcherNew (dbName, opts) {
-    if (running[dbName]) return
-    running[dbName] = true
-    try {
+  const committedStates = new Map()
+  const queue = createStatePersistenceQueue({
+    persist: async (dbName, oldState, opts) => {
       const { added, updated, removed } = opts
-      await Promise.all([
-        ...removed.map(item => action(dbName, 'remove', { _id: item.id })),
-        ...updated.map(item => action(dbName, 'update', { _id: item.id }, { $set: item }, { upsert: false })),
-        added.length ? action(dbName, 'insert', added) : Promise.resolve()
-      ])
+      for (const item of removed) {
+        await action(dbName, 'remove', { _id: item.id })
+      }
+      for (const item of updated) {
+        await action(dbName, 'update', { _id: item.id }, { $set: item }, { upsert: true })
+      }
+      for (const item of added) {
+        await action(dbName, 'update', { _id: item.id }, { $set: item }, { upsert: true })
+      }
       const allItems = await action(dbName, 'find', {})
-      const newOrder = allItems.map(d => d._id)
       await action('data', 'update',
         { _id: `${dbName}:order` },
-        { $set: { value: newOrder } },
+        { $set: { value: allItems.map(item => item._id) } },
         { upsert: true }
       )
-    } finally {
-      running[dbName] = false
-    }
-  }
+    },
+    getCommittedState: dbName => committedStates.get(dbName),
+    commitState: (dbName, state) => committedStates.set(dbName, state),
+    retryDelays: []
+  })
+  return (dbName, opts) => queue.enqueue(dbName, opts)
 }
-
 // Default for backward compat — instantiated in beforeEach
 let simulateWatcher
 
 describe('SQLite DB concurrency (DatabaseSync)', function () {
-  beforeEach(function () {
+  beforeEach(async function () {
+    if (!createStatePersistenceQueue) {
+      const moduleUrl = pathToFileURL(resolve(
+        __dirname,
+        '../../src/client/store/state-persistence-queue.js'
+      ))
+      ;({ createStatePersistenceQueue } = await import(moduleUrl))
+    }
     const db = createTestDb()
     dbAction = db.action
     cleanup = db.cleanup
@@ -512,7 +523,14 @@ describe('Benchmark: old (sequential) vs new (batched+parallel)', function () {
   let benchWatcherNew
   let benchCleanup
 
-  beforeEach(function () {
+  beforeEach(async function () {
+    if (!createStatePersistenceQueue) {
+      const moduleUrl = pathToFileURL(resolve(
+        __dirname,
+        '../../src/client/store/state-persistence-queue.js'
+      ))
+      ;({ createStatePersistenceQueue } = await import(moduleUrl))
+    }
     const db = createTestDb()
     benchDbAction = db.action
     benchCleanup = db.cleanup

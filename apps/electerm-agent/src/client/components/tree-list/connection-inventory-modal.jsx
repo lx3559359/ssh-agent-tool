@@ -24,6 +24,7 @@ function portOf (bookmark = {}) {
 
 export default function ConnectionInventoryModal ({
   bookmarks = [],
+  bookmarkGroups = [],
   onClose,
   onViewConnectionInfo
 }) {
@@ -32,7 +33,10 @@ export default function ConnectionInventoryModal ({
     if (!ok) {
       return
     }
-    const txt = '\uFEFF' + createConnectionInventoryCsv(bookmarks)
+    const txt = '\uFEFF' + createConnectionInventoryCsv(bookmarks, {
+      headerType: 'label',
+      bookmarkGroups
+    })
     const stamp = time(undefined, 'YYYY-MM-DD-HH-mm-ss')
     download('shellpilot-connections-with-credentials-' + stamp + '.csv', txt)
   }

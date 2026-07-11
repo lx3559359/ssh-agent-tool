@@ -3,6 +3,7 @@
  */
 const {
   readRemoteFile,
+  readRemoteFilePreview,
   writeRemoteFile
 } = require('./sftp-file')
 const { commonExtends } = require('./session-common.js')
@@ -616,6 +617,10 @@ class Sftp extends TerminalBase {
    */
   readFile (remotePath) {
     return readRemoteFile(this.sftp, remotePath)
+  }
+
+  readFilePreview (remotePath, maxBytes) {
+    return readRemoteFilePreview(this.sftp, remotePath, maxBytes)
   }
 
   /**

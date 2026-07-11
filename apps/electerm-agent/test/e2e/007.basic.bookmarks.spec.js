@@ -1,65 +1,122 @@
-const { _electron: electron } = require('@playwright/test')
-const {
-  test: it
-} = require('@playwright/test')
+const { test: it, expect } = require('@playwright/test')
 const { describe } = it
-it.setTimeout(100000)
-const delay = require('./common/wait')
-const log = require('./common/log')
-const { expect } = require('./common/expect')
-const appOptions = require('./common/app-options')
 const {
-  TEST_HOST,
-  TEST_PASS,
-  TEST_USER,
-  TEST_PORT
-} = require('./common/env')
-const e = require('./common/lang')
-const extendClient = require('./common/client-extend')
+  launchBookmarkApp,
+  openBookmarksSidebar,
+  cleanupBookmarkArtifacts,
+  closeBookmarkApp,
+  cleanupBookmarkProfile
+} = require('./common/bookmark-lifecycle')
+
+it.setTimeout(120000)
+
+async function bookmarkIdByTitle (client, title) {
+  return client.evaluate((expectedTitle) => {
+    return window.store.bookmarks.find(item => item.title === expectedTitle)?.id || ''
+  }, title)
+}
+
+async function openContextMenu (client, bookmarkId) {
+  const item = client.locator(`.sidebar-panel-bookmarks .tree-item[data-item-id="${bookmarkId}"]`)
+  await expect(item).toBeVisible()
+  await item.click({ button: 'right' })
+  const menu = client.locator('.ant-dropdown:not(.ant-dropdown-hidden) .ant-dropdown-menu:visible').last()
+  await expect(menu).toBeVisible()
+  await expect(menu.locator('[role="menuitem"]')).not.toHaveCount(0)
+  return menu
+}
 
 describe('bookmarks', function () {
-  it('all buttons open proper bookmark tab', async function () {
-    const electronApp = await electron.launch(appOptions)
-    const client = await electronApp.firstWindow()
-    extendClient(client, electronApp)
-    await delay(5500)
+  it('creates, edits, searches and permanently deletes a local connection', async function () {
+    const suffix = `${Date.now()}-${process.pid}`
+    const originalTitle = `E2E-Local-${suffix}`
+    const editedTitle = `E2E-Edited-${suffix}`
+    const artifacts = {
+      bookmarkIds: [],
+      bookmarkTitles: [originalTitle, editedTitle]
+    }
+    let electronApp
+    let client
 
-    log('button:edit')
-    await client.click('.btns .anticon-plus-circle')
-    await delay(2500)
-    const sel = '.setting-wrap .ant-tabs-nav-list .ant-tabs-tab-active'
-    await client.hasElem(sel)
-    const text = await client.getText(sel)
-    expect(text).equal(e('bookmarks'))
+    try {
+      const launched = await launchBookmarkApp()
+      electronApp = launched.electronApp
+      client = launched.client
 
-    log('auto focus works')
-    await client.hasFocus('.setting-wrap #ssh-form_host')
+      await client.locator('.aigshell-topbar-action .anticon-plus-circle').click()
+      const localType = client.locator('.setting-wrap label').filter({
+        has: client.locator('input[type="radio"][value="local"]')
+      })
+      await localType.waitFor({ state: 'visible', timeout: 10000 })
+      await localType.click()
+      const titleInput = client.locator('.setting-wrap #local-form_title')
+      await titleInput.fill(originalTitle)
+      await client.getByTestId('bookmark-save').click()
+      await expect.poll(() => bookmarkIdByTitle(client, originalTitle)).not.toBe('')
+      const bookmarkId = await bookmarkIdByTitle(client, originalTitle)
+      artifacts.bookmarkIds.push(bookmarkId)
 
-    log('default username = ""')
-    const v = await client.getValue('.setting-wrap #ssh-form_username')
-    expect(v).equal('')
+      await client.locator('.setting-wrap .close-setting-wrap-icon').click()
+      await expect(client.locator('.setting-wrap')).toBeHidden()
+      await openBookmarksSidebar(client)
+      let menu = await openContextMenu(client, bookmarkId)
+      await menu.locator('[role="menuitem"]').nth(2).click()
 
-    log('default port = 22')
-    const v1 = await client.getValue('.setting-wrap #ssh-form_port')
-    expect(v1).equal('22')
+      await expect(titleInput).toHaveValue(originalTitle)
+      await titleInput.fill(editedTitle)
+      await client.getByTestId('bookmark-save').click()
+      await expect.poll(() => bookmarkIdByTitle(client, editedTitle)).toBe(bookmarkId)
 
-    log('save it')
-    const bookmarkCountPrev = await client.evaluate(() => {
-      return window.store.bookmarks.length
-    })
-    await client.setValue('.setting-wrap #ssh-form_host', TEST_HOST)
-    await client.setValue('.setting-wrap #ssh-form_username', TEST_USER)
-    await client.setValue('.setting-wrap #ssh-form_password', TEST_PASS)
-    await client.setValue('.setting-wrap #ssh-form_port', TEST_PORT)
-    // const list0 = await client.elements('.setting-wrap .tree-item')
-    await client.click('.setting-wrap .ant-btn-primary')
-    await delay(1000)
-    const bookmarkCount = await client.evaluate(() => {
-      return window.store.bookmarks.length
-    })
-    // const list = await client.elements('.setting-wrap .tree-item')
-    // await delay(100)
-    expect(bookmarkCount).equal(bookmarkCountPrev + 1)
-    await electronApp.close().catch(console.log)
+      await client.locator('.setting-wrap .close-setting-wrap-icon').click()
+      await expect(client.locator('.setting-wrap')).toBeHidden()
+      await openBookmarksSidebar(client)
+      await client.locator('.sidebar-panel-bookmarks .tree-sort-wrap input').fill(editedTitle)
+      const result = client.locator(`.sidebar-panel-bookmarks .tree-item[data-item-id="${bookmarkId}"]`)
+      await expect(result).toBeVisible()
+      await expect(result).toContainText(editedTitle)
+
+      menu = await openContextMenu(client, bookmarkId)
+      const deleteItem = menu.locator('.ant-dropdown-menu-item-danger')
+      await expect(deleteItem).toBeVisible()
+      let deleteConfirmed = false
+      await Promise.all([
+        client.waitForEvent('dialog').then(async dialog => {
+          expect(dialog.type()).toBe('confirm')
+          expect(dialog.message()).not.toBe('')
+          deleteConfirmed = true
+          await dialog.accept()
+        }),
+        deleteItem.click()
+      ])
+      expect(deleteConfirmed).toBe(true)
+      await expect.poll(() => bookmarkIdByTitle(client, editedTitle)).toBe('')
+      await expect(result).toHaveCount(0)
+
+      await client.waitForTimeout(750)
+      await closeBookmarkApp(electronApp, __filename)
+      electronApp = null
+      client = null
+
+      const restarted = await launchBookmarkApp()
+      electronApp = restarted.electronApp
+      client = restarted.client
+      expect(await bookmarkIdByTitle(client, editedTitle)).toBe('')
+      expect(await client.evaluate(id => window.store.bookmarks.some(item => item.id === id), bookmarkId)).toBe(false)
+      await openBookmarksSidebar(client)
+      await client.locator('.sidebar-panel-bookmarks .tree-sort-wrap input').fill(editedTitle)
+      await expect(client.locator(`.sidebar-panel-bookmarks .tree-item[data-item-id="${bookmarkId}"]`)).toHaveCount(0)
+    } finally {
+      if (!client || client.isClosed()) {
+        await closeBookmarkApp(electronApp, __filename).catch(() => {})
+        const relaunched = await launchBookmarkApp().catch(() => null)
+        electronApp = relaunched?.electronApp
+        client = relaunched?.client
+      }
+      if (client && !client.isClosed()) {
+        await cleanupBookmarkArtifacts(client, artifacts).catch(() => {})
+      }
+      await closeBookmarkApp(electronApp, __filename).catch(() => {})
+      await cleanupBookmarkProfile().catch(() => {})
+    }
   })
 })

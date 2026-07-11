@@ -18,6 +18,11 @@ import findBookmarkGroupId from '../../common/find-bookmark-group-id'
 import getInitItem from '../../common/init-setting-item'
 import uid from '../../common/uid'
 import { action } from 'manate'
+import download from '../../common/download'
+import time from '../../common/time'
+import testTerminalConnection from '../../common/test-connection'
+import { createConnectionInventoryCsv } from '../../common/connection-inventory'
+import { notification } from '../common/notification'
 import './tree-list.styl'
 import TreeListRow from './tree-list-row'
 import TreeListEditorOverlay from './tree-list-editor-overlay.jsx'
@@ -26,6 +31,10 @@ import TreeSearch from './tree-search'
 import VirtualTreeList from './virtual-tree-list'
 import ConnectionInventoryModal from './connection-inventory-modal'
 import { buildVisibleTreeRows } from './tree-list-rows'
+import {
+  prepareBookmarkGroupCreation,
+  prepareBookmarkGroupEdit
+} from './bookmark-group-actions'
 import { getRandomDefaultColor } from '../../common/rand-hex-color.js'
 import {
   treeEditorRowHeight,
@@ -235,19 +244,22 @@ export default class ItemListTree extends Component {
       categoryColor,
       categoryId
     } = this.state
-    if (!categoryTitle) {
+    const { bookmarkGroups } = window.store
+    const edit = prepareBookmarkGroupEdit({
+      bookmarkGroups,
+      id: categoryId,
+      title: categoryTitle,
+      color: categoryColor
+    })
+    if (edit.status === 'invalid') {
       return
     }
-    const { bookmarkGroups } = window.store
-    const obj = bookmarkGroups.find(
-      bg => bg.id === categoryId
-    )
-    if (!obj) {
+    if (edit.status === 'missing') {
       return this.handleCancelEdit()
     }
-    obj.title = categoryTitle
-    if (categoryColor) {
-      obj.color = categoryColor
+    edit.group.title = edit.title
+    if (edit.color) {
+      edit.group.color = edit.color
     }
     this.setState({
       categoryId: ''
@@ -300,20 +312,20 @@ export default class ItemListTree extends Component {
     if (this.state.parentId) {
       return this.handleSubmitSub()
     }
+    const submission = prepareBookmarkGroupCreation({
+      id: uid(),
+      title: this.state.bookmarkGroupTitle,
+      color: this.state.bookmarkGroupColor
+    })
+    if (!submission) {
+      return
+    }
     this.onSubmit = true
     this.setState({
       showNewBookmarkGroupForm: false
     }, () => {
       this.onSubmit = false
-      const newGroup = {
-        id: uid(),
-        title: this.state.bookmarkGroupTitle,
-        bookmarkIds: []
-      }
-      if (this.state.bookmarkGroupColor) {
-        newGroup.color = this.state.bookmarkGroupColor
-      }
-      window.store.addBookmarkGroup(newGroup)
+      window.store.addBookmarkGroup(submission.group)
     })
   }
 
@@ -321,38 +333,35 @@ export default class ItemListTree extends Component {
     if (this.onSubmit) {
       return
     }
+    const submission = {
+      bookmarkGroups: window.store.bookmarkGroups,
+      parentId: this.state.parentId,
+      id: uid(),
+      title: this.state.bookmarkGroupTitle,
+      color: this.state.bookmarkGroupColor
+    }
+    if (!prepareBookmarkGroupCreation(submission)) {
+      return
+    }
     this.onSubmit = true
-    this.parentId = this.state.parentId
     this.setState({
       showNewBookmarkGroupForm: false,
       parentId: ''
-    }, this.afterSubmitSub)
+    }, () => this.afterSubmitSub(submission))
   }
 
-  afterSubmitSub = action(() => {
-    const id = this.parentId
+  afterSubmitSub = action(submission => {
     this.onSubmit = false
     const { bookmarkGroups } = window.store
-    const newCat = {
-      id: uid(),
-      title: this.state.bookmarkGroupTitle,
-      level: 2,
-      bookmarkIds: []
-    }
-    if (this.state.bookmarkGroupColor) {
-      newCat.color = this.state.bookmarkGroupColor
-    }
-    bookmarkGroups.unshift(newCat)
-    const cat = bookmarkGroups.find(
-      d => d.id === id
-    )
-    if (!cat) {
+    const prepared = prepareBookmarkGroupCreation({
+      ...submission,
+      bookmarkGroups
+    })
+    if (!prepared) {
       return
     }
-    cat.bookmarkGroupIds = [
-      ...(cat.bookmarkGroupIds || []),
-      newCat.id
-    ]
+    bookmarkGroups.unshift(prepared.group)
+    prepared.parent.group.bookmarkGroupIds = prepared.parent.bookmarkGroupIds
   })
 
   handleNewBookmarkGroup = () => {
@@ -455,6 +464,36 @@ export default class ItemListTree extends Component {
     this.setState({
       connectionInfoBookmark: item
     })
+  }
+
+  testConnection = async (e, item) => {
+    e.stopPropagation()
+    try {
+      await testTerminalConnection(item)
+      notification.success({
+        message: '连接测试成功',
+        description: item?.title || item?.host || '当前连接'
+      })
+    } catch (err) {
+      window.store.onError(err)
+    }
+  }
+
+  exportConnection = (e, item) => {
+    e.stopPropagation()
+    if (!window.confirm('将导出当前连接的明文账号、密码和密钥路径，请只保存在可信位置。是否继续？')) {
+      return
+    }
+    const txt = '\uFEFF' + createConnectionInventoryCsv([item], {
+      headerType: 'label',
+      bookmarkGroups: this.props.bookmarkGroups
+    })
+    const stamp = time(undefined, 'YYYY-MM-DD-HH-mm-ss')
+    const safeName = String(item?.title || item?.host || 'connection')
+      .replace(/[\\/:*?"<>|]/g, '-')
+      .replace(/\s+/g, '-')
+      .slice(0, 80)
+    download(`shellpilot-connection-${safeName}-${stamp}.csv`, txt)
   }
 
   handleCloseConnectionInfo = () => {
@@ -775,6 +814,8 @@ export default class ItemListTree extends Component {
             'openMoveModal',
             'editItem',
             'viewConnectionInfo',
+            'testConnection',
+            'exportConnection',
             'addSubCat',
             'toggleFavorite',
             'onSelect',
@@ -942,6 +983,7 @@ export default class ItemListTree extends Component {
         </div>
         <ConnectionInfoModal
           bookmark={this.state.connectionInfoBookmark}
+          bookmarkGroups={this.props.bookmarkGroups}
           onClose={this.handleCloseConnectionInfo}
         />
         {
@@ -949,6 +991,7 @@ export default class ItemListTree extends Component {
             ? (
               <ConnectionInventoryModal
                 bookmarks={this.props.bookmarks}
+                bookmarkGroups={this.props.bookmarkGroups}
                 onClose={this.handleCloseConnectionInventory}
                 onViewConnectionInfo={bookmark => this.setState({ connectionInfoBookmark: bookmark })}
               />

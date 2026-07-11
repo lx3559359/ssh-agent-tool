@@ -39,7 +39,8 @@ import sanitizeFilename from '../../common/sanitize-filename'
 import { refsStatic, refs, filesRef } from '../common/ref'
 import iconsMap from '../sys-menu/icons-map'
 import { splitOverflowMenu } from './context-menu-utils.js'
-import { buildSftpFileContextPrompt } from '../ai/ai-ssh-context'
+import { buildSftpFileTerminalAnalysisPrompt } from '../ai/ai-ssh-context'
+import { readSftpFileContext } from '../ai/ai-chat-context-actions'
 import { validateSftpFileName } from './file-name-validation.js'
 import message from '../common/message'
 
@@ -744,14 +745,35 @@ export default class FileSection extends React.Component {
   }
 
   askAiAboutFile = async () => {
-    const { path, name, type } = this.state.file
-    const filePath = resolve(path, name)
+    const file = this.state.file
+    const selectedFiles = this.isSelected(file.id)
+      ? this.props.getSelectedFiles()
+      : [file]
+    if (selectedFiles.length !== 1) {
+      message.warning('当前选择了多个文件，只允许一次分析单个文件。')
+      return
+    }
     try {
-      const text = await this.fetchEditorText(filePath, type)
+      const result = await readSftpFileContext({
+        file: selectedFiles[0],
+        sftp: this.props.sftp,
+        fsApi: window.fs
+      })
+      if (!result.ok) {
+        message.warning(result.message)
+        return
+      }
+      const termRef = refs.get('term-' + this.props.tab?.id)
+      const terminalOutput = termRef?.getTerminalBufferText?.() || ''
       window.store.handleOpenAIPanel()
-      refsStatic.get('AIChat')?.setPrompt(buildSftpFileContextPrompt({
-        path: filePath,
-        content: text
+      refsStatic.get('AIChat')?.setPrompt(buildSftpFileTerminalAnalysisPrompt({
+        source: result.source,
+        path: result.path,
+        size: result.size,
+        content: result.content,
+        terminalOutput,
+        filePreviewTruncated: result.truncated,
+        previewBytesRead: result.bytesRead
       }))
     } catch (err) {
       window.store.onError(err)
@@ -1089,12 +1111,14 @@ export default class FileSection extends React.Component {
         text: e('downloadFromBrowser')
       })
     }
-    if (showEdit) {
+    if (!isDirectory && isRealFile && id) {
       res.push({
         func: 'askAiAboutFile',
         icon: 'CodeOutlined',
-        text: 'AI 引用文件'
+        text: '让 AI 分析此文件'
       })
+    }
+    if (showEdit) {
       res.push({
         func: 'editFile',
         icon: 'EditOutlined',

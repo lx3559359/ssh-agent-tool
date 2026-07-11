@@ -34,6 +34,11 @@ import DropFileModal from './drop-file-modal.jsx'
 import keyControlPressed from '../../common/key-control-pressed.js'
 import NormalBuffer from './normal-buffer.jsx'
 import { createTerm, resizeTerm, startTerminalLogFile, toggleTerminalLog } from './terminal-apis.js'
+import {
+  saveTerminalLog,
+  startTerminalRecording,
+  stopTerminalRecording
+} from './save-terminal-log.js'
 import { shortcutExtend, shortcutDescExtend } from '../shortcuts/shortcut-handler.js'
 import { KeywordHighlighterAddon } from './highlight-addon.js'
 import { getFilePath, isUnsafeFilename } from '../../common/file-drop-utils.js'
@@ -72,7 +77,10 @@ import {
   handleTerminalColorQuery
 } from './terminal-color-query.mjs'
 import { buildTerminalContextMenuItems } from './terminal-context-menu.js'
-import { shouldRetryAutoReconnectError } from './ssh-reconnect-policy.js'
+import {
+  createSshReconnectScheduler,
+  shouldRetryAutoReconnectError
+} from './ssh-reconnect-policy.js'
 
 const e = window.translate
 
@@ -93,7 +101,7 @@ class Term extends Component {
       searchResults: [],
       matchIndex: -1,
       totalLines: 0,
-      reconnectCountdown: null,
+      reconnectState: null,
       terminalError: null,
       dropFileModalVisible: false,
       droppedFiles: [],
@@ -104,6 +112,27 @@ class Term extends Component {
     this.currentInput = ''
     this.shellInjected = false
     this.shellType = null
+    this.reconnectScheduler = createSshReconnectScheduler({
+      initialAttempt: props.tab.autoReConnect,
+      onStateChange: reconnectState => {
+        if (!this.onClose) {
+          this.setState({ reconnectState })
+        }
+      },
+      onReconnect: attempt => {
+        if (this.onClose) {
+          return
+        }
+        if (!this.props.config.autoReconnectTerminal) {
+          this.reconnectScheduler.stop()
+          return
+        }
+        this.props.reloadTab({
+          ...this.props.tab,
+          autoReConnect: attempt
+        })
+      }
+    })
   }
 
   domRef = createRef()
@@ -165,6 +194,7 @@ class Term extends Component {
       this.term.parent = null
     }
     this.disposeTerminalColorQueryHandlers()
+    this.reconnectScheduler.dispose()
     Object.keys(this.timers).forEach(k => {
       clearTimeout(this.timers[k])
       this.timers[k] = null
@@ -673,7 +703,10 @@ class Term extends Component {
   onReconnect = () => {
     this.handleCancelAutoReconnect()
     this.manualDisconnect = false
-    this.props.reloadTab(this.props.tab)
+    this.props.reloadTab({
+      ...this.props.tab,
+      autoReConnect: 0
+    })
   }
 
   onDisconnect = () => {
@@ -813,7 +846,7 @@ class Term extends Component {
       title: e(titleKey),
       defaultPath: logName + '.log',
       filters: [
-        { name: 'Log files', extensions: ['log'] }
+        { name: '日志文件', extensions: ['log'] }
       ],
       properties: ['createDirectory', 'showOverwriteConfirmation']
     })
@@ -829,15 +862,24 @@ class Term extends Component {
       return
     }
     const content = this.getTerminalBufferText()
-    await window.fs.writeFile(filePath, content).catch(window.store.onError)
     const { addTimeStampToTermLog } = this.state
-    startTerminalLogFile(this.pid, filePath, addTimeStampToTermLog).catch(window.store.onError)
-    const { path: logPath, name: logFileName } = getFolderFromFilePath(filePath, false)
-    this.syncTermInfo({ saveTerminalLogToFile: true, logPath, logFileName })
-    notification.success({
-      message: e('saveTerminalLogToFile'),
-      description: <ShowItem to={filePath}>{filePath}</ShowItem>,
-      duration: 5
+    await saveTerminalLog({
+      filePath,
+      content,
+      pid: this.pid,
+      addTimeStampToTermLog,
+      writeFile: window.fs.writeFile,
+      startTerminalLogFile,
+      onError: window.store.onError,
+      onSuccess: () => {
+        const { path: logPath, name: logFileName } = getFolderFromFilePath(filePath, false)
+        this.syncTermInfo({ saveTerminalLogToFile: true, logPath, logFileName })
+        notification.success({
+          message: e('saveTerminalLogToFile'),
+          description: <ShowItem to={filePath}>{filePath}</ShowItem>,
+          duration: 5
+        })
+      }
     })
   }
 
@@ -847,26 +889,48 @@ class Term extends Component {
       return
     }
     const { addTimeStampToTermLog } = this.state
-    startTerminalLogFile(this.pid, filePath, addTimeStampToTermLog).catch(window.store.onError)
-    const { path: logPath, name: logFileName } = getFolderFromFilePath(filePath, false)
-    this.syncTermInfo({ saveTerminalLogToFile: true, logPath, logFileName })
-    this.setState({ recording: true, recordingFilePath: filePath })
-    notification.success({
-      message: e('record'),
-      description: <ShowItem to={filePath}>{filePath}</ShowItem>,
-      duration: 5
+    await startTerminalRecording({
+      pid: this.pid,
+      filePath,
+      addTimeStampToTermLog,
+      startTerminalLogFile,
+      onError: window.store.onError,
+      onSuccess: () => {
+        const { path: logPath, name: logFileName } = getFolderFromFilePath(filePath, false)
+        this.syncTermInfo({ saveTerminalLogToFile: true, logPath, logFileName })
+        this.setState({ recording: true, recordingFilePath: filePath })
+        notification.success({
+          message: e('record'),
+          description: <ShowItem to={filePath}>{filePath}</ShowItem>,
+          duration: 5
+        })
+      }
     })
   }
 
-  onStopRecord = () => {
+  onStopRecord = async () => {
     const { recordingFilePath } = this.state
-    toggleTerminalLog(this.pid).catch(window.store.onError)
-    this.syncTermInfo({ saveTerminalLogToFile: false })
-    this.setState({ recording: false, recordingFilePath: '' })
-    notification.success({
-      message: e('stopRecord'),
-      description: <ShowItem to={recordingFilePath}>{recordingFilePath}</ShowItem>
+    await stopTerminalRecording({
+      pid: this.pid,
+      toggleTerminalLog,
+      onError: window.store.onError,
+      onSuccess: () => {
+        this.syncTermInfo({ saveTerminalLogToFile: false })
+        this.setState({ recording: false, recordingFilePath: '' })
+        notification.success({
+          message: e('stopRecord'),
+          description: <ShowItem to={recordingFilePath}>{recordingFilePath}</ShowItem>
+        })
+      }
     })
+  }
+
+  onOpenSessionLogFolder = () => {
+    const target = this.state.recordingFilePath || this.state.logPath
+    if (!target) {
+      return
+    }
+    window.pre.showItemInFolder(target)
   }
 
   renderContextMenu = () => {
@@ -1563,7 +1627,7 @@ class Term extends Component {
         return
       }
       if (isAutoReconnect) {
-        this.scheduleAutoReconnect(3000)
+        this.scheduleAutoReconnect()
         return
       }
       this.setStatus(statusMap.error)
@@ -1582,6 +1646,8 @@ class Term extends Component {
     this.initSocketEvents()
     this.term = term
     socket.onopen = async () => {
+      this.reconnectScheduler.reset()
+      this.props.editTab(id, { autoReConnect: 0 })
       await this.initAttachAddon()
       this.runInitScript()
     }
@@ -1698,42 +1764,24 @@ class Term extends Component {
     }
     const { autoReconnectTerminal } = this.props.config
     if (autoReconnectTerminal) {
-      this.scheduleAutoReconnect(3000)
+      this.scheduleAutoReconnect()
     }
   }
 
-  scheduleAutoReconnect = (delay = 3000) => {
-    clearTimeout(this.timers.reconnectTimer)
-    clearInterval(this.timers.reconnectCountdown)
-    const seconds = Math.round(delay / 1000)
-    this.setState({ reconnectCountdown: seconds })
-    let remaining = seconds
-    this.timers.reconnectCountdown = setInterval(() => {
-      remaining -= 1
-      if (remaining <= 0) {
-        clearInterval(this.timers.reconnectCountdown)
-        this.timers.reconnectCountdown = null
-      }
-      this.setState({ reconnectCountdown: remaining <= 0 ? null : remaining })
-    }, 1000)
-    this.timers.reconnectTimer = setTimeout(() => {
-      clearInterval(this.timers.reconnectCountdown)
-      this.timers.reconnectCountdown = null
-      this.setState({ reconnectCountdown: null })
-      if (this.onClose || !this.props.config.autoReconnectTerminal) {
-        return
-      }
-      const reconnectCount = (this.props.tab.autoReConnect || 0) + 1
-      this.props.reloadTab({ ...this.props.tab, autoReConnect: reconnectCount })
-    }, delay)
+  scheduleAutoReconnect = () => {
+    this.reconnectScheduler.schedule()
   }
 
   handleCancelAutoReconnect = () => {
-    clearTimeout(this.timers.reconnectTimer)
-    clearInterval(this.timers.reconnectCountdown)
-    this.timers.reconnectTimer = null
-    this.timers.reconnectCountdown = null
-    this.setState({ reconnectCountdown: null })
+    this.reconnectScheduler.reset()
+  }
+
+  handleReconnectNow = () => {
+    this.reconnectScheduler.reconnectNow()
+  }
+
+  handleStopReconnect = () => {
+    this.reconnectScheduler.stop()
   }
 
   batchInput = (cmd) => {
@@ -1875,7 +1923,9 @@ class Term extends Component {
             onEditBookmark={this.handleEditBookmarkFromError}
           />
           <ReconnectOverlay
-            countdown={this.state.reconnectCountdown}
+            reconnectState={this.state.reconnectState}
+            onReconnectNow={this.handleReconnectNow}
+            onStopReconnect={this.handleStopReconnect}
           />
           {this.renderResetFontSizeButton()}
           <DropFileModal

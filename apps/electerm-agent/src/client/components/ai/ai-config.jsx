@@ -339,7 +339,8 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
 
   const handleTest = async () => {
     try {
-      const values = await form.validateFields()
+      await form.validateFields(['baseURLAI', 'apiKeyAI'])
+      const values = form.getFieldsValue()
       setTesting(true)
       const res = await window.pre.runGlobalAsync(
         'AIchat',

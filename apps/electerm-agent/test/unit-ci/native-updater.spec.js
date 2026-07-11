@@ -28,11 +28,11 @@ test('main updater service uses native autoUpdater behind release approval', () 
   assert.match(source, /quitAndInstall\(true,\s*true\)/)
 })
 
-test('windows nsis package is one-click so in-client updates do not show setup wizard', () => {
+test('windows nsis installer lets first-time users choose an installation directory', () => {
   const config = require(path.join(root, 'build/electron-builder.json'))
 
-  assert.equal(config.nsis.oneClick, true)
-  assert.equal(config.nsis.allowToChangeInstallationDirectory, undefined)
+  assert.equal(config.nsis.oneClick, false)
+  assert.equal(config.nsis.allowToChangeInstallationDirectory, true)
 })
 
 test('windows nsis build refreshes the effective electron-builder config before packaging', () => {

@@ -86,7 +86,11 @@ export default auto(function InfoModal (props) {
     try {
       const output = await window.pre.runGlobalAsync('exportDiagnosticPack', result.filePath)
       const outputPath = output?.outputPath || result.filePath
-      message.success('诊断包已导出')
+      if (output?.hasOmissions) {
+        message.warning(`诊断包已导出，但有 ${output.omittedCount || 0} 个日志未包含`)
+      } else {
+        message.success('诊断包已导出')
+      }
       window.pre.showItemInFolder(outputPath)
     } catch (err) {
       message.error('导出诊断包失败：' + (err?.message || err))

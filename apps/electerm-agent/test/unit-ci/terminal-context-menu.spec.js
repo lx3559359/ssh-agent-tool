@@ -1,6 +1,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const path = require('node:path')
+const fs = require('node:fs')
 const { pathToFileURL } = require('node:url')
 
 const moduleUrl = pathToFileURL(
@@ -39,6 +40,7 @@ test('terminal context menu includes daily SSH operations and copy current path'
     'onDisconnect',
     'toggleSearch',
     'onSaveTerminalLog',
+    'onOpenSessionLogFolder',
     'onRecord'
   ])
   assert.equal(items.find(item => item.key === 'copyCurrentPath').disabled, false)
@@ -49,6 +51,7 @@ test('terminal context menu includes daily SSH operations and copy current path'
   assert.equal(items.find(item => item.key === 'onZoomInTerminal').labelText, '放大终端字体')
   assert.equal(items.find(item => item.key === 'onZoomOutTerminal').labelText, '缩小终端字体')
   assert.equal(items.find(item => item.key === 'onResetTerminalFontSize').labelText, '重置终端字体')
+  assert.equal(items.find(item => item.key === 'onOpenSessionLogFolder').labelText, '打开会话日志目录')
 })
 
 test('terminal context menu disables selection and cwd actions when unavailable', async () => {
@@ -67,6 +70,7 @@ test('terminal context menu disables selection and cwd actions when unavailable'
   assert.equal(items.find(item => item.key === 'copyCurrentPath').disabled, true)
   assert.equal(items.find(item => item.key === 'onResetTerminalFontSize').disabled, false)
   assert.equal(items.find(item => item.key === 'onStopRecord').labelKey, 'stopRecord')
+  assert.equal(items.find(item => item.key === 'onOpenSessionLogFolder').disabled, false)
 })
 
 test('terminal context menu keeps serial transfer actions only for serial sessions', async () => {
@@ -87,4 +91,15 @@ test('terminal context menu uses Chinese labels for serial transfer actions', as
 
   assert.equal(items.find(item => item.key === 'onXmodemSend').labelText, 'XMODEM 发送')
   assert.equal(items.find(item => item.key === 'onXmodemReceive').labelText, 'XMODEM 接收')
+})
+
+test('terminal implements opening the current session log location', () => {
+  const terminalSource = fs.readFileSync(
+    path.resolve(__dirname, '../../src/client/components/terminal/terminal.jsx'),
+    'utf8'
+  )
+
+  assert.match(terminalSource, /onOpenSessionLogFolder\s*=/)
+  assert.match(terminalSource, /window\.pre\.showItemInFolder/)
+  assert.match(terminalSource, /recordingFilePath\s*\|\|\s*this\.state\.logPath/)
 })

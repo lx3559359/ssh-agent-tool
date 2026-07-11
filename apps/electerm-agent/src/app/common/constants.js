@@ -23,5 +23,6 @@ exports.instSftpKeys = [
   'mv',
   'cp',
   'readFile',
+  'readFilePreview',
   'writeFile'
 ]

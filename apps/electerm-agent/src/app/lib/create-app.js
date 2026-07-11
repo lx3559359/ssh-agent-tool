@@ -4,7 +4,8 @@ const {
 const { createWindow } = require('./create-window')
 const {
   appDisplayName,
-  safeStorageAppName
+  safeStorageAppName,
+  isTest
 } = require('../common/runtime-constants')
 const { initCommandLine } = require('./command-line')
 const globalState = require('./glob-state')
@@ -102,7 +103,7 @@ exports.createApp = async function () {
   // Setup deep link handlers (open-url for macOS, etc.)
   setupDeepLinkHandlers()
   // Only request single instance lock if multi-instance is not allowed
-  if (!allowMultiInstance) {
+  if (!allowMultiInstance && !isTest) {
     // Use socket-based single instance lock for compatibility with Electron 22
     // where additionalData doesn't work in the second-instance event
     const isPrimaryInstance = await handleSingleInstance(progs)
