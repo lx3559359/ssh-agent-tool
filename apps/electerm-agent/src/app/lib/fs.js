@@ -13,6 +13,11 @@ const {
   createTextFilePreview
 } = require('../common/file-preview')
 const { readTextRange } = require('../common/file-range')
+const {
+  listArchive,
+  readArchiveTextEntry
+} = require('../common/archive-reader')
+const { searchTextReader } = require('../common/log-search')
 
 const ROOT_PATH = '/'
 
@@ -65,6 +70,12 @@ async function readFileRange (filePath, options) {
   } finally {
     await handle.close()
   }
+}
+
+function searchFileText (filePath, options) {
+  return searchTextReader({
+    readFileRange: rangeOptions => readFileRange(filePath, rangeOptions)
+  }, options)
 }
 
 // Encoding function
@@ -441,6 +452,9 @@ const fsExport = Object.assign(
     },
     readFilePreview,
     readFileRange,
+    searchFileText,
+    listArchive,
+    readArchiveTextEntry,
     readFile: (...args) => {
       return fss.readFile(...args, 'utf8')
     },

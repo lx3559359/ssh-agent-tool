@@ -13,8 +13,10 @@ import {
   getReleaseUpdateStatus
 } from './update-version'
 import { attachUpdateApprovalManifest } from './update-approval'
-
-const releaseApiUrl = 'https://api.github.com/repos/lx3559359/ssh-agent-tool/releases/latest'
+import {
+  appendUpdateCacheBuster,
+  getUpdateReleaseSources
+} from './update-sources'
 
 async function fetchData (url, options) {
   const data = {
@@ -30,9 +32,7 @@ async function fetchData (url, options) {
 }
 
 function getInfo (url) {
-  const n = Date.now()
-  const tail = url.includes('?') ? '' : '?_=' + n
-  return fetchData(url + tail, {
+  return fetchData(appendUpdateCacheBuster(url), {
     action: 'get-update-info',
     headers: {
       'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/59.0.3071.115 Safari/537.36'
@@ -45,8 +45,18 @@ function getInfo (url) {
 }
 
 async function getApprovedReleaseInfo () {
-  const release = await getInfo(releaseApiUrl)
-  return attachUpdateApprovalManifest(release, getInfo)
+  for (const source of getUpdateReleaseSources()) {
+    const release = await getInfo(source.releaseApiUrl)
+    const approvedRelease = await attachUpdateApprovalManifest(release, getInfo)
+    if (approvedRelease?.tag_name) {
+      return {
+        ...approvedRelease,
+        updateSource: source.id,
+        updateSourceLabel: source.label
+      }
+    }
+  }
+  return null
 }
 
 function getConfiguredUpdateChannel () {
@@ -87,7 +97,7 @@ export async function getLatestReleaseStatus () {
 }
 
 export async function getLatestReleaseInfo () {
-  const release = await getInfo(releaseApiUrl)
+  const release = await getApprovedReleaseInfo()
   return release?.body
     ? {
         body: release.body,

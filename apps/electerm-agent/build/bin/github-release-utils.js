@@ -1,4 +1,5 @@
 const path = require('path')
+const { modelScopeReleaseManifestName } = require('../../src/app/common/update-sources')
 
 function buildReleaseTag (version) {
   const value = String(version || '').trim()
@@ -19,7 +20,8 @@ function getRequiredReleaseAssetNames (version, options = {}) {
     prefix,
     `${prefix}.blockmap`,
     'latest.yml',
-    'aigshell-update.json'
+    'aigshell-update.json',
+    modelScopeReleaseManifestName
   ]
 }
 

@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { Flex, Input, Popconfirm, Segmented } from 'antd'
 import TabSelect from '../footer/tab-select'
 import AiChatHistory from './ai-chat-history'
@@ -9,6 +9,8 @@ import {
   CodeOutlined,
   FileTextOutlined,
   HighlightOutlined,
+  CloseOutlined,
+  PaperClipOutlined,
   SettingOutlined,
   SendOutlined,
   ToolOutlined,
@@ -43,6 +45,11 @@ import {
   replacePromptIfUnchanged,
   shouldAutoAttachSelectedSftpFileContext
 } from './ai-chat-context-actions'
+import {
+  buildAttachmentContextPrompt,
+  createLocalFileAttachments,
+  parseSftpDropPayload
+} from './ai-attachments'
 import message from '../common/message'
 import aiAgentCopy from './ai-agent-copy.json'
 import './ai.styl'
@@ -53,6 +60,8 @@ const MAX_HISTORY = 100
 export default function AIChat (props) {
   const [prompt, setPrompt] = useState('')
   const [mode, setMode] = useState('ask')
+  const [attachmentQueue, setAttachmentQueue] = useState([])
+  const fileInputRef = useRef(null)
   const isAgent = mode === 'agent'
   const submitDisabled = isAgent && props.agentRunning
 
@@ -62,7 +71,11 @@ export default function AIChat (props) {
 
   const handleSubmit = useCallback(async function (submitPromptOverride) {
     const promptAtSubmit = prompt
+    const attachmentQueueAtSubmit = attachmentQueue
     let submitPrompt = typeof submitPromptOverride === 'string' ? submitPromptOverride : prompt
+    if (!String(submitPrompt || '').trim() && attachmentQueueAtSubmit.length) {
+      submitPrompt = '请分析附件内容。'
+    }
     const submitAction = getAIChatSubmitAction({
       prompt: submitPrompt,
       config: props.config
@@ -98,6 +111,24 @@ export default function AIChat (props) {
       submitPrompt = `${submitPrompt}\n\n${result.prompt}`
     }
 
+    if (attachmentQueueAtSubmit.length) {
+      const attachmentPrompt = await buildAttachmentContextPrompt({
+        attachments: attachmentQueueAtSubmit,
+        fsApi: window.fs,
+        sftpRef: getActiveSftpRef({
+          store: window.store,
+          refs
+        })
+      }).catch(err => {
+        window.store.onError(err)
+        return ''
+      })
+      if (!attachmentPrompt) {
+        return
+      }
+      submitPrompt = `${submitPrompt}\n\n${attachmentPrompt}`
+    }
+
     const chatId = uid()
     const chatEntry = {
       prompt: submitPrompt,
@@ -127,7 +158,10 @@ export default function AIChat (props) {
     setPrompt(current =>
       replacePromptIfUnchanged(current, promptAtSubmit, '')
     )
-  }, [prompt, mode, props.config])
+    setAttachmentQueue(current =>
+      current === attachmentQueueAtSubmit ? [] : current
+    )
+  }, [prompt, mode, props.config, attachmentQueue])
 
   function renderHistory () {
     return (
@@ -233,6 +267,57 @@ export default function AIChat (props) {
 
   function handleQuoteLocalCliTools () {
     setPrompt(buildLocalCliContextPrompt())
+  }
+
+  function appendAttachments (items = []) {
+    const nextItems = items.filter(Boolean)
+    if (!nextItems.length) {
+      return
+    }
+    setAttachmentQueue(current => [...current, ...nextItems])
+  }
+
+  function handlePickLocalAttachments () {
+    fileInputRef.current?.click()
+  }
+
+  function handleLocalAttachmentChange (e) {
+    appendAttachments(createLocalFileAttachments(e.target.files))
+    e.target.value = ''
+  }
+
+  function handlePasteAttachments (e) {
+    const files = e.clipboardData?.files
+    if (files?.length) {
+      appendAttachments(createLocalFileAttachments(files))
+    }
+  }
+
+  function handleDropAttachments (e) {
+    const localFiles = e.dataTransfer?.files
+    const sftpPayload = e.dataTransfer?.getData?.('fromFile')
+    const attachments = [
+      ...parseSftpDropPayload(sftpPayload),
+      ...createLocalFileAttachments(localFiles)
+    ]
+    if (!attachments.length) {
+      return
+    }
+    e.preventDefault()
+    appendAttachments(attachments)
+  }
+
+  function handleDragOverAttachments (e) {
+    if (
+      e.dataTransfer?.types?.includes?.('Files') ||
+      e.dataTransfer?.types?.includes?.('fromFile')
+    ) {
+      e.preventDefault()
+    }
+  }
+
+  function removeAttachment (id) {
+    setAttachmentQueue(current => current.filter(item => item.id !== id))
   }
 
   function renderTabSelect () {
@@ -347,6 +432,33 @@ export default function AIChat (props) {
     )
   }
 
+  function renderAttachments () {
+    if (!attachmentQueue.length) {
+      return null
+    }
+    return (
+      <Flex className='ai-attachment-queue' wrap='wrap' gap={6}>
+        {
+          attachmentQueue.map(item => (
+            <button
+              key={item.id}
+              type='button'
+              className='ai-attachment-chip'
+              title={item.path || item.name}
+            >
+              <FileTextOutlined />
+              <span>{item.name}</span>
+              <CloseOutlined
+                onClick={() => removeAttachment(item.id)}
+                className='ai-attachment-remove'
+              />
+            </button>
+          ))
+        }
+      </Flex>
+    )
+  }
+
   useEffect(() => {
     refsStatic.add('AIChat', {
       setPrompt,
@@ -376,8 +488,15 @@ export default function AIChat (props) {
         {renderHistory()}
       </Flex>
 
-      <Flex vertical className='ai-chat-input'>
+      <Flex
+        vertical
+        className='ai-chat-input'
+        onPaste={handlePasteAttachments}
+        onDrop={handleDropAttachments}
+        onDragOver={handleDragOverAttachments}
+      >
         {renderContextActions()}
+        {renderAttachments()}
         <TextArea
           value={prompt}
           onChange={handlePromptChange}
@@ -386,10 +505,22 @@ export default function AIChat (props) {
           autoSize={{ minRows: 3, maxRows: 10 }}
           className='ai-chat-textarea'
         />
+        <input
+          ref={fileInputRef}
+          type='file'
+          multiple
+          className='hide'
+          onChange={handleLocalAttachmentChange}
+        />
         <Flex className='ai-chat-terminals' justify='space-between' align='center'>
           <Flex align='center' gap={6}>
             {renderModeSwitch()}
             {renderTabSelect()}
+            <PaperClipOutlined
+              onClick={handlePickLocalAttachments}
+              className='mg1l pointer icon-hover ai-attachment-pick-icon'
+              title='添加附件'
+            />
             <SettingOutlined
               onClick={toggleConfig}
               className='mg1l pointer icon-hover toggle-ai-setting-icon'

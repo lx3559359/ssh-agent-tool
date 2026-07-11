@@ -95,6 +95,61 @@ test('AI chat context actions read the current selected remote SFTP file', async
   })
 })
 
+test('AI chat context actions read selected compressed SFTP text members', async () => {
+  const {
+    readSelectedSftpFileContext
+  } = await import(moduleUrl)
+
+  let previewCalled = false
+  const result = await readSelectedSftpFileContext({
+    sftpRef: {
+      getSelectedFiles: () => [{
+        name: 'logs.zip',
+        path: '/var/log',
+        type: 'remote',
+        size: 2048,
+        isDirectory: false
+      }],
+      sftp: {
+        listArchive: async (filePath) => {
+          assert.equal(filePath, '/var/log/logs.zip')
+          return {
+            type: 'zip',
+            entries: [{
+              path: 'error.log',
+              size: 20
+            }]
+          }
+        },
+        readArchiveTextEntry: async (filePath, entryPath, options) => {
+          assert.equal(filePath, '/var/log/logs.zip')
+          assert.equal(entryPath, 'error.log')
+          assert.equal(options.maxBytes > 0, true)
+          return {
+            content: 'zip member content',
+            truncated: false,
+            binary: false,
+            bytesRead: Buffer.byteLength('zip member content'),
+            archiveType: 'zip',
+            entryPath
+          }
+        },
+        readFilePreview: async () => {
+          previewCalled = true
+        }
+      }
+    }
+  })
+
+  assert.equal(result.ok, true)
+  assert.equal(result.content, 'zip member content')
+  assert.equal(result.archiveType, 'zip')
+  assert.equal(result.archiveEntryPath, 'error.log')
+  assert.match(result.path, /logs\.zip/)
+  assert.match(result.path, /error\.log/)
+  assert.equal(previewCalled, false)
+})
+
 test('AI chat context actions read the current selected local SFTP file', async () => {
   const {
     readSelectedSftpFileContext

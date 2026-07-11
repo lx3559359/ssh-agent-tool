@@ -282,6 +282,10 @@ export const instSftpKeys = [
   'cp',
   'readFile',
   'readFilePreview',
+  'readFileRange',
+  'searchFileText',
+  'listArchive',
+  'readArchiveTextEntry',
   'writeFile'
 ]
 export const zmodemTransferPackSize = 1024 * 8

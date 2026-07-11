@@ -27,6 +27,23 @@ test('prepares approved online update assets from the local electron-builder met
 
     const manifest = JSON.parse(fs.readFileSync(path.join(tempDir, 'aigshell-update.json'), 'utf8'))
     assert.doesNotThrow(() => validateUpdateApprovalManifest(manifest, '3.15.107', { channel: 'stable' }))
+
+    const releaseIndex = JSON.parse(fs.readFileSync(path.join(tempDir, 'shellpilot-release.json'), 'utf8'))
+    assert.equal(releaseIndex.tag_name, 'v3.15.107')
+    assert.deepEqual(
+      releaseIndex.assets.map(asset => asset.name),
+      [
+        'ShellPilot-3.15.107-win-x64-installer.exe',
+        'ShellPilot-3.15.107-win-x64-installer.exe.blockmap',
+        'latest.yml',
+        'aigshell-update.json',
+        'shellpilot-release.json'
+      ]
+    )
+    assert.match(
+      releaseIndex.assets[0].browser_download_url,
+      /modelscope\.cn\/models\/lx3559359\/ShellPilot-Updates\/resolve\/master\/ShellPilot-3\.15\.107-win-x64-installer\.exe/
+    )
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true })
   }

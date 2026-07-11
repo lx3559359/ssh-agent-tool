@@ -4,6 +4,9 @@
 const {
   readRemoteFile,
   readRemoteFilePreview,
+  readRemoteFileRange,
+  listRemoteArchive,
+  readRemoteArchiveTextEntry,
   writeRemoteFile
 } = require('./sftp-file')
 const { commonExtends } = require('./session-common.js')
@@ -12,6 +15,7 @@ const {
   getSizeCount,
   getSizeCountWin
 } = require('../common/get-folder-size-and-file-count.js')
+const { searchTextReader } = require('../common/log-search')
 const globalState = require('./global-state')
 
 class Sftp extends TerminalBase {
@@ -621,6 +625,24 @@ class Sftp extends TerminalBase {
 
   readFilePreview (remotePath, maxBytes) {
     return readRemoteFilePreview(this.sftp, remotePath, maxBytes)
+  }
+
+  readFileRange (remotePath, options) {
+    return readRemoteFileRange(this.sftp, remotePath, options)
+  }
+
+  searchFileText (remotePath, options) {
+    return searchTextReader({
+      readFileRange: rangeOptions => this.readFileRange(remotePath, rangeOptions)
+    }, options)
+  }
+
+  listArchive (remotePath, options) {
+    return listRemoteArchive(this.sftp, remotePath, options)
+  }
+
+  readArchiveTextEntry (remotePath, entryPath, options) {
+    return readRemoteArchiveTextEntry(this.sftp, remotePath, entryPath, options)
   }
 
   /**

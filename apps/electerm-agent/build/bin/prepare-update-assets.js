@@ -6,6 +6,7 @@ const {
   normalizeChannel,
   validateUpdateApprovalManifest
 } = require('./write-update-approval-manifest')
+const { writeUpdateReleaseIndex } = require('./update-release-index')
 
 function readUpdateMetadataVersion (filePath) {
   if (!fs.existsSync(filePath)) {
@@ -53,6 +54,7 @@ function prepareUpdateAssets (options = {}) {
   const latestPath = path.join(distDir, 'latest.yml')
   const localMetadataPath = findUpdateMetadataPath(distDir, version, options)
   const manifestPath = path.join(distDir, 'aigshell-update.json')
+  let releaseIndexPath = ''
   let copiedLatest = false
 
   fs.mkdirSync(distDir, { recursive: true })
@@ -68,12 +70,18 @@ function prepareUpdateAssets (options = {}) {
   const manifest = buildUpdateApprovalManifest(version, { channel })
   validateUpdateApprovalManifest(manifest, version, { channel })
   fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n')
+  releaseIndexPath = writeUpdateReleaseIndex({
+    distDir,
+    version,
+    arch: options.arch || process.env.AIGSHELL_RELEASE_ARCH
+  }).releaseIndexPath
 
   return {
     copiedLatest,
     latestPath,
     localMetadataPath,
-    manifestPath
+    manifestPath,
+    releaseIndexPath
   }
 }
 
@@ -82,6 +90,7 @@ function main () {
   console.log('ShellPilot online update assets are prepared.')
   console.log(`- latest.yml: ${result.copiedLatest ? `created from ${path.basename(result.localMetadataPath)}` : 'kept existing file'}`)
   console.log('- aigshell-update.json: created and validated')
+  console.log('- shellpilot-release.json: created for ModelScope domestic update source')
 }
 
 if (require.main === module) {

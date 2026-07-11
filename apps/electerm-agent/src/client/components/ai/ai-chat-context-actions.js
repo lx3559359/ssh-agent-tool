@@ -25,6 +25,55 @@ function joinPath (base = '', name = '') {
     : left + separator + right
 }
 
+function isSupportedArchivePath (filePath = '') {
+  return /\.(zip|tgz|gz)$/i.test(String(filePath || ''))
+}
+
+async function readArchiveFileContext ({
+  reader,
+  filePath,
+  isRemote,
+  maxBytes
+}) {
+  if (
+    typeof reader?.listArchive !== 'function' ||
+    typeof reader?.readArchiveTextEntry !== 'function'
+  ) {
+    return {
+      ok: false,
+      message: '当前连接不支持压缩日志安全读取，请升级客户端或先解压后再引用。'
+    }
+  }
+  const listing = await reader.listArchive(filePath, { maxBytes })
+  const entry = listing?.entries?.find(item => item && item.path)
+  if (!entry) {
+    return {
+      ok: false,
+      message: '压缩包内没有可读取的文本成员。'
+    }
+  }
+  const preview = await reader.readArchiveTextEntry(filePath, entry.path, {
+    maxBytes
+  })
+  if (preview.binary) {
+    return {
+      ok: false,
+      message: '压缩包成员疑似二进制文件，已阻止发送给 AI。'
+    }
+  }
+  return {
+    ok: true,
+    path: `${filePath}#${entry.path}`,
+    source: isRemote ? '远程 SFTP 压缩包' : '本地压缩包',
+    content: String(preview.content || ''),
+    truncated: Boolean(preview.truncated || preview.hasMore),
+    binary: false,
+    bytesRead: Number(preview.bytesRead) || 0,
+    archiveType: preview.archiveType || listing.type,
+    archiveEntryPath: preview.entryPath || entry.path
+  }
+}
+
 export function getActiveTerminalRef ({
   store = window.store,
   refs = window.refs
@@ -129,6 +178,20 @@ export async function readSftpFileContext ({
   const size = file.size ?? ''
 
   try {
+    if (isSupportedArchivePath(filePath)) {
+      const archiveContext = await readArchiveFileContext({
+        reader,
+        filePath,
+        isRemote,
+        maxBytes
+      })
+      return archiveContext.ok
+        ? {
+            ...archiveContext,
+            size
+          }
+        : archiveContext
+    }
     if (typeof reader?.readFilePreview !== 'function') {
       return {
         ok: false,

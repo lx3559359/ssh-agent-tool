@@ -119,6 +119,7 @@ jobs:
             apps/electerm-agent/dist/ShellPilot-*-win-x64-portable.zip
             apps/electerm-agent/dist/latest.yml
             apps/electerm-agent/dist/aigshell-update.json
+            apps/electerm-agent/dist/shellpilot-release.json
           if-no-files-found: error
           retention-days: 14
 
@@ -134,3 +135,4 @@ jobs:
             apps/electerm-agent/dist/ShellPilot-*-win-x64-portable.zip
             apps/electerm-agent/dist/latest.yml
             apps/electerm-agent/dist/aigshell-update.json
+            apps/electerm-agent/dist/shellpilot-release.json

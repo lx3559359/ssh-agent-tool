@@ -136,6 +136,88 @@ describe('local file range reading', () => {
     }
   })
 
+  test('rechecks size after a non-empty short read caused by truncation', async () => {
+    const originalOpen = fss.open
+    let statCalls = 0
+    let readCalls = 0
+    fss.open = async () => ({
+      async stat () {
+        statCalls += 1
+        return { size: statCalls === 1 ? 10 : 1 }
+      },
+      async read (buffer, bufferOffset, length, position) {
+        readCalls += 1
+        if (readCalls > 1) {
+          assert.equal(position, 1)
+          return { bytesRead: 0, buffer }
+        }
+        assert.equal(position, 0)
+        assert.equal(length, 8)
+        buffer[bufferOffset] = 0xe4
+        return { bytesRead: 1, buffer }
+      },
+      async close () {}
+    })
+
+    try {
+      assert.deepEqual(await fsExport.readFileRange('unused.txt', {
+        maxBytes: 4
+      }), {
+        content: '',
+        binary: true,
+        offset: 0,
+        nextOffset: 1,
+        totalBytes: 1,
+        bytesRead: 1,
+        hasMore: false
+      })
+      assert.equal(statCalls, 2)
+    } finally {
+      fss.open = originalOpen
+    }
+  })
+
+  test('returns the refreshed tail when truncation removes the requested offset', async () => {
+    const originalOpen = fss.open
+    let statCalls = 0
+    let readCalls = 0
+    fss.open = async () => ({
+      async stat () {
+        statCalls += 1
+        return { size: statCalls === 1 ? 10 : 4 }
+      },
+      async read (buffer, bufferOffset, length, position) {
+        readCalls += 1
+        if (readCalls > 1) {
+          assert.equal(position, 4)
+          return { bytesRead: 0, buffer }
+        }
+        assert.equal(position, 2)
+        Buffer.from('ab').copy(buffer, bufferOffset)
+        return { bytesRead: 2, buffer }
+      },
+      async close () {}
+    })
+
+    try {
+      assert.deepEqual(await fsExport.readFileRange('unused.txt', {
+        offset: 5,
+        maxBytes: 4
+      }), {
+        content: '',
+        binary: false,
+        offset: 4,
+        nextOffset: 4,
+        totalBytes: 4,
+        bytesRead: 0,
+        hasMore: false
+      })
+      assert.equal(statCalls, 2)
+    } finally {
+      fss.open = originalOpen
+    }
+  })
+
   test('reassembles a large real UTF-8 file from bounded ranges', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'electerm-file-range-'))
     const filePath = path.join(root, 'large.txt')
@@ -414,5 +496,36 @@ describe('file range helpers', () => {
 
     assert.equal(sawBinary, true)
     assert.ok(source.reads.every(read => read.length <= 8))
+  })
+
+  test('marks malformed UTF-8 sequences as binary instead of text', async () => {
+    const { readTextRange } = loadRangeHelpers()
+
+    for (const value of [
+      Buffer.from([0xe0, 0x80, 0x80, 0x61]),
+      Buffer.from([0xed, 0xa0, 0x80, 0x61]),
+      Buffer.from([0xf4, 0xbf, 0xbf, 0xbf, 0x61])
+    ]) {
+      const { reader } = createReader(value)
+      const range = await readTextRange(reader, { maxBytes: 4 })
+      assert.equal(range.binary, true)
+      assert.equal(range.content, '')
+      assert.ok(range.nextOffset > range.offset)
+    }
+  })
+
+  test('does not skip malformed UTF-8 at a page boundary', async () => {
+    const { readTextRange } = loadRangeHelpers()
+    const value = Buffer.from([0x61, 0xe0, 0x80, 0x80, 0x62])
+    const { reader } = createReader(value)
+
+    const range = await readTextRange(reader, {
+      offset: 2,
+      maxBytes: 4
+    })
+
+    assert.equal(range.binary, true)
+    assert.equal(range.content, '')
+    assert.ok(range.nextOffset > 2)
   })
 })

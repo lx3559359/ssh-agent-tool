@@ -10,16 +10,13 @@ const {
   isArm,
   packInfo
 } = require('../common/app-props')
+const {
+  appendUpdateCacheBuster,
+  getUpdateReleaseSources,
+  githubFeedConfig
+} = require('../common/update-sources')
 
 axios.defaults.proxy = false
-
-const releaseApiUrl = 'https://api.github.com/repos/lx3559359/ssh-agent-tool/releases/latest'
-const feedConfig = {
-  provider: 'github',
-  owner: 'lx3559359',
-  repo: 'ssh-agent-tool',
-  channel: 'latest'
-}
 
 const state = {
   configured: false,
@@ -29,7 +26,9 @@ const state = {
   available: false,
   percent: 0,
   version: '',
-  error: ''
+  error: '',
+  updateSource: '',
+  updateSourceLabel: ''
 }
 
 function cleanVersion (value) {
@@ -98,16 +97,47 @@ async function fetchJson (url, proxy) {
   return res.data
 }
 
+async function fetchApprovedReleaseFromSource (source, options = {}) {
+  try {
+    const release = await fetchJson(appendUpdateCacheBuster(source.releaseApiUrl), options.proxy)
+    const version = cleanVersion(release?.tag_name)
+    if (!version) {
+      return null
+    }
+    const manifestAsset = getApprovalManifestAsset(release)
+    const manifestUrl = manifestAsset?.browser_download_url
+    const manifest = manifestUrl ? await fetchJson(appendUpdateCacheBuster(manifestUrl), options.proxy) : null
+    return {
+      release: {
+        ...release,
+        updateSource: source.id,
+        updateSourceLabel: source.label
+      },
+      version,
+      manifest,
+      source
+    }
+  } catch (error) {
+    log.warn('ShellPilot update source failed', {
+      source: source.id,
+      message: error?.message || String(error)
+    })
+    return null
+  }
+}
+
 async function fetchApprovedRelease (options = {}) {
-  const release = await fetchJson(releaseApiUrl, options.proxy)
-  const version = cleanVersion(release?.tag_name)
-  const manifestAsset = getApprovalManifestAsset(release)
-  const manifestUrl = manifestAsset?.browser_download_url
-  const manifest = manifestUrl ? await fetchJson(manifestUrl, options.proxy) : null
+  for (const source of getUpdateReleaseSources()) {
+    const result = await fetchApprovedReleaseFromSource(source, options)
+    if (result) {
+      return result
+    }
+  }
   return {
-    release,
-    version,
-    manifest
+    release: null,
+    version: '',
+    manifest: null,
+    source: null
   }
 }
 
@@ -116,7 +146,8 @@ async function validateApprovedRelease (options = {}) {
   const {
     release,
     version,
-    manifest
+    manifest,
+    source
   } = await fetchApprovedRelease(options)
 
   if (!version) {
@@ -149,7 +180,8 @@ async function validateApprovedRelease (options = {}) {
   return {
     status: 'update',
     version,
-    release
+    release,
+    source
   }
 }
 
@@ -166,58 +198,56 @@ function updateState (updates) {
   return cloneState()
 }
 
-function configureNativeUpdater () {
-  if (state.configured) {
-    return
+function configureNativeUpdater (feedConfig = githubFeedConfig) {
+  if (!state.configured) {
+    autoUpdater.autoDownload = false
+    autoUpdater.autoInstallOnAppQuit = false
+    autoUpdater.allowPrerelease = false
+    autoUpdater.logger = log
+    autoUpdater.on('checking-for-update', () => {
+      updateState({
+        checking: true,
+        error: ''
+      })
+    })
+    autoUpdater.on('update-available', info => {
+      updateState({
+        checking: false,
+        available: true,
+        version: cleanVersion(info?.version || state.version)
+      })
+    })
+    autoUpdater.on('update-not-available', () => {
+      updateState({
+        checking: false,
+        available: false,
+        downloading: false
+      })
+    })
+    autoUpdater.on('download-progress', progress => {
+      updateState({
+        downloading: true,
+        percent: Math.max(0, Math.min(progress?.percent || 0, 100))
+      })
+    })
+    autoUpdater.on('update-downloaded', info => {
+      updateState({
+        downloading: false,
+        downloaded: true,
+        percent: 100,
+        version: cleanVersion(info?.version || state.version)
+      })
+    })
+    autoUpdater.on('error', err => {
+      updateState({
+        checking: false,
+        downloading: false,
+        error: err?.message || '自动更新失败'
+      })
+    })
+    state.configured = true
   }
-  autoUpdater.autoDownload = false
-  autoUpdater.autoInstallOnAppQuit = false
-  autoUpdater.allowPrerelease = false
-  autoUpdater.logger = log
   autoUpdater.setFeedURL(feedConfig)
-
-  autoUpdater.on('checking-for-update', () => {
-    updateState({
-      checking: true,
-      error: ''
-    })
-  })
-  autoUpdater.on('update-available', info => {
-    updateState({
-      checking: false,
-      available: true,
-      version: cleanVersion(info?.version || state.version)
-    })
-  })
-  autoUpdater.on('update-not-available', () => {
-    updateState({
-      checking: false,
-      available: false,
-      downloading: false
-    })
-  })
-  autoUpdater.on('download-progress', progress => {
-    updateState({
-      downloading: true,
-      percent: Math.max(0, Math.min(progress?.percent || 0, 100))
-    })
-  })
-  autoUpdater.on('update-downloaded', info => {
-    updateState({
-      downloading: false,
-      downloaded: true,
-      percent: 100,
-      version: cleanVersion(info?.version || state.version)
-    })
-  })
-  autoUpdater.on('error', err => {
-    updateState({
-      checking: false,
-      downloading: false,
-      error: err?.message || '自动更新失败'
-    })
-  })
-  state.configured = true
 }
 
 function isNativeUpdaterSupported () {
@@ -231,7 +261,6 @@ async function nativeUpdateCheck (options = {}) {
       message: '当前运行环境不支持客户端内自动更新。'
     })
   }
-  configureNativeUpdater()
   const approved = await validateApprovedRelease(options)
   if (approved.status !== 'update') {
     updateState({
@@ -246,10 +275,13 @@ async function nativeUpdateCheck (options = {}) {
       ...approved
     }
   }
+  configureNativeUpdater(approved.source?.feedConfig)
   updateState({
     checking: true,
     available: true,
     version: approved.version,
+    updateSource: approved.source?.id || '',
+    updateSourceLabel: approved.source?.label || '',
     error: ''
   })
   await autoUpdater.checkForUpdates()
@@ -266,7 +298,6 @@ async function nativeUpdateDownload (options = {}) {
       message: '当前运行环境不支持客户端内自动更新。'
     })
   }
-  configureNativeUpdater()
   const approved = await validateApprovedRelease(options)
   if (approved.status !== 'update') {
     return {
@@ -274,12 +305,15 @@ async function nativeUpdateDownload (options = {}) {
       ...approved
     }
   }
+  configureNativeUpdater(approved.source?.feedConfig)
   updateState({
     available: true,
     downloading: true,
     downloaded: false,
     percent: 0,
     version: approved.version,
+    updateSource: approved.source?.id || '',
+    updateSourceLabel: approved.source?.label || '',
     error: ''
   })
   await autoUpdater.downloadUpdate()
@@ -309,7 +343,8 @@ function nativeUpdateState () {
 module.exports = {
   cleanVersion,
   configureNativeUpdater,
-  feedConfig,
+  feedConfig: githubFeedConfig,
+  fetchApprovedRelease,
   getWindowsInstallerNames,
   hasWindowsUpdateAssets,
   isApprovedManifest,

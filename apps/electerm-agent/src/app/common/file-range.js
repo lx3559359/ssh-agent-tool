@@ -41,6 +41,9 @@ function isValidUtf8Sequence (buffer, start, length) {
 }
 
 function findSafeStart (buffer, requestedIndex) {
+  if (requestedIndex >= buffer.length) {
+    return buffer.length
+  }
   if (!isContinuationByte(buffer[requestedIndex])) {
     return requestedIndex
   }
@@ -93,7 +96,7 @@ function findContentEnd (buffer, start, byteLimit, atFileEnd) {
 
 async function readTextRange (reader, options) {
   const normalized = normalizeRangeOptions(options)
-  const totalBytes = Math.max(0, await reader.size())
+  let totalBytes = Math.max(0, await reader.size())
   const requestedOffset = Math.min(normalized.offset, totalBytes)
 
   if (requestedOffset === totalBytes) {
@@ -127,6 +130,24 @@ async function readTextRange (reader, options) {
       totalBytes: currentTotalBytes,
       bytesRead: 0,
       hasMore: false
+    }
+  }
+  if (buffer.length < readLength) {
+    const currentTotalBytes = Math.max(0, await reader.size())
+    const observedEnd = readOffset + buffer.length
+    totalBytes = currentTotalBytes <= totalBytes
+      ? Math.max(currentTotalBytes, observedEnd)
+      : observedEnd
+    if (requestedOffset >= totalBytes) {
+      return {
+        content: '',
+        binary: false,
+        offset: totalBytes,
+        nextOffset: totalBytes,
+        totalBytes,
+        bytesRead: 0,
+        hasMore: false
+      }
     }
   }
   const requestedIndex = Math.min(contextBytes, buffer.length)
