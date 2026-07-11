@@ -86,10 +86,27 @@ describe('file range helpers', () => {
       normalizeRangeOptions
     } = loadRangeHelpers()
 
-    for (const offset of [undefined, null, -1, 1.5, '1', NaN]) {
+    for (const offset of [
+      undefined,
+      null,
+      -1,
+      1.5,
+      '1',
+      NaN,
+      Number.MAX_SAFE_INTEGER + 1
+    ]) {
       assert.equal(normalizeRangeOptions({ offset }).offset, 0)
     }
-    for (const maxBytes of [undefined, null, 0, -1, 1.5, '1024', NaN]) {
+    for (const maxBytes of [
+      undefined,
+      null,
+      0,
+      -1,
+      1.5,
+      '1024',
+      NaN,
+      Number.MAX_SAFE_INTEGER + 1
+    ]) {
       assert.equal(
         normalizeRangeOptions({ maxBytes }).maxBytes,
         DEFAULT_RANGE_BYTES
@@ -183,11 +200,13 @@ describe('file range helpers', () => {
     while (offset < Buffer.byteLength(original)) {
       const range = await readTextRange(reader, { offset, maxBytes: 4 })
       assert.equal(range.content.includes('\ufffd'), false)
+      assert.ok(Buffer.byteLength(range.content) <= 4)
       assert.ok(range.nextOffset > offset)
       parts.push(range.content)
       offset = range.nextOffset
     }
 
+    assert.equal(parts[0], '甲')
     assert.equal(parts.join(''), original)
   })
 
@@ -200,13 +219,19 @@ describe('file range helpers', () => {
     assert.equal(result.content, '乙')
     assert.equal(result.content.includes('\ufffd'), false)
     assert.equal(result.nextOffset, 6)
-    assert.equal(result.bytesRead, 5)
+    assert.equal(result.bytesRead, 3)
+    assert.equal(result.bytesRead, result.nextOffset - result.offset)
     assert.equal(result.hasMore, true)
 
     const narrowResult = await readTextRange(reader, { offset: 1, maxBytes: 1 })
     assert.equal(narrowResult.offset, 3)
     assert.equal(narrowResult.nextOffset, 3)
     assert.equal(narrowResult.content, '')
+    assert.equal(narrowResult.bytesRead, 0)
+    assert.equal(
+      narrowResult.bytesRead,
+      narrowResult.nextOffset - narrowResult.offset
+    )
   })
 
   test('marks binary content without exposing it as text', async () => {

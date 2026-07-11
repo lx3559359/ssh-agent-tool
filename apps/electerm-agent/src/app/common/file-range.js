@@ -4,10 +4,10 @@ const DEFAULT_RANGE_BYTES = 256 * 1024
 const MAX_RANGE_BYTES = 1024 * 1024
 
 function normalizeRangeOptions (options = {}) {
-  const offset = Number.isInteger(options.offset) && options.offset >= 0
+  const offset = Number.isSafeInteger(options.offset) && options.offset >= 0
     ? options.offset
     : 0
-  const maxBytes = Number.isInteger(options.maxBytes) && options.maxBytes > 0
+  const maxBytes = Number.isSafeInteger(options.maxBytes) && options.maxBytes > 0
     ? Math.min(options.maxBytes, MAX_RANGE_BYTES)
     : DEFAULT_RANGE_BYTES
   return { offset, maxBytes }
@@ -48,6 +48,9 @@ function findContentEnd (buffer, start, byteLimit) {
       sequence.length === sequenceLength - 1 &&
       sequence.every(isContinuationByte)
     ) {
+      if (sequenceEnd > byteLimit) {
+        break
+      }
       cursor = sequenceEnd
     } else {
       cursor += 1
@@ -100,7 +103,7 @@ async function readTextRange (reader, options) {
     offset,
     nextOffset,
     totalBytes,
-    bytesRead: nextOffset - requestedOffset,
+    bytesRead: nextOffset - offset,
     hasMore: nextOffset < totalBytes
   }
 }
