@@ -275,7 +275,7 @@ async function exportDiagnosticPack (options = {}) {
   })
   const outputPath = options.outputPath || path.join(
     os.tmpdir(),
-    `AIGShell-diagnostic-${Date.now()}.tar`
+    `ShellPilot-diagnostic-${Date.now()}.tar`
   )
   const tempRoot = options.tempRoot || os.tmpdir()
   const tempDir = await fsp.mkdtemp(path.join(tempRoot, 'aigshell-diagnostic-'))
