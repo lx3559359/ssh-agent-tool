@@ -83,8 +83,8 @@ export function getAIContextUnavailableMessage (type) {
     selection: '当前终端没有选中文本，请先在终端中选中内容。',
     file: '请在 SFTP 文件上右键选择“让 AI 分析此文件”。',
     web: '联网搜索入口还在开发中，后续会接入可配置搜索工具。',
-    mcp: 'MCP 入口还在开发中，后续会读取已配置的 MCP Server。',
-    cli: 'CLI 工具入口还在开发中，危险命令会要求用户确认。'
+    mcp: '当前没有启用的 MCP Server，请在模型 API 配置中添加并启用 MCP Server 后再引用。',
+    cli: 'CLI 能力已可引用；执行本地命令或高风险命令前会要求用户确认。'
   }
   return messages[type] || '该能力还在开发中。'
 }

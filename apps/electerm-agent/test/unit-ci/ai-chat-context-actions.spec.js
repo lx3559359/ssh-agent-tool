@@ -229,3 +229,25 @@ test('AI chat panel wires completed context actions with clear Chinese labels', 
   assert.doesNotMatch(source, /联网搜索/)
   assert.doesNotMatch(source, /showUnavailableContextAction\('web'\)/)
 })
+
+test('AI chat context actions explain missing MCP configuration instead of saying it is unfinished', async () => {
+  const {
+    getAIContextUnavailableMessage
+  } = await import(moduleUrl)
+
+  const message = getAIContextUnavailableMessage('mcp')
+  assert.match(message, /MCP Server/)
+  assert.match(message, /配置|添加|启用/)
+  assert.doesNotMatch(message, /开发中/)
+})
+
+test('AI chat context actions explain CLI capability without stale unfinished wording', async () => {
+  const {
+    getAIContextUnavailableMessage
+  } = await import(moduleUrl)
+
+  const message = getAIContextUnavailableMessage('cli')
+  assert.match(message, /CLI/)
+  assert.match(message, /命令|能力|确认/)
+  assert.doesNotMatch(message, /开发中/)
+})
