@@ -12,6 +12,7 @@ const {
   normalizePreviewMaxBytes,
   createTextFilePreview
 } = require('../common/file-preview')
+const { readTextRange } = require('../common/file-range')
 
 const ROOT_PATH = '/'
 
@@ -30,6 +31,30 @@ async function readFilePreview (filePath, maxBytes) {
       maxBytes: limit,
       truncated: bytesRead > limit
     })
+  } finally {
+    await handle.close()
+  }
+}
+
+async function readFileRange (filePath, options) {
+  const handle = await fss.open(filePath, 'r')
+  try {
+    return await readTextRange({
+      async size () {
+        const stat = await handle.stat()
+        return stat.size
+      },
+      async read (offset, length) {
+        const buffer = Buffer.alloc(length)
+        const { bytesRead } = await handle.read(
+          buffer,
+          0,
+          buffer.length,
+          offset
+        )
+        return buffer.subarray(0, bytesRead)
+      }
+    }, options)
   } finally {
     await handle.close()
   }
@@ -408,6 +433,7 @@ const fsExport = Object.assign(
         })
     },
     readFilePreview,
+    readFileRange,
     readFile: (...args) => {
       return fss.readFile(...args, 'utf8')
     },
