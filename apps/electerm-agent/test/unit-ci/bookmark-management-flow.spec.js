@@ -22,8 +22,8 @@ test('bookmark toolbar exposes new bookmark new group edit import and export act
   assert.match(source, /createEncryptedBookmarkBackup/)
   assert.match(source, /includeCredentials:\s*false/)
   assert.match(source, /download\('shellpilot-bookmarks-plaintext-/)
-  assert.match(source, /download\('aigshell-bookmarks-no-credentials-/)
-  assert.match(source, /download\('aigshell-bookmarks-encrypted-/)
+  assert.match(source, /download\('shellpilot-bookmarks-no-credentials-/)
+  assert.match(source, /download\('shellpilot-bookmarks-encrypted-/)
   assert.match(source, /onSshConfigs/)
 })
 

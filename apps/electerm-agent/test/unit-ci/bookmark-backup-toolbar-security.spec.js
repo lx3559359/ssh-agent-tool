@@ -31,3 +31,13 @@ test('encrypted backup requires matching passphrase confirmation', () => {
   assert.match(toolbarSource, /if \(confirmation !== passphrase\)/)
   assert.match(toolbarSource, /message\.error\('两次输入的备份密码不一致'/)
 })
+
+test('bookmark toolbar provides an in-app cross-device migration guide', () => {
+  assert.match(toolbarSource, /跨电脑迁移说明/)
+  assert.match(toolbarSource, /源电脑/)
+  assert.match(toolbarSource, /目标电脑/)
+  assert.match(toolbarSource, /本地私钥文件/)
+  assert.match(toolbarSource, /AI 模型配置/)
+  assert.match(toolbarSource, /终端历史/)
+  assert.match(toolbarSource, /Modal\.info/)
+})

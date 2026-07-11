@@ -6,7 +6,8 @@ import {
   CodeOutlined,
   MenuOutlined,
   EditOutlined,
-  ProfileOutlined
+  ProfileOutlined,
+  QuestionCircleOutlined
 } from '@ant-design/icons'
 import { Button, Space, Dropdown, Flex } from 'antd'
 import time from '../../common/time'
@@ -20,6 +21,7 @@ import {
 import { packInfo } from '../../common/constants'
 import { createConnectionInventoryCsv } from '../../common/connection-inventory'
 import message from '../common/message'
+import Modal from '../common/modal'
 
 const e = window.translate
 
@@ -57,7 +59,7 @@ export default function BookmarkToolbar (props) {
     })
     const txt = JSON.stringify(backup, null, 2)
     const stamp = time(undefined, 'YYYY-MM-DD-HH-mm-ss')
-    download('aigshell-bookmarks-no-credentials-' + stamp + '.json', txt)
+    download('shellpilot-bookmarks-no-credentials-' + stamp + '.json', txt)
   }
   const handleDownloadEncrypted = async () => {
     const passphrase = window.prompt('请输入备份加密密码')
@@ -77,7 +79,7 @@ export default function BookmarkToolbar (props) {
     })
     const txt = JSON.stringify(backup, null, 2)
     const stamp = time(undefined, 'YYYY-MM-DD-HH-mm-ss')
-    download('aigshell-bookmarks-encrypted-' + stamp + '.json', txt)
+    download('shellpilot-bookmarks-encrypted-' + stamp + '.json', txt)
   }
   const handleDownloadConnectionInventory = () => {
     const ok = window.confirm('将导出包含明文密码/密钥路径的连接清单 CSV，请只保存在可信位置。是否继续？')
@@ -90,6 +92,25 @@ export default function BookmarkToolbar (props) {
     })
     const stamp = time(undefined, 'YYYY-MM-DD-HH-mm-ss')
     download('shellpilot-connections-with-credentials-' + stamp + '.csv', txt)
+  }
+  const handleShowMigrationGuide = () => {
+    Modal.info({
+      title: '跨电脑迁移说明',
+      okText: '知道了',
+      width: 620,
+      content: (
+        <div>
+          <ol>
+            <li>在源电脑选择“加密备份（推荐）”，设置并牢记备份密码。</li>
+            <li>通过可信方式把加密 JSON 文件传到目标电脑。</li>
+            <li>在目标电脑打开“服务器”，点击“导入”，选择文件并输入备份密码。</li>
+            <li>出现冲突时，按需要选择保留本地、使用备份覆盖或创建副本。</li>
+          </ol>
+          <p>备份包含服务器连接、分组和连接凭据，并使用密码加密。</p>
+          <p>不包含本地私钥文件、AI 模型配置、终端历史和客户端其他设置；使用私钥路径的连接需要在目标电脑重新选择私钥文件。</p>
+        </div>
+      )
+    })
   }
   const handleToggleEdit = () => {
     window.store.bookmarkSelectMode = true
@@ -151,6 +172,11 @@ export default function BookmarkToolbar (props) {
       label: e('loadSshConfigs'),
       onClick: onSshConfigs,
       icon: <CodeOutlined />
+    },
+    {
+      label: '跨电脑迁移说明',
+      onClick: handleShowMigrationGuide,
+      icon: <QuestionCircleOutlined />
     }
   ]
 

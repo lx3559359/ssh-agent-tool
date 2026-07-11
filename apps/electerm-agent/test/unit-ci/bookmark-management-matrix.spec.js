@@ -21,6 +21,8 @@ test('服务器管理矩阵覆盖常规连接管理流程', () => {
   const group = readFile('bookmark-group.spec.js')
   const backup = readFile('bookmark-backup.spec.js')
   const upload = readFile('bookmark-upload.spec.js')
+  const importConflict = readFile('bookmark-import-conflict.spec.js')
+  const importIntegration = readFile('bookmark-import-integration.spec.js')
   const all = [
     flow,
     management,
@@ -30,7 +32,9 @@ test('服务器管理矩阵覆盖常规连接管理流程', () => {
     favorite,
     group,
     backup,
-    upload
+    upload,
+    importConflict,
+    importIntegration
   ].join('\n')
 
   assertEvidence(flow, /bookmark toolbar exposes new bookmark new group edit import and export actions/, 'new edit import export toolbar')
@@ -45,10 +49,14 @@ test('服务器管理矩阵覆盖常规连接管理流程', () => {
   assertEvidence(tags, /bookmark form exposes editable labels as tag input fields/, 'tag editing')
   assertEvidence(favorite, /bookmark favorite helper toggles a stable favorite boolean/, 'favorite toggle')
   assertEvidence(group, /removeCyclicBookmarkGroupIds removes nested group references/, 'group cycle protection')
-  assertEvidence(backup, /creates an AIGShell bookmark backup package/, 'backup export')
+  assertEvidence(backup, /creates a ShellPilot bookmark backup package/, 'backup export')
   assertEvidence(backup, /creates a bookmark backup without credentials when requested/, 'export without credentials')
   assertEvidence(backup, /creates an encrypted bookmark backup/, 'encrypted backup export')
   assertEvidence(backup, /parses encrypted bookmark backups through the import helper/, 'encrypted import')
   assertEvidence(upload, /bookmark upload guard reports invalid backup files and restores watchers/, 'invalid import guard')
+  assertEvidence(importConflict, /keep-local preserves local conflicts/, 'keep local import strategy')
+  assertEvidence(importConflict, /overwrite replaces id and connection identity conflicts/, 'overwrite import strategy')
+  assertEvidence(importConflict, /duplicate remaps conflicting bookmark and group references/, 'duplicate import strategy')
+  assertEvidence(importIntegration, /bookmark conflict dialog exposes three clear Chinese strategies/, 'conflict dialog and migration flow')
   assertEvidence(all, /copyPublicInfo|duplicate|move|delete|openAll/, 'common right click actions')
 })

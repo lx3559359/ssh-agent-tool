@@ -2,16 +2,21 @@
  * bookmark import/upload logic
  */
 
-import copy from 'json-deep-copy'
-import { uniq, isPlainObject } from 'lodash-es'
+import { isPlainObject } from 'lodash-es'
 import { action } from 'manate'
 import uid from '../../common/uid'
 import time from '../../common/time'
 import { fixBookmarks } from '../../common/db-fix'
 import delay from '../../common/wait'
 import { parseBookmarkBackupForImport } from '../../common/bookmark-backup'
+import {
+  bookmarkImportStrategies,
+  buildBookmarkImportPlan,
+  formatBookmarkImportReport
+} from '../../common/bookmark-import-plan'
 import message from '../common/message'
 import { runBookmarkUploadWithWatchers } from './bookmark-upload-guard'
+import { requestBookmarkImportStrategy } from './bookmark-import-strategy-dialog'
 
 function fixBookmarksId (bookmarks) {
   return bookmarks.map(item => {
@@ -47,47 +52,38 @@ export const bookmarkUpload = action(async (file) => {
     }]
   }
 
-  const bookmarkGroups0 = copy(bookmarkGroups)
-  const bookmarks0 = copy(bookmarks)
-
-  const bmTree = new Map(
-    bookmarks0.map(bookmark => [bookmark.id, bookmark])
-  )
-  const bmgTree = new Map(
-    bookmarkGroups0.map(group => [group.id, group])
-  )
-
   const fixed = fixBookmarks(bookmarks1)
-
-  fixed.forEach(bg => {
-    if (!bmTree.has(bg.id)) {
-      store.bookmarks.push(bg)
+  const planOptions = {
+    localBookmarks: bookmarks,
+    localBookmarkGroups: bookmarkGroups,
+    incomingBookmarks: fixed,
+    incomingBookmarkGroups: bookmarkGroups1,
+    idFactory: () => uid()
+  }
+  const preview = buildBookmarkImportPlan({
+    ...planOptions,
+    strategy: bookmarkImportStrategies.keepLocal
+  })
+  let strategy = bookmarkImportStrategies.keepLocal
+  if (preview.report.conflicts.length) {
+    strategy = await requestBookmarkImportStrategy({
+      conflictCount: preview.report.conflicts.length
+    })
+    if (!strategy) {
+      message.info('已取消导入，现有连接未发生变化')
+      return false
     }
+  }
+  const plan = buildBookmarkImportPlan({
+    ...planOptions,
+    strategy
   })
 
-  bookmarkGroups1.forEach(bg => {
-    if (!bmgTree.has(bg.id)) {
-      store.bookmarkGroups.push(bg)
-    } else {
-      const bg1 = store.bookmarkGroups.find(
-        b => b.id === bg.id
-      )
-      bg1.bookmarkIds = uniq(
-        [
-          ...(bg1.bookmarkIds || []),
-          ...(bg.bookmarkIds || [])
-        ]
-      )
-      bg1.bookmarkGroupIds = uniq(
-        [
-          ...(bg1.bookmarkGroupIds || []),
-          ...(bg.bookmarkGroupIds || [])
-        ]
-      )
-    }
-  })
+  store.bookmarks.splice(0, store.bookmarks.length, ...plan.bookmarks)
+  store.bookmarkGroups.splice(0, store.bookmarkGroups.length, ...plan.bookmarkGroups)
 
   store.fixBookmarkGroups()
+  message.success(`导入完成：${formatBookmarkImportReport(plan.report)}`)
 
   return false
 })

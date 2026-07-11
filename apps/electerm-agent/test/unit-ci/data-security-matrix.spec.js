@@ -29,7 +29,7 @@ test('P0 data security matrix covers encrypted credentials backups and redacted 
   assertEvidence(sqliteSource, /ENC_TABLES = new Set\(\[[\s\S]*'bookmarks'[\s\S]*'data'[\s\S]*'aiChatHistory'[\s\S]*\]\)/, 'sqlite encrypted table allow-list')
   assertEvidence(sqliteSource, /DATA_ENC_ID = 'userConfig'/, 'model api config row encryption gate')
   assertEvidence(sqliteSource, /enc && shouldEncForRow\(dbName,\s*_id\) \? encryptData\(jsonStr\) : jsonStr/, 'sqlite row encryption before writing')
-  assertEvidence(bookmarkBackup, /creates an AIGShell bookmark backup package with metadata and credentials intact/, 'backup can include credentials')
+  assertEvidence(bookmarkBackup, /creates a ShellPilot bookmark backup package with metadata and credentials intact/, 'backup can include credentials')
   assertEvidence(bookmarkBackup, /creates a bookmark backup without credentials when requested/, 'backup can omit credentials')
   assertEvidence(bookmarkBackup, /creates an encrypted bookmark backup that hides server details and decrypts with the passphrase/, 'encrypted backup export')
   assertEvidence(bookmarkBackup, /rejects encrypted bookmark backups without the correct passphrase/, 'encrypted backup import password validation')

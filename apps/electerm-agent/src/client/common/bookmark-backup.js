@@ -24,7 +24,7 @@ const credentialKeys = new Set([
 const invalidJsonError = '备份文件内容不是有效的 JSON'
 const noImportableBookmarksError = '备份文件中没有可导入的服务器连接'
 const invalidBookmarkBackupShapeError = '备份文件中的服务器或分组格式不正确'
-const unsupportedBookmarkBackupVersionError = '备份文件版本过新，请升级 AIGShell 后再导入'
+const unsupportedBookmarkBackupVersionError = '备份文件版本过新，请升级 ShellPilot 后再导入'
 
 export function createBookmarkBackup ({
   bookmarks = [],
@@ -40,7 +40,7 @@ export function createBookmarkBackup ({
     format: bookmarkBackupFormat,
     formatVersion: bookmarkBackupFormatVersion,
     app: {
-      name: 'AIGShell',
+      name: 'ShellPilot',
       version
     },
     exportedAt: now,

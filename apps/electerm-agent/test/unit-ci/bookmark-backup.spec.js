@@ -3,7 +3,7 @@ const assert = require('node:assert/strict')
 const path = require('node:path')
 const fs = require('node:fs')
 
-test('creates an AIGShell bookmark backup package with metadata and credentials intact', async () => {
+test('creates a ShellPilot bookmark backup package with metadata and credentials intact', async () => {
   const {
     createBookmarkBackup,
     parseBookmarkBackup
@@ -37,7 +37,7 @@ test('creates an AIGShell bookmark backup package with metadata and credentials 
 
   assert.equal(backup.format, 'AIGShell.bookmarks.backup')
   assert.equal(backup.formatVersion, 1)
-  assert.equal(backup.app.name, 'AIGShell')
+  assert.equal(backup.app.name, 'ShellPilot')
   assert.equal(backup.app.version, '3.15.105')
   assert.equal(backup.exportedAt, '2026-07-08T00:00:00.000Z')
   assert.deepEqual(backup.data.bookmarks, bookmarks)
@@ -133,7 +133,7 @@ test('creates an encrypted bookmark backup that hides server details and decrypt
 
   assert.equal(backup.format, 'AIGShell.bookmarks.encrypted-backup')
   assert.equal(backup.formatVersion, 1)
-  assert.equal(backup.app.name, 'AIGShell')
+  assert.equal(backup.app.name, 'ShellPilot')
   assert.equal(backup.app.version, '3.15.105')
   assert.equal(backup.exportedAt, '2026-07-08T00:00:00.000Z')
   assert.equal(backup.encryption.algorithm, 'AES-GCM')
@@ -497,8 +497,8 @@ test('uses secure bookmark backup actions from every toolbar export entry', () =
   assert.match(source, /createBookmarkBackup/)
   assert.match(source, /createEncryptedBookmarkBackup/)
   assert.match(source, /download\('shellpilot-bookmarks-plaintext-/)
-  assert.match(source, /download\('aigshell-bookmarks-no-credentials-/)
-  assert.match(source, /download\('aigshell-bookmarks-encrypted-/)
+  assert.match(source, /download\('shellpilot-bookmarks-no-credentials-/)
+  assert.match(source, /download\('shellpilot-bookmarks-encrypted-/)
   assert.match(source, /window\.prompt/)
   assert.match(source, /includeCredentials:\s*false/)
   assert.match(source, /onClick:\s*handleDownloadEncrypted/)
