@@ -19,6 +19,7 @@ import {
 } from '../../common/bookmark-backup'
 import { packInfo } from '../../common/constants'
 import { createConnectionInventoryCsv } from '../../common/connection-inventory'
+import message from '../common/message'
 
 const e = window.translate
 
@@ -33,7 +34,11 @@ export default function BookmarkToolbar (props) {
   } = props
   const beforeUpload = beforeBookmarkUpload
 
-  const handleDownload = () => {
+  const handleDownloadPlaintext = () => {
+    const ok = window.confirm('警告：该文件将以明文包含服务器密码、私钥和代理凭据。仅应保存在可信位置，是否继续？')
+    if (!ok) {
+      return
+    }
     const backup = createBookmarkBackup({
       bookmarkGroups,
       bookmarks,
@@ -41,7 +46,7 @@ export default function BookmarkToolbar (props) {
     })
     const txt = JSON.stringify(backup, null, 2)
     const stamp = time(undefined, 'YYYY-MM-DD-HH-mm-ss')
-    download('aigshell-bookmarks-backup-' + stamp + '.json', txt)
+    download('shellpilot-bookmarks-plaintext-' + stamp + '.json', txt)
   }
   const handleDownloadWithoutCredentials = () => {
     const backup = createBookmarkBackup({
@@ -57,6 +62,11 @@ export default function BookmarkToolbar (props) {
   const handleDownloadEncrypted = async () => {
     const passphrase = window.prompt('请输入备份加密密码')
     if (!passphrase) {
+      return
+    }
+    const confirmation = window.prompt('再次输入备份加密密码')
+    if (confirmation !== passphrase) {
+      message.error('两次输入的备份密码不一致')
       return
     }
     const backup = await createEncryptedBookmarkBackup({
@@ -113,8 +123,8 @@ export default function BookmarkToolbar (props) {
       icon: <ImportOutlined />
     },
     {
-      label: e('export'),
-      onClick: handleDownload,
+      label: '加密备份（推荐）',
+      onClick: handleDownloadEncrypted,
       icon: <ExportOutlined />
     },
     {
@@ -123,8 +133,8 @@ export default function BookmarkToolbar (props) {
       icon: <ExportOutlined />
     },
     {
-      label: `${e('export')} (加密)`,
-      onClick: handleDownloadEncrypted,
+      label: '明文备份（含凭据，不推荐）',
+      onClick: handleDownloadPlaintext,
       icon: <ExportOutlined />
     },
     {
@@ -169,8 +179,8 @@ export default function BookmarkToolbar (props) {
             />
             <Button
               icon={<ExportOutlined />}
-              onClick={handleDownload}
-              title={e('export')}
+              onClick={handleDownloadEncrypted}
+              title='加密备份（推荐）'
               className='download-bookmark-icon'
             />
             <Upload

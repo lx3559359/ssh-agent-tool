@@ -488,7 +488,7 @@ test('removes cyclic bookmark group references when importing backups', async ()
   ])
 })
 
-test('uses the AIGShell bookmark backup package from every toolbar export entry', () => {
+test('uses secure bookmark backup actions from every toolbar export entry', () => {
   const source = fs.readFileSync(
     path.resolve(__dirname, '../../src/client/components/tree-list/bookmark-toolbar.jsx'),
     'utf8'
@@ -496,15 +496,15 @@ test('uses the AIGShell bookmark backup package from every toolbar export entry'
 
   assert.match(source, /createBookmarkBackup/)
   assert.match(source, /createEncryptedBookmarkBackup/)
-  assert.match(source, /download\('aigshell-bookmarks-backup-/)
+  assert.match(source, /download\('shellpilot-bookmarks-plaintext-/)
   assert.match(source, /download\('aigshell-bookmarks-no-credentials-/)
   assert.match(source, /download\('aigshell-bookmarks-encrypted-/)
   assert.match(source, /window\.prompt/)
   assert.match(source, /includeCredentials:\s*false/)
-  assert.match(source, /label:\s*e\('export'\)[\s\S]*?onClick:\s*handleDownload/)
+  assert.match(source, /onClick:\s*handleDownloadEncrypted/)
   assert.match(source, /label:\s*`\$\{e\('export'\)\} \(不含凭据\)`[\s\S]*?onClick:\s*handleDownloadWithoutCredentials/)
-  assert.match(source, /handleDownloadEncrypted/)
-  assert.match(source, /\(加密\)/)
+  assert.match(source, /handleDownloadPlaintext/)
+  assert.match(source, /window\.confirm/)
   assert.doesNotMatch(source, /onClick:\s*onExport/)
 })
 

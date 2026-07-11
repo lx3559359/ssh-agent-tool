@@ -19,7 +19,12 @@ export default function SubmitButtons ({
   return (
     <FormItem {...tailFormItemLayout}>
       <p>
-        <Button type='primary' htmlType='submit' className='mg1r mg1b'>
+        <Button
+          type='primary'
+          htmlType='submit'
+          className='mg1r mg1b'
+          data-testid='bookmark-save-connect'
+        >
           {e('saveAndConnect')}
         </Button>
         <Button type='primary' className='mg1r mg1b' onClick={onSaveAndCreateNew}>
