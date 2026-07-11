@@ -60,10 +60,10 @@ test('widgets page source keeps user-facing labels Chinese', () => {
 })
 
 test('setting sync page source keeps common prompts and validation messages Chinese', () => {
-  const source = fs.readFileSync(
-    path.resolve(__dirname, '../../src/client/components/setting-sync/setting-sync-form.jsx'),
-    'utf8'
-  )
+  const source = [
+    '../../src/client/components/setting-sync/setting-sync-form.jsx',
+    '../../src/client/components/setting-sync/sync-data-compare.jsx'
+  ].map(file => fs.readFileSync(path.resolve(__dirname, file), 'utf8')).join('\\n')
 
   assert.match(source, /查看 Gist/)
   assert.match(source, /跳过 SSL 校验/)
@@ -79,4 +79,8 @@ test('setting sync page source keeps common prompts and validation messages Chin
   assert.doesNotMatch(source, /Skip SSL verify/)
   assert.doesNotMatch(source, /personal access token/)
   assert.doesNotMatch(source, /label='Proxy'/)
+  assert.doesNotMatch(source, /Bookmark Groups/)
+  assert.doesNotMatch(source, /Terminal Themes/)
+  assert.doesNotMatch(source, /Quick Commands/)
+  assert.doesNotMatch(source, /Address Bookmarks/)
 })
