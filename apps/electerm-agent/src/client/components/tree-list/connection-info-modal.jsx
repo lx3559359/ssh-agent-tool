@@ -39,7 +39,7 @@ export default function ConnectionInfoModal ({
   }
 
   const handleCopyAll = () => {
-    copy(formatConnectionInfoText(bookmark, { showSecrets }))
+    copy(formatConnectionInfoText(bookmark, { showSecrets, bookmarkGroups }))
   }
 
   const handleCopyValue = (field) => {
