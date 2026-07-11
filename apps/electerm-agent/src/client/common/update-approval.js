@@ -1,8 +1,10 @@
-export const updateApprovalManifestName = 'aigshell-update.json'
+export const updateApprovalManifestName = 'shellpilot-update.json'
+export const legacyUpdateApprovalManifestName = 'aigshell-update.json'
 
 export function findUpdateApprovalAsset (release) {
-  return (release?.assets || [])
-    .find(asset => asset.name === updateApprovalManifestName && asset.browser_download_url)
+  const assets = release?.assets || []
+  return assets.find(asset => asset.name === updateApprovalManifestName && asset.browser_download_url) ||
+    assets.find(asset => asset.name === legacyUpdateApprovalManifestName && asset.browser_download_url)
 }
 
 export async function attachUpdateApprovalManifest (release, fetchManifest) {

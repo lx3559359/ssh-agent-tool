@@ -89,9 +89,12 @@ function findApprovalManifest (release) {
   if (release?.updateApproval) {
     return release.updateApproval
   }
-  return (release?.assets || [])
-    .find(asset => asset.name === 'aigshell-update.json')
-    ?.updateApproval
+  const assets = release?.assets || []
+  const shellpilotManifest = assets.find(asset => asset.name === 'shellpilot-update.json')
+  if (shellpilotManifest?.updateApproval) {
+    return shellpilotManifest.updateApproval
+  }
+  return assets.find(asset => asset.name === 'aigshell-update.json')?.updateApproval
 }
 
 function getUpdateChannel (options = {}) {

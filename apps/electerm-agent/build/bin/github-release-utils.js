@@ -21,8 +21,15 @@ function getRequiredReleaseAssetNames (version, options = {}) {
     `${prefix}.blockmap`,
     'latest.yml',
     'aigshell-update.json',
+    'shellpilot-update.json',
+    'checksums.json',
     modelScopeReleaseManifestName
   ]
+}
+
+function getRequiredChecksumAssetNames (version, options = {}) {
+  return getRequiredReleaseAssetNames(version, options)
+    .filter(name => !['checksums.json', modelScopeReleaseManifestName].includes(name))
 }
 
 function selectReleaseAssets (files, version, options = {}) {
@@ -148,6 +155,7 @@ module.exports = {
   buildReleaseTag,
   buildReleaseAssetReport,
   buildValidatedLocalReleaseAssets,
+  getRequiredChecksumAssetNames,
   getRequiredReleaseAssetNames,
   selectUnexpectedReleaseAssets,
   selectReleaseAssets,

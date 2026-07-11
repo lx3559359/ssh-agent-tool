@@ -27,6 +27,24 @@ test('prepares approved online update assets from the local electron-builder met
 
     const manifest = JSON.parse(fs.readFileSync(path.join(tempDir, 'aigshell-update.json'), 'utf8'))
     assert.doesNotThrow(() => validateUpdateApprovalManifest(manifest, '3.15.107', { channel: 'stable' }))
+    const shellPilotManifest = JSON.parse(fs.readFileSync(path.join(tempDir, 'shellpilot-update.json'), 'utf8'))
+    assert.deepEqual(
+      {
+        ...shellPilotManifest,
+        generatedAt: '<dynamic>'
+      },
+      {
+        ...manifest,
+        generatedAt: '<dynamic>'
+      }
+    )
+
+    const checksums = JSON.parse(fs.readFileSync(path.join(tempDir, 'checksums.json'), 'utf8'))
+    assert.equal(checksums.product, 'ShellPilot')
+    assert.equal(checksums.version, '3.15.107')
+    assert.ok(checksums.files['latest.yml'].sha256)
+    assert.ok(checksums.files['aigshell-update.json'].sha256)
+    assert.ok(checksums.files['shellpilot-update.json'].sha256)
 
     const releaseIndex = JSON.parse(fs.readFileSync(path.join(tempDir, 'shellpilot-release.json'), 'utf8'))
     assert.equal(releaseIndex.tag_name, 'v3.15.107')
@@ -37,6 +55,8 @@ test('prepares approved online update assets from the local electron-builder met
         'ShellPilot-3.15.107-win-x64-installer.exe.blockmap',
         'latest.yml',
         'aigshell-update.json',
+        'shellpilot-update.json',
+        'checksums.json',
         'shellpilot-release.json'
       ]
     )

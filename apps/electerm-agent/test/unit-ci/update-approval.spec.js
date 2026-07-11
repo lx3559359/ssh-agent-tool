@@ -36,6 +36,35 @@ test('loads update approval manifest from release assets', async () => {
   })
 })
 
+test('prefers ShellPilot approval manifest while keeping AIGShell fallback', async () => {
+  const {
+    attachUpdateApprovalManifest,
+    findUpdateApprovalAsset
+  } = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/common/update-approval.js')))
+
+  const release = {
+    tag_name: 'v3.15.106',
+    assets: [
+      { name: 'aigshell-update.json', browser_download_url: 'https://example.com/aigshell-update.json' },
+      { name: 'shellpilot-update.json', browser_download_url: 'https://example.com/shellpilot-update.json' }
+    ]
+  }
+  const calls = []
+  const result = await attachUpdateApprovalManifest(release, async url => {
+    calls.push(url)
+    return {
+      product: 'ShellPilot',
+      channel: 'stable',
+      publishApproved: true,
+      version: '3.15.106'
+    }
+  })
+
+  assert.equal(findUpdateApprovalAsset(release).name, 'shellpilot-update.json')
+  assert.deepEqual(calls, ['https://example.com/shellpilot-update.json'])
+  assert.equal(result.updateApproval.product, 'ShellPilot')
+})
+
 test('keeps release unchanged when approval manifest is missing or cannot be fetched', async () => {
   const {
     attachUpdateApprovalManifest

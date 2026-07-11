@@ -65,7 +65,9 @@ function hasWindowsUpdateAssets (release, version) {
 }
 
 function getApprovalManifestAsset (release = {}) {
-  return (release.assets || []).find(asset => asset.name === 'aigshell-update.json')
+  const assets = release.assets || []
+  return assets.find(asset => asset.name === 'shellpilot-update.json') ||
+    assets.find(asset => asset.name === 'aigshell-update.json')
 }
 
 function isApprovedManifest (manifest, version, config = {}) {

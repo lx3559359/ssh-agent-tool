@@ -6,6 +6,10 @@ const {
   normalizeChannel,
   validateUpdateApprovalManifest
 } = require('./write-update-approval-manifest')
+const {
+  getRequiredChecksumAssetNames
+} = require('./github-release-utils')
+const { writeChecksums } = require('./update-checksums')
 const { writeUpdateReleaseIndex } = require('./update-release-index')
 
 function readUpdateMetadataVersion (filePath) {
@@ -53,7 +57,9 @@ function prepareUpdateAssets (options = {}) {
   const channel = normalizeChannel(options.channel || process.env.AIGSHELL_UPDATE_CHANNEL)
   const latestPath = path.join(distDir, 'latest.yml')
   const localMetadataPath = findUpdateMetadataPath(distDir, version, options)
-  const manifestPath = path.join(distDir, 'aigshell-update.json')
+  const legacyManifestPath = path.join(distDir, 'aigshell-update.json')
+  const manifestPath = path.join(distDir, 'shellpilot-update.json')
+  let checksumsPath = ''
   let releaseIndexPath = ''
   let copiedLatest = false
 
@@ -70,6 +76,15 @@ function prepareUpdateAssets (options = {}) {
   const manifest = buildUpdateApprovalManifest(version, { channel })
   validateUpdateApprovalManifest(manifest, version, { channel })
   fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n')
+  fs.writeFileSync(legacyManifestPath, JSON.stringify(manifest, null, 2) + '\n')
+  checksumsPath = writeChecksums({
+    distDir,
+    version,
+    channel,
+    files: getRequiredChecksumAssetNames(version, {
+      arch: options.arch || process.env.AIGSHELL_RELEASE_ARCH
+    })
+  }).checksumsPath
   releaseIndexPath = writeUpdateReleaseIndex({
     distDir,
     version,
@@ -80,7 +95,9 @@ function prepareUpdateAssets (options = {}) {
     copiedLatest,
     latestPath,
     localMetadataPath,
+    legacyManifestPath,
     manifestPath,
+    checksumsPath,
     releaseIndexPath
   }
 }
@@ -89,7 +106,8 @@ function main () {
   const result = prepareUpdateAssets()
   console.log('ShellPilot online update assets are prepared.')
   console.log(`- latest.yml: ${result.copiedLatest ? `created from ${path.basename(result.localMetadataPath)}` : 'kept existing file'}`)
-  console.log('- aigshell-update.json: created and validated')
+  console.log('- shellpilot-update.json and aigshell-update.json: created and validated')
+  console.log('- checksums.json: created')
   console.log('- shellpilot-release.json: created for ModelScope domestic update source')
 }
 
