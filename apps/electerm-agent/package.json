@@ -41,6 +41,7 @@
     "release:approval": "node build/bin/write-update-approval-manifest.js",
     "release:prepare-assets": "node build/bin/prepare-update-assets.js",
     "release:local:verify": "node build/bin/verify-local-release-assets.js",
+    "release:modelscope": "node build/bin/sync-modelscope-release.js",
     "w": "./build/bin/web-release",
     "t": "electron work/app/app.js",
     "lock": "npm i --package-lock-only",
