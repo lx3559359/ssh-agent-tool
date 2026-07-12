@@ -118,6 +118,7 @@ jobs:
             apps/electerm-agent/dist/ShellPilot-*-win-x64-installer.exe.blockmap
             apps/electerm-agent/dist/ShellPilot-*-win-x64-portable.zip
             apps/electerm-agent/dist/latest.yml
+            apps/electerm-agent/dist/shellpilot-local.yml
             apps/electerm-agent/dist/aigshell-update.json
             apps/electerm-agent/dist/shellpilot-update.json
             apps/electerm-agent/dist/checksums.json
@@ -136,6 +137,7 @@ jobs:
             apps/electerm-agent/dist/ShellPilot-*-win-x64-installer.exe.blockmap
             apps/electerm-agent/dist/ShellPilot-*-win-x64-portable.zip
             apps/electerm-agent/dist/latest.yml
+            apps/electerm-agent/dist/shellpilot-local.yml
             apps/electerm-agent/dist/aigshell-update.json
             apps/electerm-agent/dist/shellpilot-update.json
             apps/electerm-agent/dist/checksums.json

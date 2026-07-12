@@ -20,6 +20,7 @@ function getRequiredReleaseAssetNames (version, options = {}) {
     prefix,
     `${prefix}.blockmap`,
     'latest.yml',
+    'shellpilot-local.yml',
     'aigshell-update.json',
     'shellpilot-update.json',
     'checksums.json',

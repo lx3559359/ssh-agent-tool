@@ -29,6 +29,7 @@ test('windows release workflow publishes only online update assets', () => {
   assert.match(workflow, /apps\/electerm-agent\/dist\/ShellPilot-\*-win-x64-installer\.exe/)
   assert.match(workflow, /apps\/electerm-agent\/dist\/ShellPilot-\*-win-x64-installer\.exe\.blockmap/)
   assert.match(workflow, /apps\/electerm-agent\/dist\/latest\.yml/)
+  assert.match(workflow, /apps\/electerm-agent\/dist\/shellpilot-local\.yml/)
   assert.match(workflow, /apps\/electerm-agent\/dist\/aigshell-update\.json/)
   assert.match(workflow, /apps\/electerm-agent\/dist\/shellpilot-update\.json/)
   assert.match(workflow, /apps\/electerm-agent\/dist\/checksums\.json/)
@@ -175,6 +176,7 @@ test('portable zip is not required for online update asset validation', () => {
     'ShellPilot-3.15.105-win-x64-installer.exe',
     'ShellPilot-3.15.105-win-x64-installer.exe.blockmap',
     'latest.yml',
+    'shellpilot-local.yml',
     'aigshell-update.json',
     'shellpilot-update.json',
     'checksums.json',
@@ -368,6 +370,7 @@ test('selects only ShellPilot Windows update assets from dist files', () => {
     'ShellPilot-3.15.105-win-x64-installer.exe',
     'ShellPilot-3.15.105-win-x64-installer.exe.blockmap',
     'latest.yml',
+    'shellpilot-local.yml',
     'aigshell-update.json',
     'shellpilot-update.json',
     'checksums.json',
@@ -384,6 +387,7 @@ test('selects only ShellPilot Windows update assets from dist files', () => {
       'ShellPilot-3.15.105-win-x64-installer.exe',
       'ShellPilot-3.15.105-win-x64-installer.exe.blockmap',
       'latest.yml',
+      'shellpilot-local.yml',
       'aigshell-update.json',
       'shellpilot-update.json',
       'checksums.json',
@@ -399,6 +403,7 @@ test('identifies the exact release assets required for Windows online updates', 
       'ShellPilot-3.15.105-win-x64-installer.exe',
       'ShellPilot-3.15.105-win-x64-installer.exe.blockmap',
       'latest.yml',
+      'shellpilot-local.yml',
       'aigshell-update.json',
       'shellpilot-update.json',
       'checksums.json',
@@ -414,6 +419,7 @@ test('identifies Windows ARM64 release assets when requested', () => {
       'ShellPilot-3.15.105-win-arm64-installer.exe',
       'ShellPilot-3.15.105-win-arm64-installer.exe.blockmap',
       'latest.yml',
+      'shellpilot-local.yml',
       'aigshell-update.json',
       'shellpilot-update.json',
       'checksums.json',
@@ -429,6 +435,7 @@ test('selects only Windows ARM64 update assets when requested', () => {
     'ShellPilot-3.15.105-win-arm64-installer.exe',
     'ShellPilot-3.15.105-win-arm64-installer.exe.blockmap',
     'latest.yml',
+    'shellpilot-local.yml',
     'aigshell-update.json',
     'shellpilot-update.json',
     'checksums.json',
@@ -441,6 +448,7 @@ test('selects only Windows ARM64 update assets when requested', () => {
       'ShellPilot-3.15.105-win-arm64-installer.exe',
       'ShellPilot-3.15.105-win-arm64-installer.exe.blockmap',
       'latest.yml',
+      'shellpilot-local.yml',
       'aigshell-update.json',
       'shellpilot-update.json',
       'checksums.json',
@@ -454,6 +462,7 @@ test('selects unexpected release assets without deleting update files', () => {
     { name: 'ShellPilot-3.15.105-win-x64-installer.exe', id: 'installer' },
     { name: 'ShellPilot-3.15.105-win-x64-installer.exe.blockmap', id: 'blockmap' },
     { name: 'latest.yml', id: 'latest' },
+    { name: 'shellpilot-local.yml', id: 'legacy-channel' },
     { name: 'AIGShell.exe', id: 'loose-exe' },
     { name: 'app.asar', id: 'asar' },
     { name: 'windows-electerm-agent.yml', id: 'legacy-channel' }
@@ -474,6 +483,7 @@ test('builds a release asset report for local and remote update files', () => {
     { name: 'ShellPilot-3.15.105-win-x64-installer.exe', size: 100 },
     { name: 'ShellPilot-3.15.105-win-x64-installer.exe.blockmap', size: 10 },
     { name: 'latest.yml', size: 3 },
+    { name: 'shellpilot-local.yml', size: 3 },
     { name: 'aigshell-update.json', size: 88 },
     { name: 'shellpilot-update.json', size: 88 },
     { name: 'checksums.json', size: 180 },
@@ -482,6 +492,7 @@ test('builds a release asset report for local and remote update files', () => {
   const remoteAssets = [
     { name: 'ShellPilot-3.15.105-win-x64-installer.exe', size: 100 },
     { name: 'ShellPilot-3.15.105-win-x64-installer.exe.blockmap', size: 9 },
+    { name: 'shellpilot-local.yml', size: 3 },
     { name: 'aigshell-update.json', size: 88 },
     { name: 'shellpilot-update.json', size: 88 },
     { name: 'checksums.json', size: 180 },
@@ -500,6 +511,7 @@ test('builds a release asset report for local and remote update files', () => {
         'ShellPilot-3.15.105-win-x64-installer.exe',
         'ShellPilot-3.15.105-win-x64-installer.exe.blockmap',
         'latest.yml',
+        'shellpilot-local.yml',
         'aigshell-update.json',
         'shellpilot-update.json',
         'checksums.json',
@@ -532,6 +544,7 @@ test('reports ok when local and remote update assets match exactly', () => {
     { name: 'ShellPilot-3.15.105-win-x64-installer.exe', size: 100 },
     { name: 'ShellPilot-3.15.105-win-x64-installer.exe.blockmap', size: 10 },
     { name: 'latest.yml', size: 3 },
+    { name: 'shellpilot-local.yml', size: 3 },
     { name: 'aigshell-update.json', size: 88 },
     { name: 'shellpilot-update.json', size: 88 },
     { name: 'checksums.json', size: 180 },
@@ -553,6 +566,7 @@ test('reports local update assets as valid only when all required files are pres
     { name: 'ShellPilot-3.15.105-win-x64-installer.exe', size: 100 },
     { name: 'ShellPilot-3.15.105-win-x64-installer.exe.blockmap', size: 10 },
     { name: 'latest.yml', size: 3 },
+    { name: 'shellpilot-local.yml', size: 3 },
     { name: 'aigshell-update.json', size: 88 },
     { name: 'shellpilot-update.json', size: 88 },
     { name: 'checksums.json', size: 180 },
@@ -570,6 +584,7 @@ test('reports local update assets as valid only when all required files are pres
         'ShellPilot-3.15.105-win-x64-installer.exe',
         'ShellPilot-3.15.105-win-x64-installer.exe.blockmap',
         'latest.yml',
+        'shellpilot-local.yml',
         'aigshell-update.json',
         'shellpilot-update.json',
         'checksums.json',
@@ -598,6 +613,7 @@ test('reports missing and empty local update assets before upload', () => {
         'ShellPilot-3.15.105-win-x64-installer.exe',
         'ShellPilot-3.15.105-win-x64-installer.exe.blockmap',
         'latest.yml',
+        'shellpilot-local.yml',
         'aigshell-update.json',
         'shellpilot-update.json',
         'checksums.json',
@@ -605,6 +621,7 @@ test('reports missing and empty local update assets before upload', () => {
       ],
       missingLocal: [
         'ShellPilot-3.15.105-win-x64-installer.exe.blockmap',
+        'shellpilot-local.yml',
         'aigshell-update.json',
         'shellpilot-update.json',
         'checksums.json',
@@ -621,6 +638,7 @@ test('builds validated local release asset paths only when update files are read
     { name: 'ShellPilot-3.15.105-win-x64-installer.exe', size: 100 },
     { name: 'ShellPilot-3.15.105-win-x64-installer.exe.blockmap', size: 10 },
     { name: 'latest.yml', size: 3 },
+    { name: 'shellpilot-local.yml', size: 3 },
     { name: 'aigshell-update.json', size: 88 },
     { name: 'shellpilot-update.json', size: 88 },
     { name: 'checksums.json', size: 180 },
@@ -637,6 +655,7 @@ test('builds validated local release asset paths only when update files are read
       path.join('dist', 'ShellPilot-3.15.105-win-x64-installer.exe'),
       path.join('dist', 'ShellPilot-3.15.105-win-x64-installer.exe.blockmap'),
       path.join('dist', 'latest.yml'),
+      path.join('dist', 'shellpilot-local.yml'),
       path.join('dist', 'aigshell-update.json'),
       path.join('dist', 'shellpilot-update.json'),
       path.join('dist', 'checksums.json'),
@@ -667,6 +686,7 @@ test('creates deterministic gh commands for release create and upload', () => {
       'dist/ShellPilot-3.15.105-win-x64-installer.exe',
       'dist/ShellPilot-3.15.105-win-x64-installer.exe.blockmap',
       'dist/latest.yml',
+      'dist/shellpilot-local.yml',
       'dist/aigshell-update.json',
       'dist/shellpilot-update.json',
       'dist/checksums.json',
@@ -677,7 +697,7 @@ test('creates deterministic gh commands for release create and upload', () => {
   assert.deepEqual(commands, [
     ['gh', ['release', 'view', 'v3.15.105', '--repo', 'lx3559359/ssh-agent-tool']],
     ['gh', ['release', 'create', 'v3.15.105', '--repo', 'lx3559359/ssh-agent-tool', '--title', 'ShellPilot v3.15.105', '--notes', 'ShellPilot Windows release']],
-    ['gh', ['release', 'upload', 'v3.15.105', 'dist/ShellPilot-3.15.105-win-x64-installer.exe', 'dist/ShellPilot-3.15.105-win-x64-installer.exe.blockmap', 'dist/latest.yml', 'dist/aigshell-update.json', 'dist/shellpilot-update.json', 'dist/checksums.json', 'dist/shellpilot-release.json', '--repo', 'lx3559359/ssh-agent-tool', '--clobber']]
+    ['gh', ['release', 'upload', 'v3.15.105', 'dist/ShellPilot-3.15.105-win-x64-installer.exe', 'dist/ShellPilot-3.15.105-win-x64-installer.exe.blockmap', 'dist/latest.yml', 'dist/shellpilot-local.yml', 'dist/aigshell-update.json', 'dist/shellpilot-update.json', 'dist/checksums.json', 'dist/shellpilot-release.json', '--repo', 'lx3559359/ssh-agent-tool', '--clobber']]
   ])
 })
 

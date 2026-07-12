@@ -43,6 +43,7 @@ test('prepares approved online update assets from the local electron-builder met
     assert.equal(checksums.product, 'ShellPilot')
     assert.equal(checksums.version, '3.15.107')
     assert.ok(checksums.files['latest.yml'].sha256)
+    assert.ok(checksums.files['shellpilot-local.yml'].sha256)
     assert.ok(checksums.files['aigshell-update.json'].sha256)
     assert.ok(checksums.files['shellpilot-update.json'].sha256)
 
@@ -54,6 +55,7 @@ test('prepares approved online update assets from the local electron-builder met
         'ShellPilot-3.15.107-win-x64-installer.exe',
         'ShellPilot-3.15.107-win-x64-installer.exe.blockmap',
         'latest.yml',
+        'shellpilot-local.yml',
         'aigshell-update.json',
         'shellpilot-update.json',
         'checksums.json',
@@ -104,6 +106,7 @@ test('prepares update assets from the CI workflow metadata when present', () => 
     assert.equal(result.copiedLatest, true)
     assert.equal(path.basename(result.localMetadataPath), 'windows-electerm-agent.yml')
     assert.equal(fs.readFileSync(path.join(tempDir, 'latest.yml'), 'utf8'), 'version: 3.15.109\n')
+    assert.equal(fs.readFileSync(path.join(tempDir, 'shellpilot-local.yml'), 'utf8'), 'version: 3.15.109\n')
   } finally {
     if (oldWorkflowName === undefined) {
       delete process.env.WORKFLOW_NAME

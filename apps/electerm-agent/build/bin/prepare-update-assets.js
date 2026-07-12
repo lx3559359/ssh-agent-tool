@@ -51,17 +51,31 @@ function findUpdateMetadataPath (distDir, version, options = {}) {
   return existing.find(filePath => readUpdateMetadataVersion(filePath) === version) || existing[0] || ''
 }
 
+function ensureLegacyElectronUpdaterMetadata (latestPath, legacyMetadataPath) {
+  const latestContent = fs.readFileSync(latestPath, 'utf8')
+  if (
+    !fs.existsSync(legacyMetadataPath) ||
+    fs.readFileSync(legacyMetadataPath, 'utf8') !== latestContent
+  ) {
+    fs.writeFileSync(legacyMetadataPath, latestContent)
+    return true
+  }
+  return false
+}
+
 function prepareUpdateAssets (options = {}) {
   const distDir = options.distDir || path.resolve(__dirname, '../../dist')
   const version = options.version || pack.version
   const channel = normalizeChannel(options.channel || process.env.AIGSHELL_UPDATE_CHANNEL)
   const latestPath = path.join(distDir, 'latest.yml')
+  const legacyElectronUpdaterMetadataPath = path.join(distDir, 'shellpilot-local.yml')
   const localMetadataPath = findUpdateMetadataPath(distDir, version, options)
   const legacyManifestPath = path.join(distDir, 'aigshell-update.json')
   const manifestPath = path.join(distDir, 'shellpilot-update.json')
   let checksumsPath = ''
   let releaseIndexPath = ''
   let copiedLatest = false
+  let copiedLegacyElectronUpdaterMetadata = false
 
   fs.mkdirSync(distDir, { recursive: true })
 
@@ -72,6 +86,10 @@ function prepareUpdateAssets (options = {}) {
     fs.copyFileSync(localMetadataPath, latestPath)
     copiedLatest = true
   }
+  copiedLegacyElectronUpdaterMetadata = ensureLegacyElectronUpdaterMetadata(
+    latestPath,
+    legacyElectronUpdaterMetadataPath
+  )
 
   const manifest = buildUpdateApprovalManifest(version, { channel })
   validateUpdateApprovalManifest(manifest, version, { channel })
@@ -93,7 +111,9 @@ function prepareUpdateAssets (options = {}) {
 
   return {
     copiedLatest,
+    copiedLegacyElectronUpdaterMetadata,
     latestPath,
+    legacyElectronUpdaterMetadataPath,
     localMetadataPath,
     legacyManifestPath,
     manifestPath,
@@ -106,6 +126,7 @@ function main () {
   const result = prepareUpdateAssets()
   console.log('ShellPilot online update assets are prepared.')
   console.log(`- latest.yml: ${result.copiedLatest ? `created from ${path.basename(result.localMetadataPath)}` : 'kept existing file'}`)
+  console.log(`- shellpilot-local.yml: ${result.copiedLegacyElectronUpdaterMetadata ? 'synced for legacy in-app updates' : 'kept existing file'}`)
   console.log('- shellpilot-update.json and aigshell-update.json: created and validated')
   console.log('- checksums.json: created')
   console.log('- shellpilot-release.json: created for ModelScope domestic update source')
@@ -116,6 +137,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  ensureLegacyElectronUpdaterMetadata,
   readUpdateMetadataVersion,
   findUpdateMetadataPath,
   shouldCopyLatestMetadata,
