@@ -1,0 +1,83 @@
+.safety-operation-center-modal
+  .ant-modal-body
+    max-height calc(100vh - 190px)
+    overflow hidden
+    display flex
+    flex-direction column
+
+.safety-center-summary
+  padding 10px 12px
+  border 1px solid var(--main-darker)
+  border-radius 6px
+  color var(--text)
+  background var(--main-light)
+  line-height 1.6
+
+.safety-center-filters
+  display grid
+  grid-template-columns minmax(220px, 1fr) 160px 150px 140px
+  gap 10px
+  margin 14px 0
+
+.safety-center-records
+  overflow-y auto
+  min-height 180px
+  padding-right 4px
+
+.safety-center-record
+  display flex
+  align-items center
+  gap 16px
+  padding 14px
+  margin-bottom 10px
+  border 1px solid var(--main-darker)
+  border-radius 6px
+  background var(--main)
+
+.safety-center-record-main
+  min-width 0
+  flex 1
+
+.safety-center-record-title
+  display flex
+  align-items center
+  gap 8px
+  margin-bottom 7px
+
+.safety-center-record-target
+.safety-center-record-location
+  overflow hidden
+  text-overflow ellipsis
+  white-space nowrap
+
+.safety-center-record-target
+  color var(--text-light)
+  font-weight 600
+
+.safety-center-record-meta
+  display flex
+  flex-wrap wrap
+  gap 16px
+  margin-top 5px
+  color var(--text-disabled)
+  font-size 12px
+
+.safety-center-record-location
+  margin-top 5px
+  color var(--text)
+  font-size 12px
+
+.safety-center-record-error
+  margin-top 6px
+  color var(--error)
+  font-size 12px
+
+.safety-center-record-actions
+  flex none
+
+@media (max-width: 760px)
+  .safety-center-filters
+    grid-template-columns 1fr 1fr
+  .safety-center-record
+    align-items stretch
+    flex-direction column

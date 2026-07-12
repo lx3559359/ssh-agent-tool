@@ -36,7 +36,7 @@ test('one-click SFTP backup copies files and folders without changing originals'
   const records = await backupRemoteFiles({
     sftp,
     files,
-    tab: { id: 'tab-1', host: '10.0.0.8', title: '生产服务器' },
+    tab: { id: 'tab-1', host: '10.0.0.8', port: 2222, username: 'root', title: '生产服务器' },
     now: new Date('2026-07-12T08:09:10Z')
   })
 
@@ -49,6 +49,11 @@ test('one-click SFTP backup copies files and folders without changing originals'
   assert.equal(records[0].kind, 'backup')
   assert.equal(records[0].sourcePath, '/var/www/app')
   assert.equal(records[0].status, 'available')
+  assert.equal(records[0].source, 'sftp')
+  assert.equal(records[0].target, '/var/www/app')
+  assert.equal(records[0].rollbackStatus, 'available')
+  assert.equal(records[0].port, 2222)
+  assert.equal(records[0].username, 'root')
 })
 
 test('SFTP safe delete moves entries to trash instead of removing them', async () => {
@@ -102,6 +107,7 @@ test('SFTP restore preserves current content before restoring a backup', async (
     ['cp', '/etc/nginx/.shellpilot-backups/nginx.conf-20260712-080910', '/etc/nginx/nginx.conf']
   ])
   assert.equal(result.status, 'restored')
+  assert.equal(result.rollbackStatus, 'completed')
   assert.equal(result.displacedPath, '/etc/nginx/.shellpilot-before-restore/nginx.conf-20260712-091011')
 })
 

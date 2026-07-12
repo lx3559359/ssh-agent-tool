@@ -82,6 +82,10 @@ export function getItem (id) {
   return window.localStorage.getItem(id) || ''
 }
 
+export function removeItem (id) {
+  window.localStorage.removeItem(id)
+}
+
 export function getItemJSON (id, defaultValue) {
   const str = window.localStorage.getItem(id) || ''
   const r = parseJsonSafe(str)

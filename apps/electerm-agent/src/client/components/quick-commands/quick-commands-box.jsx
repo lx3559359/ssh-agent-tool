@@ -2,7 +2,7 @@
  * quick commands footer selection wrap
  */
 
-import { useState, useRef } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { pinnedQuickCommandBarKey, quickCommandLabelsLsKey, sidebarWidth } from '../../common/constants'
 import {
   getMaxRightPanelWidth,
@@ -13,6 +13,7 @@ import { Button, Input, InputNumber, Select, Space, Flex, Modal } from 'antd'
 import * as ls from '../../common/safe-local-storage'
 import { refs } from '../common/ref'
 import { runCmd } from '../terminal/terminal-apis'
+import message from '../common/message'
 import CmdItem from './quick-command-item'
 import {
   EditOutlined,
@@ -36,12 +37,22 @@ import {
   mergeDetectedNetworkParams,
   parseNetworkProbeOutput
 } from './quick-command-network'
+import {
+  assertVerifiedQuickCommandRollbackResult,
+  buildVerifiedQuickCommandRollbackAction,
+  createQuickCommandSafetyRecord,
+  findSafetyOperationSession,
+  mergeSafetyOperationRecords,
+  readSafetyOperationRecords,
+  safetyOperationUpdatedEvent,
+  updateSafetyOperationRecord,
+  writeSafetyOperationRecords
+} from '../../common/safety-operation-records'
 import './qm.styl'
 
 const e = window.translate
 const addQuickCommands = 'addQuickCommands'
 const networkChangeCommandId = 'builtin-server-network-change-ip'
-const rollbackStorageKey = 'shellpilot-network-rollback'
 const { Option } = Select
 
 export default function QuickCommandsFooterBox (props) {
@@ -50,8 +61,19 @@ export default function QuickCommandsFooterBox (props) {
   const [pendingCommand, setPendingCommand] = useState(null)
   const [showPendingPreview, setShowPendingPreview] = useState(false)
   const [networkProbe, setNetworkProbe] = useState({ loading: false, error: '', detected: null })
-  const [rollbackRecord, setRollbackRecord] = useState(() => ls.getItemJSON(rollbackStorageKey, null))
+  const [safetyRecords, setSafetyRecords] = useState(() => readSafetyOperationRecords(ls))
   const timer = useRef(null)
+  const rollbackRunningRef = useRef('')
+  const [rollbackRunning, setRollbackRunning] = useState('')
+  const rollbackRecord = safetyRecords.find(record => {
+    return record.source === 'quick-command' && record.status === 'available'
+  })
+
+  useEffect(() => {
+    const refresh = () => setSafetyRecords(readSafetyOperationRecords(ls))
+    window.addEventListener(safetyOperationUpdatedEvent, refresh)
+    return () => window.removeEventListener(safetyOperationUpdatedEvent, refresh)
+  }, [])
 
   function handleMouseLeave () {
     timer.current = setTimeout(() => {
@@ -186,25 +208,53 @@ export default function QuickCommandsFooterBox (props) {
   }
 
   function saveRollbackRecord (record) {
-    setRollbackRecord(record)
-    ls.setItemJSON(rollbackStorageKey, record)
+    const records = mergeSafetyOperationRecords(readSafetyOperationRecords(ls), [record])
+    setSafetyRecords(writeSafetyOperationRecords(ls, records))
   }
 
-  function clearRollbackRecord () {
-    setRollbackRecord(null)
-    ls.setItemJSON(rollbackStorageKey, null)
-  }
-
-  function handleRollbackAction (action) {
-    if (!rollbackRecord?.path) {
+  async function handleRollbackAction (action) {
+    if (rollbackRunningRef.current) return
+    const path = rollbackRecord?.rollbackPath || rollbackRecord?.path
+    if (!path) {
       return
     }
-    const path = rollbackRecord.path
-    const command = action === 'rollback'
-      ? `if [ -x "${path}" ]; then if [ "$(id -u)" = "0" ]; then sh "${path}"; else sudo sh "${path}"; fi; else echo "回滚脚本不存在或已失效: ${path}"; fi`
-      : `if [ "$(id -u)" = "0" ]; then rm -f "${path}.armed"; else sudo rm -f "${path}.armed"; fi && echo "已保留新配置，自动回滚已取消"`
-    window.store.runQuickCommand(command, false, rollbackRecord.tabId)
-    clearRollbackRecord()
+    const terminal = findSafetyOperationSession(
+      rollbackRecord,
+      [props.currentTab?.id, window.store.activeTabId],
+      tabId => refs.get('term-' + tabId)
+    )
+    if (!terminal) {
+      message.warning(`请先连接服务器 ${rollbackRecord.host || ''}，再执行快捷回滚。`)
+      return
+    }
+    rollbackRunningRef.current = rollbackRecord.id
+    setRollbackRunning(rollbackRecord.id)
+    try {
+      const token = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      const output = await runCmd(
+        terminal.pid,
+        buildVerifiedQuickCommandRollbackAction(rollbackRecord, action, token)
+      )
+      assertVerifiedQuickCommandRollbackResult(output, token)
+      const records = updateSafetyOperationRecord(readSafetyOperationRecords(ls), rollbackRecord.id, {
+        status: action === 'rollback' ? 'restored' : 'kept',
+        rollbackStatus: action === 'rollback' ? 'completed' : 'kept',
+        restoredAt: action === 'rollback' ? new Date().toISOString() : '',
+        keptAt: action === 'keep' ? new Date().toISOString() : ''
+      })
+      setSafetyRecords(writeSafetyOperationRecords(ls, records))
+    } catch (error) {
+      const records = updateSafetyOperationRecord(readSafetyOperationRecords(ls), rollbackRecord.id, {
+        status: 'failed',
+        rollbackStatus: 'failed',
+        error: error?.message || String(error)
+      })
+      setSafetyRecords(writeSafetyOperationRecords(ls, records))
+      window.store.onError(error)
+    } finally {
+      rollbackRunningRef.current = ''
+      setRollbackRunning('')
+    }
   }
 
   function handlePendingOk () {
@@ -214,15 +264,16 @@ export default function QuickCommandsFooterBox (props) {
     const values = pendingCommand.paramValues || {}
     if (shouldTrackRollback(pendingCommand.item, values)) {
       const rollback = pendingCommand.item.rollback
-      saveRollbackRecord({
-        path: values[rollback.pathParam] || pendingCommand.context.rollbackPath,
+      saveRollbackRecord(createQuickCommandSafetyRecord({
+        rollbackPath: values[rollback.pathParam] || pendingCommand.context.rollbackPath,
         title: rollback.title,
-        tabId: props.currentTab?.id || window.store.activeTabId,
-        host: pendingCommand.context.host || pendingCommand.context.title,
+        tab: props.currentTab || {
+          id: window.store.activeTabId,
+          host: pendingCommand.context.host || pendingCommand.context.title
+        },
         seconds: Number(values.自动回滚秒数 || 120),
-        protected: values.回滚保护 === 'enabled',
-        createdAt: Date.now()
-      })
+        protected: values.回滚保护 === 'enabled'
+      }))
     }
     window.store.runQuickCommandItem(pendingCommand.id, {
       commandText: pendingCommand.text,
@@ -474,10 +525,10 @@ export default function QuickCommandsFooterBox (props) {
           <Button
             danger
             size='small'
-            disabled={!rollbackRecord?.path}
+            disabled={!(rollbackRecord?.rollbackPath || rollbackRecord?.path)}
             onClick={() => handleRollbackAction('rollback')}
           >
-            {rollbackRecord?.path ? '立即回滚上一次修改' : '暂无可回滚修改'}
+            {(rollbackRecord?.rollbackPath || rollbackRecord?.path) ? '立即回滚上一次修改' : '暂无可回滚修改'}
           </Button>
         </div>
         <div>
@@ -493,7 +544,8 @@ export default function QuickCommandsFooterBox (props) {
   }
 
   function renderRollbackRecord () {
-    if (!rollbackRecord?.path) {
+    const path = rollbackRecord?.rollbackPath || rollbackRecord?.path
+    if (!path) {
       return null
     }
     return (
@@ -503,11 +555,25 @@ export default function QuickCommandsFooterBox (props) {
           <div className='qm-rollback-record-desc'>
             {rollbackRecord.host || '当前服务器'} · {rollbackRecord.protected ? `${rollbackRecord.seconds} 秒自动回滚保护已启动` : '已生成手动回滚脚本'}
           </div>
-          <div className='qm-rollback-record-path'>{rollbackRecord.path}</div>
+          <div className='qm-rollback-record-path'>{path}</div>
         </div>
         <Space>
-          <Button onClick={() => handleRollbackAction('keep')}>保留新配置</Button>
-          <Button danger type='primary' onClick={() => handleRollbackAction('rollback')}>立即回滚</Button>
+          <Button
+            disabled={Boolean(rollbackRunning)}
+            loading={rollbackRunning === rollbackRecord.id}
+            onClick={() => handleRollbackAction('keep')}
+          >
+            保留新配置
+          </Button>
+          <Button
+            danger
+            type='primary'
+            disabled={Boolean(rollbackRunning)}
+            loading={rollbackRunning === rollbackRecord.id}
+            onClick={() => handleRollbackAction('rollback')}
+          >
+            立即回滚
+          </Button>
         </Space>
       </div>
     )

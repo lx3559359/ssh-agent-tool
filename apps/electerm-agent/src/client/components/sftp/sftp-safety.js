@@ -60,16 +60,21 @@ export function createSftpRecoveryRecord ({
 }) {
   return {
     id: `${kind}-${now.getTime()}-${Math.random().toString(36).slice(2, 8)}`,
+    source: 'sftp',
     kind,
     title: kind === 'trash' ? 'SFTP 安全删除' : 'SFTP 快捷备份',
     sourcePath,
+    target: sourcePath,
     backupPath,
     isDirectory: Boolean(file?.isDirectory),
     tabId: tab.id || '',
     host: tab.host || '',
+    port: Number(tab.port || 22),
+    username: tab.username || tab.user || '',
     serverTitle: tab.title || tab.name || '',
     createdAt: now.toISOString(),
-    status: 'available'
+    status: 'available',
+    rollbackStatus: 'available'
   }
 }
 
@@ -88,17 +93,22 @@ export function createSftpMutationRecoveryRecord ({
   }
   return {
     id: `${kind}-${now.getTime()}-${Math.random().toString(36).slice(2, 8)}`,
+    source: 'sftp',
     kind,
     title: titleMap[kind] || 'SFTP 修改操作',
     sourcePath,
+    target: sourcePath,
     backupPath,
     previousMode,
     isDirectory: Boolean(file?.isDirectory),
     tabId: tab.id || '',
     host: tab.host || '',
+    port: Number(tab.port || 22),
+    username: tab.username || tab.user || '',
     serverTitle: tab.title || tab.name || '',
     createdAt: now.toISOString(),
-    status: 'available'
+    status: 'available',
+    rollbackStatus: 'available'
   }
 }
 
@@ -150,6 +160,7 @@ export async function restoreSftpRecoveryRecord ({ sftp, record, now = new Date(
     return {
       ...record,
       status: 'restored',
+      rollbackStatus: 'completed',
       restoredAt: now.toISOString(),
       displacedPath: ''
     }
@@ -182,6 +193,7 @@ export async function restoreSftpRecoveryRecord ({ sftp, record, now = new Date(
   return {
     ...record,
     status: 'restored',
+    rollbackStatus: 'completed',
     restoredAt: now.toISOString(),
     displacedPath: displaced ? displacedPath : ''
   }

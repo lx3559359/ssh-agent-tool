@@ -8,11 +8,12 @@ import {
   ProfileOutlined,
   QuestionCircleOutlined,
   ReloadOutlined,
+  SafetyCertificateOutlined,
   SettingOutlined,
   SunOutlined,
   ThunderboltOutlined
 } from '@ant-design/icons'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Button, Popover, Tooltip } from 'antd'
 import QuickConnect from '../tabs/quick-connect'
 import WindowControl from '../tabs/window-control'
@@ -20,6 +21,7 @@ import ConnectionInventoryModal from '../tree-list/connection-inventory-modal'
 import UpdateCenterModal from './update-center-modal'
 import ConnectionInfoModal from '../tree-list/connection-info-modal'
 import HelpCenterModal from './help-center-modal'
+import SafetyOperationCenterModal from './safety-operation-center-modal'
 import { logoPath1, packInfo, statusMap } from '../../common/constants'
 import './aigshell-topbar.styl'
 
@@ -27,10 +29,17 @@ export default function AIGShellTopBar ({ store }) {
   const [showConnectionInventory, setShowConnectionInventory] = useState(false)
   const [showUpdateCenter, setShowUpdateCenter] = useState(false)
   const [showHelpCenter, setShowHelpCenter] = useState(false)
+  const [showSafetyCenter, setShowSafetyCenter] = useState(false)
   const [connectionInfoBookmark, setConnectionInfoBookmark] = useState(null)
   const currentTab = store.currentTab || {}
   const title = currentTab.title || currentTab.name || currentTab.host || '未连接'
   const online = currentTab.status === statusMap.success
+
+  useEffect(() => {
+    const openSafetyCenter = () => setShowSafetyCenter(true)
+    window.addEventListener('shellpilot-open-safety-center', openSafetyCenter)
+    return () => window.removeEventListener('shellpilot-open-safety-center', openSafetyCenter)
+  }, [])
 
   function handleFastNew () {
     if (window.store.hasNodePty) {
@@ -121,6 +130,12 @@ export default function AIGShellTopBar ({ store }) {
       label: '连接信息',
       icon: <ProfileOutlined />,
       onClick: handleOpenConnectionInventory
+    },
+    {
+      key: 'safetyCenter',
+      label: '安全中心',
+      icon: <SafetyCertificateOutlined />,
+      onClick: () => setShowSafetyCenter(true)
     },
     {
       key: 'update',
@@ -220,6 +235,11 @@ export default function AIGShellTopBar ({ store }) {
       <HelpCenterModal
         open={showHelpCenter}
         onClose={() => setShowHelpCenter(false)}
+      />
+      <SafetyOperationCenterModal
+        open={showSafetyCenter}
+        onClose={() => setShowSafetyCenter(false)}
+        store={store}
       />
     </div>
   )

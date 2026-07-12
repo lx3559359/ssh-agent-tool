@@ -37,6 +37,9 @@ test('top bar exposes an in-client Chinese help center', () => {
   assert.match(help, /拖到 AI/)
   assert.match(help, /ModelScope/)
   assert.match(help, /回滚/)
+  assert.match(help, /全部服务器/)
+  assert.match(help, /失败记录/)
+  assert.match(help, /保留新配置/)
 })
 
 test('repository includes an offline Chinese user guide', () => {

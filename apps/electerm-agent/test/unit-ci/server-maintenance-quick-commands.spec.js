@@ -501,7 +501,7 @@ test('quick command UI exposes descriptions and edit-before-run confirmation', (
   assert.match(boxSource, /暂无可回滚修改/)
   assert.match(boxSource, /保留新配置/)
   assert.match(boxSource, /mcpRunQuickCommandNetworkProbe/)
-  assert.match(boxSource, /shellpilot-network-rollback/)
+  assert.match(boxSource, /safety-operation-records/)
   assert.match(boxSource, /currentTab/)
   assert.match(boxSource, /advancedUsage/)
   assert.match(itemSource, /description/)
