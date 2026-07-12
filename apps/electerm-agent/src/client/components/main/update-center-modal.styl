@@ -36,6 +36,17 @@
   gap 8px
   padding-top 14px
 
+.update-center-source
+  display grid
+  grid-template-columns auto minmax(210px, 320px) 1fr
+  align-items center
+  gap 12px
+  margin 16px 0
+
+@media (max-width: 560px)
+  .update-center-source
+    grid-template-columns 1fr
+
 .update-center-changelog
   max-height min(38vh, 360px)
   overflow auto

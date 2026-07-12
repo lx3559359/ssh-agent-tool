@@ -2,7 +2,7 @@ import { Component } from 'react'
 import { refs } from '../common/ref'
 import generate from '../../common/uid'
 import runIdle from '../../common/run-idle'
-import { Spin } from 'antd'
+import { Spin, Button, Modal as AntModal, Empty, Tag } from 'antd'
 import { notification } from '../common/notification'
 import Modal from '../common/modal'
 import clone from '../../common/to-simple-obj'
@@ -29,14 +29,31 @@ import ListTable from './list-table-ui'
 import deepCopy from 'json-deep-copy'
 import isValidPath from '../../common/is-valid-path'
 import normalizeRemotePath from '../../common/normalize-remote-path'
-import { LoadingOutlined, ReloadOutlined } from '@ant-design/icons'
+import {
+  LoadingOutlined,
+  ReloadOutlined,
+  SaveOutlined,
+  SafetyCertificateOutlined,
+  UndoOutlined
+} from '@ant-design/icons'
 import * as owner from './owner-list'
 import AddressBar from './address-bar'
 import getProxy from '../../common/get-proxy'
 import { createTerm } from '../terminal/terminal-apis'
+import message from '../common/message'
+import * as ls from '../../common/safe-local-storage'
+import {
+  backupRemoteFiles,
+  softDeleteRemoteFiles,
+  restoreSftpRecoveryRecord,
+  mergeSftpRecoveryRecords,
+  findLatestSftpRecoveryRecord,
+  createSftpMutationRecoveryRecord
+} from './sftp-safety'
 import './sftp.styl'
 
 const e = window.translate
+const sftpRecoveryStorageKey = 'shellpilot-sftp-recovery-records'
 
 export default class Sftp extends Component {
   constructor (props) {
@@ -50,7 +67,9 @@ export default class Sftp extends Component {
       ...this.defaultState(),
       loadingSftp: false,
       inited: false,
-      ready: false
+      ready: false,
+      sftpSafetyCenterOpen: false,
+      sftpRecoveryRecords: ls.getItemJSON(sftpRecoveryStorageKey, [])
     }
     this.retryCount = 0
   }
@@ -446,27 +465,163 @@ export default class Sftp extends Component {
         .filter(Boolean) // Filter out any undefined items
   }
 
+  persistSftpRecoveryRecords = (records) => {
+    ls.setItemJSON(sftpRecoveryStorageKey, records)
+    this.setState({ sftpRecoveryRecords: records })
+  }
+
+  addSftpRecoveryRecords = (added) => {
+    const records = mergeSftpRecoveryRecords(
+      this.state.sftpRecoveryRecords,
+      added
+    )
+    this.persistSftpRecoveryRecords(records)
+    return records
+  }
+
+  recordSftpMutationRecovery = (data) => {
+    const record = createSftpMutationRecoveryRecord({
+      ...data,
+      tab: this.props.tab
+    })
+    this.addSftpRecoveryRecords([record])
+    return record
+  }
+
+  getRemoteSafetyTargets = (files = this.getSelectedFiles()) => {
+    return files.filter(file => {
+      return file?.type === typeMap.remote && !file.isParent && !file.isEmpty
+    })
+  }
+
+  quickBackupRemoteFiles = async (files = this.getSelectedFiles(), options = {}) => {
+    const targets = this.getRemoteSafetyTargets(files)
+    if (!targets.length) {
+      if (!options.silent) message.warning('请先在远程 SFTP 面板选择文件或文件夹。')
+      return false
+    }
+    try {
+      const records = await backupRemoteFiles({
+        sftp: this.sftp,
+        files: targets,
+        tab: this.props.tab
+      })
+      this.addSftpRecoveryRecords(records)
+      if (!options.silent) {
+        message.success(`已备份 ${records.length} 项，可在安全操作中心恢复。`)
+      }
+      return true
+    } catch (err) {
+      window.store.onError(err)
+      if (!options.silent) message.error('SFTP 备份失败，原文件未改动。')
+      return false
+    }
+  }
+
+  hasSftpRecovery = (sourcePath) => {
+    return Boolean(findLatestSftpRecoveryRecord(
+      this.state.sftpRecoveryRecords,
+      sourcePath,
+      this.props.tab?.id
+    ))
+  }
+
+  restoreSftpRecord = async (record) => {
+    if (!record || record.status !== 'available') return false
+    if (record.host && record.host !== this.props.tab?.host) {
+      message.warning(`请先连接服务器 ${record.host} 后再恢复。`)
+      return false
+    }
+    try {
+      const restored = await restoreSftpRecoveryRecord({
+        sftp: this.sftp,
+        record
+      })
+      const records = this.state.sftpRecoveryRecords.map(item => {
+        return item.id === restored.id ? restored : item
+      })
+      this.persistSftpRecoveryRecords(records)
+      await this.remoteList()
+      message.success('恢复完成；恢复前的当前内容也已另行保留。')
+      return true
+    } catch (err) {
+      window.store.onError(err)
+      message.error('恢复失败，原有内容未被删除。')
+      return false
+    }
+  }
+
+  restoreLatestSftpBackup = async (sourcePath) => {
+    const record = findLatestSftpRecoveryRecord(
+      this.state.sftpRecoveryRecords,
+      sourcePath,
+      this.props.tab?.id
+    )
+    if (!record) {
+      message.info('当前文件没有可用的备份或安全删除记录。')
+      return false
+    }
+    return this.restoreSftpRecord(record)
+  }
+
+  openSftpSafetyCenter = () => {
+    this.setState({ sftpSafetyCenterOpen: true })
+  }
+
+  handleOpenSftpSafetyCenter = () => {
+    this.openSftpSafetyCenter()
+  }
+
+  handleCloseSftpSafetyCenter = () => {
+    this.setState({ sftpSafetyCenterOpen: false })
+  }
+
+  handleQuickBackupSelected = () => {
+    this.quickBackupRemoteFiles()
+  }
+
   delFiles = async (_type, files = this.getSelectedFiles()) => {
     this.onDelete = true
     const confirm = await this.confirmDelete(files)
     this.onDelete = false
     if (!confirm) {
-      return
+      return false
     }
     const type = files[0]?.type || _type
-    const func = this[type + 'Del']
-    for (const f of files) {
-      await func(f)
+    if (type === typeMap.remote) {
+      try {
+        const records = await softDeleteRemoteFiles({
+          sftp: this.sftp,
+          files: this.getRemoteSafetyTargets(files),
+          tab: this.props.tab
+        })
+        this.addSftpRecoveryRecords(records)
+        message.success(`已安全删除 ${records.length} 项，可在安全操作中心恢复。`)
+      } catch (err) {
+        window.store.onError(err)
+        message.error('安全删除失败，未继续执行永久删除。')
+        return false
+      }
+    } else {
+      for (const f of files) {
+        await this.localDel(f)
+      }
     }
     if (type === typeMap.remote) {
       await wait(500)
     }
     this[type + 'List']()
+    return true
   }
 
   renderDelConfirmTitle (files = this.getSelectedFiles(), pureText) {
     const hasDirectory = some(files, f => f.isDirectory)
+    const isRemote = files.length && files.every(f => f.type === typeMap.remote)
     const names = hasDirectory ? e('filesAndFolders') : e('files')
+    if (isRemote) {
+      const title = `确定将所选${names}移入安全回收区吗？可在安全操作中心恢复。（${files.length}）`
+      return pureText ? title : <div className='wordbreak'>{title}</div>
+    }
     if (pureText) {
       const t1 = hasDirectory
         ? e('delTip1')
@@ -1080,7 +1235,12 @@ export default class Sftp extends Component {
         'addTransferList',
         'renderDelConfirmTitle',
         'getSelectedFiles',
-        'getFileItemById'
+        'getFileItemById',
+        'quickBackupRemoteFiles',
+        'restoreLatestSftpBackup',
+        'openSftpSafetyCenter',
+        'hasSftpRecovery',
+        'recordSftpMutationRecovery'
       ]),
       ...pick(this.state, [
         'id',
@@ -1205,13 +1365,33 @@ export default class Sftp extends Component {
 
   renderSftpPanelTitle (type, username, host) {
     if (type === typeMap.remote) {
+      const selectedCount = this.getRemoteSafetyTargets().length
       return (
-        <div className='sftp-panel-title pd1t pd1b pd1x alignright'>
+        <div className='sftp-panel-title sftp-panel-title-remote pd1t pd1b pd1x'>
+          <span className='sftp-panel-location'>{e('remote')}: {username}@{host}</span>
+          <span className='sftp-safety-actions'>
+            <Button
+              size='small'
+              type='text'
+              icon={<SaveOutlined />}
+              disabled={!selectedCount}
+              onClick={this.handleQuickBackupSelected}
+            >
+              一键备份{selectedCount ? `（${selectedCount}）` : ''}
+            </Button>
+            <Button
+              size='small'
+              type='text'
+              icon={<SafetyCertificateOutlined />}
+              onClick={this.handleOpenSftpSafetyCenter}
+            >
+              安全操作中心
+            </Button>
+          </span>
           <ReloadOutlined
-            className='mg1r pointer'
+            className='pointer'
             onClick={this.handleReloadRemoteSftp}
           />
-          {e('remote')}: {username}@{host}
         </div>
       )
     }
@@ -1344,6 +1524,72 @@ export default class Sftp extends Component {
     })
   }
 
+  renderSftpSafetyCenter () {
+    const { sftpSafetyCenterOpen, sftpRecoveryRecords } = this.state
+    const host = this.props.tab?.host
+    const records = sftpRecoveryRecords.filter(record => !host || record.host === host)
+    return (
+      <AntModal
+        title='SFTP 安全操作中心'
+        open={sftpSafetyCenterOpen}
+        onCancel={this.handleCloseSftpSafetyCenter}
+        footer={null}
+        width={760}
+        destroyOnClose
+      >
+        <div className='sftp-safety-summary'>
+          备份不会改动原文件；远程删除会移入隐藏回收区。恢复前若目标位置已有内容，ShellPilot 会先把它保存到恢复保护目录。
+        </div>
+        <div className='sftp-safety-records'>
+          {
+            records.length
+              ? records.map(record => (
+                <div className='sftp-safety-record' key={record.id}>
+                  <div className='sftp-safety-record-main'>
+                    <div className='sftp-safety-record-title'>
+                      <Tag color={record.kind === 'trash' ? 'orange' : 'blue'}>
+                        {{
+                          trash: '安全删除',
+                          backup: '快捷备份',
+                          rename: '重命名',
+                          chmod: '权限修改'
+                        }[record.kind] || '修改操作'}
+                      </Tag>
+                      <span title={record.sourcePath}>{record.sourcePath}</span>
+                    </div>
+                    <div className='sftp-safety-record-meta'>
+                      {new Date(record.createdAt).toLocaleString()} · {record.host || '当前服务器'}
+                    </div>
+                    {
+                      record.backupPath
+                        ? (
+                          <div className='sftp-safety-record-path' title={record.backupPath}>
+                            {record.kind === 'rename' ? '当前路径' : '保留位置'}：{record.backupPath}
+                          </div>
+                          )
+                        : (
+                          <div className='sftp-safety-record-path'>
+                            原权限：{record.previousMode}
+                          </div>
+                          )
+                    }
+                  </div>
+                  <Button
+                    icon={<UndoOutlined />}
+                    disabled={record.status !== 'available'}
+                    onClick={() => this.restoreSftpRecord(record)}
+                  >
+                    {record.status === 'available' ? '立即恢复' : '已恢复'}
+                  </Button>
+                </div>
+              ))
+              : <Empty description='当前服务器暂无备份或安全删除记录' />
+          }
+        </div>
+      </AntModal>
+    )
+  }
+
   render () {
     const {
       id,
@@ -1369,6 +1615,7 @@ export default class Sftp extends Component {
         {
           this.renderSections()
         }
+        {this.renderSftpSafetyCenter()}
       </div>
     )
   }

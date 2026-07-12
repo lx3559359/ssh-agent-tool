@@ -499,11 +499,26 @@ export default class FileSection extends React.Component {
   changeFileMode = async (file) => {
     this.clearRef()
     const { permission, type, path, name } = file
+    const previousMode = this.state.file.permission
     const func = type === typeMap.local
       ? window.fs.chmod
       : this.props.sftp.chmod
     const p = resolve(path, name)
-    await func(p, permission).catch(window.store.onError)
+    try {
+      await func(p, permission)
+      if (type === typeMap.remote) {
+        this.props.recordSftpMutationRecovery({
+          kind: 'chmod',
+          sourcePath: p,
+          previousMode,
+          file
+        })
+        message.success('权限修改已记录，可在安全操作中心一键恢复。')
+      }
+    } catch (err) {
+      window.store.onError(err)
+      return
+    }
     this.props[type + 'List']()
   }
 
@@ -571,11 +586,18 @@ export default class FileSection extends React.Component {
     const { remotePath, sftp } = this.props
     const p1 = resolve(remotePath, oldname)
     const p2 = resolve(remotePath, newname)
-    const res = await sftp.rename(p1, p2)
-      .catch(window.store.onError)
-      .then(() => true)
-    if (res) {
+    try {
+      await sftp.rename(p1, p2)
+      this.props.recordSftpMutationRecovery({
+        kind: 'rename',
+        sourcePath: p1,
+        backupPath: p2,
+        file: this.state.file
+      })
+      message.success('重命名已记录，可在安全操作中心一键恢复。')
       this.props.remoteList()
+    } catch (err) {
+      window.store.onError(err)
     }
   }
 
@@ -710,6 +732,20 @@ export default class FileSection extends React.Component {
   }
 
   onSubmitEditFile = async (mode, type, path, text, noClose) => {
+    if (typeMap.remote === type) {
+      const backupOk = await this.props.quickBackupRemoteFiles([
+        {
+          ...getFolderFromFilePath(path, true),
+          type: typeMap.remote,
+          isDirectory: false
+        }
+      ], { silent: true })
+      if (!backupOk) {
+        message.error('保存前自动备份失败，已取消写入。')
+        this.editor?.setState({ loading: false })
+        return
+      }
+    }
     const r = typeMap.remote === type
       ? await this.props.sftp.writeFile(
         path,
@@ -897,6 +933,26 @@ export default class FileSection extends React.Component {
     await this.props.delFiles(type, files)
   }
 
+  getSftpSafetyTargets = () => {
+    const { file } = this.props
+    return this.shouldShowSelectedMenu()
+      ? this.props.getSelectedFiles()
+      : [file]
+  }
+
+  quickBackup = async () => {
+    await this.props.quickBackupRemoteFiles(this.getSftpSafetyTargets())
+  }
+
+  restoreLatestBackup = async () => {
+    const { path, name } = this.props.file
+    await this.props.restoreLatestSftpBackup(resolve(path, name))
+  }
+
+  openSafetyCenter = () => {
+    this.props.openSftpSafetyCenter()
+  }
+
   doTransfer = () => {
     this.transfer()
   }
@@ -1043,7 +1099,9 @@ export default class FileSection extends React.Component {
     const shouldShowSelectedMenu = id &&
       len > 1 &&
       selectedFiles.has(id)
-    const delTxt = shouldShowSelectedMenu ? `${e('del')}:${e('selected')}(${len})` : e('del')
+    const delTxt = isRemote
+      ? (shouldShowSelectedMenu ? `安全删除所选（${len}）` : '安全删除（可恢复）')
+      : (shouldShowSelectedMenu ? `${e('del')}:${e('selected')}(${len})` : e('del'))
     const canPaste = hasFileInClipboardText()
     const showEdit = !isDirectory && id &&
       size < maxEditFileSize
@@ -1116,6 +1174,25 @@ export default class FileSection extends React.Component {
         func: 'askAiAboutFile',
         icon: 'CodeOutlined',
         text: '让 AI 分析此文件'
+      })
+    }
+    if (isRemote && isRealFile) {
+      const sourcePath = resolve(this.props.file.path, this.props.file.name)
+      res.push({
+        func: 'quickBackup',
+        icon: 'SaveOutlined',
+        text: shouldShowSelectedMenu ? `一键备份所选（${len}）` : '一键备份'
+      })
+      res.push({
+        func: 'restoreLatestBackup',
+        icon: 'RetweetOutlined',
+        text: '恢复最近备份',
+        disabled: !this.props.hasSftpRecovery(sourcePath)
+      })
+      res.push({
+        func: 'openSafetyCenter',
+        icon: 'AppstoreOutlined',
+        text: '安全操作中心'
       })
     }
     if (showEdit) {

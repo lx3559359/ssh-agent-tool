@@ -3,10 +3,15 @@ const PROFILE_KEYS = [
   'nameAI',
   'baseURLAI',
   'modelAI',
+  'modelOptionsAI',
   'roleAI',
   'apiKeyAI',
   'authHeaderNameAI',
   'apiPathAI',
+  'aiStatus',
+  'aiStatusMessage',
+  'aiStatusAt',
+  'aiStatusFingerprint',
   'agentSkills',
   'mcpServers',
   'languageAI',
@@ -23,6 +28,15 @@ function trimString (value) {
   return typeof value === 'string' ? value.trim() : value
 }
 
+function normalizeModelOptions (items = []) {
+  const source = Array.isArray(items) ? items : [items]
+  return [...new Set(
+    source
+      .map(item => String(item || '').trim())
+      .filter(Boolean)
+  )]
+}
+
 export function normalizeAIProfile (profile = {}) {
   const next = {}
   for (const key of PROFILE_KEYS) {
@@ -35,6 +49,7 @@ export function normalizeAIProfile (profile = {}) {
   next.id = next.id || createProfileId()
   next.nameAI = next.nameAI || next.modelAI || next.baseURLAI || 'AI 配置'
   next.apiPathAI = next.apiPathAI || ''
+  next.modelOptionsAI = normalizeModelOptions(next.modelOptionsAI)
   next.agentSkills = Array.isArray(next.agentSkills) ? next.agentSkills : []
   next.mcpServers = Array.isArray(next.mcpServers) ? next.mcpServers : []
   return next
@@ -143,6 +158,79 @@ export function buildAIProfileFromValues (values = {}) {
 export function getAIProfileOptions (config = {}) {
   return migrateAIProfiles(config).aiProfiles.map(profile => ({
     value: profile.id,
-    label: `${profile.nameAI || 'AI 配置'}${profile.modelAI ? ` / ${profile.modelAI}` : ''}`
+    label: profile.nameAI || 'AI 配置'
   }))
+}
+
+export function getAIModelOptions (config = {}) {
+  const active = getActiveAIConfig(config)
+  return normalizeModelOptions([
+    ...(active.modelOptionsAI || []),
+    active.modelAI
+  ]).map(value => ({
+    value,
+    label: value
+  }))
+}
+
+export function getAIStatusFingerprint (config = {}) {
+  const apiKey = String(config.apiKeyAI || '')
+  const apiKeyMarker = apiKey
+    ? `${apiKey.length}:${apiKey.slice(0, 4)}:${apiKey.slice(-4)}`
+    : ''
+  return [
+    config.baseURLAI || '',
+    config.apiPathAI || '',
+    config.modelAI || '',
+    config.authHeaderNameAI || '',
+    config.proxyAI || '',
+    apiKeyMarker
+  ].join('|')
+}
+
+export function getAIModelStatus (config = {}) {
+  const active = getActiveAIConfig(config)
+  const hasRequiredConfig = Boolean(active.baseURLAI && active.apiKeyAI)
+  if (!hasRequiredConfig) {
+    return {
+      status: 'unconfigured',
+      label: '未配置',
+      className: 'not-configured',
+      title: '请先填写 API 地址和 API Key'
+    }
+  }
+  const statusExpired = active.aiStatusFingerprint &&
+    active.aiStatusFingerprint !== getAIStatusFingerprint(active)
+  if (!active.aiStatus || statusExpired) {
+    return {
+      status: 'pending',
+      label: '待测试',
+      className: 'pending',
+      title: statusExpired
+        ? '模型配置已变化，请重新测试连接'
+        : '配置已填写，但还没有完成测试连接'
+    }
+  }
+  if (active.aiStatus === 'available') {
+    return {
+      status: 'available',
+      label: '可用',
+      className: 'available',
+      title: active.aiStatusMessage || '最近一次模型测试连接成功'
+    }
+  }
+  if (active.aiStatus === 'error') {
+    return {
+      status: 'error',
+      label: '异常',
+      className: 'error',
+      title: active.aiStatusMessage || '最近一次模型测试连接失败'
+    }
+  }
+  return {
+    status: 'pending',
+    label: '待测试',
+    className: 'pending',
+    title: '配置已填写，但还没有完成测试连接'
+  }
 }

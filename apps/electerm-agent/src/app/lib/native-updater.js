@@ -129,7 +129,7 @@ async function fetchApprovedReleaseFromSource (source, options = {}) {
 }
 
 async function fetchApprovedRelease (options = {}) {
-  for (const source of getUpdateReleaseSources()) {
+  for (const source of getUpdateReleaseSources(options.config?.updateSource)) {
     const result = await fetchApprovedReleaseFromSource(source, options)
     if (result) {
       return result

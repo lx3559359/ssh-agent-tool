@@ -17,6 +17,11 @@ test('update center shows the complete user-facing update state', () => {
   assert.match(source, /更新日志/)
   assert.match(source, /重启并安装/)
   assert.match(source, /refsStatic\.get\('upgrade'\)/)
+  assert.match(source, /更新源/)
+  assert.match(source, /updateSource/)
+  assert.match(source, /ModelScope 国内源/)
+  assert.match(source, /GitHub/)
+  assert.match(source, /setConfig/)
 })
 
 test('top bar opens the update center before checking for updates', () => {

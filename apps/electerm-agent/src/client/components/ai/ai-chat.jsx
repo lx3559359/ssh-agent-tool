@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
-import { Flex, Input, Popconfirm, Segmented, Select } from 'antd'
+import { Flex, Input, Popconfirm, Segmented } from 'antd'
 import TabSelect from '../footer/tab-select'
 import AiChatHistory from './ai-chat-history'
 import uid from '../../common/uid'
@@ -51,9 +51,7 @@ import {
   parseSftpDropPayload
 } from './ai-attachments'
 import {
-  getActiveAIConfig,
-  getAIProfileOptions,
-  migrateAIProfiles
+  getActiveAIConfig
 } from './ai-profiles'
 import message from '../common/message'
 import aiAgentCopy from './ai-agent-copy.json'
@@ -71,10 +69,6 @@ export default function AIChat (props) {
   const submitDisabled = isAgent && props.agentRunning
   const activeAIConfig = useMemo(
     () => getActiveAIConfig(props.config),
-    [props.config]
-  )
-  const aiProfileOptions = useMemo(
-    () => getAIProfileOptions(props.config),
     [props.config]
   )
 
@@ -186,14 +180,6 @@ export default function AIChat (props) {
 
   function toggleConfig () {
     window.store.toggleAIConfig()
-  }
-
-  function handleActiveAIProfileChange (profileId) {
-    const next = migrateAIProfiles({
-      ...props.config,
-      activeAIProfileId: profileId
-    })
-    window.store.updateConfig(next)
   }
 
   function clearHistory () {
@@ -375,23 +361,6 @@ export default function AIChat (props) {
     )
   }
 
-  function renderAIProfileSelect () {
-    if (!aiProfileOptions.length) {
-      return null
-    }
-    return (
-      <Select
-        size='small'
-        className='ai-profile-select'
-        value={activeAIConfig.activeAIProfileId}
-        options={aiProfileOptions}
-        onChange={handleActiveAIProfileChange}
-        popupMatchSelectWidth={false}
-        title='选择 AI API 和模型'
-      />
-    )
-  }
-
   function renderSendIcon () {
     if (submitDisabled) {
       return (
@@ -497,6 +466,20 @@ export default function AIChat (props) {
     )
   }
 
+  function renderUploadButton () {
+    return (
+      <button
+        type='button'
+        className='ai-attachment-upload-button'
+        onClick={handlePickLocalAttachments}
+        title='上传文件，也支持粘贴文件或从 SFTP 拖入'
+      >
+        <PaperClipOutlined />
+        <span>上传</span>
+      </button>
+    )
+  }
+
   useEffect(() => {
     refsStatic.add('AIChat', {
       setPrompt,
@@ -553,13 +536,8 @@ export default function AIChat (props) {
         <Flex className='ai-chat-terminals' justify='space-between' align='center'>
           <Flex align='center' gap={6}>
             {renderModeSwitch()}
-            {renderAIProfileSelect()}
             {renderTabSelect()}
-            <PaperClipOutlined
-              onClick={handlePickLocalAttachments}
-              className='mg1l pointer icon-hover ai-attachment-pick-icon'
-              title='添加附件'
-            />
+            {renderUploadButton()}
             <SettingOutlined
               onClick={toggleConfig}
               className='mg1l pointer icon-hover toggle-ai-setting-icon'

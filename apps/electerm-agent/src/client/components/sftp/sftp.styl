@@ -5,6 +5,68 @@
   flex 1
 .sftp-title-wrap
   position relative
+.sftp-panel-title-remote
+  display flex
+  align-items center
+  gap 8px
+  min-width 0
+  border-bottom 1px solid var(--main-darker)
+.sftp-panel-location
+  flex 1
+  min-width 80px
+  overflow hidden
+  text-overflow ellipsis
+  white-space nowrap
+.sftp-safety-actions
+  display flex
+  align-items center
+  gap 2px
+  flex none
+  .ant-btn
+    height 26px
+    padding 0 7px
+    border-radius 4px
+.sftp-safety-summary
+  line-height 1.7
+  padding 10px 12px
+  margin-bottom 12px
+  border 1px solid var(--primary)
+  border-radius 6px
+  background var(--main-lighter)
+.sftp-safety-records
+  max-height 480px
+  overflow-y auto
+  padding-right 4px
+.sftp-safety-record
+  display flex
+  align-items center
+  gap 12px
+  padding 12px
+  margin-bottom 8px
+  border 1px solid var(--main-darker)
+  border-radius 6px
+  background var(--main)
+.sftp-safety-record-main
+  flex 1
+  min-width 0
+.sftp-safety-record-title
+  display flex
+  align-items center
+  min-width 0
+  font-weight 600
+  > span:last-child
+    overflow hidden
+    text-overflow ellipsis
+    white-space nowrap
+.sftp-safety-record-meta,
+.sftp-safety-record-path
+  margin-top 5px
+  color var(--text-light)
+  font-size 12px
+.sftp-safety-record-path
+  overflow hidden
+  text-overflow ellipsis
+  white-space nowrap
 .sftp-item
   position relative
   z-index 3

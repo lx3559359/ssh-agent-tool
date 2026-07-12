@@ -457,6 +457,27 @@ export default class SettingCommon extends Component {
     )
   }
 
+  renderUpdateSource () {
+    const value = this.props.config.updateSource || defaultSettings.updateSource
+    return (
+      <div className='pd2b'>
+        <span className='inline-title mg1r'>更新源</span>
+        <Select
+          onChange={v => this.onChangeValue(v, 'updateSource')}
+          popupMatchSelectWidth={false}
+          value={value}
+        >
+          <Option value='auto'>自动选择（推荐）</Option>
+          <Option value='modelscope'>ModelScope 国内源</Option>
+          <Option value='github'>GitHub</Option>
+        </Select>
+        <span className='mg1l color-grey'>
+          自动选择会优先使用国内源，失败后回退 GitHub；手动选择后只使用指定更新源。
+        </span>
+      </div>
+    )
+  }
+
   render () {
     const { ready } = this.state
     if (!ready) {
@@ -526,6 +547,7 @@ export default class SettingCommon extends Component {
           }, e('opacity'))
         }
         {this.renderUpdateChannel()}
+        {this.renderUpdateSource()}
 
         <div className='pd2b'>
           <span className='inline-title mg1r'>{e('uiThemes')}</span>

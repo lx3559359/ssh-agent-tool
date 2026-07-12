@@ -45,7 +45,7 @@ function getInfo (url) {
 }
 
 async function getApprovedReleaseInfo () {
-  for (const source of getUpdateReleaseSources()) {
+  for (const source of getUpdateReleaseSources(getConfiguredUpdateSource())) {
     const release = await getInfo(source.releaseApiUrl)
     const approvedRelease = await attachUpdateApprovalManifest(release, getInfo)
     if (approvedRelease?.tag_name) {
@@ -57,6 +57,10 @@ async function getApprovedReleaseInfo () {
     }
   }
   return null
+}
+
+function getConfiguredUpdateSource () {
+  return window.store?.config?.updateSource || 'auto'
 }
 
 function getConfiguredUpdateChannel () {

@@ -15,17 +15,14 @@ import { refs } from '../components/common/ref'
 import templates from '../components/quick-commands/templates'
 import { readClipboardAsync } from '../common/clipboard'
 
-// Function to parse templates in command string
 async function parseTemplates (cmd) {
   if (!cmd.includes('{{')) return cmd
 
-  // Process each template from templates.js
   for (const template of templates) {
     const placeholder = `{{${template}}}`
     if (cmd.includes(placeholder)) {
       let replacement = ''
 
-      // Handle each supported template using if-else
       if (template === 'clipboard') {
         replacement = await readClipboardAsync()
       } else if (template === 'time') {
@@ -33,13 +30,43 @@ async function parseTemplates (cmd) {
       } else if (template === 'date') {
         replacement = new Date().toLocaleDateString()
       }
-      // Add more conditions for any new templates as needed
 
       cmd = cmd.replaceAll(placeholder, replacement)
     }
   }
 
   return cmd
+}
+
+function normalizeCommandForShell (command) {
+  return isWin
+    ? command.replace(/\n/g, '\n\r')
+    : command
+}
+
+function getQuickCommandSteps (qm, options) {
+  if (options.commandText) {
+    return [
+      {
+        command: options.commandText,
+        id: generate(),
+        delay: 100
+      }
+    ]
+  }
+  if (qm?.commands) {
+    return qm.commands
+  }
+  if (qm?.command) {
+    return [
+      {
+        command: qm.command,
+        id: generate(),
+        delay: 100
+      }
+    ]
+  }
+  return []
 }
 
 export default Store => {
@@ -62,7 +89,7 @@ export default Store => {
     refs.get('term-' + tid)?.runQuickCommand(cmd, inputOnly)
   }
 
-  Store.prototype.runQuickCommandItem = debounce(async (id) => {
+  Store.prototype.runQuickCommandItem = debounce(async (id, options = {}) => {
     const {
       store
     } = window
@@ -70,7 +97,7 @@ export default Store => {
     const qm = store.currentQuickCommands.find(
       a => a.id === id
     )
-    if (qm?.confirmRequired) {
+    if (qm?.confirmRequired && !options.confirmed) {
       const ok = window.confirm
         ? window.confirm(`确认执行「${qm.name}」？该命令可能需要较高权限或产生较多输出。`)
         : true
@@ -78,32 +105,18 @@ export default Store => {
         return
       }
     }
-    const { runQuickCommand } = store
-    const qms = qm && qm.commands
-      ? qm.commands
-      : (qm && qm.command
-          ? [
-              {
-                command: qm.command,
-                id: generate(),
-                delay: 100
-              }
-            ]
-          : []
-        )
+    const qms = getQuickCommandSteps(qm, options)
     for (const q of qms) {
-      let realCmd = isWin
-        ? q.command.replace(/\n/g, '\n\r')
-        : q.command
-
-      // Parse templates
+      let realCmd = normalizeCommandForShell(q.command)
       realCmd = await parseTemplates(realCmd)
 
       await delay(q.delay || 100)
-      runQuickCommand(realCmd, qm.inputOnly)
-      store.editQuickCommand(qm.id, {
-        clickCount: ((qm.clickCount || 0) + 1)
-      })
+      store.runQuickCommand(realCmd, options.inputOnly ?? qm?.inputOnly)
+      if (qm) {
+        store.editQuickCommand(qm.id, {
+          clickCount: ((qm.clickCount || 0) + 1)
+        })
+      }
     }
   }, 200)
 

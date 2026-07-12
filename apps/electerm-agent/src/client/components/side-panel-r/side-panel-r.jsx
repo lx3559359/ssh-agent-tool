@@ -9,13 +9,22 @@ import {
 import {
   Typography,
   Flex,
-  Tag
+  Tag,
+  Select
 } from 'antd'
 import {
   minRightPanelWidth,
   getMaxRightPanelWidth,
   normalizeRightPanelWidth
 } from '../main/aigshell-layout'
+import {
+  getActiveAIConfig,
+  getAIModelOptions,
+  getAIModelStatus,
+  getAIProfileOptions,
+  migrateAIProfiles,
+  upsertAIProfile
+} from '../ai/ai-profiles'
 
 export default memo(function RightSidePanel (
   {
@@ -33,8 +42,13 @@ export default memo(function RightSidePanel (
   if (!rightPanelVisible) {
     return null
   }
+
   const isAI = rightPanelTab === 'ai'
-  const aiConfigured = Boolean(config.baseURLAI && config.apiKeyAI)
+  const activeAIConfig = isAI ? getActiveAIConfig(config) : config
+  const aiProfileOptions = isAI ? getAIProfileOptions(config) : []
+  const aiModelOptions = isAI ? getAIModelOptions(activeAIConfig) : []
+  const aiModelStatus = isAI ? getAIModelStatus(activeAIConfig) : null
+  const aiConfigured = Boolean(activeAIConfig.baseURLAI && activeAIConfig.apiKeyAI)
   const tag = isAI
     ? <Tag className='mg1r aigshell-ai-tag'>AI</Tag>
     : <InfoCircleOutlined className='mg1r' />
@@ -59,6 +73,66 @@ export default memo(function RightSidePanel (
     window.store.rightPanelPinned = !window.store.rightPanelPinned
   }
 
+  function handleActiveAIProfileChange (profileId) {
+    const next = migrateAIProfiles({
+      ...config,
+      activeAIProfileId: profileId
+    })
+    window.store.updateConfig(next)
+  }
+
+  function handleActiveAIModelChange (modelAI) {
+    const next = upsertAIProfile(config, {
+      ...activeAIConfig,
+      modelAI,
+      aiStatus: '',
+      aiStatusMessage: '',
+      aiStatusAt: '',
+      aiStatusFingerprint: ''
+    })
+    window.store.updateConfig(next)
+  }
+
+  function renderAIProfileSelect () {
+    if (!isAI || !aiProfileOptions.length) {
+      return (
+        <div className='right-panel-subtitle'>
+          {activeAIConfig.nameAI || title || 'AI 配置'}
+        </div>
+      )
+    }
+
+    return (
+      <Select
+        size='small'
+        className='right-panel-ai-profile-select'
+        value={activeAIConfig.activeAIProfileId}
+        options={aiProfileOptions}
+        onChange={handleActiveAIProfileChange}
+        popupMatchSelectWidth={false}
+        title='选择 AI API 配置'
+      />
+    )
+  }
+
+  function renderAIModelSelect () {
+    if (!isAI || !aiModelOptions.length) {
+      return null
+    }
+
+    return (
+      <Select
+        size='small'
+        className='right-panel-ai-model-select'
+        value={activeAIConfig.modelAI}
+        options={aiModelOptions}
+        onChange={handleActiveAIModelChange}
+        popupMatchSelectWidth={false}
+        title='选择当前 API 的模型'
+      />
+    )
+  }
+
   const panelProps = {
     className: 'right-side-panel animate-fast' + (rightPanelPinned ? ' right-side-panel-pinned' : ''),
     ref: panelRef,
@@ -79,12 +153,13 @@ export default memo(function RightSidePanel (
     onDragMove,
     left: false
   }
+
   return (
     <div
       {...panelProps}
     >
       <DragHandle {...dragProps} />
-      <Flex className='right-panel-title pd2' justify='space-between' align='center'>
+      <Flex className='right-panel-title pd2' justify='space-between' align='flex-start'>
         <div className='right-panel-title-main'>
           <Typography.Text className='right-panel-title-text' ellipsis>
             {tag} {isAI ? '助手' : title}
@@ -92,19 +167,23 @@ export default memo(function RightSidePanel (
           {
             isAI
               ? (
-                <div className='right-panel-subtitle'>
-                  {config.nameAI || title || '自定义模型'} / {config.modelAI || '未配置模型'}
-                </div>
+                <Flex className='right-panel-ai-selects right-panel-ai-config-card' gap={6} align='center'>
+                  {renderAIProfileSelect()}
+                  {renderAIModelSelect()}
+                </Flex>
                 )
               : null
           }
         </div>
-        <Flex>
+        <Flex className='right-panel-title-controls' align='center'>
           {
             isAI
               ? (
-                <Tag className={'right-panel-online' + (aiConfigured ? '' : ' not-configured')}>
-                  {aiConfigured ? '已配置' : '未配置'}
+                <Tag
+                  className={`right-panel-model-status ${aiModelStatus.className}${aiConfigured ? ' configured' : ''}`}
+                  title={aiModelStatus.title}
+                >
+                  {aiModelStatus.label}
                 </Tag>
                 )
               : null

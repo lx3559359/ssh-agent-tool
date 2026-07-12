@@ -134,12 +134,42 @@
   &:hover
     color var(--danger)
 
+.ai-attachment-upload-button
+  display inline-flex
+  align-items center
+  justify-content center
+  gap 4px
+  height 24px
+  padding 0 8px
+  border 1px solid var(--primary)
+  border-radius 6px
+  background var(--main)
+  color var(--primary)
+  font-size 12px
+  line-height 22px
+  cursor pointer
+  white-space nowrap
+  &:hover
+    background var(--primary)
+    color var(--primary-contrast)
+
 .ai-help-link
   color var(--text-dark)
   font-size 12px
   cursor pointer
   &:hover
     color var(--primary)
+
+.ai-config-inline-help
+  display grid
+  grid-template-columns 72% 28%
+  gap 8px
+  color var(--text-dark)
+  line-height 1.55
+  b
+    color var(--text)
+  @media (max-width: 780px)
+    grid-template-columns 1fr
 
 .code-block
   width 100%

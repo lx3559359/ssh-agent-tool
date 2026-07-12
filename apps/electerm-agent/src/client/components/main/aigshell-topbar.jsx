@@ -1,10 +1,12 @@
 import {
   ApiOutlined,
+  CodeOutlined,
   FolderAddOutlined,
   MessageOutlined,
   MoonOutlined,
   PlusCircleOutlined,
   ProfileOutlined,
+  QuestionCircleOutlined,
   ReloadOutlined,
   SettingOutlined,
   SunOutlined,
@@ -17,12 +19,14 @@ import WindowControl from '../tabs/window-control'
 import ConnectionInventoryModal from '../tree-list/connection-inventory-modal'
 import UpdateCenterModal from './update-center-modal'
 import ConnectionInfoModal from '../tree-list/connection-info-modal'
+import HelpCenterModal from './help-center-modal'
 import { logoPath1, packInfo, statusMap } from '../../common/constants'
 import './aigshell-topbar.styl'
 
 export default function AIGShellTopBar ({ store }) {
   const [showConnectionInventory, setShowConnectionInventory] = useState(false)
   const [showUpdateCenter, setShowUpdateCenter] = useState(false)
+  const [showHelpCenter, setShowHelpCenter] = useState(false)
   const [connectionInfoBookmark, setConnectionInfoBookmark] = useState(null)
   const currentTab = store.currentTab || {}
   const title = currentTab.title || currentTab.name || currentTab.host || '未连接'
@@ -69,6 +73,10 @@ export default function AIGShellTopBar ({ store }) {
     window.store.setTheme(isLightTheme ? 'default' : 'defaultLight')
   }
 
+  function handleOpenQuickCommands () {
+    window.store.openQuickCommandBar = true
+  }
+
   const actions = [
     {
       key: 'new',
@@ -82,6 +90,13 @@ export default function AIGShellTopBar ({ store }) {
       icon: <ThunderboltOutlined />,
       popover: <QuickConnect formOnly />,
       onClick: handleFastNew
+    },
+    {
+      key: 'quickCommands',
+      label: '快捷命令',
+      icon: <CodeOutlined />,
+      onClick: handleOpenQuickCommands,
+      primary: true
     },
     {
       key: 'ai',
@@ -124,6 +139,12 @@ export default function AIGShellTopBar ({ store }) {
       label: '设置',
       icon: <SettingOutlined />,
       onClick: window.store.openSetting
+    },
+    {
+      key: 'help',
+      label: '帮助',
+      icon: <QuestionCircleOutlined />,
+      onClick: () => setShowHelpCenter(true)
     }
   ]
 
@@ -134,7 +155,7 @@ export default function AIGShellTopBar ({ store }) {
         size='small'
         icon={item.icon}
         onClick={item.popover ? undefined : item.onClick}
-        className='aigshell-topbar-action'
+        className={'aigshell-topbar-action' + (item.primary ? ' aigshell-topbar-action-primary' : '')}
       >
         <span className='aigshell-topbar-action-label'>{item.label}</span>
       </Button>
@@ -195,6 +216,10 @@ export default function AIGShellTopBar ({ store }) {
       <UpdateCenterModal
         open={showUpdateCenter}
         onClose={handleCloseUpdateCenter}
+      />
+      <HelpCenterModal
+        open={showHelpCenter}
+        onClose={() => setShowHelpCenter(false)}
       />
     </div>
   )

@@ -11,6 +11,8 @@ const {
 } = require('./sftp-file')
 const { commonExtends } = require('./session-common.js')
 const { TerminalBase } = require('./session-base.js')
+const { pipeline } = require('stream/promises')
+const { posix: pathPosix } = require('path')
 const {
   getSizeCount,
   getSizeCountWin
@@ -339,10 +341,51 @@ class Sftp extends TerminalBase {
    * https://github.com/mscdex/ssh2/blob/master/SFTP.md
    * @return {Promise}
    */
-  cp (from, to) {
-    return this.buildRemoteCommand('cp', from, to)
-      .then(cmd => this.runExec(cmd))
-      .then(() => 1)
+  async cp (from, to) {
+    if (this.enableSsh) {
+      return this.buildRemoteCommand('cp', from, to)
+        .then(cmd => this.runExec(cmd))
+        .then(() => 1)
+    }
+    await this.copySftpEntry(from, to)
+    return 1
+  }
+
+  async copySftpFile (from, to, mode) {
+    const readStream = this.sftp.createReadStream(from)
+    const writeStream = this.sftp.createWriteStream(to, {
+      mode: mode & 0o7777
+    })
+    await pipeline(readStream, writeStream)
+  }
+
+  async copySftpDirectory (from, to, mode) {
+    await this.mkdir(to, {
+      mode: mode & 0o7777
+    }).catch(err => {
+      if (!/exist|failure/i.test(String(err?.message || err))) {
+        throw err
+      }
+    })
+    const entries = await this.list(from)
+    for (const entry of entries) {
+      const sourcePath = pathPosix.join(from, entry.name)
+      const targetPath = pathPosix.join(to, entry.name)
+      if (entry.type === 'd') {
+        await this.copySftpDirectory(sourcePath, targetPath, entry.mode)
+      } else {
+        await this.copySftpFile(sourcePath, targetPath, entry.mode)
+      }
+    }
+  }
+
+  async copySftpEntry (from, to) {
+    const sourceStat = await this.stat(from)
+    if (sourceStat.isDirectory) {
+      await this.copySftpDirectory(from, to, sourceStat.mode)
+    } else {
+      await this.copySftpFile(from, to, sourceStat.mode)
+    }
   }
 
   /**

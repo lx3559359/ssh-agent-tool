@@ -35,6 +35,7 @@ export default {
   saveTerminalLogToFile: false,
   checkUpdateOnStart: true,
   updateChannel: 'stable',
+  updateSource: 'auto',
   cursorBlink: false,
   cursorStyle: 'block',
   useSystemTitleBar: false,

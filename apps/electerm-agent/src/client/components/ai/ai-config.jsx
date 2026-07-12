@@ -25,7 +25,9 @@ import message from '../common/message'
 import {
   buildAIProfileFromValues,
   getActiveAIConfig,
+  getAIModelOptions,
   getAIProfileOptions,
+  getAIStatusFingerprint,
   migrateAIProfiles,
   removeAIProfile,
   upsertAIProfile
@@ -274,8 +276,11 @@ function getCleanMcpServers (servers = []) {
 }
 
 function uniqueOptions (items = []) {
-  return [...new Set(items.filter(Boolean))]
-    .sort((a, b) => a.localeCompare(b))
+  return [...new Set(
+    items
+      .map(item => String(item || '').trim())
+      .filter(Boolean)
+  )]
     .map(value => ({ value }))
 }
 
@@ -312,10 +317,10 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
         ...active
       })
       setProfileOptions(getAIProfileOptions(normalized))
-      setModelOptions(uniqueOptions([
-        active.modelAI,
-        ...popularModels
-      ]))
+      setModelOptions([
+        ...getAIModelOptions(normalized),
+        ...uniqueOptions(popularModels)
+      ])
     }
   }, [initialValues])
 
@@ -339,6 +344,21 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
     return next
   }
 
+  function saveProfileStatus (aiStatus, aiStatusMessage = '') {
+    const values = {
+      ...getCurrentFormValues(),
+      aiStatus,
+      aiStatusMessage: String(aiStatusMessage || ''),
+      aiStatusAt: Date.now()
+    }
+    values.aiStatusFingerprint = getAIStatusFingerprint(values)
+    const next = upsertAIProfile(values, buildAIProfileFromValues(values))
+    form.setFieldsValue(next)
+    syncProfileOptions(next)
+    window.store.updateConfig(migrateAIProfiles(next))
+    return next
+  }
+
   function handleProfileChange (profileId) {
     const saved = saveCurrentProfile()
     const next = {
@@ -352,10 +372,10 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
     }
     form.setFieldsValue(merged)
     syncProfileOptions(merged)
-    setModelOptions(uniqueOptions([
-      active.modelAI,
-      ...popularModels
-    ]))
+    setModelOptions([
+      ...getAIModelOptions(merged),
+      ...uniqueOptions(popularModels)
+    ])
   }
 
   function handleAddProfile () {
@@ -366,6 +386,7 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
       baseURLAI: '',
       apiPathAI: '',
       modelAI: '',
+      modelOptionsAI: [],
       roleAI: saved.roleAI || '',
       apiKeyAI: '',
       authHeaderNameAI: 'Authorization: Bearer',
@@ -390,14 +411,15 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
     }
     form.setFieldsValue(merged)
     syncProfileOptions(merged)
-    setModelOptions(uniqueOptions([
-      active.modelAI,
-      ...popularModels
-    ]))
+    setModelOptions([
+      ...getAIModelOptions(merged),
+      ...uniqueOptions(popularModels)
+    ])
   }
 
   const handleSubmit = async (values) => {
     const cleanValues = {
+      ...getCurrentFormValues(),
       ...values,
       apiPathAI: values.apiPathAI || '',
       agentSkills: getCleanAgentSkills(values.agentSkills),
@@ -421,6 +443,11 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
       baseURLAI: preset.baseURLAI,
       apiPathAI: preset.apiPathAI,
       modelAI: preset.modelAI,
+      modelOptionsAI: [],
+      aiStatus: '',
+      aiStatusMessage: '',
+      aiStatusAt: '',
+      aiStatusFingerprint: '',
       authHeaderNameAI: preset.authHeaderNameAI
     }
     form.setFieldsValue(nextValues)
@@ -448,10 +475,13 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
         values.authHeaderNameAI
       )
       if (res && res.error) {
+        saveProfileStatus('error', res.error)
         message.error(res.error)
       } else if (res && res.response) {
+        saveProfileStatus('available', '测试连接成功')
         message.success('模型 API 配置可用')
       } else {
+        saveProfileStatus('error', '模型 API 返回异常')
         message.error('模型 API 返回异常')
       }
     } catch (err) {
@@ -476,18 +506,24 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
         allValues.authHeaderNameAI
       )
       if (res?.error) {
+        saveProfileStatus('error', `拉取模型失败：${res.error}`)
         return message.error(`拉取模型失败：${res.error}`)
       }
       const models = res?.models || []
       if (!models.length) {
+        saveProfileStatus('error', '未获取到模型列表')
         return message.warning('未获取到模型列表，请确认该接口兼容 /models 或 Ollama /api/tags。')
       }
       const options = uniqueOptions(models)
       setModelOptions(options)
       const currentModel = form.getFieldValue('modelAI')
-      if (!currentModel && options[0]) {
-        form.setFieldsValue({ modelAI: options[0].value })
-      }
+      const modelOptionsAI = options.map(item => item.value)
+      const modelAI = currentModel || modelOptionsAI[0] || ''
+      form.setFieldsValue({
+        modelAI,
+        modelOptionsAI
+      })
+      saveProfileStatus('available', `已获取 ${options.length} 个模型`)
       message.success(`已获取 ${options.length} 个模型`)
     } catch (err) {
       if (err.message) {
@@ -501,10 +537,10 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
   function handleSelectHistory (item) {
     if (item && typeof item === 'object') {
       form.setFieldsValue(item)
-      setModelOptions(uniqueOptions([
-        item.modelAI,
-        ...popularModels
-      ]))
+      setModelOptions([
+        ...getAIModelOptions(item),
+        ...uniqueOptions(popularModels)
+      ])
     }
   }
 
@@ -539,6 +575,7 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
         title={
           <Link to={aiConfigWikiLink}>模型 API 配置说明：{aiConfigWikiLink}</Link>
         }
+        description='AI 使用说明：先选择服务商模板或直接填写 API 地址和 API 密钥；点击“拉取模型”后会保存该接口返回的模型列表；保存后可在右侧 AI 助手顶部切换 API 配置和模型。API 路径、模型、角色、语言、Header、Skill、MCP 和代理都为可选高级项。'
         type='info'
         className='mg2y'
       />
@@ -556,7 +593,10 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
         layout='vertical'
         className='ai-config-form'
       >
-        <Form.Item label='API 配置'>
+        <Form.Item
+          label='API 配置'
+          extra='管理多组 API / 中转站配置，右侧 AI 助手可在不同配置之间切换。'
+        >
           <Space.Compact className='width-100'>
             <Select
               value={activeAIProfileId}
@@ -582,7 +622,10 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
           </Space.Compact>
         </Form.Item>
 
-        <Form.Item label='服务商模板'>
+        <Form.Item
+          label='服务商模板'
+          extra='快速填入常见官方模型或中转站地址；不在列表中也可以不选模板，直接自定义 API 地址和密钥。'
+        >
           <Select
             showSearch
             allowClear
@@ -599,12 +642,26 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
         <Form.Item
           label='配置名称'
           name='nameAI'
+          extra='给当前 API 起一个便于识别的名字，例如“公司中转站”“本地 Ollama”。右侧 AI 助手左侧下拉只显示这个名称。'
         >
           <Input
             placeholder='例如：DeepSeek 中转、Ollama 本地（可选）'
           />
         </Form.Item>
-        <Form.Item label={renderApiUrlLabel()} required>
+        <Form.Item
+          label={renderApiUrlLabel()}
+          required
+          extra={
+            <div className='ai-config-inline-help'>
+              <div>
+                <b>API 地址：</b>必填，可填写基础地址、带 /v1 的地址，或完整 chat/completions 地址。
+              </div>
+              <div>
+                <b>API 路径：</b>可选，留空时自动识别；特殊网关才需要手动指定路径。
+              </div>
+            </div>
+          }
+        >
           <Space.Compact className='width-100'>
             <Form.Item
               label='API 地址'
@@ -634,6 +691,7 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
         </Form.Item>
         <Form.Item
           label={e('modelAi')}
+          extra='可选但建议填写。点击“拉取模型”会读取当前 API 可用模型并保存列表，之后可在右侧 AI 助手顶部右侧下拉自由切换模型。'
         >
           <Space.Compact className='width-100'>
             <Form.Item
@@ -661,6 +719,7 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
         <Form.Item
           label='API 密钥'
           name='apiKeyAI'
+          extra='必填，用于请求模型接口；不同服务商和中转站的 Key 需要分别配置，仅保存在本机配置中。'
           rules={[{ required: true, message: '请输入 API 密钥' }]}
         >
           <Password placeholder='输入你的 API 密钥' />
@@ -669,6 +728,7 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
         <Form.Item
           label='认证 Header'
           name='authHeaderNameAI'
+          extra='可选。大多数 OpenAI 兼容接口保持 Authorization: Bearer 即可；少数服务商可能要求 x-api-key、api-key 或自定义 Header。'
           tooltip='API 认证 Header 格式。例如：Authorization: Bearer 会发送 Authorization: Bearer <key>；x-api-key 会发送 x-api-key: <key>'
         >
           <AutoComplete
@@ -682,6 +742,7 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
         <Form.Item
           label={e('roleAI')}
           name='roleAI'
+          extra='可选。用于定义 AI 助手的身份和回答方式，例如 SSH 运维专家、数据库排查专家；会影响对话和命令建议的风格。'
         >
           <AutoComplete options={defaultRoles} placement='topLeft'>
             <Input.TextArea
@@ -694,6 +755,7 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
         <Form.Item
           label={e('language')}
           name='languageAI'
+          extra='可选。指定 AI 默认回答语言；留空或使用客户端默认语言时，通常按当前界面语言回复。'
         >
           <AutoComplete options={defaultLangs} placement='topLeft'>
             <Input
@@ -702,7 +764,10 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
           </AutoComplete>
         </Form.Item>
 
-        <Form.Item label='Agent Skill'>
+        <Form.Item
+          label='Agent Skill'
+          extra='可选。给 Agent 增加自定义排查技能，例如 Nginx 502、Redis 慢查询、Docker 异常；技能会作为排查提示词参与 AI 分析。'
+        >
           <Form.List name='agentSkills'>
             {(fields, { add, remove }) => (
               <Space direction='vertical' className='width-100'>
@@ -770,7 +835,10 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
           </Form.List>
         </Form.Item>
 
-        <Form.Item label='MCP Server'>
+        <Form.Item
+          label='MCP Server'
+          extra='可选。登记可供 Agent 参考或后续接入的外部 MCP 工具，例如 CMDB、Prometheus、知识库；当前会作为上下文和能力说明传给 AI。'
+        >
           <Form.List name='mcpServers'>
             {(fields, { add, remove }) => (
               <Space direction='vertical' className='width-100'>
@@ -848,6 +916,7 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
         <Form.Item
           label={e('proxy')}
           name='proxyAI'
+          extra='可选，仅影响模型 API 网络请求，不影响 SSH/SFTP 连接。当模型 API 在当前网络无法直连时填写代理地址，例如 socks5://127.0.0.1:1080。'
           tooltip='模型 API 请求使用的代理，例如 socks5://127.0.0.1:1080'
         >
           <AutoComplete

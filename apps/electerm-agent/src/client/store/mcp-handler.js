@@ -10,7 +10,8 @@ import { runCmd } from '../components/terminal/terminal-apis'
 import deepCopy from 'json-deep-copy'
 import {
   getLocalFileInfo,
-  getRemoteFileInfo
+  getRemoteFileInfo,
+  getFolderFromFilePath
 } from '../components/sftp/file-read'
 import {
   fixBookmarkData,
@@ -915,7 +916,7 @@ export default Store => {
     if (!sftpEntry || !sftpEntry.sftp) {
       throw new Error(`SFTP not initialized for tab "${resolvedTabId}". Open the SFTP panel first.`)
     }
-    return { sftp: sftpEntry.sftp, tab, tabId: resolvedTabId }
+    return { sftp: sftpEntry.sftp, sftpEntry, tab, tabId: resolvedTabId }
   }
 
   Store.prototype.mcpSftpList = async function (args) {
@@ -949,7 +950,7 @@ export default Store => {
   }
 
   Store.prototype.mcpSftpDel = async function (args) {
-    const { sftp, tab, tabId } = window.store.mcpGetSshSftpRef(args.tabId)
+    const { sftp, sftpEntry, tab, tabId } = window.store.mcpGetSshSftpRef(args.tabId)
     const remotePath = args.remotePath
     if (!remotePath) {
       throw new Error('remotePath is required')
@@ -959,12 +960,23 @@ export default Store => {
     const isDirectory = typeof stat.isDirectory === 'function'
       ? stat.isDirectory()
       : !!stat.isDirectory
-    if (isDirectory) {
-      await sftp.rmdir(remotePath)
-    } else {
-      await sftp.rm(remotePath)
+    const file = {
+      ...getFolderFromFilePath(remotePath, true),
+      type: 'remote',
+      isDirectory
     }
-    return { success: true, tabId, host: tab.host, path: remotePath, type: isDirectory ? 'directory' : 'file' }
+    const success = await sftpEntry.delFiles('remote', [file])
+    return {
+      success,
+      recoverable: Boolean(success),
+      tabId,
+      host: tab.host,
+      path: remotePath,
+      type: isDirectory ? 'directory' : 'file',
+      message: success
+        ? '已移入 ShellPilot SFTP 安全回收区，可在安全操作中心恢复。'
+        : '用户已取消安全删除。'
+    }
   }
 
   // ==================== File Transfer APIs ====================

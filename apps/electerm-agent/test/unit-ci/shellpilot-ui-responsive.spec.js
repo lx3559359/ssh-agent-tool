@@ -40,12 +40,18 @@ test('right panel width and SFTP list height are bounded for small windows', () 
   assert.match(sftp, /Math\.max\(0, height - 42 - 30 - 32 - 90\)/)
 })
 
-test('AI panel reports configuration state instead of claiming it is always online', () => {
+test('AI panel reports tested model state instead of claiming it is always online', () => {
   const source = readClient('components/side-panel-r/side-panel-r.jsx')
+  const style = readClient('components/side-panel-r/right-side-panel.styl')
 
   assert.match(source, /aiConfigured/)
-  assert.match(source, /已配置/)
-  assert.match(source, /未配置/)
+  assert.match(source, /getAIModelStatus/)
+  assert.match(source, /right-panel-model-status/)
   assert.doesNotMatch(source, />在线</)
   assert.match(source, /right-side-panel-content-ai/)
+  assert.match(source, /right-panel-ai-config-card/)
+  assert.match(source, /right-panel-title-controls/)
+  assert.match(style, /\.right-side-panel[\s\S]*display flex/)
+  assert.match(style, /\.right-side-panel-content[\s\S]*position static/)
+  assert.match(style, /\.right-panel-ai-config-card/)
 })

@@ -25,8 +25,8 @@ function appendUpdateCacheBuster (url, now = Date.now()) {
   return `${url}${url.includes('?') ? '&' : '?'}_=${now}`
 }
 
-function getUpdateReleaseSources () {
-  return [
+function getUpdateReleaseSources (preference = 'auto') {
+  const sources = [
     {
       id: 'modelscope',
       label: 'ModelScope 国内更新源',
@@ -40,6 +40,9 @@ function getUpdateReleaseSources () {
       feedConfig: githubFeedConfig
     }
   ]
+  return ['modelscope', 'github'].includes(preference)
+    ? sources.filter(source => source.id === preference)
+    : sources
 }
 
 module.exports = {

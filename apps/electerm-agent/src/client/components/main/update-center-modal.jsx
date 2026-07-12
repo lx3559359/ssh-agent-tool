@@ -1,4 +1,4 @@
-import { Button, Progress } from 'antd'
+import { Button, Progress, Select } from 'antd'
 import { ReloadOutlined, UpCircleOutlined } from '@ant-design/icons'
 import { auto } from 'manate/react'
 import Modal from '../common/modal'
@@ -34,9 +34,14 @@ export default auto(function UpdateCenterModal ({ open, onClose }) {
     : '尚未检查'
   const canDownload = info.shouldUpgrade && info.canAutoUpgrade && !info.upgradeReady
   const manualDownloadUrl = info.manualDownloadUrl || packInfo.releases
+  const updateSource = window.store.config?.updateSource || 'auto'
 
   const handleCheck = () => window.store.onCheckUpdate(true)
   const handleUpgrade = () => refsStatic.get('upgrade')?.doUpgrade()
+  const handleUpdateSourceChange = (value) => {
+    window.store.setConfig({ updateSource: value })
+    window.store.upgradeInfo.updateSource = value
+  }
 
   return (
     <Modal
@@ -56,6 +61,19 @@ export default auto(function UpdateCenterModal ({ open, onClose }) {
       {info.updateMessage
         ? <p className='update-center-message'>{info.updateMessage}</p>
         : null}
+      <div className='update-center-source'>
+        <span>更新源</span>
+        <Select
+          value={updateSource}
+          onChange={handleUpdateSourceChange}
+          options={[
+            { value: 'auto', label: '自动选择（国内源优先）' },
+            { value: 'modelscope', label: 'ModelScope 国内源' },
+            { value: 'github', label: 'GitHub' }
+          ]}
+        />
+        <span className='color-grey'>切换后点击“重新检查”</span>
+      </div>
       <div className='update-center-section'>
         <div className='update-center-section-title'>下载进度</div>
         <Progress percent={percent} status={info.error ? 'exception' : undefined} />

@@ -266,6 +266,53 @@ async function startSftpServer (root) {
 }
 
 describe('session-sftp transport flows', () => {
+  test('copies files and folders when the connection only exposes SFTP', async () => {
+    const root = makeTmpDir()
+    const server = await startSftpServer(root)
+    let term
+    let sftp
+    try {
+      term = await session({
+        host: '127.0.0.1',
+        port: server.port,
+        username: USERNAME,
+        password: PASSWORD,
+        useSshAgent: false,
+        enableSsh: false,
+        readyTimeout: 5000
+      }, createPromptWs())
+      sftp = new Sftp({
+        uid: 'sftp-copy-only-session-ci',
+        terminalId: term.pid,
+        enableSsh: false
+      })
+      await sftp.connect(sftp.initOptions)
+
+      await sftp.mkdir('/source')
+      await sftp.mkdir('/source/nested')
+      await sftp.writeFile('/source/app.conf', 'copy me')
+      const binary = createPatternBuffer(256 * 1024, 31)
+      fs.writeFileSync(toLocalPath(root, '/source/nested/data.bin'), binary)
+      await sftp.mkdir('/backups')
+
+      await sftp.cp('/source', '/backups/source-copy')
+
+      assert.equal(
+        await sftp.readFile('/backups/source-copy/app.conf'),
+        'copy me'
+      )
+      assert.deepEqual(
+        fs.readFileSync(toLocalPath(root, '/backups/source-copy/nested/data.bin')),
+        binary
+      )
+    } finally {
+      sftp && sftp.kill()
+      term && term.kill()
+      await server.close()
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   test('performs core SFTP file operations over an SSH session', async () => {
     const root = makeTmpDir()
     const server = await startSftpServer(root)

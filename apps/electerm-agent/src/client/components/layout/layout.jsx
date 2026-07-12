@@ -168,6 +168,8 @@ export default auto(function Layout (props) {
     'inActiveTerminal',
     'leftSidebarWidth',
     'openedSideBar',
+    'rightPanelVisible',
+    'rightPanelWidth',
     'currentQuickCommands'
   ])
   const sessionsProps = {
@@ -211,6 +213,7 @@ export default auto(function Layout (props) {
     <QuickCommandsFooterBox
       key='QuickCommandsFooterBox'
       {...qmProps}
+      currentTab={currentTab}
     />,
     <Footer
       key='Footer'

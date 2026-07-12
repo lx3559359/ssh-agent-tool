@@ -282,7 +282,7 @@ export const agentTools = [
     type: 'function',
     function: {
       name: 'sftp_del',
-      description: '通过 SFTP 删除远程文件或目录。',
+      description: '通过 SFTP 安全删除远程文件或目录。执行前必须由用户确认，内容会移入安全回收区并可在安全操作中心恢复。',
       parameters: {
         type: 'object',
         properties: {

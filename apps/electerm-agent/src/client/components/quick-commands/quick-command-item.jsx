@@ -18,7 +18,16 @@ export default class QuickCommandsItem extends PureComponent {
   }
 
   render () {
-    const { name, id, shortcut } = this.props.item
+    const {
+      name,
+      id,
+      shortcut,
+      description,
+      usage,
+      labels = [],
+      editBeforeRun,
+      confirmRequired
+    } = this.props.item
     const {
       draggable,
       handleDragOver,
@@ -40,12 +49,46 @@ export default class QuickCommandsItem extends PureComponent {
       onDragLeave: handleDragLeave,
       onDrop: handleDrop
     }
+    const visibleLabels = labels
+      .filter(label => !['内置', '服务器维护'].includes(label))
+      .slice(0, 2)
     return (
       <Button
         key={id}
         {...btnProps}
       >
-        {name}
+        <span className='qm-item-content'>
+          <span className='qm-item-head'>
+            <span className='qm-item-title'>{name}</span>
+            {
+              editBeforeRun
+                ? <span className='qm-item-pill qm-item-pill-warn'>先编辑</span>
+                : null
+            }
+            {
+              confirmRequired && !editBeforeRun
+                ? <span className='qm-item-pill qm-item-pill-warn'>需确认</span>
+                : null
+            }
+          </span>
+          {
+            description
+              ? <span className='qm-item-desc'>{description}</span>
+              : null
+          }
+          {
+            usage
+              ? <span className='qm-item-usage'>{usage}</span>
+              : null
+          }
+          <span className='qm-item-meta'>
+            {
+              visibleLabels.map(label => (
+                <span className='qm-item-pill' key={label}>{label}</span>
+              ))
+            }
+          </span>
+        </span>
       </Button>
     )
   }

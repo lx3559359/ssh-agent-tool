@@ -97,7 +97,8 @@ export default class Upgrade extends PureComponent {
     const updateOptions = {
       proxy,
       config: {
-        updateChannel: window.store.config?.updateChannel
+        updateChannel: window.store.config?.updateChannel,
+        updateSource: window.store.config?.updateSource || 'auto'
       }
     }
     try {

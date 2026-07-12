@@ -13,6 +13,7 @@ test('update channel defaults to stable in main and renderer settings', () => {
 
   for (const source of [mainDefaults, rendererDefaults]) {
     assert.match(source, /updateChannel:\s*'stable'/)
+    assert.match(source, /updateSource:\s*'auto'/)
   }
 })
 
@@ -25,4 +26,9 @@ test('common settings page exposes stable and beta update channels', () => {
   assert.match(source, /\u6d4b\u8bd5\u7248/)
   assert.match(source, /value='stable'/)
   assert.match(source, /value='beta'/)
+  assert.match(source, /renderUpdateSource/)
+  assert.match(source, /更新源/)
+  assert.match(source, /value='auto'/)
+  assert.match(source, /value='modelscope'/)
+  assert.match(source, /value='github'/)
 })

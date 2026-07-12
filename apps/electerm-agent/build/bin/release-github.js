@@ -13,6 +13,13 @@ const repo = process.env.GITHUB_REPOSITORY || 'lx3559359/ssh-agent-tool'
 const distDir = path.resolve(__dirname, '../../dist')
 const dryRun = process.argv.includes('--dry-run')
 const releaseProductName = pack.productName || 'ShellPilot'
+const releaseNotesPath = path.resolve(__dirname, '../../docs/releases', `v${pack.version}.md`)
+
+function getReleaseNotes () {
+  return fs.existsSync(releaseNotesPath)
+    ? fs.readFileSync(releaseNotesPath, 'utf8').trim()
+    : `${releaseProductName} Windows release v${pack.version}`
+}
 
 function run (command, args, options = {}) {
   const res = spawnSync(command, args, createSpawnOptions(options))
@@ -38,7 +45,7 @@ function main () {
     repo,
     tag,
     title: `${releaseProductName} ${tag}`,
-    notes: `${releaseProductName} Windows release ${tag}`,
+    notes: getReleaseNotes(),
     assets
   })
 
