@@ -184,7 +184,8 @@ test('ModelScope release sync workflow mirrors approved GitHub release assets', 
   assert.match(workflow, /gh release download "v\$\{\{\s*github\.event\.inputs\.version\s*\}\}"/)
   assert.match(workflow, /ShellPilot-\$\{\{\s*github\.event\.inputs\.version\s*\}\}-win-x64-installer\.exe/)
   assert.match(workflow, /shellpilot-local\.yml/)
-  assert.match(workflow, /npm run release:modelscope/)
+  assert.match(workflow, /pip install modelscope-hub/)
+  assert.match(workflow, /npm run release:modelscope:hub/)
   assert.match(workflow, /npm run release:update-sources:verify/)
 })
 

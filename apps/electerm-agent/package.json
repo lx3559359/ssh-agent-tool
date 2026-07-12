@@ -42,6 +42,7 @@
     "release:prepare-assets": "node build/bin/prepare-update-assets.js",
     "release:local:verify": "node build/bin/verify-local-release-assets.js",
     "release:modelscope": "node build/bin/sync-modelscope-release.js",
+    "release:modelscope:hub": "python build/bin/sync-modelscope-release-hub.py",
     "release:update-sources:verify": "node build/bin/verify-online-update-sources.js",
     "w": "./build/bin/web-release",
     "t": "electron work/app/app.js",

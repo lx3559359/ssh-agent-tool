@@ -1,5 +1,6 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
+const fs = require('node:fs')
 const path = require('node:path')
 const { spawnSync } = require('node:child_process')
 
@@ -84,6 +85,27 @@ test('ModelScope release sync can target an explicit published version from CI',
     '0.3.5'
   )
   assert.equal(resolveModelScopeReleaseVersion({}, '0.3.4'), '0.3.4')
+})
+
+test('ModelScope Hub uploader uses API token file upload instead of git credentials', () => {
+  const source = fs.readFileSync(
+    path.resolve(__dirname, '../../build/bin/sync-modelscope-release-hub.py'),
+    'utf8'
+  )
+  const pack = JSON.parse(fs.readFileSync(
+    path.resolve(__dirname, '../../package.json'),
+    'utf8'
+  ))
+
+  assert.match(source, /from modelscope_hub import HubApi/)
+  assert.match(source, /upload_file/)
+  assert.match(source, /MODELSCOPE_TOKEN/)
+  assert.doesNotMatch(source, /git push/)
+  assert.doesNotMatch(source, /GIT_ASKPASS/)
+  assert.equal(
+    pack.scripts['release:modelscope:hub'],
+    'python build/bin/sync-modelscope-release-hub.py'
+  )
 })
 
 test('ModelScope release sync prints a concise token error for operators', () => {
