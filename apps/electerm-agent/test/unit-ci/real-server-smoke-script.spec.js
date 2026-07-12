@@ -448,6 +448,20 @@ test('real-server smoke flow covers SSH, SFTP, Unicode, large binary, and safety
   }
 })
 
+test('real-server smoke flow verifies the server status scan is read-only', () => {
+  assert.match(source, /read-only server status scan/)
+  assert.match(source, /createServerStatusProbeCommands/)
+  assert.match(source, /captureServerStatusFingerprint/)
+  assert.match(source, /systemctl list-unit-files --type=service/)
+  assert.match(source, /ip route show/)
+  assert.match(source, /nft -s list ruleset/)
+  assert.match(source, /Generated\|Completed/)
+  assert.match(source, /fingerprintBefore === fingerprintAfter/)
+  assert.match(source, /probeResults\.length === 7/)
+  assert.match(source, /result\.id === 'services'/)
+  assert.doesNotMatch(source, /serverStatus[^\n]*(?:sudo|rm\s+-|mv\s+|cp\s+|mkdir|touch|sed\s+-i)/i)
+})
+
 test('critical failures set a nonzero exit code and finally verifies remote cleanup', () => {
   assert.match(source, /function record[\s\S]*process\.exitCode = 1/)
   assert.match(source, /finally\s*{/)

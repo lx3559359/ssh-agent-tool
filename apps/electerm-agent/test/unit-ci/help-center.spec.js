@@ -40,6 +40,10 @@ test('top bar exposes an in-client Chinese help center', () => {
   assert.match(help, /全部服务器/)
   assert.match(help, /失败记录/)
   assert.match(help, /保留新配置/)
+  assert.match(help, /服务器状态中心/)
+  assert.match(help, /平台与服务自动识别/)
+  assert.match(help, /权限受限/)
+  assert.match(help, /发送给 AI/)
 })
 
 test('repository includes an offline Chinese user guide', () => {
@@ -54,6 +58,8 @@ test('repository includes an offline Chinese user guide', () => {
   assert.match(guide, /端口转发/)
   assert.match(guide, /大日志与压缩日志/)
   assert.match(guide, /常见问题/)
+  assert.match(guide, /服务器状态中心/)
+  assert.match(guide, /平台与服务自动识别/)
 })
 
 test('AI configuration uses ShellPilot inline guidance without upstream wiki branding', () => {

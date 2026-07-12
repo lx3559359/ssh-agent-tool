@@ -12,10 +12,11 @@ export function createTerm (body) {
   })
 }
 
-export function runCmd (pid, cmd) {
+export function runCmd (pid, cmd, options = {}) {
   return fetch({
     pid,
     cmd,
+    timeoutMs: options.timeoutMs,
     action: 'run-cmd'
   })
 }

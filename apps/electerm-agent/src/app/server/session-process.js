@@ -207,11 +207,11 @@ exports.terminals = function (pid) {
   }
 
   return {
-    runCmd: async (cmd, id) => {
+    runCmd: async (cmd, id, timeoutMs) => {
       return sendMsgToChildProcess(pid, {
         id,
         action: 'run-cmd',
-        body: { cmd, pid }
+        body: { cmd, pid, timeoutMs }
       })
     },
     resize: (cols, rows, id) => {

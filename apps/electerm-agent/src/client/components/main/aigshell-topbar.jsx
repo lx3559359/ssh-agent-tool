@@ -1,6 +1,7 @@
 import {
   ApiOutlined,
   CodeOutlined,
+  DashboardOutlined,
   FolderAddOutlined,
   MessageOutlined,
   MoonOutlined,
@@ -14,6 +15,7 @@ import {
   ThunderboltOutlined
 } from '@ant-design/icons'
 import { useEffect, useState } from 'react'
+import { auto } from 'manate/react'
 import { Button, Popover, Tooltip } from 'antd'
 import QuickConnect from '../tabs/quick-connect'
 import WindowControl from '../tabs/window-control'
@@ -22,18 +24,25 @@ import UpdateCenterModal from './update-center-modal'
 import ConnectionInfoModal from '../tree-list/connection-info-modal'
 import HelpCenterModal from './help-center-modal'
 import SafetyOperationCenterModal from './safety-operation-center-modal'
+import ServerStatusModal from '../server-status/server-status-modal'
 import { logoPath1, packInfo, statusMap } from '../../common/constants'
 import './aigshell-topbar.styl'
 
-export default function AIGShellTopBar ({ store }) {
+export default auto(function AIGShellTopBar ({ store }) {
   const [showConnectionInventory, setShowConnectionInventory] = useState(false)
   const [showUpdateCenter, setShowUpdateCenter] = useState(false)
   const [showHelpCenter, setShowHelpCenter] = useState(false)
   const [showSafetyCenter, setShowSafetyCenter] = useState(false)
+  const [showServerStatus, setShowServerStatus] = useState(false)
   const [connectionInfoBookmark, setConnectionInfoBookmark] = useState(null)
-  const currentTab = store.currentTab || {}
+  const currentTab = store.tabs.find(tab => tab.id === store.activeTabId) || store.currentTab || {}
   const title = currentTab.title || currentTab.name || currentTab.host || '未连接'
   const online = currentTab.status === statusMap.success
+  const serverStatusAvailable = Boolean(
+    online &&
+    currentTab.host &&
+    (currentTab.type === 'ssh' || currentTab.type === undefined)
+  )
 
   useEffect(() => {
     const openSafetyCenter = () => setShowSafetyCenter(true)
@@ -87,6 +96,13 @@ export default function AIGShellTopBar ({ store }) {
   }
 
   const actions = [
+    {
+      key: 'serverStatus',
+      label: '服务器状态',
+      icon: <DashboardOutlined />,
+      onClick: () => setShowServerStatus(true),
+      disabled: !serverStatusAvailable
+    },
     {
       key: 'new',
       label: '新建',
@@ -169,6 +185,7 @@ export default function AIGShellTopBar ({ store }) {
         type='text'
         size='small'
         icon={item.icon}
+        disabled={item.disabled}
         onClick={item.popover ? undefined : item.onClick}
         className={'aigshell-topbar-action' + (item.primary ? ' aigshell-topbar-action-primary' : '')}
       >
@@ -241,6 +258,12 @@ export default function AIGShellTopBar ({ store }) {
         onClose={() => setShowSafetyCenter(false)}
         store={store}
       />
+      <ServerStatusModal
+        open={showServerStatus}
+        onClose={() => setShowServerStatus(false)}
+        store={store}
+        tab={currentTab}
+      />
     </div>
   )
-}
+})

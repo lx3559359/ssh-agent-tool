@@ -29,20 +29,44 @@ exports.commonExtends = function (Cls) {
     }
   }
 
-  Cls.prototype.runCmd = function (cmd, conn) {
+  Cls.prototype.runCmd = function (cmd, conn, options = {}) {
     return new Promise((resolve, reject) => {
       const client = conn || this.conn || this.client
       client.exec(cmd, this.getExecOpts(), (err, stream) => {
-        if (err) reject(err)
+        if (err) {
+          reject(err)
+          return
+        }
         if (stream) {
           let r = ''
+          let settled = false
+          let timer
+          const finish = (callback, value) => {
+            if (settled) return
+            settled = true
+            clearTimeout(timer)
+            callback(value)
+          }
+          const timeoutMs = Number(options.timeoutMs)
+          if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
+            timer = setTimeout(() => {
+              const error = new Error(`Command timed out after ${timeoutMs}ms`)
+              error.name = 'RunCmdTimeoutError'
+              finish(reject, error)
+              if (typeof stream.close === 'function') stream.close()
+              else if (typeof stream.destroy === 'function') stream.destroy()
+            }, timeoutMs)
+          }
           stream
             .on('data', function (data) {
               const d = data.toString()
               r = r + d
             })
+            .on('error', error => {
+              finish(reject, error)
+            })
             .on('close', (code, signal) => {
-              resolve(r)
+              finish(resolve, r)
             })
         } else {
           resolve('')

@@ -8,11 +8,11 @@ const {
 const { startSession } = require('./session')
 
 async function runCmd (body) {
-  const { pid, cmd } = body
+  const { pid, cmd, timeoutMs } = body
   const term = terminals(pid)
   let txt = ''
   if (term) {
-    txt = await term.runCmd(cmd)
+    txt = await term.runCmd(cmd, undefined, { timeoutMs })
   }
   return txt
 }
