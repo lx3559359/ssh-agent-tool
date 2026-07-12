@@ -54,7 +54,18 @@ test('AI chat copy is readable Simplified Chinese', () => {
   assert.match(chat, /引用终端/)
   assert.match(chat, /引用选中/)
   assert.match(chat, /生成命令/)
-  assert.match(chat, />帮助</)
+  assert.doesNotMatch(chat, /ai-help-link/)
+  assert.doesNotMatch(chat, />帮助</)
+})
+
+test('only the ShellPilot top bar renders desktop window controls', () => {
+  const topbar = read('src/client/components/main/aigshell-topbar.jsx')
+  const tabs = read('src/client/components/tabs/index.jsx')
+
+  assert.match(topbar, /import WindowControl/)
+  assert.match(topbar, /<WindowControl store=\{store\}/)
+  assert.doesNotMatch(tabs, /import WindowControl/)
+  assert.doesNotMatch(tabs, /renderWindowControl/)
 })
 
 test('AIGShell top bar labels avoid ambiguous unfinished actions', () => {

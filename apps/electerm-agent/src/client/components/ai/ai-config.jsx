@@ -15,9 +15,6 @@ import {
 import { useEffect, useMemo, useState } from 'react'
 import Link from '../common/external-link'
 import AiCache from './ai-cache'
-import {
-  aiConfigWikiLink
-} from '../../common/constants'
 import { normalizeAIEndpoint } from '../../common/ai-endpoint'
 import Password from '../common/password'
 import AiHistory, { addHistoryItem } from './ai-history'
@@ -572,10 +569,8 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
   return (
     <>
       <Alert
-        title={
-          <Link to={aiConfigWikiLink}>模型 API 配置说明：{aiConfigWikiLink}</Link>
-        }
-        description='AI 使用说明：先选择服务商模板或直接填写 API 地址和 API 密钥；点击“拉取模型”后会保存该接口返回的模型列表；保存后可在右侧 AI 助手顶部切换 API 配置和模型。API 路径、模型、角色、语言、Header、Skill、MCP 和代理都为可选高级项。'
+        title='模型 API 快速配置'
+        description='只需先填写 API 地址和 API 密钥，再点击“拉取模型”和“保存”即可使用。保存后可在右侧 AI 助手顶部切换 API 配置和模型；其他项目均为可选高级设置。完整说明请查看顶部“帮助”。'
         type='info'
         className='mg2y'
       />

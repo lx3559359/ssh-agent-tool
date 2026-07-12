@@ -16,9 +16,6 @@ import {
   ToolOutlined,
   UnorderedListOutlined
 } from '@ant-design/icons'
-import {
-  aiConfigWikiLink
-} from '../../common/constants'
 import { refs, refsStatic } from '../common/ref'
 import { getAIChatSubmitAction } from './ai-chat-submit'
 import {
@@ -553,7 +550,6 @@ export default function AIChat (props) {
                 title={aiAgentCopy.clearHistoryTitle}
               />
             </Popconfirm>
-            <span className='ai-help-link' onClick={() => window.open(aiConfigWikiLink)}>帮助</span>
           </Flex>
           {renderSendIcon()}
         </Flex>

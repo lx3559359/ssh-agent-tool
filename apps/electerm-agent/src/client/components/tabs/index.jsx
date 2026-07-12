@@ -20,10 +20,8 @@ import {
   tabWidth,
   tabMargin,
   extraTabWidth,
-  windowControlWidth,
   isMacJs
 } from '../../common/constants'
-import WindowControl from './window-control'
 import AddBtn from './add-btn'
 import AppDrag from './app-drag'
 import NoSession from './no-session'
@@ -258,7 +256,7 @@ export default class Tabs extends Component {
       : tabsWidthAll
     const w1 = isMacJs && (config.useSystemTitleBar || window.et.isWebApp)
       ? 30
-      : this.getExtraTabWidth()
+      : 0
     const style = {
       width: width - w1 - 166
     }
@@ -312,12 +310,12 @@ export default class Tabs extends Component {
     return (
       <LayoutMenu
         layout={this.props.layout}
-        visible={this.shouldRenderWindowControl()}
+        visible={this.shouldRenderLayoutMenu()}
       />
     )
   }
 
-  shouldRenderWindowControl = () => {
+  shouldRenderLayoutMenu = () => {
     const { layout, batch } = this.props
     const batchToRender = {
       c1: 0,
@@ -332,31 +330,11 @@ export default class Tabs extends Component {
     return batch === batchToRender[layout]
   }
 
-  getExtraTabWidth = () => {
-    return this.shouldRenderWindowControl()
-      ? windowControlWidth
-      : 0
-  }
-
-  renderWindowControl = () => {
-    if (this.shouldRenderWindowControl()) {
-      return (
-        <WindowControl
-          store={window.store}
-        />
-      )
-    }
-    return null
-  }
-
   renderTabs () {
     const { overflow } = this.state
     return (
       <div className='tabs' ref={this.tabsRef}>
         {this.renderContent()}
-        {
-          this.renderWindowControl()
-        }
         {
           overflow
             ? this.renderExtra()

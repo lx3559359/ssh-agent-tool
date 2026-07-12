@@ -1,10 +1,38 @@
 .shellpilot-help-center
   .ant-modal-body
-    max-height 72vh
+    max-height 78vh
     overflow-y auto
+  .ant-collapse-content-box
+    padding 14px 18px 16px
 
-.shellpilot-help-intro
+.shellpilot-help-heading
+  display flex
+  flex-direction column
+  gap 4px
   margin 0 0 14px
+  padding 12px 14px
+  border-left 3px solid var(--primary)
+  background rgba(24, 144, 255, .08)
+  line-height 1.55
+  span
+    color var(--text-light)
+
+.shellpilot-help-guide
+  line-height 1.75
+  p
+    margin 0 0 8px
+  ol,
+  ul
+    margin 6px 0 0
+    padding-left 22px
+  li
+    margin 4px 0
+
+.shellpilot-help-warning
+  margin-top 10px !important
+  padding 8px 10px
+  border-left 3px solid #d89614
+  background rgba(216, 150, 20, .08)
   color var(--text-light)
 
 .shellpilot-help-safety
