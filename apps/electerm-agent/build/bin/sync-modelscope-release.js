@@ -30,6 +30,10 @@ function ensureModelScopeToken (env = process.env) {
   return token
 }
 
+function resolveModelScopeReleaseVersion (env = process.env, fallback = pack.version) {
+  return env.AIGSHELL_RELEASE_VERSION || fallback
+}
+
 function getModelScopeAskPassContent ({ isWindows = process.platform === 'win32' } = {}) {
   if (isWindows) {
     return [
@@ -118,18 +122,19 @@ function syncModelScopeRelease (options = {}) {
   const repo = options.repo || modelScopeRepo
   const repoUrl = options.repoUrl || buildModelScopeRepoUrl(repo)
   const cloneDir = options.cloneDir || defaultCloneDir
-  const version = options.version || pack.version
-  const arch = options.arch || process.env.AIGSHELL_RELEASE_ARCH
-  const token = ensureModelScopeToken(options.env || process.env)
+  const env = options.env || process.env
+  const version = options.version || resolveModelScopeReleaseVersion(env, pack.version)
+  const arch = options.arch || env.AIGSHELL_RELEASE_ARCH
+  const token = ensureModelScopeToken(env)
   const username = options.username ||
-    (options.env && (options.env.MODELSCOPE_USERNAME || options.env.MODELSCOPE_USER)) ||
+    (env && (env.MODELSCOPE_USERNAME || env.MODELSCOPE_USER)) ||
     repo.split('/')[0]
   const askPassPath = writeAskPassFile()
   const gitEnv = buildModelScopeGitEnv({
     askPassPath,
     token,
     username,
-    baseEnv: options.env || process.env
+    baseEnv: env
   })
 
   try {
@@ -195,5 +200,6 @@ module.exports = {
   buildModelScopeRepoUrl,
   ensureModelScopeToken,
   getModelScopeAskPassContent,
+  resolveModelScopeReleaseVersion,
   syncModelScopeRelease
 }

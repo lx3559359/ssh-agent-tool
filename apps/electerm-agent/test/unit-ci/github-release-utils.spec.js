@@ -169,6 +169,25 @@ test('windows release workflow verifies the portable zip contents before upload'
   assert.ok(portableVerifyIndex < artifactUploadIndex, 'portable zip should be verified before upload')
 })
 
+test('ModelScope release sync workflow mirrors approved GitHub release assets', () => {
+  const workflow = fs.readFileSync(
+    path.resolve(__dirname, '../../../../.github/workflows/modelscope-release-sync.yml'),
+    'utf8'
+  )
+
+  assert.match(workflow, /workflow_dispatch:/)
+  assert.match(workflow, /version:/)
+  assert.match(workflow, /confirm_sync:/)
+  assert.match(workflow, /MODELSCOPE_TOKEN:\s+\$\{\{\s*secrets\.MODELSCOPE_TOKEN\s*\}\}/)
+  assert.match(workflow, /AIGSHELL_RELEASE_VERSION:\s+\$\{\{\s*github\.event\.inputs\.version\s*\}\}/)
+  assert.match(workflow, /AIGSHELL_RELEASE_DIST:/)
+  assert.match(workflow, /gh release download "v\$\{\{\s*github\.event\.inputs\.version\s*\}\}"/)
+  assert.match(workflow, /ShellPilot-\$\{\{\s*github\.event\.inputs\.version\s*\}\}-win-x64-installer\.exe/)
+  assert.match(workflow, /shellpilot-local\.yml/)
+  assert.match(workflow, /npm run release:modelscope/)
+  assert.match(workflow, /npm run release:update-sources:verify/)
+})
+
 test('portable zip is not required for online update asset validation', () => {
   const names = getRequiredReleaseAssetNames('3.15.105')
 

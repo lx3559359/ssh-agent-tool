@@ -3,7 +3,8 @@ const assert = require('node:assert/strict')
 const path = require('node:path')
 
 const {
-  buildOnlineUpdateSourceReport
+  buildOnlineUpdateSourceReport,
+  resolveOnlineUpdateVersion
 } = require(path.resolve(__dirname, '../../build/bin/verify-online-update-sources'))
 
 function asset (name, extra = {}) {
@@ -128,4 +129,12 @@ test('online update source verifier rejects releases missing automatic update as
     'checksums.json',
     'shellpilot-release.json'
   ])
+})
+
+test('online update source verifier can target an explicit published version from CI', () => {
+  assert.equal(
+    resolveOnlineUpdateVersion({ AIGSHELL_RELEASE_VERSION: '0.3.5' }, '0.3.4'),
+    '0.3.5'
+  )
+  assert.equal(resolveOnlineUpdateVersion({}, '0.3.4'), '0.3.4')
 })

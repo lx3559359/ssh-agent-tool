@@ -16,6 +16,10 @@ function cleanVersion (value) {
   return match ? match[1] : ''
 }
 
+function resolveOnlineUpdateVersion (env = process.env, fallback = pack.version) {
+  return env.AIGSHELL_RELEASE_VERSION || fallback
+}
+
 function compareVersions (left, right) {
   const a = cleanVersion(left).split('.').map(Number)
   const b = cleanVersion(right).split('.').map(Number)
@@ -144,7 +148,7 @@ async function buildOnlineUpdateSourceReport ({
   currentVersion = '0.2.12',
   fetchJson = defaultFetchJson,
   sources = getUpdateReleaseSources(),
-  version = pack.version
+  version = resolveOnlineUpdateVersion(process.env, pack.version)
 } = {}) {
   const checked = []
   for (const source of sources) {
@@ -194,5 +198,6 @@ module.exports = {
   checkOnlineUpdateSource,
   cleanVersion,
   getMissingRequiredAssets,
-  isApprovedManifest
+  isApprovedManifest,
+  resolveOnlineUpdateVersion
 }

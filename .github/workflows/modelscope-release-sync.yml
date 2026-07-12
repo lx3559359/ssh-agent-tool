@@ -1,0 +1,92 @@
+name: ModelScope Release Sync
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "ShellPilot version to mirror, for example 0.3.5"
+        required: true
+        default: "0.3.5"
+        type: string
+      confirm_sync:
+        description: "Type ShellPilot ModelScope sync to mirror this approved release"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  sync-modelscope:
+    name: Mirror approved release assets to ModelScope
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/electerm-agent
+
+    env:
+      CI: true
+      GH_TOKEN: ${{ github.token }}
+      MODELSCOPE_TOKEN: ${{ secrets.MODELSCOPE_TOKEN }}
+      MODELSCOPE_USERNAME: lx3559359
+      AIGSHELL_RELEASE_VERSION: ${{ github.event.inputs.version }}
+      AIGSHELL_RELEASE_DIST: ${{ github.workspace }}/.artifacts/github-release-v${{ github.event.inputs.version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify manual ModelScope sync confirmation
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event.inputs.confirm_sync }}" != "ShellPilot ModelScope sync" ]; then
+            echo "Please type ShellPilot ModelScope sync when manually triggering this workflow."
+            exit 1
+          fi
+          if [ -z "${MODELSCOPE_TOKEN:-}" ]; then
+            echo "MODELSCOPE_TOKEN repository secret is required."
+            exit 1
+          fi
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/electerm-agent/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Setup Git LFS
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y git-lfs
+          git lfs install
+
+      - name: Download approved GitHub release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$AIGSHELL_RELEASE_DIST"
+          gh release download "v${{ github.event.inputs.version }}" \
+            --repo "${{ github.repository }}" \
+            --dir "$AIGSHELL_RELEASE_DIST" \
+            --clobber \
+            --pattern "ShellPilot-${{ github.event.inputs.version }}-win-x64-installer.exe" \
+            --pattern "ShellPilot-${{ github.event.inputs.version }}-win-x64-installer.exe.blockmap" \
+            --pattern "latest.yml" \
+            --pattern "shellpilot-local.yml" \
+            --pattern "aigshell-update.json" \
+            --pattern "shellpilot-update.json" \
+            --pattern "checksums.json" \
+            --pattern "shellpilot-release.json"
+
+      - name: Mirror release assets to ModelScope
+        run: npm run release:modelscope
+
+      - name: Verify online update source selection
+        run: npm run release:update-sources:verify

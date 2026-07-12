@@ -8,7 +8,8 @@ const {
   buildModelScopeGitEnv,
   buildModelScopeRepoUrl,
   ensureModelScopeToken,
-  getModelScopeAskPassContent
+  getModelScopeAskPassContent,
+  resolveModelScopeReleaseVersion
 } = require(path.resolve(__dirname, '../../build/bin/sync-modelscope-release'))
 
 test('ModelScope release sync requires an explicit token before pushing', () => {
@@ -75,6 +76,14 @@ test('ModelScope repo URL targets the domestic update repository', () => {
     buildModelScopeRepoUrl('lx3559359/ShellPilot-Updates'),
     'https://www.modelscope.cn/lx3559359/ShellPilot-Updates.git'
   )
+})
+
+test('ModelScope release sync can target an explicit published version from CI', () => {
+  assert.equal(
+    resolveModelScopeReleaseVersion({ AIGSHELL_RELEASE_VERSION: '0.3.5' }, '0.3.4'),
+    '0.3.5'
+  )
+  assert.equal(resolveModelScopeReleaseVersion({}, '0.3.4'), '0.3.4')
 })
 
 test('ModelScope release sync prints a concise token error for operators', () => {
