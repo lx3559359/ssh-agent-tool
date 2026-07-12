@@ -5,9 +5,10 @@ const path = require('node:path')
 
 const root = path.resolve(__dirname, '../..')
 const read = file => fs.readFileSync(path.join(root, file), 'utf8')
+const pack = JSON.parse(read('package.json'))
 
-test('0.3.7 release notes clearly separate added fixed and changed items', () => {
-  const notes = read('docs/releases/v0.3.7.md')
+test('current release notes clearly separate added fixed and changed items', () => {
+  const notes = read(`docs/releases/v${pack.version}.md`)
 
   assert.match(notes, /^## \[新增\]/m)
   assert.match(notes, /^## \[修复\]/m)
