@@ -101,7 +101,7 @@ async function readSftpAttachment (attachment, sftpRef, fsApi, maxBytes) {
 
 function formatAttachmentContext (context) {
   const truncated = context.truncated
-    ? `\n内容状态：已读取前 ${context.bytesRead || '-'} 字节，后续内容未全部发送。`
+    ? `\n内容状态：已读取前 ${context.bytesRead || '-'} 字节，后续内容未全部发送；如需更多上下文，请继续读取下一段或按关键词搜索。`
     : ''
   return `文件：${context.path}
 来源：${context.source}${context.size ? `\n大小：${context.size}` : ''}${truncated}

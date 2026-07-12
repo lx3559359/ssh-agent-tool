@@ -22,6 +22,14 @@ import { normalizeAIEndpoint } from '../../common/ai-endpoint'
 import Password from '../common/password'
 import AiHistory, { addHistoryItem } from './ai-history'
 import message from '../common/message'
+import {
+  buildAIProfileFromValues,
+  getActiveAIConfig,
+  getAIProfileOptions,
+  migrateAIProfiles,
+  removeAIProfile,
+  upsertAIProfile
+} from './ai-profiles'
 
 const STORAGE_KEY_CONFIG = 'ai_config_history'
 const EVENT_NAME_CONFIG = 'ai-config-history-update'
@@ -285,8 +293,10 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
   const [testing, setTesting] = useState(false)
   const [loadingModels, setLoadingModels] = useState(false)
   const [modelOptions, setModelOptions] = useState([])
+  const [profileOptions, setProfileOptions] = useState([])
   const baseURLAI = Form.useWatch('baseURLAI', form)
   const apiPathAI = Form.useWatch('apiPathAI', form)
+  const activeAIProfileId = Form.useWatch('activeAIProfileId', form)
 
   const endpointPreview = useMemo(
     () => getEndpointPreview(baseURLAI, apiPathAI),
@@ -295,9 +305,15 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
 
   useEffect(() => {
     if (initialValues) {
-      form.setFieldsValue(initialValues)
+      const normalized = migrateAIProfiles(initialValues)
+      const active = getActiveAIConfig(normalized)
+      form.setFieldsValue({
+        ...normalized,
+        ...active
+      })
+      setProfileOptions(getAIProfileOptions(normalized))
       setModelOptions(uniqueOptions([
-        initialValues.modelAI,
+        active.modelAI,
         ...popularModels
       ]))
     }
@@ -307,13 +323,90 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
     return true
   }
 
+  function getCurrentFormValues () {
+    return form.getFieldsValue(true)
+  }
+
+  function syncProfileOptions (config) {
+    setProfileOptions(getAIProfileOptions(config))
+  }
+
+  function saveCurrentProfile () {
+    const values = getCurrentFormValues()
+    const next = upsertAIProfile(values, buildAIProfileFromValues(values))
+    form.setFieldsValue(next)
+    syncProfileOptions(next)
+    return next
+  }
+
+  function handleProfileChange (profileId) {
+    const saved = saveCurrentProfile()
+    const next = {
+      ...saved,
+      activeAIProfileId: profileId
+    }
+    const active = getActiveAIConfig(next)
+    const merged = {
+      ...next,
+      ...active
+    }
+    form.setFieldsValue(merged)
+    syncProfileOptions(merged)
+    setModelOptions(uniqueOptions([
+      active.modelAI,
+      ...popularModels
+    ]))
+  }
+
+  function handleAddProfile () {
+    const saved = saveCurrentProfile()
+    const profile = {
+      id: `ai-profile-${Date.now()}`,
+      nameAI: `AI 配置 ${(saved.aiProfiles || []).length + 1}`,
+      baseURLAI: '',
+      apiPathAI: '',
+      modelAI: '',
+      roleAI: saved.roleAI || '',
+      apiKeyAI: '',
+      authHeaderNameAI: 'Authorization: Bearer',
+      languageAI: saved.languageAI || window.store.getLangName(),
+      agentSkills: saved.agentSkills || [],
+      mcpServers: saved.mcpServers || [],
+      proxyAI: saved.proxyAI || ''
+    }
+    const next = upsertAIProfile(saved, profile)
+    form.setFieldsValue(next)
+    syncProfileOptions(next)
+    setModelOptions(uniqueOptions(popularModels))
+  }
+
+  function handleRemoveProfile () {
+    const values = getCurrentFormValues()
+    const next = removeAIProfile(values, values.activeAIProfileId)
+    const active = getActiveAIConfig(next)
+    const merged = {
+      ...next,
+      ...active
+    }
+    form.setFieldsValue(merged)
+    syncProfileOptions(merged)
+    setModelOptions(uniqueOptions([
+      active.modelAI,
+      ...popularModels
+    ]))
+  }
+
   const handleSubmit = async (values) => {
-    const nextValues = {
+    const cleanValues = {
       ...values,
       apiPathAI: values.apiPathAI || '',
       agentSkills: getCleanAgentSkills(values.agentSkills),
       mcpServers: getCleanMcpServers(values.mcpServers)
     }
+    const nextValues = upsertAIProfile(
+      cleanValues,
+      buildAIProfileFromValues(cleanValues)
+    )
     onSubmit({
       ...nextValues
     })
@@ -463,6 +556,32 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
         layout='vertical'
         className='ai-config-form'
       >
+        <Form.Item label='API 配置'>
+          <Space.Compact className='width-100'>
+            <Select
+              value={activeAIProfileId}
+              options={profileOptions}
+              onChange={handleProfileChange}
+              style={{ width: '58%' }}
+              placeholder='选择已保存的 API 配置'
+            />
+            <Button
+              onClick={handleAddProfile}
+              style={{ width: '21%' }}
+            >
+              新增配置
+            </Button>
+            <Button
+              danger
+              onClick={handleRemoveProfile}
+              disabled={profileOptions.length <= 1}
+              style={{ width: '21%' }}
+            >
+              删除配置
+            </Button>
+          </Space.Compact>
+        </Form.Item>
+
         <Form.Item label='服务商模板'>
           <Select
             showSearch

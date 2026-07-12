@@ -70,6 +70,14 @@ export default Store => {
     const qm = store.currentQuickCommands.find(
       a => a.id === id
     )
+    if (qm?.confirmRequired) {
+      const ok = window.confirm
+        ? window.confirm(`确认执行「${qm.name}」？该命令可能需要较高权限或产生较多输出。`)
+        : true
+      if (!ok) {
+        return
+      }
+    }
     const { runQuickCommand } = store
     const qms = qm && qm.commands
       ? qm.commands

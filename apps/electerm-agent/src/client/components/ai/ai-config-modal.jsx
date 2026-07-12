@@ -4,6 +4,7 @@ import AIConfigForm from './ai-config'
 import message from '../common/message'
 import { aiConfigsArr } from './ai-config-props'
 import { pick } from 'lodash-es'
+import { migrateAIProfiles } from './ai-profiles'
 
 const e = window.translate
 
@@ -19,11 +20,11 @@ export default auto(function AIConfigModal ({ store }) {
     if (!res.languageAI) {
       res.languageAI = window.store.getLangName()
     }
-    return res
+    return migrateAIProfiles(res)
   }
 
   function handleSubmit (values) {
-    window.store.updateConfig(values)
+    window.store.updateConfig(migrateAIProfiles(values))
     message.success(e('saved') || '已保存')
     window.store.showAIConfigModal = false
   }

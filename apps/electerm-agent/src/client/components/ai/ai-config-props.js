@@ -9,7 +9,9 @@ export const aiConfigsArr = [
   'agentSkills',
   'mcpServers',
   'languageAI',
-  'proxyAI'
+  'proxyAI',
+  'aiProfiles',
+  'activeAIProfileId'
 ]
 
 export const requiredAIConfigsArr = [

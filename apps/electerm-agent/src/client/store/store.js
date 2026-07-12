@@ -33,6 +33,9 @@ import { uniq } from 'lodash-es'
 import deepCopy from 'json-deep-copy'
 import getBrand from '../components/ai/get-brand'
 import {
+  getServerMaintenanceQuickCommands
+} from '../components/quick-commands/server-maintenance-commands'
+import {
   settingMap,
   terminalSshConfigType,
   paneMap,
@@ -45,6 +48,8 @@ import {
   theme
 } from 'antd'
 import { refsTabs } from '../components/common/ref'
+
+const serverMaintenanceQuickCommands = getServerMaintenanceQuickCommands()
 
 class Store {
   constructor () {
@@ -74,6 +79,7 @@ class Store {
       }
     })
     return [
+      ...serverMaintenanceQuickCommands,
       ...currentTabQuickCommands,
       ...quickCommands
     ]
@@ -139,7 +145,10 @@ class Store {
   }
 
   get quickCommandTags () {
-    const { quickCommands } = window.store
+    const quickCommands = [
+      ...serverMaintenanceQuickCommands,
+      ...window.store.quickCommands
+    ]
     return uniq(
       quickCommands.reduce((p, q) => {
         return [
@@ -187,12 +196,24 @@ class Store {
       },
       []
     )
+    const builtinQuickCommands = serverMaintenanceQuickCommands.reduce(
+      (p, q) => {
+        return [
+          ...p,
+          ...(q.commands || []).map(c => c.command)
+        ]
+      },
+      []
+    )
 
     // Return raw commands
     return {
       history: historyCommands,
       batch: batchInputCommands,
-      quick: quickCommands
+      quick: [
+        ...builtinQuickCommands,
+        ...quickCommands
+      ]
     }
   }
 

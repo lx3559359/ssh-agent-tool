@@ -89,6 +89,54 @@ test('AI attachments build bounded context for local and SFTP files', async () =
   assert.match(prompt, /remote:\/var\/log\/error\.log/)
 })
 
+test('AI attachments explain continuation and archive member context', async () => {
+  const {
+    buildAttachmentContextPrompt
+  } = await import(attachmentsUrl)
+
+  const prompt = await buildAttachmentContextPrompt({
+    attachments: [
+      {
+        id: 'archive-1',
+        source: 'sftp',
+        name: 'logs.tar.gz',
+        file: {
+          name: 'logs.tar.gz',
+          path: '/tmp',
+          type: 'remote',
+          size: 4096,
+          isDirectory: false
+        }
+      }
+    ],
+    sftpRef: {
+      sftp: {
+        listArchive: async filePath => ({
+          type: 'tar.gz',
+          entries: [
+            { path: 'nginx/error.log', size: 2048 }
+          ],
+          filePath
+        }),
+        readArchiveTextEntry: async (filePath, entryPath) => ({
+          archiveType: 'tar.gz',
+          entryPath,
+          content: 'nginx bind failed',
+          binary: false,
+          bytesRead: 16,
+          hasMore: true,
+          nextOffset: 16
+        })
+      }
+    }
+  })
+
+  assert.match(prompt, /压缩/)
+  assert.match(prompt, /logs\.tar\.gz#nginx\/error\.log/)
+  assert.match(prompt, /nginx bind failed/)
+  assert.match(prompt, /继续读取/)
+})
+
 test('AI chat component wires local paste drag and SFTP drop attachment UI', () => {
   const source = fs.readFileSync(
     path.join(root, 'src/client/components/ai/ai-chat.jsx'),

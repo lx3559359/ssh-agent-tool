@@ -1,5 +1,5 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
-import { Flex, Input, Popconfirm, Segmented } from 'antd'
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
+import { Flex, Input, Popconfirm, Segmented, Select } from 'antd'
 import TabSelect from '../footer/tab-select'
 import AiChatHistory from './ai-chat-history'
 import uid from '../../common/uid'
@@ -50,6 +50,11 @@ import {
   createLocalFileAttachments,
   parseSftpDropPayload
 } from './ai-attachments'
+import {
+  getActiveAIConfig,
+  getAIProfileOptions,
+  migrateAIProfiles
+} from './ai-profiles'
 import message from '../common/message'
 import aiAgentCopy from './ai-agent-copy.json'
 import './ai.styl'
@@ -64,6 +69,14 @@ export default function AIChat (props) {
   const fileInputRef = useRef(null)
   const isAgent = mode === 'agent'
   const submitDisabled = isAgent && props.agentRunning
+  const activeAIConfig = useMemo(
+    () => getActiveAIConfig(props.config),
+    [props.config]
+  )
+  const aiProfileOptions = useMemo(
+    () => getAIProfileOptions(props.config),
+    [props.config]
+  )
 
   function handlePromptChange (e) {
     setPrompt(e.target.value)
@@ -78,7 +91,7 @@ export default function AIChat (props) {
     }
     const submitAction = getAIChatSubmitAction({
       prompt: submitPrompt,
-      config: props.config
+      config: activeAIConfig
     })
     if (submitAction === 'noop') return
     if (submitAction === 'open-config') {
@@ -138,7 +151,7 @@ export default function AIChat (props) {
       sessionId: null,
       mode,
       toolCalls: [],
-      ...pick(props.config, [
+      ...pick(activeAIConfig, [
         'nameAI',
         'modelAI',
         'roleAI',
@@ -161,7 +174,7 @@ export default function AIChat (props) {
     setAttachmentQueue(current =>
       current === attachmentQueueAtSubmit ? [] : current
     )
-  }, [prompt, mode, props.config, attachmentQueue])
+  }, [prompt, mode, activeAIConfig, attachmentQueue])
 
   function renderHistory () {
     return (
@@ -173,6 +186,14 @@ export default function AIChat (props) {
 
   function toggleConfig () {
     window.store.toggleAIConfig()
+  }
+
+  function handleActiveAIProfileChange (profileId) {
+    const next = migrateAIProfiles({
+      ...props.config,
+      activeAIProfileId: profileId
+    })
+    window.store.updateConfig(next)
   }
 
   function clearHistory () {
@@ -256,7 +277,7 @@ export default function AIChat (props) {
 
   function handleQuoteMcpServers () {
     const text = buildMcpServerContextPrompt({
-      mcpServers: props.config?.mcpServers || window.store.config?.mcpServers || []
+      mcpServers: activeAIConfig?.mcpServers || window.store.config?.mcpServers || []
     })
     if (!text) {
       message.warning(getAIContextUnavailableMessage('mcp'))
@@ -350,6 +371,23 @@ export default function AIChat (props) {
             disabled: props.agentRunning
           }
         ]}
+      />
+    )
+  }
+
+  function renderAIProfileSelect () {
+    if (!aiProfileOptions.length) {
+      return null
+    }
+    return (
+      <Select
+        size='small'
+        className='ai-profile-select'
+        value={activeAIConfig.activeAIProfileId}
+        options={aiProfileOptions}
+        onChange={handleActiveAIProfileChange}
+        popupMatchSelectWidth={false}
+        title='选择 AI API 和模型'
       />
     )
   }
@@ -515,6 +553,7 @@ export default function AIChat (props) {
         <Flex className='ai-chat-terminals' justify='space-between' align='center'>
           <Flex align='center' gap={6}>
             {renderModeSwitch()}
+            {renderAIProfileSelect()}
             {renderTabSelect()}
             <PaperClipOutlined
               onClick={handlePickLocalAttachments}
