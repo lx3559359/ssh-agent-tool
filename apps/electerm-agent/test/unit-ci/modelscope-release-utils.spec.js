@@ -108,6 +108,18 @@ test('ModelScope Hub uploader uses API token file upload instead of git credenti
   )
 })
 
+test('ModelScope Hub uploader retries large asset uploads after transient timeouts', () => {
+  const source = fs.readFileSync(
+    path.resolve(__dirname, '../../build/bin/sync-modelscope-release-hub.py'),
+    'utf8'
+  )
+
+  assert.match(source, /def upload_file_with_retry/)
+  assert.match(source, /MODELSCOPE_UPLOAD_RETRIES/)
+  assert.match(source, /time\.sleep/)
+  assert.match(source, /upload_file_with_retry\(/)
+})
+
 test('ModelScope release sync prints a concise token error for operators', () => {
   const env = { ...process.env }
   delete env.MODELSCOPE_TOKEN

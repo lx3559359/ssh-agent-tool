@@ -3,6 +3,7 @@ import json
 import os
 import re
 import sys
+import time
 from pathlib import Path
 
 from modelscope_hub import HubApi
@@ -79,6 +80,42 @@ def validated_assets(dist_dir, version):
     return assets
 
 
+def upload_retry_count():
+    value = os.environ.get("MODELSCOPE_UPLOAD_RETRIES") or "4"
+    try:
+        return max(1, int(value))
+    except ValueError:
+        return 4
+
+
+def upload_retry_delay(attempt):
+    return min(60, 5 * attempt)
+
+
+def upload_file_with_retry(api, repo_id, repo_type, local_path, path_in_repo, commit_message):
+    retries = upload_retry_count()
+    for attempt in range(1, retries + 1):
+        try:
+            return api.upload_file(
+                repo_id,
+                repo_type,
+                str(local_path),
+                path_in_repo,
+                commit_message=commit_message,
+                disable_tqdm=True,
+            )
+        except Exception as exc:
+            if attempt >= retries:
+                raise
+            delay = upload_retry_delay(attempt)
+            print(
+                f"Upload {path_in_repo} failed on attempt {attempt}/{retries}: {redact(exc)}. Retrying in {delay}s ...",
+                file=sys.stderr,
+                flush=True,
+            )
+            time.sleep(delay)
+
+
 def upload_assets():
     version = release_version()
     dist_dir = release_dist_dir()
@@ -92,13 +129,13 @@ def upload_assets():
 
     for name, local_path in assets:
         print(f"Uploading {name} to {repo_id} ...", flush=True)
-        api.upload_file(
+        upload_file_with_retry(
+            api,
             repo_id,
             repo_type,
-            str(local_path),
+            local_path,
             name,
-            commit_message=f"Mirror ShellPilot {version} update asset",
-            disable_tqdm=True,
+            f"Mirror ShellPilot {version} update asset",
         )
         uploaded.append(name)
 
