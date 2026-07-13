@@ -2,7 +2,9 @@ import { redactAuditText } from './audit-redaction.js'
 import { classifyCommand } from './command-classifier.js'
 import { taskStatuses } from './transaction-store.js'
 import {
+  collectBoundedRemoteOutput,
   createAuditRecord,
+  maxAuditPreviewBytes,
   redactAndTruncateAuditText
 } from './transaction-runner.js'
 
@@ -92,20 +94,11 @@ export function validateTaskPlan (plan = {}) {
   return { ...plan, steps }
 }
 
-function remoteOutput (result) {
-  if (typeof result === 'string') return result
-  if (!result || typeof result !== 'object') return ''
-  return [result.output, result.stdout, result.stderr]
-    .filter(value => value !== undefined && value !== null && value !== '')
-    .map(String)
-    .filter((value, index, values) => values.indexOf(value) === index)
-    .join('\n')
-}
-
 function remoteCode (result) {
-  if (!result || typeof result !== 'object') return 0
-  const code = Number(result.code ?? result.exitCode ?? result.rc ?? 0)
-  return Number.isFinite(code) ? code : 0
+  if (!result || typeof result !== 'object') return undefined
+  const codes = [result.code, result.exitCode, result.rc]
+    .filter(value => typeof value === 'number' && Number.isFinite(value))
+  return codes.find(value => value !== 0) ?? codes[0]
 }
 
 export function createTaskRunner (options = {}) {
@@ -151,7 +144,10 @@ export function createTaskRunner (options = {}) {
 
   async function cancelExecution (active) {
     try {
-      await cancelRemote(active.executionId)
+      await cancelRemote(active.executionId, {
+        maxOutputBytes: maxAuditPreviewBytes,
+        phase: 'cancel'
+      })
     } catch (error) {
       return sanitizeError(error)
     }
@@ -192,19 +188,25 @@ export function createTaskRunner (options = {}) {
     try {
       const remote = Promise.resolve().then(() => runRemote(step.command, {
         timeoutMs: step.timeoutMs,
+        maxOutputBytes: maxAuditPreviewBytes,
         signal: controller.signal,
         executionId,
         phase: 'readonly'
       }))
       const result = await Promise.race([remote, control])
       const code = remoteCode(result)
-      const output = remoteOutput(result)
+      const output = (await collectBoundedRemoteOutput(result)).output
       const audit = createAuditRecord({
         phase: 'readonly',
         timestamp: timestamp(),
         code,
         output
       })
+      if (code === undefined) {
+        const error = new Error('只读步骤远程结果缺少有效的显式退出码。')
+        error.audit = audit
+        throw error
+      }
       if (code !== 0) {
         const error = new Error(`只读步骤执行失败，退出码 ${code}。`)
         error.audit = audit
@@ -218,13 +220,14 @@ export function createTaskRunner (options = {}) {
           ? cancelledError()
           : error
       if (!failure.audit) {
+        const output = failure === error
+          ? (await collectBoundedRemoteOutput(error)).output || error?.message || ''
+          : failure.message
         failure.audit = createAuditRecord({
           phase: 'readonly',
           timestamp: timestamp(),
           code: remoteCode(error),
-          output: failure === error
-            ? error?.output ?? error?.stderr ?? error?.message ?? ''
-            : failure.message
+          output
         })
       }
       throw failure
@@ -362,27 +365,53 @@ export function createTaskRunner (options = {}) {
     cancellationRequests.add(taskId)
     const pending = queues.get(taskId)
     const active = activeExecutions.get(taskId)
-    if (active) {
-      active.stop('cancel')
-      await cancelExecution(active)
-    }
-    if (pending) {
-      try {
-        await pending
-      } catch {}
-    } else {
-      await serialize(taskId, async () => {
+    let cancellationFailure
+    try {
+      if (active) {
+        active.stop('cancel')
+        cancellationFailure = await cancelExecution(active)
+      }
+      if (pending) {
+        try {
+          await pending
+        } catch {}
+      } else {
+        await serialize(taskId, async () => {
+          const task = await get(taskId)
+          if (!task || finalTaskStatuses.has(task.status)) return task
+          return patch(taskId, {
+            status: taskStatuses.cancelled,
+            completedAt: timestamp(),
+            updatedAt: timestamp()
+          })
+        })
+      }
+      if (cancellationFailure) {
         const task = await get(taskId)
-        if (!task || finalTaskStatuses.has(task.status)) return task
-        return patch(taskId, {
-          status: taskStatuses.cancelled,
+        const steps = task.steps.map(step => {
+          if (!['running', 'cancelled'].includes(step.status)) return step
+          return {
+            ...step,
+            status: 'failed',
+            error: cancellationFailure.message
+          }
+        })
+        const status = steps.some(step => step.status === 'completed')
+          ? taskStatuses.partiallyCompleted
+          : taskStatuses.failed
+        await patch(taskId, {
+          steps,
+          status,
+          error: cancellationFailure.message,
           completedAt: timestamp(),
           updatedAt: timestamp()
         })
-      })
+        throw cancellationFailure
+      }
+      return get(taskId)
+    } finally {
+      cancellationRequests.delete(taskId)
     }
-    cancellationRequests.delete(taskId)
-    return get(taskId)
   }
 
   return {

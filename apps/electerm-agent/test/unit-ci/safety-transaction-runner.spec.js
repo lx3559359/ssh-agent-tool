@@ -681,6 +681,76 @@ test('prepare and execute reclassify persisted commands and reject forged readon
   assert.equal(calls.length, 0)
 })
 
+test('prepare restores authoritative recovery for a forged nonreversible claim', async () => {
+  const { createTransactionRunner } = await importDomainModule('transaction-runner.js')
+  const classified = await createRequest({ id: 'op-forged-recovery-prepare' })
+  const forged = {
+    ...classified,
+    reversible: false,
+    recoveryProvider: null
+  }
+  const store = createMemoryStore()
+  const phases = []
+  let planInput
+  const runner = createTransactionRunner({
+    runRemote: async (command, options) => {
+      phases.push(options.phase)
+      return { stdout: marker(options.phase, forged.id), code: 0 }
+    },
+    cancelRemote: async () => {},
+    store,
+    getCurrentEndpoint: async () => forged.endpoint,
+    buildRecoveryPlan: operation => {
+      planInput = clone(operation)
+      return createPlan(operation)
+    },
+    now: createClock()
+  })
+
+  const prepared = await runner.prepare(forged)
+
+  assert.equal(prepared.state, 'awaiting-confirmation')
+  assert.equal(prepared.reversible, true)
+  assert.equal(prepared.recoveryProvider, 'systemd')
+  assert.equal(planInput.recoveryProvider, 'systemd')
+  assert.ok(prepared.plan?.rollbackCommand)
+  assert.deepEqual(phases, ['prepare'])
+})
+
+test('execute cannot use unsafe mode after persisted recovery classification tampering', async () => {
+  const { createTransactionRunner } = await importDomainModule('transaction-runner.js')
+  const request = await createRequest({ id: 'op-tampered-recovery-execute' })
+  const store = createMemoryStore()
+  await store.save({
+    ...request,
+    state: 'awaiting-confirmation',
+    reversible: false,
+    recoveryProvider: null
+  })
+  const calls = []
+  const runner = createTransactionRunner({
+    runRemote: async (command, options) => {
+      calls.push({ command, options })
+      return { stdout: marker(options.phase, request.id), code: 0 }
+    },
+    cancelRemote: async () => {},
+    store,
+    getCurrentEndpoint: async () => request.endpoint,
+    buildRecoveryPlan: createPlan,
+    now: createClock()
+  })
+
+  await assert.rejects(
+    runner.execute(request.id, { confirmed: true, allowUnsafe: true }),
+    /recovery-ready/
+  )
+  const failed = await store.get(request.id)
+  assert.equal(failed.state, 'failed')
+  assert.equal(failed.reversible, true)
+  assert.equal(failed.recoveryProvider, 'systemd')
+  assert.equal(calls.length, 0)
+})
+
 test('endpoint changes and unsafe network changes never execute', async () => {
   const endpointRequest = await createRequest({ id: 'op-endpoint' })
   let currentEndpoint = endpointRequest.endpoint
@@ -696,18 +766,35 @@ test('endpoint changes and unsafe network changes never execute', async () => {
   assert.deepEqual(endpointContext.remoteCalls.map(call => call.options.phase), ['prepare'])
 
   const network = {
-    ...await createRequest({ id: 'op-network-unsafe' }),
-    command: 'ip link set dev eth0 down',
+    ...await createRequest({
+      id: 'op-network-unsafe',
+      command: 'ip link set dev eth0 down && whoami'
+    }),
+    state: 'awaiting-confirmation',
     risk: 'change',
     reversible: false,
     recoveryProvider: 'network'
   }
-  const networkContext = await createPreparedRunner({ request: network })
+  const networkStore = createMemoryStore()
+  await networkStore.save(network)
+  const networkCalls = []
+  const { createTransactionRunner } = await importDomainModule('transaction-runner.js')
+  const networkRunner = createTransactionRunner({
+    runRemote: async (command, options) => {
+      networkCalls.push({ command, options })
+      return { stdout: marker(options.phase, network.id), code: 0 }
+    },
+    cancelRemote: async () => {},
+    store: networkStore,
+    getCurrentEndpoint: async () => network.endpoint,
+    buildRecoveryPlan: createPlan,
+    now: createClock()
+  })
   await assert.rejects(
-    networkContext.runner.execute(network.id, { confirmed: true, allowUnsafe: true }),
+    networkRunner.execute(network.id, { confirmed: true, allowUnsafe: true }),
     /网络|禁止|拒绝/
   )
-  assert.equal(networkContext.remoteCalls.length, 0)
+  assert.equal(networkCalls.length, 0)
 })
 
 test('unknown and nonreversible changes require an explicit unsafe confirmation', async () => {
@@ -847,10 +934,10 @@ test('concurrent execute cancellation stops the active execution without late st
   await waitFor(() => Boolean(rejectExecute))
   const cancelling = cancelled.runner.cancel('op-1')
   await assert.rejects(executing, /取消/)
-  assert.equal((await cancelling).state, 'cancelled')
-  assert.equal((await cancelled.store.get('op-1')).state, 'cancelled')
+  assert.equal((await cancelling).state, 'failed')
+  assert.equal((await cancelled.store.get('op-1')).state, 'failed')
   assert.equal(
-    cancelled.store.transitions.filter(state => state === 'cancelled').length,
+    cancelled.store.transitions.filter(state => state === 'failed').length,
     1
   )
 
@@ -882,8 +969,109 @@ test('concurrent execute cancellation stops the active execution without late st
   resolveExecute({ stdout: marker('execute', 'op-1'), code: 0 })
   await assert.rejects(completion, /取消/)
   resolveCancel()
-  assert.equal((await lateCancellation).state, 'cancelled')
-  assert.equal((await completed.store.get('op-1')).state, 'cancelled')
+  assert.equal((await lateCancellation).state, 'failed')
+  assert.equal((await completed.store.get('op-1')).state, 'failed')
+})
+
+test('cancelRemote failure rejects with a sanitized error and never claims cancellation', async () => {
+  const secret = 'cancel-transport-secret'
+  let executeStarted = false
+  const context = await createPreparedRunner({
+    runRemote: (command, options) => {
+      if (options.phase === 'prepare') {
+        return Promise.resolve({ stdout: marker('prepare', 'op-1'), code: 0 })
+      }
+      executeStarted = true
+      return new Promise(() => {})
+    },
+    cancelRemote: async () => {
+      throw new Error(`password=${secret}`)
+    }
+  })
+  const execution = context.runner.execute('op-1', { confirmed: true })
+  await waitFor(() => executeStarted)
+
+  const [cancelOutcome, executionOutcome] = await Promise.allSettled([
+    context.runner.cancel('op-1'),
+    execution
+  ])
+
+  assert.equal(cancelOutcome.status, 'rejected')
+  assert.match(cancelOutcome.reason.message, /\[REDACTED\]/)
+  assert.doesNotMatch(cancelOutcome.reason.message, new RegExp(secret))
+  assert.equal(executionOutcome.status, 'rejected')
+  assert.match(executionOutcome.reason.message, /取消/)
+  const failed = await context.store.get('op-1')
+  assert.equal(failed.state, 'failed')
+  assert.notEqual(failed.state, 'cancelled')
+  assert.match(failed.error, /\[REDACTED\]/)
+  assert.doesNotMatch(JSON.stringify(failed), new RegExp(secret))
+})
+
+test('cancelling an active reversible execute preserves recovery and permits rollback', async () => {
+  let executeStarted = false
+  const context = await createPreparedRunner({
+    runRemote: (command, options) => {
+      if (options.phase === 'execute') {
+        executeStarted = true
+        return new Promise(() => {})
+      }
+      return Promise.resolve({ stdout: marker(options.phase, 'op-1'), code: 0 })
+    },
+    cancelRemote: async () => {}
+  })
+  const bound = await context.store.get('op-1')
+  const execution = context.runner.execute('op-1', { confirmed: true })
+  await waitFor(() => executeStarted)
+
+  const [cancelOutcome, executionOutcome] = await Promise.allSettled([
+    context.runner.cancel('op-1'),
+    execution
+  ])
+
+  assert.equal(cancelOutcome.status, 'fulfilled')
+  assert.equal(cancelOutcome.value.state, 'failed')
+  assert.equal(executionOutcome.status, 'rejected')
+  const failed = await context.store.get('op-1')
+  assert.equal(failed.state, 'failed')
+  assert.deepEqual(failed.plan, bound.plan)
+  assert.deepEqual(failed.artifacts, bound.artifacts)
+  assert.deepEqual(failed.recoveryBinding, bound.recoveryBinding)
+  assert.equal((await context.runner.rollback('op-1')).state, 'restored')
+})
+
+test('cancelling an active rollback preserves recovery and permits a retry', async () => {
+  let firstRollbackStarted = false
+  let rollbackAttempts = 0
+  const context = await createPreparedRunner({
+    runRemote: (command, options) => {
+      if (options.phase === 'rollback' && rollbackAttempts++ === 0) {
+        firstRollbackStarted = true
+        return new Promise(() => {})
+      }
+      return Promise.resolve({ stdout: marker(options.phase, 'op-1'), code: 0 })
+    },
+    cancelRemote: async () => {}
+  })
+  await context.runner.execute('op-1', { confirmed: true })
+  const bound = await context.store.get('op-1')
+  const rollback = context.runner.rollback('op-1')
+  await waitFor(() => firstRollbackStarted)
+
+  const [cancelOutcome, rollbackOutcome] = await Promise.allSettled([
+    context.runner.cancel('op-1'),
+    rollback
+  ])
+
+  assert.equal(cancelOutcome.status, 'fulfilled')
+  assert.equal(cancelOutcome.value.state, 'failed')
+  assert.equal(rollbackOutcome.status, 'rejected')
+  const failed = await context.store.get('op-1')
+  assert.equal(failed.state, 'failed')
+  assert.deepEqual(failed.plan, bound.plan)
+  assert.deepEqual(failed.artifacts, bound.artifacts)
+  assert.deepEqual(failed.recoveryBinding, bound.recoveryBinding)
+  assert.equal((await context.runner.rollback('op-1')).state, 'restored')
 })
 
 test('cancel returns after cancelRemote even when runRemote never settles', async () => {
@@ -912,10 +1100,10 @@ test('cancel returns after cancelRemote even when runRemote never settles', asyn
   }
 
   assert.notEqual(outcome, 'timed-out')
-  assert.equal(outcome.state, 'cancelled')
+  assert.equal(outcome.state, 'failed')
   await assert.rejects(execution, /取消/)
   assert.equal(cancelledExecutions.length, 1)
-  assert.equal((await context.store.get('op-1')).state, 'cancelled')
+  assert.equal((await context.store.get('op-1')).state, 'failed')
 
   const nextRequest = await createRequest({ id: 'op-after-cancel' })
   const nextOutcome = await Promise.race([
@@ -959,6 +1147,64 @@ test('audit output and thrown errors are redacted before UTF-8 64 KiB truncation
     error => !error.message.includes(secret) && error.message.includes('[REDACTED]')
   )
   assert.doesNotMatch(JSON.stringify(await store.get(request.id)), new RegExp(secret))
+})
+
+test('transaction remote contracts cap output and stop consuming oversized chunks', async () => {
+  const maxBytes = 64 * 1024
+  const totalChunks = 100
+  let chunksRead = 0
+  let stderrRead = false
+  let executeStarted = false
+  let cancelOptions
+  const remoteOptions = []
+  async function * stdoutChunks (phase, id) {
+    const markerLine = `${marker(phase, id)}\n`
+    yield markerLine
+    yield new Uint8Array(
+      maxBytes - new TextEncoder().encode(markerLine).byteLength - 1
+    ).fill(120)
+    for (let index = 0; index < totalChunks; index += 1) {
+      chunksRead += 1
+      yield new Uint8Array([0xe8])
+    }
+  }
+  async function * unreadStderr () {
+    stderrRead = true
+    yield 'must not be consumed'
+  }
+  const context = await createPreparedRunner({
+    runRemote: (command, options) => {
+      remoteOptions.push(options)
+      if (options.phase === 'execute') {
+        executeStarted = true
+        return new Promise(() => {})
+      }
+      return Promise.resolve({
+        stdout: stdoutChunks(options.phase, 'op-1'),
+        stderr: unreadStderr(),
+        code: 0
+      })
+    },
+    cancelRemote: async (executionId, options) => {
+      cancelOptions = options
+    }
+  })
+
+  assert.equal(remoteOptions[0].maxOutputBytes, maxBytes)
+  assert.ok(chunksRead > 0 && chunksRead < totalChunks)
+  assert.equal(stderrRead, false)
+  assert.ok(Buffer.byteLength(context.prepared.audit[0].preview, 'utf8') <= maxBytes)
+
+  const execution = context.runner.execute('op-1', { confirmed: true })
+  await waitFor(() => executeStarted)
+  const [cancelOutcome, executionOutcome] = await Promise.allSettled([
+    context.runner.cancel('op-1'),
+    execution
+  ])
+  assert.equal(cancelOutcome.status, 'fulfilled')
+  assert.equal(executionOutcome.status, 'rejected')
+  assert.equal(remoteOptions[1].maxOutputBytes, maxBytes)
+  assert.equal(cancelOptions.maxOutputBytes, maxBytes)
 })
 
 function createTaskStore () {
@@ -1026,6 +1272,81 @@ test('task runner requires plan confirmation and persists validated readonly pro
     assert.match(event.output, /\[REDACTED\]/)
     assert.doesNotMatch(event.output, /task-secret/)
     assert.ok(Buffer.byteLength(event.output, 'utf8') <= 64 * 1024)
+  }
+})
+
+test('task remote output is capped before consuming all chunks', async () => {
+  const { createTaskRunner } = await importDomainModule('task-runner.js')
+  const maxBytes = 64 * 1024
+  const totalChunks = 100
+  let chunksRead = 0
+  let stderrRead = false
+  let runOptions
+  async function * outputChunks () {
+    for (let index = 0; index < totalChunks; index += 1) {
+      chunksRead += 1
+      yield 'x'.repeat(16 * 1024)
+    }
+  }
+  async function * unreadStderr () {
+    stderrRead = true
+    yield 'must not be consumed'
+  }
+  const runner = createTaskRunner({
+    runRemote: async (command, options) => {
+      runOptions = options
+      return { output: outputChunks(), stderr: unreadStderr(), code: 0 }
+    },
+    cancelRemote: async () => {},
+    store: createTaskStore(),
+    now: createClock()
+  })
+  const task = await runner.create(readonlyPlan({
+    steps: [{ id: 'bounded', command: 'uptime', timeoutMs: 100 }]
+  }))
+  await runner.confirmPlan(task.id)
+
+  const completed = await runner.run(task.id)
+
+  assert.equal(runOptions.maxOutputBytes, maxBytes)
+  assert.ok(chunksRead > 0 && chunksRead < totalChunks)
+  assert.equal(stderrRead, false)
+  assert.ok(Buffer.byteLength(completed.steps[0].output, 'utf8') <= maxBytes)
+})
+
+test('task runner fails closed without an explicit finite numeric exit code', async t => {
+  const { createTaskRunner } = await importDomainModule('task-runner.js')
+  const invalidResults = [
+    ['undefined', undefined],
+    ['null', null],
+    ['number', 0],
+    ['string', 'ok'],
+    ['missing-code', { output: 'ok' }],
+    ['nan-code', { output: 'ok', code: Number.NaN }],
+    ['infinite-code', { output: 'ok', code: Number.POSITIVE_INFINITY }],
+    ['numeric-string-code', { output: 'ok', code: '0' }]
+  ]
+
+  for (const [label, result] of invalidResults) {
+    await t.test(label, async () => {
+      const store = createTaskStore()
+      const runner = createTaskRunner({
+        runRemote: async () => result,
+        cancelRemote: async () => {},
+        store,
+        now: createClock()
+      })
+      const task = await runner.create(readonlyPlan({
+        id: `task-invalid-result-${label}`,
+        steps: [{ id: 'invalid', command: 'uptime', timeoutMs: 100 }]
+      }))
+      await runner.confirmPlan(task.id)
+
+      await assert.rejects(runner.run(task.id), /退出码|远程结果/)
+      const failed = await store.get(task.id)
+      assert.equal(failed.status, 'failed')
+      assert.equal(failed.steps[0].status, 'failed')
+    })
   }
 })
 
@@ -1137,6 +1458,45 @@ test('task cancellation stops later steps and preserves completed progress', asy
   assert.equal(cancelled.steps[1].status, 'cancelled')
   assert.equal(cancelled.steps[2].status, 'pending')
   assert.equal(cancelledExecutions.length, 1)
+})
+
+test('task cancelRemote failure surfaces a sanitized error and records failure', async () => {
+  const { createTaskRunner } = await importDomainModule('task-runner.js')
+  const secret = 'task-cancel-secret'
+  let activeStarted = false
+  const store = createTaskStore()
+  const runner = createTaskRunner({
+    runRemote: async () => {
+      activeStarted = true
+      return new Promise(() => {})
+    },
+    cancelRemote: async () => {
+      throw new Error(`token=${secret}`)
+    },
+    store,
+    now: createClock()
+  })
+  const task = await runner.create(readonlyPlan({
+    steps: [{ id: 'active', command: 'uptime', timeoutMs: 1000 }]
+  }))
+  await runner.confirmPlan(task.id)
+  const running = runner.run(task.id)
+  await waitFor(() => activeStarted)
+
+  const [cancelOutcome, runOutcome] = await Promise.allSettled([
+    runner.cancel(task.id),
+    running
+  ])
+
+  assert.equal(cancelOutcome.status, 'rejected')
+  assert.match(cancelOutcome.reason.message, /\[REDACTED\]/)
+  assert.doesNotMatch(cancelOutcome.reason.message, new RegExp(secret))
+  assert.equal(runOutcome.status, 'rejected')
+  const failed = await store.get(task.id)
+  assert.equal(failed.status, 'failed')
+  assert.equal(failed.steps[0].status, 'failed')
+  assert.match(failed.error, /\[REDACTED\]/)
+  assert.doesNotMatch(JSON.stringify(failed), new RegExp(secret))
 })
 
 test('an event callback failure cannot break task execution', async () => {

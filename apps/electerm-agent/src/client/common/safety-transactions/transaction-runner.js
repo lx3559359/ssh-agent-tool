@@ -75,20 +75,195 @@ export function redactAndTruncateAuditText (value, maxBytes = maxAuditPreviewByt
   return ''
 }
 
-function remoteOutput (result) {
-  if (typeof result === 'string') return result
-  if (!result || typeof result !== 'object') return ''
-  return [result.output, result.stdout, result.stderr]
-    .filter(value => value !== undefined && value !== null && value !== '')
-    .map(String)
-    .filter((value, index, values) => values.indexOf(value) === index)
-    .join('\n')
+function utf8CodePointBytes (character) {
+  const codePoint = character.codePointAt(0)
+  if (codePoint <= 0x7f) return 1
+  if (codePoint <= 0x7ff) return 2
+  if (codePoint <= 0xffff) return 3
+  return 4
 }
 
-function remoteMarkerOutput (result) {
-  if (typeof result === 'string') return result
-  if (!result || typeof result !== 'object') return ''
-  return String(result.stdout ?? '')
+function boundedUtf8String (value, maxBytes) {
+  const text = String(value ?? '')
+  let bytes = 0
+  let end = 0
+  for (const character of text) {
+    const size = utf8CodePointBytes(character)
+    if (bytes + size > maxBytes) break
+    bytes += size
+    end += character.length
+  }
+  return { text: text.slice(0, end), bytes, truncated: end < text.length }
+}
+
+function boundedUtf8TailString (value, maxBytes) {
+  const text = String(value ?? '')
+  let bytes = 0
+  let start = text.length
+  while (start > 0) {
+    let characterStart = start - 1
+    const codeUnit = text.charCodeAt(characterStart)
+    if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff && characterStart > 0) {
+      const previous = text.charCodeAt(characterStart - 1)
+      if (previous >= 0xd800 && previous <= 0xdbff) characterStart -= 1
+    }
+    const character = text.slice(characterStart, start)
+    const size = utf8CodePointBytes(character)
+    if (bytes + size > maxBytes) break
+    bytes += size
+    start = characterStart
+  }
+  return { text: text.slice(start), bytes }
+}
+
+function boundedMonolithicOutput (value, maxBytes) {
+  const bounded = boundedUtf8String(value, maxBytes)
+  if (!bounded.truncated) {
+    return {
+      output: bounded.text,
+      outputBytes: bounded.bytes,
+      markerOutput: bounded.text,
+      markerBytes: 0
+    }
+  }
+  const markerBudget = Math.min(4 * 1024, Math.floor(maxBytes / 2))
+  const output = boundedUtf8String(value, maxBytes - markerBudget)
+  const marker = boundedUtf8TailString(value, markerBudget)
+  return {
+    output: output.text,
+    outputBytes: output.bytes,
+    markerOutput: marker.text,
+    markerBytes: marker.bytes
+  }
+}
+
+function byteView (value) {
+  if (value instanceof ArrayBuffer) return new Uint8Array(value)
+  if (ArrayBuffer.isView(value)) {
+    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength)
+  }
+}
+
+async function readBoundedValue (value, maxBytes) {
+  if (value === undefined || value === null || maxBytes <= 0) {
+    return { text: '', bytes: 0 }
+  }
+  if (typeof value === 'string' ||
+    ['number', 'boolean', 'bigint'].includes(typeof value)) {
+    return boundedUtf8String(value, maxBytes)
+  }
+  const bytes = byteView(value)
+  if (bytes) {
+    const consumedBytes = Math.min(bytes.byteLength, maxBytes)
+    const bounded = boundedUtf8String(
+      new TextDecoder().decode(bytes.subarray(0, maxBytes)),
+      maxBytes
+    )
+    return { ...bounded, bytes: consumedBytes }
+  }
+
+  let text = ''
+  let usedBytes = 0
+  const append = chunk => {
+    const remaining = maxBytes - usedBytes
+    const chunkBytes = byteView(chunk)
+    const consumedBytes = chunkBytes
+      ? Math.min(chunkBytes.byteLength, remaining)
+      : undefined
+    const bounded = chunkBytes
+      ? boundedUtf8String(
+        new TextDecoder().decode(chunkBytes.subarray(0, remaining)),
+        remaining
+      )
+      : boundedUtf8String(chunk, remaining)
+    text += bounded.text
+    usedBytes += consumedBytes ?? bounded.bytes
+  }
+
+  if (typeof value?.getReader === 'function') {
+    const reader = value.getReader()
+    try {
+      while (true) {
+        if (usedBytes >= maxBytes) break
+        const item = await reader.read()
+        if (item.done) break
+        append(item.value)
+      }
+      if (usedBytes >= maxBytes) {
+        try {
+          await reader.cancel()
+        } catch {}
+      }
+    } finally {
+      reader.releaseLock?.()
+    }
+    return { text, bytes: usedBytes }
+  }
+
+  if (typeof value?.[Symbol.asyncIterator] === 'function' ||
+    typeof value?.[Symbol.iterator] === 'function') {
+    for await (const chunk of value) {
+      append(chunk)
+      if (usedBytes >= maxBytes) break
+    }
+    return { text, bytes: usedBytes }
+  }
+  return boundedUtf8String(value, maxBytes)
+}
+
+export async function collectBoundedRemoteOutput (
+  result,
+  maxBytes = maxAuditPreviewBytes
+) {
+  if (typeof result === 'string') {
+    const bounded = boundedMonolithicOutput(result, maxBytes)
+    return {
+      output: bounded.output,
+      markerOutput: bounded.markerOutput
+    }
+  }
+  if (byteView(result)) {
+    const bounded = await readBoundedValue(result, maxBytes)
+    return { output: bounded.text, markerOutput: bounded.text }
+  }
+  if (!result || typeof result !== 'object') {
+    return { output: '', markerOutput: '' }
+  }
+
+  const monolithicStdout = typeof result.stdout === 'string'
+    ? boundedMonolithicOutput(result.stdout, maxBytes)
+    : null
+  const stdout = monolithicStdout || await readBoundedValue(result.stdout, maxBytes)
+  let output = monolithicStdout ? stdout.output : stdout.text
+  let usedBytes = monolithicStdout
+    ? stdout.outputBytes + stdout.markerBytes
+    : stdout.bytes
+  const values = [result.output, result.stderr]
+  if (!output && values.every(value => value == null || value === '')) {
+    values.push(result.message)
+  }
+  for (const value of values) {
+    if (value === undefined || value === null || value === '' || usedBytes >= maxBytes) {
+      continue
+    }
+    const separatorBytes = output ? 1 : 0
+    if (usedBytes + separatorBytes >= maxBytes) break
+    const bounded = await readBoundedValue(
+      value,
+      maxBytes - usedBytes - separatorBytes
+    )
+    if (!bounded.text || bounded.text === output) continue
+    if (output) {
+      output += '\n'
+      usedBytes += 1
+    }
+    output += bounded.text
+    usedBytes += bounded.bytes
+  }
+  return {
+    output,
+    markerOutput: monolithicStdout ? stdout.markerOutput : stdout.text
+  }
 }
 
 function remoteCode (result) {
@@ -298,12 +473,11 @@ function stricterClassification (operation) {
     ? claimedRisk
     : classified.risk
   const claimsReversible = operation.reversible === true
-  const providerMatches = operation.recoveryProvider === classified.provider
   const reversible = risk === 'change' && classified.reversible === true &&
-    claimsReversible && providerMatches
+    classified.provider != null
   const forged = (hasClaimedRisk && !validClaimedRisk) ||
     riskRank[claimedRisk] < riskRank[classified.risk] ||
-    (claimsReversible && (!classified.reversible || !providerMatches)) ||
+    (claimsReversible && !classified.reversible) ||
     (operation.recoveryProvider != null && operation.recoveryProvider !== classified.provider)
   return {
     classified,
@@ -544,6 +718,7 @@ export function createTransactionRunner (options = {}) {
       try {
         const remote = Promise.resolve().then(() => runRemote(remoteCommand, {
           timeoutMs: timeoutFor(operation, phase),
+          maxOutputBytes: maxAuditPreviewBytes,
           signal: runOptions.signal,
           executionId,
           phase
@@ -551,7 +726,9 @@ export function createTransactionRunner (options = {}) {
         result = await Promise.race([remote, cancellation])
       } catch (error) {
         const cancelled = active.cancelRequested || cancellationRequests.has(operation.id)
-        const output = remoteOutput(error) || error?.message || ''
+        const remoteOutput = await collectBoundedRemoteOutput(error)
+        const output = remoteOutput.output ||
+          boundedUtf8String(error?.message || '', maxAuditPreviewBytes).text
         const audit = createAuditRecord({
           phase,
           timestamp: timestamp(),
@@ -561,8 +738,9 @@ export function createTransactionRunner (options = {}) {
         throw phaseError(error, audit, cancelled)
       }
 
-      const output = remoteOutput(result)
-      const markerOutput = remoteMarkerOutput(result)
+      const remoteOutput = await collectBoundedRemoteOutput(result)
+      const output = remoteOutput.output
+      const markerOutput = remoteOutput.markerOutput
       let code = remoteCode(result)
       if (code !== undefined && code !== 0) {
         const error = new Error(`远程${phase}传输执行失败，退出码 ${code}。`)
@@ -618,14 +796,32 @@ export function createTransactionRunner (options = {}) {
     throw sanitizeError(error)
   }
 
-  async function cancelState (operation, entries = []) {
+  async function cancelState (operation, entries = [], failure) {
     const current = await get(operation.id) || operation
-    return transition(current, operationStates.cancelled, {
+    const preservesRecovery = [
+      operationStates.executing,
+      operationStates.rollingBack
+    ].includes(current.state) && Boolean(
+      current.recoveryBinding &&
+      current.recoveryReadyAt &&
+      current.plan?.rollbackCommand &&
+      current.plan?.verifyCommand
+    )
+    const state = failure || preservesRecovery
+      ? operationStates.failed
+      : operationStates.cancelled
+    const next = await patch(current.id, {
       audit: appendAudit(current, entries),
-      error: cancellationError().message,
-      completedAt: timestamp(),
+      error: failure?.message || cancellationError().message,
+      ...(state === operationStates.failed
+        ? { failedAt: timestamp() }
+        : { completedAt: timestamp() }),
+      state,
+      updatedAt: timestamp(),
       executionId: undefined
-    }, 'cancel')
+    })
+    emit(current.id, state, 'cancel')
+    return next
   }
 
   function prepare (request = {}) {
@@ -922,12 +1118,28 @@ export function createTransactionRunner (options = {}) {
     if (active) {
       active.cancelRequested = true
       try {
-        await cancelRemote(active.executionId)
+        await cancelRemote(active.executionId, {
+          maxOutputBytes: maxAuditPreviewBytes,
+          phase: 'cancel'
+        })
       } catch (error) {
         cancellationFailure = sanitizeError(error)
       } finally {
         active.release()
       }
+    }
+
+    if (cancellationFailure) {
+      try {
+        const current = await get(operationId)
+        if (current && !terminalStates.has(current.state) &&
+          cancellableStates.has(current.state)) {
+          await cancelState(current, [], cancellationFailure)
+        }
+      } finally {
+        cancellationRequests.delete(operationId)
+      }
+      throw cancellationFailure
     }
 
     let current
@@ -936,12 +1148,13 @@ export function createTransactionRunner (options = {}) {
       if (current && !terminalStates.has(current.state) &&
         cancellableStates.has(current.state)) {
         current = await cancelState(current)
-        boundRecoveries.delete(operationId)
+        if (current.state === operationStates.cancelled) {
+          boundRecoveries.delete(operationId)
+        }
       }
     } finally {
       cancellationRequests.delete(operationId)
     }
-    if (cancellationFailure && !current) throw cancellationFailure
     return current
   }
 
