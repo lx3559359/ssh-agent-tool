@@ -331,6 +331,97 @@ test('verify rechecks the full persisted plan after rollback completes', async (
   assert.deepEqual(phases, ['prepare', 'execute', 'rollback'])
 })
 
+test('execute post-check restores the bound plan when persistence changes while remote is pending', async () => {
+  const request = await createRequest({ id: 'op-binding-execute-pending' })
+  let resolveExecute
+  const phases = []
+  const context = await createPreparedRunner({
+    request,
+    runRemote: async (command, options) => {
+      phases.push(options.phase)
+      if (options.phase === 'execute') {
+        return new Promise(resolve => { resolveExecute = resolve })
+      }
+      return { stdout: marker(options.phase, request.id), code: 0 }
+    }
+  })
+  const prepared = await context.store.get(request.id)
+  const bound = {
+    plan: clone(prepared.plan),
+    artifacts: clone(prepared.artifacts),
+    recoveryBinding: clone(prepared.recoveryBinding)
+  }
+  const execution = context.runner.execute(request.id, { confirmed: true })
+  await waitFor(() => Boolean(resolveExecute))
+  const executing = await context.store.get(request.id)
+  await context.store.patch(request.id, {
+    plan: {
+      ...executing.plan,
+      executeCommand: 'systemctl restart sshd'
+    },
+    artifacts: {
+      ...executing.artifacts,
+      manifest: '~/.shellpilot/operations/forged/manifest.json'
+    }
+  })
+  resolveExecute({ stdout: marker('execute', request.id), code: 0 })
+
+  await assert.rejects(execution, /完整性|恢复绑定|指纹|不一致/)
+  const failed = await context.store.get(request.id)
+  assert.equal(failed.state, 'failed')
+  assert.match(failed.integrityError, /完整性|恢复绑定|指纹|不一致/)
+  assert.deepEqual(failed.plan, bound.plan)
+  assert.deepEqual(failed.artifacts, bound.artifacts)
+  assert.deepEqual(failed.recoveryBinding, bound.recoveryBinding)
+  assert.deepEqual(phases, ['prepare', 'execute'])
+  assert.equal((await context.runner.rollback(request.id)).state, 'restored')
+})
+
+test('verify post-check refuses restored and repairs rollback fields after pending-plan tampering', async () => {
+  const request = await createRequest({ id: 'op-binding-verify-pending' })
+  let resolveVerify
+  let verifyAttempts = 0
+  const phases = []
+  const context = await createPreparedRunner({
+    request,
+    runRemote: async (command, options) => {
+      phases.push(options.phase)
+      if (options.phase === 'verify' && verifyAttempts++ === 0) {
+        return new Promise(resolve => { resolveVerify = resolve })
+      }
+      return { stdout: marker(options.phase, request.id), code: 0 }
+    }
+  })
+  await context.runner.execute(request.id, { confirmed: true })
+  const rollbackAvailable = await context.store.get(request.id)
+  const bound = {
+    plan: clone(rollbackAvailable.plan),
+    artifacts: clone(rollbackAvailable.artifacts),
+    recoveryBinding: clone(rollbackAvailable.recoveryBinding)
+  }
+  const rollback = context.runner.rollback(request.id)
+  await waitFor(() => Boolean(resolveVerify))
+  const verifying = await context.store.get(request.id)
+  await context.store.patch(request.id, {
+    plan: {
+      ...verifying.plan,
+      verifyCommand: 'verify-command-was-forged-while-pending'
+    }
+  })
+  resolveVerify({ stdout: marker('verify', request.id), code: 0 })
+
+  await assert.rejects(rollback, /完整性|恢复绑定|指纹|不一致/)
+  const failed = await context.store.get(request.id)
+  assert.equal(failed.state, 'failed')
+  assert.match(failed.integrityError, /完整性|恢复绑定|指纹|不一致/)
+  assert.deepEqual(failed.plan, bound.plan)
+  assert.deepEqual(failed.artifacts, bound.artifacts)
+  assert.deepEqual(failed.recoveryBinding, bound.recoveryBinding)
+  assert.notEqual(failed.state, 'restored')
+  assert.deepEqual(phases, ['prepare', 'execute', 'rollback', 'verify'])
+  assert.equal((await context.runner.rollback(request.id)).state, 'restored')
+})
+
 test('prepare and execute require real zero markers instead of transport code alone', async () => {
   const { createTransactionRunner } = await importDomainModule('transaction-runner.js')
   const request = await createRequest({ id: 'op-real-marker' })

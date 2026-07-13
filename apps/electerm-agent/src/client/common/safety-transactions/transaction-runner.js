@@ -251,6 +251,42 @@ async function assertRecoveryBinding (operation) {
   if (binding.fingerprint !== fingerprint) throw recoveryBindingError()
 }
 
+function recoveryIntegrityError () {
+  const error = new Error('恢复绑定完整性校验失败，远程结果未提交；已恢复原始可回滚信息。')
+  error.integrityFailure = true
+  return error
+}
+
+function clonePersistedValue (value) {
+  return value === undefined
+    ? undefined
+    : JSON.parse(JSON.stringify(value))
+}
+
+function boundRecoverySnapshot (operation) {
+  return clonePersistedValue({
+    identity: {
+      schemaVersion: operation.schemaVersion,
+      id: operation.id,
+      command: operation.command,
+      endpoint: operation.endpoint,
+      endpointKey: operation.endpointKey,
+      computedEndpointKey: buildEndpointKey(operation.endpoint)
+    },
+    classification: {
+      risk: operation.risk,
+      reversible: operation.reversible,
+      recoveryProvider: operation.recoveryProvider,
+      requiresConfirmation: operation.requiresConfirmation,
+      reason: operation.reason
+    },
+    plan: operation.plan,
+    artifacts: operation.artifacts,
+    recoveryBinding: operation.recoveryBinding,
+    recoveryReadyAt: operation.recoveryReadyAt
+  })
+}
+
 function stricterClassification (operation) {
   const classified = classifyCommand(operation.command)
   const hasClaimedRisk = operation.risk !== undefined
@@ -308,6 +344,7 @@ export function createTransactionRunner (options = {}) {
   const endpointQueues = new Map()
   const activeExecutions = new Map()
   const cancellationRequests = new Set()
+  const boundRecoveries = new Map()
   let executionSequence = 0
 
   function emit (operationId, status, phase) {
@@ -366,6 +403,69 @@ export function createTransactionRunner (options = {}) {
       ? await patch(operation.id, { ...effectivePatch, updatedAt: timestamp() })
       : operation
     return { operation: current, safety }
+  }
+
+  function rememberBoundRecovery (operation) {
+    const bound = boundRecoverySnapshot(operation)
+    boundRecoveries.set(operation.id, bound)
+    return bound
+  }
+
+  async function assertBoundRecovery (operation, bound) {
+    await assertRecoveryBinding(operation)
+    if (stableSerialize(boundRecoverySnapshot(operation)) !== stableSerialize(bound)) {
+      throw recoveryIntegrityError()
+    }
+    return operation
+  }
+
+  async function failIntegrity (operation, bound, entries = []) {
+    const error = recoveryIntegrityError()
+    const current = await get(operation.id) || operation
+    await transition(current, operationStates.failed, {
+      command: bound.identity.command,
+      endpoint: clonePersistedValue(bound.identity.endpoint),
+      endpointKey: bound.identity.endpointKey,
+      risk: bound.classification.risk,
+      reversible: bound.classification.reversible,
+      recoveryProvider: bound.classification.recoveryProvider,
+      requiresConfirmation: bound.classification.requiresConfirmation,
+      reason: bound.classification.reason,
+      plan: clonePersistedValue(bound.plan),
+      artifacts: clonePersistedValue(bound.artifacts),
+      recoveryBinding: clonePersistedValue(bound.recoveryBinding),
+      recoveryReadyAt: bound.recoveryReadyAt,
+      audit: appendAudit(current, entries),
+      error: error.message,
+      integrityError: error.message,
+      failedAt: timestamp(),
+      executionId: undefined
+    }, 'failed')
+    error.integrityFailureHandled = true
+    throw error
+  }
+
+  async function requireBoundRecovery (operation) {
+    const bound = boundRecoveries.get(operation.id)
+    if (!bound) {
+      await assertRecoveryBinding(operation)
+      return rememberBoundRecovery(operation)
+    }
+    try {
+      await assertBoundRecovery(operation, bound)
+      return bound
+    } catch {
+      return failIntegrity(operation, bound)
+    }
+  }
+
+  async function postCheckBoundRecovery (operation, bound, entries = []) {
+    const current = await get(operation.id) || operation
+    try {
+      return await assertBoundRecovery(current, bound)
+    } catch {
+      return failIntegrity(current, bound, entries)
+    }
   }
 
   async function runMarkedPhase (operation, command, phase, runOptions = {}) {
@@ -481,6 +581,7 @@ export function createTransactionRunner (options = {}) {
     return serialize(id, async () => {
       let operation
       try {
+        boundRecoveries.delete(id)
         const { signal, ...persistedRequest } = request
         operation = await save({
           ...persistedRequest,
@@ -543,6 +644,7 @@ export function createTransactionRunner (options = {}) {
             recoveryReadyAt: timestamp(),
             executionId: undefined
           }, 'prepare')
+          rememberBoundRecovery(recoveryReady)
           return transition(
             recoveryReady,
             operationStates.awaitingConfirmation,
@@ -571,6 +673,7 @@ export function createTransactionRunner (options = {}) {
         throw new Error('必须明确确认后才能执行安全事务。')
       }
       let safety
+      let boundRecovery
       try {
         return await serializeEndpoint(operation, async () => {
           operation = await get(operation.id) || operation
@@ -592,7 +695,7 @@ export function createTransactionRunner (options = {}) {
             if (!operation.plan || !operation.artifacts || !operation.recoveryReadyAt) {
               throw new Error('可逆事务尚未完成 recovery-ready，已拒绝执行。')
             }
-            await assertRecoveryBinding(operation)
+            boundRecovery = await requireBoundRecovery(operation)
           } else {
             if (safety.classified.provider === 'network') {
               throw new Error('网络修改禁止 unsafe 执行，必须使用已验证恢复点。')
@@ -604,7 +707,9 @@ export function createTransactionRunner (options = {}) {
 
           operation = await transition(operation, operationStates.executing, {}, 'execute')
           operation = await get(operation.id) || operation
-          if (safety.reversible) await assertRecoveryBinding(operation)
+          if (safety.reversible) {
+            operation = await postCheckBoundRecovery(operation, boundRecovery)
+          }
           const executeCommand = operation.command
           const phase = await runMarkedPhase(
             operation,
@@ -614,6 +719,11 @@ export function createTransactionRunner (options = {}) {
           )
           if (phase.cancelRequested) throw cancellationError()
           if (safety.reversible) {
+            operation = await postCheckBoundRecovery(
+              operation,
+              boundRecovery,
+              [phase.audit]
+            )
             const verified = await transition(operation, operationStates.verificationPassed, {
               audit: appendAudit(operation, [phase.audit]),
               executionId: undefined
@@ -632,6 +742,7 @@ export function createTransactionRunner (options = {}) {
           }, 'execute')
         })
       } catch (error) {
+        if (error.integrityFailureHandled) throw sanitizeError(error)
         const current = await get(operation.id) || operation
         if (error.cancelled || cancellationRequests.has(operation.id) ||
           current.state === operationStates.cancelled) throw cancellationError()
@@ -659,6 +770,7 @@ export function createTransactionRunner (options = {}) {
         throw new Error('安全事务没有可用恢复计划，无法回滚。')
       }
       const audits = []
+      let boundRecovery
       try {
         return await serializeEndpoint(operation, async () => {
           operation = await get(operation.id) || operation
@@ -670,10 +782,10 @@ export function createTransactionRunner (options = {}) {
             throw new Error('安全事务没有可用恢复计划，无法回滚。')
           }
           await assertCurrentEndpoint(operation)
-          await assertRecoveryBinding(operation)
+          boundRecovery = await requireBoundRecovery(operation)
           operation = await transition(operation, operationStates.rollingBack, {}, 'rollback')
           operation = await get(operation.id) || operation
-          await assertRecoveryBinding(operation)
+          operation = await postCheckBoundRecovery(operation, boundRecovery)
           const rollbackCommand = operation.plan.rollbackCommand
           const rollbackPhase = await runMarkedPhase(
             operation,
@@ -683,8 +795,7 @@ export function createTransactionRunner (options = {}) {
           )
           audits.push(rollbackPhase.audit)
           if (rollbackPhase.cancelRequested) throw cancellationError()
-          operation = await get(operation.id) || operation
-          await assertRecoveryBinding(operation)
+          operation = await postCheckBoundRecovery(operation, boundRecovery, audits)
           const verifyCommand = operation.plan.verifyCommand
           const verifyPhase = await runMarkedPhase(
             operation,
@@ -694,13 +805,17 @@ export function createTransactionRunner (options = {}) {
           )
           audits.push(verifyPhase.audit)
           if (verifyPhase.cancelRequested) throw cancellationError()
-          return transition(operation, operationStates.restored, {
+          operation = await postCheckBoundRecovery(operation, boundRecovery, audits)
+          const restored = await transition(operation, operationStates.restored, {
             audit: appendAudit(operation, audits),
             completedAt: timestamp(),
             executionId: undefined
           }, 'verify')
+          boundRecoveries.delete(operation.id)
+          return restored
         })
       } catch (error) {
+        if (error.integrityFailureHandled) throw sanitizeError(error)
         if (error.audit) audits.push(error.audit)
         const current = await get(operation.id) || operation
         if (error.cancelled || cancellationRequests.has(operation.id) ||
@@ -717,9 +832,11 @@ export function createTransactionRunner (options = {}) {
       if (operation.state !== operationStates.rollbackAvailable) {
         throw new Error('只有 rollback-available 状态可以确认保留。')
       }
-      return transition(operation, operationStates.kept, {
+      const kept = await transition(operation, operationStates.kept, {
         completedAt: timestamp()
       }, 'keep')
+      boundRecoveries.delete(operation.id)
+      return kept
     })
   }
 
@@ -745,6 +862,7 @@ export function createTransactionRunner (options = {}) {
       if (current && !terminalStates.has(current.state) &&
         cancellableStates.has(current.state)) {
         current = await cancelState(current)
+        boundRecoveries.delete(operationId)
       }
     } finally {
       cancellationRequests.delete(operationId)

@@ -192,7 +192,8 @@ test('operation CRUD normalizes records and explicitly propagates database failu
       schemaVersion: 1,
       algorithm: 'SHA-256',
       fingerprint: 'a'.repeat(64)
-    }
+    },
+    integrityError: '恢复计划完整性校验失败，已拒绝提交远程结果。'
   })
   assert.equal(patched.id, 'op-1')
   assert.equal(patched.createdAt, saved.createdAt)
@@ -204,6 +205,10 @@ test('operation CRUD normalizes records and explicitly propagates database failu
     algorithm: 'SHA-256',
     fingerprint: 'a'.repeat(64)
   })
+  assert.equal(
+    patched.integrityError,
+    '恢复计划完整性校验失败，已拒绝提交远程结果。'
+  )
   assert.ok(new Date(patched.updatedAt) > new Date(saved.updatedAt))
   assert.deepEqual(await store.getOperation('op-1'), patched)
   assert.deepEqual((await store.listOperations()).map(item => item.id), ['op-1'])
