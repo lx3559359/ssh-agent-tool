@@ -122,10 +122,10 @@ export function createTaskRunner (options = {}) {
   const cancellationRequests = new Set()
   let executionSequence = 0
 
-  function emit (taskId, stepId, status) {
+  function emit (taskId, stepId, status, output = '') {
     if (!onEvent) return
     try {
-      onEvent({ taskId, stepId, status, phase: 'readonly' })
+      onEvent({ taskId, stepId, status, phase: 'readonly', output })
     } catch {}
   }
 
@@ -222,7 +222,9 @@ export function createTaskRunner (options = {}) {
           phase: 'readonly',
           timestamp: timestamp(),
           code: remoteCode(error),
-          output: error?.output ?? error?.stderr ?? error?.message ?? ''
+          output: failure === error
+            ? error?.output ?? error?.stderr ?? error?.message ?? ''
+            : failure.message
         })
       }
       throw failure
@@ -319,7 +321,7 @@ export function createTaskRunner (options = {}) {
             audit: [...(task.steps[index].audit || []), audit]
           })
           completedCount += 1
-          emit(task.id, step.id, 'completed')
+          emit(task.id, step.id, 'completed', audit.preview)
         } catch (error) {
           const cancelled = error.cancelled || cancellationRequests.has(task.id) ||
             runOptions.signal?.aborted
@@ -339,7 +341,7 @@ export function createTaskRunner (options = {}) {
             completedAt: timestamp(),
             error: sanitizeError(error).message
           })
-          emit(task.id, step.id, stepStatus)
+          emit(task.id, step.id, stepStatus, error.audit?.preview || '')
           if (cancelled) {
             cancellationRequests.delete(task.id)
             throw cancelledError()
