@@ -474,11 +474,34 @@ function positionalArguments (words) {
   return words.filter(word => word !== '--' && !word.startsWith('-'))
 }
 
+function truncateTargets (words) {
+  const targets = []
+  let optionsEnded = false
+  for (let index = 1; index < words.length; index += 1) {
+    const word = words[index]
+    if (!optionsEnded && word === '--') {
+      optionsEnded = true
+      continue
+    }
+    if (!optionsEnded && (word === '-c' || word === '--no-create')) continue
+    if (!optionsEnded && (word === '-s' || word === '--size')) {
+      if (!/^[+-]?\d+[KMGTPEZY]?$/.test(words[index + 1] || '')) return []
+      index += 1
+      continue
+    }
+    if (!optionsEnded && /^--size=[+-]?\d+[KMGTPEZY]?$/.test(word)) continue
+    if (!optionsEnded && word.startsWith('-')) return []
+    targets.push(word)
+  }
+  return targets
+}
+
 function explicitFileWriteTargets (command) {
   const words = shellWords(stripCommandPrefix(command))
   const executable = (words[0] || '').toLowerCase()
   const positional = positionalArguments(words.slice(1))
-  if (executable === 'tee' || executable === 'truncate' || executable === 'rm') {
+  if (executable === 'truncate') return truncateTargets(words)
+  if (executable === 'tee' || executable === 'rm') {
     return positional
   }
   if (executable === 'find') return findOutputTargets(words.slice(1)).targets
@@ -512,7 +535,8 @@ function fileProvider (command) {
       invocation.files.every(isRecoverableFilePath)
   }
   if (executable === 'truncate') {
-    return positional.length > 0 && positional.every(isRecoverableFilePath)
+    const targets = truncateTargets([executable, ...words])
+    return targets.length > 0 && targets.every(isRecoverableFilePath)
   }
   if (executable === 'rm') {
     const recursive = words.some(word => /^-[^-]*r/i.test(word) || word === '--recursive')
