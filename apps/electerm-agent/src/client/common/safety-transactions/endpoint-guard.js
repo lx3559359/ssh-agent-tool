@@ -2,8 +2,18 @@ const defaultSshPort = 22
 
 function normalizeIpv6 (host) {
   const percentIndex = host.indexOf('%')
-  const address = percentIndex === -1 ? host : host.slice(0, percentIndex)
+  let address = percentIndex === -1 ? host : host.slice(0, percentIndex)
   const zone = percentIndex === -1 ? '' : host.slice(percentIndex).toLowerCase()
+  const embeddedIpv4 = address.match(/^(.*:)(\d{1,3}(?:\.\d{1,3}){3})$/)
+  if (embeddedIpv4) {
+    const bytes = embeddedIpv4[2].split('.').map(Number)
+    if (bytes.some(byte => !Number.isInteger(byte) || byte < 0 || byte > 255)) {
+      return host.toLowerCase()
+    }
+    const high = ((bytes[0] << 8) | bytes[1]).toString(16)
+    const low = ((bytes[2] << 8) | bytes[3]).toString(16)
+    address = `${embeddedIpv4[1]}${high}:${low}`
+  }
   const halves = address.toLowerCase().split('::')
   if (halves.length > 2) return host.toLowerCase()
 

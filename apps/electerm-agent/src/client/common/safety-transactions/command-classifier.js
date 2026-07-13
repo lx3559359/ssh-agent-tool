@@ -5,8 +5,8 @@ const riskRank = {
   blocked: 3
 }
 
-function result (risk, reason, provider = null) {
-  const reversible = risk === 'change' && Boolean(provider)
+function result (risk, reason, provider = null, reversibleOverride) {
+  const reversible = reversibleOverride ?? (risk === 'change' && Boolean(provider))
   return {
     risk,
     reversible,
@@ -50,7 +50,9 @@ function splitCommands (command) {
       index += 1
       continue
     }
-    if (character === ';' || character === '|' || character === '\n') {
+    const isBackgroundOperator = character === '&' &&
+      command[index - 1] !== '>' && command[index + 1] !== '>'
+    if (character === ';' || character === '|' || character === '\n' || isBackgroundOperator) {
       if (current.trim()) parts.push(current.trim())
       current = ''
       continue
@@ -61,21 +63,60 @@ function splitCommands (command) {
   return parts
 }
 
-function stripCommandPrefix (command) {
-  let text = command.trim()
-  text = text.replace(/^(?:[A-Za-z_][A-Za-z0-9_]*=[^\s]+\s+)*/, '')
-  text = text.replace(/^sudo(?:\s+(?:-[A-Za-z]+|--\S+)(?:\s+\S+)?)?\s+/, '')
-  return text.trim()
-}
-
-function shellWords (command) {
-  const words = []
+function shellTokens (command) {
+  const tokens = []
   const pattern = /"((?:\\.|[^"\\])*)"|'([^']*)'|([^\s]+)/g
   let match
   while ((match = pattern.exec(command))) {
-    words.push(match[1] ?? match[2] ?? match[3])
+    tokens.push({
+      value: match[1] ?? match[2] ?? match[3],
+      start: match.index,
+      end: pattern.lastIndex
+    })
   }
-  return words
+  return tokens
+}
+
+function shellWords (command) {
+  return shellTokens(command).map(token => token.value)
+}
+
+function executableName (value) {
+  return String(value || '').replace(/^.*\//, '')
+}
+
+function isEnvironmentAssignment (value) {
+  return /^[A-Za-z_][A-Za-z0-9_]*=/.test(value)
+}
+
+function stripCommandPrefix (command) {
+  const text = command.trim()
+  const tokens = shellTokens(text)
+  let index = 0
+  while (isEnvironmentAssignment(tokens[index]?.value)) index += 1
+
+  if (executableName(tokens[index]?.value) === 'sudo') {
+    index += 1
+    const optionsWithValues = new Set([
+      '-u', '--user', '-g', '--group', '-h', '--host', '-p', '--prompt',
+      '-C', '--close-from', '-T', '--command-timeout', '-R', '--chroot',
+      '-D', '--chdir', '-r', '--role', '-t', '--type'
+    ])
+    while (tokens[index]?.value?.startsWith('-')) {
+      const option = tokens[index].value
+      if (option === '--') {
+        index += 1
+        break
+      }
+      index += 1
+      if (optionsWithValues.has(option) && tokens[index]) index += 1
+    }
+    while (isEnvironmentAssignment(tokens[index]?.value)) index += 1
+  }
+
+  const executable = tokens[index]
+  if (!executable) return ''
+  return `${executableName(executable.value)}${text.slice(executable.end)}`.trim()
 }
 
 function isSafeAbsolutePath (value) {
@@ -88,16 +129,31 @@ function hasUnsafeExpansion (command) {
   return /\$\(|`|\$\{|(^|\s)(?:eval|source|\.)\s|(^|\s)(?:ba|z|k)?sh\s+-?c\b/i.test(command)
 }
 
+function isDatabaseClient (command) {
+  return /^(?:mysql|mariadb|psql|sqlite3|redis-cli|mongo|mongosh|mysqladmin)(?:\s|$)/i.test(stripCommandPrefix(command))
+}
+
+function hasDestructiveDatabaseOperation (command) {
+  return /\b(?:drop\s+(?:database|schema|table)|truncate\s+(?:table\s+)?[A-Za-z_]|delete\s+from|flushall|flushdb|dropdatabase\s*\(|db(?:\.[A-Za-z_$][\w$-]*)+\.drop\s*\()/i.test(command) ||
+    /^mysqladmin\b.*\bdrop\b/i.test(stripCommandPrefix(command))
+}
+
 function isBlocked (command) {
   const text = stripCommandPrefix(command)
   if (/^(?:mkfs(?:\.[A-Za-z0-9_-]+)?|fdisk|parted)(?:\s|$)/i.test(text)) return true
   if (/^(?:reboot|shutdown|poweroff)(?:\s|$)/i.test(text)) return true
-  if (/^dd(?:\s|$)/i.test(text) && /\bof\s*=\s*['"]?\/dev\/(?:sd[a-z]|hd[a-z]|vd[a-z]|xvd[a-z]|nvme\d+n\d+|mmcblk\d+|dm-\d+|md\d+|loop\d+|mapper\/[^\s'"]+|disk\/by-(?:id|path|uuid|partuuid)\/[^\s'"]+)/i.test(text)) return true
-
-  const databaseClient = /^(?:mysql|mariadb|psql|sqlite3|redis-cli|mongo|mongosh|mysqladmin)(?:\s|$)/i.test(text)
-  const destructiveStatement = /\b(?:drop\s+(?:database|schema|table)|truncate\s+(?:table\s+)?[A-Za-z_]|delete\s+from|flushall|flushdb|dropdatabase\s*\()/i.test(text)
-  const mysqlAdminDrop = /^mysqladmin\b.*\bdrop\b/i.test(text)
-  return databaseClient && (destructiveStatement || mysqlAdminDrop)
+  if (/^dd(?:\s|$)/i.test(text)) {
+    const outputMatch = text.match(/\bof\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s]+))/i)
+    const output = outputMatch?.[1] ?? outputMatch?.[2] ?? outputMatch?.[3] ?? ''
+    if (output.startsWith('/dev/')) {
+      const allowedCharacterDevices = new Set([
+        '/dev/null', '/dev/zero', '/dev/random', '/dev/urandom',
+        '/dev/stdout', '/dev/stderr'
+      ])
+      return !allowedCharacterDevices.has(output)
+    }
+  }
+  return isDatabaseClient(text) && hasDestructiveDatabaseOperation(text)
 }
 
 function findRedirection (command) {
@@ -228,6 +284,9 @@ export function classifyCommand (command) {
   if (!text) return result('unknown', '命令为空，无法分类')
   const parts = splitCommands(text)
   if (!parts.length) return result('unknown', '命令为空，无法分类')
+  if (parts.some(isDatabaseClient) && hasDestructiveDatabaseOperation(text)) {
+    return result('blocked', '命令包含明确禁止的不可逆操作')
+  }
 
   const classifications = parts.map(classifySingle)
   const highestRank = Math.max(...classifications.map(item => riskRank[item.risk]))
@@ -235,7 +294,7 @@ export function classifyCommand (command) {
   if (highestRank === riskRank.change) {
     const providers = [...new Set(highest.map(item => item.provider))]
     if (providers.length !== 1) {
-      return result('unknown', '复合命令包含多个恢复类型，无法作为单一事务回滚')
+      return result('change', '复合命令包含多个恢复类型，需要按命令逐项恢复', null, true)
     }
   }
   return highest[0]

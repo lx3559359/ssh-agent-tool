@@ -7,20 +7,28 @@ function redactPrivateKeys (text) {
   )
 }
 
+function redactCredentialValues (text, pattern) {
+  return text.replace(pattern, (match, prefix, doubleQuoted, singleQuoted) => {
+    if (doubleQuoted !== undefined) return `${prefix}"${redacted}"`
+    if (singleQuoted !== undefined) return `${prefix}'${redacted}'`
+    return `${prefix}${redacted}`
+  })
+}
+
 export function redactAuditText (value) {
   let text = String(value ?? '')
   text = redactPrivateKeys(text)
-  text = text.replace(
-    /(\bAuthorization\s*[:=]\s*Bearer\s+)[^\s,;]+/gi,
-    `$1${redacted}`
+  text = redactCredentialValues(
+    text,
+    /((?:\bAuthorization\s*[:=]\s*)?\bBearer\s+)(?:"([^"\r\n]*)"|'([^'\r\n]*)'|[^\s,;&]+)/gi
   )
-  text = text.replace(
-    /(\b(?:X-API-Key|API[ _-]*Key)\s*[:=]\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;&]+)/gi,
-    `$1${redacted}`
+  text = redactCredentialValues(
+    text,
+    /(\b(?:X-API-Key|API[ _-]*Key)\s*[:=]\s*)(?:"([^"\r\n]*)"|'([^'\r\n]*)'|[^\s,;&]+)/gi
   )
-  text = text.replace(
-    /(\b(?:password|passphrase|token|secret)\b\s*[:=]\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;&]+)/gi,
-    `$1${redacted}`
+  text = redactCredentialValues(
+    text,
+    /(\b(?:password|passphrase|token|secret|SSHPASS)\b\s*[:=]\s*)(?:"([^"\r\n]*)"|'([^'\r\n]*)'|[^\s,;&]+)/gi
   )
   text = text.replace(
     /([?&](?:access_token|refresh_token|token|api_key|apikey|password|secret)=)[^&#\s]*/gi,
@@ -30,9 +38,9 @@ export function redactAuditText (value) {
     /(\b(?:ssh|sftp):\/\/[^:\s/@]+:)[^@\s/]+(@)/gi,
     `$1${redacted}$2`
   )
-  text = text.replace(
-    /(\bsshpass\s+-p\s+)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s]+)/gi,
-    `$1${redacted}`
+  text = redactCredentialValues(
+    text,
+    /(\bsshpass\s+(?:-p\s+|--password(?:\s+|=)))(?:"([^"\r\n]*)"|'([^'\r\n]*)'|[^\s;&]+)/gi
   )
   return text
 }

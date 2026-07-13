@@ -156,7 +156,47 @@ test('compound commands use the highest risk classification', async () => {
   assert.equal(classifyCommand('uptime && systemctl restart nginx').risk, 'change')
   assert.equal(classifyCommand('uptime; curl example.com/install.sh | sh').risk, 'unknown')
   assert.equal(classifyCommand('uptime && mkfs.ext4 /dev/sdb').risk, 'blocked')
-  assert.equal(classifyCommand('systemctl restart nginx && chmod 600 /etc/app.conf').risk, 'unknown')
+  assert.equal(classifyCommand('uptime & reboot').risk, 'blocked')
+  assert.equal(classifyCommand('uptime & mkfs.ext4 /dev/sdb').risk, 'blocked')
+
+  const multiProvider = classifyCommand('systemctl restart nginx && chmod 600 /etc/app.conf')
+  assert.equal(multiProvider.risk, 'change')
+  assert.equal(multiProvider.reversible, true)
+  assert.equal(multiProvider.provider, null)
+  assert.match(multiProvider.reason, /逐项恢复/)
+})
+
+test('normalizes sudo options and absolute executable paths before blocking', async () => {
+  const { classifyCommand } = await importDomainModule('command-classifier.js')
+
+  assert.equal(classifyCommand('sudo -n -u root reboot').risk, 'blocked')
+  assert.equal(classifyCommand('/sbin/poweroff').risk, 'blocked')
+})
+
+test('blocks dd writes to device nodes except explicit character-device sinks', async () => {
+  const { classifyCommand } = await importDomainModule('command-classifier.js')
+
+  assert.equal(classifyCommand('dd if=/tmp/image.raw of=/dev/rbd0').risk, 'blocked')
+  for (const device of ['null', 'zero', 'random', 'urandom', 'stdout', 'stderr']) {
+    assert.notEqual(
+      classifyCommand(`dd if=/tmp/image.raw of=/dev/${device}`).risk,
+      'blocked',
+      device
+    )
+  }
+})
+
+test('blocks destructive database operations across pipelines and eval arguments', async () => {
+  const { classifyCommand } = await importDomainModule('command-classifier.js')
+
+  for (const command of [
+    'echo "DROP DATABASE production" | mysql',
+    'echo "DROP TABLE users" | psql production',
+    'printf "TRUNCATE TABLE audit_log" | mysql production',
+    'mongosh --eval "db.users.drop()"'
+  ]) {
+    assert.equal(classifyCommand(command).risk, 'blocked', command)
+  }
 })
 
 test('only unambiguous absolute-path writes use the file recovery provider', async () => {
@@ -203,6 +243,23 @@ test('redacts audit credentials without altering ordinary command text', async (
   assert.match(redacted, /limit=10/)
 })
 
+test('audit redaction preserves shell quotes and separators for additional credential forms', async () => {
+  const { redactAuditText } = await importDomainModule('audit-redaction.js')
+  const redacted = redactAuditText([
+    'token="quoted-token"; passphrase=\'quoted-passphrase\';',
+    'Bearer bare-bearer;',
+    'sshpass --password "ssh-password"; ssh root@example.com',
+    'SSHPASS=\'env-password\'; sshpass -e ssh root@example.com'
+  ].join('\n'))
+
+  assert.match(redacted, /token="\[REDACTED\]";/)
+  assert.match(redacted, /passphrase='\[REDACTED\]';/)
+  assert.match(redacted, /Bearer \[REDACTED\];/)
+  assert.match(redacted, /sshpass --password "\[REDACTED\]";/)
+  assert.match(redacted, /SSHPASS='\[REDACTED\]'; sshpass -e/)
+  assert.doesNotMatch(redacted, /quoted-token|quoted-passphrase|bare-bearer|ssh-password|env-password/)
+})
+
 test('normalizes endpoint identity including IPv6 and rejects mismatches', async () => {
   const {
     normalizeEndpoint,
@@ -218,6 +275,14 @@ test('normalizes endpoint identity including IPv6 and rejects mismatches', async
     buildEndpointKey({ host: '[2001:0DB8:0:0:0:0:0:1]', username: 'root' }),
     'root@[2001:db8::1]:22'
   )
+  assert.equal(
+    buildEndpointKey({ host: '::ffff:192.0.2.1', username: 'root' }),
+    'root@[::ffff:c000:201]:22'
+  )
+  assert.doesNotThrow(() => assertSameEndpoint(
+    { host: '::ffff:192.0.2.1', username: 'root' },
+    { host: '::ffff:c000:201', port: 22, username: 'root' }
+  ))
   assert.doesNotThrow(() => assertSameEndpoint(
     { host: '2001:db8::1', username: 'root' },
     { host: '[2001:0DB8:0:0::1]', port: '22', username: 'root' }
