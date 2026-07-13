@@ -244,6 +244,32 @@ test('legacy plaintext cleanup retries after an earlier removal failure', async 
   assert.equal(removalAttempts, 2)
 })
 
+test('legacy plaintext cleanup can wait for database migration verification', async () => {
+  const { readSafetyOperationRecords, safetyOperationStorageKey } = await import(moduleUrl)
+  let encrypted = []
+  const removed = []
+  const legacyRecord = {
+    id: 'legacy-deferred',
+    sourcePath: '/etc/hosts',
+    createdAt: '2026-07-12T08:00:00.000Z'
+  }
+  const storage = {
+    safeGetItemJSON: (key, fallback) => key === safetyOperationStorageKey ? encrypted : fallback,
+    safeSetItemJSON: (key, value) => { encrypted = value },
+    removeItem: key => removed.push(key),
+    getItemJSON: (key, fallback) => key === 'shellpilot-sftp-recovery-records'
+      ? [legacyRecord]
+      : fallback
+  }
+
+  readSafetyOperationRecords(storage, { cleanupLegacy: false })
+  assert.deepEqual(removed, [])
+  assert.deepEqual(encrypted.map(record => record.id), ['legacy-deferred'])
+
+  readSafetyOperationRecords(storage)
+  assert.deepEqual(removed.sort(), ['shellpilot-network-rollback', 'shellpilot-sftp-recovery-records'])
+})
+
 test('writing a stale snapshot merges records already persisted by another component', async () => {
   const { writeSafetyOperationRecords, safetyOperationStorageKey } = await import(moduleUrl)
   let persisted = [{ id: 'sftp-new', source: 'sftp', createdAt: '2026-07-12T10:00:00.000Z' }]

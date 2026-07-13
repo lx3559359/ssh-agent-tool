@@ -71,7 +71,7 @@ export function migrateSafetyOperationRecords ({
   return mergeSafetyOperationRecords([...legacySftp, ...legacyQuick], unifiedRecords, limit)
 }
 
-export function readSafetyOperationRecords (storage) {
+export function readSafetyOperationRecords (storage, options = {}) {
   const unifiedRecords = storage.safeGetItemJSON(safetyOperationStorageKey, [])
   const sftpRecords = storage.getItemJSON(legacySftpRecoveryStorageKey, [])
   const quickRollbackRecord = storage.getItemJSON(legacyQuickRollbackStorageKey, null)
@@ -84,7 +84,7 @@ export function readSafetyOperationRecords (storage) {
     storage.safeSetItemJSON(safetyOperationStorageKey, records)
   }
   const hadLegacyRecords = sftpRecords.length > 0 || Boolean(quickRollbackRecord)
-  if (hadLegacyRecords && storage.removeItem) {
+  if (options.cleanupLegacy !== false && hadLegacyRecords && storage.removeItem) {
     const verified = storage.safeGetItemJSON(safetyOperationStorageKey, [])
     if (JSON.stringify(verified) === JSON.stringify(records)) {
       for (const key of [legacySftpRecoveryStorageKey, legacyQuickRollbackStorageKey]) {
