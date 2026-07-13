@@ -28,6 +28,10 @@ export function redactAuditText (value) {
   )
   text = redactCredentialValues(
     text,
+    /(\bAuthorization\s*[:=]\s*Basic\s+)(?:"([^"\r\n]*)"|'([^'\r\n]*)'|[^\s,;&]+)/gi
+  )
+  text = redactCredentialValues(
+    text,
     /(\b(?:X-API-Key|API[ _-]*Key)\s*[:=]\s*)(?:"([^"\r\n]*)"|'([^'\r\n]*)'|[^\s,;&]+)/gi
   )
   text = redactCredentialValues(
@@ -44,7 +48,7 @@ export function redactAuditText (value) {
   )
   text = redactCredentialValues(
     text,
-    /(\bsshpass\s+(?:-p(?:\s+|(?=\S))|--password(?:\s+|=)))(?:"([^"\r\n]*)"|'([^'\r\n]*)'|[^\s;&]+)/gi
+    /(\bsshpass\s+(?:(?:-v|-e)\s+|(?:-f|-d|-P)\s+\S+\s+)*(?:-p(?:\s+|(?=\S))|--password(?:\s+|=)))(?:"([^"\r\n]*)"|'([^'\r\n]*)'|[^\s;&]+)/gi
   )
   return text
 }

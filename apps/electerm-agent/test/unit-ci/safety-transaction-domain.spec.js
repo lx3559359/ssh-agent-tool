@@ -203,9 +203,23 @@ test('compound commands use the highest risk classification', async () => {
 
   const multiProvider = classifyCommand('systemctl restart nginx && chmod 600 /etc/app.conf')
   assert.equal(multiProvider.risk, 'change')
-  assert.equal(multiProvider.reversible, true)
+  assert.equal(multiProvider.reversible, false)
   assert.equal(multiProvider.provider, null)
-  assert.match(multiProvider.reason, /逐项恢复/)
+  assert.match(multiProvider.reason, /包含多个修改，无法生成统一自动回滚/)
+})
+
+test('multi-provider safety requests do not claim automatic rollback', async () => {
+  const { buildSafetyRequest } = await importDomainModule('models.js')
+  const request = buildSafetyRequest({
+    source: 'terminal',
+    endpoint: { host: 'prod.example.com', username: 'root' },
+    command: 'systemctl restart nginx && chmod 600 /etc/app.conf'
+  })
+
+  assert.equal(request.risk, 'change')
+  assert.equal(request.reversible, false)
+  assert.equal(request.recoveryProvider, null)
+  assert.match(request.reason, /包含多个修改，无法生成统一自动回滚/)
 })
 
 test('normalizes sudo options and absolute executable paths before blocking', async () => {
@@ -271,6 +285,67 @@ test('find output actions require an unambiguous absolute file target', async ()
     'find /tmp -fls ../find-list.txt'
   ]) {
     assert.equal(classifyCommand(command).risk, 'unknown', command)
+  }
+})
+
+test('dangerous find actions cannot hide behind a recoverable output action', async () => {
+  const { classifyCommand } = await importDomainModule('command-classifier.js')
+
+  for (const command of [
+    'find /tmp -delete -fprint /var/log/deleted.txt',
+    'find /tmp -fprint /var/log/files.txt -exec rm -f {} \\;',
+    'find /tmp -execdir chmod 600 {} \\; -fls /var/log/files.txt',
+    'find /tmp -ok rm -f {} \\; -fprint /var/log/files.txt',
+    'find /tmp -okdir rm -f {} \\; -fprintf /var/log/files.txt "%p\\n"'
+  ]) {
+    const classification = classifyCommand(command)
+    assert.equal(classification.risk, 'unknown', command)
+    assert.equal(classification.reversible, false, command)
+    assert.equal(classification.provider, null, command)
+  }
+})
+
+test('distinguishes network mutations from readonly ip, journal and socket diagnostics', async () => {
+  const { classifyCommand } = await importDomainModule('command-classifier.js')
+
+  for (const command of [
+    'ip link set dev eth0 down',
+    'ip addr flush dev eth0'
+  ]) {
+    const classification = classifyCommand(command)
+    assert.equal(classification.risk, 'change', command)
+    assert.equal(classification.reversible, true, command)
+    assert.equal(classification.provider, 'network', command)
+  }
+  for (const command of [
+    'journalctl --vacuum-time=7d',
+    'journalctl --vacuum-size=100M',
+    'ss -K dst 10.0.0.8'
+  ]) {
+    const classification = classifyCommand(command)
+    assert.equal(classification.risk, 'unknown', command)
+    assert.equal(classification.reversible, false, command)
+    assert.equal(classification.requiresConfirmation, true, command)
+  }
+})
+
+test('dynamic provider targets never claim reversibility', async () => {
+  const { classifyCommand } = await importDomainModule('command-classifier.js')
+
+  for (const command of [
+    'systemctl restart nginx*',
+    'systemctl restart $SERVICE',
+    'docker restart app?',
+    'docker restart $(hostname)',
+    'chmod 600 /etc/*.conf',
+    'rm /tmp/`hostname`.txt',
+    'ip link set dev $IFACE down',
+    'echo enabled > /etc/$TARGET'
+  ]) {
+    const classification = classifyCommand(command)
+    assert.equal(classification.risk, 'unknown', command)
+    assert.equal(classification.reversible, false, command)
+    assert.equal(classification.provider, null, command)
   }
 })
 
@@ -363,6 +438,29 @@ test('audit redaction handles compact sshpass password syntax', async () => {
 
   assert.equal(redacted, 'sshpass -p[REDACTED] ssh root@example.com; echo done')
   assert.doesNotMatch(redacted, /compact-password/)
+})
+
+test('audit redaction handles sshpass options, Basic auth and escaped JSON strings', async () => {
+  const { redactAuditText } = await importDomainModule('audit-redaction.js')
+  const shellText = [
+    'sshpass -v -p option-secret ssh root@example.com;',
+    'Authorization: Basic dXNlcjpwYXNzd29yZA==;'
+  ].join('\n')
+  const redactedShell = redactAuditText(shellText)
+
+  assert.match(redactedShell, /sshpass -v -p \[REDACTED\] ssh root@example\.com;/)
+  assert.match(redactedShell, /Authorization: Basic \[REDACTED\];/)
+  assert.doesNotMatch(redactedShell, /option-secret|dXNlcjpwYXNzd29yZA==/)
+
+  const json = JSON.stringify({
+    password: 'quote"and\\slash',
+    apiKey: 'line\\nbreak',
+    command: 'printf "ordinary"'
+  })
+  const parsed = JSON.parse(redactAuditText(json))
+  assert.equal(parsed.password, '[REDACTED]')
+  assert.equal(parsed.apiKey, '[REDACTED]')
+  assert.equal(parsed.command, 'printf "ordinary"')
 })
 
 test('normalizes endpoint identity including IPv6 and rejects mismatches', async () => {

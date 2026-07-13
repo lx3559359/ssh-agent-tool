@@ -200,6 +200,7 @@ function classifyRedirection (command, redirects) {
 }
 
 const findOutputActions = new Set(['-fprint', '-fprintf', '-fls', '-fprint0'])
+const unsafeFindActions = new Set(['-delete', '-exec', '-execdir', '-ok', '-okdir'])
 
 function findOutputTargets (words) {
   const targets = []
@@ -210,6 +211,10 @@ function findOutputTargets (words) {
     targets.push(words[index + 1] || '')
   }
   return { hasOutputAction, targets }
+}
+
+function hasUnsafeFindAction (words) {
+  return words.some(word => unsafeFindActions.has(word))
 }
 
 function fileProvider (command) {
@@ -223,7 +228,8 @@ function fileProvider (command) {
   }
   if (executable === 'find') {
     const output = findOutputTargets(words)
-    return output.hasOutputAction && output.targets.every(isSafeAbsolutePath)
+    return !hasUnsafeFindAction(words) &&
+      output.hasOutputAction && output.targets.every(isSafeAbsolutePath)
   }
   if (executable === 'sed' && words.some(word => /^-.*i/.test(word))) {
     const scriptIndex = words.findIndex(word => !word.startsWith('-'))
@@ -255,27 +261,37 @@ function permissionsProvider (command) {
 
 function changeProvider (command) {
   const text = stripCommandPrefix(command)
-  if (/^systemctl\s+(?:start|stop|restart|reload|enable|disable)\b/i.test(text) || /^service\s+\S+\s+(?:start|stop|restart|reload)\b/i.test(text)) return 'systemd'
+  if (/[$`*?[\]]/.test(text)) return null
+  if (/^systemctl\s+(?:start|stop|restart|reload|enable|disable)\s+\S+/i.test(text) || /^service\s+\S+\s+(?:start|stop|restart|reload)\b/i.test(text)) return 'systemd'
   if (permissionsProvider(text)) return 'permissions'
   if (/^firewall-cmd\b.*\s--(?:add|remove)-[A-Za-z-]+\b/i.test(text) || /^ufw\s+(?:allow|deny|reject|delete|enable|disable)\b/i.test(text) || /^(?:iptables|ip6tables)\s+-(?:A|D|I|R|N|X|P)\b/i.test(text) || /^nft\s+(?:add|delete|insert|replace)\b/i.test(text)) return 'firewall'
-  if (/^nmcli\s+(?:connection|con)\s+(?:modify|up|down)\b/i.test(text) || /^ip\s+(?:addr(?:ess)?|route)\s+(?:add|del|delete|replace)\b/i.test(text) || /^ifconfig\s+\S+\s+(?:up|down|netmask|mtu|broadcast|[0-9a-f:.]+)\b/i.test(text)) return 'network'
-  if (/^(?:docker|podman)\s+(?:start|stop|restart)\b/i.test(text)) return 'docker'
+  if (/^nmcli\s+(?:connection|con)\s+(?:modify|up|down)\s+\S+/i.test(text) || /^ip\s+(?:addr(?:ess)?|route)\s+(?:add|del|delete|replace)\s+\S+/i.test(text) || /^ip\s+addr(?:ess)?\s+flush\s+dev\s+\S+/i.test(text) || /^ip\s+link\s+set\s+(?:dev\s+)?\S+\s+\S+/i.test(text) || /^ifconfig\s+\S+\s+(?:up|down|netmask|mtu|broadcast|[0-9a-f:.]+)\b/i.test(text)) return 'network'
+  if (/^(?:docker|podman)\s+(?:start|stop|restart)\s+\S+/i.test(text)) return 'docker'
   if (fileProvider(text)) return 'file'
   return null
 }
 
 function isReadonly (command) {
   const text = stripCommandPrefix(command)
-  if (/^(?:uptime|whoami|id|hostname|pwd|date|df|du|free|ps|ss|ls|stat|wc|which|uname|lsof)(?:\s|$)/i.test(text)) return true
+  if (/^(?:uptime|whoami|id|hostname|pwd|date|df|du|free|ps|ls|stat|wc|which|uname|lsof)(?:\s|$)/i.test(text)) return true
+  if (/^ss(?:\s|$)/i.test(text)) return !/(?:^|\s)(?:-K|--kill)(?:\s|$)/i.test(text)
   if (/^(?:cat|less|head|tail|grep)(?:\s|$)/i.test(text)) return true
   if (/^find(?:\s|$)/i.test(text)) {
     const words = shellWords(text)
     const output = findOutputTargets(words)
-    return !output.hasOutputAction && !/(?:^|\s)-(?:delete|exec|execdir|ok)(?:\s|$)/i.test(text)
+    return !output.hasOutputAction && !hasUnsafeFindAction(words)
   }
-  if (/^ip\s+(?:addr(?:ess)?|route|link)(?:\s+(?:show|list|get))?(?:\s|$)/i.test(text)) return true
+  if (/^ip\s+(?:addr(?:ess)?|route|link)(?:\s|$)/i.test(text)) {
+    const words = shellWords(text)
+    const section = words[1]?.toLowerCase()
+    const action = words[2]?.toLowerCase()
+    const readonlyActions = section === 'route'
+      ? ['show', 'list', 'get']
+      : ['show', 'list']
+    return !action || readonlyActions.includes(action)
+  }
   if (/^systemctl\s+(?:status|show|is-active|is-enabled|list-[A-Za-z-]+)\b/i.test(text)) return true
-  if (/^journalctl(?:\s|$)/i.test(text)) return true
+  if (/^journalctl(?:\s|$)/i.test(text)) return !/\s--(?:vacuum-(?:time|size|files)|rotate|flush|sync)(?:=|\s|$)/i.test(text)
   if (/^firewall-cmd\s+(?:--state|--list-[A-Za-z-]+|--query-[A-Za-z-]+)\b/i.test(text)) return true
   if (/^ufw\s+status\b/i.test(text)) return true
   if (/^(?:iptables|ip6tables)\s+-(?:L|S)\b/i.test(text)) return true
@@ -315,7 +331,7 @@ export function classifyCommand (command) {
   if (highestRank === riskRank.change) {
     const providers = [...new Set(highest.map(item => item.provider))]
     if (providers.length !== 1) {
-      return result('change', '复合命令包含多个恢复类型，需要按命令逐项恢复', null, true)
+      return result('change', '复合命令包含多个修改，无法生成统一自动回滚', null, false)
     }
   }
   return highest[0]
