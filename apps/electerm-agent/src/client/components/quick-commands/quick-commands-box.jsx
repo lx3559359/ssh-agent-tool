@@ -29,8 +29,7 @@ import {
   buildQuickCommandContext,
   buildQuickCommandRollbackContext,
   buildQuickCommandParamValues,
-  describeQuickCommandContext,
-  shouldTrackRollback
+  describeQuickCommandContext
 } from './quick-command-context'
 import {
   buildNetworkProbeCommand,
@@ -40,9 +39,7 @@ import {
 import {
   assertVerifiedQuickCommandRollbackResult,
   buildVerifiedQuickCommandRollbackAction,
-  createQuickCommandSafetyRecord,
   findSafetyOperationSession,
-  mergeSafetyOperationRecords,
   readSafetyOperationRecords,
   safetyOperationUpdatedEvent,
   updateSafetyOperationRecord,
@@ -207,11 +204,6 @@ export default function QuickCommandsFooterBox (props) {
     setShowPendingPreview(false)
   }
 
-  function saveRollbackRecord (record) {
-    const records = mergeSafetyOperationRecords(readSafetyOperationRecords(ls), [record])
-    setSafetyRecords(writeSafetyOperationRecords(ls, records))
-  }
-
   async function handleRollbackAction (action) {
     if (rollbackRunningRef.current) return
     const path = rollbackRecord?.rollbackPath || rollbackRecord?.path
@@ -260,20 +252,6 @@ export default function QuickCommandsFooterBox (props) {
   function handlePendingOk () {
     if (!pendingCommand?.text?.trim()) {
       return
-    }
-    const values = pendingCommand.paramValues || {}
-    if (shouldTrackRollback(pendingCommand.item, values)) {
-      const rollback = pendingCommand.item.rollback
-      saveRollbackRecord(createQuickCommandSafetyRecord({
-        rollbackPath: values[rollback.pathParam] || pendingCommand.context.rollbackPath,
-        title: rollback.title,
-        tab: props.currentTab || {
-          id: window.store.activeTabId,
-          host: pendingCommand.context.host || pendingCommand.context.title
-        },
-        seconds: Number(values.自动回滚秒数 || 120),
-        protected: values.回滚保护 === 'enabled'
-      }))
     }
     window.store.runQuickCommandItem(pendingCommand.id, {
       commandText: pendingCommand.text,

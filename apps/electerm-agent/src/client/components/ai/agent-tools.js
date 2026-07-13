@@ -1,6 +1,7 @@
 import { z } from '../../common/zod'
 import { bookmarkSchemas } from '../../common/bookmark-schemas'
 import { confirmAgentToolExecution } from './agent-tool-confirm'
+import { runAgentTerminalCommand } from './agent-terminal-command.js'
 import {
   confirmAgentPlan,
   ensureAgentPlanConfirmed,
@@ -554,12 +555,7 @@ export async function executeToolCall (toolName, args, runtime) {
       if (!confirmation.accepted) {
         return JSON.stringify(confirmation)
       }
-      store.mcpSendTerminalCommand(args)
-      const idleResult = await store.mcpWaitForTerminalIdle({
-        tabId: args.tabId || store.activeTabId,
-        timeout: 30000,
-        lines: 100
-      })
+      const idleResult = await runAgentTerminalCommand({ store, args })
       return JSON.stringify(idleResult)
     }
     case 'get_terminal_output':
@@ -638,7 +634,7 @@ export async function executeToolCall (toolName, args, runtime) {
       if (!confirmation.accepted) {
         return JSON.stringify(confirmation)
       }
-      return JSON.stringify(store.mcpRunBackgroundCommand(args))
+      return JSON.stringify(await store.mcpRunBackgroundCommand(args))
     }
     case 'get_background_task_status':
       return JSON.stringify(await store.mcpGetBackgroundTaskStatus(args))

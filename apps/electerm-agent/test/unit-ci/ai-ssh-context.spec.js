@@ -89,7 +89,12 @@ test('AI SSH context requires confirmation before running generated commands', a
 
   const commands = []
   const store = {
-    runCommandInTerminal: cmd => commands.push(cmd)
+    activeTabId: 'tab-1',
+    runSafetyCommand: async (command, options) => {
+      commands.push({ command, options })
+      return { sent: true }
+    },
+    mcpWaitForTerminalIdle: async () => ({ output: 'active' })
   }
 
   const denied = await confirmAndRunAICommand({
@@ -110,5 +115,12 @@ test('AI SSH context requires confirmation before running generated commands', a
     }
   })
   assert.equal(accepted, true)
-  assert.deepEqual(commands, ['systemctl status nginx'])
+  assert.deepEqual(commands, [{
+    command: 'systemctl status nginx',
+    options: {
+      tabId: 'tab-1',
+      source: 'agent',
+      title: 'AI 代码块'
+    }
+  }])
 })

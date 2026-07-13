@@ -862,7 +862,7 @@ export function createTransactionRunner (options = {}) {
               throw new Error('可逆事务尚未完成 recovery-ready，已拒绝执行。')
             }
             boundRecovery = await requireBoundRecovery(operation)
-          } else {
+          } else if (safety.risk !== 'readonly') {
             if (safety.classified.provider === 'network') {
               throw new Error('网络修改禁止 unsafe 执行，必须使用已验证恢复点。')
             }
@@ -962,7 +962,7 @@ export function createTransactionRunner (options = {}) {
               throw new Error('可逆事务尚未完成 recovery-ready，已拒绝外部执行。')
             }
             boundRecovery = await requireBoundRecovery(operation)
-          } else {
+          } else if (safety.risk !== 'readonly') {
             if (safety.classified.provider === 'network') {
               throw new Error('网络修改禁止 unsafe 执行，必须使用已验证恢复点。')
             }

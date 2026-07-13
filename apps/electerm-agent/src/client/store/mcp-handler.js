@@ -109,7 +109,7 @@ export default Store => {
 
         // Terminal operations
         case 'send_terminal_command':
-          result = store.mcpSendTerminalCommand(args)
+          result = await store.mcpSendTerminalCommand(args)
           break
         case 'get_terminal_selection':
           result = store.mcpGetTerminalSelection(args)
@@ -129,7 +129,7 @@ export default Store => {
 
         // Background task operations
         case 'run_background_command':
-          result = store.mcpRunBackgroundCommand(args)
+          result = await store.mcpRunBackgroundCommand(args)
           break
         case 'get_background_task_status':
           result = await store.mcpGetBackgroundTaskStatus(args)
@@ -518,7 +518,7 @@ export default Store => {
 
   // ==================== Terminal APIs ====================
 
-  Store.prototype.mcpSendTerminalCommand = function (args) {
+  Store.prototype.mcpSendTerminalCommand = async function (args) {
     const { store } = window
     const tabId = args.tabId || store.activeTabId
     const command = args.command
@@ -531,11 +531,22 @@ export default Store => {
       throw new Error('No command provided')
     }
 
-    store.runQuickCommand(command, args.inputOnly || false, tabId)
+    const safetyResult = await store.runSafetyCommand(command, {
+      tabId,
+      inputOnly: args.inputOnly === true,
+      source: 'agent',
+      title: args.title || 'MCP 终端命令'
+    })
 
     return {
-      success: true,
-      message: 'Command sent to terminal'
+      success: safetyResult?.sent === true || safetyResult?.inputOnly === true,
+      cancelled: safetyResult?.cancelled === true,
+      operationId: safetyResult?.operationId,
+      message: safetyResult?.cancelled
+        ? '用户取消了安全确认，命令尚未发送。'
+        : safetyResult?.inputOnly
+          ? '命令已填入终端，尚未执行。'
+          : '命令已安全发送到终端。'
     }
   }
 
@@ -751,7 +762,7 @@ export default Store => {
     } catch (e) {
       // Fallback: send via terminal and wait for idle
       const { store } = window
-      store.mcpSendTerminalCommand({ command: cmd, tabId })
+      await store.mcpSendTerminalCommand({ command: cmd, tabId })
       const idle = await store.mcpWaitForTerminalIdle({
         tabId, timeout: 10000, lines: 10, minWait: 500
       })
@@ -759,7 +770,7 @@ export default Store => {
     }
   }
 
-  Store.prototype.mcpRunBackgroundCommand = function (args) {
+  Store.prototype.mcpRunBackgroundCommand = async function (args) {
     const { store } = window
     const tabId = args.tabId || store.activeTabId
     if (!tabId) {
@@ -780,7 +791,13 @@ export default Store => {
     const inner = `eval "$(echo ${b64} | base64 --decode)" > ${logFile} 2>&1; e=$?; echo $e > ${exitFile}; rm -f ${pidFile}`
     const wrapped = `nohup bash -c '${inner}' & echo $! > ${pidFile}; disown`
 
-    store.mcpSendTerminalCommand({ command: wrapped, tabId, inputOnly: false })
+    const submission = await store.mcpSendTerminalCommand({
+      command: wrapped,
+      tabId,
+      inputOnly: false,
+      title: '后台命令'
+    })
+    if (!submission.success) return submission
 
     const task = {
       id: taskId,

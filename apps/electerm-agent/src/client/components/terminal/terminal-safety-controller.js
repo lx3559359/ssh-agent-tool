@@ -432,7 +432,7 @@ function isTransparentContext (context) {
     context.canonicalInputReliable !== true
 }
 
-function confirmationFor (command, classification) {
+export function buildTerminalSafetyConfirmation (command, classification) {
   const recordable = redactAuditText(command) === command
   if (classification.reversible && !recordable) {
     return {
@@ -499,7 +499,7 @@ export function createTerminalSafetyController (options = {}) {
     }
     const classification = classify(canonical)
     if (classification.risk === 'readonly') return { sendNow: true }
-    pending = confirmationFor(canonical, classification)
+    pending = buildTerminalSafetyConfirmation(canonical, classification)
     return { sendNow: false, confirmation: pending }
   }
 

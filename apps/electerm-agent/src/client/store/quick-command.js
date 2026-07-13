@@ -84,9 +84,34 @@ export default Store => {
     window.store.delItem({ id }, settingMap.quickCommands)
   }
 
-  Store.prototype.runQuickCommand = function (cmd, inputOnly = false, tabId) {
-    const tid = tabId || window.store.activeTabId
-    refs.get('term-' + tid)?.runQuickCommand(cmd, inputOnly)
+  Store.prototype.runSafetyCommand = async function (command, options = {}) {
+    const tabId = options.tabId || window.store.activeTabId
+    if (!tabId) {
+      throw new Error('当前没有活动终端，命令尚未发送。')
+    }
+    const term = refs.get('term-' + tabId)
+    if (!term?.runSafetyCommand) {
+      throw new Error('当前终端不可用，命令尚未发送。')
+    }
+    return term.runSafetyCommand(command, {
+      ...options,
+      tabId: undefined
+    })
+  }
+
+  Store.prototype.runQuickCommand = function (
+    cmd,
+    inputOnly = false,
+    tabId,
+    options = {}
+  ) {
+    return window.store.runSafetyCommand(cmd, {
+      ...options,
+      tabId,
+      inputOnly,
+      source: 'quick-command',
+      title: options.title || '快捷命令'
+    })
   }
 
   Store.prototype.runQuickCommandItem = debounce(async (id, options = {}) => {
@@ -111,8 +136,13 @@ export default Store => {
       realCmd = await parseTemplates(realCmd)
 
       await delay(q.delay || 100)
-      store.runQuickCommand(realCmd, options.inputOnly ?? qm?.inputOnly)
-      if (qm) {
+      const result = await store.runQuickCommand(
+        realCmd,
+        options.inputOnly ?? qm?.inputOnly,
+        options.tabId,
+        { title: qm?.name || options.title }
+      )
+      if (qm && (result?.sent || result?.inputOnly)) {
         store.editQuickCommand(qm.id, {
           clickCount: ((qm.clickCount || 0) + 1)
         })

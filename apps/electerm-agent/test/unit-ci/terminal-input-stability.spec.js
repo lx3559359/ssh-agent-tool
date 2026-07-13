@@ -640,6 +640,15 @@ test('AttachAddon keeps ordinary typing controls paste and TUI data synchronous'
   assert.deepEqual(calls, [])
 })
 
+test('AttachAddon submits an approved safety command through one controlled boundary', async () => {
+  const { addon, sent } = await createAttachHarness(() => ({ sendNow: true }))
+
+  assert.equal(addon.submitSafetyCommand('uptime', 'submission-1'), true)
+  assert.deepEqual(sent, ['uptime\r'])
+  assert.equal(addon.submitSafetyCommand('uptime', ''), false)
+  assert.deepEqual(sent, ['uptime\r'])
+})
+
 test('AttachAddon marks the Enter after a single-line paste as transparent', async () => {
   const { addon, calls, sent } = await createAttachHarness(() => ({ sendNow: true }))
 
@@ -810,6 +819,29 @@ test('CommandTrackerAddon completes a released expected simple command once', as
     command,
     exitCode: 0
   }])
+})
+
+test('CommandTrackerAddon binds an external safety submission from an empty prompt', async () => {
+  const { CommandTrackerAddon } = await importCommandTracker()
+  const harness = createTrackerTerminal({ cols: 80, cursorX: 2 })
+  const finished = []
+  const tracker = new CommandTrackerAddon()
+  tracker.onCommandFinished(event => finished.push(event))
+  tracker.activate(harness.terminal)
+  beginTrackerSession(tracker)
+  harness.osc(lifecycleOsc('A'))
+  harness.osc(lifecycleOsc('B'))
+  const command = 'uptime'
+
+  const token = tracker.expectExternalSubmission(command)
+  assert.match(token, /^terminal-submission-/)
+  assert.equal(tracker.markExpectedSubmissionReleased(token), true)
+  harness.setLines([{ text: `$ ${command}`, isWrapped: false }])
+  harness.setCursor(0, command.length + 2)
+  harness.osc(lifecycleOsc('E', command))
+  harness.osc(completionOsc(0))
+
+  assert.deepEqual(finished, [{ token, command, exitCode: 0 }])
 })
 
 test('CommandTrackerAddon reports interrupted commands with a null exit code', async () => {
@@ -1015,6 +1047,20 @@ test('terminal wires the tested safety coordinator into socket and modal lifecyc
   assert.match(coordinator, /runner\.beginExternalExecution/)
   assert.doesNotMatch(source, /terminalSafetyRunner\.execute/)
   assert.doesNotMatch(source, /_sendData\(confirmation\.command/)
+})
+
+test('terminal exposes the unified command safety entrypoint without replacing manual input', () => {
+  const source = readClientFile('components/terminal/terminal.jsx')
+
+  assert.match(source, /createSafetyCommandEntrypoint/)
+  assert.match(source, /runSafetyCommand = \(command, options = \{\}\)/)
+  assert.match(source, /expectExternalSubmission/)
+  assert.match(source, /attachAddon\?\.submitSafetyCommand/)
+  assert.match(source, /commandSafetyEntrypoint\.beginSession/)
+  assert.match(source, /commandSafetyEntrypoint\.invalidateSession/)
+  assert.match(source, /commandSafetyEntrypoint\.handleCommandFinished/)
+  assert.match(source, /commandSafetyEntrypoint\.inputChanged/)
+  assert.match(source, /terminalSafetyCoordinator\.beforeEnter/)
 })
 
 test('terminal resets continuation safety state at each tracked prompt', () => {

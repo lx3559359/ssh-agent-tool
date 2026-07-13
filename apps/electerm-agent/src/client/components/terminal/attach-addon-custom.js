@@ -279,12 +279,21 @@ export default class AttachAddonCustom {
     this._terminalPastePending = true
   }
 
+  submitSafetyCommand = (command, token) => {
+    if (!String(command || '').trim() || !String(token || '').trim()) {
+      return false
+    }
+    this._sendToServerDirect(`${command}\r`)
+    return true
+  }
+
   sendToServer = (data) => {
     this._lastInputTime = Date.now()
     const parent = this.term?.parent
     const isStandaloneEnter = data === '\r' || data === '\n'
     const isPaste = isStandaloneEnter && this._terminalPastePending
-    if (!isStandaloneEnter && this._pendingTerminalEnter) {
+    if (!isStandaloneEnter && (this._pendingTerminalEnter ||
+      parent?.hasPendingSafetyCommand?.() === true)) {
       this._pendingTerminalEnter = null
       parent?.onTerminalSafetyInputChanged?.()
     }

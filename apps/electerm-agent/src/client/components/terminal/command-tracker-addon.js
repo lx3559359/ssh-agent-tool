@@ -333,13 +333,36 @@ export class CommandTrackerAddon {
     return token
   }
 
+  expectExternalSubmission (command) {
+    const text = String(command || '')
+    const current = this.getCurrentCommandInput()
+    if (!this._sessionNonce || !text.trim() || current !== '' ||
+      this._expectedSubmissions.length) {
+      return undefined
+    }
+    const token = `terminal-submission-${++this._submissionSequence}`
+    this._expectedSubmissions.push({
+      token,
+      command: text,
+      inputGeneration: this._inputGeneration,
+      external: true,
+      armed: false,
+      executionObserved: false,
+      armedAtSequence: 0
+    })
+    return token
+  }
+
   markExpectedSubmissionReleased (token) {
     const expected = this._expectedSubmissions.find(
       submission => submission.token === token
     )
+    const current = this.getCurrentCommandInput()
+    const inputMatches = expected?.external
+      ? current === ''
+      : current === expected?.command
     if (!expected || expected.armed || !this.isCommandInputActive() ||
-      expected.inputGeneration !== this._inputGeneration ||
-      this.getCurrentCommandInput() !== expected.command) {
+      expected.inputGeneration !== this._inputGeneration || !inputMatches) {
       return false
     }
     expected.armed = true

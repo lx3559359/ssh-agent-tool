@@ -106,7 +106,7 @@ const endpointIdentityFields = [
 ]
 const normalizedOperationFields = [
   'id', 'source', 'command', 'title', 'state', 'createdAt', 'updatedAt',
-  'metadata', 'risk', 'reversible', 'recoveryProvider',
+  'metadata', 'risk', 'provider', 'reversible', 'recoveryProvider',
   'requiresConfirmation', 'reason', 'plan', 'recoveryBinding', 'artifacts', 'audit',
   'recoveryReadyAt', 'executionId', 'error', 'integrityError', 'failedAt', 'completedAt',
   'timeoutMs', 'prepareTimeoutMs', 'executeTimeoutMs',
@@ -202,6 +202,7 @@ export function buildSafetyRequest (request = {}, options = {}) {
   return normalizeOperation({
     ...safeRequest,
     risk: classification.risk,
+    provider: classification.provider,
     reversible: classification.reversible,
     recoveryProvider: classification.provider,
     requiresConfirmation: classification.requiresConfirmation,
