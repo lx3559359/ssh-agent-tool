@@ -186,6 +186,58 @@ test('prepare persists a recovery binding and execute rejects same-provider comm
   assert.equal(context.remoteCalls.length, callsBeforeExecute)
 })
 
+test('prepare persists the complete immutable recovery plan with a prepare command hash', async () => {
+  const context = await createPreparedRunner({
+    request: await createRequest({ id: 'op-binding-plan' })
+  })
+  const prepared = await context.store.get(context.request.id)
+
+  assert.match(prepared.plan.prepareCommandHash, /^[a-f0-9]{64}$/)
+  assert.equal(prepared.plan.executeCommand, context.request.command)
+  assert.equal(prepared.plan.rollbackCommand, createPlan(context.request).rollbackCommand)
+  assert.equal(prepared.plan.verifyCommand, createPlan(context.request).verifyCommand)
+  assert.equal(prepared.plan.allowUnsafeExecute, true)
+  assert.deepEqual(prepared.plan.artifacts, prepared.artifacts)
+})
+
+test('execute rejects persisted execute command or artifact tampering without a remote call', async () => {
+  const cases = [
+    {
+      id: 'op-binding-execute-command',
+      patch: operation => ({
+        plan: {
+          ...operation.plan,
+          executeCommand: 'systemctl restart sshd'
+        }
+      })
+    },
+    {
+      id: 'op-binding-artifact',
+      patch: operation => ({
+        artifacts: {
+          ...operation.artifacts,
+          manifest: '~/.shellpilot/operations/forged/manifest.json'
+        }
+      })
+    }
+  ]
+
+  for (const item of cases) {
+    const context = await createPreparedRunner({
+      request: await createRequest({ id: item.id })
+    })
+    const prepared = await context.store.get(item.id)
+    await context.store.patch(item.id, item.patch(prepared))
+    const callsBeforeExecute = context.remoteCalls.length
+
+    await assert.rejects(
+      context.runner.execute(item.id, { confirmed: true }),
+      /恢复绑定|指纹|不一致/
+    )
+    assert.equal(context.remoteCalls.length, callsBeforeExecute, item.id)
+  }
+})
+
 test('execute rejects endpoint tampering even when the live endpoint follows the forged record', async () => {
   const context = await createPreparedRunner({
     request: await createRequest({ id: 'op-binding-endpoint' }),
@@ -225,7 +277,31 @@ test('rollback rejects a recovery operationDir changed after execute', async () 
   assert.equal(context.remoteCalls.length, callsBeforeRollback)
 })
 
-test('verify rechecks recovery binding after rollback completes', async () => {
+test('rollback rejects persisted rollback or verify command tampering without a remote call', async () => {
+  for (const field of ['rollbackCommand', 'verifyCommand']) {
+    const id = `op-binding-${field}`
+    const context = await createPreparedRunner({
+      request: await createRequest({ id })
+    })
+    await context.runner.execute(id, { confirmed: true })
+    const executed = await context.store.get(id)
+    await context.store.patch(id, {
+      plan: {
+        ...executed.plan,
+        [field]: `${field}-was-forged`
+      }
+    })
+    const callsBeforeRollback = context.remoteCalls.length
+
+    await assert.rejects(
+      context.runner.rollback(id),
+      /恢复绑定|指纹|不一致/
+    )
+    assert.equal(context.remoteCalls.length, callsBeforeRollback, field)
+  }
+})
+
+test('verify rechecks the full persisted plan after rollback completes', async () => {
   const request = await createRequest({ id: 'op-binding-verify' })
   const store = createMemoryStore()
   const phases = []
@@ -239,7 +315,7 @@ test('verify rechecks recovery binding after rollback completes', async () => {
         await store.patch(request.id, {
           plan: {
             ...rollingBack.plan,
-            operationDir: '~/.shellpilot/operations/forged-during-rollback/'
+            verifyCommand: 'verify-command-was-forged-during-rollback'
           }
         })
       }
