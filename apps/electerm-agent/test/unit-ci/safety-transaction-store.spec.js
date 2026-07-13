@@ -336,6 +336,37 @@ test('agent task CRUD enforces schema version, valid status and monotonic timest
   )
 })
 
+test('task store rejects credential-like commands instead of silently rewriting them', async () => {
+  const { createTransactionStore } = await importStore()
+  const adapter = createMemoryAdapter()
+  const store = createTransactionStore({
+    adapter,
+    now: () => new Date('2026-07-13T09:00:00.000Z')
+  })
+  const unsafeCommand = 'cat /srv/password=actual-value/config'
+
+  await assert.rejects(
+    store.saveTask({
+      id: 'task-command-redaction-rejected',
+      status: 'draft',
+      steps: [{ id: 'inspect', command: unsafeCommand }]
+    }),
+    /命令|敏感|凭据|拒绝/
+  )
+  assert.equal(await store.getTask('task-command-redaction-rejected'), undefined)
+
+  const safeCommand = "printf '%s\\n' /srv/passwordless/config"
+  const saved = await store.saveTask({
+    id: 'task-command-preserved',
+    status: 'draft',
+    steps: [{ id: 'inspect', command: safeCommand }]
+  })
+  assert.equal(saved.steps[0].command, safeCommand)
+
+  const patched = await store.patchTask(saved.id, { title: 'safe patch' })
+  assert.equal(patched.steps[0].command, safeCommand)
+})
+
 test('concurrent task patches for one id are serialized with monotonic timestamps', async () => {
   const { createTransactionStore } = await importStore()
   const adapter = createMemoryAdapter()

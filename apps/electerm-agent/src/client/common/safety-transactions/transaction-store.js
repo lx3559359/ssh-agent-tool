@@ -91,13 +91,38 @@ function nextUpdatedAt (current, requested, clock) {
   return new Date(Math.max(now.getTime(), requestedTime, previousTime + 1)).toISOString()
 }
 
+function assertTaskCommandsPersistable (task) {
+  if (!Array.isArray(task.steps)) return
+  for (const step of task.steps) {
+    if (typeof step?.command !== 'string') continue
+    if (redactSensitiveData(step.command) !== step.command) {
+      throw new Error(`任务步骤 ${String(step.id || '')} 的可执行命令包含疑似敏感凭据，已拒绝持久化；请改用安全的凭据引用。`)
+    }
+  }
+}
+
+function preserveTaskCommands (task, safeTask) {
+  if (!Array.isArray(task.steps) || !Array.isArray(safeTask.steps)) {
+    return safeTask.steps
+  }
+  return safeTask.steps.map((safeStep, index) => {
+    const originalStep = task.steps[index]
+    return originalStep && Object.hasOwn(originalStep, 'command')
+      ? { ...safeStep, command: originalStep.command }
+      : safeStep
+  })
+}
+
 function normalizeTask (task = {}, clock) {
   const status = task.status || taskStatuses.draft
   if (!validTaskStatuses.has(status)) throw new Error('Agent 任务状态不受支持')
   const now = resolveNow(clock)
+  assertTaskCommandsPersistable(task)
   const safeTask = redactSensitiveData(task)
+  const safeSteps = preserveTaskCommands(task, safeTask)
   return {
     ...safeTask,
+    ...(safeSteps === undefined ? {} : { steps: safeSteps }),
     id: String(task.id || generate()),
     schemaVersion: 1,
     status,

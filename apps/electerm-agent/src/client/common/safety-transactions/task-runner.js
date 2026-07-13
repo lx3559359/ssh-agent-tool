@@ -1,4 +1,4 @@
-import { redactAuditText } from './audit-redaction.js'
+import { redactAuditText, redactSensitiveData } from './audit-redaction.js'
 import { classifyCommand } from './command-classifier.js'
 import { taskStatuses } from './transaction-store.js'
 import {
@@ -9,6 +9,8 @@ import {
 } from './transaction-runner.js'
 
 const defaultStepTimeoutMs = 30000
+const planBindingSchemaVersion = 1
+const planBindingAlgorithm = 'SHA-256'
 const finalTaskStatuses = new Set([
   taskStatuses.completed,
   taskStatuses.failed,
@@ -44,6 +46,7 @@ function sanitizeError (error, fallback = '任务执行失败。') {
   const safeError = new Error(message || fallback)
   if (error?.cancelled) safeError.cancelled = true
   if (error?.timedOut) safeError.timedOut = true
+  if (error?.cancelRemoteFailure) safeError.cancelRemoteFailure = true
   return safeError
 }
 
@@ -67,6 +70,75 @@ function normalizeTimeout (value) {
   return timeout
 }
 
+function stableSerialize (value) {
+  if (Array.isArray(value)) {
+    return `[${value.map(item => stableSerialize(item) ?? 'null').join(',')}]`
+  }
+  if (value && typeof value === 'object') {
+    const entries = Object.keys(value).sort().flatMap(key => {
+      const serialized = stableSerialize(value[key])
+      return serialized === undefined
+        ? []
+        : [`${JSON.stringify(key)}:${serialized}`]
+    })
+    return `{${entries.join(',')}}`
+  }
+  return JSON.stringify(value)
+}
+
+async function sha256 (value) {
+  const cryptoApi = globalThis.crypto
+  if (!cryptoApi?.subtle) {
+    throw new Error('当前环境不支持任务计划完整性指纹计算。')
+  }
+  const digest = await cryptoApi.subtle.digest(
+    planBindingAlgorithm,
+    new TextEncoder().encode(String(value))
+  )
+  return [...new Uint8Array(digest)]
+    .map(value => value.toString(16).padStart(2, '0'))
+    .join('')
+}
+
+function executablePlanPayload (task) {
+  return {
+    schemaVersion: task.schemaVersion,
+    id: task.id,
+    title: task.title,
+    purpose: task.purpose,
+    endpoint: task.endpoint,
+    endpointKey: task.endpointKey,
+    steps: task.steps.map(step => ({
+      id: step.id,
+      title: step.title,
+      command: step.command,
+      purpose: step.purpose,
+      timeoutMs: step.timeoutMs,
+      readOnly: step.readOnly,
+      risk: step.risk,
+      reason: step.reason,
+      reversible: step.reversible,
+      recoveryProvider: step.recoveryProvider,
+      provider: step.provider,
+      requiresConfirmation: step.requiresConfirmation
+    }))
+  }
+}
+
+async function planFingerprint (task) {
+  return sha256(stableSerialize(executablePlanPayload(task)))
+}
+
+async function assertPlanBinding (task) {
+  const binding = task.planBinding
+  if (binding?.schemaVersion !== planBindingSchemaVersion ||
+    binding?.algorithm !== planBindingAlgorithm ||
+    typeof binding?.fingerprint !== 'string' ||
+    binding.fingerprint !== await planFingerprint(task)) {
+    throw new Error('任务计划完整性校验失败，已拒绝执行；请重新生成并确认计划。')
+  }
+}
+
 export function validateTaskPlan (plan = {}) {
   if (!Array.isArray(plan.steps) || plan.steps.length === 0) {
     throw new Error('任务计划必须包含至少一个步骤。')
@@ -76,8 +148,11 @@ export function validateTaskPlan (plan = {}) {
     const id = String(step?.id || `step-${index + 1}`)
     if (ids.has(id)) throw new Error(`任务步骤标识重复：${id}`)
     ids.add(id)
-    const command = String(step?.command || '').trim()
-    if (!command) throw new Error(`任务步骤 ${id} 的命令不能为空。`)
+    const command = String(step?.command || '')
+    if (!command.trim()) throw new Error(`任务步骤 ${id} 的命令不能为空。`)
+    if (redactSensitiveData(command) !== command) {
+      throw new Error(`任务步骤 ${id} 的可执行命令包含疑似敏感凭据，持久化会改变命令；请改用安全的凭据引用后重试。`)
+    }
     const classification = classifyCommand(command)
     return {
       ...step,
@@ -149,7 +224,9 @@ export function createTaskRunner (options = {}) {
         phase: 'cancel'
       })
     } catch (error) {
-      return sanitizeError(error)
+      const failure = sanitizeError(error)
+      failure.cancelRemoteFailure = true
+      return failure
     }
   }
 
@@ -162,13 +239,20 @@ export function createTaskRunner (options = {}) {
     const control = new Promise((resolve, reject) => { rejectControl = reject })
     const active = {
       executionId,
+      cancellationPromise: null,
       stop (reason) {
-        if (settled || stopReason) return
-        stopReason = reason
-        controller.abort()
-        rejectControl(reason === 'timeout'
-          ? timeoutError(step.timeoutMs)
-          : cancelledError())
+        if (settled) return Promise.resolve(null)
+        if (!stopReason) {
+          stopReason = reason
+          controller.abort()
+          this.cancellationPromise = cancelExecution(this).then(failure => {
+            rejectControl(failure || (reason === 'timeout'
+              ? timeoutError(step.timeoutMs)
+              : cancelledError()))
+            return failure
+          })
+        }
+        return this.cancellationPromise
       }
     }
     activeExecutions.set(task.id, active)
@@ -176,13 +260,11 @@ export function createTaskRunner (options = {}) {
     const onAbort = () => {
       cancellationRequests.add(task.id)
       active.stop('cancel')
-      cancelExecution(active)
     }
     if (signal?.aborted) onAbort()
     else signal?.addEventListener('abort', onAbort, { once: true })
     const timer = setTimeout(() => {
       active.stop('timeout')
-      cancelExecution(active)
     }, step.timeoutMs)
 
     try {
@@ -214,11 +296,15 @@ export function createTaskRunner (options = {}) {
       }
       return audit
     } catch (error) {
-      const failure = stopReason === 'timeout' && !error.timedOut
-        ? timeoutError(step.timeoutMs)
-        : stopReason === 'cancel' && !error.cancelled
-          ? cancelledError()
-          : error
+      const cancellationFailure = stopReason && active.cancellationPromise
+        ? await active.cancellationPromise
+        : null
+      const failure = cancellationFailure ||
+        (stopReason === 'timeout' && !error.timedOut
+          ? timeoutError(step.timeoutMs)
+          : stopReason === 'cancel' && !error.cancelled
+            ? cancelledError()
+            : error)
       if (!failure.audit) {
         const output = failure === error
           ? (await collectBoundedRemoteOutput(error)).output || error?.message || ''
@@ -261,6 +347,11 @@ export function createTaskRunner (options = {}) {
         throw new Error('任务不在等待计划确认状态。')
       }
       return patch(id, {
+        planBinding: {
+          schemaVersion: planBindingSchemaVersion,
+          algorithm: planBindingAlgorithm,
+          fingerprint: await planFingerprint(task)
+        },
         planConfirmedAt: timestamp(),
         updatedAt: timestamp()
       })
@@ -274,6 +365,7 @@ export function createTaskRunner (options = {}) {
       if (task.status !== taskStatuses.awaitingPlanConfirmation || !task.planConfirmedAt) {
         throw new Error('必须先确认计划才能运行任务。')
       }
+      await assertPlanBinding(task)
       if (runOptions.signal?.aborted || cancellationRequests.has(task.id)) {
         task = await patch(task.id, {
           status: taskStatuses.cancelled,
@@ -326,8 +418,9 @@ export function createTaskRunner (options = {}) {
           completedCount += 1
           emit(task.id, step.id, 'completed', audit.preview)
         } catch (error) {
-          const cancelled = error.cancelled || cancellationRequests.has(task.id) ||
-            runOptions.signal?.aborted
+          const cancelled = !error.cancelRemoteFailure &&
+            (error.cancelled || cancellationRequests.has(task.id) ||
+              runOptions.signal?.aborted)
           const stepStatus = cancelled ? 'cancelled' : 'failed'
           const taskStatus = cancelled
             ? taskStatuses.cancelled
@@ -368,8 +461,7 @@ export function createTaskRunner (options = {}) {
     let cancellationFailure
     try {
       if (active) {
-        active.stop('cancel')
-        cancellationFailure = await cancelExecution(active)
+        cancellationFailure = await active.stop('cancel')
       }
       if (pending) {
         try {

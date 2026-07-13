@@ -473,10 +473,12 @@ function stricterClassification (operation) {
     ? claimedRisk
     : classified.risk
   const claimsReversible = operation.reversible === true
-  const reversible = risk === 'change' && classified.reversible === true &&
-    classified.provider != null
+  const classifierRequiresRecovery = classified.risk === 'change' &&
+    classified.reversible === true && classified.provider != null
+  const reversible = classifierRequiresRecovery
   const forged = (hasClaimedRisk && !validClaimedRisk) ||
     riskRank[claimedRisk] < riskRank[classified.risk] ||
+    (classifierRequiresRecovery && claimedRisk === 'unknown') ||
     (claimsReversible && !classified.reversible) ||
     (operation.recoveryProvider != null && operation.recoveryProvider !== classified.provider)
   return {
