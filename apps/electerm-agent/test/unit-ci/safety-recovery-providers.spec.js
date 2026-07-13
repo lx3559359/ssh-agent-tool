@@ -225,6 +225,51 @@ test('firewalld query rc=2 fails prepare and verify instead of recording absence
   }
 })
 
+test('ufw show rc=2 fails prepare and verify instead of recording absence', async () => {
+  const { buildRecoveryPlan } = await importDomainModule('recovery-providers.js')
+  const prepareHome = fs.mkdtempSync(path.join(os.tmpdir(), 'shellpilot-ufw-prepare-'))
+  const verifyHome = fs.mkdtempSync(path.join(os.tmpdir(), 'shellpilot-ufw-verify-'))
+
+  try {
+    const preparePlan = buildRecoveryPlan(await buildChange(
+      'ufw allow 8443/tcp',
+      'ufw-query-prepare'
+    ))
+    const prepareResult = runBash(
+      `function ufw { return 2; }\n${preparePlan.prepareCommand}`,
+      prepareHome
+    )
+    assert.equal(prepareResult.status, 42, prepareResult.stderr || prepareResult.stdout)
+    assert.match(prepareResult.stderr, /ufw.*查询.*退出码 2/i)
+    assert.equal(fs.existsSync(path.join(
+      prepareHome,
+      '.shellpilot/operations/ufw-query-prepare/backup/rule-present'
+    )), false)
+
+    const verifyPlan = buildRecoveryPlan(await buildChange(
+      'ufw delete allow 8443/tcp',
+      'ufw-query-verify'
+    ))
+    const setupResult = runBash(
+      `function ufw { return 0; }\n${verifyPlan.prepareCommand}`,
+      verifyHome
+    )
+    assert.equal(setupResult.status, 0, setupResult.stderr || setupResult.stdout)
+
+    const verifyResult = runBash(
+      'function ufw { return 2; }\n' +
+        '. "$HOME/.shellpilot/operations/ufw-query-verify/verify.sh"',
+      verifyHome
+    )
+    assert.equal(verifyResult.status, 43, verifyResult.stderr || verifyResult.stdout)
+    assert.match(verifyResult.stderr, /ufw.*查询.*退出码 2/i)
+    assert.doesNotMatch(verifyResult.stdout, /present=0/)
+  } finally {
+    fs.rmSync(prepareHome, { recursive: true, force: true })
+    fs.rmSync(verifyHome, { recursive: true, force: true })
+  }
+})
+
 test('firewalld provider rejects multiple changes in one invocation', async () => {
   const { buildRecoveryPlan } = await importDomainModule('recovery-providers.js')
   const change = await buildChange(
@@ -248,6 +293,59 @@ test('network provider restores prior address existence and forbids unsafe bypas
   assert.match(plan.prepareCommand, /ip addr add/)
   assert.match(plan.prepareCommand, /ip addr del/)
   assert.match(plan.prepareCommand, /scope global primary/)
+})
+
+test('network query rc=2 fails prepare rollback and verify instead of becoming a no-op', async () => {
+  const { buildRecoveryPlan } = await importDomainModule('recovery-providers.js')
+  const prepareHome = fs.mkdtempSync(path.join(os.tmpdir(), 'shellpilot-network-prepare-'))
+  const lifecycleHome = fs.mkdtempSync(path.join(os.tmpdir(), 'shellpilot-network-lifecycle-'))
+
+  try {
+    const preparePlan = buildRecoveryPlan(await buildChange(
+      'ip addr del 10.0.0.8/24 dev eth0',
+      'network-query-prepare'
+    ))
+    const prepareResult = runBash(
+      `function ip { return 2; }\n${preparePlan.prepareCommand}`,
+      prepareHome
+    )
+    assert.equal(prepareResult.status, 42, prepareResult.stderr || prepareResult.stdout)
+    assert.match(prepareResult.stderr, /网络.*查询.*退出码 2/)
+    assert.equal(fs.existsSync(path.join(
+      prepareHome,
+      '.shellpilot/operations/network-query-prepare/backup/address-present'
+    )), false)
+
+    const lifecyclePlan = buildRecoveryPlan(await buildChange(
+      'ip addr add 10.0.0.8/24 dev eth0',
+      'network-query-lifecycle'
+    ))
+    const setupResult = runBash(
+      `function ip { return 0; }\n${lifecyclePlan.prepareCommand}`,
+      lifecycleHome
+    )
+    assert.equal(setupResult.status, 0, setupResult.stderr || setupResult.stdout)
+
+    const rollbackResult = runBash(
+      'function ip { return 2; }\n' +
+        '. "$HOME/.shellpilot/operations/network-query-lifecycle/rollback.sh"',
+      lifecycleHome
+    )
+    assert.equal(rollbackResult.status, 43, rollbackResult.stderr || rollbackResult.stdout)
+    assert.match(rollbackResult.stderr, /网络.*查询.*退出码 2/)
+
+    const verifyResult = runBash(
+      'function ip { return 2; }\n' +
+        '. "$HOME/.shellpilot/operations/network-query-lifecycle/verify.sh"',
+      lifecycleHome
+    )
+    assert.equal(verifyResult.status, 43, verifyResult.stderr || verifyResult.stdout)
+    assert.match(verifyResult.stderr, /网络.*查询.*退出码 2/)
+    assert.doesNotMatch(verifyResult.stdout, /present=0/)
+  } finally {
+    fs.rmSync(prepareHome, { recursive: true, force: true })
+    fs.rmSync(lifecycleHome, { recursive: true, force: true })
+  }
 })
 
 test('network provider rejects structurally invalid static CIDR values', async () => {

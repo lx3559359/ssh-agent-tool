@@ -614,6 +614,14 @@ function buildFirewalldProvider (invocation, id) {
   }
 }
 
+function captureQueryOutput (command, outputVariable, errorLabel, exitCode) {
+  return `if ${outputVariable}=$(${command}); then :; else query_rc=$?; echo ${shellQuote(errorLabel)} "$query_rc" >&2; exit ${exitCode}; fi`
+}
+
+function exactLineState (outputVariable, expected, stateVariable, errorLabel, exitCode) {
+  return `if printf '%s\\n' "$${outputVariable}" | grep -Fqx -- ${expected}; then ${stateVariable}=1; else match_rc=$?; case "$match_rc" in 1) ${stateVariable}=0;; *) echo ${shellQuote(errorLabel)} "$match_rc" >&2; exit ${exitCode};; esac; fi`
+}
+
 function buildUfwProvider (invocation, id) {
   const words = invocation.words.slice(1)
   if (words[0] === '--force') words.shift()
@@ -623,9 +631,13 @@ function buildUfwProvider (invocation, id) {
   if (!port) throw new Error('ufw 首版只支持单一端口 allow 或 delete allow。')
   const prefix = invocation.privilege
   const canonical = shellQuote(`ufw allow ${port}`)
-  const query = `${prefix}ufw show added | grep -Fqx -- ${canonical}`
+  const query = `${prefix}ufw show added`
   const add = `${prefix}ufw allow ${port}`
   const remove = `${prefix}ufw --force delete allow ${port}`
+  const queryState = (stateVariable, exitCode) => [
+    captureQueryOutput(query, 'ufw_output', 'ufw 查询失败，退出码', exitCode),
+    exactLineState('ufw_output', canonical, stateVariable, 'ufw 输出匹配失败，退出码', exitCode)
+  ]
   const rollback = [
     ...scriptHeader(id),
     'present=$(cat "$operation_dir/backup/rule-present")',
@@ -633,13 +645,16 @@ function buildUfwProvider (invocation, id) {
   ]
   const verify = [
     ...scriptHeader(id),
-    `if ${query}; then current=1; else current=0; fi`,
+    ...queryState('current', 43),
     'expected=$(cat "$operation_dir/backup/rule-present")',
     'printf \'present=%s\\n\' "$current"',
     '[ "$current" = "$expected" ]'
   ]
   return {
-    captureCommands: [`if ${query}; then printf '1\\n' > "$operation_dir/backup/rule-present"; else printf '0\\n' > "$operation_dir/backup/rule-present"; fi`],
+    captureCommands: [
+      ...queryState('current', 42),
+      'printf \'%s\\n\' "$current" > "$operation_dir/backup/rule-present"'
+    ],
     rollbackScript: rollback.join('\n') + '\n',
     verifyScript: verify.join('\n') + '\n',
     summary: `记录 ufw 端口规则 ${port} 修改前是否存在。`,
@@ -686,25 +701,36 @@ function buildNetworkProvider (command, id) {
   const prefix = invocation.privilege
   const quotedCidr = shellQuote(cidr)
   const quotedIface = shellQuote(iface)
-  const query = `${prefix}ip -o addr show dev ${quotedIface} | awk '{print $4}' | grep -Fqx -- ${quotedCidr}`
+  const addressQuery = `${prefix}ip -o addr show dev ${quotedIface}`
+  const primaryQuery = `${addressQuery} scope global primary`
   const add = `${prefix}ip addr add ${quotedCidr} dev ${quotedIface}`
   const remove = `${prefix}ip addr del ${quotedCidr} dev ${quotedIface}`
+  const queryState = (stateVariable, exitCode) => [
+    captureQueryOutput(addressQuery, 'address_output', '网络地址查询失败，退出码', exitCode),
+    `if address_values=$(printf '%s\\n' "$address_output" | awk '{print $4}'); then :; else parse_rc=$?; echo ${shellQuote('网络地址解析失败，退出码')} "$parse_rc" >&2; exit ${exitCode}; fi`,
+    exactLineState('address_values', quotedCidr, stateVariable, '网络地址匹配失败，退出码', exitCode)
+  ]
   const captureCommands = []
+  captureCommands.push(
+    captureQueryOutput(primaryQuery, 'primary_output', '网络主 IP 查询失败，退出码', 42),
+    `if primary=$(printf '%s\\n' "$primary_output" | awk 'NR==1 {print $4}'); then :; else parse_rc=$?; echo ${shellQuote('网络主 IP 解析失败，退出码')} "$parse_rc" >&2; exit 42; fi`
+  )
   if (action === 'del') {
-    captureCommands.push(`primary=$(${prefix}ip -o addr show dev ${quotedIface} scope global primary | awk 'NR==1 {print $4}'); if [ "$primary" = ${quotedCidr} ]; then echo ${shellQuote('拒绝删除主 IP，无法安全自动恢复。')} >&2; exit 45; fi`)
-  } else {
-    captureCommands.push(`${prefix}ip -o addr show dev ${quotedIface} scope global primary >/dev/null`)
+    captureCommands.push(`if [ "$primary" = ${quotedCidr} ]; then echo ${shellQuote('拒绝删除主 IP，无法安全自动恢复。')} >&2; exit 45; fi`)
   }
-  captureCommands.push(`if ${query}; then printf '1\\n' > "$operation_dir/backup/address-present"; else printf '0\\n' > "$operation_dir/backup/address-present"; fi`)
+  captureCommands.push(
+    ...queryState('current', 42),
+    'printf \'%s\\n\' "$current" > "$operation_dir/backup/address-present"'
+  )
   const rollback = [
     ...scriptHeader(id),
     'present=$(cat "$operation_dir/backup/address-present")',
-    `if ${query}; then current=1; else current=0; fi`,
+    ...queryState('current', 43),
     `case "$present:$current" in 1:0) ${add};; 0:1) ${remove};; 1:1|0:0) :;; *) exit 43;; esac`
   ]
   const verify = [
     ...scriptHeader(id),
-    `if ${query}; then current=1; else current=0; fi`,
+    ...queryState('current', 43),
     'expected=$(cat "$operation_dir/backup/address-present")',
     'printf \'present=%s\\n\' "$current"',
     '[ "$current" = "$expected" ]'
