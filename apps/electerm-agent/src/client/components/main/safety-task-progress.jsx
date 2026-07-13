@@ -75,7 +75,7 @@ export default function SafetyTaskProgress ({
         </div>
         {canCancel
           ? cancelButton
-          : <Tooltip title='当前执行器未提供取消能力'>{cancelButton}</Tooltip>}
+          : <Tooltip title='任务执行器尚未接入'>{cancelButton}</Tooltip>}
       </div>
 
       <div className='safety-task-progress-endpoint'>{summary.endpoint}</div>

@@ -234,6 +234,25 @@ test('external PTY exit zero makes verified recovery rollback available', async 
   assert.equal((await store.get(request.id)).state, 'rollback-available')
 })
 
+test('rollback recovers a verification-passed transaction left by a crash', async () => {
+  const context = await createPreparedRunner()
+  await context.runner.execute(context.request.id, { confirmed: true })
+  await context.store.patch(context.request.id, {
+    state: 'verification-passed',
+    completedAt: undefined
+  })
+  const callsBeforeRollback = context.remoteCalls.length
+
+  const restored = await context.runner.rollback(context.request.id)
+
+  assert.equal(restored.state, 'restored')
+  assert.deepEqual(
+    context.remoteCalls.slice(callsBeforeRollback).map(call => call.options.phase),
+    ['rollback', 'verify']
+  )
+  assert.equal((await context.store.get(context.request.id)).state, 'restored')
+})
+
 test('external PTY nonzero and interrupted exits fail while preserving rollback', async t => {
   for (const exitCode of [7, null]) {
     await t.test(String(exitCode), async () => {

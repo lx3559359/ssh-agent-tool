@@ -1,7 +1,11 @@
 import { redactAuditText, redactSensitiveData } from './audit-redaction.js'
 import { classifyCommand } from './command-classifier.js'
 import { assertSameSessionEndpoint, buildEndpointKey } from './endpoint-guard.js'
-import { operationStates } from './models.js'
+import {
+  operationStates,
+  recoveryBindingAlgorithm,
+  recoveryBindingSchemaVersion
+} from './models.js'
 import {
   buildVerifiedRemoteAction,
   parseRemoteActionMarker
@@ -10,6 +14,7 @@ import {
 export const maxAuditPreviewBytes = 64 * 1024
 
 const terminalStates = new Set([
+  operationStates.verificationPassed,
   operationStates.rollbackAvailable,
   operationStates.kept,
   operationStates.restored,
@@ -35,8 +40,11 @@ const riskRank = {
   unknown: 2,
   blocked: 3
 }
-const recoveryBindingSchemaVersion = 1
-const recoveryBindingAlgorithm = 'SHA-256'
+const rollbackStates = new Set([
+  operationStates.verificationPassed,
+  operationStates.rollbackAvailable,
+  operationStates.failed
+])
 
 function requireFunction (value, label) {
   if (typeof value !== 'function') throw new Error(`${label} 必须是函数。`)
@@ -1209,7 +1217,7 @@ export function createTransactionRunner (options = {}) {
     return serialize(String(id), async () => {
       let operation = await get(id)
       if (!operation) throw new Error(`未找到安全事务：${id}`)
-      if (![operationStates.rollbackAvailable, operationStates.failed].includes(operation.state)) {
+      if (!rollbackStates.has(operation.state)) {
         throw new Error('当前安全事务状态不允许回滚。')
       }
       if (!operation.plan?.rollbackCommand || !operation.plan?.verifyCommand) {
@@ -1221,7 +1229,7 @@ export function createTransactionRunner (options = {}) {
         return await serializeEndpoint(operation, async () => {
           operation = await get(operation.id) || operation
           if (operation.state === operationStates.cancelled) throw cancellationError()
-          if (![operationStates.rollbackAvailable, operationStates.failed].includes(operation.state)) {
+          if (!rollbackStates.has(operation.state)) {
             throw new Error('当前安全事务状态不允许回滚。')
           }
           if (!operation.plan?.rollbackCommand || !operation.plan?.verifyCommand) {

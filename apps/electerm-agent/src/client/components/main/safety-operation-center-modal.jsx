@@ -28,10 +28,12 @@ import {
   matchesSafetyOperationEndpoint
 } from '../../common/safety-operation-records'
 import {
+  getOperation,
+  guardedPatchOperation,
   listOperations,
-  listTasks,
-  patchOperation
+  listTasks
 } from '../../common/safety-transactions/transaction-store.js'
+import { executeSafetyCenterAction } from './safety-operation-center-actions.js'
 import SafetyTaskProgress from './safety-task-progress.jsx'
 import {
   buildSafetyRecordViewModel,
@@ -42,7 +44,6 @@ import {
   groupSafetyCenterRecords,
   isSafetyOperationRollbackable,
   isSafetyOperationRunning,
-  routeSafetyCenterAction,
   safetyOperationStatusPresentations,
   safetyTaskStatusPresentations,
   safetyRecordActionLockKey,
@@ -190,7 +191,6 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
   const groups = useMemo(() => {
     return groupSafetyCenterRecords(records, tasks)
   }, [records, tasks])
-  const hasRunning = groups.running.length > 0
 
   useEffect(() => {
     if (open) refreshRecords()
@@ -200,10 +200,9 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
     if (!open) return
     return subscribeSafetyCenterRefresh({
       eventTarget: window,
-      refresh: refreshRecords,
-      hasRunning
+      refresh: refreshRecords
     })
-  }, [open, hasRunning, refreshRecords])
+  }, [open, refreshRecords])
 
   const allRecords = useMemo(() => {
     return Object.values(groups).flat()
@@ -282,56 +281,37 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
     }
   }
 
-  const executeLegacyAction = async (record, action) => {
+  const resolveLegacyTarget = async (record) => {
     const legacy = getLegacySafetyRecord(record)
-    if (!legacy || record.metadata?.legacyEndpointIncomplete) {
-      throw new Error('旧版记录的服务器端点不完整，无法安全恢复。')
-    }
-
-    let execute
+    if (!legacy) return undefined
     if (record.source === 'sftp') {
-      if (action !== 'rollback') throw new Error('旧版 SFTP 记录不支持保留动作。')
       const entry = findLegacySftpEntry(record)
-      if (!entry?.sftp) throw new Error('未找到端点匹配的活动 SFTP 会话。')
-      execute = () => entry.restoreSftpRecord(legacy)
-    } else if (record.source === 'quick-command') {
+      return entry?.sftp ? { type: 'sftp', entry } : undefined
+    }
+    if (record.source === 'quick-command') {
       const terminal = findSafetyOperationSession(
         legacy,
         tabIdsFor(record),
         tabId => refs.get('term-' + tabId)
       )
-      if (!terminal) throw new Error('未找到端点匹配的活动 SSH 终端。')
-      execute = async () => {
-        const token = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-        const output = await runCmd(
-          terminal.pid,
-          buildVerifiedQuickCommandRollbackAction(legacy, action, token)
-        )
-        assertVerifiedQuickCommandRollbackResult(output, token)
-      }
-    } else {
-      throw new Error('该旧版记录没有可用的恢复入口。')
+      return terminal ? { type: 'quick-command', terminal } : undefined
     }
+  }
 
-    try {
-      await execute()
-    } catch (error) {
-      try {
-        await patchOperation(record.id, {
-          state: 'failed',
-          error: error?.message || String(error),
-          failedAt: new Date().toISOString()
-        })
-      } catch (patchError) {
-        reportError(patchError)
-      }
-      throw error
+  const runLegacyAction = async (record, action, target) => {
+    const legacy = getLegacySafetyRecord(record)
+    if (!legacy) throw new Error('旧版恢复记录无效。')
+    if (target.type === 'sftp') {
+      return target.entry.restoreSftpRecord(legacy)
     }
-
-    await patchOperation(record.id, {
-      state: action === 'rollback' ? 'restored' : 'kept',
-      completedAt: new Date().toISOString()
-    })
+    if (target.type !== 'quick-command') throw new Error('旧版恢复会话无效。')
+    const token = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const output = await runCmd(
+      target.terminal.pid,
+      buildVerifiedQuickCommandRollbackAction(legacy, action, token)
+    )
+    assertVerifiedQuickCommandRollbackResult(output, token)
+    return true
   }
 
   const handleSafetyAction = (record, action) => {
@@ -342,19 +322,16 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
         const view = buildSafetyRecordViewModel(record)
         if (!await confirmSafetyAction(action, view)) return
         try {
-          if (getLegacySafetyRecord(record)) {
-            await executeLegacyAction(record, action)
-          } else if (record.recordType === 'task') {
-            await routeSafetyCenterAction({
-              action,
-              record,
-              taskCapability: getTaskCancelCapability(record)
-            })
-          } else {
-            const terminal = findOperationTerminal(record)
-            if (!terminal) throw new Error('未找到与安全操作端点完全匹配的活动 SSH 终端。')
-            await routeSafetyCenterAction({ action, record, terminal })
-          }
+          await executeSafetyCenterAction({
+            record,
+            action,
+            getOperation,
+            guardedPatchOperation,
+            resolveLegacyTarget,
+            runLegacyAction,
+            findModernTerminal: findOperationTerminal,
+            taskCapability: getTaskCancelCapability(record)
+          })
           message.success(actionLabels[action].success)
         } catch (error) {
           reportError(error)

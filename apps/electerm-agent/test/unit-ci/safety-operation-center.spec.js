@@ -58,6 +58,25 @@ function task (id, status, updatedAt, extra = {}) {
   }
 }
 
+function recoveryStructure (id) {
+  return {
+    recoveryBinding: {
+      schemaVersion: 1,
+      algorithm: 'SHA-256',
+      fingerprint: 'a'.repeat(64)
+    },
+    plan: {
+      operationDir: `~/.shellpilot/operations/${id}/`,
+      rollbackCommand: `rollback-${id}`,
+      verifyCommand: `verify-${id}`
+    },
+    artifacts: {
+      manifest: `~/.shellpilot/operations/${id}/manifest.json`
+    },
+    recoveryReadyAt: '2026-07-13T06:30:00.000Z'
+  }
+}
+
 function deferred () {
   let resolveDeferred
   let rejectDeferred
@@ -72,11 +91,10 @@ test('groups operations and tasks into four mutually exclusive tabs', async () =
   const { groupSafetyCenterRecords } = await importModel()
   const records = [
     operation('op-preparing', 'preparing', '2026-07-13T10:00:00.000Z'),
-    operation('op-ready', 'rollback-available', '2026-07-13T09:00:00.000Z'),
+    operation('op-ready', 'rollback-available', '2026-07-13T09:00:00.000Z', recoveryStructure('op-ready')),
     operation('op-kept', 'kept', '2026-07-13T08:00:00.000Z'),
     operation('op-failed-recoverable', 'failed', '2026-07-13T07:00:00.000Z', {
-      recoveryBinding: { fingerprint: 'bound' },
-      plan: { rollbackCommand: 'rollback', verifyCommand: 'verify' }
+      ...recoveryStructure('op-failed-recoverable')
     }),
     operation('op-failed-final', 'failed', '2026-07-13T06:00:00.000Z'),
     operation('legacy-1', 'rollback-available', '2026-07-13T11:00:00.000Z', {
@@ -126,8 +144,11 @@ test('groups every declared operation and task lifecycle status exactly once', a
     operationStates.recoveryReady,
     operationStates.awaitingConfirmation,
     operationStates.executing,
-    operationStates.verificationPassed,
     operationStates.rollingBack
+  ])
+  const operationRollback = new Set([
+    operationStates.verificationPassed,
+    operationStates.rollbackAvailable
   ])
   const operationHistory = new Set([
     operationStates.kept,
@@ -141,9 +162,15 @@ test('groups every declared operation and task lifecycle status exactly once', a
     taskStatuses.failed,
     taskStatuses.cancelled
   ])
-  const records = Object.values(operationStates).map((state, index) => (
-    operation(`operation-${state}`, state, `2026-07-13T10:${String(index).padStart(2, '0')}:00.000Z`)
-  ))
+  const records = Object.values(operationStates).map((state, index) => {
+    const id = `operation-${state}`
+    return operation(
+      id,
+      state,
+      `2026-07-13T10:${String(index).padStart(2, '0')}:00.000Z`,
+      operationRollback.has(state) ? recoveryStructure(id) : {}
+    )
+  })
   const tasks = Object.values(taskStatuses).map((status, index) => (
     task(`task-${status}`, status, `2026-07-13T11:${String(index).padStart(2, '0')}:00.000Z`)
   ))
@@ -158,12 +185,12 @@ test('groups every declared operation and task lifecycle status exactly once', a
   }
 
   assert.equal(
-    operationRunning.size + operationHistory.size + 1,
+    operationRunning.size + operationRollback.size + operationHistory.size,
     Object.values(operationStates).length,
     'operationStates 新状态必须明确分组'
   )
   for (const state of Object.values(operationStates)) {
-    const expected = state === operationStates.rollbackAvailable
+    const expected = operationRollback.has(state)
       ? 'rollback'
       : operationRunning.has(state) ? 'running' : 'history'
     assert.equal(membership.get(`operation-${state}`), expected, state)
@@ -179,14 +206,54 @@ test('only rollback-available or fully recoverable failed operations are rollbac
   const { isSafetyOperationRollbackable } = await importModel()
   const time = '2026-07-13T10:00:00.000Z'
   const complete = operation('complete', 'failed', time, {
-    recoveryBinding: { fingerprint: 'bound' },
-    plan: { rollbackCommand: 'rollback', verifyCommand: 'verify' }
+    ...recoveryStructure('complete')
   })
 
-  assert.equal(isSafetyOperationRollbackable(operation('ready', 'rollback-available', time)), true)
+  assert.equal(isSafetyOperationRollbackable(operation(
+    'verification-crash',
+    'verification-passed',
+    time,
+    recoveryStructure('verification-crash')
+  )), true)
+  assert.equal(isSafetyOperationRollbackable(operation(
+    'ready',
+    'rollback-available',
+    time,
+    recoveryStructure('ready')
+  )), true)
   assert.equal(isSafetyOperationRollbackable(complete), true)
   assert.equal(isSafetyOperationRollbackable(operation('failed', 'failed', time)), false)
   assert.equal(isSafetyOperationRollbackable({ ...complete, plan: { rollbackCommand: 'rollback' } }), false)
+})
+
+test('damaged recovery structures stay in history with an integrity error and no rollback action', async () => {
+  const {
+    buildSafetyRecordViewModel,
+    groupSafetyCenterRecords,
+    isSafetyOperationRollbackable
+  } = await importModel()
+  const time = '2026-07-13T10:00:00.000Z'
+  const base = operation('damaged', 'failed', time, recoveryStructure('damaged'))
+  const damagedRecords = [
+    { ...base, id: 'missing-binding', recoveryBinding: undefined },
+    { ...base, id: 'bad-schema', recoveryBinding: { ...base.recoveryBinding, schemaVersion: 2 } },
+    { ...base, id: 'bad-algorithm', recoveryBinding: { ...base.recoveryBinding, algorithm: 'MD5' } },
+    { ...base, id: 'bad-fingerprint', recoveryBinding: { ...base.recoveryBinding, fingerprint: 'short' } },
+    { ...base, id: 'missing-plan', plan: undefined },
+    { ...base, id: 'missing-rollback', plan: { ...base.plan, rollbackCommand: '' } },
+    { ...base, id: 'missing-verify', plan: { ...base.plan, verifyCommand: '' } },
+    { ...base, id: 'missing-artifacts', artifacts: undefined },
+    { ...base, id: 'missing-ready-at', recoveryReadyAt: undefined }
+  ]
+
+  const groups = groupSafetyCenterRecords(damagedRecords, [])
+
+  assert.equal(groups.rollback.length, 0)
+  assert.equal(groups.history.length, damagedRecords.length)
+  for (const record of damagedRecords) {
+    assert.equal(isSafetyOperationRollbackable(record), false, record.id)
+    assert.match(buildSafetyRecordViewModel(record).error, /完整性/)
+  }
 })
 
 test('legacy records always stay in the legacy tab', async () => {
@@ -467,6 +534,7 @@ test('task progress component exposes compact counts and capability-gated cancel
   assert.match(component, /来源/)
   assert.match(component, /canCancel/)
   assert.match(component, /disabled=!canCancel|disabled=\{!canCancel/)
+  assert.match(component, /任务执行器尚未接入/)
   assert.match(component, /Progress/)
   assert.match(styles, /overflow-y auto/)
   assert.match(styles, /border-radius 6px/)
@@ -517,7 +585,7 @@ test('safety center gives every declared operation and task status a Chinese lab
   assert.doesNotMatch(component, /\[summary\.status,\s*'default'\]/)
 })
 
-test('refresh lifecycle removes its event listener and running timer on close', async () => {
+test('refresh lifecycle is event-driven and removes listeners without creating an interval', async () => {
   const {
     legacySafetyOperationUpdatedEvent,
     safetyTransactionUpdatedEvent,
@@ -525,8 +593,7 @@ test('refresh lifecycle removes its event listener and running timer on close', 
   } = await importModel()
   const listeners = new Map()
   const removed = []
-  const cleared = []
-  let intervalCallback
+  let intervalCount = 0
   let refreshCount = 0
   const eventTarget = {
     addEventListener: (name, listener) => listeners.set(name, listener),
@@ -539,18 +606,13 @@ test('refresh lifecycle removes its event listener and running timer on close', 
     eventTarget,
     refresh: () => { refreshCount += 1 },
     hasRunning: true,
-    setIntervalFn: (callback, delay) => {
-      assert.equal(delay >= 5000, true)
-      intervalCallback = callback
-      return 'timer-1'
-    },
-    clearIntervalFn: id => cleared.push(id)
+    setIntervalFn: () => { intervalCount += 1 }
   })
 
   listeners.get(safetyTransactionUpdatedEvent)()
   listeners.get(legacySafetyOperationUpdatedEvent)()
-  intervalCallback()
-  assert.equal(refreshCount, 3)
+  assert.equal(refreshCount, 2)
+  assert.equal(intervalCount, 0)
 
   const transactionListener = listeners.get(safetyTransactionUpdatedEvent)
   const legacyListener = listeners.get(legacySafetyOperationUpdatedEvent)
@@ -559,7 +621,6 @@ test('refresh lifecycle removes its event listener and running timer on close', 
     [safetyTransactionUpdatedEvent, transactionListener],
     [legacySafetyOperationUpdatedEvent, legacyListener]
   ])
-  assert.deepEqual(cleared, ['timer-1'])
   assert.equal(listeners.size, 0)
 })
 
@@ -616,7 +677,7 @@ test('legacy operations preserve the verified SFTP and quick-command restore pat
   assert.match(modal, /buildVerifiedQuickCommandRollbackAction/)
   assert.match(modal, /assertVerifiedQuickCommandRollbackResult/)
   assert.match(modal, /findSafetyOperationSession/)
-  assert.match(modal, /state: 'failed'/)
+  assert.match(modal, /executeSafetyCenterAction/)
 })
 
 test('terminal safety center methods validate stored endpoint before delegating to runner', () => {
@@ -645,12 +706,14 @@ test('UI keeps one topbar entry and reads the encrypted transaction store', () =
   assert.match(modal, /groupSafetyCenterRecords/)
   assert.match(modal, /SafetyTaskProgress/)
   assert.match(modal, /findMatchingSafetyTerminal/)
-  assert.match(modal, /routeSafetyCenterAction/)
+  assert.match(modal, /executeSafetyCenterAction/)
+  assert.match(modal, /getOperation/)
+  assert.match(modal, /guardedPatchOperation/)
   assert.match(modal, /createSafetyActionLock/)
   assert.match(modal, /subscribeSafetyCenterRefresh/)
   assert.match(modal, /Modal\.confirm/)
   assert.match(modal, /safetyTaskCapability/)
-  assert.match(modal, /patchOperation/)
+  assert.doesNotMatch(modal, /\bpatchOperation\b/)
   assert.doesNotMatch(modal, /readSafetyOperationRecords/)
   for (const label of ['执行中', '可回滚', '历史记录', '旧版记录']) {
     assert.match(modal, new RegExp(label))

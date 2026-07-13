@@ -6,7 +6,8 @@ import {
 } from '../../common/safety-transactions/endpoint-guard.js'
 import {
   finalOperationStates,
-  operationStates
+  operationStates,
+  validateRecoveryStructure
 } from '../../common/safety-transactions/models.js'
 import {
   finalTaskStatuses,
@@ -21,6 +22,11 @@ const knownOperationStates = new Set(Object.values(operationStates))
 const finalOperationStateSet = new Set(finalOperationStates)
 const knownTaskStatuses = new Set(Object.values(taskStatuses))
 const finalTaskStatusSet = new Set(finalTaskStatuses)
+const recoveryOperationStates = new Set([
+  operationStates.verificationPassed,
+  operationStates.rollbackAvailable,
+  operationStates.failed
+])
 const successfulStepStatuses = new Set([
   'completed',
   'success',
@@ -102,26 +108,35 @@ function stableNewestFirst (entries) {
     .map(entry => entry.record)
 }
 
-function hasCompleteRecoveryPlan (record) {
-  return Boolean(
-    record.recoveryBinding &&
-    typeof record.plan?.rollbackCommand === 'string' &&
-    record.plan.rollbackCommand &&
-    typeof record.plan?.verifyCommand === 'string' &&
-    record.plan.verifyCommand
+function claimsRecovery (record) {
+  if ([operationStates.verificationPassed, operationStates.rollbackAvailable].includes(record?.state)) {
+    return true
+  }
+  return record?.state === operationStates.failed && Boolean(
+    record.reversible === true ||
+    record.recoveryBinding ||
+    record.plan ||
+    record.artifacts ||
+    record.recoveryReadyAt
   )
 }
 
+export function getSafetyRecoveryIntegrityError (record) {
+  if (record?.metadata?.legacy === true || !claimsRecovery(record)) return ''
+  const validation = validateRecoveryStructure(record)
+  return validation.valid ? '' : validation.error
+}
+
 export function isSafetyOperationRollbackable (record) {
-  return record?.state === operationStates.rollbackAvailable ||
-    (record?.state === operationStates.failed && hasCompleteRecoveryPlan(record))
+  return recoveryOperationStates.has(record?.state) &&
+    validateRecoveryStructure(record).valid
 }
 
 export function isSafetyOperationRunning (record) {
   return record?.metadata?.legacy !== true &&
     knownOperationStates.has(record?.state) &&
     !finalOperationStateSet.has(record.state) &&
-    record.state !== operationStates.rollbackAvailable
+    !recoveryOperationStates.has(record.state)
 }
 
 function operationGroup (record) {
@@ -290,6 +305,7 @@ export function buildSafetyRecordViewModel (record = {}) {
   const operationDir = record.plan?.operationDir || ''
   const backupPath = record.artifacts?.backupDir || legacy?.backupPath || ''
   const recoveryPath = operationDir || legacy?.rollbackPath || legacy?.path || ''
+  const recoveryIntegrityError = getSafetyRecoveryIntegrityError(record)
   return {
     id: safeText(record.id, 256),
     recordType: record.recordType === 'task' ? 'task' : 'operation',
@@ -305,7 +321,7 @@ export function buildSafetyRecordViewModel (record = {}) {
     updatedAt: safeText(record.updatedAt || record.createdAt, 80),
     timeline: timelineView(record, audit),
     verification: verificationView(record, audit),
-    error: safeText(record.error, maxTextPreview),
+    error: safeText(record.integrityError || recoveryIntegrityError || record.error, maxTextPreview),
     audit,
     auditCount: Array.isArray(record.audit) ? record.audit.length : 0,
     legacy: Boolean(legacy)
@@ -444,11 +460,7 @@ export function createSafetyActionLock (onChange = () => {}) {
 
 export function subscribeSafetyCenterRefresh ({
   eventTarget,
-  refresh,
-  hasRunning = false,
-  intervalMs = 5000,
-  setIntervalFn = setInterval,
-  clearIntervalFn = clearInterval
+  refresh
 }) {
   if (!eventTarget?.addEventListener || !eventTarget?.removeEventListener ||
     typeof refresh !== 'function') {
@@ -462,9 +474,6 @@ export function subscribeSafetyCenterRefresh ({
   for (const eventName of eventNames) {
     eventTarget.addEventListener(eventName, listener)
   }
-  const timer = hasRunning
-    ? setIntervalFn(listener, Math.max(5000, Number(intervalMs) || 5000))
-    : null
   let disposed = false
   return () => {
     if (disposed) return
@@ -472,6 +481,5 @@ export function subscribeSafetyCenterRefresh ({
     for (const eventName of eventNames) {
       eventTarget.removeEventListener(eventName, listener)
     }
-    if (timer !== null) clearIntervalFn(timer)
   }
 }

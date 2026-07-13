@@ -23,6 +23,56 @@ export const finalOperationStates = Object.freeze([
   operationStates.cancelled
 ])
 
+export const recoveryBindingSchemaVersion = 1
+export const recoveryBindingAlgorithm = 'SHA-256'
+
+function invalidRecoveryStructure (reason) {
+  return {
+    valid: false,
+    error: `恢复结构完整性错误：${reason}`
+  }
+}
+
+export function validateRecoveryStructure (operation = {}) {
+  const binding = operation.recoveryBinding
+  if (!binding || typeof binding !== 'object' || Array.isArray(binding)) {
+    return invalidRecoveryStructure('缺少恢复绑定。')
+  }
+  if (binding.schemaVersion !== recoveryBindingSchemaVersion) {
+    return invalidRecoveryStructure('恢复绑定版本不受支持。')
+  }
+  if (binding.algorithm !== recoveryBindingAlgorithm) {
+    return invalidRecoveryStructure('恢复绑定算法不受支持。')
+  }
+  if (typeof binding.fingerprint !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(binding.fingerprint)) {
+    return invalidRecoveryStructure('恢复绑定指纹无效。')
+  }
+
+  const plan = operation.plan
+  if (!plan || typeof plan !== 'object' || Array.isArray(plan)) {
+    return invalidRecoveryStructure('缺少恢复计划。')
+  }
+  if (typeof plan.operationDir !== 'string' || !plan.operationDir.trim()) {
+    return invalidRecoveryStructure('缺少恢复目录。')
+  }
+  if (typeof plan.rollbackCommand !== 'string' || !plan.rollbackCommand.trim()) {
+    return invalidRecoveryStructure('缺少回滚命令。')
+  }
+  if (typeof plan.verifyCommand !== 'string' || !plan.verifyCommand.trim()) {
+    return invalidRecoveryStructure('缺少验证命令。')
+  }
+  if (!operation.artifacts || typeof operation.artifacts !== 'object' ||
+    Array.isArray(operation.artifacts) || !Object.keys(operation.artifacts).length) {
+    return invalidRecoveryStructure('缺少恢复产物。')
+  }
+  if (typeof operation.recoveryReadyAt !== 'string' ||
+    Number.isNaN(new Date(operation.recoveryReadyAt).getTime())) {
+    return invalidRecoveryStructure('缺少有效的恢复点时间。')
+  }
+  return { valid: true, error: '' }
+}
+
 export const operationSources = Object.freeze([
   'terminal',
   'agent',
