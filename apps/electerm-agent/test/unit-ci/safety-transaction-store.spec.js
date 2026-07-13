@@ -21,7 +21,7 @@ function clone (value) {
   return value === undefined ? value : JSON.parse(JSON.stringify(value))
 }
 
-function createMemoryAdapter () {
+function createMemoryAdapter (options = {}) {
   const tables = new Map()
   const calls = []
   let findOneFailures = 0
@@ -54,6 +54,7 @@ function createMemoryAdapter () {
     async update (id, value, table, upsert, propagateError) {
       calls.push({ method: 'update', id, table, upsert, propagateError })
       getTable(table).set(id, clone(value))
+      await options.onUpdate?.({ id, value: clone(value), table })
       return 1
     },
     async findOne (table, id, propagateError) {
@@ -107,6 +108,9 @@ function createLegacyStorage (sftpRecords, options = {}) {
     removed,
     get sftpRecords () {
       return clone(currentSftpRecords)
+    },
+    appendSftpRecords (records) {
+      currentSftpRecords.push(...clone(records))
     },
     safeGetItemJSON: (key, fallback) => key === unifiedSafetyKey
       ? clone(unifiedRecords)
@@ -286,11 +290,10 @@ test('legacy migration is deterministic, idempotent and includes newly appearing
     createdAt: '2026-07-12T09:00:00.000Z',
     status: 'available'
   }]
-  let cleanupCount = 0
   const store = createTransactionStore({
     adapter,
     readLegacyRecords: () => legacy,
-    cleanupLegacyRecords: () => { cleanupCount += 1 },
+    cleanupLegacyRecords: () => { throw new Error('legacy cleanup must not run') },
     now: () => new Date('2026-07-13T10:00:00.000Z')
   })
 
@@ -324,17 +327,12 @@ test('legacy migration is deterministic, idempotent and includes newly appearing
     generatedId
   ].sort())
   assert.equal(adapter.tables.get('safetyOperations').size, 3)
-  assert.equal(cleanupCount, 3)
 })
 
-test('migration persists and verifies all 250 legacy records before cleaning their source key', async () => {
+test('migration persists and verifies all 250 legacy records without deleting their source key', async () => {
   const { createTransactionStore } = await importStore()
   const adapter = createMemoryAdapter()
-  const storage = createLegacyStorage(createLegacyRecords(250), {
-    onRemove: key => {
-      if (key === legacySftpKey) assert.equal(adapter.findOneCallCount, 250)
-    }
-  })
+  const storage = createLegacyStorage(createLegacyRecords(250))
   const store = createTransactionStore({
     adapter,
     legacyStorage: storage,
@@ -346,8 +344,8 @@ test('migration persists and verifies all 250 legacy records before cleaning the
   assert.equal(records.length, 250)
   assert.equal(adapter.tables.get('safetyOperations').size, 250)
   assert.equal(adapter.findOneCallCount, 250)
-  assert.deepEqual(storage.removed, [legacySftpKey])
-  assert.equal(storage.sftpRecords.length, 0)
+  assert.deepEqual(storage.removed, [])
+  assert.equal(storage.sftpRecords.length, 250)
 })
 
 test('record 201 readback failure retains all 250 legacy records and retries safely', async () => {
@@ -369,17 +367,21 @@ test('record 201 readback failure retains all 250 legacy records and retries saf
   const retried = await store.listOperations()
   assert.equal(retried.length, 250)
   assert.equal(adapter.tables.get('safetyOperations').size, 250)
-  assert.deepEqual(storage.removed, [legacySftpKey])
+  assert.equal(storage.sftpRecords.length, 250)
+  assert.deepEqual(storage.removed, [])
 })
 
-test('a legacy source key is retained when a new record appears during migration', async () => {
-  const { createTransactionStore } = await importStore()
-  const adapter = createMemoryAdapter()
+test('a concurrent legacy write during migration is retained and migrates on the next pass', async () => {
+  const {
+    createTransactionStore,
+    legacyMigrationMarkerId
+  } = await importStore()
   let addedDuringMigration = false
-  const storage = createLegacyStorage(createLegacyRecords(201), {
-    onSftpRead: ({ readCount, records }) => {
-      if (readCount === 2) {
-        records.push(...createLegacyRecords(1, 201))
+  const storage = createLegacyStorage(createLegacyRecords(201))
+  const adapter = createMemoryAdapter({
+    onUpdate: ({ table }) => {
+      if (table === 'safetyOperations' && !addedDuringMigration) {
+        storage.appendSftpRecords(createLegacyRecords(1, 201))
         addedDuringMigration = true
       }
     }
@@ -395,17 +397,27 @@ test('a legacy source key is retained when a new record appears during migration
   const second = await store.listOperations()
   assert.equal(second.length, 202)
   assert.equal(adapter.tables.get('safetyOperations').size, 202)
-  assert.deepEqual(storage.removed, [legacySftpKey])
+  assert.equal(storage.sftpRecords.length, 202)
+  assert.deepEqual(storage.removed, [])
+  assert.equal(
+    adapter.read('data', legacyMigrationMarkerId).migratedIds.includes('legacy-bulk-201'),
+    true
+  )
+
+  const third = await store.listOperations()
+  assert.equal(third.length, 202)
+  assert.equal(adapter.tables.get('safetyOperations').size, 202)
+  assert.equal(storage.sftpRecords.length, 202)
+  assert.deepEqual(storage.removed, [])
 })
 
-test('legacy data is retained until database write readback verification succeeds', async () => {
+test('migration marker is written only after database readback succeeds without cleanup', async () => {
   const {
     createTransactionStore,
     legacyMigrationMarkerId
   } = await importStore()
   const adapter = createMemoryAdapter()
   adapter.failNextFindOne()
-  let cleanupCount = 0
   const store = createTransactionStore({
     adapter,
     readLegacyRecords: () => [{
@@ -417,16 +429,14 @@ test('legacy data is retained until database write readback verification succeed
       createdAt: '2026-07-12T08:00:00.000Z',
       status: 'available'
     }],
-    cleanupLegacyRecords: () => { cleanupCount += 1 }
+    cleanupLegacyRecords: () => { throw new Error('legacy cleanup must not run') }
   })
 
   await assert.rejects(store.listOperations(), /迁移回读验证失败/)
-  assert.equal(cleanupCount, 0)
   assert.equal(adapter.read('data', legacyMigrationMarkerId), undefined)
 
   const retried = await store.listOperations()
   assert.deepEqual(retried.map(item => item.id), ['legacy-retry'])
-  assert.equal(cleanupCount, 1)
   assert.ok(adapter.read('data', legacyMigrationMarkerId))
 })
 
@@ -457,7 +467,9 @@ test('completed database state wins over a stale available legacy snapshot', asy
   })
 
   const [record] = await reader.listOperations()
+  const [repeated] = await reader.listOperations()
   assert.equal(record.state, 'restored')
+  assert.equal(repeated.state, 'restored')
   assert.equal(adapter.read('safetyOperations', 'same-record').state, 'restored')
 })
 

@@ -211,74 +211,41 @@ test('legacy plaintext is retained when encrypted migration cannot be verified',
   assert.deepEqual(removed, [])
 })
 
-test('legacy plaintext cleanup retries after an earlier removal failure', async () => {
+test('repeated migration reads retain legacy records and include later concurrent writes', async () => {
   const {
-    cleanupMigratedSafetyOperationRecords,
     readSafetyOperationRecordsForMigration,
     safetyOperationStorageKey
   } = await import(moduleUrl)
-  let encrypted = []
-  let legacyPresent = true
-  let removalAttempts = 0
-  const legacyRecord = {
-    id: 'legacy-retry',
+  const legacyRecords = [{
+    id: 'legacy-first',
     sourcePath: '/etc/hosts',
     createdAt: '2026-07-12T08:00:00.000Z'
-  }
+  }]
+  const removed = []
   const storage = {
-    safeGetItemJSON: (key, fallback) => key === safetyOperationStorageKey ? encrypted : fallback,
-    safeSetItemJSON: (key, value) => { encrypted = value },
-    removeItem: key => {
-      if (key !== 'shellpilot-sftp-recovery-records') return
-      removalAttempts += 1
-      if (removalAttempts === 1) throw new Error('temporary storage failure')
-      legacyPresent = false
-    },
+    safeGetItemJSON: (key, fallback) => key === safetyOperationStorageKey ? [] : fallback,
+    removeItem: key => removed.push(key),
     getItemJSON: (key, fallback) => {
-      return key === 'shellpilot-sftp-recovery-records' && legacyPresent
-        ? [legacyRecord]
+      return key === 'shellpilot-sftp-recovery-records'
+        ? legacyRecords
         : fallback
     }
   }
 
-  const { legacySources } = readSafetyOperationRecordsForMigration(storage)
-  assert.doesNotThrow(() => cleanupMigratedSafetyOperationRecords(storage, legacySources))
-  assert.equal(legacyPresent, true)
-  assert.doesNotThrow(() => cleanupMigratedSafetyOperationRecords(storage, legacySources))
-  assert.equal(legacyPresent, false)
-  assert.equal(removalAttempts, 2)
-})
+  const first = readSafetyOperationRecordsForMigration(storage)
+  legacyRecords.push({
+    id: 'legacy-concurrent',
+    sourcePath: '/etc/resolv.conf',
+    createdAt: '2026-07-12T09:00:00.000Z'
+  })
+  const second = readSafetyOperationRecordsForMigration(storage)
 
-test('verified migration cleanup removes only the matching nonempty legacy source', async () => {
-  const {
-    cleanupMigratedSafetyOperationRecords,
-    readSafetyOperationRecords,
-    readSafetyOperationRecordsForMigration,
-    safetyOperationStorageKey
-  } = await import(moduleUrl)
-  let encrypted = []
-  const removed = []
-  const legacyRecord = {
-    id: 'legacy-deferred',
-    sourcePath: '/etc/hosts',
-    createdAt: '2026-07-12T08:00:00.000Z'
-  }
-  const storage = {
-    safeGetItemJSON: (key, fallback) => key === safetyOperationStorageKey ? encrypted : fallback,
-    safeSetItemJSON: (key, value) => { encrypted = value },
-    removeItem: key => removed.push(key),
-    getItemJSON: (key, fallback) => key === 'shellpilot-sftp-recovery-records'
-      ? [legacyRecord]
-      : fallback
-  }
-
-  const { legacySources } = readSafetyOperationRecordsForMigration(storage)
-  readSafetyOperationRecords(storage)
+  assert.deepEqual(first.records.map(record => record.id), ['legacy-first'])
+  assert.deepEqual(second.records.map(record => record.id), [
+    'legacy-concurrent',
+    'legacy-first'
+  ])
   assert.deepEqual(removed, [])
-  assert.deepEqual(encrypted.map(record => record.id), ['legacy-deferred'])
-
-  cleanupMigratedSafetyOperationRecords(storage, legacySources)
-  assert.deepEqual(removed, ['shellpilot-sftp-recovery-records'])
 })
 
 test('migration snapshot reads all 250 legacy records while UI history remains capped at 200', async () => {
@@ -304,7 +271,6 @@ test('migration snapshot reads all 250 legacy records while UI history remains c
   const uiRecords = readSafetyOperationRecords(storage, { cleanupLegacy: false })
 
   assert.equal(migration.records.length, 250)
-  assert.equal(migration.legacySources[legacySftpRecoveryStorageKey].count, 250)
   assert.equal(uiRecords.length, 200)
 })
 

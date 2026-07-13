@@ -79,46 +79,10 @@ function readSafetyOperationRecordSources (storage) {
   }
 }
 
-function createLegacySourceSnapshot (value, count) {
-  return {
-    count,
-    serialized: JSON.stringify(value)
-  }
-}
-
 export function readSafetyOperationRecordsForMigration (storage) {
   const sources = readSafetyOperationRecordSources(storage)
   return {
-    records: migrateSafetyOperationRecords(sources, Number.MAX_SAFE_INTEGER),
-    legacySources: {
-      [legacySftpRecoveryStorageKey]: createLegacySourceSnapshot(
-        sources.sftpRecords,
-        sources.sftpRecords.length
-      ),
-      [legacyQuickRollbackStorageKey]: createLegacySourceSnapshot(
-        sources.quickRollbackRecord,
-        sources.quickRollbackRecord ? 1 : 0
-      )
-    }
-  }
-}
-
-export function cleanupMigratedSafetyOperationRecords (storage, legacySources = {}) {
-  if (!storage.removeItem) return
-  const sources = [
-    [legacySftpRecoveryStorageKey, []],
-    [legacyQuickRollbackStorageKey, null]
-  ]
-  for (const [key, fallback] of sources) {
-    const snapshot = legacySources[key]
-    if (!snapshot?.count) continue
-    const current = storage.getItemJSON(key, fallback)
-    if (JSON.stringify(current) !== snapshot.serialized) continue
-    try {
-      storage.removeItem(key)
-    } catch (error) {
-      // A later migration can retry cleanup after the database copy is verified again.
-    }
+    records: migrateSafetyOperationRecords(sources, Number.MAX_SAFE_INTEGER)
   }
 }
 
