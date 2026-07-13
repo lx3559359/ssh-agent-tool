@@ -35,6 +35,8 @@ const riskRank = {
   unknown: 2,
   blocked: 3
 }
+const recoveryBindingSchemaVersion = 1
+const recoveryBindingAlgorithm = 'SHA-256'
 
 function requireFunction (value, label) {
   if (typeof value !== 'function') throw new Error(`${label} 必须是函数。`)
@@ -142,6 +144,7 @@ function timeoutFor (operation, phase) {
 function persistedPlan (plan) {
   return redactSensitiveData({
     provider: plan.provider,
+    operationDir: plan.operationDir,
     summary: plan.summary,
     rollbackCommand: plan.rollbackCommand,
     verifyCommand: plan.verifyCommand,
@@ -149,6 +152,71 @@ function persistedPlan (plan) {
     rollbackTimeoutMs: plan.rollbackTimeoutMs,
     verifyTimeoutMs: plan.verifyTimeoutMs
   })
+}
+
+function recoveryBindingError () {
+  return new Error('恢复绑定指纹不一致，已拒绝执行。')
+}
+
+function recoveryBindingPayload (operation, plan) {
+  const classification = classifyCommand(operation.command)
+  const provider = classification.provider
+  const operationDir = typeof plan?.operationDir === 'string'
+    ? plan.operationDir
+    : ''
+  if (classification.risk !== 'change' || classification.reversible !== true ||
+    !provider || operation.recoveryProvider !== provider ||
+    plan?.provider !== provider || !operationDir) {
+    throw recoveryBindingError()
+  }
+  return {
+    schemaVersion: operation.schemaVersion,
+    id: operation.id,
+    command: operation.command,
+    endpointKey: buildEndpointKey(operation.endpoint),
+    provider,
+    operationDir
+  }
+}
+
+async function recoveryBindingFingerprint (operation, plan) {
+  const cryptoApi = globalThis.crypto
+  if (!cryptoApi?.subtle) {
+    throw new Error('当前环境不支持恢复绑定指纹计算。')
+  }
+  const payload = JSON.stringify(recoveryBindingPayload(operation, plan))
+  const digest = await cryptoApi.subtle.digest(
+    recoveryBindingAlgorithm,
+    new TextEncoder().encode(payload)
+  )
+  return [...new Uint8Array(digest)]
+    .map(value => value.toString(16).padStart(2, '0'))
+    .join('')
+}
+
+async function createRecoveryBinding (operation, plan) {
+  return {
+    schemaVersion: recoveryBindingSchemaVersion,
+    algorithm: recoveryBindingAlgorithm,
+    fingerprint: await recoveryBindingFingerprint(operation, plan)
+  }
+}
+
+async function assertRecoveryBinding (operation) {
+  const binding = operation.recoveryBinding
+  if (binding?.schemaVersion !== recoveryBindingSchemaVersion ||
+    binding?.algorithm !== recoveryBindingAlgorithm ||
+    typeof binding?.fingerprint !== 'string') {
+    throw recoveryBindingError()
+  }
+  let fingerprint
+  try {
+    fingerprint = await recoveryBindingFingerprint(operation, operation.plan)
+  } catch (error) {
+    if (error.message.includes('当前环境')) throw error
+    throw recoveryBindingError()
+  }
+  if (binding.fingerprint !== fingerprint) throw recoveryBindingError()
 }
 
 function stricterClassification (operation) {
@@ -421,6 +489,8 @@ export function createTransactionRunner (options = {}) {
           }
 
           const plan = await buildRecoveryPlan(operation)
+          const savedPlan = persistedPlan(plan)
+          const recoveryBinding = await createRecoveryBinding(operation, savedPlan)
           if (cancellationRequests.has(operation.id)) throw cancellationError()
           const phase = await runMarkedPhase(
             operation,
@@ -429,7 +499,8 @@ export function createTransactionRunner (options = {}) {
             { signal }
           )
           const recoveryReady = await transition(operation, operationStates.recoveryReady, {
-            plan: persistedPlan(plan),
+            plan: savedPlan,
+            recoveryBinding,
             artifacts: redactSensitiveData(plan.artifacts || {}),
             audit: appendAudit(operation, [phase.audit]),
             recoveryReadyAt: timestamp(),
@@ -484,6 +555,7 @@ export function createTransactionRunner (options = {}) {
             if (!operation.plan || !operation.artifacts || !operation.recoveryReadyAt) {
               throw new Error('可逆事务尚未完成 recovery-ready，已拒绝执行。')
             }
+            await assertRecoveryBinding(operation)
           } else {
             if (safety.classified.provider === 'network') {
               throw new Error('网络修改禁止 unsafe 执行，必须使用已验证恢复点。')
@@ -558,6 +630,7 @@ export function createTransactionRunner (options = {}) {
             throw new Error('安全事务没有可用恢复计划，无法回滚。')
           }
           await assertCurrentEndpoint(operation)
+          await assertRecoveryBinding(operation)
           operation = await transition(operation, operationStates.rollingBack, {}, 'rollback')
           const rollbackPhase = await runMarkedPhase(
             operation,
@@ -567,6 +640,8 @@ export function createTransactionRunner (options = {}) {
           )
           audits.push(rollbackPhase.audit)
           if (rollbackPhase.cancelRequested) throw cancellationError()
+          operation = await get(operation.id) || operation
+          await assertRecoveryBinding(operation)
           const verifyPhase = await runMarkedPhase(
             operation,
             operation.plan.verifyCommand,

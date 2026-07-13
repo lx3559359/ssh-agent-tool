@@ -50,7 +50,7 @@ const endpointIdentityFields = [
 const normalizedOperationFields = [
   'id', 'source', 'command', 'title', 'state', 'createdAt', 'updatedAt',
   'metadata', 'risk', 'reversible', 'recoveryProvider',
-  'requiresConfirmation', 'reason', 'plan', 'artifacts', 'audit',
+  'requiresConfirmation', 'reason', 'plan', 'recoveryBinding', 'artifacts', 'audit',
   'recoveryReadyAt', 'executionId', 'error', 'failedAt', 'completedAt',
   'timeoutMs', 'prepareTimeoutMs', 'executeTimeoutMs',
   'rollbackTimeoutMs', 'verifyTimeoutMs'

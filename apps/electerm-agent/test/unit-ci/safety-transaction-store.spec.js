@@ -187,13 +187,23 @@ test('operation CRUD normalizes records and explicitly propagates database failu
     createdAt: '2000-01-01T00:00:00.000Z',
     updatedAt: fixedNow.toISOString(),
     state: 'executing',
-    endpoint: { title: '生产服务器' }
+    endpoint: { title: '生产服务器' },
+    recoveryBinding: {
+      schemaVersion: 1,
+      algorithm: 'SHA-256',
+      fingerprint: 'a'.repeat(64)
+    }
   })
   assert.equal(patched.id, 'op-1')
   assert.equal(patched.createdAt, saved.createdAt)
   assert.equal(patched.state, 'executing')
   assert.equal(patched.endpoint.host, '10.0.0.1')
   assert.equal(patched.endpoint.title, '生产服务器')
+  assert.deepEqual(patched.recoveryBinding, {
+    schemaVersion: 1,
+    algorithm: 'SHA-256',
+    fingerprint: 'a'.repeat(64)
+  })
   assert.ok(new Date(patched.updatedAt) > new Date(saved.updatedAt))
   assert.deepEqual(await store.getOperation('op-1'), patched)
   assert.deepEqual((await store.listOperations()).map(item => item.id), ['op-1'])

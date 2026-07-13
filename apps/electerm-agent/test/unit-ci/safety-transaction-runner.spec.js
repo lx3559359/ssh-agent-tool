@@ -79,6 +79,7 @@ function createPlan (request) {
   const id = request.id
   return {
     provider: request.recoveryProvider,
+    operationDir: `~/.shellpilot/operations/${id}/`,
     prepareCommand: `capture-state-for-${id}`,
     executeCommand: request.command,
     rollbackCommand: `( restore-${id} ); printf '\n${marker('rollback', id).replace('=0', '=%s')}\n' 0`,
@@ -163,6 +164,95 @@ test('prepare creates and verifies recovery before execute can run a modifying c
     'verification-passed',
     'rollback-available'
   ])
+})
+
+test('prepare persists a recovery binding and execute rejects same-provider command tampering', async () => {
+  const context = await createPreparedRunner({
+    request: await createRequest({ id: 'op-binding-command' })
+  })
+  const prepared = await context.store.get(context.request.id)
+  assert.equal(prepared.recoveryBinding.schemaVersion, 1)
+  assert.equal(prepared.recoveryBinding.algorithm, 'SHA-256')
+  assert.match(prepared.recoveryBinding.fingerprint, /^[a-f0-9]{64}$/)
+
+  await context.store.patch(context.request.id, {
+    command: 'systemctl restart sshd'
+  })
+  const callsBeforeExecute = context.remoteCalls.length
+  await assert.rejects(
+    context.runner.execute(context.request.id, { confirmed: true }),
+    /恢复绑定|指纹|不一致/
+  )
+  assert.equal(context.remoteCalls.length, callsBeforeExecute)
+})
+
+test('execute rejects endpoint tampering even when the live endpoint follows the forged record', async () => {
+  const context = await createPreparedRunner({
+    request: await createRequest({ id: 'op-binding-endpoint' }),
+    getCurrentEndpoint: async operation => operation.endpoint
+  })
+  const prepared = await context.store.get(context.request.id)
+  await context.store.patch(context.request.id, {
+    endpoint: { ...prepared.endpoint, host: 'forged.example.com' }
+  })
+
+  const callsBeforeExecute = context.remoteCalls.length
+  await assert.rejects(
+    context.runner.execute(context.request.id, { confirmed: true }),
+    /恢复绑定|指纹|不一致/
+  )
+  assert.equal(context.remoteCalls.length, callsBeforeExecute)
+})
+
+test('rollback rejects a recovery operationDir changed after execute', async () => {
+  const context = await createPreparedRunner({
+    request: await createRequest({ id: 'op-binding-rollback' })
+  })
+  await context.runner.execute(context.request.id, { confirmed: true })
+  const executed = await context.store.get(context.request.id)
+  await context.store.patch(context.request.id, {
+    plan: {
+      ...executed.plan,
+      operationDir: '~/.shellpilot/operations/forged/'
+    }
+  })
+
+  const callsBeforeRollback = context.remoteCalls.length
+  await assert.rejects(
+    context.runner.rollback(context.request.id),
+    /恢复绑定|指纹|不一致/
+  )
+  assert.equal(context.remoteCalls.length, callsBeforeRollback)
+})
+
+test('verify rechecks recovery binding after rollback completes', async () => {
+  const request = await createRequest({ id: 'op-binding-verify' })
+  const store = createMemoryStore()
+  const phases = []
+  const context = await createPreparedRunner({
+    request,
+    store,
+    runRemote: async (command, options) => {
+      phases.push(options.phase)
+      if (options.phase === 'rollback') {
+        const rollingBack = await store.get(request.id)
+        await store.patch(request.id, {
+          plan: {
+            ...rollingBack.plan,
+            operationDir: '~/.shellpilot/operations/forged-during-rollback/'
+          }
+        })
+      }
+      return { stdout: marker(options.phase, request.id), code: 0 }
+    }
+  })
+  await context.runner.execute(request.id, { confirmed: true })
+
+  await assert.rejects(
+    context.runner.rollback(request.id),
+    /恢复绑定|指纹|不一致/
+  )
+  assert.deepEqual(phases, ['prepare', 'execute', 'rollback'])
 })
 
 test('prepare and execute require real zero markers instead of transport code alone', async () => {
