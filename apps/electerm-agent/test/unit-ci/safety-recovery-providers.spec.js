@@ -132,6 +132,34 @@ test('systemd recovery uses the exact trusted executable from the submitted comm
   assert.match(plan.prepareCommand, /\/usr\/bin\/systemctl[^;]*stop/)
 })
 
+test('classifier and recovery providers share the same wrapper grammar', async () => {
+  const { classifyCommand } = await importDomainModule('command-classifier.js')
+  const { buildRecoveryPlan } = await importDomainModule('recovery-providers.js')
+  const accepted = [
+    '/usr/bin/systemctl start nginx.service',
+    '/usr/bin/sudo -n /usr/bin/systemctl stop nginx.service',
+    '/usr/bin/sudo --non-interactive -- /usr/bin/chmod 600 /etc/app.conf'
+  ]
+
+  for (const [index, command] of accepted.entries()) {
+    const classification = classifyCommand(command)
+    assert.equal(classification.reversible, true, command)
+    const plan = buildRecoveryPlan(await buildChange(command, `wrapper-ok-${index}`))
+    assert.equal(plan.executeCommand, command)
+  }
+
+  for (const command of [
+    '/usr/bin/env /usr/bin/systemctl start nginx.service',
+    '/usr/bin/sudo -u root /usr/bin/systemctl start nginx.service',
+    '/usr/bin/sudo -n -u root /usr/bin/chmod 600 /etc/app.conf',
+    '/usr/bin/sudo -n /usr/bin/env /usr/bin/systemctl start nginx.service'
+  ]) {
+    const classification = classifyCommand(command)
+    assert.equal(classification.reversible, false, command)
+    assert.equal(classification.provider, null, command)
+  }
+})
+
 test('restart requests cannot be forged into reversible provider plans', async () => {
   const { buildRecoveryPlan } = await importDomainModule('recovery-providers.js')
 

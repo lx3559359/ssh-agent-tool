@@ -57,6 +57,34 @@ test('readonly uptime and ordinary non-enter input remain synchronous', async ()
   assert.deepEqual(controller.beforeSend('\x1b[A', context), { sendNow: true })
 })
 
+test('ordinary bare readonly commands stay transparent while bare changes disclose no rollback', async () => {
+  const { createTerminalSafetyController } = await importController()
+
+  for (const command of ['uptime', 'df -h', 'systemctl status nginx']) {
+    assert.deepEqual(
+      createTerminalSafetyController().beforeEnter(command, completeSshContext()),
+      { sendNow: true },
+      command
+    )
+  }
+
+  for (const command of [
+    'systemctl start nginx',
+    'chmod 600 /etc/app.conf',
+    'docker stop web'
+  ]) {
+    const decision = createTerminalSafetyController().beforeEnter(
+      command,
+      completeSshContext()
+    )
+    assert.equal(decision.sendNow, false, command)
+    assert.equal(decision.confirmation.kind, 'nonreversible', command)
+    assert.equal(decision.confirmation.automaticRollback, false, command)
+    assert.equal(decision.confirmation.classification.provider, null, command)
+    assert.match(decision.confirmation.classification.reason, /无法自动回滚/, command)
+  }
+})
+
 test('only standalone Enter delegates to command classification', async () => {
   const { createTerminalSafetyController } = await importController()
   const controller = createTerminalSafetyController()
@@ -188,6 +216,58 @@ test('commented operators arrays and process substitutions remain transparent wh
       command
     )
   }
+})
+
+test('declaration builtin array assignments remain transparent while open', async () => {
+  const {
+    createTerminalSafetyController,
+    isCompleteTerminalCommand
+  } = await importController()
+  const commands = [
+    'declare -a arr=(one two',
+    'local arr=(one two',
+    'readonly arr=(one two',
+    'declare -A map=([key]=value'
+  ]
+
+  for (const command of commands) {
+    assert.equal(isCompleteTerminalCommand(command), false, command)
+    assert.deepEqual(
+      createTerminalSafetyController().beforeEnter(command, completeSshContext()),
+      { sendNow: true },
+      command
+    )
+  }
+})
+
+test('closed declaration arrays and ordinary declaration arguments stay complete', async () => {
+  const {
+    createTerminalSafetyController,
+    isCompleteTerminalCommand
+  } = await importController()
+  const commands = [
+    'declare -a arr=(one two)',
+    'local arr=(one two)',
+    'readonly arr=(one two)',
+    'declare -A map=([key]=value)',
+    'declare -p arr',
+    'local ordinary-value',
+    'readonly -p',
+    'declare literal(parenthesis'
+  ]
+
+  for (const command of commands) {
+    assert.equal(isCompleteTerminalCommand(command), true, command)
+  }
+
+  const protectedCommand = 'declare -a arr=(one two); /usr/bin/systemctl start nginx'
+  const decision = createTerminalSafetyController().beforeEnter(
+    protectedCommand,
+    completeSshContext()
+  )
+  assert.equal(isCompleteTerminalCommand(protectedCommand), true)
+  assert.equal(decision.sendNow, false)
+  assert.notEqual(decision.confirmation, undefined)
 })
 
 test('closed arrays process substitutions and commented commands enter safety classification', async () => {

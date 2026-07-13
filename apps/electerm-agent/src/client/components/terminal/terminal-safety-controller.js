@@ -233,6 +233,7 @@ function hasOpenShellCompound (command) {
   const tokens = tokenizeShellSyntax(command)
   const stack = []
   let commandPosition = true
+  let declarationArguments = false
 
   function top () {
     return stack[stack.length - 1]
@@ -292,6 +293,7 @@ function hasOpenShellCompound (command) {
         frame.phase = 'pattern'
         commandPosition = false
       } else if ([';', '&&', '||', '|', '&', ';;'].includes(token.value)) {
+        declarationArguments = false
         commandPosition = true
       } else if (token.value === ')' && frame?.type === 'case') {
         frame.phase = 'body'
@@ -306,6 +308,17 @@ function hasOpenShellCompound (command) {
       commandPosition = false
       continue
     }
+    if (declarationArguments && token.plain) {
+      const next = tokens[index + 1]
+      if (/^[A-Za-z_][A-Za-z0-9_]*=$/.test(token.value) &&
+        next?.value === '(' && token.end === next.start) {
+        stack.push({ type: 'array' })
+        declarationArguments = false
+        commandPosition = false
+        index += 1
+      }
+      continue
+    }
     if (!commandPosition || !token.plain) {
       commandPosition = false
       continue
@@ -314,6 +327,11 @@ function hasOpenShellCompound (command) {
     const next = tokens[index + 1]
     const afterNext = tokens[index + 2]
     const functionBrace = tokens[index + 3]
+    if (['declare', 'typeset', 'local', 'readonly'].includes(token.value)) {
+      declarationArguments = true
+      commandPosition = false
+      continue
+    }
     if (/^[A-Za-z_][A-Za-z0-9_]*=$/.test(token.value) &&
       next?.value === '(' && token.end === next.start) {
       stack.push({ type: 'array' })

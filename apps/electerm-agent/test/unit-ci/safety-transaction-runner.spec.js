@@ -711,6 +711,34 @@ test('prepare and execute require real zero markers instead of transport code al
   assert.equal((await executeStore.get(executeRequest.id)).state, 'failed')
 })
 
+test('truncated transport head and tail cannot fabricate a valid prepare marker', async () => {
+  const { createBoundedOutputCollector } = require(path.resolve(
+    __dirname,
+    '../../src/app/server/session-common.js'
+  ))
+  const { createTransactionRunner } = await importDomainModule('transaction-runner.js')
+  const request = await createRequest({ id: 'op-join-attack' })
+  const store = createMemoryStore()
+  const collector = createBoundedOutputCollector(256)
+  const markerPrefix = '\n__SHELLPILOT_PREPARE_RC_op-join-attack'
+  const head = 'h'.repeat(128 - markerPrefix.length) + markerPrefix
+  const tail = '=0\n' + 't'.repeat(125)
+  const original = head + 'middle-data'.repeat(80) + tail
+  collector.append(Buffer.from(original))
+  const runner = createTransactionRunner({
+    runRemote: async () => ({ stdout: collector.toString(), code: 0 }),
+    cancelRemote: async () => {},
+    store,
+    getCurrentEndpoint: async () => request.endpoint,
+    buildRecoveryPlan: createPlan,
+    now: createClock()
+  })
+
+  assert.doesNotMatch(original, /^__SHELLPILOT_PREPARE_RC_op-join-attack=0$/m)
+  await assert.rejects(runner.prepare(request), /标记|状态/)
+  assert.equal((await store.get(request.id)).state, 'failed')
+})
+
 test('object remote results trust only stdout markers and reject nonzero transport codes', async () => {
   const { createTransactionRunner } = await importDomainModule('transaction-runner.js')
   const cases = [
@@ -731,6 +759,15 @@ test('object remote results trust only stdout markers and reject nonzero transpo
         code: 23
       },
       expected: /23|传输|退出码/
+    },
+    {
+      id: 'op-transport-signal',
+      result: {
+        stdout: marker('prepare', 'op-transport-signal'),
+        code: null,
+        signal: 'TERM'
+      },
+      expected: /TERM|信号|中断/
     }
   ]
 

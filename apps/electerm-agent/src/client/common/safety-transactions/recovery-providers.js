@@ -70,6 +70,7 @@ function parseInvocation (command) {
     sudoExecutable = tokens[index]
     privileged = true
     index += 1
+    let nonInteractive = false
     while (tokens[index]?.startsWith('-')) {
       if (tokens[index] === '--') {
         index += 1
@@ -78,7 +79,11 @@ function parseInvocation (command) {
       if (!['-n', '--non-interactive'].includes(tokens[index])) {
         throw new Error('sudo 仅支持非交互参数。')
       }
+      nonInteractive = true
       index += 1
+    }
+    if (!nonInteractive) {
+      throw new Error('sudo 恢复命令必须显式使用 -n 或 --non-interactive。')
     }
     if (isEnvironmentAssignment(tokens[index] || '')) {
       throw new Error('sudo 后不接受改变 executable 语义的环境变量。')

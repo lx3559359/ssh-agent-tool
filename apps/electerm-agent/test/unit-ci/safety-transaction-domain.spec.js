@@ -252,15 +252,46 @@ test('classifies readonly diagnostics and reversible provider changes', async ()
   }
 })
 
-test('strict classification requires a trusted absolute executable identity', async () => {
+test('bare readonly allowlist stays transparent without trusting slash paths', async () => {
+  const { classifyCommand } = await importDomainModule('command-classifier.js')
+
+  for (const command of ['uptime', 'df -h', 'systemctl status nginx']) {
+    const classification = classifyCommand(command)
+    assert.equal(classification.risk, 'readonly', command)
+    assert.equal(classification.requiresConfirmation, false, command)
+    assert.equal(classification.reversible, false, command)
+    assert.equal(classification.provider, null, command)
+  }
+
+  for (const command of ['/tmp/uptime', '/tmp/systemctl status nginx']) {
+    const classification = classifyCommand(command)
+    assert.equal(classification.risk, 'unknown', command)
+    assert.equal(classification.requiresConfirmation, true, command)
+  }
+})
+
+test('bare modifying commands are protected without claiming automatic rollback', async () => {
   const { classifyCommand } = await importDomainModule('command-classifier.js')
 
   for (const command of [
-    '/tmp/uptime --destroy',
-    '/tmp/systemctl start nginx',
-    'uptime',
     'systemctl start nginx',
-    'docker inspect web'
+    'systemctl stop nginx',
+    'systemctl restart nginx',
+    'chmod 600 /etc/app.conf',
+    'docker stop web',
+    'docker restart web'
+  ]) {
+    const classification = classifyCommand(command)
+    assert.equal(classification.risk, 'change', command)
+    assert.equal(classification.requiresConfirmation, true, command)
+    assert.equal(classification.reversible, false, command)
+    assert.equal(classification.provider, null, command)
+    assert.match(classification.reason, /无法自动回滚/, command)
+  }
+
+  for (const command of [
+    '/tmp/uptime --destroy',
+    '/tmp/systemctl start nginx'
   ]) {
     const classification = classifyCommand(command)
     assert.equal(classification.risk, 'unknown', command)
@@ -268,11 +299,38 @@ test('strict classification requires a trusted absolute executable identity', as
     assert.equal(classification.provider, null, command)
   }
 
-  assert.equal(classifyCommand('/usr/bin/uptime').risk, 'readonly')
-  assert.equal(
-    classifyCommand('/usr/bin/systemctl start nginx').provider,
-    'systemd'
-  )
+  const trusted = classifyCommand('/usr/bin/systemctl start nginx')
+  assert.equal(trusted.risk, 'change')
+  assert.equal(trusted.reversible, true)
+  assert.equal(trusted.provider, 'systemd')
+})
+
+test('reversible classification accepts only provider-compatible wrappers', async () => {
+  const { classifyCommand } = await importDomainModule('command-classifier.js')
+  const refused = [
+    '/usr/bin/env /usr/bin/systemctl start nginx',
+    '/usr/bin/env MODE=maintenance /usr/bin/chmod 600 /etc/app.conf',
+    '/usr/bin/sudo -u root /usr/bin/systemctl start nginx',
+    '/usr/bin/sudo --user root /usr/bin/chmod 600 /etc/app.conf',
+    '/usr/bin/sudo -n /usr/bin/env /usr/bin/systemctl start nginx'
+  ]
+
+  for (const command of refused) {
+    const classification = classifyCommand(command)
+    assert.equal(classification.reversible, false, command)
+    assert.equal(classification.provider, null, command)
+    assert.notEqual(classification.risk, 'readonly', command)
+  }
+
+  for (const command of [
+    '/usr/bin/sudo -n /usr/bin/systemctl start nginx',
+    '/usr/bin/sudo --non-interactive -- /usr/bin/chmod 600 /etc/app.conf'
+  ]) {
+    const classification = classifyCommand(command)
+    assert.equal(classification.risk, 'change', command)
+    assert.equal(classification.reversible, true, command)
+    assert.notEqual(classification.provider, null, command)
+  }
 })
 
 test('static tokenizer preserves Bash double-quoted non-special backslashes', async () => {

@@ -73,6 +73,24 @@ test('bounded run-cmd collection keeps strict memory and the transaction marker 
   assert.doesNotMatch(output, /\uFFFD/)
 })
 
+test('bounded head and tail use a separator that cannot synthesize a marker', () => {
+  const { createBoundedOutputCollector } = require(sessionCommonPath)
+  const maxOutputBytes = 256
+  const collector = createBoundedOutputCollector(maxOutputBytes)
+  const markerPrefix = '\n__SHELLPILOT_PREPARE_RC_op-join-attack'
+  const head = 'h'.repeat(128 - markerPrefix.length) + markerPrefix
+  const tail = '=0\n' + 't'.repeat(125)
+  const original = head + 'middle-data'.repeat(80) + tail
+
+  assert.doesNotMatch(original, /^__SHELLPILOT_PREPARE_RC_op-join-attack=0$/m)
+  collector.append(Buffer.from(original))
+  const output = collector.toString()
+
+  assert.ok(Buffer.byteLength(output, 'utf8') <= maxOutputBytes)
+  assert.match(output, /ShellPilot output truncated/)
+  assert.doesNotMatch(output, /^__SHELLPILOT_PREPARE_RC_op-join-attack=0$/m)
+})
+
 test('capped SSH stdout and stderr are collected during streaming without losing marker verification', async () => {
   const { session, streams } = createSessionHarness()
   const maxOutputBytes = 2048
@@ -91,10 +109,36 @@ test('capped SSH stdout and stderr are collected during streaming without losing
   stream.emit('data', Buffer.from(marker))
   stream.emit('close', 0, null)
 
-  const output = await running
-  assert.ok(Buffer.byteLength(output, 'utf8') <= maxOutputBytes)
-  assert.match(output, /__SHELLPILOT_PREPARE_RC_op-stream=0/)
-  assert.doesNotMatch(output, /\uFFFD/)
+  const result = await running
+  assert.equal(typeof result, 'object')
+  assert.ok(
+    Buffer.byteLength(result.stdout, 'utf8') +
+    Buffer.byteLength(result.stderr, 'utf8') <= maxOutputBytes
+  )
+  assert.match(result.stdout, /__SHELLPILOT_PREPARE_RC_op-stream=0/)
+  assert.doesNotMatch(result.stdout + result.stderr, /\uFFFD/)
+  assert.equal(result.code, 0)
+  assert.equal(result.signal, null)
+})
+
+test('capped run-cmd returns SSH close failure metadata', async () => {
+  const { session, streams } = createSessionHarness()
+  const running = session.runCmd('prepare', undefined, {
+    executionId: 'op-close-metadata',
+    maxOutputBytes: 1024
+  })
+  const stream = streams[0].stream
+
+  stream.emit('data', Buffer.from('bounded stdout'))
+  stream.stderr.emit('data', Buffer.from('bounded stderr'))
+  stream.emit('close', 23, 'TERM')
+
+  assert.deepEqual(await running, {
+    stdout: 'bounded stdout',
+    stderr: 'bounded stderr',
+    code: 23,
+    signal: 'TERM'
+  })
 })
 
 test('uncapped legacy run-cmd calls preserve their stdout-only return value', async () => {

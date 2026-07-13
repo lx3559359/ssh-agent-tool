@@ -212,40 +212,40 @@ function hasTrustedExecutableIdentity (command) {
   let index = 0
   if (isEnvironmentAssignment(tokens[index]?.value)) return false
 
-  const sudoOptionsWithValues = new Set([
-    '-u', '--user', '-g', '--group', '-h', '--host', '-p', '--prompt',
-    '-C', '--close-from', '-T', '--command-timeout', '-R', '--chroot',
-    '-D', '--chdir', '-r', '--role', '-t', '--type'
-  ])
-  const envOptionsWithValues = new Set([
-    '-u', '--unset', '-C', '--chdir', '-S', '--split-string'
-  ])
-
-  for (let depth = 0; depth < 2; depth += 1) {
-    const wrapper = tokens[index]?.value
-    const name = executableName(wrapper)
-    if (name !== 'sudo' && name !== 'env') break
+  const wrapper = tokens[index]?.value
+  if (executableName(wrapper) === 'env') return false
+  if (executableName(wrapper) === 'sudo') {
     if (!isTrustedExecutablePath(wrapper)) return false
     index += 1
-    const optionsWithValues = name === 'sudo'
-      ? sudoOptionsWithValues
-      : envOptionsWithValues
+    let nonInteractive = false
     while (tokens[index]?.value?.startsWith('-')) {
       const option = tokens[index].value
       if (option === '--') {
         index += 1
         break
       }
+      if (option !== '-n' && option !== '--non-interactive') return false
+      nonInteractive = true
       index += 1
-      if (optionsWithValues.has(option)) {
-        if (!tokens[index]) return false
-        index += 1
-      }
     }
-    if (isEnvironmentAssignment(tokens[index]?.value)) return false
+    if (!nonInteractive || isEnvironmentAssignment(tokens[index]?.value)) {
+      return false
+    }
   }
 
-  return isTrustedExecutablePath(tokens[index]?.value)
+  const executable = tokens[index]?.value
+  if (['sudo', 'env', 'command'].includes(executableName(executable))) {
+    return false
+  }
+  return isTrustedExecutablePath(executable)
+}
+
+function hasDirectBareExecutableIdentity (command) {
+  const tokens = shellTokens(String(command || '').trim())
+  const executable = tokens[0]?.value || ''
+  return Boolean(executable) && !executable.includes('/') &&
+    !isEnvironmentAssignment(executable) &&
+    !['sudo', 'env', 'command'].includes(executableName(executable))
 }
 
 function isSafeAbsolutePath (value) {
@@ -870,18 +870,36 @@ function classifySingle (command) {
     ? classifyRedirection(command, redirects)
     : null
   if (redirectClassification?.risk === 'blocked') return redirectClassification
-  if (!hasTrustedExecutableIdentity(command)) {
+  const trustedExecutable = hasTrustedExecutableIdentity(command)
+  const bareExecutable = hasDirectBareExecutableIdentity(command)
+  if (!trustedExecutable && !bareExecutable) {
     return result('unknown', '无法证明可执行程序身份，普通命令、alias、function 或非系统路径不进入严格安全分类')
   }
   const stripped = stripCommandPrefix(command)
   if (/^(?:systemctl|docker|podman)\s+restart\b/i.test(stripped) ||
     /^service\s+\S+\s+restart\b/i.test(stripped)) {
+    if (/[$`*?[\]{}]/.test(stripped)) {
+      return result('unknown', 'restart 目标包含动态 shell 展开，无法安全确定影响范围')
+    }
+    if (bareExecutable) {
+      return result('change', '已识别裸修改命令，但无法证明 alias、function 或 PATH 身份，无法自动回滚', null, false)
+    }
     return result('unknown', 'restart 无法自动恢复原进程、连接和运行时状态，不提供自动回滚')
   }
-  if (redirectClassification) return redirectClassification
+  if (redirectClassification) {
+    if (trustedExecutable || redirectClassification.risk !== 'change') {
+      return redirectClassification
+    }
+    return result('change', '已识别裸修改命令，但无法证明 alias、function 或 PATH 身份，无法自动回滚', null, false)
+  }
 
   const provider = changeProvider(command)
-  if (provider) return result('change', `${provider} 修改可创建已验证的恢复点`, provider)
+  if (provider) {
+    if (trustedExecutable) {
+      return result('change', `${provider} 修改可创建已验证的恢复点`, provider)
+    }
+    return result('change', '已识别裸修改命令，但无法证明 alias、function 或 PATH 身份，无法自动回滚', null, false)
+  }
   if (isReadonly(command)) return result('readonly', '命令属于已识别的只读诊断操作')
   return result('unknown', '命令不在已验证的安全分类白名单中')
 }

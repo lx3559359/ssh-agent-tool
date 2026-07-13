@@ -32,6 +32,16 @@ function utf8SafeStart (buffer) {
   return start
 }
 
+function outputTruncationSeparator (limit) {
+  const candidates = [
+    '\n[ShellPilot output truncated]\n',
+    '\n[...]\n',
+    '...'
+  ]
+  const text = candidates.find(value => Buffer.byteLength(value) <= limit)
+  return Buffer.from(text || '~'.repeat(limit))
+}
+
 function createBoundedOutputCollector (maxOutputBytes) {
   const limit = normalizeMaxOutputBytes(maxOutputBytes)
   if (!limit) throw new Error('maxOutputBytes must be a positive finite number.')
@@ -106,13 +116,26 @@ function createBoundedOutputCollector (maxOutputBytes) {
         return Buffer.concat([head, ...tails], headLength + tailLength)
           .toString('utf8')
       }
-      const safeHead = head.subarray(0, utf8SafeEnd(head)).toString('utf8')
-      if (!tails.length) return safeHead
+      const separator = outputTruncationSeparator(limit)
+      const dataBudget = limit - separator.length
+      const headBudget = Math.floor(dataBudget / 2)
+      const tailBudget = dataBudget - headBudget
+      const boundedHead = head.subarray(0, Math.min(head.length, headBudget))
+      const safeHead = boundedHead.subarray(0, utf8SafeEnd(boundedHead))
+      if (!tails.length) {
+        return Buffer.concat([safeHead, separator]).toString('utf8')
+      }
       const tail = tails.length === 1
         ? tails[0]
         : Buffer.concat(tails, tailLength)
-      const safeTail = tail.subarray(utf8SafeStart(tail)).toString('utf8')
-      return safeHead + safeTail
+      const boundedTail = tail.subarray(Math.max(0, tail.length - tailBudget))
+      const tailStart = utf8SafeStart(boundedTail)
+      const safeTailEnd = utf8SafeEnd(boundedTail)
+      const safeTail = boundedTail.subarray(
+        Math.min(tailStart, safeTailEnd),
+        safeTailEnd
+      )
+      return Buffer.concat([safeHead, separator, safeTail]).toString('utf8')
     }
   }
 }
@@ -200,8 +223,15 @@ exports.commonExtends = function (Cls) {
     return new Promise((resolve, reject) => {
       const client = conn || this.conn || this.client
       const maxOutputBytes = normalizeMaxOutputBytes(options.maxOutputBytes)
-      const collector = maxOutputBytes
-        ? createBoundedOutputCollector(maxOutputBytes)
+      const stdoutLimit = maxOutputBytes
+        ? Math.max(1, Math.ceil(maxOutputBytes * 0.75))
+        : 0
+      const stderrLimit = maxOutputBytes ? maxOutputBytes - stdoutLimit : 0
+      const stdoutCollector = stdoutLimit
+        ? createBoundedOutputCollector(stdoutLimit)
+        : null
+      const stderrCollector = stderrLimit
+        ? createBoundedOutputCollector(stderrLimit)
         : null
       let r = ''
       let settled = false
@@ -225,6 +255,12 @@ exports.commonExtends = function (Cls) {
         callback(value)
         return true
       }
+      const boundedResult = (code = null, signal = null) => ({
+        stdout: stdoutCollector?.toString() || '',
+        stderr: stderrCollector?.toString() || '',
+        code: typeof code === 'number' && Number.isFinite(code) ? code : null,
+        signal: signal == null ? null : String(signal)
+      })
       if (executionId) executions.set(executionId, entry)
 
       try {
@@ -251,22 +287,24 @@ exports.commonExtends = function (Cls) {
             stream
               .on('data', function (data) {
                 if (settled) return
-                if (collector) collector.append(data)
+                if (stdoutCollector) stdoutCollector.append(data)
                 else r += data.toString()
               })
               .on('error', error => {
                 finish(reject, error)
               })
-              .on('close', () => {
-                finish(resolve, collector ? collector.toString() : r)
+              .on('close', (code, signal) => {
+                finish(resolve, maxOutputBytes
+                  ? boundedResult(code, signal)
+                  : r)
               })
-            if (collector && stream.stderr?.on) {
+            if (stderrCollector && stream.stderr?.on) {
               stream.stderr.on('data', data => {
-                if (!settled) collector.append(data)
+                if (!settled) stderrCollector.append(data)
               })
             }
           } else {
-            finish(resolve, '')
+            finish(resolve, maxOutputBytes ? boundedResult() : '')
           }
         })
       } catch (error) {

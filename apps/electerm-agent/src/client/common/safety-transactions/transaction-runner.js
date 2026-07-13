@@ -273,6 +273,11 @@ function remoteCode (result) {
   return codes.find(value => value !== 0) ?? codes[0]
 }
 
+function remoteSignal (result) {
+  if (!result || typeof result !== 'object') return ''
+  return result.signal == null ? '' : String(result.signal).trim()
+}
+
 export function createAuditRecord ({ phase, timestamp, code, output }) {
   return {
     phase,
@@ -747,6 +752,16 @@ export function createTransactionRunner (options = {}) {
       if (code !== undefined && code !== 0) {
         const error = new Error(`远程${phase}传输执行失败，退出码 ${code}。`)
         error.code = code
+        throw phaseError(error, createAuditRecord({
+          phase,
+          timestamp: timestamp(),
+          code,
+          output
+        }))
+      }
+      const signal = remoteSignal(result)
+      if (signal) {
+        const error = new Error(`远程${phase}传输被信号 ${signal} 中断。`)
         throw phaseError(error, createAuditRecord({
           phase,
           timestamp: timestamp(),

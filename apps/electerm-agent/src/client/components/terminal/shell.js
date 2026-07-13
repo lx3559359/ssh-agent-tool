@@ -6,12 +6,12 @@
  * They enable OSC 633 command tracking without needing server-side file sourcing.
  *
  * OSC 633 Protocol:
- * - OSC 633 ; A - Prompt started
- * - OSC 633 ; B - Command input started (ready for typing)
- * - OSC 633 ; C - Command execution started
+ * - OSC 633 ; A ; <sessionNonce> - Prompt started
+ * - OSC 633 ; B ; <sessionNonce> - Command input started
+ * - OSC 633 ; C ; <sessionNonce> - Command execution started
  * - OSC 633 ; D ; <sessionNonce> ; <exitCode> - Command finished
- * - OSC 633 ; E ; <command> - Command line being executed
- * - OSC 633 ; P ; Cwd=<path> - Current working directory
+ * - OSC 633 ; E ; <sessionNonce> ; <command> - Command being executed
+ * - OSC 633 ; P ; <sessionNonce> ; Cwd=<path> - Current directory
  */
 
 /* eslint-disable no-template-curly-in-string, no-useless-escape */
@@ -36,11 +36,11 @@ function getBashInlineIntegration (sessionNonce) {
     'if [[ -z "${ELECTERM_SHELL_INTEGRATION:-}" ]]',
     'then export ELECTERM_SHELL_INTEGRATION=1',
     '__e_esc() { local v="$1"; v="${v//\\\\/\\\\\\\\}"; v="${v//;/\\\\x3b}"; printf \'%s\' "$v"; }',
-    '__e_pre() { [[ "$BASH_COMMAND" == "$PROMPT_COMMAND" ]] && return; [[ "$BASH_COMMAND" == "__e_"* ]] && return; [[ "${__e_in:-0}" == "0" ]] && { __e_in=1; printf \'\\e]633;E;%s\\a\\e]633;C\\a\' "$(__e_esc "$BASH_COMMAND")"; }; }',
-    '__e_cmd() { local c="$?"; [[ "${__e_in:-0}" == "1" ]] && { printf \'\\e]633;D;%s;%s\\a\' "$__e_nonce" "$c"; __e_in=0; }; printf \'\\e]633;P;Cwd=%s\\a\\e]633;A\\a\' "$(__e_esc "$PWD")"; return "$c"; }',
+    '__e_pre() { [[ "$BASH_COMMAND" == "$PROMPT_COMMAND" ]] && return; [[ "$BASH_COMMAND" == "__e_"* ]] && return; [[ "${__e_in:-0}" == "0" ]] && { __e_in=1; printf \'\\e]633;E;%s;%s\\a\\e]633;C;%s\\a\' "$__e_nonce" "$(__e_esc "$BASH_COMMAND")" "$__e_nonce"; }; }',
+    '__e_cmd() { local c="$?"; [[ "${__e_in:-0}" == "1" ]] && { printf \'\\e]633;D;%s;%s\\a\' "$__e_nonce" "$c"; __e_in=0; }; printf \'\\e]633;P;%s;Cwd=%s\\a\\e]633;A;%s\\a\' "$__e_nonce" "$(__e_esc "$PWD")" "$__e_nonce"; return "$c"; }',
     'trap \'__e_pre\' DEBUG',
     'PROMPT_COMMAND="__e_cmd${PROMPT_COMMAND:+; $PROMPT_COMMAND}"',
-    'PS1="${PS1}\\[\\e]633;B\\a\\]"',
+    'PS1="${PS1}\\[\\e]633;B;${__e_nonce}\\a\\]"',
     'fi',
     'fi'
   ].join('; ')
@@ -60,12 +60,12 @@ function getZshInlineIntegration (sessionNonce) {
     'if [[ -z "${ELECTERM_SHELL_INTEGRATION:-}" ]]',
     'then export ELECTERM_SHELL_INTEGRATION=1',
     '__e_esc() { local v="$1"; v="${v//\\\\/\\\\\\\\}"; v="${v//;/\\\\x3b}"; builtin printf \'%s\' "$v"; }',
-    '__e_preexec() { __e_cmd="$1"; builtin printf \'\\e]633;E;%s\\a\\e]633;C\\a\' "$(__e_esc "$1")"; }',
-    '__e_precmd() { local c="$?"; [[ -n "$__e_cmd" ]] && builtin printf \'\\e]633;D;%s;%s\\a\' "$__e_nonce" "$c"; __e_cmd=""; builtin printf \'\\e]633;P;Cwd=%s\\a\\e]633;A\\a\' "$(__e_esc "$PWD")"; }',
+    '__e_preexec() { __e_cmd="$1"; builtin printf \'\\e]633;E;%s;%s\\a\\e]633;C;%s\\a\' "$__e_nonce" "$(__e_esc "$1")" "$__e_nonce"; }',
+    '__e_precmd() { local c="$?"; [[ -n "$__e_cmd" ]] && builtin printf \'\\e]633;D;%s;%s\\a\' "$__e_nonce" "$c"; __e_cmd=""; builtin printf \'\\e]633;P;%s;Cwd=%s\\a\\e]633;A;%s\\a\' "$__e_nonce" "$(__e_esc "$PWD")" "$__e_nonce"; }',
     'autoload -Uz add-zsh-hook',
     'add-zsh-hook precmd __e_precmd',
     'add-zsh-hook preexec __e_preexec',
-    'PROMPT="${PROMPT}%{\\e]633;B\\a%}"',
+    'PROMPT="${PROMPT}%{\\e]633;B;${__e_nonce}\\a%}"',
     'fi',
     'fi'
   ].join('; ')
@@ -83,8 +83,8 @@ function getFishInlineIntegration (sessionNonce) {
     'set -g ELECTERM_SHELL_INTEGRATION 1',
     'function __e_esc; echo $argv | string replace -a \'\\\\\' \'\\\\\\\\\' | string replace -a \';\' \'\\\\x3b\'; end',
     'functions -c fish_prompt __e_original_fish_prompt',
-    'function fish_prompt; printf \'\\e]633;A\\a\\e]633;P;Cwd=%s\\a\' (__e_esc "$PWD"); __e_original_fish_prompt; printf \'\\e]633;B\\a\'; end',
-    'function __e_preexec --on-event fish_preexec; printf \'\\e]633;E;%s\\a\\e]633;C\\a\' (__e_esc "$argv"); end',
+    'function fish_prompt; printf \'\\e]633;A;%s\\a\\e]633;P;%s;Cwd=%s\\a\' "$__e_nonce" "$__e_nonce" (__e_esc "$PWD"); __e_original_fish_prompt; printf \'\\e]633;B;%s\\a\' "$__e_nonce"; end',
+    'function __e_preexec --on-event fish_preexec; printf \'\\e]633;E;%s;%s\\a\\e]633;C;%s\\a\' "$__e_nonce" (__e_esc "$argv") "$__e_nonce"; end',
     'function __e_postexec --on-event fish_postexec; printf \'\\e]633;D;%s;%s\\a\' "$__e_nonce" $status; end',
     'end',
     'end'

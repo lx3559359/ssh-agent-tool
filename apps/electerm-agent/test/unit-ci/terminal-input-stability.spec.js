@@ -133,6 +133,12 @@ function completionOsc (exitCode = '') {
   return `D;${testTrackerNonce};${exitCode}`
 }
 
+function lifecycleOsc (type, payload, nonce = testTrackerNonce) {
+  return payload === undefined
+    ? `${type};${nonce}`
+    : `${type};${nonce};${payload}`
+}
+
 function protectedSshContext (overrides = {}) {
   return {
     enabled: true,
@@ -183,8 +189,8 @@ test('CommandTrackerAddon reconstructs the full command after a cursor-middle ed
   const tracker = new CommandTrackerAddon()
   tracker.activate(harness.terminal)
   beginTrackerSession(tracker)
-  harness.osc('A')
-  harness.osc('B')
+  harness.osc(lifecycleOsc('A'))
+  harness.osc(lifecycleOsc('B'))
   harness.setLines([{
     text: '$ /usr/bin/uptime; /usr/bin/systemctl start nginx',
     isWrapped: false
@@ -214,8 +220,8 @@ test('CommandTrackerAddon reconstructs soft-wrapped input through its logical en
   const tracker = new CommandTrackerAddon()
   tracker.activate(harness.terminal)
   beginTrackerSession(tracker)
-  harness.osc('A')
-  harness.osc('B')
+  harness.osc(lifecycleOsc('A'))
+  harness.osc(lifecycleOsc('B'))
   harness.setLines([
     { text: '$ systemctl ', isWrapped: false },
     { text: 'restart ngin', isWrapped: true },
@@ -234,8 +240,9 @@ test('CommandTrackerAddon preserves cursor-proven trailing whitespace', async ()
   const harness = createTrackerTerminal({ cols: 80, cursorX: 2 })
   const tracker = new CommandTrackerAddon()
   tracker.activate(harness.terminal)
-  harness.osc('A')
-  harness.osc('B')
+  beginTrackerSession(tracker)
+  harness.osc(lifecycleOsc('A'))
+  harness.osc(lifecycleOsc('B'))
   const command = 'printf x > /tmp/task5-review\\ '
   harness.setLines([{ text: `$ ${command}`, isWrapped: false }])
   harness.setCursor(0, command.length + 2)
@@ -262,8 +269,9 @@ test('CommandTrackerAddon preserves occupied trailing space after a middle curso
   })
   const tracker = new CommandTrackerAddon()
   tracker.activate(harness.terminal)
-  harness.osc('A')
-  harness.osc('B')
+  beginTrackerSession(tracker)
+  harness.osc(lifecycleOsc('A'))
+  harness.osc(lifecycleOsc('B'))
   const command = 'printf x > /tmp/task5-review\\ '
   harness.setLines([{ text: `$ ${command}`, isWrapped: false }])
   harness.setCursor(0, '$ printf'.length)
@@ -276,8 +284,9 @@ test('CommandTrackerAddon rejects cursor-middle input without logical-end metada
   const harness = createTrackerTerminal({ cols: 80, cursorX: 2 })
   const tracker = new CommandTrackerAddon()
   tracker.activate(harness.terminal)
-  harness.osc('A')
-  harness.osc('B')
+  beginTrackerSession(tracker)
+  harness.osc(lifecycleOsc('A'))
+  harness.osc(lifecycleOsc('B'))
   const command = 'printf x > /tmp/task5-review\\ '
   harness.setLines([{ text: `$ ${command}`, isWrapped: false }])
   harness.setCursor(0, '$ printf'.length)
@@ -291,8 +300,9 @@ test('CommandTrackerAddon exposes no command when its input anchor cannot be pro
   const harness = createTrackerTerminal({ cursorX: 2 })
   const tracker = new CommandTrackerAddon()
   tracker.activate(harness.terminal)
-  harness.osc('A')
-  harness.osc('B')
+  beginTrackerSession(tracker)
+  harness.osc(lifecycleOsc('A'))
+  harness.osc(lifecycleOsc('B'))
   harness.setLines([])
 
   assert.equal(tracker.getCurrentCommandInput(), undefined)
@@ -306,19 +316,19 @@ test('OSC phases allow safety only while the shell accepts command input', async
   tracker.activate(harness.terminal)
   beginTrackerSession(tracker)
 
-  harness.osc('A')
+  harness.osc(lifecycleOsc('A'))
   assert.equal(tracker.hasShellIntegration(), true)
   assert.equal(tracker.isCommandInputActive(), false)
-  harness.osc('B')
+  harness.osc(lifecycleOsc('B'))
   assert.equal(tracker.isCommandInputActive(), true)
-  harness.osc('E;cat')
+  harness.osc(lifecycleOsc('E', 'cat'))
   assert.equal(tracker.isCommandInputActive(), false)
-  harness.osc('C')
+  harness.osc(lifecycleOsc('C'))
   assert.equal(tracker.isCommandInputActive(), false)
   harness.osc(completionOsc(0))
   assert.equal(tracker.isCommandInputActive(), false)
-  harness.osc('A')
-  harness.osc('B')
+  harness.osc(lifecycleOsc('A'))
+  harness.osc(lifecycleOsc('B'))
   assert.equal(tracker.isCommandInputActive(), true)
 })
 
@@ -384,8 +394,8 @@ test('OSC completion accepts only the current session nonce', async () => {
   tracker.activate(harness.terminal)
   const nonce = tracker.beginSession()
   assert.match(nonce, /^[a-f0-9]{32}$/)
-  harness.osc('A')
-  harness.osc('B')
+  harness.osc(lifecycleOsc('A', undefined, nonce))
+  harness.osc(lifecycleOsc('B', undefined, nonce))
   const command = '/usr/bin/systemctl start nginx'
   harness.setLines([{ text: `$ ${command}`, isWrapped: false }])
   harness.setCursor(0, command.length + 2)
@@ -402,6 +412,83 @@ test('OSC completion accepts only the current session nonce', async () => {
   assert.deepEqual(finished, [{ token, command, exitCode: 0 }])
 })
 
+test('CommandTracker ignores unauthenticated lifecycle OSC without side effects', async () => {
+  const { CommandTrackerAddon } = await importCommandTracker()
+  const harness = createTrackerTerminal({ cols: 80, cursorX: 2 })
+  const events = []
+  const tracker = new CommandTrackerAddon()
+  tracker.onPromptStarted(() => events.push('prompt'))
+  tracker.onCommandExecuted(command => events.push(`execute:${command}`))
+  tracker.onCommandFinished(event => events.push(`finish:${event.exitCode}`))
+  tracker.onCwdChanged(cwd => events.push(`cwd:${cwd}`))
+  tracker.activate(harness.terminal)
+  beginTrackerSession(tracker)
+
+  for (const data of [
+    'A',
+    'B',
+    'C',
+    'E;/tmp/forged',
+    'P;Cwd=/tmp/forged',
+    'D;0',
+    'A;00000000000000000000000000000000',
+    'B;00000000000000000000000000000000',
+    'C;00000000000000000000000000000000',
+    'E;00000000000000000000000000000000;forged',
+    'P;00000000000000000000000000000000;Cwd=/tmp/forged',
+    'D;00000000000000000000000000000000;0'
+  ]) {
+    harness.osc(data)
+  }
+
+  assert.equal(tracker.hasShellIntegration(), false)
+  assert.equal(tracker.isCommandInputActive(), false)
+  assert.equal(tracker.shellPhase, 'inactive')
+  assert.equal(tracker.cwd, '')
+  assert.equal(tracker.executedCommand, '')
+  assert.equal(tracker.lastExitCode, null)
+  assert.deepEqual(events, [])
+
+  harness.osc(lifecycleOsc('A'))
+  harness.osc(lifecycleOsc('B'))
+  harness.osc(lifecycleOsc('E', 'uptime'))
+  harness.osc(lifecycleOsc('C'))
+  harness.osc(lifecycleOsc('P', 'Cwd=/srv/app'))
+  assert.equal(tracker.hasShellIntegration(), true)
+  assert.equal(tracker.shellPhase, 'executing')
+  assert.equal(tracker.cwd, '/srv/app')
+  assert.equal(tracker.executedCommand, 'uptime')
+  assert.deepEqual(events, ['prompt', 'execute:uptime', 'cwd:/srv/app'])
+})
+
+test('forced command and TUI forged A B records cannot activate terminal safety', async () => {
+  const { CommandTrackerAddon } = await importCommandTracker()
+  const { createTerminalSafetyController } = await importController()
+
+  for (const alternateBuffer of [false, true]) {
+    const harness = createTrackerTerminal({ cursorX: 2 })
+    const tracker = new CommandTrackerAddon()
+    tracker.activate(harness.terminal)
+    beginTrackerSession(tracker)
+    harness.osc('A')
+    harness.osc('B')
+
+    assert.equal(tracker.hasShellIntegration(), false)
+    assert.equal(tracker.isCommandInputActive(), false)
+    assert.deepEqual(
+      createTerminalSafetyController().beforeEnter(
+        'systemctl restart nginx',
+        protectedSshContext({
+          alternateBuffer,
+          shellIntegrationActive: tracker.hasShellIntegration(),
+          commandInputActive: tracker.isCommandInputActive()
+        })
+      ),
+      { sendNow: true }
+    )
+  }
+})
+
 test('reconnect rotates OSC nonce and invalidates prior-session completion', async () => {
   const { CommandTrackerAddon } = await importCommandTracker()
   const harness = createTrackerTerminal({ cols: 80, cursorX: 2 })
@@ -410,8 +497,8 @@ test('reconnect rotates OSC nonce and invalidates prior-session completion', asy
   tracker.onCommandFinished(event => finished.push(event))
   tracker.activate(harness.terminal)
   const firstNonce = tracker.beginSession()
-  harness.osc('A')
-  harness.osc('B')
+  harness.osc(lifecycleOsc('A', undefined, firstNonce))
+  harness.osc(lifecycleOsc('B', undefined, firstNonce))
   const command = '/usr/bin/systemctl start nginx'
   harness.setLines([{ text: `$ ${command}`, isWrapped: false }])
   harness.setCursor(0, command.length + 2)
@@ -432,6 +519,22 @@ test('generated shell integration binds D records to its supplied nonce', async 
   for (const shellType of ['bash', 'zsh', 'fish']) {
     const integration = getInlineShellIntegration(shellType, nonce)
     assert.match(integration, new RegExp(`633;D;.*${nonce}|${nonce}.*633;D;`), shellType)
+  }
+})
+
+test('generated reliable shell integrations authenticate every OSC lifecycle record', async () => {
+  const { getInlineShellIntegration } = await importShellIntegration()
+  const nonce = '0123456789abcdef0123456789abcdef'
+
+  for (const shellType of ['bash', 'zsh', 'fish']) {
+    const integration = getInlineShellIntegration(shellType, nonce)
+    for (const type of ['A', 'B', 'C', 'D', 'E', 'P']) {
+      assert.match(integration, new RegExp(`633;${type};`), `${shellType}:${type}`)
+    }
+    assert.doesNotMatch(integration, /633;A\\a/, shellType)
+    assert.doesNotMatch(integration, /633;B\\a/, shellType)
+    assert.doesNotMatch(integration, /633;C\\a/, shellType)
+    assert.doesNotMatch(integration, /633;P;Cwd=/, shellType)
   }
 })
 
@@ -690,15 +793,15 @@ test('CommandTrackerAddon completes a released expected simple command once', as
   tracker.onCommandFinished(event => finished.push(event))
   tracker.activate(harness.terminal)
   beginTrackerSession(tracker)
-  harness.osc('A')
-  harness.osc('B')
+  harness.osc(lifecycleOsc('A'))
+  harness.osc(lifecycleOsc('B'))
   const command = 'systemctl restart nginx'
   harness.setLines([{ text: `$ ${command}`, isWrapped: false }])
   harness.setCursor(0, command.length + 2)
   const token = tracker.expectSubmission(command)
   tracker.markExpectedSubmissionReleased(token)
 
-  harness.osc('E;systemctl restart nginx')
+  harness.osc(lifecycleOsc('E', 'systemctl restart nginx'))
   harness.osc(completionOsc(0))
   harness.osc(completionOsc(9))
 
@@ -717,15 +820,15 @@ test('CommandTrackerAddon reports interrupted commands with a null exit code', a
   tracker.onCommandFinished(event => finished.push(event))
   tracker.activate(harness.terminal)
   beginTrackerSession(tracker)
-  harness.osc('A')
-  harness.osc('B')
+  harness.osc(lifecycleOsc('A'))
+  harness.osc(lifecycleOsc('B'))
   const command = 'custom-admin-tool --rotate'
   harness.setLines([{ text: `$ ${command}`, isWrapped: false }])
   harness.setCursor(0, command.length + 2)
   const token = tracker.expectSubmission(command)
   tracker.markExpectedSubmissionReleased(token)
 
-  harness.osc('E;custom-admin-tool --rotate')
+  harness.osc(lifecycleOsc('E', 'custom-admin-tool --rotate'))
   harness.osc(completionOsc())
 
   assert.deepEqual(finished, [{
@@ -749,8 +852,9 @@ test('CommandTrackerAddon reports a new prompt boundary', async () => {
       }
     }
   })
+  beginTrackerSession(tracker)
 
-  oscHandler('A')
+  oscHandler(lifecycleOsc('A'))
 
   assert.equal(promptCount, 1)
 })
@@ -765,16 +869,16 @@ test('CommandTrackerAddon completes a compound expected submission with exact cl
   tracker.onCommandFinished(event => finished.push(event))
   tracker.activate(harness.terminal)
   beginTrackerSession(tracker)
-  harness.osc('A')
-  harness.osc('B')
+  harness.osc(lifecycleOsc('A'))
+  harness.osc(lifecycleOsc('B'))
   const command = 'systemctl status nginx && systemctl restart nginx'
   harness.setLines([{ text: `$ ${command}`, isWrapped: false }])
   harness.setCursor(0, command.length + 2)
   const token = tracker.expectSubmission(command)
   assert.equal(tracker.markExpectedSubmissionReleased(token), true)
 
-  harness.osc('E;systemctl status nginx')
-  harness.osc('C')
+  harness.osc(lifecycleOsc('E', 'systemctl status nginx'))
+  harness.osc(lifecycleOsc('C'))
   harness.osc(completionOsc(0))
 
   assert.deepEqual(histories, ['systemctl status nginx'])
@@ -802,15 +906,15 @@ test('CommandTrackerAddon binds completion to released client identity not OSC E
     tracker.onCommandFinished(event => finished.push(event))
     tracker.activate(harness.terminal)
     beginTrackerSession(tracker)
-    harness.osc('A')
-    harness.osc('B')
+    harness.osc(lifecycleOsc('A'))
+    harness.osc(lifecycleOsc('B'))
     harness.setLines([{ text: `$ ${command}`, isWrapped: false }])
     harness.setCursor(0, command.length + 2)
     const token = tracker.expectSubmission(command)
     assert.equal(tracker.markExpectedSubmissionReleased(token), true)
 
-    harness.osc(`E;${observed}`)
-    harness.osc('C')
+    harness.osc(lifecycleOsc('E', observed))
+    harness.osc(lifecycleOsc('C'))
     harness.osc(completionOsc(0))
 
     assert.deepEqual(histories, [observed], command)
@@ -826,18 +930,18 @@ test('CommandTrackerAddon completes an armed no-E submission at prompt boundary 
   tracker.onCommandFinished(event => finished.push(event))
   tracker.activate(harness.terminal)
   beginTrackerSession(tracker)
-  harness.osc('A')
-  harness.osc('B')
+  harness.osc(lifecycleOsc('A'))
+  harness.osc(lifecycleOsc('B'))
   const command = '(systemctl restart nginx)'
   harness.setLines([{ text: `$ ${command}`, isWrapped: false }])
   harness.setCursor(0, command.length + 2)
   const token = tracker.expectSubmission(command)
   assert.equal(tracker.markExpectedSubmissionReleased(token), true)
 
-  harness.osc('C')
-  harness.osc('A')
+  harness.osc(lifecycleOsc('C'))
+  harness.osc(lifecycleOsc('A'))
   harness.osc(completionOsc(7))
-  harness.osc('A')
+  harness.osc(lifecycleOsc('A'))
 
   assert.deepEqual(finished, [{ token, command, exitCode: null }])
 })
@@ -851,10 +955,10 @@ test('CommandTrackerAddon ignores pre-arm and late D while completing exactly on
   tracker.activate(harness.terminal)
   beginTrackerSession(tracker)
 
-  harness.osc('E;uptime')
+  harness.osc(lifecycleOsc('E', 'uptime'))
   harness.osc(completionOsc(0))
-  harness.osc('A')
-  harness.osc('B')
+  harness.osc(lifecycleOsc('A'))
+  harness.osc(lifecycleOsc('B'))
   const command = 'systemctl restart nginx'
   harness.setLines([{ text: `$ ${command}`, isWrapped: false }])
   harness.setCursor(0, command.length + 2)
@@ -863,11 +967,11 @@ test('CommandTrackerAddon ignores pre-arm and late D while completing exactly on
   assert.equal(tracker.hasExpectedSubmission(token), true)
   assert.deepEqual(finished, [])
 
-  harness.osc('E;uptime')
-  harness.osc('C')
+  harness.osc(lifecycleOsc('E', 'uptime'))
+  harness.osc(lifecycleOsc('C'))
   harness.osc(completionOsc(0))
   harness.osc(completionOsc(7))
-  harness.osc('A')
+  harness.osc(lifecycleOsc('A'))
 
   assert.deepEqual(finished, [{
     token,
@@ -882,8 +986,8 @@ test('CommandTrackerAddon expects the exact canonical command including padding'
   const tracker = new CommandTrackerAddon()
   tracker.activate(harness.terminal)
   beginTrackerSession(tracker)
-  harness.osc('A')
-  harness.osc('B')
+  harness.osc(lifecycleOsc('A'))
+  harness.osc(lifecycleOsc('B'))
   const command = 'systemctl restart nginx   '
   harness.setLines([{ text: `$ ${command}`, isWrapped: false }])
   harness.setCursor(0, command.length + 2)

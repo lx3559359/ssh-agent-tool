@@ -3,12 +3,12 @@
  *
  * This addon uses Shell Integration via OSC 633 escape sequences for reliable
  * command tracking. The shell emits special sequences that tell us:
- * - OSC 633 ; A - Prompt started
- * - OSC 633 ; B - Command input started (ready for typing)
- * - OSC 633 ; C - Command execution started (output begins)
+ * - OSC 633 ; A ; <sessionNonce> - Prompt started
+ * - OSC 633 ; B ; <sessionNonce> - Command input started (ready for typing)
+ * - OSC 633 ; C ; <sessionNonce> - Command execution started (output begins)
  * - OSC 633 ; D ; <sessionNonce> ; <exitCode> - Command finished
- * - OSC 633 ; E ; <command> - The command line being executed
- * - OSC 633 ; P ; Cwd=<path> - Current working directory
+ * - OSC 633 ; E ; <sessionNonce> ; <command> - Command being executed
+ * - OSC 633 ; P ; <sessionNonce> ; Cwd=<path> - Current directory
  *
  * This properly handles:
  * - Command history (arrow up/down)
@@ -122,6 +122,11 @@ export class CommandTrackerAddon {
     // Parse the sequence: first char is the command type
     const command = data.charAt(0)
     const args = data.length > 1 ? data.substring(2) : '' // Skip "X;" part
+    if (!['A', 'B', 'C', 'D', 'E', 'P'].includes(command)) return false
+    const separator = args.indexOf(';')
+    const nonce = separator === -1 ? args : args.slice(0, separator)
+    if (!this._sessionNonce || nonce !== this._sessionNonce) return true
+    const payload = separator === -1 ? '' : args.slice(separator + 1)
     this._oscSequence += 1
 
     switch (command) {
@@ -149,15 +154,11 @@ export class CommandTrackerAddon {
         return true
 
       case 'D': { // Command finished
-        const separator = args.indexOf(';')
-        const nonce = separator === -1 ? '' : args.slice(0, separator)
-        if (!this._sessionNonce || nonce !== this._sessionNonce) return true
-        const exitCodeText = args.slice(separator + 1)
         this.shellPhase = 'finished'
         this._inputAnchor = null
         // Parse exit code if provided
-        this.lastExitCode = /^-?\d+$/.test(exitCodeText)
-          ? parseInt(exitCodeText, 10)
+        this.lastExitCode = /^-?\d+$/.test(payload)
+          ? parseInt(payload, 10)
           : null
         this._completeArmedSubmission(this.lastExitCode, true)
         return true
@@ -167,7 +168,7 @@ export class CommandTrackerAddon {
         this.shellPhase = 'executing'
         this._inputAnchor = null
         // The actual command being executed
-        this.executedCommand = this._deserializeOscValue(args)
+        this.executedCommand = this._deserializeOscValue(payload)
         this.currentCommand = this.executedCommand
         this._markExpectedSubmissionObserved()
         // Call the callback if registered
@@ -177,11 +178,8 @@ export class CommandTrackerAddon {
         return true
 
       case 'P': // Property (e.g., Cwd=<path>)
-        this._handleProperty(args)
+        this._handleProperty(payload)
         return true
-
-      default:
-        return false
     }
   }
 
