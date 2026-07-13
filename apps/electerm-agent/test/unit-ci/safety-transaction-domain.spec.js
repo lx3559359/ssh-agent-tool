@@ -31,6 +31,59 @@ test('operation model exposes every lifecycle state', async () => {
   assert.equal(Object.isFrozen(operationStates), true)
 })
 
+test('operation model defines and enforces risk and recovery provider invariants', async () => {
+  const {
+    operationRisks,
+    recoveryProviders,
+    normalizeOperation
+  } = await importDomainModule('models.js')
+  const base = {
+    source: 'terminal',
+    endpoint: { host: 'prod.example.com', username: 'root' }
+  }
+
+  assert.deepEqual(Object.values(operationRisks), ['readonly', 'change', 'unknown', 'blocked'])
+  assert.deepEqual(Object.values(recoveryProviders), [
+    'file', 'permissions', 'systemd', 'firewall', 'network', 'docker'
+  ])
+
+  for (const risk of ['readonly', 'unknown', 'blocked']) {
+    const operation = normalizeOperation({
+      ...base,
+      risk,
+      reversible: true,
+      recoveryProvider: 'file'
+    })
+    assert.equal(operation.reversible, false, risk)
+    assert.equal(operation.recoveryProvider, null, risk)
+  }
+
+  const reversibleChange = normalizeOperation({
+    ...base,
+    risk: 'change',
+    reversible: true,
+    recoveryProvider: 'systemd'
+  })
+  assert.equal(reversibleChange.reversible, true)
+  assert.equal(reversibleChange.recoveryProvider, 'systemd')
+
+  const incompleteChange = normalizeOperation({
+    ...base,
+    risk: 'change',
+    reversible: true
+  })
+  assert.equal(incompleteChange.reversible, false)
+  assert.equal(incompleteChange.recoveryProvider, null)
+
+  assert.throws(() => normalizeOperation({ ...base, risk: 'dangerous' }), /风险/)
+  assert.throws(() => normalizeOperation({
+    ...base,
+    risk: 'change',
+    reversible: true,
+    recoveryProvider: 'database'
+  }), /恢复提供方/)
+})
+
 test('normalizes operations and builds classified safety requests', async () => {
   const { normalizeOperation, buildSafetyRequest } = await importDomainModule('models.js')
   const now = new Date('2026-07-13T08:09:10.000Z')
@@ -275,6 +328,18 @@ test('compound commands use the highest risk classification', async () => {
   assert.equal(multiProvider.reversible, false)
   assert.equal(multiProvider.provider, null)
   assert.match(multiProvider.reason, /包含多个修改，无法生成统一自动回滚/)
+
+  for (const command of [
+    'uptime && systemctl restart nginx',
+    'systemctl restart nginx && systemctl restart sshd',
+    'echo first > /etc/first.conf; echo second > /etc/second.conf'
+  ]) {
+    const classification = classifyCommand(command)
+    assert.equal(classification.risk, 'change', command)
+    assert.equal(classification.reversible, false, command)
+    assert.equal(classification.provider, null, command)
+    assert.match(classification.reason, /自动回滚/, command)
+  }
 })
 
 test('multi-provider safety requests do not claim automatic rollback', async () => {
@@ -289,6 +354,15 @@ test('multi-provider safety requests do not claim automatic rollback', async () 
   assert.equal(request.reversible, false)
   assert.equal(request.recoveryProvider, null)
   assert.match(request.reason, /包含多个修改，无法生成统一自动回滚/)
+
+  const sameProviderRequest = buildSafetyRequest({
+    source: 'terminal',
+    endpoint: { host: 'prod.example.com', username: 'root' },
+    command: 'systemctl restart nginx && systemctl restart sshd'
+  })
+  assert.equal(sameProviderRequest.risk, 'change')
+  assert.equal(sameProviderRequest.reversible, false)
+  assert.equal(sameProviderRequest.recoveryProvider, null)
 })
 
 test('normalizes sudo options and absolute executable paths before blocking', async () => {
@@ -686,6 +760,32 @@ test('audit redaction recursively sanitizes valid JSON and generic credential na
   assert.match(redactedText, /SERVICE_SECRET="\[REDACTED\]";/)
 })
 
+test('structured audit redaction sanitizes every nested string leaf', async () => {
+  const { redactAuditText } = await importDomainModule('audit-redaction.js')
+  const payload = {
+    message: 'deploy token=message-token; complete',
+    output: 'Authorization: Bearer output-token;',
+    nested: {
+      values: [
+        'AWS_SECRET_ACCESS_KEY=array-secret;',
+        { note: 'sshpass -p array-password ssh root@example.com' }
+      ]
+    },
+    password: { nested: 'sensitive-key-object' },
+    SERVICE_TOKEN: ['sensitive-key-array']
+  }
+
+  const redactedJson = redactAuditText(JSON.stringify(payload))
+  const parsed = JSON.parse(redactedJson)
+  assert.match(parsed.message, /token=\[REDACTED\]; complete/)
+  assert.equal(parsed.output, 'Authorization: Bearer [REDACTED];')
+  assert.equal(parsed.nested.values[0], 'AWS_SECRET_ACCESS_KEY=[REDACTED];')
+  assert.equal(parsed.nested.values[1].note, 'sshpass -p [REDACTED] ssh root@example.com')
+  assert.equal(parsed.password, '[REDACTED]')
+  assert.equal(parsed.SERVICE_TOKEN, '[REDACTED]')
+  assert.doesNotMatch(redactedJson, /message-token|output-token|array-secret|array-password|sensitive-key-object|sensitive-key-array/)
+})
+
 test('audit redaction handles compact sshpass password syntax', async () => {
   const { redactAuditText } = await importDomainModule('audit-redaction.js')
   const redacted = redactAuditText('sshpass -pcompact-password ssh root@example.com; echo done')
@@ -754,7 +854,8 @@ test('normalizes endpoint identity including IPv6 and rejects mismatches', async
   const {
     normalizeEndpoint,
     buildEndpointKey,
-    assertSameEndpoint
+    assertSameEndpoint,
+    assertSameSessionEndpoint
   } = await importDomainModule('endpoint-guard.js')
 
   assert.deepEqual(
@@ -777,6 +878,34 @@ test('normalizes endpoint identity including IPv6 and rejects mismatches', async
     { host: '2001:db8::1', username: 'root' },
     { host: '[2001:0DB8:0:0::1]', port: '22', username: 'root' }
   ))
+  const expectedSession = {
+    host: 'prod.example.com',
+    port: 22,
+    username: 'root',
+    tabId: 'tab-1',
+    pid: 1001
+  }
+  const replacementSession = {
+    host: 'PROD.EXAMPLE.COM',
+    port: '22',
+    username: 'root',
+    tabId: 'tab-2',
+    pid: 2002
+  }
+  assert.doesNotThrow(() => assertSameEndpoint(expectedSession, replacementSession))
+  assert.throws(
+    () => assertSameEndpoint(expectedSession, replacementSession, { strictSession: true }),
+    /会话端点不一致/
+  )
+  assert.throws(
+    () => assertSameSessionEndpoint(expectedSession, replacementSession),
+    /会话端点不一致/
+  )
+  assert.doesNotThrow(() => assertSameSessionEndpoint(expectedSession, {
+    ...expectedSession,
+    host: 'PROD.EXAMPLE.COM',
+    port: '22'
+  }))
   assert.throws(() => assertSameEndpoint(
     { host: '10.0.0.1', port: 22, username: 'root' },
     { host: '10.0.0.2', port: 22, username: 'root' }

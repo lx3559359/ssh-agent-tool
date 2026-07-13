@@ -742,11 +742,12 @@ export function classifyCommand (command) {
   const classifications = parts.map(classifySingle)
   const highestRank = Math.max(...classifications.map(item => riskRank[item.risk]))
   const highest = classifications.filter(item => riskRank[item.risk] === highestRank)
-  if (highestRank === riskRank.change) {
-    const providers = [...new Set(highest.map(item => item.provider))]
-    if (providers.length !== 1) {
-      return result('change', '复合命令包含多个修改，无法生成统一自动回滚', null, false)
-    }
+  if (parts.length > 1 && highestRank === riskRank.change) {
+    const changeCount = classifications.filter(item => item.risk === 'change').length
+    const reason = changeCount > 1
+      ? '复合命令包含多个修改，无法生成统一自动回滚'
+      : '复合命令包含多个 shell 段，无法生成统一自动回滚'
+    return result('change', reason, null, false)
   }
   return highest[0]
 }

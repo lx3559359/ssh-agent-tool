@@ -90,20 +90,30 @@ export function buildEndpointKey (endpoint) {
   return `${normalized.username}@${host}:${normalized.port}`
 }
 
-export function assertSameEndpoint (expected, actual) {
+function hasSameSessionIdentity (expected, actual) {
+  const sessionFields = ['tabId', 'pid', 'terminalPid', 'sessionType']
+  return sessionFields.every(field => {
+    if (expected?.[field] === undefined || expected[field] === '') return true
+    return String(expected[field]) === String(actual?.[field])
+  })
+}
+
+export function assertSameEndpoint (expected, actual, options = {}) {
   let sameEndpoint = false
   try {
     sameEndpoint = buildEndpointKey(expected) === buildEndpointKey(actual)
   } catch {
     throw new Error('服务器端点不一致，已停止安全操作。')
   }
-  const sessionFields = ['tabId', 'pid', 'terminalPid', 'sessionType']
-  const sameSession = sessionFields.every(field => {
-    if (expected?.[field] === undefined || expected[field] === '') return true
-    return String(expected[field]) === String(actual?.[field])
-  })
-  if (!sameEndpoint || !sameSession) {
+  if (!sameEndpoint) {
     throw new Error('服务器端点不一致，已停止安全操作。')
   }
+  if (options.strictSession && !hasSameSessionIdentity(expected, actual)) {
+    throw new Error('服务器会话端点不一致，已停止安全操作。')
+  }
   return true
+}
+
+export function assertSameSessionEndpoint (expected, actual) {
+  return assertSameEndpoint(expected, actual, { strictSession: true })
 }

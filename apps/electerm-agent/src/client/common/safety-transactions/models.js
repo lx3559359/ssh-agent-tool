@@ -24,8 +24,26 @@ export const operationSources = Object.freeze([
   'sftp'
 ])
 
+export const operationRisks = Object.freeze({
+  readonly: 'readonly',
+  change: 'change',
+  unknown: 'unknown',
+  blocked: 'blocked'
+})
+
+export const recoveryProviders = Object.freeze({
+  file: 'file',
+  permissions: 'permissions',
+  systemd: 'systemd',
+  firewall: 'firewall',
+  network: 'network',
+  docker: 'docker'
+})
+
 const validStates = new Set(Object.values(operationStates))
 const validSources = new Set(operationSources)
+const validRisks = new Set(Object.values(operationRisks))
+const validRecoveryProviders = new Set(Object.values(recoveryProviders))
 const endpointIdentityFields = [
   'tabId', 'host', 'port', 'username', 'title', 'pid', 'terminalPid', 'sessionType'
 ]
@@ -61,6 +79,23 @@ function resolveNow (value) {
   return now
 }
 
+function normalizeClassification (operation, normalized) {
+  const hasClassification = operation.risk !== undefined ||
+    operation.reversible !== undefined || operation.recoveryProvider !== undefined
+  if (!hasClassification) return
+  if (operation.risk !== undefined && !validRisks.has(operation.risk)) {
+    throw new Error('安全事务风险等级不受支持')
+  }
+  const provider = operation.recoveryProvider
+  if (provider !== undefined && provider !== null && !validRecoveryProviders.has(provider)) {
+    throw new Error('安全事务恢复提供方不受支持')
+  }
+  const reversible = operation.risk === operationRisks.change &&
+    operation.reversible === true && validRecoveryProviders.has(provider)
+  normalized.reversible = reversible
+  normalized.recoveryProvider = reversible ? provider : null
+}
+
 export function normalizeOperation (operation = {}, options = {}) {
   if (!validSources.has(operation.source)) {
     throw new Error('安全事务来源不受支持')
@@ -80,6 +115,7 @@ export function normalizeOperation (operation = {}, options = {}) {
   if (normalized.metadata !== undefined) {
     normalized.metadata = redactSensitiveData(normalized.metadata)
   }
+  normalizeClassification(operation, normalized)
   return {
     ...normalized,
     schemaVersion: 1,

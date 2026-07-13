@@ -24,6 +24,7 @@ function isSensitiveKey (key) {
 }
 
 function redactData (value, ancestors) {
+  if (typeof value === 'string') return redactPlainText(value)
   if (Array.isArray(value)) {
     if (ancestors.has(value)) return redacted
     ancestors.add(value)
@@ -79,13 +80,8 @@ function redactAuthorizationValues (text) {
   )
 }
 
-export function redactAuditText (value) {
+function redactPlainText (value) {
   let text = String(value ?? '')
-  try {
-    return JSON.stringify(redactSensitiveData(JSON.parse(text)))
-  } catch {
-    // Non-JSON audit entries are sanitized below without changing command text.
-  }
   text = redactPrivateKeys(text)
   text = redactJsonCredentialValues(text)
   text = redactAuthorizationValues(text)
@@ -118,4 +114,13 @@ export function redactAuditText (value) {
     /(\bsshpass\s+(?:(?:-v|-e)\s+|(?:-f|-d|-P)\s+\S+\s+)*(?:-p(?:\s+|(?=\S))|--password(?:\s+|=)))(?:"((?:\\.|[^"\\])*)"|'([^'\r\n]*)'|[^\s;&]+)/gi
   )
   return text
+}
+
+export function redactAuditText (value) {
+  const text = String(value ?? '')
+  try {
+    return JSON.stringify(redactSensitiveData(JSON.parse(text)))
+  } catch {
+    return redactPlainText(text)
+  }
 }
