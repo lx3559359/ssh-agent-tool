@@ -24,16 +24,16 @@ function completeSshContext (overrides = {}) {
   }
 }
 
-test('reversible systemctl restart waits for one recovery confirmation', async () => {
+test('trusted reversible systemctl start waits for one recovery confirmation', async () => {
   const { createTerminalSafetyController } = await importController()
   const controller = createTerminalSafetyController()
 
   const first = controller.beforeEnter(
-    'systemctl restart nginx',
+    '/usr/bin/systemctl start nginx',
     completeSshContext()
   )
   const duplicate = controller.beforeEnter(
-    'systemctl restart nginx',
+    '/usr/bin/systemctl start nginx',
     completeSshContext()
   )
 
@@ -49,9 +49,9 @@ test('reversible systemctl restart waits for one recovery confirmation', async (
 test('readonly uptime and ordinary non-enter input remain synchronous', async () => {
   const { createTerminalSafetyController } = await importController()
   const controller = createTerminalSafetyController()
-  const context = completeSshContext({ command: 'uptime' })
+  const context = completeSshContext({ command: '/usr/bin/uptime' })
 
-  assert.deepEqual(controller.beforeEnter('uptime', context), { sendNow: true })
+  assert.deepEqual(controller.beforeEnter('/usr/bin/uptime', context), { sendNow: true })
   assert.deepEqual(controller.beforeSend('x', context), { sendNow: true })
   assert.deepEqual(controller.beforeSend('\x03', context), { sendNow: true })
   assert.deepEqual(controller.beforeSend('\x1b[A', context), { sendNow: true })
@@ -60,7 +60,7 @@ test('readonly uptime and ordinary non-enter input remain synchronous', async ()
 test('only standalone Enter delegates to command classification', async () => {
   const { createTerminalSafetyController } = await importController()
   const controller = createTerminalSafetyController()
-  const context = completeSshContext({ command: 'systemctl restart nginx' })
+  const context = completeSshContext({ command: '/usr/bin/systemctl start nginx' })
 
   assert.deepEqual(controller.beforeSend('systemctl restart nginx\r', context), {
     sendNow: true
@@ -139,7 +139,7 @@ test('ordinary trailing padding stays complete and protected', async () => {
     createTerminalSafetyController,
     isCompleteTerminalCommand
   } = await importController()
-  const command = 'systemctl restart nginx   '
+  const command = '/usr/bin/systemctl start nginx   '
   const controller = createTerminalSafetyController()
 
   assert.equal(isCompleteTerminalCommand(command), true)
@@ -401,10 +401,17 @@ test('terminal safety endpoint projects exact SSH identity without credentials',
 
 test('credential-bearing reversible commands are blocked before creating records', async () => {
   const { createTerminalSafetyController } = await importController()
-  const controller = createTerminalSafetyController()
+  const controller = createTerminalSafetyController({
+    classifyCommand: () => ({
+      risk: 'change',
+      reversible: true,
+      provider: 'systemd',
+      requiresConfirmation: true
+    })
+  })
 
   const result = controller.beforeEnter(
-    'API_KEY=secret-value systemctl restart nginx',
+    '/usr/bin/systemctl start nginx --token=secret-value',
     completeSshContext()
   )
 

@@ -105,7 +105,7 @@ async function createRequest (overrides = {}) {
       tabId: 'tab-1',
       pid: 1001
     },
-    command: 'systemctl restart nginx',
+    command: '/usr/bin/systemctl start nginx',
     ...overrides
   }, { now: new Date('2026-07-13T09:00:00.000Z') })
 }
@@ -181,7 +181,7 @@ test('prepare creates and verifies recovery before execute can run a modifying c
     'awaiting-confirmation'
   ])
   assert.deepEqual(remoteCalls.map(call => call.options.phase), ['prepare'])
-  assert.doesNotMatch(remoteCalls[0].command, /systemctl restart nginx/)
+  assert.doesNotMatch(remoteCalls[0].command, /systemctl start nginx/)
   assert.equal(prepared.plan.summary, 'recovery for op-1')
   assert.equal(prepared.artifacts.manifest, '~/.shellpilot/operations/op-1/manifest.json')
 
@@ -193,7 +193,7 @@ test('prepare creates and verifies recovery before execute can run a modifying c
 
   assert.equal(result.state, 'rollback-available')
   assert.deepEqual(remoteCalls.map(call => call.options.phase), ['prepare', 'execute'])
-  assert.match(remoteCalls[1].command, /systemctl restart nginx/)
+  assert.match(remoteCalls[1].command, /systemctl start nginx/)
   assert.deepEqual(store.transitions.slice(-3), [
     'executing',
     'verification-passed',
@@ -274,7 +274,7 @@ test('external PTY completion rejects unrelated and late command events', async 
   await assert.rejects(
     runner.completeExternalExecution(request.id, {
       executionId: begun.executionId,
-      command: 'uptime',
+      command: '/usr/bin/uptime',
       exitCode: 0
     }),
     /命令不匹配/
@@ -334,7 +334,7 @@ test('prepare persists a recovery binding and execute rejects same-provider comm
   assert.match(prepared.recoveryBinding.fingerprint, /^[a-f0-9]{64}$/)
 
   await context.store.patch(context.request.id, {
-    command: 'systemctl restart sshd'
+    command: '/usr/bin/systemctl start sshd'
   })
   const callsBeforeExecute = context.remoteCalls.length
   await assert.rejects(
@@ -365,7 +365,7 @@ test('execute rejects persisted execute command or artifact tampering without a 
       patch: operation => ({
         plan: {
           ...operation.plan,
-          executeCommand: 'systemctl restart sshd'
+          executeCommand: '/usr/bin/systemctl start sshd'
         }
       })
     },
@@ -515,7 +515,7 @@ test('execute post-check restores the bound plan when persistence changes while 
   await context.store.patch(request.id, {
     plan: {
       ...executing.plan,
-      executeCommand: 'systemctl restart sshd'
+      executeCommand: '/usr/bin/systemctl start sshd'
     },
     artifacts: {
       ...executing.artifacts,
@@ -592,7 +592,7 @@ test('execute success guard detects a store patch in the exact post-remote windo
       await baseStore.patch(id, {
         plan: {
           ...current.plan,
-          executeCommand: 'systemctl restart sshd'
+          executeCommand: '/usr/bin/systemctl start sshd'
         }
       })
     }
@@ -993,7 +993,7 @@ test('endpoint changes and unsafe network changes never execute', async () => {
 test('unknown and nonreversible changes require an explicit unsafe confirmation', async () => {
   for (const [id, command] of [
     ['op-unknown', 'custom-diagnostic --check'],
-    ['op-nonreversible', 'systemctl restart nginx && chmod 600 /etc/app.conf']
+    ['op-nonreversible', '/usr/bin/systemctl start nginx && /usr/bin/chmod 600 /etc/app.conf']
   ]) {
     const request = await createRequest({ id, command })
     const context = await createPreparedRunner({ request })
@@ -1409,8 +1409,8 @@ function readonlyPlan (overrides = {}) {
     id: 'task-1',
     title: '检查生产服务器',
     steps: [
-      { id: 'uptime', title: '运行时间', command: 'uptime', timeoutMs: 100 },
-      { id: 'identity', title: '当前用户', command: 'whoami', timeoutMs: 100 }
+      { id: 'uptime', title: '运行时间', command: '/usr/bin/uptime', timeoutMs: 100 },
+      { id: 'identity', title: '当前用户', command: '/usr/bin/whoami', timeoutMs: 100 }
     ],
     ...overrides
   }
@@ -1476,7 +1476,7 @@ test('task runner requires plan confirmation and persists validated readonly pro
   await runner.confirmPlan(task.id)
   const completed = await runner.run(task.id)
   assert.equal(completed.status, 'completed')
-  assert.deepEqual(calls.map(call => call.command), ['uptime', 'whoami'])
+  assert.deepEqual(calls.map(call => call.command), ['/usr/bin/uptime', '/usr/bin/whoami'])
   assert.equal(completed.steps.every(step => step.status === 'completed'), true)
   assert.doesNotMatch(JSON.stringify(completed), /task-secret/)
   assert.equal(events.length > 0, true)
@@ -1521,14 +1521,14 @@ test('task runner rejects a persisted executable plan swap after confirmation', 
       {
         id: 'first',
         title: 'First check',
-        command: 'uptime',
+        command: '/usr/bin/uptime',
         purpose: 'check availability',
         timeoutMs: 100
       },
       {
         id: 'second',
         title: 'Second check',
-        command: 'whoami',
+        command: '/usr/bin/whoami',
         purpose: 'check identity',
         timeoutMs: 200
       }
@@ -1575,7 +1575,7 @@ test('task remote output is capped before consuming all chunks', async () => {
     now: createClock()
   })
   const task = await runner.create(readonlyPlan({
-    steps: [{ id: 'bounded', command: 'uptime', timeoutMs: 100 }]
+    steps: [{ id: 'bounded', command: '/usr/bin/uptime', timeoutMs: 100 }]
   }))
   await runner.confirmPlan(task.id)
 
@@ -1611,7 +1611,7 @@ test('task runner fails closed without an explicit finite numeric exit code', as
       })
       const task = await runner.create(readonlyPlan({
         id: `task-invalid-result-${label}`,
-        steps: [{ id: 'invalid', command: 'uptime', timeoutMs: 100 }]
+        steps: [{ id: 'invalid', command: '/usr/bin/uptime', timeoutMs: 100 }]
       }))
       await runner.confirmPlan(task.id)
 
@@ -1638,22 +1638,22 @@ test('task runner stops before a classifier-detected change step', async () => {
   })
   const task = await runner.create(readonlyPlan({
     steps: [
-      { id: 'uptime', command: 'uptime', timeoutMs: 100 },
+      { id: 'uptime', command: '/usr/bin/uptime', timeoutMs: 100 },
       {
         id: 'restart',
-        command: 'systemctl restart nginx',
+        command: '/usr/bin/systemctl start nginx',
         timeoutMs: 100,
         readOnly: true,
         risk: 'readonly'
       },
-      { id: 'identity', command: 'whoami', timeoutMs: 100 }
+      { id: 'identity', command: '/usr/bin/whoami', timeoutMs: 100 }
     ]
   }))
   await runner.confirmPlan(task.id)
   const stopped = await runner.run(task.id)
 
   assert.equal(stopped.status, 'awaiting-change-confirmation')
-  assert.deepEqual(calls, ['uptime'])
+  assert.deepEqual(calls, ['/usr/bin/uptime'])
   assert.equal(stopped.steps[0].status, 'completed')
   assert.equal(stopped.steps[1].status, 'awaiting-confirmation')
   assert.equal(stopped.steps[2].status, 'pending')
@@ -1677,8 +1677,8 @@ test('task runner enforces per-step timeout and cancels the active remote execut
   })
   const task = await runner.create(readonlyPlan({
     steps: [
-      { id: 'slow', command: 'uptime', timeoutMs: 10 },
-      { id: 'never', command: 'whoami', timeoutMs: 100 }
+      { id: 'slow', command: '/usr/bin/uptime', timeoutMs: 10 },
+      { id: 'never', command: '/usr/bin/whoami', timeoutMs: 100 }
     ]
   }))
   await runner.confirmPlan(task.id)
@@ -1716,7 +1716,7 @@ test('task signal abort fails honestly when remote cancellation fails', async ()
   })
   const task = await runner.create(readonlyPlan({
     id: 'task-signal-cancel-failure',
-    steps: [{ id: 'active', command: 'uptime', timeoutMs: 1000 }]
+    steps: [{ id: 'active', command: '/usr/bin/uptime', timeoutMs: 1000 }]
   }))
   await runner.confirmPlan(task.id)
   const running = runner.run(task.id, { signal: controller.signal })
@@ -1763,7 +1763,7 @@ test('task signal abort cannot commit remote success while cancellation is pendi
   })
   const task = await runner.create(readonlyPlan({
     id: 'task-signal-success-cancel-race',
-    steps: [{ id: 'active', command: 'uptime', timeoutMs: 1000 }]
+    steps: [{ id: 'active', command: '/usr/bin/uptime', timeoutMs: 1000 }]
   }))
   await runner.confirmPlan(task.id)
   const running = runner.run(task.id, { signal: controller.signal })
@@ -1804,7 +1804,7 @@ test('task timeout fails honestly when remote cancellation fails', async () => {
   })
   const task = await runner.create(readonlyPlan({
     id: 'task-timeout-cancel-failure',
-    steps: [{ id: 'slow', command: 'uptime', timeoutMs: 10 }]
+    steps: [{ id: 'slow', command: '/usr/bin/uptime', timeoutMs: 10 }]
   }))
   await runner.confirmPlan(task.id)
 
@@ -1846,7 +1846,7 @@ test('task timeout cannot commit remote success while cancellation is pending', 
   })
   const task = await runner.create(readonlyPlan({
     id: 'task-timeout-success-cancel-race',
-    steps: [{ id: 'slow', command: 'uptime', timeoutMs: 10 }]
+    steps: [{ id: 'slow', command: '/usr/bin/uptime', timeoutMs: 10 }]
   }))
   await runner.confirmPlan(task.id)
   const running = runner.run(task.id)
@@ -1877,7 +1877,7 @@ test('task cancellation stops later steps and preserves completed progress', asy
   const cancelledExecutions = []
   const runner = createTaskRunner({
     runRemote: async command => {
-      if (command === 'uptime') return { output: 'first complete', code: 0 }
+      if (command === '/usr/bin/uptime') return { output: 'first complete', code: 0 }
       return new Promise((resolve, reject) => { rejectActive = reject })
     },
     cancelRemote: async executionId => {
@@ -1889,9 +1889,9 @@ test('task cancellation stops later steps and preserves completed progress', asy
   })
   const task = await runner.create(readonlyPlan({
     steps: [
-      { id: 'first', command: 'uptime', timeoutMs: 100 },
-      { id: 'active', command: 'whoami', timeoutMs: 1000 },
-      { id: 'never', command: 'pwd', timeoutMs: 100 }
+      { id: 'first', command: '/usr/bin/uptime', timeoutMs: 100 },
+      { id: 'active', command: '/usr/bin/whoami', timeoutMs: 1000 },
+      { id: 'never', command: '/usr/bin/pwd', timeoutMs: 100 }
     ]
   }))
   await runner.confirmPlan(task.id)
@@ -1925,7 +1925,7 @@ test('task cancelRemote failure surfaces a sanitized error and records failure',
     now: createClock()
   })
   const task = await runner.create(readonlyPlan({
-    steps: [{ id: 'active', command: 'uptime', timeoutMs: 1000 }]
+    steps: [{ id: 'active', command: '/usr/bin/uptime', timeoutMs: 1000 }]
   }))
   await runner.confirmPlan(task.id)
   const running = runner.run(task.id)
@@ -1958,7 +1958,7 @@ test('an event callback failure cannot break task execution', async () => {
     onEvent: () => { throw new Error('observer failed') }
   })
   const task = await runner.create(readonlyPlan({
-    steps: [{ id: 'uptime', command: 'uptime', timeoutMs: 100 }]
+    steps: [{ id: 'uptime', command: '/usr/bin/uptime', timeoutMs: 100 }]
   }))
   await runner.confirmPlan(task.id)
 

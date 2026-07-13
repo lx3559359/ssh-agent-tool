@@ -15,13 +15,22 @@ function importDomainModule (name) {
   return import(pathToFileURL(path.join(domainRoot, name)).href)
 }
 
+function trustedCommand (command) {
+  const text = String(command)
+  if (text.startsWith('/')) return text
+  if (text.startsWith('sudo -n ')) {
+    return `/usr/bin/sudo -n /usr/bin/${text.slice('sudo -n '.length)}`
+  }
+  return text.replace(/^([A-Za-z0-9_-]+)/, '/usr/bin/$1')
+}
+
 async function buildChange (command, id = 'op-1') {
   const { buildSafetyRequest } = await importDomainModule('models.js')
   return buildSafetyRequest({
     id,
     source: 'terminal',
     endpoint: { host: 'prod.example.com', username: 'root' },
-    command
+    command: trustedCommand(command)
   })
 }
 
@@ -37,7 +46,11 @@ function runBash (command, home) {
   const executable = process.platform === 'win32' && fs.existsSync(windowsBash)
     ? windowsBash
     : 'bash'
-  return spawnSync(executable, ['--noprofile', '--norc', '-c', command], {
+  const simulatedCommand = command.replace(
+    /'\/(?:usr\/)?(?:s?bin)\/([A-Za-z0-9._+-]+)'/g,
+    '$1'
+  )
+  return spawnSync(executable, ['--noprofile', '--norc', '-c', simulatedCommand], {
     encoding: 'utf8',
     env: {
       ...process.env,
@@ -92,6 +105,52 @@ test('builds a strict permission recovery package from a safety request', async 
   assert.doesNotMatch(JSON.stringify(plan), /\/tmp\/shellpilot/)
 })
 
+test('trusted executable and quoted backslash target stay bound through recovery plan', async () => {
+  const { buildRecoveryPlan } = await importDomainModule('recovery-providers.js')
+  const command = String.raw`/usr/bin/chmod 600 "/tmp/a\q"`
+  const change = await buildChange(command, 'permission-executable-binding')
+  const plan = buildRecoveryPlan(change)
+
+  assert.equal(change.recoveryProvider, 'permissions')
+  assert.equal(plan.executeCommand, command)
+  assert.equal(plan.prepareCommand.includes(String.raw`'/tmp/a\q'`), true)
+  assert.match(plan.prepareCommand, /'\/usr\/bin\/chmod'/)
+  assert.match(plan.rollbackCommand, /permission-executable-binding/)
+  assert.match(plan.verifyCommand, /permission-executable-binding/)
+})
+
+test('systemd recovery uses the exact trusted executable from the submitted command', async () => {
+  const { buildRecoveryPlan } = await importDomainModule('recovery-providers.js')
+  const command = '/usr/bin/systemctl start nginx.service'
+  const change = await buildChange(command, 'systemd-executable-binding')
+  const plan = buildRecoveryPlan(change)
+
+  assert.equal(change.recoveryProvider, 'systemd')
+  assert.equal(plan.executeCommand, command)
+  assert.match(plan.prepareCommand, /'\/usr\/bin\/systemctl' is-active/)
+  assert.match(plan.prepareCommand, /\/usr\/bin\/systemctl[^;]*start/)
+  assert.match(plan.prepareCommand, /\/usr\/bin\/systemctl[^;]*stop/)
+})
+
+test('restart requests cannot be forged into reversible provider plans', async () => {
+  const { buildRecoveryPlan } = await importDomainModule('recovery-providers.js')
+
+  for (const [command, provider] of [
+    ['/usr/bin/systemctl restart nginx.service', 'systemd'],
+    ['/usr/bin/docker restart web', 'docker']
+  ]) {
+    const change = await buildChange(command, `restart-${provider}`)
+    assert.equal(change.risk, 'unknown', command)
+    assert.equal(change.reversible, false, command)
+    assert.throws(() => buildRecoveryPlan({
+      ...change,
+      risk: 'change',
+      reversible: true,
+      recoveryProvider: provider
+    }), /恢复|recovery|restart|分类|伪造/, command)
+  }
+})
+
 test('file provider supports one static ordinary target for first-release commands', async () => {
   const { buildRecoveryPlan } = await importDomainModule('recovery-providers.js')
   const commands = [
@@ -127,7 +186,7 @@ test('file redirection preserves a trailing escaped-space target through recover
     assert.equal(change.recoveryProvider, 'file')
     const plan = buildRecoveryPlan(change)
 
-    assert.equal(plan.executeCommand, command)
+    assert.equal(plan.executeCommand, change.command)
     assert.match(plan.prepareCommand, new RegExp(`test -L '${shellTarget}'`))
     const prepared = runBash(plan.prepareCommand, home)
     assert.equal(prepared.status, 0, prepared.stderr || prepared.stdout)
@@ -189,34 +248,40 @@ test('file redirection ignores ordinary padding but preserves quoted target spac
 test('systemd and docker providers capture and restore the previous state', async () => {
   const { buildRecoveryPlan } = await importDomainModule('recovery-providers.js')
   const systemd = buildRecoveryPlan(await buildChange(
-    'sudo -n systemctl restart nginx.service',
+    'sudo -n systemctl start nginx.service',
     'systemd-1'
   ))
-  assert.match(systemd.prepareCommand, /systemctl is-active/)
-  assert.match(systemd.prepareCommand, /systemctl is-enabled/)
-  assert.match(systemd.prepareCommand, /sudo -n systemctl/)
+  assert.match(systemd.prepareCommand, /\/usr\/bin\/systemctl.*is-active/)
+  assert.match(systemd.prepareCommand, /\/usr\/bin\/systemctl.*is-enabled/)
+  assert.match(systemd.prepareCommand, /\/usr\/bin\/sudo.*-n.*\/usr\/bin\/systemctl/)
   assert.match(systemd.prepareCommand, /backup\/old-active/)
   assert.match(systemd.prepareCommand, /backup\/old-enabled/)
-  assert.match(systemd.prepareCommand, /current_active=\$\(sudo -n systemctl is-active.*\|\| true\)/)
-  assert.match(systemd.prepareCommand, /current_enabled=\$\(sudo -n systemctl is-enabled.*\|\| true\)/)
+  assert.match(systemd.prepareCommand, /current_active=.*\/usr\/bin\/systemctl.*is-active.*\|\| true/)
+  assert.match(systemd.prepareCommand, /current_enabled=.*\/usr\/bin\/systemctl.*is-enabled.*\|\| true/)
   assert.match(systemd.prepareCommand, /\[ "\$current_active" = "\$old_active" \]/)
   assert.match(systemd.prepareCommand, /\[ "\$current_enabled" = "\$old_enabled" \]/)
   assert.match(systemd.prepareCommand, /active=%s/)
   assert.match(systemd.prepareCommand, /enabled=%s/)
 
-  const docker = buildRecoveryPlan(await buildChange('docker restart web-1', 'docker-1'))
-  assert.match(docker.prepareCommand, /docker inspect/)
+  const docker = buildRecoveryPlan(await buildChange('docker stop web-1', 'docker-1'))
+  assert.match(docker.prepareCommand, /\/usr\/bin\/docker.*inspect/)
   assert.match(docker.prepareCommand, /\.State\.Running/)
-  assert.match(docker.prepareCommand, /docker start/)
-  assert.match(docker.prepareCommand, /docker stop/)
+  assert.match(docker.prepareCommand, /\/usr\/bin\/docker.*start/)
+  assert.match(docker.prepareCommand, /\/usr\/bin\/docker.*stop/)
 })
 
 test('systemd provider rejects reload because it has no exact inverse', async () => {
   const { buildRecoveryPlan } = await importDomainModule('recovery-providers.js')
   const change = await buildChange('systemctl reload nginx.service', 'systemd-reload')
 
-  assert.equal(change.reversible, true)
-  assert.throws(() => buildRecoveryPlan(change), /reload|无法撤销|拒绝/)
+  assert.equal(change.risk, 'unknown')
+  assert.equal(change.reversible, false)
+  assert.throws(() => buildRecoveryPlan({
+    ...change,
+    risk: 'change',
+    reversible: true,
+    recoveryProvider: 'systemd'
+  }), /reload|恢复|recovery|分类|伪造/)
 })
 
 test('firewall providers restore only the changed static port rule', async () => {
@@ -239,9 +304,9 @@ test('firewall providers restore only the changed static port rule', async () =>
   assert.match(spacedZone.prepareCommand, /--zone=public --query-port=80\/tcp/)
 
   const ufw = buildRecoveryPlan(await buildChange('ufw allow 8443/tcp', 'firewall-2'))
-  assert.match(ufw.prepareCommand, /ufw show added/)
-  assert.match(ufw.prepareCommand, /ufw allow/)
-  assert.match(ufw.prepareCommand, /ufw --force delete allow/)
+  assert.match(ufw.prepareCommand, /\/usr\/bin\/ufw.*show added/)
+  assert.match(ufw.prepareCommand, /\/usr\/bin\/ufw.*allow/)
+  assert.match(ufw.prepareCommand, /\/usr\/bin\/ufw.*--force delete allow/)
 })
 
 test('firewalld provider rejects commands that rely on the default zone', async () => {
@@ -389,10 +454,10 @@ test('network provider restores prior address existence and forbids unsafe bypas
   ))
 
   assert.equal(plan.allowUnsafeExecute, false)
-  assert.match(plan.prepareCommand, /ip -o addr show dev/)
+  assert.match(plan.prepareCommand, /\/usr\/bin\/ip.*-o addr show dev/)
   assert.match(plan.prepareCommand, /10\.0\.0\.8\/24/)
-  assert.match(plan.prepareCommand, /ip addr add/)
-  assert.match(plan.prepareCommand, /ip addr del/)
+  assert.match(plan.prepareCommand, /\/usr\/bin\/ip.*addr add/)
+  assert.match(plan.prepareCommand, /\/usr\/bin\/ip.*addr del/)
   assert.match(plan.prepareCommand, /scope global primary/)
 })
 
@@ -512,14 +577,14 @@ test('network provider explicitly rejects IPv6 CIDR in the first release', async
   )
 })
 
-test('manifest command summary is audit-redacted while execution stays unchanged', async () => {
+test('credential-bearing provider commands cannot create recovery manifests', async () => {
   const { buildRecoveryPlan } = await importDomainModule('recovery-providers.js')
-  const command = 'API_KEY=super-secret chmod 600 /etc/app.conf'
-  const plan = buildRecoveryPlan(await buildChange(command, 'redaction-1'))
+  const command = 'API_KEY=super-secret /usr/bin/chmod 600 /etc/app.conf'
+  const change = await buildChange(command, 'redaction-1')
 
-  assert.equal(plan.executeCommand, command)
-  assert.match(plan.prepareCommand, /\[REDACTED\]/)
-  assert.doesNotMatch(plan.prepareCommand, /super-secret/)
+  assert.equal(change.risk, 'unknown')
+  assert.equal(change.reversible, false)
+  assert.throws(() => buildRecoveryPlan(change), /恢复|recovery|提供器|不受支持/)
 })
 
 test('rejects requests that are not classified reversible atomic changes', async () => {
@@ -580,8 +645,7 @@ test('first release refuses provider commands without a provable inverse', async
     'nmcli con modify eth0 ipv4.addresses 10.0.0.2/24',
     'ip route add default via 10.0.0.1',
     'ip link set dev eth0 down',
-    'ip addr flush dev eth0',
-    'podman restart web'
+    'ip addr flush dev eth0'
   ]
 
   for (const [index, command] of commands.entries()) {
@@ -595,6 +659,10 @@ test('first release refuses provider commands without a provable inverse', async
       assert.equal(error.allowUnsafeExecute, command.startsWith('nmcli') || command.startsWith('ip ') ? false : undefined)
     }
   }
+
+  const podman = await buildChange('podman restart web', 'refuse-podman')
+  assert.equal(podman.risk, 'unknown')
+  assert.equal(podman.reversible, false)
 })
 
 test('docker rm never receives a guessed rollback even for a forged provider claim', async () => {

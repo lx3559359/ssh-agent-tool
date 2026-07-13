@@ -113,7 +113,11 @@ export function tokenizeStaticShell (command) {
         quote = ''
         inWord = true
       } else if (character === '\\' && quote === '"') {
-        escaped = true
+        if (/[$`"\\\n]/.test(text[index + 1] || '')) {
+          escaped = true
+        } else {
+          current += character
+        }
         inWord = true
       } else {
         current += character
@@ -148,6 +152,10 @@ export function tokenizeStaticShell (command) {
 
 function executableName (value) {
   return String(value || '').replace(/^.*\//, '')
+}
+
+export function isTrustedExecutablePath (value) {
+  return /^\/(?:usr\/)?(?:s?bin)\/[A-Za-z0-9._+-]+$/.test(String(value || ''))
 }
 
 function isEnvironmentAssignment (value) {
@@ -197,6 +205,47 @@ function stripCommandPrefix (command) {
   const executable = tokens[index]
   if (!executable) return ''
   return `${executableName(executable.value)}${text.slice(executable.end)}`.trim()
+}
+
+function hasTrustedExecutableIdentity (command) {
+  const tokens = shellTokens(String(command || '').trim())
+  let index = 0
+  if (isEnvironmentAssignment(tokens[index]?.value)) return false
+
+  const sudoOptionsWithValues = new Set([
+    '-u', '--user', '-g', '--group', '-h', '--host', '-p', '--prompt',
+    '-C', '--close-from', '-T', '--command-timeout', '-R', '--chroot',
+    '-D', '--chdir', '-r', '--role', '-t', '--type'
+  ])
+  const envOptionsWithValues = new Set([
+    '-u', '--unset', '-C', '--chdir', '-S', '--split-string'
+  ])
+
+  for (let depth = 0; depth < 2; depth += 1) {
+    const wrapper = tokens[index]?.value
+    const name = executableName(wrapper)
+    if (name !== 'sudo' && name !== 'env') break
+    if (!isTrustedExecutablePath(wrapper)) return false
+    index += 1
+    const optionsWithValues = name === 'sudo'
+      ? sudoOptionsWithValues
+      : envOptionsWithValues
+    while (tokens[index]?.value?.startsWith('-')) {
+      const option = tokens[index].value
+      if (option === '--') {
+        index += 1
+        break
+      }
+      index += 1
+      if (optionsWithValues.has(option)) {
+        if (!tokens[index]) return false
+        index += 1
+      }
+    }
+    if (isEnvironmentAssignment(tokens[index]?.value)) return false
+  }
+
+  return isTrustedExecutablePath(tokens[index]?.value)
 }
 
 function isSafeAbsolutePath (value) {
@@ -632,11 +681,11 @@ function permissionsProvider (command) {
 function changeProvider (command) {
   const text = stripCommandPrefix(command)
   if (/[$`*?[\]{}]/.test(text)) return null
-  if (/^systemctl\s+(?:start|stop|restart|reload|enable|disable)\s+\S+/i.test(text) || /^service\s+\S+\s+(?:start|stop|restart|reload)\b/i.test(text)) return 'systemd'
+  if (/^systemctl\s+(?:start|stop|enable|disable)\s+\S+/i.test(text)) return 'systemd'
   if (permissionsProvider(text)) return 'permissions'
   if (/^firewall-cmd\b.*\s--(?:add|remove)-[A-Za-z-]+\b/i.test(text) || /^ufw\s+(?:allow|deny|reject|delete|enable|disable)\b/i.test(text) || /^(?:iptables|ip6tables)\s+-(?:A|D|I|R|N|X|P)\b/i.test(text) || /^nft\s+(?:add|delete|insert|replace)\b/i.test(text)) return 'firewall'
   if (/^nmcli\s+(?:connection|con)\s+(?:modify|up|down)\s+\S+/i.test(text) || /^ip\s+(?:addr(?:ess)?|route)\s+(?:add|del|delete|replace)\s+\S+/i.test(text) || /^ip\s+addr(?:ess)?\s+flush\s+dev\s+\S+/i.test(text) || /^ip\s+link\s+set\s+(?:dev\s+)?\S+\s+\S+/i.test(text) || /^ifconfig\s+\S+\s+(?:up|down|netmask|mtu|broadcast|[0-9a-f:.]+)\b/i.test(text)) return 'network'
-  if (/^(?:docker|podman)\s+(?:start|stop|restart)\s+\S+/i.test(text)) return 'docker'
+  if (/^docker\s+(?:start|stop)\s+\S+/i.test(text)) return 'docker'
   if (fileProvider(text)) return 'file'
   return null
 }
@@ -817,7 +866,19 @@ function classifySingle (command) {
     return result('unknown', '命令包含动态执行或脚本解释器，无法安全解析')
   }
   const redirects = findRedirection(command)
-  if (redirects.length) return classifyRedirection(command, redirects)
+  const redirectClassification = redirects.length
+    ? classifyRedirection(command, redirects)
+    : null
+  if (redirectClassification?.risk === 'blocked') return redirectClassification
+  if (!hasTrustedExecutableIdentity(command)) {
+    return result('unknown', '无法证明可执行程序身份，普通命令、alias、function 或非系统路径不进入严格安全分类')
+  }
+  const stripped = stripCommandPrefix(command)
+  if (/^(?:systemctl|docker|podman)\s+restart\b/i.test(stripped) ||
+    /^service\s+\S+\s+restart\b/i.test(stripped)) {
+    return result('unknown', 'restart 无法自动恢复原进程、连接和运行时状态，不提供自动回滚')
+  }
+  if (redirectClassification) return redirectClassification
 
   const provider = changeProvider(command)
   if (provider) return result('change', `${provider} 修改可创建已验证的恢复点`, provider)

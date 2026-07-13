@@ -167,7 +167,7 @@ test('escaped trailing-space approval prepares recovery and completes external l
     importDomainModule('models.js')
   ])
   const id = 'terminal-trailing-space'
-  const command = String.raw`printf x > /tmp/task5-review\ `
+  const command = String.raw`/usr/bin/printf x > /tmp/task5-review\ `
   const endpoint = {
     host: 'prod.example.com',
     port: 22,
@@ -255,7 +255,7 @@ test('disconnect during confirmation closes it and never releases Enter', async 
     createTerminalSafetyController
   )
   const decision = coordinator.beforeEnter(
-    'systemctl restart nginx',
+    '/usr/bin/systemctl start nginx',
     protectedContext()
   )
 
@@ -325,7 +325,7 @@ test('disconnect during prepare cancels the transaction and ignores its late res
     { prepare: () => preparation.promise }
   )
   const decision = coordinator.beforeEnter(
-    'systemctl restart nginx',
+    '/usr/bin/systemctl start nginx',
     protectedContext()
   )
   const confirmation = coordinator.confirmExecute()
@@ -352,14 +352,14 @@ test('a stale prepare cannot release into a reconnected session', async () => {
     { prepare: () => preparation.promise }
   )
   const staleDecision = coordinator.beforeEnter(
-    'systemctl restart nginx',
+    '/usr/bin/systemctl start nginx',
     protectedContext()
   )
   const staleConfirmation = coordinator.confirmExecute()
   await Promise.resolve()
   await coordinator.invalidateSession()
   coordinator.beginSession()
-  const freshDecision = coordinator.beforeEnter('uptime', protectedContext())
+  const freshDecision = coordinator.beforeEnter('/usr/bin/uptime', protectedContext())
   preparation.resolve({ state: 'awaiting-confirmation' })
 
   assert.deepEqual(freshDecision, { sendNow: true })
@@ -379,7 +379,7 @@ test('release is one-time and invalidation before consumption prevents socket se
     createTerminalSafetyController
   )
   const decision = coordinator.beforeEnter(
-    'systemctl restart nginx',
+    '/usr/bin/systemctl start nginx',
     protectedContext()
   )
   assert.equal(await coordinator.confirmExecute(), true)
@@ -403,7 +403,7 @@ test('only the matching expected token can complete the current transaction', as
     createTerminalSafetyController
   )
   const decision = coordinator.beforeEnter(
-    'systemctl restart nginx',
+    '/usr/bin/systemctl start nginx',
     protectedContext()
   )
   await coordinator.confirmExecute()
@@ -418,13 +418,13 @@ test('only the matching expected token can complete the current transaction', as
   assert.notEqual(coordinator.getPendingExecution(), null)
   assert.equal(await coordinator.handleCommandFinished({
     token: release.releaseToken,
-    command: 'systemctl restart nginx',
+    command: '/usr/bin/systemctl start nginx',
     exitCode: 0
   }), true)
 
   assert.equal(coordinator.getPendingExecution(), null)
   assert.equal(calls.complete.length, 1)
-  assert.equal(calls.complete[0].completion.command, 'systemctl restart nginx')
+  assert.equal(calls.complete[0].completion.command, '/usr/bin/systemctl start nginx')
 })
 
 test('prompt-boundary interruption completes external execution with unknown exit', async () => {
@@ -437,7 +437,7 @@ test('prompt-boundary interruption completes external execution with unknown exi
     createTerminalSafetyController
   )
   const decision = coordinator.beforeEnter(
-    'systemctl restart nginx',
+    '/usr/bin/systemctl start nginx',
     protectedContext()
   )
   await coordinator.confirmExecute()
@@ -446,7 +446,7 @@ test('prompt-boundary interruption completes external execution with unknown exi
 
   assert.equal(await coordinator.handleCommandFinished({
     token: release.releaseToken,
-    command: 'systemctl restart nginx',
+    command: '/usr/bin/systemctl start nginx',
     exitCode: null
   }), true)
 
@@ -465,7 +465,7 @@ test('prepare and external begin must return their exact lifecycle states', asyn
     { prepare: async () => ({ state: 'failed' }) }
   )
   const unpreparedDecision = unprepared.coordinator.beforeEnter(
-    'systemctl restart nginx',
+    '/usr/bin/systemctl start nginx',
     protectedContext()
   )
 
@@ -481,7 +481,7 @@ test('prepare and external begin must return their exact lifecycle states', asyn
     { begin: async id => ({ id, state: 'failed' }) }
   )
   const unbegunDecision = unbegun.coordinator.beforeEnter(
-    'systemctl restart nginx',
+    '/usr/bin/systemctl start nginx',
     protectedContext()
   )
 
@@ -503,7 +503,7 @@ test('duplicate confirmation starts only one preparation', async () => {
     { prepare: () => preparation.promise }
   )
   const decision = coordinator.beforeEnter(
-    'systemctl restart nginx',
+    '/usr/bin/systemctl start nginx',
     protectedContext()
   )
 

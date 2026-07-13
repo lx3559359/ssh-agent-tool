@@ -1,6 +1,7 @@
 import { redactAuditText } from './audit-redaction.js'
 import {
   classifyCommand,
+  isTrustedExecutablePath,
   tokenizeStaticShell
 } from './command-classifier.js'
 import { buildVerifiedRemoteAction } from './remote-recovery.js'
@@ -57,9 +58,16 @@ function isEnvironmentAssignment (value) {
 function parseInvocation (command) {
   const tokens = tokenizeStaticShell(command)
   let index = 0
-  while (isEnvironmentAssignment(tokens[index] || '')) index += 1
+  if (isEnvironmentAssignment(tokens[index] || '')) {
+    throw new Error('恢复命令不接受改变 executable 语义的前置环境变量。')
+  }
   let privileged = false
+  let sudoExecutable = ''
   if (executableName(tokens[index]) === 'sudo') {
+    if (!isTrustedExecutablePath(tokens[index])) {
+      throw new Error('sudo 必须使用可信绝对系统路径。')
+    }
+    sudoExecutable = tokens[index]
     privileged = true
     index += 1
     while (tokens[index]?.startsWith('-')) {
@@ -72,13 +80,22 @@ function parseInvocation (command) {
       }
       index += 1
     }
-    while (isEnvironmentAssignment(tokens[index] || '')) index += 1
+    if (isEnvironmentAssignment(tokens[index] || '')) {
+      throw new Error('sudo 后不接受改变 executable 语义的环境变量。')
+    }
   }
   if (!tokens[index]) throw new Error('命令缺少可执行程序。')
+  if (!isTrustedExecutablePath(tokens[index])) {
+    throw new Error('恢复 provider 仅接受可信绝对系统 executable。')
+  }
   return {
     words: tokens.slice(index),
-    privilege: privileged ? 'sudo -n ' : ''
+    privilege: privileged ? `${shellQuote(sudoExecutable)} -n ` : ''
   }
+}
+
+function invocationTool (invocation) {
+  return `${invocation.privilege}${shellQuote(invocation.words[0])}`
 }
 
 function assertSafeName (value, label, pattern = /^[A-Za-z0-9_.:@-]+$/) {
@@ -379,13 +396,16 @@ function buildPermissionsProvider (command, id) {
   const target = assertOrdinaryAbsolutePath(invocation.words[2], '权限目标')
   const quotedTarget = shellQuote(target)
   const prefix = invocation.privilege
+  const tool = invocationTool(invocation)
+  const chmod = executable === 'chmod' ? tool : `${prefix}chmod`
+  const chown = executable === 'chown' ? tool : `${prefix}chown`
   const rollback = [
     ...scriptHeader(id),
     `target=${quotedTarget}`,
     'IFS=\' \' read -r mode uid gid < "$operation_dir/backup/permissions-state"',
     'case "$mode:$uid:$gid" in *[!0-9:]*) exit 43;; esac',
-    `${prefix}chown "$uid:$gid" -- "$target"`,
-    `${prefix}chmod "$mode" -- "$target"`
+    `${chown} "$uid:$gid" -- "$target"`,
+    `${chmod} "$mode" -- "$target"`
   ]
   const verify = [
     ...scriptHeader(id),
@@ -414,30 +434,33 @@ function buildSystemdProvider (command, id) {
   if (executableName(words[0]) === 'systemctl' && words[1] === 'reload') {
     throw new Error('systemd reload 无法撤销，首版拒绝自动回滚。')
   }
+  if (executableName(words[0]) === 'systemctl' && words[1] === 'restart') {
+    throw new Error('systemd restart 无法自动恢复原进程和连接状态。')
+  }
   if (executableName(words[0]) !== 'systemctl' || words.length !== 3 ||
-    !['start', 'stop', 'restart', 'enable', 'disable'].includes(words[1])) {
-    throw new Error('systemd 首版只支持静态单服务 start/stop/restart/enable/disable。')
+    !['start', 'stop', 'enable', 'disable'].includes(words[1])) {
+    throw new Error('systemd 首版只支持静态单服务 start/stop/enable/disable。')
   }
   const service = assertSafeName(words[2], 'systemd 服务')
   const quotedService = shellQuote(service)
-  const prefix = invocation.privilege
-  const activeQuery = `${prefix}systemctl is-active -- ${quotedService} 2>/dev/null || true`
-  const enabledQuery = `${prefix}systemctl is-enabled -- ${quotedService} 2>/dev/null || true`
+  const tool = invocationTool(invocation)
+  const activeQuery = `${tool} is-active -- ${quotedService} 2>/dev/null || true`
+  const enabledQuery = `${tool} is-enabled -- ${quotedService} 2>/dev/null || true`
   const rollback = [
     ...scriptHeader(id),
     `service=${quotedService}`,
     'old_active=$(cat "$operation_dir/backup/old-active")',
     'old_enabled=$(cat "$operation_dir/backup/old-enabled")',
-    `case "$old_enabled" in enabled) ${prefix}systemctl enable -- "$service";; disabled) ${prefix}systemctl disable -- "$service";; *) exit 43;; esac`,
-    `case "$old_active" in active) ${prefix}systemctl start -- "$service";; inactive) ${prefix}systemctl stop -- "$service";; *) exit 43;; esac`
+    `case "$old_enabled" in enabled) ${tool} enable -- "$service";; disabled) ${tool} disable -- "$service";; *) exit 43;; esac`,
+    `case "$old_active" in active) ${tool} start -- "$service";; inactive) ${tool} stop -- "$service";; *) exit 43;; esac`
   ]
   const verify = [
     ...scriptHeader(id),
     `service=${quotedService}`,
     'old_active=$(cat "$operation_dir/backup/old-active")',
     'old_enabled=$(cat "$operation_dir/backup/old-enabled")',
-    `current_active=$(${prefix}systemctl is-active -- "$service" 2>/dev/null || true)`,
-    `current_enabled=$(${prefix}systemctl is-enabled -- "$service" 2>/dev/null || true)`,
+    `current_active=$(${tool} is-active -- "$service" 2>/dev/null || true)`,
+    `current_enabled=$(${tool} is-enabled -- "$service" 2>/dev/null || true)`,
     'printf \'active=%s\\nenabled=%s\\n\' "$current_active" "$current_enabled"',
     '[ "$current_active" = "$old_active" ]',
     '[ "$current_enabled" = "$old_enabled" ]'
@@ -458,24 +481,27 @@ function buildSystemdProvider (command, id) {
 function buildDockerProvider (command, id) {
   const invocation = parseInvocation(command)
   const words = invocation.words
+  if (executableName(words[0]) === 'docker' && words[1] === 'restart') {
+    throw new Error('Docker restart 无法自动恢复原进程和连接状态。')
+  }
   if (executableName(words[0]) !== 'docker' || words.length !== 3 ||
-    !['start', 'stop', 'restart'].includes(words[1])) {
-    throw new Error('Docker 首版只支持静态单容器 start/stop/restart，rm 不提供自动回滚。')
+    !['start', 'stop'].includes(words[1])) {
+    throw new Error('Docker 首版只支持静态单容器 start/stop，restart/rm 不提供自动回滚。')
   }
   const container = assertSafeName(words[2], 'Docker 容器', /^[A-Za-z0-9][A-Za-z0-9_.-]*$/)
   const quotedContainer = shellQuote(container)
-  const prefix = invocation.privilege
-  const inspect = `${prefix}docker inspect -f '{{.State.Running}}' -- ${quotedContainer}`
+  const tool = invocationTool(invocation)
+  const inspect = `${tool} inspect -f '{{.State.Running}}' -- ${quotedContainer}`
   const rollback = [
     ...scriptHeader(id),
     `container=${quotedContainer}`,
     'running=$(cat "$operation_dir/backup/running")',
-    `case "$running" in true) ${prefix}docker start -- "$container" >/dev/null;; false) ${prefix}docker stop -- "$container" >/dev/null;; *) exit 43;; esac`
+    `case "$running" in true) ${tool} start -- "$container" >/dev/null;; false) ${tool} stop -- "$container" >/dev/null;; *) exit 43;; esac`
   ]
   const verify = [
     ...scriptHeader(id),
     `container=${quotedContainer}`,
-    `current=$(${prefix}docker inspect -f '{{.State.Running}}' -- "$container")`,
+    `current=$(${tool} inspect -f '{{.State.Running}}' -- "$container")`,
     'expected=$(cat "$operation_dir/backup/running")',
     'printf \'running=%s\\n\' "$current"',
     '[ "$current" = "$expected" ]'
@@ -532,11 +558,11 @@ function parseFirewalld (invocation) {
 
 function buildFirewalldProvider (invocation, id) {
   const parsed = parseFirewalld(invocation)
-  const prefix = invocation.privilege
+  const tool = invocationTool(invocation)
   const options = `${parsed.permanent ? ' --permanent' : ''} --zone=${parsed.zone}`
-  const query = `${prefix}firewall-cmd${options} --query-port=${parsed.port}`
-  const add = `${prefix}firewall-cmd${options} --add-port=${parsed.port}`
-  const remove = `${prefix}firewall-cmd${options} --remove-port=${parsed.port}`
+  const query = `${tool}${options} --query-port=${parsed.port}`
+  const add = `${tool}${options} --add-port=${parsed.port}`
+  const remove = `${tool}${options} --remove-port=${parsed.port}`
   const rollback = [
     ...scriptHeader(id),
     'present=$(cat "$operation_dir/backup/rule-present")',
@@ -577,11 +603,11 @@ function buildUfwProvider (invocation, id) {
   if (words.length === 2 && words[0] === 'allow') port = assertPort(words[1])
   if (words.length === 3 && words[0] === 'delete' && words[1] === 'allow') port = assertPort(words[2])
   if (!port) throw new Error('ufw 首版只支持单一端口 allow 或 delete allow。')
-  const prefix = invocation.privilege
+  const tool = invocationTool(invocation)
   const canonical = shellQuote(`ufw allow ${port}`)
-  const query = `${prefix}ufw show added`
-  const add = `${prefix}ufw allow ${port}`
-  const remove = `${prefix}ufw --force delete allow ${port}`
+  const query = `${tool} show added`
+  const add = `${tool} allow ${port}`
+  const remove = `${tool} --force delete allow ${port}`
   const queryState = (stateVariable, exitCode) => [
     captureQueryOutput(query, 'ufw_output', 'ufw 查询失败，退出码', exitCode),
     exactLineState('ufw_output', canonical, stateVariable, 'ufw 输出匹配失败，退出码', exitCode)
@@ -646,13 +672,13 @@ function buildNetworkProvider (command, id) {
   const action = words[2] === 'add' ? 'add' : 'del'
   const cidr = assertCidr(words[3])
   const iface = assertSafeName(words[5], '网络接口', /^[A-Za-z0-9_.:-]+$/)
-  const prefix = invocation.privilege
+  const tool = invocationTool(invocation)
   const quotedCidr = shellQuote(cidr)
   const quotedIface = shellQuote(iface)
-  const addressQuery = `${prefix}ip -o addr show dev ${quotedIface}`
+  const addressQuery = `${tool} -o addr show dev ${quotedIface}`
   const primaryQuery = `${addressQuery} scope global primary`
-  const add = `${prefix}ip addr add ${quotedCidr} dev ${quotedIface}`
-  const remove = `${prefix}ip addr del ${quotedCidr} dev ${quotedIface}`
+  const add = `${tool} addr add ${quotedCidr} dev ${quotedIface}`
+  const remove = `${tool} addr del ${quotedCidr} dev ${quotedIface}`
   const queryState = (stateVariable, exitCode) => [
     captureQueryOutput(addressQuery, 'address_output', '网络地址查询失败，退出码', exitCode),
     `if address_values=$(printf '%s\\n' "$address_output" | awk '{print $4}'); then :; else parse_rc=$?; echo ${shellQuote('网络地址解析失败，退出码')} "$parse_rc" >&2; exit ${exitCode}; fi`,

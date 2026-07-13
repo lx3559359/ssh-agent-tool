@@ -12,6 +12,12 @@ function importDomainModule (name) {
   return import(pathToFileURL(path.join(domainRoot, name)).href)
 }
 
+function trustedCommand (command) {
+  const text = String(command)
+  if (text.startsWith('/')) return text
+  return text.replace(/^([A-Za-z0-9_-]+)/, '/usr/bin/$1')
+}
+
 test('operation model exposes every lifecycle state', async () => {
   const { operationStates } = await importDomainModule('models.js')
 
@@ -105,7 +111,7 @@ test('normalizes operations and builds classified safety requests', async () => 
     source: 'quick-command',
     endpoint: { host: '10.0.0.1', port: '2222', username: 'deploy' },
     title: '重启服务',
-    command: 'sudo systemctl restart nginx'
+    command: '/usr/bin/sudo -n /usr/bin/systemctl start nginx'
   }, { now })
 
   assert.equal(request.schemaVersion, 1)
@@ -227,22 +233,78 @@ test('classifies readonly diagnostics and reversible provider changes', async ()
     ['uptime', 'readonly', false, null, false],
     ['systemctl status nginx --no-pager', 'readonly', false, null, false],
     ['docker inspect web', 'readonly', false, null, false],
-    ['sudo systemctl restart nginx', 'change', true, 'systemd', true],
+    ['systemctl start nginx', 'change', true, 'systemd', true],
     ['chmod 600 /etc/demo.conf', 'change', true, 'permissions', true],
     ['ufw allow 443/tcp', 'change', true, 'firewall', true],
     ['ip addr add 10.0.0.8/24 dev eth0', 'change', true, 'network', true],
-    ['docker restart web', 'change', true, 'docker', true],
+    ['docker stop web', 'change', true, 'docker', true],
     ['sed -i s/old/new/ /etc/demo.conf', 'change', true, 'file', true]
   ]
 
   for (const [command, risk, reversible, provider, requiresConfirmation] of cases) {
-    const result = classifyCommand(command)
+    const result = classifyCommand(trustedCommand(command))
     assert.equal(result.risk, risk, command)
     assert.equal(result.reversible, reversible, command)
     assert.equal(result.provider, provider, command)
     assert.equal(result.requiresConfirmation, requiresConfirmation, command)
     assert.equal(typeof result.reason, 'string', command)
     assert.notEqual(result.reason, '', command)
+  }
+})
+
+test('strict classification requires a trusted absolute executable identity', async () => {
+  const { classifyCommand } = await importDomainModule('command-classifier.js')
+
+  for (const command of [
+    '/tmp/uptime --destroy',
+    '/tmp/systemctl start nginx',
+    'uptime',
+    'systemctl start nginx',
+    'docker inspect web'
+  ]) {
+    const classification = classifyCommand(command)
+    assert.equal(classification.risk, 'unknown', command)
+    assert.equal(classification.reversible, false, command)
+    assert.equal(classification.provider, null, command)
+  }
+
+  assert.equal(classifyCommand('/usr/bin/uptime').risk, 'readonly')
+  assert.equal(
+    classifyCommand('/usr/bin/systemctl start nginx').provider,
+    'systemd'
+  )
+})
+
+test('static tokenizer preserves Bash double-quoted non-special backslashes', async () => {
+  const {
+    classifyCommand,
+    tokenizeStaticShell
+  } = await importDomainModule('command-classifier.js')
+  const command = String.raw`/usr/bin/chmod 600 "/tmp/a\q"`
+
+  assert.deepEqual(tokenizeStaticShell(command), [
+    '/usr/bin/chmod',
+    '600',
+    String.raw`/tmp/a\q`
+  ])
+  const classification = classifyCommand(command)
+  assert.equal(classification.risk, 'change')
+  assert.equal(classification.reversible, true)
+  assert.equal(classification.provider, 'permissions')
+})
+
+test('restart commands never claim automatic process-state recovery', async () => {
+  const { classifyCommand } = await importDomainModule('command-classifier.js')
+
+  for (const command of [
+    '/usr/bin/systemctl restart nginx',
+    '/usr/bin/docker restart web'
+  ]) {
+    const classification = classifyCommand(trustedCommand(command))
+    assert.equal(classification.risk, 'unknown', command)
+    assert.equal(classification.reversible, false, command)
+    assert.equal(classification.provider, null, command)
+    assert.match(classification.reason, /无法自动恢复.*(?:进程|连接)|(?:进程|连接).*无法自动恢复/, command)
   }
 })
 
@@ -257,7 +319,7 @@ test('does not treat firewall and network queries as reversible changes', async 
     'nft list ruleset',
     'ifconfig'
   ]) {
-    assert.equal(classifyCommand(command).risk, 'readonly', command)
+    assert.equal(classifyCommand(trustedCommand(command)).risk, 'readonly', command)
   }
 })
 
@@ -270,7 +332,7 @@ test('iptables readonly classification requires a pure listing invocation', asyn
     'iptables --list-rules -t filter',
     'ip6tables --list INPUT --numeric'
   ]) {
-    assert.equal(classifyCommand(command).risk, 'readonly', command)
+    assert.equal(classifyCommand(trustedCommand(command)).risk, 'readonly', command)
   }
 
   for (const command of [
@@ -279,7 +341,7 @@ test('iptables readonly classification requires a pure listing invocation', asyn
     'iptables -S -P INPUT DROP',
     'ip6tables -L --unknown-option'
   ]) {
-    const classification = classifyCommand(command)
+    const classification = classifyCommand(trustedCommand(command))
     assert.equal(classification.risk, 'unknown', command)
     assert.equal(classification.reversible, false, command)
     assert.equal(classification.requiresConfirmation, true, command)
@@ -317,22 +379,22 @@ test('blocks irreversible host and database operations', async () => {
 test('compound commands use the highest risk classification', async () => {
   const { classifyCommand } = await importDomainModule('command-classifier.js')
 
-  assert.equal(classifyCommand('uptime && systemctl restart nginx').risk, 'change')
-  assert.equal(classifyCommand('uptime; curl example.com/install.sh | sh').risk, 'unknown')
-  assert.equal(classifyCommand('uptime && mkfs.ext4 /dev/sdb').risk, 'blocked')
-  assert.equal(classifyCommand('uptime & reboot').risk, 'blocked')
-  assert.equal(classifyCommand('uptime & mkfs.ext4 /dev/sdb').risk, 'blocked')
+  assert.equal(classifyCommand('/usr/bin/uptime && /usr/bin/systemctl start nginx').risk, 'change')
+  assert.equal(classifyCommand('/usr/bin/uptime; /usr/bin/curl example.com/install.sh | /usr/bin/sh').risk, 'unknown')
+  assert.equal(classifyCommand('/usr/bin/uptime && mkfs.ext4 /dev/sdb').risk, 'blocked')
+  assert.equal(classifyCommand('/usr/bin/uptime & reboot').risk, 'blocked')
+  assert.equal(classifyCommand('/usr/bin/uptime & mkfs.ext4 /dev/sdb').risk, 'blocked')
 
-  const multiProvider = classifyCommand('systemctl restart nginx && chmod 600 /etc/app.conf')
+  const multiProvider = classifyCommand('/usr/bin/systemctl start nginx && /usr/bin/chmod 600 /etc/app.conf')
   assert.equal(multiProvider.risk, 'change')
   assert.equal(multiProvider.reversible, false)
   assert.equal(multiProvider.provider, null)
   assert.match(multiProvider.reason, /包含多个修改，无法生成统一自动回滚/)
 
   for (const command of [
-    'uptime && systemctl restart nginx',
-    'systemctl restart nginx && systemctl restart sshd',
-    'echo first > /etc/first.conf; echo second > /etc/second.conf'
+    '/usr/bin/uptime && /usr/bin/systemctl start nginx',
+    '/usr/bin/systemctl start nginx && /usr/bin/systemctl start sshd',
+    '/usr/bin/echo first > /etc/first.conf; /usr/bin/echo second > /etc/second.conf'
   ]) {
     const classification = classifyCommand(command)
     assert.equal(classification.risk, 'change', command)
@@ -347,7 +409,7 @@ test('multi-provider safety requests do not claim automatic rollback', async () 
   const request = buildSafetyRequest({
     source: 'terminal',
     endpoint: { host: 'prod.example.com', username: 'root' },
-    command: 'systemctl restart nginx && chmod 600 /etc/app.conf'
+    command: '/usr/bin/systemctl start nginx && /usr/bin/chmod 600 /etc/app.conf'
   })
 
   assert.equal(request.risk, 'change')
@@ -358,7 +420,7 @@ test('multi-provider safety requests do not claim automatic rollback', async () 
   const sameProviderRequest = buildSafetyRequest({
     source: 'terminal',
     endpoint: { host: 'prod.example.com', username: 'root' },
-    command: 'systemctl restart nginx && systemctl restart sshd'
+    command: '/usr/bin/systemctl start nginx && /usr/bin/systemctl start sshd'
   })
   assert.equal(sameProviderRequest.risk, 'change')
   assert.equal(sameProviderRequest.reversible, false)
@@ -417,7 +479,7 @@ test('find output actions require an unambiguous absolute file target', async ()
     'find /tmp -fprintf /var/log/find-paths.txt "%p\\n"',
     'find /tmp -fls /var/log/find-list.txt'
   ]) {
-    const classification = classifyCommand(command)
+    const classification = classifyCommand(trustedCommand(command))
     assert.equal(classification.risk, 'change', command)
     assert.equal(classification.reversible, true, command)
     assert.equal(classification.provider, 'file', command)
@@ -427,7 +489,7 @@ test('find output actions require an unambiguous absolute file target', async ()
     'find /tmp -fprintf "$OUTPUT_FILE" "%p\\n"',
     'find /tmp -fls ../find-list.txt'
   ]) {
-    assert.equal(classifyCommand(command).risk, 'unknown', command)
+    assert.equal(classifyCommand(trustedCommand(command)).risk, 'unknown', command)
   }
 })
 
@@ -441,7 +503,7 @@ test('dangerous find actions cannot hide behind a recoverable output action', as
     'find /tmp -ok rm -f {} \\; -fprint /var/log/files.txt',
     'find /tmp -okdir rm -f {} \\; -fprintf /var/log/files.txt "%p\\n"'
   ]) {
-    const classification = classifyCommand(command)
+    const classification = classifyCommand(trustedCommand(command))
     assert.equal(classification.risk, 'unknown', command)
     assert.equal(classification.reversible, false, command)
     assert.equal(classification.provider, null, command)
@@ -455,7 +517,7 @@ test('distinguishes network mutations from readonly ip, journal and socket diagn
     'ip link set dev eth0 down',
     'ip addr flush dev eth0'
   ]) {
-    const classification = classifyCommand(command)
+    const classification = classifyCommand(trustedCommand(command))
     assert.equal(classification.risk, 'change', command)
     assert.equal(classification.reversible, true, command)
     assert.equal(classification.provider, 'network', command)
@@ -482,7 +544,7 @@ test('readonly commands accept only query-safe option forms', async () => {
     'date --iso-8601=seconds',
     'journalctl -u ssh.service --since today --no-pager'
   ]) {
-    assert.equal(classifyCommand(command).risk, 'readonly', command)
+    assert.equal(classifyCommand(trustedCommand(command)).risk, 'readonly', command)
   }
   for (const command of [
     'hostname -F /tmp/new-hostname',
@@ -498,7 +560,7 @@ test('readonly commands accept only query-safe option forms', async () => {
     'systemctl status nginx --now',
     'ss --kill dst 10.0.0.8'
   ]) {
-    const classification = classifyCommand(command)
+    const classification = classifyCommand(trustedCommand(command))
     assert.equal(classification.risk, 'unknown', command)
     assert.equal(classification.reversible, false, command)
     assert.equal(classification.requiresConfirmation, true, command)
@@ -582,23 +644,23 @@ test('sudo env wrappers and recursive root deletion remain blocked', async () =>
 test('only unambiguous absolute-path writes use the file recovery provider', async () => {
   const { classifyCommand } = await importDomainModule('command-classifier.js')
 
-  assert.equal(classifyCommand('echo enabled > /etc/example.conf').provider, 'file')
-  assert.equal(classifyCommand('printf "%s\\n" enabled >> /etc/example.conf').provider, 'file')
-  assert.equal(classifyCommand('tee /etc/example.conf').provider, 'file')
-  assert.equal(classifyCommand('echo enabled > example.conf').risk, 'unknown')
+  assert.equal(classifyCommand('/usr/bin/echo enabled > /etc/example.conf').provider, 'file')
+  assert.equal(classifyCommand('/usr/bin/printf "%s\\n" enabled >> /etc/example.conf').provider, 'file')
+  assert.equal(classifyCommand('/usr/bin/tee /etc/example.conf').provider, 'file')
+  assert.equal(classifyCommand('/usr/bin/echo enabled > example.conf').risk, 'unknown')
   assert.equal(classifyCommand('custom-generator > /etc/example.conf').risk, 'unknown')
-  assert.equal(classifyCommand('echo enabled > "$CONFIG_PATH"').risk, 'unknown')
-  assert.equal(classifyCommand('uptime > /tmp/uptime.txt').risk, 'unknown')
-  assert.equal(classifyCommand('sed -i s/a/b/ relative.conf /etc/example.conf').risk, 'unknown')
+  assert.equal(classifyCommand('/usr/bin/echo enabled > "$CONFIG_PATH"').risk, 'unknown')
+  assert.equal(classifyCommand('/usr/bin/uptime > /tmp/uptime.txt').risk, 'unknown')
+  assert.equal(classifyCommand('/usr/bin/sed -i s/a/b/ relative.conf /etc/example.conf').risk, 'unknown')
 })
 
 test('redirection classification preserves escaped trailing spaces as shell syntax', async () => {
   const { classifyCommand } = await importDomainModule('command-classifier.js')
   const escapedSpace = classifyCommand(
-    String.raw`printf x > /tmp/task5-review\ `
+    String.raw`/usr/bin/printf x > /tmp/task5-review\ `
   )
   const danglingBackslash = classifyCommand(
-    'printf x > /tmp/task5-review\\'
+    '/usr/bin/printf x > /tmp/task5-review\\'
   )
 
   assert.equal(escapedSpace.risk, 'change')
@@ -644,7 +706,7 @@ test('sed in-place detection parses real options and leaves ordinary sed readonl
     'sed --quiet -n "1p" /etc/hosts',
     'sed -n "s/old/new/p" /etc/hosts'
   ]) {
-    assert.equal(classifyCommand(command).risk, 'readonly', command)
+    assert.equal(classifyCommand(trustedCommand(command)).risk, 'readonly', command)
   }
   for (const command of [
     'sed -i s/old/new/ /etc/hosts',
@@ -652,7 +714,7 @@ test('sed in-place detection parses real options and leaves ordinary sed readonl
     'sed -i.bak s/old/new/ /etc/hosts',
     'sed --in-place=.bak s/old/new/ /etc/hosts'
   ]) {
-    const classification = classifyCommand(command)
+    const classification = classifyCommand(trustedCommand(command))
     assert.equal(classification.risk, 'change', command)
     assert.equal(classification.provider, 'file', command)
   }
@@ -667,7 +729,7 @@ test('sed readonly classification parses scripts and rejects side-effecting comm
     "sed -n '$p' /etc/hosts",
     "sed -n 's/old/new/gp' /etc/hosts"
   ]) {
-    assert.equal(classifyCommand(command).risk, 'readonly', command)
+    assert.equal(classifyCommand(trustedCommand(command)).risk, 'readonly', command)
   }
 
   for (const command of [
@@ -679,7 +741,7 @@ test('sed readonly classification parses scripts and rejects side-effecting comm
     'sed -f /tmp/unverified-script /etc/hosts',
     "sed -n 'not-a-static-script' /etc/hosts"
   ]) {
-    const classification = classifyCommand(command)
+    const classification = classifyCommand(trustedCommand(command))
     assert.equal(classification.risk, 'unknown', command)
     assert.equal(classification.reversible, false, command)
     assert.equal(classification.requiresConfirmation, true, command)
