@@ -3,13 +3,6 @@
  */
 
 const { resolve } = require('path')
-const { existsSync, renameSync } = require('fs')
-const { appPath, defaultUserName } = require('../common/app-props')
-const log = require('../common/log')
-
-const reso = (name) => {
-  return resolve(appPath, 'electerm', 'users', defaultUserName, `electerm.${name}.nedb`)
-}
 
 const tables = [
   'bookmarks',
@@ -21,83 +14,120 @@ const tables = [
   'quickCommands',
   'log',
   'dbUpgradeLog',
-  'profiles'
+  'profiles',
+  'safetyOperations',
+  'agentTasks'
 ]
 
-/**
- * Check if migration from v1 (NeDB) to v2 (SQLite) is needed
- * @returns {boolean} true if migration is needed
- */
-function checkMigrate () {
-  if (process.versions.node < '22.0.0') {
-    return false
-  }
-  // Check if any NeDB files exist
-  for (const table of tables) {
-    const nedbPath = reso(table)
-    if (existsSync(nedbPath)) {
-      return true
+const safetyTables = new Set([
+  'safetyOperations',
+  'agentTasks'
+])
+
+function createMigration (options = {}) {
+  let dependencies
+
+  function getDependencies () {
+    if (dependencies) return dependencies
+    const appProps = options.appPath !== undefined && options.defaultUserName !== undefined
+      ? options
+      : require('../common/app-props')
+    const fs = require('fs')
+    const hasCryptoOptions = Object.prototype.hasOwnProperty.call(options, 'enc') ||
+      Object.prototype.hasOwnProperty.call(options, 'dec')
+    const crypto = hasCryptoOptions ? options : require('../lib/safe-storage')
+    const enc = hasCryptoOptions ? crypto.enc : crypto.safeEncrypt
+    const dec = hasCryptoOptions ? crypto.dec : crypto.safeDecrypt
+    if (typeof enc !== 'function' || typeof dec !== 'function') {
+      throw new Error('NeDB to SQLite migration requires explicit encryption and decryption functions')
     }
-  }
-  return false
-}
+    const upgrade = options.checkDbUpgrade && options.doUpgrade
+      ? options
+      : require('./index')
 
-/**
- * Migrate all data from NeDB to SQLite and backup NeDB files
- */
-async function migrate () {
-  log.info('Starting migration from NeDB (v1) to SQLite (v2)...')
-  // nedb-instance: raw nedb without enc/dec (legacy data was never encrypted)
-  const { dbAction: nedbDbAction } = require('./nedb-instance')
-  // Use plain sqlite (no enc/dec) for migration writes: safeStorage encryption
-  // is not reliable across restarts in the IPC/migration context. The app's
-  // normal read/write path will encrypt data on the next user-triggered write.
-  const { appPath, defaultUserName } = require('../common/app-props')
-  const { createDb: createSqlite } = require('../lib/sqlite')
-  const { dbAction: sqliteDbAction } = createSqlite(appPath, defaultUserName)
-  const {
-    checkDbUpgrade,
-    doUpgrade
-  } = require('./index')
-  if (await checkDbUpgrade()) {
-    await doUpgrade()
+    dependencies = {
+      appPath: appProps.appPath,
+      defaultUserName: appProps.defaultUserName,
+      enc,
+      dec,
+      createNedb: options.createNedb || require('../lib/nedb').createDb,
+      createSqlite: options.createSqlite || require('../lib/sqlite').createDb,
+      checkDbUpgrade: upgrade.checkDbUpgrade,
+      doUpgrade: upgrade.doUpgrade,
+      existsSync: options.existsSync || fs.existsSync,
+      renameSync: options.renameSync || fs.renameSync,
+      log: options.log || require('../common/log'),
+      nodeVersion: options.nodeVersion || process.versions.node
+    }
+    return dependencies
   }
 
-  // Migrate data from each table
-  for (const table of tables) {
-    const nedbPath = reso(table)
+  function reso (name) {
+    const { appPath, defaultUserName } = getDependencies()
+    return resolve(appPath, 'electerm', 'users', defaultUserName, `electerm.${name}.nedb`)
+  }
 
-    if (existsSync(nedbPath)) {
+  function checkMigrate () {
+    const nodeVersion = options.nodeVersion || process.versions.node
+    if (Number(String(nodeVersion).split('.')[0]) < 22) return false
+    const { existsSync } = getDependencies()
+    return tables.some(table => existsSync(reso(table)))
+  }
+
+  async function migrate () {
+    const deps = getDependencies()
+    const {
+      appPath,
+      defaultUserName,
+      enc,
+      dec,
+      createNedb,
+      createSqlite,
+      checkDbUpgrade,
+      doUpgrade,
+      existsSync,
+      renameSync,
+      log
+    } = deps
+    log.info('Starting migration from NeDB (v1) to SQLite (v2)...')
+
+    if (await checkDbUpgrade()) await doUpgrade()
+
+    const encOptions = { enc, dec }
+    const { dbAction: nedbDbAction } = createNedb(appPath, defaultUserName, encOptions)
+    const { dbAction: sqliteDbAction } = createSqlite(appPath, defaultUserName, encOptions)
+
+    for (const table of tables) {
+      const nedbPath = reso(table)
+      if (!existsSync(nedbPath)) {
+        log.info(`NeDB file for ${table} does not exist, skipping`)
+        continue
+      }
+
       log.info(`Migrating table: ${table}`)
-
-      // Read all data from NeDB (unencrypted legacy data)
       const nedbData = await nedbDbAction(table, 'find', {})
-
       if (nedbData && nedbData.length > 0) {
         log.info(`Found ${nedbData.length} records in ${table}`)
-
-        // Insert/update data into SQLite via db.js so enc/dec is applied
         for (const record of nedbData) {
-          // Ensure record has an _id field
+          if (safetyTables.has(table) && record._encdata) {
+            throw new Error(`Refusing to migrate undecrypted ${table} record ${record._id || record.id || ''}`)
+          }
           const recordId = record._id || record.id
           if (!recordId) {
             log.warn(`Record in ${table} has no _id or id field, skipping:`, record)
             continue
           }
-          // Use update with upsert option to handle existing records gracefully
           await sqliteDbAction(table, 'update',
             { _id: recordId },
             { $set: record },
             { upsert: true }
           )
         }
-
         log.info(`Successfully migrated ${nedbData.length} records from ${table}`)
       } else {
         log.info(`Table ${table} is empty, nothing to migrate`)
       }
 
-      // Rename NeDB file to .bak
       const backupPath = nedbPath + '.bak'
       try {
         renameSync(nedbPath, backupPath)
@@ -105,16 +135,23 @@ async function migrate () {
       } catch (renameError) {
         log.error(`Error backing up ${nedbPath}:`, renameError)
       }
-    } else {
-      log.info(`NeDB file for ${table} does not exist, skipping`)
     }
+
+    log.info('Migration from NeDB to SQLite completed successfully')
+    return true
   }
 
-  log.info('Migration from NeDB to SQLite completed successfully')
-  return true
+  return {
+    checkMigrate,
+    migrate
+  }
 }
 
+const defaultMigration = createMigration()
+
 module.exports = {
-  checkMigrate,
-  migrate
+  tables,
+  createMigration,
+  checkMigrate: defaultMigration.checkMigrate,
+  migrate: defaultMigration.migrate
 }

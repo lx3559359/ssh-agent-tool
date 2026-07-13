@@ -6,12 +6,13 @@ import {
 } from './models.js'
 import { redactSensitiveData } from './audit-redaction.js'
 import {
-  normalizeSafetyOperationRecord,
+  normalizeLegacySafetyOperationRecord,
   readSafetyOperationRecordsForMigration
 } from '../safety-operation-records.js'
 
 const operationTable = 'safetyOperations'
 const taskTable = 'agentTasks'
+const patchQueuesByAdapter = new WeakMap()
 
 export const legacyMigrationMarkerId = 'safetyOperations:legacy-migration:v1'
 
@@ -48,6 +49,10 @@ const defaultAdapter = {
   async find (...args) {
     const { find } = await import('../db.js')
     return find(...args)
+  },
+  async getData (...args) {
+    const { getData } = await import('../db.js')
+    return getData(...args)
   },
   async remove (...args) {
     const { remove } = await import('../db.js')
@@ -141,15 +146,8 @@ function stableHash (value) {
   return (hash >>> 0).toString(36)
 }
 
-function legacyId (record, source) {
-  if (record.id) return String(record.id)
-  return `legacy:${source}:${stableHash({
-    source,
-    createdAt: record.createdAt || '',
-    target: record.target || record.sourcePath || record.rollbackPath || record.path || '',
-    host: record.host || '',
-    title: record.title || ''
-  })}`
+function fingerprintLegacyRecords (records) {
+  return stableHash(records.map(record => stableSerialize(record)).sort())
 }
 
 function legacyState (record) {
@@ -165,8 +163,8 @@ function legacyState (record) {
 function normalizeLegacyOperation (record, clock) {
   const inferredSource = record.source || (record.rollbackPath || record.path ? 'quick-command' : 'sftp')
   const source = validOperationSources.has(inferredSource) ? inferredSource : 'sftp'
-  const id = legacyId(record, source)
-  const normalizedLegacy = normalizeSafetyOperationRecord({ ...record, id }, { source })
+  const normalizedLegacy = normalizeLegacySafetyOperationRecord(record, { source })
+  const id = normalizedLegacy.id
   const endpointIncomplete = !normalizedLegacy.host || !normalizedLegacy.username
   const endpoint = {
     tabId: normalizedLegacy.tabId,
@@ -222,6 +220,21 @@ function mergeOperations (stored, legacy) {
   })
 }
 
+function enqueuePatch (adapter, table, id, work) {
+  let queues = patchQueuesByAdapter.get(adapter)
+  if (!queues) {
+    queues = new Map()
+    patchQueuesByAdapter.set(adapter, queues)
+  }
+  const key = `${table}:${id}`
+  const previous = queues.get(key) || Promise.resolve()
+  const current = previous.catch(() => {}).then(work)
+  queues.set(key, current)
+  return current.finally(() => {
+    if (queues.get(key) === current) queues.delete(key)
+  })
+}
+
 export function createTransactionStore (options = {}) {
   const adapter = options.adapter || options.db || defaultAdapter
   const getLegacyStorage = async () => options.legacyStorage || getDefaultLegacyStorage()
@@ -234,6 +247,14 @@ export function createTransactionStore (options = {}) {
   const clock = typeof options.now === 'function'
     ? options.now
     : () => options.now || new Date()
+
+  async function getMigrationMarker () {
+    if (typeof adapter.getData === 'function') {
+      return adapter.getData(legacyMigrationMarkerId, true)
+    }
+    const record = await adapter.findOne('data', legacyMigrationMarkerId, true)
+    return record?.value || record
+  }
 
   async function saveOperation (operation) {
     const item = normalizeOperation({
@@ -256,46 +277,64 @@ export function createTransactionStore (options = {}) {
     const legacyOperations = rawLegacyRecords.map(record => {
       return normalizeLegacyOperation(record, clock)
     })
-    let storedOperations = await adapter.find(operationTable, true)
+    const legacyCount = rawLegacyRecords.length
+    const legacyFingerprint = fingerprintLegacyRecords(rawLegacyRecords)
+    const [initialStoredOperations, migrationMarker] = await Promise.all([
+      adapter.find(operationTable, true),
+      getMigrationMarker()
+    ])
+    let storedOperations = initialStoredOperations
 
     if (legacyOperations.length) {
+      const markerMatches = migrationMarker?.legacyCount === legacyCount &&
+        migrationMarker?.legacyFingerprint === legacyFingerprint
+      if (markerMatches) return mergeOperations(storedOperations, legacyOperations)
+
       const storedById = new Map(storedOperations.map(record => [record.id, record]))
+      const expectedById = new Map()
       for (const legacy of legacyOperations) {
         const stored = storedById.get(legacy.id)
         const preferred = chooseOperation(stored, legacy)
+        expectedById.set(legacy.id, preferred)
         if (preferred === legacy && !sameMigrationRecord(stored, legacy)) {
           await adapter.update(legacy.id, legacy, operationTable, true, true)
         }
-        const verified = await adapter.findOne(operationTable, legacy.id, true)
-        const expected = preferred === legacy ? legacy : stored
-        if (!verified || (expected === legacy && !sameMigrationRecord(verified, legacy))) {
-          throw new Error(`旧安全记录迁移回读验证失败：${legacy.id}`)
+      }
+
+      storedOperations = await adapter.find(operationTable, true)
+      const verifiedById = new Map(storedOperations.map(record => [record.id, record]))
+      for (const [id, expected] of expectedById) {
+        const verified = verifiedById.get(id)
+        if (!verified || !sameMigrationRecord(verified, expected)) {
+          throw new Error(`旧安全记录迁移批量验证失败：${id}`)
         }
-        storedById.set(legacy.id, verified)
       }
 
       await adapter.update(legacyMigrationMarkerId, {
         schemaVersion: 1,
-        migratedIds: legacyOperations.map(record => record.id).sort(),
+        legacyCount,
+        legacyFingerprint,
+        migratedIds: [...new Set(legacyOperations.map(record => record.id))].sort(),
         updatedAt: resolveNow(clock).toISOString()
       }, 'data', true, true)
-      storedOperations = await adapter.find(operationTable, true)
     }
 
     return mergeOperations(storedOperations, legacyOperations)
   }
 
   async function patchOperation (id, patch = {}) {
-    const current = await getOperation(id)
-    if (!current) throw new Error(`未找到安全操作：${id}`)
-    const item = normalizeOperation({
-      ...mergePatch(current, patch),
-      id: current.id,
-      createdAt: current.createdAt,
-      updatedAt: nextUpdatedAt(current.updatedAt, patch.updatedAt, clock)
-    }, { now: resolveNow(clock) })
-    await adapter.update(item.id, item, operationTable, true, true)
-    return item
+    return enqueuePatch(adapter, operationTable, id, async () => {
+      const current = await getOperation(id)
+      if (!current) throw new Error(`未找到安全操作：${id}`)
+      const item = normalizeOperation({
+        ...mergePatch(current, patch),
+        id: current.id,
+        createdAt: current.createdAt,
+        updatedAt: nextUpdatedAt(current.updatedAt, patch.updatedAt, clock)
+      }, { now: resolveNow(clock) })
+      await adapter.update(item.id, item, operationTable, true, true)
+      return item
+    })
   }
 
   async function removeOperation (id) {
@@ -317,16 +356,18 @@ export function createTransactionStore (options = {}) {
   }
 
   async function patchTask (id, patch = {}) {
-    const current = await getTask(id)
-    if (!current) throw new Error(`未找到 Agent 任务：${id}`)
-    const item = normalizeTask({
-      ...mergePatch(current, patch),
-      id: current.id,
-      createdAt: current.createdAt,
-      updatedAt: nextUpdatedAt(current.updatedAt, patch.updatedAt, clock)
-    }, clock)
-    await adapter.update(item.id, item, taskTable, true, true)
-    return item
+    return enqueuePatch(adapter, taskTable, id, async () => {
+      const current = await getTask(id)
+      if (!current) throw new Error(`未找到 Agent 任务：${id}`)
+      const item = normalizeTask({
+        ...mergePatch(current, patch),
+        id: current.id,
+        createdAt: current.createdAt,
+        updatedAt: nextUpdatedAt(current.updatedAt, patch.updatedAt, clock)
+      }, clock)
+      await adapter.update(item.id, item, taskTable, true, true)
+      return item
+    })
   }
 
   return {

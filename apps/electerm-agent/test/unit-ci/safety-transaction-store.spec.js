@@ -24,9 +24,8 @@ function clone (value) {
 function createMemoryAdapter (options = {}) {
   const tables = new Map()
   const calls = []
-  let findOneFailures = 0
-  let findOneFailureAt = 0
-  let findOneCallCount = 0
+  const updateCallCounts = new Map()
+  const updateFailureAt = new Map()
 
   function getTable (name) {
     if (!tables.has(name)) tables.set(name, new Map())
@@ -36,14 +35,11 @@ function createMemoryAdapter (options = {}) {
   return {
     calls,
     tables,
-    failNextFindOne (count = 1) {
-      findOneFailures = count
+    failUpdateAt (table, callNumber) {
+      updateFailureAt.set(table, callNumber)
     },
-    failFindOneAt (callNumber) {
-      findOneFailureAt = callNumber
-    },
-    get findOneCallCount () {
-      return findOneCallCount
+    getUpdateCallCount (table) {
+      return updateCallCounts.get(table) || 0
     },
     seed (table, value) {
       getTable(table).set(value.id, clone(value))
@@ -53,22 +49,23 @@ function createMemoryAdapter (options = {}) {
     },
     async update (id, value, table, upsert, propagateError) {
       calls.push({ method: 'update', id, table, upsert, propagateError })
+      const updateCount = (updateCallCounts.get(table) || 0) + 1
+      updateCallCounts.set(table, updateCount)
+      if (updateFailureAt.get(table) === updateCount) {
+        updateFailureAt.delete(table)
+        throw new Error(`forced ${table} update failure at ${updateCount}`)
+      }
       getTable(table).set(id, clone(value))
       await options.onUpdate?.({ id, value: clone(value), table })
       return 1
     },
     async findOne (table, id, propagateError) {
       calls.push({ method: 'findOne', id, table, propagateError })
-      findOneCallCount += 1
-      if (findOneFailureAt === findOneCallCount) {
-        findOneFailureAt = 0
-        return undefined
+      const found = clone(getTable(table).get(id))
+      if (options.wrapDataFindOne && table === 'data' && found) {
+        return { id, value: found }
       }
-      if (findOneFailures > 0) {
-        findOneFailures -= 1
-        return undefined
-      }
-      return clone(getTable(table).get(id))
+      return found
     },
     async find (table, propagateError) {
       calls.push({ method: 'find', table, propagateError })
@@ -220,6 +217,29 @@ test('operation storage rejects instead of swallowing database errors', async ()
   await assert.rejects(store.saveOperation(createOperation()), error => error === expected)
 })
 
+test('concurrent operation patches for one id are serialized without losing fields', async () => {
+  const { createTransactionStore } = await importStore()
+  const adapter = createMemoryAdapter()
+  const fixedNow = new Date('2026-07-13T08:09:10.000Z')
+  const store = createTransactionStore({ adapter, now: () => fixedNow })
+  const saved = await store.saveOperation(createOperation({
+    title: 'original',
+    metadata: { baseline: true }
+  }))
+
+  const [first, second] = await Promise.all([
+    store.patchOperation(saved.id, { title: 'first patch' }),
+    store.patchOperation(saved.id, { metadata: { concurrent: true } })
+  ])
+  const final = await store.getOperation(saved.id)
+
+  assert.equal(final.title, 'first patch')
+  assert.deepEqual(final.metadata, { baseline: true, concurrent: true })
+  assert.ok(new Date(first.updatedAt) > new Date(saved.updatedAt))
+  assert.ok(new Date(second.updatedAt) > new Date(first.updatedAt))
+  assert.equal(final.updatedAt, second.updatedAt)
+})
+
 test('agent task CRUD enforces schema version, valid status and monotonic timestamps', async () => {
   const { createTransactionStore, taskStatuses } = await importStore()
   const adapter = createMemoryAdapter()
@@ -265,12 +285,36 @@ test('agent task CRUD enforces schema version, valid status and monotonic timest
   )
 })
 
+test('concurrent task patches for one id are serialized with monotonic timestamps', async () => {
+  const { createTransactionStore } = await importStore()
+  const adapter = createMemoryAdapter()
+  const fixedNow = new Date('2026-07-13T09:00:00.000Z')
+  const store = createTransactionStore({ adapter, now: () => fixedNow })
+  const saved = await store.saveTask({
+    id: 'task-concurrent',
+    title: 'original',
+    metadata: { baseline: true }
+  })
+
+  const [first, second] = await Promise.all([
+    store.patchTask(saved.id, { title: 'first patch' }),
+    store.patchTask(saved.id, { metadata: { concurrent: true } })
+  ])
+  const final = await store.getTask(saved.id)
+
+  assert.equal(final.title, 'first patch')
+  assert.deepEqual(final.metadata, { baseline: true, concurrent: true })
+  assert.ok(new Date(first.updatedAt) > new Date(saved.updatedAt))
+  assert.ok(new Date(second.updatedAt) > new Date(first.updatedAt))
+  assert.equal(final.updatedAt, second.updatedAt)
+})
+
 test('legacy migration is deterministic, idempotent and includes newly appearing records', async () => {
   const {
     createTransactionStore,
     legacyMigrationMarkerId
   } = await importStore()
-  const adapter = createMemoryAdapter()
+  const adapter = createMemoryAdapter({ wrapDataFindOne: true })
   const legacy = [{
     id: 'legacy-existing-id',
     source: 'sftp',
@@ -299,17 +343,28 @@ test('legacy migration is deterministic, idempotent and includes newly appearing
 
   const first = await store.listOperations()
   const generatedId = first.find(item => item.id !== 'legacy-existing-id').id
+  const firstMarker = adapter.read('data', legacyMigrationMarkerId)
   assert.match(generatedId, /^legacy:quick-command:/)
   assert.equal(adapter.tables.get('safetyOperations').size, 2)
+  assert.equal(firstMarker.legacyCount, 2)
+  assert.match(firstMarker.legacyFingerprint, /^[a-z0-9]+$/)
   assert.deepEqual(
-    adapter.read('data', legacyMigrationMarkerId).migratedIds.sort(),
+    firstMarker.migratedIds.sort(),
     first.map(item => item.id).sort()
   )
+  assert.equal(
+    adapter.calls.filter(call => call.method === 'findOne' && call.table === 'safetyOperations').length,
+    0
+  )
 
+  const writesBeforeSecond = adapter.getUpdateCallCount('safetyOperations')
+  const markerWritesBeforeSecond = adapter.getUpdateCallCount('data')
   const second = await store.listOperations()
   assert.deepEqual(second.map(item => item.id).sort(), first.map(item => item.id).sort())
   assert.equal(adapter.tables.get('safetyOperations').size, 2)
   assert.equal(second.find(item => item.source === 'quick-command').id, generatedId)
+  assert.equal(adapter.getUpdateCallCount('safetyOperations'), writesBeforeSecond)
+  assert.equal(adapter.getUpdateCallCount('data'), markerWritesBeforeSecond)
 
   legacy.push({
     id: 'legacy-new',
@@ -327,6 +382,43 @@ test('legacy migration is deterministic, idempotent and includes newly appearing
     generatedId
   ].sort())
   assert.equal(adapter.tables.get('safetyOperations').size, 3)
+  assert.equal(adapter.getUpdateCallCount('safetyOperations'), writesBeforeSecond + 1)
+  const thirdMarker = adapter.read('data', legacyMigrationMarkerId)
+  assert.equal(thirdMarker.legacyCount, 3)
+  assert.notEqual(thirdMarker.legacyFingerprint, firstMarker.legacyFingerprint)
+})
+
+test('legacy ids stay deterministic when createdAt is missing or invalid', async () => {
+  const { createTransactionStore } = await importStore()
+  const storage = createLegacyStorage([{
+    source: 'sftp',
+    sourcePath: '/etc/missing-time.conf',
+    host: '10.0.0.8',
+    username: 'root'
+  }, {
+    source: 'sftp',
+    sourcePath: '/etc/invalid-time.conf',
+    host: '10.0.0.8',
+    username: 'root',
+    createdAt: 'not-a-date'
+  }])
+  const firstStore = createTransactionStore({
+    adapter: createMemoryAdapter(),
+    legacyStorage: storage,
+    now: () => new Date('2026-07-13T10:00:00.000Z')
+  })
+  const secondStore = createTransactionStore({
+    adapter: createMemoryAdapter(),
+    legacyStorage: storage,
+    now: () => new Date('2030-01-01T00:00:00.000Z')
+  })
+
+  const first = await firstStore.listOperations()
+  const second = await secondStore.listOperations()
+
+  assert.deepEqual(second.map(record => record.id), first.map(record => record.id))
+  assert.equal(first.every(record => /^legacy:sftp:/.test(record.id)), true)
+  assert.equal(first.every(record => record.createdAt === '1970-01-01T00:00:00.000Z'), true)
 })
 
 test('migration persists and verifies all 250 legacy records without deleting their source key', async () => {
@@ -343,23 +435,27 @@ test('migration persists and verifies all 250 legacy records without deleting th
 
   assert.equal(records.length, 250)
   assert.equal(adapter.tables.get('safetyOperations').size, 250)
-  assert.equal(adapter.findOneCallCount, 250)
+  assert.equal(
+    adapter.calls.filter(call => call.method === 'findOne' && call.table === 'safetyOperations').length,
+    0
+  )
+  assert.equal(adapter.read('data', 'safetyOperations:legacy-migration:v1').legacyCount, 250)
   assert.deepEqual(storage.removed, [])
   assert.equal(storage.sftpRecords.length, 250)
 })
 
-test('record 201 readback failure retains all 250 legacy records and retries safely', async () => {
+test('record 201 batch write failure leaves marker unset and retries only missing records', async () => {
   const {
     createTransactionStore,
     legacyMigrationMarkerId
   } = await importStore()
   const adapter = createMemoryAdapter()
-  adapter.failFindOneAt(201)
+  adapter.failUpdateAt('safetyOperations', 201)
   const storage = createLegacyStorage(createLegacyRecords(250))
   const store = createTransactionStore({ adapter, legacyStorage: storage })
 
-  await assert.rejects(store.listOperations(), /迁移回读验证失败/)
-  assert.equal(adapter.findOneCallCount, 201)
+  await assert.rejects(store.listOperations(), /forced safetyOperations update failure at 201/)
+  assert.equal(adapter.getUpdateCallCount('safetyOperations'), 201)
   assert.equal(storage.sftpRecords.length, 250)
   assert.deepEqual(storage.removed, [])
   assert.equal(adapter.read('data', legacyMigrationMarkerId), undefined)
@@ -367,6 +463,12 @@ test('record 201 readback failure retains all 250 legacy records and retries saf
   const retried = await store.listOperations()
   assert.equal(retried.length, 250)
   assert.equal(adapter.tables.get('safetyOperations').size, 250)
+  assert.equal(adapter.getUpdateCallCount('safetyOperations'), 251)
+  assert.equal(
+    adapter.calls.filter(call => call.method === 'findOne' && call.table === 'safetyOperations').length,
+    0
+  )
+  assert.equal(adapter.read('data', legacyMigrationMarkerId).legacyCount, 250)
   assert.equal(storage.sftpRecords.length, 250)
   assert.deepEqual(storage.removed, [])
 })
@@ -411,13 +513,18 @@ test('a concurrent legacy write during migration is retained and migrates on the
   assert.deepEqual(storage.removed, [])
 })
 
-test('migration marker is written only after database readback succeeds without cleanup', async () => {
+test('migration marker read failures propagate before legacy writes', async () => {
   const {
     createTransactionStore,
     legacyMigrationMarkerId
   } = await importStore()
   const adapter = createMemoryAdapter()
-  adapter.failNextFindOne()
+  const expected = new Error('marker database unavailable')
+  const findOne = adapter.findOne
+  adapter.findOne = async (...args) => {
+    if (args[0] === 'data') throw expected
+    return findOne(...args)
+  }
   const store = createTransactionStore({
     adapter,
     readLegacyRecords: () => [{
@@ -432,12 +539,9 @@ test('migration marker is written only after database readback succeeds without 
     cleanupLegacyRecords: () => { throw new Error('legacy cleanup must not run') }
   })
 
-  await assert.rejects(store.listOperations(), /迁移回读验证失败/)
+  await assert.rejects(store.listOperations(), error => error === expected)
   assert.equal(adapter.read('data', legacyMigrationMarkerId), undefined)
-
-  const retried = await store.listOperations()
-  assert.deepEqual(retried.map(item => item.id), ['legacy-retry'])
-  assert.ok(adapter.read('data', legacyMigrationMarkerId))
+  assert.equal(adapter.getUpdateCallCount('safetyOperations'), 0)
 })
 
 test('completed database state wins over a stale available legacy snapshot', async () => {
@@ -471,6 +575,28 @@ test('completed database state wins over a stale available legacy snapshot', asy
   assert.equal(record.state, 'restored')
   assert.equal(repeated.state, 'restored')
   assert.equal(adapter.read('safetyOperations', 'same-record').state, 'restored')
+})
+
+test('legacy completed status migrates as a terminal restored operation', async () => {
+  const { createTransactionStore } = await importStore()
+  const adapter = createMemoryAdapter()
+  const store = createTransactionStore({
+    adapter,
+    readLegacyRecords: () => [{
+      id: 'legacy-completed',
+      source: 'sftp',
+      sourcePath: '/etc/app.conf',
+      host: '10.0.0.1',
+      username: 'root',
+      createdAt: '2026-07-12T08:00:00.000Z',
+      status: 'completed'
+    }]
+  })
+
+  const [record] = await store.listOperations()
+
+  assert.equal(record.state, 'restored')
+  assert.equal(adapter.read('safetyOperations', record.id).state, 'restored')
 })
 
 test('SQLite and NeDB encrypt safety operations and agent tasks at rest', async t => {
@@ -530,4 +656,34 @@ test('SQLite and NeDB encrypt safety operations and agent tasks at rest', async 
       )
     })
   }
+})
+
+test('NeDB rejects safety records when encrypted payload decryption or JSON parsing fails', async () => {
+  const { createDb } = require('../../src/app/lib/nedb')
+  const appPath = fs.mkdtempSync(path.join(os.tmpdir(), 'shellpilot-nedb-corrupt-'))
+  const enc = value => Buffer.from(value, 'utf8').toString('base64')
+  const dec = value => Buffer.from(value, 'base64').toString('utf8')
+  const writer = createDb(appPath, 'default_user', { enc, dec })
+  await writer.dbAction('safetyOperations', 'insert', {
+    _id: 'op-corrupt-check',
+    command: 'must-not-return-an-encdata-shell'
+  })
+
+  const decryptFailure = createDb(appPath, 'default_user', {
+    enc,
+    dec: () => { throw new Error('decrypt failed') }
+  })
+  await assert.rejects(
+    decryptFailure.dbAction('safetyOperations', 'findOne', { _id: 'op-corrupt-check' }),
+    /decrypt failed/
+  )
+
+  const jsonFailure = createDb(appPath, 'default_user', {
+    enc,
+    dec: () => '{invalid-json'
+  })
+  await assert.rejects(
+    jsonFailure.dbAction('safetyOperations', 'find', {}),
+    /JSON|Unexpected|property name/i
+  )
 })

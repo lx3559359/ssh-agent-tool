@@ -58,6 +58,29 @@ test('unified completion status wins over stale legacy records during migration'
   assert.equal(records[0].rollbackStatus, 'completed')
 })
 
+test('terminal legacy states cannot be overwritten by newer rollback-available records', async () => {
+  const { mergeSafetyOperationRecords } = await import(moduleUrl)
+
+  for (const terminalStatus of ['restored', 'kept', 'failed', 'completed']) {
+    const [record] = mergeSafetyOperationRecords([{
+      id: `terminal-${terminalStatus}`,
+      status: terminalStatus,
+      rollbackStatus: 'completed',
+      createdAt: '2026-07-12T08:00:00.000Z',
+      updatedAt: '2026-07-12T08:00:00.000Z'
+    }], [{
+      id: `terminal-${terminalStatus}`,
+      status: 'rollback-available',
+      rollbackStatus: 'available',
+      createdAt: '2026-07-12T08:00:00.000Z',
+      updatedAt: '2026-07-12T10:00:00.000Z'
+    }])
+
+    assert.equal(record.status, terminalStatus)
+    assert.equal(record.rollbackStatus, 'completed')
+  }
+})
+
 test('new records are merged without overwriting history and are sorted newest first', async () => {
   const { mergeSafetyOperationRecords } = await import(moduleUrl)
   const records = mergeSafetyOperationRecords(
