@@ -1013,6 +1013,183 @@ export function createTransactionRunner (options = {}) {
     })
   }
 
+  function beginExternalExecution (id, executeOptions = {}) {
+    return serialize(String(id), async () => {
+      let operation = await get(id)
+      if (!operation) throw new Error(`未找到安全事务：${id}`)
+      if (operation.state !== operationStates.awaitingConfirmation) {
+        throw new Error('安全事务必须处于 awaiting-confirmation 状态才能开始外部执行。')
+      }
+      if (executeOptions.confirmed !== true) {
+        throw new Error('必须明确确认后才能开始外部执行。')
+      }
+      let safety
+      let boundRecovery
+      try {
+        return await serializeEndpoint(operation, async () => {
+          operation = await get(operation.id) || operation
+          if (operation.state === operationStates.cancelled) throw cancellationError()
+          if (operation.state !== operationStates.awaitingConfirmation) {
+            throw new Error('安全事务必须处于 awaiting-confirmation 状态才能开始外部执行。')
+          }
+          const enforced = await enforceClassification(operation)
+          operation = enforced.operation
+          safety = enforced.safety
+          if (safety.forged) {
+            throw new Error('命令安全分类与事务记录不一致，已拒绝伪造的低风险声明。')
+          }
+          await assertCurrentEndpoint(operation)
+          if (safety.risk === 'blocked') {
+            throw new Error('该命令重新分类为 blocked，属于明确禁止操作。')
+          }
+          if (safety.reversible) {
+            if (!operation.plan || !operation.artifacts || !operation.recoveryReadyAt) {
+              throw new Error('可逆事务尚未完成 recovery-ready，已拒绝外部执行。')
+            }
+            boundRecovery = await requireBoundRecovery(operation)
+          } else {
+            if (safety.classified.provider === 'network') {
+              throw new Error('网络修改禁止 unsafe 执行，必须使用已验证恢复点。')
+            }
+            if (executeOptions.allowUnsafe !== true) {
+              throw new Error('非可逆或未知操作必须显式允许 unsafe 外部执行。')
+            }
+          }
+
+          const executionId = `${operation.id}-external-${++executionSequence}`
+          operation = await transition(operation, operationStates.executing, {
+            executionId
+          }, 'execute')
+          operation = await get(operation.id) || operation
+          if (safety.reversible) {
+            operation = await postCheckBoundRecovery(operation, boundRecovery)
+          }
+          return operation
+        })
+      } catch (error) {
+        if (error.integrityFailureHandled) throw sanitizeError(error)
+        const current = await get(operation.id) || operation
+        if (error.cancelled || cancellationRequests.has(operation.id) ||
+          current.state === operationStates.cancelled) throw cancellationError()
+        if (safety?.forged || safety?.risk === 'blocked' ||
+          /网络修改禁止|recovery-ready/.test(error.message)) {
+          return fail(operation, error, [error.audit])
+        }
+        if (current.state === operationStates.awaitingConfirmation &&
+          /unsafe/.test(error.message)) {
+          throw sanitizeError(error)
+        }
+        return fail(operation, error, [error.audit])
+      }
+    })
+  }
+
+  function completeExternalExecution (id, completion = {}) {
+    return serialize(String(id), async () => {
+      let operation = await get(id)
+      if (!operation) throw new Error(`未找到安全事务：${id}`)
+      if (operation.state !== operationStates.executing) {
+        throw new Error('安全事务必须处于 executing 状态才能完成外部执行。')
+      }
+      if (!completion.executionId || completion.executionId !== operation.executionId) {
+        throw new Error('外部执行标识不匹配，已忽略无关或迟到事件。')
+      }
+      if (completion.command !== operation.command) {
+        throw new Error('外部执行命令不匹配，已忽略无关命令事件。')
+      }
+      if (completion.exitCode !== null && !Number.isInteger(completion.exitCode)) {
+        throw new Error('外部执行退出码无效。')
+      }
+
+      return serializeEndpoint(operation, async () => {
+        operation = await get(operation.id) || operation
+        if (operation.state !== operationStates.executing) {
+          throw new Error('安全事务必须处于 executing 状态才能完成外部执行。')
+        }
+        if (completion.executionId !== operation.executionId) {
+          throw new Error('外部执行标识不匹配，已忽略无关或迟到事件。')
+        }
+        if (completion.command !== operation.command) {
+          throw new Error('外部执行命令不匹配，已忽略无关命令事件。')
+        }
+
+        const enforced = await enforceClassification(operation)
+        operation = enforced.operation
+        const safety = enforced.safety
+        if (safety.forged || safety.risk === 'blocked') {
+          throw new Error('外部执行完成时安全分类校验失败。')
+        }
+        await assertCurrentEndpoint(operation)
+        const audit = createAuditRecord({
+          phase: 'execute',
+          timestamp: timestamp(),
+          code: completion.exitCode === null ? undefined : completion.exitCode,
+          output: completion.exitCode === null
+            ? '外部 PTY 命令未返回可验证退出码。'
+            : ''
+        })
+        const failed = completion.exitCode !== 0
+
+        if (safety.reversible) {
+          const boundRecovery = await requireBoundRecovery(operation)
+          if (failed) {
+            const error = completion.exitCode === null
+              ? '外部 PTY 命令执行中断，恢复点仍可用于回滚。'
+              : `外部 PTY 命令执行失败，退出码 ${completion.exitCode}；恢复点仍可用于回滚。`
+            return guardedRecoveryTransition(
+              operation,
+              boundRecovery,
+              operationStates.failed,
+              current => ({
+                audit: appendAudit(current, [audit]),
+                error,
+                failedAt: timestamp(),
+                executionId: undefined
+              }),
+              'execute',
+              [audit]
+            )
+          }
+          const verified = await guardedRecoveryTransition(
+            operation,
+            boundRecovery,
+            operationStates.verificationPassed,
+            current => ({
+              audit: appendAudit(current, [audit]),
+              executionId: undefined
+            }),
+            'execute',
+            [audit]
+          )
+          return guardedRecoveryTransition(
+            verified,
+            boundRecovery,
+            operationStates.rollbackAvailable,
+            { completedAt: timestamp() },
+            'execute'
+          )
+        }
+
+        if (failed) {
+          const error = completion.exitCode === null
+            ? '外部 PTY 命令执行中断。'
+            : `外部 PTY 命令执行失败，退出码 ${completion.exitCode}。`
+          return transition(operation, operationStates.failed, {
+            audit: appendAudit(operation, [audit]),
+            error,
+            failedAt: timestamp(),
+            executionId: undefined
+          }, 'execute')
+        }
+        return transition(operation, operationStates.kept, {
+          audit: appendAudit(operation, [audit]),
+          completedAt: timestamp(),
+          executionId: undefined
+        }, 'execute')
+      })
+    })
+  }
+
   function rollback (id, rollbackOptions = {}) {
     return serialize(String(id), async () => {
       let operation = await get(id)
@@ -1160,5 +1337,13 @@ export function createTransactionRunner (options = {}) {
     return current
   }
 
-  return { prepare, execute, rollback, keep, cancel }
+  return {
+    prepare,
+    execute,
+    beginExternalExecution,
+    completeExternalExecution,
+    rollback,
+    keep,
+    cancel
+  }
 }

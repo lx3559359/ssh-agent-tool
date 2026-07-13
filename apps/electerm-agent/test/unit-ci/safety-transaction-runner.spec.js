@@ -201,6 +201,129 @@ test('prepare creates and verifies recovery before execute can run a modifying c
   ])
 })
 
+test('external PTY execution begins after prepare without running the user command remotely', async () => {
+  const { runner, request, store, remoteCalls } = await createPreparedRunner()
+
+  const begun = await runner.beginExternalExecution(request.id, {
+    confirmed: true
+  })
+
+  assert.equal(begun.state, 'executing')
+  assert.match(begun.executionId, /^op-1-external-/)
+  assert.deepEqual(remoteCalls.map(call => call.options.phase), ['prepare'])
+  assert.equal(remoteCalls.some(call => call.command.includes(request.command)), false)
+  assert.equal((await store.get(request.id)).executionId, begun.executionId)
+})
+
+test('external PTY exit zero makes verified recovery rollback available', async () => {
+  const { runner, request, store, remoteCalls } = await createPreparedRunner()
+  const begun = await runner.beginExternalExecution(request.id, {
+    confirmed: true
+  })
+
+  const completed = await runner.completeExternalExecution(request.id, {
+    executionId: begun.executionId,
+    command: request.command,
+    exitCode: 0
+  })
+
+  assert.equal(completed.state, 'rollback-available')
+  assert.equal(completed.executionId, undefined)
+  assert.equal(completed.plan.executeCommand, request.command)
+  assert.deepEqual(remoteCalls.map(call => call.options.phase), ['prepare'])
+  assert.equal((await store.get(request.id)).state, 'rollback-available')
+})
+
+test('external PTY nonzero and interrupted exits fail while preserving rollback', async t => {
+  for (const exitCode of [7, null]) {
+    await t.test(String(exitCode), async () => {
+      const request = await createRequest({ id: `op-external-${exitCode}` })
+      const { runner, store } = await createPreparedRunner({ request })
+      const begun = await runner.beginExternalExecution(request.id, {
+        confirmed: true
+      })
+
+      const completed = await runner.completeExternalExecution(request.id, {
+        executionId: begun.executionId,
+        command: request.command,
+        exitCode
+      })
+
+      assert.equal(completed.state, 'failed')
+      assert.equal(completed.plan.rollbackCommand.length > 0, true)
+      assert.equal(completed.recoveryReadyAt.length > 0, true)
+      assert.equal((await store.get(request.id)).state, 'failed')
+    })
+  }
+})
+
+test('external PTY completion rejects unrelated and late command events', async () => {
+  const { runner, request, store } = await createPreparedRunner()
+  const begun = await runner.beginExternalExecution(request.id, {
+    confirmed: true
+  })
+
+  await assert.rejects(
+    runner.completeExternalExecution(request.id, {
+      executionId: 'op-1-external-stale',
+      command: request.command,
+      exitCode: 0
+    }),
+    /执行标识/
+  )
+  await assert.rejects(
+    runner.completeExternalExecution(request.id, {
+      executionId: begun.executionId,
+      command: 'uptime',
+      exitCode: 0
+    }),
+    /命令不匹配/
+  )
+  assert.equal((await store.get(request.id)).state, 'executing')
+
+  await runner.completeExternalExecution(request.id, {
+    executionId: begun.executionId,
+    command: request.command,
+    exitCode: 0
+  })
+  await assert.rejects(
+    runner.completeExternalExecution(request.id, {
+      executionId: begun.executionId,
+      command: request.command,
+      exitCode: 0
+    }),
+    /executing/
+  )
+})
+
+test('external nonreversible PTY execution requires unsafe confirmation without rollback', async () => {
+  const request = await createRequest({
+    id: 'op-external-unknown',
+    source: 'terminal',
+    command: 'custom-admin-tool --rotate'
+  })
+  const { runner, remoteCalls } = await createPreparedRunner({ request })
+
+  await assert.rejects(
+    runner.beginExternalExecution(request.id, { confirmed: true }),
+    /unsafe/
+  )
+  const begun = await runner.beginExternalExecution(request.id, {
+    confirmed: true,
+    allowUnsafe: true
+  })
+  const completed = await runner.completeExternalExecution(request.id, {
+    executionId: begun.executionId,
+    command: request.command,
+    exitCode: 0
+  })
+
+  assert.equal(completed.state, 'kept')
+  assert.equal(completed.reversible, false)
+  assert.equal(completed.plan, undefined)
+  assert.deepEqual(remoteCalls, [])
+})
+
 test('prepare persists a recovery binding and execute rejects same-provider command tampering', async () => {
   const context = await createPreparedRunner({
     request: await createRequest({ id: 'op-binding-command' })

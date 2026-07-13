@@ -3,7 +3,9 @@ const zhCnOverrides = {
   history: '历史',
   ssh: '终端',
   sftp: 'SFTP',
-  widgets: '工具中心'
+  widgets: '工具中心',
+  terminalSafetyProtection: 'SSH 终端安全保护',
+  terminalSafetyProtectionHelp: '仅在按 Enter 时检查完整的修改或高风险命令；只读、密码、粘贴和交互程序保持原样。'
 }
 
 export function getShellPilotTranslation (key, langId = 'zh_cn') {

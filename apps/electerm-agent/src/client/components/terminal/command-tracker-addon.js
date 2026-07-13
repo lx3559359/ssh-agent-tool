@@ -32,8 +32,11 @@ export class CommandTrackerAddon {
     this.shellIntegrationActive = false
 
     // Event callbacks for shell integration events
+    this._onPromptStarted = null // Called when OSC 633;A is received
     this._onCommandExecuted = null // Called when OSC 633;E is received
+    this._onCommandFinished = null // Called when OSC 633;D is received
     this._onCwdChanged = null // Called when OSC 633;P;Cwd= is received
+    this._activeCommand = ''
   }
 
   /**
@@ -42,6 +45,22 @@ export class CommandTrackerAddon {
    */
   onCommandExecuted (callback) {
     this._onCommandExecuted = callback
+  }
+
+  /**
+   * Register callback for a fresh shell prompt (received via OSC 633;A).
+   * @param {function} callback - Called when the prompt starts
+   */
+  onPromptStarted (callback) {
+    this._onPromptStarted = callback
+  }
+
+  /**
+   * Register callback for a command and its OSC 633 exit code.
+   * @param {function} callback - Called with ({ command, exitCode })
+   */
+  onCommandFinished (callback) {
+    this._onCommandFinished = callback
   }
 
   /**
@@ -90,6 +109,7 @@ export class CommandTrackerAddon {
         this.shellIntegrationActive = true
         // Reset current command when new prompt appears
         this.currentCommand = ''
+        this._onPromptStarted?.()
         return true
 
       case 'B': // Command input started (after prompt)
@@ -100,10 +120,16 @@ export class CommandTrackerAddon {
 
       case 'D': // Command finished
         // Parse exit code if provided
-        if (args) {
-          this.lastExitCode = parseInt(args, 10)
-        } else {
-          this.lastExitCode = null
+        this.lastExitCode = /^-?\d+$/.test(args)
+          ? parseInt(args, 10)
+          : null
+        if (this._onCommandFinished && this._activeCommand) {
+          const finishedCommand = this._activeCommand
+          this._activeCommand = ''
+          this._onCommandFinished({
+            command: finishedCommand,
+            exitCode: this.lastExitCode
+          })
         }
         return true
 
@@ -111,6 +137,7 @@ export class CommandTrackerAddon {
         // The actual command being executed
         this.executedCommand = this._deserializeOscValue(args)
         this.currentCommand = this.executedCommand
+        this._activeCommand = this.executedCommand
         // Call the callback if registered
         if (this._onCommandExecuted && this.executedCommand) {
           this._onCommandExecuted(this.executedCommand)

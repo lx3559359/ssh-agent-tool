@@ -33,7 +33,7 @@ import { XmodemClient } from './xmodem-client.js'
 import DropFileModal from './drop-file-modal.jsx'
 import keyControlPressed from '../../common/key-control-pressed.js'
 import NormalBuffer from './normal-buffer.jsx'
-import { createTerm, resizeTerm, startTerminalLogFile, toggleTerminalLog } from './terminal-apis.js'
+import { createTerm, resizeTerm, runCmd, startTerminalLogFile, toggleTerminalLog } from './terminal-apis.js'
 import {
   saveTerminalLog,
   startTerminalRecording,
@@ -81,6 +81,16 @@ import {
   createSshReconnectScheduler,
   shouldRetryAutoReconnectError
 } from './ssh-reconnect-policy.js'
+import {
+  buildTerminalSafetyEndpoint,
+  createTerminalSafetyController
+} from './terminal-safety-controller.js'
+import TerminalCommandSafetyModal from './terminal-command-safety-modal.jsx'
+import { createTransactionRunner } from '../../common/safety-transactions/transaction-runner.js'
+import { buildRecoveryPlan } from '../../common/safety-transactions/recovery-providers.js'
+import { buildSafetyRequest } from '../../common/safety-transactions/models.js'
+import * as terminalSafetyStore from '../../common/safety-transactions/transaction-store.js'
+import uid from '../../common/uid.js'
 
 const e = window.translate
 
@@ -103,6 +113,9 @@ class Term extends Component {
       totalLines: 0,
       reconnectState: null,
       terminalError: null,
+      terminalSafetyConfirmation: null,
+      terminalSafetyBusy: false,
+      terminalSafetyError: '',
       dropFileModalVisible: false,
       droppedFiles: [],
       fontSizeChanged: false
@@ -112,6 +125,16 @@ class Term extends Component {
     this.currentInput = ''
     this.shellInjected = false
     this.shellType = null
+    this.terminalSafetyController = createTerminalSafetyController()
+    this.terminalSafetyRunner = createTransactionRunner({
+      runRemote: (command, options) => runCmd(this.pid, command, options),
+      cancelRemote: async () => {},
+      getCurrentEndpoint: async () => this.getTerminalSafetyEndpoint(),
+      buildRecoveryPlan,
+      store: terminalSafetyStore
+    })
+    this.pendingTerminalSafetyDecision = null
+    this.pendingTerminalSafetyExecution = null
     this.reconnectScheduler = createSshReconnectScheduler({
       initialAttempt: props.tab.autoReConnect,
       onStateChange: reconnectState => {
@@ -186,6 +209,19 @@ class Term extends Component {
   }
 
   componentWillUnmount () {
+    this.onClose = true
+    const safetyOperationIds = new Set([
+      this.pendingTerminalSafetyDecision?.operationId,
+      this.pendingTerminalSafetyExecution?.id
+    ].filter(Boolean))
+    safetyOperationIds.forEach(operationId => {
+      this.terminalSafetyRunner.cancel(operationId).catch(() => {})
+    })
+    if (this.pendingTerminalSafetyDecision) {
+      this.pendingTerminalSafetyDecision.resolve({ sendNow: false, clear: false })
+      this.pendingTerminalSafetyDecision = null
+    }
+    this.pendingTerminalSafetyExecution = null
     refs.remove(this.id)
     if (window.store.activeTerminalId === this.props.tab.id) {
       window.store.activeTerminalId = ''
@@ -199,7 +235,6 @@ class Term extends Component {
       clearTimeout(this.timers[k])
       this.timers[k] = null
     })
-    this.onClose = true
     if (this.socket) {
       this.socket.close()
       this.socket = null
@@ -279,10 +314,13 @@ class Term extends Component {
     const currShowSuggestions = props.config.showCmdSuggestions
     const prevSftpFollow = prevProps.sftpPathFollowSsh
     const currSftpFollow = props.sftpPathFollowSsh
+    const prevTerminalSafety = prevProps.config.terminalSafetyProtection !== false
+    const currTerminalSafety = props.config.terminalSafetyProtection !== false
 
     if (
       (!prevShowSuggestions && currShowSuggestions) ||
-      (!prevSftpFollow && currSftpFollow)
+      (!prevSftpFollow && currSftpFollow) ||
+      (!prevTerminalSafety && currTerminalSafety)
     ) {
       // Config was toggled to true, try to inject shell integration if not already done
       if (this.canInjectShellIntegration() && !this.shellInjected) {
@@ -731,12 +769,14 @@ class Term extends Component {
     if (isWin && this.isRemote()) {
       selected = selected.replace(/\r\n/g, '\n')
     }
+    this.attachAddon?._onTerminalPaste()
     this.term.paste(selected || '')
     this.term.focus()
   }
 
   onPasteSelected = () => {
     const selected = this.term.getSelection()
+    this.attachAddon?._onTerminalPaste()
     this.term.paste(selected || '')
     this.term.focus()
   }
@@ -1172,6 +1212,180 @@ class Term extends Component {
     }
   }
 
+  getTerminalSafetyEndpoint = () => {
+    const tab = window.store.applyProfileToTabs(
+      deepCopy(this.props.tab || {})
+    )
+    return buildTerminalSafetyEndpoint(tab, this.pid)
+  }
+
+  getTerminalSafetyContext = () => {
+    return {
+      enabled: this.props.config.terminalSafetyProtection !== false,
+      isSsh: this.isSsh(),
+      shellIntegrationActive: this.cmdAddon?.hasShellIntegration() === true,
+      alternateBuffer: this.term?.buffer?.active?.type === 'alternate'
+    }
+  }
+
+  beforeTerminalEnter = (command, context) => {
+    const decision = this.terminalSafetyController.beforeEnter(command, context)
+    if (!decision.confirmation) return decision
+
+    this.setState({
+      terminalSafetyConfirmation: decision.confirmation,
+      terminalSafetyBusy: false,
+      terminalSafetyError: ''
+    })
+    return new Promise(resolve => {
+      this.pendingTerminalSafetyDecision = {
+        confirmation: decision.confirmation,
+        operationId: '',
+        resolve
+      }
+    })
+  }
+
+  finishTerminalSafetyDecision = (result) => {
+    const pending = this.pendingTerminalSafetyDecision
+    this.pendingTerminalSafetyDecision = null
+    if (!this.onClose) {
+      this.setState({
+        terminalSafetyConfirmation: null,
+        terminalSafetyBusy: false,
+        terminalSafetyError: ''
+      })
+    }
+    pending?.resolve(result)
+    this.term?.focus()
+  }
+
+  releaseUnrecordedTerminalSafetyCommand = () => {
+    const result = this.terminalSafetyController.resolvePending('execute')
+    this.finishTerminalSafetyDecision(result)
+  }
+
+  onTerminalSafetyInputChanged = () => {
+    const pending = this.pendingTerminalSafetyDecision
+    if (!pending) return
+    if (pending.operationId) {
+      this.terminalSafetyRunner.cancel(pending.operationId).catch(() => {})
+    }
+    const result = this.terminalSafetyController.resolvePending('invalidate')
+    this.finishTerminalSafetyDecision(result)
+  }
+
+  handleTerminalSafetyExecute = async () => {
+    const pending = this.pendingTerminalSafetyDecision
+    const confirmation = pending?.confirmation
+    if (!pending || !confirmation?.executeAllowed || this.state.terminalSafetyBusy) {
+      return
+    }
+    this.setState({ terminalSafetyBusy: true, terminalSafetyError: '' })
+
+    try {
+      if (confirmation.recordable === false) {
+        this.releaseUnrecordedTerminalSafetyCommand()
+        return
+      }
+
+      const request = buildSafetyRequest({
+        id: `terminal-${Date.now()}-${uid()}`,
+        source: 'terminal',
+        command: confirmation.command,
+        title: 'SSH 终端命令',
+        endpoint: this.getTerminalSafetyEndpoint(),
+        metadata: { terminalProtection: true }
+      })
+      pending.operationId = request.id
+      await this.terminalSafetyRunner.prepare(request)
+      if (this.onClose) {
+        await this.terminalSafetyRunner.cancel(request.id)
+        return
+      }
+      if (this.pendingTerminalSafetyDecision !== pending) {
+        await this.terminalSafetyRunner.cancel(request.id)
+        return
+      }
+      const begun = await this.terminalSafetyRunner.beginExternalExecution(
+        request.id,
+        {
+          confirmed: true,
+          allowUnsafe: confirmation.kind === 'nonreversible'
+        }
+      )
+      if (this.onClose) {
+        await this.terminalSafetyRunner.cancel(request.id)
+        return
+      }
+      if (this.pendingTerminalSafetyDecision !== pending) {
+        await this.terminalSafetyRunner.cancel(request.id)
+        return
+      }
+      this.pendingTerminalSafetyExecution = {
+        id: request.id,
+        executionId: begun.executionId,
+        command: confirmation.command,
+        reversible: confirmation.automaticRollback,
+        observed: false
+      }
+      const result = this.terminalSafetyController.resolvePending('execute')
+      this.finishTerminalSafetyDecision(result)
+    } catch (error) {
+      if (this.onClose || this.pendingTerminalSafetyDecision !== pending) return
+      this.setState({
+        terminalSafetyBusy: false,
+        terminalSafetyError: `未能安全准备执行：${error?.message || '未知错误'}。命令尚未发送。`
+      })
+    }
+  }
+
+  handleTerminalSafetyCancel = () => {
+    if (this.state.terminalSafetyBusy) return
+    const operationId = this.pendingTerminalSafetyDecision?.operationId
+    if (operationId) {
+      this.terminalSafetyRunner.cancel(operationId).catch(window.store.onError)
+    }
+    const result = this.terminalSafetyController.resolvePending('cancel')
+    this.finishTerminalSafetyDecision(result)
+  }
+
+  onTerminalSafetyError = () => {
+    message.error('终端安全保护处理失败，命令尚未发送。')
+  }
+
+  handleTerminalTrackedCommand = (command) => {
+    const pending = this.pendingTerminalSafetyExecution
+    if (pending) pending.observed = command === pending.command
+  }
+
+  handleTerminalCommandFinished = async event => {
+    const pending = this.pendingTerminalSafetyExecution
+    if (!pending) return
+    this.pendingTerminalSafetyExecution = null
+
+    if (!pending.observed || event.command !== pending.command) {
+      await this.terminalSafetyRunner.cancel(pending.id).catch(window.store.onError)
+      message.warning(
+        pending.reversible
+          ? '命令跟踪不可靠，事务已标记失败，恢复点仍保留。'
+          : '命令跟踪不可靠，未记录执行成功，也未声明自动回滚。'
+      )
+      return
+    }
+
+    try {
+      await this.terminalSafetyRunner.completeExternalExecution(pending.id, {
+        executionId: pending.executionId,
+        command: event.command,
+        exitCode: event.exitCode
+      })
+    } catch (error) {
+      await this.terminalSafetyRunner.cancel(pending.id).catch(() => {})
+      window.store.onError(error)
+    }
+  }
+
   loadRenderer = async (term, config) => {
     // xterm 6.x: only the built-in DOM renderer and the WebGL addon exist
     // (the canvas renderer addon was removed in 6.x). 'dom' = no addon loaded
@@ -1261,11 +1475,17 @@ class Term extends Component {
     const FitAddon = await loadFitAddon()
     this.fitAddon = new FitAddon()
     this.cmdAddon = new CommandTrackerAddon()
+    this.cmdAddon.onPromptStarted(
+      this.terminalSafetyController.onPromptStarted
+    )
     this.cmdAddon.onCommandExecuted((cmd) => {
+      this.terminalSafetyController.onCommandExecuted()
+      this.handleTerminalTrackedCommand(cmd)
       if (cmd && cmd.trim()) {
         window.store.addCmdHistory(cmd.trim())
       }
     })
+    this.cmdAddon.onCommandFinished(this.handleTerminalCommandFinished)
     this.cmdAddon.onCwdChanged((cwd) => {
       this.setCwd(cwd)
     })
@@ -1364,7 +1584,13 @@ class Term extends Component {
 
   canInjectShellIntegration = () => {
     const { config } = this.props
-    const canInject = (config.showCmdSuggestions || this.props.sftpPathFollowSsh) &&
+    const terminalSafetyNeedsIntegration =
+      config.terminalSafetyProtection !== false && this.isSsh()
+    const canInject = (
+      config.showCmdSuggestions ||
+      this.props.sftpPathFollowSsh ||
+      terminalSafetyNeedsIntegration
+    ) &&
     (
       this.isSsh() ||
       (this.isLocal() && !isWin)
@@ -1750,6 +1976,13 @@ class Term extends Component {
   }
 
   oncloseSocket = () => {
+    const safetyExecution = this.pendingTerminalSafetyExecution
+    if (safetyExecution) {
+      this.pendingTerminalSafetyExecution = null
+      this.terminalSafetyRunner.cancel(safetyExecution.id).catch(error => {
+        if (!this.onClose) window.store.onError(error)
+      })
+    }
     if (this.onClose || this.props.tab.enableSsh === false) {
       return
     }
@@ -1934,6 +2167,14 @@ class Term extends Component {
             isSerial={this.props.tab?.type === connectionMap.serial}
             onSelect={this.handleDropFileAction}
             onCancel={this.handleDropFileModalCancel}
+          />
+          <TerminalCommandSafetyModal
+            open={Boolean(this.state.terminalSafetyConfirmation)}
+            confirmation={this.state.terminalSafetyConfirmation}
+            busy={this.state.terminalSafetyBusy}
+            error={this.state.terminalSafetyError}
+            onExecute={this.handleTerminalSafetyExecute}
+            onCancel={this.handleTerminalSafetyCancel}
           />
           {spin}
         </div>

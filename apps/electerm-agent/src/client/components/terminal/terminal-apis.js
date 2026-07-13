@@ -17,6 +17,7 @@ export function runCmd (pid, cmd, options = {}) {
     pid,
     cmd,
     timeoutMs: options.timeoutMs,
+    maxOutputBytes: options.maxOutputBytes,
     action: 'run-cmd'
   })
 }

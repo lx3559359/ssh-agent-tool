@@ -1,0 +1,55 @@
+.terminal-command-safety-modal
+  .custom-modal-body
+    padding 14px 16px
+    max-height min(52vh, 420px)
+    overflow auto
+
+.terminal-command-safety-kind
+  line-height 1.55
+  color var(--text)
+
+  &.is-reversible
+    border-left 3px solid #2f9e6f
+    padding-left 10px
+
+  &.is-nonreversible,
+  &.is-blocked
+    border-left 3px solid #d97706
+    padding-left 10px
+
+.terminal-command-safety-command
+  margin 12px 0 0
+  padding 10px
+  max-height 150px
+  overflow auto
+  white-space pre-wrap
+  overflow-wrap anywhere
+  background var(--main)
+  color var(--text)
+  border 1px solid var(--main-lighter)
+  border-radius 4px
+
+.terminal-command-safety-error
+  margin-top 10px
+  color #d14343
+  line-height 1.45
+
+.terminal-command-safety-actions
+  display flex
+  justify-content flex-end
+  gap 8px
+
+.terminal-command-safety-execute
+  border 0
+  border-radius 4px
+  padding 6px 12px
+  color #fff
+  background #247a56
+  cursor pointer
+
+  &:hover
+    background #1e6849
+
+  &:disabled
+    cursor default
+    opacity .55
