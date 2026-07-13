@@ -124,6 +124,50 @@ test('operation models retain endpoint identity without authentication material'
   }
 })
 
+test('safety requests project explicit fields and recursively redact metadata', async () => {
+  const { normalizeOperation, buildSafetyRequest } = await importDomainModule('models.js')
+  const input = {
+    id: 'op-safe-fields',
+    source: 'agent',
+    endpoint: { host: 'prod.example.com', username: 'root' },
+    command: 'uptime',
+    title: '检查运行时间',
+    password: 'top-password',
+    privateKey: 'top-private-key',
+    token: 'top-token',
+    apiKey: 'top-api-key',
+    customCredential: 'top-custom-credential',
+    metadata: {
+      correlationId: 'corr-1',
+      credentials: {
+        password: 'nested-password',
+        AWS_SECRET_ACCESS_KEY: 'nested-aws-secret',
+        SERVICE_TOKEN: 'nested-service-token'
+      },
+      items: [{ privateKey: 'nested-private-key', label: 'safe-label' }]
+    }
+  }
+
+  for (const value of [normalizeOperation(input), buildSafetyRequest(input)]) {
+    assert.equal(value.id, 'op-safe-fields')
+    assert.equal(value.title, '检查运行时间')
+    assert.equal(value.metadata.correlationId, 'corr-1')
+    assert.equal(value.metadata.credentials.password, '[REDACTED]')
+    assert.equal(value.metadata.credentials.AWS_SECRET_ACCESS_KEY, '[REDACTED]')
+    assert.equal(value.metadata.credentials.SERVICE_TOKEN, '[REDACTED]')
+    assert.equal(value.metadata.items[0].privateKey, '[REDACTED]')
+    assert.equal(value.metadata.items[0].label, 'safe-label')
+    for (const field of ['password', 'privateKey', 'token', 'apiKey', 'customCredential']) {
+      assert.equal(Object.hasOwn(value, field), false, field)
+    }
+  }
+
+  assert.doesNotMatch(
+    JSON.stringify([normalizeOperation(input), buildSafetyRequest(input)]),
+    /top-password|top-private-key|top-token|top-api-key|top-custom-credential|nested-password|nested-aws-secret|nested-service-token|nested-private-key/
+  )
+})
+
 test('classifies readonly diagnostics and reversible provider changes', async () => {
   const { classifyCommand } = await importDomainModule('command-classifier.js')
   const cases = [
@@ -161,6 +205,31 @@ test('does not treat firewall and network queries as reversible changes', async 
     'ifconfig'
   ]) {
     assert.equal(classifyCommand(command).risk, 'readonly', command)
+  }
+})
+
+test('iptables readonly classification requires a pure listing invocation', async () => {
+  const { classifyCommand } = await importDomainModule('command-classifier.js')
+
+  for (const command of [
+    'iptables -L -n -v --line-numbers',
+    'iptables -L -nv --line-numbers',
+    'iptables --list-rules -t filter',
+    'ip6tables --list INPUT --numeric'
+  ]) {
+    assert.equal(classifyCommand(command).risk, 'readonly', command)
+  }
+
+  for (const command of [
+    'iptables -L -Z',
+    'iptables --list --zero',
+    'iptables -S -P INPUT DROP',
+    'ip6tables -L --unknown-option'
+  ]) {
+    const classification = classifyCommand(command)
+    assert.equal(classification.risk, 'unknown', command)
+    assert.equal(classification.reversible, false, command)
+    assert.equal(classification.requiresConfirmation, true, command)
   }
 })
 
@@ -430,6 +499,35 @@ test('only unambiguous absolute-path writes use the file recovery provider', asy
   assert.equal(classifyCommand('sed -i s/a/b/ relative.conf /etc/example.conf').risk, 'unknown')
 })
 
+test('virtual and device paths never use the file recovery provider', async () => {
+  const { classifyCommand } = await importDomainModule('command-classifier.js')
+
+  for (const command of [
+    'tee /dev/sda',
+    'tee //dev/sda',
+    'tee /proc/sysrq-trigger',
+    'echo 1 > /proc/sysrq-trigger',
+    'sed -i s/0/1/ /sys/kernel/example'
+  ]) {
+    const classification = classifyCommand(command)
+    assert.equal(classification.risk, 'blocked', command)
+    assert.equal(classification.reversible, false, command)
+    assert.equal(classification.provider, null, command)
+  }
+
+  for (const command of [
+    'tee /dev/null',
+    'tee /dev/stdout',
+    'echo runtime > /run/example.pid',
+    'echo runtime > /var/run/example.pid'
+  ]) {
+    const classification = classifyCommand(command)
+    assert.notEqual(classification.risk, 'change', command)
+    assert.equal(classification.reversible, false, command)
+    assert.equal(classification.provider, null, command)
+  }
+})
+
 test('sed in-place detection parses real options and leaves ordinary sed readonly', async () => {
   const { classifyCommand } = await importDomainModule('command-classifier.js')
 
@@ -448,6 +546,34 @@ test('sed in-place detection parses real options and leaves ordinary sed readonl
     const classification = classifyCommand(command)
     assert.equal(classification.risk, 'change', command)
     assert.equal(classification.provider, 'file', command)
+  }
+})
+
+test('sed readonly classification parses scripts and rejects side-effecting commands', async () => {
+  const { classifyCommand } = await importDomainModule('command-classifier.js')
+
+  for (const command of [
+    "sed -n 'p' /etc/hosts",
+    "sed -n '1,3p' /etc/hosts",
+    "sed -n '$p' /etc/hosts",
+    "sed -n 's/old/new/gp' /etc/hosts"
+  ]) {
+    assert.equal(classifyCommand(command).risk, 'readonly', command)
+  }
+
+  for (const command of [
+    "sed -n 'e touch /tmp/pwn' /etc/hosts",
+    "sed -n '1w /tmp/copied-hosts' /etc/hosts",
+    "sed -n 'r /etc/shadow' /etc/hosts",
+    "sed -n 's/old/new/e' /etc/hosts",
+    'sed -n "$p" /etc/hosts',
+    'sed -f /tmp/unverified-script /etc/hosts',
+    "sed -n 'not-a-static-script' /etc/hosts"
+  ]) {
+    const classification = classifyCommand(command)
+    assert.equal(classification.risk, 'unknown', command)
+    assert.equal(classification.reversible, false, command)
+    assert.equal(classification.requiresConfirmation, true, command)
   }
 })
 
@@ -519,6 +645,45 @@ test('audit redaction covers sensitive JSON keys while preserving valid JSON', a
     assert.equal(parsed[key], '[REDACTED]', key)
   }
   assert.equal(parsed.command, 'systemctl status nginx')
+})
+
+test('audit redaction recursively sanitizes valid JSON and generic credential names', async () => {
+  const { redactAuditText } = await importDomainModule('audit-redaction.js')
+  const payload = {
+    event: 'deploy',
+    credentials: {
+      AWS_SECRET_ACCESS_KEY: 'aws-json-secret',
+      OPENAI_API_KEY: 'openai-json-secret',
+      SERVICE_SECRET: 'service-json-secret',
+      SERVICE_TOKEN: 'service-json-token',
+      DB_PASSWORD: 'db-json-password'
+    },
+    records: [{ privateKey: 'json-private-key', message: 'ordinary-json-text' }]
+  }
+
+  const redactedJson = redactAuditText(JSON.stringify(payload))
+  const parsed = JSON.parse(redactedJson)
+  for (const key of [
+    'AWS_SECRET_ACCESS_KEY', 'OPENAI_API_KEY', 'SERVICE_SECRET',
+    'SERVICE_TOKEN', 'DB_PASSWORD'
+  ]) {
+    assert.equal(parsed.credentials[key], '[REDACTED]', key)
+  }
+  assert.equal(parsed.records[0].privateKey, '[REDACTED]')
+  assert.equal(parsed.records[0].message, 'ordinary-json-text')
+  assert.doesNotMatch(redactedJson, /aws-json-secret|openai-json-secret|service-json-secret|service-json-token|db-json-password|json-private-key/)
+
+  const redactedText = redactAuditText([
+    'AWS_SECRET_ACCESS_KEY=aws-text-secret;',
+    'AWS_SECRET_ACCESS_KEY: aws-colon-secret;',
+    'SERVICE_SECRET="service-text-secret";',
+    'SERVICE_TOKEN=service-text-token;',
+    'DB_PASSWORD=db-text-password;',
+    'OPENAI_API_KEY=openai-text-secret;'
+  ].join('\n'))
+  assert.doesNotMatch(redactedText, /aws-text-secret|aws-colon-secret|service-text-secret|service-text-token|db-text-password|openai-text-secret/)
+  assert.match(redactedText, /AWS_SECRET_ACCESS_KEY=\[REDACTED\];/)
+  assert.match(redactedText, /SERVICE_SECRET="\[REDACTED\]";/)
 })
 
 test('audit redaction handles compact sshpass password syntax', async () => {

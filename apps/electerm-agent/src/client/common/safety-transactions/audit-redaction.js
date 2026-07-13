@@ -1,4 +1,52 @@
 const redacted = '[REDACTED]'
+const exactSensitiveKeys = new Set([
+  'password',
+  'passphrase',
+  'token',
+  'secret',
+  'apikey',
+  'api_key',
+  'privatekey',
+  'private_key',
+  'authorization',
+  'access_token',
+  'refresh_token',
+  'ssh_password',
+  'agent',
+  'aws_secret_access_key'
+])
+
+function isSensitiveKey (key) {
+  const normalized = String(key).replace(/-/g, '_').toLowerCase()
+  return exactSensitiveKeys.has(normalized) ||
+    /_(?:secret|token|password|api_key)$/.test(normalized) ||
+    /credential$/.test(normalized)
+}
+
+function redactData (value, ancestors) {
+  if (Array.isArray(value)) {
+    if (ancestors.has(value)) return redacted
+    ancestors.add(value)
+    const output = value.map(item => redactData(item, ancestors))
+    ancestors.delete(value)
+    return output
+  }
+  if (value && typeof value === 'object') {
+    if (ancestors.has(value)) return redacted
+    ancestors.add(value)
+    const output = Object.fromEntries(Object.entries(value).map(([key, item]) => [
+      key,
+      isSensitiveKey(key) ? redacted : redactData(item, ancestors)
+    ]))
+    ancestors.delete(value)
+    return output
+  }
+  return value
+}
+
+export function redactSensitiveData (value) {
+  return redactData(value, new WeakSet())
+}
 
 function redactPrivateKeys (text) {
   return text.replace(
@@ -33,6 +81,11 @@ function redactAuthorizationValues (text) {
 
 export function redactAuditText (value) {
   let text = String(value ?? '')
+  try {
+    return JSON.stringify(redactSensitiveData(JSON.parse(text)))
+  } catch {
+    // Non-JSON audit entries are sanitized below without changing command text.
+  }
   text = redactPrivateKeys(text)
   text = redactJsonCredentialValues(text)
   text = redactAuthorizationValues(text)
@@ -46,7 +99,7 @@ export function redactAuditText (value) {
   )
   text = redactCredentialValues(
     text,
-    /(\b[A-Za-z_][A-Za-z0-9_]*_API_KEY\s*=\s*)(?:"((?:\\.|[^"\\])*)"|'([^'\r\n]*)'|[^\s,;&]+)/gi
+    /(\b(?:AWS_SECRET_ACCESS_KEY|[A-Za-z_][A-Za-z0-9_]*_(?:SECRET|TOKEN|PASSWORD|API_KEY))\s*[:=]\s*)(?:"((?:\\.|[^"\\])*)"|'([^'\r\n]*)'|[^\s,;&]+)/gi
   )
   text = redactCredentialValues(
     text,

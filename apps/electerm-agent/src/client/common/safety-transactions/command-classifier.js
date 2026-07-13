@@ -70,6 +70,7 @@ function shellTokens (command) {
   while ((match = pattern.exec(command))) {
     tokens.push({
       value: match[1] ?? match[2] ?? match[3],
+      quote: match[1] !== undefined ? '"' : match[2] !== undefined ? "'" : '',
       start: match.index,
       end: pattern.lastIndex
     })
@@ -140,6 +141,27 @@ function isSafeAbsolutePath (value) {
   return !value.split('/').includes('..')
 }
 
+const harmlessOutputSinks = new Set(['/dev/null', '/dev/stdout', '/dev/stderr'])
+const blockedVirtualRoots = ['/dev', '/proc', '/sys']
+const unrecoverableVirtualRoots = ['/run', '/var/run']
+
+function isWithinPath (value, root) {
+  return value === root || value.startsWith(`${root}/`)
+}
+
+function filePathPolicy (value) {
+  if (!isSafeAbsolutePath(value)) return 'unsafe'
+  const normalized = value.replace(/\/{2,}/g, '/')
+  if (harmlessOutputSinks.has(normalized)) return 'sink'
+  if (blockedVirtualRoots.some(root => isWithinPath(normalized, root))) return 'blocked'
+  if (unrecoverableVirtualRoots.some(root => isWithinPath(normalized, root))) return 'virtual'
+  return 'recoverable'
+}
+
+function isRecoverableFilePath (value) {
+  return filePathPolicy(value) === 'recoverable'
+}
+
 function hasUnsafeExpansion (command) {
   return /\$\(|(?:<|>)\s*\(|`|\$\{|(^|\s)(?:eval|source|\.)\s|(^|\s)(?:ba|z|k)?sh\s+-?c\b/i.test(command)
 }
@@ -157,6 +179,9 @@ function isBlocked (command) {
   const text = stripCommandPrefix(command)
   if (/^(?:mkfs(?:\.[A-Za-z0-9_-]+)?|fdisk|parted)(?:\s|$)/i.test(text)) return true
   if (/^(?:reboot|shutdown|poweroff)(?:\s|$)/i.test(text)) return true
+  if (explicitFileWriteTargets(text).some(target => filePathPolicy(target) === 'blocked')) {
+    return true
+  }
   if (/^rm(?:\s|$)/i.test(text)) {
     const words = shellWords(text).slice(1)
     const recursive = words.some(word => word === '--recursive' || /^-[^-]*r/i.test(word))
@@ -166,13 +191,11 @@ function isBlocked (command) {
   if (/^dd(?:\s|$)/i.test(text)) {
     const outputMatch = text.match(/\bof\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s]+))/i)
     const output = outputMatch?.[1] ?? outputMatch?.[2] ?? outputMatch?.[3] ?? ''
-    if (output.startsWith('/dev/')) {
-      const allowedCharacterDevices = new Set([
-        '/dev/null', '/dev/zero', '/dev/random', '/dev/urandom',
-        '/dev/stdout', '/dev/stderr'
-      ])
-      return !allowedCharacterDevices.has(output)
-    }
+    const allowedCharacterDevices = new Set([
+      '/dev/null', '/dev/zero', '/dev/random', '/dev/urandom',
+      '/dev/stdout', '/dev/stderr'
+    ])
+    if (!allowedCharacterDevices.has(output) && filePathPolicy(output) === 'blocked') return true
   }
   return isDatabaseClient(text) && hasDestructiveDatabaseOperation(text)
 }
@@ -211,17 +234,14 @@ function findRedirection (command) {
 }
 
 function classifyRedirection (command, redirects) {
-  const deviceTargets = redirects
-    .map(redirect => redirect.target)
-    .filter(target => target?.startsWith('/dev/'))
-  const harmlessDevices = new Set(['/dev/null', '/dev/stdout', '/dev/stderr'])
-  if (deviceTargets.some(target => !harmlessDevices.has(target))) {
-    return result('blocked', '输出重定向指向设备节点，无法安全恢复')
+  const targetPolicies = redirects.map(redirect => filePathPolicy(redirect.target))
+  if (targetPolicies.includes('blocked')) {
+    return result('blocked', '输出重定向指向虚拟或设备路径，无法安全恢复')
   }
-  if (deviceTargets.length) {
-    return result('unknown', '输出重定向指向设备节点，不创建文件恢复点')
+  if (targetPolicies.some(policy => policy === 'sink' || policy === 'virtual')) {
+    return result('unknown', '输出重定向指向不可恢复路径，不创建文件恢复点')
   }
-  if (redirects.length !== 1 || !isSafeAbsolutePath(redirects[0].target)) {
+  if (redirects.length !== 1 || targetPolicies[0] !== 'recoverable') {
     return result('unknown', '输出重定向目标无法安全确定')
   }
   const producer = stripCommandPrefix(command.slice(0, redirects[0].index))
@@ -233,13 +253,206 @@ function classifyRedirection (command, redirects) {
 
 const findOutputActions = new Set(['-fprint', '-fprintf', '-fls', '-fprint0'])
 const unsafeFindActions = new Set(['-delete', '-exec', '-execdir', '-ok', '-okdir'])
+const sedShortOptions = new Set(['n', 'E', 'r', 's', 'u', 'z'])
+const sedLongOptions = new Set([
+  '--quiet', '--silent', '--regexp-extended', '--separate', '--unbuffered',
+  '--null-data', '--sandbox', '--posix', '--debug', '--follow-symlinks'
+])
 
-function hasSedInPlaceOption (words) {
-  return words.some(word => {
-    if (word === '--in-place' || word.startsWith('--in-place=')) return true
-    return word.startsWith('-') && !word.startsWith('--') &&
-      word.slice(1).includes('i')
-  })
+function invalidSedInvocation () {
+  return {
+    valid: false,
+    inPlace: false,
+    externalScript: false,
+    hasDynamicScript: false,
+    scripts: [],
+    files: []
+  }
+}
+
+function hasShellVariable (value) {
+  let escaped = false
+  for (let index = 0; index < value.length - 1; index += 1) {
+    const character = value[index]
+    if (escaped) {
+      escaped = false
+      continue
+    }
+    if (character === '\\') {
+      escaped = true
+      continue
+    }
+    if (character === '$' && /[A-Za-z0-9_({?!*#$@-]/.test(value[index + 1])) return true
+  }
+  return false
+}
+
+function parseSedInvocation (words, quotes = []) {
+  const scripts = []
+  const files = []
+  let inPlace = false
+  let externalScript = false
+  let hasDynamicScript = false
+  let usesScriptOptions = false
+  let hasPositionalScript = false
+  let parseOptions = true
+
+  function addScript (value, quote) {
+    scripts.push(value)
+    if (quote !== "'" && hasShellVariable(value)) hasDynamicScript = true
+  }
+
+  for (let index = 1; index < words.length; index += 1) {
+    const word = words[index]
+    if (parseOptions && word === '--') {
+      parseOptions = false
+      continue
+    }
+    if (parseOptions && word.startsWith('--')) {
+      if (sedLongOptions.has(word)) continue
+      if (word === '--in-place' || word.startsWith('--in-place=')) {
+        inPlace = true
+        continue
+      }
+      if (word === '--expression' || word === '--file') {
+        const scriptValue = words[index + 1]
+        if (scriptValue === undefined) return invalidSedInvocation()
+        usesScriptOptions = true
+        if (word === '--expression') addScript(scriptValue, quotes[index + 1])
+        else externalScript = true
+        index += 1
+        continue
+      }
+      if (word.startsWith('--expression=')) {
+        const scriptValue = word.slice('--expression='.length)
+        if (!scriptValue) return invalidSedInvocation()
+        usesScriptOptions = true
+        addScript(scriptValue, quotes[index])
+        continue
+      }
+      if (word.startsWith('--file=')) {
+        if (word.length === '--file='.length) return invalidSedInvocation()
+        usesScriptOptions = true
+        externalScript = true
+        continue
+      }
+      return invalidSedInvocation()
+    }
+    if (parseOptions && /^-[^-]/.test(word)) {
+      for (let offset = 1; offset < word.length; offset += 1) {
+        const option = word[offset]
+        if (sedShortOptions.has(option)) continue
+        if (option === 'i') {
+          inPlace = true
+          break
+        }
+        if (option === 'e' || option === 'f') {
+          const attachedValue = word.slice(offset + 1)
+          const scriptValue = attachedValue || words[index + 1]
+          if (scriptValue === undefined) return invalidSedInvocation()
+          usesScriptOptions = true
+          if (option === 'e') {
+            addScript(scriptValue, attachedValue ? quotes[index] : quotes[index + 1])
+          } else externalScript = true
+          if (!attachedValue) index += 1
+          break
+        }
+        return invalidSedInvocation()
+      }
+      continue
+    }
+    if (!usesScriptOptions && !hasPositionalScript) {
+      addScript(word, quotes[index])
+      hasPositionalScript = true
+    } else {
+      files.push(word)
+    }
+  }
+
+  return { valid: true, inPlace, externalScript, hasDynamicScript, scripts, files }
+}
+
+function skipSedSpacing (script, index) {
+  while (index < script.length && /[\t\r ]/.test(script[index])) index += 1
+  return index
+}
+
+function consumeSedDelimited (script, index, delimiter) {
+  let escaped = false
+  for (; index < script.length; index += 1) {
+    const character = script[index]
+    if (escaped) {
+      escaped = false
+      continue
+    }
+    if (character === '\\') {
+      escaped = true
+      continue
+    }
+    if (character === delimiter) return index + 1
+  }
+  return -1
+}
+
+function consumeSedAddress (script, index) {
+  index = skipSedSpacing(script, index)
+  if (/\d/.test(script[index] || '')) {
+    while (/\d/.test(script[index] || '')) index += 1
+    return index
+  }
+  if (script[index] === '$') return index + 1
+  if (script[index] === '/') return consumeSedDelimited(script, index + 1, '/')
+  return -1
+}
+
+function isSafeSedScript (script) {
+  let index = 0
+  let commandCount = 0
+  while (index < script.length) {
+    index = skipSedSpacing(script, index)
+    while (script[index] === ';' || script[index] === '\n') {
+      index = skipSedSpacing(script, index + 1)
+    }
+    if (index >= script.length) break
+
+    const addressEnd = consumeSedAddress(script, index)
+    if (addressEnd !== -1) {
+      index = skipSedSpacing(script, addressEnd)
+      if (script[index] === ',') {
+        const rangeEnd = consumeSedAddress(script, index + 1)
+        if (rangeEnd === -1) return false
+        index = skipSedSpacing(script, rangeEnd)
+      }
+    }
+    if (script[index] === '!') index = skipSedSpacing(script, index + 1)
+
+    const command = script[index]
+    index += 1
+    if (command === 's') {
+      const delimiter = script[index]
+      if (!delimiter || /[\\\n\r\s]/.test(delimiter)) return false
+      index = consumeSedDelimited(script, index + 1, delimiter)
+      if (index === -1) return false
+      index = consumeSedDelimited(script, index, delimiter)
+      if (index === -1) return false
+      const flagsStart = index
+      while (index < script.length && script[index] !== ';' && script[index] !== '\n') index += 1
+      const flags = script.slice(flagsStart, index).trim()
+      if (!/^[gIpimM0-9]*$/.test(flags)) return false
+    } else if (['p', 'P', '='].includes(command)) {
+      index = skipSedSpacing(script, index)
+      if (index < script.length && script[index] !== ';' && script[index] !== '\n') return false
+    } else if (command === 'l') {
+      index = skipSedSpacing(script, index)
+      while (/\d/.test(script[index] || '')) index += 1
+      index = skipSedSpacing(script, index)
+      if (index < script.length && script[index] !== ';' && script[index] !== '\n') return false
+    } else {
+      return false
+    }
+    commandCount += 1
+  }
+  return commandCount > 0
 }
 
 function findOutputTargets (words) {
@@ -257,36 +470,58 @@ function hasUnsafeFindAction (words) {
   return words.some(word => unsafeFindActions.has(word))
 }
 
+function positionalArguments (words) {
+  return words.filter(word => word !== '--' && !word.startsWith('-'))
+}
+
+function explicitFileWriteTargets (command) {
+  const words = shellWords(stripCommandPrefix(command))
+  const executable = (words[0] || '').toLowerCase()
+  const positional = positionalArguments(words.slice(1))
+  if (executable === 'tee' || executable === 'truncate' || executable === 'rm') {
+    return positional
+  }
+  if (executable === 'find') return findOutputTargets(words.slice(1)).targets
+  if (executable === 'sed') {
+    const invocation = parseSedInvocation(words)
+    return invocation.inPlace ? invocation.files : []
+  }
+  if (executable === 'cp') return positional.slice(-1)
+  if (executable === 'mv') return positional
+  return []
+}
+
 function fileProvider (command) {
   const text = stripCommandPrefix(command)
   const words = shellWords(text)
   const executable = (words.shift() || '').toLowerCase()
-  const positional = words.filter(word => !word.startsWith('-'))
+  const positional = positionalArguments(words)
 
   if (executable === 'tee') {
-    return positional.length === 1 && isSafeAbsolutePath(positional[0])
+    return positional.length === 1 && isRecoverableFilePath(positional[0])
   }
   if (executable === 'find') {
     const output = findOutputTargets(words)
     return !hasUnsafeFindAction(words) &&
-      output.hasOutputAction && output.targets.every(isSafeAbsolutePath)
+      output.hasOutputAction && output.targets.every(isRecoverableFilePath)
   }
-  if (executable === 'sed' && hasSedInPlaceOption(words)) {
-    const scriptIndex = words.findIndex(word => !word.startsWith('-'))
-    const targets = scriptIndex === -1 ? [] : words.slice(scriptIndex + 1)
-    return targets.length > 0 && targets.every(isSafeAbsolutePath)
+  if (executable === 'sed') {
+    const invocation = parseSedInvocation([executable, ...words])
+    return invocation.valid && invocation.inPlace && !invocation.externalScript &&
+      invocation.scripts.every(isSafeSedScript) && invocation.files.length > 0 &&
+      invocation.files.every(isRecoverableFilePath)
   }
   if (executable === 'truncate') {
-    return positional.length > 0 && positional.every(isSafeAbsolutePath)
+    return positional.length > 0 && positional.every(isRecoverableFilePath)
   }
   if (executable === 'rm') {
     const recursive = words.some(word => /^-[^-]*r/i.test(word) || word === '--recursive')
-    const safeTargets = positional.length > 0 && positional.every(isSafeAbsolutePath)
+    const safeTargets = positional.length > 0 && positional.every(isRecoverableFilePath)
     const rootLevelTarget = positional.some(word => word.split('/').filter(Boolean).length < 2)
     return safeTargets && !(recursive && rootLevelTarget)
   }
   if (executable === 'cp' || executable === 'mv') {
-    return positional.length >= 2 && positional.every(isSafeAbsolutePath)
+    return positional.length >= 2 && positional.every(isRecoverableFilePath)
   }
   return false
 }
@@ -397,25 +632,67 @@ function isReadonlySs (words) {
   })
 }
 
-function isReadonlySed (words) {
-  if (hasSedInPlaceOption(words.slice(1))) return false
-  const allowedLongOptions = /^(?:--quiet|--silent|--regexp-extended|--separate|--unbuffered|--null-data|--expression|--file|--sandbox|--posix|--debug|--help|--version|--follow-symlinks)(?:=\S+)?$/
-  return words.slice(1).every(word => {
-    if (!word.startsWith('-')) return true
-    return /^-[nErsuzef]+$/.test(word) || allowedLongOptions.test(word)
-  })
+function isReadonlyIptables (words) {
+  const listActions = new Set(['-L', '-S', '--list', '--list-rules'])
+  const noValueModifiers = new Set([
+    '-n', '--numeric', '-v', '--verbose', '-x', '--exact',
+    '--line-numbers', '-4', '-6'
+  ])
+  const valueModifiers = new Set(['-t', '--table', '-W', '--wait-interval'])
+  const shortModifierNames = new Set(['n', 'v', 'x', '4', '6'])
+  let hasListAction = false
+  let hasChain = false
+
+  for (let index = 1; index < words.length; index += 1) {
+    const word = words[index]
+    if (listActions.has(word)) {
+      if (hasListAction) return false
+      hasListAction = true
+      continue
+    }
+    if (word.startsWith('--list=') || word.startsWith('--list-rules=')) {
+      if (hasListAction || !word.slice(word.indexOf('=') + 1)) return false
+      hasListAction = true
+      hasChain = true
+      continue
+    }
+    if (noValueModifiers.has(word) ||
+      (/^-[^-]/.test(word) && [...word.slice(1)].every(option => shortModifierNames.has(option)))) continue
+    if (/^--(?:table|wait|wait-interval)=\S+$/.test(word)) continue
+    if (word === '-w' || word === '--wait') {
+      if (/^\d+$/.test(words[index + 1] || '')) index += 1
+      continue
+    }
+    if (valueModifiers.has(word)) {
+      if (!words[index + 1]) return false
+      index += 1
+      continue
+    }
+    if (word.startsWith('-')) return false
+    if (!hasListAction || hasChain) return false
+    hasChain = true
+  }
+  return hasListAction
+}
+
+function isReadonlySed (words, quotes) {
+  const invocation = parseSedInvocation(words, quotes)
+  return invocation.valid && !invocation.inPlace && !invocation.externalScript &&
+    !invocation.hasDynamicScript && invocation.scripts.length > 0 &&
+    invocation.scripts.every(isSafeSedScript)
 }
 
 function isReadonly (command) {
   const text = stripCommandPrefix(command)
-  const words = shellWords(text)
+  const tokens = shellTokens(text)
+  const words = tokens.map(token => token.value)
   const executable = (words[0] || '').toLowerCase()
   if (inherentlyReadonlyCommands.has(executable)) return true
   if (executable === 'hostname') return words.length === 1
   if (executable === 'date') return isReadonlyDate(words)
   if (executable === 'journalctl') return isReadonlyJournalctl(words)
   if (executable === 'ss') return isReadonlySs(words)
-  if (executable === 'sed') return isReadonlySed(words)
+  if (executable === 'sed') return isReadonlySed(words, tokens.map(token => token.quote))
   if (executable === 'find') {
     const output = findOutputTargets(words)
     return !output.hasOutputAction && !hasUnsafeFindAction(words)
@@ -430,7 +707,7 @@ function isReadonly (command) {
   if (executable === 'systemctl') return isReadonlySystemctl(words)
   if (executable === 'firewall-cmd') return /^(?:--state|--list-[A-Za-z-]+|--query-[A-Za-z-]+)$/i.test(words[1] || '')
   if (executable === 'ufw') return words[1]?.toLowerCase() === 'status'
-  if (executable === 'iptables' || executable === 'ip6tables') return /^-(?:L|S)$/.test(words[1] || '')
+  if (executable === 'iptables' || executable === 'ip6tables') return isReadonlyIptables(words)
   if (executable === 'nft') return words[1]?.toLowerCase() === 'list'
   if (executable === 'ifconfig') return words.length <= 2 && (!words[1] || words[1] === '-a' || !words[1].startsWith('-'))
   if (executable === 'docker' || executable === 'podman') return ['ps', 'logs', 'inspect', 'stats'].includes(words[1]?.toLowerCase())

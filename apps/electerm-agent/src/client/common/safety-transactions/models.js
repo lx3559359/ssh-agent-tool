@@ -1,4 +1,5 @@
 import { classifyCommand } from './command-classifier.js'
+import { redactSensitiveData } from './audit-redaction.js'
 import { buildEndpointKey, normalizeEndpoint } from './endpoint-guard.js'
 
 export const operationStates = Object.freeze({
@@ -28,6 +29,21 @@ const validSources = new Set(operationSources)
 const endpointIdentityFields = [
   'tabId', 'host', 'port', 'username', 'title', 'pid', 'terminalPid', 'sessionType'
 ]
+const normalizedOperationFields = [
+  'id', 'source', 'command', 'title', 'state', 'createdAt', 'updatedAt',
+  'metadata', 'risk', 'reversible', 'recoveryProvider',
+  'requiresConfirmation', 'reason'
+]
+const safetyRequestInputFields = [
+  'id', 'source', 'command', 'title', 'endpoint', 'state', 'createdAt',
+  'updatedAt', 'metadata'
+]
+
+function projectDefinedFields (value, fields) {
+  return Object.fromEntries(fields
+    .filter(field => value[field] !== undefined)
+    .map(field => [field, value[field]]))
+}
 
 function toTimestamp (value, fallback) {
   const date = value === undefined || value === null || value === ''
@@ -60,8 +76,12 @@ export function normalizeOperation (operation = {}, options = {}) {
     .filter(field => operation.endpoint?.[field] !== undefined)
     .map(field => [field, operation.endpoint[field]]))
   Object.assign(endpoint, normalizedIdentity)
+  const normalized = projectDefinedFields(operation, normalizedOperationFields)
+  if (normalized.metadata !== undefined) {
+    normalized.metadata = redactSensitiveData(normalized.metadata)
+  }
   return {
-    ...operation,
+    ...normalized,
     schemaVersion: 1,
     source: operation.source,
     endpoint,
@@ -74,8 +94,9 @@ export function normalizeOperation (operation = {}, options = {}) {
 
 export function buildSafetyRequest (request = {}, options = {}) {
   const classification = classifyCommand(request.command)
+  const safeRequest = projectDefinedFields(request, safetyRequestInputFields)
   return normalizeOperation({
-    ...request,
+    ...safeRequest,
     risk: classification.risk,
     reversible: classification.reversible,
     recoveryProvider: classification.provider,
