@@ -96,8 +96,12 @@ test('systemd and docker providers capture and restore the previous state', asyn
   assert.match(systemd.prepareCommand, /systemctl is-active/)
   assert.match(systemd.prepareCommand, /systemctl is-enabled/)
   assert.match(systemd.prepareCommand, /sudo -n systemctl/)
-  assert.match(systemd.prepareCommand, /active=\$\(sudo -n systemctl is-active.*\|\| true\)/)
-  assert.match(systemd.prepareCommand, /enabled=\$\(sudo -n systemctl is-enabled.*\|\| true\)/)
+  assert.match(systemd.prepareCommand, /backup\/old-active/)
+  assert.match(systemd.prepareCommand, /backup\/old-enabled/)
+  assert.match(systemd.prepareCommand, /current_active=\$\(sudo -n systemctl is-active.*\|\| true\)/)
+  assert.match(systemd.prepareCommand, /current_enabled=\$\(sudo -n systemctl is-enabled.*\|\| true\)/)
+  assert.match(systemd.prepareCommand, /\[ "\$current_active" = "\$old_active" \]/)
+  assert.match(systemd.prepareCommand, /\[ "\$current_enabled" = "\$old_enabled" \]/)
   assert.match(systemd.prepareCommand, /active=%s/)
   assert.match(systemd.prepareCommand, /enabled=%s/)
 
@@ -106,6 +110,14 @@ test('systemd and docker providers capture and restore the previous state', asyn
   assert.match(docker.prepareCommand, /\.State\.Running/)
   assert.match(docker.prepareCommand, /docker start/)
   assert.match(docker.prepareCommand, /docker stop/)
+})
+
+test('systemd provider rejects reload because it has no exact inverse', async () => {
+  const { buildRecoveryPlan } = await importDomainModule('recovery-providers.js')
+  const change = await buildChange('systemctl reload nginx.service', 'systemd-reload')
+
+  assert.equal(change.reversible, true)
+  assert.throws(() => buildRecoveryPlan(change), /reload|无法撤销|拒绝/)
 })
 
 test('firewall providers restore only the changed static port rule', async () => {
@@ -117,6 +129,15 @@ test('firewall providers restore only the changed static port rule', async () =>
   assert.match(firewalld.prepareCommand, /--query-port=443\/tcp/)
   assert.match(firewalld.prepareCommand, /--add-port=443\/tcp/)
   assert.match(firewalld.prepareCommand, /--remove-port=443\/tcp/)
+  assert.match(firewalld.prepareCommand, /--zone=public --query-port=443\/tcp/)
+  assert.match(firewalld.prepareCommand, /--zone=public --add-port=443\/tcp/)
+  assert.match(firewalld.prepareCommand, /--zone=public --remove-port=443\/tcp/)
+
+  const spacedZone = buildRecoveryPlan(await buildChange(
+    'firewall-cmd --zone public --add-port=80/tcp',
+    'firewall-zone-spaced'
+  ))
+  assert.match(spacedZone.prepareCommand, /--zone=public --query-port=80\/tcp/)
 
   const ufw = buildRecoveryPlan(await buildChange('ufw allow 8443/tcp', 'firewall-2'))
   assert.match(ufw.prepareCommand, /ufw show added/)
@@ -124,10 +145,21 @@ test('firewall providers restore only the changed static port rule', async () =>
   assert.match(ufw.prepareCommand, /ufw --force delete allow/)
 })
 
+test('firewalld provider rejects commands that rely on the default zone', async () => {
+  const { buildRecoveryPlan } = await importDomainModule('recovery-providers.js')
+  const change = await buildChange(
+    'firewall-cmd --add-port=443/tcp',
+    'firewall-default-zone'
+  )
+
+  assert.equal(change.reversible, true)
+  assert.throws(() => buildRecoveryPlan(change), /zone|区域|显式|拒绝/)
+})
+
 test('firewalld provider rejects multiple changes in one invocation', async () => {
   const { buildRecoveryPlan } = await importDomainModule('recovery-providers.js')
   const change = await buildChange(
-    'firewall-cmd --add-port=443/tcp --remove-port=80/tcp',
+    'firewall-cmd --zone=public --add-port=443/tcp --remove-port=80/tcp',
     'firewall-multi'
   )
 
@@ -157,6 +189,20 @@ test('network provider rejects structurally invalid static CIDR values', async (
   )
 
   assert.throws(() => buildRecoveryPlan(change), /CIDR|网络地址|拒绝/)
+})
+
+test('network provider explicitly rejects IPv6 CIDR in the first release', async () => {
+  const { buildRecoveryPlan } = await importDomainModule('recovery-providers.js')
+  const change = await buildChange(
+    'ip addr add 2001:db8::10/64 dev eth0',
+    'network-ipv6'
+  )
+
+  assert.equal(change.reversible, true)
+  assert.throws(
+    () => buildRecoveryPlan(change),
+    (error) => /IPv4|IPv6/.test(error.message) && error.allowUnsafeExecute === false
+  )
 })
 
 test('manifest command summary is audit-redacted while execution stays unchanged', async () => {
@@ -268,6 +314,24 @@ test('verified remote actions require a valid zero result marker', async () => {
   assert.match(verify, /__SHELLPILOT_VERIFY_RC_op-1=%s/)
   assert.equal(parseRemoteActionMarker('done\n__SHELLPILOT_ROLLBACK_RC_op-1=0', 'rollback', 'op-1'), 0)
   assert.equal(parseRemoteActionMarker('done\n__SHELLPILOT_VERIFY_RC_op-1=0', 'verify', 'op-1'), 0)
+  assert.equal(
+    parseRemoteActionMarker(
+      'before\r\n \t__SHELLPILOT_VERIFY_RC_op-1=0 \t\r\nafter',
+      'verify',
+      'op-1'
+    ),
+    0
+  )
+  for (const output of [
+    'prefix__SHELLPILOT_VERIFY_RC_op-1=0',
+    '__SHELLPILOT_VERIFY_RC_op-1=0suffix',
+    '__SHELLPILOT_VERIFY_RC_op-1=0 extra'
+  ]) {
+    assert.throws(
+      () => parseRemoteActionMarker(output, 'verify', 'op-1'),
+      /未返回|标记|状态/
+    )
+  }
   assert.throws(
     () => parseRemoteActionMarker('no marker', 'rollback', 'op-1'),
     /未返回|标记|状态/

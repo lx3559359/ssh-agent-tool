@@ -39,7 +39,7 @@ export function parseRemoteActionMarker (output, actionOrOptions, id) {
   const resolved = resolveActionArguments(actionOrOptions, id)
   validateAction(resolved.action, resolved.id)
   const marker = markerPrefix(resolved.action, resolved.id)
-  const matches = [...String(output || '').matchAll(new RegExp(`${marker}=(\\d+)`, 'g'))]
+  const matches = [...String(output || '').matchAll(new RegExp(`^[ \\t]*${marker}=(\\d+)[ \\t]*\\r?$`, 'gm'))]
   const match = matches.at(-1)
   if (!match) {
     throw new Error(`远程${resolved.action === 'rollback' ? '回滚' : '校验'}未返回执行状态标记，无法确认结果。`)

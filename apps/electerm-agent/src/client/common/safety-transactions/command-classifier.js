@@ -163,7 +163,7 @@ function isRecoverableFilePath (value) {
 }
 
 function hasUnsafeExpansion (command) {
-  return /\$\(|(?:<|>)\s*\(|`|\$\{|(^|\s)(?:eval|source|\.)\s|(^|\s)(?:ba|z|k)?sh\s+-?c\b/i.test(command)
+  return /\$\(|(?:<|>)\s*\(|`|\$\{|[@?!+*]\(|(^|\s)(?:eval|source|\.)\s|(^|\s)(?:ba|z|k)?sh\s+-?c\b/i.test(command)
 }
 
 function isDatabaseClient (command) {
@@ -489,6 +489,7 @@ function truncateTargets (words) {
       index += 1
       continue
     }
+    if (!optionsEnded && /^-s[+-]?\d+[KMGTPEZY]?$/.test(word)) continue
     if (!optionsEnded && /^--size=[+-]?\d+[KMGTPEZY]?$/.test(word)) continue
     if (!optionsEnded && word.startsWith('-')) return []
     targets.push(word)

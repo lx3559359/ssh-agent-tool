@@ -135,7 +135,7 @@ function parseInvocation (command) {
 
 function assertSafeName (value, label, pattern = /^[A-Za-z0-9_.:@-]+$/) {
   const text = String(value || '')
-  if (!text || !pattern.test(text) || /[$`*?[\]{}]/.test(text)) {
+  if (!text || !pattern.test(text) || /[$`*?[\]{}]/.test(text) || /[@?!+*]\(/.test(text)) {
     throw new Error(`${label}不是静态安全目标。`)
   }
   return text
@@ -144,7 +144,8 @@ function assertSafeName (value, label, pattern = /^[A-Za-z0-9_.:@-]+$/) {
 function assertOrdinaryAbsolutePath (value, label = '路径') {
   const target = String(value || '')
   const hasControlCharacter = [...target].some(character => character.charCodeAt(0) <= 31)
-  if (!target.startsWith('/') || target === '/' || hasControlCharacter || /[$`*?[\]{}]/.test(target)) {
+  if (!target.startsWith('/') || target === '/' || hasControlCharacter ||
+    /[$`*?[\]{}]/.test(target) || /[@?!+*]\(/.test(target)) {
     throw new Error(`${label}必须是无动态展开的绝对普通路径。`)
   }
   if (target.includes('//') || target.split('/').includes('..')) {
@@ -315,6 +316,7 @@ function parseFileCommand (command) {
         index += 1
         continue
       }
+      if (/^-s[+-]?\d+[KMGTPEZY]?$/.test(word)) continue
       if (/^--size=[+-]?\d+[KMGTPEZY]?$/.test(word)) continue
       if (word.startsWith('-')) throw new Error(`truncate 不支持选项 ${word}。`)
       targets.push(word)
@@ -461,9 +463,12 @@ function buildPermissionsProvider (command, id) {
 function buildSystemdProvider (command, id) {
   const invocation = parseInvocation(command)
   const words = invocation.words
+  if (executableName(words[0]) === 'systemctl' && words[1] === 'reload') {
+    throw new Error('systemd reload 无法撤销，首版拒绝自动回滚。')
+  }
   if (executableName(words[0]) !== 'systemctl' || words.length !== 3 ||
-    !['start', 'stop', 'restart', 'reload', 'enable', 'disable'].includes(words[1])) {
-    throw new Error('systemd 首版只支持静态单服务 start/stop/restart/reload/enable/disable。')
+    !['start', 'stop', 'restart', 'enable', 'disable'].includes(words[1])) {
+    throw new Error('systemd 首版只支持静态单服务 start/stop/restart/enable/disable。')
   }
   const service = assertSafeName(words[2], 'systemd 服务')
   const quotedService = shellQuote(service)
@@ -473,28 +478,32 @@ function buildSystemdProvider (command, id) {
   const rollback = [
     ...scriptHeader(id),
     `service=${quotedService}`,
-    'active=$(cat "$operation_dir/backup/active")',
-    'enabled=$(cat "$operation_dir/backup/enabled")',
-    `case "$enabled" in enabled) ${prefix}systemctl enable -- "$service";; disabled) ${prefix}systemctl disable -- "$service";; *) exit 43;; esac`,
-    `case "$active" in active) ${prefix}systemctl start -- "$service";; inactive) ${prefix}systemctl stop -- "$service";; *) exit 43;; esac`
+    'old_active=$(cat "$operation_dir/backup/old-active")',
+    'old_enabled=$(cat "$operation_dir/backup/old-enabled")',
+    `case "$old_enabled" in enabled) ${prefix}systemctl enable -- "$service";; disabled) ${prefix}systemctl disable -- "$service";; *) exit 43;; esac`,
+    `case "$old_active" in active) ${prefix}systemctl start -- "$service";; inactive) ${prefix}systemctl stop -- "$service";; *) exit 43;; esac`
   ]
   const verify = [
     ...scriptHeader(id),
     `service=${quotedService}`,
-    `active=$(${prefix}systemctl is-active -- "$service" 2>/dev/null || true)`,
-    `enabled=$(${prefix}systemctl is-enabled -- "$service" 2>/dev/null || true)`,
-    'printf \'active=%s\\nenabled=%s\\n\' "$active" "$enabled"'
+    'old_active=$(cat "$operation_dir/backup/old-active")',
+    'old_enabled=$(cat "$operation_dir/backup/old-enabled")',
+    `current_active=$(${prefix}systemctl is-active -- "$service" 2>/dev/null || true)`,
+    `current_enabled=$(${prefix}systemctl is-enabled -- "$service" 2>/dev/null || true)`,
+    'printf \'active=%s\\nenabled=%s\\n\' "$current_active" "$current_enabled"',
+    '[ "$current_active" = "$old_active" ]',
+    '[ "$current_enabled" = "$old_enabled" ]'
   ]
   return {
     captureCommands: [
-      `active=$(${activeQuery}); case "$active" in active|inactive) :;; *) echo ${shellQuote('systemd 当前 active 状态无法精确自动恢复。')} >&2; exit 42;; esac; printf '%s\\n' "$active" > "$operation_dir/backup/active"`,
-      `enabled=$(${enabledQuery}); case "$enabled" in enabled|disabled) :;; *) echo ${shellQuote('systemd 当前 enabled 状态无法精确自动恢复。')} >&2; exit 42;; esac; printf '%s\\n' "$enabled" > "$operation_dir/backup/enabled"`
+      `old_active=$(${activeQuery}); case "$old_active" in active|inactive) :;; *) echo ${shellQuote('systemd 当前 active 状态无法精确自动恢复。')} >&2; exit 42;; esac; printf '%s\\n' "$old_active" > "$operation_dir/backup/old-active"`,
+      `old_enabled=$(${enabledQuery}); case "$old_enabled" in enabled|disabled) :;; *) echo ${shellQuote('systemd 当前 enabled 状态无法精确自动恢复。')} >&2; exit 42;; esac; printf '%s\\n' "$old_enabled" > "$operation_dir/backup/old-enabled"`
     ],
     rollbackScript: rollback.join('\n') + '\n',
     verifyScript: verify.join('\n') + '\n',
     summary: `记录 systemd 服务 ${service} 的 active 与 enabled 状态。`,
     target: service,
-    stateArtifacts: ['backup/active', 'backup/enabled']
+    stateArtifacts: ['backup/old-active', 'backup/old-enabled']
   }
 }
 
@@ -551,8 +560,10 @@ function parseFirewalld (invocation) {
     if (word === '--permanent') {
       permanent = true
     } else if (word.startsWith('--zone=')) {
+      if (zone) throw new Error('firewalld 首版只允许一个显式 zone。')
       zone = assertSafeName(word.slice(7), 'firewalld zone', /^[A-Za-z0-9_-]+$/)
     } else if (word === '--zone') {
+      if (zone) throw new Error('firewalld 首版只允许一个显式 zone。')
       zone = assertSafeName(invocation.words[++index], 'firewalld zone', /^[A-Za-z0-9_-]+$/)
     } else if (word.startsWith('--add-port=') || word.startsWith('--remove-port=')) {
       if (action) throw new Error('firewalld 首版只允许单一端口修改动作。')
@@ -567,13 +578,14 @@ function parseFirewalld (invocation) {
     }
   }
   if (!action || !port) throw new Error('firewalld 仅支持单一端口 add/remove。')
+  if (!zone) throw new Error('firewalld 自动回滚要求显式指定静态 --zone，默认 zone 命令已拒绝。')
   return { action, port, permanent, zone }
 }
 
 function buildFirewalldProvider (invocation, id) {
   const parsed = parseFirewalld(invocation)
   const prefix = invocation.privilege
-  const options = `${parsed.permanent ? ' --permanent' : ''}${parsed.zone ? ` --zone=${parsed.zone}` : ''}`
+  const options = `${parsed.permanent ? ' --permanent' : ''} --zone=${parsed.zone}`
   const query = `${prefix}firewall-cmd${options} --query-port=${parsed.port}`
   const add = `${prefix}firewall-cmd${options} --add-port=${parsed.port}`
   const remove = `${prefix}firewall-cmd${options} --remove-port=${parsed.port}`
@@ -594,7 +606,7 @@ function buildFirewalldProvider (invocation, id) {
     rollbackScript: rollback.join('\n') + '\n',
     verifyScript: verify.join('\n') + '\n',
     summary: `记录 firewalld 端口规则 ${parsed.port} 修改前是否存在。`,
-    target: `${parsed.zone || 'default'}:${parsed.port}`,
+    target: `${parsed.zone}:${parsed.port}`,
     stateArtifacts: ['backup/rule-present']
   }
 }
@@ -641,26 +653,17 @@ function buildFirewallProvider (command, id) {
   throw new Error('防火墙首版拒绝复杂 iptables/nft，只支持可精确求逆的 firewalld/ufw 端口规则。')
 }
 
-function isValidIpv6Address (address) {
-  if (!/^[0-9A-Fa-f:]+$/.test(address) || address.includes(':::')) return false
-  const compressionIndex = address.indexOf('::')
-  const compressed = compressionIndex !== -1
-  if (compressed && compressionIndex !== address.lastIndexOf('::')) return false
-  const groups = address.split(':').filter(Boolean)
-  if (groups.some(group => group.length > 4)) return false
-  return compressed ? groups.length < 8 : groups.length === 8
-}
-
 function assertCidr (value) {
   const text = String(value || '')
   const slash = text.lastIndexOf('/')
   const address = text.slice(0, slash)
   const prefix = Number(text.slice(slash + 1))
+  if (address.includes(':')) {
+    throw new Error('网络首版仅支持 IPv4 CIDR，IPv6 地址拒绝自动回滚。')
+  }
   const ipv4 = address.split('.')
   const validIpv4 = ipv4.length === 4 && ipv4.every(part => /^\d{1,3}$/.test(part) && Number(part) <= 255)
-  const validIpv6 = address.includes(':') && isValidIpv6Address(address)
-  if ((!validIpv4 && !validIpv6) || !Number.isInteger(prefix) ||
-    prefix < 0 || prefix > (validIpv4 ? 32 : 128)) {
+  if (!validIpv4 || !Number.isInteger(prefix) || prefix < 0 || prefix > 32) {
     throw new Error('网络地址必须是静态有效 CIDR。')
   }
   return text

@@ -537,11 +537,30 @@ test('dynamic provider targets never claim reversibility', async () => {
     'docker restart $(hostname)',
     'chmod 600 /etc/*.conf',
     'rm /tmp/`hostname`.txt',
+    'rm /tmp/@(foo)',
+    'rm /tmp/?(foo)',
+    'rm /tmp/+(foo)',
+    'rm /tmp/*(foo)',
+    'rm /tmp/!(foo)',
     'ip link set dev $IFACE down',
     'echo enabled > /etc/$TARGET'
   ]) {
     const classification = classifyCommand(command)
     assert.equal(classification.risk, 'unknown', command)
+    assert.equal(classification.reversible, false, command)
+    assert.equal(classification.provider, null, command)
+  }
+})
+
+test('truncate writes to devices remain blocked for every supported size spelling', async () => {
+  const { classifyCommand } = await importDomainModule('command-classifier.js')
+
+  for (const command of [
+    'truncate -s0 /dev/sda',
+    'truncate --size=0 /dev/sda'
+  ]) {
+    const classification = classifyCommand(command)
+    assert.equal(classification.risk, 'blocked', command)
     assert.equal(classification.reversible, false, command)
     assert.equal(classification.provider, null, command)
   }
