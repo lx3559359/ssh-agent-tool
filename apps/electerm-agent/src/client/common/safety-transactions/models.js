@@ -25,6 +25,9 @@ export const operationSources = Object.freeze([
 
 const validStates = new Set(Object.values(operationStates))
 const validSources = new Set(operationSources)
+const endpointIdentityFields = [
+  'tabId', 'host', 'port', 'username', 'title', 'pid', 'terminalPid', 'sessionType'
+]
 
 function toTimestamp (value, fallback) {
   const date = value === undefined || value === null || value === ''
@@ -53,10 +56,10 @@ export function normalizeOperation (operation = {}, options = {}) {
 
   const now = resolveNow(options.now)
   const normalizedIdentity = normalizeEndpoint(operation.endpoint)
-  const endpoint = {
-    ...operation.endpoint,
-    ...normalizedIdentity
-  }
+  const endpoint = Object.fromEntries(endpointIdentityFields
+    .filter(field => operation.endpoint?.[field] !== undefined)
+    .map(field => [field, operation.endpoint[field]]))
+  Object.assign(endpoint, normalizedIdentity)
   return {
     ...operation,
     schemaVersion: 1,

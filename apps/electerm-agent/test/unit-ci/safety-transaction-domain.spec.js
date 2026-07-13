@@ -82,6 +82,48 @@ test('operation model accepts only registered sources and states', async () => {
   )
 })
 
+test('operation models retain endpoint identity without authentication material', async () => {
+  const { normalizeOperation, buildSafetyRequest } = await importDomainModule('models.js')
+  const endpoint = {
+    tabId: 'tab-1',
+    host: 'prod.example.com',
+    port: 22,
+    username: 'root',
+    title: '生产服务器',
+    pid: 'terminal-1',
+    password: 'root-password',
+    privateKey: 'private-key-material',
+    passphrase: 'key-passphrase',
+    token: 'agent-token',
+    agent: '/run/user/1000/ssh-agent.sock',
+    customCredential: 'must-not-survive'
+  }
+  const expectedEndpoint = {
+    tabId: 'tab-1',
+    host: 'prod.example.com',
+    port: 22,
+    username: 'root',
+    title: '生产服务器',
+    pid: 'terminal-1'
+  }
+
+  const operation = normalizeOperation({ source: 'terminal', endpoint })
+  const request = buildSafetyRequest({ source: 'agent', endpoint, command: 'uptime' })
+
+  assert.deepEqual(operation.endpoint, expectedEndpoint)
+  assert.deepEqual(request.endpoint, expectedEndpoint)
+  for (const secret of [
+    'root-password',
+    'private-key-material',
+    'key-passphrase',
+    'agent-token',
+    'ssh-agent.sock',
+    'must-not-survive'
+  ]) {
+    assert.doesNotMatch(JSON.stringify([operation, request]), new RegExp(secret))
+  }
+})
+
 test('classifies readonly diagnostics and reversible provider changes', async () => {
   const { classifyCommand } = await importDomainModule('command-classifier.js')
   const cases = [
@@ -199,6 +241,39 @@ test('blocks destructive database operations across pipelines and eval arguments
   }
 })
 
+test('process substitution cannot be classified as a recoverable outer file write', async () => {
+  const { classifyCommand } = await importDomainModule('command-classifier.js')
+
+  const classification = classifyCommand('cat <(reboot) > /etc/example.conf')
+  assert.equal(classification.risk, 'unknown')
+  assert.equal(classification.reversible, false)
+  assert.equal(classification.provider, null)
+  assert.match(classification.reason, /动态执行|进程替换/)
+  assert.equal(classifyCommand('cat >(poweroff)').risk, 'unknown')
+})
+
+test('find output actions require an unambiguous absolute file target', async () => {
+  const { classifyCommand } = await importDomainModule('command-classifier.js')
+
+  for (const command of [
+    'find /tmp -fprint /var/log/find-paths.txt',
+    'find /tmp -fprintf /var/log/find-paths.txt "%p\\n"',
+    'find /tmp -fls /var/log/find-list.txt'
+  ]) {
+    const classification = classifyCommand(command)
+    assert.equal(classification.risk, 'change', command)
+    assert.equal(classification.reversible, true, command)
+    assert.equal(classification.provider, 'file', command)
+  }
+  for (const command of [
+    'find /tmp -fprint find-paths.txt',
+    'find /tmp -fprintf "$OUTPUT_FILE" "%p\\n"',
+    'find /tmp -fls ../find-list.txt'
+  ]) {
+    assert.equal(classifyCommand(command).risk, 'unknown', command)
+  }
+})
+
 test('only unambiguous absolute-path writes use the file recovery provider', async () => {
   const { classifyCommand } = await importDomainModule('command-classifier.js')
 
@@ -258,6 +333,36 @@ test('audit redaction preserves shell quotes and separators for additional crede
   assert.match(redacted, /sshpass --password "\[REDACTED\]";/)
   assert.match(redacted, /SSHPASS='\[REDACTED\]'; sshpass -e/)
   assert.doesNotMatch(redacted, /quoted-token|quoted-passphrase|bare-bearer|ssh-password|env-password/)
+})
+
+test('audit redaction covers sensitive JSON keys while preserving valid JSON', async () => {
+  const { redactAuditText } = await importDomainModule('audit-redaction.js')
+  const payload = {
+    password: 'json-password',
+    token: 'json-token',
+    apiKey: 'json-api-key',
+    api_key: 'json-api-key-snake',
+    secret: 'json-secret',
+    passphrase: 'json-passphrase',
+    privateKey: 'json-private-key',
+    command: 'systemctl status nginx'
+  }
+
+  const parsed = JSON.parse(redactAuditText(JSON.stringify(payload)))
+  for (const key of [
+    'password', 'token', 'apiKey', 'api_key', 'secret', 'passphrase', 'privateKey'
+  ]) {
+    assert.equal(parsed[key], '[REDACTED]', key)
+  }
+  assert.equal(parsed.command, 'systemctl status nginx')
+})
+
+test('audit redaction handles compact sshpass password syntax', async () => {
+  const { redactAuditText } = await importDomainModule('audit-redaction.js')
+  const redacted = redactAuditText('sshpass -pcompact-password ssh root@example.com; echo done')
+
+  assert.equal(redacted, 'sshpass -p[REDACTED] ssh root@example.com; echo done')
+  assert.doesNotMatch(redacted, /compact-password/)
 })
 
 test('normalizes endpoint identity including IPv6 and rejects mismatches', async () => {

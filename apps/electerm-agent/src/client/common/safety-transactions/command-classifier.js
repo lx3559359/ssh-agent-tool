@@ -126,7 +126,7 @@ function isSafeAbsolutePath (value) {
 }
 
 function hasUnsafeExpansion (command) {
-  return /\$\(|`|\$\{|(^|\s)(?:eval|source|\.)\s|(^|\s)(?:ba|z|k)?sh\s+-?c\b/i.test(command)
+  return /\$\(|(?:<|>)\s*\(|`|\$\{|(^|\s)(?:eval|source|\.)\s|(^|\s)(?:ba|z|k)?sh\s+-?c\b/i.test(command)
 }
 
 function isDatabaseClient (command) {
@@ -199,6 +199,19 @@ function classifyRedirection (command, redirects) {
   return result('change', '明确的绝对路径文件写入可创建恢复点', 'file')
 }
 
+const findOutputActions = new Set(['-fprint', '-fprintf', '-fls', '-fprint0'])
+
+function findOutputTargets (words) {
+  const targets = []
+  let hasOutputAction = false
+  for (let index = 0; index < words.length; index += 1) {
+    if (!findOutputActions.has(words[index])) continue
+    hasOutputAction = true
+    targets.push(words[index + 1] || '')
+  }
+  return { hasOutputAction, targets }
+}
+
 function fileProvider (command) {
   const text = stripCommandPrefix(command)
   const words = shellWords(text)
@@ -207,6 +220,10 @@ function fileProvider (command) {
 
   if (executable === 'tee') {
     return positional.length === 1 && isSafeAbsolutePath(positional[0])
+  }
+  if (executable === 'find') {
+    const output = findOutputTargets(words)
+    return output.hasOutputAction && output.targets.every(isSafeAbsolutePath)
   }
   if (executable === 'sed' && words.some(word => /^-.*i/.test(word))) {
     const scriptIndex = words.findIndex(word => !word.startsWith('-'))
@@ -251,7 +268,11 @@ function isReadonly (command) {
   const text = stripCommandPrefix(command)
   if (/^(?:uptime|whoami|id|hostname|pwd|date|df|du|free|ps|ss|ls|stat|wc|which|uname|lsof)(?:\s|$)/i.test(text)) return true
   if (/^(?:cat|less|head|tail|grep)(?:\s|$)/i.test(text)) return true
-  if (/^find(?:\s|$)/i.test(text)) return !/(?:^|\s)-(?:delete|exec|execdir|ok)(?:\s|$)/i.test(text)
+  if (/^find(?:\s|$)/i.test(text)) {
+    const words = shellWords(text)
+    const output = findOutputTargets(words)
+    return !output.hasOutputAction && !/(?:^|\s)-(?:delete|exec|execdir|ok)(?:\s|$)/i.test(text)
+  }
   if (/^ip\s+(?:addr(?:ess)?|route|link)(?:\s+(?:show|list|get))?(?:\s|$)/i.test(text)) return true
   if (/^systemctl\s+(?:status|show|is-active|is-enabled|list-[A-Za-z-]+)\b/i.test(text)) return true
   if (/^journalctl(?:\s|$)/i.test(text)) return true
