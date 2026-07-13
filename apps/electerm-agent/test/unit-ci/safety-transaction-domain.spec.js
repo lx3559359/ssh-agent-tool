@@ -329,11 +329,66 @@ test('distinguishes network mutations from readonly ip, journal and socket diagn
   }
 })
 
+test('readonly commands accept only query-safe option forms', async () => {
+  const { classifyCommand } = await importDomainModule('command-classifier.js')
+
+  for (const command of [
+    'hostname',
+    'date',
+    'date -u +%F',
+    'date --iso-8601=seconds',
+    'journalctl -u ssh.service --since today --no-pager'
+  ]) {
+    assert.equal(classifyCommand(command).risk, 'readonly', command)
+  }
+  for (const command of [
+    'hostname -F /tmp/new-hostname',
+    'hostname new-name',
+    'date -s tomorrow',
+    'date --set=tomorrow',
+    'date --unknown-option',
+    'journalctl --setup-keys',
+    'journalctl --rotate',
+    'journalctl --vacuum-files=2',
+    'journalctl --unknown-option',
+    'journalctl --since',
+    'systemctl status nginx --now',
+    'ss --kill dst 10.0.0.8'
+  ]) {
+    const classification = classifyCommand(command)
+    assert.equal(classification.risk, 'unknown', command)
+    assert.equal(classification.reversible, false, command)
+    assert.equal(classification.requiresConfirmation, true, command)
+  }
+})
+
+test('device redirection never creates a file recovery promise', async () => {
+  const { classifyCommand } = await importDomainModule('command-classifier.js')
+
+  for (const command of [
+    'echo destructive > /dev/sda',
+    'echo destructive >& /dev/sda'
+  ]) {
+    const blockDevice = classifyCommand(command)
+    assert.equal(blockDevice.risk, 'blocked', command)
+    assert.equal(blockDevice.reversible, false, command)
+    assert.equal(blockDevice.provider, null, command)
+  }
+
+  for (const target of ['/dev/null', '/dev/stdout', '/dev/stderr']) {
+    const classification = classifyCommand(`echo harmless > ${target}`)
+    assert.notEqual(classification.risk, 'change', target)
+    assert.equal(classification.reversible, false, target)
+    assert.equal(classification.provider, null, target)
+  }
+})
+
 test('dynamic provider targets never claim reversibility', async () => {
   const { classifyCommand } = await importDomainModule('command-classifier.js')
 
   for (const command of [
     'systemctl restart nginx*',
+    'systemctl restart nginx{1,2}',
     'systemctl restart $SERVICE',
     'docker restart app?',
     'docker restart $(hostname)',
@@ -349,6 +404,19 @@ test('dynamic provider targets never claim reversibility', async () => {
   }
 })
 
+test('sudo env wrappers and recursive root deletion remain blocked', async () => {
+  const { classifyCommand } = await importDomainModule('command-classifier.js')
+
+  for (const command of [
+    'sudo env MODE=maintenance reboot',
+    'sudo -n env MODE=maintenance /sbin/poweroff',
+    'rm -rf /',
+    'rm -rf --no-preserve-root /'
+  ]) {
+    assert.equal(classifyCommand(command).risk, 'blocked', command)
+  }
+})
+
 test('only unambiguous absolute-path writes use the file recovery provider', async () => {
   const { classifyCommand } = await importDomainModule('command-classifier.js')
 
@@ -360,6 +428,27 @@ test('only unambiguous absolute-path writes use the file recovery provider', asy
   assert.equal(classifyCommand('echo enabled > "$CONFIG_PATH"').risk, 'unknown')
   assert.equal(classifyCommand('uptime > /tmp/uptime.txt').risk, 'unknown')
   assert.equal(classifyCommand('sed -i s/a/b/ relative.conf /etc/example.conf').risk, 'unknown')
+})
+
+test('sed in-place detection parses real options and leaves ordinary sed readonly', async () => {
+  const { classifyCommand } = await importDomainModule('command-classifier.js')
+
+  for (const command of [
+    'sed --quiet -n "1p" /etc/hosts',
+    'sed -n "s/old/new/p" /etc/hosts'
+  ]) {
+    assert.equal(classifyCommand(command).risk, 'readonly', command)
+  }
+  for (const command of [
+    'sed -i s/old/new/ /etc/hosts',
+    'sed -ni s/old/new/ /etc/hosts',
+    'sed -i.bak s/old/new/ /etc/hosts',
+    'sed --in-place=.bak s/old/new/ /etc/hosts'
+  ]) {
+    const classification = classifyCommand(command)
+    assert.equal(classification.risk, 'change', command)
+    assert.equal(classification.provider, 'file', command)
+  }
 })
 
 test('redacts audit credentials without altering ordinary command text', async () => {
@@ -461,6 +550,39 @@ test('audit redaction handles sshpass options, Basic auth and escaped JSON strin
   assert.equal(parsed.password, '[REDACTED]')
   assert.equal(parsed.apiKey, '[REDACTED]')
   assert.equal(parsed.command, 'printf "ordinary"')
+})
+
+test('audit redaction covers API key environments, auth schemes and non-string JSON secrets', async () => {
+  const { redactAuditText } = await importDomainModule('audit-redaction.js')
+  const shellText = [
+    'OPENAI_API_KEY="prefix\\"suffix";',
+    'INTERNAL_API_KEY=internal-secret;',
+    'token="token\\"suffix";',
+    'Authorization: Digest digest-secret;',
+    'Authorization: Basic "quoted-auth\\"tail";',
+    'Authorization: Custom custom-secret;'
+  ].join('\n')
+  const redactedShell = redactAuditText(shellText)
+
+  assert.match(redactedShell, /OPENAI_API_KEY="\[REDACTED\]";/)
+  assert.match(redactedShell, /INTERNAL_API_KEY=\[REDACTED\];/)
+  assert.match(redactedShell, /token="\[REDACTED\]";/)
+  assert.match(redactedShell, /Authorization: Digest \[REDACTED\];/)
+  assert.match(redactedShell, /Authorization: Basic "\[REDACTED\]";/)
+  assert.match(redactedShell, /Authorization: Custom \[REDACTED\];/)
+  assert.doesNotMatch(redactedShell, /prefix|suffix|internal-secret|digest-secret|quoted-auth|tail|custom-secret/)
+
+  const parsed = JSON.parse(redactAuditText(JSON.stringify({
+    password: 123456,
+    token: true,
+    secret: false,
+    apiKey: null,
+    command: 'date'
+  })))
+  for (const key of ['password', 'token', 'secret', 'apiKey']) {
+    assert.ok(parsed[key] === '[REDACTED]' || parsed[key] === null, key)
+  }
+  assert.equal(parsed.command, 'date')
 })
 
 test('normalizes endpoint identity including IPv6 and rejects mismatches', async () => {
