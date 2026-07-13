@@ -3,6 +3,7 @@ import { refsStatic, refs } from '../common/ref'
 import { statusMap } from '../../common/constants'
 import { autoRun } from 'manate'
 import uid from '../../common/uid'
+import { waitForSafetyCompletion } from '../../common/safety-transactions/command-orchestration.js'
 
 const STATIC_KEY = 'batch-op-runner'
 
@@ -251,13 +252,22 @@ export default class BatchOpRunner extends Component {
       throw new Error('终端未就绪：attach 插件尚未初始化')
     }
 
-    term.runQuickCommand(step.command)
+    const submission = await term.runSafetyCommand(step.command, {
+      source: 'quick-command',
+      title: step.name || '批量任务命令',
+      metadata: { batchOperation: true }
+    })
+    const completion = await waitForSafetyCompletion(submission, {
+      timeoutMs: Number(step.timeout) || 30000
+    })
 
     return {
       success: true,
       action: 'command',
       command: step.command,
-      tabId
+      tabId,
+      operationId: submission.operationId,
+      exitCode: completion.exitCode
     }
   }
 

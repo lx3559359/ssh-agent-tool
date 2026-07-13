@@ -18,6 +18,10 @@ import {
   validateBookmarkData
 } from '../components/bookmark-form/fix-bookmark-default'
 import newTerm from '../common/new-terminal'
+import {
+  runZmodemDownloadSafety,
+  runZmodemUploadSafety
+} from './mcp-zmodem-safety.js'
 
 export default Store => {
   // Initialize MCP handler - called when MCP widget is started
@@ -173,10 +177,10 @@ export default Store => {
 
         // Zmodem (trzsz/rzsz) operations
         case 'zmodem_upload':
-          result = store.mcpZmodemUpload(args)
+          result = await store.mcpZmodemUpload(args)
           break
         case 'zmodem_download':
-          result = store.mcpZmodemDownload(args)
+          result = await store.mcpZmodemDownload(args)
           break
 
         // Settings operations
@@ -753,7 +757,6 @@ export default Store => {
   // ==================== Background Task Management ====================
 
   const backgroundTasks = new Map()
-  let bgTaskCounter = 0
 
   async function runMonitorCmd (tabId, cmd) {
     try {
@@ -780,24 +783,28 @@ export default Store => {
       throw new Error('No command provided')
     }
 
-    const taskId = `bg-${Date.now()}-${++bgTaskCounter}`
-    const logFile = `/tmp/electerm-${taskId}.log`
-    const pidFile = `/tmp/electerm-${taskId}.pid`
-    const exitFile = `/tmp/electerm-${taskId}.exit`
-
-    // Encode command as base64 to avoid all quote-escaping issues.
-    // The subshell runs the user's command, captures its exit code, then cleans up the PID file.
-    const b64 = btoa(args.command)
-    const inner = `eval "$(echo ${b64} | base64 --decode)" > ${logFile} 2>&1; e=$?; echo $e > ${exitFile}; rm -f ${pidFile}`
-    const wrapped = `nohup bash -c '${inner}' & echo $! > ${pidFile}; disown`
-
-    const submission = await store.mcpSendTerminalCommand({
-      command: wrapped,
+    const submission = await store.runSafetyCommand(args.command, {
       tabId,
-      inputOnly: false,
-      title: '后台命令'
+      source: 'agent',
+      title: '后台命令',
+      executionMode: 'background'
     })
-    if (!submission.success) return submission
+    if (!submission.sent) {
+      return {
+        success: false,
+        cancelled: submission.cancelled === true,
+        retryable: submission.retryable === true,
+        operationId: submission.operationId,
+        message: submission.error || '后台命令尚未发送。'
+      }
+    }
+
+    const {
+      taskId,
+      logFile,
+      pidFile,
+      exitFile
+    } = submission.execution.metadata
 
     const task = {
       id: taskId,
@@ -817,7 +824,8 @@ export default Store => {
       logFile,
       pidFile,
       exitFile,
-      message: 'Command started in background. Use get_background_task_status to check.'
+      operationId: submission.operationId,
+      message: '后台命令已启动，可查询后台任务状态。'
     }
   }
 
@@ -1097,86 +1105,19 @@ export default Store => {
 
   // ==================== Zmodem (trzsz/rzsz) APIs ====================
 
-  Store.prototype.mcpZmodemUpload = function (args) {
-    const { store } = window
-    const tabId = args.tabId || store.activeTabId
-    if (!tabId) {
-      throw new Error('No active tab')
-    }
-    const tab = store.tabs.find(t => t.id === tabId)
-    if (!tab) {
-      throw new Error(`Tab not found: ${tabId}`)
-    }
-
-    const files = args.files
-    if (!files || !Array.isArray(files) || files.length === 0) {
-      throw new Error('files array is required (list of local file paths to upload)')
-    }
-
-    const protocol = args.protocol || 'rzsz'
-    const uploadCmd = protocol === 'trzsz' ? 'trz' : 'rz'
-
-    // Set the control variable to bypass native file dialog
-    window._apiControlSelectFile = files
-
-    const term = refs.get('term-' + tabId)
-    if (!term) {
-      throw new Error(`Terminal not found for tab: ${tabId}`)
-    }
-    term.runQuickCommand(uploadCmd)
-
-    return {
-      success: true,
-      protocol,
-      command: uploadCmd,
-      message: `${uploadCmd} upload initiated for ${files.length} file(s)`,
-      files,
-      tabId
-    }
+  Store.prototype.mcpZmodemUpload = async function (args) {
+    return runZmodemUploadSafety({
+      store: window.store,
+      args,
+      setSelectedFiles: files => { window._apiControlSelectFile = files }
+    })
   }
 
-  Store.prototype.mcpZmodemDownload = function (args) {
-    const { store } = window
-    const tabId = args.tabId || store.activeTabId
-    if (!tabId) {
-      throw new Error('No active tab')
-    }
-    const tab = store.tabs.find(t => t.id === tabId)
-    if (!tab) {
-      throw new Error(`Tab not found: ${tabId}`)
-    }
-
-    const saveFolder = args.saveFolder
-    if (!saveFolder) {
-      throw new Error('saveFolder is required (local folder to save downloaded files)')
-    }
-
-    const remoteFiles = args.remoteFiles
-    if (!remoteFiles || !Array.isArray(remoteFiles) || remoteFiles.length === 0) {
-      throw new Error('remoteFiles array is required (list of remote file paths to download)')
-    }
-
-    const protocol = args.protocol || 'rzsz'
-    const downloadCmd = protocol === 'trzsz' ? 'tsz' : 'sz'
-
-    // Set the control variable to bypass native folder dialog
-    window._apiControlSelectFolder = saveFolder
-
-    const term = refs.get('term-' + tabId)
-    if (!term) {
-      throw new Error(`Terminal not found for tab: ${tabId}`)
-    }
-    const quotedFiles = remoteFiles.map(f => `"${f}"`).join(' ')
-    term.runQuickCommand(`${downloadCmd} ${quotedFiles}`)
-
-    return {
-      success: true,
-      protocol,
-      command: downloadCmd,
-      message: `${downloadCmd} download initiated for ${remoteFiles.length} file(s) to ${saveFolder}`,
-      remoteFiles,
-      saveFolder,
-      tabId
-    }
+  Store.prototype.mcpZmodemDownload = async function (args) {
+    return runZmodemDownloadSafety({
+      store: window.store,
+      args,
+      setSelectedFolder: folder => { window._apiControlSelectFolder = folder }
+    })
   }
 }

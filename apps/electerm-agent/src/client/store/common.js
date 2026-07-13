@@ -249,9 +249,11 @@ export default Store => {
   }
 
   Store.prototype.runCommandInTerminal = function (cmd) {
-    window.store.batchInputSelectedTabIds.forEach(id => {
-      refs.get('term-' + id)?.runQuickCommand(cmd)
-    })
+    return window.store.runBatchSafetyCommand(
+      cmd,
+      window.store.batchInputSelectedTabIds,
+      { source: 'quick-command', title: '批量终端命令' }
+    )
   }
 
   Store.prototype.removeAiHistory = function (id) {

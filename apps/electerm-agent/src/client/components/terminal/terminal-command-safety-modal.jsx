@@ -4,6 +4,7 @@ import './terminal-command-safety-modal.styl'
 function modalTitle (kind) {
   if (kind === 'blocked') return '命令已拦截'
   if (kind === 'reversible') return '执行前保护'
+  if (kind === 'retry') return '命令发送失败'
   return '高风险命令确认'
 }
 
@@ -19,12 +20,16 @@ export default function TerminalCommandSafetyModal ({
   const reversible = confirmation.kind === 'reversible'
   const executeText = reversible
     ? '创建恢复点并执行'
-    : '确认风险并执行一次'
+    : confirmation.kind === 'retry'
+      ? '重新准备并重试'
+      : '确认风险并执行一次'
   const detail = reversible
     ? '将先创建并验证恢复点，成功后才会释放当前命令。'
-    : confirmation.kind === 'blocked'
+    : confirmation.kind === 'retry'
       ? confirmation.message
-      : '此操作没有自动回滚。请确认风险后仅执行一次。'
+      : confirmation.kind === 'blocked'
+        ? confirmation.message
+        : '此操作没有自动回滚。请确认风险后仅执行一次。'
   const footer = (
     <div className='terminal-command-safety-actions'>
       <button

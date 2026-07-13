@@ -246,7 +246,9 @@ class Term extends Component {
   componentDidUpdate (prevProps) {
     if (prevProps.currentBatchTabId === this.props.tab.id &&
       this.props.currentBatchTabId !== this.props.tab.id) {
-      this.commandSafetyEntrypoint.cancelPending().catch(window.store.onError)
+      this.commandSafetyEntrypoint.cancelCurrentExecution(
+        '终端已切换，命令执行已取消。'
+      ).catch(window.store.onError)
     }
     const shouldChange = (
       prevProps.currentBatchTabId !== this.props.currentBatchTabId &&
@@ -2012,7 +2014,11 @@ class Term extends Component {
   }
 
   batchInput = (cmd) => {
-    this.attachAddon._sendData(cmd + '\r')
+    return this.runSafetyCommand(cmd, {
+      source: 'quick-command',
+      title: '批量终端命令',
+      metadata: { batchCommand: true }
+    })
   }
 
   onResizeTerminal = size => {

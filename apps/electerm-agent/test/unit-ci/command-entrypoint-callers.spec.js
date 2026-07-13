@@ -8,6 +8,14 @@ const agentTerminalUrl = pathToFileURL(path.resolve(
   __dirname,
   '../../src/client/components/ai/agent-terminal-command.js'
 )).href
+const zmodemSafetyUrl = pathToFileURL(path.resolve(
+  __dirname,
+  '../../src/client/store/mcp-zmodem-safety.js'
+)).href
+const modelsUrl = pathToFileURL(path.resolve(
+  __dirname,
+  '../../src/client/common/safety-transactions/models.js'
+)).href
 
 function readClientSource (relativePath) {
   return fs.readFileSync(
@@ -68,6 +76,81 @@ test('Agent safety cancellation never waits for terminal output', async () => {
   assert.equal(waits, 0)
 })
 
+test('Zmodem download quotes remote paths and rejects newline or NUL injection', async () => {
+  const { buildZmodemDownload } = await import(zmodemSafetyUrl)
+  const quote = String.fromCharCode(39)
+  const malicious = `/tmp/report${quote}; touch /tmp/pwned; printf ${quote}`
+  const built = buildZmodemDownload({
+    protocol: 'rzsz',
+    saveFolder: 'C:\\downloads',
+    remoteFiles: [malicious, '/tmp/normal file.txt']
+  })
+
+  assert.equal(
+    built.command,
+    `sz -- ${quote}/tmp/report${quote}"${quote}"${quote}; touch /tmp/pwned; printf ${quote}"${quote}"${quote}${quote} ${quote}/tmp/normal file.txt${quote}`
+  )
+  assert.throws(() => buildZmodemDownload({
+    saveFolder: 'C:\\downloads',
+    remoteFiles: ['/tmp/good\nrm -rf /']
+  }), /换行|NUL|路径/)
+  assert.throws(() => buildZmodemDownload({
+    saveFolder: 'C:\\downloads',
+    remoteFiles: ['/tmp/good\0bad']
+  }), /换行|NUL|路径/)
+})
+
+test('Zmodem upload and download submit their real commands through safety classification', async () => {
+  const {
+    runZmodemUploadSafety,
+    runZmodemDownloadSafety
+  } = await import(zmodemSafetyUrl)
+  const { buildSafetyRequest } = await import(modelsUrl)
+  const calls = []
+  const selections = []
+  const store = {
+    activeTabId: 'tab-1',
+    tabs: [{ id: 'tab-1' }],
+    async runSafetyCommand (command, options) {
+      calls.push({ command, options })
+      return { sent: true, operationId: `operation-${calls.length}` }
+    }
+  }
+
+  const upload = await runZmodemUploadSafety({
+    store,
+    args: { protocol: 'trzsz', files: ['C:\\tmp\\a.txt'] },
+    setSelectedFiles: files => selections.push(files)
+  })
+  const download = await runZmodemDownloadSafety({
+    store,
+    args: {
+      protocol: 'rzsz',
+      saveFolder: 'C:\\downloads',
+      remoteFiles: ['/tmp/a;echo injected']
+    },
+    setSelectedFolder: folder => selections.push(folder)
+  })
+
+  assert.equal(upload.success, true)
+  assert.equal(download.success, true)
+  assert.equal(calls[0].command, 'trz')
+  assert.equal(calls[0].options.metadata.remoteLandingKnown, false)
+  assert.equal(calls[1].command, "sz -- '/tmp/a;echo injected'")
+  assert.deepEqual(calls.map(call => call.options.source), ['agent', 'agent'])
+  assert.equal(buildSafetyRequest({
+    source: 'agent',
+    endpoint: { host: 'example.com', username: 'root' },
+    command: calls[0].command
+  }).risk, 'unknown')
+  assert.notEqual(buildSafetyRequest({
+    source: 'agent',
+    endpoint: { host: 'example.com', username: 'root' },
+    command: calls[1].command
+  }).risk, 'readonly')
+  assert.deepEqual(selections, [['C:\\tmp\\a.txt'], 'C:\\downloads'])
+})
+
 test('quick, AI, Agent and MCP callers contain no naked terminal command send', () => {
   const quick = readClientSource('store/quick-command.js')
   const ai = readClientSource('components/ai/ai-ssh-context.js')
@@ -76,7 +159,8 @@ test('quick, AI, Agent and MCP callers contain no naked terminal command send', 
 
   assert.match(quick, /Store\.prototype\.runSafetyCommand/)
   assert.match(quick, /term\?\.runSafetyCommand/)
-  assert.match(quick, /await store\.runQuickCommand/)
+  assert.match(quick, /runSafetyCommandSequence/)
+  assert.match(quick, /return store\.runQuickCommand/)
   assert.match(ai, /store\?\.runSafetyCommand/)
   assert.doesNotMatch(ai, /mcpSendTerminalCommand/)
   assert.match(agent, /runAgentTerminalCommand/)
@@ -86,6 +170,15 @@ test('quick, AI, Agent and MCP callers contain no naked terminal command send', 
   )
   assert.match(mcp, /Store\.prototype\.mcpSendTerminalCommand = async/)
   assert.match(mcp, /await store\.runSafetyCommand/)
+  const background = mcp.match(
+    /Store\.prototype\.mcpRunBackgroundCommand[\s\S]*?Store\.prototype\.mcpGetBackgroundTaskStatus/
+  )?.[0] || ''
+  assert.match(background, /executionMode:\s*'background'/)
+  assert.doesNotMatch(background, /btoa|nohup|submittedCommand|mcpSendTerminalCommand/)
+  const zmodem = mcp.match(
+    /Store\.prototype\.mcpZmodemUpload[\s\S]*?^}/m
+  )?.[0] || ''
+  assert.doesNotMatch(zmodem, /term\.runQuickCommand/)
 })
 
 test('new quick command execution does not create legacy localStorage records', () => {
@@ -100,4 +193,40 @@ test('new quick command execution does not create legacy localStorage records', 
   assert.doesNotMatch(body, /createQuickCommandSafetyRecord|saveRollbackRecord/)
   assert.match(source, /readSafetyOperationRecords/)
   assert.match(source, /handleRollbackAction/)
+})
+
+test('footer and batch operation commands have no raw terminal send path', () => {
+  const footer = readClientSource('components/footer/footer-entry.jsx')
+  const terminal = readClientSource('components/terminal/terminal.jsx')
+  const batchRunner = readClientSource('components/batch-op/batch-op-runner.jsx')
+  const commonStore = readClientSource('store/common.js')
+
+  assert.match(footer, /runBatchSafetyCommand/)
+  assert.doesNotMatch(
+    footer.match(/function batchInput[\s\S]*?function handleSwitchEncoding/)?.[0] || '',
+    /term\?\.batchInput|_sendData|runQuickCommand/
+  )
+  assert.match(
+    terminal.match(/batchInput = \(cmd\)[\s\S]*?onResizeTerminal/)?.[0] || '',
+    /runSafetyCommand/
+  )
+  assert.doesNotMatch(
+    terminal.match(/batchInput = \(cmd\)[\s\S]*?onResizeTerminal/)?.[0] || '',
+    /_sendData|runQuickCommand/
+  )
+  assert.match(terminal, /cancelCurrentExecution\([\s\S]*?终端已切换/)
+  assert.match(
+    readClientSource('components/terminal/terminal-command-safety-modal.jsx'),
+    /命令发送失败[\s\S]*?重新准备并重试/
+  )
+  const commandStep = batchRunner.match(
+    /async _batchStepCommand[\s\S]*?async _batchStepSftpUpload/
+  )?.[0] || ''
+  assert.match(commandStep, /runSafetyCommand/)
+  assert.match(commandStep, /waitForSafetyCompletion/)
+  assert.doesNotMatch(commandStep, /runQuickCommand|_sendData/)
+  assert.doesNotMatch(
+    commonStore.match(/Store\.prototype\.runCommandInTerminal[\s\S]*?Store\.prototype\.removeAiHistory/)?.[0] || '',
+    /runQuickCommand|_sendData/
+  )
 })

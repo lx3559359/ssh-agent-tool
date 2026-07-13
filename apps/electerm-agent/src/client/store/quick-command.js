@@ -14,6 +14,10 @@ import { debounce } from 'lodash-es'
 import { refs } from '../components/common/ref'
 import templates from '../components/quick-commands/templates'
 import { readClipboardAsync } from '../common/clipboard'
+import {
+  runSafetyCommandBatch,
+  runSafetyCommandSequence
+} from '../common/safety-transactions/command-orchestration.js'
 
 async function parseTemplates (cmd) {
   if (!cmd.includes('{{')) return cmd
@@ -114,6 +118,17 @@ export default Store => {
     })
   }
 
+  Store.prototype.runBatchSafetyCommand = function (
+    command,
+    tabIds,
+    options = {}
+  ) {
+    return runSafetyCommandBatch(command, tabIds, {
+      ...options,
+      getTerminal: tabId => refs.get('term-' + tabId)
+    })
+  }
+
   Store.prototype.runQuickCommandItem = debounce(async (id, options = {}) => {
     const {
       store
@@ -131,22 +146,34 @@ export default Store => {
       }
     }
     const qms = getQuickCommandSteps(qm, options)
-    for (const q of qms) {
-      let realCmd = normalizeCommandForShell(q.command)
-      realCmd = await parseTemplates(realCmd)
-
-      await delay(q.delay || 100)
-      const result = await store.runQuickCommand(
-        realCmd,
-        options.inputOnly ?? qm?.inputOnly,
-        options.tabId,
-        { title: qm?.name || options.title }
+    try {
+      return await runSafetyCommandSequence(qms, {
+        timeoutMs: options.completionTimeoutMs || 30000,
+        runStep: async q => {
+          let realCmd = normalizeCommandForShell(q.command)
+          realCmd = await parseTemplates(realCmd)
+          await delay(q.delay || 100)
+          return store.runQuickCommand(
+            realCmd,
+            options.inputOnly ?? qm?.inputOnly,
+            options.tabId,
+            { title: qm?.name || options.title }
+          )
+        },
+        onStepComplete: () => {
+          if (qm) {
+            store.editQuickCommand(qm.id, {
+              clickCount: ((qm.clickCount || 0) + 1)
+            })
+          }
+        }
+      })
+    } catch (error) {
+      const reported = new Error(
+        `快捷命令执行失败，已停止后续步骤：${error?.message || '未知错误'}`
       )
-      if (qm && (result?.sent || result?.inputOnly)) {
-        store.editQuickCommand(qm.id, {
-          clickCount: ((qm.clickCount || 0) + 1)
-        })
-      }
+      store.onError?.(reported)
+      return { success: false, error: reported.message }
     }
   }, 200)
 
