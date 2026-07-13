@@ -1614,6 +1614,57 @@ test('task signal abort fails honestly when remote cancellation fails', async ()
   assert.doesNotMatch(JSON.stringify(failed), new RegExp(secret))
 })
 
+test('task signal abort cannot commit remote success while cancellation is pending', async () => {
+  const { createTaskRunner } = await importDomainModule('task-runner.js')
+  const store = createTaskStore()
+  const controller = new AbortController()
+  const secret = 'signal-race-cancel-secret'
+  let resolveRemote
+  let rejectCancellation
+  let cancelCalls = 0
+  let markCancellationStarted
+  const cancellationStarted = new Promise(resolve => {
+    markCancellationStarted = resolve
+  })
+  const runner = createTaskRunner({
+    runRemote: async () => new Promise(resolve => { resolveRemote = resolve }),
+    cancelRemote: async () => {
+      cancelCalls += 1
+      return new Promise((resolve, reject) => {
+        rejectCancellation = reject
+        markCancellationStarted()
+      })
+    },
+    store,
+    now: createClock()
+  })
+  const task = await runner.create(readonlyPlan({
+    id: 'task-signal-success-cancel-race',
+    steps: [{ id: 'active', command: 'uptime', timeoutMs: 1000 }]
+  }))
+  await runner.confirmPlan(task.id)
+  const running = runner.run(task.id, { signal: controller.signal })
+  await waitFor(() => Boolean(resolveRemote))
+
+  controller.abort()
+  await cancellationStarted
+  resolveRemote({ output: 'late remote success', code: 0 })
+  await new Promise(resolve => setImmediate(resolve))
+  rejectCancellation(new Error(`token=${secret} signal-race-cancel-failed`))
+
+  await assert.rejects(running, error => {
+    assert.match(error.message, /signal-race-cancel-failed/)
+    assert.match(error.message, /\[REDACTED\]/)
+    assert.doesNotMatch(error.message, new RegExp(secret))
+    return true
+  })
+  const failed = await store.get(task.id)
+  assert.equal(failed.status, 'failed')
+  assert.equal(failed.steps[0].status, 'failed')
+  assert.equal(cancelCalls, 1)
+  assert.doesNotMatch(JSON.stringify(failed), new RegExp(secret))
+})
+
 test('task timeout fails honestly when remote cancellation fails', async () => {
   const { createTaskRunner } = await importDomainModule('task-runner.js')
   const store = createTaskStore()
@@ -1636,6 +1687,55 @@ test('task timeout fails honestly when remote cancellation fails', async () => {
 
   await assert.rejects(runner.run(task.id), error => {
     assert.match(error.message, /timeout-cancel-control-failed/)
+    assert.match(error.message, /\[REDACTED\]/)
+    assert.doesNotMatch(error.message, new RegExp(secret))
+    return true
+  })
+  const failed = await store.get(task.id)
+  assert.equal(failed.status, 'failed')
+  assert.equal(failed.steps[0].status, 'failed')
+  assert.equal(cancelCalls, 1)
+  assert.doesNotMatch(JSON.stringify(failed), new RegExp(secret))
+})
+
+test('task timeout cannot commit remote success while cancellation is pending', async () => {
+  const { createTaskRunner } = await importDomainModule('task-runner.js')
+  const store = createTaskStore()
+  const secret = 'timeout-race-cancel-secret'
+  let resolveRemote
+  let rejectCancellation
+  let cancelCalls = 0
+  let markCancellationStarted
+  const cancellationStarted = new Promise(resolve => {
+    markCancellationStarted = resolve
+  })
+  const runner = createTaskRunner({
+    runRemote: async () => new Promise(resolve => { resolveRemote = resolve }),
+    cancelRemote: async () => {
+      cancelCalls += 1
+      return new Promise((resolve, reject) => {
+        rejectCancellation = reject
+        markCancellationStarted()
+      })
+    },
+    store,
+    now: createClock()
+  })
+  const task = await runner.create(readonlyPlan({
+    id: 'task-timeout-success-cancel-race',
+    steps: [{ id: 'slow', command: 'uptime', timeoutMs: 10 }]
+  }))
+  await runner.confirmPlan(task.id)
+  const running = runner.run(task.id)
+  await waitFor(() => Boolean(resolveRemote))
+  await cancellationStarted
+
+  resolveRemote({ output: 'late remote success', code: 0 })
+  await new Promise(resolve => setImmediate(resolve))
+  rejectCancellation(new Error(`password=${secret} timeout-race-cancel-failed`))
+
+  await assert.rejects(running, error => {
+    assert.match(error.message, /timeout-race-cancel-failed/)
     assert.match(error.message, /\[REDACTED\]/)
     assert.doesNotMatch(error.message, new RegExp(secret))
     return true

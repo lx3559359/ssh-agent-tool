@@ -284,6 +284,12 @@ export function createTaskRunner (options = {}) {
         code,
         output
       })
+      if (stopReason) {
+        const cancellationFailure = await active.cancellationPromise
+        throw cancellationFailure || (stopReason === 'timeout'
+          ? timeoutError(step.timeoutMs)
+          : cancelledError())
+      }
       if (code === undefined) {
         const error = new Error('只读步骤远程结果缺少有效的显式退出码。')
         error.audit = audit
