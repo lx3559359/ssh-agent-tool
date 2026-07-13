@@ -168,7 +168,7 @@ function actionOptions (store, overrides = {}) {
     guardedPatchOperation: store.guardedPatchOperation,
     syncLegacyOperation: store.getOperation,
     now: () => new Date('2026-07-13T12:00:00.000Z'),
-    createClaimToken: () => 'claim-1',
+    createClaimId: () => 'claim-1',
     claimLeaseMs: 60_000,
     resolveLegacyTarget: async () => ({ kind: 'sftp' }),
     runLegacyAction: async () => true,
@@ -202,7 +202,7 @@ test('legacy SFTP false result is failed atomically and remains retryable', asyn
     record: failed,
     action: 'rollback',
     ...options,
-    createClaimToken: () => 'claim-2'
+    createClaimId: () => 'claim-2'
   })
   assert.equal(restored.state, 'restored')
   assert.equal(attempts, 2)
@@ -308,7 +308,7 @@ test('legacy claims persist an injected-clock lease and block an unexpired owner
 
   const claimed = await store.getOperation(record.id)
   assert.deepEqual(claimed.metadata.safetyCenterLegacyClaim, {
-    token: 'claim-1',
+    claimId: 'claim-1',
     action: 'rollback',
     claimedAt: '2026-07-13T12:00:00.000Z',
     expiresAt: '2026-07-13T12:01:00.000Z'
@@ -318,7 +318,7 @@ test('legacy claims persist an injected-clock lease and block an unexpired owner
       record,
       action: 'rollback',
       ...actionOptions(store, {
-        createClaimToken: () => 'claim-2',
+        createClaimId: () => 'claim-2',
         runLegacyAction: async () => true
       })
     }),
@@ -336,7 +336,7 @@ test('an expired legacy claim can be taken over and retried with a new lease', a
     metadata: {
       ...legacyOperation().metadata,
       safetyCenterLegacyClaim: {
-        token: 'crashed-owner',
+        claimId: 'crashed-owner',
         action: 'rollback',
         claimedAt: '2026-07-13T11:58:00.000Z',
         expiresAt: '2026-07-13T11:59:00.000Z'
@@ -350,10 +350,10 @@ test('an expired legacy claim can be taken over and retried with a new lease', a
     record,
     action: 'rollback',
     ...actionOptions(store, {
-      createClaimToken: () => 'takeover-owner',
+      createClaimId: () => 'takeover-owner',
       runLegacyAction: async claimed => {
         executions += 1
-        assert.equal(claimed.metadata.safetyCenterLegacyClaim.token, 'takeover-owner')
+        assert.equal(claimed.metadata.safetyCenterLegacyClaim.claimId, 'takeover-owner')
         assert.equal(claimed.metadata.safetyCenterLegacyClaim.expiresAt, '2026-07-13T12:01:00.000Z')
         return true
       }
@@ -379,11 +379,11 @@ test('a late legacy owner cannot overwrite a takeover owner or its terminal resu
     action: 'rollback',
     ...actionOptions(store, {
       now,
-      createClaimToken: () => 'owner-1',
+      createClaimId: () => 'owner-1',
       runLegacyAction: async () => firstPending.promise
     })
   })
-  await waitFor(async () => (await store.getOperation(record.id)).metadata?.safetyCenterLegacyClaim?.token === 'owner-1')
+  await waitFor(async () => (await store.getOperation(record.id)).metadata?.safetyCenterLegacyClaim?.claimId === 'owner-1')
   currentTime = new Date('2026-07-13T12:02:00.000Z')
 
   const second = executeSafetyCenterAction({
@@ -391,7 +391,7 @@ test('a late legacy owner cannot overwrite a takeover owner or its terminal resu
     action: 'rollback',
     ...actionOptions(store, {
       now,
-      createClaimToken: () => 'owner-2',
+      createClaimId: () => 'owner-2',
       runLegacyAction: async () => secondPending.promise
     })
   })
@@ -399,13 +399,13 @@ test('a late legacy owner cannot overwrite a takeover owner or its terminal resu
     value => ({ value }),
     error => ({ error })
   )
-  await waitFor(async () => (await store.getOperation(record.id)).metadata?.safetyCenterLegacyClaim?.token === 'owner-2')
+  await waitFor(async () => (await store.getOperation(record.id)).metadata?.safetyCenterLegacyClaim?.claimId === 'owner-2')
 
   firstPending.resolve(true)
   await assert.rejects(first, /状态已变化|其他执行|接管/)
   let current = await store.getOperation(record.id)
   assert.equal(current.state, 'rolling-back')
-  assert.equal(current.metadata.safetyCenterLegacyClaim.token, 'owner-2')
+  assert.equal(current.metadata.safetyCenterLegacyClaim.claimId, 'owner-2')
 
   secondPending.resolve(true)
   const outcome = await secondOutcome
@@ -423,7 +423,7 @@ test('expired takeover syncs legacy storage and skips remote work when migration
     metadata: {
       ...legacyOperation().metadata,
       safetyCenterLegacyClaim: {
-        token: 'crashed-owner',
+        claimId: 'crashed-owner',
         action: 'rollback',
         claimedAt: '2026-07-13T11:58:00.000Z',
         expiresAt: '2026-07-13T11:59:00.000Z'
@@ -474,7 +474,7 @@ test('guarded legacy claim prevents duplicate execution across modal instances',
       record,
       action: 'rollback',
       ...options,
-      createClaimToken: () => 'claim-2'
+      createClaimId: () => 'claim-2'
     }),
     /状态已变化|不允许|仍在执行/
   )

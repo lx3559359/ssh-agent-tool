@@ -29,7 +29,7 @@ function timestamp (now) {
   return currentDate(now).toISOString()
 }
 
-function defaultClaimToken () {
+function defaultClaimId () {
   return globalThis.crypto?.randomUUID?.() ||
     `${Date.now()}-${Math.random().toString(36).slice(2, 12)}`
 }
@@ -42,10 +42,10 @@ function isGuardRejection (error) {
   return /完整性校验|原子更新/.test(String(error?.message || error))
 }
 
-function isLegacyClaimOwner (record, token, action) {
+function isLegacyClaimOwner (record, claimId, action) {
   const claim = record?.metadata?.safetyCenterLegacyClaim
   return record?.state === operationStates.rollingBack &&
-    claim?.token === token && claim?.action === action
+    claim?.claimId === claimId && claim?.action === action
 }
 
 function legacyTargetIdentity (record) {
@@ -122,14 +122,14 @@ async function executeLegacyAction ({
   resolveLegacyTarget,
   runLegacyAction,
   now,
-  createClaimToken,
+  createClaimId,
   claimLeaseDuration
 }) {
   if (!sameLegacyTarget(latest, requested)) throw staleRecordError()
   if (isMatchingLegacyTerminal(latest, requested, action)) return latest
   const claimTime = currentDate(now)
   assertLegacyActionAllowed(latest, action, claimTime)
-  const token = requireFunction(createClaimToken || defaultClaimToken, 'createClaimToken')()
+  const claimId = requireFunction(createClaimId || defaultClaimId, 'createClaimId')()
   const claimedAt = claimTime.toISOString()
   const duration = Number(claimLeaseDuration)
   const leaseDuration = Number.isFinite(duration) && duration > 0
@@ -153,7 +153,7 @@ async function executeLegacyAction ({
         completedAt: undefined,
         metadata: {
           ...current.metadata,
-          safetyCenterLegacyClaim: { token, action, claimedAt, expiresAt }
+          safetyCenterLegacyClaim: { claimId, action, claimedAt, expiresAt }
         }
       })
     )
@@ -177,7 +177,7 @@ async function executeLegacyAction ({
     try {
       await guardedPatchOperation(
         claimed.id,
-        current => isLegacyClaimOwner(current, token, action),
+        current => isLegacyClaimOwner(current, claimId, action),
         current => ({
           state: operationStates.failed,
           error: error?.message || String(error),
@@ -198,7 +198,7 @@ async function executeLegacyAction ({
   try {
     return await guardedPatchOperation(
       claimed.id,
-      current => isLegacyClaimOwner(current, token, action),
+      current => isLegacyClaimOwner(current, claimId, action),
       current => ({
         state: expectedLegacyTerminalState(action),
         completedAt: timestamp(now),
@@ -229,7 +229,7 @@ export async function executeSafetyCenterAction ({
   findModernTerminal,
   taskCapability,
   now,
-  createClaimToken,
+  createClaimId,
   claimLeaseMs: claimLeaseDuration
 }) {
   if (!record?.id) throw new Error('安全记录无效。')
@@ -255,7 +255,7 @@ export async function executeSafetyCenterAction ({
       resolveLegacyTarget: requireFunction(resolveLegacyTarget, 'resolveLegacyTarget'),
       runLegacyAction: requireFunction(runLegacyAction, 'runLegacyAction'),
       now,
-      createClaimToken,
+      createClaimId,
       claimLeaseDuration
     })
   }

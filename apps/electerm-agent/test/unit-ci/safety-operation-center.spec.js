@@ -299,7 +299,7 @@ test('expired legacy claims expose an unknown-result warning and a retry action'
           username: 'root'
         },
         safetyCenterLegacyClaim: {
-          token: 'crashed-owner',
+          claimId: 'crashed-owner',
           action: 'rollback',
           claimedAt: '2026-07-13T10:00:00.000Z',
           expiresAt: '2026-07-13T10:01:00.000Z'
@@ -338,7 +338,7 @@ test('expired legacy claims expose an unknown-result warning and a retry action'
     metadata: {
       ...claimed.metadata,
       safetyCenterLegacyClaim: {
-        token: 'pre-lease-owner',
+        claimId: 'pre-lease-owner',
         action: 'rollback',
         claimedAt: '2026-07-13T10:00:00.000Z'
       }
@@ -352,7 +352,7 @@ test('expired legacy claims expose an unknown-result warning and a retry action'
     metadata: {
       ...claimed.metadata,
       safetyCenterLegacyClaim: {
-        token: 'missing-start-owner',
+        claimId: 'missing-start-owner',
         action: 'rollback',
         expiresAt: '2099-07-13T10:01:00.000Z'
       }
