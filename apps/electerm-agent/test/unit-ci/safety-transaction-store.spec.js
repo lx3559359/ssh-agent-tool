@@ -153,6 +153,7 @@ test('transaction store exports the browser-independent persistence contract', a
     'getOperation',
     'listOperations',
     'patchOperation',
+    'guardedPatchOperation',
     'removeOperation',
     'saveTask',
     'getTask',
@@ -253,6 +254,41 @@ test('concurrent operation patches for one id are serialized without losing fiel
   assert.ok(new Date(first.updatedAt) > new Date(saved.updatedAt))
   assert.ok(new Date(second.updatedAt) > new Date(first.updatedAt))
   assert.equal(final.updatedAt, second.updatedAt)
+})
+
+test('guarded operation patches share the per-id queue and never write on predicate failure', async () => {
+  const { createTransactionStore } = await importStore()
+  const adapter = createMemoryAdapter()
+  const store = createTransactionStore({ adapter })
+  const saved = await store.saveOperation(createOperation({ title: 'original' }))
+
+  const tamper = store.patchOperation(saved.id, { title: 'tampered' })
+  const guarded = store.guardedPatchOperation(
+    saved.id,
+    async current => current.title === 'original',
+    { state: 'rollback-available' }
+  )
+  await tamper
+  const writesBeforeGuardFailure = adapter.getUpdateCallCount('safetyOperations')
+  await assert.rejects(guarded, /完整性|原子更新|拒绝/)
+  assert.equal(
+    adapter.getUpdateCallCount('safetyOperations'),
+    writesBeforeGuardFailure
+  )
+  const unchanged = await store.getOperation(saved.id)
+  assert.equal(unchanged.title, 'tampered')
+  assert.equal(unchanged.state, 'preparing')
+
+  const updated = await store.guardedPatchOperation(
+    saved.id,
+    current => current.title === 'tampered',
+    current => ({
+      state: 'executing',
+      metadata: { guardedFrom: current.state }
+    })
+  )
+  assert.equal(updated.state, 'executing')
+  assert.deepEqual(updated.metadata, { guardedFrom: 'preparing' })
 })
 
 test('agent task CRUD enforces schema version, valid status and monotonic timestamps', async () => {

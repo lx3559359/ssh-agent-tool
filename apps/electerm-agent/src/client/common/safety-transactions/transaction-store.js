@@ -235,6 +235,13 @@ function enqueuePatch (adapter, table, id, work) {
   })
 }
 
+function operationIntegrityError () {
+  const error = new Error('安全事务完整性校验失败，已拒绝原子更新。')
+  error.code = 'SAFETY_OPERATION_INTEGRITY'
+  error.integrityFailure = true
+  return error
+}
+
 export function createTransactionStore (options = {}) {
   const adapter = options.adapter || options.db || defaultAdapter
   const getLegacyStorage = async () => options.legacyStorage || getDefaultLegacyStorage()
@@ -337,6 +344,32 @@ export function createTransactionStore (options = {}) {
     })
   }
 
+  async function guardedPatchOperation (id, predicate, patch = {}) {
+    if (typeof predicate !== 'function') throw operationIntegrityError()
+    return enqueuePatch(adapter, operationTable, id, async () => {
+      const current = await getOperation(id)
+      if (!current) throw new Error(`未找到安全操作：${id}`)
+      let accepted
+      try {
+        accepted = await predicate(current)
+      } catch {
+        throw operationIntegrityError()
+      }
+      if (accepted !== true) throw operationIntegrityError()
+      const resolvedPatch = typeof patch === 'function'
+        ? await patch(current)
+        : patch
+      const item = normalizeOperation({
+        ...mergePatch(current, resolvedPatch),
+        id: current.id,
+        createdAt: current.createdAt,
+        updatedAt: nextUpdatedAt(current.updatedAt, resolvedPatch?.updatedAt, clock)
+      }, { now: resolveNow(clock) })
+      await adapter.update(item.id, item, operationTable, true, true)
+      return item
+    })
+  }
+
   async function removeOperation (id) {
     await adapter.remove(operationTable, id, true)
   }
@@ -375,6 +408,7 @@ export function createTransactionStore (options = {}) {
     getOperation,
     listOperations,
     patchOperation,
+    guardedPatchOperation,
     removeOperation,
     saveTask,
     getTask,
@@ -389,6 +423,7 @@ export const saveOperation = (...args) => defaultStore.saveOperation(...args)
 export const getOperation = (...args) => defaultStore.getOperation(...args)
 export const listOperations = (...args) => defaultStore.listOperations(...args)
 export const patchOperation = (...args) => defaultStore.patchOperation(...args)
+export const guardedPatchOperation = (...args) => defaultStore.guardedPatchOperation(...args)
 export const removeOperation = (...args) => defaultStore.removeOperation(...args)
 export const saveTask = (...args) => defaultStore.saveTask(...args)
 export const getTask = (...args) => defaultStore.getTask(...args)

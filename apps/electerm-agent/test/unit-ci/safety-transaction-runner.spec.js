@@ -19,7 +19,46 @@ function clone (value) {
 function createMemoryStore () {
   const records = new Map()
   const transitions = []
-  return {
+  const queues = new Map()
+
+  function enqueue (id, work) {
+    const previous = queues.get(id) || Promise.resolve()
+    const current = previous.catch(() => {}).then(work)
+    queues.set(id, current)
+    return current.finally(() => {
+      if (queues.get(id) === current) queues.delete(id)
+    })
+  }
+
+  async function patch (id, value) {
+    return enqueue(id, async () => {
+      const current = records.get(id)
+      if (!current) throw new Error(`missing record: ${id}`)
+      const next = { ...current, ...clone(value) }
+      records.set(id, next)
+      transitions.push(next.state || next.status)
+      return clone(next)
+    })
+  }
+
+  async function guardedPatch (id, predicate, value) {
+    return enqueue(id, async () => {
+      const current = records.get(id)
+      if (!current) throw new Error(`missing record: ${id}`)
+      if (await predicate(clone(current)) !== true) {
+        throw new Error('安全事务完整性校验失败，已拒绝原子更新。')
+      }
+      const resolved = typeof value === 'function'
+        ? await value(clone(current))
+        : value
+      const next = { ...current, ...clone(resolved) }
+      records.set(id, next)
+      transitions.push(next.state || next.status)
+      return clone(next)
+    })
+  }
+
+  const store = {
     transitions,
     async save (value) {
       const saved = clone(value)
@@ -30,15 +69,11 @@ function createMemoryStore () {
     async get (id) {
       return clone(records.get(id))
     },
-    async patch (id, patch) {
-      const current = records.get(id)
-      if (!current) throw new Error(`missing record: ${id}`)
-      const next = { ...current, ...clone(patch) }
-      records.set(id, next)
-      transitions.push(next.state || next.status)
-      return clone(next)
-    }
+    patch,
+    guardedPatch,
+    guardedPatchOperation: guardedPatch
   }
+  return store
 }
 
 function marker (phase, id, code = 0) {
@@ -420,6 +455,95 @@ test('verify post-check refuses restored and repairs rollback fields after pendi
   assert.notEqual(failed.state, 'restored')
   assert.deepEqual(phases, ['prepare', 'execute', 'rollback', 'verify'])
   assert.equal((await context.runner.rollback(request.id)).state, 'restored')
+})
+
+test('execute success guard detects a store patch in the exact post-remote window', async () => {
+  const request = await createRequest({ id: 'op-atomic-execute-window' })
+  const baseStore = createMemoryStore()
+  let injectTamper = false
+  let injected = false
+  const guardedPatch = async (id, predicate, value) => {
+    if (injectTamper && !injected) {
+      injected = true
+      const current = await baseStore.get(id)
+      await baseStore.patch(id, {
+        plan: {
+          ...current.plan,
+          executeCommand: 'systemctl restart sshd'
+        }
+      })
+    }
+    return baseStore.guardedPatch(id, predicate, value)
+  }
+  const store = {
+    ...baseStore,
+    guardedPatch,
+    guardedPatchOperation: guardedPatch
+  }
+  const context = await createPreparedRunner({
+    request,
+    store,
+    runRemote: async (command, options) => {
+      if (options.phase === 'execute') injectTamper = true
+      return { stdout: marker(options.phase, request.id), code: 0 }
+    }
+  })
+  const prepared = await store.get(request.id)
+
+  await assert.rejects(
+    context.runner.execute(request.id, { confirmed: true }),
+    /完整性|恢复绑定|原子更新/
+  )
+  const failed = await store.get(request.id)
+  assert.equal(injected, true)
+  assert.equal(failed.state, 'failed')
+  assert.deepEqual(failed.plan, prepared.plan)
+  assert.notEqual(failed.state, 'rollback-available')
+})
+
+test('verify success guard detects a store patch before the atomic restored write', async () => {
+  const request = await createRequest({ id: 'op-atomic-verify-window' })
+  const baseStore = createMemoryStore()
+  let injectTamper = false
+  let injected = false
+  const guardedPatch = async (id, predicate, value) => {
+    if (injectTamper && !injected) {
+      injected = true
+      const current = await baseStore.get(id)
+      await baseStore.patch(id, {
+        plan: {
+          ...current.plan,
+          verifyCommand: 'verify-command-was-forged-after-remote'
+        }
+      })
+    }
+    return baseStore.guardedPatch(id, predicate, value)
+  }
+  const store = {
+    ...baseStore,
+    guardedPatch,
+    guardedPatchOperation: guardedPatch
+  }
+  const context = await createPreparedRunner({
+    request,
+    store,
+    runRemote: async (command, options) => {
+      if (options.phase === 'verify') injectTamper = true
+      return { stdout: marker(options.phase, request.id), code: 0 }
+    }
+  })
+  await context.runner.execute(request.id, { confirmed: true })
+  const bound = await store.get(request.id)
+
+  await assert.rejects(
+    context.runner.rollback(request.id),
+    /完整性|恢复绑定|原子更新/
+  )
+  const failed = await store.get(request.id)
+  assert.equal(injected, true)
+  assert.equal(failed.state, 'failed')
+  assert.deepEqual(failed.plan, bound.plan)
+  assert.notEqual(failed.state, 'restored')
 })
 
 test('prepare and execute require real zero markers instead of transport code alone', async () => {

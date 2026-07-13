@@ -338,6 +338,11 @@ export function createTransactionRunner (options = {}) {
   const save = bindStoreMethod(store, 'save', 'saveOperation')
   const get = bindStoreMethod(store, 'get', 'getOperation')
   const patch = bindStoreMethod(store, 'patch', 'patchOperation')
+  const guardedPatch = bindStoreMethod(
+    store,
+    'guardedPatch',
+    'guardedPatchOperation'
+  )
   const timestamp = resolveClock(options.now)
   const onEvent = typeof options.onEvent === 'function' ? options.onEvent : null
   const queues = new Map()
@@ -465,6 +470,54 @@ export function createTransactionRunner (options = {}) {
       return await assertBoundRecovery(current, bound)
     } catch {
       return failIntegrity(current, bound, entries)
+    }
+  }
+
+  async function guardedRecoveryTransition (
+    operation,
+    bound,
+    state,
+    extra = {},
+    phase = state,
+    entries = [],
+    shouldEmit = true
+  ) {
+    try {
+      const next = await guardedPatch(
+        operation.id,
+        async current => {
+          try {
+            await assertBoundRecovery(current, bound)
+            return true
+          } catch {
+            return false
+          }
+        },
+        async current => {
+          if (cancellationRequests.has(operation.id) ||
+            current.state === operationStates.cancelled) {
+            throw cancellationError()
+          }
+          const resolvedExtra = typeof extra === 'function'
+            ? await extra(current)
+            : extra
+          return {
+            ...resolvedExtra,
+            state,
+            updatedAt: timestamp()
+          }
+        }
+      )
+      if (shouldEmit) emit(operation.id, state, phase)
+      return next
+    } catch (error) {
+      if (error.cancelled) throw error
+      if (error.integrityFailure ||
+        error.code === 'SAFETY_OPERATION_INTEGRITY' ||
+        /完整性|原子更新/.test(error.message)) {
+        return failIntegrity(operation, bound, entries)
+      }
+      throw error
     }
   }
 
@@ -719,17 +772,20 @@ export function createTransactionRunner (options = {}) {
           )
           if (phase.cancelRequested) throw cancellationError()
           if (safety.reversible) {
-            operation = await postCheckBoundRecovery(
+            const verified = await guardedRecoveryTransition(
               operation,
               boundRecovery,
+              operationStates.verificationPassed,
+              current => ({
+                audit: appendAudit(current, [phase.audit]),
+                executionId: undefined
+              }),
+              'execute',
               [phase.audit]
             )
-            const verified = await transition(operation, operationStates.verificationPassed, {
-              audit: appendAudit(operation, [phase.audit]),
-              executionId: undefined
-            }, 'execute')
-            return transition(
+            return guardedRecoveryTransition(
               verified,
+              boundRecovery,
               operationStates.rollbackAvailable,
               { completedAt: timestamp() },
               'execute'
@@ -795,7 +851,19 @@ export function createTransactionRunner (options = {}) {
           )
           audits.push(rollbackPhase.audit)
           if (rollbackPhase.cancelRequested) throw cancellationError()
-          operation = await postCheckBoundRecovery(operation, boundRecovery, audits)
+          operation = await guardedRecoveryTransition(
+            operation,
+            boundRecovery,
+            operationStates.rollingBack,
+            current => ({
+              audit: appendAudit(current, audits),
+              executionId: undefined
+            }),
+            'rollback',
+            audits,
+            false
+          )
+          audits.length = 0
           const verifyCommand = operation.plan.verifyCommand
           const verifyPhase = await runMarkedPhase(
             operation,
@@ -805,12 +873,18 @@ export function createTransactionRunner (options = {}) {
           )
           audits.push(verifyPhase.audit)
           if (verifyPhase.cancelRequested) throw cancellationError()
-          operation = await postCheckBoundRecovery(operation, boundRecovery, audits)
-          const restored = await transition(operation, operationStates.restored, {
-            audit: appendAudit(operation, audits),
-            completedAt: timestamp(),
-            executionId: undefined
-          }, 'verify')
+          const restored = await guardedRecoveryTransition(
+            operation,
+            boundRecovery,
+            operationStates.restored,
+            current => ({
+              audit: appendAudit(current, audits),
+              completedAt: timestamp(),
+              executionId: undefined
+            }),
+            'verify',
+            audits
+          )
           boundRecoveries.delete(operation.id)
           return restored
         })
