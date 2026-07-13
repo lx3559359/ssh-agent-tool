@@ -24,6 +24,7 @@ import {
 } from './diagnostic-plan.js'
 import {
   createAgentTaskController,
+  createAgentTaskUiLifecycle,
   requestDiagnosticPlanText
 } from './agent-task-controller.js'
 import { agentTaskRegistry } from './agent-task-registry.js'
@@ -95,6 +96,10 @@ export default function AgentTaskRunner ({
   const generationRequestRef = useRef(0)
   const activeRunRef = useRef(0)
   const mountedRef = useRef(true)
+  const uiLifecycle = useMemo(() => createAgentTaskUiLifecycle({
+    abortGeneration: () => generationAbortRef.current?.abort(),
+    closeView: () => onClose?.()
+  }), [onClose])
 
   useEffect(() => {
     mountedRef.current = true
@@ -221,8 +226,7 @@ export default function AgentTaskRunner ({
   }
 
   function handleClose () {
-    if (phase === 'generating') generationAbortRef.current?.abort()
-    onClose?.()
+    uiLifecycle.close(phase)
   }
 
   function handleSendToAi () {

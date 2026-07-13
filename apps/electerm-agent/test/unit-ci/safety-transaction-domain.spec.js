@@ -837,6 +837,26 @@ test('redacts audit credentials without altering ordinary command text', async (
   assert.match(redacted, /limit=10/)
 })
 
+test('audit redaction removes CLI option credentials and bare provider keys', async () => {
+  const { redactAuditText } = await importDomainModule('audit-redaction.js')
+  const redacted = redactAuditText([
+    '/usr/bin/app --api-key sk-live-1234567890 --check',
+    '/usr/bin/app --password "cli password" --token plain-token --status',
+    'ExecStart=/usr/bin/worker --api_key=sk-worker-abcdefghijk',
+    'provider returned sk-response-abcdefghijklmnop in output',
+    'short provider key sk-x in output',
+    'systemctl status app.service'
+  ].join('\n'))
+
+  assert.doesNotMatch(redacted, /sk-live|cli password|plain-token|sk-worker|sk-response|sk-x/)
+  assert.match(redacted, /--api-key \[REDACTED\] --check/)
+  assert.match(redacted, /--password "\[REDACTED\]" --token \[REDACTED\] --status/)
+  assert.match(redacted, /--api_key=\[REDACTED\]/)
+  assert.match(redacted, /provider returned \[REDACTED\] in output/)
+  assert.match(redacted, /short provider key \[REDACTED\] in output/)
+  assert.match(redacted, /systemctl status app\.service/)
+})
+
 test('audit redaction preserves shell quotes and separators for additional credential forms', async () => {
   const { redactAuditText } = await importDomainModule('audit-redaction.js')
   const redacted = redactAuditText([

@@ -80,11 +80,26 @@ function redactAuthorizationValues (text) {
   )
 }
 
+function redactCliOptionValues (text) {
+  return redactCredentialValues(
+    text,
+    /((?:^|[\s;&])--(?:api[-_]?key|password|passphrase|token|secret)(?:[ \t]+|=))(?:"((?:\\.|[^"\\])*)"|'([^'\r\n]*)'|[^\s;&]+)/gim
+  )
+}
+
+function redactProviderKeys (text) {
+  return text.replace(
+    /(^|[^A-Za-z0-9_-])sk-[A-Za-z0-9][A-Za-z0-9_-]*(?=$|[^A-Za-z0-9_-])/gim,
+    `$1${redacted}`
+  )
+}
+
 function redactPlainText (value) {
   let text = String(value ?? '')
   text = redactPrivateKeys(text)
   text = redactJsonCredentialValues(text)
   text = redactAuthorizationValues(text)
+  text = redactCliOptionValues(text)
   text = redactCredentialValues(
     text,
     /(\bBearer\s+)(?:"((?:\\.|[^"\\])*)"|'([^'\r\n]*)'|[^\s,;&]+)/gi
@@ -113,7 +128,7 @@ function redactPlainText (value) {
     text,
     /(\bsshpass\s+(?:(?:-v|-e)\s+|(?:-f|-d|-P)\s+\S+\s+)*(?:-p(?:\s+|(?=\S))|--password(?:\s+|=)))(?:"((?:\\.|[^"\\])*)"|'([^'\r\n]*)'|[^\s;&]+)/gi
   )
-  return text
+  return redactProviderKeys(text)
 }
 
 export function redactAuditText (value) {

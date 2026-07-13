@@ -231,6 +231,93 @@ test('builds a redacted prompt containing only the selected abnormal target cont
   assert.match(prompt, /只能返回一个 JSON 对象/)
 })
 
+test('redacts credentials embedded in diagnostic commands and final reports', async () => {
+  const {
+    buildTargetedDiagnosticContext,
+    buildDiagnosticResultPrompt
+  } = await import(diagnosticPlanUrl)
+  const snapshot = {
+    endpoint: { host: 'prod.example.com', port: 22, username: 'root' },
+    services: [{
+      name: 'app.service',
+      activeState: 'failed',
+      execStart: '/usr/bin/app --api-key sk-context-1234567890 --password context-pass'
+    }],
+    resources: {
+      processes: [{
+        pid: 919,
+        command: '/usr/bin/app --token process-token --status'
+      }]
+    },
+    alerts: [{
+      status: 'critical',
+      target: 'app.service',
+      message: 'provider returned sk-alert-abcdefghijklmnop'
+    }]
+  }
+  const context = buildTargetedDiagnosticContext({
+    snapshot,
+    target: { type: 'service', id: 'app.service' }
+  })
+  const report = buildDiagnosticResultPrompt({
+    plan: validPlan(),
+    task: {
+      status: 'failed',
+      error: 'backend sk-error-abcdefghijklmnop',
+      steps: [{
+        title: '读取状态',
+        purpose: '收集证据',
+        command: '/usr/bin/app --api-key sk-report-1234567890 --password report-pass',
+        output: 'token=output-token and sk-output-abcdefghijklmnop',
+        error: '--token step-error-token'
+      }]
+    }
+  })
+  const serialized = JSON.stringify(context)
+
+  for (const secret of [
+    'sk-context', 'context-pass', 'process-token', 'sk-alert',
+    'sk-error', 'sk-report', 'report-pass', 'output-token',
+    'sk-output', 'step-error-token'
+  ]) {
+    assert.doesNotMatch(`${serialized}\n${report}`, new RegExp(secret), secret)
+  }
+  assert.match(serialized, /\[REDACTED\]/)
+  assert.match(report, /\[REDACTED\]/)
+  assert.ok(report.length <= 12000)
+})
+
+test('matches related diagnostic identities on token boundaries only', async () => {
+  const { buildTargetedDiagnosticContext } = await import(diagnosticPlanUrl)
+  const context = buildTargetedDiagnosticContext({
+    snapshot: {
+      endpoint: { host: 'prod.example.com', port: 22, username: 'root' },
+      services: [{ name: 'app.service', activeState: 'failed' }],
+      resources: {
+        processes: [
+          { pid: 10, command: '/usr/bin/app --status' },
+          { pid: 11, command: '/usr/sbin/apparmor_parser --status' }
+        ]
+      },
+      containers: [
+        { name: 'app-worker', image: 'app:latest', status: 'Exited (1)' },
+        { name: 'apparmor-helper', image: 'apparmor:latest', status: 'Exited (1)' }
+      ],
+      alerts: [
+        { status: 'critical', target: 'app.service', message: 'app failed' },
+        { status: 'critical', target: 'apparmor', message: 'apparmor failed' }
+      ]
+    },
+    target: { type: 'service', id: 'app.service' }
+  })
+  const serialized = JSON.stringify(context)
+
+  assert.match(serialized, /\/usr\/bin\/app --status/)
+  assert.match(serialized, /app-worker/)
+  assert.match(serialized, /app:latest/)
+  assert.doesNotMatch(serialized, /apparmor/)
+})
+
 test('keeps an oversized targeted prompt bounded with complete JSON context', async () => {
   const { buildTargetedDiagnosticPrompt } = await import(diagnosticPlanUrl)
   const repeated = '诊断上下文'.repeat(800)
@@ -264,30 +351,41 @@ test('keeps an oversized targeted prompt bounded with complete JSON context', as
   assert.doesNotThrow(() => JSON.parse(contextJson))
 })
 
-test('diagnostic buttons are limited to warning and abnormal targets', async () => {
-  const { isDiagnosticTargetAbnormal } = await import(diagnosticPlanUrl)
+test('derives warning or critical severity before showing diagnostic buttons', async () => {
+  const {
+    deriveDiagnosticSeverity,
+    isDiagnosticTargetAbnormal
+  } = await import(diagnosticPlanUrl)
+  const cases = [
+    [{ severity: 'warning' }, 'warning'],
+    [{ status: 'critical' }, 'critical'],
+    [{ activeState: 'failed' }, 'critical'],
+    [{ status: 'unhealthy' }, 'critical'],
+    [{ state: 'dead' }, 'critical'],
+    [{ status: 'Exited (1)' }, 'critical'],
+    [{ status: 'Up 2 minutes (unhealthy)' }, 'critical'],
+    [{ state: 'inactive' }, 'warning'],
+    [{ status: 'stopped' }, 'warning'],
+    [{ status: 'degraded' }, 'warning'],
+    [{ status: 'restarting' }, 'warning'],
+    [{ status: 'paused' }, 'warning'],
+    [{ status: 'Created' }, null],
+    [{ status: 'unknown' }, null],
+    [{ status: 'healthy' }, null],
+    [{ activeState: 'active' }, null],
+    [{ state: 'running' }, null],
+    [{ status: 'Up 2 hours' }, null],
+    [{ status: 'an-arbitrary-error-string' }, null],
+    [{}, null]
+  ]
 
-  for (const item of [
-    { status: 'warning' },
-    { status: 'critical' },
-    { activeState: 'failed' },
-    { state: 'inactive' },
-    { status: 'Created' },
-    { status: 'Exited (1)' },
-    { status: 'unhealthy' },
-    { status: 'Up 2 minutes (unhealthy)' }
-  ]) {
-    assert.equal(isDiagnosticTargetAbnormal(item), true, JSON.stringify(item))
-  }
-  for (const item of [
-    { status: 'healthy' },
-    { activeState: 'active' },
-    { state: 'running' },
-    { status: 'Up 2 hours' },
-    { status: 'unknown' },
-    {}
-  ]) {
-    assert.equal(isDiagnosticTargetAbnormal(item), false, JSON.stringify(item))
+  for (const [item, severity] of cases) {
+    assert.equal(deriveDiagnosticSeverity(item), severity, JSON.stringify(item))
+    assert.equal(
+      isDiagnosticTargetAbnormal(item),
+      severity === 'warning' || severity === 'critical',
+      JSON.stringify(item)
+    )
   }
 })
 

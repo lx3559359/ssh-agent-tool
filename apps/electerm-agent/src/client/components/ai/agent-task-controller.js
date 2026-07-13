@@ -42,6 +42,9 @@ export async function requestDiagnosticPlanText ({
   if (!String(config.baseURLAI || '').trim() || !String(config.apiKeyAI || '').trim()) {
     throw new Error('请先配置当前 AI 的 API 地址和 API Key。')
   }
+  if (!String(config.modelAI || '').trim()) {
+    throw new Error('请先配置当前 AI 模型。')
+  }
   const invoke = requireFunction(runGlobalAsync, 'AIchat 调用器')
   const requestError = (value, fallback) => {
     return sanitizedRequestError(value, fallback, [config.apiKeyAI])
@@ -110,6 +113,26 @@ export async function requestDiagnosticPlanText ({
     throw requestError(error, 'AI 诊断计划请求失败。')
   } finally {
     signal?.removeEventListener('abort', onAbort)
+  }
+}
+
+export function createAgentTaskUiLifecycle (options = {}) {
+  const abortGeneration = typeof options.abortGeneration === 'function'
+    ? options.abortGeneration
+    : () => {}
+  const closeView = typeof options.closeView === 'function'
+    ? options.closeView
+    : () => {}
+  return {
+    close (phase) {
+      const generationCancelled = phase === 'generating'
+      if (generationCancelled) abortGeneration()
+      closeView()
+      return {
+        generationCancelled,
+        taskCancelled: false
+      }
+    }
   }
 }
 

@@ -188,7 +188,10 @@ function matchesIdentity (value, identity) {
   const text = String(value || '').toLowerCase()
   if (!text) return false
   if (identity.exact.has(text.trim())) return true
-  return [...identity.fuzzy].some(item => text.includes(item))
+  return [...identity.fuzzy].some(item => {
+    const escaped = item.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    return new RegExp(`(^|[^a-z0-9])${escaped}(?=$|[^a-z0-9])`, 'i').test(text)
+  })
 }
 
 function matchesRelatedItem (item, identity) {
@@ -454,27 +457,46 @@ export function parseDiagnosticPlan (value, options = {}) {
 
 export const buildDiagnosticContext = buildTargetedDiagnosticContext
 
+const criticalDiagnosticStates = new Set([
+  'critical',
+  'failed',
+  'unhealthy',
+  'dead',
+  'exited'
+])
+const warningDiagnosticStates = new Set([
+  'warning',
+  'inactive',
+  'stopped',
+  'degraded',
+  'restarting',
+  'paused'
+])
+
+function diagnosticStateTokens (value) {
+  const text = String(value || '').trim().toLowerCase()
+  if (!text) return []
+  const tokens = [text.match(/^[a-z]+/)?.[0]]
+  for (const match of text.matchAll(/\(([^)]*)\)/g)) {
+    tokens.push(...(match[1].match(/[a-z]+/g) || []))
+  }
+  return tokens.filter(Boolean)
+}
+
+export function deriveDiagnosticSeverity (target = {}) {
+  let severity = null
+  for (const value of [target.severity, target.activeState, target.state, target.status]) {
+    for (const token of diagnosticStateTokens(value)) {
+      if (criticalDiagnosticStates.has(token)) return 'critical'
+      if (warningDiagnosticStates.has(token)) severity = 'warning'
+    }
+  }
+  return severity
+}
+
 export function isDiagnosticTargetAbnormal (target = {}) {
-  const state = String(
-    target.activeState || target.state || target.status || ''
-  ).trim().toLowerCase()
-  if (!state || state === 'unknown') return false
-  if (state.includes('unhealthy')) return true
-  if (state.startsWith('up ')) return false
-  return [
-    'warning',
-    'critical',
-    'failed',
-    'inactive',
-    'created',
-    'stopped',
-    'dead',
-    'exited',
-    'unhealthy',
-    'degraded',
-    'restarting',
-    'paused'
-  ].some(value => state === value || state.startsWith(`${value} `) || state.startsWith(`${value} (`))
+  const severity = deriveDiagnosticSeverity(target)
+  return severity === 'warning' || severity === 'critical'
 }
 
 export function buildDiagnosticResultPrompt (input = {}) {

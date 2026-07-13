@@ -6,6 +6,10 @@ const { pathToFileURL } = require('node:url')
 const aiRoot = path.resolve(__dirname, '../../src/client/components/ai')
 const registryUrl = pathToFileURL(path.join(aiRoot, 'agent-task-registry.js')).href
 const controllerUrl = pathToFileURL(path.join(aiRoot, 'agent-task-controller.js')).href
+const storeUrl = pathToFileURL(path.resolve(
+  __dirname,
+  '../../src/client/common/safety-transactions/transaction-store.js'
+)).href
 
 function clone (value) {
   return value === undefined ? undefined : structuredClone(value)
@@ -37,6 +41,29 @@ function createTaskStore (initial = []) {
       records.set(String(id), next)
       transitions.push(next.status)
       return clone(next)
+    }
+  }
+}
+
+function createMemoryAdapter () {
+  const tables = new Map()
+  const table = name => {
+    if (!tables.has(name)) tables.set(name, new Map())
+    return tables.get(name)
+  }
+  return {
+    async update (id, value, name) {
+      table(name).set(String(id), clone(value))
+      return 1
+    },
+    async findOne (name, id) {
+      return clone(table(name).get(String(id)))
+    },
+    async find (name) {
+      return [...table(name).values()].map(clone)
+    },
+    async remove (name, id) {
+      return table(name).delete(String(id)) ? 1 : 0
     }
   }
 }
@@ -369,7 +396,7 @@ test('AI plan request uses the selected profile and truly stops an active stream
       baseURLAI: 'https://relay.example.com',
       apiPathAI: '/v1/chat/completions',
       apiKeyAI: 'selected-key',
-      proxyAI: '',
+      proxyAI: 'http://proxy.example.com:8080',
       authHeaderNameAI: 'X-API-Key'
     },
     signal: abort.signal,
@@ -395,7 +422,12 @@ test('AI plan request uses the selected profile and truly stops an active stream
   assert.equal(calls[0][0], 'AIchat')
   assert.equal(calls[0][1], 'target-only-prompt')
   assert.equal(calls[0][2], 'selected-model')
+  assert.match(calls[0][3], /^SSH 运维专家\n/)
+  assert.match(calls[0][3], /只读服务器异常诊断计划.*严格 JSON/)
+  assert.equal(calls[0][4], 'https://relay.example.com')
+  assert.equal(calls[0][5], '/v1/chat/completions')
   assert.equal(calls[0][6], 'selected-key')
+  assert.equal(calls[0][7], 'http://proxy.example.com:8080')
   assert.equal(calls[0][8], true)
   assert.equal(calls[0][9], 'X-API-Key')
   assert.deepEqual(calls.at(-1), ['stopStream', 'diagnostic-stream'])
@@ -414,7 +446,21 @@ test('AI plan request fails closed with Chinese redacted configuration and respo
   )
   assert.equal(calls, 0)
 
+  await assert.rejects(
+    requestDiagnosticPlanText({
+      prompt: 'target-only-prompt',
+      config: {
+        baseURLAI: 'https://relay.example.com',
+        apiKeyAI: 'selected-key'
+      },
+      runGlobalAsync: async () => { calls += 1 }
+    }),
+    /模型|model/i
+  )
+  assert.equal(calls, 0)
+
   const config = {
+    modelAI: 'selected-model',
     baseURLAI: 'https://relay.example.com',
     apiKeyAI: 'selected-key'
   }
@@ -436,4 +482,98 @@ test('AI plan request fails closed with Chinese redacted configuration and respo
     }),
     /未返回|为空/
   )
+})
+
+test('UI lifecycle cancels generation but closing a running task only closes the view', async () => {
+  const { createAgentTaskUiLifecycle } = await import(controllerUrl)
+  let generationAborts = 0
+  let closes = 0
+  const lifecycle = createAgentTaskUiLifecycle({
+    abortGeneration: () => { generationAborts += 1 },
+    closeView: () => { closes += 1 }
+  })
+
+  assert.deepEqual(lifecycle.close('generating'), {
+    generationCancelled: true,
+    taskCancelled: false
+  })
+  assert.equal(generationAborts, 1)
+  assert.equal(closes, 1)
+
+  assert.deepEqual(lifecycle.close('running'), {
+    generationCancelled: false,
+    taskCancelled: false
+  })
+  assert.equal(generationAborts, 1)
+  assert.equal(closes, 2)
+})
+
+test('failed task execution cleans its registry entry', async () => {
+  const { createAgentTaskRegistry } = await import(registryUrl)
+  const { createAgentTaskController } = await import(controllerUrl)
+  const store = createTaskStore()
+  const registry = createAgentTaskRegistry()
+  const controller = createAgentTaskController({
+    store,
+    registry,
+    pid: 1001,
+    endpoint: endpoint(),
+    getCurrentEndpoint: async () => endpoint(),
+    runCmd: async () => ({ stdout: 'failed evidence', code: 7 }),
+    cancelRunCmd: async () => true
+  })
+
+  await assert.rejects(controller.confirmAndRun(diagnosticPlan()), /执行失败|退出码/)
+  assert.equal(registry.size, 0)
+  assert.equal((await store.listTasks()).at(-1).status, 'failed')
+})
+
+test('real transaction store methods work with registry capability and orphan recovery', async () => {
+  const { createTransactionStore } = await import(storeUrl)
+  const {
+    createAgentTaskRegistry,
+    installSafetyTaskCapability,
+    recoverOrphanedAgentTasks
+  } = await import(registryUrl)
+  const store = createTransactionStore({
+    adapter: createMemoryAdapter(),
+    now: () => new Date('2026-07-14T08:00:00.000Z'),
+    readLegacyRecords: async () => [],
+    onChange: () => {}
+  })
+  const registry = createAgentTaskRegistry()
+  const calls = []
+  const runningTask = task => ({
+    id: task,
+    source: 'server-status',
+    status: 'running-readonly',
+    endpoint: endpoint(),
+    steps: [{ id: 'status', status: 'running', command: '/usr/bin/uptime' }]
+  })
+  await store.saveTask(runningTask('live-real-task'))
+  await store.saveTask(runningTask('orphan-real-task'))
+  registry.register({
+    taskId: 'live-real-task',
+    endpoint: endpoint(),
+    controller: new AbortController(),
+    runner: {
+      cancel: async id => {
+        calls.push(id)
+        return store.patchTask(id, { status: 'cancelled' })
+      }
+    }
+  })
+
+  const capability = installSafetyTaskCapability(store, registry)
+  const recovered = await recoverOrphanedAgentTasks({ store, registry })
+  const live = await store.getTask('live-real-task')
+  const orphan = await store.getTask('orphan-real-task')
+
+  assert.equal(store.safetyTaskCapability, capability)
+  assert.equal(capability.canCancel(live), true)
+  assert.deepEqual(recovered.map(task => task.id), ['orphan-real-task'])
+  assert.equal(orphan.status, 'failed')
+  assert.equal((await capability.cancel(live.id)).status, 'cancelled')
+  assert.deepEqual(calls, ['live-real-task'])
+  assert.equal(registry.size, 0)
 })
