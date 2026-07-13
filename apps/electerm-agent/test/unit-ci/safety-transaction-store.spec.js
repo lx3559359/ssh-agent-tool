@@ -687,3 +687,35 @@ test('NeDB rejects safety records when encrypted payload decryption or JSON pars
     /JSON|Unexpected|property name/i
   )
 })
+
+test('NeDB rejects malformed encrypted payload envelopes in safety tables', async t => {
+  const { createDb } = require('../../src/app/lib/nedb')
+  const enc = value => Buffer.from(value, 'utf8').toString('base64')
+  const dec = value => Buffer.from(value, 'base64').toString('utf8')
+  const cases = [
+    ['empty ciphertext', ''],
+    ['non-string ciphertext', 0],
+    ['ciphertext without enc prefix', JSON.stringify({ command: 'plaintext' })],
+    ['truncated ciphertext', `enc:${enc('{"command":"truncated')}`]
+  ]
+
+  for (const [name, encryptedPayload] of cases) {
+    await t.test(name, async () => {
+      const appPath = fs.mkdtempSync(path.join(os.tmpdir(), 'shellpilot-nedb-envelope-'))
+      const dbFolder = path.join(appPath, 'electerm', 'users', 'default_user')
+      const sourcePath = path.join(dbFolder, 'electerm.safetyOperations.nedb')
+      const id = `malformed-${name.replaceAll(' ', '-')}`
+      fs.mkdirSync(dbFolder, { recursive: true })
+      fs.writeFileSync(sourcePath, JSON.stringify({
+        _id: id,
+        _encdata: encryptedPayload
+      }) + '\n')
+
+      const reader = createDb(appPath, 'default_user', { enc, dec })
+      await assert.rejects(
+        reader.dbAction('safetyOperations', 'findOne', { _id: id }),
+        /decrypt|encrypted|JSON|Unexpected/i
+      )
+    })
+  }
+})

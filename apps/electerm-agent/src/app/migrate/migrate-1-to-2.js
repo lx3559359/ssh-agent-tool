@@ -109,7 +109,7 @@ function createMigration (options = {}) {
       if (nedbData && nedbData.length > 0) {
         log.info(`Found ${nedbData.length} records in ${table}`)
         for (const record of nedbData) {
-          if (safetyTables.has(table) && record._encdata) {
+          if (safetyTables.has(table) && Object.prototype.hasOwnProperty.call(record, '_encdata')) {
             throw new Error(`Refusing to migrate undecrypted ${table} record ${record._id || record.id || ''}`)
           }
           const recordId = record._id || record.id

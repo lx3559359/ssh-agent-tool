@@ -111,6 +111,15 @@ function createDb (appPath, defaultUserName, { enc, dec } = {}) {
    */
   function decryptDoc (dbName, doc) {
     if (!doc || !isEncryptedRecord(dbName, doc._id)) return doc
+    const hasEncryptedPayload = Object.prototype.hasOwnProperty.call(doc, '_encdata')
+    if (!hasEncryptedPayload) return doc
+    if (STRICT_ENC_TABLES.has(dbName) && (
+      typeof doc._encdata !== 'string' ||
+      !doc._encdata.startsWith(ENC_PREFIX) ||
+      doc._encdata.length === ENC_PREFIX.length
+    )) {
+      throw new Error(`Invalid encrypted payload for ${dbName} record ${doc._id}`)
+    }
     if (!doc._encdata) return doc
     if (!dec) {
       if (STRICT_ENC_TABLES.has(dbName)) {

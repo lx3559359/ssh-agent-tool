@@ -135,3 +135,63 @@ test('corrupt encrypted safety data aborts migration without backing up the sour
   assert.equal(fs.existsSync(sourcePath), true)
   assert.equal(fs.existsSync(sourcePath + '.bak'), false)
 })
+
+test('empty or truncated safety ciphertext aborts migration without backing up its source', async t => {
+  const migrationModule = loadMigrationModule()
+  const cases = [
+    ['empty ciphertext', ''],
+    ['truncated ciphertext', `enc:${enc('{"command":"truncated')}`]
+  ]
+
+  for (const [name, encryptedPayload] of cases) {
+    await t.test(name, async () => {
+      const appPath = fs.mkdtempSync(path.join(os.tmpdir(), 'shellpilot-migrate-envelope-'))
+      const defaultUserName = 'testuser'
+      const dbFolder = path.join(appPath, 'electerm', 'users', defaultUserName)
+      const sourcePath = path.join(dbFolder, 'electerm.safetyOperations.nedb')
+      fs.mkdirSync(dbFolder, { recursive: true })
+      fs.writeFileSync(sourcePath, JSON.stringify({
+        _id: `corrupt-${name.replaceAll(' ', '-')}`,
+        _encdata: encryptedPayload
+      }) + '\n')
+
+      const migration = createTestMigration(migrationModule, appPath, defaultUserName)
+
+      await assert.rejects(migration.migrate(), /decrypt|encrypted|JSON|Unexpected/i)
+      assert.equal(fs.existsSync(sourcePath), true)
+      assert.equal(fs.existsSync(sourcePath + '.bak'), false)
+    })
+  }
+})
+
+test('migration rejects an undecrypted safety shell with empty ciphertext before writing or backup', async () => {
+  const migrationModule = loadMigrationModule()
+  let sqliteWrites = 0
+  let backups = 0
+  const migration = migrationModule.createMigration({
+    appPath: 'unused',
+    defaultUserName: 'testuser',
+    enc,
+    dec,
+    createNedb: () => ({
+      dbAction: async (table, operation) => {
+        if (table === 'safetyOperations' && operation === 'find') {
+          return [{ _id: 'empty-shell', _encdata: '' }]
+        }
+        return []
+      }
+    }),
+    createSqlite: () => ({
+      dbAction: async () => { sqliteWrites += 1 }
+    }),
+    checkDbUpgrade: async () => false,
+    doUpgrade: async () => {},
+    existsSync: file => file.endsWith('electerm.safetyOperations.nedb'),
+    renameSync: () => { backups += 1 },
+    log
+  })
+
+  await assert.rejects(migration.migrate(), /undecrypted safetyOperations record empty-shell/)
+  assert.equal(sqliteWrites, 0)
+  assert.equal(backups, 0)
+})
