@@ -713,10 +713,13 @@ function buildNetworkProvider (command, id) {
   const captureCommands = []
   captureCommands.push(
     captureQueryOutput(primaryQuery, 'primary_output', '网络主 IP 查询失败，退出码', 42),
-    `if primary=$(printf '%s\\n' "$primary_output" | awk 'NR==1 {print $4}'); then :; else parse_rc=$?; echo ${shellQuote('网络主 IP 解析失败，退出码')} "$parse_rc" >&2; exit 42; fi`
+    `if primary_addresses=$(printf '%s\\n' "$primary_output" | awk '$3 == "inet" {print $4}'); then :; else parse_rc=$?; echo ${shellQuote('网络主 IP 解析失败，退出码')} "$parse_rc" >&2; exit 42; fi`
   )
   if (action === 'del') {
-    captureCommands.push(`if [ "$primary" = ${quotedCidr} ]; then echo ${shellQuote('拒绝删除主 IP，无法安全自动恢复。')} >&2; exit 45; fi`)
+    captureCommands.push(
+      exactLineState('primary_addresses', quotedCidr, 'target_is_primary', '网络主 IP 匹配失败，退出码', 42),
+      `if [ "$target_is_primary" = '1' ]; then echo ${shellQuote('拒绝删除主 IP，无法安全自动恢复。')} >&2; exit 45; fi`
+    )
   }
   captureCommands.push(
     ...queryState('current', 42),
@@ -825,9 +828,18 @@ export function buildRecoveryPlan (change) {
   const prepareParts = [
     'umask 077',
     'set -eu',
+    'operations_root="$HOME/.shellpilot/operations"',
     `operation_dir="$HOME/.shellpilot/operations/${id}"`,
+    'mkdir -p "$operations_root"',
+    'chmod 700 "$operations_root"',
     `if [ -e "$operation_dir" ]; then echo ${shellQuote('恢复包目录已存在，拒绝覆盖历史记录。')} >&2; exit 41; fi`,
-    'mkdir -p "$operation_dir/backup"',
+    `if ! mkdir "$operation_dir"; then echo ${shellQuote('恢复包目录创建失败，可能存在并发操作。')} >&2; exit 41; fi`,
+    'cleanup_operation_dir () { cleanup_rc=$?; trap - EXIT HUP INT TERM; rm -rf -- "$operation_dir" || true; exit "$cleanup_rc"; }',
+    'trap cleanup_operation_dir EXIT',
+    "trap 'exit 129' HUP",
+    "trap 'exit 130' INT",
+    "trap 'exit 143' TERM",
+    'mkdir "$operation_dir/backup"',
     'chmod 700 "$operation_dir" "$operation_dir/backup"',
     ...recovery.captureCommands,
     `printf '%s\\n' ${shellQuote(manifest)} > "$operation_dir/manifest.json"`,
@@ -839,7 +851,8 @@ export function buildRecoveryPlan (change) {
     'test -s "$operation_dir/manifest.json"',
     'test -s "$operation_dir/result.json"',
     'test -x "$operation_dir/rollback.sh"',
-    'test -x "$operation_dir/verify.sh"'
+    'test -x "$operation_dir/verify.sh"',
+    'trap - EXIT HUP INT TERM'
   ]
 
   return {

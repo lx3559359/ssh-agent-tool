@@ -76,6 +76,10 @@ test('builds a strict permission recovery package from a safety request', async 
   assert.match(plan.prepareCommand, /result\.json/)
   assert.match(plan.prepareCommand, /rollback\.sh/)
   assert.match(plan.prepareCommand, /verify\.sh/)
+  assert.match(plan.prepareCommand, /cleanup_operation_dir/)
+  assert.match(plan.prepareCommand, /trap cleanup_operation_dir EXIT/)
+  assert.match(plan.prepareCommand, /rm -rf -- "\$operation_dir"/)
+  assert.match(plan.prepareCommand, /trap - EXIT HUP INT TERM$/)
   assert.match(plan.rollbackCommand, /__SHELLPILOT_ROLLBACK_RC_permission-1/)
   assert.match(plan.verifyCommand, /__SHELLPILOT_VERIFY_RC_permission-1/)
   assert.deepEqual(plan.artifacts, {
@@ -196,10 +200,26 @@ test('firewalld query rc=2 fails prepare and verify instead of recording absence
     )
     assert.equal(prepareResult.status, 42, prepareResult.stderr || prepareResult.stdout)
     assert.match(prepareResult.stderr, /firewalld.*查询.*退出码 2/)
+    const prepareDir = path.join(
+      prepareHome,
+      '.shellpilot/operations/firewall-query-prepare'
+    )
+    assert.equal(fs.existsSync(prepareDir), false)
     assert.equal(fs.existsSync(path.join(
       prepareHome,
       '.shellpilot/operations/firewall-query-prepare/backup/rule-present'
     )), false)
+    const retryResult = runBash(
+      `function firewall-cmd { return 1; }\n${preparePlan.prepareCommand}`,
+      prepareHome
+    )
+    assert.equal(retryResult.status, 0, retryResult.stderr || retryResult.stdout)
+    const duplicateResult = runBash(
+      `function firewall-cmd { return 1; }\n${preparePlan.prepareCommand}`,
+      prepareHome
+    )
+    assert.equal(duplicateResult.status, 41, duplicateResult.stderr || duplicateResult.stdout)
+    assert.equal(fs.existsSync(path.join(prepareDir, 'manifest.json')), true)
 
     const verifyPlan = buildRecoveryPlan(await buildChange(
       'firewall-cmd --zone=public --remove-port=80/tcp',
@@ -241,10 +261,20 @@ test('ufw show rc=2 fails prepare and verify instead of recording absence', asyn
     )
     assert.equal(prepareResult.status, 42, prepareResult.stderr || prepareResult.stdout)
     assert.match(prepareResult.stderr, /ufw.*查询.*退出码 2/i)
+    const prepareDir = path.join(
+      prepareHome,
+      '.shellpilot/operations/ufw-query-prepare'
+    )
+    assert.equal(fs.existsSync(prepareDir), false)
     assert.equal(fs.existsSync(path.join(
       prepareHome,
       '.shellpilot/operations/ufw-query-prepare/backup/rule-present'
     )), false)
+    const retryResult = runBash(
+      `function ufw { return 0; }\n${preparePlan.prepareCommand}`,
+      prepareHome
+    )
+    assert.equal(retryResult.status, 0, retryResult.stderr || retryResult.stdout)
 
     const verifyPlan = buildRecoveryPlan(await buildChange(
       'ufw delete allow 8443/tcp',
@@ -311,10 +341,20 @@ test('network query rc=2 fails prepare rollback and verify instead of becoming a
     )
     assert.equal(prepareResult.status, 42, prepareResult.stderr || prepareResult.stdout)
     assert.match(prepareResult.stderr, /网络.*查询.*退出码 2/)
+    const prepareDir = path.join(
+      prepareHome,
+      '.shellpilot/operations/network-query-prepare'
+    )
+    assert.equal(fs.existsSync(prepareDir), false)
     assert.equal(fs.existsSync(path.join(
       prepareHome,
       '.shellpilot/operations/network-query-prepare/backup/address-present'
     )), false)
+    const retryResult = runBash(
+      `function ip { return 0; }\n${preparePlan.prepareCommand}`,
+      prepareHome
+    )
+    assert.equal(retryResult.status, 0, retryResult.stderr || retryResult.stdout)
 
     const lifecyclePlan = buildRecoveryPlan(await buildChange(
       'ip addr add 10.0.0.8/24 dev eth0',
@@ -345,6 +385,35 @@ test('network query rc=2 fails prepare rollback and verify instead of becoming a
   } finally {
     fs.rmSync(prepareHome, { recursive: true, force: true })
     fs.rmSync(lifecycleHome, { recursive: true, force: true })
+  }
+})
+
+test('network delete rejects a target matching any primary IPv4 address', async () => {
+  const { buildRecoveryPlan } = await importDomainModule('recovery-providers.js')
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'shellpilot-network-primary-'))
+
+  try {
+    const plan = buildRecoveryPlan(await buildChange(
+      'ip addr del 10.0.1.8/24 dev eth0',
+      'network-primary-second'
+    ))
+    const result = runBash(
+      'function ip {\n' +
+        "printf '%s\\n' '1: eth0 inet 10.0.0.1/24 scope global eth0' " +
+        "'2: eth0 inet 10.0.1.8/24 scope global eth0'\n" +
+        'return 0\n' +
+        `}\n${plan.prepareCommand}`,
+      home
+    )
+
+    assert.equal(result.status, 45, result.stderr || result.stdout)
+    assert.match(result.stderr, /主 IP|主地址|断线/)
+    assert.equal(fs.existsSync(path.join(
+      home,
+      '.shellpilot/operations/network-primary-second'
+    )), false)
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
   }
 })
 
