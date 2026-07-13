@@ -31,6 +31,7 @@ function getBashInlineIntegration () {
     '__e_cmd() { local c="$?"; [[ "${__e_in:-0}" == "1" ]] && { printf \'\\e]633;D;%s\\a\' "$c"; __e_in=0; }; printf \'\\e]633;P;Cwd=%s\\a\\e]633;A\\a\' "$(__e_esc "$PWD")"; return "$c"; }',
     'trap \'__e_pre\' DEBUG',
     'PROMPT_COMMAND="__e_cmd${PROMPT_COMMAND:+; $PROMPT_COMMAND}"',
+    'PS1="${PS1}\\[\\e]633;B\\a\\]"',
     'fi'
   ].join('; ')
 }
@@ -51,6 +52,7 @@ function getZshInlineIntegration () {
     'autoload -Uz add-zsh-hook',
     'add-zsh-hook precmd __e_precmd',
     'add-zsh-hook preexec __e_preexec',
+    'PROMPT="${PROMPT}%{\\e]633;B\\a%}"',
     'fi'
   ].join('; ')
 }
@@ -63,7 +65,8 @@ function getFishInlineIntegration () {
     'if status is-interactive; and not set -q ELECTERM_SHELL_INTEGRATION',
     'set -g ELECTERM_SHELL_INTEGRATION 1',
     'function __e_esc; echo $argv | string replace -a \'\\\\\' \'\\\\\\\\\' | string replace -a \';\' \'\\\\x3b\'; end',
-    'function __e_prompt --on-event fish_prompt; printf \'\\e]633;A\\a\\e]633;P;Cwd=%s\\a\' (__e_esc "$PWD"); end',
+    'functions -c fish_prompt __e_original_fish_prompt',
+    'function fish_prompt; printf \'\\e]633;A\\a\\e]633;P;Cwd=%s\\a\' (__e_esc "$PWD"); __e_original_fish_prompt; printf \'\\e]633;B\\a\'; end',
     'function __e_preexec --on-event fish_preexec; printf \'\\e]633;E;%s\\a\\e]633;C\\a\' (__e_esc "$argv"); end',
     'function __e_postexec --on-event fish_postexec; printf \'\\e]633;D;%s\\a\' $status; end',
     'end'
@@ -82,7 +85,7 @@ function getShInlineIntegration () {
     // We wrap the current PS1 with OSC 633 sequences.
     // \033]633;P;Cwd=... \007 marks the directory
     // \033]633;A \007 marks the start of the prompt
-    'export PS1="\\e]633;P;Cwd=$(__e_esc "$PWD")\\a\\e]633;A\\a${PS1:-# }"',
+    'export PS1="\\e]633;P;Cwd=$(__e_esc "$PWD")\\a\\e]633;A\\a${PS1:-# }\\e]633;B\\a"',
     'fi'
   ].join('; ')
 }

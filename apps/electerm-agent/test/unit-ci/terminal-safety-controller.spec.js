@@ -18,6 +18,8 @@ function completeSshContext (overrides = {}) {
     alternateBuffer: false,
     isPaste: false,
     shellIntegrationActive: true,
+    commandInputActive: true,
+    canonicalInputReliable: true,
     ...overrides
   }
 }
@@ -70,6 +72,63 @@ test('only standalone Enter delegates to command classification', async () => {
   const enter = controller.beforeSend('\r', context)
   assert.equal(enter.sendNow, false)
   assert.equal(enter.confirmation.kind, 'reversible')
+})
+
+test('plain sh prompt integration is not a reliable command-tracking capability', async () => {
+  const { hasReliableTerminalCommandTracking } = await importController()
+
+  assert.equal(hasReliableTerminalCommandTracking('sh', true), false)
+  assert.equal(hasReliableTerminalCommandTracking('bash', true), true)
+  assert.equal(hasReliableTerminalCommandTracking('zsh', true), true)
+  assert.equal(hasReliableTerminalCommandTracking('bash', false), false)
+})
+
+test('ordinary do then and bracket arguments are complete and protected', async () => {
+  const {
+    createTerminalSafetyController,
+    isCompleteTerminalCommand
+  } = await importController()
+  const commands = [
+    'systemctl restart do',
+    'systemctl restart then',
+    'systemctl restart worker[1]'
+  ]
+
+  for (const command of commands) {
+    assert.equal(isCompleteTerminalCommand(command), true, command)
+    const decision = createTerminalSafetyController().beforeEnter(
+      command,
+      completeSshContext()
+    )
+    assert.equal(decision.sendNow, false, command)
+    assert.notEqual(decision.confirmation, undefined, command)
+  }
+})
+
+test('quoted heredoc text and an escaped pipe are complete arguments', async () => {
+  const { isCompleteTerminalCommand } = await importController()
+
+  assert.equal(isCompleteTerminalCommand("echo '<<EOF'"), true)
+  assert.equal(isCompleteTerminalCommand('echo \\|'), true)
+})
+
+test('only demonstrable shell continuations remain transparent', async () => {
+  const { isCompleteTerminalCommand } = await importController()
+  const incomplete = [
+    'echo "unfinished',
+    'echo `unfinished',
+    'systemctl restart nginx \\',
+    'systemctl restart nginx &&',
+    'systemctl restart nginx ||',
+    'systemctl restart nginx |',
+    'echo $(date',
+    'echo ${HOME',
+    'cat <<EOF'
+  ]
+
+  for (const command of incomplete) {
+    assert.equal(isCompleteTerminalCommand(command), false, command)
+  }
 })
 
 test('blocked commands cannot be released even through an execute resolution', async () => {

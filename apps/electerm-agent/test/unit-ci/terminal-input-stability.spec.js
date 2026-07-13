@@ -64,6 +64,49 @@ function createAttachHarness (beforeTerminalEnter) {
   })
 }
 
+function createTrackerTerminal (options = {}) {
+  const cols = options.cols || 40
+  let oscHandler
+  let lineDefinitions = options.lines || [{ text: '$ ', isWrapped: false }]
+  const active = {
+    type: 'normal',
+    baseY: options.baseY || 0,
+    cursorY: options.cursorY || 0,
+    cursorX: options.cursorX ?? 2,
+    getLine: index => {
+      const definition = lineDefinitions[index]
+      if (!definition) return undefined
+      return {
+        isWrapped: definition.isWrapped === true,
+        translateToString: (trimRight, start = 0, end = cols) => {
+          const padded = String(definition.text || '').padEnd(cols, ' ').slice(0, cols)
+          const selected = padded.slice(start, end)
+          return trimRight ? selected.replace(/\s+$/, '') : selected
+        }
+      }
+    }
+  }
+  const terminal = {
+    cols,
+    buffer: { active },
+    parser: {
+      registerOscHandler: (_code, handler) => {
+        oscHandler = handler
+        return { dispose () {} }
+      }
+    }
+  }
+  return {
+    terminal,
+    osc: data => oscHandler(data),
+    setCursor: (absoluteRow, column) => {
+      active.cursorY = absoluteRow - active.baseY
+      active.cursorX = column
+    },
+    setLines: definitions => { lineDefinitions = definitions }
+  }
+}
+
 function protectedSshContext (overrides = {}) {
   return {
     enabled: true,
@@ -72,6 +115,8 @@ function protectedSshContext (overrides = {}) {
     alternateBuffer: false,
     isPaste: false,
     shellIntegrationActive: true,
+    commandInputActive: true,
+    canonicalInputReliable: true,
     ...overrides
   }
 }
@@ -88,7 +133,9 @@ test('password local disabled paste TUI and untracked shells stay transparent', 
     protectedSshContext({ enabled: false }),
     protectedSshContext({ isPaste: true }),
     protectedSshContext({ alternateBuffer: true }),
-    protectedSshContext({ shellIntegrationActive: false })
+    protectedSshContext({ shellIntegrationActive: false }),
+    protectedSshContext({ commandInputActive: false }),
+    protectedSshContext({ canonicalInputReliable: false })
   ]
 
   for (const context of contexts) {
@@ -98,6 +145,124 @@ test('password local disabled paste TUI and untracked shells stay transparent', 
       { sendNow: true }
     )
   }
+})
+
+test('CommandTrackerAddon reconstructs the full command after a cursor-middle edit', async () => {
+  const { CommandTrackerAddon } = await importCommandTracker()
+  const harness = createTrackerTerminal({ cols: 80, cursorX: 2 })
+  const tracker = new CommandTrackerAddon()
+  tracker.activate(harness.terminal)
+  harness.osc('A')
+  harness.osc('B')
+  harness.setLines([{
+    text: '$ uptime; systemctl restart nginx',
+    isWrapped: false
+  }])
+  harness.setCursor(0, '$ uptime'.length)
+
+  const command = tracker.getCurrentCommandInput()
+
+  assert.equal(command, 'uptime; systemctl restart nginx')
+  const { createTerminalSafetyController } = await importController()
+  const decision = createTerminalSafetyController().beforeEnter(
+    command,
+    protectedSshContext()
+  )
+  assert.equal(decision.sendNow, false)
+  assert.equal(decision.confirmation.classification.risk, 'change')
+  assert.equal(decision.confirmation.automaticRollback, false)
+})
+
+test('CommandTrackerAddon reconstructs soft-wrapped input through its logical end', async () => {
+  const { CommandTrackerAddon } = await importCommandTracker()
+  const harness = createTrackerTerminal({ cols: 12, cursorX: 2 })
+  const tracker = new CommandTrackerAddon()
+  tracker.activate(harness.terminal)
+  harness.osc('A')
+  harness.osc('B')
+  harness.setLines([
+    { text: '$ systemctl ', isWrapped: false },
+    { text: 'restart ngin', isWrapped: true },
+    { text: 'x', isWrapped: true }
+  ])
+  harness.setCursor(1, 4)
+
+  assert.equal(
+    tracker.getCurrentCommandInput(),
+    'systemctl restart nginx'
+  )
+})
+
+test('CommandTrackerAddon exposes no command when its input anchor cannot be proven', async () => {
+  const { CommandTrackerAddon } = await importCommandTracker()
+  const harness = createTrackerTerminal({ cursorX: 2 })
+  const tracker = new CommandTrackerAddon()
+  tracker.activate(harness.terminal)
+  harness.osc('A')
+  harness.osc('B')
+  harness.setLines([])
+
+  assert.equal(tracker.getCurrentCommandInput(), undefined)
+  assert.equal(tracker.hasReliableCommandInput(), false)
+})
+
+test('OSC phases allow safety only while the shell accepts command input', async () => {
+  const { CommandTrackerAddon } = await importCommandTracker()
+  const harness = createTrackerTerminal({ cursorX: 2 })
+  const tracker = new CommandTrackerAddon()
+  tracker.activate(harness.terminal)
+
+  harness.osc('A')
+  assert.equal(tracker.hasShellIntegration(), true)
+  assert.equal(tracker.isCommandInputActive(), false)
+  harness.osc('B')
+  assert.equal(tracker.isCommandInputActive(), true)
+  harness.osc('E;cat')
+  assert.equal(tracker.isCommandInputActive(), false)
+  harness.osc('C')
+  assert.equal(tracker.isCommandInputActive(), false)
+  harness.osc('D;0')
+  assert.equal(tracker.isCommandInputActive(), false)
+  harness.osc('A')
+  harness.osc('B')
+  assert.equal(tracker.isCommandInputActive(), true)
+})
+
+test('shell integration variants emit OSC B after their prompt content', () => {
+  const source = readClientFile('components/terminal/shell.js')
+  const functionNames = [
+    'getBashInlineIntegration',
+    'getZshInlineIntegration',
+    'getFishInlineIntegration',
+    'getShInlineIntegration'
+  ]
+
+  for (let index = 0; index < functionNames.length; index += 1) {
+    const start = source.indexOf(`function ${functionNames[index]}`)
+    const end = index + 1 < functionNames.length
+      ? source.indexOf(`function ${functionNames[index + 1]}`, start)
+      : source.indexOf('export function detectShellType', start)
+    const functionBody = source.slice(start, end)
+    assert.match(functionBody, /633;B/, functionNames[index])
+    assert.equal(
+      functionBody.lastIndexOf('633;B') > functionBody.indexOf('633;A'),
+      true,
+      functionNames[index]
+    )
+  }
+})
+
+test('Enter sent to executing program stdin remains transparent', async () => {
+  const { createTerminalSafetyController } = await importController()
+  const controller = createTerminalSafetyController()
+
+  assert.deepEqual(
+    controller.beforeEnter(
+      'systemctl restart nginx',
+      protectedSshContext({ commandInputActive: false })
+    ),
+    { sendNow: true }
+  )
 })
 
 test('heredoc multiline and syntactically incomplete commands stay transparent', async () => {
@@ -247,6 +412,33 @@ test('AttachAddon releases one Enter after async acceptance and drops duplicate 
   assert.deepEqual(sent, ['\r'])
 })
 
+test('AttachAddon revalidates an async release token at the socket boundary', async () => {
+  const blocked = await createAttachHarness(() => Promise.resolve({
+    sendNow: true,
+    releaseToken: 'stale-release'
+  }))
+  const consumed = []
+  blocked.parent.consumeTerminalSafetyRelease = token => {
+    consumed.push(token)
+    return false
+  }
+
+  await blocked.addon.sendToServer('\r')
+
+  assert.deepEqual(consumed, ['stale-release'])
+  assert.deepEqual(blocked.sent, [])
+
+  const accepted = await createAttachHarness(() => Promise.resolve({
+    sendNow: true,
+    releaseToken: 'live-release'
+  }))
+  accepted.parent.consumeTerminalSafetyRelease = () => true
+
+  await accepted.addon.sendToServer('\r')
+
+  assert.deepEqual(accepted.sent, ['\r'])
+})
+
 test('AttachAddon invalidates a pending approval when transparent input edits the line', async () => {
   const firstDecision = deferred()
   let gateCount = 0
@@ -307,52 +499,53 @@ test('AttachAddon password Enter remains synchronous and resets password state',
   ])
 })
 
-test('CommandTrackerAddon associates one OSC 633 D event with the exact E command', async () => {
+test('CommandTrackerAddon completes a released expected simple command once', async () => {
   const { CommandTrackerAddon } = await importCommandTracker()
+  const harness = createTrackerTerminal({ cols: 80, cursorX: 2 })
   const finished = []
-  let oscHandler
   const tracker = new CommandTrackerAddon()
   tracker.onCommandFinished(event => finished.push(event))
-  tracker.activate({
-    parser: {
-      registerOscHandler: (code, handler) => {
-        assert.equal(code, 633)
-        oscHandler = handler
-        return { dispose () {} }
-      }
-    }
-  })
+  tracker.activate(harness.terminal)
+  harness.osc('A')
+  harness.osc('B')
+  const command = 'systemctl restart nginx'
+  harness.setLines([{ text: `$ ${command}`, isWrapped: false }])
+  harness.setCursor(0, command.length + 2)
+  const token = tracker.expectSubmission(command)
+  tracker.markExpectedSubmissionReleased(token)
 
-  oscHandler('E;systemctl restart nginx')
-  oscHandler('D;0')
-  oscHandler('D;9')
+  harness.osc('E;systemctl restart nginx')
+  harness.osc('D;0')
+  harness.osc('D;9')
 
   assert.deepEqual(finished, [{
-    command: 'systemctl restart nginx',
+    token,
+    command,
     exitCode: 0
   }])
 })
 
 test('CommandTrackerAddon reports interrupted commands with a null exit code', async () => {
   const { CommandTrackerAddon } = await importCommandTracker()
+  const harness = createTrackerTerminal({ cols: 80, cursorX: 2 })
   const finished = []
-  let oscHandler
   const tracker = new CommandTrackerAddon()
   tracker.onCommandFinished(event => finished.push(event))
-  tracker.activate({
-    parser: {
-      registerOscHandler: (_code, handler) => {
-        oscHandler = handler
-        return { dispose () {} }
-      }
-    }
-  })
+  tracker.activate(harness.terminal)
+  harness.osc('A')
+  harness.osc('B')
+  const command = 'custom-admin-tool --rotate'
+  harness.setLines([{ text: `$ ${command}`, isWrapped: false }])
+  harness.setCursor(0, command.length + 2)
+  const token = tracker.expectSubmission(command)
+  tracker.markExpectedSubmissionReleased(token)
 
-  oscHandler('E;custom-admin-tool --rotate')
-  oscHandler('D')
+  harness.osc('E;custom-admin-tool --rotate')
+  harness.osc('D')
 
   assert.deepEqual(finished, [{
-    command: 'custom-admin-tool --rotate',
+    token,
+    command,
     exitCode: null
   }])
 })
@@ -377,64 +570,85 @@ test('CommandTrackerAddon reports a new prompt boundary', async () => {
   assert.equal(promptCount, 1)
 })
 
-test('terminal integrates recovery preparation before releasing canonical PTY Enter', () => {
-  const source = readClientFile('components/terminal/terminal.jsx')
-  const executeStart = source.indexOf('handleTerminalSafetyExecute = async')
-  const executeEnd = source.indexOf('handleTerminalSafetyCancel =', executeStart)
-  const executeBody = source.slice(executeStart, executeEnd)
+test('CommandTrackerAddon completes a compound expected submission with exact client identity', async () => {
+  const { CommandTrackerAddon } = await importCommandTracker()
+  const harness = createTrackerTerminal({ cols: 80, cursorX: 2 })
+  const histories = []
+  const finished = []
+  const tracker = new CommandTrackerAddon()
+  tracker.onCommandExecuted(command => histories.push(command))
+  tracker.onCommandFinished(event => finished.push(event))
+  tracker.activate(harness.terminal)
+  harness.osc('A')
+  harness.osc('B')
+  const command = 'systemctl status nginx && systemctl restart nginx'
+  harness.setLines([{ text: `$ ${command}`, isWrapped: false }])
+  harness.setCursor(0, command.length + 2)
+  const token = tracker.expectSubmission(command)
+  assert.equal(tracker.markExpectedSubmissionReleased(token), true)
 
-  assert.notEqual(executeStart, -1)
-  assert.notEqual(executeEnd, -1)
-  assert.match(source, /createTerminalSafetyController/)
-  assert.match(source, /createTransactionRunner/)
-  assert.match(source, /beforeTerminalEnter\s*=\s*\(command, context\)/)
-  assert.match(source, /cmdAddon\.onCommandFinished/)
-  assert.match(source, /terminalSafetyController\.onCommandExecuted\(\)/)
-  assert.match(source, /TerminalCommandSafetyModal/)
-  assert.match(executeBody, /terminalSafetyRunner\.prepare\(request\)/)
-  assert.match(executeBody, /terminalSafetyRunner\.beginExternalExecution/)
-  assert.match(executeBody, /terminalSafetyController\.resolvePending\('execute'\)/)
+  harness.osc('E;systemctl status nginx')
+  harness.osc('C')
+  harness.osc('D;0')
+
+  assert.deepEqual(histories, ['systemctl status nginx'])
+  assert.deepEqual(finished, [{ token, command, exitCode: 0 }])
+})
+
+test('CommandTrackerAddon ignores unrelated and late E/D without clearing an expectation', async () => {
+  const { CommandTrackerAddon } = await importCommandTracker()
+  const harness = createTrackerTerminal({ cursorX: 2 })
+  const finished = []
+  const tracker = new CommandTrackerAddon()
+  tracker.onCommandFinished(event => finished.push(event))
+  tracker.activate(harness.terminal)
+
+  harness.osc('E;uptime')
+  harness.osc('D;0')
+  harness.osc('A')
+  harness.osc('B')
+  const command = 'systemctl restart nginx'
+  harness.setLines([{ text: `$ ${command}`, isWrapped: false }])
+  harness.setCursor(0, command.length + 2)
+  const token = tracker.expectSubmission(command)
+  tracker.markExpectedSubmissionReleased(token)
+  harness.osc('D;9')
+  assert.equal(tracker.hasExpectedSubmission(token), true)
+  assert.deepEqual(finished, [])
+
+  harness.osc('E;uptime')
+  harness.osc('D;0')
+  assert.equal(tracker.hasExpectedSubmission(token), true)
+  assert.deepEqual(finished, [])
+
+  harness.osc('E;systemctl restart nginx')
+  harness.osc('D;0')
+  harness.osc('D;7')
+
+  assert.deepEqual(finished, [{
+    token,
+    command: 'systemctl restart nginx',
+    exitCode: 0
+  }])
+})
+
+test('terminal wires the tested safety coordinator into socket and modal lifecycle', () => {
+  const source = readClientFile('components/terminal/terminal.jsx')
+  const coordinator = readClientFile('components/terminal/terminal-safety-coordinator.js')
+
+  assert.match(source, /createTerminalSafetyCoordinator/)
+  assert.match(source, /terminalSafetyCoordinator\.beforeEnter/)
+  assert.match(source, /terminalSafetyCoordinator\.consumeRelease/)
+  assert.match(source, /terminalSafetyCoordinator\.handleCommandFinished/)
+  assert.match(source, /terminalSafetyCoordinator\.beginSession/)
   assert.equal(
-    executeBody.indexOf('beginExternalExecution') < executeBody.indexOf("resolvePending('execute')"),
-    true
+    (source.match(/terminalSafetyCoordinator\.invalidateSession/g) || []).length,
+    2
   )
-  assert.doesNotMatch(executeBody, /terminalSafetyRunner\.execute/)
-  assert.doesNotMatch(executeBody, /_sendData\(confirmation\.command/)
-})
-
-test('terminal close cancels pending external lifecycle before async release can resume', () => {
-  const source = readClientFile('components/terminal/terminal.jsx')
-  const unmountStart = source.indexOf('componentWillUnmount () {')
-  const unmountEnd = source.indexOf('terminalConfigProps =', unmountStart)
-  const unmountBody = source.slice(unmountStart, unmountEnd)
-  const executeStart = source.indexOf('handleTerminalSafetyExecute = async')
-  const executeEnd = source.indexOf('handleTerminalSafetyCancel =', executeStart)
-  const executeBody = source.slice(executeStart, executeEnd)
-
-  assert.match(unmountBody, /this\.onClose = true/)
-  assert.match(unmountBody, /terminalSafetyRunner\.cancel/)
-  assert.match(
-    executeBody,
-    /terminalSafetyRunner\.prepare\(request\)[\s\S]*if \(this\.onClose\)[\s\S]*terminalSafetyRunner\.cancel[\s\S]*return[\s\S]*beginExternalExecution/
-  )
-})
-
-test('SSH disconnect fails a pending external lifecycle before reconnect', () => {
-  const source = readClientFile('components/terminal/terminal.jsx')
-  const closeStart = source.indexOf('oncloseSocket = () =>')
-  const closeEnd = source.indexOf('scheduleAutoReconnect =', closeStart)
-  const closeBody = source.slice(closeStart, closeEnd)
-
-  assert.notEqual(closeStart, -1)
-  assert.match(closeBody, /pendingTerminalSafetyExecution/)
-  assert.match(closeBody, /terminalSafetyRunner\.cancel/)
-})
-
-test('terminal invalidates stale safety approval when canonical input changes', () => {
-  const source = readClientFile('components/terminal/terminal.jsx')
-
-  assert.match(source, /onTerminalSafetyInputChanged = \(\) =>/)
-  assert.match(source, /resolvePending\('invalidate'\)/)
+  assert.match(coordinator, /runner\.prepare\(request\)/)
+  assert.match(coordinator, /runner\.beginExternalExecution/)
+  assert.doesNotMatch(source, /terminalSafetyRunner\.execute/)
+  assert.doesNotMatch(source, /_sendData\(confirmation\.command/)
 })
 
 test('terminal resets continuation safety state at each tracked prompt', () => {

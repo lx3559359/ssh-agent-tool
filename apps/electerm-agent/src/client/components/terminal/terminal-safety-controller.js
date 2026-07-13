@@ -17,13 +17,22 @@ export function buildTerminalSafetyEndpoint (tab = {}, terminalPid) {
   }
 }
 
-function hasBalancedShellSyntax (command) {
-  const pairs = { ')': '(', ']': '[', '}': '{' }
-  const stack = []
-  let quote = ''
-  let escaped = false
+export function hasReliableTerminalCommandTracking (
+  shellType,
+  shellIntegrationActive
+) {
+  return shellIntegrationActive === true && shellType !== 'sh'
+}
 
-  for (const character of command) {
+function shellContinuationState (command) {
+  const substitutions = []
+  let quote = ''
+  let backtickOpen = false
+  let escaped = false
+  let heredoc = false
+
+  for (let index = 0; index < command.length; index += 1) {
+    const character = command[index]
     if (escaped) {
       escaped = false
       continue
@@ -32,33 +41,81 @@ function hasBalancedShellSyntax (command) {
       escaped = true
       continue
     }
-    if (quote) {
-      if (character === quote) quote = ''
+    if (quote === "'") {
+      if (character === "'") quote = ''
       continue
     }
-    if (character === "'" || character === '"') {
-      quote = character
+    if (character === "'" && quote !== '"') {
+      quote = "'"
       continue
     }
-    if (['(', '[', '{'].includes(character)) {
-      stack.push(character)
+    if (character === '"') {
+      quote = quote === '"' ? '' : '"'
       continue
     }
-    if (pairs[character]) {
-      if (stack.pop() !== pairs[character]) return false
+    if (character === '`') {
+      backtickOpen = !backtickOpen
+      continue
+    }
+    if (!quote && !backtickOpen && character === '<' &&
+      command[index + 1] === '<' && command[index + 2] !== '<') {
+      heredoc = true
+    }
+    if (character === '$' && command[index + 1] === '(') {
+      substitutions.push(')')
+      index += 1
+      if (command[index + 1] === '(') {
+        substitutions.push(')')
+        index += 1
+      }
+      continue
+    }
+    if (character === '$' && command[index + 1] === '{') {
+      substitutions.push('}')
+      index += 1
+      continue
+    }
+    const expected = substitutions[substitutions.length - 1]
+    if (expected && character === expected) {
+      substitutions.pop()
+    } else if (expected === ')' && character === '(') {
+      substitutions.push(')')
+    } else if (expected === '}' && character === '{') {
+      substitutions.push('}')
     }
   }
 
-  return !quote && !escaped && stack.length === 0
+  return {
+    incomplete: Boolean(
+      quote || backtickOpen || escaped || heredoc || substitutions.length
+    )
+  }
+}
+
+function hasTrailingControlOperator (command) {
+  const text = command.trimEnd()
+  for (const operator of ['&&', '||', '|']) {
+    if (!text.endsWith(operator)) continue
+    const operatorIndex = text.length - operator.length
+    let backslashes = 0
+    for (let index = operatorIndex - 1; text[index] === '\\'; index -= 1) {
+      backslashes += 1
+    }
+    if (backslashes % 2 === 0) return true
+  }
+  return false
+}
+
+function hasKnownMultilineStart (command) {
+  return /^(?:(?:for|select|while|until)\b[\s\S]*;\s*do|if\b[\s\S]*;\s*then|case\b[\s\S]*\bin)\s*$/.test(command)
 }
 
 export function isCompleteTerminalCommand (command) {
   const text = String(command || '').trim()
   if (!text || /[\r\n]/.test(text)) return false
-  if (/(?:^|\s)\d*<<-?\s*\S+/.test(text)) return false
-  if (/(?:&&|\|\||\||\\)\s*$/.test(text)) return false
-  if (/\b(?:then|do)\s*$/.test(text)) return false
-  return hasBalancedShellSyntax(text)
+  if (hasTrailingControlOperator(text)) return false
+  if (hasKnownMultilineStart(text)) return false
+  return !shellContinuationState(text).incomplete
 }
 
 function isTransparentContext (context) {
@@ -67,7 +124,9 @@ function isTransparentContext (context) {
     context.passwordMode === true ||
     context.alternateBuffer === true ||
     context.isPaste === true ||
-    context.shellIntegrationActive !== true
+    context.shellIntegrationActive !== true ||
+    context.commandInputActive !== true ||
+    context.canonicalInputReliable !== true
 }
 
 function confirmationFor (command, classification) {

@@ -325,6 +325,10 @@ export default class AttachAddonCustom {
     const pending = Promise.resolve(decision)
       .then(result => {
         if (result?.sendNow) {
+          if (result.releaseToken &&
+            parent.consumeTerminalSafetyRelease?.(result.releaseToken) !== true) {
+            return
+          }
           this._sendToServerDirect('\r')
         } else if (result?.clear) {
           this._sendToServerDirect('\x15')
