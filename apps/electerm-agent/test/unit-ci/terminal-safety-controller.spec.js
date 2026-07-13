@@ -226,6 +226,78 @@ test('pending Bash function subshell and arithmetic forms remain transparent', a
   }
 })
 
+for (const command of [
+  'f ()',
+  '! (systemctl restart nginx',
+  'time (systemctl restart nginx',
+  'time -p (systemctl restart nginx'
+]) {
+  test(`Bash continuation stays transparent for ${command}`, async () => {
+    const {
+      createTerminalSafetyController,
+      isCompleteTerminalCommand
+    } = await importController()
+    const controller = createTerminalSafetyController()
+    const decision = controller.beforeSend(
+      '\r',
+      completeSshContext({ command })
+    )
+
+    assert.equal(isCompleteTerminalCommand(command), false)
+    assert.equal(decision.sendNow, true)
+    assert.equal(Boolean(decision.confirmation || controller.getPending()), false)
+  })
+}
+
+test('closed function and prefixed subshell commands enter safety confirmation', async () => {
+  const {
+    createTerminalSafetyController,
+    isCompleteTerminalCommand
+  } = await importController()
+  const complete = [
+    'f () { systemctl restart nginx; }',
+    '! (systemctl restart nginx)',
+    'time (systemctl restart nginx)',
+    'time -p (systemctl restart nginx)'
+  ]
+
+  for (const command of complete) {
+    const controller = createTerminalSafetyController()
+    const decision = controller.beforeSend(
+      '\r',
+      completeSshContext({ command })
+    )
+
+    assert.equal(isCompleteTerminalCommand(command), true, command)
+    assert.equal(decision.sendNow, false, command)
+    assert.notEqual(decision.confirmation, undefined, command)
+  }
+})
+
+test('function and prefix words used as ordinary arguments stay complete', async () => {
+  const {
+    createTerminalSafetyController,
+    isCompleteTerminalCommand
+  } = await importController()
+  const complete = [
+    'systemctl restart "f ()"',
+    'systemctl restart "!"',
+    'systemctl restart time'
+  ]
+
+  for (const command of complete) {
+    const controller = createTerminalSafetyController()
+    const decision = controller.beforeSend(
+      '\r',
+      completeSshContext({ command })
+    )
+
+    assert.equal(isCompleteTerminalCommand(command), true, command)
+    assert.equal(decision.sendNow, false, command)
+    assert.notEqual(decision.confirmation, undefined, command)
+  }
+})
+
 test('closed compounds and ordinary keyword or brace arguments stay complete', async () => {
   const { isCompleteTerminalCommand } = await importController()
   const complete = [

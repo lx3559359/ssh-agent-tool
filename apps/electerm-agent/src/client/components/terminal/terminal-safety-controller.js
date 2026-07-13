@@ -265,8 +265,7 @@ function hasOpenShellCompound (command) {
     const next = tokens[index + 1]
     const afterNext = tokens[index + 2]
     const functionBrace = tokens[index + 3]
-    if (next?.value === '(' && afterNext?.value === ')' &&
-      token.end === next.start && next.end === afterNext.start) {
+    if (next?.value === '(' && afterNext?.value === ')') {
       stack.push({
         type: functionBrace?.value === '{' ? 'group' : 'function'
       })
@@ -280,6 +279,16 @@ function hasOpenShellCompound (command) {
       })
       commandPosition = true
       index += afterNext?.value === '{' ? 2 : 1
+      continue
+    }
+    if (token.value === '!') {
+      commandPosition = true
+      continue
+    }
+    if (token.value === 'time') {
+      while (tokens[index + 1]?.plain &&
+        tokens[index + 1].value === '-p') index += 1
+      commandPosition = true
       continue
     }
 
