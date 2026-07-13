@@ -52,7 +52,8 @@ import {
 import {
   getShellIntegrationCommand,
   detectRemoteShell,
-  detectShellType
+  detectShellType,
+  shouldInjectShellIntegration
 } from './shell.js'
 import iconsMap from '../sys-menu/icons-map.jsx'
 import { refs, refsStatic } from '../common/ref.js'
@@ -334,13 +335,9 @@ class Term extends Component {
     const currShowSuggestions = props.config.showCmdSuggestions
     const prevSftpFollow = prevProps.sftpPathFollowSsh
     const currSftpFollow = props.sftpPathFollowSsh
-    const prevTerminalSafety = prevProps.config.terminalSafetyProtection !== false
-    const currTerminalSafety = props.config.terminalSafetyProtection !== false
-
     if (
       (!prevShowSuggestions && currShowSuggestions) ||
-      (!prevSftpFollow && currSftpFollow) ||
-      (!prevTerminalSafety && currTerminalSafety)
+      (!prevSftpFollow && currSftpFollow)
     ) {
       // Config was toggled to true, try to inject shell integration if not already done
       if (this.canInjectShellIntegration() && !this.shellInjected) {
@@ -1481,18 +1478,13 @@ class Term extends Component {
 
   canInjectShellIntegration = () => {
     const { config } = this.props
-    const terminalSafetyNeedsIntegration =
-      config.terminalSafetyProtection !== false && this.isSsh()
-    const canInject = (
-      config.showCmdSuggestions ||
-      this.props.sftpPathFollowSsh ||
-      terminalSafetyNeedsIntegration
-    ) &&
-    (
-      this.isSsh() ||
-      (this.isLocal() && !isWin)
-    )
-    return canInject
+    return shouldInjectShellIntegration({
+      showCmdSuggestions: config.showCmdSuggestions,
+      sftpPathFollowSsh: this.props.sftpPathFollowSsh,
+      isSsh: this.isSsh(),
+      isLocal: this.isLocal(),
+      isWindows: isWin
+    })
   }
 
   isSsh = () => {
@@ -1569,7 +1561,10 @@ class Term extends Component {
       return Promise.resolve()
     }
 
-    const integrationCmd = getShellIntegrationCommand(shellType)
+    const integrationCmd = getShellIntegrationCommand(
+      shellType,
+      this.cmdAddon.getSessionNonce()
+    )
 
     return new Promise((resolve) => {
       // Wait for initial data (prompt/banner) to arrive before injecting
@@ -1771,6 +1766,8 @@ class Term extends Component {
     socket.onopen = async () => {
       this.reconnectScheduler.reset()
       this.props.editTab(id, { autoReConnect: 0 })
+      this.shellInjected = false
+      this.cmdAddon.beginSession()
       this.terminalSafetyCoordinator.beginSession()
       await this.initAttachAddon()
       this.runInitScript()

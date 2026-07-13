@@ -6,7 +6,7 @@
  * - OSC 633 ; A - Prompt started
  * - OSC 633 ; B - Command input started (ready for typing)
  * - OSC 633 ; C - Command execution started (output begins)
- * - OSC 633 ; D ; <exitCode> - Command finished
+ * - OSC 633 ; D ; <sessionNonce> ; <exitCode> - Command finished
  * - OSC 633 ; E ; <command> - The command line being executed
  * - OSC 633 ; P ; Cwd=<path> - Current working directory
  *
@@ -18,6 +18,15 @@
  * - Multi-line commands
  * - Any custom prompt
  */
+
+function createSessionNonce () {
+  const bytes = new Uint8Array(16)
+  if (!globalThis.crypto?.getRandomValues) {
+    throw new Error('Secure random source is unavailable for terminal tracking.')
+  }
+  globalThis.crypto.getRandomValues(bytes)
+  return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')
+}
 
 export class CommandTrackerAddon {
   constructor () {
@@ -42,6 +51,7 @@ export class CommandTrackerAddon {
     this._submissionSequence = 0
     this._inputGeneration = 0
     this._oscSequence = 0
+    this._sessionNonce = ''
   }
 
   /**
@@ -94,6 +104,7 @@ export class CommandTrackerAddon {
     this.shellPhase = 'inactive'
     this._inputAnchor = null
     this._expectedSubmissions = []
+    this._sessionNonce = ''
     if (this._disposables) {
       this._disposables.forEach(d => d.dispose())
       this._disposables.length = 0
@@ -137,15 +148,20 @@ export class CommandTrackerAddon {
         this._markExpectedSubmissionObserved()
         return true
 
-      case 'D': // Command finished
+      case 'D': { // Command finished
+        const separator = args.indexOf(';')
+        const nonce = separator === -1 ? '' : args.slice(0, separator)
+        if (!this._sessionNonce || nonce !== this._sessionNonce) return true
+        const exitCodeText = args.slice(separator + 1)
         this.shellPhase = 'finished'
         this._inputAnchor = null
         // Parse exit code if provided
-        this.lastExitCode = /^-?\d+$/.test(args)
-          ? parseInt(args, 10)
+        this.lastExitCode = /^-?\d+$/.test(exitCodeText)
+          ? parseInt(exitCodeText, 10)
           : null
-        this._completeArmedSubmission(this.lastExitCode, false)
+        this._completeArmedSubmission(this.lastExitCode, true)
         return true
+      }
 
       case 'E': // Command line
         this.shellPhase = 'executing'
@@ -205,6 +221,27 @@ export class CommandTrackerAddon {
     return value
       .replace(/\\x([0-9a-fA-F]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
       .replace(/\\\\/g, '\\')
+  }
+
+  beginSession (nonce = createSessionNonce()) {
+    if (!/^[a-f0-9]{32}$/.test(String(nonce))) {
+      throw new Error('Terminal tracking session nonce is invalid.')
+    }
+    this._sessionNonce = String(nonce)
+    this.currentCommand = ''
+    this.executedCommand = ''
+    this.lastExitCode = null
+    this.shellIntegrationActive = false
+    this.shellPhase = 'inactive'
+    this._inputAnchor = null
+    this._expectedSubmissions = []
+    this._inputGeneration = 0
+    this._oscSequence = 0
+    return this._sessionNonce
+  }
+
+  getSessionNonce () {
+    return this._sessionNonce
   }
 
   _captureInputAnchor () {
@@ -281,7 +318,8 @@ export class CommandTrackerAddon {
   expectSubmission (command) {
     const text = String(command || '')
     const current = this.getCurrentCommandInput()
-    if (!text.trim() || current === undefined || current !== text ||
+    if (!this._sessionNonce || !text.trim() || current === undefined ||
+      current !== text ||
       this._expectedSubmissions.length) {
       return undefined
     }

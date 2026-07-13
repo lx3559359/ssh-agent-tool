@@ -5,7 +5,7 @@ const zhCnOverrides = {
   sftp: 'SFTP',
   widgets: '工具中心',
   terminalSafetyProtection: 'SSH 终端安全保护',
-  terminalSafetyProtectionHelp: '仅在按 Enter 时检查完整的修改或高风险命令；只读、密码、粘贴和交互程序保持原样。'
+  terminalSafetyProtectionHelp: '仅在已有可靠 Shell Integration 时于 Enter 检查完整命令；不会为安全保护向 forced command 或 TUI 自动注入脚本。'
 }
 
 export function getShellPilotTranslation (key, langId = 'zh_cn') {

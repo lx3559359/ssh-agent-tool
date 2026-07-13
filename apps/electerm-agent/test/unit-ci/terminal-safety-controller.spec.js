@@ -169,6 +169,51 @@ test('only demonstrable shell continuations remain transparent', async () => {
   }
 })
 
+test('commented operators arrays and process substitutions remain transparent while open', async () => {
+  const {
+    createTerminalSafetyController,
+    isCompleteTerminalCommand
+  } = await importController()
+  const incomplete = [
+    '/usr/bin/systemctl start nginx && # continue',
+    'arr=(one two',
+    '/usr/bin/cp <(/usr/bin/printf x /tmp/a'
+  ]
+
+  for (const command of incomplete) {
+    assert.equal(isCompleteTerminalCommand(command), false, command)
+    assert.deepEqual(
+      createTerminalSafetyController().beforeEnter(command, completeSshContext()),
+      { sendNow: true },
+      command
+    )
+  }
+})
+
+test('closed arrays process substitutions and commented commands enter safety classification', async () => {
+  const {
+    createTerminalSafetyController,
+    isCompleteTerminalCommand
+  } = await importController()
+  const complete = [
+    '/usr/bin/systemctl start nginx && /usr/bin/true # done',
+    'arr=(one two); /usr/bin/systemctl start nginx',
+    '/usr/bin/cp <(/usr/bin/printf x) /tmp/a',
+    '/usr/bin/printf %s "arr=(one two"',
+    '/usr/bin/printf %s "argument && # literal"'
+  ]
+
+  for (const command of complete) {
+    assert.equal(isCompleteTerminalCommand(command), true, command)
+    const decision = createTerminalSafetyController().beforeEnter(
+      command,
+      completeSshContext()
+    )
+    assert.equal(decision.sendNow, false, command)
+    assert.notEqual(decision.confirmation, undefined, command)
+  }
+})
+
 test('open shell compound bodies remain transparent continuations', async () => {
   const {
     createTerminalSafetyController,

@@ -27,6 +27,13 @@ async function importCommandTracker () {
   )))
 }
 
+async function importShellIntegration () {
+  return import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/components/terminal/shell.js'
+  )))
+}
+
 function deferred () {
   let resolveDeferred
   let rejectDeferred
@@ -116,6 +123,16 @@ function createTrackerTerminal (options = {}) {
   }
 }
 
+const testTrackerNonce = '1234567890abcdef1234567890abcdef'
+
+function beginTrackerSession (tracker) {
+  return tracker.beginSession(testTrackerNonce)
+}
+
+function completionOsc (exitCode = '') {
+  return `D;${testTrackerNonce};${exitCode}`
+}
+
 function protectedSshContext (overrides = {}) {
   return {
     enabled: true,
@@ -165,17 +182,18 @@ test('CommandTrackerAddon reconstructs the full command after a cursor-middle ed
   })
   const tracker = new CommandTrackerAddon()
   tracker.activate(harness.terminal)
+  beginTrackerSession(tracker)
   harness.osc('A')
   harness.osc('B')
   harness.setLines([{
-    text: '$ uptime; systemctl restart nginx',
+    text: '$ /usr/bin/uptime; /usr/bin/systemctl start nginx',
     isWrapped: false
   }])
-  harness.setCursor(0, '$ uptime'.length)
+  harness.setCursor(0, '$ /usr/bin/uptime'.length)
 
   const command = tracker.getCurrentCommandInput()
 
-  assert.equal(command, 'uptime; systemctl restart nginx')
+  assert.equal(command, '/usr/bin/uptime; /usr/bin/systemctl start nginx')
   const { createTerminalSafetyController } = await importController()
   const decision = createTerminalSafetyController().beforeEnter(
     command,
@@ -195,6 +213,7 @@ test('CommandTrackerAddon reconstructs soft-wrapped input through its logical en
   })
   const tracker = new CommandTrackerAddon()
   tracker.activate(harness.terminal)
+  beginTrackerSession(tracker)
   harness.osc('A')
   harness.osc('B')
   harness.setLines([
@@ -285,6 +304,7 @@ test('OSC phases allow safety only while the shell accepts command input', async
   const harness = createTrackerTerminal({ cursorX: 2 })
   const tracker = new CommandTrackerAddon()
   tracker.activate(harness.terminal)
+  beginTrackerSession(tracker)
 
   harness.osc('A')
   assert.equal(tracker.hasShellIntegration(), true)
@@ -295,7 +315,7 @@ test('OSC phases allow safety only while the shell accepts command input', async
   assert.equal(tracker.isCommandInputActive(), false)
   harness.osc('C')
   assert.equal(tracker.isCommandInputActive(), false)
-  harness.osc('D;0')
+  harness.osc(completionOsc(0))
   assert.equal(tracker.isCommandInputActive(), false)
   harness.osc('A')
   harness.osc('B')
@@ -323,6 +343,95 @@ test('shell integration variants emit OSC B after their prompt content', () => {
       true,
       functionNames[index]
     )
+  }
+})
+
+test('terminal safety alone never makes forced-command or TUI output injectable', async () => {
+  const { shouldInjectShellIntegration } = await importShellIntegration()
+  const base = {
+    showCmdSuggestions: false,
+    sftpPathFollowSsh: false,
+    terminalSafetyProtection: true,
+    isSsh: true,
+    isLocal: false,
+    isWindows: false
+  }
+
+  assert.equal(shouldInjectShellIntegration({
+    ...base,
+    forcedCommand: true
+  }), false)
+  assert.equal(shouldInjectShellIntegration({
+    ...base,
+    alternateBuffer: true
+  }), false)
+  assert.equal(shouldInjectShellIntegration({
+    ...base,
+    showCmdSuggestions: true
+  }), true)
+  assert.equal(shouldInjectShellIntegration({
+    ...base,
+    sftpPathFollowSsh: true
+  }), true)
+})
+
+test('OSC completion accepts only the current session nonce', async () => {
+  const { CommandTrackerAddon } = await importCommandTracker()
+  const harness = createTrackerTerminal({ cols: 80, cursorX: 2 })
+  const finished = []
+  const tracker = new CommandTrackerAddon()
+  tracker.onCommandFinished(event => finished.push(event))
+  tracker.activate(harness.terminal)
+  const nonce = tracker.beginSession()
+  assert.match(nonce, /^[a-f0-9]{32}$/)
+  harness.osc('A')
+  harness.osc('B')
+  const command = '/usr/bin/systemctl start nginx'
+  harness.setLines([{ text: `$ ${command}`, isWrapped: false }])
+  harness.setCursor(0, command.length + 2)
+  const token = tracker.expectSubmission(command)
+  assert.equal(tracker.markExpectedSubmissionReleased(token), true)
+
+  harness.osc('D;0')
+  harness.osc('D;00000000000000000000000000000000;0')
+  assert.deepEqual(finished, [])
+  assert.equal(tracker.hasExpectedSubmission(token), true)
+
+  harness.osc(`D;${nonce};0`)
+  harness.osc(`D;${nonce};9`)
+  assert.deepEqual(finished, [{ token, command, exitCode: 0 }])
+})
+
+test('reconnect rotates OSC nonce and invalidates prior-session completion', async () => {
+  const { CommandTrackerAddon } = await importCommandTracker()
+  const harness = createTrackerTerminal({ cols: 80, cursorX: 2 })
+  const finished = []
+  const tracker = new CommandTrackerAddon()
+  tracker.onCommandFinished(event => finished.push(event))
+  tracker.activate(harness.terminal)
+  const firstNonce = tracker.beginSession()
+  harness.osc('A')
+  harness.osc('B')
+  const command = '/usr/bin/systemctl start nginx'
+  harness.setLines([{ text: `$ ${command}`, isWrapped: false }])
+  harness.setCursor(0, command.length + 2)
+  const staleToken = tracker.expectSubmission(command)
+  tracker.markExpectedSubmissionReleased(staleToken)
+
+  const nextNonce = tracker.beginSession()
+  assert.notEqual(nextNonce, firstNonce)
+  harness.osc(`D;${firstNonce};0`)
+  assert.deepEqual(finished, [])
+  assert.equal(tracker.hasExpectedSubmission(staleToken), false)
+})
+
+test('generated shell integration binds D records to its supplied nonce', async () => {
+  const { getInlineShellIntegration } = await importShellIntegration()
+  const nonce = '0123456789abcdef0123456789abcdef'
+
+  for (const shellType of ['bash', 'zsh', 'fish']) {
+    const integration = getInlineShellIntegration(shellType, nonce)
+    assert.match(integration, new RegExp(`633;D;.*${nonce}|${nonce}.*633;D;`), shellType)
   }
 })
 
@@ -377,7 +486,7 @@ test('heredoc continuation stays transparent until OSC reports command execution
   assert.deepEqual(controller.beforeEnter('EOF', context), { sendNow: true })
 
   controller.onCommandExecuted()
-  const next = controller.beforeEnter('systemctl restart nginx', context)
+  const next = controller.beforeEnter('/usr/bin/systemctl start nginx', context)
   assert.equal(next.sendNow, false)
   assert.equal(next.confirmation.kind, 'reversible')
 })
@@ -392,7 +501,7 @@ test('a new OSC prompt resets continuation mode after Ctrl+C or syntax abort', a
   })
   controller.onPromptStarted()
 
-  const next = controller.beforeEnter('systemctl restart nginx', context)
+  const next = controller.beforeEnter('/usr/bin/systemctl start nginx', context)
   assert.equal(next.sendNow, false)
   assert.equal(next.confirmation.kind, 'reversible')
 })
@@ -580,6 +689,7 @@ test('CommandTrackerAddon completes a released expected simple command once', as
   const tracker = new CommandTrackerAddon()
   tracker.onCommandFinished(event => finished.push(event))
   tracker.activate(harness.terminal)
+  beginTrackerSession(tracker)
   harness.osc('A')
   harness.osc('B')
   const command = 'systemctl restart nginx'
@@ -589,8 +699,8 @@ test('CommandTrackerAddon completes a released expected simple command once', as
   tracker.markExpectedSubmissionReleased(token)
 
   harness.osc('E;systemctl restart nginx')
-  harness.osc('D;0')
-  harness.osc('D;9')
+  harness.osc(completionOsc(0))
+  harness.osc(completionOsc(9))
 
   assert.deepEqual(finished, [{
     token,
@@ -606,6 +716,7 @@ test('CommandTrackerAddon reports interrupted commands with a null exit code', a
   const tracker = new CommandTrackerAddon()
   tracker.onCommandFinished(event => finished.push(event))
   tracker.activate(harness.terminal)
+  beginTrackerSession(tracker)
   harness.osc('A')
   harness.osc('B')
   const command = 'custom-admin-tool --rotate'
@@ -615,7 +726,7 @@ test('CommandTrackerAddon reports interrupted commands with a null exit code', a
   tracker.markExpectedSubmissionReleased(token)
 
   harness.osc('E;custom-admin-tool --rotate')
-  harness.osc('D')
+  harness.osc(completionOsc())
 
   assert.deepEqual(finished, [{
     token,
@@ -653,6 +764,7 @@ test('CommandTrackerAddon completes a compound expected submission with exact cl
   tracker.onCommandExecuted(command => histories.push(command))
   tracker.onCommandFinished(event => finished.push(event))
   tracker.activate(harness.terminal)
+  beginTrackerSession(tracker)
   harness.osc('A')
   harness.osc('B')
   const command = 'systemctl status nginx && systemctl restart nginx'
@@ -663,7 +775,7 @@ test('CommandTrackerAddon completes a compound expected submission with exact cl
 
   harness.osc('E;systemctl status nginx')
   harness.osc('C')
-  harness.osc('D;0')
+  harness.osc(completionOsc(0))
 
   assert.deepEqual(histories, ['systemctl status nginx'])
   assert.deepEqual(finished, [{ token, command, exitCode: 0 }])
@@ -689,6 +801,7 @@ test('CommandTrackerAddon binds completion to released client identity not OSC E
     tracker.onCommandExecuted(value => histories.push(value))
     tracker.onCommandFinished(event => finished.push(event))
     tracker.activate(harness.terminal)
+    beginTrackerSession(tracker)
     harness.osc('A')
     harness.osc('B')
     harness.setLines([{ text: `$ ${command}`, isWrapped: false }])
@@ -698,7 +811,7 @@ test('CommandTrackerAddon binds completion to released client identity not OSC E
 
     harness.osc(`E;${observed}`)
     harness.osc('C')
-    harness.osc('D;0')
+    harness.osc(completionOsc(0))
 
     assert.deepEqual(histories, [observed], command)
     assert.deepEqual(finished, [{ token, command, exitCode: 0 }], command)
@@ -712,6 +825,7 @@ test('CommandTrackerAddon completes an armed no-E submission at prompt boundary 
   const tracker = new CommandTrackerAddon()
   tracker.onCommandFinished(event => finished.push(event))
   tracker.activate(harness.terminal)
+  beginTrackerSession(tracker)
   harness.osc('A')
   harness.osc('B')
   const command = '(systemctl restart nginx)'
@@ -722,7 +836,7 @@ test('CommandTrackerAddon completes an armed no-E submission at prompt boundary 
 
   harness.osc('C')
   harness.osc('A')
-  harness.osc('D;7')
+  harness.osc(completionOsc(7))
   harness.osc('A')
 
   assert.deepEqual(finished, [{ token, command, exitCode: null }])
@@ -735,9 +849,10 @@ test('CommandTrackerAddon ignores pre-arm and late D while completing exactly on
   const tracker = new CommandTrackerAddon()
   tracker.onCommandFinished(event => finished.push(event))
   tracker.activate(harness.terminal)
+  beginTrackerSession(tracker)
 
   harness.osc('E;uptime')
-  harness.osc('D;0')
+  harness.osc(completionOsc(0))
   harness.osc('A')
   harness.osc('B')
   const command = 'systemctl restart nginx'
@@ -745,14 +860,13 @@ test('CommandTrackerAddon ignores pre-arm and late D while completing exactly on
   harness.setCursor(0, command.length + 2)
   const token = tracker.expectSubmission(command)
   tracker.markExpectedSubmissionReleased(token)
-  harness.osc('D;9')
   assert.equal(tracker.hasExpectedSubmission(token), true)
   assert.deepEqual(finished, [])
 
   harness.osc('E;uptime')
   harness.osc('C')
-  harness.osc('D;0')
-  harness.osc('D;7')
+  harness.osc(completionOsc(0))
+  harness.osc(completionOsc(7))
   harness.osc('A')
 
   assert.deepEqual(finished, [{
@@ -767,6 +881,7 @@ test('CommandTrackerAddon expects the exact canonical command including padding'
   const harness = createTrackerTerminal({ cols: 80, cursorX: 2 })
   const tracker = new CommandTrackerAddon()
   tracker.activate(harness.terminal)
+  beginTrackerSession(tracker)
   harness.osc('A')
   harness.osc('B')
   const command = 'systemctl restart nginx   '
@@ -805,7 +920,7 @@ test('terminal resets continuation safety state at each tracked prompt', () => {
   assert.match(source, /terminalSafetyController\.onPromptStarted/)
 })
 
-test('terminal protection is default-on configurable and enables SSH shell integration', () => {
+test('terminal protection is default-on configurable and consumes existing shell integration', () => {
   const defaults = readClientFile('common/default-setting.js')
   const setting = readClientFile('components/setting-panel/setting-terminal.jsx')
   const locale = readClientFile('common/shellpilot-i18n-overrides.js')

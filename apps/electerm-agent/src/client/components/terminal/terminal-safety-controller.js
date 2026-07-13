@@ -106,6 +106,45 @@ function hasTrailingControlOperator (command) {
   return false
 }
 
+function withoutTrailingShellComment (command) {
+  let quote = ''
+  let backtickOpen = false
+  let escaped = false
+
+  for (let index = 0; index < command.length; index += 1) {
+    const character = command[index]
+    if (escaped) {
+      escaped = false
+      continue
+    }
+    if (character === '\\' && quote !== "'") {
+      escaped = true
+      continue
+    }
+    if (quote === "'") {
+      if (character === "'") quote = ''
+      continue
+    }
+    if (character === "'" && quote !== '"' && !backtickOpen) {
+      quote = "'"
+      continue
+    }
+    if (character === '"' && !backtickOpen) {
+      quote = quote === '"' ? '' : '"'
+      continue
+    }
+    if (!quote && character === '`') {
+      backtickOpen = !backtickOpen
+      continue
+    }
+    if (!quote && !backtickOpen && character === '#' &&
+      (index === 0 || /[\s;&|()]/.test(command[index - 1]))) {
+      return command.slice(0, index)
+    }
+  }
+  return command
+}
+
 function tokenizeShellSyntax (command) {
   const tokens = []
   let word = ''
@@ -129,7 +168,7 @@ function tokenizeShellSyntax (command) {
 
   function isBoundary (character) {
     return character === undefined || /\s/.test(character) ||
-      ';|&()'.includes(character)
+      ';|&()<>'.includes(character)
   }
 
   for (let index = 0; index < command.length; index += 1) {
@@ -169,9 +208,9 @@ function tokenizeShellSyntax (command) {
 
     const braceOperator = (character === '{' || character === '}') &&
       isBoundary(command[index - 1]) && isBoundary(command[index + 1])
-    if (';|&()'.includes(character) || braceOperator) {
+    if (';|&()<>'.includes(character) || braceOperator) {
       flushWord(index)
-      const doubled = (';|&()'.includes(character)) &&
+      const doubled = (';|&()<>'.includes(character)) &&
         command[index + 1] === character
       const value = doubled ? character + character : character
       tokens.push({
@@ -215,7 +254,13 @@ function hasOpenShellCompound (command) {
     }
 
     if (token.operator) {
-      if (token.value === '{' && commandPosition) {
+      const next = tokens[index + 1]
+      if (['<', '>'].includes(token.value) && next?.value === '(' &&
+        token.end === next.start) {
+        stack.push({ type: 'process-substitution' })
+        commandPosition = true
+        index += 1
+      } else if (token.value === '{' && commandPosition) {
         if (frame?.type === 'function') {
           frame.type = 'group'
         } else {
@@ -236,6 +281,10 @@ function hasOpenShellCompound (command) {
         stack.push({ type: 'subshell' })
         commandPosition = true
       } else if (token.value === ')' && frame?.type === 'subshell') {
+        stack.pop()
+        commandPosition = false
+      } else if (token.value === ')' &&
+        ['array', 'process-substitution'].includes(frame?.type)) {
         stack.pop()
         commandPosition = false
       } else if (token.value === ';;' && frame?.type === 'case' &&
@@ -265,6 +314,13 @@ function hasOpenShellCompound (command) {
     const next = tokens[index + 1]
     const afterNext = tokens[index + 2]
     const functionBrace = tokens[index + 3]
+    if (/^[A-Za-z_][A-Za-z0-9_]*=$/.test(token.value) &&
+      next?.value === '(' && token.end === next.start) {
+      stack.push({ type: 'array' })
+      commandPosition = false
+      index += 1
+      continue
+    }
     if (next?.value === '(' && afterNext?.value === ')') {
       stack.push({
         type: functionBrace?.value === '{' ? 'group' : 'function'
@@ -341,9 +397,10 @@ function hasOpenShellCompound (command) {
 export function isCompleteTerminalCommand (command) {
   const canonical = String(command || '')
   if (!canonical.trim() || /[\r\n]/.test(canonical)) return false
-  if (hasTrailingControlOperator(canonical)) return false
-  if (hasOpenShellCompound(canonical)) return false
-  return !shellContinuationState(canonical).incomplete
+  const syntax = withoutTrailingShellComment(canonical)
+  if (hasTrailingControlOperator(syntax)) return false
+  if (hasOpenShellCompound(syntax)) return false
+  return !shellContinuationState(syntax).incomplete
 }
 
 function isTransparentContext (context) {
