@@ -9,6 +9,9 @@ const storeModuleUrl = pathToFileURL(path.resolve(
   __dirname,
   '../../src/client/common/safety-transactions/transaction-store.js'
 )).href
+const legacySftpKey = 'shellpilot-sftp-recovery-records'
+const legacyQuickKey = 'shellpilot-network-rollback'
+const unifiedSafetyKey = 'shellpilot-safety-operation-records'
 
 function importStore () {
   return import(storeModuleUrl)
@@ -22,6 +25,8 @@ function createMemoryAdapter () {
   const tables = new Map()
   const calls = []
   let findOneFailures = 0
+  let findOneFailureAt = 0
+  let findOneCallCount = 0
 
   function getTable (name) {
     if (!tables.has(name)) tables.set(name, new Map())
@@ -33,6 +38,12 @@ function createMemoryAdapter () {
     tables,
     failNextFindOne (count = 1) {
       findOneFailures = count
+    },
+    failFindOneAt (callNumber) {
+      findOneFailureAt = callNumber
+    },
+    get findOneCallCount () {
+      return findOneCallCount
     },
     seed (table, value) {
       getTable(table).set(value.id, clone(value))
@@ -47,6 +58,11 @@ function createMemoryAdapter () {
     },
     async findOne (table, id, propagateError) {
       calls.push({ method: 'findOne', id, table, propagateError })
+      findOneCallCount += 1
+      if (findOneFailureAt === findOneCallCount) {
+        findOneFailureAt = 0
+        return undefined
+      }
       if (findOneFailures > 0) {
         findOneFailures -= 1
         return undefined
@@ -60,6 +76,61 @@ function createMemoryAdapter () {
     async remove (table, id, propagateError) {
       calls.push({ method: 'remove', id, table, propagateError })
       getTable(table).delete(id)
+    }
+  }
+}
+
+function createLegacyRecords (count, start = 0) {
+  return Array.from({ length: count }, (_, offset) => {
+    const index = start + offset
+    return {
+      id: `legacy-bulk-${index}`,
+      source: 'sftp',
+      sourcePath: `/etc/shellpilot/app-${index}.conf`,
+      backupPath: `/tmp/shellpilot/app-${index}.conf.bak`,
+      host: '10.0.0.8',
+      username: 'root',
+      createdAt: new Date(Date.UTC(2026, 6, 12, 8, 0, index)).toISOString(),
+      status: 'available'
+    }
+  })
+}
+
+function createLegacyStorage (sftpRecords, options = {}) {
+  let unifiedRecords = []
+  let currentSftpRecords = clone(sftpRecords)
+  let quickRollbackRecord = options.quickRollbackRecord || null
+  let sftpReadCount = 0
+  const removed = []
+
+  return {
+    removed,
+    get sftpRecords () {
+      return clone(currentSftpRecords)
+    },
+    safeGetItemJSON: (key, fallback) => key === unifiedSafetyKey
+      ? clone(unifiedRecords)
+      : fallback,
+    safeSetItemJSON: (key, value) => {
+      if (key === unifiedSafetyKey) unifiedRecords = clone(value)
+    },
+    getItemJSON: (key, fallback) => {
+      if (key === legacySftpKey) {
+        sftpReadCount += 1
+        options.onSftpRead?.({
+          readCount: sftpReadCount,
+          records: currentSftpRecords
+        })
+        return clone(currentSftpRecords)
+      }
+      if (key === legacyQuickKey) return clone(quickRollbackRecord) || fallback
+      return fallback
+    },
+    removeItem: key => {
+      removed.push(key)
+      options.onRemove?.(key)
+      if (key === legacySftpKey) currentSftpRecords = []
+      if (key === legacyQuickKey) quickRollbackRecord = null
     }
   }
 }
@@ -254,6 +325,77 @@ test('legacy migration is deterministic, idempotent and includes newly appearing
   ].sort())
   assert.equal(adapter.tables.get('safetyOperations').size, 3)
   assert.equal(cleanupCount, 3)
+})
+
+test('migration persists and verifies all 250 legacy records before cleaning their source key', async () => {
+  const { createTransactionStore } = await importStore()
+  const adapter = createMemoryAdapter()
+  const storage = createLegacyStorage(createLegacyRecords(250), {
+    onRemove: key => {
+      if (key === legacySftpKey) assert.equal(adapter.findOneCallCount, 250)
+    }
+  })
+  const store = createTransactionStore({
+    adapter,
+    legacyStorage: storage,
+    now: () => new Date('2026-07-13T10:00:00.000Z')
+  })
+
+  const records = await store.listOperations()
+
+  assert.equal(records.length, 250)
+  assert.equal(adapter.tables.get('safetyOperations').size, 250)
+  assert.equal(adapter.findOneCallCount, 250)
+  assert.deepEqual(storage.removed, [legacySftpKey])
+  assert.equal(storage.sftpRecords.length, 0)
+})
+
+test('record 201 readback failure retains all 250 legacy records and retries safely', async () => {
+  const {
+    createTransactionStore,
+    legacyMigrationMarkerId
+  } = await importStore()
+  const adapter = createMemoryAdapter()
+  adapter.failFindOneAt(201)
+  const storage = createLegacyStorage(createLegacyRecords(250))
+  const store = createTransactionStore({ adapter, legacyStorage: storage })
+
+  await assert.rejects(store.listOperations(), /迁移回读验证失败/)
+  assert.equal(adapter.findOneCallCount, 201)
+  assert.equal(storage.sftpRecords.length, 250)
+  assert.deepEqual(storage.removed, [])
+  assert.equal(adapter.read('data', legacyMigrationMarkerId), undefined)
+
+  const retried = await store.listOperations()
+  assert.equal(retried.length, 250)
+  assert.equal(adapter.tables.get('safetyOperations').size, 250)
+  assert.deepEqual(storage.removed, [legacySftpKey])
+})
+
+test('a legacy source key is retained when a new record appears during migration', async () => {
+  const { createTransactionStore } = await importStore()
+  const adapter = createMemoryAdapter()
+  let addedDuringMigration = false
+  const storage = createLegacyStorage(createLegacyRecords(201), {
+    onSftpRead: ({ readCount, records }) => {
+      if (readCount === 2) {
+        records.push(...createLegacyRecords(1, 201))
+        addedDuringMigration = true
+      }
+    }
+  })
+  const store = createTransactionStore({ adapter, legacyStorage: storage })
+
+  const first = await store.listOperations()
+  assert.equal(first.length, 201)
+  assert.equal(addedDuringMigration, true)
+  assert.equal(storage.sftpRecords.length, 202)
+  assert.deepEqual(storage.removed, [])
+
+  const second = await store.listOperations()
+  assert.equal(second.length, 202)
+  assert.equal(adapter.tables.get('safetyOperations').size, 202)
+  assert.deepEqual(storage.removed, [legacySftpKey])
 })
 
 test('legacy data is retained until database write readback verification succeeds', async () => {

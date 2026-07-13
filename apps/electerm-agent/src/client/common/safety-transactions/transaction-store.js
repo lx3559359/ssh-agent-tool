@@ -6,8 +6,9 @@ import {
 } from './models.js'
 import { redactSensitiveData } from './audit-redaction.js'
 import {
+  cleanupMigratedSafetyOperationRecords,
   normalizeSafetyOperationRecord,
-  readSafetyOperationRecords
+  readSafetyOperationRecordsForMigration
 } from '../safety-operation-records.js'
 
 const operationTable = 'safetyOperations'
@@ -58,18 +59,6 @@ const defaultAdapter = {
 async function getDefaultLegacyStorage () {
   if (!('window' in globalThis)) return null
   return import('../safe-local-storage.js')
-}
-
-async function defaultReadLegacyRecords () {
-  const storage = await getDefaultLegacyStorage()
-  return storage
-    ? readSafetyOperationRecords(storage, { cleanupLegacy: false })
-    : []
-}
-
-async function defaultCleanupLegacyRecords () {
-  const storage = await getDefaultLegacyStorage()
-  if (storage) readSafetyOperationRecords(storage)
 }
 
 function resolveNow (clock) {
@@ -236,8 +225,17 @@ function mergeOperations (stored, legacy) {
 
 export function createTransactionStore (options = {}) {
   const adapter = options.adapter || options.db || defaultAdapter
-  const readLegacyRecords = options.readLegacyRecords || defaultReadLegacyRecords
-  const cleanupLegacyRecords = options.cleanupLegacyRecords || defaultCleanupLegacyRecords
+  const getLegacyStorage = async () => options.legacyStorage || getDefaultLegacyStorage()
+  const readLegacyRecords = options.readLegacyRecords || (async () => {
+    const storage = await getLegacyStorage()
+    return storage
+      ? readSafetyOperationRecordsForMigration(storage)
+      : { records: [], legacySources: {} }
+  })
+  const cleanupLegacyRecords = options.cleanupLegacyRecords || (async ({ legacySources }) => {
+    const storage = await getLegacyStorage()
+    if (storage) cleanupMigratedSafetyOperationRecords(storage, legacySources)
+  })
   const clock = typeof options.now === 'function'
     ? options.now
     : () => options.now || new Date()
@@ -256,7 +254,13 @@ export function createTransactionStore (options = {}) {
   }
 
   async function listOperations () {
-    const rawLegacyRecords = await readLegacyRecords() || []
+    const legacyResult = await readLegacyRecords() || []
+    const rawLegacyRecords = Array.isArray(legacyResult)
+      ? legacyResult
+      : legacyResult.records || []
+    const legacySources = Array.isArray(legacyResult)
+      ? {}
+      : legacyResult.legacySources || {}
     const legacyOperations = rawLegacyRecords.map(record => {
       return normalizeLegacyOperation(record, clock)
     })
@@ -283,7 +287,10 @@ export function createTransactionStore (options = {}) {
         migratedIds: legacyOperations.map(record => record.id).sort(),
         updatedAt: resolveNow(clock).toISOString()
       }, 'data', true, true)
-      await cleanupLegacyRecords()
+      await cleanupLegacyRecords({
+        legacySources,
+        migratedIds: legacyOperations.map(record => record.id)
+      })
       storedOperations = await adapter.find(operationTable, true)
     }
 
