@@ -391,6 +391,40 @@ test('concurrent task patches for one id are serialized with monotonic timestamp
   assert.equal(final.updatedAt, second.updatedAt)
 })
 
+test('successful operation and task writes emit credential-free local update events', async () => {
+  const {
+    createTransactionStore,
+    safetyTransactionUpdatedEvent
+  } = await importStore()
+  const adapter = createMemoryAdapter()
+  const events = []
+  const store = createTransactionStore({
+    adapter,
+    onChange: event => events.push(event)
+  })
+  const savedOperation = await store.saveOperation(createOperation({
+    id: 'event-operation',
+    command: 'password=operation-secret'
+  }))
+  await store.patchOperation(savedOperation.id, { state: 'executing' })
+  await store.removeOperation(savedOperation.id)
+  const savedTask = await store.saveTask({
+    id: 'event-task',
+    title: '本地刷新任务'
+  })
+  await store.patchTask(savedTask.id, { status: 'running-readonly' })
+
+  assert.equal(safetyTransactionUpdatedEvent, 'shellpilot-safety-transaction-updated')
+  assert.deepEqual(events, [
+    { recordType: 'operation', id: 'event-operation', action: 'save' },
+    { recordType: 'operation', id: 'event-operation', action: 'patch' },
+    { recordType: 'operation', id: 'event-operation', action: 'remove' },
+    { recordType: 'task', id: 'event-task', action: 'save' },
+    { recordType: 'task', id: 'event-task', action: 'patch' }
+  ])
+  assert.doesNotMatch(JSON.stringify(events), /operation-secret|password|host|command/)
+})
+
 test('legacy migration is deterministic, idempotent and includes newly appearing records', async () => {
   const {
     createTransactionStore,

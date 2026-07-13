@@ -92,6 +92,7 @@ import TerminalCommandSafetyModal from './terminal-command-safety-modal.jsx'
 import { createTransactionRunner } from '../../common/safety-transactions/transaction-runner.js'
 import { buildRecoveryPlan } from '../../common/safety-transactions/recovery-providers.js'
 import { buildSafetyRequest } from '../../common/safety-transactions/models.js'
+import { assertSameSessionEndpoint } from '../../common/safety-transactions/endpoint-guard.js'
 import * as terminalSafetyStore from '../../common/safety-transactions/transaction-store.js'
 import uid from '../../common/uid.js'
 
@@ -1241,6 +1242,34 @@ class Term extends Component {
       deepCopy(this.props.tab || {})
     )
     return buildTerminalSafetyEndpoint(tab, this.pid)
+  }
+
+  assertSafetyOperationEndpoint = async id => {
+    if (!this.pid || !this.isSsh()) {
+      throw new Error('当前 SSH 终端未连接，无法执行安全操作。')
+    }
+    const operation = await terminalSafetyStore.getOperation(id)
+    if (!operation) throw new Error(`未找到安全操作：${id}`)
+    assertSameSessionEndpoint(
+      operation.endpoint,
+      this.getTerminalSafetyEndpoint()
+    )
+    return operation
+  }
+
+  rollbackSafetyOperation = async id => {
+    await this.assertSafetyOperationEndpoint(id)
+    return this.terminalSafetyRunner.rollback(id)
+  }
+
+  keepSafetyOperation = async id => {
+    await this.assertSafetyOperationEndpoint(id)
+    return this.terminalSafetyRunner.keep(id)
+  }
+
+  cancelSafetyOperation = async id => {
+    await this.assertSafetyOperationEndpoint(id)
+    return this.terminalSafetyRunner.cancel(id)
   }
 
   getTerminalSafetyContext = () => {

@@ -1,83 +1,164 @@
 .safety-operation-center-modal
   .ant-modal-body
-    max-height calc(100vh - 190px)
+    max-height calc(100vh - 160px)
     overflow hidden
     display flex
     flex-direction column
 
 .safety-center-summary
-  padding 10px 12px
-  border 1px solid var(--main-darker)
-  border-radius 6px
+  display flex
+  flex-wrap wrap
+  gap 18px
+  padding 4px 2px 8px
+  color var(--text-light)
+  font-size 12px
+
+.safety-center-summary strong
   color var(--text)
-  background var(--main-light)
-  line-height 1.6
+
+.safety-center-tabs
+  flex none
+
+.safety-center-tabs .ant-tabs-nav
+  margin-bottom 10px
 
 .safety-center-filters
   display grid
-  grid-template-columns minmax(220px, 1fr) 160px 150px 140px
-  gap 10px
-  margin 14px 0
+  grid-template-columns minmax(220px, 1fr) 170px 150px 150px
+  gap 8px
+  margin-bottom 10px
 
 .safety-center-records
-  overflow-y auto
-  min-height 180px
-  padding-right 4px
+  min-height 220px
+  overflow auto
 
-.safety-center-record
+.safety-center-record-list
+  min-width 660px
+  padding-right 3px
+
+.safety-center-loading
+  min-height 220px
   display flex
   align-items center
-  gap 16px
-  padding 14px
-  margin-bottom 10px
+  justify-content center
+
+.safety-center-record
+  min-width 0
+  margin-bottom 8px
+  padding 12px
   border 1px solid var(--main-darker)
   border-radius 6px
   background var(--main)
 
-.safety-center-record-main
-  min-width 0
-  flex 1
+.safety-center-record-header
+  display flex
+  align-items flex-start
+  justify-content space-between
+  gap 12px
 
 .safety-center-record-title
+  min-width 0
   display flex
   align-items center
-  gap 8px
-  margin-bottom 7px
+  flex-wrap wrap
+  gap 7px
 
-.safety-center-record-target
-.safety-center-record-location
+.safety-center-record-title strong
+  min-width 120px
   overflow hidden
   text-overflow ellipsis
   white-space nowrap
 
-.safety-center-record-target
-  color var(--text-light)
-  font-weight 600
-
-.safety-center-record-meta
-  display flex
-  flex-wrap wrap
-  gap 16px
-  margin-top 5px
-  color var(--text-disabled)
-  font-size 12px
-
-.safety-center-record-location
-  margin-top 5px
-  color var(--text)
-  font-size 12px
-
-.safety-center-record-error
-  margin-top 6px
-  color var(--error)
-  font-size 12px
-
 .safety-center-record-actions
   flex none
+
+.safety-center-command
+  display block
+  margin-top 8px
+  padding 6px 8px
+  overflow hidden
+  color var(--text)
+  background var(--main-light)
+  font-size 12px
+  line-height 1.45
+  text-overflow ellipsis
+  white-space nowrap
+
+.safety-center-record-grid
+  display grid
+  grid-template-columns 72px minmax(150px, 1fr) 72px minmax(150px, 1fr)
+  gap 5px 9px
+  margin-top 9px
+  color var(--text-light)
+  font-size 12px
+
+.safety-center-label
+  color var(--text-disabled)
+
+.safety-center-path
+  overflow-wrap anywhere
+
+.safety-center-timeline
+  display flex
+  gap 6px
+  margin-top 9px
+  padding-top 8px
+  overflow-x auto
+  border-top 1px solid var(--main-darker)
+
+.safety-center-timeline-item
+  flex none
+  color var(--text-disabled)
+  font-size 11px
+  white-space nowrap
+
+.safety-center-record-error
+  margin-top 7px
+  color var(--error)
+  font-size 12px
+  overflow-wrap anywhere
+
+.safety-center-audit
+  margin-top 5px
+
+.safety-center-audit .ant-btn
+  height 26px
+  padding-left 0
+
+.safety-center-audit-output
+  max-height 190px
+  margin 3px 0 0
+  padding 8px
+  overflow auto
+  color var(--text)
+  background var(--main-light)
+  font-size 11px
+  line-height 1.5
+  white-space pre-wrap
+  word-break break-word
+
+.safety-center-confirm-content
+  display flex
+  flex-direction column
+  gap 6px
+  min-width 0
+
+.safety-center-confirm-content span
+  color var(--text-light)
+
+.safety-center-confirm-content code
+  max-height 96px
+  padding 6px
+  overflow auto
+  background var(--main-light)
+  white-space pre-wrap
+  word-break break-word
 
 @media (max-width: 760px)
   .safety-center-filters
     grid-template-columns 1fr 1fr
-  .safety-center-record
+  .safety-center-record-header
     align-items stretch
     flex-direction column
+  .safety-center-record-actions
+    align-self flex-start

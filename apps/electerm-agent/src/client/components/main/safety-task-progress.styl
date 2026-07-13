@@ -1,0 +1,111 @@
+.safety-task-progress
+  min-width 0
+  padding 12px
+  border 1px solid var(--main-darker)
+  border-radius 6px
+  background var(--main)
+
+.safety-task-progress-header
+  display flex
+  align-items center
+  justify-content space-between
+  gap 12px
+
+.safety-task-progress-heading
+  min-width 0
+  display flex
+  align-items center
+  flex-wrap wrap
+  gap 8px
+
+.safety-task-progress-heading strong
+  min-width 0
+  max-width 100%
+  overflow-wrap anywhere
+
+.safety-task-progress-endpoint
+.safety-task-progress-current
+  margin-top 5px
+  overflow hidden
+  color var(--text-light)
+  font-size 12px
+  text-overflow ellipsis
+  white-space nowrap
+
+.safety-task-progress-current
+  color var(--text)
+
+.safety-task-progress-counts
+  display flex
+  flex-wrap wrap
+  gap 14px
+  margin 4px 0 8px
+  color var(--text-disabled)
+  font-size 12px
+
+.safety-task-progress-counts .is-success
+.safety-task-progress-step-line .is-success
+  color var(--success)
+
+.safety-task-progress-counts .is-error
+.safety-task-progress-step-line .is-error
+.safety-task-progress-error
+  color var(--error)
+
+.safety-task-progress-step-line .is-running
+  color var(--primary)
+
+.safety-task-progress-steps
+  max-height 280px
+  overflow-y auto
+  border-top 1px solid var(--main-darker)
+
+.safety-task-progress-step
+  min-width 0
+  padding 8px 2px
+  border-bottom 1px solid var(--main-darker)
+
+.safety-task-progress-step-line
+  display grid
+  grid-template-columns 16px minmax(0, 1fr) auto
+  align-items center
+  gap 7px
+  font-size 12px
+
+.safety-task-progress-step-line strong
+  overflow hidden
+  text-overflow ellipsis
+  white-space nowrap
+
+.safety-task-progress-command
+  display block
+  margin 5px 0 0 23px
+  overflow hidden
+  color var(--text-light)
+  font-size 11px
+  text-overflow ellipsis
+  white-space nowrap
+
+.safety-task-progress-output
+  max-height 76px
+  margin 6px 0 0 23px
+  padding 6px 8px
+  overflow auto
+  color var(--text)
+  background var(--main-light)
+  font-size 11px
+  line-height 1.45
+  white-space pre-wrap
+  word-break break-word
+
+.safety-task-progress-error
+  margin 6px 0 0 23px
+  font-size 12px
+
+@media (max-width: 680px)
+  .safety-task-progress-header
+    align-items flex-start
+  .safety-task-progress-current
+  .safety-task-progress-endpoint
+    white-space normal
+    word-break break-word

@@ -15,6 +15,20 @@ const taskTable = 'agentTasks'
 const patchQueuesByAdapter = new WeakMap()
 
 export const legacyMigrationMarkerId = 'safetyOperations:legacy-migration:v1'
+export const safetyTransactionUpdatedEvent = 'shellpilot-safety-transaction-updated'
+
+export function emitSafetyTransactionUpdated (change = {}, eventTarget = globalThis.window) {
+  const detail = {
+    recordType: change.recordType === 'task' ? 'task' : 'operation',
+    id: String(change.id || ''),
+    action: String(change.action || 'patch')
+  }
+  if (!detail.id || typeof eventTarget?.dispatchEvent !== 'function') return detail
+  try {
+    eventTarget.dispatchEvent(new CustomEvent(safetyTransactionUpdatedEvent, { detail }))
+  } catch {}
+  return detail
+}
 
 export const taskStatuses = Object.freeze({
   draft: 'draft',
@@ -279,6 +293,15 @@ export function createTransactionStore (options = {}) {
   const clock = typeof options.now === 'function'
     ? options.now
     : () => options.now || new Date()
+  const onChange = typeof options.onChange === 'function'
+    ? options.onChange
+    : emitSafetyTransactionUpdated
+
+  function notifyChange (recordType, id, action) {
+    try {
+      onChange({ recordType, id: String(id), action })
+    } catch {}
+  }
 
   async function getMigrationMarker () {
     if (typeof adapter.getData === 'function') {
@@ -294,6 +317,7 @@ export function createTransactionStore (options = {}) {
       id: operation?.id || generate()
     }, { now: resolveNow(clock) })
     await adapter.update(item.id, item, operationTable, true, true)
+    notifyChange('operation', item.id, 'save')
     return item
   }
 
@@ -365,6 +389,7 @@ export function createTransactionStore (options = {}) {
         updatedAt: nextUpdatedAt(current.updatedAt, patch.updatedAt, clock)
       }, { now: resolveNow(clock) })
       await adapter.update(item.id, item, operationTable, true, true)
+      notifyChange('operation', item.id, 'patch')
       return item
     })
   }
@@ -391,17 +416,20 @@ export function createTransactionStore (options = {}) {
         updatedAt: nextUpdatedAt(current.updatedAt, resolvedPatch?.updatedAt, clock)
       }, { now: resolveNow(clock) })
       await adapter.update(item.id, item, operationTable, true, true)
+      notifyChange('operation', item.id, 'patch')
       return item
     })
   }
 
   async function removeOperation (id) {
     await adapter.remove(operationTable, id, true)
+    notifyChange('operation', id, 'remove')
   }
 
   async function saveTask (task = {}) {
     const item = normalizeTask(task, clock)
     await adapter.update(item.id, item, taskTable, true, true)
+    notifyChange('task', item.id, 'save')
     return item
   }
 
@@ -424,6 +452,7 @@ export function createTransactionStore (options = {}) {
         updatedAt: nextUpdatedAt(current.updatedAt, patch.updatedAt, clock)
       }, clock)
       await adapter.update(item.id, item, taskTable, true, true)
+      notifyChange('task', item.id, 'patch')
       return item
     })
   }
