@@ -15,6 +15,7 @@ import {
   CloseOutlined,
   DownOutlined,
   RightOutlined,
+  ReloadOutlined,
   SafetyCertificateOutlined,
   UndoOutlined
 } from '@ant-design/icons'
@@ -37,13 +38,16 @@ import { executeSafetyCenterAction } from './safety-operation-center-actions.js'
 import SafetyTaskProgress from './safety-task-progress.jsx'
 import {
   buildSafetyRecordViewModel,
+  buildSafetyRecoveryIntegrityResults,
   createSafetyActionLock,
   filterSafetyCenterRecords,
   findMatchingSafetyTerminal,
   getLegacySafetyRecord,
+  getLegacyClaimStatus,
   groupSafetyCenterRecords,
   isSafetyOperationRollbackable,
   isSafetyOperationRunning,
+  isLegacyOperationActionable,
   safetyOperationStatusPresentations,
   safetyTaskStatusPresentations,
   safetyRecordActionLockKey,
@@ -133,6 +137,7 @@ function confirmSafetyAction (action, view) {
           <strong>{view.title}</strong>
           <span>{view.endpoint}</span>
           <code>{view.commandSummary}</code>
+          {view.error ? <span>{view.error}</span> : null}
         </div>
       ),
       okText: labels.ok,
@@ -147,6 +152,7 @@ function confirmSafetyAction (action, view) {
 export default function SafetyOperationCenterModal ({ open, onClose, store }) {
   const [records, setRecords] = useState([])
   const [tasks, setTasks] = useState([])
+  const [integrityResults, setIntegrityResults] = useState(() => new Map())
   const [activeTab, setActiveTab] = useState('running')
   const [keyword, setKeyword] = useState('')
   const [host, setHost] = useState('')
@@ -158,7 +164,6 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
   const [runningActions, setRunningActions] = useState({})
   const [expandedAuditId, setExpandedAuditId] = useState('')
   const refreshVersion = useRef(0)
-  const loaded = useRef(false)
   const actionLock = useRef()
   if (!actionLock.current) {
     actionLock.current = createSafetyActionLock(setRunningKeys)
@@ -166,15 +171,19 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
 
   const refreshRecords = useCallback(async () => {
     const version = ++refreshVersion.current
-    if (!loaded.current) setLoading(true)
+    setIntegrityResults(new Map())
+    setLoading(true)
     try {
       const [nextRecords, nextTasks] = await Promise.all([
         listOperations(),
         listTasks()
       ])
+      const safeRecords = Array.isArray(nextRecords) ? nextRecords : []
+      const nextIntegrityResults = await buildSafetyRecoveryIntegrityResults(safeRecords)
       if (version !== refreshVersion.current) return
-      setRecords(Array.isArray(nextRecords) ? nextRecords : [])
+      setRecords(safeRecords)
       setTasks(Array.isArray(nextTasks) ? nextTasks : [])
+      setIntegrityResults(nextIntegrityResults)
       setLoadError('')
     } catch (error) {
       if (version !== refreshVersion.current) return
@@ -182,15 +191,14 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
       reportError(error)
     } finally {
       if (version === refreshVersion.current) {
-        loaded.current = true
         setLoading(false)
       }
     }
   }, [])
 
   const groups = useMemo(() => {
-    return groupSafetyCenterRecords(records, tasks)
-  }, [records, tasks])
+    return groupSafetyCenterRecords(records, tasks, integrityResults)
+  }, [records, tasks, integrityResults])
 
   useEffect(() => {
     if (open) refreshRecords()
@@ -319,7 +327,7 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
     actionLock.current.run(key, async () => {
       setRunningActions(current => ({ ...current, [key]: action }))
       try {
-        const view = buildSafetyRecordViewModel(record)
+        const view = buildSafetyRecordViewModel(record, integrityResults)
         if (!await confirmSafetyAction(action, view)) return
         try {
           await executeSafetyCenterAction({
@@ -327,6 +335,10 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
             action,
             getOperation,
             guardedPatchOperation,
+            syncLegacyOperation: async id => {
+              await listOperations()
+              return getOperation(id)
+            },
             resolveLegacyTarget,
             runLegacyAction,
             findModernTerminal: findOperationTerminal,
@@ -361,7 +373,8 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
   const renderOperationActions = record => {
     const busy = isRecordBusy(record)
     if (getLegacySafetyRecord(record)) {
-      if (!['rollback-available', 'failed'].includes(record.state)) return null
+      if (!isLegacyOperationActionable(record)) return null
+      const staleClaim = getLegacyClaimStatus(record) === 'stale'
       if (record.source === 'sftp') {
         return (
           <Button
@@ -370,7 +383,7 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
             disabled={busy || record.metadata?.legacyEndpointIncomplete}
             onClick={() => handleSafetyAction(record, 'rollback')}
           >
-            {record.state === 'failed' ? '重试恢复' : '立即恢复'}
+            {staleClaim ? '接管并重试' : record.state === 'failed' ? '重试恢复' : '立即恢复'}
           </Button>
         )
       }
@@ -383,7 +396,7 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
             disabled={busy || record.metadata?.legacyEndpointIncomplete}
             onClick={() => handleSafetyAction(record, 'keep')}
           >
-            保留修改
+            {staleClaim ? '接管并保留' : '保留修改'}
           </Button>
           <Button
             danger
@@ -393,7 +406,7 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
             disabled={busy || record.metadata?.legacyEndpointIncomplete}
             onClick={() => handleSafetyAction(record, 'rollback')}
           >
-            {record.state === 'failed' ? '重试回滚' : '立即回滚'}
+            {staleClaim ? '接管并重试' : record.state === 'failed' ? '重试回滚' : '立即回滚'}
           </Button>
         </Space>
       )
@@ -412,7 +425,7 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
         </Button>
       )
     }
-    if (!isSafetyOperationRollbackable(record)) return null
+    if (!isSafetyOperationRollbackable(record, integrityResults)) return null
     return (
       <Space wrap>
         {record.state === 'rollback-available'
@@ -449,7 +462,7 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
   }
 
   const renderOperation = record => {
-    const view = buildSafetyRecordViewModel(record)
+    const view = buildSafetyRecordViewModel(record, integrityResults)
     const [statusText, statusColor] = statusLabels[view.status] || [view.status, 'default']
     const auditExpanded = expandedAuditId === record.id
     return (
@@ -601,6 +614,13 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
               label: statusLabels[value]?.[0] || value
             }))
           ]}
+        />
+        <Button
+          aria-label='刷新'
+          title='刷新'
+          icon={<ReloadOutlined />}
+          loading={loading}
+          onClick={refreshRecords}
         />
       </div>
 

@@ -277,6 +277,91 @@ test('legacy records always stay in the legacy tab', async () => {
   assert.equal(groups.history.length, 0)
 })
 
+test('expired legacy claims expose an unknown-result warning and a retry action', async () => {
+  const {
+    buildSafetyRecordViewModel,
+    getLegacyClaimStatus,
+    isLegacyOperationActionable
+  } = await importModel()
+  const claimed = operation(
+    'legacy-crashed',
+    'rolling-back',
+    '2026-07-13T10:00:00.000Z',
+    {
+      source: 'sftp',
+      metadata: {
+        legacy: true,
+        legacyRecord: {
+          id: 'legacy-crashed',
+          source: 'sftp',
+          host: 'prod.example.com',
+          port: 22,
+          username: 'root'
+        },
+        safetyCenterLegacyClaim: {
+          token: 'crashed-owner',
+          action: 'rollback',
+          claimedAt: '2026-07-13T10:00:00.000Z',
+          expiresAt: '2026-07-13T10:01:00.000Z'
+        }
+      }
+    }
+  )
+
+  assert.equal(
+    getLegacyClaimStatus(claimed, new Date('2026-07-13T10:00:30.000Z')),
+    'active'
+  )
+  assert.equal(
+    isLegacyOperationActionable(claimed, new Date('2026-07-13T10:00:30.000Z')),
+    false
+  )
+  assert.equal(
+    getLegacyClaimStatus(claimed, new Date('2026-07-13T10:02:00.000Z')),
+    'stale'
+  )
+  assert.equal(
+    isLegacyOperationActionable(claimed, new Date('2026-07-13T10:02:00.000Z')),
+    true
+  )
+  assert.equal(
+    buildSafetyRecordViewModel(
+      claimed,
+      undefined,
+      new Date('2026-07-13T10:02:00.000Z')
+    ).error,
+    '上次执行中断，结果未知'
+  )
+
+  const oldClaimWithoutExpiry = {
+    ...claimed,
+    metadata: {
+      ...claimed.metadata,
+      safetyCenterLegacyClaim: {
+        token: 'pre-lease-owner',
+        action: 'rollback',
+        claimedAt: '2026-07-13T10:00:00.000Z'
+      }
+    }
+  }
+  assert.equal(getLegacyClaimStatus(oldClaimWithoutExpiry), 'stale')
+  assert.equal(isLegacyOperationActionable(oldClaimWithoutExpiry), true)
+
+  const claimWithoutStart = {
+    ...claimed,
+    metadata: {
+      ...claimed.metadata,
+      safetyCenterLegacyClaim: {
+        token: 'missing-start-owner',
+        action: 'rollback',
+        expiresAt: '2099-07-13T10:01:00.000Z'
+      }
+    }
+  }
+  assert.equal(getLegacyClaimStatus(claimWithoutStart), 'stale')
+  assert.equal(isLegacyOperationActionable(claimWithoutStart), true)
+})
+
 test('sorting is newest first and stable for equal or invalid timestamps', async () => {
   const { groupSafetyCenterRecords } = await importModel()
   const groups = groupSafetyCenterRecords([
@@ -703,6 +788,10 @@ test('UI keeps one topbar entry and reads the encrypted transaction store', () =
   assert.match(topbar, /安全中心/)
   assert.match(modal, /listOperations/)
   assert.match(modal, /listTasks/)
+  assert.match(modal, /buildSafetyRecoveryIntegrityResults/)
+  assert.match(modal, /setIntegrityResults\(new Map\(\)\)/)
+  assert.match(modal, /ReloadOutlined/)
+  assert.match(modal, /aria-label='刷新'/)
   assert.match(modal, /groupSafetyCenterRecords/)
   assert.match(modal, /SafetyTaskProgress/)
   assert.match(modal, /findMatchingSafetyTerminal/)

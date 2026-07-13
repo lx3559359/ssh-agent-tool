@@ -1,11 +1,13 @@
-import { redactAuditText, redactSensitiveData } from './audit-redaction.js'
+import { redactAuditText } from './audit-redaction.js'
 import { classifyCommand } from './command-classifier.js'
 import { assertSameSessionEndpoint, buildEndpointKey } from './endpoint-guard.js'
+import { operationStates } from './models.js'
 import {
-  operationStates,
-  recoveryBindingAlgorithm,
-  recoveryBindingSchemaVersion
-} from './models.js'
+  assertRecoveryBinding,
+  createPersistedRecoveryPlan,
+  createRecoveryBinding,
+  stableSerialize
+} from './recovery-binding.js'
 import {
   buildVerifiedRemoteAction,
   parseRemoteActionMarker
@@ -327,116 +329,6 @@ function timeoutFor (operation, phase) {
   return Number.isFinite(timeout) && timeout > 0
     ? timeout
     : defaultTimeouts[phase]
-}
-
-function recoveryBindingError () {
-  return new Error('恢复绑定指纹不一致，已拒绝执行。')
-}
-
-function stableSerialize (value) {
-  if (Array.isArray(value)) {
-    return `[${value.map(item => stableSerialize(item) ?? 'null').join(',')}]`
-  }
-  if (value && typeof value === 'object') {
-    const entries = Object.keys(value).sort().flatMap(key => {
-      const serialized = stableSerialize(value[key])
-      return serialized === undefined
-        ? []
-        : [`${JSON.stringify(key)}:${serialized}`]
-    })
-    return `{${entries.join(',')}}`
-  }
-  return JSON.stringify(value)
-}
-
-async function sha256 (value) {
-  const cryptoApi = globalThis.crypto
-  if (!cryptoApi?.subtle) {
-    throw new Error('当前环境不支持恢复绑定指纹计算。')
-  }
-  const digest = await cryptoApi.subtle.digest(
-    recoveryBindingAlgorithm,
-    new TextEncoder().encode(String(value))
-  )
-  return [...new Uint8Array(digest)]
-    .map(value => value.toString(16).padStart(2, '0'))
-    .join('')
-}
-
-async function persistedPlan (plan) {
-  if (typeof plan?.prepareCommand !== 'string' || !plan.prepareCommand) {
-    throw recoveryBindingError()
-  }
-  const { prepareCommand, ...immutablePlan } = plan
-  return redactSensitiveData({
-    ...immutablePlan,
-    prepareCommandHash: await sha256(prepareCommand)
-  })
-}
-
-function recoveryBindingPayload (operation, plan, artifacts) {
-  const classification = classifyCommand(operation.command)
-  const provider = classification.provider
-  const operationDir = typeof plan?.operationDir === 'string'
-    ? plan.operationDir
-    : ''
-  if (classification.risk !== 'change' || classification.reversible !== true ||
-    !provider || operation.recoveryProvider !== provider ||
-    plan?.provider !== provider || !operationDir ||
-    plan?.executeCommand !== operation.command ||
-    typeof plan?.prepareCommandHash !== 'string' ||
-    !/^[a-f0-9]{64}$/.test(plan.prepareCommandHash) ||
-    typeof plan?.rollbackCommand !== 'string' || !plan.rollbackCommand ||
-    typeof plan?.verifyCommand !== 'string' || !plan.verifyCommand ||
-    typeof plan?.allowUnsafeExecute !== 'boolean' ||
-    stableSerialize(plan?.artifacts) !== stableSerialize(artifacts)) {
-    throw recoveryBindingError()
-  }
-  return {
-    schemaVersion: operation.schemaVersion,
-    id: operation.id,
-    command: operation.command,
-    endpoint: operation.endpoint,
-    endpointKey: buildEndpointKey(operation.endpoint),
-    provider,
-    operationDir,
-    plan,
-    artifacts
-  }
-}
-
-async function recoveryBindingFingerprint (operation, plan, artifacts) {
-  const payload = recoveryBindingPayload(operation, plan, artifacts)
-  return sha256(stableSerialize(payload))
-}
-
-async function createRecoveryBinding (operation, plan, artifacts) {
-  return {
-    schemaVersion: recoveryBindingSchemaVersion,
-    algorithm: recoveryBindingAlgorithm,
-    fingerprint: await recoveryBindingFingerprint(operation, plan, artifacts)
-  }
-}
-
-async function assertRecoveryBinding (operation) {
-  const binding = operation.recoveryBinding
-  if (binding?.schemaVersion !== recoveryBindingSchemaVersion ||
-    binding?.algorithm !== recoveryBindingAlgorithm ||
-    typeof binding?.fingerprint !== 'string') {
-    throw recoveryBindingError()
-  }
-  let fingerprint
-  try {
-    fingerprint = await recoveryBindingFingerprint(
-      operation,
-      operation.plan,
-      operation.artifacts
-    )
-  } catch (error) {
-    if (error.message.includes('当前环境')) throw error
-    throw recoveryBindingError()
-  }
-  if (binding.fingerprint !== fingerprint) throw recoveryBindingError()
 }
 
 function recoveryIntegrityError () {
@@ -896,7 +788,7 @@ export function createTransactionRunner (options = {}) {
           }
 
           const plan = await buildRecoveryPlan(operation)
-          const savedPlan = await persistedPlan(plan)
+          const savedPlan = await createPersistedRecoveryPlan(plan)
           const artifacts = savedPlan.artifacts || {}
           const recoveryBinding = await createRecoveryBinding(
             operation,

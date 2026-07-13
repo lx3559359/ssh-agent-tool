@@ -9,6 +9,7 @@ import {
   operationStates,
   validateRecoveryStructure
 } from '../../common/safety-transactions/models.js'
+import { verifyRecoveryBinding } from '../../common/safety-transactions/recovery-binding.js'
 import {
   finalTaskStatuses,
   safetyTransactionUpdatedEvent,
@@ -41,6 +42,8 @@ const finalStepStatuses = new Set([
 const maxCommandPreview = 320
 const maxTextPreview = 2048
 const maxAuditEntries = 20
+export const legacyClaimUnknownResultMessage = '上次执行中断，结果未知'
+export const recoveryIntegrityFailureMessage = '恢复记录完整性校验失败'
 const auditPhaseLabels = {
   prepare: '准备',
   execute: '执行',
@@ -127,9 +130,57 @@ export function getSafetyRecoveryIntegrityError (record) {
   return validation.valid ? '' : validation.error
 }
 
-export function isSafetyOperationRollbackable (record) {
-  return recoveryOperationStates.has(record?.state) &&
-    validateRecoveryStructure(record).valid
+function recoveryIntegrityResult (integrityResults, id) {
+  if (integrityResults instanceof Map) return integrityResults.get(id)
+  return integrityResults && typeof integrityResults === 'object'
+    ? integrityResults[id]
+    : undefined
+}
+
+function isModernRecoveryCandidate (record) {
+  return record?.metadata?.legacy !== true &&
+    recoveryOperationStates.has(record?.state) &&
+    claimsRecovery(record)
+}
+
+export async function buildSafetyRecoveryIntegrityResults (
+  records,
+  verify = verifyRecoveryBinding
+) {
+  const results = new Map()
+  if (!Array.isArray(records) || typeof verify !== 'function') return results
+  const candidates = records.filter(record => {
+    return isRecord(record) && isModernRecoveryCandidate(record)
+  })
+  await Promise.all(candidates.map(async record => {
+    const structure = validateRecoveryStructure(record)
+    if (!structure.valid) {
+      results.set(record.id, {
+        valid: false,
+        error: recoveryIntegrityFailureMessage
+      })
+      return
+    }
+    try {
+      const result = await verify(record)
+      results.set(record.id, result?.valid === true
+        ? { valid: true, error: '' }
+        : { valid: false, error: recoveryIntegrityFailureMessage })
+    } catch {
+      results.set(record.id, {
+        valid: false,
+        error: recoveryIntegrityFailureMessage
+      })
+    }
+  }))
+  return results
+}
+
+export function isSafetyOperationRollbackable (record, integrityResults) {
+  if (!recoveryOperationStates.has(record?.state) ||
+    !validateRecoveryStructure(record).valid) return false
+  if (integrityResults === undefined) return true
+  return recoveryIntegrityResult(integrityResults, record.id)?.valid === true
 }
 
 export function isSafetyOperationRunning (record) {
@@ -139,9 +190,30 @@ export function isSafetyOperationRunning (record) {
     !recoveryOperationStates.has(record.state)
 }
 
-function operationGroup (record) {
+export function getLegacyClaimStatus (record, now = new Date()) {
+  if (record?.metadata?.legacy !== true ||
+    record?.state !== operationStates.rollingBack) return 'none'
+  const claim = record.metadata?.safetyCenterLegacyClaim
+  if (!claim || typeof claim !== 'object') return 'stale'
+  const claimedAt = new Date(claim.claimedAt).getTime()
+  const expiresAt = new Date(claim.expiresAt).getTime()
+  const currentTime = now instanceof Date ? now.getTime() : new Date(now).getTime()
+  if (Number.isNaN(claimedAt) || Number.isNaN(expiresAt) ||
+    Number.isNaN(currentTime) || expiresAt <= claimedAt) return 'stale'
+  return expiresAt <= currentTime ? 'stale' : 'active'
+}
+
+export function isLegacyOperationActionable (record, now = new Date()) {
+  if (record?.metadata?.legacy !== true) return false
+  if ([operationStates.rollbackAvailable, operationStates.failed].includes(record.state)) {
+    return true
+  }
+  return getLegacyClaimStatus(record, now) === 'stale'
+}
+
+function operationGroup (record, integrityResults) {
   if (record.metadata?.legacy === true) return 'legacy'
-  if (isSafetyOperationRollbackable(record)) return 'rollback'
+  if (isSafetyOperationRollbackable(record, integrityResults)) return 'rollback'
   if (isSafetyOperationRunning(record)) return 'running'
   return 'history'
 }
@@ -152,7 +224,7 @@ function taskGroup (record) {
     : 'history'
 }
 
-export function groupSafetyCenterRecords (records, tasks) {
+export function groupSafetyCenterRecords (records, tasks, integrityResults) {
   const groups = {
     running: [],
     rollback: [],
@@ -165,7 +237,7 @@ export function groupSafetyCenterRecords (records, tasks) {
 
   for (const record of operations) {
     if (!isRecord(record)) continue
-    groups[operationGroup(record)].push({
+    groups[operationGroup(record, integrityResults)].push({
       order: order++,
       record: { ...record, recordType: 'operation' }
     })
@@ -299,13 +371,19 @@ export function getLegacySafetyRecord (record) {
     : null
 }
 
-export function buildSafetyRecordViewModel (record = {}) {
+export function buildSafetyRecordViewModel (record = {}, integrityResults, now = new Date()) {
   const legacy = getLegacySafetyRecord(record)
   const audit = auditView(record.audit)
   const operationDir = record.plan?.operationDir || ''
   const backupPath = record.artifacts?.backupDir || legacy?.backupPath || ''
   const recoveryPath = operationDir || legacy?.rollbackPath || legacy?.path || ''
-  const recoveryIntegrityError = getSafetyRecoveryIntegrityError(record)
+  const verifiedIntegrity = recoveryIntegrityResult(integrityResults, record.id)
+  const recoveryIntegrityError = verifiedIntegrity?.valid === false
+    ? verifiedIntegrity.error || recoveryIntegrityFailureMessage
+    : getSafetyRecoveryIntegrityError(record)
+  const legacyClaimError = getLegacyClaimStatus(record, now) === 'stale'
+    ? legacyClaimUnknownResultMessage
+    : ''
   return {
     id: safeText(record.id, 256),
     recordType: record.recordType === 'task' ? 'task' : 'operation',
@@ -321,7 +399,10 @@ export function buildSafetyRecordViewModel (record = {}) {
     updatedAt: safeText(record.updatedAt || record.createdAt, 80),
     timeline: timelineView(record, audit),
     verification: verificationView(record, audit),
-    error: safeText(record.integrityError || recoveryIntegrityError || record.error, maxTextPreview),
+    error: safeText(
+      record.integrityError || recoveryIntegrityError || legacyClaimError || record.error,
+      maxTextPreview
+    ),
     audit,
     auditCount: Array.isArray(record.audit) ? record.audit.length : 0,
     legacy: Boolean(legacy)
