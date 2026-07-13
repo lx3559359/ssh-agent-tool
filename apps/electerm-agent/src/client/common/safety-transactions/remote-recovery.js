@@ -1,5 +1,11 @@
 const safeIdPattern = /^[A-Za-z0-9_-]+$/
-const validActions = new Set(['rollback', 'verify'])
+const validActions = new Set(['prepare', 'execute', 'rollback', 'verify'])
+const actionLabels = {
+  prepare: '准备',
+  execute: '执行',
+  rollback: '回滚',
+  verify: '校验'
+}
 
 function resolveActionArguments (actionOrOptions, id) {
   if (actionOrOptions && typeof actionOrOptions === 'object') {
@@ -13,7 +19,7 @@ function resolveActionArguments (actionOrOptions, id) {
 
 function validateAction (action, id) {
   if (!validActions.has(action)) {
-    throw new Error('远程恢复动作只支持 rollback 或 verify。')
+    throw new Error('远程动作只支持 prepare、execute、rollback 或 verify。')
   }
   if (!safeIdPattern.test(String(id || ''))) {
     throw new Error('远程恢复动作标识无效，只允许字母、数字、下划线和连字符。')
@@ -42,11 +48,13 @@ export function parseRemoteActionMarker (output, actionOrOptions, id) {
   const matches = [...String(output || '').matchAll(new RegExp(`^[ \\t]*${marker}=(\\d+)[ \\t]*\\r?$`, 'gm'))]
   const match = matches.at(-1)
   if (!match) {
-    throw new Error(`远程${resolved.action === 'rollback' ? '回滚' : '校验'}未返回执行状态标记，无法确认结果。`)
+    throw new Error(`远程${actionLabels[resolved.action]}未返回执行状态标记，无法确认结果。`)
   }
   const code = Number(match[1])
   if (code !== 0) {
-    throw new Error(`远程${resolved.action === 'rollback' ? '回滚' : '校验'}执行失败，退出码 ${code}。`)
+    const error = new Error(`远程${actionLabels[resolved.action]}执行失败，退出码 ${code}。`)
+    error.code = code
+    throw error
   }
   return code
 }

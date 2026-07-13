@@ -50,8 +50,14 @@ const endpointIdentityFields = [
 const normalizedOperationFields = [
   'id', 'source', 'command', 'title', 'state', 'createdAt', 'updatedAt',
   'metadata', 'risk', 'reversible', 'recoveryProvider',
-  'requiresConfirmation', 'reason'
+  'requiresConfirmation', 'reason', 'plan', 'artifacts', 'audit',
+  'recoveryReadyAt', 'executionId', 'error', 'failedAt', 'completedAt',
+  'timeoutMs', 'prepareTimeoutMs', 'executeTimeoutMs',
+  'rollbackTimeoutMs', 'verifyTimeoutMs'
 ]
+const redactedOperationFields = new Set([
+  'plan', 'artifacts', 'audit', 'error'
+])
 const safetyRequestInputFields = [
   'id', 'source', 'command', 'title', 'endpoint', 'state', 'createdAt',
   'updatedAt', 'metadata'
@@ -114,6 +120,11 @@ export function normalizeOperation (operation = {}, options = {}) {
   const normalized = projectDefinedFields(operation, normalizedOperationFields)
   if (normalized.metadata !== undefined) {
     normalized.metadata = redactSensitiveData(normalized.metadata)
+  }
+  for (const field of redactedOperationFields) {
+    if (normalized[field] !== undefined) {
+      normalized[field] = redactSensitiveData(normalized[field])
+    }
   }
   normalizeClassification(operation, normalized)
   return {
