@@ -1,0 +1,131 @@
+.agent-task-runner-modal
+  .ant-modal-body
+    padding 14px
+
+.agent-task-runner-body
+  max-height calc(100vh - 220px)
+  min-height 180px
+  overflow-y auto
+
+.agent-task-loading-space
+  height 150px
+
+.agent-task-summary
+  margin 12px 0
+  padding 10px 12px
+  border-left 3px solid var(--primary)
+  background var(--main-light)
+  color var(--text)
+  line-height 1.6
+
+.agent-task-step-list
+  display flex
+  gap 8px
+  flex-direction column
+
+.agent-task-step
+  padding 10px 12px
+  border 1px solid var(--main-darker)
+  border-radius 6px
+  background var(--main)
+
+.agent-task-step.running
+  border-color var(--primary)
+
+.agent-task-step.failed
+  border-color var(--error)
+
+.agent-task-step header
+  display flex
+  align-items flex-start
+  justify-content space-between
+  gap 10px
+
+.agent-task-step p
+  margin 7px 0
+  color var(--text-light)
+  font-size 12px
+  line-height 1.5
+
+.agent-task-step > pre
+.agent-task-output pre
+  margin 0
+  padding 8px 10px
+  overflow auto
+  white-space pre-wrap
+  overflow-wrap anywhere
+  background var(--main-light)
+  color var(--text)
+  font-family monospace
+  font-size 12px
+  line-height 1.5
+
+.agent-task-step small
+  display block
+  margin-top 6px
+  color var(--text-disabled)
+
+.agent-task-signals
+.agent-task-final
+  margin-top 10px
+  padding 10px 12px
+  border: 1px solid var(--main-darker)
+  border-radius 6px
+  color var(--text-light)
+  font-size 12px
+  line-height 1.6
+
+.agent-task-signals ul
+  margin 5px 0 10px
+  padding-left 20px
+
+.agent-task-progress-head
+  display grid
+  grid-template-columns minmax(180px, .6fr) minmax(220px, 1fr)
+  align-items center
+  gap 16px
+  margin-bottom 10px
+
+.agent-task-progress-head > div
+  display flex
+  gap 8px
+  flex-direction column
+
+.agent-task-progress-head span
+  color var(--text-disabled)
+  font-size 12px
+
+.agent-task-output
+  margin-top 8px
+
+.agent-task-output > span
+  display block
+  margin-bottom 4px
+  color var(--text-disabled)
+  font-size 12px
+
+.agent-task-output pre
+  max-height 160px
+
+.agent-task-step-error
+  margin-top 7px
+  color var(--error)
+  font-size 12px
+
+.agent-task-final p
+  margin 4px 0 10px
+
+@media (max-width: 760px)
+  .agent-task-runner-modal
+    width calc(100vw - 20px) !important
+    max-width none
+
+  .agent-task-runner-body
+    max-height calc(100vh - 190px)
+
+  .agent-task-progress-head
+    grid-template-columns 1fr
+
+  .agent-task-runner-modal .ant-modal-footer .ant-space
+    width 100%
+    flex-wrap wrap

@@ -1,5 +1,6 @@
 import { redactAuditText, redactSensitiveData } from './audit-redaction.js'
 import { classifyCommand } from './command-classifier.js'
+import { assertSameSessionEndpoint } from './endpoint-guard.js'
 import { finalTaskStatuses, taskStatuses } from './transaction-store.js'
 import {
   collectBoundedRemoteOutput,
@@ -180,6 +181,9 @@ export function createTaskRunner (options = {}) {
   const patch = bindStoreMethod(store, 'patch', 'patchTask')
   const timestamp = resolveClock(options.now)
   const onEvent = typeof options.onEvent === 'function' ? options.onEvent : null
+  const getCurrentEndpoint = typeof options.getCurrentEndpoint === 'function'
+    ? options.getCurrentEndpoint
+    : null
   const queues = new Map()
   const activeExecutions = new Map()
   const cancellationRequests = new Set()
@@ -210,6 +214,43 @@ export function createTaskRunner (options = {}) {
       steps,
       updatedAt: timestamp()
     })
+  }
+
+  async function verifyTaskEndpoint (task, index) {
+    if (!getCurrentEndpoint && !task.endpoint) return task
+    const stepIndex = index ?? task.steps.findIndex(step => step.status !== 'completed')
+    try {
+      if (!getCurrentEndpoint) {
+        throw new Error('缺少当前服务器端点复核能力，已停止任务。')
+      }
+      assertSameSessionEndpoint(task.endpoint, await getCurrentEndpoint(task))
+      return task
+    } catch (error) {
+      const failure = sanitizeError(error, '当前 SSH 连接不可用，已停止任务。')
+      const completedCount = task.steps.filter(step => step.status === 'completed').length
+      const status = completedCount > 0
+        ? taskStatuses.partiallyCompleted
+        : taskStatuses.failed
+      if (stepIndex < 0) {
+        await patch(task.id, {
+          status,
+          error: failure.message,
+          completedAt: timestamp(),
+          updatedAt: timestamp()
+        })
+      } else {
+        await updateStep(task, stepIndex, {
+          status: 'failed',
+          error: failure.message
+        }, {
+          status,
+          error: failure.message,
+          completedAt: timestamp()
+        })
+        emit(task.id, task.steps[stepIndex].id, 'failed', failure.message)
+      }
+      throw failure
+    }
   }
 
   async function cancelExecution (active) {
@@ -367,6 +408,7 @@ export function createTaskRunner (options = {}) {
         throw new Error('必须先确认计划才能运行任务。')
       }
       await assertPlanBinding(task)
+      task = await verifyTaskEndpoint(task)
       if (runOptions.signal?.aborted || cancellationRequests.has(task.id)) {
         task = await patch(task.id, {
           status: taskStatuses.cancelled,
@@ -386,6 +428,7 @@ export function createTaskRunner (options = {}) {
       for (let index = 0; index < task.steps.length; index += 1) {
         const step = task.steps[index]
         if (step.status === 'completed') continue
+        task = await verifyTaskEndpoint(task, index)
         const classification = classifyCommand(step.command)
         if (classification.risk !== 'readonly') {
           task = await updateStep(task, index, {

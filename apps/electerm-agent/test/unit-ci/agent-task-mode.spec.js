@@ -25,6 +25,16 @@ test('Agent task mode prompt requires plan confirmation readonly execution and f
   assert.match(prompt, /confirm_agent_plan/)
 })
 
+test('Agent shared prompt keeps structured server diagnostics strictly readonly', async () => {
+  const { buildAgentTaskModePrompt } = await import(taskModeModuleUrl)
+  const prompt = buildAgentTaskModePrompt()
+
+  assert.match(prompt, /summary.*steps.*expectedSignals.*stopConditions/s)
+  assert.match(prompt, /classifyCommand|共享命令分类/)
+  assert.match(prompt, /只读诊断/)
+  assert.match(prompt, /不得执行.*修改|不允许.*修改/)
+})
+
 test('Agent command classifier separates readonly diagnostics from dangerous operations', async () => {
   const {
     classifyAgentCommand

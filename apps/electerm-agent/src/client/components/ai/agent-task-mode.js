@@ -80,7 +80,9 @@ export function buildAgentTaskModePrompt () {
 4. 计划确认后，优先执行只读命令收集证据，例如状态、日志、端口、磁盘、内存、进程和配置读取。
 5. 危险命令必须解释影响，并在普通确认后再进行二次确认。
 6. 每轮任务结束时给出总结报告：结论、证据、风险、建议下一步。
-7. 如果用户只想聊天，不要强行进入任务模式。`
+7. 服务器异常只读诊断计划使用严格 JSON：summary、steps、expectedSignals、stopConditions。
+8. 诊断命令必须通过共享命令分类 classifyCommand，只有 readonly 可执行；不得执行任何修改、未知或禁止命令。
+9. 如果用户只想聊天，不要强行进入任务模式。`
 }
 
 export function buildAgentPlanConfirmationMessage (args = {}) {

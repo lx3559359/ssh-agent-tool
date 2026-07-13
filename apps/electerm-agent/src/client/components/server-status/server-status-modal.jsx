@@ -39,6 +39,14 @@ import {
   buildServerStatusMarkdown
 } from './server-status-report.js'
 import { buildServerStatusAiPrompt } from './server-status-ai-context.js'
+import AgentTaskRunner from '../ai/agent-task-runner.jsx'
+import { isDiagnosticTargetAbnormal } from '../ai/diagnostic-plan.js'
+import {
+  agentTaskRegistry,
+  installSafetyTaskCapability,
+  recoverOrphanedAgentTasks
+} from '../ai/agent-task-registry.js'
+import * as transactionStore from '../../common/safety-transactions/transaction-store.js'
 import './server-status-modal.styl'
 
 const customRulesKey = 'shellpilot-server-platform-rules'
@@ -172,9 +180,41 @@ export default function ServerStatusModal ({ open, onClose, store, tab = {} }) {
   const [showRules, setShowRules] = useState(false)
   const [customRules, setCustomRules] = useState(() => ls.safeGetItemJSON(customRulesKey, []))
   const [ruleDraft, setRuleDraft] = useState(emptyRuleDraft)
+  const [diagnosticTarget, setDiagnosticTarget] = useState(null)
   const scanRef = useRef(0)
   const autoScanRef = useRef('')
+  const liveTabRef = useRef(tab)
+  liveTabRef.current = tab
   const snapshot = snapshots[tab.id]
+
+  useEffect(() => {
+    installSafetyTaskCapability(store, agentTaskRegistry)
+    recoverOrphanedAgentTasks({
+      store: transactionStore,
+      registry: agentTaskRegistry
+    }).catch(error => window.store.onError(error))
+  }, [store])
+
+  function getCurrentDiagnosticEndpoint () {
+    const terminal = resolveTerminal(liveTabRef.current)
+    if (!terminal) throw new Error('当前 SSH 连接已断开，诊断任务已停止。')
+    return terminal.getTerminalSafetyEndpoint()
+  }
+
+  function openDiagnostic (type, data) {
+    const terminal = resolveTerminal(tab)
+    if (!snapshot || !terminal) {
+      message.warning('当前 SSH 会话已断开，无法启动 AI 诊断。')
+      return
+    }
+    setDiagnosticTarget({
+      type,
+      data,
+      snapshot,
+      terminal,
+      requestId: `${type}-${Date.now()}`
+    })
+  }
 
   async function scanCurrentServer () {
     const terminal = resolveTerminal(tab)
@@ -361,21 +401,34 @@ export default function ServerStatusModal ({ open, onClose, store, tab = {} }) {
                 <Tag>{platform.confidence === 'high' ? '高置信度' : platform.confidence === 'medium' ? '中置信度' : '低置信度'}</Tag>
                 <Tag>{platform.services?.length || 0} 个服务</Tag>
                 {platform.containers?.length ? <Tag>{platform.containers.length} 个容器</Tag> : null}
+                {isDiagnosticTargetAbnormal(platform)
+                  ? (
+                    <Tooltip title='生成该异常平台的只读 AI 诊断计划'>
+                      <Button size='small' disabled={loading} icon={<RobotOutlined />} onClick={event => { event.preventDefault(); event.stopPropagation(); openDiagnostic('platform', platform) }}>AI 诊断</Button>
+                    </Tooltip>
+                    )
+                  : null}
               </span>
             </summary>
             <div className='server-status-evidence'>
               识别依据：{(platform.evidence || []).map(item => item.value || item.type).join('、') || '服务清单'}
             </div>
             {(platform.services || []).slice(0, compact ? 8 : 80).map(service => (
-              <div className='server-status-row' key={service.name}>
+              <div className={`server-status-row ${isDiagnosticTargetAbnormal(service) ? 'has-diagnostic' : ''}`} key={service.name}>
                 <span title={service.description}>{service.name}</span>
                 <span>{service.activeState || service.subState || '未知'}</span>
                 <span>{service.workingDirectory || service.fragmentPath || ''}</span>
+                {isDiagnosticTargetAbnormal(service)
+                  ? <Tooltip title='生成该异常服务的只读 AI 诊断计划'><Button size='small' type='text' disabled={loading} icon={<RobotOutlined />} onClick={() => openDiagnostic('service', service)}>AI 诊断</Button></Tooltip>
+                  : null}
               </div>
             ))}
             {(platform.containers || []).slice(0, compact ? 5 : 50).map(container => (
-              <div className='server-status-row' key={`${container.engine}-${container.name}`}>
+              <div className={`server-status-row ${isDiagnosticTargetAbnormal(container) ? 'has-diagnostic' : ''}`} key={`${container.engine}-${container.name}`}>
                 <span>{container.name}</span><span>{container.status}</span><span>{container.ports}</span>
+                {isDiagnosticTargetAbnormal(container)
+                  ? <Tooltip title='生成该异常容器的只读 AI 诊断计划'><Button size='small' type='text' disabled={loading} icon={<RobotOutlined />} onClick={() => openDiagnostic('container', container)}>AI 诊断</Button></Tooltip>
+                  : null}
               </div>
             ))}
           </details>
@@ -390,6 +443,9 @@ export default function ServerStatusModal ({ open, onClose, store, tab = {} }) {
     return alerts.map((alert, index) => (
       <div className={`server-status-alert ${alert.status || 'warning'}`} key={`${alert.code}-${index}`}>
         {statusTag(alert.status)}<span>{alert.message || alert.target || alert.code}</span>
+        {isDiagnosticTargetAbnormal({ status: 'warning', ...alert })
+          ? <Tooltip title='生成该告警的只读 AI 诊断计划'><Button size='small' type='text' disabled={loading} icon={<RobotOutlined />} onClick={() => openDiagnostic('alert', alert)}>AI 诊断</Button></Tooltip>
+          : null}
       </div>
     ))
   }
@@ -530,7 +586,12 @@ export default function ServerStatusModal ({ open, onClose, store, tab = {} }) {
         <header>Docker / Podman 容器</header>
         <div className='server-status-section-scroll'>
           {containers.map(item => (
-            <div className='server-status-row' key={`${item.engine}-${item.name}`}><span>{item.name}</span><span>{item.status}</span><span>{item.composeProject || item.image}</span></div>
+            <div className={`server-status-row ${isDiagnosticTargetAbnormal(item) ? 'has-diagnostic' : ''}`} key={`${item.engine}-${item.name}`}>
+              <span>{item.name}</span><span>{item.status}</span><span>{item.composeProject || item.image}</span>
+              {isDiagnosticTargetAbnormal(item)
+                ? <Tooltip title='生成该异常容器的只读 AI 诊断计划'><Button size='small' type='text' disabled={loading} icon={<RobotOutlined />} onClick={() => openDiagnostic('container', item)}>AI 诊断</Button></Tooltip>
+                : null}
+            </div>
           ))}
         </div>
       </section>
@@ -569,48 +630,59 @@ export default function ServerStatusModal ({ open, onClose, store, tab = {} }) {
   }, {})
 
   return (
-    <Modal
-      title={<Space><DashboardOutlined />服务器状态中心</Space>}
-      open={open}
-      onCancel={onClose}
-      footer={null}
-      width={1180}
-      destroyOnClose={false}
-      className='server-status-modal'
-    >
-      <div className='server-status-toolbar'>
-        <div className='server-status-endpoint'>
-          {endpointUser(tab) ? `${endpointUser(tab)}@` : ''}{tab.host || '未连接'}:{tab.port || 22}
-          {snapshot?.system?.hostname ? <span> · {snapshot.system.hostname}</span> : null}
-        </div>
-        <Space wrap>
-          <Tooltip title='复制 Markdown 摘要'><Button icon={<CopyOutlined />} disabled={!snapshot} onClick={handleCopy}>复制结果</Button></Tooltip>
-          <Button icon={<SettingOutlined />} onClick={() => setShowRules(true)}>识别规则</Button>
-          <Button icon={<DownloadOutlined />} disabled={!snapshot} onClick={() => handleExport('markdown')}>导出 Markdown</Button>
-          <Button icon={<DownloadOutlined />} disabled={!snapshot} onClick={() => handleExport('json')}>导出 JSON</Button>
-          <Button icon={<RobotOutlined />} disabled={!snapshot} onClick={handleSendToAi}>发送给 AI</Button>
-          <Button type='primary' icon={<ReloadOutlined />} loading={loading} onClick={scanCurrentServer}>刷新检测</Button>
-        </Space>
-      </div>
-      {renderSummary()}
-      <Spin spinning={loading} tip='正在执行只读检测，请稍候…'>
-        <div className='server-status-content'>
-          {!snapshot && !loading
-            ? <Empty description='尚未获取服务器状态，点击“刷新检测”开始。' />
-            : snapshot
-              ? <Tabs activeKey={activeTab} onChange={setActiveTab} items={tabItems} />
-              : <div className='server-status-loading-placeholder' />}
-        </div>
-      </Spin>
-      {snapshot
-        ? (
-          <div className='server-status-footer'>
-            <span>检测完成：{probeCounts.success || 0} 项成功，{probeCounts.permission || 0} 项权限受限，{(probeCounts.error || 0) + (probeCounts.timeout || 0)} 项失败；未执行任何修改命令。</span>
-            <span>{new Date(snapshot.collectedAt).toLocaleString()}</span>
+    <>
+      <Modal
+        title={<Space><DashboardOutlined />服务器状态中心</Space>}
+        open={open}
+        onCancel={onClose}
+        footer={null}
+        width={1180}
+        destroyOnClose={false}
+        className='server-status-modal'
+      >
+        <div className='server-status-toolbar'>
+          <div className='server-status-endpoint'>
+            {endpointUser(tab) ? `${endpointUser(tab)}@` : ''}{tab.host || '未连接'}:{tab.port || 22}
+            {snapshot?.system?.hostname ? <span> · {snapshot.system.hostname}</span> : null}
           </div>
-          )
-        : null}
-      {renderRulesModal()}
-    </Modal>
+          <Space wrap>
+            <Tooltip title='复制 Markdown 摘要'><Button icon={<CopyOutlined />} disabled={!snapshot} onClick={handleCopy}>复制结果</Button></Tooltip>
+            <Button icon={<SettingOutlined />} onClick={() => setShowRules(true)}>识别规则</Button>
+            <Button icon={<DownloadOutlined />} disabled={!snapshot} onClick={() => handleExport('markdown')}>导出 Markdown</Button>
+            <Button icon={<DownloadOutlined />} disabled={!snapshot} onClick={() => handleExport('json')}>导出 JSON</Button>
+            <Button icon={<RobotOutlined />} disabled={!snapshot} onClick={handleSendToAi}>发送给 AI</Button>
+            <Button type='primary' icon={<ReloadOutlined />} loading={loading} onClick={scanCurrentServer}>刷新检测</Button>
+          </Space>
+        </div>
+        {renderSummary()}
+        <Spin spinning={loading} tip='正在执行只读检测，请稍候…'>
+          <div className='server-status-content'>
+            {!snapshot && !loading
+              ? <Empty description='尚未获取服务器状态，点击“刷新检测”开始。' />
+              : snapshot
+                ? <Tabs activeKey={activeTab} onChange={setActiveTab} items={tabItems} />
+                : <div className='server-status-loading-placeholder' />}
+          </div>
+        </Spin>
+        {snapshot
+          ? (
+            <div className='server-status-footer'>
+              <span>检测完成：{probeCounts.success || 0} 项成功，{probeCounts.permission || 0} 项权限受限，{(probeCounts.error || 0) + (probeCounts.timeout || 0)} 项失败；未执行任何修改命令。</span>
+              <span>{new Date(snapshot.collectedAt).toLocaleString()}</span>
+            </div>
+            )
+          : null}
+        {renderRulesModal()}
+      </Modal>
+      <AgentTaskRunner
+        open={Boolean(diagnosticTarget)}
+        onClose={() => setDiagnosticTarget(null)}
+        snapshot={diagnosticTarget?.snapshot}
+        target={diagnosticTarget}
+        store={store}
+        terminal={diagnosticTarget?.terminal}
+        getCurrentEndpoint={getCurrentDiagnosticEndpoint}
+      />
+    </>
   )
 }

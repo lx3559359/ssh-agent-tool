@@ -2020,3 +2020,109 @@ test('an event callback failure cannot break task execution', async () => {
 
   assert.equal((await runner.run(task.id)).status, 'completed')
 })
+
+test('task runner checks the exact SSH session before starting the first step', async () => {
+  const { createTaskRunner } = await importDomainModule('task-runner.js')
+  const store = createTaskStore()
+  const calls = []
+  const endpoint = {
+    host: 'prod.example.com',
+    port: 22,
+    username: 'root',
+    tabId: 'tab-1',
+    pid: 1001
+  }
+  const runner = createTaskRunner({
+    runRemote: async command => {
+      calls.push(command)
+      return { output: 'must not run', code: 0 }
+    },
+    cancelRemote: async () => {},
+    getCurrentEndpoint: async () => ({ ...endpoint, host: 'other.example.com' }),
+    store,
+    now: createClock()
+  })
+  const task = await runner.create(readonlyPlan({
+    id: 'task-endpoint-before-first',
+    endpoint,
+    steps: [{ id: 'first', command: '/usr/bin/uptime', timeoutMs: 100 }]
+  }))
+  await runner.confirmPlan(task.id)
+
+  await assert.rejects(runner.run(task.id), /端点不一致/)
+  const failed = await store.get(task.id)
+  assert.equal(failed.status, 'failed')
+  assert.equal(failed.steps[0].status, 'failed')
+  assert.deepEqual(calls, [])
+})
+
+test('task runner fails closed when an endpoint-bound task has no live endpoint resolver', async () => {
+  const { createTaskRunner } = await importDomainModule('task-runner.js')
+  const store = createTaskStore()
+  const calls = []
+  const runner = createTaskRunner({
+    runRemote: async command => {
+      calls.push(command)
+      return { output: 'must not run', code: 0 }
+    },
+    cancelRemote: async () => {},
+    store,
+    now: createClock()
+  })
+  const task = await runner.create(readonlyPlan({
+    id: 'task-endpoint-resolver-required',
+    endpoint: {
+      host: 'prod.example.com',
+      port: 22,
+      username: 'root',
+      tabId: 'tab-1',
+      pid: 1001
+    },
+    steps: [{ id: 'first', command: '/usr/bin/uptime', timeoutMs: 100 }]
+  }))
+  await runner.confirmPlan(task.id)
+
+  await assert.rejects(runner.run(task.id), /端点|连接|复核/)
+  assert.equal((await store.get(task.id)).status, 'failed')
+  assert.deepEqual(calls, [])
+})
+
+test('task runner rechecks the SSH session before every later step', async () => {
+  const { createTaskRunner } = await importDomainModule('task-runner.js')
+  const store = createTaskStore()
+  const calls = []
+  let endpointChecks = 0
+  const endpoint = {
+    host: 'prod.example.com',
+    port: 22,
+    username: 'root',
+    tabId: 'tab-1',
+    pid: 1001
+  }
+  const runner = createTaskRunner({
+    runRemote: async command => {
+      calls.push(command)
+      return { output: `output for ${command}`, code: 0 }
+    },
+    cancelRemote: async () => {},
+    getCurrentEndpoint: async () => {
+      endpointChecks += 1
+      return endpointChecks < 3 ? endpoint : { ...endpoint, pid: 2002 }
+    },
+    store,
+    now: createClock()
+  })
+  const task = await runner.create(readonlyPlan({
+    id: 'task-endpoint-between-steps',
+    endpoint
+  }))
+  await runner.confirmPlan(task.id)
+
+  await assert.rejects(runner.run(task.id), /会话端点不一致/)
+  const failed = await store.get(task.id)
+  assert.equal(endpointChecks, 3)
+  assert.deepEqual(calls, ['/usr/bin/uptime'])
+  assert.equal(failed.status, 'partially-completed')
+  assert.equal(failed.steps[0].status, 'completed')
+  assert.equal(failed.steps[1].status, 'failed')
+})
