@@ -596,13 +596,16 @@ function buildFirewalldProvider (invocation, id) {
   ]
   const verify = [
     ...scriptHeader(id),
-    `if ${query} >/dev/null 2>&1; then current=1; else current=0; fi`,
+    `if ${query} >/dev/null 2>&1; then query_rc=0; else query_rc=$?; fi`,
+    `case "$query_rc" in 0) current=1;; 1) current=0;; *) echo ${shellQuote('firewalld 规则查询失败，退出码')} "$query_rc" >&2; exit 43;; esac`,
     'expected=$(cat "$operation_dir/backup/rule-present")',
     'printf \'present=%s\\n\' "$current"',
     '[ "$current" = "$expected" ]'
   ]
   return {
-    captureCommands: [`if ${query} >/dev/null 2>&1; then printf '1\\n' > "$operation_dir/backup/rule-present"; else printf '0\\n' > "$operation_dir/backup/rule-present"; fi`],
+    captureCommands: [
+      `if ${query} >/dev/null 2>&1; then query_rc=0; else query_rc=$?; fi; case "$query_rc" in 0) printf '1\\n' > "$operation_dir/backup/rule-present";; 1) printf '0\\n' > "$operation_dir/backup/rule-present";; *) echo ${shellQuote('firewalld 规则查询失败，退出码')} "$query_rc" >&2; exit 42;; esac`
+    ],
     rollbackScript: rollback.join('\n') + '\n',
     verifyScript: verify.join('\n') + '\n',
     summary: `记录 firewalld 端口规则 ${parsed.port} 修改前是否存在。`,

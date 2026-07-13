@@ -1,6 +1,9 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
+const fs = require('node:fs')
+const os = require('node:os')
 const path = require('node:path')
+const { spawnSync } = require('node:child_process')
 const { pathToFileURL } = require('node:url')
 
 const domainRoot = path.resolve(
@@ -19,6 +22,27 @@ async function buildChange (command, id = 'op-1') {
     source: 'terminal',
     endpoint: { host: 'prod.example.com', username: 'root' },
     command
+  })
+}
+
+function shellPath (value) {
+  if (process.platform !== 'win32') return value
+  return value
+    .replace(/^([A-Za-z]):/, (_, drive) => `/${drive.toLowerCase()}`)
+    .replace(/\\/g, '/')
+}
+
+function runBash (command, home) {
+  const windowsBash = 'C:\\Program Files\\Git\\bin\\bash.exe'
+  const executable = process.platform === 'win32' && fs.existsSync(windowsBash)
+    ? windowsBash
+    : 'bash'
+  return spawnSync(executable, ['--noprofile', '--norc', '-c', command], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      HOME: shellPath(home)
+    }
   })
 }
 
@@ -154,6 +178,51 @@ test('firewalld provider rejects commands that rely on the default zone', async 
 
   assert.equal(change.reversible, true)
   assert.throws(() => buildRecoveryPlan(change), /zone|区域|显式|拒绝/)
+})
+
+test('firewalld query rc=2 fails prepare and verify instead of recording absence', async () => {
+  const { buildRecoveryPlan } = await importDomainModule('recovery-providers.js')
+  const prepareHome = fs.mkdtempSync(path.join(os.tmpdir(), 'shellpilot-firewalld-prepare-'))
+  const verifyHome = fs.mkdtempSync(path.join(os.tmpdir(), 'shellpilot-firewalld-verify-'))
+
+  try {
+    const preparePlan = buildRecoveryPlan(await buildChange(
+      'firewall-cmd --zone=public --add-port=443/tcp',
+      'firewall-query-prepare'
+    ))
+    const prepareResult = runBash(
+      `function firewall-cmd { return 2; }\n${preparePlan.prepareCommand}`,
+      prepareHome
+    )
+    assert.equal(prepareResult.status, 42, prepareResult.stderr || prepareResult.stdout)
+    assert.match(prepareResult.stderr, /firewalld.*查询.*退出码 2/)
+    assert.equal(fs.existsSync(path.join(
+      prepareHome,
+      '.shellpilot/operations/firewall-query-prepare/backup/rule-present'
+    )), false)
+
+    const verifyPlan = buildRecoveryPlan(await buildChange(
+      'firewall-cmd --zone=public --remove-port=80/tcp',
+      'firewall-query-verify'
+    ))
+    const setupResult = runBash(
+      `function firewall-cmd { return 1; }\n${verifyPlan.prepareCommand}`,
+      verifyHome
+    )
+    assert.equal(setupResult.status, 0, setupResult.stderr || setupResult.stdout)
+
+    const verifyResult = runBash(
+      'function firewall-cmd { return 2; }\n' +
+        '. "$HOME/.shellpilot/operations/firewall-query-verify/verify.sh"',
+      verifyHome
+    )
+    assert.equal(verifyResult.status, 43, verifyResult.stderr || verifyResult.stdout)
+    assert.match(verifyResult.stderr, /firewalld.*查询.*退出码 2/)
+    assert.doesNotMatch(verifyResult.stdout, /present=0/)
+  } finally {
+    fs.rmSync(prepareHome, { recursive: true, force: true })
+    fs.rmSync(verifyHome, { recursive: true, force: true })
+  }
 })
 
 test('firewalld provider rejects multiple changes in one invocation', async () => {
