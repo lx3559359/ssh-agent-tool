@@ -356,14 +356,14 @@ test('extracts only mapped Docker and Podman ports from container port fields', 
   assert.equal(context.processes.some(item => [20, 168, 192].includes(item.port)), false)
 })
 
-test('accepts a readonly sk-prefixed service name but rejects a real provider key', async () => {
+test('accepts a long sk-prefixed systemd unit but rejects a real provider key', async () => {
   const { validateDiagnosticPlan } = await import(diagnosticPlanUrl)
   const endpoint = { host: 'prod.example.com', port: 22, username: 'root' }
   const accepted = validateDiagnosticPlan(validPlan({
     steps: [{
       title: '读取服务状态',
       purpose: '确认服务状态',
-      command: '/usr/bin/systemctl status sk-agent.service --no-pager',
+      command: '/usr/bin/systemctl status sk-observability-agent-production.service --no-pager',
       timeout: 10
     }]
   }), { endpoint })
@@ -374,7 +374,7 @@ test('accepts a readonly sk-prefixed service name but rejects a real provider ke
       steps: [{
         title: '泄露凭据',
         purpose: '不应接受真实密钥',
-        command: '/usr/bin/printf sk-proj-live-1234567890abcdefghijklmnop',
+        command: '/usr/bin/printf sk-ProJ-A1B2C3D4E5F6G7H8I9J0KLMNOP',
         timeout: 10
       }]
     }), { endpoint }),

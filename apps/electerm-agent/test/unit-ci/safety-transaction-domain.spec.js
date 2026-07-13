@@ -840,21 +840,25 @@ test('redacts audit credentials without altering ordinary command text', async (
 test('audit redaction removes CLI credentials and real provider keys without rewriting service names', async () => {
   const { redactAuditText } = await importDomainModule('audit-redaction.js')
   const redacted = redactAuditText([
-    '/usr/bin/app --api-key sk-proj-live-1234567890abcdefghijklmnop --check',
+    '/usr/bin/app --api-key sk-ProJ-A1B2C3D4E5F6G7H8I9J0KLMNOP --check',
     '/usr/bin/app --password "cli password" --token plain-token --status',
     'ExecStart=/usr/bin/worker --api_key=sk-worker-abcdefghijklmnopqrstuvwxyz123456',
     'provider returned sk-response-abcdefghijklmnopqrstuvwxyz123456 in output',
-    'systemctl status sk-agent.service --no-pager',
+    'systemctl status sk-observability-agent-production.service --no-pager',
+    'systemctl status sk-observability-agent-production.socket --no-pager',
+    'systemctl status sk-observability-agent-production.target --no-pager',
     'short label sk-x remains ordinary text',
     'systemctl status app.service'
   ].join('\n'))
 
-  assert.doesNotMatch(redacted, /sk-proj-live|cli password|plain-token|sk-worker|sk-response/)
+  assert.doesNotMatch(redacted, /sk-ProJ-A1B2|cli password|plain-token|sk-worker|sk-response/)
   assert.match(redacted, /--api-key \[REDACTED\] --check/)
   assert.match(redacted, /--password "\[REDACTED\]" --token \[REDACTED\] --status/)
   assert.match(redacted, /--api_key=\[REDACTED\]/)
   assert.match(redacted, /provider returned \[REDACTED\] in output/)
-  assert.match(redacted, /systemctl status sk-agent\.service --no-pager/)
+  assert.match(redacted, /systemctl status sk-observability-agent-production\.service --no-pager/)
+  assert.match(redacted, /systemctl status sk-observability-agent-production\.socket --no-pager/)
+  assert.match(redacted, /systemctl status sk-observability-agent-production\.target --no-pager/)
   assert.match(redacted, /short label sk-x remains ordinary text/)
   assert.match(redacted, /systemctl status app\.service/)
 })

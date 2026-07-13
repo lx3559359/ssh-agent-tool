@@ -118,6 +118,7 @@ export async function requestDiagnosticPlanText ({
     if (!content.trim()) throw new Error('AI 未返回诊断计划。')
     return content
   } catch (error) {
+    if (sessionId) await stopStream(sessionId)
     if (aborted || error?.cancelled) throw cancelledRequestError()
     throw requestError(error, 'AI 诊断计划请求失败。')
   } finally {

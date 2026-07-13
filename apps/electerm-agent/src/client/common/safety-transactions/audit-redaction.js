@@ -89,7 +89,7 @@ function redactCliOptionValues (text) {
 
 function redactProviderKeys (text) {
   return text.replace(
-    /(^|[^A-Za-z0-9_-])sk-[A-Za-z0-9][A-Za-z0-9_-]{19,}(?=$|[^A-Za-z0-9_-])/gim,
+    /(^|[^A-Za-z0-9_-])sk-[A-Za-z0-9][A-Za-z0-9_-]{19,}(?!\.(?:service|socket|target|timer|path|mount|automount|swap|slice|scope|device|snapshot)(?=$|[^A-Za-z0-9_-]))(?=$|[^A-Za-z0-9_-])/gim,
     `$1${redacted}`
   )
 }

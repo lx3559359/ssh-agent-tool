@@ -467,6 +467,85 @@ test('AI plan request stops a stream that arrives after initial IPC cancellation
   assert.deepEqual(calls.at(-1), ['stopStream', 'late-diagnostic-stream'])
 })
 
+test('AI plan request stops an established stream once for every polling failure', async t => {
+  const { requestDiagnosticPlanText } = await import(controllerUrl)
+  const cases = [
+    ['reject', () => Promise.reject(new Error('poll-reject-failure'))],
+    ['error-result', async () => ({ error: 'poll-error-result-failure' })],
+    ['parse', async () => {
+      const result = { hasMore: false }
+      Object.defineProperty(result, 'content', {
+        get () { throw new Error('poll-parse-failure') }
+      })
+      return result
+    }]
+  ]
+
+  for (const [label, pollResult] of cases) {
+    await t.test(label, async () => {
+      const calls = []
+      const request = requestDiagnosticPlanText({
+        prompt: 'target-only-prompt',
+        config: {
+          modelAI: 'selected-model',
+          baseURLAI: 'https://relay.example.com',
+          apiKeyAI: 'selected-key'
+        },
+        pollIntervalMs: 0,
+        runGlobalAsync: (...args) => {
+          calls.push(args)
+          if (args[0] === 'AIchat') {
+            return { isStream: true, sessionId: `poll-${label}`, content: '' }
+          }
+          if (args[0] === 'getStreamContent') return pollResult()
+          if (args[0] === 'stopStream') {
+            return Promise.reject(new Error('stop-stream-cleanup-failure'))
+          }
+          throw new Error(`unexpected action: ${args[0]}`)
+        }
+      })
+
+      await assert.rejects(
+        request,
+        error => new RegExp(`poll-${label}-failure`).test(error.message) &&
+          !/stop-stream-cleanup-failure/.test(error.message)
+      )
+      await new Promise(resolve => setImmediate(resolve))
+      assert.deepEqual(
+        calls.filter(call => call[0] === 'stopStream'),
+        [['stopStream', `poll-${label}`]]
+      )
+    })
+  }
+})
+
+test('AI plan request does not stop a normally completed stream', async () => {
+  const { requestDiagnosticPlanText } = await import(controllerUrl)
+  const calls = []
+  const content = '{"summary":"ok"}'
+  const result = await requestDiagnosticPlanText({
+    prompt: 'target-only-prompt',
+    config: {
+      modelAI: 'selected-model',
+      baseURLAI: 'https://relay.example.com',
+      apiKeyAI: 'selected-key'
+    },
+    pollIntervalMs: 0,
+    runGlobalAsync: async (...args) => {
+      calls.push(args)
+      if (args[0] === 'AIchat') {
+        return { isStream: true, sessionId: 'normal-stream', content: '' }
+      }
+      if (args[0] === 'getStreamContent') return { content, hasMore: false }
+      if (args[0] === 'stopStream') return true
+      throw new Error(`unexpected action: ${args[0]}`)
+    }
+  })
+
+  assert.equal(result, content)
+  assert.equal(calls.some(call => call[0] === 'stopStream'), false)
+})
+
 test('AI plan request fails closed with Chinese redacted configuration and response errors', async () => {
   const { requestDiagnosticPlanText } = await import(controllerUrl)
   let calls = 0
