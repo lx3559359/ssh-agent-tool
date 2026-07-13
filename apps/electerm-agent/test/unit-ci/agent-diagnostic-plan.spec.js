@@ -241,7 +241,7 @@ test('redacts credentials embedded in diagnostic commands and final reports', as
     services: [{
       name: 'app.service',
       activeState: 'failed',
-      execStart: '/usr/bin/app --api-key sk-context-1234567890 --password context-pass'
+      execStart: '/usr/bin/app --api-key sk-context-1234567890abcdefghijklmnop --password context-pass'
     }],
     resources: {
       processes: [{
@@ -267,7 +267,7 @@ test('redacts credentials embedded in diagnostic commands and final reports', as
       steps: [{
         title: '读取状态',
         purpose: '收集证据',
-        command: '/usr/bin/app --api-key sk-report-1234567890 --password report-pass',
+        command: '/usr/bin/app --api-key sk-report-1234567890abcdefghijklmnop --password report-pass',
         output: 'token=output-token and sk-output-abcdefghijklmnop',
         error: '--token step-error-token'
       }]
@@ -316,6 +316,70 @@ test('matches related diagnostic identities on token boundaries only', async () 
   assert.match(serialized, /app-worker/)
   assert.match(serialized, /app:latest/)
   assert.doesNotMatch(serialized, /apparmor/)
+})
+
+test('extracts only mapped Docker and Podman ports from container port fields', async () => {
+  const { buildTargetedDiagnosticContext } = await import(diagnosticPlanUrl)
+  const context = buildTargetedDiagnosticContext({
+    snapshot: {
+      endpoint: { host: 'prod.example.com', port: 22, username: 'root' },
+      containers: [{
+        name: 'web-gateway',
+        status: 'Exited (1)',
+        ports: [
+          '192.168.1.20:8080->80/tcp',
+          ':::443->443/tcp',
+          '0.0.0.0:80->80/tcp',
+          '80/tcp'
+        ]
+      }],
+      network: {
+        listeningPorts: [20, 168, 192, 8080, 80, 443].map(port => ({
+          port,
+          pid: port,
+          process: `listener-${port}`
+        }))
+      },
+      resources: {
+        processes: [20, 168, 192, 8080, 80, 443].map(port => ({
+          port,
+          pid: 1000 + port,
+          command: `/usr/bin/listener-${port}`
+        }))
+      }
+    },
+    target: { type: 'container', name: 'web-gateway' }
+  })
+
+  assert.deepEqual(context.listeningPorts.map(item => item.port), [8080, 80, 443])
+  assert.deepEqual(context.processes.map(item => item.port), [8080, 80, 443])
+  assert.equal(context.processes.some(item => [20, 168, 192].includes(item.port)), false)
+})
+
+test('accepts a readonly sk-prefixed service name but rejects a real provider key', async () => {
+  const { validateDiagnosticPlan } = await import(diagnosticPlanUrl)
+  const endpoint = { host: 'prod.example.com', port: 22, username: 'root' }
+  const accepted = validateDiagnosticPlan(validPlan({
+    steps: [{
+      title: '读取服务状态',
+      purpose: '确认服务状态',
+      command: '/usr/bin/systemctl status sk-agent.service --no-pager',
+      timeout: 10
+    }]
+  }), { endpoint })
+
+  assert.equal(accepted.steps[0].risk, 'readonly')
+  assert.throws(
+    () => validateDiagnosticPlan(validPlan({
+      steps: [{
+        title: '泄露凭据',
+        purpose: '不应接受真实密钥',
+        command: '/usr/bin/printf sk-proj-live-1234567890abcdefghijklmnop',
+        timeout: 10
+      }]
+    }), { endpoint }),
+    /凭据|敏感|拒绝/
+  )
 })
 
 test('keeps an oversized targeted prompt bounded with complete JSON context', async () => {

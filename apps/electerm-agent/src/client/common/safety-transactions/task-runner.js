@@ -275,13 +275,17 @@ export function createTaskRunner (options = {}) {
     const control = new Promise((resolve, reject) => { rejectControl = reject })
     const active = {
       executionId,
+      started: false,
       cancellationPromise: null,
       stop (reason) {
         if (settled) return Promise.resolve(null)
         if (!stopReason) {
           stopReason = reason
           controller.abort()
-          this.cancellationPromise = cancelExecution(this).then(failure => {
+          const cancellation = this.started
+            ? cancelExecution(this)
+            : Promise.resolve(null)
+          this.cancellationPromise = cancellation.then(failure => {
             rejectControl(failure || (reason === 'timeout'
               ? timeoutError(step.timeoutMs)
               : cancelledError()))
@@ -304,13 +308,21 @@ export function createTaskRunner (options = {}) {
     }, step.timeoutMs)
 
     try {
-      const remote = Promise.resolve().then(() => runRemote(step.command, {
-        timeoutMs: step.timeoutMs,
-        maxOutputBytes: maxAuditPreviewBytes,
-        signal: controller.signal,
-        executionId,
-        phase: 'readonly'
-      }))
+      const remote = Promise.resolve().then(() => {
+        if (stopReason || signal?.aborted || cancellationRequests.has(task.id)) {
+          throw stopReason === 'timeout'
+            ? timeoutError(step.timeoutMs)
+            : cancelledError()
+        }
+        active.started = true
+        return runRemote(step.command, {
+          timeoutMs: step.timeoutMs,
+          maxOutputBytes: maxAuditPreviewBytes,
+          signal: controller.signal,
+          executionId,
+          phase: 'readonly'
+        })
+      })
       const result = await Promise.race([remote, control])
       const code = remoteCode(result)
       const output = (await collectBoundedRemoteOutput(result)).output
@@ -407,7 +419,21 @@ export function createTaskRunner (options = {}) {
       if (task.status !== taskStatuses.awaitingPlanConfirmation || !task.planConfirmedAt) {
         throw new Error('必须先确认计划才能运行任务。')
       }
-      await assertPlanBinding(task)
+      try {
+        await assertPlanBinding(task)
+      } catch (error) {
+        const failure = sanitizeError(error, '任务计划完整性校验失败，已拒绝执行。')
+        const status = task.steps.some(step => step.status === 'completed')
+          ? taskStatuses.partiallyCompleted
+          : taskStatuses.failed
+        await patch(task.id, {
+          status,
+          error: failure.message,
+          completedAt: timestamp(),
+          updatedAt: timestamp()
+        })
+        throw failure
+      }
       task = await verifyTaskEndpoint(task)
       if (runOptions.signal?.aborted || cancellationRequests.has(task.id)) {
         task = await patch(task.id, {
@@ -431,14 +457,25 @@ export function createTaskRunner (options = {}) {
         task = await verifyTaskEndpoint(task, index)
         const classification = classifyCommand(step.command)
         if (classification.risk !== 'readonly') {
+          const failure = sanitizeError(new Error(
+            `只读任务步骤 ${step.id} 的运行时分类为 ${classification.risk}，已拒绝执行。`
+          ))
+          const status = completedCount > 0
+            ? taskStatuses.partiallyCompleted
+            : taskStatuses.failed
           task = await updateStep(task, index, {
             risk: classification.risk,
             readOnly: false,
             reason: classification.reason,
-            status: 'awaiting-confirmation'
-          }, { status: taskStatuses.awaitingChangeConfirmation })
-          emit(task.id, step.id, 'awaiting-confirmation')
-          return task
+            status: 'failed',
+            error: failure.message
+          }, {
+            status,
+            error: failure.message,
+            completedAt: timestamp()
+          })
+          emit(task.id, step.id, 'failed', failure.message)
+          throw failure
         }
         if (cancellationRequests.has(task.id) || runOptions.signal?.aborted) {
           task = await updateStep(task, index, { status: 'cancelled' }, {
@@ -452,6 +489,15 @@ export function createTaskRunner (options = {}) {
 
         task = await updateStep(task, index, { status: 'running' })
         emit(task.id, step.id, 'running')
+        if (cancellationRequests.has(task.id) || runOptions.signal?.aborted) {
+          task = await updateStep(task, index, { status: 'cancelled' }, {
+            status: taskStatuses.cancelled,
+            completedAt: timestamp()
+          })
+          emit(task.id, step.id, 'cancelled')
+          cancellationRequests.delete(task.id)
+          throw cancelledError()
+        }
         try {
           const audit = await runStepRemote(task, task.steps[index], runOptions.signal)
           task = await updateStep(task, index, {

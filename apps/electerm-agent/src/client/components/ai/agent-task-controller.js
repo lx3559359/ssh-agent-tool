@@ -52,13 +52,14 @@ export async function requestDiagnosticPlanText ({
   let sessionId = ''
   let aborted = Boolean(signal?.aborted)
   let abortReject
-  let stopRequested = false
+  const stoppedSessionIds = new Set()
 
-  const stopStream = async () => {
-    if (!sessionId || stopRequested) return
-    stopRequested = true
+  const stopStream = async (value = sessionId) => {
+    const id = String(value || '')
+    if (!id || stoppedSessionIds.has(id)) return
+    stoppedSessionIds.add(id)
     try {
-      await invoke('stopStream', sessionId)
+      await invoke('stopStream', id)
     } catch {}
   }
   const abortPromise = new Promise((resolve, reject) => {
@@ -74,7 +75,7 @@ export async function requestDiagnosticPlanText ({
   const raceAbort = promise => Promise.race([Promise.resolve(promise), abortPromise])
   try {
     if (aborted) throw cancelledRequestError()
-    const initial = await raceAbort(invoke(
+    const initialRequest = Promise.resolve().then(() => invoke(
       'AIchat',
       String(prompt || ''),
       config.modelAI,
@@ -86,6 +87,10 @@ export async function requestDiagnosticPlanText ({
       true,
       config.authHeaderNameAI
     ))
+    initialRequest.then(initial => {
+      if (aborted && initial?.isStream) stopStream(initial.sessionId)
+    }, () => {})
+    const initial = await raceAbort(initialRequest)
     if (initial?.error) {
       throw requestError(initial.error, 'AI 诊断计划请求失败。')
     }
@@ -97,6 +102,10 @@ export async function requestDiagnosticPlanText ({
 
     sessionId = String(initial.sessionId || '')
     if (!sessionId) throw new Error('AI 诊断流缺少会话标识。')
+    if (aborted) {
+      await stopStream(sessionId)
+      throw cancelledRequestError()
+    }
     let content = String(initial.content || '')
     while (true) {
       if (aborted) throw cancelledRequestError()

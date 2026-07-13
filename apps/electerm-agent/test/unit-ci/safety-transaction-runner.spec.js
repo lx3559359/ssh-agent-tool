@@ -1600,8 +1600,9 @@ test('task runner rejects a persisted executable plan swap after confirmation', 
   await assert.rejects(runner.run(task.id), /计划|完整性|篡改/)
   assert.deepEqual(calls, [])
   const rejected = await store.get(task.id)
-  assert.notEqual(rejected.status, 'running-readonly')
-  assert.notEqual(rejected.status, 'completed')
+  assert.equal(rejected.status, 'failed')
+  assert.equal(typeof rejected.completedAt, 'string')
+  assert.match(rejected.error, /计划|完整性|篡改/)
 })
 
 test('task remote output is capped before consuming all chunks', async () => {
@@ -1679,7 +1680,7 @@ test('task runner fails closed without an explicit finite numeric exit code', as
   }
 })
 
-test('task runner stops before a classifier-detected change step', async () => {
+test('task runner records a terminal partial failure before a classifier-detected change step', async () => {
   const { createTaskRunner } = await importDomainModule('task-runner.js')
   const store = createTaskStore()
   const calls = []
@@ -1706,13 +1707,76 @@ test('task runner stops before a classifier-detected change step', async () => {
     ]
   }))
   await runner.confirmPlan(task.id)
-  const stopped = await runner.run(task.id)
+  await assert.rejects(runner.run(task.id), /只读|分类|风险|拒绝/)
+  const stopped = await store.get(task.id)
 
-  assert.equal(stopped.status, 'awaiting-change-confirmation')
+  assert.equal(stopped.status, 'partially-completed')
   assert.deepEqual(calls, ['/usr/bin/uptime'])
   assert.equal(stopped.steps[0].status, 'completed')
-  assert.equal(stopped.steps[1].status, 'awaiting-confirmation')
+  assert.equal(stopped.steps[1].status, 'failed')
   assert.equal(stopped.steps[2].status, 'pending')
+  assert.equal(typeof stopped.completedAt, 'string')
+  assert.equal(typeof stopped.error, 'string')
+})
+
+test('task cancellation during delayed running patch never starts or cancels a remote execution', async () => {
+  const { createTaskRunner } = await importDomainModule('task-runner.js')
+  const baseStore = createTaskStore()
+  let releaseRunningPatch
+  let markRunningPatchStarted
+  let delayed = false
+  const runningPatchStarted = new Promise(resolve => { markRunningPatchStarted = resolve })
+  const runningPatchRelease = new Promise(resolve => { releaseRunningPatch = resolve })
+  const store = {
+    ...baseStore,
+    async patch (id, patch) {
+      if (!delayed && patch.steps?.some(step => step.status === 'running')) {
+        delayed = true
+        markRunningPatchStarted()
+        await runningPatchRelease
+      }
+      return baseStore.patch(id, patch)
+    }
+  }
+  let runCalls = 0
+  let cancelCalls = 0
+  const runner = createTaskRunner({
+    store,
+    runRemote: async () => {
+      runCalls += 1
+      return { output: 'must not run', code: 0 }
+    },
+    cancelRemote: async () => { cancelCalls += 1 },
+    now: createClock()
+  })
+  const task = await runner.create(readonlyPlan({
+    id: 'task-cancel-delayed-running-patch',
+    steps: [{ id: 'delayed', command: '/usr/bin/uptime', timeoutMs: 100 }]
+  }))
+  await runner.confirmPlan(task.id)
+  const abort = new AbortController()
+  const running = runner.run(task.id, { signal: abort.signal })
+  await runningPatchStarted
+
+  abort.abort()
+  let cancelSettled = false
+  const cancelling = runner.cancel(task.id).then(value => {
+    cancelSettled = true
+    return value
+  })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(cancelSettled, false)
+  releaseRunningPatch()
+
+  const [runOutcome, cancelOutcome] = await Promise.allSettled([running, cancelling])
+  const finalTask = await store.get(task.id)
+  assert.equal(runOutcome.status, 'rejected')
+  assert.equal(cancelOutcome.status, 'fulfilled')
+  assert.equal(cancelOutcome.value.status, 'cancelled')
+  assert.equal(finalTask.status, 'cancelled')
+  assert.equal(finalTask.steps[0].status, 'cancelled')
+  assert.equal(runCalls, 0)
+  assert.equal(cancelCalls, 0)
 })
 
 test('task runner enforces per-step timeout and cancels the active remote execution', async () => {

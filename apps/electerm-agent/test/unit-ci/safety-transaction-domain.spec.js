@@ -837,23 +837,25 @@ test('redacts audit credentials without altering ordinary command text', async (
   assert.match(redacted, /limit=10/)
 })
 
-test('audit redaction removes CLI option credentials and bare provider keys', async () => {
+test('audit redaction removes CLI credentials and real provider keys without rewriting service names', async () => {
   const { redactAuditText } = await importDomainModule('audit-redaction.js')
   const redacted = redactAuditText([
-    '/usr/bin/app --api-key sk-live-1234567890 --check',
+    '/usr/bin/app --api-key sk-proj-live-1234567890abcdefghijklmnop --check',
     '/usr/bin/app --password "cli password" --token plain-token --status',
-    'ExecStart=/usr/bin/worker --api_key=sk-worker-abcdefghijk',
-    'provider returned sk-response-abcdefghijklmnop in output',
-    'short provider key sk-x in output',
+    'ExecStart=/usr/bin/worker --api_key=sk-worker-abcdefghijklmnopqrstuvwxyz123456',
+    'provider returned sk-response-abcdefghijklmnopqrstuvwxyz123456 in output',
+    'systemctl status sk-agent.service --no-pager',
+    'short label sk-x remains ordinary text',
     'systemctl status app.service'
   ].join('\n'))
 
-  assert.doesNotMatch(redacted, /sk-live|cli password|plain-token|sk-worker|sk-response|sk-x/)
+  assert.doesNotMatch(redacted, /sk-proj-live|cli password|plain-token|sk-worker|sk-response/)
   assert.match(redacted, /--api-key \[REDACTED\] --check/)
   assert.match(redacted, /--password "\[REDACTED\]" --token \[REDACTED\] --status/)
   assert.match(redacted, /--api_key=\[REDACTED\]/)
   assert.match(redacted, /provider returned \[REDACTED\] in output/)
-  assert.match(redacted, /short provider key \[REDACTED\] in output/)
+  assert.match(redacted, /systemctl status sk-agent\.service --no-pager/)
+  assert.match(redacted, /short label sk-x remains ordinary text/)
   assert.match(redacted, /systemctl status app\.service/)
 })
 

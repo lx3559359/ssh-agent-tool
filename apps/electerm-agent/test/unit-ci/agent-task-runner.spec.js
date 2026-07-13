@@ -433,6 +433,40 @@ test('AI plan request uses the selected profile and truly stops an active stream
   assert.deepEqual(calls.at(-1), ['stopStream', 'diagnostic-stream'])
 })
 
+test('AI plan request stops a stream that arrives after initial IPC cancellation exactly once', async () => {
+  const { requestDiagnosticPlanText } = await import(controllerUrl)
+  const abort = new AbortController()
+  const calls = []
+  let resolveInitial
+  const initialResponse = new Promise(resolve => { resolveInitial = resolve })
+  const request = requestDiagnosticPlanText({
+    prompt: 'target-only-prompt',
+    config: {
+      modelAI: 'selected-model',
+      baseURLAI: 'https://relay.example.com',
+      apiKeyAI: 'selected-key'
+    },
+    signal: abort.signal,
+    pollIntervalMs: 0,
+    runGlobalAsync: (...args) => {
+      calls.push(args)
+      if (args[0] === 'AIchat') return initialResponse
+      if (args[0] === 'stopStream') return Promise.reject(new Error('late stop failure'))
+      throw new Error(`unexpected action: ${args[0]}`)
+    }
+  })
+  await waitFor(() => calls.some(call => call[0] === 'AIchat'))
+
+  abort.abort()
+  await assert.rejects(request, /已取消/)
+  resolveInitial({ isStream: true, sessionId: 'late-diagnostic-stream', content: '' })
+  await waitFor(() => calls.some(call => call[0] === 'stopStream'))
+  await new Promise(resolve => setImmediate(resolve))
+
+  assert.equal(calls.filter(call => call[0] === 'stopStream').length, 1)
+  assert.deepEqual(calls.at(-1), ['stopStream', 'late-diagnostic-stream'])
+})
+
 test('AI plan request fails closed with Chinese redacted configuration and response errors', async () => {
   const { requestDiagnosticPlanText } = await import(controllerUrl)
   let calls = 0
@@ -526,6 +560,50 @@ test('failed task execution cleans its registry entry', async () => {
   await assert.rejects(controller.confirmAndRun(diagnosticPlan()), /执行失败|退出码/)
   assert.equal(registry.size, 0)
   assert.equal((await store.listTasks()).at(-1).status, 'failed')
+})
+
+test('tampered confirmed plan reaches a failed terminal state and cleans registry', async () => {
+  const { createAgentTaskRegistry } = await import(registryUrl)
+  const { createAgentTaskController } = await import(controllerUrl)
+  const baseStore = createTaskStore()
+  let tamperNextRead = false
+  const store = {
+    ...baseStore,
+    async patchTask (id, patch) {
+      const task = await baseStore.patchTask(id, patch)
+      if (patch.planBinding) tamperNextRead = true
+      return task
+    },
+    async getTask (id) {
+      const task = await baseStore.getTask(id)
+      if (!tamperNextRead || !task) return task
+      tamperNextRead = false
+      task.steps[0].command = '/usr/bin/whoami'
+      return task
+    }
+  }
+  const registry = createAgentTaskRegistry()
+  let remoteCalls = 0
+  const controller = createAgentTaskController({
+    store,
+    registry,
+    pid: 1001,
+    endpoint: endpoint(),
+    getCurrentEndpoint: async () => endpoint(),
+    runCmd: async () => {
+      remoteCalls += 1
+      return { stdout: 'must not run', code: 0 }
+    },
+    cancelRunCmd: async () => true
+  })
+
+  await assert.rejects(controller.confirmAndRun(diagnosticPlan()), /完整性|计划|篡改/)
+  const failed = (await baseStore.listTasks()).at(-1)
+  assert.equal(remoteCalls, 0)
+  assert.equal(failed.status, 'failed')
+  assert.equal(typeof failed.completedAt, 'string')
+  assert.match(failed.error, /完整性|计划|篡改/)
+  assert.equal(registry.size, 0)
 })
 
 test('real transaction store methods work with registry capability and orphan recovery', async () => {

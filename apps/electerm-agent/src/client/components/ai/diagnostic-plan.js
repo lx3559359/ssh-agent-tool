@@ -160,6 +160,31 @@ function addIdentity (sets, value) {
   if (withoutSuffix.length >= 3) sets.fuzzy.add(withoutSuffix)
 }
 
+function mappedContainerPorts (value) {
+  if (Array.isArray(value)) return value.flatMap(mappedContainerPorts)
+  if (isObject(value)) {
+    return ['hostPort', 'published', 'containerPort', 'target']
+      .flatMap(field => mappedContainerPorts(value[field]))
+  }
+  if (typeof value === 'number') return [value]
+  const ports = []
+  for (const segment of String(value || '').split(',')) {
+    const text = segment.trim()
+    if (!text) continue
+    const mapping = text.split('->')
+    if (mapping.length === 2) {
+      const host = mapping[0].trim().match(/(?:^|:)(\d{1,5})$/)
+      const container = mapping[1].trim().match(/^(\d{1,5})(?:\/[a-z0-9]+)?$/i)
+      if (host) ports.push(Number(host[1]))
+      if (container) ports.push(Number(container[1]))
+      continue
+    }
+    const exposed = text.match(/^(\d{1,5})(?:\/[a-z0-9]+)?$/i)
+    if (exposed) ports.push(Number(exposed[1]))
+  }
+  return ports
+}
+
 function buildTargetIdentity (type, target) {
   const sets = { exact: new Set(), fuzzy: new Set(), pids: new Set(), ports: new Set() }
   const items = [
@@ -173,10 +198,7 @@ function buildTargetIdentity (type, target) {
       const pid = Number(item?.[field])
       if (Number.isInteger(pid) && pid > 0) sets.pids.add(pid)
     }
-    const portValues = Array.isArray(item?.ports)
-      ? item.ports
-      : String(item?.ports || '').match(/\d{1,5}/g) || []
-    for (const value of portValues) {
+    for (const value of mappedContainerPorts([item?.port, item?.ports])) {
       const port = Number(value)
       if (Number.isInteger(port) && port > 0 && port <= 65535) sets.ports.add(port)
     }
