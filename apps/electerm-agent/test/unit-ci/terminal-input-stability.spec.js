@@ -78,6 +78,15 @@ function createTrackerTerminal (options = {}) {
       if (!definition) return undefined
       return {
         isWrapped: definition.isWrapped === true,
+        getCell: options.cellAware
+          ? column => {
+            const character = String(definition.text || '')[column]
+            return {
+              getCode: () => character === undefined ? 0 : character.codePointAt(0),
+              getChars: () => character === undefined ? '' : character
+            }
+          }
+          : undefined,
         translateToString: (trimRight, start = 0, end = cols) => {
           const padded = String(definition.text || '').padEnd(cols, ' ').slice(0, cols)
           const selected = padded.slice(start, end)
@@ -149,7 +158,11 @@ test('password local disabled paste TUI and untracked shells stay transparent', 
 
 test('CommandTrackerAddon reconstructs the full command after a cursor-middle edit', async () => {
   const { CommandTrackerAddon } = await importCommandTracker()
-  const harness = createTrackerTerminal({ cols: 80, cursorX: 2 })
+  const harness = createTrackerTerminal({
+    cols: 80,
+    cursorX: 2,
+    cellAware: true
+  })
   const tracker = new CommandTrackerAddon()
   tracker.activate(harness.terminal)
   harness.osc('A')
@@ -175,7 +188,11 @@ test('CommandTrackerAddon reconstructs the full command after a cursor-middle ed
 
 test('CommandTrackerAddon reconstructs soft-wrapped input through its logical end', async () => {
   const { CommandTrackerAddon } = await importCommandTracker()
-  const harness = createTrackerTerminal({ cols: 12, cursorX: 2 })
+  const harness = createTrackerTerminal({
+    cols: 12,
+    cursorX: 2,
+    cellAware: true
+  })
   const tracker = new CommandTrackerAddon()
   tracker.activate(harness.terminal)
   harness.osc('A')
@@ -191,6 +208,63 @@ test('CommandTrackerAddon reconstructs soft-wrapped input through its logical en
     tracker.getCurrentCommandInput(),
     'systemctl restart nginx'
   )
+})
+
+test('CommandTrackerAddon preserves cursor-proven trailing whitespace', async () => {
+  const { CommandTrackerAddon } = await importCommandTracker()
+  const harness = createTrackerTerminal({ cols: 80, cursorX: 2 })
+  const tracker = new CommandTrackerAddon()
+  tracker.activate(harness.terminal)
+  harness.osc('A')
+  harness.osc('B')
+  const command = 'printf x > /tmp/task5-review\\ '
+  harness.setLines([{ text: `$ ${command}`, isWrapped: false }])
+  harness.setCursor(0, command.length + 2)
+
+  const current = tracker.getCurrentCommandInput()
+
+  assert.equal(current, command)
+  const { createTerminalSafetyController } = await importController()
+  assert.equal(
+    createTerminalSafetyController().beforeEnter(
+      current,
+      protectedSshContext()
+    ).sendNow,
+    false
+  )
+})
+
+test('CommandTrackerAddon preserves occupied trailing space after a middle cursor', async () => {
+  const { CommandTrackerAddon } = await importCommandTracker()
+  const harness = createTrackerTerminal({
+    cols: 80,
+    cursorX: 2,
+    cellAware: true
+  })
+  const tracker = new CommandTrackerAddon()
+  tracker.activate(harness.terminal)
+  harness.osc('A')
+  harness.osc('B')
+  const command = 'printf x > /tmp/task5-review\\ '
+  harness.setLines([{ text: `$ ${command}`, isWrapped: false }])
+  harness.setCursor(0, '$ printf'.length)
+
+  assert.equal(tracker.getCurrentCommandInput(), command)
+})
+
+test('CommandTrackerAddon rejects cursor-middle input without logical-end metadata', async () => {
+  const { CommandTrackerAddon } = await importCommandTracker()
+  const harness = createTrackerTerminal({ cols: 80, cursorX: 2 })
+  const tracker = new CommandTrackerAddon()
+  tracker.activate(harness.terminal)
+  harness.osc('A')
+  harness.osc('B')
+  const command = 'printf x > /tmp/task5-review\\ '
+  harness.setLines([{ text: `$ ${command}`, isWrapped: false }])
+  harness.setCursor(0, '$ printf'.length)
+
+  assert.equal(tracker.getCurrentCommandInput(), undefined)
+  assert.equal(tracker.hasReliableCommandInput(), false)
 })
 
 test('CommandTrackerAddon exposes no command when its input anchor cannot be proven', async () => {
@@ -595,7 +669,66 @@ test('CommandTrackerAddon completes a compound expected submission with exact cl
   assert.deepEqual(finished, [{ token, command, exitCode: 0 }])
 })
 
-test('CommandTrackerAddon ignores unrelated and late E/D without clearing an expectation', async () => {
+test('CommandTrackerAddon binds completion to released client identity not OSC E text', async () => {
+  const { CommandTrackerAddon } = await importCommandTracker()
+  const cases = [
+    ['! systemctl restart nginx', 'systemctl restart nginx'],
+    ['time systemctl restart nginx', 'systemctl restart nginx'],
+    [
+      'systemctl status nginx && systemctl restart nginx',
+      'systemctl status nginx'
+    ],
+    ['(systemctl restart nginx)', 'systemctl restart nginx']
+  ]
+
+  for (const [command, observed] of cases) {
+    const harness = createTrackerTerminal({ cols: 80, cursorX: 2 })
+    const histories = []
+    const finished = []
+    const tracker = new CommandTrackerAddon()
+    tracker.onCommandExecuted(value => histories.push(value))
+    tracker.onCommandFinished(event => finished.push(event))
+    tracker.activate(harness.terminal)
+    harness.osc('A')
+    harness.osc('B')
+    harness.setLines([{ text: `$ ${command}`, isWrapped: false }])
+    harness.setCursor(0, command.length + 2)
+    const token = tracker.expectSubmission(command)
+    assert.equal(tracker.markExpectedSubmissionReleased(token), true)
+
+    harness.osc(`E;${observed}`)
+    harness.osc('C')
+    harness.osc('D;0')
+
+    assert.deepEqual(histories, [observed], command)
+    assert.deepEqual(finished, [{ token, command, exitCode: 0 }], command)
+  }
+})
+
+test('CommandTrackerAddon completes an armed no-E submission at prompt boundary once', async () => {
+  const { CommandTrackerAddon } = await importCommandTracker()
+  const harness = createTrackerTerminal({ cols: 80, cursorX: 2 })
+  const finished = []
+  const tracker = new CommandTrackerAddon()
+  tracker.onCommandFinished(event => finished.push(event))
+  tracker.activate(harness.terminal)
+  harness.osc('A')
+  harness.osc('B')
+  const command = '(systemctl restart nginx)'
+  harness.setLines([{ text: `$ ${command}`, isWrapped: false }])
+  harness.setCursor(0, command.length + 2)
+  const token = tracker.expectSubmission(command)
+  assert.equal(tracker.markExpectedSubmissionReleased(token), true)
+
+  harness.osc('C')
+  harness.osc('A')
+  harness.osc('D;7')
+  harness.osc('A')
+
+  assert.deepEqual(finished, [{ token, command, exitCode: null }])
+})
+
+test('CommandTrackerAddon ignores pre-arm and late D while completing exactly once', async () => {
   const { CommandTrackerAddon } = await importCommandTracker()
   const harness = createTrackerTerminal({ cursorX: 2 })
   const finished = []
@@ -617,19 +750,33 @@ test('CommandTrackerAddon ignores unrelated and late E/D without clearing an exp
   assert.deepEqual(finished, [])
 
   harness.osc('E;uptime')
-  harness.osc('D;0')
-  assert.equal(tracker.hasExpectedSubmission(token), true)
-  assert.deepEqual(finished, [])
-
-  harness.osc('E;systemctl restart nginx')
+  harness.osc('C')
   harness.osc('D;0')
   harness.osc('D;7')
+  harness.osc('A')
 
   assert.deepEqual(finished, [{
     token,
     command: 'systemctl restart nginx',
     exitCode: 0
   }])
+})
+
+test('CommandTrackerAddon expects the exact canonical command including padding', async () => {
+  const { CommandTrackerAddon } = await importCommandTracker()
+  const harness = createTrackerTerminal({ cols: 80, cursorX: 2 })
+  const tracker = new CommandTrackerAddon()
+  tracker.activate(harness.terminal)
+  harness.osc('A')
+  harness.osc('B')
+  const command = 'systemctl restart nginx   '
+  harness.setLines([{ text: `$ ${command}`, isWrapped: false }])
+  harness.setCursor(0, command.length + 2)
+
+  const token = tracker.expectSubmission(command)
+
+  assert.match(token, /^terminal-submission-/)
+  assert.equal(tracker.markExpectedSubmissionReleased(token), true)
 })
 
 test('terminal wires the tested safety coordinator into socket and modal lifecycle', () => {

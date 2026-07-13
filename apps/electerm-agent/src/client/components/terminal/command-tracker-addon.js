@@ -40,6 +40,8 @@ export class CommandTrackerAddon {
     this._onCwdChanged = null // Called when OSC 633;P;Cwd= is received
     this._expectedSubmissions = []
     this._submissionSequence = 0
+    this._inputGeneration = 0
+    this._oscSequence = 0
   }
 
   /**
@@ -109,9 +111,11 @@ export class CommandTrackerAddon {
     // Parse the sequence: first char is the command type
     const command = data.charAt(0)
     const args = data.length > 1 ? data.substring(2) : '' // Skip "X;" part
+    this._oscSequence += 1
 
     switch (command) {
       case 'A': // Prompt started
+        this._completeArmedSubmission(null, true)
         this.shellIntegrationActive = true
         this.shellPhase = 'prompt'
         this._inputAnchor = null
@@ -123,12 +127,14 @@ export class CommandTrackerAddon {
       case 'B': // Command input started (after prompt)
         this.shellIntegrationActive = true
         this.shellPhase = 'input'
+        this._inputGeneration += 1
         this._captureInputAnchor()
         return true
 
       case 'C': // Command execution started
         this.shellPhase = 'executing'
         this._inputAnchor = null
+        this._markExpectedSubmissionObserved()
         return true
 
       case 'D': // Command finished
@@ -138,20 +144,7 @@ export class CommandTrackerAddon {
         this.lastExitCode = /^-?\d+$/.test(args)
           ? parseInt(args, 10)
           : null
-        {
-          const expectedIndex = this._expectedSubmissions.findIndex(
-            submission => submission.released && submission.started
-          )
-          const expected = expectedIndex === -1
-            ? null
-            : this._expectedSubmissions.splice(expectedIndex, 1)[0]
-          if (!expected || !this._onCommandFinished) return true
-          this._onCommandFinished({
-            token: expected.token,
-            command: expected.command,
-            exitCode: this.lastExitCode
-          })
-        }
+        this._completeArmedSubmission(this.lastExitCode, false)
         return true
 
       case 'E': // Command line
@@ -160,7 +153,7 @@ export class CommandTrackerAddon {
         // The actual command being executed
         this.executedCommand = this._deserializeOscValue(args)
         this.currentCommand = this.executedCommand
-        this._markExpectedSubmissionStarted(this.executedCommand)
+        this._markExpectedSubmissionObserved()
         // Call the callback if registered
         if (this._onCommandExecuted && this.executedCommand) {
           this._onCommandExecuted(this.executedCommand)
@@ -226,6 +219,21 @@ export class CommandTrackerAddon {
     this._inputAnchor = { buffer, row, column }
   }
 
+  _getLineEndColumn (line, cursorColumn) {
+    const endColumn = cursorColumn
+    if (typeof line.getCell === 'function') {
+      for (let column = Number(this.terminal?.cols) - 1; column >= 0; column -= 1) {
+        const cell = line.getCell(column)
+        if (cell && (cell.getCode?.() || cell.getChars?.())) {
+          return Math.max(endColumn, column + 1)
+        }
+      }
+      return endColumn
+    }
+    const visibleEnd = line.translateToString(true, 0).length
+    return endColumn >= visibleEnd ? endColumn : undefined
+  }
+
   getCurrentCommandInput () {
     if (!this.isCommandInputActive() || !this._inputAnchor) return undefined
     const buffer = this.terminal?.buffer?.active
@@ -250,7 +258,14 @@ export class CommandTrackerAddon {
       const line = buffer.getLine(row)
       if (!line) return undefined
       const startColumn = row === startRow ? this._inputAnchor.column : 0
-      command += line.translateToString(row === endRow, startColumn)
+      if (row === endRow) {
+        const cursorColumn = row === cursorRow ? Number(buffer.cursorX) : 0
+        const endColumn = this._getLineEndColumn(line, cursorColumn)
+        if (!Number.isInteger(endColumn)) return undefined
+        command += line.translateToString(false, startColumn, endColumn)
+      } else {
+        command += line.translateToString(false, startColumn)
+      }
     }
     return command
   }
@@ -266,7 +281,7 @@ export class CommandTrackerAddon {
   expectSubmission (command) {
     const text = String(command || '')
     const current = this.getCurrentCommandInput()
-    if (!text || current === undefined || current.trim() !== text ||
+    if (!text.trim() || current === undefined || current !== text ||
       this._expectedSubmissions.length) {
       return undefined
     }
@@ -274,8 +289,10 @@ export class CommandTrackerAddon {
     this._expectedSubmissions.push({
       token,
       command: text,
-      released: false,
-      started: false
+      inputGeneration: this._inputGeneration,
+      armed: false,
+      executionObserved: false,
+      armedAtSequence: 0
     })
     return token
   }
@@ -284,10 +301,13 @@ export class CommandTrackerAddon {
     const expected = this._expectedSubmissions.find(
       submission => submission.token === token
     )
-    if (!expected || expected.released || !this.isCommandInputActive()) {
+    if (!expected || expected.armed || !this.isCommandInputActive() ||
+      expected.inputGeneration !== this._inputGeneration ||
+      this.getCurrentCommandInput() !== expected.command) {
       return false
     }
-    expected.released = true
+    expected.armed = true
+    expected.armedAtSequence = this._oscSequence
     return true
   }
 
@@ -306,21 +326,30 @@ export class CommandTrackerAddon {
     )
   }
 
-  _markExpectedSubmissionStarted (observedCommand) {
+  _markExpectedSubmissionObserved () {
     const expected = this._expectedSubmissions.find(
-      submission => submission.released
+      submission => submission.armed &&
+        submission.inputGeneration === this._inputGeneration &&
+        submission.armedAtSequence < this._oscSequence
     )
-    if (!expected) return
-    const submitted = expected.command.trim()
-    const observed = String(observedCommand || '').trim()
-    if (submitted === observed) {
-      expected.started = true
-      return
-    }
-    if (observed && submitted.startsWith(observed)) {
-      const remainder = submitted.slice(observed.length)
-      expected.started = /^\s*(?:&&|\|\||[;|&])/.test(remainder)
-    }
+    if (expected) expected.executionObserved = true
+  }
+
+  _completeArmedSubmission (exitCode, allowWithoutExecution) {
+    const expectedIndex = this._expectedSubmissions.findIndex(
+      submission => submission.armed &&
+        submission.inputGeneration === this._inputGeneration &&
+        submission.armedAtSequence < this._oscSequence &&
+        (allowWithoutExecution || submission.executionObserved)
+    )
+    if (expectedIndex === -1) return false
+    const expected = this._expectedSubmissions.splice(expectedIndex, 1)[0]
+    this._onCommandFinished?.({
+      token: expected.token,
+      command: expected.command,
+      exitCode
+    })
+    return true
   }
 
   /**

@@ -106,16 +106,217 @@ function hasTrailingControlOperator (command) {
   return false
 }
 
-function hasKnownMultilineStart (command) {
-  return /^(?:(?:for|select|while|until)\b[\s\S]*;\s*do|if\b[\s\S]*;\s*then|case\b[\s\S]*\bin)\s*$/.test(command)
+function tokenizeShellSyntax (command) {
+  const tokens = []
+  let word = ''
+  let wordStart = -1
+  let plain = true
+  let quote = ''
+  let escaped = false
+
+  function append (character, index) {
+    if (wordStart === -1) wordStart = index
+    word += character
+  }
+
+  function flushWord (end) {
+    if (wordStart === -1) return
+    tokens.push({ value: word, plain, operator: false, start: wordStart, end })
+    word = ''
+    wordStart = -1
+    plain = true
+  }
+
+  function isBoundary (character) {
+    return character === undefined || /\s/.test(character) ||
+      ';|&()'.includes(character)
+  }
+
+  for (let index = 0; index < command.length; index += 1) {
+    const character = command[index]
+    if (escaped) {
+      append(character, index)
+      escaped = false
+      continue
+    }
+    if (quote) {
+      if (character === '\\' && quote !== "'") {
+        append(character, index)
+        escaped = true
+      } else if (character === quote) {
+        quote = ''
+      } else {
+        append(character, index)
+      }
+      continue
+    }
+    if (character === '\\') {
+      if (wordStart === -1) wordStart = index
+      plain = false
+      escaped = true
+      continue
+    }
+    if (character === "'" || character === '"' || character === '`') {
+      if (wordStart === -1) wordStart = index
+      plain = false
+      quote = character
+      continue
+    }
+    if (/\s/.test(character)) {
+      flushWord(index)
+      continue
+    }
+
+    const braceOperator = (character === '{' || character === '}') &&
+      isBoundary(command[index - 1]) && isBoundary(command[index + 1])
+    if (';|&()'.includes(character) || braceOperator) {
+      flushWord(index)
+      const doubled = (character === ';' || character === '|' || character === '&') &&
+        command[index + 1] === character
+      const value = doubled ? character + character : character
+      tokens.push({
+        value,
+        plain: true,
+        operator: true,
+        start: index,
+        end: index + value.length
+      })
+      if (doubled) index += 1
+      continue
+    }
+    append(character, index)
+  }
+  flushWord(command.length)
+  return tokens
+}
+
+function hasOpenShellCompound (command) {
+  const tokens = tokenizeShellSyntax(command)
+  const stack = []
+  let commandPosition = true
+
+  function top () {
+    return stack[stack.length - 1]
+  }
+
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index]
+    const frame = top()
+
+    if (frame?.type === 'case' && frame.phase === 'pattern') {
+      if (!token.operator && token.plain && token.value === 'esac') {
+        stack.pop()
+        commandPosition = false
+      } else if (token.operator && token.value === ')') {
+        frame.phase = 'body'
+        commandPosition = true
+      }
+      continue
+    }
+
+    if (token.operator) {
+      if (token.value === '{' && commandPosition) {
+        stack.push({ type: 'group' })
+        commandPosition = true
+      } else if (token.value === '}' && commandPosition &&
+        frame?.type === 'group') {
+        stack.pop()
+        commandPosition = false
+      } else if (token.value === ';;' && frame?.type === 'case' &&
+        frame.phase === 'body') {
+        frame.phase = 'pattern'
+        commandPosition = false
+      } else if ([';', '&&', '||', '|', '&', ';;', '('].includes(token.value)) {
+        commandPosition = true
+      } else if (token.value === ')' && frame?.type === 'case') {
+        frame.phase = 'body'
+        commandPosition = true
+      }
+      continue
+    }
+
+    if (token.plain && token.value === 'in' && frame?.type === 'case' &&
+      frame.phase === 'header') {
+      frame.phase = 'pattern'
+      commandPosition = false
+      continue
+    }
+    if (!commandPosition || !token.plain) {
+      commandPosition = false
+      continue
+    }
+
+    const next = tokens[index + 1]
+    const afterNext = tokens[index + 2]
+    const functionBrace = tokens[index + 3]
+    if (next?.value === '(' && afterNext?.value === ')' &&
+      functionBrace?.value === '{' && token.end === next.start &&
+      next.end === afterNext.start) {
+      stack.push({ type: 'group' })
+      commandPosition = true
+      index += 3
+      continue
+    }
+    if (token.value === 'function' && next && !next.operator && next.plain &&
+      afterNext?.value === '{') {
+      stack.push({ type: 'group' })
+      commandPosition = true
+      index += 2
+      continue
+    }
+
+    const current = top()
+    if (token.value === 'if') {
+      stack.push({ type: 'if', phase: 'condition' })
+      commandPosition = true
+    } else if (token.value === 'then' && current?.type === 'if' &&
+      current.phase === 'condition') {
+      current.phase = 'body'
+      commandPosition = true
+    } else if (token.value === 'elif' && current?.type === 'if' &&
+      current.phase === 'body') {
+      current.phase = 'condition'
+      commandPosition = true
+    } else if (token.value === 'else' && current?.type === 'if' &&
+      current.phase === 'body') {
+      commandPosition = true
+    } else if (token.value === 'fi' && current?.type === 'if') {
+      stack.pop()
+      commandPosition = false
+    } else if (['for', 'select'].includes(token.value)) {
+      stack.push({ type: 'loop', phase: 'header' })
+      commandPosition = false
+    } else if (['while', 'until'].includes(token.value)) {
+      stack.push({ type: 'loop', phase: 'condition' })
+      commandPosition = true
+    } else if (token.value === 'do' && current?.type === 'loop' &&
+      current.phase !== 'body') {
+      current.phase = 'body'
+      commandPosition = true
+    } else if (token.value === 'done' && current?.type === 'loop' &&
+      current.phase === 'body') {
+      stack.pop()
+      commandPosition = false
+    } else if (token.value === 'case') {
+      stack.push({ type: 'case', phase: 'header' })
+      commandPosition = false
+    } else if (token.value === 'esac' && current?.type === 'case') {
+      stack.pop()
+      commandPosition = false
+    } else {
+      commandPosition = false
+    }
+  }
+
+  return stack.length > 0
 }
 
 export function isCompleteTerminalCommand (command) {
-  const text = String(command || '').trim()
-  if (!text || /[\r\n]/.test(text)) return false
-  if (hasTrailingControlOperator(text)) return false
-  if (hasKnownMultilineStart(text)) return false
-  return !shellContinuationState(text).incomplete
+  const canonical = String(command || '')
+  if (!canonical.trim() || /[\r\n]/.test(canonical)) return false
+  if (hasTrailingControlOperator(canonical)) return false
+  if (hasOpenShellCompound(canonical)) return false
+  return !shellContinuationState(canonical).incomplete
 }
 
 function isTransparentContext (context) {
@@ -182,20 +383,21 @@ export function createTerminalSafetyController (options = {}) {
 
   function beforeEnter (command, context = {}) {
     if (pending) return { sendNow: false, pending: true }
-    const text = String(command || '').trim()
+    const canonical = String(command || '')
+    const normalized = canonical.trim()
     if (isTransparentContext(context)) {
       return { sendNow: true }
     }
     if (continuationActive) {
       return { sendNow: true }
     }
-    if (!isCompleteTerminalCommand(text)) {
-      continuationActive = Boolean(text)
+    if (!isCompleteTerminalCommand(canonical)) {
+      continuationActive = Boolean(normalized)
       return { sendNow: true }
     }
-    const classification = classify(text)
+    const classification = classify(normalized)
     if (classification.risk === 'readonly') return { sendNow: true }
-    pending = confirmationFor(text, classification)
+    pending = confirmationFor(canonical, classification)
     return { sendNow: false, confirmation: pending }
   }
 

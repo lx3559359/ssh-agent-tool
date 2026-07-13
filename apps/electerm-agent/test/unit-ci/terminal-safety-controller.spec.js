@@ -112,6 +112,44 @@ test('quoted heredoc text and an escaped pipe are complete arguments', async () 
   assert.equal(isCompleteTerminalCommand('echo \\|'), true)
 })
 
+test('escaped trailing space is complete before classifier normalization', async () => {
+  const {
+    createTerminalSafetyController,
+    isCompleteTerminalCommand
+  } = await importController()
+  const command = 'printf x > /tmp/task5-review\\ '
+  const classified = []
+  const controller = createTerminalSafetyController({
+    classifyCommand: text => {
+      classified.push(text)
+      return { risk: 'change', reversible: false }
+    }
+  })
+
+  assert.equal(isCompleteTerminalCommand(command), true)
+  const decision = controller.beforeEnter(command, completeSshContext())
+
+  assert.equal(decision.sendNow, false)
+  assert.equal(decision.confirmation.command, command)
+  assert.deepEqual(classified, ['printf x > /tmp/task5-review\\'])
+})
+
+test('ordinary trailing padding stays complete and protected', async () => {
+  const {
+    createTerminalSafetyController,
+    isCompleteTerminalCommand
+  } = await importController()
+  const command = 'systemctl restart nginx   '
+  const controller = createTerminalSafetyController()
+
+  assert.equal(isCompleteTerminalCommand(command), true)
+  const decision = controller.beforeEnter(command, completeSshContext())
+
+  assert.equal(decision.sendNow, false)
+  assert.equal(decision.confirmation.kind, 'reversible')
+  assert.equal(decision.confirmation.command, command)
+})
+
 test('only demonstrable shell continuations remain transparent', async () => {
   const { isCompleteTerminalCommand } = await importController()
   const incomplete = [
@@ -128,6 +166,66 @@ test('only demonstrable shell continuations remain transparent', async () => {
 
   for (const command of incomplete) {
     assert.equal(isCompleteTerminalCommand(command), false, command)
+  }
+})
+
+test('open shell compound bodies remain transparent continuations', async () => {
+  const {
+    createTerminalSafetyController,
+    isCompleteTerminalCommand
+  } = await importController()
+  const incomplete = [
+    'if true; then echo hi',
+    'if false; then echo no; elif true; then echo hi',
+    'if true; then echo hi; else echo no',
+    'for x in a; do echo "$x"',
+    'select x in a; do echo "$x"',
+    'while true; do echo hi',
+    'until false; do echo hi',
+    'case "$x" in a) echo a ;;',
+    'f() { echo hi',
+    'function f { echo hi',
+    '{ echo hi'
+  ]
+
+  for (const command of incomplete) {
+    assert.equal(isCompleteTerminalCommand(command), false, command)
+    assert.deepEqual(
+      createTerminalSafetyController().beforeEnter(
+        command,
+        completeSshContext()
+      ),
+      { sendNow: true },
+      command
+    )
+  }
+})
+
+test('closed compounds and ordinary keyword or brace arguments stay complete', async () => {
+  const { isCompleteTerminalCommand } = await importController()
+  const complete = [
+    'if true; then echo hi; fi',
+    String.raw`if true; then printf "%s" "\""; fi`,
+    'if false; then echo no; elif true; then echo hi; else echo no; fi',
+    'for x in a; do echo "$x"; done',
+    'select x in a; do echo "$x"; done',
+    'while true; do echo hi; done',
+    'until false; do echo hi; done',
+    'case "$x" in a) echo a ;; esac',
+    'f() { echo hi; }',
+    'function f { echo hi; }',
+    '{ echo hi; }',
+    'systemctl restart do',
+    'systemctl restart then',
+    'systemctl restart else',
+    'systemctl restart worker[1]',
+    'systemctl restart /tmp/{draft',
+    'systemctl restart ifconfig',
+    "echo '{'"
+  ]
+
+  for (const command of complete) {
+    assert.equal(isCompleteTerminalCommand(command), true, command)
   }
 })
 

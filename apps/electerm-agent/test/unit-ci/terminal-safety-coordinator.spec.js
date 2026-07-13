@@ -280,6 +280,33 @@ test('only the matching expected token can complete the current transaction', as
   assert.equal(calls.complete[0].completion.command, 'systemctl restart nginx')
 })
 
+test('prompt-boundary interruption completes external execution with unknown exit', async () => {
+  const {
+    createTerminalSafetyCoordinator,
+    createTerminalSafetyController
+  } = await importSafetyModules()
+  const { coordinator, calls } = createHarness(
+    createTerminalSafetyCoordinator,
+    createTerminalSafetyController
+  )
+  const decision = coordinator.beforeEnter(
+    'systemctl restart nginx',
+    protectedContext()
+  )
+  await coordinator.confirmExecute()
+  const release = await decision
+  assert.equal(coordinator.consumeRelease(release.releaseToken), true)
+
+  assert.equal(await coordinator.handleCommandFinished({
+    token: release.releaseToken,
+    command: 'systemctl restart nginx',
+    exitCode: null
+  }), true)
+
+  assert.equal(calls.complete.length, 1)
+  assert.equal(calls.complete[0].completion.exitCode, null)
+})
+
 test('prepare and external begin must return their exact lifecycle states', async () => {
   const {
     createTerminalSafetyCoordinator,
