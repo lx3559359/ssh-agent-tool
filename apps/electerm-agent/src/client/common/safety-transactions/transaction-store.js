@@ -1,5 +1,6 @@
 import generate from '../uid.js'
 import {
+  finalOperationStates,
   normalizeOperation,
   operationSources,
   operationStates
@@ -42,14 +43,16 @@ export const taskStatuses = Object.freeze({
   partiallyCompleted: 'partially-completed'
 })
 
+export const finalTaskStatuses = Object.freeze([
+  taskStatuses.completed,
+  taskStatuses.failed,
+  taskStatuses.cancelled,
+  taskStatuses.partiallyCompleted
+])
+
 const validTaskStatuses = new Set(Object.values(taskStatuses))
 const validOperationSources = new Set(operationSources)
-const completedOperationStates = new Set([
-  operationStates.kept,
-  operationStates.restored,
-  operationStates.failed,
-  operationStates.cancelled
-])
+const completedOperationStates = new Set(finalOperationStates)
 
 const defaultAdapter = {
   async update (...args) {

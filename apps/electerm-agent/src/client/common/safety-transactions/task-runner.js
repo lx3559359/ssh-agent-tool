@@ -1,6 +1,6 @@
 import { redactAuditText, redactSensitiveData } from './audit-redaction.js'
 import { classifyCommand } from './command-classifier.js'
-import { taskStatuses } from './transaction-store.js'
+import { finalTaskStatuses, taskStatuses } from './transaction-store.js'
 import {
   collectBoundedRemoteOutput,
   createAuditRecord,
@@ -11,12 +11,7 @@ import {
 const defaultStepTimeoutMs = 30000
 const planBindingSchemaVersion = 1
 const planBindingAlgorithm = 'SHA-256'
-const finalTaskStatuses = new Set([
-  taskStatuses.completed,
-  taskStatuses.failed,
-  taskStatuses.cancelled,
-  taskStatuses.partiallyCompleted
-])
+const finalTaskStatusSet = new Set(finalTaskStatuses)
 
 function requireFunction (value, label) {
   if (typeof value !== 'function') throw new Error(`${label} 必须是函数。`)
@@ -476,7 +471,7 @@ export function createTaskRunner (options = {}) {
       } else {
         await serialize(taskId, async () => {
           const task = await get(taskId)
-          if (!task || finalTaskStatuses.has(task.status)) return task
+          if (!task || finalTaskStatusSet.has(task.status)) return task
           return patch(taskId, {
             status: taskStatuses.cancelled,
             completedAt: timestamp(),

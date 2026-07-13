@@ -6,19 +6,13 @@ import {
   StopOutlined
 } from '@ant-design/icons'
 import { Button, Progress, Tag, Tooltip } from 'antd'
-import { summarizeSafetyTaskProgress } from './safety-operation-center-model.js'
+import {
+  getSafetyTaskStatusPresentation,
+  summarizeSafetyTaskProgress
+} from './safety-operation-center-model.js'
 import './safety-task-progress.styl'
 
 export { summarizeSafetyTaskProgress }
-
-const taskStatusLabels = {
-  'running-readonly': ['只读执行中', 'processing'],
-  'running-change': ['修改执行中', 'warning'],
-  completed: ['已完成', 'success'],
-  failed: ['失败', 'error'],
-  cancelled: ['已取消', 'default'],
-  'partially-completed': ['部分完成', 'warning']
-}
 
 const sourceLabels = {
   terminal: 'SSH 终端',
@@ -57,7 +51,7 @@ export default function SafetyTaskProgress ({
   onCancel
 }) {
   const summary = summarizeSafetyTaskProgress(task)
-  const [statusText, statusColor] = taskStatusLabels[summary.status] || [summary.status, 'default']
+  const [statusText, statusColor] = getSafetyTaskStatusPresentation(summary.status)
   const cancelButton = (
     <Button
       danger

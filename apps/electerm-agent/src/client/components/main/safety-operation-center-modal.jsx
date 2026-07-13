@@ -41,7 +41,10 @@ import {
   getLegacySafetyRecord,
   groupSafetyCenterRecords,
   isSafetyOperationRollbackable,
+  isSafetyOperationRunning,
   routeSafetyCenterAction,
+  safetyOperationStatusPresentations,
+  safetyTaskStatusPresentations,
   safetyRecordActionLockKey,
   subscribeSafetyCenterRefresh
 } from './safety-operation-center-model.js'
@@ -76,33 +79,9 @@ const providerLabels = {
 }
 
 const statusLabels = {
-  preparing: ['准备恢复点', 'processing'],
-  'recovery-ready': ['恢复点已就绪', 'processing'],
-  'awaiting-confirmation': ['等待确认', 'warning'],
-  executing: ['执行中', 'processing'],
-  'verification-passed': ['验证通过', 'success'],
-  'rollback-available': ['可回滚', 'warning'],
-  kept: ['已保留', 'default'],
-  'rolling-back': ['回滚中', 'processing'],
-  restored: ['已恢复', 'success'],
-  failed: ['失败', 'error'],
-  cancelled: ['已取消', 'default'],
-  draft: ['草稿', 'default'],
-  'awaiting-plan-confirmation': ['等待计划确认', 'warning'],
-  'running-readonly': ['只读执行中', 'processing'],
-  'awaiting-change-confirmation': ['等待修改确认', 'warning'],
-  'running-change': ['修改执行中', 'processing'],
-  completed: ['已完成', 'success'],
-  'partially-completed': ['部分完成', 'warning']
+  ...safetyOperationStatusPresentations,
+  ...safetyTaskStatusPresentations
 }
-
-const runningOperationStates = new Set([
-  'preparing',
-  'recovery-ready',
-  'awaiting-confirmation',
-  'executing',
-  'rolling-back'
-])
 
 const actionLabels = {
   rollback: {
@@ -443,7 +422,7 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
       )
     }
 
-    if (runningOperationStates.has(record.state)) {
+    if (isSafetyOperationRunning(record)) {
       return (
         <Button
           danger

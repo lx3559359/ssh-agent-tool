@@ -4,22 +4,23 @@ import {
   assertSameSessionEndpoint,
   buildEndpointKey
 } from '../../common/safety-transactions/endpoint-guard.js'
-import { safetyTransactionUpdatedEvent } from '../../common/safety-transactions/transaction-store.js'
+import {
+  finalOperationStates,
+  operationStates
+} from '../../common/safety-transactions/models.js'
+import {
+  finalTaskStatuses,
+  safetyTransactionUpdatedEvent,
+  taskStatuses
+} from '../../common/safety-transactions/transaction-store.js'
 
 export { safetyTransactionUpdatedEvent }
 export { legacySafetyOperationUpdatedEvent }
 
-const runningOperationStates = new Set([
-  'preparing',
-  'recovery-ready',
-  'awaiting-confirmation',
-  'executing',
-  'rolling-back'
-])
-const runningTaskStatuses = new Set([
-  'running-readonly',
-  'running-change'
-])
+const knownOperationStates = new Set(Object.values(operationStates))
+const finalOperationStateSet = new Set(finalOperationStates)
+const knownTaskStatuses = new Set(Object.values(taskStatuses))
+const finalTaskStatusSet = new Set(finalTaskStatuses)
 const successfulStepStatuses = new Set([
   'completed',
   'success',
@@ -41,6 +42,41 @@ const auditPhaseLabels = {
   verify: '验证',
   cancel: '取消',
   readonly: '只读'
+}
+
+export const safetyOperationStatusPresentations = Object.freeze({
+  [operationStates.preparing]: Object.freeze(['准备恢复点', 'processing']),
+  [operationStates.recoveryReady]: Object.freeze(['恢复点已就绪', 'processing']),
+  [operationStates.awaitingConfirmation]: Object.freeze(['等待确认', 'warning']),
+  [operationStates.executing]: Object.freeze(['执行中', 'processing']),
+  [operationStates.verificationPassed]: Object.freeze(['验证通过', 'success']),
+  [operationStates.rollbackAvailable]: Object.freeze(['可回滚', 'warning']),
+  [operationStates.kept]: Object.freeze(['已保留', 'default']),
+  [operationStates.rollingBack]: Object.freeze(['回滚中', 'processing']),
+  [operationStates.restored]: Object.freeze(['已恢复', 'success']),
+  [operationStates.failed]: Object.freeze(['失败', 'error']),
+  [operationStates.cancelled]: Object.freeze(['已取消', 'default'])
+})
+
+export const safetyTaskStatusPresentations = Object.freeze({
+  [taskStatuses.draft]: Object.freeze(['草稿', 'default']),
+  [taskStatuses.awaitingPlanConfirmation]: Object.freeze(['等待计划确认', 'warning']),
+  [taskStatuses.runningReadonly]: Object.freeze(['只读执行中', 'processing']),
+  [taskStatuses.awaitingChangeConfirmation]: Object.freeze(['等待修改确认', 'warning']),
+  [taskStatuses.runningChange]: Object.freeze(['修改执行中', 'warning']),
+  [taskStatuses.completed]: Object.freeze(['已完成', 'success']),
+  [taskStatuses.failed]: Object.freeze(['失败', 'error']),
+  [taskStatuses.cancelled]: Object.freeze(['已取消', 'default']),
+  [taskStatuses.partiallyCompleted]: Object.freeze(['部分完成', 'warning'])
+})
+const unknownSafetyStatusPresentation = Object.freeze(['未知状态', 'default'])
+
+export function getSafetyOperationStatusPresentation (status) {
+  return safetyOperationStatusPresentations[status] || unknownSafetyStatusPresentation
+}
+
+export function getSafetyTaskStatusPresentation (status) {
+  return safetyTaskStatusPresentations[status] || unknownSafetyStatusPresentation
 }
 
 function isRecord (value) {
@@ -77,19 +113,28 @@ function hasCompleteRecoveryPlan (record) {
 }
 
 export function isSafetyOperationRollbackable (record) {
-  return record?.state === 'rollback-available' ||
-    (record?.state === 'failed' && hasCompleteRecoveryPlan(record))
+  return record?.state === operationStates.rollbackAvailable ||
+    (record?.state === operationStates.failed && hasCompleteRecoveryPlan(record))
+}
+
+export function isSafetyOperationRunning (record) {
+  return record?.metadata?.legacy !== true &&
+    knownOperationStates.has(record?.state) &&
+    !finalOperationStateSet.has(record.state) &&
+    record.state !== operationStates.rollbackAvailable
 }
 
 function operationGroup (record) {
   if (record.metadata?.legacy === true) return 'legacy'
-  if (runningOperationStates.has(record.state)) return 'running'
   if (isSafetyOperationRollbackable(record)) return 'rollback'
+  if (isSafetyOperationRunning(record)) return 'running'
   return 'history'
 }
 
 function taskGroup (record) {
-  return runningTaskStatuses.has(record.status) ? 'running' : 'history'
+  return knownTaskStatuses.has(record.status) && !finalTaskStatusSet.has(record.status)
+    ? 'running'
+    : 'history'
 }
 
 export function groupSafetyCenterRecords (records, tasks) {

@@ -8,6 +8,14 @@ const modelModuleUrl = pathToFileURL(path.resolve(
   __dirname,
   '../../src/client/components/main/safety-operation-center-model.js'
 )).href
+const operationModelsModuleUrl = pathToFileURL(path.resolve(
+  __dirname,
+  '../../src/client/common/safety-transactions/models.js'
+)).href
+const transactionStoreModuleUrl = pathToFileURL(path.resolve(
+  __dirname,
+  '../../src/client/common/safety-transactions/transaction-store.js'
+)).href
 
 function importModel () {
   return import(modelModuleUrl)
@@ -101,6 +109,70 @@ test('groups operations and tasks into four mutually exclusive tabs', async () =
 
   const allIds = Object.values(groups).flat().map(item => item.id)
   assert.equal(allIds.length, new Set(allIds).size)
+})
+
+test('groups every declared operation and task lifecycle status exactly once', async () => {
+  const [
+    { groupSafetyCenterRecords },
+    { operationStates },
+    { taskStatuses }
+  ] = await Promise.all([
+    importModel(),
+    import(operationModelsModuleUrl),
+    import(transactionStoreModuleUrl)
+  ])
+  const operationRunning = new Set([
+    operationStates.preparing,
+    operationStates.recoveryReady,
+    operationStates.awaitingConfirmation,
+    operationStates.executing,
+    operationStates.verificationPassed,
+    operationStates.rollingBack
+  ])
+  const operationHistory = new Set([
+    operationStates.kept,
+    operationStates.restored,
+    operationStates.failed,
+    operationStates.cancelled
+  ])
+  const taskHistory = new Set([
+    taskStatuses.completed,
+    taskStatuses.partiallyCompleted,
+    taskStatuses.failed,
+    taskStatuses.cancelled
+  ])
+  const records = Object.values(operationStates).map((state, index) => (
+    operation(`operation-${state}`, state, `2026-07-13T10:${String(index).padStart(2, '0')}:00.000Z`)
+  ))
+  const tasks = Object.values(taskStatuses).map((status, index) => (
+    task(`task-${status}`, status, `2026-07-13T11:${String(index).padStart(2, '0')}:00.000Z`)
+  ))
+
+  const groups = groupSafetyCenterRecords(records, tasks)
+  const membership = new Map()
+  for (const [group, items] of Object.entries(groups)) {
+    for (const item of items) {
+      assert.equal(membership.has(item.id), false, `${item.id} 被重复分组`)
+      membership.set(item.id, group)
+    }
+  }
+
+  assert.equal(
+    operationRunning.size + operationHistory.size + 1,
+    Object.values(operationStates).length,
+    'operationStates 新状态必须明确分组'
+  )
+  for (const state of Object.values(operationStates)) {
+    const expected = state === operationStates.rollbackAvailable
+      ? 'rollback'
+      : operationRunning.has(state) ? 'running' : 'history'
+    assert.equal(membership.get(`operation-${state}`), expected, state)
+  }
+  for (const status of Object.values(taskStatuses)) {
+    const expected = taskHistory.has(status) ? 'history' : 'running'
+    assert.equal(membership.get(`task-${status}`), expected, status)
+  }
+  assert.equal(membership.size, records.length + tasks.length)
 })
 
 test('only rollback-available or fully recoverable failed operations are rollbackable', async () => {
@@ -398,6 +470,51 @@ test('task progress component exposes compact counts and capability-gated cancel
   assert.match(component, /Progress/)
   assert.match(styles, /overflow-y auto/)
   assert.match(styles, /border-radius 6px/)
+})
+
+test('safety center gives every declared operation and task status a Chinese label', async () => {
+  const [
+    {
+      getSafetyOperationStatusPresentation,
+      getSafetyTaskStatusPresentation,
+      safetyOperationStatusPresentations,
+      safetyTaskStatusPresentations
+    },
+    { operationStates },
+    { taskStatuses }
+  ] = await Promise.all([
+    importModel(),
+    import(operationModelsModuleUrl),
+    import(transactionStoreModuleUrl)
+  ])
+  const component = readSource('src/client/components/main/safety-task-progress.jsx')
+
+  assert.equal(typeof getSafetyOperationStatusPresentation, 'function')
+  assert.equal(typeof getSafetyTaskStatusPresentation, 'function')
+  assert.deepEqual(
+    Object.keys(safetyOperationStatusPresentations).sort(),
+    Object.values(operationStates).sort()
+  )
+  assert.deepEqual(
+    Object.keys(safetyTaskStatusPresentations).sort(),
+    Object.values(taskStatuses).sort()
+  )
+  for (const state of Object.values(operationStates)) {
+    const [label, color] = getSafetyOperationStatusPresentation(state)
+    assert.match(label, /[\u4e00-\u9fff]/, state)
+    assert.notEqual(label, state)
+    assert.equal(typeof color, 'string')
+  }
+  for (const status of Object.values(taskStatuses)) {
+    const [label, color] = getSafetyTaskStatusPresentation(status)
+    assert.match(label, /[\u4e00-\u9fff]/, status)
+    assert.notEqual(label, status)
+    assert.equal(typeof color, 'string')
+  }
+  assert.deepEqual(getSafetyOperationStatusPresentation('future-state'), ['未知状态', 'default'])
+  assert.deepEqual(getSafetyTaskStatusPresentation('future-status'), ['未知状态', 'default'])
+  assert.match(component, /getSafetyTaskStatusPresentation/)
+  assert.doesNotMatch(component, /\[summary\.status,\s*'default'\]/)
 })
 
 test('refresh lifecycle removes its event listener and running timer on close', async () => {

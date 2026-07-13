@@ -16,6 +16,13 @@ export const operationStates = Object.freeze({
   cancelled: 'cancelled'
 })
 
+export const finalOperationStates = Object.freeze([
+  operationStates.kept,
+  operationStates.restored,
+  operationStates.failed,
+  operationStates.cancelled
+])
+
 export const operationSources = Object.freeze([
   'terminal',
   'agent',
