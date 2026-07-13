@@ -171,7 +171,7 @@ function tokenizeShellSyntax (command) {
       isBoundary(command[index - 1]) && isBoundary(command[index + 1])
     if (';|&()'.includes(character) || braceOperator) {
       flushWord(index)
-      const doubled = (character === ';' || character === '|' || character === '&') &&
+      const doubled = (';|&()'.includes(character)) &&
         command[index + 1] === character
       const value = doubled ? character + character : character
       tokens.push({
@@ -216,17 +216,33 @@ function hasOpenShellCompound (command) {
 
     if (token.operator) {
       if (token.value === '{' && commandPosition) {
-        stack.push({ type: 'group' })
+        if (frame?.type === 'function') {
+          frame.type = 'group'
+        } else {
+          stack.push({ type: 'group' })
+        }
         commandPosition = true
       } else if (token.value === '}' && commandPosition &&
         frame?.type === 'group') {
+        stack.pop()
+        commandPosition = false
+      } else if (token.value === '((' && commandPosition) {
+        stack.push({ type: 'arithmetic' })
+        commandPosition = true
+      } else if (token.value === '))' && frame?.type === 'arithmetic') {
+        stack.pop()
+        commandPosition = false
+      } else if (token.value === '(' && commandPosition) {
+        stack.push({ type: 'subshell' })
+        commandPosition = true
+      } else if (token.value === ')' && frame?.type === 'subshell') {
         stack.pop()
         commandPosition = false
       } else if (token.value === ';;' && frame?.type === 'case' &&
         frame.phase === 'body') {
         frame.phase = 'pattern'
         commandPosition = false
-      } else if ([';', '&&', '||', '|', '&', ';;', '('].includes(token.value)) {
+      } else if ([';', '&&', '||', '|', '&', ';;'].includes(token.value)) {
         commandPosition = true
       } else if (token.value === ')' && frame?.type === 'case') {
         frame.phase = 'body'
@@ -250,18 +266,20 @@ function hasOpenShellCompound (command) {
     const afterNext = tokens[index + 2]
     const functionBrace = tokens[index + 3]
     if (next?.value === '(' && afterNext?.value === ')' &&
-      functionBrace?.value === '{' && token.end === next.start &&
-      next.end === afterNext.start) {
-      stack.push({ type: 'group' })
+      token.end === next.start && next.end === afterNext.start) {
+      stack.push({
+        type: functionBrace?.value === '{' ? 'group' : 'function'
+      })
       commandPosition = true
-      index += 3
+      index += functionBrace?.value === '{' ? 3 : 2
       continue
     }
-    if (token.value === 'function' && next && !next.operator && next.plain &&
-      afterNext?.value === '{') {
-      stack.push({ type: 'group' })
+    if (token.value === 'function' && next && !next.operator && next.plain) {
+      stack.push({
+        type: afterNext?.value === '{' ? 'group' : 'function'
+      })
       commandPosition = true
-      index += 2
+      index += afterNext?.value === '{' ? 2 : 1
       continue
     }
 
@@ -395,7 +413,7 @@ export function createTerminalSafetyController (options = {}) {
       continuationActive = Boolean(normalized)
       return { sendNow: true }
     }
-    const classification = classify(normalized)
+    const classification = classify(canonical)
     if (classification.risk === 'readonly') return { sendNow: true }
     pending = confirmationFor(canonical, classification)
     return { sendNow: false, confirmation: pending }

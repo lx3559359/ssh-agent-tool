@@ -1,5 +1,8 @@
 import { redactAuditText } from './audit-redaction.js'
-import { classifyCommand } from './command-classifier.js'
+import {
+  classifyCommand,
+  tokenizeStaticShell
+} from './command-classifier.js'
 import { buildVerifiedRemoteAction } from './remote-recovery.js'
 
 const safeIdPattern = /^[A-Za-z0-9_-]+$/
@@ -34,72 +37,17 @@ function shellQuote (value) {
   return '\'' + escaped + '\''
 }
 
-function executableName (value) {
-  return String(value || '').replace(/^.*\//, '').toLowerCase()
+function writeShellScript (script, target) {
+  const text = String(script || '')
+  if (!text.endsWith('\n') || /[\0\r]/.test(text)) {
+    throw new Error('恢复脚本必须是无控制字符且以换行结尾的静态文本。')
+  }
+  const lines = text.slice(0, -1).split('\n').map(shellQuote).join(' ')
+  return `printf '%s\\n' ${lines} > ${target}`
 }
 
-function tokenizeStaticShell (command) {
-  const text = String(command || '')
-  if (!text.trim() || /[\0\r\n]/.test(text)) {
-    throw new Error('命令为空或包含换行/NUL。')
-  }
-  const words = []
-  let current = ''
-  let quote = ''
-  let inWord = false
-  let escaped = false
-
-  function pushWord () {
-    if (!inWord) return
-    words.push(current)
-    current = ''
-    inWord = false
-  }
-
-  for (let index = 0; index < text.length; index += 1) {
-    const character = text[index]
-    if (escaped) {
-      current += character
-      inWord = true
-      escaped = false
-      continue
-    }
-    if (quote) {
-      if (character === quote) {
-        quote = ''
-        inWord = true
-      } else if (character === '\\' && quote === '"') {
-        escaped = true
-        inWord = true
-      } else {
-        current += character
-        inWord = true
-      }
-      continue
-    }
-    if (character === "'" || character === '"') {
-      quote = character
-      inWord = true
-      continue
-    }
-    if (character === '\\') {
-      escaped = true
-      inWord = true
-      continue
-    }
-    if (/\s/.test(character)) {
-      pushWord()
-      continue
-    }
-    if (/[;|&<>]/.test(character)) {
-      throw new Error('命令包含 shell 控制符，无法静态解析。')
-    }
-    current += character
-    inWord = true
-  }
-  if (quote || escaped) throw new Error('命令引号或转义不完整。')
-  pushWord()
-  return words
+function executableName (value) {
+  return String(value || '').replace(/^.*\//, '').toLowerCase()
 }
 
 function isEnvironmentAssignment (value) {
@@ -198,7 +146,7 @@ function parseFileRedirection (command) {
   const redirect = findRedirection(command)
   if (!redirect) return null
   const left = command.slice(0, redirect.index).trim()
-  const right = command.slice(redirect.index + redirect.length).trim()
+  const right = command.slice(redirect.index + redirect.length).trimStart()
   const invocation = parseInvocation(left)
   const targets = tokenizeStaticShell(right)
   if (targets.length !== 1) throw new Error('重定向必须只有一个静态目标。')
@@ -844,8 +792,8 @@ export function buildRecoveryPlan (change) {
     ...recovery.captureCommands,
     `printf '%s\\n' ${shellQuote(manifest)} > "$operation_dir/manifest.json"`,
     `printf '%s\\n' ${shellQuote(result)} > "$operation_dir/result.json"`,
-    `printf '%s' ${shellQuote(recovery.rollbackScript)} > "$operation_dir/rollback.sh"`,
-    `printf '%s' ${shellQuote(recovery.verifyScript)} > "$operation_dir/verify.sh"`,
+    writeShellScript(recovery.rollbackScript, '"$operation_dir/rollback.sh"'),
+    writeShellScript(recovery.verifyScript, '"$operation_dir/verify.sh"'),
     'chmod 600 "$operation_dir/manifest.json" "$operation_dir/result.json"',
     'chmod 700 "$operation_dir/rollback.sh" "$operation_dir/verify.sh"',
     'test -s "$operation_dir/manifest.json"',

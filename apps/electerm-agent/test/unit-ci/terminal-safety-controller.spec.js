@@ -112,7 +112,7 @@ test('quoted heredoc text and an escaped pipe are complete arguments', async () 
   assert.equal(isCompleteTerminalCommand('echo \\|'), true)
 })
 
-test('escaped trailing space is complete before classifier normalization', async () => {
+test('escaped trailing space is complete and classified from canonical bytes', async () => {
   const {
     createTerminalSafetyController,
     isCompleteTerminalCommand
@@ -131,7 +131,7 @@ test('escaped trailing space is complete before classifier normalization', async
 
   assert.equal(decision.sendNow, false)
   assert.equal(decision.confirmation.command, command)
-  assert.deepEqual(classified, ['printf x > /tmp/task5-review\\'])
+  assert.deepEqual(classified, [command])
 })
 
 test('ordinary trailing padding stays complete and protected', async () => {
@@ -201,6 +201,31 @@ test('open shell compound bodies remain transparent continuations', async () => 
   }
 })
 
+test('pending Bash function subshell and arithmetic forms remain transparent', async () => {
+  const {
+    createTerminalSafetyController,
+    isCompleteTerminalCommand
+  } = await importController()
+  const incomplete = [
+    'f()',
+    'function f',
+    '(systemctl restart nginx',
+    '(( x = 1'
+  ]
+
+  for (const command of incomplete) {
+    assert.equal(isCompleteTerminalCommand(command), false, command)
+    assert.deepEqual(
+      createTerminalSafetyController().beforeEnter(
+        command,
+        completeSshContext()
+      ),
+      { sendNow: true },
+      command
+    )
+  }
+})
+
 test('closed compounds and ordinary keyword or brace arguments stay complete', async () => {
   const { isCompleteTerminalCommand } = await importController()
   const complete = [
@@ -215,6 +240,10 @@ test('closed compounds and ordinary keyword or brace arguments stay complete', a
     'f() { echo hi; }',
     'function f { echo hi; }',
     '{ echo hi; }',
+    '(systemctl status nginx)',
+    '(( x = 1 ))',
+    'echo "(literal)"',
+    'systemctl restart "name(with-paren)"',
     'systemctl restart do',
     'systemctl restart then',
     'systemctl restart else',

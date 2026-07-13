@@ -115,6 +115,77 @@ test('file provider supports one static ordinary target for first-release comman
   }
 })
 
+test('file redirection preserves a trailing escaped-space target through recovery scripts', async () => {
+  const { buildRecoveryPlan } = await importDomainModule('recovery-providers.js')
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'shellpilot-file-space-'))
+  const targetPath = path.join(home, 'task5-review ')
+  const shellTarget = shellPath(targetPath)
+  const command = `printf x > ${shellTarget.slice(0, -1)}\\ `
+
+  try {
+    const change = await buildChange(command, 'file-trailing-space')
+    assert.equal(change.recoveryProvider, 'file')
+    const plan = buildRecoveryPlan(change)
+
+    assert.equal(plan.executeCommand, command)
+    assert.match(plan.prepareCommand, new RegExp(`test -L '${shellTarget}'`))
+    const prepared = runBash(plan.prepareCommand, home)
+    assert.equal(prepared.status, 0, prepared.stderr || prepared.stdout)
+
+    const operationRoot = path.join(
+      home,
+      '.shellpilot/operations/file-trailing-space'
+    )
+    const rollbackScript = fs.readFileSync(
+      path.join(operationRoot, 'rollback.sh'),
+      'utf8'
+    )
+    const verifyScript = fs.readFileSync(
+      path.join(operationRoot, 'verify.sh'),
+      'utf8'
+    )
+    assert.equal(
+      rollbackScript.includes(`target_target='${shellTarget}'`),
+      true
+    )
+    assert.equal(
+      verifyScript.includes(`target_target='${shellTarget}'`),
+      true
+    )
+
+    fs.writeFileSync(targetPath, 'changed')
+    const rollback = runBash(
+      '. "$HOME/.shellpilot/operations/file-trailing-space/rollback.sh"',
+      home
+    )
+    assert.equal(rollback.status, 0, rollback.stderr || rollback.stdout)
+    assert.equal(fs.existsSync(targetPath), false)
+    const verify = runBash(
+      '. "$HOME/.shellpilot/operations/file-trailing-space/verify.sh"',
+      home
+    )
+    assert.equal(verify.status, 0, verify.stderr || verify.stdout)
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('file redirection ignores ordinary padding but preserves quoted target spaces', async () => {
+  const { buildRecoveryPlan } = await importDomainModule('recovery-providers.js')
+  const padded = buildRecoveryPlan(await buildChange(
+    'printf x > /tmp/task5-review   ',
+    'file-padded-target'
+  ))
+  const quoted = buildRecoveryPlan(await buildChange(
+    'printf x > "/tmp/task5 review "',
+    'file-quoted-space'
+  ))
+
+  assert.match(padded.prepareCommand, /test -L '\/tmp\/task5-review'/)
+  assert.doesNotMatch(padded.prepareCommand, /test -L '\/tmp\/task5-review '/)
+  assert.match(quoted.prepareCommand, /test -L '\/tmp\/task5 review '/)
+})
+
 test('systemd and docker providers capture and restore the previous state', async () => {
   const { buildRecoveryPlan } = await importDomainModule('recovery-providers.js')
   const systemd = buildRecoveryPlan(await buildChange(

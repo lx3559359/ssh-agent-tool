@@ -3,6 +3,15 @@ const assert = require('node:assert/strict')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
 
+const domainRoot = path.resolve(
+  __dirname,
+  '../../src/client/common/safety-transactions'
+)
+
+function importDomainModule (name) {
+  return import(pathToFileURL(path.join(domainRoot, name)).href)
+}
+
 async function importSafetyModules () {
   const root = path.resolve(__dirname, '../../src/client/components/terminal')
   const [controllerModule, coordinatorModule] = await Promise.all([
@@ -20,6 +29,51 @@ function deferred () {
     rejectDeferred = reject
   })
   return { promise, resolve: resolveDeferred, reject: rejectDeferred }
+}
+
+function clone (value) {
+  return value === undefined ? undefined : structuredClone(value)
+}
+
+function createRunnerStore () {
+  const records = new Map()
+
+  async function guardedPatch (id, predicate, value) {
+    const current = records.get(id)
+    if (!current) throw new Error(`missing record: ${id}`)
+    if (await predicate(clone(current)) !== true) {
+      throw new Error('guarded patch rejected')
+    }
+    const resolved = typeof value === 'function'
+      ? await value(clone(current))
+      : value
+    const next = { ...current, ...clone(resolved) }
+    records.set(id, next)
+    return clone(next)
+  }
+
+  return {
+    async save (value) {
+      records.set(value.id, clone(value))
+      return clone(value)
+    },
+    async get (id) {
+      return clone(records.get(id))
+    },
+    async patch (id, value) {
+      const current = records.get(id)
+      if (!current) throw new Error(`missing record: ${id}`)
+      const next = { ...current, ...clone(value) }
+      records.set(id, next)
+      return clone(next)
+    },
+    guardedPatch,
+    guardedPatchOperation: guardedPatch
+  }
+}
+
+function marker (phase, id, code = 0) {
+  return `__SHELLPILOT_${phase.toUpperCase()}_RC_${id}=${code}`
 }
 
 function protectedContext () {
@@ -97,6 +151,99 @@ function createHarness (createTerminalSafetyCoordinator, createTerminalSafetyCon
   coordinator.beginSession()
   return { coordinator, calls, views }
 }
+
+test('escaped trailing-space approval prepares recovery and completes external lifecycle', async () => {
+  const {
+    createTerminalSafetyCoordinator,
+    createTerminalSafetyController
+  } = await importSafetyModules()
+  const [
+    { createTransactionRunner },
+    { buildRecoveryPlan },
+    { buildSafetyRequest }
+  ] = await Promise.all([
+    importDomainModule('transaction-runner.js'),
+    importDomainModule('recovery-providers.js'),
+    importDomainModule('models.js')
+  ])
+  const id = 'terminal-trailing-space'
+  const command = String.raw`printf x > /tmp/task5-review\ `
+  const endpoint = {
+    host: 'prod.example.com',
+    port: 22,
+    username: 'root',
+    tabId: 'tab-1',
+    pid: 1001
+  }
+  const store = createRunnerStore()
+  const remoteCalls = []
+  const runner = createTransactionRunner({
+    runRemote: async (remoteCommand, options) => {
+      remoteCalls.push({ command: remoteCommand, options })
+      return {
+        stdout: `prepared\n${marker(options.phase, id)}`,
+        stderr: '',
+        code: 0
+      }
+    },
+    cancelRemote: async () => {},
+    getCurrentEndpoint: async () => endpoint,
+    buildRecoveryPlan,
+    store
+  })
+  const submissionToken = 'submission-trailing-space'
+  const states = []
+  const tracker = {
+    expectSubmission: submitted => {
+      assert.equal(submitted, command)
+      return submissionToken
+    },
+    markExpectedSubmissionReleased: token => token === submissionToken,
+    cancelExpectedSubmission: () => true
+  }
+  const coordinator = createTerminalSafetyCoordinator({
+    controller: createTerminalSafetyController(),
+    runner,
+    tracker,
+    onStateChange: state => states.push(state),
+    buildRequest: confirmation => buildSafetyRequest({
+      id,
+      source: 'terminal',
+      endpoint,
+      command: confirmation.command
+    })
+  })
+  coordinator.beginSession()
+
+  const decision = coordinator.beforeEnter(command, protectedContext())
+  assert.equal(states.at(-1).confirmation.kind, 'reversible')
+  assert.equal(states.at(-1).confirmation.automaticRollback, true)
+  assert.equal(
+    await coordinator.confirmExecute(),
+    true,
+    states.at(-1)?.error
+  )
+  const release = await decision
+
+  assert.equal(release.sendNow, true)
+  assert.equal(release.releaseToken, submissionToken)
+  assert.equal(coordinator.consumeRelease(submissionToken), true)
+  assert.equal(remoteCalls.length, 1)
+  assert.equal(remoteCalls[0].options.phase, 'prepare')
+  assert.match(remoteCalls[0].command, /'\/tmp\/task5-review '/)
+  const executing = await store.get(id)
+  assert.equal(executing.state, 'executing')
+  assert.equal(executing.plan.executeCommand, command)
+
+  assert.equal(await coordinator.handleCommandFinished({
+    token: submissionToken,
+    command,
+    exitCode: 0
+  }), true)
+  const completed = await store.get(id)
+  assert.equal(completed.state, 'rollback-available')
+  assert.equal(completed.plan.rollbackCommand.length > 0, true)
+})
 
 test('disconnect during confirmation closes it and never releases Enter', async () => {
   const {

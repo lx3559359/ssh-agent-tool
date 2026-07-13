@@ -592,6 +592,22 @@ test('only unambiguous absolute-path writes use the file recovery provider', asy
   assert.equal(classifyCommand('sed -i s/a/b/ relative.conf /etc/example.conf').risk, 'unknown')
 })
 
+test('redirection classification preserves escaped trailing spaces as shell syntax', async () => {
+  const { classifyCommand } = await importDomainModule('command-classifier.js')
+  const escapedSpace = classifyCommand(
+    String.raw`printf x > /tmp/task5-review\ `
+  )
+  const danglingBackslash = classifyCommand(
+    'printf x > /tmp/task5-review\\'
+  )
+
+  assert.equal(escapedSpace.risk, 'change')
+  assert.equal(escapedSpace.reversible, true)
+  assert.equal(escapedSpace.provider, 'file')
+  assert.equal(danglingBackslash.risk, 'unknown')
+  assert.equal(danglingBackslash.reversible, false)
+})
+
 test('virtual and device paths never use the file recovery provider', async () => {
   const { classifyCommand } = await importDomainModule('command-classifier.js')
 

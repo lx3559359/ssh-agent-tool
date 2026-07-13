@@ -45,7 +45,7 @@ function splitCommands (command) {
     }
     const doubleOperator = command.slice(index, index + 2)
     if (doubleOperator === '&&' || doubleOperator === '||') {
-      if (current.trim()) parts.push(current.trim())
+      if (current.trim()) parts.push(current)
       current = ''
       index += 1
       continue
@@ -53,13 +53,13 @@ function splitCommands (command) {
     const isBackgroundOperator = character === '&' &&
       command[index - 1] !== '>' && command[index + 1] !== '>'
     if (character === ';' || character === '|' || character === '\n' || isBackgroundOperator) {
-      if (current.trim()) parts.push(current.trim())
+      if (current.trim()) parts.push(current)
       current = ''
       continue
     }
     current += character
   }
-  if (current.trim()) parts.push(current.trim())
+  if (current.trim()) parts.push(current)
   return parts
 }
 
@@ -80,6 +80,70 @@ function shellTokens (command) {
 
 function shellWords (command) {
   return shellTokens(command).map(token => token.value)
+}
+
+export function tokenizeStaticShell (command) {
+  const text = String(command || '')
+  if (!text.trim() || /[\0\r\n]/.test(text)) {
+    throw new Error('命令为空或包含换行/NUL。')
+  }
+  const words = []
+  let current = ''
+  let quote = ''
+  let inWord = false
+  let escaped = false
+
+  function pushWord () {
+    if (!inWord) return
+    words.push(current)
+    current = ''
+    inWord = false
+  }
+
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index]
+    if (escaped) {
+      current += character
+      inWord = true
+      escaped = false
+      continue
+    }
+    if (quote) {
+      if (character === quote) {
+        quote = ''
+        inWord = true
+      } else if (character === '\\' && quote === '"') {
+        escaped = true
+        inWord = true
+      } else {
+        current += character
+        inWord = true
+      }
+      continue
+    }
+    if (character === "'" || character === '"') {
+      quote = character
+      inWord = true
+      continue
+    }
+    if (character === '\\') {
+      escaped = true
+      inWord = true
+      continue
+    }
+    if (/\s/.test(character)) {
+      pushWord()
+      continue
+    }
+    if (/[;|&<>]/.test(character)) {
+      throw new Error('命令包含 shell 控制符，无法静态解析。')
+    }
+    current += character
+    inWord = true
+  }
+  if (quote || escaped) throw new Error('命令引号或转义不完整。')
+  pushWord()
+  return words
 }
 
 function executableName (value) {
@@ -226,7 +290,13 @@ function findRedirection (command) {
     const operatorEnd = command[index + 1] === '>' ? index + 2 : index + 1
     let tail = command.slice(operatorEnd).trimStart()
     if (tail.startsWith('&')) tail = tail.slice(1).trimStart()
-    const target = shellWords(tail)[0]
+    let target
+    try {
+      const targets = tokenizeStaticShell(tail)
+      target = targets.length === 1 ? targets[0] : undefined
+    } catch (error) {
+      target = undefined
+    }
     redirects.push({ index, target })
     if (command[index + 1] === '>') index += 1
   }
@@ -756,7 +826,7 @@ function classifySingle (command) {
 }
 
 export function classifyCommand (command) {
-  const text = String(command || '').trim()
+  const text = String(command || '')
   if (!text) return result('unknown', '命令为空，无法分类')
   const parts = splitCommands(text)
   if (!parts.length) return result('unknown', '命令为空，无法分类')
