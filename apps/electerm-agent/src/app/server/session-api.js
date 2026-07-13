@@ -8,13 +8,30 @@ const {
 const { startSession } = require('./session')
 
 async function runCmd (body) {
-  const { pid, cmd, timeoutMs } = body
+  const {
+    pid,
+    cmd,
+    timeoutMs,
+    maxOutputBytes,
+    executionId
+  } = body
   const term = terminals(pid)
   let txt = ''
   if (term) {
-    txt = await term.runCmd(cmd, undefined, { timeoutMs })
+    txt = await term.runCmd(cmd, undefined, {
+      timeoutMs,
+      maxOutputBytes,
+      executionId
+    })
   }
   return txt
+}
+
+async function cancelRunCmd (body) {
+  const { pid, executionId } = body
+  const term = terminals(pid)
+  if (!term) return false
+  return await term.cancelRunCmd(executionId) === true
 }
 
 async function resize (body) {
@@ -80,6 +97,7 @@ exports.createTerm = createTerm
 exports.testTerm = testTerm
 exports.resize = resize
 exports.runCmd = runCmd
+exports.cancelRunCmd = cancelRunCmd
 exports.toggleTerminalLog = toggleTerminalLog
 exports.toggleTerminalLogTimestamp = toggleTerminalLogTimestamp
 exports.setTerminalLogPath = setTerminalLogPath

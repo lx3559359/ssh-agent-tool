@@ -18,7 +18,16 @@ export function runCmd (pid, cmd, options = {}) {
     cmd,
     timeoutMs: options.timeoutMs,
     maxOutputBytes: options.maxOutputBytes,
+    executionId: options.executionId,
     action: 'run-cmd'
+  })
+}
+
+export function cancelRunCmd (pid, executionId) {
+  return fetch({
+    pid,
+    executionId,
+    action: 'cancel-run-cmd'
   })
 }
 

@@ -207,11 +207,27 @@ exports.terminals = function (pid) {
   }
 
   return {
-    runCmd: async (cmd, id, timeoutMs) => {
+    runCmd: async (cmd, id, options = {}) => {
+      const normalizedOptions = typeof options === 'number'
+        ? { timeoutMs: options }
+        : options
       return sendMsgToChildProcess(pid, {
         id,
         action: 'run-cmd',
-        body: { cmd, pid, timeoutMs }
+        body: {
+          cmd,
+          pid,
+          timeoutMs: normalizedOptions.timeoutMs,
+          maxOutputBytes: normalizedOptions.maxOutputBytes,
+          executionId: normalizedOptions.executionId
+        }
+      })
+    },
+    cancelRunCmd: async (executionId, id) => {
+      return sendMsgToChildProcess(pid, {
+        id,
+        action: 'cancel-run-cmd',
+        body: { pid, executionId }
       })
     },
     resize: (cols, rows, id) => {

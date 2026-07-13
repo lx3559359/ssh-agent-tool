@@ -33,7 +33,7 @@ import { XmodemClient } from './xmodem-client.js'
 import DropFileModal from './drop-file-modal.jsx'
 import keyControlPressed from '../../common/key-control-pressed.js'
 import NormalBuffer from './normal-buffer.jsx'
-import { createTerm, resizeTerm, runCmd, startTerminalLogFile, toggleTerminalLog } from './terminal-apis.js'
+import { cancelRunCmd, createTerm, resizeTerm, runCmd, startTerminalLogFile, toggleTerminalLog } from './terminal-apis.js'
 import {
   saveTerminalLog,
   startTerminalRecording,
@@ -131,7 +131,12 @@ class Term extends Component {
     this.terminalSafetyController = createTerminalSafetyController()
     this.terminalSafetyRunner = createTransactionRunner({
       runRemote: (command, options) => runCmd(this.pid, command, options),
-      cancelRemote: async () => {},
+      cancelRemote: async executionId => {
+        const cancelled = await cancelRunCmd(this.pid, executionId)
+        if (cancelled !== true) {
+          throw new Error('Remote command is no longer active.')
+        }
+      },
       getCurrentEndpoint: async () => this.getTerminalSafetyEndpoint(),
       buildRecoveryPlan,
       store: terminalSafetyStore

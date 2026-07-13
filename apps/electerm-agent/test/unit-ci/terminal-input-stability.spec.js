@@ -954,7 +954,11 @@ test('compact Chinese safety modal exposes only policy-allowed actions', () => {
 
 test('terminal runCmd adapter forwards safety timeout and output cap options', () => {
   const source = readClientFile('components/terminal/terminal-apis.js')
+  const terminal = readClientFile('components/terminal/terminal.jsx')
 
   assert.match(source, /timeoutMs:\s*options\.timeoutMs/)
   assert.match(source, /maxOutputBytes:\s*options\.maxOutputBytes/)
+  assert.match(source, /executionId:\s*options\.executionId/)
+  assert.match(source, /action:\s*'cancel-run-cmd'/)
+  assert.match(terminal, /cancelRunCmd\(this\.pid, executionId\)/)
 })
