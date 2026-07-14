@@ -5,8 +5,10 @@
 import { auto } from 'manate/react'
 import { pick } from 'lodash-es'
 import { Tabs, Spin } from 'antd'
-import { lazy, Suspense } from 'react'
+import { lazy, Suspense, useState } from 'react'
 import SettingModal from './setting-wrap'
+import SettingHeader from './setting-header'
+import { searchSettings } from '../../common/setting-search-index'
 import {
   settingMap,
   modals
@@ -23,12 +25,37 @@ const Loading = () => <div style={{ padding: 20, textAlign: 'center' }}><Spin />
 const e = window.translate
 
 export default auto(function SettingModalWrap (props) {
+  const { store } = props
+  const [query, setQuery] = useState('')
+  const effectiveLanguage = store.previewLanguage || store.config.language
+
   const selectItem = (item) => {
     window.store.setSettingItem(item)
   }
 
+  function openSearchResult () {
+    const result = searchSettings(query)[0]
+    if (!result) {
+      return
+    }
+    store.handleChangeSettingTab(result.tab)
+    if (!result.itemId) {
+      return
+    }
+    const item = store.getSidebarList(result.tab)
+      .find(item => item.id === result.itemId)
+    if (item) {
+      store.setSettingItem(item)
+    }
+  }
+
+  function handleClose () {
+    store.previewLanguage = ''
+    setQuery('')
+    store.hideSettingModal()
+  }
+
   function renderTabs () {
-    const { store } = props
     const tabsShouldConfirmDel = [
       settingMap.bookmarks,
       settingMap.terminalThemes
@@ -117,11 +144,20 @@ export default auto(function SettingModalWrap (props) {
     }
     return (
       <>
+        <SettingHeader
+          store={store}
+          languages={window.et.langs || []}
+          query={query}
+          onQueryChange={setQuery}
+          onSearch={openSearchResult}
+          onClose={handleClose}
+        />
         <Tabs
           {...tabsProps}
         />
         <Suspense fallback={<Loading />}>
           <TabQuickCommands
+            languageVersion={effectiveLanguage}
             listProps={props0}
             settingItem={settingItem}
             formProps={formProps}
@@ -129,18 +165,21 @@ export default auto(function SettingModalWrap (props) {
             settingTab={settingTab}
           />
           <TabBookmarks
+            languageVersion={effectiveLanguage}
             treeProps={treeProps}
             settingItem={settingItem}
             formProps={formProps}
             settingTab={settingTab}
           />
           <TabSettings
+            languageVersion={effectiveLanguage}
             listProps={props0}
             settingItem={settingItem}
             settingTab={settingTab}
             store={store}
           />
           <TabThemes
+            languageVersion={effectiveLanguage}
             listProps={props0}
             settingItem={settingItem}
             formProps={formProps}
@@ -148,6 +187,7 @@ export default auto(function SettingModalWrap (props) {
             settingTab={settingTab}
           />
           <TabProfiles
+            languageVersion={effectiveLanguage}
             listProps={props0}
             settingItem={settingItem}
             formProps={formProps}
@@ -155,6 +195,7 @@ export default auto(function SettingModalWrap (props) {
             settingTab={settingTab}
           />
           <TabWidgets
+            languageVersion={effectiveLanguage}
             listProps={props0}
             settingItem={settingItem}
             formProps={formProps}
@@ -168,7 +209,6 @@ export default auto(function SettingModalWrap (props) {
 
   const {
     showModal,
-    hideSettingModal,
     innerWidth,
     useSystemTitleBar
   } = props.store
@@ -178,7 +218,7 @@ export default auto(function SettingModalWrap (props) {
   }
   return (
     <SettingModal
-      onCancel={hideSettingModal}
+      onCancel={handleClose}
       visible={show}
       useSystemTitleBar={useSystemTitleBar}
       innerWidth={innerWidth}
