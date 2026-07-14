@@ -3,6 +3,12 @@ const fs = require('node:fs')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
 const {
+  createSshHostVerification,
+  hostFingerprintMatches,
+  normalizeExpectedHostFingerprint,
+  normalizeHostFingerprint
+} = require('./ssh-host-fingerprint')
+const {
   assertSafeRemoteTarget,
   buildCleanupAbsenceCondition,
   createValidatedRemoteScope,
@@ -138,28 +144,6 @@ function normalizeSafetyTestRoot (value) {
   return normalized
 }
 
-function normalizeHostFingerprint (value) {
-  const raw = String(value || '').trim()
-  if (/^[a-f0-9]{64}$/i.test(raw)) return raw.toLowerCase()
-
-  const match = /^SHA256:([A-Za-z0-9+/]{43}=?)$/.exec(raw)
-  if (!match) throw new Error('Invalid SHA256 host fingerprint.')
-  const unpadded = match[1].replace(/=+$/, '')
-  const digest = Buffer.from(`${unpadded}=`, 'base64')
-  if (digest.length !== 32 || digest.toString('base64').replace(/=+$/, '') !== unpadded) {
-    throw new Error('Invalid SHA256 host fingerprint.')
-  }
-  return digest.toString('hex')
-}
-
-function hostFingerprintMatches (expected, actual) {
-  try {
-    return normalizeHostFingerprint(expected) === normalizeHostFingerprint(actual)
-  } catch {
-    return false
-  }
-}
-
 function resolveRemoteConfig (env = process.env) {
   const requested = env.SHELLPILOT_SAFETY_SMOKE_REAL === '1'
   const host = String(env.SHELLPILOT_SSH_HOST || '').trim()
@@ -206,7 +190,7 @@ function validateRemoteConfig (config) {
     return { enabled: false, error: 'smoke 超时时间必须在 1000 到 120000 毫秒之间。' }
   }
   try {
-    normalizeHostFingerprint(config.hostFingerprint)
+    normalizeExpectedHostFingerprint(config.hostFingerprint)
     const testRoot = normalizeSafetyTestRoot(config.testRoot)
     const scope = createValidatedRemoteScope(testRoot)
     return { enabled: true, scope }
@@ -216,7 +200,7 @@ function validateRemoteConfig (config) {
 }
 
 function buildSshConnectOptions (config, privateKey) {
-  const expectedFingerprint = normalizeHostFingerprint(config.hostFingerprint)
+  const hostVerification = createSshHostVerification(config.hostFingerprint)
   return {
     host: config.host,
     port: config.port,
@@ -225,8 +209,7 @@ function buildSshConnectOptions (config, privateKey) {
     privateKey,
     readyTimeout: config.timeoutMs,
     keepaliveInterval: 10000,
-    hostHash: 'sha256',
-    hostVerifier: actual => hostFingerprintMatches(expectedFingerprint, actual)
+    ...hostVerification
   }
 }
 
@@ -235,7 +218,7 @@ function connectRemote (config) {
     let connectOptions
     let privateKey
     try {
-      normalizeHostFingerprint(config.hostFingerprint)
+      normalizeExpectedHostFingerprint(config.hostFingerprint)
       privateKey = readPrivateKey(config.privateKeyPath)
       connectOptions = buildSshConnectOptions(config, privateKey)
     } catch (error) {

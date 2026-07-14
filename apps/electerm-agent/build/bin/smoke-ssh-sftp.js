@@ -1,11 +1,13 @@
 const { Client } = require('@electerm/ssh2')
 const crypto = require('crypto')
 const path = require('path')
+const { createSshHostVerification } = require('./ssh-host-fingerprint')
 
 const env = process.env
 const host = env.SHELLPILOT_SSH_HOST
 const username = env.SHELLPILOT_SSH_USER
 const password = env.SHELLPILOT_SSH_PASSWORD
+const hostFingerprint = env.SHELLPILOT_SSH_HOST_FINGERPRINT
 const port = Number(env.SHELLPILOT_SSH_PORT || 22)
 const testDir = env.SHELLPILOT_SSH_TEST_DIR || '/tmp'
 const timeoutMs = Number(env.SHELLPILOT_SSH_TIMEOUT || 20000)
@@ -178,30 +180,43 @@ function failMissingEnv () {
   const missing = [
     ['SHELLPILOT_SSH_HOST', host],
     ['SHELLPILOT_SSH_USER', username],
-    ['SHELLPILOT_SSH_PASSWORD', password]
+    ['SHELLPILOT_SSH_PASSWORD', password],
+    ['SHELLPILOT_SSH_HOST_FINGERPRINT', hostFingerprint]
   ].filter(([, value]) => !value).map(([name]) => name)
   if (!missing.length) {
     return
   }
   console.error(`Missing required environment variables: ${missing.join(', ')}`)
-  console.error('Example: set SHELLPILOT_SSH_HOST, SHELLPILOT_SSH_USER and SHELLPILOT_SSH_PASSWORD, then run npm run smoke:ssh-sftp')
   process.exit(2)
 }
 
+function buildSshConnectOptions (config) {
+  const hostVerification = createSshHostVerification(config.hostFingerprint)
+  return {
+    host: config.host,
+    port: config.port,
+    username: config.username,
+    password: config.password,
+    readyTimeout: config.timeoutMs,
+    keepaliveInterval: 10000,
+    ...hostVerification
+  }
+}
+
 function connect () {
+  const connectOptions = buildSshConnectOptions({
+    host,
+    port,
+    username,
+    password,
+    timeoutMs,
+    hostFingerprint
+  })
   return new Promise((resolve, reject) => {
     const conn = new Client()
     conn.on('ready', () => resolve(conn))
     conn.on('error', reject)
-    conn.connect({
-      host,
-      port,
-      username,
-      password,
-      readyTimeout: timeoutMs,
-      keepaliveInterval: 10000,
-      hostVerifier: () => true
-    })
+    conn.connect(connectOptions)
   })
 }
 
@@ -841,6 +856,7 @@ module.exports = {
   assertSafeTestRoot,
   buildCleanupAbsenceCondition,
   buildRollbackScript,
+  buildSshConnectOptions,
   connect,
   connectWithValidatedScope,
   createCtrlCProbe,
