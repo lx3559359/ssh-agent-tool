@@ -37,6 +37,15 @@ const expectedCatalogs = {
     passwordManager: '密码管理',
     themeLibrary: '主题库',
     themePreview: '实时预览',
+    themeFilterAll: '全部',
+    themeFilterLight: '浅色',
+    themeFilterDark: '深色',
+    themeReadonly: '只读',
+    themeViewDetails: '查看主题',
+    themeApplied: '已应用',
+    themeApplyFailed: '主题应用失败，请检查当前主题设置',
+    themeUpdateChannel: '更新通道',
+    themeContextMenu: '上下文菜单',
     advancedColorEditor: '高级颜色编辑',
     shellpilotThemeOcean: '海湾蓝',
     shellpilotThemeOceanDesc: '专业清晰，适合日常服务器管理。',
@@ -86,6 +95,15 @@ const expectedCatalogs = {
     passwordManager: 'Password Manager',
     themeLibrary: 'Theme Library',
     themePreview: 'Live Preview',
+    themeFilterAll: 'All',
+    themeFilterLight: 'Light',
+    themeFilterDark: 'Dark',
+    themeReadonly: 'Read-only',
+    themeViewDetails: 'View theme',
+    themeApplied: 'Applied',
+    themeApplyFailed: 'Unable to apply theme. Check the current theme settings.',
+    themeUpdateChannel: 'Update channel',
+    themeContextMenu: 'Context menu',
     advancedColorEditor: 'Advanced Color Editor',
     shellpilotThemeOcean: 'Ocean Blue',
     shellpilotThemeOceanDesc: 'Clear and professional for daily server administration.',
@@ -148,6 +166,40 @@ test('catalog values are non-empty strings without obvious encoding corruption',
       assert.notEqual(value, '', `${langId}.${key} must not be empty`)
       assert.doesNotMatch(value, /\uFFFD|锟斤拷/)
     }
+  }
+})
+
+test('resolves namespaced theme gallery copy in Simplified Chinese and English', async () => {
+  const {
+    getShellPilotTranslation,
+    resolveShellPilotTranslation
+  } = await import(moduleUrl)
+  const expected = {
+    themeFilterAll: ['全部', 'All'],
+    themeFilterLight: ['浅色', 'Light'],
+    themeFilterDark: ['深色', 'Dark'],
+    themeReadonly: ['只读', 'Read-only'],
+    themeViewDetails: ['查看主题', 'View theme'],
+    themeApplied: ['已应用', 'Applied'],
+    themeApplyFailed: [
+      '主题应用失败，请检查当前主题设置',
+      'Unable to apply theme. Check the current theme settings.'
+    ],
+    themeUpdateChannel: ['更新通道', 'Update channel'],
+    themeContextMenu: ['上下文菜单', 'Context menu']
+  }
+
+  for (const [key, [chinese, english]] of Object.entries(expected)) {
+    assert.equal(getShellPilotTranslation(key, 'zh_cn'), chinese)
+    assert.equal(getShellPilotTranslation(key, 'en_us'), english)
+    assert.equal(
+      resolveShellPilotTranslation(key, 'zh_cn', key, key, key),
+      chinese
+    )
+    assert.equal(
+      resolveShellPilotTranslation(key, 'en_us', key, key, key),
+      english
+    )
   }
 })
 

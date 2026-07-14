@@ -1,0 +1,333 @@
+.sp-theme-center
+  width 100%
+  height 100%
+  min-width 0
+  min-height 0
+  overflow-x hidden
+  .setting-col
+    grid-template-columns minmax(360px, 42%) minmax(0, 1fr)
+  .setting-row-left
+    padding 16px
+    overflow hidden
+
+.sp-theme-gallery
+  display flex
+  flex-direction column
+  width 100%
+  height 100%
+  min-width 0
+  min-height 0
+  overflow-x hidden
+
+.sp-theme-gallery-heading
+.sp-theme-gallery-toolbar
+.sp-theme-card-title
+.sp-theme-card-actions
+.sp-theme-preview-heading
+  display flex
+  align-items center
+  gap 8px
+  min-width 0
+
+.sp-theme-gallery-heading
+  flex-wrap wrap
+  justify-content space-between
+  margin-bottom 12px
+  > div
+    flex 1 1 180px
+    min-width 0
+  h2
+    margin 0
+    color var(--sp-text)
+    white-space normal
+    overflow-wrap break-word
+    word-break normal
+  p
+    margin 3px 0 0
+    color var(--sp-text-muted)
+    white-space normal
+    overflow-wrap break-word
+    word-break normal
+  .ant-btn
+    flex 0 1 auto
+
+.sp-theme-gallery-toolbar
+  flex-wrap wrap
+  margin-bottom 12px
+  .ant-input-affix-wrapper
+    flex 1 1 190px
+    min-width 0
+  .ant-segmented
+    flex 0 1 auto
+    max-width 100%
+  .ant-segmented-item-label
+    min-height 28px
+    height auto
+    white-space normal
+    overflow-wrap break-word
+    word-break normal
+
+.sp-theme-card-grid
+  display grid
+  grid-template-columns repeat(2, minmax(0, 1fr))
+  align-content start
+  gap 12px
+  min-width 0
+  min-height 0
+  padding-right 2px
+  overflow-x hidden
+  overflow-y auto
+
+.sp-theme-card
+  min-width 0
+  padding 12px
+  box-sizing border-box
+  background var(--sp-surface)
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-card)
+  box-shadow var(--sp-shadow-card)
+  &.active
+    border-color var(--sp-success)
+  &.previewing
+    outline 2px solid var(--sp-primary)
+    outline-offset -2px
+  &.selected
+    background var(--sp-primary-soft)
+  > p
+    min-height 3em
+    margin 8px 0
+    color var(--sp-text-muted)
+    line-height 1.5
+    white-space normal
+    overflow-wrap break-word
+    word-break normal
+
+.sp-theme-palette
+  display grid
+  grid-template-columns 1.6fr 1fr 1fr 1fr
+  width 100%
+  height 52px
+  min-width 0
+  margin 0 0 10px
+  padding 0
+  overflow hidden
+  cursor pointer
+  background transparent
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-control)
+  i
+    min-width 0
+  &:focus-visible
+    outline 2px solid var(--sp-primary)
+    outline-offset 2px
+
+.sp-theme-card-title
+  flex-wrap wrap
+  align-items flex-start
+  strong
+    flex 1 1 96px
+    min-width 0
+    white-space normal
+    overflow-wrap break-word
+    word-break normal
+  .ant-tag
+    flex 0 1 auto
+    max-width 100%
+    margin 0
+    white-space normal
+    overflow-wrap break-word
+
+.sp-theme-card-actions
+  flex-wrap wrap
+  align-items stretch
+  margin-top 10px
+  .ant-btn
+    flex 1 1 76px
+    min-width 0
+    max-width 100%
+    height auto
+    white-space normal
+  .ant-popconfirm
+    max-width 100%
+
+.sp-theme-editor-column
+  min-width 0
+  > form
+    min-width 0
+
+.sp-theme-preview-scope
+  min-width 0
+  margin-bottom 18px
+  padding 16px
+  box-sizing border-box
+  color var(--sp-text)
+  background var(--sp-page)
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-card)
+  box-shadow var(--sp-shadow-card)
+
+.sp-theme-preview-heading
+  flex-wrap wrap
+  justify-content space-between
+  margin-bottom 12px
+  > div
+    flex 1 1 190px
+    min-width 0
+  h3
+    margin 0
+    white-space normal
+    overflow-wrap break-word
+  p
+    margin 4px 0 0
+    color var(--sp-text-muted)
+    white-space normal
+    overflow-wrap break-word
+
+.sp-theme-preview-status
+  flex 0 1 auto
+  max-width 100%
+  padding 5px 9px
+  color var(--sp-success)
+  background var(--sp-surface)
+  border 1px solid var(--sp-success)
+  border-radius var(--sp-radius-control)
+  white-space normal
+  overflow-wrap break-word
+
+.sp-theme-preview-ui
+  display grid
+  grid-template-columns minmax(0, 1.25fr) minmax(120px, .75fr)
+  gap 12px
+  min-width 0
+  margin-bottom 12px
+
+.sp-theme-preview-card
+.sp-theme-preview-menu
+  min-width 0
+  padding 12px
+  box-sizing border-box
+  color var(--sp-text)
+  background var(--sp-surface)
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-card)
+
+.sp-theme-preview-action
+  display inline-flex
+  align-items center
+  min-height 32px
+  padding 4px 15px
+  box-sizing border-box
+  color var(--sp-page)
+  background var(--sp-primary)
+  border 1px solid var(--sp-primary)
+  border-radius var(--sp-radius-control)
+
+.sp-theme-preview-field
+  display flex
+  flex-wrap wrap
+  align-items center
+  justify-content space-between
+  gap 8px
+  min-width 0
+  margin 10px 0
+  color var(--sp-text-muted)
+  span
+    min-width 0
+    white-space normal
+    overflow-wrap break-word
+  i
+    flex 0 1 86px
+    width 86px
+    height 28px
+    background var(--sp-surface-subtle)
+    border 1px solid var(--sp-border)
+    border-radius var(--sp-radius-control)
+
+.sp-theme-preview-menu
+  display flex
+  flex-direction column
+  gap 3px
+  box-shadow var(--sp-shadow-overlay)
+  span
+    min-width 0
+    padding 6px 8px
+    border-radius var(--sp-radius-control)
+    white-space normal
+    overflow-wrap break-word
+    &:first-of-type
+      color var(--sp-primary)
+      background var(--sp-primary-soft)
+
+.sp-theme-preview-terminal
+  position relative
+  min-width 0
+  min-height 116px
+  padding 38px 14px 14px
+  box-sizing border-box
+  overflow hidden
+  border 1px solid #272A31
+  border-radius var(--sp-radius-control)
+  code
+    display block
+    min-width 0
+    color inherit
+    line-height 1.7
+    white-space normal
+    overflow-wrap anywhere
+  mark
+    color inherit
+    background var(--sp-theme-preview-selection)
+  b
+    color var(--sp-success)
+    font-weight normal
+  code > i
+    display inline-block
+    width 8px
+    height 16px
+    margin-left 3px
+    vertical-align text-bottom
+    background var(--sp-theme-preview-cursor)
+
+.sp-theme-preview-terminal-lock
+  position absolute
+  top 10px
+  left 12px
+  right 12px
+  color #A8B0BE
+  font-size 12px
+  white-space normal
+  overflow-wrap break-word
+
+@media (max-width: 820px)
+  .sp-theme-center
+    overflow-x hidden
+    overflow-y auto
+    .setting-col
+      height auto
+      min-height 100%
+      overflow visible
+    .setting-row-left
+      display flex
+      height clamp(210px, 48vh, 280px)
+      min-height 210px
+      overflow hidden
+    .setting-row-right
+      height auto
+      min-height 180px
+      overflow visible
+      padding-top 0
+    .setting-col-content
+      overflow visible
+  .sp-theme-gallery
+    height 100%
+  .sp-theme-card-grid
+    flex 1 1 auto
+    overflow-y auto
+
+@media (max-width: 680px)
+  .sp-theme-card-grid
+    grid-template-columns minmax(0, 1fr)
+  .sp-theme-preview-ui
+    grid-template-columns minmax(0, 1fr)
+  .sp-theme-card > p
+    min-height 0
