@@ -18,7 +18,8 @@ import {
 import {
   createTransferSafetyController,
   getTransferSafetyCompletionFailure,
-  shouldUseLegacyZipOptimization
+  shouldUseLegacyZipOptimization,
+  verifyCrossHostSourcePreflight
 } from './file-transfer-safety.js'
 import {
   zipCmd,
@@ -204,6 +205,12 @@ export default class TransportAction extends Component {
       const size = update.size ?? update.transferred ?? fromFile.size
       const r = copy(transfer)
       assign(r, {
+        ...(this.verifiedCrossHostSource
+          ? {
+              verifiedSourceEndpointKey: this.verifiedCrossHostSource.verifiedSourceEndpointKey,
+              verifiedSourceIdentity: this.verifiedCrossHostSource.verifiedSourceIdentity
+            }
+          : {}),
         finishTime,
         startTime: this.startTime,
         size,
@@ -606,10 +613,19 @@ export default class TransportAction extends Component {
 
   startTransfer = async () => {
     try {
-      const { fromFile = this.fromFile, zip } = this.props.transfer
+      const transfer = this.props.transfer
+      const { fromFile = this.fromFile, zip } = transfer
       if (!fromFile) {
         return
       }
+      this.verifiedCrossHostSource = undefined
+      this.verifiedCrossHostSource = await verifyCrossHostSourcePreflight({
+        transfer: {
+          ...transfer,
+          fromFile
+        },
+        getCapability: sourceTabId => refs.get('sftp-' + sourceTabId)
+      })
       await this.transferSafety.begin()
       if (!fromFile.isDirectory) {
         return await this.transferFile()

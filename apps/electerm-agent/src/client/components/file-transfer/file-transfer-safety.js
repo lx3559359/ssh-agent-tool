@@ -66,10 +66,47 @@ export function buildCrossHostSourceIdentity ({
   return `source:${stableHash(`${endpointKey}\u0000${sourcePath}\u0000${type}\u0000${size}`)}`
 }
 
+export async function verifyCrossHostSourcePreflight ({
+  transfer = {},
+  getCapability
+} = {}) {
+  if (transfer.remote2remoteStep !== 1) return null
+
+  const sourceTabId = requiredSourceIdentityPart(
+    transfer.tabId,
+    '来源标签页标识'
+  )
+  const capability = getCapability?.(sourceTabId)
+  if (!capability?.getSftpSafetyEndpoint) {
+    throw new Error('跨主机传输无法重新确认当前来源 SFTP 安全端点，已停止下载。')
+  }
+
+  const verifiedSourceEndpointKey = buildTransferSourceEndpointKey(
+    capability.getSftpSafetyEndpoint()
+  )
+  if (verifiedSourceEndpointKey !== transfer.sourceEndpointKey) {
+    throw new Error('跨主机传输来源端点已变化，已停止下载。')
+  }
+
+  const verifiedSourceIdentity = buildCrossHostSourceIdentity({
+    sourceEndpointKey: verifiedSourceEndpointKey,
+    path: transfer.fromPath,
+    file: transfer.fromFile
+  })
+  if (verifiedSourceIdentity !== transfer.sourceIdentity) {
+    throw new Error('跨主机传输来源文件身份不一致，已停止下载。')
+  }
+
+  return {
+    verifiedSourceEndpointKey,
+    verifiedSourceIdentity
+  }
+}
+
 export function assertCrossHostSourceHistory (history, expected = {}) {
   if (!history ||
-    history.sourceEndpointKey !== expected.sourceEndpointKey ||
-    history.sourceIdentity !== expected.sourceIdentity) {
+    history.verifiedSourceEndpointKey !== expected.sourceEndpointKey ||
+    history.verifiedSourceIdentity !== expected.sourceIdentity) {
     throw new Error('跨主机传输来源安全身份已变化，已阻止目标写入。')
   }
   return true

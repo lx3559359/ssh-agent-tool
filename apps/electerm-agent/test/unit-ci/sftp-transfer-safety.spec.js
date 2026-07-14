@@ -343,15 +343,15 @@ test('cross-host target binds the complete stable source security identity', asy
     pid: 'sftp:source-tab:session-2'
   }))
   assert.equal(assertCrossHostSourceHistory({
-    sourceEndpointKey,
-    sourceIdentity
+    verifiedSourceEndpointKey: sourceEndpointKey,
+    verifiedSourceIdentity: sourceIdentity
   }, { sourceEndpointKey, sourceIdentity }), true)
   assert.throws(() => assertCrossHostSourceHistory({
-    sourceEndpointKey: buildTransferSourceEndpointKey({
+    verifiedSourceEndpointKey: buildTransferSourceEndpointKey({
       ...baseEndpoint,
       username: 'deploy'
     }),
-    sourceIdentity
+    verifiedSourceIdentity: sourceIdentity
   }, { sourceEndpointKey, sourceIdentity }), /来源安全身份/)
 
   const targetStep = buildTransferSafetyPlan({
@@ -388,6 +388,88 @@ test('cross-host target binds the complete stable source security identity', asy
   assert.match(handlersSource, /buildTransferSourceEndpointKey/)
   assert.match(handlersSource, /fromFile\.tabId\s*!==\s*targetTab\.id/)
   assert.match(fileItemSource, /file\.tabId\s*!==\s*targetTabId/)
+})
+
+test('cross-host step1 revalidates the live source endpoint before any download', async () => {
+  const {
+    buildCrossHostSourceIdentity,
+    buildTransferSourceEndpointKey,
+    verifyCrossHostSourcePreflight
+  } = await import(transferSafetyUrl)
+  const queuedEndpoint = {
+    host: 'source.example.com',
+    port: 22,
+    username: 'root',
+    tabId: 'source-tab',
+    pid: 'sftp:source-tab:session-a'
+  }
+  const sourceEndpointKey = buildTransferSourceEndpointKey(queuedEndpoint)
+  const fromFile = { isDirectory: false, size: 23 }
+  const transfer = {
+    remote2remoteStep: 1,
+    tabId: 'source-tab',
+    fromPath: '/srv/shared/release.bin',
+    fromFile,
+    sourceEndpointKey,
+    sourceIdentity: buildCrossHostSourceIdentity({
+      sourceEndpointKey,
+      path: '/srv/shared/release.bin',
+      file: fromFile
+    })
+  }
+  let capabilityLookup
+  let downloadCalls = 0
+  const reconnectedCapability = {
+    getSftpSafetyEndpoint: () => ({
+      ...queuedEndpoint,
+      port: 2222,
+      username: 'deploy',
+      pid: 'sftp:source-tab:session-b'
+    })
+  }
+
+  await assert.rejects(async () => {
+    await verifyCrossHostSourcePreflight({
+      transfer,
+      getCapability: (sourceTabId) => {
+        capabilityLookup = sourceTabId
+        return reconnectedCapability
+      }
+    })
+    downloadCalls += 1
+  }, /来源.*变化|来源.*不一致/)
+  assert.equal(capabilityLookup, 'source-tab')
+  assert.equal(downloadCalls, 0)
+
+  const verified = await verifyCrossHostSourcePreflight({
+    transfer,
+    getCapability: () => ({
+      getSftpSafetyEndpoint: () => queuedEndpoint
+    })
+  })
+  assert.deepEqual(verified, {
+    verifiedSourceEndpointKey: transfer.sourceEndpointKey,
+    verifiedSourceIdentity: transfer.sourceIdentity
+  })
+
+  const fs = require('node:fs')
+  const transferSource = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/components/file-transfer/transfer.jsx'
+  ), 'utf8')
+  const handlerSource = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/components/file-transfer/remote2remote-handler.jsx'
+  ), 'utf8')
+  assert.match(
+    transferSource,
+    /verifyCrossHostSourcePreflight[\s\S]*transferSafety\.begin\(\)[\s\S]*transferFile\(\)/
+  )
+  assert.match(transferSource, /verifiedSourceEndpointKey/)
+  assert.match(transferSource, /verifiedSourceIdentity/)
+  assert.match(handlerSource, /fromFile:\s*copy\(this\.fromFile\)/)
+  assert.match(handlerSource, /step1\.verifiedSourceEndpointKey/)
+  assert.match(handlerSource, /step1\.verifiedSourceIdentity/)
 })
 
 test('upload safety model requires an opaque source binding', async () => {

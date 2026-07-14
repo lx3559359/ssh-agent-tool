@@ -53,6 +53,7 @@ export default class Remote2RemoteHandler {
       typeTo: typeMap.local,
       fromPath: this.fromPath,
       toPath: this.tempPath,
+      fromFile: copy(this.fromFile),
       tabId: sourceTabId,
       host: sourceHost,
       title,
@@ -66,10 +67,8 @@ export default class Remote2RemoteHandler {
     return transfer
   }
 
-  buildStep2Transfer = (fromFile) => {
+  buildStep2Transfer = (fromFile, verifiedSource) => {
     const {
-      sourceEndpointKey,
-      sourceIdentity,
       targetTabId,
       targetHost,
       targetTitle,
@@ -89,8 +88,8 @@ export default class Remote2RemoteHandler {
       operation: '',
       remote2remoteStep: 2,
       remote2remoteId: this.id,
-      sourceEndpointKey,
-      sourceIdentity,
+      sourceEndpointKey: verifiedSource.sourceEndpointKey,
+      sourceIdentity: verifiedSource.sourceIdentity,
       originalId: this.step1Transfer?.id
     }
     return transfer
@@ -143,7 +142,10 @@ export default class Remote2RemoteHandler {
         this.creatingStep2 = false
         return this.finish('local temp file/folder not found')
       }
-      this.step2Transfer = this.buildStep2Transfer(localFromFile)
+      this.step2Transfer = this.buildStep2Transfer(localFromFile, {
+        sourceEndpointKey: step1.verifiedSourceEndpointKey,
+        sourceIdentity: step1.verifiedSourceIdentity
+      })
       this.creatingStep2 = false
       this.store.addTransferList([copy(this.step2Transfer)])
       return
