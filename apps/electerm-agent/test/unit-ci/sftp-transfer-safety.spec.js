@@ -305,6 +305,91 @@ test('cross-host remote transfer protects only the target write phase', async ()
   assert.equal(targetStep.transfer.direction, 'cross-host-target')
 })
 
+test('cross-host target binds the complete stable source security identity', async () => {
+  const {
+    assertCrossHostSourceHistory,
+    buildCrossHostSourceIdentity,
+    buildTransferSafetyPlan,
+    buildTransferSourceEndpointKey
+  } = await import(transferSafetyUrl)
+  const baseEndpoint = {
+    host: 'Source.Example.com.',
+    port: 22,
+    username: 'root',
+    tabId: 'source-tab',
+    pid: 'sftp:source-tab:session-1'
+  }
+  const sourceEndpointKey = buildTransferSourceEndpointKey(baseEndpoint)
+  const sourceIdentity = buildCrossHostSourceIdentity({
+    sourceEndpointKey,
+    path: '/srv/release.bin',
+    file: { isDirectory: false, size: 17 }
+  })
+
+  assert.notEqual(sourceEndpointKey, buildTransferSourceEndpointKey({
+    ...baseEndpoint,
+    username: 'deploy'
+  }))
+  assert.notEqual(sourceEndpointKey, buildTransferSourceEndpointKey({
+    ...baseEndpoint,
+    port: 2222
+  }))
+  assert.notEqual(sourceEndpointKey, buildTransferSourceEndpointKey({
+    ...baseEndpoint,
+    tabId: 'other-tab'
+  }))
+  assert.notEqual(sourceEndpointKey, buildTransferSourceEndpointKey({
+    ...baseEndpoint,
+    pid: 'sftp:source-tab:session-2'
+  }))
+  assert.equal(assertCrossHostSourceHistory({
+    sourceEndpointKey,
+    sourceIdentity
+  }, { sourceEndpointKey, sourceIdentity }), true)
+  assert.throws(() => assertCrossHostSourceHistory({
+    sourceEndpointKey: buildTransferSourceEndpointKey({
+      ...baseEndpoint,
+      username: 'deploy'
+    }),
+    sourceIdentity
+  }, { sourceEndpointKey, sourceIdentity }), /来源安全身份/)
+
+  const targetStep = buildTransferSafetyPlan({
+    id: 'remote-step-2-bound',
+    typeFrom: 'local',
+    typeTo: 'remote',
+    fromPath: 'C:/Temp/remote-item',
+    toPath: '/srv/remote-item',
+    remote2remoteStep: 2,
+    sourceEndpointKey,
+    sourceIdentity,
+    fromFile: { isDirectory: false, size: 17 }
+  })
+  assert.equal(targetStep.transfer.sourceEndpointKey, sourceEndpointKey)
+  assert.equal(targetStep.transfer.sourceIdentity, sourceIdentity)
+
+  const fs = require('node:fs')
+  const handlerSource = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/components/file-transfer/remote2remote-handler.jsx'
+  ), 'utf8')
+  const handlersSource = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/components/file-transfer/remote2remote-handlers.jsx'
+  ), 'utf8')
+  const fileItemSource = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/components/sftp/file-item.jsx'
+  ), 'utf8')
+  assert.match(handlerSource, /assertCrossHostSourceHistory\(step1/)
+  assert.match(handlerSource, /sourceEndpointKey/)
+  assert.match(handlerSource, /sourceIdentity/)
+  assert.match(handlersSource, /getSftpSafetyEndpoint\(\)/)
+  assert.match(handlersSource, /buildTransferSourceEndpointKey/)
+  assert.match(handlersSource, /fromFile\.tabId\s*!==\s*targetTab\.id/)
+  assert.match(fileItemSource, /file\.tabId\s*!==\s*targetTabId/)
+})
+
 test('upload safety model requires an opaque source binding', async () => {
   const { buildSideEffectSafetyRequest } = await importTransactionModule(
     'side-effect-model.js'
@@ -562,6 +647,54 @@ test('file-transfer safety controller bypasses downloads and exposes transport c
   await protectedTransfer.begin()
   await protectedTransfer.cancel()
   assert.equal(cancelled, 1)
+})
+
+test('transport success still reports a failed target verification to history and remote2remote', async () => {
+  const {
+    getTransferSafetyCompletionFailure
+  } = await import(transferSafetyUrl)
+  const failure = getTransferSafetyCompletionFailure({
+    state: 'failed',
+    error: 'SFTP 上传后的远程目标校验失败。',
+    metadata: {
+      externalCompletion: {
+        exitCode: 0,
+        cancelled: false
+      }
+    }
+  })
+
+  assert.deepEqual(failure, {
+    status: 'exception',
+    error: 'SFTP 上传后的远程目标校验失败。'
+  })
+
+  const fs = require('node:fs')
+  const transferSource = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/components/file-transfer/transfer.jsx'
+  ), 'utf8')
+  assert.match(transferSource, /getTransferSafetyCompletionFailure\(completed\)/)
+  assert.match(transferSource, /status:\s*update\.status/)
+  assert.match(transferSource, /error:\s*update\.error/)
+})
+
+test('SFTP directory zip optimization falls back to native protected transfer', async () => {
+  const {
+    shouldUseLegacyZipOptimization
+  } = await import(transferSafetyUrl)
+
+  assert.equal(shouldUseLegacyZipOptimization({ zip: true, isFtp: false }), false)
+  assert.equal(shouldUseLegacyZipOptimization({ zip: true, isFtp: true }), true)
+  assert.equal(shouldUseLegacyZipOptimization({ zip: false, isFtp: false }), false)
+
+  const fs = require('node:fs')
+  const source = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/components/file-transfer/transfer.jsx'
+  ), 'utf8')
+  assert.match(source, /shouldUseLegacyZipOptimization/)
+  assert.match(source, /shouldUseLegacyZipOptimization\(\{\s*zip,\s*isFtp:\s*this\.isFtp\s*\}\)/)
 })
 
 test('transfer component keeps native queue progress pause resume retry and adds safety hooks', () => {

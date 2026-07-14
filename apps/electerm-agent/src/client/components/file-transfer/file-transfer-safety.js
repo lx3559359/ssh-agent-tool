@@ -1,4 +1,23 @@
+import { normalizeEndpoint } from '../../common/safety-transactions/endpoint-guard.js'
+
 const bypassPolicies = new Set(['skip', 'cancel'])
+
+export function shouldUseLegacyZipOptimization ({ zip, isFtp } = {}) {
+  return zip === true && isFtp === true
+}
+
+export function getTransferSafetyCompletionFailure (operation) {
+  if (!operation || operation.state === 'rollback-available') return null
+  const stateMessages = {
+    failed: 'SFTP 传输安全校验失败，远程目标可回滚。',
+    cancelled: 'SFTP 传输安全事务已取消。'
+  }
+  return {
+    status: 'exception',
+    error: operation.error || stateMessages[operation.state] ||
+      `SFTP 传输安全事务未成功完成（${operation.state || '未知状态'}）。`
+  }
+}
 
 function stableHash (value) {
   let hash = 0xcbf29ce484222325n
@@ -7,6 +26,53 @@ function stableHash (value) {
     hash = BigInt.asUintN(64, hash * 0x100000001b3n)
   }
   return hash.toString(16).padStart(16, '0')
+}
+
+function requiredSourceIdentityPart (value, label) {
+  const normalized = String(value || '').trim()
+  if (!normalized) throw new Error(`跨主机传输缺少${label}。`)
+  return normalized
+}
+
+export function buildTransferSourceEndpointKey (endpoint = {}) {
+  const normalized = normalizeEndpoint(endpoint)
+  const tabId = requiredSourceIdentityPart(endpoint.tabId, '来源标签页标识')
+  const sessionKey = requiredSourceIdentityPart(
+    endpoint.pid || endpoint.terminalPid,
+    '来源会话安全标识'
+  )
+  const host = normalized.host.includes(':')
+    ? `[${normalized.host}]`
+    : normalized.host
+  return [
+    `sftp-source:v1:${encodeURIComponent(normalized.username)}@${host}:${normalized.port}`,
+    `tab:${encodeURIComponent(tabId)}`,
+    `session:${encodeURIComponent(sessionKey)}`
+  ].join('|')
+}
+
+export function buildCrossHostSourceIdentity ({
+  sourceEndpointKey,
+  path,
+  file = {}
+} = {}) {
+  const endpointKey = requiredSourceIdentityPart(
+    sourceEndpointKey,
+    '来源端点身份'
+  )
+  const sourcePath = requiredSourceIdentityPart(path, '来源路径')
+  const type = file.isDirectory ? 'directory' : 'file'
+  const size = Number.isSafeInteger(file.size) ? file.size : ''
+  return `source:${stableHash(`${endpointKey}\u0000${sourcePath}\u0000${type}\u0000${size}`)}`
+}
+
+export function assertCrossHostSourceHistory (history, expected = {}) {
+  if (!history ||
+    history.sourceEndpointKey !== expected.sourceEndpointKey ||
+    history.sourceIdentity !== expected.sourceIdentity) {
+    throw new Error('跨主机传输来源安全身份已变化，已阻止目标写入。')
+  }
+  return true
 }
 
 function resourceType (file = {}) {
@@ -66,7 +132,8 @@ export function buildTransferSafetyPlan (transfer = {}) {
       : {})
   }
   const sourceIdentity = action === 'upload'
-    ? `source:${stableHash(String(transfer.fromPath || ''))}`
+    ? String(transfer.sourceIdentity ||
+      `source:${stableHash(String(transfer.fromPath || ''))}`)
     : undefined
 
   return {

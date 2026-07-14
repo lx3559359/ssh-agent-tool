@@ -4,6 +4,7 @@ import uid from '../../common/uid'
 import resolve from '../../common/resolve'
 import { typeMap } from '../../common/constants'
 import { getFolderFromFilePath, getLocalFileInfo } from '../sftp/file-read'
+import { assertCrossHostSourceHistory } from './file-transfer-safety.js'
 
 export default class Remote2RemoteHandler {
   constructor (props) {
@@ -42,7 +43,9 @@ export default class Remote2RemoteHandler {
       title,
       tabType,
       sourceTabId,
-      sourceHost
+      sourceHost,
+      sourceEndpointKey,
+      sourceIdentity
     } = this.props
     const transfer = {
       id: uid(),
@@ -56,15 +59,17 @@ export default class Remote2RemoteHandler {
       tabType,
       operation: '',
       remote2remoteStep: 1,
-      remote2remoteId: this.id
+      remote2remoteId: this.id,
+      sourceEndpointKey,
+      sourceIdentity
     }
     return transfer
   }
 
   buildStep2Transfer = (fromFile) => {
     const {
-      sourceTabId,
-      sourceHost,
+      sourceEndpointKey,
+      sourceIdentity,
       targetTabId,
       targetHost,
       targetTitle,
@@ -84,7 +89,8 @@ export default class Remote2RemoteHandler {
       operation: '',
       remote2remoteStep: 2,
       remote2remoteId: this.id,
-      sourceEndpointKey: `remote:${sourceTabId}:${sourceHost}`,
+      sourceEndpointKey,
+      sourceIdentity,
       originalId: this.step1Transfer?.id
     }
     return transfer
@@ -122,6 +128,14 @@ export default class Remote2RemoteHandler {
       }
       if (step1.error) {
         return this.finish(step1.error)
+      }
+      try {
+        assertCrossHostSourceHistory(step1, {
+          sourceEndpointKey: this.props.sourceEndpointKey,
+          sourceIdentity: this.props.sourceIdentity
+        })
+      } catch (error) {
+        return this.finish(error.message)
       }
       this.creatingStep2 = true
       const localFromFile = await getLocalFileInfo(this.tempPath).catch(() => null)

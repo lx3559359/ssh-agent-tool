@@ -1437,6 +1437,38 @@ test('SFTP same-endpoint copy and move bind both paths and restore both sides', 
   }
 })
 
+test('SFTP same-endpoint copy rejects a same-size target with different content', async () => {
+  const sftp = createFakeSftp({
+    '/srv/app/source.txt': { type: 'file', content: 'source', mode: 0o640 }
+  })
+  const operation = await buildSftpOperation({
+    id: 'adapter-copy-wrong-digest',
+    action: 'copy',
+    paths: {
+      source: '/srv/app/source.txt',
+      target: '/srv/app/target.txt'
+    },
+    type: 'file',
+    expected: { type: 'file', size: 6 },
+    transfer: {
+      identity: 'copy-wrong-digest',
+      batchId: 'batch-copy-digest',
+      direction: 'same-endpoint'
+    }
+  })
+  const context = await runExternalSftpTransfer({
+    operation,
+    sftp,
+    mutate: () => sftp.writeFile('/srv/app/target.txt', 'xxxxxx', 0o640)
+  })
+
+  assert.equal(context.completed.state, 'failed')
+  assert.match(context.completed.error, /复制后的源或目标校验失败/)
+  const restored = await context.runner.rollback(operation.id)
+  assert.equal(restored.state, 'restored')
+  assert.equal(sftp.exists('/srv/app/target.txt'), false)
+})
+
 test('SFTP adapter snapshots and verifies editor saves with bounded chunk reads', async () => {
   const {
     createSftpTransactionAdapter,

@@ -320,6 +320,30 @@ function sameDescriptor (left, right) {
   return JSON.stringify(left) === JSON.stringify(right)
 }
 
+function copyComparableDescriptor (descriptor) {
+  if (!descriptor || descriptor.absent === true) return descriptor
+  const {
+    uid,
+    gid,
+    entries,
+    ...comparable
+  } = descriptor
+  if (Array.isArray(entries)) {
+    comparable.entries = entries.map(item => ({
+      name: item.name,
+      entry: copyComparableDescriptor(item.entry)
+    }))
+  }
+  return comparable
+}
+
+function sameCopiedDescriptor (left, right) {
+  return sameDescriptor(
+    copyComparableDescriptor(left),
+    copyComparableDescriptor(right)
+  )
+}
+
 function matchesExpected (descriptor, expected) {
   if (expected?.absent === true) return descriptor?.absent === true
   if (descriptor?.absent === true) return false
@@ -708,7 +732,7 @@ async function verifyExecuteState (sftp, operation, signal) {
       signal
     )
     if (!sameDescriptor(source, resources[0].original) ||
-      !matchesExpected(target, operation.effect.expected)) {
+      !sameCopiedDescriptor(target, resources[0].original)) {
       throw new Error('SFTP 复制后的源或目标校验失败。')
     }
     return

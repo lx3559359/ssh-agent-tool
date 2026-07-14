@@ -15,7 +15,11 @@ import {
   createTransferRetryState,
   shouldRetryTransfer
 } from '../../common/transfer-retry'
-import { createTransferSafetyController } from './file-transfer-safety.js'
+import {
+  createTransferSafetyController,
+  getTransferSafetyCompletionFailure,
+  shouldUseLegacyZipOptimization
+} from './file-transfer-safety.js'
 import {
   zipCmd,
   unzipCmd,
@@ -169,7 +173,16 @@ export default class TransportAction extends Component {
     this.finishing = true
     const failed = update.status === 'exception' || Boolean(update.error)
     try {
-      await this.transferSafety.complete({ exitCode: failed ? 1 : 0 })
+      const completed = await this.transferSafety.complete({
+        exitCode: failed ? 1 : 0
+      })
+      const completionFailure = getTransferSafetyCompletionFailure(completed)
+      if (completionFailure) {
+        update = {
+          ...update,
+          ...completionFailure
+        }
+      }
     } catch (error) {
       update = {
         ...update,
@@ -195,7 +208,9 @@ export default class TransportAction extends Component {
         startTime: this.startTime,
         size,
         next: null,
-        speed: format(size, this?.startTime)
+        speed: format(size, this?.startTime),
+        status: update.status || 'success',
+        error: update.error || ''
       })
       window.store.addTransferHistory(
         r
@@ -334,7 +349,10 @@ export default class TransportAction extends Component {
       typeFrom,
       toFile = {}
     } = transfer
-    const toPath = transfer.zip
+    const toPath = shouldUseLegacyZipOptimization({
+      zip: transfer.zip,
+      isFtp: this.isFtp
+    })
       ? transfer.toPath
       : this.newPath || transfer.toPath
     const fromFile = transfer.fromFile || this.fromFile
@@ -596,7 +614,7 @@ export default class TransportAction extends Component {
       if (!fromFile.isDirectory) {
         return await this.transferFile()
       }
-      if (zip) {
+      if (shouldUseLegacyZipOptimization({ zip, isFtp: this.isFtp })) {
         return await this.zipTransferFolder()
       }
       if (!this.isFtp) {

@@ -274,11 +274,11 @@ export default class FileSection extends React.Component {
     } = toFile
 
     let operation = ''
-    const targetHost = this.props.tab?.host
+    const targetTabId = this.props.tab?.id
     const isCrossHostRemoteDrop = !fromFileManager &&
       fromType === typeMap.remote &&
       toType === typeMap.remote &&
-      fromFiles.every(file => file?.host && file.host !== targetHost)
+      fromFiles.every(file => file?.tabId && file.tabId !== targetTabId)
 
     if (isCrossHostRemoteDrop) {
       const handled = refsStatic.get('remote2remote-handlers')?.onRemote2RemoteDrop({
