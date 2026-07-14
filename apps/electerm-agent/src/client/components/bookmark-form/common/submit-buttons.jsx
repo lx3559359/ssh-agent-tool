@@ -17,8 +17,8 @@ export default function SubmitButtons ({
   onSaveAndConnect
 }) {
   return (
-    <FormItem {...tailFormItemLayout}>
-      <p>
+    <FormItem {...tailFormItemLayout} className='sp-configuration-actions'>
+      <p className='sp-configuration-action-row'>
         <Button
           type='primary'
           htmlType='submit'
@@ -39,7 +39,7 @@ export default function SubmitButtons ({
           {e('save')}
         </Button>
       </p>
-      <p>
+      <p className='sp-configuration-action-row'>
         <Button
           type='dashed'
           onClick={onConnect}

@@ -294,9 +294,9 @@ export default function FormRenderer ({ config, props }) {
       ? (tabs[0].fields || [])
       : (config.fields || [])
     content = (
-      <div className='pd1x'>
+      <section className='sp-card sp-configuration-section'>
         {fields.map((f, index) => renderFormItem(f, config.layout, form, ctxProps, index))}
-      </div>
+      </section>
     )
   } else {
     const items = (tabs || []).map(tab => ({
@@ -304,12 +304,12 @@ export default function FormRenderer ({ config, props }) {
       label: tab.label,
       forceRender: true,
       children: (
-        <div className='pd1x'>
+        <section className='sp-card sp-configuration-section'>
           {(tab.fields || []).map((f, index) => renderFormItem(f, config.layout, form, ctxProps, index))}
-        </div>
+        </section>
       )
     }))
-    content = <Tabs items={items} />
+    content = <Tabs className='sp-configuration-tabs' items={items} />
   }
   const formName = `${config.key}-form`
   return (
@@ -318,6 +318,7 @@ export default function FormRenderer ({ config, props }) {
       onFinish={handleFinish}
       initialValues={initialValues}
       name={formName}
+      className='sp-configuration-form'
     >
       {content}
       <SubmitButtons

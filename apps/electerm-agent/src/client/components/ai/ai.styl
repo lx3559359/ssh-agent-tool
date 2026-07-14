@@ -305,3 +305,78 @@
     transform rotate(0deg)
   to
     transform rotate(360deg)
+
+// ShellPilot model API configuration card
+.sp-ai-endpoint-preview
+  max-width 100%
+  overflow-wrap anywhere
+  word-break break-word
+
+.sp-ai-config-form
+  width 100%
+  max-width 980px
+  min-width 0
+  margin 0 auto 16px
+  padding 24px
+  box-sizing border-box
+  color var(--sp-text)
+  background var(--sp-surface)
+  .ant-form-item
+  .ant-form-item-control
+  .ant-form-item-control-input
+  .ant-form-item-control-input-content
+  .ant-space
+  .ant-space-item
+  .ant-space-compact
+  .ant-select
+  .ant-input
+  .ant-input-affix-wrapper
+  textarea
+  input
+    min-width 0
+    max-width 100%
+  .ant-form-item-label > label
+    max-width 100%
+    height auto
+    white-space normal
+    overflow-wrap break-word
+    word-break normal
+  .ant-form-item-extra
+  .ant-form-item-explain
+  a
+    max-width 100%
+    overflow-wrap anywhere
+    word-break break-word
+  .ant-space-horizontal
+    max-width 100%
+    flex-wrap wrap
+  .ant-btn
+    max-width 100%
+    height auto
+    min-height 32px
+  .ant-btn > span
+    white-space normal
+    overflow-wrap break-word
+    word-break normal
+    text-overflow clip
+  .border
+    background var(--sp-surface-subtle)
+    border-color var(--sp-border) !important
+    border-radius var(--sp-radius-control)
+
+@media (max-width: 680px)
+  .sp-ai-config-form
+    padding 14px
+    .ant-space-compact
+      display flex
+      flex-wrap wrap
+      gap 8px
+      > *
+        flex 1 1 100% !important
+        width 100% !important
+        border-radius var(--sp-radius-control) !important
+    .ant-space-horizontal
+      width 100%
+      > .ant-space-item
+        flex 1 1 100%
+        width 100%

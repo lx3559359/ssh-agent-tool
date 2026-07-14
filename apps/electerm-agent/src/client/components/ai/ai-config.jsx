@@ -576,7 +576,7 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
       />
       {
         endpointPreview && (
-          <p>
+          <p className='sp-ai-endpoint-preview'>
             实际请求地址：{endpointPreview}
           </p>
         )
@@ -586,7 +586,7 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
         onFinish={handleSubmit}
         initialValues={initialValues}
         layout='vertical'
-        className='ai-config-form'
+        className='ai-config-form sp-card sp-configuration-section sp-ai-config-form'
       >
         <Form.Item
           label='API 配置'

@@ -376,7 +376,7 @@ export default function SyncForm (props) {
     <Form
       onFinish={save}
       form={form}
-      className='form-wrap pd1x'
+      className='form-wrap pd1x sp-card sp-configuration-section sp-sync-config-form'
       name={'setting-sync-form' + syncType}
       layout='vertical'
       initialValues={props.formData}
@@ -393,7 +393,7 @@ export default function SyncForm (props) {
       {
         createProxyItem()
       }
-      <FormItem>
+      <FormItem className='sp-sync-config-actions'>
         <p>
           <Button
             type='dashed'

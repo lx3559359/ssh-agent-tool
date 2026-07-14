@@ -80,18 +80,23 @@ export default auto(function SyncSettingEntry (props) {
     config
   }
   return (
-    <div className='pd2l'>
-      <DataTransport {...dataImportProps} />
+    <div className='pd2l sp-sync-config'>
+      <div className='sp-card sp-configuration-section sp-sync-transport'>
+        <DataTransport {...dataImportProps} />
+      </div>
       <Spin spinning={store.isSyncingSetting}>
         <Tabs
           activeKey={store.syncType}
           onChange={handleChange}
           items={syncItems}
+          className='sp-configuration-tabs sp-sync-config-tabs'
         />
         {
           renderForm()
         }
-        <DataSelect {...dataSelectProps} />
+        <div className='sp-card sp-configuration-section sp-sync-data-selector'>
+          <DataSelect {...dataSelectProps} />
+        </div>
       </Spin>
     </div>
   )
