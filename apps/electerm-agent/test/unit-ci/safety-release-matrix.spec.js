@@ -41,8 +41,10 @@ test('Chinese help explains the complete safety transaction workflow and limits'
 
   assert.match(help, /FTP[^。\n]*(不支持|无法)[^。\n]*自动回滚/)
   assert.match(help, /SFTP[^。\n]*(上传|下载|覆盖|复制|移动)/)
-  assert.match(help, /普通只读或未纳入保护的输入[^。\n]*常规终端直达/)
-  assert.match(help, /识别为修改型的手工命令[^。\n]*恢复点[^。\n]*风险提示[^。\n]*确认/)
+  assert.match(help, /只有普通只读命令[^。；\n]*常规终端直达/)
+  assert.match(help, /已识别修改型手工命令[^。；\n]*恢复点[^。；\n]*风险提示[^。；\n]*确认/)
+  assert.match(help, /未知或不可恢复命令[^。\n]*风险确认[^。\n]*阻止/)
+  assert.doesNotMatch(help, /未纳入保护的输入[^。\n]*直达/)
   assert.match(help, /vim、nano[^。\n]*无法预快照[^。\n]*警告/)
   assert.match(help, /回滚完成后[^。\n]*回滚验证/)
   assert.doesNotMatch(help, /手工(?:输入的)?\s*(?:SSH\s*)?命令(?:会)?直接执行/)
