@@ -3,6 +3,7 @@ import { CopyOutlined } from '@ant-design/icons'
 import { copy } from '../../common/clipboard'
 
 export function showMsg (message, type = 'success', serverInfo = null, duration = 10, description = '') {
+  const e = window.translate
   const handleCopy = () => {
     if (serverInfo && serverInfo.url) {
       copy(serverInfo.url)
@@ -15,13 +16,13 @@ export function showMsg (message, type = 'success', serverInfo = null, duration 
       <div>
         {description && <div>{description}</div>}
         <div style={{ display: 'flex', alignItems: 'center' }}>
-          <span>访问地址：{serverInfo.url}</span>
+          <span>{e('shellpilotWidgetAddress')} {serverInfo.url}</span>
           <CopyOutlined
             className='pointer mg1l'
             onClick={handleCopy}
           />
         </div>
-        <div>目录：{serverInfo.path}</div>
+        <div>{e('shellpilotWidgetDirectory')} {serverInfo.path}</div>
       </div>
     )
   }

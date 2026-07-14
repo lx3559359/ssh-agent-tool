@@ -25,7 +25,7 @@ export default auto(function AIConfigModal ({ store }) {
 
   function handleSubmit (values) {
     window.store.updateConfig(migrateAIProfiles(values))
-    message.success(e('saved') || '已保存')
+    message.success(e('saved'))
     window.store.showAIConfigModal = false
   }
 
@@ -38,7 +38,7 @@ export default auto(function AIConfigModal ({ store }) {
       open={showAIConfigModal}
       onCancel={handleClose}
       footer={null}
-      title='模型 API 配置'
+      title={e('shellpilotAiConfigTitle')}
       width='80%'
       destroyOnClose
       maskClosable={false}

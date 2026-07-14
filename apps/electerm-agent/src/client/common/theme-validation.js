@@ -78,3 +78,16 @@ export function validateThemeText (value, translate) {
   }
   return errors
 }
+
+export async function revalidateTouchedThemeFields (form, names = ['themeName', 'themeText']) {
+  const touched = names.filter(name => form.isFieldTouched(name))
+  if (!touched.length) {
+    return touched
+  }
+  try {
+    await form.validateFields(touched)
+  } catch (error) {
+    // Existing errors are expected; validation refreshes their translated copy.
+  }
+  return touched
+}

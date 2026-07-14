@@ -52,7 +52,7 @@ test('does not require optional model role endpoint path or auth header before s
 test('AI config modal title is localized for Chinese users', () => {
   const source = fs.readFileSync(path.resolve(__dirname, '../../src/client/components/ai/ai-config-modal.jsx'), 'utf8')
 
-  assert.match(source, /title='模型 API 配置'/)
+  assert.match(source, /title=\{e\('shellpilotAiConfigTitle'\)\}/)
   assert.doesNotMatch(source, /title='AI Config'/)
 })
 

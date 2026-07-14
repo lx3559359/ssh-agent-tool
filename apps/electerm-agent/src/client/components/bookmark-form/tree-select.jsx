@@ -172,7 +172,7 @@ export default function BookmarkTreeSelect (props) {
       <div className='tree-select-header'>
         <Space.Compact className='mg2b'>
           <Input.Search
-            placeholder={e('search') || 'Search...'}
+            placeholder={e('search')}
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
             allowClear

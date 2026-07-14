@@ -49,7 +49,7 @@ export default class Shortcuts extends PureComponent {
   render () {
     const columns = [
       {
-        title: 'NO.',
+        title: e('shellpilotNumberColumn'),
         dataIndex: 'index',
         key: 'index',
         render: (index) => {

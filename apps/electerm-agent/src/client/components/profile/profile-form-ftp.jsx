@@ -4,6 +4,7 @@ import {
 } from 'antd'
 import { formItemLayout } from '../../common/form-layout'
 import Password from '../common/password'
+import { createShellPilotMaxRule } from '../../common/shellpilot-i18n-overrides.js'
 
 const FormItem = Form.Item
 const e = window.translate
@@ -16,9 +17,7 @@ export default function ProfileFormSsh (props) {
         label={e('username')}
         hasFeedback
         name={['ftp', 'user']}
-        rules={[{
-          max: 128, message: '128 chars max'
-        }]}
+        rules={[createShellPilotMaxRule(e, 128)]}
       >
         <Input />
       </FormItem>

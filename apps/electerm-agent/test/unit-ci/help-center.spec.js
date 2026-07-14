@@ -67,6 +67,6 @@ test('AI configuration uses ShellPilot inline guidance without upstream wiki bra
 
   assert.doesNotMatch(config, /electerm\/electerm\/wiki\/AI-model-config-guide/)
   assert.doesNotMatch(config, /aiConfigWikiLink/)
-  assert.match(config, /只需先填写 API 地址和 API 密钥/)
-  assert.match(config, /完整说明请查看顶部“帮助”/)
+  assert.match(config, /e\('shellpilotAiQuickSetup'\)/)
+  assert.match(config, /e\('shellpilotAiQuickSetupDescription'\)/)
 })

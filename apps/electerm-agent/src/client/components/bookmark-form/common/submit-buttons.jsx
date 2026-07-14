@@ -44,9 +44,9 @@ export default function SubmitButtons ({
           type='dashed'
           onClick={onConnect}
           className='mg1r mg1b'
-          title='不保存配置，直接打开临时连接'
+          title={e('temporaryConnectionHint')}
         >
-          仅连接
+          {e('temporaryConnection')}
         </Button>
         <Button type='dashed' onClick={onTestConnection} className='mg1r mg1b'>
           {e('testConnection')}

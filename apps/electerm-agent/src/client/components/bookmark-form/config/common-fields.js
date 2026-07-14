@@ -6,6 +6,10 @@ import { terminalTypes } from '../../../common/constants'
 import defaultSettings from '../../../common/default-setting'
 import encodes from '../common/encodes'
 import { isEmpty } from 'lodash-es'
+import {
+  createShellPilotMaxRule,
+  createShellPilotRequiredRule
+} from '../../../common/shellpilot-i18n-overrides'
 
 const e = window.translate
 
@@ -42,7 +46,7 @@ export const commonFields = {
     type: 'colorTitle',
     name: 'host',
     label: () => e('host'),
-    rules: [{ required: true, message: e('host') + ' required' }]
+    rules: [createShellPilotRequiredRule(e, 'host')]
   },
 
   colorTitle: {
@@ -87,7 +91,7 @@ export const commonFields = {
     type: 'number',
     name: 'port',
     label: () => e('port'),
-    rules: [{ required: true, message: 'port required' }]
+    rules: [createShellPilotRequiredRule(e, 'port')]
   },
 
   description: {
@@ -158,7 +162,7 @@ export const commonFields = {
     type: 'autocomplete',
     name: 'envLang',
     label: 'ENV:LANG',
-    rules: [{ max: 130, message: '130 chars max' }],
+    rules: [createShellPilotMaxRule(e, 130)],
     options: commonLangOptions,
     props: { placeholder: 'en_US.UTF-8' }
   },
@@ -167,7 +171,7 @@ export const commonFields = {
     type: 'autocomplete',
     name: 'term',
     label: () => e('terminalType'),
-    rules: [{ required: true, message: 'terminal type required' }],
+    rules: [createShellPilotRequiredRule(e, 'terminalType')],
     options: terminalTypes.map(t => ({ label: t, value: t }))
   },
 
@@ -182,7 +186,7 @@ export const commonFields = {
     type: 'input',
     name: 'fontFamily',
     label: () => e('fontFamily'),
-    rules: [{ max: 130, message: '130 chars max' }],
+    rules: [createShellPilotMaxRule(e, 130)],
     props: { placeholder: defaultSettings.fontFamily }
   },
 

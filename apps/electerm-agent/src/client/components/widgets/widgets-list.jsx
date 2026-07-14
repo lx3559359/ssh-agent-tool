@@ -16,13 +16,16 @@ import WidgetInstances from './widget-instances'
 import classnames from 'classnames'
 import highlight from '../common/highlight'
 import { getWidgetDisplay } from './widget-i18n'
+import { formatShellPilotTranslation } from '../../common/shellpilot-i18n-overrides'
 import './widgets.styl'
 import {
   auto
 } from 'manate/react'
 
-export default auto(function WidgetsList ({ activeItemId, store }) {
+export default auto(function WidgetsList ({ activeItemId, store, languageVersion }) {
   const { widgetInstances } = store
+  const e = window.translate
+  const tf = (key, replacements) => formatShellPilotTranslation(e, key, replacements)
   const [tab, setTab] = useState('widgets') // or instances
   const [widgets, setWidgets] = useState([])
   const [keyword, setKeyword] = useState('')
@@ -43,7 +46,7 @@ export default auto(function WidgetsList ({ activeItemId, store }) {
       const widgets = await window.store.listWidgets()
       setWidgets(widgets)
     } catch (error) {
-      console.error('加载工具列表失败:', error)
+      console.error('Failed to load tools:', error)
     }
   }
 
@@ -60,7 +63,7 @@ export default auto(function WidgetsList ({ activeItemId, store }) {
   }
 
   const renderWidgetItem = (widget, i) => {
-    const meta = getWidgetDisplay(widget)
+    const meta = getWidgetDisplay(widget, e)
     const title = meta.title
     const running = widgetInstances.some(item => item.widgetId === widget.id)
     const cls = classnames(
@@ -90,7 +93,7 @@ export default auto(function WidgetsList ({ activeItemId, store }) {
             </div>
             {
               running && (
-                <Tag color='success' className='widget-card-tag'>运行中</Tag>
+                <Tag color='success' className='widget-card-tag'>{e('shellpilotWidgetRunning')}</Tag>
               )
             }
           </div>
@@ -109,7 +112,7 @@ export default auto(function WidgetsList ({ activeItemId, store }) {
   const renderWidgetsList = () => {
     const filteredWidgets = keyword
       ? widgets.filter(widget => {
-        const meta = getWidgetDisplay(widget)
+        const meta = getWidgetDisplay(widget, e)
         const text = [
           widget.info.name,
           meta.title,
@@ -126,7 +129,7 @@ export default auto(function WidgetsList ({ activeItemId, store }) {
         <div className='widgets-search-wrap'>
           <Input.Search
             type='text'
-            placeholder='搜索工具、场景或关键词'
+            placeholder={e('shellpilotWidgetSearchPlaceholder')}
             value={keyword}
             onChange={handleSearch}
             className='form-control'
@@ -134,14 +137,14 @@ export default auto(function WidgetsList ({ activeItemId, store }) {
           />
         </div>
         <div className='widgets-list-summary'>
-          <span>内置工具 {filteredWidgets.length} 个</span>
-          <span>运行中 {widgetInstances.length} 个</span>
+          <span>{tf('shellpilotWidgetBuiltinCount', { count: filteredWidgets.length })}</span>
+          <span>{tf('shellpilotWidgetRunningCount', { count: widgetInstances.length })}</span>
         </div>
         <div className='widgets-card-list item-list-wrap pd1y'>
           {
             filteredWidgets.length
               ? filteredWidgets.map(renderWidgetItem)
-              : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description='没有找到匹配的工具' />
+              : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={e('shellpilotWidgetNoMatches')} />
           }
         </div>
       </div>
@@ -149,11 +152,11 @@ export default auto(function WidgetsList ({ activeItemId, store }) {
   }
 
   const renderTabs = () => {
-    const instancesTag = `运行中 (${widgetInstances.length})`
+    const instancesTag = tf('shellpilotWidgetRunningTab', { count: widgetInstances.length })
     const items = [
       {
         key: 'widgets',
-        label: '工具',
+        label: e('shellpilotWidgetToolsTab'),
         children: null
       },
       {
@@ -175,6 +178,7 @@ export default auto(function WidgetsList ({ activeItemId, store }) {
     return (
       <WidgetInstances
         widgetInstances={widgetInstances}
+        languageVersion={languageVersion}
       />
     )
   }
@@ -184,11 +188,11 @@ export default auto(function WidgetsList ({ activeItemId, store }) {
   }
 
   return (
-    <div className='widgets-shell'>
+    <div className='widgets-shell' data-language-version={languageVersion}>
       <div className='widgets-panel-title'>
         <div>
-          <h3>工具中心</h3>
-          <p>面向 SSH 运维、文件传输和 AI 集成的本地工具</p>
+          <h3>{e('shellpilotWidgetToolCenter')}</h3>
+          <p>{e('shellpilotWidgetToolCenterDescription')}</p>
         </div>
       </div>
       {renderTabs()}

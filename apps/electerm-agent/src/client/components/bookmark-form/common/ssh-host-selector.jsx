@@ -2,6 +2,10 @@ import { Form } from 'antd'
 import InputAutoFocus from '../../common/input-auto-focus.jsx'
 import { ColorPickerItem } from './color-picker-item.jsx'
 import { formItemLayout } from '../../../common/form-layout.js'
+import {
+  createShellPilotMaxRule,
+  createShellPilotRequiredRule
+} from '../../../common/shellpilot-i18n-overrides.js'
 
 const FormItem = Form.Item
 const e = window.translate
@@ -32,11 +36,10 @@ export default function SshHostSelector ({ ips = [], useIp, form, onBlur, onPast
       {...formItemLayout}
       label={e('host')}
       hasFeedback
-      rules={[{
-        max: 520, message: '520 chars max'
-      }, {
-        required: true, message: 'host required'
-      }]}
+      rules={[
+        createShellPilotMaxRule(e, 520),
+        createShellPilotRequiredRule(e, 'host')
+      ]}
       normalize={props.trim}
     >
       {
@@ -44,7 +47,7 @@ export default function SshHostSelector ({ ips = [], useIp, form, onBlur, onPast
           ? renderIps()
           : (
             <div className='dns-section'>
-              hostname or ip
+              {e('shellpilotHostOrIp')}
             </div>
             )
       }

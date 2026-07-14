@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Button, Input, Form, Space } from 'antd'
 import message from '../common/message'
 import {
@@ -10,7 +10,8 @@ import { defaultTheme, defaultThemeLight } from '../../common/theme-defaults'
 import { normalizeTerminalThemeConfig } from '../../common/shellpilot-theme-constraints.js'
 import {
   validateThemeName,
-  validateThemeText
+  validateThemeText,
+  revalidateTouchedThemeFields
 } from '../../common/theme-validation.js'
 import generate from '../../common/uid'
 import Link from '../common/external-link'
@@ -28,6 +29,9 @@ export default function ThemeForm (props) {
   const [txt, setTxt] = useState(convertThemeToText(props.formData))
   const [editor, setEditor] = useState('theme-editor-color-picker')
   const action = useRef('submit')
+  useEffect(() => {
+    revalidateTouchedThemeFields(form)
+  }, [props.languageVersion])
   function exporter () {
     exportTheme(props.formData.id)
   }
@@ -204,6 +208,7 @@ export default function ThemeForm (props) {
         label={e('themeName')}
         hasFeedback
         name='themeName'
+        required
         rules={[{
           validator: validateName
         }]}

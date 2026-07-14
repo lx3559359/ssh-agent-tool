@@ -11,6 +11,8 @@ import {
   formatBookmarkSshCommand
 } from './bookmark-context-menu'
 
+const e = window.translate
+
 export default function TreeListRow (props) {
   const {
     row,
@@ -95,7 +97,9 @@ export default function TreeListRow (props) {
     if (typeof window === 'undefined' || typeof window.confirm !== 'function') {
       return true
     }
-    return window.confirm(isGroup ? '确认删除这个分组？' : '确认删除这个连接？')
+    return window.confirm(isGroup
+      ? e('shellpilotBookmarkConfirmDeleteGroup')
+      : e('shellpilotBookmarkConfirmDeleteConnection'))
   }
 
   const onContextMenuAction = ({ key, domEvent }) => {
@@ -131,7 +135,7 @@ export default function TreeListRow (props) {
       return exportConnection(safeEvent(domEvent), item)
     }
     if (key === 'copyPublicInfo') {
-      return copy(formatBookmarkPublicInfo(item))
+      return copy(formatBookmarkPublicInfo(item, e))
     }
     if (key === 'copySshCommand') {
       return copy(formatBookmarkSshCommand(item))
@@ -144,7 +148,8 @@ export default function TreeListRow (props) {
   const contextMenuItems = buildBookmarkContextMenuItems({
     item,
     isGroup,
-    staticList
+    staticList,
+    translate: e
   })
   const dropdownProps = {
     menu: {

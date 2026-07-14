@@ -129,7 +129,7 @@ export default auto(function SettingModalWrap (props) {
       },
       {
         key: settingMap.widgets,
-        label: <>工具中心 <sup>预览</sup></>,
+        label: <>{e('widgets')} <sup>{e('shellpilotPreview')}</sup></>,
         children: null
       }
     ]

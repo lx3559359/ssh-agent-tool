@@ -65,12 +65,12 @@ export function buildTerminalContextMenuItems ({
     item({
       key: 'analyzeTerminalWithAi',
       iconKey: 'AIIcon',
-      labelText: 'AI 分析当前终端'
+      labelKey: 'shellpilotTerminalAnalyzeWithAi'
     }),
     item({
       key: 'copyCurrentPath',
       iconKey: 'CopyOutlined',
-      labelText: '复制当前路径',
+      labelKey: 'shellpilotTerminalCopyCurrentPath',
       disabled: !currentPath
     }),
     item({
@@ -82,17 +82,17 @@ export function buildTerminalContextMenuItems ({
     item({
       key: 'onZoomInTerminal',
       iconKey: 'PlusCircleOutlined',
-      labelText: '放大终端字体'
+      labelKey: 'shellpilotTerminalZoomIn'
     }),
     item({
       key: 'onZoomOutTerminal',
       iconKey: 'MinusCircleOutlined',
-      labelText: '缩小终端字体'
+      labelKey: 'shellpilotTerminalZoomOut'
     }),
     item({
       key: 'onResetTerminalFontSize',
       iconKey: 'AimOutlined',
-      labelText: '重置终端字体',
+      labelKey: 'shellpilotTerminalZoomReset',
       disabled: !fontSizeChanged
     }),
     item({
@@ -120,7 +120,7 @@ export function buildTerminalContextMenuItems ({
     item({
       key: 'onOpenSessionLogFolder',
       iconKey: 'FolderOpenOutlined',
-      labelText: '打开会话日志目录'
+      labelKey: 'shellpilotTerminalOpenLogFolder'
     }),
     item({
       key: recording ? 'onStopRecord' : 'onRecord',
@@ -142,12 +142,12 @@ export function buildTerminalContextMenuItems ({
       item({
         key: 'onXmodemSend',
         iconKey: 'CloudUploadOutlined',
-        labelText: 'XMODEM 发送'
+        labelKey: 'shellpilotXmodemSend'
       }),
       item({
         key: 'onXmodemReceive',
         iconKey: 'CloudDownloadOutlined',
-        labelText: 'XMODEM 接收'
+        labelKey: 'shellpilotXmodemReceive'
       })
     ])
   }

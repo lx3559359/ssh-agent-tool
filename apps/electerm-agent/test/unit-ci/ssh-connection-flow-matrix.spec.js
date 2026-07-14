@@ -45,5 +45,5 @@ test('SSH connection lifecycle matrix covers create save auth timeout and reconn
   assertEvidence(reconnectPolicy, /stops on credential and configuration errors/, 'non-retryable configuration errors')
   assertEvidence(terminal, /scheduleAutoReconnect\s*=\s*\(\)\s*=>\s*{[\s\S]*reconnectScheduler\.schedule\(\)/, 'terminal reconnect scheduler')
   assertEvidence(terminal, /handleCancelAutoReconnect/, 'cancel reconnect action')
-  assertEvidence(feedback, /SSH connection form feedback uses Chinese messages/, 'localized connection feedback')
+  assertEvidence(feedback, /SSH connection form feedback uses runtime translations/, 'localized connection feedback')
 })

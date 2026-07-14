@@ -137,7 +137,7 @@ export default class SettingTerminal extends Component {
     try {
       const st = await window.fs.statCustom(path)
       if (!st.isD) {
-        message.error('invalid log folder')
+        message.error(e('shellpilotInvalidLogFolder'))
         return false
       }
       const testFile = osResolve(path, uid + '.test.log')
@@ -145,7 +145,7 @@ export default class SettingTerminal extends Component {
       await window.fs.unlink(testFile)
       return true
     } catch (err) {
-      message.error('invalid log folder')
+      message.error(e('shellpilotInvalidLogFolder'))
       return false
     }
   }
@@ -334,7 +334,7 @@ export default class SettingTerminal extends Component {
       <div className='pd2b'>
         <div className='pd1b'>
           <Tooltip
-            title='eg: https://xx.com/xx.png or /path/to/xx.png'
+            title={e('shellpilotTerminalBackgroundExample')}
           >
             <AutoComplete
               value={value}
@@ -554,7 +554,7 @@ export default class SettingTerminal extends Component {
         }
         <div className='pd1b'>Shift+Enter</div>
         {
-          this.renderText('shiftEnterMode', 'Text to send on Shift+Enter. Use \\n for newline')
+          this.renderText('shiftEnterMode', e('shellpilotShiftEnterPlaceholder'))
         }
         {
           this.renderCursorStyleSelect()

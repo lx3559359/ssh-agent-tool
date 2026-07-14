@@ -84,7 +84,7 @@ export default class SettingCommon extends Component {
       }, () => {
         this.submitting = false
       })
-      message.success('OK')
+      message.success(e('ok'))
     } else {
       this.setState({
         submittingPass: false
@@ -264,7 +264,7 @@ export default class SettingCommon extends Component {
           />
           <Select
             {...styleArg}
-            placeholder='args'
+            placeholder={e('shellpilotArguments')}
             onChange={onChangeArgs}
             value={args}
             mode='tags'
@@ -421,17 +421,17 @@ export default class SettingCommon extends Component {
     const value = this.props.config.updateChannel || defaultSettings.updateChannel
     return (
       <div className='sp-setting-field pd2b'>
-        <span className='inline-title mg1r'>更新通道</span>
+        <span className='inline-title mg1r'>{e('themeUpdateChannel')}</span>
         <Select
           onChange={v => this.onChangeValue(v, 'updateChannel')}
           popupMatchSelectWidth={false}
           value={value}
         >
-          <Option value='stable'>稳定版</Option>
-          <Option value='beta'>测试版</Option>
+          <Option value='stable'>{e('shellpilotStableRelease')}</Option>
+          <Option value='beta'>{e('shellpilotBetaRelease')}</Option>
         </Select>
         <span className='mg1l color-grey'>
-          稳定版只接收已确认发布的正式更新，测试版用于提前验证新功能。
+          {e('shellpilotUpdateChannelDescription')}
         </span>
       </div>
     )
@@ -441,18 +441,18 @@ export default class SettingCommon extends Component {
     const value = this.props.config.updateSource || defaultSettings.updateSource
     return (
       <div className='sp-setting-field pd2b'>
-        <span className='inline-title mg1r'>更新源</span>
+        <span className='inline-title mg1r'>{e('shellpilotUpdateSource')}</span>
         <Select
           onChange={v => this.onChangeValue(v, 'updateSource')}
           popupMatchSelectWidth={false}
           value={value}
         >
-          <Option value='auto'>自动选择（推荐）</Option>
-          <Option value='modelscope'>ModelScope 国内源</Option>
+          <Option value='auto'>{e('shellpilotAutomaticRecommended')}</Option>
+          <Option value='modelscope'>{e('shellpilotModelScopeRegionalSource')}</Option>
           <Option value='github'>GitHub</Option>
         </Select>
         <span className='mg1l color-grey'>
-          自动选择会优先使用国内源，失败后回退 GitHub；手动选择后只使用指定更新源。
+          {e('shellpilotUpdateSourceDescription')}
         </span>
       </div>
     )

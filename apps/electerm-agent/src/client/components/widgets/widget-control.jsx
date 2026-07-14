@@ -4,16 +4,18 @@
 import React, { useState } from 'react'
 import WidgetForm from './widget-form'
 import { showMsg } from './widget-notification-with-details'
+import { formatWidgetSuccessMessage } from './widget-feedback.js'
 
-export default function WidgetControl ({ formData, widgetInstancesLength }) {
+export default function WidgetControl ({ formData, widgetInstancesLength, languageVersion }) {
   const [loading, setLoading] = useState(false)
   const widget = formData
+  const e = window.translate
   if (!widget.id) {
     return (
       <div className='widget-control-empty'>
         <div className='widget-control-empty-inner'>
-          <h3>选择一个工具开始配置</h3>
-          <p>左侧工具中心提供批量任务、文件服务、MCP 服务和文件整理能力。选择后可在这里查看说明并调整参数。</p>
+          <h3>{e('shellpilotWidgetSelectTitle')}</h3>
+          <p>{e('shellpilotWidgetSelectDescription')}</p>
         </div>
       </div>
     )
@@ -32,14 +34,13 @@ export default function WidgetControl ({ formData, widgetInstancesLength }) {
       const {
         instanceId,
         success,
-        error,
-        msg
+        error
       } = result
       if (!instanceId) {
         if (success === false) {
-          showMsg('工具运行失败', 'error', null, 10, error || '')
+          showMsg(e('shellpilotWidgetRunFailed'), 'error', null, 10, error || '')
         } else {
-          showMsg(msg, 'success', null, 10)
+          showMsg(formatWidgetSuccessMessage(result, e), 'success', null, 10)
         }
         return
       }
@@ -55,10 +56,10 @@ export default function WidgetControl ({ formData, widgetInstancesLength }) {
       if (config.autoRun) {
         window.store.toggleAutoRunWidget(instance)
       }
-      showMsg(msg, 'success', result.serverInfo, 10)
+      showMsg(formatWidgetSuccessMessage(result, e), 'success', result.serverInfo, 10)
     } catch (err) {
-      console.error('工具运行失败:', err)
-      showMsg(`工具运行失败：${err.message}`, 'error', null, 10)
+      console.error('Widget failed to run:', err)
+      showMsg(e('shellpilotWidgetRunFailed'), 'error', null, 10, err.message)
     } finally {
       setLoading(false)
     }
@@ -71,6 +72,7 @@ export default function WidgetControl ({ formData, widgetInstancesLength }) {
         onSubmit={handleFormSubmit}
         loading={loading}
         hasRunningInstance={hasRunningInstance}
+        languageVersion={languageVersion}
       />
     </div>
   )

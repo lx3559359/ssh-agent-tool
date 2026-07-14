@@ -4,6 +4,7 @@ import {
   AutoComplete
 } from 'antd'
 import { formItemLayout } from '../../../common/form-layout'
+import { createShellPilotMaxRule } from '../../../common/shellpilot-i18n-overrides'
 
 const FormItem = Form.Item
 const e = window.translate
@@ -30,9 +31,7 @@ export default function renderProxy (props) {
       label={e('proxy')}
       hasFeedback
       name='proxy'
-      rules={[{
-        max: 1024, message: '1024 chars max'
-      }]}
+      rules={[createShellPilotMaxRule(e, 1024)]}
     >
       <AutoComplete options={options}>
         <Input allowClear placeholder='socks5://127.0.0.1:1080' />

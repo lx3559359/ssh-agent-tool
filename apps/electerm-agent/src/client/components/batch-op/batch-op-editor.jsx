@@ -15,83 +15,25 @@ import message from '../common/message'
 import { refsStatic } from '../common/ref'
 import generate from '../../common/uid'
 import { safeGetItem, safeSetItem } from '../../common/safe-local-storage'
+import {
+  createWorkflowExample,
+  formatBatchOpMessage
+} from './batch-op-i18n.js'
 
 const batchOpEditorKey = 'batch-op-editor-content'
-const workflowExample = `[
-  {
-    "name": "连接 SSH",
-    "action": "connect",
-    "params": {
-      "host": "192.168.1.100",
-      "port": 22,
-      "username": "root",
-      "authType": "password",
-      "password": "your_password"
-    }
-  },
-  {
-    "name": "创建 5M 测试文件",
-    "action": "command",
-    "afterDelay": 500,
-    "prevDelay": 500,
-    "command": "fallocate -l 5M /tmp/test_5m_file.bin && rm -f /tmp/test_log.log && echo '[LOG] Created 5M test file at $(date)' >> /tmp/test_log.log"
-  },
-  {
-    "name": "记录文件信息",
-    "action": "command",
-    "command": "ls -la /tmp/test_5m_file.bin >> /tmp/test_log.log 2>&1 && echo '[LOG] File size logged at $(date)' >> /tmp/test_log.log"
-  },
-  {
-    "name": "下载 5M 文件",
-    "action": "sftp_download",
-    "afterDelay": 200,
-    "remotePath": "/tmp/test_5m_file.bin",
-    "localPath": "/tmp/test_5m_file.bin"
-  },
-  {
-    "name": "记录下载结果",
-    "action": "command",
-    "afterDelay": 200,
-    "command": "echo '[LOG] Download complete at $(date)' >> /tmp/test_log.log"
-  },
-  {
-    "name": "删除远程测试文件",
-    "action": "command",
-    "afterDelay": 200,
-    "command": "rm /tmp/test_5m_file.bin && echo '[LOG] Deleted remote 5M file at $(date)' >> /tmp/test_log.log"
-  },
-  {
-    "name": "上传文件到远程服务器",
-    "action": "sftp_upload",
-    "afterDelay": 200,
-    "localPath": "/tmp/test_5m_file.bin",
-    "remotePath": "/tmp/test_5m_file_uploaded.bin"
-  },
-  {
-    "name": "记录上传结果",
-    "action": "command",
-    "afterDelay": 200,
-    "command": "echo '[LOG] Upload complete at $(date)' >> /tmp/test_log.log"
-  },
-  {
-    "name": "校验并清理",
-    "action": "command",
-    "command": "ls -la /tmp/test_5m_file_uploaded.bin >> /tmp/test_log.log 2>&1 && rm -f /tmp/test_5m_file*.bin && echo '[LOG] Cleaned up at $(date)' >> /tmp/test_log.log"
-  }
-]`
-
-function getDefaultValue (widget) {
+function getDefaultValue (widget, translate) {
   const saved = safeGetItem(batchOpEditorKey)
   if (saved) return saved
-  return workflowExample
+  return createWorkflowExample(translate)
 }
 
-export default function BatchOpEditor ({ widget }) {
-  const [value, setValue] = useState(() => getDefaultValue(widget))
+export default function BatchOpEditor ({ widget, languageVersion }) {
+  const e = window.translate
+  const [value, setValue] = useState(() => getDefaultValue(widget, e))
   const [executing, setExecuting] = useState(false)
 
   useEffect(() => {
-    const v = getDefaultValue(widget)
+    const v = getDefaultValue(widget, window.translate)
     if (v) setValue(v)
   }, [widget?.id])
 
@@ -109,17 +51,17 @@ export default function BatchOpEditor ({ widget }) {
       let workflows
       try {
         workflows = JSON.parse(value)
-        if (!Array.isArray(workflows)) throw new Error('任务流必须是数组')
-      } catch (e) {
-        message.error('任务 JSON 无效：' + e.message)
+        if (!Array.isArray(workflows)) throw new Error(e('shellpilotBatchWorkflowArrayRequired'))
+      } catch (err) {
+        message.error(formatBatchOpMessage('shellpilotBatchInvalidJson', { detail: err.message }, e))
         refsStatic.get('batch-op-logs')?.reset()
         return
       }
       await runner.executeWorkflow(workflows)
-      message.success('任务执行完成')
+      message.success(e('shellpilotBatchExecutionComplete'))
     } catch (err) {
       if (err.message !== 'Workflow aborted') {
-        message.error('任务执行失败：' + err.message)
+        message.error(formatBatchOpMessage('shellpilotBatchExecutionFailed', { detail: err.message }, e))
       }
     } finally {
       setExecuting(false)
@@ -127,8 +69,8 @@ export default function BatchOpEditor ({ widget }) {
   }
 
   const handleTemplate = useCallback(() => {
-    setValue(workflowExample)
-  }, [])
+    setValue(createWorkflowExample(window.translate))
+  }, [languageVersion])
 
   const handleEditWithSystemEditor = useCallback(async () => {
     const id = generate()
@@ -164,11 +106,11 @@ export default function BatchOpEditor ({ widget }) {
   }
 
   return (
-    <div className='batch-op-editor'>
+    <div className='batch-op-editor' data-language-version={languageVersion}>
       <BatchOpAlert />
       <Flex className='mg2y' gap='small'>
         <Button onClick={handleTemplate} type='dashed'>
-          载入模板
+          {e('shellpilotBatchLoadTemplate')}
         </Button>
         <Button
           onClick={handleExecute}
@@ -177,7 +119,7 @@ export default function BatchOpEditor ({ widget }) {
           disabled={executing}
           icon={<PlayCircleOutlined />}
         >
-          执行任务
+          {e('shellpilotBatchExecuteTask')}
         </Button>
       </Flex>
       <SimpleEditor
@@ -199,7 +141,7 @@ export default function BatchOpEditor ({ widget }) {
           />
         </div>
       )}
-      <BatchOpLogs />
+      <BatchOpLogs languageVersion={languageVersion} />
     </div>
   )
 }

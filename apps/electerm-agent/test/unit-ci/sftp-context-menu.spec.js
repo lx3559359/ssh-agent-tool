@@ -46,10 +46,15 @@ test('sftp context menu keeps all items when there is enough viewport space', as
   )
 })
 
-test('sftp context menu uses a readable chinese more submenu when it would overflow', async () => {
+test('sftp context menu accepts localized more copy when it would overflow', async () => {
   const { splitOverflowMenu } = await import(moduleUrl)
   const items = createItems(10)
-  const result = splitOverflowMenu({ items, clientY: 520, windowHeight: 600 })
+  const result = splitOverflowMenu({
+    items,
+    clientY: 520,
+    windowHeight: 600,
+    moreLabel: '更多'
+  })
   const more = result[result.length - 1]
 
   assert.equal(result.length, 6)

@@ -7,6 +7,7 @@ import {
 } from 'antd'
 import { MinusCircleOutlined, PlusOutlined } from '@ant-design/icons'
 import { formItemLayout } from '../../../common/form-layout'
+import { createShellPilotRequiredRule } from '../../../common/shellpilot-i18n-overrides'
 
 const FormItem = Form.Item
 const FormList = Form.List
@@ -34,7 +35,7 @@ export default function renderRunScripts () {
               suffix='ms'
               max={65535}
               className='number-input'
-              rules={[{ required: true, message: e('loginScriptDelay') + ' required' }]}
+              rules={[createShellPilotRequiredRule(e, 'loginScriptDelay')]}
             />
           </FormItem>
           <Space.Compact>

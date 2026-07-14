@@ -224,7 +224,7 @@ export default function TerminalBackgroundConfig ({
     <div className='pd2b'>
       <div className='pd1b'>
         <Tooltip
-          title='eg: https://xx.com/xx.png or /path/to/xx.png'
+          title={e('shellpilotTerminalBackgroundExample')}
         >
           <AutoComplete
             value={value}

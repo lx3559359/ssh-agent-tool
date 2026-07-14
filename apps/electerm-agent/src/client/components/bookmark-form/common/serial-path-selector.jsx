@@ -1,6 +1,7 @@
 import { ReloadOutlined } from '@ant-design/icons'
 import { AutoComplete, Spin, Form } from 'antd'
 import { formItemLayout } from '../../../common/form-layout'
+import { createShellPilotRequiredRule } from '../../../common/shellpilot-i18n-overrides'
 
 const FormItem = Form.Item
 const e = window.translate
@@ -14,10 +15,8 @@ export default function SerialPathSelector ({
   return (
     <FormItem
       {...formItemLayout}
-      label='path'
-      rules={[{
-        required: true, message: 'path required'
-      }]}
+      label={e('path')}
+      rules={[createShellPilotRequiredRule(e, 'path')]}
       normalize={props.trim}
     >
       <FormItem noStyle name='path'>
@@ -31,7 +30,7 @@ export default function SerialPathSelector ({
       </FormItem>
       <Spin spinning={loaddingSerials}>
         <span onClick={store.handleGetSerials} className='pointer'>
-          <ReloadOutlined /> {e('reload')} serials
+          <ReloadOutlined /> {e('reload')} {e('shellpilotSerials')}
         </span>
       </Spin>
     </FormItem>

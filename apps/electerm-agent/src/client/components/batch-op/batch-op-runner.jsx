@@ -3,8 +3,10 @@ import { refsStatic, refs } from '../common/ref'
 import { statusMap } from '../../common/constants'
 import { autoRun } from 'manate'
 import uid from '../../common/uid'
+import { formatBatchOpMessage } from './batch-op-i18n.js'
 
 const STATIC_KEY = 'batch-op-runner'
+const t = (key, replacements) => formatBatchOpMessage(key, replacements, window.translate)
 
 export default class BatchOpRunner extends Component {
   constructor () {
@@ -56,7 +58,7 @@ export default class BatchOpRunner extends Component {
       try {
         workflows = JSON.parse(content)
         if (!Array.isArray(workflows)) {
-          throw new Error('任务流必须是数组')
+          throw new Error(t('shellpilotBatchWorkflowArrayRequired'))
         }
       } catch (e) {
         console.error('批量任务 JSON 无效:', e.message)
@@ -73,7 +75,7 @@ export default class BatchOpRunner extends Component {
 
   async _executeWorkflow (workflows) {
     if (!Array.isArray(workflows)) {
-      throw new Error('任务流必须是数组')
+      throw new Error(t('shellpilotBatchWorkflowArrayRequired'))
     }
 
     this.steps = []
@@ -116,7 +118,7 @@ export default class BatchOpRunner extends Component {
     const { action, prevDelay, afterDelay } = step
 
     if (!action) {
-      throw new Error('步骤必须包含 action 字段')
+      throw new Error(t('shellpilotBatchStepActionRequired'))
     }
 
     if (prevDelay > 0) {
@@ -141,7 +143,7 @@ export default class BatchOpRunner extends Component {
         result = await this._batchStepSftpDownload(s)
         break
       default:
-        throw new Error(`未知动作：${action}`)
+        throw new Error(t('shellpilotBatchUnknownAction', { action }))
     }
 
     if (afterDelay > 0) {
@@ -207,7 +209,7 @@ export default class BatchOpRunner extends Component {
           this._refWait.stop()
           delete this._refWait
         }
-        reject(new Error('连接超时'))
+        reject(new Error(t('shellpilotBatchConnectionTimeout')))
       }, 30000)
 
       this._refWait = autoRun(() => {
@@ -222,7 +224,9 @@ export default class BatchOpRunner extends Component {
           clearTimeout(timeout)
           this._refWait && this._refWait.stop()
           delete this._refWait
-          reject(new Error('连接失败：' + (tab.errorMsg || '未知错误')))
+          reject(new Error(t('shellpilotBatchConnectionFailed', {
+            detail: tab.errorMsg || t('shellpilotBatchUnknownError')
+          })))
         }
         return window.store.tabs
       })
@@ -234,12 +238,12 @@ export default class BatchOpRunner extends Component {
     const tabId = this.currentTabId
 
     if (!tabId) {
-      throw new Error('没有可用的活动标签，请先连接服务器。')
+      throw new Error(t('shellpilotBatchNoActiveTab'))
     }
 
     const term = refs.get('term-' + tabId)
     if (!term || !term.term) {
-      throw new Error('未找到终端')
+      throw new Error(t('shellpilotBatchTerminalNotFound'))
     }
 
     let waited = 0
@@ -248,7 +252,7 @@ export default class BatchOpRunner extends Component {
       waited += 200
     }
     if (!term.attachAddon) {
-      throw new Error('终端未就绪：attach 插件尚未初始化')
+      throw new Error(t('shellpilotBatchTerminalNotReady'))
     }
 
     term.runQuickCommand(step.command)
@@ -286,7 +290,7 @@ export default class BatchOpRunner extends Component {
           this._refTransferWait.stop()
           delete this._refTransferWait
         }
-        reject(new Error('传输超时（1 小时）'))
+        reject(new Error(t('shellpilotBatchTransferTimeout')))
       }, 60 * 60 * 1000)
 
       this._refTransferWait = autoRun(() => {
@@ -297,7 +301,7 @@ export default class BatchOpRunner extends Component {
           this._refTransferWait && this._refTransferWait.stop()
           delete this._refTransferWait
           if (item.error) {
-            reject(new Error('传输失败：' + item.error))
+            reject(new Error(t('shellpilotBatchTransferFailed', { detail: item.error })))
           } else {
             resolve(item)
           }

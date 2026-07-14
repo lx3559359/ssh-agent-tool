@@ -3,6 +3,7 @@ import { terminalRdpType } from '../../../common/constants.js'
 import { createBaseInitValues, getAuthTypeDefault } from '../common/init-values.js'
 import { isEmpty } from 'lodash-es'
 import { commonFields, connectionHoppingTab } from './common-fields.js'
+import { createShellPilotRequiredRule } from '../../../common/shellpilot-i18n-overrides.js'
 
 const e = window.translate
 
@@ -30,11 +31,11 @@ const rdpConfig = {
         commonFields.category,
         commonFields.colorTitle,
         commonFields.labels,
-        { type: 'input', name: 'host', label: () => e('host'), rules: [{ required: true, message: e('host') + ' required' }] },
+        { type: 'input', name: 'host', label: () => e('host'), rules: [createShellPilotRequiredRule(e, 'host')] },
         commonFields.port,
         { type: 'profileItem', name: '__profile__', label: '', profileFilter: d => !isEmpty(d.rdp) },
-        { ...commonFields.username, rules: [{ required: true, message: e('username') + ' required' }] },
-        { ...commonFields.password, rules: [{ required: true, message: e('password') + ' required' }] },
+        { ...commonFields.username, rules: [createShellPilotRequiredRule(e, 'username')] },
+        { ...commonFields.password, rules: [createShellPilotRequiredRule(e, 'password')] },
         commonFields.description,
         { type: 'input', name: 'domain', label: () => e('domain') },
         commonFields.proxy,

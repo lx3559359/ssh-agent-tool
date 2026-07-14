@@ -57,7 +57,7 @@ export default function SshTunnelForm (props) {
 
   function renderDynamicForward () {
     return (
-      <p><UserOutlined /> → socks proxy → url</p>
+      <p><UserOutlined /> → {e('shellpilotSocksProxy')} → {e('url')}</p>
     )
   }
 
@@ -124,7 +124,7 @@ export default function SshTunnelForm (props) {
           </RadioButton>
           <RadioButton value='dynamicForward'>
             <Tooltip title={renderDynamicForward()}>
-              <span>{e('dynamicForward')}(socks proxy) <QuestionCircleOutlined /></span>
+              <span>{e('dynamicForward')} ({e('shellpilotSocksProxy')}) <QuestionCircleOutlined /></span>
             </Tooltip>
           </RadioButton>
         </RadioGroup>

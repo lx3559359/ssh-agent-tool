@@ -28,6 +28,13 @@ function trimString (value) {
   return typeof value === 'string' ? value.trim() : value
 }
 
+function translated (translate, key, fallback) {
+  const value = typeof translate === 'function' ? translate(key) : ''
+  return typeof value === 'string' && value.trim() && value !== key
+    ? value
+    : fallback
+}
+
 function normalizeModelOptions (items = []) {
   const source = Array.isArray(items) ? items : [items]
   return [...new Set(
@@ -47,7 +54,9 @@ export function normalizeAIProfile (profile = {}) {
     }
   }
   next.id = next.id || createProfileId()
-  next.nameAI = next.nameAI || next.modelAI || next.baseURLAI || 'AI 配置'
+  // Keep user data language-neutral. An empty name is rendered with the current
+  // UI language by getAIProfileOptions instead of being persisted as English.
+  next.nameAI = next.nameAI || ''
   next.apiPathAI = next.apiPathAI || ''
   next.modelOptionsAI = normalizeModelOptions(next.modelOptionsAI)
   next.agentSkills = Array.isArray(next.agentSkills) ? next.agentSkills : []
@@ -155,10 +164,10 @@ export function buildAIProfileFromValues (values = {}) {
   return normalizeAIProfile(profile)
 }
 
-export function getAIProfileOptions (config = {}) {
+export function getAIProfileOptions (config = {}, translate) {
   return migrateAIProfiles(config).aiProfiles.map(profile => ({
     value: profile.id,
-    label: profile.nameAI || 'AI 配置'
+    label: profile.nameAI || translated(translate, 'shellpilotAiDefaultConfiguration', 'AI Configuration')
   }))
 }
 
@@ -188,15 +197,15 @@ export function getAIStatusFingerprint (config = {}) {
   ].join('|')
 }
 
-export function getAIModelStatus (config = {}) {
+export function getAIModelStatus (config = {}, translate) {
   const active = getActiveAIConfig(config)
   const hasRequiredConfig = Boolean(active.baseURLAI && active.apiKeyAI)
   if (!hasRequiredConfig) {
     return {
       status: 'unconfigured',
-      label: '未配置',
+      label: translated(translate, 'shellpilotAiUnconfigured', 'Not Configured'),
       className: 'not-configured',
-      title: '请先填写 API 地址和 API Key'
+      title: translated(translate, 'shellpilotAiConfigureHint', 'Enter an API address and API key first')
     }
   }
   const statusExpired = active.aiStatusFingerprint &&
@@ -204,33 +213,33 @@ export function getAIModelStatus (config = {}) {
   if (!active.aiStatus || statusExpired) {
     return {
       status: 'pending',
-      label: '待测试',
+      label: translated(translate, 'shellpilotAiPending', 'Pending Test'),
       className: 'pending',
       title: statusExpired
-        ? '模型配置已变化，请重新测试连接'
-        : '配置已填写，但还没有完成测试连接'
+        ? translated(translate, 'shellpilotAiConfigChanged', 'The model configuration changed; test the connection again')
+        : translated(translate, 'shellpilotAiNotTested', 'The configuration is complete but has not been tested')
     }
   }
   if (active.aiStatus === 'available') {
     return {
       status: 'available',
-      label: '可用',
+      label: translated(translate, 'shellpilotAiAvailable', 'Available'),
       className: 'available',
-      title: active.aiStatusMessage || '最近一次模型测试连接成功'
+      title: active.aiStatusMessage || translated(translate, 'shellpilotAiRecentSuccess', 'The most recent model connection test succeeded')
     }
   }
   if (active.aiStatus === 'error') {
     return {
       status: 'error',
-      label: '异常',
+      label: translated(translate, 'shellpilotAiError', 'Error'),
       className: 'error',
-      title: active.aiStatusMessage || '最近一次模型测试连接失败'
+      title: active.aiStatusMessage || translated(translate, 'shellpilotAiRecentFailure', 'The most recent model connection test failed')
     }
   }
   return {
     status: 'pending',
-    label: '待测试',
+    label: translated(translate, 'shellpilotAiPending', 'Pending Test'),
     className: 'pending',
-    title: '配置已填写，但还没有完成测试连接'
+    title: translated(translate, 'shellpilotAiNotTested', 'The configuration is complete but has not been tested')
   }
 }

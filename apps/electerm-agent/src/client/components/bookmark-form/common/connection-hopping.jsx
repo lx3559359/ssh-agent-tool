@@ -157,7 +157,7 @@ export default function renderConnectionHopping (props) {
       )
     },
     {
-      title: 'NO.',
+      title: e('shellpilotNumberColumn'),
       dataIndex: 'index',
       key: 'index',
       render: (k) => k

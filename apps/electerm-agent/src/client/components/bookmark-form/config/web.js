@@ -25,18 +25,18 @@ const webConfig = {
           name: 'url',
           label: () => e('URL'),
           rules: [
-            { required: true, message: '请输入 URL' },
+            { required: true, message: e('shellpilotUrlRequired') },
             {
               validator: (_, value) =>
                 /^[a-z\d.+-]+:\/\/[^\s/$.?#].[^\s]*$/i.test(value)
                   ? Promise.resolve()
-                  : Promise.reject(new Error('URL 必须以 http:// 或 https:// 开头'))
+                  : Promise.reject(new Error(e('shellpilotHttpUrlRequired')))
             }
           ]
         },
         commonFields.description,
         { type: 'input', name: 'useragent', label: () => e('useragent') },
-        { type: 'switch', name: 'hideAddressBar', label: 'hideAddressBar', valuePropName: 'checked' },
+        { type: 'switch', name: 'hideAddressBar', label: () => e('shellpilotHideAddressBar'), valuePropName: 'checked' },
         commonFields.type
       ]
     }

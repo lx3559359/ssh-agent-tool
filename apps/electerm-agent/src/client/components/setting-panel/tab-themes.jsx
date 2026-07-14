@@ -138,6 +138,7 @@ export default function TabThemes (props) {
             <ThemePreview theme={previewThemeItem} />
             <TerminalThemeForm
               {...formProps}
+              languageVersion={languageVersion}
               key={`${settingItem.id}:${editorVersion}`}
             />
           </div>

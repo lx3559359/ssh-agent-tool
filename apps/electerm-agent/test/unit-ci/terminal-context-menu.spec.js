@@ -67,13 +67,13 @@ test('terminal context menu includes daily SSH operations and copy current path'
   ])
   assert.equal(items.find(item => item.key === 'copyCurrentPath').disabled, false)
   assert.equal(items.find(item => item.key === 'explainWithAi').disabled, false)
-  assert.equal(items.find(item => item.key === 'analyzeTerminalWithAi').labelText, 'AI 分析当前终端')
+  assert.equal(items.find(item => item.key === 'analyzeTerminalWithAi').labelKey, 'shellpilotTerminalAnalyzeWithAi')
   assert.equal(items.find(item => item.key === 'onResetTerminalFontSize').disabled, true)
-  assert.equal(items.find(item => item.key === 'copyCurrentPath').labelText, '复制当前路径')
-  assert.equal(items.find(item => item.key === 'onZoomInTerminal').labelText, '放大终端字体')
-  assert.equal(items.find(item => item.key === 'onZoomOutTerminal').labelText, '缩小终端字体')
-  assert.equal(items.find(item => item.key === 'onResetTerminalFontSize').labelText, '重置终端字体')
-  assert.equal(items.find(item => item.key === 'onOpenSessionLogFolder').labelText, '打开会话日志目录')
+  assert.equal(items.find(item => item.key === 'copyCurrentPath').labelKey, 'shellpilotTerminalCopyCurrentPath')
+  assert.equal(items.find(item => item.key === 'onZoomInTerminal').labelKey, 'shellpilotTerminalZoomIn')
+  assert.equal(items.find(item => item.key === 'onZoomOutTerminal').labelKey, 'shellpilotTerminalZoomOut')
+  assert.equal(items.find(item => item.key === 'onResetTerminalFontSize').labelKey, 'shellpilotTerminalZoomReset')
+  assert.equal(items.find(item => item.key === 'onOpenSessionLogFolder').labelKey, 'shellpilotTerminalOpenLogFolder')
 })
 
 test('terminal context menu disables selection and cwd actions when unavailable', async () => {
@@ -106,13 +106,13 @@ test('terminal context menu keeps serial transfer actions only for serial sessio
   assert.equal(serialKeys.includes('onXmodemReceive'), true)
 })
 
-test('terminal context menu uses Chinese labels for serial transfer actions', async () => {
+test('terminal context menu exposes bilingual label keys for serial transfer actions', async () => {
   const { buildTerminalContextMenuItems } = await import(moduleUrl)
 
   const items = buildTerminalContextMenuItems({ isSerial: true })
 
-  assert.equal(items.find(item => item.key === 'onXmodemSend').labelText, 'XMODEM 发送')
-  assert.equal(items.find(item => item.key === 'onXmodemReceive').labelText, 'XMODEM 接收')
+  assert.equal(items.find(item => item.key === 'onXmodemSend').labelKey, 'shellpilotXmodemSend')
+  assert.equal(items.find(item => item.key === 'onXmodemReceive').labelKey, 'shellpilotXmodemReceive')
 })
 
 test('terminal implements opening the current session log location', () => {

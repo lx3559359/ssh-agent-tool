@@ -25,6 +25,6 @@ test('AI settings form exposes custom Agent Skill management fields', () => {
   assert.match(source, /name:\s*'description'/)
   assert.match(source, /name=\{\[name,\s*'prompt'\]\}/)
   assert.match(source, /name=\{\[name,\s*'disabled'\]\}/)
-  assert.match(source, /新增 Skill/)
-  assert.match(source, /删除/)
+  assert.match(source, /e\('shellpilotAiAddSkill'\)/)
+  assert.match(source, /e\('shellpilotDelete'\)/)
 })

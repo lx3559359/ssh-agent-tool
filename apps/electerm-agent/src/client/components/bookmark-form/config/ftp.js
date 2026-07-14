@@ -3,6 +3,7 @@ import { terminalFtpType } from '../../../common/constants.js'
 import { createBaseInitValues, getAuthTypeDefault } from '../common/init-values.js'
 import { commonFields } from './common-fields.js'
 import { isEmpty } from 'lodash-es'
+import { createShellPilotRequiredRule } from '../../../common/shellpilot-i18n-overrides.js'
 
 const e = window.translate
 
@@ -28,7 +29,7 @@ const ftpConfig = {
         commonFields.category,
         commonFields.colorTitle,
         commonFields.labels,
-        { type: 'input', name: 'host', label: () => e('host'), rules: [{ required: true, message: e('host') + ' required' }] },
+        { type: 'input', name: 'host', label: () => e('host'), rules: [createShellPilotRequiredRule(e, 'host')] },
         commonFields.port,
         { type: 'profileItem', name: '__profile__', label: '', profileFilter: d => !isEmpty(d.ftp) },
         { type: 'input', name: 'user', label: () => e('username') },

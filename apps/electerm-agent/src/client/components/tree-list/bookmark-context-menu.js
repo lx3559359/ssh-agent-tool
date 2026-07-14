@@ -1,9 +1,47 @@
 import { compactMenuGroups } from '../common/context-menu-items.js'
 
 const defaultGroupId = 'default'
+const englishLabels = Object.freeze({
+  shellpilotBookmarkOpenAll: 'Open All',
+  shellpilotBookmarkEditGroup: 'Edit Group',
+  shellpilotBookmarkAddSubgroup: 'Add Subgroup',
+  shellpilotBookmarkMoveGroup: 'Move Group',
+  shellpilotBookmarkDeleteGroup: 'Delete Group',
+  shellpilotBookmarkOpenConnection: 'Open Connection',
+  shellpilotBookmarkTestConnection: 'Test Connection',
+  shellpilotBookmarkEditConnection: 'Edit Connection',
+  shellpilotBookmarkViewConnectionInfo: 'View Connection Information',
+  shellpilotBookmarkExportConnection: 'Export Current Connection',
+  shellpilotBookmarkCopyConnectionInfo: 'Copy Connection Information',
+  shellpilotBookmarkCopySshCommand: 'Copy SSH Command',
+  shellpilotBookmarkDeleteConnection: 'Delete Connection',
+  shellpilotBookmarkUnfavorite: 'Remove from Favorites',
+  shellpilotBookmarkFavorite: 'Add to Favorites',
+  shellpilotBookmarkDuplicateConnection: 'Duplicate Connection',
+  shellpilotBookmarkMoveToGroup: 'Move to Group',
+  shellpilotBookmarkFieldName: 'Name',
+  shellpilotBookmarkFieldType: 'Type',
+  shellpilotBookmarkFieldHost: 'Host',
+  shellpilotBookmarkFieldPort: 'Port',
+  shellpilotBookmarkFieldUser: 'User',
+  shellpilotBookmarkFieldLabels: 'Labels',
+  shellpilotBookmarkFieldNotes: 'Notes'
+})
 
-function label (text) {
-  return text
+function translateLabel (key, translate) {
+  const value = typeof translate === 'function' ? translate(key) : ''
+  return typeof value === 'string' && value.trim() && value !== key
+    ? value
+    : englishLabels[key] || key
+}
+
+function menuItem (key, labelKey, translate, extra = {}) {
+  return {
+    key,
+    labelKey,
+    label: translateLabel(labelKey, translate),
+    ...extra
+  }
 }
 
 function isDefaultGroup (item) {
@@ -42,26 +80,28 @@ export function formatBookmarkSshCommand (bookmark = {}) {
   parts.push(shellArg(target))
   return parts.join(' ')
 }
-export function formatBookmarkPublicInfo (bookmark = {}) {
+
+export function formatBookmarkPublicInfo (bookmark = {}, translate) {
   const lines = [
-    ['名称', bookmark.title],
-    ['类型', bookmark.type],
-    ['主机', bookmark.host || bookmark.hostname || bookmark.url || bookmark.path],
-    ['端口', bookmark.port],
-    ['用户', bookmark.username || bookmark.user],
-    ['标签', [...(bookmark.labels || []), ...(bookmark.tags || [])].join(', ')],
-    ['备注', bookmark.description]
+    ['shellpilotBookmarkFieldName', bookmark.title],
+    ['shellpilotBookmarkFieldType', bookmark.type],
+    ['shellpilotBookmarkFieldHost', bookmark.host || bookmark.hostname || bookmark.url || bookmark.path],
+    ['shellpilotBookmarkFieldPort', bookmark.port],
+    ['shellpilotBookmarkFieldUser', bookmark.username || bookmark.user],
+    ['shellpilotBookmarkFieldLabels', [...(bookmark.labels || []), ...(bookmark.tags || [])].join(', ')],
+    ['shellpilotBookmarkFieldNotes', bookmark.description]
   ]
   return lines
     .filter(([, value]) => value !== undefined && value !== null && String(value).trim() !== '')
-    .map(([name, value]) => `${name}: ${value}`)
+    .map(([key, value]) => `${translateLabel(key, translate)}: ${value}`)
     .join('\n')
 }
 
 export function buildBookmarkContextMenuItems ({
   item,
   isGroup,
-  staticList
+  staticList,
+  translate
 }) {
   if (!item) {
     return []
@@ -69,146 +109,62 @@ export function buildBookmarkContextMenuItems ({
 
   if (isGroup) {
     if (staticList) {
-      return compactMenuGroups([[{
-        key: 'openAll',
-        label: label('全部打开')
-      }]])
+      return compactMenuGroups([[
+        menuItem('openAll', 'shellpilotBookmarkOpenAll', translate)
+      ]])
     }
     if (!isDefaultGroup(item)) {
       return compactMenuGroups([
+        [menuItem('openAll', 'shellpilotBookmarkOpenAll', translate)],
         [
-          {
-            key: 'openAll',
-            label: label('全部打开')
-          }
+          menuItem('edit', 'shellpilotBookmarkEditGroup', translate),
+          menuItem('addSubCat', 'shellpilotBookmarkAddSubgroup', translate),
+          menuItem('move', 'shellpilotBookmarkMoveGroup', translate)
         ],
-        [
-          {
-            key: 'edit',
-            label: label('编辑分组')
-          },
-          {
-            key: 'addSubCat',
-            label: label('新建子分组')
-          },
-          {
-            key: 'move',
-            label: label('移动分组')
-          }
-        ],
-        [
-          {
-            key: 'delete',
-            label: label('删除分组'),
-            danger: true
-          }
-        ]
+        [menuItem('delete', 'shellpilotBookmarkDeleteGroup', translate, { danger: true })]
       ])
     }
     return []
   }
 
+  const connectionInfo = [
+    menuItem('viewConnectionInfo', 'shellpilotBookmarkViewConnectionInfo', translate),
+    menuItem('exportConnection', 'shellpilotBookmarkExportConnection', translate),
+    menuItem('copyPublicInfo', 'shellpilotBookmarkCopyConnectionInfo', translate),
+    menuItem('copySshCommand', 'shellpilotBookmarkCopySshCommand', translate, {
+      disabled: item.type && item.type !== 'ssh'
+    })
+  ]
+  const openActions = [
+    menuItem('open', 'shellpilotBookmarkOpenConnection', translate),
+    menuItem('testConnection', 'shellpilotBookmarkTestConnection', translate)
+  ]
+  const removeAction = [
+    menuItem('delete', 'shellpilotBookmarkDeleteConnection', translate, { danger: true })
+  ]
+
   if (staticList) {
     return compactMenuGroups([
-      [
-        {
-          key: 'open',
-          label: label('打开连接')
-        },
-        {
-          key: 'testConnection',
-          label: label('测试连接')
-        }
-      ],
-      [
-        {
-          key: 'edit',
-          label: label('编辑连接')
-        }
-      ],
-      [
-        {
-          key: 'viewConnectionInfo',
-          label: label('查看连接信息')
-        },
-        {
-          key: 'exportConnection',
-          label: label('导出当前连接')
-        },
-        {
-          key: 'copyPublicInfo',
-          label: label('复制连接信息')
-        },
-        {
-          key: 'copySshCommand',
-          label: label('复制 SSH 命令'),
-          disabled: item.type && item.type !== 'ssh'
-        }
-      ],
-      [
-        {
-          key: 'delete',
-          label: label('删除连接'),
-          danger: true
-        }
-      ]
+      openActions,
+      [menuItem('edit', 'shellpilotBookmarkEditConnection', translate)],
+      connectionInfo,
+      removeAction
     ])
   }
 
   return compactMenuGroups([
+    openActions,
     [
-      {
-        key: 'open',
-        label: label('打开连接')
-      },
-      {
-        key: 'testConnection',
-        label: label('测试连接')
-      }
+      menuItem('edit', 'shellpilotBookmarkEditConnection', translate),
+      menuItem(
+        'toggleFavorite',
+        item.favorite ? 'shellpilotBookmarkUnfavorite' : 'shellpilotBookmarkFavorite',
+        translate
+      ),
+      menuItem('duplicate', 'shellpilotBookmarkDuplicateConnection', translate),
+      menuItem('move', 'shellpilotBookmarkMoveToGroup', translate)
     ],
-    [
-      {
-        key: 'edit',
-        label: label('编辑连接')
-      },
-      {
-        key: 'toggleFavorite',
-        label: item.favorite ? label('取消收藏') : label('收藏')
-      },
-      {
-        key: 'duplicate',
-        label: label('复制连接')
-      },
-      {
-        key: 'move',
-        label: label('移动到分组')
-      }
-    ],
-    [
-      {
-        key: 'viewConnectionInfo',
-        label: label('查看连接信息')
-      },
-      {
-        key: 'exportConnection',
-        label: label('导出当前连接')
-      },
-      {
-        key: 'copyPublicInfo',
-        label: label('复制连接信息')
-      },
-      {
-        key: 'copySshCommand',
-        label: label('复制 SSH 命令'),
-        disabled: item.type && item.type !== 'ssh'
-      }
-    ],
-    [
-      {
-        key: 'delete',
-        label: label('删除连接'),
-        danger: true
-      }
-    ]
+    connectionInfo,
+    removeAction
   ])
 }

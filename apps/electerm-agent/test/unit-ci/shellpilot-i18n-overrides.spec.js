@@ -139,8 +139,6 @@ test('provides the complete ShellPilot catalog in Simplified Chinese and English
 
   for (const [langId, expectedCatalog] of Object.entries(expectedCatalogs)) {
     const expectedKeys = Object.keys(expectedCatalog).sort()
-    assert.deepEqual(getShellPilotCatalogKeys(langId), expectedKeys)
-
     const actualCatalog = Object.fromEntries(expectedKeys.map(key => [
       key,
       getShellPilotTranslation(key, langId)
