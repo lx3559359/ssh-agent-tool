@@ -182,6 +182,9 @@ async function startSftpServer (root) {
           })
           sftp.on('OPEN', (reqId, remotePath, flags) => {
             const localPath = toLocalPath(root, remotePath)
+            if ((flags & OPEN_MODE.EXCL) && fs.existsSync(localPath)) {
+              return sftp.status(reqId, STATUS_CODE.FAILURE)
+            }
             if (flags & OPEN_MODE.CREAT) {
               fs.mkdirSync(path.dirname(localPath), { recursive: true })
             }
@@ -309,13 +312,17 @@ describe('session-sftp transport flows', () => {
         Buffer.from('ab'),
         Buffer.from('cdef')
       ]),
-      createWriteStream: () => new Writable({
-        write (chunk, encoding, callback) {
-          targetExists = true
-          writtenBytes += chunk.length
-          callback()
-        }
-      })
+      createWriteStream: () => {
+        const stream = new Writable({
+          write (chunk, encoding, callback) {
+            targetExists = true
+            writtenBytes += chunk.length
+            callback()
+          }
+        })
+        queueMicrotask(() => stream.emit('open', Buffer.from('fake-handle')))
+        return stream
+      }
     }
     sftp.rm = async remotePath => {
       removed.push(remotePath)
@@ -332,6 +339,114 @@ describe('session-sftp transport flows', () => {
     assert.equal(writtenBytes <= 4, true)
     assert.equal(targetExists, false)
     assert.deepEqual(removed, ['/stage.bin'])
+  })
+
+  test('copyEntry claims a file exclusively without deleting a concurrent target', async () => {
+    const sftp = Object.create(Sftp.prototype)
+    const removed = []
+    let targetContent
+    const sourceStat = {
+      mode: 0o100640,
+      size: 6,
+      uid: 1000,
+      gid: 1000,
+      isDirectory: () => false,
+      isFile: () => true
+    }
+    sftp.lstat = async remotePath => {
+      if (remotePath === '/source.txt') return sourceStat
+      if (remotePath === '/snapshot.txt' && targetContent !== undefined) {
+        return { ...sourceStat, size: targetContent.length }
+      }
+      const error = new Error('No such file')
+      error.code = 'ENOENT'
+      throw error
+    }
+    sftp.sftp = {
+      createReadStream: () => Readable.from([Buffer.from('source')]),
+      createWriteStream: (remotePath, options = {}) => {
+        targetContent = Buffer.from('concurrent')
+        if (options.flags === 'wx') {
+          const error = new Error('Target exists')
+          error.code = 'EEXIST'
+          throw error
+        }
+        return new Writable({
+          write (chunk, encoding, callback) {
+            targetContent = Buffer.from(chunk)
+            callback()
+          }
+        })
+      }
+    }
+    sftp.chown = async () => { throw new Error('metadata failure') }
+    sftp.chmod = async () => 1
+    sftp.rm = async remotePath => {
+      removed.push(remotePath)
+      targetContent = undefined
+      return 1
+    }
+
+    await assert.rejects(sftp.copyEntry('/source.txt', '/snapshot.txt'))
+    assert.equal(targetContent?.toString(), 'concurrent')
+    assert.deepEqual(removed, [])
+  })
+
+  test('copyEntry claims a directory root without deleting concurrent content', async () => {
+    const sftp = Object.create(Sftp.prototype)
+    const removed = []
+    let targetExists = false
+    let concurrentFileExists = false
+    const directoryStat = {
+      mode: 0o040750,
+      size: 0,
+      uid: 1000,
+      gid: 1000,
+      isDirectory: () => true,
+      isFile: () => false
+    }
+    sftp.lstat = async remotePath => {
+      if (remotePath === '/source') return directoryStat
+      if (remotePath === '/snapshot' && targetExists) return directoryStat
+      const error = new Error('No such file')
+      error.code = 'ENOENT'
+      throw error
+    }
+    sftp.mkdir = async remotePath => {
+      if (remotePath === '/snapshot') {
+        targetExists = true
+        concurrentFileExists = true
+        throw new Error('Failure')
+      }
+      return 1
+    }
+    sftp.list = async remotePath => {
+      if (remotePath === '/source') return []
+      if (remotePath === '/snapshot' && concurrentFileExists) {
+        return [{ name: 'concurrent.txt', type: '-' }]
+      }
+      return []
+    }
+    sftp.chown = async () => { throw new Error('metadata failure') }
+    sftp.chmod = async () => 1
+    sftp.rm = async remotePath => {
+      removed.push(remotePath)
+      concurrentFileExists = false
+      return 1
+    }
+    sftp.rmFolder = async remotePath => {
+      removed.push(remotePath)
+      targetExists = false
+      return 1
+    }
+
+    await assert.rejects(
+      sftp.copyEntry('/source', '/snapshot'),
+      /failure|exist|claim|target|占用|存在|认领/i
+    )
+    assert.equal(targetExists, true)
+    assert.equal(concurrentFileExists, true)
+    assert.deepEqual(removed, [])
   })
 
   test('cooperatively cancels recursive removal after the current atomic call', async () => {

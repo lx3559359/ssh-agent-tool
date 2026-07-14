@@ -561,38 +561,80 @@ export function createTransactionRunner (options = {}) {
       externalSignal.addEventListener('abort', abortFromExternalSignal, { once: true })
     }
     let resolveSettled
+    let markerPromise = Promise.resolve()
     const active = {
       kind: 'side-effect',
       executionId,
       cancelRequested: false,
+      mutationStarted: false,
+      commitPoint: false,
       settled: new Promise(resolve => { resolveSettled = resolve }),
       abort () {
         controller.abort()
       }
+    }
+    const persistMarker = (extra) => {
+      markerPromise = markerPromise.then(() => patch(operation.id, {
+        ...extra,
+        updatedAt: timestamp()
+      })).then(() => undefined)
+      return markerPromise
+    }
+    const runMutation = async (work, mutationOptions = {}) => {
+      if (typeof work !== 'function') {
+        throw new Error('SFTP mutation lifecycle 缺少远程修改函数。')
+      }
+      if (controller.signal.aborted || cancellationRequests.has(operation.id)) {
+        throw cancellationError()
+      }
+      let mutationMarker = markerPromise
+      if (!active.mutationStarted) {
+        active.mutationStarted = true
+        const mutationStartedAt = timestamp()
+        mutationMarker = persistMarker({
+          mutationStarted: true,
+          mutationStartedAt
+        })
+      }
+      let effectPromise
+      try {
+        effectPromise = Promise.resolve(work())
+      } catch (error) {
+        effectPromise = Promise.reject(error)
+      }
+      const [effect, marker] = await Promise.allSettled([
+        effectPromise,
+        mutationMarker
+      ])
+      if (marker.status === 'rejected') throw marker.reason
+      if (effect.status === 'rejected') throw effect.reason
+      if (mutationOptions.commitPoint !== false && !active.commitPoint) {
+        active.commitPoint = true
+        await persistMarker({
+          commitPoint: true,
+          commitPointAt: timestamp()
+        })
+      }
+      return effect.value
     }
     activeExecutions.set(operation.id, active)
     try {
       const result = await adapter[method](operation, {
         ...context,
         executionId,
-        signal: controller.signal
+        signal: controller.signal,
+        runMutation
       })
       if (controller.signal.aborted) {
-        if (active.cancelRequested || cancellationRequests.has(operation.id)) {
-          throw cancellationError()
-        }
-        const abortError = controller.signal.reason instanceof Error
-          ? controller.signal.reason
-          : new Error('SFTP 安全事务阶段已中止。')
-        abortError.name = abortError.name || 'AbortError'
-        throw abortError
+        throw cancellationError()
       }
       if (result === false || result?.verified === false) {
         throw new Error(`SFTP 安全事务 ${method} 验证失败。`)
       }
       return { result, audit: sideEffectAudit(context.phase || method, result) }
     } catch (error) {
-      if (active.cancelRequested || cancellationRequests.has(operation.id)) {
+      if (controller.signal.aborted || active.cancelRequested ||
+        cancellationRequests.has(operation.id)) {
         throw cancellationError()
       }
       if (!error.audit) {
@@ -870,17 +912,23 @@ export function createTransactionRunner (options = {}) {
     throw sanitizeError(error)
   }
 
-  async function cancelState (operation, entries = [], failure) {
+  async function cancelState (operation, entries = [], failure, cancellation = {}) {
     const current = await get(operation.id) || operation
-    const preservesRecovery = [
-      operationStates.executing,
-      operationStates.rollingBack
-    ].includes(current.state) && Boolean(
+    const hasRecovery = Boolean(
       current.recoveryBinding &&
       current.recoveryReadyAt &&
       (current.operationKind === 'side-effect'
         ? current.plan?.adapter === current.effect?.adapter
         : current.plan?.rollbackCommand && current.plan?.verifyCommand)
+    )
+    const preservesRecovery = hasRecovery && (
+      current.operationKind === 'side-effect'
+        ? current.mutationStarted === true || current.commitPoint === true ||
+          cancellation.mutationStarted === true || cancellation.commitPoint === true
+        : [
+            operationStates.executing,
+            operationStates.rollingBack
+          ].includes(current.state)
     )
     const state = failure || preservesRecovery
       ? operationStates.failed
@@ -1179,7 +1227,15 @@ export function createTransactionRunner (options = {}) {
       if (error.integrityFailureHandled) throw sanitizeError(error)
       if (error.audit && !audits.includes(error.audit)) audits.push(error.audit)
       const current = await get(operation.id) || operation
-      if (error.cancelled || cancellationRequests.has(operation.id) ||
+      if (error.cancelled) {
+        if (!cancellationRequests.has(operation.id) &&
+          current.state !== operationStates.cancelled &&
+          cancellableStates.has(current.state)) {
+          await cancelState(current, audits)
+        }
+        throw cancellationError()
+      }
+      if (cancellationRequests.has(operation.id) ||
         current.state === operationStates.cancelled) throw cancellationError()
       return fail(operation, error, audits)
     }
@@ -1762,7 +1818,10 @@ export function createTransactionRunner (options = {}) {
       current = await get(operationId)
       if (current && !terminalStates.has(current.state) &&
         cancellableStates.has(current.state)) {
-        current = await cancelState(current)
+        current = await cancelState(current, [], undefined, {
+          mutationStarted: active?.mutationStarted === true,
+          commitPoint: active?.commitPoint === true
+        })
         if (current.state === operationStates.cancelled) {
           boundRecoveries.delete(operationId)
         }

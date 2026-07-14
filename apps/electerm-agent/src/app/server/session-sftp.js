@@ -498,8 +498,18 @@ class Sftp extends TerminalBase {
     throwIfSftpOperationAborted(options.signal)
     const readStream = this.sftp.createReadStream(from)
     const writeStream = this.sftp.createWriteStream(to, {
-      mode: 0o600
+      mode: 0o600,
+      ...(options.atomicClaim ? { flags: 'wx' } : {})
     })
+    const claimPromise = options.atomicClaim
+      ? new Promise((resolve, reject) => {
+        writeStream.once('open', () => {
+          options.ownedEntries.push({ path: to, type: 'file' })
+          resolve()
+        })
+        writeStream.once('error', reject)
+      })
+      : Promise.resolve()
     const actualBytesBefore = options.budget.actualBytes
     const meter = new Transform({
       transform (chunk, encoding, callback) {
@@ -511,12 +521,15 @@ class Sftp extends TerminalBase {
         }
       }
     })
-    await pipeline(
-      readStream,
-      meter,
-      writeStream,
-      ...(options.signal ? [{ signal: options.signal }] : [])
-    )
+    await Promise.all([
+      claimPromise,
+      pipeline(
+        readStream,
+        meter,
+        writeStream,
+        ...(options.signal ? [{ signal: options.signal }] : [])
+      )
+    ])
     throwIfSftpOperationAborted(options.signal)
     if (options.budget.actualBytes - actualBytesBefore !== Number(stat.size)) {
       throw new Error('SFTP 复制期间源文件大小发生变化，已拒绝快照。')
@@ -531,13 +544,18 @@ class Sftp extends TerminalBase {
 
   async copySftpDirectory (from, to, stat, options, depth) {
     throwIfSftpOperationAborted(options.signal)
-    await this.mkdir(to, {
-      mode: 0o700
-    }).catch(err => {
-      if (!/exist|failure/i.test(String(err?.message || err))) {
-        throw err
-      }
-    })
+    if (options.atomicClaim) {
+      await this.mkdir(to, { mode: 0o700 })
+      options.ownedEntries.push({ path: to, type: 'directory' })
+    } else {
+      await this.mkdir(to, {
+        mode: 0o700
+      }).catch(err => {
+        if (!/exist|failure/i.test(String(err?.message || err))) {
+          throw err
+        }
+      })
+    }
     throwIfSftpOperationAborted(options.signal)
     const entries = await this.list(from)
     throwIfSftpOperationAborted(options.signal)
@@ -585,15 +603,9 @@ class Sftp extends TerminalBase {
     const copyOptions = {
       preserveOwnership: options.preserveOwnership === true,
       budget: createSftpCopyBudget(options),
-      signal: options.signal
-    }
-    if (options.requireAbsentTarget === true) {
-      try {
-        await this.lstat(paths.target)
-        throw new Error('SFTP 复制目标已存在，已拒绝覆盖。')
-      } catch (error) {
-        if (!isMissingSftpError(error)) throw error
-      }
+      signal: options.signal,
+      atomicClaim: options.requireAbsentTarget === true,
+      ownedEntries: []
     }
     try {
       await this.copySftpEntryWithinBudget(
@@ -604,16 +616,17 @@ class Sftp extends TerminalBase {
       )
     } catch (error) {
       if (options.cleanupOnFailure === true) {
-        try {
-          const targetStat = await this.lstat(paths.target)
-          if (sftpStatType(targetStat) === 'directory') {
-            await this.removeDirectoryRecursively(paths.target)
-          } else {
-            await this.rm(paths.target)
-          }
-        } catch (cleanupError) {
-          if (!isMissingSftpError(cleanupError)) {
-            error.cleanupError = cleanupError
+        for (const owned of [...copyOptions.ownedEntries].reverse()) {
+          try {
+            if (owned.type === 'directory') {
+              await this.rmFolder(owned.path)
+            } else {
+              await this.rm(owned.path)
+            }
+          } catch (cleanupError) {
+            if (!isMissingSftpError(cleanupError) && !error.cleanupError) {
+              error.cleanupError = cleanupError
+            }
           }
         }
       }

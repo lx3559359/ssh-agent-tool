@@ -59,6 +59,14 @@ function throwIfAborted (signal) {
   throw error
 }
 
+function runProtectedMutation (context, work, options) {
+  throwIfAborted(context?.signal)
+  if (typeof context?.runMutation === 'function') {
+    return context.runMutation(work, options)
+  }
+  return work()
+}
+
 function bytesFromBase64 (value) {
   const binary = globalThis.atob(String(value || ''))
   const bytes = new Uint8Array(binary.length)
@@ -894,21 +902,26 @@ export function createSftpTransactionAdapter ({ getSftp } = {}) {
           await lstatOrAbsent(sftp, resource.executionPreviousPath, signal)) {
           throw new Error('SFTP 编辑器事务置换路径已被占用，未修改目标文件。')
         }
-        throwIfAborted(signal)
-        await sftp.writeFile(resource.executionPath, text, mode)
-        throwIfAborted(signal)
+        await runProtectedMutation(
+          context,
+          () => sftp.writeFile(resource.executionPath, text, mode)
+        )
         if (resource.original.absent !== true) {
           if (typeof sftp.chown !== 'function') {
             throw new Error('当前 SFTP 连接不支持 chown，未修改目标文件。')
           }
-          await sftp.chown(
-            resource.executionPath,
-            resource.original.uid,
-            resource.original.gid
+          await runProtectedMutation(
+            context,
+            () => sftp.chown(
+              resource.executionPath,
+              resource.original.uid,
+              resource.original.gid
+            )
           )
-          throwIfAborted(signal)
-          await sftp.chmod(resource.executionPath, mode)
-          throwIfAborted(signal)
+          await runProtectedMutation(
+            context,
+            () => sftp.chmod(resource.executionPath, mode)
+          )
         }
         const staged = await describeEntry(
           sftp,
@@ -929,25 +942,31 @@ export function createSftpTransactionAdapter ({ getSftp } = {}) {
         }
         await assertOriginalState(sftp, resource, action, signal)
         if (resource.original.absent !== true) {
-          await sftp.rename(resource.path, resource.executionPreviousPath)
-          throwIfAborted(signal)
+          await runProtectedMutation(
+            context,
+            () => sftp.rename(resource.path, resource.executionPreviousPath)
+          )
         }
-        await sftp.rename(resource.executionPath, resource.path)
-        throwIfAborted(signal)
+        await runProtectedMutation(
+          context,
+          () => sftp.rename(resource.executionPath, resource.path)
+        )
       } else if (action === 'chmod') {
-        throwIfAborted(signal)
-        await sftp.chmod(
-          operation.plan.resources[0].path,
-          operation.effect.requestedMode
+        await runProtectedMutation(
+          context,
+          () => sftp.chmod(
+            operation.plan.resources[0].path,
+            operation.effect.requestedMode
+          )
         )
-        throwIfAborted(signal)
       } else if (action === 'rename') {
-        throwIfAborted(signal)
-        await sftp.rename(
-          operation.plan.resources[0].path,
-          operation.plan.resources[1].path
+        await runProtectedMutation(
+          context,
+          () => sftp.rename(
+            operation.plan.resources[0].path,
+            operation.plan.resources[1].path
+          )
         )
-        throwIfAborted(signal)
       } else {
         const resource = operation.plan.resources[0]
         if (typeof sftp.removeEntry !== 'function') {
@@ -956,10 +975,15 @@ export function createSftpTransactionAdapter ({ getSftp } = {}) {
         if (await lstatOrAbsent(sftp, resource.executionPath, signal)) {
           throw new Error('SFTP 删除事务执行路径已被占用，未修改源资源。')
         }
-        await sftp.rename(resource.path, resource.executionPath)
-        throwIfAborted(signal)
-        await sftp.removeEntry(resource.executionPath, { signal })
-        throwIfAborted(signal)
+        await runProtectedMutation(
+          context,
+          () => sftp.rename(resource.path, resource.executionPath)
+        )
+        await runProtectedMutation(
+          context,
+          () => sftp.removeEntry(resource.executionPath, { signal }),
+          { commitPoint: false }
+        )
       }
       return { summary: `SFTP ${action} 已执行，等待验证。` }
     },

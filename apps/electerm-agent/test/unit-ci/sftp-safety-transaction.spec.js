@@ -508,14 +508,11 @@ test('side-effect cancel waits for an active atomic hook and preserves rollback 
     adapter: {
       beforeExecute: async (operation, lifecycle) => {
         markStarted()
-        await atomic
-        mutationCompleted = true
-        if (lifecycle.signal?.aborted) {
-          const error = new Error('SFTP side-effect cooperative abort')
-          error.name = 'AbortError'
-          throw error
-        }
-        return { summary: `mutated ${operation.id}` }
+        return lifecycle.runMutation(async () => {
+          await atomic
+          mutationCompleted = true
+          return { summary: `mutated ${operation.id}` }
+        })
       }
     }
   })
@@ -545,8 +542,110 @@ test('side-effect cancel waits for an active atomic hook and preserves rollback 
   assert.match(executeResult.reason.message, /cancel|取消|中止/i)
   assert.equal(cancelResult.status, 'fulfilled')
   assert.equal(cancelResult.value.state, 'failed')
+  assert.equal(cancelResult.value.mutationStarted, true)
+  assert.equal(cancelResult.value.commitPoint, true)
   assert.equal(cancelResult.value.artifacts.manifest.endsWith('/manifest.json'), true)
   assert.equal((await context.runner.rollback(context.operation.id)).state, 'restored')
+})
+
+test('side-effect cancel before mutation starts is cancelled with zero modification', async () => {
+  let markStarted
+  const started = new Promise(resolve => { markStarted = resolve })
+  let modified = false
+  const context = await createSideEffectRunner({
+    adapter: {
+      beforeExecute: async (operation, lifecycle) => {
+        markStarted()
+        await new Promise(resolve => {
+          if (lifecycle.signal.aborted) return resolve()
+          lifecycle.signal.addEventListener('abort', resolve, { once: true })
+        })
+        if (!lifecycle.signal.aborted) modified = true
+        const error = new Error(`cancelled before ${operation.id} mutation`)
+        error.name = 'AbortError'
+        throw error
+      }
+    }
+  })
+  await context.runner.prepare(context.operation)
+  const executing = context.runner.execute(context.operation.id, {
+    confirmed: true,
+    sideEffectInput: { text: '{"enabled":true}' }
+  })
+  await started
+  const cancelled = await context.runner.cancel(context.operation.id)
+
+  await assert.rejects(executing, /cancel|取消|中止/i)
+  assert.equal(cancelled.state, 'cancelled')
+  assert.equal(cancelled.mutationStarted, undefined)
+  assert.equal(cancelled.commitPoint, undefined)
+  assert.equal(modified, false)
+})
+
+test('side-effect external AbortSignal persists an honest pre or post mutation state', async t => {
+  await t.test('before mutation', async () => {
+    let markStarted
+    const started = new Promise(resolve => { markStarted = resolve })
+    const controller = new AbortController()
+    const context = await createSideEffectRunner({
+      adapter: {
+        beforeExecute: async (operation, lifecycle) => {
+          markStarted()
+          await new Promise(resolve => {
+            if (lifecycle.signal.aborted) return resolve()
+            lifecycle.signal.addEventListener('abort', resolve, { once: true })
+          })
+          const error = new Error(`aborted before ${operation.id} mutation`)
+          error.name = 'AbortError'
+          throw error
+        }
+      }
+    })
+    await context.runner.prepare(context.operation)
+    const executing = context.runner.execute(context.operation.id, {
+      confirmed: true,
+      signal: controller.signal,
+      sideEffectInput: { text: '{"enabled":true}' }
+    })
+    const rejected = assert.rejects(executing, /cancel|取消|中止/i)
+    await started
+    controller.abort()
+    await rejected
+    assert.equal((await context.store.get(context.operation.id)).state, 'cancelled')
+  })
+
+  await t.test('after mutation', async () => {
+    let markStarted
+    let releaseAtomic
+    const started = new Promise(resolve => { markStarted = resolve })
+    const atomic = new Promise(resolve => { releaseAtomic = resolve })
+    const controller = new AbortController()
+    const context = await createSideEffectRunner({
+      adapter: {
+        beforeExecute: async (operation, lifecycle) => lifecycle.runMutation(async () => {
+          markStarted()
+          await atomic
+          return { summary: `mutated ${operation.id}` }
+        })
+      }
+    })
+    await context.runner.prepare(context.operation)
+    const executing = context.runner.execute(context.operation.id, {
+      confirmed: true,
+      signal: controller.signal,
+      sideEffectInput: { text: '{"enabled":true}' }
+    })
+    const rejected = assert.rejects(executing, /cancel|取消|中止/i)
+    await started
+    controller.abort()
+    releaseAtomic()
+    await rejected
+    const failed = await context.store.get(context.operation.id)
+    assert.equal(failed.state, 'failed')
+    assert.equal(failed.mutationStarted, true)
+    assert.equal(failed.commitPoint, true)
+    assert.equal((await context.runner.rollback(context.operation.id)).state, 'restored')
+  })
 })
 
 test('SFTP endpoint identity survives transport refresh but rejects another security context', async () => {
@@ -941,6 +1040,27 @@ async function buildSftpOperation ({ id, action, paths, type, requestedMode, exp
   })
 }
 
+async function createRealSftpTransactionRunner (operation, sftp) {
+  const { createTransactionRunner } = await importTransactionModule(
+    'transaction-runner.js'
+  )
+  const { createSftpTransactionAdapter } = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/components/sftp/sftp-transaction-adapter.js'
+  )).href)
+  const store = createMemoryStore()
+  const adapter = createSftpTransactionAdapter({ getSftp: () => sftp })
+  const runner = createTransactionRunner({
+    runRemote: async () => { throw new Error('SFTP side-effect must not run commands') },
+    cancelRemote: async () => {},
+    buildRecoveryPlan: async () => { throw new Error('SFTP side-effect uses adapter recovery') },
+    getCurrentEndpoint: async () => operation.endpoint,
+    sideEffectAdapter: adapter,
+    store
+  })
+  return { runner, store }
+}
+
 test('SFTP adapter rejects forged ids before constructing a transaction directory', async () => {
   const { createSftpTransactionAdapter } = await import(pathToFileURL(path.resolve(
     __dirname,
@@ -1093,6 +1213,182 @@ test('SFTP transport replaces transaction AbortSignal with a bounded server canc
   ), 'utf8')
   assert.match(clientSource, /action:\s*'sftp-cancel'/)
   assert.match(serverSource, /action === 'sftp-cancel'[\s\S]{0,300}cancelOperation/)
+})
+
+test('SFTP action cancellation after mutation start remains immediately rollbackable', async t => {
+  const { digestSftpText } = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/components/sftp/sftp-transaction-adapter.js'
+  )).href)
+  const cases = [
+    {
+      action: 'editor-save',
+      initial: {
+        '/srv/app/config.txt': { type: 'file', content: 'original', mode: 0o640 }
+      },
+      operation: {
+        paths: { target: '/srv/app/config.txt' },
+        type: 'file',
+        requestedMode: 0o640,
+        expected: await digestSftpText('replacement')
+      },
+      input: { text: 'replacement' },
+      installAtomicHook (sftp, started, atomic) {
+        const writeFile = sftp.writeFile.bind(sftp)
+        sftp.writeFile = async (remotePath, ...args) => {
+          if (!remotePath.endsWith('.execute')) return writeFile(remotePath, ...args)
+          started()
+          await atomic
+          return writeFile(remotePath, ...args)
+        }
+      },
+      verifyRestored (sftp) {
+        assert.equal(sftp.text('/srv/app/config.txt'), 'original')
+      }
+    },
+    {
+      action: 'chmod',
+      initial: {
+        '/srv/app/mode.txt': { type: 'file', content: 'mode', mode: 0o640 }
+      },
+      operation: {
+        paths: { source: '/srv/app/mode.txt' },
+        type: 'file',
+        requestedMode: 0o750,
+        expected: { mode: 0o750, type: 'file' }
+      },
+      installAtomicHook (sftp, started, atomic) {
+        const chmod = sftp.chmod.bind(sftp)
+        sftp.chmod = async (remotePath, mode) => {
+          if (remotePath !== '/srv/app/mode.txt' || mode !== 0o750) {
+            return chmod(remotePath, mode)
+          }
+          started()
+          await atomic
+          return chmod(remotePath, mode)
+        }
+      },
+      verifyRestored (sftp) {
+        assert.equal(sftp.nodes.get('/srv/app/mode.txt').mode, 0o640)
+      }
+    },
+    {
+      action: 'rename',
+      initial: {
+        '/srv/app/source.txt': { type: 'file', content: 'source', mode: 0o640 }
+      },
+      operation: {
+        paths: {
+          source: '/srv/app/source.txt',
+          target: '/srv/app/renamed.txt'
+        },
+        type: 'file'
+      },
+      installAtomicHook (sftp, started, atomic) {
+        const rename = sftp.rename.bind(sftp)
+        sftp.rename = async (from, to) => {
+          if (from !== '/srv/app/source.txt' || to !== '/srv/app/renamed.txt') {
+            return rename(from, to)
+          }
+          started()
+          await atomic
+          return rename(from, to)
+        }
+      },
+      verifyRestored (sftp) {
+        assert.equal(sftp.text('/srv/app/source.txt'), 'source')
+        assert.equal(sftp.exists('/srv/app/renamed.txt'), false)
+      }
+    },
+    {
+      action: 'delete',
+      initial: {
+        '/srv/app/tree': { type: 'directory', mode: 0o750 },
+        '/srv/app/tree/a.txt': { type: 'file', content: 'A', mode: 0o640 },
+        '/srv/app/tree/b.txt': { type: 'file', content: 'B', mode: 0o640 }
+      },
+      operation: {
+        paths: { source: '/srv/app/tree' },
+        type: 'directory',
+        expected: { absent: true }
+      },
+      installAtomicHook (sftp, started) {
+        const removeEntry = sftp.removeEntry.bind(sftp)
+        sftp.removeEntry = async (remotePath, options = {}) => {
+          if (!remotePath.endsWith('.execute')) {
+            return removeEntry(remotePath, options)
+          }
+          started()
+          await new Promise(resolve => {
+            if (options.signal?.aborted) return resolve()
+            options.signal?.addEventListener('abort', resolve, { once: true })
+          })
+          const partial = [...sftp.nodes.keys()].find(path => (
+            path.startsWith(`${remotePath}/`) && sftp.nodes.get(path).type === 'file'
+          ))
+          if (partial) sftp.nodes.delete(partial)
+          const error = new Error('recursive delete aborted after partial removal')
+          error.name = 'AbortError'
+          throw error
+        }
+      },
+      verifyRestored (sftp) {
+        assert.equal(sftp.text('/srv/app/tree/a.txt'), 'A')
+        assert.equal(sftp.text('/srv/app/tree/b.txt'), 'B')
+      }
+    }
+  ]
+
+  for (const definition of cases) {
+    await t.test(definition.action, async () => {
+      let markStarted
+      let releaseAtomic
+      const started = new Promise(resolve => { markStarted = resolve })
+      const atomic = new Promise(resolve => { releaseAtomic = resolve })
+      const sftp = createFakeSftp(definition.initial)
+      definition.installAtomicHook(sftp, markStarted, atomic)
+      const operation = await buildSftpOperation({
+        id: `adapter-cancel-${definition.action}`,
+        action: definition.action,
+        ...definition.operation
+      })
+      const { runner } = await createRealSftpTransactionRunner(operation, sftp)
+      await runner.prepare(operation)
+      const executing = runner.execute(operation.id, {
+        confirmed: true,
+        sideEffectInput: definition.input
+      })
+      const executionResult = executing.then(
+        value => ({ status: 'fulfilled', value }),
+        reason => ({ status: 'rejected', reason })
+      )
+      await started
+      let cancelSettled = false
+      const cancelling = runner.cancel(operation.id).then(value => {
+        cancelSettled = true
+        return value
+      })
+      const cancellationResult = cancelling.then(
+        value => ({ status: 'fulfilled', value }),
+        reason => ({ status: 'rejected', reason })
+      )
+      await new Promise(resolve => setImmediate(resolve))
+      if (definition.action !== 'delete') assert.equal(cancelSettled, false)
+      releaseAtomic()
+      const [executeResult, cancelResult] = await Promise.all([
+        executionResult,
+        cancellationResult
+      ])
+
+      assert.equal(executeResult.status, 'rejected')
+      assert.equal(cancelResult.status, 'fulfilled')
+      assert.equal(cancelResult.value.state, 'failed')
+      assert.equal(cancelResult.value.mutationStarted, true)
+      assert.equal(cancelResult.value.commitPoint, true)
+      assert.equal((await runner.rollback(operation.id)).state, 'restored')
+      definition.verifyRestored(sftp)
+    })
+  }
 })
 
 test('SFTP adapter restores absent editor targets and keeps displaced content', async () => {
