@@ -7,7 +7,10 @@ export const sftpSideEffectActions = Object.freeze([
   'editor-save',
   'delete',
   'rename',
-  'chmod'
+  'chmod',
+  'upload',
+  'copy',
+  'move'
 ])
 
 const actionSet = new Set(sftpSideEffectActions)
@@ -24,6 +27,15 @@ const actionPolicies = Object.freeze({
   }),
   chmod: Object.freeze({
     reason: 'SFTP chmod changes remote permissions.'
+  }),
+  upload: Object.freeze({
+    reason: 'SFTP upload writes a remote target.'
+  }),
+  copy: Object.freeze({
+    reason: 'SFTP copy writes a remote target.'
+  }),
+  move: Object.freeze({
+    reason: 'SFTP move changes remote source and target paths.'
   })
 })
 
@@ -31,8 +43,18 @@ const actionPathFields = Object.freeze({
   'editor-save': ['target'],
   delete: ['source'],
   rename: ['source', 'target'],
-  chmod: ['source']
+  chmod: ['source'],
+  upload: ['target'],
+  copy: ['source', 'target'],
+  move: ['source', 'target']
 })
+
+const transferActions = new Set(['upload', 'copy', 'move'])
+const transferDirections = new Set([
+  'local-to-remote',
+  'same-endpoint',
+  'cross-host-target'
+])
 
 function stableSerialize (value) {
   if (Array.isArray(value)) {
@@ -121,6 +143,51 @@ function normalizeExpected (value = {}) {
   return expected
 }
 
+function normalizeTransferIdentity (value, label, required = true) {
+  if (value === undefined && !required) return undefined
+  const normalized = String(value || '').trim()
+  const hasControlCharacter = [...normalized].some(character => {
+    const code = character.charCodeAt(0)
+    return code <= 0x1f || code === 0x7f
+  })
+  if (!normalized || normalized !== normalized.normalize('NFKC') ||
+    normalized.length > 256 || hasControlCharacter) {
+    throw new Error(`SFTP transfer ${label} is invalid.`)
+  }
+  return normalized
+}
+
+function normalizeTransfer (value = {}, action) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('SFTP transfer identity is invalid.')
+  }
+  const direction = String(value.direction || '')
+  if (!transferDirections.has(direction)) {
+    throw new Error('SFTP transfer direction is invalid.')
+  }
+  const normalized = {
+    identity: normalizeTransferIdentity(value.identity, 'identity'),
+    direction
+  }
+  const sourceIdentity = normalizeTransferIdentity(
+    value.sourceIdentity,
+    'source identity',
+    action === 'upload'
+  )
+  if (sourceIdentity !== undefined) normalized.sourceIdentity = sourceIdentity
+  const batchId = normalizeTransferIdentity(value.batchId, 'batch id', false)
+  if (batchId !== undefined) normalized.batchId = batchId
+  const sourceEndpointKey = normalizeTransferIdentity(
+    value.sourceEndpointKey,
+    'source endpoint',
+    false
+  )
+  if (sourceEndpointKey !== undefined) {
+    normalized.sourceEndpointKey = sourceEndpointKey
+  }
+  return normalized
+}
+
 export function buildSideEffectKey (effect) {
   return `${effect.adapter}:${effect.action}:${shortStableHash(stableSerialize(effect))}`
 }
@@ -160,6 +227,11 @@ function normalizeEffect (effect = {}) {
     paths,
     type: normalizeType(effect.type),
     expected
+  }
+  if (transferActions.has(effect.action)) {
+    normalized.transfer = normalizeTransfer(effect.transfer, effect.action)
+  } else if (effect.transfer !== undefined) {
+    throw new Error('SFTP transfer identity is not valid for this action.')
   }
   const requestedMode = normalizeMode(
     effect.requestedMode,

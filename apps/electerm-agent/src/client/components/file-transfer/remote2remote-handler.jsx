@@ -63,6 +63,8 @@ export default class Remote2RemoteHandler {
 
   buildStep2Transfer = (fromFile) => {
     const {
+      sourceTabId,
+      sourceHost,
       targetTabId,
       targetHost,
       targetTitle,
@@ -82,6 +84,7 @@ export default class Remote2RemoteHandler {
       operation: '',
       remote2remoteStep: 2,
       remote2remoteId: this.id,
+      sourceEndpointKey: `remote:${sourceTabId}:${sourceHost}`,
       originalId: this.step1Transfer?.id
     }
     return transfer

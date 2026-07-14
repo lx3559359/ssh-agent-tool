@@ -1272,6 +1272,114 @@ export function createTransactionRunner (options = {}) {
     }
   }
 
+  function validateExternalSideEffectIdentity (operation, value = {}) {
+    const identity = String(value.transferIdentity || '')
+    if (!identity || identity !== operation.effect?.transfer?.identity) {
+      throw new Error('外部 SFTP 传输标识不匹配，已拒绝继续执行。')
+    }
+    if (value.effectKey !== undefined && value.effectKey !== operation.effectKey) {
+      throw new Error('外部 SFTP 传输 effectKey 不匹配，已拒绝继续执行。')
+    }
+    return identity
+  }
+
+  async function beginExternalSideEffectWork (operation, executeOptions) {
+    if (executeOptions.confirmed !== true) {
+      throw new Error('必须明确确认后才能开始外部 SFTP 传输。')
+    }
+    if (operation.state !== operationStates.awaitingConfirmation) {
+      throw new Error('SFTP 传输事务必须处于 awaiting-confirmation 状态。')
+    }
+    if (typeof executeOptions.cancelExternal !== 'function') {
+      throw new Error('外部 SFTP 传输缺少可取消的 transport 回调。')
+    }
+    const transferIdentity = validateExternalSideEffectIdentity(
+      operation,
+      executeOptions
+    )
+    let active
+    try {
+      return await serializeEndpoint(operation, async () => {
+        operation = await get(operation.id) || operation
+        if (operation.state !== operationStates.awaitingConfirmation) {
+          throw new Error('SFTP 传输事务状态已变化，请刷新后重试。')
+        }
+        const enforced = await enforceClassification(operation)
+        operation = enforced.operation
+        if (enforced.safety.forged || enforced.safety.risk === 'blocked') {
+          throw new Error('SFTP 传输事务安全分类校验失败。')
+        }
+        await assertCurrentEndpoint(operation)
+        const adapter = await requireSideEffectAdapter(operation)
+        if (typeof adapter.beforeExternalExecute !== 'function') {
+          throw new Error('当前 SFTP 适配器不支持外部传输事务。')
+        }
+        const bound = await requireBoundRecovery(operation)
+        operation = await assertSideEffectPhase(
+          operation,
+          bound,
+          [operationStates.awaitingConfirmation]
+        )
+        const checked = await runSideEffectHook(
+          adapter,
+          'beforeExternalExecute',
+          operation,
+          { phase: 'execute-check', signal: executeOptions.signal }
+        )
+        operation = await assertSideEffectPhase(
+          operation,
+          bound,
+          [operationStates.awaitingConfirmation],
+          [checked.audit]
+        )
+        const executionId = `${operation.id}-external-side-effect-${++executionSequence}`
+        const startedAt = timestamp()
+        operation = await guardedRecoveryTransition(
+          operation,
+          bound,
+          operationStates.executing,
+          current => ({
+            audit: appendAudit(current, [checked.audit]),
+            executionId,
+            mutationStarted: true,
+            mutationStartedAt: current.mutationStartedAt || startedAt,
+            commitPoint: true,
+            commitPointAt: current.commitPointAt || startedAt,
+            metadata: {
+              ...current.metadata,
+              externalExecution: {
+                schemaVersion: 1,
+                executionId,
+                effectKey: current.effectKey,
+                transferIdentity,
+                batchId: current.effect?.transfer?.batchId || ''
+              }
+            }
+          }),
+          'execute',
+          [checked.audit]
+        )
+        active = {
+          kind: 'external-side-effect',
+          executionId,
+          cancelRequested: false,
+          cancelExternal: executeOptions.cancelExternal
+        }
+        activeExecutions.set(operation.id, active)
+        return operation
+      })
+    } catch (error) {
+      if (activeExecutions.get(operation.id) === active) {
+        activeExecutions.delete(operation.id)
+      }
+      if (error.integrityFailureHandled) throw sanitizeError(error)
+      const current = await get(operation.id) || operation
+      if (error.cancelled || cancellationRequests.has(operation.id) ||
+        current.state === operationStates.cancelled) throw cancellationError()
+      return fail(operation, error, [error.audit])
+    }
+  }
+
   function execute (id, executeOptions = {}) {
     return serialize(String(id), async () => {
       let operation = await get(id)
@@ -1379,6 +1487,9 @@ export function createTransactionRunner (options = {}) {
     return serialize(String(id), async () => {
       let operation = await get(id)
       if (!operation) throw new Error(`未找到安全事务：${id}`)
+      if (operation.operationKind === 'side-effect') {
+        return beginExternalSideEffectWork(operation, executeOptions)
+      }
       if (operation.state !== operationStates.awaitingConfirmation) {
         throw new Error('安全事务必须处于 awaiting-confirmation 状态才能开始外部执行。')
       }
@@ -1450,6 +1561,16 @@ export function createTransactionRunner (options = {}) {
     if (!completion.executionId) {
       throw new Error('外部执行标识不匹配，已忽略无关或迟到事件。')
     }
+    if (operation.operationKind === 'side-effect') {
+      validateExternalSideEffectIdentity(operation, completion)
+      if (completion.effectKey !== operation.effectKey) {
+        throw new Error('外部 SFTP 传输 effectKey 不匹配。')
+      }
+      if (completion.exitCode !== null && !Number.isInteger(completion.exitCode)) {
+        throw new Error('外部 SFTP 传输退出状态无效。')
+      }
+      return
+    }
     if (completion.command !== operation.command) {
       throw new Error('外部执行命令不匹配，已忽略无关命令事件。')
     }
@@ -1459,6 +1580,19 @@ export function createTransactionRunner (options = {}) {
   }
 
   function externalCompletionMetadata (operation, completion) {
+    if (operation.operationKind === 'side-effect') {
+      return {
+        ...operation.metadata,
+        externalCompletion: {
+          schemaVersion: 1,
+          executionId: completion.executionId,
+          effectKey: completion.effectKey,
+          transferIdentity: completion.transferIdentity,
+          exitCode: completion.exitCode,
+          cancelled: completion.cancelled === true
+        }
+      }
+    }
     return {
       ...operation.metadata,
       externalCompletion: {
@@ -1472,6 +1606,14 @@ export function createTransactionRunner (options = {}) {
 
   function matchesExternalCompletion (operation, completion) {
     const receipt = operation.metadata?.externalCompletion
+    if (operation.operationKind === 'side-effect') {
+      return receipt?.schemaVersion === 1 &&
+        receipt.executionId === completion.executionId &&
+        receipt.effectKey === completion.effectKey &&
+        receipt.transferIdentity === completion.transferIdentity &&
+        receipt.exitCode === completion.exitCode &&
+        receipt.cancelled === (completion.cancelled === true)
+    }
     return receipt?.schemaVersion === 1 &&
       receipt.executionId === completion.executionId &&
       receipt.command === completion.command &&
@@ -1506,11 +1648,134 @@ export function createTransactionRunner (options = {}) {
     )
   }
 
+  async function completeExternalSideEffectWork (operation, completion) {
+    if (operation.state !== operationStates.executing) {
+      if (matchesExternalCompletion(operation, completion) &&
+        [operationStates.rollbackAvailable, operationStates.failed].includes(operation.state)) {
+        return operation
+      }
+      throw new Error('SFTP 传输事务不处于 executing 状态。')
+    }
+    if (completion.executionId !== operation.executionId) {
+      throw new Error('外部 SFTP 传输执行标识不匹配。')
+    }
+    try {
+      return await serializeEndpoint(operation, async () => {
+        operation = await get(operation.id) || operation
+        if (operation.state !== operationStates.executing) {
+          if (matchesExternalCompletion(operation, completion)) return operation
+          throw new Error('SFTP 传输事务状态已变化。')
+        }
+        if (completion.executionId !== operation.executionId) {
+          throw new Error('外部 SFTP 传输执行标识不匹配。')
+        }
+        const active = activeExecutions.get(operation.id)
+        if (active?.executionId === completion.executionId) {
+          activeExecutions.delete(operation.id)
+        }
+        const bound = await requireBoundRecovery(operation)
+        await assertCurrentEndpoint(operation)
+        operation = await postCheckBoundRecovery(operation, bound)
+        const failed = completion.cancelled === true || completion.exitCode !== 0
+        const audit = createAuditRecord({
+          phase: 'execute',
+          timestamp: timestamp(),
+          code: completion.exitCode === null ? undefined : completion.exitCode,
+          output: failed ? 'SFTP 传输未完整完成，恢复点仍可用于回滚。' : ''
+        })
+        if (failed) {
+          return guardedRecoveryTransition(
+            operation,
+            bound,
+            operationStates.failed,
+            current => ({
+              audit: appendAudit(current, [audit]),
+              error: completion.cancelled === true
+                ? 'SFTP 传输已取消，远程目标可能已部分写入，可执行回滚。'
+                : 'SFTP 传输失败，远程目标可能已部分写入，可执行回滚。',
+              failedAt: timestamp(),
+              executionId: undefined,
+              metadata: externalCompletionMetadata(current, completion)
+            }),
+            'execute',
+            [audit]
+          )
+        }
+        const adapter = await requireSideEffectAdapter(operation)
+        const verifiedPhase = await runSideEffectHook(
+          adapter,
+          'verifyExecute',
+          operation,
+          { phase: 'verify' }
+        )
+        operation = await assertSideEffectPhase(
+          operation,
+          bound,
+          [operationStates.executing],
+          [audit, verifiedPhase.audit]
+        )
+        const verified = await guardedRecoveryTransition(
+          operation,
+          bound,
+          operationStates.verificationPassed,
+          current => ({
+            audit: appendAudit(current, [audit, verifiedPhase.audit]),
+            executionId: undefined,
+            metadata: externalCompletionMetadata(current, completion)
+          }),
+          'verify',
+          [audit, verifiedPhase.audit]
+        )
+        return guardedRecoveryTransition(
+          verified,
+          bound,
+          operationStates.rollbackAvailable,
+          { completedAt: timestamp() },
+          'execute'
+        )
+      })
+    } catch (error) {
+      if (error.integrityFailureHandled) throw sanitizeError(error)
+      const current = await get(operation.id) || operation
+      const active = activeExecutions.get(operation.id)
+      if (active?.executionId === completion.executionId) {
+        activeExecutions.delete(operation.id)
+      }
+      if (current.state !== operationStates.executing) {
+        throw sanitizeError(error)
+      }
+      const bound = await requireBoundRecovery(current)
+      const audit = createAuditRecord({
+        phase: 'verify',
+        timestamp: timestamp(),
+        code: completion.exitCode === null ? undefined : completion.exitCode,
+        output: 'SFTP 传输结果校验失败，恢复点仍可用于回滚。'
+      })
+      return guardedRecoveryTransition(
+        current,
+        bound,
+        operationStates.failed,
+        value => ({
+          audit: appendAudit(value, [audit]),
+          error: sanitizeError(error).message,
+          failedAt: timestamp(),
+          executionId: undefined,
+          metadata: externalCompletionMetadata(value, completion)
+        }),
+        'verify',
+        [audit]
+      )
+    }
+  }
+
   function completeExternalExecution (id, completion = {}) {
     return serialize(String(id), async () => {
       let operation = await get(id)
       if (!operation) throw new Error(`未找到安全事务：${id}`)
       validateExternalCompletion(operation, completion)
+      if (operation.operationKind === 'side-effect') {
+        return completeExternalSideEffectWork(operation, completion)
+      }
       if (operation.state !== operationStates.executing) {
         return serializeEndpoint(operation, async () => {
           operation = await get(operation.id) || operation
@@ -1817,6 +2082,16 @@ export function createTransactionRunner (options = {}) {
       if (active.kind === 'side-effect') {
         active.abort()
         await active.settled
+      } else if (active.kind === 'external-side-effect') {
+        try {
+          await active.cancelExternal()
+        } catch (error) {
+          cancellationFailure = sanitizeError(error)
+        } finally {
+          if (activeExecutions.get(operationId) === active) {
+            activeExecutions.delete(operationId)
+          }
+        }
       } else {
         try {
           await cancelRemote(active.executionId, {

@@ -124,7 +124,7 @@ test('side-effect requests reject unsupported actions and non-absolute resources
     createSideEffectOperation({
       effect: {
         adapter: 'sftp',
-        action: 'upload',
+        action: 'download',
         resources: [{ path: '/srv/app/archive.tgz', type: 'file' }],
         paths: { target: '/srv/app/archive.tgz' },
         type: 'file',
@@ -1208,7 +1208,15 @@ function createFakeSftp (initial = {}, options = {}) {
   return sftp
 }
 
-async function buildSftpOperation ({ id, action, paths, type, requestedMode, expected }) {
+async function buildSftpOperation ({
+  id,
+  action,
+  paths,
+  type,
+  requestedMode,
+  expected,
+  transfer
+}) {
   const { buildSideEffectSafetyRequest } = await importTransactionModule(
     'side-effect-model.js'
   )
@@ -1231,7 +1239,8 @@ async function buildSftpOperation ({ id, action, paths, type, requestedMode, exp
       resources: Object.values(paths).map(path => ({ path, type })),
       type,
       requestedMode,
-      expected: expected || {}
+      expected: expected || {},
+      ...(transfer ? { transfer } : {})
     }
   })
 }
@@ -1283,6 +1292,148 @@ test('SFTP adapter rejects forged ids before constructing a transaction director
     assert.equal(sftp.calls.some(call => (
       call[0] === 'copyEntry' || call[0] === 'writeFile'
     )), false, id)
+  }
+})
+
+async function runExternalSftpTransfer ({ operation, sftp, mutate }) {
+  const context = await createRealSftpTransactionRunner(operation, sftp)
+  await context.runner.prepare(operation)
+  const begun = await context.runner.beginExternalExecution(operation.id, {
+    confirmed: true,
+    transferIdentity: operation.effect.transfer.identity,
+    cancelExternal: async () => {}
+  })
+  await mutate()
+  const completed = await context.runner.completeExternalExecution(operation.id, {
+    executionId: begun.executionId,
+    effectKey: operation.effectKey,
+    transferIdentity: operation.effect.transfer.identity,
+    exitCode: 0
+  })
+  return { ...context, completed }
+}
+
+test('SFTP external upload protects new and overwritten targets with rollback', async () => {
+  for (const existing of [false, true]) {
+    const sftp = createFakeSftp(existing
+      ? { '/srv/app/release.txt': { type: 'file', content: 'old', mode: 0o640 } }
+      : { '/srv/app': { type: 'directory' } })
+    const operation = await buildSftpOperation({
+      id: `adapter-upload-${existing ? 'overwrite' : 'new'}`,
+      action: 'upload',
+      paths: { target: '/srv/app/release.txt' },
+      type: 'file',
+      expected: { type: 'file', size: 3 },
+      transfer: {
+        identity: `upload-${existing ? 'overwrite' : 'new'}`,
+        sourceIdentity: `source-${existing ? 'overwrite' : 'new'}`,
+        batchId: 'batch-upload',
+        direction: 'local-to-remote'
+      }
+    })
+    const context = await runExternalSftpTransfer({
+      operation,
+      sftp,
+      mutate: () => sftp.writeFile('/srv/app/release.txt', 'new', 0o640)
+    })
+
+    assert.equal(context.completed.state, 'rollback-available')
+    assert.equal(sftp.text('/srv/app/release.txt'), 'new')
+    const restored = await context.runner.rollback(operation.id)
+    assert.equal(restored.state, 'restored')
+    if (existing) assert.equal(sftp.text('/srv/app/release.txt'), 'old')
+    else assert.equal(sftp.exists('/srv/app/release.txt'), false)
+  }
+})
+
+test('SFTP directory upload partial failure remains rollbackable', async () => {
+  const sftp = createFakeSftp({
+    '/srv/app': { type: 'directory' }
+  })
+  const operation = await buildSftpOperation({
+    id: 'adapter-upload-directory-partial',
+    action: 'upload',
+    paths: { target: '/srv/app/release' },
+    type: 'directory',
+    expected: { type: 'directory' },
+    transfer: {
+      identity: 'upload-directory-partial',
+      sourceIdentity: 'source-directory-partial',
+      batchId: 'batch-directory',
+      direction: 'local-to-remote'
+    }
+  })
+  const context = await createRealSftpTransactionRunner(operation, sftp)
+  await context.runner.prepare(operation)
+  const begun = await context.runner.beginExternalExecution(operation.id, {
+    confirmed: true,
+    transferIdentity: operation.effect.transfer.identity,
+    cancelExternal: async () => {}
+  })
+  await sftp.mkdir('/srv/app/release')
+  await sftp.writeFile('/srv/app/release/partial.txt', 'partial')
+
+  const failed = await context.runner.completeExternalExecution(operation.id, {
+    executionId: begun.executionId,
+    effectKey: operation.effectKey,
+    transferIdentity: operation.effect.transfer.identity,
+    exitCode: 1
+  })
+  assert.equal(failed.state, 'failed')
+  assert.equal(sftp.exists('/srv/app/release/partial.txt'), true)
+
+  const restored = await context.runner.rollback(operation.id)
+  assert.equal(restored.state, 'restored')
+  assert.equal(sftp.exists('/srv/app/release'), false)
+})
+
+test('SFTP same-endpoint copy and move bind both paths and restore both sides', async () => {
+  const cases = [
+    {
+      action: 'copy',
+      mutate: sftp => sftp.cp('/srv/app/source.txt', '/srv/app/target.txt'),
+      initialTarget: false
+    },
+    {
+      action: 'move',
+      mutate: sftp => sftp.rename('/srv/app/source.txt', '/srv/app/target.txt'),
+      initialTarget: true
+    }
+  ]
+  for (const item of cases) {
+    const sftp = createFakeSftp({
+      '/srv/app/source.txt': { type: 'file', content: 'source', mode: 0o640 },
+      ...(item.initialTarget
+        ? { '/srv/app/target.txt': { type: 'file', content: 'target', mode: 0o600 } }
+        : {})
+    })
+    const operation = await buildSftpOperation({
+      id: `adapter-${item.action}-external`,
+      action: item.action,
+      paths: {
+        source: '/srv/app/source.txt',
+        target: '/srv/app/target.txt'
+      },
+      type: 'file',
+      expected: { type: 'file', size: 6 },
+      transfer: {
+        identity: `${item.action}-item`,
+        batchId: 'batch-same-endpoint',
+        direction: 'same-endpoint'
+      }
+    })
+    const context = await runExternalSftpTransfer({
+      operation,
+      sftp,
+      mutate: () => item.mutate(sftp)
+    })
+
+    assert.equal(context.completed.state, 'rollback-available')
+    assert.equal(sftp.text('/srv/app/target.txt'), 'source')
+    await context.runner.rollback(operation.id)
+    assert.equal(sftp.text('/srv/app/source.txt'), 'source')
+    if (item.initialTarget) assert.equal(sftp.text('/srv/app/target.txt'), 'target')
+    else assert.equal(sftp.exists('/srv/app/target.txt'), false)
   }
 })
 

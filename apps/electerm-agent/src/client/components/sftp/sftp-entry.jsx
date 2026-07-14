@@ -581,6 +581,59 @@ export default class Sftp extends Component {
     return this.sftpSafetyRunner.prepare(request)
   }
 
+  prepareTransferSafetyOperation = async (plan) => {
+    const request = buildSideEffectSafetyRequest({
+      id: plan.operationId,
+      source: 'sftp',
+      endpoint: this.getSftpSafetyEndpoint(),
+      title: 'SFTP 文件传输',
+      effect: {
+        adapter: 'sftp',
+        action: plan.action,
+        paths: plan.paths,
+        resources: Object.values(plan.paths).map(path => ({
+          path,
+          type: plan.type
+        })),
+        type: plan.type,
+        expected: plan.expected,
+        transfer: plan.transfer
+      },
+      metadata: {
+        sftpSafetyTransaction: true,
+        fileTransferSafety: true,
+        transferBatch: plan.transfer.batchId || ''
+      }
+    })
+    const existing = await sftpSafetyStore.getOperation(request.id)
+    if (existing) {
+      await this.assertSftpSafetyOperationEndpoint(existing.id)
+      if (existing.effectKey !== request.effectKey) {
+        throw new Error('同一传输标识已绑定其他远程目标，已阻止覆盖恢复点')
+      }
+      return existing
+    }
+    return this.sftpSafetyRunner.prepare(request)
+  }
+
+  beginTransferSafetyOperation = async (id, options = {}) => {
+    await this.assertSftpSafetyOperationEndpoint(id)
+    return this.sftpSafetyRunner.beginExternalExecution(id, {
+      ...options,
+      confirmed: true
+    })
+  }
+
+  completeTransferSafetyOperation = async (id, completion) => {
+    await this.assertSftpSafetyOperationEndpoint(id)
+    return this.sftpSafetyRunner.completeExternalExecution(id, completion)
+  }
+
+  cancelTransferSafetyOperation = async (id) => {
+    await this.assertSftpSafetyOperationEndpoint(id)
+    return this.sftpSafetyRunner.cancel(id)
+  }
+
   runSftpSafetyOperation = async (spec, options = {}) => {
     const operation = await this.prepareSftpSafetyOperation(spec)
     const confirmed = await this.confirmPreparedSftpOperation(

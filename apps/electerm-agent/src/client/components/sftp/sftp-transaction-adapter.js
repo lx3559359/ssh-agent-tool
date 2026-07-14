@@ -384,9 +384,9 @@ function buildPlanSkeleton (operation) {
     transactionRoot,
     joinRemotePath(transactionRoot, assertTrustedOperationId(operation.id))
   )
-  const slots = action === 'rename'
+  const slots = ['rename', 'copy', 'move'].includes(action)
     ? [['source', paths.source], ['target', paths.target]]
-    : [[action === 'editor-save' ? 'target' : 'source', primary]]
+    : [[['editor-save', 'upload'].includes(action) ? 'target' : 'source', primary]]
   const plan = {
     adapter: 'sftp',
     action,
@@ -398,6 +398,7 @@ function buildPlanSkeleton (operation) {
     resources: slots.map(([slot, path]) => ({
       slot,
       path,
+      snapshotRequired: !(action === 'copy' && slot === 'source'),
       snapshotPath: assertTransactionArtifactPath(
         operationDir,
         joinRemotePath(operationDir, slot)
@@ -432,7 +433,9 @@ function buildArtifacts (plan) {
     ['manifest', plan.manifestPath],
     ...(plan.action === 'chmod'
       ? []
-      : plan.resources.map(resource => [resource.slot, resource.snapshotPath]))
+      : plan.resources
+        .filter(resource => resource.snapshotRequired !== false)
+        .map(resource => [resource.slot, resource.snapshotPath]))
   ])
 }
 
@@ -468,6 +471,7 @@ async function readBoundedText (sftp, path, signal) {
 }
 
 async function verifySnapshot (sftp, resource, signal) {
+  if (resource.snapshotRequired === false) return
   if (resource.original.absent === true) return
   const snapshot = await describeEntry(
     sftp,
@@ -501,6 +505,7 @@ async function validateManifest (sftp, operation, manifest, signal) {
     for (const field of [
       'slot',
       'path',
+      'snapshotRequired',
       'snapshotPath',
       'stagingPath',
       'executionPath',
@@ -539,6 +544,7 @@ async function loadManifest (sftp, operation, signal) {
 }
 
 async function copyVerifiedSnapshot (sftp, resource, signal) {
+  if (resource.snapshotRequired === false) return
   if (resource.original.absent === true) return
   const existing = await lstatOrAbsent(sftp, resource.snapshotPath, signal)
   if (existing) {
@@ -583,13 +589,13 @@ async function prepareNewManifest (sftp, operation, signal) {
       if (resource.original.type !== operation.effect.type) {
         throw new Error('SFTP 资源类型与请求不一致，已拒绝操作。')
       }
-    } else if (!['editor-save', 'rename'].includes(operation.effect.action) ||
+    } else if (!['editor-save', 'rename', 'upload', 'copy', 'move'].includes(operation.effect.action) ||
       resource.slot === 'source') {
       throw new Error('SFTP 源资源不存在，无法创建恢复点。')
     }
   }
 
-  if (operation.effect.action === 'rename') {
+  if (['rename', 'move'].includes(operation.effect.action)) {
     const [source, target] = plan.resources
     const sourceParent = await sftp.stat(parentRemotePath(source.path))
     throwIfAborted(signal)
@@ -673,6 +679,61 @@ async function assertOriginalState (sftp, resource, action, signal) {
 async function verifyExecuteState (sftp, operation, signal) {
   const action = operation.effect.action
   const resources = operation.plan.resources
+  if (action === 'upload') {
+    const target = await describeEntry(
+      sftp,
+      resources[0].path,
+      createDescriptorBudget(),
+      0,
+      signal
+    )
+    if (!matchesExpected(target, operation.effect.expected)) {
+      throw new Error('SFTP 上传后的远程目标校验失败。')
+    }
+    return
+  }
+  if (action === 'copy') {
+    const source = await describeEntry(
+      sftp,
+      resources[0].path,
+      createDescriptorBudget(),
+      0,
+      signal
+    )
+    const target = await describeEntry(
+      sftp,
+      resources[1].path,
+      createDescriptorBudget(),
+      0,
+      signal
+    )
+    if (!sameDescriptor(source, resources[0].original) ||
+      !matchesExpected(target, operation.effect.expected)) {
+      throw new Error('SFTP 复制后的源或目标校验失败。')
+    }
+    return
+  }
+  if (action === 'move') {
+    const source = await describeEntry(
+      sftp,
+      resources[0].path,
+      createDescriptorBudget(),
+      0,
+      signal
+    )
+    const target = await describeEntry(
+      sftp,
+      resources[1].path,
+      createDescriptorBudget(),
+      0,
+      signal
+    )
+    if (source.absent !== true ||
+      !sameDescriptor(target, resources[0].original)) {
+      throw new Error('SFTP 移动后的源或目标校验失败。')
+    }
+    return
+  }
   if (action === 'editor-save') {
     const current = await describeEntry(
       sftp,
@@ -824,6 +885,19 @@ async function restoreAbsent (sftp, resource, postExpected, signal) {
 }
 
 function postExpectedFor (operation, resource) {
+  if (operation.effect.action === 'upload') {
+    return operation.effect.expected
+  }
+  if (operation.effect.action === 'copy') {
+    return resource.slot === 'source'
+      ? resource.original
+      : operation.effect.expected
+  }
+  if (operation.effect.action === 'move') {
+    return resource.slot === 'source'
+      ? { absent: true }
+      : operation.plan.resources[0].original
+  }
   if (operation.effect.action === 'editor-save') {
     const mode = operation.effect.requestedMode ??
       (resource.original.absent ? undefined : resource.original.mode)
@@ -869,7 +943,15 @@ export function createSftpTransactionAdapter ({ getSftp } = {}) {
     supports (operation) {
       return operation?.operationKind === 'side-effect' &&
         operation?.effect?.adapter === 'sftp' &&
-        ['editor-save', 'delete', 'rename', 'chmod'].includes(operation.effect.action)
+        [
+          'editor-save',
+          'delete',
+          'rename',
+          'chmod',
+          'upload',
+          'copy',
+          'move'
+        ].includes(operation.effect.action)
     },
 
     async prepare (operation, context = {}) {
@@ -886,6 +968,9 @@ export function createSftpTransactionAdapter ({ getSftp } = {}) {
         await assertOriginalState(sftp, resource, operation.effect.action, signal)
       }
       const action = operation.effect.action
+      if (['upload', 'copy', 'move'].includes(action)) {
+        throw new Error('SFTP 文件传输必须由原有 transfer transport 执行。')
+      }
       if (action === 'editor-save') {
         const text = context.input?.text
         if (typeof text !== 'string') {
@@ -988,6 +1073,22 @@ export function createSftpTransactionAdapter ({ getSftp } = {}) {
       return { summary: `SFTP ${action} 已执行，等待验证。` }
     },
 
+    async beforeExternalExecute (operation, context = {}) {
+      if (!['upload', 'copy', 'move'].includes(operation.effect.action)) {
+        throw new Error('该 SFTP 操作不支持外部传输生命周期。')
+      }
+      const sftp = requireSftp()
+      const { signal } = context
+      await requireManifest(sftp, operation, signal)
+      for (const resource of operation.plan.resources) {
+        await assertOriginalState(sftp, resource, operation.effect.action, signal)
+      }
+      return {
+        verified: true,
+        summary: 'SFTP 传输开始前的源与目标状态校验通过。'
+      }
+    },
+
     async verifyExecute (operation, context = {}) {
       const sftp = requireSftp()
       await requireManifest(sftp, operation, context.signal)
@@ -1014,6 +1115,19 @@ export function createSftpTransactionAdapter ({ getSftp } = {}) {
         return { summary: 'SFTP 原始权限已恢复。' }
       }
       for (const resource of operation.plan.resources) {
+        if (resource.snapshotRequired === false) {
+          const current = await describeEntry(
+            sftp,
+            resource.path,
+            createDescriptorBudget(),
+            0,
+            signal
+          )
+          if (!sameDescriptor(current, resource.original)) {
+            throw new Error('SFTP 非修改源在回滚前已发生变化，已拒绝错误恢复。')
+          }
+          continue
+        }
         const expected = postExpectedFor(operation, resource)
         if (resource.original.absent === true) {
           await restoreAbsent(sftp, resource, expected, signal)

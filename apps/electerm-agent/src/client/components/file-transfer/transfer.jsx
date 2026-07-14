@@ -15,6 +15,7 @@ import {
   createTransferRetryState,
   shouldRetryTransfer
 } from '../../common/transfer-retry'
+import { createTransferSafetyController } from './file-transfer-safety.js'
 import {
   zipCmd,
   unzipCmd,
@@ -44,6 +45,11 @@ export default class TransportAction extends Component {
     this.isFtp = sftp?.type === 'ftp'
     this.terminalId = sftp?.terminalId
     this.transferRetryState = createTransferRetryState(props.transfer?.retry)
+    this.transferSafety = createTransferSafetyController({
+      getTransfer: this.getTransferSafetyInput,
+      getCapability: () => refs.get('sftp-' + this.tabId),
+      cancelTransport: this.cancelProtectedTransport
+    })
   }
 
   componentDidMount () {
@@ -78,6 +84,14 @@ export default class TransportAction extends Component {
     this.fromFile = null
     refsTransfers.remove(this.id)
   }
+
+  getTransferSafetyInput = () => ({
+    ...this.props.transfer,
+    fromFile: this.props.transfer.fromFile || this.fromFile,
+    finalToPath: this.newPath || this.props.transfer.toPath,
+    conflictPolicy: this.conflictPolicy,
+    isFtp: this.isFtp
+  })
 
   localCheckExist = (path) => {
     return getLocalFileInfo(path)
@@ -147,9 +161,22 @@ export default class TransportAction extends Component {
     window.store.localList(this.tabId)
   }
 
-  onEnd = (update = {}) => {
+  onEnd = async (update = {}) => {
     if (this.onCancel) {
       return
+    }
+    if (this.finishing) return
+    this.finishing = true
+    const failed = update.status === 'exception' || Boolean(update.error)
+    try {
+      await this.transferSafety.complete({ exitCode: failed ? 1 : 0 })
+    } catch (error) {
+      update = {
+        ...update,
+        status: 'exception',
+        error: error.message
+      }
+      window.store.onError(error)
     }
     const {
       transfer,
@@ -180,7 +207,7 @@ export default class TransportAction extends Component {
     const cb = () => {
       cbs.forEach(cb => cb())
     }
-    this.cancel(cb)
+    this.finishTransfer(cb)
   }
 
   onData = (transferred) => {
@@ -214,22 +241,41 @@ export default class TransportAction extends Component {
     this.update(up)
   }
 
-  cancel = (callback) => {
-    if (this.onCancel) {
-      return
-    }
+  stopTransport = () => {
     this.onCancel = true
     clearTimeout(this.retryTimer)
     this.retryTimer = null
     this.transport && this.transport.destroy()
     this.transport = null
-    // window.store.cancelTransfer(this.props.transfer.id)
-    refsStatic.get('transfer-queue')?.addToQueue(
-      'delete',
-      this.props.transfer.id
-    )
+  }
+
+  finishTransfer = (callback) => {
+    this.stopTransport()
+    if (!this.queueRemoved) {
+      this.queueRemoved = true
+      refsStatic.get('transfer-queue')?.addToQueue(
+        'delete',
+        this.props.transfer.id
+      )
+    }
     if (isFunction(callback)) {
       callback()
+    }
+  }
+
+  cancelProtectedTransport = async () => {
+    this.finishTransfer()
+  }
+
+  cancel = async (callback) => {
+    if (this.userCancelling) return
+    this.userCancelling = true
+    try {
+      await this.transferSafety.cancel()
+    } catch (error) {
+      window.store.onError(error)
+    } finally {
+      this.finishTransfer(callback)
     }
   }
 
@@ -241,7 +287,7 @@ export default class TransportAction extends Component {
     this.transport?.resume()
   }
 
-  mvOrCp = () => {
+  mvOrCp = async () => {
     const {
       transfer
     } = this.props
@@ -265,20 +311,21 @@ export default class TransportAction extends Component {
       })
     }
     if (typeFrom === typeMap.local) {
-      return window.fs[operation](fromPath, finalToPath)
-        .then(this.onEnd)
-        .catch(e => {
-          this.onEnd()
-          this.onError(e)
-        })
+      try {
+        await window.fs[operation](fromPath, finalToPath)
+        return this.onEnd()
+      } catch (e) {
+        return this.onError(e)
+      }
     }
     const sftp = refs.get('sftp-' + tabId)?.sftp
-    return sftp[operation](fromPath, finalToPath)
-      .then(this.onEnd)
-      .catch(e => {
-        this.onEnd()
-        this.onError(e)
-      })
+    try {
+      await this.transferSafety.begin()
+      await sftp[operation](fromPath, finalToPath)
+      return this.onEnd()
+    } catch (e) {
+      return this.onError(e)
+    }
   }
 
   transferFile = async (transfer = this.props.transfer, onEnd = this.onEnd) => {
@@ -410,6 +457,7 @@ export default class TransportAction extends Component {
   }
 
   onDecision = (policy) => {
+    this.conflictPolicy = policy
     if (policy === fileActions.skip || policy === fileActions.cancel) {
       return this.onEnd()
     }
@@ -544,6 +592,7 @@ export default class TransportAction extends Component {
       if (!fromFile) {
         return
       }
+      await this.transferSafety.begin()
       if (!fromFile.isDirectory) {
         return await this.transferFile()
       }
