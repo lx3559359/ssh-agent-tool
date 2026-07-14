@@ -599,6 +599,126 @@ test('cross-host step1 atomically pins one SFTP transport across ref replacement
   assert.match(transferSource, /mkdir[\s\S]*getTransferRuntimeTransport\(transfer\)/)
 })
 
+test('cross-host step1 retry drops a dead pin and revalidates the replacement transport', async () => {
+  const {
+    buildCrossHostSourceIdentity,
+    buildTransferSourceEndpointKey,
+    resetCrossHostSourceAttemptForRetry,
+    resolveTransferRuntimeTransport,
+    verifyCrossHostSourcePreflight
+  } = await import(transferSafetyUrl)
+  const endpoint = {
+    host: 'source.example.com',
+    port: 22,
+    username: 'root',
+    tabId: 'source-tab',
+    pid: 'sftp:source-tab:stable-session'
+  }
+  const sourceEndpointKey = buildTransferSourceEndpointKey(endpoint)
+  const fromFile = { isDirectory: false, size: 64 }
+  const transfer = {
+    remote2remoteStep: 1,
+    tabId: 'source-tab',
+    fromPath: '/srv/shared/retry.bin',
+    fromFile,
+    sourceEndpointKey,
+    sourceIdentity: buildCrossHostSourceIdentity({
+      sourceEndpointKey,
+      path: '/srv/shared/retry.bin',
+      file: fromFile
+    })
+  }
+  let aDownloads = 0
+  let bDownloads = 0
+  let cDownloads = 0
+  const transportA = {
+    download: async () => {
+      aDownloads += 1
+      throw new Error('socket closed during transfer')
+    }
+  }
+  const transportB = {
+    download: async () => {
+      bDownloads += 1
+    }
+  }
+  const transportC = {
+    download: async () => {
+      cDownloads += 1
+    }
+  }
+  const capabilityA = {
+    sftp: transportA,
+    getSftpSafetyEndpoint: () => endpoint
+  }
+  const capabilityB = {
+    sftp: transportB,
+    getSftpSafetyEndpoint: () => endpoint
+  }
+  const capabilityC = {
+    sftp: transportC,
+    getSftpSafetyEndpoint: () => ({
+      ...endpoint,
+      username: 'deploy',
+      pid: 'sftp:source-tab:different-session'
+    })
+  }
+
+  const attemptA = await verifyCrossHostSourcePreflight({
+    transfer,
+    getCapability: () => capabilityA
+  })
+  await assert.rejects(attemptA.runtime.sftp.download(), /socket closed/)
+
+  const retryState = resetCrossHostSourceAttemptForRetry({
+    transfer,
+    sourcePin: attemptA.runtime,
+    verifiedSource: attemptA.verified
+  })
+  assert.deepEqual(retryState, {
+    sourcePin: null,
+    verifiedSource: null
+  })
+
+  const attemptB = await verifyCrossHostSourcePreflight({
+    transfer,
+    getCapability: () => capabilityB
+  })
+  const runtimeB = resolveTransferRuntimeTransport({
+    transfer,
+    sourcePin: attemptB.runtime,
+    getCapability: () => capabilityC
+  })
+  await runtimeB.sftp.download()
+  assert.equal(runtimeB.sftp, transportB)
+  assert.equal(aDownloads, 1)
+  assert.equal(bDownloads, 1)
+  assert.equal(cDownloads, 0)
+
+  await assert.rejects(
+    verifyCrossHostSourcePreflight({
+      transfer,
+      getCapability: () => capabilityC
+    }),
+    /来源端点已变化/
+  )
+  assert.equal(aDownloads, 1)
+  assert.equal(bDownloads, 1)
+  assert.equal(cDownloads, 0)
+
+  const fs = require('node:fs')
+  const transferSource = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/components/file-transfer/transfer.jsx'
+  ), 'utf8')
+  assert.match(
+    transferSource,
+    /scheduleRetry[\s\S]*resetCrossHostSourceAttemptForRetry[\s\S]*setTimeout\(\(\)\s*=>\s*this\.startTransfer\(\)/
+  )
+  assert.match(transferSource, /this\.crossHostSourcePin\s*=\s*retrySource\.sourcePin/)
+  assert.match(transferSource, /this\.verifiedCrossHostSource\s*=\s*retrySource\.verifiedSource/)
+})
+
 test('upload safety model requires an opaque source binding', async () => {
   const { buildSideEffectSafetyRequest } = await importTransactionModule(
     'side-effect-model.js'

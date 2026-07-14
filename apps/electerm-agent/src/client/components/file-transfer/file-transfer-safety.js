@@ -135,6 +135,20 @@ export function resolveTransferRuntimeTransport ({
   }
 }
 
+export function resetCrossHostSourceAttemptForRetry ({
+  transfer = {},
+  sourcePin,
+  verifiedSource
+} = {}) {
+  if (transfer.remote2remoteStep !== 1) {
+    return { sourcePin, verifiedSource }
+  }
+  return {
+    sourcePin: null,
+    verifiedSource: null
+  }
+}
+
 export function assertCrossHostSourceHistory (history, expected = {}) {
   if (!history ||
     history.verifiedSourceEndpointKey !== expected.sourceEndpointKey ||

@@ -18,6 +18,7 @@ import {
 import {
   createTransferSafetyController,
   getTransferSafetyCompletionFailure,
+  resetCrossHostSourceAttemptForRetry,
   resolveTransferRuntimeTransport,
   shouldUseLegacyZipOptimization,
   verifyCrossHostSourcePreflight
@@ -933,6 +934,13 @@ export default class TransportAction extends Component {
     }
     this.transport && this.transport.destroy()
     this.transport = null
+    const retrySource = resetCrossHostSourceAttemptForRetry({
+      transfer: this.props.transfer,
+      sourcePin: this.crossHostSourcePin,
+      verifiedSource: this.verifiedCrossHostSource
+    })
+    this.crossHostSourcePin = retrySource.sourcePin
+    this.verifiedCrossHostSource = retrySource.verifiedSource
     this.update({
       status: 'active',
       error: '',
