@@ -131,7 +131,6 @@ export class CommandTrackerAddon {
 
     switch (command) {
       case 'A': // Prompt started
-        this._completeArmedSubmission(null, true)
         this.shellIntegrationActive = true
         this.shellPhase = 'prompt'
         this._inputAnchor = null
@@ -144,13 +143,16 @@ export class CommandTrackerAddon {
         this.shellIntegrationActive = true
         this.shellPhase = 'input'
         this._inputGeneration += 1
+        this._expectedSubmissions = this._expectedSubmissions.filter(
+          submission => submission.inputGeneration === this._inputGeneration
+        )
         this._captureInputAnchor()
         return true
 
       case 'C': // Command execution started
         this.shellPhase = 'executing'
         this._inputAnchor = null
-        this._markExpectedSubmissionObserved()
+        this._markExpectedSubmissionStarted()
         return true
 
       case 'D': { // Command finished
@@ -160,7 +162,7 @@ export class CommandTrackerAddon {
         this.lastExitCode = /^-?\d+$/.test(payload)
           ? parseInt(payload, 10)
           : null
-        this._completeArmedSubmission(this.lastExitCode, true)
+        this._completeArmedSubmission(this.lastExitCode)
         return true
       }
 
@@ -170,7 +172,7 @@ export class CommandTrackerAddon {
         // The actual command being executed
         this.executedCommand = this._deserializeOscValue(payload)
         this.currentCommand = this.executedCommand
-        this._markExpectedSubmissionObserved()
+        this._markExpectedSubmissionObserved(this.executedCommand)
         // Call the callback if registered
         if (this._onCommandExecuted && this.executedCommand) {
           this._onCommandExecuted(this.executedCommand)
@@ -327,6 +329,7 @@ export class CommandTrackerAddon {
       command: text,
       inputGeneration: this._inputGeneration,
       armed: false,
+      commandObserved: false,
       executionObserved: false,
       armedAtSequence: 0
     })
@@ -347,6 +350,7 @@ export class CommandTrackerAddon {
       inputGeneration: this._inputGeneration,
       external: true,
       armed: false,
+      commandObserved: false,
       executionObserved: false,
       armedAtSequence: 0
     })
@@ -385,21 +389,40 @@ export class CommandTrackerAddon {
     )
   }
 
-  _markExpectedSubmissionObserved () {
+  _markExpectedSubmissionObserved (command) {
     const expected = this._expectedSubmissions.find(
       submission => submission.armed &&
         submission.inputGeneration === this._inputGeneration &&
-        submission.armedAtSequence < this._oscSequence
+        submission.armedAtSequence < this._oscSequence &&
+        submission.command === command
     )
-    if (expected) expected.executionObserved = true
+    if (expected) {
+      expected.commandObserved = true
+      expected.commandObservedAtSequence = this._oscSequence
+    }
   }
 
-  _completeArmedSubmission (exitCode, allowWithoutExecution) {
+  _markExpectedSubmissionStarted () {
+    const expected = this._expectedSubmissions.find(
+      submission => submission.armed &&
+        submission.commandObserved === true &&
+        submission.inputGeneration === this._inputGeneration &&
+        submission.commandObservedAtSequence < this._oscSequence
+    )
+    if (expected) {
+      expected.executionObserved = true
+      expected.executionObservedAtSequence = this._oscSequence
+    }
+  }
+
+  _completeArmedSubmission (exitCode) {
     const expectedIndex = this._expectedSubmissions.findIndex(
       submission => submission.armed &&
+        submission.commandObserved === true &&
+        submission.executionObserved === true &&
         submission.inputGeneration === this._inputGeneration &&
         submission.armedAtSequence < this._oscSequence &&
-        (allowWithoutExecution || submission.executionObserved)
+        submission.executionObservedAtSequence < this._oscSequence
     )
     if (expectedIndex === -1) return false
     const expected = this._expectedSubmissions.splice(expectedIndex, 1)[0]

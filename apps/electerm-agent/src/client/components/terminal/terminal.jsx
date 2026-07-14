@@ -158,6 +158,7 @@ class Term extends Component {
         )
       },
       getEndpoint: () => this.getTerminalSafetyEndpoint(),
+      ensureTrackerReady: this.ensureCommandSafetyTrackerReady,
       submitCommand: (command, token) => (
         this.attachAddon?.submitSafetyCommand(command, token) === true
       ),
@@ -1291,6 +1292,35 @@ class Term extends Component {
     return this.commandSafetyEntrypoint.runSafetyCommand(command, options)
   }
 
+  isCommandSafetyTrackerReady = () => {
+    return this.cmdAddon?.hasShellIntegration() === true &&
+      this.cmdAddon?.isCommandInputActive() === true &&
+      this.cmdAddon?.getCurrentCommandInput() === ''
+  }
+
+  ensureCommandSafetyTrackerReady = async () => {
+    if (this.isCommandSafetyTrackerReady()) return true
+    if (!this.term || !this.attachAddon || !this.pid || this.onClose) {
+      throw new Error('当前终端未连接，命令尚未发送。')
+    }
+    if (this.term.buffer?.active?.type === 'alternate') {
+      throw new Error('当前交互程序无法建立可靠命令跟踪，命令尚未发送。')
+    }
+
+    await this.injectShellIntegration({ forceForSafety: true })
+    const deadline = Date.now() + (this.isSsh() ? 6000 : 4000)
+    while (Date.now() < deadline) {
+      if (this.isCommandSafetyTrackerReady()) return true
+      if (!this.term || !this.attachAddon || !this.pid || this.onClose) {
+        throw new Error('终端连接已断开，命令尚未发送。')
+      }
+      await new Promise(resolve => setTimeout(resolve, 50))
+    }
+
+    this.shellInjected = false
+    throw new Error('Shell Integration 未就绪，无法可靠跟踪命令，命令尚未发送。')
+  }
+
   getTerminalSafetyEndpoint = () => {
     const tab = window.store.applyProfileToTabs(
       deepCopy(this.props.tab || {})
@@ -1635,7 +1665,8 @@ class Term extends Component {
    * Uses output suppression to hide the injection command
    * Returns a promise that resolves when injection is complete
    */
-  injectShellIntegration = async () => {
+  injectShellIntegration = async (options = {}) => {
+    const forceForSafety = options.forceForSafety === true
     if (this.shellInjected) {
       return Promise.resolve()
     }
@@ -1654,11 +1685,17 @@ class Term extends Component {
       if (this.props.sftpPathFollowSsh) {
         this.warnSftpFollowUnsupported()
       }
+      if (forceForSafety) {
+        throw new Error('Fish shell 暂不支持可靠命令跟踪，命令尚未发送。')
+      }
       return Promise.resolve()
     }
 
     // Don't inject for sh type shells unless sftpPathFollowSsh is true
     if (shellType === 'sh' && !this.props.sftpPathFollowSsh) {
+      if (forceForSafety) {
+        throw new Error('当前 shell 暂不支持可靠命令跟踪，命令尚未发送。')
+      }
       return Promise.resolve()
     }
 

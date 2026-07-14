@@ -11,6 +11,10 @@ const runnerModuleUrl = pathToFileURL(path.resolve(
   __dirname,
   '../../src/client/common/safety-transactions/transaction-runner.js'
 )).href
+const submissionHooksModuleUrl = pathToFileURL(path.resolve(
+  __dirname,
+  '../../src/client/common/safety-transactions/command-submission-hooks.js'
+)).href
 
 function createHarness (overrides = {}) {
   const requests = []
@@ -21,6 +25,7 @@ function createHarness (overrides = {}) {
   const inputs = []
   const errors = []
   const trackedCommands = []
+  const readinessChecks = []
   let idSequence = 0
   let tokenSequence = 0
   const runner = {
@@ -68,11 +73,19 @@ function createHarness (overrides = {}) {
     inputs,
     errors,
     trackedCommands,
+    readinessChecks,
     runner,
     tracker,
     options: {
       runner,
       tracker,
+      ensureTrackerReady: async context => {
+        readinessChecks.push(context)
+        if (overrides.ensureTrackerReady) {
+          return overrides.ensureTrackerReady(context)
+        }
+        return true
+      },
       createId: () => `operation-${++idSequence}`,
       getEndpoint: () => ({
         tabId: 'tab-1',
@@ -419,7 +432,7 @@ test('real runner audits readonly execution without unsafe confirmation', async 
   assert.equal((await harness.store.get(result.operationId)).state, 'kept')
 })
 
-test('background mode classifies the original command and binds tracker completion to its trusted wrapper', async () => {
+test('background launcher completion does not finalize the original payload transaction', async () => {
   const { createSafetyCommandEntrypoint } = await import(moduleUrl)
   const harness = createHarness()
   const entrypoint = createSafetyCommandEntrypoint(harness.options)
@@ -436,7 +449,7 @@ test('background mode classifies the original command and binds tracker completi
   assert.equal(harness.requests[0].command, originalCommand)
   assert.equal(harness.requests[0].provider, 'systemd')
   assert.equal(harness.requests[0].metadata.execution.mode, 'background')
-  assert.match(harness.requests[0].metadata.execution.submittedCommand, /^nohup bash -c /)
+  assert.match(harness.requests[0].metadata.execution.submittedCommand, /^bash -c /)
   entrypoint.confirmPending()
 
   const result = await running
@@ -451,9 +464,59 @@ test('background mode classifies the original command and binds tracker completi
     command: submittedCommand,
     exitCode: 0
   })
-  const completion = await waiting
-  assert.equal(completion.exitCode, 0)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(harness.completions.length, 0)
+
+  await result.finalizeBackground(7)
+  await assert.rejects(waiting, /7/)
+  assert.equal(harness.completions.length, 1)
   assert.equal(harness.completions[0].completion.command, originalCommand)
+  assert.equal(harness.completions[0].completion.exitCode, 7)
+})
+
+test('background launcher failure finalizes without exposing a detached task', async () => {
+  const { createSafetyCommandEntrypoint } = await import(moduleUrl)
+  const harness = createHarness()
+  const entrypoint = createSafetyCommandEntrypoint(harness.options)
+  entrypoint.beginSession()
+  const result = await entrypoint.runSafetyCommand('uptime', {
+    source: 'agent',
+    executionMode: 'background'
+  })
+  const waiting = result.waitForCompletion({ timeoutMs: 1000 })
+
+  await entrypoint.handleCommandFinished({
+    token: result.token,
+    command: result.execution.submittedCommand,
+    exitCode: 9
+  })
+
+  await assert.rejects(waiting, /9/)
+  await assert.rejects(result.finalizeBackground(0), /后台|启动|终态/)
+  assert.equal(harness.completions[0].completion.exitCode, 9)
+})
+
+test('background execution exposes an idempotent cancel capability after launch', async () => {
+  const { createSafetyCommandEntrypoint } = await import(moduleUrl)
+  const harness = createHarness()
+  const entrypoint = createSafetyCommandEntrypoint(harness.options)
+  entrypoint.beginSession()
+  const result = await entrypoint.runSafetyCommand('uptime', {
+    source: 'agent',
+    executionMode: 'background'
+  })
+  const waiting = result.waitForCompletion({ timeoutMs: 1000 })
+  await entrypoint.handleCommandFinished({
+    token: result.token,
+    command: result.execution.submittedCommand,
+    exitCode: 0
+  })
+
+  assert.equal(await result.cancelBackground('用户取消后台任务。'), true)
+  assert.equal(await result.cancelBackground('重复取消。'), false)
+  await assert.rejects(waiting, /取消/)
+  assert.deepEqual(harness.cancellations, [result.operationId])
+  assert.equal(entrypoint.hasPending(), false)
 })
 
 test('callers cannot forge a submitted command for a benign original command', async () => {
@@ -468,6 +531,109 @@ test('callers cannot forge a submitted command for a benign original command', a
   }), /实际提交命令|不允许/)
   assert.deepEqual(harness.requests, [])
   assert.deepEqual(harness.submissions, [])
+})
+
+test('only authenticated internal submission hooks run atomically before submit and abort on invalidation', async () => {
+  const { createSafetyCommandEntrypoint } = await import(moduleUrl)
+  const { createInternalSubmissionHooks } = await import(submissionHooksModuleUrl)
+  let selection
+  const hookEvents = []
+  const harness = createHarness({
+    submitCommand: (command, token) => {
+      hookEvents.push(['submit', selection])
+      harness.submissions.push({ command, token })
+    }
+  })
+  const entrypoint = createSafetyCommandEntrypoint(harness.options)
+  entrypoint.beginSession()
+  const submissionHooks = createInternalSubmissionHooks({
+    beforeSubmit: () => {
+      selection = ['C:\\tmp\\upload.txt']
+      hookEvents.push(['before', selection])
+    },
+    onAbort: () => {
+      selection = undefined
+      hookEvents.push(['abort', selection])
+    }
+  })
+  const running = entrypoint.runSafetyCommand('rz', {
+    source: 'agent',
+    submissionHooks
+  })
+  await waitFor(() => harness.views.some(view => view.confirmation))
+  entrypoint.confirmPending()
+  const result = await running
+
+  assert.deepEqual(hookEvents.slice(0, 2), [
+    ['before', ['C:\\tmp\\upload.txt']],
+    ['submit', ['C:\\tmp\\upload.txt']]
+  ])
+  await entrypoint.invalidateSession()
+  assert.equal(selection, undefined)
+  assert.equal(hookEvents.at(-1)[0], 'abort')
+  await assert.rejects(result.waitForCompletion({ timeoutMs: 1000 }), /断开|取消/)
+})
+
+test('submission hook spoofing is rejected and submit failure clears hook state', async () => {
+  const { createSafetyCommandEntrypoint } = await import(moduleUrl)
+  const { createInternalSubmissionHooks } = await import(submissionHooksModuleUrl)
+  const spoofHarness = createHarness()
+  const spoofEntrypoint = createSafetyCommandEntrypoint(spoofHarness.options)
+  spoofEntrypoint.beginSession()
+  await assert.rejects(spoofEntrypoint.runSafetyCommand('uptime', {
+    source: 'agent',
+    beforeSubmit: () => {}
+  }), /内部|hook|钩子/)
+  assert.deepEqual(spoofHarness.requests, [])
+
+  let selected = false
+  const failedHarness = createHarness({
+    submitCommand: () => { throw new Error('socket failed') }
+  })
+  const failedEntrypoint = createSafetyCommandEntrypoint(failedHarness.options)
+  failedEntrypoint.beginSession()
+  const result = await failedEntrypoint.runSafetyCommand('uptime', {
+    source: 'agent',
+    submissionHooks: createInternalSubmissionHooks({
+      beforeSubmit: () => { selected = true },
+      onAbort: () => { selected = false }
+    })
+  })
+
+  assert.equal(result.sent, false)
+  assert.equal(selected, false)
+})
+
+test('explicit safety commands wait for tracker readiness under default configuration', async () => {
+  const { createSafetyCommandEntrypoint } = await import(moduleUrl)
+  const ready = deferred()
+  const harness = createHarness({
+    ensureTrackerReady: () => ready.promise
+  })
+  const entrypoint = createSafetyCommandEntrypoint(harness.options)
+  entrypoint.beginSession()
+  const running = entrypoint.runSafetyCommand('uptime', { source: 'agent' })
+  await waitFor(() => harness.readinessChecks.length === 1)
+
+  assert.equal(harness.requests.length, 0)
+  assert.equal(harness.submissions.length, 0)
+  ready.resolve(true)
+  const result = await running
+  assert.equal(result.sent, true)
+
+  const unavailable = createHarness({
+    ensureTrackerReady: async () => {
+      throw new Error('Shell Integration 尚未就绪')
+    }
+  })
+  const unavailableEntrypoint = createSafetyCommandEntrypoint(unavailable.options)
+  unavailableEntrypoint.beginSession()
+  await assert.rejects(
+    unavailableEntrypoint.runSafetyCommand('uptime', { source: 'agent' }),
+    /Shell Integration|跟踪/
+  )
+  assert.deepEqual(unavailable.requests, [])
+  assert.equal(unavailableEntrypoint.hasPendingConfirmation(), false)
 })
 
 test('background network changes still fail closed from the original command', async () => {
@@ -490,7 +656,7 @@ test('background network changes still fail closed from the original command', a
   assert.deepEqual(harness.submissions, [])
 })
 
-test('real background change prepares recovery for the original and completes from its wrapper identity', async () => {
+test('real background change remains executing after launcher and finalizes from payload exit', async () => {
   const harness = await createRealRunnerHarness()
   const originalCommand = '/usr/bin/systemctl start nginx'
   const running = harness.entrypoint.runSafetyCommand(originalCommand, {
@@ -514,6 +680,8 @@ test('real background change prepares recovery for the original and completes fr
     command: result.execution.submittedCommand,
     exitCode: 0
   })
+  assert.equal((await harness.store.get(result.operationId)).state, 'executing')
+  await result.finalizeBackground(0)
   await waiting
   assert.equal((await harness.store.get(result.operationId)).state, 'rollback-available')
 })
@@ -689,6 +857,54 @@ test('completion failure is cancelled and reported without an unhandled rejectio
   assert.equal(harness.errors.length, 1)
   assert.match(harness.errors[0].message, /事务完成写入失败/)
   assert.equal(entrypoint.hasPending(), false)
+})
+
+test('disconnect during delayed completion cancels the retained identity and ignores late success', async () => {
+  const { createSafetyCommandEntrypoint } = await import(moduleUrl)
+  const completing = deferred()
+  const harness = createHarness({
+    completeExternalExecution: () => completing.promise
+  })
+  const entrypoint = createSafetyCommandEntrypoint(harness.options)
+  entrypoint.beginSession()
+  const result = await entrypoint.runSafetyCommand('uptime', { source: 'agent' })
+  const waiting = result.waitForCompletion({ timeoutMs: 1000 })
+  const completionCall = entrypoint.handleCommandFinished({
+    token: result.token,
+    command: 'uptime',
+    exitCode: 0
+  })
+  await waitFor(() => harness.completions.length === 1)
+
+  const invalidating = entrypoint.invalidateSession()
+  completing.resolve({ id: result.operationId, state: 'kept' })
+  await Promise.all([completionCall, invalidating])
+
+  await assert.rejects(waiting, /断开|取消/)
+  assert.deepEqual(harness.cancellations, [result.operationId])
+  assert.equal(entrypoint.hasPending(), false)
+})
+
+test('late retry cancellation cannot re-arm confirmation after session invalidation', async () => {
+  const { createSafetyCommandEntrypoint } = await import(moduleUrl)
+  const cancelling = deferred()
+  const harness = createHarness({
+    submitCommand: () => { throw new Error('socket failed') },
+    cancel: () => cancelling.promise
+  })
+  const entrypoint = createSafetyCommandEntrypoint(harness.options)
+  entrypoint.beginSession()
+  const running = entrypoint.runSafetyCommand('uptime', { source: 'agent' })
+  await waitFor(() => harness.cancellations.length === 1)
+
+  const invalidating = entrypoint.invalidateSession()
+  cancelling.resolve({ state: 'cancelled' })
+  const [result] = await Promise.all([running, invalidating])
+
+  assert.equal(result.sent, false)
+  assert.equal(result.cancelled, true)
+  assert.equal(entrypoint.hasPendingConfirmation(), false)
+  assert.equal(harness.views.at(-1).confirmation, null)
 })
 
 test('real runner fails closed on unavailable network recovery and endpoint mismatch', async () => {

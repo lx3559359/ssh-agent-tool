@@ -1,3 +1,5 @@
+import { createInternalSubmissionHooks } from '../common/safety-transactions/command-submission-hooks.js'
+
 const protocols = Object.freeze({
   rzsz: { upload: 'rz', download: 'sz' },
   trzsz: { upload: 'trz', download: 'tsz' }
@@ -81,13 +83,19 @@ export async function runZmodemUploadSafety ({
 }) {
   const tabId = requireTab(store, args.tabId)
   const built = buildZmodemUpload(args)
-  setSelectedFiles(built.files)
+  setSelectedFiles(undefined)
+  const submissionHooks = createInternalSubmissionHooks({
+    beforeSubmit: () => setSelectedFiles(built.files),
+    onAbort: () => setSelectedFiles(undefined)
+  })
   const result = await store.runSafetyCommand(built.command, {
     tabId,
     source: 'agent',
     title: 'Zmodem 上传',
-    metadata: built.metadata
+    metadata: built.metadata,
+    submissionHooks
   })
+  if (!result?.sent) setSelectedFiles(undefined)
   return {
     success: result?.sent === true,
     cancelled: result?.cancelled === true,
@@ -110,13 +118,19 @@ export async function runZmodemDownloadSafety ({
 }) {
   const tabId = requireTab(store, args.tabId)
   const built = buildZmodemDownload(args)
-  setSelectedFolder(built.saveFolder)
+  setSelectedFolder(undefined)
+  const submissionHooks = createInternalSubmissionHooks({
+    beforeSubmit: () => setSelectedFolder(built.saveFolder),
+    onAbort: () => setSelectedFolder(undefined)
+  })
   const result = await store.runSafetyCommand(built.command, {
     tabId,
     source: 'agent',
     title: 'Zmodem 下载',
-    metadata: built.metadata
+    metadata: built.metadata,
+    submissionHooks
   })
+  if (!result?.sent) setSelectedFolder(undefined)
   return {
     success: result?.sent === true,
     cancelled: result?.cancelled === true,

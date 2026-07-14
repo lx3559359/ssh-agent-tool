@@ -2,6 +2,7 @@ import generate from '../uid.js'
 import { redactAuditText } from './audit-redaction.js'
 import { buildSafetyRequest, operationStates } from './models.js'
 import { buildCommandExecution } from './command-execution.js'
+import { resolveInternalSubmissionHooks } from './command-submission-hooks.js'
 
 const supportedSources = new Set(['quick-command', 'agent'])
 
@@ -14,14 +15,50 @@ function requireFunction (value, name) {
 
 function deferred () {
   let resolveDeferred
-  const promise = new Promise(resolve => {
-    resolveDeferred = resolve
-  })
+  const promise = new Promise(resolve => { resolveDeferred = resolve })
   return { promise, resolve: resolveDeferred }
 }
 
 function safeErrorMessage (error, fallback = '未知错误') {
   return redactAuditText(String(error?.message || fallback))
+}
+
+function createHookState (hooks) {
+  if (!hooks) return undefined
+  let beforePromise
+  let abortPromise
+  let abortRequested = false
+  let cleaned = false
+
+  async function abortNow () {
+    if (cleaned) return
+    cleaned = true
+    await hooks.onAbort()
+  }
+
+  return {
+    async beforeSubmit () {
+      if (abortRequested) {
+        await abortNow()
+        throw new Error('命令提交已取消。')
+      }
+      beforePromise = Promise.resolve().then(() => hooks.beforeSubmit())
+      await beforePromise
+      if (abortRequested) {
+        await abortNow()
+        throw new Error('命令提交已取消。')
+      }
+    },
+    abort () {
+      abortRequested = true
+      if (!abortPromise) {
+        abortPromise = Promise.resolve(beforePromise)
+          .catch(() => {})
+          .then(abortNow)
+      }
+      return abortPromise
+    }
+  }
 }
 
 export function createSafetyCommandEntrypoint (options = {}) {
@@ -34,6 +71,7 @@ export function createSafetyCommandEntrypoint (options = {}) {
     options.buildConfirmation,
     'buildConfirmation'
   )
+  const ensureTrackerReady = options.ensureTrackerReady || (async () => true)
   const createId = options.createId || (() => `command-${Date.now()}-${generate()}`)
   const onStateChange = options.onStateChange || (() => {})
   const onError = options.onError || (() => {})
@@ -42,6 +80,8 @@ export function createSafetyCommandEntrypoint (options = {}) {
   let pendingRun = null
   let pendingConfirmation = null
   let activeExecution = null
+  const detachedExecutions = new Map()
+  const completingExecutions = new Map()
 
   function beginSession () {
     generation += 1
@@ -59,6 +99,28 @@ export function createSafetyCommandEntrypoint (options = {}) {
 
   function isCurrent (run) {
     return live && pendingRun === run && run.generation === generation
+  }
+
+  function isGenerationCurrent (run) {
+    return live && run.generation === generation
+  }
+
+  async function abortHookState (hookState) {
+    if (!hookState) return
+    try {
+      await hookState.abort()
+    } catch (error) {
+      onError(error)
+    }
+  }
+
+  function cancelRunOperation (run) {
+    if (!run?.operationId) return Promise.resolve(undefined)
+    run.operationCancelled = true
+    if (!run.cancelPromise) {
+      run.cancelPromise = Promise.resolve().then(() => runner.cancel(run.operationId))
+    }
+    return run.cancelPromise
   }
 
   function waitForConfirmation (run, request) {
@@ -93,11 +155,13 @@ export function createSafetyCommandEntrypoint (options = {}) {
     const pending = pendingConfirmation
     if (!pending) return false
     if (pending.retry === true) {
+      const retryGeneration = generation
       pendingConfirmation = null
       updateState({ confirmation: pending.confirmation, busy: true })
       Promise.resolve()
         .then(() => runSafetyCommand(pending.command, pending.runOptions))
         .catch(error => {
+          if (!live || generation !== retryGeneration) return
           pendingConfirmation = pending
           const message = `命令重试失败，命令尚未发送：${safeErrorMessage(error)}`
           updateState({
@@ -120,18 +184,19 @@ export function createSafetyCommandEntrypoint (options = {}) {
   }
 
   async function invalidatePending (endSession) {
-    const run = pendingRun
+    const pending = pendingConfirmation
+    const hadPendingRun = Boolean(pendingRun)
+    const run = pendingRun || pending?.run
     generation += 1
     if (endSession) live = false
-    const pending = pendingConfirmation
     pendingConfirmation = null
-    if (pending?.resolve && (!run || pending.run === run)) pending.resolve(false)
+    if (pending?.resolve) pending.resolve(false)
     updateState({})
-    if (run?.operationId) {
-      run.operationCancelled = true
-      await runner.cancel(run.operationId)
+    await abortHookState(run?.hookState)
+    if (run?.operationId && !run.operationCancelled) {
+      await cancelRunOperation(run)
     }
-    return Boolean(run)
+    return hadPendingRun
   }
 
   function cancelPending () {
@@ -143,34 +208,79 @@ export function createSafetyCommandEntrypoint (options = {}) {
     return invalidatePending(false)
   }
 
-  async function cancelActiveExecution (reason, operationId) {
-    const execution = activeExecution
-    if (!execution || (operationId && execution.id !== operationId)) return false
-    activeExecution = null
+  function removeExecution (execution) {
+    if (activeExecution === execution) activeExecution = null
+    detachedExecutions.delete(execution.id)
+  }
+
+  function settleExecution (execution, outcome) {
+    if (execution.settled) return false
+    execution.settled = true
+    execution.completion.resolve(outcome)
+    return true
+  }
+
+  function findExecution (operationId) {
+    if (activeExecution?.id === operationId) return activeExecution
+    return detachedExecutions.get(operationId) ||
+      completingExecutions.get(operationId)
+  }
+
+  async function cancelExecution (execution, reason) {
+    if (!execution || execution.settled) return false
+    execution.cancelled = true
+    removeExecution(execution)
     tracker.cancelExpectedSubmission(execution.token)
-    execution.completion.resolve({
+    await abortHookState(execution.hookState)
+    settleExecution(execution, {
       cancelled: true,
       error: reason || '命令执行已取消。',
       operationId: execution.id
     })
-    await runner.cancel(execution.id)
+    if (!execution.cancelPromise) {
+      execution.cancelPromise = Promise.resolve()
+        .then(() => runner.cancel(execution.id))
+    }
+    await execution.cancelPromise
     return true
+  }
+
+  async function cancelExecutionById (operationId, reason) {
+    return cancelExecution(findExecution(operationId), reason)
+  }
+
+  async function cancelAllExecutions (reason) {
+    const executions = new Set([
+      activeExecution,
+      ...detachedExecutions.values(),
+      ...completingExecutions.values()
+    ].filter(Boolean))
+    let cancelled = false
+    for (const execution of executions) {
+      cancelled = await cancelExecution(execution, reason) || cancelled
+    }
+    return cancelled
   }
 
   async function cancelCurrentExecution (reason = '命令执行已取消。') {
     const pendingCancelled = await invalidatePending(false)
-    const executionCancelled = await cancelActiveExecution(reason)
+    const executionCancelled = await cancelAllExecutions(reason)
     return pendingCancelled || executionCancelled
   }
 
   async function invalidateSession () {
     const cancelled = await invalidatePending(true)
-    const executionCancelled = await cancelActiveExecution('终端连接已断开，命令执行已取消。')
+    const executionCancelled = await cancelAllExecutions(
+      '终端连接已断开，命令执行已取消。'
+    )
     return cancelled || executionCancelled
   }
 
   function hasPending () {
-    return Boolean(pendingRun || pendingConfirmation || activeExecution)
+    return Boolean(
+      pendingRun || pendingConfirmation || activeExecution ||
+      detachedExecutions.size || completingExecutions.size
+    )
   }
 
   function hasPendingConfirmation () {
@@ -194,34 +304,49 @@ export function createSafetyCommandEntrypoint (options = {}) {
     }
   }
 
+  function staleRunResult (request) {
+    return {
+      sent: false,
+      cancelled: true,
+      operationId: request.id
+    }
+  }
+
   async function armRetry (run, request, error, cancelOperation) {
+    let cancelError
     if (cancelOperation && run.operationId) {
       try {
-        await runner.cancel(run.operationId)
-      } catch (cancelError) {
-        onError(cancelError)
-        const message = `命令提交失败且事务取消失败，禁止重试：${safeErrorMessage(cancelError)}`
-        const confirmation = {
-          ...retryConfirmation(run, request),
-          kind: 'blocked',
-          executeAllowed: false,
-          message: '无法确认上一事务已停止，已禁止重试以避免重复执行。'
-        }
-        pendingConfirmation = { confirmation }
-        updateState({ confirmation, busy: false, error: message })
-        return {
-          sent: false,
-          retryable: false,
-          blocked: true,
-          operationId: request.id,
-          error: message
-        }
+        await cancelRunOperation(run)
+      } catch (caught) {
+        cancelError = caught
+      }
+    }
+    await abortHookState(run.hookState)
+    if (!isGenerationCurrent(run)) return staleRunResult(request)
+    if (cancelError) {
+      onError(cancelError)
+      const message = `命令提交失败且事务取消失败，禁止重试：${safeErrorMessage(cancelError)}`
+      const confirmation = {
+        ...retryConfirmation(run, request),
+        kind: 'blocked',
+        executeAllowed: false,
+        message: '无法确认上一事务已停止，已禁止重试以避免重复执行。'
+      }
+      pendingConfirmation = { run, confirmation }
+      updateState({ confirmation, busy: false, error: message })
+      return {
+        sent: false,
+        retryable: false,
+        blocked: true,
+        operationId: request.id,
+        error: message
       }
     }
     const message = `命令发送失败，命令尚未发送：${safeErrorMessage(error)}`
     const confirmation = retryConfirmation(run, request)
     pendingConfirmation = {
       retry: true,
+      run,
       command: run.command,
       runOptions: run.runOptions,
       confirmation
@@ -249,7 +374,7 @@ export function createSafetyCommandEntrypoint (options = {}) {
       clearTimeout(timeout)
       if (outcome?.timedOut) {
         const message = `等待命令完成超时（${timeoutMs} 毫秒），已停止后续命令。`
-        await cancelActiveExecution(message, operationId)
+        await cancelExecutionById(operationId, message)
         throw new Error(message)
       }
     } else {
@@ -264,6 +389,66 @@ export function createSafetyCommandEntrypoint (options = {}) {
     return outcome
   }
 
+  async function finalizeExecution (execution, exitCode) {
+    if (!execution || execution.settled) {
+      throw new Error('后台任务已经进入终态，不能重复完成。')
+    }
+    if (!Number.isInteger(exitCode) && exitCode !== null) {
+      throw new Error('命令退出码无效。')
+    }
+    if (execution.finalizationPromise) return execution.finalizationPromise
+    removeExecution(execution)
+    tracker.cancelExpectedSubmission(execution.token)
+    completingExecutions.set(execution.id, execution)
+    execution.finalizationPromise = (async () => {
+      try {
+        const operation = await runner.completeExternalExecution(execution.id, {
+          executionId: execution.executionId,
+          command: execution.originalCommand,
+          exitCode
+        })
+        if (execution.cancelled || !live || execution.generation !== generation) {
+          if (!execution.cancelPromise) {
+            execution.cancelPromise = Promise.resolve()
+              .then(() => runner.cancel(execution.id))
+          }
+          await execution.cancelPromise
+          settleExecution(execution, {
+            cancelled: true,
+            error: '终端会话已失效，已忽略迟到的命令完成结果。',
+            operationId: execution.id
+          })
+          return false
+        }
+        await abortHookState(execution.hookState)
+        settleExecution(execution, {
+          operation,
+          operationId: execution.id,
+          exitCode,
+          submittedCommand: execution.submittedCommand
+        })
+        return true
+      } catch (error) {
+        if (execution.cancelled) return false
+        try {
+          await runner.cancel(execution.id)
+        } catch (cancelError) {
+          onError(cancelError)
+        }
+        await abortHookState(execution.hookState)
+        settleExecution(execution, {
+          operationId: execution.id,
+          error: `安全事务完成失败：${safeErrorMessage(error)}`
+        })
+        onError(error)
+        return false
+      } finally {
+        completingExecutions.delete(execution.id)
+      }
+    })()
+    return execution.finalizationPromise
+  }
+
   async function executeRun (run) {
     const { command, runOptions } = run
     try {
@@ -271,13 +456,19 @@ export function createSafetyCommandEntrypoint (options = {}) {
       if (!supportedSources.has(source)) {
         throw new Error('命令安全事务来源不受支持。')
       }
+      await ensureTrackerReady({
+        command,
+        source,
+        executionMode: runOptions.executionMode || 'foreground'
+      })
+      if (!isCurrent(run)) return staleRunResult({ id: run.operationId })
       const operationId = createId()
-      const execution = buildCommandExecution({
+      const executionPlan = buildCommandExecution({
         command,
         operationId,
         mode: runOptions.executionMode || 'foreground'
       })
-      run.execution = execution
+      run.execution = executionPlan
       const request = buildSafetyRequest({
         id: operationId,
         source,
@@ -287,7 +478,7 @@ export function createSafetyCommandEntrypoint (options = {}) {
         metadata: {
           ...(runOptions.metadata || {}),
           commandEntrypoint: true,
-          execution: execution.metadata
+          execution: executionPlan.metadata
         }
       })
       run.operationId = request.id
@@ -296,14 +487,15 @@ export function createSafetyCommandEntrypoint (options = {}) {
         throw new Error(prepared?.error || '无法安全准备执行，命令尚未发送。')
       }
       if (!isCurrent(run)) {
-        if (!run.operationCancelled) await runner.cancel(request.id)
-        return { sent: false, cancelled: true, operationId: request.id }
+        if (!run.operationCancelled) await cancelRunOperation(run)
+        return staleRunResult(request)
       }
       if (request.risk !== 'readonly') {
         const accepted = await waitForConfirmation(run, request)
         if (!accepted || !isCurrent(run)) {
-          if (!run.operationCancelled) await runner.cancel(request.id)
-          return { sent: false, cancelled: true, operationId: request.id }
+          await abortHookState(run.hookState)
+          if (!run.operationCancelled) await cancelRunOperation(run)
+          return staleRunResult(request)
         }
       }
       let begun
@@ -324,10 +516,11 @@ export function createSafetyCommandEntrypoint (options = {}) {
         )
       }
       if (!isCurrent(run)) {
-        await runner.cancel(request.id)
-        return { sent: false, cancelled: true, operationId: request.id }
+        await cancelRunOperation(run)
+        await abortHookState(run.hookState)
+        return staleRunResult(request)
       }
-      const submittedCommand = execution.submittedCommand
+      const submittedCommand = executionPlan.submittedCommand
       const token = tracker.expectExternalSubmission(submittedCommand)
       if (!token || tracker.markExpectedSubmissionReleased(token) !== true) {
         if (token) tracker.cancelExpectedSubmission(token)
@@ -339,22 +532,35 @@ export function createSafetyCommandEntrypoint (options = {}) {
         )
       }
       const completion = deferred()
-      activeExecution = {
+      const execution = {
         id: request.id,
         executionId: begun.executionId,
         originalCommand: command,
         submittedCommand,
+        mode: executionPlan.mode,
         token,
-        completion
+        completion,
+        generation: run.generation,
+        hookState: run.hookState,
+        settled: false,
+        cancelled: false
       }
+      activeExecution = execution
       try {
+        await execution.hookState?.beforeSubmit()
+        if (!isCurrent(run) || activeExecution !== execution || execution.cancelled) {
+          await cancelExecution(execution, '命令提交前会话已失效。')
+          return staleRunResult(request)
+        }
         if (submitCommand(submittedCommand, token) === false) {
           throw new Error('AttachAddon 拒绝了安全命令提交。')
         }
       } catch (error) {
-        activeExecution = null
+        if (execution.cancelled) return staleRunResult(request)
+        removeExecution(execution)
         tracker.cancelExpectedSubmission(token)
-        completion.resolve({
+        await abortHookState(execution.hookState)
+        settleExecution(execution, {
           cancelled: true,
           error: '命令提交失败，命令尚未发送。',
           operationId: request.id
@@ -362,13 +568,13 @@ export function createSafetyCommandEntrypoint (options = {}) {
         return armRetry(run, request, error, true)
       }
       updateState({})
-      return {
+      const result = {
         sent: true,
         operationId: request.id,
         executionId: begun.executionId,
         token,
         request,
-        execution,
+        execution: executionPlan,
         completion: completion.promise,
         waitForCompletion: waitOptions => waitForCompletion(
           request.id,
@@ -376,6 +582,14 @@ export function createSafetyCommandEntrypoint (options = {}) {
           waitOptions
         )
       }
+      if (executionPlan.mode === 'background') {
+        result.finalizeBackground = exitCode => finalizeExecution(execution, exitCode)
+        result.cancelBackground = reason => cancelExecution(
+          execution,
+          reason || '后台任务已取消。'
+        )
+      }
+      return result
     } finally {
       if (pendingRun === run) pendingRun = null
     }
@@ -389,10 +603,16 @@ export function createSafetyCommandEntrypoint (options = {}) {
     if (!live) {
       return Promise.reject(new Error('当前终端会话未连接，命令尚未发送。'))
     }
-    if (Object.prototype.hasOwnProperty.call(runOptions, 'submittedCommand')) {
-      return Promise.reject(
-        new Error('调用方不允许指定实际提交命令。')
-      )
+    for (const forbidden of ['submittedCommand', 'beforeSubmit', 'onAbort']) {
+      if (Object.prototype.hasOwnProperty.call(runOptions, forbidden)) {
+        return Promise.reject(new Error('调用方不允许指定内部提交命令或安全钩子。'))
+      }
+    }
+    const internalHooks = runOptions.submissionHooks === undefined
+      ? undefined
+      : resolveInternalSubmissionHooks(runOptions.submissionHooks)
+    if (runOptions.submissionHooks !== undefined && !internalHooks) {
+      return Promise.reject(new Error('命令提交钩子不是可信内部 capability。'))
     }
     if (runOptions.inputOnly === true) {
       inputCommand(command)
@@ -409,8 +629,8 @@ export function createSafetyCommandEntrypoint (options = {}) {
         new Error('当前终端有失败命令等待取消或重试。')
       )
     }
-    if (activeExecution) {
-      if (activeExecution.originalCommand === command) {
+    if (activeExecution || completingExecutions.size) {
+      if (activeExecution?.originalCommand === command) {
         return Promise.resolve({
           sent: false,
           duplicate: true,
@@ -426,9 +646,14 @@ export function createSafetyCommandEntrypoint (options = {}) {
         new Error('命令包含疑似凭据，无法安全记录，命令尚未发送。')
       )
     }
-    const run = { command, runOptions, generation }
-    run.promise = executeRun(run)
+    const run = {
+      command,
+      runOptions,
+      generation,
+      hookState: createHookState(internalHooks)
+    }
     pendingRun = run
+    run.promise = executeRun(run)
     return run.promise
   }
 
@@ -438,33 +663,13 @@ export function createSafetyCommandEntrypoint (options = {}) {
       event.command !== execution.submittedCommand) {
       return false
     }
-    activeExecution = null
-    try {
-      const operation = await runner.completeExternalExecution(execution.id, {
-        executionId: execution.executionId,
-        command: execution.originalCommand,
-        exitCode: event.exitCode
-      })
-      execution.completion.resolve({
-        operation,
-        operationId: execution.id,
-        exitCode: event.exitCode,
-        submittedCommand: execution.submittedCommand
-      })
+    if (execution.mode === 'background' && event.exitCode === 0) {
+      activeExecution = null
+      execution.launched = true
+      detachedExecutions.set(execution.id, execution)
       return true
-    } catch (error) {
-      try {
-        await runner.cancel(execution.id)
-      } catch (cancelError) {
-        onError(cancelError)
-      }
-      execution.completion.resolve({
-        operationId: execution.id,
-        error: `安全事务完成失败：${safeErrorMessage(error)}`
-      })
-      onError(error)
-      return false
     }
+    return finalizeExecution(execution, event.exitCode)
   }
 
   return {

@@ -16,6 +16,10 @@ const modelsUrl = pathToFileURL(path.resolve(
   __dirname,
   '../../src/client/common/safety-transactions/models.js'
 )).href
+const submissionHooksUrl = pathToFileURL(path.resolve(
+  __dirname,
+  '../../src/client/common/safety-transactions/command-submission-hooks.js'
+)).href
 
 function readClientSource (relativePath) {
   return fs.readFileSync(
@@ -106,6 +110,7 @@ test('Zmodem upload and download submit their real commands through safety class
     runZmodemDownloadSafety
   } = await import(zmodemSafetyUrl)
   const { buildSafetyRequest } = await import(modelsUrl)
+  const { resolveInternalSubmissionHooks } = await import(submissionHooksUrl)
   const calls = []
   const selections = []
   const store = {
@@ -148,7 +153,42 @@ test('Zmodem upload and download submit their real commands through safety class
     endpoint: { host: 'example.com', username: 'root' },
     command: calls[1].command
   }).risk, 'readonly')
-  assert.deepEqual(selections, [['C:\\tmp\\a.txt'], 'C:\\downloads'])
+  assert.deepEqual(selections, [undefined, undefined])
+
+  const uploadHooks = resolveInternalSubmissionHooks(
+    calls[0].options.submissionHooks
+  )
+  const downloadHooks = resolveInternalSubmissionHooks(
+    calls[1].options.submissionHooks
+  )
+  assert.equal(typeof uploadHooks.beforeSubmit, 'function')
+  assert.equal(typeof uploadHooks.onAbort, 'function')
+  uploadHooks.beforeSubmit()
+  downloadHooks.beforeSubmit()
+  assert.deepEqual(selections.slice(-2), [
+    ['C:\\tmp\\a.txt'],
+    'C:\\downloads'
+  ])
+  uploadHooks.onAbort()
+  downloadHooks.onAbort()
+  assert.deepEqual(selections.slice(-2), [undefined, undefined])
+})
+
+test('Zmodem safety cancellation leaves no control selection for a later manual transfer', async () => {
+  const { runZmodemUploadSafety } = await import(zmodemSafetyUrl)
+  const selections = []
+  const result = await runZmodemUploadSafety({
+    store: {
+      activeTabId: 'tab-1',
+      tabs: [{ id: 'tab-1' }],
+      runSafetyCommand: async () => ({ sent: false, cancelled: true })
+    },
+    args: { files: ['C:\\tmp\\cancelled.txt'] },
+    setSelectedFiles: files => selections.push(files)
+  })
+
+  assert.equal(result.cancelled, true)
+  assert.deepEqual(selections, [undefined, undefined])
 })
 
 test('quick, AI, Agent and MCP callers contain no naked terminal command send', () => {
@@ -175,6 +215,11 @@ test('quick, AI, Agent and MCP callers contain no naked terminal command send', 
   )?.[0] || ''
   assert.match(background, /executionMode:\s*'background'/)
   assert.doesNotMatch(background, /btoa|nohup|submittedCommand|mcpSendTerminalCommand/)
+  assert.match(mcp, /createBackgroundTaskRegistry/)
+  assert.match(background, /finalize:\s*submission\.finalizeBackground/)
+  assert.match(background, /cancel:\s*submission\.cancelBackground/)
+  assert.match(mcp, /backgroundTasks\.status\(args\.taskId\)/)
+  assert.match(mcp, /backgroundTasks\.cancel\(args\.taskId\)/)
   const zmodem = mcp.match(
     /Store\.prototype\.mcpZmodemUpload[\s\S]*?^}/m
   )?.[0] || ''

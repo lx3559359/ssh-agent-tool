@@ -11,24 +11,28 @@ function safeTaskId (operationId) {
   return `bg-${safeId.slice(-96)}`
 }
 
+function shellQuote (value) {
+  const quote = String.fromCharCode(39)
+  const escapedQuote = `${quote}"${quote}"${quote}`
+  return `${quote}${String(value).replaceAll(quote, escapedQuote)}${quote}`
+}
+
 function buildBackgroundExecution (command, operationId) {
   const taskId = safeTaskId(operationId)
   const logFile = `/tmp/shellpilot-${taskId}.log`
   const pidFile = `/tmp/shellpilot-${taskId}.pid`
   const exitFile = `/tmp/shellpilot-${taskId}.exit`
   const payload = encodeBase64Utf8(command)
-  const inner = [
+  const workerScript = [
     `payload=$(printf %s ${payload} | base64 --decode)`,
     `bash -c "$payload" > ${logFile} 2>&1`,
     'code=$?',
-    `printf %s "$code" > ${exitFile}`,
-    `rm -f ${pidFile}`
+    `printf '%s\\n' "$code" > ${exitFile}`
   ].join('; ')
-  const submittedCommand = [
-    `nohup bash -c '${inner}' >/dev/null 2>&1 &`,
-    `echo $! > ${pidFile}`,
-    'disown'
-  ].join(' ')
+  const launcherScript = `nohup bash -c ${shellQuote(workerScript)} ` +
+    `>/dev/null 2>&1 & bg_pid=$!; printf '%s\\n' "$bg_pid" > ${pidFile}; ` +
+    'disown "$bg_pid"'
+  const submittedCommand = `bash -c ${shellQuote(launcherScript)}`
   return {
     mode: 'background',
     submittedCommand,
@@ -38,7 +42,8 @@ function buildBackgroundExecution (command, operationId) {
       taskId,
       logFile,
       pidFile,
-      exitFile
+      exitFile,
+      launcherScript
     }
   }
 }

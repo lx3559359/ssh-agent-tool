@@ -22,6 +22,7 @@ import {
   runZmodemDownloadSafety,
   runZmodemUploadSafety
 } from './mcp-zmodem-safety.js'
+import { createBackgroundTaskRegistry } from '../common/safety-transactions/background-task-registry.js'
 
 export default Store => {
   // Initialize MCP handler - called when MCP widget is started
@@ -756,8 +757,6 @@ export default Store => {
 
   // ==================== Background Task Management ====================
 
-  const backgroundTasks = new Map()
-
   async function runMonitorCmd (tabId, cmd) {
     try {
       const result = await runCmd(tabId, cmd)
@@ -772,6 +771,35 @@ export default Store => {
       return idle.output || ''
     }
   }
+
+  function requireBackgroundPath (value) {
+    const path = String(value || '')
+    if (!/^\/tmp\/shellpilot-bg-[a-zA-Z0-9_-]+\.(?:pid|exit|log)$/.test(path)) {
+      throw new Error('后台任务监控路径无效。')
+    }
+    return `'${path}'`
+  }
+
+  const backgroundTasks = createBackgroundTaskRegistry({
+    readFile: (tabId, path) => runMonitorCmd(
+      tabId,
+      `cat -- ${requireBackgroundPath(path)} 2>/dev/null || true`
+    ),
+    isAlive: async (tabId, pid) => {
+      const output = await runMonitorCmd(
+        tabId,
+        `kill -0 -- ${pid} 2>/dev/null && printf alive || printf dead`
+      )
+      return output.trim() === 'alive'
+    },
+    kill: async (tabId, pid) => {
+      const output = await runMonitorCmd(
+        tabId,
+        `if kill -- ${pid} 2>/dev/null; then printf killed; else printf failed; fi`
+      )
+      return output.trim() === 'killed'
+    }
+  })
 
   Store.prototype.mcpRunBackgroundCommand = async function (args) {
     const { store } = window
@@ -806,17 +834,18 @@ export default Store => {
       exitFile
     } = submission.execution.metadata
 
-    const task = {
+    const task = backgroundTasks.register({
       id: taskId,
+      operationId: submission.operationId,
       command: args.command,
       tabId,
       startTime: Date.now(),
       logFile,
       pidFile,
       exitFile,
-      status: 'started'
-    }
-    backgroundTasks.set(taskId, task)
+      finalize: submission.finalizeBackground,
+      cancel: submission.cancelBackground
+    })
 
     return {
       taskId,
@@ -824,53 +853,33 @@ export default Store => {
       logFile,
       pidFile,
       exitFile,
-      operationId: submission.operationId,
+      operationId: task.operationId,
       message: '后台命令已启动，可查询后台任务状态。'
     }
   }
 
   Store.prototype.mcpGetBackgroundTaskStatus = async function (args) {
-    const task = backgroundTasks.get(args.taskId)
-    if (!task) {
-      throw new Error(`Task ${args.taskId} not found`)
-    }
-
-    const pidOutput = await runMonitorCmd(task.tabId,
-      `cat ${task.pidFile} 2>/dev/null`)
-    const pid = pidOutput.trim()
-
-    if (!pid) {
-      return { ...task, status: 'unknown', message: 'PID file not found' }
-    }
-
-    const aliveCheck = await runMonitorCmd(task.tabId,
-      `kill -0 ${pid} 2>/dev/null && echo alive || echo dead`)
-
-    if (aliveCheck.trim() === 'alive') {
-      task.status = 'running'
-      return { ...task, pid, status: 'running' }
-    }
-
-    // Process exited — read exit code
-    const exitOutput = await runMonitorCmd(task.tabId,
-      `cat ${task.exitFile} 2>/dev/null`)
-    const exitCode = exitOutput.trim()
-
-    task.status = 'completed'
-    task.exitCode = exitCode !== '' ? parseInt(exitCode, 10) : null
-    task.endTime = Date.now()
-    return { ...task, pid, status: 'completed', exitCode: task.exitCode }
+    return backgroundTasks.status(args.taskId)
   }
 
   Store.prototype.mcpGetBackgroundTaskLog = async function (args) {
     const task = backgroundTasks.get(args.taskId)
     if (!task) {
-      throw new Error(`Task ${args.taskId} not found`)
+      return {
+        taskId: args.taskId,
+        status: 'unknown',
+        interrupted: true,
+        output: '',
+        message: '后台任务上下文已丢失，无法读取日志。'
+      }
     }
 
-    const lines = args.lines || 100
+    const lines = Number(args.lines || 100)
+    if (!Number.isInteger(lines) || lines < 1 || lines > 10000) {
+      throw new Error('后台日志行数必须是 1 到 10000 的整数。')
+    }
     const output = await runMonitorCmd(task.tabId,
-      `tail -n ${lines} ${task.logFile} 2>/dev/null || echo '(no output yet)'`)
+      `tail -n ${lines} -- ${requireBackgroundPath(task.logFile)} 2>/dev/null || true`)
 
     return {
       taskId: task.id,
@@ -880,33 +889,7 @@ export default Store => {
   }
 
   Store.prototype.mcpCancelBackgroundTask = async function (args) {
-    const task = backgroundTasks.get(args.taskId)
-    if (!task) {
-      throw new Error(`Task ${args.taskId} not found`)
-    }
-
-    const pidOutput = await runMonitorCmd(task.tabId,
-      `cat ${task.pidFile} 2>/dev/null`)
-    const pid = pidOutput.trim()
-
-    if (pid) {
-      await runMonitorCmd(task.tabId,
-        `kill ${pid} 2>/dev/null; echo $? > ${task.exitFile}`)
-      task.status = 'cancelled'
-      task.endTime = Date.now()
-      return {
-        taskId: task.id,
-        pid,
-        status: 'cancelled',
-        message: 'Process killed'
-      }
-    }
-
-    return {
-      taskId: task.id,
-      status: 'unknown',
-      message: 'PID not found, task may have already finished'
-    }
+    return backgroundTasks.cancel(args.taskId)
   }
 
   // ==================== Settings APIs ====================

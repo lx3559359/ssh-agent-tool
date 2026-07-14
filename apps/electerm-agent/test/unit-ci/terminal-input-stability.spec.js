@@ -407,6 +407,8 @@ test('OSC completion accepts only the current session nonce', async () => {
   assert.deepEqual(finished, [])
   assert.equal(tracker.hasExpectedSubmission(token), true)
 
+  harness.osc(`E;${nonce};${command}`)
+  harness.osc(`C;${nonce}`)
   harness.osc(`D;${nonce};0`)
   harness.osc(`D;${nonce};9`)
   assert.deepEqual(finished, [{ token, command, exitCode: 0 }])
@@ -811,6 +813,7 @@ test('CommandTrackerAddon completes a released expected simple command once', as
   tracker.markExpectedSubmissionReleased(token)
 
   harness.osc(lifecycleOsc('E', 'systemctl restart nginx'))
+  harness.osc(lifecycleOsc('C'))
   harness.osc(completionOsc(0))
   harness.osc(completionOsc(9))
 
@@ -839,9 +842,39 @@ test('CommandTrackerAddon binds an external safety submission from an empty prom
   harness.setLines([{ text: `$ ${command}`, isWrapped: false }])
   harness.setCursor(0, command.length + 2)
   harness.osc(lifecycleOsc('E', command))
+  harness.osc(lifecycleOsc('C'))
   harness.osc(completionOsc(0))
 
   assert.deepEqual(finished, [{ token, command, exitCode: 0 }])
+})
+
+test('CommandTrackerAddon requires exact nonce-bound E then C then D ordering', async () => {
+  const { CommandTrackerAddon } = await importCommandTracker()
+  const harness = createTrackerTerminal({ cols: 80, cursorX: 2 })
+  const finished = []
+  const tracker = new CommandTrackerAddon()
+  tracker.onCommandFinished(event => finished.push(event))
+  tracker.activate(harness.terminal)
+  beginTrackerSession(tracker)
+  harness.osc(lifecycleOsc('A'))
+  harness.osc(lifecycleOsc('B'))
+  const command = 'uptime'
+  const token = tracker.expectExternalSubmission(command)
+  assert.equal(tracker.markExpectedSubmissionReleased(token), true)
+
+  harness.osc(completionOsc(0))
+  harness.osc(lifecycleOsc('C'))
+  harness.osc(lifecycleOsc('E', 'pwd'))
+  harness.osc(completionOsc(0))
+  assert.deepEqual(finished, [])
+
+  harness.osc(lifecycleOsc('E', command))
+  harness.osc(completionOsc(0))
+  assert.deepEqual(finished, [])
+
+  harness.osc(lifecycleOsc('C'))
+  harness.osc(completionOsc(7))
+  assert.deepEqual(finished, [{ token, command, exitCode: 7 }])
 })
 
 test('CommandTrackerAddon reports interrupted commands with a null exit code', async () => {
@@ -861,6 +894,7 @@ test('CommandTrackerAddon reports interrupted commands with a null exit code', a
   tracker.markExpectedSubmissionReleased(token)
 
   harness.osc(lifecycleOsc('E', 'custom-admin-tool --rotate'))
+  harness.osc(lifecycleOsc('C'))
   harness.osc(completionOsc())
 
   assert.deepEqual(finished, [{
@@ -891,7 +925,7 @@ test('CommandTrackerAddon reports a new prompt boundary', async () => {
   assert.equal(promptCount, 1)
 })
 
-test('CommandTrackerAddon completes a compound expected submission with exact client identity', async () => {
+test('CommandTrackerAddon rejects a compound submission when OSC E is not the exact expected command', async () => {
   const { CommandTrackerAddon } = await importCommandTracker()
   const harness = createTrackerTerminal({ cols: 80, cursorX: 2 })
   const histories = []
@@ -914,10 +948,11 @@ test('CommandTrackerAddon completes a compound expected submission with exact cl
   harness.osc(completionOsc(0))
 
   assert.deepEqual(histories, ['systemctl status nginx'])
-  assert.deepEqual(finished, [{ token, command, exitCode: 0 }])
+  assert.deepEqual(finished, [])
+  assert.equal(tracker.hasExpectedSubmission(token), true)
 })
 
-test('CommandTrackerAddon binds completion to released client identity not OSC E text', async () => {
+test('CommandTrackerAddon never substitutes local expected text for a different OSC E command', async () => {
   const { CommandTrackerAddon } = await importCommandTracker()
   const cases = [
     ['! systemctl restart nginx', 'systemctl restart nginx'],
@@ -950,11 +985,12 @@ test('CommandTrackerAddon binds completion to released client identity not OSC E
     harness.osc(completionOsc(0))
 
     assert.deepEqual(histories, [observed], command)
-    assert.deepEqual(finished, [{ token, command, exitCode: 0 }], command)
+    assert.deepEqual(finished, [], command)
+    assert.equal(tracker.hasExpectedSubmission(token), true, command)
   }
 })
 
-test('CommandTrackerAddon completes an armed no-E submission at prompt boundary once', async () => {
+test('CommandTrackerAddon does not complete an armed submission without OSC E', async () => {
   const { CommandTrackerAddon } = await importCommandTracker()
   const harness = createTrackerTerminal({ cols: 80, cursorX: 2 })
   const finished = []
@@ -973,9 +1009,14 @@ test('CommandTrackerAddon completes an armed no-E submission at prompt boundary 
   harness.osc(lifecycleOsc('C'))
   harness.osc(lifecycleOsc('A'))
   harness.osc(completionOsc(7))
+  assert.deepEqual(finished, [])
+  assert.equal(tracker.hasExpectedSubmission(token), true)
+
+  harness.osc(lifecycleOsc('B'))
   harness.osc(lifecycleOsc('A'))
 
-  assert.deepEqual(finished, [{ token, command, exitCode: null }])
+  assert.deepEqual(finished, [])
+  assert.equal(tracker.hasExpectedSubmission(token), false)
 })
 
 test('CommandTrackerAddon ignores pre-arm and late D while completing exactly once', async () => {
@@ -1004,6 +1045,13 @@ test('CommandTrackerAddon ignores pre-arm and late D while completing exactly on
   harness.osc(completionOsc(0))
   harness.osc(completionOsc(7))
   harness.osc(lifecycleOsc('A'))
+
+  assert.deepEqual(finished, [])
+  assert.equal(tracker.hasExpectedSubmission(token), true)
+
+  harness.osc(lifecycleOsc('E', command))
+  harness.osc(lifecycleOsc('C'))
+  harness.osc(completionOsc(0))
 
   assert.deepEqual(finished, [{
     token,
@@ -1053,6 +1101,10 @@ test('terminal exposes the unified command safety entrypoint without replacing m
   const source = readClientFile('components/terminal/terminal.jsx')
 
   assert.match(source, /createSafetyCommandEntrypoint/)
+  assert.match(source, /ensureTrackerReady:\s*this\.ensureCommandSafetyTrackerReady/)
+  assert.match(source, /ensureCommandSafetyTrackerReady\s*=/)
+  assert.match(source, /injectShellIntegration\(\{\s*forceForSafety:\s*true\s*\}\)/)
+  assert.match(source, /Shell Integration.*就绪|可靠.*跟踪/)
   assert.match(source, /runSafetyCommand = \(command, options = \{\}\)/)
   assert.match(source, /expectExternalSubmission/)
   assert.match(source, /attachAddon\?\.submitSafetyCommand/)
