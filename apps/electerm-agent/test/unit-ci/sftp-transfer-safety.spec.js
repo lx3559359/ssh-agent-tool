@@ -394,6 +394,7 @@ test('cross-host step1 revalidates the live source endpoint before any download'
   const {
     buildCrossHostSourceIdentity,
     buildTransferSourceEndpointKey,
+    resolveTransferRuntimeTransport,
     verifyCrossHostSourcePreflight
   } = await import(transferSafetyUrl)
   const queuedEndpoint = {
@@ -420,6 +421,7 @@ test('cross-host step1 revalidates the live source endpoint before any download'
   let capabilityLookup
   let downloadCalls = 0
   const reconnectedCapability = {
+    sftp: {},
     getSftpSafetyEndpoint: () => ({
       ...queuedEndpoint,
       port: 2222,
@@ -441,16 +443,25 @@ test('cross-host step1 revalidates the live source endpoint before any download'
   assert.equal(capabilityLookup, 'source-tab')
   assert.equal(downloadCalls, 0)
 
+  const stableCapability = {
+    sftp: {},
+    getSftpSafetyEndpoint: () => queuedEndpoint
+  }
   const verified = await verifyCrossHostSourcePreflight({
     transfer,
-    getCapability: () => ({
-      getSftpSafetyEndpoint: () => queuedEndpoint
-    })
+    getCapability: () => stableCapability
   })
-  assert.deepEqual(verified, {
+  assert.deepEqual(verified.verified, {
     verifiedSourceEndpointKey: transfer.sourceEndpointKey,
     verifiedSourceIdentity: transfer.sourceIdentity
   })
+  assert.ok(verified.runtime.capability)
+  assert.ok(verified.runtime.sftp)
+  assert.equal(resolveTransferRuntimeTransport({
+    transfer: { remote2remoteStep: 1 },
+    sourcePin: verified.runtime,
+    getCapability: () => reconnectedCapability
+  }), verified.runtime)
 
   const fs = require('node:fs')
   const transferSource = fs.readFileSync(path.resolve(
@@ -467,9 +478,125 @@ test('cross-host step1 revalidates the live source endpoint before any download'
   )
   assert.match(transferSource, /verifiedSourceEndpointKey/)
   assert.match(transferSource, /verifiedSourceIdentity/)
+  assert.match(transferSource, /resolveTransferRuntimeTransport/)
   assert.match(handlerSource, /fromFile:\s*copy\(this\.fromFile\)/)
   assert.match(handlerSource, /step1\.verifiedSourceEndpointKey/)
   assert.match(handlerSource, /step1\.verifiedSourceIdentity/)
+})
+
+test('cross-host step1 atomically pins one SFTP transport across ref replacement', async () => {
+  const {
+    buildCrossHostSourceIdentity,
+    buildTransferSourceEndpointKey,
+    resolveTransferRuntimeTransport,
+    verifyCrossHostSourcePreflight
+  } = await import(transferSafetyUrl)
+  const endpoint = {
+    host: 'source.example.com',
+    port: 22,
+    username: 'root',
+    tabId: 'source-tab',
+    pid: 'sftp:source-tab:session-a'
+  }
+  const sourceEndpointKey = buildTransferSourceEndpointKey(endpoint)
+  const fromFile = { isDirectory: true, size: 41 }
+  const transfer = {
+    remote2remoteStep: 1,
+    tabId: 'source-tab',
+    fromPath: '/srv/shared/tree',
+    fromFile,
+    sourceEndpointKey,
+    sourceIdentity: buildCrossHostSourceIdentity({
+      sourceEndpointKey,
+      path: '/srv/shared/tree',
+      file: fromFile
+    })
+  }
+  let oldDownloads = 0
+  let newDownloads = 0
+  let oldDestroyed = false
+  const oldSftp = {
+    download: async () => {
+      if (oldDestroyed) throw new Error('旧来源连接已关闭')
+      oldDownloads += 1
+    }
+  }
+  const newSftp = {
+    download: async () => {
+      newDownloads += 1
+    }
+  }
+  const newComponent = {
+    sftp: newSftp,
+    getSftpSafetyEndpoint: () => ({
+      ...endpoint,
+      username: 'deploy',
+      pid: 'sftp:source-tab:session-b'
+    })
+  }
+  let currentComponent
+  const replacingComponent = {
+    sftp: oldSftp,
+    getSftpSafetyEndpoint: () => {
+      queueMicrotask(() => {
+        replacingComponent.sftp = newSftp
+        currentComponent = newComponent
+      })
+      return endpoint
+    }
+  }
+  currentComponent = replacingComponent
+
+  await assert.rejects(
+    verifyCrossHostSourcePreflight({
+      transfer,
+      getCapability: () => currentComponent
+    }),
+    /来源.*替换|来源.*变化/
+  )
+  assert.equal(oldDownloads, 0)
+  assert.equal(newDownloads, 0)
+
+  const stableComponent = {
+    sftp: oldSftp,
+    sftpList: (sftp, path) => ({ sftp, path }),
+    getSftpSafetyEndpoint: () => endpoint
+  }
+  currentComponent = stableComponent
+  const pin = await verifyCrossHostSourcePreflight({
+    transfer,
+    getCapability: () => currentComponent
+  })
+  currentComponent = newComponent
+  const runtime = resolveTransferRuntimeTransport({
+    transfer,
+    sourcePin: pin.runtime,
+    getCapability: () => currentComponent
+  })
+  assert.equal(runtime.capability, stableComponent)
+  assert.equal(runtime.sftp, oldSftp)
+  assert.deepEqual(runtime.capability.sftpList(runtime.sftp, '/srv/shared/tree'), {
+    sftp: oldSftp,
+    path: '/srv/shared/tree'
+  })
+  await runtime.sftp.download()
+  assert.equal(oldDownloads, 1)
+  assert.equal(newDownloads, 0)
+
+  oldDestroyed = true
+  await assert.rejects(runtime.sftp.download(), /旧来源连接已关闭/)
+  assert.equal(newDownloads, 0)
+
+  const fs = require('node:fs')
+  const transferSource = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/components/file-transfer/transfer.jsx'
+  ), 'utf8')
+  assert.match(transferSource, /getTransferRuntimeTransport/)
+  assert.match(transferSource, /transferFile[\s\S]*getTransferRuntimeTransport\(transfer\)/)
+  assert.match(transferSource, /transferFileAsSubTransfer[\s\S]*getTransferRuntimeTransport\(transfer\)/)
+  assert.match(transferSource, /list\(typeFrom, fromPath, tabId, transfer\)/)
+  assert.match(transferSource, /mkdir[\s\S]*getTransferRuntimeTransport\(transfer\)/)
 })
 
 test('upload safety model requires an opaque source binding', async () => {

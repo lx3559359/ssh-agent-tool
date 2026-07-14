@@ -18,6 +18,7 @@ import {
 import {
   createTransferSafetyController,
   getTransferSafetyCompletionFailure,
+  resolveTransferRuntimeTransport,
   shouldUseLegacyZipOptimization,
   verifyCrossHostSourcePreflight
 } from './file-transfer-safety.js'
@@ -97,6 +98,14 @@ export default class TransportAction extends Component {
     conflictPolicy: this.conflictPolicy,
     isFtp: this.isFtp
   })
+
+  getTransferRuntimeTransport = (transfer = this.props.transfer) => {
+    return resolveTransferRuntimeTransport({
+      transfer,
+      sourcePin: this.crossHostSourcePin,
+      getCapability: tabId => refs.get('sftp-' + tabId)
+    })
+  }
 
   localCheckExist = (path) => {
     return getLocalFileInfo(path)
@@ -317,7 +326,6 @@ export default class TransportAction extends Component {
       fromPath,
       toPath,
       typeFrom,
-      tabId,
       operation // 'mv' or 'cp'
     } = transfer
 
@@ -340,7 +348,7 @@ export default class TransportAction extends Component {
         return this.onError(e)
       }
     }
-    const sftp = refs.get('sftp-' + tabId)?.sftp
+    const sftp = this.getTransferRuntimeTransport(transfer).sftp
     try {
       await this.transferSafety.begin()
       await sftp[operation](fromPath, finalToPath)
@@ -373,7 +381,7 @@ export default class TransportAction extends Component {
       ? fromPath
       : toPath
     const mode = toFile.mode || fromMode
-    const sftp = refs.get('sftp-' + this.tabId).sftp
+    const sftp = this.getTransferRuntimeTransport(transfer).sftp
     try {
       this.transport = await sftp[transferType]({
         remotePath,
@@ -618,14 +626,17 @@ export default class TransportAction extends Component {
       if (!fromFile) {
         return
       }
-      this.verifiedCrossHostSource = undefined
-      this.verifiedCrossHostSource = await verifyCrossHostSourcePreflight({
-        transfer: {
-          ...transfer,
-          fromFile
-        },
-        getCapability: sourceTabId => refs.get('sftp-' + sourceTabId)
-      })
+      if (transfer.remote2remoteStep === 1 && !this.crossHostSourcePin) {
+        const sourcePreflight = await verifyCrossHostSourcePreflight({
+          transfer: {
+            ...transfer,
+            fromFile
+          },
+          getCapability: sourceTabId => refs.get('sftp-' + sourceTabId)
+        })
+        this.crossHostSourcePin = sourcePreflight.runtime
+        this.verifiedCrossHostSource = sourcePreflight.verified
+      }
       await this.transferSafety.begin()
       if (!fromFile.isDirectory) {
         return await this.transferFile()
@@ -647,9 +658,18 @@ export default class TransportAction extends Component {
     }
   }
 
-  list = async (type, path, tabId) => {
-    const sftp = refs.get('sftp-' + tabId)
-    return sftp[type + 'List'](true, path)
+  list = async (type, path, tabId, transfer = this.props.transfer) => {
+    const runtime = this.getTransferRuntimeTransport({
+      ...transfer,
+      tabId
+    })
+    if (transfer.remote2remoteStep === 1 && type === typeMap.remote) {
+      if (!runtime.capability?.sftpList) {
+        throw new Error('跨主机传输来源目录读取能力不可用，已停止下载。')
+      }
+      return runtime.capability.sftpList(runtime.sftp, path)
+    }
+    return runtime.capability[type + 'List'](true, path)
   }
 
   handleRename = (fromPath, isRemote) => {
@@ -701,7 +721,7 @@ export default class TransportAction extends Component {
     const localPath = isDown ? toPath : fromPath
     const remotePath = isDown ? fromPath : toPath
     const mode = toFile.mode || fromMode
-    const sftp = refs.get('sftp-' + this.tabId).sftp
+    const sftp = this.getTransferRuntimeTransport(transfer).sftp
 
     return new Promise((resolve, reject) => {
       let transport
@@ -868,7 +888,7 @@ export default class TransportAction extends Component {
       }
     }
 
-    const list = await this.list(typeFrom, fromPath, tabId)
+    const list = await this.list(typeFrom, fromPath, tabId, transfer)
     const bigFileSize = 1024 * 1024
     const smallFilesBatch = 30
     const BigFilesBatch = 3
@@ -939,15 +959,14 @@ export default class TransportAction extends Component {
   mkdir = async (transfer = this.props.transfer) => {
     const {
       typeTo,
-      toPath,
-      tabId
+      toPath
     } = transfer
     if (typeTo === typeMap.local) {
       return window.fs.mkdir(toPath)
         .then(() => true)
         .catch(() => false)
     }
-    const sftp = refs.get('sftp-' + tabId).sftp
+    const sftp = this.getTransferRuntimeTransport(transfer).sftp
     return sftp.mkdir(toPath)
       .then(() => true)
       .catch(() => false)

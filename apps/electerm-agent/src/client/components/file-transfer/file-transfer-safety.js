@@ -80,10 +80,18 @@ export async function verifyCrossHostSourcePreflight ({
   if (!capability?.getSftpSafetyEndpoint) {
     throw new Error('跨主机传输无法重新确认当前来源 SFTP 安全端点，已停止下载。')
   }
+  const pinnedSftp = capability.sftp
+  if (!pinnedSftp) {
+    throw new Error('跨主机传输当前来源 SFTP 实例不可用，已停止下载。')
+  }
 
-  const verifiedSourceEndpointKey = buildTransferSourceEndpointKey(
-    capability.getSftpSafetyEndpoint()
-  )
+  const endpoint = capability.getSftpSafetyEndpoint()
+  await Promise.resolve()
+  if (getCapability?.(sourceTabId) !== capability || capability.sftp !== pinnedSftp) {
+    throw new Error('跨主机传输来源连接在验证期间已被替换，已停止下载。')
+  }
+
+  const verifiedSourceEndpointKey = buildTransferSourceEndpointKey(endpoint)
   if (verifiedSourceEndpointKey !== transfer.sourceEndpointKey) {
     throw new Error('跨主机传输来源端点已变化，已停止下载。')
   }
@@ -98,8 +106,32 @@ export async function verifyCrossHostSourcePreflight ({
   }
 
   return {
-    verifiedSourceEndpointKey,
-    verifiedSourceIdentity
+    verified: {
+      verifiedSourceEndpointKey,
+      verifiedSourceIdentity
+    },
+    runtime: {
+      capability,
+      sftp: pinnedSftp
+    }
+  }
+}
+
+export function resolveTransferRuntimeTransport ({
+  transfer = {},
+  sourcePin,
+  getCapability
+} = {}) {
+  if (transfer.remote2remoteStep === 1) {
+    if (!sourcePin?.capability || !sourcePin?.sftp) {
+      throw new Error('跨主机传输缺少已验证的来源连接，已停止下载。')
+    }
+    return sourcePin
+  }
+  const capability = getCapability?.(transfer.tabId)
+  return {
+    capability,
+    sftp: capability?.sftp
   }
 }
 
