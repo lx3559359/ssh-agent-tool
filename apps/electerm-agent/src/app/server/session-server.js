@@ -350,6 +350,16 @@ if (type === 'rdp') {
           terminalId,
           type
         }))
+      } else if (action === 'sftp-cancel') {
+        const { id, cancelToken } = msg
+        const inst = sftp(id)
+        if (inst && typeof inst.cancelOperation === 'function') {
+          try {
+            inst.cancelOperation(cancelToken)
+          } catch (error) {
+            log.warn('invalid SFTP cancellation request', error?.message)
+          }
+        }
       } else if (action === 'sftp-func') {
         const { id, args, func, uid } = msg
         const inst = sftp(id)

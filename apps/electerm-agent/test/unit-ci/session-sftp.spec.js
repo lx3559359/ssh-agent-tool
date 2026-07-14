@@ -6,6 +6,7 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 const { once } = require('node:events')
+const { Readable, Writable } = require('node:stream')
 const Module = require('node:module')
 const { Server, utils } = require('@electerm/ssh2')
 const { STATUS_CODE, OPEN_MODE } = require('@electerm/ssh2/lib/protocol/SFTP.js')
@@ -213,10 +214,22 @@ async function startSftpServer (root) {
             sftp.status(reqId, STATUS_CODE.OK)
           })
           sftp.on('STAT', (reqId, remotePath) => {
-            sftp.attrs(reqId, attrsFor(toLocalPath(root, remotePath)))
+            try {
+              sftp.attrs(reqId, attrsFor(toLocalPath(root, remotePath)))
+            } catch (error) {
+              sftp.status(reqId, error?.code === 'ENOENT'
+                ? STATUS_CODE.NO_SUCH_FILE
+                : STATUS_CODE.FAILURE)
+            }
           })
           sftp.on('LSTAT', (reqId, remotePath) => {
-            sftp.attrs(reqId, attrsFor(toLocalPath(root, remotePath)))
+            try {
+              sftp.attrs(reqId, attrsFor(toLocalPath(root, remotePath)))
+            } catch (error) {
+              sftp.status(reqId, error?.code === 'ENOENT'
+                ? STATUS_CODE.NO_SUCH_FILE
+                : STATUS_CODE.FAILURE)
+            }
           })
           sftp.on('FSTAT', (reqId, handle) => {
             const item = handles.get(handle.toString('hex'))
@@ -269,6 +282,154 @@ async function startSftpServer (root) {
 }
 
 describe('session-sftp transport flows', () => {
+  test('copyEntry meters actual streamed bytes and cleans a growing partial target', async () => {
+    const sftp = Object.create(Sftp.prototype)
+    const removed = []
+    let targetExists = false
+    let writtenBytes = 0
+    const sourceStat = {
+      mode: 0o100644,
+      size: 2,
+      uid: 1000,
+      gid: 1000,
+      isDirectory: () => false,
+      isFile: () => true
+    }
+    sftp.lstat = async remotePath => {
+      if (remotePath === '/source.bin') return sourceStat
+      if (remotePath === '/stage.bin' && targetExists) {
+        return { ...sourceStat, size: writtenBytes }
+      }
+      const error = new Error('No such file')
+      error.code = 'ENOENT'
+      throw error
+    }
+    sftp.sftp = {
+      createReadStream: () => Readable.from([
+        Buffer.from('ab'),
+        Buffer.from('cdef')
+      ]),
+      createWriteStream: () => new Writable({
+        write (chunk, encoding, callback) {
+          targetExists = true
+          writtenBytes += chunk.length
+          callback()
+        }
+      })
+    }
+    sftp.rm = async remotePath => {
+      removed.push(remotePath)
+      targetExists = false
+      return 1
+    }
+    sftp.chmod = async () => 1
+    sftp.chown = async () => 1
+
+    await assert.rejects(
+      sftp.copyEntry('/source.bin', '/stage.bin', { maxTotalBytes: 4 }),
+      /byte|size|limit|字节|大小|上限/i
+    )
+    assert.equal(writtenBytes <= 4, true)
+    assert.equal(targetExists, false)
+    assert.deepEqual(removed, ['/stage.bin'])
+  })
+
+  test('cooperatively cancels recursive removal after the current atomic call', async () => {
+    const sftp = Object.create(Sftp.prototype)
+    const removed = []
+    let markStarted
+    let releaseRemove
+    const started = new Promise(resolve => { markStarted = resolve })
+    const atomicRemove = new Promise(resolve => { releaseRemove = resolve })
+    sftp.lstat = async () => ({ isDirectory: () => true })
+    sftp.list = async () => [
+      { name: 'first.txt', type: '-' },
+      { name: 'second.txt', type: '-' }
+    ]
+    sftp.rm = async remotePath => {
+      removed.push(remotePath)
+      if (removed.length === 1) {
+        markStarted()
+        await atomicRemove
+      }
+      return 1
+    }
+    sftp.rmFolder = async remotePath => {
+      removed.push(remotePath)
+      return 1
+    }
+
+    const removing = sftp.removeEntry('/tree', {
+      cancelToken: 'cancel-delete-tree'
+    })
+    await started
+    const supportsCancel = typeof sftp.cancelOperation === 'function'
+    if (supportsCancel) sftp.cancelOperation('cancel-delete-tree')
+    releaseRemove()
+    if (!supportsCancel) {
+      await removing
+      assert.fail('SFTP recursive remove does not expose cooperative cancellation')
+    }
+    await assert.rejects(removing, /cancel|abort|取消|中止/i)
+    assert.deepEqual(removed, ['/tree/first.txt'])
+  })
+
+  test('cooperatively cancels recursive copy before starting the next entry', async () => {
+    const sftp = Object.create(Sftp.prototype)
+    const copied = []
+    let markStarted
+    let releaseCopy
+    const started = new Promise(resolve => { markStarted = resolve })
+    const firstCopy = new Promise(resolve => { releaseCopy = resolve })
+    const directoryStat = {
+      mode: 0o040750,
+      size: 0,
+      uid: 1000,
+      gid: 1000,
+      isDirectory: () => true,
+      isFile: () => false
+    }
+    const fileStat = {
+      mode: 0o100640,
+      size: 1,
+      uid: 1000,
+      gid: 1000,
+      isDirectory: () => false,
+      isFile: () => true
+    }
+    sftp.lstat = async remotePath => {
+      if (remotePath === '/source') return directoryStat
+      if (remotePath.startsWith('/source/')) return fileStat
+      const error = new Error('No such file')
+      error.code = 'ENOENT'
+      throw error
+    }
+    sftp.list = async remotePath => remotePath === '/source'
+      ? [
+          { name: 'first.txt', type: '-' },
+          { name: 'second.txt', type: '-' }
+        ]
+      : []
+    sftp.mkdir = async () => 1
+    sftp.copySftpFile = async remotePath => {
+      copied.push(remotePath)
+      if (copied.length === 1) {
+        markStarted()
+        await firstCopy
+      }
+    }
+    sftp.applySftpCopyMetadata = async () => 1
+
+    const copying = sftp.copyEntry('/source', '/snapshot', {
+      cancelToken: 'cancel-copy-tree'
+    })
+    await started
+    assert.equal(sftp.cancelOperation('cancel-copy-tree'), true)
+    releaseCopy()
+    await assert.rejects(copying, /cancel|abort|取消|中止/i)
+    assert.deepEqual(copied, ['/source/first.txt'])
+  })
+
   test('copies files and folders when the connection only exposes SFTP', async () => {
     const root = makeTmpDir()
     const server = await startSftpServer(root)

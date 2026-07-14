@@ -12,6 +12,7 @@ const {
 } = require('./sftp-file')
 const { commonExtends } = require('./session-common.js')
 const { TerminalBase } = require('./session-base.js')
+const { Transform } = require('stream')
 const { pipeline } = require('stream/promises')
 const { posix: pathPosix } = require('path')
 const {
@@ -22,6 +23,7 @@ const { searchTextReader } = require('../common/log-search')
 const globalState = require('./global-state')
 const {
   assertSftpCopyTargetOutsideSource,
+  consumeSftpCopyActualBytes,
   consumeSftpCopyBudget,
   createSftpCopyBudget
 } = require('./sftp-copy-budget')
@@ -42,6 +44,26 @@ function requiredSftpOwnership (stat) {
     throw new Error('SFTP 复制无法读取有效的 uid/gid，已拒绝继续。')
   }
   return { uid: stat.uid, gid: stat.gid }
+}
+
+function throwIfSftpOperationAborted (signal) {
+  if (!signal?.aborted) return
+  const error = new Error('SFTP 操作已取消。')
+  error.name = 'AbortError'
+  throw error
+}
+
+function validateSftpCancelToken (value) {
+  if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(value)) {
+    throw new Error('SFTP 取消令牌无效。')
+  }
+  return value
+}
+
+function isMissingSftpError (error) {
+  return error?.code === 2 || error?.code === 'ENOENT' ||
+    error?.code === 'SFTP_NO_SUCH_FILE' ||
+    /no such|not found|does not exist/i.test(String(error?.message || error))
 }
 
 class Sftp extends TerminalBase {
@@ -115,6 +137,51 @@ class Sftp extends TerminalBase {
     delete this.sftp
     delete this.initOptions
     this.onEndConn()
+  }
+
+  cancelOperation (cancelToken) {
+    const token = validateSftpCancelToken(cancelToken)
+    const controller = this.sftpOperationControllers?.get(token)
+    if (!controller) return false
+    controller.abort()
+    return true
+  }
+
+  async withSftpOperationCancellation (options, work) {
+    const cancelToken = options?.cancelToken
+    const externalSignal = options?.signal
+    let controller
+    let signal = externalSignal
+    let abortFromExternalSignal
+    if (cancelToken !== undefined) {
+      const token = validateSftpCancelToken(cancelToken)
+      if (!this.sftpOperationControllers) {
+        this.sftpOperationControllers = new Map()
+      }
+      if (this.sftpOperationControllers.has(token)) {
+        throw new Error('SFTP 取消令牌正在使用。')
+      }
+      controller = new AbortController()
+      signal = controller.signal
+      abortFromExternalSignal = () => controller.abort()
+      if (externalSignal?.aborted) {
+        abortFromExternalSignal()
+      } else if (typeof externalSignal?.addEventListener === 'function') {
+        externalSignal.addEventListener('abort', abortFromExternalSignal, { once: true })
+      }
+      this.sftpOperationControllers.set(token, controller)
+      try {
+        throwIfSftpOperationAborted(signal)
+        return await work(signal)
+      } finally {
+        this.sftpOperationControllers.delete(token)
+        if (typeof externalSignal?.removeEventListener === 'function') {
+          externalSignal.removeEventListener('abort', abortFromExternalSignal)
+        }
+      }
+    }
+    throwIfSftpOperationAborted(signal)
+    return work(signal)
   }
 
   escapePosixPath = (value) => {
@@ -293,30 +360,39 @@ class Sftp extends TerminalBase {
     // })
   }
 
-  async removeDirectoryRecursively (remotePath) {
+  async removeDirectoryRecursively (remotePath, signal) {
+    throwIfSftpOperationAborted(signal)
     const contents = await this.list(remotePath)
+    throwIfSftpOperationAborted(signal)
     for (const item of contents) {
+      throwIfSftpOperationAborted(signal)
       const itemPath = `${remotePath}/${item.name}`
       if (item.type === 'd') {
         // Recursively delete subdirectories
-        await this.removeDirectoryRecursively(itemPath)
+        await this.removeDirectoryRecursively(itemPath, signal)
       } else {
         // Delete files
         await this.rm(itemPath)
+        throwIfSftpOperationAborted(signal)
       }
     }
     // Finally, remove the directory itself
     await this.rmFolder(remotePath)
+    throwIfSftpOperationAborted(signal)
   }
 
-  async removeEntry (remotePath) {
-    const stat = await this.lstat(remotePath)
-    if (stat.isDirectory()) {
-      await this.removeDirectoryRecursively(remotePath)
-    } else {
-      await this.rm(remotePath)
-    }
-    return 1
+  async removeEntry (remotePath, options = {}) {
+    return this.withSftpOperationCancellation(options, async signal => {
+      const stat = await this.lstat(remotePath)
+      throwIfSftpOperationAborted(signal)
+      if (stat.isDirectory()) {
+        await this.removeDirectoryRecursively(remotePath, signal)
+      } else {
+        await this.rm(remotePath)
+        throwIfSftpOperationAborted(signal)
+      }
+      return 1
+    })
   }
 
   /**
@@ -386,21 +462,30 @@ class Sftp extends TerminalBase {
   }
 
   async copyEntry (from, to, options = {}) {
-    await this.copySftpEntry(from, to, {
-      ...options,
-      preserveOwnership: true
+    return this.withSftpOperationCancellation(options, async signal => {
+      await this.copySftpEntry(from, to, {
+        ...options,
+        signal,
+        preserveOwnership: true,
+        requireAbsentTarget: true,
+        cleanupOnFailure: true
+      })
+      return 1
     })
-    return 1
   }
 
-  async applySftpCopyMetadata (path, stat, preserveOwnership) {
+  async applySftpCopyMetadata (path, stat, preserveOwnership, signal) {
+    throwIfSftpOperationAborted(signal)
     if (preserveOwnership) {
       const { uid, gid } = requiredSftpOwnership(stat)
       await this.chown(path, uid, gid)
+      throwIfSftpOperationAborted(signal)
     }
     await this.chmod(path, Number(stat.mode) & 0o7777)
+    throwIfSftpOperationAborted(signal)
     if (preserveOwnership) {
       const copied = await this.lstat(path)
+      throwIfSftpOperationAborted(signal)
       const { uid, gid } = requiredSftpOwnership(copied)
       if (uid !== stat.uid || gid !== stat.gid ||
         (Number(copied.mode) & 0o7777) !== (Number(stat.mode) & 0o7777)) {
@@ -410,15 +495,42 @@ class Sftp extends TerminalBase {
   }
 
   async copySftpFile (from, to, stat, options) {
+    throwIfSftpOperationAborted(options.signal)
     const readStream = this.sftp.createReadStream(from)
     const writeStream = this.sftp.createWriteStream(to, {
       mode: 0o600
     })
-    await pipeline(readStream, writeStream)
-    await this.applySftpCopyMetadata(to, stat, options.preserveOwnership)
+    const actualBytesBefore = options.budget.actualBytes
+    const meter = new Transform({
+      transform (chunk, encoding, callback) {
+        try {
+          consumeSftpCopyActualBytes(options.budget, chunk.length)
+          callback(null, chunk)
+        } catch (error) {
+          callback(error)
+        }
+      }
+    })
+    await pipeline(
+      readStream,
+      meter,
+      writeStream,
+      ...(options.signal ? [{ signal: options.signal }] : [])
+    )
+    throwIfSftpOperationAborted(options.signal)
+    if (options.budget.actualBytes - actualBytesBefore !== Number(stat.size)) {
+      throw new Error('SFTP 复制期间源文件大小发生变化，已拒绝快照。')
+    }
+    await this.applySftpCopyMetadata(
+      to,
+      stat,
+      options.preserveOwnership,
+      options.signal
+    )
   }
 
   async copySftpDirectory (from, to, stat, options, depth) {
+    throwIfSftpOperationAborted(options.signal)
     await this.mkdir(to, {
       mode: 0o700
     }).catch(err => {
@@ -426,8 +538,11 @@ class Sftp extends TerminalBase {
         throw err
       }
     })
+    throwIfSftpOperationAborted(options.signal)
     const entries = await this.list(from)
+    throwIfSftpOperationAborted(options.signal)
     for (const entry of entries) {
+      throwIfSftpOperationAborted(options.signal)
       const sourcePath = pathPosix.join(from, entry.name)
       const targetPath = pathPosix.join(to, entry.name)
       await this.copySftpEntryWithinBudget(
@@ -437,11 +552,18 @@ class Sftp extends TerminalBase {
         depth + 1
       )
     }
-    await this.applySftpCopyMetadata(to, stat, options.preserveOwnership)
+    await this.applySftpCopyMetadata(
+      to,
+      stat,
+      options.preserveOwnership,
+      options.signal
+    )
   }
 
   async copySftpEntryWithinBudget (from, to, options, depth) {
+    throwIfSftpOperationAborted(options.signal)
     const sourceStat = await this.lstat(from)
+    throwIfSftpOperationAborted(options.signal)
     const type = sftpStatType(sourceStat)
     if (type === 'special') {
       throw new Error('SFTP 复制不支持符号链接或特殊文件。')
@@ -462,14 +584,41 @@ class Sftp extends TerminalBase {
     const paths = assertSftpCopyTargetOutsideSource(from, to)
     const copyOptions = {
       preserveOwnership: options.preserveOwnership === true,
-      budget: createSftpCopyBudget(options)
+      budget: createSftpCopyBudget(options),
+      signal: options.signal
     }
-    await this.copySftpEntryWithinBudget(
-      paths.source,
-      paths.target,
-      copyOptions,
-      0
-    )
+    if (options.requireAbsentTarget === true) {
+      try {
+        await this.lstat(paths.target)
+        throw new Error('SFTP 复制目标已存在，已拒绝覆盖。')
+      } catch (error) {
+        if (!isMissingSftpError(error)) throw error
+      }
+    }
+    try {
+      await this.copySftpEntryWithinBudget(
+        paths.source,
+        paths.target,
+        copyOptions,
+        0
+      )
+    } catch (error) {
+      if (options.cleanupOnFailure === true) {
+        try {
+          const targetStat = await this.lstat(paths.target)
+          if (sftpStatType(targetStat) === 'directory') {
+            await this.removeDirectoryRecursively(paths.target)
+          } else {
+            await this.rm(paths.target)
+          }
+        } catch (cleanupError) {
+          if (!isMissingSftpError(cleanupError)) {
+            error.cleanupError = cleanupError
+          }
+        }
+      }
+      throw error
+    }
   }
 
   /**

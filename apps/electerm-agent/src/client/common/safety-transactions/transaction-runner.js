@@ -550,13 +550,51 @@ export function createTransactionRunner (options = {}) {
   }
 
   async function runSideEffectHook (adapter, method, operation, context = {}) {
+    if (cancellationRequests.has(operation.id)) throw cancellationError()
+    const executionId = `${operation.id}-${context.phase || method}-${++executionSequence}`
+    const controller = new AbortController()
+    const externalSignal = context.signal
+    const abortFromExternalSignal = () => controller.abort(externalSignal?.reason)
+    if (externalSignal?.aborted) {
+      abortFromExternalSignal()
+    } else if (typeof externalSignal?.addEventListener === 'function') {
+      externalSignal.addEventListener('abort', abortFromExternalSignal, { once: true })
+    }
+    let resolveSettled
+    const active = {
+      kind: 'side-effect',
+      executionId,
+      cancelRequested: false,
+      settled: new Promise(resolve => { resolveSettled = resolve }),
+      abort () {
+        controller.abort()
+      }
+    }
+    activeExecutions.set(operation.id, active)
     try {
-      const result = await adapter[method](operation, context)
+      const result = await adapter[method](operation, {
+        ...context,
+        executionId,
+        signal: controller.signal
+      })
+      if (controller.signal.aborted) {
+        if (active.cancelRequested || cancellationRequests.has(operation.id)) {
+          throw cancellationError()
+        }
+        const abortError = controller.signal.reason instanceof Error
+          ? controller.signal.reason
+          : new Error('SFTP 安全事务阶段已中止。')
+        abortError.name = abortError.name || 'AbortError'
+        throw abortError
+      }
       if (result === false || result?.verified === false) {
         throw new Error(`SFTP 安全事务 ${method} 验证失败。`)
       }
       return { result, audit: sideEffectAudit(context.phase || method, result) }
     } catch (error) {
+      if (active.cancelRequested || cancellationRequests.has(operation.id)) {
+        throw cancellationError()
+      }
       if (!error.audit) {
         error.audit = sideEffectAudit(
           context.phase || method,
@@ -565,6 +603,14 @@ export function createTransactionRunner (options = {}) {
         )
       }
       throw error
+    } finally {
+      if (typeof externalSignal?.removeEventListener === 'function') {
+        externalSignal.removeEventListener('abort', abortFromExternalSignal)
+      }
+      if (activeExecutions.get(operation.id) === active) {
+        activeExecutions.delete(operation.id)
+      }
+      resolveSettled()
     }
   }
 
@@ -1020,7 +1066,11 @@ export function createTransactionRunner (options = {}) {
             adapter,
             'verifyExecute',
             operation,
-            { phase: 'verify', input: executeOptions.sideEffectInput }
+            {
+              phase: 'verify',
+              signal: executeOptions.signal,
+              input: executeOptions.sideEffectInput
+            }
           )
           operation = await assertSideEffectPhase(
             operation,
@@ -1677,15 +1727,20 @@ export function createTransactionRunner (options = {}) {
     let cancellationFailure
     if (active) {
       active.cancelRequested = true
-      try {
-        await cancelRemote(active.executionId, {
-          maxOutputBytes: maxAuditPreviewBytes,
-          phase: 'cancel'
-        })
-      } catch (error) {
-        cancellationFailure = sanitizeError(error)
-      } finally {
-        active.release()
+      if (active.kind === 'side-effect') {
+        active.abort()
+        await active.settled
+      } else {
+        try {
+          await cancelRemote(active.executionId, {
+            maxOutputBytes: maxAuditPreviewBytes,
+            phase: 'cancel'
+          })
+        } catch (error) {
+          cancellationFailure = sanitizeError(error)
+        } finally {
+          active.release()
+        }
       }
     }
 

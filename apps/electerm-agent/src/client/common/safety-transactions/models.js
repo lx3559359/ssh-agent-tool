@@ -1,6 +1,7 @@
 import { classifyCommand } from './command-classifier.js'
 import { redactSensitiveData } from './audit-redaction.js'
 import { buildEndpointKey, normalizeEndpoint } from './endpoint-guard.js'
+import { assertTrustedOperationId } from './operation-id.js'
 
 export const operationStates = Object.freeze({
   preparing: 'preparing',
@@ -208,6 +209,12 @@ export function normalizeOperation (operation = {}, options = {}) {
     .map(field => [field, operation.endpoint[field]]))
   Object.assign(endpoint, normalizedIdentity)
   const normalized = projectDefinedFields(operation, normalizedOperationFields)
+  if (normalized.id !== undefined &&
+    normalized.operationKind === 'side-effect') {
+    normalized.id = options.allowLegacyId === true
+      ? String(normalized.id)
+      : assertTrustedOperationId(normalized.id)
+  }
   if (normalized.metadata !== undefined) {
     normalized.metadata = redactSensitiveData(normalized.metadata)
   }

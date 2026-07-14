@@ -1,3 +1,5 @@
+import { assertTrustedOperationId } from '../../common/safety-transactions/operation-id.js'
+
 const digestChunkBytes = 64 * 1024
 const maxManifestBytes = 256 * 1024
 const maxDescriptorDepth = 128
@@ -26,18 +28,35 @@ function parentRemotePath (value) {
   return index <= 0 ? '/' : path.slice(0, index)
 }
 
-function safeOperationId (value) {
-  const id = String(value || '')
-  if (!/^[a-zA-Z0-9._-]{1,160}$/.test(id)) {
-    throw new Error('SFTP 安全事务标识无效。')
+function assertTransactionOperationDir (transactionRoot, operationDir) {
+  const root = joinRemotePath(transactionRoot)
+  const directory = joinRemotePath(operationDir)
+  if (directory === root || parentRemotePath(directory) !== root ||
+    !directory.startsWith(`${root}/`)) {
+    throw new Error('SFTP 事务目录逃离唯一快照根目录，已拒绝操作。')
   }
-  return id
+  return directory
+}
+
+function assertTransactionArtifactPath (operationDir, artifactPath) {
+  const path = joinRemotePath(artifactPath)
+  if (parentRemotePath(path) !== operationDir) {
+    throw new Error('SFTP 事务产物路径逃离操作目录，已拒绝操作。')
+  }
+  return path
 }
 
 function isMissingError (error) {
   const code = error?.code
   return code === 2 || code === 'ENOENT' || code === 'SFTP_NO_SUCH_FILE' ||
     /no such|not found|does not exist/i.test(String(error?.message || error))
+}
+
+function throwIfAborted (signal) {
+  if (!signal?.aborted) return
+  const error = new Error('SFTP 安全事务已取消。')
+  error.name = 'AbortError'
+  throw error
 }
 
 function bytesFromBase64 (value) {
@@ -142,7 +161,7 @@ export async function digestSftpText (text) {
   return digest.finish()
 }
 
-async function digestRemoteFile (sftp, path, expectedSize) {
+async function digestRemoteFile (sftp, path, expectedSize, signal) {
   if (typeof sftp.readFileChunk !== 'function') {
     throw new Error('当前 SFTP 连接不支持有界文件摘要读取。')
   }
@@ -150,10 +169,12 @@ async function digestRemoteFile (sftp, path, expectedSize) {
   let offset = 0
   let totalBytes
   do {
+    throwIfAborted(signal)
     const chunk = await sftp.readFileChunk(path, {
       offset,
       maxBytes: digestChunkBytes
     })
+    throwIfAborted(signal)
     if (!chunk || chunk.offset !== offset ||
       !Number.isSafeInteger(chunk.nextOffset) || chunk.nextOffset < offset ||
       !Number.isSafeInteger(chunk.totalBytes) || chunk.totalBytes < 0) {
@@ -197,9 +218,12 @@ function safeOwnership (stat) {
   return { uid: stat.uid, gid: stat.gid }
 }
 
-async function lstatOrAbsent (sftp, path) {
+async function lstatOrAbsent (sftp, path, signal) {
+  throwIfAborted(signal)
   try {
-    return await sftp.lstat(path)
+    const stat = await sftp.lstat(path)
+    throwIfAborted(signal)
+    return stat
   } catch (error) {
     if (isMissingError(error)) return null
     throw error
@@ -225,8 +249,8 @@ function createDescriptorBudget () {
   return { remainingNodes: maxDescriptorNodes }
 }
 
-async function describeModeEntry (sftp, path) {
-  const stat = await lstatOrAbsent(sftp, path)
+async function describeModeEntry (sftp, path, signal) {
+  const stat = await lstatOrAbsent(sftp, path, signal)
   if (!stat) return { absent: true }
   const type = typeFromStat(stat)
   assertSupportedType(type)
@@ -237,13 +261,15 @@ async function describeEntry (
   sftp,
   path,
   budget = createDescriptorBudget(),
-  depth = 0
+  depth = 0,
+  signal
 ) {
+  throwIfAborted(signal)
   if (depth > maxDescriptorDepth || budget.remainingNodes <= 0) {
     throw new Error('SFTP 目录快照超过深度或节点上限，已拒绝继续操作。')
   }
   budget.remainingNodes -= 1
-  const stat = await lstatOrAbsent(sftp, path)
+  const stat = await lstatOrAbsent(sftp, path, signal)
   if (!stat) return { absent: true }
   const type = typeFromStat(stat)
   assertSupportedType(type)
@@ -253,10 +279,11 @@ async function describeEntry (
     ...safeOwnership(stat)
   }
   if (type === 'file') {
-    const digest = await digestRemoteFile(sftp, path, Number(stat.size))
+    const digest = await digestRemoteFile(sftp, path, Number(stat.size), signal)
     return { ...descriptor, ...digest }
   }
   const entries = await sftp.list(path)
+  throwIfAborted(signal)
   if (!Array.isArray(entries)) {
     throw new Error('SFTP 目录列表无效，无法完成整树快照。')
   }
@@ -264,6 +291,7 @@ async function describeEntry (
   for (const entry of [...entries].sort((left, right) => (
     String(left.name).localeCompare(String(right.name))
   ))) {
+    throwIfAborted(signal)
     const name = String(entry?.name || '')
     assertEntryName(name)
     descriptor.entries.push({
@@ -272,7 +300,8 @@ async function describeEntry (
         sftp,
         joinRemotePath(path, name),
         budget,
-        depth + 1
+        depth + 1,
+        signal
       )
     })
   }
@@ -297,35 +326,39 @@ function matchesExpected (descriptor, expected) {
   return true
 }
 
-async function ensureDirectory (sftp, path) {
+async function ensureDirectory (sftp, path, signal) {
+  throwIfAborted(signal)
   const normalized = joinRemotePath(path)
   if (normalized === '/') return
-  const existing = await lstatOrAbsent(sftp, normalized)
+  const existing = await lstatOrAbsent(sftp, normalized, signal)
   if (existing) {
     if (typeFromStat(existing) !== 'directory') {
       throw new Error('SFTP 事务目录路径已被非目录占用。')
     }
     return
   }
-  await ensureDirectory(sftp, parentRemotePath(normalized))
+  await ensureDirectory(sftp, parentRemotePath(normalized), signal)
+  throwIfAborted(signal)
   try {
     await sftp.mkdir(normalized)
+    throwIfAborted(signal)
   } catch (error) {
     if (error?.code !== 'EEXIST' && !/already exists/i.test(String(error?.message || error))) {
       throw error
     }
-    const created = await lstatOrAbsent(sftp, normalized)
+    const created = await lstatOrAbsent(sftp, normalized, signal)
     if (!created || typeFromStat(created) !== 'directory') throw error
   }
 }
 
-async function removeTransactionEntry (sftp, path) {
-  const stat = await lstatOrAbsent(sftp, path)
+async function removeTransactionEntry (sftp, path, signal) {
+  const stat = await lstatOrAbsent(sftp, path, signal)
   if (!stat) return
   if (typeof sftp.removeEntry !== 'function') {
     throw new Error('当前 SFTP 连接不支持纯 SFTP 删除。')
   }
-  await sftp.removeEntry(path)
+  await sftp.removeEntry(path, { signal })
+  throwIfAborted(signal)
 }
 
 function buildPlanSkeleton (operation) {
@@ -335,33 +368,55 @@ function buildPlanSkeleton (operation) {
   if (primary === '/') {
     throw new Error('SFTP 根目录不支持首版安全事务。')
   }
-  const operationDir = joinRemotePath(
+  const transactionRoot = joinRemotePath(
     parentRemotePath(primary),
-    '.shellpilot-transactions',
-    safeOperationId(operation.id)
+    '.shellpilot-transactions'
+  )
+  const operationDir = assertTransactionOperationDir(
+    transactionRoot,
+    joinRemotePath(transactionRoot, assertTrustedOperationId(operation.id))
   )
   const slots = action === 'rename'
     ? [['source', paths.source], ['target', paths.target]]
     : [[action === 'editor-save' ? 'target' : 'source', primary]]
-  return {
+  const plan = {
     adapter: 'sftp',
     action,
     operationDir,
-    manifestPath: joinRemotePath(operationDir, 'manifest.json'),
+    manifestPath: assertTransactionArtifactPath(
+      operationDir,
+      joinRemotePath(operationDir, 'manifest.json')
+    ),
     resources: slots.map(([slot, path]) => ({
       slot,
       path,
-      snapshotPath: joinRemotePath(operationDir, slot),
-      stagingPath: joinRemotePath(operationDir, `${slot}.preparing`),
-      executionPath: joinRemotePath(operationDir, `${slot}.execute`),
-      executionPreviousPath: joinRemotePath(
+      snapshotPath: assertTransactionArtifactPath(
         operationDir,
-        `${slot}.execute-previous`
+        joinRemotePath(operationDir, slot)
       ),
-      restoreTempPath: joinRemotePath(operationDir, `${slot}.restore-temp`),
-      displacedPath: joinRemotePath(operationDir, `${slot}.displaced`)
+      stagingPath: assertTransactionArtifactPath(
+        operationDir,
+        joinRemotePath(operationDir, `${slot}.preparing`)
+      ),
+      executionPath: assertTransactionArtifactPath(
+        operationDir,
+        joinRemotePath(operationDir, `${slot}.execute`)
+      ),
+      executionPreviousPath: assertTransactionArtifactPath(
+        operationDir,
+        joinRemotePath(operationDir, `${slot}.execute-previous`)
+      ),
+      restoreTempPath: assertTransactionArtifactPath(
+        operationDir,
+        joinRemotePath(operationDir, `${slot}.restore-temp`)
+      ),
+      displacedPath: assertTransactionArtifactPath(
+        operationDir,
+        joinRemotePath(operationDir, `${slot}.displaced`)
+      )
     }))
   }
+  return plan
 }
 
 function buildArtifacts (plan) {
@@ -373,15 +428,26 @@ function buildArtifacts (plan) {
   ])
 }
 
-async function readBoundedText (sftp, path) {
+function serializeBoundedManifest (manifest) {
+  const text = JSON.stringify(manifest)
+  const bytes = new TextEncoder().encode(text).byteLength
+  if (bytes > maxManifestBytes) {
+    throw new Error('SFTP 恢复清单序列化后超过大小上限，未创建快照。')
+  }
+  return text
+}
+
+async function readBoundedText (sftp, path, signal) {
   let offset = 0
   let totalBytes
   const chunks = []
   do {
+    throwIfAborted(signal)
     const chunk = await sftp.readFileChunk(path, {
       offset,
       maxBytes: Math.min(digestChunkBytes, maxManifestBytes - offset)
     })
+    throwIfAborted(signal)
     if (!chunk || chunk.offset !== offset || chunk.nextOffset <= offset ||
       chunk.totalBytes > maxManifestBytes) {
       throw new Error('SFTP 恢复清单超出上限或分块无效。')
@@ -393,15 +459,22 @@ async function readBoundedText (sftp, path) {
   return new TextDecoder().decode(concatBytes(...chunks))
 }
 
-async function verifySnapshot (sftp, resource) {
+async function verifySnapshot (sftp, resource, signal) {
   if (resource.original.absent === true) return
-  const snapshot = await describeEntry(sftp, resource.snapshotPath)
+  const snapshot = await describeEntry(
+    sftp,
+    resource.snapshotPath,
+    createDescriptorBudget(),
+    0,
+    signal
+  )
   if (!sameDescriptor(snapshot, resource.original)) {
     throw new Error('SFTP 快照校验失败，已拒绝继续操作。')
   }
 }
 
-async function validateManifest (sftp, operation, manifest) {
+async function validateManifest (sftp, operation, manifest, signal) {
+  throwIfAborted(signal)
   const expected = buildPlanSkeleton(operation)
   if (manifest?.schemaVersion !== 1 || manifest?.complete !== true ||
     manifest.id !== operation.id || manifest.effectKey !== operation.effectKey ||
@@ -431,7 +504,7 @@ async function validateManifest (sftp, operation, manifest) {
         throw new Error('SFTP 恢复清单资源路径已被修改。')
       }
     }
-    if (manifest.plan.action !== 'chmod') await verifySnapshot(sftp, actual)
+    if (manifest.plan.action !== 'chmod') await verifySnapshot(sftp, actual, signal)
   }
   const artifacts = buildArtifacts(manifest.plan)
   if (!sameDescriptor(artifacts, manifest.artifacts)) {
@@ -445,45 +518,59 @@ async function validateManifest (sftp, operation, manifest) {
   }
 }
 
-async function loadManifest (sftp, operation) {
+async function loadManifest (sftp, operation, signal) {
   const plan = buildPlanSkeleton(operation)
-  if (!await lstatOrAbsent(sftp, plan.manifestPath)) return null
+  if (!await lstatOrAbsent(sftp, plan.manifestPath, signal)) return null
   let manifest
   try {
-    manifest = JSON.parse(await readBoundedText(sftp, plan.manifestPath))
+    manifest = JSON.parse(await readBoundedText(sftp, plan.manifestPath, signal))
   } catch (error) {
     throw new Error(`SFTP 恢复清单读取失败：${error?.message || error}`)
   }
-  return validateManifest(sftp, operation, manifest)
+  return validateManifest(sftp, operation, manifest, signal)
 }
 
-async function copyVerifiedSnapshot (sftp, resource) {
+async function copyVerifiedSnapshot (sftp, resource, signal) {
   if (resource.original.absent === true) return
-  const existing = await lstatOrAbsent(sftp, resource.snapshotPath)
+  const existing = await lstatOrAbsent(sftp, resource.snapshotPath, signal)
   if (existing) {
-    await verifySnapshot(sftp, resource)
+    await verifySnapshot(sftp, resource, signal)
     return
   }
-  await removeTransactionEntry(sftp, resource.stagingPath)
+  await removeTransactionEntry(sftp, resource.stagingPath, signal)
   if (typeof sftp.copyEntry !== 'function') {
     throw new Error('当前 SFTP 连接不支持纯 SFTP 快照复制。')
   }
-  await sftp.copyEntry(resource.path, resource.stagingPath)
-  const staged = await describeEntry(sftp, resource.stagingPath)
+  await sftp.copyEntry(resource.path, resource.stagingPath, { signal })
+  const staged = await describeEntry(
+    sftp,
+    resource.stagingPath,
+    createDescriptorBudget(),
+    0,
+    signal
+  )
   if (!sameDescriptor(staged, resource.original)) {
     throw new Error('SFTP 快照复制不完整，已拒绝生成恢复清单。')
   }
+  throwIfAborted(signal)
   await sftp.rename(resource.stagingPath, resource.snapshotPath)
-  await verifySnapshot(sftp, resource)
+  throwIfAborted(signal)
+  await verifySnapshot(sftp, resource, signal)
 }
 
-async function prepareNewManifest (sftp, operation) {
+async function prepareNewManifest (sftp, operation, signal) {
   const plan = buildPlanSkeleton(operation)
-  await ensureDirectory(sftp, plan.operationDir)
   for (const resource of plan.resources) {
+    throwIfAborted(signal)
     resource.original = operation.effect.action === 'chmod'
-      ? await describeModeEntry(sftp, resource.path)
-      : await describeEntry(sftp, resource.path)
+      ? await describeModeEntry(sftp, resource.path, signal)
+      : await describeEntry(
+        sftp,
+        resource.path,
+        createDescriptorBudget(),
+        0,
+        signal
+      )
     if (resource.original.absent !== true) {
       if (resource.original.type !== operation.effect.type) {
         throw new Error('SFTP 资源类型与请求不一致，已拒绝操作。')
@@ -497,7 +584,9 @@ async function prepareNewManifest (sftp, operation) {
   if (operation.effect.action === 'rename') {
     const [source, target] = plan.resources
     const sourceParent = await sftp.stat(parentRemotePath(source.path))
+    throwIfAborted(signal)
     const targetParent = await sftp.stat(parentRemotePath(target.path))
+    throwIfAborted(signal)
     const sourceParentPath = parentRemotePath(source.path)
     const targetParentPath = parentRemotePath(target.path)
     const hasDeviceIds = Number.isInteger(sourceParent?.dev) &&
@@ -508,11 +597,6 @@ async function prepareNewManifest (sftp, operation) {
     }
   }
 
-  if (operation.effect.action !== 'chmod') {
-    for (const resource of plan.resources) {
-      await copyVerifiedSnapshot(sftp, resource)
-    }
-  }
   const artifacts = buildArtifacts(plan)
   const manifest = {
     schemaVersion: 1,
@@ -523,14 +607,36 @@ async function prepareNewManifest (sftp, operation) {
     plan,
     artifacts
   }
+  let manifestText = serializeBoundedManifest(manifest)
   const preparingManifest = `${plan.manifestPath}.preparing`
-  await removeTransactionEntry(sftp, preparingManifest)
-  await sftp.writeFile(preparingManifest, JSON.stringify(manifest), 0o600)
-  if (await lstatOrAbsent(sftp, plan.manifestPath)) {
-    throw new Error('SFTP 恢复清单已存在但未通过复用校验。')
+  try {
+    await ensureDirectory(sftp, plan.operationDir, signal)
+    if (operation.effect.action !== 'chmod') {
+      for (const resource of plan.resources) {
+        await copyVerifiedSnapshot(sftp, resource, signal)
+      }
+    }
+    manifestText = serializeBoundedManifest(manifest)
+    await removeTransactionEntry(sftp, preparingManifest, signal)
+    await sftp.writeFile(preparingManifest, manifestText, 0o600)
+    throwIfAborted(signal)
+    if (await lstatOrAbsent(sftp, plan.manifestPath, signal)) {
+      throw new Error('SFTP 恢复清单已存在但未通过复用校验。')
+    }
+    await sftp.rename(preparingManifest, plan.manifestPath)
+    throwIfAborted(signal)
+  } catch (error) {
+    for (const resource of plan.resources) {
+      try {
+        await removeTransactionEntry(sftp, resource.stagingPath)
+      } catch {}
+    }
+    try {
+      await removeTransactionEntry(sftp, preparingManifest)
+    } catch {}
+    throw error
   }
-  await sftp.rename(preparingManifest, plan.manifestPath)
-  const verified = await loadManifest(sftp, operation)
+  const verified = await loadManifest(sftp, operation, signal)
   if (!verified) throw new Error('SFTP 恢复清单提交失败。')
   return {
     ...verified,
@@ -538,8 +644,8 @@ async function prepareNewManifest (sftp, operation) {
   }
 }
 
-async function requireManifest (sftp, operation) {
-  const prepared = await loadManifest(sftp, operation)
+async function requireManifest (sftp, operation, signal) {
+  const prepared = await loadManifest(sftp, operation, signal)
   if (!prepared || !sameDescriptor(prepared.plan, operation.plan) ||
     !sameDescriptor(prepared.artifacts, operation.artifacts)) {
     throw new Error('SFTP 恢复清单与已绑定事务不一致。')
@@ -547,20 +653,26 @@ async function requireManifest (sftp, operation) {
   return prepared
 }
 
-async function assertOriginalState (sftp, resource, action) {
+async function assertOriginalState (sftp, resource, action, signal) {
   const current = action === 'chmod'
-    ? await describeModeEntry(sftp, resource.path)
-    : await describeEntry(sftp, resource.path)
+    ? await describeModeEntry(sftp, resource.path, signal)
+    : await describeEntry(sftp, resource.path, createDescriptorBudget(), 0, signal)
   if (!sameDescriptor(current, resource.original)) {
     throw new Error('SFTP 资源在确认前已发生变化，未执行修改。')
   }
 }
 
-async function verifyExecuteState (sftp, operation) {
+async function verifyExecuteState (sftp, operation, signal) {
   const action = operation.effect.action
   const resources = operation.plan.resources
   if (action === 'editor-save') {
-    const current = await describeEntry(sftp, resources[0].path)
+    const current = await describeEntry(
+      sftp,
+      resources[0].path,
+      createDescriptorBudget(),
+      0,
+      signal
+    )
     const mode = operation.effect.requestedMode ??
       (resources[0].original.absent ? undefined : resources[0].original.mode)
     const ownership = resources[0].original.absent
@@ -583,7 +695,7 @@ async function verifyExecuteState (sftp, operation) {
     return
   }
   if (action === 'chmod') {
-    const current = await describeModeEntry(sftp, resources[0].path)
+    const current = await describeModeEntry(sftp, resources[0].path, signal)
     if (current.absent || current.type !== resources[0].original.type ||
       current.mode !== operation.effect.requestedMode ||
       current.uid !== resources[0].original.uid ||
@@ -593,14 +705,14 @@ async function verifyExecuteState (sftp, operation) {
     return
   }
   if (action === 'rename') {
-    const source = await describeEntry(sftp, resources[0].path)
-    const target = await describeEntry(sftp, resources[1].path)
+    const source = await describeEntry(sftp, resources[0].path, createDescriptorBudget(), 0, signal)
+    const target = await describeEntry(sftp, resources[1].path, createDescriptorBudget(), 0, signal)
     if (source.absent !== true || !sameDescriptor(target, resources[0].original)) {
       throw new Error('SFTP 重命名后的源/目标验证失败。')
     }
     return
   }
-  const source = await describeEntry(sftp, resources[0].path)
+  const source = await describeEntry(sftp, resources[0].path, createDescriptorBudget(), 0, signal)
   if (source.absent !== true) throw new Error('SFTP 删除后的路径仍然存在。')
 }
 
@@ -608,14 +720,27 @@ async function restoreFromSnapshot (
   sftp,
   resource,
   postExpected,
-  allowInterruptedSwap = false
+  allowInterruptedSwap = false,
+  signal
 ) {
-  const current = await describeEntry(sftp, resource.path)
+  const current = await describeEntry(sftp, resource.path, createDescriptorBudget(), 0, signal)
   if (sameDescriptor(current, resource.original)) return
-  const displaced = await describeEntry(sftp, resource.displacedPath)
+  const displaced = await describeEntry(
+    sftp,
+    resource.displacedPath,
+    createDescriptorBudget(),
+    0,
+    signal
+  )
   if (current.absent === true) {
     if (postExpected?.absent !== true && displaced.absent === true) {
-      const previous = await describeEntry(sftp, resource.executionPreviousPath)
+      const previous = await describeEntry(
+        sftp,
+        resource.executionPreviousPath,
+        createDescriptorBudget(),
+        0,
+        signal
+      )
       if (!allowInterruptedSwap || !sameDescriptor(previous, resource.original)) {
         throw new Error('SFTP 当前目标出现外部变化，已拒绝覆盖。')
       }
@@ -624,14 +749,26 @@ async function restoreFromSnapshot (
     throw new Error('SFTP 当前目标出现外部变化，已拒绝覆盖。')
   }
 
-  await verifySnapshot(sftp, resource)
-  let restoreTemp = await describeEntry(sftp, resource.restoreTempPath)
+  await verifySnapshot(sftp, resource, signal)
+  let restoreTemp = await describeEntry(
+    sftp,
+    resource.restoreTempPath,
+    createDescriptorBudget(),
+    0,
+    signal
+  )
   if (restoreTemp.absent === true) {
     if (typeof sftp.copyEntry !== 'function') {
       throw new Error('当前 SFTP 连接不支持纯 SFTP 快照恢复。')
     }
-    await sftp.copyEntry(resource.snapshotPath, resource.restoreTempPath)
-    restoreTemp = await describeEntry(sftp, resource.restoreTempPath)
+    await sftp.copyEntry(resource.snapshotPath, resource.restoreTempPath, { signal })
+    restoreTemp = await describeEntry(
+      sftp,
+      resource.restoreTempPath,
+      createDescriptorBudget(),
+      0,
+      signal
+    )
   }
   if (!sameDescriptor(restoreTemp, resource.original)) {
     throw new Error('SFTP 恢复临时副本验证失败。')
@@ -641,24 +778,41 @@ async function restoreFromSnapshot (
     if (displaced.absent !== true) {
       throw new Error('SFTP displaced 路径已有内容，已拒绝覆盖。')
     }
+    throwIfAborted(signal)
     await sftp.rename(resource.path, resource.displacedPath)
+    throwIfAborted(signal)
   }
-  if ((await describeEntry(sftp, resource.path)).absent === true) {
+  if ((await describeEntry(
+    sftp,
+    resource.path,
+    createDescriptorBudget(),
+    0,
+    signal
+  )).absent === true) {
     await sftp.rename(resource.restoreTempPath, resource.path)
+    throwIfAborted(signal)
   }
 }
 
-async function restoreAbsent (sftp, resource, postExpected) {
-  const current = await describeEntry(sftp, resource.path)
+async function restoreAbsent (sftp, resource, postExpected, signal) {
+  const current = await describeEntry(sftp, resource.path, createDescriptorBudget(), 0, signal)
   if (current.absent === true) return
   if (!matchesExpected(current, postExpected)) {
     throw new Error('SFTP 当前目标出现外部变化，已拒绝覆盖。')
   }
-  const displaced = await describeEntry(sftp, resource.displacedPath)
+  const displaced = await describeEntry(
+    sftp,
+    resource.displacedPath,
+    createDescriptorBudget(),
+    0,
+    signal
+  )
   if (displaced.absent !== true) {
     throw new Error('SFTP displaced 路径已有内容，已拒绝覆盖。')
   }
+  throwIfAborted(signal)
   await sftp.rename(resource.path, resource.displacedPath)
+  throwIfAborted(signal)
 }
 
 function postExpectedFor (operation, resource) {
@@ -710,17 +864,18 @@ export function createSftpTransactionAdapter ({ getSftp } = {}) {
         ['editor-save', 'delete', 'rename', 'chmod'].includes(operation.effect.action)
     },
 
-    async prepare (operation) {
+    async prepare (operation, context = {}) {
       const sftp = requireSftp()
-      const existing = await loadManifest(sftp, operation)
-      return existing || prepareNewManifest(sftp, operation)
+      const existing = await loadManifest(sftp, operation, context.signal)
+      return existing || prepareNewManifest(sftp, operation, context.signal)
     },
 
     async beforeExecute (operation, context = {}) {
       const sftp = requireSftp()
-      await requireManifest(sftp, operation)
+      const { signal } = context
+      await requireManifest(sftp, operation, signal)
       for (const resource of operation.plan.resources) {
-        await assertOriginalState(sftp, resource, operation.effect.action)
+        await assertOriginalState(sftp, resource, operation.effect.action, signal)
       }
       const action = operation.effect.action
       if (action === 'editor-save') {
@@ -735,11 +890,13 @@ export function createSftpTransactionAdapter ({ getSftp } = {}) {
         const resource = operation.plan.resources[0]
         const mode = operation.effect.requestedMode ??
           (resource.original.absent ? undefined : resource.original.mode)
-        if (await lstatOrAbsent(sftp, resource.executionPath) ||
-          await lstatOrAbsent(sftp, resource.executionPreviousPath)) {
+        if (await lstatOrAbsent(sftp, resource.executionPath, signal) ||
+          await lstatOrAbsent(sftp, resource.executionPreviousPath, signal)) {
           throw new Error('SFTP 编辑器事务置换路径已被占用，未修改目标文件。')
         }
+        throwIfAborted(signal)
         await sftp.writeFile(resource.executionPath, text, mode)
+        throwIfAborted(signal)
         if (resource.original.absent !== true) {
           if (typeof sftp.chown !== 'function') {
             throw new Error('当前 SFTP 连接不支持 chown，未修改目标文件。')
@@ -749,9 +906,17 @@ export function createSftpTransactionAdapter ({ getSftp } = {}) {
             resource.original.uid,
             resource.original.gid
           )
+          throwIfAborted(signal)
           await sftp.chmod(resource.executionPath, mode)
+          throwIfAborted(signal)
         }
-        const staged = await describeEntry(sftp, resource.executionPath)
+        const staged = await describeEntry(
+          sftp,
+          resource.executionPath,
+          createDescriptorBudget(),
+          0,
+          signal
+        )
         if (!matchesExpected(staged, {
           ...operation.effect.expected,
           type: 'file',
@@ -762,80 +927,99 @@ export function createSftpTransactionAdapter ({ getSftp } = {}) {
         })) {
           throw new Error('SFTP 编辑器暂存文件验证失败，未修改目标文件。')
         }
-        await assertOriginalState(sftp, resource, action)
+        await assertOriginalState(sftp, resource, action, signal)
         if (resource.original.absent !== true) {
           await sftp.rename(resource.path, resource.executionPreviousPath)
+          throwIfAborted(signal)
         }
         await sftp.rename(resource.executionPath, resource.path)
+        throwIfAborted(signal)
       } else if (action === 'chmod') {
+        throwIfAborted(signal)
         await sftp.chmod(
           operation.plan.resources[0].path,
           operation.effect.requestedMode
         )
+        throwIfAborted(signal)
       } else if (action === 'rename') {
+        throwIfAborted(signal)
         await sftp.rename(
           operation.plan.resources[0].path,
           operation.plan.resources[1].path
         )
+        throwIfAborted(signal)
       } else {
         const resource = operation.plan.resources[0]
         if (typeof sftp.removeEntry !== 'function') {
           throw new Error('当前 SFTP 连接不支持纯 SFTP 删除。')
         }
-        if (await lstatOrAbsent(sftp, resource.executionPath)) {
+        if (await lstatOrAbsent(sftp, resource.executionPath, signal)) {
           throw new Error('SFTP 删除事务执行路径已被占用，未修改源资源。')
         }
         await sftp.rename(resource.path, resource.executionPath)
-        await sftp.removeEntry(resource.executionPath)
+        throwIfAborted(signal)
+        await sftp.removeEntry(resource.executionPath, { signal })
+        throwIfAborted(signal)
       }
       return { summary: `SFTP ${action} 已执行，等待验证。` }
     },
 
-    async verifyExecute (operation) {
+    async verifyExecute (operation, context = {}) {
       const sftp = requireSftp()
-      await requireManifest(sftp, operation)
-      await verifyExecuteState(sftp, operation)
+      await requireManifest(sftp, operation, context.signal)
+      await verifyExecuteState(sftp, operation, context.signal)
       return { verified: true, summary: 'SFTP 修改后状态验证通过。' }
     },
 
-    async rollback (operation) {
+    async rollback (operation, context = {}) {
       const sftp = requireSftp()
-      await requireManifest(sftp, operation)
+      const { signal } = context
+      await requireManifest(sftp, operation, signal)
       if (operation.effect.action === 'chmod') {
         const resource = operation.plan.resources[0]
-        const current = await describeModeEntry(sftp, resource.path)
+        const current = await describeModeEntry(sftp, resource.path, signal)
         if (sameDescriptor(current, resource.original)) {
           return { summary: 'SFTP 权限已处于原始状态。' }
         }
         if (!matchesExpected(current, postExpectedFor(operation, resource))) {
           throw new Error('SFTP 权限出现外部变化，已拒绝回滚。')
         }
+        throwIfAborted(signal)
         await sftp.chmod(resource.path, resource.original.mode)
+        throwIfAborted(signal)
         return { summary: 'SFTP 原始权限已恢复。' }
       }
       for (const resource of operation.plan.resources) {
         const expected = postExpectedFor(operation, resource)
         if (resource.original.absent === true) {
-          await restoreAbsent(sftp, resource, expected)
+          await restoreAbsent(sftp, resource, expected, signal)
         } else {
           await restoreFromSnapshot(
             sftp,
             resource,
             expected,
-            Boolean(operation.failedAt)
+            Boolean(operation.failedAt),
+            signal
           )
         }
       }
       return { summary: 'SFTP 快照已恢复，快照本身保持不变。' }
     },
 
-    async verifyRollback (operation) {
+    async verifyRollback (operation, context = {}) {
       const sftp = requireSftp()
-      await requireManifest(sftp, operation)
+      const { signal } = context
+      await requireManifest(sftp, operation, signal)
       for (const resource of operation.plan.resources) {
         const current = operation.effect.action === 'chmod'
-          ? await describeModeEntry(sftp, resource.path)
-          : await describeEntry(sftp, resource.path)
+          ? await describeModeEntry(sftp, resource.path, signal)
+          : await describeEntry(
+            sftp,
+            resource.path,
+            createDescriptorBudget(),
+            0,
+            signal
+          )
         if (!sameDescriptor(current, resource.original)) {
           throw new Error('SFTP 回滚后的资源验证失败，可保留快照后重试。')
         }

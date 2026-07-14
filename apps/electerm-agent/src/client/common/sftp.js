@@ -6,6 +6,10 @@ import generate from './uid'
 import Transfer from './transfer'
 import { transferTypeMap, instSftpKeys as keys } from './constants'
 import initWs from './ws'
+import {
+  createSftpAbortError,
+  prepareSftpCancelableCall
+} from './sftp-operation-cancellation'
 
 const transferKeys = Object.keys(transferTypeMap)
 
@@ -39,18 +43,46 @@ class Sftp {
         }
         const fid = generate()
         const uid = func + ':' + fid
+        const prepared = prepareSftpCancelableCall(func, args, fid)
+        if (prepared.signal?.aborted) throw createSftpAbortError()
         // let ws = await initWs()
         return new Promise((resolve, reject) => {
-          ws.s({
-            action: 'sftp-func',
-            id,
-            uid,
-            func,
-            args,
-            terminalId,
-            type: this.type
-          })
+          const onAbort = prepared.signal
+            ? () => {
+                ws.s({
+                  action: 'sftp-cancel',
+                  id,
+                  cancelToken: prepared.cancelToken,
+                  terminalId,
+                  type: this.type
+                })
+              }
+            : null
+          const cleanup = () => {
+            if (onAbort) {
+              prepared.signal.removeEventListener('abort', onAbort)
+            }
+          }
+          if (onAbort) {
+            prepared.signal.addEventListener('abort', onAbort, { once: true })
+          }
+          try {
+            ws.s({
+              action: 'sftp-func',
+              id,
+              uid,
+              func,
+              args: prepared.args,
+              terminalId,
+              type: this.type
+            })
+          } catch (error) {
+            cleanup()
+            reject(error)
+            return
+          }
           ws.once((arg) => {
+            cleanup()
             if (arg.error) {
               console.debug('sftp error', arg.error.message)
               return reject(new Error(arg.error.message))

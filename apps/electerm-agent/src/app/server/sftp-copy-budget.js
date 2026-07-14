@@ -56,7 +56,8 @@ function createSftpCopyBudget (limits = {}) {
       true
     ),
     nodes: 0,
-    totalBytes: 0
+    totalBytes: 0,
+    actualBytes: 0
   }
 }
 
@@ -79,8 +80,20 @@ function consumeSftpCopyBudget (budget, { depth, bytes }) {
   return budget
 }
 
+function consumeSftpCopyActualBytes (budget, bytes) {
+  if (!budget || !Number.isSafeInteger(bytes) || bytes < 0) {
+    throw new Error('SFTP 复制实际字节预算参数无效。')
+  }
+  if (budget.actualBytes + bytes > budget.maxTotalBytes) {
+    throw new Error('SFTP 复制实际流字节数超过安全上限。')
+  }
+  budget.actualBytes += bytes
+  return budget
+}
+
 module.exports = {
   assertSftpCopyTargetOutsideSource,
+  consumeSftpCopyActualBytes,
   consumeSftpCopyBudget,
   createSftpCopyBudget,
   defaultSftpCopyLimits,

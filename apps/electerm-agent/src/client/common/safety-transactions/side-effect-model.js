@@ -1,4 +1,5 @@
 import { normalizeOperation } from './models.js'
+import { assertTrustedOperationId } from './operation-id.js'
 
 export const sideEffectOperationKind = 'side-effect'
 
@@ -172,10 +173,11 @@ export function buildSideEffectSafetyRequest (request = {}, options = {}) {
   if (request.source !== 'sftp') {
     throw new Error('SFTP side-effect source is invalid.')
   }
+  const id = assertTrustedOperationId(request.id)
   const effect = normalizeEffect(request.effect)
   const policy = actionPolicies[effect.action]
   return normalizeOperation({
-    id: request.id,
+    id,
     source: 'sftp',
     title: request.title,
     endpoint: request.endpoint,

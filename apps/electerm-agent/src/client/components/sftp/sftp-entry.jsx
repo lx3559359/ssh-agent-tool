@@ -53,6 +53,7 @@ import {
 import { createTransactionRunner } from '../../common/safety-transactions/transaction-runner.js'
 import { buildSideEffectSafetyRequest } from '../../common/safety-transactions/side-effect-model.js'
 import { assertSameSessionEndpoint } from '../../common/safety-transactions/endpoint-guard.js'
+import { buildSftpSafetyEndpoint } from './sftp-safety-endpoint.js'
 import * as sftpSafetyStore from '../../common/safety-transactions/transaction-store.js'
 import {
   mergeSafetyOperationRecords,
@@ -507,17 +508,10 @@ export default class Sftp extends Component {
     if (!this.sftp || this.props.isFtp || this.type === 'ftp') {
       throw new Error('当前 SFTP 连接不可用，远程文件尚未修改。')
     }
-    const tab = this.props.tab || {}
-    return {
-      host: tab.host,
-      port: Number(tab.port || 22),
-      username: tab.username || tab.user,
-      title: tab.title || tab.name || '',
-      tabId: tab.id || '',
-      pid: this.sftp.id || '',
-      terminalPid: this.terminalId || '',
-      sessionType: 'sftp'
-    }
+    return buildSftpSafetyEndpoint({
+      tab: this.props.tab,
+      terminalId: this.terminalId
+    })
   }
 
   assertSftpSafetyOperationEndpoint = async id => {
@@ -828,7 +822,9 @@ export default class Sftp extends Component {
     const isRemote = files.length && files.every(f => f.type === typeMap.remote)
     const names = hasDirectory ? e('filesAndFolders') : e('files')
     if (isRemote) {
-      const title = `恢复快照已验证。确认删除所选${names}吗？（${files.length}）`
+      const title = this.props.isFtp
+        ? `FTP 将永久删除所选${names}，无恢复快照。确认继续吗？（${files.length}）`
+        : `恢复快照已验证。确认删除所选${names}吗？（${files.length}）`
       return pureText ? title : <div className='wordbreak'>{title}</div>
     }
     if (pureText) {

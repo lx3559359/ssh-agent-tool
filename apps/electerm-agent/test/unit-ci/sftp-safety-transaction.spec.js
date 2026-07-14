@@ -181,6 +181,24 @@ test('side-effect requests reject unsupported actions and non-absolute resources
       protectedPath
     )
   }
+
+  for (const id of [
+    '.',
+    '..',
+    'sftp/escape',
+    'sftp\\escape',
+    ' sftp-safe',
+    'sftp-safe ',
+    'sftp.safe',
+    'sftp/../safe',
+    'ｓftp-safe'
+  ]) {
+    await assert.rejects(
+      createSideEffectOperation({ id }),
+      /operation id|identifier|事务标识|操作标识/i,
+      id
+    )
+  }
 })
 
 test('side-effect recovery binding v2 binds identity effect plan and artifacts without rollback commands', async () => {
@@ -480,6 +498,123 @@ test('side-effect completion is idempotent and cancellation or endpoint change n
   assert.deepEqual(changed.calls, ['prepare'])
 })
 
+test('side-effect cancel waits for an active atomic hook and preserves rollback state', async () => {
+  let markStarted
+  let releaseAtomic
+  const started = new Promise(resolve => { markStarted = resolve })
+  const atomic = new Promise(resolve => { releaseAtomic = resolve })
+  let mutationCompleted = false
+  const context = await createSideEffectRunner({
+    adapter: {
+      beforeExecute: async (operation, lifecycle) => {
+        markStarted()
+        await atomic
+        mutationCompleted = true
+        if (lifecycle.signal?.aborted) {
+          const error = new Error('SFTP side-effect cooperative abort')
+          error.name = 'AbortError'
+          throw error
+        }
+        return { summary: `mutated ${operation.id}` }
+      }
+    }
+  })
+  await context.runner.prepare(context.operation)
+  const executing = context.runner.execute(context.operation.id, {
+    confirmed: true,
+    sideEffectInput: { text: '{"enabled":true}' }
+  })
+  await started
+
+  let cancelSettled = false
+  const cancelling = context.runner.cancel(context.operation.id).then(value => {
+    cancelSettled = true
+    return value
+  })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(cancelSettled, false)
+  assert.equal((await context.store.get(context.operation.id)).state, 'executing')
+
+  releaseAtomic()
+  const [executeResult, cancelResult] = await Promise.allSettled([
+    executing,
+    cancelling
+  ])
+  assert.equal(mutationCompleted, true)
+  assert.equal(executeResult.status, 'rejected')
+  assert.match(executeResult.reason.message, /cancel|取消|中止/i)
+  assert.equal(cancelResult.status, 'fulfilled')
+  assert.equal(cancelResult.value.state, 'failed')
+  assert.equal(cancelResult.value.artifacts.manifest.endsWith('/manifest.json'), true)
+  assert.equal((await context.runner.rollback(context.operation.id)).state, 'restored')
+})
+
+test('SFTP endpoint identity survives transport refresh but rejects another security context', async () => {
+  const { buildSftpSafetyEndpoint } = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/components/sftp/sftp-safety-endpoint.js'
+  )).href)
+  const { findMatchingSafetySftp } = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/components/main/safety-operation-center-model.js'
+  )).href)
+  const tab = {
+    id: 'tab-stable',
+    host: 'prod.example.com',
+    port: 2222,
+    username: 'deploy',
+    title: 'production'
+  }
+  const endpoint = buildSftpSafetyEndpoint({
+    tab,
+    terminalId: 'terminal-session-stable'
+  })
+  const operation = await createSideEffectOperation({ endpoint })
+  const refreshedEndpoint = buildSftpSafetyEndpoint({
+    tab: { ...tab },
+    terminalId: 'terminal-session-stable'
+  })
+  const context = await createSideEffectRunner({
+    operation,
+    getCurrentEndpoint: () => refreshedEndpoint
+  })
+  await context.runner.prepare(operation)
+  await context.runner.execute(operation.id, {
+    confirmed: true,
+    sideEffectInput: { text: '{"enabled":true}' }
+  })
+
+  const refreshedCapability = {
+    sftp: { id: 'new-random-sftp-transport-id' },
+    getSftpSafetyEndpoint: () => refreshedEndpoint,
+    rollbackSafetyOperation: id => context.runner.rollback(id)
+  }
+  const matched = findMatchingSafetySftp(
+    operation,
+    [tab.id],
+    () => refreshedCapability
+  )
+  assert.equal(matched, refreshedCapability)
+  assert.equal((await matched.rollbackSafetyOperation(operation.id)).state, 'restored')
+
+  for (const changedEndpoint of [
+    { ...refreshedEndpoint, host: 'other.example.com' },
+    { ...refreshedEndpoint, port: 22 },
+    { ...refreshedEndpoint, username: 'root' },
+    { ...refreshedEndpoint, tabId: 'tab-other' },
+    { ...refreshedEndpoint, terminalPid: 'terminal-session-other' }
+  ]) {
+    assert.equal(findMatchingSafetySftp(
+      operation,
+      [tab.id],
+      () => ({
+        ...refreshedCapability,
+        getSftpSafetyEndpoint: () => changedEndpoint
+      })
+    ), undefined)
+  }
+})
+
 function normalizeFakePath (value) {
   const parts = []
   for (const part of String(value || '/').replace(/\\/g, '/').split('/')) {
@@ -660,8 +795,8 @@ function createFakeSftp (initial = {}, options = {}) {
       cloneTree(from, to)
       return 1
     },
-    async copyEntry (from, to) {
-      calls.push(['copyEntry', normalizeFakePath(from), normalizeFakePath(to)])
+    async copyEntry (from, to, callOptions) {
+      calls.push(['copyEntry', normalizeFakePath(from), normalizeFakePath(to), callOptions])
       if (failCopy) {
         failCopy = false
         throw new Error('No space left on device')
@@ -708,9 +843,9 @@ function createFakeSftp (initial = {}, options = {}) {
       removeTree(normalized)
       return 1
     },
-    async removeEntry (path) {
+    async removeEntry (path, callOptions) {
       const normalized = normalizeFakePath(path)
-      calls.push(['removeEntry', normalized])
+      calls.push(['removeEntry', normalized, callOptions])
       node(normalized)
       if (failRemove) {
         failRemove = false
@@ -806,6 +941,35 @@ async function buildSftpOperation ({ id, action, paths, type, requestedMode, exp
   })
 }
 
+test('SFTP adapter rejects forged ids before constructing a transaction directory', async () => {
+  const { createSftpTransactionAdapter } = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/components/sftp/sftp-transaction-adapter.js'
+  )).href)
+  const operation = await buildSftpOperation({
+    id: 'adapter-safe-id',
+    action: 'delete',
+    paths: { source: '/srv/app/data.txt' },
+    type: 'file',
+    expected: { absent: true }
+  })
+
+  for (const id of ['.', '..', 'nested/escape', 'nested\\escape']) {
+    const sftp = createFakeSftp({
+      '/srv/app/data.txt': { type: 'file', content: 'data' }
+    })
+    const adapter = createSftpTransactionAdapter({ getSftp: () => sftp })
+    await assert.rejects(
+      adapter.prepare({ ...operation, id }),
+      /operation id|identifier|事务标识|事务目录/i,
+      id
+    )
+    assert.equal(sftp.calls.some(call => (
+      call[0] === 'copyEntry' || call[0] === 'writeFile'
+    )), false, id)
+  }
+})
+
 test('SFTP adapter snapshots and verifies editor saves with bounded chunk reads', async () => {
   const {
     createSftpTransactionAdapter,
@@ -856,6 +1020,79 @@ test('SFTP adapter snapshots and verifies editor saves with bounded chunk reads'
   await adapter.verifyRollback(operation)
   assert.equal(sftp.text('/srv/app/config.json'), oldText)
   assert.equal(sftp.text(prepared.artifacts.target), oldText)
+})
+
+test('SFTP adapter forwards lifecycle AbortSignal to snapshot copy and recursive delete', async () => {
+  const { createSftpTransactionAdapter } = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/components/sftp/sftp-transaction-adapter.js'
+  )).href)
+  const sftp = createFakeSftp({
+    '/srv/app/tree': { type: 'directory', mode: 0o750 },
+    '/srv/app/tree/file.txt': { type: 'file', content: 'data', mode: 0o640 }
+  })
+  const operation = await buildSftpOperation({
+    id: 'adapter-delete-abort-signal',
+    action: 'delete',
+    paths: { source: '/srv/app/tree' },
+    type: 'directory',
+    expected: { absent: true }
+  })
+  const adapter = createSftpTransactionAdapter({ getSftp: () => sftp })
+  const controller = new AbortController()
+  Object.assign(operation, await adapter.prepare(operation, {
+    signal: controller.signal
+  }))
+  const copyCall = sftp.calls.find(call => call[0] === 'copyEntry')
+  assert.equal(copyCall[3].signal, controller.signal)
+
+  await adapter.beforeExecute(operation, { signal: controller.signal })
+  const removeCall = sftp.calls.find(call => call[0] === 'removeEntry')
+  assert.equal(removeCall[2].signal, controller.signal)
+})
+
+test('SFTP transport replaces transaction AbortSignal with a bounded server cancel token', async () => {
+  const { prepareSftpCancelableCall } = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/common/sftp-operation-cancellation.js'
+  )).href)
+  const controller = new AbortController()
+  const input = ['/source', '/target', {
+    signal: controller.signal,
+    maxTotalBytes: 1024
+  }]
+  const prepared = prepareSftpCancelableCall('copyEntry', input, 'cancel_token-1')
+  assert.equal(prepared.signal, controller.signal)
+  assert.equal(prepared.cancelToken, 'cancel_token-1')
+  assert.equal(prepared.args[2].signal, undefined)
+  assert.equal(prepared.args[2].cancelToken, 'cancel_token-1')
+  assert.equal(prepared.args[2].maxTotalBytes, 1024)
+  assert.equal(input[2].cancelToken, undefined)
+
+  const ordinary = prepareSftpCancelableCall('cp', input, 'cancel_token-2')
+  assert.equal(ordinary.signal, undefined)
+  assert.equal(ordinary.cancelToken, undefined)
+  assert.equal(ordinary.args, input)
+
+  assert.throws(
+    () => prepareSftpCancelableCall('removeEntry', [
+      '/tree',
+      { signal: controller.signal }
+    ], '../escape'),
+    /token|令牌|无效/i
+  )
+
+  const fs = require('node:fs')
+  const clientSource = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/common/sftp.js'
+  ), 'utf8')
+  const serverSource = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/app/server/session-server.js'
+  ), 'utf8')
+  assert.match(clientSource, /action:\s*'sftp-cancel'/)
+  assert.match(serverSource, /action === 'sftp-cancel'[\s\S]{0,300}cancelOperation/)
 })
 
 test('SFTP adapter restores absent editor targets and keeps displaced content', async () => {
@@ -992,6 +1229,36 @@ test('SFTP adapter bounds recursive directory descriptions and fails closed', as
   )
   assert.equal(sftp.exists('/srv/app/deep'), true)
   assert.equal(sftp.calls.some(call => call[0] === 'copyEntry'), false)
+})
+
+test('SFTP adapter rejects an oversized manifest before creating snapshot staging', async () => {
+  const { createSftpTransactionAdapter } = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/components/sftp/sftp-transaction-adapter.js'
+  )).href)
+  const initial = {
+    '/srv/app/wide': { type: 'directory', mode: 0o750 }
+  }
+  for (let index = 0; index < 1400; index += 1) {
+    const suffix = String(index).padStart(4, '0')
+    const name = `${suffix}-${'manifest-entry-'.repeat(13)}`
+    initial[`/srv/app/wide/${name}`] = { type: 'directory', mode: 0o750 }
+  }
+  const sftp = createFakeSftp(initial)
+  const operation = await buildSftpOperation({
+    id: 'sftp-delete-oversized-manifest',
+    action: 'delete',
+    paths: { source: '/srv/app/wide' },
+    type: 'directory',
+    expected: { absent: true }
+  })
+
+  await assert.rejects(
+    createSftpTransactionAdapter({ getSftp: () => sftp }).prepare(operation),
+    /manifest|清单|size|limit|大小|上限/i
+  )
+  assert.equal(sftp.calls.some(call => call[0] === 'copyEntry'), false)
+  assert.equal([...sftp.nodes.keys()].some(key => key.includes(operation.id)), false)
 })
 
 test('SFTP adapter snapshots both rename paths and blocks cross-filesystem or special sources', async () => {
@@ -1300,6 +1567,15 @@ test('SFTP UI routes editor save chmod rename and delete through modern transact
   assert.match(entrySource, /renameRemoteFile[\s\S]{0,300}this\.props\.isFtp/)
   assert.match(entrySource, /saveRemoteEditorFile[\s\S]{0,300}this\.props\.isFtp/)
   assert.match(entrySource, /deleteRemoteFilesWithSafety[\s\S]{0,300}this\.props\.isFtp/)
+  assert.match(
+    entrySource,
+    /renderDelConfirmTitle[\s\S]{0,500}this\.props\.isFtp[\s\S]{0,180}永久删除[\s\S]{0,80}无恢复快照/
+  )
+  assert.match(entrySource, /恢复快照已验证/)
+  assert.match(
+    entrySource,
+    /deleteRemoteFilesWithSafety[\s\S]{0,220}this\.props\.isFtp[\s\S]{0,220}confirmDelete[\s\S]{0,220}remoteDel/
+  )
   assert.doesNotMatch(entrySource, /softDeleteRemoteFiles\(/)
   assert.doesNotMatch(entrySource, /recordSftpMutationRecovery/)
   for (const method of [

@@ -231,7 +231,7 @@ function normalizeLegacyOperation (record, clock) {
     createdAt: normalizedLegacy.createdAt,
     updatedAt: normalizedLegacy.updatedAt || normalizedLegacy.createdAt,
     metadata
-  }, { now: resolveNow(clock) })
+  }, { now: resolveNow(clock), allowLegacyId: true })
 }
 
 function recordTime (record) {
