@@ -12,10 +12,191 @@ const registryUrl = pathToFileURL(path.resolve(
   __dirname,
   '../../src/client/common/safety-transactions/background-task-registry.js'
 )).href
+const commandEntrypointUrl = pathToFileURL(path.resolve(
+  __dirname,
+  '../../src/client/common/safety-transactions/command-entrypoint.js'
+)).href
+const transactionRunnerUrl = pathToFileURL(path.resolve(
+  __dirname,
+  '../../src/client/common/safety-transactions/transaction-runner.js'
+)).href
 const orphanRecoveryUrl = pathToFileURL(path.resolve(
   __dirname,
   '../../src/client/common/safety-transactions/command-orphan-recovery.js'
 )).href
+
+function clone (value) {
+  return value === undefined ? undefined : structuredClone(value)
+}
+
+function createProductionStore () {
+  const records = new Map()
+  const queues = new Map()
+
+  function enqueue (id, work) {
+    const previous = queues.get(id) || Promise.resolve()
+    const current = previous.catch(() => {}).then(work)
+    queues.set(id, current)
+    return current.finally(() => {
+      if (queues.get(id) === current) queues.delete(id)
+    })
+  }
+
+  function merge (current, patch) {
+    return {
+      ...current,
+      ...clone(patch),
+      ...(patch?.metadata
+        ? { metadata: { ...current.metadata, ...clone(patch.metadata) } }
+        : {})
+    }
+  }
+
+  return {
+    async save (value) {
+      records.set(value.id, clone(value))
+      return clone(value)
+    },
+    async get (id) {
+      return clone(records.get(id))
+    },
+    async patch (id, patch) {
+      return enqueue(id, async () => {
+        const updated = merge(records.get(id), patch)
+        records.set(id, updated)
+        return clone(updated)
+      })
+    },
+    async guardedPatch (id, predicate, patch) {
+      return enqueue(id, async () => {
+        const current = records.get(id)
+        if (await predicate(clone(current)) !== true) {
+          throw new Error('安全事务完整性校验失败，已拒绝原子更新。')
+        }
+        const resolved = typeof patch === 'function'
+          ? await patch(clone(current))
+          : patch
+        const updated = merge(current, resolved)
+        records.set(id, updated)
+        return clone(updated)
+      })
+    },
+    async guardedPatchOperation (id, predicate, patch) {
+      return this.guardedPatch(id, predicate, patch)
+    }
+  }
+}
+
+async function createProductionBackgroundHarness (failureMode, cancelMode = 'success') {
+  const { createSafetyCommandEntrypoint } = await import(commandEntrypointUrl)
+  const { createTransactionRunner } = await import(transactionRunnerUrl)
+  const endpoint = {
+    tabId: 'tab-production',
+    host: 'prod.example.com',
+    port: 22,
+    username: 'root',
+    pid: 4001
+  }
+  const store = createProductionStore()
+  let clockTick = 0
+  const productionRunner = createTransactionRunner({
+    store,
+    runRemote: async () => assert.fail('readonly background payload must use PTY once'),
+    cancelRemote: async () => true,
+    getCurrentEndpoint: async () => endpoint,
+    buildRecoveryPlan: async () => assert.fail('readonly command needs no recovery'),
+    now: () => new Date(Date.UTC(2026, 6, 14, 12, 0, clockTick++))
+  })
+  let completeCalls = 0
+  let cancelCalls = 0
+  const runner = {
+    ...productionRunner,
+    async completeExternalExecution (id, completion) {
+      completeCalls += 1
+      if (failureMode === 'false-before-commit' && completeCalls === 1) {
+        return false
+      }
+      if (failureMode === 'always-throw') {
+        throw new Error('事务存储暂时不可用')
+      }
+      const completed = await productionRunner.completeExternalExecution(id, completion)
+      if (failureMode === 'throw-after-commit' && completeCalls === 1) {
+        throw new Error('事务已写入但响应丢失')
+      }
+      return completed
+    },
+    async cancel (id) {
+      cancelCalls += 1
+      if (cancelMode === 'false') return false
+      if (cancelMode === 'throw') throw new Error('事务取消写入失败')
+      return productionRunner.cancel(id)
+    }
+  }
+  const submissions = []
+  let tokenSequence = 0
+  const tracker = {
+    expectExternalSubmission: command => `production-${++tokenSequence}-${command}`,
+    markExpectedSubmissionReleased: () => true,
+    cancelExpectedSubmission: () => true
+  }
+  const entrypoint = createSafetyCommandEntrypoint({
+    runner,
+    tracker,
+    ensureTrackerReady: async () => true,
+    createId: () => 'production-background-operation',
+    getEndpoint: () => endpoint,
+    submitCommand: (command, token) => {
+      submissions.push({ command, token })
+      return true
+    },
+    inputCommand: () => {},
+    buildConfirmation: () => assert.fail('readonly command needs no confirmation'),
+    onStateChange: () => {},
+    onError: () => {}
+  })
+  entrypoint.beginSession()
+  const submission = await entrypoint.runSafetyCommand('uptime', {
+    source: 'agent',
+    executionMode: 'background'
+  })
+  assert.equal(await entrypoint.handleCommandFinished({
+    token: submission.token,
+    command: submission.execution.submittedCommand,
+    exitCode: 0
+  }), true)
+  return {
+    entrypoint,
+    submission,
+    submissions,
+    store,
+    get completeCalls () { return completeCalls },
+    get cancelCalls () { return cancelCalls }
+  }
+}
+
+async function createBackgroundTaskRegistryForHarness (harness, overrides = {}) {
+  const { createBackgroundTaskRegistry } = await import(registryUrl)
+  const registry = createBackgroundTaskRegistry({
+    readFile: async (_tabId, file) => file.endsWith('.exit') ? '0\n' : '4321\n',
+    isAlive: async () => false,
+    kill: async () => true,
+    ...overrides
+  })
+  registry.register({
+    id: 'production-background-task',
+    operationId: harness.submission.operationId,
+    tabId: 'tab-production',
+    command: 'uptime',
+    startTime: 100,
+    pidFile: '/tmp/production.pid',
+    exitFile: '/tmp/production.exit',
+    logFile: '/tmp/production.log',
+    finalize: harness.submission.finalizeBackground,
+    cancel: harness.submission.cancelBackground,
+    completion: harness.submission.completion
+  })
+  return registry
+}
 
 function createFakeScheduler () {
   let nextId = 1
@@ -228,6 +409,94 @@ test('finalize throw is redacted unknown state and remains safely retryable', as
   assert.equal(second.status, 'failed')
   assert.equal(second.exitCode, 7)
   assert.equal(attempts, 2)
+})
+
+test('production background finalization retries the same identity without resubmitting payload', async t => {
+  for (const failureMode of ['false-before-commit', 'throw-after-commit']) {
+    await t.test(failureMode, async () => {
+      const harness = await createProductionBackgroundHarness(failureMode)
+      const registry = await createBackgroundTaskRegistryForHarness(harness)
+      let settled = 0
+      harness.submission.completion.then(() => { settled += 1 })
+
+      const first = await registry.status('production-background-task')
+      assert.equal(first.status, 'unknown')
+      assert.equal(first.finalizePending, true)
+      assert.equal(harness.entrypoint.hasPending(), true)
+      assert.equal(settled, 0)
+      assert.equal(harness.completeCalls, 1)
+      assert.equal(harness.cancelCalls, 0)
+      assert.equal(harness.submissions.length, 1)
+
+      const second = await registry.status('production-background-task')
+      await Promise.resolve()
+      assert.equal(second.status, 'completed')
+      assert.equal(harness.completeCalls, 2)
+      assert.equal(harness.cancelCalls, 0)
+      assert.equal(harness.submissions.length, 1)
+      assert.equal(settled, 1)
+      assert.equal(harness.entrypoint.hasPending(), false)
+      assert.equal((await harness.store.get(harness.submission.operationId)).state, 'kept')
+    })
+  }
+})
+
+test('permanent production finalization failure cancels once at monitor timeout', async () => {
+  const harness = await createProductionBackgroundHarness('always-throw')
+  const clock = { value: 100 }
+  const fake = createFakeScheduler()
+  const registry = await createBackgroundTaskRegistryForHarness(harness, {
+    now: () => clock.value,
+    scheduler: fake.scheduler,
+    monitorInitialDelayMs: 250,
+    monitorMaxDelayMs: 250,
+    monitorTimeoutMs: 500
+  })
+
+  const first = await registry.status('production-background-task')
+  assert.equal(first.status, 'unknown')
+  assert.equal(first.finalizePending, true)
+  assert.equal(harness.completeCalls, 1)
+  assert.equal(harness.cancelCalls, 0)
+  assert.equal(harness.submissions.length, 1)
+
+  clock.value = 600
+  await fake.runNext()
+
+  const terminal = registry.get('production-background-task')
+  assert.equal(terminal.status, 'unknown')
+  assert.equal(terminal.interrupted, true)
+  assert.match(terminal.message, /监控超时/)
+  assert.equal(harness.cancelCalls, 1)
+  assert.equal(harness.submissions.length, 1)
+  assert.equal(fake.size, 0)
+  assert.equal(harness.entrypoint.hasPending(), false)
+})
+
+test('monitor timeout records one failed cancel attempt and stops retrying', async () => {
+  const harness = await createProductionBackgroundHarness('always-throw', 'false')
+  const clock = { value: 100 }
+  const fake = createFakeScheduler()
+  const registry = await createBackgroundTaskRegistryForHarness(harness, {
+    now: () => clock.value,
+    scheduler: fake.scheduler,
+    monitorInitialDelayMs: 250,
+    monitorMaxDelayMs: 250,
+    monitorTimeoutMs: 500
+  })
+
+  await registry.status('production-background-task')
+  clock.value = 600
+  await fake.runNext()
+
+  const terminal = registry.get('production-background-task')
+  assert.equal(terminal.status, 'unknown')
+  assert.equal(terminal.interrupted, true)
+  assert.match(terminal.message, /中断收口失败|取消失败/)
+  assert.equal(harness.cancelCalls, 1)
+  assert.equal(harness.submissions.length, 1)
+  assert.equal(fake.size, 0)
+  assert.equal(harness.entrypoint.hasPending(), false)
 })
 
 test('a registered task auto-finalizes from its real exit without a status query', async () => {

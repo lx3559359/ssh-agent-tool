@@ -276,7 +276,7 @@ test('external PTY nonzero and interrupted exits fail while preserving rollback'
   }
 })
 
-test('external PTY completion rejects unrelated and late command events', async () => {
+test('external PTY completion rejects unrelated events and idempotently accepts the same identity', async () => {
   const { runner, request, store } = await createPreparedRunner()
   const begun = await runner.beginExternalExecution(request.id, {
     confirmed: true
@@ -300,19 +300,60 @@ test('external PTY completion rejects unrelated and late command events', async 
   )
   assert.equal((await store.get(request.id)).state, 'executing')
 
-  await runner.completeExternalExecution(request.id, {
+  const completed = await runner.completeExternalExecution(request.id, {
     executionId: begun.executionId,
     command: request.command,
     exitCode: 0
   })
+  const repeated = await runner.completeExternalExecution(request.id, {
+    executionId: begun.executionId,
+    command: request.command,
+    exitCode: 0
+  })
+  assert.equal(repeated.state, completed.state)
+  assert.equal(repeated.audit.length, completed.audit.length)
+  await assert.rejects(runner.completeExternalExecution(request.id, {
+    executionId: begun.executionId,
+    command: request.command,
+    exitCode: 7
+  }), /完成记录|执行标识|匹配/)
+})
+
+test('external PTY completion retries idempotently after the terminal state was persisted before an error', async () => {
+  const baseStore = createMemoryStore()
+  let failResponse = true
+  const store = {
+    ...baseStore,
+    async guardedPatch (id, predicate, value) {
+      const updated = await baseStore.guardedPatch(id, predicate, value)
+      if (updated.state === 'rollback-available' && failResponse) {
+        failResponse = false
+        throw new Error('终态已写入但响应丢失')
+      }
+      return updated
+    }
+  }
+  const { runner, request } = await createPreparedRunner({ store })
+  const begun = await runner.beginExternalExecution(request.id, {
+    confirmed: true
+  })
+  const completion = {
+    executionId: begun.executionId,
+    command: request.command,
+    exitCode: 0
+  }
+
   await assert.rejects(
-    runner.completeExternalExecution(request.id, {
-      executionId: begun.executionId,
-      command: request.command,
-      exitCode: 0
-    }),
-    /executing/
+    runner.completeExternalExecution(request.id, completion),
+    /终态已写入但响应丢失/
   )
+  const persisted = await baseStore.get(request.id)
+  assert.equal(persisted.state, 'rollback-available')
+  const auditLength = persisted.audit.length
+
+  const retried = await runner.completeExternalExecution(request.id, completion)
+  assert.equal(retried.state, 'rollback-available')
+  assert.equal(retried.audit.length, auditLength)
 })
 
 test('external nonreversible PTY execution requires unsafe confirmation without rollback', async () => {

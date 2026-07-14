@@ -241,8 +241,8 @@ export function createSafetyCommandEntrypoint (options = {}) {
       execution.cancelPromise = Promise.resolve()
         .then(() => runner.cancel(execution.id))
     }
-    await execution.cancelPromise
-    return true
+    const cancelled = await execution.cancelPromise
+    return cancelled !== false
   }
 
   async function cancelExecutionById (operationId, reason) {
@@ -397,16 +397,18 @@ export function createSafetyCommandEntrypoint (options = {}) {
       throw new Error('命令退出码无效。')
     }
     if (execution.finalizationPromise) return execution.finalizationPromise
-    removeExecution(execution)
-    tracker.cancelExpectedSubmission(execution.token)
     completingExecutions.set(execution.id, execution)
-    execution.finalizationPromise = (async () => {
+    const finalizationPromise = (async () => {
       try {
         const operation = await runner.completeExternalExecution(execution.id, {
           executionId: execution.executionId,
           command: execution.originalCommand,
           exitCode
         })
+        if (operation === false) {
+          if (execution.mode === 'background') return false
+          throw new Error('安全事务完成返回失败。')
+        }
         if (execution.cancelled || !live || execution.generation !== generation) {
           if (!execution.cancelPromise) {
             execution.cancelPromise = Promise.resolve()
@@ -420,6 +422,8 @@ export function createSafetyCommandEntrypoint (options = {}) {
           })
           return false
         }
+        removeExecution(execution)
+        tracker.cancelExpectedSubmission(execution.token)
         await abortHookState(execution.hookState)
         settleExecution(execution, {
           operation,
@@ -430,6 +434,12 @@ export function createSafetyCommandEntrypoint (options = {}) {
         return true
       } catch (error) {
         if (execution.cancelled) return false
+        if (execution.mode === 'background') {
+          onError(error)
+          return false
+        }
+        removeExecution(execution)
+        tracker.cancelExpectedSubmission(execution.token)
         try {
           await runner.cancel(execution.id)
         } catch (cancelError) {
@@ -446,7 +456,15 @@ export function createSafetyCommandEntrypoint (options = {}) {
         completingExecutions.delete(execution.id)
       }
     })()
-    return execution.finalizationPromise
+    execution.finalizationPromise = finalizationPromise
+    try {
+      return await finalizationPromise
+    } finally {
+      if (execution.finalizationPromise === finalizationPromise &&
+        !execution.settled) {
+        execution.finalizationPromise = null
+      }
+    }
   }
 
   async function executeRun (run) {

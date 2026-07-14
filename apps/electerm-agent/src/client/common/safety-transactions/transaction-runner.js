@@ -999,27 +999,85 @@ export function createTransactionRunner (options = {}) {
     })
   }
 
+  function validateExternalCompletion (operation, completion) {
+    if (!completion.executionId) {
+      throw new Error('外部执行标识不匹配，已忽略无关或迟到事件。')
+    }
+    if (completion.command !== operation.command) {
+      throw new Error('外部执行命令不匹配，已忽略无关命令事件。')
+    }
+    if (completion.exitCode !== null && !Number.isInteger(completion.exitCode)) {
+      throw new Error('外部执行退出码无效。')
+    }
+  }
+
+  function externalCompletionMetadata (operation, completion) {
+    return {
+      ...operation.metadata,
+      externalCompletion: {
+        schemaVersion: 1,
+        executionId: completion.executionId,
+        command: completion.command,
+        exitCode: completion.exitCode
+      }
+    }
+  }
+
+  function matchesExternalCompletion (operation, completion) {
+    const receipt = operation.metadata?.externalCompletion
+    return receipt?.schemaVersion === 1 &&
+      receipt.executionId === completion.executionId &&
+      receipt.command === completion.command &&
+      receipt.exitCode === completion.exitCode
+  }
+
+  async function resumeExternalCompletion (operation, completion) {
+    if (!matchesExternalCompletion(operation, completion)) {
+      throw new Error('安全事务已有不同的外部执行完成记录，已拒绝重复收口。')
+    }
+    const successful = completion.exitCode === 0
+    if ((operation.state === operationStates.rollbackAvailable &&
+      successful && operation.reversible) ||
+      (operation.state === operationStates.kept &&
+        successful && !operation.reversible) ||
+      (operation.state === operationStates.failed && !successful)) {
+      return operation
+    }
+    if (operation.state !== operationStates.verificationPassed ||
+      !successful || !operation.reversible) {
+      throw new Error('安全事务必须处于 executing 状态才能完成外部执行。')
+    }
+    await assertCurrentEndpoint(operation)
+    const boundRecovery = await requireBoundRecovery(operation)
+    operation = await postCheckBoundRecovery(operation, boundRecovery)
+    return guardedRecoveryTransition(
+      operation,
+      boundRecovery,
+      operationStates.rollbackAvailable,
+      { completedAt: timestamp() },
+      'execute'
+    )
+  }
+
   function completeExternalExecution (id, completion = {}) {
     return serialize(String(id), async () => {
       let operation = await get(id)
       if (!operation) throw new Error(`未找到安全事务：${id}`)
+      validateExternalCompletion(operation, completion)
       if (operation.state !== operationStates.executing) {
-        throw new Error('安全事务必须处于 executing 状态才能完成外部执行。')
+        return serializeEndpoint(operation, async () => {
+          operation = await get(operation.id) || operation
+          return resumeExternalCompletion(operation, completion)
+        })
       }
-      if (!completion.executionId || completion.executionId !== operation.executionId) {
+      if (completion.executionId !== operation.executionId) {
         throw new Error('外部执行标识不匹配，已忽略无关或迟到事件。')
-      }
-      if (completion.command !== operation.command) {
-        throw new Error('外部执行命令不匹配，已忽略无关命令事件。')
-      }
-      if (completion.exitCode !== null && !Number.isInteger(completion.exitCode)) {
-        throw new Error('外部执行退出码无效。')
       }
 
       return serializeEndpoint(operation, async () => {
         operation = await get(operation.id) || operation
         if (operation.state !== operationStates.executing) {
-          throw new Error('安全事务必须处于 executing 状态才能完成外部执行。')
+          return resumeExternalCompletion(operation, completion)
         }
         if (completion.executionId !== operation.executionId) {
           throw new Error('外部执行标识不匹配，已忽略无关或迟到事件。')
@@ -1059,7 +1117,8 @@ export function createTransactionRunner (options = {}) {
                 audit: appendAudit(current, [audit]),
                 error,
                 failedAt: timestamp(),
-                executionId: undefined
+                executionId: undefined,
+                metadata: externalCompletionMetadata(current, completion)
               }),
               'execute',
               [audit]
@@ -1071,7 +1130,8 @@ export function createTransactionRunner (options = {}) {
             operationStates.verificationPassed,
             current => ({
               audit: appendAudit(current, [audit]),
-              executionId: undefined
+              executionId: undefined,
+              metadata: externalCompletionMetadata(current, completion)
             }),
             'execute',
             [audit]
@@ -1093,13 +1153,15 @@ export function createTransactionRunner (options = {}) {
             audit: appendAudit(operation, [audit]),
             error,
             failedAt: timestamp(),
-            executionId: undefined
+            executionId: undefined,
+            metadata: externalCompletionMetadata(operation, completion)
           }, 'execute')
         }
         return transition(operation, operationStates.kept, {
           audit: appendAudit(operation, [audit]),
           completedAt: timestamp(),
-          executionId: undefined
+          executionId: undefined,
+          metadata: externalCompletionMetadata(operation, completion)
         }, 'execute')
       })
     })
