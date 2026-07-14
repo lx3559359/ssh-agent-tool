@@ -499,21 +499,17 @@ export default class FileSection extends React.Component {
   changeFileMode = async (file) => {
     this.clearRef()
     const { permission, type, path, name } = file
-    const previousMode = this.state.file.permission
-    const func = type === typeMap.local
-      ? window.fs.chmod
-      : this.props.sftp.chmod
     const p = resolve(path, name)
     try {
-      await func(p, permission)
       if (type === typeMap.remote) {
-        this.props.recordSftpMutationRecovery({
-          kind: 'chmod',
-          sourcePath: p,
-          previousMode,
-          file
+        const result = await this.props.changeRemoteFileMode({
+          path: p,
+          mode: Number.parseInt(String(permission), 8),
+          type: file.isDirectory ? 'directory' : 'file'
         })
-        message.success('权限修改已记录，可在安全操作中心一键恢复。')
+        if (!result) return
+      } else {
+        await window.fs.chmod(p, permission)
       }
     } catch (err) {
       window.store.onError(err)
@@ -583,18 +579,16 @@ export default class FileSection extends React.Component {
   }
 
   remoteRename = async (oldname, newname) => {
-    const { remotePath, sftp } = this.props
+    const { remotePath } = this.props
     const p1 = resolve(remotePath, oldname)
     const p2 = resolve(remotePath, newname)
     try {
-      await sftp.rename(p1, p2)
-      this.props.recordSftpMutationRecovery({
-        kind: 'rename',
+      const result = await this.props.renameRemoteFile({
         sourcePath: p1,
-        backupPath: p2,
-        file: this.state.file
+        targetPath: p2,
+        type: this.state.file.isDirectory ? 'directory' : 'file'
       })
-      message.success('重命名已记录，可在安全操作中心一键恢复。')
+      if (!result) return
       this.props.remoteList()
     } catch (err) {
       window.store.onError(err)
@@ -732,26 +726,12 @@ export default class FileSection extends React.Component {
   }
 
   onSubmitEditFile = async (mode, type, path, text, noClose) => {
-    if (typeMap.remote === type) {
-      const backupOk = await this.props.quickBackupRemoteFiles([
-        {
-          ...getFolderFromFilePath(path, true),
-          type: typeMap.remote,
-          isDirectory: false
-        }
-      ], { silent: true })
-      if (!backupOk) {
-        message.error('保存前自动备份失败，已取消写入。')
-        this.editor?.setState({ loading: false })
-        return
-      }
-    }
     const r = typeMap.remote === type
-      ? await this.props.sftp.writeFile(
+      ? await this.props.saveRemoteEditorFile({
         path,
         text,
         mode
-      ).catch(window.store.onError)
+      }).catch(window.store.onError)
       : await window.fs.writeFile(
         path,
         text,

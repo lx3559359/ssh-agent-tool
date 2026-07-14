@@ -24,6 +24,7 @@ export const finalOperationStates = Object.freeze([
 ])
 
 export const recoveryBindingSchemaVersion = 1
+export const sideEffectRecoveryBindingSchemaVersion = 2
 export const recoveryBindingAlgorithm = 'SHA-256'
 
 function invalidRecoveryStructure (reason) {
@@ -34,6 +35,35 @@ function invalidRecoveryStructure (reason) {
 }
 
 export function validateRecoveryStructure (operation = {}) {
+  if (operation.operationKind === 'side-effect') {
+    const binding = operation.recoveryBinding
+    if (!binding || typeof binding !== 'object' || Array.isArray(binding)) {
+      return invalidRecoveryStructure('缺少恢复绑定。')
+    }
+    if (binding.schemaVersion !== sideEffectRecoveryBindingSchemaVersion) {
+      return invalidRecoveryStructure('恢复绑定版本不受支持。')
+    }
+    if (binding.algorithm !== recoveryBindingAlgorithm ||
+      typeof binding.fingerprint !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(binding.fingerprint)) {
+      return invalidRecoveryStructure('恢复绑定指纹无效。')
+    }
+    const plan = operation.plan
+    if (!plan || typeof plan !== 'object' || Array.isArray(plan) ||
+      plan.adapter !== operation.effect?.adapter ||
+      typeof plan.operationDir !== 'string' || !plan.operationDir.trim()) {
+      return invalidRecoveryStructure('缺少 side-effect 恢复计划。')
+    }
+    if (!operation.artifacts || typeof operation.artifacts !== 'object' ||
+      Array.isArray(operation.artifacts) || !Object.keys(operation.artifacts).length) {
+      return invalidRecoveryStructure('缺少恢复产物。')
+    }
+    if (typeof operation.recoveryReadyAt !== 'string' ||
+      Number.isNaN(new Date(operation.recoveryReadyAt).getTime())) {
+      return invalidRecoveryStructure('缺少有效的恢复点时间。')
+    }
+    return { valid: true, error: '' }
+  }
   const binding = operation.recoveryBinding
   if (!binding || typeof binding !== 'object' || Array.isArray(binding)) {
     return invalidRecoveryStructure('缺少恢复绑定。')
@@ -106,6 +136,7 @@ const endpointIdentityFields = [
 ]
 const normalizedOperationFields = [
   'id', 'source', 'command', 'title', 'state', 'createdAt', 'updatedAt',
+  'operationKind', 'effect', 'effectKey',
   'metadata', 'risk', 'provider', 'reversible', 'recoveryProvider',
   'requiresConfirmation', 'reason', 'plan', 'recoveryBinding', 'artifacts', 'audit',
   'recoveryReadyAt', 'executionId', 'error', 'integrityError', 'failedAt', 'completedAt',
@@ -150,11 +181,13 @@ function normalizeClassification (operation, normalized) {
     throw new Error('安全事务风险等级不受支持')
   }
   const provider = operation.recoveryProvider
-  if (provider !== undefined && provider !== null && !validRecoveryProviders.has(provider)) {
+  const validProvider = validRecoveryProviders.has(provider) ||
+    (operation.operationKind === 'side-effect' && provider === 'sftp')
+  if (provider !== undefined && provider !== null && !validProvider) {
     throw new Error('安全事务恢复提供方不受支持')
   }
   const reversible = operation.risk === operationRisks.change &&
-    operation.reversible === true && validRecoveryProviders.has(provider)
+    operation.reversible === true && validProvider
   normalized.reversible = reversible
   normalized.recoveryProvider = reversible ? provider : null
 }

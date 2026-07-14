@@ -384,13 +384,34 @@ export function buildSafetyRecordViewModel (record = {}, integrityResults, now =
   const legacyClaimError = getLegacyClaimStatus(record, now) === 'stale'
     ? legacyClaimUnknownResultMessage
     : ''
+  const resourcePaths = Array.isArray(record.effect?.resources)
+    ? record.effect.resources.slice(0, 64)
+      .map(resource => safeText(resource?.path, 1024))
+      .filter(Boolean)
+    : []
+  const artifactPaths = record.artifacts && typeof record.artifacts === 'object'
+    ? Object.values(record.artifacts).slice(0, 64)
+      .filter(value => typeof value === 'string')
+      .map(value => safeText(value, 1024))
+    : []
+  const effectSummary = record.operationKind === 'side-effect'
+    ? [record.effect?.adapter, record.effect?.action, ...resourcePaths]
+        .filter(Boolean)
+        .join(' | ')
+    : ''
   return {
     id: safeText(record.id, 256),
     recordType: record.recordType === 'task' ? 'task' : 'operation',
     source: safeText(record.source || 'unknown', 80),
     title: safeText(record.title || legacy?.title || '未命名安全操作', 320),
     endpoint: formatEndpoint(record),
-    commandSummary: compactText(record.command || legacy?.target || legacy?.sourcePath || '未记录命令'),
+    commandSummary: compactText(
+      effectSummary || record.command || legacy?.target || legacy?.sourcePath || '未记录命令'
+    ),
+    effectAdapter: safeText(record.effect?.adapter, 80),
+    effectAction: safeText(record.effect?.action, 80),
+    resourcePaths,
+    artifactPaths,
     provider: safeText(record.recoveryProvider || record.plan?.provider || '无', 80),
     backupPath: safeText(backupPath, 1024),
     recoveryPath: safeText(recoveryPath, 1024),
@@ -472,6 +493,37 @@ export function findMatchingSafetyTerminal (operation, tabIds, getTerminal) {
       continue
     }
     if (terminalMatchesOperation(operation, terminal)) return terminal
+  }
+}
+
+function sftpMatchesOperation (operation, entry) {
+  if (!entry?.sftp || typeof entry.getSftpSafetyEndpoint !== 'function' ||
+    typeof entry.rollbackSafetyOperation !== 'function') {
+    return false
+  }
+  try {
+    assertSameSessionEndpoint(
+      operation.endpoint,
+      entry.getSftpSafetyEndpoint()
+    )
+    return true
+  } catch {
+    return false
+  }
+}
+
+export function findMatchingSafetySftp (operation, tabIds, getEntry) {
+  if (!isRecord(operation) || operation.effect?.adapter !== 'sftp' ||
+    typeof getEntry !== 'function') return undefined
+  const ids = [operation.endpoint?.tabId, ...(Array.isArray(tabIds) ? tabIds : [])]
+  for (const id of [...new Set(ids.filter(Boolean))]) {
+    let entry
+    try {
+      entry = getEntry(id)
+    } catch {
+      continue
+    }
+    if (sftpMatchesOperation(operation, entry)) return entry
   }
 }
 

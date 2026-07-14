@@ -226,6 +226,7 @@ export async function executeSafetyCenterAction ({
   syncLegacyOperation,
   resolveLegacyTarget,
   runLegacyAction,
+  findModernCapability,
   findModernTerminal,
   taskCapability,
   now,
@@ -263,9 +264,10 @@ export async function executeSafetyCenterAction ({
   if (!modernActionAllowed(latest, action)) {
     throw staleRecordError()
   }
-  const terminal = requireFunction(findModernTerminal, 'findModernTerminal')(latest)
-  if (!terminal) {
-    throw new Error('未找到与安全操作端点完全匹配的活动 SSH 终端。')
+  const findCapability = findModernCapability || findModernTerminal
+  const capability = requireFunction(findCapability, 'findModernCapability')(latest)
+  if (!capability) {
+    throw new Error('未找到与安全操作端点完全匹配的活动 capability。')
   }
-  return routeSafetyCenterAction({ action, record: latest, terminal })
+  return routeSafetyCenterAction({ action, record: latest, terminal: capability })
 }

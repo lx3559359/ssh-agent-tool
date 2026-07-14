@@ -349,6 +349,47 @@ async function readRemoteFileRange (sftp, path, options) {
   return result
 }
 
+async function readRemoteFileChunk (sftp, path, options = {}) {
+  const offset = Number.isSafeInteger(options.offset) && options.offset >= 0
+    ? options.offset
+    : 0
+  const maxBytes = Number.isSafeInteger(options.maxBytes) && options.maxBytes > 0
+    ? Math.min(options.maxBytes, 64 * 1024)
+    : 64 * 1024
+  const fileHandle = await openRemoteFile(sftp, path)
+  let readError
+  let closeError
+  let result
+  try {
+    const stat = await statRemoteFile(sftp, path, fileHandle)
+    const totalBytes = Math.max(0, Number(stat.size) || 0)
+    const safeOffset = Math.min(offset, totalBytes)
+    const length = Math.min(maxBytes, totalBytes - safeOffset)
+    const value = length
+      ? await readRemoteFileHandle(sftp, fileHandle, safeOffset, length)
+      : Buffer.alloc(0)
+    const nextOffset = safeOffset + value.length
+    result = {
+      base64: value.toString('base64'),
+      offset: safeOffset,
+      nextOffset,
+      bytesRead: value.length,
+      totalBytes,
+      hasMore: nextOffset < totalBytes
+    }
+  } catch (err) {
+    readError = err
+  }
+  try {
+    await closeRemoteFile(sftp, fileHandle)
+  } catch (err) {
+    closeError = err
+  }
+  if (readError) throw readError
+  if (closeError) throw closeError
+  return result
+}
+
 function listRemoteArchive (sftp, remotePath, options = {}) {
   const archiveOptions = getArchiveOptions(remotePath, options)
   return withRemoteArchiveTempFile(
@@ -373,6 +414,7 @@ module.exports = {
   readRemoteFile,
   readRemoteFilePreview,
   readRemoteFileRange,
+  readRemoteFileChunk,
   listRemoteArchive,
   readRemoteArchiveTextEntry,
   writeRemoteFile

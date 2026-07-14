@@ -3,8 +3,10 @@ import { classifyCommand } from './command-classifier.js'
 import { buildEndpointKey } from './endpoint-guard.js'
 import {
   recoveryBindingAlgorithm,
-  recoveryBindingSchemaVersion
+  recoveryBindingSchemaVersion,
+  sideEffectRecoveryBindingSchemaVersion
 } from './models.js'
+import { buildSideEffectKey } from './side-effect-model.js'
 
 const recoveryIntegrityFailureMessage = '恢复记录完整性校验失败'
 
@@ -54,6 +56,29 @@ export async function createPersistedRecoveryPlan (plan) {
 }
 
 export function recoveryBindingPayload (operation, plan, artifacts) {
+  if (operation.operationKind === 'side-effect') {
+    if (operation.risk !== 'change' || operation.reversible !== true ||
+      operation.recoveryProvider !== operation.effect?.adapter ||
+      operation.effect?.adapter !== 'sftp' ||
+      operation.effectKey !== buildSideEffectKey(operation.effect) ||
+      plan?.adapter !== operation.effect.adapter ||
+      typeof plan?.operationDir !== 'string' || !plan.operationDir ||
+      !artifacts || typeof artifacts !== 'object' || Array.isArray(artifacts) ||
+      !Object.keys(artifacts).length) {
+      throw recoveryBindingError()
+    }
+    return {
+      schemaVersion: operation.schemaVersion,
+      operationKind: operation.operationKind,
+      id: operation.id,
+      endpoint: operation.endpoint,
+      endpointKey: buildEndpointKey(operation.endpoint),
+      effect: operation.effect,
+      effectKey: operation.effectKey,
+      plan,
+      artifacts
+    }
+  }
   const classification = classifyCommand(operation.command)
   const provider = classification.provider
   const operationDir = typeof plan?.operationDir === 'string'
@@ -93,7 +118,9 @@ export async function recoveryBindingFingerprint (operation, plan, artifacts) {
 
 export async function createRecoveryBinding (operation, plan, artifacts) {
   return {
-    schemaVersion: recoveryBindingSchemaVersion,
+    schemaVersion: operation.operationKind === 'side-effect'
+      ? sideEffectRecoveryBindingSchemaVersion
+      : recoveryBindingSchemaVersion,
     algorithm: recoveryBindingAlgorithm,
     fingerprint: await recoveryBindingFingerprint(operation, plan, artifacts)
   }
@@ -101,7 +128,10 @@ export async function createRecoveryBinding (operation, plan, artifacts) {
 
 export async function assertRecoveryBinding (operation) {
   const binding = operation.recoveryBinding
-  if (binding?.schemaVersion !== recoveryBindingSchemaVersion ||
+  const expectedVersion = operation.operationKind === 'side-effect'
+    ? sideEffectRecoveryBindingSchemaVersion
+    : recoveryBindingSchemaVersion
+  if (binding?.schemaVersion !== expectedVersion ||
     binding?.algorithm !== recoveryBindingAlgorithm ||
     typeof binding?.fingerprint !== 'string') {
     throw recoveryBindingError()

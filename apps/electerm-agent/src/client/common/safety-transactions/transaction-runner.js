@@ -3,6 +3,10 @@ import { classifyCommand } from './command-classifier.js'
 import { assertSameSessionEndpoint, buildEndpointKey } from './endpoint-guard.js'
 import { operationStates } from './models.js'
 import {
+  buildSideEffectKey,
+  sftpSideEffectActions
+} from './side-effect-model.js'
+import {
   assertRecoveryBinding,
   createPersistedRecoveryPlan,
   createRecoveryBinding,
@@ -344,15 +348,27 @@ function clonePersistedValue (value) {
 }
 
 function boundRecoverySnapshot (operation) {
+  const identity = operation.operationKind === 'side-effect'
+    ? {
+        schemaVersion: operation.schemaVersion,
+        id: operation.id,
+        operationKind: operation.operationKind,
+        effect: operation.effect,
+        effectKey: operation.effectKey,
+        endpoint: operation.endpoint,
+        endpointKey: operation.endpointKey,
+        computedEndpointKey: buildEndpointKey(operation.endpoint)
+      }
+    : {
+        schemaVersion: operation.schemaVersion,
+        id: operation.id,
+        command: operation.command,
+        endpoint: operation.endpoint,
+        endpointKey: operation.endpointKey,
+        computedEndpointKey: buildEndpointKey(operation.endpoint)
+      }
   return clonePersistedValue({
-    identity: {
-      schemaVersion: operation.schemaVersion,
-      id: operation.id,
-      command: operation.command,
-      endpoint: operation.endpoint,
-      endpointKey: operation.endpointKey,
-      computedEndpointKey: buildEndpointKey(operation.endpoint)
-    },
+    identity,
     classification: {
       risk: operation.risk,
       reversible: operation.reversible,
@@ -368,6 +384,31 @@ function boundRecoverySnapshot (operation) {
 }
 
 function stricterClassification (operation) {
+  if (operation.operationKind === 'side-effect') {
+    const supportedAction = operation.effect?.adapter === 'sftp' &&
+      sftpSideEffectActions.includes(operation.effect?.action)
+    let validEffectKey = false
+    try {
+      validEffectKey = supportedAction &&
+        operation.effectKey === buildSideEffectKey(operation.effect)
+    } catch {}
+    const forged = !validEffectKey || operation.risk !== 'change' ||
+      operation.reversible !== true || operation.recoveryProvider !== 'sftp' ||
+      operation.requiresConfirmation !== true
+    return {
+      classified: {
+        risk: 'change',
+        reversible: true,
+        provider: 'sftp'
+      },
+      forged,
+      risk: 'change',
+      reversible: true,
+      recoveryProvider: 'sftp',
+      requiresConfirmation: true,
+      reason: 'SFTP side-effect requires a verified recovery point.'
+    }
+  }
   const classified = classifyCommand(operation.command)
   const hasClaimedRisk = operation.risk !== undefined
   const validClaimedRisk = Object.hasOwn(riskRank, operation.risk)
@@ -415,6 +456,7 @@ export function createTransactionRunner (options = {}) {
   const cancelRemote = requireFunction(options.cancelRemote, 'cancelRemote')
   const getCurrentEndpoint = requireFunction(options.getCurrentEndpoint, 'getCurrentEndpoint')
   const buildRecoveryPlan = requireFunction(options.buildRecoveryPlan, 'buildRecoveryPlan')
+  const sideEffectAdapter = options.sideEffectAdapter
   const store = options.store || options
   const save = bindStoreMethod(store, 'save', 'saveOperation')
   const get = bindStoreMethod(store, 'get', 'getOperation')
@@ -482,6 +524,50 @@ export function createTransactionRunner (options = {}) {
     assertSameSessionEndpoint(operation.endpoint, current)
   }
 
+  async function requireSideEffectAdapter (operation) {
+    if (!sideEffectAdapter || typeof sideEffectAdapter !== 'object') {
+      throw new Error('当前 SFTP 安全事务缺少 sideEffectAdapter。')
+    }
+    for (const method of [
+      'supports',
+      'prepare',
+      'beforeExecute',
+      'verifyExecute',
+      'rollback',
+      'verifyRollback'
+    ]) {
+      requireFunction(sideEffectAdapter[method], `sideEffectAdapter.${method}`)
+    }
+    if (await sideEffectAdapter.supports(operation) !== true) {
+      throw new Error('当前 sideEffectAdapter 不支持该 SFTP 操作。')
+    }
+    return sideEffectAdapter
+  }
+
+  function sideEffectAudit (phase, result, code = 0) {
+    const output = result?.summary || result?.message || `${phase} completed`
+    return createAuditRecord({ phase, timestamp: timestamp(), code, output })
+  }
+
+  async function runSideEffectHook (adapter, method, operation, context = {}) {
+    try {
+      const result = await adapter[method](operation, context)
+      if (result === false || result?.verified === false) {
+        throw new Error(`SFTP 安全事务 ${method} 验证失败。`)
+      }
+      return { result, audit: sideEffectAudit(context.phase || method, result) }
+    } catch (error) {
+      if (!error.audit) {
+        error.audit = sideEffectAudit(
+          context.phase || method,
+          { summary: error?.message || String(error) },
+          null
+        )
+      }
+      throw error
+    }
+  }
+
   async function enforceClassification (operation) {
     const safety = stricterClassification(operation)
     const effectivePatch = classificationPatch(operation, safety)
@@ -509,7 +595,13 @@ export function createTransactionRunner (options = {}) {
     const error = recoveryIntegrityError()
     const current = await get(operation.id) || operation
     await transition(current, operationStates.failed, {
-      command: bound.identity.command,
+      ...(bound.identity.operationKind === 'side-effect'
+        ? {
+            operationKind: bound.identity.operationKind,
+            effect: clonePersistedValue(bound.identity.effect),
+            effectKey: bound.identity.effectKey
+          }
+        : { command: bound.identity.command }),
       endpoint: clonePersistedValue(bound.identity.endpoint),
       endpointKey: bound.identity.endpointKey,
       risk: bound.classification.risk,
@@ -552,6 +644,25 @@ export function createTransactionRunner (options = {}) {
     } catch {
       return failIntegrity(current, bound, entries)
     }
+  }
+
+  async function assertSideEffectPhase (
+    operation,
+    bound,
+    allowedStates,
+    entries = []
+  ) {
+    const current = await get(operation.id) || operation
+    await assertCurrentEndpoint(current)
+    const checked = await postCheckBoundRecovery(current, bound, entries)
+    if (cancellationRequests.has(operation.id) ||
+      checked.state === operationStates.cancelled) {
+      throw cancellationError()
+    }
+    if (allowedStates && !allowedStates.includes(checked.state)) {
+      throw new Error('SFTP 安全事务阶段状态已变化，已停止后续修改。')
+    }
+    return checked
   }
 
   async function guardedRecoveryTransition (
@@ -721,8 +832,9 @@ export function createTransactionRunner (options = {}) {
     ].includes(current.state) && Boolean(
       current.recoveryBinding &&
       current.recoveryReadyAt &&
-      current.plan?.rollbackCommand &&
-      current.plan?.verifyCommand
+      (current.operationKind === 'side-effect'
+        ? current.plan?.adapter === current.effect?.adapter
+        : current.plan?.rollbackCommand && current.plan?.verifyCommand)
     )
     const state = failure || preservesRecovery
       ? operationStates.failed
@@ -778,6 +890,59 @@ export function createTransactionRunner (options = {}) {
           await assertCurrentEndpoint(operation)
           if (cancellationRequests.has(operation.id) ||
             operation.state === operationStates.cancelled) throw cancellationError()
+          if (operation.operationKind === 'side-effect') {
+            const adapter = await requireSideEffectAdapter(operation)
+            const preparedPhase = await runSideEffectHook(
+              adapter,
+              'prepare',
+              operation,
+              { phase: 'prepare', signal }
+            )
+            await assertCurrentEndpoint(operation)
+            operation = await get(operation.id) || operation
+            enforced = await enforceClassification(operation)
+            operation = enforced.operation
+            if (enforced.safety.forged) {
+              throw new Error('SFTP side-effect 结构或权威安全分类已被修改。')
+            }
+            const prepared = preparedPhase.result
+            if (prepared?.manifestComplete !== true ||
+              !prepared.plan || typeof prepared.plan !== 'object' ||
+              !prepared.artifacts || typeof prepared.artifacts !== 'object' ||
+              !Object.keys(prepared.artifacts).length) {
+              throw new Error('SFTP 快照清单尚未完整，不能进入 recovery-ready。')
+            }
+            const savedPlan = clonePersistedValue(prepared.plan)
+            const artifacts = clonePersistedValue(prepared.artifacts)
+            const recoveryBinding = await createRecoveryBinding(
+              operation,
+              savedPlan,
+              artifacts
+            )
+            if (cancellationRequests.has(operation.id)) throw cancellationError()
+            const recoveryReady = await transition(
+              operation,
+              operationStates.recoveryReady,
+              {
+                plan: savedPlan,
+                recoveryBinding,
+                artifacts,
+                audit: appendAudit(operation, [preparedPhase.audit]),
+                recoveryReadyAt: timestamp(),
+                executionId: undefined
+              },
+              'prepare'
+            )
+            await assertCurrentEndpoint(recoveryReady)
+            await assertRecoveryBinding(recoveryReady)
+            rememberBoundRecovery(recoveryReady)
+            return transition(
+              recoveryReady,
+              operationStates.awaitingConfirmation,
+              {},
+              'prepare'
+            )
+          }
           if (!enforced.safety.reversible) {
             return transition(
               operation,
@@ -828,9 +993,154 @@ export function createTransactionRunner (options = {}) {
     })
   }
 
+  async function executeSideEffectWork (operation, executeOptions) {
+    if (executeOptions.confirmed !== true) {
+      throw new Error('必须明确确认后才能执行 SFTP 安全事务。')
+    }
+    if (![operationStates.awaitingConfirmation,
+      operationStates.verificationPassed,
+      operationStates.rollbackAvailable].includes(operation.state)) {
+      throw new Error('SFTP 安全事务必须处于 awaiting-confirmation 状态才能执行。')
+    }
+    const audits = []
+    let boundRecovery
+    try {
+      return await serializeEndpoint(operation, async () => {
+        operation = await get(operation.id) || operation
+        const adapter = await requireSideEffectAdapter(operation)
+        if ([operationStates.verificationPassed,
+          operationStates.rollbackAvailable].includes(operation.state)) {
+          boundRecovery = await requireBoundRecovery(operation)
+          operation = await assertSideEffectPhase(
+            operation,
+            boundRecovery,
+            [operation.state]
+          )
+          const verifiedPhase = await runSideEffectHook(
+            adapter,
+            'verifyExecute',
+            operation,
+            { phase: 'verify', input: executeOptions.sideEffectInput }
+          )
+          operation = await assertSideEffectPhase(
+            operation,
+            boundRecovery,
+            [operation.state],
+            [verifiedPhase.audit]
+          )
+          if (operation.state === operationStates.verificationPassed) {
+            return guardedRecoveryTransition(
+              operation,
+              boundRecovery,
+              operationStates.rollbackAvailable,
+              { completedAt: timestamp() },
+              'execute'
+            )
+          }
+          return operation
+        }
+        if (operation.state !== operationStates.awaitingConfirmation) {
+          throw new Error('SFTP 安全事务状态已变化，请刷新后重试。')
+        }
+        const enforced = await enforceClassification(operation)
+        operation = enforced.operation
+        if (enforced.safety.forged) {
+          throw new Error('SFTP side-effect 结构或权威安全分类已被修改。')
+        }
+        await assertCurrentEndpoint(operation)
+        if (!operation.plan || !operation.artifacts || !operation.recoveryReadyAt) {
+          throw new Error('SFTP 安全事务尚未完成 recovery-ready。')
+        }
+        boundRecovery = await requireBoundRecovery(operation)
+        operation = await transition(
+          operation,
+          operationStates.executing,
+          {},
+          'execute'
+        )
+
+        operation = await assertSideEffectPhase(
+          operation,
+          boundRecovery,
+          [operationStates.executing]
+        )
+        const executePhase = await runSideEffectHook(
+          adapter,
+          'beforeExecute',
+          operation,
+          {
+            phase: 'execute',
+            signal: executeOptions.signal,
+            input: executeOptions.sideEffectInput
+          }
+        )
+        audits.push(executePhase.audit)
+        operation = await assertSideEffectPhase(
+          operation,
+          boundRecovery,
+          [operationStates.executing],
+          audits
+        )
+
+        operation = await assertSideEffectPhase(
+          operation,
+          boundRecovery,
+          [operationStates.executing],
+          audits
+        )
+        const verifyPhase = await runSideEffectHook(
+          adapter,
+          'verifyExecute',
+          operation,
+          {
+            phase: 'verify',
+            signal: executeOptions.signal,
+            input: executeOptions.sideEffectInput,
+            executeResult: executePhase.result
+          }
+        )
+        audits.push(verifyPhase.audit)
+        operation = await assertSideEffectPhase(
+          operation,
+          boundRecovery,
+          [operationStates.executing],
+          audits
+        )
+        const verified = await guardedRecoveryTransition(
+          operation,
+          boundRecovery,
+          operationStates.verificationPassed,
+          current => ({
+            audit: appendAudit(current, audits),
+            executionId: undefined
+          }),
+          'verify',
+          audits
+        )
+        return guardedRecoveryTransition(
+          verified,
+          boundRecovery,
+          operationStates.rollbackAvailable,
+          { completedAt: timestamp() },
+          'execute'
+        )
+      })
+    } catch (error) {
+      if (error.integrityFailureHandled) throw sanitizeError(error)
+      if (error.audit && !audits.includes(error.audit)) audits.push(error.audit)
+      const current = await get(operation.id) || operation
+      if (error.cancelled || cancellationRequests.has(operation.id) ||
+        current.state === operationStates.cancelled) throw cancellationError()
+      return fail(operation, error, audits)
+    }
+  }
+
   function execute (id, executeOptions = {}) {
     return serialize(String(id), async () => {
       let operation = await get(id)
+      if (operation?.operationKind === 'side-effect') {
+        return executeSideEffectWork(operation, executeOptions)
+      }
       if (!operation) throw new Error(`未找到安全事务：${id}`)
       if (operation.state !== operationStates.awaitingConfirmation) {
         throw new Error('安全事务必须处于 awaiting-confirmation 状态才能执行。')
@@ -1167,9 +1477,103 @@ export function createTransactionRunner (options = {}) {
     })
   }
 
+  async function rollbackSideEffectWork (operation, rollbackOptions) {
+    if (operation.state === operationStates.restored) return operation
+    if (!rollbackStates.has(operation.state)) {
+      throw new Error('当前 SFTP 安全事务状态不允许回滚。')
+    }
+    const audits = []
+    let boundRecovery
+    try {
+      return await serializeEndpoint(operation, async () => {
+        operation = await get(operation.id) || operation
+        if (operation.state === operationStates.restored) return operation
+        if (!rollbackStates.has(operation.state)) {
+          throw new Error('当前 SFTP 安全事务状态不允许回滚。')
+        }
+        const adapter = await requireSideEffectAdapter(operation)
+        await assertCurrentEndpoint(operation)
+        boundRecovery = await requireBoundRecovery(operation)
+        operation = await transition(
+          operation,
+          operationStates.rollingBack,
+          {},
+          'rollback'
+        )
+
+        operation = await assertSideEffectPhase(
+          operation,
+          boundRecovery,
+          [operationStates.rollingBack]
+        )
+        const rollbackPhase = await runSideEffectHook(
+          adapter,
+          'rollback',
+          operation,
+          { phase: 'rollback', signal: rollbackOptions.signal }
+        )
+        audits.push(rollbackPhase.audit)
+        operation = await assertSideEffectPhase(
+          operation,
+          boundRecovery,
+          [operationStates.rollingBack],
+          audits
+        )
+
+        operation = await assertSideEffectPhase(
+          operation,
+          boundRecovery,
+          [operationStates.rollingBack],
+          audits
+        )
+        const verifyPhase = await runSideEffectHook(
+          adapter,
+          'verifyRollback',
+          operation,
+          {
+            phase: 'verify',
+            signal: rollbackOptions.signal,
+            rollbackResult: rollbackPhase.result
+          }
+        )
+        audits.push(verifyPhase.audit)
+        operation = await assertSideEffectPhase(
+          operation,
+          boundRecovery,
+          [operationStates.rollingBack],
+          audits
+        )
+        const restored = await guardedRecoveryTransition(
+          operation,
+          boundRecovery,
+          operationStates.restored,
+          current => ({
+            audit: appendAudit(current, audits),
+            completedAt: timestamp(),
+            executionId: undefined
+          }),
+          'verify',
+          audits
+        )
+        boundRecoveries.delete(operation.id)
+        return restored
+      })
+    } catch (error) {
+      if (error.integrityFailureHandled) throw sanitizeError(error)
+      if (error.audit && !audits.includes(error.audit)) audits.push(error.audit)
+      const current = await get(operation.id) || operation
+      if (error.cancelled || cancellationRequests.has(operation.id) ||
+        current.state === operationStates.cancelled) throw cancellationError()
+      return fail(operation, error, audits)
+    }
+  }
+
   function rollback (id, rollbackOptions = {}) {
     return serialize(String(id), async () => {
       let operation = await get(id)
+      if (operation?.operationKind === 'side-effect') {
+        return rollbackSideEffectWork(operation, rollbackOptions)
+      }
       if (!operation) throw new Error(`未找到安全事务：${id}`)
       if (!rollbackStates.has(operation.state)) {
         throw new Error('当前安全事务状态不允许回滚。')

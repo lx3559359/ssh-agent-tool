@@ -215,6 +215,9 @@ async function startSftpServer (root) {
           sftp.on('STAT', (reqId, remotePath) => {
             sftp.attrs(reqId, attrsFor(toLocalPath(root, remotePath)))
           })
+          sftp.on('LSTAT', (reqId, remotePath) => {
+            sftp.attrs(reqId, attrsFor(toLocalPath(root, remotePath)))
+          })
           sftp.on('FSTAT', (reqId, handle) => {
             const item = handles.get(handle.toString('hex'))
             if (!item || item.type !== 'file') {
@@ -304,6 +307,25 @@ describe('session-sftp transport flows', () => {
       assert.deepEqual(
         fs.readFileSync(toLocalPath(root, '/backups/source-copy/nested/data.bin')),
         binary
+      )
+
+      await sftp.copyEntry('/source', '/backups/transaction-copy')
+      const chunk = await sftp.readFileChunk(
+        '/backups/transaction-copy/app.conf',
+        { offset: 2, maxBytes: 4 }
+      )
+      assert.deepEqual(chunk, {
+        base64: Buffer.from('py m').toString('base64'),
+        offset: 2,
+        nextOffset: 6,
+        bytesRead: 4,
+        totalBytes: 7,
+        hasMore: true
+      })
+      await sftp.removeEntry('/backups/transaction-copy')
+      assert.equal(
+        fs.existsSync(toLocalPath(root, '/backups/transaction-copy')),
+        false
       )
     } finally {
       sftp && sftp.kill()

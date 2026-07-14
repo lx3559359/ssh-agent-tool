@@ -41,6 +41,7 @@ import {
   buildSafetyRecoveryIntegrityResults,
   createSafetyActionLock,
   filterSafetyCenterRecords,
+  findMatchingSafetySftp,
   findMatchingSafetyTerminal,
   getLegacySafetyRecord,
   getLegacyClaimStatus,
@@ -80,6 +81,7 @@ const providerLabels = {
   firewall: '防火墙',
   network: '网络',
   docker: '容器',
+  sftp: 'SFTP 快照',
   无: '无'
 }
 
@@ -258,6 +260,17 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
     )
   }
 
+  const findOperationCapability = record => {
+    if (record.effect?.adapter === 'sftp') {
+      return findMatchingSafetySftp(
+        record,
+        tabIdsFor(record),
+        tabId => refs.get('sftp-' + tabId)
+      )
+    }
+    return findOperationTerminal(record)
+  }
+
   const findLegacySftpEntry = record => {
     const legacy = getLegacySafetyRecord(record)
     if (!legacy || record.metadata?.legacyEndpointIncomplete) return undefined
@@ -341,7 +354,7 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
             },
             resolveLegacyTarget,
             runLegacyAction,
-            findModernTerminal: findOperationTerminal,
+            findModernCapability: findOperationCapability,
             taskCapability: getTaskCancelCapability(record)
           })
           message.success(actionLabels[action].success)
@@ -488,6 +501,15 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
           <span>{view.endpoint}</span>
           <span className='safety-center-label'>恢复类型</span>
           <span>{providerLabels[view.provider] || view.provider}</span>
+          {view.effectAction
+            ? <><span className='safety-center-label'>SFTP effect</span><span>{view.effectAdapter} / {view.effectAction}</span></>
+            : null}
+          {view.resourcePaths.length
+            ? <><span className='safety-center-label'>资源路径</span><span className='safety-center-path'>{view.resourcePaths.join('；')}</span></>
+            : null}
+          {view.artifactPaths.length
+            ? <><span className='safety-center-label'>恢复产物</span><span className='safety-center-path'>{view.artifactPaths.join('；')}</span></>
+            : null}
           <span className='safety-center-label'>创建时间</span>
           <span>{formatTime(view.createdAt)}</span>
           <span className='safety-center-label'>验证结果</span>

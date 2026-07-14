@@ -5,6 +5,7 @@ const {
   readRemoteFile,
   readRemoteFilePreview,
   readRemoteFileRange,
+  readRemoteFileChunk,
   listRemoteArchive,
   readRemoteArchiveTextEntry,
   writeRemoteFile
@@ -285,6 +286,16 @@ class Sftp extends TerminalBase {
     await this.rmFolder(remotePath)
   }
 
+  async removeEntry (remotePath) {
+    const stat = await this.lstat(remotePath)
+    if (stat.isDirectory()) {
+      await this.removeDirectoryRecursively(remotePath)
+    } else {
+      await this.rm(remotePath)
+    }
+    return 1
+  }
+
   /**
    * touch a file
    *
@@ -347,6 +358,11 @@ class Sftp extends TerminalBase {
         .then(cmd => this.runExec(cmd))
         .then(() => 1)
     }
+    await this.copySftpEntry(from, to)
+    return 1
+  }
+
+  async copyEntry (from, to) {
     await this.copySftpEntry(from, to)
     return 1
   }
@@ -672,6 +688,10 @@ class Sftp extends TerminalBase {
 
   readFileRange (remotePath, options) {
     return readRemoteFileRange(this.sftp, remotePath, options)
+  }
+
+  readFileChunk (remotePath, options) {
+    return readRemoteFileChunk(this.sftp, remotePath, options)
   }
 
   searchFileText (remotePath, options) {
