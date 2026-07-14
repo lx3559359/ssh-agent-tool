@@ -292,6 +292,7 @@ const InputContextMenu = () => {
         open={visible}
         placement='bottomLeft'
         className='input-context-menu'
+        overlayClassName='shellpilot-context-menu'
       >
         <div style={{ width: 1, height: 1 }} />
       </Dropdown>

@@ -291,17 +291,20 @@ class Tab extends Component {
         key: 'handleClose',
         icon: <iconsMap.CloseCircleOutlined />,
         label: e('close'),
+        danger: true,
         extra: closeShortcut
       },
       {
         key: 'closeOther',
         icon: <iconsMap.CloseCircleOutlined />,
-        label: e('closeOtherTabs')
+        label: e('closeOtherTabs'),
+        danger: true
       },
       !noRight && {
         key: 'closeTabsRight',
         icon: <iconsMap.CloseCircleOutlined />,
-        label: e('closeTabRight')
+        label: e('closeTabRight'),
+        danger: true
       },
       {
         key: 'newTab',
@@ -459,7 +462,8 @@ class Tab extends Component {
         items: this.renderContext(),
         onClick: this.onContextMenu
       },
-      trigger: ['contextMenu']
+      trigger: ['contextMenu'],
+      overlayClassName: 'shellpilot-context-menu'
     }
     const { tabCount, color = '#0088cc' } = tab
     const styleTag = color

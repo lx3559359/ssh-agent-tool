@@ -370,7 +370,8 @@ export default class FileListTable extends Component {
         onClick: this.onContextMenuFile
       },
       trigger: ['contextMenu'],
-      onOpenChange: this.handleDropdownOpenChange
+      onOpenChange: this.handleDropdownOpenChange,
+      overlayClassName: 'shellpilot-context-menu'
     }
     return (
       <div className={cls}>

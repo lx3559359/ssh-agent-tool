@@ -969,6 +969,7 @@ class Term extends Component {
         icon: Icon ? <Icon /> : null,
         label: menuItem.labelText || e(menuItem.labelKey),
         disabled: menuItem.disabled,
+        danger: menuItem.danger,
         extra: menuItem.extra
       }
     })
@@ -1884,7 +1885,8 @@ class Term extends Component {
         items: this.renderContextMenu(),
         onClick: this.onContextMenu
       },
-      trigger: this.props.config.pasteWhenContextMenu ? [] : ['contextMenu']
+      trigger: this.props.config.pasteWhenContextMenu ? [] : ['contextMenu'],
+      overlayClassName: 'shellpilot-context-menu'
     }
     const barProps = {
       matchIndex: this.state.matchIndex,

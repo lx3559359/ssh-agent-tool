@@ -75,7 +75,8 @@ export default class FileListTableHeader extends Component {
         items: this.props.renderContextMenu(),
         onClick: this.props.onContextMenu
       },
-      trigger: ['contextMenu']
+      trigger: ['contextMenu'],
+      overlayClassName: 'shellpilot-context-menu'
     }
     const spliterProps = {
       onResizeEnd: this.props.onResize,

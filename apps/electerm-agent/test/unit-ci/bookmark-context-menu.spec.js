@@ -7,6 +7,46 @@ const { pathToFileURL } = require('node:url')
 const moduleUrl = pathToFileURL(
   path.resolve(__dirname, '../../src/client/components/tree-list/bookmark-context-menu.js')
 ).href
+const groupModuleUrl = pathToFileURL(
+  path.resolve(__dirname, '../../src/client/components/common/context-menu-items.js')
+).href
+
+function actionKeys (items) {
+  return items
+    .filter(item => item.type !== 'divider')
+    .map(item => item.key)
+}
+
+function menuSignature (items) {
+  return items.map(item => item.type === 'divider' ? '|' : item.key)
+}
+
+function assertNormalizedDividers (items) {
+  assert.notEqual(items[0]?.type, 'divider')
+  assert.notEqual(items.at(-1)?.type, 'divider')
+  for (let index = 1; index < items.length; index++) {
+    assert.equal(
+      items[index - 1].type === 'divider' && items[index].type === 'divider',
+      false,
+      'context menu must not contain adjacent dividers'
+    )
+  }
+}
+
+test('compact menu groups skip empty dynamic groups without stray dividers', async () => {
+  const { compactMenuGroups } = await import(groupModuleUrl)
+  const items = compactMenuGroups([
+    [],
+    [{ key: 'open' }, false],
+    null,
+    [],
+    [{ key: 'delete' }],
+    []
+  ])
+
+  assert.deepEqual(menuSignature(items), ['open', '|', 'delete'])
+  assertNormalizedDividers(items)
+})
 
 test('bookmark context menu exposes common server actions without leaking credentials', async () => {
   const {
@@ -31,7 +71,7 @@ test('bookmark context menu exposes common server actions without leaking creden
     isGroup: false,
     staticList: false
   })
-  const keys = items.map(item => item.key)
+  const keys = actionKeys(items)
 
   assert.deepEqual(keys, [
     'open',
@@ -72,7 +112,7 @@ test('bookmark group context menu exposes group actions', async () => {
     staticList: false
   })
 
-  assert.deepEqual(items.map(item => item.key), [
+  assert.deepEqual(actionKeys(items), [
     'openAll',
     'edit',
     'addSubCat',
@@ -99,7 +139,7 @@ test('sidebar bookmark context menu exposes direct connection management actions
     staticList: true
   })
 
-  assert.deepEqual(items.map(item => item.key), [
+  assert.deepEqual(actionKeys(items), [
     'open',
     'testConnection',
     'edit',
@@ -109,6 +149,84 @@ test('sidebar bookmark context menu exposes direct connection management actions
     'copySshCommand',
     'delete'
   ])
+})
+
+test('bookmark context menus add normalized visual groups without changing baseline actions', async () => {
+  const { buildBookmarkContextMenuItems } = await import(moduleUrl)
+  const cases = [
+    {
+      args: {
+        item: { id: 'server-1', type: 'ssh' },
+        isGroup: false,
+        staticList: false
+      },
+      signature: [
+        'open', 'testConnection', '|',
+        'edit', 'toggleFavorite', 'duplicate', 'move', '|',
+        'viewConnectionInfo', 'exportConnection', 'copyPublicInfo', 'copySshCommand', '|',
+        'delete'
+      ]
+    },
+    {
+      args: {
+        item: { id: 'server-1', type: 'telnet' },
+        isGroup: false,
+        staticList: true
+      },
+      signature: [
+        'open', 'testConnection', '|',
+        'edit', '|',
+        'viewConnectionInfo', 'exportConnection', 'copyPublicInfo', 'copySshCommand', '|',
+        'delete'
+      ]
+    },
+    {
+      args: {
+        item: { id: 'group-1' },
+        isGroup: true,
+        staticList: false
+      },
+      signature: ['openAll', '|', 'edit', 'addSubCat', 'move', '|', 'delete']
+    },
+    {
+      args: {
+        item: { id: 'group-1' },
+        isGroup: true,
+        staticList: true
+      },
+      signature: ['openAll']
+    },
+    {
+      args: {
+        item: { id: 'default' },
+        isGroup: true,
+        staticList: false
+      },
+      signature: []
+    }
+  ]
+
+  for (const { args, signature } of cases) {
+    const items = buildBookmarkContextMenuItems(args)
+    assert.deepEqual(menuSignature(items), signature)
+    assertNormalizedDividers(items)
+    assert.equal(items.filter(item => item.type === 'divider').some(item => 'key' in item), false)
+  }
+})
+
+test('bookmark delete is the only dangerous action and disabled state is preserved', async () => {
+  const { buildBookmarkContextMenuItems } = await import(moduleUrl)
+  const items = buildBookmarkContextMenuItems({
+    item: { id: 'server-1', type: 'telnet' },
+    isGroup: false,
+    staticList: true
+  })
+
+  assert.deepEqual(
+    items.filter(item => item.danger).map(item => item.key),
+    ['delete']
+  )
+  assert.equal(items.find(item => item.key === 'copySshCommand').disabled, true)
 })
 
 test('bookmark tree rows wire the context menu to row actions', () => {
@@ -127,4 +245,5 @@ test('bookmark tree rows wire the context menu to row actions', () => {
   assert.match(source, /copySshCommand/)
   assert.match(source, /formatBookmarkSshCommand/)
   assert.match(source, /onContextMenuAction/)
+  assert.match(source, /overlayClassName:\s*'shellpilot-context-menu'/)
 })

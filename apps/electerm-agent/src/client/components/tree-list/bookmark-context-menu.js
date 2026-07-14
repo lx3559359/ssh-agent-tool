@@ -1,3 +1,5 @@
+import { compactMenuGroups } from '../common/context-menu-items.js'
+
 const defaultGroupId = 'default'
 
 function label (text) {
@@ -66,42 +68,95 @@ export function buildBookmarkContextMenuItems ({
   }
 
   if (isGroup) {
-    const items = []
     if (staticList) {
-      items.push({
+      return compactMenuGroups([[{
         key: 'openAll',
         label: label('全部打开')
-      })
-    } else if (!isDefaultGroup(item)) {
-      items.push(
-        {
-          key: 'openAll',
-          label: label('全部打开')
-        },
-        {
-          key: 'edit',
-          label: label('编辑分组')
-        },
-        {
-          key: 'addSubCat',
-          label: label('新建子分组')
-        },
-        {
-          key: 'move',
-          label: label('移动分组')
-        },
-        {
-          key: 'delete',
-          label: label('删除分组'),
-          danger: true
-        }
-      )
+      }]])
     }
-    return items
+    if (!isDefaultGroup(item)) {
+      return compactMenuGroups([
+        [
+          {
+            key: 'openAll',
+            label: label('全部打开')
+          }
+        ],
+        [
+          {
+            key: 'edit',
+            label: label('编辑分组')
+          },
+          {
+            key: 'addSubCat',
+            label: label('新建子分组')
+          },
+          {
+            key: 'move',
+            label: label('移动分组')
+          }
+        ],
+        [
+          {
+            key: 'delete',
+            label: label('删除分组'),
+            danger: true
+          }
+        ]
+      ])
+    }
+    return []
   }
 
   if (staticList) {
-    return [
+    return compactMenuGroups([
+      [
+        {
+          key: 'open',
+          label: label('打开连接')
+        },
+        {
+          key: 'testConnection',
+          label: label('测试连接')
+        }
+      ],
+      [
+        {
+          key: 'edit',
+          label: label('编辑连接')
+        }
+      ],
+      [
+        {
+          key: 'viewConnectionInfo',
+          label: label('查看连接信息')
+        },
+        {
+          key: 'exportConnection',
+          label: label('导出当前连接')
+        },
+        {
+          key: 'copyPublicInfo',
+          label: label('复制连接信息')
+        },
+        {
+          key: 'copySshCommand',
+          label: label('复制 SSH 命令'),
+          disabled: item.type && item.type !== 'ssh'
+        }
+      ],
+      [
+        {
+          key: 'delete',
+          label: label('删除连接'),
+          danger: true
+        }
+      ]
+    ])
+  }
+
+  return compactMenuGroups([
+    [
       {
         key: 'open',
         label: label('打开连接')
@@ -109,11 +164,27 @@ export function buildBookmarkContextMenuItems ({
       {
         key: 'testConnection',
         label: label('测试连接')
-      },
+      }
+    ],
+    [
       {
         key: 'edit',
         label: label('编辑连接')
       },
+      {
+        key: 'toggleFavorite',
+        label: item.favorite ? label('取消收藏') : label('收藏')
+      },
+      {
+        key: 'duplicate',
+        label: label('复制连接')
+      },
+      {
+        key: 'move',
+        label: label('移动到分组')
+      }
+    ],
+    [
       {
         key: 'viewConnectionInfo',
         label: label('查看连接信息')
@@ -130,61 +201,14 @@ export function buildBookmarkContextMenuItems ({
         key: 'copySshCommand',
         label: label('复制 SSH 命令'),
         disabled: item.type && item.type !== 'ssh'
-      },
+      }
+    ],
+    [
       {
         key: 'delete',
         label: label('删除连接'),
         danger: true
       }
     ]
-  }
-
-  return [
-    {
-      key: 'open',
-      label: label('打开连接')
-    },
-    {
-      key: 'testConnection',
-      label: label('测试连接')
-    },
-    {
-      key: 'edit',
-      label: label('编辑连接')
-    },
-    {
-      key: 'toggleFavorite',
-      label: item.favorite ? label('取消收藏') : label('收藏')
-    },
-    {
-      key: 'duplicate',
-      label: label('复制连接')
-    },
-    {
-      key: 'move',
-      label: label('移动到分组')
-    },
-    {
-      key: 'viewConnectionInfo',
-      label: label('查看连接信息')
-    },
-    {
-      key: 'exportConnection',
-      label: label('导出当前连接')
-    },
-    {
-      key: 'copyPublicInfo',
-      label: label('复制连接信息')
-    },
-    {
-      key: 'copySshCommand',
-      label: label('复制 SSH 命令'),
-      disabled: item.type && item.type !== 'ssh'
-    },
-    {
-      key: 'delete',
-      label: label('删除连接'),
-      danger: true
-    }
-  ]
+  ])
 }

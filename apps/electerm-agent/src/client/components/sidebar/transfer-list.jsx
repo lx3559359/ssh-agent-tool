@@ -35,7 +35,7 @@ export default memo(function TransferList (props) {
     placement: 'right',
     trigger: 'contextMenu',
     destroyOnHidden: true,
-    overlayClassName: 'transfer-list-card',
+    overlayClassName: 'transfer-list-card shellpilot-context-menu shellpilot-transfer-history-popover',
     content: <TransferModal {...transferModalProps} />
   }
   return (

@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ShellPilot Ant6 context-menu fixture</title>
+    <style>
+      :root {
+        --sp-text: #f2f4f7;
+        --sp-text-muted: #b8c0cc;
+        --sp-text-disabled: #8892a4;
+        --sp-danger: #ff8896;
+        --sp-primary-soft: #313a4a;
+        --sp-surface: #181a1f;
+        --sp-surface-elevated: #222222;
+        --sp-surface-hover: #313a4a;
+        --sp-border: #4a5260;
+        --sp-shadow-overlay: 0 16px 40px rgba(0, 0, 0, 0.42);
+        --sp-radius-overlay: 10px;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body,
+      #root {
+        width: 100%;
+        min-width: 0;
+        height: 100%;
+        margin: 0;
+        overflow-x: hidden;
+      }
+
+      body {
+        color: var(--sp-text);
+        background: var(--sp-surface);
+        font-family: Inter, "Microsoft YaHei", sans-serif;
+      }
+
+      .fixture-controls {
+        display: flex;
+        gap: 12px;
+        align-items: flex-start;
+        padding: 8px;
+      }
+
+      .fixture-trigger {
+        min-height: 32px;
+      }
+
+      .fixture-status {
+        position: fixed;
+        right: 8px;
+        bottom: 8px;
+        max-width: calc(100vw - 16px);
+        color: var(--sp-text-muted);
+        font-size: 12px;
+      }
+
+      .transfer-fixture-content {
+        width: 100%;
+        min-width: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/main.jsx"></script>
+  </body>
+</html>

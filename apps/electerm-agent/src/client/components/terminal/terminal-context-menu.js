@@ -1,3 +1,5 @@
+import { compactMenuGroups } from '../common/context-menu-items.js'
+
 const defaultShortcuts = {}
 
 function item ({
@@ -6,6 +8,7 @@ function item ({
   labelText,
   iconKey,
   disabled,
+  danger,
   extra
 }) {
   return {
@@ -14,6 +17,7 @@ function item ({
     labelText,
     iconKey,
     disabled: Boolean(disabled),
+    ...(danger ? { danger: true } : {}),
     extra
   }
 }
@@ -99,7 +103,8 @@ export function buildTerminalContextMenuItems ({
     item({
       key: 'onDisconnect',
       iconKey: 'CloseCircleOutlined',
-      labelKey: 'disconnect'
+      labelKey: 'disconnect',
+      danger: true
     }),
     item({
       key: 'toggleSearch',
@@ -124,9 +129,16 @@ export function buildTerminalContextMenuItems ({
     })
   ]
 
+  const groups = [
+    items.slice(0, 4),
+    items.slice(4, 7),
+    items.slice(7, 11),
+    items.slice(11, 13),
+    items.slice(13)
+  ]
+
   if (isSerial) {
-    items.push(
-      { type: 'divider' },
+    groups.push([
       item({
         key: 'onXmodemSend',
         iconKey: 'CloudUploadOutlined',
@@ -137,8 +149,8 @@ export function buildTerminalContextMenuItems ({
         iconKey: 'CloudDownloadOutlined',
         labelText: 'XMODEM 接收'
       })
-    )
+    ])
   }
 
-  return items
+  return compactMenuGroups(groups)
 }

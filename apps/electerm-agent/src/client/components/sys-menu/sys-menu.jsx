@@ -116,7 +116,8 @@ export default class ContextMenu extends PureComponent {
         className={cls}
         onClick={act}
       >
-        {iconElem}{iconElem ? ' ' : ''}{text}
+        {iconElem}
+        <span className='context-item-label'>{text}</span>
         {
           this.renderSubText(subText)
         }

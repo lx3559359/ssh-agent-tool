@@ -1066,6 +1066,7 @@ export default class FileSection extends React.Component {
         return {
           ...item,
           icon: <ArrowRightOutlined />,
+          popupClassName: 'shellpilot-context-menu',
           children: item.children.map(this.itemToMenuFormat)
         }
       })

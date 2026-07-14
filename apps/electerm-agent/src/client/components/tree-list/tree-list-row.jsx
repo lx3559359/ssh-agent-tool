@@ -151,7 +151,8 @@ export default function TreeListRow (props) {
       items: contextMenuItems,
       onClick: onContextMenuAction
     },
-    trigger: ['contextMenu']
+    trigger: ['contextMenu'],
+    overlayClassName: 'shellpilot-context-menu'
   }
 
   if (!isGroup) {
