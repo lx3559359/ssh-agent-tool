@@ -758,18 +758,14 @@ export default Store => {
   // ==================== Background Task Management ====================
 
   async function runMonitorCmd (tabId, cmd) {
-    try {
-      const result = await runCmd(tabId, cmd)
-      return result
-    } catch (e) {
-      // Fallback: send via terminal and wait for idle
-      const { store } = window
-      await store.mcpSendTerminalCommand({ command: cmd, tabId })
-      const idle = await store.mcpWaitForTerminalIdle({
-        tabId, timeout: 10000, lines: 10, minWait: 500
-      })
-      return idle.output || ''
-    }
+    const term = refs.get('term-' + tabId)
+    if (!term?.pid) throw new Error('后台任务终端会话已失效。')
+    const result = await runCmd(term.pid, cmd, {
+      timeoutMs: 5000,
+      maxOutputBytes: 4096
+    })
+    if (typeof result === 'string') return result
+    return result?.stdout || result?.output || ''
   }
 
   function requireBackgroundPath (value) {
@@ -844,7 +840,8 @@ export default Store => {
       pidFile,
       exitFile,
       finalize: submission.finalizeBackground,
-      cancel: submission.cancelBackground
+      cancel: submission.cancelBackground,
+      completion: submission.completion
     })
 
     return {

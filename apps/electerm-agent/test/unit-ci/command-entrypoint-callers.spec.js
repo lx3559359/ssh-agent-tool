@@ -218,8 +218,15 @@ test('quick, AI, Agent and MCP callers contain no naked terminal command send', 
   assert.match(mcp, /createBackgroundTaskRegistry/)
   assert.match(background, /finalize:\s*submission\.finalizeBackground/)
   assert.match(background, /cancel:\s*submission\.cancelBackground/)
+  assert.match(background, /completion:\s*submission\.completion/)
   assert.match(mcp, /backgroundTasks\.status\(args\.taskId\)/)
   assert.match(mcp, /backgroundTasks\.cancel\(args\.taskId\)/)
+  const monitor = mcp.match(
+    /async function runMonitorCmd[\s\S]*?const backgroundTasks/
+  )?.[0] || ''
+  assert.match(monitor, /refs\.get\('term-' \+ tabId\)/)
+  assert.match(monitor, /runCmd\(term\.pid,\s*cmd,\s*\{[\s\S]*?timeoutMs:\s*5000[\s\S]*?maxOutputBytes:\s*4096/)
+  assert.doesNotMatch(monitor, /mcpSendTerminalCommand|mcpWaitForTerminalIdle/)
   const zmodem = mcp.match(
     /Store\.prototype\.mcpZmodemUpload[\s\S]*?^}/m
   )?.[0] || ''
