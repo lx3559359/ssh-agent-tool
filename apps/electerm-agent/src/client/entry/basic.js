@@ -51,10 +51,17 @@ async function load () {
     return _get(window.langMap, `[${lang}].lang`)
   }
   window.translate = txt => {
-    const langId = window.store?.config.language || 'zh_cn'
-    const lang = window.getLang()
-    const str = resolveShellPilotTranslation(txt, langId, _get(lang, `[${txt}]`)) || txt
-    return window.capitalizeFirstLetter(str)
+    const langId = window.store?.previewLanguage || window.store?.config.language || 'zh_cn'
+    const lang = window.getLang(langId)
+    const english = window.getLang('en_us')
+    const value = resolveShellPilotTranslation(
+      txt,
+      langId,
+      _get(lang, `[${txt}]`),
+      _get(english, `[${txt}]`),
+      txt
+    )
+    return window.capitalizeFirstLetter(value)
   }
   await loadWorker()
   loadScript()
