@@ -210,6 +210,7 @@ function execCommand (conn, command, commandTimeoutMs = timeoutMs) {
     let stdout = ''
     let stderr = ''
     let done = false
+    let channel
     const finish = (err, result) => {
       if (done) {
         return
@@ -223,14 +224,24 @@ function execCommand (conn, command, commandTimeoutMs = timeoutMs) {
       }
     }
     const timer = setTimeout(() => {
-      finish(new Error(`exec timeout: ${command}`))
+      if (done) return
+      done = true
+      const error = new Error(`exec timeout after ${commandTimeoutMs}ms`)
+      error.code = 'ETIMEDOUT'
+      try { channel?.close?.() } catch {}
+      reject(error)
     }, commandTimeoutMs)
 
     conn.exec(command, (err, stream) => {
+      if (done) {
+        try { stream?.close?.() } catch {}
+        return
+      }
       if (err) {
         finish(err)
         return
       }
+      channel = stream
       stream.on('error', finish)
       stream.on('close', code => {
         finish(null, {

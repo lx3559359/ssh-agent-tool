@@ -118,7 +118,7 @@ npm run test-unit-ci
 
 ### 可配置真实服务器 smoke
 
-只有显式设置 `SHELLPILOT_SAFETY_SMOKE_REAL=1`，并提供完整 SSH 环境变量时才运行远程测试。远程测试复用 SSH/SFTP smoke 的安全路径生成器，只允许在 `/tmp`、`/var/tmp` 或它们的子目录下创建随机 `shellpilot-smoke-*` 临时目录，验证临时文件写入、chmod、恢复和取消；`finally` 会校验路径后清理。它不会修改网络、防火墙、服务、系统配置或业务目录，也不会打印密码、私钥或 API Key。
+只有显式设置 `SHELLPILOT_SAFETY_SMOKE_REAL=1`，提供完整 SSH 认证环境变量，并通过 `SHELLPILOT_SSH_HOST_FINGERPRINT` 提供预先核对的 `SHA256` 主机指纹时才运行远程测试。连接会在认证前严格校验主机指纹；不匹配时拒绝继续。远程测试只接受 `/tmp`、`/var/tmp` 或它们之下由安全路径段组成的既有目录，并在任何写入前确认目录不是符号链接、远端 `realpath` 与词法路径完全一致，再创建随机 `shellpilot-smoke-*` 临时目录。测试验证临时文件写入、chmod、恢复和取消；`finally` 会校验路径后清理。它不会修改网络、防火墙、服务、系统配置或业务目录，也不会打印密码、私钥、API Key 或其他认证凭据。
 
 ### 候选版本验证
 
