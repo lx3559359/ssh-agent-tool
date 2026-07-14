@@ -507,8 +507,8 @@ test('side-effect cancel waits for an active atomic hook and preserves rollback 
   const context = await createSideEffectRunner({
     adapter: {
       beforeExecute: async (operation, lifecycle) => {
-        markStarted()
         return lifecycle.runMutation(async () => {
+          markStarted()
           await atomic
           mutationCompleted = true
           return { summary: `mutated ${operation.id}` }
@@ -546,6 +546,202 @@ test('side-effect cancel waits for an active atomic hook and preserves rollback 
   assert.equal(cancelResult.value.commitPoint, true)
   assert.equal(cancelResult.value.artifacts.manifest.endsWith('/manifest.json'), true)
   assert.equal((await context.runner.rollback(context.operation.id)).state, 'restored')
+})
+
+test('side-effect mutation work waits for one atomic persisted commit marker', async () => {
+  const store = createMemoryStore()
+  const originalPatch = store.patch.bind(store)
+  let markMarkerPatchStarted
+  let releaseMarkerPatch
+  let markWorkStarted
+  let releaseWork
+  let workStarted = false
+  let markerPatch
+  const markerPatchStarted = new Promise(resolve => { markMarkerPatchStarted = resolve })
+  const markerPatchGate = new Promise(resolve => { releaseMarkerPatch = resolve })
+  const workStartedSignal = new Promise(resolve => { markWorkStarted = resolve })
+  const workGate = new Promise(resolve => { releaseWork = resolve })
+  store.patch = async (id, value) => {
+    if (!markerPatch && value.mutationStarted === true) {
+      markerPatch = clone(value)
+      markMarkerPatchStarted()
+      await markerPatchGate
+    }
+    return originalPatch(id, value)
+  }
+  const context = await createSideEffectRunner({
+    store,
+    adapter: {
+      beforeExecute: async (operation, lifecycle) => lifecycle.runMutation(async () => {
+        workStarted = true
+        markWorkStarted()
+        await workGate
+        return { summary: `mutated ${operation.id}` }
+      })
+    }
+  })
+  await context.runner.prepare(context.operation)
+  const executing = context.runner.execute(context.operation.id, {
+    confirmed: true,
+    sideEffectInput: { text: '{"enabled":true}' }
+  })
+
+  try {
+    await markerPatchStarted
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(workStarted, false)
+    assert.equal(markerPatch.mutationStarted, true)
+    assert.equal(markerPatch.commitPoint, true)
+    const beforeCommit = await store.get(context.operation.id)
+    assert.equal(beforeCommit.mutationStarted, undefined)
+    assert.equal(beforeCommit.commitPoint, undefined)
+
+    releaseMarkerPatch()
+    await workStartedSignal
+    const committed = await store.get(context.operation.id)
+    assert.equal(committed.mutationStarted, true)
+    assert.equal(committed.commitPoint, true)
+    releaseWork()
+    assert.equal((await executing).state, 'rollback-available')
+  } finally {
+    releaseMarkerPatch()
+    releaseWork()
+    await executing.catch(() => {})
+  }
+})
+
+test('side-effect mutation marker persistence failure performs zero remote work', async () => {
+  const store = createMemoryStore()
+  const originalPatch = store.patch.bind(store)
+  let workStarted = false
+  store.patch = async (id, value) => {
+    if (value.mutationStarted === true) {
+      throw new Error('mutation marker persistence failed')
+    }
+    return originalPatch(id, value)
+  }
+  const context = await createSideEffectRunner({
+    store,
+    adapter: {
+      beforeExecute: async (operation, lifecycle) => lifecycle.runMutation(() => {
+        workStarted = true
+        return { summary: `mutated ${operation.id}` }
+      })
+    }
+  })
+  await context.runner.prepare(context.operation)
+
+  await assert.rejects(context.runner.execute(context.operation.id, {
+    confirmed: true,
+    sideEffectInput: { text: '{"enabled":true}' }
+  }), /marker persistence failed/)
+  const failed = await store.get(context.operation.id)
+  assert.equal(workStarted, false)
+  assert.equal(failed.state, 'failed')
+  assert.equal(failed.mutationStarted, undefined)
+  assert.equal(failed.commitPoint, undefined)
+})
+
+test('side-effect mutation marker guard blocks binding and endpoint changes before work', async t => {
+  await t.test('recovery binding change', async () => {
+    const store = createMemoryStore()
+    let workStarted = false
+    const context = await createSideEffectRunner({
+      store,
+      adapter: {
+        beforeExecute: async (operation, lifecycle) => {
+          const current = await store.get(operation.id)
+          await store.patch(operation.id, {
+            effect: {
+              ...current.effect,
+              paths: { target: '/srv/app/forged-before-marker.json' }
+            }
+          })
+          return lifecycle.runMutation(() => {
+            workStarted = true
+            return { summary: `mutated ${operation.id}` }
+          })
+        }
+      }
+    })
+    await context.runner.prepare(context.operation)
+
+    await assert.rejects(context.runner.execute(context.operation.id, {
+      confirmed: true,
+      sideEffectInput: { text: '{"enabled":true}' }
+    }), /integrity|binding|完整|绑定/i)
+    assert.equal(workStarted, false)
+    assert.equal((await store.get(context.operation.id)).state, 'failed')
+  })
+
+  await t.test('live endpoint change', async () => {
+    let endpointChanged = false
+    let workStarted = false
+    const context = await createSideEffectRunner({
+      getCurrentEndpoint: operation => endpointChanged
+        ? { ...operation.endpoint, host: 'other.example.com' }
+        : operation.endpoint,
+      adapter: {
+        beforeExecute: async (operation, lifecycle) => {
+          endpointChanged = true
+          return lifecycle.runMutation(() => {
+            workStarted = true
+            return { summary: `mutated ${operation.id}` }
+          })
+        }
+      }
+    })
+    await context.runner.prepare(context.operation)
+
+    await assert.rejects(context.runner.execute(context.operation.id, {
+      confirmed: true,
+      sideEffectInput: { text: '{"enabled":true}' }
+    }), /端点|endpoint/i)
+    assert.equal(workStarted, false)
+    assert.equal((await context.store.get(context.operation.id)).state, 'failed')
+  })
+})
+
+test('side-effect persisted mutation marker prevents false cancellation after runner restart', async () => {
+  const store = createMemoryStore()
+  let markWorkStarted
+  let releaseWork
+  let recordSeenByWork
+  const workStarted = new Promise(resolve => { markWorkStarted = resolve })
+  const workGate = new Promise(resolve => { releaseWork = resolve })
+  const context = await createSideEffectRunner({
+    store,
+    adapter: {
+      beforeExecute: async (operation, lifecycle) => lifecycle.runMutation(async () => {
+        recordSeenByWork = await store.get(operation.id)
+        markWorkStarted()
+        await workGate
+        return { summary: `mutated ${operation.id}` }
+      })
+    }
+  })
+  await context.runner.prepare(context.operation)
+  const executing = context.runner.execute(context.operation.id, {
+    confirmed: true,
+    sideEffectInput: { text: '{"enabled":true}' }
+  })
+
+  try {
+    await workStarted
+    assert.equal(recordSeenByWork.mutationStarted, true)
+    assert.equal(recordSeenByWork.commitPoint, true)
+    const restarted = await createSideEffectRunner({
+      operation: context.operation,
+      store
+    })
+    const cancelledAfterRestart = await restarted.runner.cancel(context.operation.id)
+    assert.equal(cancelledAfterRestart.state, 'failed')
+    assert.equal(cancelledAfterRestart.mutationStarted, true)
+    assert.equal(cancelledAfterRestart.commitPoint, true)
+  } finally {
+    releaseWork()
+    await executing.catch(() => {})
+  }
 })
 
 test('side-effect cancel before mutation starts is cancelled with zero modification', async () => {

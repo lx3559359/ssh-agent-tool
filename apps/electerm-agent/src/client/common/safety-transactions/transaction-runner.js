@@ -561,24 +561,74 @@ export function createTransactionRunner (options = {}) {
       externalSignal.addEventListener('abort', abortFromExternalSignal, { once: true })
     }
     let resolveSettled
-    let markerPromise = Promise.resolve()
     const active = {
       kind: 'side-effect',
       executionId,
       cancelRequested: false,
-      mutationStarted: false,
-      commitPoint: false,
       settled: new Promise(resolve => { resolveSettled = resolve }),
       abort () {
         controller.abort()
       }
     }
-    const persistMarker = (extra) => {
-      markerPromise = markerPromise.then(() => patch(operation.id, {
-        ...extra,
-        updatedAt: timestamp()
-      })).then(() => undefined)
-      return markerPromise
+    const persistMutationMarker = async (mutationOptions) => {
+      const bound = await requireBoundRecovery(operation)
+      const markerAt = timestamp()
+      let guardFailure
+      try {
+        return await guardedPatch(
+          operation.id,
+          async current => {
+            if (controller.signal.aborted ||
+              cancellationRequests.has(operation.id) ||
+              current.state === operationStates.cancelled) {
+              guardFailure = cancellationError()
+              return false
+            }
+            try {
+              await assertCurrentEndpoint(current)
+            } catch (error) {
+              guardFailure = error
+              return false
+            }
+            try {
+              await assertBoundRecovery(current, bound)
+            } catch {
+              guardFailure = recoveryIntegrityError()
+              return false
+            }
+            if (current.state !== operation.state) {
+              guardFailure = new Error(
+                'SFTP 安全事务阶段状态已变化，已停止后续修改。'
+              )
+              return false
+            }
+            return true
+          },
+          current => ({
+            mutationStarted: true,
+            mutationStartedAt: current.mutationStartedAt || markerAt,
+            ...(mutationOptions.commitPoint !== false
+              ? {
+                  commitPoint: true,
+                  commitPointAt: current.commitPointAt || markerAt
+                }
+              : {}),
+            updatedAt: markerAt
+          })
+        )
+      } catch (error) {
+        if (guardFailure?.cancelled) throw guardFailure
+        if (guardFailure?.integrityFailure) {
+          return failIntegrity(operation, bound)
+        }
+        if (guardFailure) throw guardFailure
+        if (error.integrityFailure ||
+          error.code === 'SAFETY_OPERATION_INTEGRITY' ||
+          /完整性|原子更新/.test(error.message)) {
+          return failIntegrity(operation, bound)
+        }
+        throw error
+      }
     }
     const runMutation = async (work, mutationOptions = {}) => {
       if (typeof work !== 'function') {
@@ -587,14 +637,9 @@ export function createTransactionRunner (options = {}) {
       if (controller.signal.aborted || cancellationRequests.has(operation.id)) {
         throw cancellationError()
       }
-      let mutationMarker = markerPromise
-      if (!active.mutationStarted) {
-        active.mutationStarted = true
-        const mutationStartedAt = timestamp()
-        mutationMarker = persistMarker({
-          mutationStarted: true,
-          mutationStartedAt
-        })
+      await persistMutationMarker(mutationOptions)
+      if (controller.signal.aborted || cancellationRequests.has(operation.id)) {
+        throw cancellationError()
       }
       let effectPromise
       try {
@@ -602,20 +647,7 @@ export function createTransactionRunner (options = {}) {
       } catch (error) {
         effectPromise = Promise.reject(error)
       }
-      const [effect, marker] = await Promise.allSettled([
-        effectPromise,
-        mutationMarker
-      ])
-      if (marker.status === 'rejected') throw marker.reason
-      if (effect.status === 'rejected') throw effect.reason
-      if (mutationOptions.commitPoint !== false && !active.commitPoint) {
-        active.commitPoint = true
-        await persistMarker({
-          commitPoint: true,
-          commitPointAt: timestamp()
-        })
-      }
-      return effect.value
+      return effectPromise
     }
     activeExecutions.set(operation.id, active)
     try {
@@ -912,7 +944,7 @@ export function createTransactionRunner (options = {}) {
     throw sanitizeError(error)
   }
 
-  async function cancelState (operation, entries = [], failure, cancellation = {}) {
+  async function cancelState (operation, entries = [], failure) {
     const current = await get(operation.id) || operation
     const hasRecovery = Boolean(
       current.recoveryBinding &&
@@ -923,8 +955,7 @@ export function createTransactionRunner (options = {}) {
     )
     const preservesRecovery = hasRecovery && (
       current.operationKind === 'side-effect'
-        ? current.mutationStarted === true || current.commitPoint === true ||
-          cancellation.mutationStarted === true || cancellation.commitPoint === true
+        ? current.mutationStarted === true || current.commitPoint === true
         : [
             operationStates.executing,
             operationStates.rollingBack
@@ -1818,10 +1849,7 @@ export function createTransactionRunner (options = {}) {
       current = await get(operationId)
       if (current && !terminalStates.has(current.state) &&
         cancellableStates.has(current.state)) {
-        current = await cancelState(current, [], undefined, {
-          mutationStarted: active?.mutationStarted === true,
-          commitPoint: active?.commitPoint === true
-        })
+        current = await cancelState(current)
         if (current.state === operationStates.cancelled) {
           boundRecoveries.delete(operationId)
         }
