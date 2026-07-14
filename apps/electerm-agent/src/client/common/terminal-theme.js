@@ -4,6 +4,7 @@
 
 import { settingMap } from '../common/constants'
 import download from '../common/download'
+import { normalizeTerminalThemeConfig } from './shellpilot-theme-constraints.js'
 import {
   defaultTheme
 } from './theme-defaults'
@@ -93,7 +94,7 @@ export const convertThemeToText = (themeObj = {}, withName = false) => {
  * @return {object}
  */
 export const convertTheme = (themeTxt) => {
-  return themeTxt.split('\n').reduce((prev, line) => {
+  const parsed = themeTxt.split('\n').reduce((prev, line) => {
     let [key = '', value = ''] = line.split('=')
     key = key.trim()
     value = value.trim()
@@ -119,6 +120,8 @@ export const convertTheme = (themeTxt) => {
     themeConfig: {},
     uiThemeConfig: {}
   })
+  parsed.themeConfig = normalizeTerminalThemeConfig(parsed.themeConfig)
+  return parsed
 }
 
 /**

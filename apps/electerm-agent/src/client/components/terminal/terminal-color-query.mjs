@@ -1,3 +1,8 @@
+import {
+  normalizeTerminalThemeConfig,
+  shellPilotTerminalBackground
+} from '../../common/shellpilot-theme-constraints.js'
+
 const ESC = '\x1b'
 const ST = '\x1b\\'
 
@@ -123,11 +128,61 @@ export function handleTerminalColorQuery (terminal, identifier, color, fallbackC
   return true
 }
 
-export function createRendererThemeConfig (themeConfig = {}, rendererType, visibleBackground) {
-  return {
-    ...themeConfig,
-    background: rendererType === 'webGL' && colorToOscRgb(visibleBackground)
-      ? visibleBackground
-      : 'rgba(0,0,0,0)'
+export function handleTerminalForegroundColorRequest (
+  terminal,
+  data,
+  themeConfig = {},
+  foregroundFallback
+) {
+  if (typeof data !== 'string') {
+    return false
   }
+  const slots = data.split(';')
+  if (slots.length === 1) {
+    return handleTerminalColorQuery(
+      terminal,
+      10,
+      themeConfig.foreground,
+      foregroundFallback,
+      data
+    )
+  }
+
+  const queryColors = [
+    [10, themeConfig.foreground, foregroundFallback],
+    [11, shellPilotTerminalBackground, null],
+    [12, themeConfig.cursor, themeConfig.foreground || foregroundFallback]
+  ]
+  queryColors.forEach(([identifier, color, fallbackColor], index) => {
+    if (slots[index]?.trim() === '?') {
+      handleTerminalColorQuery(
+        terminal,
+        identifier,
+        color,
+        fallbackColor,
+        '?'
+      )
+    }
+  })
+  return true
+}
+
+export function handleTerminalBackgroundColorRequest (terminal, data) {
+  const hasQuery = typeof data === 'string' && data
+    .split(';')
+    .some(value => value.trim() === '?')
+  if (hasQuery) {
+    handleTerminalColorQuery(
+      terminal,
+      11,
+      shellPilotTerminalBackground,
+      null,
+      '?'
+    )
+  }
+  return true
+}
+
+export function createRendererThemeConfig (themeConfig = {}) {
+  return normalizeTerminalThemeConfig(themeConfig)
 }

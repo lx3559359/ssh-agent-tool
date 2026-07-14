@@ -9,6 +9,7 @@ import {
   requiredThemeProps
 } from '../../common/terminal-theme'
 import { defaultTheme, defaultThemeLight } from '../../common/theme-defaults'
+import { normalizeTerminalThemeConfig } from '../../common/shellpilot-theme-constraints.js'
 import generate from '../../common/uid'
 import Link from '../common/external-link'
 import InputAutoFocus from '../common/input-auto-focus'
@@ -108,10 +109,7 @@ export default function ThemeForm (props) {
       themeText
     } = res
     const converted = convertTheme(themeText)
-
-    if (converted.uiThemeConfig.main !== converted.themeConfig.background) {
-      converted.themeConfig.background = converted.uiThemeConfig.main
-    }
+    converted.themeConfig = normalizeTerminalThemeConfig(converted.themeConfig)
     const update = {
       name: themeName,
       ...converted

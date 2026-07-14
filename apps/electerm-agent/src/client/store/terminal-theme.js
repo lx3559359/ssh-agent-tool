@@ -6,6 +6,7 @@ import {
   settingMap
 } from '../common/constants'
 import { convertTheme } from '../common/terminal-theme'
+import { normalizeTerminalThemeConfig } from '../common/shellpilot-theme-constraints.js'
 import {
   defaultTheme,
   defaultThemeLight
@@ -47,7 +48,8 @@ export default Store => {
   Store.prototype.getThemeConfig = function () {
     const { store } = window
     const all = store.getSidebarList(settingMap.terminalThemes)
-    return (all.find(d => d.id === store.config.theme) || {}).themeConfig || {}
+    const selected = all.find(d => d.id === store.config.theme)
+    return normalizeTerminalThemeConfig(selected?.themeConfig || {})
   }
 
   Store.prototype.fixThemes = function (themes) {

@@ -74,7 +74,8 @@ import {
 } from './xterm-loader.js'
 import {
   createRendererThemeConfig,
-  handleTerminalColorQuery
+  handleTerminalBackgroundColorRequest,
+  handleTerminalForegroundColorRequest
 } from './terminal-color-query.mjs'
 import { buildTerminalContextMenuItems } from './terminal-context-menu.js'
 import {
@@ -1195,15 +1196,6 @@ class Term extends Component {
     this.terminalColorQueryDisposables.length = 0
   }
 
-  getVisibleTerminalBackground = () => {
-    const uiThemeConfig = window.store?.getUiThemeConfig?.() || {}
-    const dom = this.domRef.current
-    const cssMain = dom && window.getComputedStyle
-      ? window.getComputedStyle(dom).getPropertyValue('--main').trim()
-      : ''
-    return uiThemeConfig.main || cssMain || this.props.themeConfig.background
-  }
-
   getVisibleTerminalForeground = () => {
     const uiThemeConfig = window.store?.getUiThemeConfig?.() || {}
     return uiThemeConfig.text
@@ -1214,24 +1206,24 @@ class Term extends Component {
     if (!term?.parser?.registerOscHandler) {
       return
     }
-    const background = this.getVisibleTerminalBackground()
     const foregroundFallback = this.getVisibleTerminalForeground()
     this.terminalColorQueryDisposables.push(
       term.parser.registerOscHandler(10, data => {
-        return handleTerminalColorQuery(term, 10, themeConfig.foreground, foregroundFallback, data)
+        return handleTerminalForegroundColorRequest(
+          term,
+          data,
+          themeConfig,
+          foregroundFallback
+        )
       }),
       term.parser.registerOscHandler(11, data => {
-        return handleTerminalColorQuery(term, 11, background, themeConfig.background, data)
+        return handleTerminalBackgroundColorRequest(term, data)
       })
     )
   }
 
   getRendererThemeConfig = (themeConfig = this.props.themeConfig) => {
-    return createRendererThemeConfig(
-      deepCopy(themeConfig),
-      this.props.config.rendererType,
-      this.getVisibleTerminalBackground()
-    )
+    return createRendererThemeConfig(deepCopy(themeConfig))
   }
 
   initTerminal = async () => {

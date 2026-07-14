@@ -2,6 +2,8 @@
  * database default should init
  */
 
+import { normalizeTerminalThemeConfig } from './shellpilot-theme-constraints.js'
+
 function parsor (themeTxt) {
   return themeTxt.split('\n').reduce((prev, line) => {
     let [key = '', value = ''] = line.split('=')
@@ -105,7 +107,7 @@ export function defaultTheme () {
   return {
     id: 'default',
     name: 'default',
-    themeConfig: defaultThemeDarkTerminal(),
+    themeConfig: normalizeTerminalThemeConfig(defaultThemeDarkTerminal()),
     uiThemeConfig: defaultThemeDark()
   }
 }
@@ -114,7 +116,7 @@ export function defaultThemeLight () {
   return {
     id: 'defaultLight',
     name: 'default light',
-    themeConfig: defaultThemeLightTerminal(),
+    themeConfig: normalizeTerminalThemeConfig(defaultThemeLightTerminal()),
     uiThemeConfig: defaultThemeLightFunc()
   }
 }
