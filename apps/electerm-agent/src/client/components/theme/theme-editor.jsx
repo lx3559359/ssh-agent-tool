@@ -1,5 +1,11 @@
 // import { buildDefaultThemes } from '../../common/terminal-theme'
 import ThemeEditSlot from './theme-edit-slot'
+import {
+  getThemeEditorLanguage,
+  getThemeFieldLabel,
+  getThemeFieldValue,
+  isThemeFieldLocked
+} from '../../common/theme-field-labels.js'
 
 export default function ThemeEditor (props) {
   const { themeText, disabled } = props
@@ -14,6 +20,7 @@ export default function ThemeEditor (props) {
     return prev
   }, {})
   const keys = Object.keys(obj)
+  const language = getThemeEditorLanguage()
   function onChange (value, name) {
     props.onChange(value, name)
   }
@@ -21,12 +28,15 @@ export default function ThemeEditor (props) {
     <div className='editor-u-picker'>
       {
         keys.map(k => {
+          const locked = isThemeFieldLocked(k)
           return (
             <ThemeEditSlot
               key={k}
               name={k}
-              value={obj[k]}
-              disabled={disabled}
+              label={getThemeFieldLabel(k, language)}
+              value={getThemeFieldValue(k, obj[k])}
+              disabled={disabled || locked}
+              locked={locked}
               onChange={onChange}
             />
           )

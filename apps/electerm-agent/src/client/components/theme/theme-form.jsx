@@ -4,18 +4,20 @@ import message from '../common/message'
 import {
   convertTheme,
   convertThemeToText,
-  exportTheme,
-  validThemeProps,
-  requiredThemeProps
+  exportTheme
 } from '../../common/terminal-theme'
 import { defaultTheme, defaultThemeLight } from '../../common/theme-defaults'
 import { normalizeTerminalThemeConfig } from '../../common/shellpilot-theme-constraints.js'
+import {
+  validateThemeName,
+  validateThemeText
+} from '../../common/theme-validation.js'
 import generate from '../../common/uid'
 import Link from '../common/external-link'
 import InputAutoFocus from '../common/input-auto-focus'
 import ThemePicker from './theme-editor'
 import Upload from '../common/upload'
-// import './theme-form.styl'
+import './theme-form.styl'
 
 const { TextArea } = Input
 const FormItem = Form.Item
@@ -35,68 +37,19 @@ export default function ThemeForm (props) {
   }
   // A function to validate the input text
   async function validateInput (_, value) {
-    const input = value
-      .split('\n')
-      .reduce((p, line) => {
-        const [name, value] = line.split('=')
-        if (!name.trim() || !value.trim()) {
-          return p
-        }
-        p[name.trim()] = value.trim()
-        return p
-      }, {})
-
-    // A regex to test the hex color format
-    const hexColorRegex = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/
-
-    // A regex to test the rgba color format
-    const rgbaColorRegex = /^rgba\(\d{1,3}, +\d{1,3}, +\d{1,3}, +(0|0?\.\d+|1)\)$/
-
-    // A message to store the error message
-    let message = ''
-
-    // Loop through the required props
-    for (const prop of requiredThemeProps) {
-    // Check if the input has the prop
-      if (!input[prop]) {
-      // If not, set the flag to false and append the message
-        message += `Missing prop: ${prop}\n`
-        // Skip the rest of the loop
-        continue
-      }
-
-      // Check if the prop starts with terminal:
-      if (prop.startsWith('terminal:')) {
-      // If yes, check if the prop value is a valid rgba color format
-        if (!rgbaColorRegex.test(input[prop]) && !hexColorRegex.test(input[prop])) {
-        // If not, set the flag to false and append the message
-          message += `Invalid color format for prop: ${prop}\n`
-          // Skip the rest of the loop
-          continue
-        }
-      } else {
-      // If no, check if the prop value is a valid hex color format
-        if (!hexColorRegex.test(input[prop])) {
-        // If not, set the flag to false and append the message
-          message += `Invalid hex color format for prop: ${prop}\n`
-          // Skip the rest of the loop
-          continue
-        }
-      }
+    const errors = validateThemeText(value, e)
+    if (errors.length) {
+      return Promise.reject(new Error(errors.join('\n')))
     }
-
-    const keys = Object.keys(input)
-    for (const key of keys) {
-      if (!validThemeProps.includes(key)) {
-        message += `Not supported prop: ${key}\n`
-      }
-    }
-    if (message) {
-      return Promise.reject(message)
-    }
-    // Return an object with the flag and the message
     setTxt(value)
     return Promise.resolve()
+  }
+
+  async function validateName (_, value) {
+    const errors = validateThemeName(value, e)
+    return errors.length
+      ? Promise.reject(new Error(errors.join('\n')))
+      : Promise.resolve()
   }
 
   async function handleSubmit (res) {
@@ -211,11 +164,6 @@ export default function ThemeForm (props) {
         name='themeText'
         hasFeedback
         rules={[{
-          max: 1000, message: '1000 chars max'
-        }, {
-          required: true,
-          message: 'theme config required'
-        }, {
           validator: validateInput
         }]}
       >
@@ -257,9 +205,7 @@ export default function ThemeForm (props) {
         hasFeedback
         name='themeName'
         rules={[{
-          max: 30, message: '30 chars max'
-        }, {
-          required: true, message: 'theme name required'
+          validator: validateName
         }]}
       >
         <InputAutoFocus

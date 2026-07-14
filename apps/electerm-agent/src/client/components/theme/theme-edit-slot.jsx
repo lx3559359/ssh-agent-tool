@@ -1,10 +1,14 @@
 import { ColorPicker } from '../bookmark-form/common/color-picker'
 
+const e = window.translate
+
 export default function ThemeEditSlot (props) {
   const {
     name,
+    label,
     value,
-    disabled
+    disabled,
+    locked
   } = props
   function onChange (v) {
     props.onChange(v, name)
@@ -17,12 +21,17 @@ export default function ThemeEditSlot (props) {
   }
   return (
     <div className='theme-edit-slot'>
-      <span className='iblock mg1r'>{name}</span>
-      <span className='iblock'>
+      <span className='theme-edit-slot-label'>{label}</span>
+      <span className='theme-edit-slot-picker'>
         <ColorPicker
           {...pickerProps}
         />
       </span>
+      {
+        locked
+          ? <span className='theme-edit-slot-lock'>{e('terminalBackgroundLocked')}</span>
+          : null
+      }
     </div>
   )
 }

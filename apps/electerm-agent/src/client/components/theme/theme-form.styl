@@ -8,3 +8,42 @@
     display none !important
   .editor-u-picker
     display block !important
+
+.editor-u-picker
+  min-width 0
+
+.theme-edit-slot
+  display grid
+  grid-template-columns minmax(0, 1fr) auto
+  align-items center
+  gap 8px 12px
+  min-width 0
+  padding 9px 0
+  border-bottom 1px solid var(--sp-border)
+
+.theme-edit-slot-label
+  min-width 0
+  color var(--sp-text)
+  line-height 1.5
+  white-space normal
+  overflow-wrap anywhere
+  word-break normal
+
+.theme-edit-slot-picker
+  min-width 28px
+
+.theme-edit-slot-lock
+  grid-column 1 / -1
+  min-width 0
+  color var(--sp-text-muted)
+  font-size 12px
+  line-height 1.5
+  white-space normal
+  overflow-wrap break-word
+  word-break normal
+
+@media (max-width: 680px)
+  .theme-edit-slot
+    grid-template-columns minmax(0, 1fr)
+  .theme-edit-slot-picker
+    justify-self start
