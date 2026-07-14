@@ -333,7 +333,7 @@ export default class Tabs extends Component {
   renderTabs () {
     const { overflow } = this.state
     return (
-      <div className='tabs' ref={this.tabsRef}>
+      <div className={classNames('tabs', this.props.className)} ref={this.tabsRef}>
         {this.renderContent()}
         {
           overflow

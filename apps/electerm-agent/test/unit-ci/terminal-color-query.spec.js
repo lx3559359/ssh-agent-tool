@@ -190,6 +190,38 @@ describe('terminal OSC color query helpers', () => {
     )
   })
 
+  test('active terminal session tabs reuse the locked background in layout scope', () => {
+    const terminalSource = fs.readFileSync(
+      path.resolve(__dirname, '../../src/client/components/terminal/terminal.styl'),
+      'utf8'
+    )
+    const tabsSource = fs.readFileSync(
+      path.resolve(__dirname, '../../src/client/components/tabs/tabs.styl'),
+      'utf8'
+    )
+    const tabsComponentSource = fs.readFileSync(
+      path.resolve(__dirname, '../../src/client/components/tabs/index.jsx'),
+      'utf8'
+    )
+    const layoutSource = fs.readFileSync(
+      path.resolve(__dirname, '../../src/client/components/layout/layout.jsx'),
+      'utf8'
+    )
+
+    assert.match(
+      terminalSource,
+      /:root\r?\n {2}--shellpilot-terminal-background shellPilotTerminalBackground/
+    )
+    assert.match(
+      tabsSource,
+      /\.tabs\.terminal-session-tabs\r?\n {2}\.tab\.active\r?\n {4}background var\(--shellpilot-terminal-background\)/
+    )
+    assert.match(layoutSource, /className='terminal-session-tabs'/)
+    assert.match(tabsComponentSource, /className=\{classNames\('tabs', this\.props\.className\)\}/)
+    assert.match(tabsSource, /&\.active\r?\n {4}color var\(--text\)\r?\n {4}background var\(--main\)/)
+    assert.doesNotMatch(tabsSource, /\.ant-tabs[^\n]*--shellpilot-terminal-background/)
+  })
+
   test('terminal controls use fixed high-contrast foreground tokens', () => {
     const source = fs.readFileSync(
       path.resolve(__dirname, '../../src/client/components/terminal/terminal.styl'),
