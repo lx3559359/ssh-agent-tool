@@ -118,6 +118,55 @@ function normalizeMode (value, required) {
   return value
 }
 
+function normalizeSourceDescriptor (value, budget = { nodes: 10000 }, depth = 0) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) ||
+    depth > 128 || budget.nodes <= 0) {
+    throw new Error('SFTP upload source descriptor is invalid or exceeds its bounds.')
+  }
+  budget.nodes -= 1
+  const type = normalizeType(value.type)
+  const descriptor = {
+    type,
+    mode: normalizeMode(value.mode, true)
+  }
+  for (const field of ['uid', 'gid']) {
+    if (!Number.isSafeInteger(value[field]) || value[field] < 0) {
+      throw new Error(`SFTP upload source descriptor ${field} is invalid.`)
+    }
+    descriptor[field] = value[field]
+  }
+  if (type === 'file') {
+    if (!Number.isSafeInteger(value.size) || value.size < 0 ||
+      !/^[a-f0-9]{64}$/.test(String(value.digest || '').toLowerCase()) ||
+      value.digestAlgorithm !== 'SHELLPILOT-SHA-256-CHAIN-V1') {
+      throw new Error('SFTP upload source file descriptor is invalid.')
+    }
+    return {
+      ...descriptor,
+      size: value.size,
+      digest: String(value.digest).toLowerCase(),
+      digestAlgorithm: value.digestAlgorithm
+    }
+  }
+  if (!Array.isArray(value.entries)) {
+    throw new Error('SFTP upload source directory descriptor is invalid.')
+  }
+  let previousName = ''
+  descriptor.entries = value.entries.map(item => {
+    const name = String(item?.name || '')
+    if (!name || name === '.' || name === '..' || /[\\/]/.test(name) ||
+      name.localeCompare(previousName) <= 0) {
+      throw new Error('SFTP upload source directory entries are invalid.')
+    }
+    previousName = name
+    return {
+      name,
+      entry: normalizeSourceDescriptor(item.entry, budget, depth + 1)
+    }
+  })
+  return descriptor
+}
+
 function normalizeExpected (value = {}) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('SFTP side-effect expected state is invalid.')
@@ -140,6 +189,12 @@ function normalizeExpected (value = {}) {
   if (value.absent !== undefined) expected.absent = value.absent === true
   if (value.mode !== undefined) expected.mode = normalizeMode(value.mode, true)
   if (value.type !== undefined) expected.type = normalizeType(value.type)
+  if (value.sourceDescriptor !== undefined) {
+    expected.sourceDescriptor = normalizeSourceDescriptor(value.sourceDescriptor)
+    if (new TextEncoder().encode(JSON.stringify(expected.sourceDescriptor)).byteLength > 256 * 1024) {
+      throw new Error('SFTP upload source descriptor exceeds the manifest limit.')
+    }
+  }
   return expected
 }
 
@@ -184,6 +239,14 @@ function normalizeTransfer (value = {}, action) {
   )
   if (sourceEndpointKey !== undefined) {
     normalized.sourceEndpointKey = sourceEndpointKey
+  }
+  const sourceContentIdentity = normalizeTransferIdentity(
+    value.sourceContentIdentity,
+    'source content identity',
+    false
+  )
+  if (sourceContentIdentity !== undefined) {
+    normalized.sourceContentIdentity = sourceContentIdentity
   }
   return normalized
 }

@@ -90,6 +90,8 @@ export default class Remote2RemoteHandler {
       remote2remoteId: this.id,
       sourceEndpointKey: verifiedSource.sourceEndpointKey,
       sourceIdentity: verifiedSource.sourceIdentity,
+      sourceContentIdentity: verifiedSource.sourceContentIdentity,
+      sourceDescriptor: verifiedSource.sourceDescriptor,
       originalId: this.step1Transfer?.id
     }
     return transfer
@@ -144,7 +146,9 @@ export default class Remote2RemoteHandler {
       }
       this.step2Transfer = this.buildStep2Transfer(localFromFile, {
         sourceEndpointKey: step1.verifiedSourceEndpointKey,
-        sourceIdentity: step1.verifiedSourceIdentity
+        sourceIdentity: step1.verifiedSourceIdentity,
+        sourceContentIdentity: step1.verifiedSourceContentIdentity,
+        sourceDescriptor: step1.verifiedSourceDescriptor
       })
       this.creatingStep2 = false
       this.store.addTransferList([copy(this.step2Transfer)])

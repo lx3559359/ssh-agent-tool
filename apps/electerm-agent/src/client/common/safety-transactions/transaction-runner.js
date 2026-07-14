@@ -785,6 +785,22 @@ export function createTransactionRunner (options = {}) {
     return checked
   }
 
+  async function bindPostMutationArtifacts (operation, bound, verifyResult) {
+    if (!verifyResult?.postMutation) return null
+    const artifacts = {
+      ...clonePersistedValue(bound.artifacts),
+      postMutation: clonePersistedValue(verifyResult.postMutation)
+    }
+    return {
+      artifacts,
+      recoveryBinding: await createRecoveryBinding(
+        operation,
+        bound.plan,
+        artifacts
+      )
+    }
+  }
+
   async function guardedRecoveryTransition (
     operation,
     bound,
@@ -1235,20 +1251,29 @@ export function createTransactionRunner (options = {}) {
           [operationStates.executing],
           audits
         )
+        const verifiedRecovery = await bindPostMutationArtifacts(
+          operation,
+          boundRecovery,
+          verifyPhase.result
+        )
         const verified = await guardedRecoveryTransition(
           operation,
           boundRecovery,
           operationStates.verificationPassed,
           current => ({
             audit: appendAudit(current, audits),
-            executionId: undefined
+            executionId: undefined,
+            ...(verifiedRecovery || {})
           }),
           'verify',
           audits
         )
+        const verifiedBoundRecovery = verifiedRecovery
+          ? rememberBoundRecovery(verified)
+          : boundRecovery
         return guardedRecoveryTransition(
           verified,
-          boundRecovery,
+          verifiedBoundRecovery,
           operationStates.rollbackAvailable,
           { completedAt: timestamp() },
           'execute'
@@ -1714,6 +1739,11 @@ export function createTransactionRunner (options = {}) {
           [operationStates.executing],
           [audit, verifiedPhase.audit]
         )
+        const verifiedRecovery = await bindPostMutationArtifacts(
+          operation,
+          bound,
+          verifiedPhase.result
+        )
         const verified = await guardedRecoveryTransition(
           operation,
           bound,
@@ -1721,14 +1751,18 @@ export function createTransactionRunner (options = {}) {
           current => ({
             audit: appendAudit(current, [audit, verifiedPhase.audit]),
             executionId: undefined,
-            metadata: externalCompletionMetadata(current, completion)
+            metadata: externalCompletionMetadata(current, completion),
+            ...(verifiedRecovery || {})
           }),
           'verify',
           [audit, verifiedPhase.audit]
         )
+        const verifiedBound = verifiedRecovery
+          ? rememberBoundRecovery(verified)
+          : bound
         return guardedRecoveryTransition(
           verified,
-          bound,
+          verifiedBound,
           operationStates.rollbackAvailable,
           { completedAt: timestamp() },
           'execute'

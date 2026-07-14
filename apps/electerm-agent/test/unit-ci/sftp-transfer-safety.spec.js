@@ -63,6 +63,43 @@ function clone (value) {
   return structuredClone(value)
 }
 
+function transferFileDescriptor (digest = 'a'.repeat(64), size = 7) {
+  return {
+    type: 'file',
+    size,
+    mode: 0o644,
+    uid: 1000,
+    gid: 1000,
+    digest,
+    digestAlgorithm: 'SHELLPILOT-SHA-256-CHAIN-V1'
+  }
+}
+
+function descriptorSftp ({ size = 7, directory = false, methods = {} } = {}) {
+  return {
+    async lstat () {
+      return directory
+        ? { mode: 0o040755, uid: 1000, gid: 1000, size: 0, isDirectory: true }
+        : { mode: 0o100644, uid: 1000, gid: 1000, size }
+    },
+    async list () {
+      return []
+    },
+    async readFileChunk (filePath, { offset, maxBytes }) {
+      const bytesRead = Math.min(maxBytes, size - offset)
+      return {
+        offset,
+        nextOffset: offset + bytesRead,
+        totalBytes: size,
+        bytesRead,
+        hasMore: offset + bytesRead < size,
+        base64: Buffer.alloc(bytesRead, 0x61).toString('base64')
+      }
+    },
+    ...methods
+  }
+}
+
 function createMemoryStore () {
   const records = new Map()
   return {
@@ -254,6 +291,78 @@ test('remote write planning uses the final conflict path and stable retry identi
   assert.notEqual(first.operationId, differentSource.operationId)
 })
 
+test('protected uploads bind and recheck a full local source descriptor', async () => {
+  const {
+    buildTransferSafetyPlan,
+    captureLocalTransferSource,
+    verifyLocalTransferSource
+  } = await import(transferSafetyUrl)
+  const descriptors = [
+    {
+      type: 'file',
+      mode: 0o640,
+      uid: 1000,
+      gid: 1000,
+      size: 3,
+      digest: 'a'.repeat(64),
+      digestAlgorithm: 'SHELLPILOT-SHA-256-CHAIN-V1'
+    },
+    {
+      type: 'file',
+      mode: 0o640,
+      uid: 1000,
+      gid: 1000,
+      size: 3,
+      digest: 'b'.repeat(64),
+      digestAlgorithm: 'SHELLPILOT-SHA-256-CHAIN-V1'
+    }
+  ]
+  let calls = 0
+  const transfer = {
+    id: 'integrity-upload',
+    typeFrom: 'local',
+    typeTo: 'remote',
+    fromPath: 'C:/release.bin',
+    toPath: '/srv/release.bin',
+    fromFile: { isDirectory: false, size: 3 }
+  }
+  const sourceDescriptor = await captureLocalTransferSource({
+    transfer,
+    describeLocal: async () => descriptors[calls++]
+  })
+  const plan = buildTransferSafetyPlan({ ...transfer, sourceDescriptor })
+
+  assert.deepEqual(plan.expected.sourceDescriptor, descriptors[0])
+  await assert.rejects(
+    verifyLocalTransferSource({
+      transfer,
+      sourceDescriptor,
+      describeLocal: async () => descriptors[calls++]
+    }),
+    /本地上传源.*变化/
+  )
+})
+
+test('transfer attempt generations reject late callbacks and serialize completion', async () => {
+  const { createTransferAttemptGuard } = await import(transferSafetyUrl)
+  const guard = createTransferAttemptGuard()
+  const first = guard.start()
+  assert.equal(guard.isCurrent(first), true)
+
+  guard.invalidate(first)
+  assert.equal(guard.isCurrent(first), false)
+  const second = guard.start()
+  assert.notEqual(second, first)
+  assert.equal(guard.beginCompletion(second), true)
+  assert.equal(guard.start(), null)
+  assert.equal(guard.beginCompletion(second), false)
+
+  guard.finishCompletion(second)
+  const third = guard.start()
+  assert.notEqual(third, second)
+  assert.equal(guard.isCurrent(third), true)
+})
+
 test('overwrite-all keeps one operation identity per transfer item in a shared batch', async () => {
   const { buildTransferSafetyPlan } = await import(transferSafetyUrl)
   const base = {
@@ -310,7 +419,8 @@ test('cross-host target binds the complete stable source security identity', asy
     assertCrossHostSourceHistory,
     buildCrossHostSourceIdentity,
     buildTransferSafetyPlan,
-    buildTransferSourceEndpointKey
+    buildTransferSourceEndpointKey,
+    verifyCrossHostSourceContent
   } = await import(transferSafetyUrl)
   const baseEndpoint = {
     host: 'Source.Example.com.',
@@ -325,6 +435,23 @@ test('cross-host target binds the complete stable source security identity', asy
     path: '/srv/release.bin',
     file: { isDirectory: false, size: 17 }
   })
+  const sourceDescriptor = transferFileDescriptor('a'.repeat(64), 17)
+  const verifiedContent = await verifyCrossHostSourceContent({
+    transfer: {
+      remote2remoteStep: 1,
+      fromPath: '/srv/release.bin',
+      toPath: 'C:/Temp/remote-item'
+    },
+    sourcePin: { sftp: {} },
+    preflight: {
+      verifiedSourceEndpointKey: sourceEndpointKey,
+      verifiedSourceIdentity: sourceIdentity,
+      sourceDescriptor
+    },
+    describeRemote: async () => sourceDescriptor,
+    describeLocal: async () => sourceDescriptor
+  })
+  const sourceContentIdentity = verifiedContent.verifiedSourceContentIdentity
 
   assert.notEqual(sourceEndpointKey, buildTransferSourceEndpointKey({
     ...baseEndpoint,
@@ -344,14 +471,18 @@ test('cross-host target binds the complete stable source security identity', asy
   }))
   assert.equal(assertCrossHostSourceHistory({
     verifiedSourceEndpointKey: sourceEndpointKey,
-    verifiedSourceIdentity: sourceIdentity
-  }, { sourceEndpointKey, sourceIdentity }), true)
+    verifiedSourceIdentity: sourceIdentity,
+    verifiedSourceContentIdentity: sourceContentIdentity,
+    verifiedSourceDescriptor: sourceDescriptor
+  }, { sourceEndpointKey, sourceIdentity, sourceContentIdentity }), true)
   assert.throws(() => assertCrossHostSourceHistory({
     verifiedSourceEndpointKey: buildTransferSourceEndpointKey({
       ...baseEndpoint,
       username: 'deploy'
     }),
-    verifiedSourceIdentity: sourceIdentity
+    verifiedSourceIdentity: sourceIdentity,
+    verifiedSourceContentIdentity: sourceContentIdentity,
+    verifiedSourceDescriptor: sourceDescriptor
   }, { sourceEndpointKey, sourceIdentity }), /来源安全身份/)
 
   const targetStep = buildTransferSafetyPlan({
@@ -363,10 +494,36 @@ test('cross-host target binds the complete stable source security identity', asy
     remote2remoteStep: 2,
     sourceEndpointKey,
     sourceIdentity,
+    sourceContentIdentity,
+    sourceDescriptor,
     fromFile: { isDirectory: false, size: 17 }
   })
   assert.equal(targetStep.transfer.sourceEndpointKey, sourceEndpointKey)
   assert.equal(targetStep.transfer.sourceIdentity, sourceIdentity)
+  assert.equal(targetStep.transfer.sourceContentIdentity, sourceContentIdentity)
+  assert.deepEqual(targetStep.expected.sourceDescriptor, sourceDescriptor)
+  const { buildSideEffectSafetyRequest } = await importTransactionModule(
+    'side-effect-model.js'
+  )
+  const operation = buildSideEffectSafetyRequest({
+    id: 'cross-host-content-binding',
+    source: 'sftp',
+    title: 'cross-host upload',
+    endpoint: endpoint(),
+    effect: {
+      adapter: 'sftp',
+      action: targetStep.action,
+      paths: targetStep.paths,
+      resources: [{ path: targetStep.paths.target, type: targetStep.type }],
+      type: targetStep.type,
+      expected: targetStep.expected,
+      transfer: targetStep.transfer
+    }
+  })
+  assert.equal(
+    operation.effect.transfer.sourceContentIdentity,
+    sourceContentIdentity
+  )
 
   const fs = require('node:fs')
   const handlerSource = fs.readFileSync(path.resolve(
@@ -421,7 +578,7 @@ test('cross-host step1 revalidates the live source endpoint before any download'
   let capabilityLookup
   let downloadCalls = 0
   const reconnectedCapability = {
-    sftp: {},
+    sftp: descriptorSftp({ size: 23 }),
     getSftpSafetyEndpoint: () => ({
       ...queuedEndpoint,
       port: 2222,
@@ -444,7 +601,7 @@ test('cross-host step1 revalidates the live source endpoint before any download'
   assert.equal(downloadCalls, 0)
 
   const stableCapability = {
-    sftp: {},
+    sftp: descriptorSftp({ size: 23 }),
     getSftpSafetyEndpoint: () => queuedEndpoint
   }
   const verified = await verifyCrossHostSourcePreflight({
@@ -453,7 +610,8 @@ test('cross-host step1 revalidates the live source endpoint before any download'
   })
   assert.deepEqual(verified.verified, {
     verifiedSourceEndpointKey: transfer.sourceEndpointKey,
-    verifiedSourceIdentity: transfer.sourceIdentity
+    verifiedSourceIdentity: transfer.sourceIdentity,
+    sourceDescriptor: verified.verified.sourceDescriptor
   })
   assert.ok(verified.runtime.capability)
   assert.ok(verified.runtime.sftp)
@@ -474,7 +632,7 @@ test('cross-host step1 revalidates the live source endpoint before any download'
   ), 'utf8')
   assert.match(
     transferSource,
-    /verifyCrossHostSourcePreflight[\s\S]*transferSafety\.begin\(\)[\s\S]*transferFile\(\)/
+    /verifyCrossHostSourcePreflight[\s\S]*transferSafety\.begin\(\)[\s\S]*transferFile\(transfer/
   )
   assert.match(transferSource, /verifiedSourceEndpointKey/)
   assert.match(transferSource, /verifiedSourceIdentity/)
@@ -515,17 +673,23 @@ test('cross-host step1 atomically pins one SFTP transport across ref replacement
   let oldDownloads = 0
   let newDownloads = 0
   let oldDestroyed = false
-  const oldSftp = {
-    download: async () => {
-      if (oldDestroyed) throw new Error('旧来源连接已关闭')
-      oldDownloads += 1
+  const oldSftp = descriptorSftp({
+    directory: true,
+    methods: {
+      download: async () => {
+        if (oldDestroyed) throw new Error('旧来源连接已关闭')
+        oldDownloads += 1
+      }
     }
-  }
-  const newSftp = {
-    download: async () => {
-      newDownloads += 1
+  })
+  const newSftp = descriptorSftp({
+    directory: true,
+    methods: {
+      download: async () => {
+        newDownloads += 1
+      }
     }
-  }
+  })
   const newComponent = {
     sftp: newSftp,
     getSftpSafetyEndpoint: () => ({
@@ -595,7 +759,7 @@ test('cross-host step1 atomically pins one SFTP transport across ref replacement
   assert.match(transferSource, /getTransferRuntimeTransport/)
   assert.match(transferSource, /transferFile[\s\S]*getTransferRuntimeTransport\(transfer\)/)
   assert.match(transferSource, /transferFileAsSubTransfer[\s\S]*getTransferRuntimeTransport\(transfer\)/)
-  assert.match(transferSource, /list\(typeFrom, fromPath, tabId, transfer\)/)
+  assert.match(transferSource, /list\(typeFrom, fromPath, tabId, transfer, attemptToken\)/)
   assert.match(transferSource, /mkdir[\s\S]*getTransferRuntimeTransport\(transfer\)/)
 })
 
@@ -631,22 +795,31 @@ test('cross-host step1 retry drops a dead pin and revalidates the replacement tr
   let aDownloads = 0
   let bDownloads = 0
   let cDownloads = 0
-  const transportA = {
-    download: async () => {
-      aDownloads += 1
-      throw new Error('socket closed during transfer')
+  const transportA = descriptorSftp({
+    size: 64,
+    methods: {
+      download: async () => {
+        aDownloads += 1
+        throw new Error('socket closed during transfer')
+      }
     }
-  }
-  const transportB = {
-    download: async () => {
-      bDownloads += 1
+  })
+  const transportB = descriptorSftp({
+    size: 64,
+    methods: {
+      download: async () => {
+        bDownloads += 1
+      }
     }
-  }
-  const transportC = {
-    download: async () => {
-      cDownloads += 1
+  })
+  const transportC = descriptorSftp({
+    size: 64,
+    methods: {
+      download: async () => {
+        cDownloads += 1
+      }
     }
-  }
+  })
   const capabilityA = {
     sftp: transportA,
     getSftpSafetyEndpoint: () => endpoint
@@ -677,7 +850,8 @@ test('cross-host step1 retry drops a dead pin and revalidates the replacement tr
   })
   assert.deepEqual(retryState, {
     sourcePin: null,
-    verifiedSource: null
+    verifiedSource: null,
+    sourcePreflight: null
   })
 
   const attemptB = await verifyCrossHostSourcePreflight({
@@ -978,6 +1152,199 @@ test('file-transfer safety controller bypasses downloads and exposes transport c
   assert.equal(cancelled, 1)
 })
 
+test('file-transfer safety controller disposes only an active external execution', async () => {
+  const { createTransferSafetyController } = await import(transferSafetyUrl)
+  let cancelled = 0
+  const capability = {
+    async prepareTransferSafetyOperation (plan) {
+      return { id: plan.operationId, effectKey: 'effect-dispose' }
+    },
+    async beginTransferSafetyOperation (id) {
+      return { id, effectKey: 'effect-dispose', executionId: 'execution-dispose' }
+    },
+    async completeTransferSafetyOperation (id) {
+      return { id, state: 'rollback-available' }
+    },
+    async cancelTransferSafetyOperation () {
+      cancelled += 1
+      return { state: 'failed' }
+    }
+  }
+  const makeController = () => createTransferSafetyController({
+    getTransfer: () => ({
+      id: 'upload-dispose',
+      typeFrom: 'local',
+      typeTo: 'remote',
+      fromPath: 'C:/release.bin',
+      toPath: '/srv/release.bin',
+      fromFile: { isDirectory: false, size: 7 }
+    }),
+    getCapability: () => capability,
+    cancelTransport: async () => {}
+  })
+
+  const neverStarted = makeController()
+  assert.equal(await neverStarted.dispose(), null)
+  assert.equal(cancelled, 0)
+
+  const active = makeController()
+  await active.begin()
+  await Promise.all([active.dispose(), active.dispose()])
+  assert.equal(cancelled, 1)
+
+  const completed = makeController()
+  await completed.begin()
+  await completed.complete()
+  assert.equal(await completed.dispose(), null)
+  assert.equal(cancelled, 1)
+})
+
+test('file-transfer safety controller closes an execution that starts during dispose', async () => {
+  const { createTransferSafetyController } = await import(transferSafetyUrl)
+  let releaseBegin
+  let cancelled = 0
+  const beginGate = new Promise(resolve => { releaseBegin = resolve })
+  const capability = {
+    async prepareTransferSafetyOperation (plan) {
+      return { id: plan.operationId, effectKey: 'effect-unmount-race' }
+    },
+    async beginTransferSafetyOperation (id) {
+      await beginGate
+      return { id, effectKey: 'effect-unmount-race', executionId: 'execution-race' }
+    },
+    async cancelTransferSafetyOperation () {
+      cancelled += 1
+      return { state: 'failed' }
+    }
+  }
+  const controller = createTransferSafetyController({
+    getTransfer: () => ({
+      id: 'upload-unmount-race',
+      typeFrom: 'local',
+      typeTo: 'remote',
+      fromPath: 'C:/release.bin',
+      toPath: '/srv/release.bin',
+      fromFile: { isDirectory: false, size: 7 }
+    }),
+    getCapability: () => capability,
+    cancelTransport: async () => {}
+  })
+  const starting = controller.begin()
+  await Promise.resolve()
+  const disposing = controller.dispose()
+  releaseBegin()
+  await Promise.all([starting, disposing])
+  assert.equal(cancelled, 1)
+})
+
+test('cross-host source content must match preflight remote postflight remote and local temp', async () => {
+  const {
+    verifyCrossHostSourceContent,
+    verifyCrossHostSourcePreflight
+  } = await import(transferSafetyUrl)
+  const endpoint = {
+    host: 'source.example.com',
+    port: 22,
+    username: 'root',
+    tabId: 'source-tab',
+    pid: 'sftp:source-tab:session-a'
+  }
+  const {
+    buildCrossHostSourceIdentity,
+    buildTransferSourceEndpointKey
+  } = await import(transferSafetyUrl)
+  const sourceEndpointKey = buildTransferSourceEndpointKey(endpoint)
+  const fromFile = { isDirectory: false, size: 7 }
+  const transfer = {
+    remote2remoteStep: 1,
+    tabId: 'source-tab',
+    fromPath: '/srv/release.bin',
+    toPath: 'C:/temp/release.bin',
+    fromFile,
+    sourceEndpointKey,
+    sourceIdentity: buildCrossHostSourceIdentity({
+      sourceEndpointKey,
+      path: '/srv/release.bin',
+      file: fromFile
+    })
+  }
+  const source = transferFileDescriptor()
+  let remote = clone(source)
+  const pinnedSftp = {}
+  const capability = {
+    sftp: pinnedSftp,
+    getSftpSafetyEndpoint: () => endpoint
+  }
+  const preflight = await verifyCrossHostSourcePreflight({
+    transfer,
+    getCapability: () => capability,
+    describeRemote: async sftp => {
+      assert.equal(sftp, pinnedSftp)
+      return clone(remote)
+    }
+  })
+  const verified = await verifyCrossHostSourceContent({
+    transfer,
+    sourcePin: preflight.runtime,
+    preflight: preflight.verified,
+    describeRemote: async sftp => {
+      assert.equal(sftp, pinnedSftp)
+      return clone(remote)
+    },
+    describeLocal: async () => clone(source)
+  })
+  assert.match(verified.verifiedSourceContentIdentity, /^content:/)
+  assert.deepEqual(verified.verifiedSourceDescriptor, source)
+
+  remote = transferFileDescriptor('b'.repeat(64))
+  await assert.rejects(verifyCrossHostSourceContent({
+    transfer,
+    sourcePin: preflight.runtime,
+    preflight: preflight.verified,
+    describeRemote: async () => clone(remote),
+    describeLocal: async () => clone(source)
+  }), /来源内容.*变化|内容身份.*不一致/)
+
+  remote = clone(source)
+  await assert.rejects(verifyCrossHostSourceContent({
+    transfer,
+    sourcePin: preflight.runtime,
+    preflight: preflight.verified,
+    describeRemote: async () => clone(remote),
+    describeLocal: async () => transferFileDescriptor('c'.repeat(64))
+  }), /临时文件.*不一致|内容身份.*不一致/)
+
+  const directoryBefore = {
+    type: 'directory',
+    mode: 0o755,
+    uid: 1000,
+    gid: 1000,
+    entries: [{
+      name: 'app.conf',
+      entry: transferFileDescriptor('d'.repeat(64), 9)
+    }]
+  }
+  const directoryAfter = {
+    ...clone(directoryBefore),
+    entries: []
+  }
+  await assert.rejects(verifyCrossHostSourceContent({
+    transfer: {
+      ...transfer,
+      fromPath: '/srv/config',
+      toPath: 'C:/temp/config',
+      fromFile: { isDirectory: true }
+    },
+    sourcePin: preflight.runtime,
+    preflight: {
+      ...preflight.verified,
+      sourceDescriptor: directoryBefore
+    },
+    describeRemote: async () => directoryAfter,
+    describeLocal: async () => directoryBefore
+  }), /来源内容.*变化/)
+})
+
 test('transport success still reports a failed target verification to history and remote2remote', async () => {
   const {
     getTransferSafetyCompletionFailure
@@ -1041,6 +1408,8 @@ test('transfer component keeps native queue progress pause resume retry and adds
   assert.match(source, /this\.transport\?\.resume\(\)/)
   assert.match(source, /shouldRetryTransfer/)
   assert.match(source, /refsStatic\.get\('transfer-queue'\)/)
+  assert.match(source, /componentWillUnmount[\s\S]*transferSafety\.dispose\(\)/)
+  assert.match(source, /scheduleRetry[\s\S]*transferAttempts\.invalidate\(attemptToken\)/)
 })
 
 test('SFTP capability exposes authoritative transfer transaction lifecycle', () => {

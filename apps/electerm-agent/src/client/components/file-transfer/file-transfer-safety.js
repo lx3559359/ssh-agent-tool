@@ -1,6 +1,85 @@
 import { normalizeEndpoint } from '../../common/safety-transactions/endpoint-guard.js'
+import { describeSftpTransferEntry } from '../sftp/sftp-transaction-adapter.js'
 
 const bypassPolicies = new Set(['skip', 'cancel'])
+
+function sameTransferDescriptor (left, right) {
+  return JSON.stringify(left) === JSON.stringify(right)
+}
+
+function crossHostContentDescriptor (descriptor) {
+  if (!descriptor || descriptor.absent === true) return descriptor
+  const { uid, gid, mode, entries, ...content } = descriptor
+  if (Array.isArray(entries)) {
+    content.entries = entries.map(item => ({
+      name: item.name,
+      entry: crossHostContentDescriptor(item.entry)
+    }))
+  }
+  return content
+}
+
+function needsLocalSourceDescriptor (transfer = {}) {
+  return transfer.typeFrom === 'local' &&
+    transfer.typeTo === 'remote' &&
+    transfer.isFtp !== true &&
+    !bypassPolicies.has(transfer.conflictPolicy)
+}
+
+export async function captureLocalTransferSource ({
+  transfer = {},
+  describeLocal
+} = {}) {
+  if (!needsLocalSourceDescriptor(transfer)) return null
+  if (typeof describeLocal !== 'function') {
+    throw new Error('受保护上传缺少本地源文件描述能力，已停止远程写入。')
+  }
+  return describeLocal(transfer.fromPath)
+}
+
+export async function verifyLocalTransferSource ({
+  transfer = {},
+  sourceDescriptor,
+  describeLocal
+} = {}) {
+  if (!sourceDescriptor || !needsLocalSourceDescriptor(transfer)) return true
+  const current = await captureLocalTransferSource({ transfer, describeLocal })
+  if (!sameTransferDescriptor(current, sourceDescriptor)) {
+    throw new Error('本地上传源在传输期间发生变化，远程目标可执行回滚。')
+  }
+  return true
+}
+
+export function createTransferAttemptGuard () {
+  let sequence = 0
+  let current = null
+  let completing = false
+  return {
+    start () {
+      if (completing) return null
+      current = ++sequence
+      return current
+    },
+    isCurrent (token) {
+      return token !== null && token === current
+    },
+    invalidate (token) {
+      if (token === undefined || token === current) current = null
+    },
+    beginCompletion (token) {
+      if (completing || token !== current) return false
+      completing = true
+      return true
+    },
+    finishCompletion (token) {
+      if (token === current) current = null
+      completing = false
+    },
+    get completing () {
+      return completing
+    }
+  }
+}
 
 export function shouldUseLegacyZipOptimization ({ zip, isFtp } = {}) {
   return zip === true && isFtp === true
@@ -68,7 +147,8 @@ export function buildCrossHostSourceIdentity ({
 
 export async function verifyCrossHostSourcePreflight ({
   transfer = {},
-  getCapability
+  getCapability,
+  describeRemote = describeSftpTransferEntry
 } = {}) {
   if (transfer.remote2remoteStep !== 1) return null
 
@@ -104,16 +184,67 @@ export async function verifyCrossHostSourcePreflight ({
   if (verifiedSourceIdentity !== transfer.sourceIdentity) {
     throw new Error('跨主机传输来源文件身份不一致，已停止下载。')
   }
+  const sourceDescriptor = await describeRemote(
+    pinnedSftp,
+    transfer.fromPath
+  )
+  await Promise.resolve()
+  if (getCapability?.(sourceTabId) !== capability || capability.sftp !== pinnedSftp) {
+    throw new Error('跨主机传输来源连接在内容验证期间已被替换，已停止下载。')
+  }
+  const expectedType = transfer.fromFile?.isDirectory ? 'directory' : 'file'
+  if (sourceDescriptor?.type !== expectedType ||
+    (expectedType === 'file' && Number.isSafeInteger(transfer.fromFile?.size) &&
+      sourceDescriptor.size !== transfer.fromFile.size)) {
+    throw new Error('跨主机传输来源内容与排队时记录不一致，已停止下载。')
+  }
 
   return {
     verified: {
       verifiedSourceEndpointKey,
-      verifiedSourceIdentity
+      verifiedSourceIdentity,
+      sourceDescriptor
     },
     runtime: {
       capability,
       sftp: pinnedSftp
     }
+  }
+}
+
+export async function verifyCrossHostSourceContent ({
+  transfer = {},
+  sourcePin,
+  preflight,
+  describeRemote = describeSftpTransferEntry,
+  describeLocal
+} = {}) {
+  if (transfer.remote2remoteStep !== 1) return null
+  if (!sourcePin?.sftp || !preflight?.sourceDescriptor) {
+    throw new Error('跨主机传输缺少已固定的来源内容身份，已阻止目标写入。')
+  }
+  if (typeof describeLocal !== 'function') {
+    throw new Error('跨主机传输缺少本地临时文件描述能力，已阻止目标写入。')
+  }
+  const remoteAfter = await describeRemote(sourcePin.sftp, transfer.fromPath)
+  if (!sameTransferDescriptor(remoteAfter, preflight.sourceDescriptor)) {
+    throw new Error('跨主机传输来源内容在下载期间发生变化，已阻止目标写入。')
+  }
+  const local = await describeLocal(transfer.toPath)
+  if (!sameTransferDescriptor(
+    crossHostContentDescriptor(local),
+    crossHostContentDescriptor(preflight.sourceDescriptor)
+  )) {
+    throw new Error('跨主机传输本地临时文件与来源内容身份不一致，已阻止目标写入。')
+  }
+  const verifiedSourceContentIdentity = `content:${stableHash(
+    JSON.stringify(crossHostContentDescriptor(preflight.sourceDescriptor))
+  )}`
+  return {
+    verifiedSourceEndpointKey: preflight.verifiedSourceEndpointKey,
+    verifiedSourceIdentity: preflight.verifiedSourceIdentity,
+    verifiedSourceContentIdentity,
+    verifiedSourceDescriptor: local
   }
 }
 
@@ -138,21 +269,33 @@ export function resolveTransferRuntimeTransport ({
 export function resetCrossHostSourceAttemptForRetry ({
   transfer = {},
   sourcePin,
-  verifiedSource
+  verifiedSource,
+  sourcePreflight
 } = {}) {
   if (transfer.remote2remoteStep !== 1) {
-    return { sourcePin, verifiedSource }
+    return { sourcePin, verifiedSource, sourcePreflight }
   }
   return {
     sourcePin: null,
-    verifiedSource: null
+    verifiedSource: null,
+    sourcePreflight: null
   }
 }
 
 export function assertCrossHostSourceHistory (history, expected = {}) {
+  const boundContentIdentity = history?.verifiedSourceDescriptor
+    ? `content:${stableHash(JSON.stringify(
+        crossHostContentDescriptor(history.verifiedSourceDescriptor)
+      ))}`
+    : ''
   if (!history ||
     history.verifiedSourceEndpointKey !== expected.sourceEndpointKey ||
-    history.verifiedSourceIdentity !== expected.sourceIdentity) {
+    history.verifiedSourceIdentity !== expected.sourceIdentity ||
+    !history.verifiedSourceContentIdentity ||
+    !history.verifiedSourceDescriptor ||
+    history.verifiedSourceContentIdentity !== boundContentIdentity ||
+    (expected.sourceContentIdentity &&
+      history.verifiedSourceContentIdentity !== expected.sourceContentIdentity)) {
     throw new Error('跨主机传输来源安全身份已变化，已阻止目标写入。')
   }
   return true
@@ -209,10 +352,14 @@ export function buildTransferSafetyPlan (transfer = {}) {
       ? 'same-endpoint'
       : 'local-to-remote'
   const expected = {
-    type,
-    ...(type === 'file' && Number.isSafeInteger(transfer.fromFile?.size)
-      ? { size: transfer.fromFile.size }
-      : {})
+    ...(transfer.sourceDescriptor
+      ? { sourceDescriptor: transfer.sourceDescriptor }
+      : {
+          type,
+          ...(type === 'file' && Number.isSafeInteger(transfer.fromFile?.size)
+            ? { size: transfer.fromFile.size }
+            : {})
+        })
   }
   const sourceIdentity = action === 'upload'
     ? String(transfer.sourceIdentity ||
@@ -233,6 +380,9 @@ export function buildTransferSafetyPlan (transfer = {}) {
       ...(transfer.sourceEndpointKey
         ? { sourceEndpointKey: String(transfer.sourceEndpointKey) }
         : {}),
+      ...(transfer.sourceContentIdentity
+        ? { sourceContentIdentity: String(transfer.sourceContentIdentity) }
+        : {}),
       ...(batchId ? { batchId } : {})
     }
   }
@@ -248,6 +398,10 @@ export function createTransferSafetyController ({
   let execution
   let beginPromise
   let completionPromise
+  let cancelPromise
+  let disposePromise
+  let settled = false
+  let operationCapability
 
   async function begin () {
     if (execution) return execution
@@ -262,6 +416,7 @@ export function createTransferSafetyController ({
     }
 
     beginPromise = (async () => {
+      operationCapability = capability
       operation = operation || await capability.prepareTransferSafetyOperation(plan)
       execution = await capability.beginTransferSafetyOperation(operation.id, {
         transferIdentity: plan.transfer.identity,
@@ -282,7 +437,7 @@ export function createTransferSafetyController ({
     if (completionPromise) return completionPromise
     if (!execution || !operation || !plan?.required) return null
 
-    const capability = getCapability()
+    const capability = getCapability() || operationCapability
     if (!capability) {
       throw new Error('SFTP 安全会话已断开，无法确认传输结果')
     }
@@ -295,7 +450,9 @@ export function createTransferSafetyController ({
       cancelled
     })
     try {
-      return await completionPromise
+      const completed = await completionPromise
+      settled = true
+      return completed
     } catch (error) {
       completionPromise = null
       throw error
@@ -303,18 +460,44 @@ export function createTransferSafetyController ({
   }
 
   async function cancel () {
-    if (!operation || !plan?.required) return null
-    const capability = getCapability()
+    if (!execution || !operation || !plan?.required || settled) return null
+    if (cancelPromise) return cancelPromise
+    const capability = getCapability() || operationCapability
     if (!capability) {
       throw new Error('SFTP 安全会话已断开，无法取消受保护传输')
     }
-    return capability.cancelTransferSafetyOperation(operation.id)
+    cancelPromise = capability.cancelTransferSafetyOperation(operation.id)
+    try {
+      const cancelled = await cancelPromise
+      settled = true
+      return cancelled
+    } catch (error) {
+      cancelPromise = null
+      throw error
+    }
+  }
+
+  async function dispose () {
+    if (settled) return null
+    if (disposePromise) return disposePromise
+    disposePromise = (async () => {
+      if (beginPromise && !execution) {
+        try {
+          await beginPromise
+        } catch (error) {
+          return null
+        }
+      }
+      return cancel()
+    })()
+    return disposePromise
   }
 
   return {
     begin,
     complete,
     cancel,
+    dispose,
     get operationId () {
       return operation?.id || plan?.operationId
     },

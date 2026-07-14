@@ -1,5 +1,6 @@
 const fss = require('fs/promises')
 const fs = require('fs')
+const crypto = require('crypto')
 const log = require('../common/log')
 const path = require('path')
 const { isWin, isMac, tempDir } = require('../common/runtime-constants')
@@ -20,6 +21,161 @@ const {
 const { searchTextReader } = require('../common/log-search')
 
 const ROOT_PATH = '/'
+const TRANSFER_DIGEST_CHUNK_BYTES = 64 * 1024
+const TRANSFER_DIGEST_ALGORITHM = 'SHELLPILOT-SHA-256-CHAIN-V1'
+const TRANSFER_DESCRIPTOR_LIMITS = Object.freeze({
+  maxDepth: 128,
+  maxNodes: 10000,
+  maxTotalBytes: 1024 * 1024 * 1024 * 1024,
+  maxManifestBytes: 256 * 1024
+})
+
+function boundedPositiveInteger (value, fallback) {
+  return Number.isSafeInteger(value) && value > 0
+    ? Math.min(value, fallback)
+    : fallback
+}
+
+function transferDescriptorLimits (options = {}) {
+  return Object.fromEntries(Object.entries(TRANSFER_DESCRIPTOR_LIMITS).map(([key, value]) => [
+    key,
+    boundedPositiveInteger(options[key], value)
+  ]))
+}
+
+function uint64Bytes (value) {
+  const result = Buffer.alloc(8)
+  result.writeBigUInt64BE(BigInt(value))
+  return result
+}
+
+class TransferBoundedDigest {
+  constructor () {
+    this.state = Buffer.alloc(32)
+    this.block = Buffer.alloc(TRANSFER_DIGEST_CHUNK_BYTES)
+    this.used = 0
+    this.size = 0
+  }
+
+  update (value) {
+    const bytes = Buffer.from(value)
+    let offset = 0
+    while (offset < bytes.length) {
+      const length = Math.min(this.block.length - this.used, bytes.length - offset)
+      bytes.copy(this.block, this.used, offset, offset + length)
+      this.used += length
+      this.size += length
+      offset += length
+      if (this.used === this.block.length) {
+        this.state = crypto.createHash('sha256')
+          .update(this.state)
+          .update(Buffer.from([0]))
+          .update(this.block)
+          .digest()
+        this.used = 0
+      }
+    }
+  }
+
+  finish () {
+    return {
+      size: this.size,
+      digest: crypto.createHash('sha256')
+        .update(this.state)
+        .update(Buffer.from([1]))
+        .update(this.block.subarray(0, this.used))
+        .update(uint64Bytes(this.size))
+        .digest('hex'),
+      digestAlgorithm: TRANSFER_DIGEST_ALGORITHM
+    }
+  }
+}
+
+function stableLocalStat (stat) {
+  return [
+    stat.dev,
+    stat.ino,
+    stat.size,
+    stat.mode,
+    stat.mtimeMs,
+    stat.ctimeMs
+  ].join(':')
+}
+
+async function describeTransferEntryInternal (filePath, budget, depth) {
+  if (depth > budget.maxDepth) {
+    throw new Error('本地上传目录超过允许的深度上限。')
+  }
+  if (budget.remainingNodes <= 0) {
+    throw new Error('本地上传目录超过允许的节点上限。')
+  }
+  budget.remainingNodes -= 1
+  const before = await fss.lstat(filePath)
+  if (before.isSymbolicLink()) {
+    throw new Error('本地上传源包含符号链接，已拒绝受保护传输。')
+  }
+  if (!before.isFile() && !before.isDirectory()) {
+    throw new Error('本地上传源包含特殊文件，已拒绝受保护传输。')
+  }
+  const descriptor = {
+    type: before.isDirectory() ? 'directory' : 'file',
+    mode: Number(before.mode) & 0o7777,
+    uid: Number.isSafeInteger(before.uid) ? before.uid : 0,
+    gid: Number.isSafeInteger(before.gid) ? before.gid : 0
+  }
+  if (before.isFile()) {
+    if (budget.totalBytes + before.size > budget.maxTotalBytes) {
+      throw new Error('本地上传源超过允许的总字节上限。')
+    }
+    budget.totalBytes += before.size
+    const digest = new TransferBoundedDigest()
+    for await (const chunk of fs.createReadStream(filePath, {
+      highWaterMark: TRANSFER_DIGEST_CHUNK_BYTES
+    })) {
+      digest.update(chunk)
+    }
+    const result = digest.finish()
+    const after = await fss.lstat(filePath)
+    if (stableLocalStat(before) !== stableLocalStat(after) || result.size !== before.size) {
+      throw new Error('本地上传源在摘要计算期间发生变化。')
+    }
+    return { ...descriptor, ...result }
+  }
+
+  const names = await fss.readdir(filePath)
+  descriptor.entries = []
+  for (const name of names.sort((left, right) => left.localeCompare(right))) {
+    if (!name || name === '.' || name === '..' || /[\\/]/.test(name)) {
+      throw new Error('本地上传目录包含无效条目名称。')
+    }
+    descriptor.entries.push({
+      name,
+      entry: await describeTransferEntryInternal(
+        path.join(filePath, name),
+        budget,
+        depth + 1
+      )
+    })
+  }
+  const after = await fss.lstat(filePath)
+  if (stableLocalStat(before) !== stableLocalStat(after)) {
+    throw new Error('本地上传目录在摘要计算期间发生变化。')
+  }
+  return descriptor
+}
+
+async function describeTransferEntry (filePath, options = {}) {
+  const limits = transferDescriptorLimits(options)
+  const descriptor = await describeTransferEntryInternal(filePath, {
+    ...limits,
+    remainingNodes: limits.maxNodes,
+    totalBytes: 0
+  }, 0)
+  if (Buffer.byteLength(JSON.stringify(descriptor), 'utf8') > limits.maxManifestBytes) {
+    throw new Error('本地上传目录清单超过允许的大小上限。')
+  }
+  return descriptor
+}
 
 function encodeUtf8Base64 (value) {
   return Buffer.from(String(value), 'utf8').toString('base64')
@@ -418,7 +574,8 @@ const fsExport = Object.assign(
     writeCustom,
     openCustom,
     closeCustom,
-    statCustom
+    statCustom,
+    describeTransferEntry
   },
   {
     readdirAsync: (_path) => {

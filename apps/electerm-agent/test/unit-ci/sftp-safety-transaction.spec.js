@@ -1346,6 +1346,96 @@ test('SFTP external upload protects new and overwritten targets with rollback', 
   }
 })
 
+test('SFTP rollback refuses same-size external file changes after a verified upload', async () => {
+  for (const existing of [false, true]) {
+    const sftp = createFakeSftp(existing
+      ? { '/srv/app/release.txt': { type: 'file', content: 'old', mode: 0o640 } }
+      : { '/srv/app': { type: 'directory' } })
+    const operation = await buildSftpOperation({
+      id: `adapter-upload-post-file-${existing ? 'overwrite' : 'new'}`,
+      action: 'upload',
+      paths: { target: '/srv/app/release.txt' },
+      type: 'file',
+      expected: { type: 'file', size: 3 },
+      transfer: {
+        identity: `upload-post-file-${existing ? 'overwrite' : 'new'}`,
+        sourceIdentity: 'source-post-file',
+        batchId: 'batch-post-file',
+        direction: 'local-to-remote'
+      }
+    })
+    const context = await runExternalSftpTransfer({
+      operation,
+      sftp,
+      mutate: () => sftp.writeFile('/srv/app/release.txt', 'new', 0o640)
+    })
+
+    assert.equal(context.completed.state, 'rollback-available')
+    assert.equal(
+      context.completed.artifacts.postMutation.resources[0].descriptor.digestAlgorithm,
+      'SHELLPILOT-SHA-256-CHAIN-V1'
+    )
+    await sftp.writeFile('/srv/app/release.txt', 'bad', 0o640)
+    const mutationCalls = sftp.calls.length
+
+    await assert.rejects(
+      context.runner.rollback(operation.id),
+      /外部变化|拒绝回滚/
+    )
+    assert.equal(sftp.text('/srv/app/release.txt'), 'bad')
+    assert.equal(sftp.calls.slice(mutationCalls).some(call => (
+      ['rename', 'removeEntry', 'rm', 'rmdir'].includes(call[0])
+    )), false)
+  }
+})
+
+test('SFTP rollback refuses external directory tree changes after a verified upload', async () => {
+  const sftp = createFakeSftp({
+    '/srv/app': { type: 'directory' },
+    '/srv/app/release': { type: 'directory', mode: 0o750 },
+    '/srv/app/release/config.txt': { type: 'file', content: 'old', mode: 0o640 }
+  })
+  const operation = await buildSftpOperation({
+    id: 'adapter-upload-post-directory',
+    action: 'upload',
+    paths: { target: '/srv/app/release' },
+    type: 'directory',
+    expected: { type: 'directory' },
+    transfer: {
+      identity: 'upload-post-directory',
+      sourceIdentity: 'source-post-directory',
+      batchId: 'batch-post-directory',
+      direction: 'local-to-remote'
+    }
+  })
+  const context = await runExternalSftpTransfer({
+    operation,
+    sftp,
+    mutate: async () => {
+      await sftp.removeEntry('/srv/app/release')
+      await sftp.mkdir('/srv/app/release')
+      await sftp.writeFile('/srv/app/release/config.txt', 'new', 0o640)
+    }
+  })
+
+  assert.equal(context.completed.state, 'rollback-available')
+  assert.equal(
+    context.completed.artifacts.postMutation.resources[0].descriptor.entries[0].name,
+    'config.txt'
+  )
+  await sftp.writeFile('/srv/app/release/extra.txt', 'outside', 0o600)
+  const mutationCalls = sftp.calls.length
+
+  await assert.rejects(
+    context.runner.rollback(operation.id),
+    /外部变化|拒绝回滚/
+  )
+  assert.equal(sftp.text('/srv/app/release/extra.txt'), 'outside')
+  assert.equal(sftp.calls.slice(mutationCalls).some(call => (
+    ['rename', 'removeEntry', 'rm', 'rmdir'].includes(call[0])
+  )), false)
+})
+
 test('SFTP directory upload partial failure remains rollbackable', async () => {
   const sftp = createFakeSftp({
     '/srv/app': { type: 'directory' }
@@ -1467,6 +1557,76 @@ test('SFTP same-endpoint copy rejects a same-size target with different content'
   const restored = await context.runner.rollback(operation.id)
   assert.equal(restored.state, 'restored')
   assert.equal(sftp.exists('/srv/app/target.txt'), false)
+})
+
+test('SFTP upload verification rejects same-size corruption and missing directory entries', async () => {
+  const cases = [
+    {
+      id: 'file',
+      type: 'file',
+      sourceDescriptor: {
+        type: 'file',
+        mode: 0o640,
+        uid: 501,
+        gid: 20,
+        size: 3,
+        digest: await (await import(pathToFileURL(path.resolve(
+          __dirname,
+          '../../src/client/components/sftp/sftp-transaction-adapter.js'
+        )).href)).digestSftpText('abc').then(result => result.digest),
+        digestAlgorithm: 'SHELLPILOT-SHA-256-CHAIN-V1'
+      },
+      mutate: sftp => sftp.writeFile('/srv/app/target', 'xyz', 0o640)
+    },
+    {
+      id: 'directory',
+      type: 'directory',
+      sourceDescriptor: {
+        type: 'directory',
+        mode: 0o750,
+        uid: 501,
+        gid: 20,
+        entries: [{
+          name: 'required.txt',
+          entry: {
+            type: 'file',
+            mode: 0o640,
+            uid: 501,
+            gid: 20,
+            size: 3,
+            digest: '0'.repeat(64),
+            digestAlgorithm: 'SHELLPILOT-SHA-256-CHAIN-V1'
+          }
+        }]
+      },
+      mutate: sftp => sftp.mkdir('/srv/app/target')
+    }
+  ]
+
+  for (const item of cases) {
+    const sftp = createFakeSftp({ '/srv/app': { type: 'directory' } })
+    const operation = await buildSftpOperation({
+      id: `adapter-upload-integrity-${item.id}`,
+      action: 'upload',
+      paths: { target: '/srv/app/target' },
+      type: item.type,
+      expected: { sourceDescriptor: item.sourceDescriptor },
+      transfer: {
+        identity: `upload-integrity-${item.id}`,
+        sourceIdentity: `source-integrity-${item.id}`,
+        direction: 'local-to-remote'
+      }
+    })
+    const context = await runExternalSftpTransfer({
+      operation,
+      sftp,
+      mutate: () => item.mutate(sftp)
+    })
+
+    assert.equal(context.completed.state, 'failed')
+    assert.match(context.completed.error, /上传后的远程目标校验失败/)
+    assert.equal((await context.runner.rollback(operation.id)).state, 'restored')
+  }
 })
 
 test('SFTP adapter snapshots and verifies editor saves with bounded chunk reads', async () => {

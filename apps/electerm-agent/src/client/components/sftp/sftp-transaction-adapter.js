@@ -4,6 +4,7 @@ const digestChunkBytes = 64 * 1024
 const maxManifestBytes = 256 * 1024
 const maxDescriptorDepth = 128
 const maxDescriptorNodes = 10000
+const maxDescriptorTotalBytes = 1024 * 1024 * 1024 * 1024
 const digestAlgorithm = 'SHELLPILOT-SHA-256-CHAIN-V1'
 const fileTypeMask = 0o170000
 const fileTypeModes = {
@@ -254,7 +255,10 @@ function assertEntryName (name) {
 }
 
 function createDescriptorBudget () {
-  return { remainingNodes: maxDescriptorNodes }
+  return {
+    remainingNodes: maxDescriptorNodes,
+    remainingBytes: maxDescriptorTotalBytes
+  }
 }
 
 async function describeModeEntry (sftp, path, signal) {
@@ -287,6 +291,11 @@ async function describeEntry (
     ...safeOwnership(stat)
   }
   if (type === 'file') {
+    if (!Number.isSafeInteger(stat.size) || stat.size < 0 ||
+      stat.size > budget.remainingBytes) {
+      throw new Error('SFTP 文件树超过总字节上限，已拒绝继续操作。')
+    }
+    budget.remainingBytes -= stat.size
     const digest = await digestRemoteFile(sftp, path, Number(stat.size), signal)
     return { ...descriptor, ...digest }
   }
@@ -312,6 +321,21 @@ async function describeEntry (
         signal
       )
     })
+  }
+  return descriptor
+}
+
+export async function describeSftpTransferEntry (sftp, path, signal) {
+  const descriptor = await describeEntry(
+    sftp,
+    path,
+    createDescriptorBudget(),
+    0,
+    signal
+  )
+  const bytes = new TextEncoder().encode(JSON.stringify(descriptor)).byteLength
+  if (bytes > maxManifestBytes) {
+    throw new Error('SFTP 文件树描述超过清单上限，已拒绝继续传输。')
   }
   return descriptor
 }
@@ -684,11 +708,88 @@ async function prepareNewManifest (sftp, operation, signal) {
 
 async function requireManifest (sftp, operation, signal) {
   const prepared = await loadManifest(sftp, operation, signal)
+  const preparedArtifacts = { ...(operation.artifacts || {}) }
+  delete preparedArtifacts.postMutation
   if (!prepared || !sameDescriptor(prepared.plan, operation.plan) ||
-    !sameDescriptor(prepared.artifacts, operation.artifacts)) {
+    !sameDescriptor(prepared.artifacts, preparedArtifacts)) {
     throw new Error('SFTP 恢复清单与已绑定事务不一致。')
   }
   return prepared
+}
+
+async function describePostMutation (sftp, operation, signal) {
+  const resources = []
+  for (const resource of operation.plan.resources) {
+    if (resource.snapshotRequired === false) continue
+    resources.push({
+      slot: resource.slot,
+      descriptor: await describeEntry(
+        sftp,
+        resource.path,
+        createDescriptorBudget(),
+        0,
+        signal
+      )
+    })
+  }
+  const postMutation = {
+    schemaVersion: 1,
+    digestAlgorithm,
+    resources
+  }
+  if (new TextEncoder().encode(JSON.stringify(postMutation)).byteLength > maxManifestBytes) {
+    throw new Error('SFTP 修改后状态清单超过安全上限，已拒绝生成可回滚记录。')
+  }
+  return postMutation
+}
+
+function requirePostMutationDescriptors (operation) {
+  const postMutation = operation.artifacts?.postMutation
+  if (!postMutation) return null
+  if (postMutation.schemaVersion !== 1 ||
+    postMutation.digestAlgorithm !== digestAlgorithm ||
+    !Array.isArray(postMutation.resources)) {
+    throw new Error('SFTP 修改后状态清单无效，已拒绝回滚。')
+  }
+  const descriptors = new Map()
+  for (const item of postMutation.resources) {
+    if (!item?.slot || descriptors.has(item.slot) || !item.descriptor) {
+      throw new Error('SFTP 修改后状态清单存在重复或缺失项，已拒绝回滚。')
+    }
+    descriptors.set(item.slot, item.descriptor)
+  }
+  for (const resource of operation.plan.resources) {
+    if (resource.snapshotRequired !== false && !descriptors.has(resource.slot)) {
+      throw new Error('SFTP 修改后状态清单不完整，已拒绝回滚。')
+    }
+  }
+  return descriptors
+}
+
+async function assertPostMutationUnchanged (sftp, operation, signal) {
+  const descriptors = requirePostMutationDescriptors(operation)
+  if (!descriptors) return
+  const current = []
+  for (const resource of operation.plan.resources) {
+    if (resource.snapshotRequired === false) continue
+    current.push({
+      resource,
+      descriptor: await describeEntry(
+        sftp,
+        resource.path,
+        createDescriptorBudget(),
+        0,
+        signal
+      )
+    })
+  }
+  for (const item of current) {
+    const expected = descriptors.get(item.resource.slot)
+    if (!sameDescriptor(item.descriptor, expected) &&
+      !sameDescriptor(item.descriptor, item.resource.original)) {
+      throw new Error('SFTP 目标在操作完成后发生外部变化，已拒绝回滚。')
+    }
+  }
 }
 
 async function assertOriginalState (sftp, resource, action, signal) {
@@ -711,7 +812,10 @@ async function verifyExecuteState (sftp, operation, signal) {
       0,
       signal
     )
-    if (!matchesExpected(target, operation.effect.expected)) {
+    const sourceDescriptor = operation.effect.expected?.sourceDescriptor
+    if (sourceDescriptor
+      ? !sameCopiedDescriptor(target, sourceDescriptor)
+      : !matchesExpected(target, operation.effect.expected)) {
       throw new Error('SFTP 上传后的远程目标校验失败。')
     }
     return
@@ -1117,13 +1221,18 @@ export function createSftpTransactionAdapter ({ getSftp } = {}) {
       const sftp = requireSftp()
       await requireManifest(sftp, operation, context.signal)
       await verifyExecuteState(sftp, operation, context.signal)
-      return { verified: true, summary: 'SFTP 修改后状态验证通过。' }
+      return {
+        verified: true,
+        postMutation: await describePostMutation(sftp, operation, context.signal),
+        summary: 'SFTP 修改后状态验证通过。'
+      }
     },
 
     async rollback (operation, context = {}) {
       const sftp = requireSftp()
       const { signal } = context
       await requireManifest(sftp, operation, signal)
+      await assertPostMutationUnchanged(sftp, operation, signal)
       if (operation.effect.action === 'chmod') {
         const resource = operation.plan.resources[0]
         const current = await describeModeEntry(sftp, resource.path, signal)
