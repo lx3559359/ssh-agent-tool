@@ -502,12 +502,16 @@ export default class FileSection extends React.Component {
     const p = resolve(path, name)
     try {
       if (type === typeMap.remote) {
-        const result = await this.props.changeRemoteFileMode({
-          path: p,
-          mode: Number.parseInt(String(permission), 8),
-          type: file.isDirectory ? 'directory' : 'file'
-        })
-        if (!result) return
+        if (this.props.isFtp) {
+          await this.props.sftp.chmod(p, permission)
+        } else {
+          const result = await this.props.changeRemoteFileMode({
+            path: p,
+            mode: Number.parseInt(String(permission), 8),
+            type: file.isDirectory ? 'directory' : 'file'
+          })
+          if (!result) return
+        }
       } else {
         await window.fs.chmod(p, permission)
       }

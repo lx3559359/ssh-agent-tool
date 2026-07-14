@@ -73,7 +73,7 @@ function normalizeRemotePath (value) {
     parts.push(part)
   }
   const normalized = `/${parts.join('/')}`
-  if (normalized.includes('/.shellpilot-transactions/')) {
+  if (parts.includes('.shellpilot-transactions')) {
     throw new Error('SFTP side-effect cannot target transaction storage.')
   }
   return normalized

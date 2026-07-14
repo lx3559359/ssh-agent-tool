@@ -310,6 +310,12 @@ describe('session-sftp transport flows', () => {
       )
 
       await sftp.copyEntry('/source', '/backups/transaction-copy')
+      const sourceOwnership = await sftp.lstat('/source/app.conf')
+      const copiedOwnership = await sftp.lstat('/backups/transaction-copy/app.conf')
+      assert.deepEqual(
+        { uid: copiedOwnership.uid, gid: copiedOwnership.gid },
+        { uid: sourceOwnership.uid, gid: sourceOwnership.gid }
+      )
       const chunk = await sftp.readFileChunk(
         '/backups/transaction-copy/app.conf',
         { offset: 2, maxBytes: 4 }
@@ -325,6 +331,21 @@ describe('session-sftp transport flows', () => {
       await sftp.removeEntry('/backups/transaction-copy')
       assert.equal(
         fs.existsSync(toLocalPath(root, '/backups/transaction-copy')),
+        false
+      )
+      await assert.rejects(
+        sftp.copyEntry('/source', '/source/inside'),
+        /源|目标|内部|source|target/i
+      )
+      assert.equal(fs.existsSync(toLocalPath(root, '/source/inside')), false)
+      await assert.rejects(
+        sftp.copyEntry('/source/app.conf', '/backups/over-budget.conf', {
+          maxTotalBytes: 2
+        }),
+        /字节|byte|上限/i
+      )
+      assert.equal(
+        fs.existsSync(toLocalPath(root, '/backups/over-budget.conf')),
         false
       )
     } finally {

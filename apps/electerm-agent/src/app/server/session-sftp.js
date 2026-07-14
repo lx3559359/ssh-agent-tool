@@ -20,6 +20,29 @@ const {
 } = require('../common/get-folder-size-and-file-count.js')
 const { searchTextReader } = require('../common/log-search')
 const globalState = require('./global-state')
+const {
+  assertSftpCopyTargetOutsideSource,
+  consumeSftpCopyBudget,
+  createSftpCopyBudget
+} = require('./sftp-copy-budget')
+
+function sftpStatType (stat) {
+  const isDirectory = typeof stat?.isDirectory === 'function'
+    ? stat.isDirectory()
+    : stat?.isDirectory === true
+  const isFile = typeof stat?.isFile === 'function'
+    ? stat.isFile()
+    : !isDirectory && (Number(stat?.mode) & 0o170000) === 0o100000
+  return isDirectory ? 'directory' : isFile ? 'file' : 'special'
+}
+
+function requiredSftpOwnership (stat) {
+  if (!Number.isSafeInteger(stat?.uid) || stat.uid < 0 ||
+    !Number.isSafeInteger(stat?.gid) || stat.gid < 0) {
+    throw new Error('SFTP 复制无法读取有效的 uid/gid，已拒绝继续。')
+  }
+  return { uid: stat.uid, gid: stat.gid }
+}
 
 class Sftp extends TerminalBase {
   connect (initOptions) {
@@ -362,22 +385,42 @@ class Sftp extends TerminalBase {
     return 1
   }
 
-  async copyEntry (from, to) {
-    await this.copySftpEntry(from, to)
+  async copyEntry (from, to, options = {}) {
+    await this.copySftpEntry(from, to, {
+      ...options,
+      preserveOwnership: true
+    })
     return 1
   }
 
-  async copySftpFile (from, to, mode) {
-    const readStream = this.sftp.createReadStream(from)
-    const writeStream = this.sftp.createWriteStream(to, {
-      mode: mode & 0o7777
-    })
-    await pipeline(readStream, writeStream)
+  async applySftpCopyMetadata (path, stat, preserveOwnership) {
+    if (preserveOwnership) {
+      const { uid, gid } = requiredSftpOwnership(stat)
+      await this.chown(path, uid, gid)
+    }
+    await this.chmod(path, Number(stat.mode) & 0o7777)
+    if (preserveOwnership) {
+      const copied = await this.lstat(path)
+      const { uid, gid } = requiredSftpOwnership(copied)
+      if (uid !== stat.uid || gid !== stat.gid ||
+        (Number(copied.mode) & 0o7777) !== (Number(stat.mode) & 0o7777)) {
+        throw new Error('SFTP 复制后的 ownership 或 mode 校验失败。')
+      }
+    }
   }
 
-  async copySftpDirectory (from, to, mode) {
+  async copySftpFile (from, to, stat, options) {
+    const readStream = this.sftp.createReadStream(from)
+    const writeStream = this.sftp.createWriteStream(to, {
+      mode: 0o600
+    })
+    await pipeline(readStream, writeStream)
+    await this.applySftpCopyMetadata(to, stat, options.preserveOwnership)
+  }
+
+  async copySftpDirectory (from, to, stat, options, depth) {
     await this.mkdir(to, {
-      mode: mode & 0o7777
+      mode: 0o700
     }).catch(err => {
       if (!/exist|failure/i.test(String(err?.message || err))) {
         throw err
@@ -387,21 +430,46 @@ class Sftp extends TerminalBase {
     for (const entry of entries) {
       const sourcePath = pathPosix.join(from, entry.name)
       const targetPath = pathPosix.join(to, entry.name)
-      if (entry.type === 'd') {
-        await this.copySftpDirectory(sourcePath, targetPath, entry.mode)
-      } else {
-        await this.copySftpFile(sourcePath, targetPath, entry.mode)
-      }
+      await this.copySftpEntryWithinBudget(
+        sourcePath,
+        targetPath,
+        options,
+        depth + 1
+      )
+    }
+    await this.applySftpCopyMetadata(to, stat, options.preserveOwnership)
+  }
+
+  async copySftpEntryWithinBudget (from, to, options, depth) {
+    const sourceStat = await this.lstat(from)
+    const type = sftpStatType(sourceStat)
+    if (type === 'special') {
+      throw new Error('SFTP 复制不支持符号链接或特殊文件。')
+    }
+    const bytes = type === 'file' ? Number(sourceStat.size) : 0
+    if (!Number.isSafeInteger(bytes) || bytes < 0) {
+      throw new Error('SFTP 复制源文件大小无效。')
+    }
+    consumeSftpCopyBudget(options.budget, { depth, bytes })
+    if (type === 'directory') {
+      await this.copySftpDirectory(from, to, sourceStat, options, depth)
+    } else {
+      await this.copySftpFile(from, to, sourceStat, options)
     }
   }
 
-  async copySftpEntry (from, to) {
-    const sourceStat = await this.stat(from)
-    if (sourceStat.isDirectory) {
-      await this.copySftpDirectory(from, to, sourceStat.mode)
-    } else {
-      await this.copySftpFile(from, to, sourceStat.mode)
+  async copySftpEntry (from, to, options = {}) {
+    const paths = assertSftpCopyTargetOutsideSource(from, to)
+    const copyOptions = {
+      preserveOwnership: options.preserveOwnership === true,
+      budget: createSftpCopyBudget(options)
     }
+    await this.copySftpEntryWithinBudget(
+      paths.source,
+      paths.target,
+      copyOptions,
+      0
+    )
   }
 
   /**
@@ -688,6 +756,18 @@ class Sftp extends TerminalBase {
 
   readFileRange (remotePath, options) {
     return readRemoteFileRange(this.sftp, remotePath, options)
+  }
+
+  chown (remotePath, uid, gid) {
+    if (typeof this.sftp?.chown !== 'function') {
+      return Promise.reject(new Error('当前 SFTP 服务端不支持 chown，无法保留 ownership。'))
+    }
+    return new Promise((resolve, reject) => {
+      this.sftp.chown(remotePath, uid, gid, (err) => {
+        if (err) reject(err)
+        else resolve(1)
+      })
+    })
   }
 
   readFileChunk (remotePath, options) {

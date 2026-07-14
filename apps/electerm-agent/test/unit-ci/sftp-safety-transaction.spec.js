@@ -159,6 +159,28 @@ test('side-effect requests reject unsupported actions and non-absolute resources
     }),
     /expected|digest|size/i
   )
+  for (const protectedPath of [
+    '/.shellpilot-transactions',
+    '/.shellpilot-transactions/op/source',
+    '/srv/.shellpilot-transactions',
+    '/srv/.shellpilot-transactions/op/source',
+    '\\srv\\.shellpilot-transactions\\op\\source'
+  ]) {
+    await assert.rejects(
+      createSideEffectOperation({
+        effect: {
+          adapter: 'sftp',
+          action: 'delete',
+          resources: [{ path: protectedPath, type: 'file' }],
+          paths: { source: protectedPath },
+          type: 'file',
+          expected: { absent: true }
+        }
+      }),
+      /transaction storage|事务目录|事务存储/i,
+      protectedPath
+    )
+  }
 })
 
 test('side-effect recovery binding v2 binds identity effect plan and artifacts without rollback commands', async () => {
@@ -475,7 +497,13 @@ function parentFakePath (value) {
 }
 
 function createFakeSftp (initial = {}, options = {}) {
-  const nodes = new Map([['/', { type: 'directory', mode: 0o755, dev: 1 }]])
+  const nodes = new Map([['/', {
+    type: 'directory',
+    mode: 0o755,
+    dev: 1,
+    uid: 1000,
+    gid: 1000
+  }]])
   const calls = []
   let fullReads = 0
   let chunkReads = 0
@@ -483,6 +511,7 @@ function createFakeSftp (initial = {}, options = {}) {
   let failManifest = Boolean(options.failManifest)
   let failEditorSwap = Boolean(options.failEditorSwap)
   let failRemove = Boolean(options.failRemove)
+  let failChown = Boolean(options.failChown)
 
   function missing (path) {
     const error = new Error(`No such file: ${path}`)
@@ -509,12 +538,16 @@ function createFakeSftp (initial = {}, options = {}) {
           type: 'file',
           content: Buffer.from(value.content || ''),
           mode: value.mode ?? 0o644,
-          dev: value.dev || 1
+          dev: value.dev || 1,
+          uid: value.uid ?? 1000,
+          gid: value.gid ?? 1000
         }
       : {
           type: value.type || 'directory',
           mode: value.mode ?? 0o755,
-          dev: value.dev || 1
+          dev: value.dev || 1,
+          uid: value.uid ?? 1000,
+          gid: value.gid ?? 1000
         })
   }
 
@@ -537,6 +570,8 @@ function createFakeSftp (initial = {}, options = {}) {
     return {
       mode: typeMode | value.mode,
       size: value.type === 'file' ? value.content.length : 0,
+      uid: value.uid,
+      gid: value.gid,
       ...(options.omitDev ? {} : { dev: value.dev }),
       isDirectory: value.type === 'directory'
     }
@@ -633,6 +668,16 @@ function createFakeSftp (initial = {}, options = {}) {
       }
       if (exists(to)) throw new Error('Target already exists')
       cloneTree(from, to)
+      if (failChown) {
+        failChown = false
+        throw new Error('SFTP chown unsupported')
+      }
+      if (options.dropOwnershipOnCopy) {
+        for (const key of descendants(to)) {
+          node(key).uid = 1000
+          node(key).gid = 1000
+        }
+      }
       return 1
     },
     async rename (from, to) {
@@ -680,6 +725,17 @@ function createFakeSftp (initial = {}, options = {}) {
       const normalized = normalizeFakePath(path)
       calls.push(['chmod', normalized, mode])
       node(normalized).mode = mode
+      return 1
+    },
+    async chown (path, uid, gid) {
+      const normalized = normalizeFakePath(path)
+      calls.push(['chown', normalized, uid, gid])
+      if (failChown) {
+        failChown = false
+        throw new Error('SFTP chown unsupported')
+      }
+      node(normalized).uid = uid
+      node(normalized).gid = gid
       return 1
     },
     async writeFile (path, text, mode) {
@@ -888,7 +944,9 @@ test('SFTP adapter handles chmod for files and directories exactly', async t => 
       Object.assign(operation, await adapter.prepare(operation))
       assert.deepEqual(operation.plan.resources[0].original, {
         type,
-        mode: 0o640
+        mode: 0o640,
+        uid: 1000,
+        gid: 1000
       })
       assert.equal(sftp.calls.some(call => (
         call[0] === 'readFileChunk' && call[1] === target
@@ -896,6 +954,9 @@ test('SFTP adapter handles chmod for files and directories exactly', async t => 
       await adapter.beforeExecute(operation)
       await adapter.verifyExecute(operation)
       assert.equal((await sftp.stat(target)).mode & 0o7777, 0o750)
+      await sftp.chown(target, 9001, 9002)
+      await assert.rejects(adapter.rollback(operation), /外部|ownership|uid|gid|拒绝/i)
+      await sftp.chown(target, 1000, 1000)
       await adapter.rollback(operation)
       await adapter.verifyRollback(operation)
       assert.equal((await sftp.stat(target)).mode & 0o7777, 0o640)
@@ -1046,6 +1107,99 @@ test('SFTP adapter snapshots and restores complete delete trees', async () => {
   )), true)
 })
 
+test('SFTP adapter binds and restores ownership for every directory entry', async t => {
+  const { createSftpTransactionAdapter } = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/components/sftp/sftp-transaction-adapter.js'
+  )).href)
+  const source = {
+    '/srv/app/owned': {
+      type: 'directory', mode: 0o750, uid: 2100, gid: 3100
+    },
+    '/srv/app/owned/a.txt': {
+      type: 'file', content: 'A', mode: 0o640, uid: 2101, gid: 3101
+    },
+    '/srv/app/owned/nested': {
+      type: 'directory', mode: 0o700, uid: 2102, gid: 3102
+    },
+    '/srv/app/owned/nested/b.txt': {
+      type: 'file', content: 'B', mode: 0o600, uid: 2103, gid: 3103
+    }
+  }
+  const operation = await buildSftpOperation({
+    id: 'adapter-delete-ownership',
+    action: 'delete',
+    paths: { source: '/srv/app/owned' },
+    type: 'directory',
+    expected: { absent: true }
+  })
+  const sftp = createFakeSftp(source)
+  const adapter = createSftpTransactionAdapter({ getSftp: () => sftp })
+  Object.assign(operation, await adapter.prepare(operation))
+
+  const original = operation.plan.resources[0].original
+  assert.deepEqual(
+    { uid: original.uid, gid: original.gid },
+    { uid: 2100, gid: 3100 }
+  )
+  assert.deepEqual(
+    original.entries.map(item => [item.name, item.entry.uid, item.entry.gid]),
+    [['a.txt', 2101, 3101], ['nested', 2102, 3102]]
+  )
+  assert.deepEqual(
+    original.entries[1].entry.entries.map(item => [
+      item.name,
+      item.entry.uid,
+      item.entry.gid
+    ]),
+    [['b.txt', 2103, 3103]]
+  )
+
+  await adapter.beforeExecute(operation)
+  await adapter.verifyExecute(operation)
+  await adapter.rollback(operation)
+  await adapter.verifyRollback(operation)
+  for (const [remotePath, metadata] of Object.entries(source)) {
+    const restored = sftp.nodes.get(remotePath)
+    assert.equal(restored.uid, metadata.uid, remotePath)
+    assert.equal(restored.gid, metadata.gid, remotePath)
+  }
+
+  await t.test('ownership mismatch fails prepare', async () => {
+    const mismatched = createFakeSftp(source, { dropOwnershipOnCopy: true })
+    const mismatchOperation = await buildSftpOperation({
+      id: 'adapter-delete-ownership-mismatch',
+      action: 'delete',
+      paths: { source: '/srv/app/owned' },
+      type: 'directory',
+      expected: { absent: true }
+    })
+    await assert.rejects(
+      createSftpTransactionAdapter({ getSftp: () => mismatched })
+        .prepare(mismatchOperation),
+      /ownership|uid|gid|快照|校验/i
+    )
+    assert.equal(mismatched.exists('/srv/app/owned'), true)
+  })
+
+  await t.test('chown failure fails prepare', async () => {
+    const denied = createFakeSftp(source, { failChown: true })
+    const deniedOperation = await buildSftpOperation({
+      id: 'adapter-delete-ownership-denied',
+      action: 'delete',
+      paths: { source: '/srv/app/owned' },
+      type: 'directory',
+      expected: { absent: true }
+    })
+    await assert.rejects(
+      createSftpTransactionAdapter({ getSftp: () => denied })
+        .prepare(deniedOperation),
+      /chown|ownership|权限|unsupported/i
+    )
+    assert.equal(denied.exists('/srv/app/owned'), true)
+  })
+})
+
 test('SFTP adapter can roll back an interrupted recursive delete', async () => {
   const { createSftpTransactionAdapter } = await import(pathToFileURL(path.resolve(
     __dirname,
@@ -1132,6 +1286,10 @@ test('SFTP UI routes editor save chmod rename and delete through modern transact
   assert.match(itemSource, /renameRemoteFile/)
   assert.match(itemSource, /saveRemoteEditorFile/)
   assert.match(itemSource, /Number\.parseInt\(String\(permission\), 8\)/)
+  assert.match(
+    itemSource,
+    /changeFileMode[\s\S]{0,500}this\.props\.isFtp[\s\S]{0,180}sftp\.chmod\(p, permission\)/
+  )
   assert.doesNotMatch(itemSource, /recordSftpMutationRecovery/)
   assert.match(entrySource, /createTransactionRunner/)
   assert.match(entrySource, /createSftpTransactionAdapter/)

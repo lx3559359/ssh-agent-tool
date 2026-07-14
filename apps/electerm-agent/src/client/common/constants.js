@@ -282,6 +282,7 @@ export const instSftpKeys = [
   'cp',
   'copyEntry',
   'removeEntry',
+  'chown',
   'readFile',
   'readFilePreview',
   'readFileRange',

@@ -189,6 +189,14 @@ function safeMode (stat) {
   return Number(stat?.mode) & 0o7777
 }
 
+function safeOwnership (stat) {
+  if (!Number.isSafeInteger(stat?.uid) || stat.uid < 0 ||
+    !Number.isSafeInteger(stat?.gid) || stat.gid < 0) {
+    throw new Error('SFTP 资源缺少有效的 uid/gid，无法创建可靠恢复点。')
+  }
+  return { uid: stat.uid, gid: stat.gid }
+}
+
 async function lstatOrAbsent (sftp, path) {
   try {
     return await sftp.lstat(path)
@@ -222,7 +230,7 @@ async function describeModeEntry (sftp, path) {
   if (!stat) return { absent: true }
   const type = typeFromStat(stat)
   assertSupportedType(type)
-  return { type, mode: safeMode(stat) }
+  return { type, mode: safeMode(stat), ...safeOwnership(stat) }
 }
 
 async function describeEntry (
@@ -241,7 +249,8 @@ async function describeEntry (
   assertSupportedType(type)
   const descriptor = {
     type,
-    mode: safeMode(stat)
+    mode: safeMode(stat),
+    ...safeOwnership(stat)
   }
   if (type === 'file') {
     const digest = await digestRemoteFile(sftp, path, Number(stat.size))
@@ -279,6 +288,8 @@ function matchesExpected (descriptor, expected) {
   if (descriptor?.absent === true) return false
   if (expected?.type && descriptor.type !== expected.type) return false
   if (expected?.mode !== undefined && descriptor.mode !== expected.mode) return false
+  if (expected?.uid !== undefined && descriptor.uid !== expected.uid) return false
+  if (expected?.gid !== undefined && descriptor.gid !== expected.gid) return false
   if (expected?.size !== undefined && descriptor.size !== expected.size) return false
   if (expected?.digest && descriptor.digest !== expected.digest) return false
   if (expected?.digestAlgorithm &&
@@ -552,9 +563,16 @@ async function verifyExecuteState (sftp, operation) {
     const current = await describeEntry(sftp, resources[0].path)
     const mode = operation.effect.requestedMode ??
       (resources[0].original.absent ? undefined : resources[0].original.mode)
+    const ownership = resources[0].original.absent
+      ? {}
+      : {
+          uid: resources[0].original.uid,
+          gid: resources[0].original.gid
+        }
     const expected = {
       ...operation.effect.expected,
       type: 'file',
+      ...ownership,
       ...(mode === undefined
         ? {}
         : { mode })
@@ -567,7 +585,9 @@ async function verifyExecuteState (sftp, operation) {
   if (action === 'chmod') {
     const current = await describeModeEntry(sftp, resources[0].path)
     if (current.absent || current.type !== resources[0].original.type ||
-      current.mode !== operation.effect.requestedMode) {
+      current.mode !== operation.effect.requestedMode ||
+      current.uid !== resources[0].original.uid ||
+      current.gid !== resources[0].original.gid) {
       throw new Error('SFTP chmod 后的权限验证失败。')
     }
     return
@@ -648,13 +668,21 @@ function postExpectedFor (operation, resource) {
     return {
       ...operation.effect.expected,
       type: 'file',
+      ...(resource.original.absent
+        ? {}
+        : { uid: resource.original.uid, gid: resource.original.gid }),
       ...(mode === undefined
         ? {}
         : { mode })
     }
   }
   if (operation.effect.action === 'chmod') {
-    return { type: resource.original.type, mode: operation.effect.requestedMode }
+    return {
+      type: resource.original.type,
+      mode: operation.effect.requestedMode,
+      uid: resource.original.uid,
+      gid: resource.original.gid
+    }
   }
   if (operation.effect.action === 'rename') {
     return resource.slot === 'source'
@@ -712,10 +740,24 @@ export function createSftpTransactionAdapter ({ getSftp } = {}) {
           throw new Error('SFTP 编辑器事务置换路径已被占用，未修改目标文件。')
         }
         await sftp.writeFile(resource.executionPath, text, mode)
+        if (resource.original.absent !== true) {
+          if (typeof sftp.chown !== 'function') {
+            throw new Error('当前 SFTP 连接不支持 chown，未修改目标文件。')
+          }
+          await sftp.chown(
+            resource.executionPath,
+            resource.original.uid,
+            resource.original.gid
+          )
+          await sftp.chmod(resource.executionPath, mode)
+        }
         const staged = await describeEntry(sftp, resource.executionPath)
         if (!matchesExpected(staged, {
           ...operation.effect.expected,
           type: 'file',
+          ...(resource.original.absent
+            ? {}
+            : { uid: resource.original.uid, gid: resource.original.gid }),
           ...(mode === undefined ? {} : { mode })
         })) {
           throw new Error('SFTP 编辑器暂存文件验证失败，未修改目标文件。')
