@@ -79,6 +79,7 @@
 .setting-tabs-terminal-themes
 .setting-tabs-quick-commands
 .setting-tabs-profile
+.setting-tabs-widgets
   flex 1 1 auto
   min-width 0
   min-height 0
@@ -172,6 +173,26 @@
       overflow-x hidden
     .setting-row-right
       height calc(100% - clamp(132px, 36vh, 190px))
+  .setting-tabs-widgets
+    overflow-x hidden
+    overflow-y auto
+    .setting-col
+      height auto
+      min-height 100%
+      overflow visible
+    .setting-row-left
+      display block
+      height auto
+      min-height 0
+      border-right 0
+      border-bottom 1px solid var(--sp-border)
+      overflow visible
+    .setting-row-right
+      height auto
+      min-height 180px
+      overflow visible
+    .setting-col-content
+      overflow visible
 
 @media (max-width: 680px)
   .setting-wrap

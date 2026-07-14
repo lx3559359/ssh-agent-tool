@@ -139,6 +139,7 @@ test('shared and system menu styles compile with viewport-safe wrapping contract
   assert.match(sharedCss, /max-width:\s*min\(360px, calc\(100vw - 16px\)\)/)
   assert.match(shared, /max-height calc\(100vh - 16px\)/)
   assert.match(shared, /overflow-y auto/)
+  assert.match(shared, /@media \(max-height: 760px\)[\s\S]*\.ant-dropdown:not\(\.ant-dropdown-menu-submenu-popup\)[\s\S]*inset-block-start 8px !important[\s\S]*inset-block-end auto !important/)
   assert.match(shared, /grid-template-columns auto minmax\(0, 1fr\) auto/)
   assert.match(shared, /overflow-wrap anywhere/)
   assert.doesNotMatch(shared, /text-overflow ellipsis/)

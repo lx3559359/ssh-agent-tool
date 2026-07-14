@@ -241,8 +241,7 @@ test('all ordinary management tabs opt into the narrow horizontal rail explicitl
     ['setting-tabs-setting', 'components/setting-panel/tab-settings.jsx'],
     ['setting-tabs-terminal-themes', 'components/setting-panel/tab-themes.jsx'],
     ['setting-tabs-quick-commands', 'components/setting-panel/tab-quick-commands.jsx'],
-    ['setting-tabs-profile', 'components/setting-panel/tab-profiles.jsx'],
-    ['setting-tabs-profile', 'components/setting-panel/tab-widgets.jsx']
+    ['setting-tabs-profile', 'components/setting-panel/tab-profiles.jsx']
   ]
 
   assert.ok(railGroup)
@@ -252,6 +251,23 @@ test('all ordinary management tabs opt into the narrow horizontal rail explicitl
   }
   assert.doesNotMatch(railGroup[1], /\.setting-tabs-bookmarks/)
   assert.match(narrow[1], /\.item-list-wrap[\s\S]*display flex[\s\S]*flex-direction row[\s\S]*overflow-x auto[\s\S]*overflow-y hidden/)
+})
+
+test('tool center uses a vertically reachable compact layout instead of the ordinary rail', () => {
+  const wrap = readClient('components/setting-panel/setting-wrap.styl')
+  const widgets = readClient('components/widgets/widgets.styl')
+  const widgetsTab = readClient('components/setting-panel/tab-widgets.jsx')
+  const compact = wrap.match(/@media \(max-width: 820px\)([\s\S]*?)@media \(max-width: 680px\)/)
+
+  assert.ok(compact)
+  assert.match(widgetsTab, /className='setting-tabs-widgets'/)
+  assert.match(wrap, /\.setting-tabs-widgets[\s\S]*flex 1 1 auto[\s\S]*overflow hidden/)
+  assert.match(compact[1], /\.setting-tabs-widgets[\s\S]*overflow-x hidden[\s\S]*overflow-y auto/)
+  assert.match(compact[1], /\.setting-tabs-widgets[\s\S]*\.setting-col[\s\S]*height auto[\s\S]*overflow visible/)
+  assert.match(compact[1], /\.setting-tabs-widgets[\s\S]*\.setting-row-left[\s\S]*height auto[\s\S]*overflow visible/)
+  assert.match(widgets, /\.widgets-shell[\s\S]*min-width 0[\s\S]*width 100%/)
+  assert.match(widgets, /@media \(max-width: 820px\)[\s\S]*\.setting-tabs-widgets[\s\S]*\.widgets-card-list[\s\S]*min-width 0[\s\S]*max-height clamp\(180px, 45vh, 360px\)[\s\S]*overflow-y auto/)
+  assert.doesNotMatch(widgetsTab, /className='setting-tabs-profile'/)
 })
 
 test('bookmark narrow layout reserves a usable vertical viewport and keeps the editor visible', () => {

@@ -20,7 +20,7 @@ export default function TabWidgets (props) {
   } = props
   return (
     <div
-      className='setting-tabs-profile'
+      className='setting-tabs-widgets'
     >
       <SettingCol>
         <WidgetList

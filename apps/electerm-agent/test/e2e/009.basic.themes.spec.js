@@ -8,7 +8,6 @@ const delay = require('./common/wait')
 const log = require('./common/log')
 const { expect } = require('./common/expect')
 const appOptions = require('./common/app-options')
-const e = require('./common/lang')
 const extendClient = require('./common/client-extend')
 
 describe('terminal themes', function () {
@@ -18,21 +17,27 @@ describe('terminal themes', function () {
     extendClient(client, electronApp)
     await delay(3500)
 
-    log('button:edit')
-    await client.click('.btns .anticon-picture')
+    log('open settings and select UI themes')
+    await client.click('.aigshell-topbar-action .anticon-setting')
+    await delay(500)
+    await client.click('.setting-tabs [role="tab"][id$="-tab-terminalThemes"]')
     await delay(500)
     const sel = '.setting-wrap .ant-tabs-nav-list .ant-tabs-tab-active'
     await client.hasElem(sel)
     await delay(500)
-    const text = await client.getText(sel)
-    expect(text).equal(e('uiThemes'))
+    const active = await client.element(sel)
+    await active.waitFor({ state: 'visible' })
+    expect(await active.getAttribute('data-node-key')).equal('terminalThemes')
 
     const v = await client.getValue('.setting-wrap #terminal-theme-form_themeName')
-    const tx = await client.getText('.setting-wrap .item-list-unit.active')
-    const txd = await client.getText('.setting-wrap .item-list-unit.current')
-    expect(v).equal(e('newTheme'))
-    expect(tx).equal(e('newTheme'))
-    expect(txd).equal(e('default'))
+    const editorState = await client.evaluate(() => ({
+      id: window.store.settingItem.id,
+      name: window.store.settingItem.name
+    }))
+    expect(editorState.id).equal('')
+    expect(v).equal(editorState.name)
+    expect(await client.countElem('.setting-wrap .sp-theme-card.active')).equal(1)
+    expect(await client.countElem('.setting-wrap .sp-theme-card.selected')).equal(0)
 
     // create theme
     log('create theme')
@@ -42,7 +47,7 @@ describe('terminal themes', function () {
     const themeIterm = await client.evaluate(() => {
       return window.store.itermThemes.length
     })
-    await client.click('.setting-wrap .ant-btn-primary')
+    await client.click('#terminal-theme-form button[type="submit"]')
 
     const themeNow = await client.evaluate(() => {
       return window.store.terminalThemes.length
