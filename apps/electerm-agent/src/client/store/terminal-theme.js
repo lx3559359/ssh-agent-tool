@@ -7,6 +7,7 @@ import {
 } from '../common/constants'
 import { convertTheme } from '../common/terminal-theme'
 import { normalizeTerminalThemeConfig } from '../common/shellpilot-theme-constraints.js'
+import { buildShellPilotBuiltInThemes } from '../common/shellpilot-ui-palettes.js'
 import {
   defaultTheme,
   defaultThemeLight
@@ -16,12 +17,21 @@ export default Store => {
   Store.prototype.getTerminalThemes = function () {
     const t1 = defaultTheme()
     const t2 = defaultThemeLight()
+    const builtIns = buildShellPilotBuiltInThemes(t1.themeConfig)
+    const reservedIds = new Set([t1.id, t2.id, ...builtIns.map(theme => theme.id)])
+    const userThemes = window.store.getItems(settingMap.terminalThemes)
+      .filter(theme => {
+        if (!theme || !theme.id || reservedIds.has(theme.id)) {
+          return false
+        }
+        reservedIds.add(theme.id)
+        return true
+      })
     return [
       t1,
       t2,
-      ...window.store.getItems(settingMap.terminalThemes).filter(d => {
-        return d && d.id !== t1.id && d.id !== t2.id
-      })
+      ...builtIns,
+      ...userThemes
     ]
   }
 

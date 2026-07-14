@@ -13,6 +13,7 @@ import {
 import { Tag, Tooltip, Button, Space } from 'antd'
 import classnames from 'classnames'
 import { defaultTheme } from '../../common/theme-defaults'
+import { getThemeDisplayName } from '../../common/shellpilot-ui-palettes.js'
 import highlight from '../common/highlight'
 import isColorDark from '../../common/is-color-dark'
 
@@ -129,7 +130,8 @@ export default function ThemeListItem (props) {
     )
   }
 
-  const { name, id, type } = item
+  const { id, type } = item
+  const displayName = getThemeDisplayName(item, e)
   const cls = classnames(
     'item-list-unit theme-item',
     {
@@ -141,7 +143,7 @@ export default function ThemeListItem (props) {
   )
   let title = id === defaultTheme().id
     ? e(id)
-    : name
+    : displayName
   title = highlight(
     title,
     keyword
@@ -152,7 +154,7 @@ export default function ThemeListItem (props) {
       className={cls}
       onClick={handleClickTheme}
     >
-      <div className='elli pd1y pd2x' title={name}>
+      <div className='elli pd1y pd2x' title={displayName}>
         {
           !id
             ? <PlusOutlined className='mg1r' />
@@ -161,7 +163,7 @@ export default function ThemeListItem (props) {
         {renderTag()}{title}
       </div>
       {
-        id === defaultTheme().id || type === 'iterm'
+        item.readonly || id === defaultTheme().id || type === 'iterm'
           ? null
           : props.renderDelBtn(item)
       }
