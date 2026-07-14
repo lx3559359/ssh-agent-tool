@@ -117,6 +117,7 @@ export default function SettingHeader (props) {
           : null
       }
       <Button
+        className='close-setting-wrap close-setting-wrap-icon'
         aria-label={e('close')}
         icon={<CloseOutlined />}
         type='text'

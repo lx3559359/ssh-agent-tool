@@ -10,4 +10,162 @@
   left 72px
   height 60px
   right 0
-  z-index 888
+  z-index 8
+
+.sp-settings-form
+  width 100%
+  max-width 1120px
+  min-width 0
+  margin 0 auto
+  padding 4px 0 24px
+  box-sizing border-box
+  color var(--sp-text)
+  label
+  .inline-title
+    max-width 100%
+    white-space normal
+    overflow-wrap break-word
+    word-break normal
+    text-overflow clip
+  .ant-form-item
+  .ant-form-item-control
+  .ant-form-item-control-input
+  .ant-form-item-control-input-content
+  .ant-space-compact
+  .ant-select
+  .ant-input-affix-wrapper
+  .ant-input-number
+  textarea
+  input
+    min-width 0
+    max-width 100%
+  .ant-btn
+    max-width 100%
+    height auto
+    min-height 32px
+  .ant-btn > span
+    white-space normal
+    overflow-wrap break-word
+    word-break normal
+    text-overflow clip
+  a
+    overflow-wrap anywhere
+    word-break break-word
+
+.sp-settings-page-header
+  min-width 0
+  padding 4px 2px 14px
+  h1
+    margin 0 0 4px
+    color var(--sp-text)
+    font-size 24px
+    line-height 1.35
+    white-space normal
+    overflow-wrap break-word
+    word-break normal
+    text-overflow clip
+  p
+    margin 0
+    color var(--sp-text-muted)
+    line-height 1.6
+    white-space normal
+    overflow-wrap break-word
+    word-break normal
+
+.sp-setting-section
+  min-width 0
+  margin 0 0 16px
+  padding 20px
+  box-sizing border-box
+
+.sp-setting-section-header
+  min-width 0
+  margin 0 0 18px
+  padding 0 0 12px
+  border-bottom 1px solid var(--sp-border)
+  h2
+    margin 0
+    color var(--sp-text)
+    font-size 18px
+    line-height 1.4
+    white-space normal
+    overflow-wrap break-word
+    word-break normal
+    text-overflow clip
+  p
+    margin 6px 0 0
+    color var(--sp-text-muted)
+    line-height 1.55
+    white-space normal
+    overflow-wrap break-word
+    word-break normal
+
+.sp-setting-section-body
+  min-width 0
+  > *
+    min-width 0
+
+.sp-setting-field
+  display flex
+  align-items center
+  flex-wrap wrap
+  gap 8px 12px
+  min-width 0
+  max-width 100%
+  > *
+    min-width 0
+    max-width 100%
+
+.sp-setting-field-stacked
+  display flex
+  flex-direction column
+  align-items stretch
+
+.sp-setting-control
+  min-width 0
+  max-width 100%
+
+.sp-setting-actions
+  display flex
+  flex-wrap wrap
+  align-items center
+  gap 8px
+  min-width 0
+
+.sp-setting-toggle-grid
+  display grid
+  grid-template-columns repeat(2, minmax(0, 1fr))
+  gap 8px 16px
+  min-width 0
+  > *
+    min-width 0
+    margin 0
+  .ant-switch
+    width auto
+    max-width 100%
+    height auto
+    min-height 22px
+  .ant-switch-inner
+  .ant-switch-inner-checked
+  .ant-switch-inner-unchecked
+    white-space normal
+    overflow-wrap break-word
+    word-break normal
+    text-overflow clip
+
+@media (max-width: 680px)
+  .sp-settings-page-header
+    padding-bottom 12px
+    h1
+      font-size 21px
+  .sp-setting-section
+    padding 14px
+    margin-bottom 12px
+  .sp-setting-section-header
+    margin-bottom 14px
+  .sp-setting-field
+    display block
+    > * + *
+      margin-top 8px
+  .sp-setting-toggle-grid
+    grid-template-columns minmax(0, 1fr)
