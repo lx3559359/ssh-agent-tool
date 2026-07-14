@@ -28,14 +28,20 @@ test('host fingerprint helpers normalize SHA256 and ssh2 digest formats', () => 
   )
 })
 
-test('host fingerprint verifier accepts only the configured SHA256 digest', () => {
-  const verification = fingerprintHelpers.createSshHostVerification(fingerprint)
+test('host fingerprint verifier accepts SHA256 base64 and exact 64-character hex expectations', () => {
+  const base64Verification = fingerprintHelpers.createSshHostVerification(fingerprint)
+  const hexVerification = fingerprintHelpers.createSshHostVerification(
+    fingerprintHex.toUpperCase()
+  )
 
-  assert.equal(verification.hostHash, 'sha256')
-  assert.equal(verification.hostVerifier(fingerprintHex), true)
-  assert.equal(verification.hostVerifier(fingerprintBase64), true)
-  assert.equal(verification.hostVerifier('00'.repeat(32)), false)
-  assert.equal(verification.hostVerifier('not-a-digest'), false)
+  assert.equal(base64Verification.hostHash, 'sha256')
+  assert.equal(base64Verification.hostVerifier(fingerprintHex), true)
+  assert.equal(base64Verification.hostVerifier(fingerprintBase64), true)
+  assert.equal(base64Verification.hostVerifier('00'.repeat(32)), false)
+  assert.equal(base64Verification.hostVerifier('not-a-digest'), false)
+  assert.equal(hexVerification.hostHash, 'sha256')
+  assert.equal(hexVerification.hostVerifier(fingerprintBase64), true)
+  assert.equal(hexVerification.hostVerifier('00'.repeat(32)), false)
 })
 
 test('host fingerprint verifier rejects missing and malformed expectations', () => {
@@ -47,10 +53,19 @@ test('host fingerprint verifier rejects missing and malformed expectations', () 
     () => fingerprintHelpers.createSshHostVerification('SHA256:not-a-digest'),
     /SHELLPILOT_SSH_HOST_FINGERPRINT/
   )
-  assert.throws(
-    () => fingerprintHelpers.createSshHostVerification(fingerprintHex),
-    /SHA256:base64/
-  )
+  for (const malformed of [
+    fingerprintHex.slice(1),
+    `${fingerprintHex}0`,
+    `${fingerprintHex.slice(0, -1)}g`,
+    `SHA256:${fingerprintHex}`,
+    fingerprintBase64,
+    `sha256:${fingerprintBase64.replace(/=+$/, '')}`
+  ]) {
+    assert.throws(
+      () => fingerprintHelpers.createSshHostVerification(malformed),
+      /SHA256:base64|64-character hex/
+    )
+  }
 })
 
 test('generic SSH/SFTP smoke builds strict host verification options', () => {
@@ -66,6 +81,15 @@ test('generic SSH/SFTP smoke builds strict host verification options', () => {
   assert.equal(options.hostHash, 'sha256')
   assert.equal(options.hostVerifier(fingerprintHex), true)
   assert.equal(options.hostVerifier('00'.repeat(32)), false)
+  const hexOptions = sshSmoke.buildSshConnectOptions({
+    host: 'example.invalid',
+    port: 22,
+    username: 'tester',
+    password: 'not-sent-by-test',
+    timeoutMs: 1000,
+    hostFingerprint: fingerprintHex
+  })
+  assert.equal(hexOptions.hostVerifier(fingerprintBase64), true)
   assert.throws(
     () => sshSmoke.buildSshConnectOptions({
       host: 'example.invalid',
@@ -122,4 +146,13 @@ test('safety smoke re-exports the shared fingerprint behavior', () => {
   assert.equal(options.hostHash, 'sha256')
   assert.equal(options.hostVerifier(fingerprintHex), true)
   assert.equal(options.hostVerifier('00'.repeat(32)), false)
+  const hexOptions = safetySmoke.buildSshConnectOptions({
+    host: 'example.invalid',
+    port: 22,
+    username: 'tester',
+    password: 'not-sent-by-test',
+    timeoutMs: 1000,
+    hostFingerprint: fingerprintHex
+  })
+  assert.equal(hexOptions.hostVerifier(fingerprintBase64), true)
 })

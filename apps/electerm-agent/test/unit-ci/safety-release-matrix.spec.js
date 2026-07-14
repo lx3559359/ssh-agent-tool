@@ -91,7 +91,9 @@ test('architecture document records states, support boundaries, performance and 
     '按需执行',
     '不自动轮询',
     'SHELLPILOT_SSH_HOST_FINGERPRINT',
-    'SHA256'
+    'SHA256',
+    '64 位十六进制',
+    '推荐使用 `SHA256:base64`'
   ]) {
     assert.match(document, new RegExp(text), text)
   }

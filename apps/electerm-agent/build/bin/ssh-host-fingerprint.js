@@ -3,7 +3,9 @@ const crypto = require('node:crypto')
 const fingerprintEnvName = 'SHELLPILOT_SSH_HOST_FINGERPRINT'
 
 function invalidFingerprintError () {
-  return new Error(`Invalid ${fingerprintEnvName}; expected SHA256:base64.`)
+  return new Error(
+    `Invalid ${fingerprintEnvName}; expected SHA256:base64 or 64-character hex.`
+  )
 }
 
 function decodeBase64Fingerprint (value) {
@@ -34,6 +36,9 @@ function normalizeExpectedHostFingerprint (value) {
   const raw = String(value || '').trim()
   if (!raw) {
     throw new Error(`Missing required environment variable: ${fingerprintEnvName}`)
+  }
+  if (/^[a-f0-9]{64}$/i.test(raw)) {
+    return normalizeHostFingerprint(raw)
   }
   if (!raw.startsWith('SHA256:')) {
     throw invalidFingerprintError()

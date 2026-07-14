@@ -118,7 +118,7 @@ npm run test-unit-ci
 
 ### 可配置真实服务器 smoke
 
-两个真实回归入口都要求严格验证主机身份：`npm run smoke:ssh-sftp` 始终要求设置 `SHELLPILOT_SSH_HOST_FINGERPRINT`；`npm run smoke:safety` 只有显式设置 `SHELLPILOT_SAFETY_SMOKE_REAL=1` 后才进入真实服务器模式，但进入该模式时同样要求此变量。运行前必须通过服务器控制台、管理员或其他可信带外渠道预先核对 `SHA256:base64` 指纹，再把完整的 `SHA256:...` 值写入环境变量；不得把 smoke 首次看到的主机密钥直接视为可信。
+两个真实回归入口都要求严格验证主机身份：`npm run smoke:ssh-sftp` 始终要求设置 `SHELLPILOT_SSH_HOST_FINGERPRINT`；`npm run smoke:safety` 只有显式设置 `SHELLPILOT_SAFETY_SMOKE_REAL=1` 后才进入真实服务器模式，但进入该模式时同样要求此变量。该变量兼容完整的 `SHA256:base64` 指纹和恰好 64 位十六进制 SHA-256 摘要，推荐使用 `SHA256:base64`。运行前必须通过服务器控制台、管理员或其他可信带外渠道预先核对对应指纹；不得把 smoke 首次看到的主机密钥直接视为可信。
 
 两个 smoke 都会在发送密码或私钥进行认证前严格校验主机指纹。指纹缺失、格式错误或与服务器不匹配时均拒绝连接，且错误信息不会打印认证凭据。远程安全事务测试只接受 `/tmp`、`/var/tmp` 或它们之下由安全路径段组成的既有目录，并在任何写入前确认目录不是符号链接、远端 `realpath` 与词法路径完全一致，再创建随机 `shellpilot-smoke-*` 临时目录。测试验证临时文件写入、chmod、恢复和取消；`finally` 会校验路径后清理。它不会修改网络、防火墙、服务、系统配置或业务目录，也不会打印密码、私钥、API Key 或其他认证凭据。
 
