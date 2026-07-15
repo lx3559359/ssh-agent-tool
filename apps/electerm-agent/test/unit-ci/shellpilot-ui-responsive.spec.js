@@ -320,7 +320,7 @@ test('low viewport bookmarks stack inside a vertical scroller with two usable re
 
 test('secondary UI work leaves the main terminal footer layout contract untouched', () => {
   const footer = readClient('components/footer/footer.styl')
-  const flexBlock = footer.match(/\.terminal-footer-flex\n([\s\S]*?)\n\.terminal-footer-unit/)
+  const flexBlock = footer.match(/\.terminal-footer-flex\r?\n([\s\S]*?)\r?\n\.terminal-footer-unit/)
 
   assert.ok(flexBlock)
   assert.doesNotMatch(flexBlock[1], /overflow-x|overflow-y|::-webkit-scrollbar/)
