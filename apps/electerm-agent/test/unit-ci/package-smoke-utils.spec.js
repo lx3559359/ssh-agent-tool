@@ -1,6 +1,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const path = require('node:path')
+const { EventEmitter } = require('node:events')
 
 const {
   appExecutableName,
@@ -10,7 +11,8 @@ const {
   validateSmokeResult
 } = require(path.resolve(__dirname, '../../build/bin/package-smoke-utils'))
 const {
-  parseArgs
+  parseArgs,
+  stopChild
 } = require(path.resolve(__dirname, '../../build/bin/package-smoke-test'))
 
 test('package smoke paths target the unpacked ShellPilot app and isolated data folder', () => {
@@ -58,6 +60,36 @@ test('package smoke cli parser accepts an explicit app path', () => {
       app: 'D:\\AIGShell\\AIGShell.exe'
     }
   )
+})
+
+test('package smoke waits for the Electron process to fully exit before cleanup', async () => {
+  const child = new EventEmitter()
+  child.exitCode = null
+  child.signalCode = null
+  child.killCalls = []
+  child.kill = (signal = 'SIGTERM') => {
+    child.killCalls.push(signal)
+    setTimeout(() => {
+      child.exitCode = 0
+      child.emit('exit', 0, null)
+      child.emit('close', 0, null)
+    }, 20)
+    return true
+  }
+
+  let stopped = false
+  const stopping = stopChild(child, {
+    graceMs: 100,
+    forceMs: 100
+  }).then(() => {
+    stopped = true
+  })
+
+  await Promise.resolve()
+  assert.equal(stopped, false)
+  await stopping
+  assert.equal(stopped, true)
+  assert.deepEqual(child.killCalls, ['SIGTERM'])
 })
 
 test('package smoke environment isolates app data and disables gpu for CI stability', () => {

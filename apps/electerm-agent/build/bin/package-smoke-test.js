@@ -36,15 +36,44 @@ async function waitForDatabases (paths, child) {
   return fs.existsSync(paths.mainDbPath) && fs.existsSync(paths.dataDbPath)
 }
 
-async function stopChild (child) {
+function waitForChildClose (child, waitMs) {
+  return new Promise(resolve => {
+    let settled = false
+    const finish = (closed) => {
+      if (settled) {
+        return
+      }
+      settled = true
+      clearTimeout(timer)
+      child.removeListener('close', onClose)
+      child.removeListener('error', onError)
+      resolve(closed)
+    }
+    const onClose = () => finish(true)
+    const onError = () => finish(false)
+    const timer = setTimeout(() => finish(false), waitMs)
+    child.once('close', onClose)
+    child.once('error', onError)
+  })
+}
+
+async function stopChild (child, {
+  graceMs = 1500,
+  forceMs = 5000
+} = {}) {
   if (child.exitCode !== null || child.signalCode !== null) {
     return
   }
+
+  const gracefulClose = waitForChildClose(child, graceMs)
   child.kill()
-  await sleep(1500)
-  if (child.exitCode === null && child.signalCode === null) {
-    child.kill('SIGKILL')
+  if (await gracefulClose) {
+    return
   }
+
+  const forcedClose = waitForChildClose(child, forceMs)
+  child.kill('SIGKILL')
+  await forcedClose
 }
 
 function cleanupSmokeDir (tmpRoot) {
@@ -108,5 +137,6 @@ if (require.main === module) {
 
 module.exports = {
   main,
-  parseArgs
+  parseArgs,
+  stopChild
 }
