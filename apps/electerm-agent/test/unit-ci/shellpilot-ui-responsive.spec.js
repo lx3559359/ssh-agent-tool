@@ -167,10 +167,13 @@ test('settings header is the only language and close entry point', () => {
 test('settings layout replaces fixed coordinates with bounded responsive regions', () => {
   const source = readClient('components/setting-panel/setting-wrap.styl')
   const pageContainer = source.match(/\.setting-wrap\n([\s\S]*?)\n\.setting-header/)
+  const searchOverlay = source.match(/ {2}\.setting-search-results\n[\s\S]*?\n {2}\.ant-select/)
 
   assert.ok(pageContainer)
+  assert.ok(searchOverlay)
   assert.match(source, /\.setting-wrap[\s\S]*background var\(--sp-page\)[\s\S]*color var\(--sp-text\)/)
-  assert.doesNotMatch(source, /position absolute/)
+  assert.match(searchOverlay[0], /position absolute/)
+  assert.doesNotMatch(source.replace(searchOverlay[0], ''), /position absolute/)
   assert.match(source, /\.setting-header[\s\S]*position sticky[\s\S]*top 0[\s\S]*z-index 10/)
   assert.match(source, /\.setting-tabs[\s\S]*position sticky/)
   assert.match(source, /\.setting-col[\s\S]*display grid[\s\S]*grid-template-columns 226px minmax\(0, 1fr\)/)
@@ -183,13 +186,19 @@ test('settings layout replaces fixed coordinates with bounded responsive regions
   assert.doesNotMatch(pageContainer[1], /overflow-x auto/)
 })
 
-test('590px settings header uses explicit wrapped rows without sacrificing search or actions', () => {
+test('590px settings header keeps a mouse-accessible search icon and expands without squeezing actions', () => {
+  const header = readClient('components/setting-panel/setting-header.jsx')
   const source = readClient('components/setting-panel/setting-wrap.styl')
   const narrow = source.match(/@media \(max-width: 680px\)([\s\S]*)/)
 
   assert.ok(narrow, 'the 590px viewport must use the <=680px contract')
+  assert.match(header, /className='setting-header-search-toggle'/)
+  assert.match(header, /className=\{`setting-header-search[^`]*\$\{searchExpanded \? 'is-expanded' : ''\}`\.trim\(\)\}/)
   assert.match(narrow[1], /\.setting-header[\s\S]*flex-wrap wrap/)
-  assert.match(narrow[1], /\.ant-input-affix-wrapper[\s\S]*flex-basis 100%/)
+  assert.match(narrow[1], /\.setting-header-search-toggle[\s\S]*display inline-flex/)
+  assert.match(narrow[1], /\.setting-header-search(?!-)[\s\S]*display none/)
+  assert.match(narrow[1], /\.setting-header-search(?!-)[\s\S]*flex-basis 100%/)
+  assert.match(narrow[1], /&\.is-expanded[\s\S]*display block/)
   assert.match(narrow[1], /\.ant-select[\s\S]*min-width 0/)
   assert.match(narrow[1], /\.ant-btn[\s\S]*min-width 0/)
   assert.match(narrow[1], /\.ant-btn[\s\S]*height auto/)

@@ -1117,6 +1117,72 @@ test('active terminal session tab keeps the locked SSH background', async ({ bro
   })
 })
 
+test('settings search supports visible results, keyboard navigation, preview language and compact mouse entry', async ({ browserName }) => {
+  await runWithIsolatedApp('settings-search', async (electronApp) => {
+    const page = electronApp.windows()[0] || await electronApp.firstWindow()
+    await page.waitForFunction(() => window.store?.configLoaded === true, { timeout: 20000 })
+    await page.locator('.term-wrap:visible').waitFor({ timeout: 20000 })
+
+    await setWindowCase(electronApp, page, { width: 1100, height: 700 }, 1)
+    await resetSurface(page, 'en_us')
+    await page.keyboard.press('Control+K')
+    await page.locator('.setting-wrap').waitFor({ state: 'visible' })
+    const searchInput = page.locator('.setting-header-search input')
+    await expect(searchInput).toBeFocused()
+    await searchInput.fill('model')
+    const results = page.locator('.setting-search-results[role="listbox"]')
+    await expect(results).toBeVisible()
+    await expect(results.getByRole('option')).toHaveCount(1)
+    await expect(results.getByRole('option')).toHaveText('AI and Models')
+
+    await page.evaluate(() => { window.store.previewLanguage = 'zh_cn' })
+    await expect(results.getByRole('option')).toHaveText('AI 与模型')
+    await page.evaluate(() => { window.store.previewLanguage = 'en_us' })
+    await expect(results.getByRole('option')).toHaveText('AI and Models')
+    await results.getByRole('option').click()
+    await expect(results).toBeHidden()
+    expect(await page.evaluate(() => ({
+      tab: window.store.settingTab,
+      item: window.store.settingItem.id
+    })), JSON.stringify({ runner: browserName })).toEqual({
+      tab: 'setting',
+      item: 'setting-ai'
+    })
+
+    await page.keyboard.press('Control+K')
+    await expect(searchInput).toBeFocused()
+    await searchInput.fill('theme')
+    await searchInput.press('Enter')
+    expect(await page.evaluate(() => window.store.settingTab)).toBe('terminalThemes')
+
+    await resetSurface(page, 'en_us')
+    await setWindowCase(electronApp, page, { width: 590, height: 400 }, 1)
+    await openSettings(page)
+    const compactToggle = page.locator('.setting-header-search-toggle')
+    const compactSearch = page.locator('.setting-header-search')
+    await expect(compactToggle).toBeVisible()
+    await expect(compactSearch).toBeHidden()
+    const collapsedMetrics = await page.locator('.setting-header').evaluate(element => ({
+      clientWidth: element.clientWidth,
+      scrollWidth: element.scrollWidth
+    }))
+    expect(collapsedMetrics.scrollWidth, JSON.stringify({ runner: browserName, collapsedMetrics }))
+      .toBeLessThanOrEqual(collapsedMetrics.clientWidth)
+
+    await compactToggle.click()
+    await expect(compactSearch).toBeVisible()
+    await expect(searchInput).toBeFocused()
+    await searchInput.fill('model')
+    await expect(page.locator('.setting-search-results')).toBeVisible()
+    const expandedMetrics = await page.locator('.setting-header').evaluate(element => ({
+      clientWidth: element.clientWidth,
+      scrollWidth: element.scrollWidth
+    }))
+    expect(expandedMetrics.scrollWidth, JSON.stringify({ runner: browserName, expandedMetrics }))
+      .toBeLessThanOrEqual(expandedMetrics.clientWidth)
+  })
+})
+
 test('context menus keep pointer placement and compact long-menu reachability', async ({ browserName }) => {
   await runWithIsolatedApp('context-menu-placement', async (electronApp) => {
     const page = electronApp.windows()[0] || await electronApp.firstWindow()

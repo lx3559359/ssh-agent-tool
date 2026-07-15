@@ -128,14 +128,25 @@ test('settings header keeps language preview temporary and preserves all locale 
   assert.match(modalSource, /languages=\{window\.et\.langs \|\| \[\]\}/)
 })
 
-test('settings modal rerenders previews and navigates search through existing store APIs', () => {
+test('settings modal rerenders previews and navigates every visible search result through existing store APIs', () => {
   const modalSource = readClientSource('components/setting-panel/setting-modal.jsx')
+  const headerSource = readClientSource('components/setting-panel/setting-header.jsx')
 
   assert.match(modalSource, /const \[query, setQuery\] = useState\(''\)/)
-  assert.match(modalSource, /const result = searchSettings\(query\)\[0\]/)
+  assert.match(modalSource, /const searchResults = searchSettings\(query\)/)
+  assert.match(modalSource, /function openSearchResult \(result = searchResults\[0\]\)/)
   assert.match(modalSource, /store\.handleChangeSettingTab\(result\.tab\)/)
   assert.match(modalSource, /store\.getSidebarList\(result\.tab\)/)
   assert.match(modalSource, /store\.setSettingItem\(item\)/)
+  assert.match(modalSource, /searchResults=\{searchResults\}/)
+  assert.match(modalSource, /onSelectSearchResult=\{openSearchResult\}/)
+  assert.match(modalSource, /event\.(?:ctrlKey \|\| event\.metaKey|metaKey \|\| event\.ctrlKey)/)
+  assert.match(modalSource, /event\.key\.toLowerCase\(\) !== 'k'/)
+  assert.match(modalSource, /store\.openSetting\(\)/)
+  assert.match(headerSource, /role='listbox'/)
+  assert.match(headerSource, /role='option'/)
+  assert.match(headerSource, /onClick=\{\(\) => onSelectSearchResult\(result\)\}/)
+  assert.match(headerSource, /e\(result\.labelKey\)/)
   assert.match(modalSource, /function handleClose \(\) \{[\s\S]*?store\.previewLanguage = ''[\s\S]*?store\.hideSettingModal\(\)/)
   assert.match(modalSource, /<SettingHeader[\s\S]*?onClose=\{handleClose\}/)
   assert.match(modalSource, /onCancel=\{handleClose\}/)

@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Input, Select, Button } from 'antd'
 import { SearchOutlined, CloseOutlined } from '@ant-design/icons'
 import { notification } from '../common/notification'
@@ -10,16 +10,35 @@ export default function SettingHeader (props) {
     store,
     languages,
     query,
+    searchResults,
+    searchFocusRequest,
+    onSearchFocusHandled,
     onQueryChange,
     onSearch,
+    onSelectSearchResult,
     onClose
   } = props
+  const searchInputRef = useRef(null)
+  const [searchExpanded, setSearchExpanded] = useState(false)
 
   useEffect(() => {
     return () => {
       store.previewLanguage = ''
     }
   }, [store])
+
+  useEffect(() => {
+    if (!searchFocusRequest) {
+      return
+    }
+    focusSearch()
+    onSearchFocusHandled()
+  }, [searchFocusRequest])
+
+  function focusSearch () {
+    setSearchExpanded(true)
+    requestAnimationFrame(() => searchInputRef.current?.focus())
+  }
 
   function handlePreviewLanguage (language) {
     store.previewLanguage = language
@@ -71,16 +90,54 @@ export default function SettingHeader (props) {
       }}
     >
       <h2 style={{ margin: 0, whiteSpace: 'nowrap' }}>{e('settingsCenter')}</h2>
-      <Input
-        allowClear
+      <Button
+        className='setting-header-search-toggle'
         aria-label={e('searchSettings')}
-        placeholder={e('searchSettings')}
-        prefix={<SearchOutlined />}
-        value={query}
-        onChange={event => onQueryChange(event.target.value)}
-        onPressEnter={onSearch}
-        style={{ maxWidth: 320 }}
+        title={e('searchSettingsShortcut')}
+        icon={<SearchOutlined />}
+        type='text'
+        onClick={focusSearch}
       />
+      <div
+        className={`setting-header-search ${searchExpanded ? 'is-expanded' : ''}`.trim()}
+      >
+        <Input
+          ref={searchInputRef}
+          allowClear
+          aria-label={e('searchSettings')}
+          placeholder={e('searchSettings')}
+          prefix={<SearchOutlined />}
+          value={query}
+          onChange={event => onQueryChange(event.target.value)}
+          onPressEnter={() => onSearch()}
+        />
+        {
+          searchResults.length
+            ? (
+              <div
+                className='setting-search-results'
+                role='listbox'
+                aria-label={e('searchSettings')}
+              >
+                {
+                  searchResults.map(result => (
+                    <button
+                      key={`${result.tab}:${result.itemId}`}
+                      type='button'
+                      role='option'
+                      aria-selected='false'
+                      onClick={() => onSelectSearchResult(result)}
+                    >
+                      <SearchOutlined />
+                      <span>{e(result.labelKey)}</span>
+                    </button>
+                  ))
+                }
+              </div>
+              )
+            : null
+        }
+      </div>
       <span className='setting-header-auto-saved'>{e('autoSaved')}</span>
       <Select
         aria-label={e('language')}

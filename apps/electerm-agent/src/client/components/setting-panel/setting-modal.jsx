@@ -5,7 +5,7 @@
 import { auto } from 'manate/react'
 import { pick } from 'lodash-es'
 import { Tabs, Spin } from 'antd'
-import { lazy, Suspense, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import SettingModal from './setting-wrap'
 import SettingHeader from './setting-header'
 import { searchSettings } from '../../common/setting-search-index'
@@ -27,17 +27,36 @@ const e = window.translate
 export default auto(function SettingModalWrap (props) {
   const { store } = props
   const [query, setQuery] = useState('')
+  const [searchFocusRequest, setSearchFocusRequest] = useState(0)
   const effectiveLanguage = store.previewLanguage || store.config.language
+  const searchResults = searchSettings(query)
+
+  useEffect(() => {
+    function handleSearchShortcut (event) {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'k') {
+        return
+      }
+      event.preventDefault()
+      if (store.showModal !== modals.setting) {
+        setQuery('')
+        store.openSetting()
+      }
+      setSearchFocusRequest(value => value + 1)
+    }
+
+    window.addEventListener('keydown', handleSearchShortcut)
+    return () => window.removeEventListener('keydown', handleSearchShortcut)
+  }, [store])
 
   const selectItem = (item) => {
     window.store.setSettingItem(item)
   }
 
-  function openSearchResult () {
-    const result = searchSettings(query)[0]
+  function openSearchResult (result = searchResults[0]) {
     if (!result) {
       return
     }
+    setQuery('')
     store.handleChangeSettingTab(result.tab)
     if (!result.itemId) {
       return
@@ -148,8 +167,12 @@ export default auto(function SettingModalWrap (props) {
           store={store}
           languages={window.et.langs || []}
           query={query}
+          searchResults={searchResults}
+          searchFocusRequest={searchFocusRequest}
+          onSearchFocusHandled={() => setSearchFocusRequest(0)}
           onQueryChange={setQuery}
           onSearch={openSearchResult}
+          onSelectSearchResult={openSearchResult}
           onClose={handleClose}
         />
         <Tabs
