@@ -6,6 +6,7 @@
 
 import React, { useState, useEffect, useRef } from 'react'
 import { Dropdown } from 'antd'
+import { contextMenuAlign } from './context-menu-props'
 import iconsMap from '../sys-menu/icons-map.jsx'
 import { copy, readClipboard, readClipboardAsync } from '../../common/clipboard.js'
 
@@ -291,6 +292,7 @@ const InputContextMenu = () => {
         }}
         open={visible}
         placement='bottomLeft'
+        align={contextMenuAlign}
         className='input-context-menu'
         overlayClassName='shellpilot-context-menu'
       >

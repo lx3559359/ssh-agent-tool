@@ -12,6 +12,7 @@ import {
   Dropdown,
   Splitter
 } from 'antd'
+import { contextMenuAlign } from '../common/context-menu-props'
 
 const e = window.translate
 const { Panel } = Splitter
@@ -76,6 +77,7 @@ export default class FileListTableHeader extends Component {
         onClick: this.props.onContextMenu
       },
       trigger: ['contextMenu'],
+      align: contextMenuAlign,
       overlayClassName: 'shellpilot-context-menu'
     }
     const spliterProps = {

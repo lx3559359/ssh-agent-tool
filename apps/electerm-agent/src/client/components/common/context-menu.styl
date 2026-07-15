@@ -20,7 +20,7 @@
     min-width 220px
     width max-content
     max-width unquote('min(360px, calc(100vw - 16px))')
-    max-height calc(100vh - 16px)
+    max-height calc(100vh - 24px)
     overflow-x hidden
     overflow-y auto
     color var(--sp-text)
@@ -103,10 +103,5 @@
   .shellpilot-context-menu.shellpilot-context-menu.ant-dropdown-menu-submenu-popup
     inset-inline-start 8px !important
     inset-inline-end auto !important
-    inset-block-start 8px !important
-    inset-block-end auto !important
-
-@media (max-height: 760px)
-  .shellpilot-context-menu.shellpilot-context-menu.ant-dropdown:not(.ant-dropdown-menu-submenu-popup)
     inset-block-start 8px !important
     inset-block-end auto !important

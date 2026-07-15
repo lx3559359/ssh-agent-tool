@@ -15,6 +15,7 @@ import {
   Tooltip,
   Dropdown
 } from 'antd'
+import { contextMenuAlign } from '../common/context-menu-props'
 import message from '../common/message'
 import classnames from 'classnames'
 import { pick } from 'lodash-es'
@@ -463,6 +464,7 @@ class Tab extends Component {
         onClick: this.onContextMenu
       },
       trigger: ['contextMenu'],
+      align: contextMenuAlign,
       overlayClassName: 'shellpilot-context-menu'
     }
     const { tabCount, color = '#0088cc' } = tab

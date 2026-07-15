@@ -7,6 +7,7 @@ import {
   Dropdown,
   Button
 } from 'antd'
+import { contextMenuAlign } from '../common/context-menu-props'
 import message from '../common/message'
 import { notification } from '../common/notification'
 import ShowItem from '../common/show-item.jsx'
@@ -1886,6 +1887,7 @@ class Term extends Component {
         onClick: this.onContextMenu
       },
       trigger: this.props.config.pasteWhenContextMenu ? [] : ['contextMenu'],
+      align: contextMenuAlign,
       overlayClassName: 'shellpilot-context-menu'
     }
     const barProps = {

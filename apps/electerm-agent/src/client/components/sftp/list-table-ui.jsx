@@ -4,6 +4,7 @@
 
 import { Component, createRef } from 'react'
 import { Dropdown } from 'antd'
+import { contextMenuAlign } from '../common/context-menu-props'
 import classnames from 'classnames'
 import FileSection from './file-item'
 import PagedList from './paged-list'
@@ -371,6 +372,7 @@ export default class FileListTable extends Component {
       },
       trigger: ['contextMenu'],
       onOpenChange: this.handleDropdownOpenChange,
+      align: contextMenuAlign,
       overlayClassName: 'shellpilot-context-menu'
     }
     return (

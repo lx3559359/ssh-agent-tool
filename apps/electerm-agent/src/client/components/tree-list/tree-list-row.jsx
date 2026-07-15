@@ -4,6 +4,7 @@ import TreeItemOp from './tree-item-op'
 import { treeLevelIndent } from './tree-list-layout'
 import createName from '../../common/create-title'
 import { Dropdown } from 'antd'
+import { contextMenuAlign } from '../common/context-menu-props'
 import { copy } from '../../common/clipboard'
 import {
   buildBookmarkContextMenuItems,
@@ -157,6 +158,7 @@ export default function TreeListRow (props) {
       onClick: onContextMenuAction
     },
     trigger: ['contextMenu'],
+    align: contextMenuAlign,
     overlayClassName: 'shellpilot-context-menu'
   }
 
