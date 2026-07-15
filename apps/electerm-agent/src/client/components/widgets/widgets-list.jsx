@@ -80,6 +80,8 @@ export default auto(function WidgetsList ({ activeItemId, store, languageVersion
     return (
       <div
         key={widget.id}
+        data-widget-id={widget.id}
+        data-widget-type={widget.info.type}
         className={cls}
         onClick={() => onClickWidget(widget)}
       >

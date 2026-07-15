@@ -216,6 +216,16 @@ test('settings text wraps naturally and only horizontal rails may scroll', () =>
   assert.match(list, /&:hover[\s\S]*\.list-item-title[\s\S]*padding-right 84px/)
 })
 
+test('effective zoom widths keep settings rails inside the document', () => {
+  const wrap = readClient('components/setting-panel/setting-wrap.styl')
+  const list = readClient('components/setting-panel/list.styl')
+
+  assert.match(wrap, /\.setting-tabs[\s\S]*max-width 100%[\s\S]*overflow-x hidden/)
+  assert.match(wrap, /\.ant-tabs-nav-wrap[\s\S]*min-width 0[\s\S]*max-width 100%[\s\S]*overflow-x auto/)
+  assert.match(list, /@media \(max-width: 820px\)[\s\S]*\.setting-row-left[\s\S]*\.item-list[\s\S]*width 100%[\s\S]*min-width 0[\s\S]*max-width 100%/)
+  assert.match(list, /@media \(max-width: 820px\)[\s\S]*\.item-list-wrap[\s\S]*flex 1 1 auto[\s\S]*min-width 0[\s\S]*max-width 100%[\s\S]*overflow-x auto/)
+})
+
 test('narrow list rail excludes the bookmark virtual tree scroll container', () => {
   const list = readClient('components/setting-panel/list.styl')
   const bookmarksTab = readClient('components/setting-panel/tab-bookmarks.jsx')

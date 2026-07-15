@@ -21,28 +21,33 @@ const themeIds = [
 ]
 const smokeMatrix = process.env.SHELLPILOT_VISUAL_MATRIX_SMOKE === '1'
 const requestedSize = process.env.SHELLPILOT_VISUAL_MATRIX_SIZE
-const requestedZoom = Number(process.env.SHELLPILOT_VISUAL_MATRIX_ZOOM)
+const requestedZoomValue = process.env.SHELLPILOT_VISUAL_MATRIX_ZOOM
+const requestedZoom = Number(requestedZoomValue)
 const requestedLanguage = process.env.SHELLPILOT_VISUAL_MATRIX_LANGUAGE
 const dimensionOnly = process.env.SHELLPILOT_VISUAL_MATRIX_DIMENSION_ONLY === '1'
 const matrixSizes = requestedSize
   ? sizes.filter(size => `${size.width}x${size.height}` === requestedSize)
   : smokeMatrix ? [sizes[0]] : sizes
-const matrixZooms = Number.isFinite(requestedZoom) && requestedZoom > 0
-  ? [requestedZoom]
+const matrixZooms = requestedZoomValue !== undefined
+  ? Number.isFinite(requestedZoom) && requestedZoom > 0 ? [requestedZoom] : []
   : smokeMatrix ? [zooms[0]] : zooms
-const matrixLanguages = languages.includes(requestedLanguage)
-  ? [requestedLanguage]
+const matrixLanguages = requestedLanguage !== undefined
+  ? languages.includes(requestedLanguage) ? [requestedLanguage] : []
   : smokeMatrix ? [languages[0]] : languages
 const matrixThemes = dimensionOnly ? [] : smokeMatrix ? [themeIds[0]] : themeIds
-const matrixThemeSizes = smokeMatrix ? [sizes[0]] : [sizes[0], sizes[2]]
+const matrixThemeSizes = requestedSize
+  ? matrixSizes
+  : smokeMatrix ? [sizes[0]] : [sizes[0], sizes[2]]
 const lockedTerminalRgb = 'rgb(14, 15, 18)'
 const profilePrefix = 'shellpilot-secondary-visual-'
-const profileRoot = resolve(tmpdir(), `${profilePrefix}${process.pid}-${Date.now()}`)
-const bookmarkId = `visual-matrix-${process.pid}`
+const screenshotTimeout = 1800
+const geometryTimeout = 1200
+const overflowTolerance = 1
+const bookmarkId = `visual-matrix-${process.pid}-${Date.now()}`
 
 test.setTimeout(20 * 60 * 1000)
 
-function launchOptions () {
+function launchOptions (profileRoot) {
   return {
     ...appOptions,
     env: {
@@ -54,11 +59,61 @@ function launchOptions () {
   }
 }
 
-function assertSafeProfileRoot () {
+function assertSafeProfileRoot (profileRoot) {
   const tempRoot = resolve(tmpdir()) + sep
   if (!profileRoot.startsWith(tempRoot) || !profileRoot.includes(profilePrefix)) {
     throw new Error(`Refusing to use unexpected visual profile: ${profileRoot}`)
   }
+}
+
+async function launchIsolatedApp (label) {
+  const profileRoot = await fs.mkdtemp(resolve(tmpdir(), `${profilePrefix}${label}-`))
+  assertSafeProfileRoot(profileRoot)
+  const electronApp = await electron.launch(launchOptions(profileRoot))
+  const userDataPath = await electronApp.evaluate(({ app }) => app.getPath('userData'))
+  if (!resolve(userDataPath).startsWith(resolve(profileRoot) + sep)) {
+    await electronApp.close().catch(() => electronApp.process().kill())
+    throw new Error(`Electron ignored the isolated profile: ${JSON.stringify({ profileRoot, userDataPath })}`)
+  }
+  console.log(`SECONDARY_ISOLATED_PROFILE=${JSON.stringify({ label, profileRoot, userDataPath })}`)
+  return { electronApp, profileRoot }
+}
+
+async function closeIsolatedApp (electronApp, profileRoot) {
+  await electronApp.close().catch(() => electronApp.process().kill())
+  assertSafeProfileRoot(profileRoot)
+  await fs.rm(profileRoot, { recursive: true, force: true })
+}
+
+function expectedMatrixCounts () {
+  const dimensionBatches = matrixSizes.length * matrixZooms.length * matrixLanguages.length
+  const themeBatches = matrixThemes.length * matrixThemeSizes.length
+  return {
+    dimensionBatches,
+    themeBatches,
+    dimension: dimensionBatches * surfaces.length,
+    theme: themeBatches * surfaces.length,
+    total: (dimensionBatches + themeBatches) * surfaces.length
+  }
+}
+
+function assertMatrixConfiguration () {
+  const expected = expectedMatrixCounts()
+  expect(expected.dimension, JSON.stringify({ matrixSizes, matrixZooms, matrixLanguages })).toBeGreaterThan(0)
+  expect(expected.total, JSON.stringify({ matrixSizes, matrixZooms, matrixLanguages, matrixThemes })).toBeGreaterThan(0)
+  if (smokeMatrix) {
+    expect(expected.dimension).toBe(12)
+    expect(expected.theme).toBe(dimensionOnly ? 0 : 12)
+    expect(expected.total).toBe(dimensionOnly ? 12 : 24)
+  } else if (!requestedSize && requestedZoomValue === undefined && requestedLanguage === undefined && !dimensionOnly) {
+    expect(expected.dimension).toBe(288)
+    expect(expected.theme).toBe(120)
+    expect(expected.total).toBe(408)
+  }
+  if (dimensionOnly) {
+    expect(expected.theme).toBe(0)
+  }
+  return expected
 }
 
 async function setWindowCase (electronApp, page, size, zoom) {
@@ -122,15 +177,89 @@ async function openWidgets (page) {
   await page.evaluate(() => window.store.openWidgetsModal())
   await page.locator('.widgets-shell').waitFor({ state: 'visible' })
   await page.locator('.widgets-card-list').waitFor({ state: 'visible' })
+  await waitForWidgetInventory(page)
+}
+
+async function readWidgetInventory (page) {
+  return page.evaluate(async () => {
+    try {
+      const widgets = await window.store.listWidgets()
+      return {
+        error: '',
+        items: Array.isArray(widgets)
+          ? widgets.map(widget => ({ id: widget.id, type: widget.info?.type || '' }))
+          : []
+      }
+    } catch (error) {
+      return { error: error?.message || String(error), items: [] }
+    }
+  })
+}
+
+async function waitForWidgetInventory (page) {
+  let inventory = { error: 'Widget IPC has not completed', items: [] }
+  try {
+    await expect.poll(async () => {
+      inventory = await readWidgetInventory(page)
+      return inventory.error === '' && inventory.items.length > 0
+    }, {
+      timeout: 10000,
+      intervals: [100, 200, 400, 800],
+      message: 'Waiting for the real listWidgets IPC response'
+    }).toBe(true)
+  } catch (error) {
+    throw new Error(`Widget IPC did not become ready: ${JSON.stringify(inventory)}`, { cause: error })
+  }
+  return inventory
+}
+
+async function selectBatchWidget (page) {
+  const inventory = await waitForWidgetInventory(page)
+  const batch = inventory.items.find(widget => widget.id === 'batch-op' && widget.type === 'frontend')
+  if (!batch) {
+    throw new Error(`Required batch-op/frontend widget is missing: ${JSON.stringify(inventory.items)}`)
+  }
+  const card = page.locator('.widget-card[data-widget-id="batch-op"][data-widget-type="frontend"]')
+  try {
+    await card.waitFor({ state: 'visible', timeout: 5000 })
+  } catch (error) {
+    throw new Error(`Batch widget exists in IPC inventory but no matching visible card rendered: ${JSON.stringify(inventory.items)}`, { cause: error })
+  }
+  await card.scrollIntoViewIfNeeded()
+  await card.click()
+  try {
+    await expect.poll(() => page.evaluate(() => ({
+      id: window.store.settingItem?.id || '',
+      type: window.store.settingItem?.info?.type || ''
+    })), { timeout: 5000 }).toEqual({ id: 'batch-op', type: 'frontend' })
+    await page.locator('.batch-op-editor').waitFor({ state: 'visible', timeout: 5000 })
+  } catch (error) {
+    const state = await page.evaluate(() => ({
+      settingTab: window.store.settingTab,
+      showModal: window.store.showModal,
+      settingItem: {
+        id: window.store.settingItem?.id || '',
+        type: window.store.settingItem?.info?.type || '',
+        name: window.store.settingItem?.info?.name || ''
+      },
+      editorCount: document.querySelectorAll('.batch-op-editor').length,
+      controlCount: document.querySelectorAll('.widget-control').length,
+      controlHtml: document.querySelector('.widget-control')?.innerHTML.slice(0, 500) || '',
+      rightColumn: (() => {
+        const element = document.querySelector('.setting-tabs-widgets .setting-row-right')
+        if (!element) return null
+        const rect = element.getBoundingClientRect()
+        const style = window.getComputedStyle(element)
+        return { rect: rect.toJSON(), display: style.display, visibility: style.visibility, overflow: style.overflow }
+      })()
+    }))
+    throw new Error(`Batch widget was selected but its editor did not render: ${JSON.stringify(state)}`, { cause: error })
+  }
 }
 
 async function openBatch (page) {
-  await page.evaluate(async () => {
-    window.store.openWidgetsModal()
-    const widgets = await window.store.listWidgets()
-    window.store.setSettingItem(widgets.find(widget => widget.id === 'batch-op'))
-  })
-  await page.locator('.batch-op-editor').waitFor({ state: 'visible' })
+  await openWidgets(page)
+  await selectBatchWidget(page)
 }
 
 async function dispatchContextMenu (locator) {
@@ -155,6 +284,8 @@ async function waitForPopupMotion (popup) {
 async function openInputMenu (page) {
   await openSettings(page)
   const input = page.locator('.setting-header input').first()
+  await input.fill('theme')
+  await input.evaluate(element => element.setSelectionRange(0, element.value.length))
   await dispatchContextMenu(input)
   const popup = page.locator('.shellpilot-context-menu.ant-dropdown:visible').last()
   await popup.waitFor()
@@ -211,9 +342,9 @@ const surfaces = [
   { name: 'advanced-theme-editor', selector: '#terminal-theme-form', open: openThemes },
   { name: 'tool-center', selector: '.widgets-shell', open: openWidgets },
   { name: 'batch-editor', selector: '.batch-op-editor', open: openBatch },
-  { name: 'bookmark-menu', selector: '.shellpilot-context-menu.ant-dropdown:visible', open: openBookmarkMenu, menu: true },
-  { name: 'terminal-menu', selector: '.shellpilot-context-menu.ant-dropdown:visible', open: openTerminalMenu, menu: true },
-  { name: 'input-menu', selector: '.shellpilot-context-menu.ant-dropdown:visible', open: openInputMenu, menu: true }
+  { name: 'bookmark-menu', selector: '.shellpilot-context-menu.ant-dropdown:visible', open: openBookmarkMenu, menu: true, dangerPolicy: 'menu-last' },
+  { name: 'terminal-menu', selector: '.shellpilot-context-menu.ant-dropdown:visible', open: openTerminalMenu, menu: true, dangerPolicy: 'semantic-group-last' },
+  { name: 'input-menu', selector: '.shellpilot-context-menu.ant-dropdown:visible', open: openInputMenu, menu: true, dangerPolicy: 'none' }
 ]
 
 async function makePrimaryActionsReachable (page, selector) {
@@ -224,7 +355,46 @@ async function makePrimaryActionsReachable (page, selector) {
   }
 }
 
-async function inspectSurface (page, selector, menu) {
+async function inspectDocumentBaseline (page) {
+  return page.evaluate((tolerance) => {
+    const nodes = [
+      ['documentElement', document.documentElement],
+      ['body', document.body],
+      ['root', document.getElementById('container')]
+    ].map(([name, element]) => ({
+      name,
+      found: Boolean(element),
+      scrollWidth: element?.scrollWidth || 0,
+      clientWidth: element?.clientWidth || 0
+    }))
+    const offenders = [...document.body.querySelectorAll('*')]
+      .flatMap(element => {
+        const rect = element.getBoundingClientRect()
+        const style = window.getComputedStyle(element)
+        if (
+          rect.width <= 0 || rect.height <= 0 ||
+          rect.right <= window.innerWidth + tolerance ||
+          rect.bottom <= 0 || rect.top >= window.innerHeight ||
+          style.display === 'none' || style.visibility === 'hidden'
+        ) {
+          return []
+        }
+        return [{
+          tag: element.tagName,
+          className: String(element.className).slice(0, 160),
+          right: Number(rect.right.toFixed(3))
+        }]
+      })
+      .slice(0, 10)
+    return {
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+      nodes,
+      offenders
+    }
+  }, overflowTolerance)
+}
+
+async function inspectSurface (page, selector, menu, documentBaseline) {
   await makePrimaryActionsReachable(page, selector)
   const rootLocator = menu ? page.locator(selector).last() : page.locator(selector).first()
   return rootLocator.evaluate((root, options) => {
@@ -285,15 +455,82 @@ async function inspectSurface (page, selector, menu) {
         }
       }
     }
-    const disabledUnreadable = [...root.querySelectorAll('[disabled], .ant-dropdown-menu-item-disabled')]
+    const parseColor = value => {
+      const channels = String(value).match(/[\d.]+/g)?.map(Number) || []
+      if (channels.length < 3) return { r: 0, g: 0, b: 0, a: 0 }
+      return {
+        r: channels[0],
+        g: channels[1],
+        b: channels[2],
+        a: channels.length > 3 ? channels[3] : 1
+      }
+    }
+    const composite = (foreground, background) => {
+      const alpha = foreground.a + background.a * (1 - foreground.a)
+      if (alpha <= 0) return { r: 255, g: 255, b: 255, a: 1 }
+      return {
+        r: (foreground.r * foreground.a + background.r * background.a * (1 - foreground.a)) / alpha,
+        g: (foreground.g * foreground.a + background.g * background.a * (1 - foreground.a)) / alpha,
+        b: (foreground.b * foreground.a + background.b * background.a * (1 - foreground.a)) / alpha,
+        a: alpha
+      }
+    }
+    const luminance = color => {
+      const linear = channel => {
+        const normalized = channel / 255
+        return normalized <= 0.04045
+          ? normalized / 12.92
+          : ((normalized + 0.055) / 1.055) ** 2.4
+      }
+      return 0.2126 * linear(color.r) + 0.7152 * linear(color.g) + 0.0722 * linear(color.b)
+    }
+    const contrast = (foreground, background) => {
+      const foregroundLuminance = luminance(foreground)
+      const backgroundLuminance = luminance(background)
+      return (Math.max(foregroundLuminance, backgroundLuminance) + 0.05) /
+        (Math.min(foregroundLuminance, backgroundLuminance) + 0.05)
+    }
+    const resolvedBackground = element => {
+      const layers = []
+      let current = element
+      while (current) {
+        const color = parseColor(window.getComputedStyle(current).backgroundColor)
+        if (color.a > 0) layers.push(color)
+        current = current.parentElement
+      }
+      let result = { r: 255, g: 255, b: 255, a: 1 }
+      for (let index = layers.length - 1; index >= 0; index -= 1) {
+        result = composite(layers[index], result)
+      }
+      return result
+    }
+    const effectiveOpacity = element => {
+      let result = 1
+      let current = element
+      while (current) {
+        result *= Number.parseFloat(window.getComputedStyle(current).opacity || '1')
+        current = current.parentElement
+      }
+      return result
+    }
+    const disabledContrast = [...root.querySelectorAll('[disabled], [aria-disabled="true"], .ant-dropdown-menu-item-disabled')]
       .filter(visible)
-      .flatMap((element, index) => {
+      .map((element, index) => {
         const style = window.getComputedStyle(element)
-        const color = style.color
-        const unreadable = Number.parseFloat(style.opacity || '1') < 0.25 ||
-          color === 'rgba(0, 0, 0, 0)' || color === 'transparent'
-        return unreadable ? [{ index, text: element.textContent.trim(), color, opacity: style.opacity }] : []
+        const background = resolvedBackground(element)
+        const foreground = parseColor(style.color)
+        foreground.a *= effectiveOpacity(element)
+        const effectiveForeground = composite(foreground, background)
+        return {
+          index,
+          text: element.textContent.trim().slice(0, 100),
+          color: style.color,
+          background: style.backgroundColor,
+          opacity: style.opacity,
+          ratio: Number(contrast(effectiveForeground, background).toFixed(3))
+        }
       })
+    const disabledUnreadable = disabledContrast.filter(item => item.ratio < 3)
     const rendered = element => {
       const rect = element.getBoundingClientRect()
       return rect.width > 0 && rect.height > 0 && window.getComputedStyle(element).visibility !== 'hidden'
@@ -305,10 +542,27 @@ async function inspectSurface (page, selector, menu) {
       .map((item, index) => item.classList.contains('ant-dropdown-menu-item-danger') ? index : -1)
       .filter(index => index >= 0)
     const lastActionIndex = menuItems.length - 1
-    const dangerNotAtBottom = menuItems.some(item => {
-      if (!item.classList.contains('ant-dropdown-menu-item-danger')) return false
-      const next = item.nextElementSibling
-      return Boolean(next && !next.classList.contains('ant-dropdown-menu-item-divider'))
+    const dangerGroups = dangerIndexes.map(index => {
+      const item = menuItems[index]
+      const siblings = [...item.parentElement.children]
+      const siblingIndex = siblings.indexOf(item)
+      const nextSibling = siblings[siblingIndex + 1] || null
+      const followingActions = siblings.slice(siblingIndex + 1)
+        .filter(sibling => !sibling.classList.contains('ant-dropdown-menu-item-divider'))
+        .filter(sibling => sibling.getAttribute('role') === 'menuitem')
+      const beforeNextDivider = []
+      for (const sibling of siblings.slice(siblingIndex + 1)) {
+        if (sibling.classList.contains('ant-dropdown-menu-item-divider')) break
+        if (sibling.getAttribute('role') === 'menuitem') beforeNextDivider.push(sibling)
+      }
+      return {
+        index,
+        text: item.textContent.trim().slice(0, 100),
+        isLastAction: index === lastActionIndex,
+        isLastInSemanticGroup: beforeNextDivider.length === 0,
+        followedByDividerOrEnd: !nextSibling || nextSibling.classList.contains('ant-dropdown-menu-item-divider'),
+        followingActionCount: followingActions.length
+      }
     })
     const rect = root.getBoundingClientRect()
     const rootStyle = window.getComputedStyle(root)
@@ -316,9 +570,56 @@ async function inspectSurface (page, selector, menu) {
     const menuStyle = menuElement ? window.getComputedStyle(menuElement) : null
     const rootContentOverflow = root.scrollWidth > root.clientWidth + 1 &&
       !['auto', 'scroll'].includes(rootStyle.overflowX)
+    const overflowNodes = [
+      ['documentElement', document.documentElement],
+      ['body', document.body],
+      ['root', document.getElementById('container')]
+    ].map(([name, element]) => {
+      const baselineNode = options.documentBaseline?.nodes?.find(item => item.name === name)
+      const clientWidth = element?.clientWidth || 0
+      const allowedScrollWidth = name === 'root'
+        ? clientWidth
+        : Math.max(clientWidth, baselineNode?.scrollWidth || 0)
+      return {
+        name,
+        found: Boolean(element),
+        scrollWidth: element?.scrollWidth || 0,
+        clientWidth,
+        baselineScrollWidth: baselineNode?.scrollWidth || 0,
+        allowedScrollWidth,
+        overflow: Boolean(element && element.scrollWidth > allowedScrollWidth + options.overflowTolerance)
+      }
+    })
+    const documentOverflowOffenders = [...document.body.querySelectorAll('*')]
+      .flatMap(element => {
+        const itemRect = element.getBoundingClientRect()
+        const style = window.getComputedStyle(element)
+        const horizontallyOutside = itemRect.left < -options.overflowTolerance ||
+          itemRect.right > window.innerWidth + options.overflowTolerance
+        const verticallyRelevant = itemRect.bottom > 0 && itemRect.top < window.innerHeight
+        if (
+          itemRect.width <= 0 || itemRect.height <= 0 || !horizontallyOutside ||
+          !verticallyRelevant || style.display === 'none' || style.visibility === 'hidden'
+        ) {
+          return []
+        }
+        return [{
+          tag: element.tagName,
+          id: element.id,
+          className: String(element.className).slice(0, 180),
+          text: element.textContent.trim().replace(/\s+/g, ' ').slice(0, 100),
+          rect: itemRect.toJSON(),
+          position: style.position,
+          overflowX: style.overflowX,
+          transform: style.transform
+        }]
+      })
+      .slice(0, 30)
     return {
       viewport: { width: window.innerWidth, height: window.innerHeight },
-      documentOverflow: document.documentElement.scrollWidth > window.innerWidth + 1,
+      documentOverflow: overflowNodes.some(item => !item.found || item.overflow),
+      documentOverflowDetails: overflowNodes,
+      documentOverflowOffenders,
       rootContentOverflow,
       rootScrollWidth: root.scrollWidth,
       rootClientWidth: root.clientWidth,
@@ -341,14 +642,16 @@ async function inspectSurface (page, selector, menu) {
       primaryClipping,
       overlaps,
       disabledUnreadable,
+      disabledContrast,
       dangerIndexes,
       lastActionIndex,
-      dangerNotAtBottom
+      dangerGroups
     }
-  }, { menu })
+  }, { menu, overflowTolerance, documentBaseline })
 }
 
-function assertSurfaceSnapshot (snapshot, context) {
+function assertSurfaceSnapshot (snapshot, context, surface) {
+  expect(snapshot.documentOverflow, JSON.stringify({ context, snapshot })).toBe(false)
   expect(snapshot.rootContentOverflow, JSON.stringify({ context, snapshot })).toBe(false)
   expect(snapshot.rootHorizontalClip, JSON.stringify({ context, snapshot })).toBe(false)
   expect(snapshot.menuViewportClip, JSON.stringify({ context, snapshot })).toBe(false)
@@ -356,7 +659,199 @@ function assertSurfaceSnapshot (snapshot, context) {
   expect(snapshot.primaryClipping, JSON.stringify({ context, snapshot })).toEqual([])
   expect(snapshot.overlaps, JSON.stringify({ context, snapshot })).toEqual([])
   expect(snapshot.disabledUnreadable, JSON.stringify({ context, snapshot })).toEqual([])
-  expect(snapshot.dangerNotAtBottom, JSON.stringify({ context, snapshot })).toBe(false)
+  if (surface.dangerPolicy === 'menu-last') {
+    expect(snapshot.dangerIndexes.length, JSON.stringify({ context, snapshot })).toBeGreaterThan(0)
+    expect(snapshot.dangerGroups.every(item => item.isLastAction), JSON.stringify({ context, snapshot })).toBe(true)
+  } else if (surface.dangerPolicy === 'semantic-group-last') {
+    expect(snapshot.dangerIndexes.length, JSON.stringify({ context, snapshot })).toBeGreaterThan(0)
+    expect(snapshot.dangerGroups.every(item => item.isLastInSemanticGroup && item.followedByDividerOrEnd), JSON.stringify({ context, snapshot })).toBe(true)
+  } else {
+    expect(snapshot.dangerIndexes, JSON.stringify({ context, snapshot })).toEqual([])
+  }
+}
+
+async function inspectKeyboardFocus (page, surface) {
+  const rootLocator = surface.menu
+    ? page.locator(surface.selector).last()
+    : page.locator(surface.selector).first()
+  if (surface.menu) {
+    const viewport = await page.evaluate(() => ({
+      width: window.innerWidth,
+      height: window.innerHeight
+    }))
+    await page.mouse.move(viewport.width - 2, viewport.height - 2)
+    const menu = rootLocator.locator('.ant-dropdown-menu').first()
+    const result = await menu.evaluate((menuElement) => {
+      const enabledItems = [...menuElement.querySelectorAll('[role="menuitem"]')].filter(item => {
+        return !item.classList.contains('ant-dropdown-menu-item-disabled') &&
+          item.getAttribute('aria-disabled') !== 'true'
+      })
+      const styleOf = element => {
+        const style = window.getComputedStyle(element)
+        return {
+          outline: `${style.outlineStyle}|${style.outlineWidth}|${style.outlineColor}`,
+          boxShadow: style.boxShadow,
+          border: `${style.borderTopColor}|${style.borderRightColor}|${style.borderBottomColor}|${style.borderLeftColor}`,
+          background: style.backgroundColor
+        }
+      }
+      return {
+        enabledCount: enabledItems.length,
+        before: enabledItems.map(styleOf)
+      }
+    })
+    if (result.enabledCount === 0) {
+      throw new Error(`Menu surface ${surface.name} has no enabled keyboard target`)
+    }
+    await menu.focus()
+    await page.keyboard.press('ArrowDown')
+    await expect.poll(() => menu.evaluate(menuElement => {
+      const activeItem = menuElement.querySelector('.ant-dropdown-menu-item-active')
+      if (!activeItem) return false
+      const rect = activeItem.getBoundingClientRect()
+      const style = window.getComputedStyle(activeItem)
+      return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' &&
+        rect.right > 0 && rect.bottom > 0 && rect.left < window.innerWidth && rect.top < window.innerHeight
+    }), { timeout: 2000 }).toBe(true)
+    const after = await menu.evaluate((menuElement, before) => {
+      const enabledItems = [...menuElement.querySelectorAll('[role="menuitem"]')].filter(item => {
+        return !item.classList.contains('ant-dropdown-menu-item-disabled') &&
+          item.getAttribute('aria-disabled') !== 'true'
+      })
+      const activeItem = enabledItems.find(item => item.classList.contains('ant-dropdown-menu-item-active')) ||
+        enabledItems.find(item => item === document.activeElement) || null
+      const styleOf = element => {
+        const style = window.getComputedStyle(element)
+        return {
+          outline: `${style.outlineStyle}|${style.outlineWidth}|${style.outlineColor}`,
+          boxShadow: style.boxShadow,
+          border: `${style.borderTopColor}|${style.borderRightColor}|${style.borderBottomColor}|${style.borderLeftColor}`,
+          background: style.backgroundColor
+        }
+      }
+      const visible = element => {
+        if (!element) return false
+        const rect = element.getBoundingClientRect()
+        const style = window.getComputedStyle(element)
+        return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' &&
+          rect.right > 0 && rect.bottom > 0 && rect.left < window.innerWidth && rect.top < window.innerHeight
+      }
+      const index = activeItem ? enabledItems.indexOf(activeItem) : -1
+      const activeStyle = activeItem ? styleOf(activeItem) : null
+      const baseStyle = index >= 0 ? before[index] : null
+      const deltas = activeStyle && baseStyle
+        ? Object.keys(activeStyle).filter(key => activeStyle[key] !== baseStyle[key])
+        : []
+      return {
+        method: 'ArrowDown',
+        enabledCount: enabledItems.length,
+        activeIndex: index,
+        activeText: activeItem?.textContent.trim().slice(0, 100) || '',
+        activeItemVisible: visible(activeItem),
+        activeElementVisible: visible(document.activeElement),
+        activeElementRole: document.activeElement?.getAttribute?.('role') || document.activeElement?.tagName || '',
+        indicatorDeltas: deltas,
+        activeStyle,
+        baseStyle
+      }
+    }, result.before)
+    return after
+  }
+
+  await page.evaluate(() => document.activeElement?.blur?.())
+  const interactiveSelector = [
+    'button:not([disabled])', 'input:not([disabled])', 'textarea:not([disabled])',
+    'select:not([disabled])', 'a[href]',
+    '[role="button"]:not([aria-disabled="true"])',
+    '[role="tab"]:not([aria-disabled="true"])',
+    '[role="checkbox"]:not([aria-disabled="true"])',
+    '[role="switch"]:not([aria-disabled="true"])',
+    '[tabindex]:not([tabindex="-1"]):not([aria-disabled="true"])'
+  ].join(',')
+  const enabledCount = await rootLocator.locator(interactiveSelector).count()
+  if (enabledCount === 0) {
+    throw new Error(`Surface ${surface.name} has no enabled interactive element and is not allowlisted`)
+  }
+  for (let attempt = 1; attempt <= Math.max(24, enabledCount * 3); attempt += 1) {
+    await page.keyboard.press('Tab')
+    const focus = await rootLocator.evaluate((root, attemptNumber) => {
+      const active = document.activeElement
+      if (!active || !root.contains(active)) return null
+      const rect = active.getBoundingClientRect()
+      const style = window.getComputedStyle(active)
+      const visible = rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' &&
+        rect.right > 0 && rect.bottom > 0 && rect.left < window.innerWidth && rect.top < window.innerHeight
+      const styleOf = element => {
+        const computed = window.getComputedStyle(element)
+        return {
+          outline: `${computed.outlineStyle}|${computed.outlineWidth}|${computed.outlineColor}`,
+          boxShadow: computed.boxShadow,
+          border: `${computed.borderTopColor}|${computed.borderRightColor}|${computed.borderBottomColor}|${computed.borderLeftColor}`,
+          background: computed.backgroundColor
+        }
+      }
+      const owners = []
+      let owner = active
+      while (owner && root.contains(owner)) {
+        owners.push(owner)
+        if (owner === root || owners.length >= 6) break
+        owner = owner.parentElement
+      }
+      const focusedOwners = owners.map(element => ({
+        tag: element.tagName,
+        className: String(element.className || ''),
+        style: styleOf(element)
+      }))
+      active.blur()
+      const baseOwners = owners.map(element => ({
+        tag: element.tagName,
+        className: String(element.className || ''),
+        style: styleOf(element)
+      }))
+      active.focus()
+      const indicatorOwners = focusedOwners.flatMap((focusedOwner, index) => {
+        const baseOwner = baseOwners[index]
+        const deltas = Object.keys(focusedOwner.style)
+          .filter(key => focusedOwner.style[key] !== baseOwner.style[key])
+        return deltas.length
+          ? [{
+              depth: index,
+              tag: focusedOwner.tag,
+              className: focusedOwner.className,
+              deltas,
+              focusedStyle: focusedOwner.style,
+              baseStyle: baseOwner.style
+            }]
+          : []
+      })
+      return {
+        method: 'Tab',
+        attempt: attemptNumber,
+        enabledCount: root.querySelectorAll('button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), a[href], [role="button"]:not([aria-disabled="true"]), [role="tab"]:not([aria-disabled="true"]), [role="checkbox"]:not([aria-disabled="true"]), [role="switch"]:not([aria-disabled="true"]), [tabindex]:not([tabindex="-1"]):not([aria-disabled="true"])').length,
+        activeText: (active.getAttribute('aria-label') || active.textContent || active.getAttribute('placeholder') || active.tagName).trim().slice(0, 100),
+        activeTag: active.tagName,
+        activeVisible: visible,
+        indicatorDeltas: indicatorOwners.flatMap(item => item.deltas),
+        indicatorOwner: indicatorOwners[0] || null,
+        focusedOwners,
+        baseOwners
+      }
+    }, attempt)
+    if (focus) return focus
+  }
+  throw new Error(`Tab did not enter an enabled interactive element on ${surface.name} after ${Math.max(24, enabledCount * 3)} attempts`)
+}
+
+function assertFocusSnapshot (focus, context) {
+  const message = JSON.stringify({ context, focus })
+  if (focus.method === 'ArrowDown') {
+    expect(focus.activeIndex, message).toBeGreaterThanOrEqual(0)
+    expect(focus.activeItemVisible, message).toBe(true)
+    expect(focus.activeElementVisible, message).toBe(true)
+  } else {
+    expect(focus.activeVisible, message).toBe(true)
+  }
+  expect(focus.indicatorDeltas.length, message).toBeGreaterThan(0)
 }
 
 async function inspectTerminalInvariant (page) {
@@ -392,21 +887,85 @@ function assertTerminalInvariant (terminal, context) {
 }
 
 async function recordCaseFailure (page, testInfo, failures, context, error) {
-  failures.push(`${JSON.stringify(context)}\n${error.stack || error.message}`)
+  const originalError = error?.stack || error?.message || String(error)
+  const failure = { context, error: originalError }
+  failures.push(failure)
   console.log(`SECONDARY_SURFACE_FAILURE=${JSON.stringify(context)}`)
   const safeName = Object.values(context).join('-').replace(/[^a-z0-9_-]+/gi, '-').slice(0, 120)
-  await testInfo.attach(`visual-failure-${safeName}`, {
-    body: await page.screenshot({ fullPage: true }),
-    contentType: 'image/png'
-  })
+  try {
+    failure.geometry = await Promise.race([
+      page.evaluate(() => {
+        const describe = element => {
+          if (!element) return null
+          const rect = element.getBoundingClientRect()
+          return {
+            tag: element.tagName,
+            id: element.id,
+            className: String(element.className || ''),
+            rect: rect.toJSON(),
+            scrollWidth: element.scrollWidth,
+            clientWidth: element.clientWidth
+          }
+        }
+        return {
+          viewport: { width: window.innerWidth, height: window.innerHeight },
+          documentElement: describe(document.documentElement),
+          body: describe(document.body),
+          root: describe(document.getElementById('container')),
+          activeElement: describe(document.activeElement)
+        }
+      }),
+      new Promise((resolve) => setTimeout(() => resolve({ timeout: geometryTimeout }), geometryTimeout))
+    ])
+  } catch (geometryError) {
+    failure.geometryError = geometryError?.message || String(geometryError)
+  }
+  try {
+    const body = await page.screenshot({ fullPage: true, timeout: screenshotTimeout })
+    await testInfo.attach(`visual-failure-${safeName}`, {
+      body,
+      contentType: 'image/png'
+    })
+    failure.screenshotAttached = true
+  } catch (screenshotError) {
+    failure.screenshotAttached = false
+    failure.screenshotError = screenshotError?.message || String(screenshotError)
+  }
+  console.log(`SECONDARY_SURFACE_FAILURE_DETAIL=${JSON.stringify(failure)}`)
 }
 
-async function runSurfaceCase (page, testInfo, failures, context, surface) {
+function formatFailures (failures) {
+  return failures.map(failure => JSON.stringify(failure, null, 2)).join('\n\n')
+}
+
+function createMatrixStats () {
+  return {
+    focusSurfaceChecks: 0,
+    disabledContrastChecks: 0,
+    secondaryOverflowAdded: 0,
+    dangerActionChecks: 0,
+    dangerMenuLastChecks: 0,
+    dangerSemanticGroupChecks: 0
+  }
+}
+
+async function runSurfaceCase (page, testInfo, failures, context, surface, stats, documentBaseline) {
   try {
     await resetSurface(page, context.language)
     await surface.open(page)
-    const snapshot = await inspectSurface(page, surface.selector, surface.menu)
-    assertSurfaceSnapshot(snapshot, { ...context, surface: surface.name })
+    const snapshot = await inspectSurface(page, surface.selector, surface.menu, documentBaseline)
+    const surfaceContext = { ...context, surface: surface.name }
+    stats.disabledContrastChecks += snapshot.disabledContrast.length
+    stats.secondaryOverflowAdded += snapshot.documentOverflowDetails.reduce((total, item) => {
+      return total + Math.max(0, item.scrollWidth - item.allowedScrollWidth)
+    }, 0)
+    stats.dangerActionChecks += snapshot.dangerIndexes.length
+    if (surface.dangerPolicy === 'menu-last') stats.dangerMenuLastChecks += snapshot.dangerIndexes.length
+    if (surface.dangerPolicy === 'semantic-group-last') stats.dangerSemanticGroupChecks += snapshot.dangerIndexes.length
+    assertSurfaceSnapshot(snapshot, surfaceContext, surface)
+    const focus = await inspectKeyboardFocus(page, surface)
+    assertFocusSnapshot(focus, surfaceContext)
+    stats.focusSurfaceChecks += 1
     if (surface.name === 'theme-center') {
       const background = await page.locator('.sp-theme-preview-terminal').evaluate(element => {
         return window.getComputedStyle(element).backgroundColor
@@ -428,20 +987,33 @@ async function exerciseLanguageAndThemeState (page) {
   expect(initial.locales).toBe(14)
   const targetLanguage = initial.language === 'en_us' ? 'zh_cn' : 'en_us'
   const targetText = targetLanguage === 'en_us' ? 'English' : '简体中文'
+  const targetIndex = await page.evaluate((language) => {
+    return window.et.langs.findIndex(item => item.id === language)
+  }, targetLanguage)
+  expect(targetIndex).toBeGreaterThanOrEqual(0)
   const languageSelect = page.locator('.setting-header .ant-select')
-  const targetOption = () => page.locator(
-    `.ant-select-dropdown:visible .rc-virtual-list-holder-inner .ant-select-item-option[title="${targetText}"]`
-  )
-  await languageSelect.click()
-  await targetOption().click()
+  const chooseTargetOption = async () => {
+    const dropdown = page.locator('.ant-select-dropdown:visible')
+    if (!await dropdown.isVisible()) {
+      await languageSelect.click()
+    }
+    await dropdown.waitFor({ state: 'visible', timeout: 5000 })
+    await dropdown.locator('.rc-virtual-list-holder').evaluate((holder, index) => {
+      holder.scrollTop = index * 32
+      holder.dispatchEvent(new Event('scroll', { bubbles: true }))
+    }, targetIndex)
+    const option = dropdown.locator('.ant-select-item-option').filter({ hasText: targetText }).first()
+    await expect(option).toBeVisible({ timeout: 5000 })
+    await option.click()
+  }
+  await chooseTargetOption()
   expect(await page.evaluate(() => window.store.previewLanguage)).toBe(targetLanguage)
   expect(await page.evaluate(() => window.store.config.language)).toBe(initial.language)
   await page.locator('.setting-header button.ant-btn-default').click()
   expect(await page.evaluate(() => window.store.previewLanguage)).toBe('')
   expect(await page.evaluate(() => window.store.config.language)).toBe(initial.language)
 
-  await languageSelect.click()
-  await targetOption().click()
+  await chooseTargetOption()
   await page.locator('.setting-header button.ant-btn-primary').click()
   expect(await page.evaluate(() => window.store.previewLanguage)).toBe('')
   expect(await page.evaluate(() => window.store.config.language)).toBe(targetLanguage)
@@ -462,8 +1034,7 @@ async function exerciseLanguageAndThemeState (page) {
 }
 
 test('active terminal session tab keeps the locked SSH background', async ({ browserName }) => {
-  assertSafeProfileRoot()
-  const electronApp = await electron.launch(launchOptions())
+  const { electronApp, profileRoot } = await launchIsolatedApp('terminal')
   try {
     const page = electronApp.windows()[0] || await electronApp.firstWindow()
     await page.waitForFunction(() => window.store?.configLoaded === true, { timeout: 20000 })
@@ -471,14 +1042,65 @@ test('active terminal session tab keeps the locked SSH background', async ({ bro
     const terminal = await inspectTerminalInvariant(page)
     assertTerminalInvariant(terminal, { runner: browserName, surface: 'terminal-invariant' })
   } finally {
-    await electronApp.close().catch(() => electronApp.process().kill())
-    await fs.rm(profileRoot, { recursive: true, force: true })
+    await closeIsolatedApp(electronApp, profileRoot)
+  }
+})
+
+test('terminal footer contains narrow widths with locally reachable controls', async ({ browserName }) => {
+  const { electronApp, profileRoot } = await launchIsolatedApp('terminal-footer')
+  try {
+    const page = electronApp.windows()[0] || await electronApp.firstWindow()
+    await page.waitForFunction(() => window.store?.configLoaded === true, { timeout: 20000 })
+    await page.locator('.term-wrap:visible').waitFor({ timeout: 20000 })
+    const footerSizes = [
+      { width: 1100, height: 700 },
+      { width: 820, height: 600 },
+      { width: 590, height: 400 },
+      { width: 472, height: 320 },
+      { width: 393, height: 267 }
+    ]
+
+    for (const size of footerSizes) {
+      await setWindowCase(electronApp, page, size, 1)
+      const metrics = await page.locator('.terminal-footer-flex').evaluate((footer) => {
+        const documentElement = document.documentElement
+        const footerRect = footer.getBoundingClientRect()
+        const status = footer.querySelector('.terminal-footer-status')
+        const lastControl = footer.querySelector('.terminal-footer-info:last-child')
+        footer.scrollLeft = footer.scrollWidth
+        const lastRect = lastControl.getBoundingClientRect()
+        const lastControlReachable = lastRect.left >= footerRect.left - 1 &&
+          lastRect.right <= footerRect.right + 1
+        footer.scrollLeft = 0
+        const statusRect = status.getBoundingClientRect()
+        return {
+          documentClientWidth: documentElement.clientWidth,
+          documentScrollWidth: documentElement.scrollWidth,
+          footerClientWidth: footer.clientWidth,
+          footerScrollWidth: footer.scrollWidth,
+          footerOverflowX: window.getComputedStyle(footer).overflowX,
+          statusReachable: statusRect.left >= footerRect.left - 1 && statusRect.left < footerRect.right,
+          lastControlReachable
+        }
+      })
+      const context = JSON.stringify({ runner: browserName, size, metrics })
+      expect(metrics.documentScrollWidth, context).toBeLessThanOrEqual(metrics.documentClientWidth + overflowTolerance)
+      expect(metrics.statusReachable, context).toBe(true)
+      expect(metrics.lastControlReachable, context).toBe(true)
+      if (size.width >= 820) {
+        expect(metrics.footerScrollWidth, context).toBeLessThanOrEqual(metrics.footerClientWidth + overflowTolerance)
+      } else {
+        expect(metrics.footerOverflowX, context).toBe('auto')
+        expect(metrics.footerScrollWidth, context).toBeGreaterThan(metrics.footerClientWidth)
+      }
+    }
+  } finally {
+    await closeIsolatedApp(electronApp, profileRoot)
   }
 })
 
 test('tool center and batch editor stay reachable in compact real app windows', async ({ browserName }) => {
-  assertSafeProfileRoot()
-  const electronApp = await electron.launch(launchOptions())
+  const { electronApp, profileRoot } = await launchIsolatedApp('compact-tools')
   let compactChecks = 0
   try {
     const page = electronApp.windows()[0] || await electronApp.firstWindow()
@@ -527,12 +1149,8 @@ test('tool center and batch editor stay reachable in compact real app windows', 
       await lastCard.scrollIntoViewIfNeeded()
       await expect(lastCard).toBeVisible()
 
-      await page.evaluate(async () => {
-        const widgets = await window.store.listWidgets()
-        window.store.setSettingItem(widgets.find(widget => widget.id === 'batch-op'))
-      })
+      await selectBatchWidget(page)
       const editor = page.locator('.batch-op-editor')
-      await editor.waitFor({ state: 'visible' })
       await editor.scrollIntoViewIfNeeded()
       const editorMetrics = await editor.evaluate(element => {
         const rect = element.getBoundingClientRect()
@@ -555,16 +1173,16 @@ test('tool center and batch editor stay reachable in compact real app windows', 
     console.log(`SECONDARY_TOOL_CENTER_COMPACT_CHECKS=${compactChecks}`)
     expect(compactChecks).toBe(4)
   } finally {
-    await electronApp.close().catch(() => electronApp.process().kill())
-    await fs.rm(profileRoot, { recursive: true, force: true })
+    await closeIsolatedApp(electronApp, profileRoot)
   }
 })
 
 test('real app covers the secondary UI visual acceptance matrix', async ({ browserName }, testInfo) => {
   const runner = browserName
-  assertSafeProfileRoot()
-  const electronApp = await electron.launch(launchOptions())
+  const expected = assertMatrixConfiguration()
+  const { electronApp, profileRoot } = await launchIsolatedApp('matrix')
   const failures = []
+  const stats = createMatrixStats()
   let dimensionChecks = 0
   let themeChecks = 0
   try {
@@ -578,9 +1196,12 @@ test('real app covers the secondary UI visual acceptance matrix', async ({ brows
         await setWindowCase(electronApp, page, size, zoom)
         for (const language of matrixLanguages) {
           const context = { matrix: 'dimension', runner, size: `${size.width}x${size.height}`, zoom, language }
+          await resetSurface(page, language)
+          const documentBaseline = await inspectDocumentBaseline(page)
+          console.log(`SECONDARY_MAIN_CHROME_BASELINE=${JSON.stringify({ ...context, ...documentBaseline })}`)
           const failuresBeforeCase = failures.length
           for (const surface of surfaces) {
-            await runSurfaceCase(page, testInfo, failures, context, surface)
+            await runSurfaceCase(page, testInfo, failures, context, surface, stats, documentBaseline)
             dimensionChecks += 1
           }
           try {
@@ -593,7 +1214,7 @@ test('real app covers the secondary UI visual acceptance matrix', async ({ brows
           const caseFailures = failures.length - failuresBeforeCase
           console.log(`SECONDARY_DIMENSION_CASE=${JSON.stringify({ ...context, surfaces: surfaces.length, failures: caseFailures })}`)
           if (caseFailures) {
-            throw new Error(failures.slice(failuresBeforeCase).join('\n\n'))
+            throw new Error(formatFailures(failures.slice(failuresBeforeCase)))
           }
         }
       }
@@ -604,9 +1225,12 @@ test('real app covers the secondary UI visual acceptance matrix', async ({ brows
       for (const size of matrixThemeSizes) {
         await setWindowCase(electronApp, page, size, 1)
         const context = { matrix: 'theme', runner, size: `${size.width}x${size.height}`, zoom: 1, language: 'en_us', theme }
+        await resetSurface(page, 'en_us')
+        const documentBaseline = await inspectDocumentBaseline(page)
+        console.log(`SECONDARY_MAIN_CHROME_BASELINE=${JSON.stringify({ ...context, ...documentBaseline })}`)
         const failuresBeforeCase = failures.length
         for (const surface of surfaces) {
-          await runSurfaceCase(page, testInfo, failures, context, surface)
+          await runSurfaceCase(page, testInfo, failures, context, surface, stats, documentBaseline)
           themeChecks += 1
         }
         try {
@@ -619,15 +1243,29 @@ test('real app covers the secondary UI visual acceptance matrix', async ({ brows
         const caseFailures = failures.length - failuresBeforeCase
         console.log(`SECONDARY_THEME_CASE=${JSON.stringify({ ...context, surfaces: surfaces.length, failures: caseFailures })}`)
         if (caseFailures) {
-          throw new Error(failures.slice(failuresBeforeCase).join('\n\n'))
+          throw new Error(formatFailures(failures.slice(failuresBeforeCase)))
         }
       }
     }
 
     console.log(`SECONDARY_DIMENSION_SURFACE_CHECKS=${dimensionChecks}`)
     console.log(`SECONDARY_THEME_SURFACE_CHECKS=${themeChecks}`)
+    console.log(`SECONDARY_TOTAL_SURFACE_CHECKS=${dimensionChecks + themeChecks}`)
+    console.log(`SECONDARY_FOCUS_SURFACE_CHECKS=${stats.focusSurfaceChecks}`)
+    console.log(`SECONDARY_DISABLED_CONTRAST_CHECKS=${stats.disabledContrastChecks}`)
+    console.log(`SECONDARY_OVERFLOW_ADDED=${stats.secondaryOverflowAdded}`)
+    console.log(`SECONDARY_DANGER_ACTION_CHECKS=${stats.dangerActionChecks}`)
+    console.log(`SECONDARY_DANGER_MENU_LAST_CHECKS=${stats.dangerMenuLastChecks}`)
+    console.log(`SECONDARY_DANGER_SEMANTIC_GROUP_CHECKS=${stats.dangerSemanticGroupChecks}`)
     console.log(`SECONDARY_VISUAL_FAILURES=${failures.length}`)
-    expect(failures, failures.join('\n\n')).toEqual([])
+    expect(dimensionChecks).toBe(expected.dimension)
+    expect(themeChecks).toBe(expected.theme)
+    expect(dimensionChecks + themeChecks).toBe(expected.total)
+    expect(stats.focusSurfaceChecks).toBe(expected.total)
+    expect(stats.secondaryOverflowAdded).toBe(0)
+    expect(stats.dangerMenuLastChecks).toBe(expected.dimensionBatches + expected.themeBatches)
+    expect(stats.dangerSemanticGroupChecks).toBe(expected.dimensionBatches + expected.themeBatches)
+    expect(failures, formatFailures(failures)).toEqual([])
   } finally {
     try {
       const page = electronApp.windows()[0]
@@ -638,7 +1276,6 @@ test('real app covers the secondary UI visual acceptance matrix', async ({ brows
         }, bookmarkId)
       }
     } catch {}
-    await electronApp.close().catch(() => electronApp.process().kill())
-    await fs.rm(profileRoot, { recursive: true, force: true })
+    await closeIsolatedApp(electronApp, profileRoot)
   }
 })

@@ -58,18 +58,26 @@
   z-index 9
   flex 0 0 auto
   min-width 0
+  max-width 100%
   margin 0
   padding 8px 20px 0
   background var(--sp-page)
+  overflow-x hidden
   .ant-tabs-nav
+    width 100%
     min-width 0
+    max-width 100%
     margin 0
-    overflow-x auto
+    overflow-x hidden
     overflow-y hidden
   .ant-tabs-nav-wrap
-    min-width max-content
-    overflow visible
+    flex 1 1 auto
+    min-width 0
+    max-width 100%
+    overflow-x auto
+    overflow-y hidden
   .ant-tabs-nav-list
+    width max-content
     white-space nowrap
   .ant-tabs-content-holder
     display none

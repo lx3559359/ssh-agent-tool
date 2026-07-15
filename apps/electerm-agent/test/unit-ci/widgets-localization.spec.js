@@ -74,6 +74,16 @@ test('widgets page source routes user-facing labels through preview-language tra
   assert.doesNotMatch(source, />\s*Search widgets/)
 })
 
+test('widget cards expose stable widget identity and type attributes', () => {
+  const source = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/components/widgets/widgets-list.jsx'
+  ), 'utf8')
+
+  assert.match(source, /data-widget-id=\{widget\.id\}/)
+  assert.match(source, /data-widget-type=\{widget\.info\.type\}/)
+})
+
 test('widget success feedback preserves tool details with a localized prefix', async () => {
   const { formatWidgetSuccessMessage } = await import(pathToFileURL(widgetFeedbackPath))
   const { getShellPilotTranslation } = await import(pathToFileURL(shellPilotI18nPath))

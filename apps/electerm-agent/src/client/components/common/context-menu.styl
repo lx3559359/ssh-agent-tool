@@ -71,6 +71,10 @@
     color var(--sp-text)
     background var(--sp-primary-soft)
 
+  .ant-dropdown-menu:focus-visible .ant-dropdown-menu-item-active
+    outline 2px solid var(--sp-primary)
+    outline-offset -2px
+
   .ant-dropdown-menu-item-divider
     margin 5px 8px
     background var(--sp-border)
@@ -87,6 +91,7 @@
   .ant-dropdown-menu-submenu-disabled > .ant-dropdown-menu-submenu-title
     color var(--sp-text-disabled)
     background transparent
+    opacity 1
 
   .ant-dropdown-menu-submenu-expand-icon
     position static

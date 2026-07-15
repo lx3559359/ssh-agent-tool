@@ -220,6 +220,33 @@ test('derives readable secondary page and card tokens from every palette', async
   }
 })
 
+test('keeps disabled semantic text distinguishable and at least 3:1 in every palette', async () => {
+  const [
+    { buildShellPilotBuiltInThemes },
+    { deriveSecondaryThemeTokens }
+  ] = await Promise.all([
+    import(paletteModuleUrl),
+    import(tokensModuleUrl)
+  ])
+  const themes = buildShellPilotBuiltInThemes({ foreground: '#dddddd' })
+
+  for (const theme of themes) {
+    const tokens = deriveSecondaryThemeTokens(theme.uiThemeConfig)
+    for (const backgroundKey of ['page', 'surface', 'surfaceElevated']) {
+      const disabledRatio = contrastRatio(tokens.textDisabled, tokens[backgroundKey])
+      const normalRatio = contrastRatio(tokens.text, tokens[backgroundKey])
+      assert.ok(
+        disabledRatio >= 3,
+        `${theme.id} textDisabled/${backgroundKey} contrast ${disabledRatio}`
+      )
+      assert.ok(
+        disabledRatio < normalRatio,
+        `${theme.id} disabled text must remain visually distinct from normal text`
+      )
+    }
+  }
+})
+
 test('resolves ShellPilot names without translating default or third-party records', async () => {
   const { getThemeDisplayName } = await import(paletteModuleUrl)
   const shellPilotTheme = {

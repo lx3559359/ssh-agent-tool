@@ -38,8 +38,7 @@ function minimumContrast (color, backgrounds) {
   return Math.min(...backgrounds.map(background => contrastRatio(color, background)))
 }
 
-function ensureTextContrast (color, backgrounds) {
-  const minimumRatio = 4.5
+function ensureContrast (color, backgrounds, minimumRatio) {
   if (minimumContrast(color, backgrounds) >= minimumRatio) {
     return color
   }
@@ -55,6 +54,10 @@ function ensureTextContrast (color, backgrounds) {
     }
   }
   return target
+}
+
+function ensureTextContrast (color, backgrounds) {
+  return ensureContrast(color, backgrounds, 4.5)
 }
 
 function normalizeTheme (theme) {
@@ -87,7 +90,11 @@ export function deriveSecondaryThemeTokens (theme = {}) {
     surfaceElevated: surface,
     text,
     textMuted,
-    textDisabled: expandHex(theme['text-disabled'], mix(text, page, 0.64)),
+    textDisabled: ensureContrast(
+      expandHex(theme['text-disabled'], mix(text, page, 0.64)),
+      backgrounds,
+      3
+    ),
     border: mix(text, surface, 0.84),
     borderStrong: mix(text, surface, 0.72),
     primary,
