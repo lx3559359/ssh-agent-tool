@@ -22,6 +22,8 @@ import newTerm from '../../common/new-terminal'
 import { isValidIP } from '../../common/is-ip'
 import { action as manateAction } from 'manate'
 
+const e = window.translate
+
 export default function FormRenderer ({ config, props }) {
   const initialValues = config.initValues(props)
   const [form] = Form.useForm()
@@ -67,7 +69,7 @@ export default function FormRenderer ({ config, props }) {
       )
       return bg
     })
-    message.success('OK', 3)
+    message.success(e('ok'), 3)
   })
 
   const setNewItem = (settingItem = getInitItem([], settingMap.bookmarks)) => {
@@ -131,10 +133,10 @@ export default function FormRenderer ({ config, props }) {
       })
     setTesting(false)
     if (res) {
-      message.success('连接成功')
+      message.success(e('connectionSucceeded'))
     } else {
-      const err = '连接失败' +
-        (msg ? `：${msg}` : '')
+      const err = e('connectionFailed') +
+        (msg ? `: ${msg}` : '')
       message.error(err)
     }
   }
@@ -152,7 +154,7 @@ export default function FormRenderer ({ config, props }) {
 
   const handleSubmit = async (evt, res, isTest = false) => {
     if (res.enableSsh === false && res.enableSftp === false) {
-      return message.warning('SSH 和 SFTP 不能同时禁用')
+      return message.warning(e('sshAndSftpCannotBothBeDisabled'))
     }
     const obj = {
       ...props.formData,
@@ -294,9 +296,9 @@ export default function FormRenderer ({ config, props }) {
       ? (tabs[0].fields || [])
       : (config.fields || [])
     content = (
-      <div className='pd1x'>
+      <section className='sp-card sp-configuration-section'>
         {fields.map((f, index) => renderFormItem(f, config.layout, form, ctxProps, index))}
-      </div>
+      </section>
     )
   } else {
     const items = (tabs || []).map(tab => ({
@@ -304,12 +306,12 @@ export default function FormRenderer ({ config, props }) {
       label: tab.label,
       forceRender: true,
       children: (
-        <div className='pd1x'>
+        <section className='sp-card sp-configuration-section'>
           {(tab.fields || []).map((f, index) => renderFormItem(f, config.layout, form, ctxProps, index))}
-        </div>
+        </section>
       )
     }))
-    content = <Tabs items={items} />
+    content = <Tabs className='sp-configuration-tabs' items={items} />
   }
   const formName = `${config.key}-form`
   return (
@@ -318,6 +320,7 @@ export default function FormRenderer ({ config, props }) {
       onFinish={handleFinish}
       initialValues={initialValues}
       name={formName}
+      className='sp-configuration-form'
     >
       {content}
       <SubmitButtons

@@ -13,6 +13,10 @@ import {
 } from '../../common/constants'
 import { action } from 'manate'
 import ProfileTabs from './profile-tabs'
+import {
+  createShellPilotMaxRule,
+  createShellPilotRequiredRule
+} from '../../common/shellpilot-i18n-overrides.js'
 
 const FormItem = Form.Item
 const e = window.translate
@@ -70,15 +74,14 @@ export default function ProfileFormElem (props) {
       layout='vertical'
       initialValues={props.formData}
     >
-      <p>ID: {props.formData.id || genId()}</p>
+      <p>{e('shellpilotIdLabel')}: {props.formData.id || genId()}</p>
       <FormItem
         label={e('profileName')}
         {...formItemLayout}
-        rules={[{
-          max: 60, message: '60 chars max'
-        }, {
-          required: true, message: 'Name required'
-        }]}
+        rules={[
+          createShellPilotMaxRule(e, 60),
+          createShellPilotRequiredRule(e, 'profileName')
+        ]}
         hasFeedback
         name='name'
       >

@@ -8,40 +8,55 @@ const widgetI18nPath = path.resolve(
   __dirname,
   '../../src/client/components/widgets/widget-i18n.js'
 )
+const shellPilotI18nPath = path.resolve(
+  __dirname,
+  '../../src/client/common/shellpilot-i18n-overrides.js'
+)
+const widgetFeedbackPath = path.resolve(
+  __dirname,
+  '../../src/client/components/widgets/widget-feedback.js'
+)
 
-test('widgets display built-in tools with Chinese names instead of raw English names', async () => {
+test('widgets display built-in tools in Chinese and English instead of raw internal names', async () => {
   const {
     getWidgetDisplay,
     formatInstanceTitle
   } = await import(pathToFileURL(widgetI18nPath))
+  const { getShellPilotTranslation } = await import(pathToFileURL(shellPilotI18nPath))
+  const translate = langId => key => getShellPilotTranslation(key, langId) || key
 
   const widgets = [
-    ['batch-op', 'Batch Operation', '批量任务'],
-    ['local-file-server', 'Static File Server', '静态文件服务'],
-    ['local-ftp-server', 'Local FTP Server', '本地 FTP 服务'],
-    ['mcp-server', 'MCP Server', 'MCP 服务'],
-    ['rename', 'File Renamer', '批量重命名']
+    ['batch-op', 'Batch Operation', '批量任务', 'Batch Tasks'],
+    ['local-file-server', 'Static File Server', '静态文件服务', 'Static File Service'],
+    ['local-ftp-server', 'Local FTP Server', '本地 FTP 服务', 'Local FTP Service'],
+    ['mcp-server', 'MCP Server', 'MCP 服务', 'MCP Service'],
+    ['rename', 'File Renamer', '批量重命名', 'Batch Rename']
   ]
 
-  for (const [id, rawName, displayName] of widgets) {
-    const meta = getWidgetDisplay({
+  for (const [id, rawName, chineseName, englishName] of widgets) {
+    const widget = {
       id,
       info: {
         name: rawName,
         type: id === 'batch-op' || id === 'rename' ? 'frontend' : 'instance'
       }
-    })
-    assert.equal(meta.title, displayName)
-    assert.notEqual(meta.title, rawName)
+    }
+    assert.equal(getWidgetDisplay(widget, translate('zh_cn')).title, chineseName)
+    assert.equal(getWidgetDisplay(widget, translate('en_us')).title, englishName)
     assert.equal(formatInstanceTitle({
       widgetId: id,
       title: rawName,
       id: '1'
-    }), `${displayName} (1)`)
+    }, translate('zh_cn')), `${chineseName} (1)`)
+    assert.equal(formatInstanceTitle({
+      widgetId: id,
+      title: rawName,
+      id: '1'
+    }, translate('en_us')), `${englishName} (1)`)
   }
 })
 
-test('widgets page source keeps user-facing labels Chinese', () => {
+test('widgets page source routes user-facing labels through preview-language translation', () => {
   const files = [
     '../../src/client/components/widgets/widgets-list.jsx',
     '../../src/client/components/widgets/widget-form.jsx',
@@ -50,25 +65,62 @@ test('widgets page source keeps user-facing labels Chinese', () => {
   ].map(file => fs.readFileSync(path.resolve(__dirname, file), 'utf8'))
 
   const source = files.join('\n')
-  assert.match(source, /工具中心/)
-  assert.match(source, /运行中/)
-  assert.match(source, /搜索工具/)
+  assert.match(source, /getWidgetDisplay\(widget, e\)/)
+  assert.match(source, /languageVersion/)
+  assert.match(source, /shellpilotWidgetToolCenter/)
   assert.doesNotMatch(source, /<sup>Beta<\/sup>/)
   assert.doesNotMatch(source, />\s*Widgets\s*</)
   assert.doesNotMatch(source, />\s*RunningInstances/)
   assert.doesNotMatch(source, />\s*Search widgets/)
 })
 
-test('setting sync page source keeps common prompts and validation messages Chinese', () => {
+test('widget cards expose stable widget identity and type attributes', () => {
+  const source = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/components/widgets/widgets-list.jsx'
+  ), 'utf8')
+
+  assert.match(source, /data-widget-id=\{widget\.id\}/)
+  assert.match(source, /data-widget-type=\{widget\.info\.type\}/)
+})
+
+test('widget success feedback preserves tool details with a localized prefix', async () => {
+  const { formatWidgetSuccessMessage } = await import(pathToFileURL(widgetFeedbackPath))
+  const { getShellPilotTranslation } = await import(pathToFileURL(shellPilotI18nPath))
+  const translate = langId => key => getShellPilotTranslation(key, langId) || key
+  const detail = 'Renamed 3 files successfully'
+
+  assert.equal(
+    formatWidgetSuccessMessage({ msg: detail }, translate('zh_cn')),
+    `工具运行成功：${detail}`
+  )
+  assert.equal(
+    formatWidgetSuccessMessage({ msg: detail }, translate('en_us')),
+    `Tool completed successfully: ${detail}`
+  )
+  assert.equal(
+    formatWidgetSuccessMessage({}, translate('en_us')),
+    'Tool completed successfully'
+  )
+
+  const controlSource = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/components/widgets/widget-control.jsx'
+  ), 'utf8')
+  assert.match(controlSource, /formatWidgetSuccessMessage\(result, e\)/)
+  assert.doesNotMatch(controlSource, /showMsg\(e\('shellpilotWidgetRunSucceeded'\)/)
+})
+
+test('setting sync page source routes prompts and validation through runtime translations', () => {
   const source = [
     '../../src/client/components/setting-sync/setting-sync-form.jsx',
     '../../src/client/components/setting-sync/sync-data-compare.jsx'
   ].map(file => fs.readFileSync(path.resolve(__dirname, file), 'utf8')).join('\\n')
 
-  assert.match(source, /查看 Gist/)
-  assert.match(source, /跳过 SSL 校验/)
-  assert.match(source, /代理/)
-  assert.match(source, /最多 200 个字符/)
+  assert.match(source, /e\('shellpilotViewGist'\)/)
+  assert.match(source, /e\('shellpilotSkipSslVerification'\)/)
+  assert.match(source, /e\('shellpilotProxy'\)/)
+  assert.match(source, /tf\('shellpilotMaxCharacters', \{ count: 200 \}\)/)
   assert.doesNotMatch(source, />Check gist</)
   assert.doesNotMatch(source, /Request failed/)
   assert.doesNotMatch(source, /Gitee data sync is not recommended/)

@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ShellPilot secondary UI state fixture</title>
+    <style>
+      html,
+      body,
+      #root {
+        min-width: 0;
+        min-height: 100%;
+        margin: 0;
+      }
+
+      body {
+        padding: 16px;
+        color: #20242a;
+        background: #f4f6f8;
+        font-family: Inter, "Microsoft YaHei", sans-serif;
+      }
+
+      .fixture-controls {
+        position: sticky;
+        z-index: 10;
+        top: 0;
+        display: flex;
+        gap: 8px;
+        padding: 8px 0;
+        background: #f4f6f8;
+      }
+
+      .fixture-content {
+        max-width: 960px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/main.jsx"></script>
+  </body>
+</html>

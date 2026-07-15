@@ -6,6 +6,7 @@
 
 import React, { useState, useEffect, useRef } from 'react'
 import { Dropdown } from 'antd'
+import { contextMenuAlign, createContextMenuId } from './context-menu-props'
 import iconsMap from '../sys-menu/icons-map.jsx'
 import { copy, readClipboard, readClipboardAsync } from '../../common/clipboard.js'
 
@@ -191,6 +192,10 @@ function createContextMenuItems (element) {
  * Mount this component in your app to enable context menus on all input/textarea elements
  */
 const InputContextMenu = () => {
+  const contextMenuIdRef = useRef()
+  if (!contextMenuIdRef.current) {
+    contextMenuIdRef.current = createContextMenuId('input-menu')
+  }
   const [visible, setVisible] = useState(false)
   const [position, setPosition] = useState({ x: 0, y: 0 })
   const [targetElement, setTargetElement] = useState(null)
@@ -286,12 +291,15 @@ const InputContextMenu = () => {
     >
       <Dropdown
         menu={{
+          id: contextMenuIdRef.current,
           items: menuItems,
           onClick: handleMenuClick
         }}
         open={visible}
         placement='bottomLeft'
+        align={contextMenuAlign}
         className='input-context-menu'
+        overlayClassName='shellpilot-context-menu'
       >
         <div style={{ width: 1, height: 1 }} />
       </Dropdown>

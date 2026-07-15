@@ -12,11 +12,14 @@ import {
   Dropdown,
   Splitter
 } from 'antd'
+import { contextMenuAlign, createContextMenuId } from '../common/context-menu-props'
 
 const e = window.translate
 const { Panel } = Splitter
 
 export default class FileListTableHeader extends Component {
+  contextMenuId = createContextMenuId('sftp-header-menu')
+
   renderHeaderItem = (item) => {
     const {
       id,
@@ -72,10 +75,13 @@ export default class FileListTableHeader extends Component {
     const { properties } = this.props
     const dropdownProps = {
       menu: {
+        id: this.contextMenuId,
         items: this.props.renderContextMenu(),
         onClick: this.props.onContextMenu
       },
-      trigger: ['contextMenu']
+      trigger: ['contextMenu'],
+      align: contextMenuAlign,
+      overlayClassName: 'shellpilot-context-menu'
     }
     const spliterProps = {
       onResizeEnd: this.props.onResize,

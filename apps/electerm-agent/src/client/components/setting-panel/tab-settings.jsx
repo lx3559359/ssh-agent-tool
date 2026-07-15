@@ -29,7 +29,8 @@ export default auto(function TabSettings (props) {
   const {
     settingItem,
     listProps,
-    store
+    store,
+    languageVersion
   } = props
   let elem = null
 
@@ -43,7 +44,7 @@ export default auto(function TabSettings (props) {
 
   function handleConfigSubmit (values) {
     window.store.updateConfig(values)
-    message.success('Saved')
+    message.success(window.translate('shellpilotSaved'))
   }
 
   const aiConfProps = {
@@ -64,7 +65,7 @@ export default auto(function TabSettings (props) {
     ])
     elem = <SyncSetting {...syncProps} />
   } else if (sid === settingAiId) {
-    elem = <SettingAi {...aiConfProps} />
+    elem = <SettingAi {...aiConfProps} languageVersion={languageVersion} />
   } else if (sid === settingTerminalId) {
     elem = <SettingTerminal {...listProps} config={store.config} />
   } else if (sid === settingShortcutsId) {

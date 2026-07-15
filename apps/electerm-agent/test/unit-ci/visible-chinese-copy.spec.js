@@ -7,7 +7,7 @@ function readClient (relativePath) {
   return fs.readFileSync(path.resolve(__dirname, '../../src/client', relativePath), 'utf8')
 }
 
-test('common user-facing fallback messages are Chinese', () => {
+test('common user-facing copy uses translation while legacy fallback messages remain Chinese', () => {
   const aiConfig = readClient('components/ai/ai-config-modal.jsx')
   const webAuth = readClient('components/web/web-auth-modal.jsx')
   const terminalLog = readClient('components/terminal/save-terminal-log.js')
@@ -15,7 +15,8 @@ test('common user-facing fallback messages are Chinese', () => {
   const trzsz = readClient('components/terminal/trzsz-client.js')
 
   assert.doesNotMatch(aiConfig, /'Saved'/)
-  assert.match(aiConfig, /'已保存'/)
+  assert.match(aiConfig, /message\.success\(e\('saved'\)\)/)
+  assert.match(aiConfig, /title=\{e\('shellpilotAiConfigTitle'\)\}/)
   assert.doesNotMatch(webAuth, />\s*Cancel\s*</)
   assert.match(webAuth, />\s*取消\s*</)
   assert.doesNotMatch(terminalLog, /Failed to (?:start|stop|write)/)

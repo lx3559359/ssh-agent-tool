@@ -19,6 +19,10 @@ import {
 } from '../../../common/constants'
 import { useState } from 'react'
 import BookmarkSelect from './bookmark-select'
+import {
+  createShellPilotMaxRule,
+  createShellPilotRequiredRule
+} from '../../../common/shellpilot-i18n-overrides'
 
 const FormItem = Form.Item
 const RadioButton = Radio.Button
@@ -74,11 +78,10 @@ export default function ConnectionHoppingForm (props) {
         {...formItemLayout}
         label={e('host')}
         hasFeedback
-        rules={[{
-          max: 520, message: '520 chars max'
-        }, {
-          required: true, message: 'host required'
-        }]}
+        rules={[
+          createShellPilotMaxRule(e, 520),
+          createShellPilotRequiredRule(e, 'host')
+        ]}
         normalize={trim}
         name='host'
       >
@@ -89,9 +92,7 @@ export default function ConnectionHoppingForm (props) {
         label={e('port')}
         hasFeedback
         name='port'
-        rules={[{
-          required: true, message: 'port required'
-        }]}
+        rules={[createShellPilotRequiredRule(e, 'port')]}
       >
         <InputNumber
           placeholder={e('port')}
@@ -105,9 +106,7 @@ export default function ConnectionHoppingForm (props) {
         label={e('username')}
         hasFeedback
         name='username'
-        rules={[{
-          max: 128, message: '128 chars max'
-        }]}
+        rules={[createShellPilotMaxRule(e, 128)]}
         normalize={trim}
       >
         <Input />

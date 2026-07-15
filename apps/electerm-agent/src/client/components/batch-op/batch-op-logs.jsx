@@ -8,8 +8,9 @@ const statusIcon = {
   error: '×'
 }
 
-const BatchOpLogs = forwardRef(function BatchOpLogs (_, ref) {
+const BatchOpLogs = forwardRef(function BatchOpLogs ({ languageVersion }, ref) {
   const [logs, setLogsState] = useState(null)
+  const e = window.translate
 
   useImperativeHandle(ref, () => ({
     setLogs: (progress) => setLogsState(progress),
@@ -29,8 +30,8 @@ const BatchOpLogs = forwardRef(function BatchOpLogs (_, ref) {
   }
 
   return (
-    <div className='batch-op-logs mg1t pd1 font13'>
-      <div className='bold mg1b'>执行日志</div>
+    <div className='batch-op-logs mg1t pd1 font13' data-language-version={languageVersion}>
+      <div className='bold mg1b'>{e('shellpilotBatchExecutionLog')}</div>
       {logs.steps.map((step, i) => (
         <div key={i} className={`batch-op-log-entry ${step.status}`}>
           <span className='log-icon mg1r'>{statusIcon[step.status] || '•'}</span>
@@ -46,7 +47,7 @@ const BatchOpLogs = forwardRef(function BatchOpLogs (_, ref) {
       )}
       {logs.status === 'completed' && (
         <div className='batch-op-log-entry completed color-green mg1t'>
-          ✓ 任务执行完成
+          ✓ {e('shellpilotBatchExecutionComplete')}
         </div>
       )}
     </div>

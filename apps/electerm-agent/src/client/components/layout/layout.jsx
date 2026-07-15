@@ -138,6 +138,7 @@ export default auto(function Layout (props) {
       return (
         <TabsWrap
           key={'sess' + i}
+          className='terminal-session-tabs'
           {...sessProps}
         />
       )

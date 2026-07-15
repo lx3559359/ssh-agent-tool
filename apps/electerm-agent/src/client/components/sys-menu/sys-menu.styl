@@ -1,68 +1,107 @@
 .context-menu
-  position: relative
-  width 280px
+  position relative
+  box-sizing border-box
+  min-width 220px
+  width max-content
+  max-width unquote('min(360px, calc(100vw - 16px))')
+  color var(--sp-text)
+  background var(--sp-surface-elevated)
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-overlay)
+  box-shadow var(--sp-shadow-overlay)
+
+.context-menu-inner
+  min-width 0
 
 .context-item
   -webkit-app-region no-drag
   position relative
-  height 28px
-  line-height 28px
-  padding 0 16px
+  display grid
+  grid-template-columns auto minmax(0, 1fr) auto
+  align-items center
+  gap 8px
+  min-width 0
+  min-height 32px
+  padding 7px 12px
+  line-height 1.4
+  color var(--sp-text)
+  white-space normal
   &:hover
-    background #08c
-    color #eee
+    color var(--sp-text)
+    background var(--sp-primary-soft)
     cursor pointer
   &.disabled
-    color var(--text-disabled)
+    color var(--sp-text-disabled)
     &:hover
-      color #777
-      background #333
+      color var(--sp-text-disabled)
+      background transparent
       cursor not-allowed
   &.zoom-item
-    height 36px
-    line-height 36px
+    min-height 36px
     &:hover
       background transparent
+    > *
+      grid-column 1 / -1
+
+.context-item-label
+  grid-column 2
+  min-width 0
+  white-space normal
+  overflow-wrap anywhere
+  word-break normal
 
 .context-sub-text
-  position absolute
-  right 16px
-  top 0
-  color var(--text-light)
+  grid-column 3
+  min-width 0
+  color var(--sp-text-muted)
+  text-align right
+  white-space normal
+  overflow-wrap anywhere
 
 .context-menu
   hr
-    margin 0
+    margin 5px 8px
     border none
-    border-bottom 1px solid var(--main-darker)
+    border-bottom 1px solid var(--sp-border)
+
 .sub-context-menu
   display none
-  width 200px
+  box-sizing border-box
+  min-width 200px
+  width max-content
+  max-width unquote('min(360px, calc(100vw - 16px))')
   position absolute
   left 100%
   top 0
-  background var(--main)
-  box-shadow 0px 0px 3px 3px var(--main-darker)
-  max-height 300px
-  overflow-y scroll
-  color var(--text)
+  z-index 1
+  color var(--sp-text)
+  background var(--sp-surface-elevated)
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-overlay)
+  box-shadow var(--sp-shadow-overlay)
+  max-height calc(100vh - 16px)
+  overflow-x hidden
+  overflow-y auto
+
 .with-sub-menu
   &:hover
     .sub-context-menu
       display block
 
 .sub-context-menu-item
+  min-width 0
+  padding 7px 12px
   cursor pointer
-  padding 5px 16px
-  overflow hidden
-  white-space nowrap
-  text-overflow ellipsis
+  white-space normal
+  overflow-wrap anywhere
+  word-break normal
   &:hover, &.active
-    background-color #08c
-    color #eee
+    color var(--sp-text)
+    background var(--sp-primary-soft)
+
 .bookmarks-sub-context-menu
-  width 380px
-  padding 20px 10px 10px 20px
+  width unquote('min(360px, calc(100vw - 16px))')
+  padding 12px
 
 .menu-control
   width 28px
@@ -74,7 +113,6 @@
   display inline-block
   line-height 28px
   cursor pointer
-  color var(--text)
 
 .menu-logo
   display inline-block

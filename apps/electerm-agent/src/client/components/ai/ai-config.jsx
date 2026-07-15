@@ -12,7 +12,8 @@ import {
   MinusCircleOutlined,
   PlusOutlined
 } from '@ant-design/icons'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { cloneDeep, isEqual } from 'lodash-es'
 import Link from '../common/external-link'
 import AiCache from './ai-cache'
 import { normalizeAIEndpoint } from '../../common/ai-endpoint'
@@ -29,32 +30,27 @@ import {
   removeAIProfile,
   upsertAIProfile
 } from './ai-profiles'
+import { formatShellPilotTranslation } from '../../common/shellpilot-i18n-overrides.js'
 
 const STORAGE_KEY_CONFIG = 'ai_config_history'
 const EVENT_NAME_CONFIG = 'ai-config-history-update'
 
 const e = window.translate
-const defaultRoles = [
-  {
-    value: 'SSH 运维专家，优先排查服务器、网络、日志、进程、端口、磁盘、内存、Nginx、Docker 和部署问题。回答使用中文和 Markdown。'
-  },
-  {
-    value: '终端专家，提供不同系统下的命令，简要解释用法，默认使用中文回答。'
-  }
-]
+const tf = (key, replacements) => formatShellPilotTranslation(e, key, replacements)
+const defaultRoleKeys = ['shellpilotAiRoleSshOps', 'shellpilotAiRoleTerminal']
 
 const providerPresets = [
   {
-    label: '自定义中转站（OpenAI 兼容）',
+    labelKey: 'shellpilotProviderCustomOpenAi',
     value: 'custom-openai-compatible',
-    nameAI: '自定义中转站',
+    nameKey: 'shellpilotProviderCustomOpenAiName',
     baseURLAI: 'https://api.example.com',
     apiPathAI: '',
     modelAI: '',
     authHeaderNameAI: 'Authorization: Bearer'
   },
   {
-    label: 'OpenAI 官方',
+    labelKey: 'shellpilotProviderOpenAiOfficial',
     value: 'openai',
     nameAI: 'OpenAI',
     baseURLAI: 'https://api.openai.com/v1',
@@ -63,7 +59,7 @@ const providerPresets = [
     authHeaderNameAI: 'Authorization: Bearer'
   },
   {
-    label: 'DeepSeek 官方',
+    labelKey: 'shellpilotProviderDeepSeekOfficial',
     value: 'deepseek',
     nameAI: 'DeepSeek',
     baseURLAI: 'https://api.deepseek.com',
@@ -72,7 +68,7 @@ const providerPresets = [
     authHeaderNameAI: 'Authorization: Bearer'
   },
   {
-    label: 'OpenRouter 中转',
+    labelKey: 'shellpilotProviderOpenRouterRelay',
     value: 'openrouter',
     nameAI: 'OpenRouter',
     baseURLAI: 'https://openrouter.ai/api/v1',
@@ -81,7 +77,7 @@ const providerPresets = [
     authHeaderNameAI: 'Authorization: Bearer'
   },
   {
-    label: '硅基流动 SiliconFlow',
+    labelKey: 'shellpilotProviderSiliconFlow',
     value: 'siliconflow',
     nameAI: 'SiliconFlow',
     baseURLAI: 'https://api.siliconflow.cn/v1',
@@ -90,25 +86,25 @@ const providerPresets = [
     authHeaderNameAI: 'Authorization: Bearer'
   },
   {
-    label: '阿里云百炼 DashScope',
+    labelKey: 'shellpilotProviderDashScope',
     value: 'dashscope',
-    nameAI: '阿里云百炼',
+    nameKey: 'shellpilotProviderDashScope',
     baseURLAI: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     apiPathAI: '',
     modelAI: 'qwen-plus',
     authHeaderNameAI: 'Authorization: Bearer'
   },
   {
-    label: '智谱 GLM',
+    labelKey: 'shellpilotProviderGlm',
     value: 'bigmodel',
-    nameAI: '智谱 GLM',
+    nameKey: 'shellpilotProviderGlm',
     baseURLAI: 'https://open.bigmodel.cn/api/paas/v4',
     apiPathAI: '',
     modelAI: 'glm-4-plus',
     authHeaderNameAI: 'Authorization: Bearer'
   },
   {
-    label: 'Moonshot 月之暗面',
+    labelKey: 'shellpilotProviderMoonshot',
     value: 'moonshot',
     nameAI: 'Moonshot',
     baseURLAI: 'https://api.moonshot.cn/v1',
@@ -117,9 +113,9 @@ const providerPresets = [
     authHeaderNameAI: 'Authorization: Bearer'
   },
   {
-    label: '火山方舟',
+    labelKey: 'shellpilotProviderVolcanoArk',
     value: 'volcengine',
-    nameAI: '火山方舟',
+    nameKey: 'shellpilotProviderVolcanoArk',
     baseURLAI: 'https://ark.cn-beijing.volces.com/api/v3',
     apiPathAI: '',
     modelAI: 'doubao-seed-1-6',
@@ -153,9 +149,9 @@ const providerPresets = [
     authHeaderNameAI: 'Authorization: Bearer'
   },
   {
-    label: 'Ollama 本地',
+    labelKey: 'shellpilotProviderOllamaLocal',
     value: 'ollama',
-    nameAI: 'Ollama 本地',
+    nameKey: 'shellpilotProviderOllamaLocal',
     baseURLAI: 'http://127.0.0.1:11434/v1',
     apiPathAI: '',
     modelAI: 'qwen2.5:7b',
@@ -200,44 +196,44 @@ const authHeaderOptions = [
 const skillFields = [
   {
     name: 'id',
-    label: 'Skill ID',
-    placeholder: '例如：redis-troubleshooting',
+    labelKey: 'shellpilotSkillId',
+    placeholderKey: 'shellpilotSkillIdPlaceholder',
     required: true
   },
   {
     name: 'title',
-    label: '技能名称',
-    placeholder: '例如：Redis 排查',
+    labelKey: 'shellpilotSkillName',
+    placeholderKey: 'shellpilotSkillNamePlaceholder',
     required: true
   },
   {
     name: 'description',
-    label: '适用场景',
-    placeholder: '例如：连接异常、慢查询、内存占用'
+    labelKey: 'shellpilotSkillScenario',
+    placeholderKey: 'shellpilotSkillScenarioPlaceholder'
   }
 ]
 
 const mcpServerFields = [
   {
     name: 'name',
-    label: '名称',
-    placeholder: '例如：Prometheus、CMDB、知识库',
+    labelKey: 'shellpilotMcpName',
+    placeholderKey: 'shellpilotMcpNamePlaceholder',
     required: true
   },
   {
     name: 'command',
-    label: '启动命令',
-    placeholder: 'stdio 模式，例如：prometheus-mcp'
+    labelKey: 'shellpilotMcpCommand',
+    placeholderKey: 'shellpilotMcpCommandPlaceholder'
   },
   {
     name: 'url',
-    label: 'HTTP 地址',
-    placeholder: 'HTTP 模式，例如：https://cmdb.example.com/mcp'
+    labelKey: 'shellpilotMcpHttpAddress',
+    placeholderKey: 'shellpilotMcpHttpAddressPlaceholder'
   },
   {
     name: 'description',
-    label: '用途',
-    placeholder: '例如：查询监控指标、服务器资产、内部文档'
+    labelKey: 'shellpilotMcpPurpose',
+    placeholderKey: 'shellpilotMcpPurposePlaceholder'
   }
 ]
 
@@ -290,8 +286,9 @@ function getEndpointPreview (baseURLAI, apiPathAI) {
   }
 }
 
-export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig }) {
+export default function AIConfigForm ({ initialValues, languageVersion, onSubmit, showAIConfig }) {
   const [form] = Form.useForm()
+  const appliedSourceRef = useRef()
   const [testing, setTesting] = useState(false)
   const [loadingModels, setLoadingModels] = useState(false)
   const [modelOptions, setModelOptions] = useState([])
@@ -306,20 +303,30 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
   )
 
   useEffect(() => {
-    if (initialValues) {
-      const normalized = migrateAIProfiles(initialValues)
-      const active = getActiveAIConfig(normalized)
-      form.setFieldsValue({
-        ...normalized,
-        ...active
-      })
-      setProfileOptions(getAIProfileOptions(normalized))
-      setModelOptions([
-        ...getAIModelOptions(normalized),
-        ...uniqueOptions(popularModels)
-      ])
+    if (!initialValues || isEqual(appliedSourceRef.current, initialValues)) return
+    const normalized = migrateAIProfiles(initialValues)
+    const active = getActiveAIConfig(normalized)
+    form.setFieldsValue({
+      ...normalized,
+      ...active
+    })
+    setProfileOptions(getAIProfileOptions(normalized, e))
+    setModelOptions([
+      ...getAIModelOptions(normalized),
+      ...uniqueOptions(popularModels)
+    ])
+    appliedSourceRef.current = cloneDeep(initialValues)
+  }, [form, initialValues])
+
+  useEffect(() => {
+    setProfileOptions(getAIProfileOptions(form.getFieldsValue(true), e))
+    const touchedErrors = form.getFieldsError()
+      .filter(field => field.errors.length && form.isFieldTouched(field.name))
+      .map(field => field.name)
+    if (touchedErrors.length) {
+      form.validateFields(touchedErrors).catch(() => {})
     }
-  }, [initialValues])
+  }, [form, languageVersion])
 
   function filter () {
     return true
@@ -330,7 +337,7 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
   }
 
   function syncProfileOptions (config) {
-    setProfileOptions(getAIProfileOptions(config))
+    setProfileOptions(getAIProfileOptions(config, e))
   }
 
   function saveCurrentProfile () {
@@ -379,7 +386,7 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
     const saved = saveCurrentProfile()
     const profile = {
       id: `ai-profile-${Date.now()}`,
-      nameAI: `AI 配置 ${(saved.aiProfiles || []).length + 1}`,
+      nameAI: tf('shellpilotAiConfigNumber', { count: (saved.aiProfiles || []).length + 1 }),
       baseURLAI: '',
       apiPathAI: '',
       modelAI: '',
@@ -436,7 +443,7 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
     const preset = providerPresets.find(item => item.value === value)
     if (!preset) return
     const nextValues = {
-      nameAI: preset.nameAI,
+      nameAI: preset.nameKey ? e(preset.nameKey) : preset.nameAI,
       baseURLAI: preset.baseURLAI,
       apiPathAI: preset.apiPathAI,
       modelAI: preset.modelAI,
@@ -461,7 +468,7 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
       setTesting(true)
       const res = await window.pre.runGlobalAsync(
         'AIchat',
-        '你好',
+        e('shellpilotAiTestPrompt'),
         values.modelAI,
         values.roleAI,
         values.baseURLAI,
@@ -473,17 +480,17 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
       )
       if (res && res.error) {
         saveProfileStatus('error', res.error)
-        message.error(res.error)
+        message.error(`${e('shellpilotRequestFailed')}: ${res.error}`)
       } else if (res && res.response) {
-        saveProfileStatus('available', '测试连接成功')
-        message.success('模型 API 配置可用')
+        saveProfileStatus('available')
+        message.success(e('shellpilotAiConfigAvailable'))
       } else {
-        saveProfileStatus('error', '模型 API 返回异常')
-        message.error('模型 API 返回异常')
+        saveProfileStatus('error')
+        message.error(e('shellpilotAiUnexpectedResponse'))
       }
     } catch (err) {
       if (err.message) {
-        message.error(err.message)
+        message.error(`${e('shellpilotRequestFailed')}: ${err.message}`)
       }
     } finally {
       setTesting(false)
@@ -503,13 +510,14 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
         allValues.authHeaderNameAI
       )
       if (res?.error) {
-        saveProfileStatus('error', `拉取模型失败：${res.error}`)
-        return message.error(`拉取模型失败：${res.error}`)
+        const content = tf('shellpilotAiLoadModelsFailed', { detail: res.error })
+        saveProfileStatus('error', res.error)
+        return message.error(content)
       }
       const models = res?.models || []
       if (!models.length) {
-        saveProfileStatus('error', '未获取到模型列表')
-        return message.warning('未获取到模型列表，请确认该接口兼容 /models 或 Ollama /api/tags。')
+        saveProfileStatus('error')
+        return message.warning(e('shellpilotAiNoModelsHint'))
       }
       const options = uniqueOptions(models)
       setModelOptions(options)
@@ -520,11 +528,12 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
         modelAI,
         modelOptionsAI
       })
-      saveProfileStatus('available', `已获取 ${options.length} 个模型`)
-      message.success(`已获取 ${options.length} 个模型`)
+      const content = tf('shellpilotAiModelsLoaded', { count: options.length })
+      saveProfileStatus('available')
+      message.success(content)
     } catch (err) {
       if (err.message) {
-        message.error(err.message)
+        message.error(`${e('shellpilotRequestFailed')}: ${err.message}`)
       }
     } finally {
       setLoadingModels(false)
@@ -543,23 +552,23 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
 
   function renderHistoryItem (item) {
     if (!item || typeof item !== 'object') {
-      return { label: '未知配置', title: '未知配置' }
+      return { label: e('shellpilotAiUnknownConfig'), title: e('shellpilotAiUnknownConfig') }
     }
     const name = item.nameAI || ''
-    const model = item.modelAI || '默认模型'
+    const model = item.modelAI || e('shellpilotAiDefaultModel')
     const rolePrefix = item.roleAI ? item.roleAI.substring(0, 15) + '...' : ''
     const label = name || `[${model}] ${rolePrefix}`
     const title = name
-      ? `${name}\n模型：${item.modelAI}\n地址：${item.baseURLAI}`
-      : `模型：${item.modelAI}\n角色：${item.roleAI}\n地址：${item.baseURLAI}`
+      ? `${name}\n${e('shellpilotAiModelLabel')}: ${item.modelAI}\n${e('shellpilotAiAddressLabel')}: ${item.baseURLAI}`
+      : `${e('shellpilotAiModelLabel')}: ${item.modelAI}\n${e('shellpilotAiRoleLabel')}: ${item.roleAI}\n${e('shellpilotAiAddressLabel')}: ${item.baseURLAI}`
     return { label, title }
   }
 
   function renderApiUrlLabel () {
     if (baseURLAI === 'https://api.atlascloud.ai/v1') {
-      return <span>API 地址 (<Link to='https://atlascloud.ai'>AtlasCloud</Link>)</span>
+      return <span>{e('shellpilotApiAddress')} (<Link to='https://atlascloud.ai'>AtlasCloud</Link>)</span>
     }
-    return 'API 地址'
+    return e('shellpilotApiAddress')
   }
 
   if (!showAIConfig) {
@@ -569,15 +578,15 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
   return (
     <>
       <Alert
-        title='模型 API 快速配置'
-        description='只需先填写 API 地址和 API 密钥，再点击“拉取模型”和“保存”即可使用。保存后可在右侧 AI 助手顶部切换 API 配置和模型；其他项目均为可选高级设置。完整说明请查看顶部“帮助”。'
+        title={e('shellpilotAiQuickSetup')}
+        description={e('shellpilotAiQuickSetupDescription')}
         type='info'
         className='mg2y'
       />
       {
         endpointPreview && (
-          <p>
-            实际请求地址：{endpointPreview}
+          <p className='sp-ai-endpoint-preview'>
+            {e('shellpilotAiActualRequestAddress')}: {endpointPreview}
           </p>
         )
       }
@@ -586,11 +595,11 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
         onFinish={handleSubmit}
         initialValues={initialValues}
         layout='vertical'
-        className='ai-config-form'
+        className='ai-config-form sp-card sp-configuration-section sp-ai-config-form'
       >
         <Form.Item
-          label='API 配置'
-          extra='管理多组 API / 中转站配置，右侧 AI 助手可在不同配置之间切换。'
+          label={e('shellpilotAiApiConfiguration')}
+          extra={e('shellpilotAiApiConfigurationExtra')}
         >
           <Space.Compact className='width-100'>
             <Select
@@ -598,13 +607,13 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
               options={profileOptions}
               onChange={handleProfileChange}
               style={{ width: '58%' }}
-              placeholder='选择已保存的 API 配置'
+              placeholder={e('shellpilotAiApiConfigurationPlaceholder')}
             />
             <Button
               onClick={handleAddProfile}
               style={{ width: '21%' }}
             >
-              新增配置
+              {e('shellpilotAddConfiguration')}
             </Button>
             <Button
               danger
@@ -612,22 +621,22 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
               disabled={profileOptions.length <= 1}
               style={{ width: '21%' }}
             >
-              删除配置
+              {e('shellpilotDeleteConfiguration')}
             </Button>
           </Space.Compact>
         </Form.Item>
 
         <Form.Item
-          label='服务商模板'
-          extra='快速填入常见官方模型或中转站地址；不在列表中也可以不选模板，直接自定义 API 地址和密钥。'
+          label={e('shellpilotAiProviderTemplate')}
+          extra={e('shellpilotAiProviderTemplateExtra')}
         >
           <Select
             showSearch
             allowClear
-            placeholder='选择官方模型或中转站模板，也可以不选直接自定义'
+            placeholder={e('shellpilotAiProviderTemplatePlaceholder')}
             options={providerPresets.map(item => ({
               value: item.value,
-              label: item.label
+              label: item.labelKey ? e(item.labelKey) : item.label
             }))}
             onChange={handlePresetChange}
             optionFilterProp='label'
@@ -635,12 +644,12 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
         </Form.Item>
 
         <Form.Item
-          label='配置名称'
+          label={e('shellpilotAiConfigurationName')}
           name='nameAI'
-          extra='给当前 API 起一个便于识别的名字，例如“公司中转站”“本地 Ollama”。右侧 AI 助手左侧下拉只显示这个名称。'
+          extra={e('shellpilotAiConfigurationNameExtra')}
         >
           <Input
-            placeholder='例如：DeepSeek 中转、Ollama 本地（可选）'
+            placeholder={e('shellpilotAiConfigurationNamePlaceholder')}
           />
         </Form.Item>
         <Form.Item
@@ -649,36 +658,36 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
           extra={
             <div className='ai-config-inline-help'>
               <div>
-                <b>API 地址：</b>必填，可填写基础地址、带 /v1 的地址，或完整 chat/completions 地址。
+                <b>{e('shellpilotApiAddress')}:</b> {e('shellpilotAiApiAddressHelp')}
               </div>
               <div>
-                <b>API 路径：</b>可选，留空时自动识别；特殊网关才需要手动指定路径。
+                <b>{e('shellpilotAiApiPath')}:</b> {e('shellpilotAiApiPathHelp')}
               </div>
             </div>
           }
         >
           <Space.Compact className='width-100'>
             <Form.Item
-              label='API 地址'
+              label={e('shellpilotApiAddress')}
               name='baseURLAI'
               noStyle
               rules={[
-                { required: true, message: '请输入或选择 API 服务地址' },
-                { type: 'url', message: '请输入有效的 URL' }
+                { required: true, message: e('shellpilotAiApiAddressRequired') },
+                { type: 'url', message: e('shellpilotValidUrlRequired') }
               ]}
             >
               <Input
-                placeholder='例如：https://api.aigh.store、https://api.openai.com/v1，或完整 chat/completions 地址'
+                placeholder={e('shellpilotAiApiAddressPlaceholder')}
                 style={{ width: '72%' }}
               />
             </Form.Item>
             <Form.Item
-              label='API 路径'
+              label={e('shellpilotAiApiPath')}
               name='apiPathAI'
               noStyle
             >
               <Input
-                placeholder='可选，留空自动识别'
+                placeholder={e('shellpilotAiApiPathPlaceholder')}
                 style={{ width: '28%' }}
               />
             </Form.Item>
@@ -686,7 +695,7 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
         </Form.Item>
         <Form.Item
           label={e('modelAi')}
-          extra='可选但建议填写。点击“拉取模型”会读取当前 API 可用模型并保存列表，之后可在右侧 AI 助手顶部右侧下拉自由切换模型。'
+          extra={e('shellpilotAiModelExtra')}
         >
           <Space.Compact className='width-100'>
             <Form.Item
@@ -698,7 +707,7 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
                 filterOption={filter}
                 style={{ width: '72%' }}
               >
-                <Input placeholder='输入模型名，或点击右侧拉取模型' />
+                <Input placeholder={e('shellpilotAiModelPlaceholder')} />
               </AutoComplete>
             </Form.Item>
             <Button
@@ -706,42 +715,42 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
               onClick={handleLoadModels}
               style={{ width: '28%' }}
             >
-              拉取模型
+              {e('shellpilotAiLoadModels')}
             </Button>
           </Space.Compact>
         </Form.Item>
 
         <Form.Item
-          label='API 密钥'
+          label={e('shellpilotAiApiKey')}
           name='apiKeyAI'
-          extra='必填，用于请求模型接口；不同服务商和中转站的 Key 需要分别配置，仅保存在本机配置中。'
-          rules={[{ required: true, message: '请输入 API 密钥' }]}
+          extra={e('shellpilotAiApiKeyExtra')}
+          rules={[{ required: true, message: e('shellpilotAiApiKeyRequired') }]}
         >
-          <Password placeholder='输入你的 API 密钥' />
+          <Password placeholder={e('shellpilotAiApiKeyPlaceholder')} />
         </Form.Item>
 
         <Form.Item
-          label='认证 Header'
+          label={e('shellpilotAiAuthHeader')}
           name='authHeaderNameAI'
-          extra='可选。大多数 OpenAI 兼容接口保持 Authorization: Bearer 即可；少数服务商可能要求 x-api-key、api-key 或自定义 Header。'
-          tooltip='API 认证 Header 格式。例如：Authorization: Bearer 会发送 Authorization: Bearer <key>；x-api-key 会发送 x-api-key: <key>'
+          extra={e('shellpilotAiAuthHeaderExtra')}
+          tooltip={e('shellpilotAiAuthHeaderTooltip')}
         >
           <AutoComplete
             options={authHeaderOptions}
             filterOption={filter}
           >
-            <Input placeholder='例如：Authorization: Bearer' />
+            <Input placeholder={e('shellpilotAiAuthHeaderPlaceholder')} />
           </AutoComplete>
         </Form.Item>
 
         <Form.Item
           label={e('roleAI')}
           name='roleAI'
-          extra='可选。用于定义 AI 助手的身份和回答方式，例如 SSH 运维专家、数据库排查专家；会影响对话和命令建议的风格。'
+          extra={e('shellpilotAiRoleExtra')}
         >
-          <AutoComplete options={defaultRoles} placement='topLeft'>
+          <AutoComplete options={defaultRoleKeys.map(key => ({ value: e(key) }))} placement='topLeft'>
             <Input.TextArea
-              placeholder='输入 AI 角色或系统提示词'
+              placeholder={e('shellpilotAiRolePlaceholder')}
               rows={1}
             />
           </AutoComplete>
@@ -750,7 +759,7 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
         <Form.Item
           label={e('language')}
           name='languageAI'
-          extra='可选。指定 AI 默认回答语言；留空或使用客户端默认语言时，通常按当前界面语言回复。'
+          extra={e('shellpilotAiLanguageExtra')}
         >
           <AutoComplete options={defaultLangs} placement='topLeft'>
             <Input
@@ -760,8 +769,8 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
         </Form.Item>
 
         <Form.Item
-          label='Agent Skill'
-          extra='可选。给 Agent 增加自定义排查技能，例如 Nginx 502、Redis 慢查询、Docker 异常；技能会作为排查提示词参与 AI 分析。'
+          label={e('shellpilotAiAgentSkill')}
+          extra={e('shellpilotAiAgentSkillExtra')}
         >
           <Form.List name='agentSkills'>
             {(fields, { add, remove }) => (
@@ -775,39 +784,39 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
                             <Form.Item
                               key={item.name}
                               name={[name, item.name]}
-                              label={item.label}
+                              label={e(item.labelKey)}
                               rules={item.required
-                                ? [{ required: true, message: `请输入${item.label}` }]
+                                ? [{ required: true, message: tf('shellpilotFieldRequired', { field: e(item.labelKey) }) }]
                                 : []}
                               className='flex1'
                             >
-                              <Input placeholder={item.placeholder} />
+                              <Input placeholder={e(item.placeholderKey)} />
                             </Form.Item>
                           ))
                         }
                         <Form.Item
                           name={[name, 'disabled']}
-                          label='状态'
+                          label={e('shellpilotStatus')}
                           valuePropName='checked'
                         >
-                          <Checkbox>禁用</Checkbox>
+                          <Checkbox>{e('shellpilotDisabled')}</Checkbox>
                         </Form.Item>
                         <Button
                           danger
                           icon={<MinusCircleOutlined />}
                           onClick={() => remove(name)}
                         >
-                          删除
+                          {e('shellpilotDelete')}
                         </Button>
                       </Space>
                       <Form.Item
                         name={[name, 'prompt']}
-                        label='排查方法'
-                        rules={[{ required: true, message: '请输入排查方法' }]}
+                        label={e('shellpilotAiTroubleshootingMethod')}
+                        rules={[{ required: true, message: e('shellpilotAiTroubleshootingMethodRequired') }]}
                       >
                         <Input.TextArea
                           rows={3}
-                          placeholder='描述 Agent 使用这个 Skill 时应该关注的日志、命令、上下文和排查顺序'
+                          placeholder={e('shellpilotAiTroubleshootingMethodPlaceholder')}
                         />
                       </Form.Item>
                     </div>
@@ -823,7 +832,7 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
                     disabled: false
                   })}
                 >
-                  新增 Skill
+                  {e('shellpilotAiAddSkill')}
                 </Button>
               </Space>
             )}
@@ -831,8 +840,8 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
         </Form.Item>
 
         <Form.Item
-          label='MCP Server'
-          extra='可选。登记可供 Agent 参考或后续接入的外部 MCP 工具，例如 CMDB、Prometheus、知识库；当前会作为上下文和能力说明传给 AI。'
+          label={e('shellpilotAiMcpServer')}
+          extra={e('shellpilotAiMcpServerExtra')}
         >
           <Form.List name='mcpServers'>
             {(fields, { add, remove }) => (
@@ -843,24 +852,24 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
                       <Space align='start' className='width-100'>
                         <Form.Item
                           name={[name, 'transport']}
-                          label='连接方式'
+                          label={e('shellpilotAiConnectionMethod')}
                           className='width-100'
                         >
                           <Select options={mcpTransportOptions} />
                         </Form.Item>
                         <Form.Item
                           name={[name, 'disabled']}
-                          label='状态'
+                          label={e('shellpilotStatus')}
                           valuePropName='checked'
                         >
-                          <Checkbox>禁用</Checkbox>
+                          <Checkbox>{e('shellpilotDisabled')}</Checkbox>
                         </Form.Item>
                         <Button
                           danger
                           icon={<MinusCircleOutlined />}
                           onClick={() => remove(name)}
                         >
-                          删除
+                          {e('shellpilotDelete')}
                         </Button>
                       </Space>
                       <Space align='start' className='width-100'>
@@ -869,22 +878,22 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
                             <Form.Item
                               key={item.name}
                               name={[name, item.name]}
-                              label={item.label}
+                              label={e(item.labelKey)}
                               rules={item.required
-                                ? [{ required: true, message: `请输入${item.label}` }]
+                                ? [{ required: true, message: tf('shellpilotFieldRequired', { field: e(item.labelKey) }) }]
                                 : []}
                               className='flex1'
                             >
-                              <Input placeholder={item.placeholder} />
+                              <Input placeholder={e(item.placeholderKey)} />
                             </Form.Item>
                           ))
                         }
                       </Space>
                       <Form.Item
                         name={[name, 'args']}
-                        label='启动参数'
+                        label={e('shellpilotAiStartArguments')}
                       >
-                        <Input placeholder='stdio 模式可选，例如：--url http://127.0.0.1:9090' />
+                        <Input placeholder={e('shellpilotAiStartArgumentsPlaceholder')} />
                       </Form.Item>
                     </div>
                   ))
@@ -901,7 +910,7 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
                     disabled: false
                   })}
                 >
-                  新增 MCP Server
+                  {e('shellpilotAiAddMcpServer')}
                 </Button>
               </Space>
             )}
@@ -911,15 +920,15 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
         <Form.Item
           label={e('proxy')}
           name='proxyAI'
-          extra='可选，仅影响模型 API 网络请求，不影响 SSH/SFTP 连接。当模型 API 在当前网络无法直连时填写代理地址，例如 socks5://127.0.0.1:1080。'
-          tooltip='模型 API 请求使用的代理，例如 socks5://127.0.0.1:1080'
+          extra={e('shellpilotAiProxyExtra')}
+          tooltip={e('shellpilotAiProxyTooltip')}
         >
           <AutoComplete
             options={proxyOptions}
             filterOption={filter}
             allowClear
           >
-            <Input placeholder='输入代理地址（可选）' />
+            <Input placeholder={e('shellpilotAiProxyPlaceholder')} />
           </AutoComplete>
         </Form.Item>
 

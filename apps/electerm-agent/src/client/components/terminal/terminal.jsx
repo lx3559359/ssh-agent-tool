@@ -7,6 +7,7 @@ import {
   Dropdown,
   Button
 } from 'antd'
+import { contextMenuAlign, createContextMenuId } from '../common/context-menu-props'
 import message from '../common/message'
 import { notification } from '../common/notification'
 import ShowItem from '../common/show-item.jsx'
@@ -75,7 +76,8 @@ import {
 } from './xterm-loader.js'
 import {
   createRendererThemeConfig,
-  handleTerminalColorQuery
+  handleTerminalBackgroundColorRequest,
+  handleTerminalForegroundColorRequest
 } from './terminal-color-query.mjs'
 import { buildTerminalContextMenuItems } from './terminal-context-menu.js'
 import {
@@ -127,6 +129,7 @@ class Term extends Component {
       fontSizeChanged: false
     }
     this.id = `term-${this.props.tab.id}`
+    this.contextMenuId = createContextMenuId('terminal-menu')
     refs.add(this.id, this)
     this.currentInput = ''
     this.shellInjected = false
@@ -1077,6 +1080,7 @@ class Term extends Component {
         icon: Icon ? <Icon /> : null,
         label: menuItem.labelText || e(menuItem.labelKey),
         disabled: menuItem.disabled,
+        danger: menuItem.danger,
         extra: menuItem.extra
       }
     })
@@ -1435,15 +1439,6 @@ class Term extends Component {
     this.terminalColorQueryDisposables.length = 0
   }
 
-  getVisibleTerminalBackground = () => {
-    const uiThemeConfig = window.store?.getUiThemeConfig?.() || {}
-    const dom = this.domRef.current
-    const cssMain = dom && window.getComputedStyle
-      ? window.getComputedStyle(dom).getPropertyValue('--main').trim()
-      : ''
-    return uiThemeConfig.main || cssMain || this.props.themeConfig.background
-  }
-
   getVisibleTerminalForeground = () => {
     const uiThemeConfig = window.store?.getUiThemeConfig?.() || {}
     return uiThemeConfig.text
@@ -1454,24 +1449,24 @@ class Term extends Component {
     if (!term?.parser?.registerOscHandler) {
       return
     }
-    const background = this.getVisibleTerminalBackground()
     const foregroundFallback = this.getVisibleTerminalForeground()
     this.terminalColorQueryDisposables.push(
       term.parser.registerOscHandler(10, data => {
-        return handleTerminalColorQuery(term, 10, themeConfig.foreground, foregroundFallback, data)
+        return handleTerminalForegroundColorRequest(
+          term,
+          data,
+          themeConfig,
+          foregroundFallback
+        )
       }),
       term.parser.registerOscHandler(11, data => {
-        return handleTerminalColorQuery(term, 11, background, themeConfig.background, data)
+        return handleTerminalBackgroundColorRequest(term, data)
       })
     )
   }
 
   getRendererThemeConfig = (themeConfig = this.props.themeConfig) => {
-    return createRendererThemeConfig(
-      deepCopy(themeConfig),
-      this.props.config.rendererType,
-      this.getVisibleTerminalBackground()
-    )
+    return createRendererThemeConfig(deepCopy(themeConfig))
   }
 
   initTerminal = async () => {
@@ -2159,10 +2154,13 @@ class Term extends Component {
     }
     const dropdownProps = {
       menu: {
+        id: this.contextMenuId,
         items: this.renderContextMenu(),
         onClick: this.onContextMenu
       },
-      trigger: this.props.config.pasteWhenContextMenu ? [] : ['contextMenu']
+      trigger: this.props.config.pasteWhenContextMenu ? [] : ['contextMenu'],
+      align: contextMenuAlign,
+      overlayClassName: 'shellpilot-context-menu'
     }
     const barProps = {
       matchIndex: this.state.matchIndex,

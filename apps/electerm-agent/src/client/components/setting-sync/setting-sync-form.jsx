@@ -17,9 +17,11 @@ import HelpIcon from '../common/help-icon'
 import ServerDataStatus from './server-data-status'
 import Password from '../common/password'
 import { isError } from 'lodash-es'
+import { formatShellPilotTranslation } from '../../common/shellpilot-i18n-overrides.js'
 
 const FormItem = Form.Item
 const e = window.translate
+const tf = (key, replacements) => formatShellPilotTranslation(e, key, replacements)
 
 function trim (str) {
   return str ? str.trim() : ''
@@ -86,9 +88,10 @@ export default function SyncForm (props) {
     window.store.updateSyncSetting(up)
     const test = await window.store.testSyncToken(syncType, res.gistId)
     if (isError(test)) {
+      const detail = test.message || ''
       return notification.error({
-        message: test.message || '请求失败',
-        description: test.stack || '请求失败'
+        message: detail ? `${e('shellpilotRequestFailed')}: ${detail}` : e('shellpilotRequestFailed'),
+        description: test.stack || detail || e('shellpilotRequestFailed')
       })
     }
     // if (!res.gistId && syncType !== syncTypes.custom && syncType !== syncTypes.cloud) {
@@ -125,7 +128,7 @@ export default function SyncForm (props) {
       return null
     }
     return (
-      <Link to={props.formData.url}>查看 Gist</Link>
+      <Link to={props.formData.url}>{e('shellpilotViewGist')}</Link>
     )
   }
 
@@ -138,17 +141,17 @@ export default function SyncForm (props) {
     ? dayjs(lastSyncTime).format('YYYY-MM-DD HH:mm:ss')
     : '-'
   const customNameMapper = {
-    token: 'JWT 密钥',
-    gist: '用户 ID'
+    token: e('shellpilotJwtSecret'),
+    gist: e('shellpilotUserId')
   }
   const otherNameMapper = {
-    token: '访问令牌',
+    token: e('shellpilotAccessToken'),
     gistId: 'Gist ID'
   }
   function createLabel (name, text) {
     return (
       <span>
-        {isCustom ? (customNameMapper[name] || name) : name}
+        {isCustom ? (customNameMapper[name] || text || name) : (text || name)}
         <HelpIcon link={getTokenCreateGuideUrl()} />
       </span>
     )
@@ -168,11 +171,11 @@ export default function SyncForm (props) {
         <Alert
           title={
             <span>
-              不建议继续使用 Gitee 数据同步。更多信息请查看
+              {e('shellpilotGiteeSyncWarning')}
               <Link to='https://github.com/electerm/electerm/wiki/gitee-data-sync-warning' className='mg1l'>
-                说明文档
+                {e('shellpilotDocumentation')}
               </Link>
-              。
+              .
             </span>
           }
           type='warning'
@@ -188,7 +191,7 @@ export default function SyncForm (props) {
       return (
         <p>
           <Link to='https://sync.electerm.org'>
-            https://sync.electerm.org（预览）
+            https://sync.electerm.org ({e('shellpilotPreviewBadge')})
           </Link>
         </p>
       )
@@ -201,15 +204,15 @@ export default function SyncForm (props) {
     }
     return (
       <FormItem
-        label={createLabel('API Url')}
+        label={createLabel(e('shellpilotApiAddress'))}
         name='apiUrl'
         normalize={trim}
         rules={[{
-          max: 200, message: '最多 200 个字符'
+          max: 200, message: tf('shellpilotMaxCharacters', { count: 200 })
         }]}
       >
         <Input
-          placeholder='API 地址'
+          placeholder={e('shellpilotApiAddress')}
           id='sync-input-url-custom'
         />
       </FormItem>
@@ -223,9 +226,9 @@ export default function SyncForm (props) {
           name='serverUrl'
           normalize={trim}
           rules={[{
-            max: 500, message: '最多 500 个字符'
+            max: 500, message: tf('shellpilotMaxCharacters', { count: 500 })
           }, {
-            required: true, message: '请填写服务器 URL'
+            required: true, message: e('shellpilotServerUrlRequired')
           }]}
         >
           <Input
@@ -238,18 +241,18 @@ export default function SyncForm (props) {
           name='username'
           normalize={trim}
           rules={[{
-            max: 200, message: '最多 200 个字符'
+            max: 200, message: tf('shellpilotMaxCharacters', { count: 200 })
           }, {
-            required: true, message: '请填写用户名'
+            required: true, message: e('shellpilotUsernameRequired')
           }]}
         >
           <Input
-            placeholder='WebDAV 用户名'
+            placeholder={e('shellpilotWebdavUsername')}
             id='sync-input-webdav-username'
           />
         </FormItem>
         <FormItem
-          label={createLabel('跳过 SSL 校验')}
+          label={createLabel(e('shellpilotSkipSslVerification'))}
           name='skipVerify'
           valuePropName='checked'
         >
@@ -260,13 +263,13 @@ export default function SyncForm (props) {
           name='password'
           normalize={trim}
           rules={[{
-            max: 200, message: '最多 200 个字符'
+            max: 200, message: tf('shellpilotMaxCharacters', { count: 200 })
           }, {
-            required: true, message: '请填写密码'
+            required: true, message: e('shellpilotPasswordRequired')
           }]}
         >
           <Password
-            placeholder='WebDAV 密码'
+            placeholder={e('shellpilotWebdavPassword')}
             id='sync-input-webdav-password'
           />
         </FormItem>
@@ -274,15 +277,15 @@ export default function SyncForm (props) {
     )
   }
   const desc = syncType === syncTypes.custom
-    ? 'JWT 密钥'
+    ? e('shellpilotJwtSecret')
     : syncType === syncTypes.webdav
-      ? 'WebDAV 凭据'
-      : '个人访问令牌'
+      ? e('shellpilotWebdavCredentials')
+      : e('shellpilotPersonalAccessToken')
   const idDesc = syncType === syncTypes.custom
-    ? '用户 ID'
+    ? e('shellpilotUserId')
     : syncType === syncTypes.webdav
-      ? 'WebDAV 服务器'
-      : 'gist ID'
+      ? e('shellpilotWebdavServer')
+      : 'Gist ID'
   const tokenLabel = createLabel('token', desc)
   const gistLabel = createLabel('gist', idDesc)
   const syncPasswordName = e('encrypt') + ' ' + e('password')
@@ -298,7 +301,7 @@ export default function SyncForm (props) {
         required
         normalize={trim}
         rules={[{
-          max: 100, message: '最多 100 个字符'
+          max: 100, message: tf('shellpilotMaxCharacters', { count: 100 })
         }]}
       >
         <Input
@@ -319,7 +322,7 @@ export default function SyncForm (props) {
         name='syncPassword'
         normalize={trim}
         rules={[{
-          max: 100, message: '最多 100 个字符'
+          max: 100, message: tf('shellpilotMaxCharacters', { count: 100 })
         }]}
       >
         <Password
@@ -331,11 +334,11 @@ export default function SyncForm (props) {
   function createProxyItem () {
     return (
       <FormItem
-        label='代理'
+        label={e('shellpilotProxy')}
         name='proxy'
         normalize={trim}
         rules={[{
-          max: 200, message: '最多 200 个字符'
+          max: 200, message: tf('shellpilotMaxCharacters', { count: 200 })
         }]}
       >
         <Input
@@ -360,9 +363,9 @@ export default function SyncForm (props) {
         name='token'
         normalize={trim}
         rules={[{
-          max: 1100, message: '最多 1100 个字符'
+          max: 1100, message: tf('shellpilotMaxCharacters', { count: 1100 })
         }, {
-          required: true, message: `请填写${createPlaceHolder('token')}`
+          required: true, message: tf('shellpilotFieldRequired', { field: createPlaceHolder('token') })
         }]}
       >
         <Password
@@ -376,7 +379,7 @@ export default function SyncForm (props) {
     <Form
       onFinish={save}
       form={form}
-      className='form-wrap pd1x'
+      className='form-wrap pd1x sp-card sp-configuration-section sp-sync-config-form'
       name={'setting-sync-form' + syncType}
       layout='vertical'
       initialValues={props.formData}
@@ -393,7 +396,7 @@ export default function SyncForm (props) {
       {
         createProxyItem()
       }
-      <FormItem>
+      <FormItem className='sp-sync-config-actions'>
         <p>
           <Button
             type='dashed'

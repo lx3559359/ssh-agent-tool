@@ -44,7 +44,7 @@ const defaultThemeLight = parsor(`
   warn=#E55934
 `)
 const defaultThemeLightTerminal = parsor(`
-background=#f7f8fa
+background=#0E0F12
 foreground=#1f2937
 cursor=#2563eb
 selectionBackground=rgba(37, 99, 235, 0.18)
@@ -69,7 +69,7 @@ brightWhite=#ffffff
 
 const defaultThemeTerminal = {
   foreground: '#bbbbbb',
-  background: '#141314',
+  background: '#0E0F12',
   cursor: '#b5bd68',
   cursorAccent: '#1d1f21',
   selectionBackground: 'rgba(255, 255, 255, 0.3)',

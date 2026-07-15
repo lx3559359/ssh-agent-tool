@@ -41,19 +41,19 @@ export default function SyncDataCompare (props) {
   if (diffs.length === 0) {
     return (
       <p className='mg1t sync-diff-text'>
-        {e('dataInSync') || '数据已同步'}
+        {e('shellpilotDataInSync')}
       </p>
     )
   }
 
   const nameMap = {
-    bookmarks: e('bookmarks') || '书签',
-    bookmarkGroups: '书签分组',
-    terminalThemes: e('terminalThemes') || '终端主题',
-    quickCommands: e('quickCommands') || '快速命令',
-    profiles: e('profiles') || '凭据档案',
-    addressBookmarks: e('addressBookmarks') || '地址书签',
-    workspaces: e('workspaces') || '工作区'
+    bookmarks: e('bookmarks'),
+    bookmarkGroups: e('shellpilotBookmarkGroups'),
+    terminalThemes: e('shellpilotTerminalThemes'),
+    quickCommands: e('shellpilotQuickCommands'),
+    profiles: e('shellpilotCredentialProfiles'),
+    addressBookmarks: e('shellpilotAddressBookmarks'),
+    workspaces: e('shellpilotWorkspaces')
   }
 
   const lines = diffs.map(item => {
@@ -63,12 +63,12 @@ export default function SyncDataCompare (props) {
     const diff = serverCount - localCount
     let action = ''
     if (diff > 0) {
-      action = e('download') || '下载'
+      action = e('shellpilotDownload')
     } else if (diff < 0) {
-      action = e('upload') || '上传'
+      action = e('shellpilotUpload')
     }
     return {
-      text: `${e('remote') || '远程'}: ${serverCount} ${displayName}, ${e('local') || '本地'}: ${localCount} ${displayName}`,
+      text: `${e('shellpilotRemote')}: ${serverCount} ${displayName}, ${e('shellpilotLocal')}: ${localCount} ${displayName}`,
       action
     }
   })

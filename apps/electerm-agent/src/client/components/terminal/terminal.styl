@@ -1,6 +1,14 @@
 
+shellPilotTerminalBackground = #0E0F12
+shellPilotTerminalForeground = #E6EDF7
+shellPilotTerminalMutedForeground = #AAB6C8
+shellPilotTerminalActiveForeground = #FFFFFF
+
+:root
+  --shellpilot-terminal-background shellPilotTerminalBackground
+
 .terms-box
-  background var(--main)
+  background shellPilotTerminalBackground
   position relative
 .loading-wrapper
   padding 30px
@@ -12,14 +20,30 @@
   z-index 30
 
 .terminal-control
-  background var(--main)
+  background shellPilotTerminalBackground
+  color shellPilotTerminalForeground
   line-height 32px
   padding 0 10px
+  .type-tab,
+  .spliter,
+  .sess-icon
+    color shellPilotTerminalMutedForeground
+  .type-tab:hover,
+  .type-tab.active,
+  .type-tab:focus-visible,
+  .spliter:hover,
+  .spliter:focus-visible,
+  .sess-icon:hover,
+  .sess-icon.active,
+  .sess-icon:focus-visible
+    color shellPilotTerminalActiveForeground
+  .type-tab-line
+    background shellPilotTerminalMutedForeground
 
 .terms-box
   position relative
 .term-wrap
-  background var(--main)
+  background shellPilotTerminalBackground
   position absolute
 
 .vertical
@@ -33,9 +57,9 @@
 
 #container
   .xterm
-    background transparent
+    background shellPilotTerminalBackground
   .xterm-viewport
-    background-color transparent !important
+    background-color shellPilotTerminalBackground !important
   .xterm-screen::before
     content ''
     position absolute

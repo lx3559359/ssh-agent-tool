@@ -5,6 +5,7 @@
 import { useEffect, useRef } from 'react'
 import eq from 'fast-deep-equal'
 import isColorDark from '../../common/is-color-dark'
+import { buildUiThemeCss } from '../../common/ui-theme-tokens'
 
 const themeDomId = 'theme-css'
 
@@ -42,11 +43,8 @@ function buildTheme (themeConfig) {
     }
     return `--${key}: ${val};`
   }).join('\n')
-  if (themeCss) {
-    const css = `:root {\n${themeCss}\n}\n`
-    return Promise.resolve(css)
-  }
-  return Promise.resolve('')
+  const legacyCss = themeCss ? `:root {\n${themeCss}\n}\n` : ''
+  return Promise.resolve(`${legacyCss}${buildUiThemeCss(themeConfig)}\n`)
 }
 
 export default function UiTheme (props) {

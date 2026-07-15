@@ -12,9 +12,9 @@ import { formatInstanceTitle } from './widget-i18n'
 
 const e = window.translate
 
-export default auto(function WidgetInstance ({ item }) {
+export default auto(function WidgetInstance ({ item, languageVersion }) {
   const { id, title, serverInfo, autoRun } = item
-  const displayTitle = formatInstanceTitle(item)
+  const displayTitle = formatInstanceTitle(item, e)
   const cls = classnames('item-list-unit', {
     'autorun-active': autoRun
   })
@@ -49,17 +49,17 @@ export default auto(function WidgetInstance ({ item }) {
     ? (
       <div>
         <div style={{ display: 'flex', alignItems: 'center' }}>
-          <span>访问地址：{serverInfo.url}</span>
+          <span>{e('shellpilotWidgetAddress')} {serverInfo.url}</span>
           <CopyOutlined
             className='pointer mg1l'
             onClick={handleCopy}
           />
         </div>
-        <div>目录：{serverInfo.path}</div>
+        <div>{e('shellpilotWidgetDirectory')} {serverInfo.path}</div>
       </div>
       )
     : null
-  const tag = autoRun ? <Tag color='green'>自启动</Tag> : null
+  const tag = autoRun ? <Tag color='green'>{e('shellpilotWidgetAutoRun')}</Tag> : null
   const titleDiv = (
     <div
       title={displayTitle || title}
@@ -72,6 +72,7 @@ export default auto(function WidgetInstance ({ item }) {
     <div
       key={id}
       className={cls}
+      data-language-version={languageVersion}
     >
       {
         serverInfo
@@ -86,7 +87,7 @@ export default auto(function WidgetInstance ({ item }) {
             )
           : titleDiv
       }
-      <Tooltip title='切换自启动'>
+      <Tooltip title={e('shellpilotWidgetToggleAutoRun')}>
         <ThunderboltOutlined
           className='pointer list-item-autorun'
           onClick={handleToggleAutoRun}

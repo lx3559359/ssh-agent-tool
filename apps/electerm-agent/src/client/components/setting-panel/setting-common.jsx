@@ -6,7 +6,6 @@ import {
   MoonOutlined
 } from '@ant-design/icons'
 import message from '../common/message'
-import { notification } from '../common/notification'
 import {
   Select,
   Switch,
@@ -27,13 +26,14 @@ import {
 import defaultSettings from '../../common/default-setting'
 import Link from '../common/external-link'
 import { isNumber, isNaN } from 'lodash-es'
-import createEditLangLink from '../../common/create-lang-edit-link'
+import { getThemeDisplayName } from '../../common/shellpilot-ui-palettes.js'
 import StartSession from './start-session-select'
 import HelpIcon from '../common/help-icon'
 import delay from '../../common/wait.js'
 import isColorDark from '../../common/is-color-dark'
 import DeepLinkControl from './deep-link-control'
 import HotkeySetting from './hotkey'
+import SettingSection from './setting-section'
 import './setting.styl'
 
 const { Option } = Select
@@ -84,7 +84,7 @@ export default class SettingCommon extends Component {
       }, () => {
         this.submitting = false
       })
-      message.success('OK')
+      message.success(e('ok'))
     } else {
       this.setState({
         submittingPass: false
@@ -127,26 +127,6 @@ export default class SettingCommon extends Component {
   onChangeTimeout = sshReadyTimeout => {
     return this.saveConfig({
       sshReadyTimeout
-    })
-  }
-
-  handleChangeLang = async language => {
-    await this.saveConfig({
-      language
-    })
-    notification.info({
-      message: (
-        <div>
-          {e('saveLang')}
-          <Button
-            onClick={() => window.location.reload()}
-            className='mg1l'
-            size='small'
-          >
-            {e('restartNow')}
-          </Button>
-        </div>
-      )
     })
   }
 
@@ -239,7 +219,7 @@ export default class SettingCommon extends Component {
       }
     }
     return (
-      <div className={`pd2b ${cls || ''}`}>
+      <div className={`sp-setting-field pd2b ${cls || ''}`}>
         <InputNumberConfirm
           {...opts}
         />
@@ -252,7 +232,7 @@ export default class SettingCommon extends Component {
     const defaultValue = defaultSettings[name]
     const onChange = (v) => this.onChangeValue(v, name)
     return (
-      <div className='pd2b'>
+      <div className='sp-setting-control pd2b'>
         <InputConfirm
           value={value}
           onChange={onChange}
@@ -275,7 +255,7 @@ export default class SettingCommon extends Component {
       }
     }
     return (
-      <div className='pd2b'>
+      <div className='sp-setting-control pd2b'>
         <Space.Compact className='width-100'>
           <InputConfirm
             value={value}
@@ -284,7 +264,7 @@ export default class SettingCommon extends Component {
           />
           <Select
             {...styleArg}
-            placeholder='args'
+            placeholder={e('shellpilotArguments')}
             onChange={onChangeArgs}
             value={args}
             mode='tags'
@@ -306,7 +286,7 @@ export default class SettingCommon extends Component {
 
   renderReset = () => {
     return (
-      <div className='pd1b pd1t'>
+      <div className='sp-setting-actions pd1b pd1t'>
         <Button
           onClick={this.handleResetAll}
         >
@@ -363,7 +343,7 @@ export default class SettingCommon extends Component {
       width: '500px'
     }
     return (
-      <div className='pd1b'>
+      <div className='sp-setting-field sp-setting-field-stacked pd1b'>
         <div className='pd1b'>
           <span className='pd1r'>
             {e('global')} {e('proxy')}
@@ -440,18 +420,18 @@ export default class SettingCommon extends Component {
   renderUpdateChannel () {
     const value = this.props.config.updateChannel || defaultSettings.updateChannel
     return (
-      <div className='pd2b'>
-        <span className='inline-title mg1r'>更新通道</span>
+      <div className='sp-setting-field pd2b'>
+        <span className='inline-title mg1r'>{e('themeUpdateChannel')}</span>
         <Select
           onChange={v => this.onChangeValue(v, 'updateChannel')}
           popupMatchSelectWidth={false}
           value={value}
         >
-          <Option value='stable'>稳定版</Option>
-          <Option value='beta'>测试版</Option>
+          <Option value='stable'>{e('shellpilotStableRelease')}</Option>
+          <Option value='beta'>{e('shellpilotBetaRelease')}</Option>
         </Select>
         <span className='mg1l color-grey'>
-          稳定版只接收已确认发布的正式更新，测试版用于提前验证新功能。
+          {e('shellpilotUpdateChannelDescription')}
         </span>
       </div>
     )
@@ -460,84 +440,27 @@ export default class SettingCommon extends Component {
   renderUpdateSource () {
     const value = this.props.config.updateSource || defaultSettings.updateSource
     return (
-      <div className='pd2b'>
-        <span className='inline-title mg1r'>更新源</span>
+      <div className='sp-setting-field pd2b'>
+        <span className='inline-title mg1r'>{e('shellpilotUpdateSource')}</span>
         <Select
           onChange={v => this.onChangeValue(v, 'updateSource')}
           popupMatchSelectWidth={false}
           value={value}
         >
-          <Option value='auto'>自动选择（推荐）</Option>
-          <Option value='modelscope'>ModelScope 国内源</Option>
+          <Option value='auto'>{e('shellpilotAutomaticRecommended')}</Option>
+          <Option value='modelscope'>{e('shellpilotModelScopeRegionalSource')}</Option>
           <Option value='github'>GitHub</Option>
         </Select>
         <span className='mg1l color-grey'>
-          自动选择会优先使用国内源，失败后回退 GitHub；手动选择后只使用指定更新源。
+          {e('shellpilotUpdateSourceDescription')}
         </span>
       </div>
     )
   }
 
-  render () {
-    const { ready } = this.state
-    if (!ready) {
-      return (
-        <div className='pd3 aligncenter'>
-          <LoadingOutlined />
-        </div>
-      )
-    }
-    const { props } = this
-    const {
-      hotkey,
-      language,
-      theme,
-      customCss
-    } = props.config
-    const {
-      langs = []
-    } = window.et
-    const terminalThemes = props.store.getSidebarList(settingMap.terminalThemes)
-    const pops = {
-      onStartSessions: props.config.onStartSessions,
-      bookmarks: props.bookmarks,
-      bookmarkGroups: props.bookmarkGroups,
-      workspaces: props.store.workspaces,
-      onChangeStartSessions: this.onChangeStartSessions
-    }
-    const hotkeyProps = {
-      hotkey,
-      onSaveConfig: this.saveConfig
-    }
+  renderAppearanceFields = (terminalThemes, theme, customCss) => {
     return (
-      <div className='form-wrap pd1y pd2x'>
-        <h2>{e('settings')}</h2>
-        <HotkeySetting
-          {...hotkeyProps}
-        />
-        <div className='pd1b'>{e('onStartBookmarks')}</div>
-        <div className='pd2b'>
-          <StartSession
-            {...pops}
-          />
-        </div>
-        {this.renderProxy()}
-        {
-          this.renderNumber('sshReadyTimeout', {
-            step: 200,
-            min: 100,
-            cls: 'timeout-desc'
-          }, e('timeoutDesc'))
-        }
-        {
-          this.renderNumber('keepaliveInterval', {
-            step: 1000,
-            min: 0,
-            max: 20000000,
-            cls: 'keepalive-interval-desc',
-            extraDesc: '(ms)'
-          }, e('keepaliveIntervalDesc'))
-        }
+      <>
         {
           this.renderNumber('opacity', {
             step: 0.05,
@@ -546,10 +469,7 @@ export default class SettingCommon extends Component {
             cls: 'opacity'
           }, e('opacity'))
         }
-        {this.renderUpdateChannel()}
-        {this.renderUpdateSource()}
-
-        <div className='pd2b'>
+        <div className='sp-setting-field pd2b'>
           <span className='inline-title mg1r'>{e('uiThemes')}</span>
           <Select
             onChange={this.handleChangeTerminalTheme}
@@ -560,7 +480,8 @@ export default class SettingCommon extends Component {
               terminalThemes
                 .filter(d => d.id && d.name && d.uiThemeConfig)
                 .map(l => {
-                  const { id, name, uiThemeConfig } = l
+                  const { id, uiThemeConfig } = l
+                  const displayName = getThemeDisplayName(l, e)
                   const { main, text } = uiThemeConfig
                   const isDark = isColorDark(main)
                   const txt = isDark ? <MoonOutlined /> : <SunOutlined />
@@ -580,7 +501,7 @@ export default class SettingCommon extends Component {
                   )
                   return (
                     <Option key={id} value={id}>
-                      {tag} {name}
+                      {tag} {displayName}
                     </Option>
                   )
                 })
@@ -588,7 +509,7 @@ export default class SettingCommon extends Component {
           </Select>
         </div>
 
-        <div className='pd2b'>
+        <div className='sp-setting-field sp-setting-field-stacked pd2b'>
           <span className='inline-title mg1r'>{e('customCss')}</span>
           <TextareaConfirm
             onChange={this.handleCustomCss}
@@ -596,63 +517,142 @@ export default class SettingCommon extends Component {
             rows={3}
           />
         </div>
+      </>
+    )
+  }
 
-        <div className='pd2b'>
-          <span className='inline-title mg1r'>{e('language')}</span>
-          <Select
-            onChange={this.handleChangeLang}
-            value={language}
-            popupMatchSelectWidth={false}
-          >
-            {
-              langs.map(l => {
-                const { id, name } = l
-                return (
-                  <Option key={id} value={id}>{name}</Option>
-                )
-              })
-            }
-          </Select>
-          <Link className='mg1l' to={createEditLangLink(language)}>{e('edit')}</Link>
+  renderAdvancedFields = () => {
+    return (
+      <>
+        <div className='sp-setting-field sp-setting-field-stacked'>
+          <div className='pd1b'>{e('default')} {e('execWindows')}</div>
+          {this.renderTextExec('execWindows')}
         </div>
-        <div className='pd1b'>{e('default')} {e('execWindows')}</div>
-        {
-          this.renderTextExec('execWindows')
-        }
-        <div className='pd1b'>{e('default')} {e('execMac')}</div>
-        {
-          this.renderTextExec('execMac')
-        }
-        <div className='pd1b'>{e('default')} {e('execLinux')}</div>
-        {
-          this.renderTextExec('execLinux')
-        }
-        <div className='pd1b'>{e('keyword2FA')}</div>
-        {
-          this.renderText('keyword2FA')
-        }
-        {
-          [
-            'autoRefreshWhenSwitchToSftp',
-            'showHiddenFilesOnSftpStart',
-            'screenReaderMode',
-            'initDefaultTabOnStart',
-            'disableConnectionHistory',
-            'disableTransferHistory',
-            'checkUpdateOnStart',
-            'useSystemTitleBar',
-            'confirmBeforeExit',
-            'hideIP',
-            'allowMultiInstance',
-            'disableDeveloperTool',
-            'debug'
-          ].map(this.renderToggle)
-        }
+        <div className='sp-setting-field sp-setting-field-stacked'>
+          <div className='pd1b'>{e('default')} {e('execMac')}</div>
+          {this.renderTextExec('execMac')}
+        </div>
+        <div className='sp-setting-field sp-setting-field-stacked'>
+          <div className='pd1b'>{e('default')} {e('execLinux')}</div>
+          {this.renderTextExec('execLinux')}
+        </div>
+        <div className='sp-setting-field sp-setting-field-stacked'>
+          <div className='pd1b'>{e('keyword2FA')}</div>
+          {this.renderText('keyword2FA')}
+        </div>
+        <div className='sp-setting-toggle-grid'>
+          {
+            [
+              'autoRefreshWhenSwitchToSftp',
+              'showHiddenFilesOnSftpStart',
+              'screenReaderMode',
+              'initDefaultTabOnStart',
+              'disableConnectionHistory',
+              'disableTransferHistory',
+              'checkUpdateOnStart',
+              'useSystemTitleBar',
+              'confirmBeforeExit',
+              'hideIP',
+              'allowMultiInstance',
+              'disableDeveloperTool',
+              'debug'
+            ].map(this.renderToggle)
+          }
+        </div>
         {
           window.et.isWebApp ? null : <DeepLinkControl />
         }
         {this.renderLoginPass()}
         {this.renderReset()}
+      </>
+    )
+  }
+
+  render () {
+    const { ready } = this.state
+    if (!ready) {
+      return (
+        <div className='pd3 aligncenter'>
+          <LoadingOutlined />
+        </div>
+      )
+    }
+    const { props } = this
+    const {
+      hotkey,
+      theme,
+      customCss
+    } = props.config
+    const terminalThemes = props.store.getSidebarList(settingMap.terminalThemes)
+    const pops = {
+      onStartSessions: props.config.onStartSessions,
+      bookmarks: props.bookmarks,
+      bookmarkGroups: props.bookmarkGroups,
+      workspaces: props.store.workspaces,
+      onChangeStartSessions: this.onChangeStartSessions
+    }
+    const hotkeyProps = {
+      hotkey,
+      onSaveConfig: this.saveConfig
+    }
+    return (
+      <div className='form-wrap sp-settings-form'>
+        <header className='sp-settings-page-header'>
+          <h1>{e('generalSettings')}</h1>
+          <p>{e('generalSettingsDescription')}</p>
+        </header>
+        <SettingSection
+          title={e('startupAndConnection')}
+          description={e('startupAndConnectionDescription')}
+        >
+          <HotkeySetting
+            {...hotkeyProps}
+          />
+          <div className='sp-setting-field sp-setting-field-stacked'>
+            <div className='pd1b'>{e('onStartBookmarks')}</div>
+            <div className='pd2b'>
+              <StartSession
+                {...pops}
+              />
+            </div>
+          </div>
+          {
+            this.renderNumber('sshReadyTimeout', {
+              step: 200,
+              min: 100,
+              cls: 'timeout-desc'
+            }, e('timeoutDesc'))
+          }
+          {
+            this.renderNumber('keepaliveInterval', {
+              step: 1000,
+              min: 0,
+              max: 20000000,
+              cls: 'keepalive-interval-desc',
+              extraDesc: '(ms)'
+            }, e('keepaliveIntervalDesc'))
+          }
+        </SettingSection>
+        <SettingSection
+          title={e('networkAndUpdates')}
+          description={e('networkAndUpdatesDescription')}
+        >
+          {this.renderProxy()}
+          {this.renderUpdateChannel()}
+          {this.renderUpdateSource()}
+        </SettingSection>
+        <SettingSection
+          title={e('interfaceAndLanguage')}
+          description={e('interfaceAndLanguageDescription')}
+        >
+          {this.renderAppearanceFields(terminalThemes, theme, customCss)}
+        </SettingSection>
+        <SettingSection
+          title={e('advancedSettings')}
+          description={e('advancedSettingsDescription')}
+        >
+          {this.renderAdvancedFields()}
+        </SettingSection>
       </div>
     )
   }

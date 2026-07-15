@@ -12,6 +12,7 @@ import { formItemLayout } from '../../../common/form-layout'
 import { uniqBy } from 'lodash-es'
 import Password from '../../common/password'
 import Upload from '../../common/upload'
+import { createShellPilotMaxRule } from '../../../common/shellpilot-i18n-overrides'
 
 const { TextArea } = Input
 const FormItem = Form.Item
@@ -40,9 +41,7 @@ export default function renderAuth (props) {
       hasFeedback
       key={key}
       className='mg1b'
-      rules={[{
-        max: 13000, message: '13000 chars max'
-      }]}
+      rules={[createShellPilotMaxRule(e, 13000)]}
     >
       <FormItem noStyle name={key}>
         <TextArea
@@ -85,9 +84,7 @@ export default function renderAuth (props) {
         label={e('password')}
         name={formItemName}
         hasFeedback
-        rules={[{
-          max: 1024, message: '1024 chars max'
-        }]}
+        rules={[createShellPilotMaxRule(e, 1024)]}
       >
         <AutoComplete
           {...opts}
@@ -131,9 +128,7 @@ export default function renderAuth (props) {
       label={e('passphrase')}
       name='passphrase'
       hasFeedback
-      rules={[{
-        max: 1024, message: '1024 chars max'
-      }]}
+      rules={[createShellPilotMaxRule(e, 1024)]}
     >
       <Password
         placeholder={e('passphraseDesc')}

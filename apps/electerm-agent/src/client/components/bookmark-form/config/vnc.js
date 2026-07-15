@@ -3,6 +3,7 @@ import { terminalVncType } from '../../../common/constants.js'
 import { createBaseInitValues, getAuthTypeDefault } from '../common/init-values.js'
 import { isEmpty } from 'lodash-es'
 import { commonFields, connectionHoppingTab } from './common-fields.js'
+import { createShellPilotRequiredRule } from '../../../common/shellpilot-i18n-overrides.js'
 
 const e = window.translate
 
@@ -31,7 +32,7 @@ const vncConfig = {
         commonFields.category,
         commonFields.colorTitle,
         commonFields.labels,
-        { type: 'input', name: 'host', label: () => e('host'), rules: [{ required: true, message: e('host') + ' required' }] },
+        { type: 'input', name: 'host', label: () => e('host'), rules: [createShellPilotRequiredRule(e, 'host')] },
         commonFields.port,
         { type: 'switch', name: 'viewOnly', label: () => e('viewOnly'), valuePropName: 'checked' },
         { type: 'switch', name: 'clipViewport', label: () => e('clipViewport'), valuePropName: 'checked' },

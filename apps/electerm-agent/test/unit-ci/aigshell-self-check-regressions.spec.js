@@ -38,10 +38,10 @@ test('SSH form exposes a clear temporary connect action and localized feedback',
   const submitButtons = read('src/client/components/bookmark-form/common/submit-buttons.jsx')
   const formRenderer = read('src/client/components/bookmark-form/form-renderer.jsx')
 
-  assert.match(submitButtons, /仅连接/)
-  assert.match(submitButtons, /不保存配置/)
-  assert.match(formRenderer, /连接成功/)
-  assert.match(formRenderer, /连接失败/)
+  assert.match(submitButtons, /e\('temporaryConnection'\)/)
+  assert.match(submitButtons, /e\('temporaryConnectionHint'\)/)
+  assert.match(formRenderer, /e\('connectionSucceeded'\)/)
+  assert.match(formRenderer, /e\('connectionFailed'\)/)
 })
 
 test('AI chat copy is readable Simplified Chinese', () => {

@@ -3,7 +3,9 @@ import TreeListItem from './tree-list-item'
 import TreeItemOp from './tree-item-op'
 import { treeLevelIndent } from './tree-list-layout'
 import createName from '../../common/create-title'
+import { useRef } from 'react'
 import { Dropdown } from 'antd'
+import { contextMenuAlign, createContextMenuId } from '../common/context-menu-props'
 import { copy } from '../../common/clipboard'
 import {
   buildBookmarkContextMenuItems,
@@ -11,7 +13,13 @@ import {
   formatBookmarkSshCommand
 } from './bookmark-context-menu'
 
+const e = window.translate
+
 export default function TreeListRow (props) {
+  const contextMenuIdRef = useRef()
+  if (!contextMenuIdRef.current) {
+    contextMenuIdRef.current = createContextMenuId('bookmark-menu')
+  }
   const {
     row,
     keyword,
@@ -95,7 +103,9 @@ export default function TreeListRow (props) {
     if (typeof window === 'undefined' || typeof window.confirm !== 'function') {
       return true
     }
-    return window.confirm(isGroup ? '确认删除这个分组？' : '确认删除这个连接？')
+    return window.confirm(isGroup
+      ? e('shellpilotBookmarkConfirmDeleteGroup')
+      : e('shellpilotBookmarkConfirmDeleteConnection'))
   }
 
   const onContextMenuAction = ({ key, domEvent }) => {
@@ -131,7 +141,7 @@ export default function TreeListRow (props) {
       return exportConnection(safeEvent(domEvent), item)
     }
     if (key === 'copyPublicInfo') {
-      return copy(formatBookmarkPublicInfo(item))
+      return copy(formatBookmarkPublicInfo(item, e))
     }
     if (key === 'copySshCommand') {
       return copy(formatBookmarkSshCommand(item))
@@ -144,14 +154,18 @@ export default function TreeListRow (props) {
   const contextMenuItems = buildBookmarkContextMenuItems({
     item,
     isGroup,
-    staticList
+    staticList,
+    translate: e
   })
   const dropdownProps = {
     menu: {
+      id: contextMenuIdRef.current,
       items: contextMenuItems,
       onClick: onContextMenuAction
     },
-    trigger: ['contextMenu']
+    trigger: ['contextMenu'],
+    align: contextMenuAlign,
+    overlayClassName: 'shellpilot-context-menu'
   }
 
   if (!isGroup) {

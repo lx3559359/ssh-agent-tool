@@ -4,6 +4,7 @@ import {
 } from 'antd'
 import renderAuth from '../bookmark-form/common/render-auth-ssh'
 import { formItemLayout } from '../../common/form-layout'
+import { createShellPilotMaxRule } from '../../common/shellpilot-i18n-overrides.js'
 
 const FormItem = Form.Item
 const e = window.translate
@@ -17,9 +18,7 @@ export default function ProfileFormSsh (props) {
         label={e('username')}
         hasFeedback
         name='username'
-        rules={[{
-          max: 128, message: '128 chars max'
-        }]}
+        rules={[createShellPilotMaxRule(e, 128)]}
       >
         <Input />
       </FormItem>

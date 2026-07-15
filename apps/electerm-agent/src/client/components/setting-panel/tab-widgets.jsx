@@ -15,18 +15,21 @@ export default function TabWidgets (props) {
   const {
     settingItem,
     listProps,
-    formProps
+    formProps,
+    languageVersion
   } = props
   return (
     <div
-      className='setting-tabs-profile'
+      className='setting-tabs-widgets'
     >
       <SettingCol>
         <WidgetList
           {...listProps}
+          languageVersion={languageVersion}
         />
         <WidgetControl
           {...formProps}
+          languageVersion={languageVersion}
           key={settingItem.id}
         />
       </SettingCol>

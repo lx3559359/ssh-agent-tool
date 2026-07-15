@@ -126,6 +126,7 @@ export default () => {
     // for settings related
     settingItem: initSettingItem([], settingMap.bookmarks),
     settingTab: settingMap.bookmarks, // setting tab
+    previewLanguage: '',
     bookmarkId: undefined,
     showModal: 0,
 

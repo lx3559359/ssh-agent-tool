@@ -7,6 +7,7 @@ import { CloseOutlined } from '@ant-design/icons'
 import classnames from 'classnames'
 import React, { useEffect } from 'react'
 import { createRoot } from 'react-dom/client'
+import { resolveShellPilotModalCopy } from '../../common/shellpilot-i18n-overrides.js'
 import './modal.styl'
 
 export default function Modal (props) {
@@ -117,15 +118,15 @@ export default function Modal (props) {
 Modal.displayName = 'Modal'
 
 function createModalInstance (type, options) {
+  const modalCopy = resolveShellPilotModalCopy(options, window.translate)
   const {
     title,
     content,
-    okText = 'OK',
-    cancelText = 'Cancel',
     onOk,
     onCancel,
     ...rest
   } = options
+  const { okText, cancelText } = modalCopy
 
   const container = document.createElement('div')
   document.body.appendChild(container)
@@ -189,15 +190,18 @@ function createModalInstance (type, options) {
 
   const update = (newOptions) => {
     const updatedOptions = { ...options, ...newOptions }
+    const updatedCopy = resolveShellPilotModalCopy(updatedOptions, window.translate)
     const {
       title: newTitle,
       content: newContent,
-      okText: newOkText = 'OK',
-      cancelText: newCancelText = 'Cancel',
       onOk: newOnOk,
       onCancel: newOnCancel,
       ...newRest
     } = updatedOptions
+    const {
+      okText: newOkText,
+      cancelText: newCancelText
+    } = updatedCopy
 
     const newHandleOk = () => {
       if (newOnOk) {

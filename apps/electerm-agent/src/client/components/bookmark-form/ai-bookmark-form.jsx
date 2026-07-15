@@ -26,12 +26,14 @@ import { fixBookmarkData } from './fix-bookmark-default.js'
 import generate from '../../common/id-with-stamp'
 import AiHistory, { addHistoryItem } from '../ai/ai-history.jsx'
 import { getItem, setItem } from '../../common/safe-local-storage'
+import { formatShellPilotTranslation } from '../../common/shellpilot-i18n-overrides.js'
 
 const STORAGE_KEY_DESC = 'ai_bookmark_description'
 const STORAGE_KEY_HISTORY = 'ai_bookmark_history'
 const EVENT_NAME_HISTORY = 'ai-bookmark-history-update'
 const { TextArea } = Input
 const e = window.translate
+const tf = (key, replacements) => formatShellPilotTranslation(e, key, replacements)
 
 function yieldToUI () {
   return new Promise(resolve => {
@@ -64,7 +66,7 @@ export default function AIBookmarkForm (props) {
     }
 
     if (!description.trim()) {
-      return message.warning(e('description') + ' required')
+      return message.warning(e('shellpilotDescriptionRequired'))
     }
 
     setLoading(true)
@@ -125,7 +127,7 @@ export default function AIBookmarkForm (props) {
       }
     } catch (error) {
       console.error('AI bookmark generation error:', error)
-      message.error('无法根据 AI 返回内容生成书签：' + error.message)
+      message.error(tf('shellpilotAiBookmarkGenerateFailed', { detail: error.message }))
     } finally {
       setLoading(false)
     }
@@ -194,7 +196,7 @@ export default function AIBookmarkForm (props) {
       message.success(e('Done'))
     } catch (error) {
       console.error('AI bookmark creation error:', error)
-      message.error('无法根据 AI 返回内容创建书签：' + error.message)
+      message.error(tf('shellpilotAiBookmarkCreateFailed', { detail: error.message }))
     } finally {
       setConfirmProgress(null)
     }

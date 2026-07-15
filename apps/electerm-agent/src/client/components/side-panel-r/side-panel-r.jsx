@@ -26,6 +26,8 @@ import {
   upsertAIProfile
 } from '../ai/ai-profiles'
 
+const e = window.translate
+
 export default memo(function RightSidePanel (
   {
     rightPanelVisible,
@@ -45,9 +47,9 @@ export default memo(function RightSidePanel (
 
   const isAI = rightPanelTab === 'ai'
   const activeAIConfig = isAI ? getActiveAIConfig(config) : config
-  const aiProfileOptions = isAI ? getAIProfileOptions(config) : []
+  const aiProfileOptions = isAI ? getAIProfileOptions(config, e) : []
   const aiModelOptions = isAI ? getAIModelOptions(activeAIConfig) : []
-  const aiModelStatus = isAI ? getAIModelStatus(activeAIConfig) : null
+  const aiModelStatus = isAI ? getAIModelStatus(activeAIConfig, e) : null
   const aiConfigured = Boolean(activeAIConfig.baseURLAI && activeAIConfig.apiKeyAI)
   const tag = isAI
     ? <Tag className='mg1r aigshell-ai-tag'>AI</Tag>

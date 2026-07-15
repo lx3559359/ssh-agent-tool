@@ -2,8 +2,10 @@ import React, { useState, useEffect } from 'react'
 import { Button, Tooltip, Tag, Space } from 'antd'
 import message from '../common/message'
 import { CheckCircleOutlined, CloseCircleOutlined } from '@ant-design/icons'
+import { formatShellPilotTranslation } from '../../common/shellpilot-i18n-overrides.js'
 
 const e = window.translate
+const tf = (key, replacements) => formatShellPilotTranslation(e, key, replacements)
 
 export default function DeepLinkControl () {
   const [loading, setLoading] = useState(false)
@@ -14,7 +16,7 @@ export default function DeepLinkControl () {
       const status = await window.pre.runGlobalAsync('checkProtocolRegistration')
       setRegistrationStatus(status)
     } catch (error) {
-      console.error('检查协议注册状态失败:', error)
+      console.error('Protocol registration status check failed:', error)
     }
   }
 
@@ -27,14 +29,14 @@ export default function DeepLinkControl () {
     try {
       const result = await window.pre.runGlobalAsync('registerDeepLink', true)
       if (result.registered) {
-        message.success('协议处理器已注册')
+        message.success(e('shellpilotProtocolRegistered'))
         await checkRegistrationStatus()
       } else {
-        message.warning(e('deepLinkSkipped') || '已跳过注册：' + result.reason)
+        message.warning(tf('shellpilotDeepLinkSkipped', { detail: result.reason }))
       }
     } catch (error) {
-      message.error('协议处理器注册失败')
-      console.error('协议注册失败:', error)
+      message.error(e('shellpilotProtocolRegistrationFailed'))
+      console.error('Protocol registration failed:', error)
     } finally {
       setLoading(false)
     }
@@ -44,11 +46,11 @@ export default function DeepLinkControl () {
     setLoading(true)
     try {
       await window.pre.runGlobalAsync('unregisterDeepLink')
-      message.success('协议处理器已取消注册')
+      message.success(e('shellpilotProtocolUnregistered'))
       await checkRegistrationStatus()
     } catch (error) {
-      message.error('协议处理器取消注册失败')
-      console.error('协议取消注册失败:', error)
+      message.error(e('shellpilotProtocolUnregisterFailed'))
+      console.error('Protocol unregistration failed:', error)
     } finally {
       setLoading(false)
     }
@@ -66,7 +68,9 @@ export default function DeepLinkControl () {
 
   const renderTooltipContent = () => {
     const protocols = ['ssh', 'telnet', 'rdp', 'vnc', 'serial', 'spice', 'aigshell', 'electerm', 'ftp']
-    const tip = `注册 AIGShell 以打开协议链接（${protocols.join('://, ')}://）`
+    const tip = tf('shellpilotProtocolTip', {
+      protocols: `${protocols.join('://, ')}://`
+    })
 
     return (
       <div>
@@ -77,7 +81,7 @@ export default function DeepLinkControl () {
         {registrationStatus && (
           <>
             <div className='pd1b'>
-              协议状态
+              {e('shellpilotProtocolStatus')}
             </div>
             <div className='pd1b'>
               <Space size='small' wrap>

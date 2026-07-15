@@ -5,8 +5,11 @@
 import { auto } from 'manate/react'
 import { pick } from 'lodash-es'
 import { Tabs, Spin } from 'antd'
-import { lazy, Suspense } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import SettingModal from './setting-wrap'
+import SettingHeader from './setting-header'
+import { searchSettings } from '../../common/setting-search-index'
+import { shouldHandleSettingsSearchShortcut } from '../../common/settings-search-interaction.js'
 import {
   settingMap,
   modals
@@ -23,12 +26,56 @@ const Loading = () => <div style={{ padding: 20, textAlign: 'center' }}><Spin />
 const e = window.translate
 
 export default auto(function SettingModalWrap (props) {
+  const { store } = props
+  const [query, setQuery] = useState('')
+  const [searchFocusRequest, setSearchFocusRequest] = useState(0)
+  const effectiveLanguage = store.previewLanguage || store.config.language
+  const searchResults = searchSettings(query)
+
+  useEffect(() => {
+    function handleSearchShortcut (event) {
+      if (!shouldHandleSettingsSearchShortcut(event)) {
+        return
+      }
+      event.preventDefault()
+      if (store.showModal !== modals.setting) {
+        setQuery('')
+        store.openSetting()
+        setSearchFocusRequest(value => value + 1)
+      }
+    }
+
+    window.addEventListener('keydown', handleSearchShortcut)
+    return () => window.removeEventListener('keydown', handleSearchShortcut)
+  }, [store])
+
   const selectItem = (item) => {
     window.store.setSettingItem(item)
   }
 
+  function openSearchResult (result = searchResults[0]) {
+    if (!result) {
+      return
+    }
+    setQuery('')
+    store.handleChangeSettingTab(result.tab)
+    if (!result.itemId) {
+      return
+    }
+    const item = store.getSidebarList(result.tab)
+      .find(item => item.id === result.itemId)
+    if (item) {
+      store.setSettingItem(item)
+    }
+  }
+
+  function handleClose () {
+    store.previewLanguage = ''
+    setQuery('')
+    store.hideSettingModal()
+  }
+
   function renderTabs () {
-    const { store } = props
     const tabsShouldConfirmDel = [
       settingMap.bookmarks,
       settingMap.terminalThemes
@@ -102,7 +149,7 @@ export default auto(function SettingModalWrap (props) {
       },
       {
         key: settingMap.widgets,
-        label: <>工具中心 <sup>预览</sup></>,
+        label: <>{e('widgets')} <sup>{e('shellpilotPreview')}</sup></>,
         children: null
       }
     ]
@@ -117,11 +164,24 @@ export default auto(function SettingModalWrap (props) {
     }
     return (
       <>
+        <SettingHeader
+          store={store}
+          languages={window.et.langs || []}
+          query={query}
+          searchResults={searchResults}
+          searchFocusRequest={searchFocusRequest}
+          onSearchFocusHandled={() => setSearchFocusRequest(0)}
+          onQueryChange={setQuery}
+          onSearch={openSearchResult}
+          onSelectSearchResult={openSearchResult}
+          onClose={handleClose}
+        />
         <Tabs
           {...tabsProps}
         />
         <Suspense fallback={<Loading />}>
           <TabQuickCommands
+            languageVersion={effectiveLanguage}
             listProps={props0}
             settingItem={settingItem}
             formProps={formProps}
@@ -129,18 +189,21 @@ export default auto(function SettingModalWrap (props) {
             settingTab={settingTab}
           />
           <TabBookmarks
+            languageVersion={effectiveLanguage}
             treeProps={treeProps}
             settingItem={settingItem}
             formProps={formProps}
             settingTab={settingTab}
           />
           <TabSettings
+            languageVersion={effectiveLanguage}
             listProps={props0}
             settingItem={settingItem}
             settingTab={settingTab}
             store={store}
           />
           <TabThemes
+            languageVersion={effectiveLanguage}
             listProps={props0}
             settingItem={settingItem}
             formProps={formProps}
@@ -148,6 +211,7 @@ export default auto(function SettingModalWrap (props) {
             settingTab={settingTab}
           />
           <TabProfiles
+            languageVersion={effectiveLanguage}
             listProps={props0}
             settingItem={settingItem}
             formProps={formProps}
@@ -155,6 +219,7 @@ export default auto(function SettingModalWrap (props) {
             settingTab={settingTab}
           />
           <TabWidgets
+            languageVersion={effectiveLanguage}
             listProps={props0}
             settingItem={settingItem}
             formProps={formProps}
@@ -168,7 +233,6 @@ export default auto(function SettingModalWrap (props) {
 
   const {
     showModal,
-    hideSettingModal,
     innerWidth,
     useSystemTitleBar
   } = props.store
@@ -178,7 +242,7 @@ export default auto(function SettingModalWrap (props) {
   }
   return (
     <SettingModal
-      onCancel={hideSettingModal}
+      onCancel={handleClose}
       visible={show}
       useSystemTitleBar={useSystemTitleBar}
       innerWidth={innerWidth}

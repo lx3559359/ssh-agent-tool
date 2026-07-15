@@ -84,23 +84,29 @@ test('AI model status reports real tested state instead of configured-only state
     getAIModelStatus
   } = await import(profilesUrl)
 
-  assert.equal(getAIModelStatus({}).status, 'unconfigured')
+  const zh = key => ({
+    shellpilotAiUnconfigured: '未配置',
+    shellpilotAiPending: '待测试',
+    shellpilotAiAvailable: '可用',
+    shellpilotAiError: '异常'
+  })[key] || key
+  assert.equal(getAIModelStatus({}, zh).status, 'unconfigured')
   assert.equal(getAIModelStatus({
     baseURLAI: 'https://api.example.com',
     apiKeyAI: 'sk-example'
-  }).status, 'pending')
+  }, zh).status, 'pending')
   assert.equal(getAIModelStatus({
     baseURLAI: 'https://api.example.com',
     apiKeyAI: 'sk-example',
     aiStatus: 'available',
     aiStatusMessage: '测试连接成功'
-  }).label, '可用')
+  }, zh).label, '可用')
   assert.equal(getAIModelStatus({
     baseURLAI: 'https://api.example.com',
     apiKeyAI: 'sk-example',
     aiStatus: 'error',
     aiStatusMessage: '模型不存在'
-  }).label, '异常')
+  }, zh).label, '异常')
 })
 
 test('AI profiles persist fetched model lists and expose model switch options', async () => {
@@ -152,6 +158,55 @@ test('AI profile selector shows only config names while model selector keeps mod
   ])
 })
 
+test('AI profile migration restores technical name fallbacks without persisting localized display copy', async () => {
+  const {
+    migrateAIProfiles,
+    getAIProfileOptions
+  } = await import(profilesUrl)
+  const source = {
+    activeAIProfileId: 'model-profile',
+    aiProfiles: [
+      {
+        id: 'model-profile',
+        nameAI: '',
+        modelAI: 'deepseek-chat',
+        baseURLAI: 'https://api.deepseek.com'
+      },
+      {
+        id: 'url-profile',
+        nameAI: '   ',
+        modelAI: '',
+        baseURLAI: 'https://relay.example.com/v1'
+      },
+      {
+        id: 'empty-profile',
+        nameAI: '',
+        modelAI: '',
+        baseURLAI: ''
+      }
+    ]
+  }
+  const migrated = migrateAIProfiles(source)
+  const translate = language => key => ({
+    zh_cn: { shellpilotAiDefaultConfiguration: 'AI 配置' },
+    en_us: { shellpilotAiDefaultConfiguration: 'AI Configuration' }
+  })[language][key] || key
+
+  assert.deepEqual(
+    migrated.aiProfiles.map(profile => profile.nameAI),
+    ['deepseek-chat', 'https://relay.example.com/v1', '']
+  )
+  assert.deepEqual(
+    getAIProfileOptions(migrated, translate('zh_cn')).map(option => option.label),
+    ['deepseek-chat', 'https://relay.example.com/v1', 'AI 配置']
+  )
+  assert.deepEqual(
+    getAIProfileOptions(migrated, translate('en_us')).map(option => option.label),
+    ['deepseek-chat', 'https://relay.example.com/v1', 'AI Configuration']
+  )
+  assert.equal(migrated.aiProfiles[2].nameAI, '')
+})
+
 test('AI config modal and chat are wired to active AI profile selection', () => {
   const modalSource = fs.readFileSync(
     path.resolve(__dirname, '../../src/client/components/ai/ai-config-modal.jsx'),
@@ -177,17 +232,17 @@ test('AI config modal and chat are wired to active AI profile selection', () => 
   assert.match(configSource, /saveProfileStatus/)
   assert.match(configSource, /aiStatus/)
   assert.match(configSource, /modelOptionsAI/)
-  assert.match(configSource, /模型 API 快速配置/)
-  assert.match(configSource, /完整说明请查看顶部“帮助”/)
-  assert.match(configSource, /拉取模型/)
+  assert.match(configSource, /shellpilotAiQuickSetup/)
+  assert.match(configSource, /shellpilotAiQuickSetupDescription/)
+  assert.match(configSource, /shellpilotAiLoadModels/)
   assert.doesNotMatch(configSource, /ai-config-field-guide/)
-  assert.match(configSource, /管理多组 API \/ 中转站配置/)
-  assert.match(configSource, /快速填入常见官方模型或中转站地址/)
-  assert.match(configSource, /给当前 API 起一个便于识别的名字/)
-  assert.match(configSource, /可填写基础地址/)
-  assert.match(configSource, /特殊网关才需要手动指定路径/)
-  assert.match(configSource, /不同服务商和中转站的 Key 需要分别配置/)
-  assert.match(configSource, /仅影响模型 API 网络请求/)
+  assert.match(configSource, /shellpilotAiApiConfigurationExtra/)
+  assert.match(configSource, /shellpilotAiProviderTemplateExtra/)
+  assert.match(configSource, /shellpilotAiConfigurationNameExtra/)
+  assert.match(configSource, /shellpilotAiApiAddressHelp/)
+  assert.match(configSource, /shellpilotAiApiPathHelp/)
+  assert.match(configSource, /shellpilotAiApiKeyExtra/)
+  assert.match(configSource, /shellpilotAiProxyExtra/)
   assert.match(chatSource, /getActiveAIConfig/)
   assert.doesNotMatch(chatSource, /handleActiveAIProfileChange/)
   assert.doesNotMatch(chatSource, /className='ai-profile-select'/)

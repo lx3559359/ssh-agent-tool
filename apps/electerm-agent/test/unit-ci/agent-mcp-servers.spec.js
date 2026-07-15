@@ -112,5 +112,5 @@ test('AI settings form exposes external MCP server management fields', () => {
   assert.match(source, /name:\s*'command'/)
   assert.match(source, /name:\s*'url'/)
   assert.match(source, /name=\{\[name,\s*'disabled'\]\}/)
-  assert.match(source, /新增 MCP Server/)
+  assert.match(source, /e\('shellpilotAiAddMcpServer'\)/)
 })

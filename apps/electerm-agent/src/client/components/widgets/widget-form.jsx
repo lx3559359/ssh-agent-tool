@@ -9,9 +9,10 @@ import { nanoid } from 'nanoid'
 import BatchOpEditor from '../batch-op/batch-op-editor'
 import { getConfigDisplay, getWidgetDisplay } from './widget-i18n'
 
-export default function WidgetForm ({ widget, onSubmit, loading, hasRunningInstance }) {
+export default function WidgetForm ({ widget, onSubmit, loading, hasRunningInstance, languageVersion }) {
   const [form] = Form.useForm()
   const [showDownloadWarning, setShowDownloadWarning] = useState(false)
+  const e = window.translate
 
   useEffect(() => {
     let timer
@@ -37,8 +38,8 @@ export default function WidgetForm ({ widget, onSubmit, loading, hasRunningInsta
   const { configs, type, singleInstance } = info
   const isInstanceWidget = type === 'instance'
   const isFrontendWidget = type === 'frontend'
-  const meta = getWidgetDisplay(widget)
-  const txt = meta.actionText || (isInstanceWidget ? '启动服务' : '运行工具')
+  const meta = getWidgetDisplay(widget, e)
+  const txt = meta.actionText || e(isInstanceWidget ? 'shellpilotWidgetStartService' : 'shellpilotWidgetRunTool')
   const isDisabled = loading || (singleInstance && hasRunningInstance)
 
   const handleSubmit = async (values) => {
@@ -47,7 +48,7 @@ export default function WidgetForm ({ widget, onSubmit, loading, hasRunningInsta
 
   const renderFormItem = (config) => {
     const { name, type, choices, showGenerator } = config
-    const display = getConfigDisplay(config)
+    const display = getConfigDisplay(config, e)
     const { label, description } = display
     let control = null
 
@@ -72,7 +73,7 @@ export default function WidgetForm ({ widget, onSubmit, loading, hasRunningInsta
                 <Button
                   onClick={() => form.setFieldValue(name, 'ett_' + nanoid())}
                 >
-                  生成
+                  {e('shellpilotWidgetGenerate')}
                 </Button>
               </Space.Compact>
             </Form.Item>
@@ -133,7 +134,7 @@ export default function WidgetForm ({ widget, onSubmit, loading, hasRunningInsta
     }
     return (
       <Alert
-        title='首次使用可能需要准备依赖，请稍等。'
+        title={e('shellpilotWidgetDependencyWarning')}
         type='warning'
         showIcon
         className='mg1t'
@@ -147,11 +148,11 @@ export default function WidgetForm ({ widget, onSubmit, loading, hasRunningInsta
   }, {})
 
   if (isFrontendWidget && info.name === 'Batch Operation') {
-    return <BatchOpEditor widget={widget} />
+    return <BatchOpEditor widget={widget} languageVersion={languageVersion} />
   }
 
   return (
-    <div className='widget-form'>
+    <div className='widget-form' data-language-version={languageVersion}>
       <div className='widget-form-hero'>
         <div>
           <div className='widget-form-kicker'>{meta.scene} / {meta.typeLabel}</div>
@@ -178,7 +179,7 @@ export default function WidgetForm ({ widget, onSubmit, loading, hasRunningInsta
         <Form.Item
           {...tailFormItemLayout}
         >
-          <Tooltip title={isDisabled && singleInstance && hasRunningInstance ? '该服务已经运行，当前只允许启动一个实例' : ''}>
+          <Tooltip title={isDisabled && singleInstance && hasRunningInstance ? e('shellpilotWidgetSingleInstanceWarning') : ''}>
             <Button
               type='primary'
               htmlType='submit'

@@ -15,6 +15,10 @@ import { getKeysTakenData } from '../shortcuts/shortcut-utils'
 import deepCopy from 'json-deep-copy'
 import templates from './templates'
 import HelpIcon from '../common/help-icon'
+import {
+  createShellPilotMaxRule,
+  createShellPilotRequiredRule
+} from '../../common/shellpilot-i18n-overrides.js'
 
 const FormItem = Form.Item
 const { Option } = Select
@@ -117,11 +121,10 @@ export default function QuickCommandForm (props) {
       >
         <FormItem
           label={e('quickCommandName')}
-          rules={[{
-            max: 60, message: '60 chars max'
-          }, {
-            required: true, message: 'Name required'
-          }]}
+          rules={[
+            createShellPilotMaxRule(e, 60),
+            createShellPilotRequiredRule(e, 'quickCommandName')
+          ]}
           hasFeedback
           name='name'
         >

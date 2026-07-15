@@ -3,6 +3,7 @@ import { terminalSerialType, commonBaudRates, commonDataBits, commonStopBits, co
 import defaultSettings from '../../../common/default-setting.js'
 import { createBaseInitValues, getTerminalBackgroundDefaults } from '../common/init-values.js'
 import { commonFields } from './common-fields.js'
+import { createShellPilotRequiredRule } from '../../../common/shellpilot-i18n-overrides.js'
 
 const e = window.translate
 
@@ -36,11 +37,11 @@ const serialConfig = {
         commonFields.category,
         commonFields.colorTitle,
         commonFields.labels,
-        { type: 'serialPathSelector', name: 'path', label: 'path', rules: [{ required: true, message: 'path required' }] },
+        { type: 'serialPathSelector', name: 'path', label: () => e('path'), rules: [createShellPilotRequiredRule(e, 'path')] },
         {
           type: 'autocomplete',
           name: 'baudRate',
-          label: 'baudRate',
+          label: () => e('shellpilotSerialBaudRate'),
           options: commonBaudRates.map(d => ({ value: d.toString(), label: d.toString() })),
           normalize: (value) => {
             if (value === '' || value == null) {
@@ -50,16 +51,16 @@ const serialConfig = {
             return isNaN(numValue) ? undefined : numValue
           }
         },
-        { type: 'select', name: 'dataBits', label: 'dataBits', options: commonDataBits.map(d => ({ value: d, label: d })) },
-        { type: 'select', name: 'stopBits', label: 'stopBits', options: commonStopBits.map(d => ({ value: d, label: d })) },
-        { type: 'select', name: 'parity', label: 'parity', options: commonParities.map(d => ({ value: d, label: d })) },
-        { type: 'switch', name: 'lock', label: 'lock', valuePropName: 'checked' },
-        { type: 'switch', name: 'rtscts', label: 'rtscts', valuePropName: 'checked' },
-        { type: 'switch', name: 'xon', label: 'xon', valuePropName: 'checked' },
-        { type: 'switch', name: 'xoff', label: 'xoff', valuePropName: 'checked' },
-        { type: 'switch', name: 'xany', label: 'xany', valuePropName: 'checked' },
-        { type: 'select', name: 'txLineEnding', label: 'txLineEnding', options: commonTxLineEndings.map(d => ({ value: d.value, label: d.label })) },
-        { type: 'select', name: 'rxLineEnding', label: 'rxLineEnding', options: commonRxLineEndings.map(d => ({ value: d.value, label: d.label })) },
+        { type: 'select', name: 'dataBits', label: () => e('shellpilotSerialDataBits'), options: commonDataBits.map(d => ({ value: d, label: d })) },
+        { type: 'select', name: 'stopBits', label: () => e('shellpilotSerialStopBits'), options: commonStopBits.map(d => ({ value: d, label: d })) },
+        { type: 'select', name: 'parity', label: () => e('shellpilotSerialParity'), options: commonParities.map(d => ({ value: d, label: d })) },
+        { type: 'switch', name: 'lock', label: () => e('shellpilotSerialLock'), valuePropName: 'checked' },
+        { type: 'switch', name: 'rtscts', label: () => e('shellpilotSerialRtsCts'), valuePropName: 'checked' },
+        { type: 'switch', name: 'xon', label: () => e('shellpilotSerialXon'), valuePropName: 'checked' },
+        { type: 'switch', name: 'xoff', label: () => e('shellpilotSerialXoff'), valuePropName: 'checked' },
+        { type: 'switch', name: 'xany', label: () => e('shellpilotSerialXany'), valuePropName: 'checked' },
+        { type: 'select', name: 'txLineEnding', label: () => e('shellpilotSerialTxLineEnding'), options: commonTxLineEndings.map(d => ({ value: d.value, label: d.label })) },
+        { type: 'select', name: 'rxLineEnding', label: () => e('shellpilotSerialRxLineEnding'), options: commonRxLineEndings.map(d => ({ value: d.value, label: d.label })) },
         commonFields.runScripts,
         commonFields.description,
         { type: 'input', name: 'type', label: 'type', hidden: true }

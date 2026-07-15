@@ -6,28 +6,79 @@ import {
   settingMap
 } from '../common/constants'
 import { convertTheme } from '../common/terminal-theme'
+import { normalizeTerminalThemeConfig } from '../common/shellpilot-theme-constraints.js'
+import { buildShellPilotBuiltInThemes } from '../common/shellpilot-ui-palettes.js'
 import {
   defaultTheme,
   defaultThemeLight
 } from '../common/theme-defaults'
 
+const shellPilotThemePrefix = 'shellpilot-'
+
+function isShellPilotUiTheme (id) {
+  return typeof id === 'string' && id.startsWith(shellPilotThemePrefix)
+}
+
+function getTerminalThemeId (config = {}) {
+  if (!isShellPilotUiTheme(config.theme)) {
+    return config.theme || config.terminalTheme || 'default'
+  }
+  return !isShellPilotUiTheme(config.terminalTheme) && config.terminalTheme
+    ? config.terminalTheme
+    : 'default'
+}
+
+function findTerminalTheme (themes, config) {
+  const terminalThemeId = getTerminalThemeId(config)
+  return themes.find(theme => theme?.id === terminalThemeId) ||
+    themes.find(theme => theme?.id === 'default')
+}
+
 export default Store => {
   Store.prototype.getTerminalThemes = function () {
+    const { store } = window
     const t1 = defaultTheme()
     const t2 = defaultThemeLight()
+    const builtInIds = buildShellPilotBuiltInThemes(t1.themeConfig)
+      .map(theme => theme.id)
+    const reservedIds = new Set([t1.id, t2.id, ...builtInIds])
+    const userThemes = store.getItems(settingMap.terminalThemes)
+      .filter(theme => {
+        if (!theme || !theme.id || reservedIds.has(theme.id)) {
+          return false
+        }
+        reservedIds.add(theme.id)
+        return true
+      })
+    const terminalTheme = findTerminalTheme([
+      t1,
+      t2,
+      ...userThemes,
+      ...(store.itermThemes || [])
+    ], store.config) || t1
+    const builtIns = buildShellPilotBuiltInThemes(terminalTheme.themeConfig)
     return [
       t1,
       t2,
-      ...window.store.getItems(settingMap.terminalThemes).filter(d => {
-        return d && d.id !== t1.id && d.id !== t2.id
-      })
+      ...builtIns,
+      ...userThemes
     ]
   }
 
   Store.prototype.setTheme = function (id) {
-    window.store.updateConfig({
-      theme: id
-    })
+    const { store } = window
+    const update = { theme: id }
+    if (isShellPilotUiTheme(id)) {
+      update.terminalTheme = getTerminalThemeId(store.config)
+    } else {
+      update.terminalTheme = id
+    }
+    store.updateConfig(update)
+  }
+
+  Store.prototype.setTerminalTheme = function (id) {
+    const terminalTheme = !isShellPilotUiTheme(id) && id ? id : 'default'
+    window.store.updateConfig({ terminalTheme })
   }
 
   Store.prototype.addTheme = function (theme) {
@@ -47,7 +98,8 @@ export default Store => {
   Store.prototype.getThemeConfig = function () {
     const { store } = window
     const all = store.getSidebarList(settingMap.terminalThemes)
-    return (all.find(d => d.id === store.config.theme) || {}).themeConfig || {}
+    const selected = findTerminalTheme(all, store.config)
+    return normalizeTerminalThemeConfig(selected?.themeConfig || {})
   }
 
   Store.prototype.fixThemes = function (themes) {

@@ -5,6 +5,34 @@
     padding 0 3px
 .transfer-list-card
   width calc(100vw - 48px)
+.transfer-list-card.shellpilot-context-menu.shellpilot-transfer-history-popover
+  box-sizing border-box
+  inset-inline-start auto !important
+  inset-inline-end 8px !important
+  width calc(100vw - 48px)
+  max-width calc(100vw - 48px)
+  max-height calc(100vh - 16px)
+  overflow visible
+  --antd-arrow-background-color var(--sp-surface-elevated)
+  .ant-popover-inner
+    box-sizing border-box
+    width 100%
+    max-width 100%
+    max-height calc(100vh - 16px)
+    overflow-x hidden
+    overflow-y auto
+    color var(--sp-text)
+    background var(--sp-surface-elevated)
+    border 1px solid var(--sp-border)
+    border-radius var(--sp-radius-overlay)
+    box-shadow var(--sp-shadow-overlay)
+  .ant-popover-inner-content,
+  .ant-table-wrapper
+    min-width 0
+    max-width 100%
+  .ant-table-content
+    max-width 100%
+    overflow-x auto
 .sftp-file
   max-width calc(50vw - 250px)
   overflow hidden
