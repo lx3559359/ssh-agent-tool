@@ -79,6 +79,7 @@ test('package smoke waits for the Electron process to fully exit before cleanup'
 
   let stopped = false
   const stopping = stopChild(child, {
+    platform: 'linux',
     graceMs: 100,
     forceMs: 100
   }).then(() => {
@@ -90,6 +91,93 @@ test('package smoke waits for the Electron process to fully exit before cleanup'
   await stopping
   assert.equal(stopped, true)
   assert.deepEqual(child.killCalls, ['SIGTERM'])
+})
+
+test('package smoke closes the complete Windows Electron process tree', async () => {
+  const child = new EventEmitter()
+  child.pid = 4321
+  child.exitCode = null
+  child.signalCode = null
+  child.kill = () => {
+    throw new Error('Windows should use taskkill for the process tree')
+  }
+  const killedPids = []
+
+  await stopChild(child, {
+    platform: 'win32',
+    forceMs: 100,
+    killWindowsProcessTree: async (pid) => {
+      killedPids.push(pid)
+      child.emit('error', new Error('transient process error'))
+      setTimeout(() => {
+        child.exitCode = 0
+        child.emit('close', 0, null)
+      }, 20)
+    }
+  })
+
+  assert.deepEqual(killedPids, [4321])
+  assert.equal(child.listenerCount('close'), 0)
+  assert.equal(child.listenerCount('error'), 0)
+})
+
+test('package smoke force closes a process that ignores graceful shutdown', async () => {
+  const child = new EventEmitter()
+  child.exitCode = null
+  child.signalCode = null
+  child.killCalls = []
+  child.kill = (signal = 'SIGTERM') => {
+    child.killCalls.push(signal)
+    if (signal === 'SIGKILL') {
+      setTimeout(() => {
+        child.signalCode = 'SIGKILL'
+        child.emit('close', null, 'SIGKILL')
+      }, 10)
+    }
+    return true
+  }
+
+  await stopChild(child, {
+    platform: 'linux',
+    graceMs: 10,
+    forceMs: 100
+  })
+
+  assert.deepEqual(child.killCalls, ['SIGTERM', 'SIGKILL'])
+})
+
+test('package smoke rejects a process that remains alive after force close', async () => {
+  const child = new EventEmitter()
+  child.exitCode = null
+  child.signalCode = null
+  child.kill = () => true
+
+  await assert.rejects(
+    stopChild(child, {
+      platform: 'linux',
+      graceMs: 5,
+      forceMs: 5
+    }),
+    /did not exit after force close/
+  )
+  assert.equal(child.listenerCount('close'), 0)
+  assert.equal(child.listenerCount('error'), 0)
+})
+
+test('package smoke rejects when a shutdown signal cannot be sent', async () => {
+  const child = new EventEmitter()
+  child.exitCode = null
+  child.signalCode = null
+  child.kill = () => false
+
+  await assert.rejects(
+    stopChild(child, {
+      platform: 'linux',
+      graceMs: 10,
+      forceMs: 10
+    }),
+    /failed to send graceful shutdown signal/i
+  )
 })
 
 test('package smoke environment isolates app data and disables gpu for CI stability', () => {

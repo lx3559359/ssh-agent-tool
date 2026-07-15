@@ -1,6 +1,6 @@
 const fs = require('fs')
 const path = require('path')
-const { spawn } = require('child_process')
+const { execFile, spawn } = require('child_process')
 const {
   appExecutableName,
   buildSmokeEnvironment,
@@ -36,44 +36,132 @@ async function waitForDatabases (paths, child) {
   return fs.existsSync(paths.mainDbPath) && fs.existsSync(paths.dataDbPath)
 }
 
-function waitForChildClose (child, waitMs) {
-  return new Promise(resolve => {
-    let settled = false
-    const finish = (closed) => {
-      if (settled) {
+function createChildCloseWaiter (child, waitMs) {
+  let resolvePromise
+  const promise = new Promise(resolve => {
+    resolvePromise = resolve
+  })
+  let lastError = null
+  let settled = false
+
+  const cleanup = () => {
+    clearTimeout(timer)
+    child.removeListener('close', onClose)
+    child.removeListener('error', onError)
+  }
+  const finish = (result) => {
+    if (settled) {
+      return
+    }
+    settled = true
+    cleanup()
+    resolvePromise(result)
+  }
+  const onClose = () => finish({ closed: true, error: lastError })
+  const onError = (error) => {
+    lastError = error
+  }
+
+  child.once('close', onClose)
+  child.on('error', onError)
+  const timer = setTimeout(() => finish({ closed: false, error: lastError }), waitMs)
+
+  return {
+    promise,
+    cancel: () => finish({ closed: false, error: lastError })
+  }
+}
+
+function killWindowsProcessTree (pid, execFileImpl = execFile) {
+  return new Promise((resolve, reject) => {
+    execFileImpl('taskkill.exe', [
+      '/PID',
+      String(pid),
+      '/T',
+      '/F'
+    ], {
+      windowsHide: true
+    }, (error) => {
+      if (error) {
+        reject(error)
         return
       }
-      settled = true
-      clearTimeout(timer)
-      child.removeListener('close', onClose)
-      child.removeListener('error', onError)
-      resolve(closed)
-    }
-    const onClose = () => finish(true)
-    const onError = () => finish(false)
-    const timer = setTimeout(() => finish(false), waitMs)
-    child.once('close', onClose)
-    child.once('error', onError)
+      resolve()
+    })
   })
 }
 
+function closeErrorDetail (result) {
+  return result.error && result.error.message
+    ? `: ${result.error.message}`
+    : ''
+}
+
 async function stopChild (child, {
+  platform = process.platform,
   graceMs = 1500,
-  forceMs = 5000
+  forceMs = 5000,
+  killWindowsProcessTree: killWindowsTree = killWindowsProcessTree
 } = {}) {
   if (child.exitCode !== null || child.signalCode !== null) {
     return
   }
 
-  const gracefulClose = waitForChildClose(child, graceMs)
-  child.kill()
-  if (await gracefulClose) {
+  if (platform === 'win32') {
+    if (!Number.isInteger(child.pid) || child.pid <= 0) {
+      throw new Error('Packaged client has no valid process id for Windows process tree shutdown.')
+    }
+
+    const closeWaiter = createChildCloseWaiter(child, forceMs)
+    try {
+      await killWindowsTree(child.pid)
+    } catch (error) {
+      closeWaiter.cancel()
+      throw new Error(`Failed to close packaged client process tree: ${error.message}`)
+    }
+
+    const result = await closeWaiter.promise
+    if (!result.closed) {
+      throw new Error(`Packaged client process tree did not exit after force close${closeErrorDetail(result)}`)
+    }
     return
   }
 
-  const forcedClose = waitForChildClose(child, forceMs)
-  child.kill('SIGKILL')
-  await forcedClose
+  const gracefulWaiter = createChildCloseWaiter(child, graceMs)
+  let gracefulSent
+  try {
+    gracefulSent = child.kill()
+  } catch (error) {
+    gracefulWaiter.cancel()
+    throw new Error(`Failed to send graceful shutdown signal: ${error.message}`)
+  }
+  if (!gracefulSent) {
+    gracefulWaiter.cancel()
+    throw new Error('Failed to send graceful shutdown signal.')
+  }
+
+  const gracefulResult = await gracefulWaiter.promise
+  if (gracefulResult.closed) {
+    return
+  }
+
+  const forcedWaiter = createChildCloseWaiter(child, forceMs)
+  let forceSent
+  try {
+    forceSent = child.kill('SIGKILL')
+  } catch (error) {
+    forcedWaiter.cancel()
+    throw new Error(`Failed to send force close signal: ${error.message}`)
+  }
+  if (!forceSent) {
+    forcedWaiter.cancel()
+    throw new Error('Failed to send force close signal.')
+  }
+
+  const forcedResult = await forcedWaiter.promise
+  if (!forcedResult.closed) {
+    throw new Error(`Packaged client did not exit after force close${closeErrorDetail(forcedResult)}`)
+  }
 }
 
 function cleanupSmokeDir (tmpRoot) {
