@@ -29,9 +29,19 @@ test('diagnostic target name tolerates a closed modal without a target', async (
   const { getDiagnosticTargetName } = await import(diagnosticPlanUrl)
 
   assert.equal(getDiagnosticTargetName(null), '异常目标')
+  assert.equal(getDiagnosticTargetName(undefined), '异常目标')
+  assert.equal(getDiagnosticTargetName({}), '异常目标')
   assert.equal(
     getDiagnosticTargetName({ data: { unit: 'nginx.service' } }),
     'nginx.service'
+  )
+  assert.equal(
+    getDiagnosticTargetName({ item: { service: 'sshd.service' } }),
+    'sshd.service'
+  )
+  assert.equal(
+    getDiagnosticTargetName({ name: 'Docker' }),
+    'Docker'
   )
 })
 
