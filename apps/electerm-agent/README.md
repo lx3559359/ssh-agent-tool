@@ -76,7 +76,7 @@ Open-sourced terminal/ssh/sftp/telnet/serialport/RDP/VNC/Spice/ftp client(linux,
 The original UI theme library remains available under **Settings > UI Themes**. ShellPilot also provides five built-in interface palettes: Ocean Blue, Jade Green, Cloud Indigo, Warm Amber, and Graphite Night.
 
 - **Preview** renders a palette temporarily inside the Theme Center preview area without changing or saving the global client theme. **Apply** persists the selected palette.
-- The active session tab, terminal canvas, and empty terminal area always keep the SSH-focused `#0E0F12` background in every UI palette and day/night mode.
+- The active session tab, terminal controls, terminal viewport/canvas, and empty terminal area always keep the SSH-focused `#0E0F12` background in every UI palette and day/night mode.
 - Terminal foreground, cursor, selection, standard ANSI colors, and bright ANSI colors remain adjustable in terminal theme settings.
 - The existing 14-language selector is retained. Simplified Chinese and English cover the ShellPilot settings, Theme Center, Tool Center, and context menus; language changes can be previewed inside Settings, then applied or cancelled before they are saved.
 - Configuration cards, context menus, and the Tool Center wrap or scroll at compact window sizes and zoom levels so translated labels and primary actions remain reachable.
