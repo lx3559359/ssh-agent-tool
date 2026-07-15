@@ -76,6 +76,11 @@ export default Store => {
     store.updateConfig(update)
   }
 
+  Store.prototype.setTerminalTheme = function (id) {
+    const terminalTheme = !isShellPilotUiTheme(id) && id ? id : 'default'
+    window.store.updateConfig({ terminalTheme })
+  }
+
   Store.prototype.addTheme = function (theme) {
     window.store.addItem(theme, settingMap.terminalThemes)
   }

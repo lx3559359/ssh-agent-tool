@@ -121,3 +121,61 @@ test('old persisted configs without terminalTheme keep a non-ShellPilot theme an
   legacyShellPilot.setTheme('shellpilot-graphite')
   assert.equal(legacyShellPilot.config.terminalTheme, 'default')
 })
+
+test('deleting the active terminal palette preserves the ShellPilot UI palette and switches terminal fallback first', async () => {
+  const customTheme = {
+    id: 'custom-terminal',
+    name: 'Custom Terminal',
+    themeConfig: { foreground: '#ABCDEF' }
+  }
+  const store = await createStore({
+    theme: 'shellpilot-ocean',
+    terminalTheme: customTheme.id
+  }, [customTheme])
+  const { deleteThemeSafely } = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/common/theme-preview-model.js'
+  )).href)
+  const themeTabSource = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/components/setting-panel/tab-themes.jsx'
+  ), 'utf8')
+
+  await deleteThemeSafely({
+    item: customTheme,
+    themes: store.getSidebarList('terminalThemes'),
+    currentThemeId: store.config.theme,
+    terminalThemeId: store.config.terminalTheme,
+    selectedThemeId: customTheme.id,
+    setTheme: id => store.setTheme(id),
+    setTerminalTheme: id => store.setTerminalTheme(id),
+    deleteTheme: item => store.delTheme(item)
+  })
+
+  assert.equal(store.config.theme, 'shellpilot-ocean')
+  assert.equal(store.config.terminalTheme, 'default')
+  assert.equal(store.terminalThemes.some(theme => theme.id === customTheme.id), false)
+  assert.match(themeTabSource, /terminalThemeId: store\.config\.terminalTheme/)
+  assert.match(themeTabSource, /setTerminalTheme:/)
+})
+
+test('failed active terminal fallback switch leaves the palette stored and referenced', async () => {
+  const { deleteThemeSafely } = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/common/theme-preview-model.js'
+  )).href)
+  const stored = [{ id: 'custom-terminal' }]
+  const terminalThemeId = 'custom-terminal'
+
+  await assert.rejects(deleteThemeSafely({
+    item: stored[0],
+    themes: [{ id: 'default' }, ...stored],
+    currentThemeId: 'shellpilot-ocean',
+    terminalThemeId,
+    setTerminalTheme: () => { throw new Error('terminal fallback failed') },
+    deleteTheme: item => stored.splice(stored.indexOf(item), 1)
+  }), /terminal fallback failed/)
+
+  assert.equal(terminalThemeId, 'custom-terminal')
+  assert.deepEqual(stored, [{ id: 'custom-terminal' }])
+})

@@ -80,29 +80,54 @@ function findDeletionFallback (themes, deletedId, currentThemeId) {
     remaining[0] || null
 }
 
+function findTerminalDeletionFallback (themes, deletedId) {
+  const remaining = Array.isArray(themes)
+    ? themes.filter(theme => {
+      return theme?.id &&
+        theme.id !== deletedId &&
+        !theme.id.startsWith('shellpilot-')
+    })
+    : []
+  return remaining.find(theme => theme.id === 'default') ||
+    remaining.find(theme => theme.id === 'defaultLight') ||
+    remaining.find(theme => !getThemeCapabilities(theme).delete) ||
+    remaining[0] || null
+}
+
 export async function deleteThemeSafely (options = {}) {
   const {
     item,
     themes,
     currentThemeId,
+    terminalThemeId,
     selectedThemeId,
     previewController,
     setTheme,
+    setTerminalTheme,
     deleteTheme,
     onSelect
   } = options
   if (!item?.id || typeof deleteTheme !== 'function') {
     throw new TypeError('A theme and deleteTheme callback are required')
   }
-  const fallback = findDeletionFallback(themes, item.id, currentThemeId)
+  const deletingCurrentTheme = currentThemeId === item.id
+  const deletingTerminalTheme = terminalThemeId === item.id
+  const fallback = deletingTerminalTheme && !deletingCurrentTheme
+    ? findTerminalDeletionFallback(themes, item.id)
+    : findDeletionFallback(themes, item.id, currentThemeId)
   if (previewController?.getPreviewThemeId?.() === item.id) {
     previewController.clear()
   }
-  if (currentThemeId === item.id) {
+  if (deletingCurrentTheme) {
     if (!fallback || typeof setTheme !== 'function') {
       throw new Error('Cannot delete the active theme without a fallback')
     }
     await setTheme(fallback.id)
+  } else if (deletingTerminalTheme) {
+    if (!fallback || typeof setTerminalTheme !== 'function') {
+      throw new Error('Cannot delete the active terminal theme without a fallback')
+    }
+    await setTerminalTheme(fallback.id)
   }
   await deleteTheme(item)
   if (selectedThemeId === item.id && fallback && typeof onSelect === 'function') {

@@ -9,6 +9,7 @@ import { lazy, Suspense, useEffect, useState } from 'react'
 import SettingModal from './setting-wrap'
 import SettingHeader from './setting-header'
 import { searchSettings } from '../../common/setting-search-index'
+import { shouldHandleSettingsSearchShortcut } from '../../common/settings-search-interaction.js'
 import {
   settingMap,
   modals
@@ -33,15 +34,15 @@ export default auto(function SettingModalWrap (props) {
 
   useEffect(() => {
     function handleSearchShortcut (event) {
-      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'k') {
+      if (!shouldHandleSettingsSearchShortcut(event)) {
         return
       }
       event.preventDefault()
       if (store.showModal !== modals.setting) {
         setQuery('')
         store.openSetting()
+        setSearchFocusRequest(value => value + 1)
       }
-      setSearchFocusRequest(value => value + 1)
     }
 
     window.addEventListener('keydown', handleSearchShortcut)

@@ -336,6 +336,10 @@ async function waitForPopupMotion (popup) {
 async function openInputMenu (page) {
   await openSettings(page)
   const input = page.locator('.setting-header input').first()
+  if (!await input.isVisible()) {
+    await page.locator('.setting-header-search-toggle').click()
+  }
+  await input.waitFor({ state: 'visible' })
   await input.fill('theme')
   await input.evaluate(element => element.setSelectionRange(0, element.value.length))
   await dispatchContextMenu(input)
@@ -381,6 +385,16 @@ async function openTerminalMenu (page) {
   const popup = page.locator('.shellpilot-context-menu.ant-dropdown:visible').last()
   await popup.waitFor()
   await waitForPopupMotion(popup)
+}
+
+async function ensureTwoTerminalTabs (page) {
+  await page.evaluate(() => {
+    const firstTab = window.store.tabs[0]
+    if (!firstTab) throw new Error('Terminal invariant fixture requires one source tab')
+    if (window.store.tabs.length < 2) window.store.duplicateTab(firstTab.id)
+  })
+  await expect(page.locator('.tabs.terminal-session-tabs .tab')).toHaveCount(2, { timeout: 20000 })
+  await expect(page.locator('.tabs.terminal-session-tabs .tab:not(.active)')).toHaveCount(1)
 }
 
 const surfaces = [
@@ -1105,15 +1119,51 @@ test('active terminal session tab keeps the locked SSH background', async ({ bro
     const page = electronApp.windows()[0] || await electronApp.firstWindow()
     await page.waitForFunction(() => window.store?.configLoaded === true, { timeout: 20000 })
     await page.locator('.term-wrap:visible').waitFor({ timeout: 20000 })
-    await page.evaluate(() => {
-      const firstTab = window.store.tabs[0]
-      if (!firstTab) throw new Error('Terminal invariant fixture requires one source tab')
-      if (window.store.tabs.length < 2) window.store.duplicateTab(firstTab.id)
-    })
-    await expect(page.locator('.tabs.terminal-session-tabs .tab')).toHaveCount(2, { timeout: 20000 })
-    await expect(page.locator('.tabs.terminal-session-tabs .tab:not(.active)')).toHaveCount(1)
+    await ensureTwoTerminalTabs(page)
     const terminal = await inspectTerminalInvariant(page)
     assertTerminalInvariant(terminal, { runner: browserName, surface: 'terminal-invariant' })
+  })
+})
+
+test('theme center deletes the active terminal palette without changing the ShellPilot UI palette', async ({ browserName }) => {
+  await runWithIsolatedApp('terminal-theme-deletion', async (electronApp) => {
+    const page = electronApp.windows()[0] || await electronApp.firstWindow()
+    await page.waitForFunction(() => window.store?.configLoaded === true, { timeout: 20000 })
+    await page.locator('.term-wrap:visible').waitFor({ timeout: 20000 })
+    await setWindowCase(electronApp, page, { width: 1100, height: 700 }, 1)
+    await resetSurface(page, 'en_us')
+    const themeId = `deletion-lifecycle-${Date.now()}`
+    await page.evaluate((id) => {
+      window.store.addTheme({
+        id,
+        name: 'Deletion Lifecycle Theme',
+        uiThemeConfig: { main: '#20252D', text: '#F4F7FB' },
+        themeConfig: { foreground: '#D7DEE8', background: '#FFFFFF' }
+      })
+      window.store.updateConfig({
+        theme: 'shellpilot-ocean',
+        terminalTheme: id
+      })
+      window.store.openTerminalThemes()
+    }, themeId)
+    const card = page.locator('.sp-theme-card').filter({ hasText: 'Deletion Lifecycle Theme' })
+    await expect(card).toBeVisible()
+    await card.getByRole('button', { name: 'Delete Deletion Lifecycle Theme' }).click()
+    await page.locator('.ant-popconfirm:visible')
+      .getByRole('button', { name: 'Delete', exact: true })
+      .click()
+    await expect(card).toBeHidden()
+
+    const state = await page.evaluate((id) => ({
+      theme: window.store.config.theme,
+      terminalTheme: window.store.config.terminalTheme,
+      stored: window.store.terminalThemes.some(theme => theme.id === id)
+    }), themeId)
+    expect(state, JSON.stringify({ runner: browserName, state })).toEqual({
+      theme: 'shellpilot-ocean',
+      terminalTheme: 'default',
+      stored: false
+    })
   })
 })
 
@@ -1125,15 +1175,75 @@ test('settings search supports visible results, keyboard navigation, preview lan
 
     await setWindowCase(electronApp, page, { width: 1100, height: 700 }, 1)
     await resetSurface(page, 'en_us')
+    const protectedShortcutEvents = await page.evaluate(() => {
+      const fixtures = [
+        ['input', Object.assign(document.createElement('input'), { type: 'text' })],
+        ['textarea', document.createElement('textarea')],
+        ['contenteditable', document.createElement('div')],
+        ['xterm', document.createElement('textarea')]
+      ]
+      fixtures[2][1].contentEditable = 'true'
+      fixtures[3][1].className = 'xterm-helper-textarea'
+      const results = {}
+      for (const [name, element] of fixtures) {
+        element.style.position = 'fixed'
+        element.style.left = '-9999px'
+        document.body.appendChild(element)
+        element.focus()
+        const event = new window.KeyboardEvent('keydown', {
+          key: 'k',
+          ctrlKey: true,
+          bubbles: true,
+          cancelable: true
+        })
+        element.dispatchEvent(event)
+        results[name] = event.defaultPrevented
+        element.remove()
+      }
+      const composing = new window.KeyboardEvent('keydown', {
+        key: 'k',
+        ctrlKey: true,
+        isComposing: true,
+        bubbles: true,
+        cancelable: true
+      })
+      document.body.dispatchEvent(composing)
+      results.composing = composing.defaultPrevented
+      return results
+    })
+    expect(protectedShortcutEvents).toEqual({
+      input: false,
+      textarea: false,
+      contenteditable: false,
+      xterm: false,
+      composing: false
+    })
+    expect(await page.locator('.setting-wrap').count()).toBe(0)
+
     await page.keyboard.press('Control+K')
     await page.locator('.setting-wrap').waitFor({ state: 'visible' })
     const searchInput = page.locator('.setting-header-search input')
     await expect(searchInput).toBeFocused()
+    await expect(searchInput).toHaveAttribute('role', 'combobox')
+    await expect(searchInput).toHaveAttribute('aria-expanded', 'false')
     await searchInput.fill('model')
     const results = page.locator('.setting-search-results[role="listbox"]')
     await expect(results).toBeVisible()
+    await expect(searchInput).toHaveAttribute('aria-expanded', 'true')
+    await expect(searchInput).toHaveAttribute('aria-controls', 'setting-search-results')
     await expect(results.getByRole('option')).toHaveCount(1)
     await expect(results.getByRole('option')).toHaveText('AI and Models')
+    await searchInput.press('ArrowDown')
+    await expect(results.getByRole('option')).toHaveAttribute('aria-selected', 'true')
+    const activeResultId = await results.getByRole('option').getAttribute('id')
+    await expect(searchInput).toHaveAttribute('aria-activedescendant', activeResultId)
+    await searchInput.press('ArrowUp')
+    await expect(results.getByRole('option')).toHaveAttribute('aria-selected', 'true')
+    await searchInput.press('Escape')
+    await expect(results).toBeHidden()
+    await expect(searchInput).toHaveAttribute('aria-expanded', 'false')
+    await searchInput.fill('model')
+    await expect(results).toBeVisible()
 
     await page.evaluate(() => { window.store.previewLanguage = 'zh_cn' })
     await expect(results.getByRole('option')).toHaveText('AI 与模型')
@@ -1152,6 +1262,8 @@ test('settings search supports visible results, keyboard navigation, preview lan
     await page.keyboard.press('Control+K')
     await expect(searchInput).toBeFocused()
     await searchInput.fill('theme')
+    await searchInput.press('ArrowDown')
+    await expect(page.locator('.setting-search-results [role="option"]')).toHaveAttribute('aria-selected', 'true')
     await searchInput.press('Enter')
     expect(await page.evaluate(() => window.store.settingTab)).toBe('terminalThemes')
 
@@ -1345,6 +1457,7 @@ test('real app covers the secondary UI visual acceptance matrix', async ({ brows
             }
             try {
               await resetSurface(page, language)
+              await ensureTwoTerminalTabs(page)
               const terminal = await inspectTerminalInvariant(page)
               assertTerminalInvariant(terminal, context)
             } catch (error) {
@@ -1372,6 +1485,7 @@ test('real app covers the secondary UI visual acceptance matrix', async ({ brows
           }
           try {
             await resetSurface(page, 'en_us')
+            await ensureTwoTerminalTabs(page)
             const terminal = await inspectTerminalInvariant(page)
             assertTerminalInvariant(terminal, context)
           } catch (error) {

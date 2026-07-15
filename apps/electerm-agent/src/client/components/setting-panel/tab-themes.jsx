@@ -33,6 +33,9 @@ export default function TabThemes (props) {
   function setSavedTheme (themeId) {
     return store.setTheme(themeId)
   }
+  function setSavedTerminalTheme (themeId) {
+    return store.setTerminalTheme(themeId)
+  }
   const controllerRef = useRef(null)
   if (!controllerRef.current) {
     controllerRef.current = createThemePreviewController({
@@ -106,9 +109,11 @@ export default function TabThemes (props) {
       item,
       themes,
       currentThemeId: store.config.theme,
+      terminalThemeId: store.config.terminalTheme,
       selectedThemeId: settingItem.id,
       previewController: controller,
       setTheme: setSavedTheme,
+      setTerminalTheme: setSavedTerminalTheme,
       deleteTheme: target => store.delTheme(target),
       onSelect: selectTheme
     })
