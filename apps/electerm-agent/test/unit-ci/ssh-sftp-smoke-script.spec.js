@@ -2,6 +2,7 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
+const { EventEmitter } = require('node:events')
 
 const root = path.resolve(__dirname, '../..')
 const scriptPath = path.join(root, 'build/bin/smoke-ssh-sftp.js')
@@ -125,5 +126,105 @@ test('invalid SSH smoke configuration exits as a preflight failure without expos
     const output = `${result.stdout}\n${result.stderr}`
     assert.equal(result.status, 2, output)
     assert.doesNotMatch(output, new RegExp(secret.trim()))
+  }
+})
+
+test('injected smoke secrets stay redacted after exec and cleanup failures', async () => {
+  const password = 'injected-password-not-in-process-env'
+  const privateKey = 'PRIVATE-KEY-CONTENT-MUST-NOT-LEAK'
+  const passphrase = 'PASSPHRASE-CONTENT-MUST-NOT-LEAK'
+  const output = []
+  const originalLog = console.log
+  const originalError = console.error
+  const originalExitCode = process.exitCode
+  const originalProcessPassword = process.env.SHELLPILOT_SSH_PASSWORD
+
+  class FailingClient extends EventEmitter {
+    connect () {
+      queueMicrotask(() => this.emit('ready'))
+    }
+
+    exec (command, callback) {
+      const phase = command.includes('rm -rf') ? 'cleanup' : 'exec'
+      callback(new Error(
+        `${phase} failed password=${password} privateKey=${privateKey} passphrase=${passphrase}`
+      ))
+    }
+
+    end () {
+      throw new Error(`close failed password=${password}`)
+    }
+  }
+
+  try {
+    process.env.SHELLPILOT_SSH_PASSWORD = 'different-process-password'
+    console.log = (...args) => output.push(args.join(' '))
+    console.error = (...args) => output.push(args.join(' '))
+
+    const summary = await smokeHelpers.runSmoke({
+      env: validEnv({ SHELLPILOT_SSH_PASSWORD: password }),
+      clientFactory: () => new FailingClient()
+    })
+    const serializedOutput = JSON.stringify(output)
+
+    assert.match(serializedOutput, /\[REDACTED\]/)
+    for (const secret of [password, privateKey, passphrase]) {
+      assert.doesNotMatch(serializedOutput, new RegExp(secret))
+    }
+
+    assert.equal(typeof summary, 'object')
+    assert.ok(summary.results.some(item => item.name === 'remote test directory setup'))
+    assert.ok(summary.results.some(item => item.name === 'remote test directory cleanup'))
+    assert.ok(summary.results.some(item => item.name === 'SSH connection close'))
+    const serializedSummary = JSON.stringify(summary)
+    assert.match(serializedSummary, /\[REDACTED\]/)
+    for (const secret of [password, privateKey, passphrase]) {
+      assert.doesNotMatch(serializedSummary, new RegExp(secret))
+    }
+  } finally {
+    console.log = originalLog
+    console.error = originalError
+    process.exitCode = originalExitCode
+    if (originalProcessPassword === undefined) {
+      delete process.env.SHELLPILOT_SSH_PASSWORD
+    } else {
+      process.env.SHELLPILOT_SSH_PASSWORD = originalProcessPassword
+    }
+  }
+})
+
+test('execCommand returns a redacted error object with explicit secret context', async () => {
+  const password = 'error-object-password'
+  const privateKey = 'error-object-private-key'
+  const passphrase = 'error-object-passphrase'
+  assert.equal(typeof smokeHelpers.createRedactor, 'function')
+  const redactor = smokeHelpers.createRedactor({ password })
+  const sourceError = Object.assign(new Error(
+    `failed password=${password} privateKey=${privateKey} passphrase=${passphrase}`
+  ), { code: 'EAUTH' })
+  const execImplementations = [
+    (command, callback) => callback(sourceError),
+    () => { throw sourceError }
+  ]
+
+  for (const exec of execImplementations) {
+    let receivedError
+    await assert.rejects(
+      smokeHelpers.execCommand({ exec }, 'true', 1000, redactor),
+      error => {
+        receivedError = error
+        return error.code === 'EAUTH'
+      }
+    )
+
+    const serialized = JSON.stringify({
+      message: receivedError.message,
+      stack: receivedError.stack,
+      code: receivedError.code
+    })
+    assert.match(serialized, /\[REDACTED\]/)
+    for (const secret of [password, privateKey, passphrase]) {
+      assert.doesNotMatch(serialized, new RegExp(secret))
+    }
   }
 })

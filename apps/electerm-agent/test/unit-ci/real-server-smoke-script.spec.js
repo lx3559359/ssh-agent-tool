@@ -437,7 +437,7 @@ test('real-server smoke flow covers SSH, SFTP, Unicode, large binary, and safety
   assert.match(source, /SHELLPILOT_SSH_TEST_DIR\s*\|\|\s*defaultTestDir/)
   assert.match(source, /connectWithValidatedScope\([\s\S]{0,100}config\.testDir,[\s\S]{0,100}\(\) => connect\(config/)
   assert.match(source, /createRemotePaths\(remoteTestDir\)/)
-  assert.match(source, /shellTest\(conn, remoteTestDir, config\.timeoutMs\)/)
+  assert.match(source, /shellTest\(conn, remoteTestDir, config\.timeoutMs, redactor\)/)
   assert.match(source, /mkdir -p -- \$\{shellQuote\(remoteTestDir\)\}/)
   assert.doesNotMatch(source, /user=root/)
 
