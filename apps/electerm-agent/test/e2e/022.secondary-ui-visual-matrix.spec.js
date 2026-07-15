@@ -3,6 +3,7 @@ const { tmpdir } = require('os')
 const { resolve, sep } = require('path')
 const { _electron: electron, test, expect } = require('@playwright/test')
 const appOptions = require('./common/app-options')
+const { acquireIsolatedApp } = require('./common/isolated-electron-app')
 
 const sizes = [
   { width: 590, height: 400 },
@@ -67,22 +68,48 @@ function assertSafeProfileRoot (profileRoot) {
 }
 
 async function launchIsolatedApp (label) {
-  const profileRoot = await fs.mkdtemp(resolve(tmpdir(), `${profilePrefix}${label}-`))
-  assertSafeProfileRoot(profileRoot)
-  const electronApp = await electron.launch(launchOptions(profileRoot))
-  const userDataPath = await electronApp.evaluate(({ app }) => app.getPath('userData'))
-  if (!resolve(userDataPath).startsWith(resolve(profileRoot) + sep)) {
-    await electronApp.close().catch(() => electronApp.process().kill())
-    throw new Error(`Electron ignored the isolated profile: ${JSON.stringify({ profileRoot, userDataPath })}`)
-  }
+  const { electronApp, profileRoot, userDataPath } = await acquireIsolatedApp({
+    createProfileRoot: () => fs.mkdtemp(resolve(tmpdir(), `${profilePrefix}${label}-`)),
+    validateProfileRoot: assertSafeProfileRoot,
+    launch: root => electron.launch(launchOptions(root)),
+    readUserDataPath: app => app.evaluate(({ app }) => app.getPath('userData')),
+    validateUserDataPath: (root, actualPath) => {
+      if (!resolve(actualPath).startsWith(resolve(root) + sep)) {
+        throw new Error(`Electron ignored the isolated profile: ${JSON.stringify({ profileRoot: root, userDataPath: actualPath })}`)
+      }
+    },
+    cleanup: closeIsolatedApp
+  })
   console.log(`SECONDARY_ISOLATED_PROFILE=${JSON.stringify({ label, profileRoot, userDataPath })}`)
   return { electronApp, profileRoot }
 }
 
 async function closeIsolatedApp (electronApp, profileRoot) {
-  await electronApp.close().catch(() => electronApp.process().kill())
-  assertSafeProfileRoot(profileRoot)
-  await fs.rm(profileRoot, { recursive: true, force: true })
+  let shutdownError
+  let removalError
+  if (electronApp) {
+    try {
+      await electronApp.close()
+    } catch (closeError) {
+      try {
+        electronApp.process().kill()
+      } catch (killError) {
+        killError.closeError = closeError
+        shutdownError = killError
+      }
+    }
+  }
+  try {
+    assertSafeProfileRoot(profileRoot)
+    await fs.rm(profileRoot, { recursive: true, force: true })
+  } catch (error) {
+    removalError = error
+  }
+  if (shutdownError) {
+    if (removalError) shutdownError.cleanupError = removalError
+    throw shutdownError
+  }
+  if (removalError) throw removalError
 }
 
 function expectedMatrixCounts () {
@@ -263,15 +290,20 @@ async function openBatch (page) {
 }
 
 async function dispatchContextMenu (locator) {
-  await locator.evaluate(element => {
+  return locator.evaluate(element => {
     const rect = element.getBoundingClientRect()
+    const point = {
+      x: Math.max(1, Math.min(window.innerWidth - 2, rect.left + Math.min(48, rect.width / 2))),
+      y: Math.max(1, Math.min(window.innerHeight - 2, rect.top + Math.min(32, rect.height / 2)))
+    }
     element.dispatchEvent(new MouseEvent('contextmenu', {
       bubbles: true,
       cancelable: true,
       button: 2,
-      clientX: Math.max(1, Math.min(window.innerWidth - 2, rect.left + Math.min(48, rect.width / 2))),
-      clientY: Math.max(1, Math.min(window.innerHeight - 2, rect.top + Math.min(32, rect.height / 2)))
+      clientX: point.x,
+      clientY: point.y
     }))
+    return point
   })
 }
 
@@ -314,7 +346,6 @@ async function ensureVisualBookmark (page) {
 }
 
 async function openBookmarkMenu (page) {
-  await ensureVisualBookmark(page)
   await dispatchContextMenu(
     page.locator(`.sidebar-panel-bookmarks .tree-item[data-item-id="${bookmarkId}"]`)
   )
@@ -342,7 +373,7 @@ const surfaces = [
   { name: 'advanced-theme-editor', selector: '#terminal-theme-form', open: openThemes },
   { name: 'tool-center', selector: '.widgets-shell', open: openWidgets },
   { name: 'batch-editor', selector: '.batch-op-editor', open: openBatch },
-  { name: 'bookmark-menu', selector: '.shellpilot-context-menu.ant-dropdown:visible', open: openBookmarkMenu, menu: true, dangerPolicy: 'menu-last' },
+  { name: 'bookmark-menu', selector: '.shellpilot-context-menu.ant-dropdown:visible', prepare: ensureVisualBookmark, open: openBookmarkMenu, menu: true, dangerPolicy: 'menu-last' },
   { name: 'terminal-menu', selector: '.shellpilot-context-menu.ant-dropdown:visible', open: openTerminalMenu, menu: true, dangerPolicy: 'semantic-group-last' },
   { name: 'input-menu', selector: '.shellpilot-context-menu.ant-dropdown:visible', open: openInputMenu, menu: true, dangerPolicy: 'none' }
 ]
@@ -627,8 +658,10 @@ async function inspectSurface (page, selector, menu, documentBaseline) {
       rootRect: rect.toJSON(),
       rootHorizontalClip: rect.left < -1 || rect.right > window.innerWidth + 1,
       menuViewportClip: Boolean(options.menu && (
-        rect.left < 7 || rect.right > window.innerWidth - 7 ||
-        rect.top < 7 || rect.bottom > window.innerHeight - 7
+        rect.left < -options.overflowTolerance ||
+        rect.right > window.innerWidth + options.overflowTolerance ||
+        rect.top < -options.overflowTolerance ||
+        rect.bottom > window.innerHeight + options.overflowTolerance
       )),
       menuScroll: menuElement
         ? {
@@ -949,9 +982,12 @@ function createMatrixStats () {
   }
 }
 
-async function runSurfaceCase (page, testInfo, failures, context, surface, stats, documentBaseline) {
+async function runSurfaceCase (page, testInfo, failures, context, surface, stats) {
   try {
     await resetSurface(page, context.language)
+    if (surface.prepare) await surface.prepare(page)
+    const documentBaseline = await inspectDocumentBaseline(page)
+    console.log(`SECONDARY_MAIN_CHROME_BASELINE=${JSON.stringify({ ...context, surface: surface.name, ...documentBaseline })}`)
     await surface.open(page)
     const snapshot = await inspectSurface(page, surface.selector, surface.menu, documentBaseline)
     const surfaceContext = { ...context, surface: surface.name }
@@ -987,22 +1023,16 @@ async function exerciseLanguageAndThemeState (page) {
   expect(initial.locales).toBe(14)
   const targetLanguage = initial.language === 'en_us' ? 'zh_cn' : 'en_us'
   const targetText = targetLanguage === 'en_us' ? 'English' : '简体中文'
-  const targetIndex = await page.evaluate((language) => {
-    return window.et.langs.findIndex(item => item.id === language)
-  }, targetLanguage)
-  expect(targetIndex).toBeGreaterThanOrEqual(0)
   const languageSelect = page.locator('.setting-header .ant-select')
+  const languageCombobox = languageSelect.getByRole('combobox')
   const chooseTargetOption = async () => {
-    const dropdown = page.locator('.ant-select-dropdown:visible')
-    if (!await dropdown.isVisible()) {
-      await languageSelect.click()
+    if (await languageCombobox.getAttribute('aria-expanded') !== 'true') {
+      await languageCombobox.click()
     }
-    await dropdown.waitFor({ state: 'visible', timeout: 5000 })
-    await dropdown.locator('.rc-virtual-list-holder').evaluate((holder, index) => {
-      holder.scrollTop = index * 32
-      holder.dispatchEvent(new Event('scroll', { bubbles: true }))
-    }, targetIndex)
-    const option = dropdown.locator('.ant-select-item-option').filter({ hasText: targetText }).first()
+    await expect(languageCombobox).toHaveAttribute('aria-expanded', 'true', { timeout: 5000 })
+    const option = page.getByRole('option', { name: targetText, exact: true })
+    await expect(option).toBeAttached({ timeout: 5000 })
+    await option.scrollIntoViewIfNeeded()
     await expect(option).toBeVisible({ timeout: 5000 })
     await option.click()
   }
@@ -1046,54 +1076,64 @@ test('active terminal session tab keeps the locked SSH background', async ({ bro
   }
 })
 
-test('terminal footer contains narrow widths with locally reachable controls', async ({ browserName }) => {
-  const { electronApp, profileRoot } = await launchIsolatedApp('terminal-footer')
+test('context menus keep pointer placement and compact long-menu reachability', async ({ browserName }) => {
+  const { electronApp, profileRoot } = await launchIsolatedApp('context-menu-placement')
   try {
     const page = electronApp.windows()[0] || await electronApp.firstWindow()
     await page.waitForFunction(() => window.store?.configLoaded === true, { timeout: 20000 })
     await page.locator('.term-wrap:visible').waitFor({ timeout: 20000 })
-    const footerSizes = [
-      { width: 1100, height: 700 },
-      { width: 820, height: 600 },
-      { width: 590, height: 400 },
-      { width: 472, height: 320 },
-      { width: 393, height: 267 }
-    ]
 
-    for (const size of footerSizes) {
-      await setWindowCase(electronApp, page, size, 1)
-      const metrics = await page.locator('.terminal-footer-flex').evaluate((footer) => {
-        const documentElement = document.documentElement
-        const footerRect = footer.getBoundingClientRect()
-        const status = footer.querySelector('.terminal-footer-status')
-        const lastControl = footer.querySelector('.terminal-footer-info:last-child')
-        footer.scrollLeft = footer.scrollWidth
-        const lastRect = lastControl.getBoundingClientRect()
-        const lastControlReachable = lastRect.left >= footerRect.left - 1 &&
-          lastRect.right <= footerRect.right + 1
-        footer.scrollLeft = 0
-        const statusRect = status.getBoundingClientRect()
-        return {
-          documentClientWidth: documentElement.clientWidth,
-          documentScrollWidth: documentElement.scrollWidth,
-          footerClientWidth: footer.clientWidth,
-          footerScrollWidth: footer.scrollWidth,
-          footerOverflowX: window.getComputedStyle(footer).overflowX,
-          statusReachable: statusRect.left >= footerRect.left - 1 && statusRect.left < footerRect.right,
-          lastControlReachable
-        }
-      })
-      const context = JSON.stringify({ runner: browserName, size, metrics })
-      expect(metrics.documentScrollWidth, context).toBeLessThanOrEqual(metrics.documentClientWidth + overflowTolerance)
-      expect(metrics.statusReachable, context).toBe(true)
-      expect(metrics.lastControlReachable, context).toBe(true)
-      if (size.width >= 820) {
-        expect(metrics.footerScrollWidth, context).toBeLessThanOrEqual(metrics.footerClientWidth + overflowTolerance)
-      } else {
-        expect(metrics.footerOverflowX, context).toBe('auto')
-        expect(metrics.footerScrollWidth, context).toBeGreaterThan(metrics.footerClientWidth)
+    await setWindowCase(electronApp, page, { width: 1100, height: 700 }, 1)
+    await resetSurface(page, 'en_us')
+    await openSettings(page)
+    const input = page.locator('.setting-header input').first()
+    await input.fill('theme')
+    await input.evaluate(element => element.setSelectionRange(0, element.value.length))
+    const pointer = await dispatchContextMenu(input)
+    const shortMenu = page.locator('.shellpilot-context-menu.ant-dropdown:visible').last()
+    await shortMenu.waitFor()
+    await waitForPopupMotion(shortMenu)
+    const shortRect = await shortMenu.evaluate(element => element.getBoundingClientRect().toJSON())
+    expect(shortRect.top, JSON.stringify({ runner: browserName, pointer, shortRect }))
+      .toBeGreaterThanOrEqual(pointer.y - 8)
+    expect(shortRect.top, JSON.stringify({ runner: browserName, pointer, shortRect }))
+      .toBeLessThanOrEqual(pointer.y + 24)
+
+    await resetSurface(page, 'en_us')
+    await setWindowCase(electronApp, page, { width: 590, height: 400 }, 1.5)
+    const baseline = await inspectDocumentBaseline(page)
+    await openTerminalMenu(page)
+    const longMenu = page.locator('.shellpilot-context-menu.ant-dropdown:visible').last()
+    const snapshot = await inspectSurface(page, '.shellpilot-context-menu.ant-dropdown:visible', true, baseline)
+    expect(snapshot.documentOverflow, JSON.stringify({ runner: browserName, snapshot })).toBe(false)
+    expect(snapshot.menuViewportClip, JSON.stringify({ runner: browserName, snapshot })).toBe(false)
+    expect(snapshot.menuScroll.scrollHeight, JSON.stringify({ runner: browserName, snapshot }))
+      .toBeGreaterThan(snapshot.menuScroll.clientHeight)
+    expect(snapshot.menuScroll.overflowY, JSON.stringify({ runner: browserName, snapshot })).toBe('auto')
+    const reachability = await longMenu.locator('.ant-dropdown-menu').evaluate(menu => {
+      const items = [...menu.querySelectorAll('[role="menuitem"]')]
+      const visibleInside = item => {
+        const itemRect = item.getBoundingClientRect()
+        const menuRect = menu.getBoundingClientRect()
+        return itemRect.top >= menuRect.top - 1 && itemRect.bottom <= menuRect.bottom + 1
       }
-    }
+      menu.scrollTop = 0
+      const firstReachable = visibleInside(items[0])
+      items.at(-1).scrollIntoView({ block: 'nearest' })
+      return {
+        itemCount: items.length,
+        firstReachable,
+        lastReachable: visibleInside(items.at(-1)),
+        scrollTop: menu.scrollTop,
+        maxScrollTop: menu.scrollHeight - menu.clientHeight
+      }
+    })
+    expect(reachability.itemCount, JSON.stringify({ runner: browserName, reachability })).toBeGreaterThan(1)
+    expect(reachability.firstReachable, JSON.stringify({ runner: browserName, reachability })).toBe(true)
+    expect(reachability.lastReachable, JSON.stringify({ runner: browserName, reachability })).toBe(true)
+    expect(reachability.scrollTop, JSON.stringify({ runner: browserName, reachability })).toBeGreaterThan(0)
+    expect(reachability.scrollTop, JSON.stringify({ runner: browserName, reachability }))
+      .toBeLessThanOrEqual(reachability.maxScrollTop + 1)
   } finally {
     await closeIsolatedApp(electronApp, profileRoot)
   }
@@ -1197,11 +1237,9 @@ test('real app covers the secondary UI visual acceptance matrix', async ({ brows
         for (const language of matrixLanguages) {
           const context = { matrix: 'dimension', runner, size: `${size.width}x${size.height}`, zoom, language }
           await resetSurface(page, language)
-          const documentBaseline = await inspectDocumentBaseline(page)
-          console.log(`SECONDARY_MAIN_CHROME_BASELINE=${JSON.stringify({ ...context, ...documentBaseline })}`)
           const failuresBeforeCase = failures.length
           for (const surface of surfaces) {
-            await runSurfaceCase(page, testInfo, failures, context, surface, stats, documentBaseline)
+            await runSurfaceCase(page, testInfo, failures, context, surface, stats)
             dimensionChecks += 1
           }
           try {
@@ -1226,11 +1264,9 @@ test('real app covers the secondary UI visual acceptance matrix', async ({ brows
         await setWindowCase(electronApp, page, size, 1)
         const context = { matrix: 'theme', runner, size: `${size.width}x${size.height}`, zoom: 1, language: 'en_us', theme }
         await resetSurface(page, 'en_us')
-        const documentBaseline = await inspectDocumentBaseline(page)
-        console.log(`SECONDARY_MAIN_CHROME_BASELINE=${JSON.stringify({ ...context, ...documentBaseline })}`)
         const failuresBeforeCase = failures.length
         for (const surface of surfaces) {
-          await runSurfaceCase(page, testInfo, failures, context, surface, stats, documentBaseline)
+          await runSurfaceCase(page, testInfo, failures, context, surface, stats)
           themeChecks += 1
         }
         try {

@@ -308,3 +308,25 @@ test('low viewport bookmarks stack inside a vertical scroller with two usable re
   assert.match(lowViewport[1], /\.setting-row-right[\s\S]*height auto[\s\S]*min-height 160px/)
   assert.doesNotMatch(lowViewport[1], /height calc\(100% - clamp/)
 })
+
+test('secondary UI work leaves the main terminal footer layout contract untouched', () => {
+  const footer = readClient('components/footer/footer.styl')
+  const flexBlock = footer.match(/\.terminal-footer-flex\n([\s\S]*?)\n\.terminal-footer-unit/)
+
+  assert.ok(flexBlock)
+  assert.doesNotMatch(flexBlock[1], /overflow-x|overflow-y|::-webkit-scrollbar/)
+  assert.doesNotMatch(flexBlock[1], /width 100%|max-width 100%/)
+})
+
+test('secondary surface overflow is compared with main chrome immediately before that surface opens', () => {
+  const matrix = readProject('test/e2e/022.secondary-ui-visual-matrix.spec.js')
+  const runner = matrix.match(/async function runSurfaceCase \([\s\S]*?\n}/)
+
+  assert.ok(runner)
+  const resetIndex = runner[0].indexOf('await resetSurface')
+  const baselineIndex = runner[0].indexOf('await inspectDocumentBaseline')
+  const openIndex = runner[0].indexOf('await surface.open')
+  assert.ok(resetIndex >= 0)
+  assert.ok(baselineIndex > resetIndex)
+  assert.ok(openIndex > baselineIndex)
+})
