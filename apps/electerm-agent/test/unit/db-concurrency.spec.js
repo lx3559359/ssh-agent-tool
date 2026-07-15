@@ -39,7 +39,8 @@ function createTestDb () {
     'bookmarks', 'bookmarkGroups', 'addressBookmarks',
     'terminalThemes', 'lastStates', 'data', 'quickCommands',
     'log', 'dbUpgradeLog', 'profiles', 'workspaces',
-    'history', 'terminalCommandHistory', 'aiChatHistory', 'autoRunWidgets'
+    'history', 'terminalCommandHistory', 'aiChatHistory',
+    'safetyOperations', 'agentTasks', 'autoRunWidgets'
   ]
 
   for (const table of tables) {
@@ -488,7 +489,8 @@ describe('SQLite DB concurrency (DatabaseSync)', function () {
     const dbNames = [
       'bookmarks', 'bookmarkGroups', 'addressBookmarks',
       'terminalThemes', 'lastStates', 'quickCommands',
-      'history', 'terminalCommandHistory', 'aiChatHistory', 'autoRunWidgets'
+      'history', 'terminalCommandHistory', 'aiChatHistory',
+      'safetyOperations', 'agentTasks', 'autoRunWidgets'
     ]
 
     const promises = dbNames.map((name, dbIdx) => {

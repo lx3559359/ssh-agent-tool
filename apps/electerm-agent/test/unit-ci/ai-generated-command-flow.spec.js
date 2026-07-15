@@ -59,9 +59,10 @@ test('confirmed AI commands send, wait, and report against one active tab', asyn
   }
   const store = {
     activeTabId: 'tab-active',
-    mcpSendTerminalCommand: async args => {
-      events.push(['send', args])
+    runSafetyCommand: async (command, options) => {
+      events.push(['safety', command, options])
       store.activeTabId = 'tab-switched-after-send'
+      return { sent: true, operationId: 'operation-1' }
     },
     mcpWaitForTerminalIdle: async args => {
       events.push(['wait', args])
@@ -87,9 +88,10 @@ test('confirmed AI commands send, wait, and report against one active tab', asyn
     /\u5386\u53f2\u547d\u4ee4\u3001\u8def\u5f84\u3001\u4ee4\u724c\u6216\u5176\u4ed6\u654f\u611f\u4fe1\u606f/
   )
   assert.deepEqual(events, [
-    ['send', {
-      command: 'systemctl status nginx',
-      tabId: 'tab-active'
+    ['safety', 'systemctl status nginx', {
+      tabId: 'tab-active',
+      source: 'agent',
+      title: 'AI 代码块'
     }],
     ['wait', {
       tabId: 'tab-active',
@@ -110,7 +112,10 @@ test('AI command result upload can be declined after execution', async () => {
   let resultConfirmation = ''
   const store = {
     activeTabId: 'tab-active',
-    mcpSendTerminalCommand: () => events.push('send'),
+    runSafetyCommand: async () => {
+      events.push('safety')
+      return { sent: true }
+    },
     mcpWaitForTerminalIdle: async () => {
       events.push('wait')
       return { output: 'secret-token' }
@@ -130,7 +135,7 @@ test('AI command result upload can be declined after execution', async () => {
 
   assert.equal(accepted, true)
   assert.match(resultConfirmation, /\u6700\u8fd1\u7ec8\u7aef\u8f93\u51fa/)
-  assert.deepEqual(events, ['send', 'wait'])
+  assert.deepEqual(events, ['safety', 'wait'])
 })
 
 test('confirmed AI command safely cancels without an active tab', async () => {
@@ -138,7 +143,7 @@ test('confirmed AI command safely cancels without an active tab', async () => {
   const events = []
   const store = {
     activeTabId: '',
-    mcpSendTerminalCommand: () => events.push('send'),
+    runSafetyCommand: () => events.push('safety'),
     mcpWaitForTerminalIdle: () => events.push('wait')
   }
 

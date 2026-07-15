@@ -26,6 +26,11 @@ import HelpCenterModal from './help-center-modal'
 import SafetyOperationCenterModal from './safety-operation-center-modal'
 import ServerStatusModal from '../server-status/server-status-modal'
 import { logoPath1, packInfo, statusMap } from '../../common/constants'
+import * as safetyTransactionStore from '../../common/safety-transactions/transaction-store.js'
+import {
+  commandOrphanRecoveryStartedAt,
+  recoverOrphanedCommandOperationsOnce
+} from '../../common/safety-transactions/command-orphan-recovery.js'
 import './aigshell-topbar.styl'
 
 export default auto(function AIGShellTopBar ({ store }) {
@@ -48,6 +53,15 @@ export default auto(function AIGShellTopBar ({ store }) {
     const openSafetyCenter = () => setShowSafetyCenter(true)
     window.addEventListener('shellpilot-open-safety-center', openSafetyCenter)
     return () => window.removeEventListener('shellpilot-open-safety-center', openSafetyCenter)
+  }, [])
+
+  useEffect(() => {
+    recoverOrphanedCommandOperationsOnce({
+      store: safetyTransactionStore,
+      startedAt: commandOrphanRecoveryStartedAt
+    }).catch(() => {
+      window.store.onError?.(new Error('后台安全事务启动恢复失败。'))
+    })
   }, [])
 
   function handleFastNew () {

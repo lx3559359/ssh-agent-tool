@@ -1,6 +1,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const path = require('node:path')
+const { EventEmitter } = require('node:events')
 
 const {
   appExecutableName,
@@ -10,7 +11,9 @@ const {
   validateSmokeResult
 } = require(path.resolve(__dirname, '../../build/bin/package-smoke-utils'))
 const {
-  parseArgs
+  killWindowsProcessTree,
+  parseArgs,
+  stopChild
 } = require(path.resolve(__dirname, '../../build/bin/package-smoke-test'))
 
 test('package smoke paths target the unpacked ShellPilot app and isolated data folder', () => {
@@ -57,6 +60,202 @@ test('package smoke cli parser accepts an explicit app path', () => {
     {
       app: 'D:\\AIGShell\\AIGShell.exe'
     }
+  )
+})
+
+test('package smoke waits for the Electron process to fully exit before cleanup', async () => {
+  const child = new EventEmitter()
+  child.exitCode = null
+  child.signalCode = null
+  child.killCalls = []
+  child.kill = (signal = 'SIGTERM') => {
+    child.killCalls.push(signal)
+    setTimeout(() => {
+      child.exitCode = 0
+      child.emit('exit', 0, null)
+      child.emit('close', 0, null)
+    }, 20)
+    return true
+  }
+
+  let stopped = false
+  const stopping = stopChild(child, {
+    platform: 'linux',
+    graceMs: 100,
+    forceMs: 100
+  }).then(() => {
+    stopped = true
+  })
+
+  await Promise.resolve()
+  assert.equal(stopped, false)
+  await stopping
+  assert.equal(stopped, true)
+  assert.deepEqual(child.killCalls, ['SIGTERM'])
+})
+
+test('package smoke closes the complete Windows Electron process tree', async () => {
+  const child = new EventEmitter()
+  child.pid = 4321
+  child.exitCode = null
+  child.signalCode = null
+  child.kill = () => {
+    throw new Error('Windows should use taskkill for the process tree')
+  }
+  const killedPids = []
+
+  await stopChild(child, {
+    platform: 'win32',
+    forceMs: 100,
+    killWindowsProcessTree: async (pid) => {
+      killedPids.push(pid)
+      child.emit('error', new Error('transient process error'))
+      setTimeout(() => {
+        child.exitCode = 0
+        child.emit('close', 0, null)
+      }, 20)
+    }
+  })
+
+  assert.deepEqual(killedPids, [4321])
+  assert.equal(child.listenerCount('close'), 0)
+  assert.equal(child.listenerCount('error'), 0)
+})
+
+test('package smoke invokes taskkill with process-tree force flags and timeout', async () => {
+  let invocation
+  await killWindowsProcessTree(4321, 2500, (command, args, options, callback) => {
+    invocation = { command, args, options }
+    callback(null)
+  })
+
+  assert.deepEqual(invocation, {
+    command: 'taskkill.exe',
+    args: ['/PID', '4321', '/T', '/F'],
+    options: {
+      windowsHide: true,
+      timeout: 2500,
+      killSignal: 'SIGKILL'
+    }
+  })
+})
+
+test('package smoke times out a hanging Windows taskkill operation', async () => {
+  const child = new EventEmitter()
+  child.pid = 4321
+  child.exitCode = null
+  child.signalCode = null
+
+  await assert.rejects(
+    stopChild(child, {
+      platform: 'win32',
+      forceMs: 10,
+      killWindowsProcessTree: () => new Promise(() => {})
+    }),
+    /process tree shutdown timed out/i
+  )
+  assert.equal(child.listenerCount('close'), 0)
+  assert.equal(child.listenerCount('error'), 0)
+})
+
+test('package smoke waits for close when exitCode is already available', async () => {
+  const child = new EventEmitter()
+  child.exitCode = 0
+  child.signalCode = null
+  child.kill = () => {
+    throw new Error('An exited process must only wait for close')
+  }
+
+  let stopped = false
+  const stopping = stopChild(child, {
+    platform: 'linux',
+    forceMs: 100
+  }).then(() => {
+    stopped = true
+  })
+  await Promise.resolve()
+  assert.equal(stopped, false)
+  child.emit('close', 0, null)
+  await stopping
+  assert.equal(stopped, true)
+})
+
+test('package smoke removes listeners when Windows taskkill fails', async () => {
+  const child = new EventEmitter()
+  child.pid = 4321
+  child.exitCode = null
+  child.signalCode = null
+
+  await assert.rejects(
+    stopChild(child, {
+      platform: 'win32',
+      forceMs: 100,
+      killWindowsProcessTree: async () => {
+        throw new Error('taskkill failed')
+      }
+    }),
+    /failed to close packaged client process tree/i
+  )
+  assert.equal(child.listenerCount('close'), 0)
+  assert.equal(child.listenerCount('error'), 0)
+})
+
+test('package smoke force closes a process that ignores graceful shutdown', async () => {
+  const child = new EventEmitter()
+  child.exitCode = null
+  child.signalCode = null
+  child.killCalls = []
+  child.kill = (signal = 'SIGTERM') => {
+    child.killCalls.push(signal)
+    if (signal === 'SIGKILL') {
+      setTimeout(() => {
+        child.signalCode = 'SIGKILL'
+        child.emit('close', null, 'SIGKILL')
+      }, 10)
+    }
+    return true
+  }
+
+  await stopChild(child, {
+    platform: 'linux',
+    graceMs: 10,
+    forceMs: 100
+  })
+
+  assert.deepEqual(child.killCalls, ['SIGTERM', 'SIGKILL'])
+})
+
+test('package smoke rejects a process that remains alive after force close', async () => {
+  const child = new EventEmitter()
+  child.exitCode = null
+  child.signalCode = null
+  child.kill = () => true
+
+  await assert.rejects(
+    stopChild(child, {
+      platform: 'linux',
+      graceMs: 5,
+      forceMs: 5
+    }),
+    /did not exit after force close/
+  )
+  assert.equal(child.listenerCount('close'), 0)
+  assert.equal(child.listenerCount('error'), 0)
+})
+
+test('package smoke rejects when a shutdown signal cannot be sent', async () => {
+  const child = new EventEmitter()
+  child.exitCode = null
+  child.signalCode = null
+  child.kill = () => false
+
+  await assert.rejects(
+    stopChild(child, {
+      platform: 'linux',
+      graceMs: 10,
+      forceMs: 10
+    }),
+    /failed to send graceful shutdown signal/i
   )
 })
 

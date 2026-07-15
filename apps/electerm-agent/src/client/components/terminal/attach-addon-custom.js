@@ -25,6 +25,8 @@ export default class AttachAddonCustom {
     this._passwordPromptDetected = false
     this._pendingEchoCheck = null
     this._echoCheckTimer = null
+    this._pendingTerminalEnter = null
+    this._terminalPastePending = false
   }
 
   _initBase = async () => {
@@ -83,6 +85,16 @@ export default class AttachAddonCustom {
   activate = async (terminal = this.term) => {
     await this._initBase()
     this.addSocketListener(this._socket, 'message', this.onMsg)
+
+    if (terminal.textarea?.addEventListener) {
+      terminal.textarea.addEventListener('paste', this._onTerminalPaste)
+      this._disposables.push({
+        dispose: () => terminal.textarea?.removeEventListener(
+          'paste',
+          this._onTerminalPaste
+        )
+      })
+    }
 
     if (this._bidirectional) {
       this._disposables.push(terminal.onData((data) => this.sendToServer(data)))
@@ -242,8 +254,7 @@ export default class AttachAddonCustom {
     term?.write(str)
   }
 
-  sendToServer = (data) => {
-    this._lastInputTime = Date.now()
+  _sendToServerDirect = (data) => {
     // Start echo detection when password prompt is suspected
     if (this._passwordPromptDetected && !this._pendingEchoCheck && data !== '\r' && data !== '\n' && data !== '\x03') {
       this._pendingEchoCheck = { char: data, time: Date.now() }
@@ -262,6 +273,86 @@ export default class AttachAddonCustom {
       this._echoCheckTimer = null
     }
     this._sendData(data)
+  }
+
+  _onTerminalPaste = () => {
+    this._terminalPastePending = true
+  }
+
+  submitSafetyCommand = (command, token) => {
+    if (!String(command || '').trim() || !String(token || '').trim()) {
+      return false
+    }
+    this._sendToServerDirect(`${command}\r`)
+    return true
+  }
+
+  sendToServer = (data) => {
+    this._lastInputTime = Date.now()
+    const parent = this.term?.parent
+    const isStandaloneEnter = data === '\r' || data === '\n'
+    const isPaste = isStandaloneEnter && this._terminalPastePending
+    if (!isStandaloneEnter && (this._pendingTerminalEnter ||
+      parent?.hasPendingSafetyCommand?.() === true)) {
+      this._pendingTerminalEnter = null
+      parent?.onTerminalSafetyInputChanged?.()
+    }
+    if (isStandaloneEnter || data === '\x03' || data === '\x15' ||
+      (typeof data === 'string' && /[\r\n]/.test(data))) {
+      this._terminalPastePending = false
+    }
+    if (!isStandaloneEnter || typeof parent?.beforeTerminalEnter !== 'function') {
+      return this._sendToServerDirect(data)
+    }
+    if (this._pendingTerminalEnter) return this._pendingTerminalEnter
+
+    const context = {
+      ...parent.getTerminalSafetyContext?.(),
+      passwordMode: this._passwordPromptDetected,
+      alternateBuffer: this.term?.buffer?.active?.type === 'alternate',
+      isPaste
+    }
+    let decision
+    try {
+      decision = parent.beforeTerminalEnter(
+        parent.getCurrentInput?.() || '',
+        context
+      )
+    } catch (error) {
+      parent.onTerminalSafetyError?.(error)
+      return
+    }
+
+    if (!decision || typeof decision.then !== 'function') {
+      if (decision?.sendNow === false) {
+        if (decision.clear) this._sendToServerDirect('\x15')
+        return
+      }
+      return this._sendToServerDirect(data)
+    }
+
+    const pending = Promise.resolve(decision)
+      .then(result => {
+        if (result?.sendNow) {
+          if (result.releaseToken &&
+            parent.consumeTerminalSafetyRelease?.(result.releaseToken) !== true) {
+            return
+          }
+          this._sendToServerDirect('\r')
+        } else if (result?.clear) {
+          this._sendToServerDirect('\x15')
+        }
+      })
+      .catch(error => {
+        parent.onTerminalSafetyError?.(error)
+      })
+      .finally(() => {
+        if (this._pendingTerminalEnter === pending) {
+          this._pendingTerminalEnter = null
+        }
+      })
+    this._pendingTerminalEnter = pending
+    return pending
   }
 
   _startKeepalive = () => {
@@ -323,6 +414,8 @@ export default class AttachAddonCustom {
     this._stopKeepalive()
     clearTimeout(this._echoCheckTimer)
     this._echoCheckTimer = null
+    this._pendingTerminalEnter = null
+    this._terminalPastePending = false
     this.term = null
     this._disposables.forEach(d => d.dispose())
     this._disposables.length = 0

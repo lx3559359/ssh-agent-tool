@@ -1,8 +1,12 @@
 import { Component } from 'react'
 import resolve from '../../common/resolve'
 import { typeMap } from '../../common/constants'
-import { refsStatic } from '../common/ref'
+import { refs, refsStatic } from '../common/ref'
 import Remote2RemoteHandler from './remote2remote-handler'
+import {
+  buildCrossHostSourceIdentity,
+  buildTransferSourceEndpointKey
+} from './file-transfer-safety.js'
 
 const handlerRefId = 'remote2remote-handlers'
 
@@ -24,20 +28,33 @@ export default class Remote2RemoteHandlers extends Component {
     this.handlers.clear()
   }
 
-  canHandle = ({ fromFile, targetHost }) => {
+  canHandle = ({ fromFile, targetTab }) => {
     return fromFile?.type === typeMap.remote &&
-      fromFile?.host &&
-      targetHost &&
-      fromFile.host !== targetHost &&
-      fromFile?.tabId
+      Boolean(fromFile?.tabId) &&
+      Boolean(targetTab?.id) &&
+      fromFile.tabId !== targetTab.id
   }
 
   createHandler = ({ fromFile, targetPathBase, targetTab }) => {
+    const sourceCapability = refs.get('sftp-' + fromFile.tabId)
+    if (!sourceCapability?.getSftpSafetyEndpoint) {
+      throw new Error('跨主机传输无法确认来源 SFTP 安全端点，已停止操作。')
+    }
+    const sourceEndpointKey = buildTransferSourceEndpointKey(
+      sourceCapability.getSftpSafetyEndpoint()
+    )
+    const sourceIdentity = buildCrossHostSourceIdentity({
+      sourceEndpointKey,
+      path: resolve(fromFile.path, fromFile.name),
+      file: fromFile
+    })
     const handler = new Remote2RemoteHandler({
       fromFile,
       toPath: resolve(targetPathBase, fromFile.name),
       sourceHost: fromFile.host,
       sourceTabId: fromFile.tabId,
+      sourceEndpointKey,
+      sourceIdentity,
       title: fromFile.title,
       tabType: fromFile.tabType,
       targetHost: targetTab.host,
@@ -59,10 +76,9 @@ export default class Remote2RemoteHandlers extends Component {
 
   onRemote2RemoteDrop = ({ fromFiles, toFile, targetTab }) => {
     const targetPathBase = resolve(toFile.path, toFile.name)
-    const targetHost = targetTab?.host
     let handled = false
     for (const fromFile of fromFiles) {
-      if (!this.canHandle({ fromFile, targetHost })) {
+      if (!this.canHandle({ fromFile, targetTab })) {
         continue
       }
       handled = true

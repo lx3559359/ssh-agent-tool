@@ -8,7 +8,21 @@ const fs = require('fs')
 const Datastore = require('@electerm/nedb')
 
 // Tables whose stored data values should be encrypted at rest
-const ENC_TABLES = new Set(['bookmarks', 'profiles', 'data', 'history', 'terminalCommandHistory', 'aiChatHistory'])
+const ENC_TABLES = new Set([
+  'bookmarks',
+  'profiles',
+  'data',
+  'history',
+  'terminalCommandHistory',
+  'aiChatHistory',
+  'safetyOperations',
+  'agentTasks'
+])
+
+const STRICT_ENC_TABLES = new Set([
+  'safetyOperations',
+  'agentTasks'
+])
 
 // Within the 'data' table, only this specific record is encrypted
 const DATA_ENC_ID = 'userConfig'
@@ -43,6 +57,8 @@ function createDb (appPath, defaultUserName, { enc, dec } = {}) {
     'history',
     'terminalCommandHistory',
     'aiChatHistory',
+    'safetyOperations',
+    'agentTasks',
     'autoRunWidgets'
   ]
 
@@ -80,6 +96,10 @@ function createDb (appPath, defaultUserName, { enc, dec } = {}) {
    */
   function needsEnc (dbName, id) {
     if (!enc) return false
+    return isEncryptedRecord(dbName, id)
+  }
+
+  function isEncryptedRecord (dbName, id) {
     if (dbName === 'data') return id === DATA_ENC_ID
     return ENC_TABLES.has(dbName)
   }
@@ -90,14 +110,32 @@ function createDb (appPath, defaultUserName, { enc, dec } = {}) {
    * serialised data field that was encrypted during writes.
    */
   function decryptDoc (dbName, doc) {
-    if (!dec || !doc || !needsEnc(dbName, doc._id)) return doc
+    if (!doc || !isEncryptedRecord(dbName, doc._id)) return doc
+    const hasEncryptedPayload = Object.prototype.hasOwnProperty.call(doc, '_encdata')
+    if (!hasEncryptedPayload) return doc
+    if (STRICT_ENC_TABLES.has(dbName) && (
+      typeof doc._encdata !== 'string' ||
+      !doc._encdata.startsWith(ENC_PREFIX) ||
+      doc._encdata.length === ENC_PREFIX.length
+    )) {
+      throw new Error(`Invalid encrypted payload for ${dbName} record ${doc._id}`)
+    }
     if (!doc._encdata) return doc
+    if (!dec) {
+      if (STRICT_ENC_TABLES.has(dbName)) {
+        throw new Error(`Cannot decrypt ${dbName} record ${doc._id}: decoder is not configured`)
+      }
+      return doc
+    }
     try {
       const plain = decryptData(doc._encdata)
       const parsed = JSON.parse(plain)
       const { _encdata: _, ...rest } = doc
       return { ...rest, ...parsed }
     } catch (e) {
+      if (STRICT_ENC_TABLES.has(dbName)) {
+        throw new Error(`Failed to decrypt ${dbName} record ${doc._id}: ${e.message}`, { cause: e })
+      }
       return doc
     }
   }
@@ -122,12 +160,20 @@ function createDb (appPath, defaultUserName, { enc, dec } = {}) {
       if (op === 'find') {
         db[dbName][op](...args, (err, results) => {
           if (err) return reject(err)
-          resolve((results || []).map(doc => decryptDoc(dbName, doc)))
+          try {
+            resolve((results || []).map(doc => decryptDoc(dbName, doc)))
+          } catch (error) {
+            reject(error)
+          }
         })
       } else if (op === 'findOne') {
         db[dbName][op](...args, (err, result) => {
           if (err) return reject(err)
-          resolve(decryptDoc(dbName, result))
+          try {
+            resolve(decryptDoc(dbName, result))
+          } catch (error) {
+            reject(error)
+          }
         })
       } else if (op === 'insert') {
         const original = args[0]

@@ -24,11 +24,11 @@ export default auto(function FooterEntry (props) {
   }
 
   function batchInput (cmd, selectedTabIds) {
-    selectedTabIds.map(id => {
-      return refs.get('term-' + id)
-    }).forEach(term => {
-      term?.batchInput(cmd)
-    })
+    window.store.runBatchSafetyCommand(cmd, selectedTabIds, {
+      source: 'quick-command',
+      title: '批量终端命令',
+      timeoutMs: 30000
+    }).catch(window.store.onError)
   }
 
   function handleSwitchEncoding (encode) {

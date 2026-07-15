@@ -251,6 +251,25 @@ test('invalid roots and cleanup targets are rejected before connect or exec call
   )
   assert.equal(connectCalls, 0)
 
+  for (const unsafeRoot of [
+    '/etc',
+    '/tmp/space root',
+    '/tmp/unsafe;name',
+    '/tmp/$(touch-pwned)',
+    '/tmp/../etc',
+    '/var/tmp/safe/../escape'
+  ]) {
+    await assert.rejects(
+      connectWithValidatedScope(unsafeRoot, async () => {
+        connectCalls += 1
+        return {}
+      }),
+      /unsafe test root|temporary test root/i,
+      unsafeRoot
+    )
+  }
+  assert.equal(connectCalls, 0)
+
   let execCalls = 0
   await assert.rejects(
     executeCleanupIfSafe('/tmp/smoke-root', '/', async () => {
@@ -271,6 +290,9 @@ test('invalid roots and cleanup targets are rejected before connect or exec call
   assert.equal(scope.testRoot, '/tmp/smoke-root')
   assert.ok(scope.remoteTestDir.startsWith('/tmp/smoke-root/shellpilot-smoke-'))
   assert.ok(Object.values(scope.paths).every(value => value.startsWith(`${scope.remoteTestDir}/`)))
+
+  const varTmpScope = createValidatedRemoteScope('/var/tmp/smoke-root')
+  assert.equal(varTmpScope.testRoot, '/var/tmp/smoke-root')
 })
 
 test('cleanup absence condition does not treat a dangling symlink as absent', () => {
@@ -412,10 +434,10 @@ test('SFTP operation timeout closes SFTP and SSH resources with a clear method e
 test('real-server smoke flow covers SSH, SFTP, Unicode, large binary, and safety recovery', () => {
   assert.match(source, /if \(require\.main === module\)/)
   assert.match(source, /module\.exports\s*=/)
-  assert.match(source, /SHELLPILOT_SSH_TEST_DIR\s*\|\|\s*'\/tmp'/)
-  assert.match(source, /connectWithValidatedScope\(testDir, connect\)/)
+  assert.match(source, /SHELLPILOT_SSH_TEST_DIR\s*\|\|\s*defaultTestDir/)
+  assert.match(source, /connectWithValidatedScope\([\s\S]{0,100}config\.testDir,[\s\S]{0,100}\(\) => connect\(config/)
   assert.match(source, /createRemotePaths\(remoteTestDir\)/)
-  assert.match(source, /shellTest\(conn, remoteTestDir\)/)
+  assert.match(source, /shellTest\(conn, remoteTestDir, config\.timeoutMs, redactor\)/)
   assert.match(source, /mkdir -p -- \$\{shellQuote\(remoteTestDir\)\}/)
   assert.doesNotMatch(source, /user=root/)
 
@@ -467,7 +489,7 @@ test('critical failures set a nonzero exit code and finally verifies remote clea
   assert.match(source, /finally\s*{/)
   assert.match(
     source,
-    /executeCleanupIfSafe\(testDir, remoteTestDir,[\s\S]{0,300}rm -rf -- \$\{shellQuote\(cleanupTarget\)\}/
+    /executeCleanupIfSafe\(config\.testDir, remoteTestDir,[\s\S]{0,300}rm -rf -- \$\{shellQuote\(cleanupTarget\)\}/
   )
   assert.match(source, /\[ ! -e \$\{shellQuote\(cleanupTarget\)\} \]/)
   assert.match(source, /\[ ! -L \$\{shellQuote\(cleanupTarget\)\} \]/)

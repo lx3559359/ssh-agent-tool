@@ -80,6 +80,7 @@ export default {
   sessionLogPath: '',
   sshSftpSplitView: false,
   showCmdSuggestions: false,
+  terminalSafetyProtection: true,
   autoReconnectTerminal: false,
   startDirectoryLocal: '',
   allowMultiInstance: false,

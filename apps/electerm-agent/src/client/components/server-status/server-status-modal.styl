@@ -142,6 +142,11 @@
 .server-status-platform-tags
   margin-left auto
   flex none
+  display flex
+  align-items center
+  gap 4px
+  flex-wrap wrap
+  justify-content flex-end
 
 .server-status-evidence
   padding 0 12px 8px 30px
@@ -156,6 +161,9 @@
   border-top 1px solid var(--main-darker)
   color var(--text-light)
   font-size 12px
+
+.server-status-row.has-diagnostic
+  grid-template-columns minmax(150px, 1fr) minmax(100px, .7fr) minmax(120px, 1fr) auto
 
 .server-status-row span
   min-width 0
@@ -178,6 +186,13 @@
   color var(--text-light)
   font-size 12px
   line-height 1.5
+
+.server-status-alert > span:nth-child(2)
+  min-width 0
+  flex 1
+
+.server-status-alert button
+  flex none
 
 .server-status-alert.critical
   border-left-color var(--error)
@@ -335,3 +350,11 @@
     flex-direction column
   .server-status-rule-form
     grid-template-columns 1fr
+  .server-status-row.has-diagnostic
+    grid-template-columns minmax(120px, 1fr) minmax(80px, .7fr) auto
+  .server-status-row.has-diagnostic > span:nth-child(3)
+    display none
+  .server-status-platform summary
+    align-items flex-start
+  .server-status-platform-tags
+    max-width 70%

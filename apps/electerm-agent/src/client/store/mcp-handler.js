@@ -18,6 +18,11 @@ import {
   validateBookmarkData
 } from '../components/bookmark-form/fix-bookmark-default'
 import newTerm from '../common/new-terminal'
+import {
+  runZmodemDownloadSafety,
+  runZmodemUploadSafety
+} from './mcp-zmodem-safety.js'
+import { createBackgroundTaskRegistry } from '../common/safety-transactions/background-task-registry.js'
 
 export default Store => {
   // Initialize MCP handler - called when MCP widget is started
@@ -109,7 +114,7 @@ export default Store => {
 
         // Terminal operations
         case 'send_terminal_command':
-          result = store.mcpSendTerminalCommand(args)
+          result = await store.mcpSendTerminalCommand(args)
           break
         case 'get_terminal_selection':
           result = store.mcpGetTerminalSelection(args)
@@ -129,7 +134,7 @@ export default Store => {
 
         // Background task operations
         case 'run_background_command':
-          result = store.mcpRunBackgroundCommand(args)
+          result = await store.mcpRunBackgroundCommand(args)
           break
         case 'get_background_task_status':
           result = await store.mcpGetBackgroundTaskStatus(args)
@@ -173,10 +178,10 @@ export default Store => {
 
         // Zmodem (trzsz/rzsz) operations
         case 'zmodem_upload':
-          result = store.mcpZmodemUpload(args)
+          result = await store.mcpZmodemUpload(args)
           break
         case 'zmodem_download':
-          result = store.mcpZmodemDownload(args)
+          result = await store.mcpZmodemDownload(args)
           break
 
         // Settings operations
@@ -518,7 +523,7 @@ export default Store => {
 
   // ==================== Terminal APIs ====================
 
-  Store.prototype.mcpSendTerminalCommand = function (args) {
+  Store.prototype.mcpSendTerminalCommand = async function (args) {
     const { store } = window
     const tabId = args.tabId || store.activeTabId
     const command = args.command
@@ -531,11 +536,22 @@ export default Store => {
       throw new Error('No command provided')
     }
 
-    store.runQuickCommand(command, args.inputOnly || false, tabId)
+    const safetyResult = await store.runSafetyCommand(command, {
+      tabId,
+      inputOnly: args.inputOnly === true,
+      source: 'agent',
+      title: args.title || 'MCP 终端命令'
+    })
 
     return {
-      success: true,
-      message: 'Command sent to terminal'
+      success: safetyResult?.sent === true || safetyResult?.inputOnly === true,
+      cancelled: safetyResult?.cancelled === true,
+      operationId: safetyResult?.operationId,
+      message: safetyResult?.cancelled
+        ? '用户取消了安全确认，命令尚未发送。'
+        : safetyResult?.inputOnly
+          ? '命令已填入终端，尚未执行。'
+          : '命令已安全发送到终端。'
     }
   }
 
@@ -741,25 +757,47 @@ export default Store => {
 
   // ==================== Background Task Management ====================
 
-  const backgroundTasks = new Map()
-  let bgTaskCounter = 0
-
   async function runMonitorCmd (tabId, cmd) {
-    try {
-      const result = await runCmd(tabId, cmd)
-      return result
-    } catch (e) {
-      // Fallback: send via terminal and wait for idle
-      const { store } = window
-      store.mcpSendTerminalCommand({ command: cmd, tabId })
-      const idle = await store.mcpWaitForTerminalIdle({
-        tabId, timeout: 10000, lines: 10, minWait: 500
-      })
-      return idle.output || ''
-    }
+    const term = refs.get('term-' + tabId)
+    if (!term?.pid) throw new Error('后台任务终端会话已失效。')
+    const result = await runCmd(term.pid, cmd, {
+      timeoutMs: 5000,
+      maxOutputBytes: 4096
+    })
+    if (typeof result === 'string') return result
+    return result?.stdout || result?.output || ''
   }
 
-  Store.prototype.mcpRunBackgroundCommand = function (args) {
+  function requireBackgroundPath (value) {
+    const path = String(value || '')
+    if (!/^\/tmp\/shellpilot-bg-[a-zA-Z0-9_-]+\.(?:pid|exit|log)$/.test(path)) {
+      throw new Error('后台任务监控路径无效。')
+    }
+    return `'${path}'`
+  }
+
+  const backgroundTasks = createBackgroundTaskRegistry({
+    readFile: (tabId, path) => runMonitorCmd(
+      tabId,
+      `cat -- ${requireBackgroundPath(path)} 2>/dev/null || true`
+    ),
+    isAlive: async (tabId, pid) => {
+      const output = await runMonitorCmd(
+        tabId,
+        `kill -0 -- ${pid} 2>/dev/null && printf alive || printf dead`
+      )
+      return output.trim() === 'alive'
+    },
+    kill: async (tabId, pid) => {
+      const output = await runMonitorCmd(
+        tabId,
+        `if kill -- ${pid} 2>/dev/null; then printf killed; else printf failed; fi`
+      )
+      return output.trim() === 'killed'
+    }
+  })
+
+  Store.prototype.mcpRunBackgroundCommand = async function (args) {
     const { store } = window
     const tabId = args.tabId || store.activeTabId
     if (!tabId) {
@@ -769,30 +807,42 @@ export default Store => {
       throw new Error('No command provided')
     }
 
-    const taskId = `bg-${Date.now()}-${++bgTaskCounter}`
-    const logFile = `/tmp/electerm-${taskId}.log`
-    const pidFile = `/tmp/electerm-${taskId}.pid`
-    const exitFile = `/tmp/electerm-${taskId}.exit`
+    const submission = await store.runSafetyCommand(args.command, {
+      tabId,
+      source: 'agent',
+      title: '后台命令',
+      executionMode: 'background'
+    })
+    if (!submission.sent) {
+      return {
+        success: false,
+        cancelled: submission.cancelled === true,
+        retryable: submission.retryable === true,
+        operationId: submission.operationId,
+        message: submission.error || '后台命令尚未发送。'
+      }
+    }
 
-    // Encode command as base64 to avoid all quote-escaping issues.
-    // The subshell runs the user's command, captures its exit code, then cleans up the PID file.
-    const b64 = btoa(args.command)
-    const inner = `eval "$(echo ${b64} | base64 --decode)" > ${logFile} 2>&1; e=$?; echo $e > ${exitFile}; rm -f ${pidFile}`
-    const wrapped = `nohup bash -c '${inner}' & echo $! > ${pidFile}; disown`
+    const {
+      taskId,
+      logFile,
+      pidFile,
+      exitFile
+    } = submission.execution.metadata
 
-    store.mcpSendTerminalCommand({ command: wrapped, tabId, inputOnly: false })
-
-    const task = {
+    const task = backgroundTasks.register({
       id: taskId,
+      operationId: submission.operationId,
       command: args.command,
       tabId,
       startTime: Date.now(),
       logFile,
       pidFile,
       exitFile,
-      status: 'started'
-    }
-    backgroundTasks.set(taskId, task)
+      finalize: submission.finalizeBackground,
+      cancel: submission.cancelBackground,
+      completion: submission.completion
+    })
 
     return {
       taskId,
@@ -800,52 +850,33 @@ export default Store => {
       logFile,
       pidFile,
       exitFile,
-      message: 'Command started in background. Use get_background_task_status to check.'
+      operationId: task.operationId,
+      message: '后台命令已启动，可查询后台任务状态。'
     }
   }
 
   Store.prototype.mcpGetBackgroundTaskStatus = async function (args) {
-    const task = backgroundTasks.get(args.taskId)
-    if (!task) {
-      throw new Error(`Task ${args.taskId} not found`)
-    }
-
-    const pidOutput = await runMonitorCmd(task.tabId,
-      `cat ${task.pidFile} 2>/dev/null`)
-    const pid = pidOutput.trim()
-
-    if (!pid) {
-      return { ...task, status: 'unknown', message: 'PID file not found' }
-    }
-
-    const aliveCheck = await runMonitorCmd(task.tabId,
-      `kill -0 ${pid} 2>/dev/null && echo alive || echo dead`)
-
-    if (aliveCheck.trim() === 'alive') {
-      task.status = 'running'
-      return { ...task, pid, status: 'running' }
-    }
-
-    // Process exited — read exit code
-    const exitOutput = await runMonitorCmd(task.tabId,
-      `cat ${task.exitFile} 2>/dev/null`)
-    const exitCode = exitOutput.trim()
-
-    task.status = 'completed'
-    task.exitCode = exitCode !== '' ? parseInt(exitCode, 10) : null
-    task.endTime = Date.now()
-    return { ...task, pid, status: 'completed', exitCode: task.exitCode }
+    return backgroundTasks.status(args.taskId)
   }
 
   Store.prototype.mcpGetBackgroundTaskLog = async function (args) {
     const task = backgroundTasks.get(args.taskId)
     if (!task) {
-      throw new Error(`Task ${args.taskId} not found`)
+      return {
+        taskId: args.taskId,
+        status: 'unknown',
+        interrupted: true,
+        output: '',
+        message: '后台任务上下文已丢失，无法读取日志。'
+      }
     }
 
-    const lines = args.lines || 100
+    const lines = Number(args.lines || 100)
+    if (!Number.isInteger(lines) || lines < 1 || lines > 10000) {
+      throw new Error('后台日志行数必须是 1 到 10000 的整数。')
+    }
     const output = await runMonitorCmd(task.tabId,
-      `tail -n ${lines} ${task.logFile} 2>/dev/null || echo '(no output yet)'`)
+      `tail -n ${lines} -- ${requireBackgroundPath(task.logFile)} 2>/dev/null || true`)
 
     return {
       taskId: task.id,
@@ -855,33 +886,7 @@ export default Store => {
   }
 
   Store.prototype.mcpCancelBackgroundTask = async function (args) {
-    const task = backgroundTasks.get(args.taskId)
-    if (!task) {
-      throw new Error(`Task ${args.taskId} not found`)
-    }
-
-    const pidOutput = await runMonitorCmd(task.tabId,
-      `cat ${task.pidFile} 2>/dev/null`)
-    const pid = pidOutput.trim()
-
-    if (pid) {
-      await runMonitorCmd(task.tabId,
-        `kill ${pid} 2>/dev/null; echo $? > ${task.exitFile}`)
-      task.status = 'cancelled'
-      task.endTime = Date.now()
-      return {
-        taskId: task.id,
-        pid,
-        status: 'cancelled',
-        message: 'Process killed'
-      }
-    }
-
-    return {
-      taskId: task.id,
-      status: 'unknown',
-      message: 'PID not found, task may have already finished'
-    }
+    return backgroundTasks.cancel(args.taskId)
   }
 
   // ==================== Settings APIs ====================
@@ -1080,86 +1085,19 @@ export default Store => {
 
   // ==================== Zmodem (trzsz/rzsz) APIs ====================
 
-  Store.prototype.mcpZmodemUpload = function (args) {
-    const { store } = window
-    const tabId = args.tabId || store.activeTabId
-    if (!tabId) {
-      throw new Error('No active tab')
-    }
-    const tab = store.tabs.find(t => t.id === tabId)
-    if (!tab) {
-      throw new Error(`Tab not found: ${tabId}`)
-    }
-
-    const files = args.files
-    if (!files || !Array.isArray(files) || files.length === 0) {
-      throw new Error('files array is required (list of local file paths to upload)')
-    }
-
-    const protocol = args.protocol || 'rzsz'
-    const uploadCmd = protocol === 'trzsz' ? 'trz' : 'rz'
-
-    // Set the control variable to bypass native file dialog
-    window._apiControlSelectFile = files
-
-    const term = refs.get('term-' + tabId)
-    if (!term) {
-      throw new Error(`Terminal not found for tab: ${tabId}`)
-    }
-    term.runQuickCommand(uploadCmd)
-
-    return {
-      success: true,
-      protocol,
-      command: uploadCmd,
-      message: `${uploadCmd} upload initiated for ${files.length} file(s)`,
-      files,
-      tabId
-    }
+  Store.prototype.mcpZmodemUpload = async function (args) {
+    return runZmodemUploadSafety({
+      store: window.store,
+      args,
+      setSelectedFiles: files => { window._apiControlSelectFile = files }
+    })
   }
 
-  Store.prototype.mcpZmodemDownload = function (args) {
-    const { store } = window
-    const tabId = args.tabId || store.activeTabId
-    if (!tabId) {
-      throw new Error('No active tab')
-    }
-    const tab = store.tabs.find(t => t.id === tabId)
-    if (!tab) {
-      throw new Error(`Tab not found: ${tabId}`)
-    }
-
-    const saveFolder = args.saveFolder
-    if (!saveFolder) {
-      throw new Error('saveFolder is required (local folder to save downloaded files)')
-    }
-
-    const remoteFiles = args.remoteFiles
-    if (!remoteFiles || !Array.isArray(remoteFiles) || remoteFiles.length === 0) {
-      throw new Error('remoteFiles array is required (list of remote file paths to download)')
-    }
-
-    const protocol = args.protocol || 'rzsz'
-    const downloadCmd = protocol === 'trzsz' ? 'tsz' : 'sz'
-
-    // Set the control variable to bypass native folder dialog
-    window._apiControlSelectFolder = saveFolder
-
-    const term = refs.get('term-' + tabId)
-    if (!term) {
-      throw new Error(`Terminal not found for tab: ${tabId}`)
-    }
-    const quotedFiles = remoteFiles.map(f => `"${f}"`).join(' ')
-    term.runQuickCommand(`${downloadCmd} ${quotedFiles}`)
-
-    return {
-      success: true,
-      protocol,
-      command: downloadCmd,
-      message: `${downloadCmd} download initiated for ${remoteFiles.length} file(s) to ${saveFolder}`,
-      remoteFiles,
-      saveFolder,
-      tabId
-    }
+  Store.prototype.mcpZmodemDownload = async function (args) {
+    return runZmodemDownloadSafety({
+      store: window.store,
+      args,
+      setSelectedFolder: folder => { window._apiControlSelectFolder = folder }
+    })
   }
 }

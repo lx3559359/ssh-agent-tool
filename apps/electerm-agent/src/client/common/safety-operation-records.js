@@ -3,6 +3,15 @@ export const legacySftpRecoveryStorageKey = 'shellpilot-sftp-recovery-records'
 export const legacyQuickRollbackStorageKey = 'shellpilot-network-rollback'
 export const safetyOperationUpdatedEvent = 'shellpilot-safety-operation-records-updated'
 
+const legacyEpoch = '1970-01-01T00:00:00.000Z'
+const terminalSafetyOperationStatuses = new Set([
+  'restored',
+  'kept',
+  'failed',
+  'completed',
+  'cancelled'
+])
+
 function toIsoString (value, fallback = new Date()) {
   const date = value ? new Date(value) : fallback
   return Number.isNaN(date.getTime()) ? fallback.toISOString() : date.toISOString()
@@ -11,6 +20,47 @@ function toIsoString (value, fallback = new Date()) {
 function normalizeStatus (record = {}) {
   if (record.status) return record.status
   return record.rollbackStatus === 'completed' ? 'restored' : 'available'
+}
+
+function stableLegacyHash (value) {
+  const text = String(value)
+  let hash = 2166136261
+  for (let index = 0; index < text.length; index++) {
+    hash ^= text.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+  return (hash >>> 0).toString(36)
+}
+
+export function createLegacySafetyOperationId (record = {}, source = 'sftp') {
+  if (record.id) return String(record.id)
+  const identity = [
+    source,
+    record.createdAt || '',
+    record.target || record.sourcePath || record.rollbackPath || record.path || '',
+    record.backupPath || '',
+    record.host || '',
+    record.port || '',
+    record.username || '',
+    record.title || ''
+  ].map(value => String(value)).join('\u0000')
+  return `legacy:${source}:${stableLegacyHash(identity)}`
+}
+
+function isTerminalSafetyOperationRecord (record = {}) {
+  return terminalSafetyOperationStatuses.has(record.status) ||
+    terminalSafetyOperationStatuses.has(record.rollbackStatus)
+}
+
+export function chooseSafetyOperationRecord (existing, incoming) {
+  if (!existing) return incoming
+  const existingTerminal = isTerminalSafetyOperationRecord(existing)
+  const incomingTerminal = isTerminalSafetyOperationRecord(incoming)
+  if (existingTerminal && !incomingTerminal) return existing
+  if (incomingTerminal && !existingTerminal) return incoming
+  const existingTime = new Date(existing.updatedAt || existing.createdAt).getTime()
+  const incomingTime = new Date(incoming.updatedAt || incoming.createdAt).getTime()
+  return incomingTime >= existingTime ? incoming : existing
 }
 
 export function normalizeSafetyOperationRecord (record = {}, defaults = {}) {
@@ -40,19 +90,22 @@ export function normalizeSafetyOperationRecord (record = {}, defaults = {}) {
   }
 }
 
+export function normalizeLegacySafetyOperationRecord (record = {}, defaults = {}) {
+  const source = record.source || defaults.source || (record.rollbackPath || record.path ? 'quick-command' : 'sftp')
+  return normalizeSafetyOperationRecord({
+    ...record,
+    id: createLegacySafetyOperationId(record, source),
+    createdAt: toIsoString(record.createdAt, new Date(legacyEpoch))
+  }, { ...defaults, source })
+}
+
 export function mergeSafetyOperationRecords (records = [], added = [], limit = 200) {
   const byId = new Map()
   for (const item of [...records, ...added]) {
     if (!item) continue
     const normalized = normalizeSafetyOperationRecord(item)
     const existing = byId.get(normalized.id)
-    const existingTime = existing
-      ? new Date(existing.updatedAt || existing.createdAt).getTime()
-      : -1
-    const incomingTime = new Date(normalized.updatedAt || normalized.createdAt).getTime()
-    if (!existing || incomingTime >= existingTime) {
-      byId.set(normalized.id, normalized)
-    }
+    byId.set(normalized.id, chooseSafetyOperationRecord(existing, normalized))
   }
   return [...byId.values()]
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
@@ -64,11 +117,27 @@ export function migrateSafetyOperationRecords ({
   sftpRecords = [],
   quickRollbackRecord = null
 } = {}, limit = 200) {
-  const legacySftp = sftpRecords.map(record => normalizeSafetyOperationRecord(record, { source: 'sftp' }))
+  const normalizedUnified = unifiedRecords.map(record => normalizeLegacySafetyOperationRecord(record))
+  const legacySftp = sftpRecords.map(record => normalizeLegacySafetyOperationRecord(record, { source: 'sftp' }))
   const legacyQuick = quickRollbackRecord
-    ? [normalizeSafetyOperationRecord(quickRollbackRecord, { source: 'quick-command' })]
+    ? [normalizeLegacySafetyOperationRecord(quickRollbackRecord, { source: 'quick-command' })]
     : []
-  return mergeSafetyOperationRecords([...legacySftp, ...legacyQuick], unifiedRecords, limit)
+  return mergeSafetyOperationRecords([...legacySftp, ...legacyQuick], normalizedUnified, limit)
+}
+
+function readSafetyOperationRecordSources (storage) {
+  return {
+    unifiedRecords: storage.safeGetItemJSON(safetyOperationStorageKey, []),
+    sftpRecords: storage.getItemJSON(legacySftpRecoveryStorageKey, []),
+    quickRollbackRecord: storage.getItemJSON(legacyQuickRollbackStorageKey, null)
+  }
+}
+
+export function readSafetyOperationRecordsForMigration (storage) {
+  const sources = readSafetyOperationRecordSources(storage)
+  return {
+    records: migrateSafetyOperationRecords(sources, Number.MAX_SAFE_INTEGER)
+  }
 }
 
 export function readSafetyOperationRecords (storage) {
@@ -82,19 +151,6 @@ export function readSafetyOperationRecords (storage) {
   })
   if (JSON.stringify(records) !== JSON.stringify(unifiedRecords)) {
     storage.safeSetItemJSON(safetyOperationStorageKey, records)
-  }
-  const hadLegacyRecords = sftpRecords.length > 0 || Boolean(quickRollbackRecord)
-  if (hadLegacyRecords && storage.removeItem) {
-    const verified = storage.safeGetItemJSON(safetyOperationStorageKey, [])
-    if (JSON.stringify(verified) === JSON.stringify(records)) {
-      for (const key of [legacySftpRecoveryStorageKey, legacyQuickRollbackStorageKey]) {
-        try {
-          storage.removeItem(key)
-        } catch (error) {
-          // Retry cleanup on the next read while the verified encrypted copy remains available.
-        }
-      }
-    }
   }
   return records
 }

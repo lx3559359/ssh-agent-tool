@@ -4,6 +4,7 @@ import uid from '../../common/uid'
 import resolve from '../../common/resolve'
 import { typeMap } from '../../common/constants'
 import { getFolderFromFilePath, getLocalFileInfo } from '../sftp/file-read'
+import { assertCrossHostSourceHistory } from './file-transfer-safety.js'
 
 export default class Remote2RemoteHandler {
   constructor (props) {
@@ -42,7 +43,9 @@ export default class Remote2RemoteHandler {
       title,
       tabType,
       sourceTabId,
-      sourceHost
+      sourceHost,
+      sourceEndpointKey,
+      sourceIdentity
     } = this.props
     const transfer = {
       id: uid(),
@@ -50,18 +53,21 @@ export default class Remote2RemoteHandler {
       typeTo: typeMap.local,
       fromPath: this.fromPath,
       toPath: this.tempPath,
+      fromFile: copy(this.fromFile),
       tabId: sourceTabId,
       host: sourceHost,
       title,
       tabType,
       operation: '',
       remote2remoteStep: 1,
-      remote2remoteId: this.id
+      remote2remoteId: this.id,
+      sourceEndpointKey,
+      sourceIdentity
     }
     return transfer
   }
 
-  buildStep2Transfer = (fromFile) => {
+  buildStep2Transfer = (fromFile, verifiedSource) => {
     const {
       targetTabId,
       targetHost,
@@ -82,6 +88,10 @@ export default class Remote2RemoteHandler {
       operation: '',
       remote2remoteStep: 2,
       remote2remoteId: this.id,
+      sourceEndpointKey: verifiedSource.sourceEndpointKey,
+      sourceIdentity: verifiedSource.sourceIdentity,
+      sourceContentIdentity: verifiedSource.sourceContentIdentity,
+      sourceDescriptor: verifiedSource.sourceDescriptor,
       originalId: this.step1Transfer?.id
     }
     return transfer
@@ -120,13 +130,26 @@ export default class Remote2RemoteHandler {
       if (step1.error) {
         return this.finish(step1.error)
       }
+      try {
+        assertCrossHostSourceHistory(step1, {
+          sourceEndpointKey: this.props.sourceEndpointKey,
+          sourceIdentity: this.props.sourceIdentity
+        })
+      } catch (error) {
+        return this.finish(error.message)
+      }
       this.creatingStep2 = true
       const localFromFile = await getLocalFileInfo(this.tempPath).catch(() => null)
       if (!localFromFile) {
         this.creatingStep2 = false
         return this.finish('local temp file/folder not found')
       }
-      this.step2Transfer = this.buildStep2Transfer(localFromFile)
+      this.step2Transfer = this.buildStep2Transfer(localFromFile, {
+        sourceEndpointKey: step1.verifiedSourceEndpointKey,
+        sourceIdentity: step1.verifiedSourceIdentity,
+        sourceContentIdentity: step1.verifiedSourceContentIdentity,
+        sourceDescriptor: step1.verifiedSourceDescriptor
+      })
       this.creatingStep2 = false
       this.store.addTransferList([copy(this.step2Transfer)])
       return

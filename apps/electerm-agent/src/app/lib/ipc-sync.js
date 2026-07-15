@@ -112,6 +112,7 @@ module.exports = {
         'access',
         'statAsync',
         'lstatAsync',
+        'describeTransferEntry',
         'cp',
         'mv',
         'mkdir',

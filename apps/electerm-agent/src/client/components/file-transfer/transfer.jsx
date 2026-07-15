@@ -16,6 +16,18 @@ import {
   shouldRetryTransfer
 } from '../../common/transfer-retry'
 import {
+  captureLocalTransferSource,
+  createTransferAttemptGuard,
+  createTransferSafetyController,
+  getTransferSafetyCompletionFailure,
+  resetCrossHostSourceAttemptForRetry,
+  resolveTransferRuntimeTransport,
+  shouldUseLegacyZipOptimization,
+  verifyCrossHostSourceContent,
+  verifyCrossHostSourcePreflight,
+  verifyLocalTransferSource
+} from './file-transfer-safety.js'
+import {
   zipCmd,
   unzipCmd,
   rmCmd,
@@ -44,6 +56,14 @@ export default class TransportAction extends Component {
     this.isFtp = sftp?.type === 'ftp'
     this.terminalId = sftp?.terminalId
     this.transferRetryState = createTransferRetryState(props.transfer?.retry)
+    this.transferAttempts = createTransferAttemptGuard()
+    this.subTransports = new Set()
+    this.localSourceDescriptor = props.transfer?.sourceDescriptor || null
+    this.transferSafety = createTransferSafetyController({
+      getTransfer: this.getTransferSafetyInput,
+      getCapability: () => refs.get('sftp-' + this.tabId),
+      cancelTransport: this.cancelProtectedTransport
+    })
   }
 
   componentDidMount () {
@@ -71,12 +91,68 @@ export default class TransportAction extends Component {
   }
 
   componentWillUnmount () {
+    this.onCancel = true
+    this.transferAttempts.invalidate(this.activeAttemptToken)
+    this.activeAttemptToken = null
     clearTimeout(this.retryTimer)
     this.retryTimer = null
     this.transport && this.transport.destroy()
     this.transport = null
+    this.destroySubTransports()
+    Promise.resolve(this.transferSafety.dispose()).catch(error => {
+      window.store?.onError(error)
+    })
     this.fromFile = null
     refsTransfers.remove(this.id)
+  }
+
+  getTransferSafetyInput = () => ({
+    ...this.props.transfer,
+    fromFile: this.props.transfer.fromFile || this.fromFile,
+    finalToPath: this.newPath || this.props.transfer.toPath,
+    conflictPolicy: this.conflictPolicy,
+    isFtp: this.isFtp,
+    sourceDescriptor: this.localSourceDescriptor
+  })
+
+  getLocalSourceTransfer = (transfer = this.props.transfer) => ({
+    ...transfer,
+    fromFile: transfer.fromFile || this.fromFile,
+    finalToPath: this.newPath || transfer.toPath,
+    conflictPolicy: this.conflictPolicy,
+    isFtp: this.isFtp
+  })
+
+  prepareLocalSource = async (transfer = this.props.transfer) => {
+    const sourceTransfer = this.getLocalSourceTransfer(transfer)
+    if (this.localSourceDescriptor) {
+      await verifyLocalTransferSource({
+        transfer: sourceTransfer,
+        sourceDescriptor: this.localSourceDescriptor,
+        describeLocal: window.fs.describeTransferEntry
+      })
+      return
+    }
+    this.localSourceDescriptor = await captureLocalTransferSource({
+      transfer: sourceTransfer,
+      describeLocal: window.fs.describeTransferEntry
+    })
+  }
+
+  verifyLocalSource = (transfer = this.props.transfer) => {
+    return verifyLocalTransferSource({
+      transfer: this.getLocalSourceTransfer(transfer),
+      sourceDescriptor: this.localSourceDescriptor,
+      describeLocal: window.fs.describeTransferEntry
+    })
+  }
+
+  getTransferRuntimeTransport = (transfer = this.props.transfer) => {
+    return resolveTransferRuntimeTransport({
+      transfer,
+      sourcePin: this.crossHostSourcePin,
+      getCapability: tabId => refs.get('sftp-' + tabId)
+    })
   }
 
   localCheckExist = (path) => {
@@ -147,9 +223,59 @@ export default class TransportAction extends Component {
     window.store.localList(this.tabId)
   }
 
-  onEnd = (update = {}) => {
-    if (this.onCancel) {
+  onEnd = async (update = {}, attemptToken) => {
+    const protectedAttempt = attemptToken !== undefined
+    if (protectedAttempt && !this.transferAttempts.beginCompletion(attemptToken)) {
       return
+    }
+    if (this.onCancel) {
+      if (protectedAttempt) this.transferAttempts.finishCompletion(attemptToken)
+      return
+    }
+    if (this.finishing) {
+      if (protectedAttempt) this.transferAttempts.finishCompletion(attemptToken)
+      return
+    }
+    this.finishing = true
+    let failed = update.status === 'exception' || Boolean(update.error)
+    if (!failed) {
+      try {
+        await this.verifyLocalSource()
+        if (this.props.transfer.remote2remoteStep === 1) {
+          this.verifiedCrossHostSource = await verifyCrossHostSourceContent({
+            transfer: this.props.transfer,
+            sourcePin: this.crossHostSourcePin,
+            preflight: this.crossHostSourcePreflight,
+            describeLocal: window.fs.describeTransferEntry
+          })
+        }
+      } catch (error) {
+        failed = true
+        update = {
+          ...update,
+          status: 'exception',
+          error: error.message
+        }
+      }
+    }
+    try {
+      const completed = await this.transferSafety.complete({
+        exitCode: failed ? 1 : 0
+      })
+      const completionFailure = getTransferSafetyCompletionFailure(completed)
+      if (completionFailure) {
+        update = {
+          ...update,
+          ...completionFailure
+        }
+      }
+    } catch (error) {
+      update = {
+        ...update,
+        status: 'exception',
+        error: error.message
+      }
+      window.store.onError(error)
     }
     const {
       transfer,
@@ -164,11 +290,21 @@ export default class TransportAction extends Component {
       const size = update.size ?? update.transferred ?? fromFile.size
       const r = copy(transfer)
       assign(r, {
+        ...(this.verifiedCrossHostSource
+          ? {
+              verifiedSourceEndpointKey: this.verifiedCrossHostSource.verifiedSourceEndpointKey,
+              verifiedSourceIdentity: this.verifiedCrossHostSource.verifiedSourceIdentity,
+              verifiedSourceContentIdentity: this.verifiedCrossHostSource.verifiedSourceContentIdentity,
+              verifiedSourceDescriptor: this.verifiedCrossHostSource.verifiedSourceDescriptor
+            }
+          : {}),
         finishTime,
         startTime: this.startTime,
         size,
         next: null,
-        speed: format(size, this?.startTime)
+        speed: format(size, this?.startTime),
+        status: update.status || 'success',
+        error: update.error || ''
       })
       window.store.addTransferHistory(
         r
@@ -180,10 +316,14 @@ export default class TransportAction extends Component {
     const cb = () => {
       cbs.forEach(cb => cb())
     }
-    this.cancel(cb)
+    if (protectedAttempt) this.transferAttempts.finishCompletion(attemptToken)
+    this.finishTransfer(cb)
   }
 
-  onData = (transferred) => {
+  onData = (transferred, attemptToken) => {
+    if (attemptToken !== undefined && !this.transferAttempts.isCurrent(attemptToken)) {
+      return
+    }
     if (this.onCancel) {
       return
     }
@@ -214,22 +354,49 @@ export default class TransportAction extends Component {
     this.update(up)
   }
 
-  cancel = (callback) => {
-    if (this.onCancel) {
-      return
-    }
+  stopTransport = () => {
     this.onCancel = true
+    this.transferAttempts.invalidate(this.activeAttemptToken)
+    this.activeAttemptToken = null
     clearTimeout(this.retryTimer)
     this.retryTimer = null
     this.transport && this.transport.destroy()
     this.transport = null
-    // window.store.cancelTransfer(this.props.transfer.id)
-    refsStatic.get('transfer-queue')?.addToQueue(
-      'delete',
-      this.props.transfer.id
-    )
+    this.destroySubTransports()
+  }
+
+  destroySubTransports = () => {
+    for (const transport of this.subTransports) transport?.destroy()
+    this.subTransports.clear()
+  }
+
+  finishTransfer = (callback) => {
+    this.stopTransport()
+    if (!this.queueRemoved) {
+      this.queueRemoved = true
+      refsStatic.get('transfer-queue')?.addToQueue(
+        'delete',
+        this.props.transfer.id
+      )
+    }
     if (isFunction(callback)) {
       callback()
+    }
+  }
+
+  cancelProtectedTransport = async () => {
+    this.finishTransfer()
+  }
+
+  cancel = async (callback) => {
+    if (this.userCancelling) return
+    this.userCancelling = true
+    try {
+      await this.transferSafety.cancel()
+    } catch (error) {
+      window.store.onError(error)
+    } finally {
+      this.finishTransfer(callback)
     }
   }
 
@@ -241,7 +408,10 @@ export default class TransportAction extends Component {
     this.transport?.resume()
   }
 
-  mvOrCp = () => {
+  mvOrCp = async () => {
+    const attemptToken = this.transferAttempts.start()
+    if (attemptToken === null) return
+    this.activeAttemptToken = attemptToken
     const {
       transfer
     } = this.props
@@ -249,7 +419,6 @@ export default class TransportAction extends Component {
       fromPath,
       toPath,
       typeFrom,
-      tabId,
       operation // 'mv' or 'cp'
     } = transfer
 
@@ -265,29 +434,33 @@ export default class TransportAction extends Component {
       })
     }
     if (typeFrom === typeMap.local) {
-      return window.fs[operation](fromPath, finalToPath)
-        .then(this.onEnd)
-        .catch(e => {
-          this.onEnd()
-          this.onError(e)
-        })
+      try {
+        await window.fs[operation](fromPath, finalToPath)
+        return this.onEnd({}, attemptToken)
+      } catch (e) {
+        return this.onError(e, attemptToken)
+      }
     }
-    const sftp = refs.get('sftp-' + tabId)?.sftp
-    return sftp[operation](fromPath, finalToPath)
-      .then(this.onEnd)
-      .catch(e => {
-        this.onEnd()
-        this.onError(e)
-      })
+    const sftp = this.getTransferRuntimeTransport(transfer).sftp
+    try {
+      await this.transferSafety.begin()
+      await sftp[operation](fromPath, finalToPath)
+      return this.onEnd({}, attemptToken)
+    } catch (e) {
+      return this.onError(e, attemptToken)
+    }
   }
 
-  transferFile = async (transfer = this.props.transfer, onEnd = this.onEnd) => {
+  transferFile = async (transfer = this.props.transfer, onEnd, attemptToken) => {
     const {
       fromPath,
       typeFrom,
       toFile = {}
     } = transfer
-    const toPath = transfer.zip
+    const toPath = shouldUseLegacyZipOptimization({
+      zip: transfer.zip,
+      isFtp: this.isFtp
+    })
       ? transfer.toPath
       : this.newPath || transfer.toPath
     const fromFile = transfer.fromFile || this.fromFile
@@ -301,19 +474,27 @@ export default class TransportAction extends Component {
       ? fromPath
       : toPath
     const mode = toFile.mode || fromMode
-    const sftp = refs.get('sftp-' + this.tabId).sftp
+    const sftp = this.getTransferRuntimeTransport(transfer).sftp
+    const handleEnd = onEnd
+      ? update => onEnd(update, attemptToken)
+      : update => this.onEnd(update, attemptToken)
     try {
-      this.transport = await sftp[transferType]({
+      const transport = await sftp[transferType]({
         remotePath,
         localPath,
         isDirectory: !!fromFile.isDirectory,
         options: { mode },
-        onData: this.onData,
-        onError: this.onError,
-        onEnd
+        onData: transferred => this.onData(transferred, attemptToken),
+        onError: error => this.onError(error, attemptToken),
+        onEnd: handleEnd
       })
+      if (!this.transferAttempts.isCurrent(attemptToken)) {
+        transport?.destroy()
+        return
+      }
+      this.transport = transport
     } catch (e) {
-      this.onError(e)
+      this.onError(e, attemptToken)
     }
   }
 
@@ -410,6 +591,7 @@ export default class TransportAction extends Component {
   }
 
   onDecision = (policy) => {
+    this.conflictPolicy = policy
     if (policy === fileActions.skip || policy === fileActions.cancel) {
       return this.onEnd()
     }
@@ -435,7 +617,7 @@ export default class TransportAction extends Component {
     this.startTransfer()
   }
 
-  zipTransferFolder = async () => {
+  zipTransferFolder = async (attemptToken) => {
     const {
       transfer
     } = this.props
@@ -464,10 +646,11 @@ export default class TransportAction extends Component {
       toPath: nTo,
       fromPath: p
     }
-    this.transferFile(newTrans1, this.unzipFile)
+    this.transferFile(newTrans1, this.unzipFile, attemptToken)
   }
 
-  unzipFile = async () => {
+  unzipFile = async (update, attemptToken) => {
+    if (!this.transferAttempts.isCurrent(attemptToken)) return
     const { transfer } = this.props
     const {
       typeTo
@@ -514,7 +697,7 @@ export default class TransportAction extends Component {
         await window.fs.rmrf(path)
       }
     }
-    this.onEnd()
+    this.onEnd({}, attemptToken)
   }
 
   buildUnzipPath = (transfer) => {
@@ -539,34 +722,76 @@ export default class TransportAction extends Component {
   }
 
   startTransfer = async () => {
+    const attemptToken = this.transferAttempts.start()
+    if (attemptToken === null) return
+    this.activeAttemptToken = attemptToken
     try {
-      const { fromFile = this.fromFile, zip } = this.props.transfer
+      const transfer = this.props.transfer
+      const { fromFile = this.fromFile, zip } = transfer
       if (!fromFile) {
+        this.transferAttempts.invalidate(attemptToken)
         return
       }
-      if (!fromFile.isDirectory) {
-        return await this.transferFile()
+      await this.prepareLocalSource(transfer)
+      if (transfer.remote2remoteStep === 1 && !this.crossHostSourcePin) {
+        const sourcePreflight = await verifyCrossHostSourcePreflight({
+          transfer: {
+            ...transfer,
+            fromFile
+          },
+          getCapability: sourceTabId => refs.get('sftp-' + sourceTabId)
+        })
+        this.crossHostSourcePin = sourcePreflight.runtime
+        this.crossHostSourcePreflight = sourcePreflight.verified
+        this.verifiedCrossHostSource = null
       }
-      if (zip) {
-        return await this.zipTransferFolder()
+      await this.transferSafety.begin()
+      if (!fromFile.isDirectory) {
+        return await this.transferFile(transfer, undefined, attemptToken)
+      }
+      if (shouldUseLegacyZipOptimization({ zip, isFtp: this.isFtp })) {
+        return await this.zipTransferFolder(attemptToken)
       }
       if (!this.isFtp) {
-        return await this.transferFile()
+        return await this.transferFile(transfer, undefined, attemptToken)
       } else {
-        await this.transferFolderRecursive()
+        await this.transferFolderRecursive(this.getDefaultTransfer(), true, attemptToken)
       }
       this.onEnd({
         transferred: this.transferred,
         size: this.total
-      })
+      }, attemptToken)
     } catch (e) {
-      this.onError(e)
+      this.onError(e, attemptToken)
     }
   }
 
-  list = async (type, path, tabId) => {
-    const sftp = refs.get('sftp-' + tabId)
-    return sftp[type + 'List'](true, path)
+  assertCurrentAttempt = (attemptToken) => {
+    if (attemptToken !== undefined &&
+      !this.transferAttempts.isCurrent(attemptToken)) {
+      const error = new Error('传输尝试已失效。')
+      error.code = 'STALE_TRANSFER_ATTEMPT'
+      throw error
+    }
+  }
+
+  list = async (type, path, tabId, transfer = this.props.transfer, attemptToken) => {
+    this.assertCurrentAttempt(attemptToken)
+    const runtime = this.getTransferRuntimeTransport({
+      ...transfer,
+      tabId
+    })
+    if (transfer.remote2remoteStep === 1 && type === typeMap.remote) {
+      if (!runtime.capability?.sftpList) {
+        throw new Error('跨主机传输来源目录读取能力不可用，已停止下载。')
+      }
+      const result = await runtime.capability.sftpList(runtime.sftp, path)
+      this.assertCurrentAttempt(attemptToken)
+      return result
+    }
+    const result = await runtime.capability[type + 'List'](true, path)
+    this.assertCurrentAttempt(attemptToken)
+    return result
   }
 
   handleRename = (fromPath, isRemote) => {
@@ -578,7 +803,9 @@ export default class TransportAction extends Component {
     }
   }
 
-  onFolderData = (transferred) => {
+  onFolderData = (transferred, attemptToken) => {
+    if (attemptToken !== undefined &&
+      !this.transferAttempts.isCurrent(attemptToken)) return
     if (this.onCancel) {
       return
     }
@@ -601,7 +828,8 @@ export default class TransportAction extends Component {
     this.update(up)
   }
 
-  transferFileAsSubTransfer = async (transfer) => {
+  transferFileAsSubTransfer = async (transfer, attemptToken) => {
+    this.assertCurrentAttempt(attemptToken)
     const {
       fromPath,
       toPath,
@@ -618,16 +846,23 @@ export default class TransportAction extends Component {
     const localPath = isDown ? toPath : fromPath
     const remotePath = isDown ? fromPath : toPath
     const mode = toFile.mode || fromMode
-    const sftp = refs.get('sftp-' + this.tabId).sftp
+    const sftp = this.getTransferRuntimeTransport(transfer).sftp
 
     return new Promise((resolve, reject) => {
       let transport
 
       const onSubEnd = () => {
+        if (!this.transferAttempts.isCurrent(attemptToken)) {
+          transport?.destroy()
+          const error = new Error('传输尝试已失效。')
+          error.code = 'STALE_TRANSFER_ATTEMPT'
+          return reject(error)
+        }
         if (fileSize) {
-          this.onFolderData(fileSize)
+          this.onFolderData(fileSize, attemptToken)
         }
         if (transport) {
+          this.subTransports.delete(transport)
           transport.destroy()
           transport = null
         }
@@ -636,8 +871,15 @@ export default class TransportAction extends Component {
 
       const onSubError = (error) => {
         if (transport) {
+          this.subTransports.delete(transport)
           transport.destroy()
           transport = null
+        }
+        if (!this.transferAttempts.isCurrent(attemptToken)) {
+          const stale = new Error('传输尝试已失效。')
+          stale.code = 'STALE_TRANSFER_ATTEMPT'
+          reject(stale)
+          return
         }
         reject(error)
       }
@@ -650,7 +892,15 @@ export default class TransportAction extends Component {
         onError: onSubError,
         onEnd: onSubEnd
       }).then(transportInstance => {
+        if (!this.transferAttempts.isCurrent(attemptToken)) {
+          transportInstance?.destroy()
+          const error = new Error('传输尝试已失效。')
+          error.code = 'STALE_TRANSFER_ATTEMPT'
+          reject(error)
+          return
+        }
         transport = transportInstance
+        this.subTransports.add(transportInstance)
       }).catch(onSubError)
     })
   }
@@ -669,7 +919,8 @@ export default class TransportAction extends Component {
   }
 
   // Handle file transfers in parallel batches
-  transferFiles = async (files, batch, transfer) => {
+  transferFiles = async (files, batch, transfer, attemptToken) => {
+    this.assertCurrentAttempt(attemptToken)
     if (this.onCancel) {
       return
     }
@@ -698,22 +949,24 @@ export default class TransportAction extends Component {
           fromFile: file
         }
 
-        return this.transferFileAsSubTransfer(itemTransfer)
+        return this.transferFileAsSubTransfer(itemTransfer, attemptToken)
       })
 
       // Wait for all files in batch to complete
       const results = await Promise.all(promises)
+      this.assertCurrentAttempt(attemptToken)
 
       // Update progress once for the entire batch
       const batchTotalSize = results.reduce((sum, size) => sum + size, 0)
       if (batchTotalSize > 0) {
-        this.onFolderData(batchTotalSize)
+        this.onFolderData(batchTotalSize, attemptToken)
       }
     }
   }
 
   // Handle folder transfers sequentially to prevent concurrency explosion
-  transferFolders = async (folders, batch, transfer) => {
+  transferFolders = async (folders, batch, transfer, attemptToken) => {
+    this.assertCurrentAttempt(attemptToken)
     if (this.onCancel) {
       return
     }
@@ -737,11 +990,12 @@ export default class TransportAction extends Component {
           fromFile: folder
         }
 
-        return this.mkdir(createTransfer)
+        return this.mkdir(createTransfer, attemptToken)
       })
 
       // Create all folders in this batch concurrently
       await Promise.all(createFolderPromises)
+      this.assertCurrentAttempt(attemptToken)
     }
 
     // Step 2: Process contents of each folder sequentially
@@ -761,12 +1015,13 @@ export default class TransportAction extends Component {
       }
 
       // Transfer folder contents (set createFolder = false since we already created it)
-      await this.transferFolderRecursive(itemTransfer, false)
+      await this.transferFolderRecursive(itemTransfer, false, attemptToken)
     }
   }
 
   // Main recursive function using the separate handlers
-  transferFolderRecursive = async (transfer = this.getDefaultTransfer(), createFolder = true) => {
+  transferFolderRecursive = async (transfer = this.getDefaultTransfer(), createFolder = true, attemptToken) => {
+    this.assertCurrentAttempt(attemptToken)
     if (this.onCancel) {
       return
     }
@@ -779,13 +1034,13 @@ export default class TransportAction extends Component {
     } = transfer
 
     if (createFolder && (!toFile || isRenamed)) {
-      const folderCreated = await this.mkdir(transfer)
+      const folderCreated = await this.mkdir(transfer, attemptToken)
       if (!folderCreated) {
         return
       }
     }
 
-    const list = await this.list(typeFrom, fromPath, tabId)
+    const list = await this.list(typeFrom, fromPath, tabId, transfer, attemptToken)
     const bigFileSize = 1024 * 1024
     const smallFilesBatch = 30
     const BigFilesBatch = 3
@@ -814,22 +1069,35 @@ export default class TransportAction extends Component {
     })
 
     // Process files with parallel batching
-    await this.transferFiles(smallFiles, smallFilesBatch, transfer)
-    await this.transferFiles(largeFiles, BigFilesBatch, transfer)
+    await this.transferFiles(smallFiles, smallFilesBatch, transfer, attemptToken)
+    await this.transferFiles(largeFiles, BigFilesBatch, transfer, attemptToken)
 
     // Process folders sequentially
-    await this.transferFolders(folders, foldersBatch, transfer)
+    await this.transferFolders(folders, foldersBatch, transfer, attemptToken)
   }
 
-  scheduleRetry = (e) => {
+  scheduleRetry = (e, attemptToken) => {
+    if (!this.transferAttempts.isCurrent(attemptToken) ||
+      this.transferAttempts.completing) return false
     if (
       this.onCancel ||
       !shouldRetryTransfer(e, this.transferRetryState)
     ) {
       return false
     }
+    this.transferAttempts.invalidate(attemptToken)
+    this.activeAttemptToken = null
     this.transport && this.transport.destroy()
     this.transport = null
+    const retrySource = resetCrossHostSourceAttemptForRetry({
+      transfer: this.props.transfer,
+      sourcePin: this.crossHostSourcePin,
+      verifiedSource: this.verifiedCrossHostSource,
+      sourcePreflight: this.crossHostSourcePreflight
+    })
+    this.crossHostSourcePin = retrySource.sourcePin
+    this.verifiedCrossHostSource = retrySource.verifiedSource
+    this.crossHostSourcePreflight = retrySource.sourcePreflight
     this.update({
       status: 'active',
       error: '',
@@ -841,33 +1109,39 @@ export default class TransportAction extends Component {
     return true
   }
 
-  onError = (e) => {
-    if (this.scheduleRetry(e)) {
+  onError = (e, attemptToken) => {
+    if (!this.transferAttempts.isCurrent(attemptToken) ||
+      this.transferAttempts.completing) return
+    if (this.scheduleRetry(e, attemptToken)) {
       return
     }
     const up = {
       status: 'exception',
       error: e.message
     }
-    this.onEnd(up)
+    this.onEnd(up, attemptToken)
     window.store.onError(e)
   }
 
-  mkdir = async (transfer = this.props.transfer) => {
+  mkdir = async (transfer = this.props.transfer, attemptToken) => {
+    this.assertCurrentAttempt(attemptToken)
     const {
       typeTo,
-      toPath,
-      tabId
+      toPath
     } = transfer
     if (typeTo === typeMap.local) {
-      return window.fs.mkdir(toPath)
+      const result = await window.fs.mkdir(toPath)
         .then(() => true)
         .catch(() => false)
+      this.assertCurrentAttempt(attemptToken)
+      return result
     }
-    const sftp = refs.get('sftp-' + tabId).sftp
-    return sftp.mkdir(toPath)
+    const sftp = this.getTransferRuntimeTransport(transfer).sftp
+    const result = await sftp.mkdir(toPath)
       .then(() => true)
       .catch(() => false)
+    this.assertCurrentAttempt(attemptToken)
+    return result
   }
 
   render () {

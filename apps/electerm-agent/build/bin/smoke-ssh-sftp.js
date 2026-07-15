@@ -1,17 +1,17 @@
 const { Client } = require('@electerm/ssh2')
 const crypto = require('crypto')
 const path = require('path')
+const {
+  createSshHostVerification,
+  normalizeExpectedHostFingerprint
+} = require('./ssh-host-fingerprint')
 
-const env = process.env
-const host = env.SHELLPILOT_SSH_HOST
-const username = env.SHELLPILOT_SSH_USER
-const password = env.SHELLPILOT_SSH_PASSWORD
-const port = Number(env.SHELLPILOT_SSH_PORT || 22)
-const testDir = env.SHELLPILOT_SSH_TEST_DIR || '/tmp'
-const timeoutMs = Number(env.SHELLPILOT_SSH_TIMEOUT || 20000)
-const started = Date.now()
+const defaultPort = 22
+const defaultTestDir = '/tmp'
+const defaultTimeoutMs = 20000
 const results = []
 const sftpConnections = new WeakMap()
+const sftpTimeouts = new WeakMap()
 
 const sshCheckNames = [
   'remote command execution',
@@ -29,9 +29,114 @@ const sftpCheckNames = [
   'quick rollback script'
 ]
 
-function redact (text, secret = password) {
-  const value = String(text || '')
-  return secret ? value.replaceAll(secret, '[REDACTED]') : value
+function resolveConfig (env = process.env) {
+  return {
+    host: String(env.SHELLPILOT_SSH_HOST || '').trim(),
+    username: String(env.SHELLPILOT_SSH_USER || '').trim(),
+    password: String(env.SHELLPILOT_SSH_PASSWORD || ''),
+    hostFingerprint: String(env.SHELLPILOT_SSH_HOST_FINGERPRINT || '').trim(),
+    port: Number(env.SHELLPILOT_SSH_PORT || defaultPort),
+    testDir: String(env.SHELLPILOT_SSH_TEST_DIR || defaultTestDir),
+    timeoutMs: Number(env.SHELLPILOT_SSH_TIMEOUT || defaultTimeoutMs)
+  }
+}
+
+function validateConfig (config) {
+  const normalized = {
+    ...config,
+    host: String(config?.host || '').trim(),
+    username: String(config?.username || '').trim(),
+    password: String(config?.password || ''),
+    hostFingerprint: String(config?.hostFingerprint || '').trim(),
+    port: Number(config?.port),
+    testDir: String(config?.testDir || defaultTestDir),
+    timeoutMs: Number(config?.timeoutMs)
+  }
+  const missing = [
+    ['SHELLPILOT_SSH_HOST', normalized.host],
+    ['SHELLPILOT_SSH_USER', normalized.username],
+    ['SHELLPILOT_SSH_PASSWORD', normalized.password],
+    ['SHELLPILOT_SSH_HOST_FINGERPRINT', normalized.hostFingerprint]
+  ].filter(([, value]) => !value).map(([name]) => name)
+
+  if (missing.length) {
+    throw new Error(`Missing required environment variables: ${missing.join(', ')}`)
+  }
+  if (!Number.isInteger(normalized.port) || normalized.port < 1 || normalized.port > 65535) {
+    throw new Error('Invalid SSH smoke configuration: port must be an integer from 1 to 65535.')
+  }
+  if (!Number.isInteger(normalized.timeoutMs) ||
+      normalized.timeoutMs < 1000 ||
+      normalized.timeoutMs > 120000) {
+    throw new Error('Invalid SSH smoke configuration: timeout must be an integer from 1000 to 120000 milliseconds.')
+  }
+
+  normalizeExpectedHostFingerprint(normalized.hostFingerprint)
+  normalized.testDir = assertSafeTestRoot(normalized.testDir)
+  return normalized
+}
+
+function collectSecretValues (secretContext) {
+  const candidates = Array.isArray(secretContext)
+    ? secretContext
+    : secretContext && typeof secretContext === 'object' && !Buffer.isBuffer(secretContext)
+      ? Object.values(secretContext)
+      : [secretContext]
+  return candidates
+    .flat()
+    .filter(value => typeof value === 'string' || Buffer.isBuffer(value))
+    .map(String)
+    .filter(Boolean)
+    .sort((left, right) => right.length - left.length)
+}
+
+function redactError (error, redactor) {
+  const source = error instanceof Error ? error : new Error(String(error || ''))
+  const safeError = new Error(redactor(source.message))
+  safeError.name = redactor(source.name || 'Error')
+  safeError.stack = redactor(source.stack || `${safeError.name}: ${safeError.message}`)
+  for (const property of ['code', 'errno', 'status', 'statusCode']) {
+    if (source[property] !== undefined) {
+      safeError[property] = typeof source[property] === 'string'
+        ? redactor(source[property])
+        : source[property]
+    }
+  }
+  return safeError
+}
+
+function resolveDefaultRedactionContext (env = process.env) {
+  return {
+    password: env.SHELLPILOT_SSH_PASSWORD,
+    privateKey: [
+      env.SHELLPILOT_SSH_PRIVATE_KEY,
+      env.SHELLPILOT_SSH_PRIVATE_KEY_CONTENT
+    ],
+    passphrase: [
+      env.SHELLPILOT_SSH_PASSPHRASE,
+      env.SHELLPILOT_SSH_PRIVATE_KEY_PASSPHRASE
+    ]
+  }
+}
+
+function createRedactor (secretContext = resolveDefaultRedactionContext()) {
+  const secrets = collectSecretValues(secretContext)
+  const redactor = text => {
+    let value = String(text || '')
+    for (const secret of secrets) {
+      value = value.replaceAll(secret, '[REDACTED]')
+    }
+    return value.replace(
+      /((?:password|passphrase|private[_ -]?key|api[_ -]?key|token)\s*[:=]\s*)\S+/gi,
+      '$1[REDACTED]'
+    )
+  }
+  redactor.error = error => redactError(error, redactor)
+  return redactor
+}
+
+function redact (text, secretContext) {
+  return createRedactor(secretContext)(text)
 }
 
 function shellQuote (value) {
@@ -46,7 +151,20 @@ function normalizeRemotePath (value) {
 function assertSafeTestRoot (testRoot) {
   const rawRoot = String(testRoot || '')
   const normalizedRoot = normalizeRemotePath(rawRoot)
-  if (!rawRoot || !normalizedRoot.startsWith('/') || normalizedRoot === '/') {
+  const isAllowedTemporaryRoot = normalizedRoot === '/tmp' ||
+    normalizedRoot.startsWith('/tmp/') ||
+    normalizedRoot === '/var/tmp' ||
+    normalizedRoot.startsWith('/var/tmp/')
+  const segments = rawRoot.split('/').filter(Boolean)
+  const hasUnsafeSegment = segments.some(segment =>
+    segment === '..' || !/^[A-Za-z0-9._-]+$/.test(segment)
+  )
+  if (!rawRoot ||
+      !normalizedRoot.startsWith('/') ||
+      normalizedRoot === '/' ||
+      /\s/.test(rawRoot) ||
+      !isAllowedTemporaryRoot ||
+      hasUnsafeSegment) {
     throw new Error(`unsafe test root: ${normalizedRoot}`)
   }
   return normalizedRoot
@@ -145,8 +263,8 @@ function isCleanupPathAbsent ({ exists, isSymbolicLink, isHardLinkAlias }) {
   return !exists && !isSymbolicLink && !isHardLinkAlias
 }
 
-function record (name, ok, detail = '') {
-  const safeDetail = redact(detail)
+function record (name, ok, detail = '', redactor = createRedactor()) {
+  const safeDetail = redactor(detail)
   results.push({ name, ok, detail: safeDetail })
   console.log(`${ok ? '[PASS]' : '[FAIL]'} ${name}${safeDetail ? ' - ' + safeDetail : ''}`)
   if (!ok) {
@@ -154,62 +272,62 @@ function record (name, ok, detail = '') {
   }
 }
 
-function recordUnavailable (names, detail) {
+function recordUnavailable (names, detail, redactor = createRedactor()) {
   for (const name of names) {
-    record(name, false, detail)
+    record(name, false, detail, redactor)
   }
 }
 
-async function runCheck (name, task) {
+async function runCheck (name, task, redactor = createRedactor()) {
   try {
     const result = await task()
     const outcome = typeof result === 'object'
       ? result
       : { ok: Boolean(result) }
-    record(name, Boolean(outcome.ok), outcome.detail || '')
+    record(name, Boolean(outcome.ok), outcome.detail || '', redactor)
     return Boolean(outcome.ok)
   } catch (err) {
-    record(name, false, redact(err.stack || err.message))
+    const safeError = redactor.error(err)
+    record(name, false, safeError.stack || safeError.message, redactor)
     return false
   }
 }
 
-function failMissingEnv () {
-  const missing = [
-    ['SHELLPILOT_SSH_HOST', host],
-    ['SHELLPILOT_SSH_USER', username],
-    ['SHELLPILOT_SSH_PASSWORD', password]
-  ].filter(([, value]) => !value).map(([name]) => name)
-  if (!missing.length) {
-    return
+function buildSshConnectOptions (config) {
+  const hostVerification = createSshHostVerification(config.hostFingerprint)
+  return {
+    host: config.host,
+    port: config.port,
+    username: config.username,
+    password: config.password,
+    readyTimeout: config.timeoutMs,
+    keepaliveInterval: 10000,
+    ...hostVerification
   }
-  console.error(`Missing required environment variables: ${missing.join(', ')}`)
-  console.error('Example: set SHELLPILOT_SSH_HOST, SHELLPILOT_SSH_USER and SHELLPILOT_SSH_PASSWORD, then run npm run smoke:ssh-sftp')
-  process.exit(2)
 }
 
-function connect () {
+function connect (config = resolveConfig(process.env), createClient = () => new Client()) {
+  const validatedConfig = validateConfig(config)
+  const connectOptions = buildSshConnectOptions(validatedConfig)
   return new Promise((resolve, reject) => {
-    const conn = new Client()
+    const conn = createClient()
     conn.on('ready', () => resolve(conn))
     conn.on('error', reject)
-    conn.connect({
-      host,
-      port,
-      username,
-      password,
-      readyTimeout: timeoutMs,
-      keepaliveInterval: 10000,
-      hostVerifier: () => true
-    })
+    conn.connect(connectOptions)
   })
 }
 
-function execCommand (conn, command, commandTimeoutMs = timeoutMs) {
+function execCommand (
+  conn,
+  command,
+  commandTimeoutMs = defaultTimeoutMs,
+  redactor = createRedactor()
+) {
   return new Promise((resolve, reject) => {
     let stdout = ''
     let stderr = ''
     let done = false
+    let channel
     const finish = (err, result) => {
       if (done) {
         return
@@ -217,26 +335,36 @@ function execCommand (conn, command, commandTimeoutMs = timeoutMs) {
       done = true
       clearTimeout(timer)
       if (err) {
-        reject(err)
+        reject(redactor.error(err))
       } else {
         resolve(result)
       }
     }
     const timer = setTimeout(() => {
-      finish(new Error(`exec timeout: ${command}`))
+      if (done) return
+      done = true
+      const error = new Error(`exec timeout after ${commandTimeoutMs}ms`)
+      error.code = 'ETIMEDOUT'
+      try { channel?.close?.() } catch {}
+      reject(redactor.error(error))
     }, commandTimeoutMs)
 
-    conn.exec(command, (err, stream) => {
+    const onExec = (err, stream) => {
+      if (done) {
+        try { stream?.close?.() } catch {}
+        return
+      }
       if (err) {
         finish(err)
         return
       }
+      channel = stream
       stream.on('error', finish)
       stream.on('close', code => {
         finish(null, {
           code,
-          stdout: redact(stdout),
-          stderr: redact(stderr)
+          stdout: redactor(stdout),
+          stderr: redactor(stderr)
         })
       })
       stream.on('data', data => {
@@ -245,7 +373,12 @@ function execCommand (conn, command, commandTimeoutMs = timeoutMs) {
       stream.stderr.on('data', data => {
         stderr += data.toString('utf8')
       })
-    })
+    }
+    try {
+      conn.exec(command, onExec)
+    } catch (err) {
+      finish(err)
+    }
   })
 }
 
@@ -274,7 +407,7 @@ function sftpTimeoutError (label, boundedTimeoutMs) {
   return err
 }
 
-function sftpClient (conn, connectTimeoutMs = timeoutMs) {
+function sftpClient (conn, connectTimeoutMs = defaultTimeoutMs) {
   const boundedTimeoutMs = normalizeSftpTimeout(connectTimeoutMs, 'SFTP connect')
   return new Promise((resolve, reject) => {
     let done = false
@@ -300,6 +433,7 @@ function sftpClient (conn, connectTimeoutMs = timeoutMs) {
         return
       }
       sftpConnections.set(sftp, conn)
+      sftpTimeouts.set(sftp, boundedTimeoutMs)
       resolve(sftp)
     }
 
@@ -315,7 +449,7 @@ function sftpOpWithTimeout ({
   args = [],
   conn,
   method,
-  operationTimeoutMs = timeoutMs,
+  operationTimeoutMs = defaultTimeoutMs,
   sftp
 }) {
   const boundedTimeoutMs = normalizeSftpTimeout(
@@ -362,7 +496,7 @@ function sftpOp (sftp, method, ...args) {
     args,
     conn: sftpConnections.get(sftp),
     method,
-    operationTimeoutMs: timeoutMs,
+    operationTimeoutMs: sftpTimeouts.get(sftp) || defaultTimeoutMs,
     sftp
   })
 }
@@ -438,10 +572,16 @@ function createServerStatusProbeCommands () {
   ]
 }
 
-async function captureServerStatusFingerprint (conn) {
+async function captureServerStatusFingerprint (
+  conn,
+  commandTimeoutMs = defaultTimeoutMs,
+  redactor = createRedactor()
+) {
   const result = await execCommand(
     conn,
-    "printf '__ROUTES__\\n'; ip route show 2>&1; printf '__SERVICES__\\n'; systemctl list-unit-files --type=service --no-legend --no-pager 2>&1; printf '__FIREWALL__\\n'; if command -v nft >/dev/null 2>&1; then nft -s list ruleset 2>&1; elif command -v iptables-save >/dev/null 2>&1; then iptables-save -c 2>/dev/null | sed -E -e 's/\\[[0-9]+:[0-9]+\\]/[COUNTERS]/g' -e 's/^# (Generated|Completed).*/# \\1/'; fi"
+    "printf '__ROUTES__\\n'; ip route show 2>&1; printf '__SERVICES__\\n'; systemctl list-unit-files --type=service --no-legend --no-pager 2>&1; printf '__FIREWALL__\\n'; if command -v nft >/dev/null 2>&1; then nft -s list ruleset 2>&1; elif command -v iptables-save >/dev/null 2>&1; then iptables-save -c 2>/dev/null | sed -E -e 's/\\[[0-9]+:[0-9]+\\]/[COUNTERS]/g' -e 's/^# (Generated|Completed).*/# \\1/'; fi",
+    commandTimeoutMs,
+    redactor
   )
   if (result.code !== 0) {
     throw new Error(`status fingerprint failed: ${result.stderr || result.stdout}`)
@@ -507,11 +647,16 @@ function isCtrlCInterruptSpecific (probe, output, interruptElapsedMs) {
     interruptElapsedMs < probe.totalTimeoutMs
 }
 
-function shellTest (conn, remoteTestDir) {
+function shellTest (
+  conn,
+  remoteTestDir,
+  timeoutMs = defaultTimeoutMs,
+  redactor = createRedactor()
+) {
   return new Promise((resolve, reject) => {
     conn.shell({ term: 'xterm-256color', cols: 100, rows: 30 }, (err, stream) => {
       if (err) {
-        reject(err)
+        reject(redactor.error(err))
         return
       }
       let data = ''
@@ -529,7 +674,7 @@ function shellTest (conn, remoteTestDir) {
           clearTimeout(delayedWrite)
         }
         if (finishError) {
-          reject(finishError)
+          reject(redactor.error(finishError))
         } else {
           resolve(value)
         }
@@ -550,7 +695,7 @@ function shellTest (conn, remoteTestDir) {
           stream.end('exit\n')
           finish(null, {
             interruptElapsedMs: Date.now() - probeStartedAt,
-            output: redact(data),
+            output: redactor(data),
             probe
           })
         }
@@ -572,30 +717,53 @@ function shellTest (conn, remoteTestDir) {
   })
 }
 
-async function runSmoke () {
-  failMissingEnv()
+async function runSmoke (options = {}) {
+  const resolvedConfig = resolveConfig(options.env || process.env)
+  const redactor = createRedactor({ password: resolvedConfig.password })
+  let config
+  try {
+    config = validateConfig(resolvedConfig)
+  } catch (err) {
+    console.error(redactor(err.message))
+    process.exitCode = 2
+    return
+  }
+  const started = Date.now()
+  results.length = 0
+  const recordResult = (name, ok, detail = '') => {
+    record(name, ok, detail, redactor)
+  }
+  const recordUnavailableResults = (names, detail) => {
+    recordUnavailable(names, detail, redactor)
+  }
+  const runSmokeCheck = (name, task) => runCheck(name, task, redactor)
   let remoteTestDir
   let paths
   let conn
   let sftp
 
-  try {
+  const runChecks = async () => {
     try {
-      const connected = await connectWithValidatedScope(testDir, connect)
+      const connected = await connectWithValidatedScope(
+        config.testDir,
+        () => connect(config, options.clientFactory)
+      )
       conn = connected.conn
       remoteTestDir = connected.remoteTestDir
       paths = connected.paths
-      record('SSH password login', true, `connected ${host}:${port} in ${Date.now() - started}ms`)
+      recordResult('SSH password login', true, `connected ${config.host}:${config.port} in ${Date.now() - started}ms`)
     } catch (err) {
-      record('SSH password login', false, redact(err.stack || err.message))
-      recordUnavailable([...sshCheckNames, ...sftpCheckNames], 'not run: SSH login failed')
+      recordResult('SSH password login', false, err.stack || err.message)
+      recordUnavailableResults([...sshCheckNames, ...sftpCheckNames], 'not run: SSH login failed')
       return
     }
 
-    const setupOk = await runCheck('remote test directory setup', async () => {
+    const setupOk = await runSmokeCheck('remote test directory setup', async () => {
       const setup = await execCommand(
         conn,
-        `mkdir -p -- ${shellQuote(remoteTestDir)} && [ -d ${shellQuote(remoteTestDir)} ]`
+        `mkdir -p -- ${shellQuote(remoteTestDir)} && [ -d ${shellQuote(remoteTestDir)} ]`,
+        config.timeoutMs,
+        redactor
       )
       return {
         ok: setup.code === 0,
@@ -603,25 +771,27 @@ async function runSmoke () {
       }
     })
     if (!setupOk) {
-      recordUnavailable([...sshCheckNames, ...sftpCheckNames], 'not run: isolated directory setup failed')
+      recordUnavailableResults([...sshCheckNames, ...sftpCheckNames], 'not run: isolated directory setup failed')
       return
     }
 
-    await runCheck('remote command execution', async () => {
+    await runSmokeCheck('remote command execution', async () => {
       const basic = await execCommand(
         conn,
-        `cd -- ${shellQuote(remoteTestDir)} && { printf 'user='; whoami; printf 'uid='; id -u; printf 'kernel='; uname -s; printf 'pwd='; pwd; printf '__COMMAND_OK__\\n'; }`
+        `cd -- ${shellQuote(remoteTestDir)} && { printf 'user='; whoami; printf 'uid='; id -u; printf 'kernel='; uname -s; printf 'pwd='; pwd; printf '__COMMAND_OK__\\n'; }`,
+        config.timeoutMs,
+        redactor
       )
       return {
         ok: basic.code === 0 &&
-          basic.stdout.includes(`user=${username}\n`) &&
+          basic.stdout.includes(`user=${config.username}\n`) &&
           basic.stdout.includes('__COMMAND_OK__'),
         detail: basic.stdout.trim().replace(/\s+/g, ' | ')
       }
     })
 
-    await runCheck('interactive shell Ctrl+C', async () => {
-      const shellResult = await shellTest(conn, remoteTestDir)
+    await runSmokeCheck('interactive shell Ctrl+C', async () => {
+      const shellResult = await shellTest(conn, remoteTestDir, config.timeoutMs, redactor)
       return {
         ok: isCtrlCInterruptSpecific(
           shellResult.probe,
@@ -632,15 +802,15 @@ async function runSmoke () {
       }
     })
 
-    await runCheck('read-only server status scan', async () => {
-      const fingerprintBefore = await captureServerStatusFingerprint(conn)
+    await runSmokeCheck('read-only server status scan', async () => {
+      const fingerprintBefore = await captureServerStatusFingerprint(conn, config.timeoutMs, redactor)
       const probeResults = await Promise.all(
         createServerStatusProbeCommands().map(async probe => {
-          const result = await execCommand(conn, probe.command, 20000)
+          const result = await execCommand(conn, probe.command, 20000, redactor)
           return { ...result, id: probe.id }
         })
       )
-      const fingerprintAfter = await captureServerStatusFingerprint(conn)
+      const fingerprintAfter = await captureServerStatusFingerprint(conn, config.timeoutMs, redactor)
       const coreProbeIds = new Set(['system', 'resources', 'services', 'network'])
       const coreProbesOk = probeResults
         .filter(result => coreProbeIds.has(result.id))
@@ -658,13 +828,13 @@ async function runSmoke () {
     })
 
     try {
-      sftp = await sftpClient(conn)
+      sftp = await sftpClient(conn, config.timeoutMs)
     } catch (err) {
-      recordUnavailable(sftpCheckNames, `SFTP unavailable: ${redact(err.message)}`)
+      recordUnavailableResults(sftpCheckNames, `SFTP unavailable: ${redactor(err.message)}`)
       return
     }
 
-    await runCheck('SFTP directory operations', async () => {
+    await runSmokeCheck('SFTP directory operations', async () => {
       await sftpOp(sftp, 'mkdir', paths.sftpDir)
       await sftpOp(sftp, 'mkdir', paths.nestedDir)
       const nestedStat = await sftpOp(sftp, 'stat', paths.nestedDir)
@@ -676,7 +846,7 @@ async function runSmoke () {
       }
     })
 
-    await runCheck('SFTP file write/read', async () => {
+    await runSmokeCheck('SFTP file write/read', async () => {
       const content = Buffer.from(`ShellPilot SFTP smoke ${new Date().toISOString()}\n`)
       await sftpOp(sftp, 'writeFile', paths.plainFile, content)
       const stat = await sftpOp(sftp, 'stat', paths.plainFile)
@@ -687,7 +857,7 @@ async function runSmoke () {
       }
     })
 
-    await runCheck('SFTP rename/delete', async () => {
+    await runSmokeCheck('SFTP rename/delete', async () => {
       await sftpOp(sftp, 'rename', paths.plainFile, paths.renamedFile)
       const list = await sftpOp(sftp, 'readdir', paths.sftpDir)
       const renamedVisible = list.some(item => item.filename === 'plain-renamed.txt')
@@ -699,7 +869,7 @@ async function runSmoke () {
       }
     })
 
-    await runCheck('SFTP Unicode filename', async () => {
+    await runSmokeCheck('SFTP Unicode filename', async () => {
       const content = Buffer.from('ShellPilot Unicode path content\n')
       await sftpOp(sftp, 'writeFile', paths.unicodeFile, content)
       const readBack = await sftpOp(sftp, 'readFile', paths.unicodeFile)
@@ -710,7 +880,7 @@ async function runSmoke () {
       }
     })
 
-    await runCheck('SFTP 1MB binary integrity', async () => {
+    await runSmokeCheck('SFTP 1MB binary integrity', async () => {
       const binary = crypto.randomBytes(1024 * 1024)
       await sftpOp(sftp, 'writeFile', paths.binaryFile, binary)
       const stat = await sftpOp(sftp, 'stat', paths.binaryFile)
@@ -724,7 +894,7 @@ async function runSmoke () {
       }
     })
 
-    await runCheck('file backup modify restore', async () => {
+    await runSmokeCheck('file backup modify restore', async () => {
       const original = Buffer.from('safe-original-state\n')
       const modified = Buffer.from('safe-modified-state\n')
       await sftpOp(sftp, 'mkdir', paths.backupDir)
@@ -744,7 +914,7 @@ async function runSmoke () {
       }
     })
 
-    await runCheck('safe delete restore', async () => {
+    await runSmokeCheck('safe delete restore', async () => {
       const content = Buffer.from('safe-delete-original\n')
       await sftpOp(sftp, 'mkdir', paths.trashDir)
       await sftpOp(sftp, 'writeFile', paths.trashSource, content)
@@ -759,7 +929,7 @@ async function runSmoke () {
       }
     })
 
-    await runCheck('quick rollback script', async () => {
+    await runSmokeCheck('quick rollback script', async () => {
       const original = Buffer.from('quick-rollback-original\n')
       const modified = Buffer.from('quick-rollback-modified\n')
       await sftpOp(sftp, 'writeFile', paths.rollbackState, original)
@@ -770,7 +940,9 @@ async function runSmoke () {
       const modifiedRead = await sftpOp(sftp, 'readFile', paths.rollbackState)
       const rollback = await execCommand(
         conn,
-        `sh ${shellQuote(paths.rollbackScript)} ${shellQuote(paths.rollbackState)}`
+        `sh ${shellQuote(paths.rollbackScript)} ${shellQuote(paths.rollbackState)}`,
+        config.timeoutMs,
+        redactor
       )
       const restored = await sftpOp(sftp, 'readFile', paths.rollbackState)
       return {
@@ -779,28 +951,34 @@ async function runSmoke () {
         detail: `restored-sha256=${sha256(restored)}`
       }
     })
+  }
+
+  try {
+    await runChecks()
   } catch (err) {
-    record('smoke flow error', false, redact(err.stack || err.message))
+    recordResult('smoke flow error', false, err.stack || err.message)
   } finally {
     if (sftp) {
       try {
         sftp.end()
       } catch (err) {
-        record('SFTP session close', false, redact(err.message))
+        recordResult('SFTP session close', false, err.message)
       }
     }
 
     if (conn) {
       try {
         let cleanupTarget
-        const cleanup = await executeCleanupIfSafe(testDir, remoteTestDir, safeTarget => {
+        const cleanup = await executeCleanupIfSafe(config.testDir, remoteTestDir, safeTarget => {
           cleanupTarget = safeTarget
           return execCommand(
             conn,
-            `rm -rf -- ${shellQuote(cleanupTarget)}; if ${buildCleanupAbsenceCondition(cleanupTarget)}; then printf '__CLEANUP_OK__'; else printf '__CLEANUP_FAILED__' >&2; exit 1; fi`
+            `rm -rf -- ${shellQuote(cleanupTarget)}; if ${buildCleanupAbsenceCondition(cleanupTarget)}; then printf '__CLEANUP_OK__'; else printf '__CLEANUP_FAILED__' >&2; exit 1; fi`,
+            config.timeoutMs,
+            redactor
           )
         })
-        record(
+        recordResult(
           'remote test directory cleanup',
           cleanup.code === 0 && cleanup.stdout.includes('__CLEANUP_OK__'),
           cleanup.stdout.includes('__CLEANUP_OK__')
@@ -808,20 +986,25 @@ async function runSmoke () {
             : cleanup.stderr.trim()
         )
       } catch (err) {
-        record('remote test directory cleanup', false, redact(err.stack || err.message))
+        recordResult('remote test directory cleanup', false, err.stack || err.message)
       }
-      conn.end()
+      try {
+        conn.end()
+      } catch (err) {
+        recordResult('SSH connection close', false, err.stack || err.message)
+      }
     } else {
-      record('remote test directory cleanup', false, 'not run: SSH connection unavailable')
+      recordResult('remote test directory cleanup', false, 'not run: SSH connection unavailable')
     }
-
-    const summary = {
-      passed: results.filter(item => item.ok).length,
-      failed: results.filter(item => !item.ok).length,
-      results
-    }
-    console.log(`\nSUMMARY ${JSON.stringify(summary, null, 2)}`)
   }
+
+  const summary = {
+    passed: results.filter(item => item.ok).length,
+    failed: results.filter(item => !item.ok).length,
+    results: results.map(item => ({ ...item }))
+  }
+  console.log(`\nSUMMARY ${redactor(JSON.stringify(summary, null, 2))}`)
+  return summary
 }
 
 module.exports = {
@@ -830,8 +1013,10 @@ module.exports = {
   assertSafeTestRoot,
   buildCleanupAbsenceCondition,
   buildRollbackScript,
+  buildSshConnectOptions,
   connect,
   connectWithValidatedScope,
+  createRedactor,
   createCtrlCProbe,
   createServerStatusProbeCommands,
   createRemotePaths,
@@ -846,11 +1031,14 @@ module.exports = {
   isSftpNoSuchFileError,
   captureServerStatusFingerprint,
   redact,
+  resolveConfig,
+  runSmoke,
   sftpClient,
   sftpExists,
   sftpOp,
   sftpOpWithTimeout,
-  shellQuote
+  shellQuote,
+  validateConfig
 }
 
 if (require.main === module) {

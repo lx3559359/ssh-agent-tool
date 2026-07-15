@@ -192,13 +192,20 @@ export async function confirmAndRunAICommand ({
 
   const tabId = store?.activeTabId
   if (
-    typeof store?.mcpSendTerminalCommand === 'function' &&
+    typeof store?.runSafetyCommand === 'function' &&
     typeof store?.mcpWaitForTerminalIdle === 'function'
   ) {
     if (!tabId) {
       return false
     }
-    await store.mcpSendTerminalCommand({ command, tabId })
+    const safetyResult = await store.runSafetyCommand(command, {
+      tabId,
+      source: 'agent',
+      title: 'AI 代码块'
+    })
+    if (safetyResult?.sent !== true) {
+      return false
+    }
     const result = await store.mcpWaitForTerminalIdle({
       tabId,
       timeout: 30000,
@@ -216,7 +223,7 @@ export async function confirmAndRunAICommand ({
       }
     }
   } else {
-    store?.runCommandInTerminal?.(command)
+    return false
   }
   return true
 }

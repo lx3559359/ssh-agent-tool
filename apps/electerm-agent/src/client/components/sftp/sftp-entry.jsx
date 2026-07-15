@@ -43,11 +43,18 @@ import message from '../common/message'
 import * as ls from '../../common/safe-local-storage'
 import {
   backupRemoteFiles,
-  softDeleteRemoteFiles,
   restoreSftpRecoveryRecord,
-  findLatestSftpRecoveryRecord,
-  createSftpMutationRecoveryRecord
+  findLatestSftpRecoveryRecord
 } from './sftp-safety'
+import {
+  createSftpTransactionAdapter,
+  digestSftpText
+} from './sftp-transaction-adapter.js'
+import { createTransactionRunner } from '../../common/safety-transactions/transaction-runner.js'
+import { buildSideEffectSafetyRequest } from '../../common/safety-transactions/side-effect-model.js'
+import { assertSameSessionEndpoint } from '../../common/safety-transactions/endpoint-guard.js'
+import { buildSftpSafetyEndpoint } from './sftp-safety-endpoint.js'
+import * as sftpSafetyStore from '../../common/safety-transactions/transaction-store.js'
 import {
   mergeSafetyOperationRecords,
   matchesSafetyOperationEndpoint,
@@ -75,6 +82,21 @@ export default class Sftp extends Component {
       sftpRecoveryRecords: readSafetyOperationRecords(ls)
     }
     this.retryCount = 0
+    this.sftpSafetyAdapter = createSftpTransactionAdapter({
+      getSftp: () => this.sftp
+    })
+    this.sftpSafetyRunner = createTransactionRunner({
+      runRemote: async () => {
+        throw new Error('SFTP side-effect 禁止通过 shell command 执行。')
+      },
+      cancelRemote: async () => {},
+      getCurrentEndpoint: async () => this.getSftpSafetyEndpoint(),
+      buildRecoveryPlan: async () => {
+        throw new Error('SFTP side-effect 禁止生成 shell recovery command。')
+      },
+      sideEffectAdapter: this.sftpSafetyAdapter,
+      store: sftpSafetyStore
+    })
   }
 
   componentDidMount () {
@@ -482,13 +504,239 @@ export default class Sftp extends Component {
     return records
   }
 
-  recordSftpMutationRecovery = (data) => {
-    const record = createSftpMutationRecoveryRecord({
-      ...data,
-      tab: this.props.tab
+  getSftpSafetyEndpoint = () => {
+    if (!this.sftp || this.props.isFtp || this.type === 'ftp') {
+      throw new Error('当前 SFTP 连接不可用，远程文件尚未修改。')
+    }
+    return buildSftpSafetyEndpoint({
+      tab: this.props.tab,
+      terminalId: this.terminalId
     })
-    this.addSftpRecoveryRecords([record])
-    return record
+  }
+
+  assertSftpSafetyOperationEndpoint = async id => {
+    const operation = await sftpSafetyStore.getOperation(id)
+    if (!operation) throw new Error(`未找到 SFTP 安全操作：${id}`)
+    if (operation.effect?.adapter !== 'sftp') {
+      throw new Error('该安全操作不属于 SFTP capability。')
+    }
+    assertSameSessionEndpoint(operation.endpoint, this.getSftpSafetyEndpoint())
+    return operation
+  }
+
+  rollbackSafetyOperation = async id => {
+    await this.assertSftpSafetyOperationEndpoint(id)
+    const result = await this.sftpSafetyRunner.rollback(id)
+    await this.remoteList()
+    return result
+  }
+
+  keepSafetyOperation = async id => {
+    await this.assertSftpSafetyOperationEndpoint(id)
+    return this.sftpSafetyRunner.keep(id)
+  }
+
+  cancelSafetyOperation = async id => {
+    await this.assertSftpSafetyOperationEndpoint(id)
+    return this.sftpSafetyRunner.cancel(id)
+  }
+
+  confirmPreparedSftpOperation = (title) => {
+    return new Promise(resolve => {
+      Modal.confirm({
+        title,
+        content: '恢复快照已验证完成。确认后才会修改远程文件；修改完成后仍可在安全操作中心回滚。',
+        okText: '确认执行',
+        cancelText: '取消',
+        onOk: () => resolve(true),
+        onCancel: () => resolve(false)
+      })
+    })
+  }
+
+  prepareSftpSafetyOperation = async ({
+    action,
+    paths,
+    type,
+    requestedMode,
+    expected,
+    title
+  }) => {
+    const request = buildSideEffectSafetyRequest({
+      id: `sftp-${action}-${Date.now()}-${generate()}`,
+      source: 'sftp',
+      endpoint: this.getSftpSafetyEndpoint(),
+      title,
+      effect: {
+        adapter: 'sftp',
+        action,
+        paths,
+        resources: Object.values(paths).map(path => ({ path, type })),
+        type,
+        requestedMode,
+        expected: expected || {}
+      },
+      metadata: { sftpSafetyTransaction: true }
+    })
+    return this.sftpSafetyRunner.prepare(request)
+  }
+
+  prepareTransferSafetyOperation = async (plan) => {
+    const request = buildSideEffectSafetyRequest({
+      id: plan.operationId,
+      source: 'sftp',
+      endpoint: this.getSftpSafetyEndpoint(),
+      title: 'SFTP 文件传输',
+      effect: {
+        adapter: 'sftp',
+        action: plan.action,
+        paths: plan.paths,
+        resources: Object.values(plan.paths).map(path => ({
+          path,
+          type: plan.type
+        })),
+        type: plan.type,
+        expected: plan.expected,
+        transfer: plan.transfer
+      },
+      metadata: {
+        sftpSafetyTransaction: true,
+        fileTransferSafety: true,
+        transferBatch: plan.transfer.batchId || ''
+      }
+    })
+    const existing = await sftpSafetyStore.getOperation(request.id)
+    if (existing) {
+      await this.assertSftpSafetyOperationEndpoint(existing.id)
+      if (existing.effectKey !== request.effectKey) {
+        throw new Error('同一传输标识已绑定其他远程目标，已阻止覆盖恢复点')
+      }
+      return existing
+    }
+    return this.sftpSafetyRunner.prepare(request)
+  }
+
+  beginTransferSafetyOperation = async (id, options = {}) => {
+    await this.assertSftpSafetyOperationEndpoint(id)
+    return this.sftpSafetyRunner.beginExternalExecution(id, {
+      ...options,
+      confirmed: true
+    })
+  }
+
+  completeTransferSafetyOperation = async (id, completion) => {
+    await this.assertSftpSafetyOperationEndpoint(id)
+    return this.sftpSafetyRunner.completeExternalExecution(id, completion)
+  }
+
+  cancelTransferSafetyOperation = async (id) => {
+    await this.assertSftpSafetyOperationEndpoint(id)
+    return this.sftpSafetyRunner.cancel(id)
+  }
+
+  runSftpSafetyOperation = async (spec, options = {}) => {
+    const operation = await this.prepareSftpSafetyOperation(spec)
+    const confirmed = await this.confirmPreparedSftpOperation(
+      options.confirmTitle || `确认${spec.title || '执行 SFTP 修改'}？`
+    )
+    if (!confirmed) {
+      await this.sftpSafetyRunner.cancel(operation.id)
+      return false
+    }
+    return this.sftpSafetyRunner.execute(operation.id, {
+      confirmed: true,
+      sideEffectInput: options.input
+    })
+  }
+
+  changeRemoteFileMode = async ({ path, mode, type }) => {
+    const result = await this.runSftpSafetyOperation({
+      action: 'chmod',
+      paths: { source: path },
+      type,
+      requestedMode: mode,
+      expected: { mode, type },
+      title: 'SFTP 权限修改'
+    })
+    if (result) message.success('权限修改已验证，可在安全操作中心回滚。')
+    return result
+  }
+
+  renameRemoteFile = async ({ sourcePath, targetPath, type }) => {
+    if (this.props.isFtp) {
+      await this.sftp.rename(sourcePath, targetPath)
+      return true
+    }
+    const result = await this.runSftpSafetyOperation({
+      action: 'rename',
+      paths: { source: sourcePath, target: targetPath },
+      type,
+      expected: {},
+      title: 'SFTP 重命名'
+    })
+    if (result) message.success('重命名已验证，可在安全操作中心回滚。')
+    return result
+  }
+
+  saveRemoteEditorFile = async ({ path, text, mode }) => {
+    if (this.props.isFtp) {
+      await this.sftp.writeFile(path, text, mode)
+      return true
+    }
+    const expected = await digestSftpText(text)
+    const requestedMode = mode === undefined ? undefined : Number(mode) & 0o7777
+    const result = await this.runSftpSafetyOperation({
+      action: 'editor-save',
+      paths: { target: path },
+      type: 'file',
+      requestedMode,
+      expected,
+      title: 'SFTP 编辑器保存'
+    }, {
+      input: { text }
+    })
+    if (result) message.success('远程文件保存已验证，可在安全操作中心回滚。')
+    return result
+  }
+
+  deleteRemoteFilesWithSafety = async (files) => {
+    if (this.props.isFtp) {
+      const confirmed = await this.confirmDelete(files)
+      if (!confirmed) return false
+      for (const file of files) await this.remoteDel(file)
+      return true
+    }
+    const operations = []
+    try {
+      for (const file of this.getRemoteSafetyTargets(files)) {
+        const source = resolve(file.path, file.name)
+        operations.push(await this.prepareSftpSafetyOperation({
+          action: 'delete',
+          paths: { source },
+          type: file.isDirectory ? 'directory' : 'file',
+          expected: { absent: true },
+          title: 'SFTP 删除'
+        }))
+      }
+    } catch (error) {
+      await Promise.allSettled(operations.map(operation => (
+        this.sftpSafetyRunner.cancel(operation.id)
+      )))
+      throw error
+    }
+    if (!operations.length) return false
+    const confirmed = await this.confirmDelete(files)
+    if (!confirmed) {
+      await Promise.allSettled(operations.map(operation => (
+        this.sftpSafetyRunner.cancel(operation.id)
+      )))
+      return false
+    }
+    for (const operation of operations) {
+      await this.sftpSafetyRunner.execute(operation.id, { confirmed: true })
+    }
+    message.success(`已删除 ${operations.length} 项，恢复快照仍保留在安全操作中心。`)
+    return true
   }
 
   getRemoteSafetyTargets = (files = this.getSelectedFiles()) => {
@@ -593,36 +841,32 @@ export default class Sftp extends Component {
   }
 
   delFiles = async (_type, files = this.getSelectedFiles()) => {
+    const type = files[0]?.type || _type
+    if (type === typeMap.remote) {
+      this.onDelete = true
+      try {
+        const deleted = await this.deleteRemoteFilesWithSafety(files)
+        if (!deleted) return false
+      } catch (err) {
+        window.store.onError(err)
+        message.error('SFTP 删除事务失败，恢复快照仍保留。')
+        return false
+      } finally {
+        this.onDelete = false
+      }
+      await wait(500)
+      await this.remoteList()
+      return true
+    }
+
     this.onDelete = true
     const confirm = await this.confirmDelete(files)
     this.onDelete = false
-    if (!confirm) {
-      return false
+    if (!confirm) return false
+    for (const file of files) {
+      await this.localDel(file)
     }
-    const type = files[0]?.type || _type
-    if (type === typeMap.remote) {
-      try {
-        const records = await softDeleteRemoteFiles({
-          sftp: this.sftp,
-          files: this.getRemoteSafetyTargets(files),
-          tab: this.props.tab
-        })
-        this.addSftpRecoveryRecords(records)
-        message.success(`已安全删除 ${records.length} 项，可在安全操作中心恢复。`)
-      } catch (err) {
-        window.store.onError(err)
-        message.error('安全删除失败，未继续执行永久删除。')
-        return false
-      }
-    } else {
-      for (const f of files) {
-        await this.localDel(f)
-      }
-    }
-    if (type === typeMap.remote) {
-      await wait(500)
-    }
-    this[type + 'List']()
+    this.localList()
     return true
   }
 
@@ -631,7 +875,9 @@ export default class Sftp extends Component {
     const isRemote = files.length && files.every(f => f.type === typeMap.remote)
     const names = hasDirectory ? e('filesAndFolders') : e('files')
     if (isRemote) {
-      const title = `确定将所选${names}移入安全回收区吗？可在安全操作中心恢复。（${files.length}）`
+      const title = this.props.isFtp
+        ? `FTP 将永久删除所选${names}，无恢复快照。确认继续吗？（${files.length}）`
+        : `恢复快照已验证。确认删除所选${names}吗？（${files.length}）`
       return pureText ? title : <div className='wordbreak'>{title}</div>
     }
     if (pureText) {
@@ -1249,10 +1495,12 @@ export default class Sftp extends Component {
         'getSelectedFiles',
         'getFileItemById',
         'quickBackupRemoteFiles',
+        'changeRemoteFileMode',
+        'renameRemoteFile',
+        'saveRemoteEditorFile',
         'restoreLatestSftpBackup',
         'openSftpSafetyCenter',
-        'hasSftpRecovery',
-        'recordSftpMutationRecovery'
+        'hasSftpRecovery'
       ]),
       ...pick(this.state, [
         'id',

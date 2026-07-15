@@ -133,6 +133,24 @@ export default class SettingTerminal extends Component {
     )
   }
 
+  renderTerminalSafetyToggle = () => {
+    const name = 'terminalSafetyProtection'
+    const checked = this.props.config[name] !== false
+    return (
+      <div className='pd2b'>
+        <Switch
+          checked={checked}
+          checkedChildren={e(name)}
+          unCheckedChildren={e(name)}
+          onChange={v => this.onChangeValue(v, name)}
+        />
+        <span className='mg1l'>
+          <HelpIcon title={e('terminalSafetyProtectionHelp')} />
+        </span>
+      </div>
+    )
+  }
+
   testFolderPathCanSaveLog = async (path) => {
     try {
       const st = await window.fs.statCustom(path)
@@ -566,6 +584,7 @@ export default class SettingTerminal extends Component {
           this.renderToggle('saveTerminalLogToFile')
         }
         {this.renderToggle('addTimeStampToTermLog')}
+        {this.renderTerminalSafetyToggle()}
         {
           [
             'cursorBlink',

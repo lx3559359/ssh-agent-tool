@@ -3,12 +3,12 @@
  *
  * This addon uses Shell Integration via OSC 633 escape sequences for reliable
  * command tracking. The shell emits special sequences that tell us:
- * - OSC 633 ; A - Prompt started
- * - OSC 633 ; B - Command input started (ready for typing)
- * - OSC 633 ; C - Command execution started (output begins)
- * - OSC 633 ; D ; <exitCode> - Command finished
- * - OSC 633 ; E ; <command> - The command line being executed
- * - OSC 633 ; P ; Cwd=<path> - Current working directory
+ * - OSC 633 ; A ; <sessionNonce> - Prompt started
+ * - OSC 633 ; B ; <sessionNonce> - Command input started (ready for typing)
+ * - OSC 633 ; C ; <sessionNonce> - Command execution started (output begins)
+ * - OSC 633 ; D ; <sessionNonce> ; <exitCode> - Command finished
+ * - OSC 633 ; E ; <sessionNonce> ; <command> - Command being executed
+ * - OSC 633 ; P ; <sessionNonce> ; Cwd=<path> - Current directory
  *
  * This properly handles:
  * - Command history (arrow up/down)
@@ -18,6 +18,15 @@
  * - Multi-line commands
  * - Any custom prompt
  */
+
+function createSessionNonce () {
+  const bytes = new Uint8Array(16)
+  if (!globalThis.crypto?.getRandomValues) {
+    throw new Error('Secure random source is unavailable for terminal tracking.')
+  }
+  globalThis.crypto.getRandomValues(bytes)
+  return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')
+}
 
 export class CommandTrackerAddon {
   constructor () {
@@ -30,10 +39,19 @@ export class CommandTrackerAddon {
     this.lastExitCode = null
     this.cwd = ''
     this.shellIntegrationActive = false
+    this.shellPhase = 'inactive'
+    this._inputAnchor = null
 
     // Event callbacks for shell integration events
+    this._onPromptStarted = null // Called when OSC 633;A is received
     this._onCommandExecuted = null // Called when OSC 633;E is received
+    this._onCommandFinished = null // Called when OSC 633;D is received
     this._onCwdChanged = null // Called when OSC 633;P;Cwd= is received
+    this._expectedSubmissions = []
+    this._submissionSequence = 0
+    this._inputGeneration = 0
+    this._oscSequence = 0
+    this._sessionNonce = ''
   }
 
   /**
@@ -42,6 +60,22 @@ export class CommandTrackerAddon {
    */
   onCommandExecuted (callback) {
     this._onCommandExecuted = callback
+  }
+
+  /**
+   * Register callback for a fresh shell prompt (received via OSC 633;A).
+   * @param {function} callback - Called when the prompt starts
+   */
+  onPromptStarted (callback) {
+    this._onPromptStarted = callback
+  }
+
+  /**
+   * Register callback for a command and its OSC 633 exit code.
+   * @param {function} callback - Called with ({ command, exitCode })
+   */
+  onCommandFinished (callback) {
+    this._onCommandFinished = callback
   }
 
   /**
@@ -67,6 +101,10 @@ export class CommandTrackerAddon {
 
   dispose () {
     this.terminal = null
+    this.shellPhase = 'inactive'
+    this._inputAnchor = null
+    this._expectedSubmissions = []
+    this._sessionNonce = ''
     if (this._disposables) {
       this._disposables.forEach(d => d.dispose())
       this._disposables.length = 0
@@ -84,33 +122,57 @@ export class CommandTrackerAddon {
     // Parse the sequence: first char is the command type
     const command = data.charAt(0)
     const args = data.length > 1 ? data.substring(2) : '' // Skip "X;" part
+    if (!['A', 'B', 'C', 'D', 'E', 'P'].includes(command)) return false
+    const separator = args.indexOf(';')
+    const nonce = separator === -1 ? args : args.slice(0, separator)
+    if (!this._sessionNonce || nonce !== this._sessionNonce) return true
+    const payload = separator === -1 ? '' : args.slice(separator + 1)
+    this._oscSequence += 1
 
     switch (command) {
       case 'A': // Prompt started
         this.shellIntegrationActive = true
+        this.shellPhase = 'prompt'
+        this._inputAnchor = null
         // Reset current command when new prompt appears
         this.currentCommand = ''
+        this._onPromptStarted?.()
         return true
 
       case 'B': // Command input started (after prompt)
+        this.shellIntegrationActive = true
+        this.shellPhase = 'input'
+        this._inputGeneration += 1
+        this._expectedSubmissions = this._expectedSubmissions.filter(
+          submission => submission.inputGeneration === this._inputGeneration
+        )
+        this._captureInputAnchor()
         return true
 
       case 'C': // Command execution started
+        this.shellPhase = 'executing'
+        this._inputAnchor = null
+        this._markExpectedSubmissionStarted()
         return true
 
-      case 'D': // Command finished
+      case 'D': { // Command finished
+        this.shellPhase = 'finished'
+        this._inputAnchor = null
         // Parse exit code if provided
-        if (args) {
-          this.lastExitCode = parseInt(args, 10)
-        } else {
-          this.lastExitCode = null
-        }
+        this.lastExitCode = /^-?\d+$/.test(payload)
+          ? parseInt(payload, 10)
+          : null
+        this._completeArmedSubmission(this.lastExitCode)
         return true
+      }
 
       case 'E': // Command line
+        this.shellPhase = 'executing'
+        this._inputAnchor = null
         // The actual command being executed
-        this.executedCommand = this._deserializeOscValue(args)
+        this.executedCommand = this._deserializeOscValue(payload)
         this.currentCommand = this.executedCommand
+        this._markExpectedSubmissionObserved(this.executedCommand)
         // Call the callback if registered
         if (this._onCommandExecuted && this.executedCommand) {
           this._onCommandExecuted(this.executedCommand)
@@ -118,11 +180,8 @@ export class CommandTrackerAddon {
         return true
 
       case 'P': // Property (e.g., Cwd=<path>)
-        this._handleProperty(args)
+        this._handleProperty(payload)
         return true
-
-      default:
-        return false
     }
   }
 
@@ -162,6 +221,217 @@ export class CommandTrackerAddon {
     return value
       .replace(/\\x([0-9a-fA-F]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
       .replace(/\\\\/g, '\\')
+  }
+
+  beginSession (nonce = createSessionNonce()) {
+    if (!/^[a-f0-9]{32}$/.test(String(nonce))) {
+      throw new Error('Terminal tracking session nonce is invalid.')
+    }
+    this._sessionNonce = String(nonce)
+    this.currentCommand = ''
+    this.executedCommand = ''
+    this.lastExitCode = null
+    this.shellIntegrationActive = false
+    this.shellPhase = 'inactive'
+    this._inputAnchor = null
+    this._expectedSubmissions = []
+    this._inputGeneration = 0
+    this._oscSequence = 0
+    return this._sessionNonce
+  }
+
+  getSessionNonce () {
+    return this._sessionNonce
+  }
+
+  _captureInputAnchor () {
+    const buffer = this.terminal?.buffer?.active
+    const row = Number(buffer?.baseY) + Number(buffer?.cursorY)
+    const column = Number(buffer?.cursorX)
+    if (!buffer || !Number.isInteger(row) || !Number.isInteger(column) ||
+      column < 0 || column > Number(this.terminal?.cols)) {
+      this._inputAnchor = null
+      return
+    }
+    this._inputAnchor = { buffer, row, column }
+  }
+
+  _getLineEndColumn (line, cursorColumn) {
+    const endColumn = cursorColumn
+    if (typeof line.getCell === 'function') {
+      for (let column = Number(this.terminal?.cols) - 1; column >= 0; column -= 1) {
+        const cell = line.getCell(column)
+        if (cell && (cell.getCode?.() || cell.getChars?.())) {
+          return Math.max(endColumn, column + 1)
+        }
+      }
+      return endColumn
+    }
+    const visibleEnd = line.translateToString(true, 0).length
+    return endColumn >= visibleEnd ? endColumn : undefined
+  }
+
+  getCurrentCommandInput () {
+    if (!this.isCommandInputActive() || !this._inputAnchor) return undefined
+    const buffer = this.terminal?.buffer?.active
+    if (!buffer || buffer !== this._inputAnchor.buffer) return undefined
+    const cursorRow = Number(buffer.baseY) + Number(buffer.cursorY)
+    const startRow = this._inputAnchor.row
+    if (!Number.isInteger(cursorRow) || cursorRow < startRow) return undefined
+    if (!buffer.getLine(startRow)) return undefined
+
+    for (let row = startRow + 1; row <= cursorRow; row += 1) {
+      if (buffer.getLine(row)?.isWrapped !== true) return undefined
+    }
+
+    let endRow = cursorRow
+    while (buffer.getLine(endRow + 1)?.isWrapped === true) {
+      endRow += 1
+      if (endRow - startRow > 4096) return undefined
+    }
+
+    let command = ''
+    for (let row = startRow; row <= endRow; row += 1) {
+      const line = buffer.getLine(row)
+      if (!line) return undefined
+      const startColumn = row === startRow ? this._inputAnchor.column : 0
+      if (row === endRow) {
+        const cursorColumn = row === cursorRow ? Number(buffer.cursorX) : 0
+        const endColumn = this._getLineEndColumn(line, cursorColumn)
+        if (!Number.isInteger(endColumn)) return undefined
+        command += line.translateToString(false, startColumn, endColumn)
+      } else {
+        command += line.translateToString(false, startColumn)
+      }
+    }
+    return command
+  }
+
+  hasReliableCommandInput () {
+    return this.getCurrentCommandInput() !== undefined
+  }
+
+  isCommandInputActive () {
+    return this.shellPhase === 'input'
+  }
+
+  expectSubmission (command) {
+    const text = String(command || '')
+    const current = this.getCurrentCommandInput()
+    if (!this._sessionNonce || !text.trim() || current === undefined ||
+      current !== text ||
+      this._expectedSubmissions.length) {
+      return undefined
+    }
+    const token = `terminal-submission-${++this._submissionSequence}`
+    this._expectedSubmissions.push({
+      token,
+      command: text,
+      inputGeneration: this._inputGeneration,
+      armed: false,
+      commandObserved: false,
+      executionObserved: false,
+      armedAtSequence: 0
+    })
+    return token
+  }
+
+  expectExternalSubmission (command) {
+    const text = String(command || '')
+    const current = this.getCurrentCommandInput()
+    if (!this._sessionNonce || !text.trim() || current !== '' ||
+      this._expectedSubmissions.length) {
+      return undefined
+    }
+    const token = `terminal-submission-${++this._submissionSequence}`
+    this._expectedSubmissions.push({
+      token,
+      command: text,
+      inputGeneration: this._inputGeneration,
+      external: true,
+      armed: false,
+      commandObserved: false,
+      executionObserved: false,
+      armedAtSequence: 0
+    })
+    return token
+  }
+
+  markExpectedSubmissionReleased (token) {
+    const expected = this._expectedSubmissions.find(
+      submission => submission.token === token
+    )
+    const current = this.getCurrentCommandInput()
+    const inputMatches = expected?.external
+      ? current === ''
+      : current === expected?.command
+    if (!expected || expected.armed || !this.isCommandInputActive() ||
+      expected.inputGeneration !== this._inputGeneration || !inputMatches) {
+      return false
+    }
+    expected.armed = true
+    expected.armedAtSequence = this._oscSequence
+    return true
+  }
+
+  cancelExpectedSubmission (token) {
+    const index = this._expectedSubmissions.findIndex(
+      submission => submission.token === token
+    )
+    if (index === -1) return false
+    this._expectedSubmissions.splice(index, 1)
+    return true
+  }
+
+  hasExpectedSubmission (token) {
+    return this._expectedSubmissions.some(
+      submission => submission.token === token
+    )
+  }
+
+  _markExpectedSubmissionObserved (command) {
+    const expected = this._expectedSubmissions.find(
+      submission => submission.armed &&
+        submission.inputGeneration === this._inputGeneration &&
+        submission.armedAtSequence < this._oscSequence &&
+        submission.command === command
+    )
+    if (expected) {
+      expected.commandObserved = true
+      expected.commandObservedAtSequence = this._oscSequence
+    }
+  }
+
+  _markExpectedSubmissionStarted () {
+    const expected = this._expectedSubmissions.find(
+      submission => submission.armed &&
+        submission.commandObserved === true &&
+        submission.inputGeneration === this._inputGeneration &&
+        submission.commandObservedAtSequence < this._oscSequence
+    )
+    if (expected) {
+      expected.executionObserved = true
+      expected.executionObservedAtSequence = this._oscSequence
+    }
+  }
+
+  _completeArmedSubmission (exitCode) {
+    const expectedIndex = this._expectedSubmissions.findIndex(
+      submission => submission.armed &&
+        submission.commandObserved === true &&
+        submission.executionObserved === true &&
+        submission.inputGeneration === this._inputGeneration &&
+        submission.armedAtSequence < this._oscSequence &&
+        submission.executionObservedAtSequence < this._oscSequence
+    )
+    if (expectedIndex === -1) return false
+    const expected = this._expectedSubmissions.splice(expectedIndex, 1)[0]
+    this._onCommandFinished?.({
+      token: expected.token,
+      command: expected.command,
+      exitCode
+    })
+    return true
   }
 
   /**

@@ -19,6 +19,7 @@ const {
   testTerm,
   resize,
   runCmd,
+  cancelRunCmd,
   toggleTerminalLog,
   toggleTerminalLogTimestamp,
   setTerminalLogPath,
@@ -349,6 +350,16 @@ if (type === 'rdp') {
           terminalId,
           type
         }))
+      } else if (action === 'sftp-cancel') {
+        const { id, cancelToken } = msg
+        const inst = sftp(id)
+        if (inst && typeof inst.cancelOperation === 'function') {
+          try {
+            inst.cancelOperation(cancelToken)
+          } catch (error) {
+            log.warn('invalid SFTP cancellation request', error?.message)
+          }
+        }
       } else if (action === 'sftp-func') {
         const { id, args, func, uid } = msg
         const inst = sftp(id)
@@ -470,6 +481,8 @@ process.on('message', async (message) => {
       promise = startTerminalLogFile(body)
     } else if (action === 'run-cmd') {
       promise = runCmd(body)
+    } else if (action === 'cancel-run-cmd') {
+      promise = cancelRunCmd(body)
     }
 
     const result = await promise

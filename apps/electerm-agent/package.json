@@ -1,6 +1,6 @@
 {
   "name": "ssh-agent-tool",
-  "version": "0.3.9",
+  "version": "0.4.0",
   "productName": "ShellPilot",
   "description": "基于 Electerm 二次开发的 Windows 优先 SSH、SFTP 和 AI Agent 客户端",
   "main": "app.js",
@@ -27,6 +27,7 @@
     "test-unit-ci": "node --test test/unit-ci/*.spec.js",
     "test-package-smoke": "node.exe build/bin/package-smoke-test.js",
     "smoke:ssh-sftp": "node build/bin/smoke-ssh-sftp.js",
+    "smoke:safety": "node build/bin/smoke-safety-transactions.js",
     "verify-win-portable": "node build/bin/verify-win-portable-zip.js",
     "test1": "playwright test test/e2e/00*.js --workers=1",
     "test2": "playwright test test/e2e/01*.js --workers=1",

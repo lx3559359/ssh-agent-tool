@@ -14,6 +14,10 @@ import { debounce } from 'lodash-es'
 import { refs } from '../components/common/ref'
 import templates from '../components/quick-commands/templates'
 import { readClipboardAsync } from '../common/clipboard'
+import {
+  runSafetyCommandBatch,
+  runSafetyCommandSequence
+} from '../common/safety-transactions/command-orchestration.js'
 
 async function parseTemplates (cmd) {
   if (!cmd.includes('{{')) return cmd
@@ -84,9 +88,45 @@ export default Store => {
     window.store.delItem({ id }, settingMap.quickCommands)
   }
 
-  Store.prototype.runQuickCommand = function (cmd, inputOnly = false, tabId) {
-    const tid = tabId || window.store.activeTabId
-    refs.get('term-' + tid)?.runQuickCommand(cmd, inputOnly)
+  Store.prototype.runSafetyCommand = async function (command, options = {}) {
+    const tabId = options.tabId || window.store.activeTabId
+    if (!tabId) {
+      throw new Error('当前没有活动终端，命令尚未发送。')
+    }
+    const term = refs.get('term-' + tabId)
+    if (!term?.runSafetyCommand) {
+      throw new Error('当前终端不可用，命令尚未发送。')
+    }
+    return term.runSafetyCommand(command, {
+      ...options,
+      tabId: undefined
+    })
+  }
+
+  Store.prototype.runQuickCommand = function (
+    cmd,
+    inputOnly = false,
+    tabId,
+    options = {}
+  ) {
+    return window.store.runSafetyCommand(cmd, {
+      ...options,
+      tabId,
+      inputOnly,
+      source: 'quick-command',
+      title: options.title || '快捷命令'
+    })
+  }
+
+  Store.prototype.runBatchSafetyCommand = function (
+    command,
+    tabIds,
+    options = {}
+  ) {
+    return runSafetyCommandBatch(command, tabIds, {
+      ...options,
+      getTerminal: tabId => refs.get('term-' + tabId)
+    })
   }
 
   Store.prototype.runQuickCommandItem = debounce(async (id, options = {}) => {
@@ -106,17 +146,34 @@ export default Store => {
       }
     }
     const qms = getQuickCommandSteps(qm, options)
-    for (const q of qms) {
-      let realCmd = normalizeCommandForShell(q.command)
-      realCmd = await parseTemplates(realCmd)
-
-      await delay(q.delay || 100)
-      store.runQuickCommand(realCmd, options.inputOnly ?? qm?.inputOnly)
-      if (qm) {
-        store.editQuickCommand(qm.id, {
-          clickCount: ((qm.clickCount || 0) + 1)
-        })
-      }
+    try {
+      return await runSafetyCommandSequence(qms, {
+        timeoutMs: options.completionTimeoutMs || 30000,
+        runStep: async q => {
+          let realCmd = normalizeCommandForShell(q.command)
+          realCmd = await parseTemplates(realCmd)
+          await delay(q.delay || 100)
+          return store.runQuickCommand(
+            realCmd,
+            options.inputOnly ?? qm?.inputOnly,
+            options.tabId,
+            { title: qm?.name || options.title }
+          )
+        },
+        onStepComplete: () => {
+          if (qm) {
+            store.editQuickCommand(qm.id, {
+              clickCount: ((qm.clickCount || 0) + 1)
+            })
+          }
+        }
+      })
+    } catch (error) {
+      const reported = new Error(
+        `快捷命令执行失败，已停止后续步骤：${error?.message || '未知错误'}`
+      )
+      store.onError?.(reported)
+      return { success: false, error: reported.message }
     }
   }, 200)
 

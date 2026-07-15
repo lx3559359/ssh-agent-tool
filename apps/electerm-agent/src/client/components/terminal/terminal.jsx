@@ -33,7 +33,7 @@ import { XmodemClient } from './xmodem-client.js'
 import DropFileModal from './drop-file-modal.jsx'
 import keyControlPressed from '../../common/key-control-pressed.js'
 import NormalBuffer from './normal-buffer.jsx'
-import { createTerm, resizeTerm, startTerminalLogFile, toggleTerminalLog } from './terminal-apis.js'
+import { cancelRunCmd, createTerm, resizeTerm, runCmd, startTerminalLogFile, toggleTerminalLog } from './terminal-apis.js'
 import {
   saveTerminalLog,
   startTerminalRecording,
@@ -52,7 +52,8 @@ import {
 import {
   getShellIntegrationCommand,
   detectRemoteShell,
-  detectShellType
+  detectShellType,
+  shouldInjectShellIntegration
 } from './shell.js'
 import iconsMap from '../sys-menu/icons-map.jsx'
 import { refs, refsStatic } from '../common/ref.js'
@@ -81,6 +82,21 @@ import {
   createSshReconnectScheduler,
   shouldRetryAutoReconnectError
 } from './ssh-reconnect-policy.js'
+import {
+  buildTerminalSafetyConfirmation,
+  buildTerminalSafetyEndpoint,
+  createTerminalSafetyController,
+  hasReliableTerminalCommandTracking
+} from './terminal-safety-controller.js'
+import { createTerminalSafetyCoordinator } from './terminal-safety-coordinator.js'
+import TerminalCommandSafetyModal from './terminal-command-safety-modal.jsx'
+import { createSafetyCommandEntrypoint } from '../../common/safety-transactions/command-entrypoint.js'
+import { createTransactionRunner } from '../../common/safety-transactions/transaction-runner.js'
+import { buildRecoveryPlan } from '../../common/safety-transactions/recovery-providers.js'
+import { buildSafetyRequest } from '../../common/safety-transactions/models.js'
+import { assertSameSessionEndpoint } from '../../common/safety-transactions/endpoint-guard.js'
+import * as terminalSafetyStore from '../../common/safety-transactions/transaction-store.js'
+import uid from '../../common/uid.js'
 
 const e = window.translate
 
@@ -103,6 +119,9 @@ class Term extends Component {
       totalLines: 0,
       reconnectState: null,
       terminalError: null,
+      terminalSafetyConfirmation: null,
+      terminalSafetyBusy: false,
+      terminalSafetyError: '',
       dropFileModalVisible: false,
       droppedFiles: [],
       fontSizeChanged: false
@@ -112,6 +131,87 @@ class Term extends Component {
     this.currentInput = ''
     this.shellInjected = false
     this.shellType = null
+    this.terminalSafetyController = createTerminalSafetyController()
+    this.terminalSafetyRunner = createTransactionRunner({
+      runRemote: (command, options) => runCmd(this.pid, command, options),
+      cancelRemote: async executionId => {
+        const cancelled = await cancelRunCmd(this.pid, executionId)
+        if (cancelled !== true) {
+          throw new Error('Remote command is no longer active.')
+        }
+      },
+      getCurrentEndpoint: async () => this.getTerminalSafetyEndpoint(),
+      buildRecoveryPlan,
+      store: terminalSafetyStore
+    })
+    this.commandSafetyEntrypoint = createSafetyCommandEntrypoint({
+      runner: this.terminalSafetyRunner,
+      tracker: {
+        expectExternalSubmission: command => (
+          this.cmdAddon?.expectExternalSubmission(command)
+        ),
+        markExpectedSubmissionReleased: token => (
+          this.cmdAddon?.markExpectedSubmissionReleased(token) === true
+        ),
+        cancelExpectedSubmission: token => (
+          this.cmdAddon?.cancelExpectedSubmission(token) === true
+        )
+      },
+      getEndpoint: () => this.getTerminalSafetyEndpoint(),
+      ensureTrackerReady: this.ensureCommandSafetyTrackerReady,
+      submitCommand: (command, token) => (
+        this.attachAddon?.submitSafetyCommand(command, token) === true
+      ),
+      inputCommand: command => {
+        if (!this.attachAddon) {
+          throw new Error('当前终端未连接，无法填入命令。')
+        }
+        this.attachAddon.sendToServer(command)
+        this.term?.focus()
+      },
+      buildConfirmation: buildTerminalSafetyConfirmation,
+      onStateChange: state => {
+        if (this.onClose) return
+        this.setState({
+          terminalSafetyConfirmation: state.confirmation,
+          terminalSafetyBusy: state.busy,
+          terminalSafetyError: state.error
+        })
+        if (!state.confirmation) this.term?.focus()
+      },
+      onError: error => window.store.onError(error)
+    })
+    this.terminalSafetyCoordinator = createTerminalSafetyCoordinator({
+      controller: this.terminalSafetyController,
+      runner: this.terminalSafetyRunner,
+      tracker: {
+        expectSubmission: command => this.cmdAddon?.expectSubmission(command),
+        markExpectedSubmissionReleased: token => (
+          this.cmdAddon?.markExpectedSubmissionReleased(token) === true
+        ),
+        cancelExpectedSubmission: token => (
+          this.cmdAddon?.cancelExpectedSubmission(token) === true
+        )
+      },
+      buildRequest: confirmation => buildSafetyRequest({
+        id: `terminal-${Date.now()}-${uid()}`,
+        source: 'terminal',
+        command: confirmation.command,
+        title: 'SSH 终端命令',
+        endpoint: this.getTerminalSafetyEndpoint(),
+        metadata: { terminalProtection: true }
+      }),
+      onStateChange: state => {
+        if (this.onClose) return
+        this.setState({
+          terminalSafetyConfirmation: state.confirmation,
+          terminalSafetyBusy: state.busy,
+          terminalSafetyError: state.error
+        })
+        if (!state.confirmation) this.term?.focus()
+      },
+      onError: error => window.store.onError(error)
+    })
     this.reconnectScheduler = createSshReconnectScheduler({
       initialAttempt: props.tab.autoReConnect,
       onStateChange: reconnectState => {
@@ -145,6 +245,12 @@ class Term extends Component {
   }
 
   componentDidUpdate (prevProps) {
+    if (prevProps.currentBatchTabId === this.props.tab.id &&
+      this.props.currentBatchTabId !== this.props.tab.id) {
+      this.commandSafetyEntrypoint.cancelCurrentExecution(
+        '终端已切换，命令执行已取消。'
+      ).catch(window.store.onError)
+    }
     const shouldChange = (
       prevProps.currentBatchTabId !== this.props.currentBatchTabId &&
       this.props.tab.id === this.props.currentBatchTabId &&
@@ -186,6 +292,9 @@ class Term extends Component {
   }
 
   componentWillUnmount () {
+    this.onClose = true
+    this.terminalSafetyCoordinator.invalidateSession().catch(() => {})
+    this.commandSafetyEntrypoint.invalidateSession().catch(() => {})
     refs.remove(this.id)
     if (window.store.activeTerminalId === this.props.tab.id) {
       window.store.activeTerminalId = ''
@@ -199,7 +308,6 @@ class Term extends Component {
       clearTimeout(this.timers[k])
       this.timers[k] = null
     })
-    this.onClose = true
     if (this.socket) {
       this.socket.close()
       this.socket = null
@@ -279,7 +387,6 @@ class Term extends Component {
     const currShowSuggestions = props.config.showCmdSuggestions
     const prevSftpFollow = prevProps.sftpPathFollowSsh
     const currSftpFollow = props.sftpPathFollowSsh
-
     if (
       (!prevShowSuggestions && currShowSuggestions) ||
       (!prevSftpFollow && currSftpFollow)
@@ -731,12 +838,14 @@ class Term extends Component {
     if (isWin && this.isRemote()) {
       selected = selected.replace(/\r\n/g, '\n')
     }
+    this.attachAddon?._onTerminalPaste()
     this.term.paste(selected || '')
     this.term.focus()
   }
 
   onPasteSelected = () => {
     const selected = this.term.getSelection()
+    this.attachAddon?._onTerminalPaste()
     this.term.paste(selected || '')
     this.term.focus()
   }
@@ -1077,6 +1186,8 @@ class Term extends Component {
    * This is more reliable than tracking character-by-character
    */
   getCurrentInput = () => {
+    const trackedInput = this.cmdAddon?.getCurrentCommandInput()
+    if (trackedInput !== undefined) return trackedInput
     if (!this.term) return ''
 
     const buffer = this.term.buffer.active
@@ -1172,6 +1283,135 @@ class Term extends Component {
     }
   }
 
+  runSafetyCommand = (command, options = {}) => {
+    if (!this.term || !this.attachAddon || !this.pid) {
+      return Promise.reject(
+        new Error('当前终端未连接，命令尚未发送。')
+      )
+    }
+    return this.commandSafetyEntrypoint.runSafetyCommand(command, options)
+  }
+
+  isCommandSafetyTrackerReady = () => {
+    return this.cmdAddon?.hasShellIntegration() === true &&
+      this.cmdAddon?.isCommandInputActive() === true &&
+      this.cmdAddon?.getCurrentCommandInput() === ''
+  }
+
+  ensureCommandSafetyTrackerReady = async () => {
+    if (this.isCommandSafetyTrackerReady()) return true
+    if (!this.term || !this.attachAddon || !this.pid || this.onClose) {
+      throw new Error('当前终端未连接，命令尚未发送。')
+    }
+    if (this.term.buffer?.active?.type === 'alternate') {
+      throw new Error('当前交互程序无法建立可靠命令跟踪，命令尚未发送。')
+    }
+
+    await this.injectShellIntegration({ forceForSafety: true })
+    const deadline = Date.now() + (this.isSsh() ? 6000 : 4000)
+    while (Date.now() < deadline) {
+      if (this.isCommandSafetyTrackerReady()) return true
+      if (!this.term || !this.attachAddon || !this.pid || this.onClose) {
+        throw new Error('终端连接已断开，命令尚未发送。')
+      }
+      await new Promise(resolve => setTimeout(resolve, 50))
+    }
+
+    this.shellInjected = false
+    throw new Error('Shell Integration 未就绪，无法可靠跟踪命令，命令尚未发送。')
+  }
+
+  getTerminalSafetyEndpoint = () => {
+    const tab = window.store.applyProfileToTabs(
+      deepCopy(this.props.tab || {})
+    )
+    return buildTerminalSafetyEndpoint(tab, this.pid)
+  }
+
+  assertSafetyOperationEndpoint = async id => {
+    if (!this.pid || !this.isSsh()) {
+      throw new Error('当前 SSH 终端未连接，无法执行安全操作。')
+    }
+    const operation = await terminalSafetyStore.getOperation(id)
+    if (!operation) throw new Error(`未找到安全操作：${id}`)
+    assertSameSessionEndpoint(
+      operation.endpoint,
+      this.getTerminalSafetyEndpoint()
+    )
+    return operation
+  }
+
+  rollbackSafetyOperation = async id => {
+    await this.assertSafetyOperationEndpoint(id)
+    return this.terminalSafetyRunner.rollback(id)
+  }
+
+  keepSafetyOperation = async id => {
+    await this.assertSafetyOperationEndpoint(id)
+    return this.terminalSafetyRunner.keep(id)
+  }
+
+  cancelSafetyOperation = async id => {
+    await this.assertSafetyOperationEndpoint(id)
+    return this.terminalSafetyRunner.cancel(id)
+  }
+
+  getTerminalSafetyContext = () => {
+    return {
+      enabled: this.props.config.terminalSafetyProtection !== false,
+      isSsh: this.isSsh(),
+      shellIntegrationActive: hasReliableTerminalCommandTracking(
+        this.shellType,
+        this.cmdAddon?.hasShellIntegration() === true
+      ),
+      commandInputActive: this.cmdAddon?.isCommandInputActive() === true,
+      canonicalInputReliable: this.cmdAddon?.hasReliableCommandInput() === true,
+      alternateBuffer: this.term?.buffer?.active?.type === 'alternate'
+    }
+  }
+
+  beforeTerminalEnter = (command, context) => {
+    return this.terminalSafetyCoordinator.beforeEnter(command, context)
+  }
+
+  onTerminalSafetyInputChanged = () => {
+    Promise.all([
+      this.terminalSafetyCoordinator.inputChanged(),
+      this.commandSafetyEntrypoint.inputChanged()
+    ]).catch(window.store.onError)
+  }
+
+  handleTerminalSafetyExecute = async () => {
+    if (this.commandSafetyEntrypoint.confirmPending()) return
+    await this.terminalSafetyCoordinator.confirmExecute()
+  }
+
+  handleTerminalSafetyCancel = () => {
+    if (this.state.terminalSafetyBusy) return
+    if (this.commandSafetyEntrypoint.hasPendingConfirmation()) {
+      this.commandSafetyEntrypoint.cancelPending().catch(window.store.onError)
+      return
+    }
+    this.terminalSafetyCoordinator.cancelConfirmation().catch(window.store.onError)
+  }
+
+  hasPendingSafetyCommand = () => {
+    return this.commandSafetyEntrypoint.hasPending()
+  }
+
+  consumeTerminalSafetyRelease = token => {
+    return this.terminalSafetyCoordinator.consumeRelease(token)
+  }
+
+  onTerminalSafetyError = () => {
+    message.error('终端安全保护处理失败，命令尚未发送。')
+  }
+
+  handleTerminalCommandFinished = async event => {
+    if (await this.commandSafetyEntrypoint.handleCommandFinished(event)) return
+    await this.terminalSafetyCoordinator.handleCommandFinished(event)
+  }
+
   loadRenderer = async (term, config) => {
     // xterm 6.x: only the built-in DOM renderer and the WebGL addon exist
     // (the canvas renderer addon was removed in 6.x). 'dom' = no addon loaded
@@ -1261,11 +1501,16 @@ class Term extends Component {
     const FitAddon = await loadFitAddon()
     this.fitAddon = new FitAddon()
     this.cmdAddon = new CommandTrackerAddon()
+    this.cmdAddon.onPromptStarted(
+      this.terminalSafetyController.onPromptStarted
+    )
     this.cmdAddon.onCommandExecuted((cmd) => {
+      this.terminalSafetyController.onCommandExecuted()
       if (cmd && cmd.trim()) {
         window.store.addCmdHistory(cmd.trim())
       }
     })
+    this.cmdAddon.onCommandFinished(this.handleTerminalCommandFinished)
     this.cmdAddon.onCwdChanged((cwd) => {
       this.setCwd(cwd)
     })
@@ -1364,12 +1609,13 @@ class Term extends Component {
 
   canInjectShellIntegration = () => {
     const { config } = this.props
-    const canInject = (config.showCmdSuggestions || this.props.sftpPathFollowSsh) &&
-    (
-      this.isSsh() ||
-      (this.isLocal() && !isWin)
-    )
-    return canInject
+    return shouldInjectShellIntegration({
+      showCmdSuggestions: config.showCmdSuggestions,
+      sftpPathFollowSsh: this.props.sftpPathFollowSsh,
+      isSsh: this.isSsh(),
+      isLocal: this.isLocal(),
+      isWindows: isWin
+    })
   }
 
   isSsh = () => {
@@ -1419,7 +1665,8 @@ class Term extends Component {
    * Uses output suppression to hide the injection command
    * Returns a promise that resolves when injection is complete
    */
-  injectShellIntegration = async () => {
+  injectShellIntegration = async (options = {}) => {
+    const forceForSafety = options.forceForSafety === true
     if (this.shellInjected) {
       return Promise.resolve()
     }
@@ -1438,15 +1685,24 @@ class Term extends Component {
       if (this.props.sftpPathFollowSsh) {
         this.warnSftpFollowUnsupported()
       }
+      if (forceForSafety) {
+        throw new Error('Fish shell 暂不支持可靠命令跟踪，命令尚未发送。')
+      }
       return Promise.resolve()
     }
 
     // Don't inject for sh type shells unless sftpPathFollowSsh is true
     if (shellType === 'sh' && !this.props.sftpPathFollowSsh) {
+      if (forceForSafety) {
+        throw new Error('当前 shell 暂不支持可靠命令跟踪，命令尚未发送。')
+      }
       return Promise.resolve()
     }
 
-    const integrationCmd = getShellIntegrationCommand(shellType)
+    const integrationCmd = getShellIntegrationCommand(
+      shellType,
+      this.cmdAddon.getSessionNonce()
+    )
 
     return new Promise((resolve) => {
       // Wait for initial data (prompt/banner) to arrive before injecting
@@ -1648,6 +1904,10 @@ class Term extends Component {
     socket.onopen = async () => {
       this.reconnectScheduler.reset()
       this.props.editTab(id, { autoReConnect: 0 })
+      this.shellInjected = false
+      this.cmdAddon.beginSession()
+      this.terminalSafetyCoordinator.beginSession()
+      this.commandSafetyEntrypoint.beginSession()
       await this.initAttachAddon()
       this.runInitScript()
     }
@@ -1750,6 +2010,12 @@ class Term extends Component {
   }
 
   oncloseSocket = () => {
+    this.terminalSafetyCoordinator.invalidateSession().catch(error => {
+      if (!this.onClose) window.store.onError(error)
+    })
+    this.commandSafetyEntrypoint.invalidateSession().catch(error => {
+      if (!this.onClose) window.store.onError(error)
+    })
     if (this.onClose || this.props.tab.enableSsh === false) {
       return
     }
@@ -1785,7 +2051,11 @@ class Term extends Component {
   }
 
   batchInput = (cmd) => {
-    this.attachAddon._sendData(cmd + '\r')
+    return this.runSafetyCommand(cmd, {
+      source: 'quick-command',
+      title: '批量终端命令',
+      metadata: { batchCommand: true }
+    })
   }
 
   onResizeTerminal = size => {
@@ -1934,6 +2204,14 @@ class Term extends Component {
             isSerial={this.props.tab?.type === connectionMap.serial}
             onSelect={this.handleDropFileAction}
             onCancel={this.handleDropFileModalCancel}
+          />
+          <TerminalCommandSafetyModal
+            open={Boolean(this.state.terminalSafetyConfirmation)}
+            confirmation={this.state.terminalSafetyConfirmation}
+            busy={this.state.terminalSafetyBusy}
+            error={this.state.terminalSafetyError}
+            onExecute={this.handleTerminalSafetyExecute}
+            onCancel={this.handleTerminalSafetyCancel}
           />
           {spin}
         </div>

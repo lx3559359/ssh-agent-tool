@@ -20,6 +20,7 @@ export default function Modal (props) {
     children,
     footer,
     maskClosable = true,
+    keyboardConfirm = true,
     onCancel
   } = props
 
@@ -62,7 +63,7 @@ export default function Modal (props) {
           onCancel()
           e.preventDefault()
         }
-      } else if ((e.key === 'Enter' || e.key === ' ')) {
+      } else if (keyboardConfirm && (e.key === 'Enter' || e.key === ' ')) {
         // For confirm, Enter/Space confirms
         const okBtn = document.querySelector('.custom-modal-ok-btn')
         if (okBtn) {
@@ -74,7 +75,7 @@ export default function Modal (props) {
 
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [open, onCancel])
+  }, [keyboardConfirm, open, onCancel])
 
   return (
     <div className={cls} style={modalStyle}>

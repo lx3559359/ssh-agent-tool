@@ -36,6 +36,8 @@ export const dbNames = [
   'history',
   'terminalCommandHistory',
   'aiChatHistory',
+  'safetyOperations',
+  'agentTasks',
   'autoRunWidgets'
 ]
 export const dbNamesForSync = [
@@ -51,6 +53,8 @@ export const dbNamesForWatch = [
   'history',
   'terminalCommandHistory',
   'aiChatHistory',
+  'safetyOperations',
+  'agentTasks',
   'autoRunWidgets'
 ]
 
@@ -118,8 +122,9 @@ export function update (_id, value, db = 'data', upsert = true, propagateError =
  * @param {string} id
  * @return any
  */
-export async function findOne (dbName, id) {
-  const res = await dbAction(dbName, 'findOne', {
+export async function findOne (dbName, id, propagateError = false) {
+  const action = propagateError ? dbActionOrThrow : dbAction
+  const res = await action(dbName, 'findOne', {
     _id: id
   })
   if (!res) {
@@ -136,8 +141,9 @@ export async function findOne (dbName, id) {
  * get all data as array from databse
  * @param {string} dbName
  */
-export async function find (dbName) {
-  const res = await dbAction(dbName, 'find', {}) || []
+export async function find (dbName, propagateError = false) {
+  const action = propagateError ? dbActionOrThrow : dbAction
+  const res = await action(dbName, 'find', {}) || []
   return res.map(r => {
     const { _id, ...rest } = r
     return {
@@ -152,8 +158,9 @@ export async function find (dbName) {
  * @param {string} name
  * @return any
  */
-export async function getData (name) {
-  const res = await dbAction('data', 'findOne', {
+export async function getData (name, propagateError = false) {
+  const action = propagateError ? dbActionOrThrow : dbAction
+  const res = await action('data', 'findOne', {
     _id: name
   })
   return res ? res.value : undefined

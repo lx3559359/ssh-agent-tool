@@ -2,10 +2,29 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
+const { EventEmitter } = require('node:events')
 
 const root = path.resolve(__dirname, '../..')
 const scriptPath = path.join(root, 'build/bin/smoke-ssh-sftp.js')
 const packagePath = path.join(root, 'package.json')
+const smokeHelpers = require(scriptPath)
+
+const validFingerprint = `SHA256:${Buffer.alloc(32, 0xab)
+  .toString('base64')
+  .replace(/=+$/, '')}`
+
+function validEnv (overrides = {}) {
+  return {
+    SHELLPILOT_SSH_HOST: ' 127.0.0.1 ',
+    SHELLPILOT_SSH_USER: ' tester ',
+    SHELLPILOT_SSH_PASSWORD: '  password with spaces  ',
+    SHELLPILOT_SSH_HOST_FINGERPRINT: ` ${validFingerprint} `,
+    SHELLPILOT_SSH_PORT: '22',
+    SHELLPILOT_SSH_TEST_DIR: '/tmp',
+    SHELLPILOT_SSH_TIMEOUT: '20000',
+    ...overrides
+  }
+}
 
 test('SSH/SFTP smoke script is reusable and keeps credentials out of source', () => {
   const source = fs.readFileSync(scriptPath, 'utf8')
@@ -14,6 +33,7 @@ test('SSH/SFTP smoke script is reusable and keeps credentials out of source', ()
   assert.match(source, /SHELLPILOT_SSH_HOST/)
   assert.match(source, /SHELLPILOT_SSH_USER/)
   assert.match(source, /SHELLPILOT_SSH_PASSWORD/)
+  assert.match(source, /SHELLPILOT_SSH_HOST_FINGERPRINT/)
   assert.match(source, /conn\.shell/)
   assert.match(source, /'\\x03'/)
   assert.match(source, /sftpOp\(sftp,\s*'writeFile'/)
@@ -21,10 +41,262 @@ test('SSH/SFTP smoke script is reusable and keeps credentials out of source', ()
   assert.match(source, /sftpOp\(sftp,\s*'unlink'/)
   assert.doesNotMatch(source, /23\.94\.104\.203/)
   assert.doesNotMatch(source, /example-secret-password/)
+  assert.doesNotMatch(source, /hostVerifier\s*:\s*\(\)\s*=>\s*true/)
 })
 
 test('package exposes SSH/SFTP smoke test command', () => {
   const pack = JSON.parse(fs.readFileSync(packagePath, 'utf8'))
 
   assert.equal(pack.scripts['smoke:ssh-sftp'], 'node build/bin/smoke-ssh-sftp.js')
+})
+
+test('SSH smoke resolves normalized public fields without changing password whitespace', () => {
+  assert.equal(typeof smokeHelpers.resolveConfig, 'function')
+  assert.equal(typeof smokeHelpers.validateConfig, 'function')
+
+  const config = smokeHelpers.validateConfig(
+    smokeHelpers.resolveConfig(validEnv())
+  )
+
+  assert.equal(config.host, '127.0.0.1')
+  assert.equal(config.username, 'tester')
+  assert.equal(config.hostFingerprint, validFingerprint)
+  assert.equal(config.password, '  password with spaces  ')
+  assert.equal(config.port, 22)
+  assert.equal(config.timeoutMs, 20000)
+  assert.equal(config.testDir, '/tmp')
+})
+
+test('SSH smoke rejects invalid configuration before calling the client factory', async () => {
+  const invalidCases = [
+    ['host', { SHELLPILOT_SSH_HOST: '   ' }, /SHELLPILOT_SSH_HOST/],
+    ['username', { SHELLPILOT_SSH_USER: '\t ' }, /SHELLPILOT_SSH_USER/],
+    ['fingerprint', { SHELLPILOT_SSH_HOST_FINGERPRINT: '  ' }, /SHELLPILOT_SSH_HOST_FINGERPRINT/],
+    ['fractional port', { SHELLPILOT_SSH_PORT: '22.5' }, /port/i],
+    ['zero port', { SHELLPILOT_SSH_PORT: '0' }, /port/i],
+    ['oversized port', { SHELLPILOT_SSH_PORT: '65536' }, /port/i],
+    ['non-finite timeout', { SHELLPILOT_SSH_TIMEOUT: 'Infinity' }, /timeout/i],
+    ['fractional timeout', { SHELLPILOT_SSH_TIMEOUT: '1000.5' }, /timeout/i],
+    ['short timeout', { SHELLPILOT_SSH_TIMEOUT: '999' }, /timeout/i],
+    ['long timeout', { SHELLPILOT_SSH_TIMEOUT: '120001' }, /timeout/i],
+    ['unsafe test directory', { SHELLPILOT_SSH_TEST_DIR: '/tmp/../etc' }, /test root/i]
+  ]
+
+  for (const [name, overrides, errorPattern] of invalidCases) {
+    let factoryCalls = 0
+    const config = smokeHelpers.resolveConfig(validEnv(overrides))
+    await assert.rejects(
+      Promise.resolve().then(() => smokeHelpers.connect(config, () => {
+        factoryCalls += 1
+        throw new Error('client factory must not run')
+      })),
+      errorPattern,
+      name
+    )
+    assert.equal(factoryCalls, 0, name)
+  }
+})
+
+test('invalid SSH smoke configuration exits as a preflight failure without exposing secrets', () => {
+  const secret = '  preflight secret with spaces  '
+  const invalidEnvironments = [
+    { SHELLPILOT_SSH_HOST: '   ' },
+    { SHELLPILOT_SSH_USER: '   ' },
+    { SHELLPILOT_SSH_HOST_FINGERPRINT: '   ' },
+    { SHELLPILOT_SSH_PORT: 'not-a-port' },
+    { SHELLPILOT_SSH_TIMEOUT: 'NaN' },
+    { SHELLPILOT_SSH_TEST_DIR: '/tmp/unsafe;name' }
+  ]
+
+  for (const overrides of invalidEnvironments) {
+    const result = require('node:child_process').spawnSync(
+      process.execPath,
+      ['build/bin/smoke-ssh-sftp.js'],
+      {
+        cwd: root,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          ...validEnv({ SHELLPILOT_SSH_PASSWORD: secret }),
+          ...overrides
+        },
+        timeout: 5000
+      }
+    )
+    const output = `${result.stdout}\n${result.stderr}`
+    assert.equal(result.status, 2, output)
+    assert.doesNotMatch(output, new RegExp(secret.trim()))
+  }
+})
+
+test('injected smoke secrets stay redacted after exec and cleanup failures', async () => {
+  const password = 'injected-password-not-in-process-env'
+  const privateKey = 'PRIVATE-KEY-CONTENT-MUST-NOT-LEAK'
+  const passphrase = 'PASSPHRASE-CONTENT-MUST-NOT-LEAK'
+  const output = []
+  const originalLog = console.log
+  const originalError = console.error
+  const originalExitCode = process.exitCode
+  const originalProcessPassword = process.env.SHELLPILOT_SSH_PASSWORD
+
+  class FailingClient extends EventEmitter {
+    connect () {
+      queueMicrotask(() => this.emit('ready'))
+    }
+
+    exec (command, callback) {
+      const phase = command.includes('rm -rf') ? 'cleanup' : 'exec'
+      callback(new Error(
+        `${phase} failed credential ${password} privateKey=${privateKey} passphrase=${passphrase}`
+      ))
+    }
+
+    end () {
+      throw new Error(`close failed password=${password}`)
+    }
+  }
+
+  try {
+    process.env.SHELLPILOT_SSH_PASSWORD = 'different-process-password'
+    console.log = (...args) => output.push(args.join(' '))
+    console.error = (...args) => output.push(args.join(' '))
+
+    const summary = await smokeHelpers.runSmoke({
+      env: validEnv({ SHELLPILOT_SSH_PASSWORD: password }),
+      clientFactory: () => new FailingClient()
+    })
+    const serializedOutput = JSON.stringify(output)
+
+    assert.match(serializedOutput, /\[REDACTED\]/)
+    for (const secret of [password, privateKey, passphrase]) {
+      assert.doesNotMatch(serializedOutput, new RegExp(secret))
+    }
+
+    assert.equal(typeof summary, 'object')
+    assert.ok(summary.results.some(item => item.name === 'remote test directory setup'))
+    assert.ok(summary.results.some(item => item.name === 'remote test directory cleanup'))
+    assert.ok(summary.results.some(item => item.name === 'SSH connection close'))
+    const serializedSummary = JSON.stringify(summary)
+    assert.match(serializedSummary, /\[REDACTED\]/)
+    for (const secret of [password, privateKey, passphrase]) {
+      assert.doesNotMatch(serializedSummary, new RegExp(secret))
+    }
+  } finally {
+    console.log = originalLog
+    console.error = originalError
+    process.exitCode = originalExitCode
+    if (originalProcessPassword === undefined) {
+      delete process.env.SHELLPILOT_SSH_PASSWORD
+    } else {
+      process.env.SHELLPILOT_SSH_PASSWORD = originalProcessPassword
+    }
+  }
+})
+
+test('execCommand returns a redacted error object with explicit secret context', async () => {
+  const password = 'error-object-password'
+  const privateKey = 'error-object-private-key'
+  const passphrase = 'error-object-passphrase'
+  assert.equal(typeof smokeHelpers.createRedactor, 'function')
+  const redactor = smokeHelpers.createRedactor({ password })
+  const sourceError = Object.assign(new Error(
+    `failed password=${password} privateKey=${privateKey} passphrase=${passphrase}`
+  ), { code: 'EAUTH' })
+  const execImplementations = [
+    (command, callback) => callback(sourceError),
+    () => { throw sourceError }
+  ]
+
+  for (const exec of execImplementations) {
+    let receivedError
+    await assert.rejects(
+      smokeHelpers.execCommand({ exec }, 'true', 1000, redactor),
+      error => {
+        receivedError = error
+        return error.code === 'EAUTH'
+      }
+    )
+
+    const serialized = JSON.stringify({
+      message: receivedError.message,
+      stack: receivedError.stack,
+      code: receivedError.code
+    })
+    assert.match(serialized, /\[REDACTED\]/)
+    for (const secret of [password, privateKey, passphrase]) {
+      assert.doesNotMatch(serialized, new RegExp(secret))
+    }
+  }
+})
+
+test('public smoke helpers redact with the current process environment by default', async () => {
+  const password = 'default-process-env-password'
+  const originalPassword = process.env.SHELLPILOT_SSH_PASSWORD
+
+  try {
+    process.env.SHELLPILOT_SSH_PASSWORD = password
+
+    const directResult = smokeHelpers.redact(`direct ${password}`)
+    assert.equal(directResult, 'direct [REDACTED]')
+
+    const outputStream = new EventEmitter()
+    outputStream.stderr = new EventEmitter()
+    const outputPromise = smokeHelpers.execCommand({
+      exec (command, callback) {
+        callback(null, outputStream)
+        queueMicrotask(() => {
+          outputStream.emit('data', Buffer.from(`stdout ${password}`))
+          outputStream.stderr.emit('data', Buffer.from(`stderr ${password}`))
+          outputStream.emit('close', 0)
+        })
+      }
+    }, 'true', 1000)
+    const outputResult = await outputPromise
+
+    assert.equal(outputResult.stdout, 'stdout [REDACTED]')
+    assert.equal(outputResult.stderr, 'stderr [REDACTED]')
+
+    let receivedError
+    await assert.rejects(
+      smokeHelpers.execCommand({
+        exec (command, callback) {
+          callback(new Error(`exec failed ${password}`))
+        }
+      }, 'false', 1000),
+      error => {
+        receivedError = error
+        return true
+      }
+    )
+    assert.match(receivedError.message, /\[REDACTED\]/)
+    assert.doesNotMatch(receivedError.stack, new RegExp(password))
+  } finally {
+    if (originalPassword === undefined) {
+      delete process.env.SHELLPILOT_SSH_PASSWORD
+    } else {
+      process.env.SHELLPILOT_SSH_PASSWORD = originalPassword
+    }
+  }
+})
+
+test('default and injected smoke redactors keep their secret contexts isolated', () => {
+  const processPassword = 'process-context-password'
+  const injectedPassword = 'injected-context-password'
+  const originalPassword = process.env.SHELLPILOT_SSH_PASSWORD
+
+  try {
+    process.env.SHELLPILOT_SSH_PASSWORD = processPassword
+    const input = `${processPassword}|${injectedPassword}`
+    const defaultResult = smokeHelpers.redact(input)
+    const injectedResult = smokeHelpers.createRedactor({ password: injectedPassword })(input)
+
+    assert.equal(defaultResult, `[REDACTED]|${injectedPassword}`)
+    assert.equal(injectedResult, `${processPassword}|[REDACTED]`)
+  } finally {
+    if (originalPassword === undefined) {
+      delete process.env.SHELLPILOT_SSH_PASSWORD
+    } else {
+      process.env.SHELLPILOT_SSH_PASSWORD = originalPassword
+    }
+  }
 })

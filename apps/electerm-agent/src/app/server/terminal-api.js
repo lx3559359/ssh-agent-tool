@@ -5,17 +5,48 @@
 const { testConnection, terminal, terminals } = require('./session-process')
 
 async function runCmd (ws, msg) {
-  const { id, pid, cmd, timeoutMs } = msg
+  const {
+    id,
+    pid,
+    cmd,
+    timeoutMs,
+    maxOutputBytes,
+    executionId
+  } = msg
   const term = terminals(pid)
   try {
     let txt = ''
     if (term) {
-      txt = await term.runCmd(cmd, id, timeoutMs)
+      txt = await term.runCmd(cmd, id, {
+        timeoutMs,
+        maxOutputBytes,
+        executionId
+      })
     }
     ws.s({
       id,
       data: txt
     })
+  } catch (err) {
+    ws.s({
+      id,
+      error: {
+        message: err.message,
+        name: err.name,
+        stack: err.stack
+      }
+    })
+  }
+}
+
+async function cancelRunCmd (ws, msg) {
+  const { id, pid, executionId } = msg
+  const term = terminals(pid)
+  try {
+    const cancelled = term
+      ? await term.cancelRunCmd(executionId, id)
+      : false
+    ws.s({ id, data: cancelled })
   } catch (err) {
     ws.s({
       id,
@@ -148,6 +179,7 @@ exports.createTerm = createTerm
 exports.testTerm = testTerm
 exports.resize = resize
 exports.runCmd = runCmd
+exports.cancelRunCmd = cancelRunCmd
 exports.toggleTerminalLog = toggleTerminalLog
 exports.toggleTerminalLogTimestamp = toggleTerminalLogTimestamp
 exports.setTerminalLogPath = setTerminalLogPath

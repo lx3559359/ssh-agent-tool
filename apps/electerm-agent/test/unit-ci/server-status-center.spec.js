@@ -54,7 +54,7 @@ test('server status scan requires a live matching SSH terminal', () => {
   assert.match(modal, /runCmd\(terminal\.pid, command, options\)/)
 })
 
-test('terminal run-cmd transports timeout to the SSH execution layer', () => {
+test('terminal run-cmd transports safety execution options to the SSH layer', () => {
   const clientApi = readSource('src/client/components/terminal/terminal-apis.js')
   const terminalApi = readSource('src/app/server/terminal-api.js')
   const sessionProcess = readSource('src/app/server/session-process.js')
@@ -62,9 +62,12 @@ test('terminal run-cmd transports timeout to the SSH execution layer', () => {
   const sessionCommon = readSource('src/app/server/session-common.js')
 
   assert.match(clientApi, /timeoutMs/)
-  assert.match(terminalApi, /term\.runCmd\(cmd, id, timeoutMs\)/)
-  assert.match(sessionProcess, /timeoutMs/)
-  assert.match(sessionApi, /term\.runCmd\(cmd, undefined, \{ timeoutMs \}\)/)
+  assert.match(clientApi, /maxOutputBytes/)
+  assert.match(clientApi, /executionId/)
+  assert.match(terminalApi, /term\.runCmd\(cmd, id, \{/)
+  assert.match(sessionProcess, /action: 'cancel-run-cmd'/)
+  assert.match(sessionApi, /term\.runCmd\(cmd, undefined, \{/)
+  assert.match(sessionApi, /term\.cancelRunCmd\(executionId\)/)
   assert.match(sessionCommon, /stream\.(?:close|destroy)\(\)/)
   assert.match(sessionCommon, /RunCmdTimeoutError/)
 })
