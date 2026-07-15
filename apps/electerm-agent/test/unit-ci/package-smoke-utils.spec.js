@@ -11,6 +11,7 @@ const {
   validateSmokeResult
 } = require(path.resolve(__dirname, '../../build/bin/package-smoke-utils'))
 const {
+  killWindowsProcessTree,
   parseArgs,
   stopChild
 } = require(path.resolve(__dirname, '../../build/bin/package-smoke-test'))
@@ -117,6 +118,84 @@ test('package smoke closes the complete Windows Electron process tree', async ()
   })
 
   assert.deepEqual(killedPids, [4321])
+  assert.equal(child.listenerCount('close'), 0)
+  assert.equal(child.listenerCount('error'), 0)
+})
+
+test('package smoke invokes taskkill with process-tree force flags and timeout', async () => {
+  let invocation
+  await killWindowsProcessTree(4321, 2500, (command, args, options, callback) => {
+    invocation = { command, args, options }
+    callback(null)
+  })
+
+  assert.deepEqual(invocation, {
+    command: 'taskkill.exe',
+    args: ['/PID', '4321', '/T', '/F'],
+    options: {
+      windowsHide: true,
+      timeout: 2500,
+      killSignal: 'SIGKILL'
+    }
+  })
+})
+
+test('package smoke times out a hanging Windows taskkill operation', async () => {
+  const child = new EventEmitter()
+  child.pid = 4321
+  child.exitCode = null
+  child.signalCode = null
+
+  await assert.rejects(
+    stopChild(child, {
+      platform: 'win32',
+      forceMs: 10,
+      killWindowsProcessTree: () => new Promise(() => {})
+    }),
+    /process tree shutdown timed out/i
+  )
+  assert.equal(child.listenerCount('close'), 0)
+  assert.equal(child.listenerCount('error'), 0)
+})
+
+test('package smoke waits for close when exitCode is already available', async () => {
+  const child = new EventEmitter()
+  child.exitCode = 0
+  child.signalCode = null
+  child.kill = () => {
+    throw new Error('An exited process must only wait for close')
+  }
+
+  let stopped = false
+  const stopping = stopChild(child, {
+    platform: 'linux',
+    forceMs: 100
+  }).then(() => {
+    stopped = true
+  })
+  await Promise.resolve()
+  assert.equal(stopped, false)
+  child.emit('close', 0, null)
+  await stopping
+  assert.equal(stopped, true)
+})
+
+test('package smoke removes listeners when Windows taskkill fails', async () => {
+  const child = new EventEmitter()
+  child.pid = 4321
+  child.exitCode = null
+  child.signalCode = null
+
+  await assert.rejects(
+    stopChild(child, {
+      platform: 'win32',
+      forceMs: 100,
+      killWindowsProcessTree: async () => {
+        throw new Error('taskkill failed')
+      }
+    }),
+    /failed to close packaged client process tree/i
+  )
   assert.equal(child.listenerCount('close'), 0)
   assert.equal(child.listenerCount('error'), 0)
 })

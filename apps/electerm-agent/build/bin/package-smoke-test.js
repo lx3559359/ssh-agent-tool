@@ -72,7 +72,7 @@ function createChildCloseWaiter (child, waitMs) {
   }
 }
 
-function killWindowsProcessTree (pid, execFileImpl = execFile) {
+function killWindowsProcessTree (pid, timeoutMs, execFileImpl = execFile) {
   return new Promise((resolve, reject) => {
     execFileImpl('taskkill.exe', [
       '/PID',
@@ -80,7 +80,9 @@ function killWindowsProcessTree (pid, execFileImpl = execFile) {
       '/T',
       '/F'
     ], {
-      windowsHide: true
+      windowsHide: true,
+      timeout: timeoutMs,
+      killSignal: 'SIGKILL'
     }, (error) => {
       if (error) {
         reject(error)
@@ -89,6 +91,15 @@ function killWindowsProcessTree (pid, execFileImpl = execFile) {
       resolve()
     })
   })
+}
+
+function withTimeout (promise, waitMs, message) {
+  let timer
+  const timeout = new Promise((resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), waitMs)
+  })
+  return Promise.race([promise, timeout])
+    .finally(() => clearTimeout(timer))
 }
 
 function closeErrorDetail (result) {
@@ -101,9 +112,23 @@ async function stopChild (child, {
   platform = process.platform,
   graceMs = 1500,
   forceMs = 5000,
+  closeState,
   killWindowsProcessTree: killWindowsTree = killWindowsProcessTree
 } = {}) {
+  if (closeState && closeState.observed) {
+    return
+  }
+
   if (child.exitCode !== null || child.signalCode !== null) {
+    const exitedWaiter = createChildCloseWaiter(child, forceMs)
+    if (closeState && closeState.observed) {
+      exitedWaiter.cancel()
+      return
+    }
+    const exitedResult = await exitedWaiter.promise
+    if (!exitedResult.closed) {
+      throw new Error(`Packaged client exit was observed without process close${closeErrorDetail(exitedResult)}`)
+    }
     return
   }
 
@@ -114,7 +139,11 @@ async function stopChild (child, {
 
     const closeWaiter = createChildCloseWaiter(child, forceMs)
     try {
-      await killWindowsTree(child.pid)
+      await withTimeout(
+        killWindowsTree(child.pid, forceMs),
+        forceMs,
+        'Packaged client process tree shutdown timed out.'
+      )
     } catch (error) {
       closeWaiter.cancel()
       throw new Error(`Failed to close packaged client process tree: ${error.message}`)
@@ -195,6 +224,10 @@ async function main () {
     stdio: 'ignore',
     windowsHide: true
   })
+  const closeState = { observed: false }
+  child.once('close', () => {
+    closeState.observed = true
+  })
 
   const databasesReady = await waitForDatabases(paths, child)
   const runningAfterWait = child.exitCode === null && child.signalCode === null
@@ -205,7 +238,7 @@ async function main () {
     exitCode: child.exitCode
   }
 
-  await stopChild(child)
+  await stopChild(child, { closeState })
 
   validateSmokeResult(result)
   console.log(`Package smoke test passed: ${paths.exePath}`)
@@ -224,6 +257,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  killWindowsProcessTree,
   main,
   parseArgs,
   stopChild
