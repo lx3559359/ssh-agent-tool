@@ -38,13 +38,15 @@ global.window = {
   translate: value => value
 }
 
-test('ShellPilot locks terminal background while preserving other theme colors', async () => {
+test('ShellPilot locks terminal background and repairs unreadable foreground colors', async () => {
   const {
     shellPilotTerminalBackground,
+    shellPilotTerminalForeground,
     normalizeTerminalThemeConfig
   } = await import(pathToFileURL(path.join(clientCommonDir, 'shellpilot-theme-constraints.js')))
 
   assert.equal(shellPilotTerminalBackground, '#0E0F12')
+  assert.equal(shellPilotTerminalForeground, '#D7DEE8')
   assert.deepEqual(
     normalizeTerminalThemeConfig({
       background: '#fafafa',
@@ -52,20 +54,36 @@ test('ShellPilot locks terminal background while preserving other theme colors',
     }),
     {
       background: '#0E0F12',
-      foreground: '#222222'
+      foreground: '#D7DEE8'
+    }
+  )
+  assert.deepEqual(
+    normalizeTerminalThemeConfig({
+      background: '#fafafa',
+      foreground: '#ABCDEF'
+    }),
+    {
+      background: '#0E0F12',
+      foreground: '#ABCDEF'
     }
   )
   assert.deepEqual(
     normalizeTerminalThemeConfig(['#ffffff']),
-    { background: '#0E0F12' }
+    {
+      background: '#0E0F12',
+      foreground: '#D7DEE8'
+    }
   )
   assert.deepEqual(
     normalizeTerminalThemeConfig('background=#ffffff'),
-    { background: '#0E0F12' }
+    {
+      background: '#0E0F12',
+      foreground: '#D7DEE8'
+    }
   )
 })
 
-test('imported terminal themes keep their foreground and use the locked background', async () => {
+test('imported terminal themes repair unsafe foreground and use the locked background', async () => {
   const { convertTheme } = await import(terminalThemeUrl)
 
   const converted = convertTheme([
@@ -75,7 +93,7 @@ test('imported terminal themes keep their foreground and use the locked backgrou
   ].join('\n'))
 
   assert.equal(converted.themeConfig.background, '#0E0F12')
-  assert.equal(converted.themeConfig.foreground, '#222222')
+  assert.equal(converted.themeConfig.foreground, '#D7DEE8')
 })
 
 test('theme save and database defaults enforce the locked background', () => {
