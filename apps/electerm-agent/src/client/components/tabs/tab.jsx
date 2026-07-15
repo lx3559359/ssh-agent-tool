@@ -15,7 +15,7 @@ import {
   Tooltip,
   Dropdown
 } from 'antd'
-import { contextMenuAlign } from '../common/context-menu-props'
+import { contextMenuAlign, createContextMenuId } from '../common/context-menu-props'
 import message from '../common/message'
 import classnames from 'classnames'
 import { pick } from 'lodash-es'
@@ -38,6 +38,7 @@ class Tab extends Component {
       terminalOnData: ''
     }
     this.id = 'tab-' + this.props.tab.id
+    this.contextMenuId = createContextMenuId('tab-menu')
     refsTabs.add(this.id, this)
   }
 
@@ -460,6 +461,7 @@ class Tab extends Component {
     }
     const dropdownProps = {
       menu: {
+        id: this.contextMenuId,
         items: this.renderContext(),
         onClick: this.onContextMenu
       },

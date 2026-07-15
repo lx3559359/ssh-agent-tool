@@ -3,8 +3,9 @@ import TreeListItem from './tree-list-item'
 import TreeItemOp from './tree-item-op'
 import { treeLevelIndent } from './tree-list-layout'
 import createName from '../../common/create-title'
+import { useRef } from 'react'
 import { Dropdown } from 'antd'
-import { contextMenuAlign } from '../common/context-menu-props'
+import { contextMenuAlign, createContextMenuId } from '../common/context-menu-props'
 import { copy } from '../../common/clipboard'
 import {
   buildBookmarkContextMenuItems,
@@ -15,6 +16,10 @@ import {
 const e = window.translate
 
 export default function TreeListRow (props) {
+  const contextMenuIdRef = useRef()
+  if (!contextMenuIdRef.current) {
+    contextMenuIdRef.current = createContextMenuId('bookmark-menu')
+  }
   const {
     row,
     keyword,
@@ -154,6 +159,7 @@ export default function TreeListRow (props) {
   })
   const dropdownProps = {
     menu: {
+      id: contextMenuIdRef.current,
       items: contextMenuItems,
       onClick: onContextMenuAction
     },

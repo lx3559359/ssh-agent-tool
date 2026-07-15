@@ -771,6 +771,7 @@ async function inspectKeyboardFocus (page, surface) {
       throw new Error(`Menu surface ${surface.name} has no enabled keyboard target`)
     }
     await menu.focus()
+    await expect(menu).toBeFocused()
     await page.keyboard.press('ArrowDown')
     await expect.poll(() => menu.evaluate(menuElement => {
       const activeItem = menuElement.querySelector('.ant-dropdown-menu-item-active')

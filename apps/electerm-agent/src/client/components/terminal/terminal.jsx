@@ -7,7 +7,7 @@ import {
   Dropdown,
   Button
 } from 'antd'
-import { contextMenuAlign } from '../common/context-menu-props'
+import { contextMenuAlign, createContextMenuId } from '../common/context-menu-props'
 import message from '../common/message'
 import { notification } from '../common/notification'
 import ShowItem from '../common/show-item.jsx'
@@ -110,6 +110,7 @@ class Term extends Component {
       fontSizeChanged: false
     }
     this.id = `term-${this.props.tab.id}`
+    this.contextMenuId = createContextMenuId('terminal-menu')
     refs.add(this.id, this)
     this.currentInput = ''
     this.shellInjected = false
@@ -1883,6 +1884,7 @@ class Term extends Component {
     }
     const dropdownProps = {
       menu: {
+        id: this.contextMenuId,
         items: this.renderContextMenu(),
         onClick: this.onContextMenu
       },

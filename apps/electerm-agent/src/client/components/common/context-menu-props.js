@@ -7,3 +7,10 @@ export const contextMenuAlign = {
     shiftY: true
   }
 }
+
+let nextContextMenuId = 0
+
+export function createContextMenuId (scope = 'menu') {
+  nextContextMenuId += 1
+  return `shellpilot-${scope}-${nextContextMenuId}`
+}

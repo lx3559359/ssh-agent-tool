@@ -4,7 +4,7 @@
 
 import { Component, createRef } from 'react'
 import { Dropdown } from 'antd'
-import { contextMenuAlign } from '../common/context-menu-props'
+import { contextMenuAlign, createContextMenuId } from '../common/context-menu-props'
 import classnames from 'classnames'
 import FileSection from './file-item'
 import PagedList from './paged-list'
@@ -30,6 +30,7 @@ export default class FileListTable extends Component {
       ...this.initFromProps(),
       scrollTop: 0
     }
+    this.contextMenuId = createContextMenuId('sftp-list-menu')
   }
 
   containerRef = createRef()
@@ -367,6 +368,7 @@ export default class FileListTable extends Component {
     const cls = classnames('sftp-table relative')
     const ddProps = {
       menu: {
+        id: this.contextMenuId,
         items: this.renderContextMenuFile(),
         onClick: this.onContextMenuFile
       },
