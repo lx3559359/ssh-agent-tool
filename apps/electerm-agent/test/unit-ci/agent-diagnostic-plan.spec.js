@@ -25,6 +25,16 @@ function validPlan (overrides = {}) {
   }
 }
 
+test('diagnostic target name tolerates a closed modal without a target', async () => {
+  const { getDiagnosticTargetName } = await import(diagnosticPlanUrl)
+
+  assert.equal(getDiagnosticTargetName(null), '异常目标')
+  assert.equal(
+    getDiagnosticTargetName({ data: { unit: 'nginx.service' } }),
+    'nginx.service'
+  )
+})
+
 test('parses one pure JSON object or one json fence and rejects surrounding text', async () => {
   const { parseDiagnosticPlan } = await import(diagnosticPlanUrl)
   const json = JSON.stringify(validPlan())

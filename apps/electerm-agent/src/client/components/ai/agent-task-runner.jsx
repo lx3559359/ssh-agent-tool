@@ -20,6 +20,7 @@ import { getActiveAIConfig } from './ai-profiles.js'
 import {
   buildDiagnosticResultPrompt,
   buildTargetedDiagnosticPrompt,
+  getDiagnosticTargetName,
   parseDiagnosticPlan
 } from './diagnostic-plan.js'
 import {
@@ -56,12 +57,6 @@ const taskStatusLabels = {
   failed: '诊断失败',
   cancelled: '已取消',
   'partially-completed': '部分完成'
-}
-
-function targetName (target = {}) {
-  const value = target.data || target.item || target
-  return value.name || value.unit || value.service || value.target ||
-    value.message || value.code || '异常目标'
 }
 
 function displayError (error, fallback = '操作失败。') {
@@ -355,7 +350,7 @@ export default function AgentTaskRunner ({
 
   return (
     <Modal
-      title={<Space><RobotOutlined />AI 只读诊断 · {targetName(target)}</Space>}
+      title={<Space><RobotOutlined />AI 只读诊断 · {getDiagnosticTargetName(target)}</Space>}
       open={open}
       onCancel={handleClose}
       footer={footer}

@@ -61,6 +61,12 @@ function isObject (value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
+export function getDiagnosticTargetName (target) {
+  const value = target?.data || target?.item || target || {}
+  return value.name || value.unit || value.service || value.target ||
+    value.message || value.code || '异常目标'
+}
+
 function safeText (value, limit = maxContextTextLength) {
   return redactAuditText(String(value ?? '')).slice(0, limit)
 }
