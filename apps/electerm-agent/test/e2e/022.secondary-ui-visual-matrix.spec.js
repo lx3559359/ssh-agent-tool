@@ -910,7 +910,9 @@ function assertFocusSnapshot (focus, context) {
 async function inspectTerminalInvariant (page) {
   return page.evaluate(() => {
     const selectors = [
-      '.tabs .tab.active',
+      '.tabs.terminal-session-tabs',
+      '.tabs.terminal-session-tabs .tab.active',
+      '.tabs.terminal-session-tabs .tab:not(.active)',
       '.terminal-control',
       '.term-wrap',
       '.xterm',
@@ -1103,6 +1105,13 @@ test('active terminal session tab keeps the locked SSH background', async ({ bro
     const page = electronApp.windows()[0] || await electronApp.firstWindow()
     await page.waitForFunction(() => window.store?.configLoaded === true, { timeout: 20000 })
     await page.locator('.term-wrap:visible').waitFor({ timeout: 20000 })
+    await page.evaluate(() => {
+      const firstTab = window.store.tabs[0]
+      if (!firstTab) throw new Error('Terminal invariant fixture requires one source tab')
+      if (window.store.tabs.length < 2) window.store.duplicateTab(firstTab.id)
+    })
+    await expect(page.locator('.tabs.terminal-session-tabs .tab')).toHaveCount(2, { timeout: 20000 })
+    await expect(page.locator('.tabs.terminal-session-tabs .tab:not(.active)')).toHaveCount(1)
     const terminal = await inspectTerminalInvariant(page)
     assertTerminalInvariant(terminal, { runner: browserName, surface: 'terminal-invariant' })
   })

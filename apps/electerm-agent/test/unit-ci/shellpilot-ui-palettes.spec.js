@@ -344,10 +344,11 @@ test('store inserts built-ins before unique persisted user themes', () => {
   ), 'utf8')
 
   assert.match(source, /import \{ buildShellPilotBuiltInThemes \} from '\.\.\/common\/shellpilot-ui-palettes\.js'/)
-  assert.match(source, /const builtIns = buildShellPilotBuiltInThemes\(t1\.themeConfig\)/)
-  assert.match(source, /const reservedIds = new Set\(\[t1\.id, t2\.id, \.\.\.builtIns\.map\(theme => theme\.id\)\]\)/)
+  assert.match(source, /const builtInIds = buildShellPilotBuiltInThemes\(t1\.themeConfig\)/)
+  assert.match(source, /const reservedIds = new Set\(\[t1\.id, t2\.id, \.\.\.builtInIds\]\)/)
   assert.match(source, /!theme \|\| !theme\.id \|\| reservedIds\.has\(theme\.id\)/)
   assert.match(source, /reservedIds\.add\(theme\.id\)/)
+  assert.match(source, /const builtIns = buildShellPilotBuiltInThemes\(terminalTheme\.themeConfig\)/)
   assert.match(source, /t1,\s*t2,\s*\.\.\.builtIns,\s*\.\.\.userThemes/)
 })
 
