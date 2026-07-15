@@ -161,7 +161,7 @@ test('SFTP rename recovery moves the renamed entry back to its original path', a
 
 test('SFTP safety UI exposes backup, recovery center, and safe-delete wiring', () => {
   const itemSource = fs.readFileSync(
-    path.resolve(__dirname, '../../src/client/components/sftp/file-item.jsx'),
+    path.resolve(__dirname, '../../src/client/components/sftp/sftp-file-context-menu.js'),
     'utf8'
   )
   const entrySource = fs.readFileSync(
@@ -174,8 +174,8 @@ test('SFTP safety UI exposes backup, recovery center, and safe-delete wiring', (
   )
 
   assert.match(itemSource, /quickBackup/)
-  assert.match(itemSource, /恢复最近备份/)
-  assert.match(itemSource, /一键备份/)
+  assert.match(itemSource, /shellpilotSftpRestoreLatestBackup/)
+  assert.match(itemSource, /shellpilotSftpQuickBackup/)
   assert.match(entrySource, /softDeleteRemoteFiles/)
   assert.match(entrySource, /安全操作中心/)
   assert.match(entrySource, /一键备份/)

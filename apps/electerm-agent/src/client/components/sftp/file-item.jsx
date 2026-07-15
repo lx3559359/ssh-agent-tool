@@ -42,6 +42,7 @@ import { splitOverflowMenu } from './context-menu-utils.js'
 import { buildSftpFileTerminalAnalysisPrompt } from '../ai/ai-ssh-context'
 import { readSftpFileContext } from '../ai/ai-chat-context-actions'
 import { validateSftpFileName } from './file-name-validation.js'
+import { buildSftpFileContextItems } from './sftp-file-context-menu.js'
 import message from '../common/message'
 
 const e = window.translate
@@ -513,7 +514,7 @@ export default class FileSection extends React.Component {
           previousMode,
           file
         })
-        message.success('权限修改已记录，可在安全操作中心一键恢复。')
+        message.success(e('shellpilotSftpPermissionRecoveryRecorded'))
       }
     } catch (err) {
       window.store.onError(err)
@@ -594,7 +595,7 @@ export default class FileSection extends React.Component {
         backupPath: p2,
         file: this.state.file
       })
-      message.success('重命名已记录，可在安全操作中心一键恢复。')
+      message.success(e('shellpilotSftpRenameRecoveryRecorded'))
       this.props.remoteList()
     } catch (err) {
       window.store.onError(err)
@@ -741,7 +742,7 @@ export default class FileSection extends React.Component {
         }
       ], { silent: true })
       if (!backupOk) {
-        message.error('保存前自动备份失败，已取消写入。')
+        message.error(e('shellpilotSftpBackupBeforeSaveFailed'))
         this.editor?.setState({ loading: false })
         return
       }
@@ -786,7 +787,7 @@ export default class FileSection extends React.Component {
       ? this.props.getSelectedFiles()
       : [file]
     if (selectedFiles.length !== 1) {
-      message.warning('当前选择了多个文件，只允许一次分析单个文件。')
+      message.warning(e('shellpilotSftpSingleFileAnalysisOnly'))
       return
     }
     try {
@@ -1073,216 +1074,27 @@ export default class FileSection extends React.Component {
   }
 
   renderContextItems () {
-    const {
-      file: {
-        type,
-        isDirectory,
-        size,
-        id,
-        isEmpty,
-        isParent
-      },
+    const { file, selectedFiles, tab } = this.props
+    const isRemote = file.type === typeMap.remote
+    const isRealFile = !file.isEmpty && !file.isParent
+    const sourcePath = isRemote && isRealFile
+      ? resolve(file.path, file.name)
+      : ''
+    return buildSftpFileContextItems({
+      file,
       selectedFiles,
-      tab
-    } = this.props
-    const isRealFile = !isEmpty && !isParent
-    const hasHost = !!tab.host
-    const { enableSsh } = tab
-    const isLocal = type === typeMap.local
-    const isRemote = type === typeMap.remote
-    const transferText = isLocal
-      ? e(transferTypeMap.upload)
-      : e(transferTypeMap.download)
-    const iconType = isLocal
-      ? 'CloudUploadOutlined'
-      : 'CloudDownloadOutlined'
-    const len = selectedFiles.size
-    const shouldShowSelectedMenu = id &&
-      len > 1 &&
-      selectedFiles.has(id)
-    const delTxt = isRemote
-      ? (shouldShowSelectedMenu ? `安全删除所选（${len}）` : '安全删除（可恢复）')
-      : (shouldShowSelectedMenu ? `${e('del')}:${e('selected')}(${len})` : e('del'))
-    const canPaste = hasFileInClipboardText()
-    const showEdit = !isDirectory && id &&
-      size < maxEditFileSize
-    const res = []
-    if (isDirectory && isRealFile) {
-      res.push({
-        func: 'doEnterDirectory',
-        icon: 'EnterOutlined',
-        text: e('enter')
-      })
-    }
-    if (shouldShowSelectedMenu && hasHost) {
-      res.push({
-        func: 'doTransferSelected',
-        icon: iconType,
-        text: `${e('selected')}(${len})`
-      })
-    }
-    if (
-      isDirectory &&
-      (
-        (hasHost && enableSsh !== false && isRemote) ||
-        (isLocal && !hasHost)
-      ) &&
-      !this.props.isFtp
-    ) {
-      res.push({
-        func: 'gotoFolderInTerminal',
-        icon: 'CodeOutlined',
-        text: e('gotoFolderInTerminal')
-      })
-    }
-    if (!(!isRealFile || !hasHost || shouldShowSelectedMenu)) {
-      res.push({
-        func: 'doTransfer',
-        icon: iconType,
-        text: transferText
-      })
-      // if (isDirectory && !this.props.isFtp) {
-      //   res.push({
-      //     func: 'zipAndTransfer',
-      //     icon: 'FileZipOutlined',
-      //     text: e('compressAndTransfer')
-      //   })
-      // }
-    }
-    if (!isDirectory && isRealFile && isLocal) {
-      res.push({
-        func: 'transferOrEnterDirectory',
-        icon: 'ArrowRightOutlined',
-        text: e('open')
-      })
-    }
-    if (isRealFile && isLocal) {
-      res.push({
-        func: 'showInDefaultFileManager',
-        icon: 'ContainerOutlined',
-        text: e('showInDefaultFileMananger')
-      })
-    }
-    if (isLocal && isRealFile && window.et.isWebApp) {
-      res.push({
-        func: 'downloadFromBrowser',
-        icon: 'DownloadOutlined',
-        text: e('downloadFromBrowser')
-      })
-    }
-    if (!isDirectory && isRealFile && id) {
-      res.push({
-        func: 'askAiAboutFile',
-        icon: 'CodeOutlined',
-        text: '让 AI 分析此文件'
-      })
-    }
-    if (isRemote && isRealFile) {
-      const sourcePath = resolve(this.props.file.path, this.props.file.name)
-      res.push({
-        func: 'quickBackup',
-        icon: 'SaveOutlined',
-        text: shouldShowSelectedMenu ? `一键备份所选（${len}）` : '一键备份'
-      })
-      res.push({
-        func: 'restoreLatestBackup',
-        icon: 'RetweetOutlined',
-        text: '恢复最近备份',
-        disabled: !this.props.hasSftpRecovery(sourcePath)
-      })
-      res.push({
-        func: 'openSafetyCenter',
-        icon: 'AppstoreOutlined',
-        text: '安全操作中心'
-      })
-    }
-    if (showEdit) {
-      res.push({
-        func: 'editFile',
-        icon: 'EditOutlined',
-        text: e('edit')
-      })
-    }
-    if (isRealFile) {
-      res.push({
-        func: 'del',
-        icon: 'CloseCircleOutlined',
-        text: delTxt,
-        requireConfirm: true
-      })
-      res.push({
-        func: 'onCopy',
-        icon: 'CopyOutlined',
-        text: e('copy'),
-        subText: `${ctrlOrCmd}+c`
-      })
-      res.push({
-        func: 'onCut',
-        icon: 'FileExcelOutlined',
-        text: e('cut'),
-        subText: `${ctrlOrCmd}+x`
-      })
-    }
-    res.push({
-      func: 'onPaste',
-      icon: 'CopyOutlined',
-      text: e('paste'),
-      disabled: !canPaste,
-      subText: `${ctrlOrCmd}+v`
+      tab,
+      isWin,
+      isWebApp: window.et.isWebApp,
+      isFtp: this.props.isFtp,
+      canPaste: hasFileInClipboardText(),
+      hasRecovery: isRemote && isRealFile
+        ? this.props.hasSftpRecovery(sourcePath)
+        : false,
+      maxEditFileSize,
+      shortcutModifier: ctrlOrCmd,
+      translate: e
     })
-    if (isRealFile) {
-      res.push({
-        func: 'doRename',
-        icon: 'EditOutlined',
-        text: e('rename')
-      })
-      res.push({
-        func: 'onCopyPath',
-        icon: 'CopyOutlined',
-        text: e('copyFilePath')
-      })
-    }
-    if (enableSsh !== false || isLocal) {
-      res.push({
-        func: 'newFile',
-        icon: 'FileAddOutlined',
-        text: e('newFile')
-      })
-      res.push({
-        func: 'newDirectory',
-        icon: 'FolderAddOutlined',
-        text: e('newFolder')
-      })
-    }
-    res.push({
-      func: 'selectAll',
-      icon: 'CheckSquareOutlined',
-      text: e('selectAll'),
-      subText: `${ctrlOrCmd}+a`
-    })
-    res.push({
-      func: 'refresh',
-      icon: 'ReloadOutlined',
-      text: e('refresh')
-    })
-    if (
-      this.showModeEdit(type, isRealFile) &&
-      !this.props.isFtp
-    ) {
-      res.push({
-        func: 'editPermission',
-        icon: 'LockOutlined',
-        text: e('editPermission')
-      })
-    }
-    if (isRealFile) {
-      res.push({
-        func: 'showInfo',
-        icon: 'InfoCircleOutlined',
-        text: e('info')
-      })
-    }
-    return res
   }
 
   onContextMenu = ({ key }) => {

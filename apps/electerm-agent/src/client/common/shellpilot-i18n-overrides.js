@@ -422,7 +422,18 @@ const catalogs = Object.freeze({
     shellpilotAiRecentFailure: '最近一次模型测试连接失败',
     shellpilotDescriptionRequired: '请输入描述',
     shellpilotAiBookmarkGenerateFailed: '无法根据 AI 返回内容生成书签：{detail}',
-    shellpilotAiBookmarkCreateFailed: '无法根据 AI 返回内容创建书签：{detail}'
+    shellpilotAiBookmarkCreateFailed: '无法根据 AI 返回内容创建书签：{detail}',
+    shellpilotSftpPermissionRecoveryRecorded: '权限修改已记录，可在安全操作中心一键恢复。',
+    shellpilotSftpRenameRecoveryRecorded: '重命名已记录，可在安全操作中心一键恢复。',
+    shellpilotSftpBackupBeforeSaveFailed: '保存前自动备份失败，已取消写入。',
+    shellpilotSftpSingleFileAnalysisOnly: '当前选择了多个文件，只允许一次分析单个文件。',
+    shellpilotSftpSafeDeleteSelected: '安全删除所选（{count}）',
+    shellpilotSftpSafeDeleteRecoverable: '安全删除（可恢复）',
+    shellpilotSftpAnalyzeFileWithAi: '让 AI 分析此文件',
+    shellpilotSftpBackupSelected: '一键备份所选（{count}）',
+    shellpilotSftpQuickBackup: '一键备份',
+    shellpilotSftpRestoreLatestBackup: '恢复最近备份',
+    shellpilotSftpSafetyCenter: '安全操作中心'
   }),
   en_us: Object.freeze({
     bookmarks: 'Bookmarks',
@@ -847,7 +858,18 @@ const catalogs = Object.freeze({
     shellpilotAiRecentFailure: 'The most recent model connection test failed',
     shellpilotDescriptionRequired: 'Enter a description',
     shellpilotAiBookmarkGenerateFailed: 'Failed to generate a bookmark from the AI response: {detail}',
-    shellpilotAiBookmarkCreateFailed: 'Failed to create a bookmark from the AI response: {detail}'
+    shellpilotAiBookmarkCreateFailed: 'Failed to create a bookmark from the AI response: {detail}',
+    shellpilotSftpPermissionRecoveryRecorded: 'Permission recovery was recorded and can be restored from the Safety Center.',
+    shellpilotSftpRenameRecoveryRecorded: 'Rename recovery was recorded and can be restored from the Safety Center.',
+    shellpilotSftpBackupBeforeSaveFailed: 'The automatic backup before saving failed. The write was cancelled.',
+    shellpilotSftpSingleFileAnalysisOnly: 'Multiple files are selected. Analyze one file at a time.',
+    shellpilotSftpSafeDeleteSelected: 'Safe Delete Selected ({count})',
+    shellpilotSftpSafeDeleteRecoverable: 'Safe Delete (Recoverable)',
+    shellpilotSftpAnalyzeFileWithAi: 'Analyze This File with AI',
+    shellpilotSftpBackupSelected: 'Back Up Selected ({count})',
+    shellpilotSftpQuickBackup: 'Quick Backup',
+    shellpilotSftpRestoreLatestBackup: 'Restore Latest Backup',
+    shellpilotSftpSafetyCenter: 'Safety Center'
   })
 })
 

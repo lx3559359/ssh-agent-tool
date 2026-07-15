@@ -194,19 +194,28 @@ test('file analysis prompt states byte-level safe truncation', async () => {
   assert.match(prompt, /不要自动执行命令/)
 })
 
-test('SFTP context menu exposes AI analysis outside the edit-size guard', () => {
+test('SFTP context menu exposes AI analysis outside the edit-size guard', async () => {
   const source = fs.readFileSync(
     path.join(root, 'src/client/components/sftp/file-item.jsx'),
     'utf8'
   )
+  const { buildSftpFileContextItems } = await import(pathToFileURL(
+    path.join(root, 'src/client/components/sftp/sftp-file-context-menu.js')
+  ).href)
   const methodSource = source.slice(
     source.indexOf('askAiAboutFile = async'),
     source.indexOf('transferOrEnterDirectory = async')
   )
-  const aiMenuIndex = source.indexOf("func: 'askAiAboutFile'")
-  const showEditIndex = source.indexOf('if (showEdit)')
+  const items = buildSftpFileContextItems({
+    file: { id: 'large', type: 'remote', size: 999999 },
+    selectedFiles: new Set(['large']),
+    tab: { host: 'server.example' },
+    maxEditFileSize: 10,
+    translate: key => key
+  })
 
-  assert.ok(aiMenuIndex > -1 && aiMenuIndex < showEditIndex)
+  assert.ok(items.some(item => item.func === 'askAiAboutFile'))
+  assert.equal(items.some(item => item.func === 'editFile'), false)
   assert.match(methodSource, /readSftpFileContext/)
   assert.match(methodSource, /message\.warning\(result\.message\)/)
   assert.doesNotMatch(methodSource, /fetchEditorText\(filePath,\s*type\)/)

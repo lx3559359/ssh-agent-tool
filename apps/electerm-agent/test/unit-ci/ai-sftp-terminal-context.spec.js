@@ -1,7 +1,6 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const path = require('node:path')
-const fs = require('node:fs')
 const { pathToFileURL } = require('node:url')
 
 const root = path.resolve(__dirname, '../..')
@@ -109,12 +108,18 @@ test('selected SFTP file analysis rejects directory selection', async () => {
   assert.match(result.message, /目录/)
 })
 
-test('SFTP file context menu exposes AI analysis wording', () => {
-  const source = fs.readFileSync(
-    path.join(root, 'src/client/components/sftp/file-item.jsx'),
-    'utf8'
-  )
+test('SFTP file context menu exposes AI analysis wording', async () => {
+  const { buildSftpFileContextItems } = await import(pathToFileURL(
+    path.join(root, 'src/client/components/sftp/sftp-file-context-menu.js')
+  ).href)
+  const items = buildSftpFileContextItems({
+    file: { id: 'file-1', type: 'remote', size: 1 },
+    selectedFiles: new Set(['file-1']),
+    tab: { host: 'server.example' },
+    translate: key => key === 'shellpilotSftpAnalyzeFileWithAi'
+      ? '让 AI 分析此文件'
+      : key
+  })
 
-  assert.match(source, /askAiAboutFile/)
-  assert.match(source, /让 AI 分析此文件/)
+  assert.equal(items.find(item => item.func === 'askAiAboutFile').text, '让 AI 分析此文件')
 })

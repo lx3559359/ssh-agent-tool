@@ -158,6 +158,55 @@ test('AI profile selector shows only config names while model selector keeps mod
   ])
 })
 
+test('AI profile migration restores technical name fallbacks without persisting localized display copy', async () => {
+  const {
+    migrateAIProfiles,
+    getAIProfileOptions
+  } = await import(profilesUrl)
+  const source = {
+    activeAIProfileId: 'model-profile',
+    aiProfiles: [
+      {
+        id: 'model-profile',
+        nameAI: '',
+        modelAI: 'deepseek-chat',
+        baseURLAI: 'https://api.deepseek.com'
+      },
+      {
+        id: 'url-profile',
+        nameAI: '   ',
+        modelAI: '',
+        baseURLAI: 'https://relay.example.com/v1'
+      },
+      {
+        id: 'empty-profile',
+        nameAI: '',
+        modelAI: '',
+        baseURLAI: ''
+      }
+    ]
+  }
+  const migrated = migrateAIProfiles(source)
+  const translate = language => key => ({
+    zh_cn: { shellpilotAiDefaultConfiguration: 'AI 配置' },
+    en_us: { shellpilotAiDefaultConfiguration: 'AI Configuration' }
+  })[language][key] || key
+
+  assert.deepEqual(
+    migrated.aiProfiles.map(profile => profile.nameAI),
+    ['deepseek-chat', 'https://relay.example.com/v1', '']
+  )
+  assert.deepEqual(
+    getAIProfileOptions(migrated, translate('zh_cn')).map(option => option.label),
+    ['deepseek-chat', 'https://relay.example.com/v1', 'AI 配置']
+  )
+  assert.deepEqual(
+    getAIProfileOptions(migrated, translate('en_us')).map(option => option.label),
+    ['deepseek-chat', 'https://relay.example.com/v1', 'AI Configuration']
+  )
+  assert.equal(migrated.aiProfiles[2].nameAI, '')
+})
+
 test('AI config modal and chat are wired to active AI profile selection', () => {
   const modalSource = fs.readFileSync(
     path.resolve(__dirname, '../../src/client/components/ai/ai-config-modal.jsx'),

@@ -322,7 +322,9 @@ test('known secondary configuration surfaces contain no direct visible Chinese c
     'components/terminal/terminal-context-menu.js',
     'components/tree-list/bookmark-context-menu.js',
     'components/tree-list/tree-list-row.jsx',
-    'components/sftp/context-menu-utils.js'
+    'components/sftp/context-menu-utils.js',
+    'components/sftp/file-item.jsx',
+    'components/sftp/list-table-ui.jsx'
   ]
 
   for (const file of files) {
@@ -401,7 +403,9 @@ test('expanded configuration routes contain no direct hardcoded visible copy', (
     'components/terminal/terminal-context-menu.js',
     'components/tree-list/bookmark-context-menu.js',
     'components/tree-list/tree-list-row.jsx',
-    'components/sftp/context-menu-utils.js'
+    'components/sftp/context-menu-utils.js',
+    'components/sftp/file-item.jsx',
+    'components/sftp/list-table-ui.jsx'
   ]
   const uniqueFiles = [...new Set(files)].sort()
   const issues = uniqueFiles.flatMap(file => {

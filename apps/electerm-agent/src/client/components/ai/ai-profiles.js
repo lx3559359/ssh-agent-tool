@@ -54,9 +54,10 @@ export function normalizeAIProfile (profile = {}) {
     }
   }
   next.id = next.id || createProfileId()
-  // Keep user data language-neutral. An empty name is rendered with the current
-  // UI language by getAIProfileOptions instead of being persisted as English.
-  next.nameAI = next.nameAI || ''
+  // Keep persisted names language-neutral while retaining legacy technical
+  // fallbacks. Only a profile with no name, model, or URL uses localized copy
+  // in getAIProfileOptions.
+  next.nameAI = next.nameAI || next.modelAI || next.baseURLAI || ''
   next.apiPathAI = next.apiPathAI || ''
   next.modelOptionsAI = normalizeModelOptions(next.modelOptionsAI)
   next.agentSkills = Array.isArray(next.agentSkills) ? next.agentSkills : []

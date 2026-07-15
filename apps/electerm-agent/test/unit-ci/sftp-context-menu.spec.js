@@ -74,18 +74,28 @@ test('sftp context menu does not create an overflow submenu for short menus', as
   )
 })
 
-test('sftp file context menu uses safe AI analysis outside the edit-size guard', () => {
+test('sftp file context menu uses safe AI analysis outside the edit-size guard', async () => {
   const methodSource = fileItemSource.slice(
     fileItemSource.indexOf('askAiAboutFile = async'),
     fileItemSource.indexOf('transferOrEnterDirectory = async')
   )
-  const aiMenuIndex = fileItemSource.indexOf("func: 'askAiAboutFile'")
-  const showEditIndex = fileItemSource.indexOf('if (showEdit)')
+  const { buildSftpFileContextItems } = await import(pathToFileURL(
+    path.resolve(__dirname, '../../src/client/components/sftp/sftp-file-context-menu.js')
+  ).href)
+  const items = buildSftpFileContextItems({
+    file: { id: 'file-1', type: 'remote', name: 'large.log', size: 999999 },
+    selectedFiles: new Set(['file-1']),
+    tab: { host: 'server.example', enableSsh: true },
+    maxEditFileSize: 10,
+    translate: key => key
+  })
+  const aiMenuIndex = items.findIndex(item => item.func === 'askAiAboutFile')
+  const editIndex = items.findIndex(item => item.func === 'editFile')
 
-  assert.match(fileItemSource, /func:\s*'askAiAboutFile'/)
-  assert.match(fileItemSource, /text:\s*'让 AI 分析此文件'/)
+  assert.match(fileItemSource, /buildSftpFileContextItems/)
   assert.match(fileItemSource, /buildSftpFileTerminalAnalysisPrompt/)
-  assert.ok(aiMenuIndex > -1 && aiMenuIndex < showEditIndex)
+  assert.ok(aiMenuIndex > -1)
+  assert.equal(editIndex, -1)
   assert.match(methodSource, /readSftpFileContext/)
   assert.doesNotMatch(methodSource, /fetchEditorText\(filePath,\s*type\)/)
 })
