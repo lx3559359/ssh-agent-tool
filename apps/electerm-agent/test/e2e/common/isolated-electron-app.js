@@ -34,6 +34,19 @@ async function acquireIsolatedApp (options) {
   return acquiredApp
 }
 
+async function cleanupPreservingPrimaryError (cleanup, primaryError) {
+  try {
+    await cleanup()
+  } catch (cleanupError) {
+    if (primaryError) {
+      primaryError.cleanupError = cleanupError
+      return
+    }
+    throw cleanupError
+  }
+}
+
 module.exports = {
-  acquireIsolatedApp
+  acquireIsolatedApp,
+  cleanupPreservingPrimaryError
 }

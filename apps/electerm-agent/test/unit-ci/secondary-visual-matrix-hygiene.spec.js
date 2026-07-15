@@ -8,10 +8,17 @@ const matrixPath = path.resolve(__dirname, '../e2e/022.secondary-ui-visual-matri
 
 test('language selection uses rendered option semantics instead of virtual-row math', () => {
   const source = fs.readFileSync(matrixPath, 'utf8')
+  const selector = source.match(/const chooseTargetOption = async \(\) => {[\s\S]*?\n {2}}\n {2}await chooseTargetOption/)
 
-  assert.doesNotMatch(source, /index\s*\*\s*32|targetIndex/)
-  assert.match(source, /getByRole\('option'/)
-  assert.match(source, /scrollIntoViewIfNeeded\(\)/)
+  assert.ok(selector)
+  assert.doesNotMatch(selector[0], /index\s*\*\s*32|targetIndex/)
+  assert.match(selector[0], /getAttribute\('aria-expanded'\) !== 'true'\) {\s*await languageCombobox\.press\('ArrowDown'\)/)
+  assert.match(selector[0], /aria-activedescendant/)
+  assert.match(selector[0], /languageCombobox\.press\('Home'\)/)
+  assert.match(selector[0], /step < initial\.locales/)
+  assert.match(selector[0], /\[role="option"\]/)
+  assert.match(selector[0], /activeOption\.textContent\(\)/)
+  assert.doesNotMatch(selector[0], /scrollIntoViewIfNeeded\(\)/)
 })
 
 test('isolated app acquisition cleans launch and validation failures without masking them', async () => {
@@ -53,4 +60,26 @@ test('isolated app acquisition cleans launch and validation failures without mas
       profileRoot: 'safe-profile'
     }])
   }
+})
+
+test('isolated app body cleanup preserves the primary failure', async () => {
+  const { cleanupPreservingPrimaryError } = require(helperPath)
+  const primaryError = new Error('body failed')
+  const cleanupError = new Error('cleanup failed')
+
+  await cleanupPreservingPrimaryError(async () => {
+    throw cleanupError
+  }, primaryError)
+  assert.equal(primaryError.cleanupError, cleanupError)
+
+  await assert.rejects(
+    cleanupPreservingPrimaryError(async () => {
+      throw cleanupError
+    }),
+    error => error === cleanupError
+  )
+
+  const matrix = fs.readFileSync(matrixPath, 'utf8')
+  assert.match(matrix, /runWithIsolatedApp/)
+  assert.doesNotMatch(matrix, /finally\s*{\s*await closeIsolatedApp/)
 })

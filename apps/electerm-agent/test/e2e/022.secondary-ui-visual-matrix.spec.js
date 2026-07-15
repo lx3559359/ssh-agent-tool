@@ -3,7 +3,10 @@ const { tmpdir } = require('os')
 const { resolve, sep } = require('path')
 const { _electron: electron, test, expect } = require('@playwright/test')
 const appOptions = require('./common/app-options')
-const { acquireIsolatedApp } = require('./common/isolated-electron-app')
+const {
+  acquireIsolatedApp,
+  cleanupPreservingPrimaryError
+} = require('./common/isolated-electron-app')
 
 const sizes = [
   { width: 590, height: 400 },
@@ -110,6 +113,23 @@ async function closeIsolatedApp (electronApp, profileRoot) {
     throw shutdownError
   }
   if (removalError) throw removalError
+}
+
+async function runWithIsolatedApp (label, callback) {
+  const { electronApp, profileRoot } = await launchIsolatedApp(label)
+  let result
+  let primaryError
+  try {
+    result = await callback(electronApp)
+  } catch (error) {
+    primaryError = error
+  }
+  await cleanupPreservingPrimaryError(
+    () => closeIsolatedApp(electronApp, profileRoot),
+    primaryError
+  )
+  if (primaryError) throw primaryError
+  return result
 }
 
 function expectedMatrixCounts () {
@@ -1022,19 +1042,34 @@ async function exerciseLanguageAndThemeState (page) {
   }))
   expect(initial.locales).toBe(14)
   const targetLanguage = initial.language === 'en_us' ? 'zh_cn' : 'en_us'
-  const targetText = targetLanguage === 'en_us' ? 'English' : '简体中文'
+  const targetText = await page.evaluate((language) => {
+    return window.et.langs.find(item => item.id === language)?.name || ''
+  }, targetLanguage)
+  expect(targetText).not.toBe('')
   const languageSelect = page.locator('.setting-header .ant-select')
   const languageCombobox = languageSelect.getByRole('combobox')
   const chooseTargetOption = async () => {
     if (await languageCombobox.getAttribute('aria-expanded') !== 'true') {
-      await languageCombobox.click()
+      await languageCombobox.press('ArrowDown')
     }
     await expect(languageCombobox).toHaveAttribute('aria-expanded', 'true', { timeout: 5000 })
-    const option = page.getByRole('option', { name: targetText, exact: true })
-    await expect(option).toBeAttached({ timeout: 5000 })
-    await option.scrollIntoViewIfNeeded()
-    await expect(option).toBeVisible({ timeout: 5000 })
-    await option.click()
+    await languageCombobox.press('Home')
+    await expect(languageCombobox).toHaveAttribute('aria-activedescendant', /.+/, { timeout: 5000 })
+    const visitedOptions = []
+    for (let step = 0; step < initial.locales; step += 1) {
+      const activeId = await languageCombobox.getAttribute('aria-activedescendant')
+      const activeOption = page.locator(`[role="option"][id=${JSON.stringify(activeId)}]`)
+      await expect(activeOption).toBeAttached({ timeout: 5000 })
+      const activeText = (await activeOption.textContent())?.trim()
+      visitedOptions.push({ activeId, activeText })
+      if (activeText === targetText) {
+        await languageCombobox.press('Enter')
+        await expect(languageCombobox).toHaveAttribute('aria-expanded', 'false', { timeout: 5000 })
+        return
+      }
+      await languageCombobox.press('ArrowDown')
+    }
+    throw new Error(`Language option was not reached: ${JSON.stringify({ targetLanguage, targetText, visitedOptions })}`)
   }
   await chooseTargetOption()
   expect(await page.evaluate(() => window.store.previewLanguage)).toBe(targetLanguage)
@@ -1064,21 +1099,17 @@ async function exerciseLanguageAndThemeState (page) {
 }
 
 test('active terminal session tab keeps the locked SSH background', async ({ browserName }) => {
-  const { electronApp, profileRoot } = await launchIsolatedApp('terminal')
-  try {
+  await runWithIsolatedApp('terminal', async (electronApp) => {
     const page = electronApp.windows()[0] || await electronApp.firstWindow()
     await page.waitForFunction(() => window.store?.configLoaded === true, { timeout: 20000 })
     await page.locator('.term-wrap:visible').waitFor({ timeout: 20000 })
     const terminal = await inspectTerminalInvariant(page)
     assertTerminalInvariant(terminal, { runner: browserName, surface: 'terminal-invariant' })
-  } finally {
-    await closeIsolatedApp(electronApp, profileRoot)
-  }
+  })
 })
 
 test('context menus keep pointer placement and compact long-menu reachability', async ({ browserName }) => {
-  const { electronApp, profileRoot } = await launchIsolatedApp('context-menu-placement')
-  try {
+  await runWithIsolatedApp('context-menu-placement', async (electronApp) => {
     const page = electronApp.windows()[0] || await electronApp.firstWindow()
     await page.waitForFunction(() => window.store?.configLoaded === true, { timeout: 20000 })
     await page.locator('.term-wrap:visible').waitFor({ timeout: 20000 })
@@ -1134,15 +1165,12 @@ test('context menus keep pointer placement and compact long-menu reachability', 
     expect(reachability.scrollTop, JSON.stringify({ runner: browserName, reachability })).toBeGreaterThan(0)
     expect(reachability.scrollTop, JSON.stringify({ runner: browserName, reachability }))
       .toBeLessThanOrEqual(reachability.maxScrollTop + 1)
-  } finally {
-    await closeIsolatedApp(electronApp, profileRoot)
-  }
+  })
 })
 
 test('tool center and batch editor stay reachable in compact real app windows', async ({ browserName }) => {
-  const { electronApp, profileRoot } = await launchIsolatedApp('compact-tools')
   let compactChecks = 0
-  try {
+  await runWithIsolatedApp('compact-tools', async (electronApp) => {
     const page = electronApp.windows()[0] || await electronApp.firstWindow()
     await page.waitForFunction(() => window.store?.configLoaded === true, { timeout: 20000 })
     await page.locator('.term-wrap:visible').waitFor({ timeout: 20000 })
@@ -1212,106 +1240,104 @@ test('tool center and batch editor stay reachable in compact real app windows', 
 
     console.log(`SECONDARY_TOOL_CENTER_COMPACT_CHECKS=${compactChecks}`)
     expect(compactChecks).toBe(4)
-  } finally {
-    await closeIsolatedApp(electronApp, profileRoot)
-  }
+  })
 })
 
 test('real app covers the secondary UI visual acceptance matrix', async ({ browserName }, testInfo) => {
   const runner = browserName
   const expected = assertMatrixConfiguration()
-  const { electronApp, profileRoot } = await launchIsolatedApp('matrix')
   const failures = []
   const stats = createMatrixStats()
   let dimensionChecks = 0
   let themeChecks = 0
-  try {
-    const page = electronApp.windows()[0] || await electronApp.firstWindow()
-    await page.waitForFunction(() => window.store?.configLoaded === true, { timeout: 20000 })
-    await page.locator('.term-wrap:visible').waitFor({ timeout: 20000 })
-    await exerciseLanguageAndThemeState(page)
+  await runWithIsolatedApp('matrix', async (electronApp) => {
+    try {
+      const page = electronApp.windows()[0] || await electronApp.firstWindow()
+      await page.waitForFunction(() => window.store?.configLoaded === true, { timeout: 20000 })
+      await page.locator('.term-wrap:visible').waitFor({ timeout: 20000 })
+      await exerciseLanguageAndThemeState(page)
 
-    for (const size of matrixSizes) {
-      for (const zoom of matrixZooms) {
-        await setWindowCase(electronApp, page, size, zoom)
-        for (const language of matrixLanguages) {
-          const context = { matrix: 'dimension', runner, size: `${size.width}x${size.height}`, zoom, language }
-          await resetSurface(page, language)
+      for (const size of matrixSizes) {
+        for (const zoom of matrixZooms) {
+          await setWindowCase(electronApp, page, size, zoom)
+          for (const language of matrixLanguages) {
+            const context = { matrix: 'dimension', runner, size: `${size.width}x${size.height}`, zoom, language }
+            await resetSurface(page, language)
+            const failuresBeforeCase = failures.length
+            for (const surface of surfaces) {
+              await runSurfaceCase(page, testInfo, failures, context, surface, stats)
+              dimensionChecks += 1
+            }
+            try {
+              await resetSurface(page, language)
+              const terminal = await inspectTerminalInvariant(page)
+              assertTerminalInvariant(terminal, context)
+            } catch (error) {
+              await recordCaseFailure(page, testInfo, failures, { ...context, surface: 'terminal-invariant' }, error)
+            }
+            const caseFailures = failures.length - failuresBeforeCase
+            console.log(`SECONDARY_DIMENSION_CASE=${JSON.stringify({ ...context, surfaces: surfaces.length, failures: caseFailures })}`)
+            if (caseFailures) {
+              throw new Error(formatFailures(failures.slice(failuresBeforeCase)))
+            }
+          }
+        }
+      }
+
+      for (const theme of matrixThemes) {
+        await page.evaluate((themeId) => window.store.setTheme(themeId), theme)
+        for (const size of matrixThemeSizes) {
+          await setWindowCase(electronApp, page, size, 1)
+          const context = { matrix: 'theme', runner, size: `${size.width}x${size.height}`, zoom: 1, language: 'en_us', theme }
+          await resetSurface(page, 'en_us')
           const failuresBeforeCase = failures.length
           for (const surface of surfaces) {
             await runSurfaceCase(page, testInfo, failures, context, surface, stats)
-            dimensionChecks += 1
+            themeChecks += 1
           }
           try {
-            await resetSurface(page, language)
+            await resetSurface(page, 'en_us')
             const terminal = await inspectTerminalInvariant(page)
             assertTerminalInvariant(terminal, context)
           } catch (error) {
             await recordCaseFailure(page, testInfo, failures, { ...context, surface: 'terminal-invariant' }, error)
           }
           const caseFailures = failures.length - failuresBeforeCase
-          console.log(`SECONDARY_DIMENSION_CASE=${JSON.stringify({ ...context, surfaces: surfaces.length, failures: caseFailures })}`)
+          console.log(`SECONDARY_THEME_CASE=${JSON.stringify({ ...context, surfaces: surfaces.length, failures: caseFailures })}`)
           if (caseFailures) {
             throw new Error(formatFailures(failures.slice(failuresBeforeCase)))
           }
         }
       }
-    }
 
-    for (const theme of matrixThemes) {
-      await page.evaluate((themeId) => window.store.setTheme(themeId), theme)
-      for (const size of matrixThemeSizes) {
-        await setWindowCase(electronApp, page, size, 1)
-        const context = { matrix: 'theme', runner, size: `${size.width}x${size.height}`, zoom: 1, language: 'en_us', theme }
-        await resetSurface(page, 'en_us')
-        const failuresBeforeCase = failures.length
-        for (const surface of surfaces) {
-          await runSurfaceCase(page, testInfo, failures, context, surface, stats)
-          themeChecks += 1
+      console.log(`SECONDARY_DIMENSION_SURFACE_CHECKS=${dimensionChecks}`)
+      console.log(`SECONDARY_THEME_SURFACE_CHECKS=${themeChecks}`)
+      console.log(`SECONDARY_TOTAL_SURFACE_CHECKS=${dimensionChecks + themeChecks}`)
+      console.log(`SECONDARY_FOCUS_SURFACE_CHECKS=${stats.focusSurfaceChecks}`)
+      console.log(`SECONDARY_DISABLED_CONTRAST_CHECKS=${stats.disabledContrastChecks}`)
+      console.log(`SECONDARY_OVERFLOW_ADDED=${stats.secondaryOverflowAdded}`)
+      console.log(`SECONDARY_DANGER_ACTION_CHECKS=${stats.dangerActionChecks}`)
+      console.log(`SECONDARY_DANGER_MENU_LAST_CHECKS=${stats.dangerMenuLastChecks}`)
+      console.log(`SECONDARY_DANGER_SEMANTIC_GROUP_CHECKS=${stats.dangerSemanticGroupChecks}`)
+      console.log(`SECONDARY_VISUAL_FAILURES=${failures.length}`)
+      expect(dimensionChecks).toBe(expected.dimension)
+      expect(themeChecks).toBe(expected.theme)
+      expect(dimensionChecks + themeChecks).toBe(expected.total)
+      expect(stats.focusSurfaceChecks).toBe(expected.total)
+      expect(stats.secondaryOverflowAdded).toBe(0)
+      expect(stats.dangerMenuLastChecks).toBe(expected.dimensionBatches + expected.themeBatches)
+      expect(stats.dangerSemanticGroupChecks).toBe(expected.dimensionBatches + expected.themeBatches)
+      expect(failures, formatFailures(failures)).toEqual([])
+    } finally {
+      try {
+        const page = electronApp.windows()[0]
+        if (page) {
+          await page.evaluate((id) => {
+            const bookmark = window.store.bookmarks.find(item => item.id === id)
+            if (bookmark) window.store.delBookmark(bookmark)
+          }, bookmarkId)
         }
-        try {
-          await resetSurface(page, 'en_us')
-          const terminal = await inspectTerminalInvariant(page)
-          assertTerminalInvariant(terminal, context)
-        } catch (error) {
-          await recordCaseFailure(page, testInfo, failures, { ...context, surface: 'terminal-invariant' }, error)
-        }
-        const caseFailures = failures.length - failuresBeforeCase
-        console.log(`SECONDARY_THEME_CASE=${JSON.stringify({ ...context, surfaces: surfaces.length, failures: caseFailures })}`)
-        if (caseFailures) {
-          throw new Error(formatFailures(failures.slice(failuresBeforeCase)))
-        }
-      }
+      } catch {}
     }
-
-    console.log(`SECONDARY_DIMENSION_SURFACE_CHECKS=${dimensionChecks}`)
-    console.log(`SECONDARY_THEME_SURFACE_CHECKS=${themeChecks}`)
-    console.log(`SECONDARY_TOTAL_SURFACE_CHECKS=${dimensionChecks + themeChecks}`)
-    console.log(`SECONDARY_FOCUS_SURFACE_CHECKS=${stats.focusSurfaceChecks}`)
-    console.log(`SECONDARY_DISABLED_CONTRAST_CHECKS=${stats.disabledContrastChecks}`)
-    console.log(`SECONDARY_OVERFLOW_ADDED=${stats.secondaryOverflowAdded}`)
-    console.log(`SECONDARY_DANGER_ACTION_CHECKS=${stats.dangerActionChecks}`)
-    console.log(`SECONDARY_DANGER_MENU_LAST_CHECKS=${stats.dangerMenuLastChecks}`)
-    console.log(`SECONDARY_DANGER_SEMANTIC_GROUP_CHECKS=${stats.dangerSemanticGroupChecks}`)
-    console.log(`SECONDARY_VISUAL_FAILURES=${failures.length}`)
-    expect(dimensionChecks).toBe(expected.dimension)
-    expect(themeChecks).toBe(expected.theme)
-    expect(dimensionChecks + themeChecks).toBe(expected.total)
-    expect(stats.focusSurfaceChecks).toBe(expected.total)
-    expect(stats.secondaryOverflowAdded).toBe(0)
-    expect(stats.dangerMenuLastChecks).toBe(expected.dimensionBatches + expected.themeBatches)
-    expect(stats.dangerSemanticGroupChecks).toBe(expected.dimensionBatches + expected.themeBatches)
-    expect(failures, formatFailures(failures)).toEqual([])
-  } finally {
-    try {
-      const page = electronApp.windows()[0]
-      if (page) {
-        await page.evaluate((id) => {
-          const bookmark = window.store.bookmarks.find(item => item.id === id)
-          if (bookmark) window.store.delBookmark(bookmark)
-        }, bookmarkId)
-      }
-    } catch {}
-    await closeIsolatedApp(electronApp, profileRoot)
-  }
+  })
 })
