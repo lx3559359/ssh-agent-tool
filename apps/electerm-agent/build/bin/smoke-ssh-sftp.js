@@ -105,7 +105,21 @@ function redactError (error, redactor) {
   return safeError
 }
 
-function createRedactor (secretContext) {
+function resolveDefaultRedactionContext (env = process.env) {
+  return {
+    password: env.SHELLPILOT_SSH_PASSWORD,
+    privateKey: [
+      env.SHELLPILOT_SSH_PRIVATE_KEY,
+      env.SHELLPILOT_SSH_PRIVATE_KEY_CONTENT
+    ],
+    passphrase: [
+      env.SHELLPILOT_SSH_PASSPHRASE,
+      env.SHELLPILOT_SSH_PRIVATE_KEY_PASSPHRASE
+    ]
+  }
+}
+
+function createRedactor (secretContext = resolveDefaultRedactionContext()) {
   const secrets = collectSecretValues(secretContext)
   const redactor = text => {
     let value = String(text || '')

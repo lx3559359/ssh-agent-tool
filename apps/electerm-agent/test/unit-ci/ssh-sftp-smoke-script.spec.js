@@ -147,7 +147,7 @@ test('injected smoke secrets stay redacted after exec and cleanup failures', asy
     exec (command, callback) {
       const phase = command.includes('rm -rf') ? 'cleanup' : 'exec'
       callback(new Error(
-        `${phase} failed password=${password} privateKey=${privateKey} passphrase=${passphrase}`
+        `${phase} failed credential ${password} privateKey=${privateKey} passphrase=${passphrase}`
       ))
     }
 
@@ -225,6 +225,78 @@ test('execCommand returns a redacted error object with explicit secret context',
     assert.match(serialized, /\[REDACTED\]/)
     for (const secret of [password, privateKey, passphrase]) {
       assert.doesNotMatch(serialized, new RegExp(secret))
+    }
+  }
+})
+
+test('public smoke helpers redact with the current process environment by default', async () => {
+  const password = 'default-process-env-password'
+  const originalPassword = process.env.SHELLPILOT_SSH_PASSWORD
+
+  try {
+    process.env.SHELLPILOT_SSH_PASSWORD = password
+
+    const directResult = smokeHelpers.redact(`direct ${password}`)
+    assert.equal(directResult, 'direct [REDACTED]')
+
+    const outputStream = new EventEmitter()
+    outputStream.stderr = new EventEmitter()
+    const outputPromise = smokeHelpers.execCommand({
+      exec (command, callback) {
+        callback(null, outputStream)
+        queueMicrotask(() => {
+          outputStream.emit('data', Buffer.from(`stdout ${password}`))
+          outputStream.stderr.emit('data', Buffer.from(`stderr ${password}`))
+          outputStream.emit('close', 0)
+        })
+      }
+    }, 'true', 1000)
+    const outputResult = await outputPromise
+
+    assert.equal(outputResult.stdout, 'stdout [REDACTED]')
+    assert.equal(outputResult.stderr, 'stderr [REDACTED]')
+
+    let receivedError
+    await assert.rejects(
+      smokeHelpers.execCommand({
+        exec (command, callback) {
+          callback(new Error(`exec failed ${password}`))
+        }
+      }, 'false', 1000),
+      error => {
+        receivedError = error
+        return true
+      }
+    )
+    assert.match(receivedError.message, /\[REDACTED\]/)
+    assert.doesNotMatch(receivedError.stack, new RegExp(password))
+  } finally {
+    if (originalPassword === undefined) {
+      delete process.env.SHELLPILOT_SSH_PASSWORD
+    } else {
+      process.env.SHELLPILOT_SSH_PASSWORD = originalPassword
+    }
+  }
+})
+
+test('default and injected smoke redactors keep their secret contexts isolated', () => {
+  const processPassword = 'process-context-password'
+  const injectedPassword = 'injected-context-password'
+  const originalPassword = process.env.SHELLPILOT_SSH_PASSWORD
+
+  try {
+    process.env.SHELLPILOT_SSH_PASSWORD = processPassword
+    const input = `${processPassword}|${injectedPassword}`
+    const defaultResult = smokeHelpers.redact(input)
+    const injectedResult = smokeHelpers.createRedactor({ password: injectedPassword })(input)
+
+    assert.equal(defaultResult, `[REDACTED]|${injectedPassword}`)
+    assert.equal(injectedResult, `${processPassword}|[REDACTED]`)
+  } finally {
+    if (originalPassword === undefined) {
+      delete process.env.SHELLPILOT_SSH_PASSWORD
+    } else {
+      process.env.SHELLPILOT_SSH_PASSWORD = originalPassword
     }
   }
 })
