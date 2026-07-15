@@ -60,7 +60,7 @@ test('real AIConfig keeps draft and validation across language preview but appli
 
     await expect(apiUrl).toHaveValue('https://stored.example.com/v1')
     await profileSelect.click()
-    await expect(page.locator('.ant-select-item-option-content').filter({ hasText: 'AI 配置' })).toBeVisible()
+    await expect(page.locator('.ant-select-item-option-content').filter({ hasText: 'stored-model' })).toBeVisible()
     await page.keyboard.press('Escape')
     await apiUrl.fill('not-a-valid-url')
     await apiKey.fill('draft-fixture-key')
@@ -72,7 +72,7 @@ test('real AIConfig keeps draft and validation across language preview but appli
     await page.getByTestId('language-toggle').click()
     await expect(page.getByText('Quick Model API Setup')).toBeVisible()
     await profileSelect.click()
-    await expect(page.locator('.ant-select-item-option-content').filter({ hasText: 'AI Configuration' })).toBeVisible()
+    await expect(page.locator('.ant-select-item-option-content').filter({ hasText: 'stored-model' })).toBeVisible()
     await page.keyboard.press('Escape')
     await expect(apiUrl).toHaveValue('not-a-valid-url')
     await expect(apiKey).toHaveValue('draft-fixture-key')
