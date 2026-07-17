@@ -62,7 +62,7 @@ test('structured inspection arguments are bounded and reject shell fragments', a
     () => validateStructuredArgs('read_file_range', {
       remotePath: '/var/log/app.log',
       offset: 0,
-      length: 65537
+      length: 32769
     }),
     error => error.code === 'AGENT_ARGUMENT_INVALID'
   )

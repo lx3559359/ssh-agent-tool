@@ -195,3 +195,49 @@ test('gateway rejects argument mutation and endpoint replacement after confirmat
   assert.equal(executions, 0)
   assert.equal(invalidations, 2)
 })
+
+test('gateway accepts delegated confirmation only through a system validator', async () => {
+  const { executeAgentTool } = await import(gatewayUrl)
+  const registry = await activeRegistry()
+  const preparation = {
+    delegatedSafetyConfirmation: true,
+    confirmedArgs: { remotePath: '/srv/app/cache', tabId: 'tab-a' }
+  }
+  let executions = 0
+
+  await assert.rejects(executeAgentTool({
+    toolName: 'sftp_del',
+    args: preparation.confirmedArgs,
+    endpoint: endpoint(),
+    resolveEndpoint: endpoint,
+    registry,
+    prepareRisky: async () => preparation,
+    execute: async () => { executions += 1 }
+  }), error => error.code === 'AGENT_RISK_CONFIRMATION_REQUIRED')
+  assert.equal(executions, 0)
+
+  const result = await executeAgentTool({
+    toolName: 'sftp_del',
+    args: preparation.confirmedArgs,
+    endpoint: endpoint(),
+    resolveEndpoint: endpoint,
+    registry,
+    prepareRisky: async () => preparation,
+    validateDelegatedRisk: ({ toolName, args, delegatedPreparation }) => {
+      assert.equal(toolName, 'sftp_del')
+      assert.equal(args, preparation.confirmedArgs)
+      assert.equal(delegatedPreparation, preparation)
+      return { name: toolName, args }
+    },
+    execute: async (_endpoint, _preparation, context) => {
+      executions += 1
+      return context.validated
+    }
+  })
+
+  assert.equal(executions, 1)
+  assert.deepEqual(result, {
+    name: 'sftp_del',
+    args: preparation.confirmedArgs
+  })
+})

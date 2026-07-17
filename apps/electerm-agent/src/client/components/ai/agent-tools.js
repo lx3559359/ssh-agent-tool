@@ -49,6 +49,14 @@ import {
   failAgentRiskPreparation,
   isAgentAsyncRiskResult
 } from './agent-risk-async.js'
+import {
+  createDelegatedAgentSafetyPreparation,
+  shouldDelegateAgentSafetyConfirmation,
+  validateDelegatedAgentSafetyPreparation
+} from './agent-risk-delegation.js'
+import {
+  assertAgentRiskVerificationAllowed
+} from './agent-risk-verification-gate.js'
 
 function createAgentOperationId (prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`
@@ -751,17 +759,25 @@ export async function prepareAgentRiskArgs (
 ) {
   if (toolName !== 'sftp_upload') return args
   assertAgentRuntimeActive(runtime)
-  const prepared = await store.mcpDescribeSftpUploadSource(args, {
-    signal: runtime.signal,
-    prepareRecovery: options.prepareRecovery !== false
-  })
-  assertAgentRuntimeActive(runtime)
-  return {
-    ...args,
-    sourceDescriptor: prepared.sourceDescriptor,
-    ...(prepared.preparedTransfer
-      ? { preparedTransfer: prepared.preparedTransfer }
-      : {})
+  let prepared
+  try {
+    prepared = await store.mcpDescribeSftpUploadSource(args, {
+      signal: runtime.signal,
+      prepareRecovery: options.prepareRecovery !== false
+    })
+    assertAgentRuntimeActive(runtime)
+    return {
+      ...args,
+      sourceDescriptor: prepared.sourceDescriptor,
+      ...(prepared.preparedTransfer
+        ? { preparedTransfer: prepared.preparedTransfer }
+        : {})
+    }
+  } catch (error) {
+    await cancelPreparedRiskArtifacts({
+      preparedTransfer: prepared?.preparedTransfer
+    }, store)
+    throw error
   }
 }
 
@@ -839,6 +855,7 @@ export async function prepareAgentRiskBatch (toolCalls, runtime = {}) {
       expandedContent
     })
     if (classification.outcome !== 'risky') continue
+    if (shouldDelegateAgentSafetyConfirmation(toolName, args)) return null
     transactions.push(buildResolvedRiskTransaction(
       toolName,
       args,
@@ -854,12 +871,30 @@ export async function prepareAgentRiskBatch (toolCalls, runtime = {}) {
     return null
   }
   const transaction = combineRiskTransactions(transactions)
-  const confirmation = await confirmRiskTransaction(transaction, {
-    confirm: frozen => requestAgentRiskConfirmation(frozen, {
-      signal: runtime.signal
+  let confirmation
+  try {
+    confirmation = await confirmRiskTransaction(transaction, {
+      confirm: frozen => requestAgentRiskConfirmation(frozen, {
+        signal: runtime.signal
+      })
     })
-  })
-  assertAgentRuntimeActive(runtime)
+    assertAgentRuntimeActive(runtime)
+  } catch (error) {
+    if (confirmation?.accepted && confirmation.taskId) {
+      await failAgentRiskPreparation({
+        preparation: {
+          riskTaskId: confirmation.taskId,
+          riskTransaction: transaction
+        },
+        error,
+        dispatched: false,
+        status: error?.name === 'AbortError' ? 'cancelled' : 'failed',
+        remoteState: 'not-dispatched',
+        settle: settleRiskTransactionTask
+      })
+    }
+    throw error
+  }
   runtime.riskBatch = confirmation.accepted
     ? {
         transaction,
@@ -881,6 +916,9 @@ async function prepareResolvedAgentTool (toolName, args, runtime, context = {}) 
   }
   const batchPreparation = batchPreparationFor(runtime)
   if (batchPreparation) return batchPreparation
+  if (shouldDelegateAgentSafetyConfirmation(toolName, args)) {
+    return createDelegatedAgentSafetyPreparation(toolName, args)
+  }
   const confirmedArgs = await prepareAgentRiskArgs(toolName, args, runtime)
   const transaction = buildResolvedRiskTransaction(
     toolName,
@@ -897,6 +935,19 @@ async function prepareResolvedAgentTool (toolName, args, runtime, context = {}) 
     })
     assertAgentRuntimeActive(runtime)
   } catch (error) {
+    if (confirmation?.accepted && confirmation.taskId) {
+      await failAgentRiskPreparation({
+        preparation: {
+          riskTaskId: confirmation.taskId,
+          riskTransaction: transaction
+        },
+        error,
+        dispatched: false,
+        status: error?.name === 'AbortError' ? 'cancelled' : 'failed',
+        remoteState: 'not-dispatched',
+        settle: settleRiskTransactionTask
+      })
+    }
     await cancelPreparedRiskArtifacts(confirmedArgs)
     throw error
   }
@@ -1126,16 +1177,27 @@ async function verifyPreparedAgentRisk (preparation, endpoint, runtime) {
       error.verificationFailed = true
       throw error
     }
+    const descriptor = getAgentToolDescriptor(step.name)
+    const verificationEndpoint = assertAgentRiskVerificationAllowed({
+      expectedEndpoint: endpoint,
+      runtime,
+      descriptor
+    })
     const args = bindAgentToolArgs(step.name, step.args || {}, runtime)
     const result = await executeStructuredAgentTool({
       toolName: step.name,
       args,
-      endpoint,
+      endpoint: verificationEndpoint,
       executeCommand: command => runTerminalTool(window.store, {
         command,
         tabId: args.tabId
       }, runtime),
       readFile: fileArgs => window.store.mcpSftpReadFile(fileArgs)
+    })
+    assertAgentRiskVerificationAllowed({
+      expectedEndpoint: endpoint,
+      runtime,
+      descriptor
     })
     try {
       assertVerificationExpectation(step, result)
@@ -1228,13 +1290,18 @@ export async function executeToolCall (toolName, rawArgs, runtime = {}) {
       runtime,
       context
     ),
+    validateDelegatedRisk: validateDelegatedAgentSafetyPreparation,
     invalidateRisky: async (error, preparation) => {
-      await failAgentRiskPreparation({
-        preparation,
-        error,
-        dispatched: false,
-        settle: settleRiskTransactionTask
-      })
+      try {
+        await cancelPreparedRiskArtifacts(preparation?.confirmedArgs)
+      } finally {
+        await failAgentRiskPreparation({
+          preparation,
+          error,
+          dispatched: false,
+          settle: settleRiskTransactionTask
+        })
+      }
     },
     execute: async (verifiedEndpoint, preparation, executionContext = {}) => {
       try {

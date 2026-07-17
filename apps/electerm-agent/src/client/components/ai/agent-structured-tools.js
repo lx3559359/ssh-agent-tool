@@ -1,5 +1,5 @@
 const MAX_LOG_LINES = 1000
-const MAX_FILE_BYTES = 64 * 1024
+const MAX_FILE_BYTES = 32 * 1024
 const MAX_COMMAND_OUTPUT = 32 * 1024
 const unitPattern = /^[A-Za-z0-9][A-Za-z0-9_.@:-]{0,127}$/
 const unsafePathCharacters = new Set([';', '&', '|', '`', '$', '<', '>'])

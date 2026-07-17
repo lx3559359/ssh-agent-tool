@@ -225,6 +225,11 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
   }
 
   async function markCancelled () {
+    try {
+      await failAgentRiskBatch(agentRuntime, createAgentAbortError())
+    } catch (error) {
+      if (!cancellationFailure) cancellationFailure = error
+    }
     const settledError = await settleAgentCancellation(activeCancellation)
     if (settledError && !cancellationFailure) {
       cancellationFailure = settledError

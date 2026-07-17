@@ -97,9 +97,7 @@ export function getAgentToolDescriptor (toolName) {
     name,
     scope,
     execution: executionFor(name),
-    outputLimit: name === 'sftp_read_file' || name === 'read_file_range'
-      ? 64 * 1024
-      : 32 * 1024,
+    outputLimit: name === 'sftp_read_file' ? 64 * 1024 : 32 * 1024,
     cancellable: scope !== 'conversation'
   })
 }

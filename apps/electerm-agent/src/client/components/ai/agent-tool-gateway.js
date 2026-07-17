@@ -33,6 +33,7 @@ export async function executeAgentTool ({
   resolveDescriptor = getAgentToolDescriptor,
   classifyCall = classifyAgentCall,
   prepareRisky,
+  validateDelegatedRisk,
   invalidateRisky,
   verifyRisky,
   execute,
@@ -109,6 +110,21 @@ export async function executeAgentTool ({
     validate: risky
       ? async (verifiedEndpoint, preparation) => {
         try {
+          if (preparation?.delegatedSafetyConfirmation === true) {
+            if (typeof validateDelegatedRisk !== 'function') {
+              const error = new Error(
+                'Delegated Agent safety confirmation requires a system validator'
+              )
+              error.code = 'AGENT_RISK_CONFIRMATION_REQUIRED'
+              throw error
+            }
+            return await validateDelegatedRisk({
+              toolName,
+              args,
+              endpoint: verifiedEndpoint,
+              delegatedPreparation: preparation
+            })
+          }
           return await validateConfirmedRiskTransaction({
             transaction: preparation?.riskTransaction,
             planGrant: preparation?.riskPlanGrant,

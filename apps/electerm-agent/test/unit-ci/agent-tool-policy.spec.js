@@ -91,4 +91,5 @@ test('every descriptor carries runtime metadata without model-facing authority',
   assert.equal(descriptor.execution, 'structured')
   assert.equal(descriptor.scope, 'session-read')
   assert.equal(descriptor.cancellable, true)
+  assert.equal(getAgentToolDescriptor('read_file_range').outputLimit, 32 * 1024)
 })

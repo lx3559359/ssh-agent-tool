@@ -1155,6 +1155,14 @@ export default Store => {
     const safetyOperation = safetyPlan.required
       ? await sftpEntry.prepareTransferSafetyOperation(safetyPlan)
       : null
+    try {
+      assertMcpActive(options.signal, 'SFTP upload recovery preparation cancelled')
+    } catch (error) {
+      if (safetyOperation?.id) {
+        await sftpEntry.cancelTransferSafetyOperation(safetyOperation.id)
+      }
+      throw error
+    }
     return {
       sourceDescriptor,
       preparedTransfer: {

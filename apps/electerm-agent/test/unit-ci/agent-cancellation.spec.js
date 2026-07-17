@@ -220,4 +220,39 @@ test('production handlers use abortable waits and prepare upload recovery before
   assert.match(upload, /preparedTransfer\?\.transferId/)
   assert.match(upload, /Prepared SFTP recovery operation changed before queueing/)
   assert.match(upload, /safetyOperationId/)
+
+  const describeUpload = source.slice(
+    source.indexOf('Store.prototype.mcpDescribeSftpUploadSource'),
+    source.indexOf('Store.prototype.mcpCancelPreparedSftpUpload')
+  )
+  assert.match(describeUpload, /assertMcpActive\(options\.signal[\s\S]*cancelTransferSafetyOperation/)
+
+  const agentTools = fs.readFileSync(path.join(aiRoot, 'agent-tools.js'), 'utf8')
+  const prepareArgs = agentTools.slice(
+    agentTools.indexOf('export async function prepareAgentRiskArgs'),
+    agentTools.indexOf('function batchPreparationFor')
+  )
+  const invalidate = agentTools.slice(
+    agentTools.indexOf('invalidateRisky:'),
+    agentTools.indexOf('execute: async', agentTools.indexOf('invalidateRisky:'))
+  )
+  assert.match(prepareArgs, /catch[\s\S]*cancelPreparedRiskArtifacts/)
+  assert.ok(
+    invalidate.indexOf('cancelPreparedRiskArtifacts') <
+      invalidate.indexOf('failAgentRiskPreparation')
+  )
+})
+
+test('agent cancellation settles an open risk batch before returning', () => {
+  const agentSource = fs.readFileSync(path.join(aiRoot, 'agent.js'), 'utf8')
+  const cancellation = agentSource.slice(
+    agentSource.indexOf('async function markCancelled'),
+    agentSource.indexOf('\n  try {', agentSource.indexOf('async function markCancelled'))
+  )
+
+  assert.match(cancellation, /failAgentRiskBatch\(agentRuntime/)
+  assert.ok(
+    cancellation.indexOf('failAgentRiskBatch') <
+      cancellation.indexOf('settleAgentCancellation')
+  )
 })
