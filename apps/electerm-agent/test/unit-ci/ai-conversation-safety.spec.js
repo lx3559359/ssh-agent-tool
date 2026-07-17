@@ -395,7 +395,7 @@ test('Agent cancellation remains effective while a tool confirmation is open', a
   )
   for (const toolName of ['send_terminal_command', 'run_local_cli', 'run_background_command']) {
     const toolBranch = new RegExp(
-      `case '${toolName}':[\\s\\S]*?confirmAgentToolExecution\\([\\s\\S]*?\\)\\n\\s*assertAgentRuntimeActive\\(runtime\\)`,
+      `case '${toolName}':[\\s\\S]*?confirmAgentToolExecution\\([\\s\\S]*?\\)\\r?\\n\\s*assertAgentRuntimeActive\\(runtime\\)`,
       'm'
     )
     assert.match(tools, toolBranch)
