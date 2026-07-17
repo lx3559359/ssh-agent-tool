@@ -112,7 +112,7 @@ jobs:
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ssh-agent-tool-windows-${{ github.ref_name }}
+          name: shellpilot-windows-${{ steps.package-version.outputs.version }}-${{ github.run_id }}
           path: |
             apps/electerm-agent/dist/ShellPilot-*-win-x64-installer.exe
             apps/electerm-agent/dist/ShellPilot-*-win-x64-installer.exe.blockmap
