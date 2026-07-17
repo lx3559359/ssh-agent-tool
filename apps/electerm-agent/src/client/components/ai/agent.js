@@ -60,9 +60,7 @@ export function cancelAgentRunsForScope (sourceTabId) {
 function buildAgentSystemPrompt (config) {
   const lang = config.languageAI || window.store.getLangName() || '简体中文'
   const baseRole = config.roleAI || '你是一个中文 SSH 运维排查助手。'
-  const skillPrompt = buildAgentSkillPrompt({
-    customSkills: config.agentSkills || window.store.config?.agentSkills || []
-  })
+  const skillPrompt = buildAgentSkillPrompt()
   const mcpServerPrompt = buildAgentMcpServerPrompt({
     mcpServers: config.mcpServers || window.store.config?.mcpServers || []
   })

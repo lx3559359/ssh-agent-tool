@@ -8,27 +8,30 @@ const moduleUrl = pathToFileURL(
   path.resolve(__dirname, '../../src/client/components/ai/agent-skills.js')
 ).href
 
-test('Agent skill registry exposes built-in SSH troubleshooting skills', async () => {
+test('clean install has no business skills', async () => {
   const {
     getBuiltInAgentSkills,
+    getAgentSkills,
     buildAgentSkillPrompt
   } = await import(moduleUrl)
 
   const skills = getBuiltInAgentSkills()
-  const ids = skills.map(skill => skill.id)
+  assert.deepEqual(skills, [])
+  assert.deepEqual(getAgentSkills(), [])
+  assert.equal(buildAgentSkillPrompt(), '')
 
-  assert.ok(ids.includes('linux-health'))
-  assert.ok(ids.includes('nginx-troubleshooting'))
-  assert.ok(ids.includes('docker-troubleshooting'))
-  assert.ok(ids.includes('disk-cleanup'))
-  assert.equal(skills.every(skill => skill.title && skill.prompt), true)
-
-  const prompt = buildAgentSkillPrompt()
-  assert.match(prompt, /Skill/)
-  assert.match(prompt, /linux-health/)
-  assert.match(prompt, /nginx-troubleshooting/)
-  assert.match(prompt, /docker-troubleshooting/)
-  assert.match(prompt, /disk-cleanup/)
+  const source = fs.readFileSync(
+    path.resolve(__dirname, '../../src/client/components/ai/agent-skills.js'),
+    'utf8'
+  )
+  for (const legacyId of [
+    'linux-health',
+    'nginx-troubleshooting',
+    'docker-troubleshooting',
+    'disk-cleanup'
+  ]) {
+    assert.doesNotMatch(source, new RegExp(legacyId))
+  }
 })
 
 test('Agent skill registry merges custom skills and filters invalid entries', async () => {
@@ -59,7 +62,6 @@ test('Agent skill registry merges custom skills and filters invalid entries', as
   const skills = getAgentSkills({ customSkills })
   const ids = skills.map(skill => skill.id)
 
-  assert.ok(ids.includes('linux-health'))
   assert.ok(ids.includes('custom-redis'))
   assert.equal(ids.includes('disabled-skill'), false)
   assert.equal(ids.includes('missing-prompt'), false)
@@ -78,5 +80,6 @@ test('Agent system prompt includes the skill framework hook', () => {
   )
 
   assert.match(source, /buildAgentSkillPrompt/)
-  assert.match(source, /agentSkills/)
+  assert.doesNotMatch(source, /config\.agentSkills/)
+  assert.doesNotMatch(source, /window\.store\.config\?\.agentSkills/)
 })
