@@ -33,6 +33,22 @@ test('migrates old single AI config into one active profile without losing field
   assert.equal(active.apiKeyAI, 'sk-example')
 })
 
+test('legacy single AI config migration keeps a stable profile id across renders', async () => {
+  const { migrateAIProfiles } = await import(profilesUrl)
+  const legacy = {
+    nameAI: 'Legacy relay',
+    baseURLAI: 'https://api.example.com',
+    apiKeyAI: 'sk-example',
+    modelAI: 'model-a'
+  }
+
+  const first = migrateAIProfiles(legacy)
+  const second = migrateAIProfiles(legacy)
+
+  assert.equal(first.activeAIProfileId, second.activeAIProfileId)
+  assert.equal(first.aiProfiles[0].id, second.aiProfiles[0].id)
+})
+
 test('upserts multiple AI profiles and switches active profile by id', async () => {
   const {
     migrateAIProfiles,
