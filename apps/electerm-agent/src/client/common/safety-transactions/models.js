@@ -177,13 +177,14 @@ const normalizedOperationFields = [
   'operationKind', 'effect', 'effectKey',
   'metadata', 'risk', 'provider', 'reversible', 'recoveryProvider',
   'requiresConfirmation', 'reason', 'plan', 'recoveryBinding', 'artifacts', 'audit',
+  'artifactReferences',
   'recoveryReadyAt', 'executionId', 'error', 'integrityError', 'failedAt', 'completedAt',
   'mutationStarted', 'mutationStartedAt', 'commitPoint', 'commitPointAt',
   'timeoutMs', 'prepareTimeoutMs', 'executeTimeoutMs',
   'rollbackTimeoutMs', 'verifyTimeoutMs'
 ]
 const redactedOperationFields = new Set([
-  'plan', 'artifacts', 'audit', 'error', 'integrityError'
+  'plan', 'artifacts', 'artifactReferences', 'audit', 'error', 'integrityError'
 ])
 const safetyRequestInputFields = [
   'id', 'source', 'command', 'title', 'endpoint', 'state', 'createdAt',

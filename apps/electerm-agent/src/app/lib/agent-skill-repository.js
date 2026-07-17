@@ -9,6 +9,19 @@ const {
 const { validateSkillPackage } = require('./agent-skill-validator')
 
 const STATES = Object.freeze(['enabled', 'disabled', 'drafts'])
+const DEFAULT_MINIMUM_FREE_BYTES = 64 * 1024 * 1024
+
+async function filesystemFreeBytes (root) {
+  try {
+    const stats = await fsp.statfs(root)
+    const available = BigInt(stats.bavail) * BigInt(stats.bsize)
+    return available > BigInt(Number.MAX_SAFE_INTEGER)
+      ? Number.MAX_SAFE_INTEGER
+      : Number(available)
+  } catch {
+    return Number.POSITIVE_INFINITY
+  }
+}
 
 function repositoryError (code, message) {
   const error = new Error(message)
@@ -97,6 +110,43 @@ async function syncPackage (root) {
   }
 }
 
+async function directoryBytes (root) {
+  let total = 0
+  const entries = await fsp.readdir(root, { withFileTypes: true })
+  for (const entry of entries) {
+    const target = path.join(root, entry.name)
+    if (entry.isDirectory()) {
+      total += await directoryBytes(target)
+    } else if (entry.isFile()) {
+      total += (await fsp.stat(target)).size
+    }
+  }
+  return total
+}
+
+function historyReferenceKey (skillId, digest) {
+  return `skill-history:${skillId}:${digest}`
+}
+
+function normalizeHistoryReferences (references = []) {
+  const output = new Set()
+  for (const reference of Array.isArray(references) ? references : []) {
+    if (typeof reference === 'string') {
+      output.add(reference)
+      continue
+    }
+    if (!reference || typeof reference !== 'object') continue
+    if (reference.type === 'skill-history' && reference.skillId && reference.digest) {
+      output.add(historyReferenceKey(reference.skillId, reference.digest))
+    }
+    if (reference.type === 'skill-artifact' && reference.packageDigest) {
+      const skillId = String(reference.skillId || reference.id || '').split(':')[0]
+      if (skillId) output.add(historyReferenceKey(skillId, reference.packageDigest))
+    }
+  }
+  return output
+}
+
 function createAgentSkillRepository (options = {}) {
   const rootPath = path.resolve(String(options.rootPath || ''))
   if (!options.rootPath) {
@@ -105,6 +155,16 @@ function createAgentSkillRepository (options = {}) {
   const rename = options.rename || fsp.rename
   const onCleanupError = options.onCleanupError || (() => {})
   const onDigestInvalidated = options.onDigestInvalidated || (() => {})
+  const getFreeBytes = typeof options.getFreeBytes === 'function'
+    ? options.getFreeBytes
+    : filesystemFreeBytes
+  const getProtectedHistoryReferences = typeof options.getProtectedHistoryReferences === 'function'
+    ? options.getProtectedHistoryReferences
+    : async () => []
+  const minimumFreeBytes = Number.isSafeInteger(options.minimumFreeBytes) &&
+    options.minimumFreeBytes >= 0
+    ? options.minimumFreeBytes
+    : DEFAULT_MINIMUM_FREE_BYTES
   const locks = new Map()
 
   const statePath = state => path.join(rootPath, state)
@@ -130,6 +190,19 @@ function createAgentSkillRepository (options = {}) {
   async function createTempDirectory (parent) {
     await fsp.mkdir(parent, { recursive: true })
     return fsp.mkdtemp(path.join(parent, '.tmp-'))
+  }
+
+  async function assertStorageCapacity (estimatedBytes, label = 'Skill history') {
+    const available = Number(await getFreeBytes(rootPath))
+    if (!Number.isFinite(available)) return
+    const required = Math.max(0, Number(estimatedBytes) || 0) + minimumFreeBytes
+    if (available < required) {
+      throw repositoryError(
+        'AGENT_STORAGE_INSUFFICIENT',
+        `Insufficient free space for ${label}: ${available} bytes available; ` +
+        `${required} bytes required including the safety reserve.`
+      )
+    }
   }
 
   async function atomicReplaceDirectory (candidate, target) {
@@ -237,6 +310,7 @@ function createAgentSkillRepository (options = {}) {
   async function snapshotDirectory (skillId, directory, digest) {
     const target = historyPath(skillId, digest)
     if (await pathExists(target)) return
+    await assertStorageCapacity(await directoryBytes(directory), 'a Skill history snapshot')
     const parent = path.dirname(target)
     const candidate = await copyToTemp(directory, parent)
     try {
@@ -592,6 +666,49 @@ function createAgentSkillRepository (options = {}) {
     })
   }
 
+  async function cleanupHistory ({ references = [], expiresBefore } = {}) {
+    await ensureRoots()
+    const cutoff = expiresBefore === undefined
+      ? new Date(Date.now() - 90 * 24 * 60 * 60 * 1000)
+      : new Date(expiresBefore)
+    if (Number.isNaN(cutoff.getTime())) {
+      throw repositoryError('SKILL_HISTORY_EXPIRY_INVALID', 'Skill history expiry is invalid.')
+    }
+    const protectedReferences = normalizeHistoryReferences([
+      ...references,
+      ...await getProtectedHistoryReferences()
+    ])
+    const removed = []
+    const retained = []
+    const historyRoot = path.join(rootPath, 'history')
+    const skillEntries = await fsp.readdir(historyRoot, { withFileTypes: true })
+    for (const skillEntry of skillEntries.sort((left, right) => left.name.localeCompare(right.name))) {
+      if (!skillEntry.isDirectory()) continue
+      try {
+        assertSkillId(skillEntry.name)
+      } catch {
+        continue
+      }
+      const parent = path.join(historyRoot, skillEntry.name)
+      const versions = await fsp.readdir(parent, { withFileTypes: true })
+      for (const version of versions.sort((left, right) => left.name.localeCompare(right.name))) {
+        if (!version.isDirectory() || !/^[a-f0-9]{64}$/.test(version.name)) continue
+        const target = path.join(parent, version.name)
+        const stat = await fsp.stat(target)
+        if (stat.mtime > cutoff) continue
+        const summary = { skillId: skillEntry.name, digest: version.name }
+        const key = historyReferenceKey(skillEntry.name, version.name)
+        if (protectedReferences.has(key)) {
+          retained.push(summary)
+          continue
+        }
+        await fsp.rm(target, { recursive: true, force: true })
+        removed.push(summary)
+      }
+    }
+    return { removed, retained }
+  }
+
   return Object.freeze({
     list,
     getMetadata,
@@ -604,7 +721,9 @@ function createAgentSkillRepository (options = {}) {
     enableDraft,
     disable,
     rollback,
-    remove
+    remove,
+    cleanupHistory,
+    assertStorageCapacity
   })
 }
 

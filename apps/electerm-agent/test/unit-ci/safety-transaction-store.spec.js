@@ -753,7 +753,7 @@ test('legacy completed status migrates as a terminal restored operation', async 
   assert.equal(adapter.read('safetyOperations', record.id).state, 'restored')
 })
 
-test('SQLite and NeDB encrypt safety operations and agent tasks at rest', async t => {
+test('SQLite and NeDB encrypt safety operations, agent tasks, and bounded artifacts at rest', async t => {
   const backends = [
     ['SQLite', '../../src/app/lib/sqlite', 'electerm.db'],
     ['NeDB', '../../src/app/lib/nedb', 'electerm.safetyOperations.nedb']
@@ -777,16 +777,23 @@ test('SQLite and NeDB encrypt safety operations and agent tasks at rest', async 
         output: 'secret-task-output-7419',
         endpoint: { host: 'secret-task-endpoint-7419.example.com' }
       }
+      const artifact = {
+        _id: 'artifact-secret',
+        summary: 'secret-artifact-summary-7419',
+        evidence: 'secret-artifact-evidence-7419'
+      }
 
       assert.equal(tables.includes('safetyOperations'), true)
       assert.equal(tables.includes('agentTasks'), true)
+      assert.equal(tables.includes('agentArtifacts'), true)
       await dbAction('safetyOperations', 'insert', operation)
       await dbAction('agentTasks', 'insert', task)
+      await dbAction('agentArtifacts', 'insert', artifact)
 
       const dbFolder = path.join(appPath, 'electerm', 'users', 'default_user')
       const files = name === 'SQLite'
         ? [operationFile]
-        : [operationFile, 'electerm.agentTasks.nedb']
+        : [operationFile, 'electerm.agentTasks.nedb', 'electerm.agentArtifacts.nedb']
       const storedText = files
         .map(file => fs.readFileSync(path.join(dbFolder, file), 'utf8'))
         .join('\n')
@@ -795,7 +802,9 @@ test('SQLite and NeDB encrypt safety operations and agent tasks at rest', async 
         operation.endpoint.host,
         operation.auditOutput,
         task.output,
-        task.endpoint.host
+        task.endpoint.host,
+        artifact.summary,
+        artifact.evidence
       ]) {
         assert.equal(storedText.includes(secret), false, `${name} leaked ${secret}`)
       }
@@ -807,6 +816,10 @@ test('SQLite and NeDB encrypt safety operations and agent tasks at rest', async 
       assert.equal(
         (await dbAction('agentTasks', 'findOne', { _id: task._id })).output,
         task.output
+      )
+      assert.equal(
+        (await dbAction('agentArtifacts', 'findOne', { _id: artifact._id })).evidence,
+        artifact.evidence
       )
     })
   }

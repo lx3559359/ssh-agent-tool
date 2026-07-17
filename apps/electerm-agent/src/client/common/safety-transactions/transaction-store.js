@@ -6,7 +6,10 @@ import {
   operationStates,
   validateAgentPlanGrantStructure
 } from './models.js'
-import { redactSensitiveData } from './audit-redaction.js'
+import {
+  redactAuditText,
+  redactSensitiveData
+} from './audit-redaction.js'
 import {
   normalizeLegacySafetyOperationRecord,
   readSafetyOperationRecordsForMigration
@@ -14,7 +17,23 @@ import {
 
 const operationTable = 'safetyOperations'
 const taskTable = 'agentTasks'
+const artifactTable = 'agentArtifacts'
 const patchQueuesByAdapter = new WeakMap()
+const defaultMinimumFreeBytes = 64 * 1024 * 1024
+const defaultRecoveryReservationBytes = 8 * 1024 * 1024
+const defaultMaximumArtifactBytes = 1024 * 1024
+
+async function defaultArtifactFreeBytes () {
+  try {
+    const estimate = await globalThis.navigator?.storage?.estimate?.()
+    const quota = Number(estimate?.quota)
+    const usage = Number(estimate?.usage)
+    if (Number.isFinite(quota) && Number.isFinite(usage)) {
+      return Math.max(0, quota - usage)
+    }
+  } catch {}
+  return Number.POSITIVE_INFINITY
+}
 
 export const legacyMigrationMarkerId = 'safetyOperations:legacy-migration:v1'
 export const safetyTransactionUpdatedEvent = 'shellpilot-safety-transaction-updated'
@@ -54,6 +73,67 @@ export const finalTaskStatuses = Object.freeze([
 const validTaskStatuses = new Set(Object.values(taskStatuses))
 const validOperationSources = new Set(operationSources)
 const completedOperationStates = new Set(finalOperationStates)
+const completedTaskStatuses = new Set(finalTaskStatuses)
+
+function byteLength (value) {
+  return new TextEncoder().encode(String(value ?? '')).byteLength
+}
+
+function artifactError (code, message) {
+  const error = new Error(message)
+  error.code = code
+  return error
+}
+
+function normalizeArtifactId (value) {
+  const id = String(value || '').trim()
+  if (!id || id.length > 256 || !/^[A-Za-z0-9][A-Za-z0-9:._-]*$/.test(id)) {
+    throw artifactError('AGENT_ARTIFACT_ID_INVALID', 'Agent artifact ID is invalid.')
+  }
+  return id
+}
+
+function recordReferences (record = {}) {
+  const values = [
+    record.artifactReferences,
+    record.metadata?.artifactReferences,
+    ...((record.steps || []).map(step => step?.artifactReferences))
+  ]
+  const references = new Set()
+  for (const list of values) {
+    if (!Array.isArray(list)) continue
+    for (const value of list) {
+      const id = typeof value === 'string' ? value : value?.id
+      if (id) references.add(String(id))
+    }
+  }
+  const bindings = [
+    ...(record.skillBindings || []),
+    ...(record.riskTransaction?.skillBindings || [])
+  ]
+  for (const binding of bindings) {
+    if (binding?.id && binding?.digest) {
+      references.add(`skill-history:${binding.id}:${binding.digest}`)
+    }
+  }
+  return references
+}
+
+function taskProtectsArtifacts (task = {}) {
+  return !completedTaskStatuses.has(task.status) ||
+    task.status === taskStatuses.partiallyCompleted ||
+    task.awaitingVerification === true ||
+    ['unknown', 'changed-unverified'].includes(task.remoteState)
+}
+
+function operationProtectsArtifacts (operation = {}) {
+  return !completedOperationStates.has(operation.state) ||
+    (operation.state === operationStates.failed && (
+      operation.reversible === true ||
+      Boolean(operation.recoveryBinding) ||
+      Boolean(operation.artifacts)
+    ))
+}
 
 const defaultAdapter = {
   async update (...args) {
@@ -303,11 +383,73 @@ export function createTransactionStore (options = {}) {
   const onChange = typeof options.onChange === 'function'
     ? options.onChange
     : emitSafetyTransactionUpdated
+  const getFreeBytes = typeof options.getFreeBytes === 'function'
+    ? options.getFreeBytes
+    : defaultArtifactFreeBytes
+  const minimumFreeBytes = Number.isSafeInteger(options.minimumFreeBytes) &&
+    options.minimumFreeBytes >= 0
+    ? options.minimumFreeBytes
+    : defaultMinimumFreeBytes
+  const recoveryReservationBytes = Number.isSafeInteger(
+    options.defaultRecoveryReservationBytes
+  ) && options.defaultRecoveryReservationBytes >= 0
+    ? options.defaultRecoveryReservationBytes
+    : defaultRecoveryReservationBytes
+  const maximumArtifactBytes = Number.isSafeInteger(options.maximumArtifactBytes) &&
+    options.maximumArtifactBytes > 0
+    ? options.maximumArtifactBytes
+    : defaultMaximumArtifactBytes
 
   function notifyChange (recordType, id, action) {
     try {
       onChange({ recordType, id: String(id), action })
     } catch {}
+  }
+
+  async function assertArtifactCapacity (estimatedBytes = 0, label = 'Agent evidence') {
+    const bytes = Number.isSafeInteger(estimatedBytes) && estimatedBytes >= 0
+      ? estimatedBytes
+      : 0
+    const available = Number(await getFreeBytes())
+    if (!Number.isFinite(available)) return { availableBytes: available, requiredBytes: bytes }
+    const required = bytes + minimumFreeBytes
+    if (available < required) {
+      throw artifactError(
+        'AGENT_STORAGE_INSUFFICIENT',
+        `Insufficient free space for ${label}: ${available} bytes available; ` +
+        `${required} bytes required including the safety reserve.`
+      )
+    }
+    return { availableBytes: available, requiredBytes: required }
+  }
+
+  function normalizeArtifact (artifact = {}) {
+    const now = resolveNow(clock)
+    const safeEvidence = redactSensitiveData(artifact.evidence ?? '')
+    const safeSummary = redactAuditText(artifact.summary ?? '')
+    const serializedEvidence = typeof safeEvidence === 'string'
+      ? safeEvidence
+      : JSON.stringify(safeEvidence)
+    const evidenceBytes = byteLength(serializedEvidence)
+    if (evidenceBytes > maximumArtifactBytes) {
+      throw artifactError(
+        'AGENT_ARTIFACT_TOO_LARGE',
+        `Agent evidence exceeds the ${maximumArtifactBytes}-byte persistence limit.`
+      )
+    }
+    const defaultExpiry = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000)
+    const expiresAt = toTimestamp(artifact.expiresAt, defaultExpiry, 'Artifact expiry')
+    return {
+      id: normalizeArtifactId(artifact.id),
+      schemaVersion: 1,
+      kind: String(artifact.kind || 'evidence').slice(0, 64),
+      summary: safeSummary,
+      evidence: safeEvidence,
+      evidenceBytes,
+      createdAt: toTimestamp(artifact.createdAt, now, 'Artifact creation'),
+      updatedAt: toTimestamp(artifact.updatedAt, now, 'Artifact update'),
+      expiresAt
+    }
   }
 
   async function getMigrationMarker () {
@@ -323,6 +465,13 @@ export function createTransactionStore (options = {}) {
       ...operation,
       id: operation?.id || generate()
     }, { now: resolveNow(clock) })
+    if (item.state === operationStates.preparing &&
+      item.risk === 'change' && item.reversible === true) {
+      const estimatedBytes = Number.isSafeInteger(item.metadata?.estimatedRecoveryBytes)
+        ? item.metadata.estimatedRecoveryBytes
+        : recoveryReservationBytes
+      await assertArtifactCapacity(estimatedBytes, 'a new recovery point')
+    }
     await adapter.update(item.id, item, operationTable, true, true)
     notifyChange('operation', item.id, 'save')
     return item
@@ -435,6 +584,13 @@ export function createTransactionStore (options = {}) {
 
   async function saveTask (task = {}) {
     const item = normalizeTask(task, clock)
+    if (Number.isSafeInteger(task.artifactReservationBytes) &&
+      task.artifactReservationBytes > 0) {
+      await assertArtifactCapacity(
+        task.artifactReservationBytes,
+        'full Agent output capture'
+      )
+    }
     await adapter.update(item.id, item, taskTable, true, true)
     notifyChange('task', item.id, 'save')
     return item
@@ -464,6 +620,67 @@ export function createTransactionStore (options = {}) {
     })
   }
 
+  async function saveArtifact (artifact = {}) {
+    const item = normalizeArtifact(artifact)
+    await assertArtifactCapacity(item.evidenceBytes, `${item.kind} Agent evidence`)
+    await adapter.update(item.id, item, artifactTable, true, true)
+    return item
+  }
+
+  async function getArtifact (id) {
+    return adapter.findOne(artifactTable, normalizeArtifactId(id), true)
+  }
+
+  async function listArtifacts () {
+    const artifacts = await adapter.find(artifactTable, true)
+    return artifacts.sort((left, right) => String(left.id).localeCompare(String(right.id)))
+  }
+
+  async function protectedArtifactReferences () {
+    const [tasks, operations] = await Promise.all([
+      listTasks(),
+      listOperations()
+    ])
+    const references = new Set()
+    for (const task of tasks) {
+      if (!taskProtectsArtifacts(task)) continue
+      for (const reference of recordReferences(task)) references.add(reference)
+    }
+    for (const operation of operations) {
+      if (!operationProtectsArtifacts(operation)) continue
+      for (const reference of recordReferences(operation)) references.add(reference)
+    }
+    return [...references].sort()
+  }
+
+  async function cleanupArtifacts ({ expiresBefore } = {}) {
+    const cutoff = expiresBefore === undefined
+      ? resolveNow(clock)
+      : new Date(expiresBefore)
+    if (Number.isNaN(cutoff.getTime())) {
+      throw artifactError('AGENT_ARTIFACT_EXPIRY_INVALID', 'Artifact cleanup expiry is invalid.')
+    }
+    const [artifacts, protectedReferences] = await Promise.all([
+      listArtifacts(),
+      protectedArtifactReferences()
+    ])
+    const protectedIds = new Set(protectedReferences)
+    const removed = []
+    const retained = []
+    for (const artifact of artifacts) {
+      const expiresAt = new Date(artifact.expiresAt)
+      if (Number.isNaN(expiresAt.getTime()) || expiresAt > cutoff) continue
+      const summary = { id: String(artifact.id), kind: String(artifact.kind || 'evidence') }
+      if (protectedIds.has(artifact.id)) {
+        retained.push(summary)
+        continue
+      }
+      await adapter.remove(artifactTable, artifact.id, true)
+      removed.push(summary)
+    }
+    return { removed, retained }
+  }
+
   return {
     saveOperation,
     getOperation,
@@ -474,7 +691,13 @@ export function createTransactionStore (options = {}) {
     saveTask,
     getTask,
     listTasks,
-    patchTask
+    patchTask,
+    saveArtifact,
+    getArtifact,
+    listArtifacts,
+    protectedArtifactReferences,
+    cleanupArtifacts,
+    assertArtifactCapacity
   }
 }
 
@@ -490,3 +713,13 @@ export const saveTask = (...args) => defaultStore.saveTask(...args)
 export const getTask = (...args) => defaultStore.getTask(...args)
 export const listTasks = (...args) => defaultStore.listTasks(...args)
 export const patchTask = (...args) => defaultStore.patchTask(...args)
+export const saveArtifact = (...args) => defaultStore.saveArtifact(...args)
+export const getArtifact = (...args) => defaultStore.getArtifact(...args)
+export const listArtifacts = (...args) => defaultStore.listArtifacts(...args)
+export const protectedArtifactReferences = (...args) => (
+  defaultStore.protectedArtifactReferences(...args)
+)
+export const cleanupArtifacts = (...args) => defaultStore.cleanupArtifacts(...args)
+export const assertArtifactCapacity = (...args) => (
+  defaultStore.assertArtifactCapacity(...args)
+)

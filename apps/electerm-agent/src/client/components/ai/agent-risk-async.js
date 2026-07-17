@@ -15,6 +15,11 @@ function callCount (preparation, state) {
     state.transaction?.calls?.length || 1
 }
 
+function evidencePatch (preparation) {
+  const evidence = preparation?.executionState?.result ?? preparation?.executionResult
+  return evidence === undefined ? {} : { evidence }
+}
+
 export function isAgentAsyncRiskResult (result) {
   return result?.pending === true || Boolean(result?.taskId || result?.transferId)
 }
@@ -52,7 +57,8 @@ export async function completeAgentRiskPreparation ({
         taskId: preparation.riskTaskId,
         status: 'completed',
         remoteState: 'verified',
-        canAutoRetry: false
+        canAutoRetry: false,
+        ...evidencePatch(preparation)
       })
       state.terminal = true
       return { passed: true, verification }
@@ -63,7 +69,8 @@ export async function completeAgentRiskPreparation ({
         status: 'partially-completed',
         error,
         remoteState: 'changed-unverified',
-        canAutoRetry: false
+        canAutoRetry: false,
+        ...evidencePatch(preparation)
       })
       state.terminal = true
       error.verificationFailed = true
@@ -92,7 +99,8 @@ export async function failAgentRiskPreparation ({
     status: resolvedStatus,
     error,
     remoteState: resolvedRemoteState,
-    canAutoRetry: false
+    canAutoRetry: false,
+    ...evidencePatch(preparation)
   })
   return { status: resolvedStatus, remoteState: resolvedRemoteState }
 }

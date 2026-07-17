@@ -9,6 +9,10 @@ const exactSensitiveKeys = new Set([
   'privatekey',
   'private_key',
   'authorization',
+  'proxy_authorization',
+  'cookie',
+  'cookies',
+  'set_cookie',
   'access_token',
   'refresh_token',
   'ssh_password',
@@ -99,7 +103,15 @@ function redactPlainText (value) {
   text = redactPrivateKeys(text)
   text = redactJsonCredentialValues(text)
   text = redactAuthorizationValues(text)
+  text = text.replace(
+    /(\b(?:Cookie|Set-Cookie)\s*:\s*)[^\r\n]+/gi,
+    `$1${redacted}`
+  )
   text = redactCliOptionValues(text)
+  text = redactCredentialValues(
+    text,
+    /((?:^|[\s;&])(?:-b|--cookie)(?:[ \t]+|=))(?:"((?:\\.|[^"\\])*)"|'([^'\r\n]*)'|[^\s;&]+)/gim
+  )
   text = redactCredentialValues(
     text,
     /(\bBearer\s+)(?:"((?:\\.|[^"\\])*)"|'([^'\r\n]*)'|[^\s,;&]+)/gi

@@ -38,6 +38,7 @@ export const dbNames = [
   'aiChatHistory',
   'safetyOperations',
   'agentTasks',
+  'agentArtifacts',
   'autoRunWidgets'
 ]
 export const dbNamesForSync = [
@@ -55,6 +56,7 @@ export const dbNamesForWatch = [
   'aiChatHistory',
   'safetyOperations',
   'agentTasks',
+  'agentArtifacts',
   'autoRunWidgets'
 ]
 

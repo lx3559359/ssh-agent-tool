@@ -11,6 +11,7 @@ import { createTrustedOperationId } from '../../common/safety-transactions/opera
 import {
   getTask,
   patchTask,
+  saveArtifact,
   saveTask,
   taskStatuses
 } from '../../common/safety-transactions/transaction-store.js'
@@ -267,7 +268,8 @@ function resolveStore (store = {}) {
   return {
     getTask: store.getTask || getTask,
     saveTask: store.saveTask || saveTask,
-    patchTask: store.patchTask || patchTask
+    patchTask: store.patchTask || patchTask,
+    saveArtifact: store.saveArtifact || saveArtifact
   }
 }
 
@@ -300,6 +302,7 @@ export async function confirmRiskTransaction (transaction, options = {}) {
     status: taskStatuses.awaitingChangeConfirmation,
     steps: taskSteps(transaction),
     riskTransaction: transaction,
+    artifactReservationBytes: 64 * 1024,
     audit: [],
     createdAt: now,
     updatedAt: now
@@ -352,6 +355,7 @@ export async function settleRiskTransactionTask ({
   error,
   remoteState,
   canAutoRetry,
+  evidence,
   store: customStore,
   now
 } = {}) {
@@ -361,21 +365,39 @@ export async function settleRiskTransactionTask ({
   const failed = status === 'failed' || status === 'partially-completed'
   const cancelled = status === 'cancelled'
   const phase = cancelled ? 'cancel' : failed ? 'execute' : 'verify'
+  let artifactReferences = [...new Set(current?.artifactReferences || [])]
+  let evidenceError = ''
+  if (evidence !== undefined && evidence !== null && String(evidence) !== '') {
+    const artifactId = `agent-output:${taskId}`
+    try {
+      await store.saveArtifact({
+        id: artifactId,
+        kind: 'full-output',
+        summary: `${phase} evidence for Agent risk task ${taskId}`,
+        evidence
+      })
+      artifactReferences = [...new Set([...artifactReferences, artifactId])]
+    } catch (error) {
+      evidenceError = ` Bounded evidence was not persisted: ${String(error?.message || error)}`
+    }
+  }
+  const auditPreview = (cancelled
+    ? 'Execution was cancelled before completion.'
+    : failed
+      ? String(error?.message || error || 'Execution failed')
+      : 'Transaction completed.') + evidenceError
   return store.patchTask(taskId, {
     status: cancelled ? taskStatuses.cancelled : failed ? status : taskStatuses.completed,
     ...(remoteState === undefined ? {} : { remoteState }),
     ...(canAutoRetry === undefined ? {} : { canAutoRetry }),
     error: error ? String(error.message || error) : '',
+    artifactReferences,
     completedAt: timestamp(now),
     audit: [...(current?.audit || []), {
       phase,
       timestamp: timestamp(now),
       code: failed || cancelled ? null : 0,
-      preview: cancelled
-        ? 'Execution was cancelled before completion.'
-        : failed
-          ? String(error?.message || error || 'Execution failed')
-          : 'Transaction completed.'
+      preview: auditPreview
     }]
   })
 }
