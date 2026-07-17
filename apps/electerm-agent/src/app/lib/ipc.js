@@ -70,8 +70,19 @@ const { safeEncrypt, safeDecrypt } = require('./safe-storage')
 const { initCommandLine } = require('./command-line')
 const { watchFile, unwatchFile } = require('./watch-file')
 const lookup = require('../common/lookup')
-const { AIchat, AIchatWithTools, AIModels, getStreamContent, stopStream } = require('./ai')
+const {
+  AIchat,
+  AIChatCancel,
+  AIchatWithTools,
+  AIAgentCancel,
+  AIHealthCheck,
+  AIHealthCheckCancel,
+  AIModels,
+  getStreamContent,
+  stopStream
+} = require('./ai')
 const { runLocalCli } = require('./local-cli')
+const { cancelLocalCli } = require('./local-cli')
 const { getAllowedLocalCliTools } = require('./local-cli')
 const { getCodexCliStatus } = require('./local-cli')
 const log = require('../common/log')
@@ -246,11 +257,16 @@ function initIpc () {
     },
     saveUserConfig,
     AIchat,
+    AIChatCancel,
     AIchatWithTools,
+    AIAgentCancel,
+    AIHealthCheck,
+    AIHealthCheckCancel,
     AIModels,
     getStreamContent,
     stopStream,
     runLocalCli,
+    cancelLocalCli,
     getAllowedLocalCliTools,
     getCodexCliStatus,
     exportDiagnosticPack: async (outputPath) => exportDiagnosticPack({

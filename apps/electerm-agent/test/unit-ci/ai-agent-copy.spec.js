@@ -6,6 +6,7 @@ const fs = require('node:fs')
 const copy = require(path.resolve(__dirname, '../../src/client/components/ai/ai-agent-copy.json'))
 const aiChatSource = fs.readFileSync(path.resolve(__dirname, '../../src/client/components/ai/ai-chat.jsx'), 'utf8')
 const aiHistoryItemSource = fs.readFileSync(path.resolve(__dirname, '../../src/client/components/ai/ai-chat-history-item.jsx'), 'utf8')
+const aiCredentialSource = fs.readFileSync(path.resolve(__dirname, '../../src/client/components/ai/ai-request-credentials.js'), 'utf8')
 
 test('AI panel copy uses Chinese labels for the SSH Agent product', () => {
   assert.equal(copy.modeLabels.ask, '对话')
@@ -38,14 +39,16 @@ test('Agent default rules are SSH operations focused and safety aware', () => {
   assert.match(rules, /中文/)
 })
 
-test('Agent chat preserves custom API auth header configuration', () => {
-  assert.match(aiChatSource, /'authHeaderNameAI'/)
+test('Agent chat keeps custom auth headers in the memory-only request reference', () => {
+  assert.match(aiChatSource, /createAIRequestCredentialReference/)
+  assert.doesNotMatch(aiChatSource, /'authHeaderNameAI'/)
+  assert.match(aiCredentialSource, /'authHeaderNameAI'/)
   assert.match(aiHistoryItemSource, /authHeaderNameAI/)
 })
 
 test('normal AI chat passes custom API auth header to backend requests', () => {
   assert.match(
     aiHistoryItemSource,
-    /window\.pre\.runGlobalAsync\(\s*'AIchat'[\s\S]*?true,\s*authHeaderNameAI\s*\)/
+    /window\.pre\.runGlobalAsync\(\s*'AIchat'[\s\S]*?true,\s*authHeaderNameAI,\s*requestId\s*\)/
   )
 })

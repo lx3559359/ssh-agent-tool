@@ -554,6 +554,7 @@ test('returns provider error messages from model list requests', async () => {
     get: async () => {
       const err = new Error('Request failed with status code 401')
       err.response = {
+        status: 401,
         data: {
           error: {
             message: 'API Key 无效或额度不足'
@@ -570,6 +571,7 @@ test('returns provider error messages from model list requests', async () => {
   try {
     const res = await AIModels('https://relay.example.com/v1', 'bad-key', '', 'Authorization: Bearer')
     assert.equal(res.error, 'API Key 无效或额度不足')
+    assert.equal(res.status, 'auth-error')
   } finally {
     axios.create = originalCreate
     delete require.cache[aiPath]
@@ -614,6 +616,7 @@ test('returns provider error messages from errors arrays', async () => {
     get: async () => {
       const err = new Error('Request failed with status code 429')
       err.response = {
+        status: 429,
         data: {
           errors: [
             {
@@ -632,6 +635,7 @@ test('returns provider error messages from errors arrays', async () => {
   try {
     const res = await AIModels('https://relay.example.com/v1', 'test-key', '', 'Authorization: Bearer')
     assert.equal(res.error, 'relay daily quota exceeded')
+    assert.equal(res.status, 'quota-error')
   } finally {
     axios.create = originalCreate
     delete require.cache[aiPath]
@@ -1093,6 +1097,337 @@ test('returns provider error messages from stream response frames', async () => 
     assert.equal(streamState.hasMore, false)
   } finally {
     axios.create = originalCreate
+    delete require.cache[aiPath]
+  }
+})
+test('redacts credentials and stacks from ordinary chat request errors', async () => {
+  const axios = require('axios')
+  const log = require(path.resolve(__dirname, '../../src/app/common/log'))
+  const originalCreate = axios.create
+  const originalError = log.error
+  const apiKey = 'sk-chat-secret-1234567890'
+  const proxyPassword = 'proxy-chat-secret'
+
+  axios.create = () => ({
+    post: async () => {
+      const error = new Error(
+        'Authorization: Bearer ' + apiKey +
+        ' proxy password=' + proxyPassword +
+        ' https://relay.example.com/v1?token=query-chat-secret'
+      )
+      error.stack = 'STACK_WITH_' + apiKey
+      throw error
+    }
+  })
+  log.error = () => {}
+
+  delete require.cache[aiPath]
+  const { AIchat } = require(aiPath)
+
+  try {
+    const result = await AIchat(
+      'hello',
+      'test-model',
+      'system',
+      'https://relay.example.com/v1?token=query-chat-secret',
+      '',
+      apiKey,
+      'http://user:' + proxyPassword + '@proxy.example.com:8080',
+      false,
+      'Authorization: Bearer'
+    )
+    const serialized = JSON.stringify(result)
+
+    assert.equal('stack' in result, false)
+    assert.doesNotMatch(serialized, /sk-chat-secret|proxy-chat-secret|query-chat-secret|STACK_WITH/)
+    assert.match(result.error, /已隐藏/)
+  } finally {
+    axios.create = originalCreate
+    log.error = originalError
+    delete require.cache[aiPath]
+  }
+})
+
+test('cancels an in-flight Agent model request by request id', async () => {
+  const axios = require('axios')
+  const originalCreate = axios.create
+  let capturedSignal
+
+  axios.create = () => ({
+    post: async (requestPath, requestData, options = {}) => {
+      capturedSignal = options.signal
+      return new Promise((resolve, reject) => {
+        options.signal.addEventListener('abort', () => {
+          const error = new Error('canceled')
+          error.code = 'ERR_CANCELED'
+          reject(error)
+        }, { once: true })
+      })
+    }
+  })
+
+  delete require.cache[aiPath]
+  const { AIchatWithTools, AIAgentCancel } = require(aiPath)
+
+  try {
+    const pending = AIchatWithTools(
+      [{ role: 'user', content: 'check server' }],
+      'test-model',
+      'https://relay.example.com/v1',
+      '',
+      'test-key',
+      '',
+      [],
+      'Authorization: Bearer',
+      'agent-request-1'
+    )
+    await new Promise(resolve => setImmediate(resolve))
+
+    assert.equal(capturedSignal.aborted, false)
+    assert.deepEqual(AIAgentCancel('agent-request-1'), { cancelled: true })
+    assert.equal(capturedSignal.aborted, true)
+    assert.deepEqual(await pending, { cancelled: true })
+  } finally {
+    axios.create = originalCreate
+    delete require.cache[aiPath]
+  }
+})
+
+test('cancels an in-flight normal chat model request by request id', async () => {
+  const axios = require('axios')
+  const originalCreate = axios.create
+  let capturedSignal
+
+  axios.create = () => ({
+    post: async (requestPath, requestData, options = {}) => {
+      capturedSignal = options.signal
+      return new Promise((resolve, reject) => {
+        options.signal.addEventListener('abort', () => {
+          const error = new Error('canceled')
+          error.code = 'ERR_CANCELED'
+          reject(error)
+        }, { once: true })
+      })
+    }
+  })
+
+  delete require.cache[aiPath]
+  const { AIchat, AIChatCancel } = require(aiPath)
+
+  try {
+    const pending = AIchat(
+      [{ role: 'user', content: 'check server' }],
+      'test-model',
+      'test-role',
+      'https://relay.example.com/v1',
+      '',
+      'test-key',
+      '',
+      true,
+      'Authorization: Bearer',
+      'chat-request-1'
+    )
+    await new Promise(resolve => setImmediate(resolve))
+
+    assert.equal(capturedSignal.aborted, false)
+    assert.deepEqual(AIChatCancel('chat-request-1'), { cancelled: true })
+    assert.equal(capturedSignal.aborted, true)
+    assert.deepEqual(await pending, { cancelled: true })
+  } finally {
+    axios.create = originalCreate
+    delete require.cache[aiPath]
+  }
+})
+
+test('redacts credentials from tool chat request errors', async () => {
+  const axios = require('axios')
+  const log = require(path.resolve(__dirname, '../../src/app/common/log'))
+  const originalCreate = axios.create
+  const originalError = log.error
+  const apiKey = 'sk-tools-secret-1234567890'
+
+  axios.create = () => ({
+    post: async () => {
+      const error = new Error('api_key=' + apiKey + ' token=tool-query-secret')
+      error.stack = 'STACK_WITH_' + apiKey
+      throw error
+    }
+  })
+  log.error = () => {}
+
+  delete require.cache[aiPath]
+  const { AIchatWithTools } = require(aiPath)
+
+  try {
+    const result = await AIchatWithTools(
+      [{ role: 'user', content: 'check server' }],
+      'test-model',
+      'https://relay.example.com/v1?token=tool-query-secret',
+      '',
+      apiKey,
+      '',
+      [{ type: 'function', function: { name: 'noop', parameters: {} } }],
+      'Authorization: Bearer'
+    )
+    const serialized = JSON.stringify(result)
+
+    assert.doesNotMatch(serialized, /sk-tools-secret|tool-query-secret|STACK_WITH/)
+    assert.match(result.error, /已隐藏/)
+  } finally {
+    axios.create = originalCreate
+    log.error = originalError
+    delete require.cache[aiPath]
+  }
+})
+
+test('redacts credentials from successful HTTP error response bodies', async () => {
+  const axios = require('axios')
+  const originalCreate = axios.create
+  const apiKey = 'sk-body-secret-1234567890'
+
+  axios.create = () => ({
+    post: async () => ({
+      data: {
+        error: {
+          message: 'Authorization: Bearer ' + apiKey
+        }
+      }
+    })
+  })
+
+  delete require.cache[aiPath]
+  const { AIchat, AIchatWithTools } = require(aiPath)
+
+  try {
+    const chat = await AIchat(
+      'hello',
+      'test-model',
+      'system',
+      'https://relay.example.com/v1',
+      '',
+      apiKey,
+      '',
+      false,
+      'Authorization: Bearer'
+    )
+    const tools = await AIchatWithTools(
+      [{ role: 'user', content: 'check server' }],
+      'test-model',
+      'https://relay.example.com/v1',
+      '',
+      apiKey,
+      '',
+      [{ type: 'function', function: { name: 'noop', parameters: {} } }],
+      'Authorization: Bearer'
+    )
+
+    assert.doesNotMatch(JSON.stringify({ chat, tools }), /sk-body-secret/)
+    assert.match(chat.error, /已隐藏/)
+    assert.match(tools.error, /已隐藏/)
+  } finally {
+    axios.create = originalCreate
+    delete require.cache[aiPath]
+  }
+})
+
+test('redacts credentials from stream response error frames', async () => {
+  const axios = require('axios')
+  const originalCreate = axios.create
+  const apiKey = 'sk-stream-secret-1234567890'
+
+  axios.create = () => ({
+    post: async () => ({
+      data: Readable.from([
+        Buffer.from(
+          'data: {"error":{"message":"Authorization: Bearer ' +
+          apiKey +
+          '"}}\n\n'
+        )
+      ])
+    })
+  })
+
+  delete require.cache[aiPath]
+  const { AIchat, getStreamContent } = require(aiPath)
+
+  try {
+    const result = await AIchat(
+      'hello',
+      'test-model',
+      'system',
+      'https://relay.example.com/v1',
+      '',
+      apiKey,
+      '',
+      true,
+      'Authorization: Bearer'
+    )
+
+    let streamState
+    for (let index = 0; index < 20; index += 1) {
+      await new Promise(resolve => setTimeout(resolve, 10))
+      streamState = getStreamContent(result.sessionId)
+      if (!streamState.hasMore || streamState.error) break
+    }
+
+    assert.doesNotMatch(JSON.stringify(streamState), /sk-stream-secret/)
+    assert.match(streamState.error, /已隐藏/)
+  } finally {
+    axios.create = originalCreate
+    delete require.cache[aiPath]
+  }
+})
+
+test('redacts credentials from malformed stream frames before logging', async () => {
+  const axios = require('axios')
+  const log = require(path.resolve(__dirname, '../../src/app/common/log'))
+  const originalCreate = axios.create
+  const originalError = log.error
+  const apiKey = 'sk-malformed-stream-secret-1234567890'
+  const logged = []
+
+  axios.create = () => ({
+    post: async () => ({
+      data: Readable.from([
+        Buffer.from('data: {"error":"' + apiKey + '" invalid-json}\n\n')
+      ])
+    })
+  })
+  log.error = (...args) => {
+    logged.push(args.map(value => {
+      if (value instanceof Error) return value.stack || value.message
+      return String(value)
+    }).join(' '))
+  }
+
+  delete require.cache[aiPath]
+  const { AIchat, getStreamContent } = require(aiPath)
+
+  try {
+    const result = await AIchat(
+      'hello',
+      'test-model',
+      'system',
+      'https://relay.example.com/v1',
+      '',
+      apiKey,
+      '',
+      true,
+      'Authorization: Bearer'
+    )
+
+    let streamState
+    for (let index = 0; index < 20; index += 1) {
+      await new Promise(resolve => setTimeout(resolve, 10))
+      streamState = getStreamContent(result.sessionId)
+      if (!streamState.hasMore || streamState.error) break
+    }
+
+    assert.doesNotMatch(JSON.stringify(streamState), /sk-malformed-stream-secret|invalid-json|JSON\.parse/)
+    assert.doesNotMatch(logged.join('\n'), /sk-malformed-stream-secret|invalid-json|JSON\.parse/)
+  } finally {
+    axios.create = originalCreate
+    log.error = originalError
     delete require.cache[aiPath]
   }
 })

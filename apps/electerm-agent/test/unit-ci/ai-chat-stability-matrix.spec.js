@@ -2,6 +2,12 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const path = require('node:path')
 const fs = require('node:fs')
+const { pathToFileURL } = require('node:url')
+
+const asyncResultPath = path.resolve(
+  __dirname,
+  '../../src/client/common/async-result.js'
+)
 
 function readTest (name) {
   return fs.readFileSync(path.resolve(__dirname, name), 'utf8')
@@ -31,7 +37,7 @@ test('P1 AI chat stability matrix covers submit stream stop retry copy and clear
   assertEvidence(historyItem, /'AIchat'[\s\S]*?true,[\s\S]*?authHeaderNameAI/, 'streaming AI request and auth header forwarding')
   assertEvidence(historyItem, /getStreamContent/, 'stream polling')
   assertEvidence(historyItem, /stopStream/, 'stop generation')
-  assertEvidence(historyItem, /window\.store\.aiChatHistory = \[\.\.\.window\.store\.aiChatHistory\]/, 'history refresh after AI response')
+  assertEvidence(historyItem, /updateAIChatHistoryEntry\(window\.store/, 'sanitized history refresh after AI response')
   assertEvidence(actionsTest, /copy the answer first and fall back to prompt/, 'copy answer fallback')
   assertEvidence(actionsTest, /create a clean retry entry without stale stream state/, 'retry clears stale stream state')
   assertEvidence(actionsTest, /clear conversation context from the store/, 'clear context')
@@ -42,12 +48,34 @@ test('P1 AI chat stability matrix covers submit stream stop retry copy and clear
 
 test('AI chat publishes history after non-stream responses are written', () => {
   const historyItem = readSource('ai-chat-history-item.jsx')
-  const branchStart = historyItem.indexOf('} else if (aiResponse && aiResponse.response) {')
+  const branchStart = historyItem.indexOf("} else if (aiResponse && Object.prototype.hasOwnProperty.call(aiResponse, 'response')) {")
   const catchStart = historyItem.indexOf('} catch (error) {', branchStart)
   const branch = historyItem.slice(branchStart, catchStart)
 
   assert.notEqual(branchStart, -1)
   assert.notEqual(catchStart, -1)
-  assertEvidence(branch, /window\.store\.aiChatHistory\[index\]\.response = aiResponse\.response/, 'non-stream response write')
-  assertEvidence(branch, /window\.store\.aiChatHistory = \[\.\.\.window\.store\.aiChatHistory\]/, 'non-stream response history refresh')
+  assertEvidence(branch, /updateAIChatHistoryEntry\(window\.store, item\.id, \{[\s\S]*response: aiResponse\.response/, 'sanitized non-stream response write')
+})
+
+test('async results normalize null undefined success and error responses', async () => {
+  assert.ok(fs.existsSync(asyncResultPath), 'async result helper must exist')
+  const asyncResult = await import(pathToFileURL(asyncResultPath))
+  const { normalizeAsyncResult } = asyncResult
+
+  assert.equal(asyncResult.createAsyncResultGuard, undefined)
+  const empty = { ok: false, data: null, error: 'empty-response' }
+  assert.deepEqual(normalizeAsyncResult(null), empty)
+  assert.deepEqual(normalizeAsyncResult(undefined), empty)
+  assert.deepEqual(
+    normalizeAsyncResult({ data: { status: 'available' } }),
+    { ok: true, data: { status: 'available' }, error: '' }
+  )
+  assert.deepEqual(
+    normalizeAsyncResult({ data: false }),
+    { ok: true, data: false, error: '' }
+  )
+  assert.deepEqual(
+    normalizeAsyncResult({ data: undefined, error: 'network-error' }),
+    { ok: false, data: null, error: 'network-error' }
+  )
 })

@@ -1,6 +1,8 @@
 import { auto } from 'manate/react'
 import { useEffect } from 'react'
 import Layout from '../layout/layout'
+import FleetStatusWorkspace from '../fleet-status/fleet-status-workspace'
+import { getTerminalWorkspaceAccessibility } from '../fleet-status/fleet-status-navigation'
 import FileInfoModal from '../sftp/file-info-modal'
 import UpdateCheck from './upgrade'
 import SettingModal from '../setting-panel/setting-modal'
@@ -45,17 +47,26 @@ import TerminalInfo from '../terminal-info/terminal-info-entry'
 import '../../common/fs.js'
 import './term-fullscreen.styl'
 
+export function getSafeRightPanelTitle (store, rawConfig) {
+  return rawConfig ? store.rightPanelTitle : ''
+}
+
 export default auto(function Index (props) {
   useEffect(() => {
     const { store } = props
+    const openTab = (event, parsed) => store.ipcOpenTab(parsed)
+    const preventDocumentDrop = event => {
+      event.preventDefault()
+      event.stopPropagation()
+    }
     window.addEventListener('resize', store.onResize)
-    setTimeout(store.triggerResize, 200)
-    const { ipcOnEvent } = window.pre
+    const resizeTimer = setTimeout(store.triggerResize, 200)
+    const { ipcOnEvent, ipcOffEvent } = window.pre
     ipcOnEvent('checkupdate', store.onCheckUpdate)
     ipcOnEvent('open-about', store.openAbout)
     ipcOnEvent('new-ssh', store.onNewSsh)
     ipcOnEvent('add-tab-from-command-line', store.addTabFromCommandLine)
-    ipcOnEvent('open-tab', (e, parsed) => store.ipcOpenTab(parsed))
+    ipcOnEvent('open-tab', openTab)
     ipcOnEvent('openSettings', store.openSetting)
     ipcOnEvent('selectall', store.selectall)
     ipcOnEvent('focused', store.focus)
@@ -65,14 +76,8 @@ export default auto(function Index (props) {
     ipcOnEvent('zoomout', store.onZoomout)
     ipcOnEvent('confirm-exit', store.beforeExitApp)
 
-    document.addEventListener('drop', function (e) {
-      e.preventDefault()
-      e.stopPropagation()
-    })
-    document.addEventListener('dragover', function (e) {
-      e.preventDefault()
-      e.stopPropagation()
-    })
+    document.addEventListener('drop', preventDocumentDrop)
+    document.addEventListener('dragover', preventDocumentDrop)
     window.addEventListener('offline', store.setOffline)
     if (window.et.isWebApp) {
       window.onbeforeunload = store.beforeExit
@@ -82,12 +87,35 @@ export default auto(function Index (props) {
     store.checkForDbUpgrade()
     store.handleGetSerials()
     store.checkPendingDeepLink()
+
+    return () => {
+      clearTimeout(resizeTimer)
+      window.removeEventListener('resize', store.onResize)
+      window.removeEventListener('offline', store.setOffline)
+      document.removeEventListener('drop', preventDocumentDrop)
+      document.removeEventListener('dragover', preventDocumentDrop)
+      ipcOffEvent('checkupdate', store.onCheckUpdate)
+      ipcOffEvent('open-about', store.openAbout)
+      ipcOffEvent('new-ssh', store.onNewSsh)
+      ipcOffEvent('add-tab-from-command-line', store.addTabFromCommandLine)
+      ipcOffEvent('open-tab', openTab)
+      ipcOffEvent('openSettings', store.openSetting)
+      ipcOffEvent('selectall', store.selectall)
+      ipcOffEvent('focused', store.focus)
+      ipcOffEvent('blur', store.onBlur)
+      ipcOffEvent('zoom-reset', store.onZoomReset)
+      ipcOffEvent('zoomin', store.onZoomIn)
+      ipcOffEvent('zoomout', store.onZoomout)
+      ipcOffEvent('confirm-exit', store.beforeExitApp)
+      if (window.onbeforeunload === store.beforeExit) {
+        window.onbeforeunload = null
+      }
+    }
   }, [])
 
   const { store } = props
   const {
     configLoaded,
-    config,
     fullscreen,
     pinned,
     isSecondInstance,
@@ -98,15 +126,21 @@ export default auto(function Index (props) {
     transferHistory,
     transferToConfirm,
     openResolutionEdit,
-    rightPanelTitle,
     rightPanelTab
   } = store
+  const rawConfig = store.config
+  const config = rawConfig || {}
+  const rightPanelTitle = getSafeRightPanelTitle(store, rawConfig)
+  const tabs = (store.getTabs() || []).filter(Boolean)
+  const currentTab = store.currentTab || null
+  const activeTabId = currentTab?.id || store.activeTabId || ''
   const upgradeInfo = deepCopy(store.upgradeInfo)
+  const fleetStatusActive = store.mainWorkspaceMode === 'fleet-status'
   const cls = classnames({
     loaded: configLoaded,
     'not-webapp': !window.et.isWebApp,
-    'system-ui': store.config.useSystemTitleBar,
-    'not-system-ui': !store.config.useSystemTitleBar,
+    'system-ui': config.useSystemTitleBar,
+    'not-system-ui': !config.useSystemTitleBar,
     'is-mac': isMac,
     'not-mac': !isMac,
     'is-win': isWin,
@@ -130,8 +164,8 @@ export default auto(function Index (props) {
   const bgTabs = config.terminalBackgroundImagePath === 'index' ||
                   config.terminalBackgroundImagePath === 'randomShape' ||
                   config.terminalBackgroundImagePath === textTerminalBgValue
-    ? store.getTabs().filter(tab => activeTabIds.includes(tab.id))
-    : store.getTabs().filter(tab =>
+    ? tabs.filter(tab => activeTabIds.includes(tab.id))
+    : tabs.filter(tab =>
       activeTabIds.includes(tab.id) && tab.terminalBackground?.terminalBackgroundImagePath
     )
   const confsCss = {
@@ -233,14 +267,20 @@ export default auto(function Index (props) {
     aiChatHistory: store.aiChatHistory,
     config,
     selectedTabIds: store.batchInputSelectedTabIds,
-    tabs: store.getTabs(),
-    activeTabId: store.activeTabId,
+    tabs,
+    activeTabId,
     showAIConfig: store.showAIConfig,
     rightPanelTab,
     agentRunning: store.agentRunning
   }
   const cmdSuggestionsProps = {
     suggestions: store.terminalCommandSuggestions
+  }
+  const terminalWorkspaceProps = {
+    className: classnames('terminal-workspace-layer', {
+      'fleet-status-active': fleetStatusActive
+    }),
+    ...getTerminalWorkspaceAccessibility(fleetStatusActive)
   }
   return (
     <ConfigProvider
@@ -274,8 +314,14 @@ export default auto(function Index (props) {
         >
           <AIGShellTopBar store={store} />
           <Sidebar {...sidebarProps} />
-          <Layout
+          <div {...terminalWorkspaceProps}>
+            <Layout
+              store={store}
+            />
+          </div>
+          <FleetStatusWorkspace
             store={store}
+            active={fleetStatusActive}
           />
         </div>
         <ConfirmModalStore
@@ -290,7 +336,7 @@ export default auto(function Index (props) {
         <InfoModal {...infoModalProps} />
         <RightSidePanel {...rightPanelProps}>
           <AIChat {...aiChatProps} />
-          <TerminalInfo key={store.activeTabId} {...terminalInfoProps} />
+          <TerminalInfo key={activeTabId} {...terminalInfoProps} />
         </RightSidePanel>
         <SshConfigLoadNotify {...sshConfigProps} />
         <LoadSshConfigs

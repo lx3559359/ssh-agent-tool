@@ -5,7 +5,7 @@
 
 import uid from '../common/uid'
 import { settingMap } from '../common/constants'
-import { refs, refsTabs } from '../components/common/ref'
+import { refs, refsStatic, refsTabs } from '../components/common/ref'
 import { runCmd } from '../components/terminal/terminal-apis'
 import deepCopy from 'json-deep-copy'
 import {
@@ -23,6 +23,7 @@ import {
   runZmodemUploadSafety
 } from './mcp-zmodem-safety.js'
 import { createBackgroundTaskRegistry } from '../common/safety-transactions/background-task-registry.js'
+import { decodeUtf8Chunk } from '../common/utf8-chunk.js'
 
 export default Store => {
   // Initialize MCP handler - called when MCP widget is started
@@ -421,14 +422,9 @@ export default Store => {
 
   Store.prototype.mcpSwitchTab = function (args) {
     const { store } = window
-    const tab = store.tabs.find(t => t.id === args.tabId)
+    const tab = store.changeActiveTabId(args.tabId)
     if (!tab) {
       throw new Error(`Tab not found: ${args.tabId}`)
-    }
-
-    store.activeTabId = args.tabId
-    if (tab.batch !== undefined) {
-      store[`activeTabId${tab.batch}`] = args.tabId
     }
 
     return {
@@ -950,11 +946,39 @@ export default Store => {
     if (!remotePath) {
       throw new Error('remotePath is required')
     }
-    const content = await sftp.readFile(remotePath)
-    return { tabId, host: tab.host, path: remotePath, content }
+    const requestedMaxBytes = Number(args.maxBytes)
+    const maxBytes = Number.isSafeInteger(requestedMaxBytes) && requestedMaxBytes > 0
+      ? Math.max(4, Math.min(requestedMaxBytes, 64 * 1024))
+      : 64 * 1024
+    const requestedOffset = Number(args.offset)
+    const offset = Number.isSafeInteger(requestedOffset) && requestedOffset >= 0
+      ? requestedOffset
+      : 0
+    const chunk = await sftp.readFileChunk(remotePath, { offset, maxBytes })
+    const binary = globalThis.atob(String(chunk.base64 || ''))
+    const bytes = new Uint8Array(binary.length)
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index)
+    }
+    const decoded = decodeUtf8Chunk(bytes, {
+      offset: chunk.offset,
+      totalBytes: chunk.totalBytes,
+      hasMore: chunk.hasMore
+    })
+    return {
+      tabId,
+      host: tab.host,
+      path: remotePath,
+      ...decoded
+    }
   }
 
-  Store.prototype.mcpSftpDel = async function (args) {
+  Store.prototype.mcpSftpDel = async function (args, options = {}) {
+    if (options.signal?.aborted) {
+      const error = new Error('SFTP delete cancelled')
+      error.name = 'AbortError'
+      throw error
+    }
     const { sftp, sftpEntry, tab, tabId } = window.store.mcpGetSshSftpRef(args.tabId)
     const remotePath = args.remotePath
     if (!remotePath) {
@@ -962,6 +986,11 @@ export default Store => {
     }
     // Use stat to determine if it's a file or directory
     const stat = await sftp.stat(remotePath)
+    if (options.signal?.aborted) {
+      const error = new Error('SFTP delete cancelled')
+      error.name = 'AbortError'
+      throw error
+    }
     const isDirectory = typeof stat.isDirectory === 'function'
       ? stat.isDirectory()
       : !!stat.isDirectory
@@ -970,7 +999,7 @@ export default Store => {
       type: 'remote',
       isDirectory
     }
-    const success = await sftpEntry.delFiles('remote', [file])
+    const success = await sftpEntry.delFiles('remote', [file], options)
     return {
       success,
       recoverable: Boolean(success),
@@ -1071,6 +1100,23 @@ export default Store => {
       transferId: transferItem.id,
       tabId
     }
+  }
+
+  Store.prototype.mcpSftpCancelTransfer = async function ({ transferId } = {}) {
+    const { store } = window
+    const id = String(transferId || '')
+    const transfer = store.fileTransfers.find(item => item.id === id)
+    if (!transfer) {
+      return { success: false, transferId: id, message: 'Transfer not found' }
+    }
+    const queue = refsStatic.get('transfer-queue')
+    if (queue) {
+      queue.addToQueue('delete', id)
+    } else {
+      const index = store.fileTransfers.findIndex(item => item.id === id)
+      if (index >= 0) store.fileTransfers.splice(index, 1)
+    }
+    return { success: true, transferId: id }
   }
 
   // ==================== Transfer List/History APIs ====================

@@ -1,0 +1,181 @@
+const TAB_SCOPED_AGENT_TOOLS = new Set([
+  'send_terminal_command',
+  'get_terminal_output',
+  'sftp_list',
+  'sftp_stat',
+  'sftp_read_file',
+  'sftp_del',
+  'sftp_upload',
+  'sftp_download',
+  'get_terminal_status',
+  'cancel_terminal_command',
+  'run_background_command'
+])
+
+const MAX_AGENT_CONTEXT_CHARS = 92 * 1024
+const MAX_AGENT_BASE_CHARS = 32 * 1024
+const MAX_AGENT_MESSAGE_CHARS = 16 * 1024
+const MAX_AGENT_TOOL_ARGUMENT_CHARS = 4 * 1024
+const MAX_AGENT_RUNTIME_MESSAGES = 32
+
+function boundedText (value, maxChars = MAX_AGENT_MESSAGE_CHARS) {
+  const text = String(value ?? '')
+  if (text.length <= maxChars) return text
+  const marker = `\n...[已截断 ${text.length - maxChars} 个字符]...\n`
+  const available = Math.max(0, maxChars - marker.length)
+  const head = Math.ceil(available / 2)
+  return text.slice(0, head) + marker + text.slice(text.length - (available - head))
+}
+
+function boundedToolCalls (toolCalls = []) {
+  return toolCalls.map(toolCall => {
+    const args = String(toolCall?.function?.arguments || '')
+    return {
+      ...toolCall,
+      function: {
+        ...(toolCall.function || {}),
+        arguments: args.length <= MAX_AGENT_TOOL_ARGUMENT_CHARS
+          ? args
+          : JSON.stringify({
+            truncated: true,
+            originalCharacters: args.length
+          })
+      }
+    }
+  })
+}
+
+function boundedMessage (message = {}) {
+  return {
+    ...message,
+    content: boundedText(message.content),
+    ...(Array.isArray(message.tool_calls)
+      ? { tool_calls: boundedToolCalls(message.tool_calls) }
+      : {})
+  }
+}
+
+function serializedLength (value) {
+  return JSON.stringify(value).length
+}
+
+function takeRecentMessages (messages, maxChars, maxMessages = Infinity) {
+  const selected = []
+  let used = 0
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = boundedMessage(messages[index])
+    const size = serializedLength(message)
+    if (selected.length && (used + size > maxChars || selected.length >= maxMessages)) break
+    if (!selected.length || size <= maxChars) {
+      selected.unshift(message)
+      used += size
+    }
+  }
+  return selected
+}
+
+function groupRuntimeMessages (messages = []) {
+  const groups = []
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index]
+    if (message?.role === 'tool') continue
+    const group = [message]
+    if (message?.role === 'assistant' && message.tool_calls?.length) {
+      const ids = new Set(message.tool_calls.map(call => call.id))
+      while (
+        index + 1 < messages.length &&
+        messages[index + 1]?.role === 'tool' &&
+        ids.has(messages[index + 1].tool_call_id)
+      ) {
+        group.push(messages[++index])
+      }
+    }
+    groups.push(group)
+  }
+  return groups
+}
+
+export function boundAgentToolResult (value) {
+  let text
+  if (typeof value === 'string') {
+    text = value
+  } else {
+    try {
+      text = JSON.stringify(value)
+    } catch (error) {
+      text = String(value ?? '')
+    }
+  }
+  return boundedText(text)
+}
+
+export function buildBoundedAgentMessages (baseMessages = [], runtimeMessages = []) {
+  const system = boundedMessage(baseMessages[0] || { role: 'system', content: '' })
+  const base = takeRecentMessages(baseMessages.slice(1), MAX_AGENT_BASE_CHARS)
+  const fixed = [system, ...base]
+  let remainingChars = Math.max(
+    MAX_AGENT_MESSAGE_CHARS,
+    MAX_AGENT_CONTEXT_CHARS - serializedLength(fixed)
+  )
+  let remainingMessages = MAX_AGENT_RUNTIME_MESSAGES
+  const selectedGroups = []
+  const groups = groupRuntimeMessages(runtimeMessages)
+  for (let index = groups.length - 1; index >= 0; index -= 1) {
+    const group = groups[index].map(boundedMessage)
+    const size = serializedLength(group)
+    if (group.length > remainingMessages || size > remainingChars) break
+    selectedGroups.unshift(group)
+    remainingChars -= size
+    remainingMessages -= group.length
+  }
+  return [...fixed, ...selectedGroups.flat()]
+}
+
+export function bindAgentToolArgs (toolName, args = {}, runtime = {}) {
+  const safeArgs = { ...(args || {}) }
+  if (
+    TAB_SCOPED_AGENT_TOOLS.has(toolName) &&
+    runtime.sourceTabId
+  ) {
+    safeArgs.tabId = runtime.sourceTabId
+  }
+  return safeArgs
+}
+
+export function assertAgentRuntimeActive (runtime = {}) {
+  if (!runtime.signal?.aborted) {
+    return
+  }
+  const error = new Error('Agent request cancelled')
+  error.name = 'AbortError'
+  throw error
+}
+
+export function registerAgentCancellation (runtime = {}, cancel) {
+  if (typeof cancel !== 'function') return () => {}
+  const cancellations = runtime.cancellations || new Set()
+  runtime.cancellations = cancellations
+  let active = true
+  const wrappedCancel = () => {
+    if (!active) return
+    active = false
+    cancellations.delete(wrappedCancel)
+    try {
+      Promise.resolve(cancel()).catch(() => {})
+    } catch (error) {
+      // Cancellation is best-effort and must not mask the original stop action.
+    }
+  }
+  cancellations.add(wrappedCancel)
+  if (runtime.signal?.aborted) wrappedCancel()
+  return () => {
+    active = false
+    cancellations.delete(wrappedCancel)
+  }
+}
+
+export function cancelAgentRuntimeOperations (runtime = {}) {
+  runtime.cancelActiveTool?.()
+  runtime.cancelActiveTool = null
+  for (const cancel of [...(runtime.cancellations || [])]) cancel()
+}

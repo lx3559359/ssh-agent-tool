@@ -191,7 +191,7 @@ test('AI configuration keeps save and test handlers while opting into the scoped
   )
   assert.deepEqual(callsIn(findFunction(ast, 'handleSubmit'), 'onSubmit'), [['ObjectExpression']])
   assert.deepEqual(callsIn(findFunction(ast, 'handleSubmit'), 'addHistoryItem'), [
-    ['STORAGE_KEY_CONFIG', 'nextValues', 'EVENT_NAME_CONFIG']
+    ['STORAGE_KEY_CONFIG', 'CallExpression', 'EVENT_NAME_CONFIG']
   ])
 
   const buttons = buttonHandlersIn(findFunction(ast, 'AIConfigForm'))

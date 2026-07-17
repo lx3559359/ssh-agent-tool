@@ -14,12 +14,21 @@ import {
 } from '../common/constants'
 import * as ls from '../common/safe-local-storage'
 import { refs, refsStatic } from '../components/common/ref'
+import message from '../components/common/message'
 import { action } from 'manate'
 import uid from '../common/uid'
 import deepCopy from 'json-deep-copy'
 import { isAIConfigMissing } from '../components/ai/ai-config-props'
 import { normalizeRightPanelWidth } from '../components/main/aigshell-layout'
 import { buildTerminalContextPrompt } from '../components/ai/ai-ssh-context'
+import {
+  closeFleetStatus as closeFleetStatusState,
+  openFleetStatus as openFleetStatusState
+} from '../components/fleet-status/fleet-status-navigation'
+import {
+  buildFleetStatusAiPrompt,
+  handoffFleetStatusPromptToAi
+} from '../components/fleet-status/fleet-status-ai-context'
 
 const e = window.translate
 const { assign } = Object
@@ -27,6 +36,14 @@ const { assign } = Object
 export default Store => {
   Store.prototype.storeAssign = function (updates) {
     assign(window.store, updates)
+  }
+
+  Store.prototype.openFleetStatus = function () {
+    return openFleetStatusState(window.store)
+  }
+
+  Store.prototype.closeFleetStatus = function () {
+    return closeFleetStatusState(window.store)
   }
 
   Store.prototype.onError = function (e) {
@@ -231,6 +248,23 @@ export default Store => {
     const { store } = window
     store.rightPanelVisible = true
     store.rightPanelTab = 'ai'
+  }
+
+  Store.prototype.onFleetStatusAiDiagnose = function (
+    rows,
+    selectedServices = []
+  ) {
+    const { store } = window
+    const prompt = buildFleetStatusAiPrompt({ rows, selectedServices })
+    store.handleOpenAIPanel()
+    handoffFleetStatusPromptToAi({
+      prompt,
+      getAiChat: () => refsStatic.get('AIChat'),
+      onUnavailable: () => {
+        message.warning('AI \u52a9\u624b\u5c1a\u672a\u51c6\u5907\u5b8c\u6210\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002')
+      }
+    })
+    return prompt
   }
 
   Store.prototype.explainWithAi = function (txt, source = 'selection') {

@@ -19,9 +19,13 @@ import {
 import { refs, refsStatic } from '../common/ref'
 import { getAIChatSubmitAction } from './ai-chat-submit'
 import {
+  adoptLegacyAIChatHistoryScope,
   appendAIChatHistory,
-  clearAIChatContext
+  cancelAndClearAIChatContext,
+  getAIChatHistoryForScope
 } from './ai-chat-actions'
+import { cancelAgentRun } from './agent'
+import { cancelDetachedAIStream } from './ai-chat-history-item'
 import {
   buildCommandSuggestionPrompt,
   buildTerminalContextPrompt
@@ -50,6 +54,12 @@ import {
 import {
   getActiveAIConfig
 } from './ai-profiles'
+import {
+  aiHealthCoordinator,
+  getAIHealthRequestKey,
+  resolveAIChatHealthTransitions
+} from './ai-health-coordinator'
+import { createAIRequestCredentialReference } from './ai-request-credentials'
 import message from '../common/message'
 import aiAgentCopy from './ai-agent-copy.json'
 import './ai.styl'
@@ -62,12 +72,24 @@ export default function AIChat (props) {
   const [mode, setMode] = useState('ask')
   const [attachmentQueue, setAttachmentQueue] = useState([])
   const fileInputRef = useRef(null)
+  const submittedHealthChecksRef = useRef(new Map())
   const isAgent = mode === 'agent'
   const submitDisabled = isAgent && props.agentRunning
   const activeAIConfig = useMemo(
     () => getActiveAIConfig(props.config),
     [props.config]
   )
+  const conversationScopeId = String(props.activeTabId || 'global')
+  const visibleHistory = useMemo(
+    () => getAIChatHistoryForScope(props.aiChatHistory, conversationScopeId),
+    [props.aiChatHistory, conversationScopeId]
+  )
+
+  useEffect(() => {
+    if (props.activeTabId) {
+      adoptLegacyAIChatHistoryScope(window.store, conversationScopeId)
+    }
+  }, [props.activeTabId, conversationScopeId, props.aiChatHistory])
 
   function handlePromptChange (e) {
     setPrompt(e.target.value)
@@ -89,6 +111,8 @@ export default function AIChat (props) {
       window.store.toggleAIConfig()
       return
     }
+
+    const userPrompt = String(submitPrompt || '').trim()
 
     if (shouldAutoAttachSelectedSftpFileContext(submitPrompt)) {
       const result = await buildSelectedSftpFileAnalysisPrompt({
@@ -136,28 +160,33 @@ export default function AIChat (props) {
     const chatId = uid()
     const chatEntry = {
       prompt: submitPrompt,
+      displayPrompt: userPrompt,
+      conversationScopeId: String(props.activeTabId || 'global'),
+      sourceTabId: String(props.activeTabId || ''),
+      completionStatus: 'pending',
       response: '',
       isStreaming: false,
       pending: true,
       sessionId: null,
       mode,
       toolCalls: [],
+      ...createAIRequestCredentialReference(activeAIConfig),
       ...pick(activeAIConfig, [
         'nameAI',
         'modelAI',
         'roleAI',
-        'baseURLAI',
-        'apiPathAI',
-        'apiKeyAI',
-        'authHeaderNameAI',
-        'proxyAI',
-        'languageAI',
-        'mcpServers'
+        'languageAI'
       ]),
       timestamp: Date.now(),
       id: chatId
     }
 
+    const healthKey = getAIHealthRequestKey(activeAIConfig)
+    submittedHealthChecksRef.current.set(chatId, {
+      key: healthKey,
+      seen: false
+    })
+    aiHealthCoordinator.recordChatStarted(healthKey)
     appendAIChatHistory(window.store, chatEntry, MAX_HISTORY)
     setPrompt(current =>
       replacePromptIfUnchanged(current, promptAtSubmit, '')
@@ -165,12 +194,12 @@ export default function AIChat (props) {
     setAttachmentQueue(current =>
       current === attachmentQueueAtSubmit ? [] : current
     )
-  }, [prompt, mode, activeAIConfig, attachmentQueue])
+  }, [prompt, mode, activeAIConfig, attachmentQueue, props.activeTabId])
 
   function renderHistory () {
     return (
       <AiChatHistory
-        history={props.aiChatHistory}
+        history={visibleHistory}
       />
     )
   }
@@ -179,8 +208,13 @@ export default function AIChat (props) {
     window.store.toggleAIConfig()
   }
 
-  function clearHistory () {
-    clearAIChatContext(window.store)
+  async function clearHistory () {
+    await cancelAndClearAIChatContext(window.store, conversationScopeId, {
+      cancelAgent: cancelAgentRun,
+      cancelDetachedStream: cancelDetachedAIStream,
+      cancelRequest: requestId => window.pre.runGlobalAsync('AIChatCancel', requestId),
+      stopStream: sessionId => window.pre.runGlobalAsync('stopStream', sessionId)
+    })
   }
 
   function setContextPrompt (source, text) {
@@ -476,6 +510,27 @@ export default function AIChat (props) {
       </button>
     )
   }
+
+  useEffect(() => {
+    const result = resolveAIChatHealthTransitions(
+      props.aiChatHistory,
+      submittedHealthChecksRef.current
+    )
+    submittedHealthChecksRef.current = result.tracked
+    for (const update of result.updates) {
+      aiHealthCoordinator.recordChatResult(update.key, {
+        ok: update.ok,
+        status: update.status,
+        message: update.ok
+          ? '当前模型已完成真实对话'
+          : '当前模型对话失败'
+      })
+    }
+  }, [props.aiChatHistory])
+
+  useEffect(() => () => {
+    submittedHealthChecksRef.current.clear()
+  }, [])
 
   useEffect(() => {
     refsStatic.add('AIChat', {

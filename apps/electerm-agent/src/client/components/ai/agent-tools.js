@@ -3,6 +3,11 @@ import { bookmarkSchemas } from '../../common/bookmark-schemas'
 import { confirmAgentToolExecution } from './agent-tool-confirm'
 import { runAgentTerminalCommand } from './agent-terminal-command.js'
 import {
+  assertAgentRuntimeActive,
+  bindAgentToolArgs,
+  registerAgentCancellation
+} from './agent-runtime-context.js'
+import {
   confirmAgentPlan,
   ensureAgentPlanConfirmed,
   markAgentPlanConfirmed
@@ -10,6 +15,17 @@ import {
 import {
   allowedLocalCliTools
 } from './agent-local-cli-tools'
+
+function createAgentOperationId (prefix) {
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+function registerAgentTransferCancellation (runtime, transferId) {
+  if (!transferId) return
+  registerAgentCancellation(runtime, () => (
+    window.store.mcpSftpCancelTransfer({ transferId })
+  ))
+}
 
 function buildAddBookmarkParameters () {
   const typeProperties = {}
@@ -273,6 +289,17 @@ export const agentTools = [
           tabId: {
             type: 'string',
             description: 'SSH/FTP 标签页 ID。省略时使用当前活动标签页。'
+          },
+          offset: {
+            type: 'integer',
+            minimum: 0,
+            description: '续读起始字节。首次读取填 0，后续使用上次返回的 nextOffset。'
+          },
+          maxBytes: {
+            type: 'integer',
+            minimum: 4,
+            maximum: 64 * 1024,
+            description: '本次最多读取的字节数，最大 65536。'
           }
         },
         required: ['remotePath']
@@ -535,11 +562,14 @@ export const agentTools = [
   }
 ]
 
-export async function executeToolCall (toolName, args, runtime) {
+export async function executeToolCall (toolName, rawArgs, runtime) {
   const store = window.store
+  const args = bindAgentToolArgs(toolName, rawArgs, runtime)
+  assertAgentRuntimeActive(runtime)
   switch (toolName) {
     case 'confirm_agent_plan': {
       const confirmation = await confirmAgentPlan({ args })
+      assertAgentRuntimeActive(runtime)
       markAgentPlanConfirmed(runtime, confirmation)
       return JSON.stringify(confirmation)
     }
@@ -552,11 +582,26 @@ export async function executeToolCall (toolName, args, runtime) {
         toolName,
         args
       })
+      assertAgentRuntimeActive(runtime)
       if (!confirmation.accepted) {
         return JSON.stringify(confirmation)
       }
-      const idleResult = await runAgentTerminalCommand({ store, args })
-      return JSON.stringify(idleResult)
+      const cancelTerminal = () => {
+        try {
+          store.mcpCancelTerminalCommand({ tabId: args.tabId })
+        } catch (error) {
+          // The terminal may already be idle or closed.
+        }
+      }
+      runtime.cancelActiveTool = cancelTerminal
+      try {
+        const idleResult = await runAgentTerminalCommand({ store, args })
+        return JSON.stringify(idleResult)
+      } finally {
+        if (runtime.cancelActiveTool === cancelTerminal) {
+          runtime.cancelActiveTool = null
+        }
+      }
     }
     case 'get_terminal_output':
       return JSON.stringify(store.mcpGetTerminalOutput(args))
@@ -590,12 +635,23 @@ export async function executeToolCall (toolName, args, runtime) {
       return JSON.stringify(await store.mcpSftpStat(args))
     case 'sftp_read_file':
       return JSON.stringify(await store.mcpSftpReadFile(args))
-    case 'sftp_del':
-      return JSON.stringify(await store.mcpSftpDel(args))
-    case 'sftp_upload':
-      return JSON.stringify(await store.mcpSftpUpload(args))
-    case 'sftp_download':
-      return JSON.stringify(await store.mcpSftpDownload(args))
+    case 'sftp_del': {
+      const result = await store.mcpSftpDel(args, { signal: runtime.signal })
+      assertAgentRuntimeActive(runtime)
+      return JSON.stringify(result)
+    }
+    case 'sftp_upload': {
+      const result = await store.mcpSftpUpload(args)
+      registerAgentTransferCancellation(runtime, result?.transferId)
+      assertAgentRuntimeActive(runtime)
+      return JSON.stringify(result)
+    }
+    case 'sftp_download': {
+      const result = await store.mcpSftpDownload(args)
+      registerAgentTransferCancellation(runtime, result?.transferId)
+      assertAgentRuntimeActive(runtime)
+      return JSON.stringify(result)
+    }
     case 'sftp_transfer_list':
       return JSON.stringify(store.mcpSftpTransferList())
     case 'sftp_transfer_history':
@@ -617,10 +673,24 @@ export async function executeToolCall (toolName, args, runtime) {
         toolName,
         args
       })
+      assertAgentRuntimeActive(runtime)
       if (!confirmation.accepted) {
         return JSON.stringify(confirmation)
       }
-      return JSON.stringify(await window.pre.runGlobalAsync('runLocalCli', args))
+      const requestId = createAgentOperationId('local-cli')
+      const clearCancellation = registerAgentCancellation(runtime, () => (
+        window.pre.runGlobalAsync('cancelLocalCli', requestId)
+      ))
+      try {
+        const result = await window.pre.runGlobalAsync('runLocalCli', {
+          ...args,
+          requestId
+        })
+        assertAgentRuntimeActive(runtime)
+        return JSON.stringify(result)
+      } finally {
+        clearCancellation()
+      }
     }
     case 'run_background_command': {
       const planGuard = ensureAgentPlanConfirmed({ toolName, runtime })
@@ -631,10 +701,18 @@ export async function executeToolCall (toolName, args, runtime) {
         toolName,
         args
       })
+      assertAgentRuntimeActive(runtime)
       if (!confirmation.accepted) {
         return JSON.stringify(confirmation)
       }
-      return JSON.stringify(await store.mcpRunBackgroundCommand(args))
+      const result = await store.mcpRunBackgroundCommand(args)
+      if (result?.taskId) {
+        registerAgentCancellation(runtime, () => (
+          store.mcpCancelBackgroundTask({ taskId: result.taskId })
+        ))
+      }
+      assertAgentRuntimeActive(runtime)
+      return JSON.stringify(result)
     }
     case 'get_background_task_status':
       return JSON.stringify(await store.mcpGetBackgroundTaskStatus(args))

@@ -95,18 +95,41 @@
   border-color var(--success)
   color var(--success)
   background var(--main)
+  display inline-flex
+  align-items center
+  gap 4px
+  cursor pointer
+  user-select none
   &.not-configured
     border-color var(--warn)
     color var(--warn)
+  &.checking
+    border-color var(--primary)
+    color var(--primary)
+  &.reachable
+    border-color var(--primary)
+    color var(--primary)
   &.pending
     border-color var(--warn)
     color var(--warn)
   &.available
     border-color var(--success)
     color var(--success)
-  &.error
+  &.auth-error,
+  &.model-error,
+  &.quota-error,
+  &.network-error
     border-color var(--danger)
     color var(--danger)
+  &.stale
+    border-color var(--warn)
+    color var(--warn)
+  &:focus-visible
+    outline 1px solid var(--primary)
+    outline-offset 2px
+
+.right-panel-model-status-refresh
+  font-size 11px
 
 .right-side-panel-controls
   color var(--text)

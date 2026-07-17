@@ -6,6 +6,21 @@ const path = require('node:path')
 const root = path.resolve(__dirname, '../..')
 const read = file => fs.readFileSync(path.join(root, file), 'utf8')
 
+function toDataUrl (source) {
+  return `data:text/javascript;base64,${Buffer.from(source).toString('base64')}`
+}
+
+async function importMainGuards () {
+  const source = read('src/client/components/main/main.jsx')
+  const start = source.indexOf('export function getSafeRightPanelTitle')
+  const componentStart = /\r?\n\r?\nexport default/.exec(source.slice(start))
+  const end = componentStart ? start + componentStart.index : -1
+
+  assert.notEqual(start, -1, 'safe right panel title resolver must be exported from main')
+  assert.notEqual(end, -1, 'safe right panel title resolver must end before the main component')
+  return import(toDataUrl(source.slice(start, end)))
+}
+
 test('Windows test preparation uses cross-env and a current Playwright version', () => {
   const pkg = JSON.parse(read('package.json'))
   const script = pkg.scripts['prepare-test']
@@ -80,4 +95,72 @@ test('right AI panel title avoids duplicate AI wording', () => {
 
   assert.doesNotMatch(sidePanel, /\{tag\}\s*\{isAI\s*\?\s*'AI\s/)
   assert.match(sidePanel, /isAI\s*\?\s*'助手'/)
+})
+
+test('renderer shell guards empty tabs and a missing current tab', () => {
+  const main = read('src/client/components/main/main.jsx')
+
+  assert.match(main, /const\s+tabs\s*=\s*\(store\.getTabs\(\)\s*\|\|\s*\[\]\)\.filter\(Boolean\)/)
+  assert.match(main, /const\s+currentTab\s*=\s*store\.currentTab\s*\|\|\s*null/)
+  assert.match(main, /const\s+activeTabId\s*=\s*currentTab\?\.id\s*\|\|\s*store\.activeTabId\s*\|\|\s*''/)
+  assert.doesNotMatch(main, /store\.getTabs\(\)\.filter/)
+})
+
+test('renderer shell and right AI panel tolerate a null config', () => {
+  const main = read('src/client/components/main/main.jsx')
+  const sidePanel = read('src/client/components/side-panel-r/side-panel-r.jsx')
+
+  assert.match(main, /const\s+rawConfig\s*=\s*store\.config/)
+  assert.match(main, /const\s+config\s*=\s*rawConfig\s*\|\|\s*\{\}/)
+  assert.doesNotMatch(main, /store\.config\.useSystemTitleBar/)
+  assert.match(sidePanel, /const\s+safeConfig\s*=\s*config\s*\|\|\s*\{\}/)
+  assert.match(sidePanel, /getActiveAIConfig\(safeConfig\)\s*\|\|\s*\{\}/)
+  assert.doesNotMatch(sidePanel, /getActiveAIConfig\(config\)/)
+})
+
+test('renderer shell reads the right panel title only after raw config is available', async () => {
+  const { getSafeRightPanelTitle } = await importMainGuards()
+  let configAvailable = false
+  let titleReads = 0
+  const store = {
+    get rightPanelTitle () {
+      titleReads += 1
+      if (!configAvailable) {
+        throw new Error('rightPanelTitle read before config fallback')
+      }
+      return 'AI assistant'
+    }
+  }
+
+  assert.equal(getSafeRightPanelTitle(store, null), '')
+  assert.equal(titleReads, 0)
+  configAvailable = true
+  assert.equal(getSafeRightPanelTitle(store, {}), 'AI assistant')
+  assert.equal(titleReads, 1)
+
+  const main = read('src/client/components/main/main.jsx')
+  const storeDestructureStart = main.indexOf('const {', main.indexOf('const { store }'))
+  const storeDestructureEnd = main.indexOf('} = store', storeDestructureStart)
+  const storeDestructure = main.slice(storeDestructureStart, storeDestructureEnd)
+  const rawConfigIndex = main.indexOf('const rawConfig = store.config')
+  const configFallbackIndex = main.indexOf('const config = rawConfig || {}')
+  const titleIndex = main.indexOf('const rightPanelTitle = getSafeRightPanelTitle')
+
+  assert.doesNotMatch(storeDestructure, /rightPanelTitle/)
+  assert.notEqual(rawConfigIndex, -1)
+  assert.ok(
+    titleIndex > configFallbackIndex && configFallbackIndex > rawConfigIndex,
+    'rightPanelTitle must be resolved after the raw config fallback'
+  )
+})
+
+test('renderer startup cleanup only owns component callbacks listeners and timers', () => {
+  const main = read('src/client/components/main/main.jsx')
+
+  assert.doesNotMatch(main, /createAsyncResultGuard|asyncResultGuard\.run/)
+  assert.match(main, /store\.initData\(\)/)
+  assert.match(main, /return\s*\(\)\s*=>\s*\{/)
+  assert.match(main, /clearTimeout\(resizeTimer\)/)
+  assert.match(main, /window\.removeEventListener\('resize', store\.onResize\)/)
+  assert.match(main, /ipcOffEvent\('open-tab', openTab\)/)
 })

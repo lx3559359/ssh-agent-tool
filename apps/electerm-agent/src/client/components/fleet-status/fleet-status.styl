@@ -1,0 +1,322 @@
+.terminal-workspace-layer.fleet-status-active
+  > *:not(.main-footer)
+    visibility hidden
+    pointer-events none
+  > .main-footer
+    pointer-events none
+
+.fleet-status-workspace
+  box-sizing border-box
+  position absolute
+  z-index 90
+  display flex
+  min-width 0
+  overflow hidden
+  visibility hidden
+  opacity 0
+  pointer-events none
+  background var(--main)
+  color var(--text)
+  transition opacity .12s ease
+
+.fleet-status-workspace-active
+  visibility visible
+  opacity 1
+  pointer-events auto
+
+.fleet-status-scroll
+  box-sizing border-box
+  display flex
+  flex-direction column
+  width 100%
+  height 100%
+  min-width 0
+  padding 18px 20px
+  overflow hidden
+
+.fleet-status-header
+  flex none
+  display flex
+  align-items center
+  justify-content space-between
+  gap 16px
+  min-width 0
+  padding-bottom 14px
+
+.fleet-status-heading
+  min-width 0
+  h1
+    margin 0
+    color var(--text-light)
+    font-size 20px
+    line-height 28px
+    font-weight 650
+    letter-spacing 0
+
+.fleet-status-bookmark-count
+  box-sizing border-box
+  flex none
+  display flex
+  align-items baseline
+  gap 8px
+  padding 6px 9px
+  border 1px solid var(--main-darker)
+  border-radius 6px
+  background var(--main-light)
+  color var(--text-dark)
+  font-size 12px
+  strong
+    color var(--text-light)
+    font-size 17px
+    line-height 22px
+
+.fleet-status-toolbar
+  flex none
+  display flex
+  align-items center
+  flex-wrap wrap
+  gap 8px
+  min-width 0
+  padding 10px 0
+  border-top 1px solid var(--main-darker)
+  border-bottom 1px solid var(--main-darker)
+
+.fleet-status-search
+  width 240px
+
+.fleet-status-filter
+  width 136px
+
+.fleet-status-cache-hint
+.fleet-status-selected-count
+  color var(--text-dark)
+  font-size 12px
+  line-height 20px
+  white-space nowrap
+
+.fleet-status-cache-hint
+  margin-left auto
+
+.fleet-status-selected-count
+  color var(--text-light)
+
+.fleet-status-batch-bar
+  position sticky
+  top 0
+  z-index 8
+  flex none
+  display flex
+  align-items center
+  flex-wrap wrap
+  gap 8px
+  min-width 0
+  min-height 40px
+  padding 6px 8px
+  border-bottom 1px solid var(--main-darker)
+  background var(--main-light)
+  color var(--text)
+  font-size 12px
+  strong
+    margin-right 4px
+
+.fleet-status-disabled-action
+  display inline-flex
+
+.fleet-status-table-scroll
+  flex 1
+  min-width 0
+  min-height 0
+  overflow-x auto
+  overflow-y auto
+  border-bottom 1px solid var(--main-darker)
+
+.fleet-status-table
+  width 100%
+  min-width 1900px
+  border-collapse separate
+  border-spacing 0
+  table-layout fixed
+  color var(--text)
+  font-size 12px
+  th
+  td
+    box-sizing border-box
+    height 38px
+    padding 7px 9px
+    overflow hidden
+    border-right 1px solid var(--main-darker)
+    border-bottom 1px solid var(--main-darker)
+    background var(--main)
+    text-align left
+    text-overflow ellipsis
+    vertical-align middle
+    white-space nowrap
+  th
+    position sticky
+    top 0
+    z-index 4
+    height 36px
+    background var(--main-light)
+    color var(--text-light)
+    font-weight 600
+  th:nth-child(1)
+    width 38px
+  th:nth-child(2)
+    width 190px
+  th:nth-child(3)
+    width 120px
+  th:nth-child(4)
+    width 170px
+  th:nth-child(5)
+    width 150px
+  th:nth-child(6)
+  th:nth-child(7)
+  th:nth-child(8)
+  th:nth-child(9)
+    width 82px
+  th:nth-child(10)
+    width 120px
+  th:nth-child(11)
+    width 220px
+  th:nth-child(12)
+    width 150px
+  th:nth-child(13)
+  th:nth-child(14)
+    width 210px
+  th:nth-child(15)
+    width 170px
+
+.fleet-status-table .fleet-status-selection-cell
+  position sticky
+  left 0
+  z-index 5
+  width 38px
+  padding-right 7px
+  padding-left 10px
+  background var(--main)
+
+.fleet-status-table th.fleet-status-selection-cell
+  z-index 7
+  background var(--main-light)
+
+.fleet-status-table .fleet-status-name-cell
+  position sticky
+  left 38px
+  z-index 3
+  background var(--main)
+
+.fleet-status-table th.fleet-status-name-cell
+  z-index 6
+  background var(--main-light)
+
+.fleet-status-table tbody tr:hover td
+  background var(--main-lighter)
+
+.fleet-status-table tbody tr:hover .fleet-status-selection-cell
+.fleet-status-table tbody tr:hover .fleet-status-name-cell
+  background var(--main-lighter)
+
+.fleet-status-name-content
+  display grid
+  grid-template-columns minmax(0, 1fr) 24px
+  align-items center
+  gap 4px
+  min-width 0
+  strong
+    overflow hidden
+    text-overflow ellipsis
+    white-space nowrap
+  .ant-btn
+    width 24px
+    min-width 24px
+    height 24px
+    padding 0
+
+.fleet-status-wide-value
+  max-width 220px
+
+.fleet-status-state
+  display inline-flex
+  align-items center
+  gap 5px
+  max-width 100%
+  overflow hidden
+  text-overflow ellipsis
+  white-space nowrap
+  &::before
+    content ''
+    flex none
+    width 7px
+    height 7px
+    border-radius 50%
+    background var(--text-disabled)
+
+.fleet-status-state-healthy
+  color var(--success)
+  &::before
+    background var(--success)
+
+.fleet-status-state-warning
+  color var(--warning, #d89614)
+  &::before
+    background var(--warning, #d89614)
+
+.fleet-status-state-critical
+.fleet-status-state-offline
+  color var(--error)
+  &::before
+    background var(--error)
+
+.fleet-status-state-cancelled
+.fleet-status-state-permission
+.fleet-status-state-unsupported
+  color var(--text-dark)
+
+.fleet-status-no-results
+  height 160px !important
+  color var(--text-dark)
+  text-align center !important
+
+.fleet-status-empty
+  box-sizing border-box
+  flex 1
+  display flex
+  flex-direction column
+  align-items center
+  justify-content center
+  min-width 0
+  min-height 220px
+  gap 12px
+  overflow hidden
+  border-bottom 1px solid var(--main-darker)
+  text-align center
+  h2
+    margin 0
+    color var(--text-light)
+    font-size 16px
+    line-height 24px
+    font-weight 600
+    letter-spacing 0
+  p
+    margin -6px 0 0
+    color var(--text-dark)
+    font-size 12px
+    line-height 20px
+
+.fleet-status-empty-icon
+  color var(--text-disabled)
+  font-size 32px
+
+@media (max-width: 760px)
+  .fleet-status-scroll
+    padding 12px
+  .fleet-status-header
+    gap 10px
+  .fleet-status-search
+    width 100%
+  .fleet-status-filter
+    flex 1
+    min-width 120px
+  .fleet-status-cache-hint
+    flex-basis 100%
+    margin-left 0
