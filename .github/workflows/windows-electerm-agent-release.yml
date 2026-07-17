@@ -131,6 +131,7 @@ jobs:
         with:
           draft: true
           tag_name: ${{ steps.package-version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           name: ShellPilot ${{ steps.package-version.outputs.tag }}
           files: |
             apps/electerm-agent/dist/ShellPilot-*-win-x64-installer.exe

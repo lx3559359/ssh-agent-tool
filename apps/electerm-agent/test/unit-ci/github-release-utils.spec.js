@@ -163,6 +163,7 @@ test('windows release workflow requires an explicit manual stable release confir
   assert.match(workflow, /id:\s+package-version/)
   assert.match(workflow, /tag=v\$version/)
   assert.match(workflow, /tag_name:\s+\$\{\{ steps\.package-version\.outputs\.tag \}\}/)
+  assert.match(workflow, /target_commitish:\s+\$\{\{ github\.sha \}\}/)
 })
 
 test('windows release workflow verifies the portable zip contents before upload', () => {
