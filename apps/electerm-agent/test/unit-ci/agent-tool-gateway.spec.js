@@ -2,6 +2,7 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
+const { createRiskPreparation } = require('./agent-risk-fixture.js')
 
 const aiRoot = path.resolve(__dirname, '../../src/client/components/ai')
 const gatewayUrl = pathToFileURL(path.join(aiRoot, 'agent-tool-gateway.js')).href
@@ -119,7 +120,11 @@ test('gateway sends readonly directly and prepares risky work', async () => {
       prepareRisky: async context => {
         prepares += 1
         assert.equal(context.descriptor.name, toolName)
-        preparedValue = { frozen: true }
+        preparedValue = await createRiskPreparation({
+          toolName,
+          args,
+          endpoint: endpoint()
+        })
         return preparedValue
       },
       execute: async (_endpoint, preparation) => {
@@ -131,4 +136,62 @@ test('gateway sends readonly directly and prepares risky work', async () => {
     assert.equal(executions, 1, toolName)
     assert.equal(executePreparation, expectedPrepare ? preparedValue : undefined)
   }
+})
+
+test('gateway rejects argument mutation and endpoint replacement after confirmation', async () => {
+  const { executeAgentTool } = await import(gatewayUrl)
+  const args = { command: 'systemctl restart nginx' }
+  const registry = await activeRegistry()
+  const replacement = {
+    ...endpoint(),
+    tabId: 'tab-b',
+    pid: 'pid-b',
+    terminalPid: 'terminal-b',
+    hostKeyFingerprint: 'SHA256:b'
+  }
+  registry.enable(replacement)
+  registry.transition(replacement, 'active-idle')
+  let currentEndpoint = endpoint()
+  let executions = 0
+  let invalidations = 0
+
+  await assert.rejects(executeAgentTool({
+    toolName: 'send_terminal_command',
+    args,
+    endpoint: endpoint(),
+    resolveEndpoint: () => currentEndpoint,
+    registry,
+    prepareRisky: async () => {
+      const prepared = await createRiskPreparation({
+        args,
+        endpoint: endpoint()
+      })
+      args.command = 'systemctl restart sshd'
+      return prepared
+    },
+    invalidateRisky: async () => { invalidations += 1 },
+    execute: async () => { executions += 1 }
+  }), error => error.code === 'PLAN_BINDING_CHANGED')
+  assert.equal(executions, 0)
+
+  args.command = 'systemctl restart nginx'
+  await assert.rejects(executeAgentTool({
+    toolName: 'send_terminal_command',
+    args,
+    endpoint: endpoint(),
+    resolveEndpoint: () => currentEndpoint,
+    registry,
+    prepareRisky: async () => {
+      const prepared = await createRiskPreparation({
+        args,
+        endpoint: endpoint()
+      })
+      currentEndpoint = replacement
+      return prepared
+    },
+    invalidateRisky: async () => { invalidations += 1 },
+    execute: async () => { executions += 1 }
+  }), error => error.code === 'PLAN_BINDING_CHANGED')
+  assert.equal(executions, 0)
+  assert.equal(invalidations, 2)
 })

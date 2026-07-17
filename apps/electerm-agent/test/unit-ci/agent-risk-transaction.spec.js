@@ -7,6 +7,10 @@ const moduleUrl = pathToFileURL(path.resolve(
   __dirname,
   '../../src/client/components/ai/agent-risk-transaction.js'
 )).href
+const grantModuleUrl = pathToFileURL(path.resolve(
+  __dirname,
+  '../../src/client/components/ai/agent-plan-grant.js'
+)).href
 
 const endpoint = Object.freeze({
   host: 'srv.test',
@@ -68,7 +72,8 @@ test('builds a deeply frozen auditable risk transaction and rejects unsafe calls
 test('combines transactions only when all authorization boundaries remain compatible', async () => {
   const {
     buildRiskTransaction,
-    canCombineRiskTransactions
+    canCombineRiskTransactions,
+    combineRiskTransactions
   } = await import(moduleUrl)
   const base = buildRiskTransaction([restartCall()], context())
   const same = buildRiskTransaction([restartCall()], context())
@@ -85,7 +90,7 @@ test('combines transactions only when all authorization boundaries remain compat
   assert.equal(canCombineRiskTransactions(base, buildRiskTransaction(
     [restartCall('systemctl stop nginx')],
     context()
-  )), false)
+  )), true)
   assert.equal(canCombineRiskTransactions(base, buildRiskTransaction(
     [restartCall()],
     context({ affectedObjects: ['service:nginx', 'file:/etc/nginx/nginx.conf'] })
@@ -102,6 +107,16 @@ test('combines transactions only when all authorization boundaries remain compat
     [restartCall()],
     context({ verification: [] })
   )), false)
+
+  const combined = combineRiskTransactions([
+    base,
+    buildRiskTransaction([restartCall('systemctl stop nginx')], context())
+  ])
+  assert.deepEqual(combined.calls.map(call => call.command), [
+    'systemctl restart nginx',
+    'systemctl stop nginx'
+  ])
+  assert.equal(Object.isFrozen(combined), true)
 })
 
 test('confirmation creates a grant and cancellation records zero-step audit', async () => {
@@ -149,4 +164,38 @@ test('confirmation creates a grant and cancellation records zero-step audit', as
   assert.match(accepted.planGrant.digest, /^[a-f0-9]{64}$/)
   assert.equal(patched.at(-1).value.status, 'running-change')
   assert.equal(dispatches, 1)
+})
+
+test('a combined grant binds each ordered call at its exact batch index', async () => {
+  const {
+    buildRiskPlanPayload,
+    buildRiskTransaction,
+    validateConfirmedRiskTransaction
+  } = await import(moduleUrl)
+  const { createPlanGrant } = await import(grantModuleUrl)
+  const transaction = buildRiskTransaction([
+    restartCall('systemctl stop nginx'),
+    restartCall('systemctl start nginx')
+  ], context())
+  const grant = await createPlanGrant(buildRiskPlanPayload(transaction), {
+    confirmedBy: 'user'
+  })
+
+  const validated = await validateConfirmedRiskTransaction({
+    transaction,
+    planGrant: grant,
+    endpoint,
+    toolName: 'send_terminal_command',
+    args: { command: 'systemctl start nginx' },
+    callIndex: 1
+  })
+  assert.equal(validated.command, 'systemctl start nginx')
+  await assert.rejects(validateConfirmedRiskTransaction({
+    transaction,
+    planGrant: grant,
+    endpoint,
+    toolName: 'send_terminal_command',
+    args: { command: 'systemctl start nginx' },
+    callIndex: 0
+  }), error => error.code === 'PLAN_BINDING_CHANGED')
 })

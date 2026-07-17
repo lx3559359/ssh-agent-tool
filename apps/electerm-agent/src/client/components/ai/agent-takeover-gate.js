@@ -42,6 +42,7 @@ export async function executeAgentToolWithGate ({
   registry,
   risk = false,
   prepare,
+  validate,
   verify,
   execute,
   signal
@@ -100,6 +101,10 @@ export async function executeAgentToolWithGate ({
       if (changing) transition('awaiting-risk-confirmation', 'active-idle')
       return prepared.result
     }
+    const validated = typeof validate === 'function'
+      ? await validate(verifiedEndpoint, prepared)
+      : undefined
+    assertActive()
 
     if (changing) {
       transition('awaiting-risk-confirmation', 'running-confirmed-change')
@@ -109,11 +114,17 @@ export async function executeAgentToolWithGate ({
     }
 
     assertActive()
-    const result = await execute(verifiedEndpoint, prepared, { signal })
+    const result = await execute(verifiedEndpoint, prepared, {
+      signal,
+      validated
+    })
     assertActive()
     if (changing && transition('running-confirmed-change', 'verifying')) {
       if (typeof verify === 'function') {
-        await verify(result, verifiedEndpoint, prepared, { signal })
+        await verify(result, verifiedEndpoint, prepared, {
+          signal,
+          validated
+        })
         assertActive()
       }
       transition('verifying', 'active-idle')

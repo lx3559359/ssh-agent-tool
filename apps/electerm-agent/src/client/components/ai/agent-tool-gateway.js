@@ -7,6 +7,7 @@ import {
   classifyAgentCall,
   getAgentToolDescriptor
 } from './agent-tool-policy.js'
+import { validateConfirmedRiskTransaction } from './agent-risk-transaction.js'
 
 function policyError (classification) {
   const unauditable = classification.outcome === 'unauditable'
@@ -32,6 +33,7 @@ export async function executeAgentTool ({
   resolveDescriptor = getAgentToolDescriptor,
   classifyCall = classifyAgentCall,
   prepareRisky,
+  invalidateRisky,
   verifyRisky,
   execute,
   signal
@@ -68,6 +70,11 @@ export async function executeAgentTool ({
     throw policyError(classification)
   }
   const risky = classification.outcome === 'risky'
+  if (risky && typeof prepareRisky !== 'function') {
+    const error = new Error('Risky Agent tool calls require a frozen confirmation transaction')
+    error.code = 'AGENT_RISK_CONFIRMATION_REQUIRED'
+    throw error
+  }
   let preparedRisk
   const markDispatchedError = (error, verificationFailed = false) => {
     const failure = error instanceof Error ? error : new Error(String(error))
@@ -99,24 +106,48 @@ export async function executeAgentTool ({
         return preparedRisk
       }
       : undefined,
+    validate: risky
+      ? async (verifiedEndpoint, preparation) => {
+        try {
+          return await validateConfirmedRiskTransaction({
+            transaction: preparation?.riskTransaction,
+            planGrant: preparation?.riskPlanGrant,
+            endpoint: verifiedEndpoint,
+            toolName,
+            args,
+            callIndex: preparation?.riskCallIndex || 0
+          })
+        } catch (error) {
+          if (typeof invalidateRisky === 'function') {
+            await invalidateRisky(error, preparation)
+          }
+          throw error
+        }
+      }
+      : undefined,
     execute: risky
-      ? async (...values) => {
+      ? async (verifiedEndpoint, preparation, context) => {
         try {
           assertActive()
-          return await execute(...values, { signal })
+          return await execute(verifiedEndpoint, preparation, context)
         } catch (error) {
           throw markDispatchedError(error)
         }
       }
-      : async (...values) => {
+      : async (verifiedEndpoint, preparation, context) => {
         assertActive()
-        return execute(...values, { signal })
+        return execute(verifiedEndpoint, preparation, context)
       },
     verify: risky && typeof verifyRisky === 'function'
-      ? async (...values) => {
+      ? async (result, verifiedEndpoint, preparation, context) => {
         try {
           assertActive()
-          return await verifyRisky(...values, { signal })
+          return await verifyRisky(
+            result,
+            verifiedEndpoint,
+            preparation,
+            context
+          )
         } catch (error) {
           throw markDispatchedError(error, true)
         }

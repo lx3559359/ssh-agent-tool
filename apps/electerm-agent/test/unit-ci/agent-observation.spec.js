@@ -65,3 +65,30 @@ test('redacts observation secrets and keeps evidence in the data field', async (
   assert.match(serialized, /UNTRUSTED EVIDENCE/)
   assert.match(serialized, /"data"/)
 })
+
+test('production tool observations stream through bounded output with cursors', async () => {
+  const {
+    createAgentToolObservation,
+    serializeAgentObservationForModel,
+    MAX_AGENT_MODEL_OBSERVATION_BYTES,
+    MAX_AGENT_RENDERER_OBSERVATION_BYTES
+  } = await import(observationUrl)
+  async function * chunks () {
+    yield 'a'.repeat(40 * 1024)
+    yield 'b'.repeat(40 * 1024)
+  }
+  const observation = await createAgentToolObservation(
+    'read_recent_logs',
+    { data: chunks() },
+    { endpoint: endpoint() }
+  )
+
+  assert.equal(observation.truncated, true)
+  assert.ok(observation.nextCursor)
+  assert.ok(Buffer.byteLength(observation.data) <= MAX_AGENT_RENDERER_OBSERVATION_BYTES)
+  const serialized = serializeAgentObservationForModel(observation)
+  const modelEnvelope = JSON.parse(serialized.split('\n').slice(1).join('\n'))
+  assert.equal(modelEnvelope.truncated, true)
+  assert.ok(modelEnvelope.nextCursor)
+  assert.ok(Buffer.byteLength(modelEnvelope.data) <= MAX_AGENT_MODEL_OBSERVATION_BYTES)
+})

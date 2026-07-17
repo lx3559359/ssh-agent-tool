@@ -609,12 +609,18 @@ export function createSafetyCommandEntrypoint (options = {}) {
       }
       return result
     } finally {
+      run.removeAbortListener?.()
       if (pendingRun === run) pendingRun = null
     }
   }
 
   function runSafetyCommand (value, runOptions = {}) {
     const command = String(value || '')
+    if (runOptions.signal?.aborted) {
+      const error = new Error('Command safety preparation cancelled')
+      error.name = 'AbortError'
+      return Promise.reject(error)
+    }
     if (!command.trim()) {
       return Promise.reject(new Error('命令不能为空。'))
     }
@@ -671,6 +677,16 @@ export function createSafetyCommandEntrypoint (options = {}) {
       hookState: createHookState(internalHooks)
     }
     pendingRun = run
+    if (runOptions.signal) {
+      const onAbort = () => {
+        if (pendingRun !== run && pendingConfirmation?.run !== run) return
+        Promise.resolve(invalidatePending(false)).catch(onError)
+      }
+      runOptions.signal.addEventListener('abort', onAbort, { once: true })
+      run.removeAbortListener = () => {
+        runOptions.signal.removeEventListener('abort', onAbort)
+      }
+    }
     run.promise = executeRun(run)
     return run.promise
   }

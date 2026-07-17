@@ -63,23 +63,35 @@ export function createAgentObservation ({
   nextCursor = null,
   data = ''
 } = {}) {
+  const sanitizedData = sanitizeObservationData(data)
+  const dataWasTruncated = byteLength(sanitizedData) >
+    MAX_AGENT_RENDERER_OBSERVATION_BYTES
+  const boundedData = sliceUtf8(
+    sanitizedData,
+    MAX_AGENT_RENDERER_OBSERVATION_BYTES
+  )
   return Object.freeze({
     kind: 'untrusted-observation',
     source: String(source || 'ssh'),
     endpointKey: endpointKey(endpoint),
     toolName: String(toolName || ''),
     capturedAt: Number(capturedAt) || 0,
-    truncated: truncated === true,
-    nextCursor: nextCursor === undefined ? null : nextCursor,
-    data: sliceUtf8(
-      sanitizeObservationData(data),
-      MAX_AGENT_RENDERER_OBSERVATION_BYTES
-    )
+    truncated: truncated === true || dataWasTruncated,
+    nextCursor: nextCursor === undefined || nextCursor === null
+      ? (dataWasTruncated ? String(byteLength(boundedData)) : null)
+      : nextCursor,
+    data: boundedData
   })
 }
 
 export function serializeAgentObservationForModel (observation = {}) {
   const parts = String(observation.endpointKey || '').split(':')
+  const modelData = sliceUtf8(
+    observation.data,
+    MAX_AGENT_MODEL_OBSERVATION_BYTES
+  )
+  const modelWasTruncated = byteLength(observation.data) >
+    MAX_AGENT_MODEL_OBSERVATION_BYTES
   const safe = createAgentObservation({
     source: observation.source,
     endpoint: {
@@ -89,9 +101,11 @@ export function serializeAgentObservationForModel (observation = {}) {
     },
     toolName: observation.toolName,
     capturedAt: observation.capturedAt,
-    truncated: observation.truncated,
-    nextCursor: observation.nextCursor,
-    data: sliceUtf8(observation.data, MAX_AGENT_MODEL_OBSERVATION_BYTES)
+    truncated: observation.truncated || modelWasTruncated,
+    nextCursor: observation.nextCursor ?? (
+      modelWasTruncated ? `model:${byteLength(modelData)}` : null
+    ),
+    data: modelData
   })
   return `${untrustedInstruction}\n${JSON.stringify(safe)}`
 }
@@ -147,7 +161,7 @@ export async function consumeBoundedAgentOutput (source, {
   }
 }
 
-export function createAgentToolObservation (toolName, value, runtime = {}) {
+export async function createAgentToolObservation (toolName, value, runtime = {}) {
   let parsed
   try {
     parsed = typeof value === 'string' ? JSON.parse(value) : value
@@ -155,13 +169,21 @@ export function createAgentToolObservation (toolName, value, runtime = {}) {
     parsed = null
   }
   const record = parsed && typeof parsed === 'object' ? parsed : {}
+  const data = record.data ?? record.output ?? record.content ?? value
+  const source = data && typeof data[Symbol.asyncIterator] === 'function'
+    ? data
+    : [typeof data === 'string' ? data : JSON.stringify(data)]
+  const bounded = await consumeBoundedAgentOutput(source, {
+    signal: runtime.signal,
+    cursor: record.cursor ?? '0'
+  })
   return createAgentObservation({
     source: runtime.endpoint ? 'ssh' : 'client',
     endpoint: runtime.endpoint || {},
     toolName,
     capturedAt: record.capturedAt || Date.now(),
-    truncated: record.truncated === true,
-    nextCursor: record.nextCursor ?? null,
-    data: record.data ?? record.output ?? record.content ?? value
+    truncated: record.truncated === true || bounded.truncated,
+    nextCursor: record.nextCursor ?? bounded.nextCursor,
+    data: bounded.rendererData
   })
 }

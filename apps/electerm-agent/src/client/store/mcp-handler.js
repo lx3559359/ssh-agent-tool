@@ -28,6 +28,34 @@ import {
   assertSessionResourceTabId,
   filterSessionResourcesByTabId
 } from '../common/session-resource-guard.js'
+import { buildTransferSafetyPlan } from '../components/file-transfer/file-transfer-safety.js'
+
+function mcpAbortError (message = 'MCP operation cancelled') {
+  const error = new Error(message)
+  error.name = 'AbortError'
+  return error
+}
+
+function assertMcpActive (signal, message) {
+  if (signal?.aborted) throw mcpAbortError(message)
+}
+
+function abortableDelay (milliseconds, signal, message) {
+  assertMcpActive(signal, message)
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(done, milliseconds)
+    function done () {
+      signal?.removeEventListener('abort', aborted)
+      resolve()
+    }
+    function aborted () {
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', aborted)
+      reject(mcpAbortError(message))
+    }
+    signal?.addEventListener('abort', aborted, { once: true })
+  })
+}
 
 export default Store => {
   // Initialize MCP handler - called when MCP widget is started
@@ -134,7 +162,7 @@ export default Store => {
           result = store.mcpGetTerminalStatus(args)
           break
         case 'cancel_terminal_command':
-          result = store.mcpCancelTerminalCommand(args)
+          result = await store.mcpCancelTerminalCommand(args)
           break
 
         // Background task operations
@@ -630,16 +658,18 @@ export default Store => {
     const pollInterval = 500
     const minWait = args.minWait !== undefined ? args.minWait : 1000
     const lineCountToFetch = args.lines || 50
+    const signal = args.signal
 
     if (!tabId) {
       throw new Error('No active terminal')
     }
+    assertMcpActive(signal, 'Terminal wait cancelled')
 
     const start = Date.now()
 
     // Brief initial wait so the command has time to start producing output
     if (minWait > 0) {
-      await new Promise(resolve => setTimeout(resolve, minWait))
+      await abortableDelay(minWait, signal, 'Terminal wait cancelled')
     }
 
     const collectOutput = () => {
@@ -663,6 +693,7 @@ export default Store => {
 
     // Poll until onData becomes false (4s idle debounce in tab.jsx)
     while (Date.now() - start < timeout) {
+      assertMcpActive(signal, 'Terminal wait cancelled')
       const tabRef = refsTabs.get('tab-' + tabId)
       const onData = tabRef?.state.terminalOnData
       if (!onData) {
@@ -675,7 +706,7 @@ export default Store => {
           lineCount
         }
       }
-      await new Promise(resolve => setTimeout(resolve, pollInterval))
+      await abortableDelay(pollInterval, signal, 'Terminal wait cancelled')
     }
 
     // Timeout reached — return whatever is currently in the buffer
@@ -735,7 +766,7 @@ export default Store => {
     }
   }
 
-  Store.prototype.mcpCancelTerminalCommand = function (args) {
+  Store.prototype.mcpCancelTerminalCommand = async function (args) {
     const { store } = window
     const tabId = args.tabId || store.activeTabId
     if (!tabId) {
@@ -748,9 +779,26 @@ export default Store => {
     }
 
     term.attachAddon._sendData('\x03')
+    const transactionCancelled = typeof term.commandSafetyEntrypoint
+      ?.cancelCurrentExecution === 'function'
+      ? await term.commandSafetyEntrypoint.cancelCurrentExecution(
+        'Agent sent Ctrl+C'
+      )
+      : undefined
+    const idle = await store.mcpWaitForTerminalIdle({
+      tabId,
+      timeout: 6000,
+      minWait: 300,
+      lines: 20
+    })
+    const stopConfirmed = idle.timedOut === false && transactionCancelled !== false
     return {
-      success: true,
-      message: 'Sent Ctrl+C to terminal',
+      success: stopConfirmed,
+      stopConfirmed,
+      remoteState: stopConfirmed ? 'stopped' : 'unknown',
+      message: stopConfirmed
+        ? 'Sent Ctrl+C and confirmed terminal idle'
+        : 'Sent Ctrl+C but terminal stop could not be confirmed',
       tabId
     }
   }
@@ -803,7 +851,7 @@ export default Store => {
     return task
   }
 
-  Store.prototype.mcpRunBackgroundCommand = async function (args) {
+  Store.prototype.mcpRunBackgroundCommand = async function (args, options = {}) {
     const { store } = window
     const tabId = args.tabId || store.activeTabId
     if (!tabId) {
@@ -812,13 +860,31 @@ export default Store => {
     if (!args.command) {
       throw new Error('No command provided')
     }
+    assertMcpActive(options.signal, 'Background command cancelled')
 
     const submission = await store.runSafetyCommand(args.command, {
       tabId,
+      ...(options.signal ? { signal: options.signal } : {}),
       source: 'agent',
       title: '后台命令',
       executionMode: 'background'
     })
+    if (options.signal?.aborted && submission.sent) {
+      let cancelled = false
+      try {
+        cancelled = await submission.cancelBackground?.(
+          'Agent background command cancelled after dispatch'
+        ) === true
+      } catch {
+        cancelled = false
+      }
+      const error = mcpAbortError('Background command cancelled after dispatch')
+      error.mutationDispatched = true
+      error.remoteState = cancelled ? 'stopped' : 'unknown'
+      error.canAutoRetry = false
+      throw error
+    }
+    assertMcpActive(options.signal, 'Background command cancelled')
     if (!submission.sent) {
       return {
         success: false,
@@ -851,6 +917,7 @@ export default Store => {
     })
 
     return {
+      pending: true,
       taskId,
       tabId,
       logFile,
@@ -1027,9 +1094,9 @@ export default Store => {
 
   // ==================== File Transfer APIs ====================
 
-  Store.prototype.mcpSftpUpload = async function (args) {
+  Store.prototype.mcpSftpUpload = async function (args, options = {}) {
     const { store } = window
-    const { tab, tabId } = store.mcpGetSshSftpRef(args.tabId)
+    const { tab, tabId, sftpEntry } = store.mcpGetSshSftpRef(args.tabId)
     const localPath = args.localPath
     const remotePath = args.remotePath
     if (!localPath) {
@@ -1038,6 +1105,7 @@ export default Store => {
     if (!remotePath) {
       throw new Error('remotePath is required')
     }
+    assertMcpActive(options.signal, 'SFTP upload cancelled')
 
     window._transferConflictPolicy = args.conflictPolicy || 'mergeOrOverwriteAll'
 
@@ -1059,20 +1127,42 @@ export default Store => {
       id: uid(),
       title: tab.title,
       tabId,
+      conflictPolicy: args.conflictPolicy || 'mergeOrOverwriteAll',
       operation: ''
     }
-
-    store.addTransferList([transferItem])
+    const safetyPlan = buildTransferSafetyPlan(transferItem)
+    let safetyOperation
+    if (safetyPlan.required) {
+      safetyOperation = await sftpEntry.prepareTransferSafetyOperation(safetyPlan)
+      transferItem.safetyOperationId = safetyOperation.id
+    }
+    if (options.signal?.aborted) {
+      if (safetyOperation) {
+        await sftpEntry.cancelTransferSafetyOperation(safetyOperation.id)
+      }
+      throw mcpAbortError('SFTP upload cancelled before queueing')
+    }
+    try {
+      store.addTransferList([transferItem])
+    } catch (error) {
+      if (safetyOperation) {
+        await sftpEntry.cancelTransferSafetyOperation(safetyOperation.id)
+      }
+      throw error
+    }
 
     return {
       success: true,
+      pending: true,
+      recoveryPrepared: safetyOperation != null,
+      safetyOperationId: safetyOperation?.id,
       message: `Upload started: ${localPath} → ${tab.host}:${remotePath}`,
       transferId: transferItem.id,
       tabId
     }
   }
 
-  Store.prototype.mcpSftpDownload = async function (args) {
+  Store.prototype.mcpSftpDownload = async function (args, options = {}) {
     const { store } = window
     const { sftp, tab, tabId } = store.mcpGetSshSftpRef(args.tabId) // sftp used for getRemoteFileInfo
     const remotePath = args.remotePath
@@ -1083,6 +1173,7 @@ export default Store => {
     if (!localPath) {
       throw new Error('localPath is required')
     }
+    assertMcpActive(options.signal, 'SFTP download cancelled')
 
     window._transferConflictPolicy = args.conflictPolicy || 'mergeOrOverwriteAll'
 
@@ -1101,13 +1192,16 @@ export default Store => {
       },
       id: uid(),
       title: tab.title,
-      tabId
+      tabId,
+      conflictPolicy: args.conflictPolicy || 'mergeOrOverwriteAll'
     }
 
+    assertMcpActive(options.signal, 'SFTP download cancelled before queueing')
     store.addTransferList([transferItem])
 
     return {
       success: true,
+      pending: true,
       message: `Download started: ${tab.host}:${remotePath} → ${localPath}`,
       transferId: transferItem.id,
       tabId
@@ -1127,7 +1221,8 @@ export default Store => {
     if (tabId) assertSessionResourceTabId(transfer, tabId)
     const transferRefId = `tr-${transfer.transferBatch || ''}-${id}`
     const activeTransfer = refsTransfers.get(transferRefId)
-    if (typeof activeTransfer?.cancelAndWait === 'function') {
+    const handledByActiveTransfer = typeof activeTransfer?.cancelAndWait === 'function'
+    if (handledByActiveTransfer) {
       await activeTransfer.cancelAndWait()
     } else {
       const queue = refsStatic.get('transfer-queue')
@@ -1140,6 +1235,10 @@ export default Store => {
     }
     if (store.fileTransfers.some(item => item.id === id)) {
       throw new Error(`Transfer cancellation did not complete: ${id}`)
+    }
+    if (transfer.safetyOperationId && !handledByActiveTransfer) {
+      const { sftpEntry } = store.mcpGetSshSftpRef(transfer.tabId)
+      await sftpEntry.cancelTransferSafetyOperation(transfer.safetyOperationId)
     }
     return { success: true, transferId: id }
   }

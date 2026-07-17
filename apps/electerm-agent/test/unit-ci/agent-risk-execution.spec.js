@@ -2,6 +2,7 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
+const { createRiskPreparation } = require('./agent-risk-fixture.js')
 
 const aiRoot = path.resolve(__dirname, '../../src/client/components/ai')
 const gatewayUrl = pathToFileURL(path.join(aiRoot, 'agent-tool-gateway.js')).href
@@ -10,6 +11,7 @@ const operationIdUrl = pathToFileURL(path.resolve(
   __dirname,
   '../../src/client/common/safety-transactions/operation-id.js'
 )).href
+const riskResultUrl = pathToFileURL(path.join(aiRoot, 'agent-risk-result.js')).href
 
 function endpoint () {
   return {
@@ -57,7 +59,11 @@ test('transport uncertainty after dispatch never replays a changing call', async
     registry: takeoverRegistry,
     prepareRisky: async () => {
       events.push('intent-persisted')
-      return { riskTaskId: 'agent-risk-1', artifacts: { manifest: '/safe/manifest' } }
+      return createRiskPreparation({
+        args: { command: 'systemctl restart nginx' },
+        endpoint: endpoint(),
+        riskTaskId: 'agent-risk-1'
+      })
     },
     execute: async () => {
       events.push('dispatch')
@@ -89,9 +95,10 @@ test('exit zero with failed target verification is partially completed and not r
     endpoint: endpoint(),
     resolveEndpoint: endpoint,
     registry: takeoverRegistry,
-    prepareRisky: async () => ({
-      riskTaskId: 'agent-risk-verify',
-      artifacts: { manifest: '/safe/manifest' }
+    prepareRisky: async () => createRiskPreparation({
+      args: { command: 'systemctl restart nginx' },
+      endpoint: endpoint(),
+      riskTaskId: 'agent-risk-verify'
     }),
     execute: async () => {
       remoteWriteCalls += 1
@@ -114,4 +121,29 @@ test('exit zero with failed target verification is partially completed and not r
   assert.equal(remoteWriteCalls, 1)
   assert.equal(verificationCalls, 1)
   assert.equal(takeoverRegistry.get(endpoint()).state, 'partially-completed')
+})
+
+test('asynchronous mutation results cannot be marked verified at queue time', async () => {
+  const {
+    assertAgentRiskResultReadyForVerification,
+    assertAgentVerificationDeclared
+  } = await import(riskResultUrl)
+  for (const value of [
+    { pending: true },
+    { taskId: 'task-a' },
+    { transferId: 'transfer-a' }
+  ]) {
+    assert.throws(
+      () => assertAgentRiskResultReadyForVerification(value),
+      error => error.code === 'AGENT_ASYNC_OPERATION_PENDING' &&
+        error.remoteState === 'in-progress'
+    )
+  }
+  assert.equal(assertAgentRiskResultReadyForVerification({ exitCode: 0 }), true)
+  assert.throws(
+    () => assertAgentVerificationDeclared([]),
+    error => error.code === 'AGENT_TARGET_VERIFICATION_REQUIRED' &&
+      error.remoteState === 'changed-unverified'
+  )
+  assert.equal(assertAgentVerificationDeclared([{ name: 'read_service_status' }]), true)
 })

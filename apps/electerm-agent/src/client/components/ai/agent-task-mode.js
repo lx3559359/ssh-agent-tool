@@ -73,6 +73,7 @@ export function buildAgentPlanConfirmationMessage (args = {}) {
   const goal = String(args.goal || args.summary || 'Agent 运维排查任务').trim()
   const steps = Array.isArray(args.steps) ? args.steps : []
   const commands = Array.isArray(args.readonlyCommands) ? args.readonlyCommands : []
+  const verification = Array.isArray(args.verification) ? args.verification : []
   const lines = [
     `Agent 请求确认分析计划：${goal}`,
     '',
@@ -84,6 +85,13 @@ export function buildAgentPlanConfirmationMessage (args = {}) {
     '',
     '确认后 Agent 才能继续执行命令。'
   ]
+  lines.splice(lines.length - 1, 0,
+    'Risk target verification:',
+    ...(verification.length
+      ? verification.map(step => `- ${JSON.stringify(step)}`)
+      : ['- none; risky work cannot be marked verified']),
+    ''
+  )
   return lines.join('\n')
 }
 
@@ -116,23 +124,23 @@ export function buildConversationPlanGrantPayload (args = {}, endpoint = {}) {
     schemaVersion: 1,
     endpoint,
     goal: String(args.goal || args.summary || 'Agent 运维任务').trim(),
-    orderedCalls: Array.isArray(args.orderedCalls)
-      ? args.orderedCalls
-      : commands.map(command => ({
-        name: 'send_terminal_command',
-        args: { command: String(command) }
-      })),
-    skillBindings: Array.isArray(args.skillBindings) ? args.skillBindings : [],
-    artifactDigests: Array.isArray(args.artifactDigests) ? args.artifactDigests : [],
-    impactTargets: Array.isArray(args.impactTargets) ? args.impactTargets : [],
-    resourceImpact: args.resourceImpact || {
+    // Only commands rendered in the confirmation dialog may be granted. Never
+    // accept a hidden orderedCalls field supplied by the model.
+    orderedCalls: commands.map(command => ({
+      name: 'send_terminal_command',
+      args: { command: String(command) }
+    })),
+    skillBindings: [],
+    artifactDigests: [],
+    impactTargets: [],
+    resourceImpact: {
       cpu: 'unknown',
       memory: 'unknown',
       disk: 'unknown',
       network: 'unknown',
       duration: 'unknown'
     },
-    recovery: args.recovery || null,
+    recovery: null,
     verification: Array.isArray(args.verification) ? args.verification : []
   }
 }
@@ -140,6 +148,8 @@ export function buildConversationPlanGrantPayload (args = {}, endpoint = {}) {
 export function markAgentPlanConfirmed (runtime, confirmation) {
   if (runtime && confirmation?.accepted && confirmation.planGrant) {
     runtime.planGrant = confirmation.planGrant
+    runtime.planGrantCursor = 0
+    runtime.planGrantReservation = null
   }
 }
 
@@ -158,6 +168,20 @@ function executableCall (toolName, args = {}) {
   return { name: toolName, args: boundArgs }
 }
 
+export async function ensureAgentPlanAvailable (runtime) {
+  const grant = runtime?.planGrant
+  if (grant && await verifyPlanGrant(grant.payload, grant)) return null
+  return {
+    accepted: false,
+    cancelled: true,
+    requiresPlan: true,
+    reasonCode: grant ? 'PLAN_BINDING_CHANGED' : 'PLAN_CONFIRMATION_REQUIRED',
+    message: grant
+      ? 'The confirmed Agent plan binding changed and must be confirmed again.'
+      : 'The Agent plan must be confirmed before risky work can be prepared.'
+  }
+}
+
 export async function ensureAgentPlanConfirmed ({
   toolName,
   args,
@@ -166,10 +190,16 @@ export async function ensureAgentPlanConfirmed ({
   if (!isAgentCommandTool(toolName)) {
     return null
   }
+  const availability = await ensureAgentPlanAvailable(runtime)
   const grant = runtime?.planGrant
-  if (grant && await verifyPlanGrant(grant.payload, grant)) {
+  if (!availability) {
     const expected = stableSerialize(executableCall(toolName, args))
-    if (grant.payload.orderedCalls.some(call => stableSerialize(call) === expected)) {
+    const index = Number.isSafeInteger(runtime.planGrantCursor)
+      ? runtime.planGrantCursor
+      : 0
+    const planned = grant.payload.orderedCalls[index]
+    if (planned && stableSerialize(planned) === expected) {
+      runtime.planGrantReservation = Object.freeze({ index, expected })
       return null
     }
   }
@@ -182,4 +212,22 @@ export async function ensureAgentPlanConfirmed ({
       ? 'Agent 计划绑定已变更，必须重新确认后才能执行命令。'
       : 'Agent 必须先提交分析计划，并由用户确认后才能执行命令。'
   }
+}
+
+export function commitAgentPlanCall ({ toolName, args, runtime } = {}) {
+  if (!isAgentCommandTool(toolName)) return false
+  const reservation = runtime?.planGrantReservation
+  const index = Number.isSafeInteger(runtime?.planGrantCursor)
+    ? runtime.planGrantCursor
+    : 0
+  const expected = stableSerialize(executableCall(toolName, args))
+  if (!reservation || reservation.index !== index ||
+    reservation.expected !== expected) {
+    const error = new Error('Agent plan call was not reserved for this dispatch')
+    error.code = 'PLAN_BINDING_CHANGED'
+    throw error
+  }
+  runtime.planGrantCursor = index + 1
+  runtime.planGrantReservation = null
+  return true
 }

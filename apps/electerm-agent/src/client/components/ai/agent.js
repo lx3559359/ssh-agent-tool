@@ -1,4 +1,8 @@
-import { agentTools, executeToolCall } from './agent-tools'
+import {
+  agentTools,
+  executeToolCall,
+  prepareAgentRiskBatch
+} from './agent-tools'
 import {
   createAgentToolObservation,
   serializeAgentObservationForModel
@@ -305,6 +309,8 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
         return
       }
 
+      await prepareAgentRiskBatch(assistantMessage.tool_calls, agentRuntime)
+
       for (const toolCall of assistantMessage.tool_calls) {
         if (abortRef && abortRef.current) {
           await markCancelled()
@@ -341,7 +347,7 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
             await markCancelled()
             return
           }
-          const observation = createAgentToolObservation(
+          const observation = await createAgentToolObservation(
             toolCall.function.name,
             toolResult,
             agentRuntime
@@ -355,7 +361,16 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
             return
           }
           toolEntry.status = 'error'
-          toolEntry.result = sanitizeAIStoredText(err.message)
+          const observation = await createAgentToolObservation(
+            toolCall.function.name,
+            {
+              error: true,
+              data: sanitizeAIStoredText(err.message)
+            },
+            agentRuntime
+          )
+          toolEntry.result = boundAgentToolResult(JSON.stringify(observation))
+          toolResult = serializeAgentObservationForModel(observation)
         }
 
         updateChatEntry(chatEntry, {

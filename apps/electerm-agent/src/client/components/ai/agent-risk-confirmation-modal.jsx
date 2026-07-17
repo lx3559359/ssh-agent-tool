@@ -49,6 +49,11 @@ export function AgentRiskConfirmationContent ({ transaction }) {
   return (
     <div className='agent-risk-confirmation-content'>
       <p className='agent-risk-warning'>这是高风险二次确认。确认后仅执行已冻结的调用。</p>
+      {details.recovery.verified !== true && (
+        <p className='agent-risk-warning'>
+          Exact recovery is not ready at this dialog. The lower safety transaction must prepare and verify it before remote dispatch; non-reversible work has no automatic rollback.
+        </p>
+      )}
       <dl className='agent-risk-details'>
         <dt>目标 SSH 身份</dt><dd>{details.targetIdentity}</dd>
         <dt>目的</dt><dd>{details.purpose}</dd>

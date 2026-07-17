@@ -57,6 +57,8 @@ test('Agent tool execution routes risky tools through frozen transaction confirm
   assert.match(source, /buildRiskTransaction/)
   assert.match(source, /confirmRiskTransaction/)
   assert.match(source, /requestAgentRiskConfirmation/)
+  assert.match(source, /combineRiskTransactions/)
+  assert.match(source, /export async function prepareAgentRiskBatch/)
   assert.match(source, /prepareRisky:\s*context\s*=>\s*prepareResolvedAgentTool/)
   assert.match(source, /executeAgentTool\(\{/)
 })
@@ -85,6 +87,7 @@ test('Agent tools route every executor through the single takeover gate', () => 
   assert.match(source, /case 'run_local_cli'/)
   assert.match(source, /case 'run_background_command'/)
   assert.match(agentSource, /agentTools\.map\(\(\{ type, function: definition \}\)/)
+  assert.match(agentSource, /prepareAgentRiskBatch\(assistantMessage\.tool_calls, agentRuntime\)/)
 })
 
 test('Agent prompt rules do not allow direct command execution without confirmation', () => {

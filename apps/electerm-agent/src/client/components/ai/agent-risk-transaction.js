@@ -2,7 +2,11 @@ import {
   classifyAgentCall,
   getAgentToolDescriptor
 } from './agent-tool-policy.js'
-import { createPlanGrant } from './agent-plan-grant.js'
+import {
+  createPlanGrant,
+  verifyPlanGrant
+} from './agent-plan-grant.js'
+import { assertSameSessionEndpoint } from '../../common/safety-transactions/endpoint-guard.js'
 import { createTrustedOperationId } from '../../common/safety-transactions/operation-id.js'
 import {
   getTask,
@@ -139,14 +143,12 @@ function combinationBoundary (transaction) {
   return {
     endpoint: transaction.endpoint,
     goal: transaction.goal,
-    calls: transaction.calls.map(call => ({
-      name: call.name,
-      args: call.args,
-      scriptEntry: call.scriptEntry
-    })),
+    scriptEntries: transaction.calls.map(call => call.scriptEntry),
     affectedObjects: transaction.affectedObjects,
     recovery: transaction.recovery,
-    verification: transaction.verification
+    verification: transaction.verification,
+    skillBindings: transaction.skillBindings,
+    artifactDigests: transaction.artifactDigests
   }
 }
 
@@ -154,6 +156,37 @@ export function canCombineRiskTransactions (left, right) {
   if (!left || !right) return false
   return stableSerialize(combinationBoundary(left)) ===
     stableSerialize(combinationBoundary(right))
+}
+
+export function combineRiskTransactions (transactions) {
+  if (!Array.isArray(transactions) || transactions.length < 2) {
+    throw new TypeError('At least two risk transactions are required for a batch')
+  }
+  const first = transactions[0]
+  if (!transactions.slice(1).every(item => canCombineRiskTransactions(first, item))) {
+    rejectTransaction('Risk transactions cross an authorization boundary')
+  }
+  return buildRiskTransaction(
+    transactions.flatMap(transaction => transaction.calls.map(call => ({
+      name: call.name,
+      args: call.args,
+      scriptEntry: call.scriptEntry
+    }))),
+    {
+      endpoint: first.endpoint,
+      goal: first.goal,
+      purpose: first.purpose,
+      affectedObjects: first.affectedObjects,
+      worstCase: transactions.map(item => item.worstCase).join('; '),
+      disconnectPossible: transactions.some(item => item.disconnectPossible),
+      recovery: first.recovery,
+      rollbackLimits: first.rollbackLimits,
+      verification: first.verification,
+      cancellationBehavior: first.cancellationBehavior,
+      skillBindings: first.skillBindings,
+      artifactDigests: first.artifactDigests
+    }
+  )
 }
 
 export function buildRiskPlanPayload (transaction) {
@@ -172,6 +205,46 @@ export function buildRiskPlanPayload (transaction) {
     recovery: cloneJson(transaction.recovery),
     verification: cloneJson(transaction.verification)
   }
+}
+
+function planBindingChanged (cause) {
+  const error = new Error('Confirmed Agent risk transaction changed before dispatch')
+  error.code = 'PLAN_BINDING_CHANGED'
+  if (cause) error.cause = cause
+  return error
+}
+
+export async function validateConfirmedRiskTransaction ({
+  transaction,
+  planGrant,
+  endpoint,
+  toolName,
+  args,
+  callIndex = 0
+} = {}) {
+  if (!transaction || !planGrant || !Number.isSafeInteger(callIndex) ||
+    callIndex < 0 || callIndex >= transaction.calls?.length) {
+    const error = new Error('A frozen confirmed Agent risk transaction is required')
+    error.code = 'AGENT_RISK_CONFIRMATION_REQUIRED'
+    throw error
+  }
+  try {
+    assertSameSessionEndpoint(transaction.endpoint, endpoint)
+  } catch (error) {
+    throw planBindingChanged(error)
+  }
+  if (!await verifyPlanGrant(buildRiskPlanPayload(transaction), planGrant)) {
+    throw planBindingChanged()
+  }
+  const frozenCall = transaction.calls[callIndex]
+  if (stableSerialize({ name: frozenCall.name, args: frozenCall.args }) !==
+    stableSerialize({
+      name: String(toolName || ''),
+      args: cloneJson(args || {})
+    })) {
+    throw planBindingChanged()
+  }
+  return frozenCall
 }
 
 function resolveStore (store = {}) {

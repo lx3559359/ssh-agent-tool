@@ -5,7 +5,12 @@ function assertActive (signal) {
   throw error
 }
 
-export async function runAgentTerminalCommand ({ store, args = {}, signal }) {
+export async function runAgentTerminalCommand ({
+  store,
+  args = {},
+  signal,
+  onDispatched
+}) {
   assertActive(signal)
   const tabId = args.tabId || store?.activeTabId
   if (!tabId) {
@@ -21,8 +26,8 @@ export async function runAgentTerminalCommand ({ store, args = {}, signal }) {
     source: 'agent',
     title: 'Agent 终端命令'
   })
-  assertActive(signal)
   if (safetyResult?.sent !== true) {
+    assertActive(signal)
     return {
       success: false,
       cancelled: safetyResult?.cancelled === true,
@@ -32,6 +37,10 @@ export async function runAgentTerminalCommand ({ store, args = {}, signal }) {
         : '命令未发送。'
     }
   }
+  if (typeof onDispatched === 'function') {
+    await onDispatched(safetyResult)
+  }
+  assertActive(signal)
   return store.mcpWaitForTerminalIdle({
     tabId,
     timeout: 30000,

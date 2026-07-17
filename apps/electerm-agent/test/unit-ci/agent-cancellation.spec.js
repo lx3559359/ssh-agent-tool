@@ -3,6 +3,7 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
+const { createRiskPreparation } = require('./agent-risk-fixture.js')
 
 const aiRoot = path.resolve(__dirname, '../../src/client/components/ai')
 const gatewayUrl = pathToFileURL(path.join(aiRoot, 'agent-tool-gateway.js')).href
@@ -41,7 +42,11 @@ test('the same AbortSignal reaches gateway preparation, execution and verificati
     signal: controller.signal,
     prepareRisky: async context => {
       observed.push(context.signal)
-      return { riskTaskId: 'risk-a' }
+      return createRiskPreparation({
+        args: { command: 'systemctl restart nginx' },
+        endpoint: endpoint(),
+        riskTaskId: 'risk-a'
+      })
     },
     execute: async (_endpoint, _prepared, context) => {
       observed.push(context.signal)
@@ -130,4 +135,83 @@ test('terminal safety dispatch and wait receive the runtime AbortSignal', async 
 
   assert.deepEqual(result, { success: true })
   assert.deepEqual(observed, [controller.signal, controller.signal])
+})
+
+test('terminal cancellation is not armed until the command was dispatched', async () => {
+  const { runAgentTerminalCommand } = await import(terminalUrl)
+  let armed = 0
+  await runAgentTerminalCommand({
+    args: { command: 'uptime', tabId: 'tab-a' },
+    store: {
+      runSafetyCommand: async () => ({ sent: false, cancelled: true }),
+      mcpWaitForTerminalIdle: async () => {
+        throw new Error('wait should not run')
+      }
+    },
+    onDispatched: () => { armed += 1 }
+  })
+  assert.equal(armed, 0)
+
+  await runAgentTerminalCommand({
+    args: { command: 'uptime', tabId: 'tab-a' },
+    store: {
+      runSafetyCommand: async () => ({ sent: true }),
+      mcpWaitForTerminalIdle: async () => ({ timedOut: false })
+    },
+    onDispatched: () => { armed += 1 }
+  })
+  assert.equal(armed, 1)
+})
+
+test('a cancellation race after terminal dispatch still arms remote stop', async () => {
+  const { runAgentTerminalCommand } = await import(terminalUrl)
+  const controller = new AbortController()
+  let armed = 0
+  await assert.rejects(runAgentTerminalCommand({
+    args: { command: 'uptime', tabId: 'tab-a' },
+    signal: controller.signal,
+    store: {
+      runSafetyCommand: async () => {
+        controller.abort()
+        return { sent: true }
+      },
+      mcpWaitForTerminalIdle: async () => {
+        throw new Error('wait should not run after abort')
+      }
+    },
+    onDispatched: () => { armed += 1 }
+  }), error => error.name === 'AbortError')
+  assert.equal(armed, 1)
+})
+
+test('production handlers use abortable waits and prepare upload recovery before queueing', () => {
+  const source = fs.readFileSync(path.resolve(
+    aiRoot,
+    '../../store/mcp-handler.js'
+  ), 'utf8')
+  const commandEntrypoint = fs.readFileSync(path.resolve(
+    aiRoot,
+    '../../common/safety-transactions/command-entrypoint.js'
+  ), 'utf8')
+  const wait = source.slice(
+    source.indexOf('Store.prototype.mcpWaitForTerminalIdle'),
+    source.indexOf('// ==================== Terminal Status')
+  )
+  const background = source.slice(
+    source.indexOf('Store.prototype.mcpRunBackgroundCommand'),
+    source.indexOf('Store.prototype.mcpGetBackgroundTaskStatus')
+  )
+  const upload = source.slice(
+    source.indexOf('Store.prototype.mcpSftpUpload'),
+    source.indexOf('Store.prototype.mcpSftpDownload')
+  )
+  assert.match(wait, /abortableDelay\(minWait, signal/)
+  assert.match(wait, /abortableDelay\(pollInterval, signal/)
+  assert.match(background, /options\.signal/)
+  assert.match(commandEntrypoint, /runOptions\.signal\.addEventListener\('abort'/)
+  assert.ok(
+    upload.indexOf('prepareTransferSafetyOperation') <
+      upload.indexOf('addTransferList')
+  )
+  assert.match(upload, /safetyOperationId/)
 })
