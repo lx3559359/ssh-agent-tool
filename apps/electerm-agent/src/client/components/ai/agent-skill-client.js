@@ -15,6 +15,14 @@ export const listAgentSkills = () => runAgentSkillCall('listAgentSkills')
 export const getAgentSkillMetadata = id => runAgentSkillCall('getAgentSkillMetadata', id)
 export const readAgentSkillFile = (id, relativePath) => runAgentSkillCall('readAgentSkillFile', id, relativePath)
 export const createAgentSkillDraft = files => runAgentSkillCall('createAgentSkillDraft', files)
+export const createAgentSkillDraftFromFiles = files => {
+  if (!Array.isArray(files)) {
+    throw new TypeError('Generated Skill files must be an array')
+  }
+  return createAgentSkillDraft(Object.fromEntries(
+    files.map(file => [file.path, file.content])
+  ))
+}
 export const updateAgentSkillDraftFile = (id, relativePath, content) => runAgentSkillCall('updateAgentSkillDraftFile', id, relativePath, content)
 export const validateAgentSkillDraft = id => runAgentSkillCall('validateAgentSkillDraft', id)
 export const enableAgentSkillDraft = (id, packageDigest) => runAgentSkillCall('enableAgentSkillDraft', id, packageDigest)
@@ -28,6 +36,7 @@ export const agentSkillClient = Object.freeze({
   getAgentSkillMetadata,
   readAgentSkillFile,
   createAgentSkillDraft,
+  createAgentSkillDraftFromFiles,
   updateAgentSkillDraftFile,
   validateAgentSkillDraft,
   enableAgentSkillDraft,
