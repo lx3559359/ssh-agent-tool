@@ -6,6 +6,10 @@ import {
 } from './agent-tool-confirm'
 import { runAgentTerminalCommand } from './agent-terminal-command.js'
 import {
+  executeStructuredAgentTool,
+  structuredAgentTools
+} from './agent-structured-tools.js'
+import {
   assertAgentRuntimeActive,
   bindAgentToolArgs,
   registerAgentCancellation,
@@ -64,6 +68,7 @@ function buildAddBookmarkParameters () {
 }
 
 export const agentTools = withAgentToolPolicy(withAgentToolScopes([
+  ...structuredAgentTools,
   {
     type: 'function',
     function: {
@@ -604,7 +609,26 @@ async function prepareResolvedAgentTool (toolName, args, runtime) {
     : { handled: true, result: JSON.stringify(confirmation) }
 }
 
-async function executeResolvedAgentTool (toolName, args, runtime) {
+async function runTerminalTool (store, args, runtime) {
+  const cancelTerminal = () => {
+    try {
+      return store.mcpCancelTerminalCommand({ tabId: args.tabId })
+    } catch (error) {
+      // The terminal may already be idle or closed.
+      return undefined
+    }
+  }
+  runtime.cancelActiveTool = cancelTerminal
+  try {
+    return await runAgentTerminalCommand({ store, args })
+  } finally {
+    if (runtime.cancelActiveTool === cancelTerminal) {
+      runtime.cancelActiveTool = null
+    }
+  }
+}
+
+async function executeResolvedAgentTool (toolName, args, runtime, endpoint) {
   const store = window.store
   switch (toolName) {
     case 'confirm_agent_plan': {
@@ -616,24 +640,22 @@ async function executeResolvedAgentTool (toolName, args, runtime) {
       markAgentPlanConfirmed(runtime, confirmation)
       return JSON.stringify(confirmation)
     }
-    case 'send_terminal_command': {
-      const cancelTerminal = () => {
-        try {
-          store.mcpCancelTerminalCommand({ tabId: args.tabId })
-        } catch (error) {
-          // The terminal may already be idle or closed.
-        }
-      }
-      runtime.cancelActiveTool = cancelTerminal
-      try {
-        const idleResult = await runAgentTerminalCommand({ store, args })
-        return JSON.stringify(idleResult)
-      } finally {
-        if (runtime.cancelActiveTool === cancelTerminal) {
-          runtime.cancelActiveTool = null
-        }
-      }
-    }
+    case 'read_service_status':
+    case 'read_recent_logs':
+    case 'verify_listening_port':
+    case 'read_file_range':
+      return JSON.stringify(await executeStructuredAgentTool({
+        toolName,
+        args,
+        endpoint,
+        executeCommand: command => runTerminalTool(store, {
+          command,
+          tabId: args.tabId
+        }, runtime),
+        readFile: fileArgs => store.mcpSftpReadFile(fileArgs)
+      }))
+    case 'send_terminal_command':
+      return JSON.stringify(await runTerminalTool(store, args, runtime))
     case 'get_terminal_output':
       return JSON.stringify(store.mcpGetTerminalOutput(args))
     case 'open_local_terminal':
@@ -759,6 +781,11 @@ export async function executeToolCall (toolName, rawArgs, runtime = {}) {
     registry: runtime.takeoverRegistry,
     expandedContent: args.script || args.expandedContent,
     prepareRisky: () => prepareResolvedAgentTool(toolName, args, runtime),
-    execute: () => executeResolvedAgentTool(toolName, args, runtime)
+    execute: verifiedEndpoint => executeResolvedAgentTool(
+      toolName,
+      args,
+      runtime,
+      verifiedEndpoint
+    )
   })
 }

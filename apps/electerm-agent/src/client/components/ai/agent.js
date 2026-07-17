@@ -72,6 +72,8 @@ ${localCliPrompt}
 
 ${taskModePrompt}
 
+服务状态、近期日志、监听端口和文件分段读取时，必须优先使用 read_service_status、read_recent_logs、verify_listening_port 和 read_file_range 结构化工具。只有结构化工具无法表达目标时才使用原始 shell，且 shell 仍由系统风险策略裁决。
+
 可用工具：
 - 在终端标签页执行命令并读取输出
 - 打开新的本地或 SSH 终端标签页

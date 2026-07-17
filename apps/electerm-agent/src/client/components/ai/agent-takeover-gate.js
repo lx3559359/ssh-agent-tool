@@ -97,7 +97,7 @@ export async function executeAgentToolWithGate ({
       transition('active-idle', 'running-readonly')
     }
 
-    const result = await execute()
+    const result = await execute(verifiedEndpoint)
     if (changing && transition('running-confirmed-change', 'verifying')) {
       transition('verifying', 'active-idle')
     } else if (!changing) {

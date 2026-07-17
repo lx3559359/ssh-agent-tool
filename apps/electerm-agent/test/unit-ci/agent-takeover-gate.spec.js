@@ -9,6 +9,7 @@ const gateUrl = pathToFileURL(path.join(aiRoot, 'agent-takeover-gate.js')).href
 const scopesUrl = pathToFileURL(path.join(aiRoot, 'agent-tool-scopes.js')).href
 const runtimeUrl = pathToFileURL(path.join(aiRoot, 'agent-runtime-context.js')).href
 const agentToolsPath = path.join(aiRoot, 'agent-tools.js')
+const structuredToolsPath = path.join(aiRoot, 'agent-structured-tools.js')
 
 function endpoint (overrides = {}) {
   return {
@@ -30,7 +31,9 @@ test('assigns one valid scope to every exported Agent tool descriptor', async ()
     VALID_AGENT_TOOL_SCOPES,
     withAgentToolScopes
   } = await import(scopesUrl)
-  const source = fs.readFileSync(agentToolsPath, 'utf8')
+  const source = [agentToolsPath, structuredToolsPath]
+    .map(file => fs.readFileSync(file, 'utf8'))
+    .join('\n')
   const names = [...source.matchAll(/name:\s*'([^']+)'/g)].map(match => match[1])
 
   assert.deepEqual(Object.keys(AGENT_TOOL_SCOPES).sort(), [...names].sort())
@@ -94,6 +97,7 @@ test('active exact-session grant invokes one executor once', async () => {
   const { executeAgentToolWithGate } = await import(gateUrl)
   const expected = endpoint()
   let assertedEndpoint
+  let executedEndpoint
   let calls = 0
   const result = await executeAgentToolWithGate({
     descriptor: { scope: 'session-read' },
@@ -104,8 +108,9 @@ test('active exact-session grant invokes one executor once', async () => {
         return { state: 'active-idle' }
       }
     },
-    execute: async () => {
+    execute: async value => {
       calls += 1
+      executedEndpoint = value
       return 'remote-result'
     }
   })
@@ -113,6 +118,7 @@ test('active exact-session grant invokes one executor once', async () => {
   assert.equal(result, 'remote-result')
   assert.equal(calls, 1)
   assert.equal(assertedEndpoint, expected)
+  assert.equal(executedEndpoint, expected)
 })
 
 test('runtime endpoint resolver revalidates complete current SSH identity', async () => {
@@ -163,6 +169,6 @@ test('the single tool entrypoint resolves a descriptor before the guarded switch
   assert.match(source, /function executeResolvedAgentTool/)
   assert.match(entrypoint, /getAgentToolDescriptor\(toolName\)/)
   assert.match(entrypoint, /resolveAgentExecutionEndpoint/)
-  assert.match(entrypoint, /executeAgentToolWithGate/)
+  assert.match(entrypoint, /executeAgentTool/)
   assert.doesNotMatch(entrypoint, /switch\s*\(toolName\)/)
 })

@@ -4,6 +4,10 @@ import {
 } from '../../common/safety-transactions/endpoint-guard.js'
 
 const TAB_SCOPED_AGENT_TOOLS = new Set([
+  'read_service_status',
+  'read_recent_logs',
+  'verify_listening_port',
+  'read_file_range',
   'send_terminal_command',
   'get_terminal_output',
   'sftp_list',

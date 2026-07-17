@@ -7,6 +7,10 @@ export const VALID_AGENT_TOOL_SCOPES = Object.freeze([
 
 export const AGENT_TOOL_SCOPES = Object.freeze({
   confirm_agent_plan: 'conversation',
+  read_service_status: 'session-read',
+  read_recent_logs: 'session-read',
+  verify_listening_port: 'session-read',
+  read_file_range: 'session-read',
   send_terminal_command: 'session-write',
   get_terminal_output: 'session-read',
   open_local_terminal: 'session-control',

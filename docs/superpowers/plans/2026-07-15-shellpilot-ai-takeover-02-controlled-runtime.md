@@ -101,7 +101,7 @@ git commit -m "feat: centralize agent tool risk policy"
 - Modify: `apps/electerm-agent/src/client/components/ai/agent.js`
 - Create: `apps/electerm-agent/test/unit-ci/agent-structured-tools.spec.js`
 
-- [ ] **Step 1: 写入参数边界失败测试**
+- [x] **Step 1: 写入参数边界失败测试**
 
 Test the exact initial tools: `read_service_status`, `read_recent_logs`, `verify_listening_port`, `read_file_range`. Assert `read_recent_logs` requires `limit` in `1..1000`, `read_file_range` requires bounded offset/length, and no tool accepts shell fragments as a service name, port or path option.
 
@@ -112,7 +112,7 @@ assert.throws(
 )
 ```
 
-- [ ] **Step 2: 运行测试并确认失败**
+- [x] **Step 2: 运行测试并确认失败**
 
 ```powershell
 node --test test/unit-ci/agent-structured-tools.spec.js
@@ -120,15 +120,15 @@ node --test test/unit-ci/agent-structured-tools.spec.js
 
 Expected: structured tool registry is absent.
 
-- [ ] **Step 3: 实现固定模板和有限输出**
+- [x] **Step 3: 实现固定模板和有限输出**
 
 Use argument arrays or fixed templates; do not concatenate unchecked shell strings. Every result contains `exitCode`, `truncated`, `nextCursor`, `capturedAt` and endpoint identity. Default limits must keep a single observation below the existing model context safeguards.
 
-- [ ] **Step 4: 调整 Agent prompt 优先选择结构化工具**
+- [x] **Step 4: 调整 Agent prompt 优先选择结构化工具**
 
 Describe the structured tools as the preferred diagnostics path. Raw shell remains available only through the same policy gateway and is never assumed readonly because the model says so.
 
-- [ ] **Step 5: 运行测试并提交**
+- [x] **Step 5: 运行测试并提交**
 
 ```powershell
 node --test test/unit-ci/agent-structured-tools.spec.js test/unit-ci/ai-agent-tools.spec.js
