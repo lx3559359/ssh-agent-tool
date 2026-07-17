@@ -1329,7 +1329,11 @@ class Term extends Component {
     const tab = window.store.applyProfileToTabs(
       deepCopy(this.props.tab || {})
     )
-    return buildTerminalSafetyEndpoint(tab, this.pid)
+    return buildTerminalSafetyEndpoint(
+      tab,
+      this.pid,
+      this.hostKeyFingerprint
+    )
   }
 
   assertSafetyOperationEndpoint = async id => {
@@ -1763,6 +1767,7 @@ class Term extends Component {
   }
 
   remoteInit = async (term = this.term) => {
+    this.hostKeyFingerprint = ''
     this.setState({
       loading: true,
       terminalError: null
@@ -1885,6 +1890,9 @@ class Term extends Component {
       return
     }
     this.port = r.port
+    this.hostKeyFingerprint = typeof r.hostKeyFingerprint === 'string'
+      ? r.hostKeyFingerprint
+      : ''
     this.setStatus(statusMap.success)
     refs.get('sftp-' + id)?.initData(id, r.port)
     term.pid = id

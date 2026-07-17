@@ -21,14 +21,19 @@
 **Files:**
 - Modify: `apps/electerm-agent/src/app/server/ssh-known-hosts.js`
 - Modify: `apps/electerm-agent/src/app/server/session-ssh.js`
+- Modify: `apps/electerm-agent/src/app/server/session-api.js`
 - Modify: `apps/electerm-agent/src/app/server/session-process.js`
-- Modify: `apps/electerm-agent/src/app/server/dispatch-center.js`
 - Modify: `apps/electerm-agent/src/client/common/safety-transactions/endpoint-guard.js`
+- Modify: `apps/electerm-agent/src/client/common/safety-transactions/models.js`
+- Modify: `apps/electerm-agent/src/client/components/terminal/terminal-safety-controller.js`
+- Modify: `apps/electerm-agent/src/client/components/terminal/terminal.jsx`
 - Test: `apps/electerm-agent/test/unit-ci/session-ssh-known-hosts.spec.js`
+- Test: `apps/electerm-agent/test/unit-ci/session-api-identity.spec.js`
+- Test: `apps/electerm-agent/test/unit-ci/session-process.spec.js`
 - Test: `apps/electerm-agent/test/unit-ci/safety-transaction-domain.spec.js`
 - Create: `apps/electerm-agent/test/unit-ci/agent-takeover-endpoint.spec.js`
 
-- [ ] **Step 1: 写入失败测试，要求 host verifier 回传已接受指纹**
+- [x] **Step 1: 写入失败测试，要求 host verifier 回传已接受指纹**
 
 Add a test using the existing `createHostVerifier` fixture:
 
@@ -58,7 +63,7 @@ test('reports the exact accepted host key metadata', async () => {
 })
 ```
 
-- [ ] **Step 2: 写入失败测试，要求严格身份包含指纹**
+- [x] **Step 2: 写入失败测试，要求严格身份包含指纹**
 
 ```js
 test('strict SSH endpoint identity includes host key fingerprint', async () => {
@@ -71,7 +76,7 @@ test('strict SSH endpoint identity includes host key fingerprint', async () => {
 })
 ```
 
-- [ ] **Step 3: 运行测试并确认失败**
+- [x] **Step 3: 运行测试并确认失败**
 
 ```powershell
 Set-Location apps/electerm-agent
@@ -80,7 +85,7 @@ node --test test/unit-ci/session-ssh-known-hosts.spec.js test/unit-ci/safety-tra
 
 Expected: `onVerified` 未调用或 endpoint 缺少 `hostKeyFingerprint`，测试失败。
 
-- [ ] **Step 4: 实现一次性指纹回传和只读会话元数据传播**
+- [x] **Step 4: 实现一次性指纹回传和只读会话元数据传播**
 
 Add `onVerified(meta)` only after the verifier has accepted the key. Normalize the public value as `SHA256:<base64>` and expose it through the existing session metadata response; never expose raw host key bytes.
 
@@ -98,11 +103,11 @@ const STRICT_SESSION_FIELDS = [
 
 Reject an SSH endpoint as incomplete when the accepted fingerprint is missing. Do not apply this requirement to local, serial, RDP, VNC or Telnet sessions; those session types cannot enable SSH takeover.
 
-- [ ] **Step 5: 运行测试并提交**
+- [x] **Step 5: 运行测试并提交**
 
 ```powershell
 node --test test/unit-ci/session-ssh-known-hosts.spec.js test/unit-ci/safety-transaction-domain.spec.js test/unit-ci/agent-takeover-endpoint.spec.js
-git add src/app/server/ssh-known-hosts.js src/app/server/session-ssh.js src/app/server/session-process.js src/app/server/dispatch-center.js src/client/common/safety-transactions/endpoint-guard.js test/unit-ci/session-ssh-known-hosts.spec.js test/unit-ci/safety-transaction-domain.spec.js test/unit-ci/agent-takeover-endpoint.spec.js
+git add src/app/server/ssh-known-hosts.js src/app/server/session-ssh.js src/app/server/session-api.js src/app/server/session-process.js src/client/common/safety-transactions/endpoint-guard.js src/client/common/safety-transactions/models.js src/client/components/terminal/terminal-safety-controller.js src/client/components/terminal/terminal.jsx test/unit-ci/session-ssh-known-hosts.spec.js test/unit-ci/session-api-identity.spec.js test/unit-ci/session-process.spec.js test/unit-ci/safety-transaction-domain.spec.js test/unit-ci/agent-takeover-endpoint.spec.js test/unit-ci/terminal-safety-controller.spec.js
 git commit -m "feat: bind agent takeover to verified ssh identity"
 ```
 

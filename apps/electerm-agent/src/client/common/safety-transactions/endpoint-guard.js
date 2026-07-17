@@ -1,4 +1,11 @@
 const defaultSshPort = 22
+const strictSessionFields = [
+  'tabId',
+  'pid',
+  'terminalPid',
+  'sessionType',
+  'hostKeyFingerprint'
+]
 
 function normalizeIpv6 (host) {
   const percentIndex = host.indexOf('%')
@@ -90,9 +97,36 @@ export function buildEndpointKey (endpoint) {
   return `${normalized.username}@${host}:${normalized.port}`
 }
 
+export function projectEndpoint (endpoint = {}) {
+  const normalized = normalizeEndpoint(endpoint)
+  const projected = { ...normalized }
+  for (const field of strictSessionFields) {
+    const value = endpoint[field]
+    if (value === undefined || value === null || String(value).trim() === '') {
+      const error = new Error(
+        field === 'hostKeyFingerprint'
+          ? 'Verified SSH host key fingerprint is required'
+          : `Complete SSH session identity field is required: ${field}`
+      )
+      error.code = 'INCOMPLETE_SSH_SESSION_IDENTITY'
+      throw error
+    }
+    projected[field] = field === 'sessionType'
+      ? String(value).trim().toLowerCase()
+      : field === 'hostKeyFingerprint'
+        ? String(value).trim()
+        : value
+  }
+  if (projected.sessionType !== 'ssh') {
+    const error = new Error('AI takeover requires an SSH session')
+    error.code = 'SSH_SESSION_REQUIRED'
+    throw error
+  }
+  return projected
+}
+
 function hasSameSessionIdentity (expected, actual) {
-  const sessionFields = ['tabId', 'pid', 'terminalPid', 'sessionType']
-  return sessionFields.every(field => {
+  return strictSessionFields.every(field => {
     if (expected?.[field] === undefined || expected[field] === '') return true
     return String(expected[field]) === String(actual?.[field])
   })

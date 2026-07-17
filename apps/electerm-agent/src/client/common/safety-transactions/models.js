@@ -133,7 +133,8 @@ const validSources = new Set(operationSources)
 const validRisks = new Set(Object.values(operationRisks))
 const validRecoveryProviders = new Set(Object.values(recoveryProviders))
 const endpointIdentityFields = [
-  'tabId', 'host', 'port', 'username', 'title', 'pid', 'terminalPid', 'sessionType'
+  'tabId', 'host', 'port', 'username', 'title', 'pid', 'terminalPid',
+  'sessionType', 'hostKeyFingerprint'
 ]
 const normalizedOperationFields = [
   'id', 'source', 'command', 'title', 'state', 'createdAt', 'updatedAt',

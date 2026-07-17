@@ -509,7 +509,7 @@ test('terminal safety endpoint projects exact SSH identity without credentials',
     privateKey: 'do-not-record-either',
     title: '生产环境',
     type: 'ssh'
-  }, 'terminal-pid-7')
+  }, 'terminal-pid-7', 'SHA256:verified-host-key')
 
   assert.deepEqual(endpoint, {
     tabId: 'tab-prod',
@@ -519,7 +519,8 @@ test('terminal safety endpoint projects exact SSH identity without credentials',
     title: '生产环境',
     pid: 'terminal-pid-7',
     terminalPid: 'terminal-pid-7',
-    sessionType: 'ssh'
+    sessionType: 'ssh',
+    hostKeyFingerprint: 'SHA256:verified-host-key'
   })
   assert.equal(JSON.stringify(endpoint).includes('do-not-record'), false)
 })

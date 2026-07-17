@@ -1,11 +1,15 @@
 import { classifyCommand } from '../../common/safety-transactions/command-classifier.js'
 import { redactAuditText } from '../../common/safety-transactions/audit-redaction.js'
 
-export function buildTerminalSafetyEndpoint (tab = {}, terminalPid) {
+export function buildTerminalSafetyEndpoint (
+  tab = {},
+  terminalPid,
+  hostKeyFingerprint
+) {
   const pid = terminalPid === undefined || terminalPid === null
     ? ''
     : terminalPid
-  return {
+  const endpoint = {
     tabId: tab.id,
     host: tab.host,
     port: Number(tab.port || 22),
@@ -15,6 +19,10 @@ export function buildTerminalSafetyEndpoint (tab = {}, terminalPid) {
     terminalPid: pid,
     sessionType: tab.type || 'ssh'
   }
+  if (hostKeyFingerprint) {
+    endpoint.hostKeyFingerprint = hostKeyFingerprint
+  }
+  return endpoint
 }
 
 export function hasReliableTerminalCommandTracking (
