@@ -124,3 +124,26 @@ test('invalid JSON and API errors preserve the existing draft and redact secrets
     assert.equal(controller.getState().status, 'failed')
   }
 })
+
+test('reset returns a completed creator to a clean idle state without cancelling AI', async () => {
+  const { createAgentSkillCreatorController } = await import(moduleUrl)
+  const calls = []
+  const controller = createAgentSkillCreatorController({
+    runGlobalAsync: async name => {
+      calls.push(name)
+      return { response: response() }
+    },
+    createDraft: async () => ({
+      id: 'inspect-web-service-draft-1',
+      state: 'draft',
+      enabled: false,
+      valid: true,
+      packageDigest: 'a'.repeat(64)
+    })
+  })
+
+  await controller.generate({ requirements: 'Inspect', config })
+  assert.equal(controller.reset(), true)
+  assert.equal(controller.getState().status, 'idle')
+  assert.deepEqual(calls, ['AIchat'])
+})

@@ -13,6 +13,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import message from '../common/message'
 import { getFilePath } from '../../common/file-drop-utils.js'
 import AgentSkillEditor from './agent-skill-editor.jsx'
+import AgentSkillCreateModal from './agent-skill-create-modal.jsx'
 import {
   disableAgentSkill,
   enableAgentSkillDraft,
@@ -58,6 +59,7 @@ export default function AgentSkillManagerModal ({
   const [validation, setValidation] = useState(null)
   const [rollbackDigest, setRollbackDigest] = useState('')
   const [loading, setLoading] = useState(false)
+  const [createOpen, setCreateOpen] = useState(false)
   const selected = useMemo(
     () => catalog.find(item => item.id === selectedId) || null,
     [catalog, selectedId]
@@ -205,6 +207,9 @@ export default function AgentSkillManagerModal ({
     >
       <div className='agent-skill-manager'>
         <Space wrap className='agent-skill-manager-actions'>
+          <Button type='primary' onClick={() => setCreateOpen(true)}>
+            {e('shellpilotSkillCreateWithAi')}
+          </Button>
           <Button onClick={() => archiveInputRef.current?.click()}>
             {e('shellpilotSkillImportArchive')}
           </Button>
@@ -298,6 +303,19 @@ export default function AgentSkillManagerModal ({
             onSaved={handleSaved}
           />
         </div>
+        <AgentSkillCreateModal
+          open={createOpen}
+          onClose={() => setCreateOpen(false)}
+          onDraftReady={draft => refresh(draft.id)}
+          onManualEdit={draft => {
+            setCreateOpen(false)
+            refresh(draft.id)
+          }}
+          onEnabled={skill => {
+            setCreateOpen(false)
+            refresh(skill.id)
+          }}
+        />
       </div>
     </Modal>
   )

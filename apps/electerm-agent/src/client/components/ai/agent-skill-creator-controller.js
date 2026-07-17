@@ -70,6 +70,12 @@ export function createAgentSkillCreatorController ({
     return true
   }
 
+  function reset () {
+    if (active) return false
+    transition('idle')
+    return true
+  }
+
   async function generate ({
     requirements,
     conversation,
@@ -147,6 +153,7 @@ export function createAgentSkillCreatorController ({
   return Object.freeze({
     generate,
     cancel,
+    reset,
     getState: () => state,
     subscribe (listener) {
       if (typeof listener !== 'function') throw new TypeError('Listener must be a function')
