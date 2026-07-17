@@ -46,10 +46,11 @@ export function createDelegatedAgentSafetyPreparation (toolName, args = {}) {
   if (!shouldDelegateAgentSafetyConfirmation(toolName, args)) {
     throw confirmationRequiredError()
   }
-  return deepFreeze({
+  return Object.freeze({
     delegatedSafetyConfirmation: true,
     toolName: String(toolName),
-    confirmedArgs: cloneJson(args)
+    confirmedArgs: deepFreeze(cloneJson(args)),
+    executionState: { result: undefined }
   })
 }
 

@@ -9,7 +9,10 @@ const moduleUrl = pathToFileURL(path.resolve(
 )).href
 
 test('only operations with lower recovery preparation delegate confirmation', async () => {
-  const { shouldDelegateAgentSafetyConfirmation } = await import(moduleUrl)
+  const {
+    createDelegatedAgentSafetyPreparation,
+    shouldDelegateAgentSafetyConfirmation
+  } = await import(moduleUrl)
 
   assert.equal(shouldDelegateAgentSafetyConfirmation('sftp_del', {
     remotePath: '/srv/app/cache'
@@ -31,4 +34,12 @@ test('only operations with lower recovery preparation delegate confirmation', as
     tool: 'node',
     args: ['script.js']
   }), false)
+
+  const preparation = createDelegatedAgentSafetyPreparation('sftp_del', {
+    remotePath: '/srv/app/cache'
+  })
+  assert.equal(Object.isFrozen(preparation), true)
+  assert.equal(Object.isFrozen(preparation.confirmedArgs), true)
+  preparation.executionState.result = '{"success":true}'
+  assert.equal(preparation.executionState.result, '{"success":true}')
 })

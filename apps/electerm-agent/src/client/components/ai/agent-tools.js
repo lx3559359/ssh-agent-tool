@@ -1322,7 +1322,11 @@ export async function executeToolCall (toolName, rawArgs, runtime = {}) {
             runtime
           })
         }
-        if (preparation) preparation.executionResult = result
+        if (preparation?.executionState) {
+          preparation.executionState.result = result
+        } else if (preparation) {
+          preparation.executionResult = result
+        }
         return result
       } catch (error) {
         try {
@@ -1339,7 +1343,9 @@ export async function executeToolCall (toolName, rawArgs, runtime = {}) {
       }
     },
     verifyRisky: async (_result, verifiedEndpoint, preparation) => {
-      const parsed = parseToolResult(preparation?.executionResult)
+      const parsed = parseToolResult(
+        preparation?.executionState?.result ?? preparation?.executionResult
+      )
       if (parsed?.cancelled === true || parsed?.success === false) {
         await failAgentRiskPreparation({
           preparation,
