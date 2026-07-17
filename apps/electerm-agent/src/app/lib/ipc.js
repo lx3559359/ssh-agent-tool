@@ -105,7 +105,8 @@ const {
   nativeUpdateState
 } = require('./native-updater')
 
-const agentSkillRepositoryRoot = path.resolve(appPath, 'agent-skills')
+const agentSkillDataRoot = process.env.DATA_PATH || path.resolve(appPath, 'electerm')
+const agentSkillRepositoryRoot = path.resolve(agentSkillDataRoot, 'agent-skills')
 const agentSkillRepository = createAgentSkillRepository({
   rootPath: agentSkillRepositoryRoot
 })

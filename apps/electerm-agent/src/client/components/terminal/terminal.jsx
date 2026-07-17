@@ -1911,10 +1911,10 @@ class Term extends Component {
     this.hostKeyFingerprint = typeof r.hostKeyFingerprint === 'string'
       ? r.hostKeyFingerprint
       : ''
-    this.setStatus(statusMap.success)
-    refs.get('sftp-' + id)?.initData(id, r.port)
     term.pid = id
     this.pid = id
+    this.setStatus(statusMap.success)
+    refs.get('sftp-' + id)?.initData(id, r.port)
     if (previousEndpoint) {
       emitAgentTakeoverLifecycleEvent({
         type: 'endpoint-change',

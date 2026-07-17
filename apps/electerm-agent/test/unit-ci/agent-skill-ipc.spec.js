@@ -31,7 +31,8 @@ test('registers the exact dedicated Agent Skill async IPC methods', () => {
   assert.ok(block, 'dedicated Agent Skill IPC block is required')
   const names = [...block[1].matchAll(/^ {4}([a-zA-Z][a-zA-Z0-9]+):/gm)].map(match => match[1])
   assert.deepEqual(names, expectedMethods)
-  assert.match(ipcSource, /path\.resolve\(appPath, 'agent-skills'\)/)
+  assert.match(ipcSource, /process\.env\.DATA_PATH \|\| path\.resolve\(appPath, 'electerm'\)/)
+  assert.match(ipcSource, /path\.resolve\(agentSkillDataRoot, 'agent-skills'\)/)
   assert.doesNotMatch(block[1], /rootPath|repositoryRoot|readFileSync|exec|spawn|shell/)
 })
 

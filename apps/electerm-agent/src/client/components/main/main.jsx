@@ -248,6 +248,7 @@ export default auto(function Index (props) {
     title: rightPanelTitle,
     rightPanelTab,
     activeTabId: aiSessionTabId,
+    activeSessionStatus: currentTab?.status || '',
     config
   }
   const terminalInfoProps = {

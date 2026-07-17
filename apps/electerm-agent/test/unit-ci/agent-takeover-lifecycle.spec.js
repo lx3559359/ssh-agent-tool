@@ -119,6 +119,7 @@ test('renderer session lifecycle is wired to the unified takeover adapter', () =
   assert.match(terminalSource, /type: 'tab-close'/)
   assert.match(tabStoreSource, /type: 'tab-close'/)
   assert.match(mainSource, /installAgentTakeoverLifecycle/)
+  assert.match(mainSource, /activeSessionStatus: currentTab\?\.status \|\| ''/)
 })
 
 test('takeover remains memory-only and adds no idle polling or remote work', () => {
@@ -139,4 +140,20 @@ test('takeover remains memory-only and adds no idle polling or remote work', () 
   assert.doesNotMatch(lifecycleSource + registrySource, /AIchat|runCmd|createTerm/)
   assert.doesNotMatch(initialStateSource, /takeoverGrants/)
   assert.doesNotMatch(initialStateSource, /agentRunning:/)
+})
+
+test('terminal publishes connected status only after exact session identity is ready', () => {
+  const terminalSource = fs.readFileSync(
+    path.resolve(__dirname, '../../src/client/components/terminal/terminal.jsx'),
+    'utf8'
+  )
+  const connectedBlock = terminalSource.match(
+    /this\.port = r\.port([\s\S]*?)const wsUrl = this\.buildWsUrl/
+  )
+  assert.ok(connectedBlock, 'SSH connection completion block is required')
+  assert.ok(
+    connectedBlock[1].indexOf('this.pid = id') <
+      connectedBlock[1].indexOf('this.setStatus(statusMap.success)'),
+    'session pid must be assigned before the observable connected status update'
+  )
 })
