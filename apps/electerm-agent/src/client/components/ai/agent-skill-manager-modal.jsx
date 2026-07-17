@@ -11,6 +11,7 @@ import {
 } from 'antd'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import message from '../common/message'
+import { getFilePath } from '../../common/file-drop-utils.js'
 import AgentSkillEditor from './agent-skill-editor.jsx'
 import {
   disableAgentSkill,
@@ -33,11 +34,12 @@ function stateLabel (skill) {
 
 function selectedImportPath (files) {
   const file = files?.[0]
-  if (!file?.path) return ''
+  const filePath = file ? getFilePath(file) : ''
+  if (!filePath) return ''
   const relativeParts = String(file.webkitRelativePath || '')
     .split('/')
     .filter(Boolean)
-  let selectedPath = file.path
+  let selectedPath = filePath
   for (let index = 1; index < relativeParts.length; index += 1) {
     selectedPath = selectedPath.replace(/[\\/][^\\/]+$/, '')
   }
@@ -163,10 +165,24 @@ export default function AgentSkillManagerModal ({
     })
   }
 
-  async function rollbackSelected () {
+  function rollbackSelected () {
     if (!selected?.skillId || !rollbackDigest) return
-    const rolledBack = await rollbackAgentSkill(selected.skillId, rollbackDigest)
-    await refresh(rolledBack.id)
+    Modal.confirm({
+      title: e('shellpilotSkillRollbackConfirm'),
+      content: (
+        <div>
+          <p>{e('shellpilotSkillRollbackExplain')}</p>
+          <p><b>Digest:</b> {rollbackDigest}</p>
+        </div>
+      ),
+      onOk: async () => {
+        const rolledBack = await rollbackAgentSkill(
+          selected.skillId,
+          rollbackDigest
+        )
+        await refresh(rolledBack.id)
+      }
+    })
   }
 
   function handleSaved (draft) {

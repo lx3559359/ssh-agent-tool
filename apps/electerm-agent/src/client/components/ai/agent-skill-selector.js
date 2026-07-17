@@ -10,7 +10,8 @@ function normalizeMatchText (value) {
 export function parseExplicitSkillIds (prompt) {
   const ids = []
   const seen = new Set()
-  for (const match of normalizeMatchText(prompt).matchAll(explicitSkillPattern)) {
+  const source = String(prompt || '').normalize('NFKC')
+  for (const match of source.matchAll(explicitSkillPattern)) {
     const id = match[1]
     if (!seen.has(id)) {
       seen.add(id)
@@ -71,6 +72,20 @@ function selectionResult ({
 }
 
 async function loadSelectedSkill (metadata, client) {
+  const before = await client.getAgentSkillMetadata(metadata.id)
+  const matchesSelection = candidate => (
+    candidate?.skillId === metadata.id &&
+    candidate?.enabled === true &&
+    candidate?.state === 'enabled' &&
+    candidate?.valid === true &&
+    candidate?.version === metadata.version &&
+    candidate?.packageDigest === metadata.packageDigest
+  )
+  if (!matchesSelection(before)) {
+    const error = new Error('Selected Skill changed before its document was loaded.')
+    error.code = 'SKILL_DIGEST_MISMATCH'
+    throw error
+  }
   const document = await client.readAgentSkillFile(metadata.id, 'SKILL.md')
   if (!document || document.path !== 'SKILL.md' ||
     !String(document.content || '').trim() || !String(document.digest || '').trim()) {
@@ -78,7 +93,22 @@ async function loadSelectedSkill (metadata, client) {
     error.code = 'SKILL_INVALID'
     throw error
   }
-  return Object.freeze({ metadata, document: Object.freeze({ ...document }) })
+  const after = await client.getAgentSkillMetadata(metadata.id)
+  if (!matchesSelection(after) ||
+    before.packageDigest !== after.packageDigest ||
+    before.version !== after.version) {
+    const error = new Error('Selected Skill changed while its document was loaded.')
+    error.code = 'SKILL_DIGEST_MISMATCH'
+    throw error
+  }
+  return Object.freeze({
+    metadata: Object.freeze({
+      ...metadata,
+      requestedPermissions: Object.freeze([...(after.requestedPermissions || [])]),
+      riskSummary: Object.freeze({ ...(after.riskSummary || {}) })
+    }),
+    document: Object.freeze({ ...document })
+  })
 }
 
 function explicitFailure (id, rawMetadata, error) {

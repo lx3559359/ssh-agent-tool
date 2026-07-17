@@ -79,9 +79,33 @@ function findArtifact (metadata, artifactId) {
   return artifact
 }
 
-function commandFor (artifact, args) {
-  const suffix = args.length ? ` -- ${args.map(JSON.stringify).join(' ')}` : ''
-  return `${artifact.interpreter} -s${suffix}`
+function posixShellQuote (value) {
+  return `'${String(value).replace(/'/g, '\u0027"\u0027"\u0027')}'`
+}
+
+function stdinInvocation (interpreter) {
+  if (interpreter === 'bash' || interpreter === 'sh') {
+    return `${interpreter} -s --`
+  }
+  if (interpreter === 'node') return 'node - --'
+  if (interpreter === 'python' || interpreter === 'python3') {
+    return `${interpreter} -`
+  }
+  if (interpreter === 'powershell' || interpreter === 'pwsh') {
+    return `${interpreter} -NoProfile -NonInteractive -File -`
+  }
+  throw skillError('SKILL_INTERPRETER_UNSUPPORTED', 'Skill artifact interpreter is unsupported.')
+}
+
+function commandFor (artifact, args, content, fileDigest) {
+  let delimiter = `SHELLPILOT_SKILL_${fileDigest.slice(0, 16)}`
+  while (String(content).split(/\r?\n/).includes(delimiter)) delimiter += '_X'
+  const suffix = args.length
+    ? ` ${args.map(posixShellQuote).join(' ')}`
+    : ''
+  const script = String(content || '')
+  const newline = script.endsWith('\n') ? '' : '\n'
+  return `${stdinInvocation(artifact.interpreter)}${suffix} <<'${delimiter}'\n${script}${newline}${delimiter}`
 }
 
 export async function prepareSkillArtifactCall ({
@@ -169,7 +193,12 @@ export async function prepareSkillArtifactCall ({
       : 'run_local_cli',
     args: artifact.target === 'remote'
       ? deepFreeze({
-        command: commandFor(artifact, artifactArgs),
+        command: commandFor(
+          artifact,
+          artifactArgs,
+          file.content,
+          file.digest
+        ),
         script: file.content,
         scriptArguments: artifactArgs
       })
@@ -184,4 +213,29 @@ export async function prepareSkillArtifactCall ({
     ...(localExecution ? { localExecution } : {})
   }
   return Object.freeze(call)
+}
+
+export async function prepareSelectedSkillArtifactCall ({
+  skillId,
+  artifactId,
+  args,
+  skillBindings = [],
+  endpoint,
+  client = agentSkillClient
+} = {}) {
+  const selectedId = String(skillId || '').trim()
+  const binding = skillBindings.find(item => bindingId(item) === selectedId)
+  if (!binding) {
+    throw skillError(
+      'SKILL_NOT_SELECTED',
+      'Only an explicitly or implicitly selected Skill artifact can run.'
+    )
+  }
+  return prepareSkillArtifactCall({
+    skillBinding: binding,
+    artifactId,
+    args,
+    endpoint,
+    client
+  })
 }

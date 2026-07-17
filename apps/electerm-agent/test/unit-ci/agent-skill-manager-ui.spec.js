@@ -33,6 +33,7 @@ test('Skill manager keeps imports disabled and exposes the complete lifecycle', 
   assert.match(manager, /Modal\.confirm/)
   assert.match(manager, /validation\.valid/)
   assert.match(manager, /validation\.packageDigest/)
+  assert.match(manager, /getFilePath\(file\)/)
 })
 
 test('Skill editor shows the full file plus permission, risk, and validation evidence', () => {

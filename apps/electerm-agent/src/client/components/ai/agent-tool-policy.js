@@ -199,7 +199,11 @@ function classifySkillArtifact ({
     !sameStrings(localExecution.requestedPermissions, permissions)) {
     return blockedSkillPermission()
   }
-  return result('risky', 'SKILL_LOCAL_SCRIPT')
+
+  // Arbitrary local interpreter processes can access filesystem and network
+  // APIs directly. Until an OS sandbox enforces the declared permissions,
+  // local Skill artifacts must not reach the existing local CLI runner.
+  return blockedSkillPermission()
 }
 
 function classifyShellText (text) {

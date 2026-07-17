@@ -57,6 +57,7 @@ import {
 import {
   assertAgentRiskVerificationAllowed
 } from './agent-risk-verification-gate.js'
+import { prepareSelectedSkillArtifactCall } from './agent-skill-execution.js'
 
 function createAgentOperationId (prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`
@@ -561,6 +562,32 @@ export const agentTools = withAgentToolPolicy(withAgentToolScopes([
   {
     type: 'function',
     function: {
+      name: 'run_skill_artifact',
+      description: 'Run one declared script artifact from a Skill selected for this task. The system loads and digest-checks the file, applies its declared permissions, and routes the expanded content through the normal takeover and risk gateway.',
+      parameters: {
+        type: 'object',
+        properties: {
+          skillId: {
+            type: 'string',
+            description: 'Selected Skill ID shown in the selected Skill context.'
+          },
+          artifactId: {
+            type: 'string',
+            description: 'Declared script artifact ID shown in the selected Skill context.'
+          },
+          args: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Separate artifact arguments; never a shell command string.'
+          }
+        },
+        required: ['skillId', 'artifactId']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'run_background_command',
       description: '使用 nohup 在后台运行命令，终端会立即释放。返回 taskId 以便监控，可用 get_background_task_status 和 get_background_task_log 查看进度。',
       parameters: {
@@ -722,6 +749,16 @@ function buildResolvedRiskTransaction (toolName, args, runtime, context = {}) {
           path: args.localPath,
           digest: args.sourceDescriptor.digest,
           algorithm: args.sourceDescriptor.digestAlgorithm || 'unknown'
+        }]
+      : []),
+    ...(context.skillArtifact?.fileDigest
+      ? [{
+          type: 'skill-artifact',
+          id: `${context.skillArtifact.skillId}:${context.skillArtifact.id}`,
+          path: context.skillArtifact.path,
+          digest: context.skillArtifact.fileDigest,
+          packageDigest: context.skillArtifact.packageDigest,
+          algorithm: 'sha256'
         }]
       : [])
   ]
@@ -1281,24 +1318,49 @@ function parseToolResult (result) {
   }
 }
 
-export async function executeToolCall (toolName, rawArgs, runtime = {}) {
+export async function executeToolCall (
+  toolName,
+  rawArgs,
+  runtime = {},
+  controlledSkillCall
+) {
+  if (toolName === 'run_skill_artifact' && !controlledSkillCall) {
+    const pseudoDescriptor = getAgentToolDescriptor(toolName)
+    const endpoint = resolveAgentExecutionEndpoint({
+      descriptor: pseudoDescriptor,
+      runtime
+    })
+    const call = await prepareSelectedSkillArtifactCall({
+      skillId: rawArgs?.skillId,
+      artifactId: rawArgs?.artifactId,
+      args: rawArgs?.args,
+      skillBindings: runtime.selectedSkillBindings || [],
+      endpoint
+    })
+    return executeToolCall(call.toolName, call.args, runtime, call)
+  }
   const descriptor = getAgentToolDescriptor(toolName)
   const args = bindAgentToolArgs(toolName, rawArgs, runtime)
+  const expandedContent = controlledSkillCall?.expandedContent ||
+    args.script || args.expandedContent
   assertAgentRuntimeActive(runtime)
   const initialClassification = classifyAgentCall({
     descriptor,
     args,
-    expandedContent: args.script || args.expandedContent
+    expandedContent,
+    skillArtifact: controlledSkillCall?.skillArtifact,
+    localExecution: controlledSkillCall?.localExecution
   })
   if (isAgentCommandTool(toolName) &&
     initialClassification.outcome === 'allowlisted-readonly') {
     const planGuard = await ensureAgentPlanConfirmed({ toolName, args, runtime })
     if (planGuard) return JSON.stringify(planGuard)
   }
-  const endpoint = resolveAgentExecutionEndpoint({
+  const currentEndpoint = resolveAgentExecutionEndpoint({
     descriptor,
     runtime
   })
+  const endpoint = controlledSkillCall?.endpoint || currentEndpoint
   return executeAgentTool({
     toolName,
     args,
@@ -1310,7 +1372,10 @@ export async function executeToolCall (toolName, rawArgs, runtime = {}) {
     }),
     registry: runtime.takeoverRegistry,
     signal: runtime.signal,
-    expandedContent: args.script || args.expandedContent,
+    expandedContent,
+    skillArtifact: controlledSkillCall?.skillArtifact,
+    localExecution: controlledSkillCall?.localExecution,
+    validateArtifact: controlledSkillCall?.validateArtifact,
     prepareRisky: context => prepareResolvedAgentTool(
       toolName,
       args,

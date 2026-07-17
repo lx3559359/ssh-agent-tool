@@ -66,6 +66,15 @@ test('unrelated prompts request metadata only and never read package contents', 
   assert.deepEqual(result.catalog.map(item => item.id), ['inspect-web-service'])
 })
 
+test('uppercase shell variables are not mistaken for explicit Skill IDs', async () => {
+  const { parseExplicitSkillIds } = await import(moduleUrl)
+
+  assert.deepEqual(parseExplicitSkillIds('echo $HOME and $PATH'), [])
+  assert.deepEqual(parseExplicitSkillIds('use $inspect-web-service'), [
+    'inspect-web-service'
+  ])
+})
+
 test('explicit selection reads only the named Skill and suppresses implicit mixing', async () => {
   const { selectAgentSkills } = await import(moduleUrl)
   const client = clientFor([
@@ -91,7 +100,9 @@ test('explicit selection reads only the named Skill and suppresses implicit mixi
   assert.deepEqual(result.selected.map(item => item.metadata.id), ['inspect-web-service'])
   assert.deepEqual(client.calls, [
     ['list'],
-    ['read', 'inspect-web-service', 'SKILL.md']
+    ['metadata', 'inspect-web-service'],
+    ['read', 'inspect-web-service', 'SKILL.md'],
+    ['metadata', 'inspect-web-service']
   ])
   assert.deepEqual(result.skillBindings, [{
     id: 'inspect-web-service',
@@ -115,7 +126,11 @@ test('implicit matching is deterministic and respects implicitMatching', async (
 
   assert.equal(result.explicit, false)
   assert.deepEqual(result.selected.map(item => item.metadata.id), ['best-match'])
-  assert.deepEqual(client.calls.slice(1), [['read', 'best-match', 'SKILL.md']])
+  assert.deepEqual(client.calls.slice(1), [
+    ['metadata', 'best-match'],
+    ['read', 'best-match', 'SKILL.md'],
+    ['metadata', 'best-match']
+  ])
 })
 
 test('explicit missing disabled invalid or unreadable Skills require a user choice', async () => {
@@ -143,4 +158,28 @@ test('explicit missing disabled invalid or unreadable Skills require a user choi
   })
   assert.equal(result.requiresUserChoice, true)
   assert.equal(result.failure.reasonCode, 'SKILL_NOT_FOUND')
+})
+
+test('selected Skill document is rejected if state version or package digest changes around the read', async () => {
+  const { selectAgentSkills } = await import(moduleUrl)
+  let metadataReads = 0
+  const client = clientFor([metadata()], new Map([
+    ['inspect-web-service', '# Exact workflow']
+  ]))
+  client.getAgentSkillMetadata = async id => {
+    client.calls.push(['metadata', id])
+    metadataReads += 1
+    return metadata({
+      packageDigest: metadataReads > 1 ? 'f'.repeat(64) : 'a'.repeat(64)
+    })
+  }
+
+  const result = await selectAgentSkills({
+    prompt: '$inspect-web-service inspect this endpoint',
+    client
+  })
+
+  assert.equal(result.requiresUserChoice, true)
+  assert.equal(result.failure.reasonCode, 'SKILL_DIGEST_MISMATCH')
+  assert.equal(result.selected.length, 0)
 })

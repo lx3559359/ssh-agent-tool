@@ -33,6 +33,7 @@ export const AGENT_TOOL_SCOPES = Object.freeze({
   get_terminal_status: 'session-read',
   cancel_terminal_command: 'session-control',
   run_local_cli: 'session-control',
+  run_skill_artifact: 'session-control',
   list_local_cli_tools: 'conversation',
   get_codex_cli_status: 'conversation',
   run_background_command: 'session-write',

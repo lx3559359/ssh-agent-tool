@@ -115,6 +115,64 @@ test('prepares a digest-bound remote artifact call without executing it', async 
   ])
 })
 
+test('remote artifact arguments cannot expand shell variables or substitutions', async () => {
+  const { prepareSkillArtifactCall } = await import(executionModuleUrl)
+  const client = clientFor()
+  const call = await prepareSkillArtifactCall({
+    skillBinding: { id: 'inspect-web-service', version: '1.0.0', digest: packageDigest },
+    artifactId: 'collect-evidence',
+    args: ['$(touch /tmp/injected)', '`id`', '$HOME', "single'quote"],
+    endpoint,
+    client
+  })
+
+  assert.match(call.args.command, /'\$\(touch \/tmp\/injected\)'/)
+  assert.match(call.args.command, /'`id`'/)
+  assert.match(call.args.command, /'\$HOME'/)
+  assert.match(call.args.command, /'single'"'"'quote'/)
+  assert.match(call.args.command, /<<'SHELLPILOT_SKILL_b{16}'/)
+  assert.match(call.args.command, /systemctl status nginx/)
+})
+
+test('production selection resolver accepts only a digest-bound selected Skill', async () => {
+  const { prepareSelectedSkillArtifactCall } = await import(executionModuleUrl)
+  const client = clientFor()
+  const call = await prepareSelectedSkillArtifactCall({
+    skillId: 'inspect-web-service',
+    artifactId: 'collect-evidence',
+    args: ['nginx'],
+    skillBindings: [{
+      id: 'inspect-web-service',
+      version: '1.0.0',
+      digest: packageDigest
+    }],
+    endpoint,
+    client
+  })
+
+  assert.equal(call.toolName, 'send_terminal_command')
+  await assert.rejects(prepareSelectedSkillArtifactCall({
+    skillId: 'not-selected',
+    artifactId: 'collect-evidence',
+    skillBindings: [],
+    endpoint,
+    client
+  }), error => error.code === 'SKILL_NOT_SELECTED')
+})
+
+test('Agent production tool chain exposes and routes selected artifacts through the gateway', () => {
+  const source = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/components/ai/agent-tools.js'
+  ), 'utf8')
+
+  assert.match(source, /name:\s*'run_skill_artifact'/)
+  assert.match(source, /prepareSelectedSkillArtifactCall/)
+  assert.match(source, /skillArtifact:\s*controlledSkillCall\?\.skillArtifact/)
+  assert.match(source, /validateArtifact:\s*controlledSkillCall\?\.validateArtifact/)
+  assert.match(source, /type:\s*'skill-artifact'/)
+})
+
 test('artifact revalidation rejects package or file changes before gateway dispatch', async () => {
   const { prepareSkillArtifactCall } = await import(executionModuleUrl)
   const { executeAgentTool } = await import(gatewayModuleUrl)
@@ -217,7 +275,9 @@ test('local artifact envelopes are bounded and require explicit broad permission
   assert.deepEqual(call.localExecution.environmentKeys, [
     'PATH', 'SystemRoot', 'TEMP', 'TMP', 'WINDIR'
   ])
-  assert.equal(classifyAgentCall(call).outcome, 'risky')
+  const blocked = classifyAgentCall(call)
+  assert.equal(blocked.outcome, 'blocked')
+  assert.equal(blocked.errorCode, 'SKILL_PERMISSION_UNENFORCEABLE')
 
   const implicitNetwork = classifyAgentCall({
     ...call,

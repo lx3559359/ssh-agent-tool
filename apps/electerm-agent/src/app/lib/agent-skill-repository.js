@@ -103,6 +103,7 @@ function createAgentSkillRepository (options = {}) {
     throw repositoryError('SKILL_REPOSITORY_ROOT_REQUIRED', 'Skill repository root is required.')
   }
   const rename = options.rename || fsp.rename
+  const onCleanupError = options.onCleanupError || (() => {})
   const onDigestInvalidated = options.onDigestInvalidated || (() => {})
   const locks = new Map()
 
@@ -484,13 +485,28 @@ function createAgentSkillRepository (options = {}) {
       await snapshotEnabled(skillId)
       const target = path.join(statePath('enabled'), skillId)
       const candidate = await copyToTemp(latest.directory, statePath('enabled'))
+      const consumed = path.join(
+        statePath('drafts'),
+        `.consumed-${draftId}-${uniqueToken()}`
+      )
+      let sourceHidden = false
       try {
         await validateOrThrow(candidate, expectedDigest)
         await syncPackage(candidate)
+        await rename(latest.directory, consumed)
+        sourceHidden = true
         await atomicReplaceDirectory(candidate, target)
-        await fsp.rm(latest.directory, { recursive: true, force: true })
+        try {
+          await fsp.rm(consumed, { recursive: true, force: true })
+        } catch (error) {
+          onCleanupError(error)
+        }
         return metadataFor(target, 'enabled', skillId, validation.manifest.id)
       } catch (error) {
+        if (sourceHidden && await pathExists(consumed) &&
+          !await pathExists(latest.directory)) {
+          await rename(consumed, latest.directory)
+        }
         await fsp.rm(candidate, { recursive: true, force: true })
         throw error
       }
@@ -507,8 +523,28 @@ function createAgentSkillRepository (options = {}) {
       await snapshotDirectory(skillId, source, validation.packageDigest)
       const candidate = await copyToTemp(source, statePath('disabled'))
       const target = path.join(statePath('disabled'), skillId)
-      await atomicReplaceDirectory(candidate, target)
-      await fsp.rm(source, { recursive: true, force: true })
+      const consumed = path.join(
+        statePath('enabled'),
+        `.consumed-${skillId}-${uniqueToken()}`
+      )
+      let sourceHidden = false
+      try {
+        await rename(source, consumed)
+        sourceHidden = true
+        await atomicReplaceDirectory(candidate, target)
+      } catch (error) {
+        if (sourceHidden && await pathExists(consumed) &&
+          !await pathExists(source)) {
+          await rename(consumed, source)
+        }
+        await fsp.rm(candidate, { recursive: true, force: true })
+        throw error
+      }
+      try {
+        await fsp.rm(consumed, { recursive: true, force: true })
+      } catch (error) {
+        onCleanupError(error)
+      }
       onDigestInvalidated({ skillId, packageDigest: validation.packageDigest })
       return metadataFor(target, 'disabled', skillId, skillId)
     })
