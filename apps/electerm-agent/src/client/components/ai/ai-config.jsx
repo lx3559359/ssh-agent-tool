@@ -39,6 +39,8 @@ import {
   restoreAIConfigHistoryCredentials,
   sanitizeAIConfigHistory
 } from './ai-request-credentials'
+import AgentSkillManagerModal from './agent-skill-manager-modal.jsx'
+import { listAgentSkills } from './agent-skill-client.js'
 
 const STORAGE_KEY_CONFIG = 'ai_config_history'
 const EVENT_NAME_CONFIG = 'ai-config-history-update'
@@ -201,26 +203,6 @@ const authHeaderOptions = [
   { value: 'Authorization' }
 ]
 
-const skillFields = [
-  {
-    name: 'id',
-    labelKey: 'shellpilotSkillId',
-    placeholderKey: 'shellpilotSkillIdPlaceholder',
-    required: true
-  },
-  {
-    name: 'title',
-    labelKey: 'shellpilotSkillName',
-    placeholderKey: 'shellpilotSkillNamePlaceholder',
-    required: true
-  },
-  {
-    name: 'description',
-    labelKey: 'shellpilotSkillScenario',
-    placeholderKey: 'shellpilotSkillScenarioPlaceholder'
-  }
-]
-
 const mcpServerFields = [
   {
     name: 'name',
@@ -302,6 +284,8 @@ export default function AIConfigForm ({ initialValues, languageVersion, onSubmit
   const [loadingModels, setLoadingModels] = useState(false)
   const [modelOptions, setModelOptions] = useState([])
   const [profileOptions, setProfileOptions] = useState([])
+  const [skillManagerOpen, setSkillManagerOpen] = useState(false)
+  const [skillCount, setSkillCount] = useState(0)
   const baseURLAI = Form.useWatch('baseURLAI', form)
   const apiPathAI = Form.useWatch('apiPathAI', form)
   const activeAIProfileId = Form.useWatch('activeAIProfileId', form)
@@ -336,6 +320,13 @@ export default function AIConfigForm ({ initialValues, languageVersion, onSubmit
       form.validateFields(touchedErrors).catch(() => {})
     }
   }, [form, languageVersion])
+
+  useEffect(() => {
+    if (!showAIConfig) return
+    listAgentSkills()
+      .then(items => setSkillCount(Array.isArray(items) ? items.length : 0))
+      .catch(() => {})
+  }, [showAIConfig])
 
   function filter () {
     return true
@@ -828,71 +819,9 @@ export default function AIConfigForm ({ initialValues, languageVersion, onSubmit
           label={e('shellpilotAiAgentSkill')}
           extra={e('shellpilotAiAgentSkillExtra')}
         >
-          <Form.List name='agentSkills'>
-            {(fields, { add, remove }) => (
-              <Space direction='vertical' className='width-100'>
-                {
-                  fields.map(({ key, name }) => (
-                    <div className='pd1 border' key={key}>
-                      <Space align='start' className='width-100'>
-                        {
-                          skillFields.map(item => (
-                            <Form.Item
-                              key={item.name}
-                              name={[name, item.name]}
-                              label={e(item.labelKey)}
-                              rules={item.required
-                                ? [{ required: true, message: tf('shellpilotFieldRequired', { field: e(item.labelKey) }) }]
-                                : []}
-                              className='flex1'
-                            >
-                              <Input placeholder={e(item.placeholderKey)} />
-                            </Form.Item>
-                          ))
-                        }
-                        <Form.Item
-                          name={[name, 'disabled']}
-                          label={e('shellpilotStatus')}
-                          valuePropName='checked'
-                        >
-                          <Checkbox>{e('shellpilotDisabled')}</Checkbox>
-                        </Form.Item>
-                        <Button
-                          danger
-                          icon={<MinusCircleOutlined />}
-                          onClick={() => remove(name)}
-                        >
-                          {e('shellpilotDelete')}
-                        </Button>
-                      </Space>
-                      <Form.Item
-                        name={[name, 'prompt']}
-                        label={e('shellpilotAiTroubleshootingMethod')}
-                        rules={[{ required: true, message: e('shellpilotAiTroubleshootingMethodRequired') }]}
-                      >
-                        <Input.TextArea
-                          rows={3}
-                          placeholder={e('shellpilotAiTroubleshootingMethodPlaceholder')}
-                        />
-                      </Form.Item>
-                    </div>
-                  ))
-                }
-                <Button
-                  icon={<PlusOutlined />}
-                  onClick={() => add({
-                    id: '',
-                    title: '',
-                    description: '',
-                    prompt: '',
-                    disabled: false
-                  })}
-                >
-                  {e('shellpilotAiAddSkill')}
-                </Button>
-              </Space>
-            )}
-          </Form.List>
+          <Button onClick={() => setSkillManagerOpen(true)}>
+            {tf('shellpilotSkillManageCount', { count: skillCount })}
+          </Button>
         </Form.Item>
 
         <Form.Item
@@ -1002,6 +931,11 @@ export default function AIConfigForm ({ initialValues, languageVersion, onSubmit
           </Space>
         </Form.Item>
       </Form>
+      <AgentSkillManagerModal
+        open={skillManagerOpen}
+        onClose={() => setSkillManagerOpen(false)}
+        onCatalogChange={items => setSkillCount(items.length)}
+      />
       <AiHistory
         storageKey={STORAGE_KEY_CONFIG}
         eventName={EVENT_NAME_CONFIG}

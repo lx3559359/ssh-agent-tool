@@ -20,6 +20,48 @@ function uniqueToken () {
   return `${Date.now().toString(36)}-${crypto.randomBytes(5).toString('hex')}`
 }
 
+function sha256 (value) {
+  return crypto.createHash('sha256').update(String(value || '')).digest('hex')
+}
+
+function legacySkillId (value, identity) {
+  const normalized = String(value || '')
+    .normalize('NFKD')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48)
+    .replace(/-+$/g, '')
+  return normalized || `legacy-skill-${identity.slice(0, 8)}`
+}
+
+function quotedScalar (value, fallback) {
+  const text = String(value || '').trim() || fallback
+  return JSON.stringify(text.slice(0, 4096))
+}
+
+function legacySkillDocument (item, skillId) {
+  const title = String(item.title || item.name || '').trim() || skillId
+  const description = String(item.description || '').trim() || `Migrated workflow for ${title}.`
+  const prompt = (String(item.prompt || '').trim() || description)
+    .slice(0, 192 * 1024)
+  const trigger = description.slice(0, 512) || title
+  return [
+    '---',
+    `id: ${skillId}`,
+    `name: ${quotedScalar(title, skillId)}`,
+    `description: ${quotedScalar(description, `Migrated workflow for ${title}.`)}`,
+    'version: 1.0.0',
+    'triggers:',
+    `  - ${quotedScalar(trigger, title)}`,
+    '---',
+    '',
+    '# Workflow',
+    '',
+    prompt
+  ].join('\n')
+}
+
 async function pathExists (target) {
   try {
     await fsp.access(target)
@@ -174,6 +216,7 @@ function createAgentSkillRepository (options = {}) {
       requestedPermissions: validation.requestedPermissions,
       packageDigest: validation.packageDigest,
       riskSummary: validation.riskSummary,
+      filePaths: Object.keys(validation.fileDigests || {}).sort(),
       errors: validation.errors,
       warnings: validation.warnings,
       historyDigests: await historyDigests(skillId)
@@ -233,6 +276,119 @@ function createAgentSkillRepository (options = {}) {
       await fsp.rm(candidate, { recursive: true, force: true })
       throw error
     }
+  }
+
+  async function readMigrationMarker () {
+    const markerPath = path.join(rootPath, 'migration-v1.json')
+    if (!await pathExists(markerPath)) return null
+    try {
+      const marker = JSON.parse(await fsp.readFile(markerPath, 'utf8'))
+      return marker?.version === 1 && marker.complete === true ? marker : null
+    } catch {
+      return null
+    }
+  }
+
+  async function writeMigrationMarker (marker) {
+    const target = path.join(rootPath, 'migration-v1.json')
+    const candidate = path.join(rootPath, `.migration-v1-${uniqueToken()}.tmp`)
+    try {
+      await fsp.writeFile(candidate, JSON.stringify(marker, null, 2))
+      await syncFile(candidate)
+      await rename(candidate, target)
+    } catch (error) {
+      await fsp.rm(candidate, { force: true })
+      throw error
+    }
+  }
+
+  async function migrateLegacySkills (legacyItems = []) {
+    return withLock('__migration-v1__', async () => {
+      await ensureRoots()
+      const completed = await readMigrationMarker()
+      if (completed) return completed
+
+      const sourceItems = Array.isArray(legacyItems) ? legacyItems : []
+      const entriesByIdentity = new Map()
+      for (const rawItem of sourceItems) {
+        if (!rawItem || typeof rawItem !== 'object') continue
+        const item = {
+          id: String(rawItem.id || '').trim(),
+          title: String(rawItem.title || rawItem.name || '').trim(),
+          description: String(rawItem.description || '').trim(),
+          prompt: String(rawItem.prompt || '').trim()
+        }
+        if (!item.id && !item.title && !item.description && !item.prompt) continue
+        const identity = sha256(JSON.stringify(item))
+        if (!entriesByIdentity.has(identity)) {
+          entriesByIdentity.set(identity, { identity, item })
+        }
+      }
+      const entries = [...entriesByIdentity.values()]
+        .sort((left, right) => left.identity.localeCompare(right.identity))
+      const catalog = await list()
+      const usedSkillIds = new Set(catalog.map(item => item.skillId))
+      const existingEntryIds = new Set(catalog.map(item => item.id))
+      const migrated = []
+      const warnings = []
+
+      for (const entry of entries) {
+        const baseId = legacySkillId(entry.item.id || entry.item.title, entry.identity)
+        const draftId = `${baseId}-legacy-v1-${entry.identity.slice(0, 8)}`
+        if (existingEntryIds.has(draftId)) {
+          const existing = await getMetadata(draftId)
+          migrated.push({
+            sourceDigest: entry.identity,
+            draftId,
+            skillId: existing.skillId,
+            status: 'accounted'
+          })
+          usedSkillIds.add(existing.skillId)
+          continue
+        }
+
+        let skillId = baseId
+        if (usedSkillIds.has(skillId)) {
+          skillId = `${baseId}-legacy-${entry.identity.slice(0, 8)}`
+          warnings.push({
+            code: 'SKILL_MIGRATION_ID_CONFLICT',
+            sourceDigest: entry.identity,
+            requestedId: baseId,
+            resolvedId: skillId
+          })
+        }
+        const parent = statePath('drafts')
+        const candidate = await createTempDirectory(parent)
+        try {
+          await writePackageFiles(candidate, {
+            'SKILL.md': legacySkillDocument(entry.item, skillId)
+          })
+          await validateOrThrow(candidate)
+          await syncPackage(candidate)
+          await rename(candidate, path.join(parent, draftId))
+        } catch (error) {
+          await fsp.rm(candidate, { recursive: true, force: true })
+          throw error
+        }
+        usedSkillIds.add(skillId)
+        existingEntryIds.add(draftId)
+        migrated.push({
+          sourceDigest: entry.identity,
+          draftId,
+          skillId,
+          status: 'migrated'
+        })
+      }
+
+      const marker = {
+        version: 1,
+        complete: true,
+        migrated,
+        warnings
+      }
+      await writeMigrationMarker(marker)
+      return marker
+    })
   }
 
   async function list () {
@@ -405,6 +561,7 @@ function createAgentSkillRepository (options = {}) {
     getMetadata,
     readDocument,
     readFile,
+    migrateLegacySkills,
     createDraft,
     updateDraftFile,
     validateDraft,

@@ -113,6 +113,39 @@ const agentSkillImporter = createAgentSkillImporter({
   repository: agentSkillRepository,
   repositoryRoot: agentSkillRepositoryRoot
 })
+let agentSkillMigrationPromise
+
+function collectLegacyAgentSkills (config = {}) {
+  return [
+    ...(Array.isArray(config.agentSkills) ? config.agentSkills : []),
+    ...(Array.isArray(config.aiProfiles)
+      ? config.aiProfiles.flatMap(profile => (
+        Array.isArray(profile?.agentSkills) ? profile.agentSkills : []
+      ))
+      : [])
+  ]
+}
+
+async function ensureAgentSkillsMigrated () {
+  if (!agentSkillMigrationPromise) {
+    agentSkillMigrationPromise = getConfig()
+      .then(({ config }) => (
+        agentSkillRepository.migrateLegacySkills(
+          collectLegacyAgentSkills(config)
+        )
+      ))
+      .catch(error => {
+        agentSkillMigrationPromise = null
+        throw error
+      })
+  }
+  return agentSkillMigrationPromise
+}
+
+async function afterAgentSkillMigration (operation) {
+  await ensureAgentSkillsMigrated()
+  return operation()
+}
 
 function safeAgentSkillResult (operation) {
   return Promise.resolve()
@@ -235,17 +268,17 @@ function initIpc () {
     event.returnValue = ipcSyncFuncs[name](...args)
   })
   const agentSkillAsyncGlobals = {
-    listAgentSkills: () => safeAgentSkillResult(() => agentSkillRepository.list()),
-    getAgentSkillMetadata: id => safeAgentSkillResult(() => agentSkillRepository.getMetadata(id)),
-    readAgentSkillFile: (id, relativePath) => safeAgentSkillResult(() => agentSkillRepository.readFile(id, relativePath)),
-    createAgentSkillDraft: files => safeAgentSkillResult(() => agentSkillRepository.createDraft(files)),
-    updateAgentSkillDraftFile: (id, relativePath, content) => safeAgentSkillResult(() => agentSkillRepository.updateDraftFile(id, relativePath, content)),
-    validateAgentSkillDraft: id => safeAgentSkillResult(() => agentSkillRepository.validateDraft(id)),
-    enableAgentSkillDraft: (id, packageDigest) => safeAgentSkillResult(() => agentSkillRepository.enableDraft(id, packageDigest)),
-    disableAgentSkill: id => safeAgentSkillResult(() => agentSkillRepository.disable(id)),
-    rollbackAgentSkill: (id, packageDigest) => safeAgentSkillResult(() => agentSkillRepository.rollback(id, packageDigest)),
-    removeAgentSkill: id => safeAgentSkillResult(() => agentSkillRepository.remove(id)),
-    importAgentSkill: sourcePath => safeAgentSkillResult(() => agentSkillImporter.importSkill(sourcePath))
+    listAgentSkills: () => safeAgentSkillResult(() => afterAgentSkillMigration(() => agentSkillRepository.list())),
+    getAgentSkillMetadata: id => safeAgentSkillResult(() => afterAgentSkillMigration(() => agentSkillRepository.getMetadata(id))),
+    readAgentSkillFile: (id, relativePath) => safeAgentSkillResult(() => afterAgentSkillMigration(() => agentSkillRepository.readFile(id, relativePath))),
+    createAgentSkillDraft: files => safeAgentSkillResult(() => afterAgentSkillMigration(() => agentSkillRepository.createDraft(files))),
+    updateAgentSkillDraftFile: (id, relativePath, content) => safeAgentSkillResult(() => afterAgentSkillMigration(() => agentSkillRepository.updateDraftFile(id, relativePath, content))),
+    validateAgentSkillDraft: id => safeAgentSkillResult(() => afterAgentSkillMigration(() => agentSkillRepository.validateDraft(id))),
+    enableAgentSkillDraft: (id, packageDigest) => safeAgentSkillResult(() => afterAgentSkillMigration(() => agentSkillRepository.enableDraft(id, packageDigest))),
+    disableAgentSkill: id => safeAgentSkillResult(() => afterAgentSkillMigration(() => agentSkillRepository.disable(id))),
+    rollbackAgentSkill: (id, packageDigest) => safeAgentSkillResult(() => afterAgentSkillMigration(() => agentSkillRepository.rollback(id, packageDigest))),
+    removeAgentSkill: id => safeAgentSkillResult(() => afterAgentSkillMigration(() => agentSkillRepository.remove(id))),
+    importAgentSkill: sourcePath => safeAgentSkillResult(() => afterAgentSkillMigration(() => agentSkillImporter.importSkill(sourcePath)))
   }
   const asyncGlobals = {
     ...agentSkillAsyncGlobals,
