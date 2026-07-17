@@ -69,6 +69,41 @@ test('builds a deeply frozen auditable risk transaction and rejects unsafe calls
   )
 })
 
+test('reclassifies a digest-bound remote Skill artifact using its verified script context', async () => {
+  const { buildRiskTransaction } = await import(moduleUrl)
+  const skillArtifact = {
+    skillId: 'inspect-web-service',
+    id: 'collect-evidence',
+    target: 'remote',
+    interpreter: 'bash',
+    path: 'scripts/collect.sh',
+    packageDigest: 'a'.repeat(64),
+    fileDigest: 'b'.repeat(64),
+    requestedPermissions: ['ssh.read']
+  }
+  const transaction = buildRiskTransaction([{
+    name: 'send_terminal_command',
+    args: {
+      command: "bash -s -- 'nginx' <<'SHELLPILOT_SKILL_bbbbbbbbbbbbbbbb'\nsystemctl status nginx\nSHELLPILOT_SKILL_bbbbbbbbbbbbbbbb"
+    },
+    expandedContent: 'systemctl status nginx',
+    skillArtifact
+  }], context({
+    artifactDigests: [{
+      type: 'skill-artifact',
+      id: 'inspect-web-service:collect-evidence',
+      digest: 'b'.repeat(64),
+      packageDigest: 'a'.repeat(64),
+      algorithm: 'sha256'
+    }]
+  }))
+
+  assert.equal(transaction.calls[0].classification.outcome, 'risky')
+  assert.equal(transaction.calls[0].classification.reasonCode, 'SKILL_REMOTE_SCRIPT')
+  assert.equal(transaction.calls[0].skillArtifact.fileDigest, 'b'.repeat(64))
+  assert.equal(Object.isFrozen(transaction.calls[0].skillArtifact), true)
+})
+
 test('combines transactions only when all authorization boundaries remain compatible', async () => {
   const {
     buildRiskTransaction,

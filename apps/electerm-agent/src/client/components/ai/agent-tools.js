@@ -767,6 +767,8 @@ function buildResolvedRiskTransaction (toolName, args, runtime, context = {}) {
     args,
     descriptor: context.descriptor,
     expandedContent: context.expandedContent,
+    skillArtifact: context.skillArtifact,
+    localExecution: context.localExecution,
     scriptEntry: args.scriptEntry || null
   }], {
     endpoint: context.endpoint,
@@ -861,7 +863,8 @@ function beginPreparedRiskBatchCall (preparation) {
 export async function prepareAgentRiskBatch (toolCalls, runtime = {}) {
   if (runtime.riskBatch?.terminal === true) runtime.riskBatch = null
   if (!Array.isArray(toolCalls) || toolCalls.length < 2 ||
-    toolCalls.some(call => call?.function?.name === 'confirm_agent_plan')) {
+    toolCalls.some(call => call?.function?.name === 'confirm_agent_plan') ||
+    toolCalls.some(call => call?.function?.name === 'run_skill_artifact')) {
     return null
   }
   if (await ensureAgentPlanAvailable(runtime)) return null

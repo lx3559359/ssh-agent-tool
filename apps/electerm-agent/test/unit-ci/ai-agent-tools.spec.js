@@ -59,6 +59,10 @@ test('Agent tool execution routes risky tools through frozen transaction confirm
   assert.match(source, /requestAgentRiskConfirmation/)
   assert.match(source, /combineRiskTransactions/)
   assert.match(source, /export async function prepareAgentRiskBatch/)
+  assert.match(
+    source,
+    /toolCalls\.some\(call\s*=>\s*call\?\.function\?\.name\s*===\s*'run_skill_artifact'\)/
+  )
   assert.match(source, /prepareRisky:\s*context\s*=>\s*prepareResolvedAgentTool/)
   assert.match(source, /executeAgentTool\(\{/)
 })

@@ -83,8 +83,18 @@ function normalizedCall (call) {
     ? getAgentToolDescriptor(call.descriptor.name)
     : getAgentToolDescriptor(name)
   const args = cloneJson(call?.args || {})
-  const expandedContent = call?.expandedContent ?? null
-  const classification = classifyAgentCall({ descriptor, args, expandedContent })
+  const expandedContent = call?.expandedContent == null
+    ? null
+    : String(call.expandedContent)
+  const skillArtifact = cloneJson(call?.skillArtifact ?? null)
+  const localExecution = cloneJson(call?.localExecution ?? null)
+  const classification = classifyAgentCall({
+    descriptor,
+    args,
+    expandedContent,
+    skillArtifact,
+    localExecution
+  })
   if (classification.outcome === 'blocked' || classification.outcome === 'unauditable') {
     rejectTransaction(`Risk transaction contains ${classification.outcome} call: ${name}`)
   }
@@ -93,6 +103,9 @@ function normalizedCall (call) {
     args,
     command: callCommand(name, args),
     scriptEntry: cloneJson(call?.scriptEntry ?? null),
+    expandedContent,
+    skillArtifact,
+    localExecution,
     classification: cloneJson(classification)
   }
 }
@@ -170,7 +183,10 @@ export function combineRiskTransactions (transactions) {
     transactions.flatMap(transaction => transaction.calls.map(call => ({
       name: call.name,
       args: call.args,
-      scriptEntry: call.scriptEntry
+      scriptEntry: call.scriptEntry,
+      expandedContent: call.expandedContent,
+      skillArtifact: call.skillArtifact,
+      localExecution: call.localExecution
     }))),
     {
       endpoint: first.endpoint,
