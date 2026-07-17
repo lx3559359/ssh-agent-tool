@@ -1,6 +1,7 @@
 import {
   agentTools,
   executeToolCall,
+  failAgentRiskBatch,
   prepareAgentRiskBatch
 } from './agent-tools'
 import {
@@ -358,6 +359,10 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
             await markCancelled()
             return
           }
+          await failAgentRiskBatch(agentRuntime, err, {
+            toolName: toolCall.function.name,
+            args
+          })
           toolEntry.status = 'error'
           const observation = await createAgentToolObservation(
             toolCall.function.name,

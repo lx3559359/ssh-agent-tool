@@ -88,6 +88,10 @@ test('Agent tools route every executor through the single takeover gate', () => 
   assert.match(source, /case 'run_background_command'/)
   assert.match(agentSource, /agentTools\.map\(\(\{ type, function: definition \}\)/)
   assert.match(agentSource, /prepareAgentRiskBatch\(assistantMessage\.tool_calls, agentRuntime\)/)
+  assert.match(agentSource, /failAgentRiskBatch\(agentRuntime, err/)
+  assert.match(source, /mcpDescribeSftpUploadSource/)
+  assert.match(source, /createAgentRiskTerminalHandler/)
+  assert.match(source, /sourceDescriptor/)
 })
 
 test('Agent prompt rules do not allow direct command execution without confirmation', () => {

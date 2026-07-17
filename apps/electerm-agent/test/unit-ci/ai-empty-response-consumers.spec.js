@@ -47,9 +47,10 @@ async function importAgentModule () {
   let source = read('src/client/components/ai/agent.js')
   source = source
     .replace(
-      /^import \{\r?\n\s*agentTools,\r?\n\s*executeToolCall,\r?\n\s*prepareAgentRiskBatch\r?\n\} from '\.\/agent-tools'\r?\n/m,
+      /^import \{\r?\n\s*agentTools,\r?\n\s*executeToolCall,\r?\n\s*failAgentRiskBatch,\r?\n\s*prepareAgentRiskBatch\r?\n\} from '\.\/agent-tools'\r?\n/m,
       'const agentTools = []\n' +
       'const executeToolCall = (...args) => globalThis.__executeToolCall?.(...args) ?? \'\'\n' +
+      'const failAgentRiskBatch = async () => null\n' +
       'const prepareAgentRiskBatch = async () => null\n'
     )
     .replace(

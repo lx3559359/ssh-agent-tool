@@ -210,8 +210,14 @@ test('production handlers use abortable waits and prepare upload recovery before
   assert.match(background, /options\.signal/)
   assert.match(commandEntrypoint, /runOptions\.signal\.addEventListener\('abort'/)
   assert.ok(
+    upload.indexOf('verifyLocalTransferSource') <
+      upload.indexOf('prepareTransferSafetyOperation')
+  )
+  assert.ok(
     upload.indexOf('prepareTransferSafetyOperation') <
       upload.indexOf('addTransferList')
   )
+  assert.match(upload, /preparedTransfer\?\.transferId/)
+  assert.match(upload, /Prepared SFTP recovery operation changed before queueing/)
   assert.match(upload, /safetyOperationId/)
 })

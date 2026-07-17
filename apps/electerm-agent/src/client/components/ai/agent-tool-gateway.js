@@ -114,7 +114,7 @@ export async function executeAgentTool ({
             planGrant: preparation?.riskPlanGrant,
             endpoint: verifiedEndpoint,
             toolName,
-            args,
+            args: preparation?.confirmedArgs || args,
             callIndex: preparation?.riskCallIndex || 0
           })
         } catch (error) {

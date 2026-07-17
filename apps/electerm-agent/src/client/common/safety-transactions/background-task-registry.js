@@ -91,6 +91,7 @@ export function createBackgroundTaskRegistry (options = {}) {
     0,
     30 * 24 * 60 * 60 * 1000
   )
+  const onTerminalError = options.onTerminalError || (() => {})
   if (typeof readFile !== 'function' || typeof isAlive !== 'function' ||
     typeof kill !== 'function') {
     throw new TypeError('后台任务 registry 缺少监控能力。')
@@ -143,7 +144,13 @@ export function createBackgroundTaskRegistry (options = {}) {
     delete record.finalizePending
     capabilities.delete(record.id)
     pruneTerminalRecords()
-    return { ...record }
+    const result = { ...record }
+    if (typeof capability?.onTerminal === 'function') {
+      Promise.resolve()
+        .then(() => capability.onTerminal(result))
+        .catch(onTerminalError)
+    }
+    return result
   }
 
   function markFinalizeFailure (record, error, returnedFalse) {
@@ -349,7 +356,8 @@ export function createBackgroundTaskRegistry (options = {}) {
       checking: null,
       timer: null,
       nextDelay: monitorInitialDelayMs,
-      monitorStartedAt: time
+      monitorStartedAt: time,
+      onTerminal: task.onTerminal
     }
     records.set(record.id, record)
     capabilities.set(record.id, capability)

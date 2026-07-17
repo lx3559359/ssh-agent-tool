@@ -59,6 +59,7 @@ export default class TransportAction extends Component {
     this.transferAttempts = createTransferAttemptGuard()
     this.subTransports = new Set()
     this.localSourceDescriptor = props.transfer?.sourceDescriptor || null
+    this.agentRiskTerminalPromise = null
     this.transferSafety = createTransferSafetyController({
       getTransfer: this.getTransferSafetyInput,
       getCapability: () => refs.get('sftp-' + this.tabId),
@@ -203,6 +204,11 @@ export default class TransportAction extends Component {
       finishTime: Date.now()
     })
     store.addTransferHistory(tr)
+    this.notifyAgentRiskTerminal({
+      status: 'failed',
+      error: errorMsg,
+      transferId: id
+    }).catch(error => window.store.onError(error))
     refsStatic.get('transfer-queue')?.addToQueue(
       'delete',
       id
@@ -275,6 +281,15 @@ export default class TransportAction extends Component {
         status: 'exception',
         error: error.message
       }
+      window.store.onError(error)
+    }
+    try {
+      await this.notifyAgentRiskTerminal({
+        status: update.status === 'exception' || update.error ? 'failed' : 'completed',
+        error: update.error || '',
+        transferId: this.props.transfer.id
+      })
+    } catch (error) {
       window.store.onError(error)
     }
     const {
@@ -395,6 +410,15 @@ export default class TransportAction extends Component {
     }
   }
 
+  notifyAgentRiskTerminal = (outcome) => {
+    if (this.agentRiskTerminalPromise) return this.agentRiskTerminalPromise
+    const callback = this.props.transfer?._agentRiskTerminal
+    if (typeof callback !== 'function') return Promise.resolve(null)
+    this.agentRiskTerminalPromise = Promise.resolve()
+      .then(() => callback(outcome))
+    return this.agentRiskTerminalPromise
+  }
+
   cancelProtectedTransport = async () => {
     await this.finishTransfer()
   }
@@ -406,7 +430,15 @@ export default class TransportAction extends Component {
       try {
         await this.transferSafety.cancel()
       } finally {
-        await this.finishTransfer()
+        try {
+          await this.notifyAgentRiskTerminal({
+            status: 'cancelled',
+            remoteState: 'unknown',
+            transferId: this.props.transfer.id
+          })
+        } finally {
+          await this.finishTransfer()
+        }
       }
     })()
     return this.cancellationPromise

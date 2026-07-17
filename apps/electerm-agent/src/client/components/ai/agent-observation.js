@@ -102,9 +102,9 @@ export function serializeAgentObservationForModel (observation = {}) {
     toolName: observation.toolName,
     capturedAt: observation.capturedAt,
     truncated: observation.truncated || modelWasTruncated,
-    nextCursor: observation.nextCursor ?? (
-      modelWasTruncated ? `model:${byteLength(modelData)}` : null
-    ),
+    nextCursor: modelWasTruncated
+      ? `model:${byteLength(modelData)}`
+      : (observation.nextCursor ?? null),
     data: modelData
   })
   return `${untrustedInstruction}\n${JSON.stringify(safe)}`

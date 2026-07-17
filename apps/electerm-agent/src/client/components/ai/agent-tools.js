@@ -41,9 +41,14 @@ import {
 } from './agent-risk-transaction.js'
 import { requestAgentRiskConfirmation } from './agent-risk-confirmation-modal.jsx'
 import {
-  assertAgentRiskResultReadyForVerification,
   assertAgentVerificationDeclared
 } from './agent-risk-result.js'
+import {
+  completeAgentRiskPreparation,
+  createAgentRiskTerminalHandler,
+  failAgentRiskPreparation,
+  isAgentAsyncRiskResult
+} from './agent-risk-async.js'
 
 function createAgentOperationId (prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`
@@ -623,6 +628,22 @@ export const agentTools = withAgentToolPolicy(withAgentToolScopes([
   }
 ]))
 
+const sftpListTool = agentTools.find(tool => tool.function.name === 'sftp_list')
+Object.assign(sftpListTool.function.parameters.properties, {
+  cursor: {
+    type: 'string',
+    description: 'Continuation cursor returned by the previous page.'
+  },
+  limit: {
+    type: 'number',
+    description: 'Page item limit from 1 to 200; defaults to 100.'
+  },
+  maxBytes: {
+    type: 'number',
+    description: 'Page JSON byte limit; defaults to 24 KiB.'
+  }
+})
+
 const agentToolDescriptors = new Map(
   agentTools.map(descriptor => [descriptor.function.name, descriptor])
 )
@@ -650,6 +671,15 @@ function affectedObjectsFor (toolName, args, runtime) {
 }
 
 function recoveryFor (toolName, args) {
+  if (toolName === 'sftp_upload' && args.preparedTransfer?.safetyOperationId) {
+    return {
+      type: 'sftp',
+      verified: true,
+      strategyVerified: true,
+      operationId: args.preparedTransfer.safetyOperationId,
+      limits: 'Exact target recovery was prepared and verified before this confirmation.'
+    }
+  }
   if (!isAgentCommandTool(toolName)) {
     return {
       type: toolName.startsWith('sftp_') ? 'sftp' : 'none',
@@ -675,6 +705,17 @@ function recoveryFor (toolName, args) {
 
 function buildResolvedRiskTransaction (toolName, args, runtime, context = {}) {
   const recovery = recoveryFor(toolName, args)
+  const artifactDigests = [
+    ...(runtime.planGrant?.payload?.artifactDigests || []),
+    ...(toolName === 'sftp_upload' && args.sourceDescriptor?.digest
+      ? [{
+          type: 'local-transfer-source',
+          path: args.localPath,
+          digest: args.sourceDescriptor.digest,
+          algorithm: args.sourceDescriptor.digestAlgorithm || 'unknown'
+        }]
+      : [])
+  ]
   return buildRiskTransaction([{
     name: toolName,
     args,
@@ -695,8 +736,36 @@ function buildResolvedRiskTransaction (toolName, args, runtime, context = {}) {
     rollbackLimits: recovery.limits,
     verification: runtime.planGrant?.payload?.verification || [],
     skillBindings: runtime.planGrant?.payload?.skillBindings || [],
-    artifactDigests: runtime.planGrant?.payload?.artifactDigests || []
+    artifactDigests
   })
+}
+
+export async function prepareAgentRiskArgs (
+  toolName,
+  args,
+  runtime,
+  store = window.store,
+  options = {}
+) {
+  if (toolName !== 'sftp_upload') return args
+  assertAgentRuntimeActive(runtime)
+  const prepared = await store.mcpDescribeSftpUploadSource(args, {
+    signal: runtime.signal,
+    prepareRecovery: options.prepareRecovery !== false
+  })
+  assertAgentRuntimeActive(runtime)
+  return {
+    ...args,
+    sourceDescriptor: prepared.sourceDescriptor,
+    ...(prepared.preparedTransfer
+      ? { preparedTransfer: prepared.preparedTransfer }
+      : {})
+  }
+}
+
+async function cancelPreparedRiskArtifacts (args, store = window.store) {
+  if (!args?.preparedTransfer?.safetyOperationId) return
+  await store.mcpCancelPreparedSftpUpload(args.preparedTransfer)
 }
 
 function batchPreparationFor (runtime) {
@@ -717,6 +786,7 @@ function batchPreparationFor (runtime) {
     riskTaskId: batch.riskTaskId,
     riskPlanGrant: batch.riskPlanGrant,
     riskCallIndex,
+    confirmedArgs: batch.transaction.calls[riskCallIndex].args,
     riskBatch: batch
   }
 }
@@ -733,20 +803,8 @@ function beginPreparedRiskBatchCall (preparation) {
   return true
 }
 
-function markPreparedRiskBatchTerminal (preparation) {
-  if (preparation?.riskBatch) preparation.riskBatch.terminal = true
-}
-
-function completePreparedRiskBatchCall (preparation) {
-  const batch = preparation?.riskBatch
-  if (!batch) return true
-  batch.verifiedCalls += 1
-  const complete = batch.verifiedCalls === batch.transaction.calls.length
-  if (complete) batch.terminal = true
-  return complete
-}
-
 export async function prepareAgentRiskBatch (toolCalls, runtime = {}) {
+  if (runtime.riskBatch?.terminal === true) runtime.riskBatch = null
   if (!Array.isArray(toolCalls) || toolCalls.length < 2 ||
     toolCalls.some(call => call?.function?.name === 'confirm_agent_plan')) {
     return null
@@ -767,7 +825,10 @@ export async function prepareAgentRiskBatch (toolCalls, runtime = {}) {
     } catch {
       continue
     }
-    const args = bindAgentToolArgs(toolName, rawArgs, runtime)
+    let args = bindAgentToolArgs(toolName, rawArgs, runtime)
+    args = await prepareAgentRiskArgs(toolName, args, runtime, window.store, {
+      prepareRecovery: false
+    })
     const endpoint = resolveAgentExecutionEndpoint({ descriptor, runtime })
     const expandedContent = args.script || args.expandedContent
     const classification = classifyAgentCall({
@@ -784,6 +845,7 @@ export async function prepareAgentRiskBatch (toolCalls, runtime = {}) {
     ))
   }
   if (transactions.length < 2 ||
+    transactions.some(item => item.calls.some(call => call.name === 'sftp_upload')) ||
     !transactions.slice(1).every(item => (
       canCombineRiskTransactions(transactions[0], item)
     ))) {
@@ -802,7 +864,8 @@ export async function prepareAgentRiskBatch (toolCalls, runtime = {}) {
         riskTaskId: confirmation.taskId,
         riskPlanGrant: confirmation.planGrant,
         cursor: 0,
-        verifiedCalls: 0,
+        completedCalls: new Set(),
+        settling: null,
         terminal: false
       }
     : { cancelledResult: confirmation, terminal: true }
@@ -816,23 +879,32 @@ async function prepareResolvedAgentTool (toolName, args, runtime, context = {}) 
   }
   const batchPreparation = batchPreparationFor(runtime)
   if (batchPreparation) return batchPreparation
+  const confirmedArgs = await prepareAgentRiskArgs(toolName, args, runtime)
   const transaction = buildResolvedRiskTransaction(
     toolName,
-    args,
+    confirmedArgs,
     runtime,
     context
   )
-  const confirmation = await confirmRiskTransaction(transaction, {
-    confirm: frozen => requestAgentRiskConfirmation(frozen, {
-      signal: runtime.signal
+  let confirmation
+  try {
+    confirmation = await confirmRiskTransaction(transaction, {
+      confirm: frozen => requestAgentRiskConfirmation(frozen, {
+        signal: runtime.signal
+      })
     })
-  })
-  assertAgentRuntimeActive(runtime)
+    assertAgentRuntimeActive(runtime)
+  } catch (error) {
+    await cancelPreparedRiskArtifacts(confirmedArgs)
+    throw error
+  }
+  if (!confirmation.accepted) await cancelPreparedRiskArtifacts(confirmedArgs)
   return confirmation.accepted
     ? {
         riskTransaction: transaction,
         riskTaskId: confirmation.taskId,
-        riskPlanGrant: confirmation.planGrant
+        riskPlanGrant: confirmation.planGrant,
+        confirmedArgs
       }
     : { handled: true, result: JSON.stringify(confirmation) }
 }
@@ -869,7 +941,7 @@ async function runTerminalTool (store, args, runtime) {
   }
 }
 
-async function executeResolvedAgentTool (toolName, args, runtime, endpoint) {
+async function executeResolvedAgentTool (toolName, args, runtime, endpoint, preparation) {
   const store = window.store
   switch (toolName) {
     case 'confirm_agent_plan': {
@@ -939,7 +1011,8 @@ async function executeResolvedAgentTool (toolName, args, runtime, endpoint) {
     }
     case 'sftp_upload': {
       const transfer = Promise.resolve(store.mcpSftpUpload(args, {
-        signal: runtime.signal
+        signal: runtime.signal,
+        onTerminal: createPreparedRiskTerminalHandler(preparation, endpoint, runtime)
       }))
       registerAgentTransferCancellation(runtime, transfer, args.tabId)
       const result = await transfer
@@ -948,7 +1021,8 @@ async function executeResolvedAgentTool (toolName, args, runtime, endpoint) {
     }
     case 'sftp_download': {
       const transfer = Promise.resolve(store.mcpSftpDownload(args, {
-        signal: runtime.signal
+        signal: runtime.signal,
+        onTerminal: createPreparedRiskTerminalHandler(preparation, endpoint, runtime)
       }))
       registerAgentTransferCancellation(runtime, transfer, args.tabId)
       const result = await transfer
@@ -985,7 +1059,8 @@ async function executeResolvedAgentTool (toolName, args, runtime, endpoint) {
     }
     case 'run_background_command': {
       const backgroundTask = Promise.resolve(store.mcpRunBackgroundCommand(args, {
-        signal: runtime.signal
+        signal: runtime.signal,
+        onTerminal: createPreparedRiskTerminalHandler(preparation, endpoint, runtime)
       }))
       registerDeferredAgentCancellation(runtime, backgroundTask, result => {
         if (!result?.taskId) return undefined
@@ -1070,6 +1145,41 @@ async function verifyPreparedAgentRisk (preparation, endpoint, runtime) {
   return { passed: true, count: verification.length }
 }
 
+function completePreparedAgentRisk (preparation, endpoint, runtime) {
+  return completeAgentRiskPreparation({
+    preparation,
+    verify: () => verifyPreparedAgentRisk(preparation, endpoint, runtime),
+    settle: settleRiskTransactionTask
+  })
+}
+
+function createPreparedRiskTerminalHandler (preparation, endpoint, runtime) {
+  if (!preparation?.riskTaskId) return undefined
+  return createAgentRiskTerminalHandler({
+    preparation,
+    verify: () => verifyPreparedAgentRisk(preparation, endpoint, runtime),
+    settle: settleRiskTransactionTask
+  })
+}
+
+export async function failAgentRiskBatch (runtime, error, call = {}) {
+  const batch = runtime?.riskBatch
+  if (!batch || batch.terminal === true || batch.cancelledResult) return null
+  const nextCall = batch.transaction?.calls?.[batch.cursor]
+  if (call.toolName && nextCall?.name !== call.toolName) return null
+  return failAgentRiskPreparation({
+    preparation: {
+      riskTaskId: batch.riskTaskId,
+      riskTransaction: batch.transaction,
+      riskBatch: batch,
+      riskCallIndex: batch.cursor
+    },
+    error,
+    dispatched: batch.cursor > 0,
+    settle: settleRiskTransactionTask
+  })
+}
+
 function parseToolResult (result) {
   try {
     return JSON.parse(result)
@@ -1115,19 +1225,24 @@ export async function executeToolCall (toolName, rawArgs, runtime = {}) {
       context
     ),
     invalidateRisky: async (error, preparation) => {
-      markPreparedRiskBatchTerminal(preparation)
-      if (!preparation?.riskTaskId) return
-      await settleRiskTransactionTask({
-        taskId: preparation.riskTaskId,
-        status: 'failed',
+      await failAgentRiskPreparation({
+        preparation,
         error,
-        remoteState: 'not-dispatched',
-        canAutoRetry: false
+        dispatched: false,
+        settle: settleRiskTransactionTask
       })
     },
     execute: async (verifiedEndpoint, preparation, executionContext = {}) => {
       try {
         const executionArgs = executionContext.validated?.args || args
+        beginPreparedRiskBatchCall(preparation)
+        const result = await executeResolvedAgentTool(
+          toolName,
+          executionArgs,
+          runtime,
+          verifiedEndpoint,
+          preparation
+        )
         if (isAgentCommandTool(toolName) &&
           initialClassification.outcome === 'allowlisted-readonly') {
           commitAgentPlanCall({
@@ -1136,29 +1251,18 @@ export async function executeToolCall (toolName, rawArgs, runtime = {}) {
             runtime
           })
         }
-        beginPreparedRiskBatchCall(preparation)
-        const result = await executeResolvedAgentTool(
-          toolName,
-          executionArgs,
-          runtime,
-          verifiedEndpoint
-        )
         if (preparation) preparation.executionResult = result
         return result
       } catch (error) {
-        markPreparedRiskBatchTerminal(preparation)
-        if (preparation?.riskTaskId) {
-          try {
-            await settleRiskTransactionTask({
-              taskId: preparation.riskTaskId,
-              status: 'partially-completed',
-              error,
-              remoteState: 'unknown',
-              canAutoRetry: false
-            })
-          } catch (settleError) {
-            window.store?.onError?.(settleError)
-          }
+        try {
+          await failAgentRiskPreparation({
+            preparation,
+            error,
+            dispatched: true,
+            settle: settleRiskTransactionTask
+          })
+        } catch (settleError) {
+          window.store?.onError?.(settleError)
         }
         throw error
       }
@@ -1166,64 +1270,22 @@ export async function executeToolCall (toolName, rawArgs, runtime = {}) {
     verifyRisky: async (_result, verifiedEndpoint, preparation) => {
       const parsed = parseToolResult(preparation?.executionResult)
       if (parsed?.cancelled === true || parsed?.success === false) {
-        markPreparedRiskBatchTerminal(preparation)
-        if (preparation?.riskTaskId) {
-          await settleRiskTransactionTask({
-            taskId: preparation.riskTaskId,
-            status: parsed.cancelled ? 'cancelled' : 'failed',
-            error: parsed.message,
-            remoteState: parsed.cancelled ? 'not-dispatched' : 'known-failed',
-            canAutoRetry: false
-          })
-        }
+        await failAgentRiskPreparation({
+          preparation,
+          error: parsed.message,
+          dispatched: parsed.cancelled !== true,
+          status: parsed.cancelled ? 'cancelled' : 'partially-completed',
+          remoteState: parsed.cancelled ? 'not-dispatched' : 'known-failed',
+          settle: settleRiskTransactionTask
+        })
         return { passed: false, cancelled: parsed.cancelled === true }
       }
-      try {
-        assertAgentRiskResultReadyForVerification(parsed)
-      } catch (error) {
-        markPreparedRiskBatchTerminal(preparation)
-        if (preparation?.riskTaskId) {
-          await settleRiskTransactionTask({
-            taskId: preparation.riskTaskId,
-            status: 'partially-completed',
-            error,
-            remoteState: 'in-progress',
-            canAutoRetry: false
-          })
-        }
-        throw error
+      if (isAgentAsyncRiskResult(parsed)) {
+        return { passed: true, pending: true }
       }
       try {
-        const verification = await verifyPreparedAgentRisk(
-          preparation,
-          verifiedEndpoint,
-          runtime
-        )
-        const batchComplete = completePreparedRiskBatchCall(preparation)
-        if (preparation?.riskTaskId && batchComplete) {
-          await settleRiskTransactionTask({
-            taskId: preparation.riskTaskId,
-            status: 'completed',
-            remoteState: 'verified',
-            canAutoRetry: false
-          })
-        }
-        return verification
+        return await completePreparedAgentRisk(preparation, verifiedEndpoint, runtime)
       } catch (error) {
-        markPreparedRiskBatchTerminal(preparation)
-        if (preparation?.riskTaskId) {
-          try {
-            await settleRiskTransactionTask({
-              taskId: preparation.riskTaskId,
-              status: 'partially-completed',
-              error,
-              remoteState: 'changed-unverified',
-              canAutoRetry: false
-            })
-          } catch (settleError) {
-            window.store?.onError?.(settleError)
-          }
-        }
         error.verificationFailed = true
         error.canAutoRetry = false
         throw error
