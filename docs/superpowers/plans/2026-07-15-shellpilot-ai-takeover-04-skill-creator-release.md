@@ -191,8 +191,8 @@ git commit -m "feat: retain recoverable agent evidence safely"
 ## Task 5: 增加 E2E 和性能回归
 
 **Files:**
-- Create: `apps/electerm-agent/test/e2e/025.ai-takeover.spec.js`
-- Create: `apps/electerm-agent/test/e2e/025.agent-skill-manager.spec.js`
+- Create: `apps/electerm-agent/test/e2e/026.ai-takeover.spec.js`
+- Create: `apps/electerm-agent/test/e2e/026.agent-skill-manager.spec.js`
 - Create: `apps/electerm-agent/test/unit-ci/agent-takeover-performance.spec.js`
 - Create: `apps/electerm-agent/test/unit-ci/agent-output-stress.spec.js`
 
@@ -206,7 +206,7 @@ With isolated `DATA_PATH`, cover clean empty state, conversational draft generat
 
 - [ ] **Step 3: 写入空闲零负载和压力测试**
 
-Enable multiple mock sessions and assert five minutes of fake idle time creates zero model requests, zero SSH commands, zero remote processes and zero Agent polling timers. Stream large logs/files/continuous output and assert memory-retained chunks remain bounded, backpressure engages, UI stop remains responsive and model context receives only capped observations.
+Warm or stub `aiHealthCoordinator`, record the control baseline, enable multiple mock sessions and assert five minutes of fake idle time creates zero incremental model requests, zero SSH commands, zero remote processes and zero Agent polling timers. Stream large logs/files/continuous output and assert memory-retained chunks remain bounded by the existing runtime constants, backpressure engages, UI stop remains responsive and model context receives only capped observations.
 
 Do not make tool-call count, total task duration or Token consumption release ceilings. Record them for diagnosis while the pass/fail conditions target unexpected growth, blocking and unbounded retention.
 
@@ -214,7 +214,7 @@ Do not make tool-call count, total task duration or Token consumption release ce
 
 ```powershell
 node --test test/unit-ci/agent-takeover-performance.spec.js test/unit-ci/agent-output-stress.spec.js
-npx playwright test test/e2e/025.ai-takeover.spec.js test/e2e/025.agent-skill-manager.spec.js --workers=1
+npx playwright test test/e2e/026.ai-takeover.spec.js test/e2e/026.agent-skill-manager.spec.js --workers=1
 ```
 
 Expected before fixtures and implementation are complete: new tests fail.
@@ -227,8 +227,8 @@ Apply fixes only in the owning phase modules. Do not weaken assertions by increa
 
 ```powershell
 node --test test/unit-ci/agent-takeover-performance.spec.js test/unit-ci/agent-output-stress.spec.js
-npx playwright test test/e2e/025.ai-takeover.spec.js test/e2e/025.agent-skill-manager.spec.js --workers=1
-git add test/e2e/025.ai-takeover.spec.js test/e2e/025.agent-skill-manager.spec.js test/unit-ci/agent-takeover-performance.spec.js test/unit-ci/agent-output-stress.spec.js
+npx playwright test test/e2e/026.ai-takeover.spec.js test/e2e/026.agent-skill-manager.spec.js --workers=1
+git add test/e2e/026.ai-takeover.spec.js test/e2e/026.agent-skill-manager.spec.js test/unit-ci/agent-takeover-performance.spec.js test/unit-ci/agent-output-stress.spec.js
 git commit -m "test: cover ai takeover and user skill flows"
 ```
 

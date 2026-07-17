@@ -4,7 +4,7 @@
 
 **Goal:** 增加默认关闭、每个 SSH 会话独立授权的 AI 接管开关，并确保所有远程执行能力在统一门禁处验证精确会话身份。
 
-**Architecture:** 接管授权只保存在渲染进程内存的会话注册表中，不写入配置或恢复数据；授权键由标签页、连接进程、主机、端口、用户、SSH 类型和已验证主机密钥指纹组成。UI、Agent 工具和生命周期事件都依赖同一注册表，避免局部开关被绕过。
+**Architecture:** 接管授权只保存在渲染进程内存的会话注册表中，不写入配置或恢复数据；授权键由标签页、连接进程、主机、端口、用户、SSH 类型和已验证主机密钥指纹组成。复用 v0.4.3 的 `agent-runtime-context.js`、`ai-conversation-context.js` 和 `agent-task-registry.js` 管理运行上下文与任务，新的注册表只负责授权和接管状态。
 
 **Tech Stack:** React、Manate、Node.js、现有 SSH host verifier、safety-transactions endpoint guard、Node test runner。
 
@@ -12,7 +12,7 @@
 
 ## 前置条件
 
-- Fleet Operations 已稳定并进入当前分支基线。
+- `codex/fleet-operations-release` 已进入当前分支基线，版本为 ShellPilot v0.4.3。
 - 在 `.worktrees/ai-takeover-user-skills` 的 `codex/ai-takeover-user-skills` 分支执行。
 - 每次只暂存本阶段列出的文件，不暂存主工作树的 `.superpowers/`。
 
@@ -196,6 +196,8 @@ git commit -m "feat: add per-session takeover state registry"
 - Create: `apps/electerm-agent/src/client/components/ai/agent-takeover-gate.js`
 - Modify: `apps/electerm-agent/src/client/components/ai/agent-tools.js`
 - Modify: `apps/electerm-agent/src/client/components/ai/agent.js`
+- Modify: `apps/electerm-agent/src/client/components/ai/agent-runtime-context.js`
+- Modify: `apps/electerm-agent/src/client/components/ai/ai-conversation-context.js`
 - Create: `apps/electerm-agent/test/unit-ci/agent-takeover-gate.spec.js`
 - Modify: `apps/electerm-agent/test/unit-ci/ai-agent-tools.spec.js`
 
@@ -231,7 +233,7 @@ export function assertAgentExecutionAllowed ({ descriptor, endpoint, registry })
 }
 ```
 
-Change `executeToolCall` to resolve one descriptor, call the gate exactly once, and only then invoke the executor. Pass `endpoint`, `takeoverRegistry` and the existing Agent runtime from `runAgentLoop`; do not add a second bypass execution switch. Phase 01 only establishes scope and takeover enforcement; phase 02 owns final read/write risk policy.
+Change `executeToolCall` to resolve one descriptor, call the gate exactly once, and only then invoke the executor. Extend the existing runtime created by `runAgentLoop` with `endpoint` and `takeoverRegistry`; retain its `AbortSignal`, cancellation set, `sourceTabId` binding and bounded-message helpers. Resolve endpoint from the active `conversationScopeId`/`sourceTabId`, then verify the complete endpoint rather than trusting the tab ID alone. Phase 01 only establishes scope and takeover enforcement; phase 02 owns final read/write risk policy.
 
 - [ ] **Step 4: 增加回归断言，禁止直接 switch 绕过门禁**
 
@@ -241,7 +243,7 @@ In `ai-agent-tools.spec.js`, assert every exported callable tool routes through 
 
 ```powershell
 node --test test/unit-ci/agent-takeover-gate.spec.js test/unit-ci/ai-agent-tools.spec.js test/unit-ci/agent-task-mode.spec.js
-git add src/client/components/ai/agent-takeover-gate.js src/client/components/ai/agent-tools.js src/client/components/ai/agent.js test/unit-ci/agent-takeover-gate.spec.js test/unit-ci/ai-agent-tools.spec.js
+git add src/client/components/ai/agent-takeover-gate.js src/client/components/ai/agent-tools.js src/client/components/ai/agent.js src/client/components/ai/agent-runtime-context.js src/client/components/ai/ai-conversation-context.js test/unit-ci/agent-takeover-gate.spec.js test/unit-ci/ai-agent-tools.spec.js
 git commit -m "feat: require takeover grant for agent execution tools"
 ```
 
@@ -281,7 +283,7 @@ Expected: takeover switch and translations are absent.
 
 - [ ] **Step 3: 实现启用确认和状态展示**
 
-Place the compact switch in the existing AI assistant header. Before calling `registry.enable`, show host, port, username, fingerprint, automatic-read-only behavior and risky-operation confirmation rule. Use the current modal system. Show a compact tab badge only while active. Show `一键停止` for all active or executing states. Hiding the right panel must not stop the task.
+Place the compact switch in the existing AI assistant header beside the v0.4.3 profile/model selection and health status, without replacing or rescheduling `aiHealthCoordinator`. Before calling `registry.enable`, show host, port, username, fingerprint, automatic-read-only behavior and risky-operation confirmation rule. Use the current modal system. Show a compact tab badge only while active. Show `一键停止` for all active or executing states. Hiding the right panel must not stop the task.
 
 - [ ] **Step 4: 验证主题、缩放和键盘语义**
 
@@ -299,9 +301,15 @@ git commit -m "feat: add session takeover controls to ai panel"
 
 **Files:**
 - Modify: `apps/electerm-agent/src/client/components/ai/agent-takeover-registry.js`
+- Modify: `apps/electerm-agent/src/client/components/ai/agent.js`
+- Modify: `apps/electerm-agent/src/client/components/ai/agent-task-registry.js`
+- Modify: `apps/electerm-agent/src/client/components/ai/agent-runtime-context.js`
+- Modify: `apps/electerm-agent/src/client/components/ai/ai-conversation-context.js`
 - Modify: `apps/electerm-agent/src/client/components/main/main.jsx`
 - Modify: `apps/electerm-agent/src/client/store/init-state.js`
 - Create: `apps/electerm-agent/test/unit-ci/agent-takeover-lifecycle.spec.js`
+- Create: `apps/electerm-agent/test/unit-ci/agent-takeover-concurrency.spec.js`
+- Create: `apps/electerm-agent/test/unit-ci/agent-takeover-fleet-boundary.spec.js`
 
 - [ ] **Step 1: 写入生命周期失败测试**
 
@@ -313,10 +321,14 @@ Also reload a fresh store and assert:
 assert.equal(Object.hasOwn(freshInitialState, 'takeoverGrants'), false)
 ```
 
+Add concurrency assertions: two Agent runs for one exact session are rejected, while runs for two different complete endpoint identities may coexist in `agent-task-registry`. Remove the global `agentRunning` boolean as an authorization or concurrency source; a UI-wide busy indicator may be derived from the registry size.
+
+Add Fleet boundary assertions: `fleet-status-ai-context` and a Fleet workspace conversation can provide already collected observations, but cannot create, borrow or match a takeover grant. Any remote-capable tool from that scope fails with `AI_TAKEOVER_REQUIRED` until a concrete SSH tab is opened and enabled.
+
 - [ ] **Step 2: 运行测试并确认失败**
 
 ```powershell
-node --test test/unit-ci/agent-takeover-lifecycle.spec.js
+node --test test/unit-ci/agent-takeover-lifecycle.spec.js test/unit-ci/agent-takeover-concurrency.spec.js test/unit-ci/agent-takeover-fleet-boundary.spec.js
 ```
 
 Expected: grants survive one or more lifecycle events or are represented in persisted initial state.
@@ -327,13 +339,13 @@ Add one adapter in `main.jsx` that translates existing tab/session events into r
 
 - [ ] **Step 4: 添加空闲零工作测试**
 
-Use spies for `runGlobalAsync('AIchat')`, terminal command submission and timers. Enable ten mock sessions, advance fake time by five minutes and assert zero model calls, zero remote commands, zero remote processes and zero periodic timers created by takeover.
+Warm or stub the existing `aiHealthCoordinator`, record its control baseline, then enable ten mock sessions and advance fake time by five minutes. Assert the takeover delta is zero model calls, zero remote commands, zero remote processes and zero periodic timers; the test must not misattribute the existing deduplicated model health check to takeover.
 
 - [ ] **Step 5: 运行本阶段回归并提交**
 
 ```powershell
 node --test test/unit-ci/agent-takeover-*.spec.js test/unit-ci/ai-agent-tools.spec.js test/unit-ci/ai-chat-layout.spec.js test/unit-ci/session-ssh-known-hosts.spec.js
-git add src/client/components/ai/agent-takeover-registry.js src/client/components/main/main.jsx src/client/store/init-state.js test/unit-ci/agent-takeover-lifecycle.spec.js
+git add src/client/components/ai/agent-takeover-registry.js src/client/components/ai/agent.js src/client/components/ai/agent-task-registry.js src/client/components/ai/agent-runtime-context.js src/client/components/ai/ai-conversation-context.js src/client/components/main/main.jsx src/client/store/init-state.js test/unit-ci/agent-takeover-lifecycle.spec.js test/unit-ci/agent-takeover-concurrency.spec.js test/unit-ci/agent-takeover-fleet-boundary.spec.js
 git commit -m "feat: revoke takeover grants on session lifecycle changes"
 ```
 

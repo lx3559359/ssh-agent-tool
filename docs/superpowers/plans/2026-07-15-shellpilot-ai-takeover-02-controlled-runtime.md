@@ -4,7 +4,7 @@
 
 **Goal:** 把现有 Agent 工具调用收敛到受控执行网关，实现自动只读、风险事务合并确认、冻结计划绑定、目标验证、全链路取消和大输出背压。
 
-**Architecture:** 工具描述符声明能力范围，但最终风险由系统根据实际参数和展开内容判定。统一网关依次执行接管校验、端点校验、风险分类、计划绑定和事务调度；风险写操作复用 safety-transactions，不另建第二套执行器。模型看到的远程输出始终是受限、脱敏且标记为不可信的观察数据。
+**Architecture:** 工具描述符声明能力范围，但最终风险由系统根据实际参数和展开内容判定。统一网关依次执行接管校验、端点校验、风险分类、计划绑定和事务调度；风险写操作复用 safety-transactions，不另建第二套执行器。取消和限长输出扩展 v0.4.3 的 `agent-runtime-context.js`、`AIAgentCancel` 与会话上下文，不建立平行运行时。
 
 **Tech Stack:** Existing Agent loop、safety-transactions、WebSocket terminal transport、Node crypto SHA-256、AbortController、React/Ant Design、Node test runner。
 
@@ -13,7 +13,7 @@
 ## 前置条件
 
 - 阶段 01 已通过评审门，所有远程能力都经过 takeover gate。
-- `codex/long-log-archive-reader` 已合入当前分支，`file-range.js` 和相关 fs IPC 不重复实现。
+- 主线现有 `file-range.js`、archive reader、AI log context 和相关测试已覆盖长日志等价补丁，不重复合并旧分支或实现第二套范围读取。
 - 保留现有宽松的 `MAX_ITERATIONS = 150`、单命令超时和一键停止；本阶段不增加较低的工具次数、总时长或 Token 产品上限。
 
 ## Task 1: 建立工具描述符和最终风险策略
@@ -306,6 +306,9 @@ git commit -m "feat: execute confirmed agent changes at most once"
 - Create: `apps/electerm-agent/src/client/components/ai/agent-observation.js`
 - Modify: `apps/electerm-agent/src/client/components/ai/agent.js`
 - Modify: `apps/electerm-agent/src/client/components/ai/agent-tools.js`
+- Modify: `apps/electerm-agent/src/client/components/ai/agent-runtime-context.js`
+- Modify: `apps/electerm-agent/src/client/components/ai/ai-conversation-context.js`
+- Modify: `apps/electerm-agent/src/client/components/ai/ai-request-credentials.js`
 - Modify: `apps/electerm-agent/src/client/components/ai/agent-terminal-command.js`
 - Modify: `apps/electerm-agent/src/client/components/ai/ai-chat-history-item.jsx`
 - Modify: `apps/electerm-agent/src/client/common/safety-transactions/task-runner.js`
@@ -316,7 +319,7 @@ git commit -m "feat: execute confirmed agent changes at most once"
 
 - [ ] **Step 1: 写入全链路取消失败测试**
 
-Use one `AbortController`, start a terminal tool and abort it. Assert the signal reaches `runAgentLoop`, gateway, executor and transport; no later tool call begins. If remote stop cannot be confirmed, assert status is unknown rather than cancelled-success.
+Use the existing `AbortController` created by `runAgentLoop`, start a gateway terminal tool and abort it through `cancelAgentRun`. Assert the same signal reaches gateway, executor and transport, `AIAgentCancel` is sent for an active backend request, registered tool cancellations run once, and no later tool call begins. If remote stop cannot be confirmed, assert status is unknown rather than cancelled-success.
 
 - [ ] **Step 2: 写入观察数据和注入失败测试**
 
@@ -345,11 +348,11 @@ Feed 100 MB of generated output through a bounded async source. Assert retained 
 node --test test/unit-ci/agent-cancellation.spec.js test/unit-ci/agent-observation.spec.js test/unit-ci/agent-output-backpressure.spec.js
 ```
 
-Expected: current boolean abort flag does not reach executors or output grows without a hard retained-data bound.
+Expected: the v0.4.3 runtime already cancels and bounds common paths, but tests fail because the new gateway lacks exact endpoint propagation, untrusted observation envelopes, cursor pagination or unknown-remote-state semantics.
 
 - [ ] **Step 5: 实现 AbortSignal 传播和观察封装**
 
-Replace the UI-only boolean with an `AbortController` owned by the running task. Pass `signal` into `executeToolCall`, gateway, terminal/background/local CLI adapters and safety runner. Keep observation content in a data field with a fixed instruction that it is untrusted evidence. Apply incremental redaction before persistence and before model context construction.
+Extend the existing `AbortController` and `registerAgentCancellation` path instead of replacing it. Pass the existing `signal` and exact endpoint into gateway, terminal/background/local CLI adapters and safety runner; preserve `AIAgentCancel` for backend model calls. Keep observation content in a data field with a fixed instruction that it is untrusted evidence. Apply incremental redaction through the existing credential sanitizer before persistence and before model context construction.
 
 - [ ] **Step 6: 实现分页和消费端背压**
 
@@ -359,7 +362,7 @@ Use the merged archive/file-range reader for large retained output. Keep bounded
 
 ```powershell
 node --test test/unit-ci/agent-cancellation.spec.js test/unit-ci/agent-observation.spec.js test/unit-ci/agent-output-backpressure.spec.js test/unit-ci/archive-reader.spec.js test/unit-ci/file-range.spec.js
-git add src/client/components/ai/agent-observation.js src/client/components/ai/agent.js src/client/components/ai/agent-tools.js src/client/components/ai/agent-terminal-command.js src/client/components/ai/ai-chat-history-item.jsx src/client/common/safety-transactions/task-runner.js src/client/common/safety-transactions/audit-redaction.js test/unit-ci/agent-cancellation.spec.js test/unit-ci/agent-observation.spec.js test/unit-ci/agent-output-backpressure.spec.js
+git add src/client/components/ai/agent-observation.js src/client/components/ai/agent.js src/client/components/ai/agent-tools.js src/client/components/ai/agent-runtime-context.js src/client/components/ai/ai-conversation-context.js src/client/components/ai/ai-request-credentials.js src/client/components/ai/agent-terminal-command.js src/client/components/ai/ai-chat-history-item.jsx src/client/common/safety-transactions/task-runner.js src/client/common/safety-transactions/audit-redaction.js test/unit-ci/agent-cancellation.spec.js test/unit-ci/agent-observation.spec.js test/unit-ci/agent-output-backpressure.spec.js
 git commit -m "feat: bound and cancel agent observations"
 ```
 
