@@ -193,7 +193,7 @@ test('Agent runtime context keeps the current request and bounds tool output', a
   assert.match(agent, /callBackendAIchatWithTools\(\s*buildBoundedAgentMessages\(/)
   assert.match(
     agent,
-    /boundAgentToolResult\(\s*sanitizeAIStoredText\(boundAgentToolResult\(toolResult\)\)\s*\)/
+    /createAgentToolObservation\([\s\S]*?toolResult[\s\S]*?boundAgentToolResult\(JSON\.stringify\(observation\)\)[\s\S]*?serializeAgentObservationForModel\(observation\)/
   )
 })
 
@@ -400,9 +400,9 @@ test('Agent cancellation remains effective while a tool confirmation is open', a
     path.resolve(__dirname, '../../src/client/components/ai/agent-tools.js'),
     'utf8'
   )
-  assert.match(tools, /prepareResolvedAgentTool[\s\S]*?confirmAgentToolExecution\([\s\S]*?signal:\s*runtime\.signal[\s\S]*?assertAgentRuntimeActive\(runtime\)/)
+  assert.match(tools, /prepareResolvedAgentTool[\s\S]*?confirmRiskTransaction\([\s\S]*?signal:\s*runtime\.signal[\s\S]*?assertAgentRuntimeActive\(runtime\)/)
   assert.match(tools, /resolveEndpoint:[\s\S]*?resolveAgentExecutionEndpoint/)
-  assert.match(tools, /prepare:\s*isAgentCommandTool\(toolName\)/)
+  assert.match(tools, /prepareRisky:\s*context\s*=>\s*prepareResolvedAgentTool/)
   assert.match(tools, /case 'sftp_del':[\s\S]*?mcpSftpDel\(args,\s*\{\s*signal:\s*runtime\.signal\s*\}\)/)
   assert.match(tools, /case 'sftp_upload':[\s\S]*?registerAgentTransferCancellation/)
   assert.match(tools, /case 'sftp_download':[\s\S]*?registerAgentTransferCancellation/)

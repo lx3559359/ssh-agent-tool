@@ -17,7 +17,7 @@ export async function runAgentTerminalCommand ({ store, args = {}, signal }) {
   }
   const safetyResult = await store.runSafetyCommand(args.command, {
     tabId,
-    signal,
+    ...(signal ? { signal } : {}),
     source: 'agent',
     title: 'Agent 终端命令'
   })
@@ -36,6 +36,6 @@ export async function runAgentTerminalCommand ({ store, args = {}, signal }) {
     tabId,
     timeout: 30000,
     lines: 100,
-    signal
+    ...(signal ? { signal } : {})
   })
 }

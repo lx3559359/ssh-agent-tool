@@ -51,6 +51,13 @@ async function importAgentModule () {
       "const agentTools = []\nconst executeToolCall = (...args) => globalThis.__executeToolCall?.(...args) ?? ''\n"
     )
     .replace(
+      /^import \{\r?\n\s*createAgentToolObservation,\r?\n\s*serializeAgentObservationForModel\r?\n\} from '\.\/agent-observation\.js'\r?\n/m,
+      'const createAgentToolObservation = (toolName, value) => ({\n' +
+      "  kind: 'untrusted-observation', toolName, data: String(value ?? '')\n" +
+      '})\n' +
+      'const serializeAgentObservationForModel = value => JSON.stringify(value)\n'
+    )
+    .replace(
       /^import \{ buildAgentSkillPrompt \} from '\.\/agent-skills'\r?\n/m,
       "const buildAgentSkillPrompt = () => ''\n"
     )

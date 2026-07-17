@@ -2,7 +2,13 @@ const MAX_LOG_LINES = 1000
 const MAX_FILE_BYTES = 64 * 1024
 const MAX_COMMAND_OUTPUT = 32 * 1024
 const unitPattern = /^[A-Za-z0-9][A-Za-z0-9_.@:-]{0,127}$/
-const unsafePathPattern = /[\u0000-\u001f;&|`$<>]/
+const unsafePathCharacters = new Set([';', '&', '|', '`', '$', '<', '>'])
+
+function hasUnsafePathCharacter (value) {
+  return [...value].some(character => (
+    character.charCodeAt(0) <= 31 || unsafePathCharacters.has(character)
+  ))
+}
 
 function invalidArgument (message) {
   const error = new Error(message)
@@ -27,7 +33,7 @@ function requiredInteger (value, field, minimum, maximum) {
 
 function requiredRemotePath (value) {
   const remotePath = String(value || '')
-  if (!remotePath.startsWith('/') || remotePath.length > 4096 || unsafePathPattern.test(remotePath)) {
+  if (!remotePath.startsWith('/') || remotePath.length > 4096 || hasUnsafePathCharacter(remotePath)) {
     invalidArgument('remotePath must be a static absolute path without shell syntax')
   }
   return remotePath
