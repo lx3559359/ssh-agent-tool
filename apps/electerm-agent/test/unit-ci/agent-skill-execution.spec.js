@@ -142,7 +142,7 @@ test('PowerShell remote artifacts survive an outer PowerShell command parser wit
   skip: process.platform !== 'win32'
 }, async () => {
   const { prepareSkillArtifactCall } = await import(executionModuleUrl)
-  const script = 'param([string]$Value)\nWrite-Output "skill:$Value"\n'
+  const script = 'param([string]$Value)\nWrite-Output "skill:$Value"\nexit 7\n'
   const powershellMetadata = metadata({
     riskSummary: {
       scripts: [{
@@ -166,11 +166,80 @@ test('PowerShell remote artifacts survive an outer PowerShell command parser wit
     '-NoProfile',
     '-NonInteractive',
     '-Command',
-    call.args.command
+    `${call.args.command}; exit $LASTEXITCODE`
   ], { encoding: 'utf8', timeout: 15000 })
-  assert.equal(result.status, 0, result.stderr)
+  assert.equal(result.status, 7, result.stderr)
   assert.match(result.stdout, /skill:literal \$HOME `id`/)
 })
+
+for (const fixture of [
+  {
+    interpreter: 'bash',
+    path: 'scripts/test.sh',
+    script: 'printf \'ARG1=<%s> ARG2=<%s>\\n\' "$1" "$2"\nexit 7\n'
+  },
+  {
+    interpreter: 'sh',
+    path: 'scripts/test.sh',
+    script: 'printf \'ARG1=<%s> ARG2=<%s>\\n\' "$1" "$2"\nexit 7\n'
+  },
+  {
+    interpreter: 'node',
+    path: 'scripts/test.js',
+    // eslint-disable-next-line no-template-curly-in-string
+    script: 'console.log(`ARG1=<${process.argv[2]}> ARG2=<${process.argv[3]}>`)\nprocess.exit(7)\n'
+  },
+  {
+    interpreter: 'python',
+    path: 'scripts/test.py',
+    script: 'import sys\nprint(f"ARG1=<{sys.argv[1]}> ARG2=<{sys.argv[2]}>")\nsys.exit(7)\n'
+  }
+]) {
+  const gitBin = 'C:\\Program Files\\Git\\bin'
+  const pathValue = fs.existsSync(gitBin)
+    ? `${gitBin};${process.env.Path || process.env.PATH || ''}`
+    : (process.env.Path || process.env.PATH || '')
+  const available = process.platform === 'win32' && spawnSync(
+    'where.exe',
+    [fixture.interpreter],
+    { env: { ...process.env, Path: pathValue } }
+  ).status === 0
+  test(`PowerShell outer shell preserves ${fixture.interpreter} wrapper quotes and arguments`, {
+    skip: !available
+  }, async () => {
+    const { prepareSkillArtifactCall } = await import(executionModuleUrl)
+    const interpreterMetadata = metadata({
+      riskSummary: {
+        scripts: [{
+          id: 'collect-evidence',
+          path: fixture.path,
+          interpreter: fixture.interpreter,
+          target: 'remote'
+        }]
+      }
+    })
+    const call = await prepareSkillArtifactCall({
+      skillBinding: { id: 'inspect-web-service', version: '1.0.0', digest: packageDigest },
+      artifactId: 'collect-evidence',
+      args: ['literal $HOME `id`', "single'quote"],
+      endpoint,
+      client: clientFor(() => interpreterMetadata, fixture.script)
+    })
+    const result = spawnSync('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      `${call.args.command}; exit $LASTEXITCODE`
+    ], {
+      encoding: 'utf8',
+      timeout: 15000,
+      env: { ...process.env, Path: pathValue }
+    })
+
+    assert.equal(result.status, 7, result.stderr)
+    assert.match(result.stdout, /ARG1=<literal \$HOME `id`> ARG2=<single'quote>/)
+  })
+}
 
 test('production selection resolver accepts only a digest-bound selected Skill', async () => {
   const { prepareSelectedSkillArtifactCall } = await import(executionModuleUrl)

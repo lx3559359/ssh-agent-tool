@@ -113,7 +113,8 @@ function interpreterInvocation (interpreter) {
       prefix: 'bash -c',
       // eslint-disable-next-line no-template-curly-in-string
       wrapper: 'script_b64="$1"; shift; decoded=(); for item in "$@"; do value=$(printf %s "$item" | base64 -d) || exit 65; decoded+=("$value"); done; printf %s "$script_b64" | base64 -d | bash -s -- "${decoded[@]}"',
-      leadingArgs: [encodedToken('shellpilot-skill')]
+      leadingArgs: [encodedToken('shellpilot-skill')],
+      bootstrap: 'payload=$1; shift; eval $(printf %s $payload | base64 -d)'
     }
   }
   if (interpreter === 'sh') {
@@ -121,21 +122,24 @@ function interpreterInvocation (interpreter) {
       prefix: 'sh -c',
       // eslint-disable-next-line no-template-curly-in-string
       wrapper: 'script_b64="$1"; shift; tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/shellpilot-skill.XXXXXX") || exit 70; cleanup(){ rm -rf -- "$tmp_dir"; }; trap cleanup EXIT HUP INT TERM; index=0; for item in "$@"; do printf %s "$item" | base64 -d > "$tmp_dir/$index" || exit 65; index=$((index+1)); done; set --; cursor=0; while [ "$cursor" -lt "$index" ]; do value=$(cat "$tmp_dir/$cursor"; printf x); value=${value%x}; set -- "$@" "$value"; cursor=$((cursor+1)); done; printf %s "$script_b64" | base64 -d | sh -s -- "$@"',
-      leadingArgs: [encodedToken('shellpilot-skill')]
+      leadingArgs: [encodedToken('shellpilot-skill')],
+      bootstrap: 'payload=$1; shift; eval $(printf %s $payload | base64 -d)'
     }
   }
   if (interpreter === 'node') {
     return {
       prefix: 'node -e',
-      wrapper: 'const [script,...args]=process.argv.slice(1).map(value=>Buffer.from(value,"base64").toString("utf8")); process.argv=["node","skill.js",...args]; require("vm").runInThisContext(script,{filename:"skill.js"})',
-      leadingArgs: []
+      wrapper: 'const [script,...args]=process.argv.slice(2).map(value=>Buffer.from(value,"base64").toString("utf8")); process.argv=["node","skill.js",...args]; require("vm").runInThisContext(script,{filename:"skill.js"})',
+      leadingArgs: [],
+      bootstrap: 'eval(Buffer.from(process.argv[1],String.fromCharCode(98,97,115,101,54,52)).toString(String.fromCharCode(117,116,102,56)))'
     }
   }
   if (interpreter === 'python' || interpreter === 'python3') {
     return {
       prefix: `${interpreter} -c`,
-      wrapper: 'import base64,sys; script=base64.b64decode(sys.argv[1]); sys.argv=["skill.py"]+[base64.b64decode(value).decode("utf-8") for value in sys.argv[2:]]; exec(compile(script,"skill.py","exec"))',
-      leadingArgs: []
+      wrapper: 'import base64,sys; script=base64.b64decode(sys.argv[2]); sys.argv=["skill.py"]+[base64.b64decode(value).decode("utf-8") for value in sys.argv[3:]]; exec(compile(script,"skill.py","exec"))',
+      leadingArgs: [],
+      bootstrap: 'exec(__import__(bytes([98,97,115,101,54,52]).decode()).b64decode(__import__(bytes([115,121,115]).decode()).argv[1]))'
     }
   }
   throw skillError('SKILL_INTERPRETER_UNSUPPORTED', 'Skill artifact interpreter is unsupported.')
@@ -161,8 +165,9 @@ function commandFor (artifact, args, content) {
     throw skillError('SKILL_INTERPRETER_WRAPPER_INVALID', 'Skill interpreter wrapper is invalid.')
   }
   const tokens = [
-    `'${invocation.wrapper}'`,
+    `'${invocation.bootstrap}'`,
     ...invocation.leadingArgs,
+    encodedToken(invocation.wrapper),
     encodedToken(content),
     ...args.map(encodedToken)
   ]
