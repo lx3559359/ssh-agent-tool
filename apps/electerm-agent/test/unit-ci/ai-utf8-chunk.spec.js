@@ -56,5 +56,5 @@ test('Agent SFTP reads request at least one complete UTF-8 code point', () => {
   ), 'utf8')
 
   assert.match(tools, /maxBytes:\s*\{[\s\S]{0,160}minimum:\s*4/)
-  assert.match(handler, /Math\.max\(4,\s*Math\.min\(requestedMaxBytes,\s*64 \* 1024\)\)/)
+  assert.match(handler, /Math\.max\(4,\s*Math\.min\(requestedMaxBytes,\s*32 \* 1024\)\)/)
 })
