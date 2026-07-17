@@ -9,6 +9,7 @@ import {
   serializeAgentObservationForModel
 } from './agent-observation.js'
 import { buildAgentSkillPrompt } from './agent-skills'
+import { selectAgentSkills } from './agent-skill-selector.js'
 import { buildAgentMcpServerPrompt } from './agent-mcp-servers'
 import { buildAgentLocalCliPrompt } from './agent-local-cli-tools'
 import { buildAgentTaskModePrompt } from './agent-task-mode.js'
@@ -58,10 +59,13 @@ export function cancelAgentRunsForScope (sourceTabId) {
   return agentTaskRegistry.cancelByScope(sourceTabId)
 }
 
-function buildAgentSystemPrompt (config) {
+function buildAgentSystemPrompt (config, skillSelection) {
   const lang = config.languageAI || window.store.getLangName() || '简体中文'
   const baseRole = config.roleAI || '你是一个中文 SSH 运维排查助手。'
-  const skillPrompt = buildAgentSkillPrompt()
+  const skillPrompt = buildAgentSkillPrompt({
+    catalog: skillSelection?.catalog || [],
+    selectedSkills: skillSelection?.selected || []
+  })
   const mcpServerPrompt = buildAgentMcpServerPrompt({
     mcpServers: config.mcpServers || window.store.config?.mcpServers || []
   })
@@ -150,6 +154,8 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
   const resolveEndpoint = () => resolveAgentRuntimeEndpoint(sourceTabId)
   const agentRuntime = {
     planGrant: null,
+    selectedSkillBindings: [],
+    selectedSkillArtifactDigests: [],
     sourceTabId,
     endpoint: resolveEndpoint(),
     resolveEndpoint,
@@ -234,18 +240,38 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
   }
 
   try {
-    const baseMessages = [
-      { role: 'system', content: buildAgentSystemPrompt(config) },
-      ...buildAIConversationMessages(history, chatEntry)
-    ]
-    const runtimeMessages = []
-    const toolCallsLog = []
     setIsStreaming(true)
     updateChatEntry(chatEntry, {
       toolCalls: [],
       response: '',
       completionStatus: 'running'
     })
+    const skillSelection = await selectAgentSkills({ prompt: chatEntry.prompt })
+    if (skillSelection.requiresUserChoice) {
+      const failure = skillSelection.failure || {}
+      const message = `${failure.message || 'The requested Skill could not be loaded.'} ` +
+        '请明确选择：修复/启用该 Skill 后重试，或移除 $skill-id 并确认使用通用 Agent 继续。'
+      setIsStreaming(false)
+      updateChatEntry(chatEntry, {
+        response: message,
+        completionStatus: 'failed'
+      })
+      return {
+        ok: false,
+        data: null,
+        error: 'skill-selection-required',
+        requiresUserChoice: true,
+        failure
+      }
+    }
+    agentRuntime.selectedSkillBindings = skillSelection.skillBindings
+    agentRuntime.selectedSkillArtifactDigests = skillSelection.artifactDigests
+    const baseMessages = [
+      { role: 'system', content: buildAgentSystemPrompt(config, skillSelection) },
+      ...buildAIConversationMessages(history, chatEntry)
+    ]
+    const runtimeMessages = []
+    const toolCallsLog = []
 
     for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
       if (abortRef && abortRef.current) {

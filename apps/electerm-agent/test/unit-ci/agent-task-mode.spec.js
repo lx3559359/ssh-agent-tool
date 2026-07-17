@@ -199,6 +199,35 @@ test('conversation plan ignores hidden calls and enforces visible command order'
   }), null)
 })
 
+test('conversation plan binds trusted selected Skill digests but ignores model bindings', async () => {
+  const { confirmAgentPlan } = await import(taskModeModuleUrl)
+  const skillBindings = [{
+    id: 'inspect-web-service',
+    version: '1.2.3',
+    digest: 'a'.repeat(64)
+  }]
+  const artifactDigests = [{
+    id: 'inspect-web-service:SKILL.md',
+    path: 'SKILL.md',
+    digest: 'document-digest'
+  }]
+  const confirmation = await confirmAgentPlan({
+    args: {
+      goal: 'inspect web service',
+      readonlyCommands: ['uptime'],
+      skillBindings: [{ id: 'model-forged-skill' }],
+      artifactDigests: [{ id: 'model-forged-artifact' }]
+    },
+    endpoint: { tabId: 'tab-a' },
+    trustedSkillBindings: skillBindings,
+    trustedArtifactDigests: artifactDigests,
+    confirm: () => true
+  })
+
+  assert.deepEqual(confirmation.planGrant.payload.skillBindings, skillBindings)
+  assert.deepEqual(confirmation.planGrant.payload.artifactDigests, artifactDigests)
+})
+
 test('plan confirmation visibly renders target verification steps', async () => {
   const { buildAgentPlanConfirmationMessage } = await import(taskModeModuleUrl)
   const message = buildAgentPlanConfirmationMessage({

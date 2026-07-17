@@ -706,6 +706,7 @@ function recoveryFor (toolName, args) {
 function buildResolvedRiskTransaction (toolName, args, runtime, context = {}) {
   const recovery = recoveryFor(toolName, args)
   const artifactDigests = [
+    ...(runtime.selectedSkillArtifactDigests || []),
     ...(runtime.planGrant?.payload?.artifactDigests || []),
     ...(toolName === 'sftp_upload' && args.sourceDescriptor?.digest
       ? [{
@@ -735,7 +736,8 @@ function buildResolvedRiskTransaction (toolName, args, runtime, context = {}) {
     recovery,
     rollbackLimits: recovery.limits,
     verification: runtime.planGrant?.payload?.verification || [],
-    skillBindings: runtime.planGrant?.payload?.skillBindings || [],
+    skillBindings: runtime.selectedSkillBindings ||
+      runtime.planGrant?.payload?.skillBindings || [],
     artifactDigests
   })
 }
@@ -948,6 +950,8 @@ async function executeResolvedAgentTool (toolName, args, runtime, endpoint, prep
       const confirmation = await confirmAgentPlan({
         args,
         signal: runtime.signal,
+        trustedSkillBindings: runtime.selectedSkillBindings || [],
+        trustedArtifactDigests: runtime.selectedSkillArtifactDigests || [],
         endpoint: (typeof runtime.resolveEndpoint === 'function'
           ? runtime.resolveEndpoint()
           : runtime.endpoint) || {}

@@ -99,14 +99,19 @@ export async function confirmAgentPlan ({
   args = {},
   confirm,
   signal,
-  endpoint = {}
+  endpoint = {},
+  trustedSkillBindings = [],
+  trustedArtifactDigests = []
 } = {}) {
   const ask = typeof confirm === 'function'
     ? confirm
     : message => requestAgentConfirmation(message, { signal })
   const accepted = await ask(buildAgentPlanConfirmationMessage(args))
   const planGrant = accepted
-    ? await createPlanGrant(buildConversationPlanGrantPayload(args, endpoint), {
+    ? await createPlanGrant(buildConversationPlanGrantPayload(args, endpoint, {
+      skillBindings: trustedSkillBindings,
+      artifactDigests: trustedArtifactDigests
+    }), {
       confirmedBy: 'user'
     })
     : null
@@ -118,7 +123,11 @@ export async function confirmAgentPlan ({
   }
 }
 
-export function buildConversationPlanGrantPayload (args = {}, endpoint = {}) {
+export function buildConversationPlanGrantPayload (
+  args = {},
+  endpoint = {},
+  trustedBindings = {}
+) {
   const commands = Array.isArray(args.readonlyCommands) ? args.readonlyCommands : []
   return {
     schemaVersion: 1,
@@ -130,8 +139,12 @@ export function buildConversationPlanGrantPayload (args = {}, endpoint = {}) {
       name: 'send_terminal_command',
       args: { command: String(command) }
     })),
-    skillBindings: [],
-    artifactDigests: [],
+    skillBindings: Array.isArray(trustedBindings.skillBindings)
+      ? trustedBindings.skillBindings
+      : [],
+    artifactDigests: Array.isArray(trustedBindings.artifactDigests)
+      ? trustedBindings.artifactDigests
+      : [],
     impactTargets: [],
     resourceImpact: {
       cpu: 'unknown',

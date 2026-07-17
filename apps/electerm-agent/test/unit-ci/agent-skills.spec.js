@@ -15,8 +15,7 @@ test('clean install has no business skills', async () => {
     buildAgentSkillPrompt
   } = await import(moduleUrl)
 
-  const skills = getBuiltInAgentSkills()
-  assert.deepEqual(skills, [])
+  assert.deepEqual(getBuiltInAgentSkills(), [])
   assert.deepEqual(getAgentSkills(), [])
   assert.equal(buildAgentSkillPrompt(), '')
 
@@ -34,52 +33,59 @@ test('clean install has no business skills', async () => {
   }
 })
 
-test('Agent skill registry merges custom skills and filters invalid entries', async () => {
-  const {
-    getAgentSkills,
-    buildAgentSkillPrompt
-  } = await import(moduleUrl)
-
+test('Agent skill prompt exposes enabled metadata and only selected documents', async () => {
+  const { getAgentSkills, buildAgentSkillPrompt } = await import(moduleUrl)
   const customSkills = [
     {
       id: 'custom-redis',
-      title: 'Redis 排查',
-      description: '检查 Redis 连接、慢查询和内存。',
-      prompt: '优先查看 redis-cli info、slowlog 和连接数。'
+      name: 'Redis inspection',
+      description: 'Inspect Redis safely.',
+      version: '1.0.0',
+      triggers: ['redis'],
+      implicitMatching: true,
+      packageDigest: 'a'.repeat(64),
+      enabled: true,
+      valid: true
     },
     {
       id: 'disabled-skill',
-      title: '禁用技能',
-      prompt: '不应该出现',
-      disabled: true
+      name: 'Disabled Skill',
+      packageDigest: 'b'.repeat(64),
+      enabled: false,
+      valid: true
     },
     {
-      id: 'missing-prompt',
-      title: '无提示技能'
+      id: 'invalid-skill',
+      name: 'Invalid Skill',
+      enabled: true,
+      valid: false
     }
   ]
 
   const skills = getAgentSkills({ customSkills })
-  const ids = skills.map(skill => skill.id)
+  assert.deepEqual(skills.map(skill => skill.id), ['custom-redis'])
 
-  assert.ok(ids.includes('custom-redis'))
-  assert.equal(ids.includes('disabled-skill'), false)
-  assert.equal(ids.includes('missing-prompt'), false)
-
-  const prompt = buildAgentSkillPrompt({ customSkills })
+  const prompt = buildAgentSkillPrompt({
+    catalog: skills,
+    selectedSkills: [{
+      metadata: skills[0],
+      document: { content: '# Selected Redis workflow', digest: 'document-digest' }
+    }]
+  })
   assert.match(prompt, /custom-redis/)
-  assert.match(prompt, /Redis 排查/)
-  assert.match(prompt, /redis-cli info/)
-  assert.doesNotMatch(prompt, /不应该出现/)
+  assert.match(prompt, /Redis inspection/)
+  assert.match(prompt, /Selected Redis workflow/)
+  assert.doesNotMatch(prompt, /Disabled Skill/)
 })
 
-test('Agent system prompt includes the skill framework hook', () => {
+test('Agent system prompt uses repository-backed Skill selection', () => {
   const source = fs.readFileSync(
     path.resolve(__dirname, '../../src/client/components/ai/agent.js'),
     'utf8'
   )
 
   assert.match(source, /buildAgentSkillPrompt/)
+  assert.match(source, /selectAgentSkills/)
   assert.doesNotMatch(source, /config\.agentSkills/)
   assert.doesNotMatch(source, /window\.store\.config\?\.agentSkills/)
 })

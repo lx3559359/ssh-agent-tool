@@ -65,6 +65,12 @@ async function importAgentModule () {
       "const buildAgentSkillPrompt = () => ''\n"
     )
     .replace(
+      /^import \{ selectAgentSkills \} from '\.\/agent-skill-selector\.js'\r?\n/m,
+      'const selectAgentSkills = async () => ({\n' +
+      '  catalog: [], selected: [], skillBindings: [], artifactDigests: []\n' +
+      '})\n'
+    )
+    .replace(
       /^import \{ buildAgentMcpServerPrompt \} from '\.\/agent-mcp-servers'\r?\n/m,
       "const buildAgentMcpServerPrompt = () => ''\n"
     )
