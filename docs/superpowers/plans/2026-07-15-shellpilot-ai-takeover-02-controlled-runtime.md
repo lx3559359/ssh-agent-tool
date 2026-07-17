@@ -146,7 +146,7 @@ git commit -m "feat: add bounded structured ssh inspection tools"
 - Create: `apps/electerm-agent/test/unit-ci/agent-plan-grant.spec.js`
 - Modify: `apps/electerm-agent/test/unit-ci/agent-task-runner.spec.js`
 
-- [ ] **Step 1: 写入规范化和篡改失败测试**
+- [x] **Step 1: 写入规范化和篡改失败测试**
 
 ```js
 test('invalidates a grant when any bound field changes', async () => {
@@ -172,7 +172,7 @@ test('invalidates a grant when any bound field changes', async () => {
 
 Repeat for endpoint fingerprint, command text, arguments, Skill ID/version/digest, script/template digest, impact target, recovery metadata and verification step.
 
-- [ ] **Step 2: 运行测试并确认失败**
+- [x] **Step 2: 运行测试并确认失败**
 
 ```powershell
 node --test test/unit-ci/agent-plan-grant.spec.js test/unit-ci/agent-task-runner.spec.js
@@ -180,7 +180,7 @@ node --test test/unit-ci/agent-plan-grant.spec.js test/unit-ci/agent-task-runner
 
 Expected: plan grant module is absent or existing boolean `planConfirmed` accepts modified content.
 
-- [ ] **Step 3: 实现确定性规范化数据结构**
+- [x] **Step 3: 实现确定性规范化数据结构**
 
 The hash payload contains exactly:
 
@@ -201,11 +201,11 @@ The hash payload contains exactly:
 
 Recursively sort object keys while preserving array order, serialize as UTF-8 JSON and hash with SHA-256. Store `digest`, `confirmedAt`, `confirmedBy` and the immutable payload snapshot. Remove the boolean-only grant from `agent-task-mode.js`.
 
-- [ ] **Step 4: 在执行前重新计算并比较**
+- [x] **Step 4: 在执行前重新计算并比较**
 
 The task runner must compare current endpoint and current plan digest immediately before the first changing operation. Any mismatch sets the task back to `awaiting-change-confirmation` with reason `PLAN_BINDING_CHANGED`; no step executes.
 
-- [ ] **Step 5: 运行测试并提交**
+- [x] **Step 5: 运行测试并提交**
 
 ```powershell
 node --test test/unit-ci/agent-plan-grant.spec.js test/unit-ci/agent-task-runner.spec.js test/unit-ci/safety-transaction-store.spec.js

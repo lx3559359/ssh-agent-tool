@@ -3,7 +3,8 @@ import {
   finalOperationStates,
   normalizeOperation,
   operationSources,
-  operationStates
+  operationStates,
+  validateAgentPlanGrantStructure
 } from './models.js'
 import { redactSensitiveData } from './audit-redaction.js'
 import {
@@ -133,6 +134,9 @@ function preserveTaskCommands (task, safeTask) {
 function normalizeTask (task = {}, clock) {
   const status = task.status || taskStatuses.draft
   if (!validTaskStatuses.has(status)) throw new Error('Agent 任务状态不受支持')
+  if (task.planGrant !== undefined && !validateAgentPlanGrantStructure(task.planGrant)) {
+    throw new Error('Agent 任务计划授权结构无效')
+  }
   const now = resolveNow(clock)
   assertTaskCommandsPersistable(task)
   const safeTask = redactSensitiveData(task)

@@ -367,6 +367,44 @@ test('task store rejects credential-like commands instead of silently rewriting 
   assert.equal(patched.steps[0].command, safeCommand)
 })
 
+test('task store accepts only structurally valid immutable plan grants', async () => {
+  const { createTransactionStore } = await importStore()
+  const store = createTransactionStore({
+    adapter: createMemoryAdapter(),
+    now: () => new Date('2026-07-13T09:00:00.000Z')
+  })
+  const payload = {
+    schemaVersion: 1,
+    endpoint: { host: 'srv.test', port: 22, username: 'ops' },
+    goal: 'inspect service',
+    orderedCalls: [],
+    skillBindings: [],
+    artifactDigests: [],
+    impactTargets: [],
+    resourceImpact: { duration: 'short' },
+    recovery: null,
+    verification: []
+  }
+  const planGrant = {
+    schemaVersion: 1,
+    algorithm: 'SHA-256',
+    digest: 'a'.repeat(64),
+    confirmedAt: '2026-07-13T09:00:00.000Z',
+    confirmedBy: 'user',
+    payload
+  }
+
+  const saved = await store.saveTask({ id: 'valid-plan-grant', planGrant })
+  assert.deepEqual(saved.planGrant, planGrant)
+  await assert.rejects(
+    store.saveTask({
+      id: 'invalid-plan-grant',
+      planGrant: { ...planGrant, digest: 'not-a-sha256-digest' }
+    }),
+    /计划授权结构无效/
+  )
+})
+
 test('concurrent task patches for one id are serialized with monotonic timestamps', async () => {
   const { createTransactionStore } = await importStore()
   const adapter = createMemoryAdapter()

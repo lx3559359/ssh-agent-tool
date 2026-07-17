@@ -594,7 +594,7 @@ export function getAgentToolDescriptor (toolName) {
 
 async function prepareResolvedAgentTool (toolName, args, runtime) {
   if (!isAgentCommandTool(toolName)) return undefined
-  const planGuard = ensureAgentPlanConfirmed({ toolName, runtime })
+  const planGuard = await ensureAgentPlanConfirmed({ toolName, args, runtime })
   if (planGuard) {
     return { handled: true, result: JSON.stringify(planGuard) }
   }
@@ -634,7 +634,10 @@ async function executeResolvedAgentTool (toolName, args, runtime, endpoint) {
     case 'confirm_agent_plan': {
       const confirmation = await confirmAgentPlan({
         args,
-        signal: runtime.signal
+        signal: runtime.signal,
+        endpoint: (typeof runtime.resolveEndpoint === 'function'
+          ? runtime.resolveEndpoint()
+          : runtime.endpoint) || {}
       })
       assertAgentRuntimeActive(runtime)
       markAgentPlanConfirmed(runtime, confirmation)

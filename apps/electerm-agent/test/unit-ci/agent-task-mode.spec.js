@@ -89,6 +89,47 @@ test('dangerous Agent commands require a second user confirmation', async () => 
   assert.match(messages[1], /二次确认/)
 })
 
+test('conversation plan confirmation stores an immutable grant instead of a boolean', async () => {
+  const {
+    confirmAgentPlan,
+    ensureAgentPlanConfirmed,
+    markAgentPlanConfirmed
+  } = await import(taskModeModuleUrl)
+  const runtime = {}
+  const confirmation = await confirmAgentPlan({
+    args: {
+      goal: 'inspect nginx',
+      readonlyCommands: ['systemctl status nginx']
+    },
+    endpoint: {
+      host: 'srv.test',
+      port: 22,
+      username: 'ops',
+      tabId: 'tab-a',
+      pid: 'pid-a',
+      terminalPid: 'term-a',
+      sessionType: 'ssh',
+      hostKeyFingerprint: 'SHA256:abc'
+    },
+    confirm: () => true
+  })
+  markAgentPlanConfirmed(runtime, confirmation)
+
+  assert.equal(runtime.planConfirmed, undefined)
+  assert.match(runtime.planGrant.digest, /^[a-f0-9]{64}$/)
+  assert.equal(await ensureAgentPlanConfirmed({
+    toolName: 'send_terminal_command',
+    args: { command: 'systemctl status nginx', tabId: 'tab-a' },
+    runtime
+  }), null)
+  const changed = await ensureAgentPlanConfirmed({
+    toolName: 'send_terminal_command',
+    args: { command: 'systemctl restart nginx', tabId: 'tab-a' },
+    runtime
+  })
+  assert.equal(changed.reasonCode, 'PLAN_BINDING_CHANGED')
+})
+
 test('Agent tools expose plan confirmation and guard command tools until the plan is approved', () => {
   const source = fs.readFileSync(
     path.resolve(__dirname, '../../src/client/components/ai/agent-tools.js'),

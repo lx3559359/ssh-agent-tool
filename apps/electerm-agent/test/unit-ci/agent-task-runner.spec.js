@@ -641,7 +641,7 @@ test('failed task execution cleans its registry entry', async () => {
   assert.equal((await store.listTasks()).at(-1).status, 'failed')
 })
 
-test('tampered confirmed plan reaches a failed terminal state and cleans registry', async () => {
+test('tampered confirmed plan returns to change confirmation and executes no step', async () => {
   const { createAgentTaskRegistry } = await import(registryUrl)
   const { createAgentTaskController } = await import(controllerUrl)
   const baseStore = createTaskStore()
@@ -650,7 +650,7 @@ test('tampered confirmed plan reaches a failed terminal state and cleans registr
     ...baseStore,
     async patchTask (id, patch) {
       const task = await baseStore.patchTask(id, patch)
-      if (patch.planBinding) tamperNextRead = true
+      if (patch.planGrant) tamperNextRead = true
       return task
     },
     async getTask (id) {
@@ -676,12 +676,13 @@ test('tampered confirmed plan reaches a failed terminal state and cleans registr
     cancelRunCmd: async () => true
   })
 
-  await assert.rejects(controller.confirmAndRun(diagnosticPlan()), /完整性|计划|篡改/)
-  const failed = (await baseStore.listTasks()).at(-1)
+  await assert.rejects(controller.confirmAndRun(diagnosticPlan()), /绑定|计划|篡改/)
+  const changed = (await baseStore.listTasks()).at(-1)
   assert.equal(remoteCalls, 0)
-  assert.equal(failed.status, 'failed')
-  assert.equal(typeof failed.completedAt, 'string')
-  assert.match(failed.error, /完整性|计划|篡改/)
+  assert.equal(changed.status, 'awaiting-change-confirmation')
+  assert.equal(changed.completedAt, undefined)
+  assert.equal(changed.reasonCode, 'PLAN_BINDING_CHANGED')
+  assert.match(changed.error, /绑定|计划|篡改/)
   assert.equal(registry.size, 0)
 })
 

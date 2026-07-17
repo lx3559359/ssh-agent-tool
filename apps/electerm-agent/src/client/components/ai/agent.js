@@ -142,7 +142,7 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
   )
   const resolveEndpoint = () => resolveAgentRuntimeEndpoint(sourceTabId)
   const agentRuntime = {
-    planConfirmed: false,
+    planGrant: null,
     sourceTabId,
     endpoint: resolveEndpoint(),
     resolveEndpoint,

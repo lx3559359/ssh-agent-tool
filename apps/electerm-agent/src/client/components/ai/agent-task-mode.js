@@ -1,5 +1,9 @@
 import { requestAgentConfirmation } from './agent-confirmation.js'
 import { classifyCommand } from '../../common/safety-transactions/command-classifier.js'
+import {
+  createPlanGrant,
+  verifyPlanGrant
+} from './agent-plan-grant.js'
 
 const COMMAND_TOOL_NAMES = new Set([
   'send_terminal_command',
@@ -86,40 +90,96 @@ export function buildAgentPlanConfirmationMessage (args = {}) {
 export async function confirmAgentPlan ({
   args = {},
   confirm,
-  signal
+  signal,
+  endpoint = {}
 } = {}) {
   const ask = typeof confirm === 'function'
     ? confirm
     : message => requestAgentConfirmation(message, { signal })
   const accepted = await ask(buildAgentPlanConfirmationMessage(args))
+  const planGrant = accepted
+    ? await createPlanGrant(buildConversationPlanGrantPayload(args, endpoint), {
+      confirmedBy: 'user'
+    })
+    : null
   return {
     accepted,
     cancelled: !accepted,
-    planConfirmed: accepted,
+    planGrant,
     message: accepted ? '用户已确认 Agent 分析计划。' : '用户已取消 Agent 分析计划。'
   }
 }
 
-export function markAgentPlanConfirmed (runtime, confirmation) {
-  if (runtime && confirmation?.accepted) {
-    runtime.planConfirmed = true
+export function buildConversationPlanGrantPayload (args = {}, endpoint = {}) {
+  const commands = Array.isArray(args.readonlyCommands) ? args.readonlyCommands : []
+  return {
+    schemaVersion: 1,
+    endpoint,
+    goal: String(args.goal || args.summary || 'Agent 运维任务').trim(),
+    orderedCalls: Array.isArray(args.orderedCalls)
+      ? args.orderedCalls
+      : commands.map(command => ({
+        name: 'send_terminal_command',
+        args: { command: String(command) }
+      })),
+    skillBindings: Array.isArray(args.skillBindings) ? args.skillBindings : [],
+    artifactDigests: Array.isArray(args.artifactDigests) ? args.artifactDigests : [],
+    impactTargets: Array.isArray(args.impactTargets) ? args.impactTargets : [],
+    resourceImpact: args.resourceImpact || {
+      cpu: 'unknown',
+      memory: 'unknown',
+      disk: 'unknown',
+      network: 'unknown',
+      duration: 'unknown'
+    },
+    recovery: args.recovery || null,
+    verification: Array.isArray(args.verification) ? args.verification : []
   }
 }
 
-export function ensureAgentPlanConfirmed ({
+export function markAgentPlanConfirmed (runtime, confirmation) {
+  if (runtime && confirmation?.accepted && confirmation.planGrant) {
+    runtime.planGrant = confirmation.planGrant
+  }
+}
+
+function stableSerialize (value) {
+  if (Array.isArray(value)) return `[${value.map(stableSerialize).join(',')}]`
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map(key => (
+      `${JSON.stringify(key)}:${stableSerialize(value[key])}`
+    )).join(',')}}`
+  }
+  return JSON.stringify(value)
+}
+
+function executableCall (toolName, args = {}) {
+  const { tabId, ...boundArgs } = args || {}
+  return { name: toolName, args: boundArgs }
+}
+
+export async function ensureAgentPlanConfirmed ({
   toolName,
+  args,
   runtime
 } = {}) {
   if (!isAgentCommandTool(toolName)) {
     return null
   }
-  if (runtime?.planConfirmed) {
-    return null
+  const grant = runtime?.planGrant
+  if (grant && await verifyPlanGrant(grant.payload, grant)) {
+    const expected = stableSerialize(executableCall(toolName, args))
+    if (grant.payload.orderedCalls.some(call => stableSerialize(call) === expected)) {
+      return null
+    }
   }
   return {
     accepted: false,
     cancelled: true,
     requiresPlan: true,
-    message: 'Agent 必须先提交分析计划，并由用户确认后才能执行命令。'
+    reasonCode: grant ? 'PLAN_BINDING_CHANGED' : 'PLAN_CONFIRMATION_REQUIRED',
+    message: grant
+      ? 'Agent 计划绑定已变更，必须重新确认后才能执行命令。'
+      : 'Agent 必须先提交分析计划，并由用户确认后才能执行命令。'
   }
 }
