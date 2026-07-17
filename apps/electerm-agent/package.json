@@ -28,6 +28,7 @@
     "test-package-smoke": "node.exe build/bin/package-smoke-test.js",
     "smoke:ssh-sftp": "node build/bin/smoke-ssh-sftp.js",
     "smoke:safety": "node build/bin/smoke-safety-transactions.js",
+    "smoke:ai-takeover": "node build/bin/smoke-ai-takeover.js",
     "verify-win-portable": "node build/bin/verify-win-portable-zip.js",
     "test1": "playwright test test/e2e/00*.js --workers=1",
     "test2": "playwright test test/e2e/01*.js --workers=1",

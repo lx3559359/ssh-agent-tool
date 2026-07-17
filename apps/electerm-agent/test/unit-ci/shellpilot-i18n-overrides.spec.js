@@ -78,7 +78,10 @@ const expectedCatalogs = {
     shellpilotAiTakeoverRiskRule: '有风险的操作仍会弹窗说明影响并要求二次确认。',
     shellpilotAiTakeoverActive: '接管中',
     shellpilotAiTakeoverEnabling: '启动中',
-    shellpilotAiTakeoverStopping: '停止中'
+    shellpilotAiTakeoverStopping: '停止中',
+    shellpilotAiTakeoverHelpSession: 'AI 接管默认关闭，并按 SSH 会话独立启用；断开连接或客户端重启会自动撤销。',
+    shellpilotAiTakeoverHelpSkills: '默认不内置 Skill。用户可通过对话创建或手动导入、编辑禁用草稿；Skill 声明权限不等于获得授权。',
+    shellpilotAiTakeoverHelpResources: '云端模型推理不在 SSH 服务器运行；空闲接管不产生额外远程工作，实际命令、恢复点和验证会消耗服务器资源。'
   },
   en_us: {
     bookmarks: 'Bookmarks',
@@ -147,7 +150,10 @@ const expectedCatalogs = {
     shellpilotAiTakeoverRiskRule: 'Risky operations still show their impact and require a second confirmation.',
     shellpilotAiTakeoverActive: 'Takeover Active',
     shellpilotAiTakeoverEnabling: 'Enabling',
-    shellpilotAiTakeoverStopping: 'Stopping'
+    shellpilotAiTakeoverStopping: 'Stopping',
+    shellpilotAiTakeoverHelpSession: 'AI Takeover is off by default and enabled independently per SSH session; disconnecting or restarting the client revokes it.',
+    shellpilotAiTakeoverHelpSkills: 'No Skills are built in by default. Users can create them in conversation or import and edit disabled drafts; declared permissions do not grant authorization.',
+    shellpilotAiTakeoverHelpResources: 'Cloud model inference does not run on the SSH server; idle takeover adds no remote work, while real commands, recovery points, and verification consume server resources.'
   }
 }
 
