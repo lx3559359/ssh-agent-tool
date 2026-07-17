@@ -221,9 +221,14 @@ test('Agent SFTP read tool exposes offset and bounded maxBytes pagination', () =
     tools.indexOf("name: 'sftp_read_file'"),
     tools.indexOf("name: 'sftp_del'")
   )
+  const mcpSource = fs.readFileSync(
+    path.resolve(__dirname, '../../src/client/store/mcp-handler.js'),
+    'utf8'
+  )
 
   assert.match(readTool, /offset:\s*\{[\s\S]*?type:\s*'integer'[\s\S]*?minimum:\s*0/)
-  assert.match(readTool, /maxBytes:\s*\{[\s\S]*?type:\s*'integer'[\s\S]*?maximum:\s*64 \* 1024/)
+  assert.match(readTool, /maxBytes:\s*\{[\s\S]*?type:\s*'integer'[\s\S]*?maximum:\s*32 \* 1024/)
+  assert.match(mcpSource, /mcpSftpReadFile[\s\S]{0,500}Math\.min\(requestedMaxBytes, 32 \* 1024\)/)
 })
 
 test('AI history unmount pauses polling without cancelling active work', () => {

@@ -372,8 +372,8 @@ export const agentTools = withAgentToolPolicy(withAgentToolScopes([
           maxBytes: {
             type: 'integer',
             minimum: 4,
-            maximum: 64 * 1024,
-            description: '本次最多读取的字节数，最大 65536。'
+            maximum: 32 * 1024,
+            description: '本次最多读取的字节数，最大 32768。'
           }
         },
         required: ['remotePath']
@@ -855,7 +855,9 @@ export async function prepareAgentRiskBatch (toolCalls, runtime = {}) {
       expandedContent
     })
     if (classification.outcome !== 'risky') continue
-    if (shouldDelegateAgentSafetyConfirmation(toolName, args)) return null
+    if (shouldDelegateAgentSafetyConfirmation(toolName, args, { endpoint })) {
+      return null
+    }
     transactions.push(buildResolvedRiskTransaction(
       toolName,
       args,
@@ -916,8 +918,11 @@ async function prepareResolvedAgentTool (toolName, args, runtime, context = {}) 
   }
   const batchPreparation = batchPreparationFor(runtime)
   if (batchPreparation) return batchPreparation
-  if (shouldDelegateAgentSafetyConfirmation(toolName, args)) {
+  if (shouldDelegateAgentSafetyConfirmation(toolName, args, {
+    endpoint: context.endpoint
+  })) {
     return createDelegatedAgentSafetyPreparation(toolName, args, {
+      endpoint: context.endpoint,
       verification: runtime.planGrant?.payload?.verification || []
     })
   }

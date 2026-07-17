@@ -8,6 +8,17 @@ const moduleUrl = pathToFileURL(path.resolve(
   '../../src/client/components/ai/agent-risk-delegation.js'
 )).href
 
+const sshEndpoint = Object.freeze({
+  host: 'srv.test',
+  port: 22,
+  username: 'ops',
+  tabId: 'tab-a',
+  pid: 'pid-a',
+  terminalPid: 'terminal-a',
+  sessionType: 'ssh',
+  hostKeyFingerprint: 'SHA256:a'
+})
+
 test('only operations with lower recovery preparation delegate confirmation', async () => {
   const {
     createDelegatedAgentSafetyPreparation,
@@ -16,7 +27,10 @@ test('only operations with lower recovery preparation delegate confirmation', as
 
   assert.equal(shouldDelegateAgentSafetyConfirmation('sftp_del', {
     remotePath: '/srv/app/cache'
-  }), true)
+  }, { endpoint: sshEndpoint }), true)
+  assert.equal(shouldDelegateAgentSafetyConfirmation('sftp_del', {
+    remotePath: '/srv/app/cache'
+  }, { endpoint: { ...sshEndpoint, sessionType: 'ftp' } }), false)
   assert.equal(shouldDelegateAgentSafetyConfirmation('send_terminal_command', {
     command: '/usr/bin/systemctl start nginx.service'
   }), true)
@@ -38,7 +52,10 @@ test('only operations with lower recovery preparation delegate confirmation', as
   const preparation = createDelegatedAgentSafetyPreparation(
     'sftp_del',
     { remotePath: '/srv/app/cache' },
-    { verification: [{ name: 'read_file_range', args: { length: 1 } }] }
+    {
+      endpoint: sshEndpoint,
+      verification: [{ name: 'read_file_range', args: { length: 1 } }]
+    }
   )
   assert.equal(Object.isFrozen(preparation), true)
   assert.equal(Object.isFrozen(preparation.confirmedArgs), true)

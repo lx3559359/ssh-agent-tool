@@ -221,6 +221,13 @@ test('production handlers use abortable waits and prepare upload recovery before
   assert.match(upload, /Prepared SFTP recovery operation changed before queueing/)
   assert.match(upload, /safetyOperationId/)
 
+  const sftpDelete = source.slice(
+    source.indexOf('Store.prototype.mcpSftpDel'),
+    source.indexOf('// ==================== File Transfer APIs')
+  )
+  assert.match(sftpDelete, /recoverable\s*=\s*Boolean\(success && !isFtp\)/)
+  assert.match(sftpDelete, /permanently deleted/)
+
   const describeUpload = source.slice(
     source.indexOf('Store.prototype.mcpDescribeSftpUploadSource'),
     source.indexOf('Store.prototype.mcpCancelPreparedSftpUpload')

@@ -35,9 +35,15 @@ function confirmationRequiredError () {
   return error
 }
 
-export function shouldDelegateAgentSafetyConfirmation (toolName, args = {}) {
+export function shouldDelegateAgentSafetyConfirmation (
+  toolName,
+  args = {},
+  options = {}
+) {
   const name = String(toolName || '')
-  if (delegatedStructuredTools.has(name)) return true
+  if (delegatedStructuredTools.has(name)) {
+    return String(options.endpoint?.sessionType || '').toLowerCase() === 'ssh'
+  }
   if (!delegatedCommandTools.has(name)) return false
   return classifyCommand(args.command).reversible === true
 }
@@ -47,7 +53,7 @@ export function createDelegatedAgentSafetyPreparation (
   args = {},
   options = {}
 ) {
-  if (!shouldDelegateAgentSafetyConfirmation(toolName, args)) {
+  if (!shouldDelegateAgentSafetyConfirmation(toolName, args, options)) {
     throw confirmationRequiredError()
   }
   return Object.freeze({
@@ -62,12 +68,17 @@ export function createDelegatedAgentSafetyPreparation (
 export function validateDelegatedAgentSafetyPreparation ({
   toolName,
   args,
+  endpoint,
   delegatedPreparation
 } = {}) {
   if (
     delegatedPreparation?.delegatedSafetyConfirmation !== true ||
     delegatedPreparation.toolName !== String(toolName || '') ||
-    !shouldDelegateAgentSafetyConfirmation(toolName, delegatedPreparation.confirmedArgs) ||
+    !shouldDelegateAgentSafetyConfirmation(
+      toolName,
+      delegatedPreparation.confirmedArgs,
+      { endpoint }
+    ) ||
     stableSerialize(args || {}) !== stableSerialize(delegatedPreparation.confirmedArgs)
   ) {
     throw confirmationRequiredError()

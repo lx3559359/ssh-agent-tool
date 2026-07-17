@@ -1050,8 +1050,8 @@ export default Store => {
     }
     const requestedMaxBytes = Number(args.maxBytes)
     const maxBytes = Number.isSafeInteger(requestedMaxBytes) && requestedMaxBytes > 0
-      ? Math.max(4, Math.min(requestedMaxBytes, 64 * 1024))
-      : 64 * 1024
+      ? Math.max(4, Math.min(requestedMaxBytes, 32 * 1024))
+      : 32 * 1024
     const requestedOffset = Number(args.offset)
     const offset = Number.isSafeInteger(requestedOffset) && requestedOffset >= 0
       ? requestedOffset
@@ -1102,15 +1102,20 @@ export default Store => {
       isDirectory
     }
     const success = await sftpEntry.delFiles('remote', [file], options)
+    const isFtp = sftpEntry.props?.isFtp === true ||
+      String(tab.type || '').toLowerCase() === 'ftp'
+    const recoverable = Boolean(success && !isFtp)
     return {
       success,
-      recoverable: Boolean(success),
+      recoverable,
       tabId,
       host: tab.host,
       path: remotePath,
       type: isDirectory ? 'directory' : 'file',
       message: success
-        ? '已移入 ShellPilot SFTP 安全回收区，可在安全操作中心恢复。'
+        ? recoverable
+          ? '已移入 ShellPilot SFTP 安全回收区，可在安全操作中心恢复。'
+          : 'FTP item was permanently deleted; no recovery snapshot exists.'
         : '用户已取消安全删除。'
     }
   }
