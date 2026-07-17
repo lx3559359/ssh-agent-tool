@@ -59,6 +59,21 @@ const outcomeRank = Object.freeze({
   blocked: 3
 })
 
+const remoteSkillPermissions = new Set(['ssh.read', 'ssh.write'])
+const localSkillPermissions = new Set([
+  'local.process',
+  'local.filesystem.read',
+  'local.filesystem.write',
+  'network'
+])
+const localSkillEnvironmentKeys = Object.freeze([
+  'PATH',
+  'SystemRoot',
+  'TEMP',
+  'TMP',
+  'WINDIR'
+])
+
 const lowImpact = Object.freeze({
   cpu: 'low',
   memory: 'low',
@@ -119,15 +134,72 @@ function commandText (descriptor, args = {}) {
   return String(args.command || '').trim()
 }
 
-function result (outcome, reasonCode, resourceImpact) {
+function result (outcome, reasonCode, resourceImpact, extras = {}) {
   return Object.freeze({
     outcome,
     reasonCode,
+    ...extras,
     resourceImpact: Object.freeze({
       ...(outcome === 'allowlisted-readonly' ? lowImpact : elevatedImpact),
       ...(resourceImpact || {})
     })
   })
+}
+
+function sameStrings (left, right) {
+  const normalized = value => [...new Set(
+    (Array.isArray(value) ? value : []).map(String)
+  )].sort()
+  return JSON.stringify(normalized(left)) === JSON.stringify(normalized(right))
+}
+
+function blockedSkillPermission () {
+  return result('blocked', 'SKILL_PERMISSION_UNENFORCEABLE', undefined, {
+    errorCode: 'SKILL_PERMISSION_UNENFORCEABLE'
+  })
+}
+
+function classifySkillArtifact ({
+  policy,
+  expandedContent,
+  skillArtifact,
+  localExecution
+}) {
+  const target = String(skillArtifact?.target || '')
+  const permissions = Array.isArray(skillArtifact?.requestedPermissions)
+    ? skillArtifact.requestedPermissions.map(String)
+    : []
+  const allowed = target === 'remote'
+    ? remoteSkillPermissions
+    : target === 'local' ? localSkillPermissions : null
+  if (!allowed || permissions.some(permission => !allowed.has(permission))) {
+    return blockedSkillPermission()
+  }
+
+  if (target === 'remote') {
+    if (policy.name !== 'send_terminal_command') return blockedSkillPermission()
+    const content = classifyShellText(expandedContent)
+    if (content.outcome === 'blocked' || content.outcome === 'unauditable') {
+      return content
+    }
+    return strictest(
+      result('risky', 'SKILL_REMOTE_SCRIPT'),
+      content
+    )
+  }
+
+  if (policy.name !== 'run_local_cli' ||
+    localExecution?.shell !== false ||
+    !Number.isFinite(localExecution?.timeoutMs) ||
+    localExecution.timeoutMs < 1 || localExecution.timeoutMs > 30000 ||
+    !Number.isFinite(localExecution?.outputLimitBytes) ||
+    localExecution.outputLimitBytes < 1 ||
+    localExecution.outputLimitBytes > 64 * 1024 ||
+    !sameStrings(localExecution.environmentKeys, localSkillEnvironmentKeys) ||
+    !sameStrings(localExecution.requestedPermissions, permissions)) {
+    return blockedSkillPermission()
+  }
+  return result('risky', 'SKILL_LOCAL_SCRIPT')
 }
 
 function classifyShellText (text) {
@@ -158,14 +230,27 @@ function strictest (left, right) {
 
 export function classifyAgentCall ({
   descriptor,
+  toolName,
   args = {},
-  expandedContent
+  expandedContent,
+  skillArtifact,
+  localExecution
 } = {}) {
   const policy = descriptor?.name
     ? getAgentToolDescriptor(descriptor.name)
-    : descriptor
+    : descriptor || (toolName ? getAgentToolDescriptor(toolName) : undefined)
   if (!policy?.name) {
     return result('blocked', 'TOOL_DESCRIPTOR_MISSING')
+  }
+
+  if (skillArtifact) {
+    return classifySkillArtifact({
+      policy,
+      args,
+      expandedContent,
+      skillArtifact,
+      localExecution
+    })
   }
 
   if (RAW_SHELL_TOOLS.has(policy.name) || policy.name === 'run_local_cli') {

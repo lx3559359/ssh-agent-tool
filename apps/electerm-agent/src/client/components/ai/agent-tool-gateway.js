@@ -14,9 +14,9 @@ function policyError (classification) {
   const error = new Error(unauditable
     ? 'Agent tool call cannot be audited safely'
     : 'Agent tool call is blocked by system policy')
-  error.code = unauditable
+  error.code = classification.errorCode || (unauditable
     ? 'AGENT_TOOL_UNAUDITABLE'
-    : 'AGENT_TOOL_BLOCKED'
+    : 'AGENT_TOOL_BLOCKED')
   error.classification = classification
   return error
 }
@@ -25,6 +25,9 @@ export async function executeAgentTool ({
   toolName,
   args = {},
   expandedContent,
+  skillArtifact,
+  localExecution,
+  validateArtifact,
   descriptor,
   endpoint,
   resolveEndpoint,
@@ -61,10 +64,18 @@ export async function executeAgentTool ({
   if (resolvedDescriptor.scope !== 'conversation' && endpoint) {
     assertSameSessionEndpoint(endpoint, currentEndpoint)
   }
+  if (skillArtifact && typeof validateArtifact !== 'function') {
+    const error = new Error('Skill artifact calls require digest revalidation')
+    error.code = 'SKILL_ARTIFACT_VALIDATION_REQUIRED'
+    throw error
+  }
+  if (skillArtifact) await validateArtifact()
   const classification = classifyCall({
     descriptor: resolvedDescriptor,
     args,
-    expandedContent
+    expandedContent,
+    skillArtifact,
+    localExecution
   })
   if (classification.outcome === 'blocked' ||
     classification.outcome === 'unauditable') {
@@ -105,6 +116,8 @@ export async function executeAgentTool ({
           descriptor: resolvedDescriptor,
           args,
           expandedContent,
+          skillArtifact,
+          localExecution,
           signal
         })
         return preparedRisk
@@ -113,6 +126,7 @@ export async function executeAgentTool ({
     validate: risky
       ? async (verifiedEndpoint, preparation) => {
         try {
+          if (skillArtifact) await validateArtifact()
           if (preparation?.delegatedSafetyConfirmation === true) {
             if (typeof validateDelegatedRisk !== 'function') {
               const error = new Error(
