@@ -70,7 +70,7 @@ function parseSkillDocument (input, options = {}) {
   let activeList = null
   for (const line of lines.slice(1, closingIndex)) {
     if (!line.trim()) continue
-    const listMatch = line.match(/^  -\s+(.+)$/)
+    const listMatch = line.match(/^ {2}-\s+(.+)$/)
     if (listMatch) {
       if (!activeList) {
         throw parserError('SKILL_FRONTMATTER_INVALID', 'Unexpected frontmatter list item.')

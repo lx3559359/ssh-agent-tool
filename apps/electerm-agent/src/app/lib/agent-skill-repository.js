@@ -1,0 +1,421 @@
+const crypto = require('node:crypto')
+const fsp = require('node:fs/promises')
+const path = require('node:path')
+const {
+  assertSkillId,
+  normalizeSkillRelativePath,
+  resolveSkillEntry
+} = require('./agent-skill-path')
+const { validateSkillPackage } = require('./agent-skill-validator')
+
+const STATES = Object.freeze(['enabled', 'disabled', 'drafts'])
+
+function repositoryError (code, message) {
+  const error = new Error(message)
+  error.code = code
+  return error
+}
+
+function uniqueToken () {
+  return `${Date.now().toString(36)}-${crypto.randomBytes(5).toString('hex')}`
+}
+
+async function pathExists (target) {
+  try {
+    await fsp.access(target)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function syncFile (filePath) {
+  const handle = await fsp.open(filePath, 'r+')
+  try {
+    await handle.sync()
+  } finally {
+    await handle.close()
+  }
+}
+
+async function syncPackage (root) {
+  const entries = await fsp.readdir(root, { withFileTypes: true })
+  for (const entry of entries) {
+    const target = path.join(root, entry.name)
+    if (entry.isDirectory()) {
+      await syncPackage(target)
+    } else if (entry.isFile()) {
+      await syncFile(target)
+    }
+  }
+  try {
+    await syncFile(root)
+  } catch {
+    // Directory fsync is not supported on every Windows filesystem.
+  }
+}
+
+function createAgentSkillRepository (options = {}) {
+  const rootPath = path.resolve(String(options.rootPath || ''))
+  if (!options.rootPath) {
+    throw repositoryError('SKILL_REPOSITORY_ROOT_REQUIRED', 'Skill repository root is required.')
+  }
+  const rename = options.rename || fsp.rename
+  const onDigestInvalidated = options.onDigestInvalidated || (() => {})
+  const locks = new Map()
+
+  const statePath = state => path.join(rootPath, state)
+  const historyPath = (skillId, digest) => path.join(rootPath, 'history', skillId, digest)
+
+  async function ensureRoots () {
+    await Promise.all([
+      ...STATES.map(state => fsp.mkdir(statePath(state), { recursive: true })),
+      fsp.mkdir(path.join(rootPath, 'history'), { recursive: true })
+    ])
+  }
+
+  function withLock (key, operation) {
+    const previous = locks.get(key) || Promise.resolve()
+    const run = previous.catch(() => {}).then(operation)
+    const settled = run.catch(() => {}).finally(() => {
+      if (locks.get(key) === settled) locks.delete(key)
+    })
+    locks.set(key, settled)
+    return run
+  }
+
+  async function createTempDirectory (parent) {
+    await fsp.mkdir(parent, { recursive: true })
+    return fsp.mkdtemp(path.join(parent, '.tmp-'))
+  }
+
+  async function atomicReplaceDirectory (candidate, target) {
+    const backup = `${target}.backup-${uniqueToken()}`
+    const hadTarget = await pathExists(target)
+    if (hadTarget) await rename(target, backup)
+    try {
+      await rename(candidate, target)
+    } catch (error) {
+      if (hadTarget && await pathExists(backup)) {
+        await rename(backup, target)
+      }
+      throw error
+    }
+    if (hadTarget) await fsp.rm(backup, { recursive: true, force: true })
+  }
+
+  async function copyToTemp (source, parent) {
+    const candidate = await createTempDirectory(parent)
+    try {
+      await fsp.cp(source, candidate, { recursive: true, force: true })
+      return candidate
+    } catch (error) {
+      await fsp.rm(candidate, { recursive: true, force: true })
+      throw error
+    }
+  }
+
+  async function writePackageFiles (target, files) {
+    if (!files || Array.isArray(files) || typeof files !== 'object') {
+      throw repositoryError('SKILL_FILES_INVALID', 'Skill draft files must be a path-to-content object.')
+    }
+    const normalized = new Map()
+    for (const [relativePath, content] of Object.entries(files)) {
+      const safePath = normalizeSkillRelativePath(relativePath)
+      if (normalized.has(safePath)) {
+        throw repositoryError('SKILL_FILE_DUPLICATE', `Duplicate Skill file: ${safePath}`)
+      }
+      if (!(typeof content === 'string' || Buffer.isBuffer(content))) {
+        throw repositoryError('SKILL_FILE_CONTENT_INVALID', `Skill file must be text or bytes: ${safePath}`)
+      }
+      normalized.set(safePath, content)
+    }
+    for (const [relativePath, content] of normalized) {
+      const filePath = resolveSkillEntry(target, relativePath, { allowMissing: true })
+      await fsp.mkdir(path.dirname(filePath), { recursive: true })
+      await fsp.writeFile(filePath, content)
+    }
+  }
+
+  async function validateOrThrow (directory, expectedDigest) {
+    const validation = await validateSkillPackage(directory)
+    if (!validation.valid) {
+      const error = repositoryError('SKILL_VALIDATION_FAILED', 'Skill package did not pass validation.')
+      error.validation = validation
+      throw error
+    }
+    if (expectedDigest && validation.packageDigest !== expectedDigest) {
+      throw repositoryError('SKILL_DIGEST_MISMATCH', 'Skill package changed after validation.')
+    }
+    return validation
+  }
+
+  async function historyDigests (skillId) {
+    const parent = path.join(rootPath, 'history', skillId)
+    if (!await pathExists(parent)) return []
+    const entries = await fsp.readdir(parent, { withFileTypes: true })
+    return entries.filter(entry => entry.isDirectory()).map(entry => entry.name).sort()
+  }
+
+  async function metadataFor (directory, state, entryId, skillIdHint) {
+    const validation = await validateSkillPackage(directory)
+    const skillId = validation.manifest?.id || skillIdHint || entryId
+    return {
+      id: state === 'drafts' ? entryId : skillId,
+      skillId,
+      enabled: state === 'enabled',
+      state: state === 'drafts' ? 'draft' : state,
+      valid: validation.valid,
+      name: validation.manifest?.name || skillId,
+      description: validation.manifest?.description || '',
+      version: validation.manifest?.version || '',
+      triggers: validation.manifest?.triggers || [],
+      implicitMatching: validation.manifest?.implicitMatching === true,
+      requestedPermissions: validation.requestedPermissions,
+      packageDigest: validation.packageDigest,
+      riskSummary: validation.riskSummary,
+      errors: validation.errors,
+      warnings: validation.warnings,
+      historyDigests: await historyDigests(skillId)
+    }
+  }
+
+  async function locate (id) {
+    assertSkillId(id)
+    await ensureRoots()
+    for (const state of STATES) {
+      const directory = path.join(statePath(state), id)
+      if (await pathExists(directory)) return { state, directory, entryId: id }
+    }
+    return null
+  }
+
+  async function snapshotDirectory (skillId, directory, digest) {
+    const target = historyPath(skillId, digest)
+    if (await pathExists(target)) return
+    const parent = path.dirname(target)
+    const candidate = await copyToTemp(directory, parent)
+    try {
+      await validateOrThrow(candidate, digest)
+      await syncPackage(candidate)
+      if (await pathExists(target)) {
+        await fsp.rm(candidate, { recursive: true, force: true })
+      } else {
+        await rename(candidate, target)
+      }
+    } catch (error) {
+      await fsp.rm(candidate, { recursive: true, force: true })
+      throw error
+    }
+  }
+
+  async function snapshotEnabled (skillId) {
+    const directory = path.join(statePath('enabled'), skillId)
+    if (!await pathExists(directory)) return null
+    const validation = await validateOrThrow(directory)
+    await snapshotDirectory(skillId, directory, validation.packageDigest)
+    return validation
+  }
+
+  async function createDraft (files) {
+    await ensureRoots()
+    const parent = statePath('drafts')
+    const candidate = await createTempDirectory(parent)
+    try {
+      await writePackageFiles(candidate, files)
+      const validation = await validateOrThrow(candidate)
+      const draftId = `${validation.manifest.id}-draft-${uniqueToken()}`
+      const target = path.join(parent, draftId)
+      await syncPackage(candidate)
+      await rename(candidate, target)
+      return metadataFor(target, 'drafts', draftId, validation.manifest.id)
+    } catch (error) {
+      await fsp.rm(candidate, { recursive: true, force: true })
+      throw error
+    }
+  }
+
+  async function list () {
+    await ensureRoots()
+    const catalog = []
+    for (const state of STATES) {
+      const entries = await fsp.readdir(statePath(state), { withFileTypes: true })
+      for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+        if (!entry.isDirectory() || entry.name.startsWith('.')) continue
+        catalog.push(await metadataFor(path.join(statePath(state), entry.name), state, entry.name))
+      }
+    }
+    return catalog
+  }
+
+  async function getMetadata (id) {
+    const found = await locate(id)
+    if (!found) return null
+    return metadataFor(found.directory, found.state, found.entryId)
+  }
+
+  async function readFile (id, relativePath) {
+    const found = await locate(id)
+    if (!found) throw repositoryError('SKILL_NOT_FOUND', 'Skill was not found.')
+    const safePath = normalizeSkillRelativePath(relativePath)
+    const filePath = resolveSkillEntry(found.directory, safePath)
+    const stat = await fsp.stat(filePath)
+    if (!stat.isFile()) throw repositoryError('SKILL_FILE_INVALID', 'Skill path is not a regular file.')
+    const content = await fsp.readFile(filePath, 'utf8')
+    const digest = crypto.createHash('sha256').update(Buffer.from(content, 'utf8')).digest('hex')
+    return { path: safePath, content, digest }
+  }
+
+  function readDocument (id) {
+    return readFile(id, 'SKILL.md')
+  }
+
+  async function validateDraft (id) {
+    const found = await locate(id)
+    if (!found || found.state !== 'drafts') {
+      throw repositoryError('SKILL_DRAFT_NOT_FOUND', 'Skill draft was not found.')
+    }
+    return validateSkillPackage(found.directory)
+  }
+
+  async function updateDraftFile (id, relativePath, content) {
+    const found = await locate(id)
+    if (!found) throw repositoryError('SKILL_NOT_FOUND', 'Skill was not found.')
+    const current = await metadataFor(found.directory, found.state, found.entryId)
+    const skillId = current.skillId
+    return withLock(skillId, async () => {
+      const latest = await locate(id)
+      if (!latest) throw repositoryError('SKILL_NOT_FOUND', 'Skill changed before it could be edited.')
+      const parent = statePath('drafts')
+      const candidate = await copyToTemp(latest.directory, parent)
+      let target
+      try {
+        const safePath = normalizeSkillRelativePath(relativePath)
+        const filePath = resolveSkillEntry(candidate, safePath, { allowMissing: true })
+        await fsp.mkdir(path.dirname(filePath), { recursive: true })
+        await fsp.writeFile(filePath, content)
+        await syncPackage(candidate)
+        if (latest.state === 'drafts') {
+          target = latest.directory
+          await atomicReplaceDirectory(candidate, target)
+        } else {
+          const draftId = `${skillId}-draft-${uniqueToken()}`
+          target = path.join(parent, draftId)
+          await rename(candidate, target)
+          onDigestInvalidated({ skillId, packageDigest: current.packageDigest })
+        }
+        return metadataFor(target, 'drafts', path.basename(target), skillId)
+      } catch (error) {
+        await fsp.rm(candidate, { recursive: true, force: true })
+        throw error
+      }
+    })
+  }
+
+  async function enableDraft (draftId, expectedDigest) {
+    const found = await locate(draftId)
+    if (!found || found.state !== 'drafts') {
+      throw repositoryError('SKILL_DRAFT_NOT_FOUND', 'Skill draft was not found.')
+    }
+    const firstValidation = await validateOrThrow(found.directory, expectedDigest)
+    const skillId = firstValidation.manifest.id
+    return withLock(skillId, async () => {
+      const latest = await locate(draftId)
+      if (!latest || latest.state !== 'drafts') {
+        throw repositoryError('SKILL_DRAFT_NOT_FOUND', 'Skill draft changed before it could be enabled.')
+      }
+      const validation = await validateOrThrow(latest.directory, expectedDigest)
+      await snapshotEnabled(skillId)
+      const target = path.join(statePath('enabled'), skillId)
+      const candidate = await copyToTemp(latest.directory, statePath('enabled'))
+      try {
+        await validateOrThrow(candidate, expectedDigest)
+        await syncPackage(candidate)
+        await atomicReplaceDirectory(candidate, target)
+        await fsp.rm(latest.directory, { recursive: true, force: true })
+        return metadataFor(target, 'enabled', skillId, validation.manifest.id)
+      } catch (error) {
+        await fsp.rm(candidate, { recursive: true, force: true })
+        throw error
+      }
+    })
+  }
+
+  async function disable (skillId) {
+    assertSkillId(skillId)
+    return withLock(skillId, async () => {
+      await ensureRoots()
+      const source = path.join(statePath('enabled'), skillId)
+      if (!await pathExists(source)) throw repositoryError('SKILL_ENABLED_NOT_FOUND', 'Enabled Skill was not found.')
+      const validation = await validateOrThrow(source)
+      await snapshotDirectory(skillId, source, validation.packageDigest)
+      const candidate = await copyToTemp(source, statePath('disabled'))
+      const target = path.join(statePath('disabled'), skillId)
+      await atomicReplaceDirectory(candidate, target)
+      await fsp.rm(source, { recursive: true, force: true })
+      onDigestInvalidated({ skillId, packageDigest: validation.packageDigest })
+      return metadataFor(target, 'disabled', skillId, skillId)
+    })
+  }
+
+  async function rollback (skillId, digest) {
+    assertSkillId(skillId)
+    if (!/^[a-f0-9]{64}$/.test(String(digest || ''))) {
+      throw repositoryError('SKILL_DIGEST_INVALID', 'Skill history digest is invalid.')
+    }
+    return withLock(skillId, async () => {
+      await ensureRoots()
+      const source = historyPath(skillId, digest)
+      if (!await pathExists(source)) throw repositoryError('SKILL_HISTORY_NOT_FOUND', 'Skill history version was not found.')
+      await validateOrThrow(source, digest)
+      await snapshotEnabled(skillId)
+      const target = path.join(statePath('enabled'), skillId)
+      const candidate = await copyToTemp(source, statePath('enabled'))
+      try {
+        await syncPackage(candidate)
+        await atomicReplaceDirectory(candidate, target)
+        return metadataFor(target, 'enabled', skillId, skillId)
+      } catch (error) {
+        await fsp.rm(candidate, { recursive: true, force: true })
+        throw error
+      }
+    })
+  }
+
+  async function remove (id) {
+    const found = await locate(id)
+    if (!found) return false
+    const current = await metadataFor(found.directory, found.state, found.entryId)
+    return withLock(current.skillId, async () => {
+      const latest = await locate(id)
+      if (!latest) return false
+      if (latest.state !== 'drafts' && current.valid && current.packageDigest) {
+        await snapshotDirectory(current.skillId, latest.directory, current.packageDigest)
+      }
+      await fsp.rm(latest.directory, { recursive: true, force: true })
+      if (latest.state === 'enabled') {
+        onDigestInvalidated({ skillId: current.skillId, packageDigest: current.packageDigest })
+      }
+      return true
+    })
+  }
+
+  return Object.freeze({
+    list,
+    getMetadata,
+    readDocument,
+    readFile,
+    createDraft,
+    updateDraftFile,
+    validateDraft,
+    enableDraft,
+    disable,
+    rollback,
+    remove
+  })
+}
+
+module.exports = {
+  createAgentSkillRepository,
+  repositoryError
+}
