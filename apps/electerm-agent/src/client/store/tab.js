@@ -21,6 +21,9 @@ import {
   beginTerminalWorkspaceIntent,
   isFleetStatusActive
 } from '../components/fleet-status/fleet-status-navigation'
+import {
+  emitAgentTakeoverLifecycleEvent
+} from '../components/ai/agent-takeover-lifecycle.js'
 
 export default Store => {
   Store.prototype.nextTabCount = function () {
@@ -234,6 +237,9 @@ export default Store => {
     }
 
     if (removedIds.length) {
+      for (const tabId of removedIds) {
+        emitAgentTakeoverLifecycleEvent({ type: 'tab-close', tabId })
+      }
       window.store.fixCurrentTabIds(tabs, removedIds)
     }
   }

@@ -321,7 +321,7 @@ git commit -m "feat: add session takeover controls to ai panel"
 - Create: `apps/electerm-agent/test/unit-ci/agent-takeover-concurrency.spec.js`
 - Create: `apps/electerm-agent/test/unit-ci/agent-takeover-fleet-boundary.spec.js`
 
-- [ ] **Step 1: 写入生命周期失败测试**
+- [x] **Step 1: 写入生命周期失败测试**
 
 Table-test these events: `disconnect`, `reconnect-start`, `tab-close`, `endpoint-change`, `app-before-quit`, `manual-stop`. Each event must move the matching grant to off, abort its active task, invalidate pending confirmations and leave unrelated sessions active.
 
@@ -335,7 +335,7 @@ Add concurrency assertions: two Agent runs for one exact session are rejected, w
 
 Add Fleet boundary assertions: `fleet-status-ai-context` and a Fleet workspace conversation can provide already collected observations, but cannot create, borrow or match a takeover grant. Any remote-capable tool from that scope fails with `AI_TAKEOVER_REQUIRED` until a concrete SSH tab is opened and enabled.
 
-- [ ] **Step 2: 运行测试并确认失败**
+- [x] **Step 2: 运行测试并确认失败**
 
 ```powershell
 node --test test/unit-ci/agent-takeover-lifecycle.spec.js test/unit-ci/agent-takeover-concurrency.spec.js test/unit-ci/agent-takeover-fleet-boundary.spec.js
@@ -343,15 +343,15 @@ node --test test/unit-ci/agent-takeover-lifecycle.spec.js test/unit-ci/agent-tak
 
 Expected: grants survive one or more lifecycle events or are represented in persisted initial state.
 
-- [ ] **Step 3: 订阅已有会话生命周期并精确失效**
+- [x] **Step 3: 订阅已有会话生命周期并精确失效**
 
 Add one adapter in `main.jsx` that translates existing tab/session events into registry calls. On endpoint comparison failure, call `disable(previousEndpoint, 'endpoint-changed')` before any new Agent tool can run. On stop, request task cancellation first, then transition `stopping -> off`; phase 02 will connect the abort signal to remote tools.
 
-- [ ] **Step 4: 添加空闲零工作测试**
+- [x] **Step 4: 添加空闲零工作测试**
 
 Warm or stub the existing `aiHealthCoordinator`, record its control baseline, then enable ten mock sessions and advance fake time by five minutes. Assert the takeover delta is zero model calls, zero remote commands, zero remote processes and zero periodic timers; the test must not misattribute the existing deduplicated model health check to takeover.
 
-- [ ] **Step 5: 运行本阶段回归并提交**
+- [x] **Step 5: 运行本阶段回归并提交**
 
 ```powershell
 node --test test/unit-ci/agent-takeover-*.spec.js test/unit-ci/ai-agent-tools.spec.js test/unit-ci/ai-chat-layout.spec.js test/unit-ci/session-ssh-known-hosts.spec.js

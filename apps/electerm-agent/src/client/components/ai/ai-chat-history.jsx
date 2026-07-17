@@ -4,12 +4,11 @@ import { auto } from 'manate/react'
 import AIChatHistoryItem from './ai-chat-history-item'
 import { isAIHistoryNearBottom } from './ai-chat-scroll'
 
-export default auto(function AIChatHistory ({ history }) {
+export default auto(function AIChatHistory ({ history, agentRunning }) {
   const historyRef = useRef(null)
   const stickToBottomRef = useRef(true)
   const list = Array.isArray(history) ? history : []
   const config = window.store?.config || {}
-  const agentRunning = Boolean(window.store?.agentRunning)
   const configRevisionKey = [
     config.activeAIProfileId,
     config.credentialRevisionAI,

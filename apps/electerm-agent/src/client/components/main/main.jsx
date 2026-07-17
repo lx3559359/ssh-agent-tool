@@ -46,6 +46,9 @@ import './wrapper.styl'
 import TerminalInfo from '../terminal-info/terminal-info-entry'
 import '../../common/fs.js'
 import './term-fullscreen.styl'
+import {
+  installAgentTakeoverLifecycle
+} from '../ai/agent-takeover-lifecycle.js'
 
 export function getSafeRightPanelTitle (store, rawConfig) {
   return rawConfig ? store.rightPanelTitle : ''
@@ -79,6 +82,9 @@ export default auto(function Index (props) {
     document.addEventListener('drop', preventDocumentDrop)
     document.addEventListener('dragover', preventDocumentDrop)
     window.addEventListener('offline', store.setOffline)
+    const uninstallAgentTakeoverLifecycle = installAgentTakeoverLifecycle({
+      onError: error => store.onError(error)
+    })
     if (window.et.isWebApp) {
       window.onbeforeunload = store.beforeExit
     }
@@ -92,6 +98,7 @@ export default auto(function Index (props) {
       clearTimeout(resizeTimer)
       window.removeEventListener('resize', store.onResize)
       window.removeEventListener('offline', store.setOffline)
+      uninstallAgentTakeoverLifecycle()
       document.removeEventListener('drop', preventDocumentDrop)
       document.removeEventListener('dragover', preventDocumentDrop)
       ipcOffEvent('checkupdate', store.onCheckUpdate)
@@ -136,6 +143,10 @@ export default auto(function Index (props) {
   const activeTabId = currentTab?.id || store.activeTabId || ''
   const upgradeInfo = deepCopy(store.upgradeInfo)
   const fleetStatusActive = store.mainWorkspaceMode === 'fleet-status'
+  const aiSessionTabId = fleetStatusActive ? '' : activeTabId
+  const aiConversationScopeId = fleetStatusActive
+    ? 'fleet-status'
+    : String(activeTabId || 'global')
   const cls = classnames({
     loaded: configLoaded,
     'not-webapp': !window.et.isWebApp,
@@ -236,7 +247,7 @@ export default auto(function Index (props) {
     rightPanelWidth: store.rightPanelWidth,
     title: rightPanelTitle,
     rightPanelTab,
-    activeTabId,
+    activeTabId: aiSessionTabId,
     config
   }
   const terminalInfoProps = {
@@ -269,10 +280,10 @@ export default auto(function Index (props) {
     config,
     selectedTabIds: store.batchInputSelectedTabIds,
     tabs,
-    activeTabId,
+    activeTabId: aiSessionTabId,
+    conversationScopeId: aiConversationScopeId,
     showAIConfig: store.showAIConfig,
-    rightPanelTab,
-    agentRunning: store.agentRunning
+    rightPanelTab
   }
   const cmdSuggestionsProps = {
     suggestions: store.terminalCommandSuggestions

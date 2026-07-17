@@ -99,6 +99,9 @@ import { buildSafetyRequest } from '../../common/safety-transactions/models.js'
 import { assertSameSessionEndpoint } from '../../common/safety-transactions/endpoint-guard.js'
 import * as terminalSafetyStore from '../../common/safety-transactions/transaction-store.js'
 import uid from '../../common/uid.js'
+import {
+  emitAgentTakeoverLifecycleEvent
+} from '../ai/agent-takeover-lifecycle.js'
 
 const e = window.translate
 
@@ -295,6 +298,11 @@ class Term extends Component {
   }
 
   componentWillUnmount () {
+    emitAgentTakeoverLifecycleEvent({
+      type: 'tab-close',
+      tabId: this.props.tab.id,
+      endpoint: this.getTerminalSafetyEndpoint()
+    })
     this.onClose = true
     this.terminalSafetyCoordinator.invalidateSession().catch(() => {})
     this.commandSafetyEntrypoint.invalidateSession().catch(() => {})
@@ -1767,6 +1775,16 @@ class Term extends Component {
   }
 
   remoteInit = async (term = this.term) => {
+    const previousEndpoint = this.hostKeyFingerprint && this.pid
+      ? this.getTerminalSafetyEndpoint()
+      : null
+    if (previousEndpoint) {
+      emitAgentTakeoverLifecycleEvent({
+        type: 'reconnect-start',
+        tabId: this.props.tab.id,
+        endpoint: previousEndpoint
+      })
+    }
     this.hostKeyFingerprint = ''
     this.setState({
       loading: true,
@@ -1897,6 +1915,14 @@ class Term extends Component {
     refs.get('sftp-' + id)?.initData(id, r.port)
     term.pid = id
     this.pid = id
+    if (previousEndpoint) {
+      emitAgentTakeoverLifecycleEvent({
+        type: 'endpoint-change',
+        tabId: id,
+        endpoint: previousEndpoint,
+        nextEndpoint: this.getTerminalSafetyEndpoint()
+      })
+    }
     const wsUrl = this.buildWsUrl(r.port)
     const socket = new WebSocket(wsUrl)
     socket.onclose = this.oncloseSocket
@@ -2013,6 +2039,11 @@ class Term extends Component {
   }
 
   oncloseSocket = () => {
+    emitAgentTakeoverLifecycleEvent({
+      type: 'disconnect',
+      tabId: this.props.tab.id,
+      endpoint: this.getTerminalSafetyEndpoint()
+    })
     this.terminalSafetyCoordinator.invalidateSession().catch(error => {
       if (!this.onClose) window.store.onError(error)
     })

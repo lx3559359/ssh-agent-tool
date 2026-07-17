@@ -17,8 +17,7 @@ test('takeover control is an exact-session accessible switch with explicit stop'
   assert.match(source, /shellpilotAiTakeoverStop/)
   assert.match(source, /agentTakeoverRegistry\.subscribe/)
   assert.match(source, /resolveAgentRuntimeEndpoint\(activeTabId\)/)
-  assert.match(source, /cancelAgentRunsForScope\(activeTabId\)/)
-  assert.match(source, /agentTakeoverRegistry\.disable\(endpoint, 'user-stop'\)/)
+  assert.match(source, /stopAgentTakeover\(endpoint\)/)
 })
 
 test('enabling takeover requires a non-dismissible detailed identity confirmation', () => {

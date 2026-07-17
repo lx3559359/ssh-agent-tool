@@ -249,9 +249,9 @@ test('Agent runs remain explicitly cancellable after the chat panel remounts', (
     'utf8'
   )
 
-  assert.match(agent, /activeAgentRuns\s*=\s*new Map\(\)/)
+  assert.match(agent, /agentTaskRegistry/)
   assert.match(agent, /export function cancelAgentRun/)
-  assert.match(agent, /activeAgentRuns\.set\(String\(chatEntry\.id\),\s*cancelCurrent\)/)
+  assert.match(agent, /agentTaskRegistry\.register\(/)
   assert.match(historyItem, /cancelAgentRun\(item\.id\)/)
 })
 
@@ -348,7 +348,8 @@ test('chat entries persist scope display text and explicit completion state', ()
   )
 
   assert.match(chat, /displayPrompt:\s*userPrompt/)
-  assert.match(chat, /conversationScopeId:\s*String\(props\.activeTabId/)
+  assert.match(chat, /const\s+conversationScopeId\s*=\s*String\(\s*props\.conversationScopeId\s*\|\|\s*props\.activeTabId\s*\|\|\s*'global'\s*\)/)
+  assert.match(chat, /conversationScopeId,/)
   assert.match(chat, /sourceTabId:\s*String\(props\.activeTabId/)
   assert.match(chat, /completionStatus:\s*'pending'/)
   assert.match(historyItem, /completionStatus:\s*streamResponse\.hasMore\s*\?\s*'running'\s*:\s*'completed'/)
@@ -442,7 +443,8 @@ test('Agent retry is blocked while another Agent run owns the lock', () => {
 
   assert.match(historyItem, /mode\s*===\s*'agent'\s*&&\s*agentRunning/)
   assert.match(historyItem, /if\s*\(retryDisabled\)/)
-  assert.match(agent, /if\s*\(window\.store\.agentRunning\)/)
+  assert.match(agent, /AI_AGENT_SESSION_BUSY/)
+  assert.doesNotMatch(agent, /window\.store\.agentRunning/)
 })
 
 test('long chat history avoids rerendering every unchanged message', () => {

@@ -4,12 +4,12 @@ import message from '../common/message'
 import {
   assertSameSessionEndpoint
 } from '../../common/safety-transactions/endpoint-guard.js'
-import { cancelAgentRunsForScope } from './agent'
 import { resolveAgentRuntimeEndpoint } from './agent-runtime-context.js'
 import {
   agentTakeoverRegistry
 } from './agent-takeover-registry.js'
 import { isTakeoverActive } from './agent-takeover-state.js'
+import { stopAgentTakeover } from './agent-takeover-lifecycle.js'
 import './ai.styl'
 
 const e = window.translate
@@ -38,14 +38,10 @@ export default function AgentTakeoverControls ({ activeTabId }) {
     setPendingEndpoint(currentEndpoint)
   }
 
-  function stopTakeover () {
+  async function stopTakeover () {
     if (!endpoint || !record) return
     try {
-      if (record.state !== 'stopping') {
-        agentTakeoverRegistry.stop(endpoint)
-      }
-      cancelAgentRunsForScope(activeTabId)
-      agentTakeoverRegistry.disable(endpoint, 'user-stop')
+      await stopAgentTakeover(endpoint)
     } catch (error) {
       message.error(error?.message || e('shellpilotAiTakeoverStopFailed'))
     }

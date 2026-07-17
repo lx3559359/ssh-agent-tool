@@ -59,6 +59,8 @@ import {
   getAIHealthRequestKey,
   resolveAIChatHealthTransitions
 } from './ai-health-coordinator'
+import { agentTaskRegistry } from './agent-task-registry.js'
+import { resolveAgentRuntimeEndpoint } from './agent-runtime-context.js'
 import { createAIRequestCredentialReference } from './ai-request-credentials'
 import message from '../common/message'
 import aiAgentCopy from './ai-agent-copy.json'
@@ -73,13 +75,20 @@ export default function AIChat (props) {
   const [attachmentQueue, setAttachmentQueue] = useState([])
   const fileInputRef = useRef(null)
   const submittedHealthChecksRef = useRef(new Map())
+  const [, setAgentTaskVersion] = useState(0)
   const isAgent = mode === 'agent'
-  const submitDisabled = isAgent && props.agentRunning
+  const conversationScopeId = String(
+    props.conversationScopeId || props.activeTabId || 'global'
+  )
+  const activeEndpoint = resolveAgentRuntimeEndpoint(props.activeTabId)
+  const agentRunning = activeEndpoint
+    ? agentTaskRegistry.isEndpointBusy(activeEndpoint)
+    : agentTaskRegistry.isScopeBusy(conversationScopeId)
+  const submitDisabled = isAgent && agentRunning
   const activeAIConfig = useMemo(
     () => getActiveAIConfig(props.config),
     [props.config]
   )
-  const conversationScopeId = String(props.activeTabId || 'global')
   const visibleHistory = useMemo(
     () => getAIChatHistoryForScope(props.aiChatHistory, conversationScopeId),
     [props.aiChatHistory, conversationScopeId]
@@ -90,6 +99,10 @@ export default function AIChat (props) {
       adoptLegacyAIChatHistoryScope(window.store, conversationScopeId)
     }
   }, [props.activeTabId, conversationScopeId, props.aiChatHistory])
+
+  useEffect(() => agentTaskRegistry.subscribe(() => {
+    setAgentTaskVersion(version => version + 1)
+  }), [])
 
   function handlePromptChange (e) {
     setPrompt(e.target.value)
@@ -161,7 +174,7 @@ export default function AIChat (props) {
     const chatEntry = {
       prompt: submitPrompt,
       displayPrompt: userPrompt,
-      conversationScopeId: String(props.activeTabId || 'global'),
+      conversationScopeId,
       sourceTabId: String(props.activeTabId || ''),
       completionStatus: 'pending',
       response: '',
@@ -194,12 +207,20 @@ export default function AIChat (props) {
     setAttachmentQueue(current =>
       current === attachmentQueueAtSubmit ? [] : current
     )
-  }, [prompt, mode, activeAIConfig, attachmentQueue, props.activeTabId])
+  }, [
+    prompt,
+    mode,
+    activeAIConfig,
+    attachmentQueue,
+    props.activeTabId,
+    conversationScopeId
+  ])
 
   function renderHistory () {
     return (
       <AiChatHistory
         history={visibleHistory}
+        agentRunning={agentRunning}
       />
     )
   }
@@ -385,7 +406,7 @@ export default function AIChat (props) {
           {
             label: 'Agent',
             value: 'agent',
-            disabled: props.agentRunning
+            disabled: agentRunning
           }
         ]}
       />

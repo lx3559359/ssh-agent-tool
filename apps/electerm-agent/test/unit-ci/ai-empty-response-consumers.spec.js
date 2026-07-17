@@ -99,6 +99,39 @@ async function importAgentModule () {
       'const agentTakeoverRegistry = { assertActive: () => ({ state: \'active-idle\' }) }\n'
     )
     .replace(
+      /^import \{ agentTaskRegistry \} from '\.\/agent-task-registry\.js'\r?\n/m,
+      `const __agentTasks = new Map()
+const agentTaskRegistry = {
+  register: entry => {
+    if ([...__agentTasks.values()].some(item => item.scopeId === entry.scopeId)) {
+      const error = new Error('busy')
+      error.code = 'AI_AGENT_SESSION_BUSY'
+      throw error
+    }
+    __agentTasks.set(String(entry.taskId), entry)
+    return entry
+  },
+  unregister: id => __agentTasks.delete(String(id)),
+  get: id => __agentTasks.get(String(id)),
+  cancel: async id => {
+    const key = String(id)
+    const entry = __agentTasks.get(key)
+    if (!entry) throw new Error('missing task')
+    entry.controller?.abort?.()
+    try {
+      return await entry.runner.cancel(key)
+    } finally {
+      __agentTasks.delete(key)
+    }
+  },
+  cancelByScope: async scopeId => {
+    const matches = [...__agentTasks.values()].filter(entry => entry.scopeId === String(scopeId || ''))
+    return Promise.all(matches.map(entry => agentTaskRegistry.cancel(entry.taskId)))
+  }
+}
+`
+    )
+    .replace(
       /^import aiAgentCopy from '\.\/ai-agent-copy\.json'\r?\n/m,
       `const aiAgentCopy = ${JSON.stringify({
         agentPromptRules: [],
@@ -568,6 +601,7 @@ test('agent cancellation releases the lock without waiting for a hung backend re
 test('takeover stop cancels only the Agent run bound to that terminal scope', async () => {
   const {
     cancelAgentRunsForScope,
+    isAgentRunActive,
     runAgentLoop
   } = await importAgentModule()
   let markRequestStarted
@@ -601,9 +635,9 @@ test('takeover stop cancels only the Agent run bound to that terminal scope', as
 
   const pending = runAgentLoop(chatEntry, {}, { current: false }, () => {})
   await requestStarted
-  assert.equal(cancelAgentRunsForScope('tab-b'), 0)
-  assert.equal(window.store.agentRunning, true)
-  assert.equal(cancelAgentRunsForScope('tab-a'), 1)
+  assert.deepEqual(await cancelAgentRunsForScope('tab-b'), [])
+  assert.equal(isAgentRunActive(chatEntry.id), true)
+  assert.equal((await cancelAgentRunsForScope('tab-a')).length, 1)
 
   await assert.doesNotReject(Promise.race([
     pending,
@@ -612,7 +646,7 @@ test('takeover stop cancels only the Agent run bound to that terminal scope', as
       250
     ))
   ]))
-  assert.equal(window.store.agentRunning, false)
+  assert.equal(isAgentRunActive(chatEntry.id), false)
   assert.equal(window.store.aiChatHistory[0].completionStatus, 'cancelled')
 })
 

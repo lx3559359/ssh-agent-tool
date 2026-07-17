@@ -20,36 +20,27 @@ import {
 import {
   agentTakeoverRegistry
 } from './agent-takeover-registry.js'
+import { agentTaskRegistry } from './agent-task-registry.js'
 
 const MAX_ITERATIONS = 150
-const activeAgentRuns = new Map()
-const activeAgentRunScopes = new Map()
 const agentApiTools = Object.freeze(
   agentTools.map(({ scope, ...tool }) => tool)
 )
 
 export function cancelAgentRun (chatId) {
-  const cancel = activeAgentRuns.get(String(chatId || ''))
-  if (!cancel) return false
-  cancel()
+  const taskId = String(chatId || '')
+  const entry = agentTaskRegistry.get(taskId)
+  if (entry?.kind !== 'chat-agent') return false
+  agentTaskRegistry.cancel(taskId).catch(() => {})
   return true
 }
 
 export function isAgentRunActive (chatId) {
-  return activeAgentRuns.has(String(chatId || ''))
+  return agentTaskRegistry.get(String(chatId || ''))?.kind === 'chat-agent'
 }
 
 export function cancelAgentRunsForScope (sourceTabId) {
-  const expectedScope = String(sourceTabId || '')
-  let cancelled = 0
-  for (const [chatId, scopeId] of activeAgentRunScopes) {
-    if (scopeId !== expectedScope) continue
-    const cancel = activeAgentRuns.get(chatId)
-    if (typeof cancel !== 'function') continue
-    cancel()
-    cancelled += 1
-  }
-  return cancelled
+  return agentTaskRegistry.cancelByScope(sourceTabId)
 }
 
 function buildAgentSystemPrompt (config) {
@@ -131,24 +122,14 @@ export function waitForAgentOperation (operation, signal) {
 }
 
 export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming, history = []) {
-  if (window.store.agentRunning) {
-    const lockedResult = {
-      ok: false,
-      data: null,
-      error: '已有 Agent 任务正在运行，请等待任务结束或先取消当前任务。'
-    }
-    setIsStreaming(false)
-    updateChatEntry(chatEntry, {
-      response: `**${aiAgentCopy.errorLabel}:** ${lockedResult.error}`,
-      completionStatus: 'failed'
-    })
-    return lockedResult
-  }
-  window.store.agentRunning = true
   let accumulatedContent = ''
   const controller = new AbortController()
   let activeBackendRequestId = ''
-  const sourceTabId = chatEntry.sourceTabId || chatEntry.conversationScopeId || ''
+  const taskId = String(chatEntry.id || '')
+  const sourceTabId = String(chatEntry.sourceTabId || '')
+  const taskScopeId = String(
+    sourceTabId || chatEntry.conversationScopeId || 'global'
+  )
   const resolveEndpoint = () => resolveAgentRuntimeEndpoint(sourceTabId)
   const agentRuntime = {
     planConfirmed: false,
@@ -171,8 +152,38 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
     }
   }
   abortRef.cancelCurrent = cancelCurrent
-  activeAgentRuns.set(String(chatEntry.id), cancelCurrent)
-  activeAgentRunScopes.set(String(chatEntry.id), String(sourceTabId))
+  try {
+    agentTaskRegistry.register({
+      taskId,
+      endpoint: agentRuntime.endpoint,
+      scopeId: taskScopeId,
+      kind: 'chat-agent',
+      controller,
+      runner: {
+        cancel: async () => {
+          cancelCurrent()
+          return { id: taskId, status: 'cancelling' }
+        }
+      }
+    })
+  } catch (error) {
+    if (abortRef.cancelCurrent === cancelCurrent) {
+      delete abortRef.cancelCurrent
+    }
+    const lockedResult = {
+      ok: false,
+      data: null,
+      error: error?.code === 'AI_AGENT_SESSION_BUSY'
+        ? '当前 SSH 会话已有 Agent 任务正在运行，请等待任务结束或先取消当前任务。'
+        : sanitizeAIStoredText(error?.message || error)
+    }
+    setIsStreaming(false)
+    updateChatEntry(chatEntry, {
+      response: `**${aiAgentCopy.errorLabel}:** ${lockedResult.error}`,
+      completionStatus: 'failed'
+    })
+    return lockedResult
+  }
 
   function markCancelled () {
     setIsStreaming(false)
@@ -340,10 +351,6 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
     if (abortRef.cancelCurrent === cancelCurrent) {
       delete abortRef.cancelCurrent
     }
-    if (activeAgentRuns.get(String(chatEntry.id)) === cancelCurrent) {
-      activeAgentRuns.delete(String(chatEntry.id))
-      activeAgentRunScopes.delete(String(chatEntry.id))
-    }
-    window.store.agentRunning = false
+    agentTaskRegistry.unregister(taskId)
   }
 }
