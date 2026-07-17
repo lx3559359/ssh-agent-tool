@@ -93,11 +93,44 @@ const {
   reportRendererError
 } = require('./renderer-error-report')
 const {
+  createAgentSkillRepository
+} = require('./agent-skill-repository')
+const {
+  createAgentSkillImporter
+} = require('./agent-skill-import')
+const {
   nativeUpdateCheck,
   nativeUpdateDownload,
   nativeUpdateInstall,
   nativeUpdateState
 } = require('./native-updater')
+
+const agentSkillRepositoryRoot = path.resolve(appPath, 'agent-skills')
+const agentSkillRepository = createAgentSkillRepository({
+  rootPath: agentSkillRepositoryRoot
+})
+const agentSkillImporter = createAgentSkillImporter({
+  repository: agentSkillRepository,
+  repositoryRoot: agentSkillRepositoryRoot
+})
+
+function safeAgentSkillResult (operation) {
+  return Promise.resolve()
+    .then(operation)
+    .then(value => ({ ok: true, value }))
+    .catch(error => ({
+      ok: false,
+      error: {
+        code: String(error?.code || '').startsWith('SKILL_')
+          ? error.code
+          : 'SKILL_IPC_ERROR',
+        message: String(error?.code || '').startsWith('SKILL_')
+          ? error.message
+          : 'Agent Skill operation failed.',
+        ...(error?.validation ? { validation: error.validation } : {})
+      }
+    }))
+}
 
 // Security: whitelist of safe environment variables for Linux/Mac/Windows
 const SAFE_ENV_KEYS = [
@@ -201,7 +234,21 @@ function initIpc () {
   ipcMain.on('sync-func', (event, { name, args }) => {
     event.returnValue = ipcSyncFuncs[name](...args)
   })
+  const agentSkillAsyncGlobals = {
+    listAgentSkills: () => safeAgentSkillResult(() => agentSkillRepository.list()),
+    getAgentSkillMetadata: id => safeAgentSkillResult(() => agentSkillRepository.getMetadata(id)),
+    readAgentSkillFile: (id, relativePath) => safeAgentSkillResult(() => agentSkillRepository.readFile(id, relativePath)),
+    createAgentSkillDraft: files => safeAgentSkillResult(() => agentSkillRepository.createDraft(files)),
+    updateAgentSkillDraftFile: (id, relativePath, content) => safeAgentSkillResult(() => agentSkillRepository.updateDraftFile(id, relativePath, content)),
+    validateAgentSkillDraft: id => safeAgentSkillResult(() => agentSkillRepository.validateDraft(id)),
+    enableAgentSkillDraft: (id, packageDigest) => safeAgentSkillResult(() => agentSkillRepository.enableDraft(id, packageDigest)),
+    disableAgentSkill: id => safeAgentSkillResult(() => agentSkillRepository.disable(id)),
+    rollbackAgentSkill: (id, packageDigest) => safeAgentSkillResult(() => agentSkillRepository.rollback(id, packageDigest)),
+    removeAgentSkill: id => safeAgentSkillResult(() => agentSkillRepository.remove(id)),
+    importAgentSkill: sourcePath => safeAgentSkillResult(() => agentSkillImporter.importSkill(sourcePath))
+  }
   const asyncGlobals = {
+    ...agentSkillAsyncGlobals,
     confirmExit: () => {
       globalState.set('confirmExit', true)
     },
