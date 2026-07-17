@@ -121,7 +121,7 @@ Expected: tests pass; commit contains no private key, password or raw host key.
 - Create: `apps/electerm-agent/test/unit-ci/agent-takeover-state.spec.js`
 - Create: `apps/electerm-agent/test/unit-ci/agent-takeover-registry.spec.js`
 
-- [ ] **Step 1: 写入状态转换失败测试**
+- [x] **Step 1: 写入状态转换失败测试**
 
 ```js
 test('allows only declared takeover transitions', async () => {
@@ -138,7 +138,7 @@ test('allows only declared takeover transitions', async () => {
 
 Also assert all active states can enter `stopping`, then `off`, and execution states can enter `failed` or `partially-completed`.
 
-- [ ] **Step 2: 写入会话隔离和非持久化失败测试**
+- [x] **Step 2: 写入会话隔离和非持久化失败测试**
 
 ```js
 test('keeps takeover grants isolated by exact session identity', async () => {
@@ -158,7 +158,7 @@ test('keeps takeover grants isolated by exact session identity', async () => {
 })
 ```
 
-- [ ] **Step 3: 运行测试并确认模块缺失**
+- [x] **Step 3: 运行测试并确认模块缺失**
 
 ```powershell
 node --test test/unit-ci/agent-takeover-state.spec.js test/unit-ci/agent-takeover-registry.spec.js
@@ -166,7 +166,7 @@ node --test test/unit-ci/agent-takeover-state.spec.js test/unit-ci/agent-takeove
 
 Expected: module-not-found failure.
 
-- [ ] **Step 4: 实现纯状态机和可订阅注册表**
+- [x] **Step 4: 实现纯状态机和可订阅注册表**
 
 Export these exact states:
 
@@ -187,7 +187,7 @@ export const TAKEOVER_STATES = Object.freeze([
 
 The registry API is `enable(endpoint)`, `transition(endpoint, nextState)`, `disable(endpoint, reason)`, `stop(endpoint)`, `get(endpoint)`, `isActive(endpoint)`, `assertActive(endpoint)`, `subscribe(listener)` and `snapshot()`. Freeze a normalized copy of the endpoint at enable time. Keep records only in a closure-owned `Map`; do not connect it to Manate persisted store or config serialization.
 
-- [ ] **Step 5: 运行测试并提交**
+- [x] **Step 5: 运行测试并提交**
 
 ```powershell
 node --test test/unit-ci/agent-takeover-state.spec.js test/unit-ci/agent-takeover-registry.spec.js
