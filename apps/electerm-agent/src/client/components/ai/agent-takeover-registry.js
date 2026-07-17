@@ -173,3 +173,5 @@ export function createTakeoverRegistry (options = {}) {
     snapshot
   })
 }
+
+export const agentTakeoverRegistry = createTakeoverRegistry()

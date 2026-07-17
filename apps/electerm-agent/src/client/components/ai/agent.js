@@ -14,11 +14,18 @@ import { normalizeAsyncResult } from '../../common/async-result.js'
 import {
   boundAgentToolResult,
   buildBoundedAgentMessages,
-  cancelAgentRuntimeOperations
+  cancelAgentRuntimeOperations,
+  resolveAgentRuntimeEndpoint
 } from './agent-runtime-context.js'
+import {
+  agentTakeoverRegistry
+} from './agent-takeover-registry.js'
 
 const MAX_ITERATIONS = 150
 const activeAgentRuns = new Map()
+const agentApiTools = Object.freeze(
+  agentTools.map(({ scope, ...tool }) => tool)
+)
 
 export function cancelAgentRun (chatId) {
   const cancel = activeAgentRuns.get(String(chatId || ''))
@@ -77,7 +84,7 @@ async function callBackendAIchatWithTools (messages, config, requestId) {
     config.apiPathAI,
     config.apiKeyAI,
     config.proxyAI,
-    agentTools,
+    agentApiTools,
     config.authHeaderNameAI,
     requestId
   )
@@ -127,9 +134,14 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
   let accumulatedContent = ''
   const controller = new AbortController()
   let activeBackendRequestId = ''
+  const sourceTabId = chatEntry.sourceTabId || chatEntry.conversationScopeId || ''
+  const resolveEndpoint = () => resolveAgentRuntimeEndpoint(sourceTabId)
   const agentRuntime = {
     planConfirmed: false,
-    sourceTabId: chatEntry.sourceTabId || chatEntry.conversationScopeId || '',
+    sourceTabId,
+    endpoint: resolveEndpoint(),
+    resolveEndpoint,
+    takeoverRegistry: agentTakeoverRegistry,
     signal: controller.signal,
     cancelActiveTool: null,
     cancellations: new Set()

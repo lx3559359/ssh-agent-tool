@@ -198,15 +198,17 @@ git commit -m "feat: add per-session takeover state registry"
 ## Task 3: 在 Agent 工具入口增加统一接管门禁
 
 **Files:**
+- Create: `apps/electerm-agent/src/client/components/ai/agent-tool-scopes.js`
 - Create: `apps/electerm-agent/src/client/components/ai/agent-takeover-gate.js`
+- Modify: `apps/electerm-agent/src/client/components/ai/agent-takeover-registry.js`
 - Modify: `apps/electerm-agent/src/client/components/ai/agent-tools.js`
 - Modify: `apps/electerm-agent/src/client/components/ai/agent.js`
 - Modify: `apps/electerm-agent/src/client/components/ai/agent-runtime-context.js`
-- Modify: `apps/electerm-agent/src/client/components/ai/ai-conversation-context.js`
 - Create: `apps/electerm-agent/test/unit-ci/agent-takeover-gate.spec.js`
 - Modify: `apps/electerm-agent/test/unit-ci/ai-agent-tools.spec.js`
+- Modify: `apps/electerm-agent/test/unit-ci/ai-empty-response-consumers.spec.js`
 
-- [ ] **Step 1: 写入失败测试，覆盖所有已有工具**
+- [x] **Step 1: 写入失败测试，覆盖所有已有工具**
 
 Create a table-driven test that imports the exported tool descriptors and asserts every tool has one scope:
 
@@ -219,7 +221,7 @@ for (const tool of tools) {
 
 Assert `conversation` tools work while takeover is off, and every other scope throws an error with code `AI_TAKEOVER_REQUIRED` before its executor is invoked.
 
-- [ ] **Step 2: 运行测试并确认失败**
+- [x] **Step 2: 运行测试并确认失败**
 
 ```powershell
 node --test test/unit-ci/agent-takeover-gate.spec.js test/unit-ci/ai-agent-tools.spec.js
@@ -227,7 +229,7 @@ node --test test/unit-ci/agent-takeover-gate.spec.js test/unit-ci/ai-agent-tools
 
 Expected: tool descriptors lack scope or tools execute without an active grant.
 
-- [ ] **Step 3: 实现门禁并把 runtime 传到单一执行入口**
+- [x] **Step 3: 实现门禁并把 runtime 传到单一执行入口**
 
 The public gate contract is:
 
@@ -240,15 +242,15 @@ export function assertAgentExecutionAllowed ({ descriptor, endpoint, registry })
 
 Change `executeToolCall` to resolve one descriptor, call the gate exactly once, and only then invoke the executor. Extend the existing runtime created by `runAgentLoop` with `endpoint` and `takeoverRegistry`; retain its `AbortSignal`, cancellation set, `sourceTabId` binding and bounded-message helpers. Resolve endpoint from the active `conversationScopeId`/`sourceTabId`, then verify the complete endpoint rather than trusting the tab ID alone. Phase 01 only establishes scope and takeover enforcement; phase 02 owns final read/write risk policy.
 
-- [ ] **Step 4: 增加回归断言，禁止直接 switch 绕过门禁**
+- [x] **Step 4: 增加回归断言，禁止直接 switch 绕过门禁**
 
 In `ai-agent-tools.spec.js`, assert every exported callable tool routes through `assertAgentExecutionAllowed` and that `send_terminal_command`, SFTP mutation, background command and local CLI cannot run while takeover is off.
 
-- [ ] **Step 5: 运行测试并提交**
+- [x] **Step 5: 运行测试并提交**
 
 ```powershell
 node --test test/unit-ci/agent-takeover-gate.spec.js test/unit-ci/ai-agent-tools.spec.js test/unit-ci/agent-task-mode.spec.js
-git add src/client/components/ai/agent-takeover-gate.js src/client/components/ai/agent-tools.js src/client/components/ai/agent.js src/client/components/ai/agent-runtime-context.js src/client/components/ai/ai-conversation-context.js test/unit-ci/agent-takeover-gate.spec.js test/unit-ci/ai-agent-tools.spec.js
+git add src/client/components/ai/agent-tool-scopes.js src/client/components/ai/agent-takeover-gate.js src/client/components/ai/agent-takeover-registry.js src/client/components/ai/agent-tools.js src/client/components/ai/agent.js src/client/components/ai/agent-runtime-context.js test/unit-ci/agent-takeover-gate.spec.js test/unit-ci/ai-agent-tools.spec.js test/unit-ci/ai-empty-response-consumers.spec.js
 git commit -m "feat: require takeover grant for agent execution tools"
 ```
 

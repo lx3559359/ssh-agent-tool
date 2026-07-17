@@ -59,6 +59,26 @@ test('Agent tool execution routes command tools through user confirmation', () =
   assert.match(source, /case 'run_background_command':[\s\S]*confirmAgentToolExecution/)
 })
 
+test('Agent tools route every executor through the single takeover gate', () => {
+  const source = fs.readFileSync(
+    path.resolve(__dirname, '../../src/client/components/ai/agent-tools.js'),
+    'utf8'
+  )
+  const agentSource = fs.readFileSync(
+    path.resolve(__dirname, '../../src/client/components/ai/agent.js'),
+    'utf8'
+  )
+
+  assert.match(source, /withAgentToolScopes\(\[/)
+  assert.match(source, /executeAgentToolWithGate/)
+  assert.match(source, /function executeResolvedAgentTool/)
+  assert.match(source, /case 'send_terminal_command'/)
+  assert.match(source, /case 'sftp_del'/)
+  assert.match(source, /case 'run_local_cli'/)
+  assert.match(source, /case 'run_background_command'/)
+  assert.match(agentSource, /agentTools\.map\(\(\{ scope, \.\.\.tool \}\) => tool\)/)
+})
+
 test('Agent prompt rules do not allow direct command execution without confirmation', () => {
   const copy = fs.readFileSync(
     path.resolve(__dirname, '../../src/client/components/ai/ai-agent-copy.json'),

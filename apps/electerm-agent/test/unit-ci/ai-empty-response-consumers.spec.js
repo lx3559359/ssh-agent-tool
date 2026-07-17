@@ -86,12 +86,17 @@ async function importAgentModule () {
       "const buildAIConversationMessages = (history, entry) => [{ role: 'user', content: entry.prompt }]\n"
     )
     .replace(
-      /^import \{\r?\n\s*boundAgentToolResult,\r?\n\s*buildBoundedAgentMessages,\r?\n\s*cancelAgentRuntimeOperations\r?\n\} from '\.\/agent-runtime-context\.js'\r?\n/m,
+      /^import \{\r?\n\s*boundAgentToolResult,\r?\n\s*buildBoundedAgentMessages,\r?\n\s*cancelAgentRuntimeOperations,\r?\n\s*resolveAgentRuntimeEndpoint\r?\n\} from '\.\/agent-runtime-context\.js'\r?\n/m,
       'const boundAgentToolResult = value => typeof value === \'string\' ? value : JSON.stringify(value)\n' +
       'const buildBoundedAgentMessages = (base, runtime) => [...base, ...runtime]\n' +
       'const cancelAgentRuntimeOperations = runtime => {\n' +
       '  for (const cancel of runtime.cancellations || []) cancel()\n' +
-      '}\n'
+      '}\n' +
+      'const resolveAgentRuntimeEndpoint = () => null\n'
+    )
+    .replace(
+      /^import \{\r?\n\s*agentTakeoverRegistry\r?\n\} from '\.\/agent-takeover-registry\.js'\r?\n/m,
+      'const agentTakeoverRegistry = { assertActive: () => ({ state: \'active-idle\' }) }\n'
     )
     .replace(
       /^import aiAgentCopy from '\.\/ai-agent-copy\.json'\r?\n/m,

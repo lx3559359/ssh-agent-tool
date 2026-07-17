@@ -5,8 +5,13 @@ import { runAgentTerminalCommand } from './agent-terminal-command.js'
 import {
   assertAgentRuntimeActive,
   bindAgentToolArgs,
-  registerAgentCancellation
+  registerAgentCancellation,
+  resolveAgentExecutionEndpoint
 } from './agent-runtime-context.js'
+import {
+  executeAgentToolWithGate
+} from './agent-takeover-gate.js'
+import { withAgentToolScopes } from './agent-tool-scopes.js'
 import {
   confirmAgentPlan,
   ensureAgentPlanConfirmed,
@@ -52,7 +57,7 @@ function buildAddBookmarkParameters () {
   }
 }
 
-export const agentTools = [
+export const agentTools = withAgentToolScopes([
   {
     type: 'function',
     function: {
@@ -560,12 +565,24 @@ export const agentTools = [
       }
     }
   }
-]
+])
 
-export async function executeToolCall (toolName, rawArgs, runtime) {
+const agentToolDescriptors = new Map(
+  agentTools.map(descriptor => [descriptor.function.name, descriptor])
+)
+
+export function getAgentToolDescriptor (toolName) {
+  const descriptor = agentToolDescriptors.get(String(toolName || ''))
+  if (!descriptor) {
+    const error = new Error(`Unknown Agent tool: ${String(toolName)}`)
+    error.code = 'UNKNOWN_AGENT_TOOL'
+    throw error
+  }
+  return descriptor
+}
+
+async function executeResolvedAgentTool (toolName, args, runtime) {
   const store = window.store
-  const args = bindAgentToolArgs(toolName, rawArgs, runtime)
-  assertAgentRuntimeActive(runtime)
   switch (toolName) {
     case 'confirm_agent_plan': {
       const confirmation = await confirmAgentPlan({ args })
@@ -723,4 +740,17 @@ export async function executeToolCall (toolName, rawArgs, runtime) {
     default:
       throw new Error(`未知 Agent 工具：${toolName}`)
   }
+}
+
+export async function executeToolCall (toolName, rawArgs, runtime = {}) {
+  const descriptor = getAgentToolDescriptor(toolName)
+  const args = bindAgentToolArgs(toolName, rawArgs, runtime)
+  assertAgentRuntimeActive(runtime)
+  const endpoint = resolveAgentExecutionEndpoint({ descriptor, runtime })
+  return executeAgentToolWithGate({
+    descriptor,
+    endpoint,
+    registry: runtime.takeoverRegistry,
+    execute: () => executeResolvedAgentTool(toolName, args, runtime)
+  })
 }

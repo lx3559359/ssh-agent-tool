@@ -1,3 +1,8 @@
+import {
+  assertSameSessionEndpoint,
+  projectEndpoint
+} from '../../common/safety-transactions/endpoint-guard.js'
+
 const TAB_SCOPED_AGENT_TOOLS = new Set([
   'send_terminal_command',
   'get_terminal_output',
@@ -9,7 +14,9 @@ const TAB_SCOPED_AGENT_TOOLS = new Set([
   'sftp_download',
   'get_terminal_status',
   'cancel_terminal_command',
-  'run_background_command'
+  'run_background_command',
+  'switch_tab',
+  'close_tab'
 ])
 
 const MAX_AGENT_CONTEXT_CHARS = 92 * 1024
@@ -140,6 +147,54 @@ export function bindAgentToolArgs (toolName, args = {}, runtime = {}) {
     safeArgs.tabId = runtime.sourceTabId
   }
   return safeArgs
+}
+
+function takeoverRequiredError (cause) {
+  const error = new Error('AI takeover requires a complete active SSH session')
+  error.code = 'AI_TAKEOVER_REQUIRED'
+  if (cause) error.cause = cause
+  return error
+}
+
+export function resolveAgentRuntimeEndpoint (sourceTabId, options = {}) {
+  const tabId = String(sourceTabId || '').trim()
+  if (!tabId || tabId === 'global') return null
+  const refs = options.refs || (
+    typeof window === 'undefined' ? undefined : window.refs
+  )
+  const terminal = refs?.get?.('term-' + tabId)
+  if (
+    !terminal ||
+    terminal.isSsh?.() !== true ||
+    typeof terminal.getTerminalSafetyEndpoint !== 'function'
+  ) {
+    return null
+  }
+  try {
+    const endpoint = projectEndpoint(terminal.getTerminalSafetyEndpoint())
+    return String(endpoint.tabId) === tabId ? endpoint : null
+  } catch (_) {
+    return null
+  }
+}
+
+export function resolveAgentExecutionEndpoint ({
+  descriptor,
+  runtime = {}
+} = {}) {
+  if (descriptor?.scope === 'conversation') return null
+  try {
+    const candidate = typeof runtime.resolveEndpoint === 'function'
+      ? runtime.resolveEndpoint()
+      : runtime.endpoint
+    const current = projectEndpoint(candidate)
+    if (runtime.endpoint) {
+      assertSameSessionEndpoint(projectEndpoint(runtime.endpoint), current)
+    }
+    return current
+  } catch (error) {
+    throw takeoverRequiredError(error)
+  }
 }
 
 export function assertAgentRuntimeActive (runtime = {}) {
