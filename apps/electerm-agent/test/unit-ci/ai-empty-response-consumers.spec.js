@@ -132,6 +132,24 @@ const agentTaskRegistry = {
 `
     )
     .replace(
+      /^import \{\r?\n\s*buildAgentCancellationUpdate,\r?\n\s*settleAgentCancellation\r?\n\} from '\.\/agent-cancellation-status\.js'\r?\n/m,
+      `const buildAgentCancellationUpdate = ({ response = '', stoppedText = 'Stopped', error } = {}) => ({
+  response: error
+    ? response + '\\n\\n**Cancellation not confirmed:** ' + String(error)
+    : response + '\\n\\n*(' + stoppedText + ')*',
+  completionStatus: error ? 'partially-completed' : 'cancelled'
+})
+const settleAgentCancellation = async activeCancellation => {
+  try {
+    await activeCancellation
+    return null
+  } catch (error) {
+    return error
+  }
+}
+`
+    )
+    .replace(
       /^import aiAgentCopy from '\.\/ai-agent-copy\.json'\r?\n/m,
       `const aiAgentCopy = ${JSON.stringify({
         agentPromptRules: [],

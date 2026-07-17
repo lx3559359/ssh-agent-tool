@@ -1,11 +1,15 @@
 import { z } from '../../common/zod'
 import { bookmarkSchemas } from '../../common/bookmark-schemas'
-import { confirmAgentToolExecution } from './agent-tool-confirm'
+import {
+  confirmAgentToolExecution,
+  isAgentCommandTool
+} from './agent-tool-confirm'
 import { runAgentTerminalCommand } from './agent-terminal-command.js'
 import {
   assertAgentRuntimeActive,
   bindAgentToolArgs,
   registerAgentCancellation,
+  registerDeferredAgentCancellation,
   resolveAgentExecutionEndpoint
 } from './agent-runtime-context.js'
 import {
@@ -25,11 +29,14 @@ function createAgentOperationId (prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
 
-function registerAgentTransferCancellation (runtime, transferId) {
-  if (!transferId) return
-  registerAgentCancellation(runtime, () => (
-    window.store.mcpSftpCancelTransfer({ transferId })
-  ))
+function registerAgentTransferCancellation (runtime, transferPromise, tabId) {
+  registerDeferredAgentCancellation(runtime, transferPromise, result => {
+    if (!result?.transferId) return undefined
+    return window.store.mcpSftpCancelTransfer({
+      transferId: result.transferId,
+      tabId
+    })
+  })
 }
 
 function buildAddBookmarkParameters () {
@@ -581,28 +588,36 @@ export function getAgentToolDescriptor (toolName) {
   return descriptor
 }
 
+async function prepareResolvedAgentTool (toolName, args, runtime) {
+  if (!isAgentCommandTool(toolName)) return undefined
+  const planGuard = ensureAgentPlanConfirmed({ toolName, runtime })
+  if (planGuard) {
+    return { handled: true, result: JSON.stringify(planGuard) }
+  }
+  const confirmation = await confirmAgentToolExecution({
+    toolName,
+    args,
+    signal: runtime.signal
+  })
+  assertAgentRuntimeActive(runtime)
+  return confirmation.accepted
+    ? undefined
+    : { handled: true, result: JSON.stringify(confirmation) }
+}
+
 async function executeResolvedAgentTool (toolName, args, runtime) {
   const store = window.store
   switch (toolName) {
     case 'confirm_agent_plan': {
-      const confirmation = await confirmAgentPlan({ args })
+      const confirmation = await confirmAgentPlan({
+        args,
+        signal: runtime.signal
+      })
       assertAgentRuntimeActive(runtime)
       markAgentPlanConfirmed(runtime, confirmation)
       return JSON.stringify(confirmation)
     }
     case 'send_terminal_command': {
-      const planGuard = ensureAgentPlanConfirmed({ toolName, runtime })
-      if (planGuard) {
-        return JSON.stringify(planGuard)
-      }
-      const confirmation = await confirmAgentToolExecution({
-        toolName,
-        args
-      })
-      assertAgentRuntimeActive(runtime)
-      if (!confirmation.accepted) {
-        return JSON.stringify(confirmation)
-      }
       const cancelTerminal = () => {
         try {
           store.mcpCancelTerminalCommand({ tabId: args.tabId })
@@ -658,21 +673,23 @@ async function executeResolvedAgentTool (toolName, args, runtime) {
       return JSON.stringify(result)
     }
     case 'sftp_upload': {
-      const result = await store.mcpSftpUpload(args)
-      registerAgentTransferCancellation(runtime, result?.transferId)
+      const transfer = Promise.resolve(store.mcpSftpUpload(args))
+      registerAgentTransferCancellation(runtime, transfer, args.tabId)
+      const result = await transfer
       assertAgentRuntimeActive(runtime)
       return JSON.stringify(result)
     }
     case 'sftp_download': {
-      const result = await store.mcpSftpDownload(args)
-      registerAgentTransferCancellation(runtime, result?.transferId)
+      const transfer = Promise.resolve(store.mcpSftpDownload(args))
+      registerAgentTransferCancellation(runtime, transfer, args.tabId)
+      const result = await transfer
       assertAgentRuntimeActive(runtime)
       return JSON.stringify(result)
     }
     case 'sftp_transfer_list':
-      return JSON.stringify(store.mcpSftpTransferList())
+      return JSON.stringify(store.mcpSftpTransferList(args))
     case 'sftp_transfer_history':
-      return JSON.stringify(store.mcpSftpTransferHistory())
+      return JSON.stringify(store.mcpSftpTransferHistory(args))
     case 'get_terminal_status':
       return JSON.stringify(store.mcpGetTerminalStatus(args))
     case 'cancel_terminal_command':
@@ -682,18 +699,6 @@ async function executeResolvedAgentTool (toolName, args, runtime) {
     case 'get_codex_cli_status':
       return JSON.stringify(await window.pre.runGlobalAsync('getCodexCliStatus'))
     case 'run_local_cli': {
-      const planGuard = ensureAgentPlanConfirmed({ toolName, runtime })
-      if (planGuard) {
-        return JSON.stringify(planGuard)
-      }
-      const confirmation = await confirmAgentToolExecution({
-        toolName,
-        args
-      })
-      assertAgentRuntimeActive(runtime)
-      if (!confirmation.accepted) {
-        return JSON.stringify(confirmation)
-      }
       const requestId = createAgentOperationId('local-cli')
       const clearCancellation = registerAgentCancellation(runtime, () => (
         window.pre.runGlobalAsync('cancelLocalCli', requestId)
@@ -710,24 +715,17 @@ async function executeResolvedAgentTool (toolName, args, runtime) {
       }
     }
     case 'run_background_command': {
-      const planGuard = ensureAgentPlanConfirmed({ toolName, runtime })
-      if (planGuard) {
-        return JSON.stringify(planGuard)
-      }
-      const confirmation = await confirmAgentToolExecution({
-        toolName,
-        args
+      const backgroundTask = Promise.resolve(store.mcpRunBackgroundCommand(args))
+      registerDeferredAgentCancellation(runtime, backgroundTask, result => {
+        if (!result?.taskId) return undefined
+        return (
+          store.mcpCancelBackgroundTask({
+            taskId: result.taskId,
+            tabId: args.tabId
+          })
+        )
       })
-      assertAgentRuntimeActive(runtime)
-      if (!confirmation.accepted) {
-        return JSON.stringify(confirmation)
-      }
-      const result = await store.mcpRunBackgroundCommand(args)
-      if (result?.taskId) {
-        registerAgentCancellation(runtime, () => (
-          store.mcpCancelBackgroundTask({ taskId: result.taskId })
-        ))
-      }
+      const result = await backgroundTask
       assertAgentRuntimeActive(runtime)
       return JSON.stringify(result)
     }
@@ -746,11 +744,17 @@ export async function executeToolCall (toolName, rawArgs, runtime = {}) {
   const descriptor = getAgentToolDescriptor(toolName)
   const args = bindAgentToolArgs(toolName, rawArgs, runtime)
   assertAgentRuntimeActive(runtime)
-  const endpoint = resolveAgentExecutionEndpoint({ descriptor, runtime })
   return executeAgentToolWithGate({
     descriptor,
-    endpoint,
+    resolveEndpoint: () => resolveAgentExecutionEndpoint({
+      descriptor,
+      runtime
+    }),
     registry: runtime.takeoverRegistry,
+    risk: isAgentCommandTool(toolName),
+    prepare: isAgentCommandTool(toolName)
+      ? () => prepareResolvedAgentTool(toolName, args, runtime)
+      : undefined,
     execute: () => executeResolvedAgentTool(toolName, args, runtime)
   })
 }

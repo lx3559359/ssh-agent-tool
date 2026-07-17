@@ -38,12 +38,79 @@ export function assertAgentExecutionAllowed ({
 export async function executeAgentToolWithGate ({
   descriptor,
   endpoint,
+  resolveEndpoint,
   registry,
+  risk = false,
+  prepare,
   execute
 } = {}) {
-  assertAgentExecutionAllowed({ descriptor, endpoint, registry })
   if (typeof execute !== 'function') {
     throw new TypeError('Agent tool executor must be a function')
   }
-  return await execute()
+  const currentEndpoint = () => typeof resolveEndpoint === 'function'
+    ? resolveEndpoint()
+    : endpoint
+  const changing = risk || descriptor?.scope === 'session-write' ||
+    descriptor?.scope === 'session-control'
+  let verifiedEndpoint = currentEndpoint()
+  assertAgentExecutionAllowed({
+    descriptor,
+    endpoint: verifiedEndpoint,
+    registry
+  })
+
+  const transition = (from, to) => {
+    if (typeof registry?.get !== 'function' ||
+      typeof registry?.transition !== 'function') return false
+    const record = registry.get(verifiedEndpoint)
+    const expected = Array.isArray(from) ? from : [from]
+    if (!record || !expected.includes(record.state)) return false
+    registry.transition(verifiedEndpoint, to)
+    return true
+  }
+
+  if (changing) {
+    transition(['failed', 'partially-completed'], 'active-idle')
+    transition('active-idle', 'awaiting-risk-confirmation')
+  }
+
+  try {
+    const prepared = typeof prepare === 'function'
+      ? await prepare()
+      : undefined
+
+    verifiedEndpoint = currentEndpoint()
+    assertAgentExecutionAllowed({
+      descriptor,
+      endpoint: verifiedEndpoint,
+      registry
+    })
+    if (prepared?.handled === true) {
+      if (changing) transition('awaiting-risk-confirmation', 'active-idle')
+      return prepared.result
+    }
+
+    if (changing) {
+      transition('awaiting-risk-confirmation', 'running-confirmed-change')
+    } else if (descriptor?.scope === 'session-read') {
+      transition(['failed', 'partially-completed'], 'active-idle')
+      transition('active-idle', 'running-readonly')
+    }
+
+    const result = await execute()
+    if (changing && transition('running-confirmed-change', 'verifying')) {
+      transition('verifying', 'active-idle')
+    } else if (!changing) {
+      transition('running-readonly', 'active-idle')
+    }
+    return result
+  } catch (error) {
+    transition([
+      'running-readonly',
+      'awaiting-risk-confirmation',
+      'running-confirmed-change',
+      'verifying'
+    ], 'failed')
+    throw error
+  }
 }

@@ -55,8 +55,9 @@ test('Agent tool execution routes command tools through user confirmation', () =
   )
 
   assert.match(source, /confirmAgentToolExecution/)
-  assert.match(source, /case 'send_terminal_command':[\s\S]*confirmAgentToolExecution/)
-  assert.match(source, /case 'run_background_command':[\s\S]*confirmAgentToolExecution/)
+  assert.match(source, /prepareResolvedAgentTool[\s\S]*confirmAgentToolExecution/)
+  assert.match(source, /prepare:\s*isAgentCommandTool\(toolName\)/)
+  assert.match(source, /risk:\s*isAgentCommandTool\(toolName\)/)
 })
 
 test('Agent tools route every executor through the single takeover gate', () => {

@@ -18,6 +18,7 @@ import download from '../../common/download'
 import { normalizeAsyncResult } from '../../common/async-result.js'
 import aiAgentCopy from './ai-agent-copy.json'
 import uid from '../../common/uid'
+import { buildAgentCancellationUpdate } from './agent-cancellation-status.js'
 import { buildAgentDiagnosticReportFiles } from './agent-diagnostic-report'
 import {
   appendAIChatHistory,
@@ -586,12 +587,27 @@ export default memo(function AIChatHistoryItem ({
     }
     if (mode === 'agent') {
       abortRef.current = true
-      if (abortRef.cancelCurrent) abortRef.cancelCurrent()
-      else cancelAgentRun(item.id)
       setIsStreaming(false)
-      updateAIChatHistoryEntry(window.store, item.id, {
-        completionStatus: 'cancelled'
-      })
+      let cancellationError
+      if (abortRef.cancelCurrent) {
+        await abortRef.cancelCurrent().catch(error => {
+          cancellationError = error
+          window.store.onError?.(error)
+        })
+      } else {
+        await cancelAgentRun(item.id).catch(error => {
+          cancellationError = error
+          window.store.onError?.(error)
+        })
+      }
+      const current = window.store.aiChatHistory?.find(chat => chat.id === item.id)
+      updateAIChatHistoryEntry(window.store, item.id, buildAgentCancellationUpdate({
+        response: current?.response || item.response,
+        stoppedText: aiAgentCopy.stoppedText,
+        error: cancellationError && sanitizeAIStoredText(
+          cancellationError?.message || cancellationError
+        )
+      }))
       return
     }
     requestEpochRef.current += 1

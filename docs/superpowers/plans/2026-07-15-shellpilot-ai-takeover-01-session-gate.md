@@ -366,7 +366,7 @@ Expected: phase 01 tests pass and idle takeover produces no work.
 **Files:**
 - Verify only: all files changed in phase 01
 
-- [ ] **Step 1: 运行针对性回归**
+- [x] **Step 1: 运行针对性回归**
 
 ```powershell
 npm run test-unit-ci
@@ -376,10 +376,16 @@ git diff --check HEAD~5..HEAD
 
 Expected: tests and lint pass; no whitespace errors.
 
+完成证据（2026-07-17）：完整 unit-ci、lint、build 与 `git diff --check` 均退出 0；复审新增的确认竞态、跨会话资源、延迟资源取消和并发传输删除测试均通过。
+
 - [ ] **Step 2: 手工核对两个 SSH 标签页**
 
 Open two SSH sessions to distinct identities. Enable only the first; verify the second remains off. Reconnect the first and verify it returns to off. Restart the app and verify both are off while prior audit records remain readable.
 
-- [ ] **Step 3: 评审门**
+当前开发环境未提供两个可连接的真实 SSH 测试端点；完整身份隔离、重连失效、重启不持久化已由自动化测试覆盖，真实双服务器 smoke 保留到阶段 04 发布门执行并单独报告。
+
+- [x] **Step 3: 评审门**
 
 Do not begin phase 02 until reviewers can trace every remote-capable Agent tool to the single gate and confirm no takeover authorization is persisted.
+
+独立复审结论：Ready。所有远程工具均经过统一门禁；异步确认后重新校验精确端点；授权仅驻留内存；取消失败不会伪报成功。

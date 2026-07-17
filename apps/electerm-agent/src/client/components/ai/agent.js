@@ -21,6 +21,10 @@ import {
   agentTakeoverRegistry
 } from './agent-takeover-registry.js'
 import { agentTaskRegistry } from './agent-task-registry.js'
+import {
+  buildAgentCancellationUpdate,
+  settleAgentCancellation
+} from './agent-cancellation-status.js'
 
 const MAX_ITERATIONS = 150
 const agentApiTools = Object.freeze(
@@ -30,9 +34,8 @@ const agentApiTools = Object.freeze(
 export function cancelAgentRun (chatId) {
   const taskId = String(chatId || '')
   const entry = agentTaskRegistry.get(taskId)
-  if (entry?.kind !== 'chat-agent') return false
-  agentTaskRegistry.cancel(taskId).catch(() => {})
-  return true
+  if (entry?.kind !== 'chat-agent') return Promise.resolve(false)
+  return agentTaskRegistry.cancel(taskId)
 }
 
 export function isAgentRunActive (chatId) {
@@ -125,6 +128,8 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
   let accumulatedContent = ''
   const controller = new AbortController()
   let activeBackendRequestId = ''
+  let activeCancellation
+  let cancellationFailure
   const taskId = String(chatEntry.id || '')
   const sourceTabId = String(chatEntry.sourceTabId || '')
   const taskScopeId = String(
@@ -139,17 +144,33 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
     takeoverRegistry: agentTakeoverRegistry,
     signal: controller.signal,
     cancelActiveTool: null,
-    cancellations: new Set()
+    cancellations: new Set(),
+    reportCancellationFailure: error => {
+      cancellationFailure = error
+    }
   }
 
   function cancelCurrent () {
-    abortRef.current = true
-    controller.abort()
-    cancelAgentRuntimeOperations(agentRuntime)
-    if (activeBackendRequestId) {
-      window.pre.runGlobalAsync('AIAgentCancel', activeBackendRequestId)
-        .catch(() => {})
-    }
+    if (activeCancellation) return activeCancellation
+    activeCancellation = (async () => {
+      abortRef.current = true
+      controller.abort()
+      const operationCancellation = cancelAgentRuntimeOperations(agentRuntime)
+      let backendCancellation = Promise.resolve()
+      if (activeBackendRequestId) {
+        backendCancellation = window.pre
+          .runGlobalAsync('AIAgentCancel', activeBackendRequestId)
+          .catch(() => {})
+      }
+      await backendCancellation
+      try {
+        return await operationCancellation
+      } catch (error) {
+        cancellationFailure = error
+        throw error
+      }
+    })()
+    return activeCancellation
   }
   abortRef.cancelCurrent = cancelCurrent
   try {
@@ -161,7 +182,7 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
       controller,
       runner: {
         cancel: async () => {
-          cancelCurrent()
+          await cancelCurrent()
           return { id: taskId, status: 'cancelling' }
         }
       }
@@ -185,12 +206,19 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
     return lockedResult
   }
 
-  function markCancelled () {
+  async function markCancelled () {
+    const settledError = await settleAgentCancellation(activeCancellation)
+    if (settledError && !cancellationFailure) {
+      cancellationFailure = settledError
+    }
     setIsStreaming(false)
-    updateChatEntry(chatEntry, {
-      response: accumulatedContent + `\n\n*(${aiAgentCopy.stoppedText})*`,
-      completionStatus: 'cancelled'
-    })
+    updateChatEntry(chatEntry, buildAgentCancellationUpdate({
+      response: accumulatedContent,
+      stoppedText: aiAgentCopy.stoppedText,
+      error: cancellationFailure && sanitizeAIStoredText(
+        cancellationFailure?.message || cancellationFailure
+      )
+    }))
   }
 
   try {
@@ -209,7 +237,7 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
 
     for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
       if (abortRef && abortRef.current) {
-        markCancelled()
+        await markCancelled()
         return
       }
 
@@ -224,7 +252,7 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
       )
       activeBackendRequestId = ''
       if (abortRef && abortRef.current) {
-        markCancelled()
+        await markCancelled()
         return
       }
       const agentResult = normalizeAsyncResult(backendResult)
@@ -270,7 +298,7 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
 
       for (const toolCall of assistantMessage.tool_calls) {
         if (abortRef && abortRef.current) {
-          markCancelled()
+          await markCancelled()
           return
         }
 
@@ -301,7 +329,7 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
             controller.signal
           )
           if (abortRef && abortRef.current) {
-            markCancelled()
+            await markCancelled()
             return
           }
           toolEntry.status = 'completed'
@@ -310,7 +338,7 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
           )
         } catch (err) {
           if (abortRef && abortRef.current) {
-            markCancelled()
+            await markCancelled()
             return
           }
           toolEntry.status = 'error'
@@ -336,7 +364,7 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
     })
   } catch (error) {
     if (controller.signal.aborted || abortRef.current || error?.name === 'AbortError') {
-      markCancelled()
+      await markCancelled()
       return
     }
     const safeError = sanitizeAIStoredText(error?.message || error)

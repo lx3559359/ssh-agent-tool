@@ -1,3 +1,5 @@
+import { requestAgentConfirmation } from './agent-confirmation.js'
+
 const COMMAND_TOOL_NAMES = new Set([
   'send_terminal_command',
   'run_background_command',
@@ -105,11 +107,12 @@ export function buildAgentPlanConfirmationMessage (args = {}) {
 
 export async function confirmAgentPlan ({
   args = {},
-  confirm
+  confirm,
+  signal
 } = {}) {
   const ask = typeof confirm === 'function'
     ? confirm
-    : message => window.confirm(message)
+    : message => requestAgentConfirmation(message, { signal })
   const accepted = await ask(buildAgentPlanConfirmationMessage(args))
   return {
     accepted,

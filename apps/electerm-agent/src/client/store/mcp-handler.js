@@ -5,7 +5,7 @@
 
 import uid from '../common/uid'
 import { settingMap } from '../common/constants'
-import { refs, refsStatic, refsTabs } from '../components/common/ref'
+import { refs, refsStatic, refsTabs, refsTransfers } from '../components/common/ref'
 import { runCmd } from '../components/terminal/terminal-apis'
 import deepCopy from 'json-deep-copy'
 import {
@@ -24,6 +24,10 @@ import {
 } from './mcp-zmodem-safety.js'
 import { createBackgroundTaskRegistry } from '../common/safety-transactions/background-task-registry.js'
 import { decodeUtf8Chunk } from '../common/utf8-chunk.js'
+import {
+  assertSessionResourceTabId,
+  filterSessionResourcesByTabId
+} from '../common/session-resource-guard.js'
 
 export default Store => {
   // Initialize MCP handler - called when MCP widget is started
@@ -793,6 +797,12 @@ export default Store => {
     }
   })
 
+  function assertBackgroundTaskSession (taskId, tabId) {
+    const task = backgroundTasks.get(taskId)
+    if (task && tabId) assertSessionResourceTabId(task, tabId)
+    return task
+  }
+
   Store.prototype.mcpRunBackgroundCommand = async function (args) {
     const { store } = window
     const tabId = args.tabId || store.activeTabId
@@ -852,11 +862,12 @@ export default Store => {
   }
 
   Store.prototype.mcpGetBackgroundTaskStatus = async function (args) {
+    assertBackgroundTaskSession(args.taskId, args.tabId)
     return backgroundTasks.status(args.taskId)
   }
 
   Store.prototype.mcpGetBackgroundTaskLog = async function (args) {
-    const task = backgroundTasks.get(args.taskId)
+    const task = assertBackgroundTaskSession(args.taskId, args.tabId)
     if (!task) {
       return {
         taskId: args.taskId,
@@ -882,6 +893,7 @@ export default Store => {
   }
 
   Store.prototype.mcpCancelBackgroundTask = async function (args) {
+    assertBackgroundTaskSession(args.taskId, args.tabId)
     return backgroundTasks.cancel(args.taskId)
   }
 
@@ -1102,31 +1114,50 @@ export default Store => {
     }
   }
 
-  Store.prototype.mcpSftpCancelTransfer = async function ({ transferId } = {}) {
+  Store.prototype.mcpSftpCancelTransfer = async function ({
+    transferId,
+    tabId
+  } = {}) {
     const { store } = window
     const id = String(transferId || '')
     const transfer = store.fileTransfers.find(item => item.id === id)
     if (!transfer) {
       return { success: false, transferId: id, message: 'Transfer not found' }
     }
-    const queue = refsStatic.get('transfer-queue')
-    if (queue) {
-      queue.addToQueue('delete', id)
+    if (tabId) assertSessionResourceTabId(transfer, tabId)
+    const transferRefId = `tr-${transfer.transferBatch || ''}-${id}`
+    const activeTransfer = refsTransfers.get(transferRefId)
+    if (typeof activeTransfer?.cancelAndWait === 'function') {
+      await activeTransfer.cancelAndWait()
     } else {
-      const index = store.fileTransfers.findIndex(item => item.id === id)
-      if (index >= 0) store.fileTransfers.splice(index, 1)
+      const queue = refsStatic.get('transfer-queue')
+      if (queue) {
+        await queue.addToQueue('delete', id)
+      } else {
+        const index = store.fileTransfers.findIndex(item => item.id === id)
+        if (index >= 0) store.fileTransfers.splice(index, 1)
+      }
+    }
+    if (store.fileTransfers.some(item => item.id === id)) {
+      throw new Error(`Transfer cancellation did not complete: ${id}`)
     }
     return { success: true, transferId: id }
   }
 
   // ==================== Transfer List/History APIs ====================
 
-  Store.prototype.mcpSftpTransferList = function () {
-    return deepCopy(window.store.fileTransfers)
+  Store.prototype.mcpSftpTransferList = function (args = {}) {
+    const items = args.tabId
+      ? filterSessionResourcesByTabId(window.store.fileTransfers, args.tabId)
+      : window.store.fileTransfers
+    return deepCopy(items)
   }
 
-  Store.prototype.mcpSftpTransferHistory = function () {
-    return deepCopy(window.store.transferHistory)
+  Store.prototype.mcpSftpTransferHistory = function (args = {}) {
+    const items = args.tabId
+      ? filterSessionResourcesByTabId(window.store.transferHistory, args.tabId)
+      : window.store.transferHistory
+    return deepCopy(items)
   }
 
   // ==================== Zmodem (trzsz/rzsz) APIs ====================
