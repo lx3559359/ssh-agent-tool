@@ -1256,6 +1256,7 @@ export async function failAgentRiskBatch (runtime, error, call = {}) {
   if (!batch || batch.terminal === true || batch.cancelledResult) return null
   const nextCall = batch.transaction?.calls?.[batch.cursor]
   if (call.toolName && nextCall?.name !== call.toolName) return null
+  const dispatched = batch.cursor > 0
   return failAgentRiskPreparation({
     preparation: {
       riskTaskId: batch.riskTaskId,
@@ -1264,7 +1265,10 @@ export async function failAgentRiskBatch (runtime, error, call = {}) {
       riskCallIndex: batch.cursor
     },
     error,
-    dispatched: batch.cursor > 0,
+    dispatched,
+    status: error?.name === 'AbortError' && !dispatched
+      ? 'cancelled'
+      : undefined,
     settle: settleRiskTransactionTask
   })
 }

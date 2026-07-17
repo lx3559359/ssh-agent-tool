@@ -262,6 +262,13 @@ test('agent cancellation settles an open risk batch before returning', () => {
     cancellation.indexOf('failAgentRiskBatch') <
       cancellation.indexOf('settleAgentCancellation')
   )
+
+  const agentTools = fs.readFileSync(path.join(aiRoot, 'agent-tools.js'), 'utf8')
+  const failBatch = agentTools.slice(
+    agentTools.indexOf('export async function failAgentRiskBatch'),
+    agentTools.indexOf('function parseToolResult')
+  )
+  assert.match(failBatch, /error\?\.name === 'AbortError' && !dispatched[\s\S]*'cancelled'/)
 })
 
 test('upload preparation failures clean recovery and remain not dispatched', () => {
