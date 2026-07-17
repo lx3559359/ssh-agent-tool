@@ -317,11 +317,11 @@ git commit -m "feat: execute confirmed agent changes at most once"
 - Create: `apps/electerm-agent/test/unit-ci/agent-observation.spec.js`
 - Create: `apps/electerm-agent/test/unit-ci/agent-output-backpressure.spec.js`
 
-- [ ] **Step 1: 写入全链路取消失败测试**
+- [x] **Step 1: 写入全链路取消失败测试**
 
 Use the existing `AbortController` created by `runAgentLoop`, start a gateway terminal tool and abort it through `cancelAgentRun`. Assert the same signal reaches gateway, executor and transport, `AIAgentCancel` is sent for an active backend request, registered tool cancellations run once, and no later tool call begins. If remote stop cannot be confirmed, assert status is unknown rather than cancelled-success.
 
-- [ ] **Step 2: 写入观察数据和注入失败测试**
+- [x] **Step 2: 写入观察数据和注入失败测试**
 
 ```js
 assert.deepEqual(observation, {
@@ -338,11 +338,11 @@ assert.deepEqual(observation, {
 
 Assert log/file text cannot introduce tool calls, change policy, mark itself trusted or disclose matched secret fixtures.
 
-- [ ] **Step 3: 写入背压失败测试**
+- [x] **Step 3: 写入背压失败测试**
 
 Feed 100 MB of generated output through a bounded async source. Assert retained renderer data and model observation stay within configured limits, a `nextCursor` is returned, and cancellation remains responsive without storing the full source.
 
-- [ ] **Step 4: 运行测试并确认失败**
+- [x] **Step 4: 运行测试并确认失败**
 
 ```powershell
 node --test test/unit-ci/agent-cancellation.spec.js test/unit-ci/agent-observation.spec.js test/unit-ci/agent-output-backpressure.spec.js
@@ -350,15 +350,15 @@ node --test test/unit-ci/agent-cancellation.spec.js test/unit-ci/agent-observati
 
 Expected: the v0.4.3 runtime already cancels and bounds common paths, but tests fail because the new gateway lacks exact endpoint propagation, untrusted observation envelopes, cursor pagination or unknown-remote-state semantics.
 
-- [ ] **Step 5: 实现 AbortSignal 传播和观察封装**
+- [x] **Step 5: 实现 AbortSignal 传播和观察封装**
 
 Extend the existing `AbortController` and `registerAgentCancellation` path instead of replacing it. Pass the existing `signal` and exact endpoint into gateway, terminal/background/local CLI adapters and safety runner; preserve `AIAgentCancel` for backend model calls. Keep observation content in a data field with a fixed instruction that it is untrusted evidence. Apply incremental redaction through the existing credential sanitizer before persistence and before model context construction.
 
-- [ ] **Step 6: 实现分页和消费端背压**
+- [x] **Step 6: 实现分页和消费端背压**
 
 Use the merged archive/file-range reader for large retained output. Keep bounded chunks in memory, expose `nextCursor`, stop requesting new chunks when the consumer is behind, and never add continuous polling for idle sessions. Long-running commands use the existing background-task mechanism with explicit status reads and cancellation.
 
-- [ ] **Step 7: 运行测试并提交**
+- [x] **Step 7: 运行测试并提交**
 
 ```powershell
 node --test test/unit-ci/agent-cancellation.spec.js test/unit-ci/agent-observation.spec.js test/unit-ci/agent-output-backpressure.spec.js test/unit-ci/archive-reader.spec.js test/unit-ci/file-range.spec.js

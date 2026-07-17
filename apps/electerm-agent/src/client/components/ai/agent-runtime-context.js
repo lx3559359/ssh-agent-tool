@@ -290,6 +290,10 @@ export async function cancelAgentRuntimeOperations (runtime = {}) {
   if (errors.length) {
     const error = new AggregateError(errors, 'One or more Agent operations could not be cancelled')
     error.code = 'AGENT_CANCELLATION_FAILED'
+    if (errors.some(item => item?.remoteState === 'unknown')) {
+      error.remoteState = 'unknown'
+      error.canAutoRetry = false
+    }
     throw error
   }
   return settled.map(result => result.value)

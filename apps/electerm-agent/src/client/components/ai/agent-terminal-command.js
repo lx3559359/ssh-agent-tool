@@ -1,4 +1,12 @@
-export async function runAgentTerminalCommand ({ store, args = {} }) {
+function assertActive (signal) {
+  if (!signal?.aborted) return
+  const error = new Error('Agent request cancelled')
+  error.name = 'AbortError'
+  throw error
+}
+
+export async function runAgentTerminalCommand ({ store, args = {}, signal }) {
+  assertActive(signal)
   const tabId = args.tabId || store?.activeTabId
   if (!tabId) {
     return {
@@ -9,9 +17,11 @@ export async function runAgentTerminalCommand ({ store, args = {} }) {
   }
   const safetyResult = await store.runSafetyCommand(args.command, {
     tabId,
+    signal,
     source: 'agent',
     title: 'Agent 终端命令'
   })
+  assertActive(signal)
   if (safetyResult?.sent !== true) {
     return {
       success: false,
@@ -25,6 +35,7 @@ export async function runAgentTerminalCommand ({ store, args = {} }) {
   return store.mcpWaitForTerminalIdle({
     tabId,
     timeout: 30000,
-    lines: 100
+    lines: 100,
+    signal
   })
 }

@@ -43,7 +43,8 @@ export async function executeAgentToolWithGate ({
   risk = false,
   prepare,
   verify,
-  execute
+  execute,
+  signal
 } = {}) {
   if (typeof execute !== 'function') {
     throw new TypeError('Agent tool executor must be a function')
@@ -53,6 +54,13 @@ export async function executeAgentToolWithGate ({
     : endpoint
   const changing = risk || descriptor?.scope === 'session-write' ||
     descriptor?.scope === 'session-control'
+  const assertActive = () => {
+    if (!signal?.aborted) return
+    const error = new Error('Agent request cancelled')
+    error.name = 'AbortError'
+    throw error
+  }
+  assertActive()
   let verifiedEndpoint = currentEndpoint()
   assertAgentExecutionAllowed({
     descriptor,
@@ -76,10 +84,12 @@ export async function executeAgentToolWithGate ({
   }
 
   try {
+    assertActive()
     const prepared = typeof prepare === 'function'
       ? await prepare()
       : undefined
 
+    assertActive()
     verifiedEndpoint = currentEndpoint()
     assertAgentExecutionAllowed({
       descriptor,
@@ -98,10 +108,13 @@ export async function executeAgentToolWithGate ({
       transition('active-idle', 'running-readonly')
     }
 
-    const result = await execute(verifiedEndpoint, prepared)
+    assertActive()
+    const result = await execute(verifiedEndpoint, prepared, { signal })
+    assertActive()
     if (changing && transition('running-confirmed-change', 'verifying')) {
       if (typeof verify === 'function') {
-        await verify(result, verifiedEndpoint, prepared)
+        await verify(result, verifiedEndpoint, prepared, { signal })
+        assertActive()
       }
       transition('verifying', 'active-idle')
     } else if (!changing) {

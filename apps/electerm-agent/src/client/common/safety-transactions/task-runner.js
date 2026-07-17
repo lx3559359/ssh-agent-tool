@@ -45,6 +45,8 @@ function sanitizeError (error, fallback = '任务执行失败。') {
   if (error?.cancelled) safeError.cancelled = true
   if (error?.timedOut) safeError.timedOut = true
   if (error?.cancelRemoteFailure) safeError.cancelRemoteFailure = true
+  if (error?.remoteState) safeError.remoteState = error.remoteState
+  if (error?.canAutoRetry === false) safeError.canAutoRetry = false
   return safeError
 }
 
@@ -230,6 +232,8 @@ export function createTaskRunner (options = {}) {
     } catch (error) {
       const failure = sanitizeError(error)
       failure.cancelRemoteFailure = true
+      failure.remoteState = error?.remoteState || 'unknown'
+      failure.canAutoRetry = false
       return failure
     }
   }

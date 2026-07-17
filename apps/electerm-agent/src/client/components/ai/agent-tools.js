@@ -690,7 +690,11 @@ async function runTerminalTool (store, args, runtime) {
   }
   runtime.cancelActiveTool = cancelTerminal
   try {
-    return await runAgentTerminalCommand({ store, args })
+    return await runAgentTerminalCommand({
+      store,
+      args,
+      signal: runtime.signal
+    })
   } finally {
     if (runtime.cancelActiveTool === cancelTerminal) {
       runtime.cancelActiveTool = null
@@ -918,6 +922,7 @@ export async function executeToolCall (toolName, rawArgs, runtime = {}) {
       runtime
     }),
     registry: runtime.takeoverRegistry,
+    signal: runtime.signal,
     expandedContent: args.script || args.expandedContent,
     prepareRisky: context => prepareResolvedAgentTool(
       toolName,

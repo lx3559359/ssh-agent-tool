@@ -1,4 +1,8 @@
 import { agentTools, executeToolCall } from './agent-tools'
+import {
+  createAgentToolObservation,
+  serializeAgentObservationForModel
+} from './agent-observation.js'
 import { buildAgentSkillPrompt } from './agent-skills'
 import { buildAgentMcpServerPrompt } from './agent-mcp-servers'
 import { buildAgentLocalCliPrompt } from './agent-local-cli-tools'
@@ -337,10 +341,14 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
             await markCancelled()
             return
           }
-          toolEntry.status = 'completed'
-          toolEntry.result = boundAgentToolResult(
-            sanitizeAIStoredText(boundAgentToolResult(toolResult))
+          const observation = createAgentToolObservation(
+            toolCall.function.name,
+            toolResult,
+            agentRuntime
           )
+          toolEntry.status = 'completed'
+          toolEntry.result = boundAgentToolResult(JSON.stringify(observation))
+          toolResult = serializeAgentObservationForModel(observation)
         } catch (err) {
           if (abortRef && abortRef.current) {
             await markCancelled()
@@ -357,7 +365,9 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
         runtimeMessages.push({
           role: 'tool',
           tool_call_id: toolCall.id,
-          content: toolEntry.result
+          content: toolEntry.status === 'completed'
+            ? toolResult
+            : toolEntry.result
         })
       }
     }

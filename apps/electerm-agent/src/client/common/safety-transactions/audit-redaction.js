@@ -139,3 +139,41 @@ export function redactAuditText (value) {
     return redactPlainText(text)
   }
 }
+
+export function createIncrementalAuditRedactor () {
+  let pending = ''
+  let closed = false
+
+  function commit (final) {
+    if (!pending) return ''
+    let commitIndex = final ? pending.length : pending.lastIndexOf('\n') + 1
+    const privateKeyStart = pending.lastIndexOf('-----BEGIN ')
+    const privateKeyEnd = pending.lastIndexOf('-----END ')
+    if (
+      privateKeyStart >= 0 &&
+      privateKeyStart > privateKeyEnd &&
+      privateKeyStart < commitIndex
+    ) {
+      commitIndex = privateKeyStart
+    }
+    if (!commitIndex) return ''
+    const value = pending.slice(0, commitIndex)
+    pending = pending.slice(commitIndex)
+    return redactAuditText(value)
+  }
+
+  return {
+    push (value, { final = false } = {}) {
+      if (closed) throw new Error('Incremental audit redactor is closed')
+      pending += String(value ?? '')
+      const output = commit(final)
+      if (final) closed = true
+      return output
+    },
+    flush () {
+      if (closed) return ''
+      closed = true
+      return commit(true)
+    }
+  }
+}

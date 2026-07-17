@@ -33,12 +33,20 @@ export async function executeAgentTool ({
   classifyCall = classifyAgentCall,
   prepareRisky,
   verifyRisky,
-  execute
+  execute,
+  signal
 } = {}) {
   if (typeof execute !== 'function') {
     throw new TypeError('Agent tool executor must be a function')
   }
   const resolvedDescriptor = descriptor || resolveDescriptor(toolName)
+  const assertActive = () => {
+    if (!signal?.aborted) return
+    const error = new Error('Agent request cancelled')
+    error.name = 'AbortError'
+    throw error
+  }
+  assertActive()
   const currentEndpoint = typeof resolveEndpoint === 'function'
     ? resolveEndpoint()
     : endpoint
@@ -85,7 +93,8 @@ export async function executeAgentTool ({
           endpoint: currentEndpoint,
           descriptor: resolvedDescriptor,
           args,
-          expandedContent
+          expandedContent,
+          signal
         })
         return preparedRisk
       }
@@ -93,20 +102,26 @@ export async function executeAgentTool ({
     execute: risky
       ? async (...values) => {
         try {
-          return await execute(...values)
+          assertActive()
+          return await execute(...values, { signal })
         } catch (error) {
           throw markDispatchedError(error)
         }
       }
-      : execute,
+      : async (...values) => {
+        assertActive()
+        return execute(...values, { signal })
+      },
     verify: risky && typeof verifyRisky === 'function'
       ? async (...values) => {
         try {
-          return await verifyRisky(...values)
+          assertActive()
+          return await verifyRisky(...values, { signal })
         } catch (error) {
           throw markDispatchedError(error, true)
         }
       }
-      : undefined
+      : undefined,
+    signal
   })
 }
