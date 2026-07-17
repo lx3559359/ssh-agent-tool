@@ -27,7 +27,7 @@
 - Create: `apps/electerm-agent/test/unit-ci/agent-tool-policy.spec.js`
 - Create: `apps/electerm-agent/test/unit-ci/agent-tool-gateway.spec.js`
 
-- [ ] **Step 1: 写入四结果分类失败测试**
+- [x] **Step 1: 写入四结果分类失败测试**
 
 ```js
 test('maps actual calls to the four system outcomes', async () => {
@@ -42,11 +42,11 @@ test('maps actual calls to the four system outcomes', async () => {
 
 Add cases for SFTP upload/delete, local CLI, background commands, redirection, pipelines, `find -exec`, dynamic command substitution, unbounded recursion, log follow and database queries without limits.
 
-- [ ] **Step 2: 写入“Skill/模型声明不是授权”测试**
+- [x] **Step 2: 写入“Skill/模型声明不是授权”测试**
 
 Pass calls containing `declaredRisk: 'readonly'` and `skillPermissions: ['ssh.write']`; assert classifier output is unchanged from the actual tool and arguments.
 
-- [ ] **Step 3: 运行测试并确认失败**
+- [x] **Step 3: 运行测试并确认失败**
 
 ```powershell
 Set-Location apps/electerm-agent
@@ -55,7 +55,7 @@ node --test test/unit-ci/agent-tool-policy.spec.js test/unit-ci/agent-tool-gatew
 
 Expected: policy/gateway modules are missing or existing regex classifier misclassifies at least one case.
 
-- [ ] **Step 4: 实现描述符、共享分类器和资源敏感规则**
+- [x] **Step 4: 实现描述符、共享分类器和资源敏感规则**
 
 Each descriptor must include:
 
@@ -81,11 +81,11 @@ Each descriptor must include:
 
 The only allowed outcomes are `allowlisted-readonly`, `risky`, `unauditable`, and `blocked`. Treat recursive full-disk scans, unlimited log follow, large archive/hash operations, image builds and unbounded result queries as `risky` even when they do not modify data. Reuse `command-classifier.js` for shell parsing and remove duplicate regex decisions from `agent-task-mode.js`.
 
-- [ ] **Step 5: 实现网关的固定检查顺序**
+- [x] **Step 5: 实现网关的固定检查顺序**
 
 `executeAgentTool` must perform this order: resolve descriptor, assert takeover, assert exact endpoint, classify actual call, reject blocked/unauditable, dispatch readonly or prepare risky transaction. No executor may be passed into or invoked before checks complete.
 
-- [ ] **Step 6: 运行测试并提交**
+- [x] **Step 6: 运行测试并提交**
 
 ```powershell
 node --test test/unit-ci/agent-tool-policy.spec.js test/unit-ci/agent-tool-gateway.spec.js test/unit-ci/agent-task-mode.spec.js test/unit-ci/safety-transaction-domain.spec.js

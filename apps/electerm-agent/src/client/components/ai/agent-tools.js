@@ -12,10 +12,9 @@ import {
   registerDeferredAgentCancellation,
   resolveAgentExecutionEndpoint
 } from './agent-runtime-context.js'
-import {
-  executeAgentToolWithGate
-} from './agent-takeover-gate.js'
+import { executeAgentTool } from './agent-tool-gateway.js'
 import { withAgentToolScopes } from './agent-tool-scopes.js'
+import { withAgentToolPolicy } from './agent-tool-policy.js'
 import {
   confirmAgentPlan,
   ensureAgentPlanConfirmed,
@@ -64,7 +63,7 @@ function buildAddBookmarkParameters () {
   }
 }
 
-export const agentTools = withAgentToolScopes([
+export const agentTools = withAgentToolPolicy(withAgentToolScopes([
   {
     type: 'function',
     function: {
@@ -572,7 +571,7 @@ export const agentTools = withAgentToolScopes([
       }
     }
   }
-])
+]))
 
 const agentToolDescriptors = new Map(
   agentTools.map(descriptor => [descriptor.function.name, descriptor])
@@ -744,17 +743,22 @@ export async function executeToolCall (toolName, rawArgs, runtime = {}) {
   const descriptor = getAgentToolDescriptor(toolName)
   const args = bindAgentToolArgs(toolName, rawArgs, runtime)
   assertAgentRuntimeActive(runtime)
-  return executeAgentToolWithGate({
+  const endpoint = resolveAgentExecutionEndpoint({
     descriptor,
+    runtime
+  })
+  return executeAgentTool({
+    toolName,
+    args,
+    descriptor,
+    endpoint,
     resolveEndpoint: () => resolveAgentExecutionEndpoint({
       descriptor,
       runtime
     }),
     registry: runtime.takeoverRegistry,
-    risk: isAgentCommandTool(toolName),
-    prepare: isAgentCommandTool(toolName)
-      ? () => prepareResolvedAgentTool(toolName, args, runtime)
-      : undefined,
+    expandedContent: args.script || args.expandedContent,
+    prepareRisky: () => prepareResolvedAgentTool(toolName, args, runtime),
     execute: () => executeResolvedAgentTool(toolName, args, runtime)
   })
 }

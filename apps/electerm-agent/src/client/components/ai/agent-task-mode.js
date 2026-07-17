@@ -1,34 +1,11 @@
 import { requestAgentConfirmation } from './agent-confirmation.js'
+import { classifyCommand } from '../../common/safety-transactions/command-classifier.js'
 
 const COMMAND_TOOL_NAMES = new Set([
   'send_terminal_command',
   'run_background_command',
   'run_local_cli'
 ])
-
-const DANGEROUS_PATTERNS = [
-  /\brm\s+.*(-r|-f|--recursive|--force)/i,
-  /\bsystemctl\s+(restart|stop|reload|disable|mask|kill)\b/i,
-  /\bservice\s+\S+\s+(restart|stop|reload)\b/i,
-  /\bkubectl\s+(delete|apply|replace|patch|scale|rollout|cordon|drain)\b/i,
-  /\bdocker\s+(rm|rmi|stop|restart|kill|prune)\b/i,
-  /\bgit\s+(reset\s+--hard|clean\s+-|push\s+--force)\b/i,
-  /\b(chmod|chown)\s+/i,
-  /\b(mkfs|fdisk|parted|reboot|shutdown|poweroff)\b/i,
-  />\s*\/|>>\s*\/|\bsed\s+-i\b|\btruncate\s+/i
-]
-
-const READONLY_PATTERNS = [
-  /^(uptime|whoami|id|hostname|pwd|date)\b/i,
-  /^(df|du|free|top|htop|ps|ss|netstat|lsof|ip|ifconfig|route)\b/i,
-  /^(cat|tail|head|grep|egrep|fgrep|awk|sed|find|ls|stat)\b/i,
-  /^systemctl\s+(status|is-active|is-enabled|list-units|--failed)\b/i,
-  /^journalctl\b/i,
-  /^docker\s+(ps|logs|inspect|stats|images|volume\s+ls|network\s+ls)\b/i,
-  /^kubectl\s+(get|describe|logs|top|version|config\s+view)\b/i,
-  /^git\s+(status|log|show|diff|branch|remote)\b/i,
-  /^(ping|traceroute|tracert|ssh-keygen\s+-l|ssh-keygen\s+-y)\b/i
-]
 
 export function isAgentCommandTool (toolName) {
   return COMMAND_TOOL_NAMES.has(toolName)
@@ -53,14 +30,15 @@ export function classifyAgentCommand (command) {
       reason: '命令为空'
     }
   }
-  if (DANGEROUS_PATTERNS.some(pattern => pattern.test(text))) {
+  const classified = classifyCommand(text)
+  if (classified.risk === 'change' || classified.risk === 'blocked') {
     return {
       risk: 'dangerous',
       needsSecondConfirmation: true,
       reason: '命令可能修改系统、删除数据、重启服务或影响业务'
     }
   }
-  if (READONLY_PATTERNS.some(pattern => pattern.test(text))) {
+  if (classified.risk === 'readonly') {
     return {
       risk: 'readonly',
       needsSecondConfirmation: false,

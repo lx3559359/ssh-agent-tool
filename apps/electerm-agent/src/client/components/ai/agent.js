@@ -28,7 +28,10 @@ import {
 
 const MAX_ITERATIONS = 150
 const agentApiTools = Object.freeze(
-  agentTools.map(({ scope, ...tool }) => tool)
+  agentTools.map(({ type, function: definition }) => ({
+    type,
+    function: definition
+  }))
 )
 
 export function cancelAgentRun (chatId) {

@@ -56,8 +56,8 @@ test('Agent tool execution routes command tools through user confirmation', () =
 
   assert.match(source, /confirmAgentToolExecution/)
   assert.match(source, /prepareResolvedAgentTool[\s\S]*confirmAgentToolExecution/)
-  assert.match(source, /prepare:\s*isAgentCommandTool\(toolName\)/)
-  assert.match(source, /risk:\s*isAgentCommandTool\(toolName\)/)
+  assert.match(source, /prepareRisky:\s*\(\)\s*=>\s*prepareResolvedAgentTool/)
+  assert.match(source, /executeAgentTool\(\{/)
 })
 
 test('Agent tools route every executor through the single takeover gate', () => {
@@ -70,14 +70,14 @@ test('Agent tools route every executor through the single takeover gate', () => 
     'utf8'
   )
 
-  assert.match(source, /withAgentToolScopes\(\[/)
-  assert.match(source, /executeAgentToolWithGate/)
+  assert.match(source, /withAgentToolPolicy\(withAgentToolScopes\(\[/)
+  assert.match(source, /executeAgentTool/)
   assert.match(source, /function executeResolvedAgentTool/)
   assert.match(source, /case 'send_terminal_command'/)
   assert.match(source, /case 'sftp_del'/)
   assert.match(source, /case 'run_local_cli'/)
   assert.match(source, /case 'run_background_command'/)
-  assert.match(agentSource, /agentTools\.map\(\(\{ scope, \.\.\.tool \}\) => tool\)/)
+  assert.match(agentSource, /agentTools\.map\(\(\{ type, function: definition \}\)/)
 })
 
 test('Agent prompt rules do not allow direct command execution without confirmation', () => {
