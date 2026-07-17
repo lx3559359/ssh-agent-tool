@@ -256,3 +256,22 @@ test('agent cancellation settles an open risk batch before returning', () => {
       cancellation.indexOf('settleAgentCancellation')
   )
 })
+
+test('upload preparation failures clean recovery and remain not dispatched', () => {
+  const agentSource = fs.readFileSync(path.join(aiRoot, 'agent-tools.js'), 'utf8')
+  const uploadCase = agentSource.slice(
+    agentSource.indexOf("case 'sftp_upload'"),
+    agentSource.indexOf("case 'sftp_download'")
+  )
+  const executionCatch = agentSource.slice(
+    agentSource.indexOf('execute: async (verifiedEndpoint'),
+    agentSource.indexOf('verifyRisky:', agentSource.indexOf('execute: async (verifiedEndpoint'))
+  )
+  const gatewaySource = fs.readFileSync(path.join(aiRoot, 'agent-tool-gateway.js'), 'utf8')
+
+  assert.match(uploadCase, /catch[\s\S]*cancelPreparedRiskArtifacts\(args/)
+  assert.match(uploadCase, /mutationDispatched\s*=\s*false/)
+  assert.match(uploadCase, /remoteState\s*=\s*'not-dispatched'/)
+  assert.match(executionCatch, /dispatched:\s*error\?\.mutationDispatched\s*!==\s*false/)
+  assert.match(gatewaySource, /error\?\.mutationDispatched\s*!==\s*false/)
+})

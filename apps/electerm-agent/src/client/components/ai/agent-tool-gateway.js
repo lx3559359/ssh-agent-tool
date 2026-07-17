@@ -79,12 +79,15 @@ export async function executeAgentTool ({
   let preparedRisk
   const markDispatchedError = (error, verificationFailed = false) => {
     const failure = error instanceof Error ? error : new Error(String(error))
+    const dispatched = error?.mutationDispatched !== false
     failure.operationId = preparedRisk?.riskTaskId || preparedRisk?.operationId
-    failure.mutationDispatched = true
+    failure.mutationDispatched = dispatched
     failure.canAutoRetry = false
     if (verificationFailed) failure.verificationFailed = true
     if (!failure.remoteState) {
-      failure.remoteState = verificationFailed ? 'changed-unverified' : 'unknown'
+      failure.remoteState = dispatched
+        ? (verificationFailed ? 'changed-unverified' : 'unknown')
+        : 'not-dispatched'
     }
     return failure
   }

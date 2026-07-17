@@ -24,7 +24,15 @@ export async function completeAgentRiskPreparation ({
   verify,
   settle
 } = {}) {
-  if (!preparation?.riskTaskId) return { passed: true }
+  if (!preparation?.riskTaskId) {
+    if (preparation?.delegatedSafetyConfirmation === true) {
+      return {
+        passed: true,
+        verification: await verify?.()
+      }
+    }
+    return { passed: true }
+  }
   const state = stateFor(preparation)
   if (state.terminal) return { passed: false, terminal: true }
   const index = Number.isSafeInteger(preparation.riskCallIndex)

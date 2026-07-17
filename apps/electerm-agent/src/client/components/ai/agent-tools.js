@@ -917,7 +917,9 @@ async function prepareResolvedAgentTool (toolName, args, runtime, context = {}) 
   const batchPreparation = batchPreparationFor(runtime)
   if (batchPreparation) return batchPreparation
   if (shouldDelegateAgentSafetyConfirmation(toolName, args)) {
-    return createDelegatedAgentSafetyPreparation(toolName, args)
+    return createDelegatedAgentSafetyPreparation(toolName, args, {
+      verification: runtime.planGrant?.payload?.verification || []
+    })
   }
   const confirmedArgs = await prepareAgentRiskArgs(toolName, args, runtime)
   const transaction = buildResolvedRiskTransaction(
@@ -1070,7 +1072,21 @@ async function executeResolvedAgentTool (toolName, args, runtime, endpoint, prep
         onTerminal: createPreparedRiskTerminalHandler(preparation, endpoint, runtime)
       }))
       registerAgentTransferCancellation(runtime, transfer, args.tabId)
-      const result = await transfer
+      let result
+      try {
+        result = await transfer
+      } catch (error) {
+        const failure = error instanceof Error ? error : new Error(String(error))
+        try {
+          await cancelPreparedRiskArtifacts(args, store)
+        } catch (cleanupError) {
+          failure.cleanupError = cleanupError
+          store.onError?.(cleanupError)
+        }
+        failure.mutationDispatched = false
+        failure.remoteState = 'not-dispatched'
+        throw failure
+      }
       assertAgentRuntimeActive(runtime)
       return JSON.stringify(result)
     }
@@ -1168,7 +1184,8 @@ function assertVerificationExpectation (step, result) {
 }
 
 async function verifyPreparedAgentRisk (preparation, endpoint, runtime) {
-  const verification = preparation?.riskTransaction?.verification || []
+  const verification = preparation?.riskTransaction?.verification ||
+    preparation?.verification || []
   assertAgentVerificationDeclared(verification)
   for (const step of verification) {
     if (!structuredVerificationTools.has(step?.name)) {
@@ -1220,7 +1237,8 @@ function completePreparedAgentRisk (preparation, endpoint, runtime) {
 }
 
 function createPreparedRiskTerminalHandler (preparation, endpoint, runtime) {
-  if (!preparation?.riskTaskId) return undefined
+  if (!preparation?.riskTaskId &&
+    preparation?.delegatedSafetyConfirmation !== true) return undefined
   return createAgentRiskTerminalHandler({
     preparation,
     verify: () => verifyPreparedAgentRisk(preparation, endpoint, runtime),
@@ -1333,7 +1351,7 @@ export async function executeToolCall (toolName, rawArgs, runtime = {}) {
           await failAgentRiskPreparation({
             preparation,
             error,
-            dispatched: true,
+            dispatched: error?.mutationDispatched !== false,
             settle: settleRiskTransactionTask
           })
         } catch (settleError) {

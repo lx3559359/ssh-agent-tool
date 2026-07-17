@@ -83,3 +83,41 @@ test('a confirmed batch can be failed before dispatch without remaining stuck ru
   assert.equal(settlements[0].status, 'failed')
   assert.equal(settlements[0].remoteState, 'not-dispatched')
 })
+
+test('delegated lower confirmations still run declared target verification once', async () => {
+  const {
+    completeAgentRiskPreparation,
+    createAgentRiskTerminalHandler
+  } = await import(moduleUrl)
+  let verifications = 0
+  const verify = async () => {
+    verifications += 1
+    return { passed: true }
+  }
+
+  assert.deepEqual(await completeAgentRiskPreparation({
+    preparation: {
+      delegatedSafetyConfirmation: true,
+      confirmedArgs: { remotePath: '/srv/app/cache' }
+    },
+    verify
+  }), {
+    passed: true,
+    verification: { passed: true }
+  })
+
+  const handler = createAgentRiskTerminalHandler({
+    preparation: {
+      delegatedSafetyConfirmation: true,
+      confirmedArgs: {
+        command: '/usr/bin/systemctl start nginx.service'
+      }
+    },
+    verify
+  })
+  await Promise.all([
+    handler({ status: 'completed' }),
+    handler({ status: 'completed' })
+  ])
+  assert.equal(verifications, 2)
+})

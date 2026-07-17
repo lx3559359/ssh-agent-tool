@@ -42,7 +42,11 @@ export function shouldDelegateAgentSafetyConfirmation (toolName, args = {}) {
   return classifyCommand(args.command).reversible === true
 }
 
-export function createDelegatedAgentSafetyPreparation (toolName, args = {}) {
+export function createDelegatedAgentSafetyPreparation (
+  toolName,
+  args = {},
+  options = {}
+) {
   if (!shouldDelegateAgentSafetyConfirmation(toolName, args)) {
     throw confirmationRequiredError()
   }
@@ -50,6 +54,7 @@ export function createDelegatedAgentSafetyPreparation (toolName, args = {}) {
     delegatedSafetyConfirmation: true,
     toolName: String(toolName),
     confirmedArgs: deepFreeze(cloneJson(args)),
+    verification: deepFreeze(cloneJson(options.verification || [])),
     executionState: { result: undefined }
   })
 }

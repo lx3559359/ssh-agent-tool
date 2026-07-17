@@ -35,11 +35,15 @@ test('only operations with lower recovery preparation delegate confirmation', as
     args: ['script.js']
   }), false)
 
-  const preparation = createDelegatedAgentSafetyPreparation('sftp_del', {
-    remotePath: '/srv/app/cache'
-  })
+  const preparation = createDelegatedAgentSafetyPreparation(
+    'sftp_del',
+    { remotePath: '/srv/app/cache' },
+    { verification: [{ name: 'read_file_range', args: { length: 1 } }] }
+  )
   assert.equal(Object.isFrozen(preparation), true)
   assert.equal(Object.isFrozen(preparation.confirmedArgs), true)
+  assert.equal(Object.isFrozen(preparation.verification), true)
+  assert.equal(preparation.verification[0].name, 'read_file_range')
   preparation.executionState.result = '{"success":true}'
   assert.equal(preparation.executionState.result, '{"success":true}')
 })
