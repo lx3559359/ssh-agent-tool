@@ -21,3 +21,13 @@ test('AI chat layout lets history scroll while the input remains fixed at the bo
   assert.match(style, /\.ai-history-wrap[\s\S]*?overflow-y auto/)
   assert.match(style, /\.ai-chat-input[\s\S]*?flex 0 0 auto/)
 })
+
+test('session takeover controls wrap inside the current AI header dimensions', () => {
+  const aiStyle = read('src/client/components/ai/ai.styl')
+  const panelStyle = read('src/client/components/side-panel-r/right-side-panel.styl')
+
+  assert.match(aiStyle, /\.agent-takeover-controls[\s\S]*?max-width 100%/)
+  assert.match(aiStyle, /@media \(max-width: 780px\)/)
+  assert.doesNotMatch(aiStyle, /agent-takeover[^\n]*width\s+\d+px/)
+  assert.doesNotMatch(panelStyle, /agent-takeover[^\n]*width\s+\d+px/)
+})

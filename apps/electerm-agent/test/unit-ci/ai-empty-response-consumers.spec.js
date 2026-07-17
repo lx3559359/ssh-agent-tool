@@ -565,6 +565,57 @@ test('agent cancellation releases the lock without waiting for a hung backend re
   assert.equal(cancelledRequests.length, 1)
 })
 
+test('takeover stop cancels only the Agent run bound to that terminal scope', async () => {
+  const {
+    cancelAgentRunsForScope,
+    runAgentLoop
+  } = await importAgentModule()
+  let markRequestStarted
+  const requestStarted = new Promise(resolve => {
+    markRequestStarted = resolve
+  })
+  const neverFinishes = new Promise(() => {})
+  const chatEntry = {
+    id: 'cancel-by-terminal-scope',
+    sourceTabId: 'tab-a',
+    prompt: 'check status'
+  }
+  global.window = {
+    pre: {
+      runGlobalAsync: async action => {
+        if (action === 'AIchatWithTools') {
+          markRequestStarted()
+          return neverFinishes
+        }
+        if (action === 'AIAgentCancel') return { cancelled: true }
+        throw new Error(`unexpected action: ${action}`)
+      }
+    },
+    store: {
+      agentRunning: false,
+      aiChatHistory: [chatEntry],
+      config: {},
+      getLangName: () => 'English'
+    }
+  }
+
+  const pending = runAgentLoop(chatEntry, {}, { current: false }, () => {})
+  await requestStarted
+  assert.equal(cancelAgentRunsForScope('tab-b'), 0)
+  assert.equal(window.store.agentRunning, true)
+  assert.equal(cancelAgentRunsForScope('tab-a'), 1)
+
+  await assert.doesNotReject(Promise.race([
+    pending,
+    new Promise((resolve, reject) => setTimeout(
+      () => reject(new Error('Scoped takeover stop did not cancel the Agent run')),
+      250
+    ))
+  ]))
+  assert.equal(window.store.agentRunning, false)
+  assert.equal(window.store.aiChatHistory[0].completionStatus, 'cancelled')
+})
+
 test('agent loop ignores an in-flight tool result after cancellation', async () => {
   const { runAgentLoop } = await importAgentModule()
   let resolveTool

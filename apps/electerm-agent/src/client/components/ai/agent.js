@@ -23,6 +23,7 @@ import {
 
 const MAX_ITERATIONS = 150
 const activeAgentRuns = new Map()
+const activeAgentRunScopes = new Map()
 const agentApiTools = Object.freeze(
   agentTools.map(({ scope, ...tool }) => tool)
 )
@@ -36,6 +37,19 @@ export function cancelAgentRun (chatId) {
 
 export function isAgentRunActive (chatId) {
   return activeAgentRuns.has(String(chatId || ''))
+}
+
+export function cancelAgentRunsForScope (sourceTabId) {
+  const expectedScope = String(sourceTabId || '')
+  let cancelled = 0
+  for (const [chatId, scopeId] of activeAgentRunScopes) {
+    if (scopeId !== expectedScope) continue
+    const cancel = activeAgentRuns.get(chatId)
+    if (typeof cancel !== 'function') continue
+    cancel()
+    cancelled += 1
+  }
+  return cancelled
 }
 
 function buildAgentSystemPrompt (config) {
@@ -158,6 +172,7 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
   }
   abortRef.cancelCurrent = cancelCurrent
   activeAgentRuns.set(String(chatEntry.id), cancelCurrent)
+  activeAgentRunScopes.set(String(chatEntry.id), String(sourceTabId))
 
   function markCancelled () {
     setIsStreaming(false)
@@ -327,6 +342,7 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
     }
     if (activeAgentRuns.get(String(chatEntry.id)) === cancelCurrent) {
       activeAgentRuns.delete(String(chatEntry.id))
+      activeAgentRunScopes.delete(String(chatEntry.id))
     }
     window.store.agentRunning = false
   }

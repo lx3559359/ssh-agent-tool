@@ -258,15 +258,18 @@ git commit -m "feat: require takeover grant for agent execution tools"
 
 **Files:**
 - Create: `apps/electerm-agent/src/client/components/ai/agent-takeover-controls.jsx`
-- Modify: `apps/electerm-agent/src/client/components/ai/ai-chat.jsx`
+- Modify: `apps/electerm-agent/src/client/components/ai/agent.js`
 - Modify: `apps/electerm-agent/src/client/components/ai/ai.styl`
+- Modify: `apps/electerm-agent/src/client/components/common/modal.jsx`
 - Modify: `apps/electerm-agent/src/client/components/side-panel-r/side-panel-r.jsx`
 - Modify: `apps/electerm-agent/src/client/components/main/main.jsx`
 - Modify: `apps/electerm-agent/src/client/common/shellpilot-i18n-overrides.js`
 - Create: `apps/electerm-agent/test/unit-ci/agent-takeover-ui.spec.js`
 - Modify: `apps/electerm-agent/test/unit-ci/ai-chat-layout.spec.js`
+- Modify: `apps/electerm-agent/test/unit-ci/ai-empty-response-consumers.spec.js`
+- Modify: `apps/electerm-agent/test/unit-ci/shellpilot-i18n-overrides.spec.js`
 
-- [ ] **Step 1: 写入 UI 合同失败测试**
+- [x] **Step 1: 写入 UI 合同失败测试**
 
 Assert source and rendered fixture expose:
 
@@ -280,7 +283,7 @@ assert.doesNotMatch(sidePanelSource, /takeover[^\n]*width:\s*\d+px/)
 
 Also assert non-SSH tabs render the control disabled with an explanation, and narrow layout preserves the existing right panel dimensions.
 
-- [ ] **Step 2: 运行测试并确认失败**
+- [x] **Step 2: 运行测试并确认失败**
 
 ```powershell
 node --test test/unit-ci/agent-takeover-ui.spec.js test/unit-ci/ai-chat-layout.spec.js test/unit-ci/shellpilot-i18n-overrides.spec.js
@@ -288,19 +291,19 @@ node --test test/unit-ci/agent-takeover-ui.spec.js test/unit-ci/ai-chat-layout.s
 
 Expected: takeover switch and translations are absent.
 
-- [ ] **Step 3: 实现启用确认和状态展示**
+- [x] **Step 3: 实现启用确认和状态展示**
 
 Place the compact switch in the existing AI assistant header beside the v0.4.3 profile/model selection and health status, without replacing or rescheduling `aiHealthCoordinator`. Before calling `registry.enable`, show host, port, username, fingerprint, automatic-read-only behavior and risky-operation confirmation rule. Use the current modal system. Show a compact tab badge only while active. Show `一键停止` for all active or executing states. Hiding the right panel must not stop the task.
 
-- [ ] **Step 4: 验证主题、缩放和键盘语义**
+- [x] **Step 4: 验证主题、缩放和键盘语义**
 
 Use existing color tokens and responsive breakpoints. The switch must support Space/Enter, modal focus trap, Escape cancel and visible focus. Add Chinese and English strings through `shellpilot-i18n-overrides.js`.
 
-- [ ] **Step 5: 运行测试并提交**
+- [x] **Step 5: 运行测试并提交**
 
 ```powershell
 node --test test/unit-ci/agent-takeover-ui.spec.js test/unit-ci/ai-chat-layout.spec.js test/unit-ci/shellpilot-i18n-overrides.spec.js test/unit-ci/shellpilot-ui-responsive.spec.js
-git add src/client/components/ai/agent-takeover-controls.jsx src/client/components/ai/ai-chat.jsx src/client/components/ai/ai.styl src/client/components/side-panel-r/side-panel-r.jsx src/client/components/main/main.jsx src/client/common/shellpilot-i18n-overrides.js test/unit-ci/agent-takeover-ui.spec.js test/unit-ci/ai-chat-layout.spec.js
+git add src/client/components/ai/agent-takeover-controls.jsx src/client/components/ai/agent.js src/client/components/ai/ai.styl src/client/components/common/modal.jsx src/client/components/side-panel-r/side-panel-r.jsx src/client/components/main/main.jsx src/client/common/shellpilot-i18n-overrides.js test/unit-ci/agent-takeover-ui.spec.js test/unit-ci/ai-chat-layout.spec.js test/unit-ci/ai-empty-response-consumers.spec.js test/unit-ci/shellpilot-i18n-overrides.spec.js
 git commit -m "feat: add session takeover controls to ai panel"
 ```
 

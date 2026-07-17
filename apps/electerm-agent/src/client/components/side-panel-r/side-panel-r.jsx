@@ -30,6 +30,7 @@ import {
   aiHealthCoordinator,
   getAIHealthRequestKey
 } from '../ai/ai-health-coordinator'
+import AgentTakeoverControls from '../ai/agent-takeover-controls'
 
 const e = window.translate
 
@@ -41,6 +42,7 @@ export default memo(function RightSidePanel (
     children,
     title,
     rightPanelTab,
+    activeTabId,
     config = {}
   }
 ) {
@@ -216,6 +218,11 @@ export default memo(function RightSidePanel (
                   {renderAIModelSelect()}
                 </Flex>
                 )
+              : null
+          }
+          {
+            isAI
+              ? <AgentTakeoverControls activeTabId={activeTabId} />
               : null
           }
         </div>

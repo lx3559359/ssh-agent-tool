@@ -236,6 +236,7 @@ export default auto(function Index (props) {
     rightPanelWidth: store.rightPanelWidth,
     title: rightPanelTitle,
     rightPanelTab,
+    activeTabId,
     config
   }
   const terminalInfoProps = {

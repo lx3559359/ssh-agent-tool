@@ -1,0 +1,58 @@
+const test = require('node:test')
+const assert = require('node:assert/strict')
+const fs = require('node:fs')
+const path = require('node:path')
+
+const root = path.resolve(__dirname, '../..')
+const read = relativePath => fs.readFileSync(path.join(root, relativePath), 'utf8')
+
+test('takeover control is an exact-session accessible switch with explicit stop', () => {
+  const source = read('src/client/components/ai/agent-takeover-controls.jsx')
+
+  assert.match(source, /role='switch'/)
+  assert.match(source, /aria-checked=\{isActive\}/)
+  assert.match(source, /aria-describedby='agent-takeover-availability'/)
+  assert.match(source, /disabled=\{!endpoint \|\| isStopping\}/)
+  assert.match(source, /shellpilotAiTakeoverLabel/)
+  assert.match(source, /shellpilotAiTakeoverStop/)
+  assert.match(source, /agentTakeoverRegistry\.subscribe/)
+  assert.match(source, /resolveAgentRuntimeEndpoint\(activeTabId\)/)
+  assert.match(source, /cancelAgentRunsForScope\(activeTabId\)/)
+  assert.match(source, /agentTakeoverRegistry\.disable\(endpoint, 'user-stop'\)/)
+})
+
+test('enabling takeover requires a non-dismissible detailed identity confirmation', () => {
+  const source = read('src/client/components/ai/agent-takeover-controls.jsx')
+  const modalSource = read('src/client/components/common/modal.jsx')
+
+  assert.match(source, /<Modal/)
+  assert.match(source, /maskClosable=\{false\}/)
+  assert.match(source, /keyboardConfirm=\{false\}/)
+  assert.match(source, /pendingEndpoint\.host/)
+  assert.match(source, /pendingEndpoint\.port/)
+  assert.match(source, /pendingEndpoint\.username/)
+  assert.match(source, /pendingEndpoint\.hostKeyFingerprint/)
+  assert.match(source, /shellpilotAiTakeoverReadonlyRule/)
+  assert.match(source, /shellpilotAiTakeoverRiskRule/)
+  assert.match(source, /assertSameSessionEndpoint/)
+  assert.match(source, /agentTakeoverRegistry\.enable\(currentEndpoint\)/)
+  assert.match(source, /agentTakeoverRegistry\.transition\(currentEndpoint, 'active-idle'\)/)
+  assert.match(modalSource, /role='dialog'/)
+  assert.match(modalSource, /aria-modal='true'/)
+  assert.match(modalSource, /getFocusableElements/)
+  assert.match(modalSource, /e\.key === 'Tab'/)
+})
+
+test('takeover control is local to the existing AI header without a new layout surface', () => {
+  const sidePanel = read('src/client/components/side-panel-r/side-panel-r.jsx')
+  const main = read('src/client/components/main/main.jsx')
+  const styles = read('src/client/components/ai/ai.styl')
+
+  assert.match(sidePanel, /<AgentTakeoverControls[\s\S]*?activeTabId=\{activeTabId\}/)
+  assert.match(main, /rightPanelProps[\s\S]*?activeTabId/)
+  assert.match(styles, /\.agent-takeover-controls/)
+  assert.match(styles, /flex-wrap wrap/)
+  assert.match(styles, /:focus-visible/)
+  assert.doesNotMatch(styles, /agent-takeover[^\n]*width\s+\d+px/)
+  assert.doesNotMatch(main, /takeover[^\n]*workspace/i)
+})
