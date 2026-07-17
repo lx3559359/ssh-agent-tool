@@ -129,7 +129,7 @@ function interpreterInvocation (interpreter) {
   if (interpreter === 'node') {
     return {
       prefix: 'node -e',
-      wrapper: 'const [script,...args]=process.argv.slice(2).map(value=>Buffer.from(value,"base64").toString("utf8")); process.argv=["node","skill.js",...args]; require("vm").runInThisContext(script,{filename:"skill.js"})',
+      wrapper: 'const [script,...args]=process.argv.slice(2).map(value=>Buffer.from(value,"base64").toString("utf8")); process.argv=["node","skill.js",...args]; new Function(script)()',
       leadingArgs: [],
       bootstrap: 'eval(Buffer.from(process.argv[1],String.fromCharCode(98,97,115,101,54,52)).toString(String.fromCharCode(117,116,102,56)))'
     }
