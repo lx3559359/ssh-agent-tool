@@ -23,6 +23,8 @@
 
 .chat-history-item
   position relative
+  content-visibility auto
+  contain-intrinsic-size auto 220px
   > .ai-stop-icon-square
     position absolute
     bottom 8px
@@ -43,6 +45,12 @@
 .ai-stream-output
   max-height none
   overflow visible
+
+.ai-stream-plain-output
+  margin 0
+  white-space pre-wrap
+  overflow-wrap anywhere
+  font-family inherit
 
 .ai-chat-input
   position relative
@@ -214,8 +222,8 @@
 
 .ai-history-item-title
   display flex
-  align-items center
-  gap 4px
+  align-items flex-start
+  gap 8px
   width 100%
   .ai-stop-icon-square
     margin-left auto
@@ -223,14 +231,16 @@
 .ai-history-item-prompt
   flex 1
   min-width 0
-  overflow hidden
-  text-overflow ellipsis
-  white-space nowrap
+  white-space pre-wrap
+  overflow-wrap anywhere
+  word-break break-word
+  line-height 1.55
 
 .ai-history-item-actions
   display inline-flex
   align-items center
   flex none
+  padding-top 2px
   color var(--text-dark)
 
 .agent-tool-calls

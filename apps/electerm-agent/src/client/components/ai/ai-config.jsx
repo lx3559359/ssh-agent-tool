@@ -26,11 +26,19 @@ import {
   getAIModelOptions,
   getAIProfileOptions,
   getAIStatusFingerprint,
+  isAIProfileRequestCurrent,
   migrateAIProfiles,
   removeAIProfile,
-  upsertAIProfile
+  upsertAIProfile,
+  upsertAIProfileWithCredentialRevision,
+  withAICredentialRevision
 } from './ai-profiles'
 import { formatShellPilotTranslation } from '../../common/shellpilot-i18n-overrides.js'
+import { aiHealthCoordinator } from './ai-health-coordinator'
+import {
+  restoreAIConfigHistoryCredentials,
+  sanitizeAIConfigHistory
+} from './ai-request-credentials'
 
 const STORAGE_KEY_CONFIG = 'ai_config_history'
 const EVENT_NAME_CONFIG = 'ai-config-history-update'
@@ -289,6 +297,7 @@ function getEndpointPreview (baseURLAI, apiPathAI) {
 export default function AIConfigForm ({ initialValues, languageVersion, onSubmit, showAIConfig }) {
   const [form] = Form.useForm()
   const appliedSourceRef = useRef()
+  const profileRequestGenerationRef = useRef(0)
   const [testing, setTesting] = useState(false)
   const [loadingModels, setLoadingModels] = useState(false)
   const [modelOptions, setModelOptions] = useState([])
@@ -342,15 +351,16 @@ export default function AIConfigForm ({ initialValues, languageVersion, onSubmit
 
   function saveCurrentProfile () {
     const values = getCurrentFormValues()
-    const next = upsertAIProfile(values, buildAIProfileFromValues(values))
+    const next = upsertAIProfileWithCredentialRevision(values, buildAIProfileFromValues(values))
     form.setFieldsValue(next)
     syncProfileOptions(next)
     return next
   }
 
-  function saveProfileStatus (aiStatus, aiStatusMessage = '') {
+  function saveProfileStatus (aiStatus, aiStatusMessage = '', profileValues = {}) {
     const values = {
       ...getCurrentFormValues(),
+      ...profileValues,
       aiStatus,
       aiStatusMessage: String(aiStatusMessage || ''),
       aiStatusAt: Date.now()
@@ -395,11 +405,12 @@ export default function AIConfigForm ({ initialValues, languageVersion, onSubmit
       apiKeyAI: '',
       authHeaderNameAI: 'Authorization: Bearer',
       languageAI: saved.languageAI || window.store.getLangName(),
+      credentialRevisionAI: '',
       agentSkills: saved.agentSkills || [],
       mcpServers: saved.mcpServers || [],
       proxyAI: saved.proxyAI || ''
     }
-    const next = upsertAIProfile(saved, profile)
+    const next = upsertAIProfileWithCredentialRevision(saved, profile)
     form.setFieldsValue(next)
     syncProfileOptions(next)
     setModelOptions(uniqueOptions(popularModels))
@@ -421,6 +432,15 @@ export default function AIConfigForm ({ initialValues, languageVersion, onSubmit
     ])
   }
 
+  function getPersistedProfile (values) {
+    const profiles = Array.isArray(values.aiProfiles) ? values.aiProfiles : []
+    return profiles.find(item => item.id === values.activeAIProfileId)
+  }
+
+  function isProfileRequestCurrent (profile, requestGeneration) {
+    return requestGeneration === profileRequestGenerationRef.current &&
+      isAIProfileRequestCurrent(profile, getCurrentFormValues())
+  }
   const handleSubmit = async (values) => {
     const cleanValues = {
       ...getCurrentFormValues(),
@@ -429,14 +449,18 @@ export default function AIConfigForm ({ initialValues, languageVersion, onSubmit
       agentSkills: getCleanAgentSkills(values.agentSkills),
       mcpServers: getCleanMcpServers(values.mcpServers)
     }
-    const nextValues = upsertAIProfile(
+    const nextValues = upsertAIProfileWithCredentialRevision(
       cleanValues,
       buildAIProfileFromValues(cleanValues)
     )
     onSubmit({
       ...nextValues
     })
-    addHistoryItem(STORAGE_KEY_CONFIG, nextValues, EVENT_NAME_CONFIG)
+    addHistoryItem(
+      STORAGE_KEY_CONFIG,
+      sanitizeAIConfigHistory(nextValues),
+      EVENT_NAME_CONFIG
+    )
   }
 
   const handlePresetChange = (value) => {
@@ -462,33 +486,30 @@ export default function AIConfigForm ({ initialValues, languageVersion, onSubmit
   }
 
   const handleTest = async () => {
+    let profile
+    let requestGeneration
     try {
       await form.validateFields(['baseURLAI', 'apiKeyAI'])
-      const values = form.getFieldsValue()
-      setTesting(true)
-      const res = await window.pre.runGlobalAsync(
-        'AIchat',
-        e('shellpilotAiTestPrompt'),
-        values.modelAI,
-        values.roleAI,
-        values.baseURLAI,
-        values.apiPathAI || '',
-        values.apiKeyAI,
-        values.proxyAI,
-        false,
-        values.authHeaderNameAI
+      const values = form.getFieldsValue(true)
+      profile = withAICredentialRevision(
+        buildAIProfileFromValues(values),
+        getPersistedProfile(values)
       )
-      if (res && res.error) {
-        saveProfileStatus('error', res.error)
-        message.error(`${e('shellpilotRequestFailed')}: ${res.error}`)
-      } else if (res && res.response) {
-        saveProfileStatus('available')
+      form.setFieldValue('credentialRevisionAI', profile.credentialRevisionAI)
+      requestGeneration = ++profileRequestGenerationRef.current
+      setTesting(true)
+      const result = await aiHealthCoordinator.checkNow(profile, { force: true })
+      if (!isProfileRequestCurrent(profile, requestGeneration)) return
+      saveProfileStatus(result.status, result.message, profile)
+      if (result.status === 'available') {
         message.success(e('shellpilotAiConfigAvailable'))
+      } else if (result.status === 'reachable') {
+        message.warning(result.message || e('shellpilotAiReachableHint'))
       } else {
-        saveProfileStatus('error')
-        message.error(e('shellpilotAiUnexpectedResponse'))
+        message.error(result.message || e('shellpilotAiRecentFailure'))
       }
     } catch (err) {
+      if (profile && !isProfileRequestCurrent(profile, requestGeneration)) return
       if (err.message) {
         message.error(`${e('shellpilotRequestFailed')}: ${err.message}`)
       }
@@ -498,25 +519,42 @@ export default function AIConfigForm ({ initialValues, languageVersion, onSubmit
   }
 
   const handleLoadModels = async () => {
+    let profile
+    let requestGeneration
     try {
-      const values = await form.validateFields(['baseURLAI'])
-      const allValues = form.getFieldsValue()
+      await form.validateFields(['baseURLAI', 'apiKeyAI'])
+      const values = form.getFieldsValue(true)
+      profile = withAICredentialRevision(
+        buildAIProfileFromValues(values),
+        getPersistedProfile(values)
+      )
+      form.setFieldValue('credentialRevisionAI', profile.credentialRevisionAI)
+      requestGeneration = ++profileRequestGenerationRef.current
       setLoadingModels(true)
       const res = await window.pre.runGlobalAsync(
         'AIModels',
-        values.baseURLAI,
-        allValues.apiKeyAI,
-        allValues.proxyAI,
-        allValues.authHeaderNameAI
+        profile.baseURLAI,
+        profile.apiKeyAI,
+        profile.proxyAI,
+        profile.authHeaderNameAI
       )
+      if (!isProfileRequestCurrent(profile, requestGeneration)) return
       if (res?.error) {
         const content = tf('shellpilotAiLoadModelsFailed', { detail: res.error })
-        saveProfileStatus('error', res.error)
+        saveProfileStatus(res.status || 'network-error', res.error, profile)
         return message.error(content)
       }
       const models = res?.models || []
       if (!models.length) {
-        saveProfileStatus('error')
+        aiHealthCoordinator.recordHealthResult(profile, {
+          status: 'reachable',
+          apiStatus: 'reachable',
+          modelStatus: 'unknown',
+          models: [],
+          message: e('shellpilotAiNoModelsHint'),
+          checkedAt: Date.now()
+        })
+        saveProfileStatus('reachable', e('shellpilotAiNoModelsHint'), profile)
         return message.warning(e('shellpilotAiNoModelsHint'))
       }
       const options = uniqueOptions(models)
@@ -529,9 +567,23 @@ export default function AIConfigForm ({ initialValues, languageVersion, onSubmit
         modelOptionsAI
       })
       const content = tf('shellpilotAiModelsLoaded', { count: options.length })
-      saveProfileStatus('available')
+      const nextProfile = {
+        ...profile,
+        modelAI,
+        modelOptionsAI
+      }
+      aiHealthCoordinator.recordHealthResult(nextProfile, {
+        status: 'reachable',
+        apiStatus: 'reachable',
+        modelStatus: 'unknown',
+        models: modelOptionsAI,
+        message: content,
+        checkedAt: Date.now()
+      })
+      saveProfileStatus('reachable', content, nextProfile)
       message.success(content)
     } catch (err) {
+      if (profile && !isProfileRequestCurrent(profile, requestGeneration)) return
       if (err.message) {
         message.error(`${e('shellpilotRequestFailed')}: ${err.message}`)
       }
@@ -542,9 +594,13 @@ export default function AIConfigForm ({ initialValues, languageVersion, onSubmit
 
   function handleSelectHistory (item) {
     if (item && typeof item === 'object') {
-      form.setFieldsValue(item)
+      const restored = restoreAIConfigHistoryCredentials(
+        item,
+        getCurrentFormValues()
+      )
+      form.setFieldsValue(restored)
       setModelOptions([
-        ...getAIModelOptions(item),
+        ...getAIModelOptions(restored),
         ...uniqueOptions(popularModels)
       ])
     }
@@ -949,6 +1005,7 @@ export default function AIConfigForm ({ initialValues, languageVersion, onSubmit
       <AiHistory
         storageKey={STORAGE_KEY_CONFIG}
         eventName={EVENT_NAME_CONFIG}
+        sanitizeHistory={sanitizeAIConfigHistory}
         onSelect={handleSelectHistory}
         renderItem={renderHistoryItem}
       />

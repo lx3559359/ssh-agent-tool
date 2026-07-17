@@ -1,23 +1,21 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { memo, useState, useEffect, useRef, useCallback } from 'react'
 import AIOutput from './ai-output'
 import AIStopIcon from './ai-stop-icon'
 import AgentToolCallCard from './agent-tool-call-card'
-import { runAgentLoop } from './agent'
+import { cancelAgentRun, isAgentRunActive, runAgentLoop } from './agent'
 import {
   Alert,
-  Dropdown,
-  Tooltip
+  Dropdown
 } from 'antd'
 import {
   CopyOutlined,
   CloseOutlined,
   DownloadOutlined,
-  ReloadOutlined,
-  CaretDownOutlined,
-  CaretRightOutlined
+  ReloadOutlined
 } from '@ant-design/icons'
 import { copy } from '../../common/clipboard'
 import download from '../../common/download'
+import { normalizeAsyncResult } from '../../common/async-result.js'
 import aiAgentCopy from './ai-agent-copy.json'
 import uid from '../../common/uid'
 import { buildAgentDiagnosticReportFiles } from './agent-diagnostic-report'
@@ -26,32 +24,232 @@ import {
   buildAIChatRole,
   createRetryChatEntry,
   getAIChatCopyText,
-  getAIChatStreamSessionId
+  getInterruptedAIChatUpdate,
+  getAIChatRequestId,
+  getAIChatStreamSessionId,
+  updateAIChatHistoryEntry
 } from './ai-chat-actions'
+import { buildAIConversationMessages } from './ai-conversation-context'
+import {
+  createAIStoredTextAccumulator,
+  createAIRequestCredentialReference,
+  resolveAIRequestConfigForProfile,
+  sanitizeAIStoredText
+} from './ai-request-credentials'
 
-export default function AIChatHistoryItem ({ item }) {
-  const [showOutput, setShowOutput] = useState(true)
-  const [isStreaming, setIsStreaming] = useState(false)
+export function buildAIRequestFailureText (error, existingResponse = '') {
+  const errorText = `**${aiAgentCopy.errorLabel}:** ${sanitizeAIStoredText(error)}`
+  const partial = String(existingResponse || '').trim()
+  return partial ? `${partial}\n\n${errorText}` : errorText
+}
+
+export async function consumeAIStreamPoll ({
+  request,
+  isActive,
+  onResponse,
+  onError,
+  onInactiveResponse,
+  onInactiveError
+}) {
+  const rawResult = await request()
+  const result = normalizeAsyncResult(rawResult)
+  if (!isActive()) {
+    if (result.ok && onInactiveResponse) {
+      await onInactiveResponse(result.data)
+    } else if (!result.ok && onInactiveError) {
+      await onInactiveError(result.error, rawResult)
+    }
+    return result
+  }
+  if (!result.ok) {
+    if (rawResult?.content && onResponse) {
+      onResponse({ ...rawResult, error: undefined, hasMore: false })
+    }
+    onError(result.error)
+    return result
+  }
+  onResponse(result.data)
+  return result
+}
+
+export async function consumeAIChatRequest (options) {
+  return consumeAIStreamPoll(options)
+}
+
+export async function stopAIStreamSafely ({
+  sessionId,
+  stopStream,
+  onError = error => console.error('Error stopping stream:', error)
+}) {
+  if (!sessionId) {
+    return false
+  }
+  try {
+    await stopStream(sessionId)
+    return true
+  } catch (error) {
+    onError(error)
+    return false
+  }
+}
+
+const detachedAIStreams = new Map()
+const DETACHED_STREAM_POLL_DELAY = 200
+
+export function shouldApplyAIChatAsyncUpdate (store, chatId) {
+  const latest = store?.aiChatHistory?.find(chat => chat.id === chatId)
+  return latest?.completionStatus === 'running'
+}
+
+export function isDetachedAIStreamActive (chatId) {
+  return detachedAIStreams.has(chatId)
+}
+
+export function cancelDetachedAIStream (chatId) {
+  const active = detachedAIStreams.get(chatId)
+  if (!active) return false
+  active.cancelled = true
+  detachedAIStreams.delete(chatId)
+  return true
+}
+
+function mergeAIStreamResponse (streamResponse, state) {
+  if (streamResponse.incremental) {
+    if (streamResponse.offset !== state.cursor) {
+      throw new Error('AI 流式响应游标不连续，请重试。')
+    }
+    state.rawContent += streamResponse.content || ''
+    state.cursor = streamResponse.nextOffset
+  } else {
+    state.rawContent = streamResponse.content || ''
+    state.cursor = state.rawContent.length
+  }
+}
+
+export function startDetachedAIStream ({
+  chatId,
+  sessionId,
+  store,
+  initialContent = '',
+  initialOffset = 0,
+  request = (sid, offset) => window.pre.runGlobalAsync(
+    'getStreamContent',
+    sid,
+    offset
+  )
+}) {
+  if (!chatId || !sessionId || !store) return null
+  const existing = detachedAIStreams.get(chatId)
+  if (existing?.sessionId === sessionId) return existing.promise
+  if (existing) existing.cancelled = true
+
+  const active = {
+    sessionId,
+    cancelled: false,
+    promise: null
+  }
+  detachedAIStreams.set(chatId, active)
+  active.promise = (async () => {
+    const state = {
+      rawContent: initialContent,
+      cursor: Math.max(0, Number(initialOffset) || 0)
+    }
+    const sanitizer = createAIStoredTextAccumulator()
+    while (!active.cancelled && shouldApplyAIChatAsyncUpdate(store, chatId)) {
+      const rawResult = await request(sessionId, state.cursor)
+      if (active.cancelled || !shouldApplyAIChatAsyncUpdate(store, chatId)) break
+      const result = normalizeAsyncResult(rawResult)
+      if (!result.ok) {
+        if (rawResult?.content) {
+          mergeAIStreamResponse({
+            ...rawResult,
+            error: undefined,
+            hasMore: false
+          }, state)
+        }
+        updateAIChatHistoryEntry(store, chatId, {
+          response: buildAIRequestFailureText(result.error, state.rawContent),
+          completionStatus: 'failed',
+          requestId: ''
+        })
+        break
+      }
+
+      const streamResponse = result.data
+      mergeAIStreamResponse(streamResponse, state)
+      if (!shouldApplyAIChatAsyncUpdate(store, chatId)) break
+      updateAIChatHistoryEntry(store, chatId, {
+        response: sanitizer.sanitize(state.rawContent, {
+          final: !streamResponse.hasMore
+        }),
+        completionStatus: streamResponse.hasMore ? 'running' : 'completed',
+        requestId: ''
+      }, { sanitized: true })
+      if (!streamResponse.hasMore) break
+      await new Promise(resolve => setTimeout(resolve, DETACHED_STREAM_POLL_DELAY))
+    }
+  })().catch(error => {
+    if (!active.cancelled && shouldApplyAIChatAsyncUpdate(store, chatId)) {
+      const latest = store.aiChatHistory?.find(chat => chat.id === chatId)
+      updateAIChatHistoryEntry(store, chatId, {
+        response: buildAIRequestFailureText(error?.message || error, latest?.response),
+        completionStatus: 'failed',
+        requestId: ''
+      })
+      store.onError?.(error)
+    }
+  }).finally(() => {
+    if (detachedAIStreams.get(chatId) === active) {
+      detachedAIStreams.delete(chatId)
+    }
+  })
+  return active.promise
+}
+
+export default memo(function AIChatHistoryItem ({
+  item,
+  config,
+  agentRunning
+}) {
+  const [isStreaming, setIsStreaming] = useState(
+    item.completionStatus === 'running'
+  )
+  const requestIsRunning = item.completionStatus === 'running' && isStreaming
   const abortRef = useRef(false)
+  const mountedRef = useRef(true)
+  const pollTimerRef = useRef(null)
+  const requestEpochRef = useRef(0)
+  const initialRequestIdRef = useRef('')
+  const streamSanitizerRef = useRef(createAIStoredTextAccumulator())
+  const streamCursorRef = useRef(0)
+  const streamRawContentRef = useRef('')
+  const streamPollingRef = useRef('')
   const {
     prompt,
-    nameAI,
     modelAI,
     roleAI,
-    baseURLAI,
-    apiPathAI,
-    apiKeyAI,
-    authHeaderNameAI,
-    proxyAI,
+    credentialTokenAI,
+    aiProfileId,
+    credentialRevisionAI,
     languageAI,
-    mcpServers,
     mode,
     toolCalls
   } = item
-
-  function toggleOutput () {
-    setShowOutput(!showOutput)
-  }
+  const visiblePrompt = item.displayPrompt || prompt
+  const requestConfig = resolveAIRequestConfigForProfile(
+    credentialTokenAI,
+    aiProfileId,
+    credentialRevisionAI,
+    config || {}
+  )
+  const {
+    apiKeyAI = '',
+    baseURLAI = '',
+    apiPathAI = '',
+    authHeaderNameAI = '',
+    proxyAI = '',
+    mcpServers = []
+  } = requestConfig
 
   function buildRole () {
     return buildAIChatRole({
@@ -61,75 +259,243 @@ export default function AIChatHistoryItem ({ item }) {
     })
   }
 
-  const pollStreamContent = useCallback(async (sid) => {
+  function markRequestFailed (error) {
+    if (!shouldApplyAIChatAsyncUpdate(window.store, item.id)) return
+    const safeError = sanitizeAIStoredText(error?.message || error)
+    const latest = window.store.aiChatHistory?.find(chat => chat.id === item.id)
+    updateAIChatHistoryEntry(window.store, item.id, {
+      response: buildAIRequestFailureText(safeError, latest?.response || item.response),
+      completionStatus: 'failed',
+      requestId: ''
+    })
+    if (mountedRef.current) setIsStreaming(false)
+    window.store.onError(new Error(safeError))
+  }
+
+  const pollStreamContent = useCallback(async (sid, requestEpoch) => {
+    const isActive = () => (
+      mountedRef.current && requestEpochRef.current === requestEpoch
+    )
     try {
-      const streamResponse = await window.pre.runGlobalAsync('getStreamContent', sid)
-
-      if (streamResponse && streamResponse.error) {
-        if (streamResponse.error === 'Session not found') {
-          return
+      await consumeAIStreamPoll({
+        request: () => window.pre.runGlobalAsync(
+          'getStreamContent',
+          sid,
+          streamCursorRef.current
+        ),
+        isActive,
+        onInactiveError: (error, streamResponse) => {
+          if (!shouldApplyAIChatAsyncUpdate(window.store, item.id)) return
+          let partial = streamRawContentRef.current
+          if (streamResponse?.content) {
+            partial = streamResponse.incremental
+              ? partial + streamResponse.content
+              : streamResponse.content
+          }
+          const latest = window.store.aiChatHistory?.find(chat => chat.id === item.id)
+          updateAIChatHistoryEntry(window.store, item.id, {
+            response: buildAIRequestFailureText(error, partial || latest?.response),
+            completionStatus: 'failed',
+            requestId: ''
+          })
+        },
+        onInactiveResponse: streamResponse => {
+          if (!shouldApplyAIChatAsyncUpdate(window.store, item.id)) return
+          const state = {
+            rawContent: streamRawContentRef.current,
+            cursor: streamCursorRef.current
+          }
+          mergeAIStreamResponse(streamResponse, state)
+          streamRawContentRef.current = state.rawContent
+          streamCursorRef.current = state.cursor
+          const response = streamSanitizerRef.current.sanitize(
+            streamRawContentRef.current,
+            { final: !streamResponse.hasMore }
+          )
+          updateAIChatHistoryEntry(window.store, item.id, {
+            response,
+            completionStatus: streamResponse.hasMore ? 'running' : 'completed',
+            requestId: ''
+          }, { sanitized: true })
+          if (streamResponse.hasMore) {
+            startDetachedAIStream({
+              chatId: item.id,
+              sessionId: sid,
+              store: window.store,
+              initialContent: state.rawContent,
+              initialOffset: state.cursor
+            })
+          }
+        },
+        onError: error => {
+          streamPollingRef.current = ''
+          markRequestFailed(error)
+        },
+        onResponse: streamResponse => {
+          const state = {
+            rawContent: streamRawContentRef.current,
+            cursor: streamCursorRef.current
+          }
+          mergeAIStreamResponse(streamResponse, state)
+          streamRawContentRef.current = state.rawContent
+          streamCursorRef.current = state.cursor
+          const response = streamSanitizerRef.current.sanitize(
+            streamRawContentRef.current,
+            { final: !streamResponse.hasMore }
+          )
+          updateAIChatHistoryEntry(window.store, item.id, {
+            response,
+            completionStatus: streamResponse.hasMore ? 'running' : 'completed',
+            requestId: ''
+          }, { sanitized: true })
+          setIsStreaming(streamResponse.hasMore)
+          if (streamResponse.hasMore) {
+            pollTimerRef.current = setTimeout(
+              () => pollStreamContent(sid, requestEpoch),
+              200
+            )
+          } else {
+            pollTimerRef.current = null
+            streamPollingRef.current = ''
+          }
         }
-        window.store.removeAiHistory(item.id)
-        return window.store.onError(new Error(streamResponse.error))
-      }
-
-      const index = window.store.aiChatHistory.findIndex(i => i.id === item.id)
-      if (index !== -1) {
-        window.store.aiChatHistory[index].response = streamResponse.content || ''
-        window.store.aiChatHistory = [...window.store.aiChatHistory]
-      }
-      setIsStreaming(streamResponse.hasMore)
-      if (streamResponse.hasMore) {
-        setTimeout(() => pollStreamContent(sid), 200)
-      }
+      })
     } catch (error) {
-      window.store.removeAiHistory(item.id)
-      window.store.onError(error)
+      if (!isActive()) {
+        if (shouldApplyAIChatAsyncUpdate(window.store, item.id)) {
+          markRequestFailed(error)
+        }
+        return
+      }
+      markRequestFailed(error)
     }
   }, [item.id])
 
+  const resumeStreamSession = useCallback((sid) => {
+    if (!sid || streamPollingRef.current === sid) return
+    streamPollingRef.current = sid
+    streamSanitizerRef.current.reset()
+    streamCursorRef.current = 0
+    streamRawContentRef.current = ''
+    const requestEpoch = requestEpochRef.current + 1
+    requestEpochRef.current = requestEpoch
+    setIsStreaming(true)
+    pollStreamContent(sid, requestEpoch)
+  }, [pollStreamContent])
+
   const startRequest = useCallback(async () => {
+    const requestEpoch = requestEpochRef.current + 1
+    requestEpochRef.current = requestEpoch
+    const isActive = () => (
+      mountedRef.current && requestEpochRef.current === requestEpoch
+    )
+    if (!baseURLAI || !apiKeyAI) {
+      markRequestFailed('历史 API 凭据已失效，请选择当前 API 配置后重新发送')
+      return
+    }
+    const requestId = `chat-${item.id}-${requestEpoch}-${uid()}`
+    streamSanitizerRef.current.reset()
+    streamCursorRef.current = 0
+    streamRawContentRef.current = ''
+    initialRequestIdRef.current = requestId
+    setIsStreaming(true)
+    updateAIChatHistoryEntry(window.store, item.id, {
+      completionStatus: 'running',
+      requestId
+    })
     try {
-      const aiResponse = await window.pre.runGlobalAsync(
-        'AIchat',
-        prompt,
-        modelAI,
-        buildRole(),
-        baseURLAI,
-        apiPathAI,
-        apiKeyAI,
-        proxyAI,
-        true,
-        authHeaderNameAI
-      )
-
-      if (aiResponse && aiResponse.error) {
-        window.store.removeAiHistory(item.id)
-        return window.store.onError(new Error(aiResponse.error))
-      }
-
-      if (aiResponse && aiResponse.isStream && aiResponse.sessionId) {
-        setIsStreaming(true)
-        const index = window.store.aiChatHistory.findIndex(i => i.id === item.id)
-        if (index !== -1) {
-          window.store.aiChatHistory[index].sessionId = aiResponse.sessionId
-          window.store.aiChatHistory[index].response = aiResponse.content || ''
+      const conversationMessages = buildAIConversationMessages(window.store.aiChatHistory, item)
+      await consumeAIChatRequest({
+        request: () => window.pre.runGlobalAsync(
+          'AIchat',
+          conversationMessages,
+          modelAI,
+          buildRole(),
+          baseURLAI,
+          apiPathAI,
+          apiKeyAI,
+          proxyAI,
+          true,
+          authHeaderNameAI,
+          requestId
+        ),
+        isActive,
+        onError: error => {
+          markRequestFailed(error)
+        },
+        onInactiveError: error => {
+          if (shouldApplyAIChatAsyncUpdate(window.store, item.id)) markRequestFailed(error)
+        },
+        onInactiveResponse: aiResponse => {
+          if (!shouldApplyAIChatAsyncUpdate(window.store, item.id)) return
+          if (aiResponse?.isStream && aiResponse.sessionId) {
+            const initialContent = aiResponse.content || ''
+            updateAIChatHistoryEntry(window.store, item.id, {
+              sessionId: aiResponse.sessionId,
+              response: sanitizeAIStoredText(initialContent),
+              completionStatus: 'running',
+              requestId: ''
+            })
+            startDetachedAIStream({
+              chatId: item.id,
+              sessionId: aiResponse.sessionId,
+              store: window.store,
+              initialContent,
+              initialOffset: initialContent.length
+            })
+          } else if (aiResponse && Object.prototype.hasOwnProperty.call(aiResponse, 'response')) {
+            updateAIChatHistoryEntry(window.store, item.id, {
+              response: aiResponse.response || '',
+              completionStatus: 'completed',
+              requestId: ''
+            })
+          }
+        },
+        onResponse: aiResponse => {
+          if (aiResponse.isStream && aiResponse.sessionId) {
+            setIsStreaming(true)
+            streamPollingRef.current = aiResponse.sessionId
+            streamRawContentRef.current = aiResponse.content || ''
+            streamCursorRef.current = streamRawContentRef.current.length
+            const response = streamSanitizerRef.current.sanitize(
+              streamRawContentRef.current
+            )
+            updateAIChatHistoryEntry(window.store, item.id, {
+              sessionId: aiResponse.sessionId,
+              response,
+              completionStatus: 'running',
+              requestId: ''
+            }, { sanitized: true })
+            pollStreamContent(aiResponse.sessionId, requestEpoch)
+          } else if (aiResponse && Object.prototype.hasOwnProperty.call(aiResponse, 'response')) {
+            updateAIChatHistoryEntry(window.store, item.id, {
+              response: aiResponse.response || '',
+              completionStatus: 'completed',
+              requestId: ''
+            })
+          }
         }
-        pollStreamContent(aiResponse.sessionId)
-      } else if (aiResponse && aiResponse.response) {
-        const index = window.store.aiChatHistory.findIndex(i => i.id === item.id)
-        if (index !== -1) {
-          window.store.aiChatHistory[index].response = aiResponse.response
-          window.store.aiChatHistory = [...window.store.aiChatHistory]
-        }
-      }
+      })
     } catch (error) {
-      window.store.removeAiHistory(item.id)
-      window.store.onError(error)
+      if (!isActive()) {
+        if (shouldApplyAIChatAsyncUpdate(window.store, item.id)) {
+          markRequestFailed(error)
+        }
+        return
+      }
+      markRequestFailed(error)
+    } finally {
+      if (initialRequestIdRef.current === requestId) {
+        initialRequestIdRef.current = ''
+      }
     }
   }, [prompt, modelAI, baseURLAI, apiPathAI, apiKeyAI, authHeaderNameAI, proxyAI, item.id, pollStreamContent])
 
   const startAgentRequest = useCallback(async () => {
+    if (!baseURLAI || !apiKeyAI) {
+      markRequestFailed('历史 API 凭据已失效，请选择当前 API 配置后重新发送')
+      return
+    }
     abortRef.current = false
     const config = {
       modelAI,
@@ -142,43 +508,125 @@ export default function AIChatHistoryItem ({ item }) {
       languageAI,
       mcpServers
     }
-    await runAgentLoop(item, config, abortRef, setIsStreaming)
+    await runAgentLoop(item, config, abortRef, value => {
+      if (mountedRef.current) {
+        setIsStreaming(value)
+      }
+    }, window.store.aiChatHistory)
   }, [modelAI, roleAI, baseURLAI, apiPathAI, apiKeyAI, authHeaderNameAI, proxyAI, languageAI, mcpServers, item.id])
 
   useEffect(() => {
-    if (item.pending) {
-      const index = window.store.aiChatHistory.findIndex(i => i.id === item.id)
-      if (index !== -1) {
-        window.store.aiChatHistory[index].pending = false
-      }
+    mountedRef.current = true
+    const interruptedUpdate = getInterruptedAIChatUpdate(item)
+    if (
+      interruptedUpdate &&
+      !(mode === 'agent' && isAgentRunActive(item.id))
+    ) {
+      updateAIChatHistoryEntry(window.store, item.id, interruptedUpdate)
+      setIsStreaming(false)
+    } else if (item.pending) {
+      updateAIChatHistoryEntry(window.store, item.id, {
+        pending: false,
+        completionStatus: 'running'
+      })
       if (mode === 'agent') {
         startAgentRequest()
       } else {
         startRequest()
       }
     }
+
+    return () => {
+      const latest = window.store.aiChatHistory?.find(chat => chat.id === item.id)
+      const activeSessionId = getAIChatStreamSessionId(item, window.store)
+      if (
+        mode !== 'agent' &&
+        latest?.completionStatus === 'running' &&
+        activeSessionId
+      ) {
+        startDetachedAIStream({
+          chatId: item.id,
+          sessionId: activeSessionId,
+          store: window.store,
+          initialContent: streamRawContentRef.current,
+          initialOffset: streamCursorRef.current
+        })
+      }
+      mountedRef.current = false
+      requestEpochRef.current += 1
+      streamPollingRef.current = ''
+      if (pollTimerRef.current !== null) {
+        clearTimeout(pollTimerRef.current)
+        pollTimerRef.current = null
+      }
+    }
   }, [])
+
+  useEffect(() => {
+    if (
+      mode !== 'agent' &&
+      item.completionStatus === 'running' &&
+      item.sessionId &&
+      !isDetachedAIStreamActive(item.id)
+    ) {
+      resumeStreamSession(item.sessionId)
+    }
+  }, [item.sessionId, item.completionStatus, mode, resumeStreamSession])
+
+  useEffect(() => {
+    setIsStreaming(item.completionStatus === 'running')
+  }, [item.completionStatus])
 
   async function handleStop (e) {
     e.stopPropagation()
-    if (mode === 'agent') {
-      abortRef.current = true
+    const latest = window.store.aiChatHistory?.find(chat => chat.id === item.id)
+    if (latest?.completionStatus !== 'running') {
       setIsStreaming(false)
       return
+    }
+    if (mode === 'agent') {
+      abortRef.current = true
+      if (abortRef.cancelCurrent) abortRef.cancelCurrent()
+      else cancelAgentRun(item.id)
+      setIsStreaming(false)
+      updateAIChatHistoryEntry(window.store, item.id, {
+        completionStatus: 'cancelled'
+      })
+      return
+    }
+    requestEpochRef.current += 1
+    cancelDetachedAIStream(item.id)
+    streamPollingRef.current = ''
+    if (pollTimerRef.current !== null) {
+      clearTimeout(pollTimerRef.current)
+      pollTimerRef.current = null
+    }
+    const initialRequestId = getAIChatRequestId(item, window.store) || initialRequestIdRef.current
+    setIsStreaming(false)
+    updateAIChatHistoryEntry(window.store, item.id, {
+      completionStatus: 'cancelled',
+      requestId: ''
+    })
+    initialRequestIdRef.current = ''
+    if (initialRequestId) {
+      try {
+        await window.pre.runGlobalAsync('AIChatCancel', initialRequestId)
+      } catch (error) {
+        console.error('Error cancelling AI request:', error)
+      }
     }
     const activeSessionId = getAIChatStreamSessionId(item, window.store)
     if (!activeSessionId) return
 
     try {
       await window.pre.runGlobalAsync('stopStream', activeSessionId)
-      setIsStreaming(false)
     } catch (error) {
       console.error('Error stopping stream:', error)
     }
   }
 
   function renderStopButton () {
-    if (!isStreaming) {
+    if (!requestIsRunning) {
       return null
     }
     return (
@@ -232,13 +680,14 @@ export default function AIChatHistoryItem ({ item }) {
     )
   }
 
+  const retryDisabled = requestIsRunning || (
+    mode === 'agent' && agentRunning
+  )
   const alertProps = {
     title: (
       <div className='ai-history-item-title'>
-        <span className='pointer mg1r' onClick={toggleOutput}>
-          {showOutput ? <CaretDownOutlined /> : <CaretRightOutlined />}
-        </span>
-        <span className='ai-history-item-prompt'>{prompt}</span>
+
+        <span className='ai-history-item-prompt'>{visiblePrompt}</span>
         <span className='ai-history-item-actions'>
           <CopyOutlined
             className='pointer'
@@ -246,9 +695,9 @@ export default function AIChatHistoryItem ({ item }) {
             title={aiAgentCopy.copyAnswerTitle}
           />
           <ReloadOutlined
-            className='pointer mg1l'
+            className={retryDisabled ? 'mg1l disabled' : 'pointer mg1l'}
             onClick={handleRetry}
-            title={aiAgentCopy.retryTitle}
+            title={retryDisabled ? '当前任务运行中，暂时不能重试' : aiAgentCopy.retryTitle}
           />
           {renderReportExportAction()}
           <CloseOutlined
@@ -262,14 +711,12 @@ export default function AIChatHistoryItem ({ item }) {
     type: 'info'
   }
 
-  function handleDel (e) {
+  async function handleDel (e) {
     e.stopPropagation()
+    if (requestIsRunning || item.completionStatus === 'running') {
+      await handleStop(e)
+    }
     window.store.removeAiHistory(item.id)
-  }
-
-  function handleCopyPrompt (e) {
-    e.stopPropagation()
-    copy(prompt)
   }
 
   function handleCopyAnswer (e) {
@@ -279,58 +726,21 @@ export default function AIChatHistoryItem ({ item }) {
 
   function handleRetry (e) {
     e.stopPropagation()
-    const retryEntry = createRetryChatEntry(item, {
-      id: uid(),
-      timestamp: Date.now()
-    })
+    if (retryDisabled) {
+      return
+    }
+    const retryEntry = {
+      ...createRetryChatEntry(item, {
+        id: uid(),
+        timestamp: Date.now()
+      }),
+      ...createAIRequestCredentialReference({
+        ...requestConfig,
+        id: aiProfileId,
+        credentialRevisionAI
+      })
+    }
     appendAIChatHistory(window.store, retryEntry)
-  }
-
-  function renderTitle () {
-    return (
-      <div>
-        {nameAI && (
-          <p>
-            <b>名称：</b> {nameAI}
-          </p>
-        )}
-        <p>
-          <b>模型：</b> {modelAI}
-        </p>
-        <p>
-          <b>角色：</b> {roleAI}
-        </p>
-        <p>
-          <b>基础地址：</b> {baseURLAI}
-        </p>
-        <p>
-          <b>时间：</b> {new Date(item.timestamp).toLocaleString()}
-        </p>
-        <p>
-          <CopyOutlined
-            className='pointer'
-            onClick={handleCopyPrompt}
-            title={aiAgentCopy.copyPromptTitle}
-          />
-          <CopyOutlined
-            className='pointer mg1l'
-            onClick={handleCopyAnswer}
-            title={aiAgentCopy.copyAnswerTitle}
-          />
-          <ReloadOutlined
-            className='pointer mg1l'
-            onClick={handleRetry}
-            title={aiAgentCopy.retryTitle}
-          />
-          {renderReportExportAction()}
-          <CloseOutlined
-            className='pointer mg1l'
-            onClick={handleDel}
-            title={aiAgentCopy.deleteTitle}
-          />
-        </p>
-      </div>
-    )
   }
 
   function renderToolCalls () {
@@ -349,13 +759,11 @@ export default function AIChatHistoryItem ({ item }) {
   return (
     <div className='chat-history-item'>
       <div className='mg1y'>
-        <Tooltip title={renderTitle()}>
-          <Alert {...alertProps} />
-        </Tooltip>
+        <Alert {...alertProps} />
       </div>
       {renderToolCalls()}
-      {showOutput && <AIOutput item={item} />}
+      <AIOutput item={item} isStreaming={requestIsRunning} />
       {renderStopButton()}
     </div>
   )
-}
+})

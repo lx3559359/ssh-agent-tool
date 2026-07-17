@@ -1,10 +1,11 @@
-import React, { memo, useRef } from 'react'
+import React, { memo, useEffect, useRef, useState } from 'react'
 import DragHandle from '../common/drag-handle'
 import './right-side-panel.styl'
 import {
   CloseCircleOutlined,
   PushpinOutlined,
-  InfoCircleOutlined
+  InfoCircleOutlined,
+  ReloadOutlined
 } from '@ant-design/icons'
 import {
   Typography,
@@ -25,6 +26,10 @@ import {
   migrateAIProfiles,
   upsertAIProfile
 } from '../ai/ai-profiles'
+import {
+  aiHealthCoordinator,
+  getAIHealthRequestKey
+} from '../ai/ai-health-coordinator'
 
 const e = window.translate
 
@@ -40,16 +45,41 @@ export default memo(function RightSidePanel (
   }
 ) {
   const panelRef = useRef(null)
+  const safeConfig = config || {}
+  const isAI = rightPanelTab === 'ai'
+  const activeAIConfig = isAI ? getActiveAIConfig(safeConfig) || {} : safeConfig
+  const aiHealthKey = isAI ? getAIHealthRequestKey(activeAIConfig) : ''
+  const [aiHealthState, setAIHealthState] = useState(
+    () => aiHealthCoordinator.getSnapshot(activeAIConfig)
+  )
+
+  useEffect(() => {
+    if (!isAI || !rightPanelVisible) return undefined
+    let mounted = true
+    const updateState = () => {
+      if (mounted) {
+        setAIHealthState(aiHealthCoordinator.getSnapshot(activeAIConfig))
+      }
+    }
+    const unsubscribe = aiHealthCoordinator.subscribe(updateState)
+    const cancelCheck = aiHealthCoordinator.schedule(activeAIConfig)
+    updateState()
+    return () => {
+      mounted = false
+      unsubscribe()
+      cancelCheck()
+    }
+  }, [aiHealthKey, isAI, rightPanelVisible])
 
   if (!rightPanelVisible) {
     return null
   }
 
-  const isAI = rightPanelTab === 'ai'
-  const activeAIConfig = isAI ? getActiveAIConfig(config) : config
-  const aiProfileOptions = isAI ? getAIProfileOptions(config, e) : []
+  const aiProfileOptions = isAI ? getAIProfileOptions(safeConfig, e) : []
   const aiModelOptions = isAI ? getAIModelOptions(activeAIConfig) : []
-  const aiModelStatus = isAI ? getAIModelStatus(activeAIConfig, e) : null
+  const aiModelStatus = isAI
+    ? getAIModelStatus(activeAIConfig, e, aiHealthState)
+    : null
   const aiConfigured = Boolean(activeAIConfig.baseURLAI && activeAIConfig.apiKeyAI)
   const tag = isAI
     ? <Tag className='mg1r aigshell-ai-tag'>AI</Tag>
@@ -77,22 +107,34 @@ export default memo(function RightSidePanel (
 
   function handleActiveAIProfileChange (profileId) {
     const next = migrateAIProfiles({
-      ...config,
+      ...safeConfig,
       activeAIProfileId: profileId
     })
     window.store.updateConfig(next)
   }
 
   function handleActiveAIModelChange (modelAI) {
-    const next = upsertAIProfile(config, {
+    const next = upsertAIProfile(safeConfig, {
       ...activeAIConfig,
       modelAI,
-      aiStatus: '',
-      aiStatusMessage: '',
+      aiStatus: 'stale',
+      aiStatusMessage: e('shellpilotAiConfigChanged'),
       aiStatusAt: '',
       aiStatusFingerprint: ''
     })
     window.store.updateConfig(next)
+  }
+
+  function handleManualAIHealthCheck () {
+    if (!isAI) return
+    aiHealthCoordinator.checkNow(activeAIConfig, { force: true }).catch(() => {})
+  }
+
+  function handleAIHealthKeyDown (event) {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      handleManualAIHealthCheck()
+    }
   }
 
   function renderAIProfileSelect () {
@@ -184,8 +226,17 @@ export default memo(function RightSidePanel (
                 <Tag
                   className={`right-panel-model-status ${aiModelStatus.className}${aiConfigured ? ' configured' : ''}`}
                   title={aiModelStatus.title}
+                  role='button'
+                  tabIndex={0}
+                  aria-label={e('shellpilotAiManualRecheck')}
+                  onClick={handleManualAIHealthCheck}
+                  onKeyDown={handleAIHealthKeyDown}
                 >
-                  {aiModelStatus.label}
+                  <ReloadOutlined
+                    className='right-panel-model-status-refresh'
+                    spin={aiModelStatus.status === 'checking'}
+                  />
+                  <span>{aiModelStatus.label}</span>
                 </Tag>
                 )
               : null

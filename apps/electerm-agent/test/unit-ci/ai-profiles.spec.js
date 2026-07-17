@@ -86,15 +86,15 @@ test('AI model status reports real tested state instead of configured-only state
 
   const zh = key => ({
     shellpilotAiUnconfigured: '未配置',
-    shellpilotAiPending: '待测试',
+    shellpilotAiStale: '待重新检测',
     shellpilotAiAvailable: '可用',
-    shellpilotAiError: '异常'
+    shellpilotAiNetworkError: '网络异常'
   })[key] || key
   assert.equal(getAIModelStatus({}, zh).status, 'unconfigured')
   assert.equal(getAIModelStatus({
     baseURLAI: 'https://api.example.com',
     apiKeyAI: 'sk-example'
-  }, zh).status, 'pending')
+  }, zh).status, 'stale')
   assert.equal(getAIModelStatus({
     baseURLAI: 'https://api.example.com',
     apiKeyAI: 'sk-example',
@@ -106,7 +106,7 @@ test('AI model status reports real tested state instead of configured-only state
     apiKeyAI: 'sk-example',
     aiStatus: 'error',
     aiStatusMessage: '模型不存在'
-  }, zh).label, '异常')
+  }, zh).label, '网络异常')
 })
 
 test('AI profiles persist fetched model lists and expose model switch options', async () => {
@@ -255,4 +255,207 @@ test('AI config modal and chat are wired to active AI profile selection', () => 
   assert.match(sidePanelSource, /right-panel-ai-profile-select/)
   assert.match(sidePanelSource, /right-panel-ai-model-select/)
   assert.match(sidePanelSource, /right-panel-model-status/)
+})
+
+test('AI health fingerprint sanitizes API path secrets and tracks auth semantics', async () => {
+  const { getAIStatusFingerprint } = await import(profilesUrl)
+  const base = {
+    baseURLAI: 'https://relay.example.com/v1',
+    modelAI: 'model-a',
+    proxyAI: '',
+    credentialRevisionAI: 'revision-1'
+  }
+  const first = getAIStatusFingerprint({
+    ...base,
+    apiPathAI: 'https://path-user:path-secret@relay.example.com/chat?api_key=query-secret&mode=fast',
+    authHeaderNameAI: 'Authorization: Bearer header-secret'
+  })
+  const sameSemantics = getAIStatusFingerprint({
+    ...base,
+    apiPathAI: 'https://other-user:other-secret@relay.example.com/chat?api_key=other-query-secret&mode=fast',
+    authHeaderNameAI: 'Authorization: Bearer other-header-secret'
+  })
+  const differentHeader = getAIStatusFingerprint({
+    ...base,
+    apiPathAI: 'https://third-user:third-secret@relay.example.com/chat?token=ignored&mode=fast',
+    authHeaderNameAI: 'x-api-key: should-not-appear'
+  })
+
+  assert.equal(first, sameSemantics)
+  assert.notEqual(first, differentHeader)
+  assert.doesNotMatch(
+    first + sameSemantics + differentHeader,
+    /path-user|path-secret|query-secret|other-secret|header-secret|should-not-appear/
+  )
+})
+
+test('AI health fingerprints strip common URL credentials and rotate credential revisions', async () => {
+  const {
+    getAIStatusFingerprint,
+    withAICredentialRevision
+  } = await import(profilesUrl)
+  const fingerprint = getAIStatusFingerprint({
+    baseURLAI: 'https://user:password@relay.example.com/v1?sig=secret-a&credential=secret-b&pass=secret-c&pwd=secret-d&mode=fast#access_token=fragment-secret',
+    apiPathAI: '/chat?token=secret-e&view=full',
+    modelAI: 'model-a',
+    credentialRevisionAI: 'revision-1'
+  })
+  assert.doesNotMatch(
+    fingerprint,
+    /user|password|secret-a|secret-b|secret-c|secret-d|secret-e|fragment-secret/
+  )
+
+  const previous = withAICredentialRevision({
+    apiKeyAI: 'sk-same',
+    baseURLAI: 'https://relay.example.com/v1?sig=old-secret',
+    proxyAI: 'http://proxy-user:old-password@proxy.example.com'
+  }, undefined, () => 'revision-1')
+  const next = withAICredentialRevision({
+    ...previous,
+    baseURLAI: 'https://relay.example.com/v1?sig=new-secret',
+    proxyAI: 'http://proxy-user:new-password@proxy.example.com'
+  }, previous, () => 'revision-2')
+  assert.equal(previous.credentialRevisionAI, 'revision-1')
+  assert.equal(next.credentialRevisionAI, 'revision-2')
+})
+test('MCP changes rotate credential revisions without persisting MCP secrets', async () => {
+  const { withAICredentialRevision } = await import(profilesUrl)
+  const previous = withAICredentialRevision({
+    apiKeyAI: 'sk-same',
+    mcpServers: [{ id: 'mcp-a', env: { TOKEN: 'old-secret' } }]
+  }, undefined, () => 'revision-1')
+  const next = withAICredentialRevision({
+    ...previous,
+    mcpServers: [{ id: 'mcp-a', env: { TOKEN: 'new-secret' } }]
+  }, previous, () => 'revision-2')
+
+  assert.equal(previous.credentialRevisionAI, 'revision-1')
+  assert.equal(next.credentialRevisionAI, 'revision-2')
+})
+
+test('AI health fingerprint fallback removes fragments from malformed URLs', async () => {
+  const { getAIStatusFingerprint } = await import(profilesUrl)
+  const fingerprint = getAIStatusFingerprint({
+    baseURLAI: 'https://invalid host/path?mode=fast#access_token=fragment-secret',
+    modelAI: 'model-a',
+    credentialRevisionAI: 'revision-1'
+  })
+
+  assert.doesNotMatch(fingerprint, /fragment-secret|access_token/)
+})
+
+test('AI status fingerprints never persist raw endpoint or proxy values', async () => {
+  const { getAIStatusFingerprint } = await import(profilesUrl)
+  const fingerprint = getAIStatusFingerprint({
+    baseURLAI: 'https://relay.example.com/private-path-token/v1?code=unknown-query-secret',
+    apiPathAI: '/chat/private-api-token/completions?api-version=2026-01-01',
+    proxyAI: 'http://proxy-user:proxy-pass@proxy.example.com/private-proxy-token',
+    modelAI: 'model-a',
+    credentialRevisionAI: 'revision-1'
+  })
+
+  assert.doesNotMatch(
+    fingerprint,
+    /relay\.example|private-path-token|unknown-query-secret|private-api-token|proxy-user|proxy-pass|private-proxy-token/
+  )
+})
+test('credential-aware profile upserts rotate revisions on every persistence path', async () => {
+  const { upsertAIProfileWithCredentialRevision } = await import(profilesUrl)
+  let config = upsertAIProfileWithCredentialRevision({}, {
+    id: 'profile-a',
+    nameAI: 'Relay',
+    apiKeyAI: 'sk-first',
+    baseURLAI: 'https://relay.example.com/v1'
+  }, () => 'revision-1')
+  assert.equal(config.credentialRevisionAI, 'revision-1')
+
+  config = upsertAIProfileWithCredentialRevision(config, {
+    ...config,
+    apiKeyAI: 'sk-second'
+  }, () => 'revision-2')
+  assert.equal(config.credentialRevisionAI, 'revision-2')
+  assert.equal(config.aiProfiles[0].credentialRevisionAI, 'revision-2')
+})
+test('a credential change keeps one revision from health check through status persistence', async () => {
+  const {
+    getAIStatusFingerprint,
+    upsertAIProfile,
+    withAICredentialRevision
+  } = await import(profilesUrl)
+  const previous = {
+    id: 'profile-a',
+    apiKeyAI: 'sk-old',
+    baseURLAI: 'https://relay.example.com/v1',
+    modelAI: 'model-a',
+    credentialRevisionAI: 'revision-old'
+  }
+  const config = {
+    ...previous,
+    activeAIProfileId: previous.id,
+    aiProfiles: [previous]
+  }
+  let revisionCount = 0
+  const createRevision = () => `revision-${++revisionCount}`
+  const checkedProfile = withAICredentialRevision({
+    ...previous,
+    apiKeyAI: 'sk-new'
+  }, previous, createRevision)
+  const checkedFingerprint = getAIStatusFingerprint(checkedProfile)
+  const saved = upsertAIProfile(config, {
+    ...checkedProfile,
+    aiStatus: 'available',
+    aiStatusFingerprint: checkedFingerprint
+  })
+  const repeatedCheck = withAICredentialRevision(
+    saved.aiProfiles[0],
+    saved.aiProfiles[0],
+    createRevision
+  )
+  const editedAgain = withAICredentialRevision({
+    ...repeatedCheck,
+    apiKeyAI: 'sk-newer'
+  }, saved.aiProfiles[0], createRevision)
+
+  assert.equal(repeatedCheck.credentialRevisionAI, checkedProfile.credentialRevisionAI)
+  assert.equal(saved.aiStatusFingerprint, getAIStatusFingerprint(saved))
+  assert.equal(revisionCount, 2)
+  assert.equal(editedAgain.credentialRevisionAI, 'revision-2')
+})
+test('AI profile request guard rejects stale edits and profile switches', async () => {
+  const { isAIProfileRequestCurrent } = await import(profilesUrl)
+  const requestProfile = {
+    id: 'profile-a',
+    activeAIProfileId: 'profile-a',
+    nameAI: 'Relay A',
+    baseURLAI: 'https://relay.example.com/v1',
+    apiPathAI: '/chat/completions',
+    apiKeyAI: 'request-secret',
+    authHeaderNameAI: 'Authorization: Bearer',
+    proxyAI: 'http://proxy.example.com',
+    modelAI: 'model-a',
+    credentialRevisionAI: 'revision-a'
+  }
+
+  assert.equal(isAIProfileRequestCurrent(requestProfile, requestProfile), true)
+  assert.equal(isAIProfileRequestCurrent(requestProfile, {
+    ...requestProfile,
+    apiKeyAI: 'edited-secret'
+  }), false)
+  assert.equal(isAIProfileRequestCurrent(requestProfile, {
+    ...requestProfile,
+    baseURLAI: 'https://other.example.com/v1'
+  }), false)
+  assert.equal(isAIProfileRequestCurrent(requestProfile, {
+    ...requestProfile,
+    modelAI: 'model-b'
+  }), false)
+  assert.equal(isAIProfileRequestCurrent(requestProfile, {
+    ...requestProfile,
+    id: 'profile-b',
+    activeAIProfileId: 'profile-b'
+  }), false)
+  assert.equal(isAIProfileRequestCurrent(requestProfile, {
+    ...requestProfile,
+    credentialRevisionAI: 'revision-b'
+  }), false)
 })

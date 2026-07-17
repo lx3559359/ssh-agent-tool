@@ -8,8 +8,15 @@ import AiHistoryItem from './ai-history-item'
 
 const MAX_HISTORY = 20
 
-export function getHistory (storageKey) {
-  return safeGetItemJSON(storageKey, [])
+export function getHistory (storageKey, sanitizeHistory) {
+  const history = safeGetItemJSON(storageKey, [])
+  if (typeof sanitizeHistory !== 'function') return history
+  const safeHistory = sanitizeHistory(history)
+  const normalized = Array.isArray(safeHistory) ? safeHistory : []
+  if (JSON.stringify(normalized) !== JSON.stringify(history)) {
+    safeSetItemJSON(storageKey, normalized)
+  }
+  return normalized
 }
 
 export function addHistoryItem (storageKey, itemData, eventName) {
@@ -44,11 +51,11 @@ export function addHistoryItem (storageKey, itemData, eventName) {
 }
 
 export default function AiHistory (props) {
-  const { onSelect, storageKey, eventName, renderItem } = props
+  const { onSelect, storageKey, eventName, renderItem, sanitizeHistory } = props
   const [history, setHistory] = useState([])
 
   const loadHistory = () => {
-    setHistory(getHistory(storageKey))
+    setHistory(getHistory(storageKey, sanitizeHistory))
   }
 
   useEffect(() => {
@@ -59,7 +66,7 @@ export default function AiHistory (props) {
         window.removeEventListener(eventName, loadHistory)
       }
     }
-  }, [storageKey, eventName])
+  }, [storageKey, eventName, sanitizeHistory])
 
   const handleDelete = (item, event) => {
     event.preventDefault()

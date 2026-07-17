@@ -214,6 +214,117 @@ test('local CLI runner uses execFile without shell and returns bounded output', 
   assert.equal(result.stdout.length <= 12000, true)
 })
 
+test('local CLI runner never echoes sensitive argument values in its result', async () => {
+  const {
+    createLocalCliRunner
+  } = require(localCliPath)
+  const runner = createLocalCliRunner({
+    execFileImpl: (file, args, options, callback) => {
+      callback(null, 'ok\n', '')
+    }
+  })
+
+  const result = await runner({
+    tool: 'curl',
+    args: [
+      '--api-key',
+      'plain-secret-value',
+      '--authorization=Bearer inline-secret-value',
+      '--url',
+      'https://example.com'
+    ]
+  })
+
+  assert.deepEqual(result.args, [
+    '--api-key',
+    '[REDACTED]',
+    '--authorization=[REDACTED]',
+    '--url',
+    'https://example.com'
+  ])
+  assert.doesNotMatch(JSON.stringify(result), /plain-secret-value|inline-secret-value/)
+})
+
+test('local CLI runner exposes a request-scoped process cancellation handle', async () => {
+  const {
+    cancelLocalCli,
+    createLocalCliRunner
+  } = require(localCliPath)
+  let finish
+  let killedWith = ''
+  const runner = createLocalCliRunner({
+    execFileImpl: (file, args, options, callback) => {
+      finish = callback
+      return {
+        kill: signal => {
+          killedWith = signal
+          const error = new Error('cancelled')
+          error.signal = signal
+          finish(error, '', '')
+          return true
+        }
+      }
+    }
+  })
+  const pending = runner({
+    tool: 'ping',
+    args: ['127.0.0.1'],
+    requestId: 'local-cli-cancel-test'
+  })
+
+  assert.deepEqual(cancelLocalCli('local-cli-cancel-test'), {
+    success: true,
+    requestId: 'local-cli-cancel-test'
+  })
+  const result = await pending
+  assert.equal(killedWith, 'SIGTERM')
+  assert.equal(result.ok, false)
+})
+
+test('local CLI cancellation survives the Codex resolver startup window', async () => {
+  const {
+    cancelLocalCli,
+    createLocalCliRunner
+  } = require(localCliPath)
+  const calls = []
+  let releaseLocator
+  const runner = createLocalCliRunner({
+    platform: 'win32',
+    execFileImpl: (file, args, options, callback) => {
+      calls.push({ file, args })
+      if (file === 'where.exe') {
+        releaseLocator = () => callback(null, 'C:\\Tools\\codex.exe\n', '')
+        return { kill: () => true }
+      }
+      if (args[0] === '--version') {
+        callback(null, 'codex-cli 1.0.0\n', '')
+        return { kill: () => true }
+      }
+      callback(null, 'must not run\n', '')
+      return { kill: () => true }
+    }
+  })
+
+  const pending = runner({
+    tool: 'codex',
+    args: ['exec', 'diagnose'],
+    requestId: 'local-cli-resolver-cancel-test'
+  })
+  await Promise.resolve()
+
+  assert.deepEqual(cancelLocalCli('local-cli-resolver-cancel-test'), {
+    success: true,
+    pending: true,
+    requestId: 'local-cli-resolver-cancel-test'
+  })
+  releaseLocator()
+
+  const result = await pending
+  assert.equal(result.ok, false)
+  assert.equal(result.cancelled, true)
+  assert.equal(calls.some(call => call.args[0] === 'exec'), false)
+})
+
 test('Agent local CLI tool requires user confirmation before execution', async () => {
   const {
     confirmAgentToolExecution
@@ -278,6 +389,7 @@ test('main process exposes runLocalCli through the async IPC allowlist', () => {
   assert.match(source, /getAllowedLocalCliTools/)
   assert.match(source, /getCodexCliStatus/)
   assert.match(source, /const \{ runLocalCli \} = require\('\.\/local-cli'\)/)
+  assert.match(source, /cancelLocalCli/)
 })
 
 test('AI chat exposes a usable local CLI context action', async () => {

@@ -16,7 +16,7 @@ import {
 
 const e = window.translate
 
-export default function AIOutput ({ item }) {
+export default function AIOutput ({ item, isStreaming = false }) {
   const outputRef = useRef(null)
   const runningCommandsRef = useRef(new Set())
   const {
@@ -126,7 +126,13 @@ export default function AIOutput ({ item }) {
     <div className='ai-stream-output' ref={outputRef}>
       <div className='pd1'>
         {renderBrand()}
-        <ReactMarkdown {...mdProps} />
+        {isStreaming
+          ? (
+            <pre className='ai-stream-plain-output'>{response}</pre>
+            )
+          : (
+            <ReactMarkdown {...mdProps} />
+            )}
       </div>
     </div>
   )

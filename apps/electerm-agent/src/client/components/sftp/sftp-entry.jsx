@@ -469,15 +469,33 @@ export default class Sftp extends Component {
     await func(p).catch(window.store.onError)
   }
 
-  confirmDelete = (files) => {
+  confirmDelete = (files, { signal } = {}) => {
     return new Promise((resolve) => {
-      Modal.confirm({
+      let settled = false
+      const modalRef = { current: null }
+      const settle = (value) => {
+        if (settled) return
+        settled = true
+        signal?.removeEventListener('abort', onAbort)
+        resolve(value)
+      }
+      const onAbort = () => {
+        modalRef.current?.destroy()
+        settle(false)
+      }
+      if (signal?.aborted) {
+        settle(false)
+        return
+      }
+      signal?.addEventListener('abort', onAbort, { once: true })
+      modalRef.current = Modal.confirm({
         title: this.renderDelConfirmTitle(files),
         okText: e('ok'),
         cancelText: e('cancel'),
-        onOk: () => resolve(true),
-        onCancel: () => resolve(false)
+        onOk: () => settle(true),
+        onCancel: () => settle(false)
       })
+      if (signal?.aborted) onAbort()
     })
   }
 
@@ -560,7 +578,8 @@ export default class Sftp extends Component {
     type,
     requestedMode,
     expected,
-    title
+    title,
+    signal
   }) => {
     const request = buildSideEffectSafetyRequest({
       id: `sftp-${action}-${Date.now()}-${generate()}`,
@@ -578,6 +597,7 @@ export default class Sftp extends Component {
       },
       metadata: { sftpSafetyTransaction: true }
     })
+    request.signal = signal
     return this.sftpSafetyRunner.prepare(request)
   }
 
@@ -699,23 +719,28 @@ export default class Sftp extends Component {
     return result
   }
 
-  deleteRemoteFilesWithSafety = async (files) => {
+  deleteRemoteFilesWithSafety = async (files, options = {}) => {
     if (this.props.isFtp) {
-      const confirmed = await this.confirmDelete(files)
-      if (!confirmed) return false
-      for (const file of files) await this.remoteDel(file)
+      const confirmed = await this.confirmDelete(files, { signal: options.signal })
+      if (!confirmed || options.signal?.aborted) return false
+      for (const file of files) {
+        if (options.signal?.aborted) return false
+        await this.remoteDel(file)
+      }
       return true
     }
     const operations = []
     try {
       for (const file of this.getRemoteSafetyTargets(files)) {
+        if (options.signal?.aborted) break
         const source = resolve(file.path, file.name)
         operations.push(await this.prepareSftpSafetyOperation({
           action: 'delete',
           paths: { source },
           type: file.isDirectory ? 'directory' : 'file',
           expected: { absent: true },
-          title: 'SFTP 删除'
+          title: 'SFTP 删除',
+          signal: options.signal
         }))
       }
     } catch (error) {
@@ -725,15 +750,39 @@ export default class Sftp extends Component {
       throw error
     }
     if (!operations.length) return false
-    const confirmed = await this.confirmDelete(files)
-    if (!confirmed) {
+    if (options.signal?.aborted) {
       await Promise.allSettled(operations.map(operation => (
         this.sftpSafetyRunner.cancel(operation.id)
       )))
       return false
     }
-    for (const operation of operations) {
-      await this.sftpSafetyRunner.execute(operation.id, { confirmed: true })
+    const confirmed = await this.confirmDelete(files, { signal: options.signal })
+    if (!confirmed || options.signal?.aborted) {
+      await Promise.allSettled(operations.map(operation => (
+        this.sftpSafetyRunner.cancel(operation.id)
+      )))
+      return false
+    }
+    for (let index = 0; index < operations.length; index += 1) {
+      const operation = operations[index]
+      if (options.signal?.aborted) {
+        await Promise.allSettled(operations.slice(index).map(pending => (
+          this.sftpSafetyRunner.cancel(pending.id)
+        )))
+        return false
+      }
+      try {
+        await this.sftpSafetyRunner.execute(operation.id, {
+          confirmed: true,
+          signal: options.signal
+        })
+      } catch (error) {
+        if (!options.signal?.aborted && error?.name !== 'AbortError') throw error
+        await Promise.allSettled(operations.slice(index).map(pending => (
+          this.sftpSafetyRunner.cancel(pending.id)
+        )))
+        return false
+      }
     }
     message.success(`已删除 ${operations.length} 项，恢复快照仍保留在安全操作中心。`)
     return true
@@ -840,12 +889,12 @@ export default class Sftp extends Component {
     this.quickBackupRemoteFiles()
   }
 
-  delFiles = async (_type, files = this.getSelectedFiles()) => {
+  delFiles = async (_type, files = this.getSelectedFiles(), options = {}) => {
     const type = files[0]?.type || _type
     if (type === typeMap.remote) {
       this.onDelete = true
       try {
-        const deleted = await this.deleteRemoteFilesWithSafety(files)
+        const deleted = await this.deleteRemoteFilesWithSafety(files, options)
         if (!deleted) return false
       } catch (err) {
         window.store.onError(err)

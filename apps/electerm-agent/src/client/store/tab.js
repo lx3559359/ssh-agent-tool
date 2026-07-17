@@ -17,6 +17,10 @@ import generate from '../common/id-with-stamp'
 import uid from '../common/uid'
 import newTerm, { updateCount } from '../common/new-terminal.js'
 import { action } from 'manate'
+import {
+  beginTerminalWorkspaceIntent,
+  isFleetStatusActive
+} from '../components/fleet-status/fleet-status-navigation'
 
 export default Store => {
   Store.prototype.nextTabCount = function () {
@@ -137,6 +141,7 @@ export default Store => {
 
   Store.prototype.duplicateTab = function (tabId) {
     const { store } = window
+    beginTerminalWorkspaceIntent(store)
     const { tabs } = store
 
     // Find the target tab and its index
@@ -312,6 +317,7 @@ export default Store => {
 
   Store.prototype.clickTab = function (id, batch) {
     const { store } = window
+    beginTerminalWorkspaceIntent(store)
 
     // Update current batch
     store.currentLayoutBatch = batch
@@ -328,6 +334,8 @@ export default Store => {
     index,
     batch
   ) {
+    const { store } = window
+    beginTerminalWorkspaceIntent(store)
     if (
       (!newTab.type || newTab.type === 'local') &&
       !newTab.host &&
@@ -340,7 +348,6 @@ export default Store => {
         'local terminal is not supported, due to node-pty not working in this build'
       )
     }
-    const { store } = window
     const { tabs } = store
     newTab.tabCount = store.nextTabCount()
     newTab.batch = batch ?? newTab.batch ?? window.openTabBatch ?? window.store.currentLayoutBatch
@@ -385,16 +392,7 @@ export default Store => {
     return window.store.addTab(safeTab)
   }
 
-  Store.prototype.clickNextTab = debounce(function () {
-    window.store.clickBioTab(1)
-  }, 100)
-
-  Store.prototype.clickPrevTab = debounce(function () {
-    window.store.clickBioTab(-1)
-  }, 100)
-
-  Store.prototype.clickBioTab = function (diff) {
-    const { store } = window
+  const switchRelativeTab = function (store, diff) {
     const { tabs, activeTabId } = store
 
     // Find the current tab index and its batch
@@ -428,11 +426,68 @@ export default Store => {
     }
   }
 
+  const shouldRestoreKeyboardTerminalFocus = function (store, focusOrigin) {
+    const document = window.document
+    if (!document || store.showModal) {
+      return false
+    }
+    const originCanYieldToTerminal = (
+      focusOrigin === document.body ||
+      focusOrigin?.classList?.contains('fleet-status-workspace')
+    )
+    const focusWasNotReclaimed = (
+      !document.activeElement ||
+      document.activeElement === focusOrigin ||
+      document.activeElement === document.body
+    )
+    return originCanYieldToTerminal && focusWasNotReclaimed
+  }
+
+  const completeKeyboardTabNavigation = function (diff, focusOrigin) {
+    const { store } = window
+    switchRelativeTab(store, diff)
+    if (
+      !isFleetStatusActive(store) &&
+      shouldRestoreKeyboardTerminalFocus(store, focusOrigin)
+    ) {
+      store.focus()
+    }
+  }
+
+  const clickNextTab = debounce(function (focusOrigin) {
+    completeKeyboardTabNavigation(1, focusOrigin)
+  }, 100)
+
+  const clickPrevTab = debounce(function (focusOrigin) {
+    completeKeyboardTabNavigation(-1, focusOrigin)
+  }, 100)
+
+  Store.prototype.clickNextTab = function () {
+    const { store } = window
+    const focusOrigin = window.document?.activeElement
+    beginTerminalWorkspaceIntent(store)
+    clickNextTab(focusOrigin)
+  }
+
+  Store.prototype.clickPrevTab = function () {
+    const { store } = window
+    const focusOrigin = window.document?.activeElement
+    beginTerminalWorkspaceIntent(store)
+    clickPrevTab(focusOrigin)
+  }
+
+  Store.prototype.clickBioTab = function (diff) {
+    const { store } = window
+    beginTerminalWorkspaceIntent(store)
+    return switchRelativeTab(store, diff)
+  }
+
   Store.prototype.cloneToNextLayout = function (tab = window.store.currentTab) {
+    const { store } = window
+    beginTerminalWorkspaceIntent(store)
     if (!tab) {
       return
     }
-    const { store } = window
     const defaultStatus = statusMap.processing
     const { layout, currentLayoutBatch } = store
     const ntb = deepCopy(tab)
@@ -501,9 +556,11 @@ export default Store => {
     if (!tab) {
       return
     }
+    beginTerminalWorkspaceIntent(store)
     store.activeTabId = id
     store[`activeTabId${tab.batch}`] = id
     store.focus()
+    return tab
   }
 
   Store.prototype.updateHistory = function (tab) {

@@ -13,6 +13,7 @@ import { initWsCommon } from '../common/fetch-from-server'
 import safeParse from '../common/parse-json-safe'
 import initWatch from './watch'
 import { parseQuickConnect } from '../common/parse-quick-connect'
+import { sanitizeAIChatHistory } from '../components/ai/ai-request-credentials'
 
 function getHost (argv, opts) {
   const arr = argv
@@ -203,7 +204,9 @@ export default (Store) => {
                 dt.map(d => [d.id, d])
               )
             }
-            ext[name] = dt
+            ext[name] = name === 'aiChatHistory'
+              ? sanitizeAIChatHistory(dt)
+              : dt
           }
         })
       ext.lastDataUpdateTime = await getData('lastDataUpdateTime') || 0

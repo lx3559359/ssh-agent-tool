@@ -12,6 +12,10 @@ import {
 import { refs, refsStatic } from '../common/ref'
 import keyControlPressed from '../../common/key-control-pressed'
 import keyPressed from '../../common/key-pressed'
+import {
+  dispatchAiChatShortcut,
+  isFleetStatusActive
+} from '../fleet-status/fleet-status-navigation'
 
 function isInputActive () {
   const activeElement = document.activeElement
@@ -31,6 +35,11 @@ class ShortcutControl extends React.PureComponent {
   }
 
   onEvent = (e) => {
+    if (isFleetStatusActive(window.store)) {
+      this.handleKeyboardEvent(e)
+      this.handleAiChat(e)
+      return
+    }
     // First check SFTP shortcuts
     this.handleSftpKeyboardEvent(e)
     // Then handle extended shortcuts
@@ -48,21 +57,12 @@ class ShortcutControl extends React.PureComponent {
 
   handleAiChat = (e) => {
     const { rightPanelTab } = window.store
-    if (rightPanelTab !== 'ai') {
-      return
-    }
-    const elem = document.activeElement
-    if (
-      e.ctrlKey &&
-      e.key === 'Enter' &&
-      !e.shiftKey &&
-      !e.altKey &&
-      !e.metaKey &&
-      elem?.tagName === 'TEXTAREA' &&
-      elem?.classList.contains('ai-chat-textarea')
-    ) {
-      refsStatic.get('AIChat')?.handleSubmit()
-    }
+    return dispatchAiChatShortcut({
+      event: e,
+      rightPanelTab,
+      activeElement: document.activeElement,
+      submit: () => refsStatic.get('AIChat')?.handleSubmit()
+    })
   }
 
   // SFTP shortcuts handler

@@ -54,6 +54,7 @@ export default () => {
     lastDataUpdateTime: 0,
     tabs: [],
     activeTabId: '',
+    mainWorkspaceMode: 'terminal',
     history: [],
     sshConfigs: [],
     bookmarks: [],
