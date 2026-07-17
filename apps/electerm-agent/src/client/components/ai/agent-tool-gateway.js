@@ -65,7 +65,15 @@ export async function executeAgentTool ({
     resolveEndpoint,
     registry,
     risk: risky,
-    prepare: risky ? prepareRisky : undefined,
+    prepare: risky && typeof prepareRisky === 'function'
+      ? () => prepareRisky({
+          classification,
+          endpoint: currentEndpoint,
+          descriptor: resolvedDescriptor,
+          args,
+          expandedContent
+        })
+      : undefined,
     execute
   })
 }

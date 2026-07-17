@@ -108,16 +108,27 @@ test('gateway sends readonly directly and prepares risky work', async () => {
     const registry = await activeRegistry()
     let prepares = 0
     let executions = 0
+    let preparedValue
+    let executePreparation
     await executeAgentTool({
       toolName,
       args,
       endpoint: endpoint(),
       resolveEndpoint: endpoint,
       registry,
-      prepareRisky: async () => { prepares += 1 },
-      execute: async () => { executions += 1 }
+      prepareRisky: async context => {
+        prepares += 1
+        assert.equal(context.descriptor.name, toolName)
+        preparedValue = { frozen: true }
+        return preparedValue
+      },
+      execute: async (_endpoint, preparation) => {
+        executions += 1
+        executePreparation = preparation
+      }
     })
     assert.equal(prepares, expectedPrepare, toolName)
     assert.equal(executions, 1, toolName)
+    assert.equal(executePreparation, expectedPrepare ? preparedValue : undefined)
   }
 })

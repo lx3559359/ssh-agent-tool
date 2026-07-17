@@ -556,7 +556,7 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
   const renderRecord = record => {
     if (record.recordType !== 'task') return renderOperation(record)
     const capability = getTaskCancelCapability(record)
-    return (
+    const taskProgress = (
       <SafetyTaskProgress
         key={record.id}
         task={record}
@@ -565,6 +565,9 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
         onCancel={() => handleSafetyAction(record, 'cancel')}
       />
     )
+    return record.riskTransaction
+      ? <div className='safety-center-agent-risk-record'>{taskProgress}</div>
+      : taskProgress
   }
 
   const tabItems = [

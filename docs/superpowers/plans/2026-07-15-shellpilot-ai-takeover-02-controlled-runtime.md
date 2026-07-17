@@ -224,15 +224,15 @@ git commit -m "feat: bind risky agent plans to immutable grants"
 - Create: `apps/electerm-agent/test/unit-ci/agent-risk-transaction.spec.js`
 - Create: `apps/electerm-agent/test/unit-ci/agent-risk-confirmation-ui.spec.js`
 
-- [ ] **Step 1: 写入事务合并边界失败测试**
+- [x] **Step 1: 写入事务合并边界失败测试**
 
 Assert steps combine only when endpoint, goal, ordered impact scope, recovery and verification are all compatible. Assert different endpoints, reordered calls, new targets, irreversible intermediate effects or changed scripts produce separate transactions and invalidate any prior confirmation.
 
-- [ ] **Step 2: 写入弹窗完整性失败测试**
+- [x] **Step 2: 写入弹窗完整性失败测试**
 
 The rendered transaction fixture must show target host/port/user/fingerprint/session, purpose, full commands, script entry, affected objects, worst case, estimated CPU/memory/disk/network/duration or `unknown`, disconnect possibility, verified recovery point, rollback limits, verification and cancellation behavior.
 
-- [ ] **Step 3: 运行测试并确认失败**
+- [x] **Step 3: 运行测试并确认失败**
 
 ```powershell
 node --test test/unit-ci/agent-risk-transaction.spec.js test/unit-ci/agent-risk-confirmation-ui.spec.js
@@ -240,15 +240,15 @@ node --test test/unit-ci/agent-risk-transaction.spec.js test/unit-ci/agent-risk-
 
 Expected: grouping and modal modules are absent.
 
-- [ ] **Step 4: 实现纯事务构建器**
+- [x] **Step 4: 实现纯事务构建器**
 
 `buildRiskTransaction(calls, context)` returns a deeply frozen object and rejects empty, blocked or unauditable calls. Prepare and verify recovery points through existing safety transaction providers before enabling the confirm button. When impact cannot be estimated, render `unknown`; do not omit the row.
 
-- [ ] **Step 5: 实现确认/取消行为**
+- [x] **Step 5: 实现确认/取消行为**
 
 Confirm creates the plan grant and dispatches the frozen transaction. Cancel writes an audit event and executes zero transaction steps. While the modal is open, Agent may explain the plan but cannot mutate it. Integrate records into the existing safety operation center instead of creating a separate history screen.
 
-- [ ] **Step 6: 运行测试并提交**
+- [x] **Step 6: 运行测试并提交**
 
 ```powershell
 node --test test/unit-ci/agent-risk-transaction.spec.js test/unit-ci/agent-risk-confirmation-ui.spec.js test/unit-ci/safety-operation-center*.spec.js

@@ -1,7 +1,6 @@
 import { z } from '../../common/zod'
 import { bookmarkSchemas } from '../../common/bookmark-schemas'
 import {
-  confirmAgentToolExecution,
   isAgentCommandTool
 } from './agent-tool-confirm'
 import { runAgentTerminalCommand } from './agent-terminal-command.js'
@@ -27,6 +26,13 @@ import {
 import {
   allowedLocalCliTools
 } from './agent-local-cli-tools'
+import { classifyCommand } from '../../common/safety-transactions/command-classifier.js'
+import {
+  buildRiskTransaction,
+  confirmRiskTransaction,
+  settleRiskTransactionTask
+} from './agent-risk-transaction.js'
+import { requestAgentRiskConfirmation } from './agent-risk-confirmation-modal.jsx'
 
 function createAgentOperationId (prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`
@@ -592,20 +598,84 @@ export function getAgentToolDescriptor (toolName) {
   return descriptor
 }
 
-async function prepareResolvedAgentTool (toolName, args, runtime) {
-  if (!isAgentCommandTool(toolName)) return undefined
-  const planGuard = await ensureAgentPlanConfirmed({ toolName, args, runtime })
-  if (planGuard) {
-    return { handled: true, result: JSON.stringify(planGuard) }
+function affectedObjectsFor (toolName, args, runtime) {
+  const planned = runtime.planGrant?.payload?.impactTargets
+  if (Array.isArray(planned) && planned.length) return planned
+  return [
+    args.remotePath && `remote-path:${args.remotePath}`,
+    args.localPath && `local-path:${args.localPath}`,
+    args.taskId && `background-task:${args.taskId}`,
+    args.tabId && `session:${args.tabId}`,
+    toolName
+  ].filter(Boolean)
+}
+
+function recoveryFor (toolName, args) {
+  if (!isAgentCommandTool(toolName)) {
+    return {
+      type: toolName.startsWith('sftp_') ? 'sftp' : 'none',
+      verified: false,
+      strategyVerified: toolName === 'sftp_del',
+      limits: 'The underlying safety provider determines exact rollback availability.'
+    }
   }
-  const confirmation = await confirmAgentToolExecution({
-    toolName,
+  const classification = classifyCommand(
+    toolName === 'run_local_cli'
+      ? [args.tool, ...(args.args || [])].filter(Boolean).join(' ')
+      : args.command
+  )
+  return {
+    type: classification.provider || 'none',
+    verified: false,
+    strategyVerified: classification.reversible === true,
+    limits: classification.reversible
+      ? 'The underlying safety provider creates and verifies the exact recovery point before terminal release.'
+      : 'No automatic rollback is promised; the operation is dispatched at most once.'
+  }
+}
+
+async function prepareResolvedAgentTool (toolName, args, runtime, context = {}) {
+  if (isAgentCommandTool(toolName)) {
+    const planGuard = await ensureAgentPlanConfirmed({ toolName, args, runtime })
+    if (planGuard) {
+      return { handled: true, result: JSON.stringify(planGuard) }
+    }
+  }
+  const recovery = recoveryFor(toolName, args)
+  const transaction = buildRiskTransaction([{
+    name: toolName,
     args,
-    signal: runtime.signal
+    descriptor: context.descriptor,
+    expandedContent: context.expandedContent,
+    scriptEntry: args.scriptEntry || null
+  }], {
+    endpoint: context.endpoint,
+    goal: runtime.planGrant?.payload?.goal || `Agent ${toolName}`,
+    purpose: runtime.planGrant?.payload?.goal || `Execute ${toolName}`,
+    affectedObjects: affectedObjectsFor(toolName, args, runtime),
+    worstCase: context.classification?.reasonCode || 'unknown',
+    resourceImpact: context.classification?.resourceImpact,
+    disconnectPossible: /(?:network|firewall|restart|reboot|shutdown)/i.test(
+      String(args.command || toolName)
+    ),
+    recovery,
+    rollbackLimits: recovery.limits,
+    verification: runtime.planGrant?.payload?.verification || [],
+    skillBindings: runtime.planGrant?.payload?.skillBindings || [],
+    artifactDigests: runtime.planGrant?.payload?.artifactDigests || []
+  })
+  const confirmation = await confirmRiskTransaction(transaction, {
+    confirm: frozen => requestAgentRiskConfirmation(frozen, {
+      signal: runtime.signal
+    })
   })
   assertAgentRuntimeActive(runtime)
   return confirmation.accepted
-    ? undefined
+    ? {
+        riskTransaction: transaction,
+        riskTaskId: confirmation.taskId,
+        riskPlanGrant: confirmation.planGrant
+      }
     : { handled: true, result: JSON.stringify(confirmation) }
 }
 
@@ -783,12 +853,55 @@ export async function executeToolCall (toolName, rawArgs, runtime = {}) {
     }),
     registry: runtime.takeoverRegistry,
     expandedContent: args.script || args.expandedContent,
-    prepareRisky: () => prepareResolvedAgentTool(toolName, args, runtime),
-    execute: verifiedEndpoint => executeResolvedAgentTool(
+    prepareRisky: context => prepareResolvedAgentTool(
       toolName,
       args,
       runtime,
-      verifiedEndpoint
-    )
+      context
+    ),
+    execute: async (verifiedEndpoint, preparation) => {
+      try {
+        const result = await executeResolvedAgentTool(
+          toolName,
+          args,
+          runtime,
+          verifiedEndpoint
+        )
+        if (preparation?.riskTaskId) {
+          let parsed
+          try {
+            parsed = JSON.parse(result)
+          } catch {}
+          const status = parsed?.cancelled === true
+            ? 'cancelled'
+            : parsed?.success === false
+              ? 'failed'
+              : 'completed'
+          try {
+            await settleRiskTransactionTask({
+              taskId: preparation.riskTaskId,
+              status,
+              error: status === 'failed' ? parsed?.message : undefined
+            })
+          } catch (error) {
+            window.store?.onError?.(error)
+          }
+        }
+        return result
+      } catch (error) {
+        if (preparation?.riskTaskId) {
+          try {
+            await settleRiskTransactionTask({
+              taskId: preparation.riskTaskId,
+              status: 'failed',
+              error
+            })
+          } catch (settleError) {
+            window.store?.onError?.(settleError)
+          }
+        }
+        throw error
+      }
+    }
   })
 }

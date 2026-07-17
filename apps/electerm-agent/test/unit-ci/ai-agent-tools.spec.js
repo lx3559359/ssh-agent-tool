@@ -48,15 +48,16 @@ test('Agent command confirmation allows terminal execution only after approval',
   assert.equal(result.cancelled, false)
 })
 
-test('Agent tool execution routes command tools through user confirmation', () => {
+test('Agent tool execution routes risky tools through frozen transaction confirmation', () => {
   const source = fs.readFileSync(
     path.resolve(__dirname, '../../src/client/components/ai/agent-tools.js'),
     'utf8'
   )
 
-  assert.match(source, /confirmAgentToolExecution/)
-  assert.match(source, /prepareResolvedAgentTool[\s\S]*confirmAgentToolExecution/)
-  assert.match(source, /prepareRisky:\s*\(\)\s*=>\s*prepareResolvedAgentTool/)
+  assert.match(source, /buildRiskTransaction/)
+  assert.match(source, /confirmRiskTransaction/)
+  assert.match(source, /requestAgentRiskConfirmation/)
+  assert.match(source, /prepareRisky:\s*context\s*=>\s*prepareResolvedAgentTool/)
   assert.match(source, /executeAgentTool\(\{/)
 })
 
