@@ -17,7 +17,23 @@ export function AgentRiskConfirmationContent ({ transaction }) {
     ].join(' | ')
     const purpose = textOrUnknown(transaction.purpose)
     const fullCommands = transaction.calls.map(call => textOrUnknown(call.command || call.name))
-    const scriptEntries = transaction.calls.map(call => call.scriptEntry).filter(Boolean)
+    const skillArtifacts = transaction.calls
+      .filter(call => call.skillArtifact)
+      .map(call => ({
+        skillId: call.skillArtifact.skillId,
+        artifactId: call.skillArtifact.id,
+        path: call.skillArtifact.path,
+        target: call.skillArtifact.target,
+        interpreter: call.skillArtifact.interpreter,
+        packageDigest: call.skillArtifact.packageDigest,
+        fileDigest: call.skillArtifact.fileDigest,
+        arguments: call.skillArtifact.arguments || [],
+        requestedPermissions: call.skillArtifact.requestedPermissions || [],
+        content: textOrUnknown(call.expandedContent)
+      }))
+    const scriptEntries = transaction.calls
+      .map(call => call.scriptEntry || call.skillArtifact?.path)
+      .filter(Boolean)
     const affectedObjects = transaction.affectedObjects.length
       ? transaction.affectedObjects
       : ['unknown']
@@ -35,6 +51,7 @@ export function AgentRiskConfirmationContent ({ transaction }) {
       purpose,
       fullCommands,
       scriptEntries,
+      skillArtifacts,
       affectedObjects,
       worstCase,
       resourceImpact,
@@ -59,6 +76,18 @@ export function AgentRiskConfirmationContent ({ transaction }) {
         <dt>目的</dt><dd>{details.purpose}</dd>
         <dt>完整命令</dt><dd>{details.fullCommands.map(command => <pre key={command}>{command}</pre>)}</dd>
         <dt>脚本入口</dt><dd>{details.scriptEntries.length ? details.scriptEntries.join(', ') : 'unknown'}</dd>
+        {details.skillArtifacts.length > 0 && (
+          <>
+            <dt>Skill 脚本完整内容</dt>
+            <dd>{details.skillArtifacts.map(artifact => (
+              <div key={`${artifact.skillId}:${artifact.artifactId}:${artifact.fileDigest}`}>
+                <pre>{JSON.stringify({ ...artifact, content: undefined }, null, 2)}</pre>
+                <pre>{artifact.content}</pre>
+              </div>
+            ))}
+            </dd>
+          </>
+        )}
         <dt>影响对象</dt><dd>{details.affectedObjects.join(', ')}</dd>
         <dt>最坏结果</dt><dd>{details.worstCase}</dd>
         <dt>资源影响</dt>

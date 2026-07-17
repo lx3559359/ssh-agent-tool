@@ -2,6 +2,7 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const path = require('node:path')
 const fs = require('node:fs')
+const { spawnSync } = require('node:child_process')
 const { pathToFileURL } = require('node:url')
 
 const executionModuleUrl = pathToFileURL(path.resolve(
@@ -52,7 +53,10 @@ function metadata (overrides = {}) {
   }
 }
 
-function clientFor (getCurrentMetadata = () => metadata()) {
+function clientFor (
+  getCurrentMetadata = () => metadata(),
+  content = 'systemctl status nginx\n'
+) {
   const calls = []
   return {
     calls,
@@ -64,7 +68,7 @@ function clientFor (getCurrentMetadata = () => metadata()) {
       calls.push(['read', id, relativePath])
       return {
         path: relativePath,
-        content: 'systemctl status nginx\n',
+        content,
         digest: fileDigest
       }
     }
@@ -126,12 +130,46 @@ test('remote artifact arguments cannot expand shell variables or substitutions',
     client
   })
 
-  assert.match(call.args.command, /'\$\(touch \/tmp\/injected\)'/)
-  assert.match(call.args.command, /'`id`'/)
-  assert.match(call.args.command, /'\$HOME'/)
-  assert.match(call.args.command, /'single'"'"'quote'/)
-  assert.match(call.args.command, /<<'SHELLPILOT_SKILL_b{16}'/)
-  assert.match(call.args.command, /systemctl status nginx/)
+  for (const raw of ['$(touch /tmp/injected)', '`id`', '$HOME', "single'quote"]) {
+    assert.equal(call.args.command.includes(raw), false)
+  }
+  assert.doesNotMatch(call.args.command, /<<|SHELLPILOT_SKILL/)
+  assert.match(call.args.command, /^bash -c '[^']+' '[A-Za-z0-9+/=]+'/)
+  assert.equal(call.args.command.includes(Buffer.from('systemctl status nginx\n').toString('base64')), true)
+})
+
+test('PowerShell remote artifacts survive an outer PowerShell command parser without here-doc syntax', {
+  skip: process.platform !== 'win32'
+}, async () => {
+  const { prepareSkillArtifactCall } = await import(executionModuleUrl)
+  const script = 'param([string]$Value)\nWrite-Output "skill:$Value"\n'
+  const powershellMetadata = metadata({
+    riskSummary: {
+      scripts: [{
+        id: 'collect-evidence',
+        path: 'scripts/collect-evidence.ps1',
+        interpreter: 'powershell',
+        target: 'remote'
+      }]
+    }
+  })
+  const call = await prepareSkillArtifactCall({
+    skillBinding: { id: 'inspect-web-service', version: '1.0.0', digest: packageDigest },
+    artifactId: 'collect-evidence',
+    args: ['literal $HOME `id`'],
+    endpoint,
+    client: clientFor(() => powershellMetadata, script)
+  })
+
+  assert.doesNotMatch(call.args.command, /<</)
+  const result = spawnSync('powershell.exe', [
+    '-NoProfile',
+    '-NonInteractive',
+    '-Command',
+    call.args.command
+  ], { encoding: 'utf8', timeout: 15000 })
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(result.stdout, /skill:literal \$HOME `id`/)
 })
 
 test('production selection resolver accepts only a digest-bound selected Skill', async () => {

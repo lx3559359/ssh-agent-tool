@@ -14,6 +14,7 @@ test('risk confirmation modal renders every required authorization detail', () =
     'purpose',
     'fullCommands',
     'scriptEntries',
+    'skillArtifacts',
     'affectedObjects',
     'worstCase',
     'resourceImpact',

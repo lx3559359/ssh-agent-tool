@@ -234,6 +234,16 @@ async function validateSkillPackage (root, options = {}) {
         continue
       }
       const content = await fsp.readFile(artifact.fullPath, 'utf8')
+      const remoteLimit = ['powershell', 'pwsh'].includes(entry.interpreter)
+        ? 5 * 1024
+        : 16 * 1024
+      if (entry.target === 'remote' && Buffer.byteLength(content, 'utf8') > remoteLimit) {
+        errors.push(validationIssue(
+          'SKILL_REMOTE_SCRIPT_TOO_LARGE',
+          `Remote ${entry.interpreter} script exceeds the ${remoteLimit}-byte cross-shell transport limit.`,
+          relativePath
+        ))
+      }
       const unsafePatterns = scanScript(content)
       if (unsafePatterns.length) {
         errors.push(validationIssue('SKILL_SCRIPT_UNSAFE', `Script uses blocked patterns: ${unsafePatterns.join(', ')}.`, relativePath))

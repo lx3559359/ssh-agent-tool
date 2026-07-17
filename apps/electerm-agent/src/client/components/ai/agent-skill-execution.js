@@ -79,33 +79,101 @@ function findArtifact (metadata, artifactId) {
   return artifact
 }
 
-function posixShellQuote (value) {
-  return `'${String(value).replace(/'/g, '\u0027"\u0027"\u0027')}'`
+function utf8Base64 (value) {
+  const bytes = new TextEncoder().encode(String(value ?? ''))
+  let binary = ''
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000))
+  }
+  return globalThis.btoa(binary)
 }
 
-function stdinInvocation (interpreter) {
-  if (interpreter === 'bash' || interpreter === 'sh') {
-    return `${interpreter} -s --`
+function encodedToken (value) {
+  return `'${utf8Base64(value)}'`
+}
+
+function utf16LeBase64 (value) {
+  const text = String(value ?? '')
+  const bytes = new Uint8Array(text.length * 2)
+  for (let index = 0; index < text.length; index++) {
+    const code = text.charCodeAt(index)
+    bytes[index * 2] = code & 0xff
+    bytes[index * 2 + 1] = code >>> 8
   }
-  if (interpreter === 'node') return 'node - --'
+  let binary = ''
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000))
+  }
+  return globalThis.btoa(binary)
+}
+
+function interpreterInvocation (interpreter) {
+  if (interpreter === 'bash') {
+    return {
+      prefix: 'bash -c',
+      // eslint-disable-next-line no-template-curly-in-string
+      wrapper: 'script_b64="$1"; shift; decoded=(); for item in "$@"; do value=$(printf %s "$item" | base64 -d) || exit 65; decoded+=("$value"); done; printf %s "$script_b64" | base64 -d | bash -s -- "${decoded[@]}"',
+      leadingArgs: [encodedToken('shellpilot-skill')]
+    }
+  }
+  if (interpreter === 'sh') {
+    return {
+      prefix: 'sh -c',
+      // eslint-disable-next-line no-template-curly-in-string
+      wrapper: 'script_b64="$1"; shift; tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/shellpilot-skill.XXXXXX") || exit 70; cleanup(){ rm -rf -- "$tmp_dir"; }; trap cleanup EXIT HUP INT TERM; index=0; for item in "$@"; do printf %s "$item" | base64 -d > "$tmp_dir/$index" || exit 65; index=$((index+1)); done; set --; cursor=0; while [ "$cursor" -lt "$index" ]; do value=$(cat "$tmp_dir/$cursor"; printf x); value=${value%x}; set -- "$@" "$value"; cursor=$((cursor+1)); done; printf %s "$script_b64" | base64 -d | sh -s -- "$@"',
+      leadingArgs: [encodedToken('shellpilot-skill')]
+    }
+  }
+  if (interpreter === 'node') {
+    return {
+      prefix: 'node -e',
+      wrapper: 'const [script,...args]=process.argv.slice(1).map(value=>Buffer.from(value,"base64").toString("utf8")); process.argv=["node","skill.js",...args]; require("vm").runInThisContext(script,{filename:"skill.js"})',
+      leadingArgs: []
+    }
+  }
   if (interpreter === 'python' || interpreter === 'python3') {
-    return `${interpreter} -`
-  }
-  if (interpreter === 'powershell' || interpreter === 'pwsh') {
-    return `${interpreter} -NoProfile -NonInteractive -File -`
+    return {
+      prefix: `${interpreter} -c`,
+      wrapper: 'import base64,sys; script=base64.b64decode(sys.argv[1]); sys.argv=["skill.py"]+[base64.b64decode(value).decode("utf-8") for value in sys.argv[2:]]; exec(compile(script,"skill.py","exec"))',
+      leadingArgs: []
+    }
   }
   throw skillError('SKILL_INTERPRETER_UNSUPPORTED', 'Skill artifact interpreter is unsupported.')
 }
 
-function commandFor (artifact, args, content, fileDigest) {
-  let delimiter = `SHELLPILOT_SKILL_${fileDigest.slice(0, 16)}`
-  while (String(content).split(/\r?\n/).includes(delimiter)) delimiter += '_X'
-  const suffix = args.length
-    ? ` ${args.map(posixShellQuote).join(' ')}`
-    : ''
-  const script = String(content || '')
-  const newline = script.endsWith('\n') ? '' : '\n'
-  return `${stdinInvocation(artifact.interpreter)}${suffix} <<'${delimiter}'\n${script}${newline}${delimiter}`
+function commandFor (artifact, args, content) {
+  if (artifact.interpreter === 'powershell' || artifact.interpreter === 'pwsh') {
+    const payloads = [content, ...args]
+      .map(value => `"${utf8Base64(value)}"`)
+      .join(',')
+    const wrapper = `$payloads=@(${payloads}); $encoding=[Text.Encoding]::UTF8; $script=$encoding.GetString([Convert]::FromBase64String($payloads[0])); $decoded=@(); for($index=1; $index -lt $payloads.Count; $index+=1){ $decoded+=$encoding.GetString([Convert]::FromBase64String($payloads[$index])) }; & ([scriptblock]::Create($script)) @decoded; if($LASTEXITCODE -ne $null){ exit $LASTEXITCODE }`
+    const command = `${artifact.interpreter} -NoProfile -NonInteractive -EncodedCommand ${utf16LeBase64(wrapper)}`
+    if (command.length > 24 * 1024) {
+      throw skillError(
+        'SKILL_REMOTE_COMMAND_TOO_LARGE',
+        'Remote Skill script and arguments exceed the cross-shell command limit.'
+      )
+    }
+    return command
+  }
+  const invocation = interpreterInvocation(artifact.interpreter)
+  if (invocation.wrapper.includes("'")) {
+    throw skillError('SKILL_INTERPRETER_WRAPPER_INVALID', 'Skill interpreter wrapper is invalid.')
+  }
+  const tokens = [
+    `'${invocation.wrapper}'`,
+    ...invocation.leadingArgs,
+    encodedToken(content),
+    ...args.map(encodedToken)
+  ]
+  const command = `${invocation.prefix} ${tokens.join(' ')}`
+  if (command.length > 24 * 1024) {
+    throw skillError(
+      'SKILL_REMOTE_COMMAND_TOO_LARGE',
+      'Remote Skill script and arguments exceed the cross-shell command limit.'
+    )
+  }
+  return command
 }
 
 export async function prepareSkillArtifactCall ({
@@ -196,8 +264,7 @@ export async function prepareSkillArtifactCall ({
         command: commandFor(
           artifact,
           artifactArgs,
-          file.content,
-          file.digest
+          file.content
         ),
         script: file.content,
         scriptArguments: artifactArgs

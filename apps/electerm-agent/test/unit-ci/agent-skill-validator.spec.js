@@ -144,3 +144,23 @@ test('rejects unsafe script patterns and references outside the package', async 
     await fsp.rm(root, { recursive: true, force: true })
   }
 })
+
+test('rejects remote scripts that cannot fit the declared cross-shell transport', async () => {
+  const root = await makePackage({
+    'skill.json': JSON.stringify({
+      ...validManifest,
+      scripts: [{
+        ...validManifest.scripts[0],
+        interpreter: 'powershell'
+      }]
+    }),
+    'scripts/collect-evidence.sh': `Write-Output "ok"\n${'# bounded filler\n'.repeat(500)}`
+  })
+  try {
+    const result = await validateSkillPackage(root)
+    assert.equal(result.valid, false)
+    assert.ok(result.errors.some(error => error.code === 'SKILL_REMOTE_SCRIPT_TOO_LARGE'))
+  } finally {
+    await fsp.rm(root, { recursive: true, force: true })
+  }
+})
