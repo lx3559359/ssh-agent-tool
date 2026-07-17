@@ -178,7 +178,7 @@ function classifySkillArtifact ({
 
   if (target === 'remote') {
     if (policy.name !== 'send_terminal_command') return blockedSkillPermission()
-    const content = classifyShellText(expandedContent)
+    const content = classifyRemoteSkillText(expandedContent)
     if (content.outcome === 'blocked' || content.outcome === 'unauditable') {
       return content
     }
@@ -226,6 +226,18 @@ function classifyShellText (text) {
     return result('allowlisted-readonly', 'COMMAND_READONLY')
   }
   return result('unauditable', 'COMMAND_UNAUDITABLE')
+}
+
+function classifyRemoteSkillText (text) {
+  const classified = classifyShellText(text)
+  // A reviewed Skill artifact is digest-bound and its full source is displayed
+  // in the risk confirmation. An otherwise unknown static script therefore
+  // remains a risky operation instead of being rejected as unauditable. The
+  // explicit dynamic/piped/eval and blocked classifications still win.
+  if (classified.reasonCode === 'COMMAND_UNAUDITABLE') {
+    return result('risky', 'SKILL_REMOTE_SCRIPT')
+  }
+  return classified
 }
 
 function strictest (left, right) {

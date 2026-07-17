@@ -17,6 +17,14 @@ const gatewayModuleUrl = pathToFileURL(path.resolve(
   __dirname,
   '../../src/client/components/ai/agent-tool-gateway.js'
 )).href
+const riskTransactionModuleUrl = pathToFileURL(path.resolve(
+  __dirname,
+  '../../src/client/components/ai/agent-risk-transaction.js'
+)).href
+const planGrantModuleUrl = pathToFileURL(path.resolve(
+  __dirname,
+  '../../src/client/components/ai/agent-plan-grant.js'
+)).href
 
 const packageDigest = 'a'.repeat(64)
 const fileDigest = 'b'.repeat(64)
@@ -345,6 +353,59 @@ test('remote scripts stay risky and unenforceable permissions are blocked explic
   assert.equal(blocked.outcome, 'blocked')
   assert.equal(blocked.reasonCode, 'SKILL_PERMISSION_UNENFORCEABLE')
   assert.equal(blocked.errorCode, 'SKILL_PERMISSION_UNENFORCEABLE')
+})
+
+test('ordinary remote scripts reach frozen risk confirmation and grant validation', async () => {
+  const { prepareSkillArtifactCall } = await import(executionModuleUrl)
+  const {
+    buildRiskPlanPayload,
+    buildRiskTransaction,
+    validateConfirmedRiskTransaction
+  } = await import(riskTransactionModuleUrl)
+  const { createPlanGrant } = await import(planGrantModuleUrl)
+  const script = 'printf ok\\nexit 7\\n'
+  const call = await prepareSkillArtifactCall({
+    skillBinding: { id: 'inspect-web-service', version: '1.0.0', digest: packageDigest },
+    artifactId: 'collect-evidence',
+    endpoint,
+    client: clientFor(() => metadata(), script)
+  })
+  const transaction = buildRiskTransaction([{
+    name: call.toolName,
+    args: call.args,
+    expandedContent: call.expandedContent,
+    skillArtifact: call.skillArtifact
+  }], {
+    endpoint,
+    goal: 'run reviewed Skill script',
+    skillBindings: [{
+      id: 'inspect-web-service',
+      version: '1.0.0',
+      digest: packageDigest
+    }],
+    artifactDigests: [{
+      type: 'skill-artifact',
+      id: 'inspect-web-service:collect-evidence',
+      digest: fileDigest,
+      packageDigest,
+      algorithm: 'sha256'
+    }]
+  })
+
+  assert.equal(transaction.calls[0].classification.outcome, 'risky')
+  assert.equal(transaction.calls[0].classification.reasonCode, 'SKILL_REMOTE_SCRIPT')
+  const planGrant = await createPlanGrant(buildRiskPlanPayload(transaction), {
+    confirmedBy: 'user'
+  })
+  const frozenCall = await validateConfirmedRiskTransaction({
+    transaction,
+    planGrant,
+    endpoint,
+    toolName: call.toolName,
+    args: call.args
+  })
+  assert.deepEqual(frozenCall.args, call.args)
+  assert.equal(frozenCall.skillArtifact.fileDigest, fileDigest)
 })
 
 test('local artifact envelopes are bounded and require explicit broad permissions', async () => {
