@@ -1632,18 +1632,19 @@ test('task runner rejects a persisted executable plan swap after confirmation', 
     ]
   }))
   const confirmed = await runner.confirmPlan(task.id)
-  assert.equal(confirmed.planBinding.algorithm, 'SHA-256')
-  assert.match(confirmed.planBinding.fingerprint, /^[a-f0-9]{64}$/)
+  assert.equal(confirmed.planGrant.algorithm, 'SHA-256')
+  assert.match(confirmed.planGrant.digest, /^[a-f0-9]{64}$/)
   await store.patch(task.id, {
     steps: [confirmed.steps[1], confirmed.steps[0]]
   })
 
-  await assert.rejects(runner.run(task.id), /计划|完整性|篡改/)
+  await assert.rejects(runner.run(task.id), /计划|绑定|篡改/)
   assert.deepEqual(calls, [])
   const rejected = await store.get(task.id)
-  assert.equal(rejected.status, 'failed')
-  assert.equal(typeof rejected.completedAt, 'string')
-  assert.match(rejected.error, /计划|完整性|篡改/)
+  assert.equal(rejected.status, 'awaiting-change-confirmation')
+  assert.equal(rejected.completedAt, undefined)
+  assert.equal(rejected.reasonCode, 'PLAN_BINDING_CHANGED')
+  assert.match(rejected.error, /计划|绑定|篡改/)
 })
 
 test('task remote output is capped before consuming all chunks', async () => {

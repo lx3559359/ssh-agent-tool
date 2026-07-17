@@ -3,6 +3,7 @@ import {
   getAgentToolDescriptor
 } from './agent-tool-policy.js'
 import { createPlanGrant } from './agent-plan-grant.js'
+import { createTrustedOperationId } from '../../common/safety-transactions/operation-id.js'
 import {
   getTask,
   patchTask,
@@ -202,6 +203,7 @@ export async function confirmRiskTransaction (transaction, options = {}) {
   const store = resolveStore(options.store)
   const now = timestamp(options.now)
   let task = await store.saveTask({
+    id: createTrustedOperationId('agent-risk'),
     source: 'agent',
     title: transaction.goal,
     purpose: transaction.purpose,
@@ -259,6 +261,8 @@ export async function settleRiskTransactionTask ({
   taskId,
   status,
   error,
+  remoteState,
+  canAutoRetry,
   store: customStore,
   now
 } = {}) {
@@ -270,6 +274,8 @@ export async function settleRiskTransactionTask ({
   const phase = cancelled ? 'cancel' : failed ? 'execute' : 'verify'
   return store.patchTask(taskId, {
     status: cancelled ? taskStatuses.cancelled : failed ? status : taskStatuses.completed,
+    ...(remoteState === undefined ? {} : { remoteState }),
+    ...(canAutoRetry === undefined ? {} : { canAutoRetry }),
     error: error ? String(error.message || error) : '',
     completedAt: timestamp(now),
     audit: [...(current?.audit || []), {

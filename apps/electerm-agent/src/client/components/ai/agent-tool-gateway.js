@@ -32,6 +32,7 @@ export async function executeAgentTool ({
   resolveDescriptor = getAgentToolDescriptor,
   classifyCall = classifyAgentCall,
   prepareRisky,
+  verifyRisky,
   execute
 } = {}) {
   if (typeof execute !== 'function') {
@@ -59,6 +60,18 @@ export async function executeAgentTool ({
     throw policyError(classification)
   }
   const risky = classification.outcome === 'risky'
+  let preparedRisk
+  const markDispatchedError = (error, verificationFailed = false) => {
+    const failure = error instanceof Error ? error : new Error(String(error))
+    failure.operationId = preparedRisk?.riskTaskId || preparedRisk?.operationId
+    failure.mutationDispatched = true
+    failure.canAutoRetry = false
+    if (verificationFailed) failure.verificationFailed = true
+    if (!failure.remoteState) {
+      failure.remoteState = verificationFailed ? 'changed-unverified' : 'unknown'
+    }
+    return failure
+  }
   return executeAgentToolWithGate({
     descriptor: resolvedDescriptor,
     endpoint: currentEndpoint,
@@ -66,14 +79,34 @@ export async function executeAgentTool ({
     registry,
     risk: risky,
     prepare: risky && typeof prepareRisky === 'function'
-      ? () => prepareRisky({
+      ? async () => {
+        preparedRisk = await prepareRisky({
           classification,
           endpoint: currentEndpoint,
           descriptor: resolvedDescriptor,
           args,
           expandedContent
         })
+        return preparedRisk
+      }
       : undefined,
-    execute
+    execute: risky
+      ? async (...values) => {
+        try {
+          return await execute(...values)
+        } catch (error) {
+          throw markDispatchedError(error)
+        }
+      }
+      : execute,
+    verify: risky && typeof verifyRisky === 'function'
+      ? async (...values) => {
+        try {
+          return await verifyRisky(...values)
+        } catch (error) {
+          throw markDispatchedError(error, true)
+        }
+      }
+      : undefined
   })
 }

@@ -266,7 +266,7 @@ git commit -m "feat: confirm risky agent work as frozen transactions"
 - Modify: `apps/electerm-agent/src/client/components/ai/agent-tool-gateway.js`
 - Create: `apps/electerm-agent/test/unit-ci/agent-risk-execution.spec.js`
 
-- [ ] **Step 1: 写入写操作不重放测试**
+- [x] **Step 1: 写入写操作不重放测试**
 
 Simulate a transport timeout after remote acceptance. Assert the same `operationId` is persisted, no automatic second write is sent, task state becomes `partially-completed` or unknown, and verification/recovery entry remains available.
 
@@ -276,11 +276,11 @@ assert.equal(result.remoteState, 'unknown')
 assert.equal(result.canAutoRetry, false)
 ```
 
-- [ ] **Step 2: 写入目标级验证测试**
+- [x] **Step 2: 写入目标级验证测试**
 
 Assert exit code 0 with a failed health check is not successful. Assert recovery failure preserves all artifacts and never replays the original change.
 
-- [ ] **Step 3: 运行测试并确认失败**
+- [x] **Step 3: 运行测试并确认失败**
 
 ```powershell
 node --test test/unit-ci/agent-risk-execution.spec.js test/unit-ci/safety-transaction-runner.spec.js
@@ -288,11 +288,11 @@ node --test test/unit-ci/agent-risk-execution.spec.js test/unit-ci/safety-transa
 
 Expected: at least one write is retried or success is based only on exit code.
 
-- [ ] **Step 4: 扩展现有 runner，不创建旁路执行器**
+- [x] **Step 4: 扩展现有 runner，不创建旁路执行器**
 
 Use the existing per-target serial queues, recovery providers and transaction records. Persist operation intent before dispatch. Readonly calls may retry only when the transport proves remote execution did not start; changing calls never retry automatically after dispatch uncertainty. Run declared target verification after execution and transition takeover state through `running-confirmed-change -> verifying -> active-idle|failed|partially-completed`.
 
-- [ ] **Step 5: 运行测试并提交**
+- [x] **Step 5: 运行测试并提交**
 
 ```powershell
 node --test test/unit-ci/agent-risk-execution.spec.js test/unit-ci/safety-transaction-runner.spec.js test/unit-ci/safety-transaction-store.spec.js

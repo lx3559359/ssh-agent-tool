@@ -834,6 +834,72 @@ async function executeResolvedAgentTool (toolName, args, runtime, endpoint) {
   }
 }
 
+const structuredVerificationTools = new Set([
+  'read_service_status',
+  'read_recent_logs',
+  'verify_listening_port',
+  'read_file_range'
+])
+
+function assertVerificationExpectation (step, result) {
+  const expected = step.expected || step.expect
+  if (result.exitCode !== null && result.exitCode !== 0) {
+    throw new Error(`Verification ${step.name} returned exit code ${result.exitCode}`)
+  }
+  if (!expected) return
+  if (expected.exitCode !== undefined && result.exitCode !== expected.exitCode) {
+    throw new Error(`Verification ${step.name} exit code did not match`)
+  }
+  if (expected.contains !== undefined &&
+    !result.output.includes(String(expected.contains))) {
+    throw new Error(`Verification ${step.name} output did not contain expected text`)
+  }
+  if (expected.notContains !== undefined &&
+    result.output.includes(String(expected.notContains))) {
+    throw new Error(`Verification ${step.name} output contained forbidden text`)
+  }
+}
+
+async function verifyPreparedAgentRisk (preparation, endpoint, runtime) {
+  const verification = preparation?.riskTransaction?.verification || []
+  for (const step of verification) {
+    if (!structuredVerificationTools.has(step?.name)) {
+      const error = new Error(`Unsupported Agent verification tool: ${String(step?.name)}`)
+      error.code = 'AGENT_TARGET_VERIFICATION_FAILED'
+      error.verificationFailed = true
+      throw error
+    }
+    const args = bindAgentToolArgs(step.name, step.args || {}, runtime)
+    const result = await executeStructuredAgentTool({
+      toolName: step.name,
+      args,
+      endpoint,
+      executeCommand: command => runTerminalTool(window.store, {
+        command,
+        tabId: args.tabId
+      }, runtime),
+      readFile: fileArgs => window.store.mcpSftpReadFile(fileArgs)
+    })
+    try {
+      assertVerificationExpectation(step, result)
+    } catch (error) {
+      error.code = 'AGENT_TARGET_VERIFICATION_FAILED'
+      error.verificationFailed = true
+      throw error
+    }
+    assertAgentRuntimeActive(runtime)
+  }
+  return { passed: true, count: verification.length }
+}
+
+function parseToolResult (result) {
+  try {
+    return JSON.parse(result)
+  } catch {
+    return null
+  }
+}
+
 export async function executeToolCall (toolName, rawArgs, runtime = {}) {
   const descriptor = getAgentToolDescriptor(toolName)
   const args = bindAgentToolArgs(toolName, rawArgs, runtime)
@@ -867,39 +933,70 @@ export async function executeToolCall (toolName, rawArgs, runtime = {}) {
           runtime,
           verifiedEndpoint
         )
-        if (preparation?.riskTaskId) {
-          let parsed
-          try {
-            parsed = JSON.parse(result)
-          } catch {}
-          const status = parsed?.cancelled === true
-            ? 'cancelled'
-            : parsed?.success === false
-              ? 'failed'
-              : 'completed'
-          try {
-            await settleRiskTransactionTask({
-              taskId: preparation.riskTaskId,
-              status,
-              error: status === 'failed' ? parsed?.message : undefined
-            })
-          } catch (error) {
-            window.store?.onError?.(error)
-          }
-        }
+        if (preparation) preparation.executionResult = result
         return result
       } catch (error) {
         if (preparation?.riskTaskId) {
           try {
             await settleRiskTransactionTask({
               taskId: preparation.riskTaskId,
-              status: 'failed',
-              error
+              status: 'partially-completed',
+              error,
+              remoteState: 'unknown',
+              canAutoRetry: false
             })
           } catch (settleError) {
             window.store?.onError?.(settleError)
           }
         }
+        throw error
+      }
+    },
+    verifyRisky: async (_result, verifiedEndpoint, preparation) => {
+      const parsed = parseToolResult(preparation?.executionResult)
+      if (parsed?.cancelled === true || parsed?.success === false) {
+        if (preparation?.riskTaskId) {
+          await settleRiskTransactionTask({
+            taskId: preparation.riskTaskId,
+            status: parsed.cancelled ? 'cancelled' : 'failed',
+            error: parsed.message,
+            remoteState: parsed.cancelled ? 'not-dispatched' : 'known-failed',
+            canAutoRetry: false
+          })
+        }
+        return { passed: false, cancelled: parsed.cancelled === true }
+      }
+      try {
+        const verification = await verifyPreparedAgentRisk(
+          preparation,
+          verifiedEndpoint,
+          runtime
+        )
+        if (preparation?.riskTaskId) {
+          await settleRiskTransactionTask({
+            taskId: preparation.riskTaskId,
+            status: 'completed',
+            remoteState: 'verified',
+            canAutoRetry: false
+          })
+        }
+        return verification
+      } catch (error) {
+        if (preparation?.riskTaskId) {
+          try {
+            await settleRiskTransactionTask({
+              taskId: preparation.riskTaskId,
+              status: 'partially-completed',
+              error,
+              remoteState: 'changed-unverified',
+              canAutoRetry: false
+            })
+          } catch (settleError) {
+            window.store?.onError?.(settleError)
+          }
+        }
+        error.verificationFailed = true
+        error.canAutoRetry = false
         throw error
       }
     }

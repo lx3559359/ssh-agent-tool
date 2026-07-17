@@ -71,7 +71,7 @@ function normalizeTimeout (value) {
 export function buildTaskPlanGrantPayload (task) {
   return {
     schemaVersion: 1,
-    endpoint: task.endpoint,
+    endpoint: task.endpoint || {},
     goal: String(task.purpose || task.summary || task.title || task.id),
     orderedCalls: task.steps.map(step => ({
       name: 'send_terminal_command',

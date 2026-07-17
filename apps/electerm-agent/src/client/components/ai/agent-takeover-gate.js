@@ -42,6 +42,7 @@ export async function executeAgentToolWithGate ({
   registry,
   risk = false,
   prepare,
+  verify,
   execute
 } = {}) {
   if (typeof execute !== 'function') {
@@ -99,18 +100,23 @@ export async function executeAgentToolWithGate ({
 
     const result = await execute(verifiedEndpoint, prepared)
     if (changing && transition('running-confirmed-change', 'verifying')) {
+      if (typeof verify === 'function') {
+        await verify(result, verifiedEndpoint, prepared)
+      }
       transition('verifying', 'active-idle')
     } else if (!changing) {
       transition('running-readonly', 'active-idle')
     }
     return result
   } catch (error) {
+    const partial = error?.mutationDispatched === true ||
+      error?.verificationFailed === true || error?.remoteState === 'unknown'
     transition([
       'running-readonly',
       'awaiting-risk-confirmation',
       'running-confirmed-change',
       'verifying'
-    ], 'failed')
+    ], partial ? 'partially-completed' : 'failed')
     throw error
   }
 }
