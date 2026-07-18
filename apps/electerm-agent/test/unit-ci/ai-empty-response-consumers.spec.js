@@ -53,12 +53,28 @@ async function importAgentModule () {
   let source = read('src/client/components/ai/agent.js')
   source = source
     .replace(
-      /^import \{ agentTools, executeToolCall \} from '\.\/agent-tools'\r?\n/m,
-      "const agentTools = []\nconst executeToolCall = (...args) => globalThis.__executeToolCall?.(...args) ?? ''\n"
+      /^import \{\r?\n\s*agentTools,\r?\n\s*executeToolCall,\r?\n\s*failAgentRiskBatch,\r?\n\s*prepareAgentRiskBatch\r?\n\} from '\.\/agent-tools'\r?\n/m,
+      'const agentTools = []\n' +
+      'const executeToolCall = (...args) => globalThis.__executeToolCall?.(...args) ?? \'\'\n' +
+      'const failAgentRiskBatch = async () => null\n' +
+      'const prepareAgentRiskBatch = async () => null\n'
+    )
+    .replace(
+      /^import \{\r?\n\s*createAgentToolObservation,\r?\n\s*serializeAgentObservationForModel\r?\n\} from '\.\/agent-observation\.js'\r?\n/m,
+      'const createAgentToolObservation = (toolName, value) => ({\n' +
+      "  kind: 'untrusted-observation', toolName, data: String(value ?? '')\n" +
+      '})\n' +
+      'const serializeAgentObservationForModel = value => JSON.stringify(value)\n'
     )
     .replace(
       /^import \{ buildAgentSkillPrompt \} from '\.\/agent-skills'\r?\n/m,
       "const buildAgentSkillPrompt = () => ''\n"
+    )
+    .replace(
+      /^import \{ selectAgentSkills \} from '\.\/agent-skill-selector\.js'\r?\n/m,
+      'const selectAgentSkills = async () => ({\n' +
+      '  catalog: [], selected: [], skillBindings: [], artifactDigests: []\n' +
+      '})\n'
     )
     .replace(
       /^import \{ buildAgentMcpServerPrompt \} from '\.\/agent-mcp-servers'\r?\n/m,
@@ -92,12 +108,68 @@ async function importAgentModule () {
       "const buildAIConversationMessages = (history, entry) => [{ role: 'user', content: entry.prompt }]\n"
     )
     .replace(
-      /^import \{\r?\n\s*boundAgentToolResult,\r?\n\s*buildBoundedAgentMessages,\r?\n\s*cancelAgentRuntimeOperations\r?\n\} from '\.\/agent-runtime-context\.js'\r?\n/m,
+      /^import \{\r?\n\s*boundAgentToolResult,\r?\n\s*buildBoundedAgentMessages,\r?\n\s*cancelAgentRuntimeOperations,\r?\n\s*resolveAgentRuntimeEndpoint\r?\n\} from '\.\/agent-runtime-context\.js'\r?\n/m,
       'const boundAgentToolResult = value => typeof value === \'string\' ? value : JSON.stringify(value)\n' +
       'const buildBoundedAgentMessages = (base, runtime) => [...base, ...runtime]\n' +
       'const cancelAgentRuntimeOperations = runtime => {\n' +
       '  for (const cancel of runtime.cancellations || []) cancel()\n' +
-      '}\n'
+      '}\n' +
+      'const resolveAgentRuntimeEndpoint = () => null\n'
+    )
+    .replace(
+      /^import \{\r?\n\s*agentTakeoverRegistry\r?\n\} from '\.\/agent-takeover-registry\.js'\r?\n/m,
+      'const agentTakeoverRegistry = { assertActive: () => ({ state: \'active-idle\' }) }\n'
+    )
+    .replace(
+      /^import \{ agentTaskRegistry \} from '\.\/agent-task-registry\.js'\r?\n/m,
+      `const __agentTasks = new Map()
+const agentTaskRegistry = {
+  register: entry => {
+    if ([...__agentTasks.values()].some(item => item.scopeId === entry.scopeId)) {
+      const error = new Error('busy')
+      error.code = 'AI_AGENT_SESSION_BUSY'
+      throw error
+    }
+    __agentTasks.set(String(entry.taskId), entry)
+    return entry
+  },
+  unregister: id => __agentTasks.delete(String(id)),
+  get: id => __agentTasks.get(String(id)),
+  cancel: async id => {
+    const key = String(id)
+    const entry = __agentTasks.get(key)
+    if (!entry) throw new Error('missing task')
+    entry.controller?.abort?.()
+    try {
+      return await entry.runner.cancel(key)
+    } finally {
+      __agentTasks.delete(key)
+    }
+  },
+  cancelByScope: async scopeId => {
+    const matches = [...__agentTasks.values()].filter(entry => entry.scopeId === String(scopeId || ''))
+    return Promise.all(matches.map(entry => agentTaskRegistry.cancel(entry.taskId)))
+  }
+}
+`
+    )
+    .replace(
+      /^import \{\r?\n\s*buildAgentCancellationUpdate,\r?\n\s*settleAgentCancellation\r?\n\} from '\.\/agent-cancellation-status\.js'\r?\n/m,
+      `const buildAgentCancellationUpdate = ({ response = '', stoppedText = 'Stopped', error } = {}) => ({
+  response: error
+    ? response + '\\n\\n**Cancellation not confirmed:** ' + String(error)
+    : response + '\\n\\n*(' + stoppedText + ')*',
+  completionStatus: error ? 'partially-completed' : 'cancelled'
+})
+const settleAgentCancellation = async activeCancellation => {
+  try {
+    await activeCancellation
+    return null
+  } catch (error) {
+    return error
+  }
+}
+`
     )
     .replace(
       /^import aiAgentCopy from '\.\/ai-agent-copy\.json'\r?\n/m,
@@ -665,6 +737,58 @@ test('agent cancellation releases the lock without waiting for a hung backend re
   assert.equal(window.store.agentRunning, false)
   assert.equal(window.store.aiChatHistory[0].completionStatus, 'cancelled')
   assert.equal(cancelledRequests.length, 1)
+})
+
+test('takeover stop cancels only the Agent run bound to that terminal scope', async () => {
+  const {
+    cancelAgentRunsForScope,
+    isAgentRunActive,
+    runAgentLoop
+  } = await importAgentModule()
+  let markRequestStarted
+  const requestStarted = new Promise(resolve => {
+    markRequestStarted = resolve
+  })
+  const neverFinishes = new Promise(() => {})
+  const chatEntry = {
+    id: 'cancel-by-terminal-scope',
+    sourceTabId: 'tab-a',
+    prompt: 'check status'
+  }
+  global.window = {
+    pre: {
+      runGlobalAsync: async action => {
+        if (action === 'AIchatWithTools') {
+          markRequestStarted()
+          return neverFinishes
+        }
+        if (action === 'AIAgentCancel') return { cancelled: true }
+        throw new Error(`unexpected action: ${action}`)
+      }
+    },
+    store: {
+      agentRunning: false,
+      aiChatHistory: [chatEntry],
+      config: {},
+      getLangName: () => 'English'
+    }
+  }
+
+  const pending = runAgentLoop(chatEntry, {}, { current: false }, () => {})
+  await requestStarted
+  assert.deepEqual(await cancelAgentRunsForScope('tab-b'), [])
+  assert.equal(isAgentRunActive(chatEntry.id), true)
+  assert.equal((await cancelAgentRunsForScope('tab-a')).length, 1)
+
+  await assert.doesNotReject(Promise.race([
+    pending,
+    new Promise((resolve, reject) => setTimeout(
+      () => reject(new Error('Scoped takeover stop did not cancel the Agent run')),
+      250
+    ))
+  ]))
+  assert.equal(isAgentRunActive(chatEntry.id), false)
+  assert.equal(window.store.aiChatHistory[0].completionStatus, 'cancelled')
 })
 
 test('agent loop ignores an in-flight tool result after cancellation', async () => {

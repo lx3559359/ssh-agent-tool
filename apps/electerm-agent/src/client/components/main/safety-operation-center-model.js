@@ -448,6 +448,25 @@ export function summarizeSafetyTaskProgress (task = {}) {
   const finishedCount = steps.filter(step => finalStepStatuses.has(step.status)).length
   const currentStep = steps.find(step => step.status === 'running') ||
     steps.find(step => step.status === 'awaiting-confirmation') || null
+  const risk = task.riskTransaction && typeof task.riskTransaction === 'object'
+    ? task.riskTransaction
+    : null
+  const riskDetails = risk
+    ? {
+        purpose: safeText(risk.purpose, 512),
+        affectedObjects: (risk.affectedObjects || []).map(value => safeText(value, 512)),
+        worstCase: safeText(risk.worstCase || 'unknown', 512),
+        resourceImpact: Object.fromEntries(
+          ['cpu', 'memory', 'disk', 'network', 'duration'].map(key => [
+            key,
+            safeText(risk.resourceImpact?.[key] || 'unknown', 80)
+          ])
+        ),
+        recovery: safeText(risk.recovery?.type || 'unknown', 120),
+        rollbackLimits: safeText(risk.rollbackLimits || 'unknown', 512),
+        cancellationBehavior: safeText(risk.cancellationBehavior || 'unknown', 512)
+      }
+    : null
   return {
     id: safeText(task.id, 256),
     source: safeText(task.source || 'unknown', 80),
@@ -462,6 +481,7 @@ export function summarizeSafetyTaskProgress (task = {}) {
     percent: steps.length ? Math.round(finishedCount / steps.length * 100) : 0,
     currentStep,
     steps,
+    riskDetails,
     error: safeText(task.error, maxTextPreview)
   }
 }

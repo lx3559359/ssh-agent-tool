@@ -14,7 +14,38 @@ function writePrompt (stream) {
   stream.write('\r\n$ ')
 }
 
-function runCommand (stream, command) {
+function osc633 (nonce, type, payload = '') {
+  return `\u001b]633;${type};${nonce}${payload ? `;${payload}` : ''}\u0007`
+}
+
+function writeTrackedPrompt (stream, nonce) {
+  stream.write(
+    osc633(nonce, 'P', 'Cwd=/home/shellpilot') +
+    osc633(nonce, 'A') +
+    '$ ' +
+    osc633(nonce, 'B')
+  )
+}
+
+function runCommand (stream, command, state) {
+  const integration = command.match(/__e_nonce=[\s\S]*?([a-f0-9]{32})/)
+  if (integration) {
+    state.shellIntegrationNonce = integration[1]
+    // The client intentionally discards the first OSC chunk while ending
+    // output suppression. A real shell emits the next prompt separately.
+    stream.write(osc633(state.shellIntegrationNonce, 'A'))
+    setTimeout(() => writeTrackedPrompt(stream, state.shellIntegrationNonce), 20)
+    return
+  }
+
+  state.commands.push(command)
+  const nonce = state.shellIntegrationNonce
+  if (nonce) {
+    stream.write(
+      osc633(nonce, 'E', command.replace(/\\/g, '\\\\').replace(/;/g, '\\x3b')) +
+      osc633(nonce, 'C')
+    )
+  }
   if (command === 'echo shellpilot-e2e') {
     stream.write('shellpilot-e2e\r\n')
   } else if (command === 'pwd') {
@@ -22,7 +53,12 @@ function runCommand (stream, command) {
   } else if (command) {
     stream.write(`command received: ${command}\r\n`)
   }
-  stream.write('$ ')
+  if (nonce) {
+    stream.write(osc633(nonce, 'D', '0'))
+    writeTrackedPrompt(stream, nonce)
+  } else {
+    stream.write('$ ')
+  }
 }
 
 function attachShell (stream, state) {
@@ -48,7 +84,7 @@ function attachShell (stream, state) {
         }
         lastWasCarriageReturn = byte === 13
         stream.write('\r\n')
-        runCommand(stream, line.trim())
+        runCommand(stream, line.trim(), state)
         line = ''
         continue
       }
@@ -280,7 +316,10 @@ async function startLocalSshServer (options = {}) {
     ctrlCCount: 0,
     sftpSessions: 0,
     sftpWrites: 0,
-    sftpRenames: 0
+    sftpRenames: 0,
+    shellIntegrationNonce: '',
+    execCommands: [],
+    commands: []
   }
   const server = new Server({
     hostKeys: [HOST_KEY.private]
@@ -310,6 +349,18 @@ async function startLocalSshServer (options = {}) {
         session.on('env', acceptEnv => acceptEnv?.())
         session.on('pty', acceptPty => acceptPty())
         session.on('window-change', () => {})
+        session.on('exec', (acceptExec, rejectExec, info) => {
+          state.execCommands.push(info.command)
+          const stream = acceptExec()
+          if (/\$SHELL/.test(info.command)) {
+            stream.write('/bin/bash\n')
+            stream.exit(0)
+          } else {
+            stream.stderr.write(`unsupported E2E exec: ${info.command}\n`)
+            stream.exit(127)
+          }
+          stream.end()
+        })
         session.on('shell', acceptShell => {
           state.shellCount += 1
           attachShell(acceptShell(), state)

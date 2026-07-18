@@ -39,6 +39,14 @@ test('developer scripts avoid POSIX-only local binary paths on Windows', () => {
   }
 })
 
+test('test3 uses a Playwright file regex instead of a shell-dependent glob', () => {
+  const pkg = JSON.parse(read('package.json'))
+  const script = pkg.scripts.test3
+
+  assert.ok(script.includes('test/e2e/02.*\\.js'))
+  assert.doesNotMatch(script, /test\/e2e\/02\*\.js/)
+})
+
 test('e2e SSH helpers target the AIGShell Chinese UI', () => {
   const common = read('test/e2e/common/common.js')
 

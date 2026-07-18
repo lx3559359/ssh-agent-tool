@@ -1,6 +1,14 @@
 import { normalizeTraceContext } from '../../common/quality/trace-context.js'
+import {
+  assertSameSessionEndpoint,
+  projectEndpoint
+} from '../../common/safety-transactions/endpoint-guard.js'
 
 const TAB_SCOPED_AGENT_TOOLS = new Set([
+  'read_service_status',
+  'read_recent_logs',
+  'verify_listening_port',
+  'read_file_range',
   'send_terminal_command',
   'get_terminal_output',
   'sftp_list',
@@ -9,9 +17,16 @@ const TAB_SCOPED_AGENT_TOOLS = new Set([
   'sftp_del',
   'sftp_upload',
   'sftp_download',
+  'sftp_transfer_list',
+  'sftp_transfer_history',
   'get_terminal_status',
   'cancel_terminal_command',
-  'run_background_command'
+  'run_background_command',
+  'get_background_task_status',
+  'get_background_task_log',
+  'cancel_background_task',
+  'switch_tab',
+  'close_tab'
 ])
 
 const MAX_AGENT_CONTEXT_CHARS = 92 * 1024
@@ -148,6 +163,54 @@ export function bindAgentToolArgs (toolName, args = {}, runtime = {}) {
   return safeArgs
 }
 
+function takeoverRequiredError (cause) {
+  const error = new Error('AI takeover requires a complete active SSH session')
+  error.code = 'AI_TAKEOVER_REQUIRED'
+  if (cause) error.cause = cause
+  return error
+}
+
+export function resolveAgentRuntimeEndpoint (sourceTabId, options = {}) {
+  const tabId = String(sourceTabId || '').trim()
+  if (!tabId || tabId === 'global') return null
+  const refs = options.refs || (
+    typeof window === 'undefined' ? undefined : window.refs
+  )
+  const terminal = refs?.get?.('term-' + tabId)
+  if (
+    !terminal ||
+    terminal.isSsh?.() !== true ||
+    typeof terminal.getTerminalSafetyEndpoint !== 'function'
+  ) {
+    return null
+  }
+  try {
+    const endpoint = projectEndpoint(terminal.getTerminalSafetyEndpoint())
+    return String(endpoint.tabId) === tabId ? endpoint : null
+  } catch (_) {
+    return null
+  }
+}
+
+export function resolveAgentExecutionEndpoint ({
+  descriptor,
+  runtime = {}
+} = {}) {
+  if (descriptor?.scope === 'conversation') return null
+  try {
+    const candidate = typeof runtime.resolveEndpoint === 'function'
+      ? runtime.resolveEndpoint()
+      : runtime.endpoint
+    const current = projectEndpoint(candidate)
+    if (runtime.endpoint) {
+      assertSameSessionEndpoint(projectEndpoint(runtime.endpoint), current)
+    }
+    return current
+  } catch (error) {
+    throw takeoverRequiredError(error)
+  }
+}
+
 export function assertAgentRuntimeActive (runtime = {}) {
   if (!runtime.signal?.aborted) {
     return
@@ -162,26 +225,81 @@ export function registerAgentCancellation (runtime = {}, cancel) {
   const cancellations = runtime.cancellations || new Set()
   runtime.cancellations = cancellations
   let active = true
+  let cancellation
   const wrappedCancel = () => {
-    if (!active) return
+    if (!active) return cancellation || Promise.resolve()
     active = false
     cancellations.delete(wrappedCancel)
     try {
-      Promise.resolve(cancel()).catch(() => {})
+      cancellation = Promise.resolve(cancel())
     } catch (error) {
-      // Cancellation is best-effort and must not mask the original stop action.
+      cancellation = Promise.reject(error)
     }
+    return cancellation
   }
   cancellations.add(wrappedCancel)
-  if (runtime.signal?.aborted) wrappedCancel()
+  if (runtime.signal?.aborted) {
+    wrappedCancel().catch(error => {
+      if (typeof runtime.reportCancellationFailure === 'function') {
+        runtime.reportCancellationFailure(error)
+      } else {
+        const errors = runtime.cancellationErrors || []
+        errors.push(error)
+        runtime.cancellationErrors = errors
+      }
+    })
+  }
   return () => {
     active = false
     cancellations.delete(wrappedCancel)
   }
 }
 
-export function cancelAgentRuntimeOperations (runtime = {}) {
-  runtime.cancelActiveTool?.()
+export function registerDeferredAgentCancellation (
+  runtime = {},
+  resourcePromise,
+  cancelResource
+) {
+  if (typeof cancelResource !== 'function') return () => {}
+  const resource = Promise.resolve(resourcePromise)
+  return registerAgentCancellation(runtime, async () => {
+    let value
+    try {
+      value = await resource
+    } catch {
+      return undefined
+    }
+    return cancelResource(value)
+  })
+}
+
+export async function cancelAgentRuntimeOperations (runtime = {}) {
+  const pending = []
+  if (typeof runtime.cancelActiveTool === 'function') {
+    try {
+      pending.push(Promise.resolve(runtime.cancelActiveTool()))
+    } catch (error) {
+      pending.push(Promise.reject(error))
+    }
+  }
   runtime.cancelActiveTool = null
-  for (const cancel of [...(runtime.cancellations || [])]) cancel()
+  for (const cancel of [...(runtime.cancellations || [])]) {
+    pending.push(cancel())
+  }
+  const settled = await Promise.allSettled(pending)
+  const errors = settled
+    .filter(result => result.status === 'rejected')
+    .map(result => result.reason)
+    .concat(runtime.cancellationErrors || [])
+  runtime.cancellationErrors = []
+  if (errors.length) {
+    const error = new AggregateError(errors, 'One or more Agent operations could not be cancelled')
+    error.code = 'AGENT_CANCELLATION_FAILED'
+    if (errors.some(item => item?.remoteState === 'unknown')) {
+      error.remoteState = 'unknown'
+      error.canAutoRetry = false
+    }
+    throw error
+  }
+  return settled.map(result => result.value)
 }

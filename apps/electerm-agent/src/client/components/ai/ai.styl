@@ -207,6 +207,176 @@
   @media (max-width: 780px)
     grid-template-columns 1fr
 
+.agent-takeover-controls
+  display flex
+  align-items center
+  flex-wrap wrap
+  gap 5px
+  max-width 100%
+  min-width 0
+  font-size 11px
+
+.agent-takeover-switch,
+.agent-takeover-stop
+  min-height 24px
+  display inline-flex
+  align-items center
+  justify-content center
+  gap 5px
+  padding 2px 7px
+  border 1px solid var(--main-darker)
+  border-radius 6px
+  background var(--main)
+  color var(--text)
+  font-size 11px
+  line-height 18px
+  cursor pointer
+  &:hover:not(:disabled)
+    border-color var(--primary)
+    color var(--primary)
+  &:disabled
+    cursor not-allowed
+    opacity .55
+  &:focus-visible
+    outline 2px solid var(--primary)
+    outline-offset 2px
+
+.agent-takeover-switch.active
+  border-color var(--success)
+  color var(--success)
+
+.agent-takeover-switch-track
+  width 22px
+  height 12px
+  padding 1px
+  display inline-flex
+  align-items center
+  border-radius 999px
+  background var(--main-darker)
+  transition background .15s ease
+
+.agent-takeover-switch-thumb
+  width 10px
+  height 10px
+  border-radius 50%
+  background var(--text-dark)
+  transform translateX(0)
+  transition transform .15s ease, background .15s ease
+
+.agent-takeover-switch.active
+  .agent-takeover-switch-track
+    background var(--success)
+  .agent-takeover-switch-thumb
+    background var(--primary-contrast)
+    transform translateX(10px)
+
+.agent-takeover-badge
+  max-width 100%
+  padding 1px 6px
+  border 1px solid var(--success)
+  border-radius 999px
+  color var(--success)
+  background var(--main)
+  white-space nowrap
+
+.agent-takeover-stop
+  border-color var(--danger)
+  color var(--danger)
+
+.agent-takeover-availability
+  min-width 0
+  max-width 100%
+  color var(--text-dark)
+  overflow hidden
+  text-overflow ellipsis
+  white-space nowrap
+  &.unavailable
+    flex-basis 100%
+    color var(--warn)
+
+.agent-takeover-confirm-content
+  line-height 1.55
+  p
+    margin-top 0
+
+.agent-takeover-identity
+  display grid
+  grid-template-columns minmax(88px, auto) minmax(0, 1fr)
+  gap 7px 12px
+  margin 12px 0
+  padding 12px
+  border 1px solid var(--main-darker)
+  border-radius 7px
+  background var(--main-light)
+  dt
+    color var(--text-dark)
+  dd
+    min-width 0
+    margin 0
+    color var(--text)
+    overflow-wrap anywhere
+  code
+    overflow-wrap anywhere
+    word-break break-all
+
+.agent-takeover-rules
+  margin 10px 0 0
+  padding-left 20px
+  color var(--text)
+
+.agent-risk-confirmation-content
+  max-height 68vh
+  overflow auto
+  line-height 1.5
+
+.agent-risk-warning
+  padding 10px 12px
+  border 1px solid #ff7875
+  border-radius 6px
+  color #cf1322
+  background rgba(255, 77, 79, .08)
+
+.agent-risk-details
+  display grid
+  grid-template-columns minmax(120px, auto) minmax(0, 1fr)
+  gap 8px 14px
+  margin 0
+  dt
+    color var(--text-dark)
+    font-weight 600
+  dd
+    min-width 0
+    margin 0
+    overflow-wrap anywhere
+    > span
+      display inline-block
+      margin-right 12px
+  pre
+    max-height 180px
+    margin 0 0 6px
+    padding 7px 9px
+    overflow auto
+    white-space pre-wrap
+    word-break break-all
+    border-radius 4px
+    background var(--main-dark)
+
+@media (max-width: 780px)
+  .agent-takeover-controls
+    align-items flex-start
+  .agent-takeover-availability
+    flex-basis 100%
+  .agent-takeover-identity
+    grid-template-columns 1fr
+    gap 2px
+    dd
+      margin-bottom 6px
+  .agent-risk-details
+    grid-template-columns 1fr
+    gap 3px
+    dd
+      margin-bottom 8px
+
 .code-block
   width 100%
   pre

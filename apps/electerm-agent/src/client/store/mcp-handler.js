@@ -5,7 +5,7 @@
 
 import uid from '../common/uid'
 import { settingMap } from '../common/constants'
-import { refs, refsStatic, refsTabs } from '../components/common/ref'
+import { refs, refsStatic, refsTabs, refsTransfers } from '../components/common/ref'
 import { runCmd } from '../components/terminal/terminal-apis'
 import deepCopy from 'json-deep-copy'
 import {
@@ -24,6 +24,43 @@ import {
 } from './mcp-zmodem-safety.js'
 import { createBackgroundTaskRegistry } from '../common/safety-transactions/background-task-registry.js'
 import { decodeUtf8Chunk } from '../common/utf8-chunk.js'
+import { paginateAgentList } from '../common/agent-pagination.js'
+import {
+  assertSessionResourceTabId,
+  filterSessionResourcesByTabId
+} from '../common/session-resource-guard.js'
+import {
+  buildTransferSafetyPlan,
+  captureLocalTransferSource,
+  verifyLocalTransferSource
+} from '../components/file-transfer/file-transfer-safety.js'
+
+function mcpAbortError (message = 'MCP operation cancelled') {
+  const error = new Error(message)
+  error.name = 'AbortError'
+  return error
+}
+
+function assertMcpActive (signal, message) {
+  if (signal?.aborted) throw mcpAbortError(message)
+}
+
+function abortableDelay (milliseconds, signal, message) {
+  assertMcpActive(signal, message)
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(done, milliseconds)
+    function done () {
+      signal?.removeEventListener('abort', aborted)
+      resolve()
+    }
+    function aborted () {
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', aborted)
+      reject(mcpAbortError(message))
+    }
+    signal?.addEventListener('abort', aborted, { once: true })
+  })
+}
 
 export default Store => {
   // Initialize MCP handler - called when MCP widget is started
@@ -130,7 +167,7 @@ export default Store => {
           result = store.mcpGetTerminalStatus(args)
           break
         case 'cancel_terminal_command':
-          result = store.mcpCancelTerminalCommand(args)
+          result = await store.mcpCancelTerminalCommand(args)
           break
 
         // Background task operations
@@ -626,16 +663,18 @@ export default Store => {
     const pollInterval = 500
     const minWait = args.minWait !== undefined ? args.minWait : 1000
     const lineCountToFetch = args.lines || 50
+    const signal = args.signal
 
     if (!tabId) {
       throw new Error('No active terminal')
     }
+    assertMcpActive(signal, 'Terminal wait cancelled')
 
     const start = Date.now()
 
     // Brief initial wait so the command has time to start producing output
     if (minWait > 0) {
-      await new Promise(resolve => setTimeout(resolve, minWait))
+      await abortableDelay(minWait, signal, 'Terminal wait cancelled')
     }
 
     const collectOutput = () => {
@@ -659,6 +698,7 @@ export default Store => {
 
     // Poll until onData becomes false (4s idle debounce in tab.jsx)
     while (Date.now() - start < timeout) {
+      assertMcpActive(signal, 'Terminal wait cancelled')
       const tabRef = refsTabs.get('tab-' + tabId)
       const onData = tabRef?.state.terminalOnData
       if (!onData) {
@@ -671,7 +711,7 @@ export default Store => {
           lineCount
         }
       }
-      await new Promise(resolve => setTimeout(resolve, pollInterval))
+      await abortableDelay(pollInterval, signal, 'Terminal wait cancelled')
     }
 
     // Timeout reached — return whatever is currently in the buffer
@@ -731,7 +771,7 @@ export default Store => {
     }
   }
 
-  Store.prototype.mcpCancelTerminalCommand = function (args) {
+  Store.prototype.mcpCancelTerminalCommand = async function (args) {
     const { store } = window
     const tabId = args.tabId || store.activeTabId
     if (!tabId) {
@@ -744,9 +784,26 @@ export default Store => {
     }
 
     term.attachAddon._sendData('\x03')
+    const transactionCancelled = typeof term.commandSafetyEntrypoint
+      ?.cancelCurrentExecution === 'function'
+      ? await term.commandSafetyEntrypoint.cancelCurrentExecution(
+        'Agent sent Ctrl+C'
+      )
+      : undefined
+    const idle = await store.mcpWaitForTerminalIdle({
+      tabId,
+      timeout: 6000,
+      minWait: 300,
+      lines: 20
+    })
+    const stopConfirmed = idle.timedOut === false && transactionCancelled === true
     return {
-      success: true,
-      message: 'Sent Ctrl+C to terminal',
+      success: stopConfirmed,
+      stopConfirmed,
+      remoteState: stopConfirmed ? 'stopped' : 'unknown',
+      message: stopConfirmed
+        ? 'Sent Ctrl+C and confirmed terminal idle'
+        : 'Sent Ctrl+C but terminal stop could not be confirmed',
       tabId
     }
   }
@@ -793,7 +850,13 @@ export default Store => {
     }
   })
 
-  Store.prototype.mcpRunBackgroundCommand = async function (args) {
+  function assertBackgroundTaskSession (taskId, tabId) {
+    const task = backgroundTasks.get(taskId)
+    if (task && tabId) assertSessionResourceTabId(task, tabId)
+    return task
+  }
+
+  Store.prototype.mcpRunBackgroundCommand = async function (args, options = {}) {
     const { store } = window
     const tabId = args.tabId || store.activeTabId
     if (!tabId) {
@@ -802,13 +865,31 @@ export default Store => {
     if (!args.command) {
       throw new Error('No command provided')
     }
+    assertMcpActive(options.signal, 'Background command cancelled')
 
     const submission = await store.runSafetyCommand(args.command, {
       tabId,
+      ...(options.signal ? { signal: options.signal } : {}),
       source: 'agent',
       title: '后台命令',
       executionMode: 'background'
     })
+    if (options.signal?.aborted && submission.sent) {
+      let cancelled = false
+      try {
+        cancelled = await submission.cancelBackground?.(
+          'Agent background command cancelled after dispatch'
+        ) === true
+      } catch {
+        cancelled = false
+      }
+      const error = mcpAbortError('Background command cancelled after dispatch')
+      error.mutationDispatched = true
+      error.remoteState = cancelled ? 'stopped' : 'unknown'
+      error.canAutoRetry = false
+      throw error
+    }
+    assertMcpActive(options.signal, 'Background command cancelled')
     if (!submission.sent) {
       return {
         success: false,
@@ -837,10 +918,12 @@ export default Store => {
       exitFile,
       finalize: submission.finalizeBackground,
       cancel: submission.cancelBackground,
-      completion: submission.completion
+      completion: submission.completion,
+      onTerminal: options.onTerminal
     })
 
     return {
+      pending: true,
       taskId,
       tabId,
       logFile,
@@ -852,11 +935,12 @@ export default Store => {
   }
 
   Store.prototype.mcpGetBackgroundTaskStatus = async function (args) {
+    assertBackgroundTaskSession(args.taskId, args.tabId)
     return backgroundTasks.status(args.taskId)
   }
 
   Store.prototype.mcpGetBackgroundTaskLog = async function (args) {
-    const task = backgroundTasks.get(args.taskId)
+    const task = assertBackgroundTaskSession(args.taskId, args.tabId)
     if (!task) {
       return {
         taskId: args.taskId,
@@ -882,6 +966,7 @@ export default Store => {
   }
 
   Store.prototype.mcpCancelBackgroundTask = async function (args) {
+    assertBackgroundTaskSession(args.taskId, args.tabId)
     return backgroundTasks.cancel(args.taskId)
   }
 
@@ -927,7 +1012,24 @@ export default Store => {
       throw new Error('remotePath is required')
     }
     const list = await sftp.list(remotePath)
-    return { tabId, host: tab.host, path: remotePath, list }
+    const ordered = [...list].sort((left, right) => (
+      String(left?.name || '').localeCompare(String(right?.name || ''))
+    ))
+    const page = paginateAgentList(ordered, {
+      cursor: args.cursor,
+      limit: args.limit,
+      maxBytes: args.maxBytes
+    })
+    return {
+      tabId,
+      host: tab.host,
+      path: remotePath,
+      list: page.items,
+      cursor: String(page.cursor),
+      nextCursor: page.nextCursor,
+      hasMore: page.hasMore,
+      total: page.total
+    }
   }
 
   Store.prototype.mcpSftpStat = async function (args) {
@@ -948,8 +1050,8 @@ export default Store => {
     }
     const requestedMaxBytes = Number(args.maxBytes)
     const maxBytes = Number.isSafeInteger(requestedMaxBytes) && requestedMaxBytes > 0
-      ? Math.max(4, Math.min(requestedMaxBytes, 64 * 1024))
-      : 64 * 1024
+      ? Math.max(4, Math.min(requestedMaxBytes, 32 * 1024))
+      : 32 * 1024
     const requestedOffset = Number(args.offset)
     const offset = Number.isSafeInteger(requestedOffset) && requestedOffset >= 0
       ? requestedOffset
@@ -1000,24 +1102,92 @@ export default Store => {
       isDirectory
     }
     const success = await sftpEntry.delFiles('remote', [file], options)
+    const isFtp = sftpEntry.props?.isFtp === true ||
+      String(tab.type || '').toLowerCase() === 'ftp'
+    const recoverable = Boolean(success && !isFtp)
     return {
       success,
-      recoverable: Boolean(success),
+      recoverable,
       tabId,
       host: tab.host,
       path: remotePath,
       type: isDirectory ? 'directory' : 'file',
       message: success
-        ? '已移入 ShellPilot SFTP 安全回收区，可在安全操作中心恢复。'
+        ? recoverable
+          ? '已移入 ShellPilot SFTP 安全回收区，可在安全操作中心恢复。'
+          : 'FTP item was permanently deleted; no recovery snapshot exists.'
         : '用户已取消安全删除。'
     }
   }
 
   // ==================== File Transfer APIs ====================
 
-  Store.prototype.mcpSftpUpload = async function (args) {
+  Store.prototype.mcpDescribeSftpUploadSource = async function (args, options = {}) {
     const { store } = window
-    const { tab, tabId } = store.mcpGetSshSftpRef(args.tabId)
+    const { tab, tabId, sftpEntry } = store.mcpGetSshSftpRef(args.tabId)
+    if (!args.localPath || !args.remotePath) {
+      throw new Error('localPath and remotePath are required')
+    }
+    assertMcpActive(options.signal, 'SFTP upload source capture cancelled')
+    const fromFile = await getLocalFileInfo(args.localPath)
+    const transfer = {
+      host: tab.host,
+      tabType: tab.type || 'ssh',
+      typeFrom: 'local',
+      typeTo: 'remote',
+      fromPath: args.localPath,
+      toPath: args.remotePath,
+      fromFile: {
+        ...fromFile,
+        host: tab.host,
+        tabType: tab.type || 'ssh',
+        tabId
+      },
+      id: uid(),
+      title: tab.title,
+      tabId,
+      conflictPolicy: args.conflictPolicy || 'mergeOrOverwriteAll',
+      operation: ''
+    }
+    const sourceDescriptor = await captureLocalTransferSource({
+      transfer,
+      describeLocal: window.fs.describeTransferEntry
+    })
+    assertMcpActive(options.signal, 'SFTP upload source capture cancelled')
+    if (options.prepareRecovery !== true) return { sourceDescriptor }
+    transfer.sourceDescriptor = sourceDescriptor
+    const safetyPlan = buildTransferSafetyPlan(transfer)
+    const safetyOperation = safetyPlan.required
+      ? await sftpEntry.prepareTransferSafetyOperation(safetyPlan)
+      : null
+    try {
+      assertMcpActive(options.signal, 'SFTP upload recovery preparation cancelled')
+    } catch (error) {
+      if (safetyOperation?.id) {
+        await sftpEntry.cancelTransferSafetyOperation(safetyOperation.id)
+      }
+      throw error
+    }
+    return {
+      sourceDescriptor,
+      preparedTransfer: {
+        transferId: transfer.id,
+        tabId,
+        safetyOperationId: safetyOperation?.id || null
+      }
+    }
+  }
+
+  Store.prototype.mcpCancelPreparedSftpUpload = async function (prepared = {}) {
+    if (!prepared.safetyOperationId) return false
+    const { sftpEntry } = window.store.mcpGetSshSftpRef(prepared.tabId)
+    await sftpEntry.cancelTransferSafetyOperation(prepared.safetyOperationId)
+    return true
+  }
+
+  Store.prototype.mcpSftpUpload = async function (args, options = {}) {
+    const { store } = window
+    const { tab, tabId, sftpEntry } = store.mcpGetSshSftpRef(args.tabId)
     const localPath = args.localPath
     const remotePath = args.remotePath
     if (!localPath) {
@@ -1026,6 +1196,7 @@ export default Store => {
     if (!remotePath) {
       throw new Error('remotePath is required')
     }
+    assertMcpActive(options.signal, 'SFTP upload cancelled')
 
     window._transferConflictPolicy = args.conflictPolicy || 'mergeOrOverwriteAll'
 
@@ -1044,23 +1215,66 @@ export default Store => {
         tabId,
         title: tab.title
       },
-      id: uid(),
+      id: args.preparedTransfer?.transferId || uid(),
       title: tab.title,
       tabId,
+      conflictPolicy: args.conflictPolicy || 'mergeOrOverwriteAll',
       operation: ''
     }
-
-    store.addTransferList([transferItem])
+    transferItem.sourceDescriptor = args.sourceDescriptor ||
+      await captureLocalTransferSource({
+        transfer: transferItem,
+        describeLocal: window.fs.describeTransferEntry
+      })
+    await verifyLocalTransferSource({
+      transfer: transferItem,
+      sourceDescriptor: transferItem.sourceDescriptor,
+      describeLocal: window.fs.describeTransferEntry
+    })
+    if (typeof options.onTerminal === 'function') {
+      Object.defineProperty(transferItem, '_agentRiskTerminal', {
+        configurable: false,
+        enumerable: false,
+        value: options.onTerminal
+      })
+    }
+    const safetyPlan = buildTransferSafetyPlan(transferItem)
+    let safetyOperation
+    if (safetyPlan.required) {
+      safetyOperation = await sftpEntry.prepareTransferSafetyOperation(safetyPlan)
+      if (args.preparedTransfer?.safetyOperationId &&
+        safetyOperation.id !== args.preparedTransfer.safetyOperationId) {
+        throw new Error('Prepared SFTP recovery operation changed before queueing')
+      }
+      transferItem.safetyOperationId = safetyOperation.id
+    }
+    if (options.signal?.aborted) {
+      if (safetyOperation) {
+        await sftpEntry.cancelTransferSafetyOperation(safetyOperation.id)
+      }
+      throw mcpAbortError('SFTP upload cancelled before queueing')
+    }
+    try {
+      store.addTransferList([transferItem])
+    } catch (error) {
+      if (safetyOperation) {
+        await sftpEntry.cancelTransferSafetyOperation(safetyOperation.id)
+      }
+      throw error
+    }
 
     return {
       success: true,
+      pending: true,
+      recoveryPrepared: safetyOperation != null,
+      safetyOperationId: safetyOperation?.id,
       message: `Upload started: ${localPath} → ${tab.host}:${remotePath}`,
       transferId: transferItem.id,
       tabId
     }
   }
 
-  Store.prototype.mcpSftpDownload = async function (args) {
+  Store.prototype.mcpSftpDownload = async function (args, options = {}) {
     const { store } = window
     const { sftp, tab, tabId } = store.mcpGetSshSftpRef(args.tabId) // sftp used for getRemoteFileInfo
     const remotePath = args.remotePath
@@ -1071,6 +1285,7 @@ export default Store => {
     if (!localPath) {
       throw new Error('localPath is required')
     }
+    assertMcpActive(options.signal, 'SFTP download cancelled')
 
     window._transferConflictPolicy = args.conflictPolicy || 'mergeOrOverwriteAll'
 
@@ -1089,44 +1304,85 @@ export default Store => {
       },
       id: uid(),
       title: tab.title,
-      tabId
+      tabId,
+      conflictPolicy: args.conflictPolicy || 'mergeOrOverwriteAll'
+    }
+    if (typeof options.onTerminal === 'function') {
+      Object.defineProperty(transferItem, '_agentRiskTerminal', {
+        configurable: false,
+        enumerable: false,
+        value: options.onTerminal
+      })
     }
 
+    assertMcpActive(options.signal, 'SFTP download cancelled before queueing')
     store.addTransferList([transferItem])
 
     return {
       success: true,
+      pending: true,
       message: `Download started: ${tab.host}:${remotePath} → ${localPath}`,
       transferId: transferItem.id,
       tabId
     }
   }
 
-  Store.prototype.mcpSftpCancelTransfer = async function ({ transferId } = {}) {
+  Store.prototype.mcpSftpCancelTransfer = async function ({
+    transferId,
+    tabId
+  } = {}) {
     const { store } = window
     const id = String(transferId || '')
     const transfer = store.fileTransfers.find(item => item.id === id)
     if (!transfer) {
       return { success: false, transferId: id, message: 'Transfer not found' }
     }
-    const queue = refsStatic.get('transfer-queue')
-    if (queue) {
-      queue.addToQueue('delete', id)
+    if (tabId) assertSessionResourceTabId(transfer, tabId)
+    const transferRefId = `tr-${transfer.transferBatch || ''}-${id}`
+    const activeTransfer = refsTransfers.get(transferRefId)
+    const handledByActiveTransfer = typeof activeTransfer?.cancelAndWait === 'function'
+    if (handledByActiveTransfer) {
+      await activeTransfer.cancelAndWait()
     } else {
-      const index = store.fileTransfers.findIndex(item => item.id === id)
-      if (index >= 0) store.fileTransfers.splice(index, 1)
+      const queue = refsStatic.get('transfer-queue')
+      if (queue) {
+        await queue.addToQueue('delete', id)
+      } else {
+        const index = store.fileTransfers.findIndex(item => item.id === id)
+        if (index >= 0) store.fileTransfers.splice(index, 1)
+      }
+    }
+    if (store.fileTransfers.some(item => item.id === id)) {
+      throw new Error(`Transfer cancellation did not complete: ${id}`)
+    }
+    if (transfer.safetyOperationId && !handledByActiveTransfer) {
+      const { sftpEntry } = store.mcpGetSshSftpRef(transfer.tabId)
+      await sftpEntry.cancelTransferSafetyOperation(transfer.safetyOperationId)
+    }
+    if (!handledByActiveTransfer && typeof transfer._agentRiskTerminal === 'function') {
+      await transfer._agentRiskTerminal({
+        status: 'cancelled',
+        remoteState: 'not-dispatched',
+        transferId: id
+      })
     }
     return { success: true, transferId: id }
   }
 
   // ==================== Transfer List/History APIs ====================
 
-  Store.prototype.mcpSftpTransferList = function () {
-    return deepCopy(window.store.fileTransfers)
+  Store.prototype.mcpSftpTransferList = function (args = {}) {
+    const items = args.tabId
+      ? filterSessionResourcesByTabId(window.store.fileTransfers, args.tabId)
+      : window.store.fileTransfers
+    return deepCopy(items)
   }
 
-  Store.prototype.mcpSftpTransferHistory = function () {
-    return deepCopy(window.store.transferHistory)
+  Store.prototype.mcpSftpTransferHistory = function (args = {}) {
+    const items = args.tabId
+      ? filterSessionResourcesByTabId(window.store.transferHistory, args.tabId)
+      : window.store.transferHistory
+    return deepCopy(items)
   }
 
   // ==================== Zmodem (trzsz/rzsz) APIs ====================

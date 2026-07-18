@@ -150,6 +150,7 @@ test('operation models retain endpoint identity without authentication material'
     username: 'root',
     title: '生产服务器',
     pid: 'terminal-1',
+    hostKeyFingerprint: 'SHA256:verified-host-key',
     password: 'root-password',
     privateKey: 'private-key-material',
     passphrase: 'key-passphrase',
@@ -163,7 +164,8 @@ test('operation models retain endpoint identity without authentication material'
     port: 22,
     username: 'root',
     title: '生产服务器',
-    pid: 'terminal-1'
+    pid: 'terminal-1',
+    hostKeyFingerprint: 'SHA256:verified-host-key'
   }
 
   const operation = normalizeOperation({ source: 'terminal', endpoint })
@@ -1036,7 +1038,8 @@ test('normalizes endpoint identity including IPv6 and rejects mismatches', async
     normalizeEndpoint,
     buildEndpointKey,
     assertSameEndpoint,
-    assertSameSessionEndpoint
+    assertSameSessionEndpoint,
+    projectEndpoint
   } = await importDomainModule('endpoint-guard.js')
 
   assert.deepEqual(
@@ -1087,6 +1090,38 @@ test('normalizes endpoint identity including IPv6 and rejects mismatches', async
     host: 'PROD.EXAMPLE.COM',
     port: '22'
   }))
+  const verifiedSession = {
+    ...expectedSession,
+    terminalPid: 1001,
+    sessionType: 'ssh',
+    hostKeyFingerprint: 'SHA256:verified-host-key'
+  }
+  assert.deepEqual(projectEndpoint({
+    ...verifiedSession,
+    title: 'Production',
+    password: 'must-not-survive',
+    privateKey: 'must-not-survive'
+  }), {
+    host: 'prod.example.com',
+    port: 22,
+    username: 'root',
+    tabId: 'tab-1',
+    pid: 1001,
+    terminalPid: 1001,
+    sessionType: 'ssh',
+    hostKeyFingerprint: 'SHA256:verified-host-key'
+  })
+  assert.throws(
+    () => projectEndpoint({ ...verifiedSession, hostKeyFingerprint: '' }),
+    /fingerprint/i
+  )
+  assert.throws(
+    () => assertSameSessionEndpoint(verifiedSession, {
+      ...verifiedSession,
+      hostKeyFingerprint: 'SHA256:replacement-host-key'
+    }),
+    error => error.message.includes('端点不一致')
+  )
   assert.throws(() => assertSameEndpoint(
     { host: '10.0.0.1', port: 22, username: 'root' },
     { host: '10.0.0.2', port: 22, username: 'root' }

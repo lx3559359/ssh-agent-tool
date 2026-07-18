@@ -101,6 +101,9 @@ import * as terminalSafetyStore from '../../common/safety-transactions/transacti
 import uid from '../../common/uid.js'
 import { extractTerminalCommandInput } from './terminal-current-input.js'
 import { recordPerformanceMark } from '../../common/quality/quality-events.js'
+import {
+  emitAgentTakeoverLifecycleEvent
+} from '../ai/agent-takeover-lifecycle.js'
 
 const e = window.translate
 
@@ -297,6 +300,11 @@ class Term extends Component {
   }
 
   componentWillUnmount () {
+    emitAgentTakeoverLifecycleEvent({
+      type: 'tab-close',
+      tabId: this.props.tab.id,
+      endpoint: this.getTerminalSafetyEndpoint()
+    })
     this.onClose = true
     this.terminalSafetyCoordinator.invalidateSession().catch(() => {})
     this.commandSafetyEntrypoint.invalidateSession().catch(() => {})
@@ -1322,7 +1330,11 @@ class Term extends Component {
     const tab = window.store.applyProfileToTabs(
       deepCopy(this.props.tab || {})
     )
-    return buildTerminalSafetyEndpoint(tab, this.pid)
+    return buildTerminalSafetyEndpoint(
+      tab,
+      this.pid,
+      this.hostKeyFingerprint
+    )
   }
 
   assertSafetyOperationEndpoint = async id => {
@@ -1756,6 +1768,17 @@ class Term extends Component {
   }
 
   remoteInit = async (term = this.term) => {
+    const previousEndpoint = this.hostKeyFingerprint && this.pid
+      ? this.getTerminalSafetyEndpoint()
+      : null
+    if (previousEndpoint) {
+      emitAgentTakeoverLifecycleEvent({
+        type: 'reconnect-start',
+        tabId: this.props.tab.id,
+        endpoint: previousEndpoint
+      })
+    }
+    this.hostKeyFingerprint = ''
     this.setState({
       loading: true,
       terminalError: null
@@ -1878,10 +1901,21 @@ class Term extends Component {
       return
     }
     this.port = r.port
-    this.setStatus(statusMap.success)
-    refs.get('sftp-' + id)?.initData(id, r.port)
+    this.hostKeyFingerprint = typeof r.hostKeyFingerprint === 'string'
+      ? r.hostKeyFingerprint
+      : ''
     term.pid = id
     this.pid = id
+    this.setStatus(statusMap.success)
+    refs.get('sftp-' + id)?.initData(id, r.port)
+    if (previousEndpoint) {
+      emitAgentTakeoverLifecycleEvent({
+        type: 'endpoint-change',
+        tabId: id,
+        endpoint: previousEndpoint,
+        nextEndpoint: this.getTerminalSafetyEndpoint()
+      })
+    }
     const wsUrl = this.buildWsUrl(r.port)
     const socket = new WebSocket(wsUrl)
     socket.onclose = this.oncloseSocket
@@ -2007,6 +2041,11 @@ class Term extends Component {
   }
 
   oncloseSocket = () => {
+    emitAgentTakeoverLifecycleEvent({
+      type: 'disconnect',
+      tabId: this.props.tab.id,
+      endpoint: this.getTerminalSafetyEndpoint()
+    })
     this.terminalSafetyCoordinator.invalidateSession().catch(error => {
       if (!this.onClose) window.store.onError(error)
     })

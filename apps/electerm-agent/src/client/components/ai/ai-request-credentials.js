@@ -232,6 +232,21 @@ function stripCredentials (value) {
   if (!value || typeof value !== 'object') {
     return { value, changed: false }
   }
+  if (value.kind === 'untrusted-observation') {
+    return {
+      changed: true,
+      value: {
+        kind: 'untrusted-observation',
+        source: String(value.source || ''),
+        endpointKey: String(value.endpointKey || ''),
+        toolName: String(value.toolName || ''),
+        capturedAt: Number(value.capturedAt) || 0,
+        truncated: value.truncated === true,
+        nextCursor: value.nextCursor ?? null,
+        data: stripCredentials(value.data).value
+      }
+    }
+  }
   let changed = false
   const next = {}
   for (const [key, item] of Object.entries(value)) {
@@ -318,6 +333,10 @@ export function resolveAIRequestConfigForProfile (
 
 export function sanitizeAIChatHistory (history = []) {
   return stripCredentials(Array.isArray(history) ? history : []).value
+}
+
+export function sanitizeAIStoredValue (value) {
+  return stripCredentials(value).value
 }
 
 export function sanitizeAIConfigHistory (config = {}) {

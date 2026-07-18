@@ -1,30 +1,76 @@
 import { z } from '../../common/zod'
 import { bookmarkSchemas } from '../../common/bookmark-schemas'
-import { confirmAgentToolExecution } from './agent-tool-confirm'
+import {
+  isAgentCommandTool
+} from './agent-tool-confirm'
 import { runAgentTerminalCommand } from './agent-terminal-command.js'
+import {
+  executeStructuredAgentTool,
+  structuredAgentTools
+} from './agent-structured-tools.js'
 import {
   assertAgentRuntimeActive,
   bindAgentToolArgs,
-  registerAgentCancellation
+  registerAgentCancellation,
+  registerDeferredAgentCancellation,
+  resolveAgentExecutionEndpoint
 } from './agent-runtime-context.js'
+import { executeAgentTool } from './agent-tool-gateway.js'
+import { withAgentToolScopes } from './agent-tool-scopes.js'
 import {
+  classifyAgentCall,
+  withAgentToolPolicy
+} from './agent-tool-policy.js'
+import {
+  commitAgentPlanCall,
   confirmAgentPlan,
+  ensureAgentPlanAvailable,
   ensureAgentPlanConfirmed,
   markAgentPlanConfirmed
 } from './agent-task-mode.js'
 import {
   allowedLocalCliTools
 } from './agent-local-cli-tools'
+import { classifyCommand } from '../../common/safety-transactions/command-classifier.js'
+import {
+  buildRiskTransaction,
+  canCombineRiskTransactions,
+  combineRiskTransactions,
+  confirmRiskTransaction,
+  settleRiskTransactionTask
+} from './agent-risk-transaction.js'
+import { requestAgentRiskConfirmation } from './agent-risk-confirmation-modal.jsx'
+import {
+  assertAgentVerificationDeclared
+} from './agent-risk-result.js'
+import {
+  completeAgentRiskPreparation,
+  createAgentRiskTerminalHandler,
+  failAgentRiskPreparation,
+  isAgentAsyncRiskResult
+} from './agent-risk-async.js'
+import {
+  createDelegatedAgentSafetyPreparation,
+  shouldDelegateAgentSafetyConfirmation,
+  validateDelegatedAgentSafetyPreparation
+} from './agent-risk-delegation.js'
+import {
+  assertAgentRiskVerificationAllowed
+} from './agent-risk-verification-gate.js'
+import { prepareSelectedSkillArtifactCall } from './agent-skill-execution.js'
 
 function createAgentOperationId (prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
 
-function registerAgentTransferCancellation (runtime, transferId) {
-  if (!transferId) return
-  registerAgentCancellation(runtime, () => (
-    window.store.mcpSftpCancelTransfer({ transferId })
-  ))
+function registerAgentTransferCancellation (runtime, transferPromise, tabId) {
+  registerDeferredAgentCancellation(runtime, transferPromise, result => {
+    if (!result?.transferId) return undefined
+    return window.store.mcpSftpCancelTransfer({
+      transferId: result.transferId,
+      tabId
+    })
+  })
 }
 
 function buildAddBookmarkParameters () {
@@ -52,7 +98,8 @@ function buildAddBookmarkParameters () {
   }
 }
 
-export const agentTools = [
+export const agentTools = withAgentToolPolicy(withAgentToolScopes([
+  ...structuredAgentTools,
   {
     type: 'function',
     function: {
@@ -74,6 +121,34 @@ export const agentTools = [
             type: 'array',
             items: { type: 'string' },
             description: '计划执行的只读命令列表'
+          },
+          verification: {
+            type: 'array',
+            description: 'Target checks shown before plan approval and run after risky work.',
+            items: {
+              type: 'object',
+              properties: {
+                name: {
+                  type: 'string',
+                  enum: [
+                    'read_service_status',
+                    'read_recent_logs',
+                    'verify_listening_port',
+                    'read_file_range'
+                  ]
+                },
+                args: { type: 'object' },
+                expected: {
+                  type: 'object',
+                  properties: {
+                    exitCode: { type: 'number' },
+                    contains: { type: 'string' },
+                    notContains: { type: 'string' }
+                  }
+                }
+              },
+              required: ['name', 'args']
+            }
           }
         },
         required: ['goal']
@@ -298,8 +373,8 @@ export const agentTools = [
           maxBytes: {
             type: 'integer',
             minimum: 4,
-            maximum: 64 * 1024,
-            description: '本次最多读取的字节数，最大 65536。'
+            maximum: 32 * 1024,
+            description: '本次最多读取的字节数，最大 32768。'
           }
         },
         required: ['remotePath']
@@ -487,6 +562,32 @@ export const agentTools = [
   {
     type: 'function',
     function: {
+      name: 'run_skill_artifact',
+      description: 'Run one declared script artifact from a Skill selected for this task. The system loads and digest-checks the file, applies its declared permissions, and routes the expanded content through the normal takeover and risk gateway.',
+      parameters: {
+        type: 'object',
+        properties: {
+          skillId: {
+            type: 'string',
+            description: 'Selected Skill ID shown in the selected Skill context.'
+          },
+          artifactId: {
+            type: 'string',
+            description: 'Declared script artifact ID shown in the selected Skill context.'
+          },
+          args: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Separate artifact arguments; never a shell command string.'
+          }
+        },
+        required: ['skillId', 'artifactId']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'run_background_command',
       description: '使用 nohup 在后台运行命令，终端会立即释放。返回 taskId 以便监控，可用 get_background_task_status 和 get_background_task_log 查看进度。',
       parameters: {
@@ -560,49 +661,419 @@ export const agentTools = [
       }
     }
   }
-]
+]))
 
-export async function executeToolCall (toolName, rawArgs, runtime) {
-  const store = window.store
-  const args = bindAgentToolArgs(toolName, rawArgs, runtime)
+const sftpListTool = agentTools.find(tool => tool.function.name === 'sftp_list')
+Object.assign(sftpListTool.function.parameters.properties, {
+  cursor: {
+    type: 'string',
+    description: 'Continuation cursor returned by the previous page.'
+  },
+  limit: {
+    type: 'number',
+    description: 'Page item limit from 1 to 200; defaults to 100.'
+  },
+  maxBytes: {
+    type: 'number',
+    description: 'Page JSON byte limit; defaults to 24 KiB.'
+  }
+})
+
+const agentToolDescriptors = new Map(
+  agentTools.map(descriptor => [descriptor.function.name, descriptor])
+)
+
+export function getAgentToolDescriptor (toolName) {
+  const descriptor = agentToolDescriptors.get(String(toolName || ''))
+  if (!descriptor) {
+    const error = new Error(`Unknown Agent tool: ${String(toolName)}`)
+    error.code = 'UNKNOWN_AGENT_TOOL'
+    throw error
+  }
+  return descriptor
+}
+
+function affectedObjectsFor (toolName, args, runtime) {
+  const planned = runtime.planGrant?.payload?.impactTargets
+  if (Array.isArray(planned) && planned.length) return planned
+  return [
+    args.remotePath && `remote-path:${args.remotePath}`,
+    args.localPath && `local-path:${args.localPath}`,
+    args.taskId && `background-task:${args.taskId}`,
+    args.tabId && `session:${args.tabId}`,
+    toolName
+  ].filter(Boolean)
+}
+
+function recoveryFor (toolName, args) {
+  if (toolName === 'sftp_upload' && args.preparedTransfer?.safetyOperationId) {
+    return {
+      type: 'sftp',
+      verified: true,
+      strategyVerified: true,
+      operationId: args.preparedTransfer.safetyOperationId,
+      limits: 'Exact target recovery was prepared and verified before this confirmation.'
+    }
+  }
+  if (!isAgentCommandTool(toolName)) {
+    return {
+      type: toolName.startsWith('sftp_') ? 'sftp' : 'none',
+      verified: false,
+      strategyVerified: toolName === 'sftp_del',
+      limits: 'The underlying safety provider determines exact rollback availability.'
+    }
+  }
+  const classification = classifyCommand(
+    toolName === 'run_local_cli'
+      ? [args.tool, ...(args.args || [])].filter(Boolean).join(' ')
+      : args.command
+  )
+  return {
+    type: classification.provider || 'none',
+    verified: false,
+    strategyVerified: classification.reversible === true,
+    limits: classification.reversible
+      ? 'The underlying safety provider creates and verifies the exact recovery point before terminal release.'
+      : 'No automatic rollback is promised; the operation is dispatched at most once.'
+  }
+}
+
+function buildResolvedRiskTransaction (toolName, args, runtime, context = {}) {
+  const recovery = recoveryFor(toolName, args)
+  const artifactDigests = [
+    ...(runtime.selectedSkillArtifactDigests || []),
+    ...(runtime.planGrant?.payload?.artifactDigests || []),
+    ...(toolName === 'sftp_upload' && args.sourceDescriptor?.digest
+      ? [{
+          type: 'local-transfer-source',
+          path: args.localPath,
+          digest: args.sourceDescriptor.digest,
+          algorithm: args.sourceDescriptor.digestAlgorithm || 'unknown'
+        }]
+      : []),
+    ...(context.skillArtifact?.fileDigest
+      ? [{
+          type: 'skill-artifact',
+          id: `${context.skillArtifact.skillId}:${context.skillArtifact.id}`,
+          path: context.skillArtifact.path,
+          digest: context.skillArtifact.fileDigest,
+          packageDigest: context.skillArtifact.packageDigest,
+          algorithm: 'sha256'
+        }]
+      : [])
+  ]
+  return buildRiskTransaction([{
+    name: toolName,
+    args,
+    descriptor: context.descriptor,
+    expandedContent: context.expandedContent,
+    skillArtifact: context.skillArtifact,
+    localExecution: context.localExecution,
+    scriptEntry: args.scriptEntry || null
+  }], {
+    endpoint: context.endpoint,
+    goal: runtime.planGrant?.payload?.goal || `Agent ${toolName}`,
+    purpose: runtime.planGrant?.payload?.goal || `Execute ${toolName}`,
+    affectedObjects: affectedObjectsFor(toolName, args, runtime),
+    worstCase: context.classification?.reasonCode || 'unknown',
+    resourceImpact: context.classification?.resourceImpact,
+    disconnectPossible: /(?:network|firewall|restart|reboot|shutdown)/i.test(
+      String(args.command || toolName)
+    ),
+    recovery,
+    rollbackLimits: recovery.limits,
+    verification: runtime.planGrant?.payload?.verification || [],
+    skillBindings: runtime.selectedSkillBindings ||
+      runtime.planGrant?.payload?.skillBindings || [],
+    artifactDigests
+  })
+}
+
+export async function prepareAgentRiskArgs (
+  toolName,
+  args,
+  runtime,
+  store = window.store,
+  options = {}
+) {
+  if (toolName !== 'sftp_upload') return args
   assertAgentRuntimeActive(runtime)
+  let prepared
+  try {
+    prepared = await store.mcpDescribeSftpUploadSource(args, {
+      signal: runtime.signal,
+      prepareRecovery: options.prepareRecovery !== false
+    })
+    assertAgentRuntimeActive(runtime)
+    return {
+      ...args,
+      sourceDescriptor: prepared.sourceDescriptor,
+      ...(prepared.preparedTransfer
+        ? { preparedTransfer: prepared.preparedTransfer }
+        : {})
+    }
+  } catch (error) {
+    await cancelPreparedRiskArtifacts({
+      preparedTransfer: prepared?.preparedTransfer
+    }, store)
+    throw error
+  }
+}
+
+async function cancelPreparedRiskArtifacts (args, store = window.store) {
+  if (!args?.preparedTransfer?.safetyOperationId) return
+  await store.mcpCancelPreparedSftpUpload(args.preparedTransfer)
+}
+
+function batchPreparationFor (runtime) {
+  const batch = runtime.riskBatch
+  if (!batch) return null
+  if (batch.cancelledResult) {
+    return { handled: true, result: JSON.stringify(batch.cancelledResult) }
+  }
+  if (batch.terminal === true) {
+    const error = new Error('Agent risk batch is already terminal')
+    error.code = 'AGENT_RISK_BATCH_TERMINAL'
+    throw error
+  }
+  const riskCallIndex = batch.cursor
+  if (riskCallIndex >= batch.transaction.calls.length) return null
+  return {
+    riskTransaction: batch.transaction,
+    riskTaskId: batch.riskTaskId,
+    riskPlanGrant: batch.riskPlanGrant,
+    riskCallIndex,
+    confirmedArgs: batch.transaction.calls[riskCallIndex].args,
+    riskBatch: batch
+  }
+}
+
+function beginPreparedRiskBatchCall (preparation) {
+  const batch = preparation?.riskBatch
+  if (!batch) return false
+  if (batch.terminal || batch.cursor !== preparation.riskCallIndex) {
+    const error = new Error('Agent risk batch order changed before dispatch')
+    error.code = 'PLAN_BINDING_CHANGED'
+    throw error
+  }
+  batch.cursor += 1
+  return true
+}
+
+export async function prepareAgentRiskBatch (toolCalls, runtime = {}) {
+  if (runtime.riskBatch?.terminal === true) runtime.riskBatch = null
+  if (!Array.isArray(toolCalls) || toolCalls.length < 2 ||
+    toolCalls.some(call => call?.function?.name === 'confirm_agent_plan') ||
+    toolCalls.some(call => call?.function?.name === 'run_skill_artifact')) {
+    return null
+  }
+  if (await ensureAgentPlanAvailable(runtime)) return null
+  const transactions = []
+  for (const toolCall of toolCalls) {
+    const toolName = String(toolCall?.function?.name || '')
+    let rawArgs
+    try {
+      rawArgs = JSON.parse(toolCall?.function?.arguments || '{}')
+    } catch {
+      rawArgs = {}
+    }
+    let descriptor
+    try {
+      descriptor = getAgentToolDescriptor(toolName)
+    } catch {
+      continue
+    }
+    let args = bindAgentToolArgs(toolName, rawArgs, runtime)
+    args = await prepareAgentRiskArgs(toolName, args, runtime, window.store, {
+      prepareRecovery: false
+    })
+    const endpoint = resolveAgentExecutionEndpoint({ descriptor, runtime })
+    const expandedContent = args.script || args.expandedContent
+    const classification = classifyAgentCall({
+      descriptor,
+      args,
+      expandedContent
+    })
+    if (classification.outcome !== 'risky') continue
+    if (shouldDelegateAgentSafetyConfirmation(toolName, args, { endpoint })) {
+      return null
+    }
+    transactions.push(buildResolvedRiskTransaction(
+      toolName,
+      args,
+      runtime,
+      { descriptor, endpoint, expandedContent, classification }
+    ))
+  }
+  if (transactions.length < 2 ||
+    transactions.some(item => item.calls.some(call => call.name === 'sftp_upload')) ||
+    !transactions.slice(1).every(item => (
+      canCombineRiskTransactions(transactions[0], item)
+    ))) {
+    return null
+  }
+  const transaction = combineRiskTransactions(transactions)
+  let confirmation
+  try {
+    confirmation = await confirmRiskTransaction(transaction, {
+      confirm: frozen => requestAgentRiskConfirmation(frozen, {
+        signal: runtime.signal
+      })
+    })
+    assertAgentRuntimeActive(runtime)
+  } catch (error) {
+    if (confirmation?.accepted && confirmation.taskId) {
+      await failAgentRiskPreparation({
+        preparation: {
+          riskTaskId: confirmation.taskId,
+          riskTransaction: transaction
+        },
+        error,
+        dispatched: false,
+        status: error?.name === 'AbortError' ? 'cancelled' : 'failed',
+        remoteState: 'not-dispatched',
+        settle: settleRiskTransactionTask
+      })
+    }
+    throw error
+  }
+  runtime.riskBatch = confirmation.accepted
+    ? {
+        transaction,
+        riskTaskId: confirmation.taskId,
+        riskPlanGrant: confirmation.planGrant,
+        cursor: 0,
+        completedCalls: new Set(),
+        settling: null,
+        terminal: false
+      }
+    : { cancelledResult: confirmation, terminal: true }
+  return confirmation
+}
+
+async function prepareResolvedAgentTool (toolName, args, runtime, context = {}) {
+  const planGuard = await ensureAgentPlanAvailable(runtime)
+  if (planGuard) {
+    return { handled: true, result: JSON.stringify(planGuard) }
+  }
+  const batchPreparation = batchPreparationFor(runtime)
+  if (batchPreparation) return batchPreparation
+  if (shouldDelegateAgentSafetyConfirmation(toolName, args, {
+    endpoint: context.endpoint
+  })) {
+    return createDelegatedAgentSafetyPreparation(toolName, args, {
+      endpoint: context.endpoint,
+      verification: runtime.planGrant?.payload?.verification || []
+    })
+  }
+  const confirmedArgs = await prepareAgentRiskArgs(toolName, args, runtime)
+  const transaction = buildResolvedRiskTransaction(
+    toolName,
+    confirmedArgs,
+    runtime,
+    context
+  )
+  let confirmation
+  try {
+    confirmation = await confirmRiskTransaction(transaction, {
+      confirm: frozen => requestAgentRiskConfirmation(frozen, {
+        signal: runtime.signal
+      })
+    })
+    assertAgentRuntimeActive(runtime)
+  } catch (error) {
+    if (confirmation?.accepted && confirmation.taskId) {
+      await failAgentRiskPreparation({
+        preparation: {
+          riskTaskId: confirmation.taskId,
+          riskTransaction: transaction
+        },
+        error,
+        dispatched: false,
+        status: error?.name === 'AbortError' ? 'cancelled' : 'failed',
+        remoteState: 'not-dispatched',
+        settle: settleRiskTransactionTask
+      })
+    }
+    await cancelPreparedRiskArtifacts(confirmedArgs)
+    throw error
+  }
+  if (!confirmation.accepted) await cancelPreparedRiskArtifacts(confirmedArgs)
+  return confirmation.accepted
+    ? {
+        riskTransaction: transaction,
+        riskTaskId: confirmation.taskId,
+        riskPlanGrant: confirmation.planGrant,
+        confirmedArgs
+      }
+    : { handled: true, result: JSON.stringify(confirmation) }
+}
+
+async function runTerminalTool (store, args, runtime) {
+  let clearCancellation = () => {}
+  const cancelTerminal = async () => {
+    try {
+      const result = await store.mcpCancelTerminalCommand({ tabId: args.tabId })
+      if (result?.stopConfirmed !== true) {
+        const error = new Error('Terminal stop could not be confirmed after Ctrl+C')
+        error.remoteState = 'unknown'
+        error.canAutoRetry = false
+        throw error
+      }
+      return result
+    } catch (error) {
+      error.remoteState = error.remoteState || 'unknown'
+      error.canAutoRetry = false
+      throw error
+    }
+  }
+  try {
+    return await runAgentTerminalCommand({
+      store,
+      args,
+      signal: runtime.signal,
+      onDispatched: () => {
+        clearCancellation = registerAgentCancellation(runtime, cancelTerminal)
+      }
+    })
+  } finally {
+    clearCancellation()
+  }
+}
+
+async function executeResolvedAgentTool (toolName, args, runtime, endpoint, preparation) {
+  const store = window.store
   switch (toolName) {
     case 'confirm_agent_plan': {
-      const confirmation = await confirmAgentPlan({ args })
+      const confirmation = await confirmAgentPlan({
+        args,
+        signal: runtime.signal,
+        trustedSkillBindings: runtime.selectedSkillBindings || [],
+        trustedArtifactDigests: runtime.selectedSkillArtifactDigests || [],
+        endpoint: (typeof runtime.resolveEndpoint === 'function'
+          ? runtime.resolveEndpoint()
+          : runtime.endpoint) || {}
+      })
       assertAgentRuntimeActive(runtime)
       markAgentPlanConfirmed(runtime, confirmation)
       return JSON.stringify(confirmation)
     }
-    case 'send_terminal_command': {
-      const planGuard = ensureAgentPlanConfirmed({ toolName, runtime })
-      if (planGuard) {
-        return JSON.stringify(planGuard)
-      }
-      const confirmation = await confirmAgentToolExecution({
+    case 'read_service_status':
+    case 'read_recent_logs':
+    case 'verify_listening_port':
+    case 'read_file_range':
+      return JSON.stringify(await executeStructuredAgentTool({
         toolName,
-        args
-      })
-      assertAgentRuntimeActive(runtime)
-      if (!confirmation.accepted) {
-        return JSON.stringify(confirmation)
-      }
-      const cancelTerminal = () => {
-        try {
-          store.mcpCancelTerminalCommand({ tabId: args.tabId })
-        } catch (error) {
-          // The terminal may already be idle or closed.
-        }
-      }
-      runtime.cancelActiveTool = cancelTerminal
-      try {
-        const idleResult = await runAgentTerminalCommand({ store, args })
-        return JSON.stringify(idleResult)
-      } finally {
-        if (runtime.cancelActiveTool === cancelTerminal) {
-          runtime.cancelActiveTool = null
-        }
-      }
-    }
+        args,
+        endpoint,
+        executeCommand: command => runTerminalTool(store, {
+          command,
+          tabId: args.tabId
+        }, runtime),
+        readFile: fileArgs => store.mcpSftpReadFile(fileArgs)
+      }))
+    case 'send_terminal_command':
+      return JSON.stringify(await runTerminalTool(store, args, runtime))
     case 'get_terminal_output':
       return JSON.stringify(store.mcpGetTerminalOutput(args))
     case 'open_local_terminal':
@@ -641,42 +1112,52 @@ export async function executeToolCall (toolName, rawArgs, runtime) {
       return JSON.stringify(result)
     }
     case 'sftp_upload': {
-      const result = await store.mcpSftpUpload(args)
-      registerAgentTransferCancellation(runtime, result?.transferId)
+      const transfer = Promise.resolve(store.mcpSftpUpload(args, {
+        signal: runtime.signal,
+        onTerminal: createPreparedRiskTerminalHandler(preparation, endpoint, runtime)
+      }))
+      registerAgentTransferCancellation(runtime, transfer, args.tabId)
+      let result
+      try {
+        result = await transfer
+      } catch (error) {
+        const failure = error instanceof Error ? error : new Error(String(error))
+        try {
+          await cancelPreparedRiskArtifacts(args, store)
+        } catch (cleanupError) {
+          failure.cleanupError = cleanupError
+          store.onError?.(cleanupError)
+        }
+        failure.mutationDispatched = false
+        failure.remoteState = 'not-dispatched'
+        throw failure
+      }
       assertAgentRuntimeActive(runtime)
       return JSON.stringify(result)
     }
     case 'sftp_download': {
-      const result = await store.mcpSftpDownload(args)
-      registerAgentTransferCancellation(runtime, result?.transferId)
+      const transfer = Promise.resolve(store.mcpSftpDownload(args, {
+        signal: runtime.signal,
+        onTerminal: createPreparedRiskTerminalHandler(preparation, endpoint, runtime)
+      }))
+      registerAgentTransferCancellation(runtime, transfer, args.tabId)
+      const result = await transfer
       assertAgentRuntimeActive(runtime)
       return JSON.stringify(result)
     }
     case 'sftp_transfer_list':
-      return JSON.stringify(store.mcpSftpTransferList())
+      return JSON.stringify(store.mcpSftpTransferList(args))
     case 'sftp_transfer_history':
-      return JSON.stringify(store.mcpSftpTransferHistory())
+      return JSON.stringify(store.mcpSftpTransferHistory(args))
     case 'get_terminal_status':
       return JSON.stringify(store.mcpGetTerminalStatus(args))
     case 'cancel_terminal_command':
-      return JSON.stringify(store.mcpCancelTerminalCommand(args))
+      return JSON.stringify(await store.mcpCancelTerminalCommand(args))
     case 'list_local_cli_tools':
       return JSON.stringify(await window.pre.runGlobalAsync('getAllowedLocalCliTools'))
     case 'get_codex_cli_status':
       return JSON.stringify(await window.pre.runGlobalAsync('getCodexCliStatus'))
     case 'run_local_cli': {
-      const planGuard = ensureAgentPlanConfirmed({ toolName, runtime })
-      if (planGuard) {
-        return JSON.stringify(planGuard)
-      }
-      const confirmation = await confirmAgentToolExecution({
-        toolName,
-        args
-      })
-      assertAgentRuntimeActive(runtime)
-      if (!confirmation.accepted) {
-        return JSON.stringify(confirmation)
-      }
       const requestId = createAgentOperationId('local-cli')
       const clearCancellation = registerAgentCancellation(runtime, () => (
         window.pre.runGlobalAsync('cancelLocalCli', requestId)
@@ -693,24 +1174,20 @@ export async function executeToolCall (toolName, rawArgs, runtime) {
       }
     }
     case 'run_background_command': {
-      const planGuard = ensureAgentPlanConfirmed({ toolName, runtime })
-      if (planGuard) {
-        return JSON.stringify(planGuard)
-      }
-      const confirmation = await confirmAgentToolExecution({
-        toolName,
-        args
+      const backgroundTask = Promise.resolve(store.mcpRunBackgroundCommand(args, {
+        signal: runtime.signal,
+        onTerminal: createPreparedRiskTerminalHandler(preparation, endpoint, runtime)
+      }))
+      registerDeferredAgentCancellation(runtime, backgroundTask, result => {
+        if (!result?.taskId) return undefined
+        return (
+          store.mcpCancelBackgroundTask({
+            taskId: result.taskId,
+            tabId: args.tabId
+          })
+        )
       })
-      assertAgentRuntimeActive(runtime)
-      if (!confirmation.accepted) {
-        return JSON.stringify(confirmation)
-      }
-      const result = await store.mcpRunBackgroundCommand(args)
-      if (result?.taskId) {
-        registerAgentCancellation(runtime, () => (
-          store.mcpCancelBackgroundTask({ taskId: result.taskId })
-        ))
-      }
+      const result = await backgroundTask
       assertAgentRuntimeActive(runtime)
       return JSON.stringify(result)
     }
@@ -723,4 +1200,268 @@ export async function executeToolCall (toolName, rawArgs, runtime) {
     default:
       throw new Error(`未知 Agent 工具：${toolName}`)
   }
+}
+
+const structuredVerificationTools = new Set([
+  'read_service_status',
+  'read_recent_logs',
+  'verify_listening_port',
+  'read_file_range'
+])
+
+function assertVerificationExpectation (step, result) {
+  const expected = step.expected || step.expect
+  if (result.exitCode !== null && result.exitCode !== 0) {
+    throw new Error(`Verification ${step.name} returned exit code ${result.exitCode}`)
+  }
+  if (!expected) return
+  if (expected.exitCode !== undefined && result.exitCode !== expected.exitCode) {
+    throw new Error(`Verification ${step.name} exit code did not match`)
+  }
+  if (expected.contains !== undefined &&
+    !result.output.includes(String(expected.contains))) {
+    throw new Error(`Verification ${step.name} output did not contain expected text`)
+  }
+  if (expected.notContains !== undefined &&
+    result.output.includes(String(expected.notContains))) {
+    throw new Error(`Verification ${step.name} output contained forbidden text`)
+  }
+}
+
+async function verifyPreparedAgentRisk (preparation, endpoint, runtime) {
+  const verification = preparation?.riskTransaction?.verification ||
+    preparation?.verification || []
+  assertAgentVerificationDeclared(verification)
+  for (const step of verification) {
+    if (!structuredVerificationTools.has(step?.name)) {
+      const error = new Error(`Unsupported Agent verification tool: ${String(step?.name)}`)
+      error.code = 'AGENT_TARGET_VERIFICATION_FAILED'
+      error.verificationFailed = true
+      throw error
+    }
+    const descriptor = getAgentToolDescriptor(step.name)
+    const verificationEndpoint = assertAgentRiskVerificationAllowed({
+      expectedEndpoint: endpoint,
+      runtime,
+      descriptor
+    })
+    const args = bindAgentToolArgs(step.name, step.args || {}, runtime)
+    const result = await executeStructuredAgentTool({
+      toolName: step.name,
+      args,
+      endpoint: verificationEndpoint,
+      executeCommand: command => runTerminalTool(window.store, {
+        command,
+        tabId: args.tabId
+      }, runtime),
+      readFile: fileArgs => window.store.mcpSftpReadFile(fileArgs)
+    })
+    assertAgentRiskVerificationAllowed({
+      expectedEndpoint: endpoint,
+      runtime,
+      descriptor
+    })
+    try {
+      assertVerificationExpectation(step, result)
+    } catch (error) {
+      error.code = 'AGENT_TARGET_VERIFICATION_FAILED'
+      error.verificationFailed = true
+      throw error
+    }
+    assertAgentRuntimeActive(runtime)
+  }
+  return { passed: true, count: verification.length }
+}
+
+function completePreparedAgentRisk (preparation, endpoint, runtime) {
+  return completeAgentRiskPreparation({
+    preparation,
+    verify: () => verifyPreparedAgentRisk(preparation, endpoint, runtime),
+    settle: settleRiskTransactionTask
+  })
+}
+
+function createPreparedRiskTerminalHandler (preparation, endpoint, runtime) {
+  if (!preparation?.riskTaskId &&
+    preparation?.delegatedSafetyConfirmation !== true) return undefined
+  return createAgentRiskTerminalHandler({
+    preparation,
+    verify: () => verifyPreparedAgentRisk(preparation, endpoint, runtime),
+    settle: settleRiskTransactionTask
+  })
+}
+
+export async function failAgentRiskBatch (runtime, error, call = {}) {
+  const batch = runtime?.riskBatch
+  if (!batch || batch.terminal === true || batch.cancelledResult) return null
+  const nextCall = batch.transaction?.calls?.[batch.cursor]
+  if (call.toolName && nextCall?.name !== call.toolName) return null
+  const dispatched = batch.cursor > 0
+  return failAgentRiskPreparation({
+    preparation: {
+      riskTaskId: batch.riskTaskId,
+      riskTransaction: batch.transaction,
+      riskBatch: batch,
+      riskCallIndex: batch.cursor
+    },
+    error,
+    dispatched,
+    status: error?.name === 'AbortError' && !dispatched
+      ? 'cancelled'
+      : undefined,
+    settle: settleRiskTransactionTask
+  })
+}
+
+function parseToolResult (result) {
+  try {
+    return JSON.parse(result)
+  } catch {
+    return null
+  }
+}
+
+export async function executeToolCall (
+  toolName,
+  rawArgs,
+  runtime = {},
+  controlledSkillCall
+) {
+  if (toolName === 'run_skill_artifact' && !controlledSkillCall) {
+    const pseudoDescriptor = getAgentToolDescriptor(toolName)
+    const endpoint = resolveAgentExecutionEndpoint({
+      descriptor: pseudoDescriptor,
+      runtime
+    })
+    const call = await prepareSelectedSkillArtifactCall({
+      skillId: rawArgs?.skillId,
+      artifactId: rawArgs?.artifactId,
+      args: rawArgs?.args,
+      skillBindings: runtime.selectedSkillBindings || [],
+      endpoint
+    })
+    return executeToolCall(call.toolName, call.args, runtime, call)
+  }
+  const descriptor = getAgentToolDescriptor(toolName)
+  const args = bindAgentToolArgs(toolName, rawArgs, runtime)
+  const expandedContent = controlledSkillCall?.expandedContent ||
+    args.script || args.expandedContent
+  assertAgentRuntimeActive(runtime)
+  const initialClassification = classifyAgentCall({
+    descriptor,
+    args,
+    expandedContent,
+    skillArtifact: controlledSkillCall?.skillArtifact,
+    localExecution: controlledSkillCall?.localExecution
+  })
+  if (isAgentCommandTool(toolName) &&
+    initialClassification.outcome === 'allowlisted-readonly') {
+    const planGuard = await ensureAgentPlanConfirmed({ toolName, args, runtime })
+    if (planGuard) return JSON.stringify(planGuard)
+  }
+  const currentEndpoint = resolveAgentExecutionEndpoint({
+    descriptor,
+    runtime
+  })
+  const endpoint = controlledSkillCall?.endpoint || currentEndpoint
+  return executeAgentTool({
+    toolName,
+    args,
+    descriptor,
+    endpoint,
+    resolveEndpoint: () => resolveAgentExecutionEndpoint({
+      descriptor,
+      runtime
+    }),
+    registry: runtime.takeoverRegistry,
+    signal: runtime.signal,
+    expandedContent,
+    skillArtifact: controlledSkillCall?.skillArtifact,
+    localExecution: controlledSkillCall?.localExecution,
+    validateArtifact: controlledSkillCall?.validateArtifact,
+    prepareRisky: context => prepareResolvedAgentTool(
+      toolName,
+      args,
+      runtime,
+      context
+    ),
+    validateDelegatedRisk: validateDelegatedAgentSafetyPreparation,
+    invalidateRisky: async (error, preparation) => {
+      try {
+        await cancelPreparedRiskArtifacts(preparation?.confirmedArgs)
+      } finally {
+        await failAgentRiskPreparation({
+          preparation,
+          error,
+          dispatched: false,
+          settle: settleRiskTransactionTask
+        })
+      }
+    },
+    execute: async (verifiedEndpoint, preparation, executionContext = {}) => {
+      try {
+        const executionArgs = executionContext.validated?.args || args
+        beginPreparedRiskBatchCall(preparation)
+        const result = await executeResolvedAgentTool(
+          toolName,
+          executionArgs,
+          runtime,
+          verifiedEndpoint,
+          preparation
+        )
+        if (isAgentCommandTool(toolName) &&
+          initialClassification.outcome === 'allowlisted-readonly') {
+          commitAgentPlanCall({
+            toolName,
+            args: executionArgs,
+            runtime
+          })
+        }
+        if (preparation?.executionState) {
+          preparation.executionState.result = result
+        } else if (preparation) {
+          preparation.executionResult = result
+        }
+        return result
+      } catch (error) {
+        try {
+          await failAgentRiskPreparation({
+            preparation,
+            error,
+            dispatched: error?.mutationDispatched !== false,
+            settle: settleRiskTransactionTask
+          })
+        } catch (settleError) {
+          window.store?.onError?.(settleError)
+        }
+        throw error
+      }
+    },
+    verifyRisky: async (_result, verifiedEndpoint, preparation) => {
+      const parsed = parseToolResult(
+        preparation?.executionState?.result ?? preparation?.executionResult
+      )
+      if (parsed?.cancelled === true || parsed?.success === false) {
+        await failAgentRiskPreparation({
+          preparation,
+          error: parsed.message,
+          dispatched: parsed.cancelled !== true,
+          status: parsed.cancelled ? 'cancelled' : 'partially-completed',
+          remoteState: parsed.cancelled ? 'not-dispatched' : 'known-failed',
+          settle: settleRiskTransactionTask
+        })
+        return { passed: false, cancelled: parsed.cancelled === true }
+      }
+      if (isAgentAsyncRiskResult(parsed)) {
+        return { passed: true, pending: true }
+      }
+      try {
+        return await completePreparedAgentRisk(preparation, verifiedEndpoint, runtime)
+      } catch (error) {
+        error.verificationFailed = true
+        error.canAutoRetry = false
+        throw error
+      }
+    }
+  })
 }

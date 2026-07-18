@@ -68,7 +68,20 @@ const expectedCatalogs = {
     themeUnsupportedProperty: '不支持的主题属性',
     testConfiguration: '测试配置',
     connectionHealthy: '连接正常',
-    moveToSafeTrash: '移到安全回收站'
+    moveToSafeTrash: '移到安全回收站',
+    shellpilotAiTakeoverLabel: 'AI 接管',
+    shellpilotAiTakeoverEnable: '启动 AI 接管',
+    shellpilotAiTakeoverStop: '一键停止',
+    shellpilotAiTakeoverUnavailable: '仅已连接且主机密钥已验证的 SSH 会话可启用',
+    shellpilotAiTakeoverConfirmTitle: '确认启动 AI 接管',
+    shellpilotAiTakeoverReadonlyRule: '默认先执行只读检查。',
+    shellpilotAiTakeoverRiskRule: '有风险的操作仍会弹窗说明影响并要求二次确认。',
+    shellpilotAiTakeoverActive: '接管中',
+    shellpilotAiTakeoverEnabling: '启动中',
+    shellpilotAiTakeoverStopping: '停止中',
+    shellpilotAiTakeoverHelpSession: 'AI 接管默认关闭，并按 SSH 会话独立启用；断开连接或客户端重启会自动撤销。',
+    shellpilotAiTakeoverHelpSkills: '默认不内置 Skill。用户可通过对话创建或手动导入、编辑禁用草稿；Skill 声明权限不等于获得授权。',
+    shellpilotAiTakeoverHelpResources: '云端模型推理不在 SSH 服务器运行；空闲接管不产生额外远程工作，实际命令、恢复点和验证会消耗服务器资源。'
   },
   en_us: {
     bookmarks: 'Bookmarks',
@@ -127,7 +140,20 @@ const expectedCatalogs = {
     themeUnsupportedProperty: 'Unsupported theme property',
     testConfiguration: 'Test Configuration',
     connectionHealthy: 'Connection healthy',
-    moveToSafeTrash: 'Move to Safe Trash'
+    moveToSafeTrash: 'Move to Safe Trash',
+    shellpilotAiTakeoverLabel: 'AI Takeover',
+    shellpilotAiTakeoverEnable: 'Enable AI Takeover',
+    shellpilotAiTakeoverStop: 'Stop Now',
+    shellpilotAiTakeoverUnavailable: 'Available only for a connected SSH session with a verified host key',
+    shellpilotAiTakeoverConfirmTitle: 'Confirm AI Takeover',
+    shellpilotAiTakeoverReadonlyRule: 'Read-only checks run first by default.',
+    shellpilotAiTakeoverRiskRule: 'Risky operations still show their impact and require a second confirmation.',
+    shellpilotAiTakeoverActive: 'Takeover Active',
+    shellpilotAiTakeoverEnabling: 'Enabling',
+    shellpilotAiTakeoverStopping: 'Stopping',
+    shellpilotAiTakeoverHelpSession: 'AI Takeover is off by default and enabled independently per SSH session; disconnecting or restarting the client revokes it.',
+    shellpilotAiTakeoverHelpSkills: 'No Skills are built in by default. Users can create them in conversation or import and edit disabled drafts; declared permissions do not grant authorization.',
+    shellpilotAiTakeoverHelpResources: 'Cloud model inference does not run on the SSH server; idle takeover adds no remote work, while real commands, recovery points, and verification consume server resources.'
   }
 }
 

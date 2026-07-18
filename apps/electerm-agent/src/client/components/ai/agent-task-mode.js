@@ -1,32 +1,15 @@
+import { requestAgentConfirmation } from './agent-confirmation.js'
+import { classifyCommand } from '../../common/safety-transactions/command-classifier.js'
+import {
+  createPlanGrant,
+  verifyPlanGrant
+} from './agent-plan-grant.js'
+
 const COMMAND_TOOL_NAMES = new Set([
   'send_terminal_command',
   'run_background_command',
   'run_local_cli'
 ])
-
-const DANGEROUS_PATTERNS = [
-  /\brm\s+.*(-r|-f|--recursive|--force)/i,
-  /\bsystemctl\s+(restart|stop|reload|disable|mask|kill)\b/i,
-  /\bservice\s+\S+\s+(restart|stop|reload)\b/i,
-  /\bkubectl\s+(delete|apply|replace|patch|scale|rollout|cordon|drain)\b/i,
-  /\bdocker\s+(rm|rmi|stop|restart|kill|prune)\b/i,
-  /\bgit\s+(reset\s+--hard|clean\s+-|push\s+--force)\b/i,
-  /\b(chmod|chown)\s+/i,
-  /\b(mkfs|fdisk|parted|reboot|shutdown|poweroff)\b/i,
-  />\s*\/|>>\s*\/|\bsed\s+-i\b|\btruncate\s+/i
-]
-
-const READONLY_PATTERNS = [
-  /^(uptime|whoami|id|hostname|pwd|date)\b/i,
-  /^(df|du|free|top|htop|ps|ss|netstat|lsof|ip|ifconfig|route)\b/i,
-  /^(cat|tail|head|grep|egrep|fgrep|awk|sed|find|ls|stat)\b/i,
-  /^systemctl\s+(status|is-active|is-enabled|list-units|--failed)\b/i,
-  /^journalctl\b/i,
-  /^docker\s+(ps|logs|inspect|stats|images|volume\s+ls|network\s+ls)\b/i,
-  /^kubectl\s+(get|describe|logs|top|version|config\s+view)\b/i,
-  /^git\s+(status|log|show|diff|branch|remote)\b/i,
-  /^(ping|traceroute|tracert|ssh-keygen\s+-l|ssh-keygen\s+-y)\b/i
-]
 
 export function isAgentCommandTool (toolName) {
   return COMMAND_TOOL_NAMES.has(toolName)
@@ -51,14 +34,15 @@ export function classifyAgentCommand (command) {
       reason: '命令为空'
     }
   }
-  if (DANGEROUS_PATTERNS.some(pattern => pattern.test(text))) {
+  const classified = classifyCommand(text)
+  if (classified.risk === 'change' || classified.risk === 'blocked') {
     return {
       risk: 'dangerous',
       needsSecondConfirmation: true,
       reason: '命令可能修改系统、删除数据、重启服务或影响业务'
     }
   }
-  if (READONLY_PATTERNS.some(pattern => pattern.test(text))) {
+  if (classified.risk === 'readonly') {
     return {
       risk: 'readonly',
       needsSecondConfirmation: false,
@@ -89,6 +73,7 @@ export function buildAgentPlanConfirmationMessage (args = {}) {
   const goal = String(args.goal || args.summary || 'Agent 运维排查任务').trim()
   const steps = Array.isArray(args.steps) ? args.steps : []
   const commands = Array.isArray(args.readonlyCommands) ? args.readonlyCommands : []
+  const verification = Array.isArray(args.verification) ? args.verification : []
   const lines = [
     `Agent 请求确认分析计划：${goal}`,
     '',
@@ -100,45 +85,162 @@ export function buildAgentPlanConfirmationMessage (args = {}) {
     '',
     '确认后 Agent 才能继续执行命令。'
   ]
+  lines.splice(lines.length - 1, 0,
+    'Risk target verification:',
+    ...(verification.length
+      ? verification.map(step => `- ${JSON.stringify(step)}`)
+      : ['- none; risky work cannot be marked verified']),
+    ''
+  )
   return lines.join('\n')
 }
 
 export async function confirmAgentPlan ({
   args = {},
-  confirm
+  confirm,
+  signal,
+  endpoint = {},
+  trustedSkillBindings = [],
+  trustedArtifactDigests = []
 } = {}) {
   const ask = typeof confirm === 'function'
     ? confirm
-    : message => window.confirm(message)
+    : message => requestAgentConfirmation(message, { signal })
   const accepted = await ask(buildAgentPlanConfirmationMessage(args))
+  const planGrant = accepted
+    ? await createPlanGrant(buildConversationPlanGrantPayload(args, endpoint, {
+      skillBindings: trustedSkillBindings,
+      artifactDigests: trustedArtifactDigests
+    }), {
+      confirmedBy: 'user'
+    })
+    : null
   return {
     accepted,
     cancelled: !accepted,
-    planConfirmed: accepted,
+    planGrant,
     message: accepted ? '用户已确认 Agent 分析计划。' : '用户已取消 Agent 分析计划。'
   }
 }
 
-export function markAgentPlanConfirmed (runtime, confirmation) {
-  if (runtime && confirmation?.accepted) {
-    runtime.planConfirmed = true
+export function buildConversationPlanGrantPayload (
+  args = {},
+  endpoint = {},
+  trustedBindings = {}
+) {
+  const commands = Array.isArray(args.readonlyCommands) ? args.readonlyCommands : []
+  return {
+    schemaVersion: 1,
+    endpoint,
+    goal: String(args.goal || args.summary || 'Agent 运维任务').trim(),
+    // Only commands rendered in the confirmation dialog may be granted. Never
+    // accept a hidden orderedCalls field supplied by the model.
+    orderedCalls: commands.map(command => ({
+      name: 'send_terminal_command',
+      args: { command: String(command) }
+    })),
+    skillBindings: Array.isArray(trustedBindings.skillBindings)
+      ? trustedBindings.skillBindings
+      : [],
+    artifactDigests: Array.isArray(trustedBindings.artifactDigests)
+      ? trustedBindings.artifactDigests
+      : [],
+    impactTargets: [],
+    resourceImpact: {
+      cpu: 'unknown',
+      memory: 'unknown',
+      disk: 'unknown',
+      network: 'unknown',
+      duration: 'unknown'
+    },
+    recovery: null,
+    verification: Array.isArray(args.verification) ? args.verification : []
   }
 }
 
-export function ensureAgentPlanConfirmed ({
+export function markAgentPlanConfirmed (runtime, confirmation) {
+  if (runtime && confirmation?.accepted && confirmation.planGrant) {
+    runtime.planGrant = confirmation.planGrant
+    runtime.planGrantCursor = 0
+    runtime.planGrantReservation = null
+  }
+}
+
+function stableSerialize (value) {
+  if (Array.isArray(value)) return `[${value.map(stableSerialize).join(',')}]`
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map(key => (
+      `${JSON.stringify(key)}:${stableSerialize(value[key])}`
+    )).join(',')}}`
+  }
+  return JSON.stringify(value)
+}
+
+function executableCall (toolName, args = {}) {
+  const { tabId, ...boundArgs } = args || {}
+  return { name: toolName, args: boundArgs }
+}
+
+export async function ensureAgentPlanAvailable (runtime) {
+  const grant = runtime?.planGrant
+  if (grant && await verifyPlanGrant(grant.payload, grant)) return null
+  return {
+    accepted: false,
+    cancelled: true,
+    requiresPlan: true,
+    reasonCode: grant ? 'PLAN_BINDING_CHANGED' : 'PLAN_CONFIRMATION_REQUIRED',
+    message: grant
+      ? 'The confirmed Agent plan binding changed and must be confirmed again.'
+      : 'The Agent plan must be confirmed before risky work can be prepared.'
+  }
+}
+
+export async function ensureAgentPlanConfirmed ({
   toolName,
+  args,
   runtime
 } = {}) {
   if (!isAgentCommandTool(toolName)) {
     return null
   }
-  if (runtime?.planConfirmed) {
-    return null
+  const availability = await ensureAgentPlanAvailable(runtime)
+  const grant = runtime?.planGrant
+  if (!availability) {
+    const expected = stableSerialize(executableCall(toolName, args))
+    const index = Number.isSafeInteger(runtime.planGrantCursor)
+      ? runtime.planGrantCursor
+      : 0
+    const planned = grant.payload.orderedCalls[index]
+    if (planned && stableSerialize(planned) === expected) {
+      runtime.planGrantReservation = Object.freeze({ index, expected })
+      return null
+    }
   }
   return {
     accepted: false,
     cancelled: true,
     requiresPlan: true,
-    message: 'Agent 必须先提交分析计划，并由用户确认后才能执行命令。'
+    reasonCode: grant ? 'PLAN_BINDING_CHANGED' : 'PLAN_CONFIRMATION_REQUIRED',
+    message: grant
+      ? 'Agent 计划绑定已变更，必须重新确认后才能执行命令。'
+      : 'Agent 必须先提交分析计划，并由用户确认后才能执行命令。'
   }
+}
+
+export function commitAgentPlanCall ({ toolName, args, runtime } = {}) {
+  if (!isAgentCommandTool(toolName)) return false
+  const reservation = runtime?.planGrantReservation
+  const index = Number.isSafeInteger(runtime?.planGrantCursor)
+    ? runtime.planGrantCursor
+    : 0
+  const expected = stableSerialize(executableCall(toolName, args))
+  if (!reservation || reservation.index !== index ||
+    reservation.expected !== expected) {
+    const error = new Error('Agent plan call was not reserved for this dispatch')
+    error.code = 'PLAN_BINDING_CHANGED'
+    throw error
+  }
+  runtime.planGrantCursor = index + 1
+  runtime.planGrantReservation = null
+  return true
 }

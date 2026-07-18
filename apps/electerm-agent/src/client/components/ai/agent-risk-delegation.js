@@ -1,0 +1,90 @@
+import { classifyCommand } from '../../common/safety-transactions/command-classifier.js'
+
+const delegatedStructuredTools = new Set(['sftp_del'])
+const delegatedCommandTools = new Set([
+  'send_terminal_command',
+  'run_background_command'
+])
+
+function cloneJson (value) {
+  if (value === undefined) return null
+  return JSON.parse(JSON.stringify(value))
+}
+
+function deepFreeze (value) {
+  if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value
+  for (const child of Object.values(value)) deepFreeze(child)
+  return Object.freeze(value)
+}
+
+function stableSerialize (value) {
+  if (Array.isArray(value)) return `[${value.map(stableSerialize).join(',')}]`
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map(key => (
+      `${JSON.stringify(key)}:${stableSerialize(value[key])}`
+    )).join(',')}}`
+  }
+  return JSON.stringify(value)
+}
+
+function confirmationRequiredError () {
+  const error = new Error(
+    'Agent safety confirmation may be delegated only to an exact lower safety transaction'
+  )
+  error.code = 'AGENT_RISK_CONFIRMATION_REQUIRED'
+  return error
+}
+
+export function shouldDelegateAgentSafetyConfirmation (
+  toolName,
+  args = {},
+  options = {}
+) {
+  const name = String(toolName || '')
+  if (delegatedStructuredTools.has(name)) {
+    return String(options.endpoint?.sessionType || '').toLowerCase() === 'ssh'
+  }
+  if (!delegatedCommandTools.has(name)) return false
+  return classifyCommand(args.command).reversible === true
+}
+
+export function createDelegatedAgentSafetyPreparation (
+  toolName,
+  args = {},
+  options = {}
+) {
+  if (!shouldDelegateAgentSafetyConfirmation(toolName, args, options)) {
+    throw confirmationRequiredError()
+  }
+  return Object.freeze({
+    delegatedSafetyConfirmation: true,
+    toolName: String(toolName),
+    confirmedArgs: deepFreeze(cloneJson(args)),
+    verification: deepFreeze(cloneJson(options.verification || [])),
+    executionState: { result: undefined }
+  })
+}
+
+export function validateDelegatedAgentSafetyPreparation ({
+  toolName,
+  args,
+  endpoint,
+  delegatedPreparation
+} = {}) {
+  if (
+    delegatedPreparation?.delegatedSafetyConfirmation !== true ||
+    delegatedPreparation.toolName !== String(toolName || '') ||
+    !shouldDelegateAgentSafetyConfirmation(
+      toolName,
+      delegatedPreparation.confirmedArgs,
+      { endpoint }
+    ) ||
+    stableSerialize(args || {}) !== stableSerialize(delegatedPreparation.confirmedArgs)
+  ) {
+    throw confirmationRequiredError()
+  }
+  return deepFreeze({
+    name: String(toolName),
+    args: cloneJson(delegatedPreparation.confirmedArgs)
+  })
+}

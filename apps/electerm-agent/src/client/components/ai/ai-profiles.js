@@ -22,6 +22,7 @@ const PROFILE_KEYS = [
 ]
 
 const COMPAT_KEYS = PROFILE_KEYS.filter(key => key !== 'id')
+const LEGACY_PROFILE_ID = 'ai-profile-legacy'
 
 export function createAICredentialRevision () {
   if (globalThis.crypto?.randomUUID) {
@@ -111,7 +112,9 @@ function hasUsableProfileFields (profile = {}) {
 }
 
 function getLegacyProfile (config = {}) {
-  const legacy = {}
+  const legacy = {
+    id: config.activeAIProfileId || LEGACY_PROFILE_ID
+  }
   for (const key of COMPAT_KEYS) {
     if (key in config) {
       legacy[key] = config[key]

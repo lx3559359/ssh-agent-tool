@@ -90,6 +90,21 @@ export default function SafetyTaskProgress ({
         <span>取消 {summary.cancelledCount}</span>
       </div>
 
+      {summary.riskDetails
+        ? (
+          <div className='safety-task-risk-details'>
+            <strong>Agent 风险事务</strong>
+            <span>目的：{summary.riskDetails.purpose}</span>
+            <span>影响对象：{summary.riskDetails.affectedObjects.join(', ') || 'unknown'}</span>
+            <span>最坏结果：{summary.riskDetails.worstCase}</span>
+            <span>资源：{Object.entries(summary.riskDetails.resourceImpact).map(([key, value]) => `${key}=${value}`).join(', ')}</span>
+            <span>恢复：{summary.riskDetails.recovery}</span>
+            <span>回滚限制：{summary.riskDetails.rollbackLimits}</span>
+            <span>取消：{summary.riskDetails.cancellationBehavior}</span>
+          </div>
+          )
+        : null}
+
       <div className='safety-task-progress-steps'>
         {summary.steps.map(step => (
           <div className='safety-task-progress-step' key={step.id}>

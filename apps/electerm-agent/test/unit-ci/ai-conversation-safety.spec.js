@@ -204,7 +204,7 @@ test('Agent runtime context keeps the current request and bounds tool output', a
   assert.match(agent, /callBackendAIchatWithTools\(\s*buildBoundedAgentMessages\(/)
   assert.match(
     agent,
-    /boundAgentToolResult\(\s*sanitizeAIStoredText\(boundAgentToolResult\(toolResult\)\)\s*\)/
+    /createAgentToolObservation\([\s\S]*?toolResult[\s\S]*?boundAgentToolResult\(JSON\.stringify\(observation\)\)[\s\S]*?serializeAgentObservationForModel\(observation\)/
   )
 })
 
@@ -232,9 +232,14 @@ test('Agent SFTP read tool exposes offset and bounded maxBytes pagination', () =
     tools.indexOf("name: 'sftp_read_file'"),
     tools.indexOf("name: 'sftp_del'")
   )
+  const mcpSource = fs.readFileSync(
+    path.resolve(__dirname, '../../src/client/store/mcp-handler.js'),
+    'utf8'
+  )
 
   assert.match(readTool, /offset:\s*\{[\s\S]*?type:\s*'integer'[\s\S]*?minimum:\s*0/)
-  assert.match(readTool, /maxBytes:\s*\{[\s\S]*?type:\s*'integer'[\s\S]*?maximum:\s*64 \* 1024/)
+  assert.match(readTool, /maxBytes:\s*\{[\s\S]*?type:\s*'integer'[\s\S]*?maximum:\s*32 \* 1024/)
+  assert.match(mcpSource, /mcpSftpReadFile[\s\S]{0,500}Math\.min\(requestedMaxBytes, 32 \* 1024\)/)
 })
 
 test('AI history unmount pauses polling without cancelling active work', () => {
@@ -260,9 +265,9 @@ test('Agent runs remain explicitly cancellable after the chat panel remounts', (
     'utf8'
   )
 
-  assert.match(agent, /activeAgentRuns\s*=\s*new Map\(\)/)
+  assert.match(agent, /agentTaskRegistry/)
   assert.match(agent, /export function cancelAgentRun/)
-  assert.match(agent, /activeAgentRuns\.set\(String\(chatEntry\.id\),\s*cancelCurrent\)/)
+  assert.match(agent, /agentTaskRegistry\.register\(/)
   assert.match(historyItem, /cancelAgentRun\(item\.id\)/)
 })
 
@@ -402,15 +407,22 @@ test('chat entries persist scope display text and explicit completion state', ()
     path.resolve(__dirname, '../../src/client/components/ai/agent.js'),
     'utf8'
   )
+  const cancellationStatus = fs.readFileSync(
+    path.resolve(__dirname, '../../src/client/components/ai/agent-cancellation-status.js'),
+    'utf8'
+  )
 
   assert.match(chat, /displayPrompt:\s*userPrompt/)
-  assert.match(chat, /conversationScopeId:\s*String\(props\.activeTabId/)
+  assert.match(chat, /const\s+conversationScopeId\s*=\s*String\(\s*props\.conversationScopeId\s*\|\|\s*props\.activeTabId\s*\|\|\s*'global'\s*\)/)
+  assert.match(chat, /conversationScopeId,/)
   assert.match(chat, /sourceTabId:\s*String\(props\.activeTabId/)
   assert.match(chat, /completionStatus:\s*'pending'/)
   assert.match(historyItem, /completionStatus:\s*streamResponse\.hasMore\s*\?\s*'running'\s*:\s*'completed'/)
   assert.match(historyItem, /const\s+visiblePrompt\s*=\s*item\.displayPrompt\s*\|\|\s*prompt/)
   assert.match(agent, /completionStatus:\s*'completed'/)
-  assert.match(agent, /completionStatus:\s*'cancelled'/)
+  assert.match(agent, /buildAgentCancellationUpdate/)
+  assert.match(cancellationStatus, /completionStatus:\s*'cancelled'/)
+  assert.match(cancellationStatus, /completionStatus:\s*'partially-completed'/)
 })
 
 test('chat cancellation invalidates late polling and request failures stay visible', () => {
@@ -457,13 +469,9 @@ test('Agent cancellation remains effective while a tool confirmation is open', a
     path.resolve(__dirname, '../../src/client/components/ai/agent-tools.js'),
     'utf8'
   )
-  for (const toolName of ['send_terminal_command', 'run_local_cli', 'run_background_command']) {
-    const toolBranch = new RegExp(
-      `case '${toolName}':[\\s\\S]*?confirmAgentToolExecution\\([\\s\\S]*?\\)\\r?\\n\\s*assertAgentRuntimeActive\\(runtime\\)`,
-      'm'
-    )
-    assert.match(tools, toolBranch)
-  }
+  assert.match(tools, /prepareResolvedAgentTool[\s\S]*?confirmRiskTransaction\([\s\S]*?signal:\s*runtime\.signal[\s\S]*?assertAgentRuntimeActive\(runtime\)/)
+  assert.match(tools, /resolveEndpoint:[\s\S]*?resolveAgentExecutionEndpoint/)
+  assert.match(tools, /prepareRisky:\s*context\s*=>\s*prepareResolvedAgentTool/)
   assert.match(tools, /case 'sftp_del':[\s\S]*?mcpSftpDel\(args,\s*\{\s*signal:\s*runtime\.signal\s*\}\)/)
   assert.match(tools, /case 'sftp_upload':[\s\S]*?registerAgentTransferCancellation/)
   assert.match(tools, /case 'sftp_download':[\s\S]*?registerAgentTransferCancellation/)
@@ -506,7 +514,21 @@ test('Agent retry is blocked while another Agent run owns the lock', () => {
 
   assert.match(historyItem, /mode\s*===\s*'agent'\s*&&\s*agentRunning/)
   assert.match(historyItem, /if\s*\(retryDisabled\)/)
-  assert.match(agent, /if\s*\(window\.store\.agentRunning\)/)
+  assert.match(agent, /AI_AGENT_SESSION_BUSY/)
+  assert.doesNotMatch(agent, /window\.store\.agentRunning/)
+})
+
+test('remounted Agent stop awaits and reports task registry cancellation failure', () => {
+  const agent = fs.readFileSync(
+    path.resolve(__dirname, '../../src/client/components/ai/agent.js'),
+    'utf8'
+  )
+  const historyItem = fs.readFileSync(
+    path.resolve(__dirname, '../../src/client/components/ai/ai-chat-history-item.jsx'),
+    'utf8'
+  )
+  assert.match(agent, /return agentTaskRegistry\.cancel\(taskId\)/)
+  assert.match(historyItem, /else\s*\{[\s\S]*?await cancelAgentRun\(item\.id\)[\s\S]*?cancellationError = error/)
 })
 
 test('long chat history avoids rerendering every unchanged message', () => {

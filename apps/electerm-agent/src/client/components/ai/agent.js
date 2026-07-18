@@ -1,5 +1,15 @@
-import { agentTools, executeToolCall } from './agent-tools'
+import {
+  agentTools,
+  executeToolCall,
+  failAgentRiskBatch,
+  prepareAgentRiskBatch
+} from './agent-tools'
+import {
+  createAgentToolObservation,
+  serializeAgentObservationForModel
+} from './agent-observation.js'
 import { buildAgentSkillPrompt } from './agent-skills'
+import { selectAgentSkills } from './agent-skill-selector.js'
 import { buildAgentMcpServerPrompt } from './agent-mcp-servers'
 import { buildAgentLocalCliPrompt } from './agent-local-cli-tools'
 import { buildAgentTaskModePrompt } from './agent-task-mode.js'
@@ -15,28 +25,47 @@ import { createTraceContext } from '../../common/quality/trace-context.js'
 import {
   boundAgentToolResult,
   buildBoundedAgentMessages,
-  cancelAgentRuntimeOperations
+  cancelAgentRuntimeOperations,
+  resolveAgentRuntimeEndpoint
 } from './agent-runtime-context.js'
+import {
+  agentTakeoverRegistry
+} from './agent-takeover-registry.js'
+import { agentTaskRegistry } from './agent-task-registry.js'
+import {
+  buildAgentCancellationUpdate,
+  settleAgentCancellation
+} from './agent-cancellation-status.js'
 
 const MAX_ITERATIONS = 150
-const activeAgentRuns = new Map()
+const agentApiTools = Object.freeze(
+  agentTools.map(({ type, function: definition }) => ({
+    type,
+    function: definition
+  }))
+)
 
 export function cancelAgentRun (chatId) {
-  const cancel = activeAgentRuns.get(String(chatId || ''))
-  if (!cancel) return false
-  cancel()
-  return true
+  const taskId = String(chatId || '')
+  const entry = agentTaskRegistry.get(taskId)
+  if (entry?.kind !== 'chat-agent') return Promise.resolve(false)
+  return agentTaskRegistry.cancel(taskId)
 }
 
 export function isAgentRunActive (chatId) {
-  return activeAgentRuns.has(String(chatId || ''))
+  return agentTaskRegistry.get(String(chatId || ''))?.kind === 'chat-agent'
 }
 
-function buildAgentSystemPrompt (config) {
+export function cancelAgentRunsForScope (sourceTabId) {
+  return agentTaskRegistry.cancelByScope(sourceTabId)
+}
+
+function buildAgentSystemPrompt (config, skillSelection) {
   const lang = config.languageAI || window.store.getLangName() || '简体中文'
   const baseRole = config.roleAI || '你是一个中文 SSH 运维排查助手。'
   const skillPrompt = buildAgentSkillPrompt({
-    customSkills: config.agentSkills || window.store.config?.agentSkills || []
+    catalog: skillSelection?.catalog || [],
+    selectedSkills: skillSelection?.selected || []
   })
   const mcpServerPrompt = buildAgentMcpServerPrompt({
     mcpServers: config.mcpServers || window.store.config?.mcpServers || []
@@ -54,6 +83,8 @@ ${mcpServerPrompt}
 ${localCliPrompt}
 
 ${taskModePrompt}
+
+服务状态、近期日志、监听端口和文件分段读取时，必须优先使用 read_service_status、read_recent_logs、verify_listening_port 和 read_file_range 结构化工具。只有结构化工具无法表达目标时才使用原始 shell，且 shell 仍由系统风险策略裁决。
 
 可用工具：
 - 在终端标签页执行命令并读取输出
@@ -78,7 +109,7 @@ async function callBackendAIchatWithTools (messages, config, requestId, traceCon
     config.apiPathAI,
     config.apiKeyAI,
     config.proxyAI,
-    agentTools,
+    agentApiTools,
     config.authHeaderNameAI,
     requestId,
     traceContext
@@ -126,11 +157,81 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
     qualityFinished = true
     onQualityTerminal?.(phase, result)
   }
-  if (window.store.agentRunning) {
+  let accumulatedContent = ''
+  const controller = new AbortController()
+  let activeBackendRequestId = ''
+  let activeCancellation
+  let cancellationFailure
+  const taskId = String(chatEntry.id || '')
+  const sourceTabId = String(chatEntry.sourceTabId || '')
+  const taskScopeId = String(
+    sourceTabId || chatEntry.conversationScopeId || 'global'
+  )
+  const resolveEndpoint = () => resolveAgentRuntimeEndpoint(sourceTabId)
+  const agentRuntime = {
+    planGrant: null,
+    selectedSkillBindings: [],
+    selectedSkillArtifactDigests: [],
+    sourceTabId,
+    traceContext: parentTrace,
+    endpoint: resolveEndpoint(),
+    resolveEndpoint,
+    takeoverRegistry: agentTakeoverRegistry,
+    signal: controller.signal,
+    cancelActiveTool: null,
+    cancellations: new Set(),
+    reportCancellationFailure: error => {
+      cancellationFailure = error
+    }
+  }
+
+  function cancelCurrent () {
+    if (activeCancellation) return activeCancellation
+    activeCancellation = (async () => {
+      abortRef.current = true
+      controller.abort()
+      const operationCancellation = cancelAgentRuntimeOperations(agentRuntime)
+      let backendCancellation = Promise.resolve()
+      if (activeBackendRequestId) {
+        backendCancellation = window.pre
+          .runGlobalAsync('AIAgentCancel', activeBackendRequestId)
+          .catch(() => {})
+      }
+      await backendCancellation
+      try {
+        return await operationCancellation
+      } catch (error) {
+        cancellationFailure = error
+        throw error
+      }
+    })()
+    return activeCancellation
+  }
+  abortRef.cancelCurrent = cancelCurrent
+  try {
+    agentTaskRegistry.register({
+      taskId,
+      endpoint: agentRuntime.endpoint,
+      scopeId: taskScopeId,
+      kind: 'chat-agent',
+      controller,
+      runner: {
+        cancel: async () => {
+          await cancelCurrent()
+          return { id: taskId, status: 'cancelling' }
+        }
+      }
+    })
+  } catch (error) {
+    if (abortRef.cancelCurrent === cancelCurrent) {
+      delete abortRef.cancelCurrent
+    }
     const lockedResult = {
       ok: false,
       data: null,
-      error: '已有 Agent 任务正在运行，请等待任务结束或先取消当前任务。'
+      error: error?.code === 'AI_AGENT_SESSION_BUSY'
+        ? '当前 SSH 会话已有 Agent 任务正在运行，请等待任务结束或先取消当前任务。'
+        : sanitizeAIStoredText(error?.message || error)
     }
     setIsStreaming(false)
     updateChatEntry(chatEntry, {
@@ -140,52 +241,34 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
     finishQuality('failed', 'failed')
     return lockedResult
   }
-  window.store.agentRunning = true
-  let accumulatedContent = ''
-  const controller = new AbortController()
-  let activeBackendRequestId = ''
-  const agentRuntime = {
-    planConfirmed: false,
-    sourceTabId: chatEntry.sourceTabId || chatEntry.conversationScopeId || '',
-    traceContext: parentTrace,
-    signal: controller.signal,
-    cancelActiveTool: null,
-    cancellations: new Set()
-  }
 
-  function cancelCurrent () {
-    abortRef.current = true
-    controller.abort()
-    cancelAgentRuntimeOperations(agentRuntime)
-    if (activeBackendRequestId) {
-      window.pre.runGlobalAsync('AIAgentCancel', activeBackendRequestId)
-        .catch(() => {})
+  async function markCancelled () {
+    try {
+      await failAgentRiskBatch(agentRuntime, createAgentAbortError())
+    } catch (error) {
+      if (!cancellationFailure) cancellationFailure = error
     }
-  }
-  abortRef.cancelCurrent = cancelCurrent
-  activeAgentRuns.set(String(chatEntry.id), cancelCurrent)
-
-  function markCancelled () {
+    const settledError = await settleAgentCancellation(activeCancellation)
+    if (settledError && !cancellationFailure) {
+      cancellationFailure = settledError
+    }
     const current = window.store.aiChatHistory?.find(item => (
       item.id === chatEntry.id
     ))
     const terminalAlreadyRecorded = !current ||
       current.completionStatus === 'cancelled'
     setIsStreaming(false)
-    updateChatEntry(chatEntry, {
-      response: accumulatedContent + `\n\n*(${aiAgentCopy.stoppedText})*`,
-      completionStatus: 'cancelled'
-    })
+    updateChatEntry(chatEntry, buildAgentCancellationUpdate({
+      response: accumulatedContent,
+      stoppedText: aiAgentCopy.stoppedText,
+      error: cancellationFailure && sanitizeAIStoredText(
+        cancellationFailure?.message || cancellationFailure
+      )
+    }))
     if (!terminalAlreadyRecorded) finishQuality('cancelled', 'cancelled')
   }
 
   try {
-    const baseMessages = [
-      { role: 'system', content: buildAgentSystemPrompt(config) },
-      ...buildAIConversationMessages(history, chatEntry)
-    ]
-    const runtimeMessages = []
-    const toolCallsLog = []
     setIsStreaming(true)
     updateChatEntry(chatEntry, {
       toolCalls: [],
@@ -195,10 +278,37 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
         ? { metadata: { traceId: parentTrace.traceId } }
         : {})
     })
+    const skillSelection = await selectAgentSkills({ prompt: chatEntry.prompt })
+    if (skillSelection.requiresUserChoice) {
+      const failure = skillSelection.failure || {}
+      const message = `${failure.message || 'The requested Skill could not be loaded.'} ` +
+        '请明确选择：修复/启用该 Skill 后重试，或移除 $skill-id 并确认使用通用 Agent 继续。'
+      setIsStreaming(false)
+      updateChatEntry(chatEntry, {
+        response: message,
+        completionStatus: 'failed'
+      })
+      finishQuality('failed', 'failed')
+      return {
+        ok: false,
+        data: null,
+        error: 'skill-selection-required',
+        requiresUserChoice: true,
+        failure
+      }
+    }
+    agentRuntime.selectedSkillBindings = skillSelection.skillBindings
+    agentRuntime.selectedSkillArtifactDigests = skillSelection.artifactDigests
+    const baseMessages = [
+      { role: 'system', content: buildAgentSystemPrompt(config, skillSelection) },
+      ...buildAIConversationMessages(history, chatEntry)
+    ]
+    const runtimeMessages = []
+    const toolCallsLog = []
 
     for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
       if (abortRef && abortRef.current) {
-        markCancelled()
+        await markCancelled()
         return
       }
 
@@ -220,7 +330,7 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
       )
       activeBackendRequestId = ''
       if (abortRef && abortRef.current) {
-        markCancelled()
+        await markCancelled()
         return
       }
       const agentResult = normalizeAsyncResult(backendResult)
@@ -267,9 +377,11 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
         return
       }
 
+      await prepareAgentRiskBatch(assistantMessage.tool_calls, agentRuntime)
+
       for (const toolCall of assistantMessage.tool_calls) {
         if (abortRef && abortRef.current) {
-          markCancelled()
+          await markCancelled()
           return
         }
 
@@ -300,20 +412,37 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
             controller.signal
           )
           if (abortRef && abortRef.current) {
-            markCancelled()
+            await markCancelled()
             return
           }
-          toolEntry.status = 'completed'
-          toolEntry.result = boundAgentToolResult(
-            sanitizeAIStoredText(boundAgentToolResult(toolResult))
+          const observation = await createAgentToolObservation(
+            toolCall.function.name,
+            toolResult,
+            agentRuntime
           )
+          toolEntry.status = 'completed'
+          toolEntry.result = boundAgentToolResult(JSON.stringify(observation))
+          toolResult = serializeAgentObservationForModel(observation)
         } catch (err) {
           if (abortRef && abortRef.current) {
-            markCancelled()
+            await markCancelled()
             return
           }
+          await failAgentRiskBatch(agentRuntime, err, {
+            toolName: toolCall.function.name,
+            args
+          })
           toolEntry.status = 'error'
-          toolEntry.result = sanitizeAIStoredText(err.message)
+          const observation = await createAgentToolObservation(
+            toolCall.function.name,
+            {
+              error: true,
+              data: sanitizeAIStoredText(err.message)
+            },
+            agentRuntime
+          )
+          toolEntry.result = boundAgentToolResult(JSON.stringify(observation))
+          toolResult = serializeAgentObservationForModel(observation)
         }
 
         updateChatEntry(chatEntry, {
@@ -323,7 +452,9 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
         runtimeMessages.push({
           role: 'tool',
           tool_call_id: toolCall.id,
-          content: toolEntry.result
+          content: toolEntry.status === 'completed'
+            ? toolResult
+            : toolEntry.result
         })
       }
     }
@@ -336,7 +467,7 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
     finishQuality('failed', 'failed')
   } catch (error) {
     if (controller.signal.aborted || abortRef.current || error?.name === 'AbortError') {
-      markCancelled()
+      await markCancelled()
       return
     }
     const safeError = sanitizeAIStoredText(error?.message || error)
@@ -352,9 +483,6 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
     if (abortRef.cancelCurrent === cancelCurrent) {
       delete abortRef.cancelCurrent
     }
-    if (activeAgentRuns.get(String(chatEntry.id)) === cancelCurrent) {
-      activeAgentRuns.delete(String(chatEntry.id))
-    }
-    window.store.agentRunning = false
+    agentTaskRegistry.unregister(taskId)
   }
 }

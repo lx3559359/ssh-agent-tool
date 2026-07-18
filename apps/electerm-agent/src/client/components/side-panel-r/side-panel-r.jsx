@@ -13,6 +13,7 @@ import {
   minRightPanelWidth,
   normalizeRightPanelWidth
 } from '../main/aigshell-layout'
+import AgentTakeoverControls from '../ai/agent-takeover-controls'
 
 const RightSidePanelAIHeader = lazy(() => import('./right-side-panel-ai-header'))
 
@@ -23,6 +24,7 @@ export default memo(function RightSidePanel ({
   children,
   title,
   rightPanelTab,
+  activeTabId,
   config = {}
 }) {
   const panelRef = useRef(null)
@@ -95,6 +97,11 @@ export default memo(function RightSidePanel ({
                   </Suspense>
                 </LazyModuleBoundary>
                 )
+              : null
+          }
+          {
+            isAI
+              ? <AgentTakeoverControls activeTabId={activeTabId} />
               : null
           }
         </div>

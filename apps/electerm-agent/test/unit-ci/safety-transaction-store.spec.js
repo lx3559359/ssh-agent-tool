@@ -367,6 +367,44 @@ test('task store rejects credential-like commands instead of silently rewriting 
   assert.equal(patched.steps[0].command, safeCommand)
 })
 
+test('task store accepts only structurally valid immutable plan grants', async () => {
+  const { createTransactionStore } = await importStore()
+  const store = createTransactionStore({
+    adapter: createMemoryAdapter(),
+    now: () => new Date('2026-07-13T09:00:00.000Z')
+  })
+  const payload = {
+    schemaVersion: 1,
+    endpoint: { host: 'srv.test', port: 22, username: 'ops' },
+    goal: 'inspect service',
+    orderedCalls: [],
+    skillBindings: [],
+    artifactDigests: [],
+    impactTargets: [],
+    resourceImpact: { duration: 'short' },
+    recovery: null,
+    verification: []
+  }
+  const planGrant = {
+    schemaVersion: 1,
+    algorithm: 'SHA-256',
+    digest: 'a'.repeat(64),
+    confirmedAt: '2026-07-13T09:00:00.000Z',
+    confirmedBy: 'user',
+    payload
+  }
+
+  const saved = await store.saveTask({ id: 'valid-plan-grant', planGrant })
+  assert.deepEqual(saved.planGrant, planGrant)
+  await assert.rejects(
+    store.saveTask({
+      id: 'invalid-plan-grant',
+      planGrant: { ...planGrant, digest: 'not-a-sha256-digest' }
+    }),
+    /计划授权结构无效/
+  )
+})
+
 test('concurrent task patches for one id are serialized with monotonic timestamps', async () => {
   const { createTransactionStore } = await importStore()
   const adapter = createMemoryAdapter()
@@ -897,7 +935,7 @@ test('legacy completed status migrates as a terminal restored operation', async 
   assert.equal(adapter.read('safetyOperations', record.id).state, 'restored')
 })
 
-test('SQLite and NeDB encrypt safety operations and agent tasks at rest', async t => {
+test('SQLite and NeDB encrypt safety operations, agent tasks, and bounded artifacts at rest', async t => {
   const backends = [
     ['SQLite', '../../src/app/lib/sqlite', 'electerm.db'],
     ['NeDB', '../../src/app/lib/nedb', 'electerm.safetyOperations.nedb']
@@ -921,16 +959,23 @@ test('SQLite and NeDB encrypt safety operations and agent tasks at rest', async 
         output: 'secret-task-output-7419',
         endpoint: { host: 'secret-task-endpoint-7419.example.com' }
       }
+      const artifact = {
+        _id: 'artifact-secret',
+        summary: 'secret-artifact-summary-7419',
+        evidence: 'secret-artifact-evidence-7419'
+      }
 
       assert.equal(tables.includes('safetyOperations'), true)
       assert.equal(tables.includes('agentTasks'), true)
+      assert.equal(tables.includes('agentArtifacts'), true)
       await dbAction('safetyOperations', 'insert', operation)
       await dbAction('agentTasks', 'insert', task)
+      await dbAction('agentArtifacts', 'insert', artifact)
 
       const dbFolder = path.join(appPath, 'electerm', 'users', 'default_user')
       const files = name === 'SQLite'
         ? [operationFile]
-        : [operationFile, 'electerm.agentTasks.nedb']
+        : [operationFile, 'electerm.agentTasks.nedb', 'electerm.agentArtifacts.nedb']
       const storedText = files
         .map(file => fs.readFileSync(path.join(dbFolder, file), 'utf8'))
         .join('\n')
@@ -939,7 +984,9 @@ test('SQLite and NeDB encrypt safety operations and agent tasks at rest', async 
         operation.endpoint.host,
         operation.auditOutput,
         task.output,
-        task.endpoint.host
+        task.endpoint.host,
+        artifact.summary,
+        artifact.evidence
       ]) {
         assert.equal(storedText.includes(secret), false, `${name} leaked ${secret}`)
       }
@@ -951,6 +998,10 @@ test('SQLite and NeDB encrypt safety operations and agent tasks at rest', async 
       assert.equal(
         (await dbAction('agentTasks', 'findOne', { _id: task._id })).output,
         task.output
+      )
+      assert.equal(
+        (await dbAction('agentArtifacts', 'findOne', { _id: artifact._id })).evidence,
+        artifact.evidence
       )
     })
   }

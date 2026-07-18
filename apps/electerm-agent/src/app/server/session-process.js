@@ -407,12 +407,19 @@ exports.terminal = async function (initOptions, ws, uid) {
       'ftp'
     ].includes(type)
     if (isSsh) attachSshBridge(entry)
+    let sessionMetadata = {}
     if (type !== 'ftp') {
-      await sendMsgToChildProcess(child, {
+      const createdSession = await sendMsgToChildProcess(child, {
         id: uid,
         action: 'create-terminal',
         body: terminalOptions
       })
+      const hostKeyFingerprint = typeof createdSession?.hostKeyFingerprint === 'string'
+        ? createdSession.hostKeyFingerprint.trim()
+        : ''
+      if (hostKeyFingerprint) {
+        sessionMetadata = { hostKeyFingerprint }
+      }
     }
     if (abortSignal?.aborted) throw childEndedError('aborted during initialization')
     if (latestTerminalRequests.get(pid) !== requestToken) throw supersededError()
@@ -420,7 +427,7 @@ exports.terminal = async function (initOptions, ws, uid) {
     const previous = activeTerminals.get(pid)
     activeTerminals.set(pid, entry)
     if (previous && previous !== entry) await closeEntry(previous)
-    return { pid, port }
+    return { pid, port, ...sessionMetadata }
   } catch (error) {
     if (entry) await closeEntry(entry)
     if (latestTerminalRequests.get(pid) === requestToken) {

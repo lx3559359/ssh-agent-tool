@@ -63,7 +63,15 @@ async function toggleTerminalLogTimestamp (body) {
 
 async function createTerm (body, ws) {
   const t = await startSession(body, ws)
-  return t.pid
+  const metadata = typeof t.getPublicSessionMetadata === 'function'
+    ? t.getPublicSessionMetadata()
+    : {}
+  const result = { pid: t.pid }
+  const hostKeyFingerprint = typeof metadata?.hostKeyFingerprint === 'string'
+    ? metadata.hostKeyFingerprint.trim()
+    : ''
+  if (hostKeyFingerprint) result.hostKeyFingerprint = hostKeyFingerprint
+  return result
 }
 
 async function testTerm (body, ws) {

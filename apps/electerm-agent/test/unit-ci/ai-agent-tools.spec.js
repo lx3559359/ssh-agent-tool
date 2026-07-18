@@ -48,15 +48,54 @@ test('Agent command confirmation allows terminal execution only after approval',
   assert.equal(result.cancelled, false)
 })
 
-test('Agent tool execution routes command tools through user confirmation', () => {
+test('Agent tool execution routes risky tools through frozen transaction confirmation', () => {
   const source = fs.readFileSync(
     path.resolve(__dirname, '../../src/client/components/ai/agent-tools.js'),
     'utf8'
   )
 
-  assert.match(source, /confirmAgentToolExecution/)
-  assert.match(source, /case 'send_terminal_command':[\s\S]*confirmAgentToolExecution/)
-  assert.match(source, /case 'run_background_command':[\s\S]*confirmAgentToolExecution/)
+  assert.match(source, /buildRiskTransaction/)
+  assert.match(source, /confirmRiskTransaction/)
+  assert.match(source, /requestAgentRiskConfirmation/)
+  assert.match(source, /combineRiskTransactions/)
+  assert.match(source, /export async function prepareAgentRiskBatch/)
+  assert.match(
+    source,
+    /toolCalls\.some\(call\s*=>\s*call\?\.function\?\.name\s*===\s*'run_skill_artifact'\)/
+  )
+  assert.match(source, /prepareRisky:\s*context\s*=>\s*prepareResolvedAgentTool/)
+  assert.match(source, /executeAgentTool\(\{/)
+})
+
+test('Agent tools route every executor through the single takeover gate', () => {
+  const source = fs.readFileSync(
+    path.resolve(__dirname, '../../src/client/components/ai/agent-tools.js'),
+    'utf8'
+  )
+  const agentSource = fs.readFileSync(
+    path.resolve(__dirname, '../../src/client/components/ai/agent.js'),
+    'utf8'
+  )
+
+  assert.match(source, /withAgentToolPolicy\(withAgentToolScopes\(\[/)
+  assert.match(source, /executeAgentTool/)
+  assert.match(source, /function executeResolvedAgentTool/)
+  assert.match(source, /\.\.\.structuredAgentTools/)
+  assert.match(source, /case 'read_service_status'/)
+  assert.match(source, /case 'read_recent_logs'/)
+  assert.match(source, /case 'verify_listening_port'/)
+  assert.match(source, /case 'read_file_range'/)
+  assert.match(source, /executeStructuredAgentTool/)
+  assert.match(source, /case 'send_terminal_command'/)
+  assert.match(source, /case 'sftp_del'/)
+  assert.match(source, /case 'run_local_cli'/)
+  assert.match(source, /case 'run_background_command'/)
+  assert.match(agentSource, /agentTools\.map\(\(\{ type, function: definition \}\)/)
+  assert.match(agentSource, /prepareAgentRiskBatch\(assistantMessage\.tool_calls, agentRuntime\)/)
+  assert.match(agentSource, /failAgentRiskBatch\(agentRuntime, err/)
+  assert.match(source, /mcpDescribeSftpUploadSource/)
+  assert.match(source, /createAgentRiskTerminalHandler/)
+  assert.match(source, /sourceDescriptor/)
 })
 
 test('Agent prompt rules do not allow direct command execution without confirmation', () => {

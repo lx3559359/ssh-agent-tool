@@ -967,3 +967,28 @@ test('input changes and disconnects cancel stale preparation before any send', a
     assert.deepEqual(harness.cancellations, ['operation-1'], cancel)
   }
 })
+
+test('an AbortSignal cancels stale safety preparation before terminal send', async () => {
+  const { createSafetyCommandEntrypoint } = await import(moduleUrl)
+  const preparation = deferred()
+  const harness = createHarness({ prepare: () => preparation.promise })
+  const entrypoint = createSafetyCommandEntrypoint(harness.options)
+  const controller = new AbortController()
+  entrypoint.beginSession()
+  const running = entrypoint.runSafetyCommand('/usr/bin/tee /tmp/app.conf', {
+    source: 'agent',
+    signal: controller.signal
+  })
+  await waitFor(() => harness.requests.length === 1)
+
+  controller.abort()
+  preparation.resolve({
+    ...harness.requests[0],
+    state: 'awaiting-confirmation'
+  })
+
+  const result = await running
+  assert.equal(result.cancelled, true)
+  assert.deepEqual(harness.submissions, [])
+  assert.deepEqual(harness.cancellations, ['operation-1'])
+})

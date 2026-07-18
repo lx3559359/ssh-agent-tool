@@ -19,7 +19,7 @@ import {
 
 const e = window.translate
 
-export default auto(function AIChatHistory ({ history }) {
+export default auto(function AIChatHistory ({ history, agentRunning }) {
   const historyRef = useRef(null)
   const stickToBottomRef = useRef(true)
   const list = Array.isArray(history) ? history : []
@@ -31,7 +31,6 @@ export default auto(function AIChatHistory ({ history }) {
   ))
   const visibleList = getVisibleAIHistory(list, visibleCount)
   const config = window.store?.config || {}
-  const agentRunning = Boolean(window.store?.agentRunning)
   const configRevisionKey = [
     config.activeAIProfileId,
     config.credentialRevisionAI,

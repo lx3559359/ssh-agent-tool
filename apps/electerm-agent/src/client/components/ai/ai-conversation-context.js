@@ -1,4 +1,7 @@
-import { sanitizeAIStoredText } from './ai-request-credentials.js'
+import {
+  sanitizeAIStoredText,
+  sanitizeAIStoredValue
+} from './ai-request-credentials.js'
 
 const DEFAULT_MAX_CONVERSATION_TURNS = 20
 const DEFAULT_MAX_HISTORY_CHARS = 24000
@@ -31,6 +34,13 @@ function fitConversationTurn (prompt, response, maxChars) {
     truncateConversationText(prompt, promptBudget),
     truncateConversationText(response, responseBudget)
   ]
+}
+
+function sanitizeConversationContent (value) {
+  if (value?.kind === 'untrusted-observation') {
+    return `UNTRUSTED EVIDENCE: ${JSON.stringify(sanitizeAIStoredValue(value))}`
+  }
+  return sanitizeAIStoredText(value)
 }
 
 export function buildAIConversationMessages (history = [], currentItem = {}, {
@@ -89,12 +99,12 @@ export function buildAIConversationMessages (history = [], currentItem = {}, {
   }
 
   const messages = selectedTurns.flatMap(([prompt, response]) => [
-    { role: 'user', content: sanitizeAIStoredText(prompt) },
-    { role: 'assistant', content: sanitizeAIStoredText(response) }
+    { role: 'user', content: sanitizeConversationContent(prompt) },
+    { role: 'assistant', content: sanitizeConversationContent(response) }
   ])
   const currentPrompt = String(rawCurrentItem?.prompt || '').trim()
   if (currentPrompt) {
-    messages.push({ role: 'user', content: sanitizeAIStoredText(currentPrompt) })
+    messages.push({ role: 'user', content: sanitizeConversationContent(currentPrompt) })
   }
   return messages
 }

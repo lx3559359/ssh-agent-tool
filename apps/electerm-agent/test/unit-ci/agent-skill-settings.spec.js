@@ -10,21 +10,16 @@ function readSource (relativePath) {
   )
 }
 
-test('AI settings persistence includes custom Agent Skills', () => {
+test('AI settings persistence retains legacy Skills until repository migration accounts for them', () => {
   const source = readSource('src/client/components/ai/ai-config-props.js')
 
   assert.match(source, /'agentSkills'/)
 })
 
-test('AI settings form exposes custom Agent Skill management fields', () => {
+test('AI settings form delegates user Skill operations to the local manager', () => {
   const source = readSource('src/client/components/ai/ai-config.jsx')
 
-  assert.match(source, /Form\.List\s+name=['"]agentSkills['"]/)
-  assert.match(source, /name:\s*'id'/)
-  assert.match(source, /name:\s*'title'/)
-  assert.match(source, /name:\s*'description'/)
-  assert.match(source, /name=\{\[name,\s*'prompt'\]\}/)
-  assert.match(source, /name=\{\[name,\s*'disabled'\]\}/)
-  assert.match(source, /e\('shellpilotAiAddSkill'\)/)
-  assert.match(source, /e\('shellpilotDelete'\)/)
+  assert.doesNotMatch(source, /Form\.List\s+name=['"]agentSkills['"]/)
+  assert.match(source, /AgentSkillManagerModal/)
+  assert.match(source, /shellpilotSkillManageCount/)
 })

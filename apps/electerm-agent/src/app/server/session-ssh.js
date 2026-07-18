@@ -801,6 +801,9 @@ class TerminalSshBase extends TerminalBase {
       },
       onError: (err) => {
         this.hostVerificationError = err
+      },
+      onVerified: ({ fingerprint }) => {
+        this.hostKeyFingerprint = fingerprint
       }
     })
     this.authPartiallySucceeded = false
@@ -1224,6 +1227,13 @@ class TerminalSshBase extends TerminalBase {
 
   init () {
     return this.remoteInitProcess()
+  }
+
+  getPublicSessionMetadata () {
+    if (!this.hostKeyFingerprint) return {}
+    return {
+      hostKeyFingerprint: this.hostKeyFingerprint
+    }
   }
 }
 
