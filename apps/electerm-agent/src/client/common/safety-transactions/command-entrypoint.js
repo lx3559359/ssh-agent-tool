@@ -2,7 +2,11 @@ import generate from '../uid.js'
 import { redactAuditText } from './audit-redaction.js'
 import { buildSafetyRequest, operationStates } from './models.js'
 import { buildCommandExecution } from './command-execution.js'
+import {
+  resolveInternalCommandRiskDelegation
+} from './command-risk-delegation.js'
 import { resolveInternalSubmissionHooks } from './command-submission-hooks.js'
+import { assertSameSessionEndpoint } from './endpoint-guard.js'
 import { createTraceContext } from '../quality/trace-context.js'
 import { recordQualityEvent } from '../quality/quality-events.js'
 
@@ -23,6 +27,24 @@ function deferred () {
 
 function safeErrorMessage (error, fallback = '未知错误') {
   return redactAuditText(String(error?.message || fallback))
+}
+
+function riskDelegationError () {
+  const error = new Error('Agent command risk delegation capability is invalid')
+  error.code = 'AGENT_RISK_DELEGATION_INVALID'
+  return error
+}
+
+function resolveRiskDelegation (command, runOptions) {
+  if (runOptions.riskDelegation === undefined) return undefined
+  const delegation = resolveInternalCommandRiskDelegation(
+    runOptions.riskDelegation
+  )
+  if (!delegation || runOptions.source !== 'agent' ||
+    runOptions.inputOnly === true || delegation.command !== command) {
+    throw riskDelegationError()
+  }
+  return delegation
 }
 
 function createHookState (hooks) {
@@ -136,14 +158,25 @@ export function createSafetyCommandEntrypoint (options = {}) {
     return run.cancelPromise
   }
 
-  function waitForConfirmation (run, request) {
-    const classification = {
+  function confirmationClassification (run, request) {
+    return {
       risk: request.risk,
       reversible: request.reversible,
       provider: request.provider,
       requiresConfirmation: request.requiresConfirmation,
-      reason: request.reason
+      reason: request.reason,
+      ...(run.riskDelegation
+        ? {
+            riskContext: run.riskDelegation.riskContext,
+            agentRiskReasonCode: run.riskDelegation.classification.reasonCode,
+            agentToolName: run.riskDelegation.toolName
+          }
+        : {})
     }
+  }
+
+  function waitForConfirmation (run, request) {
+    const classification = confirmationClassification(run, request)
     const built = buildConfirmation(run.command, classification) || {}
     const confirmation = {
       ...built,
@@ -305,13 +338,7 @@ export function createSafetyCommandEntrypoint (options = {}) {
     return {
       kind: 'retry',
       command: run.command,
-      classification: {
-        risk: request.risk,
-        reversible: request.reversible,
-        provider: request.provider,
-        requiresConfirmation: request.requiresConfirmation,
-        reason: request.reason
-      },
+      classification: confirmationClassification(run, request),
       executeAllowed: true,
       automaticRollback: request.reversible,
       message: '上次安全提交失败，可取消或重新准备后重试。'
@@ -510,19 +537,41 @@ export function createSafetyCommandEntrypoint (options = {}) {
         mode: runOptions.executionMode || 'foreground'
       })
       run.execution = executionPlan
-      const request = buildSafetyRequest({
+      const endpoint = getEndpoint()
+      if (run.riskDelegation) {
+        assertSameSessionEndpoint(run.riskDelegation.endpoint, endpoint)
+      }
+      let request = buildSafetyRequest({
         id: operationId,
         source,
-        endpoint: getEndpoint(),
+        endpoint,
         title: runOptions.title || '终端命令',
         command,
         metadata: {
           ...(runOptions.metadata || {}),
           commandEntrypoint: true,
           execution: executionPlan.metadata,
-          traceId: run.traceContext.traceId
+          traceId: run.traceContext.traceId,
+          ...(run.riskDelegation
+            ? {
+                agentRiskContext: run.riskDelegation.riskContext,
+                agentRiskReasonCode: run.riskDelegation.classification.reasonCode,
+                agentToolName: run.riskDelegation.toolName
+              }
+            : {})
         }
       })
+      if (run.riskDelegation && request.risk === 'readonly') {
+        request = {
+          ...request,
+          risk: 'unknown',
+          provider: null,
+          reversible: false,
+          recoveryProvider: null,
+          requiresConfirmation: true,
+          reason: `Agent policy requires confirmation: ${run.riskDelegation.classification.reasonCode}`
+        }
+      }
       run.operationId = request.id
       const prepared = await runner.prepare(request)
       if (prepared?.state !== operationStates.awaitingConfirmation) {
@@ -657,6 +706,12 @@ export function createSafetyCommandEntrypoint (options = {}) {
         return Promise.reject(new Error('调用方不允许指定内部提交命令或安全钩子。'))
       }
     }
+    let riskDelegation
+    try {
+      riskDelegation = resolveRiskDelegation(command, runOptions)
+    } catch (error) {
+      return Promise.reject(error)
+    }
     const internalHooks = runOptions.submissionHooks === undefined
       ? undefined
       : resolveInternalSubmissionHooks(runOptions.submissionHooks)
@@ -709,6 +764,7 @@ export function createSafetyCommandEntrypoint (options = {}) {
       runOptions,
       generation,
       hookState: createHookState(internalHooks),
+      riskDelegation,
       operationId,
       traceContext,
       qualityFinished: false

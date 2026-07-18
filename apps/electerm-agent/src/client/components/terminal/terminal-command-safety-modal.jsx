@@ -18,6 +18,7 @@ export default function TerminalCommandSafetyModal ({
 }) {
   if (!open || !confirmation) return null
   const reversible = confirmation.kind === 'reversible'
+  const riskContext = confirmation.classification?.riskContext
   const executeText = reversible
     ? '创建恢复点并执行'
     : confirmation.kind === 'retry'
@@ -69,6 +70,25 @@ export default function TerminalCommandSafetyModal ({
       <div className={`terminal-command-safety-kind is-${confirmation.kind}`}>
         {detail}
       </div>
+      {riskContext
+        ? (
+          <div className='terminal-command-safety-risk-context'>
+            <div><strong>目的：</strong>{riskContext.purpose}</div>
+            <div>
+              <strong>影响目标：</strong>
+              {riskContext.impactTargets.join('、')}
+            </div>
+            <div><strong>执行后验证：</strong></div>
+            <ul>
+              {riskContext.verification.map((step, index) => (
+                <li key={`${step.name}-${index}`}>
+                  {step.name} <code>{JSON.stringify(step.args)}</code>
+                </li>
+              ))}
+            </ul>
+          </div>
+          )
+        : null}
       <pre className='terminal-command-safety-command'>{confirmation.command}</pre>
       {error
         ? <div className='terminal-command-safety-error'>{error}</div>

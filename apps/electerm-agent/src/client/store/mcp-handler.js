@@ -872,7 +872,10 @@ export default Store => {
       ...(options.signal ? { signal: options.signal } : {}),
       source: 'agent',
       title: '后台命令',
-      executionMode: 'background'
+      executionMode: 'background',
+      ...(options.riskDelegation
+        ? { riskDelegation: options.riskDelegation }
+        : {})
     })
     if (options.signal?.aborted && submission.sent) {
       let cancelled = false

@@ -9,6 +9,12 @@ function readSource (name) {
   return fs.readFileSync(path.join(aiRoot, name), 'utf8')
 }
 
+function toolDefinition (source, name) {
+  const start = source.indexOf(`name: '${name}'`)
+  const next = source.indexOf("name: '", start + 7)
+  return source.slice(start, next === -1 ? undefined : next)
+}
+
 test('Agent tool execution routes risky tools through frozen transaction confirmation', () => {
   const source = readSource('agent-tools.js')
 
@@ -80,4 +86,39 @@ test('structured reads use readonly exec while file ranges keep SFTP read', () =
   assert.match(structuredCases, /executeCommand:\s*command\s*=>\s*runReadonlyTool/)
   assert.match(structuredCases, /readFile:\s*fileArgs\s*=>\s*store\.mcpSftpReadFile/)
   assert.doesNotMatch(structuredCases, /mcpSendTerminal|runSafetyCommand|runTerminalTool/)
+})
+
+test('risky tool schemas require complete risk context without breaking readonly send compatibility', () => {
+  const source = readSource('agent-tools.js')
+
+  for (const name of [
+    'run_background_command',
+    'sftp_del',
+    'sftp_upload',
+    'sftp_download',
+    'run_local_cli'
+  ]) {
+    assert.match(
+      toolDefinition(source, name),
+      /required:\s*\[[^\]]*'riskContext'[^\]]*\]/,
+      name
+    )
+  }
+
+  const send = toolDefinition(source, 'send_terminal_command')
+  assert.match(send, /riskContext:\s*agentRiskContextSchema/)
+  assert.match(send, /required:\s*\['command'\]/)
+  assert.doesNotMatch(send, /required:\s*\[[^\]]*'riskContext'/)
+})
+
+test('runtime rejects risky calls without context before risk preparation', () => {
+  const source = readSource('agent-tools.js')
+  const entrypoint = source.slice(source.indexOf('export async function executeToolCall'))
+
+  assert.match(entrypoint, /assertAgentRiskContextForCall\([\s\S]*initialClassification/)
+  assert.ok(
+    entrypoint.indexOf('assertAgentRiskContextForCall') <
+      entrypoint.indexOf('executeAgentTool({')
+  )
+  assert.doesNotMatch(source, /const riskContext = args\.riskContext \|\| \{\}/)
 })

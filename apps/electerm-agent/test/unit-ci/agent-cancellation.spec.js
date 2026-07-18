@@ -137,6 +137,28 @@ test('terminal safety dispatch and wait receive the runtime AbortSignal', async 
   assert.deepEqual(observed, [controller.signal, controller.signal])
 })
 
+test('terminal Agent risk passes its authenticated delegation to the safety entrypoint', async () => {
+  const { runAgentTerminalCommand } = await import(terminalUrl)
+  const riskDelegation = Object.freeze({ opaque: true })
+  let observedDelegation
+
+  await runAgentTerminalCommand({
+    args: { command: 'journalctl -f', tabId: 'tab-a' },
+    riskDelegation,
+    store: {
+      runSafetyCommand: async (_command, options) => {
+        observedDelegation = options.riskDelegation
+        return { sent: false, cancelled: true }
+      },
+      mcpWaitForTerminalIdle: async () => {
+        throw new Error('wait should not run')
+      }
+    }
+  })
+
+  assert.equal(observedDelegation, riskDelegation)
+})
+
 test('terminal cancellation is not armed until the command was dispatched', async () => {
   const { runAgentTerminalCommand } = await import(terminalUrl)
   let armed = 0

@@ -15,6 +15,10 @@ const submissionHooksModuleUrl = pathToFileURL(path.resolve(
   __dirname,
   '../../src/client/common/safety-transactions/command-submission-hooks.js'
 )).href
+const agentRiskDelegationUrl = pathToFileURL(path.resolve(
+  __dirname,
+  '../../src/client/components/ai/agent-risk-delegation.js'
+)).href
 
 function createHarness (overrides = {}) {
   const requests = []
@@ -26,6 +30,7 @@ function createHarness (overrides = {}) {
   const errors = []
   const trackedCommands = []
   const readinessChecks = []
+  const confirmationBuilds = []
   let idSequence = 0
   let tokenSequence = 0
   const runner = {
@@ -74,6 +79,7 @@ function createHarness (overrides = {}) {
     errors,
     trackedCommands,
     readinessChecks,
+    confirmationBuilds,
     runner,
     tracker,
     options: {
@@ -87,7 +93,7 @@ function createHarness (overrides = {}) {
         return true
       },
       createId: () => `operation-${++idSequence}`,
-      getEndpoint: () => ({
+      getEndpoint: () => overrides.getEndpoint?.() || ({
         tabId: 'tab-1',
         host: 'prod.example.com',
         port: 22,
@@ -101,13 +107,16 @@ function createHarness (overrides = {}) {
         submissions.push({ command, token })
       },
       inputCommand: command => inputs.push(command),
-      buildConfirmation: (command, classification) => ({
-        command,
-        classification,
-        kind: classification.reversible ? 'reversible' : 'nonreversible',
-        executeAllowed: true,
-        automaticRollback: classification.reversible
-      }),
+      buildConfirmation: (command, classification) => {
+        confirmationBuilds.push({ command, classification })
+        return {
+          command,
+          classification,
+          kind: classification.reversible ? 'reversible' : 'nonreversible',
+          executeAllowed: true,
+          automaticRollback: classification.reversible
+        }
+      },
       onStateChange: state => views.push(state),
       onError: error => errors.push(error)
     }
@@ -291,6 +300,195 @@ test('quick, AI and Agent commands use one classified safety request shape', asy
   ])
   assert.equal(harness.submissions.length, 2)
   assert.equal(harness.completions.length, 2)
+})
+
+test('delegated Agent resource risks receive exactly one lower confirmation and one dispatch', async () => {
+  const { createSafetyCommandEntrypoint } = await import(moduleUrl)
+  const { createDelegatedAgentSafetyPreparation } = await import(agentRiskDelegationUrl)
+  const endpoint = {
+    tabId: 'tab-1',
+    host: 'prod.example.com',
+    port: 22,
+    username: 'root',
+    pid: 1001,
+    terminalPid: 'terminal-1',
+    sessionType: 'ssh',
+    hostKeyFingerprint: 'SHA256:abc'
+  }
+  const riskContext = {
+    purpose: 'collect a bounded operational signal',
+    impactTargets: ['ssh-session:tab-1'],
+    verification: [{
+      name: 'read_service_status',
+      args: { service: 'nginx' }
+    }]
+  }
+
+  for (const [toolName, command, executionMode] of [
+    ['run_background_command', 'uptime', 'background'],
+    ['send_terminal_command', 'journalctl -f', 'foreground'],
+    ['send_terminal_command', 'tail -f /var/log/nginx/error.log', 'foreground']
+  ]) {
+    const harness = createHarness({ getEndpoint: () => endpoint })
+    const entrypoint = createSafetyCommandEntrypoint(harness.options)
+    entrypoint.beginSession()
+    const preparation = createDelegatedAgentSafetyPreparation(toolName, {
+      command,
+      tabId: 'tab-1',
+      riskContext
+    }, {
+      endpoint,
+      classification: {
+        outcome: 'risky',
+        reasonCode: toolName === 'run_background_command'
+          ? 'BACKGROUND_PROCESS'
+          : 'RESOURCE_SENSITIVE_READ'
+      }
+    })
+
+    const running = entrypoint.runSafetyCommand(command, {
+      source: 'agent',
+      executionMode,
+      riskDelegation: preparation.safetyDelegationCapability
+    })
+    await waitFor(() => harness.confirmationBuilds.length === 1)
+
+    assert.equal(harness.confirmationBuilds.length, 1, command)
+    assert.deepEqual(
+      harness.confirmationBuilds[0].classification.riskContext,
+      riskContext,
+      command
+    )
+    assert.equal(harness.submissions.length, 0, command)
+    assert.equal(entrypoint.confirmPending(), true, command)
+
+    const result = await running
+    assert.equal(result.sent, true, command)
+    assert.equal(harness.confirmationBuilds.length, 1, command)
+    assert.equal(harness.submissions.length, 1, command)
+  }
+})
+
+test('cancelling a delegated Agent resource risk confirms once and dispatches zero times', async () => {
+  const { createSafetyCommandEntrypoint } = await import(moduleUrl)
+  const { createDelegatedAgentSafetyPreparation } = await import(agentRiskDelegationUrl)
+  const endpoint = {
+    tabId: 'tab-1',
+    host: 'prod.example.com',
+    port: 22,
+    username: 'root',
+    pid: 1001,
+    terminalPid: 'terminal-1',
+    sessionType: 'ssh',
+    hostKeyFingerprint: 'SHA256:abc'
+  }
+  const riskContext = {
+    purpose: 'run one bounded background diagnostic',
+    impactTargets: ['ssh-session:tab-1'],
+    verification: [{ name: 'verify_listening_port', args: { port: 22 } }]
+  }
+  const preparation = createDelegatedAgentSafetyPreparation(
+    'run_background_command',
+    { command: 'uptime', tabId: 'tab-1', riskContext },
+    {
+      endpoint,
+      classification: { outcome: 'risky', reasonCode: 'BACKGROUND_PROCESS' }
+    }
+  )
+  const harness = createHarness({ getEndpoint: () => endpoint })
+  const entrypoint = createSafetyCommandEntrypoint(harness.options)
+  entrypoint.beginSession()
+  const running = entrypoint.runSafetyCommand('uptime', {
+    source: 'agent',
+    executionMode: 'background',
+    riskDelegation: preparation.safetyDelegationCapability
+  })
+  await waitFor(() => harness.confirmationBuilds.length === 1)
+
+  assert.equal(await entrypoint.cancelPending(), true)
+  const result = await running
+  assert.equal(result.cancelled, true)
+  assert.equal(harness.confirmationBuilds.length, 1)
+  assert.equal(harness.submissions.length, 0)
+})
+
+test('plain readonly commands keep zero confirmations and forged risk delegation is rejected', async () => {
+  const { createSafetyCommandEntrypoint } = await import(moduleUrl)
+  const { createDelegatedAgentSafetyPreparation } = await import(agentRiskDelegationUrl)
+  const readonlyHarness = createHarness()
+  const readonlyEntrypoint = createSafetyCommandEntrypoint(readonlyHarness.options)
+  readonlyEntrypoint.beginSession()
+
+  const result = await readonlyEntrypoint.runSafetyCommand('uptime', {
+    source: 'agent'
+  })
+  assert.equal(result.sent, true)
+  assert.equal(readonlyHarness.confirmationBuilds.length, 0)
+  assert.equal(readonlyHarness.submissions.length, 1)
+
+  const forgedHarness = createHarness()
+  const forgedEntrypoint = createSafetyCommandEntrypoint(forgedHarness.options)
+  forgedEntrypoint.beginSession()
+  await assert.rejects(forgedEntrypoint.runSafetyCommand('uptime', {
+    source: 'agent',
+    riskDelegation: Object.freeze({})
+  }), /delegation|capability|risk/i)
+  assert.equal(forgedHarness.confirmationBuilds.length, 0)
+  assert.equal(forgedHarness.submissions.length, 0)
+
+  const endpoint = {
+    tabId: 'tab-1',
+    host: 'prod.example.com',
+    port: 22,
+    username: 'root',
+    pid: 1001,
+    terminalPid: 'terminal-1',
+    sessionType: 'ssh',
+    hostKeyFingerprint: 'SHA256:abc'
+  }
+  const preparation = createDelegatedAgentSafetyPreparation(
+    'run_background_command',
+    {
+      command: 'uptime',
+      tabId: 'tab-1',
+      riskContext: {
+        purpose: 'bounded background diagnostic',
+        impactTargets: ['ssh-session:tab-1'],
+        verification: [{
+          name: 'verify_listening_port',
+          args: { port: 22 }
+        }]
+      }
+    },
+    {
+      endpoint,
+      classification: { outcome: 'risky', reasonCode: 'BACKGROUND_PROCESS' }
+    }
+  )
+  const changedHarness = createHarness({
+    getEndpoint: () => ({ ...endpoint, pid: 1002 })
+  })
+  const changedEntrypoint = createSafetyCommandEntrypoint(changedHarness.options)
+  changedEntrypoint.beginSession()
+  await assert.rejects(changedEntrypoint.runSafetyCommand('uptime', {
+    source: 'agent',
+    executionMode: 'background',
+    riskDelegation: preparation.safetyDelegationCapability
+  }), /不一致|session|endpoint/i)
+  assert.equal(changedHarness.confirmationBuilds.length, 0)
+  assert.equal(changedHarness.submissions.length, 0)
+
+  const changedCommandHarness = createHarness({ getEndpoint: () => endpoint })
+  const changedCommandEntrypoint = createSafetyCommandEntrypoint(
+    changedCommandHarness.options
+  )
+  changedCommandEntrypoint.beginSession()
+  await assert.rejects(changedCommandEntrypoint.runSafetyCommand('whoami', {
+    source: 'agent',
+    riskDelegation: preparation.safetyDelegationCapability
+  }), /delegation|capability|risk/i)
+  assert.equal(changedCommandHarness.confirmationBuilds.length, 0)
+  assert.equal(changedCommandHarness.submissions.length, 0)
 })
 
 test('inputOnly fills the terminal without creating a transaction', async () => {

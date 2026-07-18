@@ -57,6 +57,7 @@ test('SSH command safety confirmation delegates to the single lower transaction'
 
 test('delegated preparation freezes full args endpoint and verification', async () => {
   const {
+    assertAgentRiskContext,
     createDelegatedAgentSafetyPreparation,
     validateDelegatedAgentSafetyPreparation
   } = await import(moduleUrl)
@@ -68,7 +69,13 @@ test('delegated preparation freezes full args endpoint and verification', async 
   const preparation = createDelegatedAgentSafetyPreparation(
     'send_terminal_command',
     args,
-    { endpoint: sshEndpoint }
+    {
+      endpoint: sshEndpoint,
+      classification: {
+        outcome: 'risky',
+        reasonCode: 'COMMAND_CHANGES_STATE'
+      }
+    }
   )
 
   assert.equal(Object.isFrozen(preparation), true)
@@ -76,8 +83,10 @@ test('delegated preparation freezes full args endpoint and verification', async 
   assert.equal(Object.isFrozen(preparation.confirmedArgs.riskContext), true)
   assert.equal(Object.isFrozen(preparation.endpoint), true)
   assert.equal(Object.isFrozen(preparation.verification), true)
+  assert.equal(Object.isFrozen(preparation.safetyDelegationCapability), true)
   assert.deepEqual(preparation.endpoint, sshEndpoint)
   assert.deepEqual(preparation.verification, riskContext.verification)
+  assert.deepEqual(assertAgentRiskContext(riskContext), riskContext)
 
   const validated = validateDelegatedAgentSafetyPreparation({
     toolName: 'send_terminal_command',
@@ -100,6 +109,71 @@ test('delegated preparation freezes full args endpoint and verification', async 
     endpoint: { ...sshEndpoint, pid: 'pid-b' },
     delegatedPreparation: preparation
   }), error => error.code === 'AGENT_RISK_CONFIRMATION_REQUIRED')
+})
+
+test('risk context schema and runtime validation require non-empty authorization details', async () => {
+  const {
+    agentRiskContextSchema,
+    assertAgentRiskContext,
+    assertAgentRiskContextForCall
+  } = await import(moduleUrl)
+
+  assert.deepEqual(agentRiskContextSchema.required, [
+    'purpose',
+    'impactTargets',
+    'verification'
+  ])
+  assert.equal(agentRiskContextSchema.properties.purpose.minLength, 1)
+  assert.equal(agentRiskContextSchema.properties.impactTargets.minItems, 1)
+  assert.equal(agentRiskContextSchema.properties.impactTargets.items.minLength, 1)
+  assert.equal(agentRiskContextSchema.properties.verification.minItems, 1)
+  assert.deepEqual(
+    agentRiskContextSchema.properties.verification.items.required,
+    ['name', 'args']
+  )
+
+  for (const invalid of [
+    undefined,
+    {},
+    { ...riskContext, purpose: '   ' },
+    { ...riskContext, impactTargets: [] },
+    { ...riskContext, impactTargets: [''] },
+    { ...riskContext, verification: [] },
+    { ...riskContext, verification: [{ name: 'read_service_status' }] },
+    { ...riskContext, verification: [{ name: 'unknown', args: {} }] },
+    {
+      ...riskContext,
+      verification: [{
+        name: 'read_service_status',
+        args: { nonJsonValue: 1n }
+      }]
+    }
+  ]) {
+    assert.throws(
+      () => assertAgentRiskContext(invalid),
+      error => error.code === 'AGENT_RISK_CONTEXT_REQUIRED'
+    )
+  }
+
+  const validated = assertAgentRiskContext(riskContext)
+  assert.equal(Object.isFrozen(validated), true)
+  assert.equal(Object.isFrozen(validated.verification), true)
+
+  assert.equal(assertAgentRiskContextForCall({
+    toolName: 'send_terminal_command',
+    args: { command: 'ip addr' },
+    classification: { outcome: 'allowlisted-readonly' }
+  }), null)
+  assert.throws(() => assertAgentRiskContextForCall({
+    toolName: 'send_terminal_command',
+    args: { command: 'journalctl -f' },
+    classification: { outcome: 'risky' }
+  }), error => error.code === 'AGENT_RISK_CONTEXT_REQUIRED')
+  assert.deepEqual(assertAgentRiskContextForCall({
+    toolName: 'run_background_command',
+    args: { command: 'uptime', riskContext },
+    classification: { outcome: 'risky' }
+  }), riskContext)
 })
 
 test('SFTP delete keeps its existing delegated SSH safety path', async () => {

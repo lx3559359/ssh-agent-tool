@@ -9,6 +9,7 @@ export async function runAgentTerminalCommand ({
   store,
   args = {},
   signal,
+  riskDelegation,
   onDispatched
 }) {
   assertActive(signal)
@@ -25,6 +26,7 @@ export async function runAgentTerminalCommand ({
     ...(signal ? { signal } : {}),
     source: 'agent',
     title: 'Agent 终端命令',
+    ...(riskDelegation ? { riskDelegation } : {}),
     ...(args.traceContext ? { traceContext: args.traceContext } : {})
   })
   if (safetyResult?.sent !== true) {

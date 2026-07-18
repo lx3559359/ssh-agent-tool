@@ -44,6 +44,9 @@ import {
   isAgentAsyncRiskResult
 } from './agent-risk-async.js'
 import {
+  agentRiskContextSchema,
+  assertAgentRiskContext,
+  assertAgentRiskContextForCall,
   createDelegatedAgentSafetyPreparation,
   shouldDelegateAgentSafetyConfirmation,
   validateDelegatedAgentSafetyPreparation
@@ -91,40 +94,6 @@ function buildAddBookmarkParameters () {
     required: ['type']
   }
 }
-
-const agentRiskContextSchema = Object.freeze({
-  type: 'object',
-  properties: {
-    purpose: { type: 'string' },
-    impactTargets: {
-      type: 'array',
-      items: { type: 'string' }
-    },
-    verification: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          name: {
-            type: 'string',
-            enum: [
-              'read_service_status',
-              'read_recent_logs',
-              'verify_listening_port',
-              'read_file_range'
-            ]
-          },
-          args: { type: 'object' },
-          expected: { type: 'object' }
-        },
-        required: ['name', 'args'],
-        additionalProperties: false
-      }
-    }
-  },
-  required: ['purpose', 'verification'],
-  additionalProperties: false
-})
 
 export const agentTools = withAgentToolPolicy(withAgentToolScopes([
   ...structuredAgentTools,
@@ -395,7 +364,7 @@ export const agentTools = withAgentToolPolicy(withAgentToolScopes([
           },
           riskContext: agentRiskContextSchema
         },
-        required: ['remotePath']
+        required: ['remotePath', 'riskContext']
       }
     }
   },
@@ -421,7 +390,7 @@ export const agentTools = withAgentToolPolicy(withAgentToolScopes([
           },
           riskContext: agentRiskContextSchema
         },
-        required: ['localPath', 'remotePath']
+        required: ['localPath', 'remotePath', 'riskContext']
       }
     }
   },
@@ -447,7 +416,7 @@ export const agentTools = withAgentToolPolicy(withAgentToolScopes([
           },
           riskContext: agentRiskContextSchema
         },
-        required: ['remotePath', 'localPath']
+        required: ['remotePath', 'localPath', 'riskContext']
       }
     }
   },
@@ -533,7 +502,7 @@ export const agentTools = withAgentToolPolicy(withAgentToolScopes([
           },
           riskContext: agentRiskContextSchema
         },
-        required: ['tool']
+        required: ['tool', 'riskContext']
       }
     }
   },
@@ -603,7 +572,7 @@ export const agentTools = withAgentToolPolicy(withAgentToolScopes([
           },
           riskContext: agentRiskContextSchema
         },
-        required: ['command']
+        required: ['command', 'riskContext']
       }
     }
   },
@@ -694,16 +663,6 @@ export function getAgentToolDescriptor (toolName) {
   return descriptor
 }
 
-function affectedObjectsFor (toolName, args) {
-  return [
-    args.remotePath && `remote-path:${args.remotePath}`,
-    args.localPath && `local-path:${args.localPath}`,
-    args.taskId && `background-task:${args.taskId}`,
-    args.tabId && `session:${args.tabId}`,
-    toolName
-  ].filter(Boolean)
-}
-
 function recoveryFor (toolName, args) {
   if (toolName === 'sftp_upload' && args.preparedTransfer?.safetyOperationId) {
     return {
@@ -739,7 +698,7 @@ function recoveryFor (toolName, args) {
 
 function buildResolvedRiskTransaction (toolName, args, runtime, context = {}) {
   const recovery = recoveryFor(toolName, args)
-  const riskContext = args.riskContext || {}
+  const riskContext = assertAgentRiskContext(args.riskContext)
   const artifactDigests = [
     ...(runtime.selectedSkillArtifactDigests || []),
     ...(toolName === 'sftp_upload' && args.sourceDescriptor?.digest
@@ -772,10 +731,8 @@ function buildResolvedRiskTransaction (toolName, args, runtime, context = {}) {
   }], {
     endpoint: context.endpoint,
     goal: runtime.goal || `Agent ${toolName}`,
-    purpose: riskContext.purpose || runtime.goal || `Execute ${toolName}`,
-    affectedObjects: Array.isArray(riskContext.impactTargets)
-      ? riskContext.impactTargets
-      : affectedObjectsFor(toolName, args),
+    purpose: riskContext.purpose,
+    affectedObjects: riskContext.impactTargets,
     worstCase: context.classification?.reasonCode || 'unknown',
     resourceImpact: context.classification?.resourceImpact,
     disconnectPossible: /(?:network|firewall|restart|reboot|shutdown)/i.test(
@@ -783,9 +740,7 @@ function buildResolvedRiskTransaction (toolName, args, runtime, context = {}) {
     ),
     recovery,
     rollbackLimits: recovery.limits,
-    verification: Array.isArray(riskContext.verification)
-      ? riskContext.verification
-      : [],
+    verification: riskContext.verification,
     skillBindings: runtime.selectedSkillBindings || [],
     artifactDigests
   })
@@ -883,18 +838,27 @@ export async function prepareAgentRiskBatch (toolCalls, runtime = {}) {
     } catch {
       continue
     }
-    let args = bindAgentToolArgs(toolName, rawArgs, runtime)
-    args = await prepareAgentRiskArgs(toolName, args, runtime, window.store, {
-      prepareRecovery: false
-    })
+    const boundArgs = bindAgentToolArgs(toolName, rawArgs, runtime)
     const endpoint = resolveAgentExecutionEndpoint({ descriptor, runtime })
-    const expandedContent = args.script || args.expandedContent
+    const expandedContent = boundArgs.script || boundArgs.expandedContent
     const classification = classifyAgentCall({
       descriptor,
-      args,
+      args: boundArgs,
       expandedContent
     })
+    assertAgentRiskContextForCall({
+      toolName,
+      args: boundArgs,
+      classification
+    })
     if (classification.outcome !== 'risky') continue
+    const args = await prepareAgentRiskArgs(
+      toolName,
+      boundArgs,
+      runtime,
+      window.store,
+      { prepareRecovery: false }
+    )
     if (shouldDelegateAgentSafetyConfirmation(toolName, args, { endpoint })) {
       return null
     }
@@ -952,6 +916,11 @@ export async function prepareAgentRiskBatch (toolCalls, runtime = {}) {
 }
 
 async function prepareResolvedAgentTool (toolName, args, runtime, context = {}) {
+  assertAgentRiskContextForCall({
+    toolName,
+    args,
+    classification: context.classification
+  })
   const batchPreparation = batchPreparationFor(runtime)
   if (batchPreparation) return batchPreparation
   if (shouldDelegateAgentSafetyConfirmation(toolName, args, {
@@ -959,7 +928,8 @@ async function prepareResolvedAgentTool (toolName, args, runtime, context = {}) 
   })) {
     return createDelegatedAgentSafetyPreparation(toolName, args, {
       endpoint: context.endpoint,
-      verification: args.riskContext?.verification || []
+      verification: args.riskContext.verification,
+      classification: context.classification
     })
   }
   const confirmedArgs = await prepareAgentRiskArgs(toolName, args, runtime)
@@ -1005,7 +975,7 @@ async function prepareResolvedAgentTool (toolName, args, runtime, context = {}) 
     : { handled: true, result: JSON.stringify(confirmation) }
 }
 
-async function runTerminalTool (store, args, runtime) {
+async function runTerminalTool (store, args, runtime, preparation) {
   let clearCancellation = () => {}
   const cancelTerminal = async () => {
     try {
@@ -1028,6 +998,7 @@ async function runTerminalTool (store, args, runtime) {
       store,
       args,
       signal: runtime.signal,
+      riskDelegation: preparation?.safetyDelegationCapability,
       onDispatched: () => {
         clearCancellation = registerAgentCancellation(runtime, cancelTerminal)
       }
@@ -1073,7 +1044,12 @@ async function executeResolvedAgentTool (toolName, args, runtime, endpoint, prep
         'allowlisted-readonly') {
         return JSON.stringify(await runReadonlyTool(args, endpoint, runtime))
       }
-      return JSON.stringify(await runTerminalTool(store, args, runtime))
+      return JSON.stringify(await runTerminalTool(
+        store,
+        args,
+        runtime,
+        preparation
+      ))
     }
     case 'get_terminal_output':
       return JSON.stringify(store.mcpGetTerminalOutput(args))
@@ -1177,6 +1153,7 @@ async function executeResolvedAgentTool (toolName, args, runtime, endpoint, prep
     case 'run_background_command': {
       const backgroundTask = Promise.resolve(store.mcpRunBackgroundCommand(args, {
         signal: runtime.signal,
+        riskDelegation: preparation?.safetyDelegationCapability,
         onTerminal: createPreparedRiskTerminalHandler(preparation, endpoint, runtime)
       }))
       registerDeferredAgentCancellation(runtime, backgroundTask, result => {
@@ -1348,6 +1325,18 @@ export async function executeToolCall (
   const expandedContent = controlledSkillCall?.expandedContent ||
     args.script || args.expandedContent
   assertAgentRuntimeActive(runtime)
+  const initialClassification = classifyAgentCall({
+    descriptor,
+    args,
+    expandedContent,
+    skillArtifact: controlledSkillCall?.skillArtifact,
+    localExecution: controlledSkillCall?.localExecution
+  })
+  assertAgentRiskContextForCall({
+    toolName,
+    args,
+    classification: initialClassification
+  })
   const currentEndpoint = resolveAgentExecutionEndpoint({
     descriptor,
     runtime
