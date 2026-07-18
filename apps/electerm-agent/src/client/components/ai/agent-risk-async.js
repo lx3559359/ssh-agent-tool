@@ -53,10 +53,19 @@ export async function completeAgentRiskPreparation ({
   state.settling = Promise.resolve()
     .then(() => verify?.())
     .then(async verification => {
+      const verified = verification?.passed === true &&
+        verification?.status === 'verified' &&
+        Number.isInteger(verification?.count) && verification.count > 0
+      const notApplicable = verification?.passed === true &&
+        verification?.status === 'not-applicable' && verification?.count === 0
       await settle?.({
         taskId: preparation.riskTaskId,
         status: 'completed',
-        remoteState: 'verified',
+        remoteState: verified
+          ? 'verified'
+          : notApplicable
+            ? 'not-applicable'
+            : 'unverified',
         canAutoRetry: false,
         ...evidencePatch(preparation)
       })

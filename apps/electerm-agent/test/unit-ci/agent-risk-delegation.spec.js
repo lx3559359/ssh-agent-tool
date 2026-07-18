@@ -29,7 +29,7 @@ const riskContext = Object.freeze({
   verification: [{
     name: 'read_service_status',
     args: { service: 'nginx' },
-    expected: { contains: 'ActiveState=active' }
+    expected: { exitCode: 0, contains: 'ActiveState=active' }
   }]
 })
 const sessionControlRiskContext = Object.freeze({
@@ -143,6 +143,15 @@ test('risk context schema and runtime validation require non-empty authorization
     agentRiskContextSchema.properties.verification.items.required,
     ['name', 'args']
   )
+  const expectedSchema = agentRiskContextSchema.properties.verification
+    .items.properties.expected
+  assert.equal(expectedSchema.minProperties, 1)
+  assert.equal(expectedSchema.additionalProperties, false)
+  assert.deepEqual(expectedSchema.properties, {
+    exitCode: { type: 'integer' },
+    contains: { type: 'string', minLength: 1 },
+    notContains: { type: 'string', minLength: 1 }
+  })
   assert.equal(agentRiskContextSchema, agentRemoteRiskContextSchema)
   assert.equal(agentRemoteRiskContextSchema.properties.verification.minItems, 1)
   assert.equal(agentSessionControlRiskContextSchema.properties.verification.minItems, 0)
@@ -164,6 +173,34 @@ test('risk context schema and runtime validation require non-empty authorization
     { ...riskContext, verification: [{ name: 'unknown', args: {} }] },
     {
       ...riskContext,
+      verification: [{ name: 'read_service_status', args: {}, expected: {} }]
+    },
+    {
+      ...riskContext,
+      verification: [{
+        name: 'read_service_status',
+        args: {},
+        expected: { equals: 'active' }
+      }]
+    },
+    {
+      ...riskContext,
+      verification: [{
+        name: 'read_service_status',
+        args: {},
+        expected: { exitCode: '0' }
+      }]
+    },
+    {
+      ...riskContext,
+      verification: [{
+        name: 'read_service_status',
+        args: {},
+        expected: { contains: '' }
+      }]
+    },
+    {
+      ...riskContext,
       verification: [{
         name: 'read_service_status',
         args: { nonJsonValue: 1n }
@@ -179,6 +216,13 @@ test('risk context schema and runtime validation require non-empty authorization
   const validated = assertAgentRiskContext(riskContext)
   assert.equal(Object.isFrozen(validated), true)
   assert.equal(Object.isFrozen(validated.verification), true)
+
+  const implicit = assertAgentRiskContext({
+    ...riskContext,
+    verification: [{ name: 'read_service_status', args: { service: 'nginx' } }]
+  })
+  assert.deepEqual(implicit.verification[0].expected, { exitCode: 0 })
+  assert.equal(Object.isFrozen(implicit.verification[0].expected), true)
 
   assert.equal(assertAgentRiskContextForCall({
     toolName: 'send_terminal_command',
@@ -196,6 +240,42 @@ test('risk context schema and runtime validation require non-empty authorization
     descriptor: { name: 'run_background_command', scope: 'session-write' },
     classification: { outcome: 'risky' }
   }), riskContext)
+})
+
+test('one central verification dispatcher enforces every declared predicate', async () => {
+  const {
+    agentVerificationToolNames,
+    assertAgentVerificationExpectation
+  } = await import(moduleUrl)
+
+  assert.deepEqual(agentVerificationToolNames, [
+    'read_service_status',
+    'read_recent_logs',
+    'verify_listening_port',
+    'read_file_range'
+  ])
+  assert.doesNotThrow(() => assertAgentVerificationExpectation({
+    name: 'read_recent_logs',
+    expected: { exitCode: 7 }
+  }, { exitCode: 7, output: 'nginx ready' }))
+  assert.doesNotThrow(() => assertAgentVerificationExpectation({
+    name: 'read_recent_logs',
+    expected: { exitCode: 0, contains: 'nginx', notContains: 'panic' }
+  }, { exitCode: 0, output: 'nginx ready' }))
+
+  for (const [expected, result] of [
+    [{ exitCode: 0 }, { exitCode: 1, output: '' }],
+    [{ contains: 'ready' }, { exitCode: 0, output: 'starting' }],
+    [{ notContains: 'panic' }, { exitCode: 0, output: 'panic detected' }]
+  ]) {
+    assert.throws(
+      () => assertAgentVerificationExpectation({
+        name: 'read_recent_logs',
+        expected
+      }, result),
+      /Verification/
+    )
+  }
 })
 
 test('runtime context modes cover every write and control policy without fake verification', async () => {

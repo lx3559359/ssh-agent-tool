@@ -320,7 +320,8 @@ test('delegated Agent resource risks receive exactly one lower confirmation and 
     impactTargets: ['ssh-session:tab-1'],
     verification: [{
       name: 'read_service_status',
-      args: { service: 'nginx' }
+      args: { service: 'nginx' },
+      expected: { exitCode: 0 }
     }]
   }
 
@@ -489,6 +490,252 @@ test('plain readonly commands keep zero confirmations and forged risk delegation
   }), /delegation|capability|risk/i)
   assert.equal(changedCommandHarness.confirmationBuilds.length, 0)
   assert.equal(changedCommandHarness.submissions.length, 0)
+})
+
+test('Agent risk delegation capability is consumed by its first validation attempt', async () => {
+  const { createSafetyCommandEntrypoint } = await import(moduleUrl)
+  const { createDelegatedAgentSafetyPreparation } = await import(agentRiskDelegationUrl)
+  const endpoint = {
+    tabId: 'tab-1',
+    host: 'prod.example.com',
+    port: 22,
+    username: 'root',
+    pid: 1001,
+    terminalPid: 'terminal-1',
+    sessionType: 'ssh',
+    hostKeyFingerprint: 'SHA256:abc'
+  }
+  const makePreparation = () => createDelegatedAgentSafetyPreparation(
+    'send_terminal_command',
+    {
+      command: 'journalctl -f',
+      tabId: 'tab-1',
+      riskContext: {
+        purpose: 'observe one bounded stream',
+        impactTargets: ['ssh-session:tab-1'],
+        verification: [{
+          name: 'read_recent_logs',
+          args: { unit: 'nginx', limit: 10 },
+          expected: { contains: 'nginx' }
+        }]
+      }
+    },
+    {
+      endpoint,
+      classification: {
+        outcome: 'risky',
+        reasonCode: 'RESOURCE_SENSITIVE_READ'
+      }
+    }
+  )
+  const start = async (capability, overrides = {}) => {
+    const harness = createHarness({ getEndpoint: () => endpoint, ...overrides })
+    const entrypoint = createSafetyCommandEntrypoint(harness.options)
+    entrypoint.beginSession()
+    return {
+      harness,
+      entrypoint,
+      running: entrypoint.runSafetyCommand(
+        'journalctl -f',
+        { source: 'agent', riskDelegation: capability }
+      )
+    }
+  }
+  const assertCapabilityRejected = async (running) => {
+    const outcome = await Promise.race([
+      Promise.resolve(running).then(
+        value => ({ value }),
+        error => ({ error })
+      ),
+      new Promise(resolve => setImmediate(() => resolve({ pending: true })))
+    ])
+    assert.equal(outcome.error?.code, 'AGENT_RISK_DELEGATION_INVALID')
+  }
+
+  const successful = makePreparation()
+  const first = await start(successful.safetyDelegationCapability)
+  await waitFor(() => first.harness.confirmationBuilds.length === 1)
+  first.entrypoint.confirmPending()
+  const dispatched = await first.running
+  assert.equal(dispatched.sent, true)
+  await first.entrypoint.handleCommandFinished({
+    token: dispatched.token,
+    command: dispatched.execution.submittedCommand,
+    exitCode: 0
+  })
+  await assertCapabilityRejected(
+    (await start(successful.safetyDelegationCapability)).running
+  )
+
+  const cancelled = makePreparation()
+  const cancelledRun = await start(cancelled.safetyDelegationCapability)
+  await waitFor(() => cancelledRun.harness.confirmationBuilds.length === 1)
+  await cancelledRun.entrypoint.cancelPending()
+  assert.equal((await cancelledRun.running).cancelled, true)
+  await assertCapabilityRejected(
+    (await start(cancelled.safetyDelegationCapability)).running
+  )
+
+  const failed = makePreparation()
+  const failedRun = await start(failed.safetyDelegationCapability, {
+    prepare: () => { throw new Error('prepare failed') }
+  })
+  await assert.rejects(failedRun.running, /prepare failed/)
+  await assertCapabilityRejected(
+    (await start(failed.safetyDelegationCapability)).running
+  )
+
+  const mismatched = makePreparation()
+  const wrongCommandHarness = createHarness({ getEndpoint: () => endpoint })
+  const wrongCommandEntrypoint = createSafetyCommandEntrypoint(
+    wrongCommandHarness.options
+  )
+  wrongCommandEntrypoint.beginSession()
+  await assert.rejects(wrongCommandEntrypoint.runSafetyCommand('whoami', {
+    source: 'agent',
+    riskDelegation: mismatched.safetyDelegationCapability
+  }), error => error.code === 'AGENT_RISK_DELEGATION_INVALID')
+  await assertCapabilityRejected(
+    (await start(mismatched.safetyDelegationCapability)).running
+  )
+
+  const wrongEndpoint = makePreparation()
+  const changed = createHarness({
+    getEndpoint: () => ({ ...endpoint, pid: 2002 })
+  })
+  const changedEntrypoint = createSafetyCommandEntrypoint(changed.options)
+  changedEntrypoint.beginSession()
+  await assert.rejects(changedEntrypoint.runSafetyCommand('journalctl -f', {
+    source: 'agent',
+    riskDelegation: wrongEndpoint.safetyDelegationCapability
+  }), /session|endpoint|不一致/i)
+  await assertCapabilityRejected(
+    (await start(wrongEndpoint.safetyDelegationCapability)).running
+  )
+})
+
+test('entrypoint retry retains validated delegation without replaying its capability', async () => {
+  const { createSafetyCommandEntrypoint } = await import(moduleUrl)
+  const { createDelegatedAgentSafetyPreparation } = await import(agentRiskDelegationUrl)
+  const endpoint = {
+    tabId: 'tab-1',
+    host: 'prod.example.com',
+    port: 22,
+    username: 'root',
+    pid: 1001,
+    terminalPid: 'terminal-1',
+    sessionType: 'ssh',
+    hostKeyFingerprint: 'SHA256:abc'
+  }
+  const preparation = createDelegatedAgentSafetyPreparation(
+    'send_terminal_command',
+    {
+      command: 'journalctl -f',
+      tabId: 'tab-1',
+      riskContext: {
+        purpose: 'retry one validated stream submission',
+        impactTargets: ['ssh-session:tab-1'],
+        verification: [{
+          name: 'read_recent_logs',
+          args: { unit: 'nginx', limit: 10 },
+          expected: { contains: 'nginx' }
+        }]
+      }
+    },
+    {
+      endpoint,
+      classification: {
+        outcome: 'risky',
+        reasonCode: 'RESOURCE_SENSITIVE_READ'
+      }
+    }
+  )
+  let beginAttempts = 0
+  const harness = createHarness({
+    getEndpoint: () => endpoint,
+    beginExternalExecution: (id) => {
+      beginAttempts += 1
+      if (beginAttempts === 1) throw new Error('transient begin failure')
+      return { id, state: 'executing', executionId: `${id}-external` }
+    }
+  })
+  const entrypoint = createSafetyCommandEntrypoint(harness.options)
+  entrypoint.beginSession()
+  const running = entrypoint.runSafetyCommand('journalctl -f', {
+    source: 'agent',
+    riskDelegation: preparation.safetyDelegationCapability
+  })
+  await waitFor(() => harness.confirmationBuilds.length === 1)
+  entrypoint.confirmPending()
+  assert.equal((await running).retryable, true)
+
+  assert.equal(entrypoint.confirmPending(), true)
+  await waitFor(() => harness.confirmationBuilds.length === 2)
+  assert.equal(entrypoint.confirmPending(), true)
+  await waitFor(() => harness.submissions.length === 1)
+  assert.equal(beginAttempts, 2)
+
+  const replayHarness = createHarness({ getEndpoint: () => endpoint })
+  const replayEntrypoint = createSafetyCommandEntrypoint(replayHarness.options)
+  replayEntrypoint.beginSession()
+  const replayOutcome = await Promise.race([
+    replayEntrypoint.runSafetyCommand('journalctl -f', {
+      source: 'agent',
+      riskDelegation: preparation.safetyDelegationCapability
+    }).then(value => ({ value }), error => ({ error })),
+    new Promise(resolve => setImmediate(() => resolve({ pending: true })))
+  ])
+  assert.equal(replayOutcome.error?.code, 'AGENT_RISK_DELEGATION_INVALID')
+})
+
+test('foreground cancellation is bound to the exact active operation identity', async () => {
+  const { createSafetyCommandEntrypoint } = await import(moduleUrl)
+  const harness = createHarness()
+  const entrypoint = createSafetyCommandEntrypoint(harness.options)
+  entrypoint.beginSession()
+
+  const first = await entrypoint.runSafetyCommand('uptime', {
+    source: 'agent'
+  })
+  assert.equal(first.sent, true)
+  await entrypoint.handleCommandFinished({
+    token: first.token,
+    command: first.execution.submittedCommand,
+    exitCode: 0
+  })
+
+  const second = await entrypoint.runSafetyCommand('whoami', {
+    source: 'agent'
+  })
+  assert.equal(second.sent, true)
+  let interrupts = 0
+  const interrupt = () => { interrupts += 1 }
+
+  assert.equal(await entrypoint.cancelForegroundExecutionById(
+    first.operationId,
+    interrupt,
+    'stale Agent cancellation'
+  ), false)
+  assert.equal(interrupts, 0)
+  assert.equal(await entrypoint.cancelForegroundExecutionById(
+    'not-dispatched',
+    interrupt,
+    'pre-dispatch Agent cancellation'
+  ), false)
+  assert.equal(interrupts, 0)
+
+  assert.equal(await entrypoint.cancelForegroundExecutionById(
+    second.operationId,
+    interrupt,
+    'exact Agent cancellation'
+  ), true)
+  assert.equal(interrupts, 1)
+  assert.equal(await entrypoint.cancelForegroundExecutionById(
+    second.operationId,
+    interrupt,
+    'duplicate Agent cancellation'
+  ), false)
+  assert.equal(interrupts, 1)
 })
 
 test('inputOnly fills the terminal without creating a transaction', async () => {

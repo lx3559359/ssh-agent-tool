@@ -62,6 +62,34 @@ function abortableDelay (milliseconds, signal, message) {
   })
 }
 
+function abortableMcpOperation (operation, signal, message) {
+  assertMcpActive(signal, message)
+  const pending = Promise.resolve(operation)
+  if (!signal) return pending
+  return new Promise((resolve, reject) => {
+    let settled = false
+    const cleanup = () => signal.removeEventListener('abort', aborted)
+    function aborted () {
+      if (settled) return
+      settled = true
+      cleanup()
+      reject(mcpAbortError(message))
+    }
+    signal.addEventListener('abort', aborted, { once: true })
+    pending.then(value => {
+      if (settled) return
+      settled = true
+      cleanup()
+      resolve(value)
+    }, error => {
+      if (settled) return
+      settled = true
+      cleanup()
+      reject(error)
+    })
+  })
+}
+
 export default Store => {
   // Initialize MCP handler - called when MCP widget is started
   Store.prototype.initMcpHandler = function () {
@@ -783,13 +811,24 @@ export default Store => {
       throw new Error('Terminal not found')
     }
 
-    term.attachAddon._sendData('\x03')
     const transactionCancelled = typeof term.commandSafetyEntrypoint
-      ?.cancelCurrentExecution === 'function'
-      ? await term.commandSafetyEntrypoint.cancelCurrentExecution(
+      ?.cancelForegroundExecutionById === 'function'
+      ? await term.commandSafetyEntrypoint.cancelForegroundExecutionById(
+        args.operationId,
+        () => term.attachAddon._sendData('\x03'),
         'Agent sent Ctrl+C'
       )
-      : undefined
+      : false
+    if (transactionCancelled !== true) {
+      return {
+        success: false,
+        stopConfirmed: false,
+        remoteState: 'not-dispatched',
+        message: 'The requested safety operation is not the active foreground command',
+        tabId,
+        operationId: args.operationId
+      }
+    }
     const idle = await store.mcpWaitForTerminalIdle({
       tabId,
       timeout: 6000,
@@ -804,7 +843,8 @@ export default Store => {
       message: stopConfirmed
         ? 'Sent Ctrl+C and confirmed terminal idle'
         : 'Sent Ctrl+C but terminal stop could not be confirmed',
-      tabId
+      tabId,
+      operationId: args.operationId
     }
   }
 
@@ -1045,7 +1085,8 @@ export default Store => {
     return { tabId, host: tab.host, path: remotePath, stat }
   }
 
-  Store.prototype.mcpSftpReadFile = async function (args) {
+  Store.prototype.mcpSftpReadFile = async function (args, options = {}) {
+    assertMcpActive(options.signal, 'SFTP file read cancelled')
     const { sftp, tab, tabId } = window.store.mcpGetSshSftpRef(args.tabId)
     const remotePath = args.remotePath
     if (!remotePath) {
@@ -1059,7 +1100,26 @@ export default Store => {
     const offset = Number.isSafeInteger(requestedOffset) && requestedOffset >= 0
       ? requestedOffset
       : 0
-    const chunk = await sftp.readFileChunk(remotePath, { offset, maxBytes })
+    const chunk = await abortableMcpOperation(
+      sftp.readFileChunk(remotePath, { offset, maxBytes }),
+      options.signal,
+      'SFTP file read cancelled'
+    )
+    assertMcpActive(options.signal, 'SFTP file read cancelled')
+    let current
+    try {
+      current = window.store.mcpGetSshSftpRef(args.tabId)
+    } catch (cause) {
+      const error = new Error('SFTP session endpoint changed during file read')
+      error.code = 'SESSION_ENDPOINT_CHANGED'
+      error.cause = cause
+      throw error
+    }
+    if (current.sftp !== sftp || current.tabId !== tabId) {
+      const error = new Error('SFTP session endpoint changed during file read')
+      error.code = 'SESSION_ENDPOINT_CHANGED'
+      throw error
+    }
     const binary = globalThis.atob(String(chunk.base64 || ''))
     const bytes = new Uint8Array(binary.length)
     for (let index = 0; index < binary.length; index += 1) {

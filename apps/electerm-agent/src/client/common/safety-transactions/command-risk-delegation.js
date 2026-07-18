@@ -44,6 +44,8 @@ export function createInternalCommandRiskDelegation (details = {}) {
   return capability
 }
 
-export function resolveInternalCommandRiskDelegation (capability) {
-  return internalRiskDelegations.get(capability)
+export function consumeInternalCommandRiskDelegation (capability) {
+  const delegation = internalRiskDelegations.get(capability)
+  internalRiskDelegations.delete(capability)
+  return delegation
 }

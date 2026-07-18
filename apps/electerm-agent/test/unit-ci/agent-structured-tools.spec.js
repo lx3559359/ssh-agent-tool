@@ -1,5 +1,6 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
+const fs = require('node:fs')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
 
@@ -15,6 +16,7 @@ const endpoint = Object.freeze({
   tabId: 'tab-a',
   pid: 'pid-a',
   terminalPid: 'term-a',
+  sessionType: 'ssh',
   type: 'ssh',
   hostKeyFingerprint: 'SHA256:abc'
 })
@@ -178,6 +180,77 @@ test('all command-backed structured reads share one exec adapter and file range 
     maxBytes: 8,
     tabId: undefined
   })
+})
+
+test('read_file_range aborts promptly and safely ignores a late SFTP rejection', async () => {
+  const { executeStructuredAgentTool } = await import(moduleUrl)
+  const controller = new AbortController()
+  let rejectRead
+  let observedSignal
+  const pending = executeStructuredAgentTool({
+    toolName: 'read_file_range',
+    args: { remotePath: '/var/log/app.log', offset: 0, length: 16 },
+    endpoint,
+    resolveEndpoint: () => endpoint,
+    signal: controller.signal,
+    readFile: (_args, options) => {
+      observedSignal = options.signal
+      return new Promise((_resolve, reject) => { rejectRead = reject })
+    }
+  })
+
+  controller.abort()
+  await assert.rejects(pending, error => error.name === 'AbortError')
+  assert.equal(observedSignal, controller.signal)
+  rejectRead(new Error('late SFTP failure'))
+  await new Promise(resolve => setImmediate(resolve))
+})
+
+test('read_file_range rejects stale evidence when its exact endpoint changes', async () => {
+  const { executeStructuredAgentTool } = await import(moduleUrl)
+  let current = endpoint
+  await assert.rejects(executeStructuredAgentTool({
+    toolName: 'read_file_range',
+    args: { remotePath: '/var/log/app.log', offset: 0, length: 16 },
+    endpoint,
+    resolveEndpoint: () => current,
+    readFile: async () => {
+      current = { ...endpoint, pid: 'pid-b' }
+      return { content: 'stale evidence', hasMore: false }
+    }
+  }), error => error.code === 'SESSION_ENDPOINT_CHANGED')
+})
+
+test('ordinary and risk verification file reads share signal and endpoint boundaries', () => {
+  const aiRoot = path.resolve(__dirname, '../../src/client/components/ai')
+  const source = fs.readFileSync(path.join(aiRoot, 'agent-tools.js'), 'utf8')
+  const ordinary = source.slice(
+    source.indexOf('async function executeResolvedAgentTool'),
+    source.indexOf("case 'send_terminal_command'")
+  )
+  const verification = source.slice(
+    source.indexOf('async function verifyPreparedAgentRisk'),
+    source.indexOf('function completePreparedAgentRisk')
+  )
+  for (const boundary of [ordinary, verification]) {
+    assert.match(boundary, /signal:\s*runtime\.signal/)
+    assert.match(boundary, /resolveEndpoint:/)
+    assert.match(boundary, /mcpSftpReadFile\(fileArgs,\s*\{\s*signal:\s*runtime\.signal\s*\}\)/)
+  }
+
+  const mcp = fs.readFileSync(path.resolve(
+    aiRoot,
+    '../../store/mcp-handler.js'
+  ), 'utf8')
+  const read = mcp.slice(
+    mcp.indexOf('Store.prototype.mcpSftpReadFile'),
+    mcp.indexOf('Store.prototype.mcpSftpDel')
+  )
+  assert.match(read, /options\s*=\s*\{\}/)
+  assert.match(read, /assertMcpActive\(options\.signal/)
+  assert.match(read, /abortableMcpOperation/)
+  assert.ok((read.match(/mcpGetSshSftpRef/g) || []).length >= 2)
+  assert.match(read, /SESSION_ENDPOINT_CHANGED/)
 })
 
 test('initial structured tool registry exposes only the four bounded diagnostics', async () => {

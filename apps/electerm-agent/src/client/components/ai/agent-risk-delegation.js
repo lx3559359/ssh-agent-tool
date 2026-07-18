@@ -5,6 +5,8 @@ import { assertAgentRiskContext } from './agent-risk-context.js'
 
 export {
   agentRiskCallsRequireVerification,
+  agentVerificationExpectedSchema,
+  agentVerificationToolNames,
   agentArtifactRiskContextSchema,
   agentRemoteRiskContextSchema,
   agentRiskContextSchema,
@@ -13,6 +15,7 @@ export {
   assertAgentRemoteRiskContext,
   assertAgentRiskContext,
   assertAgentRiskContextForCall,
+  assertAgentVerificationExpectation,
   assertAgentSessionControlRiskContext,
   resolveAgentRiskContextMode
 } from './agent-risk-context.js'
@@ -73,8 +76,8 @@ export function createDelegatedAgentSafetyPreparation (
   if (!shouldDelegateAgentSafetyConfirmation(toolName, args, options)) {
     throw confirmationRequiredError()
   }
-  const confirmedArgs = deepFreeze(cloneJson(args))
-  const riskContext = assertAgentRiskContext(confirmedArgs.riskContext)
+  const riskContext = assertAgentRiskContext(args.riskContext)
+  const confirmedArgs = deepFreeze(cloneJson({ ...args, riskContext }))
   const classification = deepFreeze(cloneJson(options.classification || {}))
   const endpoint = deepFreeze(cloneJson(options.endpoint || {}))
   const safetyDelegationCapability = delegatedCommandTools.has(String(toolName))
@@ -105,6 +108,15 @@ export function validateDelegatedAgentSafetyPreparation ({
   endpoint,
   delegatedPreparation
 } = {}) {
+  let normalizedArgs
+  try {
+    normalizedArgs = {
+      ...(args || {}),
+      riskContext: assertAgentRiskContext(args?.riskContext)
+    }
+  } catch {
+    throw confirmationRequiredError()
+  }
   if (
     delegatedPreparation?.delegatedSafetyConfirmation !== true ||
     delegatedPreparation.toolName !== String(toolName || '') ||
@@ -113,7 +125,7 @@ export function validateDelegatedAgentSafetyPreparation ({
       delegatedPreparation.confirmedArgs,
       { endpoint }
     ) ||
-    stableSerialize(args || {}) !== stableSerialize(delegatedPreparation.confirmedArgs) ||
+    stableSerialize(normalizedArgs) !== stableSerialize(delegatedPreparation.confirmedArgs) ||
     stableSerialize(endpoint || {}) !== stableSerialize(delegatedPreparation.endpoint || {}) ||
     stableSerialize(delegatedPreparation.verification || []) !== stableSerialize(
       delegatedPreparation.confirmedArgs?.riskContext?.verification || []

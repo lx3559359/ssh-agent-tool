@@ -185,6 +185,48 @@ test('terminal cancellation is not armed until the command was dispatched', asyn
   assert.equal(armed, 1)
 })
 
+test('terminal cancellation carries the dispatched safety operation identity', async () => {
+  const { runAgentTerminalCommand } = await import(terminalUrl)
+  let dispatched
+  await runAgentTerminalCommand({
+    args: { command: 'uptime', tabId: 'tab-a' },
+    store: {
+      runSafetyCommand: async () => ({
+        sent: true,
+        operationId: 'operation-a'
+      }),
+      mcpWaitForTerminalIdle: async () => ({ timedOut: false })
+    },
+    onDispatched: result => { dispatched = result }
+  })
+
+  assert.equal(dispatched.operationId, 'operation-a')
+  const agentTools = fs.readFileSync(path.join(aiRoot, 'agent-tools.js'), 'utf8')
+  const terminalTool = agentTools.slice(
+    agentTools.indexOf('async function runTerminalTool'),
+    agentTools.indexOf('export async function runReadonlyTool')
+  )
+  assert.match(terminalTool, /onDispatched:\s*safetyResult\s*=>/)
+  assert.match(
+    terminalTool,
+    /mcpCancelTerminalCommand\(\{\s*tabId:\s*args\.tabId,\s*operationId:\s*safetyResult\.operationId\s*\}\)/
+  )
+
+  const mcpSource = fs.readFileSync(path.resolve(
+    aiRoot,
+    '../../store/mcp-handler.js'
+  ), 'utf8')
+  const cancellation = mcpSource.slice(
+    mcpSource.indexOf('Store.prototype.mcpCancelTerminalCommand'),
+    mcpSource.indexOf('// ==================== Background Task Management')
+  )
+  assert.match(cancellation, /cancelForegroundExecutionById\(\s*args\.operationId/)
+  assert.ok(
+    cancellation.indexOf('cancelForegroundExecutionById') <
+      cancellation.indexOf("_sendData('\\x03')")
+  )
+})
+
 test('a cancellation race after terminal dispatch still arms remote stop', async () => {
   const { runAgentTerminalCommand } = await import(terminalUrl)
   const controller = new AbortController()

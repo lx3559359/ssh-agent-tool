@@ -3,7 +3,7 @@ import { redactAuditText } from './audit-redaction.js'
 import { buildSafetyRequest, operationStates } from './models.js'
 import { buildCommandExecution } from './command-execution.js'
 import {
-  resolveInternalCommandRiskDelegation
+  consumeInternalCommandRiskDelegation
 } from './command-risk-delegation.js'
 import { resolveInternalSubmissionHooks } from './command-submission-hooks.js'
 import { assertSameSessionEndpoint } from './endpoint-guard.js'
@@ -37,7 +37,7 @@ function riskDelegationError () {
 
 function resolveRiskDelegation (command, runOptions) {
   if (runOptions.riskDelegation === undefined) return undefined
-  const delegation = resolveInternalCommandRiskDelegation(
+  const delegation = consumeInternalCommandRiskDelegation(
     runOptions.riskDelegation
   )
   if (!delegation || runOptions.source !== 'agent' ||
@@ -205,7 +205,11 @@ export function createSafetyCommandEntrypoint (options = {}) {
       pendingConfirmation = null
       updateState({ confirmation: pending.confirmation, busy: true })
       Promise.resolve()
-        .then(() => runSafetyCommand(pending.command, pending.runOptions))
+        .then(() => startSafetyCommand(
+          pending.command,
+          pending.runOptions,
+          pending.riskDelegation
+        ))
         .catch(error => {
           if (!live || generation !== retryGeneration) return
           pendingConfirmation = pending
@@ -272,11 +276,12 @@ export function createSafetyCommandEntrypoint (options = {}) {
       completingExecutions.get(operationId)
   }
 
-  async function cancelExecution (execution, reason) {
-    if (!execution || execution.settled) return false
+  async function cancelExecution (execution, reason, interrupt) {
+    if (!execution || execution.settled || execution.cancelled) return false
     execution.cancelled = true
     removeExecution(execution)
     tracker.cancelExpectedSubmission(execution.token)
+    if (typeof interrupt === 'function') interrupt()
     await abortHookState(execution.hookState)
     settleExecution(execution, {
       cancelled: true,
@@ -290,6 +295,20 @@ export function createSafetyCommandEntrypoint (options = {}) {
     }
     const cancelled = await execution.cancelPromise
     return cancelled !== false
+  }
+
+  async function cancelForegroundExecutionById (
+    operationId,
+    interrupt,
+    reason = '命令执行已取消。'
+  ) {
+    const execution = activeExecution
+    if (!operationId || !execution || execution.id !== operationId ||
+      execution.mode !== 'foreground' || execution.settled ||
+      execution.cancelled) {
+      return false
+    }
+    return cancelExecution(execution, reason, interrupt)
   }
 
   async function cancelExecutionById (operationId, reason) {
@@ -390,6 +409,7 @@ export function createSafetyCommandEntrypoint (options = {}) {
       run,
       command: run.command,
       runOptions: run.runOptions,
+      riskDelegation: run.riskDelegation,
       confirmation
     }
     updateState({ confirmation, busy: false, error: message })
@@ -688,8 +708,20 @@ export function createSafetyCommandEntrypoint (options = {}) {
     }
   }
 
-  function runSafetyCommand (value, runOptions = {}) {
+  function startSafetyCommand (
+    value,
+    runOptions = {},
+    trustedRiskDelegation
+  ) {
     const command = String(value || '')
+    let riskDelegation
+    try {
+      riskDelegation = trustedRiskDelegation === undefined
+        ? resolveRiskDelegation(command, runOptions)
+        : trustedRiskDelegation
+    } catch (error) {
+      return Promise.reject(error)
+    }
     if (runOptions.signal?.aborted) {
       const error = new Error('Command safety preparation cancelled')
       error.name = 'AbortError'
@@ -705,12 +737,6 @@ export function createSafetyCommandEntrypoint (options = {}) {
       if (Object.prototype.hasOwnProperty.call(runOptions, forbidden)) {
         return Promise.reject(new Error('调用方不允许指定内部提交命令或安全钩子。'))
       }
-    }
-    let riskDelegation
-    try {
-      riskDelegation = resolveRiskDelegation(command, runOptions)
-    } catch (error) {
-      return Promise.reject(error)
     }
     const internalHooks = runOptions.submissionHooks === undefined
       ? undefined
@@ -792,6 +818,10 @@ export function createSafetyCommandEntrypoint (options = {}) {
     return run.promise
   }
 
+  function runSafetyCommand (value, runOptions = {}) {
+    return startSafetyCommand(value, runOptions)
+  }
+
   async function handleCommandFinished (event = {}) {
     const execution = activeExecution
     if (!execution || event.token !== execution.token ||
@@ -814,6 +844,7 @@ export function createSafetyCommandEntrypoint (options = {}) {
     cancelPending,
     inputChanged,
     cancelCurrentExecution,
+    cancelForegroundExecutionById,
     invalidateSession,
     hasPending,
     hasPendingConfirmation,

@@ -1,3 +1,7 @@
+import {
+  assertSameSessionEndpoint
+} from '../../common/safety-transactions/endpoint-guard.js'
+
 const MAX_LOG_LINES = 1000
 const MAX_FILE_BYTES = 32 * 1024
 const MAX_COMMAND_OUTPUT = 32 * 1024
@@ -112,15 +116,71 @@ function capturedTimestamp (capturedAt) {
   return typeof capturedAt === 'function' ? capturedAt() : Date.now()
 }
 
+function structuredAbortError () {
+  const error = new Error('Structured Agent read cancelled')
+  error.name = 'AbortError'
+  return error
+}
+
+function assertStructuredActive (signal) {
+  if (signal?.aborted) throw structuredAbortError()
+}
+
+function abortableStructuredResult (operation, signal) {
+  assertStructuredActive(signal)
+  const pending = Promise.resolve(operation)
+  if (!signal) return pending
+  return new Promise((resolve, reject) => {
+    let settled = false
+    const cleanup = () => signal.removeEventListener('abort', onAbort)
+    const onAbort = () => {
+      if (settled) return
+      settled = true
+      cleanup()
+      reject(structuredAbortError())
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+    pending.then(value => {
+      if (settled) return
+      settled = true
+      cleanup()
+      resolve(value)
+    }, error => {
+      if (settled) return
+      settled = true
+      cleanup()
+      reject(error)
+    })
+  })
+}
+
+function assertBoundEndpoint (expected, resolveEndpoint) {
+  try {
+    const actual = typeof resolveEndpoint === 'function'
+      ? resolveEndpoint()
+      : expected
+    assertSameSessionEndpoint(expected, actual)
+  } catch (cause) {
+    const error = new Error('The structured Agent read endpoint changed')
+    error.code = 'SESSION_ENDPOINT_CHANGED'
+    error.cause = cause
+    throw error
+  }
+}
+
 export async function executeStructuredAgentTool ({
   toolName,
   args: rawArgs,
   endpoint,
+  resolveEndpoint,
+  signal,
   executeCommand,
   readFile,
   capturedAt
 } = {}) {
   const args = validateStructuredArgs(toolName, rawArgs)
+  assertStructuredActive(signal)
+  assertBoundEndpoint(endpoint, resolveEndpoint)
   let source
   let outputLimit = MAX_COMMAND_OUTPUT
 
@@ -129,18 +189,22 @@ export async function executeStructuredAgentTool ({
       throw new TypeError('readFile is required for read_file_range')
     }
     outputLimit = args.length
-    source = await readFile({
+    const read = readFile({
       remotePath: args.remotePath,
       offset: args.offset,
       maxBytes: args.length,
       tabId: args.tabId
-    })
+    }, { signal })
+    source = await abortableStructuredResult(read, signal)
   } else {
     if (typeof executeCommand !== 'function') {
       throw new TypeError('executeCommand is required for structured command tools')
     }
     source = await executeCommand(buildStructuredCommand(toolName, args), args)
   }
+
+  assertStructuredActive(signal)
+  assertBoundEndpoint(endpoint, resolveEndpoint)
 
   const bounded = boundedOutput(source?.content ?? source?.output, outputLimit)
   const hasMore = source?.hasMore === true

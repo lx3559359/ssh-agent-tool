@@ -45,10 +45,12 @@ import {
 } from './agent-risk-async.js'
 import {
   agentRiskCallsRequireVerification,
+  agentVerificationToolNames,
   agentArtifactRiskContextSchema,
   agentRemoteRiskContextSchema,
   agentSessionControlRiskContextSchema,
   assertAgentRiskContextForCall,
+  assertAgentVerificationExpectation,
   createDelegatedAgentSafetyPreparation,
   shouldDelegateAgentSafetyConfirmation,
   validateDelegatedAgentSafetyPreparation
@@ -1015,29 +1017,34 @@ async function prepareResolvedAgentTool (toolName, args, runtime, context = {}) 
 
 async function runTerminalTool (store, args, runtime, preparation) {
   let clearCancellation = () => {}
-  const cancelTerminal = async () => {
-    try {
-      const result = await store.mcpCancelTerminalCommand({ tabId: args.tabId })
-      if (result?.stopConfirmed !== true) {
-        const error = new Error('Terminal stop could not be confirmed after Ctrl+C')
-        error.remoteState = 'unknown'
-        error.canAutoRetry = false
-        throw error
-      }
-      return result
-    } catch (error) {
-      error.remoteState = error.remoteState || 'unknown'
-      error.canAutoRetry = false
-      throw error
-    }
-  }
   try {
     return await runAgentTerminalCommand({
       store,
       args,
       signal: runtime.signal,
       riskDelegation: preparation?.safetyDelegationCapability,
-      onDispatched: () => {
+      onDispatched: safetyResult => {
+        const cancelTerminal = async () => {
+          try {
+            const result = await store.mcpCancelTerminalCommand({
+              tabId: args.tabId,
+              operationId: safetyResult.operationId
+            })
+            if (result?.stopConfirmed !== true) {
+              const error = new Error(
+                'Terminal stop could not be confirmed after Ctrl+C'
+              )
+              error.remoteState = result?.remoteState || 'unknown'
+              error.canAutoRetry = false
+              throw error
+            }
+            return result
+          } catch (error) {
+            error.remoteState = error.remoteState || 'unknown'
+            error.canAutoRetry = false
+            throw error
+          }
+        }
         clearCancellation = registerAgentCancellation(runtime, cancelTerminal)
       }
     })
@@ -1071,11 +1078,18 @@ async function executeResolvedAgentTool (toolName, args, runtime, endpoint, prep
         toolName,
         args,
         endpoint,
+        signal: runtime.signal,
+        resolveEndpoint: () => resolveAgentExecutionEndpoint({
+          descriptor: getAgentToolDescriptor(toolName),
+          runtime
+        }),
         executeCommand: command => runReadonlyTool({
           command,
           tabId: args.tabId
         }, endpoint, runtime),
-        readFile: fileArgs => store.mcpSftpReadFile(fileArgs)
+        readFile: fileArgs => store.mcpSftpReadFile(fileArgs, {
+          signal: runtime.signal
+        })
       }))
     case 'send_terminal_command': {
       if (!preparation && classifyAgentCall({ toolName, args }).outcome ===
@@ -1218,31 +1232,7 @@ async function executeResolvedAgentTool (toolName, args, runtime, endpoint, prep
   }
 }
 
-const structuredVerificationTools = new Set([
-  'read_service_status',
-  'read_recent_logs',
-  'verify_listening_port',
-  'read_file_range'
-])
-
-function assertVerificationExpectation (step, result) {
-  const expected = step.expected || step.expect
-  if (result.exitCode !== null && result.exitCode !== 0) {
-    throw new Error(`Verification ${step.name} returned exit code ${result.exitCode}`)
-  }
-  if (!expected) return
-  if (expected.exitCode !== undefined && result.exitCode !== expected.exitCode) {
-    throw new Error(`Verification ${step.name} exit code did not match`)
-  }
-  if (expected.contains !== undefined &&
-    !result.output.includes(String(expected.contains))) {
-    throw new Error(`Verification ${step.name} output did not contain expected text`)
-  }
-  if (expected.notContains !== undefined &&
-    result.output.includes(String(expected.notContains))) {
-    throw new Error(`Verification ${step.name} output contained forbidden text`)
-  }
-}
+const structuredVerificationTools = new Set(agentVerificationToolNames)
 
 async function verifyPreparedAgentRisk (preparation, endpoint, runtime) {
   const verification = preparation?.riskTransaction?.verification ||
@@ -1268,11 +1258,19 @@ async function verifyPreparedAgentRisk (preparation, endpoint, runtime) {
       toolName: step.name,
       args,
       endpoint: verificationEndpoint,
+      signal: runtime.signal,
+      resolveEndpoint: () => assertAgentRiskVerificationAllowed({
+        expectedEndpoint: endpoint,
+        runtime,
+        descriptor
+      }),
       executeCommand: command => runReadonlyTool({
         command,
         tabId: args.tabId
       }, verificationEndpoint, runtime),
-      readFile: fileArgs => window.store.mcpSftpReadFile(fileArgs)
+      readFile: fileArgs => window.store.mcpSftpReadFile(fileArgs, {
+        signal: runtime.signal
+      })
     })
     assertAgentRiskVerificationAllowed({
       expectedEndpoint: endpoint,
@@ -1280,7 +1278,7 @@ async function verifyPreparedAgentRisk (preparation, endpoint, runtime) {
       descriptor
     })
     try {
-      assertVerificationExpectation(step, result)
+      assertAgentVerificationExpectation(step, result)
     } catch (error) {
       error.code = 'AGENT_TARGET_VERIFICATION_FAILED'
       error.verificationFailed = true
@@ -1288,7 +1286,9 @@ async function verifyPreparedAgentRisk (preparation, endpoint, runtime) {
     }
     assertAgentRuntimeActive(runtime)
   }
-  return { passed: true, count: verification.length }
+  return verification.length > 0
+    ? { passed: true, count: verification.length, status: 'verified' }
+    : { passed: true, count: 0, status: 'not-applicable' }
 }
 
 function completePreparedAgentRisk (preparation, endpoint, runtime) {

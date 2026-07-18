@@ -1,11 +1,41 @@
 import { AGENT_TOOL_SCOPES } from './agent-tool-scopes.js'
 
-const supportedVerificationTools = new Set([
+export const agentVerificationToolNames = Object.freeze([
   'read_service_status',
   'read_recent_logs',
   'verify_listening_port',
   'read_file_range'
 ])
+const supportedVerificationTools = new Set(agentVerificationToolNames)
+
+const verificationPredicateRegistry = Object.freeze({
+  exitCode: Object.freeze({
+    schema: Object.freeze({ type: 'integer' }),
+    valid: value => Number.isInteger(value),
+    matches: (expected, result) => result?.exitCode === expected,
+    failure: name => `Verification ${name} exit code did not match`
+  }),
+  contains: Object.freeze({
+    schema: Object.freeze({ type: 'string', minLength: 1 }),
+    valid: value => typeof value === 'string' && value.length > 0,
+    matches: (expected, result) => String(result?.output ?? '').includes(expected),
+    failure: name => `Verification ${name} output did not contain expected text`
+  }),
+  notContains: Object.freeze({
+    schema: Object.freeze({ type: 'string', minLength: 1 }),
+    valid: value => typeof value === 'string' && value.length > 0,
+    matches: (expected, result) => !String(result?.output ?? '').includes(expected),
+    failure: name => `Verification ${name} output contained forbidden text`
+  })
+})
+
+export const agentVerificationExpectedSchema = deepFreeze({
+  type: 'object',
+  properties: Object.fromEntries(Object.entries(verificationPredicateRegistry)
+    .map(([name, predicate]) => [name, predicate.schema])),
+  minProperties: 1,
+  additionalProperties: false
+})
 
 function cloneJson (value) {
   if (value === undefined) return null
@@ -26,6 +56,39 @@ function riskContextRequiredError () {
   return error
 }
 
+function normalizeVerificationExpected (expected) {
+  if (expected === undefined) return { exitCode: 0 }
+  if (!expected || typeof expected !== 'object' || Array.isArray(expected)) {
+    throw riskContextRequiredError()
+  }
+  const keys = Object.keys(expected)
+  if (keys.length === 0 || keys.some(key => !verificationPredicateRegistry[key])) {
+    throw riskContextRequiredError()
+  }
+  const normalized = { exitCode: 0 }
+  for (const key of keys) {
+    if (!verificationPredicateRegistry[key].valid(expected[key])) {
+      throw riskContextRequiredError()
+    }
+    normalized[key] = expected[key]
+  }
+  return normalized
+}
+
+export function assertAgentVerificationExpectation (step, result) {
+  if (!step || !supportedVerificationTools.has(step.name)) {
+    throw riskContextRequiredError()
+  }
+  const expected = normalizeVerificationExpected(step.expected)
+  for (const [name, value] of Object.entries(expected)) {
+    const predicate = verificationPredicateRegistry[name]
+    if (!predicate.matches(value, result)) {
+      throw new Error(predicate.failure(step.name))
+    }
+  }
+  return true
+}
+
 function verificationSchema ({ minItems, maxItems } = {}) {
   return {
     type: 'array',
@@ -34,12 +97,9 @@ function verificationSchema ({ minItems, maxItems } = {}) {
     items: {
       type: 'object',
       properties: {
-        name: {
-          type: 'string',
-          enum: [...supportedVerificationTools]
-        },
+        name: { type: 'string', enum: [...agentVerificationToolNames] },
         args: { type: 'object' },
-        expected: { type: 'object' }
+        expected: agentVerificationExpectedSchema
       },
       required: ['name', 'args'],
       additionalProperties: false
@@ -94,22 +154,25 @@ function assertRiskContextEnvelope (context) {
     context.impactTargets.every(item => (
       typeof item === 'string' && Boolean(item.trim())
     )) &&
-    Array.isArray(context.verification) &&
-    context.verification.every(step => {
-      if (!step || typeof step !== 'object' || Array.isArray(step)) return false
-      const stepKeys = Object.keys(step)
-      return stepKeys.every(key => ['name', 'args', 'expected'].includes(key)) &&
-        stepKeys.includes('name') && stepKeys.includes('args') &&
-        supportedVerificationTools.has(step.name) &&
-        step.args && typeof step.args === 'object' && !Array.isArray(step.args) &&
-        (step.expected === undefined || (
-          step.expected && typeof step.expected === 'object' &&
-          !Array.isArray(step.expected)
-        ))
-    })
+    Array.isArray(context.verification) && context.verification.every(step => {
+    if (!step || typeof step !== 'object' || Array.isArray(step)) return false
+    const stepKeys = Object.keys(step)
+    return stepKeys.every(key => ['name', 'args', 'expected'].includes(key)) &&
+      stepKeys.includes('name') && stepKeys.includes('args') &&
+      supportedVerificationTools.has(step.name) &&
+      step.args && typeof step.args === 'object' && !Array.isArray(step.args)
+  })
   if (!valid) throw riskContextRequiredError()
   try {
-    return deepFreeze(cloneJson(context))
+    return deepFreeze({
+      purpose: context.purpose,
+      impactTargets: cloneJson(context.impactTargets),
+      verification: context.verification.map(step => ({
+        name: step.name,
+        args: cloneJson(step.args),
+        expected: normalizeVerificationExpected(step.expected)
+      }))
+    })
   } catch {
     throw riskContextRequiredError()
   }

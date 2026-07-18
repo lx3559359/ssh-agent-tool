@@ -19,7 +19,10 @@ test('batch verification waits until every confirmed call reaches its real termi
     terminal: false
   }
   const common = {
-    verify: async () => { verifications += 1 },
+    verify: async () => {
+      verifications += 1
+      return { passed: true, count: 1, status: 'verified' }
+    },
     settle: async value => settlements.push(value)
   }
 
@@ -43,6 +46,35 @@ test('batch verification waits until every confirmed call reaches its real termi
     remoteState: 'verified',
     canAutoRetry: false
   }])
+})
+
+test('zero checked verification steps never settle remote state as verified', async () => {
+  const { completeAgentRiskPreparation } = await import(moduleUrl)
+  for (const [verification, expectedRemoteState] of [
+    [{ passed: true, count: 0, status: 'not-applicable' }, 'not-applicable'],
+    [undefined, 'unverified'],
+    [{ passed: true, count: 0 }, 'unverified']
+  ]) {
+    const settlements = []
+    const result = await completeAgentRiskPreparation({
+      preparation: { riskTaskId: `risk-${expectedRemoteState}` },
+      verify: async () => verification,
+      settle: async value => settlements.push(value)
+    })
+    assert.equal(result.passed, true)
+    assert.equal(settlements.length, 1)
+    assert.equal(settlements[0].status, 'completed')
+    assert.equal(settlements[0].remoteState, expectedRemoteState)
+    assert.notEqual(settlements[0].remoteState, 'verified')
+  }
+
+  const verified = []
+  await completeAgentRiskPreparation({
+    preparation: { riskTaskId: 'risk-verified' },
+    verify: async () => ({ passed: true, count: 1, status: 'verified' }),
+    settle: async value => verified.push(value)
+  })
+  assert.equal(verified[0].remoteState, 'verified')
 })
 
 test('async terminal handlers settle once and preserve failed or unknown terminal truth', async () => {

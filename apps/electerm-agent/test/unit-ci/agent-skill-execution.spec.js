@@ -44,7 +44,7 @@ const remoteRiskContext = Object.freeze({
   verification: [{
     name: 'read_service_status',
     args: { service: 'nginx' },
-    expected: { contains: 'ActiveState=active' }
+    expected: { exitCode: 0, contains: 'ActiveState=active' }
   }]
 })
 const localRiskContext = Object.freeze({
