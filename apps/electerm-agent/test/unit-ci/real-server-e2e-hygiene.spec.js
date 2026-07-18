@@ -194,11 +194,79 @@ function isReadonlyCommandsMapArgument (callPath, commandPath) {
   return true
 }
 
+function staticMemberPathKey (memberPath) {
+  const parts = []
+  let currentPath = memberPath
+  while (currentPath?.isMemberExpression()) {
+    const propertyPath = currentPath.get('property')
+    const property = currentPath.node.computed
+      ? evaluateStaticExpression(propertyPath)
+      : propertyPath.node.name
+    if (typeof property !== 'string' && typeof property !== 'number') return undefined
+    parts.unshift(String(property))
+    currentPath = currentPath.get('object')
+  }
+  if (!currentPath?.isIdentifier()) return undefined
+  parts.unshift(currentPath.node.name)
+  return parts.join('.')
+}
+
+function isApprovedMonitorAssignment (assignmentPath) {
+  const leftPath = assignmentPath.get('left')
+  const rightPath = assignmentPath.get('right')
+  const key = staticMemberPathKey(leftPath)
+  if (assignmentPath.node.operator === '=' &&
+    key === 'window.__shellpilotAgentReadonlyPtyMonitor.count') {
+    return rightPath.isNumericLiteral({ value: 0 })
+  }
+  if (assignmentPath.node.operator === '=' && key === 'attachAddon._sendData') {
+    return rightPath.isFunctionExpression()
+  }
+  if (assignmentPath.node.operator === '+=' && key === 'monitor.count') {
+    return rightPath.isNumericLiteral({ value: 1 })
+  }
+  if (assignmentPath.node.operator === '=' &&
+    key === 'window.__shellpilotAgentReadonlyPtyMonitor') {
+    return rightPath.isIdentifier({ name: 'monitor' })
+  }
+  return assignmentPath.node.operator === '=' &&
+    key === 'monitor.attachAddon._sendData' &&
+    rightPath.isMemberExpression() &&
+    staticMemberPathKey(rightPath) === 'monitor.original'
+}
+
+function isForbiddenMutationHelper (memberPath) {
+  const objectPath = memberPath.get('object')
+  const propertyPath = memberPath.get('property')
+  const property = memberPath.node.computed
+    ? evaluateStaticExpression(propertyPath)
+    : propertyPath.node.name
+  if (objectPath.isIdentifier({ name: 'Object' })) {
+    return ['assign', 'defineProperty', 'defineProperties'].includes(property)
+  }
+  return objectPath.isIdentifier({ name: 'Reflect' }) && property === 'set'
+}
+
+function isDirectReadonlyToolCallMap (callPath, commandPath) {
+  if (!isReadonlyCommandsMapArgument(callPath, commandPath)) return false
+  const callbackPath = callPath.parentPath
+  if (!callbackPath?.isArrowFunctionExpression() ||
+    callbackPath.get('body').node !== callPath.node) return false
+  const mapCallPath = callbackPath.parentPath
+  if (!mapCallPath?.isCallExpression() ||
+    mapCallPath.get('arguments')[0]?.node !== callbackPath.node) return false
+  const toolCallsPropertyPath = mapCallPath.parentPath
+  return toolCallsPropertyPath?.isObjectProperty() &&
+    staticObjectPropertyName(toolCallsPropertyPath) === 'tool_calls' &&
+    toolCallsPropertyPath.get('value').node === mapCallPath.node
+}
+
 function assertStaticCommandExpressionsSafe (source) {
   const ast = parser.parse(source, {
     sourceType: 'unambiguous',
     plugins: ['jsx']
   })
+  const descriptorObjects = new Set()
   const dynamicSinkFunctions = new Map()
   traverse(ast, {
     enter (expressionPath) {
@@ -214,17 +282,26 @@ function assertStaticCommandExpressionsSafe (source) {
       if (!descriptorPath.isObjectExpression()) {
         throw new Error('readonly command descriptor must be a static object')
       }
+      descriptorObjects.add(descriptorPath.node)
+      const functionPropertyPath = descriptorPath.parentPath
+      const returnedObjectPath = functionPropertyPath?.parentPath
+      const returnPath = returnedObjectPath?.parentPath
+      if (!functionPropertyPath?.isObjectProperty() ||
+        staticObjectPropertyName(functionPropertyPath) !== 'function' ||
+        functionPropertyPath.get('value').node !== descriptorPath.node ||
+        !returnedObjectPath?.isObjectExpression() ||
+        !returnPath?.isReturnStatement() ||
+        returnPath.get('argument').node !== returnedObjectPath.node) {
+        throw new Error('readonly command descriptor must be returned directly by its sink')
+      }
       const commandPath = commandExpressionFromReadonlyDescriptor(descriptorPath)
       if (!commandPath) {
         throw new Error('readonly command descriptor must bind one static command field')
       }
-      const command = evaluateStaticExpression(commandPath)
-      if (typeof command === 'string') {
-        assertStaticCommandTextSafe(command)
-        return
-      }
-      const functionPath = propertyPath.findParent(path => path.isFunctionDeclaration())
-      if (!functionPath?.node.id || !commandPath.isIdentifier()) {
+      const functionPath = returnPath.findParent(path => path.isFunction())
+      if (!functionPath?.isFunctionDeclaration() ||
+        functionPath.node.id?.name !== 'toolCall' ||
+        !functionPath.parentPath.isProgram() || !commandPath.isIdentifier()) {
         throw new Error('dynamic readonly command sink is forbidden')
       }
       const parameterIndex = functionPath.get('params').findIndex(parameterPath => (
@@ -238,11 +315,38 @@ function assertStaticCommandExpressionsSafe (source) {
         throw new Error('readonly command sink must have one auditable function binding')
       }
       dynamicSinkFunctions.set(functionBinding, parameterIndex)
+    },
+    AssignmentExpression (assignmentPath) {
+      if (assignmentPath.get('left').isMemberExpression() &&
+        !isApprovedMonitorAssignment(assignmentPath)) {
+        throw new Error('member mutation is forbidden in the readonly fixture')
+      }
+    },
+    UpdateExpression (updatePath) {
+      if (updatePath.get('argument').isMemberExpression()) {
+        throw new Error('member update is forbidden in the readonly fixture')
+      }
+    },
+    UnaryExpression (unaryPath) {
+      if (unaryPath.node.operator !== 'delete' ||
+        !unaryPath.get('argument').isMemberExpression()) return
+      if (staticMemberPathKey(unaryPath.get('argument')) !==
+        'window.__shellpilotAgentReadonlyPtyMonitor') {
+        throw new Error('member deletion is forbidden in the readonly fixture')
+      }
+    },
+    MemberExpression (memberPath) {
+      if (isForbiddenMutationHelper(memberPath)) {
+        throw new Error('generic object mutation helpers are forbidden')
+      }
     }
   })
+  if (descriptorObjects.size !== 1 || dynamicSinkFunctions.size !== 1) {
+    throw new Error('the readonly fixture must register exactly one descriptor sink')
+  }
   for (const [functionBinding, parameterIndex] of dynamicSinkFunctions) {
-    if (functionBinding.referencePaths.length === 0) {
-      throw new Error('readonly command descriptor has no auditable call site')
+    if (functionBinding.referencePaths.length !== 1) {
+      throw new Error('readonly command descriptor must have one auditable map call site')
     }
     for (const referencePath of functionBinding.referencePaths) {
       const callPath = referencePath.parentPath
@@ -251,12 +355,7 @@ function assertStaticCommandExpressionsSafe (source) {
         throw new Error('indirect readonly command sink use is forbidden')
       }
       const commandPath = callPath.get('arguments')[parameterIndex]
-      const command = evaluateStaticExpression(commandPath)
-      if (typeof command === 'string') {
-        assertStaticCommandTextSafe(command)
-        continue
-      }
-      if (!isReadonlyCommandsMapArgument(callPath, commandPath)) {
+      if (!isDirectReadonlyToolCallMap(callPath, commandPath)) {
         throw new Error('readonly command construction is not statically auditable')
       }
     }
@@ -463,6 +562,7 @@ test('Agent readonly hygiene fails closed on a dynamic readonly command sink', (
 
 function readonlySinkFixture (indirectUse) {
   return `
+    const readonlyCommands = Object.freeze(['ip addr'])
     function toolCall (id, command) {
       return {
         function: {
@@ -471,7 +571,11 @@ function readonlySinkFixture (indirectUse) {
         }
       }
     }
-    toolCall('safe', 'ip addr')
+    const response = {
+      tool_calls: readonlyCommands.map((command, index) => (
+        toolCall(\`readonly-real-\${index}\`, command)
+      ))
+    }
     ${indirectUse}
   `
 }
@@ -496,6 +600,64 @@ test('Agent readonly hygiene rejects member and callback uses of a sink', () => 
       indirectUse
     )
   }
+})
+
+test('Agent readonly hygiene rejects descriptor member mutation after construction', () => {
+  for (const mutation of [
+    `
+      const call = response.tool_calls[0]
+      call.function.arguments = JSON.stringify({ command: prompt })
+    `,
+    `
+      const call = response.tool_calls[0]
+      call.function['arg' + 'uments'] = JSON.stringify({ command: prompt })
+    `
+  ]) {
+    assert.throws(
+      () => assertNoForbiddenReadonlyFixtureSource(readonlySinkFixture(mutation)),
+      mutation
+    )
+  }
+})
+
+test('Agent readonly hygiene rejects generic descriptor mutation helpers', () => {
+  for (const mutation of [
+    'Object.assign(response.tool_calls[0].function, { arguments: JSON.stringify({ command: prompt }) })',
+    "Object.defineProperty(response.tool_calls[0].function, 'arguments', { value: JSON.stringify({ command: prompt }) })",
+    'Object.defineProperties(response.tool_calls[0].function, { arguments: { value: JSON.stringify({ command: prompt }) } })',
+    "Reflect.set(response.tool_calls[0].function, 'arguments', JSON.stringify({ command: prompt }))"
+  ]) {
+    assert.throws(
+      () => assertNoForbiddenReadonlyFixtureSource(readonlySinkFixture(mutation)),
+      mutation
+    )
+  }
+})
+
+test('Agent readonly hygiene rejects an extra directly declared descriptor', () => {
+  const extraDescriptor = `
+    const call = {
+      function: {
+        name: 'run_readonly_command',
+        arguments: JSON.stringify({ command: 'ip addr' })
+      }
+    }
+  `
+  assert.throws(() => (
+    assertNoForbiddenReadonlyFixtureSource(readonlySinkFixture(extraDescriptor))
+  ))
+})
+
+test('Agent readonly hygiene rejects saving a descriptor map before mutation', () => {
+  const mutation = `
+    const calls = readonlyCommands.map((command, index) => (
+      toolCall(\`readonly-saved-\${index}\`, command)
+    ))
+    calls[0].function.arguments = JSON.stringify({ command: prompt })
+  `
+  assert.throws(() => (
+    assertNoForbiddenReadonlyFixtureSource(readonlySinkFixture(mutation))
+  ))
 })
 
 test('Agent readonly real-server E2E uses one five-call batch and observes no PTY sends', { skip: !agentSpecExists }, () => {
