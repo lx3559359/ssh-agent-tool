@@ -11,6 +11,7 @@ export const AGENT_TOOL_SCOPES = Object.freeze({
   read_recent_logs: 'session-read',
   verify_listening_port: 'session-read',
   read_file_range: 'session-read',
+  run_readonly_command: 'session-read',
   send_terminal_command: 'session-write',
   get_terminal_output: 'session-read',
   open_local_terminal: 'session-control',

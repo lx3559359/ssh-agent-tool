@@ -23,6 +23,33 @@ test('maps actual calls to the four system outcomes', async () => {
   assert.equal(call('send_terminal_command', { command: 'mkfs.ext4 /dev/sda' }).outcome, 'blocked')
 })
 
+test('allows only statically classified readonly commands through the readonly runner', async () => {
+  const {
+    classifyAgentCall,
+    getAgentToolDescriptor
+  } = await import(policyUrl)
+  const descriptor = getAgentToolDescriptor('run_readonly_command')
+
+  assert.equal(descriptor.scope, 'session-read')
+  assert.equal(classifyAgentCall({
+    descriptor,
+    args: { command: 'ip addr' }
+  }).outcome, 'allowlisted-readonly')
+
+  for (const command of [
+    'ip addr add 10.0.0.2/24 dev eth0',
+    'cat /etc/os-release | sh',
+    'echo $(id)',
+    'journalctl -f',
+    'unknown-static-command'
+  ]) {
+    assert.notEqual(classifyAgentCall({
+      descriptor,
+      args: { command }
+    }).outcome, 'allowlisted-readonly', command)
+  }
+})
+
 test('classifies side effects from actual parameters and expanded content', async () => {
   const { classifyAgentCall, getAgentToolDescriptor } = await import(policyUrl)
   const outcome = (name, args = {}, expandedContent) => classifyAgentCall({

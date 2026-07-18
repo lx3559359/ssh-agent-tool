@@ -865,7 +865,8 @@ function isReadonly (command) {
     return !output.hasOutputAction && !hasUnsafeFindAction(words)
   }
   if (executable === 'ip') {
-    const section = words[1]?.toLowerCase()
+    const rawSection = words[1]?.toLowerCase()
+    const section = rawSection === 'a' ? 'addr' : rawSection
     const action = words[2]?.toLowerCase()
     const readonlyActions = section === 'route' ? ['show', 'list', 'get'] : ['show', 'list']
     return ['addr', 'address', 'route', 'link'].includes(section) &&

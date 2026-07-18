@@ -7,6 +7,17 @@ const orchestrationUrl = pathToFileURL(path.resolve(
   __dirname,
   '../../src/client/common/safety-transactions/command-orchestration.js'
 )).href
+const classifierUrl = pathToFileURL(path.resolve(
+  __dirname,
+  '../../src/client/common/safety-transactions/command-classifier.js'
+)).href
+
+test('classifies limited ip address aliases as readonly', async () => {
+  const { classifyCommand } = await import(classifierUrl)
+
+  assert.equal(classifyCommand('ip a').risk, 'readonly')
+  assert.equal(classifyCommand('ip a show dev eth0').risk, 'readonly')
+})
 
 function deferred () {
   let resolveDeferred

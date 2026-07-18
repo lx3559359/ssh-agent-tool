@@ -25,6 +25,7 @@ const EXTRA_TOOL_SCOPES = Object.freeze({
 })
 
 const RAW_SHELL_TOOLS = new Set([
+  'run_readonly_command',
   'send_terminal_command',
   'run_background_command'
 ])
