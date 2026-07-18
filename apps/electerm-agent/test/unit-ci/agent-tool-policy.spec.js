@@ -140,23 +140,52 @@ test('treats dangerous-looking single quoted text as static literals', async () 
   }
 })
 
-test('parses boolean options and stops option scanning at the terminator', async () => {
+test('parses every Go boolean spelling for streaming options', async () => {
   const { classifyAgentCall, getAgentToolDescriptor } = await import(policyUrl)
   const descriptor = getAgentToolDescriptor('run_readonly_command')
+  const classify = command => classifyAgentCall({
+    descriptor,
+    args: { command }
+  })
+  const trueValues = ['true', 'True', 'TRUE', 't', 'T', '1']
+  const falseValues = ['false', 'False', 'FALSE', 'f', 'F', '0']
 
-  for (const command of [
-    'docker logs --follow=false demo',
-    'podman logs --follow=false demo',
-    'kubectl logs --follow=false pod/demo',
-    'kubectl get --watch=false pods',
-    'tail -- -f',
-    'docker logs -- -f'
-  ]) {
-    assert.equal(
-      classifyAgentCall({ descriptor, args: { command } }).outcome,
-      'allowlisted-readonly',
-      command
-    )
+  for (const value of falseValues) {
+    for (const command of [
+      `docker logs --follow=${value} demo`,
+      `podman logs --follow=${value} demo`,
+      `kubectl logs --follow=${value} pod/demo`,
+      `kubectl get --watch=${value} pods`
+    ]) {
+      assert.equal(classify(command).outcome, 'allowlisted-readonly', command)
+    }
+    for (const command of [
+      `docker stats --no-stream=${value}`,
+      `podman stats --no-stream=${value}`
+    ]) {
+      assert.equal(classify(command).outcome, 'risky', command)
+    }
+  }
+
+  for (const value of trueValues) {
+    for (const command of [
+      `docker logs --follow=${value} demo`,
+      `podman logs --follow=${value} demo`,
+      `kubectl logs --follow=${value} pod/demo`,
+      `kubectl get --watch=${value} pods`
+    ]) {
+      assert.equal(classify(command).outcome, 'risky', command)
+    }
+    for (const command of [
+      `docker stats --no-stream=${value}`,
+      `podman stats --no-stream=${value}`
+    ]) {
+      assert.equal(classify(command).outcome, 'allowlisted-readonly', command)
+    }
+  }
+
+  for (const command of ['tail -- -f', 'docker logs -- -f']) {
+    assert.equal(classify(command).outcome, 'allowlisted-readonly', command)
   }
 })
 
@@ -176,14 +205,13 @@ test('raises streaming CLI modes outside the readonly fast path', async () => {
     'free --seconds 1',
     'less /etc/os-release',
     'docker stats',
+    'docker stats --no-stream=maybe',
     'podman stats',
     'docker logs -f demo',
     'docker logs --follow demo',
     'podman logs -f demo',
     'kubectl logs -f pod/demo',
-    'kubectl logs pod/demo --follow=true',
     'kubectl get -w pods',
-    'kubectl get --watch=true pods',
     'kubectl get --watch-only pods'
   ]) {
     const classified = classifyAgentCall({ descriptor, args: { command } })
@@ -194,6 +222,60 @@ test('raises streaming CLI modes outside the readonly fast path', async () => {
   for (const command of [
     'docker stats --no-stream',
     'podman stats --no-stream'
+  ]) {
+    assert.equal(
+      classifyAgentCall({ descriptor, args: { command } }).outcome,
+      'allowlisted-readonly',
+      command
+    )
+  }
+})
+
+test('rejects unbounded and blocking special input sources', async () => {
+  const { classifyAgentCall, getAgentToolDescriptor } = await import(policyUrl)
+  const descriptor = getAgentToolDescriptor('run_readonly_command')
+
+  for (const command of [
+    'cat /dev/zero',
+    'head /dev/zero',
+    'head -n 1 /dev/zero',
+    'wc /dev/zero',
+    'grep x /dev/zero',
+    'cat /dev/random',
+    'head /dev/urandom',
+    'wc /dev/kmsg',
+    'grep x /proc/kmsg',
+    'cat /dev/stdin',
+    'head /dev/fd/0',
+    'wc /proc/self/fd/0',
+    'head /proc/thread-self/fd/0',
+    'grep x /proc/321/fd/4',
+    'grep x -',
+    'cat /dev/tty',
+    'cat /dev/mapper/control',
+    'cat',
+    'head -n 1',
+    'tail -n 1',
+    'wc -l',
+    'grep x',
+    'sed -n p'
+  ]) {
+    const classified = classifyAgentCall({ descriptor, args: { command } })
+    assert.equal(classified.outcome, 'risky', command)
+    assert.notEqual(classified.resourceImpact.duration, 'short', command)
+  }
+
+  for (const command of [
+    'cat /dev/null',
+    'head /dev/null',
+    'wc /dev/null',
+    'grep x /dev/null',
+    'cat README.md',
+    'head -n 1 README.md',
+    'tail -n 1 README.md',
+    'wc -l README.md',
+    'grep x README.md',
+    'sed -n p README.md'
   ]) {
     assert.equal(
       classifyAgentCall({ descriptor, args: { command } }).outcome,

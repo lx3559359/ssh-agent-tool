@@ -106,10 +106,18 @@ function staticInvocationWords (command) {
   return words.slice(index)
 }
 
+function parseBooleanOptionValue (value) {
+  const normalized = String(value || '').toLowerCase()
+  if (['1', 't', 'true'].includes(normalized)) return true
+  if (['0', 'f', 'false'].includes(normalized)) return false
+  return undefined
+}
+
 function optionEnabled (words, {
   short = '',
   long,
-  booleanValue = true
+  booleanValue = true,
+  unknownValue = true
 }) {
   let enabled = false
   for (const word of words) {
@@ -119,16 +127,20 @@ function optionEnabled (words, {
       continue
     }
     if (long && word.startsWith(`${long}=`)) {
-      const value = word.slice(long.length + 1).toLowerCase()
-      enabled = !booleanValue || !['false', '0'].includes(value)
+      const value = parseBooleanOptionValue(word.slice(long.length + 1))
+      enabled = !booleanValue || value === true ||
+        (value === undefined && unknownValue)
       continue
     }
     if (!short || !/^-[^-]/.test(word)) continue
     const separator = word.indexOf('=')
     const flags = word.slice(1, separator === -1 ? undefined : separator)
     if (![...short].some(option => flags.includes(option))) continue
-    const value = separator === -1 ? '' : word.slice(separator + 1).toLowerCase()
-    enabled = !booleanValue || !['false', '0'].includes(value)
+    const value = separator === -1
+      ? undefined
+      : parseBooleanOptionValue(word.slice(separator + 1))
+    enabled = !booleanValue || value === true ||
+      (value === undefined && unknownValue)
   }
   return enabled
 }
@@ -178,7 +190,10 @@ function isStreamingCommand (command) {
     const action = args[0]?.toLowerCase()
     const actionArgs = args.slice(1)
     if (action === 'stats') {
-      return !optionEnabled(actionArgs, { long: '--no-stream' })
+      return !optionEnabled(actionArgs, {
+        long: '--no-stream',
+        unknownValue: false
+      })
     }
     if (action === 'logs') {
       return optionEnabled(actionArgs, {
@@ -204,6 +219,82 @@ function isStreamingCommand (command) {
     }
   }
   return false
+}
+
+const inputConsumingCommands = new Set([
+  'cat', 'grep', 'head', 'sed', 'tail', 'wc'
+])
+
+const inputOptionValues = Object.freeze({
+  grep: new Set([
+    '-A', '--after-context', '-B', '--before-context', '-C', '--context',
+    '-d', '--directories', '-D', '--devices', '-e', '--regexp',
+    '-f', '--file', '-m', '--max-count'
+  ]),
+  head: new Set(['-c', '--bytes', '-n', '--lines']),
+  sed: new Set(['-e', '--expression', '-f', '--file']),
+  tail: new Set([
+    '-c', '--bytes', '-n', '--lines', '--max-unchanged-stats',
+    '--pid', '-s', '--sleep-interval'
+  ])
+})
+
+function isUnboundedInputSource (value) {
+  const source = String(value || '').replace(/^--[^=]+=/, '')
+  if (source === '/dev/null') return false
+  return source === '-' || source === '/proc/kmsg' ||
+    /^\/dev(?:\/|$)/.test(source) ||
+    /^\/proc\/(?:self|thread-self|\d+)\/fd(?:\/|$)/.test(source)
+}
+
+function positionalArguments (words, valueOptions = new Set()) {
+  const positionals = []
+  let parseOptions = true
+  for (let index = 0; index < words.length; index += 1) {
+    const word = words[index]
+    if (parseOptions && word === '--') {
+      parseOptions = false
+      continue
+    }
+    if (parseOptions && word.startsWith('--')) {
+      const option = word.split('=', 1)[0]
+      if (valueOptions.has(option) && !word.includes('=') && words[index + 1]) {
+        index += 1
+      }
+      continue
+    }
+    if (parseOptions && /^-[^-]/.test(word)) {
+      if (valueOptions.has(word) && words[index + 1]) index += 1
+      continue
+    }
+    positionals.push(word)
+  }
+  return positionals
+}
+
+function hasImplicitStandardInput (name, args) {
+  const positionals = positionalArguments(args, inputOptionValues[name])
+  if (name === 'grep' || name === 'sed') {
+    const hasScriptOption = optionEnabled(args, {
+      short: 'ef',
+      booleanValue: false
+    }) || optionEnabled(args, {
+      long: name === 'grep' ? '--regexp' : '--expression',
+      booleanValue: false
+    }) || optionEnabled(args, {
+      long: '--file',
+      booleanValue: false
+    })
+    return positionals.length <= (hasScriptOption ? 0 : 1)
+  }
+  return positionals.length === 0
+}
+
+function hasUnboundedInputSource (command) {
+  const [executable, ...args] = staticInvocationWords(command)
+  const name = executableName(executable)
+  if (!inputConsumingCommands.has(name)) return false
+  return args.some(isUnboundedInputSource) || hasImplicitStandardInput(name, args)
 }
 
 function scopeFor (name) {
@@ -329,7 +420,7 @@ function classifyShellText (text) {
   if (shellSyntax.executionExpansion || shellSyntax.controlOperator) {
     return result('unauditable', 'DYNAMIC_OR_PIPED_SHELL')
   }
-  if (isStreamingCommand(command) ||
+  if (isStreamingCommand(command) || hasUnboundedInputSource(command) ||
     resourceSensitivePatterns.some(pattern => pattern.test(command))) {
     return result('risky', 'RESOURCE_SENSITIVE_READ')
   }
