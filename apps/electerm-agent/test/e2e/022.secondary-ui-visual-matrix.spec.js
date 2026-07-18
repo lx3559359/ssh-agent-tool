@@ -1065,19 +1065,30 @@ async function exerciseLanguageAndThemeState (page) {
   expect(targetText).not.toBe('')
   const languageSelect = page.locator('.setting-header .ant-select')
   const languageCombobox = languageSelect.getByRole('combobox')
+  const readActiveOption = async (previousId = '') => {
+    let activeOption
+    await expect.poll(async () => {
+      const activeId = await languageCombobox.getAttribute('aria-activedescendant')
+      if (!activeId || activeId === previousId) return ''
+      const option = page.locator(`[role="option"][id=${JSON.stringify(activeId)}]`)
+      if (await option.count() !== 1) return ''
+      const activeText = (await option.textContent())?.trim() || ''
+      if (!activeText) return ''
+      activeOption = { activeId, activeText }
+      return `${activeId}:${activeText}`
+    }, { timeout: 5000 }).not.toBe('')
+    return activeOption
+  }
   const chooseTargetOption = async () => {
     if (await languageCombobox.getAttribute('aria-expanded') !== 'true') {
       await languageCombobox.press('ArrowDown')
     }
     await expect(languageCombobox).toHaveAttribute('aria-expanded', 'true', { timeout: 5000 })
     await languageCombobox.press('Home')
-    await expect(languageCombobox).toHaveAttribute('aria-activedescendant', /.+/, { timeout: 5000 })
     const visitedOptions = []
+    let activeOption = await readActiveOption()
     for (let step = 0; step < initial.locales; step += 1) {
-      const activeId = await languageCombobox.getAttribute('aria-activedescendant')
-      const activeOption = page.locator(`[role="option"][id=${JSON.stringify(activeId)}]`)
-      await expect(activeOption).toBeAttached({ timeout: 5000 })
-      const activeText = (await activeOption.textContent())?.trim()
+      const { activeId, activeText } = activeOption
       visitedOptions.push({ activeId, activeText })
       if (activeText === targetText) {
         await languageCombobox.press('Enter')
@@ -1085,6 +1096,7 @@ async function exerciseLanguageAndThemeState (page) {
         return
       }
       await languageCombobox.press('ArrowDown')
+      activeOption = await readActiveOption(activeId)
     }
     throw new Error(`Language option was not reached: ${JSON.stringify({ targetLanguage, targetText, visitedOptions })}`)
   }
