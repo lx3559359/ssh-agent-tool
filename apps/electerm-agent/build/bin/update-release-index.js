@@ -4,6 +4,7 @@ const {
   buildReleaseTag,
   getRequiredReleaseAssetNames
 } = require('./github-release-utils')
+const { sha256File } = require('./update-checksums')
 const {
   buildModelScopeAssetUrl,
   modelScopeReleaseManifestName,
@@ -13,6 +14,11 @@ const {
 function getFileSize (distDir, name) {
   const filePath = path.join(distDir, name)
   return fs.existsSync(filePath) ? fs.statSync(filePath).size : undefined
+}
+
+function getFileSha256 (distDir, name) {
+  const filePath = path.join(distDir, name)
+  return fs.existsSync(filePath) ? sha256File(filePath) : undefined
 }
 
 function buildUpdateReleaseIndex ({
@@ -29,11 +35,14 @@ function buildUpdateReleaseIndex ({
     html_url: 'https://modelscope.cn/models/lx3559359/ShellPilot-Updates/files',
     published_at: publishedAt,
     body,
-    assets: getRequiredReleaseAssetNames(version, { arch }).map(name => ({
-      name,
-      size: getFileSize(distDir, name),
-      browser_download_url: buildModelScopeAssetUrl(name)
-    }))
+    assets: getRequiredReleaseAssetNames(version, { arch })
+      .filter(name => name !== modelScopeReleaseManifestName)
+      .map(name => ({
+        name,
+        size: getFileSize(distDir, name),
+        sha256: getFileSha256(distDir, name),
+        browser_download_url: buildModelScopeAssetUrl(name)
+      }))
   }
 }
 

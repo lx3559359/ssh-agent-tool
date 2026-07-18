@@ -1,5 +1,6 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
+const crypto = require('node:crypto')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
@@ -15,6 +16,8 @@ test('prepares approved online update assets from the local electron-builder met
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigshell-update-assets-'))
   try {
     fs.writeFileSync(path.join(tempDir, 'shellpilot-local.yml'), 'version: 3.15.107\n')
+    fs.writeFileSync(path.join(tempDir, 'ShellPilot-3.15.107-win-x64-installer.exe'), 'installer')
+    fs.writeFileSync(path.join(tempDir, 'ShellPilot-3.15.107-win-x64-installer.exe.blockmap'), 'blockmap')
 
     const result = prepareUpdateAssets({
       distDir: tempDir,
@@ -58,10 +61,18 @@ test('prepares approved online update assets from the local electron-builder met
         'shellpilot-local.yml',
         'aigshell-update.json',
         'shellpilot-update.json',
-        'checksums.json',
-        'shellpilot-release.json'
+        'checksums.json'
       ]
     )
+    for (const asset of releaseIndex.assets) {
+      const assetPath = path.join(tempDir, asset.name)
+      assert.equal(asset.size, fs.statSync(assetPath).size, `${asset.name} size`)
+      assert.equal(
+        asset.sha256,
+        crypto.createHash('sha256').update(fs.readFileSync(assetPath)).digest('hex'),
+        `${asset.name} sha256`
+      )
+    }
     assert.match(
       releaseIndex.assets[0].browser_download_url,
       /modelscope\.cn\/models\/lx3559359\/ShellPilot-Updates\/resolve\/master\/ShellPilot-3\.15\.107-win-x64-installer\.exe/
