@@ -8,7 +8,7 @@ const matrixPath = path.resolve(__dirname, '../e2e/022.secondary-ui-visual-matri
 
 test('language selection uses rendered option semantics instead of virtual-row math', () => {
   const source = fs.readFileSync(matrixPath, 'utf8')
-  const selector = source.match(/const chooseTargetOption = async \(\) => {[\s\S]*?\r?\n {2}}\r?\n {2}await chooseTargetOption/)
+  const selector = source.match(/const readActiveOption = async \(previousId = ''\) => {[\s\S]*?\r?\n {2}await chooseTargetOption/)
 
   assert.ok(selector)
   assert.doesNotMatch(selector[0], /index\s*\*\s*32|targetIndex/)
@@ -17,7 +17,7 @@ test('language selection uses rendered option semantics instead of virtual-row m
   assert.match(selector[0], /languageCombobox\.press\('Home'\)/)
   assert.match(selector[0], /step < initial\.locales/)
   assert.match(selector[0], /\[role="option"\]/)
-  assert.match(selector[0], /activeOption\.textContent\(\)/)
+  assert.match(selector[0], /option\.textContent\(\)/)
   assert.doesNotMatch(selector[0], /scrollIntoViewIfNeeded\(\)/)
 })
 
