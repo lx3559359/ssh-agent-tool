@@ -40,14 +40,11 @@ const STRUCTURED_WRITE_TOOLS = new Set([
 ])
 
 const resourceSensitivePatterns = [
-  /\bjournalctl\b[^\n]*(?:\s-f\b|--follow\b)/i,
-  /\b(?:tail)\b[^\n]*(?:\s-f\b|--follow\b)/i,
   /\bdu\b[^\n]*(?:\s-a\b|--all\b)[^\n]*(?:\s\/\s*$|\s\/\*?)/i,
   /\b(?:tar|cpio|zip|7z)\b[^\n]*(?:\s\/\s*$|\s\/\*?)/i,
   /\b(?:sha(?:1|224|256|384|512)sum|md5sum)\b[^\n]*(?:\/var\/lib|\/home|\/srv|\/)/i,
-  /\b(?:docker|podman)\s+(?:build|buildx\s+build|stats)\b/i,
+  /\b(?:docker|podman)\s+(?:build|buildx\s+build)\b/i,
   /\bkubectl\b[^\n]*(?:\s-w\b|--watch(?:=\S+)?\b)/i,
-  /\bkubectl\s+logs\b[^\n]*(?:\s-f\b|\s--follow(?:=\S+)?\b)/i,
   /\b(?:psql|mysql|mariadb|sqlite3)\b[^\n]*\bselect\b(?![^\n]*\blimit\b)/i
 ]
 
@@ -94,6 +91,109 @@ const elevatedImpact = Object.freeze({
   network: 'medium',
   duration: 'unknown'
 })
+
+function executableName (value) {
+  return String(value || '').replace(/^.*\//, '').toLowerCase()
+}
+
+function staticInvocationWords (command) {
+  let words
+  try {
+    words = tokenizeStaticShell(command)
+  } catch (error) {
+    return []
+  }
+  let index = 0
+  if (executableName(words[index]) === 'sudo') {
+    index += 1
+    while (['-n', '--non-interactive'].includes(words[index])) index += 1
+    if (words[index] === '--') index += 1
+  }
+  return words.slice(index)
+}
+
+function hasShortOption (words, options) {
+  return words.some(word => {
+    if (!/^-[^-]/.test(word)) return false
+    const flags = word.slice(1).split('=', 1)[0]
+    return [...options].some(option => flags.includes(option))
+  })
+}
+
+function hasLongOption (words, option) {
+  return words.some(word => word === option || word.startsWith(`${option}=`))
+}
+
+function booleanOptionEnabled (words, option) {
+  let enabled = false
+  for (const word of words) {
+    if (word === option) {
+      enabled = true
+      continue
+    }
+    if (!word.startsWith(`${option}=`)) continue
+    const value = word.slice(option.length + 1).toLowerCase()
+    enabled = value === 'true' || value === '1'
+  }
+  return enabled
+}
+
+function isStreamingCommand (command) {
+  const [executable, ...args] = staticInvocationWords(command)
+  const name = executableName(executable)
+  if (name === 'journalctl') {
+    return hasShortOption(args, 'f') || hasLongOption(args, '--follow')
+  }
+  if (name === 'tail') {
+    return hasShortOption(args, 'fF') || hasLongOption(args, '--follow')
+  }
+  if (name === 'docker' || name === 'podman') {
+    const action = args[0]?.toLowerCase()
+    const actionArgs = args.slice(1)
+    if (action === 'stats') {
+      return !booleanOptionEnabled(actionArgs, '--no-stream')
+    }
+    if (action === 'logs') {
+      return hasShortOption(actionArgs, 'f') ||
+        hasLongOption(actionArgs, '--follow')
+    }
+  }
+  if (name === 'kubectl' && args[0]?.toLowerCase() === 'logs') {
+    const actionArgs = args.slice(1)
+    return hasShortOption(actionArgs, 'f') ||
+      hasLongOption(actionArgs, '--follow')
+  }
+  return false
+}
+
+function hasRuntimeShellExpansion (command) {
+  let quote = ''
+  let escaped = false
+  for (const character of command) {
+    if (escaped) {
+      escaped = false
+      continue
+    }
+    if (character === '\\' && quote !== "'") {
+      escaped = true
+      continue
+    }
+    if (quote) {
+      if (character === quote) {
+        quote = ''
+      } else if (quote === '"' && (character === '$' || character === '`')) {
+        return true
+      }
+      continue
+    }
+    if (character === "'" || character === '"') {
+      quote = character
+      continue
+    }
+    if ('$`*?[]{}~'.includes(character)) return true
+  }
+  return false
+}
 
 function scopeFor (name) {
   return AGENT_TOOL_SCOPES[name] || EXTRA_TOOL_SCOPES[name]
@@ -214,7 +314,8 @@ function classifySkillArtifact ({
 function classifyShellText (text) {
   const command = String(text || '').trim()
   if (!command) return result('unauditable', 'EMPTY_OR_MISSING_COMMAND')
-  if (resourceSensitivePatterns.some(pattern => pattern.test(command))) {
+  if (isStreamingCommand(command) ||
+    resourceSensitivePatterns.some(pattern => pattern.test(command))) {
     return result('risky', 'RESOURCE_SENSITIVE_READ')
   }
   if (unauditableShellPatterns.some(pattern => pattern.test(command))) {
@@ -231,6 +332,9 @@ function classifyShellText (text) {
     try {
       tokenizeStaticShell(command)
     } catch (error) {
+      return result('unauditable', 'DYNAMIC_OR_PIPED_SHELL')
+    }
+    if (hasRuntimeShellExpansion(command)) {
       return result('unauditable', 'DYNAMIC_OR_PIPED_SHELL')
     }
     return result('allowlisted-readonly', 'COMMAND_READONLY')

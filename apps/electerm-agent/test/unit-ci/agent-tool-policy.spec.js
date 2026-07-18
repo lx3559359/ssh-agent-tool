@@ -72,19 +72,73 @@ test('rejects shell control syntax from the readonly runner without rejecting qu
   )
 })
 
+test('rejects runtime shell expansion from the static readonly fast path', async () => {
+  const { classifyAgentCall, getAgentToolDescriptor } = await import(policyUrl)
+  const descriptor = getAgentToolDescriptor('run_readonly_command')
+  const classify = command => classifyAgentCall({
+    descriptor,
+    args: { command }
+  })
+
+  for (const command of [
+    'cat $HOME/.profile',
+    'cat "$HOME/.profile"',
+    'ls /etc/*.conf',
+    'cat /etc/pas?wd',
+    'cat /etc/pa[ss]wd',
+    'ls /etc/{passwd,shadow}',
+    ['cat $', '{HOME}/.profile'].join(''),
+    'cat $((1 + 1))',
+    'cat $(printf /etc/passwd)',
+    'cat <(printf /etc/passwd)',
+    'cat `printf /etc/passwd`',
+    'cat ~/.profile',
+    'ip a > /tmp/ip-addresses',
+    'cat <<EOF\ntext\nEOF',
+    'ip a\nwhoami'
+  ]) {
+    assert.notEqual(classify(command).outcome, 'allowlisted-readonly', command)
+  }
+
+  for (const command of [
+    'grep \'$HOME *.conf pas?wd [ab] {a,b}\' /etc/os-release',
+    'grep "*.conf pas?wd [ab] {a,b}" /etc/os-release'
+  ]) {
+    assert.equal(classify(command).outcome, 'allowlisted-readonly', command)
+  }
+})
+
 test('raises streaming CLI modes outside the readonly fast path', async () => {
   const { classifyAgentCall, getAgentToolDescriptor } = await import(policyUrl)
   const descriptor = getAgentToolDescriptor('run_readonly_command')
 
   for (const command of [
+    'journalctl -fn 10',
+    'journalctl -af',
+    'tail -Fn 10 /var/log/syslog',
+    'tail -qf /var/log/syslog',
     'docker stats',
     'podman stats',
+    'docker logs -f demo',
+    'docker logs --follow demo',
+    'podman logs -f demo',
     'kubectl logs -f pod/demo',
     'kubectl logs pod/demo --follow=true'
   ]) {
     const classified = classifyAgentCall({ descriptor, args: { command } })
     assert.equal(classified.outcome, 'risky', command)
     assert.notEqual(classified.resourceImpact.duration, 'short', command)
+  }
+
+  for (const command of [
+    'docker stats --no-stream',
+    'podman stats --no-stream'
+  ]) {
+    assert.equal(
+      classifyAgentCall({ descriptor, args: { command } }).outcome,
+      'allowlisted-readonly',
+      command
+    )
   }
 })
 
