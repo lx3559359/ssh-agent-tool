@@ -50,6 +50,23 @@ export function buildSftpSafetyPath (sourcePath, kind = 'backup', now = new Date
   return joinPath(parent, safetyDir, `${name}-${formatTimestamp(now)}`)
 }
 
+async function findAvailableSftpSafetyPath (sftp, basePath) {
+  if (typeof sftp?.stat !== 'function') return basePath
+  for (let index = 1; index <= 1000; index++) {
+    const candidate = index === 1 ? basePath : `${basePath}-${index}`
+    try {
+      await sftp.stat(candidate)
+    } catch (err) {
+      const message = String(err?.message || err)
+      if (/no such|not found|does not exist|enoent/i.test(message)) {
+        return candidate
+      }
+      throw err
+    }
+  }
+  throw new Error('SFTP 备份名称冲突过多，请清理历史备份后重试。')
+}
+
 export function createSftpRecoveryRecord ({
   kind,
   sourcePath,
@@ -117,7 +134,10 @@ export async function backupRemoteFiles ({ sftp, files = [], tab, now = new Date
   const createdDirs = new Set()
   for (const file of files) {
     const sourcePath = getFilePath(file)
-    const backupPath = buildSftpSafetyPath(sourcePath, 'backup', now)
+    const backupPath = await findAvailableSftpSafetyPath(
+      sftp,
+      buildSftpSafetyPath(sourcePath, 'backup', now)
+    )
     const backupDir = splitPath(backupPath).parent
     await ensureRemoteDir(sftp, backupDir, createdDirs)
     await sftp.cp(sourcePath, backupPath)
@@ -138,7 +158,10 @@ export async function softDeleteRemoteFiles ({ sftp, files = [], tab, now = new 
   const createdDirs = new Set()
   for (const file of files) {
     const sourcePath = getFilePath(file)
-    const backupPath = buildSftpSafetyPath(sourcePath, 'trash', now)
+    const backupPath = await findAvailableSftpSafetyPath(
+      sftp,
+      buildSftpSafetyPath(sourcePath, 'trash', now)
+    )
     const trashDir = splitPath(backupPath).parent
     await ensureRemoteDir(sftp, trashDir, createdDirs)
     await sftp.rename(sourcePath, backupPath)

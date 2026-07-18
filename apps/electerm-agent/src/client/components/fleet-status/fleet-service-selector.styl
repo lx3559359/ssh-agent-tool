@@ -1,0 +1,284 @@
+.fleet-service-selector-drawer
+  --fleet-service-success unquote('color-mix(in srgb, var(--success) 15%, var(--text) 85%)')
+  --fleet-service-info unquote('color-mix(in srgb, var(--info) 15%, var(--text) 85%)')
+  --fleet-service-warn unquote('color-mix(in srgb, var(--warn) 15%, var(--text) 85%)')
+  --fleet-service-error unquote('color-mix(in srgb, var(--error) 15%, var(--text) 85%)')
+  .ant-drawer-content-wrapper
+    width 1180px !important
+    max-width calc(100vw - 32px)
+  .ant-drawer-content
+  .ant-drawer-header
+  .ant-drawer-body
+    background var(--main)
+    color var(--text)
+  .ant-drawer-header
+    padding 12px 16px
+    border-bottom 1px solid var(--main-darker)
+  .ant-drawer-body
+    min-height 0
+    padding 0
+    overflow-x hidden
+    overflow-y auto
+
+.fleet-service-selector-title
+  display flex
+  align-items center
+  justify-content space-between
+  gap 12px
+  min-width 0
+  > div
+    display flex
+    align-items baseline
+    gap 10px
+    min-width 0
+  strong
+    color var(--text-light)
+    font-size 16px
+    line-height 24px
+    letter-spacing 0
+  span
+    color var(--text-dark)
+    font-size 12px
+
+.fleet-service-selector-content
+  box-sizing border-box
+  display flex
+  flex-direction column
+  width 100%
+  height 100%
+  min-width 0
+  min-height 0
+  overflow-x hidden
+  overflow-y auto
+  overscroll-behavior contain
+
+.fleet-service-selector-targets
+  flex none
+  max-height clamp(120px, 32vh, 240px)
+  overflow-y auto
+  overscroll-behavior contain
+  padding 12px 16px 10px
+  border-bottom 1px solid var(--main-darker)
+  h3
+    margin 0 0 8px
+    color var(--text-light)
+    font-size 13px
+    line-height 20px
+    font-weight 600
+    letter-spacing 0
+  ul
+    display flex
+    flex-wrap wrap
+    gap 6px
+    margin 0
+    padding 0
+    list-style none
+  li
+    box-sizing border-box
+    display grid
+    grid-template-columns minmax(130px, 1fr) auto
+    align-items center
+    gap 4px 10px
+    min-width 260px
+    max-width 360px
+    padding 7px 9px
+    border 1px solid var(--main-darker)
+    border-radius 6px
+    background var(--main-light)
+    font-size 12px
+    > div
+      min-width 0
+      strong
+      span
+        display block
+        overflow hidden
+        text-overflow ellipsis
+        white-space nowrap
+      strong
+        color var(--text-light)
+      span
+        color var(--text-dark)
+    > span
+      white-space nowrap
+    em
+      grid-column 1 / -1
+      color var(--fleet-service-warn)
+      font-style normal
+
+.fleet-service-selector-server-status
+  font-size 12px
+  font-weight 600
+
+.fleet-service-selector-server-ready
+  color var(--fleet-service-success) !important
+.fleet-service-selector-server-loading
+  color var(--fleet-service-info) !important
+.fleet-service-selector-server-partial
+  color var(--fleet-service-warn) !important
+.fleet-service-selector-server-disconnected
+.fleet-service-selector-server-permission
+.fleet-service-selector-server-error
+  color var(--fleet-service-error) !important
+.fleet-service-selector-server-unsupported
+.fleet-service-selector-server-cancelled
+.fleet-service-selector-server-empty
+  color var(--text) !important
+
+.fleet-service-selector-toolbar
+.fleet-service-selector-selection-bar
+  flex none
+  display flex
+  align-items center
+  flex-wrap wrap
+  gap 8px
+  min-width 0
+  padding 9px 16px
+  border-bottom 1px solid var(--main-darker)
+
+.fleet-service-selector-toolbar
+  background var(--main)
+
+.fleet-service-selector-selection-bar
+  min-height 38px
+  background var(--main-light)
+  font-size 12px
+  > span
+    color var(--text-light)
+  > strong
+    margin-left auto
+    color var(--fleet-service-warn)
+    font-weight 600
+
+.fleet-service-selector-search
+  width 250px
+
+.fleet-service-selector-filter
+  width 138px
+
+.fleet-service-selector-table-scroll
+  flex 1
+  min-width 0
+  min-height clamp(96px, 30vh, 220px)
+  overflow-x auto
+  overflow-y auto
+  overscroll-behavior contain
+
+.fleet-service-selector-table
+  width 100%
+  min-width 1120px
+  border-collapse separate
+  border-spacing 0
+  table-layout fixed
+  color var(--text)
+  font-size 12px
+  th
+  td
+    box-sizing border-box
+    height 38px
+    padding 7px 9px
+    overflow hidden
+    border-right 1px solid var(--main-darker)
+    border-bottom 1px solid var(--main-darker)
+    background var(--main)
+    text-align left
+    text-overflow ellipsis
+    vertical-align middle
+    white-space nowrap
+  thead th
+    position sticky
+    top 0
+    z-index 4
+    height 36px
+    background var(--main-light)
+    color var(--text-light)
+    font-weight 600
+  th:nth-child(1)
+    width 42px
+  th:nth-child(2)
+    width 160px
+  th:nth-child(3)
+    width 190px
+  th:nth-child(4)
+    width 105px
+  th:nth-child(5)
+    width 130px
+  th:nth-child(6)
+    width 105px
+  th:nth-child(7)
+    width 105px
+  th:nth-child(8)
+    width 280px
+
+.fleet-service-selector-table .fleet-service-selector-selection-cell
+  position sticky
+  left 0
+  z-index 3
+  width 42px
+  background var(--main)
+
+.fleet-service-selector-table thead .fleet-service-selector-selection-cell
+  z-index 6
+  background var(--main-light)
+
+.fleet-service-selector-group-row th
+  position sticky
+  left 0
+  z-index 2
+  height 32px
+  background var(--main-light)
+  color var(--text-light)
+  font-size 12px
+  font-weight 650
+
+.fleet-service-selector-state
+  font-weight 600
+  font-size 12px
+.fleet-service-selector-state-running
+  color var(--fleet-service-success)
+.fleet-service-selector-state-stopped
+  color var(--text)
+.fleet-service-selector-state-failed
+.fleet-service-selector-state-restarting
+  color var(--fleet-service-error)
+.fleet-service-selector-state-starting
+  color var(--fleet-service-info)
+.fleet-service-selector-state-paused
+.fleet-service-selector-state-unknown
+  color var(--fleet-service-warn)
+
+.fleet-service-selector-empty
+  height 120px !important
+  color var(--text-dark)
+  text-align center !important
+
+.fleet-service-selector-advanced
+  flex none
+  padding 8px 16px 10px
+  border-top 1px solid var(--main-darker)
+  color var(--text-dark)
+  font-size 12px
+  summary
+    width max-content
+    cursor pointer
+    color var(--text)
+  p
+    margin 7px 0 0
+
+@media (max-width 720px)
+  .fleet-service-selector-drawer
+    .ant-drawer-content-wrapper
+      max-width calc(100vw - 16px)
+  .fleet-service-selector-targets
+  .fleet-service-selector-toolbar
+  .fleet-service-selector-selection-bar
+    padding-right 10px
+    padding-left 10px
+  .fleet-service-selector-targets li
+    width 100%
+    min-width 0
+    max-width none
+  .fleet-service-selector-search
+    width 100%
+  .fleet-service-selector-filter
+    flex 1
+    min-width 125px

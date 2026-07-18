@@ -4,11 +4,13 @@ const getPort = require('./get-port')
 const { userConfigId, userNoEncryptConfigId } = require('../common/constants')
 const generate = require('../common/uid')
 const globalState = require('./glob-state')
+const { restoreAIConfigCredentials } = require('./ai-credential-storage')
 
 exports.getConfig = async (inited) => {
-  const userConfig = await dbAction('data', 'findOne', {
+  const storedUserConfig = await dbAction('data', 'findOne', {
     _id: userConfigId
   }) || {}
+  const userConfig = restoreAIConfigCredentials(storedUserConfig)
   const requireAuth = userConfig.hashedPassword
   delete userConfig._id
   delete userConfig.host

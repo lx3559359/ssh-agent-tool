@@ -20,6 +20,12 @@ const {
 } = require('./terminal-api')
 const globalState = require('./global-state')
 const wsDec = require('./ws-dec')
+const {
+  collectionInputFromMessage,
+  createFleetStatusService
+} = require('./fleet-status-service')
+
+const fleetStatusService = createFleetStatusService()
 
 const { tokenElecterm } = process.env
 
@@ -30,6 +36,57 @@ function verify (req) {
   }
   if (process.env.requireAuth === 'yes' && !globalState.authed) {
     throw new Error('auth required')
+  }
+}
+
+function fleetErrorResponse (error) {
+  const code = typeof error?.code === 'string'
+    ? error.code
+    : 'FLEET_STATUS_ERROR'
+  const messages = {
+    INVALID_REQUEST: 'Invalid fleet status request',
+    INVALID_TASK_ID: 'Invalid fleet status task id',
+    INVALID_TARGETS: 'Invalid fleet status targets',
+    INVALID_PROBE_ID: 'Invalid fleet status probe id',
+    TASK_EXISTS: 'Fleet status task already exists',
+    FLEET_STATUS_ERROR: 'Fleet status request failed'
+  }
+  return {
+    code,
+    message: messages[code] || messages.FLEET_STATUS_ERROR
+  }
+}
+
+async function collectFleetStatus (ws, msg) {
+  try {
+    const data = await fleetStatusService.collect(
+      collectionInputFromMessage(msg),
+      ws
+    )
+    ws.s({ id: msg.id, data })
+  } catch (error) {
+    ws.s({ id: msg.id, error: fleetErrorResponse(error) })
+  }
+}
+
+async function collectFleetServiceInventory (ws, msg) {
+  try {
+    const data = await fleetStatusService.inventory(
+      collectionInputFromMessage(msg),
+      ws
+    )
+    ws.s({ id: msg.id, data })
+  } catch (error) {
+    ws.s({ id: msg.id, error: fleetErrorResponse(error) })
+  }
+}
+
+async function cancelFleetStatus (ws, msg) {
+  try {
+    const data = await fleetStatusService.cancel(msg.taskId)
+    ws.s({ id: msg.id, data })
+  } catch (error) {
+    ws.s({ id: msg.id, error: fleetErrorResponse(error) })
   }
 }
 
@@ -66,6 +123,12 @@ const initWs = function (app) {
           runCmd(ws, msg)
         } else if (action === 'cancel-run-cmd') {
           cancelRunCmd(ws, msg)
+        } else if (action === 'collect-fleet-status') {
+          await collectFleetStatus(ws, msg)
+        } else if (action === 'collect-fleet-service-inventory') {
+          await collectFleetServiceInventory(ws, msg)
+        } else if (action === 'cancel-fleet-status') {
+          await cancelFleetStatus(ws, msg)
         }
       } catch (err) {
         log.error('common ws error', err)

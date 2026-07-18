@@ -4,6 +4,10 @@ import {
   isMacJs
 } from '../../common/constants.js'
 import keyControlPressed from '../../common/key-control-pressed.js'
+import {
+  isFleetStatusActive,
+  routeFleetStatusShortcut
+} from '../fleet-status/fleet-status-navigation.js'
 
 function processEscapeSequences (text) {
   let result = ''
@@ -177,6 +181,10 @@ export function shortcutExtend (Cls) {
     if (event.isComposing) {
       return
     }
+    const fleetStatusActive = isFleetStatusActive(window.store)
+    if (fleetStatusActive && this.term) {
+      return false
+    }
     if (handleTerminalSelectionReplace(event, this)) {
       return false
     }
@@ -281,13 +289,26 @@ export function shortcutExtend (Cls) {
       const conf = shortcutsConfig[k]
       const funcName = conf.func + 'Shortcut'
       if (conf.shortcut.split(',').includes(r)) {
-        if (this[funcName]) {
-          return this[funcName](event)
-        } else if (this.term && conf.readonly) {
-          return true
-        } else {
-          return false
+        const invoke = () => {
+          if (this[funcName]) {
+            return this[funcName](event)
+          } else if (this.term && conf.readonly) {
+            return true
+          } else {
+            return false
+          }
         }
+        const fleetRoute = routeFleetStatusShortcut({
+          active: fleetStatusActive,
+          funcName,
+          event,
+          close: () => window.store.closeFleetStatus(),
+          invoke
+        })
+        if (fleetRoute.routed) {
+          return fleetRoute.value
+        }
+        return invoke()
       }
     }
 

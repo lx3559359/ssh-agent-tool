@@ -576,8 +576,9 @@ test('AI model status copy follows the current language without changing status 
   )
   assert.equal(profiles.getAIModelStatus({}, translate('zh_cn')).label, '未配置')
   assert.equal(profiles.getAIModelStatus({}, translate('en_us')).label, 'Not Configured')
-  assert.equal(profiles.getAIModelStatus(configured, translate('zh_cn')).label, '待测试')
-  assert.equal(profiles.getAIModelStatus(configured, translate('en_us')).label, 'Pending Test')
+  assert.equal(profiles.getAIModelStatus(configured, translate('zh_cn')).label, '\u5f85\u91cd\u65b0\u68c0\u6d4b')
+  assert.equal(profiles.getAIModelStatus(configured, translate('en_us')).label, 'Check Required')
+  assert.equal(profiles.getAIModelStatus(configured, translate('en_us')).status, 'stale')
   assert.equal(profiles.getAIModelStatus({
     ...configured,
     aiStatus: 'available'
@@ -585,7 +586,7 @@ test('AI model status copy follows the current language without changing status 
 
   const aiConfigSource = readClient('components/ai/ai-config.jsx')
   assert.doesNotMatch(aiConfigSource, /saveProfileStatus\('(?:available|error)',\s*e\('shellpilotAi/)
-  assert.match(aiConfigSource, /message\.error\(`\$\{e\('shellpilotRequestFailed'\)\}: \$\{res\.error\}`\)/)
+  assert.match(aiConfigSource, /message\.error\(result\.message \|\| e\('shellpilotAiRecentFailure'\)\)/)
   const source = readClient('components/bookmark-form/ai-bookmark-form.jsx')
   assert.doesNotMatch(source, /message\.error\(['"]无法根据 AI 返回内容/)
 })

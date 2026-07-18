@@ -1,216 +1,62 @@
-<h1 align="center" style="padding-top: 60px;padding-bottom: 40px;">
-    <a href="https://electerm.org">
-        <img src="https://github.com/electerm/electerm-resource/raw/master/static/images/electerm.png", alt="" />
-    </a>
-</h1>
+# ShellPilot
 
-# electerm [![Tweet](https://badgers.space/badge/Tweet/Tweet/social)](https://twitter.com/intent/tweet?text=Open%20sourced%20terminal%2Fssh%2Fsftp%20client(linux%2C%20mac%2C%20win)&url=https%3A%2F%2Fgithub.com%2Felecterm%2Felecterm&hashtags=electerm,ssh,terminal,sftp)
+ShellPilot 是一款以 Windows 为主要使用环境的 SSH、SFTP 与 AI 运维客户端。它在成熟终端能力之上，整合服务器状态查看、智能诊断、安全执行、备份与快捷回滚，适合日常服务器维护和多服务器运维。
 
-[![GitHub version](https://badgers.space/github/release/electerm/electerm?corner_radius=m)](https://github.com/electerm/electerm/releases)
-[![Build Status](https://github.com/electerm/electerm/actions/workflows/mac-test-1.yml/badge.svg)](https://github.com/electerm/electerm/actions)
-[![license](https://img.shields.io/github/license/electerm/electerm)](https://github.com/electerm/electerm/blob/master/LICENSE)
-[![JavaScript Style Guide](https://img.shields.io/badge/code_style-standard-brightgreen.svg)](https://standardjs.com)
-[![Get it from the Snap Store](https://img.shields.io/badge/Snap-Store-green)](https://snapcraft.io/electerm)
-[![Get it from the Microsoft Store](https://img.shields.io/badge/Microsoft-Store-blue)](https://www.microsoft.com/store/apps/9NCN7272GTFF)
-[![GitHub Sponsors](https://img.shields.io/github/sponsors/electerm?label=Sponsors)](https://github.com/sponsors/electerm)
-[![Powered by manate](https://img.shields.io/badge/Powered%20by-manate-blue)](https://github.com/tylerlong/manate)
-[![Discord](https://img.shields.io/badge/Discord-Join-blue?logo=discord)](https://discord.gg/855W7g8EVd)
-[![star](https://atomgit.com/electerm/electerm/star/badge.svg)](https://atomgit.com/electerm/electerm)
+## 主要功能
 
-[![English](https://img.shields.io/badge/English-EN-blue)](README.md) [![中文](https://img.shields.io/badge/中文-Chinese-blue)](README_cn.md)
+- **SSH 终端**：支持密码、私钥、证书、跳板机、端口转发、多标签、搜索及常用终端快捷键。
+- **SFTP 文件管理**：支持上传、下载、预览、拖放、同名备份防碰撞、备份记录与恢复。
+- **AI 助手**：支持多组 API、多模型切换、连续对话上下文、文件附件、SFTP 文件引用、MCP 与 CLI 能力。
+- **服务器状态**：查看服务、进程、端口、防火墙、网卡、CPU、内存、磁盘及已安装平台软件。
+- **批量运维**：集中查看已接入服务器的在线状态和关键指标，快速定位异常主机。
+- **安全操作中心**：只读诊断计划、可取消任务、完整审计记录、修改前自动备份和快捷回滚。
+- **在线更新**：更新需经过发布确认；客户端可选择更新源，自动模式支持国内源与 GitHub 回退。
 
-[![DigitalOcean Referral Badge](https://web-platforms.sfo2.cdn.digitaloceanspaces.com/WWW/Badge%202.svg)](https://www.digitalocean.com/?refcode=c10bcb28b846&utm_campaign=Referral_Invite&utm_medium=Referral_Program&utm_source=badge)
+## 快速开始
 
-[![Vercel OSS Program](https://github.com/electerm/electerm-resource/blob/master/static/images/vercel-oss-2005.png?raw=true)](https://oss-directory.vercel.app)
+1. 从 [ShellPilot 发布页面](https://github.com/lx3559359/ssh-agent-tool/releases) 下载最新版 Windows 安装包。
+2. 新建或导入服务器连接，首次连接时核对主机指纹。
+3. 需要 AI 分析时再配置模型 API；未配置 AI 不影响 SSH 和 SFTP 基础功能。
+4. 执行修改类操作前检查生成命令、备份位置和回滚方案，确认无误后再执行。
 
-开源终端/ssh/telnet/serialport/RDP/VNC/Spice/sftp/ftp客户端(linux, mac, win)。
+完整使用方法请查看 [中文帮助文档](docs/USER_GUIDE_ZH.md)。
 
-- [electerm.org](https://electerm.org): 主页，下载，视频等
-- [electerm-web](https://github.com/electerm/electerm-web): 运行于浏览器(支持移动设备)的web app版本
-- [electerm-web-docker](https://github.com/electerm/electerm-web-docker): electerm-web的docker镜像
-- [electerm online](https://cloud.electerm.org): 公共免费在线electerm应用
-- [electerm demo](https://demo.electerm.org): 在线演示
-- [electerm deb repo](https://repos.electerm.org/deb): Debian repo of electerm
-- [electerm rpm repo](https://repos.electerm.org/rpm): RPM repo of electerm
+## 本地开发
 
-## Atlas Cloud
-
-<div align="center">
-  <a href="https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=electerm">
-    <img src="https://github.com/electerm/electerm-resource/blob/master/static/images/atlas-cloud.png?raw=true" alt="Atlas Cloud" width="200" />
-  </a>
-</div>
-
-[Atlas Cloud](https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=electerm) 提供与 OpenAI 兼容的 AI API 和模型访问，用于在 electerm 中实现 AI 驱动的工作流程。
-
-<div align="center">
-  <img src="https://github.com/electerm/electerm-resource/raw/master/static/images/electerm.gif", alt="" />
-</div>
-
-## 功能特性
-
-- 支持ssh,telnet,serialport,RDP,VNC,Spice,本地和远程文件管理，sftp/ftp文件传输，以及作为本地终端使用
-- 支持Window 7+(X64/ARM64), Mac OS 10.15+(x64/arm64), Linux(x64/arm64/Loong64), 以及Linux with glibc 2.17+ like UOS/Kylin/Ubuntu 18.04 etc
-- 全局快捷键切换隐藏显示窗口(类似guake, 默认快捷键`ctrl + 2`)
-- 多平台支持(linux, mac, win)
-- 🇺🇸 🇨🇳 🇧🇷 🇷🇺 🇪🇸 🇫🇷 🇹🇷 🇭🇰 🇯🇵 🇸🇦 🇩🇪 🇰🇷 🇮🇩 🇵🇱 多国语言支持([electerm-locales](https://github.com/electerm/electerm-locales), 欢迎提交代码)
-- 双击直接编辑远程文件.
-- 支持密码或者密匙登录.
-- 支持Zmodem(rz, sz).
-- 支持ssh隧道
-- 支持[Trzsz](https://github.com/trzsz/trzsz)(trz/tsz), 类似rz/sz, 兼容tmux.
-- 支持透明窗口(Mac, win).
-- 支持设置终端背景图片.
-- 支持代理服务器.
-- 支持预设快捷命令
-- 支持主题
-- 支持同步书签等数据到github/gitee私人gist, webdav/custom server/electerm cloud
-- 支持快速输入命令到一个或者多个终端
-- AI助手集成（支持[DeepSeek](https://www.deepseek.com)、OpenAI等AI API），协助命令建议、脚本编写、以及解释所选终端内容, 创建书签
-- MCP (Model Context Protocol) 组件，用于AI助手和外部工具集成 - 详见 [MCP Widget Usage Guide](https://github.com/electerm/electerm/wiki/MCP-Widget-Usage-Guide)
-- 支持命令行使用: 请参阅[wiki](https://github.com/electerm/electerm/wiki/Command-line-usage)
-- 深度链接支持: 使用 `telnet://192.168.2.31:34554` 或 `ssh://user@host:22` 等URL打开连接 - 详见 [深度链接支持 wiki](https://github.com/electerm/electerm/wiki/Deep-link-support)
-
-
-## 安装
-
-- Mac OS用户: `brew install --cask electerm`
-- Snap: `sudo snap install electerm --classic`
-- 一些Linux发行版的内置软件商店(Ubuntu, Deepin, Mint...).
-- 不支持`rpm`, `deb`, or `snap` 的Linux发行版可以尝试 `tar.gz`版本.
-- Windows用户可以从[windows store](https://www.microsoft.com/store/apps/9NCN7272GTFF), 命令行安装工具 [winget](https://github.com/microsoft/winget-cli)，以及[scoop](https://github.com/lukesampson/scoop) :
-
-```powershell
-# winget https://github.com/microsoft/winget-cli
-winget install electerm.electerm
-
-# scoop https://github.com/lukesampson/scoop
-scoop bucket add dorado https://github.com/chawyehsu/dorado
-scoop install dorado/electerm
-```
-
-- 从Debian软件源安装 (适用于Debian/Ubuntu系统) 使用 `apt` 命令
-
-查看 [https://repos.electerm.org/deb](https://repos.electerm.org/deb)
-
-- 从npm安装
+开发环境需要 Windows、Node.js 和 npm。
 
 ```bash
-npm i -g electerm
+npm install
+npm run dev
 ```
 
-## 升级
-
-- 自动升级: 点击新版本的升级按钮.
-- 下载: 重新下载最新版安装.
-- Npm: 如果是从npm安装 再次运行`npm i -g electerm` 即可.
-- 如果从Linux发行版软件商店或者Snap安装，可能有自动升级机制.
-
-## 已知问题
-
-[https://github.com/electerm/electerm/wiki/Know-issues](https://github.com/electerm/electerm/wiki/Know-issues)
-
-## 疑难解答
-
-[https://github.com/electerm/electerm/wiki/Troubleshoot](https://github.com/electerm/electerm/wiki/Troubleshoot)
-
-## 讨论区
-
-[![Discord](https://img.shields.io/badge/Discord-Join-blue?logo=discord)](https://discord.gg/855W7g8EVd)
-
-[Discussion board](https://github.com/electerm/electerm/discussions)
-
-![electerm-wechat-group-qr.jpg](https://electerm.org/electerm-wechat-group-qr.jpg)
-
-## 支持
-
-欢迎[提交问题/建议](https://github.com/electerm/electerm/issues), [展开讨论](https://github.com/electerm/electerm/discussions/new), [修复或者创建语言文件](https://github.com/electerm/electerm-locales)或者贡献代码。
-
-## 赞助项目
-
-github sponsor
-
-[https://github.com/sponsors/electerm](https://github.com/sponsors/electerm)
-
-kofi
-
-[https://ko-fi.com/zhaoxudong](https://ko-fi.com/zhaoxudong)
-
-微信赞赏码
-
-[![wechat donate](https://electerm.org/electerm-wechat-donate.png)](https://github.com/electerm)
-
-## 开发
+常用自检命令：
 
 ```bash
-# May only works in Linux
-# needs nodejs/npm, suggest using nvm to install nodejs/npm
-# with nodejs 24.x
-
-git clone git@github.com:electerm/electerm.git
-cd electerm
-npm config set legacy-peer-deps true
-npm i
-
-# start vite dev server, requires port 5570
-npm start
-
-# in a separate terminal session run app
-npm run app
-
-# code format check
 npm run lint
-
-# code format fix
-npm run fix
+npm run test-unit-ci
+npm run build
 ```
 
-## 测试
+## 发布与更新
 
-```bash
-npm run b
-npm run prepare-test
-cp .sample.env .env
+只有经过确认并正式发布的版本才会出现在客户端更新中心。每次发布说明统一使用：
 
-# edit .env, fill your test host/username/password, may only works in mac OS
-npm run test
-```
+- `[新增]`
+- `[修复]`
+- `[改动]`
 
-## 测试构建
+用户可以手动选择国内源或 GitHub。自动模式会优先尝试配置的国内更新源，候选版本不可用或校验失败时自动回退到 GitHub。
 
-```bash
-# May only works in Linux
-# Install yarn first(to do yarn autoclean)
-# See https://yarnpkg.com/en/docs/install
+## 安全说明
 
-# Build linux only with -l
-npm i
-npm run b
-npm run pb
-./node_modules/.bin/electron-builder --linux tar.gz
-# or replace tar.gz to rpm/deb/AppImage
-# check dist/ folder
+- 连接凭据和 API 密钥保存在本机，默认不会写入诊断报告或导出日志。
+- 只读检查不会创建无意义的回滚记录。
+- 修改网络、防火墙、SSH、权限和系统服务等高风险操作需要确认，并在条件允许时先备份再提供快捷回滚。
+- 修改网络或 SSH 配置前，请保留云控制台、VNC 或其他独立登录通道。
 
-# build for linux arm/
-./node_modules/.bin/electron-builder --linux --arm64
-```
+问题反馈请前往 [ShellPilot Issues](https://github.com/lx3559359/ssh-agent-tool/issues)。
 
-## 使用视频
+## 开源许可
 
-- [https://electerm.org/videos](https://electerm.org/videos)
-
-## 变更历史
-
-Visit [Releases](https://github.com/electerm/electerm/releases).
-
-## 联系作者
-
-[zxdong@gmail.com](mailto:zxdong@gmail.com)
-
-## 许可证
-
-MIT
-
-## 收藏历史
-
-[![Star History Chart](https://api.star-history.com/svg?repos=electerm/electerm&type=Date)](https://www.star-history.com/#electerm/electerm&Date)
+许可内容见 [LICENSE](LICENSE)。依法必须保留的第三方许可和历史版权信息仅保留在对应法律文件中，不作为客户端品牌、作者或赞助信息展示。

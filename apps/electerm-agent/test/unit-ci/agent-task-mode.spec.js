@@ -89,6 +89,195 @@ test('dangerous Agent commands require a second user confirmation', async () => 
   assert.match(messages[1], /二次确认/)
 })
 
+test('conversation plan confirmation stores an immutable grant instead of a boolean', async () => {
+  const {
+    commitAgentPlanCall,
+    confirmAgentPlan,
+    ensureAgentPlanConfirmed,
+    markAgentPlanConfirmed
+  } = await import(taskModeModuleUrl)
+  const runtime = {}
+  const confirmation = await confirmAgentPlan({
+    args: {
+      goal: 'inspect nginx',
+      readonlyCommands: ['systemctl status nginx']
+    },
+    endpoint: {
+      host: 'srv.test',
+      port: 22,
+      username: 'ops',
+      tabId: 'tab-a',
+      pid: 'pid-a',
+      terminalPid: 'term-a',
+      sessionType: 'ssh',
+      hostKeyFingerprint: 'SHA256:abc'
+    },
+    confirm: () => true
+  })
+  markAgentPlanConfirmed(runtime, confirmation)
+
+  assert.equal(runtime.planConfirmed, undefined)
+  assert.match(runtime.planGrant.digest, /^[a-f0-9]{64}$/)
+  assert.equal(await ensureAgentPlanConfirmed({
+    toolName: 'send_terminal_command',
+    args: { command: 'systemctl status nginx', tabId: 'tab-a' },
+    runtime
+  }), null)
+  assert.equal(commitAgentPlanCall({
+    toolName: 'send_terminal_command',
+    args: { command: 'systemctl status nginx', tabId: 'tab-a' },
+    runtime
+  }), true)
+  const repeated = await ensureAgentPlanConfirmed({
+    toolName: 'send_terminal_command',
+    args: { command: 'systemctl status nginx', tabId: 'tab-a' },
+    runtime
+  })
+  assert.equal(repeated.reasonCode, 'PLAN_BINDING_CHANGED')
+  const changed = await ensureAgentPlanConfirmed({
+    toolName: 'send_terminal_command',
+    args: { command: 'systemctl restart nginx', tabId: 'tab-a' },
+    runtime
+  })
+  assert.equal(changed.reasonCode, 'PLAN_BINDING_CHANGED')
+})
+
+test('conversation plan ignores hidden calls and enforces visible command order', async () => {
+  const {
+    buildConversationPlanGrantPayload,
+    commitAgentPlanCall,
+    confirmAgentPlan,
+    ensureAgentPlanConfirmed,
+    markAgentPlanConfirmed
+  } = await import(taskModeModuleUrl)
+  const payload = buildConversationPlanGrantPayload({
+    readonlyCommands: ['uptime', 'df -h'],
+    impactTargets: ['hidden:target'],
+    skillBindings: ['hidden-skill'],
+    artifactDigests: ['hidden-digest'],
+    recovery: { type: 'fake', verified: true },
+    orderedCalls: [{
+      name: 'send_terminal_command',
+      args: { command: 'systemctl restart nginx' }
+    }]
+  })
+  assert.deepEqual(payload.orderedCalls, [
+    { name: 'send_terminal_command', args: { command: 'uptime' } },
+    { name: 'send_terminal_command', args: { command: 'df -h' } }
+  ])
+  assert.deepEqual(payload.impactTargets, [])
+  assert.deepEqual(payload.skillBindings, [])
+  assert.deepEqual(payload.artifactDigests, [])
+  assert.equal(payload.recovery, null)
+
+  const runtime = {}
+  markAgentPlanConfirmed(runtime, await confirmAgentPlan({
+    args: { readonlyCommands: ['uptime', 'df -h'] },
+    endpoint: { tabId: 'tab-a' },
+    confirm: () => true
+  }))
+  const outOfOrder = await ensureAgentPlanConfirmed({
+    toolName: 'send_terminal_command',
+    args: { command: 'df -h', tabId: 'tab-a' },
+    runtime
+  })
+  assert.equal(outOfOrder.reasonCode, 'PLAN_BINDING_CHANGED')
+  assert.equal(await ensureAgentPlanConfirmed({
+    toolName: 'send_terminal_command',
+    args: { command: 'uptime', tabId: 'tab-a' },
+    runtime
+  }), null)
+  commitAgentPlanCall({
+    toolName: 'send_terminal_command',
+    args: { command: 'uptime', tabId: 'tab-a' },
+    runtime
+  })
+  assert.equal(await ensureAgentPlanConfirmed({
+    toolName: 'send_terminal_command',
+    args: { command: 'df -h', tabId: 'tab-a' },
+    runtime
+  }), null)
+})
+
+test('conversation plan ignores trusted internal trace metadata when binding a command', async () => {
+  const {
+    commitAgentPlanCall,
+    confirmAgentPlan,
+    ensureAgentPlanConfirmed,
+    markAgentPlanConfirmed
+  } = await import(taskModeModuleUrl)
+  const runtime = {}
+  markAgentPlanConfirmed(runtime, await confirmAgentPlan({
+    args: { readonlyCommands: ['pwd'] },
+    endpoint: { tabId: 'tab-a' },
+    confirm: () => true
+  }))
+  const args = {
+    command: 'pwd',
+    tabId: 'tab-a',
+    traceContext: {
+      traceId: 'sp-1784304000000-12345678',
+      module: 'ai'
+    }
+  }
+
+  assert.equal(await ensureAgentPlanConfirmed({
+    toolName: 'send_terminal_command',
+    args,
+    runtime
+  }), null)
+  assert.equal(commitAgentPlanCall({
+    toolName: 'send_terminal_command',
+    args,
+    runtime
+  }), true)
+})
+
+test('conversation plan binds trusted selected Skill digests but ignores model bindings', async () => {
+  const { confirmAgentPlan } = await import(taskModeModuleUrl)
+  const skillBindings = [{
+    id: 'inspect-web-service',
+    version: '1.2.3',
+    digest: 'a'.repeat(64)
+  }]
+  const artifactDigests = [{
+    id: 'inspect-web-service:SKILL.md',
+    path: 'SKILL.md',
+    digest: 'document-digest'
+  }]
+  const confirmation = await confirmAgentPlan({
+    args: {
+      goal: 'inspect web service',
+      readonlyCommands: ['uptime'],
+      skillBindings: [{ id: 'model-forged-skill' }],
+      artifactDigests: [{ id: 'model-forged-artifact' }]
+    },
+    endpoint: { tabId: 'tab-a' },
+    trustedSkillBindings: skillBindings,
+    trustedArtifactDigests: artifactDigests,
+    confirm: () => true
+  })
+
+  assert.deepEqual(confirmation.planGrant.payload.skillBindings, skillBindings)
+  assert.deepEqual(confirmation.planGrant.payload.artifactDigests, artifactDigests)
+})
+
+test('plan confirmation visibly renders target verification steps', async () => {
+  const { buildAgentPlanConfirmationMessage } = await import(taskModeModuleUrl)
+  const message = buildAgentPlanConfirmationMessage({
+    goal: 'restart nginx',
+    verification: [{
+      name: 'read_service_status',
+      args: { service: 'nginx' },
+      expected: { contains: 'active' }
+    }]
+  })
+  assert.match(message, /Risk target verification/)
+  assert.match(message, /read_service_status/)
+  assert.match(message, /nginx/)
+  assert.match(message, /active/)
+})
+
 test('Agent tools expose plan confirmation and guard command tools until the plan is approved', () => {
   const source = fs.readFileSync(
     path.resolve(__dirname, '../../src/client/components/ai/agent-tools.js'),

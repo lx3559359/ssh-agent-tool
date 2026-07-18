@@ -5,23 +5,49 @@
 import { auto } from 'manate/react'
 import { pick } from 'lodash-es'
 import { Tabs, Spin } from 'antd'
-import { lazy, Suspense, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import SettingModal from './setting-wrap'
 import SettingHeader from './setting-header'
+import LazyModuleBoundary from '../common/lazy-module-boundary'
 import { searchSettings } from '../../common/setting-search-index'
 import { shouldHandleSettingsSearchShortcut } from '../../common/settings-search-interaction.js'
 import {
   settingMap,
   modals
 } from '../../common/constants'
-const TabBookmarks = lazy(() => import('./tab-bookmarks'))
-const TabQuickCommands = lazy(() => import('./tab-quick-commands'))
-const TabSettings = lazy(() => import('./tab-settings'))
-const TabThemes = lazy(() => import('./tab-themes'))
-const TabProfiles = lazy(() => import('./tab-profiles'))
-const TabWidgets = lazy(() => import('./tab-widgets'))
 
 const Loading = () => <div style={{ padding: 20, textAlign: 'center' }}><Spin /></div>
+const settingTabLoaders = {
+  [settingMap.bookmarks]: () => import('./tab-bookmarks'),
+  [settingMap.setting]: () => import('./tab-settings'),
+  [settingMap.terminalThemes]: () => import('./tab-themes'),
+  [settingMap.quickCommands]: () => import('./tab-quick-commands'),
+  [settingMap.profiles]: () => import('./tab-profiles'),
+  [settingMap.widgets]: () => import('./tab-widgets')
+}
+
+function ActiveSettingTab ({ settingTab, componentProps }) {
+  const [state, setState] = useState({ Component: null, error: null })
+
+  useEffect(() => {
+    let active = true
+    setState({ Component: null, error: null })
+    const loader = settingTabLoaders[settingTab]
+    if (!loader) return () => { active = false }
+    loader()
+      .then(module => {
+        if (active) setState({ Component: module.default, error: null })
+      })
+      .catch(error => {
+        if (active) setState({ Component: null, error })
+      })
+    return () => { active = false }
+  }, [settingTab])
+
+  if (state.error) throw state.error
+  if (!state.Component) return <Loading />
+  return <state.Component {...componentProps} />
+}
 
 const e = window.translate
 
@@ -162,6 +188,22 @@ export default auto(function SettingModalWrap (props) {
       className: 'setting-tabs',
       type: 'card'
     }
+    function renderActiveTab () {
+      return (
+        <ActiveSettingTab
+          settingTab={settingTab}
+          componentProps={{
+            languageVersion: effectiveLanguage,
+            listProps: props0,
+            treeProps,
+            settingItem,
+            formProps,
+            store,
+            settingTab
+          }}
+        />
+      )
+    }
     return (
       <>
         <SettingHeader
@@ -179,54 +221,9 @@ export default auto(function SettingModalWrap (props) {
         <Tabs
           {...tabsProps}
         />
-        <Suspense fallback={<Loading />}>
-          <TabQuickCommands
-            languageVersion={effectiveLanguage}
-            listProps={props0}
-            settingItem={settingItem}
-            formProps={formProps}
-            store={store}
-            settingTab={settingTab}
-          />
-          <TabBookmarks
-            languageVersion={effectiveLanguage}
-            treeProps={treeProps}
-            settingItem={settingItem}
-            formProps={formProps}
-            settingTab={settingTab}
-          />
-          <TabSettings
-            languageVersion={effectiveLanguage}
-            listProps={props0}
-            settingItem={settingItem}
-            settingTab={settingTab}
-            store={store}
-          />
-          <TabThemes
-            languageVersion={effectiveLanguage}
-            listProps={props0}
-            settingItem={settingItem}
-            formProps={formProps}
-            store={store}
-            settingTab={settingTab}
-          />
-          <TabProfiles
-            languageVersion={effectiveLanguage}
-            listProps={props0}
-            settingItem={settingItem}
-            formProps={formProps}
-            store={store}
-            settingTab={settingTab}
-          />
-          <TabWidgets
-            languageVersion={effectiveLanguage}
-            listProps={props0}
-            settingItem={settingItem}
-            formProps={formProps}
-            store={store}
-            settingTab={settingTab}
-          />
-        </Suspense>
+        <LazyModuleBoundary moduleName={e('setting')} fallback={<Loading />}>
+          {renderActiveTab()}
+        </LazyModuleBoundary>
       </>
     )
   }

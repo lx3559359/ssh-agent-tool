@@ -29,6 +29,26 @@ function clone (value) {
   return value === undefined ? undefined : structuredClone(value)
 }
 
+function installQualityRecorder () {
+  const calls = []
+  const previousWindow = globalThis.window
+  globalThis.window = {
+    pre: {
+      runGlobalAsync: async (...args) => {
+        if (args[0] === 'recordQualityEvent') calls.push(args)
+        return true
+      }
+    }
+  }
+  return {
+    calls,
+    restore () {
+      if (previousWindow === undefined) delete globalThis.window
+      else globalThis.window = previousWindow
+    }
+  }
+}
+
 function createProductionStore () {
   const records = new Map()
   const queues = new Map()
@@ -292,6 +312,28 @@ test('status finalizes the original operation from the real payload exit code on
   assert.deepEqual(finalizations, [7])
 })
 
+test('background terminal state notifies an Agent risk binding exactly once', async () => {
+  const { createBackgroundTaskRegistry } = await import(registryUrl)
+  const terminal = []
+  const registry = createBackgroundTaskRegistry({
+    readFile: async (_tabId, path) => path.endsWith('.exit') ? '0\n' : '4321\n',
+    isAlive: async () => false,
+    kill: async () => false,
+    now: () => 200
+  })
+  registry.register(backgroundTask({
+    id: 'agent-terminal-callback',
+    finalize: async () => true,
+    onTerminal: outcome => terminal.push(outcome)
+  }))
+
+  await registry.status('agent-terminal-callback')
+  await Promise.resolve()
+  await registry.status('agent-terminal-callback')
+  assert.equal(terminal.length, 1)
+  assert.equal(terminal[0].status, 'completed')
+})
+
 test('cancel uses a validated PID and cancels the transaction only after kill succeeds', async () => {
   const { createBackgroundTaskRegistry } = await import(registryUrl)
   const killed = []
@@ -438,6 +480,30 @@ test('production background finalization retries the same identity without resub
       assert.equal(harness.entrypoint.hasPending(), false)
       assert.equal((await harness.store.get(harness.submission.operationId)).state, 'kept')
     })
+  }
+})
+
+test('false-before-commit keeps the SSH quality trace open until retry succeeds', async () => {
+  const recorder = installQualityRecorder()
+  try {
+    const harness = await createProductionBackgroundHarness('false-before-commit')
+    const registry = await createBackgroundTaskRegistryForHarness(harness)
+
+    const first = await registry.status('production-background-task')
+    assert.equal(first.status, 'unknown')
+    assert.deepEqual(
+      recorder.calls.map(([, , event]) => event.phase),
+      ['started']
+    )
+
+    const second = await registry.status('production-background-task')
+    assert.equal(second.status, 'completed')
+    assert.deepEqual(
+      recorder.calls.map(([, , event]) => event.phase),
+      ['started', 'completed']
+    )
+  } finally {
+    recorder.restore()
   }
 })
 

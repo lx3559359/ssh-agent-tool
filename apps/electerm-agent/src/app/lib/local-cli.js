@@ -22,6 +22,40 @@ const ALLOWED_LOCAL_CLI_TOOLS = [
 const MAX_OUTPUT_LENGTH = 12000
 const DEFAULT_TIMEOUT_MS = 15000
 const MAX_TIMEOUT_MS = 120000
+const activeLocalCliRequests = new Map()
+const pendingLocalCliCancellations = new Set()
+const MAX_PENDING_CANCELLATIONS = 256
+
+function rememberPendingCancellation (requestId) {
+  pendingLocalCliCancellations.add(requestId)
+  while (pendingLocalCliCancellations.size > MAX_PENDING_CANCELLATIONS) {
+    const oldestRequestId = pendingLocalCliCancellations.values().next().value
+    pendingLocalCliCancellations.delete(oldestRequestId)
+  }
+}
+
+function consumePendingCancellation (requestId) {
+  if (!requestId || !pendingLocalCliCancellations.has(requestId)) return false
+  pendingLocalCliCancellations.delete(requestId)
+  return true
+}
+
+function cancelLocalCli (requestId) {
+  const id = String(requestId || '')
+  if (!id) {
+    return { success: false, requestId: id }
+  }
+  const child = activeLocalCliRequests.get(id)
+  if (!child || typeof child.kill !== 'function') {
+    rememberPendingCancellation(id)
+    return { success: true, pending: true, requestId: id }
+  }
+  activeLocalCliRequests.delete(id)
+  return {
+    success: child.kill('SIGTERM') !== false,
+    requestId: id
+  }
+}
 
 function getAllowedLocalCliTools () {
   return [...ALLOWED_LOCAL_CLI_TOOLS]
@@ -36,6 +70,26 @@ function normalizeArgs (args = []) {
     return []
   }
   return args.slice(0, 64).map(arg => String(arg))
+}
+
+const SENSITIVE_RESULT_ARGUMENT = /^(?:[a-z0-9]+[-_.])*(?:api[-_.]?key|access[-_.]?key|secret[-_.]?key|token|access[-_.]?token|auth[-_.]?token|id[-_.]?token|secret|client[-_.]?secret|auth|authorization|password|passwd|pass|pwd|credential|credentials|signature|sig)$/i
+
+function sanitizeResultArgs (args = []) {
+  let redactNext = false
+  return normalizeArgs(args).map(arg => {
+    const inline = /^--([^=]+)=(.*)$/s.exec(arg)
+    if (inline && SENSITIVE_RESULT_ARGUMENT.test(inline[1])) {
+      redactNext = false
+      return `--${inline[1]}=[REDACTED]`
+    }
+    if (redactNext && !/^--/.test(arg)) {
+      redactNext = false
+      return '[REDACTED]'
+    }
+    const flag = /^--([^=]+)$/.exec(arg)
+    redactNext = Boolean(flag && SENSITIVE_RESULT_ARGUMENT.test(flag[1]))
+    return arg
+  })
 }
 
 function normalizeTimeout (timeoutMs) {
@@ -262,14 +316,27 @@ function createLocalCliRunner ({
     tool,
     args = [],
     cwd,
-    timeoutMs
+    timeoutMs,
+    requestId
   } = {}) {
     const command = String(tool || '').trim()
+    const id = String(requestId || '')
     if (!isAllowedLocalCliTool(command)) {
       return Promise.resolve({
         ok: false,
         error: `不允许执行本机 CLI 工具：${command || '(空)'}`,
         allowedTools: getAllowedLocalCliTools()
+      })
+    }
+    if (consumePendingCancellation(id)) {
+      return Promise.resolve({
+        ok: false,
+        cancelled: true,
+        tool: command,
+        args: sanitizeResultArgs(args),
+        cwd: cwd || '',
+        requestId: id,
+        error: 'Local CLI request cancelled'
       })
     }
 
@@ -283,11 +350,22 @@ function createLocalCliRunner ({
         env,
         codexDesktopCandidatePaths
       })()
+      if (consumePendingCancellation(id)) {
+        return {
+          ok: false,
+          cancelled: true,
+          tool: command,
+          args: sanitizeResultArgs(args),
+          cwd: cwd || '',
+          requestId: id,
+          error: 'Local CLI request cancelled'
+        }
+      }
       if (!resolved.available) {
         return {
           ok: false,
           tool: command,
-          args: executableArgs,
+          args: sanitizeResultArgs(args),
           cwd: cwd || '',
           exitCode: 1,
           signal: '',
@@ -302,7 +380,9 @@ function createLocalCliRunner ({
     }
 
     return new Promise(resolve => {
-      execFileImpl(executable, executableArgs, {
+      const processRef = { child: null }
+      let finished = false
+      const child = execFileImpl(executable, executableArgs, {
         cwd: cwd || undefined,
         timeout: normalizeTimeout(timeoutMs),
         windowsHide: true,
@@ -310,11 +390,15 @@ function createLocalCliRunner ({
         encoding: 'utf8',
         maxBuffer: 1024 * 1024
       }, (error, stdout = '', stderr = '') => {
+        finished = true
+        if (id && activeLocalCliRequests.get(id) === processRef.child) {
+          activeLocalCliRequests.delete(id)
+        }
         resolve({
           ok: !error,
           tool: command,
           resolvedTool,
-          args: normalizeArgs(args),
+          args: sanitizeResultArgs(args),
           cwd: cwd || '',
           exitCode: error?.code ?? 0,
           signal: error?.signal || '',
@@ -323,6 +407,10 @@ function createLocalCliRunner ({
           error: error ? String(error.message || error) : ''
         })
       })
+      processRef.child = child
+      if (id && !finished && child && typeof child.kill === 'function') {
+        activeLocalCliRequests.set(id, child)
+      }
     })
   }
 }
@@ -336,4 +424,5 @@ exports.createCodexCliResolver = createCodexCliResolver
 exports.createCodexCliStatusChecker = createCodexCliStatusChecker
 exports.getCodexCliStatus = getCodexCliStatus
 exports.createLocalCliRunner = createLocalCliRunner
+exports.cancelLocalCli = cancelLocalCli
 exports.runLocalCli = runLocalCli

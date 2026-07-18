@@ -7,6 +7,16 @@ const fs = require('fs')
 const os = require('os')
 const { resolve } = require('path')
 
+function cleanGeneratedFrontendAssets () {
+  const assetsRoot = resolve(__dirname, '../../work/app/assets')
+  const targets = ['chunk', 'js', 'css']
+    .map(name => resolve(assetsRoot, name))
+
+  for (const target of targets) {
+    fs.rmSync(target, { recursive: true, force: true })
+  }
+}
+
 function syncRuntimeFiles () {
   const packPath = resolve(__dirname, '../../package.json')
   const targetPackPath = resolve(__dirname, '../../work/app/package.json')
@@ -36,8 +46,7 @@ echo('start build')
 
 const timeStart = +new Date()
 
-// echo('clean')
-// exec('npm run clean')
+cleanGeneratedFrontendAssets()
 echo('version file')
 echo('js/css file')
 exec('npm run vite-build')

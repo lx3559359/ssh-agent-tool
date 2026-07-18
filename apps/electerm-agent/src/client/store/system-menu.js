@@ -5,6 +5,7 @@
 import Modal from '../components/common/modal'
 import { isString } from 'lodash-es'
 import getInitItem from '../common/init-setting-item'
+import { beginTerminalWorkspaceIntent } from '../components/fleet-status/fleet-status-navigation'
 import {
   settingMap,
   maxZoom,
@@ -54,6 +55,7 @@ export default Store => {
 
   Store.prototype.onNewSsh = function () {
     const { store } = window
+    beginTerminalWorkspaceIntent(store)
     store.storeAssign({
       settingTab: settingMap.bookmarks
     })
@@ -63,6 +65,7 @@ export default Store => {
 
   Store.prototype.onNewSshAI = function () {
     const { store } = window
+    beginTerminalWorkspaceIntent(store)
     if (store.aiConfigMissing()) {
       store.toggleAIConfig()
       return

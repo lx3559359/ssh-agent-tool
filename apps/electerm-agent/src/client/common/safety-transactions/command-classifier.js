@@ -826,6 +826,29 @@ function isReadonlySed (words, quotes) {
     invocation.scripts.every(isSafeSedScript)
 }
 
+function isReadonlyKubectl (words) {
+  const action = words[1]?.toLowerCase()
+  return ['get', 'describe', 'logs', 'top', 'version'].includes(action)
+}
+
+function isReadonlyGit (words) {
+  const action = words[1]?.toLowerCase()
+  if (['status', 'log', 'show', 'diff'].includes(action)) return true
+  if (action === 'branch') {
+    return words.slice(2).every(word => (
+      /^-(?:a|r|v|vv)$/.test(word) ||
+      ['--all', '--remotes', '--verbose', '--list', '--show-current'].includes(word)
+    ))
+  }
+  if (action === 'remote') {
+    return words.slice(2).every(word => (
+      word === '-v' || word === '--verbose' || word === 'show' ||
+      word === 'get-url' || !word.startsWith('-')
+    ))
+  }
+  return false
+}
+
 function isReadonly (command) {
   const text = stripCommandPrefix(command)
   const tokens = shellTokens(text)
@@ -855,7 +878,15 @@ function isReadonly (command) {
   if (executable === 'nft') return words[1]?.toLowerCase() === 'list'
   if (executable === 'ifconfig') return words.length <= 2 && (!words[1] || words[1] === '-a' || !words[1].startsWith('-'))
   if (executable === 'docker' || executable === 'podman') return ['ps', 'logs', 'inspect', 'stats'].includes(words[1]?.toLowerCase())
+  if (executable === 'kubectl') return isReadonlyKubectl(words)
+  if (executable === 'git') return isReadonlyGit(words)
   return false
+}
+
+function isRecognizedMutation (command) {
+  return /^(?:kubectl)\s+(?:delete|apply|replace|patch|scale|rollout|cordon|drain)\b/i.test(command) ||
+    /^(?:docker|podman)\s+(?:rm|rmi|stop|kill|prune)\b/i.test(command) ||
+    /^git\s+(?:reset\s+--hard\b|clean\s+-|push\b[^\n]*--force(?:-with-lease)?\b)/i.test(command)
 }
 
 function classifySingle (command) {
@@ -899,6 +930,9 @@ function classifySingle (command) {
       return result('change', `${provider} 修改可创建已验证的恢复点`, provider)
     }
     return result('change', '已识别裸修改命令，但无法证明 alias、function 或 PATH 身份，无法自动回滚', null, false)
+  }
+  if (isRecognizedMutation(stripped)) {
+    return result('change', '已识别修改命令，但没有可验证的自动恢复提供器', null, false)
   }
   if (isReadonly(command)) return result('readonly', '命令属于已识别的只读诊断操作')
   return result('unknown', '命令不在已验证的安全分类白名单中')

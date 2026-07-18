@@ -1,5 +1,6 @@
 import {
   BookOutlined,
+  DashboardOutlined,
   FileTextOutlined,
   HistoryOutlined,
   KeyOutlined,
@@ -82,6 +83,20 @@ export default function Sidebar (props) {
     }
   }
 
+  const handleOpenTerminalSidebarPanel = tab => {
+    store.closeFleetStatus()
+    handleOpenSidebarPanel(tab)
+  }
+
+  const handleOpenFleetStatus = () => {
+    store.openFleetStatus()
+  }
+
+  const handleOpenSftp = () => {
+    store.closeFleetStatus()
+    store.updateTab(store.activeTabId, { pane: paneMap.fileManager })
+  }
+
   const handleOpenSettingItem = id => {
     store.storeAssign({
       settingTab: settingMap.setting
@@ -114,6 +129,7 @@ export default function Sidebar (props) {
   const passwordsActive = showSetting && settingTab === settingMap.setting && settingItem.id === settingPasswordsId
   const bookmarksActive = openedSideBar === 'bookmarks' && sidebarPanelTab === 'bookmarks'
   const historyActive = openedSideBar === 'bookmarks' && sidebarPanelTab === 'history'
+  const fleetStatusActive = store.mainWorkspaceMode === 'fleet-status'
   const logActive = showInfoModal && store.infoModalTab === infoTabs.log
   const sideProps = openedSideBar
     ? {
@@ -144,19 +160,29 @@ export default function Sidebar (props) {
           <MenuBtn store={store} config={store.config} />
         </div>
         <SideIcon
+          title='状态总览'
+          label='状态总览'
+          active={fleetStatusActive}
+        >
+          <DashboardOutlined
+            onClick={handleOpenFleetStatus}
+            className='font20 iblock control-icon'
+          />
+        </SideIcon>
+        <SideIcon
           title='服务器'
           label='服务器'
           active={bookmarksActive}
         >
           <BookOutlined
-            onClick={() => handleOpenSidebarPanel('bookmarks')}
+            onClick={() => handleOpenTerminalSidebarPanel('bookmarks')}
             className='font20 iblock control-icon'
           />
         </SideIcon>
         <TransferList
           {...transferProps}
           active={store.currentTab?.pane === paneMap.fileManager}
-          onOpenSftp={() => store.updateTab(store.activeTabId, { pane: paneMap.fileManager })}
+          onOpenSftp={handleOpenSftp}
         />
         <SideIcon
           title='历史'
@@ -165,7 +191,7 @@ export default function Sidebar (props) {
         >
           <HistoryOutlined
             className='font20 iblock control-icon'
-            onClick={() => handleOpenSidebarPanel('history')}
+            onClick={() => handleOpenTerminalSidebarPanel('history')}
           />
         </SideIcon>
         <SideIcon

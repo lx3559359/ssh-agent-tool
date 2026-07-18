@@ -1,8 +1,8 @@
 import { auto } from 'manate/react'
-import { useEffect } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
 import Layout from '../layout/layout'
+import { getTerminalWorkspaceAccessibility } from '../fleet-status/fleet-status-navigation'
 import FileInfoModal from '../sftp/file-info-modal'
-import UpdateCheck from './upgrade'
 import SettingModal from '../setting-panel/setting-modal'
 import TextEditor from '../text-editor/text-editor-entry'
 import Sidebar from '../sidebar'
@@ -22,14 +22,15 @@ import { isMac, isWin, textTerminalBgValue } from '../../common/constants'
 import { ConfigProvider } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 import { NotificationContainer } from '../common/notification'
+import LazyModuleBoundary from '../common/lazy-module-boundary'
 import InfoModal from '../sidebar/info-modal.jsx'
 import RightSidePanel from '../side-panel-r/side-panel-r'
 import ConnectionHoppingWarning from './connection-hopping-warnning'
 import SshConfigLoadNotify from '../ssh-config/ssh-config-load-notify'
 import LoadSshConfigs from '../ssh-config/load-ssh-configs'
 import AIChat from '../ai/ai-chat-entry'
-import AIConfigModal from '../ai/ai-config-modal'
 import AIGShellTopBar from './aigshell-topbar'
+import CrashRecoveryNotice from './crash-recovery-notice'
 import Opacity from '../common/opacity'
 import MoveItemModal from '../tree-list/move-item-modal'
 import InputContextMenu from '../common/input-context-menu'
@@ -44,18 +45,34 @@ import './wrapper.styl'
 import TerminalInfo from '../terminal-info/terminal-info-entry'
 import '../../common/fs.js'
 import './term-fullscreen.styl'
+import {
+  installAgentTakeoverLifecycle
+} from '../ai/agent-takeover-lifecycle.js'
+
+const FleetStatusWorkspace = lazy(() => import('../fleet-status/fleet-status-workspace'))
+const UpdateCheck = lazy(() => import('./upgrade'))
+const AIConfigModal = lazy(() => import('../ai/ai-config-modal'))
+
+export function getSafeRightPanelTitle (store, rawConfig) {
+  return rawConfig ? store.rightPanelTitle : ''
+}
 
 export default auto(function Index (props) {
   useEffect(() => {
     const { store } = props
+    const openTab = (event, parsed) => store.ipcOpenTab(parsed)
+    const preventDocumentDrop = event => {
+      event.preventDefault()
+      event.stopPropagation()
+    }
     window.addEventListener('resize', store.onResize)
-    setTimeout(store.triggerResize, 200)
-    const { ipcOnEvent } = window.pre
+    const resizeTimer = setTimeout(store.triggerResize, 200)
+    const { ipcOnEvent, ipcOffEvent } = window.pre
     ipcOnEvent('checkupdate', store.onCheckUpdate)
     ipcOnEvent('open-about', store.openAbout)
     ipcOnEvent('new-ssh', store.onNewSsh)
     ipcOnEvent('add-tab-from-command-line', store.addTabFromCommandLine)
-    ipcOnEvent('open-tab', (e, parsed) => store.ipcOpenTab(parsed))
+    ipcOnEvent('open-tab', openTab)
     ipcOnEvent('openSettings', store.openSetting)
     ipcOnEvent('selectall', store.selectall)
     ipcOnEvent('focused', store.focus)
@@ -65,15 +82,12 @@ export default auto(function Index (props) {
     ipcOnEvent('zoomout', store.onZoomout)
     ipcOnEvent('confirm-exit', store.beforeExitApp)
 
-    document.addEventListener('drop', function (e) {
-      e.preventDefault()
-      e.stopPropagation()
-    })
-    document.addEventListener('dragover', function (e) {
-      e.preventDefault()
-      e.stopPropagation()
-    })
+    document.addEventListener('drop', preventDocumentDrop)
+    document.addEventListener('dragover', preventDocumentDrop)
     window.addEventListener('offline', store.setOffline)
+    const uninstallAgentTakeoverLifecycle = installAgentTakeoverLifecycle({
+      onError: error => store.onError(error)
+    })
     if (window.et.isWebApp) {
       window.onbeforeunload = store.beforeExit
     }
@@ -82,12 +96,36 @@ export default auto(function Index (props) {
     store.checkForDbUpgrade()
     store.handleGetSerials()
     store.checkPendingDeepLink()
+
+    return () => {
+      clearTimeout(resizeTimer)
+      window.removeEventListener('resize', store.onResize)
+      window.removeEventListener('offline', store.setOffline)
+      uninstallAgentTakeoverLifecycle()
+      document.removeEventListener('drop', preventDocumentDrop)
+      document.removeEventListener('dragover', preventDocumentDrop)
+      ipcOffEvent('checkupdate', store.onCheckUpdate)
+      ipcOffEvent('open-about', store.openAbout)
+      ipcOffEvent('new-ssh', store.onNewSsh)
+      ipcOffEvent('add-tab-from-command-line', store.addTabFromCommandLine)
+      ipcOffEvent('open-tab', openTab)
+      ipcOffEvent('openSettings', store.openSetting)
+      ipcOffEvent('selectall', store.selectall)
+      ipcOffEvent('focused', store.focus)
+      ipcOffEvent('blur', store.onBlur)
+      ipcOffEvent('zoom-reset', store.onZoomReset)
+      ipcOffEvent('zoomin', store.onZoomIn)
+      ipcOffEvent('zoomout', store.onZoomout)
+      ipcOffEvent('confirm-exit', store.beforeExitApp)
+      if (window.onbeforeunload === store.beforeExit) {
+        window.onbeforeunload = null
+      }
+    }
   }, [])
 
   const { store } = props
   const {
     configLoaded,
-    config,
     fullscreen,
     pinned,
     isSecondInstance,
@@ -98,15 +136,25 @@ export default auto(function Index (props) {
     transferHistory,
     transferToConfirm,
     openResolutionEdit,
-    rightPanelTitle,
     rightPanelTab
   } = store
+  const rawConfig = store.config
+  const config = rawConfig || {}
+  const rightPanelTitle = getSafeRightPanelTitle(store, rawConfig)
+  const tabs = (store.getTabs() || []).filter(Boolean)
+  const currentTab = store.currentTab || null
+  const activeTabId = currentTab?.id || store.activeTabId || ''
   const upgradeInfo = deepCopy(store.upgradeInfo)
+  const fleetStatusActive = store.mainWorkspaceMode === 'fleet-status'
+  const aiSessionTabId = fleetStatusActive ? '' : activeTabId
+  const aiConversationScopeId = fleetStatusActive
+    ? 'fleet-status'
+    : String(activeTabId || 'global')
   const cls = classnames({
     loaded: configLoaded,
     'not-webapp': !window.et.isWebApp,
-    'system-ui': store.config.useSystemTitleBar,
-    'not-system-ui': !store.config.useSystemTitleBar,
+    'system-ui': config.useSystemTitleBar,
+    'not-system-ui': !config.useSystemTitleBar,
     'is-mac': isMac,
     'not-mac': !isMac,
     'is-win': isWin,
@@ -130,8 +178,8 @@ export default auto(function Index (props) {
   const bgTabs = config.terminalBackgroundImagePath === 'index' ||
                   config.terminalBackgroundImagePath === 'randomShape' ||
                   config.terminalBackgroundImagePath === textTerminalBgValue
-    ? store.getTabs().filter(tab => activeTabIds.includes(tab.id))
-    : store.getTabs().filter(tab =>
+    ? tabs.filter(tab => activeTabIds.includes(tab.id))
+    : tabs.filter(tab =>
       activeTabIds.includes(tab.id) && tab.terminalBackground?.terminalBackgroundImagePath
     )
   const confsCss = {
@@ -202,6 +250,8 @@ export default auto(function Index (props) {
     rightPanelWidth: store.rightPanelWidth,
     title: rightPanelTitle,
     rightPanelTab,
+    activeTabId: aiSessionTabId,
+    activeSessionStatus: currentTab?.status || '',
     config
   }
   const terminalInfoProps = {
@@ -233,14 +283,20 @@ export default auto(function Index (props) {
     aiChatHistory: store.aiChatHistory,
     config,
     selectedTabIds: store.batchInputSelectedTabIds,
-    tabs: store.getTabs(),
-    activeTabId: store.activeTabId,
+    tabs,
+    activeTabId: aiSessionTabId,
+    conversationScopeId: aiConversationScopeId,
     showAIConfig: store.showAIConfig,
-    rightPanelTab,
-    agentRunning: store.agentRunning
+    rightPanelTab
   }
   const cmdSuggestionsProps = {
     suggestions: store.terminalCommandSuggestions
+  }
+  const terminalWorkspaceProps = {
+    className: classnames('terminal-workspace-layer', {
+      'fleet-status-active': fleetStatusActive
+    }),
+    ...getTerminalWorkspaceAccessibility(fleetStatusActive)
   }
   return (
     <ConfigProvider
@@ -261,11 +317,15 @@ export default auto(function Index (props) {
         />
         <CustomCss customCss={config.customCss} configLoaded={configLoaded} />
         <TextEditor />
-        <UpdateCheck
-          skipVersion={config.skipVersion}
-          upgradeInfo={upgradeInfo}
-          installSrc={installSrc}
-        />
+        <LazyModuleBoundary moduleName='更新检查' fallback={null}>
+          <Suspense fallback={null}>
+            <UpdateCheck
+              skipVersion={config.skipVersion}
+              upgradeInfo={upgradeInfo}
+              installSrc={installSrc}
+            />
+          </Suspense>
+        </LazyModuleBoundary>
         <FileInfoModal />
         <SettingModal store={store} />
         <MoveItemModal store={store} />
@@ -273,10 +333,30 @@ export default auto(function Index (props) {
           id='outside-context'
         >
           <AIGShellTopBar store={store} />
-          <Sidebar {...sidebarProps} />
-          <Layout
+          <CrashRecoveryNotice
             store={store}
+            recoveryPlan={store.recoveryPlan}
           />
+          <Sidebar {...sidebarProps} />
+          <div {...terminalWorkspaceProps}>
+            <Layout
+              store={store}
+            />
+          </div>
+          {
+            fleetStatusActive
+              ? (
+                <LazyModuleBoundary moduleName='服务器状态工作区' fallback={null}>
+                  <Suspense fallback={null}>
+                    <FleetStatusWorkspace
+                      store={store}
+                      active
+                    />
+                  </Suspense>
+                </LazyModuleBoundary>
+                )
+              : null
+          }
         </div>
         <ConfirmModalStore
           transferToConfirm={transferToConfirm}
@@ -290,7 +370,7 @@ export default auto(function Index (props) {
         <InfoModal {...infoModalProps} />
         <RightSidePanel {...rightPanelProps}>
           <AIChat {...aiChatProps} />
-          <TerminalInfo key={store.activeTabId} {...terminalInfoProps} />
+          <TerminalInfo key={activeTabId} {...terminalInfoProps} />
         </RightSidePanel>
         <SshConfigLoadNotify {...sshConfigProps} />
         <LoadSshConfigs
@@ -305,7 +385,17 @@ export default auto(function Index (props) {
         <BookmarkFromHistoryModal />
         <NotificationContainer />
         <BatchOpRunner />
-        <AIConfigModal store={store} />
+        {
+          store.showAIConfigModal
+            ? (
+              <LazyModuleBoundary moduleName='模型 API 配置' fallback={null}>
+                <Suspense fallback={null}>
+                  <AIConfigModal store={store} />
+                </Suspense>
+              </LazyModuleBoundary>
+              )
+            : null
+        }
         <UnixTimestampTooltip />
       </div>
     </ConfigProvider>

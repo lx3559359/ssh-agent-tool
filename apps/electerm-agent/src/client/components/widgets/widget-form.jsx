@@ -163,7 +163,7 @@ export default function WidgetForm ({ widget, onSubmit, loading, hasRunningInsta
         </div>
         <div className='widget-form-actions'>
           {info.name === 'MCP Server' && (
-            <HelpIcon link='https://github.com/electerm/electerm/wiki/MCP-Widget-Usage-Guide' />
+            <HelpIcon link='https://github.com/lx3559359/ssh-agent-tool/blob/master/docs/USER_GUIDE_ZH.md' />
           )}
         </div>
       </div>

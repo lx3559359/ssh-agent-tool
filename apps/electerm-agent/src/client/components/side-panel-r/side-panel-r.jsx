@@ -1,69 +1,52 @@
-import React, { memo, useRef } from 'react'
+import React, { lazy, memo, Suspense, useRef } from 'react'
 import DragHandle from '../common/drag-handle'
+import LazyModuleBoundary from '../common/lazy-module-boundary'
 import './right-side-panel.styl'
 import {
   CloseCircleOutlined,
-  PushpinOutlined,
-  InfoCircleOutlined
+  InfoCircleOutlined,
+  PushpinOutlined
 } from '@ant-design/icons'
+import { Flex, Tag, Typography } from 'antd'
 import {
-  Typography,
-  Flex,
-  Tag,
-  Select
-} from 'antd'
-import {
-  minRightPanelWidth,
   getMaxRightPanelWidth,
+  minRightPanelWidth,
   normalizeRightPanelWidth
 } from '../main/aigshell-layout'
-import {
-  getActiveAIConfig,
-  getAIModelOptions,
-  getAIModelStatus,
-  getAIProfileOptions,
-  migrateAIProfiles,
-  upsertAIProfile
-} from '../ai/ai-profiles'
+import AgentTakeoverControls from '../ai/agent-takeover-controls'
 
-const e = window.translate
+const RightSidePanelAIHeader = lazy(() => import('./right-side-panel-ai-header'))
 
-export default memo(function RightSidePanel (
-  {
-    rightPanelVisible,
-    rightPanelPinned,
-    rightPanelWidth,
-    children,
-    title,
-    rightPanelTab,
-    config = {}
-  }
-) {
+export default memo(function RightSidePanel ({
+  rightPanelVisible,
+  rightPanelPinned,
+  rightPanelWidth,
+  children,
+  title,
+  rightPanelTab,
+  activeTabId,
+  config = {}
+}) {
   const panelRef = useRef(null)
+  const isAI = rightPanelTab === 'ai'
 
   if (!rightPanelVisible) {
     return null
   }
 
-  const isAI = rightPanelTab === 'ai'
-  const activeAIConfig = isAI ? getActiveAIConfig(config) : config
-  const aiProfileOptions = isAI ? getAIProfileOptions(config, e) : []
-  const aiModelOptions = isAI ? getAIModelOptions(activeAIConfig) : []
-  const aiModelStatus = isAI ? getAIModelStatus(activeAIConfig, e) : null
-  const aiConfigured = Boolean(activeAIConfig.baseURLAI && activeAIConfig.apiKeyAI)
   const tag = isAI
     ? <Tag className='mg1r aigshell-ai-tag'>AI</Tag>
     : <InfoCircleOutlined className='mg1r' />
   const maxWidth = getMaxRightPanelWidth(window.innerWidth)
   const width = Math.min(normalizeRightPanelWidth(rightPanelWidth), maxWidth)
 
-  function onDragEnd (nw) {
-    window.store.setRightSidePanelWidth(nw)
+  function onDragEnd (nextWidth) {
+    window.store.setRightSidePanelWidth(nextWidth)
   }
 
-  function onDragMove (nw) {
+  function onDragMove (nextWidth) {
     if (panelRef.current) {
-      panelRef.current.style.width = nw + 'px'
+      panelRef.current.style.width = nextWidth + 'px'
     }
   }
 
@@ -75,74 +58,11 @@ export default memo(function RightSidePanel (
     window.store.rightPanelPinned = !window.store.rightPanelPinned
   }
 
-  function handleActiveAIProfileChange (profileId) {
-    const next = migrateAIProfiles({
-      ...config,
-      activeAIProfileId: profileId
-    })
-    window.store.updateConfig(next)
-  }
-
-  function handleActiveAIModelChange (modelAI) {
-    const next = upsertAIProfile(config, {
-      ...activeAIConfig,
-      modelAI,
-      aiStatus: '',
-      aiStatusMessage: '',
-      aiStatusAt: '',
-      aiStatusFingerprint: ''
-    })
-    window.store.updateConfig(next)
-  }
-
-  function renderAIProfileSelect () {
-    if (!isAI || !aiProfileOptions.length) {
-      return (
-        <div className='right-panel-subtitle'>
-          {activeAIConfig.nameAI || title || 'AI 配置'}
-        </div>
-      )
-    }
-
-    return (
-      <Select
-        size='small'
-        className='right-panel-ai-profile-select'
-        value={activeAIConfig.activeAIProfileId}
-        options={aiProfileOptions}
-        onChange={handleActiveAIProfileChange}
-        popupMatchSelectWidth={false}
-        title='选择 AI API 配置'
-      />
-    )
-  }
-
-  function renderAIModelSelect () {
-    if (!isAI || !aiModelOptions.length) {
-      return null
-    }
-
-    return (
-      <Select
-        size='small'
-        className='right-panel-ai-model-select'
-        value={activeAIConfig.modelAI}
-        options={aiModelOptions}
-        onChange={handleActiveAIModelChange}
-        popupMatchSelectWidth={false}
-        title='选择当前 API 的模型'
-      />
-    )
-  }
-
   const panelProps = {
     className: 'right-side-panel animate-fast' + (rightPanelPinned ? ' right-side-panel-pinned' : ''),
     ref: panelRef,
-    style: {
-      width: `${width}px`
-    }
+    style: { width: `${width}px` }
   }
-
   const pinProps = {
     className: 'right-side-panel-pin right-side-panel-controls' + (rightPanelPinned ? ' pinned' : ''),
     onClick: togglePin
@@ -157,23 +77,31 @@ export default memo(function RightSidePanel (
   }
 
   return (
-    <div
-      {...panelProps}
-    >
+    <div {...panelProps}>
       <DragHandle {...dragProps} />
       <Flex className='right-panel-title pd2' justify='space-between' align='flex-start'>
         <div className='right-panel-title-main'>
-          <Typography.Text className='right-panel-title-text' ellipsis>
+          <Typography.Text className='right-panel-title-text'>
             {tag} {isAI ? '助手' : title}
           </Typography.Text>
           {
             isAI
               ? (
-                <Flex className='right-panel-ai-selects right-panel-ai-config-card' gap={6} align='center'>
-                  {renderAIProfileSelect()}
-                  {renderAIModelSelect()}
-                </Flex>
+                <LazyModuleBoundary moduleName='AI 模型状态' fallback={<div className='right-panel-subtitle'>{title}</div>}>
+                  <Suspense fallback={<div className='right-panel-subtitle'>{title}</div>}>
+                    <RightSidePanelAIHeader
+                      config={config}
+                      rightPanelVisible={rightPanelVisible}
+                      title={title}
+                    />
+                  </Suspense>
+                </LazyModuleBoundary>
                 )
+              : null
+          }
+          {
+            isAI
+              ? <AgentTakeoverControls activeTabId={activeTabId} />
               : null
           }
         </div>
@@ -181,18 +109,19 @@ export default memo(function RightSidePanel (
           {
             isAI
               ? (
-                <Tag
-                  className={`right-panel-model-status ${aiModelStatus.className}${aiConfigured ? ' configured' : ''}`}
-                  title={aiModelStatus.title}
-                >
-                  {aiModelStatus.label}
-                </Tag>
+                <LazyModuleBoundary moduleName='AI 模型状态' fallback={null}>
+                  <Suspense fallback={null}>
+                    <RightSidePanelAIHeader
+                      config={config}
+                      rightPanelVisible={rightPanelVisible}
+                      variant='status'
+                    />
+                  </Suspense>
+                </LazyModuleBoundary>
                 )
               : null
           }
-          <PushpinOutlined
-            {...pinProps}
-          />
+          <PushpinOutlined {...pinProps} />
           <CloseCircleOutlined
             className='right-side-panel-close right-side-panel-controls mg1l'
             onClick={onClose}

@@ -5,10 +5,25 @@
 
 import { CloseOutlined } from '@ant-design/icons'
 import classnames from 'classnames'
-import React, { useEffect } from 'react'
+import React, { useEffect, useRef } from 'react'
 import { createRoot } from 'react-dom/client'
 import { resolveShellPilotModalCopy } from '../../common/shellpilot-i18n-overrides.js'
 import './modal.styl'
+
+function getFocusableElements (container) {
+  if (!container) return []
+  return [...container.querySelectorAll([
+    'button:not([disabled])',
+    '[href]',
+    'input:not([disabled])',
+    'select:not([disabled])',
+    'textarea:not([disabled])',
+    '[tabindex]:not([tabindex="-1"])'
+  ].join(','))].filter(element => (
+    element.getAttribute('aria-hidden') !== 'true' &&
+    element.offsetParent !== null
+  ))
+}
 
 export default function Modal (props) {
   const {
@@ -24,6 +39,7 @@ export default function Modal (props) {
     keyboardConfirm = true,
     onCancel
   } = props
+  const contentRef = useRef(null)
 
   function handleMaskClick (e) {
     if (e.target === e.currentTarget && maskClosable && onCancel) {
@@ -36,6 +52,53 @@ export default function Modal (props) {
       onCancel()
     }
   }
+
+  useEffect(() => {
+    if (!open) return undefined
+    const previouslyFocused = document.activeElement
+    const content = contentRef.current
+
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        if (onCancel) {
+          onCancel()
+          e.preventDefault()
+        }
+      } else if (e.key === 'Tab') {
+        const focusable = getFocusableElements(content)
+        if (!focusable.length) {
+          e.preventDefault()
+          content?.focus()
+          return
+        }
+        const first = focusable[0]
+        const last = focusable[focusable.length - 1]
+        const active = document.activeElement
+        if (e.shiftKey && (active === first || !content?.contains(active))) {
+          e.preventDefault()
+          last.focus()
+        } else if (!e.shiftKey && active === last) {
+          e.preventDefault()
+          first.focus()
+        }
+      } else if (keyboardConfirm && (e.key === 'Enter' || e.key === ' ')) {
+        // For confirm, Enter/Space confirms
+        const okBtn = document.querySelector('.custom-modal-ok-btn')
+        if (okBtn) {
+          okBtn.click()
+          e.preventDefault()
+        }
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    const initialFocus = getFocusableElements(content)[0] || content
+    initialFocus?.focus()
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown)
+      if (previouslyFocused?.isConnected) previouslyFocused.focus()
+    }
+  }, [keyboardConfirm, open, onCancel])
 
   if (!open) {
     return null
@@ -55,29 +118,6 @@ export default function Modal (props) {
     className
   )
 
-  useEffect(() => {
-    if (!open) return
-
-    const handleKeyDown = (e) => {
-      if (e.key === 'Escape') {
-        if (onCancel) {
-          onCancel()
-          e.preventDefault()
-        }
-      } else if (keyboardConfirm && (e.key === 'Enter' || e.key === ' ')) {
-        // For confirm, Enter/Space confirms
-        const okBtn = document.querySelector('.custom-modal-ok-btn')
-        if (okBtn) {
-          okBtn.click()
-          e.preventDefault()
-        }
-      }
-    }
-
-    document.addEventListener('keydown', handleKeyDown)
-    return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [keyboardConfirm, open, onCancel])
-
   return (
     <div className={cls} style={modalStyle}>
       <div
@@ -86,8 +126,13 @@ export default function Modal (props) {
       />
       <div className='custom-modal-container' onClick={handleMaskClick}>
         <div
+          ref={contentRef}
           className='custom-modal-content'
           style={contentStyle}
+          role='dialog'
+          aria-modal='true'
+          aria-label={typeof title === 'string' ? title : undefined}
+          tabIndex={-1}
         >
           {title && (
             <div className='custom-modal-header'>

@@ -1,3 +1,5 @@
+import { sanitizeAIStoredText } from './ai-request-credentials.js'
+
 function normalizeMcpServer (server = {}) {
   return {
     name: String(server.name || '').trim(),
@@ -58,13 +60,11 @@ export function getEnabledMcpServers (mcpServers = []) {
 }
 
 function describeServer (server) {
-  const endpoint = server.transport === 'http'
-    ? `URL=${server.url}`
-    : `命令=${[server.command, server.args].filter(Boolean).join(' ')}`
-  const desc = server.description ? `，用途=${server.description}` : ''
-  return `- ${server.name}：transport=${server.transport}，${endpoint}${desc}`
+  const name = sanitizeAIStoredText(server.name).slice(0, 96) || 'MCP Server'
+  const description = sanitizeAIStoredText(server.description).slice(0, 240)
+  const desc = description ? `, description=${description}` : ''
+  return `- ${name}: transport=${server.transport}${desc}`
 }
-
 export function buildAgentMcpServerPrompt ({ mcpServers = [] } = {}) {
   const servers = getEnabledMcpServers(mcpServers)
   if (!servers.length) {

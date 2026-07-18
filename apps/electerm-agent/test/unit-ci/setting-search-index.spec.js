@@ -160,15 +160,17 @@ test('settings modal rerenders previews and navigates every visible search resul
   assert.match(modalSource, /onCancel=\{handleClose\}/)
 })
 
-test('language previews rerender every tab without changing the content tree identity', () => {
+test('language previews rerender the active tab without changing the content tree identity', () => {
   const modalSource = readClientSource('components/setting-panel/setting-modal.jsx')
 
   assert.match(modalSource, /const effectiveLanguage = store\.previewLanguage \|\| store\.config\.language/)
+  assert.match(modalSource, /const settingTabLoaders =/)
+  assert.match(modalSource, /<ActiveSettingTab/)
   assert.doesNotMatch(modalSource, /key=\{(?:store\.previewLanguage|effectiveLanguage)/)
   assert.equal(
-    (modalSource.match(/languageVersion=\{effectiveLanguage\}/g) || []).length,
-    6,
-    'all six stable tab components must receive the preview version as a normal prop'
+    (modalSource.match(/languageVersion:\s*effectiveLanguage/g) || []).length,
+    1,
+    'the active lazy-loaded tab must receive the preview version as a normal prop'
   )
 })
 

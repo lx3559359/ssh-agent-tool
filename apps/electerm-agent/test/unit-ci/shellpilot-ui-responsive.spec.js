@@ -32,9 +32,10 @@ test('ShellPilot top bar and AI panel use theme variables in day and night modes
 test('top bar has a narrow-window fallback that keeps icon commands available', () => {
   const source = readClient('components/main/aigshell-topbar.styl')
 
-  assert.match(source, /@media \(max-width: 1280px\)/)
+  assert.match(source, /@media \(max-width: 1440px\)/)
   assert.match(source, /\.aigshell-topbar-action-label[\s\S]*display none/)
   assert.match(source, /@media \(max-width: 900px\)/)
+  assert.match(source, /z-index 4\d{2}/)
 })
 
 test('right panel width and SFTP list height are bounded for small windows', () => {
@@ -50,7 +51,9 @@ test('right panel width and SFTP list height are bounded for small windows', () 
 })
 
 test('AI panel reports tested model state instead of claiming it is always online', () => {
-  const source = readClient('components/side-panel-r/side-panel-r.jsx')
+  const panel = readClient('components/side-panel-r/side-panel-r.jsx')
+  const header = readClient('components/side-panel-r/right-side-panel-ai-header.jsx')
+  const source = `${panel}\n${header}`
   const style = readClient('components/side-panel-r/right-side-panel.styl')
 
   assert.match(source, /aiConfigured/)
@@ -158,7 +161,7 @@ test('settings header is the only language and close entry point', () => {
   assert.equal((header.match(/className='close-setting-wrap close-setting-wrap-icon'/g) || []).length, 1)
   assert.match(bookmarksE2E, /\.setting-wrap \.close-setting-wrap-icon/)
   assert.match(settingsE2E, /\.setting-wrap \.close-setting-wrap/)
-  assert.match(modal, /languageVersion=\{effectiveLanguage\}/)
+  assert.match(modal, /languageVersion:\s*effectiveLanguage/)
   assert.doesNotMatch(wrap, /CloseCircleOutlined|close-setting-wrap/)
   assert.match(wrap, /<Drawer/)
   assert.match(wrap, /this\.props\.useSystemTitleBar \? null : <AppDrag \/>/)

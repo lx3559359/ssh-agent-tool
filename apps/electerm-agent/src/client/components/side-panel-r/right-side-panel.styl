@@ -34,6 +34,9 @@
 
 .right-panel-title-text
   display block
+  white-space nowrap
+  overflow hidden
+  text-overflow ellipsis
   color var(--text-light)
   font-size 15px
   font-weight 650
@@ -95,18 +98,48 @@
   border-color var(--success)
   color var(--success)
   background var(--main)
+  display inline-flex
+  align-items center
+  gap 4px
+  cursor pointer
+  user-select none
   &.not-configured
     border-color var(--warn)
     color var(--warn)
+  &.checking
+    border-color var(--primary)
+    color var(--primary)
+  &.reachable
+    border-color var(--primary)
+    color var(--primary)
   &.pending
     border-color var(--warn)
     color var(--warn)
   &.available
     border-color var(--success)
     color var(--success)
-  &.error
+  &.auth-error,
+  &.model-error,
+  &.quota-error,
+  &.network-error
     border-color var(--danger)
     color var(--danger)
+  &.stale
+    border-color var(--warn)
+    color var(--warn)
+  &:focus-visible
+    outline 1px solid var(--primary)
+    outline-offset 2px
+
+.right-panel-model-status-refresh
+  font-size 11px
+
+.right-panel-model-latency
+  padding-left 4px
+  border-left 1px solid currentColor
+  font-size 11px
+  line-height 1
+  opacity .86
 
 .right-side-panel-controls
   color var(--text)

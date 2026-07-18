@@ -15,6 +15,7 @@ const {
   getUpdateReleaseSources,
   githubFeedConfig
 } = require('../common/update-sources')
+const { createTraceContext } = require('./quality/trace-context')
 
 axios.defaults.proxy = false
 
@@ -29,6 +30,33 @@ const state = {
   error: '',
   updateSource: '',
   updateSourceLabel: ''
+}
+
+function createUpdateQualityState (traceContext, action) {
+  const context = createTraceContext({
+    ...traceContext,
+    module: 'updater',
+    action
+  })
+  log.recordQualityEvent(context, {
+    module: 'updater',
+    action,
+    phase: 'started'
+  })
+  return { context, action, finished: false }
+}
+
+function finishUpdateQuality (qualityState, phase, result) {
+  if (!qualityState.finished) {
+    qualityState.finished = true
+    log.recordQualityEvent(qualityState.context, {
+      module: 'updater',
+      action: qualityState.action,
+      phase,
+      result
+    })
+  }
+  return result
 }
 
 function cleanVersion (value) {
@@ -143,14 +171,14 @@ async function fetchApprovedRelease (options = {}) {
   }
 }
 
-async function validateApprovedRelease (options = {}) {
+function validateApprovedReleaseCandidate (candidate, options = {}) {
   const currentVersion = cleanVersion(options.currentVersion || packInfo.version)
   const {
     release,
     version,
     manifest,
     source
-  } = await fetchApprovedRelease(options)
+  } = candidate || {}
 
   if (!version) {
     return {
@@ -184,6 +212,27 @@ async function validateApprovedRelease (options = {}) {
     version,
     release,
     source
+  }
+}
+
+async function validateApprovedRelease (options = {}) {
+  let fallbackResult = null
+  let currentResult = null
+  for (const source of getUpdateReleaseSources(options.config?.updateSource)) {
+    const candidate = await fetchApprovedReleaseFromSource(source, options)
+    if (!candidate) continue
+    const result = validateApprovedReleaseCandidate(candidate, options)
+    if (result.status === 'update') {
+      return result
+    }
+    fallbackResult ||= result
+    if (result.status === 'current') {
+      currentResult ||= result
+    }
+  }
+  return currentResult || fallbackResult || {
+    status: 'unavailable',
+    message: '无法获取更新版本信息。'
   }
 }
 
@@ -256,86 +305,120 @@ function isNativeUpdaterSupported () {
   return (isWin || isMac) && app.isPackaged
 }
 
-async function nativeUpdateCheck (options = {}) {
-  if (!isNativeUpdaterSupported()) {
-    return cloneState({
-      status: 'unsupported',
-      message: '当前运行环境不支持客户端内自动更新。'
-    })
-  }
-  const approved = await validateApprovedRelease(options)
-  if (approved.status !== 'update') {
+async function nativeUpdateCheck (options = {}, traceContext) {
+  const qualityState = createUpdateQualityState(traceContext, 'check')
+  try {
+    if (!isNativeUpdaterSupported()) {
+      const result = cloneState({
+        status: 'unsupported',
+        message: '当前运行环境不支持客户端内自动更新。'
+      })
+      finishUpdateQuality(qualityState, 'completed', result.status)
+      return result
+    }
+    const approved = await validateApprovedRelease(options)
+    if (approved.status !== 'update') {
+      updateState({
+        checking: false,
+        available: false,
+        downloading: false,
+        downloaded: false,
+        error: ''
+      })
+      const result = {
+        ...cloneState(),
+        ...approved
+      }
+      finishUpdateQuality(qualityState, 'completed', result.status)
+      return result
+    }
+    configureNativeUpdater(approved.source?.feedConfig)
     updateState({
-      checking: false,
-      available: false,
-      downloading: false,
-      downloaded: false,
+      checking: true,
+      available: true,
+      version: approved.version,
+      updateSource: approved.source?.id || '',
+      updateSourceLabel: approved.source?.label || '',
       error: ''
     })
-    return {
-      ...cloneState(),
-      ...approved
-    }
+    await autoUpdater.checkForUpdates()
+    const result = cloneState({
+      status: 'update',
+      version: approved.version
+    })
+    finishUpdateQuality(qualityState, 'completed', result.status)
+    return result
+  } catch (error) {
+    finishUpdateQuality(qualityState, 'failed', 'failed')
+    throw error
   }
-  configureNativeUpdater(approved.source?.feedConfig)
-  updateState({
-    checking: true,
-    available: true,
-    version: approved.version,
-    updateSource: approved.source?.id || '',
-    updateSourceLabel: approved.source?.label || '',
-    error: ''
-  })
-  await autoUpdater.checkForUpdates()
-  return cloneState({
-    status: 'update',
-    version: approved.version
-  })
 }
 
-async function nativeUpdateDownload (options = {}) {
-  if (!isNativeUpdaterSupported()) {
-    return cloneState({
-      status: 'unsupported',
-      message: '当前运行环境不支持客户端内自动更新。'
-    })
-  }
-  const approved = await validateApprovedRelease(options)
-  if (approved.status !== 'update') {
-    return {
-      ...cloneState(),
-      ...approved
+async function nativeUpdateDownload (options = {}, traceContext) {
+  const qualityState = createUpdateQualityState(traceContext, 'download')
+  try {
+    if (!isNativeUpdaterSupported()) {
+      const result = cloneState({
+        status: 'unsupported',
+        message: '当前运行环境不支持客户端内自动更新。'
+      })
+      finishUpdateQuality(qualityState, 'completed', result.status)
+      return result
     }
+    const approved = await validateApprovedRelease(options)
+    if (approved.status !== 'update') {
+      const result = {
+        ...cloneState(),
+        ...approved
+      }
+      finishUpdateQuality(qualityState, 'completed', result.status)
+      return result
+    }
+    configureNativeUpdater(approved.source?.feedConfig)
+    updateState({
+      available: true,
+      downloading: true,
+      downloaded: false,
+      percent: 0,
+      version: approved.version,
+      updateSource: approved.source?.id || '',
+      updateSourceLabel: approved.source?.label || '',
+      error: ''
+    })
+    await autoUpdater.downloadUpdate()
+    const result = cloneState({
+      status: 'downloading',
+      version: approved.version
+    })
+    finishUpdateQuality(qualityState, 'completed', result.status)
+    return result
+  } catch (error) {
+    finishUpdateQuality(qualityState, 'failed', 'failed')
+    throw error
   }
-  configureNativeUpdater(approved.source?.feedConfig)
-  updateState({
-    available: true,
-    downloading: true,
-    downloaded: false,
-    percent: 0,
-    version: approved.version,
-    updateSource: approved.source?.id || '',
-    updateSourceLabel: approved.source?.label || '',
-    error: ''
-  })
-  await autoUpdater.downloadUpdate()
-  return cloneState({
-    status: 'downloading',
-    version: approved.version
-  })
 }
 
-function nativeUpdateInstall () {
-  if (!state.downloaded) {
-    return cloneState({
-      status: 'notDownloaded',
-      message: '更新文件尚未下载完成。'
+function nativeUpdateInstall (traceContext) {
+  const qualityState = createUpdateQualityState(traceContext, 'install')
+  try {
+    if (!state.downloaded) {
+      const result = cloneState({
+        status: 'notDownloaded',
+        message: '更新文件尚未下载完成。'
+      })
+      finishUpdateQuality(qualityState, 'completed', result.status)
+      return result
+    }
+    autoUpdater.quitAndInstall(true, true)
+    const result = cloneState({
+      status: 'installing'
     })
+    finishUpdateQuality(qualityState, 'completed', result.status)
+    return result
+  } catch (error) {
+    finishUpdateQuality(qualityState, 'failed', 'failed')
+    throw error
   }
-  autoUpdater.quitAndInstall(true, true)
-  return cloneState({
-    status: 'installing'
-  })
 }
 
 function nativeUpdateState () {
@@ -354,5 +437,6 @@ module.exports = {
   nativeUpdateDownload,
   nativeUpdateInstall,
   nativeUpdateState,
+  validateApprovedReleaseCandidate,
   validateApprovedRelease
 }

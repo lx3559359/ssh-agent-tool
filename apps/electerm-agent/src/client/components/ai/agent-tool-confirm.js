@@ -3,13 +3,15 @@ import {
   getAgentToolCommandText,
   isAgentCommandTool
 } from './agent-task-mode.js'
+import { requestAgentConfirmation } from './agent-confirmation.js'
 
 export { isAgentCommandTool }
 
 export async function confirmAgentToolExecution ({
   toolName,
   args = {},
-  confirm
+  confirm,
+  signal
 } = {}) {
   if (!isAgentCommandTool(toolName)) {
     return {
@@ -31,7 +33,7 @@ export async function confirmAgentToolExecution ({
   const risk = classifyAgentCommand(command)
   const ask = typeof confirm === 'function'
     ? confirm
-    : message => window.confirm(message)
+    : message => requestAgentConfirmation(message, { signal })
   const accepted = await ask(`Agent 请求执行以下命令，请确认：\n\n${command}\n\n风险判断：${risk.reason}`)
 
   if (accepted && risk.needsSecondConfirmation) {

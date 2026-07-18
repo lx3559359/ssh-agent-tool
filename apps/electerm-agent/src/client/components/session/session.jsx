@@ -14,9 +14,12 @@ import {
   FullscreenOutlined,
   PaperClipOutlined,
   CloseOutlined,
-  ApartmentOutlined
+  ApartmentOutlined,
+  SafetyCertificateOutlined,
+  ReloadOutlined
 } from '@ant-design/icons'
 import {
+  Button,
   Tooltip,
   Splitter
 } from 'antd'
@@ -819,7 +822,32 @@ export default class SessionWrapper extends Component {
     )
   }
 
+  handleRecoveryReconnect = () => {
+    window.store.reconnectRecoveredTab(this.props.tab.id)
+  }
+
+  renderRecoveryPending = () => {
+    const { tab } = this.props
+    const target = tab.host
+      ? `${tab.username ? tab.username + '@' : ''}${tab.host}:${tab.port || 22}`
+      : '本地终端'
+    return (
+      <div className='session-recovery-pending' role='status'>
+        <SafetyCertificateOutlined className='session-recovery-pending-icon' />
+        <h3>待重新连接</h3>
+        <p>{target}</p>
+        <p>为避免异常恢复后自动连接或执行命令，请手动确认。</p>
+        <Button type='primary' icon={<ReloadOutlined />} onClick={this.handleRecoveryReconnect}>
+          重新连接
+        </Button>
+      </div>
+    )
+  }
+
   render () {
+    if (this.props.tab.recoveryPending) {
+      return this.renderRecoveryPending()
+    }
     const { pane } = this.props.tab
     const cls = classnames(
       'term-sftp-box',

@@ -59,6 +59,24 @@ test('renderer and native updater use shared ordered update sources', () => {
   assert.match(nativeSource, /autoUpdater\.setFeedURL\(feedConfig/)
 })
 
+test('automatic update checks continue after a semantically unusable source', () => {
+  const rendererSource = fs.readFileSync(path.join(root, 'src/client/common/update-check.js'), 'utf8')
+  const nativeSource = fs.readFileSync(path.join(root, 'src/app/lib/native-updater.js'), 'utf8')
+
+  assert.match(rendererSource, /status\.status\s*===\s*'update'/)
+  assert.match(rendererSource, /currentCandidate/)
+  assert.match(nativeSource, /validateApprovedReleaseCandidate/)
+  assert.match(nativeSource, /fallbackResult/)
+  assert.match(nativeSource, /for \(const source of getUpdateReleaseSources/)
+})
+
+test('legacy update error panel stays hidden while the update center is open', () => {
+  const source = fs.readFileSync(path.join(root, 'src/client/components/main/upgrade.jsx'), 'utf8')
+
+  assert.match(source, /showUpdateCenter/)
+  assert.match(source, /if \(error && !showUpdateCenter\)/)
+})
+
 function pathToFileURL (filePath) {
   return new URL(`file://${filePath.replace(/\\/g, '/')}`).href
 }

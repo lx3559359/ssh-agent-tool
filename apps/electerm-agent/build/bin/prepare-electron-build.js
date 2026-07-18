@@ -1,5 +1,6 @@
 const fs = require('fs')
 const path = require('path')
+const { execFileSync } = require('child_process')
 const { cp } = require('shelljs')
 
 const defaultLocalWorkflowName = 'shellpilot-local'
@@ -21,10 +22,52 @@ function replacePublishChannelPlaceholders (value, workflowName) {
   }, {})
 }
 
+function findCpuFeaturesPackageDirs (cwd) {
+  const candidates = []
+  const dependencyRoots = [
+    path.join(cwd, 'node_modules'),
+    path.join(cwd, 'work/app/node_modules')
+  ]
+
+  for (const dependencyRoot of dependencyRoots) {
+    candidates.push(path.join(dependencyRoot, 'cpu-features'))
+    const pnpmStore = path.join(dependencyRoot, '.pnpm')
+    if (!fs.existsSync(pnpmStore)) continue
+
+    for (const entry of fs.readdirSync(pnpmStore, { withFileTypes: true })) {
+      if (!entry.isDirectory() || !entry.name.startsWith('cpu-features@')) continue
+      candidates.push(path.join(
+        pnpmStore,
+        entry.name,
+        'node_modules/cpu-features'
+      ))
+    }
+  }
+
+  return [...new Set(candidates
+    .filter(packageDir => fs.existsSync(path.join(packageDir, 'buildcheck.js')))
+    .map(packageDir => fs.realpathSync(packageDir)))]
+}
+
+function prepareCpuFeaturesBuildConfig ({ cwd = process.cwd() } = {}) {
+  const prepared = []
+  for (const packageDir of findCpuFeaturesPackageDirs(cwd)) {
+    const output = execFileSync(process.execPath, ['buildcheck.js'], {
+      cwd: packageDir,
+      encoding: 'utf8'
+    })
+    JSON.parse(output)
+    fs.writeFileSync(path.join(packageDir, 'buildcheck.gypi'), output, 'utf8')
+    prepared.push(packageDir)
+  }
+  return prepared
+}
+
 function prepareElectronBuilderConfig ({
   cwd = process.cwd(),
   workflowName = process.env.WORKFLOW_NAME || defaultLocalWorkflowName
 } = {}) {
+  prepareCpuFeaturesBuildConfig({ cwd })
   cp('-r', path.join(cwd, 'build/electron-builder.json'), cwd)
   const configPath = path.join(cwd, 'electron-builder.json')
   const config = JSON.parse(fs.readFileSync(configPath, 'utf8'))
@@ -37,6 +80,8 @@ if (require.main === module) {
 }
 
 module.exports = {
+  findCpuFeaturesPackageDirs,
+  prepareCpuFeaturesBuildConfig,
   prepareElectronBuilderConfig,
   replacePublishChannelPlaceholders
 }

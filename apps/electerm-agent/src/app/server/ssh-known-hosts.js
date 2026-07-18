@@ -356,8 +356,20 @@ function createHostVerifier (options) {
     port,
     knownHostsPath = getKnownHostsPath(),
     confirm,
-    onError
+    onError,
+    onVerified
   } = options
+  let verificationReported = false
+  const accept = (meta, verify) => {
+    if (!verificationReported) {
+      onVerified && onVerified({
+        keyType: meta.keyType,
+        fingerprint: formatSha256Fingerprint(meta.sha256)
+      })
+      verificationReported = true
+    }
+    verify(true)
+  }
   return (hostKey, verify) => {
     checkKnownHosts({
       host,
@@ -367,7 +379,7 @@ function createHostVerifier (options) {
     })
       .then(async (result) => {
         if (result.status === 'match') {
-          verify(true)
+          accept(result.meta, verify)
           return
         }
         if (result.status === 'revoked') {
@@ -403,7 +415,7 @@ function createHostVerifier (options) {
             hostKey,
             knownHostsPath
           })
-          verify(true)
+          accept(result.meta, verify)
           return
         }
         const accepted = await confirm(buildUnknownHostPrompt({
@@ -423,7 +435,7 @@ function createHostVerifier (options) {
           hostKey,
           knownHostsPath
         })
-        verify(true)
+        accept(result.meta, verify)
       })
       .catch((err) => {
         onError && onError(err)

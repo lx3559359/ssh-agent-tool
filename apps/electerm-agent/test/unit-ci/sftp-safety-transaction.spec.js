@@ -2398,6 +2398,32 @@ test('SFTP UI routes editor save chmod rename and delete through modern transact
   assert.match(entrySource, /buildSideEffectSafetyRequest/)
   assert.match(entrySource, /runSftpSafetyOperation/)
   assert.match(entrySource, /deleteRemoteFilesWithSafety/)
+  assert.match(
+    entrySource,
+    /sftpSafetyRunner\.execute\(operation\.id,\s*\{[\s\S]{0,160}signal:\s*options\.signal/
+  )
+  assert.match(
+    entrySource,
+    /prepareSftpSafetyOperation\s*=\s*async\s*\(\{[\s\S]{0,240}signal[\s\S]{0,900}request\.signal\s*=\s*signal[\s\S]{0,300}sftpSafetyRunner\.prepare\(request\)/
+  )
+  assert.match(
+    entrySource,
+    /deleteRemoteFilesWithSafety[\s\S]{0,1200}options\.signal\?\.aborted[\s\S]{0,800}prepareSftpSafetyOperation\(\{[\s\S]{0,400}signal:\s*options\.signal/
+  )
+  assert.match(
+    entrySource,
+    /confirmDelete\s*=\s*\(files,\s*\{\s*signal\s*\}\s*=\s*\{\}\)/
+  )
+  assert.match(entrySource, /signal\?\.addEventListener\('abort',\s*onAbort/)
+  assert.match(entrySource, /modalRef\.current\?\.destroy\(\)/)
+  assert.match(
+    entrySource,
+    /deleteRemoteFilesWithSafety[\s\S]{0,1600}confirmDelete\(files,\s*\{\s*signal:\s*options\.signal\s*\}\)/
+  )
+  assert.match(
+    entrySource,
+    /for \(let index = 0; index < operations\.length; index \+= 1\)[\s\S]{0,300}options\.signal\?\.aborted[\s\S]{0,300}sftpSafetyRunner\.cancel/
+  )
   assert.match(entrySource, /mode === undefined \? undefined : Number\(mode\) & 0o7777/)
   assert.match(entrySource, /renameRemoteFile[\s\S]{0,300}this\.props\.isFtp/)
   assert.match(entrySource, /saveRemoteEditorFile[\s\S]{0,300}this\.props\.isFtp/)

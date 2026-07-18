@@ -14,17 +14,15 @@ import {
   SunOutlined,
   ThunderboltOutlined
 } from '@ant-design/icons'
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
+import LazyModuleBoundary from '../common/lazy-module-boundary'
 import { auto } from 'manate/react'
 import { Button, Popover, Tooltip } from 'antd'
 import QuickConnect from '../tabs/quick-connect'
 import WindowControl from '../tabs/window-control'
 import ConnectionInventoryModal from '../tree-list/connection-inventory-modal'
-import UpdateCenterModal from './update-center-modal'
 import ConnectionInfoModal from '../tree-list/connection-info-modal'
-import HelpCenterModal from './help-center-modal'
 import SafetyOperationCenterModal from './safety-operation-center-modal'
-import ServerStatusModal from '../server-status/server-status-modal'
 import { logoPath1, packInfo, statusMap } from '../../common/constants'
 import * as safetyTransactionStore from '../../common/safety-transactions/transaction-store.js'
 import {
@@ -32,6 +30,10 @@ import {
   recoverOrphanedCommandOperationsOnce
 } from '../../common/safety-transactions/command-orphan-recovery.js'
 import './aigshell-topbar.styl'
+
+const UpdateCenterModal = lazy(() => import('./update-center-modal'))
+const HelpCenterModal = lazy(() => import('./help-center-modal'))
+const ServerStatusModal = lazy(() => import('../server-status/server-status-modal'))
 
 export default auto(function AIGShellTopBar ({ store }) {
   const [showConnectionInventory, setShowConnectionInventory] = useState(false)
@@ -51,8 +53,16 @@ export default auto(function AIGShellTopBar ({ store }) {
 
   useEffect(() => {
     const openSafetyCenter = () => setShowSafetyCenter(true)
+    const openUpdateCenter = () => {
+      setShowUpdateCenter(true)
+      window.store.upgradeInfo.showUpdateCenter = true
+    }
     window.addEventListener('shellpilot-open-safety-center', openSafetyCenter)
-    return () => window.removeEventListener('shellpilot-open-safety-center', openSafetyCenter)
+    window.addEventListener('shellpilot-open-update-center', openUpdateCenter)
+    return () => {
+      window.removeEventListener('shellpilot-open-safety-center', openSafetyCenter)
+      window.removeEventListener('shellpilot-open-update-center', openUpdateCenter)
+    }
   }, [])
 
   useEffect(() => {
@@ -259,25 +269,55 @@ export default auto(function AIGShellTopBar ({ store }) {
         bookmarkGroups={store.bookmarkGroups}
         onClose={handleCloseConnectionInfo}
       />
-      <UpdateCenterModal
-        open={showUpdateCenter}
-        onClose={handleCloseUpdateCenter}
-      />
-      <HelpCenterModal
-        open={showHelpCenter}
-        onClose={() => setShowHelpCenter(false)}
-      />
+      {
+        showUpdateCenter
+          ? (
+            <LazyModuleBoundary moduleName='更新中心' fallback={null}>
+              <Suspense fallback={null}>
+                <UpdateCenterModal
+                  open
+                  onClose={handleCloseUpdateCenter}
+                />
+              </Suspense>
+            </LazyModuleBoundary>
+            )
+          : null
+      }
+      {
+        showHelpCenter
+          ? (
+            <LazyModuleBoundary moduleName='帮助中心' fallback={null}>
+              <Suspense fallback={null}>
+                <HelpCenterModal
+                  open
+                  onClose={() => setShowHelpCenter(false)}
+                />
+              </Suspense>
+            </LazyModuleBoundary>
+            )
+          : null
+      }
       <SafetyOperationCenterModal
         open={showSafetyCenter}
         onClose={() => setShowSafetyCenter(false)}
         store={store}
       />
-      <ServerStatusModal
-        open={showServerStatus}
-        onClose={() => setShowServerStatus(false)}
-        store={store}
-        tab={currentTab}
-      />
+      {
+        showServerStatus
+          ? (
+            <LazyModuleBoundary moduleName='服务器状态' fallback={null}>
+              <Suspense fallback={null}>
+                <ServerStatusModal
+                  open
+                  onClose={() => setShowServerStatus(false)}
+                  store={store}
+                  tab={currentTab}
+                />
+              </Suspense>
+            </LazyModuleBoundary>
+            )
+          : null
+      }
     </div>
   )
 })

@@ -24,6 +24,7 @@ async function runCreateApp ({ isTest, isPrimaryInstance = true }) {
       calls.quit++
     },
     on () {},
+    once () {},
     whenReady () {
       return new Promise(() => {})
     }

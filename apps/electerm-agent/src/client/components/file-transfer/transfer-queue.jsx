@@ -1,40 +1,30 @@
 import { Component } from 'react'
 import { autoRun, action } from 'manate'
 import { refsStatic } from '../common/ref'
+import { createTransferOperationQueue } from './transfer-operation-queue.js'
 
 export default class Queue extends Component {
   constructor (props) {
     super(props)
     this.queue = []
     this.currentRun = null
+    this.operationQueue = createTransferOperationQueue({
+      execute: this.executeOperation,
+      onError: error => console.error('Error processing operation:', error)
+    })
     this.id = 'transfer-queue'
     refsStatic.add(this.id, this)
   }
 
   componentWillUnmount () {
+    this.operationQueue.dispose()
     if (this.currentRun) {
       this.currentRun.stop()
     }
   }
 
   addToQueue = (operation, ...args) => {
-    this.queue.push({ operation, args })
-    this.processQueue()
-  }
-
-  processQueue = async () => {
-    if (this.queue.length === 0 || this.processing === true) {
-      return
-    }
-    this.processing = true
-    const { operation, args } = this.queue.shift()
-
-    await this.executeOperation(operation, ...args)
-      .catch((error) => {
-        console.error('Error processing operation:', error)
-      })
-    this.processing = false
-    this.processQueue()
+    return this.operationQueue.add(operation, ...args)
   }
 
   executeOperation = (operation, ...args) => {

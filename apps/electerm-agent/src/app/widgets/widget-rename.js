@@ -16,7 +16,7 @@ const widgetInfo = {
   name: 'File Renamer',
   description: 'Batch rename files in a folder using customizable templates',
   version: '1.0.0',
-  author: 'ZHAO Xudong',
+  author: 'ShellPilot Team',
   type: 'once',
   builtin: true,
   configs: [

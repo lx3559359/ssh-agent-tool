@@ -1,8 +1,8 @@
 {
   "name": "ssh-agent-tool",
-  "version": "0.4.2",
+  "version": "0.4.5",
   "productName": "ShellPilot",
-  "description": "基于 Electerm 二次开发的 Windows 优先 SSH、SFTP 和 AI Agent 客户端",
+  "description": "面向 Windows 的 SSH、SFTP 与 AI 运维客户端",
   "main": "app.js",
   "bin": {
     "aigshell": "npm/electerm",
@@ -28,10 +28,14 @@
     "test-package-smoke": "node.exe build/bin/package-smoke-test.js",
     "smoke:ssh-sftp": "node build/bin/smoke-ssh-sftp.js",
     "smoke:safety": "node build/bin/smoke-safety-transactions.js",
+    "smoke:ai-takeover": "node build/bin/smoke-ai-takeover.js",
     "verify-win-portable": "node build/bin/verify-win-portable-zip.js",
     "test1": "playwright test test/e2e/00*.js --workers=1",
     "test2": "playwright test test/e2e/01*.js --workers=1",
-    "test3": "playwright test test/e2e/02*.js --workers=1 && npm run test-unit-ci",
+    "test3": "playwright test \"test/e2e/02.*\\.js\" --workers=1 && npm run test-unit-ci",
+    "test-quality-e2e": "playwright test test/e2e/027.quality-core-flows.spec.js test/e2e/028.crash-recovery.spec.js --workers=1",
+    "test-performance-e2e": "playwright test test/e2e/029.performance-baseline.spec.js --workers=1",
+    "test-real-server-e2e": "playwright test test/e2e/030.real-server-regression.spec.js --workers=1",
     "b": "npm run clean && npm run compile && npm run prepare-file",
     "r": "./build/bin/release",
     "release:github": "node build/bin/release-github.js",
@@ -52,18 +56,13 @@
     "configure:ai": "cross-env NODE_ENV=development electron build/bin/configure-ai.js"
   },
   "license": "MIT",
-  "langugeRepo": "https://github.com/electerm/electerm-locales",
-  "privacyNoticeLink": "https://github.com/electerm/electerm/wiki/privacy-notice",
-  "knownIssuesLink": "https://github.com/electerm/electerm/wiki/Know-issues",
-  "sponsorLink": "https://electerm.org/sponsor-electerm",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/lx3559359/ssh-agent-tool.git"
   },
   "author": {
-    "name": "ZHAO Xudong",
-    "email": "zxdong@gmail.com",
-    "url": "https://github.com/zxdong262"
+    "name": "ShellPilot Team",
+    "url": "https://github.com/lx3559359/ssh-agent-tool"
   },
   "bugs": {
     "url": "https://github.com/lx3559359/ssh-agent-tool/issues"
@@ -76,9 +75,11 @@
   "preferGlobal": true,
   "devDependencies": {
     "@ant-design/icons": "6.2.5",
+    "@babel/parser": "^7.29.2",
     "@electerm/electerm-resource": "2.1.7",
     "@fontsource/maple-mono": "^5.2.5",
     "@novnc/novnc": "1.7.0",
+    "@serialport/binding-mock": "^10.2.2",
     "@types/node": "22.12.0",
     "@vitejs/plugin-react": "^5.2.0",
     "@xterm/addon-attach": "0.13.0-beta.288",

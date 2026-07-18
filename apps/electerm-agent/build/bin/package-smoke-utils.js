@@ -15,13 +15,25 @@ function resolveSmokePaths ({
   )
   const dataPath = path.join(root, 'data')
   const userPath = path.join(dataPath, 'users', 'default_user')
+  const resolvedExePath = exePath || path.join(projectRoot, 'dist', 'win-unpacked', appExecutableName)
+  const appRoot = path.dirname(resolvedExePath)
 
   return {
     tmpRoot: root,
-    exePath: exePath || path.join(projectRoot, 'dist', 'win-unpacked', appExecutableName),
+    exePath: resolvedExePath,
     dataPath,
     mainDbPath: path.join(userPath, 'electerm.db'),
-    dataDbPath: path.join(userPath, 'electerm_data.db')
+    dataDbPath: path.join(userPath, 'electerm_data.db'),
+    nodePtyConptyPath: path.join(
+      appRoot,
+      'resources',
+      'app.asar.unpacked',
+      'node_modules',
+      'node-pty',
+      'build',
+      'Release',
+      'conpty.node'
+    )
   }
 }
 
@@ -61,6 +73,12 @@ function validateSmokeResult ({
   }
   if (!mainDbExists || !dataDbExists) {
     throw new Error(`${appProductName} did not create sqlite databases in DATA_PATH`)
+  }
+}
+
+function validatePackagedRuntime (paths, existsSync = require('fs').existsSync) {
+  if (!existsSync(paths.nodePtyConptyPath)) {
+    throw new Error(`Windows terminal runtime is missing: ${paths.nodePtyConptyPath}`)
   }
 }
 
@@ -104,6 +122,7 @@ module.exports = {
   listFilesRecursive,
   resolvePortableZipPaths,
   resolveSmokePaths,
+  validatePackagedRuntime,
   validatePortableZipExtractedFiles,
   validateSmokeResult
 }

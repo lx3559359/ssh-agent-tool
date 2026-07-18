@@ -36,6 +36,19 @@ test('windows release workflow publishes only online update assets', () => {
   assert.match(workflow, /apps\/electerm-agent\/dist\/shellpilot-release\.json/)
 })
 
+test('windows release workflow uses a branch-safe artifact name', () => {
+  const workflow = fs.readFileSync(
+    path.resolve(__dirname, '../../../../.github/workflows/windows-electerm-agent-release.yml'),
+    'utf8'
+  )
+
+  assert.match(
+    workflow,
+    /name: shellpilot-windows-\$\{\{ steps\.package-version\.outputs\.version \}\}-\$\{\{ github\.run_id \}\}/
+  )
+  assert.doesNotMatch(workflow, /name: .*\$\{\{ github\.ref_name \}\}/)
+})
+
 test('windows release workflow smoke tests the packaged app before uploading artifacts', () => {
   const workflow = fs.readFileSync(
     path.resolve(__dirname, '../../../../.github/workflows/windows-electerm-agent-release.yml'),
@@ -150,6 +163,7 @@ test('windows release workflow requires an explicit manual stable release confir
   assert.match(workflow, /id:\s+package-version/)
   assert.match(workflow, /tag=v\$version/)
   assert.match(workflow, /tag_name:\s+\$\{\{ steps\.package-version\.outputs\.tag \}\}/)
+  assert.match(workflow, /target_commitish:\s+\$\{\{ github\.sha \}\}/)
 })
 
 test('windows release workflow verifies the portable zip contents before upload', () => {

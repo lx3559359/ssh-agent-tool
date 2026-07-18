@@ -3,5 +3,5 @@
  */
 
 export default (lang) => {
-  return `https://github.com/electerm/electerm-locales/edit/master/locales/${lang}.js`
+  return `https://github.com/lx3559359/ssh-agent-tool/issues/new?title=${encodeURIComponent(`翻译反馈：${lang}`)}`
 }

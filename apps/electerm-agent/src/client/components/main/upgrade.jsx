@@ -15,6 +15,8 @@ import newTerm from '../../common/new-terminal'
 import Markdown from '../common/markdown'
 import { refsStatic } from '../common/ref'
 import message from '../common/message'
+import { createTraceContext } from '../../common/quality/trace-context.js'
+import { recordQualityEvent } from '../../common/quality/quality-events.js'
 import './upgrade.styl'
 
 const e = window.translate
@@ -69,23 +71,49 @@ export default class Upgrade extends PureComponent {
   }
 
   doUpgrade = debounce(async () => {
+    const traceContext = createTraceContext({
+      module: 'updater',
+      action: 'upgrade'
+    })
     if (this.props.upgradeInfo.upgradeReady) {
-      await window.pre.runGlobalAsync('nativeUpdateInstall')
+      await window.pre.runGlobalAsync('nativeUpdateInstall', traceContext)
       return
     }
     const { installSrc } = this.props
     if (!isMac && !isWin && installSrc === 'npm') {
-      return window.store.addTab(
-        {
-          ...newTerm(undefined, true),
-          runScripts: [
-            {
-              script: 'npm install -g aigshell',
-              delay: 500
-            }
-          ]
-        }
-      )
+      recordQualityEvent(traceContext, {
+        module: 'updater',
+        action: 'install',
+        phase: 'started'
+      })
+      try {
+        const result = await window.store.addTab(
+          {
+            ...newTerm(undefined, true),
+            runScripts: [
+              {
+                script: 'npm install -g aigshell',
+                delay: 500
+              }
+            ]
+          }
+        )
+        recordQualityEvent(traceContext, {
+          module: 'updater',
+          action: 'install',
+          phase: 'completed',
+          result: 'npm'
+        })
+        return result
+      } catch (err) {
+        recordQualityEvent(traceContext, {
+          module: 'updater',
+          action: 'install',
+          phase: 'failed',
+          result: 'failed'
+        })
+        throw err
+      }
     }
     this.changeProps({
       upgrading: true,
@@ -102,7 +130,11 @@ export default class Upgrade extends PureComponent {
       }
     }
     try {
-      const checked = await window.pre.runGlobalAsync('nativeUpdateCheck', updateOptions)
+      const checked = await window.pre.runGlobalAsync(
+        'nativeUpdateCheck',
+        updateOptions,
+        traceContext
+      )
       if (checked?.status && checked.status !== 'update') {
         this.changeProps({
           upgrading: false,
@@ -112,7 +144,11 @@ export default class Upgrade extends PureComponent {
         return
       }
       this.trackNativeUpdateProgress()
-      const downloadState = await window.pre.runGlobalAsync('nativeUpdateDownload', updateOptions)
+      const downloadState = await window.pre.runGlobalAsync(
+        'nativeUpdateDownload',
+        updateOptions,
+        traceContext
+      )
       if (downloadState?.status && downloadState.status !== 'downloading' && !downloadState.downloaded) {
         this.clearNativeUpdatePoll()
         this.changeProps({
@@ -191,7 +227,22 @@ export default class Upgrade extends PureComponent {
 
   getLatestRelease = async (isManual = false) => {
     const { installSrc } = this.props
+    const traceContext = createTraceContext({
+      module: 'updater',
+      action: 'check'
+    })
+    recordQualityEvent(traceContext, {
+      module: 'updater',
+      action: 'check',
+      phase: 'started'
+    })
     if (checkSkipSrc(installSrc)) {
+      recordQualityEvent(traceContext, {
+        module: 'updater',
+        action: 'check',
+        phase: 'completed',
+        result: 'skipped'
+      })
       return
     }
     const checkingMessage = isManual ? message.info('正在检查更新...', 0) : null
@@ -215,9 +266,21 @@ export default class Upgrade extends PureComponent {
       if (isManual) {
         this.showNoUpdateInfo(errorMessage, 'error')
       }
+      recordQualityEvent(traceContext, {
+        module: 'updater',
+        action: 'check',
+        phase: 'failed',
+        result: 'failed'
+      })
       return
     }
     checkingMessage?.destroy()
+    recordQualityEvent(traceContext, {
+      module: 'updater',
+      action: 'check',
+      phase: 'completed',
+      result: releaseStatus.status || 'completed'
+    })
     const remoteVersion = releaseStatus.tag_name || ''
     const releaseInfo = releaseStatus.body
       ? { body: releaseStatus.body, date: releaseStatus.date || '未知日期' }
@@ -454,9 +517,12 @@ export default class Upgrade extends PureComponent {
   }
 
   render () {
-    const { shouldUpgrade, checkingRemoteVersion, error } = this.props.upgradeInfo
-    if (error) {
+    const { shouldUpgrade, checkingRemoteVersion, error, showUpdateCenter } = this.props.upgradeInfo
+    if (error && !showUpdateCenter) {
       return this.renderError(error)
+    }
+    if (showUpdateCenter) {
+      return null
     }
     if (!shouldUpgrade) {
       return null

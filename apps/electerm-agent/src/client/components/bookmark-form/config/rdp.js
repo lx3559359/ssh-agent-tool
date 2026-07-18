@@ -26,7 +26,7 @@ const rdpConfig = {
         {
           type: 'wiki',
           name: 'rdp-limitation-warning',
-          link: 'https://github.com/electerm/electerm/wiki/RDP-limitation'
+          link: 'https://github.com/lx3559359/ssh-agent-tool/blob/master/docs/USER_GUIDE_ZH.md'
         },
         commonFields.category,
         commonFields.colorTitle,

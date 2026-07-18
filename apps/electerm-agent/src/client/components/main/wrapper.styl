@@ -2,8 +2,17 @@
 .error-wrapper
   background var(--main)
   height 100%
+  width 100%
+  box-sizing border-box
   position fixed
   overflow-y scroll
+  color var(--text)
+
+.sp-safe-error-diagnostic
+  max-width 720px
+  border 1px solid var(--main-darker)
+  border-radius 6px
+  background var(--main-light)
 
 #container
   .xterm

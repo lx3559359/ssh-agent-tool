@@ -6,7 +6,7 @@ const widgetInfo = {
   name: 'Local FTP Server',
   description: 'A local FTP server to share files over FTP protocol.',
   version: '1.0.0',
-  author: 'ZHAO Xudong',
+  author: 'ShellPilot Team',
   type: 'instance',
   builtin: true,
   configs: [

@@ -3,6 +3,8 @@ import { redactAuditText } from './audit-redaction.js'
 import { buildSafetyRequest, operationStates } from './models.js'
 import { buildCommandExecution } from './command-execution.js'
 import { resolveInternalSubmissionHooks } from './command-submission-hooks.js'
+import { createTraceContext } from '../quality/trace-context.js'
+import { recordQualityEvent } from '../quality/quality-events.js'
 
 const supportedSources = new Set(['quick-command', 'agent'])
 
@@ -82,6 +84,17 @@ export function createSafetyCommandEntrypoint (options = {}) {
   let activeExecution = null
   const detachedExecutions = new Map()
   const completingExecutions = new Map()
+
+  function recordRunEvent (run, phase, result) {
+    if (!run?.traceContext || (phase !== 'started' && run.qualityFinished)) return
+    if (phase !== 'started') run.qualityFinished = true
+    recordQualityEvent(run.traceContext, {
+      module: 'ssh',
+      action: 'safety-command',
+      phase,
+      ...(result ? { result } : {})
+    })
+  }
 
   function beginSession () {
     generation += 1
@@ -237,6 +250,7 @@ export function createSafetyCommandEntrypoint (options = {}) {
       error: reason || '命令执行已取消。',
       operationId: execution.id
     })
+    recordRunEvent(execution.qualityRun, 'cancelled', 'cancelled')
     if (!execution.cancelPromise) {
       execution.cancelPromise = Promise.resolve()
         .then(() => runner.cancel(execution.id))
@@ -420,6 +434,7 @@ export function createSafetyCommandEntrypoint (options = {}) {
             error: '终端会话已失效，已忽略迟到的命令完成结果。',
             operationId: execution.id
           })
+          recordRunEvent(execution.qualityRun, 'cancelled', 'cancelled')
           return false
         }
         removeExecution(execution)
@@ -431,6 +446,13 @@ export function createSafetyCommandEntrypoint (options = {}) {
           exitCode,
           submittedCommand: execution.submittedCommand
         })
+        const failed = (exitCode !== null && exitCode !== 0) ||
+          operation?.state === operationStates.failed
+        recordRunEvent(
+          execution.qualityRun,
+          failed ? 'failed' : 'completed',
+          failed ? 'failed' : 'completed'
+        )
         return true
       } catch (error) {
         if (execution.cancelled) return false
@@ -450,6 +472,7 @@ export function createSafetyCommandEntrypoint (options = {}) {
           operationId: execution.id,
           error: `安全事务完成失败：${safeErrorMessage(error)}`
         })
+        recordRunEvent(execution.qualityRun, 'failed', 'failed')
         onError(error)
         return false
       } finally {
@@ -480,7 +503,7 @@ export function createSafetyCommandEntrypoint (options = {}) {
         executionMode: runOptions.executionMode || 'foreground'
       })
       if (!isCurrent(run)) return staleRunResult({ id: run.operationId })
-      const operationId = createId()
+      const operationId = run.operationId
       const executionPlan = buildCommandExecution({
         command,
         operationId,
@@ -496,7 +519,8 @@ export function createSafetyCommandEntrypoint (options = {}) {
         metadata: {
           ...(runOptions.metadata || {}),
           commandEntrypoint: true,
-          execution: executionPlan.metadata
+          execution: executionPlan.metadata,
+          traceId: run.traceContext.traceId
         }
       })
       run.operationId = request.id
@@ -561,7 +585,8 @@ export function createSafetyCommandEntrypoint (options = {}) {
         generation: run.generation,
         hookState: run.hookState,
         settled: false,
-        cancelled: false
+        cancelled: false,
+        qualityRun: run
       }
       activeExecution = execution
       try {
@@ -609,12 +634,18 @@ export function createSafetyCommandEntrypoint (options = {}) {
       }
       return result
     } finally {
+      run.removeAbortListener?.()
       if (pendingRun === run) pendingRun = null
     }
   }
 
   function runSafetyCommand (value, runOptions = {}) {
     const command = String(value || '')
+    if (runOptions.signal?.aborted) {
+      const error = new Error('Command safety preparation cancelled')
+      error.name = 'AbortError'
+      return Promise.reject(error)
+    }
     if (!command.trim()) {
       return Promise.reject(new Error('命令不能为空。'))
     }
@@ -664,14 +695,44 @@ export function createSafetyCommandEntrypoint (options = {}) {
         new Error('命令包含疑似凭据，无法安全记录，命令尚未发送。')
       )
     }
+    const operationId = createId()
+    const traceContext = createTraceContext({
+      ...(runOptions.traceContext?.traceId
+        ? { traceId: runOptions.traceContext.traceId }
+        : {}),
+      operationId,
+      module: 'ssh',
+      action: 'safety-command'
+    })
     const run = {
       command,
       runOptions,
       generation,
-      hookState: createHookState(internalHooks)
+      hookState: createHookState(internalHooks),
+      operationId,
+      traceContext,
+      qualityFinished: false
     }
     pendingRun = run
-    run.promise = executeRun(run)
+    if (runOptions.signal) {
+      const onAbort = () => {
+        if (pendingRun !== run && pendingConfirmation?.run !== run) return
+        Promise.resolve(invalidatePending(false)).catch(onError)
+      }
+      runOptions.signal.addEventListener('abort', onAbort, { once: true })
+      run.removeAbortListener = () => {
+        runOptions.signal.removeEventListener('abort', onAbort)
+      }
+    }
+    recordRunEvent(run, 'started')
+    run.promise = executeRun(run).then(result => {
+      if (result?.cancelled) recordRunEvent(run, 'cancelled', 'cancelled')
+      else if (result?.retryable || result?.blocked) recordRunEvent(run, 'failed', 'failed')
+      return result
+    }, error => {
+      recordRunEvent(run, 'failed', 'failed')
+      throw error
+    })
     return run.promise
   }
 

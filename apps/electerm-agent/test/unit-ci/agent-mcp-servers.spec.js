@@ -45,7 +45,7 @@ test('MCP server prompt lists enabled user configured servers only', async () =>
   assert.match(prompt, /MCP Server/)
   assert.match(prompt, /Prometheus/)
   assert.match(prompt, /stdio/)
-  assert.match(prompt, /prometheus-mcp/)
+  assert.doesNotMatch(prompt, /prometheus-mcp|127\.0\.0\.1/)
   assert.match(prompt, /指标查询/)
   assert.doesNotMatch(prompt, /cmdb\.example\.com/)
 })
@@ -113,4 +113,27 @@ test('AI settings form exposes external MCP server management fields', () => {
   assert.match(source, /name:\s*'url'/)
   assert.match(source, /name=\{\[name,\s*'disabled'\]\}/)
   assert.match(source, /e\('shellpilotAiAddMcpServer'\)/)
+})
+test('MCP prompts never expose transport credentials or commands', async () => {
+  const { buildAgentMcpServerPrompt, buildMcpServerContextPrompt } = await import(moduleUrl)
+  const mcpServers = [{
+    name: 'Secure CMDB',
+    transport: 'http',
+    url: 'https://user:url-password@cmdb.example.com/mcp?token=query-secret',
+    description: 'CMDB lookup Authorization: Bearer description-secret'
+  }, {
+    name: 'Local metrics',
+    transport: 'stdio',
+    command: 'env TOKEN=command-secret metrics-mcp',
+    args: '--api-key args-secret'
+  }]
+  const prompt = [
+    buildAgentMcpServerPrompt({ mcpServers }),
+    buildMcpServerContextPrompt({ mcpServers })
+  ].join('\n')
+
+  assert.match(prompt, /Secure CMDB|Local metrics/)
+  assert.match(prompt, /http|stdio/)
+  assert.doesNotMatch(prompt, /url-password|query-secret|description-secret|command-secret|args-secret/)
+  assert.doesNotMatch(prompt, /cmdb\.example\.com|metrics-mcp|--api-key/)
 })
