@@ -224,7 +224,7 @@ function classifySafeFailure (message) {
   return 'unclassified'
 }
 
-test('Agent readonly SSH exec remains isolated, evidenced and fast on a real server', async ({ browserName }, testInfo) => {
+test('Agent readonly SSH exec remains isolated, evidenced and fast on a real server', async ({ browserName }) => {
   expect(browserName).toBeTruthy()
   const { config, missingEnvironmentVariables } = readRealServerConfig()
   test.skip(
@@ -313,17 +313,6 @@ test('Agent readonly SSH exec remains isolated, evidenced and fast on a real ser
       () => readonlyCommands
     ).flat())
     expect(p95Ms).toBeLessThanOrEqual(3000)
-    testInfo.annotations.push({ type: 'p95Ms', description: String(p95Ms) })
-    await testInfo.attach('agent-readonly-real-statistics.json', {
-      body: Buffer.from(JSON.stringify({
-        samples: samples.length,
-        p95Ms,
-        minMs: Math.min(...durations),
-        maxMs: Math.max(...durations),
-        minOutputBytes: Math.min(...samples.map(sample => sample.outputBytes))
-      })),
-      contentType: 'application/json'
-    })
   } finally {
     await client?.evaluate(() => {
       const monitor = window.__shellpilotAgentReadonlyPtyMonitor
