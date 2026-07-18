@@ -239,11 +239,10 @@ const inputOptionValues = Object.freeze({
   ])
 })
 
-function isUnboundedInputSource (value) {
-  const source = String(value || '').replace(/^--[^=]+=/, '')
+function isSpecialStreamSource (value) {
+  const source = String(value || '').replace(/^-{1,2}[^=]+=/, '')
   if (source === '/dev/null') return false
-  return source === '-' || source === '/proc/kmsg' ||
-    /^\/dev(?:\/|$)/.test(source) ||
+  return source === '/proc/kmsg' || /^\/dev(?:\/|$)/.test(source) ||
     /^\/proc\/(?:self|thread-self|\d+)\/fd(?:\/|$)/.test(source)
 }
 
@@ -272,29 +271,73 @@ function positionalArguments (words, valueOptions = new Set()) {
   return positionals
 }
 
-function hasImplicitStandardInput (name, args) {
+function hasScriptOption (name, args) {
+  return optionEnabled(args, {
+    short: 'ef',
+    booleanValue: false
+  }) || optionEnabled(args, {
+    long: name === 'grep' ? '--regexp' : '--expression',
+    booleanValue: false
+  }) || optionEnabled(args, {
+    long: '--file',
+    booleanValue: false
+  })
+}
+
+function consumerInputSources (name, args) {
   const positionals = positionalArguments(args, inputOptionValues[name])
   if (name === 'grep' || name === 'sed') {
-    const hasScriptOption = optionEnabled(args, {
-      short: 'ef',
-      booleanValue: false
-    }) || optionEnabled(args, {
-      long: name === 'grep' ? '--regexp' : '--expression',
-      booleanValue: false
-    }) || optionEnabled(args, {
-      long: '--file',
-      booleanValue: false
-    })
-    return positionals.length <= (hasScriptOption ? 0 : 1)
+    return positionals.slice(hasScriptOption(name, args) ? 0 : 1)
   }
-  return positionals.length === 0
+  return positionals
+}
+
+const shortFileOptionCommands = new Set(['date', 'grep', 'kubectl', 'sed'])
+
+function isExplicitUnboundedInput (name, args) {
+  let parseOptions = true
+  for (let index = 0; index < args.length; index += 1) {
+    const word = args[index]
+    if (parseOptions && word === '--') {
+      parseOptions = false
+      continue
+    }
+    if (!parseOptions) continue
+    if (word === '--stdin' || word.startsWith('--stdin=')) return true
+
+    const longOption = ['--file', '--filename'].find(option => (
+      word === option || word.startsWith(`${option}=`)
+    ))
+    if (longOption) {
+      const value = word === longOption
+        ? args[index + 1]
+        : word.slice(longOption.length + 1)
+      if (!value || value === '-' || isSpecialStreamSource(value)) return true
+      if (word === longOption) index += 1
+      continue
+    }
+
+    if (shortFileOptionCommands.has(name) && word.startsWith('-f')) {
+      const value = word === '-f'
+        ? args[index + 1]
+        : word.slice(2).replace(/^=/, '')
+      if (!value || value === '-' || isSpecialStreamSource(value)) return true
+      if (word === '-f') index += 1
+    }
+  }
+  return false
 }
 
 function hasUnboundedInputSource (command) {
   const [executable, ...args] = staticInvocationWords(command)
   const name = executableName(executable)
+  if (args.some(isSpecialStreamSource) || isExplicitUnboundedInput(name, args)) {
+    return true
+  }
   if (!inputConsumingCommands.has(name)) return false
-  return args.some(isUnboundedInputSource) || hasImplicitStandardInput(name, args)
+  const sources = consumerInputSources(name, args)
+  return sources.length === 0 ||
+    sources.some(source => source === '-' || isSpecialStreamSource(source))
 }
 
 function scopeFor (name) {
@@ -420,13 +463,13 @@ function classifyShellText (text) {
   if (shellSyntax.executionExpansion || shellSyntax.controlOperator) {
     return result('unauditable', 'DYNAMIC_OR_PIPED_SHELL')
   }
-  if (isStreamingCommand(command) || hasUnboundedInputSource(command) ||
-    resourceSensitivePatterns.some(pattern => pattern.test(command))) {
-    return result('risky', 'RESOURCE_SENSITIVE_READ')
-  }
   const classified = classifyCommand(command)
   if (classified.risk === 'blocked') {
     return result('blocked', 'COMMAND_BLOCKED')
+  }
+  if (isStreamingCommand(command) || hasUnboundedInputSource(command) ||
+    resourceSensitivePatterns.some(pattern => pattern.test(command))) {
+    return result('risky', 'RESOURCE_SENSITIVE_READ')
   }
   if (classified.risk === 'change') {
     return result('risky', 'COMMAND_CHANGES_STATE')

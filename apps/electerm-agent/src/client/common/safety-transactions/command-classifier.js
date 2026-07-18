@@ -738,7 +738,7 @@ function changeProvider (command) {
 
 const inherentlyReadonlyCommands = new Set([
   'uptime', 'whoami', 'id', 'pwd', 'df', 'du', 'free', 'ps', 'ls',
-  'stat', 'wc', 'which', 'uname', 'lsof', 'cat', 'less', 'head', 'tail', 'grep'
+  'stat', 'wc', 'which', 'uname', 'lsof', 'cat', 'head', 'tail', 'grep'
 ])
 const journalctlShortOptions = /^-[abDefFgklmMnopqrStuUWxN]+$/
 
@@ -772,7 +772,7 @@ function isReadonlyJournalctl (words) {
     '--unit', '--user-unit', '--identifier', '--priority', '--facility',
     '--grep', '--since', '--until', '--lines', '--output', '--output-fields',
     '--field', '--directory', '--file', '--root', '--machine', '--namespace',
-    '--cursor', '--after-cursor', '--cursor-file', '--case-sensitive', '--verify-key'
+    '--cursor', '--after-cursor', '--case-sensitive', '--verify-key'
   ]
   for (let index = 1; index < words.length; index += 1) {
     const word = words[index]
@@ -820,6 +820,20 @@ function isReadonlySs (words) {
     if (!word.startsWith('-')) return true
     return /^-[HOnraletuxwpmios460]+$/.test(word) || longOptions.test(word)
   })
+}
+
+function isReadonlyLess (words) {
+  let parseOptions = true
+  for (const word of words.slice(1)) {
+    if (parseOptions && word === '--') {
+      parseOptions = false
+      continue
+    }
+    if (!parseOptions) continue
+    if (word.startsWith('+') || word === '-o' || word === '-O' ||
+      /^-[oO].+/.test(word) || word.toLowerCase().startsWith('--log')) return false
+  }
+  return true
 }
 
 function isReadonlyIptables (words) {
@@ -877,22 +891,74 @@ function isReadonlyKubectl (words) {
   return ['get', 'describe', 'logs', 'top', 'version'].includes(action)
 }
 
+function hasGitSideEffectOption (words) {
+  for (const word of words.slice(2)) {
+    if (word === '--') break
+    if (word === '--output' || word.startsWith('--output=') ||
+      word === '--ext-diff' || word === '--textconv') return true
+  }
+  return false
+}
+
+function isReadonlyGitRemote (words) {
+  const args = words.slice(2)
+  let index = 0
+  if (args[index] === '-v' || args[index] === '--verbose') index += 1
+  if (index === args.length) return true
+
+  const action = args[index]
+  index += 1
+  if (action === 'show') {
+    if (args[index] === '-n') index += 1
+    const remotes = args.slice(index)
+    return remotes.length > 0 && remotes.every(remote => !remote.startsWith('-'))
+  }
+  if (action === 'get-url') {
+    while (args[index] === '--push' || args[index] === '--all') index += 1
+    const remotes = args.slice(index)
+    return remotes.length === 1 && !remotes[0].startsWith('-')
+  }
+  return false
+}
+
 function isReadonlyGit (words) {
   const action = words[1]?.toLowerCase()
-  if (['status', 'log', 'show', 'diff'].includes(action)) return true
+  if (['status', 'log', 'show', 'diff'].includes(action)) {
+    return !hasGitSideEffectOption(words)
+  }
   if (action === 'branch') {
     return words.slice(2).every(word => (
       /^-(?:a|r|v|vv)$/.test(word) ||
       ['--all', '--remotes', '--verbose', '--list', '--show-current'].includes(word)
     ))
   }
-  if (action === 'remote') {
-    return words.slice(2).every(word => (
-      word === '-v' || word === '--verbose' || word === 'show' ||
-      word === 'get-url' || !word.startsWith('-')
-    ))
-  }
+  if (action === 'remote') return isReadonlyGitRemote(words)
   return false
+}
+
+function isReadonlyFirewallCmd (words) {
+  const selectors = new Set([
+    '--permanent', '--direct', '--verbose', '--quiet', '--zone', '--policy',
+    '--ipset', '--service', '--helper', '--icmptype'
+  ])
+  let hasQuery = false
+  for (const word of words.slice(1)) {
+    if (word === '--state' ||
+      /^--(?:get|list|query|info|path)-[A-Za-z0-9-]+(?:=.*)?$/.test(word) ||
+      word === '--check-config') {
+      hasQuery = true
+      continue
+    }
+    const selector = word.split('=', 1)[0]
+    if (selectors.has(selector) || !word.startsWith('-')) continue
+    return false
+  }
+  return hasQuery
+}
+
+function isReadonlyUfw (words) {
+  return words[1]?.toLowerCase() === 'status' &&
+    words.slice(2).every(word => ['verbose', 'numbered'].includes(word.toLowerCase()))
 }
 
 function isReadonly (command) {
@@ -905,6 +971,7 @@ function isReadonly (command) {
   if (executable === 'date') return isReadonlyDate(words)
   if (executable === 'journalctl') return isReadonlyJournalctl(words)
   if (executable === 'ss') return isReadonlySs(words)
+  if (executable === 'less') return isReadonlyLess(words)
   if (executable === 'sed') return isReadonlySed(words, tokens.map(token => token.quote))
   if (executable === 'find') {
     const output = findOutputTargets(words)
@@ -919,8 +986,8 @@ function isReadonly (command) {
       (!action || readonlyActions.includes(action))
   }
   if (executable === 'systemctl') return isReadonlySystemctl(words)
-  if (executable === 'firewall-cmd') return /^(?:--state|--list-[A-Za-z-]+|--query-[A-Za-z-]+)$/i.test(words[1] || '')
-  if (executable === 'ufw') return words[1]?.toLowerCase() === 'status'
+  if (executable === 'firewall-cmd') return isReadonlyFirewallCmd(words)
+  if (executable === 'ufw') return isReadonlyUfw(words)
   if (executable === 'iptables' || executable === 'ip6tables') return isReadonlyIptables(words)
   if (executable === 'nft') return words[1]?.toLowerCase() === 'list'
   if (executable === 'ifconfig') return words.length <= 2 && (!words[1] || words[1] === '-a' || !words[1].startsWith('-'))

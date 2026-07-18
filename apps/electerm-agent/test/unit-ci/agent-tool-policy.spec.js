@@ -285,6 +285,71 @@ test('rejects unbounded and blocking special input sources', async () => {
   }
 })
 
+test('rejects special streams and explicit stdin across readonly executables', async () => {
+  const { classifyAgentCall, getAgentToolDescriptor } = await import(policyUrl)
+  const descriptor = getAgentToolDescriptor('run_readonly_command')
+  const classify = command => classifyAgentCall({
+    descriptor,
+    args: { command }
+  })
+
+  for (const command of [
+    'date -f -',
+    'date --file=-',
+    'date --file=/dev/zero',
+    'date --file /proc/kmsg',
+    'git log --stdin',
+    'git diff --no-index /dev/zero README.md',
+    'kubectl get -f -',
+    'kubectl get --filename=-',
+    'kubectl get --filename=/proc/kmsg',
+    'ls /dev/random',
+    'stat /dev/mapper/control',
+    'git show /proc/self/fd/0'
+  ]) {
+    const classified = classify(command)
+    assert.equal(classified.outcome, 'risky', command)
+    assert.notEqual(classified.resourceImpact.duration, 'short', command)
+  }
+
+  for (const command of [
+    'date -u +%F',
+    'date -f dates.txt',
+    'date --file=/dev/null',
+    'git log --oneline -5',
+    'git diff --no-index README.md package.json',
+    'kubectl get -A pods',
+    'kubectl get -f manifest.yaml',
+    'kubectl get --filename=/dev/null',
+    'ls /dev/null'
+  ]) {
+    assert.equal(classify(command).outcome, 'allowlisted-readonly', command)
+  }
+})
+
+test('inherits write-capable query exclusions from the command classifier', async () => {
+  const { classifyAgentCall, getAgentToolDescriptor } = await import(policyUrl)
+  const descriptor = getAgentToolDescriptor('run_readonly_command')
+
+  for (const command of [
+    'git diff --output=/tmp/x',
+    'git log --output=/tmp/x',
+    'git remote add origin https://example.test/repo.git',
+    'git remote remove origin',
+    'git remote set-url origin https://example.test/repo.git',
+    'git remote prune origin',
+    'journalctl --cursor-file=/tmp/cursor',
+    'less -o /tmp/less.log README.md',
+    'firewall-cmd --state --add-port=443/tcp'
+  ]) {
+    assert.notEqual(
+      classifyAgentCall({ descriptor, args: { command } }).outcome,
+      'allowlisted-readonly',
+      command
+    )
+  }
+})
+
 test('keeps non-allowlisted periodic tools outside the readonly fast path', async () => {
   const { classifyAgentCall, getAgentToolDescriptor } = await import(policyUrl)
   const descriptor = getAgentToolDescriptor('run_readonly_command')
