@@ -1,4 +1,9 @@
 import { agentSkillClient } from './agent-skill-client.js'
+import {
+  assertAgentArtifactRiskContext,
+  assertAgentRemoteRiskContext,
+  assertAgentSessionControlRiskContext
+} from './agent-risk-context.js'
 
 const digestPattern = /^[a-f0-9]{64}$/
 const localEnvironmentKeys = Object.freeze([
@@ -185,9 +190,11 @@ export async function prepareSkillArtifactCall ({
   skillBinding,
   artifactId,
   args,
+  riskContext,
   endpoint,
   client = agentSkillClient
 } = {}) {
+  const artifactRiskContext = assertAgentArtifactRiskContext(riskContext)
   if (!client || typeof client.getAgentSkillMetadata !== 'function' ||
     typeof client.readAgentSkillFile !== 'function') {
     throw new TypeError('A confined Agent Skill client is required')
@@ -199,6 +206,9 @@ export async function prepareSkillArtifactCall ({
     skillBinding
   )
   const artifact = findArtifact(before, artifactId)
+  const confirmedRiskContext = artifact.target === 'remote'
+    ? assertAgentRemoteRiskContext(artifactRiskContext)
+    : assertAgentSessionControlRiskContext(artifactRiskContext)
   const file = await client.readAgentSkillFile(id, artifact.path)
   if (!file || file.path !== artifact.path || !digestPattern.test(String(file.digest || ''))) {
     throw skillError('SKILL_FILE_DIGEST_INVALID', 'Skill artifact file digest is invalid.')
@@ -272,11 +282,13 @@ export async function prepareSkillArtifactCall ({
           file.content
         ),
         script: file.content,
-        scriptArguments: artifactArgs
+        scriptArguments: artifactArgs,
+        riskContext: confirmedRiskContext
       })
       : deepFreeze({
         tool: artifact.interpreter,
-        args: artifactArgs
+        args: artifactArgs,
+        riskContext: confirmedRiskContext
       }),
     expandedContent: String(file.content || ''),
     skillArtifact,
@@ -291,6 +303,7 @@ export async function prepareSelectedSkillArtifactCall ({
   skillId,
   artifactId,
   args,
+  riskContext,
   skillBindings = [],
   endpoint,
   client = agentSkillClient
@@ -307,6 +320,7 @@ export async function prepareSelectedSkillArtifactCall ({
     skillBinding: binding,
     artifactId,
     args,
+    riskContext,
     endpoint,
     client
   })

@@ -8,6 +8,14 @@ function modalTitle (kind) {
   return '高风险命令确认'
 }
 
+function serializeExpected (step) {
+  try {
+    return JSON.stringify(step.expected)
+  } catch {
+    return '无法序列化'
+  }
+}
+
 export default function TerminalCommandSafetyModal ({
   open,
   confirmation,
@@ -78,14 +86,28 @@ export default function TerminalCommandSafetyModal ({
               <strong>影响目标：</strong>
               {riskContext.impactTargets.join('、')}
             </div>
-            <div><strong>执行后验证：</strong></div>
-            <ul>
-              {riskContext.verification.map((step, index) => (
-                <li key={`${step.name}-${index}`}>
-                  {step.name} <code>{JSON.stringify(step.args)}</code>
-                </li>
-              ))}
-            </ul>
+            <div>
+              <strong>执行后验证：</strong>
+              {riskContext.verification.length === 0 ? '无额外条件' : null}
+            </div>
+            {riskContext.verification.length > 0
+              ? (
+                <ul>
+                  {riskContext.verification.map((step, index) => (
+                    <li key={`${step.name}-${index}`}>
+                      {step.name} <code>{JSON.stringify(step.args)}</code>
+                      {step.expected === undefined
+                        ? '；无额外条件'
+                        : (
+                          <>
+                            ；期望 <code>{serializeExpected(step)}</code>
+                          </>
+                          )}
+                    </li>
+                  ))}
+                </ul>
+                )
+              : null}
           </div>
           )
         : null}

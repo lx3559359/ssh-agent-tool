@@ -38,6 +38,20 @@ const endpoint = Object.freeze({
   sessionType: 'ssh',
   hostKeyFingerprint: 'SHA256:abc'
 })
+const remoteRiskContext = Object.freeze({
+  purpose: 'run the selected remote diagnostic artifact',
+  impactTargets: ['ssh-session:tab-a'],
+  verification: [{
+    name: 'read_service_status',
+    args: { service: 'nginx' },
+    expected: { contains: 'ActiveState=active' }
+  }]
+})
+const localRiskContext = Object.freeze({
+  purpose: 'run the selected local artifact',
+  impactTargets: ['local-process:python3'],
+  verification: []
+})
 
 function metadata (overrides = {}) {
   return {
@@ -105,6 +119,7 @@ test('prepares a digest-bound remote artifact call without executing it', async 
     skillBinding: { id: 'inspect-web-service', version: '1.0.0', digest: packageDigest },
     artifactId: 'collect-evidence',
     args: ['nginx'],
+    riskContext: remoteRiskContext,
     endpoint,
     client,
     execute: () => { executed = true }
@@ -119,12 +134,32 @@ test('prepares a digest-bound remote artifact call without executing it', async 
   assert.deepEqual(call.skillArtifact.arguments, ['nginx'])
   assert.deepEqual(call.skillArtifact.requestedPermissions, ['ssh.read'])
   assert.deepEqual(call.endpoint, endpoint)
+  assert.deepEqual(call.args.riskContext, remoteRiskContext)
+  assert.equal(Object.isFrozen(call.args.riskContext), true)
   assert.equal(Object.isFrozen(call.skillArtifact), true)
   assert.deepEqual(client.calls, [
     ['metadata', 'inspect-web-service'],
     ['read', 'inspect-web-service', 'scripts/collect-evidence.sh'],
     ['metadata', 'inspect-web-service']
   ])
+})
+
+test('missing artifact risk context fails before metadata or file preparation', async () => {
+  const { prepareSelectedSkillArtifactCall } = await import(executionModuleUrl)
+  const client = clientFor()
+
+  await assert.rejects(prepareSelectedSkillArtifactCall({
+    skillId: 'inspect-web-service',
+    artifactId: 'collect-evidence',
+    skillBindings: [{
+      id: 'inspect-web-service',
+      version: '1.0.0',
+      digest: packageDigest
+    }],
+    endpoint,
+    client
+  }), error => error.code === 'AGENT_RISK_CONTEXT_REQUIRED')
+  assert.deepEqual(client.calls, [])
 })
 
 test('remote artifact arguments cannot expand shell variables or substitutions', async () => {
@@ -134,6 +169,7 @@ test('remote artifact arguments cannot expand shell variables or substitutions',
     skillBinding: { id: 'inspect-web-service', version: '1.0.0', digest: packageDigest },
     artifactId: 'collect-evidence',
     args: ['$(touch /tmp/injected)', '`id`', '$HOME', "single'quote"],
+    riskContext: remoteRiskContext,
     endpoint,
     client
   })
@@ -165,6 +201,7 @@ test('PowerShell remote artifacts survive an outer PowerShell command parser wit
     skillBinding: { id: 'inspect-web-service', version: '1.0.0', digest: packageDigest },
     artifactId: 'collect-evidence',
     args: ['literal $HOME `id`'],
+    riskContext: remoteRiskContext,
     endpoint,
     client: clientFor(() => powershellMetadata, script)
   })
@@ -230,6 +267,7 @@ for (const fixture of [
       skillBinding: { id: 'inspect-web-service', version: '1.0.0', digest: packageDigest },
       artifactId: 'collect-evidence',
       args: ['literal $HOME `id`', "single'quote"],
+      riskContext: remoteRiskContext,
       endpoint,
       client: clientFor(() => interpreterMetadata, fixture.script)
     })
@@ -256,6 +294,7 @@ test('production selection resolver accepts only a digest-bound selected Skill',
     skillId: 'inspect-web-service',
     artifactId: 'collect-evidence',
     args: ['nginx'],
+    riskContext: remoteRiskContext,
     skillBindings: [{
       id: 'inspect-web-service',
       version: '1.0.0',
@@ -266,9 +305,11 @@ test('production selection resolver accepts only a digest-bound selected Skill',
   })
 
   assert.equal(call.toolName, 'send_terminal_command')
+  assert.deepEqual(call.args.riskContext, remoteRiskContext)
   await assert.rejects(prepareSelectedSkillArtifactCall({
     skillId: 'not-selected',
     artifactId: 'collect-evidence',
+    riskContext: remoteRiskContext,
     skillBindings: [],
     endpoint,
     client
@@ -299,6 +340,7 @@ test('artifact revalidation rejects package or file changes before gateway dispa
   const call = await prepareSkillArtifactCall({
     skillBinding: { id: 'inspect-web-service', version: '1.0.0', digest: packageDigest },
     artifactId: 'collect-evidence',
+    riskContext: remoteRiskContext,
     endpoint,
     client
   })
@@ -367,6 +409,7 @@ test('ordinary remote scripts reach frozen risk confirmation and grant validatio
   const call = await prepareSkillArtifactCall({
     skillBinding: { id: 'inspect-web-service', version: '1.0.0', digest: packageDigest },
     artifactId: 'collect-evidence',
+    riskContext: remoteRiskContext,
     endpoint,
     client: clientFor(() => metadata(), script)
   })
@@ -406,6 +449,19 @@ test('ordinary remote scripts reach frozen risk confirmation and grant validatio
   })
   assert.deepEqual(frozenCall.args, call.args)
   assert.equal(frozenCall.skillArtifact.fileDigest, fileDigest)
+  await assert.rejects(validateConfirmedRiskTransaction({
+    transaction,
+    planGrant,
+    endpoint,
+    toolName: call.toolName,
+    args: {
+      ...call.args,
+      riskContext: {
+        ...call.args.riskContext,
+        purpose: 'changed after confirmation'
+      }
+    }
+  }), error => error.code === 'PLAN_BINDING_CHANGED')
 })
 
 test('local artifact envelopes are bounded and require explicit broad permissions', async () => {
@@ -432,6 +488,7 @@ test('local artifact envelopes are bounded and require explicit broad permission
     skillBinding: { id: 'inspect-web-service', version: '1.0.0', digest: packageDigest },
     artifactId: 'local-check',
     args: ['--format', 'json'],
+    riskContext: localRiskContext,
     endpoint,
     client
   })

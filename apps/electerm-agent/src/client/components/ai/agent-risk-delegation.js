@@ -1,17 +1,26 @@
 import {
   createInternalCommandRiskDelegation
 } from '../../common/safety-transactions/command-risk-delegation.js'
+import { assertAgentRiskContext } from './agent-risk-context.js'
+
+export {
+  agentRiskCallsRequireVerification,
+  agentArtifactRiskContextSchema,
+  agentRemoteRiskContextSchema,
+  agentRiskContextSchema,
+  agentSessionControlRiskContextSchema,
+  assertAgentArtifactRiskContext,
+  assertAgentRemoteRiskContext,
+  assertAgentRiskContext,
+  assertAgentRiskContextForCall,
+  assertAgentSessionControlRiskContext,
+  resolveAgentRiskContextMode
+} from './agent-risk-context.js'
 
 const delegatedStructuredTools = new Set(['sftp_del'])
 const delegatedCommandTools = new Set([
   'send_terminal_command',
   'run_background_command'
-])
-const supportedVerificationTools = new Set([
-  'read_service_status',
-  'read_recent_logs',
-  'verify_listening_port',
-  'read_file_range'
 ])
 
 function cloneJson (value) {
@@ -54,75 +63,6 @@ export function shouldDelegateAgentSafetyConfirmation (
   }
   const sessionType = options.endpoint?.sessionType || options.endpoint?.type
   return String(sessionType || '').toLowerCase() === 'ssh'
-}
-
-function riskContextRequiredError () {
-  const error = new Error(
-    'Agent risky operations require purpose, impact targets and verification'
-  )
-  error.code = 'AGENT_RISK_CONTEXT_REQUIRED'
-  return error
-}
-
-export const agentRiskContextSchema = deepFreeze({
-  type: 'object',
-  properties: {
-    purpose: { type: 'string', minLength: 1 },
-    impactTargets: {
-      type: 'array',
-      minItems: 1,
-      items: { type: 'string', minLength: 1 }
-    },
-    verification: {
-      type: 'array',
-      minItems: 1,
-      items: {
-        type: 'object',
-        properties: {
-          name: {
-            type: 'string',
-            enum: [...supportedVerificationTools]
-          },
-          args: { type: 'object' },
-          expected: { type: 'object' }
-        },
-        required: ['name', 'args'],
-        additionalProperties: false
-      }
-    }
-  },
-  required: ['purpose', 'impactTargets', 'verification'],
-  additionalProperties: false
-})
-
-export function assertAgentRiskContext (context) {
-  const valid = context && typeof context === 'object' && !Array.isArray(context) &&
-    typeof context.purpose === 'string' && Boolean(context.purpose.trim()) &&
-    Array.isArray(context.impactTargets) && context.impactTargets.length > 0 &&
-    context.impactTargets.every(item => (
-      typeof item === 'string' && Boolean(item.trim())
-    )) &&
-    Array.isArray(context.verification) && context.verification.length > 0 &&
-    context.verification.every(step => (
-      step && typeof step === 'object' && !Array.isArray(step) &&
-      supportedVerificationTools.has(step.name) &&
-      step.args && typeof step.args === 'object' && !Array.isArray(step.args) &&
-      (step.expected === undefined || (
-        step.expected && typeof step.expected === 'object' &&
-        !Array.isArray(step.expected)
-      ))
-    ))
-  if (!valid) throw riskContextRequiredError()
-  try {
-    return deepFreeze(cloneJson(context))
-  } catch {
-    throw riskContextRequiredError()
-  }
-}
-
-export function assertAgentRiskContextForCall ({ args, classification } = {}) {
-  if (classification?.outcome !== 'risky') return null
-  return assertAgentRiskContext(args?.riskContext)
 }
 
 export function createDelegatedAgentSafetyPreparation (

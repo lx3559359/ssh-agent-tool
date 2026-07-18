@@ -44,8 +44,10 @@ import {
   isAgentAsyncRiskResult
 } from './agent-risk-async.js'
 import {
-  agentRiskContextSchema,
-  assertAgentRiskContext,
+  agentRiskCallsRequireVerification,
+  agentArtifactRiskContextSchema,
+  agentRemoteRiskContextSchema,
+  agentSessionControlRiskContextSchema,
   assertAgentRiskContextForCall,
   createDelegatedAgentSafetyPreparation,
   shouldDelegateAgentSafetyConfirmation,
@@ -95,6 +97,17 @@ function buildAddBookmarkParameters () {
   }
 }
 
+function withRequiredRiskContextParameters (parameters, riskContextSchema) {
+  return {
+    ...parameters,
+    properties: {
+      ...parameters.properties,
+      riskContext: riskContextSchema
+    },
+    required: [...new Set([...(parameters.required || []), 'riskContext'])]
+  }
+}
+
 export const agentTools = withAgentToolPolicy(withAgentToolScopes([
   ...structuredAgentTools,
   {
@@ -135,7 +148,7 @@ export const agentTools = withAgentToolPolicy(withAgentToolScopes([
             type: 'string',
             description: '终端标签页 ID。省略时使用当前活动终端。'
           },
-          riskContext: agentRiskContextSchema
+          riskContext: agentRemoteRiskContextSchema
         },
         required: ['command']
       }
@@ -168,7 +181,10 @@ export const agentTools = withAgentToolPolicy(withAgentToolScopes([
       description: '打开新的本地终端标签页，返回新标签页 ID。',
       parameters: {
         type: 'object',
-        properties: {}
+        properties: {
+          riskContext: agentSessionControlRiskContextSchema
+        },
+        required: ['riskContext']
       }
     }
   },
@@ -205,9 +221,10 @@ export const agentTools = withAgentToolPolicy(withAgentToolScopes([
           tabId: {
             type: 'string',
             description: '要切换到的标签页 ID。'
-          }
+          },
+          riskContext: agentSessionControlRiskContextSchema
         },
-        required: ['tabId']
+        required: ['tabId', 'riskContext']
       }
     }
   },
@@ -222,9 +239,10 @@ export const agentTools = withAgentToolPolicy(withAgentToolScopes([
           tabId: {
             type: 'string',
             description: '要关闭的标签页 ID。'
-          }
+          },
+          riskContext: agentSessionControlRiskContextSchema
         },
-        required: ['tabId']
+        required: ['tabId', 'riskContext']
       }
     }
   },
@@ -250,9 +268,10 @@ export const agentTools = withAgentToolPolicy(withAgentToolScopes([
           id: {
             type: 'string',
             description: '要打开的书签 ID。'
-          }
+          },
+          riskContext: agentSessionControlRiskContextSchema
         },
-        required: ['id']
+        required: ['id', 'riskContext']
       }
     }
   },
@@ -261,7 +280,10 @@ export const agentTools = withAgentToolPolicy(withAgentToolScopes([
     function: {
       name: 'add_bookmark',
       description: '创建新书签。需要指定类型并提供该类型对应字段。支持类型：' + Object.keys(bookmarkSchemas).join(', ') + '。',
-      parameters: buildAddBookmarkParameters()
+      parameters: withRequiredRiskContextParameters(
+        buildAddBookmarkParameters(),
+        agentSessionControlRiskContextSchema
+      )
     }
   },
   {
@@ -269,7 +291,10 @@ export const agentTools = withAgentToolPolicy(withAgentToolScopes([
     function: {
       name: 'open_tab',
       description: '使用连接参数直接打开终端标签页，不创建书签。支持类型：' + Object.keys(bookmarkSchemas).join(', ') + '。',
-      parameters: buildAddBookmarkParameters()
+      parameters: withRequiredRiskContextParameters(
+        buildAddBookmarkParameters(),
+        agentSessionControlRiskContextSchema
+      )
     }
   },
   {
@@ -362,7 +387,7 @@ export const agentTools = withAgentToolPolicy(withAgentToolScopes([
             type: 'string',
             description: 'SSH/FTP 标签页 ID。省略时使用当前活动标签页。'
           },
-          riskContext: agentRiskContextSchema
+          riskContext: agentRemoteRiskContextSchema
         },
         required: ['remotePath', 'riskContext']
       }
@@ -388,7 +413,7 @@ export const agentTools = withAgentToolPolicy(withAgentToolScopes([
             type: 'string',
             description: 'SSH/FTP 标签页 ID。省略时使用当前活动标签页。'
           },
-          riskContext: agentRiskContextSchema
+          riskContext: agentRemoteRiskContextSchema
         },
         required: ['localPath', 'remotePath', 'riskContext']
       }
@@ -414,7 +439,7 @@ export const agentTools = withAgentToolPolicy(withAgentToolScopes([
             type: 'string',
             description: 'SSH/FTP 标签页 ID。省略时使用当前活动标签页。'
           },
-          riskContext: agentRiskContextSchema
+          riskContext: agentRemoteRiskContextSchema
         },
         required: ['remotePath', 'localPath', 'riskContext']
       }
@@ -469,8 +494,10 @@ export const agentTools = withAgentToolPolicy(withAgentToolScopes([
           tabId: {
             type: 'string',
             description: '标签页 ID。省略时使用当前活动终端。'
-          }
-        }
+          },
+          riskContext: agentSessionControlRiskContextSchema
+        },
+        required: ['riskContext']
       }
     }
   },
@@ -500,7 +527,7 @@ export const agentTools = withAgentToolPolicy(withAgentToolScopes([
             type: 'number',
             description: '可选超时时间，单位毫秒'
           },
-          riskContext: agentRiskContextSchema
+          riskContext: agentSessionControlRiskContextSchema
         },
         required: ['tool', 'riskContext']
       }
@@ -548,9 +575,10 @@ export const agentTools = withAgentToolPolicy(withAgentToolScopes([
             type: 'array',
             items: { type: 'string' },
             description: 'Separate artifact arguments; never a shell command string.'
-          }
+          },
+          riskContext: agentArtifactRiskContextSchema
         },
-        required: ['skillId', 'artifactId']
+        required: ['skillId', 'artifactId', 'riskContext']
       }
     }
   },
@@ -570,7 +598,7 @@ export const agentTools = withAgentToolPolicy(withAgentToolScopes([
             type: 'string',
             description: '标签页 ID。省略时使用当前活动终端。'
           },
-          riskContext: agentRiskContextSchema
+          riskContext: agentRemoteRiskContextSchema
         },
         required: ['command', 'riskContext']
       }
@@ -625,9 +653,10 @@ export const agentTools = withAgentToolPolicy(withAgentToolScopes([
           taskId: {
             type: 'string',
             description: 'run_background_command 返回的任务 ID。'
-          }
+          },
+          riskContext: agentSessionControlRiskContextSchema
         },
-        required: ['taskId']
+        required: ['taskId', 'riskContext']
       }
     }
   }
@@ -698,7 +727,13 @@ function recoveryFor (toolName, args) {
 
 function buildResolvedRiskTransaction (toolName, args, runtime, context = {}) {
   const recovery = recoveryFor(toolName, args)
-  const riskContext = assertAgentRiskContext(args.riskContext)
+  const riskContext = assertAgentRiskContextForCall({
+    toolName,
+    args,
+    descriptor: context.descriptor,
+    classification: context.classification,
+    skillArtifact: context.skillArtifact
+  })
   const artifactDigests = [
     ...(runtime.selectedSkillArtifactDigests || []),
     ...(toolName === 'sftp_upload' && args.sourceDescriptor?.digest
@@ -849,6 +884,7 @@ export async function prepareAgentRiskBatch (toolCalls, runtime = {}) {
     assertAgentRiskContextForCall({
       toolName,
       args: boundArgs,
+      descriptor,
       classification
     })
     if (classification.outcome !== 'risky') continue
@@ -919,7 +955,9 @@ async function prepareResolvedAgentTool (toolName, args, runtime, context = {}) 
   assertAgentRiskContextForCall({
     toolName,
     args,
-    classification: context.classification
+    descriptor: context.descriptor,
+    classification: context.classification,
+    skillArtifact: context.skillArtifact
   })
   const batchPreparation = batchPreparationFor(runtime)
   if (batchPreparation) return batchPreparation
@@ -1209,7 +1247,9 @@ function assertVerificationExpectation (step, result) {
 async function verifyPreparedAgentRisk (preparation, endpoint, runtime) {
   const verification = preparation?.riskTransaction?.verification ||
     preparation?.verification || []
-  assertAgentVerificationDeclared(verification)
+  if (agentRiskCallsRequireVerification(preparation?.riskTransaction?.calls)) {
+    assertAgentVerificationDeclared(verification)
+  }
   for (const step of verification) {
     if (!structuredVerificationTools.has(step?.name)) {
       const error = new Error(`Unsupported Agent verification tool: ${String(step?.name)}`)
@@ -1307,14 +1347,27 @@ export async function executeToolCall (
 ) {
   if (toolName === 'run_skill_artifact' && !controlledSkillCall) {
     const pseudoDescriptor = getAgentToolDescriptor(toolName)
+    const args = bindAgentToolArgs(toolName, rawArgs, runtime)
+    assertAgentRuntimeActive(runtime)
+    const initialClassification = classifyAgentCall({
+      descriptor: pseudoDescriptor,
+      args
+    })
+    const riskContext = assertAgentRiskContextForCall({
+      toolName,
+      args,
+      descriptor: pseudoDescriptor,
+      classification: initialClassification
+    })
     const endpoint = resolveAgentExecutionEndpoint({
       descriptor: pseudoDescriptor,
       runtime
     })
     const call = await prepareSelectedSkillArtifactCall({
-      skillId: rawArgs?.skillId,
-      artifactId: rawArgs?.artifactId,
-      args: rawArgs?.args,
+      skillId: args.skillId,
+      artifactId: args.artifactId,
+      args: args.args,
+      riskContext,
       skillBindings: runtime.selectedSkillBindings || [],
       endpoint
     })
@@ -1335,7 +1388,9 @@ export async function executeToolCall (
   assertAgentRiskContextForCall({
     toolName,
     args,
-    classification: initialClassification
+    descriptor,
+    classification: initialClassification,
+    skillArtifact: controlledSkillCall?.skillArtifact
   })
   const currentEndpoint = resolveAgentExecutionEndpoint({
     descriptor,

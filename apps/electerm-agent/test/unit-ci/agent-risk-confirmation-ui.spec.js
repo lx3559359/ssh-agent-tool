@@ -31,4 +31,5 @@ test('risk confirmation modal renders every required authorization detail', () =
   assert.match(source, /signal.*abort|addEventListener\('abort'/s)
   assert.match(source, /Exact recovery is not ready/)
   assert.match(source, /before remote dispatch/)
+  assert.match(source, /无额外条件（会话控制操作）/)
 })

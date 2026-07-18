@@ -7,6 +7,10 @@ const moduleUrl = pathToFileURL(path.resolve(
   __dirname,
   '../../src/client/components/ai/agent-risk-delegation.js'
 )).href
+const scopesUrl = pathToFileURL(path.resolve(
+  __dirname,
+  '../../src/client/components/ai/agent-tool-scopes.js'
+)).href
 
 const sshEndpoint = Object.freeze({
   host: 'srv.test',
@@ -27,6 +31,11 @@ const riskContext = Object.freeze({
     args: { service: 'nginx' },
     expected: { contains: 'ActiveState=active' }
   }]
+})
+const sessionControlRiskContext = Object.freeze({
+  purpose: 'switch the visible workspace tab',
+  impactTargets: ['tab:tab-a'],
+  verification: []
 })
 
 test('SSH command safety confirmation delegates to the single lower transaction', async () => {
@@ -114,6 +123,9 @@ test('delegated preparation freezes full args endpoint and verification', async 
 test('risk context schema and runtime validation require non-empty authorization details', async () => {
   const {
     agentRiskContextSchema,
+    agentArtifactRiskContextSchema,
+    agentRemoteRiskContextSchema,
+    agentSessionControlRiskContextSchema,
     assertAgentRiskContext,
     assertAgentRiskContextForCall
   } = await import(moduleUrl)
@@ -130,6 +142,15 @@ test('risk context schema and runtime validation require non-empty authorization
   assert.deepEqual(
     agentRiskContextSchema.properties.verification.items.required,
     ['name', 'args']
+  )
+  assert.equal(agentRiskContextSchema, agentRemoteRiskContextSchema)
+  assert.equal(agentRemoteRiskContextSchema.properties.verification.minItems, 1)
+  assert.equal(agentSessionControlRiskContextSchema.properties.verification.minItems, 0)
+  assert.equal(agentSessionControlRiskContextSchema.properties.verification.maxItems, 0)
+  assert.equal(agentArtifactRiskContextSchema.properties.verification.minItems, 0)
+  assert.equal(
+    Object.hasOwn(agentArtifactRiskContextSchema.properties.verification, 'maxItems'),
+    false
   )
 
   for (const invalid of [
@@ -172,8 +193,75 @@ test('risk context schema and runtime validation require non-empty authorization
   assert.deepEqual(assertAgentRiskContextForCall({
     toolName: 'run_background_command',
     args: { command: 'uptime', riskContext },
+    descriptor: { name: 'run_background_command', scope: 'session-write' },
     classification: { outcome: 'risky' }
   }), riskContext)
+})
+
+test('runtime context modes cover every write and control policy without fake verification', async () => {
+  const {
+    agentRiskCallsRequireVerification,
+    assertAgentRiskContextForCall,
+    resolveAgentRiskContextMode
+  } = await import(moduleUrl)
+  const { AGENT_TOOL_SCOPES } = await import(scopesUrl)
+
+  for (const [name, scope] of Object.entries(AGENT_TOOL_SCOPES)) {
+    if (scope !== 'session-write' && scope !== 'session-control') continue
+    const descriptor = { name, scope }
+    const mode = resolveAgentRiskContextMode({
+      toolName: name,
+      descriptor,
+      classification: { outcome: 'risky' }
+    })
+    const expectedMode = name === 'run_skill_artifact'
+      ? 'artifact'
+      : scope === 'session-control'
+        ? 'session-control'
+        : 'remote-verification'
+    assert.equal(mode, expectedMode, name)
+
+    const context = expectedMode === 'session-control'
+      ? sessionControlRiskContext
+      : riskContext
+    assert.deepEqual(assertAgentRiskContextForCall({
+      toolName: name,
+      descriptor,
+      args: { riskContext: context },
+      classification: { outcome: 'risky' }
+    }), context, name)
+
+    assert.throws(() => assertAgentRiskContextForCall({
+      toolName: name,
+      descriptor,
+      args: {},
+      classification: { outcome: 'risky' }
+    }), error => error.code === 'AGENT_RISK_CONTEXT_REQUIRED', name)
+  }
+
+  assert.throws(() => assertAgentRiskContextForCall({
+    toolName: 'send_terminal_command',
+    descriptor: { name: 'send_terminal_command', scope: 'session-write' },
+    args: { riskContext: sessionControlRiskContext },
+    classification: { outcome: 'risky' }
+  }), error => error.code === 'AGENT_RISK_CONTEXT_REQUIRED')
+
+  assert.equal(assertAgentRiskContextForCall({
+    toolName: 'send_terminal_command',
+    descriptor: { name: 'send_terminal_command', scope: 'session-write' },
+    args: { command: 'uptime' },
+    classification: { outcome: 'allowlisted-readonly' }
+  }), null)
+
+  assert.equal(agentRiskCallsRequireVerification([{
+    name: 'switch_tab',
+    classification: { outcome: 'risky' }
+  }]), false)
+  assert.equal(agentRiskCallsRequireVerification([{
+    name: 'send_terminal_command',
+    classification: { outcome: 'risky' }
+  }]), true)
+  assert.equal(agentRiskCallsRequireVerification([]), true)
 })
 
 test('SFTP delete keeps its existing delegated SSH safety path', async () => {

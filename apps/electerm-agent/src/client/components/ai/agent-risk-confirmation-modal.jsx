@@ -44,7 +44,7 @@ export function AgentRiskConfirmationContent ({ transaction }) {
     const rollbackLimits = textOrUnknown(transaction.rollbackLimits)
     const verification = transaction.verification.length
       ? transaction.verification
-      : ['unknown']
+      : ['无额外条件（会话控制操作）']
     const cancellationBehavior = textOrUnknown(transaction.cancellationBehavior)
     return {
       targetIdentity,

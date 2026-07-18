@@ -2,8 +2,10 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
+const { pathToFileURL } = require('node:url')
 
 const aiRoot = path.resolve(__dirname, '../../src/client/components/ai')
+const scopesUrl = pathToFileURL(path.join(aiRoot, 'agent-tool-scopes.js')).href
 
 function readSource (name) {
   return fs.readFileSync(path.join(aiRoot, name), 'utf8')
@@ -88,25 +90,33 @@ test('structured reads use readonly exec while file ranges keep SFTP read', () =
   assert.doesNotMatch(structuredCases, /mcpSendTerminal|runSafetyCommand|runTerminalTool/)
 })
 
-test('risky tool schemas require complete risk context without breaking readonly send compatibility', () => {
+test('every write and control tool schema matches its policy risk context mode', async () => {
   const source = readSource('agent-tools.js')
+  const { AGENT_TOOL_SCOPES } = await import(scopesUrl)
+  const contextTools = Object.entries(AGENT_TOOL_SCOPES).filter(([, scope]) => (
+    scope === 'session-write' || scope === 'session-control'
+  ))
 
-  for (const name of [
-    'run_background_command',
-    'sftp_del',
-    'sftp_upload',
-    'sftp_download',
-    'run_local_cli'
-  ]) {
-    assert.match(
-      toolDefinition(source, name),
-      /required:\s*\[[^\]]*'riskContext'[^\]]*\]/,
-      name
+  for (const [name, scope] of contextTools) {
+    const definition = toolDefinition(source, name)
+    assert.ok(definition, `missing tool definition: ${name}`)
+    const schemaName = name === 'run_skill_artifact'
+      ? 'agentArtifactRiskContextSchema'
+      : scope === 'session-control'
+        ? 'agentSessionControlRiskContextSchema'
+        : 'agentRemoteRiskContextSchema'
+    assert.match(definition, new RegExp(schemaName), name)
+    if (name === 'send_terminal_command') continue
+    assert.equal(
+      /required:\s*\[[^\]]*'riskContext'[^\]]*\]/.test(definition) ||
+        /withRequiredRiskContextParameters/.test(definition),
+      true,
+      `${name} must require riskContext`
     )
   }
 
   const send = toolDefinition(source, 'send_terminal_command')
-  assert.match(send, /riskContext:\s*agentRiskContextSchema/)
+  assert.match(send, /riskContext:\s*agentRemoteRiskContextSchema/)
   assert.match(send, /required:\s*\['command'\]/)
   assert.doesNotMatch(send, /required:\s*\[[^\]]*'riskContext'/)
 })
@@ -120,5 +130,13 @@ test('runtime rejects risky calls without context before risk preparation', () =
     entrypoint.indexOf('assertAgentRiskContextForCall') <
       entrypoint.indexOf('executeAgentTool({')
   )
+  const skillWrapper = entrypoint.slice(
+    entrypoint.indexOf("toolName === 'run_skill_artifact'")
+  )
+  assert.ok(
+    skillWrapper.indexOf('assertAgentRiskContextForCall') <
+      skillWrapper.indexOf('prepareSelectedSkillArtifactCall')
+  )
+  assert.match(skillWrapper, /prepareSelectedSkillArtifactCall\([\s\S]*riskContext/)
   assert.doesNotMatch(source, /const riskContext = args\.riskContext \|\| \{\}/)
 })
