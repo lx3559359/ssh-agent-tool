@@ -275,8 +275,54 @@ function isRecoverableFilePath (value) {
   return filePathPolicy(value) === 'recoverable'
 }
 
+export function analyzeShellSyntax (command) {
+  const text = String(command || '')
+  let quote = ''
+  let escaped = false
+  let executionExpansion = false
+  let pathExpansion = false
+  let controlOperator = false
+
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index]
+    if (escaped) {
+      escaped = false
+      continue
+    }
+    if (character === '\\' && quote !== "'") {
+      escaped = true
+      continue
+    }
+    if (quote) {
+      if (character === quote) {
+        quote = ''
+      } else if (quote === '"' && (character === '$' || character === '`')) {
+        executionExpansion = true
+      }
+      continue
+    }
+    if (character === "'" || character === '"') {
+      quote = character
+      continue
+    }
+    if (character === '$' || character === '`' ||
+      ((character === '<' || character === '>') && /^\s*\(/.test(text.slice(index + 1))) ||
+      ('@?!+*'.includes(character) && text[index + 1] === '(')) {
+      executionExpansion = true
+    }
+    if ('|&;\r\n'.includes(character)) controlOperator = true
+    if ('*?[]{}~'.includes(character)) pathExpansion = true
+  }
+
+  return { executionExpansion, pathExpansion, controlOperator }
+}
+
 function hasUnsafeExpansion (command) {
-  return /\$\(|(?:<|>)\s*\(|`|\$\{|[@?!+*]\(|(^|\s)(?:eval|source|\.)\s|(^|\s)(?:ba|z|k)?sh\s+-?c\b/i.test(command)
+  if (analyzeShellSyntax(command).executionExpansion) return true
+  const words = shellWords(stripCommandPrefix(command))
+  const executable = executableName(words[0]).toLowerCase()
+  if (['eval', 'source', '.'].includes(executable)) return true
+  return /^(?:ba|z|k)?sh$/.test(executable) && /^-?c$/.test(words[1] || '')
 }
 
 function isDatabaseClient (command) {

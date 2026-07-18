@@ -1,4 +1,5 @@
 import {
+  analyzeShellSyntax,
   classifyCommand,
   tokenizeStaticShell
 } from '../../common/safety-transactions/command-classifier.js'
@@ -44,14 +45,7 @@ const resourceSensitivePatterns = [
   /\b(?:tar|cpio|zip|7z)\b[^\n]*(?:\s\/\s*$|\s\/\*?)/i,
   /\b(?:sha(?:1|224|256|384|512)sum|md5sum)\b[^\n]*(?:\/var\/lib|\/home|\/srv|\/)/i,
   /\b(?:docker|podman)\s+(?:build|buildx\s+build)\b/i,
-  /\bkubectl\b[^\n]*(?:\s-w\b|--watch(?:=\S+)?\b)/i,
   /\b(?:psql|mysql|mariadb|sqlite3)\b[^\n]*\bselect\b(?![^\n]*\blimit\b)/i
-]
-
-const unauditableShellPatterns = [
-  /\$\(|`|\$\{|<\(|>\(/,
-  /\b(?:curl|wget)\b[^\n|]*\|/i,
-  /\b(?:eval|source)\b/i
 ]
 
 const outcomeRank = Object.freeze({
@@ -112,85 +106,102 @@ function staticInvocationWords (command) {
   return words.slice(index)
 }
 
-function hasShortOption (words, options) {
-  return words.some(word => {
-    if (!/^-[^-]/.test(word)) return false
-    const flags = word.slice(1).split('=', 1)[0]
-    return [...options].some(option => flags.includes(option))
-  })
-}
-
-function hasLongOption (words, option) {
-  return words.some(word => word === option || word.startsWith(`${option}=`))
-}
-
-function booleanOptionEnabled (words, option) {
+function optionEnabled (words, {
+  short = '',
+  long,
+  booleanValue = true
+}) {
   let enabled = false
   for (const word of words) {
-    if (word === option) {
+    if (word === '--') break
+    if (long && word === long) {
       enabled = true
       continue
     }
-    if (!word.startsWith(`${option}=`)) continue
-    const value = word.slice(option.length + 1).toLowerCase()
-    enabled = value === 'true' || value === '1'
+    if (long && word.startsWith(`${long}=`)) {
+      const value = word.slice(long.length + 1).toLowerCase()
+      enabled = !booleanValue || !['false', '0'].includes(value)
+      continue
+    }
+    if (!short || !/^-[^-]/.test(word)) continue
+    const separator = word.indexOf('=')
+    const flags = word.slice(1, separator === -1 ? undefined : separator)
+    if (![...short].some(option => flags.includes(option))) continue
+    const value = separator === -1 ? '' : word.slice(separator + 1).toLowerCase()
+    enabled = !booleanValue || !['false', '0'].includes(value)
   }
   return enabled
+}
+
+function hasLsofRepeat (words) {
+  for (const word of words) {
+    if (word === '--') break
+    if (/^[+-]r(?:\d+(?:\.\d+)?)?$/.test(word)) return true
+  }
+  return false
 }
 
 function isStreamingCommand (command) {
   const [executable, ...args] = staticInvocationWords(command)
   const name = executableName(executable)
   if (name === 'journalctl') {
-    return hasShortOption(args, 'f') || hasLongOption(args, '--follow')
+    return optionEnabled(args, {
+      short: 'f',
+      long: '--follow',
+      booleanValue: false
+    })
   }
   if (name === 'tail') {
-    return hasShortOption(args, 'fF') || hasLongOption(args, '--follow')
+    return optionEnabled(args, {
+      short: 'fF',
+      long: '--follow',
+      booleanValue: false
+    })
   }
+  if (name === 'ss') {
+    return optionEnabled(args, {
+      short: 'E',
+      long: '--events',
+      booleanValue: false
+    })
+  }
+  if (name === 'lsof') return hasLsofRepeat(args)
+  if (name === 'free') {
+    return optionEnabled(args, {
+      short: 's',
+      long: '--seconds',
+      booleanValue: false
+    })
+  }
+  if (name === 'less') return true
   if (name === 'docker' || name === 'podman') {
     const action = args[0]?.toLowerCase()
     const actionArgs = args.slice(1)
     if (action === 'stats') {
-      return !booleanOptionEnabled(actionArgs, '--no-stream')
+      return !optionEnabled(actionArgs, { long: '--no-stream' })
     }
     if (action === 'logs') {
-      return hasShortOption(actionArgs, 'f') ||
-        hasLongOption(actionArgs, '--follow')
+      return optionEnabled(actionArgs, {
+        short: 'f',
+        long: '--follow'
+      })
     }
   }
-  if (name === 'kubectl' && args[0]?.toLowerCase() === 'logs') {
+  if (name === 'kubectl') {
+    const action = args[0]?.toLowerCase()
     const actionArgs = args.slice(1)
-    return hasShortOption(actionArgs, 'f') ||
-      hasLongOption(actionArgs, '--follow')
-  }
-  return false
-}
-
-function hasRuntimeShellExpansion (command) {
-  let quote = ''
-  let escaped = false
-  for (const character of command) {
-    if (escaped) {
-      escaped = false
-      continue
+    if (action === 'logs') {
+      return optionEnabled(actionArgs, {
+        short: 'f',
+        long: '--follow'
+      })
     }
-    if (character === '\\' && quote !== "'") {
-      escaped = true
-      continue
+    if (action === 'get') {
+      return optionEnabled(actionArgs, {
+        short: 'w',
+        long: '--watch'
+      }) || optionEnabled(actionArgs, { long: '--watch-only' })
     }
-    if (quote) {
-      if (character === quote) {
-        quote = ''
-      } else if (quote === '"' && (character === '$' || character === '`')) {
-        return true
-      }
-      continue
-    }
-    if (character === "'" || character === '"') {
-      quote = character
-      continue
-    }
-    if ('$`*?[]{}~'.includes(character)) return true
   }
   return false
 }
@@ -314,12 +325,13 @@ function classifySkillArtifact ({
 function classifyShellText (text) {
   const command = String(text || '').trim()
   if (!command) return result('unauditable', 'EMPTY_OR_MISSING_COMMAND')
+  const shellSyntax = analyzeShellSyntax(command)
+  if (shellSyntax.executionExpansion || shellSyntax.controlOperator) {
+    return result('unauditable', 'DYNAMIC_OR_PIPED_SHELL')
+  }
   if (isStreamingCommand(command) ||
     resourceSensitivePatterns.some(pattern => pattern.test(command))) {
     return result('risky', 'RESOURCE_SENSITIVE_READ')
-  }
-  if (unauditableShellPatterns.some(pattern => pattern.test(command))) {
-    return result('unauditable', 'DYNAMIC_OR_PIPED_SHELL')
   }
   const classified = classifyCommand(command)
   if (classified.risk === 'blocked') {
@@ -334,7 +346,7 @@ function classifyShellText (text) {
     } catch (error) {
       return result('unauditable', 'DYNAMIC_OR_PIPED_SHELL')
     }
-    if (hasRuntimeShellExpansion(command)) {
+    if (shellSyntax.pathExpansion) {
       return result('unauditable', 'DYNAMIC_OR_PIPED_SHELL')
     }
     return result('allowlisted-readonly', 'COMMAND_READONLY')

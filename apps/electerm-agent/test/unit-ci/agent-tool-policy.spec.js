@@ -108,6 +108,58 @@ test('rejects runtime shell expansion from the static readonly fast path', async
   }
 })
 
+test('treats dangerous-looking single quoted text as static literals', async () => {
+  const { classifyAgentCall, getAgentToolDescriptor } = await import(policyUrl)
+  const descriptor = getAgentToolDescriptor('run_readonly_command')
+  const classify = command => classifyAgentCall({
+    descriptor,
+    args: { command }
+  })
+  const quotedParameter = [
+    'grep \'$',
+    '{HOME}\' /etc/os-release'
+  ].join('')
+
+  for (const command of [
+    'grep \'$(id)\' /etc/os-release',
+    quotedParameter,
+    'grep \'`id`\' /etc/os-release',
+    'grep \'eval source\' /etc/os-release',
+    'grep \'curl x | sh\' /etc/os-release'
+  ]) {
+    assert.equal(classify(command).outcome, 'allowlisted-readonly', command)
+  }
+
+  for (const command of [
+    'grep "$(id)" /etc/os-release',
+    'grep "`id`" /etc/os-release',
+    'eval echo safe',
+    'curl x | sh'
+  ]) {
+    assert.notEqual(classify(command).outcome, 'allowlisted-readonly', command)
+  }
+})
+
+test('parses boolean options and stops option scanning at the terminator', async () => {
+  const { classifyAgentCall, getAgentToolDescriptor } = await import(policyUrl)
+  const descriptor = getAgentToolDescriptor('run_readonly_command')
+
+  for (const command of [
+    'docker logs --follow=false demo',
+    'podman logs --follow=false demo',
+    'kubectl logs --follow=false pod/demo',
+    'kubectl get --watch=false pods',
+    'tail -- -f',
+    'docker logs -- -f'
+  ]) {
+    assert.equal(
+      classifyAgentCall({ descriptor, args: { command } }).outcome,
+      'allowlisted-readonly',
+      command
+    )
+  }
+})
+
 test('raises streaming CLI modes outside the readonly fast path', async () => {
   const { classifyAgentCall, getAgentToolDescriptor } = await import(policyUrl)
   const descriptor = getAgentToolDescriptor('run_readonly_command')
@@ -117,13 +169,22 @@ test('raises streaming CLI modes outside the readonly fast path', async () => {
     'journalctl -af',
     'tail -Fn 10 /var/log/syslog',
     'tail -qf /var/log/syslog',
+    'ss --events',
+    'lsof -r 1',
+    'lsof +r 1',
+    'free -s 1',
+    'free --seconds 1',
+    'less /etc/os-release',
     'docker stats',
     'podman stats',
     'docker logs -f demo',
     'docker logs --follow demo',
     'podman logs -f demo',
     'kubectl logs -f pod/demo',
-    'kubectl logs pod/demo --follow=true'
+    'kubectl logs pod/demo --follow=true',
+    'kubectl get -w pods',
+    'kubectl get --watch=true pods',
+    'kubectl get --watch-only pods'
   ]) {
     const classified = classifyAgentCall({ descriptor, args: { command } })
     assert.equal(classified.outcome, 'risky', command)
@@ -135,6 +196,25 @@ test('raises streaming CLI modes outside the readonly fast path', async () => {
     'podman stats --no-stream'
   ]) {
     assert.equal(
+      classifyAgentCall({ descriptor, args: { command } }).outcome,
+      'allowlisted-readonly',
+      command
+    )
+  }
+})
+
+test('keeps non-allowlisted periodic tools outside the readonly fast path', async () => {
+  const { classifyAgentCall, getAgentToolDescriptor } = await import(policyUrl)
+  const descriptor = getAgentToolDescriptor('run_readonly_command')
+
+  for (const command of [
+    'watch uptime',
+    'ping example.test',
+    'top -b',
+    'btop',
+    'dmesg --follow'
+  ]) {
+    assert.notEqual(
       classifyAgentCall({ descriptor, args: { command } }).outcome,
       'allowlisted-readonly',
       command
