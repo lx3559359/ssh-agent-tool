@@ -111,13 +111,14 @@ test('capped SSH stdout and stderr are collected during streaming without losing
 
   const result = await running
   assert.equal(typeof result, 'object')
+  assert.equal(result.truncated, true)
+  assert.equal(result.code, 0)
   assert.ok(
     Buffer.byteLength(result.stdout, 'utf8') +
     Buffer.byteLength(result.stderr, 'utf8') <= maxOutputBytes
   )
   assert.match(result.stdout, /__SHELLPILOT_PREPARE_RC_op-stream=0/)
   assert.doesNotMatch(result.stdout + result.stderr, /\uFFFD/)
-  assert.equal(result.code, 0)
   assert.equal(result.signal, null)
 })
 
@@ -137,7 +138,8 @@ test('capped run-cmd returns SSH close failure metadata', async () => {
     stdout: 'bounded stdout',
     stderr: 'bounded stderr',
     code: 23,
-    signal: 'TERM'
+    signal: 'TERM',
+    truncated: false
   })
 })
 

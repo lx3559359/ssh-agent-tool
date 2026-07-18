@@ -109,6 +109,9 @@ function createBoundedOutputCollector (maxOutputBytes) {
     get retainedBytes () {
       return headLength + tailLength
     },
+    get truncated () {
+      return totalBytes > limit
+    },
     toString () {
       const head = storage.subarray(0, headLength)
       const tails = tailBuffers()
@@ -259,7 +262,9 @@ exports.commonExtends = function (Cls) {
         stdout: stdoutCollector?.toString() || '',
         stderr: stderrCollector?.toString() || '',
         code: typeof code === 'number' && Number.isFinite(code) ? code : null,
-        signal: signal == null ? null : String(signal)
+        signal: signal == null ? null : String(signal),
+        truncated: stdoutCollector?.truncated === true ||
+          stderrCollector?.truncated === true
       })
       if (executionId) executions.set(executionId, entry)
 
