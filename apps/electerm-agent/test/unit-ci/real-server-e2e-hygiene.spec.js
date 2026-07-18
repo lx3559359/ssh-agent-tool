@@ -197,7 +197,7 @@ function isReadonlyCommandsMapArgument (callPath, commandPath) {
 function staticMemberPathKey (memberPath) {
   const parts = []
   let currentPath = memberPath
-  while (currentPath?.isMemberExpression()) {
+  while (currentPath?.isMemberExpression() || currentPath?.isOptionalMemberExpression()) {
     const propertyPath = currentPath.get('property')
     const property = currentPath.node.computed
       ? evaluateStaticExpression(propertyPath)
@@ -211,28 +211,206 @@ function staticMemberPathKey (memberPath) {
   return parts.join('.')
 }
 
-function isApprovedMonitorAssignment (assignmentPath) {
-  const leftPath = assignmentPath.get('left')
-  const rightPath = assignmentPath.get('right')
-  const key = staticMemberPathKey(leftPath)
-  if (assignmentPath.node.operator === '=' &&
-    key === 'window.__shellpilotAgentReadonlyPtyMonitor.count') {
-    return rightPath.isNumericLiteral({ value: 0 })
+function staticMemberPropertyName (memberPath) {
+  const propertyPath = memberPath.get('property')
+  return memberPath.node.computed
+    ? evaluateStaticExpression(propertyPath)
+    : propertyPath.node.name
+}
+
+function hasUnboundMemberRoot (memberPath, name) {
+  let rootPath = memberPath
+  while (rootPath?.isMemberExpression() || rootPath?.isOptionalMemberExpression()) {
+    rootPath = rootPath.get('object')
   }
-  if (assignmentPath.node.operator === '=' && key === 'attachAddon._sendData') {
-    return rightPath.isFunctionExpression()
+  return rootPath?.isIdentifier({ name }) && !rootPath.scope.getBinding(name)
+}
+
+function isGlobalWindowMember (memberPath, key) {
+  return staticMemberPathKey(memberPath) === key &&
+    hasUnboundMemberRoot(memberPath, 'window')
+}
+
+function isIdentifierBoundTo (identifierPath, binding) {
+  return identifierPath?.isIdentifier() &&
+    identifierPath.scope.getBinding(identifierPath.node.name) === binding
+}
+
+function isMemberOfBinding (memberPath, binding, property) {
+  return (memberPath?.isMemberExpression() || memberPath?.isOptionalMemberExpression()) &&
+    staticMemberPropertyName(memberPath) === property &&
+    isIdentifierBoundTo(memberPath.get('object'), binding)
+}
+
+function constBindingFromStatement (statementPath, name) {
+  if (!statementPath?.isVariableDeclaration({ kind: 'const' })) return undefined
+  const declaratorPaths = statementPath.get('declarations')
+  if (declaratorPaths.length !== 1) return undefined
+  const declaratorPath = declaratorPaths[0]
+  const idPath = declaratorPath.get('id')
+  if (!idPath.isIdentifier({ name })) return undefined
+  const binding = idPath.scope.getBinding(name)
+  if (!binding || binding.path.node !== declaratorPath.node || !binding.constant) return undefined
+  return { binding, initPath: declaratorPath.get('init') }
+}
+
+function isClientEvaluateCallback (callbackPath) {
+  const callPath = callbackPath.parentPath
+  if ((!callPath?.isCallExpression() && !callPath?.isOptionalCallExpression()) ||
+    callPath.get('arguments')[0]?.node !== callbackPath.node) return false
+  const calleePath = callPath.get('callee')
+  return (calleePath.isMemberExpression() || calleePath.isOptionalMemberExpression()) &&
+    staticMemberPathKey(calleePath) === 'client.evaluate' &&
+    callbackPath.node.params.length === 0
+}
+
+function isTerminalLookup (initPath) {
+  if (!initPath?.isCallExpression() ||
+    !isGlobalWindowMember(initPath.get('callee'), 'window.refs.get')) return false
+  const argumentPaths = initPath.get('arguments')
+  if (argumentPaths.length !== 1 ||
+    !argumentPaths[0].isBinaryExpression({ operator: '+' })) return false
+  return evaluateStaticExpression(argumentPaths[0].get('left')) === 'term-' &&
+    isGlobalWindowMember(
+      argumentPaths[0].get('right'),
+      'window.store.activeTabId'
+    )
+}
+
+function approvedInstallMonitorMutations (callbackPath) {
+  if (!isClientEvaluateCallback(callbackPath) ||
+    !callbackPath.get('body').isBlockStatement()) return undefined
+  const statements = callbackPath.get('body.body')
+  if (statements.length !== 7) return undefined
+  const terminal = constBindingFromStatement(statements[0], 'terminal')
+  const attachAddon = constBindingFromStatement(statements[1], 'attachAddon')
+  const original = constBindingFromStatement(statements[3], 'original')
+  const monitor = constBindingFromStatement(statements[4], 'monitor')
+  if (!terminal || !attachAddon || !original || !monitor ||
+    !isTerminalLookup(terminal.initPath) ||
+    !isMemberOfBinding(attachAddon.initPath, terminal.binding, 'attachAddon') ||
+    !isMemberOfBinding(original.initPath, attachAddon.binding, '_sendData')) {
+    return undefined
   }
-  if (assignmentPath.node.operator === '+=' && key === 'monitor.count') {
-    return rightPath.isNumericLiteral({ value: 1 })
-  }
-  if (assignmentPath.node.operator === '=' &&
-    key === 'window.__shellpilotAgentReadonlyPtyMonitor') {
-    return rightPath.isIdentifier({ name: 'monitor' })
-  }
-  return assignmentPath.node.operator === '=' &&
-    key === 'monitor.attachAddon._sendData' &&
-    rightPath.isMemberExpression() &&
-    staticMemberPathKey(rightPath) === 'monitor.original'
+  const availabilityCheck = statements[2]
+  const availabilityTest = availabilityCheck.get('test')
+  if (!availabilityCheck.isIfStatement() ||
+    !availabilityTest.isUnaryExpression({ operator: '!' }) ||
+    !isMemberOfBinding(availabilityTest.get('argument'), attachAddon.binding, '_sendData') ||
+    !availabilityCheck.get('consequent').isThrowStatement()) return undefined
+  if (!monitor.initPath.isObjectExpression()) return undefined
+  const monitorProperties = monitor.initPath.get('properties')
+  if (monitorProperties.length !== 3) return undefined
+  const attachProperty = findStaticObjectProperty(monitor.initPath, 'attachAddon')
+  const originalProperty = findStaticObjectProperty(monitor.initPath, 'original')
+  const countProperty = findStaticObjectProperty(monitor.initPath, 'count')
+  if (!attachProperty || !originalProperty || !countProperty ||
+    !isIdentifierBoundTo(attachProperty.get('value'), attachAddon.binding) ||
+    !isIdentifierBoundTo(originalProperty.get('value'), original.binding) ||
+    !countProperty.get('value').isNumericLiteral({ value: 0 })) return undefined
+  const replacementStatement = statements[5]
+  const replacement = replacementStatement.get('expression')
+  if (!replacementStatement.isExpressionStatement() ||
+    !replacement.isAssignmentExpression({ operator: '=' }) ||
+    !isMemberOfBinding(replacement.get('left'), attachAddon.binding, '_sendData') ||
+    !replacement.get('right').isFunctionExpression()) return undefined
+  const replacementFunction = replacement.get('right')
+  const replacementParameters = replacementFunction.get('params')
+  const replacementStatements = replacementFunction.get('body.body')
+  if (replacementParameters.length !== 1 ||
+    !replacementParameters[0].isRestElement() ||
+    !replacementParameters[0].get('argument').isIdentifier({ name: 'args' }) ||
+    replacementStatements.length !== 2) return undefined
+  const argsBinding = replacementFunction.scope.getBinding('args')
+  const incrementStatement = replacementStatements[0]
+  const increment = incrementStatement.get('expression')
+  if (!argsBinding || !incrementStatement.isExpressionStatement() ||
+    !increment.isAssignmentExpression({ operator: '+=' }) ||
+    !isMemberOfBinding(increment.get('left'), monitor.binding, 'count') ||
+    !increment.get('right').isNumericLiteral({ value: 1 })) return undefined
+  const returnStatement = replacementStatements[1]
+  const returnCall = returnStatement.get('argument')
+  if (!returnStatement.isReturnStatement() || !returnCall.isCallExpression() ||
+    !isMemberOfBinding(returnCall.get('callee'), original.binding, 'apply')) return undefined
+  const returnArguments = returnCall.get('arguments')
+  if (returnArguments.length !== 2 || !returnArguments[0].isThisExpression() ||
+    !isIdentifierBoundTo(returnArguments[1], argsBinding)) return undefined
+  const installStatement = statements[6]
+  const install = installStatement.get('expression')
+  if (!installStatement.isExpressionStatement() ||
+    !install.isAssignmentExpression({ operator: '=' }) ||
+    !isGlobalWindowMember(
+      install.get('left'),
+      'window.__shellpilotAgentReadonlyPtyMonitor'
+    ) ||
+    !isIdentifierBoundTo(install.get('right'), monitor.binding)) return undefined
+  return new Set([replacement.node, increment.node, install.node])
+}
+
+function approvedResetMonitorMutation (callbackPath) {
+  if (!isClientEvaluateCallback(callbackPath) ||
+    !callbackPath.get('body').isBlockStatement()) return undefined
+  const statements = callbackPath.get('body.body')
+  if (statements.length !== 1 || !statements[0].isExpressionStatement()) return undefined
+  const reset = statements[0].get('expression')
+  if (!reset.isAssignmentExpression({ operator: '=' }) ||
+    !isGlobalWindowMember(
+      reset.get('left'),
+      'window.__shellpilotAgentReadonlyPtyMonitor.count'
+    ) ||
+    !reset.get('right').isNumericLiteral({ value: 0 })) return undefined
+  return reset.node
+}
+
+function approvedCleanupMonitorMutations (callbackPath) {
+  if (!isClientEvaluateCallback(callbackPath) ||
+    !callbackPath.get('body').isBlockStatement()) return undefined
+  const statements = callbackPath.get('body.body')
+  if (statements.length !== 3) return undefined
+  const monitor = constBindingFromStatement(statements[0], 'monitor')
+  if (!monitor || !isGlobalWindowMember(
+    monitor.initPath,
+    'window.__shellpilotAgentReadonlyPtyMonitor'
+  )) return undefined
+  const restoreIf = statements[1]
+  if (!restoreIf.isIfStatement() ||
+    !isMemberOfBinding(restoreIf.get('test'), monitor.binding, 'attachAddon') ||
+    !restoreIf.get('consequent').isExpressionStatement()) return undefined
+  const restore = restoreIf.get('consequent.expression')
+  const restoreLeft = restore.get('left')
+  if (!restore.isAssignmentExpression({ operator: '=' }) ||
+    !restoreLeft.isMemberExpression() ||
+    staticMemberPropertyName(restoreLeft) !== '_sendData' ||
+    !isMemberOfBinding(restoreLeft.get('object'), monitor.binding, 'attachAddon') ||
+    !isMemberOfBinding(restore.get('right'), monitor.binding, 'original')) return undefined
+  const deleteStatement = statements[2]
+  const deletion = deleteStatement.get('expression')
+  if (!deleteStatement.isExpressionStatement() ||
+    !deletion.isUnaryExpression({ operator: 'delete' }) ||
+    !isGlobalWindowMember(
+      deletion.get('argument'),
+      'window.__shellpilotAgentReadonlyPtyMonitor'
+    )) return undefined
+  return { assignment: restore.node, deletion: deletion.node }
+}
+
+function collectApprovedMonitorMutations (ast) {
+  const assignments = new Set()
+  const deletions = new Set()
+  traverse(ast, {
+    ArrowFunctionExpression (callbackPath) {
+      const install = approvedInstallMonitorMutations(callbackPath)
+      if (install) for (const node of install) assignments.add(node)
+      const reset = approvedResetMonitorMutation(callbackPath)
+      if (reset) assignments.add(reset)
+      const cleanup = approvedCleanupMonitorMutations(callbackPath)
+      if (cleanup) {
+        assignments.add(cleanup.assignment)
+        deletions.add(cleanup.deletion)
+      }
+    }
+  })
+  return { assignments, deletions }
 }
 
 function isForbiddenMutationHelper (memberPath) {
@@ -245,6 +423,15 @@ function isForbiddenMutationHelper (memberPath) {
     return ['assign', 'defineProperty', 'defineProperties'].includes(property)
   }
   return objectPath.isIdentifier({ name: 'Reflect' }) && property === 'set'
+}
+
+function assertReadonlyMemberExpressionSafe (memberPath) {
+  if (staticMemberPropertyName(memberPath) === 'tool_calls') {
+    throw new Error('tool_calls must not be accessed after static construction')
+  }
+  if (isForbiddenMutationHelper(memberPath)) {
+    throw new Error('generic object mutation helpers are forbidden')
+  }
 }
 
 function isDirectReadonlyToolCallMap (callPath, commandPath) {
@@ -266,8 +453,10 @@ function assertStaticCommandExpressionsSafe (source) {
     sourceType: 'unambiguous',
     plugins: ['jsx']
   })
+  const approvedMonitorMutations = collectApprovedMonitorMutations(ast)
   const descriptorObjects = new Set()
   const dynamicSinkFunctions = new Map()
+  const toolCallsProperties = []
   traverse(ast, {
     enter (expressionPath) {
       if (!expressionPath.isExpression()) return
@@ -275,7 +464,9 @@ function assertStaticCommandExpressionsSafe (source) {
       if (typeof value === 'string') assertStaticCommandTextSafe(value)
     },
     ObjectProperty (propertyPath) {
-      if (staticObjectPropertyName(propertyPath) !== 'name' ||
+      const propertyName = staticObjectPropertyName(propertyPath)
+      if (propertyName === 'tool_calls') toolCallsProperties.push(propertyPath)
+      if (propertyName !== 'name' ||
         evaluateStaticExpression(propertyPath.get('value')) !==
           'run_readonly_command') return
       const descriptorPath = propertyPath.parentPath
@@ -318,7 +509,7 @@ function assertStaticCommandExpressionsSafe (source) {
     },
     AssignmentExpression (assignmentPath) {
       if (assignmentPath.get('left').isMemberExpression() &&
-        !isApprovedMonitorAssignment(assignmentPath)) {
+        !approvedMonitorMutations.assignments.has(assignmentPath.node)) {
         throw new Error('member mutation is forbidden in the readonly fixture')
       }
     },
@@ -329,19 +520,21 @@ function assertStaticCommandExpressionsSafe (source) {
     },
     UnaryExpression (unaryPath) {
       if (unaryPath.node.operator !== 'delete' ||
-        !unaryPath.get('argument').isMemberExpression()) return
-      if (staticMemberPathKey(unaryPath.get('argument')) !==
-        'window.__shellpilotAgentReadonlyPtyMonitor') {
+        (!unaryPath.get('argument').isMemberExpression() &&
+          !unaryPath.get('argument').isOptionalMemberExpression())) return
+      if (!approvedMonitorMutations.deletions.has(unaryPath.node)) {
         throw new Error('member deletion is forbidden in the readonly fixture')
       }
     },
     MemberExpression (memberPath) {
-      if (isForbiddenMutationHelper(memberPath)) {
-        throw new Error('generic object mutation helpers are forbidden')
-      }
+      assertReadonlyMemberExpressionSafe(memberPath)
+    },
+    OptionalMemberExpression (memberPath) {
+      assertReadonlyMemberExpressionSafe(memberPath)
     }
   })
-  if (descriptorObjects.size !== 1 || dynamicSinkFunctions.size !== 1) {
+  if (descriptorObjects.size !== 1 || dynamicSinkFunctions.size !== 1 ||
+    toolCallsProperties.length !== 1) {
     throw new Error('the readonly fixture must register exactly one descriptor sink')
   }
   for (const [functionBinding, parameterIndex] of dynamicSinkFunctions) {
@@ -658,6 +851,57 @@ test('Agent readonly hygiene rejects saving a descriptor map before mutation', (
   assert.throws(() => (
     assertNoForbiddenReadonlyFixtureSource(readonlySinkFixture(mutation))
   ))
+})
+
+test('Agent readonly hygiene rejects extra or dynamic tool_calls properties', () => {
+  for (const extraToolCalls of [
+    'const injected = { tool_calls: getDynamicToolCalls() }',
+    "const injected = { ['tool_' + 'calls']: getDynamicToolCalls() }"
+  ]) {
+    assert.throws(() => (
+      assertNoForbiddenReadonlyFixtureSource(readonlySinkFixture(extraToolCalls))
+    ))
+  }
+})
+
+test('Agent readonly hygiene rejects mutation through tool_calls member access', () => {
+  for (const mutation of [
+    'response.tool_calls.push(getDynamicToolCall())',
+    'response.tool_calls.splice(0, 0, getDynamicToolCall())',
+    'response.tool_calls.unshift(getDynamicToolCall())',
+    "response['tool_' + 'calls'].push(getDynamicToolCall())"
+  ]) {
+    assert.throws(
+      () => assertNoForbiddenReadonlyFixtureSource(readonlySinkFixture(mutation)),
+      mutation
+    )
+  }
+})
+
+test('Agent readonly hygiene rejects spoofed PTY monitor bindings', () => {
+  for (const spoof of [
+    `
+      const monitor = response.tool_calls[0].function
+      monitor.count += 1
+    `,
+    `
+      const attachAddon = response.tool_calls[0].function
+      attachAddon._sendData = function () {}
+    `,
+    `
+      const monitor = getDynamicMonitor()
+      monitor.count += 1
+    `,
+    `
+      const attachAddon = getDynamicAttachAddon()
+      attachAddon._sendData = function () {}
+    `
+  ]) {
+    assert.throws(
+      () => assertNoForbiddenReadonlyFixtureSource(readonlySinkFixture(spoof)),
+      spoof
+    )
+  }
 })
 
 test('Agent readonly real-server E2E uses one five-call batch and observes no PTY sends', { skip: !agentSpecExists }, () => {
