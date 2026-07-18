@@ -738,6 +738,143 @@ test('foreground cancellation is bound to the exact active operation identity', 
   assert.equal(interrupts, 1)
 })
 
+test('accepted foreground completion retires its interrupt identity before audit persistence', async () => {
+  const { createSafetyCommandEntrypoint } = await import(moduleUrl)
+  const completing = deferred()
+  const harness = createHarness({
+    completeExternalExecution: () => completing.promise
+  })
+  const entrypoint = createSafetyCommandEntrypoint(harness.options)
+  entrypoint.beginSession()
+
+  const first = await entrypoint.runSafetyCommand('uptime', {
+    source: 'agent'
+  })
+  const waiting = first.waitForCompletion().then(
+    value => ({ value }),
+    error => ({ error })
+  )
+  const completionCall = entrypoint.handleCommandFinished({
+    token: first.token,
+    command: first.execution.submittedCommand,
+    exitCode: 0
+  })
+  await waitFor(() => harness.completions.length === 1)
+
+  const manualInput = await entrypoint.runSafetyCommand('echo manual', {
+    source: 'quick-command',
+    inputOnly: true
+  })
+  assert.equal(manualInput.inputOnly, true)
+  assert.deepEqual(harness.inputs, ['echo manual'])
+
+  let interrupts = 0
+  const interrupt = () => { interrupts += 1 }
+  assert.equal(await entrypoint.cancelForegroundExecutionById(
+    first.operationId,
+    interrupt,
+    'late Agent cancellation'
+  ), false)
+  assert.equal(interrupts, 0)
+  assert.deepEqual(harness.cancellations, [])
+  assert.equal(await entrypoint.handleCommandFinished({
+    token: first.token,
+    command: first.execution.submittedCommand,
+    exitCode: 0
+  }), false)
+
+  completing.resolve({ id: first.operationId, state: 'kept' })
+  assert.equal(await completionCall, true)
+  const completionOutcome = await waiting
+  assert.equal(completionOutcome.error, undefined)
+  assert.equal(completionOutcome.value.exitCode, 0)
+  assert.equal(await entrypoint.handleCommandFinished({
+    token: first.token,
+    command: first.execution.submittedCommand,
+    exitCode: 0
+  }), false)
+  assert.equal(harness.completions.length, 1)
+  assert.deepEqual(harness.cancellations, [])
+  assert.deepEqual(harness.errors, [])
+  assert.equal(entrypoint.hasPending(), false)
+})
+
+test('failed foreground completion stays retired and cannot replace the next active identity', async () => {
+  const { createSafetyCommandEntrypoint } = await import(moduleUrl)
+  const completing = deferred()
+  const harness = createHarness({
+    completeExternalExecution: () => completing.promise
+  })
+  const entrypoint = createSafetyCommandEntrypoint(harness.options)
+  entrypoint.beginSession()
+
+  const first = await entrypoint.runSafetyCommand('uptime', {
+    source: 'agent'
+  })
+  const waiting = first.waitForCompletion().then(
+    value => ({ value }),
+    error => ({ error })
+  )
+  const completionCall = entrypoint.handleCommandFinished({
+    token: first.token,
+    command: first.execution.submittedCommand,
+    exitCode: 0
+  })
+  await waitFor(() => harness.completions.length === 1)
+
+  let interrupts = 0
+  const interrupt = () => { interrupts += 1 }
+  assert.equal(await entrypoint.cancelForegroundExecutionById(
+    first.operationId,
+    interrupt,
+    'late Agent cancellation'
+  ), false)
+  assert.equal(await entrypoint.handleCommandFinished({
+    token: first.token,
+    command: first.execution.submittedCommand,
+    exitCode: 0
+  }), false)
+  assert.equal(interrupts, 0)
+
+  completing.reject(new Error('audit persistence failed'))
+  assert.equal(await completionCall, false)
+  const completionOutcome = await waiting
+  assert.equal(completionOutcome.value, undefined)
+  assert.match(completionOutcome.error.message, /audit persistence failed/)
+  assert.deepEqual(harness.cancellations, [first.operationId])
+  assert.equal(harness.errors.length, 1)
+  assert.match(harness.errors[0].message, /audit persistence failed/)
+
+  const second = await entrypoint.runSafetyCommand('whoami', {
+    source: 'agent'
+  })
+  assert.equal(await entrypoint.handleCommandFinished({
+    token: first.token,
+    command: first.execution.submittedCommand,
+    exitCode: 0
+  }), false)
+  assert.equal(await entrypoint.cancelForegroundExecutionById(
+    first.operationId,
+    interrupt,
+    'stale Agent cancellation'
+  ), false)
+  assert.equal(await entrypoint.cancelForegroundExecutionById(
+    second.operationId,
+    interrupt,
+    'exact Agent cancellation'
+  ), true)
+  assert.equal(await entrypoint.cancelForegroundExecutionById(
+    second.operationId,
+    interrupt,
+    'duplicate Agent cancellation'
+  ), false)
+  assert.equal(interrupts, 1)
+  assert.deepEqual(harness.cancellations, [
+    first.operationId,
+    second.operationId
+  ])
+})
+
 test('inputOnly fills the terminal without creating a transaction', async () => {
   const { createSafetyCommandEntrypoint } = await import(moduleUrl)
   const harness = createHarness()

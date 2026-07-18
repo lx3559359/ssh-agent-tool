@@ -834,6 +834,7 @@ export function createSafetyCommandEntrypoint (options = {}) {
       detachedExecutions.set(execution.id, execution)
       return true
     }
+    if (execution.mode === 'foreground') removeExecution(execution)
     return finalizeExecution(execution, event.exitCode)
   }
 
