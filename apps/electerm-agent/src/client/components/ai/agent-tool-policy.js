@@ -294,6 +294,13 @@ function consumerInputSources (name, args) {
 
 const shortFileOptionCommands = new Set(['date', 'grep', 'kubectl', 'sed'])
 
+function hasGitNoIndexStdin (name, args) {
+  if (name !== 'git' || args[0]?.toLowerCase() !== 'diff') return false
+  const optionEnd = args.indexOf('--')
+  const options = args.slice(1, optionEnd === -1 ? undefined : optionEnd)
+  return options.includes('--no-index') && args.slice(1).includes('-')
+}
+
 function isExplicitUnboundedInput (name, args) {
   let parseOptions = true
   for (let index = 0; index < args.length; index += 1) {
@@ -331,7 +338,8 @@ function isExplicitUnboundedInput (name, args) {
 function hasUnboundedInputSource (command) {
   const [executable, ...args] = staticInvocationWords(command)
   const name = executableName(executable)
-  if (args.some(isSpecialStreamSource) || isExplicitUnboundedInput(name, args)) {
+  if (args.some(isSpecialStreamSource) || isExplicitUnboundedInput(name, args) ||
+    hasGitNoIndexStdin(name, args)) {
     return true
   }
   if (!inputConsumingCommands.has(name)) return false
