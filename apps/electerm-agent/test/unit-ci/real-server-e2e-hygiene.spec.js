@@ -45,13 +45,23 @@ function parseFrozenStringArray (source, name) {
   return values
 }
 
+function collectStaticStringBodies (source) {
+  const bodies = []
+  const pattern = /(['"`])((?:\\[\s\S]|(?!\1)[\s\S])*)\1/g
+  for (const match of source.matchAll(pattern)) bodies.push(match[2])
+  return bodies
+}
+
 function assertNoForbiddenReadonlyFixtureSource (source) {
   assert.doesNotMatch(
     source,
     /(?:^|[\s'"`])(?:sudo|su|rm|mv|cp|touch|mkdir|chmod|chown|tee|firewall-cmd|ufw|iptables|nft|nmcli|useradd|userdel|passwd|reboot|shutdown|poweroff|kill|pkill)\b/i
   )
   assert.doesNotMatch(source, /\bsed\s+-i\b/i)
-  assert.doesNotMatch(source, /\bip\s+(?:-[^\s]+\s+)*(?:link\s+set|(?:address|addr)\s+(?:add|del|delete|replace|flush))\b/i)
+  assert.doesNotMatch(
+    source,
+    /\bip(?:\s+(?!route\b|link\b|addr(?:ess)?\b)[^\s'"`]+)*\s+(?:route\s+(?:add|del|delete|replace|flush|append|change)|link\s+(?:add|del|delete|set|change|replace)|addr(?:ess)?\s+(?:add|del|delete|replace|flush|change))\b/i
+  )
   assert.doesNotMatch(source, /\bifconfig\s+\S+\s+(?:up|down|[-\d]|netmask|broadcast|mtu|hw)\b/i)
   assert.doesNotMatch(source, /\b(?:systemctl|service)\s+(?:restart|reload|stop|start|enable|disable|mask|unmask)\b/i)
   assert.doesNotMatch(source, /\b(?:apt(?:-get)?|yum|dnf|apk|zypper|pacman)\s+(?:install|remove|purge|upgrade|update)\b/i)
@@ -64,6 +74,18 @@ function assertNoForbiddenReadonlyFixtureSource (source) {
     /\bprocess\b/,
     'the fixture may use process only for the exact process.env credential boundary'
   )
+  for (const body of collectStaticStringBodies(source)) {
+    assert.doesNotMatch(
+      body,
+      />>?/,
+      'shell write redirection is forbidden in real-server test literals'
+    )
+    assert.doesNotMatch(
+      body,
+      /<<<?/,
+      'here-doc and here-string input are forbidden in real-server test literals'
+    )
+  }
 }
 
 function readSpec () {
@@ -191,6 +213,29 @@ test('Agent readonly hygiene rejects extra allowlist entries and indirect argv a
     'const proc = process; const value = proc.argv'
   ]) {
     assert.throws(() => assertNoForbiddenReadonlyFixtureSource(source))
+  }
+})
+
+test('Agent readonly hygiene rejects network mutation and shell write bypasses', () => {
+  for (const source of [
+    "const command = 'ip route add default via 192.0.2.1'",
+    "const command = 'ip -4 route del default'",
+    "const command = 'ip -family inet route delete default'",
+    "const command = 'ip -brief route replace default via 192.0.2.1'",
+    "const command = 'ip route flush table main'",
+    "const command = 'ip route append 192.0.2.0/24 dev eth0'",
+    "const command = 'ip route change default via 192.0.2.1'",
+    "const command = 'ip link add dummy0 type dummy'",
+    "const command = 'ip -details link delete dummy0'",
+    "const command = 'ip addr flush dev eth0'",
+    "const command = 'echo unsafe > /tmp/output'",
+    "const command = 'printf unsafe >> /tmp/output'",
+    'const command = `cat <<EOF > /tmp/output\nunsafe\nEOF`',
+    "const command = 'cat <<< unsafe'",
+    "const operator = '>'; const command = 'echo unsafe ' + operator + ' /tmp/output'",
+    "const operator = '<<'; const command = 'cat ' + operator + 'EOF'"
+  ]) {
+    assert.throws(() => assertNoForbiddenReadonlyFixtureSource(source), source)
   }
 })
 
