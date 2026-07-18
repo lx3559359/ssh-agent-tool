@@ -2,6 +2,8 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
 const test = require('node:test')
+const parser = require('@babel/parser')
+const traverse = require('@babel/traverse').default
 
 const root = path.resolve(__dirname, '../..')
 const specPath = path.join(root, 'test/e2e/030.real-server-regression.spec.js')
@@ -45,11 +47,214 @@ function parseFrozenStringArray (source, name) {
   return values
 }
 
-function collectStaticStringBodies (source) {
-  const bodies = []
-  const pattern = /(['"`])((?:\\[\s\S]|(?!\1)[\s\S])*)\1/g
-  for (const match of source.matchAll(pattern)) bodies.push(match[2])
-  return bodies
+const unknownStaticValue = Symbol('unknown-static-value')
+
+function evaluateStaticExpression (expressionPath, visiting = new Set()) {
+  if (!expressionPath?.node) return unknownStaticValue
+  if (expressionPath.isStringLiteral()) return expressionPath.node.value
+  if (expressionPath.isNumericLiteral()) return expressionPath.node.value
+  if (expressionPath.isBooleanLiteral()) return expressionPath.node.value
+  if (expressionPath.isNullLiteral()) return null
+  if (expressionPath.isTemplateLiteral()) {
+    const expressionPaths = expressionPath.get('expressions')
+    const quasis = expressionPath.node.quasis
+    let value = quasis[0]?.value?.cooked ?? ''
+    for (let index = 0; index < expressionPaths.length; index++) {
+      const evaluated = evaluateStaticExpression(expressionPaths[index], visiting)
+      if (evaluated === unknownStaticValue || typeof evaluated === 'object') {
+        return unknownStaticValue
+      }
+      value += String(evaluated) + (quasis[index + 1]?.value?.cooked ?? '')
+    }
+    return value
+  }
+  if (expressionPath.isBinaryExpression({ operator: '+' })) {
+    const left = evaluateStaticExpression(expressionPath.get('left'), visiting)
+    const right = evaluateStaticExpression(expressionPath.get('right'), visiting)
+    if (left === unknownStaticValue || right === unknownStaticValue ||
+      typeof left === 'object' || typeof right === 'object') {
+      return unknownStaticValue
+    }
+    return left + right
+  }
+  if (expressionPath.isArrayExpression()) {
+    const values = []
+    for (const elementPath of expressionPath.get('elements')) {
+      if (!elementPath?.node || elementPath.isSpreadElement()) return unknownStaticValue
+      const value = evaluateStaticExpression(elementPath, visiting)
+      if (value === unknownStaticValue || typeof value === 'object') {
+        return unknownStaticValue
+      }
+      values.push(value)
+    }
+    return values
+  }
+  if (expressionPath.isIdentifier()) {
+    const binding = expressionPath.scope.getBinding(expressionPath.node.name)
+    if (!binding || binding.kind !== 'const' ||
+      !binding.path.isVariableDeclarator()) return unknownStaticValue
+    if (visiting.has(binding.path.node)) return unknownStaticValue
+    const initPath = binding.path.get('init')
+    if (!initPath?.node) return unknownStaticValue
+    const nextVisiting = new Set(visiting)
+    nextVisiting.add(binding.path.node)
+    return evaluateStaticExpression(initPath, nextVisiting)
+  }
+  if (!expressionPath.isCallExpression()) return unknownStaticValue
+  const calleePath = expressionPath.get('callee')
+  const argumentPaths = expressionPath.get('arguments')
+  if (calleePath.isMemberExpression()) {
+    const objectPath = calleePath.get('object')
+    const propertyPath = calleePath.get('property')
+    const propertyName = calleePath.node.computed
+      ? evaluateStaticExpression(propertyPath, visiting)
+      : propertyPath.node.name
+    if (objectPath.isIdentifier({ name: 'Object' }) &&
+      propertyName === 'freeze' && argumentPaths.length === 1) {
+      return evaluateStaticExpression(argumentPaths[0], visiting)
+    }
+    if (propertyName === 'join' && argumentPaths.length <= 1) {
+      const values = evaluateStaticExpression(objectPath, visiting)
+      const separator = argumentPaths.length === 0
+        ? ','
+        : evaluateStaticExpression(argumentPaths[0], visiting)
+      if (!Array.isArray(values) || separator === unknownStaticValue ||
+        typeof separator === 'object') return unknownStaticValue
+      return values.join(String(separator))
+    }
+  }
+  return unknownStaticValue
+}
+
+function staticObjectPropertyName (propertyPath) {
+  if (!propertyPath.isObjectProperty()) return undefined
+  const keyPath = propertyPath.get('key')
+  if (!propertyPath.node.computed && keyPath.isIdentifier()) {
+    return keyPath.node.name
+  }
+  return evaluateStaticExpression(keyPath)
+}
+
+function findStaticObjectProperty (objectPath, name) {
+  return objectPath.get('properties').find(propertyPath => (
+    staticObjectPropertyName(propertyPath) === name
+  ))
+}
+
+function assertStaticCommandTextSafe (text) {
+  assert.doesNotMatch(
+    text,
+    /(?:^|[\s;|&])(?:sudo|su|rm|mv|cp|install|touch|mkdir|chmod|chown|tee|firewall-cmd|ufw|iptables|nft|nmcli|useradd|userdel|passwd|reboot|shutdown|poweroff|kill|pkill)\b/i
+  )
+  assert.doesNotMatch(text, /\bsed\s+-i\b/i)
+  assert.doesNotMatch(
+    text,
+    /\bip(?:\s+(?!route\b|link\b|addr(?:ess)?\b)[^\s'"`]+)*\s+(?:route\s+(?:add|del|delete|replace|flush|append|change)|link\s+(?:add|del|delete|set|change|replace)|addr(?:ess)?\s+(?:add|del|delete|replace|flush|change))\b/i
+  )
+  assert.doesNotMatch(text, /\bdd\b[^\r\n]*\bof\s*=/i)
+  assert.doesNotMatch(text, />>?/, 'shell write redirection is forbidden')
+  assert.doesNotMatch(text, /<<<?/, 'here-doc and here-string input are forbidden')
+}
+
+function commandExpressionFromReadonlyDescriptor (objectPath) {
+  const argumentsProperty = findStaticObjectProperty(objectPath, 'arguments')
+  const argumentsPath = argumentsProperty?.get('value')
+  if (!argumentsPath?.isCallExpression()) return undefined
+  const calleePath = argumentsPath.get('callee')
+  if (!calleePath.isMemberExpression()) return undefined
+  const objectPathForCall = calleePath.get('object')
+  const propertyPath = calleePath.get('property')
+  if (!objectPathForCall.isIdentifier({ name: 'JSON' }) ||
+    (!calleePath.node.computed && propertyPath.node.name !== 'stringify')) {
+    return undefined
+  }
+  const payloadPath = argumentsPath.get('arguments')[0]
+  if (!payloadPath?.isObjectExpression()) return undefined
+  return findStaticObjectProperty(payloadPath, 'command')?.get('value')
+}
+
+function isReadonlyCommandsMapArgument (callPath, commandPath) {
+  if (!commandPath.isIdentifier()) return false
+  const callbackPath = callPath.findParent(path => path.isArrowFunctionExpression())
+  if (!callbackPath) return false
+  const commandParameterPath = callbackPath.get('params')[0]
+  if (!commandParameterPath?.isIdentifier({ name: commandPath.node.name }) ||
+    commandPath.scope.getBinding(commandPath.node.name) !==
+      callbackPath.scope.getBinding(commandParameterPath.node.name)) return false
+  const mapCallPath = callbackPath.parentPath
+  if (!mapCallPath?.isCallExpression()) return false
+  const mapCalleePath = mapCallPath.get('callee')
+  if (!mapCalleePath.isMemberExpression() ||
+    !mapCalleePath.get('object').isIdentifier({ name: 'readonlyCommands' }) ||
+    mapCalleePath.get('property').node.name !== 'map') return false
+  const commands = evaluateStaticExpression(mapCalleePath.get('object'))
+  if (!Array.isArray(commands) || commands.length === 0 ||
+    commands.some(command => typeof command !== 'string')) return false
+  for (const command of commands) assertStaticCommandTextSafe(command)
+  return true
+}
+
+function assertStaticCommandExpressionsSafe (source) {
+  const ast = parser.parse(source, {
+    sourceType: 'unambiguous',
+    plugins: ['jsx']
+  })
+  const dynamicSinkFunctions = new Map()
+  traverse(ast, {
+    enter (expressionPath) {
+      if (!expressionPath.isExpression()) return
+      const value = evaluateStaticExpression(expressionPath)
+      if (typeof value === 'string') assertStaticCommandTextSafe(value)
+    },
+    ObjectProperty (propertyPath) {
+      if (staticObjectPropertyName(propertyPath) !== 'name' ||
+        evaluateStaticExpression(propertyPath.get('value')) !==
+          'run_readonly_command') return
+      const descriptorPath = propertyPath.parentPath
+      if (!descriptorPath.isObjectExpression()) {
+        throw new Error('readonly command descriptor must be a static object')
+      }
+      const commandPath = commandExpressionFromReadonlyDescriptor(descriptorPath)
+      if (!commandPath) {
+        throw new Error('readonly command descriptor must bind one static command field')
+      }
+      const command = evaluateStaticExpression(commandPath)
+      if (typeof command === 'string') {
+        assertStaticCommandTextSafe(command)
+        return
+      }
+      const functionPath = propertyPath.findParent(path => path.isFunctionDeclaration())
+      if (!functionPath?.node.id || !commandPath.isIdentifier()) {
+        throw new Error('dynamic readonly command sink is forbidden')
+      }
+      const parameterIndex = functionPath.get('params').findIndex(parameterPath => (
+        parameterPath.isIdentifier({ name: commandPath.node.name }) &&
+        parameterPath.scope.getBinding(parameterPath.node.name) ===
+          commandPath.scope.getBinding(commandPath.node.name)
+      ))
+      if (parameterIndex < 0) throw new Error('dynamic readonly command sink is forbidden')
+      dynamicSinkFunctions.set(functionPath.node.id.name, parameterIndex)
+    }
+  })
+  for (const [functionName, parameterIndex] of dynamicSinkFunctions) {
+    let calls = 0
+    traverse(ast, {
+      CallExpression (callPath) {
+        if (!callPath.get('callee').isIdentifier({ name: functionName })) return
+        calls += 1
+        const commandPath = callPath.get('arguments')[parameterIndex]
+        const command = evaluateStaticExpression(commandPath)
+        if (typeof command === 'string') {
+          assertStaticCommandTextSafe(command)
+          return
+        }
+        if (!isReadonlyCommandsMapArgument(callPath, commandPath)) {
+          throw new Error('readonly command construction is not statically auditable')
+        }
+      }
+    })
+    if (calls === 0) throw new Error('readonly command descriptor has no auditable call site')
+  }
 }
 
 function assertNoForbiddenReadonlyFixtureSource (source) {
@@ -74,18 +279,7 @@ function assertNoForbiddenReadonlyFixtureSource (source) {
     /\bprocess\b/,
     'the fixture may use process only for the exact process.env credential boundary'
   )
-  for (const body of collectStaticStringBodies(source)) {
-    assert.doesNotMatch(
-      body,
-      />>?/,
-      'shell write redirection is forbidden in real-server test literals'
-    )
-    assert.doesNotMatch(
-      body,
-      /<<<?/,
-      'here-doc and here-string input are forbidden in real-server test literals'
-    )
-  }
+  assertStaticCommandExpressionsSafe(source)
 }
 
 function readSpec () {
@@ -237,6 +431,28 @@ test('Agent readonly hygiene rejects network mutation and shell write bypasses',
   ]) {
     assert.throws(() => assertNoForbiddenReadonlyFixtureSource(source), source)
   }
+})
+
+test('Agent readonly hygiene evaluates composed command expressions before approval', () => {
+  for (const source of [
+    "const command = 'dd if=/dev/zero of=/tmp/file count=1'",
+    "const command = ['ip', 'route', 'add', 'default'].join(' ')",
+    "const section = 'rou' + 'te'; const action = 'a' + 'dd'; const command = 'ip ' + section + ' ' + action",
+    "const command = ['ip', 'link', 'delete', 'dummy0'].join(' ')"
+  ]) {
+    assert.throws(() => assertNoForbiddenReadonlyFixtureSource(source), source)
+  }
+})
+
+test('Agent readonly hygiene fails closed on a dynamic readonly command sink', () => {
+  const source = `
+    const command = getDynamicCommand()
+    const call = {
+      name: 'run_readonly_command',
+      arguments: JSON.stringify({ command })
+    }
+  `
+  assert.throws(() => assertNoForbiddenReadonlyFixtureSource(source))
 })
 
 test('Agent readonly real-server E2E uses one five-call batch and observes no PTY sends', { skip: !agentSpecExists }, () => {
