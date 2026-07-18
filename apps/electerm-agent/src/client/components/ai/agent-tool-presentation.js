@@ -156,33 +156,36 @@ function terminalConnected (terminal) {
     return status === true || status === 'success' || status === 'connected'
   }
   if (terminal?.connected !== undefined) return terminal.connected === true
-  return Boolean(terminal?.pid && terminal?.term && !terminal?.onClose)
+  return false
 }
 
-function terminalPasswordMode (terminal) {
+function terminalPasswordState (terminal) {
   if (
     terminal?.passwordMode === true ||
     terminal?.attachAddon?._passwordPromptDetected === true ||
     terminal?.props?.tab?.hasPasswordPrompt === true
   ) return true
+  if (
+    terminal?.passwordMode === false ||
+    terminal?.attachAddon?._passwordPromptDetected === false ||
+    terminal?.props?.tab?.hasPasswordPrompt === false
+  ) return false
   try {
-    return terminal?.getTerminalSafetyContext?.().passwordMode === true
+    const passwordMode = terminal?.getTerminalSafetyContext?.().passwordMode
+    return typeof passwordMode === 'boolean' ? passwordMode : undefined
   } catch {
-    return true
+    return undefined
   }
 }
 
-function terminalInTui (terminal) {
-  if (
-    terminal?.isTui === true ||
-    terminal?.inTui === true ||
-    terminal?.tuiActive === true
-  ) return true
+function terminalAtTrustedShellPrompt (terminal) {
   try {
-    return terminal?.cmdAddon?.hasShellIntegration?.() === true &&
-      terminal.cmdAddon.isCommandInputActive?.() !== true
+    return terminal?.isCommandSafetyTrackerReady?.() === true &&
+      terminal?.cmdAddon?.hasShellIntegration?.() === true &&
+      terminal?.cmdAddon?.isCommandInputActive?.() === true &&
+      terminal?.cmdAddon?.getCurrentCommandInput?.() === ''
   } catch {
-    return true
+    return false
   }
 }
 
@@ -213,10 +216,14 @@ export function getAgentCommandFillState ({
     return denied('当前 SSH 终端不可用')
   }
   if (!terminalConnected(terminal)) return denied('当前 SSH 终端未连接')
-  if (terminalPasswordMode(terminal)) return denied('密码输入期间不能填入命令')
+  const passwordState = terminalPasswordState(terminal)
+  if (passwordState === true) return denied('密码输入期间不能填入命令')
+  if (passwordState !== false) return denied('无法可靠确认当前终端不在密码输入状态')
   const bufferType = terminal?.term?.buffer?.active?.type || terminal?.bufferMode
   if (bufferType !== 'normal') return denied('交互程序中不能填入命令')
-  if (terminalInTui(terminal)) return denied('当前终端不是空闲命令行')
+  if (!terminalAtTrustedShellPrompt(terminal)) {
+    return denied('无法可靠确认当前处于普通 Shell 提示符')
+  }
   let currentInput
   try {
     if (typeof terminal.getCurrentInput !== 'function') {
@@ -228,4 +235,44 @@ export function getAgentCommandFillState ({
   }
   if (currentInput.length) return denied('当前终端已有输入')
   return Object.freeze({ allowed: true, reason: '' })
+}
+
+export async function fillAgentCommandIntoTerminal ({
+  presentation,
+  getActiveTabId,
+  getTerminal,
+  sendTerminalCommand,
+  onError
+} = {}) {
+  let activeTabId
+  let terminal
+  try {
+    activeTabId = getActiveTabId?.()
+    terminal = activeTabId ? getTerminal?.(activeTabId) : null
+  } catch {
+    return Object.freeze({ sent: false, reason: '当前终端状态不可用' })
+  }
+  const fillState = getAgentCommandFillState({
+    presentation,
+    activeTabId,
+    terminal
+  })
+  if (!fillState.allowed) {
+    return Object.freeze({ sent: false, reason: fillState.reason })
+  }
+  try {
+    await sendTerminalCommand?.({
+      command: presentation.command,
+      tabId: presentation.tabId,
+      inputOnly: true,
+      title: 'Agent 命令预览'
+    })
+    return Object.freeze({ sent: true, reason: '' })
+  } catch (error) {
+    onError?.(error)
+    return Object.freeze({
+      sent: false,
+      reason: String(error?.message || '填入终端失败')
+    })
+  }
 }

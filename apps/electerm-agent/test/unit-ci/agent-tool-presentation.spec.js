@@ -21,11 +21,18 @@ function endpoint (overrides = {}) {
 }
 
 function connectedTerminal (overrides = {}) {
+  const cmdAddon = {
+    hasShellIntegration: () => true,
+    isCommandInputActive: () => true,
+    getCurrentCommandInput: () => ''
+  }
   return {
     isSsh: () => true,
     props: { tab: { status: 'success' } },
     term: { buffer: { active: { type: 'normal' } } },
     attachAddon: { _passwordPromptDetected: false },
+    cmdAddon,
+    isCommandSafetyTrackerReady: () => true,
     getCurrentInput: () => '',
     ...overrides
   }
@@ -234,6 +241,73 @@ test('allows filling only completed readonly evidence into the same idle connect
   }), { allowed: true, reason: '' })
 })
 
+test('fails closed unless shell integration proves a ready normal prompt', async () => {
+  const {
+    buildAgentToolPresentation,
+    getAgentCommandFillState
+  } = await import(presentationUrl)
+  const presentation = buildAgentToolPresentation(
+    'run_readonly_command',
+    { command: 'ip addr' },
+    {
+      endpoint: endpoint(),
+      capturedAt: 1000,
+      exitCode: 0,
+      output: '1: lo'
+    }
+  )
+  const noIntegration = connectedTerminal({
+    cmdAddon: undefined,
+    isCommandSafetyTrackerReady: undefined
+  })
+  const catOrRepl = connectedTerminal({
+    cmdAddon: {
+      hasShellIntegration: () => false,
+      isCommandInputActive: () => false,
+      getCurrentCommandInput: () => undefined
+    },
+    isCommandSafetyTrackerReady: () => false
+  })
+  const unknownTracker = connectedTerminal({
+    cmdAddon: {
+      hasShellIntegration: () => true,
+      isCommandInputActive: () => undefined,
+      getCurrentCommandInput: () => undefined
+    },
+    isCommandSafetyTrackerReady: () => undefined
+  })
+  const unknownConnection = connectedTerminal({
+    props: { tab: {} },
+    connected: undefined,
+    pid: 123
+  })
+  const unknownPasswordState = connectedTerminal({
+    attachAddon: {}
+  })
+
+  for (const [label, terminal] of [
+    ['no shell integration', noIntegration],
+    ['cat or REPL', catOrRepl],
+    ['unknown tracker state', unknownTracker],
+    ['unknown connection state', unknownConnection],
+    ['unknown password state', unknownPasswordState]
+  ]) {
+    const state = getAgentCommandFillState({
+      presentation,
+      activeTabId: 'tab-a',
+      terminal
+    })
+    assert.equal(state.allowed, false, label)
+    assert.ok(state.reason, `${label} must explain why fill is unavailable`)
+  }
+
+  assert.deepEqual(getAgentCommandFillState({
+    presentation,
+    activeTabId: 'tab-a',
+    terminal: connectedTerminal()
+  }), { allowed: true, reason: '' })
+})
+
 test('rejects stale unsafe busy or incomplete terminal fill states with a reason', async () => {
   const {
     buildAgentToolPresentation,
@@ -292,7 +366,72 @@ test('rejects stale unsafe busy or incomplete terminal fill states with a reason
   }
 })
 
-test('readonly tool card keeps evidence primary and rechecks safe input-only fill on click', () => {
+test('fill controller rechecks live terminal state and only sends one exact input-only payload', async () => {
+  const {
+    buildAgentToolPresentation,
+    fillAgentCommandIntoTerminal
+  } = await import(presentationUrl)
+  const presentation = buildAgentToolPresentation(
+    'run_readonly_command',
+    { command: 'ip addr' },
+    {
+      endpoint: endpoint(),
+      capturedAt: 1000,
+      exitCode: 0,
+      output: '1: lo'
+    }
+  )
+
+  async function runController ({ activeTabId = 'tab-a', terminal }) {
+    const sent = []
+    const result = await fillAgentCommandIntoTerminal({
+      presentation,
+      getActiveTabId: () => activeTabId,
+      getTerminal: tabId => tabId === activeTabId ? terminal : null,
+      sendTerminalCommand: async payload => sent.push(payload)
+    })
+    return { result, sent }
+  }
+
+  const liveStateChanges = [
+    ['TUI after render', connectedTerminal({
+      cmdAddon: {
+        hasShellIntegration: () => true,
+        isCommandInputActive: () => false,
+        getCurrentCommandInput: () => undefined
+      },
+      isCommandSafetyTrackerReady: () => false
+    }), 'tab-a'],
+    ['nonempty input after render', connectedTerminal({
+      getCurrentInput: () => 'echo pending'
+    }), 'tab-a'],
+    ['disconnect after render', connectedTerminal({
+      props: { tab: { status: 'error' } }
+    }), 'tab-a'],
+    ['wrong tab after render', connectedTerminal(), 'tab-b']
+  ]
+
+  for (const [label, terminal, activeTabId] of liveStateChanges) {
+    const { result, sent } = await runController({ terminal, activeTabId })
+    assert.equal(sent.length, 0, label)
+    assert.equal(result.sent, false, label)
+    assert.ok(result.reason, `${label} must explain why nothing was sent`)
+  }
+
+  const { result, sent } = await runController({
+    terminal: connectedTerminal()
+  })
+  assert.deepEqual(result, { sent: true, reason: '' })
+  assert.deepEqual(sent, [{
+    command: 'ip addr',
+    tabId: 'tab-a',
+    inputOnly: true,
+    title: 'Agent 命令预览'
+  }])
+  assert.doesNotMatch(sent[0].command, /[\r\n]$/)
+})
+
+test('readonly tool card uses the shared fill controller and exposes disabled reasons', () => {
   const source = fs.readFileSync(
     path.join(aiRoot, 'agent-tool-call-card.jsx'),
     'utf8'
@@ -319,11 +458,9 @@ test('readonly tool card keeps evidence primary and rechecks safe input-only fil
   assert.match(source, /const \[outputExpanded, setOutputExpanded\] = useState\(false\)/)
   assert.match(source, /const \[rawExpanded, setRawExpanded\] = useState\(false\)/)
   assert.match(source, /copy\(presentation\.command\)/)
-  assert.ok(
-    (source.match(/getAgentCommandFillState\(/g) || []).length >= 2,
-    'fill state must be calculated for render and recalculated immediately before click'
-  )
-  assert.match(source, /window\.store\.mcpSendTerminalCommand\(\{[\s\S]*?command: presentation\.command,[\s\S]*?tabId: presentation\.tabId,[\s\S]*?inputOnly: true,[\s\S]*?title: 'Agent 命令预览'/)
-  assert.doesNotMatch(source, /presentation\.command\s*\+\s*['"]\\r/)
-  assert.doesNotMatch(source, /presentation\.command\s*\+\s*['"]\\n/)
+  assert.match(source, /fillAgentCommandIntoTerminal\(\{[\s\S]*?presentation,[\s\S]*?getActiveTabId:[\s\S]*?getTerminal:[\s\S]*?sendTerminalCommand:/)
+  assert.match(source, /className='agent-readonly-fill-reason'/)
+  assert.match(source, /disabled=\{!fillState\.allowed\}/)
+  assert.match(source, /title=\{fillState\.reason\}/)
+  assert.doesNotMatch(source, /mcpSendTerminalCommand\(\{[\s\S]*?inputOnly:/)
 })

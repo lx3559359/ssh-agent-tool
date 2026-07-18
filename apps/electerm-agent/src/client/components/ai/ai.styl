@@ -523,6 +523,10 @@
 .agent-send-running
   cursor wait
 
+.agent-send-disabled
+  cursor not-allowed
+  opacity .5
+
 .agent-tool-readonly-card
   .agent-tool-detail
     border-top 1px solid var(--main-darker)
@@ -567,6 +571,13 @@
   display flex
   flex-wrap wrap
   gap 6px
+
+.agent-readonly-fill-reason
+  color var(--text-color-2)
+  font-size 11px
+  line-height 1.4
+  overflow-wrap anywhere
+  word-break break-word
 
 .agent-readonly-action,
 .agent-readonly-toggle

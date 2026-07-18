@@ -18,7 +18,10 @@ import {
   UnorderedListOutlined
 } from '@ant-design/icons'
 import { refs, refsStatic } from '../common/ref'
-import { getAIChatSubmitAction } from './ai-chat-submit'
+import {
+  getAgentComposerActionState,
+  getAIChatSubmitAction
+} from './ai-chat-submit'
 import {
   adoptLegacyAIChatHistoryScope,
   appendAIChatHistory,
@@ -86,6 +89,11 @@ export default function AIChat (props) {
     ? agentTaskRegistry.isEndpointBusy(activeEndpoint)
     : agentTaskRegistry.isScopeBusy(conversationScopeId)
   const submitDisabled = isAgent && agentRunning
+  const composerActionState = getAgentComposerActionState({
+    isAgent,
+    agentRunning,
+    disabled: submitDisabled
+  })
   const activeAIConfig = useMemo(
     () => getActiveAIConfig(props.config),
     [props.config]
@@ -415,7 +423,7 @@ export default function AIChat (props) {
   }
 
   function renderSendIcon () {
-    if (submitDisabled) {
+    if (composerActionState.kind === 'loading') {
       return (
         <LoadingOutlined
           spin
@@ -426,8 +434,13 @@ export default function AIChat (props) {
     }
     return (
       <SendOutlined
-        onClick={handleSubmit}
-        className='mg1l pointer icon-hover send-to-ai-icon'
+        onClick={composerActionState.disabled ? undefined : handleSubmit}
+        aria-disabled={composerActionState.disabled}
+        className={`mg1l send-to-ai-icon ${
+          composerActionState.disabled
+            ? 'agent-send-disabled'
+            : 'pointer icon-hover'
+        }`}
         title={aiAgentCopy.sendTitle}
       />
     )
@@ -582,7 +595,7 @@ export default function AIChat (props) {
     }
     if (!e.shiftKey) {
       e.preventDefault()
-      if (!submitDisabled) {
+      if (!composerActionState.disabled) {
         handleSubmit()
       }
     }

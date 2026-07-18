@@ -33,14 +33,33 @@ test('session takeover controls wrap inside the current AI header dimensions', (
   assert.doesNotMatch(panelStyle, /agent-takeover[^\n]*width\s+\d+px/)
 })
 
-test('Agent send affordance spins only while the task registry reports a real run', () => {
+test('Agent send affordance uses the shared composer state model and loading icon', () => {
   const aiChatSource = read('src/client/components/ai/ai-chat.jsx')
 
   assert.match(aiChatSource, /const agentRunning = activeEndpoint[\s\S]*?agentTaskRegistry\.isEndpointBusy\(activeEndpoint\)[\s\S]*?agentTaskRegistry\.isScopeBusy\(conversationScopeId\)/)
   assert.match(aiChatSource, /const submitDisabled = isAgent && agentRunning/)
-  assert.match(aiChatSource, /if \(submitDisabled\)[\s\S]*?<LoadingOutlined[\s\S]*?spin[\s\S]*?agent-send-running/)
-  assert.doesNotMatch(aiChatSource, /if \(submitDisabled\)[\s\S]{0,180}<SendOutlined/)
-  assert.match(aiChatSource, /<SendOutlined[\s\S]*?onClick=\{handleSubmit\}[\s\S]*?send-to-ai-icon/)
+  assert.match(aiChatSource, /getAgentComposerActionState\(\{[\s\S]*?isAgent,[\s\S]*?agentRunning,[\s\S]*?disabled: submitDisabled/)
+  assert.match(aiChatSource, /composerActionState\.kind === 'loading'[\s\S]*?<LoadingOutlined[\s\S]*?spin[\s\S]*?agent-send-running/)
+  assert.match(aiChatSource, /<SendOutlined[\s\S]*?composerActionState\.disabled[\s\S]*?send-to-ai-icon/)
+})
+
+test('composer state renders disabled Send without pretending a task is running', async () => {
+  const submitUrl = pathToFileURL(path.join(
+    root,
+    'src/client/components/ai/ai-chat-submit.js'
+  )).href
+  const { getAgentComposerActionState } = await import(submitUrl)
+
+  assert.deepEqual(getAgentComposerActionState({
+    isAgent: true,
+    agentRunning: false,
+    disabled: true
+  }), { kind: 'send', disabled: true })
+  assert.deepEqual(getAgentComposerActionState({
+    isAgent: false,
+    agentRunning: true,
+    disabled: true
+  }), { kind: 'send', disabled: true })
 })
 
 test('Agent registry completion failure cancellation and registration cleanup restore Send', async () => {
@@ -48,7 +67,16 @@ test('Agent registry completion failure cancellation and registration cleanup re
     root,
     'src/client/components/ai/agent-task-registry.js'
   )).href
-  const { createAgentTaskRegistry } = await import(registryUrl)
+  const submitUrl = pathToFileURL(path.join(
+    root,
+    'src/client/components/ai/ai-chat-submit.js'
+  )).href
+  const [registryModule, submitModule] = await Promise.all([
+    import(registryUrl),
+    import(submitUrl)
+  ])
+  const { createAgentTaskRegistry } = registryModule
+  const { getAgentComposerActionState } = submitModule
   const endpoint = {
     tabId: 'tab-a',
     pid: 'pid-a',
@@ -68,25 +96,35 @@ test('Agent registry completion failure cancellation and registration cleanup re
     controller: { abort () {} },
     runner: { cancel }
   })
+  const action = (disabled = false) => getAgentComposerActionState({
+    isAgent: true,
+    agentRunning: registry.isEndpointBusy(endpoint),
+    disabled
+  })
+
+  assert.deepEqual(action(), { kind: 'send', disabled: false })
 
   for (const terminalState of ['completed', 'failed', 'cancelled']) {
     register(terminalState)
-    assert.equal(registry.isEndpointBusy(endpoint), true)
+    assert.deepEqual(action(), { kind: 'loading', disabled: true })
     registry.unregister(terminalState)
-    assert.equal(registry.isEndpointBusy(endpoint), false)
+    assert.deepEqual(action(), { kind: 'send', disabled: false })
   }
 
   register('cancel-via-registry')
+  assert.deepEqual(action(), { kind: 'loading', disabled: true })
   await registry.cancel('cancel-via-registry')
-  assert.equal(registry.isEndpointBusy(endpoint), false)
+  assert.deepEqual(action(), { kind: 'send', disabled: false })
 
   register('first')
+  assert.deepEqual(action(), { kind: 'loading', disabled: true })
   assert.throws(
     () => register('registration-failed'),
     error => error.code === 'AI_AGENT_SESSION_BUSY'
   )
+  assert.deepEqual(action(), { kind: 'loading', disabled: true })
   registry.unregister('first')
-  assert.equal(registry.isEndpointBusy(endpoint), false)
+  assert.deepEqual(action(), { kind: 'send', disabled: false })
 
   const agentSource = read('src/client/components/ai/agent.js')
   assert.match(agentSource, /finally \{[\s\S]*?agentTaskRegistry\.unregister\(taskId\)/)

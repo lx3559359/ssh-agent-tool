@@ -12,6 +12,7 @@ import {
 import { copy } from '../../common/clipboard'
 import { refs } from '../common/ref'
 import {
+  fillAgentCommandIntoTerminal,
   getAgentCommandFillState
 } from './agent-tool-presentation.js'
 import aiAgentCopy from './ai-agent-copy.json'
@@ -95,26 +96,13 @@ export default function AgentToolCallCard ({ toolCall }) {
 
   async function handleFillTerminal (e) {
     e.stopPropagation()
-    const currentActiveTabId = window.store.activeTabId
-    const currentTerminal = currentActiveTabId
-      ? refs.get('term-' + currentActiveTabId)
-      : null
-    const currentFillState = getAgentCommandFillState({
+    await fillAgentCommandIntoTerminal({
       presentation,
-      activeTabId: currentActiveTabId,
-      terminal: currentTerminal
+      getActiveTabId: () => window.store.activeTabId,
+      getTerminal: tabId => refs.get('term-' + tabId),
+      sendTerminalCommand: payload => window.store.mcpSendTerminalCommand(payload),
+      onError: error => window.store.onError(error)
     })
-    if (!currentFillState.allowed) return
-    try {
-      await window.store.mcpSendTerminalCommand({
-        command: presentation.command,
-        tabId: presentation.tabId,
-        inputOnly: true,
-        title: 'Agent 命令预览'
-      })
-    } catch (error) {
-      window.store.onError(error)
-    }
   }
 
   function renderReadonlyDetail () {
@@ -163,6 +151,9 @@ export default function AgentToolCallCard ({ toolCall }) {
             {aiAgentCopy.toolCall.fillTerminal}
           </button>
         </div>
+        {!fillState.allowed && fillState.reason && (
+          <span className='agent-readonly-fill-reason'>{fillState.reason}</span>
+        )}
         {presentation.output !== undefined && (
           <div className='agent-readonly-section'>
             <button
