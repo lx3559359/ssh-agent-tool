@@ -12,6 +12,7 @@ import {
   CloseOutlined,
   PaperClipOutlined,
   SettingOutlined,
+  LoadingOutlined,
   SendOutlined,
   ToolOutlined,
   UnorderedListOutlined
@@ -416,8 +417,9 @@ export default function AIChat (props) {
   function renderSendIcon () {
     if (submitDisabled) {
       return (
-        <SendOutlined
-          className='mg1l send-to-ai-icon disabled'
+        <LoadingOutlined
+          spin
+          className='mg1l send-to-ai-icon agent-send-running'
           title={aiAgentCopy.runningTitle}
         />
       )

@@ -172,6 +172,10 @@ const settleAgentCancellation = async activeCancellation => {
 `
     )
     .replace(
+      /^import \{ buildAgentToolPresentation \} from '\.\/agent-tool-presentation\.js'\r?\n/m,
+      'const buildAgentToolPresentation = () => null\n'
+    )
+    .replace(
       /^import aiAgentCopy from '\.\/ai-agent-copy\.json'\r?\n/m,
       `const aiAgentCopy = ${JSON.stringify({
         agentPromptRules: [],

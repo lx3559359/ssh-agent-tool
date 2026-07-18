@@ -36,6 +36,7 @@ import {
   buildAgentCancellationUpdate,
   settleAgentCancellation
 } from './agent-cancellation-status.js'
+import { buildAgentToolPresentation } from './agent-tool-presentation.js'
 
 const MAX_ITERATIONS = 150
 const agentApiTools = Object.freeze(
@@ -398,7 +399,13 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
           name: toolCall.function.name,
           args: safeArgs,
           status: 'running',
-          result: null
+          result: null,
+          presentation: buildAgentToolPresentation(
+            toolCall.function.name,
+            args,
+            null,
+            { endpoint: agentRuntime.endpoint }
+          )
         }
         toolCallsLog.push(toolEntry)
         updateChatEntry(chatEntry, {
@@ -415,6 +422,12 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
             await markCancelled()
             return
           }
+          toolEntry.presentation = buildAgentToolPresentation(
+            toolCall.function.name,
+            args,
+            toolResult,
+            { endpoint: agentRuntime.endpoint }
+          )
           const observation = await createAgentToolObservation(
             toolCall.function.name,
             toolResult,
@@ -433,6 +446,12 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
             args
           })
           toolEntry.status = 'error'
+          toolEntry.presentation = buildAgentToolPresentation(
+            toolCall.function.name,
+            args,
+            { error: sanitizeAIStoredText(err.message) },
+            { endpoint: agentRuntime.endpoint }
+          )
           const observation = await createAgentToolObservation(
             toolCall.function.name,
             {
