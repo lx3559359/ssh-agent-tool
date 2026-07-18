@@ -89,9 +89,9 @@ export default function AIChat (props) {
     () => getActiveAIConfig(props.config),
     [props.config]
   )
-  const visibleHistory = useMemo(
-    () => getAIChatHistoryForScope(props.aiChatHistory, conversationScopeId),
-    [props.aiChatHistory, conversationScopeId]
+  const visibleHistory = getAIChatHistoryForScope(
+    props.aiChatHistory,
+    conversationScopeId
   )
 
   useEffect(() => {

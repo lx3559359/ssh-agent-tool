@@ -177,7 +177,7 @@ function stableSerialize (value) {
 }
 
 function executableCall (toolName, args = {}) {
-  const { tabId, ...boundArgs } = args || {}
+  const { tabId, traceContext, ...boundArgs } = args || {}
   return { name: toolName, args: boundArgs }
 }
 

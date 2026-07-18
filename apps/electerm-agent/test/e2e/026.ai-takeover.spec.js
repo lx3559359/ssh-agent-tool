@@ -144,7 +144,10 @@ async function runAgentPrompt (client, prompt, riskDecision) {
   const before = await client.locator('.chat-history-item').count()
   await client.locator('.ai-chat-container .ant-segmented-item').filter({ hasText: 'Agent' }).click()
   await client.locator('.ai-chat-textarea').fill(prompt)
-  await client.locator('.send-to-ai-icon').click()
+  const send = client.locator('.send-to-ai-icon')
+  await expect(send).not.toHaveClass(/disabled/)
+  await send.click()
+  await expect(client.locator('.chat-history-item')).toHaveCount(before + 1)
 
   const plan = client.locator('.ant-modal-confirm').last()
   await expect(plan).toBeVisible({ timeout: 15000 })
@@ -168,7 +171,6 @@ async function runAgentPrompt (client, prompt, riskDecision) {
     }
   }
 
-  await expect(client.locator('.chat-history-item')).toHaveCount(before + 1)
   const item = client.locator('.chat-history-item').last()
   await expect(item).toContainText(
     riskDecision === 'cancel'

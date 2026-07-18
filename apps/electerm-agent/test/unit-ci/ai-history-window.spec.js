@@ -29,3 +29,15 @@ test('AI history window handles empty and shortened histories safely', async () 
   assert.equal(clampAIHistoryWindow(48, 10), 10)
   assert.equal(clampAIHistoryWindow(-1, 10), 10)
 })
+
+test('AI history window grows with new messages until the initial page is full', async () => {
+  const {
+    syncAIHistoryWindow
+  } = await import('../../src/client/components/ai/ai-history-window.js')
+
+  assert.equal(syncAIHistoryWindow(1, 2), 2)
+  assert.equal(syncAIHistoryWindow(23, 24), 24)
+  assert.equal(syncAIHistoryWindow(24, 25), 24)
+  assert.equal(syncAIHistoryWindow(48, 49), 48)
+  assert.equal(syncAIHistoryWindow(48, 10), 10)
+})

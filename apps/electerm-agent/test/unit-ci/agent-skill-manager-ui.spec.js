@@ -12,6 +12,8 @@ test('AI settings opens a local Skill manager instead of editing prompt rows inl
 
   assert.doesNotMatch(config, /Form\.List\s+name=['"]agentSkills['"]/)
   assert.match(config, /AgentSkillManagerModal/)
+  assert.match(config, /lazy\(\(\) => import\(['"]\.\/agent-skill-manager-modal\.jsx['"]\)\)/)
+  assert.match(config, /skillManagerOpen\s*\?\s*\(/)
   assert.match(config, /shellpilotSkillManageCount/)
 })
 

@@ -15,7 +15,7 @@ import {
   PlusOutlined,
   UploadOutlined
 } from '@ant-design/icons'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { cloneDeep, isEqual } from 'lodash-es'
 import Link from '../common/external-link'
 import AiCache from './ai-cache'
@@ -47,8 +47,9 @@ import {
   createAIProfileExport,
   mergeAIProfileImport
 } from './ai-profile-transfer'
-import AgentSkillManagerModal from './agent-skill-manager-modal.jsx'
 import { listAgentSkills } from './agent-skill-client.js'
+
+const AgentSkillManagerModal = lazy(() => import('./agent-skill-manager-modal.jsx'))
 
 const STORAGE_KEY_CONFIG = 'ai_config_history'
 const EVENT_NAME_CONFIG = 'ai-config-history-update'
@@ -1000,11 +1001,19 @@ export default function AIConfigForm ({ initialValues, languageVersion, onSubmit
           }]}
         />
       </Form>
-      <AgentSkillManagerModal
-        open={skillManagerOpen}
-        onClose={() => setSkillManagerOpen(false)}
-        onCatalogChange={items => setSkillCount(items.length)}
-      />
+      {
+        skillManagerOpen
+          ? (
+            <Suspense fallback={null}>
+              <AgentSkillManagerModal
+                open
+                onClose={() => setSkillManagerOpen(false)}
+                onCatalogChange={items => setSkillCount(items.length)}
+              />
+            </Suspense>
+            )
+          : null
+      }
       {
         advancedOpen
           ? (

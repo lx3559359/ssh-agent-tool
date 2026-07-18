@@ -199,6 +199,40 @@ test('conversation plan ignores hidden calls and enforces visible command order'
   }), null)
 })
 
+test('conversation plan ignores trusted internal trace metadata when binding a command', async () => {
+  const {
+    commitAgentPlanCall,
+    confirmAgentPlan,
+    ensureAgentPlanConfirmed,
+    markAgentPlanConfirmed
+  } = await import(taskModeModuleUrl)
+  const runtime = {}
+  markAgentPlanConfirmed(runtime, await confirmAgentPlan({
+    args: { readonlyCommands: ['pwd'] },
+    endpoint: { tabId: 'tab-a' },
+    confirm: () => true
+  }))
+  const args = {
+    command: 'pwd',
+    tabId: 'tab-a',
+    traceContext: {
+      traceId: 'sp-1784304000000-12345678',
+      module: 'ai'
+    }
+  }
+
+  assert.equal(await ensureAgentPlanConfirmed({
+    toolName: 'send_terminal_command',
+    args,
+    runtime
+  }), null)
+  assert.equal(commitAgentPlanCall({
+    toolName: 'send_terminal_command',
+    args,
+    runtime
+  }), true)
+})
+
 test('conversation plan binds trusted selected Skill digests but ignores model bindings', async () => {
   const { confirmAgentPlan } = await import(taskModeModuleUrl)
   const skillBindings = [{

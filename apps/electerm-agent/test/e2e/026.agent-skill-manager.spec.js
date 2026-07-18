@@ -105,6 +105,10 @@ async function openSkillManager (client) {
   }
   await expect(client.locator('.ai-config-modal .ai-config-form')).toBeVisible()
   const manage = client.locator('.ai-config-form button').filter({ hasText: /Skill|技能/i })
+  if (!await manage.isVisible().catch(() => false)) {
+    await client.locator('.sp-ai-config-advanced .ant-collapse-header').click()
+  }
+  await expect(manage).toBeVisible()
   await manage.click()
   await expect(client.locator('.agent-skill-manager')).toBeVisible()
 }

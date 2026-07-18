@@ -16,6 +16,22 @@ export function getVisibleAIHistory (history = [], visibleCount = AI_HISTORY_PAG
   return count ? list.slice(-count) : []
 }
 
+export function syncAIHistoryWindow (
+  visibleCount,
+  total,
+  pageSize = AI_HISTORY_PAGE_SIZE
+) {
+  const length = Math.max(0, Number(total) || 0)
+  const initialPage = Math.min(
+    Math.max(1, Number(pageSize) || AI_HISTORY_PAGE_SIZE),
+    length
+  )
+  return clampAIHistoryWindow(
+    Math.max(Number(visibleCount) || 0, initialPage),
+    length
+  )
+}
+
 export function expandAIHistoryWindow (
   visibleCount,
   total,

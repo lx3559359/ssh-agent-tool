@@ -14,7 +14,8 @@ import {
   AI_HISTORY_PAGE_SIZE,
   clampAIHistoryWindow,
   expandAIHistoryWindow,
-  getVisibleAIHistory
+  getVisibleAIHistory,
+  syncAIHistoryWindow
 } from './ai-history-window'
 
 const e = window.translate
@@ -42,7 +43,7 @@ export default auto(function AIChatHistory ({ history, agentRunning }) {
   ].join('|')
 
   useEffect(() => {
-    setVisibleCount(current => clampAIHistoryWindow(current, list.length))
+    setVisibleCount(current => syncAIHistoryWindow(current, list.length))
   }, [list.length])
 
   useLayoutEffect(() => {
