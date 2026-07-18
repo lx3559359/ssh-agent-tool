@@ -50,6 +50,44 @@ test('allows only statically classified readonly commands through the readonly r
   }
 })
 
+test('rejects shell control syntax from the readonly runner without rejecting quoted operators', async () => {
+  const { classifyAgentCall, getAgentToolDescriptor } = await import(policyUrl)
+  const descriptor = getAgentToolDescriptor('run_readonly_command')
+  const classify = command => classifyAgentCall({
+    descriptor,
+    args: { command }
+  })
+
+  for (const command of [
+    'ip a | cat',
+    'cat /etc/os-release | grep PRETTY_NAME',
+    'ip a && whoami',
+    'ip a &'
+  ]) {
+    assert.equal(classify(command).outcome, 'unauditable', command)
+  }
+  assert.equal(
+    classify('grep \'PRETTY_NAME|VERSION\' /etc/os-release').outcome,
+    'allowlisted-readonly'
+  )
+})
+
+test('raises streaming CLI modes outside the readonly fast path', async () => {
+  const { classifyAgentCall, getAgentToolDescriptor } = await import(policyUrl)
+  const descriptor = getAgentToolDescriptor('run_readonly_command')
+
+  for (const command of [
+    'docker stats',
+    'podman stats',
+    'kubectl logs -f pod/demo',
+    'kubectl logs pod/demo --follow=true'
+  ]) {
+    const classified = classifyAgentCall({ descriptor, args: { command } })
+    assert.equal(classified.outcome, 'risky', command)
+    assert.notEqual(classified.resourceImpact.duration, 'short', command)
+  }
+})
+
 test('classifies side effects from actual parameters and expanded content', async () => {
   const { classifyAgentCall, getAgentToolDescriptor } = await import(policyUrl)
   const outcome = (name, args = {}, expandedContent) => classifyAgentCall({

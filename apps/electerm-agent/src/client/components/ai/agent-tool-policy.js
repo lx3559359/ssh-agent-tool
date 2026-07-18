@@ -1,4 +1,7 @@
-import { classifyCommand } from '../../common/safety-transactions/command-classifier.js'
+import {
+  classifyCommand,
+  tokenizeStaticShell
+} from '../../common/safety-transactions/command-classifier.js'
 import { AGENT_TOOL_SCOPES } from './agent-tool-scopes.js'
 
 const STRUCTURED_SESSION_READS = new Set([
@@ -42,8 +45,9 @@ const resourceSensitivePatterns = [
   /\bdu\b[^\n]*(?:\s-a\b|--all\b)[^\n]*(?:\s\/\s*$|\s\/\*?)/i,
   /\b(?:tar|cpio|zip|7z)\b[^\n]*(?:\s\/\s*$|\s\/\*?)/i,
   /\b(?:sha(?:1|224|256|384|512)sum|md5sum)\b[^\n]*(?:\/var\/lib|\/home|\/srv|\/)/i,
-  /\b(?:docker|podman)\s+(?:build|buildx\s+build)\b/i,
+  /\b(?:docker|podman)\s+(?:build|buildx\s+build|stats)\b/i,
   /\bkubectl\b[^\n]*(?:\s-w\b|--watch(?:=\S+)?\b)/i,
+  /\bkubectl\s+logs\b[^\n]*(?:\s-f\b|\s--follow(?:=\S+)?\b)/i,
   /\b(?:psql|mysql|mariadb|sqlite3)\b[^\n]*\bselect\b(?![^\n]*\blimit\b)/i
 ]
 
@@ -224,6 +228,11 @@ function classifyShellText (text) {
     return result('risky', 'COMMAND_CHANGES_STATE')
   }
   if (classified.risk === 'readonly') {
+    try {
+      tokenizeStaticShell(command)
+    } catch (error) {
+      return result('unauditable', 'DYNAMIC_OR_PIPED_SHELL')
+    }
     return result('allowlisted-readonly', 'COMMAND_READONLY')
   }
   return result('unauditable', 'COMMAND_UNAUDITABLE')
