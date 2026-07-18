@@ -29,6 +29,28 @@ function rejectedCommandError (classification) {
   return error
 }
 
+function remoteCancellationFailedError (pid, executionId) {
+  const error = new Error('Agent remote cancellation could not be confirmed')
+  error.name = 'AgentRemoteCancelError'
+  error.code = 'AGENT_REMOTE_CANCEL_FAILED'
+  error.remoteState = 'unknown'
+  error.canAutoRetry = false
+  error.pid = pid
+  error.executionId = executionId
+  return error
+}
+
+function normalizeRemoteCancellationError (error, pid, executionId) {
+  const failure = error instanceof Error
+    ? error
+    : new Error('Agent remote cancellation failed', { cause: error })
+  failure.remoteState = 'unknown'
+  failure.canAutoRetry = false
+  failure.pid = pid
+  failure.executionId = executionId
+  return failure
+}
+
 function assertBoundEndpoint (expected, actual) {
   try {
     assertSameSessionEndpoint(expected, actual)
@@ -48,6 +70,22 @@ function normalizeAgentBound (value, maximum) {
   const number = Number(value)
   if (!Number.isFinite(number) || number <= 0) return maximum
   return Math.min(maximum, Math.max(1, Math.floor(number)))
+}
+
+function truncateUtf8Evidence (value, maxBytes) {
+  const text = String(value ?? '')
+  const bytes = new TextEncoder().encode(text)
+  if (bytes.length <= maxBytes) return { text, truncated: false }
+  const decoder = new TextDecoder('utf-8', { fatal: true })
+  for (let end = maxBytes; end >= Math.max(0, maxBytes - 3); end -= 1) {
+    try {
+      return {
+        text: decoder.decode(bytes.slice(0, end)),
+        truncated: true
+      }
+    } catch {}
+  }
+  return { text: '', truncated: true }
 }
 
 export function createAgentReadonlyExecutionId () {
@@ -93,9 +131,22 @@ export async function executeAgentReadonlyCommand ({
     ...(runtime?.signal ? { signal: runtime.signal } : {})
   }
   let dispatched = false
-  const clearCancellation = registerAgentCancellation(runtime, () => {
+  const clearCancellation = registerAgentCancellation(runtime, async () => {
     if (!dispatched) return undefined
-    return cancel(capturedEndpoint.pid, executionId)
+    let cancelled
+    try {
+      cancelled = await cancel(capturedEndpoint.pid, executionId)
+    } catch (error) {
+      throw normalizeRemoteCancellationError(
+        error,
+        capturedEndpoint.pid,
+        executionId
+      )
+    }
+    if (cancelled !== true) {
+      throw remoteCancellationFailedError(capturedEndpoint.pid, executionId)
+    }
+    return true
   })
 
   try {
@@ -109,6 +160,10 @@ export async function executeAgentReadonlyCommand ({
     assertAgentRuntimeActive(runtime)
     assertBoundEndpoint(capturedEndpoint, resolveEndpoint())
     const capturedAt = now()
+    const evidence = truncateUtf8Evidence(
+      [raw.stdout, raw.stderr].filter(Boolean).join('\n'),
+      options.maxOutputBytes
+    )
 
     return Object.freeze({
       kind: 'readonly-exec-result',
@@ -119,8 +174,8 @@ export async function executeAgentReadonlyCommand ({
       durationMs: capturedAt - startedAt,
       exitCode: raw.code,
       signal: raw.signal,
-      truncated: raw.truncated === true,
-      output: [raw.stdout, raw.stderr].filter(Boolean).join('\n')
+      truncated: raw.truncated === true || evidence.truncated,
+      output: evidence.text
     })
   } finally {
     clearCancellation()

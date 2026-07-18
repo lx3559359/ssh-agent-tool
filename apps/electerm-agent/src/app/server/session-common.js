@@ -38,6 +38,17 @@ function normalizeCollectorLimit (value) {
   return Math.max(0, Math.floor(bytes))
 }
 
+function createSharedOutputBudget (maxOutputBytes) {
+  let remainingBytes = normalizeCollectorLimit(maxOutputBytes)
+  return {
+    claim (requestedBytes) {
+      const grantedBytes = Math.min(remainingBytes, requestedBytes)
+      remainingBytes -= grantedBytes
+      return grantedBytes
+    }
+  }
+}
+
 function utf8SafeEnd (buffer) {
   if (!buffer.length) return 0
   let lead = buffer.length - 1
@@ -70,7 +81,7 @@ function outputTruncationSeparator (limit) {
   return Buffer.from(text || '~'.repeat(limit))
 }
 
-function createBoundedOutputCollector (maxOutputBytes) {
+function createBoundedOutputCollector (maxOutputBytes, sharedBudget) {
   const limit = normalizeCollectorLimit(maxOutputBytes)
   if (limit === undefined) {
     throw new Error('maxOutputBytes must be a non-negative finite number.')
@@ -82,6 +93,7 @@ function createBoundedOutputCollector (maxOutputBytes) {
   let tailLength = 0
   let tailStart = 0
   let totalBytes = 0
+  let claimedBytes = sharedBudget ? 0 : limit
 
   function appendTail (source) {
     if (!tailCapacity || !source.length) return
@@ -127,6 +139,7 @@ function createBoundedOutputCollector (maxOutputBytes) {
     append (value) {
       const source = Buffer.isBuffer(value) ? value : Buffer.from(value)
       totalBytes += source.length
+      if (sharedBudget) claimedBytes += sharedBudget.claim(source.length)
       let offset = 0
       if (headLength < headCapacity) {
         const length = Math.min(headCapacity - headLength, source.length)
@@ -140,17 +153,17 @@ function createBoundedOutputCollector (maxOutputBytes) {
       return headLength + tailLength
     },
     get truncated () {
-      return totalBytes > limit
+      return totalBytes > claimedBytes
     },
     toString () {
       const head = storage.subarray(0, headLength)
       const tails = tailBuffers()
-      if (totalBytes <= limit) {
+      if (totalBytes <= claimedBytes) {
         return Buffer.concat([head, ...tails], headLength + tailLength)
           .toString('utf8')
       }
-      const separator = outputTruncationSeparator(limit)
-      const dataBudget = limit - separator.length
+      const separator = outputTruncationSeparator(claimedBytes)
+      const dataBudget = claimedBytes - separator.length
       const headBudget = Math.floor(dataBudget / 2)
       const tailBudget = dataBudget - headBudget
       const boundedHead = head.subarray(0, Math.min(head.length, headBudget))
@@ -257,15 +270,14 @@ exports.commonExtends = function (Cls) {
       const client = conn || this.conn || this.client
       const maxOutputBytes = normalizeMaxOutputBytes(options.maxOutputBytes)
       const timeoutMs = normalizeTimeoutMs(options.timeoutMs)
-      const stdoutLimit = maxOutputBytes
-        ? Math.max(1, Math.ceil(maxOutputBytes * 0.75))
-        : 0
-      const stderrLimit = maxOutputBytes ? maxOutputBytes - stdoutLimit : 0
-      const stdoutCollector = stdoutLimit
-        ? createBoundedOutputCollector(stdoutLimit)
+      const outputBudget = maxOutputBytes
+        ? createSharedOutputBudget(maxOutputBytes)
+        : null
+      const stdoutCollector = maxOutputBytes
+        ? createBoundedOutputCollector(maxOutputBytes, outputBudget)
         : null
       const stderrCollector = maxOutputBytes
-        ? createBoundedOutputCollector(stderrLimit)
+        ? createBoundedOutputCollector(maxOutputBytes, outputBudget)
         : null
       let r = ''
       let settled = false
@@ -298,6 +310,13 @@ exports.commonExtends = function (Cls) {
           stderrCollector?.truncated === true
       })
       if (executionId) executions.set(executionId, entry)
+      if (timeoutMs) {
+        timer = setTimeout(() => {
+          const error = new Error(`Command timed out after ${timeoutMs}ms`)
+          error.name = 'RunCmdTimeoutError'
+          if (finish(reject, error)) terminateExecStream(entry.stream)
+        }, timeoutMs)
+      }
 
       try {
         client.exec(cmd, this.getExecOpts(), (err, stream) => {
@@ -311,14 +330,6 @@ exports.commonExtends = function (Cls) {
           }
           if (stream) {
             entry.stream = stream
-            if (timeoutMs) {
-              timer = setTimeout(() => {
-                const error = new Error(`Command timed out after ${timeoutMs}ms`)
-                error.name = 'RunCmdTimeoutError'
-                finish(reject, error)
-                terminateExecStream(stream)
-              }, timeoutMs)
-            }
             stream
               .on('data', function (data) {
                 if (settled) return

@@ -122,8 +122,38 @@ test('tiny caps count stderr-only truncation within the aggregate UTF-8 limit', 
       Buffer.byteLength(result.stdout, 'utf8') +
       Buffer.byteLength(result.stderr, 'utf8') <= maxOutputBytes
     )
-    assert.equal(result.truncated, true)
+    assert.equal(result.truncated, maxOutputBytes < 3)
+    if (maxOutputBytes === 3) assert.equal(result.stderr, '中')
     assert.doesNotMatch(result.stdout + result.stderr, /\uFFFD/)
+  }
+})
+
+test('stdout and stderr dynamically share the entire output budget', async () => {
+  const cases = [
+    { stdout: '', stderr: 'e'.repeat(50) },
+    { stdout: 'o'.repeat(10), stderr: 'e'.repeat(90) },
+    { stdout: 'o'.repeat(90), stderr: 'e'.repeat(10) }
+  ]
+
+  for (const [index, output] of cases.entries()) {
+    const { session, streams } = createSessionHarness()
+    const running = session.runCmd('shared-budget', undefined, {
+      executionId: `shared-budget-${index}`,
+      maxOutputBytes: 100
+    })
+    const stream = streams[0].stream
+    if (output.stdout) stream.emit('data', Buffer.from(output.stdout))
+    if (output.stderr) stream.stderr.emit('data', Buffer.from(output.stderr))
+    stream.emit('close', 0, null)
+
+    const result = await running
+    assert.equal(result.stdout, output.stdout)
+    assert.equal(result.stderr, output.stderr)
+    assert.equal(result.truncated, false)
+    assert.ok(
+      Buffer.byteLength(result.stdout, 'utf8') +
+      Buffer.byteLength(result.stderr, 'utf8') <= 100
+    )
   }
 })
 
@@ -295,6 +325,75 @@ test('explicit invalid and excessive timeouts stay finite at the session backend
   await Promise.all(pending)
   assert.deepEqual(observed, cases.map(entry => entry.expected))
   assert.ok(observed.every(value => Number.isFinite(value) && value > 0))
+})
+
+test('run-cmd timeout covers client exec setup and closes a late stream', async () => {
+  const { commonExtends } = require(sessionCommonPath)
+  const executionId = 'timeout-before-exec-callback'
+  const events = []
+  let scheduledTimer
+  let lateCallback
+  class FakeSession {
+    kill () {}
+  }
+  commonExtends(FakeSession)
+  const session = new FakeSession()
+  session.initOptions = {}
+  session.client = {
+    exec: (command, options, callback) => {
+      events.push('exec')
+      lateCallback = callback
+    }
+  }
+  const originalSetTimeout = global.setTimeout
+  const originalClearTimeout = global.clearTimeout
+  let running
+
+  try {
+    global.setTimeout = (callback, delay) => {
+      events.push('timer')
+      scheduledTimer = { callback, delay }
+      return scheduledTimer
+    }
+    global.clearTimeout = () => {}
+    running = session.runCmd('connect slowly', undefined, {
+      executionId,
+      timeoutMs: 7,
+      maxOutputBytes: 16
+    })
+
+    assert.deepEqual(events, ['timer', 'exec'])
+    assert.equal(scheduledTimer.delay, 7)
+    scheduledTimer.callback()
+    await assert.rejects(
+      running,
+      error => error.name === 'RunCmdTimeoutError'
+    )
+    assert.equal(session.cancelRunCmd(executionId), false)
+  } finally {
+    global.setTimeout = originalSetTimeout
+    global.clearTimeout = originalClearTimeout
+    session.cancelAllRunCmd()
+    running?.catch(() => {})
+  }
+
+  const lateStream = createStream()
+  lateCallback(null, lateStream)
+  assert.deepEqual(lateStream.signals, ['TERM'])
+  assert.equal(lateStream.closeCalls + lateStream.destroyCalls, 1)
+
+  let reusedStream
+  session.client.exec = (command, options, callback) => {
+    reusedStream = createStream()
+    callback(null, reusedStream)
+  }
+  const reused = session.runCmd('reuse id', undefined, {
+    executionId,
+    timeoutMs: 50,
+    maxOutputBytes: 16
+  })
+  reusedStream.emit('close', 0, null)
+  assert.equal((await reused).code, 0)
 })
 
 test('cancelRunCmd closes the exact SSH stream and ignores late success', async () => {

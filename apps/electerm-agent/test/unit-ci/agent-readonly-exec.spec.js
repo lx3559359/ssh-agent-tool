@@ -228,6 +228,100 @@ test('runtime cancellation reaches the exact SSH exec and preserves its cancella
   assert.equal(runtime.cancellations.size, 0)
 })
 
+test('an unconfirmed remote cancellation rejects with unknown non-retryable state', async () => {
+  const { executeAgentReadonlyCommand } = await import(readonlyExecUrl)
+  const { cancelAgentRuntimeOperations } = await import(runtimeContextUrl)
+  const controller = new AbortController()
+  const runtime = {
+    signal: controller.signal,
+    cancellations: new Set()
+  }
+  const cancelCalls = []
+  let rejectRun
+  const runError = new Error('Remote command cancellation was not confirmed')
+  runError.name = 'RunCmdCancelledError'
+
+  const running = executeAgentReadonlyCommand({
+    command: 'ip addr',
+    endpoint: sessionEndpoint(),
+    resolveEndpoint: () => sessionEndpoint(),
+    runtime,
+    run: async () => new Promise((resolve, reject) => { rejectRun = reject }),
+    cancel: async (pid, executionId) => {
+      cancelCalls.push({ pid, executionId })
+      return false
+    },
+    createExecutionId: () => 'agent-readonly-unconfirmed-cancel'
+  })
+
+  controller.abort()
+  await assert.rejects(cancelAgentRuntimeOperations(runtime), error => {
+    assert.equal(error.code, 'AGENT_CANCELLATION_FAILED')
+    assert.equal(error.remoteState, 'unknown')
+    assert.equal(error.canAutoRetry, false)
+    assert.equal(error.errors.length, 1)
+    assert.equal(error.errors[0].code, 'AGENT_REMOTE_CANCEL_FAILED')
+    assert.equal(error.errors[0].remoteState, 'unknown')
+    assert.equal(error.errors[0].canAutoRetry, false)
+    assert.equal(error.errors[0].pid, sessionEndpoint().pid)
+    assert.equal(
+      error.errors[0].executionId,
+      'agent-readonly-unconfirmed-cancel'
+    )
+    return true
+  })
+  assert.deepEqual(cancelCalls, [{
+    pid: sessionEndpoint().pid,
+    executionId: 'agent-readonly-unconfirmed-cancel'
+  }])
+
+  rejectRun(runError)
+  await assert.rejects(running, error => error === runError)
+})
+
+test('a thrown remote cancellation error keeps its identity but becomes non-retryable', async () => {
+  const { executeAgentReadonlyCommand } = await import(readonlyExecUrl)
+  const { cancelAgentRuntimeOperations } = await import(runtimeContextUrl)
+  const controller = new AbortController()
+  const runtime = {
+    signal: controller.signal,
+    cancellations: new Set()
+  }
+  const cancelError = new Error('Cancellation transport disconnected')
+  cancelError.name = 'TransportError'
+  cancelError.code = 'ECONNRESET'
+  let rejectRun
+  const running = executeAgentReadonlyCommand({
+    command: 'ip addr',
+    endpoint: sessionEndpoint(),
+    resolveEndpoint: () => sessionEndpoint(),
+    runtime,
+    run: async () => new Promise((resolve, reject) => { rejectRun = reject }),
+    cancel: async () => { throw cancelError },
+    createExecutionId: () => 'agent-readonly-thrown-cancel'
+  })
+
+  controller.abort()
+  await assert.rejects(cancelAgentRuntimeOperations(runtime), error => {
+    assert.equal(error.remoteState, 'unknown')
+    assert.equal(error.canAutoRetry, false)
+    assert.equal(error.errors[0], cancelError)
+    assert.equal(error.errors[0].name, 'TransportError')
+    assert.equal(error.errors[0].code, 'ECONNRESET')
+    assert.equal(error.errors[0].remoteState, 'unknown')
+    assert.equal(error.errors[0].canAutoRetry, false)
+    assert.equal(error.errors[0].pid, sessionEndpoint().pid)
+    assert.equal(
+      error.errors[0].executionId,
+      'agent-readonly-thrown-cancel'
+    )
+    return true
+  })
+
+  rejectRun(cancelError)
+  await assert.rejects(running, error => error === cancelError)
+})
+
 test('late cancellation after completion or failure never reaches the backend', async () => {
   const { executeAgentReadonlyCommand } = await import(readonlyExecUrl)
   const { cancelAgentRuntimeOperations } = await import(runtimeContextUrl)
@@ -311,7 +405,7 @@ test('rejects an endpoint change after SSH completion and clears cancellation st
   assert.equal(runtime.cancellations.size, 0)
 })
 
-test('passes through backend truncation metadata without applying a second output cap', async () => {
+test('preserves backend truncation metadata within the final output cap', async () => {
   const { executeAgentReadonlyCommand } = await import(readonlyExecUrl)
   const boundedBackendOutput = 'x'.repeat(32 * 1024)
 
@@ -331,6 +425,63 @@ test('passes through backend truncation metadata without applying a second outpu
   assert.equal(result.truncated, true)
   assert.equal(result.output, boundedBackendOutput)
   assert.equal(Buffer.byteLength(result.output, 'utf8'), 32 * 1024)
+})
+
+test('final combined evidence counts its separator inside the UTF-8 byte cap', async () => {
+  const { executeAgentReadonlyCommand } = await import(readonlyExecUrl)
+  const maxOutputBytes = 32 * 1024
+  const stdout = 'o'.repeat(maxOutputBytes / 2)
+  const stderr = 'e'.repeat(maxOutputBytes / 2)
+
+  const result = await executeAgentReadonlyCommand({
+    command: 'ip addr',
+    endpoint: sessionEndpoint(),
+    resolveEndpoint: () => sessionEndpoint(),
+    runtime: { cancellations: new Set() },
+    maxOutputBytes,
+    run: async () => commandResult({ stdout, stderr }),
+    cancel: async () => true,
+    createExecutionId: () => 'agent-readonly-final-cap'
+  })
+
+  assert.ok(Buffer.byteLength(result.output, 'utf8') <= maxOutputBytes)
+  assert.equal(result.truncated, true)
+  assert.doesNotMatch(result.output, /\uFFFD/)
+})
+
+test('final combined evidence keeps multibyte separator bounds UTF-8 safe', async () => {
+  const { executeAgentReadonlyCommand } = await import(readonlyExecUrl)
+
+  const result = await executeAgentReadonlyCommand({
+    command: 'ip addr',
+    endpoint: sessionEndpoint(),
+    resolveEndpoint: () => sessionEndpoint(),
+    runtime: { cancellations: new Set() },
+    maxOutputBytes: 7,
+    run: async () => commandResult({ stdout: '中', stderr: '文' }),
+    cancel: async () => true,
+    createExecutionId: () => 'agent-readonly-final-multibyte'
+  })
+
+  assert.equal(result.output, '中\n文')
+  assert.equal(Buffer.byteLength(result.output, 'utf8'), 7)
+  assert.equal(result.truncated, false)
+  assert.doesNotMatch(result.output, /\uFFFD/)
+
+  const truncated = await executeAgentReadonlyCommand({
+    command: 'ip addr',
+    endpoint: sessionEndpoint(),
+    resolveEndpoint: () => sessionEndpoint(),
+    runtime: { cancellations: new Set() },
+    maxOutputBytes: 6,
+    run: async () => commandResult({ stdout: '中', stderr: '文' }),
+    cancel: async () => true,
+    createExecutionId: () => 'agent-readonly-truncated-multibyte'
+  })
+
+  assert.ok(Buffer.byteLength(truncated.output, 'utf8') <= 6)
+  assert.equal(truncated.truncated, true)
+  assert.doesNotMatch(truncated.output, /\uFFFD/)
 })
 
 test('normalizes unsafe Agent bounds and preserves smaller positive limits', async () => {
