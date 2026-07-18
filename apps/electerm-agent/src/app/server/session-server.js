@@ -33,6 +33,7 @@ const { zmodemManager } = require('./zmodem')
 const { trzszManager } = require('./trzsz')
 const { xmodemManager } = require('./xmodem')
 const { parseTerminalControlMessage } = require('./terminal-control-message')
+const { serializeRunCmdError } = require('./session-common')
 
 const {
   tokenElecterm,
@@ -496,10 +497,7 @@ process.on('message', async (message) => {
         log.error('common message error', err)
         return {
           id,
-          error: {
-            message: err.message,
-            stack: err.stack
-          }
+          error: serializeRunCmdError(err)
         }
       })
 

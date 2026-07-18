@@ -1,5 +1,6 @@
 const { fork } = require('child_process')
 const path = require('path')
+const { reconstructRunCmdError } = require('./session-common')
 
 // Active entries have completed initialization; pending entries have not.
 const activeTerminals = new Map()
@@ -97,14 +98,7 @@ function childEndedError (event, detail) {
 }
 
 function toError (value) {
-  if (value instanceof Error) return value
-  const error = new Error(value?.message || String(value || 'Session request failed'))
-  if (value && typeof value === 'object') {
-    for (const [key, item] of Object.entries(value)) {
-      if (key !== 'message') error[key] = item
-    }
-  }
-  return error
+  return reconstructRunCmdError(value, 'Session request failed')
 }
 
 function hasExited (entry) {

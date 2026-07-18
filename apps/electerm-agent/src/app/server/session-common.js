@@ -9,6 +9,57 @@ const MAX_RUN_CMD_TIMEOUT_MS = 60000
 const DEFAULT_RUN_CMD_OUTPUT_BYTES = 32 * 1024
 const MAX_RUN_CMD_OUTPUT_BYTES = 128 * 1024
 
+const safeRemoteStates = new Set([
+  'not-dispatched',
+  'in-progress',
+  'stopped',
+  'unknown',
+  'known-failed',
+  'verified',
+  'changed-unverified'
+])
+
+function safeErrorIdentifier (value, pattern) {
+  if (typeof value !== 'string' || value.length > 128) return undefined
+  return pattern.test(value) ? value : undefined
+}
+
+function serializeRunCmdError (error) {
+  const name = safeErrorIdentifier(error?.name, /^[A-Za-z][A-Za-z0-9]*$/)
+  const code = safeErrorIdentifier(error?.code, /^[A-Za-z0-9_:-]+$/)
+  const remoteState = safeRemoteStates.has(error?.remoteState)
+    ? error.remoteState
+    : undefined
+  return {
+    message: String(error?.message || 'Remote command failed'),
+    ...(name ? { name } : {}),
+    ...(code ? { code } : {}),
+    ...(remoteState ? { remoteState } : {}),
+    ...(typeof error?.canAutoRetry === 'boolean'
+      ? { canAutoRetry: error.canAutoRetry }
+      : {})
+  }
+}
+
+function reconstructRunCmdError (
+  value,
+  fallbackMessage = 'Remote command failed'
+) {
+  if (value instanceof Error) return value
+  const source = value && typeof value === 'object'
+    ? value
+    : { message: value || fallbackMessage }
+  const safeError = serializeRunCmdError(source)
+  const error = new Error(safeError.message)
+  if (safeError.name) error.name = safeError.name
+  if (safeError.code) error.code = safeError.code
+  if (safeError.remoteState) error.remoteState = safeError.remoteState
+  if (typeof safeError.canAutoRetry === 'boolean') {
+    error.canAutoRetry = safeError.canAutoRetry
+  }
+  return error
+}
+
 function normalizeRunCmdBound (value, fallback, maximum) {
   if (value === undefined) return undefined
   const number = Number(value)
@@ -224,6 +275,8 @@ function terminateExecStream (stream) {
 }
 
 exports.createBoundedOutputCollector = createBoundedOutputCollector
+exports.serializeRunCmdError = serializeRunCmdError
+exports.reconstructRunCmdError = reconstructRunCmdError
 
 exports.commonExtends = function (Cls) {
   Cls.prototype.customEnv = function (envs) {

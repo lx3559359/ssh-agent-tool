@@ -3,38 +3,7 @@
  */
 
 const { testConnection, terminal, terminals } = require('./session-process')
-
-const safeRemoteStates = new Set([
-  'not-dispatched',
-  'in-progress',
-  'stopped',
-  'unknown',
-  'known-failed',
-  'verified',
-  'changed-unverified'
-])
-
-function safeErrorIdentifier (value, pattern) {
-  if (typeof value !== 'string' || value.length > 128) return undefined
-  return pattern.test(value) ? value : undefined
-}
-
-function serializeRunCmdError (error) {
-  const name = safeErrorIdentifier(error?.name, /^[A-Za-z][A-Za-z0-9]*$/)
-  const code = safeErrorIdentifier(error?.code, /^[A-Za-z0-9_:-]+$/)
-  const remoteState = safeRemoteStates.has(error?.remoteState)
-    ? error.remoteState
-    : undefined
-  return {
-    message: String(error?.message || 'Remote command failed'),
-    ...(name ? { name } : {}),
-    ...(code ? { code } : {}),
-    ...(remoteState ? { remoteState } : {}),
-    ...(typeof error?.canAutoRetry === 'boolean'
-      ? { canAutoRetry: error.canAutoRetry }
-      : {})
-  }
-}
+const { serializeRunCmdError } = require('./session-common')
 
 async function runCmd (ws, msg) {
   const {
