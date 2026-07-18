@@ -1,5 +1,3 @@
-import { classifyCommand } from '../../common/safety-transactions/command-classifier.js'
-
 const delegatedStructuredTools = new Set(['sftp_del'])
 const delegatedCommandTools = new Set([
   'send_terminal_command',
@@ -41,11 +39,11 @@ export function shouldDelegateAgentSafetyConfirmation (
   options = {}
 ) {
   const name = String(toolName || '')
-  if (delegatedStructuredTools.has(name)) {
-    return String(options.endpoint?.sessionType || '').toLowerCase() === 'ssh'
+  if (!delegatedStructuredTools.has(name) && !delegatedCommandTools.has(name)) {
+    return false
   }
-  if (!delegatedCommandTools.has(name)) return false
-  return classifyCommand(args.command).reversible === true
+  const sessionType = options.endpoint?.sessionType || options.endpoint?.type
+  return String(sessionType || '').toLowerCase() === 'ssh'
 }
 
 export function createDelegatedAgentSafetyPreparation (
@@ -56,11 +54,15 @@ export function createDelegatedAgentSafetyPreparation (
   if (!shouldDelegateAgentSafetyConfirmation(toolName, args, options)) {
     throw confirmationRequiredError()
   }
+  const confirmedArgs = deepFreeze(cloneJson(args))
   return Object.freeze({
     delegatedSafetyConfirmation: true,
     toolName: String(toolName),
-    confirmedArgs: deepFreeze(cloneJson(args)),
-    verification: deepFreeze(cloneJson(options.verification || [])),
+    confirmedArgs,
+    endpoint: deepFreeze(cloneJson(options.endpoint || {})),
+    verification: deepFreeze(cloneJson(
+      options.verification ?? confirmedArgs?.riskContext?.verification ?? []
+    )),
     executionState: { result: undefined }
   })
 }
@@ -79,7 +81,11 @@ export function validateDelegatedAgentSafetyPreparation ({
       delegatedPreparation.confirmedArgs,
       { endpoint }
     ) ||
-    stableSerialize(args || {}) !== stableSerialize(delegatedPreparation.confirmedArgs)
+    stableSerialize(args || {}) !== stableSerialize(delegatedPreparation.confirmedArgs) ||
+    stableSerialize(endpoint || {}) !== stableSerialize(delegatedPreparation.endpoint || {}) ||
+    stableSerialize(delegatedPreparation.verification || []) !== stableSerialize(
+      delegatedPreparation.confirmedArgs?.riskContext?.verification || []
+    )
   ) {
     throw confirmationRequiredError()
   }

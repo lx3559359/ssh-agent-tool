@@ -5,6 +5,7 @@ import {
 } from '../../common/safety-transactions/endpoint-guard.js'
 
 const TAB_SCOPED_AGENT_TOOLS = new Set([
+  'run_readonly_command',
   'read_service_status',
   'read_recent_logs',
   'verify_listening_port',

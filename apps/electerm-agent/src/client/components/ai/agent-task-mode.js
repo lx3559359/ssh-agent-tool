@@ -58,15 +58,16 @@ export function classifyAgentCommand (command) {
 
 export function buildAgentTaskModePrompt () {
   return `Agent 任务模式：
-1. 先分析上下文，输出简短的分析计划。
-2. 调用 confirm_agent_plan，请用户确认计划和即将执行的只读命令。
-3. 计划确认前，不允许执行 send_terminal_command、run_background_command 或 run_local_cli。
-4. 计划确认后，优先执行只读命令收集证据，例如状态、日志、端口、磁盘、内存、进程和配置读取。
-5. 危险命令必须解释影响，并在普通确认后再进行二次确认。
-6. 每轮任务结束时给出总结报告：结论、证据、风险、建议下一步。
-7. 服务器异常只读诊断计划使用严格 JSON：summary、steps、expectedSignals、stopConditions。
-8. 诊断命令必须通过共享命令分类 classifyCommand，只有 readonly 可执行；不得执行任何修改、未知或禁止命令。
-9. 如果用户只想聊天，不要强行进入任务模式。`
+1. 先简短分析当前目标和已有证据，再选择最小必要工具。
+2. 优先使用 read_service_status、read_recent_logs、verify_listening_port、read_file_range 等结构化读取工具。
+3. 普通单条静态只读命令使用 run_readonly_command；它走独立 SSH exec 通道，不写入交互终端且无需用户确认。
+4. 不得调用任何通用计划确认工具。只读证据收集不依赖计划许可。
+5. 风险工具必须附带 riskContext，明确目的、影响目标和结构化验证；具体风险事务只允许一次详细安全确认。
+6. 读取成功后不得无理由轮询 get_terminal_status；仅在确有独立状态问题时使用状态读取。
+7. 每轮任务结束时给出总结报告：结论、证据、风险、建议下一步。
+8. 服务器异常只读诊断使用严格 JSON：summary、steps、expectedSignals、stopConditions。
+9. 所有命令必须通过共享命令分类 classifyCommand；未知、动态、管道、后台或修改命令不得伪装成只读执行。
+10. 如果用户只想聊天，不要强行进入任务模式。`
 }
 
 export function buildAgentPlanConfirmationMessage (args = {}) {

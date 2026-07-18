@@ -128,6 +128,58 @@ test('structured results are bounded and carry endpoint identity plus cursors', 
   assert.deepEqual(file.endpoint, endpoint)
 })
 
+test('all command-backed structured reads share one exec adapter and file range stays SFTP-only', async () => {
+  const { executeStructuredAgentTool } = await import(moduleUrl)
+  const commands = []
+  const fileReads = []
+  const executeCommand = async command => {
+    commands.push(command)
+    return { exitCode: 0, output: command }
+  }
+  const readFile = async args => {
+    fileReads.push(args)
+    return { content: 'slice', nextOffset: args.offset + args.maxBytes, hasMore: false }
+  }
+
+  await executeStructuredAgentTool({
+    toolName: 'read_service_status',
+    args: { service: 'nginx' },
+    endpoint,
+    executeCommand,
+    readFile
+  })
+  await executeStructuredAgentTool({
+    toolName: 'read_recent_logs',
+    args: { unit: 'nginx', limit: 20 },
+    endpoint,
+    executeCommand,
+    readFile
+  })
+  await executeStructuredAgentTool({
+    toolName: 'verify_listening_port',
+    args: { port: 443 },
+    endpoint,
+    executeCommand,
+    readFile
+  })
+  await executeStructuredAgentTool({
+    toolName: 'read_file_range',
+    args: { remotePath: '/var/log/nginx/error.log', offset: 5, length: 8 },
+    endpoint,
+    executeCommand,
+    readFile
+  })
+
+  assert.equal(commands.length, 3)
+  assert.equal(fileReads.length, 1)
+  assert.deepEqual(fileReads[0], {
+    remotePath: '/var/log/nginx/error.log',
+    offset: 5,
+    maxBytes: 8,
+    tabId: undefined
+  })
+})
+
 test('initial structured tool registry exposes only the four bounded diagnostics', async () => {
   const { structuredAgentTools } = await import(moduleUrl)
   assert.deepEqual(

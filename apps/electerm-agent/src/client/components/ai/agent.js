@@ -169,7 +169,7 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
   )
   const resolveEndpoint = () => resolveAgentRuntimeEndpoint(sourceTabId)
   const agentRuntime = {
-    planGrant: null,
+    goal: String(chatEntry.prompt || 'Agent SSH task'),
     selectedSkillBindings: [],
     selectedSkillArtifactDigests: [],
     sourceTabId,

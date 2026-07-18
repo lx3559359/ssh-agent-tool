@@ -19,48 +19,98 @@ const sshEndpoint = Object.freeze({
   hostKeyFingerprint: 'SHA256:a'
 })
 
-test('only operations with lower recovery preparation delegate confirmation', async () => {
-  const {
-    createDelegatedAgentSafetyPreparation,
-    shouldDelegateAgentSafetyConfirmation
-  } = await import(moduleUrl)
+const riskContext = Object.freeze({
+  purpose: 'restart nginx after configuration validation',
+  impactTargets: ['nginx.service'],
+  verification: [{
+    name: 'read_service_status',
+    args: { service: 'nginx' },
+    expected: { contains: 'ActiveState=active' }
+  }]
+})
 
-  assert.equal(shouldDelegateAgentSafetyConfirmation('sftp_del', {
-    remotePath: '/srv/app/cache'
+test('SSH command safety confirmation delegates to the single lower transaction', async () => {
+  const { shouldDelegateAgentSafetyConfirmation } = await import(moduleUrl)
+
+  assert.equal(shouldDelegateAgentSafetyConfirmation('send_terminal_command', {
+    command: 'systemctl restart nginx',
+    riskContext
   }, { endpoint: sshEndpoint }), true)
-  assert.equal(shouldDelegateAgentSafetyConfirmation('sftp_del', {
-    remotePath: '/srv/app/cache'
-  }, { endpoint: { ...sshEndpoint, sessionType: 'ftp' } }), false)
-  assert.equal(shouldDelegateAgentSafetyConfirmation('send_terminal_command', {
-    command: '/usr/bin/systemctl start nginx.service'
-  }), true)
   assert.equal(shouldDelegateAgentSafetyConfirmation('run_background_command', {
-    command: '/usr/bin/systemctl start nginx.service'
-  }), true)
+    command: 'systemctl restart nginx',
+    riskContext
+  }, { endpoint: sshEndpoint }), true)
   assert.equal(shouldDelegateAgentSafetyConfirmation('send_terminal_command', {
-    command: 'rm -rf /srv/app/cache'
-  }), false)
-  assert.equal(shouldDelegateAgentSafetyConfirmation('sftp_upload', {
-    localPath: 'C:/tmp/app.conf',
-    remotePath: '/etc/app.conf'
-  }), false)
+    command: 'rm -rf /srv/app/cache',
+    riskContext
+  }, { endpoint: sshEndpoint }), true)
+  assert.equal(shouldDelegateAgentSafetyConfirmation('send_terminal_command', {
+    command: 'systemctl restart nginx',
+    riskContext
+  }, { endpoint: { ...sshEndpoint, sessionType: 'ftp' } }), false)
   assert.equal(shouldDelegateAgentSafetyConfirmation('run_local_cli', {
     tool: 'node',
-    args: ['script.js']
-  }), false)
+    args: ['script.js'],
+    riskContext
+  }, { endpoint: sshEndpoint }), false)
+})
 
+test('delegated preparation freezes full args endpoint and verification', async () => {
+  const {
+    createDelegatedAgentSafetyPreparation,
+    validateDelegatedAgentSafetyPreparation
+  } = await import(moduleUrl)
+  const args = {
+    command: 'systemctl restart nginx',
+    tabId: 'tab-a',
+    riskContext
+  }
   const preparation = createDelegatedAgentSafetyPreparation(
-    'sftp_del',
-    { remotePath: '/srv/app/cache' },
-    {
-      endpoint: sshEndpoint,
-      verification: [{ name: 'read_file_range', args: { length: 1 } }]
-    }
+    'send_terminal_command',
+    args,
+    { endpoint: sshEndpoint }
   )
+
   assert.equal(Object.isFrozen(preparation), true)
   assert.equal(Object.isFrozen(preparation.confirmedArgs), true)
+  assert.equal(Object.isFrozen(preparation.confirmedArgs.riskContext), true)
+  assert.equal(Object.isFrozen(preparation.endpoint), true)
   assert.equal(Object.isFrozen(preparation.verification), true)
-  assert.equal(preparation.verification[0].name, 'read_file_range')
-  preparation.executionState.result = '{"success":true}'
-  assert.equal(preparation.executionState.result, '{"success":true}')
+  assert.deepEqual(preparation.endpoint, sshEndpoint)
+  assert.deepEqual(preparation.verification, riskContext.verification)
+
+  const validated = validateDelegatedAgentSafetyPreparation({
+    toolName: 'send_terminal_command',
+    args,
+    endpoint: sshEndpoint,
+    delegatedPreparation: preparation
+  })
+  assert.deepEqual(validated.args, preparation.confirmedArgs)
+
+  assert.throws(() => validateDelegatedAgentSafetyPreparation({
+    toolName: 'send_terminal_command',
+    args: { ...args, command: 'systemctl restart sshd' },
+    endpoint: sshEndpoint,
+    delegatedPreparation: preparation
+  }), error => error.code === 'AGENT_RISK_CONFIRMATION_REQUIRED')
+
+  assert.throws(() => validateDelegatedAgentSafetyPreparation({
+    toolName: 'send_terminal_command',
+    args,
+    endpoint: { ...sshEndpoint, pid: 'pid-b' },
+    delegatedPreparation: preparation
+  }), error => error.code === 'AGENT_RISK_CONFIRMATION_REQUIRED')
+})
+
+test('SFTP delete keeps its existing delegated SSH safety path', async () => {
+  const { shouldDelegateAgentSafetyConfirmation } = await import(moduleUrl)
+
+  assert.equal(shouldDelegateAgentSafetyConfirmation('sftp_del', {
+    remotePath: '/srv/app/cache',
+    riskContext
+  }, { endpoint: sshEndpoint }), true)
+  assert.equal(shouldDelegateAgentSafetyConfirmation('sftp_del', {
+    remotePath: '/srv/app/cache',
+    riskContext
+  }, { endpoint: { ...sshEndpoint, sessionType: 'ftp' } }), false)
 })

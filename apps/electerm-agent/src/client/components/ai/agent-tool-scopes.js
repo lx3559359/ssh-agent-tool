@@ -6,7 +6,6 @@ export const VALID_AGENT_TOOL_SCOPES = Object.freeze([
 ])
 
 export const AGENT_TOOL_SCOPES = Object.freeze({
-  confirm_agent_plan: 'conversation',
   read_service_status: 'session-read',
   read_recent_logs: 'session-read',
   verify_listening_port: 'session-read',

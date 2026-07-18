@@ -1,5 +1,6 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
+const fs = require('node:fs')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
 const { createRiskPreparation } = require('./agent-risk-fixture.js')
@@ -146,4 +147,96 @@ test('asynchronous mutation results cannot be marked verified at queue time', as
       error.remoteState === 'changed-unverified'
   )
   assert.equal(assertAgentVerificationDeclared([{ name: 'read_service_status' }]), true)
+})
+
+test('risk transaction grant binds exact args endpoint and verification', async () => {
+  const riskUrl = pathToFileURL(path.join(aiRoot, 'agent-risk-transaction.js')).href
+  const grantUrl = pathToFileURL(path.join(aiRoot, 'agent-plan-grant.js')).href
+  const {
+    buildRiskPlanPayload,
+    buildRiskTransaction,
+    validateConfirmedRiskTransaction
+  } = await import(riskUrl)
+  const { createPlanGrant } = await import(grantUrl)
+  const args = {
+    command: 'systemctl restart nginx',
+    tabId: 'tab-a',
+    riskContext: {
+      purpose: 'reload verified nginx configuration',
+      impactTargets: ['nginx.service'],
+      verification: [{
+        name: 'read_service_status',
+        args: { service: 'nginx' },
+        expected: { contains: 'ActiveState=active' }
+      }]
+    }
+  }
+  const transaction = buildRiskTransaction([{ name: 'send_terminal_command', args }], {
+    endpoint: endpoint(),
+    goal: 'repair nginx',
+    purpose: args.riskContext.purpose,
+    affectedObjects: args.riskContext.impactTargets,
+    verification: args.riskContext.verification
+  })
+  const grant = await createPlanGrant(buildRiskPlanPayload(transaction), {
+    confirmedBy: 'user',
+    now: 1000
+  })
+
+  const validated = await validateConfirmedRiskTransaction({
+    transaction,
+    planGrant: grant,
+    endpoint: endpoint(),
+    toolName: 'send_terminal_command',
+    args
+  })
+  assert.equal(Object.isFrozen(validated.args.riskContext.verification), true)
+
+  await assert.rejects(validateConfirmedRiskTransaction({
+    transaction,
+    planGrant: grant,
+    endpoint: { ...endpoint(), pid: 'pid-b' },
+    toolName: 'send_terminal_command',
+    args
+  }), error => error.code === 'PLAN_BINDING_CHANGED')
+  await assert.rejects(validateConfirmedRiskTransaction({
+    transaction,
+    planGrant: grant,
+    endpoint: endpoint(),
+    toolName: 'send_terminal_command',
+    args: {
+      ...args,
+      riskContext: {
+        ...args.riskContext,
+        verification: [{
+          name: 'read_service_status',
+          args: { service: 'sshd' }
+        }]
+      }
+    }
+  }), error => error.code === 'PLAN_BINDING_CHANGED')
+})
+
+test('post-risk verification is mandatory and command checks use readonly exec', () => {
+  const source = fs.readFileSync(path.join(aiRoot, 'agent-tools.js'), 'utf8')
+  const verification = source.match(
+    /async function verifyPreparedAgentRisk[\s\S]*?\n}/
+  )?.[0] || ''
+
+  assert.match(verification, /assertAgentVerificationDeclared\(verification\)/)
+  assert.match(verification, /executeStructuredAgentTool/)
+  assert.match(verification, /executeCommand:\s*command\s*=>\s*runReadonlyTool/)
+  assert.doesNotMatch(verification, /runTerminalTool|mcpWaitForTerminalIdle/)
+})
+
+test('delegated command risk reaches only the lower safety transaction', () => {
+  const source = fs.readFileSync(path.join(aiRoot, 'agent-tools.js'), 'utf8')
+  const terminalSource = fs.readFileSync(path.join(aiRoot, 'agent-terminal-command.js'), 'utf8')
+  const preparation = source.match(
+    /async function prepareResolvedAgentTool[\s\S]*?\n}/
+  )?.[0] || ''
+
+  assert.match(preparation, /shouldDelegateAgentSafetyConfirmation/)
+  assert.match(preparation, /createDelegatedAgentSafetyPreparation/)
+  assert.equal((terminalSource.match(/\.runSafetyCommand\(/g) || []).length, 1)
 })

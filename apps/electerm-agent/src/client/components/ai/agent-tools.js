@@ -4,6 +4,7 @@ import {
   isAgentCommandTool
 } from './agent-tool-confirm'
 import { runAgentTerminalCommand } from './agent-terminal-command.js'
+import { executeAgentReadonlyCommand } from './agent-readonly-exec.js'
 import {
   executeStructuredAgentTool,
   structuredAgentTools
@@ -21,13 +22,6 @@ import {
   classifyAgentCall,
   withAgentToolPolicy
 } from './agent-tool-policy.js'
-import {
-  commitAgentPlanCall,
-  confirmAgentPlan,
-  ensureAgentPlanAvailable,
-  ensureAgentPlanConfirmed,
-  markAgentPlanConfirmed
-} from './agent-task-mode.js'
 import {
   allowedLocalCliTools
 } from './agent-local-cli-tools'
@@ -98,60 +92,61 @@ function buildAddBookmarkParameters () {
   }
 }
 
+const agentRiskContextSchema = Object.freeze({
+  type: 'object',
+  properties: {
+    purpose: { type: 'string' },
+    impactTargets: {
+      type: 'array',
+      items: { type: 'string' }
+    },
+    verification: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          name: {
+            type: 'string',
+            enum: [
+              'read_service_status',
+              'read_recent_logs',
+              'verify_listening_port',
+              'read_file_range'
+            ]
+          },
+          args: { type: 'object' },
+          expected: { type: 'object' }
+        },
+        required: ['name', 'args'],
+        additionalProperties: false
+      }
+    }
+  },
+  required: ['purpose', 'verification'],
+  additionalProperties: false
+})
+
 export const agentTools = withAgentToolPolicy(withAgentToolScopes([
   ...structuredAgentTools,
   {
     type: 'function',
     function: {
-      name: 'confirm_agent_plan',
-      description: '向用户提交 Agent 分析计划。计划确认前不得执行终端命令、本机 CLI 或后台命令。',
+      name: 'run_readonly_command',
+      description: '在当前 SSH 会话的独立 exec 通道运行一条静态、已允许的只读命令；无需用户确认，不写入交互终端。未知、动态、管道、后台或修改命令会被拒绝。',
       parameters: {
         type: 'object',
         properties: {
-          goal: {
+          command: {
             type: 'string',
-            description: '本次排查或操作目标'
+            description: '单条静态只读命令'
           },
-          steps: {
-            type: 'array',
-            items: { type: 'string' },
-            description: '计划步骤'
-          },
-          readonlyCommands: {
-            type: 'array',
-            items: { type: 'string' },
-            description: '计划执行的只读命令列表'
-          },
-          verification: {
-            type: 'array',
-            description: 'Target checks shown before plan approval and run after risky work.',
-            items: {
-              type: 'object',
-              properties: {
-                name: {
-                  type: 'string',
-                  enum: [
-                    'read_service_status',
-                    'read_recent_logs',
-                    'verify_listening_port',
-                    'read_file_range'
-                  ]
-                },
-                args: { type: 'object' },
-                expected: {
-                  type: 'object',
-                  properties: {
-                    exitCode: { type: 'number' },
-                    contains: { type: 'string' },
-                    notContains: { type: 'string' }
-                  }
-                }
-              },
-              required: ['name', 'args']
-            }
+          tabId: {
+            type: 'string',
+            description: '由系统绑定当前接管会话'
           }
         },
-        required: ['goal']
+        required: ['command'],
+        additionalProperties: false
       }
     }
   },
@@ -170,7 +165,8 @@ export const agentTools = withAgentToolPolicy(withAgentToolScopes([
           tabId: {
             type: 'string',
             description: '终端标签页 ID。省略时使用当前活动终端。'
-          }
+          },
+          riskContext: agentRiskContextSchema
         },
         required: ['command']
       }
@@ -396,7 +392,8 @@ export const agentTools = withAgentToolPolicy(withAgentToolScopes([
           tabId: {
             type: 'string',
             description: 'SSH/FTP 标签页 ID。省略时使用当前活动标签页。'
-          }
+          },
+          riskContext: agentRiskContextSchema
         },
         required: ['remotePath']
       }
@@ -421,7 +418,8 @@ export const agentTools = withAgentToolPolicy(withAgentToolScopes([
           tabId: {
             type: 'string',
             description: 'SSH/FTP 标签页 ID。省略时使用当前活动标签页。'
-          }
+          },
+          riskContext: agentRiskContextSchema
         },
         required: ['localPath', 'remotePath']
       }
@@ -446,7 +444,8 @@ export const agentTools = withAgentToolPolicy(withAgentToolScopes([
           tabId: {
             type: 'string',
             description: 'SSH/FTP 标签页 ID。省略时使用当前活动标签页。'
-          }
+          },
+          riskContext: agentRiskContextSchema
         },
         required: ['remotePath', 'localPath']
       }
@@ -531,7 +530,8 @@ export const agentTools = withAgentToolPolicy(withAgentToolScopes([
           timeoutMs: {
             type: 'number',
             description: '可选超时时间，单位毫秒'
-          }
+          },
+          riskContext: agentRiskContextSchema
         },
         required: ['tool']
       }
@@ -600,7 +600,8 @@ export const agentTools = withAgentToolPolicy(withAgentToolScopes([
           tabId: {
             type: 'string',
             description: '标签页 ID。省略时使用当前活动终端。'
-          }
+          },
+          riskContext: agentRiskContextSchema
         },
         required: ['command']
       }
@@ -693,9 +694,7 @@ export function getAgentToolDescriptor (toolName) {
   return descriptor
 }
 
-function affectedObjectsFor (toolName, args, runtime) {
-  const planned = runtime.planGrant?.payload?.impactTargets
-  if (Array.isArray(planned) && planned.length) return planned
+function affectedObjectsFor (toolName, args) {
   return [
     args.remotePath && `remote-path:${args.remotePath}`,
     args.localPath && `local-path:${args.localPath}`,
@@ -740,9 +739,9 @@ function recoveryFor (toolName, args) {
 
 function buildResolvedRiskTransaction (toolName, args, runtime, context = {}) {
   const recovery = recoveryFor(toolName, args)
+  const riskContext = args.riskContext || {}
   const artifactDigests = [
     ...(runtime.selectedSkillArtifactDigests || []),
-    ...(runtime.planGrant?.payload?.artifactDigests || []),
     ...(toolName === 'sftp_upload' && args.sourceDescriptor?.digest
       ? [{
           type: 'local-transfer-source',
@@ -772,9 +771,11 @@ function buildResolvedRiskTransaction (toolName, args, runtime, context = {}) {
     scriptEntry: args.scriptEntry || null
   }], {
     endpoint: context.endpoint,
-    goal: runtime.planGrant?.payload?.goal || `Agent ${toolName}`,
-    purpose: runtime.planGrant?.payload?.goal || `Execute ${toolName}`,
-    affectedObjects: affectedObjectsFor(toolName, args, runtime),
+    goal: runtime.goal || `Agent ${toolName}`,
+    purpose: riskContext.purpose || runtime.goal || `Execute ${toolName}`,
+    affectedObjects: Array.isArray(riskContext.impactTargets)
+      ? riskContext.impactTargets
+      : affectedObjectsFor(toolName, args),
     worstCase: context.classification?.reasonCode || 'unknown',
     resourceImpact: context.classification?.resourceImpact,
     disconnectPossible: /(?:network|firewall|restart|reboot|shutdown)/i.test(
@@ -782,9 +783,10 @@ function buildResolvedRiskTransaction (toolName, args, runtime, context = {}) {
     ),
     recovery,
     rollbackLimits: recovery.limits,
-    verification: runtime.planGrant?.payload?.verification || [],
-    skillBindings: runtime.selectedSkillBindings ||
-      runtime.planGrant?.payload?.skillBindings || [],
+    verification: Array.isArray(riskContext.verification)
+      ? riskContext.verification
+      : [],
+    skillBindings: runtime.selectedSkillBindings || [],
     artifactDigests
   })
 }
@@ -863,11 +865,9 @@ function beginPreparedRiskBatchCall (preparation) {
 export async function prepareAgentRiskBatch (toolCalls, runtime = {}) {
   if (runtime.riskBatch?.terminal === true) runtime.riskBatch = null
   if (!Array.isArray(toolCalls) || toolCalls.length < 2 ||
-    toolCalls.some(call => call?.function?.name === 'confirm_agent_plan') ||
     toolCalls.some(call => call?.function?.name === 'run_skill_artifact')) {
     return null
   }
-  if (await ensureAgentPlanAvailable(runtime)) return null
   const transactions = []
   for (const toolCall of toolCalls) {
     const toolName = String(toolCall?.function?.name || '')
@@ -952,10 +952,6 @@ export async function prepareAgentRiskBatch (toolCalls, runtime = {}) {
 }
 
 async function prepareResolvedAgentTool (toolName, args, runtime, context = {}) {
-  const planGuard = await ensureAgentPlanAvailable(runtime)
-  if (planGuard) {
-    return { handled: true, result: JSON.stringify(planGuard) }
-  }
   const batchPreparation = batchPreparationFor(runtime)
   if (batchPreparation) return batchPreparation
   if (shouldDelegateAgentSafetyConfirmation(toolName, args, {
@@ -963,7 +959,7 @@ async function prepareResolvedAgentTool (toolName, args, runtime, context = {}) 
   })) {
     return createDelegatedAgentSafetyPreparation(toolName, args, {
       endpoint: context.endpoint,
-      verification: runtime.planGrant?.payload?.verification || []
+      verification: args.riskContext?.verification || []
     })
   }
   const confirmedArgs = await prepareAgentRiskArgs(toolName, args, runtime)
@@ -1041,23 +1037,23 @@ async function runTerminalTool (store, args, runtime) {
   }
 }
 
+export async function runReadonlyTool (args, endpoint, runtime = {}) {
+  const resolveEndpoint = typeof runtime.resolveEndpoint === 'function'
+    ? runtime.resolveEndpoint
+    : () => endpoint
+  return executeAgentReadonlyCommand({
+    command: args.command,
+    endpoint,
+    resolveEndpoint,
+    runtime
+  })
+}
+
 async function executeResolvedAgentTool (toolName, args, runtime, endpoint, preparation) {
   const store = window.store
   switch (toolName) {
-    case 'confirm_agent_plan': {
-      const confirmation = await confirmAgentPlan({
-        args,
-        signal: runtime.signal,
-        trustedSkillBindings: runtime.selectedSkillBindings || [],
-        trustedArtifactDigests: runtime.selectedSkillArtifactDigests || [],
-        endpoint: (typeof runtime.resolveEndpoint === 'function'
-          ? runtime.resolveEndpoint()
-          : runtime.endpoint) || {}
-      })
-      assertAgentRuntimeActive(runtime)
-      markAgentPlanConfirmed(runtime, confirmation)
-      return JSON.stringify(confirmation)
-    }
+    case 'run_readonly_command':
+      return JSON.stringify(await runReadonlyTool(args, endpoint, runtime))
     case 'read_service_status':
     case 'read_recent_logs':
     case 'verify_listening_port':
@@ -1066,14 +1062,19 @@ async function executeResolvedAgentTool (toolName, args, runtime, endpoint, prep
         toolName,
         args,
         endpoint,
-        executeCommand: command => runTerminalTool(store, {
+        executeCommand: command => runReadonlyTool({
           command,
           tabId: args.tabId
-        }, runtime),
+        }, endpoint, runtime),
         readFile: fileArgs => store.mcpSftpReadFile(fileArgs)
       }))
-    case 'send_terminal_command':
+    case 'send_terminal_command': {
+      if (!preparation && classifyAgentCall({ toolName, args }).outcome ===
+        'allowlisted-readonly') {
+        return JSON.stringify(await runReadonlyTool(args, endpoint, runtime))
+      }
       return JSON.stringify(await runTerminalTool(store, args, runtime))
+    }
     case 'get_terminal_output':
       return JSON.stringify(store.mcpGetTerminalOutput(args))
     case 'open_local_terminal':
@@ -1250,10 +1251,10 @@ async function verifyPreparedAgentRisk (preparation, endpoint, runtime) {
       toolName: step.name,
       args,
       endpoint: verificationEndpoint,
-      executeCommand: command => runTerminalTool(window.store, {
+      executeCommand: command => runReadonlyTool({
         command,
         tabId: args.tabId
-      }, runtime),
+      }, verificationEndpoint, runtime),
       readFile: fileArgs => window.store.mcpSftpReadFile(fileArgs)
     })
     assertAgentRiskVerificationAllowed({
@@ -1347,18 +1348,6 @@ export async function executeToolCall (
   const expandedContent = controlledSkillCall?.expandedContent ||
     args.script || args.expandedContent
   assertAgentRuntimeActive(runtime)
-  const initialClassification = classifyAgentCall({
-    descriptor,
-    args,
-    expandedContent,
-    skillArtifact: controlledSkillCall?.skillArtifact,
-    localExecution: controlledSkillCall?.localExecution
-  })
-  if (isAgentCommandTool(toolName) &&
-    initialClassification.outcome === 'allowlisted-readonly') {
-    const planGuard = await ensureAgentPlanConfirmed({ toolName, args, runtime })
-    if (planGuard) return JSON.stringify(planGuard)
-  }
   const currentEndpoint = resolveAgentExecutionEndpoint({
     descriptor,
     runtime
@@ -1409,14 +1398,6 @@ export async function executeToolCall (
           verifiedEndpoint,
           preparation
         )
-        if (isAgentCommandTool(toolName) &&
-          initialClassification.outcome === 'allowlisted-readonly') {
-          commitAgentPlanCall({
-            toolName,
-            args: executionArgs,
-            runtime
-          })
-        }
         if (preparation?.executionState) {
           preparation.executionState.result = result
         } else if (preparation) {
