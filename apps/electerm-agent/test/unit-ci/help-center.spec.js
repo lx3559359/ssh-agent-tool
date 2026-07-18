@@ -70,3 +70,28 @@ test('AI configuration uses ShellPilot inline guidance without upstream wiki bra
   assert.match(config, /e\('shellpilotAiQuickSetup'\)/)
   assert.match(config, /e\('shellpilotAiQuickSetupDescription'\)/)
 })
+
+test('help center explains per-session AI takeover, user Skills, recovery, and resource impact', () => {
+  const help = read('src/client/components/main/help-center-modal.jsx')
+
+  for (const required of [
+    '每个 SSH 会话独立开关',
+    '默认关闭',
+    '只读检查',
+    '有风险的操作',
+    '二次确认',
+    '一键停止',
+    '断开连接或客户端重启',
+    '默认不内置任何 Skill',
+    '对话创建',
+    '手动导入和编辑',
+    '禁用草稿',
+    '声明权限不等于获得授权',
+    '带外恢复',
+    '云端模型推理不会在 SSH 服务器运行',
+    '空闲接管不会产生额外远程工作',
+    'CPU、内存、磁盘和网络'
+  ]) {
+    assert.match(help, new RegExp(required))
+  }
+})

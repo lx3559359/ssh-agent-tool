@@ -93,11 +93,86 @@ const {
   reportRendererError
 } = require('./renderer-error-report')
 const {
+  createAgentSkillRepository
+} = require('./agent-skill-repository')
+const {
+  createAgentSkillImporter
+} = require('./agent-skill-import')
+const {
   nativeUpdateCheck,
   nativeUpdateDownload,
   nativeUpdateInstall,
   nativeUpdateState
 } = require('./native-updater')
+
+let agentSkillServices
+let agentSkillMigrationPromise
+
+function getAgentSkillServices () {
+  if (agentSkillServices) return agentSkillServices
+  const agentSkillDataRoot = process.env.DATA_PATH || path.resolve(appPath, 'electerm')
+  const agentSkillRepositoryRoot = path.resolve(agentSkillDataRoot, 'agent-skills')
+  const repository = createAgentSkillRepository({
+    rootPath: agentSkillRepositoryRoot
+  })
+  const importer = createAgentSkillImporter({
+    repository,
+    repositoryRoot: agentSkillRepositoryRoot
+  })
+  agentSkillServices = { repository, importer }
+  return agentSkillServices
+}
+
+function collectLegacyAgentSkills (config = {}) {
+  return [
+    ...(Array.isArray(config.agentSkills) ? config.agentSkills : []),
+    ...(Array.isArray(config.aiProfiles)
+      ? config.aiProfiles.flatMap(profile => (
+        Array.isArray(profile?.agentSkills) ? profile.agentSkills : []
+      ))
+      : [])
+  ]
+}
+
+async function ensureAgentSkillsMigrated () {
+  if (!agentSkillMigrationPromise) {
+    const { repository } = getAgentSkillServices()
+    agentSkillMigrationPromise = getConfig()
+      .then(({ config }) => (
+        repository.migrateLegacySkills(
+          collectLegacyAgentSkills(config)
+        )
+      ))
+      .catch(error => {
+        agentSkillMigrationPromise = null
+        throw error
+      })
+  }
+  return agentSkillMigrationPromise
+}
+
+async function afterAgentSkillMigration (operation) {
+  await ensureAgentSkillsMigrated()
+  return operation()
+}
+
+function safeAgentSkillResult (operation) {
+  return Promise.resolve()
+    .then(operation)
+    .then(value => ({ ok: true, value }))
+    .catch(error => ({
+      ok: false,
+      error: {
+        code: String(error?.code || '').startsWith('SKILL_')
+          ? error.code
+          : 'SKILL_IPC_ERROR',
+        message: String(error?.code || '').startsWith('SKILL_')
+          ? error.message
+          : 'Agent Skill operation failed.',
+        ...(error?.validation ? { validation: error.validation } : {})
+      }
+    }))
+}
 
 // Security: whitelist of safe environment variables for Linux/Mac/Windows
 const SAFE_ENV_KEYS = [
@@ -135,6 +210,74 @@ async function getDiagnosticSessionLogDir () {
   } catch (e) {
     log.error('Read diagnostic session log config failed', e)
     return path.join(appPath, 'AIGShell', 'session_logs')
+  }
+}
+
+function recordPerformanceMetric (payload = {}) {
+  try {
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      return false
+    }
+    const metrics = globalState.get('performanceMetrics')
+    if (!metrics) return false
+    const dimensions = payload.dimensions || {}
+    if (payload.kind === 'mark') {
+      if (typeof payload.name !== 'string' || !Number.isFinite(payload.at)) {
+        return false
+      }
+      return metrics.mark(payload.name, payload.at, dimensions)
+    }
+    if (payload.kind === 'duration') {
+      if (typeof payload.name !== 'string' || !Number.isFinite(payload.value)) {
+        return false
+      }
+      return metrics.recordDuration(payload.name, payload.value, dimensions)
+    }
+    return false
+  } catch (error) {
+    return false
+  }
+}
+
+function getPerformanceSummary () {
+  try {
+    return globalState.get('performanceMetrics')?.getSummary() || {
+      schemaVersion: 1,
+      generatedAt: 0,
+      recordCount: 0,
+      metrics: {}
+    }
+  } catch (error) {
+    return {
+      schemaVersion: 1,
+      generatedAt: 0,
+      recordCount: 0,
+      metrics: {}
+    }
+  }
+}
+
+function saveRecoverySnapshot (state = {}) {
+  try {
+    return globalState.get('recoverySnapshot')?.saveClientState(state) === true
+  } catch (error) {
+    return false
+  }
+}
+
+function getRecoveryPlan () {
+  try {
+    return globalState.get('recoverySnapshot')?.getRecoveryPlan() || null
+  } catch (error) {
+    return null
+  }
+}
+
+function dismissRecoveryPlan () {
+  try {
+    return globalState.get('recoverySnapshot')?.dismissRecoveryPlan() === true
+  } catch (error) {
+    return false
   }
 }
 
@@ -201,7 +344,21 @@ function initIpc () {
   ipcMain.on('sync-func', (event, { name, args }) => {
     event.returnValue = ipcSyncFuncs[name](...args)
   })
+  const agentSkillAsyncGlobals = {
+    listAgentSkills: () => safeAgentSkillResult(() => afterAgentSkillMigration(() => getAgentSkillServices().repository.list())),
+    getAgentSkillMetadata: id => safeAgentSkillResult(() => afterAgentSkillMigration(() => getAgentSkillServices().repository.getMetadata(id))),
+    readAgentSkillFile: (id, relativePath) => safeAgentSkillResult(() => afterAgentSkillMigration(() => getAgentSkillServices().repository.readFile(id, relativePath))),
+    createAgentSkillDraft: files => safeAgentSkillResult(() => afterAgentSkillMigration(() => getAgentSkillServices().repository.createDraft(files))),
+    updateAgentSkillDraftFile: (id, relativePath, content) => safeAgentSkillResult(() => afterAgentSkillMigration(() => getAgentSkillServices().repository.updateDraftFile(id, relativePath, content))),
+    validateAgentSkillDraft: id => safeAgentSkillResult(() => afterAgentSkillMigration(() => getAgentSkillServices().repository.validateDraft(id))),
+    enableAgentSkillDraft: (id, packageDigest) => safeAgentSkillResult(() => afterAgentSkillMigration(() => getAgentSkillServices().repository.enableDraft(id, packageDigest))),
+    disableAgentSkill: id => safeAgentSkillResult(() => afterAgentSkillMigration(() => getAgentSkillServices().repository.disable(id))),
+    rollbackAgentSkill: (id, packageDigest) => safeAgentSkillResult(() => afterAgentSkillMigration(() => getAgentSkillServices().repository.rollback(id, packageDigest))),
+    removeAgentSkill: id => safeAgentSkillResult(() => afterAgentSkillMigration(() => getAgentSkillServices().repository.remove(id))),
+    importAgentSkill: sourcePath => safeAgentSkillResult(() => afterAgentSkillMigration(() => getAgentSkillServices().importer.importSkill(sourcePath)))
+  }
   const asyncGlobals = {
+    ...agentSkillAsyncGlobals,
     confirmExit: () => {
       globalState.set('confirmExit', true)
     },
@@ -278,6 +435,14 @@ function initIpc () {
       logFilePath: log.transports.file.getFile().path,
       sessionLogDir: await getDiagnosticSessionLogDir()
     }),
+    recordQualityEvent: (context, event) => {
+      return log.recordQualityEvent(context, event)
+    },
+    recordPerformanceMetric,
+    getPerformanceSummary,
+    saveRecoverySnapshot,
+    getRecoveryPlan,
+    dismissRecoveryPlan,
     reportRendererError: (payload) => reportRendererError(payload, log),
     nativeUpdateCheck,
     nativeUpdateDownload,

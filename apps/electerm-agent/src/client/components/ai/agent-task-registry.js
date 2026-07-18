@@ -19,6 +19,7 @@ function taskStoreMethod (store, genericName, taskName) {
 export function createAgentTaskRegistry () {
   const entries = new Map()
   const listeners = new Set()
+  const cancellations = new Map()
 
   function notify (change) {
     for (const listener of listeners) {
@@ -34,11 +35,32 @@ export function createAgentTaskRegistry () {
       throw new Error('注册 Agent 任务需要 taskId 和可取消 runner。')
     }
     if (entries.has(taskId)) throw new Error(`Agent 任务已注册：${taskId}`)
+    const scopeId = String(options.scopeId || options.endpoint?.tabId || '')
+    const endpoint = options.endpoint
+    const conflicting = [...entries.values()].find(entry => {
+      if (endpoint && entry.endpoint) {
+        try {
+          assertSameSessionEndpoint(entry.endpoint, endpoint)
+          return true
+        } catch {
+          return false
+        }
+      }
+      return !endpoint && !entry.endpoint && scopeId && entry.scopeId === scopeId
+    })
+    if (conflicting) {
+      const error = new Error('当前 SSH 会话已有 Agent 任务正在运行。')
+      error.code = 'AI_AGENT_SESSION_BUSY'
+      error.taskId = conflicting.taskId
+      throw error
+    }
     const entry = {
       taskId,
       runner: options.runner,
       controller: options.controller,
-      endpoint: options.endpoint,
+      endpoint,
+      scopeId,
+      kind: String(options.kind || 'diagnostic'),
       pid: options.pid,
       registeredAt: new Date().toISOString()
     }
@@ -70,14 +92,60 @@ export function createAgentTaskRegistry () {
 
   async function cancel (id) {
     const taskId = String(id || '')
+    if (cancellations.has(taskId)) return cancellations.get(taskId)
     const entry = entries.get(taskId)
     if (!entry) throw new Error('任务取消能力不可用，执行器可能已结束。')
-    entry.controller?.abort?.()
+    const cancellation = (async () => {
+      entry.controller?.abort?.()
+      try {
+        return await entry.runner.cancel(taskId)
+      } finally {
+        unregister(taskId)
+      }
+    })()
+    cancellations.set(taskId, cancellation)
     try {
-      return await entry.runner.cancel(taskId)
+      return await cancellation
     } finally {
-      unregister(taskId)
+      cancellations.delete(taskId)
     }
+  }
+
+  function matchesEndpoint (entry, endpoint) {
+    if (!entry?.endpoint || !endpoint) return false
+    try {
+      assertSameSessionEndpoint(entry.endpoint, endpoint)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  function listByEndpoint (endpoint) {
+    return [...entries.values()].filter(entry => matchesEndpoint(entry, endpoint))
+  }
+
+  function listByScope (scopeId) {
+    const expected = String(scopeId || '')
+    return expected
+      ? [...entries.values()].filter(entry => entry.scopeId === expected)
+      : []
+  }
+
+  function cancelEntries (matches) {
+    return Promise.all(matches.map(entry => cancel(entry.taskId)))
+  }
+
+  function cancelByEndpoint (endpoint) {
+    return cancelEntries(listByEndpoint(endpoint))
+  }
+
+  function cancelByScope (scopeId) {
+    return cancelEntries(listByScope(scopeId))
+  }
+
+  function cancelAll () {
+    return cancelEntries([...entries.values()])
   }
 
   function subscribe (listener) {
@@ -92,8 +160,15 @@ export function createAgentTaskRegistry () {
     has: id => entries.has(String(id || '')),
     get: id => entries.get(String(id || '')),
     list: () => [...entries.values()],
+    listByEndpoint,
+    listByScope,
+    isEndpointBusy: endpoint => listByEndpoint(endpoint).length > 0,
+    isScopeBusy: scopeId => listByScope(scopeId).length > 0,
     canCancel,
     cancel,
+    cancelByEndpoint,
+    cancelByScope,
+    cancelAll,
     subscribe,
     get size () {
       return entries.size

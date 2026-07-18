@@ -9,4 +9,15 @@ export function assertTrustedOperationId (value) {
   return value
 }
 
+export function createTrustedOperationId (prefix, options = {}) {
+  const now = typeof options.now === 'function' ? options.now() : Date.now()
+  const timestamp = now instanceof Date ? now.getTime() : Number(now)
+  const random = typeof options.random === 'function'
+    ? options.random()
+    : Math.random().toString(36).slice(2, 12)
+  return assertTrustedOperationId(
+    `${String(prefix || 'operation')}-${timestamp}-${String(random)}`
+  )
+}
+
 export { trustedOperationIdPattern }

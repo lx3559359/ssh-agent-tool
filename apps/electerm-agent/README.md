@@ -1,227 +1,61 @@
-<h1 align="center" style="padding-top: 60px;padding-bottom: 40px;">
-    <a href="https://electerm.org">
-        <img src="https://github.com/electerm/electerm-resource/raw/master/static/images/electerm.png", alt="" />
-    </a>
-</h1>
+# ShellPilot
 
-# electerm [![Tweet](https://badgers.space/badge/Tweet/Tweet/social)](https://twitter.com/intent/tweet?text=Open%20sourced%20terminal%2Fssh%2Fsftp%20client(linux%2C%20mac%2C%20win)&url=https%3A%2F%2Fgithub.com%2Felecterm%2Felecterm&hashtags=electerm,ssh,terminal,sftp)
+ShellPilot is a Windows-first SSH, SFTP, and AI-assisted operations client. It combines a mature terminal experience with server inspection, safe changes, backups, rollback records, and configurable model APIs.
 
-[![GitHub version](https://badgers.space/github/release/electerm/electerm?corner_radius=m)](https://github.com/electerm/electerm/releases)
-[![Build Status](https://github.com/electerm/electerm/actions/workflows/mac-test-1.yml/badge.svg)](https://github.com/electerm/electerm/actions)
-[![license](https://img.shields.io/github/license/electerm/electerm)](https://github.com/electerm/electerm/blob/master/LICENSE)
-[![JavaScript Style Guide](https://img.shields.io/badge/code_style-standard-brightgreen.svg)](https://standardjs.com)
-[![Get it from the Snap Store](https://img.shields.io/badge/Snap-Store-green)](https://snapcraft.io/electerm)
-[![Get it from the Microsoft Store](https://img.shields.io/badge/Microsoft-Store-blue)](https://www.microsoft.com/store/apps/9NCN7272GTFF)
-[![GitHub Sponsors](https://img.shields.io/github/sponsors/electerm?label=Sponsors)](https://github.com/sponsors/electerm)
-[![Powered by manate](https://img.shields.io/badge/Powered%20by-manate-blue)](https://github.com/tylerlong/manate)
-[![Discord](https://img.shields.io/badge/Discord-Join-blue?logo=discord)](https://discord.gg/855W7g8EVd)
-[![star](https://atomgit.com/electerm/electerm/star/badge.svg)](https://atomgit.com/electerm/electerm)
+## Main Features
 
-[![English](https://img.shields.io/badge/English-EN-blue)](README.md) [![中文](https://img.shields.io/badge/中文-Chinese-blue)](README_cn.md)
+- SSH terminal sessions with passwords, private keys, certificates, jump hosts, port forwarding, tabs, search, and common terminal shortcuts.
+- SFTP file management with upload, download, preview, drag and drop, collision-safe backups, and restore records.
+- AI assistant with multiple API profiles and models, persistent conversation context, attachments, SFTP references, MCP, and CLI integrations.
+- Single-server and fleet status views for services, processes, ports, firewall, network interfaces, CPU, memory, disks, and installed platforms.
+- Read-only diagnosis plans, cancellable tasks, operation audit records, automatic pre-change backups, and one-click rollback.
+- Approved online updates with user-selectable sources and automatic fallback between domestic and GitHub release sources.
 
-[![DigitalOcean Referral Badge](https://web-platforms.sfo2.cdn.digitaloceanspaces.com/WWW/Badge%202.svg)](https://www.digitalocean.com/?refcode=c10bcb28b846&utm_campaign=Referral_Invite&utm_medium=Referral_Program&utm_source=badge)
+## Quick Start
 
-[![Vercel OSS Program](https://github.com/electerm/electerm-resource/blob/master/static/images/vercel-oss-2005.png?raw=true)](https://oss-directory.vercel.app)
+1. Download the latest Windows installer from [ShellPilot Releases](https://github.com/lx3559359/ssh-agent-tool/releases).
+2. Create or import an SSH connection and verify the host fingerprint before connecting.
+3. Configure an AI API only when AI analysis is needed. SSH and SFTP remain usable without an AI configuration.
+4. Review generated commands and rollback information before approving any change to a server.
 
-Open-sourced terminal/ssh/sftp/telnet/serialport/RDP/VNC/Spice/ftp client(linux, mac, win).
+The complete Chinese user guide is available in [docs/USER_GUIDE_ZH.md](docs/USER_GUIDE_ZH.md).
 
-- [electerm.org](https://electerm.org): Homepage, downloads, videos, etc
-- [electerm-web](https://github.com/electerm/electerm-web): Web app version running in browser(including mobile device)
-- [electerm-web-docker](https://github.com/electerm/electerm-web-docker): Docker image for electerm-web
-- [electerm online](https://cloud.electerm.org): Public free online electerm app
-- [electerm demo](https://demo.electerm.org): Online demo of electerm
-- [electerm deb repo](https://repos.electerm.org/deb): Debian repo of electerm
-- [electerm rpm repo](https://repos.electerm.org/rpm): RPM repo of electerm
+## Development
 
-## Atlas Cloud
-
-<div align="center">
-  <a href="https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=electerm">
-    <img src="https://github.com/electerm/electerm-resource/blob/master/static/images/atlas-cloud.png?raw=true" alt="Atlas Cloud" width="200" />
-  </a>
-</div>
-
-[Atlas Cloud](https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=electerm) provides OpenAI-compatible AI APIs and model access for AI-powered workflows in electerm.
-
-<div align="center">
-  <img src="https://github.com/electerm/electerm-resource/raw/master/static/images/electerm.gif", alt="" />
-</div>
-
-## Features
-
-- Works as a terminal/file manager or ssh/sftp/ftp/telnet/serialport/RDP/VNC/Spice client
-- Support Window 7+(X64/ARM64), Mac OS 10.15+(x64/arm64), Linux(x64/arm64/Loong64), even old Linux with glibc 2.17+ like UOS/Kylin/Ubuntu 18.04 etc
-- Global hotkey to toggle window visibility (similar to guake, default is `ctrl + 2`)
-- Multi platform(linux, mac, win)
-- 🇺🇸 🇨🇳 🇧🇷 🇷🇺 🇪🇸 🇫🇷 🇹🇷 🇭🇰 🇯🇵 🇸🇦 🇩🇪 🇰🇷 🇮🇩 🇵🇱 Multi-language support([electerm-locales](https://github.com/electerm/electerm-locales), contributions/fixes welcome)
-- Double click to directly edit (small) remote files.
-- Auth with publicKey + password.
-- Support Zmodem(rz, sz).
-- Support ssh tunnel.
-- Support [Trzsz](https://github.com/trzsz/trzsz)(trz/tsz), similar to rz/sz, and compatible with tmux.
-- Transparent window(Mac, win).
-- Terminal background image.
-- Global/session proxy.
-- Quick commands
-- UI/terminal theme
-- Sync bookmarks/themes/quick commands to github/gitee secret gist/webdav/custom server/electerm cloud
-- Quick input to one or all terminals.
-- AI assistant integration (supporting [DeepSeek](https://www.deepseek.com), OpenAI, and any other AI APIs) to help with command suggestions, script writing, and explaining selected terminal content, create bookmarks
-- MCP (Model Context Protocol) widget for AI assistants and external tools integration - see [MCP Widget Usage Guide](https://github.com/electerm/electerm/wiki/MCP-Widget-Usage-Guide)
-- Deep link support: Open connections with URLs like `telnet://192.168.2.31:34554` or `ssh://user@host:22` - see [Deep link support wiki](https://github.com/electerm/electerm/wiki/Deep-link-support)
-- Command line usage: check [wiki](https://github.com/electerm/electerm/wiki/Command-line-usage)
-
-## ShellPilot interface themes and languages
-
-The original UI theme library remains available under **Settings > UI Themes**. ShellPilot also provides five built-in interface palettes: Ocean Blue, Jade Green, Cloud Indigo, Warm Amber, and Graphite Night.
-
-- **Preview** renders a palette temporarily inside the Theme Center preview area without changing or saving the global client theme. **Apply** persists the selected palette.
-- The active session tab, terminal controls, terminal viewport/canvas, and empty terminal area always keep the SSH-focused `#0E0F12` background in every UI palette and day/night mode.
-- Terminal foreground, cursor, selection, standard ANSI colors, and bright ANSI colors remain adjustable in terminal theme settings.
-- The existing 14-language selector is retained. Simplified Chinese and English cover the ShellPilot settings, Theme Center, Tool Center, and context menus; language changes can be previewed inside Settings, then applied or cancelled before they are saved.
-- Configuration cards, context menus, and the Tool Center wrap or scroll at compact window sizes and zoom levels so translated labels and primary actions remain reachable.
-
-## Install
-
-- For Mac user: `brew install --cask electerm`
-- With snap: `sudo snap install electerm --classic`
-- For some Linux distribution, you can find it from OS default App store(Ubuntu, Deepin, Mint...).
-- For some linux OS, the `rpm`, `deb`, or `snap` release may not work, you can try the `tar.gz` or `.appImage` release.
-- For Windows users, you can install it from [windows store](https://www.microsoft.com/store/apps/9NCN7272GTFF), command-line installer [winget](https://github.com/microsoft/winget-cli) and [scoop](https://github.com/lukesampson/scoop) is also recommended:
-
-```powershell
-# winget https://github.com/microsoft/winget-cli
-winget install electerm.electerm
-
-# scoop https://github.com/lukesampson/scoop
-scoop bucket add dorado https://github.com/chawyehsu/dorado
-scoop install dorado/electerm
-```
-
-- Install from Debian repository (for Debian/Ubuntu-based systems) with `apt` command
-
-Check [https://repos.electerm.org/deb](https://repos.electerm.org/deb)
-
-- Install from npm
+Requirements: Node.js and npm on Windows.
 
 ```bash
-npm i -g electerm
-
+npm install
+npm run dev
 ```
 
-## Upgrade
-
-- Auto upgrade: When a new version is released, you will get an upgrade notification after you start electerm again. You can then click the upgrade button to upgrade.
-- Download: Just download the latest edition, reinstall.
-- Npm: If you install from npm, just run `npm i -g electerm` again.
-- If use Snap or some other distribution system, these systems may provide upgrades.
-
-## Known issues
-
-[https://github.com/electerm/electerm/wiki/Know-issues](https://github.com/electerm/electerm/wiki/Know-issues)
-
-## Troubleshoot
-
-[https://github.com/electerm/electerm/wiki/Troubleshoot](https://github.com/electerm/electerm/wiki/Troubleshoot)
-
-## Discussion
-
-[![Discord](https://img.shields.io/badge/Discord-Join-blue?logo=discord)](https://discord.gg/855W7g8EVd)
-
-[Discussion board](https://github.com/electerm/electerm/discussions)
-
-![electerm-wechat-group-qr.jpg](https://electerm.org/electerm-wechat-group-qr.jpg)
-
-## Support
-
-Would love to hear from you, please tell me what you think, [submit an issue](https://github.com/electerm/electerm/issues), [Start a new discussion](https://github.com/electerm/electerm/discussions/new), [create/fix language files](https://github.com/electerm/electerm-locales) or create pull requests, all welcome.
-
-## Sponsor this project
-
-github sponsor
-
-[https://github.com/sponsors/electerm](https://github.com/sponsors/electerm)
-
-kofi
-
-[https://ko-fi.com/zhaoxudong](https://ko-fi.com/zhaoxudong)
-
-wechat donate
-
-[![wechat donate](https://electerm.org/electerm-wechat-donate.png)](https://github.com/electerm)
-
-## Dev
+Common verification commands:
 
 ```bash
-# May only works in Linux
-# needs nodejs/npm, suggest using nvm to install nodejs/npm
-# with nodejs 24.x
-
-git clone git@github.com:electerm/electerm.git
-cd electerm
-npm config set legacy-peer-deps true
-npm i
-
-# start vite dev server, requires port 5570
-npm start
-
-# in a separate terminal session run app
-npm run app
-
-# code format check
 npm run lint
-
-# code format fix
-npm run fix
+npm run test-unit-ci
+npm run build
 ```
 
-## Test
+## Releases and Updates
 
-```bash
-npm run b
-npm run prepare-test
-cp .sample.env .env
+Client updates are visible only after a release has been explicitly approved and published. Release notes use the following sections:
 
-# edit .env, fill your test host/username/password, may only works in mac OS
-npm run test
-```
+- `[Added]`
+- `[Fixed]`
+- `[Changed]`
 
-## Test build
+Users can choose an update source. Automatic mode tries the configured domestic source first and falls back to GitHub when the candidate is unavailable or invalid.
 
-```bash
-# May only works in Linux
-# Install yarn first(to do yarn autoclean)
-# See https://yarnpkg.com/en/docs/install
+## Security
 
-# Build linux only with -l
-npm i
-npm run b
-npm run pb
-./node_modules/.bin/electron-builder --linux tar.gz
-# or replace tar.gz to rpm/deb/AppImage
-# check dist/ folder
+- Credentials and API keys are stored locally and are never included in exported diagnostic reports by default.
+- Read-only checks do not create rollback records.
+- Risky operations require confirmation, create a backup when possible, and expose a rollback entry in the Safety Center.
+- Keep an independent console or cloud control channel available before changing network, firewall, SSH, or privilege settings.
 
-# build for linux arm/
-./node_modules/.bin/electron-builder --linux --arm64
-```
-
-## Video guide
-
-- [https://electerm.org/videos](https://electerm.org/videos)
-
-## Change log
-
-Visit [Releases](https://github.com/electerm/electerm/releases).
-
-## Contact author
-
-[zxdong@gmail.com](mailto:zxdong@gmail.com)
-
+Report product issues through [GitHub Issues](https://github.com/lx3559359/ssh-agent-tool/issues).
 
 ## License
 
-MIT
-
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=electerm/electerm&type=Date)](https://www.star-history.com/#electerm/electerm&Date)
+See [LICENSE](LICENSE). Required third-party license notices and historical copyright attribution are retained in their legal files.

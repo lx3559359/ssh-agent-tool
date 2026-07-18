@@ -91,6 +91,108 @@ test('bounded head and tail use a separator that cannot synthesize a marker', ()
   assert.doesNotMatch(output, /^__SHELLPILOT_PREPARE_RC_op-join-attack=0$/m)
 })
 
+test('zero-byte collector counts discarded stderr without retaining data', () => {
+  const { createBoundedOutputCollector } = require(sessionCommonPath)
+  let collector
+
+  assert.doesNotThrow(() => {
+    collector = createBoundedOutputCollector(0)
+  })
+  collector.append(Buffer.from([0xe4, 0xb8, 0xad]))
+
+  assert.equal(collector.retainedBytes, 0)
+  assert.equal(collector.toString(), '')
+  assert.equal(collector.truncated, true)
+})
+
+test('tiny caps count stderr-only truncation within the aggregate UTF-8 limit', async () => {
+  for (const maxOutputBytes of [1, 2, 3]) {
+    const { session, streams } = createSessionHarness()
+    const running = session.runCmd('stderr-only', undefined, {
+      executionId: `stderr-only-${maxOutputBytes}`,
+      maxOutputBytes
+    })
+    const stream = streams[0].stream
+
+    stream.stderr.emit('data', Buffer.from([0xe4, 0xb8, 0xad]))
+    stream.emit('close', 0, null)
+
+    const result = await running
+    assert.ok(
+      Buffer.byteLength(result.stdout, 'utf8') +
+      Buffer.byteLength(result.stderr, 'utf8') <= maxOutputBytes
+    )
+    assert.equal(result.truncated, maxOutputBytes < 3)
+    if (maxOutputBytes === 3) assert.equal(result.stderr, '中')
+    assert.doesNotMatch(result.stdout + result.stderr, /\uFFFD/)
+  }
+})
+
+test('stdout and stderr dynamically share the entire output budget', async () => {
+  const cases = [
+    { stdout: '', stderr: 'e'.repeat(50) },
+    { stdout: 'o'.repeat(10), stderr: 'e'.repeat(90) },
+    { stdout: 'o'.repeat(90), stderr: 'e'.repeat(10) }
+  ]
+
+  for (const [index, output] of cases.entries()) {
+    const { session, streams } = createSessionHarness()
+    const running = session.runCmd('shared-budget', undefined, {
+      executionId: `shared-budget-${index}`,
+      maxOutputBytes: 100
+    })
+    const stream = streams[0].stream
+    if (output.stdout) stream.emit('data', Buffer.from(output.stdout))
+    if (output.stderr) stream.stderr.emit('data', Buffer.from(output.stderr))
+    stream.emit('close', 0, null)
+
+    const result = await running
+    assert.equal(result.stdout, output.stdout)
+    assert.equal(result.stderr, output.stderr)
+    assert.equal(result.truncated, false)
+    assert.ok(
+      Buffer.byteLength(result.stdout, 'utf8') +
+      Buffer.byteLength(result.stderr, 'utf8') <= 100
+    )
+  }
+})
+
+test('tiny caps report mixed-stream discards while preserving small complete UTF-8 output', async () => {
+  const mixed = createSessionHarness()
+  const mixedRun = mixed.session.runCmd('mixed', undefined, {
+    executionId: 'mixed-tiny-cap',
+    maxOutputBytes: 3
+  })
+  const mixedStream = mixed.streams[0].stream
+  mixedStream.emit('data', Buffer.from('a'))
+  mixedStream.stderr.emit('data', Buffer.from([0xe4, 0xb8, 0xad]))
+  mixedStream.emit('close', 0, null)
+
+  const mixedResult = await mixedRun
+  assert.ok(
+    Buffer.byteLength(mixedResult.stdout, 'utf8') +
+    Buffer.byteLength(mixedResult.stderr, 'utf8') <= 3
+  )
+  assert.equal(mixedResult.truncated, true)
+  assert.doesNotMatch(mixedResult.stdout + mixedResult.stderr, /\uFFFD/)
+
+  const complete = createSessionHarness()
+  const completeRun = complete.session.runCmd('complete', undefined, {
+    executionId: 'complete-tiny-cap',
+    maxOutputBytes: 3
+  })
+  complete.streams[0].stream.emit(
+    'data',
+    Buffer.from([0xe4, 0xb8, 0xad])
+  )
+  complete.streams[0].stream.emit('close', 0, null)
+
+  const completeResult = await completeRun
+  assert.equal(Buffer.byteLength(completeResult.stdout, 'utf8'), 3)
+  assert.equal(completeResult.truncated, false)
+  assert.doesNotMatch(completeResult.stdout, /\uFFFD/)
+})
+
 test('capped SSH stdout and stderr are collected during streaming without losing marker verification', async () => {
   const { session, streams } = createSessionHarness()
   const maxOutputBytes = 2048
@@ -111,13 +213,14 @@ test('capped SSH stdout and stderr are collected during streaming without losing
 
   const result = await running
   assert.equal(typeof result, 'object')
+  assert.equal(result.truncated, true)
+  assert.equal(result.code, 0)
   assert.ok(
     Buffer.byteLength(result.stdout, 'utf8') +
     Buffer.byteLength(result.stderr, 'utf8') <= maxOutputBytes
   )
   assert.match(result.stdout, /__SHELLPILOT_PREPARE_RC_op-stream=0/)
   assert.doesNotMatch(result.stdout + result.stderr, /\uFFFD/)
-  assert.equal(result.code, 0)
   assert.equal(result.signal, null)
 })
 
@@ -137,7 +240,8 @@ test('capped run-cmd returns SSH close failure metadata', async () => {
     stdout: 'bounded stdout',
     stderr: 'bounded stderr',
     code: 23,
-    signal: 'TERM'
+    signal: 'TERM',
+    truncated: false
   })
 })
 
@@ -151,6 +255,145 @@ test('uncapped legacy run-cmd calls preserve their stdout-only return value', as
   stream.emit('close', 0, null)
 
   assert.equal(await running, 'legacy stdout')
+})
+
+test('explicit invalid and excessive output caps stay bounded at the session backend', async () => {
+  const cases = [
+    { value: 0, expectedLimit: 32 * 1024 },
+    { value: -1, expectedLimit: 32 * 1024 },
+    { value: NaN, expectedLimit: 32 * 1024 },
+    { value: Infinity, expectedLimit: 32 * 1024 },
+    { value: 1024 * 1024, expectedLimit: 128 * 1024 }
+  ]
+
+  for (const [index, entry] of cases.entries()) {
+    const { session, streams } = createSessionHarness()
+    const running = session.runCmd('bounded-backend', undefined, {
+      executionId: `bounded-backend-${index}`,
+      maxOutputBytes: entry.value
+    })
+    const stream = streams[0].stream
+    stream.emit('data', Buffer.alloc(160 * 1024, 'x'))
+    stream.stderr.emit('data', Buffer.alloc(160 * 1024, 'y'))
+    stream.emit('close', 0, null)
+
+    const result = await running
+    assert.equal(typeof result, 'object')
+    assert.ok(
+      Buffer.byteLength(result.stdout, 'utf8') +
+      Buffer.byteLength(result.stderr, 'utf8') <= entry.expectedLimit
+    )
+    assert.equal(result.truncated, true)
+  }
+})
+
+test('explicit invalid and excessive timeouts stay finite at the session backend', async () => {
+  const cases = [
+    { value: 0, expected: 15000 },
+    { value: -1, expected: 15000 },
+    { value: NaN, expected: 15000 },
+    { value: Infinity, expected: 15000 },
+    { value: 10 ** 9, expected: 60000 },
+    { value: 7, expected: 7 }
+  ]
+  const observed = []
+  const pending = []
+  const originalSetTimeout = global.setTimeout
+  const originalClearTimeout = global.clearTimeout
+
+  try {
+    global.setTimeout = (callback, delay) => {
+      observed.push(delay)
+      return { callback, delay }
+    }
+    global.clearTimeout = () => {}
+    for (const [index, entry] of cases.entries()) {
+      const { session, streams } = createSessionHarness()
+      const running = session.runCmd('timed-backend', undefined, {
+        executionId: `timed-backend-${index}`,
+        timeoutMs: entry.value,
+        maxOutputBytes: 1
+      })
+      streams[0].stream.emit('close', 0, null)
+      pending.push(running)
+    }
+  } finally {
+    global.setTimeout = originalSetTimeout
+    global.clearTimeout = originalClearTimeout
+  }
+
+  await Promise.all(pending)
+  assert.deepEqual(observed, cases.map(entry => entry.expected))
+  assert.ok(observed.every(value => Number.isFinite(value) && value > 0))
+})
+
+test('run-cmd timeout covers client exec setup and closes a late stream', async () => {
+  const { commonExtends } = require(sessionCommonPath)
+  const executionId = 'timeout-before-exec-callback'
+  const events = []
+  let scheduledTimer
+  let lateCallback
+  class FakeSession {
+    kill () {}
+  }
+  commonExtends(FakeSession)
+  const session = new FakeSession()
+  session.initOptions = {}
+  session.client = {
+    exec: (command, options, callback) => {
+      events.push('exec')
+      lateCallback = callback
+    }
+  }
+  const originalSetTimeout = global.setTimeout
+  const originalClearTimeout = global.clearTimeout
+  let running
+
+  try {
+    global.setTimeout = (callback, delay) => {
+      events.push('timer')
+      scheduledTimer = { callback, delay }
+      return scheduledTimer
+    }
+    global.clearTimeout = () => {}
+    running = session.runCmd('connect slowly', undefined, {
+      executionId,
+      timeoutMs: 7,
+      maxOutputBytes: 16
+    })
+
+    assert.deepEqual(events, ['timer', 'exec'])
+    assert.equal(scheduledTimer.delay, 7)
+    scheduledTimer.callback()
+    await assert.rejects(
+      running,
+      error => error.name === 'RunCmdTimeoutError'
+    )
+    assert.equal(session.cancelRunCmd(executionId), false)
+  } finally {
+    global.setTimeout = originalSetTimeout
+    global.clearTimeout = originalClearTimeout
+    session.cancelAllRunCmd()
+    running?.catch(() => {})
+  }
+
+  const lateStream = createStream()
+  lateCallback(null, lateStream)
+  assert.deepEqual(lateStream.signals, ['TERM'])
+  assert.equal(lateStream.closeCalls + lateStream.destroyCalls, 1)
+
+  let reusedStream
+  session.client.exec = (command, options, callback) => {
+    reusedStream = createStream()
+    callback(null, reusedStream)
+  }
+  const reused = session.runCmd('reuse id', undefined, {
+    executionId,
+    timeoutMs: 50,
+    maxOutputBytes: 16
+  })
+  reusedStream.emit('close', 0, null)
+  assert.equal((await reused).code, 0)
 })
 
 test('cancelRunCmd closes the exact SSH stream and ignores late success', async () => {

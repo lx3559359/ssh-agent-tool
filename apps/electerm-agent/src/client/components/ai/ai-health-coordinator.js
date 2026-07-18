@@ -65,6 +65,12 @@ function normalizeCheckedAt (value) {
   return Number.isFinite(parsed) ? parsed : 0
 }
 
+function normalizeLatency (value) {
+  if (value === null || value === undefined || value === '') return null
+  const latency = Number(value)
+  return Number.isFinite(latency) && latency >= 0 ? Math.round(latency) : null
+}
+
 function createState (status, values = {}, secrets = []) {
   return Object.freeze({
     status: normalizeStatus(status, 'stale'),
@@ -72,7 +78,8 @@ function createState (status, values = {}, secrets = []) {
     modelStatus: redactText(values.modelStatus, secrets),
     models: sanitizeModels(values.models, secrets),
     message: redactText(values.message, secrets),
-    checkedAt: normalizeCheckedAt(values.checkedAt)
+    checkedAt: normalizeCheckedAt(values.checkedAt),
+    latencyMs: normalizeLatency(values.latencyMs)
   })
 }
 
@@ -203,7 +210,8 @@ export function createAIHealthCoordinator ({
         modelStatus: result?.modelStatus,
         models: result?.models,
         message: result?.message,
-        checkedAt: result?.checkedAt || now()
+        checkedAt: result?.checkedAt || now(),
+        latencyMs: result?.latencyMs
       },
       [secret]
     )

@@ -1,30 +1,77 @@
 import { z } from '../../common/zod'
 import { bookmarkSchemas } from '../../common/bookmark-schemas'
-import { confirmAgentToolExecution } from './agent-tool-confirm'
+import {
+  isAgentCommandTool
+} from './agent-tool-confirm'
 import { runAgentTerminalCommand } from './agent-terminal-command.js'
+import { executeAgentReadonlyCommand } from './agent-readonly-exec.js'
+import {
+  executeStructuredAgentTool,
+  structuredAgentTools
+} from './agent-structured-tools.js'
 import {
   assertAgentRuntimeActive,
   bindAgentToolArgs,
-  registerAgentCancellation
+  registerAgentCancellation,
+  registerDeferredAgentCancellation,
+  resolveAgentExecutionEndpoint
 } from './agent-runtime-context.js'
+import { executeAgentTool } from './agent-tool-gateway.js'
+import { withAgentToolScopes } from './agent-tool-scopes.js'
 import {
-  confirmAgentPlan,
-  ensureAgentPlanConfirmed,
-  markAgentPlanConfirmed
-} from './agent-task-mode.js'
+  classifyAgentCall,
+  withAgentToolPolicy
+} from './agent-tool-policy.js'
 import {
   allowedLocalCliTools
 } from './agent-local-cli-tools'
+import { classifyCommand } from '../../common/safety-transactions/command-classifier.js'
+import {
+  buildRiskTransaction,
+  canCombineRiskTransactions,
+  combineRiskTransactions,
+  confirmRiskTransaction,
+  settleRiskTransactionTask
+} from './agent-risk-transaction.js'
+import { requestAgentRiskConfirmation } from './agent-risk-confirmation-modal.jsx'
+import {
+  assertAgentVerificationDeclared
+} from './agent-risk-result.js'
+import {
+  completeAgentRiskPreparation,
+  createAgentRiskTerminalHandler,
+  failAgentRiskPreparation,
+  isAgentAsyncRiskResult
+} from './agent-risk-async.js'
+import {
+  agentRiskCallsRequireVerification,
+  agentVerificationToolNames,
+  agentArtifactRiskContextSchema,
+  agentRemoteRiskContextSchema,
+  agentSessionControlRiskContextSchema,
+  assertAgentRiskContextForCall,
+  assertAgentVerificationExpectation,
+  createDelegatedAgentSafetyPreparation,
+  shouldDelegateAgentSafetyConfirmation,
+  validateDelegatedAgentSafetyPreparation
+} from './agent-risk-delegation.js'
+import {
+  assertAgentRiskVerificationAllowed
+} from './agent-risk-verification-gate.js'
+import { prepareSelectedSkillArtifactCall } from './agent-skill-execution.js'
 
 function createAgentOperationId (prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
 
-function registerAgentTransferCancellation (runtime, transferId) {
-  if (!transferId) return
-  registerAgentCancellation(runtime, () => (
-    window.store.mcpSftpCancelTransfer({ transferId })
-  ))
+function registerAgentTransferCancellation (runtime, transferPromise, tabId) {
+  registerDeferredAgentCancellation(runtime, transferPromise, result => {
+    if (!result?.transferId) return undefined
+    return window.store.mcpSftpCancelTransfer({
+      transferId: result.transferId,
+      tabId
+    })
+  })
 }
 
 function buildAddBookmarkParameters () {
@@ -52,31 +99,38 @@ function buildAddBookmarkParameters () {
   }
 }
 
-export const agentTools = [
+function withRequiredRiskContextParameters (parameters, riskContextSchema) {
+  return {
+    ...parameters,
+    properties: {
+      ...parameters.properties,
+      riskContext: riskContextSchema
+    },
+    required: [...new Set([...(parameters.required || []), 'riskContext'])]
+  }
+}
+
+export const agentTools = withAgentToolPolicy(withAgentToolScopes([
+  ...structuredAgentTools,
   {
     type: 'function',
     function: {
-      name: 'confirm_agent_plan',
-      description: '向用户提交 Agent 分析计划。计划确认前不得执行终端命令、本机 CLI 或后台命令。',
+      name: 'run_readonly_command',
+      description: '在当前 SSH 会话的独立 exec 通道运行一条静态、已允许的只读命令；无需用户确认，不写入交互终端。未知、动态、管道、后台或修改命令会被拒绝。',
       parameters: {
         type: 'object',
         properties: {
-          goal: {
+          command: {
             type: 'string',
-            description: '本次排查或操作目标'
+            description: '单条静态只读命令'
           },
-          steps: {
-            type: 'array',
-            items: { type: 'string' },
-            description: '计划步骤'
-          },
-          readonlyCommands: {
-            type: 'array',
-            items: { type: 'string' },
-            description: '计划执行的只读命令列表'
+          tabId: {
+            type: 'string',
+            description: '由系统绑定当前接管会话'
           }
         },
-        required: ['goal']
+        required: ['command'],
+        additionalProperties: false
       }
     }
   },
@@ -95,7 +149,8 @@ export const agentTools = [
           tabId: {
             type: 'string',
             description: '终端标签页 ID。省略时使用当前活动终端。'
-          }
+          },
+          riskContext: agentRemoteRiskContextSchema
         },
         required: ['command']
       }
@@ -128,7 +183,10 @@ export const agentTools = [
       description: '打开新的本地终端标签页，返回新标签页 ID。',
       parameters: {
         type: 'object',
-        properties: {}
+        properties: {
+          riskContext: agentSessionControlRiskContextSchema
+        },
+        required: ['riskContext']
       }
     }
   },
@@ -165,9 +223,10 @@ export const agentTools = [
           tabId: {
             type: 'string',
             description: '要切换到的标签页 ID。'
-          }
+          },
+          riskContext: agentSessionControlRiskContextSchema
         },
-        required: ['tabId']
+        required: ['tabId', 'riskContext']
       }
     }
   },
@@ -182,9 +241,10 @@ export const agentTools = [
           tabId: {
             type: 'string',
             description: '要关闭的标签页 ID。'
-          }
+          },
+          riskContext: agentSessionControlRiskContextSchema
         },
-        required: ['tabId']
+        required: ['tabId', 'riskContext']
       }
     }
   },
@@ -210,9 +270,10 @@ export const agentTools = [
           id: {
             type: 'string',
             description: '要打开的书签 ID。'
-          }
+          },
+          riskContext: agentSessionControlRiskContextSchema
         },
-        required: ['id']
+        required: ['id', 'riskContext']
       }
     }
   },
@@ -221,7 +282,10 @@ export const agentTools = [
     function: {
       name: 'add_bookmark',
       description: '创建新书签。需要指定类型并提供该类型对应字段。支持类型：' + Object.keys(bookmarkSchemas).join(', ') + '。',
-      parameters: buildAddBookmarkParameters()
+      parameters: withRequiredRiskContextParameters(
+        buildAddBookmarkParameters(),
+        agentSessionControlRiskContextSchema
+      )
     }
   },
   {
@@ -229,7 +293,10 @@ export const agentTools = [
     function: {
       name: 'open_tab',
       description: '使用连接参数直接打开终端标签页，不创建书签。支持类型：' + Object.keys(bookmarkSchemas).join(', ') + '。',
-      parameters: buildAddBookmarkParameters()
+      parameters: withRequiredRiskContextParameters(
+        buildAddBookmarkParameters(),
+        agentSessionControlRiskContextSchema
+      )
     }
   },
   {
@@ -298,8 +365,8 @@ export const agentTools = [
           maxBytes: {
             type: 'integer',
             minimum: 4,
-            maximum: 64 * 1024,
-            description: '本次最多读取的字节数，最大 65536。'
+            maximum: 32 * 1024,
+            description: '本次最多读取的字节数，最大 32768。'
           }
         },
         required: ['remotePath']
@@ -321,9 +388,10 @@ export const agentTools = [
           tabId: {
             type: 'string',
             description: 'SSH/FTP 标签页 ID。省略时使用当前活动标签页。'
-          }
+          },
+          riskContext: agentRemoteRiskContextSchema
         },
-        required: ['remotePath']
+        required: ['remotePath', 'riskContext']
       }
     }
   },
@@ -346,9 +414,10 @@ export const agentTools = [
           tabId: {
             type: 'string',
             description: 'SSH/FTP 标签页 ID。省略时使用当前活动标签页。'
-          }
+          },
+          riskContext: agentRemoteRiskContextSchema
         },
-        required: ['localPath', 'remotePath']
+        required: ['localPath', 'remotePath', 'riskContext']
       }
     }
   },
@@ -371,9 +440,10 @@ export const agentTools = [
           tabId: {
             type: 'string',
             description: 'SSH/FTP 标签页 ID。省略时使用当前活动标签页。'
-          }
+          },
+          riskContext: agentRemoteRiskContextSchema
         },
-        required: ['remotePath', 'localPath']
+        required: ['remotePath', 'localPath', 'riskContext']
       }
     }
   },
@@ -426,8 +496,10 @@ export const agentTools = [
           tabId: {
             type: 'string',
             description: '标签页 ID。省略时使用当前活动终端。'
-          }
-        }
+          },
+          riskContext: agentSessionControlRiskContextSchema
+        },
+        required: ['riskContext']
       }
     }
   },
@@ -456,9 +528,10 @@ export const agentTools = [
           timeoutMs: {
             type: 'number',
             description: '可选超时时间，单位毫秒'
-          }
+          },
+          riskContext: agentSessionControlRiskContextSchema
         },
-        required: ['tool']
+        required: ['tool', 'riskContext']
       }
     }
   },
@@ -487,6 +560,33 @@ export const agentTools = [
   {
     type: 'function',
     function: {
+      name: 'run_skill_artifact',
+      description: 'Run one declared script artifact from a Skill selected for this task. The system loads and digest-checks the file, applies its declared permissions, and routes the expanded content through the normal takeover and risk gateway.',
+      parameters: {
+        type: 'object',
+        properties: {
+          skillId: {
+            type: 'string',
+            description: 'Selected Skill ID shown in the selected Skill context.'
+          },
+          artifactId: {
+            type: 'string',
+            description: 'Declared script artifact ID shown in the selected Skill context.'
+          },
+          args: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Separate artifact arguments; never a shell command string.'
+          },
+          riskContext: agentArtifactRiskContextSchema
+        },
+        required: ['skillId', 'artifactId', 'riskContext']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'run_background_command',
       description: '使用 nohup 在后台运行命令，终端会立即释放。返回 taskId 以便监控，可用 get_background_task_status 和 get_background_task_log 查看进度。',
       parameters: {
@@ -499,9 +599,10 @@ export const agentTools = [
           tabId: {
             type: 'string',
             description: '标签页 ID。省略时使用当前活动终端。'
-          }
+          },
+          riskContext: agentRemoteRiskContextSchema
         },
-        required: ['command']
+        required: ['command', 'riskContext']
       }
     }
   },
@@ -554,54 +655,453 @@ export const agentTools = [
           taskId: {
             type: 'string',
             description: 'run_background_command 返回的任务 ID。'
-          }
+          },
+          riskContext: agentSessionControlRiskContextSchema
         },
-        required: ['taskId']
+        required: ['taskId', 'riskContext']
       }
     }
   }
-]
+]))
 
-export async function executeToolCall (toolName, rawArgs, runtime) {
-  const store = window.store
-  const args = bindAgentToolArgs(toolName, rawArgs, runtime)
-  assertAgentRuntimeActive(runtime)
-  switch (toolName) {
-    case 'confirm_agent_plan': {
-      const confirmation = await confirmAgentPlan({ args })
-      assertAgentRuntimeActive(runtime)
-      markAgentPlanConfirmed(runtime, confirmation)
-      return JSON.stringify(confirmation)
+const sftpListTool = agentTools.find(tool => tool.function.name === 'sftp_list')
+Object.assign(sftpListTool.function.parameters.properties, {
+  cursor: {
+    type: 'string',
+    description: 'Continuation cursor returned by the previous page.'
+  },
+  limit: {
+    type: 'number',
+    description: 'Page item limit from 1 to 200; defaults to 100.'
+  },
+  maxBytes: {
+    type: 'number',
+    description: 'Page JSON byte limit; defaults to 24 KiB.'
+  }
+})
+
+const agentToolDescriptors = new Map(
+  agentTools.map(descriptor => [descriptor.function.name, descriptor])
+)
+
+export function getAgentToolDescriptor (toolName) {
+  const descriptor = agentToolDescriptors.get(String(toolName || ''))
+  if (!descriptor) {
+    const error = new Error(`Unknown Agent tool: ${String(toolName)}`)
+    error.code = 'UNKNOWN_AGENT_TOOL'
+    throw error
+  }
+  return descriptor
+}
+
+function recoveryFor (toolName, args) {
+  if (toolName === 'sftp_upload' && args.preparedTransfer?.safetyOperationId) {
+    return {
+      type: 'sftp',
+      verified: true,
+      strategyVerified: true,
+      operationId: args.preparedTransfer.safetyOperationId,
+      limits: 'Exact target recovery was prepared and verified before this confirmation.'
     }
-    case 'send_terminal_command': {
-      const planGuard = ensureAgentPlanConfirmed({ toolName, runtime })
-      if (planGuard) {
-        return JSON.stringify(planGuard)
-      }
-      const confirmation = await confirmAgentToolExecution({
-        toolName,
-        args
+  }
+  if (!isAgentCommandTool(toolName)) {
+    return {
+      type: toolName.startsWith('sftp_') ? 'sftp' : 'none',
+      verified: false,
+      strategyVerified: toolName === 'sftp_del',
+      limits: 'The underlying safety provider determines exact rollback availability.'
+    }
+  }
+  const classification = classifyCommand(
+    toolName === 'run_local_cli'
+      ? [args.tool, ...(args.args || [])].filter(Boolean).join(' ')
+      : args.command
+  )
+  return {
+    type: classification.provider || 'none',
+    verified: false,
+    strategyVerified: classification.reversible === true,
+    limits: classification.reversible
+      ? 'The underlying safety provider creates and verifies the exact recovery point before terminal release.'
+      : 'No automatic rollback is promised; the operation is dispatched at most once.'
+  }
+}
+
+function buildResolvedRiskTransaction (toolName, args, runtime, context = {}) {
+  const recovery = recoveryFor(toolName, args)
+  const riskContext = assertAgentRiskContextForCall({
+    toolName,
+    args,
+    descriptor: context.descriptor,
+    classification: context.classification,
+    skillArtifact: context.skillArtifact
+  })
+  const artifactDigests = [
+    ...(runtime.selectedSkillArtifactDigests || []),
+    ...(toolName === 'sftp_upload' && args.sourceDescriptor?.digest
+      ? [{
+          type: 'local-transfer-source',
+          path: args.localPath,
+          digest: args.sourceDescriptor.digest,
+          algorithm: args.sourceDescriptor.digestAlgorithm || 'unknown'
+        }]
+      : []),
+    ...(context.skillArtifact?.fileDigest
+      ? [{
+          type: 'skill-artifact',
+          id: `${context.skillArtifact.skillId}:${context.skillArtifact.id}`,
+          path: context.skillArtifact.path,
+          digest: context.skillArtifact.fileDigest,
+          packageDigest: context.skillArtifact.packageDigest,
+          algorithm: 'sha256'
+        }]
+      : [])
+  ]
+  return buildRiskTransaction([{
+    name: toolName,
+    args,
+    descriptor: context.descriptor,
+    expandedContent: context.expandedContent,
+    skillArtifact: context.skillArtifact,
+    localExecution: context.localExecution,
+    scriptEntry: args.scriptEntry || null
+  }], {
+    endpoint: context.endpoint,
+    goal: runtime.goal || `Agent ${toolName}`,
+    purpose: riskContext.purpose,
+    affectedObjects: riskContext.impactTargets,
+    worstCase: context.classification?.reasonCode || 'unknown',
+    resourceImpact: context.classification?.resourceImpact,
+    disconnectPossible: /(?:network|firewall|restart|reboot|shutdown)/i.test(
+      String(args.command || toolName)
+    ),
+    recovery,
+    rollbackLimits: recovery.limits,
+    verification: riskContext.verification,
+    skillBindings: runtime.selectedSkillBindings || [],
+    artifactDigests
+  })
+}
+
+export async function prepareAgentRiskArgs (
+  toolName,
+  args,
+  runtime,
+  store = window.store,
+  options = {}
+) {
+  if (toolName !== 'sftp_upload') return args
+  assertAgentRuntimeActive(runtime)
+  let prepared
+  try {
+    prepared = await store.mcpDescribeSftpUploadSource(args, {
+      signal: runtime.signal,
+      prepareRecovery: options.prepareRecovery !== false
+    })
+    assertAgentRuntimeActive(runtime)
+    return {
+      ...args,
+      sourceDescriptor: prepared.sourceDescriptor,
+      ...(prepared.preparedTransfer
+        ? { preparedTransfer: prepared.preparedTransfer }
+        : {})
+    }
+  } catch (error) {
+    await cancelPreparedRiskArtifacts({
+      preparedTransfer: prepared?.preparedTransfer
+    }, store)
+    throw error
+  }
+}
+
+async function cancelPreparedRiskArtifacts (args, store = window.store) {
+  if (!args?.preparedTransfer?.safetyOperationId) return
+  await store.mcpCancelPreparedSftpUpload(args.preparedTransfer)
+}
+
+function batchPreparationFor (runtime) {
+  const batch = runtime.riskBatch
+  if (!batch) return null
+  if (batch.cancelledResult) {
+    return { handled: true, result: JSON.stringify(batch.cancelledResult) }
+  }
+  if (batch.terminal === true) {
+    const error = new Error('Agent risk batch is already terminal')
+    error.code = 'AGENT_RISK_BATCH_TERMINAL'
+    throw error
+  }
+  const riskCallIndex = batch.cursor
+  if (riskCallIndex >= batch.transaction.calls.length) return null
+  return {
+    riskTransaction: batch.transaction,
+    riskTaskId: batch.riskTaskId,
+    riskPlanGrant: batch.riskPlanGrant,
+    riskCallIndex,
+    confirmedArgs: batch.transaction.calls[riskCallIndex].args,
+    riskBatch: batch
+  }
+}
+
+function beginPreparedRiskBatchCall (preparation) {
+  const batch = preparation?.riskBatch
+  if (!batch) return false
+  if (batch.terminal || batch.cursor !== preparation.riskCallIndex) {
+    const error = new Error('Agent risk batch order changed before dispatch')
+    error.code = 'PLAN_BINDING_CHANGED'
+    throw error
+  }
+  batch.cursor += 1
+  return true
+}
+
+export async function prepareAgentRiskBatch (toolCalls, runtime = {}) {
+  if (runtime.riskBatch?.terminal === true) runtime.riskBatch = null
+  if (!Array.isArray(toolCalls) || toolCalls.length < 2 ||
+    toolCalls.some(call => call?.function?.name === 'run_skill_artifact')) {
+    return null
+  }
+  const transactions = []
+  for (const toolCall of toolCalls) {
+    const toolName = String(toolCall?.function?.name || '')
+    let rawArgs
+    try {
+      rawArgs = JSON.parse(toolCall?.function?.arguments || '{}')
+    } catch {
+      rawArgs = {}
+    }
+    let descriptor
+    try {
+      descriptor = getAgentToolDescriptor(toolName)
+    } catch {
+      continue
+    }
+    const boundArgs = bindAgentToolArgs(toolName, rawArgs, runtime)
+    const endpoint = resolveAgentExecutionEndpoint({ descriptor, runtime })
+    const expandedContent = boundArgs.script || boundArgs.expandedContent
+    const classification = classifyAgentCall({
+      descriptor,
+      args: boundArgs,
+      expandedContent
+    })
+    assertAgentRiskContextForCall({
+      toolName,
+      args: boundArgs,
+      descriptor,
+      classification
+    })
+    if (classification.outcome !== 'risky') continue
+    const args = await prepareAgentRiskArgs(
+      toolName,
+      boundArgs,
+      runtime,
+      window.store,
+      { prepareRecovery: false }
+    )
+    if (shouldDelegateAgentSafetyConfirmation(toolName, args, { endpoint })) {
+      return null
+    }
+    transactions.push(buildResolvedRiskTransaction(
+      toolName,
+      args,
+      runtime,
+      { descriptor, endpoint, expandedContent, classification }
+    ))
+  }
+  if (transactions.length < 2 ||
+    transactions.some(item => item.calls.some(call => call.name === 'sftp_upload')) ||
+    !transactions.slice(1).every(item => (
+      canCombineRiskTransactions(transactions[0], item)
+    ))) {
+    return null
+  }
+  const transaction = combineRiskTransactions(transactions)
+  let confirmation
+  try {
+    confirmation = await confirmRiskTransaction(transaction, {
+      confirm: frozen => requestAgentRiskConfirmation(frozen, {
+        signal: runtime.signal
       })
-      assertAgentRuntimeActive(runtime)
-      if (!confirmation.accepted) {
-        return JSON.stringify(confirmation)
+    })
+    assertAgentRuntimeActive(runtime)
+  } catch (error) {
+    if (confirmation?.accepted && confirmation.taskId) {
+      await failAgentRiskPreparation({
+        preparation: {
+          riskTaskId: confirmation.taskId,
+          riskTransaction: transaction
+        },
+        error,
+        dispatched: false,
+        status: error?.name === 'AbortError' ? 'cancelled' : 'failed',
+        remoteState: 'not-dispatched',
+        settle: settleRiskTransactionTask
+      })
+    }
+    throw error
+  }
+  runtime.riskBatch = confirmation.accepted
+    ? {
+        transaction,
+        riskTaskId: confirmation.taskId,
+        riskPlanGrant: confirmation.planGrant,
+        cursor: 0,
+        completedCalls: new Set(),
+        settling: null,
+        terminal: false
       }
-      const cancelTerminal = () => {
-        try {
-          store.mcpCancelTerminalCommand({ tabId: args.tabId })
-        } catch (error) {
-          // The terminal may already be idle or closed.
+    : { cancelledResult: confirmation, terminal: true }
+  return confirmation
+}
+
+async function prepareResolvedAgentTool (toolName, args, runtime, context = {}) {
+  assertAgentRiskContextForCall({
+    toolName,
+    args,
+    descriptor: context.descriptor,
+    classification: context.classification,
+    skillArtifact: context.skillArtifact
+  })
+  const batchPreparation = batchPreparationFor(runtime)
+  if (batchPreparation) return batchPreparation
+  if (shouldDelegateAgentSafetyConfirmation(toolName, args, {
+    endpoint: context.endpoint
+  })) {
+    return createDelegatedAgentSafetyPreparation(toolName, args, {
+      endpoint: context.endpoint,
+      verification: args.riskContext.verification,
+      classification: context.classification
+    })
+  }
+  const confirmedArgs = await prepareAgentRiskArgs(toolName, args, runtime)
+  const transaction = buildResolvedRiskTransaction(
+    toolName,
+    confirmedArgs,
+    runtime,
+    context
+  )
+  let confirmation
+  try {
+    confirmation = await confirmRiskTransaction(transaction, {
+      confirm: frozen => requestAgentRiskConfirmation(frozen, {
+        signal: runtime.signal
+      })
+    })
+    assertAgentRuntimeActive(runtime)
+  } catch (error) {
+    if (confirmation?.accepted && confirmation.taskId) {
+      await failAgentRiskPreparation({
+        preparation: {
+          riskTaskId: confirmation.taskId,
+          riskTransaction: transaction
+        },
+        error,
+        dispatched: false,
+        status: error?.name === 'AbortError' ? 'cancelled' : 'failed',
+        remoteState: 'not-dispatched',
+        settle: settleRiskTransactionTask
+      })
+    }
+    await cancelPreparedRiskArtifacts(confirmedArgs)
+    throw error
+  }
+  if (!confirmation.accepted) await cancelPreparedRiskArtifacts(confirmedArgs)
+  return confirmation.accepted
+    ? {
+        riskTransaction: transaction,
+        riskTaskId: confirmation.taskId,
+        riskPlanGrant: confirmation.planGrant,
+        confirmedArgs
+      }
+    : { handled: true, result: JSON.stringify(confirmation) }
+}
+
+async function runTerminalTool (store, args, runtime, preparation) {
+  let clearCancellation = () => {}
+  try {
+    return await runAgentTerminalCommand({
+      store,
+      args,
+      signal: runtime.signal,
+      riskDelegation: preparation?.safetyDelegationCapability,
+      onDispatched: safetyResult => {
+        const cancelTerminal = async () => {
+          try {
+            const result = await store.mcpCancelTerminalCommand({
+              tabId: args.tabId,
+              operationId: safetyResult.operationId
+            })
+            if (result?.stopConfirmed !== true) {
+              const error = new Error(
+                'Terminal stop could not be confirmed after Ctrl+C'
+              )
+              error.remoteState = result?.remoteState || 'unknown'
+              error.canAutoRetry = false
+              throw error
+            }
+            return result
+          } catch (error) {
+            error.remoteState = error.remoteState || 'unknown'
+            error.canAutoRetry = false
+            throw error
+          }
         }
+        clearCancellation = registerAgentCancellation(runtime, cancelTerminal)
       }
-      runtime.cancelActiveTool = cancelTerminal
-      try {
-        const idleResult = await runAgentTerminalCommand({ store, args })
-        return JSON.stringify(idleResult)
-      } finally {
-        if (runtime.cancelActiveTool === cancelTerminal) {
-          runtime.cancelActiveTool = null
-        }
+    })
+  } finally {
+    clearCancellation()
+  }
+}
+
+export async function runReadonlyTool (args, endpoint, runtime = {}) {
+  const resolveEndpoint = typeof runtime.resolveEndpoint === 'function'
+    ? runtime.resolveEndpoint
+    : () => endpoint
+  return executeAgentReadonlyCommand({
+    command: args.command,
+    endpoint,
+    resolveEndpoint,
+    runtime
+  })
+}
+
+async function executeResolvedAgentTool (toolName, args, runtime, endpoint, preparation) {
+  const store = window.store
+  switch (toolName) {
+    case 'run_readonly_command':
+      return JSON.stringify(await runReadonlyTool(args, endpoint, runtime))
+    case 'read_service_status':
+    case 'read_recent_logs':
+    case 'verify_listening_port':
+    case 'read_file_range':
+      return JSON.stringify(await executeStructuredAgentTool({
+        toolName,
+        args,
+        endpoint,
+        signal: runtime.signal,
+        resolveEndpoint: () => resolveAgentExecutionEndpoint({
+          descriptor: getAgentToolDescriptor(toolName),
+          runtime
+        }),
+        executeCommand: command => runReadonlyTool({
+          command,
+          tabId: args.tabId
+        }, endpoint, runtime),
+        readFile: fileArgs => store.mcpSftpReadFile(fileArgs, {
+          signal: runtime.signal
+        })
+      }))
+    case 'send_terminal_command': {
+      if (!preparation && classifyAgentCall({ toolName, args }).outcome ===
+        'allowlisted-readonly') {
+        return JSON.stringify(await runReadonlyTool(args, endpoint, runtime))
       }
+      return JSON.stringify(await runTerminalTool(
+        store,
+        args,
+        runtime,
+        preparation
+      ))
     }
     case 'get_terminal_output':
       return JSON.stringify(store.mcpGetTerminalOutput(args))
@@ -641,42 +1141,52 @@ export async function executeToolCall (toolName, rawArgs, runtime) {
       return JSON.stringify(result)
     }
     case 'sftp_upload': {
-      const result = await store.mcpSftpUpload(args)
-      registerAgentTransferCancellation(runtime, result?.transferId)
+      const transfer = Promise.resolve(store.mcpSftpUpload(args, {
+        signal: runtime.signal,
+        onTerminal: createPreparedRiskTerminalHandler(preparation, endpoint, runtime)
+      }))
+      registerAgentTransferCancellation(runtime, transfer, args.tabId)
+      let result
+      try {
+        result = await transfer
+      } catch (error) {
+        const failure = error instanceof Error ? error : new Error(String(error))
+        try {
+          await cancelPreparedRiskArtifacts(args, store)
+        } catch (cleanupError) {
+          failure.cleanupError = cleanupError
+          store.onError?.(cleanupError)
+        }
+        failure.mutationDispatched = false
+        failure.remoteState = 'not-dispatched'
+        throw failure
+      }
       assertAgentRuntimeActive(runtime)
       return JSON.stringify(result)
     }
     case 'sftp_download': {
-      const result = await store.mcpSftpDownload(args)
-      registerAgentTransferCancellation(runtime, result?.transferId)
+      const transfer = Promise.resolve(store.mcpSftpDownload(args, {
+        signal: runtime.signal,
+        onTerminal: createPreparedRiskTerminalHandler(preparation, endpoint, runtime)
+      }))
+      registerAgentTransferCancellation(runtime, transfer, args.tabId)
+      const result = await transfer
       assertAgentRuntimeActive(runtime)
       return JSON.stringify(result)
     }
     case 'sftp_transfer_list':
-      return JSON.stringify(store.mcpSftpTransferList())
+      return JSON.stringify(store.mcpSftpTransferList(args))
     case 'sftp_transfer_history':
-      return JSON.stringify(store.mcpSftpTransferHistory())
+      return JSON.stringify(store.mcpSftpTransferHistory(args))
     case 'get_terminal_status':
       return JSON.stringify(store.mcpGetTerminalStatus(args))
     case 'cancel_terminal_command':
-      return JSON.stringify(store.mcpCancelTerminalCommand(args))
+      return JSON.stringify(await store.mcpCancelTerminalCommand(args))
     case 'list_local_cli_tools':
       return JSON.stringify(await window.pre.runGlobalAsync('getAllowedLocalCliTools'))
     case 'get_codex_cli_status':
       return JSON.stringify(await window.pre.runGlobalAsync('getCodexCliStatus'))
     case 'run_local_cli': {
-      const planGuard = ensureAgentPlanConfirmed({ toolName, runtime })
-      if (planGuard) {
-        return JSON.stringify(planGuard)
-      }
-      const confirmation = await confirmAgentToolExecution({
-        toolName,
-        args
-      })
-      assertAgentRuntimeActive(runtime)
-      if (!confirmation.accepted) {
-        return JSON.stringify(confirmation)
-      }
       const requestId = createAgentOperationId('local-cli')
       const clearCancellation = registerAgentCancellation(runtime, () => (
         window.pre.runGlobalAsync('cancelLocalCli', requestId)
@@ -693,24 +1203,21 @@ export async function executeToolCall (toolName, rawArgs, runtime) {
       }
     }
     case 'run_background_command': {
-      const planGuard = ensureAgentPlanConfirmed({ toolName, runtime })
-      if (planGuard) {
-        return JSON.stringify(planGuard)
-      }
-      const confirmation = await confirmAgentToolExecution({
-        toolName,
-        args
+      const backgroundTask = Promise.resolve(store.mcpRunBackgroundCommand(args, {
+        signal: runtime.signal,
+        riskDelegation: preparation?.safetyDelegationCapability,
+        onTerminal: createPreparedRiskTerminalHandler(preparation, endpoint, runtime)
+      }))
+      registerDeferredAgentCancellation(runtime, backgroundTask, result => {
+        if (!result?.taskId) return undefined
+        return (
+          store.mcpCancelBackgroundTask({
+            taskId: result.taskId,
+            tabId: args.tabId
+          })
+        )
       })
-      assertAgentRuntimeActive(runtime)
-      if (!confirmation.accepted) {
-        return JSON.stringify(confirmation)
-      }
-      const result = await store.mcpRunBackgroundCommand(args)
-      if (result?.taskId) {
-        registerAgentCancellation(runtime, () => (
-          store.mcpCancelBackgroundTask({ taskId: result.taskId })
-        ))
-      }
+      const result = await backgroundTask
       assertAgentRuntimeActive(runtime)
       return JSON.stringify(result)
     }
@@ -723,4 +1230,263 @@ export async function executeToolCall (toolName, rawArgs, runtime) {
     default:
       throw new Error(`未知 Agent 工具：${toolName}`)
   }
+}
+
+const structuredVerificationTools = new Set(agentVerificationToolNames)
+
+async function verifyPreparedAgentRisk (preparation, endpoint, runtime) {
+  const verification = preparation?.riskTransaction?.verification ||
+    preparation?.verification || []
+  if (agentRiskCallsRequireVerification(preparation?.riskTransaction?.calls)) {
+    assertAgentVerificationDeclared(verification)
+  }
+  for (const step of verification) {
+    if (!structuredVerificationTools.has(step?.name)) {
+      const error = new Error(`Unsupported Agent verification tool: ${String(step?.name)}`)
+      error.code = 'AGENT_TARGET_VERIFICATION_FAILED'
+      error.verificationFailed = true
+      throw error
+    }
+    const descriptor = getAgentToolDescriptor(step.name)
+    const verificationEndpoint = assertAgentRiskVerificationAllowed({
+      expectedEndpoint: endpoint,
+      runtime,
+      descriptor
+    })
+    const args = bindAgentToolArgs(step.name, step.args || {}, runtime)
+    const result = await executeStructuredAgentTool({
+      toolName: step.name,
+      args,
+      endpoint: verificationEndpoint,
+      signal: runtime.signal,
+      resolveEndpoint: () => assertAgentRiskVerificationAllowed({
+        expectedEndpoint: endpoint,
+        runtime,
+        descriptor
+      }),
+      executeCommand: command => runReadonlyTool({
+        command,
+        tabId: args.tabId
+      }, verificationEndpoint, runtime),
+      readFile: fileArgs => window.store.mcpSftpReadFile(fileArgs, {
+        signal: runtime.signal
+      })
+    })
+    assertAgentRiskVerificationAllowed({
+      expectedEndpoint: endpoint,
+      runtime,
+      descriptor
+    })
+    try {
+      assertAgentVerificationExpectation(step, result)
+    } catch (error) {
+      error.code = 'AGENT_TARGET_VERIFICATION_FAILED'
+      error.verificationFailed = true
+      throw error
+    }
+    assertAgentRuntimeActive(runtime)
+  }
+  return verification.length > 0
+    ? { passed: true, count: verification.length, status: 'verified' }
+    : { passed: true, count: 0, status: 'not-applicable' }
+}
+
+function completePreparedAgentRisk (preparation, endpoint, runtime) {
+  return completeAgentRiskPreparation({
+    preparation,
+    verify: () => verifyPreparedAgentRisk(preparation, endpoint, runtime),
+    settle: settleRiskTransactionTask
+  })
+}
+
+function createPreparedRiskTerminalHandler (preparation, endpoint, runtime) {
+  if (!preparation?.riskTaskId &&
+    preparation?.delegatedSafetyConfirmation !== true) return undefined
+  return createAgentRiskTerminalHandler({
+    preparation,
+    verify: () => verifyPreparedAgentRisk(preparation, endpoint, runtime),
+    settle: settleRiskTransactionTask
+  })
+}
+
+export async function failAgentRiskBatch (runtime, error, call = {}) {
+  const batch = runtime?.riskBatch
+  if (!batch || batch.terminal === true || batch.cancelledResult) return null
+  const nextCall = batch.transaction?.calls?.[batch.cursor]
+  if (call.toolName && nextCall?.name !== call.toolName) return null
+  const dispatched = batch.cursor > 0
+  return failAgentRiskPreparation({
+    preparation: {
+      riskTaskId: batch.riskTaskId,
+      riskTransaction: batch.transaction,
+      riskBatch: batch,
+      riskCallIndex: batch.cursor
+    },
+    error,
+    dispatched,
+    status: error?.name === 'AbortError' && !dispatched
+      ? 'cancelled'
+      : undefined,
+    settle: settleRiskTransactionTask
+  })
+}
+
+function parseToolResult (result) {
+  try {
+    return JSON.parse(result)
+  } catch {
+    return null
+  }
+}
+
+export async function executeToolCall (
+  toolName,
+  rawArgs,
+  runtime = {},
+  controlledSkillCall
+) {
+  if (toolName === 'run_skill_artifact' && !controlledSkillCall) {
+    const pseudoDescriptor = getAgentToolDescriptor(toolName)
+    const args = bindAgentToolArgs(toolName, rawArgs, runtime)
+    assertAgentRuntimeActive(runtime)
+    const initialClassification = classifyAgentCall({
+      descriptor: pseudoDescriptor,
+      args
+    })
+    const riskContext = assertAgentRiskContextForCall({
+      toolName,
+      args,
+      descriptor: pseudoDescriptor,
+      classification: initialClassification
+    })
+    const endpoint = resolveAgentExecutionEndpoint({
+      descriptor: pseudoDescriptor,
+      runtime
+    })
+    const call = await prepareSelectedSkillArtifactCall({
+      skillId: args.skillId,
+      artifactId: args.artifactId,
+      args: args.args,
+      riskContext,
+      skillBindings: runtime.selectedSkillBindings || [],
+      endpoint
+    })
+    return executeToolCall(call.toolName, call.args, runtime, call)
+  }
+  const descriptor = getAgentToolDescriptor(toolName)
+  const args = bindAgentToolArgs(toolName, rawArgs, runtime)
+  const expandedContent = controlledSkillCall?.expandedContent ||
+    args.script || args.expandedContent
+  assertAgentRuntimeActive(runtime)
+  const initialClassification = classifyAgentCall({
+    descriptor,
+    args,
+    expandedContent,
+    skillArtifact: controlledSkillCall?.skillArtifact,
+    localExecution: controlledSkillCall?.localExecution
+  })
+  assertAgentRiskContextForCall({
+    toolName,
+    args,
+    descriptor,
+    classification: initialClassification,
+    skillArtifact: controlledSkillCall?.skillArtifact
+  })
+  const currentEndpoint = resolveAgentExecutionEndpoint({
+    descriptor,
+    runtime
+  })
+  const endpoint = controlledSkillCall?.endpoint || currentEndpoint
+  return executeAgentTool({
+    toolName,
+    args,
+    descriptor,
+    endpoint,
+    resolveEndpoint: () => resolveAgentExecutionEndpoint({
+      descriptor,
+      runtime
+    }),
+    registry: runtime.takeoverRegistry,
+    signal: runtime.signal,
+    expandedContent,
+    skillArtifact: controlledSkillCall?.skillArtifact,
+    localExecution: controlledSkillCall?.localExecution,
+    validateArtifact: controlledSkillCall?.validateArtifact,
+    prepareRisky: context => prepareResolvedAgentTool(
+      toolName,
+      args,
+      runtime,
+      context
+    ),
+    validateDelegatedRisk: validateDelegatedAgentSafetyPreparation,
+    invalidateRisky: async (error, preparation) => {
+      try {
+        await cancelPreparedRiskArtifacts(preparation?.confirmedArgs)
+      } finally {
+        await failAgentRiskPreparation({
+          preparation,
+          error,
+          dispatched: false,
+          settle: settleRiskTransactionTask
+        })
+      }
+    },
+    execute: async (verifiedEndpoint, preparation, executionContext = {}) => {
+      try {
+        const executionArgs = executionContext.validated?.args || args
+        beginPreparedRiskBatchCall(preparation)
+        const result = await executeResolvedAgentTool(
+          toolName,
+          executionArgs,
+          runtime,
+          verifiedEndpoint,
+          preparation
+        )
+        if (preparation?.executionState) {
+          preparation.executionState.result = result
+        } else if (preparation) {
+          preparation.executionResult = result
+        }
+        return result
+      } catch (error) {
+        try {
+          await failAgentRiskPreparation({
+            preparation,
+            error,
+            dispatched: error?.mutationDispatched !== false,
+            settle: settleRiskTransactionTask
+          })
+        } catch (settleError) {
+          window.store?.onError?.(settleError)
+        }
+        throw error
+      }
+    },
+    verifyRisky: async (_result, verifiedEndpoint, preparation) => {
+      const parsed = parseToolResult(
+        preparation?.executionState?.result ?? preparation?.executionResult
+      )
+      if (parsed?.cancelled === true || parsed?.success === false) {
+        await failAgentRiskPreparation({
+          preparation,
+          error: parsed.message,
+          dispatched: parsed.cancelled !== true,
+          status: parsed.cancelled ? 'cancelled' : 'partially-completed',
+          remoteState: parsed.cancelled ? 'not-dispatched' : 'known-failed',
+          settle: settleRiskTransactionTask
+        })
+        return { passed: false, cancelled: parsed.cancelled === true }
+      }
+      if (isAgentAsyncRiskResult(parsed)) {
+        return { passed: true, pending: true }
+      }
+      try {
+        return await completePreparedAgentRisk(preparation, verifiedEndpoint, runtime)
+      } catch (error) {
+        error.verificationFailed = true
+        error.canAutoRetry = false
+        throw error
+      }
+    }
+  })
 }

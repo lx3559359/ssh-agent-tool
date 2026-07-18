@@ -179,6 +179,58 @@ test('diagnostic controller creates confirms and runs only after explicit confir
   assert.equal(registry.size, 0)
 })
 
+test('real Agent task persistence keeps only the parent trace id in metadata', async () => {
+  const { createAgentTaskRegistry } = await import(registryUrl)
+  const { createAgentTaskController } = await import(controllerUrl)
+  const { createTransactionStore } = await import(storeUrl)
+  const qualityEvents = []
+  const store = createTransactionStore({
+    adapter: createMemoryAdapter(),
+    now: () => new Date('2026-07-18T08:00:00.000Z'),
+    recordQualityEvent: (context, event) => {
+      qualityEvents.push({ context, event })
+      return true
+    }
+  })
+  const traceContext = {
+    traceId: 'sp-1784304000000-12345678',
+    operationId: 'upstream-operation',
+    taskId: 'upstream-task',
+    requestId: 'upstream-request',
+    password: 'parent-secret'
+  }
+  const controller = createAgentTaskController({
+    store,
+    registry: createAgentTaskRegistry(),
+    pid: 1001,
+    endpoint: endpoint(),
+    traceContext,
+    getCurrentEndpoint: async () => endpoint(),
+    runCmd: async () => ({ stdout: 'readonly evidence', code: 0 }),
+    cancelRunCmd: async () => true
+  })
+
+  const completed = await controller.confirmAndRun(diagnosticPlan({
+    steps: [diagnosticPlan().steps[0]]
+  }))
+  const saved = await store.getTask(completed.id)
+
+  assert.deepEqual(saved.metadata, { traceId: traceContext.traceId })
+  assert.equal(saved.traceContext, undefined)
+  assert.doesNotMatch(
+    JSON.stringify(saved),
+    /upstream-(?:operation|task|request)|parent-secret|password/
+  )
+  assert.deepEqual(qualityEvents.map(entry => [
+    entry.context.traceId,
+    entry.context.taskId,
+    entry.event.phase
+  ]), [
+    [traceContext.traceId, saved.id, 'started'],
+    [traceContext.traceId, saved.id, 'completed']
+  ])
+})
+
 test('registry cancellation reaches cancelRunCmd with the active execution id after UI unmount', async () => {
   const { createAgentTaskRegistry } = await import(registryUrl)
   const { createAgentTaskController } = await import(controllerUrl)
@@ -641,7 +693,7 @@ test('failed task execution cleans its registry entry', async () => {
   assert.equal((await store.listTasks()).at(-1).status, 'failed')
 })
 
-test('tampered confirmed plan reaches a failed terminal state and cleans registry', async () => {
+test('tampered confirmed plan returns to change confirmation and executes no step', async () => {
   const { createAgentTaskRegistry } = await import(registryUrl)
   const { createAgentTaskController } = await import(controllerUrl)
   const baseStore = createTaskStore()
@@ -650,7 +702,7 @@ test('tampered confirmed plan reaches a failed terminal state and cleans registr
     ...baseStore,
     async patchTask (id, patch) {
       const task = await baseStore.patchTask(id, patch)
-      if (patch.planBinding) tamperNextRead = true
+      if (patch.planGrant) tamperNextRead = true
       return task
     },
     async getTask (id) {
@@ -676,12 +728,13 @@ test('tampered confirmed plan reaches a failed terminal state and cleans registr
     cancelRunCmd: async () => true
   })
 
-  await assert.rejects(controller.confirmAndRun(diagnosticPlan()), /完整性|计划|篡改/)
-  const failed = (await baseStore.listTasks()).at(-1)
+  await assert.rejects(controller.confirmAndRun(diagnosticPlan()), /绑定|计划|篡改/)
+  const changed = (await baseStore.listTasks()).at(-1)
   assert.equal(remoteCalls, 0)
-  assert.equal(failed.status, 'failed')
-  assert.equal(typeof failed.completedAt, 'string')
-  assert.match(failed.error, /完整性|计划|篡改/)
+  assert.equal(changed.status, 'awaiting-change-confirmation')
+  assert.equal(changed.completedAt, undefined)
+  assert.equal(changed.reasonCode, 'PLAN_BINDING_CHANGED')
+  assert.match(changed.error, /绑定|计划|篡改/)
   assert.equal(registry.size, 0)
 })
 

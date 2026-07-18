@@ -1,5 +1,6 @@
 const { fork } = require('child_process')
 const path = require('path')
+const { reconstructRunCmdError } = require('./session-common')
 
 // Active entries have completed initialization; pending entries have not.
 const activeTerminals = new Map()
@@ -97,14 +98,7 @@ function childEndedError (event, detail) {
 }
 
 function toError (value) {
-  if (value instanceof Error) return value
-  const error = new Error(value?.message || String(value || 'Session request failed'))
-  if (value && typeof value === 'object') {
-    for (const [key, item] of Object.entries(value)) {
-      if (key !== 'message') error[key] = item
-    }
-  }
-  return error
+  return reconstructRunCmdError(value, 'Session request failed')
 }
 
 function hasExited (entry) {
@@ -407,12 +401,19 @@ exports.terminal = async function (initOptions, ws, uid) {
       'ftp'
     ].includes(type)
     if (isSsh) attachSshBridge(entry)
+    let sessionMetadata = {}
     if (type !== 'ftp') {
-      await sendMsgToChildProcess(child, {
+      const createdSession = await sendMsgToChildProcess(child, {
         id: uid,
         action: 'create-terminal',
         body: terminalOptions
       })
+      const hostKeyFingerprint = typeof createdSession?.hostKeyFingerprint === 'string'
+        ? createdSession.hostKeyFingerprint.trim()
+        : ''
+      if (hostKeyFingerprint) {
+        sessionMetadata = { hostKeyFingerprint }
+      }
     }
     if (abortSignal?.aborted) throw childEndedError('aborted during initialization')
     if (latestTerminalRequests.get(pid) !== requestToken) throw supersededError()
@@ -420,7 +421,7 @@ exports.terminal = async function (initOptions, ws, uid) {
     const previous = activeTerminals.get(pid)
     activeTerminals.set(pid, entry)
     if (previous && previous !== entry) await closeEntry(previous)
-    return { pid, port }
+    return { pid, port, ...sessionMetadata }
   } catch (error) {
     if (entry) await closeEntry(entry)
     if (latestTerminalRequests.get(pid) === requestToken) {

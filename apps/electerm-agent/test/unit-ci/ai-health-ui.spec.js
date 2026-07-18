@@ -35,7 +35,7 @@ test('chat health transition observer reports real success and disappearance fai
 })
 
 test('right AI panel automatically checks current selection and offers compact manual refresh', () => {
-  const panel = source('side-panel-r/side-panel-r.jsx')
+  const panel = source('side-panel-r/right-side-panel-ai-header.jsx')
   const style = source('side-panel-r/right-side-panel.styl')
 
   assert.match(panel, /aiHealthCoordinator/)
@@ -46,6 +46,8 @@ test('right AI panel automatically checks current selection and offers compact m
   assert.match(panel, /ReloadOutlined/)
   assert.match(panel, /getAIModelStatus\(activeAIConfig, e, aiHealthState\)/)
   assert.match(panel, /role='button'/)
+  assert.match(panel, /aiModelStatus\.latencyMs/)
+  assert.match(style, /\.right-panel-model-latency/)
   assert.match(style, /&\.checking/)
   assert.match(style, /&\.reachable/)
   assert.match(style, /&\.auth-error/)
@@ -53,6 +55,30 @@ test('right AI panel automatically checks current selection and offers compact m
   assert.match(style, /&\.quota-error/)
   assert.match(style, /&\.network-error/)
   assert.match(style, /&\.stale/)
+})
+
+test('AI configuration can import and export provider profiles without keys', () => {
+  const config = source('ai/ai-config.jsx')
+
+  assert.match(config, /createAIProfileExport/)
+  assert.match(config, /mergeAIProfileImport/)
+  assert.match(config, /shellpilotAiProfileExportWithoutKeys/)
+  assert.match(config, /accept='\.json,application\/json'/)
+})
+
+test('right AI panel title uses CSS ellipsis without a render-time measurement loop', () => {
+  const panel = source('side-panel-r/side-panel-r.jsx')
+  const style = source('side-panel-r/right-side-panel.styl')
+
+  assert.match(panel, /<Typography\.Text className='right-panel-title-text'>/)
+  assert.doesNotMatch(
+    panel,
+    /<Typography\.Text className='right-panel-title-text' ellipsis>/
+  )
+  assert.match(
+    style,
+    /\.right-panel-title-text[\s\S]*white-space nowrap[\s\S]*overflow hidden[\s\S]*text-overflow ellipsis/
+  )
 })
 
 test('AI configuration uses health contract and never marks model-list loading as available', () => {

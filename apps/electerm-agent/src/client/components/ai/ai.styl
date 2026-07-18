@@ -12,12 +12,47 @@
   overflow hidden
   &::-webkit-scrollbar
     width 0
+.ai-history-shell
+  position relative
+  display flex
+  flex 1 1 auto
+  min-height 0
+  width 100%
 .ai-history-wrap
   width 100%
   height 100%
   flex 1 1 auto
   min-height 0
   overflow-y auto
+.ai-history-load-earlier
+  display flex
+  justify-content center
+  padding 10px 8px 4px
+  .ant-btn
+    max-width calc(100% - 16px)
+    border-radius 6px
+.ai-history-back-to-latest
+  position absolute
+  z-index 3
+  right 12px
+  bottom 12px
+  display inline-flex
+  align-items center
+  max-width calc(100% - 24px)
+  box-shadow 0 6px 18px rgba(0, 0, 0, 0.22)
+.ai-history-unread-count
+  display inline-flex
+  align-items center
+  justify-content center
+  min-width 18px
+  height 18px
+  margin-left 6px
+  padding 0 5px
+  border-radius 9px
+  background rgba(255, 255, 255, 0.2)
+  color inherit
+  font-size 11px
+  line-height 18px
   overflow-x hidden
   padding-right 4px
 
@@ -172,6 +207,176 @@
   @media (max-width: 780px)
     grid-template-columns 1fr
 
+.agent-takeover-controls
+  display flex
+  align-items center
+  flex-wrap wrap
+  gap 5px
+  max-width 100%
+  min-width 0
+  font-size 11px
+
+.agent-takeover-switch,
+.agent-takeover-stop
+  min-height 24px
+  display inline-flex
+  align-items center
+  justify-content center
+  gap 5px
+  padding 2px 7px
+  border 1px solid var(--main-darker)
+  border-radius 6px
+  background var(--main)
+  color var(--text)
+  font-size 11px
+  line-height 18px
+  cursor pointer
+  &:hover:not(:disabled)
+    border-color var(--primary)
+    color var(--primary)
+  &:disabled
+    cursor not-allowed
+    opacity .55
+  &:focus-visible
+    outline 2px solid var(--primary)
+    outline-offset 2px
+
+.agent-takeover-switch.active
+  border-color var(--success)
+  color var(--success)
+
+.agent-takeover-switch-track
+  width 22px
+  height 12px
+  padding 1px
+  display inline-flex
+  align-items center
+  border-radius 999px
+  background var(--main-darker)
+  transition background .15s ease
+
+.agent-takeover-switch-thumb
+  width 10px
+  height 10px
+  border-radius 50%
+  background var(--text-dark)
+  transform translateX(0)
+  transition transform .15s ease, background .15s ease
+
+.agent-takeover-switch.active
+  .agent-takeover-switch-track
+    background var(--success)
+  .agent-takeover-switch-thumb
+    background var(--primary-contrast)
+    transform translateX(10px)
+
+.agent-takeover-badge
+  max-width 100%
+  padding 1px 6px
+  border 1px solid var(--success)
+  border-radius 999px
+  color var(--success)
+  background var(--main)
+  white-space nowrap
+
+.agent-takeover-stop
+  border-color var(--danger)
+  color var(--danger)
+
+.agent-takeover-availability
+  flex 1 1 100px
+  min-width 0
+  max-width 100%
+  color var(--text-dark)
+  overflow hidden
+  text-overflow ellipsis
+  white-space nowrap
+  &.unavailable
+    color var(--warn)
+
+.agent-takeover-confirm-content
+  line-height 1.55
+  p
+    margin-top 0
+
+.agent-takeover-identity
+  display grid
+  grid-template-columns minmax(88px, auto) minmax(0, 1fr)
+  gap 7px 12px
+  margin 12px 0
+  padding 12px
+  border 1px solid var(--main-darker)
+  border-radius 7px
+  background var(--main-light)
+  dt
+    color var(--text-dark)
+  dd
+    min-width 0
+    margin 0
+    color var(--text)
+    overflow-wrap anywhere
+  code
+    overflow-wrap anywhere
+    word-break break-all
+
+.agent-takeover-rules
+  margin 10px 0 0
+  padding-left 20px
+  color var(--text)
+
+.agent-risk-confirmation-content
+  max-height 68vh
+  overflow auto
+  line-height 1.5
+
+.agent-risk-warning
+  padding 10px 12px
+  border 1px solid #ff7875
+  border-radius 6px
+  color #cf1322
+  background rgba(255, 77, 79, .08)
+
+.agent-risk-details
+  display grid
+  grid-template-columns minmax(120px, auto) minmax(0, 1fr)
+  gap 8px 14px
+  margin 0
+  dt
+    color var(--text-dark)
+    font-weight 600
+  dd
+    min-width 0
+    margin 0
+    overflow-wrap anywhere
+    > span
+      display inline-block
+      margin-right 12px
+  pre
+    max-height 180px
+    margin 0 0 6px
+    padding 7px 9px
+    overflow auto
+    white-space pre-wrap
+    word-break break-all
+    border-radius 4px
+    background var(--main-dark)
+
+@media (max-width: 780px)
+  .agent-takeover-controls
+    align-items flex-start
+  .agent-takeover-availability
+    flex-basis 100%
+  .agent-takeover-identity
+    grid-template-columns 1fr
+    gap 2px
+    dd
+      margin-bottom 6px
+  .agent-risk-details
+    grid-template-columns 1fr
+    gap 3px
+    dd
+      margin-bottom 8px
+
 .code-block
   width 100%
   pre
@@ -251,12 +456,16 @@
   border-radius 4px
   margin-bottom 6px
   font-size 13px
+  max-width 100%
+  min-width 0
+  overflow hidden
 
 .agent-tool-header
   display flex
   align-items center
   padding 6px 8px
   gap 6px
+  min-width 0
 
 .agent-tool-name
   font-weight 500
@@ -300,6 +509,7 @@
   white-space pre-wrap
   word-break break-all
   margin-bottom 0
+  max-width 100%
 
 .agent-tool-running
   border-color #1890ff
@@ -307,8 +517,110 @@
 .agent-tool-completed
   border-color #52c41a
 
-.agent-tool-error
+.agent-tool-error,
+.agent-tool-cancelled
   border-color #ff4d4f
+
+.agent-send-running
+  cursor wait
+
+.agent-send-disabled
+  cursor not-allowed
+  opacity .5
+
+.agent-tool-readonly-card
+  .agent-tool-detail
+    border-top 1px solid var(--main-darker)
+
+.agent-readonly-header
+  flex-wrap wrap
+
+.agent-readonly-command
+  flex 1 1 140px
+  min-width 0
+  padding 2px 5px
+  border-radius 3px
+  background var(--main-dark)
+  color var(--text-color)
+  white-space pre-wrap
+  overflow-wrap anywhere
+  word-break break-word
+
+.agent-readonly-detail
+  display flex
+  flex-direction column
+  gap 6px
+
+.agent-readonly-status-line
+  display flex
+  flex-wrap wrap
+  gap 4px 10px
+  min-width 0
+  padding-top 6px
+  color var(--text-color-2)
+  font-size 12px
+  span
+    min-width 0
+    overflow-wrap anywhere
+    word-break break-word
+
+.agent-readonly-truncated,
+.agent-readonly-error
+  color #ff4d4f
+
+.agent-readonly-actions
+  display flex
+  flex-wrap wrap
+  gap 6px
+
+.agent-readonly-fill-reason
+  color var(--text-color-2)
+  font-size 11px
+  line-height 1.4
+  overflow-wrap anywhere
+  word-break break-word
+
+.agent-readonly-action,
+.agent-readonly-toggle
+  max-width 100%
+  border 1px solid var(--main-darker)
+  border-radius 3px
+  background var(--main)
+  color var(--text-color)
+  line-height 1.4
+  cursor pointer
+  &:hover:not(:disabled)
+    border-color var(--primary)
+    color var(--primary)
+  &:focus-visible
+    outline 2px solid var(--primary)
+    outline-offset 1px
+  &:disabled
+    cursor not-allowed
+    opacity .5
+
+.agent-readonly-action
+  padding 3px 8px
+
+.agent-readonly-section
+  min-width 0
+
+.agent-readonly-toggle
+  display inline-flex
+  align-items center
+  gap 4px
+  padding 2px 6px
+  background transparent
+  border-color transparent
+  font-size 12px
+
+.agent-readonly-output
+  margin-top 4px
+  overflow auto
+
+.agent-readonly-raw
+  border-top 1px dashed var(--main-darker)
+  padding-top 4px
 
 @keyframes spin
   from
@@ -374,6 +686,32 @@
     border-color var(--sp-border) !important
     border-radius var(--sp-radius-control)
 
+.sp-ai-config-primary-fields
+  max-width 760px
+  margin 0 auto
+
+.sp-ai-config-advanced
+  margin-top 6px
+  border-top 1px solid var(--sp-border)
+  .ant-collapse-header
+    align-items flex-start !important
+    padding-left 0 !important
+    padding-right 0 !important
+  .ant-collapse-extra
+    min-width 0
+    max-width 70%
+  .ant-collapse-content-box
+    padding-left 0 !important
+    padding-right 0 !important
+
+.sp-ai-config-advanced-description
+  display block
+  color var(--text-dark)
+  font-size 12px
+  line-height 1.5
+  text-align right
+  white-space normal
+
 @media (max-width: 680px)
   .sp-ai-config-form
     padding 14px
@@ -390,3 +728,6 @@
       > .ant-space-item
         flex 1 1 100%
         width 100%
+  .sp-ai-config-advanced
+    .ant-collapse-extra
+      display none

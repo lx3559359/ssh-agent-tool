@@ -1,6 +1,7 @@
 const {
   app
 } = require('electron')
+const path = require('path')
 const { createWindow } = require('./create-window')
 const {
   appDisplayName,
@@ -17,8 +18,73 @@ const log = require('../common/log')
 const {
   installProcessErrorLogging
 } = require('./process-error-logging')
+const {
+  createPerformanceMetrics
+} = require('./quality/performance-metrics')
+const {
+  createRecoverySnapshotManager
+} = require('./quality/recovery-snapshot')
 
 let conf = {}
+const processStartedAt = Date.now()
+const MEMORY_SAMPLE_INTERVAL_MS = 60 * 1000
+const MEMORY_STABLE_DELAY_MS = 10 * 1000
+let memoryTimer = null
+let initialMemoryTimer = null
+
+function toMb (workingSetSizeKb) {
+  const value = Number(workingSetSizeKb)
+  return Number.isFinite(value) && value >= 0
+    ? Math.round((value / 1024) * 1000) / 1000
+    : 0
+}
+
+async function sampleApplicationMemory (metrics) {
+  try {
+    const ownMemory = typeof process.getProcessMemoryInfo === 'function'
+      ? await process.getProcessMemoryInfo()
+      : {}
+    const appMetrics = typeof app.getAppMetrics === 'function'
+      ? app.getAppMetrics()
+      : []
+    const rendererKb = appMetrics
+      .filter(item => item?.type === 'Tab')
+      .reduce((sum, item) => sum + Number(item?.memory?.workingSetSize || 0), 0)
+    const totalKb = appMetrics
+      .reduce((sum, item) => sum + Number(item?.memory?.workingSetSize || 0), 0)
+    metrics.recordMemory({
+      mainMb: toMb(ownMemory.workingSetSize),
+      rendererMb: toMb(rendererKb),
+      totalMb: toMb(totalKb || ownMemory.workingSetSize)
+    })
+  } catch (error) {
+    // Performance sampling must never affect application startup or shutdown.
+  }
+}
+
+function startMemorySampling (metrics) {
+  if (initialMemoryTimer || memoryTimer) return
+  initialMemoryTimer = setTimeout(() => {
+    initialMemoryTimer = null
+    sampleApplicationMemory(metrics)
+    memoryTimer = setInterval(
+      () => sampleApplicationMemory(metrics),
+      MEMORY_SAMPLE_INTERVAL_MS
+    )
+    memoryTimer.unref?.()
+  }, MEMORY_STABLE_DELAY_MS)
+  initialMemoryTimer.unref?.()
+}
+
+function stopPerformanceCollection (metrics) {
+  if (initialMemoryTimer) clearTimeout(initialMemoryTimer)
+  if (memoryTimer) clearInterval(memoryTimer)
+  initialMemoryTimer = null
+  memoryTimer = null
+  try {
+    metrics?.flush().catch(() => false)
+  } catch (error) {}
+}
 
 // GPU error suggestion message
 const GPU_ERROR_SUGGESTION = `
@@ -46,13 +112,48 @@ Example:
 installProcessErrorLogging({
   app,
   log,
-  gpuSuggestion: GPU_ERROR_SUGGESTION
+  gpuSuggestion: GPU_ERROR_SUGGESTION,
+  onAbnormalExit: reason => {
+    globalState.get('recoverySnapshot')?.markAbnormalSync(reason)
+  }
 })
 
 exports.createApp = async function () {
   // Keep the legacy internal app name so Electron safeStorage can decrypt
   // API keys and SSH settings saved before the ShellPilot rebrand.
   app.setName(safeStorageAppName)
+  let performanceStoragePath = ''
+  try {
+    performanceStoragePath = path.join(
+      app.getPath('userData'),
+      'quality',
+      'performance-metrics.json'
+    )
+  } catch (error) {}
+  const performanceMetrics = createPerformanceMetrics({
+    storagePath: performanceStoragePath,
+    logger: log
+  })
+  performanceMetrics.mark('app_start', processStartedAt)
+  globalState.set('performanceMetrics', performanceMetrics)
+  let recoveryStoragePath = ''
+  try {
+    recoveryStoragePath = path.join(
+      app.getPath('userData'),
+      'quality',
+      'recovery-snapshot.json'
+    )
+  } catch (error) {}
+  const recoverySnapshot = createRecoverySnapshotManager({
+    storagePath: recoveryStoragePath,
+    logger: log
+  })
+  recoverySnapshot.initialize()
+  globalState.set('recoverySnapshot', recoverySnapshot)
+  app.once('before-quit', () => {
+    stopPerformanceCollection(performanceMetrics)
+    recoverySnapshot.markCleanExitSync()
+  })
   const { getUserConfigNoEnc, getDbConfig } = require('./get-config')
   // Set desktop name so Linux taskbars (e.g. UOS/Deepin dde-dock) can match
   // the window to the .desktop file embedded in the AppImage.
@@ -134,6 +235,7 @@ exports.createApp = async function () {
   app.whenReady().then(async () => {
     conf = await getDbConfig()
     createWindow(conf)
+    startMemorySampling(performanceMetrics)
   })
   app.on('activate', () => {
     // On macOS it's common to re-create a window in the app when the

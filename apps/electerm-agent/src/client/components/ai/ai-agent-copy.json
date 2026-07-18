@@ -20,10 +20,22 @@
     "status": {
       "running": "执行中",
       "completed": "已完成",
+      "cancelled": "已取消",
       "error": "失败"
     },
     "argumentsLabel": "参数",
-    "resultLabel": "结果"
+    "resultLabel": "结果",
+    "readonlyTitle": "只读执行",
+    "copyCommand": "复制命令",
+    "fillTerminal": "填入终端",
+    "outputLabel": "执行输出",
+    "rawLabel": "技术详情",
+    "targetLabel": "目标",
+    "durationLabel": "耗时",
+    "exitCodeLabel": "退出码",
+    "truncatedLabel": "截断",
+    "yesLabel": "是",
+    "noLabel": "否"
   },
   "agentPromptRules": [
     "你正在 AIGShell 内工作，这是一个面向 Windows 的 SSH、SFTP 和 Agent 客户端，底层基于 Electerm。",

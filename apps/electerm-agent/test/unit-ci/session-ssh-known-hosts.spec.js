@@ -11,6 +11,7 @@ const {
   buildHostMismatchPrompt,
   buildUnknownHostPrompt,
   checkKnownHosts,
+  createHostVerifier,
   getHostKeyMeta,
   matchesKnownHostField,
   removeKnownHost,
@@ -31,6 +32,41 @@ function createHostKey (label) {
 }
 
 describe('ssh known_hosts verification', () => {
+  test('reports the exact accepted host key metadata once', async () => {
+    const tempDir = await fs.promises.mkdtemp(join(os.tmpdir(), 'electerm-known-hosts-'))
+    try {
+      const accepted = []
+      const hostKey = createHostKey('takeover-endpoint')
+      const verifier = createHostVerifier({
+        host: 'example.test',
+        port: 22,
+        knownHostsPath: join(tempDir, 'known_hosts'),
+        confirm: async () => true,
+        onVerified: meta => accepted.push(meta)
+      })
+      const verify = () => new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error('host verifier timed out'))
+        }, 1000)
+        verifier(hostKey, result => {
+          clearTimeout(timeout)
+          resolve(result)
+        })
+      })
+      const verified = await verify()
+      const verifiedAgain = await verify()
+
+      assert.equal(verified, true)
+      assert.equal(verifiedAgain, true)
+      assert.equal(accepted.length, 1)
+      assert.deepEqual(Object.keys(accepted[0]).sort(), ['fingerprint', 'keyType'])
+      assert.match(accepted[0].fingerprint, /^SHA256:/)
+      assert.equal(accepted[0].keyType, 'ssh-ed25519')
+    } finally {
+      await fs.promises.rm(tempDir, { recursive: true, force: true })
+    }
+  })
+
   test('matches hashed host entries', () => {
     const salt = crypto.randomBytes(20)
     const host = 'example.test'

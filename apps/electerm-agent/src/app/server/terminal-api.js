@@ -3,6 +3,7 @@
  */
 
 const { testConnection, terminal, terminals } = require('./session-process')
+const { serializeRunCmdError } = require('./session-common')
 
 async function runCmd (ws, msg) {
   const {
@@ -30,11 +31,7 @@ async function runCmd (ws, msg) {
   } catch (err) {
     ws.s({
       id,
-      error: {
-        message: err.message,
-        name: err.name,
-        stack: err.stack
-      }
+      error: serializeRunCmdError(err)
     })
   }
 }
@@ -50,11 +47,7 @@ async function cancelRunCmd (ws, msg) {
   } catch (err) {
     ws.s({
       id,
-      error: {
-        message: err.message,
-        name: err.name,
-        stack: err.stack
-      }
+      error: serializeRunCmdError(err)
     })
   }
 }

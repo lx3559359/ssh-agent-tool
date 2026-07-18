@@ -59,6 +59,7 @@ export default class TransportAction extends Component {
     this.transferAttempts = createTransferAttemptGuard()
     this.subTransports = new Set()
     this.localSourceDescriptor = props.transfer?.sourceDescriptor || null
+    this.agentRiskTerminalPromise = null
     this.transferSafety = createTransferSafetyController({
       getTransfer: this.getTransferSafetyInput,
       getCapability: () => refs.get('sftp-' + this.tabId),
@@ -203,6 +204,11 @@ export default class TransportAction extends Component {
       finishTime: Date.now()
     })
     store.addTransferHistory(tr)
+    this.notifyAgentRiskTerminal({
+      status: 'failed',
+      error: errorMsg,
+      transferId: id
+    }).catch(error => window.store.onError(error))
     refsStatic.get('transfer-queue')?.addToQueue(
       'delete',
       id
@@ -277,6 +283,15 @@ export default class TransportAction extends Component {
       }
       window.store.onError(error)
     }
+    try {
+      await this.notifyAgentRiskTerminal({
+        status: update.status === 'exception' || update.error ? 'failed' : 'completed',
+        error: update.error || '',
+        transferId: this.props.transfer.id
+      })
+    } catch (error) {
+      window.store.onError(error)
+    }
     const {
       transfer,
       config
@@ -317,7 +332,7 @@ export default class TransportAction extends Component {
       cbs.forEach(cb => cb())
     }
     if (protectedAttempt) this.transferAttempts.finishCompletion(attemptToken)
-    this.finishTransfer(cb)
+    this.finishTransfer(cb).catch(error => window.store.onError(error))
   }
 
   onData = (transferred, attemptToken) => {
@@ -370,33 +385,72 @@ export default class TransportAction extends Component {
     this.subTransports.clear()
   }
 
-  finishTransfer = (callback) => {
-    this.stopTransport()
-    if (!this.queueRemoved) {
-      this.queueRemoved = true
-      refsStatic.get('transfer-queue')?.addToQueue(
-        'delete',
-        this.props.transfer.id
-      )
+  removeTransferFromQueue = async () => {
+    const queue = refsStatic.get('transfer-queue')
+    if (queue) {
+      await queue.addToQueue('delete', this.props.transfer.id)
+    } else {
+      const { fileTransfers } = window.store
+      const index = fileTransfers.findIndex(item => (
+        item.id === this.props.transfer.id
+      ))
+      if (index >= 0) fileTransfers.splice(index, 1)
     }
+  }
+
+  finishTransfer = async (callback) => {
+    this.stopTransport()
+    if (!this.queueRemovalPromise) {
+      this.queueRemoved = true
+      this.queueRemovalPromise = this.removeTransferFromQueue()
+    }
+    await this.queueRemovalPromise
     if (isFunction(callback)) {
       callback()
     }
   }
 
+  notifyAgentRiskTerminal = (outcome) => {
+    if (this.agentRiskTerminalPromise) return this.agentRiskTerminalPromise
+    const callback = this.props.transfer?._agentRiskTerminal
+    if (typeof callback !== 'function') return Promise.resolve(null)
+    this.agentRiskTerminalPromise = Promise.resolve()
+      .then(() => callback(outcome))
+    return this.agentRiskTerminalPromise
+  }
+
   cancelProtectedTransport = async () => {
-    this.finishTransfer()
+    await this.finishTransfer()
+  }
+
+  cancelAndWait = () => {
+    if (this.cancellationPromise) return this.cancellationPromise
+    this.userCancelling = true
+    this.cancellationPromise = (async () => {
+      try {
+        await this.transferSafety.cancel()
+      } finally {
+        try {
+          await this.notifyAgentRiskTerminal({
+            status: 'cancelled',
+            remoteState: 'unknown',
+            transferId: this.props.transfer.id
+          })
+        } finally {
+          await this.finishTransfer()
+        }
+      }
+    })()
+    return this.cancellationPromise
   }
 
   cancel = async (callback) => {
-    if (this.userCancelling) return
-    this.userCancelling = true
     try {
-      await this.transferSafety.cancel()
+      await this.cancelAndWait()
     } catch (error) {
       window.store.onError(error)
     } finally {
-      this.finishTransfer(callback)
+      if (isFunction(callback)) callback()
     }
   }
 

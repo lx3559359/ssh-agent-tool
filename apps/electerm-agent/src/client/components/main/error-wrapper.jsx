@@ -1,61 +1,30 @@
 import React from 'react'
-import { FrownOutlined, ReloadOutlined, CopyOutlined } from '@ant-design/icons'
-import { Button } from 'antd'
 import {
-  logoPath1,
-  packInfo,
+  CopyOutlined,
+  FrownOutlined,
+  ReloadOutlined
+} from '@ant-design/icons'
+import { Button, Space } from 'antd'
+import {
   isMac,
-  isWin
+  isWin,
+  logoPath1,
+  packInfo
 } from '../../common/constants'
 import Link from '../common/external-link'
 import { copy } from '../../common/clipboard'
-import compare from '../../common/version-compare'
+import { createSafeErrorDiagnostic } from '../../common/error-diagnostics'
+import message from '../common/message'
 
 const e = window.translate
-const version = packInfo.version
 const os = isMac ? 'mac' : isWin ? 'windows' : 'linux'
-const isVersion2OrAbove = compare(version, '2.0.0') >= 0
-
-// 历史兼容：底层仍沿用 Electerm 的数据目录，避免用户升级后丢失原有连接配置。
-const userDataPath = {
-  mac: '~/Library/Application\\ Support/electerm/users/default_user',
-  linux: '~/.config/electerm/users/default_user',
-  windows: 'C:\\Users\\your-user-name\\AppData\\Roaming\\electerm\\users\\default_user'
-}
-
-const troubleshootContent = {
-  runInCommandLine: {
-    title: '从命令行启动',
-    mac: '/Applications/AIGShell.app/Contents/MacOS/AIGShell',
-    linux: 'path/to/AIGShell',
-    windows: 'path\\to\\AIGShell.exe'
-  },
-  clearConfig: {
-    title: '清理本地配置',
-    mac: isVersion2OrAbove
-      ? `rm -rf ${userDataPath.mac}/electerm_data.db`
-      : `rm -rf ${userDataPath.mac}/electerm.data.nedb`,
-    linux: isVersion2OrAbove
-      ? `rm -rf ${userDataPath.linux}/electerm_data.db`
-      : `rm -rf ${userDataPath.linux}/electerm.data.nedb`,
-    windows: isVersion2OrAbove
-      ? `删除 ${userDataPath.windows}\\electerm_data.db`
-      : `删除 ${userDataPath.windows}\\electerm.data.nedb`
-  },
-  backupData: {
-    title: '备份本地数据',
-    mac: `cp -r ${userDataPath.mac} ~/Desktop/aigshell_backup_${Date.now()}`,
-    linux: `cp -r ${userDataPath.linux} ~/Desktop/aigshell_backup_${Date.now()}`,
-    windows: `xcopy "${userDataPath.windows}\\*" "%USERPROFILE%\\Desktop\\aigshell_backup_${Date.now()}" /E /I`
-  }
-}
 
 export default class ErrorBoundary extends React.PureComponent {
   constructor (props) {
     super(props)
     this.state = {
       hasError: false,
-      error: {}
+      diagnostic: null
     }
   }
 
@@ -70,7 +39,10 @@ export default class ErrorBoundary extends React.PureComponent {
     }).catch(() => {})
     this.setState({
       hasError: true,
-      error
+      diagnostic: createSafeErrorDiagnostic(error, {
+        version: packInfo.version,
+        os
+      })
     })
   }
 
@@ -78,83 +50,64 @@ export default class ErrorBoundary extends React.PureComponent {
     window.location.reload()
   }
 
-  renderIconCopy = (cmd) => {
-    return (
-      <CopyOutlined
-        className='mg2l pointer'
-        onClick={() => copy(cmd)}
-      />
-    )
+  handleCopyDiagnostic = () => {
+    const diagnostic = this.state.diagnostic
+    if (!diagnostic) return
+    copy(diagnostic.text)
+    message.success(e('shellpilotDiagnosticCopied'))
   }
 
-  renderTroubleShoot = () => {
-    if (window.et.isWebApp) {
-      return this.renderContacts()
-    }
+  renderFeedbackLink () {
+    const bugReportLink = packInfo?.bugs?.url
+    if (!bugReportLink) return null
     return (
-      <div className='pd1y wordbreak'>
-        <h2>排查建议</h2>
-        <p>AIGShell 版本：{packInfo.version}，系统：{os}</p>
-        <p>说明：为兼容 Electerm 底座和历史数据，部分本地数据目录名称仍保留 electerm。</p>
-        {
-          Object.keys(troubleshootContent).map((k) => {
-            const v = troubleshootContent[k]
-            const cmd = v[os]
-            return (
-              <div className='pd1b' key={k}>
-                <h3>{v.title} {this.renderIconCopy(cmd)}</h3>
-                <p><code>{cmd}</code></p>
-              </div>
-            )
-          })
-        }
-        {this.renderContacts()}
-      </div>
-    )
-  }
-
-  renderContacts () {
-    const {
-      bugs: {
-        url: bugReportLink
-      }
-    } = packInfo
-    const bugUrl = `${bugReportLink}/new/choose`
-    return (
-      <>
-        <div className='pd1b'>
-          <Link to={bugUrl}>提交问题反馈</Link>
-        </div>
-      </>
+      <Link to={`${bugReportLink}/new/choose`}>
+        {e('shellpilotSubmitFeedback')}
+      </Link>
     )
   }
 
   render () {
-    if (this.state.hasError) {
-      const { stack, message } = this.state.error
-      return (
-        <div className='pd3 error-wrapper'>
-          <div className='pd2y'>
-            <img src={logoPath1} className='iblock mwm-100' width={100} />
-          </div>
-          <h1>
-            <FrownOutlined className='mg1r iblock' />
-            <span className='iblock mg1r'>界面发生错误</span>
-            <Button
-              onClick={this.handleReload}
-              icon={<ReloadOutlined />}
-            >
-              {e('reload')}
-            </Button>
-          </h1>
-          <div className='pd1y'>{message}</div>
-          <div className='pd1y'>{stack}</div>
-          {
-            this.renderTroubleShoot()
-          }
-        </div>
-      )
+    if (!this.state.hasError) {
+      return this.props.children
     }
-    return this.props.children
+
+    const diagnostic = this.state.diagnostic || createSafeErrorDiagnostic(null, {
+      version: packInfo.version,
+      os
+    })
+
+    return (
+      <div className='pd3 error-wrapper'>
+        <div className='pd2y'>
+          <img src={logoPath1} className='iblock mwm-100' width={88} alt='ShellPilot' />
+        </div>
+        <h1>
+          <FrownOutlined className='mg1r iblock' />
+          <span className='iblock mg1r'>{e('shellpilotInterfaceError')}</span>
+        </h1>
+        <p>{e('shellpilotSafeErrorHint')}</p>
+        <div className='sp-safe-error-diagnostic pd2'>
+          <p><b>{e('shellpilotErrorNumber')}:</b> <code>{diagnostic.id}</code></p>
+          <p className='wordbreak'>{diagnostic.safeMessage}</p>
+        </div>
+        <Space className='pd2y' wrap>
+          <Button
+            type='primary'
+            onClick={this.handleReload}
+            icon={<ReloadOutlined />}
+          >
+            {e('reload')}
+          </Button>
+          <Button
+            onClick={this.handleCopyDiagnostic}
+            icon={<CopyOutlined />}
+          >
+            {e('shellpilotCopyDiagnostic')}
+          </Button>
+          {this.renderFeedbackLink()}
+        </Space>
+      </div>
+    )
   }
 }

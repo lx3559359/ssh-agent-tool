@@ -219,17 +219,10 @@ test('real fleet workspace preserves AI panel, scrolling and interactions across
     const checkServices = batchBar.getByRole('button', { name: /检查服务/ })
     const aiDiagnose = batchBar.getByRole('button', { name: /AI 批量诊断/ })
     await expect(checkServices).toBeEnabled()
-    await expect(aiDiagnose).toBeDisabled()
-
-    const aiDiagnoseWrapper = batchBar.locator(
-      ".fleet-status-disabled-action[aria-label='AI 批量诊断尚未启用']"
-    )
-    await aiDiagnoseWrapper.focus()
-    await expect(aiDiagnoseWrapper).toBeFocused()
-    await expect(aiDiagnoseWrapper).toHaveAccessibleName('AI 批量诊断尚未启用')
-    await expect(page.locator('[role="tooltip"]:visible', {
-      hasText: 'AI 批量诊断尚未启用'
-    })).toBeVisible()
+    await expect(aiDiagnose).toBeEnabled()
+    await expect(page.locator('.ai-chat-container')).toBeVisible()
+    await aiDiagnose.click()
+    await expect(page.locator('.ai-chat-textarea')).toContainText('Fleet Unique Edge')
     await page.getByRole('button', { name: '清除选择' }).click()
     await expect(batchBar).toHaveCount(0)
 

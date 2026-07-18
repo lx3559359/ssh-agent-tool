@@ -27,7 +27,7 @@
 - Create: `apps/electerm-agent/test/unit-ci/agent-tool-policy.spec.js`
 - Create: `apps/electerm-agent/test/unit-ci/agent-tool-gateway.spec.js`
 
-- [ ] **Step 1: 写入四结果分类失败测试**
+- [x] **Step 1: 写入四结果分类失败测试**
 
 ```js
 test('maps actual calls to the four system outcomes', async () => {
@@ -42,11 +42,11 @@ test('maps actual calls to the four system outcomes', async () => {
 
 Add cases for SFTP upload/delete, local CLI, background commands, redirection, pipelines, `find -exec`, dynamic command substitution, unbounded recursion, log follow and database queries without limits.
 
-- [ ] **Step 2: 写入“Skill/模型声明不是授权”测试**
+- [x] **Step 2: 写入“Skill/模型声明不是授权”测试**
 
 Pass calls containing `declaredRisk: 'readonly'` and `skillPermissions: ['ssh.write']`; assert classifier output is unchanged from the actual tool and arguments.
 
-- [ ] **Step 3: 运行测试并确认失败**
+- [x] **Step 3: 运行测试并确认失败**
 
 ```powershell
 Set-Location apps/electerm-agent
@@ -55,7 +55,7 @@ node --test test/unit-ci/agent-tool-policy.spec.js test/unit-ci/agent-tool-gatew
 
 Expected: policy/gateway modules are missing or existing regex classifier misclassifies at least one case.
 
-- [ ] **Step 4: 实现描述符、共享分类器和资源敏感规则**
+- [x] **Step 4: 实现描述符、共享分类器和资源敏感规则**
 
 Each descriptor must include:
 
@@ -81,11 +81,11 @@ Each descriptor must include:
 
 The only allowed outcomes are `allowlisted-readonly`, `risky`, `unauditable`, and `blocked`. Treat recursive full-disk scans, unlimited log follow, large archive/hash operations, image builds and unbounded result queries as `risky` even when they do not modify data. Reuse `command-classifier.js` for shell parsing and remove duplicate regex decisions from `agent-task-mode.js`.
 
-- [ ] **Step 5: 实现网关的固定检查顺序**
+- [x] **Step 5: 实现网关的固定检查顺序**
 
 `executeAgentTool` must perform this order: resolve descriptor, assert takeover, assert exact endpoint, classify actual call, reject blocked/unauditable, dispatch readonly or prepare risky transaction. No executor may be passed into or invoked before checks complete.
 
-- [ ] **Step 6: 运行测试并提交**
+- [x] **Step 6: 运行测试并提交**
 
 ```powershell
 node --test test/unit-ci/agent-tool-policy.spec.js test/unit-ci/agent-tool-gateway.spec.js test/unit-ci/agent-task-mode.spec.js test/unit-ci/safety-transaction-domain.spec.js
@@ -101,7 +101,7 @@ git commit -m "feat: centralize agent tool risk policy"
 - Modify: `apps/electerm-agent/src/client/components/ai/agent.js`
 - Create: `apps/electerm-agent/test/unit-ci/agent-structured-tools.spec.js`
 
-- [ ] **Step 1: 写入参数边界失败测试**
+- [x] **Step 1: 写入参数边界失败测试**
 
 Test the exact initial tools: `read_service_status`, `read_recent_logs`, `verify_listening_port`, `read_file_range`. Assert `read_recent_logs` requires `limit` in `1..1000`, `read_file_range` requires bounded offset/length, and no tool accepts shell fragments as a service name, port or path option.
 
@@ -112,7 +112,7 @@ assert.throws(
 )
 ```
 
-- [ ] **Step 2: 运行测试并确认失败**
+- [x] **Step 2: 运行测试并确认失败**
 
 ```powershell
 node --test test/unit-ci/agent-structured-tools.spec.js
@@ -120,15 +120,15 @@ node --test test/unit-ci/agent-structured-tools.spec.js
 
 Expected: structured tool registry is absent.
 
-- [ ] **Step 3: 实现固定模板和有限输出**
+- [x] **Step 3: 实现固定模板和有限输出**
 
 Use argument arrays or fixed templates; do not concatenate unchecked shell strings. Every result contains `exitCode`, `truncated`, `nextCursor`, `capturedAt` and endpoint identity. Default limits must keep a single observation below the existing model context safeguards.
 
-- [ ] **Step 4: 调整 Agent prompt 优先选择结构化工具**
+- [x] **Step 4: 调整 Agent prompt 优先选择结构化工具**
 
 Describe the structured tools as the preferred diagnostics path. Raw shell remains available only through the same policy gateway and is never assumed readonly because the model says so.
 
-- [ ] **Step 5: 运行测试并提交**
+- [x] **Step 5: 运行测试并提交**
 
 ```powershell
 node --test test/unit-ci/agent-structured-tools.spec.js test/unit-ci/ai-agent-tools.spec.js
@@ -146,7 +146,7 @@ git commit -m "feat: add bounded structured ssh inspection tools"
 - Create: `apps/electerm-agent/test/unit-ci/agent-plan-grant.spec.js`
 - Modify: `apps/electerm-agent/test/unit-ci/agent-task-runner.spec.js`
 
-- [ ] **Step 1: 写入规范化和篡改失败测试**
+- [x] **Step 1: 写入规范化和篡改失败测试**
 
 ```js
 test('invalidates a grant when any bound field changes', async () => {
@@ -172,7 +172,7 @@ test('invalidates a grant when any bound field changes', async () => {
 
 Repeat for endpoint fingerprint, command text, arguments, Skill ID/version/digest, script/template digest, impact target, recovery metadata and verification step.
 
-- [ ] **Step 2: 运行测试并确认失败**
+- [x] **Step 2: 运行测试并确认失败**
 
 ```powershell
 node --test test/unit-ci/agent-plan-grant.spec.js test/unit-ci/agent-task-runner.spec.js
@@ -180,7 +180,7 @@ node --test test/unit-ci/agent-plan-grant.spec.js test/unit-ci/agent-task-runner
 
 Expected: plan grant module is absent or existing boolean `planConfirmed` accepts modified content.
 
-- [ ] **Step 3: 实现确定性规范化数据结构**
+- [x] **Step 3: 实现确定性规范化数据结构**
 
 The hash payload contains exactly:
 
@@ -201,11 +201,11 @@ The hash payload contains exactly:
 
 Recursively sort object keys while preserving array order, serialize as UTF-8 JSON and hash with SHA-256. Store `digest`, `confirmedAt`, `confirmedBy` and the immutable payload snapshot. Remove the boolean-only grant from `agent-task-mode.js`.
 
-- [ ] **Step 4: 在执行前重新计算并比较**
+- [x] **Step 4: 在执行前重新计算并比较**
 
 The task runner must compare current endpoint and current plan digest immediately before the first changing operation. Any mismatch sets the task back to `awaiting-change-confirmation` with reason `PLAN_BINDING_CHANGED`; no step executes.
 
-- [ ] **Step 5: 运行测试并提交**
+- [x] **Step 5: 运行测试并提交**
 
 ```powershell
 node --test test/unit-ci/agent-plan-grant.spec.js test/unit-ci/agent-task-runner.spec.js test/unit-ci/safety-transaction-store.spec.js
@@ -224,15 +224,15 @@ git commit -m "feat: bind risky agent plans to immutable grants"
 - Create: `apps/electerm-agent/test/unit-ci/agent-risk-transaction.spec.js`
 - Create: `apps/electerm-agent/test/unit-ci/agent-risk-confirmation-ui.spec.js`
 
-- [ ] **Step 1: 写入事务合并边界失败测试**
+- [x] **Step 1: 写入事务合并边界失败测试**
 
 Assert steps combine only when endpoint, goal, ordered impact scope, recovery and verification are all compatible. Assert different endpoints, reordered calls, new targets, irreversible intermediate effects or changed scripts produce separate transactions and invalidate any prior confirmation.
 
-- [ ] **Step 2: 写入弹窗完整性失败测试**
+- [x] **Step 2: 写入弹窗完整性失败测试**
 
 The rendered transaction fixture must show target host/port/user/fingerprint/session, purpose, full commands, script entry, affected objects, worst case, estimated CPU/memory/disk/network/duration or `unknown`, disconnect possibility, verified recovery point, rollback limits, verification and cancellation behavior.
 
-- [ ] **Step 3: 运行测试并确认失败**
+- [x] **Step 3: 运行测试并确认失败**
 
 ```powershell
 node --test test/unit-ci/agent-risk-transaction.spec.js test/unit-ci/agent-risk-confirmation-ui.spec.js
@@ -240,15 +240,15 @@ node --test test/unit-ci/agent-risk-transaction.spec.js test/unit-ci/agent-risk-
 
 Expected: grouping and modal modules are absent.
 
-- [ ] **Step 4: 实现纯事务构建器**
+- [x] **Step 4: 实现纯事务构建器**
 
 `buildRiskTransaction(calls, context)` returns a deeply frozen object and rejects empty, blocked or unauditable calls. Prepare and verify recovery points through existing safety transaction providers before enabling the confirm button. When impact cannot be estimated, render `unknown`; do not omit the row.
 
-- [ ] **Step 5: 实现确认/取消行为**
+- [x] **Step 5: 实现确认/取消行为**
 
 Confirm creates the plan grant and dispatches the frozen transaction. Cancel writes an audit event and executes zero transaction steps. While the modal is open, Agent may explain the plan but cannot mutate it. Integrate records into the existing safety operation center instead of creating a separate history screen.
 
-- [ ] **Step 6: 运行测试并提交**
+- [x] **Step 6: 运行测试并提交**
 
 ```powershell
 node --test test/unit-ci/agent-risk-transaction.spec.js test/unit-ci/agent-risk-confirmation-ui.spec.js test/unit-ci/safety-operation-center*.spec.js
@@ -266,7 +266,7 @@ git commit -m "feat: confirm risky agent work as frozen transactions"
 - Modify: `apps/electerm-agent/src/client/components/ai/agent-tool-gateway.js`
 - Create: `apps/electerm-agent/test/unit-ci/agent-risk-execution.spec.js`
 
-- [ ] **Step 1: 写入写操作不重放测试**
+- [x] **Step 1: 写入写操作不重放测试**
 
 Simulate a transport timeout after remote acceptance. Assert the same `operationId` is persisted, no automatic second write is sent, task state becomes `partially-completed` or unknown, and verification/recovery entry remains available.
 
@@ -276,11 +276,11 @@ assert.equal(result.remoteState, 'unknown')
 assert.equal(result.canAutoRetry, false)
 ```
 
-- [ ] **Step 2: 写入目标级验证测试**
+- [x] **Step 2: 写入目标级验证测试**
 
 Assert exit code 0 with a failed health check is not successful. Assert recovery failure preserves all artifacts and never replays the original change.
 
-- [ ] **Step 3: 运行测试并确认失败**
+- [x] **Step 3: 运行测试并确认失败**
 
 ```powershell
 node --test test/unit-ci/agent-risk-execution.spec.js test/unit-ci/safety-transaction-runner.spec.js
@@ -288,11 +288,11 @@ node --test test/unit-ci/agent-risk-execution.spec.js test/unit-ci/safety-transa
 
 Expected: at least one write is retried or success is based only on exit code.
 
-- [ ] **Step 4: 扩展现有 runner，不创建旁路执行器**
+- [x] **Step 4: 扩展现有 runner，不创建旁路执行器**
 
 Use the existing per-target serial queues, recovery providers and transaction records. Persist operation intent before dispatch. Readonly calls may retry only when the transport proves remote execution did not start; changing calls never retry automatically after dispatch uncertainty. Run declared target verification after execution and transition takeover state through `running-confirmed-change -> verifying -> active-idle|failed|partially-completed`.
 
-- [ ] **Step 5: 运行测试并提交**
+- [x] **Step 5: 运行测试并提交**
 
 ```powershell
 node --test test/unit-ci/agent-risk-execution.spec.js test/unit-ci/safety-transaction-runner.spec.js test/unit-ci/safety-transaction-store.spec.js
@@ -317,11 +317,11 @@ git commit -m "feat: execute confirmed agent changes at most once"
 - Create: `apps/electerm-agent/test/unit-ci/agent-observation.spec.js`
 - Create: `apps/electerm-agent/test/unit-ci/agent-output-backpressure.spec.js`
 
-- [ ] **Step 1: 写入全链路取消失败测试**
+- [x] **Step 1: 写入全链路取消失败测试**
 
 Use the existing `AbortController` created by `runAgentLoop`, start a gateway terminal tool and abort it through `cancelAgentRun`. Assert the same signal reaches gateway, executor and transport, `AIAgentCancel` is sent for an active backend request, registered tool cancellations run once, and no later tool call begins. If remote stop cannot be confirmed, assert status is unknown rather than cancelled-success.
 
-- [ ] **Step 2: 写入观察数据和注入失败测试**
+- [x] **Step 2: 写入观察数据和注入失败测试**
 
 ```js
 assert.deepEqual(observation, {
@@ -338,11 +338,11 @@ assert.deepEqual(observation, {
 
 Assert log/file text cannot introduce tool calls, change policy, mark itself trusted or disclose matched secret fixtures.
 
-- [ ] **Step 3: 写入背压失败测试**
+- [x] **Step 3: 写入背压失败测试**
 
 Feed 100 MB of generated output through a bounded async source. Assert retained renderer data and model observation stay within configured limits, a `nextCursor` is returned, and cancellation remains responsive without storing the full source.
 
-- [ ] **Step 4: 运行测试并确认失败**
+- [x] **Step 4: 运行测试并确认失败**
 
 ```powershell
 node --test test/unit-ci/agent-cancellation.spec.js test/unit-ci/agent-observation.spec.js test/unit-ci/agent-output-backpressure.spec.js
@@ -350,15 +350,15 @@ node --test test/unit-ci/agent-cancellation.spec.js test/unit-ci/agent-observati
 
 Expected: the v0.4.3 runtime already cancels and bounds common paths, but tests fail because the new gateway lacks exact endpoint propagation, untrusted observation envelopes, cursor pagination or unknown-remote-state semantics.
 
-- [ ] **Step 5: 实现 AbortSignal 传播和观察封装**
+- [x] **Step 5: 实现 AbortSignal 传播和观察封装**
 
 Extend the existing `AbortController` and `registerAgentCancellation` path instead of replacing it. Pass the existing `signal` and exact endpoint into gateway, terminal/background/local CLI adapters and safety runner; preserve `AIAgentCancel` for backend model calls. Keep observation content in a data field with a fixed instruction that it is untrusted evidence. Apply incremental redaction through the existing credential sanitizer before persistence and before model context construction.
 
-- [ ] **Step 6: 实现分页和消费端背压**
+- [x] **Step 6: 实现分页和消费端背压**
 
 Use the merged archive/file-range reader for large retained output. Keep bounded chunks in memory, expose `nextCursor`, stop requesting new chunks when the consumer is behind, and never add continuous polling for idle sessions. Long-running commands use the existing background-task mechanism with explicit status reads and cancellation.
 
-- [ ] **Step 7: 运行测试并提交**
+- [x] **Step 7: 运行测试并提交**
 
 ```powershell
 node --test test/unit-ci/agent-cancellation.spec.js test/unit-ci/agent-observation.spec.js test/unit-ci/agent-output-backpressure.spec.js test/unit-ci/archive-reader.spec.js test/unit-ci/file-range.spec.js

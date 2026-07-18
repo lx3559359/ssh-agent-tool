@@ -180,7 +180,7 @@ test('chat entry and config history wiring never persist apiKeyAI', () => {
   assert.match(config, /sanitizeHistory=\{sanitizeAIConfigHistory\}/)
   assert.match(history, /safeSetItemJSON\(storageKey, normalized\)/)
   assert.match(actions, /sanitizeAIChatHistory/)
-  assert.match(loadData, /sanitizeAIChatHistory\(dt\)/)
+  assert.match(loadData, /normalizeAIChatHistoryOnStartup\(dt\)/)
 })
 
 test('transport credentials remain memory-only and fallback requires the same revision', async () => {

@@ -21,14 +21,19 @@
 **Files:**
 - Modify: `apps/electerm-agent/src/app/server/ssh-known-hosts.js`
 - Modify: `apps/electerm-agent/src/app/server/session-ssh.js`
+- Modify: `apps/electerm-agent/src/app/server/session-api.js`
 - Modify: `apps/electerm-agent/src/app/server/session-process.js`
-- Modify: `apps/electerm-agent/src/app/server/dispatch-center.js`
 - Modify: `apps/electerm-agent/src/client/common/safety-transactions/endpoint-guard.js`
+- Modify: `apps/electerm-agent/src/client/common/safety-transactions/models.js`
+- Modify: `apps/electerm-agent/src/client/components/terminal/terminal-safety-controller.js`
+- Modify: `apps/electerm-agent/src/client/components/terminal/terminal.jsx`
 - Test: `apps/electerm-agent/test/unit-ci/session-ssh-known-hosts.spec.js`
+- Test: `apps/electerm-agent/test/unit-ci/session-api-identity.spec.js`
+- Test: `apps/electerm-agent/test/unit-ci/session-process.spec.js`
 - Test: `apps/electerm-agent/test/unit-ci/safety-transaction-domain.spec.js`
 - Create: `apps/electerm-agent/test/unit-ci/agent-takeover-endpoint.spec.js`
 
-- [ ] **Step 1: 写入失败测试，要求 host verifier 回传已接受指纹**
+- [x] **Step 1: 写入失败测试，要求 host verifier 回传已接受指纹**
 
 Add a test using the existing `createHostVerifier` fixture:
 
@@ -58,7 +63,7 @@ test('reports the exact accepted host key metadata', async () => {
 })
 ```
 
-- [ ] **Step 2: 写入失败测试，要求严格身份包含指纹**
+- [x] **Step 2: 写入失败测试，要求严格身份包含指纹**
 
 ```js
 test('strict SSH endpoint identity includes host key fingerprint', async () => {
@@ -71,7 +76,7 @@ test('strict SSH endpoint identity includes host key fingerprint', async () => {
 })
 ```
 
-- [ ] **Step 3: 运行测试并确认失败**
+- [x] **Step 3: 运行测试并确认失败**
 
 ```powershell
 Set-Location apps/electerm-agent
@@ -80,7 +85,7 @@ node --test test/unit-ci/session-ssh-known-hosts.spec.js test/unit-ci/safety-tra
 
 Expected: `onVerified` 未调用或 endpoint 缺少 `hostKeyFingerprint`，测试失败。
 
-- [ ] **Step 4: 实现一次性指纹回传和只读会话元数据传播**
+- [x] **Step 4: 实现一次性指纹回传和只读会话元数据传播**
 
 Add `onVerified(meta)` only after the verifier has accepted the key. Normalize the public value as `SHA256:<base64>` and expose it through the existing session metadata response; never expose raw host key bytes.
 
@@ -98,11 +103,11 @@ const STRICT_SESSION_FIELDS = [
 
 Reject an SSH endpoint as incomplete when the accepted fingerprint is missing. Do not apply this requirement to local, serial, RDP, VNC or Telnet sessions; those session types cannot enable SSH takeover.
 
-- [ ] **Step 5: 运行测试并提交**
+- [x] **Step 5: 运行测试并提交**
 
 ```powershell
 node --test test/unit-ci/session-ssh-known-hosts.spec.js test/unit-ci/safety-transaction-domain.spec.js test/unit-ci/agent-takeover-endpoint.spec.js
-git add src/app/server/ssh-known-hosts.js src/app/server/session-ssh.js src/app/server/session-process.js src/app/server/dispatch-center.js src/client/common/safety-transactions/endpoint-guard.js test/unit-ci/session-ssh-known-hosts.spec.js test/unit-ci/safety-transaction-domain.spec.js test/unit-ci/agent-takeover-endpoint.spec.js
+git add src/app/server/ssh-known-hosts.js src/app/server/session-ssh.js src/app/server/session-api.js src/app/server/session-process.js src/client/common/safety-transactions/endpoint-guard.js src/client/common/safety-transactions/models.js src/client/components/terminal/terminal-safety-controller.js src/client/components/terminal/terminal.jsx test/unit-ci/session-ssh-known-hosts.spec.js test/unit-ci/session-api-identity.spec.js test/unit-ci/session-process.spec.js test/unit-ci/safety-transaction-domain.spec.js test/unit-ci/agent-takeover-endpoint.spec.js test/unit-ci/terminal-safety-controller.spec.js
 git commit -m "feat: bind agent takeover to verified ssh identity"
 ```
 
@@ -116,7 +121,7 @@ Expected: tests pass; commit contains no private key, password or raw host key.
 - Create: `apps/electerm-agent/test/unit-ci/agent-takeover-state.spec.js`
 - Create: `apps/electerm-agent/test/unit-ci/agent-takeover-registry.spec.js`
 
-- [ ] **Step 1: 写入状态转换失败测试**
+- [x] **Step 1: 写入状态转换失败测试**
 
 ```js
 test('allows only declared takeover transitions', async () => {
@@ -133,7 +138,7 @@ test('allows only declared takeover transitions', async () => {
 
 Also assert all active states can enter `stopping`, then `off`, and execution states can enter `failed` or `partially-completed`.
 
-- [ ] **Step 2: 写入会话隔离和非持久化失败测试**
+- [x] **Step 2: 写入会话隔离和非持久化失败测试**
 
 ```js
 test('keeps takeover grants isolated by exact session identity', async () => {
@@ -153,7 +158,7 @@ test('keeps takeover grants isolated by exact session identity', async () => {
 })
 ```
 
-- [ ] **Step 3: 运行测试并确认模块缺失**
+- [x] **Step 3: 运行测试并确认模块缺失**
 
 ```powershell
 node --test test/unit-ci/agent-takeover-state.spec.js test/unit-ci/agent-takeover-registry.spec.js
@@ -161,7 +166,7 @@ node --test test/unit-ci/agent-takeover-state.spec.js test/unit-ci/agent-takeove
 
 Expected: module-not-found failure.
 
-- [ ] **Step 4: 实现纯状态机和可订阅注册表**
+- [x] **Step 4: 实现纯状态机和可订阅注册表**
 
 Export these exact states:
 
@@ -182,7 +187,7 @@ export const TAKEOVER_STATES = Object.freeze([
 
 The registry API is `enable(endpoint)`, `transition(endpoint, nextState)`, `disable(endpoint, reason)`, `stop(endpoint)`, `get(endpoint)`, `isActive(endpoint)`, `assertActive(endpoint)`, `subscribe(listener)` and `snapshot()`. Freeze a normalized copy of the endpoint at enable time. Keep records only in a closure-owned `Map`; do not connect it to Manate persisted store or config serialization.
 
-- [ ] **Step 5: 运行测试并提交**
+- [x] **Step 5: 运行测试并提交**
 
 ```powershell
 node --test test/unit-ci/agent-takeover-state.spec.js test/unit-ci/agent-takeover-registry.spec.js
@@ -193,15 +198,17 @@ git commit -m "feat: add per-session takeover state registry"
 ## Task 3: 在 Agent 工具入口增加统一接管门禁
 
 **Files:**
+- Create: `apps/electerm-agent/src/client/components/ai/agent-tool-scopes.js`
 - Create: `apps/electerm-agent/src/client/components/ai/agent-takeover-gate.js`
+- Modify: `apps/electerm-agent/src/client/components/ai/agent-takeover-registry.js`
 - Modify: `apps/electerm-agent/src/client/components/ai/agent-tools.js`
 - Modify: `apps/electerm-agent/src/client/components/ai/agent.js`
 - Modify: `apps/electerm-agent/src/client/components/ai/agent-runtime-context.js`
-- Modify: `apps/electerm-agent/src/client/components/ai/ai-conversation-context.js`
 - Create: `apps/electerm-agent/test/unit-ci/agent-takeover-gate.spec.js`
 - Modify: `apps/electerm-agent/test/unit-ci/ai-agent-tools.spec.js`
+- Modify: `apps/electerm-agent/test/unit-ci/ai-empty-response-consumers.spec.js`
 
-- [ ] **Step 1: 写入失败测试，覆盖所有已有工具**
+- [x] **Step 1: 写入失败测试，覆盖所有已有工具**
 
 Create a table-driven test that imports the exported tool descriptors and asserts every tool has one scope:
 
@@ -214,7 +221,7 @@ for (const tool of tools) {
 
 Assert `conversation` tools work while takeover is off, and every other scope throws an error with code `AI_TAKEOVER_REQUIRED` before its executor is invoked.
 
-- [ ] **Step 2: 运行测试并确认失败**
+- [x] **Step 2: 运行测试并确认失败**
 
 ```powershell
 node --test test/unit-ci/agent-takeover-gate.spec.js test/unit-ci/ai-agent-tools.spec.js
@@ -222,7 +229,7 @@ node --test test/unit-ci/agent-takeover-gate.spec.js test/unit-ci/ai-agent-tools
 
 Expected: tool descriptors lack scope or tools execute without an active grant.
 
-- [ ] **Step 3: 实现门禁并把 runtime 传到单一执行入口**
+- [x] **Step 3: 实现门禁并把 runtime 传到单一执行入口**
 
 The public gate contract is:
 
@@ -235,15 +242,15 @@ export function assertAgentExecutionAllowed ({ descriptor, endpoint, registry })
 
 Change `executeToolCall` to resolve one descriptor, call the gate exactly once, and only then invoke the executor. Extend the existing runtime created by `runAgentLoop` with `endpoint` and `takeoverRegistry`; retain its `AbortSignal`, cancellation set, `sourceTabId` binding and bounded-message helpers. Resolve endpoint from the active `conversationScopeId`/`sourceTabId`, then verify the complete endpoint rather than trusting the tab ID alone. Phase 01 only establishes scope and takeover enforcement; phase 02 owns final read/write risk policy.
 
-- [ ] **Step 4: 增加回归断言，禁止直接 switch 绕过门禁**
+- [x] **Step 4: 增加回归断言，禁止直接 switch 绕过门禁**
 
 In `ai-agent-tools.spec.js`, assert every exported callable tool routes through `assertAgentExecutionAllowed` and that `send_terminal_command`, SFTP mutation, background command and local CLI cannot run while takeover is off.
 
-- [ ] **Step 5: 运行测试并提交**
+- [x] **Step 5: 运行测试并提交**
 
 ```powershell
 node --test test/unit-ci/agent-takeover-gate.spec.js test/unit-ci/ai-agent-tools.spec.js test/unit-ci/agent-task-mode.spec.js
-git add src/client/components/ai/agent-takeover-gate.js src/client/components/ai/agent-tools.js src/client/components/ai/agent.js src/client/components/ai/agent-runtime-context.js src/client/components/ai/ai-conversation-context.js test/unit-ci/agent-takeover-gate.spec.js test/unit-ci/ai-agent-tools.spec.js
+git add src/client/components/ai/agent-tool-scopes.js src/client/components/ai/agent-takeover-gate.js src/client/components/ai/agent-takeover-registry.js src/client/components/ai/agent-tools.js src/client/components/ai/agent.js src/client/components/ai/agent-runtime-context.js test/unit-ci/agent-takeover-gate.spec.js test/unit-ci/ai-agent-tools.spec.js test/unit-ci/ai-empty-response-consumers.spec.js
 git commit -m "feat: require takeover grant for agent execution tools"
 ```
 
@@ -251,15 +258,18 @@ git commit -m "feat: require takeover grant for agent execution tools"
 
 **Files:**
 - Create: `apps/electerm-agent/src/client/components/ai/agent-takeover-controls.jsx`
-- Modify: `apps/electerm-agent/src/client/components/ai/ai-chat.jsx`
+- Modify: `apps/electerm-agent/src/client/components/ai/agent.js`
 - Modify: `apps/electerm-agent/src/client/components/ai/ai.styl`
+- Modify: `apps/electerm-agent/src/client/components/common/modal.jsx`
 - Modify: `apps/electerm-agent/src/client/components/side-panel-r/side-panel-r.jsx`
 - Modify: `apps/electerm-agent/src/client/components/main/main.jsx`
 - Modify: `apps/electerm-agent/src/client/common/shellpilot-i18n-overrides.js`
 - Create: `apps/electerm-agent/test/unit-ci/agent-takeover-ui.spec.js`
 - Modify: `apps/electerm-agent/test/unit-ci/ai-chat-layout.spec.js`
+- Modify: `apps/electerm-agent/test/unit-ci/ai-empty-response-consumers.spec.js`
+- Modify: `apps/electerm-agent/test/unit-ci/shellpilot-i18n-overrides.spec.js`
 
-- [ ] **Step 1: 写入 UI 合同失败测试**
+- [x] **Step 1: 写入 UI 合同失败测试**
 
 Assert source and rendered fixture expose:
 
@@ -273,7 +283,7 @@ assert.doesNotMatch(sidePanelSource, /takeover[^\n]*width:\s*\d+px/)
 
 Also assert non-SSH tabs render the control disabled with an explanation, and narrow layout preserves the existing right panel dimensions.
 
-- [ ] **Step 2: 运行测试并确认失败**
+- [x] **Step 2: 运行测试并确认失败**
 
 ```powershell
 node --test test/unit-ci/agent-takeover-ui.spec.js test/unit-ci/ai-chat-layout.spec.js test/unit-ci/shellpilot-i18n-overrides.spec.js
@@ -281,19 +291,19 @@ node --test test/unit-ci/agent-takeover-ui.spec.js test/unit-ci/ai-chat-layout.s
 
 Expected: takeover switch and translations are absent.
 
-- [ ] **Step 3: 实现启用确认和状态展示**
+- [x] **Step 3: 实现启用确认和状态展示**
 
 Place the compact switch in the existing AI assistant header beside the v0.4.3 profile/model selection and health status, without replacing or rescheduling `aiHealthCoordinator`. Before calling `registry.enable`, show host, port, username, fingerprint, automatic-read-only behavior and risky-operation confirmation rule. Use the current modal system. Show a compact tab badge only while active. Show `一键停止` for all active or executing states. Hiding the right panel must not stop the task.
 
-- [ ] **Step 4: 验证主题、缩放和键盘语义**
+- [x] **Step 4: 验证主题、缩放和键盘语义**
 
 Use existing color tokens and responsive breakpoints. The switch must support Space/Enter, modal focus trap, Escape cancel and visible focus. Add Chinese and English strings through `shellpilot-i18n-overrides.js`.
 
-- [ ] **Step 5: 运行测试并提交**
+- [x] **Step 5: 运行测试并提交**
 
 ```powershell
 node --test test/unit-ci/agent-takeover-ui.spec.js test/unit-ci/ai-chat-layout.spec.js test/unit-ci/shellpilot-i18n-overrides.spec.js test/unit-ci/shellpilot-ui-responsive.spec.js
-git add src/client/components/ai/agent-takeover-controls.jsx src/client/components/ai/ai-chat.jsx src/client/components/ai/ai.styl src/client/components/side-panel-r/side-panel-r.jsx src/client/components/main/main.jsx src/client/common/shellpilot-i18n-overrides.js test/unit-ci/agent-takeover-ui.spec.js test/unit-ci/ai-chat-layout.spec.js
+git add src/client/components/ai/agent-takeover-controls.jsx src/client/components/ai/agent.js src/client/components/ai/ai.styl src/client/components/common/modal.jsx src/client/components/side-panel-r/side-panel-r.jsx src/client/components/main/main.jsx src/client/common/shellpilot-i18n-overrides.js test/unit-ci/agent-takeover-ui.spec.js test/unit-ci/ai-chat-layout.spec.js test/unit-ci/ai-empty-response-consumers.spec.js test/unit-ci/shellpilot-i18n-overrides.spec.js
 git commit -m "feat: add session takeover controls to ai panel"
 ```
 
@@ -311,7 +321,7 @@ git commit -m "feat: add session takeover controls to ai panel"
 - Create: `apps/electerm-agent/test/unit-ci/agent-takeover-concurrency.spec.js`
 - Create: `apps/electerm-agent/test/unit-ci/agent-takeover-fleet-boundary.spec.js`
 
-- [ ] **Step 1: 写入生命周期失败测试**
+- [x] **Step 1: 写入生命周期失败测试**
 
 Table-test these events: `disconnect`, `reconnect-start`, `tab-close`, `endpoint-change`, `app-before-quit`, `manual-stop`. Each event must move the matching grant to off, abort its active task, invalidate pending confirmations and leave unrelated sessions active.
 
@@ -325,7 +335,7 @@ Add concurrency assertions: two Agent runs for one exact session are rejected, w
 
 Add Fleet boundary assertions: `fleet-status-ai-context` and a Fleet workspace conversation can provide already collected observations, but cannot create, borrow or match a takeover grant. Any remote-capable tool from that scope fails with `AI_TAKEOVER_REQUIRED` until a concrete SSH tab is opened and enabled.
 
-- [ ] **Step 2: 运行测试并确认失败**
+- [x] **Step 2: 运行测试并确认失败**
 
 ```powershell
 node --test test/unit-ci/agent-takeover-lifecycle.spec.js test/unit-ci/agent-takeover-concurrency.spec.js test/unit-ci/agent-takeover-fleet-boundary.spec.js
@@ -333,15 +343,15 @@ node --test test/unit-ci/agent-takeover-lifecycle.spec.js test/unit-ci/agent-tak
 
 Expected: grants survive one or more lifecycle events or are represented in persisted initial state.
 
-- [ ] **Step 3: 订阅已有会话生命周期并精确失效**
+- [x] **Step 3: 订阅已有会话生命周期并精确失效**
 
 Add one adapter in `main.jsx` that translates existing tab/session events into registry calls. On endpoint comparison failure, call `disable(previousEndpoint, 'endpoint-changed')` before any new Agent tool can run. On stop, request task cancellation first, then transition `stopping -> off`; phase 02 will connect the abort signal to remote tools.
 
-- [ ] **Step 4: 添加空闲零工作测试**
+- [x] **Step 4: 添加空闲零工作测试**
 
 Warm or stub the existing `aiHealthCoordinator`, record its control baseline, then enable ten mock sessions and advance fake time by five minutes. Assert the takeover delta is zero model calls, zero remote commands, zero remote processes and zero periodic timers; the test must not misattribute the existing deduplicated model health check to takeover.
 
-- [ ] **Step 5: 运行本阶段回归并提交**
+- [x] **Step 5: 运行本阶段回归并提交**
 
 ```powershell
 node --test test/unit-ci/agent-takeover-*.spec.js test/unit-ci/ai-agent-tools.spec.js test/unit-ci/ai-chat-layout.spec.js test/unit-ci/session-ssh-known-hosts.spec.js
@@ -356,7 +366,7 @@ Expected: phase 01 tests pass and idle takeover produces no work.
 **Files:**
 - Verify only: all files changed in phase 01
 
-- [ ] **Step 1: 运行针对性回归**
+- [x] **Step 1: 运行针对性回归**
 
 ```powershell
 npm run test-unit-ci
@@ -366,10 +376,16 @@ git diff --check HEAD~5..HEAD
 
 Expected: tests and lint pass; no whitespace errors.
 
+完成证据（2026-07-17）：完整 unit-ci、lint、build 与 `git diff --check` 均退出 0；复审新增的确认竞态、跨会话资源、延迟资源取消和并发传输删除测试均通过。
+
 - [ ] **Step 2: 手工核对两个 SSH 标签页**
 
 Open two SSH sessions to distinct identities. Enable only the first; verify the second remains off. Reconnect the first and verify it returns to off. Restart the app and verify both are off while prior audit records remain readable.
 
-- [ ] **Step 3: 评审门**
+当前开发环境未提供两个可连接的真实 SSH 测试端点；完整身份隔离、重连失效、重启不持久化已由自动化测试覆盖，真实双服务器 smoke 保留到阶段 04 发布门执行并单独报告。
+
+- [x] **Step 3: 评审门**
 
 Do not begin phase 02 until reviewers can trace every remote-capable Agent tool to the single gate and confirm no takeover authorization is persisted.
+
+独立复审结论：Ready。所有远程工具均经过统一门禁；异步确认后重新校验精确端点；授权仅驻留内存；取消失败不会伪报成功。

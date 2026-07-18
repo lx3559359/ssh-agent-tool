@@ -56,6 +56,33 @@ test('one-click SFTP backup copies files and folders without changing originals'
   assert.equal(records[0].username, 'root')
 })
 
+test('SFTP backup chooses a collision-free path when the timestamped name already exists', async () => {
+  const { backupRemoteFiles } = await import(moduleUrl)
+  const calls = []
+  const existing = '/var/www/.shellpilot-backups/app-20260712-080910'
+  const sftp = {
+    stat: async value => {
+      if (value === existing) return { isDirectory: true }
+      throw new Error('No such file')
+    },
+    mkdir: async value => calls.push(['mkdir', value]),
+    cp: async (from, to) => calls.push(['cp', from, to])
+  }
+
+  const records = await backupRemoteFiles({
+    sftp,
+    files: [{ path: '/var/www', name: 'app', isDirectory: true }],
+    tab: { id: 'tab-1', host: '10.0.0.8' },
+    now: new Date('2026-07-12T08:09:10Z')
+  })
+
+  assert.deepEqual(calls, [
+    ['mkdir', '/var/www/.shellpilot-backups'],
+    ['cp', '/var/www/app', `${existing}-2`]
+  ])
+  assert.equal(records[0].backupPath, `${existing}-2`)
+})
+
 test('SFTP safe delete moves entries to trash instead of removing them', async () => {
   const { softDeleteRemoteFiles } = await import(moduleUrl)
   const calls = []

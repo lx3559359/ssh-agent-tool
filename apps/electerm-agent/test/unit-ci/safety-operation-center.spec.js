@@ -608,6 +608,32 @@ test('task progress counts terminal step states and limits output previews', asy
   assert.doesNotMatch(JSON.stringify(summary), /step-secret/)
 })
 
+test('task progress exposes redacted Agent risk transaction details', async () => {
+  const { summarizeSafetyTaskProgress } = await importModel()
+  const summary = summarizeSafetyTaskProgress(task(
+    'task-risk',
+    'awaiting-change-confirmation',
+    '2026-07-13T10:00:00.000Z',
+    {
+      source: 'agent',
+      riskTransaction: {
+        purpose: 'restart nginx',
+        affectedObjects: ['service:nginx'],
+        worstCase: 'password=risk-secret',
+        resourceImpact: { cpu: 'low', duration: 'unknown' },
+        recovery: { type: 'systemd' },
+        rollbackLimits: 'process memory is not restored',
+        cancellationBehavior: 'future steps stop'
+      }
+    }
+  ))
+
+  assert.equal(summary.riskDetails.purpose, 'restart nginx')
+  assert.deepEqual(summary.riskDetails.affectedObjects, ['service:nginx'])
+  assert.equal(summary.riskDetails.resourceImpact.duration, 'unknown')
+  assert.doesNotMatch(JSON.stringify(summary.riskDetails), /risk-secret/)
+})
+
 test('task progress component exposes compact counts and capability-gated cancel', () => {
   const component = readSource('src/client/components/main/safety-task-progress.jsx')
   const styles = readSource('src/client/components/main/safety-task-progress.styl')

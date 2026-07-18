@@ -1,14 +1,9 @@
 import {
   GithubOutlined,
-  GlobalOutlined,
   HighlightOutlined,
   HomeOutlined,
-  UserOutlined,
   InfoCircleOutlined,
-  AlignLeftOutlined,
   BugOutlined,
-  HeartOutlined,
-  CloudOutlined,
   DownloadOutlined
 } from '@ant-design/icons'
 import { Tabs, Button } from 'antd'
@@ -175,21 +170,12 @@ export default auto(function InfoModal (props) {
     // description,
     devDependencies,
     dependencies,
-    langugeRepo,
-    author: {
-      name: authorName,
-      email,
-      url: authorUrl
-    },
     homepage,
     bugs: {
       url: bugReportLink
     },
-    releases: releaseLink,
-    sponsorLink,
-    knownIssuesLink
+    releases: releaseLink
   } = packInfo
-  const electermOnline = 'https://cloud.electerm.org'
   const link = releaseLink.replace('/releases', '')
   const { versions } = window.pre
   const deps = {
@@ -229,21 +215,9 @@ export default auto(function InfoModal (props) {
             </Link>
           </p>
           <p className='mg1b'>
-            <UserOutlined /> <b className='mg1r'>{e('author')} ➾</b>
-            <Link to={authorUrl} className='mg1l'>
-              {authorName} ({email})
-            </Link>
-          </p>
-          <p className='mg1b'>
             <GithubOutlined /> <b className='mg1r'>github ➾</b>
             <Link to={link} className='mg1l'>
               {link}
-            </Link>
-          </p>
-          <p className='mg1b'>
-            <GlobalOutlined /> <b className='mg1r'>{e('language')} repo ➾</b>
-            <Link to={langugeRepo} className='mg1l'>
-              {langugeRepo}
             </Link>
           </p>
           <p className='mg1b'>
@@ -256,24 +230,6 @@ export default auto(function InfoModal (props) {
             <HighlightOutlined /> <b className='mg1r'>{e('changeLog')} ➾</b>
             <Link to={releaseLink} className='mg1l'>
               {releaseLink}
-            </Link>
-          </p>
-          <p className='mg1b'>
-            <AlignLeftOutlined /> <b className='mg1r'>{e('knownIssues')} ➾</b>
-            <Link to={knownIssuesLink} className='mg1l'>
-              {knownIssuesLink}
-            </Link>
-          </p>
-          <p className='mg1b'>
-            <CloudOutlined /> <b className='mg1r'>electerm Online ➾</b>
-            <Link to={electermOnline} className='mg1l'>
-              {electermOnline}
-            </Link>
-          </p>
-          <p className='mg1b'>
-            <HeartOutlined /> <b className='mg1r'>{e('sponsorElecterm')} ➾</b>
-            <Link to={sponsorLink} className='mg1l'>
-              {sponsorLink}
             </Link>
           </p>
           <p className='mg1b'>

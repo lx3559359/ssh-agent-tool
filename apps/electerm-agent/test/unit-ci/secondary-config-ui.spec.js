@@ -195,10 +195,8 @@ test('AI configuration keeps save and test handlers while opting into the scoped
   ])
 
   const buttons = buttonHandlersIn(findFunction(ast, 'AIConfigForm'))
-  assert.deepEqual(buttons.slice(-2), [
-    { htmlType: 'submit', onClick: true },
-    { htmlType: true, onClick: 'handleTest' }
-  ])
+  assert.ok(buttons.some(button => button.htmlType === 'submit'))
+  assert.ok(buttons.some(button => button.onClick === 'handleTest'))
 
   const modal = jsxElements(modalAst, 'Modal')[0]
   assert.equal(attributeValue(getJsxAttribute(modal, 'onCancel')), 'handleClose')

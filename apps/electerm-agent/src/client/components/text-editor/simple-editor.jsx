@@ -9,6 +9,8 @@ import {
 import { copy } from '../../common/clipboard'
 import { escapeRegExp } from 'lodash-es'
 
+const e = window.translate
+
 export default function SimpleEditor (props) {
   const [searchKeyword, setSearchKeyword] = useState('')
   const [occurrences, setOccurrences] = useState([])
@@ -190,7 +192,7 @@ export default function SimpleEditor (props) {
         <Input.Search
           value={searchKeyword}
           onChange={handleChange}
-          placeholder='Search in text...'
+          placeholder={e('shellpilotSearchInText')}
           allowClear
           enterButton={<SearchOutlined />}
           onSearch={handleSearch}

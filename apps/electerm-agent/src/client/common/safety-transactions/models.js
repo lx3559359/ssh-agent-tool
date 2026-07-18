@@ -28,6 +28,42 @@ export const recoveryBindingSchemaVersion = 1
 export const sideEffectRecoveryBindingSchemaVersion = 2
 export const recoveryBindingAlgorithm = 'SHA-256'
 
+const agentPlanPayloadFields = Object.freeze([
+  'schemaVersion',
+  'endpoint',
+  'goal',
+  'orderedCalls',
+  'skillBindings',
+  'artifactDigests',
+  'impactTargets',
+  'resourceImpact',
+  'recovery',
+  'verification'
+])
+
+export function validateAgentPlanGrantStructure (grant) {
+  if (!grant || typeof grant !== 'object' || Array.isArray(grant)) return false
+  if (grant.schemaVersion !== 1 || grant.algorithm !== 'SHA-256' ||
+    !/^[a-f0-9]{64}$/.test(String(grant.digest || '')) ||
+    !String(grant.confirmedBy || '').trim() ||
+    Number.isNaN(new Date(grant.confirmedAt).getTime())) return false
+  const payload = grant.payload
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return false
+  if (Object.keys(payload).sort().join('\n') !== [...agentPlanPayloadFields].sort().join('\n')) {
+    return false
+  }
+  return payload.schemaVersion === 1 &&
+    payload.endpoint && typeof payload.endpoint === 'object' &&
+    typeof payload.goal === 'string' && Boolean(payload.goal.trim()) &&
+    Array.isArray(payload.orderedCalls) &&
+    Array.isArray(payload.skillBindings) &&
+    Array.isArray(payload.artifactDigests) &&
+    Array.isArray(payload.impactTargets) &&
+    payload.resourceImpact && typeof payload.resourceImpact === 'object' &&
+    (payload.recovery === null || typeof payload.recovery === 'object') &&
+    Array.isArray(payload.verification)
+}
+
 function invalidRecoveryStructure (reason) {
   return {
     valid: false,
@@ -133,20 +169,22 @@ const validSources = new Set(operationSources)
 const validRisks = new Set(Object.values(operationRisks))
 const validRecoveryProviders = new Set(Object.values(recoveryProviders))
 const endpointIdentityFields = [
-  'tabId', 'host', 'port', 'username', 'title', 'pid', 'terminalPid', 'sessionType'
+  'tabId', 'host', 'port', 'username', 'title', 'pid', 'terminalPid',
+  'sessionType', 'hostKeyFingerprint'
 ]
 const normalizedOperationFields = [
   'id', 'source', 'command', 'title', 'state', 'createdAt', 'updatedAt',
   'operationKind', 'effect', 'effectKey',
   'metadata', 'risk', 'provider', 'reversible', 'recoveryProvider',
   'requiresConfirmation', 'reason', 'plan', 'recoveryBinding', 'artifacts', 'audit',
+  'artifactReferences',
   'recoveryReadyAt', 'executionId', 'error', 'integrityError', 'failedAt', 'completedAt',
   'mutationStarted', 'mutationStartedAt', 'commitPoint', 'commitPointAt',
   'timeoutMs', 'prepareTimeoutMs', 'executeTimeoutMs',
   'rollbackTimeoutMs', 'verifyTimeoutMs'
 ]
 const redactedOperationFields = new Set([
-  'plan', 'artifacts', 'audit', 'error', 'integrityError'
+  'plan', 'artifacts', 'artifactReferences', 'audit', 'error', 'integrityError'
 ])
 const safetyRequestInputFields = [
   'id', 'source', 'command', 'title', 'endpoint', 'state', 'createdAt',

@@ -59,12 +59,14 @@ function assertSafeResultShape (result) {
   ])
   assert.deepEqual(
     Object.keys(result).sort(),
-    ['apiStatus', 'checkedAt', 'message', 'modelStatus', 'models', 'status'].sort()
+    ['apiStatus', 'checkedAt', 'latencyMs', 'message', 'modelStatus', 'models', 'status'].sort()
   )
   assert.equal(allowedStatuses.has(result.status), true)
   assert.equal(Array.isArray(result.models), true)
   assert.equal(typeof result.message, 'string')
   assert.equal(Number.isNaN(Date.parse(result.checkedAt)), false)
+  assert.equal(Number.isFinite(result.latencyMs), true)
+  assert.equal(result.latencyMs >= 0, true)
 }
 
 test('checks models before a minimal non-streaming model request', async () => {

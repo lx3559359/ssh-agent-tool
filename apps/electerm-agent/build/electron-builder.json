@@ -64,7 +64,7 @@
       ]
     },
     {
-      "name": "AIGShell 协议",
+      "name": "ShellPilot 协议",
       "schemes": [
         "aigshell",
         "ssh-agent-tool"
@@ -75,7 +75,7 @@
     "applicationId": "sshagenttool",
     "identityName": "lx3559359.sshagenttool",
     "publisher": "CN=9F481654-170A-434C-8259-984D2EB1FD7F",
-    "publisherDisplayName": "ZHAO Xudong"
+    "publisherDisplayName": "ShellPilot Team"
   },
   "nsis": {
     "oneClick": false,

@@ -90,7 +90,7 @@ export default () => {
     // batch input selected tab ids
     _batchInputSelectedTabIds: new Set(),
     aiChatHistory: [],
-    agentRunning: false,
+    recoveryPlan: null,
 
     // sftp
     fileOperation: fileOperationsMap.cp, // cp or mv

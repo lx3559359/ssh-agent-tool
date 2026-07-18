@@ -2,7 +2,14 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const path = require('node:path')
 const fs = require('node:fs')
+const os = require('node:os')
 const { pathToFileURL } = require('node:url')
+
+function deferred () {
+  let resolvePromise
+  const promise = new Promise(resolve => { resolvePromise = resolve })
+  return { promise, resolve: resolvePromise }
+}
 
 test('AI chat actions build localized role prompts', async () => {
   const {
@@ -22,7 +29,21 @@ test('AI chat actions build localized role prompts', async () => {
       languageAI: '',
       getLangName: () => '简体中文'
     }),
-    '你是中文 SSH 运维助手。; 请使用简体中文回复'
+    '请使用简体中文回复'
+  )
+})
+
+test('AI chat actions remove the legacy built-in SSH operations role from ordinary chat', async () => {
+  const {
+    buildAIChatRole
+  } = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/components/ai/ai-chat-actions.js')))
+
+  assert.equal(
+    buildAIChatRole({
+      roleAI: 'SSH 运维专家，优先排查服务器、网络、日志、进程、端口、磁盘、内存、Nginx、Docker 和部署问题。回答使用中文和 Markdown。',
+      languageAI: '简体中文'
+    }),
+    '请使用简体中文回复'
   )
 })
 
@@ -105,6 +126,290 @@ test('AI chat actions close orphaned running requests after an app restart', asy
     completionStatus: 'pending',
     pending: true
   }), null)
+})
+
+test('AI chat history migrates legacy trace fields to metadata-only persistence', async () => {
+  const {
+    appendAIChatHistory,
+    getAIChatTraceId,
+    updateAIChatHistoryEntry
+  } = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/components/ai/ai-chat-actions.js')))
+  const legacyTraceId = 'sp-1784304000000-12345678'
+  const appendedTraceId = 'sp-1784304000001-87654321'
+  const store = {
+    aiChatHistory: [{
+      id: 'legacy-trace',
+      traceId: legacyTraceId,
+      traceContext: {
+        traceId: legacyTraceId,
+        requestId: 'legacy-request',
+        password: 'must-not-persist'
+      },
+      metadata: { source: 'legacy' }
+    }, {
+      id: 'active-trace-write',
+      response: ''
+    }]
+  }
+
+  assert.equal(getAIChatTraceId(store.aiChatHistory[0]), legacyTraceId)
+  updateAIChatHistoryEntry(store, 'active-trace-write', { response: 'updated' })
+  assert.equal(store.aiChatHistory[0].traceId, undefined)
+  assert.equal(store.aiChatHistory[0].traceContext, undefined)
+  assert.deepEqual(store.aiChatHistory[0].metadata, {
+    source: 'legacy',
+    traceId: legacyTraceId
+  })
+  appendAIChatHistory(store, {
+    id: 'appended-trace',
+    traceId: appendedTraceId,
+    traceContext: { traceId: appendedTraceId, password: 'must-not-persist' }
+  })
+
+  assert.deepEqual(store.aiChatHistory[0].metadata, {
+    source: 'legacy',
+    traceId: legacyTraceId
+  })
+  assert.equal(store.aiChatHistory[0].traceId, undefined)
+  assert.equal(store.aiChatHistory[0].traceContext, undefined)
+  assert.equal(store.aiChatHistory[1].response, 'updated')
+  assert.deepEqual(store.aiChatHistory[2].metadata, { traceId: appendedTraceId })
+  assert.equal(store.aiChatHistory[2].traceId, undefined)
+  assert.equal(store.aiChatHistory[2].traceContext, undefined)
+  assert.doesNotMatch(JSON.stringify(store.aiChatHistory), /must-not-persist|legacy-request/)
+})
+
+test('AI restart recovery emits one interrupted terminal for chat and Agent requests', async () => {
+  const {
+    recoverInterruptedAIChatEntry
+  } = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/components/ai/ai-chat-actions.js')))
+  const events = []
+  const store = {
+    aiChatHistory: [
+      {
+        id: 'chat-interrupted',
+        mode: 'ask',
+        completionStatus: 'running',
+        pending: false,
+        sessionId: '',
+        requestId: 'chat-request',
+        metadata: { traceId: 'sp-1784304000002-12345678' }
+      },
+      {
+        id: 'agent-interrupted',
+        mode: 'agent',
+        completionStatus: 'running',
+        pending: false,
+        sessionId: '',
+        traceId: 'sp-1784304000003-87654321'
+      }
+    ]
+  }
+  const options = {
+    recordQualityEvent: (context, event) => {
+      events.push({ context, event })
+      return true
+    }
+  }
+
+  for (const item of [...store.aiChatHistory]) {
+    assert.equal(recoverInterruptedAIChatEntry(store, item, options), true)
+    assert.equal(recoverInterruptedAIChatEntry(store, item, options), false)
+  }
+
+  assert.deepEqual(events.map(entry => [
+    entry.context.traceId,
+    entry.context.requestId || entry.context.taskId,
+    entry.event.action,
+    entry.event.phase,
+    entry.event.result
+  ]), [
+    ['sp-1784304000002-12345678', 'chat-request', 'chat', 'interrupted', 'interrupted'],
+    ['sp-1784304000003-87654321', 'agent-interrupted', 'agent', 'interrupted', 'interrupted']
+  ])
+  assert.deepEqual(
+    store.aiChatHistory.map(item => item.completionStatus),
+    ['failed', 'failed']
+  )
+  assert.equal(store.aiChatHistory[1].traceId, undefined)
+  assert.deepEqual(store.aiChatHistory[1].metadata, {
+    traceId: 'sp-1784304000003-87654321'
+  })
+})
+
+test('AI startup interrupts a persisted stream session exactly once', async () => {
+  const {
+    normalizeAIChatHistoryOnStartup
+  } = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/components/ai/ai-chat-actions.js')))
+  const events = []
+  const options = {
+    recordQualityEvent: (context, event) => {
+      events.push({ context, event })
+      return true
+    }
+  }
+  const history = [{
+    id: 'stream-from-previous-process',
+    mode: 'ask',
+    completionStatus: 'running',
+    pending: false,
+    isStreaming: true,
+    sessionId: 'old-main-process-session',
+    requestId: '',
+    response: 'partial stream output',
+    metadata: { traceId: 'sp-1784304000004-12345678' }
+  }]
+
+  const recovered = normalizeAIChatHistoryOnStartup(history, options)
+  const recoveredAgain = normalizeAIChatHistoryOnStartup(recovered, options)
+
+  assert.equal(recovered[0].completionStatus, 'failed')
+  assert.equal(recovered[0].sessionId, null)
+  assert.equal(recovered[0].requestId, '')
+  assert.equal(recovered[0].isStreaming, false)
+  assert.match(recovered[0].response, /partial stream output/)
+  assert.deepEqual(recoveredAgain, recovered)
+  assert.deepEqual(events.map(entry => [
+    entry.context.traceId,
+    entry.context.requestId || entry.context.sessionId,
+    entry.event.action,
+    entry.event.phase,
+    entry.event.result
+  ]), [[
+    'sp-1784304000004-12345678',
+    'old-main-process-session',
+    'chat',
+    'interrupted',
+    'interrupted'
+  ]])
+})
+
+test('AI startup migrates completed global legacy traces before persistence watch starts', async () => {
+  const {
+    normalizeAIChatHistoryOnStartup
+  } = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/components/ai/ai-chat-actions.js')))
+  const legacyTraceId = 'sp-1784304000005-87654321'
+  const legacyHistory = [{
+    id: 'completed-global-legacy',
+    completionStatus: 'completed',
+    traceId: legacyTraceId,
+    traceContext: {
+      traceId: legacyTraceId,
+      password: 'must-not-survive-startup'
+    },
+    response: 'completed answer'
+  }]
+  const normalized = normalizeAIChatHistoryOnStartup(legacyHistory)
+
+  assert.equal(normalized[0].completionStatus, 'completed')
+  assert.equal(normalized[0].traceId, undefined)
+  assert.equal(normalized[0].traceContext, undefined)
+  assert.deepEqual(normalized[0].metadata, { traceId: legacyTraceId })
+  assert.doesNotMatch(JSON.stringify(normalized), /must-not-survive-startup/)
+
+  const loadData = fs.readFileSync(
+    path.resolve(__dirname, '../../src/client/store/load-data.js'),
+    'utf8'
+  )
+  assert.match(
+    loadData,
+    /refsStatic\.add\('oldState-' \+ name, dt\)[\s\S]{0,600}normalizeAIChatHistoryOnStartup\(dt\)/
+  )
+  assert.match(
+    loadData,
+    /Object\.assign\(store, ext\)[\s\S]{0,400}initWatch\(store\)/
+  )
+
+  const { persistStateSnapshot } = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/store/state-persistence-queue.js'
+  )))
+  const { default: dataCompare } = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/common/data-compare.js'
+  )))
+  const upserts = []
+  await persistStateSnapshot({
+    oldState: legacyHistory,
+    snapshot: normalized,
+    getChanges: dataCompare,
+    removeItem: () => {},
+    upsertItem: item => upserts.push(item),
+    writeOrder: () => {}
+  })
+  assert.deepEqual(upserts, normalized)
+})
+
+test('AI startup migration replaces legacy NeDB plaintext with one encrypted record', async () => {
+  const {
+    normalizeAIChatHistoryOnStartup
+  } = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/components/ai/ai-chat-actions.js')))
+  const { persistStateSnapshot } = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/store/state-persistence-queue.js'
+  )))
+  const { default: dataCompare } = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/common/data-compare.js'
+  )))
+  const { createDb } = require('../../src/app/lib/nedb')
+  const appPath = fs.mkdtempSync(path.join(os.tmpdir(), 'shellpilot-ai-history-migration-'))
+  const traceId = 'sp-1784304000006-12345678'
+  const password = 'legacy-plaintext-password'
+  const legacyRecord = {
+    _id: 'legacy-ai-history',
+    completionStatus: 'completed',
+    response: 'completed response',
+    traceId,
+    traceContext: {
+      traceId,
+      password
+    },
+    password
+  }
+  const enc = value => Buffer.from(value, 'utf8').toString('base64')
+  const dec = value => Buffer.from(value, 'base64').toString('utf8')
+
+  const legacyDb = createDb(appPath, 'default_user')
+  await legacyDb.dbAction('aiChatHistory', 'insert', legacyRecord)
+
+  const encryptedDb = createDb(appPath, 'default_user', { enc, dec })
+  const loaded = await encryptedDb.dbAction('aiChatHistory', 'find', {})
+  const oldState = loaded.map(({ _id, ...item }) => ({ id: _id, ...item }))
+  const normalized = normalizeAIChatHistoryOnStartup(oldState)
+
+  await persistStateSnapshot({
+    oldState,
+    snapshot: normalized,
+    getChanges: dataCompare,
+    removeItem: () => {},
+    upsertItem: item => {
+      const { id, ...value } = item
+      return encryptedDb.dbAction(
+        'aiChatHistory',
+        'update',
+        { _id: id },
+        { $set: value },
+        { upsert: true }
+      )
+    },
+    writeOrder: () => {}
+  })
+
+  const rawDb = createDb(appPath, 'default_user')
+  const rawRecord = await rawDb.dbAction('aiChatHistory', 'findOne', {
+    _id: legacyRecord._id
+  })
+  assert.deepEqual(Object.keys(rawRecord).sort(), ['_encdata', '_id'])
+
+  const reopenedDb = createDb(appPath, 'default_user', { enc, dec })
+  const migrated = await reopenedDb.dbAction('aiChatHistory', 'findOne', {
+    _id: legacyRecord._id
+  })
+  assert.equal(migrated.traceId, undefined)
+  assert.equal(migrated.traceContext, undefined)
+  assert.equal(migrated.password, undefined)
+  assert.deepEqual(migrated.metadata, { traceId })
 })
 
 test('AI chat actions clear conversation context from the store', async () => {
@@ -193,6 +498,7 @@ test('AI chat clear cancels active work before removing scoped history', async (
     cancelAndClearAIChatContext
   } = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/components/ai/ai-chat-actions.js')))
   const events = []
+  const qualityEvents = []
   const store = {
     aiChatHistory: [
       {
@@ -200,13 +506,15 @@ test('AI chat clear cancels active work before removing scoped history', async (
         conversationScopeId: 'tab-a',
         completionStatus: 'running',
         requestId: 'request-1',
-        sessionId: 'session-1'
+        sessionId: 'session-1',
+        metadata: { traceId: 'sp-1784304000009-12345678' }
       },
       {
         id: 'agent-running',
         conversationScopeId: 'tab-a',
         completionStatus: 'running',
-        mode: 'agent'
+        mode: 'agent',
+        metadata: { traceId: 'sp-1784304000010-87654321' }
       },
       {
         id: 'other-running',
@@ -221,7 +529,11 @@ test('AI chat clear cancels active work before removing scoped history', async (
     cancelAgent: id => events.push(['agent', id]),
     cancelDetachedStream: id => events.push(['detached', id]),
     cancelRequest: async id => events.push(['request', id]),
-    stopStream: async id => events.push(['stream', id])
+    stopStream: async id => events.push(['stream', id]),
+    recordQualityEvent: (context, event) => {
+      qualityEvents.push({ context, event })
+      return true
+    }
   })
 
   assert.deepEqual(events, [
@@ -231,7 +543,85 @@ test('AI chat clear cancels active work before removing scoped history', async (
     ['request', 'request-1'],
     ['stream', 'session-1']
   ])
+  assert.deepEqual(qualityEvents.map(entry => [
+    entry.context.traceId,
+    entry.context.requestId || entry.context.sessionId || entry.context.taskId,
+    entry.event.action,
+    entry.event.phase,
+    entry.event.result
+  ]), [
+    ['sp-1784304000009-12345678', 'request-1', 'chat', 'cancelled', 'cancelled'],
+    ['sp-1784304000010-87654321', 'agent-running', 'agent', 'cancelled', 'cancelled']
+  ])
   assert.deepEqual(store.aiChatHistory.map(item => item.id), ['other-running'])
+})
+
+test('AI chat clear and Stop share one cancelled terminal across repeated clears', async () => {
+  const {
+    cancelAIChatEntryLifecycle,
+    cancelAndClearAIChatContext
+  } = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/components/ai/ai-chat-actions.js')))
+  assert.equal(typeof cancelAIChatEntryLifecycle, 'function')
+  const qualityEvents = []
+  const recordQualityEvent = (context, event) => {
+    qualityEvents.push({ context, event })
+    return true
+  }
+  const releaseCancellation = deferred()
+  const store = {
+    aiChatHistory: [
+      {
+        id: 'stop-first',
+        conversationScopeId: 'tab-a',
+        completionStatus: 'running',
+        requestId: 'request-stop-first',
+        metadata: { traceId: 'sp-1784304000011-12345678' }
+      },
+      {
+        id: 'clear-no-session',
+        conversationScopeId: 'tab-a',
+        pending: true,
+        requestId: 'request-no-session',
+        metadata: { traceId: 'sp-1784304000012-12345678' }
+      },
+      {
+        id: 'clear-with-session',
+        conversationScopeId: 'tab-a',
+        completionStatus: 'running',
+        sessionId: 'session-clear',
+        metadata: { traceId: 'sp-1784304000013-12345678' }
+      }
+    ]
+  }
+
+  assert.equal(cancelAIChatEntryLifecycle(store, store.aiChatHistory[0], {
+    recordQualityEvent
+  }), true)
+  const clearing = cancelAndClearAIChatContext(store, 'tab-a', {
+    cancelDetachedStream: () => {},
+    cancelRequest: () => releaseCancellation.promise,
+    stopStream: () => releaseCancellation.promise,
+    recordQualityEvent
+  })
+  assert.equal(cancelAIChatEntryLifecycle(store, {
+    id: 'clear-with-session'
+  }, { recordQualityEvent }), false)
+  const repeatedClear = cancelAndClearAIChatContext(store, 'tab-a', {
+    recordQualityEvent
+  })
+  releaseCancellation.resolve()
+  await Promise.all([clearing, repeatedClear])
+
+  assert.deepEqual(qualityEvents.map(entry => [
+    entry.context.traceId,
+    entry.context.requestId || entry.context.sessionId,
+    entry.event.phase
+  ]), [
+    ['sp-1784304000011-12345678', 'request-stop-first', 'cancelled'],
+    ['sp-1784304000012-12345678', 'request-no-session', 'cancelled'],
+    ['sp-1784304000013-12345678', 'session-clear', 'cancelled']
+  ])
+  assert.deepEqual(store.aiChatHistory, [])
 })
 
 test('AI chat actions keep legacy history unscoped until a real terminal is active', async () => {
@@ -396,6 +786,14 @@ test('agent and history response consumers use the sanitized history update boun
   )
   assert.match(historyItem, /createAIStoredTextAccumulator/)
   assert.match(historyItem, /\{\s*sanitized:\s*true\s*\}/)
+  assert.match(
+    historyItem,
+    /recoverInterruptedAIChatEntry\(window\.store,\s*item\)/
+  )
+  assert.equal(
+    (historyItem.match(/metadata:\s*\{\s*traceId:\s*traceContext\.traceId\s*\}/g) || []).length,
+    2
+  )
 
   const output = fs.readFileSync(
     path.resolve(__dirname, '../../src/client/components/ai/ai-output.jsx'),

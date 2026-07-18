@@ -7,6 +7,7 @@ const {
   normalizeAIEndpoint,
   normalizeAIModelBaseURL
 } = require('../common/ai-endpoint')
+const { createTraceContext } = require('./quality/trace-context')
 
 // Store for ongoing streaming sessions
 const streamingSessions = new Map()
@@ -15,6 +16,65 @@ const activeAgentRequests = new Map()
 const AI_HEALTH_REQUEST_TIMEOUT = 8000
 const AI_HEALTH_TOTAL_TIMEOUT = 15000
 const AI_STREAM_SESSION_TTL = 5 * 60 * 1000
+let activeStreamingReservations = 0
+
+function createAIQualityState (traceContext, action, requestId) {
+  const context = createTraceContext({
+    ...(traceContext?.traceId ? { traceId: traceContext.traceId } : {}),
+    ...(requestId ? { requestId: String(requestId) } : {}),
+    module: 'ai',
+    action
+  })
+  log.recordQualityEvent(context, {
+    module: 'ai',
+    action,
+    phase: 'started'
+  })
+  return { context, action, finished: false }
+}
+
+function finishAIQuality (qualityState, phase, result, contextPatch = {}) {
+  if (!qualityState || qualityState.finished) return
+  qualityState.finished = true
+  log.recordQualityEvent({
+    ...qualityState.context,
+    ...contextPatch
+  }, {
+    module: 'ai',
+    action: qualityState.action,
+    phase,
+    result
+  })
+}
+
+function readPositiveLimit (name, fallback) {
+  const value = Number(process.env[name])
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback
+}
+
+const AI_STREAM_LIMITS = Object.freeze({
+  maxActive: readPositiveLimit('SHELLPILOT_AI_STREAM_MAX_ACTIVE', 6),
+  maxBytes: readPositiveLimit('SHELLPILOT_AI_STREAM_MAX_BYTES', 8 * 1024 * 1024),
+  maxBufferBytes: readPositiveLimit('SHELLPILOT_AI_STREAM_MAX_BUFFER_BYTES', 512 * 1024),
+  maxDurationMs: readPositiveLimit('SHELLPILOT_AI_STREAM_MAX_DURATION_MS', 3 * 60 * 1000)
+})
+
+const AI_REQUEST_LIMITS = Object.freeze({
+  timeoutMs: readPositiveLimit('SHELLPILOT_AI_REQUEST_TIMEOUT_MS', 60 * 1000),
+  maxRetries: Math.min(readPositiveLimit('SHELLPILOT_AI_REQUEST_MAX_RETRIES', 1), 2),
+  retryDelayMs: readPositiveLimit('SHELLPILOT_AI_REQUEST_RETRY_DELAY_MS', 350)
+})
+
+exports.AI_STREAM_LIMITS = AI_STREAM_LIMITS
+exports.AI_REQUEST_LIMITS = AI_REQUEST_LIMITS
+
+function getActiveStreamingSessionCount () {
+  let count = activeStreamingReservations
+  for (const session of streamingSessions.values()) {
+    if (!session.completed) count++
+  }
+  return count
+}
 
 function scheduleStreamingSessionCleanup (sessionId, session) {
   if (!session || session.cleanupTimer) return
@@ -42,8 +102,15 @@ exports.stopStream = (sessionId) => {
   // Mark as completed (not an error, just stopped by user)
   session.completed = true
   session.stopped = true
+  finishAIQuality(
+    session.qualityState,
+    'cancelled',
+    'cancelled',
+    { sessionId: String(sessionId) }
+  )
 
   // Clean up
+  if (session.limitTimer) clearTimeout(session.limitTimer)
   if (session.cleanupTimer) clearTimeout(session.cleanupTimer)
   streamingSessions.delete(sessionId)
 
@@ -339,6 +406,83 @@ function sanitizeAIErrorMessage (error, context = {}) {
     .replace(/\b(?:api[ _-]*key|token|secret|password|signature)\s*[:=]\s*[^\s,;]+/ig, '[已隐藏认证信息]')
     .replace(/\bsk-[a-z0-9_-]{6,}\b/ig, '[已隐藏密钥]')
     .slice(0, 1000)
+}
+
+function isAIRequestCancelled (error, signal) {
+  return Boolean(
+    signal?.aborted ||
+    error?.code === 'ERR_CANCELED' ||
+    error?.name === 'AbortError'
+  )
+}
+
+function isTransientAIRequestError (error) {
+  if (!error || error.response) return false
+  const code = String(error.code || '').toUpperCase()
+  return [
+    'ECONNRESET',
+    'ECONNREFUSED',
+    'ECONNABORTED',
+    'ETIMEDOUT',
+    'EAI_AGAIN',
+    'ENOTFOUND',
+    'ERR_NETWORK',
+    'UND_ERR_CONNECT_TIMEOUT'
+  ].includes(code) || /socket hang up|network error|timed?\s*out/i.test(String(error.message || ''))
+}
+
+function waitForAIRetry (signal, delayMs) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(Object.assign(new Error('AI request cancelled'), { code: 'ERR_CANCELED' }))
+      return
+    }
+    const timer = setTimeout(resolve, delayMs)
+    signal?.addEventListener?.('abort', () => {
+      clearTimeout(timer)
+      reject(Object.assign(new Error('AI request cancelled'), { code: 'ERR_CANCELED' }))
+    }, { once: true })
+  })
+}
+
+async function postAIRequestWithRetry (client, path, data, config = {}) {
+  let attempt = 0
+  while (true) {
+    try {
+      return await client.post(path, data, config)
+    } catch (error) {
+      if (
+        isAIRequestCancelled(error, config.signal) ||
+        !isTransientAIRequestError(error) ||
+        attempt >= AI_REQUEST_LIMITS.maxRetries
+      ) {
+        throw error
+      }
+      attempt += 1
+      await waitForAIRetry(config.signal, AI_REQUEST_LIMITS.retryDelayMs * attempt)
+    }
+  }
+}
+
+function getAIUserFacingRequestError (error, context = {}) {
+  const classification = classifyAIHealthError(error, 'chat')
+  if (classification === 'auth-error') {
+    return '模型 API 认证失败，请检查 API Key 和认证 Header。'
+  }
+  if (classification === 'quota-error') {
+    return '模型 API 额度不足或请求受到限流，请稍后重试或更换模型。'
+  }
+  if (classification === 'model-error') {
+    return '当前模型不可用，请重新拉取模型列表或切换模型。'
+  }
+  const code = String(error?.code || '').toUpperCase()
+  if (code === 'ECONNABORTED' || code === 'ETIMEDOUT' || /timed?\s*out/i.test(String(error?.message || ''))) {
+    return `模型 API 请求超过 ${Math.round(AI_REQUEST_LIMITS.timeoutMs / 1000)} 秒，请检查网络后重试。`
+  }
+  if (isTransientAIRequestError(error)) {
+    return '模型 API 连接中断，已完成有限重试；请检查网络、代理和 API 地址后重试。'
+  }
+  return sanitizeAIErrorMessage(error, context)
 }
 
 function sanitizeAIEndpointForLog (value) {
@@ -725,6 +869,7 @@ exports.AIHealthCheck = async (
   authHeaderName,
   requestId
 ) => {
+  const startedAt = Date.now()
   const controller = new AbortController()
   const id = String(requestId || '')
   if (id) {
@@ -742,7 +887,7 @@ exports.AIHealthCheck = async (
   })
 
   try {
-    return await Promise.race([
+    const result = await Promise.race([
       performAIHealthCheck({
         model,
         baseURL,
@@ -754,6 +899,10 @@ exports.AIHealthCheck = async (
       }),
       timeout
     ])
+    return {
+      ...result,
+      latencyMs: Math.max(0, Date.now() - startedAt)
+    }
   } catch (error) {
     const classification = 'network-error'
     logAIHealthError('total', error, {
@@ -762,12 +911,15 @@ exports.AIHealthCheck = async (
       baseURL,
       apiPath: path
     }, classification)
-    return createAIHealthResult(
-      classification,
-      classification,
-      'unknown',
-      []
-    )
+    return {
+      ...createAIHealthResult(
+        classification,
+        classification,
+        'unknown',
+        []
+      ),
+      latencyMs: Math.max(0, Date.now() - startedAt)
+    }
   } finally {
     clearTimeout(timer)
     if (id && activeAIHealthChecks.get(id) === controller) {
@@ -863,11 +1015,16 @@ exports.AIModels = async (baseURL, apiKey, proxy, authHeaderName) => {
   }
 }
 
-exports.AIchatWithTools = async (messages, model, baseURL, path, apiKey, proxy, tools, authHeaderName, requestId) => {
+exports.AIchatWithTools = async (messages, model, baseURL, path, apiKey, proxy, tools, authHeaderName, requestId, traceContext) => {
   let endpoint
   let errorContext = { model, baseURL, apiPath: path, apiKey, proxy }
   const controller = new AbortController()
   const normalizedRequestId = String(requestId || '')
+  const qualityState = createAIQualityState(
+    traceContext,
+    'agent-request',
+    normalizedRequestId
+  )
   try {
     if (normalizedRequestId) {
       activeAgentRequests.get(normalizedRequestId)?.abort()
@@ -881,7 +1038,9 @@ exports.AIchatWithTools = async (messages, model, baseURL, path, apiKey, proxy, 
       apiKey,
       proxy
     }
-    const client = createAIClient(endpoint.baseURL, apiKey, proxy, authHeaderName)
+    const client = createAIClient(endpoint.baseURL, apiKey, proxy, authHeaderName, {
+      timeout: AI_REQUEST_LIMITS.timeoutMs
+    })
     const requestData = {
       model,
       messages,
@@ -890,25 +1049,29 @@ exports.AIchatWithTools = async (messages, model, baseURL, path, apiKey, proxy, 
     if (tools && tools.length) {
       requestData.tools = tools
     }
-    const response = await client.post(endpoint.path, requestData, {
+    const response = await postAIRequestWithRetry(client, endpoint.path, requestData, {
       signal: controller.signal
     })
     const choice = response.data?.choices?.[0]
     if (!choice?.message) {
       const errorMessage = sanitizeAIErrorMessage(response.data, errorContext)
+      finishAIQuality(qualityState, 'failed', 'failed')
       return {
         error: errorMessage || '模型 API 返回异常，未包含可用的 Agent 消息'
       }
     }
+    finishAIQuality(qualityState, 'completed', 'completed')
     return {
       message: choice.message
     }
   } catch (e) {
     if (controller.signal.aborted || e?.code === 'ERR_CANCELED') {
+      finishAIQuality(qualityState, 'cancelled', 'cancelled')
       return { cancelled: true }
     }
     logAIRequestError('agent-tools', e, errorContext)
-    return { error: sanitizeAIErrorMessage(e, errorContext) }
+    finishAIQuality(qualityState, 'failed', 'failed')
+    return { error: getAIUserFacingRequestError(e, errorContext) }
   } finally {
     if (
       normalizedRequestId &&
@@ -929,12 +1092,19 @@ exports.AIchat = async (
   proxy = defaultSettings.proxyAI,
   stream = true,
   authHeaderName = defaultSettings.authHeaderNameAI,
-  requestId
+  requestId,
+  traceContext
 ) => {
   let endpoint
   let errorContext = { model, baseURL, apiPath: path, apiKey, proxy }
   const controller = new AbortController()
   const normalizedRequestId = String(requestId || '')
+  const qualityState = createAIQualityState(
+    traceContext,
+    'chat-request',
+    normalizedRequestId
+  )
+  let streamSlotReserved = false
   try {
     if (normalizedRequestId) {
       activeAIChatRequests.get(normalizedRequestId)?.abort()
@@ -948,7 +1118,9 @@ exports.AIchat = async (
       apiKey,
       proxy
     }
-    const client = createAIClient(endpoint.baseURL, apiKey, proxy, authHeaderName)
+    const client = createAIClient(endpoint.baseURL, apiKey, proxy, authHeaderName, {
+      timeout: AI_REQUEST_LIMITS.timeoutMs
+    })
 
     const conversationMessages = Array.isArray(promptOrMessages)
       ? promptOrMessages
@@ -972,31 +1144,46 @@ exports.AIchat = async (
     const isCommandSuggestion = prompt.includes('give me max 5 command suggestions')
     const useStream = stream && !isCommandSuggestion
 
+    const normalizedRole = String(role || '').trim()
+    const systemMessages = normalizedRole
+      ? [{ role: 'system', content: normalizedRole }]
+      : []
     const requestData = {
       model,
       messages: [
-        {
-          role: 'system',
-          content: role
-        },
+        ...systemMessages,
         ...conversationMessages
       ],
       stream: useStream
     }
 
     if (useStream) {
+      if (getActiveStreamingSessionCount() >= AI_STREAM_LIMITS.maxActive) {
+        finishAIQuality(qualityState, 'failed', 'failed')
+        return {
+          error: `AI 流式会话并发已达到 ${AI_STREAM_LIMITS.maxActive} 个，请停止已有任务或稍后重试。`
+        }
+      }
+      activeStreamingReservations++
+      streamSlotReserved = true
       // For streaming responses, initiate streaming and return session info
-      const response = await client.post(endpoint.path, requestData, {
+      const response = await postAIRequestWithRetry(client, endpoint.path, requestData, {
         responseType: 'stream',
         signal: controller.signal
       })
 
+      activeStreamingReservations--
+      streamSlotReserved = false
+
       const sessionId = Date.now().toString() + Math.random().toString(36).substr(2, 9)
       const sessionData = {
         stream: response.data,
+        controller,
         content: '',
         completed: false,
-        error: null
+        error: null,
+        receivedBytes: 0,
+        qualityState
       }
 
       streamingSessions.set(sessionId, sessionData)
@@ -1012,17 +1199,19 @@ exports.AIchat = async (
       }
     } else {
       // For non-streaming responses (command suggestions and when stream=false)
-      const response = await client.post(endpoint.path, requestData, {
+      const response = await postAIRequestWithRetry(client, endpoint.path, requestData, {
         signal: controller.signal
       })
       const choice = response.data?.choices?.[0]
       if (!choice) {
         const errorMessage = sanitizeAIErrorMessage(response.data, errorContext)
+        finishAIQuality(qualityState, 'failed', 'failed')
         return {
           error: errorMessage || '模型 API 返回异常，未包含可用的对话消息'
         }
       }
 
+      finishAIQuality(qualityState, 'completed', 'completed')
       return {
         response: normalizeAIMessageContent(getAIChoiceContent(choice)),
         isStream: false
@@ -1030,13 +1219,18 @@ exports.AIchat = async (
     }
   } catch (e) {
     if (controller.signal.aborted || e?.code === 'ERR_CANCELED') {
+      finishAIQuality(qualityState, 'cancelled', 'cancelled')
       return { cancelled: true }
     }
     logAIRequestError('chat', e, errorContext)
+    finishAIQuality(qualityState, 'failed', 'failed')
     return {
-      error: sanitizeAIErrorMessage(e, errorContext)
+      error: getAIUserFacingRequestError(e, errorContext)
     }
   } finally {
+    if (streamSlotReserved) {
+      activeStreamingReservations = Math.max(0, activeStreamingReservations - 1)
+    }
     if (
       normalizedRequestId &&
       activeAIChatRequests.get(normalizedRequestId) === controller
@@ -1088,6 +1282,31 @@ function processStream (sessionId, sessionData, errorContext = {}) {
   let buffer = ''
   const decoder = new StringDecoder('utf8')
 
+  const finishSession = (error = '') => {
+    if (sessionData.completed) return
+    sessionData.completed = true
+    if (error) sessionData.error = error
+    finishAIQuality(
+      sessionData.qualityState,
+      error ? 'failed' : 'completed',
+      error ? 'failed' : 'completed',
+      { sessionId: String(sessionId) }
+    )
+    if (sessionData.limitTimer) clearTimeout(sessionData.limitTimer)
+    if (error) {
+      sessionData.controller?.abort()
+      if (sessionData.stream && !sessionData.stream.destroyed) {
+        sessionData.stream.destroy()
+      }
+    }
+    scheduleStreamingSessionCleanup(sessionId, sessionData)
+  }
+
+  sessionData.limitTimer = setTimeout(() => {
+    finishSession(`AI 流式响应超过 ${Math.round(AI_STREAM_LIMITS.maxDurationMs / 1000)} 秒时间上限，已自动停止。`)
+  }, AI_STREAM_LIMITS.maxDurationMs)
+  sessionData.limitTimer.unref?.()
+
   const processLines = (shouldFlush = false) => {
     const lines = buffer.split('\n')
     buffer = shouldFlush ? '' : lines.pop()
@@ -1103,17 +1322,14 @@ function processStream (sessionId, sessionData, errorContext = {}) {
 
       const payload = trimmed.replace(/^data:\s*/, '')
       if (payload === '[DONE]') {
-        sessionData.completed = true
-        scheduleStreamingSessionCleanup(sessionId, sessionData)
+        finishSession()
         return
       }
 
       try {
         const data = JSON.parse(payload)
         if (data.error) {
-          sessionData.error = sanitizeAIErrorMessage(data, errorContext)
-          sessionData.completed = true
-          scheduleStreamingSessionCleanup(sessionId, sessionData)
+          finishSession(sanitizeAIErrorMessage(data, errorContext))
           return
         }
         const content = getAIChoiceContent(data.choices && data.choices[0])
@@ -1127,20 +1343,33 @@ function processStream (sessionId, sessionData, errorContext = {}) {
   }
 
   sessionData.stream.on('data', (chunk) => {
+    sessionData.receivedBytes += Buffer.byteLength(chunk)
+    if (sessionData.receivedBytes > AI_STREAM_LIMITS.maxBytes) {
+      finishSession(`AI 流式响应数据过大，已超过 ${AI_STREAM_LIMITS.maxBytes} 字节上限并自动停止。`)
+      return
+    }
     buffer += decoder.write(chunk)
+    if (Buffer.byteLength(buffer) > AI_STREAM_LIMITS.maxBufferBytes) {
+      finishSession('AI 流式响应单帧超过缓冲区限制，已自动停止。')
+      return
+    }
     processLines()
   })
 
   sessionData.stream.on('end', () => {
+    if (sessionData.completed) return
     buffer += decoder.end()
     processLines(true)
-    sessionData.completed = true
-    scheduleStreamingSessionCleanup(sessionId, sessionData)
+    finishSession()
   })
 
   sessionData.stream.on('error', (error) => {
-    sessionData.error = sanitizeAIErrorMessage(error, errorContext)
-    sessionData.completed = true
-    scheduleStreamingSessionCleanup(sessionId, sessionData)
+    finishSession(getAIUserFacingRequestError(error, errorContext))
   })
+
+  const finishInterruptedStream = () => {
+    finishSession('AI 流式响应在完成前中断。')
+  }
+  sessionData.stream.on('aborted', finishInterruptedStream)
+  sessionData.stream.on('close', finishInterruptedStream)
 }

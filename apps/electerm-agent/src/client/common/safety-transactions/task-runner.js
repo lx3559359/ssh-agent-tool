@@ -8,10 +8,12 @@ import {
   maxAuditPreviewBytes,
   redactAndTruncateAuditText
 } from './transaction-runner.js'
+import {
+  createPlanGrant,
+  verifyPlanGrant
+} from '../../components/ai/agent-plan-grant.js'
 
 const defaultStepTimeoutMs = 30000
-const planBindingSchemaVersion = 1
-const planBindingAlgorithm = 'SHA-256'
 const finalTaskStatusSet = new Set(finalTaskStatuses)
 
 function requireFunction (value, label) {
@@ -43,6 +45,8 @@ function sanitizeError (error, fallback = '任务执行失败。') {
   if (error?.cancelled) safeError.cancelled = true
   if (error?.timedOut) safeError.timedOut = true
   if (error?.cancelRemoteFailure) safeError.cancelRemoteFailure = true
+  if (error?.remoteState) safeError.remoteState = error.remoteState
+  if (error?.canAutoRetry === false) safeError.canAutoRetry = false
   return safeError
 }
 
@@ -66,72 +70,38 @@ function normalizeTimeout (value) {
   return timeout
 }
 
-function stableSerialize (value) {
-  if (Array.isArray(value)) {
-    return `[${value.map(item => stableSerialize(item) ?? 'null').join(',')}]`
-  }
-  if (value && typeof value === 'object') {
-    const entries = Object.keys(value).sort().flatMap(key => {
-      const serialized = stableSerialize(value[key])
-      return serialized === undefined
-        ? []
-        : [`${JSON.stringify(key)}:${serialized}`]
-    })
-    return `{${entries.join(',')}}`
-  }
-  return JSON.stringify(value)
-}
-
-async function sha256 (value) {
-  const cryptoApi = globalThis.crypto
-  if (!cryptoApi?.subtle) {
-    throw new Error('当前环境不支持任务计划完整性指纹计算。')
-  }
-  const digest = await cryptoApi.subtle.digest(
-    planBindingAlgorithm,
-    new TextEncoder().encode(String(value))
-  )
-  return [...new Uint8Array(digest)]
-    .map(value => value.toString(16).padStart(2, '0'))
-    .join('')
-}
-
-function executablePlanPayload (task) {
+export function buildTaskPlanGrantPayload (task) {
   return {
-    schemaVersion: task.schemaVersion,
-    id: task.id,
-    title: task.title,
-    purpose: task.purpose,
-    endpoint: task.endpoint,
-    endpointKey: task.endpointKey,
-    steps: task.steps.map(step => ({
-      id: step.id,
-      title: step.title,
-      command: step.command,
-      purpose: step.purpose,
-      timeoutMs: step.timeoutMs,
-      readOnly: step.readOnly,
-      risk: step.risk,
-      reason: step.reason,
-      reversible: step.reversible,
-      recoveryProvider: step.recoveryProvider,
-      provider: step.provider,
-      requiresConfirmation: step.requiresConfirmation
-    }))
+    schemaVersion: 1,
+    endpoint: task.endpoint || {},
+    goal: String(task.purpose || task.summary || task.title || task.id),
+    orderedCalls: task.steps.map(step => ({
+      name: 'send_terminal_command',
+      args: {
+        command: step.command,
+        timeoutMs: step.timeoutMs
+      }
+    })),
+    skillBindings: task.skillBindings || [],
+    artifactDigests: task.artifactDigests || [],
+    impactTargets: task.impactTargets || (task.target ? [task.target] : []),
+    resourceImpact: task.resourceImpact || {
+      cpu: 'unknown',
+      memory: 'unknown',
+      disk: 'unknown',
+      network: 'unknown',
+      duration: 'unknown'
+    },
+    recovery: task.recovery || null,
+    verification: task.verification || []
   }
-}
-
-async function planFingerprint (task) {
-  return sha256(stableSerialize(executablePlanPayload(task)))
 }
 
 async function assertPlanBinding (task) {
-  const binding = task.planBinding
-  if (binding?.schemaVersion !== planBindingSchemaVersion ||
-    binding?.algorithm !== planBindingAlgorithm ||
-    typeof binding?.fingerprint !== 'string' ||
-    binding.fingerprint !== await planFingerprint(task)) {
-    throw new Error('任务计划完整性校验失败，已拒绝执行；请重新生成并确认计划。')
+  if (!await verifyPlanGrant(buildTaskPlanGrantPayload(task), task.planGrant)) {
+    const error = new Error('任务计划绑定已变更，已拒绝执行；请重新确认。')
+    error.code = 'PLAN_BINDING_CHANGED'
+    throw error
   }
 }
 
@@ -262,6 +232,8 @@ export function createTaskRunner (options = {}) {
     } catch (error) {
       const failure = sanitizeError(error)
       failure.cancelRemoteFailure = true
+      failure.remoteState = error?.remoteState || 'unknown'
+      failure.canAutoRetry = false
       return failure
     }
   }
@@ -379,14 +351,14 @@ export function createTaskRunner (options = {}) {
     }
   }
 
-  async function create (plan) {
+  async function create (plan, traceContext) {
     const normalized = validateTaskPlan(plan)
     const draft = await save({
       ...normalized,
       status: taskStatuses.draft,
       createdAt: plan.createdAt || timestamp(),
       updatedAt: timestamp()
-    })
+    }, traceContext)
     return patch(draft.id, {
       status: taskStatuses.awaitingPlanConfirmation,
       updatedAt: timestamp()
@@ -400,13 +372,13 @@ export function createTaskRunner (options = {}) {
       if (task.status !== taskStatuses.awaitingPlanConfirmation) {
         throw new Error('任务不在等待计划确认状态。')
       }
+      const confirmedAt = timestamp()
       return patch(id, {
-        planBinding: {
-          schemaVersion: planBindingSchemaVersion,
-          algorithm: planBindingAlgorithm,
-          fingerprint: await planFingerprint(task)
-        },
-        planConfirmedAt: timestamp(),
+        planGrant: await createPlanGrant(buildTaskPlanGrantPayload(task), {
+          confirmedBy: 'user',
+          now: confirmedAt
+        }),
+        planConfirmedAt: confirmedAt,
         updatedAt: timestamp()
       })
     })
@@ -416,20 +388,17 @@ export function createTaskRunner (options = {}) {
     return serialize(String(id), async () => {
       let task = await get(id)
       if (!task) throw new Error(`未找到 Agent 任务：${id}`)
-      if (task.status !== taskStatuses.awaitingPlanConfirmation || !task.planConfirmedAt) {
+      if (task.status !== taskStatuses.awaitingPlanConfirmation || !task.planGrant) {
         throw new Error('必须先确认计划才能运行任务。')
       }
       try {
         await assertPlanBinding(task)
       } catch (error) {
         const failure = sanitizeError(error, '任务计划完整性校验失败，已拒绝执行。')
-        const status = task.steps.some(step => step.status === 'completed')
-          ? taskStatuses.partiallyCompleted
-          : taskStatuses.failed
         await patch(task.id, {
-          status,
+          status: taskStatuses.awaitingChangeConfirmation,
+          reasonCode: 'PLAN_BINDING_CHANGED',
           error: failure.message,
-          completedAt: timestamp(),
           updatedAt: timestamp()
         })
         throw failure

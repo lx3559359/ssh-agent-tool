@@ -7,6 +7,7 @@ const { spawnSync } = require('node:child_process')
 
 const root = path.resolve(__dirname, '../..')
 const scriptPath = path.join(root, 'build/bin/smoke-ssh-sftp.js')
+const takeoverScriptPath = path.join(root, 'build/bin/smoke-ai-takeover.js')
 const source = fs.readFileSync(scriptPath, 'utf8')
 const smokeHelpers = require(scriptPath)
 
@@ -498,4 +499,100 @@ test('critical failures set a nonzero exit code and finally verifies remote clea
   assert.match(source, /\$\{ok \? '\[PASS\]' : '\[FAIL\]'\}/)
   assert.doesNotMatch(source, /console\.(?:log|error)\([^\n]*password/)
   assert.doesNotMatch(source, /execCommand\(conn, `[^`]*\$\{testDir/)
+})
+
+test('AI takeover smoke refuses to run without an explicit isolated configuration', () => {
+  assert.equal(fs.existsSync(takeoverScriptPath), true)
+  const result = spawnSync(process.execPath, [takeoverScriptPath], {
+    cwd: root,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      SHELLPILOT_AI_TAKEOVER_SMOKE_CONFIG: ''
+    }
+  })
+
+  assert.notEqual(result.status, 0)
+  assert.match(`${result.stderr}\n${result.stdout}`, /--isolated/)
+})
+
+test('AI takeover smoke validates fingerprint, caller scope, dedicated service, and recovery acknowledgement', () => {
+  const helpers = require(takeoverScriptPath)
+  const valid = {
+    host: 'smoke.internal',
+    port: 22,
+    username: 'smoke-user',
+    password: 'secret',
+    hostFingerprint: `SHA256:${Buffer.alloc(32, 7).toString('base64').replace(/=+$/, '')}`,
+    testRoot: '/tmp/shellpilot-ai-takeover-tests',
+    dedicatedService: 'shellpilot-ai-takeover-smoke-web.service',
+    recoveryAcknowledgement: 'I_HAVE_OUT_OF_BAND_RECOVERY'
+  }
+
+  const config = helpers.validateTakeoverSmokeConfig(valid, { isolated: true })
+  assert.equal(config.testRoot, valid.testRoot)
+  assert.equal(config.dedicatedService, valid.dedicatedService)
+
+  for (const [property, value, expected] of [
+    ['hostFingerprint', '', /fingerprint/i],
+    ['testRoot', '', /test root/i],
+    ['testRoot', '/etc', /temporary test root/i],
+    ['dedicatedService', 'sshd.service', /dedicated test service/i],
+    ['recoveryAcknowledgement', '', /out-of-band recovery/i]
+  ]) {
+    assert.throws(
+      () => helpers.validateTakeoverSmokeConfig({ ...valid, [property]: value }, { isolated: true }),
+      expected
+    )
+  }
+  assert.throws(
+    () => helpers.validateTakeoverSmokeConfig(valid, { isolated: false }),
+    /--isolated/
+  )
+})
+
+test('AI takeover smoke writes and cleans only its generated namespace', () => {
+  const helpers = require(takeoverScriptPath)
+  const first = helpers.createTakeoverSmokeScope('/tmp/shellpilot-ai-takeover-tests')
+  const second = helpers.createTakeoverSmokeScope('/tmp/shellpilot-ai-takeover-tests')
+
+  assert.match(first.remoteTestDir, /^\/tmp\/shellpilot-ai-takeover-tests\/shellpilot-ai-takeover-smoke-[a-f0-9-]+$/)
+  assert.notEqual(first.remoteTestDir, second.remoteTestDir)
+  assert.ok(Object.values(first.paths).every(value => value.startsWith(`${first.remoteTestDir}/`)))
+  assert.equal(
+    helpers.assertSafeTakeoverCleanupTarget(first.testRoot, first.remoteTestDir),
+    first.remoteTestDir
+  )
+
+  for (const target of [
+    '/',
+    first.testRoot,
+    `${first.remoteTestDir}/nested`,
+    '/tmp/shellpilot-ai-takeover-smoke-foreign'
+  ]) {
+    assert.throws(
+      () => helpers.assertSafeTakeoverCleanupTarget(first.testRoot, target),
+      /unsafe takeover cleanup target/
+    )
+  }
+})
+
+test('AI takeover smoke covers bounded diagnostics, rollback, cancellation, service restart and disconnect', () => {
+  const takeoverSource = fs.readFileSync(takeoverScriptPath, 'utf8')
+  const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
+
+  assert.equal(packageJson.scripts['smoke:ai-takeover'], 'node build/bin/smoke-ai-takeover.js')
+  assert.match(takeoverSource, /createSshHostVerification/)
+  assert.match(takeoverSource, /remote test root boundary/)
+  assert.match(takeoverSource, /pwd -P/)
+  assert.match(takeoverSource, /test ! -L/)
+  assert.match(takeoverSource, /bounded read-only diagnostics/)
+  assert.match(takeoverSource, /verified backup change rollback/)
+  assert.match(takeoverSource, /cancellation closes its channel/)
+  assert.match(takeoverSource, /dedicated test service restart/)
+  assert.match(takeoverSource, /SSH disconnect/)
+  assert.match(takeoverSource, /systemctl restart --/)
+  assert.match(takeoverSource, /rm -rf --/)
+  assert.doesNotMatch(takeoverSource, /systemctl restart -- (?:ssh|sshd|network|NetworkManager)\b/)
+  assert.doesNotMatch(takeoverSource, /rm -rf -- ['"]?\/['"]?(?:\s|$)/)
 })

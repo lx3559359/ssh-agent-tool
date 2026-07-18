@@ -275,8 +275,54 @@ function isRecoverableFilePath (value) {
   return filePathPolicy(value) === 'recoverable'
 }
 
+export function analyzeShellSyntax (command) {
+  const text = String(command || '')
+  let quote = ''
+  let escaped = false
+  let executionExpansion = false
+  let pathExpansion = false
+  let controlOperator = false
+
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index]
+    if (escaped) {
+      escaped = false
+      continue
+    }
+    if (character === '\\' && quote !== "'") {
+      escaped = true
+      continue
+    }
+    if (quote) {
+      if (character === quote) {
+        quote = ''
+      } else if (quote === '"' && (character === '$' || character === '`')) {
+        executionExpansion = true
+      }
+      continue
+    }
+    if (character === "'" || character === '"') {
+      quote = character
+      continue
+    }
+    if (character === '$' || character === '`' ||
+      ((character === '<' || character === '>') && /^\s*\(/.test(text.slice(index + 1))) ||
+      ('@?!+*'.includes(character) && text[index + 1] === '(')) {
+      executionExpansion = true
+    }
+    if ('|&;\r\n'.includes(character)) controlOperator = true
+    if ('*?[]{}~'.includes(character)) pathExpansion = true
+  }
+
+  return { executionExpansion, pathExpansion, controlOperator }
+}
+
 function hasUnsafeExpansion (command) {
-  return /\$\(|(?:<|>)\s*\(|`|\$\{|[@?!+*]\(|(^|\s)(?:eval|source|\.)\s|(^|\s)(?:ba|z|k)?sh\s+-?c\b/i.test(command)
+  if (analyzeShellSyntax(command).executionExpansion) return true
+  const words = shellWords(stripCommandPrefix(command))
+  const executable = executableName(words[0]).toLowerCase()
+  if (['eval', 'source', '.'].includes(executable)) return true
+  return /^(?:ba|z|k)?sh$/.test(executable) && /^-?c$/.test(words[1] || '')
 }
 
 function isDatabaseClient (command) {
@@ -692,7 +738,7 @@ function changeProvider (command) {
 
 const inherentlyReadonlyCommands = new Set([
   'uptime', 'whoami', 'id', 'pwd', 'df', 'du', 'free', 'ps', 'ls',
-  'stat', 'wc', 'which', 'uname', 'lsof', 'cat', 'less', 'head', 'tail', 'grep'
+  'stat', 'wc', 'which', 'uname', 'lsof', 'cat', 'head', 'tail', 'grep'
 ])
 const journalctlShortOptions = /^-[abDefFgklmMnopqrStuUWxN]+$/
 
@@ -726,7 +772,7 @@ function isReadonlyJournalctl (words) {
     '--unit', '--user-unit', '--identifier', '--priority', '--facility',
     '--grep', '--since', '--until', '--lines', '--output', '--output-fields',
     '--field', '--directory', '--file', '--root', '--machine', '--namespace',
-    '--cursor', '--after-cursor', '--cursor-file', '--case-sensitive', '--verify-key'
+    '--cursor', '--after-cursor', '--case-sensitive', '--verify-key'
   ]
   for (let index = 1; index < words.length; index += 1) {
     const word = words[index]
@@ -774,6 +820,20 @@ function isReadonlySs (words) {
     if (!word.startsWith('-')) return true
     return /^-[HOnraletuxwpmios460]+$/.test(word) || longOptions.test(word)
   })
+}
+
+function isReadonlyLess (words) {
+  let parseOptions = true
+  for (const word of words.slice(1)) {
+    if (parseOptions && word === '--') {
+      parseOptions = false
+      continue
+    }
+    if (!parseOptions) continue
+    if (word.startsWith('+') || word === '-o' || word === '-O' ||
+      /^-[oO].+/.test(word) || word.toLowerCase().startsWith('--log')) return false
+  }
+  return true
 }
 
 function isReadonlyIptables (words) {
@@ -826,6 +886,87 @@ function isReadonlySed (words, quotes) {
     invocation.scripts.every(isSafeSedScript)
 }
 
+function isReadonlyKubectl (words) {
+  const action = words[1]?.toLowerCase()
+  return ['get', 'describe', 'logs', 'top', 'version'].includes(action)
+}
+
+const gitSideEffectLongOptions = ['--output', '--ext-diff', '--textconv']
+const gitSafeExactLongOptions = new Set(['--text'])
+
+function hasGitSideEffectOption (words) {
+  for (const word of words.slice(2)) {
+    if (word === '--') break
+    const option = word.split('=', 1)[0]
+    if (gitSafeExactLongOptions.has(option)) continue
+    if (gitSideEffectLongOptions.some(candidate => candidate.startsWith(option))) {
+      return true
+    }
+  }
+  return false
+}
+
+function isReadonlyGitRemote (words) {
+  const args = words.slice(2)
+  let index = 0
+  if (args[index] === '-v' || args[index] === '--verbose') index += 1
+  if (index === args.length) return true
+
+  const action = args[index]
+  index += 1
+  if (action === 'show') {
+    if (args[index] === '-n') index += 1
+    const remotes = args.slice(index)
+    return remotes.length > 0 && remotes.every(remote => !remote.startsWith('-'))
+  }
+  if (action === 'get-url') {
+    while (args[index] === '--push' || args[index] === '--all') index += 1
+    const remotes = args.slice(index)
+    return remotes.length === 1 && !remotes[0].startsWith('-')
+  }
+  return false
+}
+
+function isReadonlyGit (words) {
+  const action = words[1]?.toLowerCase()
+  if (['status', 'log', 'show', 'diff'].includes(action)) {
+    return !hasGitSideEffectOption(words)
+  }
+  if (action === 'branch') {
+    return words.slice(2).every(word => (
+      /^-(?:a|r|v|vv)$/.test(word) ||
+      ['--all', '--remotes', '--verbose', '--list', '--show-current'].includes(word)
+    ))
+  }
+  if (action === 'remote') return isReadonlyGitRemote(words)
+  return false
+}
+
+function isReadonlyFirewallCmd (words) {
+  const selectors = new Set([
+    '--permanent', '--direct', '--verbose', '--quiet', '--zone', '--policy',
+    '--ipset', '--service', '--helper', '--icmptype'
+  ])
+  let hasQuery = false
+  for (const word of words.slice(1)) {
+    if (word === '--state' ||
+      /^--(?:get|list|query|info|path)-[A-Za-z0-9-]+(?:=.*)?$/.test(word) ||
+      word === '--check-config') {
+      hasQuery = true
+      continue
+    }
+    const selector = word.split('=', 1)[0]
+    if (selectors.has(selector) || !word.startsWith('-')) continue
+    return false
+  }
+  return hasQuery
+}
+
+function isReadonlyUfw (words) {
+  return words[1]?.toLowerCase() === 'status' &&
+    words.slice(2).every(word => ['verbose', 'numbered'].includes(word.toLowerCase()))
+}
+
 function isReadonly (command) {
   const text = stripCommandPrefix(command)
   const tokens = shellTokens(text)
@@ -836,26 +977,43 @@ function isReadonly (command) {
   if (executable === 'date') return isReadonlyDate(words)
   if (executable === 'journalctl') return isReadonlyJournalctl(words)
   if (executable === 'ss') return isReadonlySs(words)
+  if (executable === 'less') return isReadonlyLess(words)
   if (executable === 'sed') return isReadonlySed(words, tokens.map(token => token.quote))
   if (executable === 'find') {
     const output = findOutputTargets(words)
     return !output.hasOutputAction && !hasUnsafeFindAction(words)
   }
   if (executable === 'ip') {
-    const section = words[1]?.toLowerCase()
-    const action = words[2]?.toLowerCase()
+    const sectionIndex = words[1]?.toLowerCase() === '-brief' ? 2 : 1
+    const rawSection = words[sectionIndex]?.toLowerCase()
+    const section = rawSection === 'a' ? 'addr' : rawSection
+    const action = words[sectionIndex + 1]?.toLowerCase()
     const readonlyActions = section === 'route' ? ['show', 'list', 'get'] : ['show', 'list']
     return ['addr', 'address', 'route', 'link'].includes(section) &&
       (!action || readonlyActions.includes(action))
   }
   if (executable === 'systemctl') return isReadonlySystemctl(words)
-  if (executable === 'firewall-cmd') return /^(?:--state|--list-[A-Za-z-]+|--query-[A-Za-z-]+)$/i.test(words[1] || '')
-  if (executable === 'ufw') return words[1]?.toLowerCase() === 'status'
+  if (executable === 'firewall-cmd') return isReadonlyFirewallCmd(words)
+  if (executable === 'ufw') return isReadonlyUfw(words)
   if (executable === 'iptables' || executable === 'ip6tables') return isReadonlyIptables(words)
   if (executable === 'nft') return words[1]?.toLowerCase() === 'list'
   if (executable === 'ifconfig') return words.length <= 2 && (!words[1] || words[1] === '-a' || !words[1].startsWith('-'))
   if (executable === 'docker' || executable === 'podman') return ['ps', 'logs', 'inspect', 'stats'].includes(words[1]?.toLowerCase())
+  if (executable === 'kubectl') return isReadonlyKubectl(words)
+  if (executable === 'git') {
+    try {
+      return isReadonlyGit(tokenizeStaticShell(text))
+    } catch (error) {
+      return false
+    }
+  }
   return false
+}
+
+function isRecognizedMutation (command) {
+  return /^(?:kubectl)\s+(?:delete|apply|replace|patch|scale|rollout|cordon|drain)\b/i.test(command) ||
+    /^(?:docker|podman)\s+(?:rm|rmi|stop|kill|prune)\b/i.test(command) ||
+    /^git\s+(?:reset\s+--hard\b|clean\s+-|push\b[^\n]*--force(?:-with-lease)?\b)/i.test(command)
 }
 
 function classifySingle (command) {
@@ -899,6 +1057,9 @@ function classifySingle (command) {
       return result('change', `${provider} 修改可创建已验证的恢复点`, provider)
     }
     return result('change', '已识别裸修改命令，但无法证明 alias、function 或 PATH 身份，无法自动回滚', null, false)
+  }
+  if (isRecognizedMutation(stripped)) {
+    return result('change', '已识别修改命令，但没有可验证的自动恢复提供器', null, false)
   }
   if (isReadonly(command)) return result('readonly', '命令属于已识别的只读诊断操作')
   return result('unknown', '命令不在已验证的安全分类白名单中')

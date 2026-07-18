@@ -32,7 +32,7 @@ test('P1 model API config matrix covers providers model loading and flexible end
   assertEvidence(aiConfig, /value:\s*'siliconflow'[\s\S]*baseURLAI:\s*'https:\/\/api\.siliconflow\.cn\/v1'/, 'SiliconFlow preset')
   assertEvidence(aiConfig, /value:\s*'openrouter'[\s\S]*baseURLAI:\s*'https:\/\/openrouter\.ai\/api\/v1'/, 'OpenRouter preset')
   assertEvidence(aiConfig, /handleLoadModels[\s\S]*'AIModels'[\s\S]*profile\.baseURLAI[\s\S]*profile\.apiKeyAI/, 'model list loading action')
-  assertEvidence(aiConfig, /name='apiPathAI'[\s\S]*noStyle/, 'optional API path input')
+  assertEvidence(aiConfig, /className='sp-ai-config-advanced-fields'[\s\S]*name='apiPathAI'/, 'optional API path input in advanced settings')
   assertEvidence(aiEndpointTest, /normalizes relay root URL to OpenAI-compatible chat endpoint/, 'relay root URL normalization')
   assertEvidence(aiEndpointTest, /accepts a full chat completions URL in the API address field/, 'full chat completions URL accepted')
   assertEvidence(aiEndpointTest, /explicit API path is optional but respected when provided/, 'explicit path optional but respected')

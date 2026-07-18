@@ -6,7 +6,9 @@ const {
   buildReleaseTag,
   buildValidatedLocalReleaseAssets,
   buildGitHubReleaseCommands,
-  createSpawnOptions
+  createSpawnOptions,
+  getSpawnStatus,
+  assertSpawnSuccess
 } = require('./github-release-utils')
 
 const repo = process.env.GITHUB_REPOSITORY || 'lx3559359/ssh-agent-tool'
@@ -21,9 +23,23 @@ function getReleaseNotes () {
     : `${releaseProductName} Windows release v${pack.version}`
 }
 
-function run (command, args, options = {}) {
-  const res = spawnSync(command, args, createSpawnOptions(options))
-  return res.status || 0
+function run (command, args, options = {}, spawn = spawnSync) {
+  const result = spawn(command, args, createSpawnOptions(options))
+  return getSpawnStatus(result, command, args)
+}
+
+function runRequired (command, args, options = {}, spawn = spawnSync) {
+  const result = spawn(command, args, createSpawnOptions(options))
+  return assertSpawnSuccess(result, command, args)
+}
+
+function executeGitHubReleaseCommands (commands, spawn = spawnSync) {
+  const [view, create, edit, upload, publish] = commands
+  const exists = run(view[0], view[1], { stdio: 'ignore' }, spawn) === 0
+  const prepare = exists ? edit : create
+  runRequired(prepare[0], prepare[1], {}, spawn)
+  runRequired(upload[0], upload[1], {}, spawn)
+  runRequired(publish[0], publish[1], {}, spawn)
 }
 
 function main () {
@@ -56,21 +72,17 @@ function main () {
     return
   }
 
-  const view = commands[0]
-  const create = commands[1]
-  const upload = commands[2]
-  const exists = run(view[0], view[1], { stdio: 'ignore' }) === 0
-  if (!exists) {
-    const created = run(create[0], create[1])
-    if (created !== 0) {
-      process.exit(created)
-    }
-  }
-
-  const uploaded = run(upload[0], upload[1])
-  if (uploaded !== 0) {
-    process.exit(uploaded)
-  }
+  executeGitHubReleaseCommands(commands)
 }
 
-main()
+if (require.main === module) {
+  main()
+}
+
+module.exports = {
+  executeGitHubReleaseCommands,
+  getReleaseNotes,
+  main,
+  run,
+  runRequired
+}

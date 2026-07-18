@@ -1,37 +1,16 @@
 const express = require('express')
-const app = express()
-const port = 43434
 
-// Middleware for JSON parsing
-app.use(express.json())
+const DEFAULT_PORT = 43434
 
-// Middleware to check Bearer token
-app.use((req, res, next) => {
-  const authHeader = req.headers.authorization
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Missing or invalid authorization header' })
-  }
-  next()
-})
-
-// Helper function to extract user input from message
 function extractUserInput (message) {
-  const match = message.match(/user input: "([^"]*)"/)
+  const match = String(message || '').match(/user input: "([^"]*)"/)
   return match ? match[1] : ''
 }
 
-// Generate 5 fake commands that start with user input
 function generateTestCommands (userInput) {
-  return [
-    `${userInput}-test-command-1`,
-    `${userInput}-test-command-2`,
-    `${userInput}-test-command-3`,
-    `${userInput}-test-command-4`,
-    `${userInput}-test-command-5`
-  ]
+  return Array.from({ length: 5 }, (_, index) => `${userInput}-test-command-${index + 1}`)
 }
 
-// Generate a test bookmark based on description
 function generateTestBookmark (description) {
   return {
     title: 'Test Server',
@@ -43,105 +22,111 @@ function generateTestBookmark (description) {
   }
 }
 
-// Chat completions endpoint
-app.post('/chat/completions', (req, res) => {
-  const { messages, stream } = req.body
-  const lastMessage = messages[messages.length - 1].content
+function mockResponse () {
+  return '# Response to your query\n\n' +
+    'Here is a sample response with different markdown elements:\n\n' +
+    '## Code Example\n' +
+    '```javascript\n' +
+    'console.log("Hello World!");\n' +
+    '```\n\n' +
+    '## List Example\n' +
+    '- Item 1\n' +
+    '- Item 2\n' +
+    '- Item 3\n\n' +
+    '## Text Formatting\n' +
+    '**Bold text** and *italic text*\n\n' +
+    '> This is a blockquote\n\n' +
+    '[This is a link](https://example.com)'
+}
 
-  if (lastMessage.includes('give me max 5 command suggestions for user input')) {
-    const userInput = extractUserInput(lastMessage)
-    const mockSuggestions = generateTestCommands(userInput)
-
-    // Command suggestions are always non-streaming
-    res.json({
-      choices: [{
-        message: {
-          content: JSON.stringify(mockSuggestions)
-        }
-      }]
-    })
-  } else if (lastMessage.includes('Generate the bookmark JSON')) {
-    const bookmarkData = generateTestBookmark(lastMessage)
-    res.json({
-      choices: [{
-        message: {
-          content: JSON.stringify(bookmarkData, null, 2)
-        }
-      }]
-    })
-  } else if (stream) {
-    // Handle streaming response
-    res.writeHead(200, {
-      'Content-Type': 'text/plain',
-      'Transfer-Encoding': 'chunked'
-    })
-
-    const mockResponse = '# Response to your query\n\n' +
-      'Here is a sample response with different markdown elements:\n\n' +
-      '## Code Example\n' +
-      '```javascript\n' +
-      'console.log("Hello World!");\n' +
-      '```\n\n' +
-      '## List Example\n' +
-      '- Item 1\n' +
-      '- Item 2\n' +
-      '- Item 3\n\n' +
-      '## Text Formatting\n' +
-      '**Bold text** and *italic text*\n\n' +
-      '> This is a blockquote\n\n' +
-      '[This is a link](https://example.com)'
-
-    // Split response into chunks and send as streaming data
-    const chunks = mockResponse.split(' ')
-    let index = 0
-
-    const sendChunk = () => {
-      if (index < chunks.length) {
-        const content = chunks[index] + (index < chunks.length - 1 ? ' ' : '')
-        const streamData = {
-          choices: [{
-            delta: {
-              content
-            }
-          }]
-        }
-        res.write(`data: ${JSON.stringify(streamData)}\n\n`)
-        index++
-        setTimeout(sendChunk, 50) // Simulate streaming delay
-      } else {
-        res.write('data: [DONE]\n\n')
-        res.end()
-      }
+function createLocalAiApp (options = {}) {
+  const app = express()
+  const state = options.state || {
+    requests: 0,
+    aborted: 0,
+    completed: 0,
+    firstChunkAt: 0
+  }
+  app.use(express.json({ limit: '2mb' }))
+  app.use((req, res, next) => {
+    const authHeader = req.headers.authorization
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Missing or invalid authorization header' })
+    }
+    next()
+  })
+  app.post('/chat/completions', (req, res) => {
+    state.requests += 1
+    req.on('aborted', () => { state.aborted += 1 })
+    const messages = Array.isArray(req.body.messages) ? req.body.messages : []
+    const lastMessage = String(messages.at(-1)?.content || '')
+    if (lastMessage.includes('give me max 5 command suggestions for user input')) {
+      return res.json({
+        choices: [{ message: { content: JSON.stringify(generateTestCommands(extractUserInput(lastMessage))) } }]
+      })
+    }
+    if (lastMessage.includes('Generate the bookmark JSON')) {
+      return res.json({
+        choices: [{ message: { content: JSON.stringify(generateTestBookmark(lastMessage), null, 2) } }]
+      })
+    }
+    if (!req.body.stream) {
+      return res.json({ choices: [{ message: { content: mockResponse() } }] })
     }
 
-    sendChunk()
-  } else {
-    // Handle non-streaming response
-    const mockResponse = '# Response to your query\n\n' +
-      'Here is a sample response with different markdown elements:\n\n' +
-      '## Code Example\n' +
-      '```javascript\n' +
-      'console.log("Hello World!");\n' +
-      '```\n\n' +
-      '## List Example\n' +
-      '- Item 1\n' +
-      '- Item 2\n' +
-      '- Item 3\n\n' +
-      '## Text Formatting\n' +
-      '**Bold text** and *italic text*\n\n' +
-      '> This is a blockquote\n\n' +
-      '[This is a link](https://example.com)'
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive'
+    })
+    const chunks = mockResponse().split(' ')
+    const delayMs = Number(options.chunkDelayMs) || 25
+    let index = 0
+    let completed = false
+    res.once('close', () => {
+      if (!completed) state.aborted += 1
+    })
+    const sendChunk = () => {
+      if (res.destroyed || res.writableEnded) return
+      if (index >= chunks.length) {
+        completed = true
+        state.completed += 1
+        res.write('data: [DONE]\n\n')
+        res.end()
+        return
+      }
+      if (!state.firstChunkAt) state.firstChunkAt = Date.now()
+      const content = chunks[index] + (index < chunks.length - 1 ? ' ' : '')
+      res.write(`data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`)
+      index += 1
+      setTimeout(sendChunk, delayMs)
+    }
+    setTimeout(sendChunk, Number(options.firstChunkDelayMs) || delayMs)
+  })
+  return { app, state }
+}
 
-    res.json({
-      choices: [{
-        message: {
-          content: mockResponse
-        }
-      }]
+async function startLocalAiServer (options = {}) {
+  const { app, state } = createLocalAiApp(options)
+  const server = await new Promise((resolve, reject) => {
+    const listening = app.listen(options.port ?? 0, '127.0.0.1', () => resolve(listening))
+    listening.once('error', reject)
+  })
+  return {
+    baseURL: `http://127.0.0.1:${server.address().port}`,
+    state,
+    close: () => new Promise((resolve, reject) => {
+      server.close(error => error ? reject(error) : resolve())
     })
   }
-})
+}
 
-app.listen(port, '127.0.0.1', () => {
-  console.log(`Mock AI API server running at http://127.0.0.1:${port}`)
-})
+if (require.main === module) {
+  const { app } = createLocalAiApp()
+  app.listen(DEFAULT_PORT, '127.0.0.1')
+}
+
+module.exports = {
+  createLocalAiApp,
+  startLocalAiServer
+}

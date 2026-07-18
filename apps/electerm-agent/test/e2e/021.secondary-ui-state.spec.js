@@ -64,6 +64,10 @@ test('real AIConfig keeps draft and validation across language preview but appli
     await page.keyboard.press('Escape')
     await apiUrl.fill('not-a-valid-url')
     await apiKey.fill('draft-fixture-key')
+    if (!await role.isVisible()) {
+      await page.locator('.sp-ai-config-advanced .ant-collapse-header').click()
+      await expect(role).toBeVisible()
+    }
     await role.fill('draft-role')
     await apiUrl.blur()
     await expect(page.getByText('请输入有效的 URL')).toBeVisible()

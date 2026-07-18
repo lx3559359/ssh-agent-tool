@@ -7,7 +7,7 @@ const widgetInfo = {
   name: 'Static File Server',
   description: 'A simple local file server to serve static files from your computer.',
   version: '1.0.0',
-  author: 'ZHAO Xudong',
+  author: 'ShellPilot Team',
   type: 'instance',
   builtin: true,
   configs: [

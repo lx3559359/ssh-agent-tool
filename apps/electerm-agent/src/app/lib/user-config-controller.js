@@ -6,6 +6,7 @@ const { dbAction } = require('./db')
 const { userConfigId, userNoEncryptConfigId } = require('../common/constants')
 const { getDbConfig } = require('./get-config')
 const globalState = require('./glob-state')
+const { protectAIConfigCredentials } = require('./ai-credential-storage')
 
 const configNoEncryptFields = ['allowMultiInstance']
 
@@ -22,32 +23,34 @@ exports.saveUserConfig = async (userConfig) => {
   const q = {
     _id: userConfigId
   }
-  delete userConfig.host
-  delete userConfig.terminalTypes
-  delete userConfig.tokenElecterm
-  delete userConfig.server
-  delete userConfig.port
-  globalState.update('config', userConfig)
+  const runtimeConfig = { ...userConfig }
+  delete runtimeConfig.host
+  delete runtimeConfig.terminalTypes
+  delete runtimeConfig.tokenElecterm
+  delete runtimeConfig.server
+  delete runtimeConfig.port
+  globalState.update('config', runtimeConfig)
   const conf = await getDbConfig()
-  if (hasNoEncryptFields(userConfig)) {
+  if (hasNoEncryptFields(runtimeConfig)) {
     const q1 = {
       _id: userNoEncryptConfigId
     }
     const noEncryptConfig = {}
     for (const f of configNoEncryptFields) {
-      if (f in userConfig) {
-        noEncryptConfig[f] = userConfig[f]
+      if (f in runtimeConfig) {
+        noEncryptConfig[f] = runtimeConfig[f]
       }
     }
     await dbAction('data', 'update', q1, noEncryptConfig, {
       upsert: true
     })
   }
-  return dbAction('data', 'update', q, {
+  const persistedConfig = protectAIConfigCredentials({
     ...q,
     ...conf,
-    ...userConfig
-  }, {
+    ...runtimeConfig
+  })
+  return dbAction('data', 'update', q, persistedConfig, {
     upsert: true
   })
 }

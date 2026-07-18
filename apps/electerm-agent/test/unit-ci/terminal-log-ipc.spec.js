@@ -234,7 +234,8 @@ test('terminal log controls expose child process response promises', async () =>
       })
       await assert.rejects(rejection, error => {
         assert.equal(error.message, `${operation.action} failed`)
-        assert.equal(error.stack, 'child-stack')
+        assert.match(error.stack, /reconstructRunCmdError/)
+        assert.doesNotMatch(error.stack, /child-stack/)
         return true
       })
     }

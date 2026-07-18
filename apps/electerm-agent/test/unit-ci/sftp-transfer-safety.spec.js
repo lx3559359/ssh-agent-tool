@@ -63,6 +63,12 @@ function clone (value) {
   return structuredClone(value)
 }
 
+function deferred () {
+  let resolvePromise
+  const promise = new Promise(resolve => { resolvePromise = resolve })
+  return { promise, resolve: resolvePromise }
+}
+
 function transferFileDescriptor (digest = 'a'.repeat(64), size = 7) {
   return {
     type: 'file',
@@ -141,6 +147,7 @@ async function createExternalTransferRunner (options = {}) {
   )
   const store = createMemoryStore()
   const calls = []
+  let remainingBeginFailures = Number(options.beginFailures || 0)
   const adapter = {
     supports: operation => operation.effect?.adapter === 'sftp',
     async prepare (operation) {
@@ -174,6 +181,10 @@ async function createExternalTransferRunner (options = {}) {
     },
     async beforeExternalExecute () {
       calls.push('beforeExternalExecute')
+      if (remainingBeginFailures > 0) {
+        remainingBeginFailures -= 1
+        throw new Error('external transfer preflight failed')
+      }
       return { verified: true, summary: 'target unchanged' }
     },
     async verifyExecute () {
@@ -209,6 +220,73 @@ async function createExternalTransferRunner (options = {}) {
     effect: transferEffect('upload')
   }, { now: new Date('2026-07-14T00:00:00.000Z') })
   return { runner, request, store, calls }
+}
+
+async function createRealTransferController ({ complete, cancel, getOperation } = {}) {
+  const { createTransferSafetyController } = await import(transferSafetyUrl)
+  const { buildSideEffectSafetyRequest } = await importTransactionModule(
+    'side-effect-model.js'
+  )
+  const { runner, store } = await createExternalTransferRunner()
+  const terminalCalls = []
+  const capability = {
+    async prepareTransferSafetyOperation (plan) {
+      const request = buildSideEffectSafetyRequest({
+        id: plan.operationId,
+        source: 'sftp',
+        title: 'SFTP upload',
+        endpoint: endpoint(),
+        effect: {
+          adapter: 'sftp',
+          action: plan.action,
+          paths: plan.paths,
+          resources: Object.values(plan.paths).map(resourcePath => ({
+            path: resourcePath,
+            type: plan.type
+          })),
+          type: plan.type,
+          expected: plan.expected,
+          transfer: plan.transfer
+        },
+        metadata: { ...plan.metadata }
+      }, { now: new Date('2026-07-14T00:00:00.000Z') })
+      return runner.prepare(request)
+    },
+    beginTransferSafetyOperation (id, options) {
+      return runner.beginExternalExecution(id, {
+        ...options,
+        confirmed: true
+      })
+    },
+    getTransferSafetyOperation (id) {
+      const read = () => store.get(id)
+      return getOperation ? getOperation(read, id) : read()
+    },
+    completeTransferSafetyOperation (id, completionData) {
+      terminalCalls.push('complete')
+      const run = () => runner.completeExternalExecution(id, completionData)
+      return complete ? complete(run, { id, store }) : run()
+    },
+    cancelTransferSafetyOperation (id) {
+      terminalCalls.push('cancel')
+      const run = () => runner.cancel(id)
+      return cancel ? cancel(run, { id, store }) : run()
+    }
+  }
+  const controller = createTransferSafetyController({
+    getTransfer: () => ({
+      id: 'real-terminal-race',
+      typeFrom: 'local',
+      typeTo: 'remote',
+      fromPath: 'C:/release.bin',
+      toPath: '/srv/release.bin',
+      fromFile: { isDirectory: false, size: 7 }
+    }),
+    getCapability: () => capability,
+    cancelTransport: async () => {}
+  })
+  await controller.begin()
+  return { controller, store, terminalCalls }
 }
 
 test('transfer side effects authoritatively bind upload copy and move identities', async () => {
@@ -944,6 +1022,71 @@ test('external SFTP transfer persists mutation marker before transport and verif
   ])
 })
 
+test('file-transfer controller prepares a new operation after a real runner begin failure', async () => {
+  const { createTransferSafetyController } = await import(transferSafetyUrl)
+  const { buildSideEffectSafetyRequest } = await importTransactionModule(
+    'side-effect-model.js'
+  )
+  const { runner, store } = await createExternalTransferRunner({
+    beginFailures: 1
+  })
+  const preparedIds = []
+  const traceIds = []
+  const controller = createTransferSafetyController({
+    getTransfer: () => ({
+      id: 'real-runner-failed-begin',
+      typeFrom: 'local',
+      typeTo: 'remote',
+      fromPath: 'C:/release.bin',
+      toPath: '/srv/release.bin',
+      fromFile: { isDirectory: false, size: 7 }
+    }),
+    getCapability: () => ({
+      prepareTransferSafetyOperation: async plan => {
+        preparedIds.push(plan.operationId)
+        traceIds.push(plan.metadata.traceId)
+        const request = buildSideEffectSafetyRequest({
+          id: plan.operationId,
+          source: 'sftp',
+          title: 'SFTP upload',
+          endpoint: endpoint(),
+          effect: {
+            adapter: 'sftp',
+            action: plan.action,
+            paths: plan.paths,
+            resources: Object.values(plan.paths).map(resourcePath => ({
+              path: resourcePath,
+              type: plan.type
+            })),
+            type: plan.type,
+            expected: plan.expected,
+            transfer: plan.transfer
+          },
+          metadata: { ...plan.metadata }
+        }, { now: new Date('2026-07-14T00:00:00.000Z') })
+        return runner.prepare(request)
+      },
+      beginTransferSafetyOperation: async (id, options) => {
+        return runner.beginExternalExecution(id, {
+          ...options,
+          confirmed: true
+        })
+      }
+    }),
+    cancelTransport: async () => {}
+  })
+
+  await assert.rejects(controller.begin(), /preflight failed/i)
+  const begun = await controller.begin()
+
+  assert.equal(begun.state, 'executing')
+  assert.equal(preparedIds.length, 2)
+  assert.notEqual(preparedIds[0], preparedIds[1])
+  assert.equal(traceIds[0], traceIds[1])
+  assert.equal((await store.get(preparedIds[0])).state, 'failed')
+  assert.equal((await store.get(preparedIds[1])).state, 'executing')
+})
+
 test('cancelling a running external transfer stops transport and keeps rollback available', async () => {
   const { runner, request, store } = await createExternalTransferRunner()
   let cancelled = 0
@@ -1009,6 +1152,310 @@ test('external transfer verification failure persists a rollbackable failure', a
   assert.equal(restored.state, 'restored')
 })
 
+test('file-transfer terminal races send only the first transition to the real runner', async t => {
+  await t.test('complete owns a concurrent cancel even when cancel would return first', async () => {
+    const started = deferred()
+    const release = deferred()
+    const context = await createRealTransferController({
+      complete: async run => {
+        started.resolve()
+        await release.promise
+        return run()
+      }
+    })
+    const completing = context.controller.complete()
+    await started.promise
+    const cancelling = context.controller.cancel()
+    await Promise.resolve()
+    release.resolve()
+    const outcomes = await Promise.allSettled([completing, cancelling])
+
+    assert.deepEqual(context.terminalCalls, ['complete'])
+    assert.deepEqual(outcomes.map(outcome => outcome.status), [
+      'fulfilled',
+      'fulfilled'
+    ])
+    assert.deepEqual(outcomes.map(outcome => outcome.value?.state), [
+      'rollback-available',
+      'rollback-available'
+    ])
+    assert.equal(
+      (await context.store.get(context.controller.operationId)).state,
+      'rollback-available'
+    )
+  })
+
+  await t.test('cancel owns a concurrent complete even when complete would return first', async () => {
+    const started = deferred()
+    const release = deferred()
+    const context = await createRealTransferController({
+      cancel: async run => {
+        started.resolve()
+        await release.promise
+        return run()
+      }
+    })
+    const cancelling = context.controller.cancel()
+    await started.promise
+    const completing = context.controller.complete()
+    await Promise.resolve()
+    release.resolve()
+    const outcomes = await Promise.allSettled([cancelling, completing])
+
+    assert.deepEqual(context.terminalCalls, ['cancel'])
+    assert.deepEqual(outcomes.map(outcome => outcome.status), [
+      'fulfilled',
+      'fulfilled'
+    ])
+    assert.deepEqual(outcomes.map(outcome => outcome.value?.state), [
+      'failed',
+      'failed'
+    ])
+    assert.equal(
+      (await context.store.get(context.controller.operationId)).state,
+      'failed'
+    )
+  })
+
+  await t.test('complete owns dispose after persistence but before return', async () => {
+    const persisted = deferred()
+    const release = deferred()
+    const context = await createRealTransferController({
+      complete: async run => {
+        const result = await run()
+        persisted.resolve()
+        await release.promise
+        return result
+      }
+    })
+    const completing = context.controller.complete()
+    await persisted.promise
+    const disposing = context.controller.dispose()
+    await Promise.resolve()
+    release.resolve()
+    const outcomes = await Promise.allSettled([completing, disposing])
+
+    assert.deepEqual(context.terminalCalls, ['complete'])
+    assert.deepEqual(outcomes.map(outcome => outcome.status), [
+      'fulfilled',
+      'fulfilled'
+    ])
+    assert.equal(outcomes[0].value.state, 'rollback-available')
+    assert.equal(outcomes[1].value.state, 'rollback-available')
+  })
+
+  await t.test('dispose reuses a rejecting cancel transition', async () => {
+    const started = deferred()
+    const release = deferred()
+    const context = await createRealTransferController({
+      cancel: async () => {
+        started.resolve()
+        await release.promise
+        throw new Error('cancel persistence unavailable')
+      }
+    })
+    const cancelling = context.controller.cancel()
+    await started.promise
+    const disposing = context.controller.dispose()
+    release.resolve()
+    const outcomes = await Promise.allSettled([cancelling, disposing])
+
+    assert.deepEqual(context.terminalCalls, ['cancel'])
+    assert.deepEqual(outcomes.map(outcome => outcome.status), [
+      'rejected',
+      'rejected'
+    ])
+    assert.match(outcomes[0].reason.message, /persistence unavailable/)
+    assert.match(outcomes[1].reason.message, /persistence unavailable/)
+    assert.equal(
+      (await context.store.get(context.controller.operationId)).state,
+      'executing'
+    )
+  })
+})
+
+test('file-transfer terminal results reconcile and cache the authoritative runner state', async t => {
+  const previousWindow = global.window
+  const qualityEvents = []
+  global.window = {
+    pre: {
+      runGlobalAsync: async (name, context, event) => {
+        if (name === 'recordQualityEvent') qualityEvents.push({ context, event })
+        return true
+      }
+    }
+  }
+  t.after(() => {
+    if (previousWindow === undefined) delete global.window
+    else global.window = previousWindow
+  })
+
+  const terminalPhases = () => qualityEvents
+    .map(entry => entry.event.phase)
+    .filter(phase => phase !== 'started')
+
+  await t.test('successful completion is cached for complete cancel and dispose', async () => {
+    qualityEvents.length = 0
+    const context = await createRealTransferController()
+    const completing = context.controller.complete()
+    const concurrentCancel = context.controller.cancel()
+    assert.strictEqual(concurrentCancel, completing)
+    const result = await completing
+    const repeatedComplete = context.controller.complete()
+    const repeatedCancel = context.controller.cancel()
+    const repeatedDispose = context.controller.dispose()
+
+    assert.strictEqual(repeatedComplete, completing)
+    assert.strictEqual(repeatedCancel, completing)
+    assert.strictEqual(repeatedDispose, completing)
+    assert.strictEqual(await repeatedCancel, result)
+    assert.deepEqual(context.terminalCalls, ['complete'])
+    assert.deepEqual(terminalPhases(), ['completed'])
+  })
+
+  await t.test('committed completion survives a lost response and owns later calls', async () => {
+    qualityEvents.length = 0
+    const persisted = deferred()
+    const releaseResponse = deferred()
+    const context = await createRealTransferController({
+      complete: async run => {
+        await run()
+        persisted.resolve()
+        await releaseResponse.promise
+        throw new Error('completion response lost')
+      }
+    })
+    const completing = context.controller.complete()
+    await persisted.promise
+    const cancelling = context.controller.cancel()
+    const disposing = context.controller.dispose()
+    releaseResponse.resolve()
+    const result = await completing
+
+    assert.strictEqual(cancelling, completing)
+    assert.strictEqual(disposing, completing)
+    assert.equal(result.state, 'rollback-available')
+    assert.strictEqual(await context.controller.cancel(), result)
+    assert.deepEqual(context.terminalCalls, ['complete'])
+    assert.deepEqual(terminalPhases(), ['completed'])
+  })
+
+  await t.test('an uncommitted rejection leaves quality open and permits retry', async () => {
+    qualityEvents.length = 0
+    let attempts = 0
+    const context = await createRealTransferController({
+      complete: async run => {
+        attempts += 1
+        if (attempts === 1) throw new Error('completion not committed')
+        return run()
+      }
+    })
+
+    await assert.rejects(context.controller.complete(), /not committed/)
+    assert.equal(
+      (await context.store.get(context.controller.operationId)).state,
+      'executing'
+    )
+    assert.deepEqual(terminalPhases(), [])
+
+    const retried = await context.controller.complete()
+    assert.equal(retried.state, 'rollback-available')
+    assert.deepEqual(context.terminalCalls, ['complete', 'complete'])
+    assert.deepEqual(terminalPhases(), ['completed'])
+  })
+
+  await t.test('a failed state read leaves quality open and permits retry', async () => {
+    qualityEvents.length = 0
+    let reads = 0
+    let attempts = 0
+    const context = await createRealTransferController({
+      complete: async run => {
+        attempts += 1
+        if (attempts === 1) throw new Error('completion response unavailable')
+        return run()
+      },
+      getOperation: async read => {
+        reads += 1
+        if (reads === 1) throw new Error('state lookup unavailable')
+        return read()
+      }
+    })
+
+    await assert.rejects(
+      context.controller.complete(),
+      /completion response unavailable/
+    )
+    assert.deepEqual(terminalPhases(), [])
+    const retried = await context.controller.complete()
+
+    assert.equal(retried.state, 'rollback-available')
+    assert.deepEqual(context.terminalCalls, ['complete', 'complete'])
+    assert.deepEqual(terminalPhases(), ['completed'])
+  })
+
+  await t.test('a committed failed cancellation is cached after response loss', async () => {
+    qualityEvents.length = 0
+    const persisted = deferred()
+    const releaseResponse = deferred()
+    const context = await createRealTransferController({
+      cancel: async run => {
+        await run()
+        persisted.resolve()
+        await releaseResponse.promise
+        throw new Error('cancel response lost')
+      }
+    })
+    const cancelling = context.controller.cancel()
+    await persisted.promise
+    const completing = context.controller.complete()
+    releaseResponse.resolve()
+    const result = await cancelling
+
+    assert.strictEqual(completing, cancelling)
+    assert.equal(result.state, 'failed')
+    assert.strictEqual(await context.controller.dispose(), result)
+    assert.deepEqual(context.terminalCalls, ['cancel'])
+    assert.deepEqual(terminalPhases(), ['failed'])
+  })
+
+  await t.test('a committed cancelled state is cached after response loss', async () => {
+    qualityEvents.length = 0
+    const context = await createRealTransferController({
+      cancel: async (run, { id, store }) => {
+        await store.patch(id, {
+          commitPoint: false,
+          mutationStarted: false
+        })
+        await run()
+        throw new Error('cancelled response lost')
+      }
+    })
+    const result = await context.controller.cancel()
+
+    assert.equal(result.state, 'cancelled')
+    assert.strictEqual(await context.controller.complete(), result)
+    assert.deepEqual(context.terminalCalls, ['cancel'])
+    assert.deepEqual(terminalPhases(), ['cancelled'])
+  })
+
+  await t.test('a persisted completed state is cached after response loss', async () => {
+    qualityEvents.length = 0
+    const context = await createRealTransferController({
+      complete: async (run, { id, store }) => {
+        await run()
+        await store.patch(id, { state: 'completed' })
+        throw new Error('completed response lost')
+      }
+    })
+    const result = await context.controller.complete()
+
+    assert.equal(result.state, 'completed')
+    assert.strictEqual(await context.controller.dispose(), result)
+    assert.deepEqual(context.terminalCalls, ['complete'])
+    assert.deepEqual(terminalPhases(), ['completed'])
+  })
+})
+
 test('file-transfer safety controller prepares once across retries and completes by identity', async () => {
   const {
     createTransferSafetyController
@@ -1060,14 +1507,16 @@ test('file-transfer safety controller prepares once across retries and completes
   assert.match(calls[2][2].transferIdentity, /^transfer:/)
 })
 
-test('file-transfer safety controller retries lifecycle calls without replacing recovery', async () => {
+test('file-transfer safety controller retries begin with a new operation and keeps successful recovery', async () => {
   const { createTransferSafetyController } = await import(transferSafetyUrl)
   let prepareCalls = 0
   let beginCalls = 0
   let completeCalls = 0
+  const preparedIds = []
   const capability = {
     async prepareTransferSafetyOperation (plan) {
       prepareCalls += 1
+      preparedIds.push(plan.operationId)
       return { id: plan.operationId, effectKey: 'effect-retry' }
     },
     async beginTransferSafetyOperation (id) {
@@ -1096,8 +1545,9 @@ test('file-transfer safety controller retries lifecycle calls without replacing 
 
   await assert.rejects(controller.begin(), /temporary begin failure/)
   await controller.begin()
-  assert.equal(prepareCalls, 1)
+  assert.equal(prepareCalls, 2)
   assert.equal(beginCalls, 2)
+  assert.notEqual(preparedIds[0], preparedIds[1])
 
   await assert.rejects(controller.complete(), /temporary complete failure/)
   const completed = await controller.complete()
@@ -1194,8 +1644,8 @@ test('file-transfer safety controller disposes only an active external execution
 
   const completed = makeController()
   await completed.begin()
-  await completed.complete()
-  assert.equal(await completed.dispose(), null)
+  const completedResult = await completed.complete()
+  assert.strictEqual(await completed.dispose(), completedResult)
   assert.equal(cancelled, 1)
 })
 
@@ -1421,6 +1871,7 @@ test('SFTP capability exposes authoritative transfer transaction lifecycle', () 
 
   assert.match(source, /prepareTransferSafetyOperation\s*=/)
   assert.match(source, /beginTransferSafetyOperation\s*=/)
+  assert.match(source, /getTransferSafetyOperation\s*=/)
   assert.match(source, /completeTransferSafetyOperation\s*=/)
   assert.match(source, /cancelTransferSafetyOperation\s*=/)
   assert.match(source, /fileTransferSafety:\s*true/)

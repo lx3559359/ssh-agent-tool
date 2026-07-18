@@ -353,7 +353,8 @@ test('Agent tools expose and route run_local_cli through confirmation and IPC', 
   )
 
   assert.match(source, /name:\s*'run_local_cli'/)
-  assert.match(source, /case 'run_local_cli':[\s\S]*confirmAgentToolExecution/)
+  assert.match(source, /prepareResolvedAgentTool[\s\S]*confirmRiskTransaction/)
+  assert.match(source, /isAgentCommandTool\(toolName\)/)
   assert.match(source, /case 'run_local_cli':[\s\S]*runGlobalAsync\('runLocalCli'/)
 })
 

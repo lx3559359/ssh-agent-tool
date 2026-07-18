@@ -15,10 +15,6 @@ pack.scripts = {
   postinstall: 'node npm/install.js',
   postpublish: 'node bin/postpublish.js'
 }
-delete pack.langugeRepo
-delete pack.privacyNoticeLink
-delete pack.knownIssuesLink
-delete pack.sponsorLink
 delete pack.releases
 delete pack.standard
 const from = resolve(__dirname, '../../package.json')

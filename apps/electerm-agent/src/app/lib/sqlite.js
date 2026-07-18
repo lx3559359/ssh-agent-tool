@@ -18,7 +18,8 @@ const ENC_TABLES = new Set([
   'terminalCommandHistory',
   'aiChatHistory',
   'safetyOperations',
-  'agentTasks'
+  'agentTasks',
+  'agentArtifacts'
 ])
 
 // Within the 'data' table, only this specific record is encrypted
@@ -64,6 +65,7 @@ function createDb (appPath, defaultUserName, { enc, dec } = {}) {
     'aiChatHistory',
     'safetyOperations',
     'agentTasks',
+    'agentArtifacts',
     'autoRunWidgets'
   ]
 
@@ -181,8 +183,20 @@ function createDb (appPath, defaultUserName, { enc, dec } = {}) {
       const { upsert = false } = options
       const qid = query._id || query.id
       const newData = updateObj.$set || updateObj
+      let currentData = {}
+      if (updateObj.$set && !shouldEncForRow(dbName, qid)) {
+        const currentRow = db.prepare(
+          `SELECT * FROM \`${dbName}\` WHERE _id = ? LIMIT 1`
+        ).get(qid)
+        const current = toDoc(currentRow, dbName)
+        if (current) {
+          const { _id: _ignored, ...payload } = current
+          currentData = payload
+        }
+      }
       const { _id, data } = toRow({
         _id: qid,
+        ...currentData,
         ...newData
       }, dbName)
       let stmt

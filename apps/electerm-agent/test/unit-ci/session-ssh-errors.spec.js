@@ -6,7 +6,8 @@ const Module = require('module')
 const sessionSshPath = require.resolve('../../src/app/server/session-ssh')
 const {
   normalizeSshConnectionError,
-  shouldLogSshConnectErrorAsError
+  shouldLogSshConnectErrorAsError,
+  reorderConnectionHoppings
 } = require(sessionSshPath)
 
 async function withSessionSshMocks ({ proxySock, clientScenarios = [] }, run) {
@@ -150,6 +151,30 @@ describe('session-ssh production session error boundary', () => {
 })
 
 describe('session-ssh connection error diagnostics', () => {
+  test('preserves the final target certificate after jump-host reordering', () => {
+    const options = {
+      host: 'target.example.com',
+      port: 22,
+      username: 'target-user',
+      privateKey: 'target-private-key',
+      certificate: 'target-openssh-certificate',
+      hasHopping: true,
+      connectionHoppings: [{
+        host: 'jump.example.com',
+        port: 22,
+        username: 'jump-user',
+        certificate: 'jump-openssh-certificate'
+      }]
+    }
+
+    reorderConnectionHoppings(options)
+
+    assert.equal(options.host, 'jump.example.com')
+    assert.equal(options.certificate, 'jump-openssh-certificate')
+    assert.equal(options.connectionHoppings[0].host, 'target.example.com')
+    assert.equal(options.connectionHoppings[0].certificate, 'target-openssh-certificate')
+  })
+
   test('does not log expected two factor auth retry as an ssh error', () => {
     assert.equal(shouldLogSshConnectErrorAsError(new Error('2FA_RETRY')), false)
     assert.equal(shouldLogSshConnectErrorAsError(new Error('connect ECONNREFUSED 10.0.1.23:22')), true)

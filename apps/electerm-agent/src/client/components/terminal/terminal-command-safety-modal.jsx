@@ -8,6 +8,14 @@ function modalTitle (kind) {
   return '高风险命令确认'
 }
 
+function serializeExpected (step) {
+  try {
+    return JSON.stringify(step.expected)
+  } catch {
+    return '无法序列化'
+  }
+}
+
 export default function TerminalCommandSafetyModal ({
   open,
   confirmation,
@@ -18,6 +26,8 @@ export default function TerminalCommandSafetyModal ({
 }) {
   if (!open || !confirmation) return null
   const reversible = confirmation.kind === 'reversible'
+  const riskContext = confirmation.classification?.riskContext
+  const endpoint = confirmation.classification?.endpoint
   const executeText = reversible
     ? '创建恢复点并执行'
     : confirmation.kind === 'retry'
@@ -69,6 +79,53 @@ export default function TerminalCommandSafetyModal ({
       <div className={`terminal-command-safety-kind is-${confirmation.kind}`}>
         {detail}
       </div>
+      {riskContext
+        ? (
+          <div className='terminal-command-safety-risk-context'>
+            {endpoint
+              ? (
+                <div className='terminal-command-safety-endpoint'>
+                  <div>
+                    <strong>绑定 SSH：</strong>
+                    {endpoint.username}@{endpoint.host}:{endpoint.port}
+                  </div>
+                  <div>
+                    <strong>主机指纹：</strong>
+                    <code>{endpoint.hostKeyFingerprint}</code>
+                  </div>
+                </div>
+                )
+              : null}
+            <div><strong>目的：</strong>{riskContext.purpose}</div>
+            <div>
+              <strong>影响目标：</strong>
+              {riskContext.impactTargets.join('、')}
+            </div>
+            <div>
+              <strong>执行后验证：</strong>
+              {riskContext.verification.length === 0 ? '无额外条件' : null}
+            </div>
+            {riskContext.verification.length > 0
+              ? (
+                <ul>
+                  {riskContext.verification.map((step, index) => (
+                    <li key={`${step.name}-${index}`}>
+                      {step.name} <code>{JSON.stringify(step.args)}</code>
+                      {step.expected === undefined
+                        ? '；无额外条件'
+                        : (
+                          <>
+                            ；期望 <code>{serializeExpected(step)}</code>
+                          </>
+                          )}
+                    </li>
+                  ))}
+                </ul>
+                )
+              : null}
+          </div>
+          )
+        : null}
       <pre className='terminal-command-safety-command'>{confirmation.command}</pre>
       {error
         ? <div className='terminal-command-safety-error'>{error}</div>

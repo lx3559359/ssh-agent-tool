@@ -2,18 +2,24 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
+const { spawnSync } = require('node:child_process')
 
 const {
+  assertSpawnSuccess,
   buildLocalReleaseAssetReport,
   buildReleaseTag,
   buildReleaseAssetReport,
   buildValidatedLocalReleaseAssets,
+  getAllowedGitHubReleaseAssetNames,
   getRequiredReleaseAssetNames,
   selectUnexpectedReleaseAssets,
   selectReleaseAssets,
   buildGitHubReleaseCommands,
   createSpawnOptions
 } = require(path.resolve(__dirname, '../../build/bin/github-release-utils'))
+const {
+  executeGitHubReleaseCommands
+} = require(path.resolve(__dirname, '../../build/bin/release-github'))
 const {
   buildUpdateApprovalManifest,
   validateUpdateApprovalManifest
@@ -219,6 +225,16 @@ test('portable zip is not required for online update asset validation', () => {
   assert.equal(names.some(name => name.includes('portable.zip')), false)
 })
 
+test('GitHub Release assets require the verified portable zip in addition to update assets', () => {
+  assert.deepEqual(
+    getAllowedGitHubReleaseAssetNames('3.15.105'),
+    [
+      ...getRequiredReleaseAssetNames('3.15.105'),
+      'ShellPilot-3.15.105-win-x64-portable.zip'
+    ]
+  )
+})
+
 test('local Windows portable build scripts create zip packages', () => {
   const ciSource = fs.readFileSync(
     path.resolve(__dirname, '../../build/bin/prepare-win-portable-ci.js'),
@@ -249,7 +265,7 @@ test('release verification scripts accept an explicit Windows release architectu
   assert.match(localVerifySource, /AIGSHELL_RELEASE_ARCH/)
   assert.match(localVerifySource, /buildLocalReleaseAssetReport\(\{[\s\S]*arch:\s*releaseArch/s)
   assert.match(githubVerifySource, /AIGSHELL_RELEASE_ARCH/)
-  assert.match(githubVerifySource, /getRequiredReleaseAssetNames\(pack\.version,\s*\{[\s\S]*arch:\s*releaseArch/s)
+  assert.match(githubVerifySource, /getAllowedGitHubReleaseAssetNames\(pack\.version,\s*\{[\s\S]*arch:\s*releaseArch/s)
   assert.match(githubVerifySource, /buildReleaseAssetReport\(\{[\s\S]*arch:\s*releaseArch/s)
 })
 
@@ -497,6 +513,9 @@ test('selects unexpected release assets without deleting update files', () => {
     { name: 'ShellPilot-3.15.105-win-x64-installer.exe.blockmap', id: 'blockmap' },
     { name: 'latest.yml', id: 'latest' },
     { name: 'shellpilot-local.yml', id: 'legacy-channel' },
+    { name: 'ShellPilot-3.15.105-win-x64-portable.zip', id: 'portable' },
+    { name: 'ShellPilot-3.15.105-win-x64.appx', id: 'appx' },
+    { name: 'ShellPilot-3.15.105-win-x64.tar.gz', id: 'tar' },
     { name: 'AIGShell.exe', id: 'loose-exe' },
     { name: 'app.asar', id: 'asar' },
     { name: 'windows-electerm-agent.yml', id: 'legacy-channel' }
@@ -505,6 +524,8 @@ test('selects unexpected release assets without deleting update files', () => {
   assert.deepEqual(
     selectUnexpectedReleaseAssets(assets, '3.15.105'),
     [
+      { name: 'ShellPilot-3.15.105-win-x64.appx', id: 'appx' },
+      { name: 'ShellPilot-3.15.105-win-x64.tar.gz', id: 'tar' },
       { name: 'AIGShell.exe', id: 'loose-exe' },
       { name: 'app.asar', id: 'asar' },
       { name: 'windows-electerm-agent.yml', id: 'legacy-channel' }
@@ -521,7 +542,8 @@ test('builds a release asset report for local and remote update files', () => {
     { name: 'aigshell-update.json', size: 88 },
     { name: 'shellpilot-update.json', size: 88 },
     { name: 'checksums.json', size: 180 },
-    { name: 'shellpilot-release.json', size: 320 }
+    { name: 'shellpilot-release.json', size: 320 },
+    { name: 'ShellPilot-3.15.105-win-x64-portable.zip', size: 240 }
   ]
   const remoteAssets = [
     { name: 'ShellPilot-3.15.105-win-x64-installer.exe', size: 100 },
@@ -531,6 +553,7 @@ test('builds a release asset report for local and remote update files', () => {
     { name: 'shellpilot-update.json', size: 88 },
     { name: 'checksums.json', size: 180 },
     { name: 'shellpilot-release.json', size: 319 },
+    { name: 'ShellPilot-3.15.105-win-x64-portable.zip', size: 240 },
     { name: 'AIGShell.exe', size: 200 }
   ]
 
@@ -549,7 +572,8 @@ test('builds a release asset report for local and remote update files', () => {
         'aigshell-update.json',
         'shellpilot-update.json',
         'checksums.json',
-        'shellpilot-release.json'
+        'shellpilot-release.json',
+        'ShellPilot-3.15.105-win-x64-portable.zip'
       ],
       missingLocal: [],
       missingRemote: ['latest.yml'],
@@ -582,7 +606,9 @@ test('reports ok when local and remote update assets match exactly', () => {
     { name: 'aigshell-update.json', size: 88 },
     { name: 'shellpilot-update.json', size: 88 },
     { name: 'checksums.json', size: 180 },
-    { name: 'shellpilot-release.json', size: 320 }
+    { name: 'shellpilot-release.json', size: 320 },
+    { name: 'ShellPilot-3.15.105-win-x64-portable.zip', size: 240 },
+    { name: 'ShellPilot-3.15.105-win-x64-portable.zip', size: 240 }
   ]
 
   assert.equal(
@@ -605,6 +631,7 @@ test('reports local update assets as valid only when all required files are pres
     { name: 'shellpilot-update.json', size: 88 },
     { name: 'checksums.json', size: 180 },
     { name: 'shellpilot-release.json', size: 320 },
+    { name: 'ShellPilot-3.15.105-win-x64-portable.zip', size: 240 },
     { name: 'win-unpacked', size: 0 }
   ]
 
@@ -622,7 +649,8 @@ test('reports local update assets as valid only when all required files are pres
         'aigshell-update.json',
         'shellpilot-update.json',
         'checksums.json',
-        'shellpilot-release.json'
+        'shellpilot-release.json',
+        'ShellPilot-3.15.105-win-x64-portable.zip'
       ],
       missingLocal: [],
       emptyLocal: [],
@@ -651,7 +679,8 @@ test('reports missing and empty local update assets before upload', () => {
         'aigshell-update.json',
         'shellpilot-update.json',
         'checksums.json',
-        'shellpilot-release.json'
+        'shellpilot-release.json',
+        'ShellPilot-3.15.105-win-x64-portable.zip'
       ],
       missingLocal: [
         'ShellPilot-3.15.105-win-x64-installer.exe.blockmap',
@@ -659,7 +688,8 @@ test('reports missing and empty local update assets before upload', () => {
         'aigshell-update.json',
         'shellpilot-update.json',
         'checksums.json',
-        'shellpilot-release.json'
+        'shellpilot-release.json',
+        'ShellPilot-3.15.105-win-x64-portable.zip'
       ],
       emptyLocal: ['ShellPilot-3.15.105-win-x64-installer.exe'],
       ok: false
@@ -676,7 +706,8 @@ test('builds validated local release asset paths only when update files are read
     { name: 'aigshell-update.json', size: 88 },
     { name: 'shellpilot-update.json', size: 88 },
     { name: 'checksums.json', size: 180 },
-    { name: 'shellpilot-release.json', size: 320 }
+    { name: 'shellpilot-release.json', size: 320 },
+    { name: 'ShellPilot-3.15.105-win-x64-portable.zip', size: 240 }
   ]
 
   assert.deepEqual(
@@ -693,7 +724,8 @@ test('builds validated local release asset paths only when update files are read
       path.join('dist', 'aigshell-update.json'),
       path.join('dist', 'shellpilot-update.json'),
       path.join('dist', 'checksums.json'),
-      path.join('dist', 'shellpilot-release.json')
+      path.join('dist', 'shellpilot-release.json'),
+      path.join('dist', 'ShellPilot-3.15.105-win-x64-portable.zip')
     ]
   )
 
@@ -724,15 +756,64 @@ test('creates deterministic gh commands for release create and upload', () => {
       'dist/aigshell-update.json',
       'dist/shellpilot-update.json',
       'dist/checksums.json',
-      'dist/shellpilot-release.json'
+      'dist/shellpilot-release.json',
+      'dist/ShellPilot-3.15.105-win-x64-portable.zip'
     ]
   })
 
   assert.deepEqual(commands, [
     ['gh', ['release', 'view', 'v3.15.105', '--repo', 'lx3559359/ssh-agent-tool']],
-    ['gh', ['release', 'create', 'v3.15.105', '--repo', 'lx3559359/ssh-agent-tool', '--title', 'ShellPilot v3.15.105', '--notes', 'ShellPilot Windows release']],
-    ['gh', ['release', 'upload', 'v3.15.105', 'dist/ShellPilot-3.15.105-win-x64-installer.exe', 'dist/ShellPilot-3.15.105-win-x64-installer.exe.blockmap', 'dist/latest.yml', 'dist/shellpilot-local.yml', 'dist/aigshell-update.json', 'dist/shellpilot-update.json', 'dist/checksums.json', 'dist/shellpilot-release.json', '--repo', 'lx3559359/ssh-agent-tool', '--clobber']]
+    ['gh', ['release', 'create', 'v3.15.105', '--repo', 'lx3559359/ssh-agent-tool', '--draft', '--title', 'ShellPilot v3.15.105', '--notes', 'ShellPilot Windows release']],
+    ['gh', ['release', 'edit', 'v3.15.105', '--repo', 'lx3559359/ssh-agent-tool', '--title', 'ShellPilot v3.15.105', '--notes', 'ShellPilot Windows release']],
+    ['gh', ['release', 'upload', 'v3.15.105', 'dist/ShellPilot-3.15.105-win-x64-installer.exe', 'dist/ShellPilot-3.15.105-win-x64-installer.exe.blockmap', 'dist/latest.yml', 'dist/shellpilot-local.yml', 'dist/aigshell-update.json', 'dist/shellpilot-update.json', 'dist/checksums.json', 'dist/shellpilot-release.json', 'dist/ShellPilot-3.15.105-win-x64-portable.zip', '--repo', 'lx3559359/ssh-agent-tool', '--clobber']],
+    ['gh', ['release', 'edit', 'v3.15.105', '--repo', 'lx3559359/ssh-agent-tool', '--draft=false']]
   ])
+})
+
+test('spawn result validation fails closed for ENOENT null and non-integer statuses', () => {
+  const missing = spawnSync('gh', ['--version'], {
+    env: { ...process.env, PATH: '' },
+    encoding: 'utf8'
+  })
+  assert.ok(missing.error)
+  assert.throws(() => assertSpawnSuccess(missing, 'gh', ['--version']), /ENOENT|spawn/i)
+  assert.throws(() => assertSpawnSuccess({ status: null }, 'gh', ['release']), /status/i)
+  assert.throws(() => assertSpawnSuccess({ status: '0' }, 'gh', ['release']), /status/i)
+  assert.throws(() => assertSpawnSuccess({ status: 3, stderr: 'edit failed' }, 'gh', ['release', 'edit']), /edit failed/)
+  assert.equal(assertSpawnSuccess({ status: 0 }, 'gh', ['release']), 0)
+})
+
+test('existing draft releases update notes before upload and publish only after upload succeeds', () => {
+  const commands = buildGitHubReleaseCommands({
+    repo: 'owner/repo',
+    tag: 'v0.4.6',
+    title: 'ShellPilot v0.4.6',
+    notes: '# ShellPilot v0.4.6',
+    assets: ['dist/asset.exe']
+  })
+  const calls = []
+  const spawn = (command, args) => {
+    calls.push([command, args])
+    return { status: 0 }
+  }
+
+  executeGitHubReleaseCommands(commands, spawn)
+  assert.deepEqual(calls.map(call => call[1].slice(0, 2)), [
+    ['release', 'view'],
+    ['release', 'edit'],
+    ['release', 'upload'],
+    ['release', 'edit']
+  ])
+  assert.ok(calls[1][1].includes('# ShellPilot v0.4.6'))
+  assert.ok(calls[3][1].includes('--draft=false'))
+
+  assert.throws(
+    () => executeGitHubReleaseCommands(commands, (command, args) => ({
+      status: args.includes('--draft=false') ? 4 : 0,
+      stderr: args.includes('--draft=false') ? 'publish failed' : ''
+    })),
+    /publish failed/
+  )
 })
 
 test('uses direct spawn options so gh arguments with spaces stay intact on Windows', () => {

@@ -172,7 +172,7 @@ export default function SyncForm (props) {
           title={
             <span>
               {e('shellpilotGiteeSyncWarning')}
-              <Link to='https://github.com/electerm/electerm/wiki/gitee-data-sync-warning' className='mg1l'>
+              <Link to='https://github.com/lx3559359/ssh-agent-tool/blob/master/docs/USER_GUIDE_ZH.md' className='mg1l'>
                 {e('shellpilotDocumentation')}
               </Link>
               .

@@ -31,14 +31,17 @@ function installProcessErrorLogging ({
   processRef = process,
   log,
   consoleRef = console,
-  gpuSuggestion = ''
+  gpuSuggestion = '',
+  onAbnormalExit = () => {}
 }) {
   processRef.on('uncaughtException', (error) => {
+    try { onAbnormalExit('main-uncaught-exception') } catch {}
     log.error('main-process uncaughtException', stringifyError(error))
     maybePrintGpuSuggestion(error, consoleRef, gpuSuggestion)
   })
 
   processRef.on('unhandledRejection', (reason) => {
+    try { onAbnormalExit('main-unhandled-rejection') } catch {}
     log.error('main-process unhandledRejection', stringifyError(reason))
     maybePrintGpuSuggestion(reason, consoleRef, gpuSuggestion)
   })
@@ -52,6 +55,9 @@ function installProcessErrorLogging ({
 
   app.on('render-process-gone', (event, webContents, details) => {
     log.error('electron render-process-gone', details)
+    if (['crashed', 'abnormal-exit', 'killed', 'oom'].includes(details?.reason)) {
+      try { onAbnormalExit(`renderer-${details.reason}`) } catch {}
+    }
     if (['crashed', 'abnormal-exit', 'killed', 'oom'].includes(details?.reason) && gpuSuggestion) {
       consoleRef.error(gpuSuggestion)
     }

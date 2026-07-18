@@ -7,6 +7,117 @@ const orchestrationUrl = pathToFileURL(path.resolve(
   __dirname,
   '../../src/client/common/safety-transactions/command-orchestration.js'
 )).href
+const classifierUrl = pathToFileURL(path.resolve(
+  __dirname,
+  '../../src/client/common/safety-transactions/command-classifier.js'
+)).href
+
+test('classifies limited ip address aliases as readonly', async () => {
+  const { classifyCommand } = await import(classifierUrl)
+
+  assert.equal(classifyCommand('ip a').risk, 'readonly')
+  assert.equal(classifyCommand('ip a show dev eth0').risk, 'readonly')
+  assert.equal(classifyCommand('ip -brief address').risk, 'readonly')
+  assert.notEqual(
+    classifyCommand('ip -brief address add 192.0.2.2/24 dev eth0').risk,
+    'readonly'
+  )
+})
+
+function trustedCommand (command) {
+  const text = String(command)
+  if (text.startsWith('/')) return text
+  return text.replace(/^([A-Za-z0-9_-]+)/, '/usr/bin/$1')
+}
+
+test('git readonly classification accepts only query subcommands and side-effect-free options', async () => {
+  const { classifyCommand } = await import(classifierUrl)
+
+  for (const command of [
+    'git status --short',
+    'git log --oneline -5',
+    'git show --stat HEAD',
+    'git diff --stat',
+    'git branch --all',
+    'git remote',
+    'git remote -v',
+    'git remote show origin',
+    'git remote -v show -n origin',
+    'git remote get-url origin',
+    'git remote get-url --push --all origin'
+  ]) {
+    assert.equal(classifyCommand(trustedCommand(command)).risk, 'readonly', command)
+  }
+
+  for (const command of [
+    'git diff --output=/tmp/diff.txt',
+    'git diff --output /tmp/diff.txt',
+    'git log --output=/tmp/log.txt',
+    'git show --output /tmp/show.txt HEAD',
+    'git diff --ext-diff',
+    'git log --textconv',
+    'git branch new-branch',
+    'git branch -D old-branch',
+    'git tag v1.0.0',
+    'git remote add origin https://example.test/repo.git',
+    'git remote remove origin',
+    'git remote rename origin upstream',
+    'git remote set-head origin --auto',
+    'git remote set-branches origin main',
+    'git remote set-url origin https://example.test/repo.git',
+    'git remote prune origin',
+    'git remote update origin'
+  ]) {
+    const classification = classifyCommand(trustedCommand(command))
+    assert.notEqual(classification.risk, 'readonly', command)
+    assert.equal(classification.requiresConfirmation, true, command)
+  }
+})
+
+test('journal and utility query allowlists reject state-changing option combinations', async () => {
+  const { classifyCommand } = await import(classifierUrl)
+
+  for (const command of [
+    'journalctl --cursor-file=/tmp/cursor',
+    'journalctl --rotate',
+    'journalctl --vacuum-time=7d',
+    'journalctl --vacuum-size=100M',
+    'journalctl --vacuum-files=2',
+    'journalctl --flush',
+    'journalctl --sync',
+    'journalctl --relinquish-var',
+    'journalctl --smart-relinquish-var',
+    'journalctl --update-catalog',
+    'less -o /tmp/less.log README.md',
+    'less -O/tmp/less.log README.md',
+    'less --log-file=/tmp/less.log README.md',
+    'less --log=/tmp/less.log README.md',
+    "less '+!touch /tmp/less-owned' README.md",
+    'firewall-cmd --state --add-port=443/tcp',
+    'firewall-cmd --list-all --remove-service=ssh',
+    'ufw status enable',
+    'ss -K dst 10.0.0.8',
+    'find /tmp -delete',
+    'find /tmp -exec touch /tmp/created {} \\;'
+  ]) {
+    const classification = classifyCommand(trustedCommand(command))
+    assert.notEqual(classification.risk, 'readonly', command)
+    assert.equal(classification.requiresConfirmation, true, command)
+  }
+
+  for (const command of [
+    'journalctl --since today --no-pager',
+    'less README.md',
+    'firewall-cmd --state',
+    'firewall-cmd --zone=public --list-all',
+    'firewall-cmd --zone public --query-port 443/tcp',
+    'ufw status verbose',
+    'ss -ltn',
+    'find /tmp -name "*.log"'
+  ]) {
+    assert.equal(classifyCommand(trustedCommand(command)).risk, 'readonly', command)
+  }
+})
 
 function deferred () {
   let resolveDeferred

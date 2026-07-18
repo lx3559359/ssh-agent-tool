@@ -143,16 +143,16 @@ test('quick command context fills safe editable command defaults from the active
   } = await import(contextUrl)
 
   const context = buildQuickCommandContext({
-    host: '23.94.104.203',
+    host: '192.0.2.44',
     port: 2222,
     username: 'root',
     title: 'prod-web-01'
   })
 
-  assert.equal(context.host, '23.94.104.203')
+  assert.equal(context.host, '192.0.2.44')
   assert.equal(context.port, '2222')
   assert.equal(context.username, 'root')
-  assert.match(context.capturePath, /\/tmp\/shellpilot-capture-23-94-104-203-/)
+  assert.match(context.capturePath, /\/tmp\/shellpilot-capture-192-0-2-44-/)
   assert.equal(context.packetFilter, 'tcp')
   assert.equal(context.packetCount, '50')
 
@@ -179,7 +179,7 @@ test('packet capture command preview does not pretend success when tcpdump is mi
   const packet = getServerMaintenanceQuickCommands()
     .find(item => item.id === 'builtin-server-packet-capture')
   const context = buildQuickCommandContext({
-    host: '23.94.104.203',
+    host: '192.0.2.44',
     port: 22,
     username: 'root'
   })
@@ -204,7 +204,7 @@ test('packet capture form params build a concrete tcpdump command', async () => 
   const packet = getServerMaintenanceQuickCommands()
     .find(item => item.id === 'builtin-server-packet-capture')
   const context = buildQuickCommandContext({
-    host: '23.94.104.203',
+    host: '192.0.2.44',
     port: 22,
     username: 'root'
   })
@@ -259,7 +259,7 @@ test('editable maintenance commands use form params instead of raw placeholders'
 
   const commands = getServerMaintenanceQuickCommands()
   const context = buildQuickCommandContext({
-    host: '23.94.104.203',
+    host: '192.0.2.44',
     port: 22,
     username: 'root'
   })

@@ -60,7 +60,7 @@ export default function ProfileFormElem (props) {
     form,
     store: props.store
   }
-  const profileDefaultWikiLink = 'https://github.com/electerm/electerm/wiki/Default-Profile'
+  const profileDefaultWikiLink = 'https://github.com/lx3559359/ssh-agent-tool/blob/master/docs/USER_GUIDE_ZH.md'
   const defaultLabel = (
     <span>
       {e('default')} <HelpIcon link={profileDefaultWikiLink} />

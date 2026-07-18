@@ -1,3 +1,5 @@
+import { normalizeAIChatRole } from './ai-role.js'
+
 const PROFILE_KEYS = [
   'id',
   'nameAI',
@@ -20,6 +22,7 @@ const PROFILE_KEYS = [
 ]
 
 const COMPAT_KEYS = PROFILE_KEYS.filter(key => key !== 'id')
+const LEGACY_PROFILE_ID = 'ai-profile-legacy'
 
 export function createAICredentialRevision () {
   if (globalThis.crypto?.randomUUID) {
@@ -92,6 +95,7 @@ export function normalizeAIProfile (profile = {}) {
     }
   }
   next.id = next.id || createProfileId()
+  next.roleAI = normalizeAIChatRole(next.roleAI)
   // Keep persisted names language-neutral while retaining legacy technical
   // fallbacks. Only a profile with no name, model, or URL uses localized copy
   // in getAIProfileOptions.
@@ -108,7 +112,9 @@ function hasUsableProfileFields (profile = {}) {
 }
 
 function getLegacyProfile (config = {}) {
-  const legacy = {}
+  const legacy = {
+    id: config.activeAIProfileId || LEGACY_PROFILE_ID
+  }
   for (const key of COMPAT_KEYS) {
     if (key in config) {
       legacy[key] = config[key]
@@ -374,7 +380,10 @@ export function getAIModelStatus (config = {}, translate, healthState) {
       status: 'unconfigured',
       label: translated(translate, 'shellpilotAiUnconfigured', 'Not Configured'),
       className: 'not-configured',
-      title: translated(translate, 'shellpilotAiConfigureHint', 'Enter an API address and API key first')
+      title: translated(translate, 'shellpilotAiConfigureHint', 'Enter an API address and API key first'),
+      latencyMs: null,
+      checkedAt: '',
+      failureReason: ''
     }
   }
   const hasLiveState = Boolean(healthState?.status)
@@ -384,16 +393,32 @@ export function getAIModelStatus (config = {}, translate, healthState) {
     ? 'stale'
     : normalizeHealthStatus(healthState?.status || active.aiStatus)
   const [labelKey, labelFallback, titleKey, titleFallback] = HEALTH_STATUS_META[status]
+  const checkedAt = healthState?.checkedAt || active.aiStatusAt
+  const checkedTime = checkedAt
+    ? new Date(checkedAt).toLocaleString()
+    : ''
+  const rawLatency = healthState?.latencyMs
+  const latency = rawLatency === null || rawLatency === undefined || rawLatency === ''
+    ? Number.NaN
+    : Number(rawLatency)
+  const details = [
+    Number.isFinite(latency) && latency >= 0 ? `响应 ${Math.round(latency)} ms` : '',
+    checkedTime ? `最近检测 ${checkedTime}` : ''
+  ].filter(Boolean).join(' · ')
+  const statusTitle = healthState?.message || active.aiStatusMessage || translated(
+    translate,
+    statusExpired ? 'shellpilotAiConfigChanged' : titleKey,
+    statusExpired
+      ? 'The model configuration changed; check it again'
+      : titleFallback
+  )
   return {
     status,
     label: translated(translate, labelKey, labelFallback),
     className: status,
-    title: healthState?.message || active.aiStatusMessage || translated(
-      translate,
-      statusExpired ? 'shellpilotAiConfigChanged' : titleKey,
-      statusExpired
-        ? 'The model configuration changed; check it again'
-        : titleFallback
-    )
+    latencyMs: Number.isFinite(latency) && latency >= 0 ? Math.round(latency) : null,
+    checkedAt: checkedAt || '',
+    failureReason: status.endsWith('error') ? statusTitle : '',
+    title: details ? `${statusTitle}\n${details}` : statusTitle
   }
 }

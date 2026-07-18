@@ -78,7 +78,7 @@ export default function renderQm (form) {
       >
         <HolderOutlined className='mg1r drag' />
 
-        <Space.Addon>{e('delay')}</Space.Addon>
+        <Space.Addon>{e('shellpilotQuickCommandDelay')}</Space.Addon>
         <FormItem
           label=''
           name={[field.name, 'delay']}
