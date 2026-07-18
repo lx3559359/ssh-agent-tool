@@ -4,10 +4,38 @@
 
 const activeRunCmdExecutions = Symbol('activeRunCmdExecutions')
 
+const DEFAULT_RUN_CMD_TIMEOUT_MS = 15000
+const MAX_RUN_CMD_TIMEOUT_MS = 60000
+const DEFAULT_RUN_CMD_OUTPUT_BYTES = 32 * 1024
+const MAX_RUN_CMD_OUTPUT_BYTES = 128 * 1024
+
+function normalizeRunCmdBound (value, fallback, maximum) {
+  if (value === undefined) return undefined
+  const number = Number(value)
+  if (!Number.isFinite(number) || number <= 0) return fallback
+  return Math.min(maximum, Math.max(1, Math.floor(number)))
+}
+
 function normalizeMaxOutputBytes (value) {
+  return normalizeRunCmdBound(
+    value,
+    DEFAULT_RUN_CMD_OUTPUT_BYTES,
+    MAX_RUN_CMD_OUTPUT_BYTES
+  )
+}
+
+function normalizeTimeoutMs (value) {
+  return normalizeRunCmdBound(
+    value,
+    DEFAULT_RUN_CMD_TIMEOUT_MS,
+    MAX_RUN_CMD_TIMEOUT_MS
+  )
+}
+
+function normalizeCollectorLimit (value) {
   const bytes = Number(value)
-  if (!Number.isFinite(bytes) || bytes <= 0) return undefined
-  return Math.max(1, Math.floor(bytes))
+  if (!Number.isFinite(bytes) || bytes < 0) return undefined
+  return Math.max(0, Math.floor(bytes))
 }
 
 function utf8SafeEnd (buffer) {
@@ -43,8 +71,10 @@ function outputTruncationSeparator (limit) {
 }
 
 function createBoundedOutputCollector (maxOutputBytes) {
-  const limit = normalizeMaxOutputBytes(maxOutputBytes)
-  if (!limit) throw new Error('maxOutputBytes must be a positive finite number.')
+  const limit = normalizeCollectorLimit(maxOutputBytes)
+  if (limit === undefined) {
+    throw new Error('maxOutputBytes must be a non-negative finite number.')
+  }
   const storage = Buffer.alloc(limit)
   const headCapacity = Math.floor(limit / 2)
   const tailCapacity = limit - headCapacity
@@ -226,6 +256,7 @@ exports.commonExtends = function (Cls) {
     return new Promise((resolve, reject) => {
       const client = conn || this.conn || this.client
       const maxOutputBytes = normalizeMaxOutputBytes(options.maxOutputBytes)
+      const timeoutMs = normalizeTimeoutMs(options.timeoutMs)
       const stdoutLimit = maxOutputBytes
         ? Math.max(1, Math.ceil(maxOutputBytes * 0.75))
         : 0
@@ -233,7 +264,7 @@ exports.commonExtends = function (Cls) {
       const stdoutCollector = stdoutLimit
         ? createBoundedOutputCollector(stdoutLimit)
         : null
-      const stderrCollector = stderrLimit
+      const stderrCollector = maxOutputBytes
         ? createBoundedOutputCollector(stderrLimit)
         : null
       let r = ''
@@ -280,8 +311,7 @@ exports.commonExtends = function (Cls) {
           }
           if (stream) {
             entry.stream = stream
-            const timeoutMs = Number(options.timeoutMs)
-            if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
+            if (timeoutMs) {
               timer = setTimeout(() => {
                 const error = new Error(`Command timed out after ${timeoutMs}ms`)
                 error.name = 'RunCmdTimeoutError'

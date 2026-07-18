@@ -9,6 +9,9 @@ import {
 } from './agent-runtime-context.js'
 import { classifyAgentCall } from './agent-tool-policy.js'
 
+const MAX_AGENT_READONLY_TIMEOUT_MS = 15000
+const MAX_AGENT_READONLY_OUTPUT_BYTES = 32 * 1024
+
 async function runCmd (...args) {
   const terminalApis = await import('../terminal/terminal-apis.js')
   return terminalApis.runCmd(...args)
@@ -41,6 +44,12 @@ function endpointSnapshot (endpoint) {
   return Object.freeze({ ...projectEndpoint(endpoint) })
 }
 
+function normalizeAgentBound (value, maximum) {
+  const number = Number(value)
+  if (!Number.isFinite(number) || number <= 0) return maximum
+  return Math.min(maximum, Math.max(1, Math.floor(number)))
+}
+
 export function createAgentReadonlyExecutionId () {
   return createTrustedOperationId('agent-readonly')
 }
@@ -71,17 +80,27 @@ export async function executeAgentReadonlyCommand ({
   const capturedEndpoint = endpointSnapshot(endpoint)
   const executionId = createExecutionId()
   const startedAt = now()
-  const clearCancellation = registerAgentCancellation(runtime, () => (
-    cancel(capturedEndpoint.pid, executionId)
-  ))
+  const options = {
+    timeoutMs: normalizeAgentBound(
+      timeoutMs,
+      MAX_AGENT_READONLY_TIMEOUT_MS
+    ),
+    maxOutputBytes: normalizeAgentBound(
+      maxOutputBytes,
+      MAX_AGENT_READONLY_OUTPUT_BYTES
+    ),
+    executionId,
+    ...(runtime?.signal ? { signal: runtime.signal } : {})
+  }
+  let dispatched = false
+  const clearCancellation = registerAgentCancellation(runtime, () => {
+    if (!dispatched) return undefined
+    return cancel(capturedEndpoint.pid, executionId)
+  })
 
   try {
-    const options = {
-      timeoutMs,
-      maxOutputBytes,
-      executionId,
-      ...(runtime?.signal ? { signal: runtime.signal } : {})
-    }
+    assertAgentRuntimeActive(runtime)
+    dispatched = true
     const raw = await run(
       capturedEndpoint.pid,
       command,

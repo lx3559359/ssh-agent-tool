@@ -146,6 +146,43 @@ test('rejects an already cancelled Agent runtime without dispatch', async () => 
   assert.equal(runCalls, 0)
 })
 
+test('cancellation during registration neither dispatches nor cancels an unknown execution', async () => {
+  const { executeAgentReadonlyCommand } = await import(readonlyExecUrl)
+  const controller = new AbortController()
+  const events = []
+  controller.signal.addEventListener('abort', () => events.push('abort'))
+  class AbortOnRegistrationSet extends Set {
+    add (cancel) {
+      const result = super.add(cancel)
+      controller.abort()
+      return result
+    }
+  }
+  const runtime = {
+    signal: controller.signal,
+    cancellations: new AbortOnRegistrationSet()
+  }
+
+  await assert.rejects(executeAgentReadonlyCommand({
+    command: 'ip addr',
+    endpoint: sessionEndpoint(),
+    resolveEndpoint: () => sessionEndpoint(),
+    runtime,
+    run: async () => {
+      events.push('run')
+      return commandResult()
+    },
+    cancel: async () => {
+      events.push('cancel')
+      return true
+    },
+    createExecutionId: () => 'agent-readonly-registration-race'
+  }), error => error.name === 'AbortError')
+
+  assert.deepEqual(events, ['abort'])
+  assert.equal(runtime.cancellations.size, 0)
+})
+
 test('runtime cancellation reaches the exact SSH exec and preserves its cancellation error', async () => {
   const { executeAgentReadonlyCommand } = await import(readonlyExecUrl)
   const { cancelAgentRuntimeOperations } = await import(runtimeContextUrl)
@@ -179,6 +216,7 @@ test('runtime cancellation reaches the exact SSH exec and preserves its cancella
   assert.equal(runtime.cancellations.size, 1)
   controller.abort()
   await cancelAgentRuntimeOperations(runtime)
+  await cancelAgentRuntimeOperations(runtime)
   assert.deepEqual(cancelCalls, [{
     pid: sessionEndpoint().pid,
     executionId: 'agent-readonly-cancel'
@@ -188,6 +226,47 @@ test('runtime cancellation reaches the exact SSH exec and preserves its cancella
   await assert.rejects(running, error => error === cancellationError)
   assert.equal(runCalls, 1)
   assert.equal(runtime.cancellations.size, 0)
+})
+
+test('late cancellation after completion or failure never reaches the backend', async () => {
+  const { executeAgentReadonlyCommand } = await import(readonlyExecUrl)
+  const { cancelAgentRuntimeOperations } = await import(runtimeContextUrl)
+
+  for (const outcome of ['complete', 'fail']) {
+    const controller = new AbortController()
+    const runtime = {
+      signal: controller.signal,
+      cancellations: new Set()
+    }
+    const cancelCalls = []
+    const runError = new Error('SSH exec failed')
+    const running = executeAgentReadonlyCommand({
+      command: 'ip addr',
+      endpoint: sessionEndpoint(),
+      resolveEndpoint: () => sessionEndpoint(),
+      runtime,
+      run: async () => {
+        if (outcome === 'fail') throw runError
+        return commandResult({ stdout: 'complete' })
+      },
+      cancel: async (pid, executionId) => {
+        cancelCalls.push({ pid, executionId })
+        return true
+      },
+      createExecutionId: () => `agent-readonly-late-${outcome}`
+    })
+
+    if (outcome === 'fail') {
+      await assert.rejects(running, error => error === runError)
+    } else {
+      assert.equal((await running).output, 'complete')
+    }
+    assert.equal(runtime.cancellations.size, 0)
+
+    controller.abort()
+    await cancelAgentRuntimeOperations(runtime)
+    assert.deepEqual(cancelCalls, [])
+  }
 })
 
 test('rejects an endpoint change before dispatch with the stable error code', async () => {
@@ -252,6 +331,53 @@ test('passes through backend truncation metadata without applying a second outpu
   assert.equal(result.truncated, true)
   assert.equal(result.output, boundedBackendOutput)
   assert.equal(Buffer.byteLength(result.output, 'utf8'), 32 * 1024)
+})
+
+test('normalizes unsafe Agent bounds and preserves smaller positive limits', async () => {
+  const { executeAgentReadonlyCommand } = await import(readonlyExecUrl)
+  const unsafeValues = [0, -1, NaN, Infinity, Number.MAX_SAFE_INTEGER]
+  const calls = []
+
+  for (const value of unsafeValues) {
+    await executeAgentReadonlyCommand({
+      command: 'ip addr',
+      endpoint: sessionEndpoint(),
+      resolveEndpoint: () => sessionEndpoint(),
+      runtime: { cancellations: new Set() },
+      timeoutMs: value,
+      maxOutputBytes: value,
+      run: async (pid, command, options) => {
+        calls.push(options)
+        return commandResult()
+      },
+      cancel: async () => true,
+      createExecutionId: () => `agent-readonly-unsafe-${calls.length}`
+    })
+  }
+
+  await executeAgentReadonlyCommand({
+    command: 'ip addr',
+    endpoint: sessionEndpoint(),
+    resolveEndpoint: () => sessionEndpoint(),
+    runtime: { cancellations: new Set() },
+    timeoutMs: 7,
+    maxOutputBytes: 11,
+    run: async (pid, command, options) => {
+      calls.push(options)
+      return commandResult()
+    },
+    cancel: async () => true,
+    createExecutionId: () => 'agent-readonly-small-bounds'
+  })
+
+  for (const options of calls.slice(0, unsafeValues.length)) {
+    assert.equal(options.timeoutMs, 15000)
+    assert.equal(options.maxOutputBytes, 32768)
+    assert.ok(options.timeoutMs > 0 && options.timeoutMs <= 15000)
+    assert.ok(options.maxOutputBytes > 0 && options.maxOutputBytes <= 32768)
+  }
+  assert.equal(calls.at(-1).timeoutMs, 7)
+  assert.equal(calls.at(-1).maxOutputBytes, 11)
 })
 
 test('freezes non-zero SSH close metadata and stderr output without retrying', async () => {
