@@ -71,6 +71,29 @@ function createAttachHarness (beforeTerminalEnter) {
   })
 }
 
+function createDirectAttachHarness () {
+  const sent = []
+  const safetyCalls = []
+  const parent = {
+    agentTakeoverActive: true,
+    requestTerminalSafetyConfirmation: command => {
+      safetyCalls.push({ type: 'confirmation', command })
+    },
+    runSafetyCommand: command => {
+      safetyCalls.push({ type: 'transaction', command })
+    }
+  }
+  const term = {
+    parent,
+    buffer: { active: { type: 'normal' } }
+  }
+  return importAttachAddon().then(AttachAddon => {
+    const addon = new AttachAddon(term, {}, false)
+    addon._sendData = data => sent.push(data)
+    return { addon, safetyCalls, sent }
+  })
+}
+
 function createTrackerTerminal (options = {}) {
   const cols = options.cols || 40
   let oscHandler
@@ -642,6 +665,23 @@ test('AttachAddon keeps ordinary typing controls paste and TUI data synchronous'
   assert.deepEqual(calls, [])
 })
 
+test('manual Enter stays direct while AI takeover is active for every command class', async () => {
+  const { addon, safetyCalls, sent } = await createDirectAttachHarness()
+  const commands = [
+    'ip a',
+    'systemctl restart nginx',
+    'opaque-command --unknown-mode'
+  ]
+
+  for (const command of commands) {
+    assert.equal(addon.sendToServer(command), undefined)
+    assert.equal(addon.sendToServer('\r'), undefined)
+  }
+
+  assert.deepEqual(sent, commands.flatMap(command => [command, '\r']))
+  assert.deepEqual(safetyCalls, [])
+})
+
 test('AttachAddon submits an approved safety command through one controlled boundary', async () => {
   const { addon, sent } = await createAttachHarness(() => ({ sendNow: true }))
 
@@ -1078,21 +1118,15 @@ test('CommandTrackerAddon expects the exact canonical command including padding'
   assert.equal(tracker.markExpectedSubmissionReleased(token), true)
 })
 
-test('terminal wires the tested safety coordinator into socket and modal lifecycle', () => {
+test('terminal leaves manual Enter unwired while retaining programmatic safety transactions', () => {
   const source = readClientFile('components/terminal/terminal.jsx')
-  const coordinator = readClientFile('components/terminal/terminal-safety-coordinator.js')
 
-  assert.match(source, /createTerminalSafetyCoordinator/)
-  assert.match(source, /terminalSafetyCoordinator\.beforeEnter/)
-  assert.match(source, /terminalSafetyCoordinator\.consumeRelease/)
-  assert.match(source, /terminalSafetyCoordinator\.handleCommandFinished/)
-  assert.match(source, /terminalSafetyCoordinator\.beginSession/)
-  assert.equal(
-    (source.match(/terminalSafetyCoordinator\.invalidateSession/g) || []).length,
-    2
-  )
-  assert.match(coordinator, /runner\.prepare\(request\)/)
-  assert.match(coordinator, /runner\.beginExternalExecution/)
+  assert.doesNotMatch(source, /beforeTerminalEnter\s*=/)
+  assert.doesNotMatch(source, /createTerminalSafetyCoordinator/)
+  assert.doesNotMatch(source, /consumeTerminalSafetyRelease/)
+  assert.doesNotMatch(source, /terminalSafetyCoordinator/)
+  assert.match(source, /runSafetyCommand = \(command, options = \{\}\)/)
+  assert.match(source, /commandSafetyEntrypoint/)
   assert.doesNotMatch(source, /terminalSafetyRunner\.execute/)
   assert.doesNotMatch(source, /_sendData\(confirmation\.command/)
 })
@@ -1112,29 +1146,28 @@ test('terminal exposes the unified command safety entrypoint without replacing m
   assert.match(source, /commandSafetyEntrypoint\.invalidateSession/)
   assert.match(source, /commandSafetyEntrypoint\.handleCommandFinished/)
   assert.match(source, /commandSafetyEntrypoint\.inputChanged/)
-  assert.match(source, /terminalSafetyCoordinator\.beforeEnter/)
+  assert.doesNotMatch(source, /beforeTerminalEnter\s*=/)
 })
 
-test('terminal resets continuation safety state at each tracked prompt', () => {
+test('terminal command tracking no longer routes through the manual safety controller', () => {
   const source = readClientFile('components/terminal/terminal.jsx')
 
-  assert.match(source, /cmdAddon\.onPromptStarted/)
-  assert.match(source, /terminalSafetyController\.onPromptStarted/)
+  assert.doesNotMatch(source, /terminalSafetyController/)
+  assert.match(source, /cmdAddon\.onCommandFinished\(this\.handleTerminalCommandFinished\)/)
 })
 
-test('terminal protection is default-on configurable and consumes existing shell integration', () => {
+test('manual terminal protection setting and locale copy are removed', () => {
   const defaults = readClientFile('common/default-setting.js')
   const setting = readClientFile('components/setting-panel/setting-terminal.jsx')
   const locale = readClientFile('common/shellpilot-i18n-overrides.js')
   const terminal = readClientFile('components/terminal/terminal.jsx')
 
-  assert.match(defaults, /terminalSafetyProtection:\s*true/)
-  assert.match(setting, /terminalSafetyProtection/)
-  assert.match(setting, /terminalSafetyProtectionHelp/)
-  assert.match(locale, /terminalSafetyProtection:\s*'SSH 终端安全保护'/)
-  assert.match(locale, /terminalSafetyProtectionHelp:/)
-  assert.match(terminal, /config\.terminalSafetyProtection\s*!==\s*false/)
-  assert.match(terminal, /canInjectShellIntegration/)
+  assert.doesNotMatch(defaults, /terminalSafetyProtection/)
+  assert.doesNotMatch(setting, /renderTerminalSafetyToggle/)
+  assert.doesNotMatch(setting, /terminalSafetyProtection/)
+  assert.doesNotMatch(locale, /terminalSafetyProtectionHelp/)
+  assert.doesNotMatch(locale, /terminalSafetyProtection/)
+  assert.doesNotMatch(terminal, /config\.terminalSafetyProtection/)
 })
 
 test('compact Chinese safety modal exposes only policy-allowed actions', () => {

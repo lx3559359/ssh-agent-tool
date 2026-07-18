@@ -86,19 +86,14 @@ import {
 } from './ssh-reconnect-policy.js'
 import {
   buildTerminalSafetyConfirmation,
-  buildTerminalSafetyEndpoint,
-  createTerminalSafetyController,
-  hasReliableTerminalCommandTracking
+  buildTerminalSafetyEndpoint
 } from './terminal-safety-controller.js'
-import { createTerminalSafetyCoordinator } from './terminal-safety-coordinator.js'
 import TerminalCommandSafetyModal from './terminal-command-safety-modal.jsx'
 import { createSafetyCommandEntrypoint } from '../../common/safety-transactions/command-entrypoint.js'
 import { createTransactionRunner } from '../../common/safety-transactions/transaction-runner.js'
 import { buildRecoveryPlan } from '../../common/safety-transactions/recovery-providers.js'
-import { buildSafetyRequest } from '../../common/safety-transactions/models.js'
 import { assertSameSessionEndpoint } from '../../common/safety-transactions/endpoint-guard.js'
 import * as terminalSafetyStore from '../../common/safety-transactions/transaction-store.js'
-import uid from '../../common/uid.js'
 import { extractTerminalCommandInput } from './terminal-current-input.js'
 import { recordPerformanceMark } from '../../common/quality/quality-events.js'
 import {
@@ -139,7 +134,6 @@ class Term extends Component {
     this.currentInput = ''
     this.shellInjected = false
     this.shellType = null
-    this.terminalSafetyController = createTerminalSafetyController()
     this.terminalSafetyRunner = createTransactionRunner({
       runRemote: (command, options) => runCmd(this.pid, command, options),
       cancelRemote: async executionId => {
@@ -178,37 +172,6 @@ class Term extends Component {
         this.term?.focus()
       },
       buildConfirmation: buildTerminalSafetyConfirmation,
-      onStateChange: state => {
-        if (this.onClose) return
-        this.setState({
-          terminalSafetyConfirmation: state.confirmation,
-          terminalSafetyBusy: state.busy,
-          terminalSafetyError: state.error
-        })
-        if (!state.confirmation) this.term?.focus()
-      },
-      onError: error => window.store.onError(error)
-    })
-    this.terminalSafetyCoordinator = createTerminalSafetyCoordinator({
-      controller: this.terminalSafetyController,
-      runner: this.terminalSafetyRunner,
-      tracker: {
-        expectSubmission: command => this.cmdAddon?.expectSubmission(command),
-        markExpectedSubmissionReleased: token => (
-          this.cmdAddon?.markExpectedSubmissionReleased(token) === true
-        ),
-        cancelExpectedSubmission: token => (
-          this.cmdAddon?.cancelExpectedSubmission(token) === true
-        )
-      },
-      buildRequest: confirmation => buildSafetyRequest({
-        id: `terminal-${Date.now()}-${uid()}`,
-        source: 'terminal',
-        command: confirmation.command,
-        title: 'SSH 终端命令',
-        endpoint: this.getTerminalSafetyEndpoint(),
-        metadata: { terminalProtection: true }
-      }),
       onStateChange: state => {
         if (this.onClose) return
         this.setState({
@@ -306,7 +269,6 @@ class Term extends Component {
       endpoint: this.getTerminalSafetyEndpoint()
     })
     this.onClose = true
-    this.terminalSafetyCoordinator.invalidateSession().catch(() => {})
     this.commandSafetyEntrypoint.invalidateSession().catch(() => {})
     refs.remove(this.id)
     if (window.store.activeTerminalId === this.props.tab.id) {
@@ -1365,60 +1327,25 @@ class Term extends Component {
     return this.terminalSafetyRunner.cancel(id)
   }
 
-  getTerminalSafetyContext = () => {
-    return {
-      enabled: this.props.config.terminalSafetyProtection !== false,
-      isSsh: this.isSsh(),
-      shellIntegrationActive: hasReliableTerminalCommandTracking(
-        this.shellType,
-        this.cmdAddon?.hasShellIntegration() === true
-      ),
-      commandInputActive: this.cmdAddon?.isCommandInputActive() === true,
-      canonicalInputReliable: this.cmdAddon?.hasReliableCommandInput() === true,
-      alternateBuffer: this.term?.buffer?.active?.type === 'alternate'
-    }
-  }
-
-  beforeTerminalEnter = (command, context) => {
-    return this.terminalSafetyCoordinator.beforeEnter(command, context)
-  }
-
   onTerminalSafetyInputChanged = () => {
-    Promise.all([
-      this.terminalSafetyCoordinator.inputChanged(),
-      this.commandSafetyEntrypoint.inputChanged()
-    ]).catch(window.store.onError)
+    this.commandSafetyEntrypoint.inputChanged().catch(window.store.onError)
   }
 
-  handleTerminalSafetyExecute = async () => {
-    if (this.commandSafetyEntrypoint.confirmPending()) return
-    await this.terminalSafetyCoordinator.confirmExecute()
+  handleTerminalSafetyExecute = () => {
+    this.commandSafetyEntrypoint.confirmPending()
   }
 
   handleTerminalSafetyCancel = () => {
     if (this.state.terminalSafetyBusy) return
-    if (this.commandSafetyEntrypoint.hasPendingConfirmation()) {
-      this.commandSafetyEntrypoint.cancelPending().catch(window.store.onError)
-      return
-    }
-    this.terminalSafetyCoordinator.cancelConfirmation().catch(window.store.onError)
+    this.commandSafetyEntrypoint.cancelPending().catch(window.store.onError)
   }
 
   hasPendingSafetyCommand = () => {
     return this.commandSafetyEntrypoint.hasPending()
   }
 
-  consumeTerminalSafetyRelease = token => {
-    return this.terminalSafetyCoordinator.consumeRelease(token)
-  }
-
-  onTerminalSafetyError = () => {
-    message.error('终端安全保护处理失败，命令尚未发送。')
-  }
-
-  handleTerminalCommandFinished = async event => {
-    if (await this.commandSafetyEntrypoint.handleCommandFinished(event)) return
-    await this.terminalSafetyCoordinator.handleCommandFinished(event)
+  handleTerminalCommandFinished = event => {
+    return this.commandSafetyEntrypoint.handleCommandFinished(event)
   }
 
   loadRenderer = async (term, config) => {
@@ -1501,11 +1428,7 @@ class Term extends Component {
     const FitAddon = await loadFitAddon()
     this.fitAddon = new FitAddon()
     this.cmdAddon = new CommandTrackerAddon()
-    this.cmdAddon.onPromptStarted(
-      this.terminalSafetyController.onPromptStarted
-    )
     this.cmdAddon.onCommandExecuted((cmd) => {
-      this.terminalSafetyController.onCommandExecuted()
       if (cmd && cmd.trim()) {
         window.store.addCmdHistory(cmd.trim())
       }
@@ -1928,7 +1851,6 @@ class Term extends Component {
       this.props.editTab(id, { autoReConnect: 0 })
       this.shellInjected = false
       this.cmdAddon.beginSession()
-      this.terminalSafetyCoordinator.beginSession()
       this.commandSafetyEntrypoint.beginSession()
       await this.initAttachAddon()
       this.runInitScript()
@@ -2045,9 +1967,6 @@ class Term extends Component {
       type: 'disconnect',
       tabId: this.props.tab.id,
       endpoint: this.getTerminalSafetyEndpoint()
-    })
-    this.terminalSafetyCoordinator.invalidateSession().catch(error => {
-      if (!this.onClose) window.store.onError(error)
     })
     this.commandSafetyEntrypoint.invalidateSession().catch(error => {
       if (!this.onClose) window.store.onError(error)
