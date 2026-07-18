@@ -17,6 +17,11 @@ test('classifies limited ip address aliases as readonly', async () => {
 
   assert.equal(classifyCommand('ip a').risk, 'readonly')
   assert.equal(classifyCommand('ip a show dev eth0').risk, 'readonly')
+  assert.equal(classifyCommand('ip -brief address').risk, 'readonly')
+  assert.notEqual(
+    classifyCommand('ip -brief address add 192.0.2.2/24 dev eth0').risk,
+    'readonly'
+  )
 })
 
 function trustedCommand (command) {

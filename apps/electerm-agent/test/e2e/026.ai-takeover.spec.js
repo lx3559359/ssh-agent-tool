@@ -8,7 +8,17 @@ const {
 } = require('./common/bookmark-lifecycle')
 const { startLocalSshServer } = require('./common/local-ssh-server')
 
-test.setTimeout(180000)
+test.setTimeout(240000)
+
+const riskContext = Object.freeze({
+  purpose: 'Exercise the exact nginx restart safety transaction in the local E2E fixture',
+  impactTargets: ['nginx service in the isolated local SSH fixture'],
+  verification: [{
+    name: 'read_service_status',
+    args: { service: 'nginx' },
+    expected: { exitCode: 0, contains: 'ActiveState=active' }
+  }]
+})
 
 function toolCall (id, name, args) {
   return {
@@ -16,6 +26,12 @@ function toolCall (id, name, args) {
     type: 'function',
     function: { name, arguments: JSON.stringify(args) }
   }
+}
+
+function commandForPrompt (prompt) {
+  if (prompt.includes('readonly-stop-e2e')) return 'cat /proc/loadavg'
+  if (prompt.includes('readonly-e2e')) return 'ip addr'
+  return 'systemctl restart nginx'
 }
 
 async function startAgentApi () {
@@ -32,43 +48,40 @@ async function startAgentApi () {
     const body = JSON.parse(rawBody)
     requests.push(body)
     const messages = body.messages || []
-    const prompt = [...messages].reverse().find(item => item.role === 'user')?.content || ''
-    const toolResults = messages.filter(item => item.role === 'tool')
-    let message
-    if (!toolResults.length) {
-      const command = prompt.includes('readonly-e2e')
-        ? 'pwd'
-        : 'systemctl restart nginx'
-      message = {
-        role: 'assistant',
-        content: 'plan ready',
-        tool_calls: [toolCall(`plan-${requests.length}`, 'confirm_agent_plan', {
-          goal: `E2E ${prompt}`,
-          steps: ['execute the frozen command'],
-          readonlyCommands: [command],
-          verification: []
-        })]
+    let userIndex = -1
+    for (let index = messages.length - 1; index >= 0; index--) {
+      if (messages[index]?.role === 'user') {
+        userIndex = index
+        break
       }
-    } else if (toolResults.length === 1) {
-      const command = prompt.includes('readonly-e2e')
-        ? 'pwd'
-        : 'systemctl restart nginx'
-      message = {
-        role: 'assistant',
-        content: 'execute frozen call',
-        tool_calls: [toolCall(`command-${requests.length}`, 'send_terminal_command', {
-          command
-        })]
-      }
-    } else {
-      message = {
-        role: 'assistant',
-        content: prompt.includes('risk-cancel-e2e')
-          ? 'risk cancelled complete'
-          : prompt.includes('risk-confirm-e2e')
-            ? 'risk confirmed complete'
-            : 'readonly complete'
-      }
+    }
+    const prompt = String(messages[userIndex]?.content || '')
+    const toolResults = messages.slice(userIndex + 1).filter(item => item.role === 'tool')
+    const command = commandForPrompt(prompt)
+    const message = toolResults.length
+      ? {
+          role: 'assistant',
+          content: prompt.includes('risk-cancel-e2e')
+            ? 'risk cancelled complete'
+            : prompt.includes('risk-confirm-e2e')
+              ? 'risk confirmed complete'
+              : 'readonly complete'
+        }
+      : {
+          role: 'assistant',
+          content: 'executing exact E2E call',
+          tool_calls: [toolCall(
+            `command-${requests.length}`,
+            prompt.includes('readonly')
+              ? 'run_readonly_command'
+              : 'send_terminal_command',
+            prompt.includes('readonly')
+              ? { command }
+              : { command, riskContext }
+          )]
+        }
+    if (!toolResults.length && prompt.includes('readonly-e2e')) {
+      await new Promise(resolve => setTimeout(resolve, 120))
     }
     response.writeHead(200, { 'content-type': 'application/json' })
     response.end(JSON.stringify({ choices: [{ message }] }))
@@ -91,10 +104,6 @@ async function acceptHostKeyIfShown (client, timeout = 1000) {
     return true
   }
   return false
-}
-
-async function connectFirstSession (client, sshServer) {
-  return openSshSession(client, sshServer)
 }
 
 async function openSshSession (client, sshServer) {
@@ -140,50 +149,43 @@ async function enableTakeover (client) {
   await expect(toggle).toHaveAttribute('aria-checked', 'true')
 }
 
-async function runAgentPrompt (client, prompt, riskDecision) {
+async function submitAgentPrompt (client, prompt) {
   const before = await client.locator('.chat-history-item').count()
   await client.locator('.ai-chat-container .ant-segmented-item').filter({ hasText: 'Agent' }).click()
   await client.locator('.ai-chat-textarea').fill(prompt)
   const send = client.locator('.send-to-ai-icon')
   await expect(send).not.toHaveClass(/disabled/)
+  const startedAt = Date.now()
   await send.click()
   await expect(client.locator('.chat-history-item')).toHaveCount(before + 1)
-
-  const plan = client.locator('.ant-modal-confirm').last()
-  await expect(plan).toBeVisible({ timeout: 15000 })
-  await plan.locator('.ant-btn-primary').click()
-
-  if (riskDecision) {
-    const risk = client.locator('.ant-modal-confirm').filter({
-      has: client.locator('.agent-risk-confirmation-content')
-    })
-    await expect(risk).toBeVisible({ timeout: 15000 })
-    await expect(risk).toContainText('systemctl restart nginx')
-    await expect(risk).toContainText('fingerprint=SHA256:')
-    await (riskDecision === 'confirm'
-      ? risk.locator('.ant-btn-primary').click()
-      : risk.locator('.ant-btn-default').click())
-    if (riskDecision === 'confirm') {
-      const terminalSafety = client.locator('.terminal-command-safety-modal')
-      await expect(terminalSafety).toBeVisible({ timeout: 15000 })
-      await expect(terminalSafety).toContainText('systemctl restart nginx')
-      await terminalSafety.locator('.terminal-command-safety-execute').click()
-    }
-  }
-
-  const item = client.locator('.chat-history-item').last()
-  await expect(item).toContainText(
-    riskDecision === 'cancel'
-      ? 'risk cancelled complete'
-      : riskDecision === 'confirm'
-        ? 'risk confirmed complete'
-        : 'readonly complete',
-    { timeout: 30000 }
-  )
+  return { startedAt, item: client.locator('.chat-history-item').last() }
 }
 
-test('per-session takeover stays isolated and gates readonly and risky Agent work', async () => {
-  const sshServer = await startLocalSshServer()
+async function expectAgentCompleted (client, item, text) {
+  await expect(item).toContainText(text, { timeout: 30000 })
+  await expect(client.locator('.agent-send-running')).toHaveCount(0)
+  await expect(client.locator('.send-to-ai-icon')).toBeVisible()
+}
+
+async function typeManualCommand (client, sshServer, command) {
+  const before = sshServer.state.commands.filter(value => value === command).length
+  await client.evaluate(command => {
+    const terminal = window.refs.get('term-' + window.store.activeTabId)
+    terminal.attachAddon.sendToServer(command)
+    terminal.attachAddon.sendToServer('\r')
+  }, command)
+  await expect.poll(
+    () => sshServer.state.commands.filter(value => value === command).length,
+    { timeout: 10000 }
+  ).toBe(before + 1)
+  await expect(client.locator('.terminal-command-safety-modal')).toHaveCount(0)
+  await expect(client.locator('.agent-risk-confirmation-content')).toHaveCount(0)
+}
+
+test('per-session takeover uses readonly exec, direct manual input and one risky confirmation', async () => {
+  const sshServer = await startLocalSshServer({
+    execDelayMsByCommand: { 'cat /proc/loadavg': 30000 }
+  })
   const agentApi = await startAgentApi()
   let electronApp
   try {
@@ -199,7 +201,7 @@ test('per-session takeover stays isolated and gates readonly and risky Agent wor
       languageAI: 'English'
     }), { port: agentApi.port })
 
-    const firstTab = await connectFirstSession(client, sshServer)
+    const firstTab = await openSshSession(client, sshServer)
     await openAiPanel(client)
     await enableTakeover(client)
 
@@ -209,19 +211,90 @@ test('per-session takeover stays isolated and gates readonly and risky Agent wor
     await client.evaluate(tabId => window.store.mcpSwitchTab({ tabId }), firstTab)
     await expect(client.locator('.agent-takeover-switch')).toHaveAttribute('aria-checked', 'true')
 
-    await runAgentPrompt(client, 'readonly-e2e', null)
-    expect(sshServer.state.commands).toContain('pwd')
-    const riskyBefore = sshServer.state.commands.filter(command => command === 'systemctl restart nginx').length
-    await runAgentPrompt(client, 'risk-cancel-e2e', 'cancel')
-    expect(sshServer.state.commands.filter(command => command === 'systemctl restart nginx')).toHaveLength(riskyBefore)
-    await runAgentPrompt(client, 'risk-confirm-e2e', 'confirm')
-    expect(sshServer.state.commands.filter(command => command === 'systemctl restart nginx')).toHaveLength(riskyBefore + 1)
+    for (const command of ['ip a', 'ip addr', 'systemctl restart nginx']) {
+      await typeManualCommand(client, sshServer, command)
+    }
+    await expect.poll(() => client.evaluate(async () => {
+      const terminal = window.refs.get('term-' + window.store.activeTabId)
+      await terminal?.injectShellIntegration?.({ forceForSafety: true })
+      return terminal?.isCommandSafetyTrackerReady?.() === true
+    }), { timeout: 10000 }).toBe(true)
 
+    const readonlyCommandsBefore = sshServer.state.commands.filter(value => value === 'ip addr').length
+    const readonlyExecBefore = sshServer.state.execCommands.filter(value => value === 'ip addr').length
+    const readonlyRun = await submitAgentPrompt(client, 'readonly-e2e')
+    await expect(client.locator('.agent-send-running')).toBeVisible()
+    await expect(client.locator('.ant-modal-confirm')).toHaveCount(0)
+    await expect(client.locator('.terminal-command-safety-modal')).toHaveCount(0)
+    await expectAgentCompleted(client, readonlyRun.item, 'readonly complete')
+    expect(Date.now() - readonlyRun.startedAt).toBeLessThan(3000)
+    expect(sshServer.state.execCommands.filter(value => value === 'ip addr')).toHaveLength(readonlyExecBefore + 1)
+    expect(sshServer.state.commands.filter(value => value === 'ip addr')).toHaveLength(readonlyCommandsBefore)
+
+    const readonlyCard = readonlyRun.item.locator('.agent-tool-readonly-card')
+    await expect(readonlyCard).toContainText('ip addr')
+    await expect(readonlyCard).toContainText('ms')
+    await expect(readonlyCard).toContainText('0')
+    const evidence = await client.evaluate(() => {
+      const item = [...window.store.aiChatHistory].reverse()
+        .find(entry => entry.displayPrompt === 'readonly-e2e')
+      return item?.toolCalls?.[0]?.presentation
+    })
+    expect(evidence.target).toBeTruthy()
+    expect(evidence.exitCode).toBe(0)
+    expect(evidence.truncated).toBe(false)
+    expect(evidence.output).toContain('LOOPBACK')
+
+    const fillButton = readonlyCard.locator('.agent-readonly-actions button').nth(1)
+    await expect(fillButton).toBeEnabled()
+    await fillButton.click()
+    await expect.poll(() => client.evaluate(() => window.refs
+      .get('term-' + window.store.activeTabId)
+      ?.getCurrentInput?.())).toBe('ip addr')
+    expect(sshServer.state.commands.filter(value => value === 'ip addr')).toHaveLength(readonlyCommandsBefore)
+    await client.evaluate(() => window.refs
+      .get('term-' + window.store.activeTabId)
+      ?.attachAddon?.sendToServer('\r'))
+    await expect.poll(
+      () => sshServer.state.commands.filter(value => value === 'ip addr').length
+    ).toBe(readonlyCommandsBefore + 1)
+    await expect.poll(() => client.evaluate(() => window.refs
+      .get('term-' + window.store.activeTabId)
+      ?.getCurrentInput?.())).toBe('')
+
+    const riskyBefore = sshServer.state.commands.filter(value => value === 'systemctl restart nginx').length
+    const cancelRun = await submitAgentPrompt(client, 'risk-cancel-e2e')
+    const cancelModal = client.locator('.terminal-command-safety-modal')
+    await expect(cancelModal).toHaveCount(1)
+    await expect(cancelModal).toContainText('systemctl restart nginx')
+    await expect(client.locator('.agent-risk-confirmation-content')).toHaveCount(0)
+    await cancelModal.locator('.custom-modal-cancel-btn').click()
+    await expectAgentCompleted(client, cancelRun.item, 'risk cancelled complete')
+    expect(sshServer.state.commands.filter(value => value === 'systemctl restart nginx')).toHaveLength(riskyBefore)
+
+    const confirmRun = await submitAgentPrompt(client, 'risk-confirm-e2e')
+    const confirmModal = client.locator('.terminal-command-safety-modal')
+    await expect(confirmModal).toHaveCount(1)
+    await expect(confirmModal).toContainText('systemctl restart nginx')
+    await expect(client.locator('.agent-risk-confirmation-content')).toHaveCount(0)
+    await confirmModal.locator('.terminal-command-safety-execute').click()
+    await expectAgentCompleted(client, confirmRun.item, 'risk confirmed complete')
+    expect(sshServer.state.commands.filter(value => value === 'systemctl restart nginx')).toHaveLength(riskyBefore + 1)
+
+    const stopRun = await submitAgentPrompt(client, 'readonly-stop-e2e')
+    await expect.poll(
+      () => sshServer.state.execCommands.filter(value => value === 'cat /proc/loadavg').length,
+      { timeout: 15000 }
+    ).toBe(1)
+    await expect(client.locator('.agent-send-running')).toBeVisible()
     await client.locator('.agent-takeover-stop').click()
+    await expect(stopRun.item).toContainText(/stopped|cancel/i, { timeout: 30000 })
     await expect(client.locator('.agent-takeover-switch')).toHaveAttribute('aria-checked', 'false')
+    await expect.poll(() => sshServer.state.cancelledExecCommands)
+      .toContain('cat /proc/loadavg')
+
     await client.evaluate(tabId => window.store.mcpSwitchTab({ tabId }), secondTab)
     await expect(client.locator('.agent-takeover-switch')).toHaveAttribute('aria-checked', 'true')
-
     const shells = sshServer.state.shellCount
     await client.evaluate(tabId => window.store.mcpReloadTab({ tabId }), secondTab)
     await expect(client.locator('.agent-takeover-switch')).toHaveAttribute('aria-checked', 'false')
@@ -229,14 +302,11 @@ test('per-session takeover stays isolated and gates readonly and risky Agent wor
     await expect.poll(() => sshServer.state.shellCount, { timeout: 20000 }).toBeGreaterThan(shells)
     const reloadedTab = await client.evaluate(() => window.store.activeTabId)
     expect(reloadedTab).not.toBe(secondTab)
-    await expect(client.locator('.agent-takeover-switch')).toHaveAttribute('aria-checked', 'false')
 
     await enableTakeover(client)
     await client.evaluate(tabId => window.store.mcpCloseTab({ tabId }), reloadedTab)
     await expect.poll(() => client.evaluate(() => window.store.activeTabId)).toBe(firstTab)
     const reopenedTab = await openSshSession(client, sshServer)
-    expect(reopenedTab).not.toBe(secondTab)
-    expect(reopenedTab).not.toBe(reloadedTab)
     await expect(client.locator('.agent-takeover-switch')).toHaveAttribute('aria-checked', 'false')
 
     await enableTakeover(client)
@@ -248,6 +318,12 @@ test('per-session takeover stays isolated and gates readonly and risky Agent wor
     await openSshSession(client, sshServer)
     await openAiPanel(client)
     await expect(client.locator('.agent-takeover-switch')).toHaveAttribute('aria-checked', 'false')
+    expect(reopenedTab).not.toBe(reloadedTab)
+
+    const offeredToolNames = agentApi.requests.flatMap(request => (
+      request.tools || []
+    )).map(tool => tool?.function?.name)
+    expect(offeredToolNames).not.toContain('confirm_agent_plan')
   } finally {
     await closeBookmarkApp(electronApp, __filename).catch(() => {})
     await cleanupBookmarkProfile().catch(() => {})

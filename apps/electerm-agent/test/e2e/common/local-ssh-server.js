@@ -10,6 +10,18 @@ const HOST_KEY = utils.generateKeyPairSync('ed25519', {
   comment: 'shellpilot-e2e-host'
 })
 
+const execResults = Object.freeze({
+  pwd: ['/home/shellpilot\n', 0],
+  'ip addr': ['1: lo: <LOOPBACK,UP>\n2: eth0: <BROADCAST,UP>\n', 0],
+  'ip route show': ['default via 192.0.2.1 dev eth0\n', 0],
+  'uname -s': ['Linux\n', 0],
+  'cat /proc/loadavg': ['0.00 0.01 0.05 1/100 1234\n', 0],
+  'systemctl show --no-pager --property=LoadState,ActiveState,SubState,UnitFileState nginx': [
+    'LoadState=loaded\nActiveState=active\nSubState=running\n',
+    0
+  ]
+})
+
 function writePrompt (stream) {
   stream.write('\r\n$ ')
 }
@@ -319,6 +331,7 @@ async function startLocalSshServer (options = {}) {
     sftpRenames: 0,
     shellIntegrationNonce: '',
     execCommands: [],
+    cancelledExecCommands: [],
     commands: []
   }
   const server = new Server({
@@ -346,20 +359,62 @@ async function startLocalSshServer (options = {}) {
       state.readyCount += 1
       client.on('session', accept => {
         const session = accept()
+        let cancelActiveExec = () => false
         session.on('env', acceptEnv => acceptEnv?.())
         session.on('pty', acceptPty => acceptPty())
         session.on('window-change', () => {})
+        session.on('signal', (acceptSignal, rejectSignal, info) => {
+          if (info?.name === 'TERM' && cancelActiveExec()) {
+            acceptSignal?.()
+            return
+          }
+          rejectSignal?.()
+        })
         session.on('exec', (acceptExec, rejectExec, info) => {
           state.execCommands.push(info.command)
           const stream = acceptExec()
-          if (/\$SHELL/.test(info.command)) {
-            stream.write('/bin/bash\n')
-            stream.exit(0)
-          } else {
-            stream.stderr.write(`unsupported E2E exec: ${info.command}\n`)
-            stream.exit(127)
+          const result = /\$SHELL/.test(info.command)
+            ? ['/bin/bash\n', 0]
+            : execResults[info.command]
+          const delayMs = Math.max(
+            0,
+            Number(options.execDelayMsByCommand?.[info.command]) || 0
+          )
+          let settled = false
+          let timer
+          const finish = () => {
+            if (settled) return
+            settled = true
+            cancelActiveExec = () => false
+            if (result) {
+              stream.write(result[0])
+              stream.exit(result[1])
+            } else {
+              stream.stderr.write(`unsupported E2E exec: ${info.command}\n`)
+              stream.exit(127)
+            }
+            stream.end()
           }
-          stream.end()
+          const recordCancellation = () => {
+            if (settled) return false
+            settled = true
+            clearTimeout(timer)
+            cancelActiveExec = () => false
+            state.cancelledExecCommands.push(info.command)
+            try {
+              stream.exit('TERM', false, 'cancelled')
+              stream.end()
+            } catch {}
+            return true
+          }
+          cancelActiveExec = recordCancellation
+          stream.on('error', () => {})
+          stream.once('close', recordCancellation)
+          if (delayMs > 0) {
+            timer = setTimeout(finish, delayMs)
+          } else {
+            finish()
+          }
         })
         session.on('shell', acceptShell => {
           state.shellCount += 1
