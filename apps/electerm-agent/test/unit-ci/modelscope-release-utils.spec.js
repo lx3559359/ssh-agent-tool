@@ -120,6 +120,36 @@ test('ModelScope Hub uploader retries large asset uploads after transient timeou
   assert.match(source, /upload_file_with_retry\(/)
 })
 
+test('ModelScope Hub uploader redacts every accepted token value regardless of token format', () => {
+  const modulePath = path.resolve(__dirname, '../../build/bin/sync-modelscope-release-hub.py')
+  const script = [
+    'import importlib.util, os, sys, types',
+    'stub = types.ModuleType("modelscope_hub")',
+    'stub.HubApi = object',
+    'sys.modules["modelscope_hub"] = stub',
+    'spec = importlib.util.spec_from_file_location("shellpilot_modelscope", sys.argv[1])',
+    'module = importlib.util.module_from_spec(spec)',
+    'spec.loader.exec_module(module)',
+    'message = " | ".join([os.environ["MODELSCOPE_TOKEN"], os.environ["MODELSCOPE_API_TOKEN"], os.environ["MODELSCOPE_SDK_TOKEN"]])',
+    'print(module.redact(RuntimeError(message)))'
+  ].join('; ')
+  const secrets = ['plain-primary-token', 'ms-secret', 'sdk token with spaces']
+  const result = spawnSync('python', ['-c', script, modulePath], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      PYTHONDONTWRITEBYTECODE: '1',
+      MODELSCOPE_TOKEN: secrets[0],
+      MODELSCOPE_API_TOKEN: secrets[1],
+      MODELSCOPE_SDK_TOKEN: secrets[2]
+    }
+  })
+
+  assert.equal(result.status, 0, result.stderr)
+  for (const secret of secrets) assert.doesNotMatch(result.stdout, new RegExp(secret.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+  assert.equal((result.stdout.match(/\[REDACTED\]/g) || []).length, 3)
+})
+
 test('ModelScope release sync prints a concise token error for operators', () => {
   const env = { ...process.env }
   delete env.MODELSCOPE_TOKEN

@@ -4,7 +4,7 @@ const path = require('path')
 const { spawnSync } = require('child_process')
 const pack = require('../../package.json')
 const {
-  buildValidatedLocalReleaseAssets,
+  buildValidatedLocalUpdateAssets,
   createSpawnOptions
 } = require('./github-release-utils')
 const {
@@ -89,7 +89,7 @@ function buildModelScopeAssetCopyPlan ({
   arch,
   localFiles
 }) {
-  return buildValidatedLocalReleaseAssets({
+  return buildValidatedLocalUpdateAssets({
     distDir,
     localFiles: localFiles || readLocalFiles(distDir),
     version,

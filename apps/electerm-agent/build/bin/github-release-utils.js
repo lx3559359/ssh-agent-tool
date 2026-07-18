@@ -28,18 +28,25 @@ function getRequiredReleaseAssetNames (version, options = {}) {
   ]
 }
 
+function getAllowedGitHubReleaseAssetNames (version, options = {}) {
+  return [
+    ...getRequiredReleaseAssetNames(version, options),
+    `${getReleaseAssetPrefix(options)}-${version}-win-${getReleaseArch(options)}-portable.zip`
+  ]
+}
+
 function getRequiredChecksumAssetNames (version, options = {}) {
   return getRequiredReleaseAssetNames(version, options)
     .filter(name => !['checksums.json', modelScopeReleaseManifestName].includes(name))
 }
 
 function selectReleaseAssets (files, version, options = {}) {
-  const wanted = new Set(getRequiredReleaseAssetNames(version, options))
+  const wanted = new Set(getAllowedGitHubReleaseAssetNames(version, options))
   return files.filter(file => wanted.has(path.basename(file)))
 }
 
 function selectUnexpectedReleaseAssets (assets, version, options = {}) {
-  const required = new Set(getRequiredReleaseAssetNames(version, options))
+  const required = new Set(getAllowedGitHubReleaseAssetNames(version, options))
   return (assets || []).filter(asset => !required.has(path.basename(asset.name)))
 }
 
@@ -53,7 +60,7 @@ function buildLocalReleaseAssetReport ({
   arch
 }) {
   const options = { arch }
-  const requiredNames = getRequiredReleaseAssetNames(version, options)
+  const requiredNames = getAllowedGitHubReleaseAssetNames(version, options)
   const localByName = byName(localFiles)
   const missingLocal = requiredNames.filter(name => !localByName.has(name))
   const emptyLocal = requiredNames
@@ -94,6 +101,27 @@ function buildValidatedLocalReleaseAssets ({
   return report.requiredNames.map(name => path.join(distDir, name))
 }
 
+function buildValidatedLocalUpdateAssets ({
+  distDir,
+  localFiles = [],
+  version,
+  arch
+}) {
+  const requiredNames = getRequiredReleaseAssetNames(version, { arch })
+  const localByName = byName(localFiles)
+  const missing = requiredNames.filter(name => !localByName.has(name))
+  const empty = requiredNames
+    .filter(name => localByName.has(name))
+    .filter(name => Number(localByName.get(name).size) <= 0)
+  if (missing.length || empty.length) {
+    throw new Error([
+      missing.length ? `Missing local update assets: ${missing.join(', ')}` : '',
+      empty.length ? `Empty local update assets: ${empty.join(', ')}` : ''
+    ].filter(Boolean).join('\n'))
+  }
+  return requiredNames.map(name => path.join(distDir, name))
+}
+
 function buildReleaseAssetReport ({
   localFiles = [],
   remoteAssets = [],
@@ -101,7 +129,7 @@ function buildReleaseAssetReport ({
   arch
 }) {
   const options = { arch }
-  const requiredNames = getRequiredReleaseAssetNames(version, options)
+  const requiredNames = getAllowedGitHubReleaseAssetNames(version, options)
   const localByName = byName(localFiles)
   const remoteByName = byName(remoteAssets)
   const missingLocal = requiredNames.filter(name => !localByName.has(name))
@@ -138,8 +166,10 @@ function buildGitHubReleaseCommands ({
 }) {
   return [
     ['gh', ['release', 'view', tag, '--repo', repo]],
-    ['gh', ['release', 'create', tag, '--repo', repo, '--title', title, '--notes', notes]],
-    ['gh', ['release', 'upload', tag, ...assets, '--repo', repo, '--clobber']]
+    ['gh', ['release', 'create', tag, '--repo', repo, '--draft', '--title', title, '--notes', notes]],
+    ['gh', ['release', 'edit', tag, '--repo', repo, '--title', title, '--notes', notes]],
+    ['gh', ['release', 'upload', tag, ...assets, '--repo', repo, '--clobber']],
+    ['gh', ['release', 'edit', tag, '--repo', repo, '--draft=false']]
   ]
 }
 
@@ -151,13 +181,35 @@ function createSpawnOptions (options = {}) {
   }
 }
 
+function getSpawnStatus (result, command, args = []) {
+  if (result?.error) {
+    throw new Error(`${command} ${args.join(' ')} failed to start: ${result.error.message || result.error}`)
+  }
+  if (!Number.isInteger(result?.status)) {
+    throw new Error(`${command} ${args.join(' ')} returned an invalid process status`)
+  }
+  return result.status
+}
+
+function assertSpawnSuccess (result, command, args = []) {
+  const status = getSpawnStatus(result, command, args)
+  if (status !== 0) {
+    throw new Error(result.stderr || result.stdout || `${command} ${args.join(' ')} failed with status ${status}`)
+  }
+  return status
+}
+
 module.exports = {
+  assertSpawnSuccess,
   buildLocalReleaseAssetReport,
   buildReleaseTag,
   buildReleaseAssetReport,
   buildValidatedLocalReleaseAssets,
+  buildValidatedLocalUpdateAssets,
+  getAllowedGitHubReleaseAssetNames,
   getRequiredChecksumAssetNames,
   getRequiredReleaseAssetNames,
+  getSpawnStatus,
   selectUnexpectedReleaseAssets,
   selectReleaseAssets,
   buildGitHubReleaseCommands,

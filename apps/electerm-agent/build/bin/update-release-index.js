@@ -21,11 +21,20 @@ function getFileSha256 (distDir, name) {
   return fs.existsSync(filePath) ? sha256File(filePath) : undefined
 }
 
+function getReleaseNotes (version) {
+  const notesPath = path.resolve(__dirname, '../../docs/releases', `v${version}.md`)
+  if (fs.existsSync(notesPath)) {
+    const notes = fs.readFileSync(notesPath, 'utf8').trim()
+    if (notes) return notes
+  }
+  return `# ShellPilot v${version}`
+}
+
 function buildUpdateReleaseIndex ({
   version,
   distDir,
   arch,
-  body = '',
+  body,
   publishedAt = new Date().toISOString()
 }) {
   const tag = buildReleaseTag(version)
@@ -34,7 +43,7 @@ function buildUpdateReleaseIndex ({
     name: `ShellPilot ${tag}`,
     html_url: 'https://modelscope.cn/models/lx3559359/ShellPilot-Updates/files',
     published_at: publishedAt,
-    body,
+    body: String(body || getReleaseNotes(version)).trim(),
     assets: getRequiredReleaseAssetNames(version, { arch })
       .filter(name => name !== modelScopeReleaseManifestName)
       .map(name => ({
@@ -63,5 +72,6 @@ function writeUpdateReleaseIndex (options = {}) {
 
 module.exports = {
   buildUpdateReleaseIndex,
+  getReleaseNotes,
   writeUpdateReleaseIndex
 }

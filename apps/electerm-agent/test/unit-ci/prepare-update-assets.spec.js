@@ -101,6 +101,28 @@ test('prepares update assets from legacy aigshell-local metadata as a fallback',
   }
 })
 
+test('ModelScope release index embeds the versioned Markdown release notes', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigshell-update-assets-'))
+  try {
+    fs.writeFileSync(path.join(tempDir, 'shellpilot-local.yml'), 'version: 0.4.6\n')
+    fs.writeFileSync(path.join(tempDir, 'ShellPilot-0.4.6-win-x64-installer.exe'), 'installer')
+    fs.writeFileSync(path.join(tempDir, 'ShellPilot-0.4.6-win-x64-installer.exe.blockmap'), 'blockmap')
+
+    prepareUpdateAssets({
+      distDir: tempDir,
+      version: '0.4.6',
+      channel: 'stable'
+    })
+
+    const releaseIndex = JSON.parse(fs.readFileSync(path.join(tempDir, 'shellpilot-release.json'), 'utf8'))
+    const notes = fs.readFileSync(path.resolve(__dirname, '../../docs/releases/v0.4.6.md'), 'utf8').trim()
+    assert.equal(releaseIndex.body, notes)
+    assert.notEqual(releaseIndex.body, '')
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true })
+  }
+})
+
 test('prepares update assets from the CI workflow metadata when present', () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigshell-update-assets-'))
   const oldWorkflowName = process.env.WORKFLOW_NAME

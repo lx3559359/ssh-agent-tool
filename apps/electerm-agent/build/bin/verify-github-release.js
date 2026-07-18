@@ -6,7 +6,7 @@ const {
   buildReleaseAssetReport,
   buildReleaseTag,
   createSpawnOptions,
-  getRequiredReleaseAssetNames
+  getAllowedGitHubReleaseAssetNames
 } = require('./github-release-utils')
 
 const repo = process.env.GITHUB_REPOSITORY || 'lx3559359/ssh-agent-tool'
@@ -26,7 +26,7 @@ function ghJson (args) {
 }
 
 function readLocalFiles () {
-  return getRequiredReleaseAssetNames(pack.version, { arch: releaseArch }).map(name => {
+  return getAllowedGitHubReleaseAssetNames(pack.version, { arch: releaseArch }).map(name => {
     const filePath = path.join(distDir, name)
     if (!fs.existsSync(filePath)) {
       return {
