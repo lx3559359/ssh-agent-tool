@@ -321,9 +321,6 @@ export function getAgentCommandFillState ({
   if (passwordState !== false) return denied('无法可靠确认当前终端不在密码输入状态')
   const bufferType = terminal?.term?.buffer?.active?.type || terminal?.bufferMode
   if (bufferType !== 'normal') return denied('交互程序中不能填入命令')
-  if (!terminalAtTrustedShellPrompt(terminal)) {
-    return denied('无法可靠确认当前处于普通 Shell 提示符')
-  }
   let currentInput
   try {
     if (typeof terminal.getCurrentInput !== 'function') {
@@ -334,6 +331,9 @@ export function getAgentCommandFillState ({
     return denied('无法确认当前终端输入')
   }
   if (currentInput.length) return denied('当前终端已有输入')
+  if (!terminalAtTrustedShellPrompt(terminal)) {
+    return denied('无法可靠确认当前处于普通 Shell 提示符')
+  }
   return Object.freeze({ allowed: true, reason: '' })
 }
 

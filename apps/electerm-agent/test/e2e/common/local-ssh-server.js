@@ -85,7 +85,11 @@ function attachShell (stream, state) {
         state.ctrlCCount += 1
         line = ''
         stream.write('^C')
-        writePrompt(stream)
+        if (state.shellIntegrationNonce) {
+          writeTrackedPrompt(stream, state.shellIntegrationNonce)
+        } else {
+          writePrompt(stream)
+        }
         lastWasCarriageReturn = false
         continue
       }

@@ -38,6 +38,14 @@ test('allows only statically classified readonly commands through the readonly r
 
   for (const command of [
     'ip addr add 10.0.0.2/24 dev eth0',
+    'ip -brief address del 10.0.0.2/24 dev eth0',
+    'ip -brief address delete 10.0.0.2/24 dev eth0',
+    'ip -brief address replace 10.0.0.2/24 dev eth0',
+    'ip -brief address flush dev eth0',
+    'ip -brief address > /tmp/address',
+    'ip -brief address | cat',
+    'ip -brief address && uname -s',
+    'ip -brief address; uname -s',
     'cat /etc/os-release | sh',
     'echo $(id)',
     'journalctl -f',

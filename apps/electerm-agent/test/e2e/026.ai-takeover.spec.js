@@ -7,6 +7,7 @@ const {
   cleanupBookmarkProfile
 } = require('./common/bookmark-lifecycle')
 const { startLocalSshServer } = require('./common/local-ssh-server')
+const aiAgentCopy = require('../../src/client/components/ai/ai-agent-copy.json')
 
 test.setTimeout(240000)
 
@@ -167,13 +168,18 @@ async function expectAgentCompleted (client, item, text) {
   await expect(client.locator('.send-to-ai-icon')).toBeVisible()
 }
 
+async function focusActiveTerminalInput (client) {
+  const input = client.locator('.session-current .xterm-helper-textarea').last()
+  await input.evaluate(element => element.focus())
+  await expect(input).toBeFocused()
+  return input
+}
+
 async function typeManualCommand (client, sshServer, command) {
   const before = sshServer.state.commands.filter(value => value === command).length
-  await client.evaluate(command => {
-    const terminal = window.refs.get('term-' + window.store.activeTabId)
-    terminal.attachAddon.sendToServer(command)
-    terminal.attachAddon.sendToServer('\r')
-  }, command)
+  await focusActiveTerminalInput(client)
+  await client.keyboard.type(command)
+  await client.keyboard.press('Enter')
   await expect.poll(
     () => sshServer.state.commands.filter(value => value === command).length,
     { timeout: 10000 }
@@ -220,6 +226,12 @@ test('per-session takeover uses readonly exec, direct manual input and one risky
       return terminal?.isCommandSafetyTrackerReady?.() === true
     }), { timeout: 10000 }).toBe(true)
 
+    await focusActiveTerminalInput(client)
+    await client.keyboard.type('pending-terminal-input')
+    await expect.poll(() => client.evaluate(() => window.refs
+      .get('term-' + window.store.activeTabId)
+      ?.getCurrentInput?.())).toBe('pending-terminal-input')
+
     const readonlyCommandsBefore = sshServer.state.commands.filter(value => value === 'ip addr').length
     const readonlyExecBefore = sshServer.state.execCommands.filter(value => value === 'ip addr').length
     const readonlyRun = await submitAgentPrompt(client, 'readonly-e2e')
@@ -232,9 +244,6 @@ test('per-session takeover uses readonly exec, direct manual input and one risky
     expect(sshServer.state.commands.filter(value => value === 'ip addr')).toHaveLength(readonlyCommandsBefore)
 
     const readonlyCard = readonlyRun.item.locator('.agent-tool-readonly-card')
-    await expect(readonlyCard).toContainText('ip addr')
-    await expect(readonlyCard).toContainText('ms')
-    await expect(readonlyCard).toContainText('0')
     const evidence = await client.evaluate(() => {
       const item = [...window.store.aiChatHistory].reverse()
         .find(entry => entry.displayPrompt === 'readonly-e2e')
@@ -244,17 +253,41 @@ test('per-session takeover uses readonly exec, direct manual input and one risky
     expect(evidence.exitCode).toBe(0)
     expect(evidence.truncated).toBe(false)
     expect(evidence.output).toContain('LOOPBACK')
+    await expect(readonlyCard.locator('.agent-readonly-command')).toHaveText('ip addr')
+    const statusItems = readonlyCard.locator('.agent-readonly-status-line span')
+    await expect(statusItems.nth(0)).toHaveText(
+      `${aiAgentCopy.toolCall.targetLabel}: ${evidence.target}`
+    )
+    await expect(statusItems.nth(1)).toHaveText(
+      `${aiAgentCopy.toolCall.durationLabel}: ${evidence.durationMs} ms`
+    )
+    await expect(statusItems.nth(2)).toHaveText(
+      `${aiAgentCopy.toolCall.exitCodeLabel}: ${evidence.exitCode}`
+    )
+    await readonlyCard.locator('.agent-readonly-toggle').first().click()
+    await expect(readonlyCard.locator('.agent-readonly-output')).toContainText('LOOPBACK')
 
     const fillButton = readonlyCard.locator('.agent-readonly-actions button').nth(1)
+    await expect(fillButton).toBeDisabled()
+    await expect(readonlyCard.locator('.agent-readonly-fill-reason'))
+      .toContainText('当前终端已有输入')
+    await focusActiveTerminalInput(client)
+    await client.keyboard.press('Control+C')
+    await expect.poll(() => client.evaluate(() => window.refs
+      .get('term-' + window.store.activeTabId)
+      ?.getCurrentInput?.())).toBe('')
+    await expect.poll(() => client.evaluate(() => window.refs
+      .get('term-' + window.store.activeTabId)
+      ?.isCommandSafetyTrackerReady?.())).toBe(true)
+    await readonlyCard.locator('.agent-readonly-toggle').first().click()
     await expect(fillButton).toBeEnabled()
     await fillButton.click()
     await expect.poll(() => client.evaluate(() => window.refs
       .get('term-' + window.store.activeTabId)
       ?.getCurrentInput?.())).toBe('ip addr')
     expect(sshServer.state.commands.filter(value => value === 'ip addr')).toHaveLength(readonlyCommandsBefore)
-    await client.evaluate(() => window.refs
-      .get('term-' + window.store.activeTabId)
-      ?.attachAddon?.sendToServer('\r'))
+    await focusActiveTerminalInput(client)
+    await client.keyboard.press('Enter')
     await expect.poll(
       () => sshServer.state.commands.filter(value => value === 'ip addr').length
     ).toBe(readonlyCommandsBefore + 1)
@@ -262,11 +295,47 @@ test('per-session takeover uses readonly exec, direct manual input and one risky
       .get('term-' + window.store.activeTabId)
       ?.getCurrentInput?.())).toBe('')
 
+    await client.evaluate(({ firstTab, secondTab }) => {
+      const original = [...window.store.aiChatHistory].reverse()
+        .find(entry => entry.displayPrompt === 'readonly-e2e')
+      window.store.aiChatHistory = [...window.store.aiChatHistory, {
+        ...original,
+        id: 'readonly-wrong-tab-e2e',
+        conversationScopeId: secondTab,
+        sourceTabId: secondTab,
+        displayPrompt: 'readonly-wrong-tab-e2e',
+        toolCalls: original.toolCalls.map(call => ({
+          ...call,
+          presentation: { ...call.presentation, tabId: firstTab }
+        }))
+      }]
+      window.store.mcpSwitchTab({ tabId: secondTab })
+    }, { firstTab, secondTab })
+    const wrongTabCard = client.locator('.chat-history-item').last()
+      .locator('.agent-tool-readonly-card')
+    await expect(wrongTabCard).toBeVisible()
+    const wrongTabFill = wrongTabCard.locator('.agent-readonly-actions button').nth(1)
+    await expect(wrongTabFill).toBeDisabled()
+    await expect(wrongTabCard.locator('.agent-readonly-fill-reason'))
+      .toContainText('执行该命令的 SSH 标签页')
+    await client.evaluate(tabId => window.store.mcpSwitchTab({ tabId }), firstTab)
+
     const riskyBefore = sshServer.state.commands.filter(value => value === 'systemctl restart nginx').length
     const cancelRun = await submitAgentPrompt(client, 'risk-cancel-e2e')
     const cancelModal = client.locator('.terminal-command-safety-modal')
     await expect(cancelModal).toHaveCount(1)
     await expect(cancelModal).toContainText('systemctl restart nginx')
+    const boundEndpoint = await client.evaluate(() => window.refs
+      .get('term-' + window.store.activeTabId)
+      ?.getTerminalSafetyEndpoint?.())
+    await expect(cancelModal).toContainText(riskContext.purpose)
+    await expect(cancelModal).toContainText(riskContext.impactTargets[0])
+    await expect(cancelModal).toContainText(riskContext.verification[0].name)
+    await expect(cancelModal).toContainText(riskContext.verification[0].expected.contains)
+    await expect(cancelModal).toContainText(boundEndpoint.hostKeyFingerprint)
+    await expect(cancelModal).toContainText(
+      `${boundEndpoint.username}@${boundEndpoint.host}:${boundEndpoint.port}`
+    )
     await expect(client.locator('.agent-risk-confirmation-content')).toHaveCount(0)
     await cancelModal.locator('.custom-modal-cancel-btn').click()
     await expectAgentCompleted(client, cancelRun.item, 'risk cancelled complete')

@@ -169,7 +169,8 @@ export function createSafetyCommandEntrypoint (options = {}) {
         ? {
             riskContext: run.riskDelegation.riskContext,
             agentRiskReasonCode: run.riskDelegation.classification.reasonCode,
-            agentToolName: run.riskDelegation.toolName
+            agentToolName: run.riskDelegation.toolName,
+            endpoint: run.riskDelegation.endpoint
           }
         : {})
     }

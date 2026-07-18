@@ -80,28 +80,38 @@ async function startAgentApi () {
       }
     }
     const prompt = String(messages[userIndex]?.content || '')
-    const promptMatch = prompt.match(/^agent-readonly-real-(warmup|sample)-(\d+)-(\d+)$/)
+    const promptMatch = prompt.match(/^agent-readonly-real-(warmup|sample)-(\d+)$/)
     if (!promptMatch) {
       response.writeHead(400, { 'content-type': 'application/json' })
       response.end(JSON.stringify({ error: { message: 'Unexpected fixed real-server E2E prompt' } }))
       return
     }
-    const commandIndex = Number(promptMatch[2])
-    const command = readonlyCommands[commandIndex]
-    if (!command) {
+    const batchIndex = Number(promptMatch[2])
+    if ((promptMatch[1] === 'warmup' && batchIndex !== 0) ||
+      (promptMatch[1] === 'sample' && (batchIndex < 0 || batchIndex > 4))) {
       response.writeHead(400, { 'content-type': 'application/json' })
-      response.end(JSON.stringify({ error: { message: 'Readonly command index is outside the fixed allowlist' } }))
+      response.end(JSON.stringify({ error: { message: 'Readonly batch index is outside the fixed sample set' } }))
       return
     }
-    const hasToolResult = messages.slice(userIndex + 1).some(item => item.role === 'tool')
-    const message = hasToolResult
-      ? { role: 'assistant', content: 'readonly real-server sample complete' }
-      : {
-          role: 'assistant',
-          content: 'running fixed readonly sample',
-          tool_calls: [toolCall(`readonly-real-${state.commands.length}`, command)]
-        }
-    if (!hasToolResult) state.commands.push(command)
+    const toolResults = messages.slice(userIndex + 1).filter(item => item.role === 'tool')
+    let message
+    if (toolResults.length === 0) {
+      const firstId = state.commands.length
+      message = {
+        role: 'assistant',
+        content: 'running fixed readonly batch',
+        tool_calls: readonlyCommands.map((command, index) => (
+          toolCall(`readonly-real-${firstId + index}`, command)
+        ))
+      }
+      state.commands.push(...readonlyCommands)
+    } else if (toolResults.length === readonlyCommands.length) {
+      message = { role: 'assistant', content: 'readonly real-server batch complete' }
+    } else {
+      response.writeHead(400, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({ error: { message: 'Final response requires all five tool observations' } }))
+      return
+    }
     response.writeHead(200, { 'content-type': 'application/json' })
     response.end(JSON.stringify({ choices: [{ message }] }))
   })
@@ -160,8 +170,11 @@ async function enableTakeover (client) {
   await expect(toggle).toHaveAttribute('aria-checked', 'true')
 }
 
-async function runReadonlySample (client, prompt) {
+async function runReadonlyBatch (client, prompt) {
   await client.locator('.ai-chat-container .ant-segmented-item').filter({ hasText: 'Agent' }).click()
+  await client.evaluate(() => {
+    window.__shellpilotAgentReadonlyPtyMonitor.count = 0
+  })
   await client.locator('.ai-chat-textarea').fill(prompt)
   await client.locator('.send-to-ai-icon').click()
   await expect.poll(() => client.evaluate(expectedPrompt => {
@@ -170,23 +183,30 @@ async function runReadonlySample (client, prompt) {
       .find(entry => entry.displayPrompt === expectedPrompt)
     return item?.completionStatus
   }, prompt), { timeout: 30000 }).toBe('completed')
-  const evidence = await client.evaluate(expectedPrompt => {
+  const batch = await client.evaluate(expectedPrompt => {
     const item = [...window.store.aiChatHistory]
       .reverse()
       .find(entry => entry.displayPrompt === expectedPrompt)
-    const tool = item?.toolCalls?.[0]
+    const toolCalls = item?.toolCalls || []
     return {
-      toolName: tool?.name,
-      status: tool?.status,
-      presentation: tool?.presentation,
+      evidence: toolCalls.map(tool => ({
+        toolName: tool?.name,
+        status: tool?.status,
+        presentation: tool?.presentation
+      })),
       currentInput: window.refs
         .get('term-' + window.store.activeTabId)
-        ?.getCurrentInput?.()
+        ?.getCurrentInput?.(),
+      ptySendCount: window.__shellpilotAgentReadonlyPtyMonitor.count
     }
   }, prompt)
-  const card = client.locator('.chat-history-item').last().locator('.agent-tool-readonly-card')
-  await expect(card).toBeVisible()
-  return evidence
+  const cards = client.locator('.chat-history-item').last().locator('.agent-tool-readonly-card')
+  await expect(cards).toHaveCount(readonlyCommands.length)
+  for (let index = 0; index < readonlyCommands.length; index++) {
+    await expect(cards.nth(index)).toBeVisible()
+    await expect(cards.nth(index)).toContainText(readonlyCommands[index])
+  }
+  return batch
 }
 
 function percentile95 (values) {
@@ -215,10 +235,11 @@ test('Agent readonly SSH exec remains isolated, evidenced and fast on a real ser
   const agentApi = await startAgentApi()
   const samples = []
   let electronApp
+  let client
   try {
     const launched = await launchBookmarkApp()
     electronApp = launched.electronApp
-    const client = launched.client
+    client = launched.client
     const fakeApiToken = ['e2e', 'only', 'token'].join('-')
     await client.evaluate(({ port, fakeApiToken }) => window.store.setConfig({
       baseURLAI: `http://localhost:${port}`,
@@ -230,21 +251,42 @@ test('Agent readonly SSH exec remains isolated, evidenced and fast on a real ser
     }), { port: agentApi.port, fakeApiToken })
     await connectRealServer(client, config)
     await enableTakeover(client)
+    await client.evaluate(() => {
+      const terminal = window.refs.get('term-' + window.store.activeTabId)
+      const attachAddon = terminal?.attachAddon
+      if (!attachAddon?._sendData) throw new Error('Existing PTY send boundary is unavailable')
+      const original = attachAddon._sendData
+      const monitor = {
+        attachAddon,
+        original,
+        count: 0
+      }
+      attachAddon._sendData = function (...args) {
+        monitor.count += 1
+        return original.apply(this, args)
+      }
+      window.__shellpilotAgentReadonlyPtyMonitor = monitor
+    })
 
-    const warmup = await runReadonlySample(client, 'agent-readonly-real-warmup-3-0')
-    expect(warmup.toolName).toBe('run_readonly_command')
-    expect(warmup.status).toBe('completed')
-    expect(warmup.presentation.exitCode).toBe(0)
-    expect(warmup.presentation.truncated).toBe(false)
-    expect(Buffer.byteLength(warmup.presentation.output || '', 'utf8')).toBeGreaterThan(0)
+    const warmup = await runReadonlyBatch(client, 'agent-readonly-real-warmup-0')
+    expect(warmup.evidence).toHaveLength(readonlyCommands.length)
+    for (const evidence of warmup.evidence) {
+      expect(evidence.toolName).toBe('run_readonly_command')
+      expect(evidence.status).toBe('completed')
+      expect(evidence.presentation.exitCode).toBe(0)
+      expect(evidence.presentation.truncated).toBe(false)
+      expect(Buffer.byteLength(evidence.presentation.output || '', 'utf8')).toBeGreaterThan(0)
+    }
     expect(warmup.currentInput || '').toBe('')
+    expect(warmup.ptySendCount).toBe(0)
 
     for (let repeat = 0; repeat < 5; repeat++) {
-      for (let commandIndex = 0; commandIndex < readonlyCommands.length; commandIndex++) {
-        const evidence = await runReadonlySample(
-          client,
-          `agent-readonly-real-sample-${commandIndex}-${repeat}`
-        )
+      const batch = await runReadonlyBatch(client, `agent-readonly-real-sample-${repeat}`)
+      expect(batch.evidence).toHaveLength(readonlyCommands.length)
+      expect(batch.currentInput || '').toBe('')
+      expect(batch.ptySendCount).toBe(0)
+      for (let commandIndex = 0; commandIndex < batch.evidence.length; commandIndex++) {
+        const evidence = batch.evidence[commandIndex]
         const presentation = evidence.presentation || {}
         const outputBytes = Buffer.byteLength(presentation.output || '', 'utf8')
         expect(evidence.toolName).toBe('run_readonly_command')
@@ -259,7 +301,6 @@ test('Agent readonly SSH exec remains isolated, evidenced and fast on a real ser
         expect(presentation.exitCode).toBe(0)
         expect(presentation.truncated).toBe(false)
         expect(outputBytes).toBeGreaterThan(0)
-        expect(evidence.currentInput || '').toBe('')
         samples.push({ durationMs: presentation.durationMs, outputBytes })
       }
     }
@@ -267,7 +308,10 @@ test('Agent readonly SSH exec remains isolated, evidenced and fast on a real ser
     const durations = samples.map(sample => sample.durationMs)
     const p95Ms = percentile95(durations)
     expect(samples).toHaveLength(readonlyCommands.length * 5)
-    expect(agentApi.state.commands).toHaveLength(1 + readonlyCommands.length * 5)
+    expect(agentApi.state.commands).toEqual(Array.from(
+      { length: 6 },
+      () => readonlyCommands
+    ).flat())
     expect(p95Ms).toBeLessThanOrEqual(3000)
     testInfo.annotations.push({ type: 'p95Ms', description: String(p95Ms) })
     await testInfo.attach('agent-readonly-real-statistics.json', {
@@ -281,6 +325,11 @@ test('Agent readonly SSH exec remains isolated, evidenced and fast on a real ser
       contentType: 'application/json'
     })
   } finally {
+    await client?.evaluate(() => {
+      const monitor = window.__shellpilotAgentReadonlyPtyMonitor
+      if (monitor?.attachAddon) monitor.attachAddon._sendData = monitor.original
+      delete window.__shellpilotAgentReadonlyPtyMonitor
+    }).catch(() => {})
     await closeBookmarkApp(electronApp, __filename).catch(() => {})
     await cleanupBookmarkProfile().catch(() => {})
     await agentApi.close().catch(() => {})

@@ -15,6 +15,56 @@ const requiredEnvironmentVariables = [
   'SHELLPILOT_E2E_PASSWORD',
   'SHELLPILOT_E2E_REMOTE_ROOT'
 ]
+const approvedAgentEnvironmentVariables = [
+  'SHELLPILOT_E2E_HOST',
+  'SHELLPILOT_E2E_PORT',
+  'SHELLPILOT_E2E_USERNAME',
+  'SHELLPILOT_E2E_PASSWORD'
+]
+const approvedAgentReadonlyCommands = [
+  'ip -brief address',
+  'ip addr',
+  'ip route show',
+  'uname -s',
+  'cat /proc/loadavg'
+]
+
+function parseFrozenStringArray (source, name) {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const match = source.match(new RegExp(
+    `const\\s+${escaped}\\s*=\\s*Object\\.freeze\\(\\[([\\s\\S]*?)\\]\\)`
+  ))
+  assert.ok(match, `${name} must be a frozen literal array`)
+  const values = []
+  const literalPattern = /(['"])((?:\\.|(?!\1)[^\\])*)\1/g
+  const residue = match[1].replace(literalPattern, (_, quote, raw) => {
+    values.push(JSON.parse(`"${raw.replace(/"/g, '\\"')}"`))
+    return ''
+  }).replace(/[\s,]/g, '')
+  assert.equal(residue, '', `${name} may contain only string literals`)
+  return values
+}
+
+function assertNoForbiddenReadonlyFixtureSource (source) {
+  assert.doesNotMatch(
+    source,
+    /(?:^|[\s'"`])(?:sudo|su|rm|mv|cp|touch|mkdir|chmod|chown|tee|firewall-cmd|ufw|iptables|nft|nmcli|useradd|userdel|passwd|reboot|shutdown|poweroff|kill|pkill)\b/i
+  )
+  assert.doesNotMatch(source, /\bsed\s+-i\b/i)
+  assert.doesNotMatch(source, /\bip\s+(?:-[^\s]+\s+)*(?:link\s+set|(?:address|addr)\s+(?:add|del|delete|replace|flush))\b/i)
+  assert.doesNotMatch(source, /\bifconfig\s+\S+\s+(?:up|down|[-\d]|netmask|broadcast|mtu|hw)\b/i)
+  assert.doesNotMatch(source, /\b(?:systemctl|service)\s+(?:restart|reload|stop|start|enable|disable|mask|unmask)\b/i)
+  assert.doesNotMatch(source, /\b(?:apt(?:-get)?|yum|dnf|apk|zypper|pacman)\s+(?:install|remove|purge|upgrade|update)\b/i)
+  assert.doesNotMatch(source, /['"`]\s*(?:ip|ifconfig|uname|cat)\b[^'"`\r\n]*(?:>>?|\|\||&&|[|;])[^'"`\r\n]*['"`]/i)
+  assert.doesNotMatch(source, /(?:exec|execFile|spawn|fork)\s*\(/)
+  assert.doesNotMatch(source, /\bargv\b/)
+  assert.doesNotMatch(source, /['"](?:node:)?process['"]\s*\)?/)
+  assert.doesNotMatch(
+    source.replace(/\bprocess\.env\b/g, ''),
+    /\bprocess\b/,
+    'the fixture may use process only for the exact process.env credential boundary'
+  )
+}
 
 function readSpec () {
   return fs.readFileSync(specPath, 'utf8')
@@ -98,16 +148,15 @@ test('Agent readonly real-server E2E spec exists', () => {
 
 test('Agent readonly real-server E2E reads only the four approved credentials', { skip: !agentSpecExists }, () => {
   const source = readAgentSpec()
-  const approved = requiredEnvironmentVariables.filter(name => name !== 'SHELLPILOT_E2E_REMOTE_ROOT')
-
-  for (const variable of approved) {
-    assert.match(source, new RegExp(`['"]${variable}['"]`))
-  }
+  assert.deepEqual(
+    parseFrozenStringArray(source, 'requiredEnvironmentVariables'),
+    approvedAgentEnvironmentVariables
+  )
   assert.doesNotMatch(source, /SHELLPILOT_E2E_REMOTE_ROOT/)
   const directEnvironmentReads = [...source.matchAll(/process\.env\.([A-Z][A-Z0-9_]*)/g)]
     .map(match => match[1])
   assert.deepEqual(
-    directEnvironmentReads.filter(name => !approved.includes(name)),
+    directEnvironmentReads.filter(name => !approvedAgentEnvironmentVariables.includes(name)),
     []
   )
   assert.doesNotMatch(source, /(?:password|username|host|apiKey)\s*[:=]\s*['"][^'"]+['"]/i)
@@ -118,23 +167,60 @@ test('Agent readonly real-server E2E reads only the four approved credentials', 
 test('Agent readonly real-server E2E fixes the complete command allowlist in source', { skip: !agentSpecExists }, () => {
   const source = readAgentSpec()
 
-  assert.match(source, /const readonlyCommands = Object\.freeze\(\[/)
-  for (const command of [
-    'ip -brief address',
-    'ip addr',
-    'ip route show',
-    'uname -s',
-    'cat /proc/loadavg'
-  ]) {
-    assert.match(source, new RegExp(`['"]${command.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}['"]`))
-  }
-  assert.match(source, /for \(let repeat = 0; repeat < 5; repeat\+\+\)/)
-  assert.doesNotMatch(
-    source,
-    /\b(?:sudo|su|rm|mv|cp|touch|mkdir|chmod|chown|tee|systemctl|service|firewall-cmd|ufw|iptables|nft|nmcli|useradd|userdel|passwd|reboot|shutdown|poweroff|kill|pkill|apt|yum|dnf|apk)\b|sed\s+-i|ip\s+(?:address|addr|route)\s+(?:add|del|replace)/i
+  assert.deepEqual(
+    parseFrozenStringArray(source, 'readonlyCommands'),
+    approvedAgentReadonlyCommands
   )
-  assert.doesNotMatch(source, /(?:exec|execFile|spawn|fork)\s*\(/)
-  assert.doesNotMatch(source, /process\.argv/)
+  assert.match(source, /for \(let repeat = 0; repeat < 5; repeat\+\+\)/)
+  assertNoForbiddenReadonlyFixtureSource(source)
+})
+
+test('Agent readonly hygiene rejects extra allowlist entries and indirect argv access', () => {
+  const synthetic = "const readonlyCommands = Object.freeze(['ip addr', 'touch /tmp/nope'])"
+  assert.notDeepEqual(
+    parseFrozenStringArray(synthetic, 'readonlyCommands'),
+    approvedAgentReadonlyCommands
+  )
+  for (const source of [
+    "const value = process['argv']",
+    'const value = globalThis.process.argv',
+    "const value = global['process']['argv']",
+    "import process from 'node:process'",
+    'const { argv: values } = process',
+    'const proc = require(\'process\')',
+    'const proc = process; const value = proc.argv'
+  ]) {
+    assert.throws(() => assertNoForbiddenReadonlyFixtureSource(source))
+  }
+})
+
+test('Agent readonly real-server E2E uses one five-call batch and observes no PTY sends', { skip: !agentSpecExists }, () => {
+  const source = readAgentSpec()
+
+  assert.match(source, /tool_calls:\s*readonlyCommands\.map\(/)
+  assert.match(source, /toolResults\.length\s*===\s*readonlyCommands\.length/)
+  assert.match(source, /runReadonlyBatch/)
+  assert.match(source, /toolCalls\.map\(/)
+  assert.match(source, /agent-readonly-real-warmup-0/)
+  assert.match(source, /agent-readonly-real-sample-\$\{repeat\}/)
+  assert.match(source, /__shellpilotAgentReadonlyPtyMonitor/)
+  assert.match(source, /attachAddon\._sendData/)
+  assert.match(source, /ptySendCount/)
+  assert.match(source, /toBe\(0\)/)
+  assert.doesNotMatch(source, /agent-readonly-real-(?:warmup|sample)-\$?\{?commandIndex/)
+})
+
+test('local takeover E2E drives manual input only through the xterm textarea and keyboard', () => {
+  const source = fs.readFileSync(path.join(root, 'test/e2e/026.ai-takeover.spec.js'), 'utf8')
+
+  assert.match(source, /\.xterm-helper-textarea/)
+  assert.match(source, /client\.keyboard\.type\(command\)/)
+  assert.match(source, /client\.keyboard\.press\('Enter'\)/)
+  assert.doesNotMatch(source, /attachAddon(?:\?\.)?\.sendToServer/)
+  assert.match(source, /agent-readonly-fill-reason/)
+  assert.match(source, /mcpSwitchTab/)
+  assert.match(source, /terminal-command-safety-modal/)
+  assert.match(source, /hostKeyFingerprint/)
 })
 
 test('Agent readonly real-server E2E exercises the client takeover path without leaking server data', { skip: !agentSpecExists }, () => {
@@ -150,4 +236,16 @@ test('Agent readonly real-server E2E exercises the client takeover path without 
   assert.match(source, /outputBytes\)\.toBeGreaterThan\(0\)/)
   assert.doesNotMatch(source, /console\.(?:log|info|debug|warn|error)\s*\(/)
   assert.doesNotMatch(source, /presentation\.output[^\n]*(?:attach|body|write|log)/)
+})
+
+test('unit fixture uses an RFC 5737 address for the sanitized VPS example', () => {
+  const source = fs.readFileSync(
+    path.join(root, 'test/unit-ci/server-maintenance-quick-commands.spec.js'),
+    'utf8'
+  )
+  const documentationAddressUses = source.match(/\b192\.0\.2\.44\b/g) || []
+  assert.ok(
+    documentationAddressUses.length >= 5,
+    'the repeated VPS fixture must use an RFC 5737 documentation address'
+  )
 })
