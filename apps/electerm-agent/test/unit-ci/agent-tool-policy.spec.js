@@ -199,6 +199,9 @@ test('respects short option arity when detecting streaming flags', async () => {
 
   for (const command of [
     'kubectl get -owide pods',
+    'kubectl get -fworkload.yaml',
+    'kubectl get -f/dev/null',
+    'kubectl get -kworkload',
     'kubectl logs -cfrontend pod/demo'
   ]) {
     assert.equal(classify(command).outcome, 'allowlisted-readonly', command)
@@ -206,6 +209,10 @@ test('respects short option arity when detecting streaming flags', async () => {
 
   for (const command of [
     'kubectl get -Aw pods',
+    'kubectl get -w pods',
+    'kubectl get --watch pods',
+    'kubectl get -f-',
+    'kubectl get -f/dev/zero',
     'kubectl logs -pf pod/demo'
   ]) {
     assert.equal(classify(command).outcome, 'risky', command)
@@ -364,6 +371,11 @@ test('rejects stdin and special streams in command-specific file options', async
   for (const command of [
     'du --files0-from=-',
     'du --files0-from=/dev/zero',
+    'du --f=-',
+    'du --files0-f=-',
+    'du --files0-fr=-',
+    'du --files0-f -',
+    'du --files0-fr=/dev/zero',
     'find -files0-from - -print',
     'find -files0-from /proc/kmsg -print'
   ]) {
@@ -373,6 +385,11 @@ test('rejects stdin and special streams in command-specific file options', async
   for (const command of [
     'du --files0-from=paths.txt',
     'du --files0-from=/dev/null',
+    'du --f=paths.txt',
+    'du --files0-f=paths.txt',
+    'du --files0-fr paths.txt',
+    'du --files0-f=/dev/null',
+    'du --files0-fr /dev/null',
     'find -files0-from paths.txt -print',
     'find -files0-from /dev/null -print'
   ]) {

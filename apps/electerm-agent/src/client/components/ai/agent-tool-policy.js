@@ -233,7 +233,7 @@ function isStreamingCommand (command) {
     if (action === 'get') {
       return optionEnabled(actionArgs, {
         short: 'w',
-        shortValueOptions: 'olLnsv',
+        shortValueOptions: 'fkolLnsv',
         long: '--watch'
       }) || optionEnabled(actionArgs, { long: '--watch-only' })
     }
@@ -322,6 +322,24 @@ const commandInputFileOptions = Object.freeze({
   kubectl: new Set(['-f']),
   sed: new Set(['-f'])
 })
+const abbreviatedInputFileOptions = Object.freeze({
+  du: new Set(['--files0-from'])
+})
+
+function inputFileOptionSpelling (name, word, fileOptions) {
+  const equals = word.indexOf('=')
+  const spelling = equals === -1 ? word : word.slice(0, equals)
+  for (const option of fileOptions) {
+    if (word === option || word.startsWith(`${option}=`) ||
+      (option.length === 2 && word.startsWith(option))) return option
+  }
+  if (spelling.length > 2 &&
+    [...(abbreviatedInputFileOptions[name] || [])]
+      .some(option => option.startsWith(spelling))) {
+    return spelling
+  }
+  return ''
+}
 
 function hasGitNoIndexStdin (name, args) {
   if (name !== 'git' || args[0]?.toLowerCase() !== 'diff') return false
@@ -345,10 +363,7 @@ function isExplicitUnboundedInput (name, args) {
     if (!parseOptions) continue
     if (word === '--stdin' || word.startsWith('--stdin=')) return true
 
-    const fileOption = [...fileOptions].find(option => (
-      word === option || word.startsWith(`${option}=`) ||
-      (option.length === 2 && word.startsWith(option))
-    ))
+    const fileOption = inputFileOptionSpelling(name, word, fileOptions)
     if (fileOption) {
       const value = word === fileOption
         ? args[index + 1]
