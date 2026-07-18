@@ -127,11 +127,22 @@ test('Agent tab-scoped tools stay bound to the tab that started the conversation
     path.resolve(__dirname, '../../src/client/components/ai/agent-tools.js'),
     'utf8'
   )
+  const rawArgs = { command: 'uptime' }
+  const traceContext = {
+    traceId: 'sp-1784304000000-12345678',
+    taskId: 'agent-task-1',
+    module: 'ai',
+    action: 'agent-run'
+  }
 
   assert.deepEqual(
-    bindAgentToolArgs('send_terminal_command', { command: 'uptime' }, { sourceTabId: 'tab-a' }),
-    { command: 'uptime', tabId: 'tab-a' }
+    bindAgentToolArgs('send_terminal_command', rawArgs, {
+      sourceTabId: 'tab-a',
+      traceContext
+    }),
+    { command: 'uptime', tabId: 'tab-a', traceContext }
   )
+  assert.deepEqual(rawArgs, { command: 'uptime' })
   assert.deepEqual(
     bindAgentToolArgs('send_terminal_command', { command: 'uptime', tabId: 'tab-b' }, { sourceTabId: 'tab-a' }),
     { command: 'uptime', tabId: 'tab-a' }
@@ -327,10 +338,55 @@ test('conversation context sanitizes a direct current item before sending it', a
 })
 
 test('history scrolling only stays pinned while the reader is near the bottom', async () => {
-  const { isAIHistoryNearBottom } = await import(pathToFileURL(scrollPath))
+  const {
+    createAIHistorySnapshot,
+    getAIHistoryChangedItemIds,
+    isAIHistoryNearBottom,
+    mergeUnreadAIHistoryIds
+  } = await import(pathToFileURL(scrollPath))
 
   assert.equal(isAIHistoryNearBottom({ scrollTop: 940, clientHeight: 500, scrollHeight: 1460 }), true)
   assert.equal(isAIHistoryNearBottom({ scrollTop: 300, clientHeight: 500, scrollHeight: 1460 }), false)
+
+  const before = [{ id: 'message-1', prompt: 'check', response: '', completionStatus: 'pending' }]
+  const firstChunk = [{ id: 'message-1', prompt: 'check', response: 'first', completionStatus: 'running' }]
+  const secondChunk = [{ id: 'message-1', prompt: 'check', response: 'first second', completionStatus: 'running' }]
+
+  assert.deepEqual(getAIHistoryChangedItemIds(before, firstChunk), ['message-1'])
+  assert.deepEqual(
+    getAIHistoryChangedItemIds(
+      createAIHistorySnapshot(before),
+      createAIHistorySnapshot(firstChunk)
+    ),
+    ['message-1'],
+    'stored snapshots must preserve streaming changes'
+  )
+  assert.deepEqual(
+    mergeUnreadAIHistoryIds([], getAIHistoryChangedItemIds(before, firstChunk), false),
+    ['message-1']
+  )
+  assert.deepEqual(
+    mergeUnreadAIHistoryIds(['message-1'], getAIHistoryChangedItemIds(firstChunk, secondChunk), false),
+    ['message-1'],
+    'streaming updates from the same entry count as one unread message'
+  )
+  assert.deepEqual(
+    mergeUnreadAIHistoryIds(['message-1'], ['message-2'], true),
+    [],
+    'reaching the bottom clears unread messages'
+  )
+})
+
+test('AI history exposes a visible return-to-latest action with unread count', () => {
+  const source = fs.readFileSync(
+    path.resolve(__dirname, '../../src/client/components/ai/ai-chat-history.jsx'),
+    'utf8'
+  )
+
+  assert.match(source, /shellpilotBackToLatest/)
+  assert.match(source, /unreadItemIds/)
+  assert.match(source, /ArrowDownOutlined/)
+  assert.match(source, /handleBackToLatest/)
 })
 
 test('chat entries persist scope display text and explicit completion state', () => {
@@ -368,6 +424,14 @@ test('chat cancellation invalidates late polling and request failures stay visib
   assert.match(historyItem, /response:\s*buildAIRequestFailureText/)
   assert.match(historyItem, /setIsStreaming\(true\)[\s\S]*runGlobalAsync\(\s*'AIchat'/)
   assert.match(historyItem, /runGlobalAsync\(\s*'AIChatCancel',\s*initialRequestId/)
+  assert.match(
+    historyItem,
+    /const pollStreamContent = useCallback[\s\S]{0,500}const isActive = \(\) => \([\s\S]{0,250}shouldApplyAIChatAsyncUpdate\(window\.store,\s*item\.id\)/
+  )
+  assert.match(
+    historyItem,
+    /const startRequest = useCallback[\s\S]{0,500}const isActive = \(\) => \([\s\S]{0,250}shouldApplyAIChatAsyncUpdate\(window\.store,\s*item\.id\)/
+  )
 })
 
 test('Agent cancellation remains effective while a tool confirmation is open', async () => {

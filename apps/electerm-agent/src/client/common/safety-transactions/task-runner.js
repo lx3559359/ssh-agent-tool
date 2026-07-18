@@ -379,14 +379,14 @@ export function createTaskRunner (options = {}) {
     }
   }
 
-  async function create (plan) {
+  async function create (plan, traceContext) {
     const normalized = validateTaskPlan(plan)
     const draft = await save({
       ...normalized,
       status: taskStatuses.draft,
       createdAt: plan.createdAt || timestamp(),
       updatedAt: timestamp()
-    })
+    }, traceContext)
     return patch(draft.id, {
       status: taskStatuses.awaitingPlanConfirmation,
       updatedAt: timestamp()

@@ -63,6 +63,37 @@ test('electron builder prepare script keeps CI publish channel explicit', () => 
   assert.equal(config.win.publish.channel, 'windows-electerm-agent')
 })
 
+test('electron builder prepare generates cpu-features build config for pnpm installs', () => {
+  const {
+    prepareCpuFeaturesBuildConfig
+  } = require(path.resolve(__dirname, '../../build/bin/prepare-electron-build.js'))
+
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'shellpilot-cpu-features-'))
+  const packageDir = path.join(
+    tmpRoot,
+    'node_modules/.pnpm/cpu-features@0.0.10/node_modules/cpu-features'
+  )
+  fs.mkdirSync(packageDir, { recursive: true })
+  fs.writeFileSync(
+    path.join(packageDir, 'buildcheck.js'),
+    'console.log(JSON.stringify({ conditions: [] }, null, 2))\n',
+    'utf8'
+  )
+
+  try {
+    const prepared = prepareCpuFeaturesBuildConfig({ cwd: tmpRoot })
+    const generated = JSON.parse(fs.readFileSync(
+      path.join(packageDir, 'buildcheck.gypi'),
+      'utf8'
+    ))
+
+    assert.deepEqual(prepared, [packageDir])
+    assert.deepEqual(generated, { conditions: [] })
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true })
+  }
+})
+
 test('electron builder config cleans packaged batch scripts after native rebuild', () => {
   const config = JSON.parse(fs.readFileSync(
     path.resolve(__dirname, '../../build/electron-builder.json'),

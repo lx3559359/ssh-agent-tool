@@ -108,7 +108,7 @@ test('renderer shell guards empty tabs and a missing current tab', () => {
 
 test('renderer shell and right AI panel tolerate a null config', () => {
   const main = read('src/client/components/main/main.jsx')
-  const sidePanel = read('src/client/components/side-panel-r/side-panel-r.jsx')
+  const sidePanel = read('src/client/components/side-panel-r/right-side-panel-ai-header.jsx')
 
   assert.match(main, /const\s+rawConfig\s*=\s*store\.config/)
   assert.match(main, /const\s+config\s*=\s*rawConfig\s*\|\|\s*\{\}/)

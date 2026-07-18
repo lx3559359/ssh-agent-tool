@@ -113,7 +113,7 @@ export default function DataTransport (props) {
           </Space>
         )}
         <HelpIcon
-          link='https://github.com/electerm/electerm/wiki/Auto-data-Sync'
+          link='https://github.com/lx3559359/ssh-agent-tool/blob/master/docs/USER_GUIDE_ZH.md'
         />
       </div>
     </div>

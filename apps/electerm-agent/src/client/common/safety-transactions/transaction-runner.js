@@ -977,15 +977,21 @@ export function createTransactionRunner (options = {}) {
             operationStates.rollingBack
           ].includes(current.state)
     )
-    const state = failure || preservesRecovery
-      ? operationStates.failed
-      : operationStates.cancelled
+    const rollbackCancelled = !failure && preservesRecovery &&
+      current.state === operationStates.rollingBack
+    const state = rollbackCancelled
+      ? operationStates.rollbackAvailable
+      : failure || preservesRecovery
+        ? operationStates.failed
+        : operationStates.cancelled
     const next = await patch(current.id, {
       audit: appendAudit(current, entries),
       error: failure?.message || cancellationError().message,
       ...(state === operationStates.failed
         ? { failedAt: timestamp() }
-        : { completedAt: timestamp() }),
+        : state === operationStates.cancelled
+          ? { completedAt: timestamp() }
+          : {}),
       state,
       updatedAt: timestamp(),
       executionId: undefined

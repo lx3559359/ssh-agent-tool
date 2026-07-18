@@ -198,10 +198,12 @@ test('AI health coordinator debounces automatic checks for 450ms', async () => {
     modelStatus: 'available',
     models: ['model-a'],
     message: 'ok',
-    checkedAt: clock.now()
+    checkedAt: clock.now(),
+    latencyMs: null
   })
   await clock.advance(0)
   assert.equal(coordinator.getSnapshot(profile).status, 'available')
+  assert.equal(coordinator.getSnapshot(profile).latencyMs, null)
 })
 
 test('AI health coordinator caches for five minutes and deduplicates inflight checks', async () => {

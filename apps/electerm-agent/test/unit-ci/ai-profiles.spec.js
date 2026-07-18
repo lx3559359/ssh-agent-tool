@@ -33,6 +33,22 @@ test('migrates old single AI config into one active profile without losing field
   assert.equal(active.apiKeyAI, 'sk-example')
 })
 
+test('AI profile migration clears the legacy built-in SSH operations role', async () => {
+  const {
+    migrateAIProfiles
+  } = await import(profilesUrl)
+
+  const config = migrateAIProfiles({
+    nameAI: '旧版配置',
+    baseURLAI: 'https://api.example.com/v1',
+    apiKeyAI: 'sk-example',
+    roleAI: 'SSH 运维专家，优先排查服务器、网络、日志、进程、端口、磁盘、内存、Nginx、Docker 和部署问题。回答使用中文和 Markdown。'
+  })
+
+  assert.equal(config.roleAI, '')
+  assert.equal(config.aiProfiles[0].roleAI, '')
+})
+
 test('upserts multiple AI profiles and switches active profile by id', async () => {
   const {
     migrateAIProfiles,
@@ -107,6 +123,45 @@ test('AI model status reports real tested state instead of configured-only state
     aiStatus: 'error',
     aiStatusMessage: '模型不存在'
   }, zh).label, '网络异常')
+})
+
+test('AI model status includes latency, last check and failure details', async () => {
+  const { getAIModelStatus } = await import(profilesUrl)
+  const config = {
+    baseURLAI: 'https://api.example.com',
+    apiKeyAI: 'sk-example',
+    modelAI: 'model-a'
+  }
+  const checkedAt = Date.now()
+  const available = getAIModelStatus(config, key => key, {
+    status: 'available',
+    latencyMs: 126,
+    checkedAt,
+    message: '检测成功'
+  })
+  assert.equal(available.latencyMs, 126)
+  assert.equal(available.checkedAt, checkedAt)
+  assert.match(available.title, /响应 126 ms/)
+  assert.match(available.title, /最近检测/)
+
+  const failed = getAIModelStatus(config, key => key, {
+    status: 'network-error',
+    latencyMs: 8001,
+    checkedAt,
+    message: '连接超时'
+  })
+  assert.equal(failed.failureReason, '连接超时')
+  assert.match(failed.title, /连接超时/)
+
+  const unconfigured = getAIModelStatus({}, key => key)
+  assert.equal(unconfigured.latencyMs, null)
+
+  const unchecked = getAIModelStatus(config, key => key, {
+    status: 'stale',
+    latencyMs: null
+  })
+  assert.equal(unchecked.latencyMs, null)
+  assert.doesNotMatch(unchecked.title, /响应 0 ms/)
 })
 
 test('AI profiles persist fetched model lists and expose model switch options', async () => {
@@ -221,7 +276,7 @@ test('AI config modal and chat are wired to active AI profile selection', () => 
     'utf8'
   )
   const sidePanelSource = fs.readFileSync(
-    path.resolve(__dirname, '../../src/client/components/side-panel-r/side-panel-r.jsx'),
+    path.resolve(__dirname, '../../src/client/components/side-panel-r/right-side-panel-ai-header.jsx'),
     'utf8'
   )
 

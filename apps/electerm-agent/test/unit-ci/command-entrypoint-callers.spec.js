@@ -32,6 +32,12 @@ test('Agent terminal commands use the safety entrypoint and preserve idle result
   const { runAgentTerminalCommand } = await import(agentTerminalUrl)
   const calls = []
   const idle = { output: 'ok', timedOut: false, tabId: 'tab-1' }
+  const traceContext = {
+    traceId: 'sp-1784304000000-12345678',
+    taskId: 'agent-task-1',
+    module: 'ai',
+    action: 'agent-run'
+  }
   const store = {
     activeTabId: 'tab-1',
     async runSafetyCommand (command, options) {
@@ -46,7 +52,7 @@ test('Agent terminal commands use the safety entrypoint and preserve idle result
 
   const result = await runAgentTerminalCommand({
     store,
-    args: { command: 'uptime' }
+    args: { command: 'uptime', traceContext }
   })
 
   assert.deepEqual(result, idle)
@@ -54,7 +60,8 @@ test('Agent terminal commands use the safety entrypoint and preserve idle result
     ['safety', 'uptime', {
       tabId: 'tab-1',
       source: 'agent',
-      title: 'Agent 终端命令'
+      title: 'Agent 终端命令',
+      traceContext
     }],
     ['wait', {
       tabId: 'tab-1',

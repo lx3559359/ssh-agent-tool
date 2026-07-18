@@ -24,6 +24,7 @@ exports.onClose = async function (e) {
     globalState.set('closeAction', '')
     return e.preventDefault()
   }
+  globalState.get('recoverySnapshot')?.markCleanExitSync()
   log.debug('Closing app')
   const childPid = globalState.get('childPid')
   childPid && process.kill(childPid)

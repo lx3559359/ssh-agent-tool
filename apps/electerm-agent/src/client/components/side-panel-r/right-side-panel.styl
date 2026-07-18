@@ -34,6 +34,9 @@
 
 .right-panel-title-text
   display block
+  white-space nowrap
+  overflow hidden
+  text-overflow ellipsis
   color var(--text-light)
   font-size 15px
   font-weight 650
@@ -130,6 +133,13 @@
 
 .right-panel-model-status-refresh
   font-size 11px
+
+.right-panel-model-latency
+  padding-left 4px
+  border-left 1px solid currentColor
+  font-size 11px
+  line-height 1
+  opacity .86
 
 .right-side-panel-controls
   color var(--text)

@@ -5,6 +5,7 @@ const {
   appExecutableName,
   buildSmokeEnvironment,
   resolveSmokePaths,
+  validatePackagedRuntime,
   validateSmokeResult
 } = require('./package-smoke-utils')
 
@@ -217,6 +218,7 @@ async function main () {
   if (!fs.existsSync(paths.exePath)) {
     throw new Error(`${appExecutableName} package not found: ${paths.exePath}. Run npm run b first.`)
   }
+  validatePackagedRuntime(paths)
 
   fs.mkdirSync(paths.dataPath, { recursive: true })
   const child = spawn(paths.exePath, [], {

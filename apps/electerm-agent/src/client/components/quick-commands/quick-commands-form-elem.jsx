@@ -109,7 +109,7 @@ export default function QuickCommandForm (props) {
   const templatesStr = templates.map(t => {
     return `{{${t}}}`
   }).join(', ')
-  const wiki = 'https://github.com/electerm/electerm/wiki/quick-command-templates'
+  const wiki = 'https://github.com/lx3559359/ssh-agent-tool/blob/master/docs/USER_GUIDE_ZH.md'
   return (
     <>
       <Form
@@ -133,7 +133,7 @@ export default function QuickCommandForm (props) {
         {renderQm(form)}
         <FormItem
           name='labels'
-          label={e('label')}
+          label={e('shellpilotQuickCommandLabels')}
         >
           <Select
             mode='tags'
@@ -177,7 +177,7 @@ export default function QuickCommandForm (props) {
           </p>
         </FormItem>
         <p>
-          <b className='mg1r'>{e('templates')}:</b>
+          <b className='mg1r'>{e('shellpilotQuickCommandTemplates')}:</b>
           <span className='mg1r'>{templatesStr}</span>
           <HelpIcon
             link={wiki}

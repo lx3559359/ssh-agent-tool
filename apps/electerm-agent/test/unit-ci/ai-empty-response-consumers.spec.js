@@ -10,6 +10,10 @@ const asyncResultUrl = pathToFileURL(path.join(
   root,
   'src/client/common/async-result.js'
 )).href
+const traceContextUrl = pathToFileURL(path.join(
+  root,
+  'src/client/common/quality/trace-context.js'
+)).href
 
 function toDataUrl (source) {
   return `data:text/javascript;base64,${Buffer.from(source).toString('base64')}`
@@ -32,6 +36,8 @@ async function importStreamConsumer () {
     const createAIStoredTextAccumulator = () => ({
       sanitize: value => String(value ?? '')
     })
+    const markAIResponseContent = () => false
+    const finishAIQuality = () => false
     const updateAIChatHistoryEntry = (store, id, updates) => {
       const index = store.aiChatHistory.findIndex(item => item.id === id)
       if (index === -1) return false
@@ -106,6 +112,10 @@ async function importAgentModule () {
     .replace(
       /^import \{ normalizeAsyncResult \} from '\.\.\/\.\.\/common\/async-result\.js'\r?\n/m,
       `import { normalizeAsyncResult } from ${JSON.stringify(asyncResultUrl)}\n`
+    )
+    .replace(
+      /^import \{ createTraceContext \} from '\.\.\/\.\.\/common\/quality\/trace-context\.js'\r?\n/m,
+      `import { createTraceContext } from ${JSON.stringify(traceContextUrl)}\n`
     )
 
   assert.doesNotMatch(source, /^import .*from '\./m, 'all local agent imports must be stubbed')
@@ -456,6 +466,103 @@ test('agent loop returns a diagnostic empty response for null and undefined back
     assert.match(window.store.aiChatHistory[0].response, /empty-response/)
     assert.deepEqual(streaming, [true, false])
     assert.equal(window.store.agentRunning, false)
+  }
+})
+
+test('agent loop keeps its parent trace internal while propagating it to tool runtime', async () => {
+  const { runAgentLoop } = await importAgentModule()
+  const chatEntry = { id: 'agent-trace-task', sourceTabId: 'tab-a', prompt: 'check status' }
+  const backendContexts = []
+  const backendMessages = []
+  let backendCalls = 0
+  let toolRuntime
+  let toolArgs
+  global.__executeToolCall = async (name, args, runtime) => {
+    toolArgs = args
+    toolRuntime = runtime
+    return 'readonly evidence'
+  }
+  global.window = {
+    pre: {
+      runGlobalAsync: async (action, ...args) => {
+        assert.equal(action, 'AIchatWithTools')
+        backendCalls += 1
+        backendMessages.push(args[0])
+        backendContexts.push(args.at(-1))
+        if (backendCalls === 1) {
+          return {
+            message: {
+              role: 'assistant',
+              content: '',
+              tool_calls: [{
+                id: 'tool-trace-1',
+                function: {
+                  name: 'get_terminal_status',
+                  arguments: '{"tabId":"model-tab"}'
+                }
+              }]
+            }
+          }
+        }
+        return {
+          message: {
+            role: 'assistant',
+            content: 'done',
+            tool_calls: []
+          }
+        }
+      }
+    },
+    store: {
+      agentRunning: false,
+      aiChatHistory: [chatEntry],
+      config: {},
+      getLangName: () => 'English'
+    }
+  }
+  const parentTrace = {
+    traceId: 'sp-1784304000000-12345678',
+    operationId: 'upstream-operation',
+    requestId: 'upstream-request',
+    password: 'parent-secret'
+  }
+
+  try {
+    await runAgentLoop(
+      chatEntry,
+      {},
+      { current: false },
+      () => {},
+      [],
+      parentTrace
+    )
+
+    assert.equal(toolRuntime.traceContext.traceId, parentTrace.traceId)
+    assert.equal(toolRuntime.traceContext.taskId, chatEntry.id)
+    assert.equal(toolRuntime.traceContext.operationId, undefined)
+    assert.equal(toolRuntime.traceContext.requestId, undefined)
+    assert.equal(toolRuntime.traceContext.password, undefined)
+    assert.deepEqual(toolArgs, { tabId: 'model-tab' })
+    assert.equal(backendContexts.length, 2)
+    assert.equal(backendContexts.every(context => context.traceId === parentTrace.traceId), true)
+    assert.equal(backendContexts.every(context => context.taskId === undefined), true)
+    assert.equal(backendContexts.every(context => context.operationId === undefined), true)
+    assert.equal(backendContexts.every(context => context.module === 'ai'), true)
+    assert.equal(backendContexts.every(context => context.action === 'agent-request'), true)
+    assert.equal(backendContexts.every(context => /^agent-agent-trace-task-\d+-\d+$/.test(context.requestId)), true)
+    assert.equal(backendContexts.every(context => context.password === undefined), true)
+    assert.doesNotMatch(
+      JSON.stringify(backendMessages),
+      /sp-1784304000000-12345678|upstream-operation|upstream-request|parent-secret|traceContext/
+    )
+    assert.equal(window.store.aiChatHistory[0].traceId, undefined)
+    assert.deepEqual(window.store.aiChatHistory[0].metadata, {
+      traceId: parentTrace.traceId
+    })
+    assert.equal(window.store.aiChatHistory[0].traceContext, undefined)
+    assert.doesNotMatch(JSON.stringify(window.store.aiChatHistory[0]), /parent-secret|upstream-/)
+  } finally {
+    delete global.__executeToolCall
   }
 })
 

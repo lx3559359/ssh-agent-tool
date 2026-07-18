@@ -22,11 +22,13 @@ import { buildAgentDiagnosticReportFiles } from './agent-diagnostic-report'
 import {
   appendAIChatHistory,
   buildAIChatRole,
+  cancelAIChatEntryLifecycle,
   createRetryChatEntry,
   getAIChatCopyText,
-  getInterruptedAIChatUpdate,
   getAIChatRequestId,
   getAIChatStreamSessionId,
+  getAIChatTraceId,
+  recoverInterruptedAIChatEntry,
   updateAIChatHistoryEntry
 } from './ai-chat-actions'
 import { buildAIConversationMessages } from './ai-conversation-context'
@@ -36,6 +38,42 @@ import {
   resolveAIRequestConfigForProfile,
   sanitizeAIStoredText
 } from './ai-request-credentials'
+import {
+  createTraceContext,
+  normalizeTraceContext
+} from '../../common/quality/trace-context.js'
+import {
+  createAIRequestPerformanceTracker,
+  recordQualityEvent
+} from '../../common/quality/quality-events.js'
+
+function createAIQualityState (traceContext, performance = null) {
+  return {
+    context: normalizeTraceContext(traceContext),
+    performance,
+    finished: false
+  }
+}
+
+function finishAIQuality (qualityState, phase, result, contextPatch = {}) {
+  if (!qualityState || qualityState.finished) return
+  qualityState.finished = true
+  qualityState.performance?.finish(result || phase)
+  if (!qualityState.context?.traceId) return
+  recordQualityEvent({
+    ...qualityState.context,
+    ...contextPatch
+  }, {
+    module: 'ai',
+    action: qualityState.context.action || 'chat',
+    phase,
+    result
+  })
+}
+
+function markAIResponseContent (qualityState, content) {
+  return qualityState?.performance?.markContent(content) || false
+}
 
 export function buildAIRequestFailureText (error, existingResponse = '') {
   const errorText = `**${aiAgentCopy.errorLabel}:** ${sanitizeAIStoredText(error)}`
@@ -130,6 +168,7 @@ export function startDetachedAIStream ({
   chatId,
   sessionId,
   store,
+  qualityState,
   initialContent = '',
   initialOffset = 0,
   request = (sid, offset) => window.pre.runGlobalAsync(
@@ -155,6 +194,7 @@ export function startDetachedAIStream ({
       cursor: Math.max(0, Number(initialOffset) || 0)
     }
     const sanitizer = createAIStoredTextAccumulator()
+    markAIResponseContent(qualityState, initialContent)
     while (!active.cancelled && shouldApplyAIChatAsyncUpdate(store, chatId)) {
       const rawResult = await request(sessionId, state.cursor)
       if (active.cancelled || !shouldApplyAIChatAsyncUpdate(store, chatId)) break
@@ -166,17 +206,20 @@ export function startDetachedAIStream ({
             error: undefined,
             hasMore: false
           }, state)
+          markAIResponseContent(qualityState, state.rawContent)
         }
         updateAIChatHistoryEntry(store, chatId, {
           response: buildAIRequestFailureText(result.error, state.rawContent),
           completionStatus: 'failed',
           requestId: ''
         })
+        finishAIQuality(qualityState, 'failed', 'failed', { sessionId })
         break
       }
 
       const streamResponse = result.data
       mergeAIStreamResponse(streamResponse, state)
+      markAIResponseContent(qualityState, state.rawContent)
       if (!shouldApplyAIChatAsyncUpdate(store, chatId)) break
       updateAIChatHistoryEntry(store, chatId, {
         response: sanitizer.sanitize(state.rawContent, {
@@ -185,6 +228,9 @@ export function startDetachedAIStream ({
         completionStatus: streamResponse.hasMore ? 'running' : 'completed',
         requestId: ''
       }, { sanitized: true })
+      if (!streamResponse.hasMore) {
+        finishAIQuality(qualityState, 'completed', 'completed', { sessionId })
+      }
       if (!streamResponse.hasMore) break
       await new Promise(resolve => setTimeout(resolve, DETACHED_STREAM_POLL_DELAY))
     }
@@ -196,6 +242,7 @@ export function startDetachedAIStream ({
         completionStatus: 'failed',
         requestId: ''
       })
+      finishAIQuality(qualityState, 'failed', 'failed', { sessionId })
       store.onError?.(error)
     }
   }).finally(() => {
@@ -220,6 +267,13 @@ export default memo(function AIChatHistoryItem ({
   const pollTimerRef = useRef(null)
   const requestEpochRef = useRef(0)
   const initialRequestIdRef = useRef('')
+  const qualityStateRef = useRef(createAIQualityState({
+    traceId: getAIChatTraceId(item),
+    requestId: item.requestId,
+    sessionId: item.sessionId,
+    module: 'ai',
+    action: item.mode === 'agent' ? 'agent' : 'chat'
+  }))
   const streamSanitizerRef = useRef(createAIStoredTextAccumulator())
   const streamCursorRef = useRef(0)
   const streamRawContentRef = useRef('')
@@ -269,12 +323,15 @@ export default memo(function AIChatHistoryItem ({
       requestId: ''
     })
     if (mountedRef.current) setIsStreaming(false)
+    finishAIQuality(qualityStateRef.current, 'failed', 'failed')
     window.store.onError(new Error(safeError))
   }
 
   const pollStreamContent = useCallback(async (sid, requestEpoch) => {
     const isActive = () => (
-      mountedRef.current && requestEpochRef.current === requestEpoch
+      mountedRef.current &&
+      requestEpochRef.current === requestEpoch &&
+      shouldApplyAIChatAsyncUpdate(window.store, item.id)
     )
     try {
       await consumeAIStreamPoll({
@@ -298,6 +355,12 @@ export default memo(function AIChatHistoryItem ({
             completionStatus: 'failed',
             requestId: ''
           })
+          finishAIQuality(
+            qualityStateRef.current,
+            'failed',
+            'failed',
+            { sessionId: sid }
+          )
         },
         onInactiveResponse: streamResponse => {
           if (!shouldApplyAIChatAsyncUpdate(window.store, item.id)) return
@@ -306,6 +369,7 @@ export default memo(function AIChatHistoryItem ({
             cursor: streamCursorRef.current
           }
           mergeAIStreamResponse(streamResponse, state)
+          markAIResponseContent(qualityStateRef.current, state.rawContent)
           streamRawContentRef.current = state.rawContent
           streamCursorRef.current = state.cursor
           const response = streamSanitizerRef.current.sanitize(
@@ -317,11 +381,20 @@ export default memo(function AIChatHistoryItem ({
             completionStatus: streamResponse.hasMore ? 'running' : 'completed',
             requestId: ''
           }, { sanitized: true })
+          if (!streamResponse.hasMore) {
+            finishAIQuality(
+              qualityStateRef.current,
+              'completed',
+              'completed',
+              { sessionId: sid }
+            )
+          }
           if (streamResponse.hasMore) {
             startDetachedAIStream({
               chatId: item.id,
               sessionId: sid,
               store: window.store,
+              qualityState: qualityStateRef.current,
               initialContent: state.rawContent,
               initialOffset: state.cursor
             })
@@ -337,6 +410,7 @@ export default memo(function AIChatHistoryItem ({
             cursor: streamCursorRef.current
           }
           mergeAIStreamResponse(streamResponse, state)
+          markAIResponseContent(qualityStateRef.current, state.rawContent)
           streamRawContentRef.current = state.rawContent
           streamCursorRef.current = state.cursor
           const response = streamSanitizerRef.current.sanitize(
@@ -348,6 +422,14 @@ export default memo(function AIChatHistoryItem ({
             completionStatus: streamResponse.hasMore ? 'running' : 'completed',
             requestId: ''
           }, { sanitized: true })
+          if (!streamResponse.hasMore) {
+            finishAIQuality(
+              qualityStateRef.current,
+              'completed',
+              'completed',
+              { sessionId: sid }
+            )
+          }
           setIsStreaming(streamResponse.hasMore)
           if (streamResponse.hasMore) {
             pollTimerRef.current = setTimeout(
@@ -387,13 +469,29 @@ export default memo(function AIChatHistoryItem ({
     const requestEpoch = requestEpochRef.current + 1
     requestEpochRef.current = requestEpoch
     const isActive = () => (
-      mountedRef.current && requestEpochRef.current === requestEpoch
+      mountedRef.current &&
+      requestEpochRef.current === requestEpoch &&
+      shouldApplyAIChatAsyncUpdate(window.store, item.id)
     )
     if (!baseURLAI || !apiKeyAI) {
       markRequestFailed('历史 API 凭据已失效，请选择当前 API 配置后重新发送')
       return
     }
     const requestId = `chat-${item.id}-${requestEpoch}-${uid()}`
+    const traceContext = createTraceContext({
+      requestId,
+      module: 'ai',
+      action: 'chat'
+    })
+    qualityStateRef.current = createAIQualityState(
+      traceContext,
+      createAIRequestPerformanceTracker({ requestType: 'chat' })
+    )
+    recordQualityEvent(traceContext, {
+      module: 'ai',
+      action: 'chat',
+      phase: 'started'
+    })
     streamSanitizerRef.current.reset()
     streamCursorRef.current = 0
     streamRawContentRef.current = ''
@@ -401,24 +499,43 @@ export default memo(function AIChatHistoryItem ({
     setIsStreaming(true)
     updateAIChatHistoryEntry(window.store, item.id, {
       completionStatus: 'running',
-      requestId
+      requestId,
+      metadata: { traceId: traceContext.traceId }
     })
     try {
       const conversationMessages = buildAIConversationMessages(window.store.aiChatHistory, item)
       await consumeAIChatRequest({
-        request: () => window.pre.runGlobalAsync(
-          'AIchat',
-          conversationMessages,
-          modelAI,
-          buildRole(),
-          baseURLAI,
-          apiPathAI,
-          apiKeyAI,
-          proxyAI,
-          true,
-          authHeaderNameAI,
-          requestId
-        ),
+        request: () => {
+          if (!traceContext) {
+            return window.pre.runGlobalAsync(
+              'AIchat',
+              conversationMessages,
+              modelAI,
+              buildRole(),
+              baseURLAI,
+              apiPathAI,
+              apiKeyAI,
+              proxyAI,
+              true,
+              authHeaderNameAI,
+              requestId
+            )
+          }
+          return window.pre.runGlobalAsync(
+            'AIchat',
+            conversationMessages,
+            modelAI,
+            buildRole(),
+            baseURLAI,
+            apiPathAI,
+            apiKeyAI,
+            proxyAI,
+            true,
+            authHeaderNameAI,
+            requestId,
+            traceContext
+          )
+        },
         isActive,
         onError: error => {
           markRequestFailed(error)
@@ -430,6 +547,7 @@ export default memo(function AIChatHistoryItem ({
           if (!shouldApplyAIChatAsyncUpdate(window.store, item.id)) return
           if (aiResponse?.isStream && aiResponse.sessionId) {
             const initialContent = aiResponse.content || ''
+            markAIResponseContent(qualityStateRef.current, initialContent)
             updateAIChatHistoryEntry(window.store, item.id, {
               sessionId: aiResponse.sessionId,
               response: sanitizeAIStoredText(initialContent),
@@ -440,15 +558,18 @@ export default memo(function AIChatHistoryItem ({
               chatId: item.id,
               sessionId: aiResponse.sessionId,
               store: window.store,
+              qualityState: qualityStateRef.current,
               initialContent,
               initialOffset: initialContent.length
             })
           } else if (aiResponse && Object.prototype.hasOwnProperty.call(aiResponse, 'response')) {
+            markAIResponseContent(qualityStateRef.current, aiResponse.response || '')
             updateAIChatHistoryEntry(window.store, item.id, {
               response: aiResponse.response || '',
               completionStatus: 'completed',
               requestId: ''
             })
+            finishAIQuality(qualityStateRef.current, 'completed', 'completed')
           }
         },
         onResponse: aiResponse => {
@@ -456,6 +577,7 @@ export default memo(function AIChatHistoryItem ({
             setIsStreaming(true)
             streamPollingRef.current = aiResponse.sessionId
             streamRawContentRef.current = aiResponse.content || ''
+            markAIResponseContent(qualityStateRef.current, streamRawContentRef.current)
             streamCursorRef.current = streamRawContentRef.current.length
             const response = streamSanitizerRef.current.sanitize(
               streamRawContentRef.current
@@ -468,11 +590,13 @@ export default memo(function AIChatHistoryItem ({
             }, { sanitized: true })
             pollStreamContent(aiResponse.sessionId, requestEpoch)
           } else if (aiResponse && Object.prototype.hasOwnProperty.call(aiResponse, 'response')) {
+            markAIResponseContent(qualityStateRef.current, aiResponse.response || '')
             updateAIChatHistoryEntry(window.store, item.id, {
               response: aiResponse.response || '',
               completionStatus: 'completed',
               requestId: ''
             })
+            finishAIQuality(qualityStateRef.current, 'completed', 'completed')
           }
         }
       })
@@ -497,6 +621,23 @@ export default memo(function AIChatHistoryItem ({
       return
     }
     abortRef.current = false
+    const traceContext = createTraceContext({
+      taskId: String(item.id),
+      module: 'ai',
+      action: 'agent'
+    })
+    qualityStateRef.current = createAIQualityState(
+      traceContext,
+      createAIRequestPerformanceTracker({ requestType: 'agent' })
+    )
+    updateAIChatHistoryEntry(window.store, item.id, {
+      metadata: { traceId: traceContext.traceId }
+    })
+    recordQualityEvent(traceContext, {
+      module: 'ai',
+      action: 'agent',
+      phase: 'started'
+    })
     const config = {
       modelAI,
       roleAI,
@@ -512,17 +653,16 @@ export default memo(function AIChatHistoryItem ({
       if (mountedRef.current) {
         setIsStreaming(value)
       }
-    }, window.store.aiChatHistory)
+    }, window.store.aiChatHistory, traceContext, (phase, result) => {
+      finishAIQuality(qualityStateRef.current, phase, result)
+    })
   }, [modelAI, roleAI, baseURLAI, apiPathAI, apiKeyAI, authHeaderNameAI, proxyAI, languageAI, mcpServers, item.id])
 
   useEffect(() => {
     mountedRef.current = true
-    const interruptedUpdate = getInterruptedAIChatUpdate(item)
-    if (
-      interruptedUpdate &&
-      !(mode === 'agent' && isAgentRunActive(item.id))
-    ) {
-      updateAIChatHistoryEntry(window.store, item.id, interruptedUpdate)
+    const recovered = !(mode === 'agent' && isAgentRunActive(item.id)) &&
+      recoverInterruptedAIChatEntry(window.store, item)
+    if (recovered) {
       setIsStreaming(false)
     } else if (item.pending) {
       updateAIChatHistoryEntry(window.store, item.id, {
@@ -548,6 +688,7 @@ export default memo(function AIChatHistoryItem ({
           chatId: item.id,
           sessionId: activeSessionId,
           store: window.store,
+          qualityState: qualityStateRef.current,
           initialContent: streamRawContentRef.current,
           initialOffset: streamCursorRef.current
         })
@@ -584,14 +725,15 @@ export default memo(function AIChatHistoryItem ({
       setIsStreaming(false)
       return
     }
+    const initialRequestId = getAIChatRequestId(item, window.store) || initialRequestIdRef.current
+    const activeSessionId = getAIChatStreamSessionId(item, window.store)
     if (mode === 'agent') {
+      cancelAIChatEntryLifecycle(window.store, item)
+      finishAIQuality(qualityStateRef.current, 'cancelled', 'cancelled')
       abortRef.current = true
       if (abortRef.cancelCurrent) abortRef.cancelCurrent()
       else cancelAgentRun(item.id)
       setIsStreaming(false)
-      updateAIChatHistoryEntry(window.store, item.id, {
-        completionStatus: 'cancelled'
-      })
       return
     }
     requestEpochRef.current += 1
@@ -601,12 +743,9 @@ export default memo(function AIChatHistoryItem ({
       clearTimeout(pollTimerRef.current)
       pollTimerRef.current = null
     }
-    const initialRequestId = getAIChatRequestId(item, window.store) || initialRequestIdRef.current
     setIsStreaming(false)
-    updateAIChatHistoryEntry(window.store, item.id, {
-      completionStatus: 'cancelled',
-      requestId: ''
-    })
+    cancelAIChatEntryLifecycle(window.store, item)
+    finishAIQuality(qualityStateRef.current, 'cancelled', 'cancelled')
     initialRequestIdRef.current = ''
     if (initialRequestId) {
       try {
@@ -615,7 +754,6 @@ export default memo(function AIChatHistoryItem ({
         console.error('Error cancelling AI request:', error)
       }
     }
-    const activeSessionId = getAIChatStreamSessionId(item, window.store)
     if (!activeSessionId) return
 
     try {

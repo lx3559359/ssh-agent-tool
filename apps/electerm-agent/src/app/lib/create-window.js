@@ -65,12 +65,24 @@ exports.createWindow = async function (userConfig) {
     ? process.env.devPort || 5570
     : await getPort()
   const opts = `http://127.0.0.1:${port}/index.html?v=${packInfo.version}`
+  let mainLoadFailed = false
   // If loading the URL fails (e.g. proxy/firewall interference), show error page
   win.webContents.once('did-fail-load', (event, errorCode, errorDescription) => {
+    mainLoadFailed = true
     console.error('Failed to load app URL:', errorCode, errorDescription)
     const htmlContent = require('./error-page')(port)
     const dataUrl = `data:text/html;charset=utf-8,${encodeURIComponent(htmlContent)}`
     win.loadURL(dataUrl)
+  })
+  win.webContents.once('did-finish-load', () => {
+    if (mainLoadFailed) return
+    try {
+      globalState.get('performanceMetrics')?.mark(
+        'window_loaded',
+        Date.now(),
+        { windowRole: 'main' }
+      )
+    } catch (error) {}
   })
   win.loadURL(opts)
   win.webContents.once('dom-ready', () => {
@@ -108,4 +120,5 @@ exports.createWindow = async function (userConfig) {
     disableShortCuts(win)
   })
   win.on('close', onClose)
+  return win
 }

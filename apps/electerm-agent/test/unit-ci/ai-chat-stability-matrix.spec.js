@@ -34,6 +34,8 @@ test('P1 AI chat stability matrix covers submit stream stop retry copy and clear
   assertEvidence(aiChat, /const\s+submitAction\s*=\s*getAIChatSubmitAction/, 'chat submit goes through submit policy')
   assertEvidence(aiChat, /appendAIChatHistory\(window\.store,\s*chatEntry,\s*MAX_HISTORY\)/, 'new chat entry append')
   assertEvidence(aiChat, /onPressEnter=\{handleKeyPress\}/, 'enter sends from textarea')
+  assertEvidence(aiChat, /nativeEvent\?\.isComposing|isComposing/, 'Chinese IME composition does not submit the message')
+  assertEvidence(aiChat, /keyCode\s*===\s*229|which\s*===\s*229/, 'legacy IME composition is guarded')
   assertEvidence(historyItem, /'AIchat'[\s\S]*?true,[\s\S]*?authHeaderNameAI/, 'streaming AI request and auth header forwarding')
   assertEvidence(historyItem, /getStreamContent/, 'stream polling')
   assertEvidence(historyItem, /stopStream/, 'stop generation')

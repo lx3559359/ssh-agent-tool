@@ -5,12 +5,15 @@ import {
   AutoComplete,
   Alert,
   Checkbox,
+  Collapse,
   Space,
   Select
 } from 'antd'
 import {
+  DownloadOutlined,
   MinusCircleOutlined,
-  PlusOutlined
+  PlusOutlined,
+  UploadOutlined
 } from '@ant-design/icons'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { cloneDeep, isEqual } from 'lodash-es'
@@ -39,6 +42,11 @@ import {
   restoreAIConfigHistoryCredentials,
   sanitizeAIConfigHistory
 } from './ai-request-credentials'
+import download from '../../common/download'
+import {
+  createAIProfileExport,
+  mergeAIProfileImport
+} from './ai-profile-transfer'
 
 const STORAGE_KEY_CONFIG = 'ai_config_history'
 const EVENT_NAME_CONFIG = 'ai-config-history-update'
@@ -297,9 +305,11 @@ function getEndpointPreview (baseURLAI, apiPathAI) {
 export default function AIConfigForm ({ initialValues, languageVersion, onSubmit, showAIConfig }) {
   const [form] = Form.useForm()
   const appliedSourceRef = useRef()
+  const importInputRef = useRef()
   const profileRequestGenerationRef = useRef(0)
   const [testing, setTesting] = useState(false)
   const [loadingModels, setLoadingModels] = useState(false)
+  const [advancedOpen, setAdvancedOpen] = useState(false)
   const [modelOptions, setModelOptions] = useState([])
   const [profileOptions, setProfileOptions] = useState([])
   const baseURLAI = Form.useWatch('baseURLAI', form)
@@ -430,6 +440,43 @@ export default function AIConfigForm ({ initialValues, languageVersion, onSubmit
       ...getAIModelOptions(merged),
       ...uniqueOptions(popularModels)
     ])
+  }
+
+  async function handleExportProfiles () {
+    const saved = saveCurrentProfile()
+    const date = new Date().toISOString().slice(0, 10)
+    await download(
+      `shellpilot-ai-profiles-${date}.json`,
+      JSON.stringify(createAIProfileExport(saved), null, 2)
+    )
+  }
+
+  async function handleImportProfiles (event) {
+    const input = event.target
+    const file = input.files?.[0]
+    if (!file) return
+    try {
+      const text = await file.text()
+      const merged = mergeAIProfileImport(saveCurrentProfile(), text)
+      const active = getActiveAIConfig(merged)
+      const next = {
+        ...merged,
+        ...active
+      }
+      form.setFieldsValue(next)
+      syncProfileOptions(next)
+      setModelOptions([
+        ...getAIModelOptions(next),
+        ...uniqueOptions(popularModels)
+      ])
+      message.success(e('shellpilotAiProfileImportSucceeded'))
+    } catch (error) {
+      message.error(tf('shellpilotAiProfileImportFailed', {
+        detail: error?.message || e('shellpilotAiProfileImportInvalid')
+      }))
+    } finally {
+      input.value = ''
+    }
   }
 
   function getPersistedProfile (values) {
@@ -633,19 +680,6 @@ export default function AIConfigForm ({ initialValues, languageVersion, onSubmit
   const defaultLangs = window.store.getLangNames().map(l => ({ value: l }))
   return (
     <>
-      <Alert
-        title={e('shellpilotAiQuickSetup')}
-        description={e('shellpilotAiQuickSetupDescription')}
-        type='info'
-        className='mg2y'
-      />
-      {
-        endpointPreview && (
-          <p className='sp-ai-endpoint-preview'>
-            {e('shellpilotAiActualRequestAddress')}: {endpointPreview}
-          </p>
-        )
-      }
       <Form
         form={form}
         onFinish={handleSubmit}
@@ -653,185 +687,221 @@ export default function AIConfigForm ({ initialValues, languageVersion, onSubmit
         layout='vertical'
         className='ai-config-form sp-card sp-configuration-section sp-ai-config-form'
       >
-        <Form.Item
-          label={e('shellpilotAiApiConfiguration')}
-          extra={e('shellpilotAiApiConfigurationExtra')}
-        >
-          <Space.Compact className='width-100'>
-            <Select
-              value={activeAIProfileId}
-              options={profileOptions}
-              onChange={handleProfileChange}
-              style={{ width: '58%' }}
-              placeholder={e('shellpilotAiApiConfigurationPlaceholder')}
-            />
-            <Button
-              onClick={handleAddProfile}
-              style={{ width: '21%' }}
-            >
-              {e('shellpilotAddConfiguration')}
-            </Button>
-            <Button
-              danger
-              onClick={handleRemoveProfile}
-              disabled={profileOptions.length <= 1}
-              style={{ width: '21%' }}
-            >
-              {e('shellpilotDeleteConfiguration')}
-            </Button>
-          </Space.Compact>
-        </Form.Item>
-
-        <Form.Item
-          label={e('shellpilotAiProviderTemplate')}
-          extra={e('shellpilotAiProviderTemplateExtra')}
-        >
-          <Select
-            showSearch
-            allowClear
-            placeholder={e('shellpilotAiProviderTemplatePlaceholder')}
-            options={providerPresets.map(item => ({
-              value: item.value,
-              label: item.labelKey ? e(item.labelKey) : item.label
-            }))}
-            onChange={handlePresetChange}
-            optionFilterProp='label'
-          />
-        </Form.Item>
-
-        <Form.Item
-          label={e('shellpilotAiConfigurationName')}
-          name='nameAI'
-          extra={e('shellpilotAiConfigurationNameExtra')}
-        >
-          <Input
-            placeholder={e('shellpilotAiConfigurationNamePlaceholder')}
-          />
-        </Form.Item>
-        <Form.Item
-          label={renderApiUrlLabel()}
-          required
-          extra={
-            <div className='ai-config-inline-help'>
-              <div>
-                <b>{e('shellpilotApiAddress')}:</b> {e('shellpilotAiApiAddressHelp')}
-              </div>
-              <div>
-                <b>{e('shellpilotAiApiPath')}:</b> {e('shellpilotAiApiPathHelp')}
-              </div>
-            </div>
-          }
-        >
-          <Space.Compact className='width-100'>
-            <Form.Item
-              label={e('shellpilotApiAddress')}
-              name='baseURLAI'
-              noStyle
-              rules={[
-                { required: true, message: e('shellpilotAiApiAddressRequired') },
-                { type: 'url', message: e('shellpilotValidUrlRequired') }
-              ]}
-            >
-              <Input
-                placeholder={e('shellpilotAiApiAddressPlaceholder')}
-                style={{ width: '72%' }}
-              />
-            </Form.Item>
-            <Form.Item
-              label={e('shellpilotAiApiPath')}
-              name='apiPathAI'
-              noStyle
-            >
-              <Input
-                placeholder={e('shellpilotAiApiPathPlaceholder')}
-                style={{ width: '28%' }}
-              />
-            </Form.Item>
-          </Space.Compact>
-        </Form.Item>
-        <Form.Item
-          label={e('modelAi')}
-          extra={e('shellpilotAiModelExtra')}
-        >
-          <Space.Compact className='width-100'>
-            <Form.Item
-              name='modelAI'
-              noStyle
-            >
-              <AutoComplete
-                options={modelOptions}
-                filterOption={filter}
-                style={{ width: '72%' }}
-              >
-                <Input placeholder={e('shellpilotAiModelPlaceholder')} />
-              </AutoComplete>
-            </Form.Item>
-            <Button
-              loading={loadingModels}
-              onClick={handleLoadModels}
-              style={{ width: '28%' }}
-            >
-              {e('shellpilotAiLoadModels')}
-            </Button>
-          </Space.Compact>
-        </Form.Item>
-
-        <Form.Item
-          label={e('shellpilotAiApiKey')}
-          name='apiKeyAI'
-          extra={e('shellpilotAiApiKeyExtra')}
-          rules={[{ required: true, message: e('shellpilotAiApiKeyRequired') }]}
-        >
-          <Password placeholder={e('shellpilotAiApiKeyPlaceholder')} />
-        </Form.Item>
-
-        <Form.Item
-          label={e('shellpilotAiAuthHeader')}
-          name='authHeaderNameAI'
-          extra={e('shellpilotAiAuthHeaderExtra')}
-          tooltip={e('shellpilotAiAuthHeaderTooltip')}
-        >
-          <AutoComplete
-            options={authHeaderOptions}
-            filterOption={filter}
+        <div className='sp-ai-config-primary-fields'>
+          <Form.Item
+            label={renderApiUrlLabel()}
+            name='baseURLAI'
+            required
+            extra={e('shellpilotAiApiAddressHelp')}
+            rules={[
+              { required: true, message: e('shellpilotAiApiAddressRequired') },
+              { type: 'url', message: e('shellpilotValidUrlRequired') }
+            ]}
           >
-            <Input placeholder={e('shellpilotAiAuthHeaderPlaceholder')} />
-          </AutoComplete>
-        </Form.Item>
+            <Input placeholder={e('shellpilotAiApiAddressPlaceholder')} />
+          </Form.Item>
 
-        <Form.Item
-          label={e('roleAI')}
-          name='roleAI'
-          extra={e('shellpilotAiRoleExtra')}
-        >
-          <AutoComplete options={defaultRoleKeys.map(key => ({ value: e(key) }))} placement='topLeft'>
-            <Input.TextArea
-              placeholder={e('shellpilotAiRolePlaceholder')}
-              rows={1}
-            />
-          </AutoComplete>
-        </Form.Item>
+          <Form.Item
+            label={e('shellpilotAiApiKey')}
+            name='apiKeyAI'
+            extra={e('shellpilotAiApiKeyExtra')}
+            rules={[{ required: true, message: e('shellpilotAiApiKeyRequired') }]}
+          >
+            <Password placeholder={e('shellpilotAiApiKeyPlaceholder')} />
+          </Form.Item>
 
-        <Form.Item
-          label={e('language')}
-          name='languageAI'
-          extra={e('shellpilotAiLanguageExtra')}
-        >
-          <AutoComplete options={defaultLangs} placement='topLeft'>
-            <Input
-              placeholder={e('language')}
-            />
-          </AutoComplete>
-        </Form.Item>
+          <Form.Item
+            label={e('modelAi')}
+            extra={e('shellpilotAiModelExtra')}
+          >
+            <Space.Compact className='width-100'>
+              <Form.Item name='modelAI' noStyle>
+                <AutoComplete
+                  options={modelOptions}
+                  filterOption={filter}
+                  style={{ width: '72%' }}
+                >
+                  <Input placeholder={e('shellpilotAiModelPlaceholder')} />
+                </AutoComplete>
+              </Form.Item>
+              <Button
+                loading={loadingModels}
+                onClick={handleLoadModels}
+                style={{ width: '28%' }}
+              >
+                {e('shellpilotAiLoadModels')}
+              </Button>
+            </Space.Compact>
+          </Form.Item>
 
-        <Form.Item
-          label={e('shellpilotAiAgentSkill')}
-          extra={e('shellpilotAiAgentSkillExtra')}
-        >
-          <Form.List name='agentSkills'>
-            {(fields, { add, remove }) => (
-              <Space direction='vertical' className='width-100'>
+          <Form.Item>
+            <Button type='primary' htmlType='submit'>
+              {e('save')}
+            </Button>
+          </Form.Item>
+        </div>
+
+        <Collapse
+          ghost
+          className='sp-ai-config-advanced'
+          activeKey={advancedOpen ? ['advanced'] : []}
+          onChange={keys => setAdvancedOpen(Array.isArray(keys) ? keys.includes('advanced') : keys === 'advanced')}
+          items={[{
+            key: 'advanced',
+            label: e('shellpilotAiAdvancedOptions'),
+            extra: <span className='sp-ai-config-advanced-description'>{e('shellpilotAiAdvancedOptionsDescription')}</span>,
+            children: (
+              <div className='sp-ai-config-advanced-fields'>
+                <Alert
+                  title={e('shellpilotAiQuickSetup')}
+                  description={e('shellpilotAiQuickSetupDescription')}
+                  type='info'
+                  className='mg2y'
+                />
                 {
+                  endpointPreview && (
+                    <p className='sp-ai-endpoint-preview'>
+                      {e('shellpilotAiActualRequestAddress')}: {endpointPreview}
+                    </p>
+                  )
+                }
+                <Form.Item
+                  label={e('shellpilotAiApiConfiguration')}
+                  extra={e('shellpilotAiApiConfigurationExtra')}
+                >
+                  <Space.Compact className='width-100'>
+                    <Select
+                      value={activeAIProfileId}
+                      options={profileOptions}
+                      onChange={handleProfileChange}
+                      style={{ width: '58%' }}
+                      placeholder={e('shellpilotAiApiConfigurationPlaceholder')}
+                    />
+                    <Button
+                      onClick={handleAddProfile}
+                      style={{ width: '21%' }}
+                    >
+                      {e('shellpilotAddConfiguration')}
+                    </Button>
+                    <Button
+                      danger
+                      onClick={handleRemoveProfile}
+                      disabled={profileOptions.length <= 1}
+                      style={{ width: '21%' }}
+                    >
+                      {e('shellpilotDeleteConfiguration')}
+                    </Button>
+                  </Space.Compact>
+                </Form.Item>
+
+                <Form.Item
+                  label={e('shellpilotAiProfileTransfer')}
+                  extra={e('shellpilotAiProfileTransferExtra')}
+                >
+                  <Space wrap>
+                    <Button
+                      icon={<UploadOutlined />}
+                      onClick={() => importInputRef.current?.click()}
+                    >
+                      {e('shellpilotAiProfileImport')}
+                    </Button>
+                    <Button
+                      icon={<DownloadOutlined />}
+                      onClick={handleExportProfiles}
+                    >
+                      {e('shellpilotAiProfileExportWithoutKeys')}
+                    </Button>
+                    <input
+                      ref={importInputRef}
+                      type='file'
+                      accept='.json,application/json'
+                      hidden
+                      onChange={handleImportProfiles}
+                    />
+                  </Space>
+                </Form.Item>
+
+                <Form.Item
+                  label={e('shellpilotAiProviderTemplate')}
+                  extra={e('shellpilotAiProviderTemplateExtra')}
+                >
+                  <Select
+                    showSearch
+                    allowClear
+                    placeholder={e('shellpilotAiProviderTemplatePlaceholder')}
+                    options={providerPresets.map(item => ({
+                      value: item.value,
+                      label: item.labelKey ? e(item.labelKey) : item.label
+                    }))}
+                    onChange={handlePresetChange}
+                    optionFilterProp='label'
+                  />
+                </Form.Item>
+
+                <Form.Item
+                  label={e('shellpilotAiConfigurationName')}
+                  name='nameAI'
+                  extra={e('shellpilotAiConfigurationNameExtra')}
+                >
+                  <Input
+                    placeholder={e('shellpilotAiConfigurationNamePlaceholder')}
+                  />
+                </Form.Item>
+                <Form.Item
+                  label={e('shellpilotAiApiPath')}
+                  name='apiPathAI'
+                  extra={e('shellpilotAiApiPathHelp')}
+                >
+                  <Input placeholder={e('shellpilotAiApiPathPlaceholder')} />
+                </Form.Item>
+
+                <Form.Item
+                  label={e('shellpilotAiAuthHeader')}
+                  name='authHeaderNameAI'
+                  extra={e('shellpilotAiAuthHeaderExtra')}
+                  tooltip={e('shellpilotAiAuthHeaderTooltip')}
+                >
+                  <AutoComplete
+                    options={authHeaderOptions}
+                    filterOption={filter}
+                  >
+                    <Input placeholder={e('shellpilotAiAuthHeaderPlaceholder')} />
+                  </AutoComplete>
+                </Form.Item>
+
+                <Form.Item
+                  label={e('roleAI')}
+                  name='roleAI'
+                  extra={e('shellpilotAiRoleExtra')}
+                >
+                  <AutoComplete options={defaultRoleKeys.map(key => ({ value: e(key) }))} placement='topLeft'>
+                    <Input.TextArea
+                      placeholder={e('shellpilotAiRolePlaceholder')}
+                      rows={1}
+                    />
+                  </AutoComplete>
+                </Form.Item>
+
+                <Form.Item
+                  label={e('language')}
+                  name='languageAI'
+                  extra={e('shellpilotAiLanguageExtra')}
+                >
+                  <AutoComplete options={defaultLangs} placement='topLeft'>
+                    <Input
+                      placeholder={e('language')}
+                    />
+                  </AutoComplete>
+                </Form.Item>
+
+                <Form.Item
+                  label={e('shellpilotAiAgentSkill')}
+                  extra={e('shellpilotAiAgentSkillExtra')}
+                >
+                  <Form.List name='agentSkills'>
+                    {(fields, { add, remove }) => (
+                      <Space direction='vertical' className='width-100'>
+                        {
                   fields.map(({ key, name }) => (
                     <div className='pd1 border' key={key}>
                       <Space align='start' className='width-100'>
@@ -878,31 +948,31 @@ export default function AIConfigForm ({ initialValues, languageVersion, onSubmit
                     </div>
                   ))
                 }
-                <Button
-                  icon={<PlusOutlined />}
-                  onClick={() => add({
-                    id: '',
-                    title: '',
-                    description: '',
-                    prompt: '',
-                    disabled: false
-                  })}
-                >
-                  {e('shellpilotAiAddSkill')}
-                </Button>
-              </Space>
-            )}
-          </Form.List>
-        </Form.Item>
+                        <Button
+                          icon={<PlusOutlined />}
+                          onClick={() => add({
+                            id: '',
+                            title: '',
+                            description: '',
+                            prompt: '',
+                            disabled: false
+                          })}
+                        >
+                          {e('shellpilotAiAddSkill')}
+                        </Button>
+                      </Space>
+                    )}
+                  </Form.List>
+                </Form.Item>
 
-        <Form.Item
-          label={e('shellpilotAiMcpServer')}
-          extra={e('shellpilotAiMcpServerExtra')}
-        >
-          <Form.List name='mcpServers'>
-            {(fields, { add, remove }) => (
-              <Space direction='vertical' className='width-100'>
-                {
+                <Form.Item
+                  label={e('shellpilotAiMcpServer')}
+                  extra={e('shellpilotAiMcpServerExtra')}
+                >
+                  <Form.List name='mcpServers'>
+                    {(fields, { add, remove }) => (
+                      <Space direction='vertical' className='width-100'>
+                        {
                   fields.map(({ key, name }) => (
                     <div className='pd1 border' key={key}>
                       <Space align='start' className='width-100'>
@@ -954,62 +1024,69 @@ export default function AIConfigForm ({ initialValues, languageVersion, onSubmit
                     </div>
                   ))
                 }
-                <Button
-                  icon={<PlusOutlined />}
-                  onClick={() => add({
-                    name: '',
-                    transport: 'stdio',
-                    command: '',
-                    args: '',
-                    url: '',
-                    description: '',
-                    disabled: false
-                  })}
+                        <Button
+                          icon={<PlusOutlined />}
+                          onClick={() => add({
+                            name: '',
+                            transport: 'stdio',
+                            command: '',
+                            args: '',
+                            url: '',
+                            description: '',
+                            disabled: false
+                          })}
+                        >
+                          {e('shellpilotAiAddMcpServer')}
+                        </Button>
+                      </Space>
+                    )}
+                  </Form.List>
+                </Form.Item>
+
+                <Form.Item
+                  label={e('proxy')}
+                  name='proxyAI'
+                  extra={e('shellpilotAiProxyExtra')}
+                  tooltip={e('shellpilotAiProxyTooltip')}
                 >
-                  {e('shellpilotAiAddMcpServer')}
-                </Button>
-              </Space>
-            )}
-          </Form.List>
-        </Form.Item>
+                  <AutoComplete
+                    options={proxyOptions}
+                    filterOption={filter}
+                    allowClear
+                  >
+                    <Input placeholder={e('shellpilotAiProxyPlaceholder')} />
+                  </AutoComplete>
+                </Form.Item>
 
-        <Form.Item
-          label={e('proxy')}
-          name='proxyAI'
-          extra={e('shellpilotAiProxyExtra')}
-          tooltip={e('shellpilotAiProxyTooltip')}
-        >
-          <AutoComplete
-            options={proxyOptions}
-            filterOption={filter}
-            allowClear
-          >
-            <Input placeholder={e('shellpilotAiProxyPlaceholder')} />
-          </AutoComplete>
-        </Form.Item>
-
-        <Form.Item>
-          <Space>
-            <Button type='primary' htmlType='submit'>
-              {e('save')}
-            </Button>
-            <Button
-              loading={testing}
-              onClick={handleTest}
-            >
-              {e('testConnection')}
-            </Button>
-          </Space>
-        </Form.Item>
+                <Form.Item>
+                  <Button
+                    loading={testing}
+                    onClick={handleTest}
+                  >
+                    {e('testConnection')}
+                  </Button>
+                </Form.Item>
+              </div>
+            )
+          }]}
+        />
       </Form>
-      <AiHistory
-        storageKey={STORAGE_KEY_CONFIG}
-        eventName={EVENT_NAME_CONFIG}
-        sanitizeHistory={sanitizeAIConfigHistory}
-        onSelect={handleSelectHistory}
-        renderItem={renderHistoryItem}
-      />
-      <AiCache />
+      {
+        advancedOpen
+          ? (
+            <>
+              <AiHistory
+                storageKey={STORAGE_KEY_CONFIG}
+                eventName={EVENT_NAME_CONFIG}
+                sanitizeHistory={sanitizeAIConfigHistory}
+                onSelect={handleSelectHistory}
+                renderItem={renderHistoryItem}
+              />
+              <AiCache />
+            </>
+            )
+          : null
+      }
     </>
   )
 }

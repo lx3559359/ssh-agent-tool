@@ -1,99 +1,50 @@
-import React, { memo, useEffect, useRef, useState } from 'react'
+import React, { lazy, memo, Suspense, useRef } from 'react'
 import DragHandle from '../common/drag-handle'
+import LazyModuleBoundary from '../common/lazy-module-boundary'
 import './right-side-panel.styl'
 import {
   CloseCircleOutlined,
-  PushpinOutlined,
   InfoCircleOutlined,
-  ReloadOutlined
+  PushpinOutlined
 } from '@ant-design/icons'
+import { Flex, Tag, Typography } from 'antd'
 import {
-  Typography,
-  Flex,
-  Tag,
-  Select
-} from 'antd'
-import {
-  minRightPanelWidth,
   getMaxRightPanelWidth,
+  minRightPanelWidth,
   normalizeRightPanelWidth
 } from '../main/aigshell-layout'
-import {
-  getActiveAIConfig,
-  getAIModelOptions,
-  getAIModelStatus,
-  getAIProfileOptions,
-  migrateAIProfiles,
-  upsertAIProfile
-} from '../ai/ai-profiles'
-import {
-  aiHealthCoordinator,
-  getAIHealthRequestKey
-} from '../ai/ai-health-coordinator'
 
-const e = window.translate
+const RightSidePanelAIHeader = lazy(() => import('./right-side-panel-ai-header'))
 
-export default memo(function RightSidePanel (
-  {
-    rightPanelVisible,
-    rightPanelPinned,
-    rightPanelWidth,
-    children,
-    title,
-    rightPanelTab,
-    config = {}
-  }
-) {
+export default memo(function RightSidePanel ({
+  rightPanelVisible,
+  rightPanelPinned,
+  rightPanelWidth,
+  children,
+  title,
+  rightPanelTab,
+  config = {}
+}) {
   const panelRef = useRef(null)
-  const safeConfig = config || {}
   const isAI = rightPanelTab === 'ai'
-  const activeAIConfig = isAI ? getActiveAIConfig(safeConfig) || {} : safeConfig
-  const aiHealthKey = isAI ? getAIHealthRequestKey(activeAIConfig) : ''
-  const [aiHealthState, setAIHealthState] = useState(
-    () => aiHealthCoordinator.getSnapshot(activeAIConfig)
-  )
-
-  useEffect(() => {
-    if (!isAI || !rightPanelVisible) return undefined
-    let mounted = true
-    const updateState = () => {
-      if (mounted) {
-        setAIHealthState(aiHealthCoordinator.getSnapshot(activeAIConfig))
-      }
-    }
-    const unsubscribe = aiHealthCoordinator.subscribe(updateState)
-    const cancelCheck = aiHealthCoordinator.schedule(activeAIConfig)
-    updateState()
-    return () => {
-      mounted = false
-      unsubscribe()
-      cancelCheck()
-    }
-  }, [aiHealthKey, isAI, rightPanelVisible])
 
   if (!rightPanelVisible) {
     return null
   }
 
-  const aiProfileOptions = isAI ? getAIProfileOptions(safeConfig, e) : []
-  const aiModelOptions = isAI ? getAIModelOptions(activeAIConfig) : []
-  const aiModelStatus = isAI
-    ? getAIModelStatus(activeAIConfig, e, aiHealthState)
-    : null
-  const aiConfigured = Boolean(activeAIConfig.baseURLAI && activeAIConfig.apiKeyAI)
   const tag = isAI
     ? <Tag className='mg1r aigshell-ai-tag'>AI</Tag>
     : <InfoCircleOutlined className='mg1r' />
   const maxWidth = getMaxRightPanelWidth(window.innerWidth)
   const width = Math.min(normalizeRightPanelWidth(rightPanelWidth), maxWidth)
 
-  function onDragEnd (nw) {
-    window.store.setRightSidePanelWidth(nw)
+  function onDragEnd (nextWidth) {
+    window.store.setRightSidePanelWidth(nextWidth)
   }
 
-  function onDragMove (nw) {
+  function onDragMove (nextWidth) {
     if (panelRef.current) {
-      panelRef.current.style.width = nw + 'px'
+      panelRef.current.style.width = nextWidth + 'px'
     }
   }
 
@@ -105,86 +56,11 @@ export default memo(function RightSidePanel (
     window.store.rightPanelPinned = !window.store.rightPanelPinned
   }
 
-  function handleActiveAIProfileChange (profileId) {
-    const next = migrateAIProfiles({
-      ...safeConfig,
-      activeAIProfileId: profileId
-    })
-    window.store.updateConfig(next)
-  }
-
-  function handleActiveAIModelChange (modelAI) {
-    const next = upsertAIProfile(safeConfig, {
-      ...activeAIConfig,
-      modelAI,
-      aiStatus: 'stale',
-      aiStatusMessage: e('shellpilotAiConfigChanged'),
-      aiStatusAt: '',
-      aiStatusFingerprint: ''
-    })
-    window.store.updateConfig(next)
-  }
-
-  function handleManualAIHealthCheck () {
-    if (!isAI) return
-    aiHealthCoordinator.checkNow(activeAIConfig, { force: true }).catch(() => {})
-  }
-
-  function handleAIHealthKeyDown (event) {
-    if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault()
-      handleManualAIHealthCheck()
-    }
-  }
-
-  function renderAIProfileSelect () {
-    if (!isAI || !aiProfileOptions.length) {
-      return (
-        <div className='right-panel-subtitle'>
-          {activeAIConfig.nameAI || title || 'AI 配置'}
-        </div>
-      )
-    }
-
-    return (
-      <Select
-        size='small'
-        className='right-panel-ai-profile-select'
-        value={activeAIConfig.activeAIProfileId}
-        options={aiProfileOptions}
-        onChange={handleActiveAIProfileChange}
-        popupMatchSelectWidth={false}
-        title='选择 AI API 配置'
-      />
-    )
-  }
-
-  function renderAIModelSelect () {
-    if (!isAI || !aiModelOptions.length) {
-      return null
-    }
-
-    return (
-      <Select
-        size='small'
-        className='right-panel-ai-model-select'
-        value={activeAIConfig.modelAI}
-        options={aiModelOptions}
-        onChange={handleActiveAIModelChange}
-        popupMatchSelectWidth={false}
-        title='选择当前 API 的模型'
-      />
-    )
-  }
-
   const panelProps = {
     className: 'right-side-panel animate-fast' + (rightPanelPinned ? ' right-side-panel-pinned' : ''),
     ref: panelRef,
-    style: {
-      width: `${width}px`
-    }
+    style: { width: `${width}px` }
   }
-
   const pinProps = {
     className: 'right-side-panel-pin right-side-panel-controls' + (rightPanelPinned ? ' pinned' : ''),
     onClick: togglePin
@@ -199,22 +75,25 @@ export default memo(function RightSidePanel (
   }
 
   return (
-    <div
-      {...panelProps}
-    >
+    <div {...panelProps}>
       <DragHandle {...dragProps} />
       <Flex className='right-panel-title pd2' justify='space-between' align='flex-start'>
         <div className='right-panel-title-main'>
-          <Typography.Text className='right-panel-title-text' ellipsis>
+          <Typography.Text className='right-panel-title-text'>
             {tag} {isAI ? '助手' : title}
           </Typography.Text>
           {
             isAI
               ? (
-                <Flex className='right-panel-ai-selects right-panel-ai-config-card' gap={6} align='center'>
-                  {renderAIProfileSelect()}
-                  {renderAIModelSelect()}
-                </Flex>
+                <LazyModuleBoundary moduleName='AI 模型状态' fallback={<div className='right-panel-subtitle'>{title}</div>}>
+                  <Suspense fallback={<div className='right-panel-subtitle'>{title}</div>}>
+                    <RightSidePanelAIHeader
+                      config={config}
+                      rightPanelVisible={rightPanelVisible}
+                      title={title}
+                    />
+                  </Suspense>
+                </LazyModuleBoundary>
                 )
               : null
           }
@@ -223,27 +102,19 @@ export default memo(function RightSidePanel (
           {
             isAI
               ? (
-                <Tag
-                  className={`right-panel-model-status ${aiModelStatus.className}${aiConfigured ? ' configured' : ''}`}
-                  title={aiModelStatus.title}
-                  role='button'
-                  tabIndex={0}
-                  aria-label={e('shellpilotAiManualRecheck')}
-                  onClick={handleManualAIHealthCheck}
-                  onKeyDown={handleAIHealthKeyDown}
-                >
-                  <ReloadOutlined
-                    className='right-panel-model-status-refresh'
-                    spin={aiModelStatus.status === 'checking'}
-                  />
-                  <span>{aiModelStatus.label}</span>
-                </Tag>
+                <LazyModuleBoundary moduleName='AI 模型状态' fallback={null}>
+                  <Suspense fallback={null}>
+                    <RightSidePanelAIHeader
+                      config={config}
+                      rightPanelVisible={rightPanelVisible}
+                      variant='status'
+                    />
+                  </Suspense>
+                </LazyModuleBoundary>
                 )
               : null
           }
-          <PushpinOutlined
-            {...pinProps}
-          />
+          <PushpinOutlined {...pinProps} />
           <CloseCircleOutlined
             className='right-side-panel-close right-side-panel-controls mg1l'
             onClick={onClose}

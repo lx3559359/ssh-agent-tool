@@ -767,7 +767,7 @@ test('logs AI chat request errors with safe diagnostic context', async () => {
     )
 
     const serialized = JSON.stringify(logs)
-    assert.equal(res.error, 'invalid api key')
+    assert.equal(res.error, '模型 API 认证失败，请检查 API Key 和认证 Header。')
     assert.match(serialized, /AI request error/)
     assert.match(serialized, /chat/)
     assert.match(serialized, /relay-model/)

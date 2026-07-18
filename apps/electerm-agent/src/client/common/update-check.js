@@ -45,18 +45,36 @@ function getInfo (url) {
 }
 
 async function getApprovedReleaseInfo () {
+  const updateChannel = getConfiguredUpdateChannel()
+  const validationOptions = {
+    arch: isArm ? 'arm64' : 'x64',
+    requireWindowsAssets: true,
+    requireApprovalManifest: true,
+    allowPrerelease: updateChannel === 'beta',
+    updateChannel
+  }
+  let firstCandidate = null
+  let currentCandidate = null
   for (const source of getUpdateReleaseSources(getConfiguredUpdateSource())) {
     const release = await getInfo(source.releaseApiUrl)
     const approvedRelease = await attachUpdateApprovalManifest(release, getInfo)
     if (approvedRelease?.tag_name) {
-      return {
+      const candidate = {
         ...approvedRelease,
         updateSource: source.id,
         updateSourceLabel: source.label
       }
+      const status = getReleaseUpdateStatus(candidate, packInfo.version, validationOptions)
+      if (status.status === 'update') {
+        return candidate
+      }
+      firstCandidate ||= candidate
+      if (status.status === 'current') {
+        currentCandidate ||= candidate
+      }
     }
   }
-  return null
+  return currentCandidate || firstCandidate
 }
 
 function getConfiguredUpdateSource () {

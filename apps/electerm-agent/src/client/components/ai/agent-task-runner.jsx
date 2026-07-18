@@ -30,6 +30,7 @@ import {
 } from './agent-task-controller.js'
 import { agentTaskRegistry } from './agent-task-registry.js'
 import * as transactionStore from '../../common/safety-transactions/transaction-store.js'
+import { createTraceContext } from '../../common/quality/trace-context.js'
 import { cancelRunCmd, runCmd } from '../terminal/terminal-apis.js'
 import { refsStatic } from '../common/ref'
 import message from '../common/message'
@@ -91,6 +92,7 @@ export default function AgentTaskRunner ({
   const generationRequestRef = useRef(0)
   const activeRunRef = useRef(0)
   const mountedRef = useRef(true)
+  const taskTraceContextRef = useRef(null)
   const uiLifecycle = useMemo(() => createAgentTaskUiLifecycle({
     abortGeneration: () => generationAbortRef.current?.abort(),
     closeView: () => onClose?.()
@@ -107,6 +109,11 @@ export default function AgentTaskRunner ({
     if (!open || !snapshot || !target || !terminal) return
     const generationToken = ++generationRequestRef.current
     activeRunRef.current += 1
+    taskTraceContextRef.current = createTraceContext({
+      ...(target.requestId ? { requestId: String(target.requestId) } : {}),
+      module: 'agent',
+      action: 'agent-task'
+    })
     generationAbortRef.current?.abort()
     const controller = new AbortController()
     generationAbortRef.current = controller
@@ -176,6 +183,7 @@ export default function AgentTaskRunner ({
       const controller = createAgentTaskController({
         store: transactionStore,
         registry: agentTaskRegistry,
+        traceContext: taskTraceContextRef.current,
         endpoint: plan.endpoint,
         pid: terminal.pid,
         runCmd,

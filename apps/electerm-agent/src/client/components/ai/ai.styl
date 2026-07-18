@@ -12,12 +12,47 @@
   overflow hidden
   &::-webkit-scrollbar
     width 0
+.ai-history-shell
+  position relative
+  display flex
+  flex 1 1 auto
+  min-height 0
+  width 100%
 .ai-history-wrap
   width 100%
   height 100%
   flex 1 1 auto
   min-height 0
   overflow-y auto
+.ai-history-load-earlier
+  display flex
+  justify-content center
+  padding 10px 8px 4px
+  .ant-btn
+    max-width calc(100% - 16px)
+    border-radius 6px
+.ai-history-back-to-latest
+  position absolute
+  z-index 3
+  right 12px
+  bottom 12px
+  display inline-flex
+  align-items center
+  max-width calc(100% - 24px)
+  box-shadow 0 6px 18px rgba(0, 0, 0, 0.22)
+.ai-history-unread-count
+  display inline-flex
+  align-items center
+  justify-content center
+  min-width 18px
+  height 18px
+  margin-left 6px
+  padding 0 5px
+  border-radius 9px
+  background rgba(255, 255, 255, 0.2)
+  color inherit
+  font-size 11px
+  line-height 18px
   overflow-x hidden
   padding-right 4px
 
@@ -374,6 +409,32 @@
     border-color var(--sp-border) !important
     border-radius var(--sp-radius-control)
 
+.sp-ai-config-primary-fields
+  max-width 760px
+  margin 0 auto
+
+.sp-ai-config-advanced
+  margin-top 6px
+  border-top 1px solid var(--sp-border)
+  .ant-collapse-header
+    align-items flex-start !important
+    padding-left 0 !important
+    padding-right 0 !important
+  .ant-collapse-extra
+    min-width 0
+    max-width 70%
+  .ant-collapse-content-box
+    padding-left 0 !important
+    padding-right 0 !important
+
+.sp-ai-config-advanced-description
+  display block
+  color var(--text-dark)
+  font-size 12px
+  line-height 1.5
+  text-align right
+  white-space normal
+
 @media (max-width: 680px)
   .sp-ai-config-form
     padding 14px
@@ -390,3 +451,6 @@
       > .ant-space-item
         flex 1 1 100%
         width 100%
+  .sp-ai-config-advanced
+    .ant-collapse-extra
+      display none

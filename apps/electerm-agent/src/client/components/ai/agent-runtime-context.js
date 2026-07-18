@@ -1,3 +1,5 @@
+import { normalizeTraceContext } from '../../common/quality/trace-context.js'
+
 const TAB_SCOPED_AGENT_TOOLS = new Set([
   'send_terminal_command',
   'get_terminal_output',
@@ -138,6 +140,10 @@ export function bindAgentToolArgs (toolName, args = {}, runtime = {}) {
     runtime.sourceTabId
   ) {
     safeArgs.tabId = runtime.sourceTabId
+  }
+  if (toolName === 'send_terminal_command') {
+    const traceContext = normalizeTraceContext(runtime.traceContext)
+    if (traceContext.traceId) safeArgs.traceContext = traceContext
   }
   return safeArgs
 }

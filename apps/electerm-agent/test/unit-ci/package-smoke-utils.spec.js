@@ -7,6 +7,7 @@ const {
   appExecutableName,
   buildSmokeEnvironment,
   resolveSmokePaths,
+  validatePackagedRuntime,
   validatePortableZipExtractedFiles,
   validateSmokeResult
 } = require(path.resolve(__dirname, '../../build/bin/package-smoke-utils'))
@@ -37,6 +38,10 @@ test('package smoke paths target the unpacked ShellPilot app and isolated data f
   assert.equal(
     paths.dataDbPath,
     'C:\\Temp\\aigshell-package-smoke-test\\data\\users\\default_user\\electerm_data.db'
+  )
+  assert.equal(
+    paths.nodePtyConptyPath,
+    'C:\\work\\aigshell\\dist\\win-unpacked\\resources\\app.asar.unpacked\\node_modules\\node-pty\\build\\Release\\conpty.node'
   )
 })
 
@@ -267,6 +272,18 @@ test('package smoke environment isolates app data and disables gpu for CI stabil
       DATA_PATH: 'C:\\Temp\\aigshell-data',
       DISABLE_GPU: '1'
     }
+  )
+})
+
+test('package smoke rejects a Windows package without the native terminal runtime', () => {
+  const paths = {
+    nodePtyConptyPath: 'C:\\ShellPilot\\resources\\app.asar.unpacked\\node_modules\\node-pty\\build\\Release\\conpty.node'
+  }
+
+  assert.doesNotThrow(() => validatePackagedRuntime(paths, () => true))
+  assert.throws(
+    () => validatePackagedRuntime(paths, () => false),
+    /conpty\.node/
   )
 })
 

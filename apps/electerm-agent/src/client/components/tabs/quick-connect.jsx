@@ -155,7 +155,7 @@ export default function QuickConnect ({ batch, inputOnly, formOnly }) {
       </Space.Compact>
     )
   }
-  const wiki = 'https://github.com/electerm/electerm/wiki/quick-connect'
+  const wiki = 'https://github.com/lx3559359/ssh-agent-tool/blob/master/docs/USER_GUIDE_ZH.md'
 
   function renderForm () {
     if (!showInput && !formOnly) {

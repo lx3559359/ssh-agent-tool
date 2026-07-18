@@ -138,6 +138,74 @@ async function getDiagnosticSessionLogDir () {
   }
 }
 
+function recordPerformanceMetric (payload = {}) {
+  try {
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      return false
+    }
+    const metrics = globalState.get('performanceMetrics')
+    if (!metrics) return false
+    const dimensions = payload.dimensions || {}
+    if (payload.kind === 'mark') {
+      if (typeof payload.name !== 'string' || !Number.isFinite(payload.at)) {
+        return false
+      }
+      return metrics.mark(payload.name, payload.at, dimensions)
+    }
+    if (payload.kind === 'duration') {
+      if (typeof payload.name !== 'string' || !Number.isFinite(payload.value)) {
+        return false
+      }
+      return metrics.recordDuration(payload.name, payload.value, dimensions)
+    }
+    return false
+  } catch (error) {
+    return false
+  }
+}
+
+function getPerformanceSummary () {
+  try {
+    return globalState.get('performanceMetrics')?.getSummary() || {
+      schemaVersion: 1,
+      generatedAt: 0,
+      recordCount: 0,
+      metrics: {}
+    }
+  } catch (error) {
+    return {
+      schemaVersion: 1,
+      generatedAt: 0,
+      recordCount: 0,
+      metrics: {}
+    }
+  }
+}
+
+function saveRecoverySnapshot (state = {}) {
+  try {
+    return globalState.get('recoverySnapshot')?.saveClientState(state) === true
+  } catch (error) {
+    return false
+  }
+}
+
+function getRecoveryPlan () {
+  try {
+    return globalState.get('recoverySnapshot')?.getRecoveryPlan() || null
+  } catch (error) {
+    return null
+  }
+}
+
+function dismissRecoveryPlan () {
+  try {
+    return globalState.get('recoverySnapshot')?.dismissRecoveryPlan() === true
+  } catch (error) {
+    return false
+  }
+}
+
 async function initAppServer () {
   const {
     config
@@ -278,6 +346,14 @@ function initIpc () {
       logFilePath: log.transports.file.getFile().path,
       sessionLogDir: await getDiagnosticSessionLogDir()
     }),
+    recordQualityEvent: (context, event) => {
+      return log.recordQualityEvent(context, event)
+    },
+    recordPerformanceMetric,
+    getPerformanceSummary,
+    saveRecoverySnapshot,
+    getRecoveryPlan,
+    dismissRecoveryPlan,
     reportRendererError: (payload) => reportRendererError(payload, log),
     nativeUpdateCheck,
     nativeUpdateDownload,

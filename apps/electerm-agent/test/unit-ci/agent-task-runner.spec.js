@@ -179,6 +179,58 @@ test('diagnostic controller creates confirms and runs only after explicit confir
   assert.equal(registry.size, 0)
 })
 
+test('real Agent task persistence keeps only the parent trace id in metadata', async () => {
+  const { createAgentTaskRegistry } = await import(registryUrl)
+  const { createAgentTaskController } = await import(controllerUrl)
+  const { createTransactionStore } = await import(storeUrl)
+  const qualityEvents = []
+  const store = createTransactionStore({
+    adapter: createMemoryAdapter(),
+    now: () => new Date('2026-07-18T08:00:00.000Z'),
+    recordQualityEvent: (context, event) => {
+      qualityEvents.push({ context, event })
+      return true
+    }
+  })
+  const traceContext = {
+    traceId: 'sp-1784304000000-12345678',
+    operationId: 'upstream-operation',
+    taskId: 'upstream-task',
+    requestId: 'upstream-request',
+    password: 'parent-secret'
+  }
+  const controller = createAgentTaskController({
+    store,
+    registry: createAgentTaskRegistry(),
+    pid: 1001,
+    endpoint: endpoint(),
+    traceContext,
+    getCurrentEndpoint: async () => endpoint(),
+    runCmd: async () => ({ stdout: 'readonly evidence', code: 0 }),
+    cancelRunCmd: async () => true
+  })
+
+  const completed = await controller.confirmAndRun(diagnosticPlan({
+    steps: [diagnosticPlan().steps[0]]
+  }))
+  const saved = await store.getTask(completed.id)
+
+  assert.deepEqual(saved.metadata, { traceId: traceContext.traceId })
+  assert.equal(saved.traceContext, undefined)
+  assert.doesNotMatch(
+    JSON.stringify(saved),
+    /upstream-(?:operation|task|request)|parent-secret|password/
+  )
+  assert.deepEqual(qualityEvents.map(entry => [
+    entry.context.traceId,
+    entry.context.taskId,
+    entry.event.phase
+  ]), [
+    [traceContext.traceId, saved.id, 'started'],
+    [traceContext.traceId, saved.id, 'completed']
+  ])
+})
+
 test('registry cancellation reaches cancelRunCmd with the active execution id after UI unmount', async () => {
   const { createAgentTaskRegistry } = await import(registryUrl)
   const { createAgentTaskController } = await import(controllerUrl)

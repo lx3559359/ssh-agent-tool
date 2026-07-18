@@ -622,7 +622,8 @@ export default class Sftp extends Component {
       metadata: {
         sftpSafetyTransaction: true,
         fileTransferSafety: true,
-        transferBatch: plan.transfer.batchId || ''
+        transferBatch: plan.transfer.batchId || '',
+        traceId: plan.metadata?.traceId
       }
     })
     const existing = await sftpSafetyStore.getOperation(request.id)
@@ -642,6 +643,10 @@ export default class Sftp extends Component {
       ...options,
       confirmed: true
     })
+  }
+
+  getTransferSafetyOperation = async id => {
+    return this.assertSftpSafetyOperationEndpoint(id)
   }
 
   completeTransferSafetyOperation = async (id, completion) => {

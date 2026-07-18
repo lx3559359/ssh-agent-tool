@@ -391,6 +391,188 @@ test('concurrent task patches for one id are serialized with monotonic timestamp
   assert.equal(final.updatedAt, second.updatedAt)
 })
 
+test('operation and task stores persist only the parent trace id without replacing business ids', async () => {
+  const { createTransactionStore } = await importStore()
+  const adapter = createMemoryAdapter()
+  const qualityEvents = []
+  const traceContext = {
+    traceId: 'sp-1784304000000-12345678',
+    operationId: 'upstream-operation',
+    taskId: 'upstream-task',
+    requestId: 'upstream-request',
+    sessionId: 'upstream-session'
+  }
+  const store = createTransactionStore({
+    adapter,
+    now: () => new Date('2026-07-18T08:00:00.000Z'),
+    recordQualityEvent: (context, event) => {
+      qualityEvents.push({ context, event })
+      return true
+    }
+  })
+
+  const operation = await store.saveOperation(createOperation({
+    id: 'operation-business-id',
+    traceContext: { ...traceContext, password: 'operation-secret' },
+    requestId: 'operation-top-level-request',
+    metadata: {
+      retained: 'operation-metadata',
+      traceContext: { ...traceContext, password: 'operation-metadata-secret' },
+      operationId: 'operation-metadata-id',
+      requestId: 'operation-metadata-request',
+      module: 'operation-metadata-module',
+      action: 'operation-metadata-action'
+    }
+  }), traceContext)
+  const task = await store.saveTask({
+    id: 'task-business-id',
+    title: '只用于业务存储的标题',
+    traceContext: { ...traceContext, password: 'task-secret' },
+    operationId: 'task-top-level-operation',
+    requestId: 'task-top-level-request',
+    module: 'task-top-level-module',
+    action: 'task-top-level-action',
+    metadata: {
+      retained: 'task-metadata',
+      traceContext: { ...traceContext, password: 'task-metadata-secret' },
+      taskId: 'task-metadata-id',
+      requestId: 'task-metadata-request',
+      module: 'task-metadata-module',
+      action: 'task-metadata-action'
+    }
+  }, traceContext)
+
+  assert.equal(operation.id, 'operation-business-id')
+  assert.equal(task.id, 'task-business-id')
+  assert.deepEqual(operation.metadata, {
+    retained: 'operation-metadata',
+    traceId: traceContext.traceId
+  })
+  assert.deepEqual(task.metadata, {
+    retained: 'task-metadata',
+    traceId: traceContext.traceId
+  })
+  assert.equal(operation.traceContext, undefined)
+  assert.equal(task.traceContext, undefined)
+  assert.doesNotMatch(JSON.stringify({ operation, task }), /upstream-(?:operation|task|request|session)/)
+
+  await store.patchOperation(operation.id, {
+    state: 'rollback-available',
+    traceContext: { ...traceContext, password: 'operation-patch-secret' },
+    requestId: 'operation-patch-request',
+    metadata: {
+      traceContext: { ...traceContext, password: 'operation-patch-metadata-secret' },
+      requestId: 'operation-patch-metadata-request'
+    }
+  })
+  await store.patchOperation(operation.id, { state: 'rolling-back' })
+  await store.patchOperation(operation.id, { state: 'restored' })
+  await store.patchTask(task.id, {
+    status: 'completed',
+    traceContext: { ...traceContext, password: 'task-patch-secret' },
+    requestId: 'task-patch-request',
+    metadata: {
+      traceContext: { ...traceContext, password: 'task-patch-metadata-secret' },
+      requestId: 'task-patch-metadata-request'
+    }
+  })
+
+  assert.deepEqual((await store.getOperation(operation.id)).metadata, {
+    retained: 'operation-metadata',
+    traceId: traceContext.traceId
+  })
+  assert.deepEqual((await store.getTask(task.id)).metadata, {
+    retained: 'task-metadata',
+    traceId: traceContext.traceId
+  })
+  for (const record of [
+    await store.getOperation(operation.id),
+    await store.getTask(task.id)
+  ]) {
+    for (const field of [
+      'traceContext',
+      'traceId',
+      'operationId',
+      'taskId',
+      'requestId',
+      'sessionId',
+      'tabId',
+      'module',
+      'action'
+    ]) {
+      assert.equal(Object.hasOwn(record, field), false, field)
+    }
+  }
+
+  assert.deepEqual(qualityEvents.map(entry => [
+    entry.context.traceId,
+    entry.context.operationId || entry.context.taskId,
+    entry.event.action,
+    entry.event.phase,
+    entry.event.result
+  ]), [
+    [traceContext.traceId, operation.id, 'safety-operation', 'started', undefined],
+    [traceContext.traceId, task.id, 'agent-task', 'started', undefined],
+    [traceContext.traceId, operation.id, 'safety-operation', 'completed', 'completed'],
+    [traceContext.traceId, operation.id, 'rollback', 'started', undefined],
+    [traceContext.traceId, operation.id, 'rollback', 'completed', 'completed'],
+    [traceContext.traceId, task.id, 'agent-task', 'completed', 'completed']
+  ])
+  assert.doesNotMatch(JSON.stringify(qualityEvents), /只用于业务存储的标题|systemctl|10\.0\.0\.1/)
+})
+
+test('quality terminals do not repeat after keep and cancellation stays with rollback', async () => {
+  const { createTransactionStore } = await importStore()
+  const adapter = createMemoryAdapter()
+  const qualityEvents = []
+  const traceContext = {
+    traceId: 'sp-1784304000000-12345678'
+  }
+  const store = createTransactionStore({
+    adapter,
+    now: () => new Date('2026-07-18T08:00:00.000Z'),
+    recordQualityEvent: (context, event) => {
+      qualityEvents.push({ context, event })
+      return true
+    }
+  })
+
+  const directlyKept = await store.saveOperation(createOperation({
+    id: 'operation-directly-kept-terminal'
+  }), traceContext)
+  await store.patchOperation(directlyKept.id, { state: 'executing' })
+  await store.patchOperation(directlyKept.id, { state: 'kept' })
+
+  const kept = await store.saveOperation(createOperation({
+    id: 'operation-kept-terminal'
+  }), traceContext)
+  await store.patchOperation(kept.id, { state: 'rollback-available' })
+  await store.patchOperation(kept.id, { state: 'kept' })
+
+  const rollbackCancelled = await store.saveOperation(createOperation({
+    id: 'operation-rollback-cancelled'
+  }), traceContext)
+  await store.patchOperation(rollbackCancelled.id, { state: 'rollback-available' })
+  await store.patchOperation(rollbackCancelled.id, { state: 'rolling-back' })
+  await store.patchOperation(rollbackCancelled.id, { state: 'cancelled' })
+
+  assert.deepEqual(qualityEvents.map(entry => [
+    entry.context.operationId,
+    entry.event.action,
+    entry.event.phase,
+    entry.event.result
+  ]), [
+    [directlyKept.id, 'safety-operation', 'started', undefined],
+    [directlyKept.id, 'safety-operation', 'completed', 'completed'],
+    [kept.id, 'safety-operation', 'started', undefined],
+    [kept.id, 'safety-operation', 'completed', 'completed'],
+    [rollbackCancelled.id, 'safety-operation', 'started', undefined],
+    [rollbackCancelled.id, 'safety-operation', 'completed', 'completed'],
+    [rollbackCancelled.id, 'rollback', 'started', undefined],
+    [rollbackCancelled.id, 'rollback', 'cancelled', 'cancelled']
+  ])
+})
+
 test('successful operation and task writes emit credential-free local update events', async () => {
   const {
     createTransactionStore,
@@ -770,6 +952,48 @@ test('SQLite and NeDB encrypt safety operations and agent tasks at rest', async 
         (await dbAction('agentTasks', 'findOne', { _id: task._id })).output,
         task.output
       )
+    })
+  }
+})
+
+test('SQLite and NeDB preserve partial updates for non-encrypted records', async t => {
+  const backends = [
+    ['SQLite', '../../src/app/lib/sqlite'],
+    ['NeDB', '../../src/app/lib/nedb']
+  ]
+  const enc = value => Buffer.from(value, 'utf8').toString('base64')
+  const dec = value => Buffer.from(value, 'base64').toString('utf8')
+
+  for (const [backend, modulePath] of backends) {
+    await t.test(backend, async t => {
+      const { createDb } = require(path.resolve(__dirname, modulePath))
+      const appPath = fs.mkdtempSync(path.join(
+        os.tmpdir(),
+        `shellpilot-partial-${backend.toLowerCase()}-`
+      ))
+      const { dbAction } = createDb(appPath, 'default_user', { enc, dec })
+
+      for (const [table, id] of [
+        ['bookmarkGroups', 'partial-bookmark-group'],
+        ['data', 'ordinary-non-user-config']
+      ]) {
+        await t.test(`${table} ${id}`, async () => {
+          await dbAction(table, 'insert', {
+            _id: id,
+            retained: 'keep-me',
+            changed: 'before'
+          })
+          await dbAction(table, 'update', { _id: id }, {
+            $set: { changed: 'after' }
+          }, { upsert: false })
+
+          assert.deepEqual(await dbAction(table, 'findOne', { _id: id }), {
+            _id: id,
+            retained: 'keep-me',
+            changed: 'after'
+          })
+        })
+      }
     })
   }
 })

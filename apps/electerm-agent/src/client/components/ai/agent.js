@@ -11,6 +11,7 @@ import { updateAIChatHistoryEntry } from './ai-chat-actions'
 import { buildAIConversationMessages } from './ai-conversation-context'
 import aiAgentCopy from './ai-agent-copy.json'
 import { normalizeAsyncResult } from '../../common/async-result.js'
+import { createTraceContext } from '../../common/quality/trace-context.js'
 import {
   boundAgentToolResult,
   buildBoundedAgentMessages,
@@ -68,7 +69,7 @@ function updateChatEntry (chatEntry, updates) {
   updateAIChatHistoryEntry(window.store, chatEntry.id, updates)
 }
 
-async function callBackendAIchatWithTools (messages, config, requestId) {
+async function callBackendAIchatWithTools (messages, config, requestId, traceContext) {
   return window.pre.runGlobalAsync(
     'AIchatWithTools',
     messages,
@@ -79,7 +80,8 @@ async function callBackendAIchatWithTools (messages, config, requestId) {
     config.proxyAI,
     agentTools,
     config.authHeaderNameAI,
-    requestId
+    requestId,
+    traceContext
   )
 }
 
@@ -109,7 +111,21 @@ export function waitForAgentOperation (operation, signal) {
   })
 }
 
-export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming, history = []) {
+export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming, history = [], traceContext, onQualityTerminal) {
+  const parentTrace = traceContext?.traceId
+    ? createTraceContext({
+      traceId: traceContext.traceId,
+      taskId: String(chatEntry.id),
+      module: 'ai',
+      action: 'agent-run'
+    })
+    : undefined
+  let qualityFinished = false
+  const finishQuality = (phase, result) => {
+    if (qualityFinished) return
+    qualityFinished = true
+    onQualityTerminal?.(phase, result)
+  }
   if (window.store.agentRunning) {
     const lockedResult = {
       ok: false,
@@ -121,6 +137,7 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
       response: `**${aiAgentCopy.errorLabel}:** ${lockedResult.error}`,
       completionStatus: 'failed'
     })
+    finishQuality('failed', 'failed')
     return lockedResult
   }
   window.store.agentRunning = true
@@ -130,6 +147,7 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
   const agentRuntime = {
     planConfirmed: false,
     sourceTabId: chatEntry.sourceTabId || chatEntry.conversationScopeId || '',
+    traceContext: parentTrace,
     signal: controller.signal,
     cancelActiveTool: null,
     cancellations: new Set()
@@ -148,11 +166,17 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
   activeAgentRuns.set(String(chatEntry.id), cancelCurrent)
 
   function markCancelled () {
+    const current = window.store.aiChatHistory?.find(item => (
+      item.id === chatEntry.id
+    ))
+    const terminalAlreadyRecorded = !current ||
+      current.completionStatus === 'cancelled'
     setIsStreaming(false)
     updateChatEntry(chatEntry, {
       response: accumulatedContent + `\n\n*(${aiAgentCopy.stoppedText})*`,
       completionStatus: 'cancelled'
     })
+    if (!terminalAlreadyRecorded) finishQuality('cancelled', 'cancelled')
   }
 
   try {
@@ -166,7 +190,10 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
     updateChatEntry(chatEntry, {
       toolCalls: [],
       response: '',
-      completionStatus: 'running'
+      completionStatus: 'running',
+      ...(parentTrace
+        ? { metadata: { traceId: parentTrace.traceId } }
+        : {})
     })
 
     for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
@@ -176,11 +203,18 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
       }
 
       activeBackendRequestId = `agent-${chatEntry.id}-${iteration}-${Date.now()}`
+      const requestTraceContext = createTraceContext({
+        ...(parentTrace?.traceId ? { traceId: parentTrace.traceId } : {}),
+        requestId: activeBackendRequestId,
+        module: 'ai',
+        action: 'agent-request'
+      })
       const backendResult = await waitForAgentOperation(
         callBackendAIchatWithTools(
           buildBoundedAgentMessages(baseMessages, runtimeMessages),
           config,
-          activeBackendRequestId
+          activeBackendRequestId,
+          requestTraceContext
         ),
         controller.signal
       )
@@ -198,6 +232,7 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
           response: accumulatedContent + `\n\n**${aiAgentCopy.errorLabel}:** ${safeAgentError}`,
           completionStatus: 'failed'
         })
+        finishQuality('failed', 'failed')
         return { ...agentResult, error: safeAgentError }
       }
 
@@ -209,6 +244,7 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
           response: accumulatedContent || aiAgentCopy.noResponseText,
           completionStatus: 'failed'
         })
+        finishQuality('failed', 'failed')
         return
       }
 
@@ -227,6 +263,7 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
           response: accumulatedContent,
           completionStatus: 'completed'
         })
+        finishQuality('completed', 'completed')
         return
       }
 
@@ -296,6 +333,7 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
       response: accumulatedContent + `\n\n*(${aiAgentCopy.maxIterationsText})*`,
       completionStatus: 'failed'
     })
+    finishQuality('failed', 'failed')
   } catch (error) {
     if (controller.signal.aborted || abortRef.current || error?.name === 'AbortError') {
       markCancelled()
@@ -307,6 +345,7 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
       response: accumulatedContent + `\n\n**${aiAgentCopy.errorLabel}:** ${safeError}`,
       completionStatus: 'failed'
     })
+    finishQuality('failed', 'failed')
     return { ok: false, data: null, error: safeError }
   } finally {
     agentRuntime.cancellations.clear()

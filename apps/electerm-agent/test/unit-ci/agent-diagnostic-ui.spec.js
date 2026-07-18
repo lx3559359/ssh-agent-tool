@@ -77,3 +77,19 @@ test('reopening diagnostics isolates visible progress from an older background t
   assert.match(runner, /runToken/)
   assert.match(runner, /activeRunRef\.current\s*!==\s*runToken/)
 })
+
+test('production AgentTaskRunner passes an internal parent trace only to the task controller', () => {
+  const runner = readSource('src/client/components/ai/agent-task-runner.jsx')
+  const modelRequest = runner.slice(
+    runner.indexOf('const text = await requestDiagnosticPlanText({'),
+    runner.indexOf('const nextPlan = parseDiagnosticPlan')
+  )
+
+  assert.match(runner, /createTraceContext/)
+  assert.match(runner, /taskTraceContextRef\.current\s*=\s*createTraceContext\(/)
+  assert.match(
+    runner,
+    /createAgentTaskController\(\{[\s\S]*traceContext:\s*taskTraceContextRef\.current/
+  )
+  assert.doesNotMatch(modelRequest, /traceContext|taskTraceContextRef/)
+})

@@ -10,7 +10,8 @@ export async function runAgentTerminalCommand ({ store, args = {} }) {
   const safetyResult = await store.runSafetyCommand(args.command, {
     tabId,
     source: 'agent',
-    title: 'Agent 终端命令'
+    title: 'Agent 终端命令',
+    ...(args.traceContext ? { traceContext: args.traceContext } : {})
   })
   if (safetyResult?.sent !== true) {
     return {

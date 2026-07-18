@@ -99,6 +99,8 @@ import { buildSafetyRequest } from '../../common/safety-transactions/models.js'
 import { assertSameSessionEndpoint } from '../../common/safety-transactions/endpoint-guard.js'
 import * as terminalSafetyStore from '../../common/safety-transactions/transaction-store.js'
 import uid from '../../common/uid.js'
+import { extractTerminalCommandInput } from './terminal-current-input.js'
+import { recordPerformanceMark } from '../../common/quality/quality-events.js'
 
 const e = window.translate
 
@@ -540,7 +542,7 @@ class Term extends Component {
   warnSftpFollowUnsupported = () => {
     message.warning(
       <span>
-        Fish shell/windows shell is not supported for SFTP follow SSH path feature. See: <ExternalLink to='https://github.com/electerm/electerm/wiki/Warning-about-sftp-follow-ssh-path-function'>wiki</ExternalLink>
+        Fish shell/windows shell is not supported for SFTP follow SSH path feature. See: <ExternalLink to='https://github.com/lx3559359/ssh-agent-tool/blob/master/docs/USER_GUIDE_ZH.md'>ShellPilot 使用指南</ExternalLink>
       </span>
       , 7)
   }
@@ -1206,19 +1208,7 @@ class Term extends Component {
     // Get text from start of line up to cursor position
     const lineText = line.translateToString(true, 0, cursorX)
 
-    // Try to extract command after prompt
-    // Common prompt endings with trailing space
-    const promptEndings = ['$ ', '# ', '> ', '% ', '] ', ') ']
-
-    let commandStart = 0
-    for (const ending of promptEndings) {
-      const idx = lineText.lastIndexOf(ending)
-      if (idx !== -1 && idx + ending.length > commandStart) {
-        commandStart = idx + ending.length
-      }
-    }
-
-    return lineText.slice(commandStart)
+    return extractTerminalCommandInput(lineText)
   }
 
   setCurrentInput = (value) => {
@@ -1274,17 +1264,20 @@ class Term extends Component {
       }
       return
     }
-    if (this.props.config.showCmdSuggestions) {
+    if (!this.props.config.showCmdSuggestions || d === '\r' || d === '\n') {
+      this.closeSuggestions()
+      return
+    }
+
+    clearTimeout(this.timers.suggestionRefresh)
+    this.timers.suggestionRefresh = setTimeout(() => {
       const data = this.getCurrentInput()
-      if (data && d !== '\r' && d !== '\n') {
-        const cursorPos = this.getCursorPosition()
-        this.openSuggestions(cursorPos, data)
+      if (data) {
+        this.openSuggestions(this.getCursorPosition(), data)
       } else {
         this.closeSuggestions()
       }
-    } else {
-      this.closeSuggestions()
-    }
+    }, 50)
   }
 
   runSafetyCommand = (command, options = {}) => {
@@ -1905,6 +1898,15 @@ class Term extends Component {
       this.commandSafetyEntrypoint.beginSession()
       await this.initAttachAddon()
       this.runInitScript()
+      try {
+        this.fitAddon.fit()
+        term.focus()
+        recordPerformanceMark('first_terminal_ready', Date.now(), {
+          terminalType: tab.host ? 'ssh' : 'local'
+        })
+      } catch (error) {
+        // Readiness metrics must not alter a working terminal session.
+      }
     }
     // term.onRrefresh(this.onRefresh)
     term.onResize(this.onResizeTerminal)

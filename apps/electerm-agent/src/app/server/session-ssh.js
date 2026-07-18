@@ -257,6 +257,25 @@ function shouldLogSshConnectErrorAsError (err) {
   return err?.message !== '2FA_RETRY'
 }
 
+function reorderConnectionHoppings (initOptions = {}) {
+  if (
+    !initOptions.hasHopping ||
+    !Array.isArray(initOptions.connectionHoppings) ||
+    initOptions.connectionHoppings.length === 0
+  ) {
+    return initOptions
+  }
+
+  const authKeys = [
+    'host', 'port', 'username', 'password', 'privateKey', 'passphrase', 'certificate'
+  ]
+  const currentHostHopping = _.pick(initOptions, authKeys)
+  const [firstHopping, ...restHoppings] = initOptions.connectionHoppings
+  Object.assign(initOptions, _.pick(firstHopping, authKeys))
+  initOptions.connectionHoppings = [...restHoppings, currentHostHopping]
+  return initOptions
+}
+
 class TerminalSshBase extends TerminalBase {
   async remoteInitProcess () {
     this.adjustConnectionOrder()
@@ -346,26 +365,7 @@ class TerminalSshBase extends TerminalBase {
   }
 
   adjustConnectionOrder () {
-    const { initOptions } = this
-    if (!initOptions.hasHopping || !initOptions.connectionHoppings || initOptions.connectionHoppings.length === 0) {
-      return
-    }
-
-    const currentHostHopping = {
-      host: initOptions.host,
-      port: initOptions.port,
-      username: initOptions.username,
-      password: initOptions.password,
-      privateKey: initOptions.privateKey,
-      passphrase: initOptions.passphrase
-    }
-
-    const [firstHopping, ...restHoppings] = initOptions.connectionHoppings
-    const pickProps = _.pick(firstHopping, [
-      'host', 'port', 'username', 'password', 'privateKey', 'passphrase', 'certificate'
-    ])
-    Object.assign(initOptions, pickProps)
-    initOptions.connectionHoppings = [...restHoppings, currentHostHopping]
+    reorderConnectionHoppings(this.initOptions)
   }
 
   isLikely2FAPrompts (prompts) {
@@ -1239,6 +1239,7 @@ exports.session = async function (initOptions, ws) {
 
 exports.normalizeSshConnectionError = normalizeSshConnectionError
 exports.shouldLogSshConnectErrorAsError = shouldLogSshConnectErrorAsError
+exports.reorderConnectionHoppings = reorderConnectionHoppings
 
 /**
  * test ssh connection

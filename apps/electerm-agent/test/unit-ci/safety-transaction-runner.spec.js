@@ -76,6 +76,31 @@ function createMemoryStore () {
   return store
 }
 
+function createPersistenceAdapter () {
+  const tables = new Map()
+
+  function table (name) {
+    if (!tables.has(name)) tables.set(name, new Map())
+    return tables.get(name)
+  }
+
+  return {
+    async update (id, value, name) {
+      table(name).set(id, clone(value))
+      return 1
+    },
+    async findOne (name, id) {
+      return clone(table(name).get(id))
+    },
+    async find (name) {
+      return [...table(name).values()].map(clone)
+    },
+    async remove (name, id) {
+      return table(name).delete(id) ? 1 : 0
+    }
+  }
+}
+
 function marker (phase, id, code = 0) {
   return `__SHELLPILOT_${phase.toUpperCase()}_RC_${id}=${code}`
 }
@@ -1354,14 +1379,103 @@ test('cancelling an active rollback preserves recovery and permits a retry', asy
   ])
 
   assert.equal(cancelOutcome.status, 'fulfilled')
-  assert.equal(cancelOutcome.value.state, 'failed')
+  assert.equal(cancelOutcome.value.state, 'rollback-available')
   assert.equal(rollbackOutcome.status, 'rejected')
-  const failed = await context.store.get('op-1')
-  assert.equal(failed.state, 'failed')
-  assert.deepEqual(failed.plan, bound.plan)
-  assert.deepEqual(failed.artifacts, bound.artifacts)
-  assert.deepEqual(failed.recoveryBinding, bound.recoveryBinding)
+  const available = await context.store.get('op-1')
+  assert.equal(available.state, 'rollback-available')
+  assert.deepEqual(available.plan, bound.plan)
+  assert.deepEqual(available.artifacts, bound.artifacts)
+  assert.deepEqual(available.recoveryBinding, bound.recoveryBinding)
+  assert.equal((await context.runner.cancel('op-1')).state, 'rollback-available')
   assert.equal((await context.runner.rollback('op-1')).state, 'restored')
+})
+
+test('real store records active rollback cancellation once and keeps it retryable', async () => {
+  const { createTransactionStore } = await importDomainModule('transaction-store.js')
+  const qualityEvents = []
+  const store = createTransactionStore({
+    adapter: createPersistenceAdapter(),
+    now: createClock(),
+    recordQualityEvent: (context, event) => {
+      qualityEvents.push({ context, event })
+      return true
+    }
+  })
+  const request = await createRequest({
+    metadata: { traceId: 'sp-1784304000007-12345678' }
+  })
+  let firstRollbackStarted = false
+  let rollbackAttempts = 0
+  const context = await createPreparedRunner({
+    request,
+    store,
+    runRemote: async (command, options) => {
+      if (options.phase === 'rollback' && rollbackAttempts++ === 0) {
+        firstRollbackStarted = true
+        return new Promise(() => {})
+      }
+      return { stdout: marker(options.phase, 'op-1'), code: 0 }
+    },
+    cancelRemote: async () => {}
+  })
+  await context.runner.execute('op-1', { confirmed: true })
+  const bound = await store.getOperation('op-1')
+  const rollback = context.runner.rollback('op-1')
+  await waitFor(() => firstRollbackStarted)
+
+  const [cancelOutcome, rollbackOutcome] = await Promise.allSettled([
+    context.runner.cancel('op-1'),
+    rollback
+  ])
+
+  assert.equal(cancelOutcome.status, 'fulfilled')
+  assert.equal(cancelOutcome.value.state, 'rollback-available')
+  assert.equal(rollbackOutcome.status, 'rejected')
+  const available = await store.getOperation('op-1')
+  assert.deepEqual(available.plan, bound.plan)
+  assert.deepEqual(available.artifacts, bound.artifacts)
+  assert.deepEqual(available.recoveryBinding, bound.recoveryBinding)
+  assert.equal((await context.runner.cancel('op-1')).state, 'rollback-available')
+  assert.deepEqual(qualityEvents
+    .filter(entry => entry.event.action === 'rollback')
+    .map(entry => [entry.event.phase, entry.event.result]), [
+    ['started', undefined],
+    ['cancelled', 'cancelled']
+  ])
+
+  assert.equal((await context.runner.rollback('op-1')).state, 'restored')
+
+  const failedRequest = await createRequest({
+    id: 'op-remote-rollback-failure',
+    metadata: { traceId: 'sp-1784304000008-87654321' }
+  })
+  const failedContext = await createPreparedRunner({
+    request: failedRequest,
+    store,
+    runRemote: async (command, options) => {
+      const code = options.phase === 'rollback' ? 31 : 0
+      return {
+        stdout: marker(options.phase, failedRequest.id, code),
+        code
+      }
+    }
+  })
+  await failedContext.runner.execute(failedRequest.id, { confirmed: true })
+  await assert.rejects(
+    failedContext.runner.rollback(failedRequest.id),
+    /31/
+  )
+  assert.equal(
+    (await store.getOperation(failedRequest.id)).state,
+    'failed'
+  )
+  assert.deepEqual(qualityEvents
+    .filter(entry => entry.context.operationId === failedRequest.id &&
+      entry.event.action === 'rollback')
+    .map(entry => [entry.event.phase, entry.event.result]), [
+    ['started', undefined],
+    ['failed', 'failed']
+  ])
 })
 
 test('cancel returns after cancelRemote even when runRemote never settles', async () => {

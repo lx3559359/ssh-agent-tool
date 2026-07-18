@@ -409,7 +409,7 @@ export default function AIBookmarkForm (props) {
           <RobotOutlined className='mg1r' />
           {e('createBookmarkByAI')}
         </span>
-        <HelpIcon link='https://github.com/electerm/electerm/wiki/Create-bookmark-by-AI' />
+        <HelpIcon link='https://github.com/lx3559359/ssh-agent-tool/blob/master/docs/USER_GUIDE_ZH.md' />
       </div>
       <div className='pd1b'>
         <Alert

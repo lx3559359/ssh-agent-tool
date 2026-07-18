@@ -13,7 +13,22 @@ import { initWsCommon } from '../common/fetch-from-server'
 import safeParse from '../common/parse-json-safe'
 import initWatch from './watch'
 import { parseQuickConnect } from '../common/parse-quick-connect'
-import { sanitizeAIChatHistory } from '../components/ai/ai-request-credentials'
+import { normalizeAIChatHistoryOnStartup } from '../components/ai/ai-chat-actions'
+import { recordPerformanceMark } from '../common/quality/quality-events.js'
+import {
+  buildClientRecoveryPlan,
+  createRecoveredTabs
+} from '../common/recovery/client-recovery-state.js'
+import deepCopy from 'json-deep-copy'
+import * as safetyTransactionStore from '../common/safety-transactions/transaction-store.js'
+import {
+  commandOrphanRecoveryStartedAt,
+  recoverOrphanedCommandOperationsOnce
+} from '../common/safety-transactions/command-orphan-recovery.js'
+import {
+  agentTaskRegistry,
+  recoverOrphanedAgentTasks
+} from '../components/ai/agent-task-registry.js'
 
 function getHost (argv, opts) {
   const arr = argv
@@ -167,6 +182,110 @@ export default (Store) => {
   }
   Store.prototype.confirmLoad = function () {
     window.store.configLoaded = true
+    recordPerformanceMark('config_interactive', Date.now(), {
+      windowRole: 'main'
+    })
+  }
+  Store.prototype.loadRecoveryPlan = async function () {
+    const { store } = window
+    let plan = null
+    try {
+      plan = buildClientRecoveryPlan(
+        await window.pre.runGlobalAsync('getRecoveryPlan')
+      )
+    } catch (error) {}
+    const [commands, agents] = await Promise.all([
+      recoverOrphanedCommandOperationsOnce({
+        store: safetyTransactionStore,
+        startedAt: commandOrphanRecoveryStartedAt
+      }).catch(() => []),
+      recoverOrphanedAgentTasks({
+        store: safetyTransactionStore,
+        registry: agentTaskRegistry
+      }).catch(() => [])
+    ])
+    const interrupted = [
+      ...commands.map(item => ({
+        id: item.id,
+        type: 'safety',
+        status: 'interrupted',
+        title: '安全操作已中断'
+      })),
+      ...agents.map(item => ({
+        id: item.id,
+        type: 'agent',
+        status: 'interrupted',
+        title: 'Agent 任务已中断'
+      }))
+    ]
+    if (!plan && interrupted.length) {
+      plan = {
+        schemaVersion: 1,
+        abnormalExit: true,
+        reason: 'interrupted-tasks',
+        layout: store.layout,
+        activeTabId: '',
+        tabs: [],
+        pendingTasks: []
+      }
+    }
+    if (plan) {
+      plan.pendingTasks = [...(plan.pendingTasks || []), ...interrupted].slice(0, 50)
+    }
+    store.recoveryPlan = plan
+    return plan
+  }
+  Store.prototype.restoreRecoveryTabs = function () {
+    const { store } = window
+    const plan = store.recoveryPlan
+    if (!plan || plan.tabsRestored) return 0
+
+    const existingIds = new Set(store.tabs.map(tab => tab.id))
+    const recoveredTabs = createRecoveredTabs(plan).map(tab => {
+      const id = existingIds.has(tab.id) ? generate() : tab.id
+      existingIds.add(id)
+      return { ...tab, id }
+    })
+    let restored = 0
+    for (const tab of recoveredTabs) {
+      const before = store.tabs.length
+      store.addTab(tab)
+      if (store.tabs.length > before) restored++
+    }
+    plan.tabsRestored = true
+    plan.restoredTabCount = restored
+    return restored
+  }
+  Store.prototype.reconnectRecoveredTab = function (tabId) {
+    const { store } = window
+    const tab = store.tabs.find(item => item.id === tabId)
+    if (!tab?.recoveryPending) return false
+
+    const bookmark = tab.srcId
+      ? store.bookmarks.find(item => item.id === tab.srcId)
+      : null
+    const connection = bookmark ? deepCopy(bookmark) : {}
+    store.updateTab(tabId, {
+      ...connection,
+      id: tab.id,
+      batch: tab.batch,
+      tabCount: tab.tabCount,
+      from: bookmark ? 'bookmarks' : tab.from,
+      srcId: bookmark?.id || tab.srcId,
+      authType: bookmark?.authType || tab.authType || (tab.host ? 'password' : undefined),
+      status: statusMap.processing,
+      connectionState: undefined,
+      recoveryPending: false,
+      autoReConnect: 0
+    })
+    return true
+  }
+  Store.prototype.dismissRecoveryNotice = async function () {
+    const { store } = window
+    try {
+      await window.pre.runGlobalAsync('dismissRecoveryPlan')
+    } catch (error) {}
+    store.recoveryPlan = null
   }
   Store.prototype.initApp = async function () {
     const { store } = window
@@ -205,13 +324,14 @@ export default (Store) => {
               )
             }
             ext[name] = name === 'aiChatHistory'
-              ? sanitizeAIChatHistory(dt)
+              ? normalizeAIChatHistoryOnStartup(dt)
               : dt
           }
         })
       ext.lastDataUpdateTime = await getData('lastDataUpdateTime') || 0
       ext.initLoadingData = false
       Object.assign(store, ext)
+      await store.loadRecoveryPlan()
       store.loadFontList()
       store.fetchItermThemes()
       store.openInitSessions()

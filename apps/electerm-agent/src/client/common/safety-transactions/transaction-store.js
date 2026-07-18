@@ -10,10 +10,22 @@ import {
   normalizeLegacySafetyOperationRecord,
   readSafetyOperationRecordsForMigration
 } from '../safety-operation-records.js'
+import { normalizeTraceContext } from '../quality/trace-context.js'
+import { recordQualityEvent as emitQualityEvent } from '../quality/quality-events.js'
 
 const operationTable = 'safetyOperations'
 const taskTable = 'agentTasks'
 const patchQueuesByAdapter = new WeakMap()
+const traceContextFields = [
+  'traceId',
+  'operationId',
+  'taskId',
+  'requestId',
+  'sessionId',
+  'tabId',
+  'module',
+  'action'
+]
 
 export const legacyMigrationMarkerId = 'safetyOperations:legacy-migration:v1'
 export const safetyTransactionUpdatedEvent = 'shellpilot-safety-transaction-updated'
@@ -130,7 +142,28 @@ function preserveTaskCommands (task, safeTask) {
   })
 }
 
+function stripInternalTraceFields (record = {}) {
+  const safeRecord = { ...record }
+  delete safeRecord.traceContext
+  for (const field of traceContextFields) delete safeRecord[field]
+
+  if (record.metadata && typeof record.metadata === 'object' &&
+    !Array.isArray(record.metadata)) {
+    const metadata = { ...record.metadata }
+    delete metadata.traceContext
+    for (const field of traceContextFields) {
+      if (field !== 'traceId') delete metadata[field]
+    }
+    const { traceId } = normalizeTraceContext({ traceId: metadata.traceId })
+    if (traceId) metadata.traceId = traceId
+    else delete metadata.traceId
+    safeRecord.metadata = metadata
+  }
+  return safeRecord
+}
+
 function normalizeTask (task = {}, clock) {
+  task = stripInternalTraceFields(task)
   const status = task.status || taskStatuses.draft
   if (!validTaskStatuses.has(status)) throw new Error('Agent 任务状态不受支持')
   const now = resolveNow(clock)
@@ -165,7 +198,76 @@ function mergePatch (current, patch) {
       ...patch.metadata
     }
   }
-  return merged
+  return stripInternalTraceFields(merged)
+}
+
+function withTraceMetadata (record = {}, traceContext) {
+  const safeRecord = stripInternalTraceFields(record)
+  const parent = normalizeTraceContext(traceContext)
+  const traceId = parent.traceId || safeRecord.metadata?.traceId
+  if (!traceId) return safeRecord
+  return {
+    ...safeRecord,
+    metadata: {
+      ...(safeRecord.metadata || {}),
+      traceId
+    }
+  }
+}
+
+function safelyRecordQualityEvent (recordEvent, context, event) {
+  try {
+    Promise.resolve(recordEvent(context, event)).catch(() => {})
+  } catch {}
+}
+
+function operationQualityEvent (current, previousState) {
+  if (!current?.metadata?.traceId || current.state === previousState) return null
+  if (current.state === operationStates.rollingBack) {
+    return { action: 'rollback', phase: 'started' }
+  }
+  if (current.state === operationStates.restored) {
+    return { action: 'rollback', phase: 'completed', result: 'completed' }
+  }
+  if (current.state === operationStates.rollbackAvailable) {
+    if (previousState === operationStates.rollingBack) {
+      return { action: 'rollback', phase: 'cancelled', result: 'cancelled' }
+    }
+    return { action: 'safety-operation', phase: 'completed', result: 'completed' }
+  }
+  if (
+    current.state === operationStates.kept &&
+    previousState === operationStates.executing
+  ) {
+    return { action: 'safety-operation', phase: 'completed', result: 'completed' }
+  }
+  if (current.state === operationStates.cancelled) {
+    const action = previousState === operationStates.rollingBack
+      ? 'rollback'
+      : 'safety-operation'
+    return { action, phase: 'cancelled', result: 'cancelled' }
+  }
+  if (current.state === operationStates.failed) {
+    const action = previousState === operationStates.rollingBack
+      ? 'rollback'
+      : 'safety-operation'
+    return { action, phase: 'failed', result: 'failed' }
+  }
+  return null
+}
+
+function taskQualityEvent (current, previousStatus) {
+  if (!current?.metadata?.traceId || current.status === previousStatus) return null
+  if (current.status === taskStatuses.completed) {
+    return { phase: 'completed', result: 'completed' }
+  }
+  if (current.status === taskStatuses.cancelled) {
+    return { phase: 'cancelled', result: 'cancelled' }
+  }
+  if ([taskStatuses.failed, taskStatuses.partiallyCompleted].includes(current.status)) {
+    return { phase: 'failed', result: 'failed' }
+  }
+  return null
 }
 
 function stableSerialize (value) {
@@ -221,7 +323,7 @@ function normalizeLegacyOperation (record, clock) {
     legacyEndpointIncomplete: endpointIncomplete,
     legacyRecord: normalizedLegacy
   }
-  return normalizeOperation({
+  return normalizeOperation(stripInternalTraceFields({
     id,
     source,
     command: record.command,
@@ -231,7 +333,7 @@ function normalizeLegacyOperation (record, clock) {
     createdAt: normalizedLegacy.createdAt,
     updatedAt: normalizedLegacy.updatedAt || normalizedLegacy.createdAt,
     metadata
-  }, { now: resolveNow(clock), allowLegacyId: true })
+  }), { now: resolveNow(clock), allowLegacyId: true })
 }
 
 function recordTime (record) {
@@ -299,6 +401,9 @@ export function createTransactionStore (options = {}) {
   const onChange = typeof options.onChange === 'function'
     ? options.onChange
     : emitSafetyTransactionUpdated
+  const recordEvent = typeof options.recordQualityEvent === 'function'
+    ? options.recordQualityEvent
+    : emitQualityEvent
 
   function notifyChange (recordType, id, action) {
     try {
@@ -314,13 +419,46 @@ export function createTransactionStore (options = {}) {
     return record?.value || record
   }
 
-  async function saveOperation (operation) {
+  function recordOperationEvent (operation, event) {
+    if (!event) return
+    safelyRecordQualityEvent(recordEvent, {
+      traceId: operation.metadata?.traceId,
+      operationId: operation.id,
+      module: 'safety',
+      action: event.action
+    }, {
+      module: 'safety',
+      ...event
+    })
+  }
+
+  function recordTaskEvent (task, event) {
+    if (!event) return
+    safelyRecordQualityEvent(recordEvent, {
+      traceId: task.metadata?.traceId,
+      taskId: task.id,
+      module: 'agent',
+      action: 'agent-task'
+    }, {
+      module: 'agent',
+      action: 'agent-task',
+      ...event
+    })
+  }
+
+  async function saveOperation (operation, traceContext) {
     const item = normalizeOperation({
-      ...operation,
+      ...withTraceMetadata(operation, traceContext),
       id: operation?.id || generate()
     }, { now: resolveNow(clock) })
     await adapter.update(item.id, item, operationTable, true, true)
     notifyChange('operation', item.id, 'save')
+    if (item.metadata?.traceId) {
+      recordOperationEvent(item, {
+        action: 'safety-operation',
+        phase: 'started'
+      })
+    }
     return item
   }
 
@@ -393,6 +531,7 @@ export function createTransactionStore (options = {}) {
       }, { now: resolveNow(clock) })
       await adapter.update(item.id, item, operationTable, true, true)
       notifyChange('operation', item.id, 'patch')
+      recordOperationEvent(item, operationQualityEvent(item, current.state))
       return item
     })
   }
@@ -420,6 +559,7 @@ export function createTransactionStore (options = {}) {
       }, { now: resolveNow(clock) })
       await adapter.update(item.id, item, operationTable, true, true)
       notifyChange('operation', item.id, 'patch')
+      recordOperationEvent(item, operationQualityEvent(item, current.state))
       return item
     })
   }
@@ -429,10 +569,13 @@ export function createTransactionStore (options = {}) {
     notifyChange('operation', id, 'remove')
   }
 
-  async function saveTask (task = {}) {
-    const item = normalizeTask(task, clock)
+  async function saveTask (task = {}, traceContext) {
+    const item = normalizeTask(withTraceMetadata(task, traceContext), clock)
     await adapter.update(item.id, item, taskTable, true, true)
     notifyChange('task', item.id, 'save')
+    if (item.metadata?.traceId) {
+      recordTaskEvent(item, { phase: 'started' })
+    }
     return item
   }
 
@@ -456,8 +599,15 @@ export function createTransactionStore (options = {}) {
       }, clock)
       await adapter.update(item.id, item, taskTable, true, true)
       notifyChange('task', item.id, 'patch')
+      recordTaskEvent(item, taskQualityEvent(item, current.status))
       return item
     })
+  }
+
+  async function attachTraceToOperation (id, traceContext) {
+    const { traceId } = normalizeTraceContext(traceContext)
+    if (!traceId) return getOperation(id)
+    return patchOperation(id, { metadata: { traceId } })
   }
 
   return {
@@ -467,6 +617,7 @@ export function createTransactionStore (options = {}) {
     patchOperation,
     guardedPatchOperation,
     removeOperation,
+    attachTraceToOperation,
     saveTask,
     getTask,
     listTasks,
@@ -482,6 +633,7 @@ export const listOperations = (...args) => defaultStore.listOperations(...args)
 export const patchOperation = (...args) => defaultStore.patchOperation(...args)
 export const guardedPatchOperation = (...args) => defaultStore.guardedPatchOperation(...args)
 export const removeOperation = (...args) => defaultStore.removeOperation(...args)
+export const attachTraceToOperation = (...args) => defaultStore.attachTraceToOperation(...args)
 export const saveTask = (...args) => defaultStore.saveTask(...args)
 export const getTask = (...args) => defaultStore.getTask(...args)
 export const listTasks = (...args) => defaultStore.listTasks(...args)

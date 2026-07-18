@@ -1,13 +1,35 @@
 // ai-chat-history.jsx
-import { useLayoutEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { auto } from 'manate/react'
+import { Button } from 'antd'
+import { ArrowDownOutlined } from '@ant-design/icons'
 import AIChatHistoryItem from './ai-chat-history-item'
-import { isAIHistoryNearBottom } from './ai-chat-scroll'
+import {
+  createAIHistorySnapshot,
+  getAIHistoryChangedItemIds,
+  isAIHistoryNearBottom,
+  mergeUnreadAIHistoryIds
+} from './ai-chat-scroll'
+import {
+  AI_HISTORY_PAGE_SIZE,
+  clampAIHistoryWindow,
+  expandAIHistoryWindow,
+  getVisibleAIHistory
+} from './ai-history-window'
+
+const e = window.translate
 
 export default auto(function AIChatHistory ({ history }) {
   const historyRef = useRef(null)
   const stickToBottomRef = useRef(true)
   const list = Array.isArray(history) ? history : []
+  const previousHistoryRef = useRef(createAIHistorySnapshot(list))
+  const previousScrollHeightRef = useRef(null)
+  const [unreadItemIds, setUnreadItemIds] = useState([])
+  const [visibleCount, setVisibleCount] = useState(() => (
+    clampAIHistoryWindow(AI_HISTORY_PAGE_SIZE, list.length)
+  ))
+  const visibleList = getVisibleAIHistory(list, visibleCount)
   const config = window.store?.config || {}
   const agentRunning = Boolean(window.store?.agentRunning)
   const configRevisionKey = [
@@ -20,39 +42,121 @@ export default auto(function AIChatHistory ({ history }) {
       : [])
   ].join('|')
 
+  useEffect(() => {
+    setVisibleCount(current => clampAIHistoryWindow(current, list.length))
+  }, [list.length])
+
   useLayoutEffect(() => {
-    if (historyRef.current && stickToBottomRef.current) {
-      historyRef.current.scrollTop = historyRef.current.scrollHeight
+    const historyElement = historyRef.current
+    const previousHistory = previousHistoryRef.current
+    const nextHistory = createAIHistorySnapshot(list)
+    const changedItemIds = getAIHistoryChangedItemIds(previousHistory, nextHistory)
+    previousHistoryRef.current = nextHistory
+
+    if (historyElement && stickToBottomRef.current) {
+      historyElement.scrollTop = historyElement.scrollHeight
+      setUnreadItemIds([])
+      return
     }
+    setUnreadItemIds(current => mergeUnreadAIHistoryIds(current, changedItemIds, false))
   }, [history])
 
+  useLayoutEffect(() => {
+    const historyElement = historyRef.current
+    if (!historyElement || previousScrollHeightRef.current === null) return
+    const previousScrollHeight = previousScrollHeightRef.current
+    previousScrollHeightRef.current = null
+    historyElement.scrollTop += historyElement.scrollHeight - previousScrollHeight
+  }, [visibleCount])
+
   function handleScroll (event) {
-    stickToBottomRef.current = isAIHistoryNearBottom(event.currentTarget)
+    const isNearBottom = isAIHistoryNearBottom(event.currentTarget)
+    stickToBottomRef.current = isNearBottom
+    if (isNearBottom) {
+      setUnreadItemIds([])
+    }
   }
 
-  if (!list.length) {
-    return (
-      <div
-        ref={historyRef}
-        onScroll={handleScroll}
-        className='ai-history-wrap ai-history-empty'
-      />
-    )
+  function handleBackToLatest () {
+    const historyElement = historyRef.current
+    if (!historyElement) return
+    stickToBottomRef.current = true
+    historyElement.scrollTo?.({
+      top: historyElement.scrollHeight,
+      behavior: 'smooth'
+    })
+    if (!historyElement.scrollTo) {
+      historyElement.scrollTop = historyElement.scrollHeight
+    }
+    setUnreadItemIds([])
   }
+
+  function handleLoadEarlier () {
+    const historyElement = historyRef.current
+    if (historyElement) {
+      previousScrollHeightRef.current = historyElement.scrollHeight
+    }
+    setVisibleCount(current => expandAIHistoryWindow(current, list.length))
+  }
+
   return (
-    <div ref={historyRef} onScroll={handleScroll} className='ai-history-wrap'>
+    <div className='ai-history-shell'>
       {
-        list.map((item) => {
-          return (
-            <AIChatHistoryItem
-              key={item.id}
-              item={item}
-              config={config}
-              configRevisionKey={configRevisionKey}
-              agentRunning={agentRunning}
+        list.length
+          ? (
+            <div ref={historyRef} onScroll={handleScroll} className='ai-history-wrap'>
+              {
+                visibleList.length < list.length
+                  ? (
+                    <div className='ai-history-load-earlier'>
+                      <Button size='small' onClick={handleLoadEarlier}>
+                        加载更早消息（剩余 {list.length - visibleList.length} 条）
+                      </Button>
+                    </div>
+                    )
+                  : null
+              }
+              {
+                visibleList.map((item) => {
+                  return (
+                    <AIChatHistoryItem
+                      key={item.id}
+                      item={item}
+                      config={config}
+                      configRevisionKey={configRevisionKey}
+                      agentRunning={agentRunning}
+                    />
+                  )
+                })
+              }
+            </div>
+            )
+          : (
+            <div
+              ref={historyRef}
+              onScroll={handleScroll}
+              className='ai-history-wrap ai-history-empty'
             />
-          )
-        })
+            )
+      }
+      {
+        unreadItemIds.length
+          ? (
+            <Button
+              type='primary'
+              size='small'
+              className='ai-history-back-to-latest'
+              icon={<ArrowDownOutlined />}
+              onClick={handleBackToLatest}
+              title={e('shellpilotBackToLatest')}
+            >
+              {e('shellpilotBackToLatest')}
+              <span className='ai-history-unread-count'>
+                {unreadItemIds.length > 99 ? '99+' : unreadItemIds.length}
+              </span>
+            </Button>
+            )
+          : null
       }
     </div>
   )

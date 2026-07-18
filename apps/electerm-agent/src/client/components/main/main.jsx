@@ -1,10 +1,8 @@
 import { auto } from 'manate/react'
-import { useEffect } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
 import Layout from '../layout/layout'
-import FleetStatusWorkspace from '../fleet-status/fleet-status-workspace'
 import { getTerminalWorkspaceAccessibility } from '../fleet-status/fleet-status-navigation'
 import FileInfoModal from '../sftp/file-info-modal'
-import UpdateCheck from './upgrade'
 import SettingModal from '../setting-panel/setting-modal'
 import TextEditor from '../text-editor/text-editor-entry'
 import Sidebar from '../sidebar'
@@ -24,14 +22,15 @@ import { isMac, isWin, textTerminalBgValue } from '../../common/constants'
 import { ConfigProvider } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 import { NotificationContainer } from '../common/notification'
+import LazyModuleBoundary from '../common/lazy-module-boundary'
 import InfoModal from '../sidebar/info-modal.jsx'
 import RightSidePanel from '../side-panel-r/side-panel-r'
 import ConnectionHoppingWarning from './connection-hopping-warnning'
 import SshConfigLoadNotify from '../ssh-config/ssh-config-load-notify'
 import LoadSshConfigs from '../ssh-config/load-ssh-configs'
 import AIChat from '../ai/ai-chat-entry'
-import AIConfigModal from '../ai/ai-config-modal'
 import AIGShellTopBar from './aigshell-topbar'
+import CrashRecoveryNotice from './crash-recovery-notice'
 import Opacity from '../common/opacity'
 import MoveItemModal from '../tree-list/move-item-modal'
 import InputContextMenu from '../common/input-context-menu'
@@ -46,6 +45,10 @@ import './wrapper.styl'
 import TerminalInfo from '../terminal-info/terminal-info-entry'
 import '../../common/fs.js'
 import './term-fullscreen.styl'
+
+const FleetStatusWorkspace = lazy(() => import('../fleet-status/fleet-status-workspace'))
+const UpdateCheck = lazy(() => import('./upgrade'))
+const AIConfigModal = lazy(() => import('../ai/ai-config-modal'))
 
 export function getSafeRightPanelTitle (store, rawConfig) {
   return rawConfig ? store.rightPanelTitle : ''
@@ -301,11 +304,15 @@ export default auto(function Index (props) {
         />
         <CustomCss customCss={config.customCss} configLoaded={configLoaded} />
         <TextEditor />
-        <UpdateCheck
-          skipVersion={config.skipVersion}
-          upgradeInfo={upgradeInfo}
-          installSrc={installSrc}
-        />
+        <LazyModuleBoundary moduleName='更新检查' fallback={null}>
+          <Suspense fallback={null}>
+            <UpdateCheck
+              skipVersion={config.skipVersion}
+              upgradeInfo={upgradeInfo}
+              installSrc={installSrc}
+            />
+          </Suspense>
+        </LazyModuleBoundary>
         <FileInfoModal />
         <SettingModal store={store} />
         <MoveItemModal store={store} />
@@ -313,16 +320,30 @@ export default auto(function Index (props) {
           id='outside-context'
         >
           <AIGShellTopBar store={store} />
+          <CrashRecoveryNotice
+            store={store}
+            recoveryPlan={store.recoveryPlan}
+          />
           <Sidebar {...sidebarProps} />
           <div {...terminalWorkspaceProps}>
             <Layout
               store={store}
             />
           </div>
-          <FleetStatusWorkspace
-            store={store}
-            active={fleetStatusActive}
-          />
+          {
+            fleetStatusActive
+              ? (
+                <LazyModuleBoundary moduleName='服务器状态工作区' fallback={null}>
+                  <Suspense fallback={null}>
+                    <FleetStatusWorkspace
+                      store={store}
+                      active
+                    />
+                  </Suspense>
+                </LazyModuleBoundary>
+                )
+              : null
+          }
         </div>
         <ConfirmModalStore
           transferToConfirm={transferToConfirm}
@@ -351,7 +372,17 @@ export default auto(function Index (props) {
         <BookmarkFromHistoryModal />
         <NotificationContainer />
         <BatchOpRunner />
-        <AIConfigModal store={store} />
+        {
+          store.showAIConfigModal
+            ? (
+              <LazyModuleBoundary moduleName='模型 API 配置' fallback={null}>
+                <Suspense fallback={null}>
+                  <AIConfigModal store={store} />
+                </Suspense>
+              </LazyModuleBoundary>
+              )
+            : null
+        }
         <UnixTimestampTooltip />
       </div>
     </ConfigProvider>

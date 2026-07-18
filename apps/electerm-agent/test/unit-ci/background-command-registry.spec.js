@@ -29,6 +29,26 @@ function clone (value) {
   return value === undefined ? undefined : structuredClone(value)
 }
 
+function installQualityRecorder () {
+  const calls = []
+  const previousWindow = globalThis.window
+  globalThis.window = {
+    pre: {
+      runGlobalAsync: async (...args) => {
+        if (args[0] === 'recordQualityEvent') calls.push(args)
+        return true
+      }
+    }
+  }
+  return {
+    calls,
+    restore () {
+      if (previousWindow === undefined) delete globalThis.window
+      else globalThis.window = previousWindow
+    }
+  }
+}
+
 function createProductionStore () {
   const records = new Map()
   const queues = new Map()
@@ -438,6 +458,30 @@ test('production background finalization retries the same identity without resub
       assert.equal(harness.entrypoint.hasPending(), false)
       assert.equal((await harness.store.get(harness.submission.operationId)).state, 'kept')
     })
+  }
+})
+
+test('false-before-commit keeps the SSH quality trace open until retry succeeds', async () => {
+  const recorder = installQualityRecorder()
+  try {
+    const harness = await createProductionBackgroundHarness('false-before-commit')
+    const registry = await createBackgroundTaskRegistryForHarness(harness)
+
+    const first = await registry.status('production-background-task')
+    assert.equal(first.status, 'unknown')
+    assert.deepEqual(
+      recorder.calls.map(([, , event]) => event.phase),
+      ['started']
+    )
+
+    const second = await registry.status('production-background-task')
+    assert.equal(second.status, 'completed')
+    assert.deepEqual(
+      recorder.calls.map(([, , event]) => event.phase),
+      ['started', 'completed']
+    )
+  } finally {
+    recorder.restore()
   }
 })
 

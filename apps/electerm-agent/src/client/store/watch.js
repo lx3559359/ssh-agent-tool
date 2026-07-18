@@ -19,8 +19,12 @@ import * as ls from '../common/safe-local-storage'
 import { debounce, isEmpty } from 'lodash-es'
 import { refsStatic } from '../components/common/ref'
 import dataCompare from '../common/data-compare'
+import { serializeClientRecoveryState } from '../common/recovery/client-recovery-state.js'
 
 export default store => {
+  const saveRecoverySnapshot = debounce(snapshot => {
+    window.pre.runGlobalAsync('saveRecoverySnapshot', snapshot).catch(() => false)
+  }, 500)
   const persistenceQueue = createStatePersistenceQueue({
     persist: (name, oldState, snapshot) => persistStateSnapshot({
       oldState,
@@ -143,5 +147,11 @@ export default store => {
       window.store.openInfoPanelAction()
     }
     return store.activeTabId
+  }).start()
+
+  autoRun(() => {
+    const snapshot = serializeClientRecoveryState(store)
+    saveRecoverySnapshot(snapshot)
+    return JSON.stringify(snapshot)
   }).start()
 }

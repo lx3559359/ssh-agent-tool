@@ -547,6 +547,16 @@ export default function AIChat (props) {
   }
 
   const handleKeyPress = (e) => {
+    const nativeEvent = e.nativeEvent || e
+    if (
+      e.isComposing ||
+      nativeEvent?.isComposing ||
+      e.keyCode === 229 ||
+      e.which === 229 ||
+      nativeEvent?.keyCode === 229
+    ) {
+      return
+    }
     if (!e.shiftKey) {
       e.preventDefault()
       if (!submitDisabled) {

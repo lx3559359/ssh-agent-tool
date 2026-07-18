@@ -1,5 +1,6 @@
 import { redactAuditText } from '../../common/safety-transactions/audit-redaction.js'
 import { createTaskRunner } from '../../common/safety-transactions/task-runner.js'
+import { createTraceContext } from '../../common/quality/trace-context.js'
 import {
   agentTaskRegistry
 } from './agent-task-registry.js'
@@ -178,13 +179,24 @@ export function createAgentTaskController (options = {}) {
   })
 
   async function confirmAndRun (plan) {
-    let task = await runner.create({
-      ...plan,
-      title: plan.title || plan.summary,
-      purpose: plan.purpose || plan.summary,
-      source: plan.source || 'server-status',
-      endpoint: plan.endpoint || endpoint
+    const {
+      traceContext: planTraceContext,
+      ...taskPlan
+    } = plan
+    const parentTrace = options.traceContext || planTraceContext
+    const taskTraceContext = createTraceContext({
+      ...(parentTrace?.traceId ? { traceId: parentTrace.traceId } : {}),
+      ...(taskPlan.id ? { taskId: String(taskPlan.id) } : {}),
+      module: 'agent',
+      action: 'agent-task'
     })
+    let task = await runner.create({
+      ...taskPlan,
+      title: taskPlan.title || taskPlan.summary,
+      purpose: taskPlan.purpose || taskPlan.summary,
+      source: taskPlan.source || 'server-status',
+      endpoint: taskPlan.endpoint || endpoint
+    }, taskTraceContext)
     notifyTaskChange(task)
     task = await runner.confirmPlan(task.id)
     notifyTaskChange(task)

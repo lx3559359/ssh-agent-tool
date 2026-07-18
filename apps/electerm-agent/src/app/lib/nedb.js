@@ -219,8 +219,7 @@ function createDb (appPath, defaultUserName, { enc, dec } = {}) {
           const newData = updateObj.$set || updateObj
           const { _id: _ignored, ...payload } = newData
           const encDoc = encryptDoc(dbName, { _id: qid, ...payload })
-          const finalUpdate = updateObj.$set ? { $set: encDoc } : encDoc
-          db[dbName][op](query, finalUpdate, options || {}, (err, result) => {
+          db[dbName][op](query, encDoc, options || {}, (err, result) => {
             if (err) return reject(err)
             resolve(result)
           })
