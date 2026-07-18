@@ -1,6 +1,6 @@
 import { sanitizeAIStoredText } from './ai-request-credentials.js'
 import {
-  assertSameSessionEndpoint,
+  buildEndpointKey,
   projectEndpoint
 } from '../../common/safety-transactions/endpoint-guard.js'
 
@@ -9,6 +9,17 @@ const MAX_OUTPUT_CHARS = 32768
 const MAX_ERROR_CHARS = 4096
 const MAX_ENDPOINT_CHARS = 512
 const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key)
+const sessionIdentityFields = [
+  'sessionDigest',
+  'hostFingerprint',
+  'tabId',
+  'pid',
+  'terminalPid',
+  'sessionType',
+  'host',
+  'port',
+  'username'
+]
 
 function boundedSanitizedText (value, maxChars) {
   const text = sanitizeAIStoredText(value)
@@ -29,15 +40,60 @@ function parseToolResult (rawResult) {
   return { state: 'settled', value: rawResult }
 }
 
-function projectPresentationEndpoint (endpoint) {
-  if (!endpoint || typeof endpoint !== 'object') return null
-  let projected
+function projectStoredSessionIdentity (identity) {
+  if (!identity || typeof identity !== 'object' || Array.isArray(identity)) {
+    return null
+  }
+  const projected = {}
+  for (const field of sessionIdentityFields) {
+    if (!hasOwn(identity, field)) return null
+    if (field === 'port') {
+      if (
+        typeof identity.port !== 'number' ||
+        !Number.isInteger(identity.port) ||
+        identity.port < 1 ||
+        identity.port > 65535
+      ) return null
+      projected.port = identity.port
+      continue
+    }
+    if (typeof identity[field] !== 'string') return null
+    const value = boundedSanitizedText(
+      identity[field],
+      MAX_ENDPOINT_CHARS
+    ).trim()
+    if (!value || value !== identity[field]) return null
+    projected[field] = value
+  }
+  if (projected.sessionType !== 'ssh') return null
   try {
-    projected = projectEndpoint(endpoint)
+    if (buildEndpointKey(projected) !== projected.sessionDigest) return null
   } catch {
     return null
   }
-  const identity = {
+  return Object.freeze(projected)
+}
+
+function projectPresentationEndpoint (endpoint) {
+  if (!endpoint || typeof endpoint !== 'object' || Array.isArray(endpoint)) {
+    return null
+  }
+  let projected
+  let sessionDigest
+  try {
+    projected = projectEndpoint(endpoint)
+    sessionDigest = hasOwn(endpoint, 'endpointKey')
+      ? endpoint.endpointKey
+      : buildEndpointKey(projected)
+  } catch {
+    return null
+  }
+  return projectStoredSessionIdentity({
+    sessionDigest,
+    hostFingerprint: boundedSanitizedText(
+      projected.hostKeyFingerprint,
+      MAX_ENDPOINT_CHARS
+    ).trim(),
     tabId: boundedSanitizedText(projected.tabId, MAX_ENDPOINT_CHARS).trim(),
     pid: boundedSanitizedText(projected.pid, MAX_ENDPOINT_CHARS).trim(),
     terminalPid: boundedSanitizedText(
@@ -48,19 +104,13 @@ function projectPresentationEndpoint (endpoint) {
       projected.sessionType,
       MAX_ENDPOINT_CHARS
     ).trim(),
-    hostKeyFingerprint: boundedSanitizedText(
-      projected.hostKeyFingerprint,
-      MAX_ENDPOINT_CHARS
-    ).trim(),
     host: boundedSanitizedText(projected.host, MAX_ENDPOINT_CHARS).trim(),
     port: Number(projected.port),
     username: boundedSanitizedText(
       projected.username,
       MAX_ENDPOINT_CHARS
     ).trim()
-  }
-  if (Object.values(identity).some(value => value === '')) return null
-  return Object.freeze(identity)
+  })
 }
 
 function formatTarget (endpoint) {
@@ -233,7 +283,14 @@ export function getAgentCommandFillState ({
   if (String(activeTabId || '') !== String(presentation.tabId)) {
     return denied('请切换到执行该命令的 SSH 标签页')
   }
-  if (!presentation.sessionIdentity) {
+  const sessionIdentity = projectStoredSessionIdentity(
+    presentation.sessionIdentity
+  )
+  if (
+    !sessionIdentity ||
+    typeof presentation.tabId !== 'string' ||
+    presentation.tabId !== sessionIdentity.tabId
+  ) {
     return denied('只读证据没有完整 SSH 会话身份，不能填入终端')
   }
   if (!terminal) return denied('当前终端不可用')
@@ -246,10 +303,15 @@ export function getAgentCommandFillState ({
     if (typeof terminal.getTerminalSafetyEndpoint !== 'function') {
       return denied('无法确认当前 SSH 会话身份')
     }
-    assertSameSessionEndpoint(
-      presentation.sessionIdentity,
-      projectEndpoint(terminal.getTerminalSafetyEndpoint())
+    const currentIdentity = projectPresentationEndpoint(
+      terminal.getTerminalSafetyEndpoint()
     )
+    if (
+      !currentIdentity ||
+      sessionIdentityFields.some(field => (
+        currentIdentity[field] !== sessionIdentity[field]
+      ))
+    ) throw new Error('SSH session identity changed')
   } catch {
     return denied('当前 SSH 会话与只读证据不一致')
   }
@@ -307,10 +369,16 @@ export async function fillAgentCommandIntoTerminal ({
     })
     return Object.freeze({ sent: true, reason: '' })
   } catch (error) {
-    onError?.(error)
+    const safeReason = boundedSanitizedText(
+      error?.message || '填入终端失败',
+      MAX_ERROR_CHARS
+    ).trim() || '填入终端失败'
+    try {
+      onError?.(new Error(safeReason))
+    } catch {}
     return Object.freeze({
       sent: false,
-      reason: String(error?.message || '填入终端失败')
+      reason: safeReason
     })
   }
 }

@@ -9,6 +9,10 @@ const presentationUrl = pathToFileURL(path.join(
   aiRoot,
   'agent-tool-presentation.js'
 )).href
+const credentialsUrl = pathToFileURL(path.join(
+  aiRoot,
+  'ai-request-credentials.js'
+)).href
 
 function endpoint (overrides = {}) {
   return {
@@ -17,6 +21,21 @@ function endpoint (overrides = {}) {
     terminalPid: 'terminal-a',
     sessionType: 'ssh',
     hostKeyFingerprint: 'SHA256:host-a',
+    host: 'srv.test',
+    port: 22,
+    username: 'root',
+    ...overrides
+  }
+}
+
+function persistedSessionIdentity (overrides = {}) {
+  return {
+    sessionDigest: 'root@srv.test:22',
+    hostFingerprint: 'SHA256:host-a',
+    tabId: 'tab-a',
+    pid: 'pid-a',
+    terminalPid: 'terminal-a',
+    sessionType: 'ssh',
     host: 'srv.test',
     port: 22,
     username: 'root',
@@ -63,7 +82,7 @@ test('builds the exact readonly execution presentation from raw evidence', async
     command: 'ip addr',
     tabId: 'tab-a',
     target: 'root@srv.test:22',
-    sessionIdentity: endpoint(),
+    sessionIdentity: persistedSessionIdentity(),
     capturedAt: 1000,
     durationMs: 125,
     exitCode: 0,
@@ -86,7 +105,7 @@ test('builds a bounded running presentation from args and the runtime endpoint',
   assert.equal(view.command, 'uname -s')
   assert.equal(view.tabId, 'tab-a')
   assert.equal(view.target, 'root@srv.test:22')
-  assert.deepEqual(view.sessionIdentity, endpoint())
+  assert.deepEqual(view.sessionIdentity, persistedSessionIdentity())
   assert.equal(Object.isFrozen(view.sessionIdentity), true)
   assert.equal(view.capturedAt, undefined)
   assert.equal(view.error, undefined)
@@ -248,6 +267,107 @@ test('allows filling only completed readonly evidence into the same idle connect
     activeTabId: 'tab-a',
     terminal: connectedTerminal()
   }), { allowed: true, reason: '' })
+})
+
+test('preserves and revalidates exact safe session identity through production history sanitizing', async () => {
+  const {
+    buildAgentToolPresentation,
+    getAgentCommandFillState
+  } = await import(presentationUrl)
+  const { sanitizeAIChatHistory } = await import(credentialsUrl)
+  const built = buildAgentToolPresentation(
+    'run_readonly_command',
+    { command: 'ip addr', password: 'args-password-secret' },
+    {
+      endpoint: {
+        ...endpoint(),
+        password: 'endpoint-password-secret',
+        apiKey: 'endpoint-api-key-secret',
+        token: 'endpoint-token-secret',
+        privateKey: 'endpoint-private-key-secret'
+      },
+      capturedAt: 1000,
+      exitCode: 0,
+      output: '1: lo'
+    }
+  )
+  const persisted = JSON.parse(JSON.stringify(sanitizeAIChatHistory([{
+    toolCalls: [{ presentation: built }]
+  }])))[0].toolCalls[0].presentation
+  const serialized = JSON.stringify(persisted)
+
+  assert.deepEqual(persisted.sessionIdentity, persistedSessionIdentity())
+  assert.deepEqual(Object.keys(persisted.sessionIdentity).sort(), [
+    'host',
+    'hostFingerprint',
+    'pid',
+    'port',
+    'sessionDigest',
+    'sessionType',
+    'tabId',
+    'terminalPid',
+    'username'
+  ])
+  assert.doesNotMatch(serialized, /key|token|password|secret/i)
+  assert.deepEqual(getAgentCommandFillState({
+    presentation: persisted,
+    activeTabId: 'tab-a',
+    terminal: connectedTerminal()
+  }), { allowed: true, reason: '' })
+
+  const identityChanges = [
+    ['session digest', { sessionDigest: 'root@other.test:22' }],
+    ['fingerprint', { hostFingerprint: 'SHA256:host-b' }],
+    ['pid', { pid: 'pid-b' }],
+    ['terminal pid', { terminalPid: 'terminal-b' }],
+    ['session type', { sessionType: 'telnet' }],
+    ['host', { host: 'other.test' }],
+    ['port', { port: 2222 }],
+    ['username', { username: 'deploy' }]
+  ]
+  for (const [label, change] of identityChanges) {
+    const presentation = {
+      ...persisted,
+      sessionIdentity: { ...persisted.sessionIdentity, ...change }
+    }
+    assert.equal(getAgentCommandFillState({
+      presentation,
+      activeTabId: 'tab-a',
+      terminal: connectedTerminal()
+    }).allowed, false, label)
+  }
+
+  for (const [label, sessionIdentity] of [
+    ['missing digest', { ...persisted.sessionIdentity, sessionDigest: undefined }],
+    ['missing fingerprint', { ...persisted.sessionIdentity, hostFingerprint: undefined }],
+    ['legacy fingerprint name', {
+      ...endpoint(),
+      sessionDigest: undefined
+    }],
+    ['wrong port type', { ...persisted.sessionIdentity, port: '22' }],
+    ['wrong pid type', { ...persisted.sessionIdentity, pid: { value: 'pid-a' } }]
+  ]) {
+    assert.equal(getAgentCommandFillState({
+      presentation: { ...persisted, sessionIdentity },
+      activeTabId: 'tab-a',
+      terminal: connectedTerminal()
+    }).allowed, false, label)
+  }
+
+  for (const [label, currentEndpoint] of [
+    ['missing current fingerprint', endpoint({ hostKeyFingerprint: undefined })],
+    ['mismatched current endpoint digest', endpoint({
+      endpointKey: 'root@other.test:22'
+    })]
+  ]) {
+    assert.equal(getAgentCommandFillState({
+      presentation: persisted,
+      activeTabId: 'tab-a',
+      terminal: connectedTerminal({
+        getTerminalSafetyEndpoint: () => currentEndpoint
+      })
+    }).allowed, false, label)
+  }
 })
 
 test('binds fill to the exact SSH session identity and rejects same-tab reconnects', async () => {
@@ -521,6 +641,63 @@ test('fill controller rechecks live terminal state and only sends one exact inpu
     title: 'Agent 命令预览'
   }])
   assert.doesNotMatch(sent[0].command, /[\r\n]$/)
+})
+
+test('fill controller exposes only one bounded sanitized send failure', async () => {
+  const {
+    buildAgentToolPresentation,
+    fillAgentCommandIntoTerminal
+  } = await import(presentationUrl)
+  const presentation = buildAgentToolPresentation(
+    'run_readonly_command',
+    { command: 'ip addr' },
+    {
+      endpoint: endpoint(),
+      capturedAt: 1000,
+      exitCode: 0,
+      output: '1: lo'
+    }
+  )
+  const rawError = new Error([
+    'send failed token=send-token-secret',
+    'password=send-password-secret',
+    '-----BEGIN PRIVATE KEY-----',
+    'send-private-key-secret',
+    '-----END PRIVATE KEY-----',
+    '    at unsafeSend (terminal.js:1:2)',
+    'x'.repeat(20000)
+  ].join('\n'))
+  rawError.stack = [
+    rawError.message,
+    '    at leakedStack (terminal.js:9:9)',
+    'stack-token=stack-token-secret'
+  ].join('\n')
+  const onErrors = []
+
+  const result = await fillAgentCommandIntoTerminal({
+    presentation,
+    getActiveTabId: () => 'tab-a',
+    getTerminal: () => connectedTerminal(),
+    sendTerminalCommand: async () => { throw rawError },
+    onError: error => onErrors.push(error)
+  })
+  const exposed = JSON.stringify({
+    result,
+    errorMessage: onErrors[0]?.message,
+    errorStack: onErrors[0]?.stack
+  })
+
+  assert.equal(result.sent, false)
+  assert.ok(result.reason)
+  assert.ok(result.reason.length <= 4096)
+  assert.equal(onErrors.length, 1)
+  assert.notEqual(onErrors[0], rawError)
+  assert.equal(onErrors[0] instanceof Error, true)
+  assert.equal(onErrors[0].message, result.reason)
+  assert.doesNotMatch(exposed, /send-token-secret|send-password-secret/)
+  assert.doesNotMatch(exposed, /send-private-key-secret|stack-token-secret/)
+  assert.doesNotMatch(exposed, /unsafeSend|leakedStack|terminal\.js:/)
+  assert.match(result.reason, /\[REDACTED\]/)
 })
 
 test('readonly tool card uses the shared fill controller and exposes disabled reasons', () => {
