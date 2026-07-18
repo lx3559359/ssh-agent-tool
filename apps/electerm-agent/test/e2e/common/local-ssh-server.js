@@ -39,7 +39,7 @@ function writeTrackedPrompt (stream, nonce) {
   )
 }
 
-function runCommand (stream, command, state) {
+function runCommand (stream, command, state, sessionId) {
   const integration = command.match(/__e_nonce=[\s\S]*?([a-f0-9]{32})/)
   if (integration) {
     state.shellIntegrationNonce = integration[1]
@@ -51,6 +51,7 @@ function runCommand (stream, command, state) {
   }
 
   state.commands.push(command)
+  state.commandEvents.push({ sessionId, command })
   const nonce = state.shellIntegrationNonce
   if (nonce) {
     stream.write(
@@ -73,7 +74,7 @@ function runCommand (stream, command, state) {
   }
 }
 
-function attachShell (stream, state) {
+function attachShell (stream, state, sessionId) {
   let line = ''
   let lastWasCarriageReturn = false
 
@@ -100,7 +101,7 @@ function attachShell (stream, state) {
         }
         lastWasCarriageReturn = byte === 13
         stream.write('\r\n')
-        runCommand(stream, line.trim(), state)
+        runCommand(stream, line.trim(), state, sessionId)
         line = ''
         continue
       }
@@ -324,6 +325,7 @@ function attachSftp (sftp, root, state) {
 
 async function startLocalSshServer (options = {}) {
   const clients = new Set()
+  let nextConnectionId = 1
   const state = {
     authenticationCount: 0,
     acceptedCount: 0,
@@ -336,11 +338,14 @@ async function startLocalSshServer (options = {}) {
     shellIntegrationNonce: '',
     execCommands: [],
     cancelledExecCommands: [],
-    commands: []
+    commands: [],
+    commandEvents: [],
+    shellSessionIds: []
   }
   const server = new Server({
     hostKeys: [HOST_KEY.private]
   }, client => {
+    const sessionId = `local-ssh-${nextConnectionId++}`
     clients.add(client)
     const remove = () => clients.delete(client)
     client.on('error', remove)
@@ -422,7 +427,8 @@ async function startLocalSshServer (options = {}) {
         })
         session.on('shell', acceptShell => {
           state.shellCount += 1
-          attachShell(acceptShell(), state)
+          state.shellSessionIds.push(sessionId)
+          attachShell(acceptShell(), state, sessionId)
         })
         if (options.sftpRoot) {
           session.on('sftp', acceptSftp => {

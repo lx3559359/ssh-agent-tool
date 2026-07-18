@@ -30,6 +30,21 @@ function openSftp (client) {
   })
 }
 
+function openShell (client) {
+  return new Promise((resolve, reject) => {
+    client.shell((error, stream) => error ? reject(error) : resolve(stream))
+  })
+}
+
+async function waitFor (predicate, timeout = 5000) {
+  const deadline = Date.now() + timeout
+  while (Date.now() < deadline) {
+    if (predicate()) return
+    await new Promise(resolve => setTimeout(resolve, 20))
+  }
+  assert.fail('timed out waiting for local SSH fixture state')
+}
+
 function callSftp (sftp, method, ...args) {
   return new Promise((resolve, reject) => {
     sftp[method](...args, (error, result) => error ? reject(error) : resolve(result))
@@ -67,5 +82,36 @@ test('local SSH fixture provides isolated SFTP read, write, rename and cleanup o
     client?.end()
     await server.close().catch(() => {})
     await fixture.cleanup()
+  }
+})
+
+test('local SSH fixture records shell commands against stable connection sessions', async () => {
+  const server = await startLocalSshServer()
+  const clients = []
+
+  try {
+    clients.push(await connectClient(server), await connectClient(server))
+    const firstShell = await openShell(clients[0])
+    const secondShell = await openShell(clients[1])
+    firstShell.write('pwd\r')
+    firstShell.write('ip addr\r')
+    secondShell.write('pwd\r')
+    await waitFor(() => server.state.commandEvents.length === 3)
+
+    const [firstPwd, firstIp, secondPwd] = server.state.commandEvents
+    assert.deepEqual(
+      server.state.commands.slice(-3),
+      ['pwd', 'ip addr', 'pwd'],
+      'legacy command state remains compatible'
+    )
+    assert.equal(firstPwd.sessionId, firstIp.sessionId)
+    assert.notEqual(firstPwd.sessionId, secondPwd.sessionId)
+    assert.deepEqual(
+      server.state.shellSessionIds,
+      [firstPwd.sessionId, secondPwd.sessionId]
+    )
+  } finally {
+    for (const client of clients) client.end()
+    await server.close().catch(() => {})
   }
 })

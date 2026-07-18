@@ -110,6 +110,7 @@ async function acceptHostKeyIfShown (client, timeout = 1000) {
 async function openSshSession (client, sshServer) {
   const before = await client.evaluate(() => window.store.activeTabId)
   const shells = sshServer.state.shellCount
+  const shellSessions = sshServer.state.shellSessionIds.length
   await client.evaluate(server => window.store.mcpOpenTab({
     type: 'ssh',
     title: 'AI Takeover E2E',
@@ -129,9 +130,16 @@ async function openSshSession (client, sshServer) {
   })
   await acceptHostKeyIfShown(client, shells === 0 ? 20000 : 1000)
   await expect.poll(() => sshServer.state.shellCount, { timeout: 20000 }).toBeGreaterThan(shells)
+  await expect.poll(
+    () => sshServer.state.shellSessionIds.length,
+    { timeout: 20000 }
+  ).toBe(shellSessions + 1)
   const tabId = await client.evaluate(() => window.store.activeTabId)
   expect(tabId).not.toBe(before)
-  return tabId
+  return {
+    tabId,
+    sessionId: sshServer.state.shellSessionIds[shellSessions]
+  }
 }
 
 async function openAiPanel (client) {
@@ -175,15 +183,25 @@ async function focusActiveTerminalInput (client) {
   return input
 }
 
-async function typeManualCommand (client, sshServer, command) {
-  const before = sshServer.state.commands.filter(value => value === command).length
+async function typeManualCommand (client, sshServer, sessionId, command) {
+  const eventOffset = sshServer.state.commandEvents.length
   await focusActiveTerminalInput(client)
   await client.keyboard.type(command)
   await client.keyboard.press('Enter')
   await expect.poll(
-    () => sshServer.state.commands.filter(value => value === command).length,
+    () => {
+      const events = sshServer.state.commandEvents.slice(eventOffset)
+        .filter(event => event.command === command)
+      return {
+        target: events.filter(event => event.sessionId === sessionId).length,
+        other: events.filter(event => event.sessionId !== sessionId).length
+      }
+    },
     { timeout: 10000 }
-  ).toBe(before + 1)
+  ).toEqual({ target: 1, other: 0 })
+  await new Promise(resolve => setTimeout(resolve, 300))
+  expect(sshServer.state.commandEvents.slice(eventOffset)
+    .filter(event => event.command === command)).toHaveLength(1)
   await expect(client.locator('.terminal-command-safety-modal')).toHaveCount(0)
   await expect(client.locator('.agent-risk-confirmation-content')).toHaveCount(0)
 }
@@ -207,18 +225,20 @@ test('per-session takeover uses readonly exec, direct manual input and one risky
       languageAI: 'English'
     }), { port: agentApi.port })
 
-    const firstTab = await openSshSession(client, sshServer)
+    const firstSession = await openSshSession(client, sshServer)
+    const firstTab = firstSession.tabId
     await openAiPanel(client)
     await enableTakeover(client)
 
-    const secondTab = await openSshSession(client, sshServer)
+    const secondSession = await openSshSession(client, sshServer)
+    const secondTab = secondSession.tabId
     await expect(client.locator('.agent-takeover-switch')).toHaveAttribute('aria-checked', 'false')
     await enableTakeover(client)
     await client.evaluate(tabId => window.store.mcpSwitchTab({ tabId }), firstTab)
     await expect(client.locator('.agent-takeover-switch')).toHaveAttribute('aria-checked', 'true')
 
     for (const command of ['ip a', 'ip addr', 'systemctl restart nginx']) {
-      await typeManualCommand(client, sshServer, command)
+      await typeManualCommand(client, sshServer, firstSession.sessionId, command)
     }
     await expect.poll(() => client.evaluate(async () => {
       const terminal = window.refs.get('term-' + window.store.activeTabId)
@@ -375,7 +395,7 @@ test('per-session takeover uses readonly exec, direct manual input and one risky
     await enableTakeover(client)
     await client.evaluate(tabId => window.store.mcpCloseTab({ tabId }), reloadedTab)
     await expect.poll(() => client.evaluate(() => window.store.activeTabId)).toBe(firstTab)
-    const reopenedTab = await openSshSession(client, sshServer)
+    const reopenedTab = (await openSshSession(client, sshServer)).tabId
     await expect(client.locator('.agent-takeover-switch')).toHaveAttribute('aria-checked', 'false')
 
     await enableTakeover(client)

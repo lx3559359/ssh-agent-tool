@@ -226,9 +226,13 @@ function hasUnboundMemberRoot (memberPath, name) {
   return rootPath?.isIdentifier({ name }) && !rootPath.scope.getBinding(name)
 }
 
-function isGlobalWindowMember (memberPath, key) {
+function isUnboundGlobalMember (memberPath, key, rootName) {
   return staticMemberPathKey(memberPath) === key &&
-    hasUnboundMemberRoot(memberPath, 'window')
+    hasUnboundMemberRoot(memberPath, rootName)
+}
+
+function isGlobalWindowMember (memberPath, key) {
+  return isUnboundGlobalMember(memberPath, key, 'window')
 }
 
 function isIdentifierBoundTo (identifierPath, binding) {
@@ -425,9 +429,223 @@ function isForbiddenMutationHelper (memberPath) {
   return objectPath.isIdentifier({ name: 'Reflect' }) && property === 'set'
 }
 
-function assertReadonlyMemberExpressionSafe (memberPath) {
+function isApprovedEnvironmentArrayBinding (binding) {
+  if (!binding || binding.kind !== 'const' || !binding.path.isVariableDeclarator() ||
+    !binding.path.get('id').isIdentifier({ name: 'requiredEnvironmentVariables' })) {
+    return false
+  }
+  const values = evaluateStaticExpression(binding.path.get('init'))
+  return Array.isArray(values) &&
+    values.length === approvedAgentEnvironmentVariables.length &&
+    values.every((value, index) => value === approvedAgentEnvironmentVariables[index])
+}
+
+function isApprovedProcessEnvironmentReference (environmentPath) {
+  if (staticMemberPathKey(environmentPath) !== 'process.env' ||
+    !hasUnboundMemberRoot(environmentPath, 'process')) return false
+  const accessPath = environmentPath.parentPath
+  if (!accessPath?.isMemberExpression() ||
+    accessPath.get('object').node !== environmentPath.node ||
+    !accessPath.node.computed || !accessPath.get('property').isIdentifier()) return false
+  const namePath = accessPath.get('property')
+  const nameBinding = namePath.scope.getBinding(namePath.node.name)
+  const callbackPath = accessPath.findParent(path => path.isArrowFunctionExpression())
+  if (!callbackPath) return false
+  const callbackNamePath = callbackPath.get('params')[0]
+  if (!callbackNamePath?.isIdentifier() ||
+    callbackNamePath.scope.getBinding(callbackNamePath.node.name) !== nameBinding) return false
+  const mapCallPath = callbackPath.parentPath
+  if (!mapCallPath?.isCallExpression() ||
+    mapCallPath.get('arguments')[0]?.node !== callbackPath.node) return false
+  const mapCalleePath = mapCallPath.get('callee')
+  if (!mapCalleePath.isMemberExpression() ||
+    staticMemberPropertyName(mapCalleePath) !== 'map') return false
+  const arrayPath = mapCalleePath.get('object')
+  if (!arrayPath.isIdentifier({ name: 'requiredEnvironmentVariables' }) ||
+    !isApprovedEnvironmentArrayBinding(arrayPath.scope.getBinding(arrayPath.node.name))) {
+    return false
+  }
+  const fallbackPath = accessPath.parentPath
+  const declarationPath = fallbackPath?.parentPath
+  return fallbackPath?.isLogicalExpression({ operator: '||' }) &&
+    fallbackPath.get('left').node === accessPath.node &&
+    evaluateStaticExpression(fallbackPath.get('right')) === '' &&
+    declarationPath?.isVariableDeclarator() &&
+    declarationPath.get('init').node === fallbackPath.node &&
+    declarationPath.get('id').isIdentifier({ name: 'value' })
+}
+
+function exactObjectProperties (objectPath, names) {
+  if (!objectPath?.isObjectExpression()) return undefined
+  const properties = objectPath.get('properties')
+  if (properties.length !== names.length ||
+    properties.some(propertyPath => !propertyPath.isObjectProperty())) return undefined
+  const result = new Map()
+  for (const propertyPath of properties) {
+    const name = staticObjectPropertyName(propertyPath)
+    if (!names.includes(name) || result.has(name)) return undefined
+    result.set(name, propertyPath.get('value'))
+  }
+  return result
+}
+
+function constBindingInitializer (scope, name) {
+  const binding = scope.getBinding(name)
+  if (!binding || binding.kind !== 'const' || !binding.constant ||
+    !binding.path.isVariableDeclarator() ||
+    !binding.path.get('id').isIdentifier({ name })) return undefined
+  return { binding, initPath: binding.path.get('init') }
+}
+
+function isBoundMapProjection (callPath, sourceBinding, property) {
+  if (!callPath?.isCallExpression()) return false
+  const calleePath = callPath.get('callee')
+  if (!calleePath.isMemberExpression() ||
+    staticMemberPropertyName(calleePath) !== 'map' ||
+    !isIdentifierBoundTo(calleePath.get('object'), sourceBinding)) return false
+  const callbackPath = callPath.get('arguments')[0]
+  if (!callbackPath?.isArrowFunctionExpression() || callbackPath.node.params.length !== 1) {
+    return false
+  }
+  const itemPath = callbackPath.get('params')[0]
+  if (!itemPath.isIdentifier()) return false
+  const itemBinding = itemPath.scope.getBinding(itemPath.node.name)
+  return isMemberOfBinding(callbackPath.get('body'), itemBinding, property)
+}
+
+function isMathSpreadCall (callPath, method, binding) {
+  if (!callPath?.isCallExpression() ||
+    !isUnboundGlobalMember(callPath.get('callee'), `Math.${method}`, 'Math')) return false
+  const argumentsPaths = callPath.get('arguments')
+  return argumentsPaths.length === 1 && argumentsPaths[0].isSpreadElement() &&
+    isIdentifierBoundTo(argumentsPaths[0].get('argument'), binding)
+}
+
+function isExactStatisticsAttachment (callPath) {
+  const argumentsPaths = callPath.get('arguments')
+  if (argumentsPaths.length !== 2 ||
+    evaluateStaticExpression(argumentsPaths[0]) !==
+      'agent-readonly-real-statistics.json') return false
+  const options = exactObjectProperties(argumentsPaths[1], ['body', 'contentType'])
+  if (!options || evaluateStaticExpression(options.get('contentType')) !==
+    'application/json') return false
+  const bodyPath = options.get('body')
+  if (!bodyPath.isCallExpression() ||
+    !isUnboundGlobalMember(bodyPath.get('callee'), 'Buffer.from', 'Buffer')) return false
+  const stringifyPath = bodyPath.get('arguments')[0]
+  if (bodyPath.node.arguments.length !== 1 || !stringifyPath?.isCallExpression() ||
+    !isUnboundGlobalMember(
+      stringifyPath.get('callee'),
+      'JSON.stringify',
+      'JSON'
+    )) return false
+  const statistics = exactObjectProperties(
+    stringifyPath.get('arguments')[0],
+    ['samples', 'p95Ms', 'minMs', 'maxMs', 'minOutputBytes']
+  )
+  if (!statistics || stringifyPath.node.arguments.length !== 1) return false
+  const samples = constBindingInitializer(callPath.scope, 'samples')
+  const durations = constBindingInitializer(callPath.scope, 'durations')
+  const p95Ms = constBindingInitializer(callPath.scope, 'p95Ms')
+  if (!samples || !durations || !p95Ms ||
+    !samples.initPath.isArrayExpression() || samples.initPath.node.elements.length !== 0 ||
+    !isBoundMapProjection(durations.initPath, samples.binding, 'durationMs')) return false
+  if (!p95Ms.initPath.isCallExpression() ||
+    !p95Ms.initPath.get('callee').isIdentifier({ name: 'percentile95' }) ||
+    p95Ms.initPath.node.arguments.length !== 1 ||
+    !isIdentifierBoundTo(p95Ms.initPath.get('arguments')[0], durations.binding)) return false
+  if (!isMemberOfBinding(statistics.get('samples'), samples.binding, 'length') ||
+    !isIdentifierBoundTo(statistics.get('p95Ms'), p95Ms.binding) ||
+    !isMathSpreadCall(statistics.get('minMs'), 'min', durations.binding) ||
+    !isMathSpreadCall(statistics.get('maxMs'), 'max', durations.binding)) return false
+  const minOutputPath = statistics.get('minOutputBytes')
+  if (!minOutputPath.isCallExpression() ||
+    !isUnboundGlobalMember(minOutputPath.get('callee'), 'Math.min', 'Math')) return false
+  const minOutputArguments = minOutputPath.get('arguments')
+  return minOutputArguments.length === 1 && minOutputArguments[0].isSpreadElement() &&
+    isBoundMapProjection(
+      minOutputArguments[0].get('argument'),
+      samples.binding,
+      'outputBytes'
+    )
+}
+
+function collectApprovedReportingMembers (ast) {
+  const approvedAttachMembers = new Set()
+  const testInfoBindings = []
+  traverse(ast, {
+    Function (functionPath) {
+      const params = functionPath.get('params')
+      const testInfoPath = params[1]
+      if (!testInfoPath?.isIdentifier({ name: 'testInfo' })) return
+      const callPath = functionPath.parentPath
+      if (!callPath?.isCallExpression() ||
+        !callPath.get('callee').isIdentifier({ name: 'test' }) ||
+        callPath.get('arguments').at(-1)?.node !== functionPath.node) return
+      const binding = functionPath.scope.getBinding('testInfo')
+      if (binding) testInfoBindings.push(binding)
+    }
+  })
+  if (testInfoBindings.length > 1) {
+    throw new Error('the readonly fixture must have one testInfo binding')
+  }
+  for (const binding of testInfoBindings) {
+    let attachCount = 0
+    let annotationCount = 0
+    for (const referencePath of binding.referencePaths) {
+      const memberPath = referencePath.parentPath
+      if (!memberPath?.isMemberExpression() ||
+        memberPath.get('object').node !== referencePath.node) {
+        throw new Error('testInfo aliases are forbidden')
+      }
+      const property = staticMemberPropertyName(memberPath)
+      if (property === 'attach') {
+        const callPath = memberPath.parentPath
+        if (memberPath.node.computed || !callPath?.isCallExpression() ||
+          callPath.get('callee').node !== memberPath.node ||
+          !isExactStatisticsAttachment(callPath)) {
+          throw new Error('testInfo attachment must be the fixed statistics JSON')
+        }
+        attachCount += 1
+        approvedAttachMembers.add(memberPath.node)
+        continue
+      }
+      const pushPath = memberPath.parentPath
+      const annotationCallPath = pushPath?.parentPath
+      if (property !== 'annotations' || !pushPath?.isMemberExpression() ||
+        staticMemberPropertyName(pushPath) !== 'push' ||
+        !annotationCallPath?.isCallExpression() ||
+        annotationCallPath.get('callee').node !== pushPath.node) {
+        throw new Error('testInfo reference is outside approved reporting')
+      }
+      annotationCount += 1
+    }
+    if (attachCount !== 1 || annotationCount !== 1) {
+      throw new Error('the readonly fixture reporting shape is incomplete')
+    }
+  }
+  return approvedAttachMembers
+}
+
+function assertReadonlyMemberExpressionSafe (memberPath, approvedAttachMembers) {
+  if (staticMemberPathKey(memberPath) === 'process.env' &&
+    !isApprovedProcessEnvironmentReference(memberPath)) {
+    throw new Error('process.env access is outside the approved credential map')
+  }
   if (staticMemberPropertyName(memberPath) === 'tool_calls') {
     throw new Error('tool_calls must not be accessed after static construction')
+  }
+  if (staticMemberPropertyName(memberPath) === 'attach' &&
+    !approvedAttachMembers.has(memberPath.node)) {
+    throw new Error('attachments outside the fixed statistics JSON are forbidden')
+  }
+  const key = staticMemberPathKey(memberPath)
+  const property = staticMemberPropertyName(memberPath)
+  if ((key?.startsWith('console.') && hasUnboundMemberRoot(memberPath, 'console')) ||
+    ['write', 'writeFile', 'writeFileSync', 'appendFile', 'appendFileSync',
+      'createWriteStream'].includes(property) ||
+    ['process.stdout.write', 'process.stderr.write'].includes(key)) {
+    throw new Error('log and write sinks are forbidden in the readonly fixture')
   }
   if (isForbiddenMutationHelper(memberPath)) {
     throw new Error('generic object mutation helpers are forbidden')
@@ -454,6 +672,7 @@ function assertStaticCommandExpressionsSafe (source) {
     plugins: ['jsx']
   })
   const approvedMonitorMutations = collectApprovedMonitorMutations(ast)
+  const approvedAttachMembers = collectApprovedReportingMembers(ast)
   const descriptorObjects = new Set()
   const dynamicSinkFunctions = new Map()
   const toolCallsProperties = []
@@ -527,10 +746,10 @@ function assertStaticCommandExpressionsSafe (source) {
       }
     },
     MemberExpression (memberPath) {
-      assertReadonlyMemberExpressionSafe(memberPath)
+      assertReadonlyMemberExpressionSafe(memberPath, approvedAttachMembers)
     },
     OptionalMemberExpression (memberPath) {
-      assertReadonlyMemberExpressionSafe(memberPath)
+      assertReadonlyMemberExpressionSafe(memberPath, approvedAttachMembers)
     }
   })
   if (descriptorObjects.size !== 1 || dynamicSinkFunctions.size !== 1 ||
@@ -904,6 +1123,55 @@ test('Agent readonly hygiene rejects spoofed PTY monitor bindings', () => {
   }
 })
 
+test('Agent readonly hygiene rejects unapproved process.env access paths', () => {
+  for (const access of [
+    "const secret = process.env['AWS_SECRET_ACCESS_KEY']",
+    "const key = 'AWS_' + 'SECRET_ACCESS_KEY'; const secret = process.env[key]",
+    'const name = getDynamicName(); const secret = process.env[name]',
+    "const env = process.env; const secret = env['AWS_SECRET_ACCESS_KEY']"
+  ]) {
+    assert.throws(
+      () => assertNoForbiddenReadonlyFixtureSource(readonlySinkFixture(access)),
+      access
+    )
+  }
+})
+
+test('Agent readonly hygiene rejects attachment output and credential aliases', () => {
+  for (const leak of [
+    `
+      const output = presentation.output
+      testInfo.attach('leak.txt', { body: output })
+    `,
+    `
+      const attach = testInfo.attach
+      attach('leak.txt', { body: getDynamicOutput() })
+    `,
+    `
+      const config = { password: getDynamicPassword() }
+      const password = config.password
+      testInfo.attach('leak.txt', { body: password })
+    `
+  ]) {
+    assert.throws(
+      () => assertNoForbiddenReadonlyFixtureSource(readonlySinkFixture(leak)),
+      leak
+    )
+  }
+})
+
+test('Agent readonly hygiene rejects aliased log and write sinks', () => {
+  for (const leak of [
+    'const log = console.log; log(getDynamicOutput())',
+    "const write = fs.writeFile; write('leak.txt', getDynamicOutput())"
+  ]) {
+    assert.throws(
+      () => assertNoForbiddenReadonlyFixtureSource(readonlySinkFixture(leak)),
+      leak
+    )
+  }
+})
+
 test('Agent readonly real-server E2E uses one five-call batch and observes no PTY sends', { skip: !agentSpecExists }, () => {
   const source = readAgentSpec()
 
@@ -926,6 +1194,10 @@ test('local takeover E2E drives manual input only through the xterm textarea and
   assert.match(source, /\.xterm-helper-textarea/)
   assert.match(source, /client\.keyboard\.type\(command\)/)
   assert.match(source, /client\.keyboard\.press\('Enter'\)/)
+  assert.match(source, /state\.commandEvents/)
+  assert.match(source, /event\.sessionId\s*===\s*sessionId/)
+  assert.match(source, /event\.sessionId\s*!==\s*sessionId/)
+  assert.match(source, /setTimeout\(resolve, 300\)/)
   assert.doesNotMatch(source, /attachAddon(?:\?\.)?\.sendToServer/)
   assert.match(source, /agent-readonly-fill-reason/)
   assert.match(source, /mcpSwitchTab/)
