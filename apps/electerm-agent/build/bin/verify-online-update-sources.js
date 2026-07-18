@@ -2,6 +2,8 @@ const axios = require('axios')
 const pack = require('../../package.json')
 const {
   appendUpdateCacheBuster,
+  buildModelScopeAssetUrl,
+  modelScopeReleaseManifestName,
   getUpdateReleaseSources
 } = require('../../src/app/common/update-sources')
 const {
@@ -49,10 +51,35 @@ function isApprovedManifest (manifest, version) {
   )
 }
 
-function getMissingRequiredAssets (release, version) {
+function getMissingRequiredAssets (release, version, options = {}) {
   const names = new Set((release.assets || []).map(asset => asset.name))
   return getRequiredReleaseAssetNames(version)
+    .filter(name => options.excludeReleaseIndex !== true || name !== modelScopeReleaseManifestName)
     .filter(name => !names.has(name))
+}
+
+function isModelScopeReleaseIndexSource (source = {}) {
+  if (source.id !== 'modelscope') return false
+  try {
+    const pathname = new URL(source.releaseApiUrl).pathname
+    return pathname.split('/').pop() === modelScopeReleaseManifestName
+  } catch (error) {
+    return false
+  }
+}
+
+function getInvalidModelScopeAssets (release, version) {
+  const byName = new Map((release.assets || []).map(asset => [asset.name, asset]))
+  return getRequiredReleaseAssetNames(version)
+    .filter(name => name !== modelScopeReleaseManifestName)
+    .filter(name => {
+      const asset = byName.get(name)
+      return !asset ||
+        !Number.isSafeInteger(asset.size) ||
+        asset.size <= 0 ||
+        !/^[a-f0-9]{64}$/i.test(String(asset.sha256 || '')) ||
+        asset.browser_download_url !== buildModelScopeAssetUrl(name)
+    })
 }
 
 async function defaultFetchJson (url) {
@@ -101,7 +128,20 @@ async function checkOnlineUpdateSource ({
       }
     }
 
-    const missingAssets = getMissingRequiredAssets(release, releaseVersion)
+    const isModelScope = source.id === 'modelscope'
+    if (isModelScope && !isModelScopeReleaseIndexSource(source)) {
+      return {
+        id: source.id,
+        label: source.label,
+        ok: false,
+        reason: 'missing-release-index',
+        version: releaseVersion
+      }
+    }
+
+    const missingAssets = getMissingRequiredAssets(release, releaseVersion, {
+      excludeReleaseIndex: isModelScope
+    })
     if (missingAssets.length) {
       return {
         id: source.id,
@@ -110,6 +150,20 @@ async function checkOnlineUpdateSource ({
         reason: 'missing-assets',
         version: releaseVersion,
         missingAssets
+      }
+    }
+
+    if (isModelScope) {
+      const invalidAssets = getInvalidModelScopeAssets(release, releaseVersion)
+      if (invalidAssets.length) {
+        return {
+          id: source.id,
+          label: source.label,
+          ok: false,
+          reason: 'invalid-assets',
+          version: releaseVersion,
+          invalidAssets
+        }
       }
     }
 
@@ -197,7 +251,9 @@ module.exports = {
   buildOnlineUpdateSourceReport,
   checkOnlineUpdateSource,
   cleanVersion,
+  getInvalidModelScopeAssets,
   getMissingRequiredAssets,
+  isModelScopeReleaseIndexSource,
   isApprovedManifest,
   resolveOnlineUpdateVersion
 }
