@@ -233,27 +233,33 @@ function assertStaticCommandExpressionsSafe (source) {
           commandPath.scope.getBinding(commandPath.node.name)
       ))
       if (parameterIndex < 0) throw new Error('dynamic readonly command sink is forbidden')
-      dynamicSinkFunctions.set(functionPath.node.id.name, parameterIndex)
+      const functionBinding = functionPath.scope.getBinding(functionPath.node.id.name)
+      if (!functionBinding || functionBinding.path.node !== functionPath.node) {
+        throw new Error('readonly command sink must have one auditable function binding')
+      }
+      dynamicSinkFunctions.set(functionBinding, parameterIndex)
     }
   })
-  for (const [functionName, parameterIndex] of dynamicSinkFunctions) {
-    let calls = 0
-    traverse(ast, {
-      CallExpression (callPath) {
-        if (!callPath.get('callee').isIdentifier({ name: functionName })) return
-        calls += 1
-        const commandPath = callPath.get('arguments')[parameterIndex]
-        const command = evaluateStaticExpression(commandPath)
-        if (typeof command === 'string') {
-          assertStaticCommandTextSafe(command)
-          return
-        }
-        if (!isReadonlyCommandsMapArgument(callPath, commandPath)) {
-          throw new Error('readonly command construction is not statically auditable')
-        }
+  for (const [functionBinding, parameterIndex] of dynamicSinkFunctions) {
+    if (functionBinding.referencePaths.length === 0) {
+      throw new Error('readonly command descriptor has no auditable call site')
+    }
+    for (const referencePath of functionBinding.referencePaths) {
+      const callPath = referencePath.parentPath
+      if (!callPath?.isCallExpression() || referencePath.key !== 'callee' ||
+        callPath.get('callee').node !== referencePath.node) {
+        throw new Error('indirect readonly command sink use is forbidden')
       }
-    })
-    if (calls === 0) throw new Error('readonly command descriptor has no auditable call site')
+      const commandPath = callPath.get('arguments')[parameterIndex]
+      const command = evaluateStaticExpression(commandPath)
+      if (typeof command === 'string') {
+        assertStaticCommandTextSafe(command)
+        continue
+      }
+      if (!isReadonlyCommandsMapArgument(callPath, commandPath)) {
+        throw new Error('readonly command construction is not statically auditable')
+      }
+    }
   }
 }
 
@@ -453,6 +459,43 @@ test('Agent readonly hygiene fails closed on a dynamic readonly command sink', (
     }
   `
   assert.throws(() => assertNoForbiddenReadonlyFixtureSource(source))
+})
+
+function readonlySinkFixture (indirectUse) {
+  return `
+    function toolCall (id, command) {
+      return {
+        function: {
+          name: 'run_readonly_command',
+          arguments: JSON.stringify({ command })
+        }
+      }
+    }
+    toolCall('safe', 'ip addr')
+    ${indirectUse}
+  `
+}
+
+test('Agent readonly hygiene rejects aliasing a sink despite one safe direct call', () => {
+  const source = readonlySinkFixture(`
+    const alias = toolCall
+    alias('unsafe', getDynamicCommand())
+  `)
+  assert.throws(() => assertNoForbiddenReadonlyFixtureSource(source))
+})
+
+test('Agent readonly hygiene rejects member and callback uses of a sink', () => {
+  for (const indirectUse of [
+    "toolCall.call(null, 'unsafe', getDynamicCommand())",
+    "toolCall.apply(null, ['unsafe', getDynamicCommand()])",
+    "toolCall.bind(null, 'unsafe', getDynamicCommand())",
+    'consume(toolCall)'
+  ]) {
+    assert.throws(
+      () => assertNoForbiddenReadonlyFixtureSource(readonlySinkFixture(indirectUse)),
+      indirectUse
+    )
+  }
 })
 
 test('Agent readonly real-server E2E uses one five-call batch and observes no PTY sends', { skip: !agentSpecExists }, () => {
