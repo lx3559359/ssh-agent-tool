@@ -189,6 +189,29 @@ test('parses every Go boolean spelling for streaming options', async () => {
   }
 })
 
+test('respects short option arity when detecting streaming flags', async () => {
+  const { classifyAgentCall, getAgentToolDescriptor } = await import(policyUrl)
+  const descriptor = getAgentToolDescriptor('run_readonly_command')
+  const classify = command => classifyAgentCall({
+    descriptor,
+    args: { command }
+  })
+
+  for (const command of [
+    'kubectl get -owide pods',
+    'kubectl logs -cfrontend pod/demo'
+  ]) {
+    assert.equal(classify(command).outcome, 'allowlisted-readonly', command)
+  }
+
+  for (const command of [
+    'kubectl get -Aw pods',
+    'kubectl logs -pf pod/demo'
+  ]) {
+    assert.equal(classify(command).outcome, 'risky', command)
+  }
+})
+
 test('raises streaming CLI modes outside the readonly fast path', async () => {
   const { classifyAgentCall, getAgentToolDescriptor } = await import(policyUrl)
   const descriptor = getAgentToolDescriptor('run_readonly_command')
@@ -330,6 +353,33 @@ test('rejects special streams and explicit stdin across readonly executables', a
   }
 })
 
+test('rejects stdin and special streams in command-specific file options', async () => {
+  const { classifyAgentCall, getAgentToolDescriptor } = await import(policyUrl)
+  const descriptor = getAgentToolDescriptor('run_readonly_command')
+  const classify = command => classifyAgentCall({
+    descriptor,
+    args: { command }
+  })
+
+  for (const command of [
+    'du --files0-from=-',
+    'du --files0-from=/dev/zero',
+    'find -files0-from - -print',
+    'find -files0-from /proc/kmsg -print'
+  ]) {
+    assert.equal(classify(command).outcome, 'risky', command)
+  }
+
+  for (const command of [
+    'du --files0-from=paths.txt',
+    'du --files0-from=/dev/null',
+    'find -files0-from paths.txt -print',
+    'find -files0-from /dev/null -print'
+  ]) {
+    assert.equal(classify(command).outcome, 'allowlisted-readonly', command)
+  }
+})
+
 test('inherits write-capable query exclusions from the command classifier', async () => {
   const { classifyAgentCall, getAgentToolDescriptor } = await import(policyUrl)
   const descriptor = getAgentToolDescriptor('run_readonly_command')
@@ -337,6 +387,10 @@ test('inherits write-capable query exclusions from the command classifier', asyn
   for (const command of [
     'git diff --output=/tmp/x',
     'git log --output=/tmp/x',
+    '/usr/bin/sudo -n /usr/bin/git diff --out\\put=/etc/example.conf',
+    "/usr/bin/sudo -n /usr/bin/git diff --out'put'=/etc/example.conf",
+    'git diff --ext-dif',
+    'git diff --textcon',
     'git remote add origin https://example.test/repo.git',
     'git remote remove origin',
     'git remote set-url origin https://example.test/repo.git',

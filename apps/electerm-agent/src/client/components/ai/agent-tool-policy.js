@@ -115,12 +115,14 @@ function parseBooleanOptionValue (value) {
 
 function optionEnabled (words, {
   short = '',
+  shortValueOptions = '',
   long,
   booleanValue = true,
   unknownValue = true
 }) {
   let enabled = false
-  for (const word of words) {
+  for (let wordIndex = 0; wordIndex < words.length; wordIndex += 1) {
+    const word = words[wordIndex]
     if (word === '--') break
     if (long && word === long) {
       enabled = true
@@ -135,7 +137,18 @@ function optionEnabled (words, {
     if (!short || !/^-[^-]/.test(word)) continue
     const separator = word.indexOf('=')
     const flags = word.slice(1, separator === -1 ? undefined : separator)
-    if (![...short].some(option => flags.includes(option))) continue
+    let matched = false
+    for (let flagIndex = 0; flagIndex < flags.length; flagIndex += 1) {
+      const option = flags[flagIndex]
+      if (short.includes(option)) matched = true
+      if (!shortValueOptions.includes(option)) continue
+      if (flagIndex === flags.length - 1 && separator === -1 &&
+        words[wordIndex + 1]) {
+        wordIndex += 1
+      }
+      break
+    }
+    if (!matched) continue
     const value = separator === -1
       ? undefined
       : parseBooleanOptionValue(word.slice(separator + 1))
@@ -159,6 +172,7 @@ function isStreamingCommand (command) {
   if (name === 'journalctl') {
     return optionEnabled(args, {
       short: 'f',
+      shortValueOptions: 'butpgSUcnoFD',
       long: '--follow',
       booleanValue: false
     })
@@ -166,6 +180,7 @@ function isStreamingCommand (command) {
   if (name === 'tail') {
     return optionEnabled(args, {
       short: 'fF',
+      shortValueOptions: 'cns',
       long: '--follow',
       booleanValue: false
     })
@@ -173,6 +188,7 @@ function isStreamingCommand (command) {
   if (name === 'ss') {
     return optionEnabled(args, {
       short: 'E',
+      shortValueOptions: 'AFf',
       long: '--events',
       booleanValue: false
     })
@@ -181,6 +197,7 @@ function isStreamingCommand (command) {
   if (name === 'free') {
     return optionEnabled(args, {
       short: 's',
+      shortValueOptions: 'cs',
       long: '--seconds',
       booleanValue: false
     })
@@ -198,6 +215,7 @@ function isStreamingCommand (command) {
     if (action === 'logs') {
       return optionEnabled(actionArgs, {
         short: 'f',
+        shortValueOptions: 'n',
         long: '--follow'
       })
     }
@@ -208,12 +226,14 @@ function isStreamingCommand (command) {
     if (action === 'logs') {
       return optionEnabled(actionArgs, {
         short: 'f',
+        shortValueOptions: 'cnlsv',
         long: '--follow'
       })
     }
     if (action === 'get') {
       return optionEnabled(actionArgs, {
         short: 'w',
+        shortValueOptions: 'olLnsv',
         long: '--watch'
       }) || optionEnabled(actionArgs, { long: '--watch-only' })
     }
@@ -274,6 +294,7 @@ function positionalArguments (words, valueOptions = new Set()) {
 function hasScriptOption (name, args) {
   return optionEnabled(args, {
     short: 'ef',
+    shortValueOptions: 'ef',
     booleanValue: false
   }) || optionEnabled(args, {
     long: name === 'grep' ? '--regexp' : '--expression',
@@ -292,7 +313,15 @@ function consumerInputSources (name, args) {
   return positionals
 }
 
-const shortFileOptionCommands = new Set(['date', 'grep', 'kubectl', 'sed'])
+const commonInputFileOptions = new Set(['--file', '--filename'])
+const commandInputFileOptions = Object.freeze({
+  date: new Set(['-f']),
+  du: new Set(['--files0-from']),
+  find: new Set(['-files0-from']),
+  grep: new Set(['-f']),
+  kubectl: new Set(['-f']),
+  sed: new Set(['-f'])
+})
 
 function hasGitNoIndexStdin (name, args) {
   if (name !== 'git' || args[0]?.toLowerCase() !== 'diff') return false
@@ -302,6 +331,10 @@ function hasGitNoIndexStdin (name, args) {
 }
 
 function isExplicitUnboundedInput (name, args) {
+  const fileOptions = new Set([
+    ...commonInputFileOptions,
+    ...(commandInputFileOptions[name] || [])
+  ])
   let parseOptions = true
   for (let index = 0; index < args.length; index += 1) {
     const word = args[index]
@@ -312,24 +345,17 @@ function isExplicitUnboundedInput (name, args) {
     if (!parseOptions) continue
     if (word === '--stdin' || word.startsWith('--stdin=')) return true
 
-    const longOption = ['--file', '--filename'].find(option => (
-      word === option || word.startsWith(`${option}=`)
+    const fileOption = [...fileOptions].find(option => (
+      word === option || word.startsWith(`${option}=`) ||
+      (option.length === 2 && word.startsWith(option))
     ))
-    if (longOption) {
-      const value = word === longOption
+    if (fileOption) {
+      const value = word === fileOption
         ? args[index + 1]
-        : word.slice(longOption.length + 1)
+        : word.slice(fileOption.length).replace(/^=/, '')
       if (!value || value === '-' || isSpecialStreamSource(value)) return true
-      if (word === longOption) index += 1
+      if (word === fileOption) index += 1
       continue
-    }
-
-    if (shortFileOptionCommands.has(name) && word.startsWith('-f')) {
-      const value = word === '-f'
-        ? args[index + 1]
-        : word.slice(2).replace(/^=/, '')
-      if (!value || value === '-' || isSpecialStreamSource(value)) return true
-      if (word === '-f') index += 1
     }
   }
   return false

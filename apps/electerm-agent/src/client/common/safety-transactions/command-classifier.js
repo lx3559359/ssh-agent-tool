@@ -891,11 +891,17 @@ function isReadonlyKubectl (words) {
   return ['get', 'describe', 'logs', 'top', 'version'].includes(action)
 }
 
+const gitSideEffectLongOptions = ['--output', '--ext-diff', '--textconv']
+const gitSafeExactLongOptions = new Set(['--text'])
+
 function hasGitSideEffectOption (words) {
   for (const word of words.slice(2)) {
     if (word === '--') break
-    if (word === '--output' || word.startsWith('--output=') ||
-      word === '--ext-diff' || word === '--textconv') return true
+    const option = word.split('=', 1)[0]
+    if (gitSafeExactLongOptions.has(option)) continue
+    if (gitSideEffectLongOptions.some(candidate => candidate.startsWith(option))) {
+      return true
+    }
   }
   return false
 }
@@ -993,7 +999,13 @@ function isReadonly (command) {
   if (executable === 'ifconfig') return words.length <= 2 && (!words[1] || words[1] === '-a' || !words[1].startsWith('-'))
   if (executable === 'docker' || executable === 'podman') return ['ps', 'logs', 'inspect', 'stats'].includes(words[1]?.toLowerCase())
   if (executable === 'kubectl') return isReadonlyKubectl(words)
-  if (executable === 'git') return isReadonlyGit(words)
+  if (executable === 'git') {
+    try {
+      return isReadonlyGit(tokenizeStaticShell(text))
+    } catch (error) {
+      return false
+    }
+  }
   return false
 }
 
