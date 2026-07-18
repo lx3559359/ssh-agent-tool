@@ -15,6 +15,25 @@ test('current release notes clearly separate added fixed and changed items', () 
   assert.match(notes, /^## \[改动\]/m)
 })
 
+test('v0.4.6 release metadata documents the readonly Agent usability release', () => {
+  assert.equal(pack.version, '0.4.6')
+
+  const notes = read('docs/releases/v0.4.6.md')
+  for (const section of ['新增', '修复', '改动']) {
+    assert.match(notes, new RegExp(`^## \\[${section}\\]`, 'm'))
+  }
+  for (const phrase of [
+    '只读 exec 快路径',
+    '人工命令直通',
+    '风险单弹窗',
+    '运行图标',
+    '工具卡',
+    '真实 VPS 只读验证'
+  ]) {
+    assert.match(notes, new RegExp(phrase))
+  }
+})
+
 test('GitHub release script loads versioned Markdown release notes', () => {
   const source = read('build/bin/release-github.js')
 
