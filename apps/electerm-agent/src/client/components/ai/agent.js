@@ -159,6 +159,7 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
     onQualityTerminal?.(phase, result)
   }
   let accumulatedContent = ''
+  const toolCallsLog = []
   const controller = new AbortController()
   let activeBackendRequestId = ''
   let activeCancellation
@@ -243,6 +244,48 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
     return lockedResult
   }
 
+  function reportCancellationPersistenceError (error) {
+    try {
+      window.store.onError?.(error)
+    } catch {}
+  }
+
+  function finalizeCancelledToolCalls () {
+    const cancellationDetail = cancellationFailure
+      ? sanitizeAIStoredText(
+        cancellationFailure?.message || cancellationFailure
+      )
+      : 'Agent request cancelled'
+    const cancellationReason = `AbortError: ${cancellationDetail}`
+    let changed = false
+    for (const toolEntry of toolCallsLog) {
+      if (toolEntry.status !== 'running') continue
+      toolEntry.status = 'cancelled'
+      toolEntry.presentation = buildAgentToolPresentation(
+        toolEntry.name,
+        toolEntry.args,
+        { error: cancellationReason },
+        { endpoint: agentRuntime.endpoint }
+      )
+      toolEntry.result = boundAgentToolResult(JSON.stringify({
+        error: true,
+        cancelled: true,
+        verified: false,
+        name: 'AbortError',
+        data: cancellationReason
+      }))
+      changed = true
+    }
+    if (!changed) return
+    try {
+      updateChatEntry(chatEntry, {
+        toolCalls: [...toolCallsLog]
+      })
+    } catch (error) {
+      reportCancellationPersistenceError(error)
+    }
+  }
+
   async function markCancelled () {
     try {
       await failAgentRiskBatch(agentRuntime, createAgentAbortError())
@@ -253,19 +296,24 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
     if (settledError && !cancellationFailure) {
       cancellationFailure = settledError
     }
+    finalizeCancelledToolCalls()
     const current = window.store.aiChatHistory?.find(item => (
       item.id === chatEntry.id
     ))
     const terminalAlreadyRecorded = !current ||
       current.completionStatus === 'cancelled'
     setIsStreaming(false)
-    updateChatEntry(chatEntry, buildAgentCancellationUpdate({
-      response: accumulatedContent,
-      stoppedText: aiAgentCopy.stoppedText,
-      error: cancellationFailure && sanitizeAIStoredText(
-        cancellationFailure?.message || cancellationFailure
-      )
-    }))
+    try {
+      updateChatEntry(chatEntry, buildAgentCancellationUpdate({
+        response: accumulatedContent,
+        stoppedText: aiAgentCopy.stoppedText,
+        error: cancellationFailure && sanitizeAIStoredText(
+          cancellationFailure?.message || cancellationFailure
+        )
+      }))
+    } catch (error) {
+      reportCancellationPersistenceError(error)
+    }
     if (!terminalAlreadyRecorded) finishQuality('cancelled', 'cancelled')
   }
 
@@ -305,8 +353,6 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
       ...buildAIConversationMessages(history, chatEntry)
     ]
     const runtimeMessages = []
-    const toolCallsLog = []
-
     for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
       if (abortRef && abortRef.current) {
         await markCancelled()

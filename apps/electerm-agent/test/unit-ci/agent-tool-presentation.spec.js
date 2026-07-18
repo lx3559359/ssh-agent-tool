@@ -13,6 +13,10 @@ const presentationUrl = pathToFileURL(path.join(
 function endpoint (overrides = {}) {
   return {
     tabId: 'tab-a',
+    pid: 'pid-a',
+    terminalPid: 'terminal-a',
+    sessionType: 'ssh',
+    hostKeyFingerprint: 'SHA256:host-a',
     host: 'srv.test',
     port: 22,
     username: 'root',
@@ -34,6 +38,7 @@ function connectedTerminal (overrides = {}) {
     cmdAddon,
     isCommandSafetyTrackerReady: () => true,
     getCurrentInput: () => '',
+    getTerminalSafetyEndpoint: () => endpoint(),
     ...overrides
   }
 }
@@ -58,6 +63,7 @@ test('builds the exact readonly execution presentation from raw evidence', async
     command: 'ip addr',
     tabId: 'tab-a',
     target: 'root@srv.test:22',
+    sessionIdentity: endpoint(),
     capturedAt: 1000,
     durationMs: 125,
     exitCode: 0,
@@ -80,6 +86,8 @@ test('builds a bounded running presentation from args and the runtime endpoint',
   assert.equal(view.command, 'uname -s')
   assert.equal(view.tabId, 'tab-a')
   assert.equal(view.target, 'root@srv.test:22')
+  assert.deepEqual(view.sessionIdentity, endpoint())
+  assert.equal(Object.isFrozen(view.sessionIdentity), true)
   assert.equal(view.capturedAt, undefined)
   assert.equal(view.error, undefined)
   assert.doesNotMatch(JSON.stringify(view), /password|must-not-survive/)
@@ -130,7 +138,7 @@ test('fails closed for malformed or invalid raw results without projecting arbit
     assert.ok(view.error)
     assert.deepEqual(
       Object.keys(view).sort(),
-      ['command', 'error', 'kind', 'tabId', 'target']
+      ['command', 'error', 'kind', 'sessionIdentity', 'tabId', 'target']
     )
   }
   assert.doesNotMatch(
@@ -203,6 +211,7 @@ test('whitelists presentation fields and bounds sanitized output and errors', as
     'exitCode',
     'kind',
     'output',
+    'sessionIdentity',
     'tabId',
     'target',
     'truncated'
@@ -233,6 +242,73 @@ test('allows filling only completed readonly evidence into the same idle connect
       output: '1: lo'
     }
   )
+
+  assert.deepEqual(getAgentCommandFillState({
+    presentation,
+    activeTabId: 'tab-a',
+    terminal: connectedTerminal()
+  }), { allowed: true, reason: '' })
+})
+
+test('binds fill to the exact SSH session identity and rejects same-tab reconnects', async () => {
+  const {
+    buildAgentToolPresentation,
+    getAgentCommandFillState
+  } = await import(presentationUrl)
+  const presentation = buildAgentToolPresentation(
+    'run_readonly_command',
+    { command: 'ip addr' },
+    {
+      endpoint: endpoint(),
+      capturedAt: 1000,
+      exitCode: 0,
+      output: '1: lo'
+    }
+  )
+  const mismatches = [
+    ['pid', { pid: 'pid-b' }],
+    ['terminal pid', { terminalPid: 'terminal-b' }],
+    ['session type', { sessionType: 'telnet' }],
+    ['fingerprint', { hostKeyFingerprint: 'SHA256:host-b' }],
+    ['host', { host: 'other.test' }],
+    ['port', { port: 2222 }],
+    ['username', { username: 'deploy' }]
+  ]
+
+  for (const [label, changed] of mismatches) {
+    const state = getAgentCommandFillState({
+      presentation,
+      activeTabId: 'tab-a',
+      terminal: connectedTerminal({
+        getTerminalSafetyEndpoint: () => endpoint(changed)
+      })
+    })
+    assert.equal(state.allowed, false, label)
+    assert.match(state.reason, /会话|session|SSH/i, label)
+  }
+
+  for (const [label, terminal] of [
+    ['missing getter', connectedTerminal({ getTerminalSafetyEndpoint: undefined })],
+    ['throwing getter', connectedTerminal({
+      getTerminalSafetyEndpoint: () => { throw new Error('unavailable') }
+    })]
+  ]) {
+    const state = getAgentCommandFillState({
+      presentation,
+      activeTabId: 'tab-a',
+      terminal
+    })
+    assert.equal(state.allowed, false, label)
+    assert.ok(state.reason, label)
+  }
+
+  const legacy = { ...presentation }
+  delete legacy.sessionIdentity
+  assert.equal(getAgentCommandFillState({
+    presentation: legacy,
+    activeTabId: 'tab-a',
+    terminal: connectedTerminal()
+  }).allowed, false)
 
   assert.deepEqual(getAgentCommandFillState({
     presentation,
@@ -382,10 +458,14 @@ test('fill controller rechecks live terminal state and only sends one exact inpu
     }
   )
 
-  async function runController ({ activeTabId = 'tab-a', terminal }) {
+  async function runController ({
+    activeTabId = 'tab-a',
+    terminal,
+    currentPresentation = presentation
+  }) {
     const sent = []
     const result = await fillAgentCommandIntoTerminal({
-      presentation,
+      presentation: currentPresentation,
       getActiveTabId: () => activeTabId,
       getTerminal: tabId => tabId === activeTabId ? terminal : null,
       sendTerminalCommand: async payload => sent.push(payload)
@@ -408,6 +488,9 @@ test('fill controller rechecks live terminal state and only sends one exact inpu
     ['disconnect after render', connectedTerminal({
       props: { tab: { status: 'error' } }
     }), 'tab-a'],
+    ['same tab reconnected after render', connectedTerminal({
+      getTerminalSafetyEndpoint: () => endpoint({ pid: 'pid-b' })
+    }), 'tab-a'],
     ['wrong tab after render', connectedTerminal(), 'tab-b']
   ]
 
@@ -417,6 +500,15 @@ test('fill controller rechecks live terminal state and only sends one exact inpu
     assert.equal(result.sent, false, label)
     assert.ok(result.reason, `${label} must explain why nothing was sent`)
   }
+
+  const legacy = { ...presentation }
+  delete legacy.sessionIdentity
+  const legacyAttempt = await runController({
+    terminal: connectedTerminal(),
+    currentPresentation: legacy
+  })
+  assert.equal(legacyAttempt.sent.length, 0)
+  assert.equal(legacyAttempt.result.sent, false)
 
   const { result, sent } = await runController({
     terminal: connectedTerminal()
@@ -445,6 +537,7 @@ test('readonly tool card uses the shared fill controller and exposes disabled re
   assert.equal(copy.toolCall.readonlyTitle, '只读执行')
   assert.equal(copy.toolCall.copyCommand, '复制命令')
   assert.equal(copy.toolCall.fillTerminal, '填入终端')
+  assert.equal(copy.toolCall.status.cancelled, '已取消')
   assert.equal(copy.toolCall.truncatedLabel, '截断')
   assert.equal(copy.toolCall.yesLabel, '是')
   assert.equal(copy.toolCall.noLabel, '否')
@@ -459,8 +552,12 @@ test('readonly tool card uses the shared fill controller and exposes disabled re
   assert.match(source, /const \[rawExpanded, setRawExpanded\] = useState\(false\)/)
   assert.match(source, /copy\(presentation\.command\)/)
   assert.match(source, /fillAgentCommandIntoTerminal\(\{[\s\S]*?presentation,[\s\S]*?getActiveTabId:[\s\S]*?getTerminal:[\s\S]*?sendTerminalCommand:/)
+  assert.match(source, /const \[fillActionReason, setFillActionReason\] = useState\(''\)/)
+  assert.match(source, /const fillResult = await fillAgentCommandIntoTerminal/)
+  assert.match(source, /setFillActionReason\(fillResult\.sent \? '' : fillResult\.reason\)/)
   assert.match(source, /className='agent-readonly-fill-reason'/)
   assert.match(source, /disabled=\{!fillState\.allowed\}/)
-  assert.match(source, /title=\{fillState\.reason\}/)
+  assert.match(source, /const visibleFillReason = fillActionReason \|\| fillState\.reason/)
+  assert.match(source, /title=\{visibleFillReason\}/)
   assert.doesNotMatch(source, /mcpSendTerminalCommand\(\{[\s\S]*?inputOnly:/)
 })

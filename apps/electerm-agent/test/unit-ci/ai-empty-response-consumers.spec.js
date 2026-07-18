@@ -14,6 +14,10 @@ const traceContextUrl = pathToFileURL(path.join(
   root,
   'src/client/common/quality/trace-context.js'
 )).href
+const presentationUrl = pathToFileURL(path.join(
+  root,
+  'src/client/components/ai/agent-tool-presentation.js'
+)).href
 
 function toDataUrl (source) {
   return `data:text/javascript;base64,${Buffer.from(source).toString('base64')}`
@@ -96,6 +100,7 @@ async function importAgentModule () {
     .replace(
       /^import \{ updateAIChatHistoryEntry \} from '\.\/ai-chat-actions'\r?\n/m,
       `const updateAIChatHistoryEntry = (store, id, updates) => {
+  globalThis.__updateAIChatHistoryEntry?.(store, id, updates)
   const index = store.aiChatHistory.findIndex(item => item.id === id)
   if (index !== -1) {
     Object.assign(store.aiChatHistory[index], updates)
@@ -114,7 +119,7 @@ async function importAgentModule () {
       'const cancelAgentRuntimeOperations = runtime => {\n' +
       '  for (const cancel of runtime.cancellations || []) cancel()\n' +
       '}\n' +
-      'const resolveAgentRuntimeEndpoint = () => null\n'
+      'const resolveAgentRuntimeEndpoint = () => globalThis.__agentEndpoint || null\n'
     )
     .replace(
       /^import \{\r?\n\s*agentTakeoverRegistry\r?\n\} from '\.\/agent-takeover-registry\.js'\r?\n/m,
@@ -173,7 +178,7 @@ const settleAgentCancellation = async activeCancellation => {
     )
     .replace(
       /^import \{ buildAgentToolPresentation \} from '\.\/agent-tool-presentation\.js'\r?\n/m,
-      'const buildAgentToolPresentation = () => null\n'
+      `import { buildAgentToolPresentation } from ${JSON.stringify(presentationUrl)}\n`
     )
     .replace(
       /^import aiAgentCopy from '\.\/ai-agent-copy\.json'\r?\n/m,
@@ -859,6 +864,169 @@ test('agent loop ignores an in-flight tool result after cancellation', async () 
     assert.equal(window.store.agentRunning, false)
   } finally {
     delete global.__executeToolCall
+  }
+})
+
+test('agent cancellation finalizes persisted in-flight readonly evidence before returning', async () => {
+  const { isAgentRunActive, runAgentLoop } = await importAgentModule()
+  let markToolStarted
+  const toolStarted = new Promise(resolve => {
+    markToolStarted = resolve
+  })
+  const neverFinishes = new Promise(() => {})
+  const endpoint = {
+    tabId: 'tab-a',
+    pid: 'pid-a',
+    terminalPid: 'terminal-a',
+    sessionType: 'ssh',
+    hostKeyFingerprint: 'SHA256:host-a',
+    host: 'srv.test',
+    port: 22,
+    username: 'root',
+    password: 'must-not-survive'
+  }
+  const chatEntry = {
+    id: 'cancel-readonly-evidence',
+    sourceTabId: 'tab-a',
+    prompt: 'check interfaces'
+  }
+  const abortRef = { current: false }
+  global.__agentEndpoint = endpoint
+  global.__executeToolCall = async () => {
+    markToolStarted()
+    return neverFinishes
+  }
+  global.window = {
+    pre: {
+      runGlobalAsync: async action => {
+        if (action === 'AIchatWithTools') {
+          return {
+            message: {
+              role: 'assistant',
+              content: '',
+              tool_calls: [{
+                id: 'readonly-in-flight',
+                function: {
+                  name: 'run_readonly_command',
+                  arguments: '{"command":"ip addr"}'
+                }
+              }]
+            }
+          }
+        }
+        if (action === 'AIAgentCancel') return { cancelled: true }
+        throw new Error(`unexpected action: ${action}`)
+      }
+    },
+    store: {
+      agentRunning: false,
+      aiChatHistory: [chatEntry],
+      config: {},
+      getLangName: () => 'English',
+      onError: error => { throw error }
+    }
+  }
+
+  try {
+    const pending = runAgentLoop(chatEntry, {}, abortRef, () => {})
+    await toolStarted
+    await abortRef.cancelCurrent()
+    await pending
+
+    const stored = window.store.aiChatHistory[0]
+    assert.equal(stored.completionStatus, 'cancelled')
+    assert.equal(stored.toolCalls.some(tool => tool.status === 'running'), false)
+    assert.equal(stored.toolCalls[0].status, 'cancelled')
+    assert.equal(stored.toolCalls[0].presentation.command, 'ip addr')
+    assert.equal(stored.toolCalls[0].presentation.target, 'root@srv.test:22')
+    assert.match(stored.toolCalls[0].presentation.error, /cancel/i)
+    assert.match(stored.toolCalls[0].result, /cancel/i)
+    assert.doesNotMatch(JSON.stringify(stored.toolCalls[0]), /must-not-survive|password/)
+    assert.equal(isAgentRunActive(chatEntry.id), false)
+  } finally {
+    delete global.__agentEndpoint
+    delete global.__executeToolCall
+  }
+})
+
+test('cancel finalization update failure reports the error and still releases the registry', async () => {
+  const { isAgentRunActive, runAgentLoop } = await importAgentModule()
+  let markToolStarted
+  const toolStarted = new Promise(resolve => {
+    markToolStarted = resolve
+  })
+  const errors = []
+  const chatEntry = {
+    id: 'cancel-update-failure',
+    sourceTabId: 'tab-a',
+    prompt: 'check interfaces'
+  }
+  const abortRef = { current: false }
+  global.__agentEndpoint = {
+    tabId: 'tab-a',
+    pid: 'pid-a',
+    terminalPid: 'terminal-a',
+    sessionType: 'ssh',
+    hostKeyFingerprint: 'SHA256:host-a',
+    host: 'srv.test',
+    port: 22,
+    username: 'root'
+  }
+  global.__executeToolCall = async () => {
+    markToolStarted()
+    return new Promise(() => {})
+  }
+  global.__updateAIChatHistoryEntry = (store, id, updates) => {
+    if (updates.toolCalls?.some(tool => tool.status === 'cancelled')) {
+      throw new Error('cancel evidence update failed')
+    }
+  }
+  global.window = {
+    pre: {
+      runGlobalAsync: async action => {
+        if (action === 'AIchatWithTools') {
+          return {
+            message: {
+              role: 'assistant',
+              content: '',
+              tool_calls: [{
+                id: 'readonly-update-failure',
+                function: {
+                  name: 'run_readonly_command',
+                  arguments: '{"command":"ip addr"}'
+                }
+              }]
+            }
+          }
+        }
+        if (action === 'AIAgentCancel') return { cancelled: true }
+        throw new Error(`unexpected action: ${action}`)
+      }
+    },
+    store: {
+      agentRunning: false,
+      aiChatHistory: [chatEntry],
+      config: {},
+      getLangName: () => 'English',
+      onError: error => errors.push(error)
+    }
+  }
+
+  try {
+    const pending = runAgentLoop(chatEntry, {}, abortRef, () => {})
+    await toolStarted
+    await abortRef.cancelCurrent()
+    await assert.doesNotReject(pending)
+
+    assert.equal(isAgentRunActive(chatEntry.id), false)
+    assert.equal(window.store.aiChatHistory[0].completionStatus, 'cancelled')
+    assert.equal(window.store.aiChatHistory[0].toolCalls[0].status, 'cancelled')
+    assert.equal(errors.length, 1)
+    assert.match(errors[0].message, /cancel evidence update failed/)
+  } finally {
+    delete global.__agentEndpoint
+    delete global.__executeToolCall
+    delete global.__updateAIChatHistoryEntry
   }
 })
 

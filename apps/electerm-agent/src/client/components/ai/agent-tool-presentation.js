@@ -1,4 +1,8 @@
 import { sanitizeAIStoredText } from './ai-request-credentials.js'
+import {
+  assertSameSessionEndpoint,
+  projectEndpoint
+} from '../../common/safety-transactions/endpoint-guard.js'
 
 const MAX_COMMAND_CHARS = 4096
 const MAX_OUTPUT_CHARS = 32768
@@ -27,17 +31,36 @@ function parseToolResult (rawResult) {
 
 function projectPresentationEndpoint (endpoint) {
   if (!endpoint || typeof endpoint !== 'object') return null
-  const tabId = boundedSanitizedText(endpoint.tabId, MAX_ENDPOINT_CHARS).trim()
-  const username = boundedSanitizedText(endpoint.username, MAX_ENDPOINT_CHARS).trim()
-  const host = boundedSanitizedText(endpoint.host, MAX_ENDPOINT_CHARS).trim()
-  const port = Number(endpoint.port)
-  if (
-    !tabId || !username || !host ||
-    !Number.isInteger(port) || port < 1 || port > 65535
-  ) {
+  let projected
+  try {
+    projected = projectEndpoint(endpoint)
+  } catch {
     return null
   }
-  return Object.freeze({ tabId, username, host, port })
+  const identity = {
+    tabId: boundedSanitizedText(projected.tabId, MAX_ENDPOINT_CHARS).trim(),
+    pid: boundedSanitizedText(projected.pid, MAX_ENDPOINT_CHARS).trim(),
+    terminalPid: boundedSanitizedText(
+      projected.terminalPid,
+      MAX_ENDPOINT_CHARS
+    ).trim(),
+    sessionType: boundedSanitizedText(
+      projected.sessionType,
+      MAX_ENDPOINT_CHARS
+    ).trim(),
+    hostKeyFingerprint: boundedSanitizedText(
+      projected.hostKeyFingerprint,
+      MAX_ENDPOINT_CHARS
+    ).trim(),
+    host: boundedSanitizedText(projected.host, MAX_ENDPOINT_CHARS).trim(),
+    port: Number(projected.port),
+    username: boundedSanitizedText(
+      projected.username,
+      MAX_ENDPOINT_CHARS
+    ).trim()
+  }
+  if (Object.values(identity).some(value => value === '')) return null
+  return Object.freeze(identity)
 }
 
 function formatTarget (endpoint) {
@@ -107,6 +130,7 @@ export function buildAgentToolPresentation (
   if (endpoint) {
     view.tabId = endpoint.tabId
     view.target = formatTarget(endpoint)
+    view.sessionIdentity = endpoint
   }
   if (parsed.state === 'running') return Object.freeze(view)
 
@@ -209,11 +233,25 @@ export function getAgentCommandFillState ({
   if (String(activeTabId || '') !== String(presentation.tabId)) {
     return denied('请切换到执行该命令的 SSH 标签页')
   }
+  if (!presentation.sessionIdentity) {
+    return denied('只读证据没有完整 SSH 会话身份，不能填入终端')
+  }
   if (!terminal) return denied('当前终端不可用')
   try {
     if (terminal.isSsh?.() !== true) return denied('当前标签页不是 SSH 终端')
   } catch {
     return denied('当前 SSH 终端不可用')
+  }
+  try {
+    if (typeof terminal.getTerminalSafetyEndpoint !== 'function') {
+      return denied('无法确认当前 SSH 会话身份')
+    }
+    assertSameSessionEndpoint(
+      presentation.sessionIdentity,
+      projectEndpoint(terminal.getTerminalSafetyEndpoint())
+    )
+  } catch {
+    return denied('当前 SSH 会话与只读证据不一致')
   }
   if (!terminalConnected(terminal)) return denied('当前 SSH 终端未连接')
   const passwordState = terminalPasswordState(terminal)

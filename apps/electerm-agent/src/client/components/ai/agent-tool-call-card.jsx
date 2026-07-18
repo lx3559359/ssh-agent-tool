@@ -55,6 +55,7 @@ export default function AgentToolCallCard ({ toolCall }) {
   const [expanded, setExpanded] = useState(toolCall.status === 'running')
   const [outputExpanded, setOutputExpanded] = useState(false)
   const [rawExpanded, setRawExpanded] = useState(false)
+  const [fillActionReason, setFillActionReason] = useState('')
   const { name, args, status, result, presentation } = toolCall
   const Icon = toolIcons[name] || CodeOutlined
   const isReadonly = presentation && presentation.kind === 'readonly-exec'
@@ -69,6 +70,7 @@ export default function AgentToolCallCard ({ toolCall }) {
       terminal: activeTerminal
     })
     : { allowed: false, reason: '' }
+  const visibleFillReason = fillActionReason || fillState.reason
 
   function renderStatus () {
     if (status === 'running') {
@@ -96,13 +98,14 @@ export default function AgentToolCallCard ({ toolCall }) {
 
   async function handleFillTerminal (e) {
     e.stopPropagation()
-    await fillAgentCommandIntoTerminal({
+    const fillResult = await fillAgentCommandIntoTerminal({
       presentation,
       getActiveTabId: () => window.store.activeTabId,
       getTerminal: tabId => refs.get('term-' + tabId),
       sendTerminalCommand: payload => window.store.mcpSendTerminalCommand(payload),
       onError: error => window.store.onError(error)
     })
+    setFillActionReason(fillResult.sent ? '' : fillResult.reason)
   }
 
   function renderReadonlyDetail () {
@@ -145,14 +148,14 @@ export default function AgentToolCallCard ({ toolCall }) {
             type='button'
             className='agent-readonly-action'
             disabled={!fillState.allowed}
-            title={fillState.reason}
+            title={visibleFillReason}
             onClick={handleFillTerminal}
           >
             {aiAgentCopy.toolCall.fillTerminal}
           </button>
         </div>
-        {!fillState.allowed && fillState.reason && (
-          <span className='agent-readonly-fill-reason'>{fillState.reason}</span>
+        {visibleFillReason && (
+          <span className='agent-readonly-fill-reason'>{visibleFillReason}</span>
         )}
         {presentation.output !== undefined && (
           <div className='agent-readonly-section'>
