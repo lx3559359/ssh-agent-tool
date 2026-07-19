@@ -196,6 +196,26 @@
     background var(--primary)
     color var(--primary-contrast)
 
+@media (max-height: 500px)
+  .ai-chat-input
+    margin-top 6px
+    .ant-input.ai-chat-textarea
+      height 64px !important
+      min-height 64px !important
+      max-height 64px !important
+      padding 8px 40px 30px 8px
+      overflow-y auto !important
+    .ai-context-actions,
+    .ai-attachment-queue
+      flex 0 0 24px
+      flex-wrap nowrap
+      max-height 24px
+      margin-bottom 4px
+      overflow-x auto
+      overflow-y hidden
+      &::-webkit-scrollbar
+        height 0
+
 .ai-config-inline-help
   display grid
   grid-template-columns 72% 28%

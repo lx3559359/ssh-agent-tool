@@ -978,13 +978,17 @@ test('terminal elevation guard covers every rendered terminal layer and semantic
 test('shell chrome E2E uses concrete scroll mutation, clipping ancestry and document overflow gates', () => {
   const source = fs.readFileSync(path.join(projectRoot, 'test/e2e/022.secondary-ui-visual-matrix.spec.js'), 'utf8')
   const inspect = source.match(/async function inspectShellChrome \(page\) \{([\s\S]*?)\n\}\n\nfunction assertShellChrome/)
+  const scrollExercise = source.match(/async function exerciseRightPanelScroll \(page\) \{([\s\S]*?)\n\}\n\nfunction assertShellChrome/)
 
   assert.ok(inspect)
+  assert.ok(scrollExercise)
   assert.match(source, /async function exerciseRightPanelScroll/)
   assert.match(source, /\.right-side-panel-content \.ai-history-wrap/)
   assert.match(source, /scrollTop/)
   assert.match(source, /finally\s*\{/)
   assert.match(source, /scrollFixture\.remove\(\)/)
+  assert.doesNotMatch(scrollExercise[1], /container\.style\.(?:height|minHeight|flex)\s*=/)
+  assert.match(scrollExercise[1], /beforeClientHeight/)
   assert.doesNotMatch(inspect[1], /querySelectorAll\('\.right-side-panel-content, \.right-side-panel-content \*'\)/)
   for (const selector of ['.ai-icon', '.terminal-info-icon', 'a[href]', '[tabindex]']) {
     assert.ok(inspect[1].includes(selector), `${selector} must be included in shell interactive reachability`)

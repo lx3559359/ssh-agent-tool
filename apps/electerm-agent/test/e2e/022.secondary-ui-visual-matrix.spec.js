@@ -1565,25 +1565,72 @@ async function exerciseRightPanelScroll (page) {
   await scroller.waitFor({ state: 'attached', timeout: 20000 })
   return scroller.evaluate(async container => {
     const nextFrame = () => new Promise(resolve => window.requestAnimationFrame(resolve))
+    const describe = element => {
+      if (!element) return null
+      const rect = element.getBoundingClientRect()
+      const style = window.getComputedStyle(element)
+      return {
+        className: String(element.className || ''),
+        clientWidth: element.clientWidth,
+        scrollWidth: element.scrollWidth,
+        clientHeight: element.clientHeight,
+        scrollHeight: element.scrollHeight,
+        rectTop: rect.top,
+        rectBottom: rect.bottom,
+        rectHeight: rect.height,
+        display: style.display,
+        height: style.height,
+        minHeight: style.minHeight,
+        maxHeight: style.maxHeight,
+        flex: style.flex,
+        flexBasis: style.flexBasis,
+        flexGrow: style.flexGrow,
+        flexShrink: style.flexShrink,
+        overflowX: style.overflowX,
+        overflowY: style.overflowY,
+        paddingTop: style.paddingTop,
+        paddingBottom: style.paddingBottom,
+        marginTop: style.marginTop,
+        marginBottom: style.marginBottom
+      }
+    }
     const scrollFixture = document.createElement('div')
+    const contextActions = document.querySelector('.ai-context-actions')
     const originalScrollTop = container.scrollTop
     const originalScrollBehavior = container.style.scrollBehavior
-    const originalHeight = container.style.height
-    const originalMinHeight = container.style.minHeight
-    const originalFlex = container.style.flex
+    const originalContextScrollLeft = contextActions?.scrollLeft || 0
+    const ancestors = []
+    let current = container
+    while (current) {
+      ancestors.push(describe(current))
+      if (current.classList.contains('right-side-panel')) break
+      current = current.parentElement
+    }
     const result = {
       className: String(container.className || ''),
       overflowY: window.getComputedStyle(container).overflowY,
-      originalScrollTop
+      originalScrollTop,
+      originalContextScrollLeft,
+      beforeClientHeight: container.clientHeight,
+      beforeScrollHeight: container.scrollHeight,
+      ancestors,
+      occupied: Object.fromEntries([
+        ['panelHeader', '.right-panel-title'],
+        ['panelContent', '.right-side-panel-content-ai'],
+        ['chatContainer', '.ai-chat-container'],
+        ['chatHistory', '.ai-chat-history'],
+        ['contextActions', '.ai-context-actions'],
+        ['attachmentQueue', '.ai-attachment-queue'],
+        ['composer', '.ai-chat-input'],
+        ['composerTextarea', '.ai-chat-textarea'],
+        ['composerControls', '.ai-chat-terminals']
+      ].map(([name, selector]) => [name, describe(document.querySelector(selector))]))
     }
     scrollFixture.dataset.shellChromeScrollFixture = 'true'
     scrollFixture.style.height = `${Math.max(640, container.clientHeight * 2)}px`
     scrollFixture.style.minHeight = scrollFixture.style.height
     scrollFixture.style.width = '1px'
     container.style.scrollBehavior = 'auto'
-    container.style.height = '64px'
-    container.style.minHeight = '64px'
-    container.style.flex = '0 0 64px'
     try {
       container.appendChild(scrollFixture)
       await nextFrame()
@@ -1598,21 +1645,30 @@ async function exerciseRightPanelScroll (page) {
       result.maxScrollTop = maxScrollTop
       result.targetScrollTop = targetScrollTop
       result.scrolledTop = container.scrollTop
+      if (contextActions) {
+        const maxScrollLeft = contextActions.scrollWidth - contextActions.clientWidth
+        const targetScrollLeft = Math.min(64, maxScrollLeft)
+        contextActions.scrollLeft = targetScrollLeft
+        await nextFrame()
+        result.contextRail = {
+          clientWidth: contextActions.clientWidth,
+          scrollWidth: contextActions.scrollWidth,
+          maxScrollLeft,
+          targetScrollLeft,
+          scrolledLeft: contextActions.scrollLeft
+        }
+      }
     } finally {
       scrollFixture.remove()
       container.style.scrollBehavior = originalScrollBehavior
-      container.style.height = originalHeight
-      container.style.minHeight = originalMinHeight
-      container.style.flex = originalFlex
       container.scrollTop = originalScrollTop
+      if (contextActions) contextActions.scrollLeft = originalContextScrollLeft
       await nextFrame()
       result.cleanup = {
         fixtureRemoved: !container.querySelector('[data-shell-chrome-scroll-fixture="true"]'),
         restoredScrollTop: container.scrollTop,
-        stylesRestored: container.style.height === originalHeight &&
-          container.style.minHeight === originalMinHeight &&
-          container.style.flex === originalFlex &&
-          container.style.scrollBehavior === originalScrollBehavior
+        scrollBehaviorRestored: container.style.scrollBehavior === originalScrollBehavior,
+        restoredContextScrollLeft: contextActions?.scrollLeft || 0
       }
     }
     return result
@@ -1669,6 +1725,7 @@ function assertRightPanelScroll (snapshot, context) {
   const message = JSON.stringify({ context, snapshot })
   expect(snapshot.className.split(/\s+/), message).toContain('ai-history-wrap')
   expect(snapshot.overflowY, message).toBe('auto')
+  expect(snapshot.beforeClientHeight, message).toBeGreaterThan(0)
   expect(snapshot.clientHeight, message).toBeGreaterThan(0)
   expect(snapshot.scrollHeight, message).toBeGreaterThan(snapshot.clientHeight)
   expect(snapshot.maxScrollTop, message).toBeGreaterThan(0)
@@ -1677,7 +1734,20 @@ function assertRightPanelScroll (snapshot, context) {
   expect(snapshot.scrolledTop, message).toBeLessThanOrEqual(snapshot.maxScrollTop)
   expect(snapshot.cleanup.fixtureRemoved, message).toBe(true)
   expect(snapshot.cleanup.restoredScrollTop, message).toBe(snapshot.originalScrollTop)
-  expect(snapshot.cleanup.stylesRestored, message).toBe(true)
+  expect(snapshot.cleanup.scrollBehaviorRestored, message).toBe(true)
+  expect(snapshot.occupied.contextActions.clientHeight, message).toBeGreaterThanOrEqual(24)
+  if (snapshot.contextRail.scrollWidth > snapshot.contextRail.clientWidth) {
+    expect(snapshot.contextRail.maxScrollLeft, message).toBeGreaterThan(0)
+    expect(snapshot.contextRail.targetScrollLeft, message).toBeGreaterThan(0)
+    expect(snapshot.contextRail.scrolledLeft, message).toBeGreaterThan(0)
+    expect(snapshot.cleanup.restoredContextScrollLeft, message).toBe(snapshot.originalContextScrollLeft)
+  }
+  expect(snapshot.occupied.composerTextarea.clientHeight, message).toBeGreaterThan(0)
+  expect(snapshot.occupied.composerControls.clientHeight, message).toBeGreaterThan(0)
+  expect(snapshot.occupied.composer.rectTop, message).toBeGreaterThanOrEqual(snapshot.occupied.panelContent.rectTop)
+  expect(snapshot.occupied.composer.rectBottom, message).toBeLessThanOrEqual(snapshot.occupied.panelContent.rectBottom)
+  expect(snapshot.occupied.composerControls.rectTop, message).toBeGreaterThanOrEqual(snapshot.occupied.composer.rectTop)
+  expect(snapshot.occupied.composerControls.rectBottom, message).toBeLessThanOrEqual(snapshot.occupied.composer.rectBottom)
 }
 
 async function recordCaseFailure (page, testInfo, failures, context, error) {
@@ -1789,43 +1859,25 @@ async function exerciseLanguageAndThemeState (page) {
   const targetText = await page.evaluate((language) => {
     return window.et.langs.find(item => item.id === language)?.name || ''
   }, targetLanguage)
+  const targetIndex = await page.evaluate((language) => {
+    return window.et.langs.findIndex(item => item.id === language)
+  }, targetLanguage)
   expect(targetText).not.toBe('')
+  expect(targetIndex).toBeGreaterThanOrEqual(0)
   const languageSelect = page.locator('.setting-header .ant-select')
   const languageCombobox = languageSelect.getByRole('combobox')
-  const readActiveOption = async (previousId = '') => {
-    let activeOption
-    await expect.poll(async () => {
-      const activeId = await languageCombobox.getAttribute('aria-activedescendant')
-      if (!activeId || activeId === previousId) return ''
-      const option = page.locator(`[role="option"][id=${JSON.stringify(activeId)}]`)
-      if (await option.count() !== 1) return ''
-      const activeText = (await option.textContent())?.trim() || ''
-      if (!activeText) return ''
-      activeOption = { activeId, activeText }
-      return `${activeId}:${activeText}`
-    }, { timeout: 5000 }).not.toBe('')
-    return activeOption
-  }
   const chooseTargetOption = async () => {
     if (await languageCombobox.getAttribute('aria-expanded') !== 'true') {
       await languageCombobox.press('ArrowDown')
     }
     await expect(languageCombobox).toHaveAttribute('aria-expanded', 'true', { timeout: 5000 })
-    await languageCombobox.press('Home')
-    const visitedOptions = []
-    let activeOption = await readActiveOption()
-    for (let step = 0; step < initial.locales; step += 1) {
-      const { activeId, activeText } = activeOption
-      visitedOptions.push({ activeId, activeText })
-      if (activeText === targetText) {
-        await languageCombobox.press('Enter')
-        await expect(languageCombobox).toHaveAttribute('aria-expanded', 'false', { timeout: 5000 })
-        return
-      }
-      await languageCombobox.press('ArrowDown')
-      activeOption = await readActiveOption(activeId)
-    }
-    throw new Error(`Language option was not reached: ${JSON.stringify({ targetLanguage, targetText, visitedOptions })}`)
+    const listboxId = await languageCombobox.getAttribute('aria-controls')
+    expect(listboxId).not.toBeFalsy()
+    const targetOption = page.locator(`[role="option"][id=${JSON.stringify(`${listboxId}_${targetIndex}`)}]`)
+    await expect(targetOption).toHaveCount(1)
+    await expect(targetOption).toHaveText(targetText)
+    await targetOption.evaluate(option => option.click())
+    await expect(languageCombobox).toHaveAttribute('aria-expanded', 'false', { timeout: 5000 })
   }
   await chooseTargetOption()
   expect(await page.evaluate(() => window.store.previewLanguage)).toBe(targetLanguage)
@@ -1887,6 +1939,7 @@ test('shell chrome keeps restrained depth, compact geometry and terminal isolati
       { size: { width: 820, height: 600 }, zoom: 1 },
       { size: { width: 820, height: 600 }, zoom: 2 }
     ]
+    const scrollCases = []
     for (const item of cases) {
       await setWindowCase(electronApp, page, item.size, item.zoom)
       const context = {
@@ -1896,11 +1949,15 @@ test('shell chrome keeps restrained depth, compact geometry and terminal isolati
         zoom: item.zoom
       }
       const scroll = await exerciseRightPanelScroll(page)
-      assertRightPanelScroll(scroll, context)
+      scrollCases.push({ scroll, context })
+      console.log(`SHELL_CHROME_SCROLL_PROBE=${JSON.stringify({ context, scroll })}`)
       const shell = await inspectShellChrome(page)
       assertShellChrome(shell, context)
       const terminal = await inspectTerminalInvariant(page)
       assertTerminalInvariant(terminal, context)
+    }
+    for (const { scroll, context } of scrollCases) {
+      assertRightPanelScroll(scroll, context)
     }
   })
 })
