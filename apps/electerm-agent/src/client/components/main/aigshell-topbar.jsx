@@ -134,6 +134,21 @@ export default auto(function AIGShellTopBar ({ store }) {
     }
   }
 
+  function handleActionRailFocus (event) {
+    const rail = event.currentTarget
+    const action = event.target.closest('.aigshell-topbar-action')
+    if (!action || !rail.contains(action) || rail.scrollWidth <= rail.clientWidth) {
+      return
+    }
+    const railRect = rail.getBoundingClientRect()
+    const actionRect = action.getBoundingClientRect()
+    if (actionRect.left < railRect.left) {
+      rail.scrollLeft += actionRect.left - railRect.left
+    } else if (actionRect.right > railRect.right) {
+      rail.scrollLeft += actionRect.right - railRect.right
+    }
+  }
+
   const actions = [
     {
       key: 'serverStatus',
@@ -257,7 +272,11 @@ export default auto(function AIGShellTopBar ({ store }) {
           <span className={'aigshell-topbar-dot ' + (online ? 'online' : '')} />
         </Tooltip>
       </div>
-      <div className='aigshell-topbar-actions' onWheel={handleActionRailWheel}>
+      <div
+        className='aigshell-topbar-actions'
+        onWheel={handleActionRailWheel}
+        onFocusCapture={handleActionRailFocus}
+      >
         {
           actions.map(item => (
             <span key={item.key} className='aigshell-topbar-action-wrap'>

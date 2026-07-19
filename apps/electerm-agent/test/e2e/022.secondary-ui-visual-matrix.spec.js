@@ -2104,6 +2104,8 @@ test('narrow topbar actions avoid native window controls and keep the last actio
     console.log(`TOPBAR_INTERACTION_PROBE=${JSON.stringify({ browserName, keyboardProbe, systemUiMarginRight, before, lastTrialError, afterWheel })}`)
 
     expect(keyboardProbe.lastActionFocused).toBe(true)
+    expect(keyboardProbe.lastActionFullyVisible).toBe(true)
+    expect(keyboardProbe.lastActionHit).toBe(true)
     expect(keyboardProbe.hitsWindowControl).toBe(false)
     expect(keyboardProbe.scrollLeft).toBeGreaterThan(0)
     expect(systemUiMarginRight).toBe('0px')
@@ -2118,6 +2120,170 @@ test('narrow topbar actions avoid native window controls and keep the last actio
     expect(afterWheel.visibleActions.every(item => item.hitsAction)).toBe(true)
 
     await actions.last().click()
+    await expect(page.locator('.shellpilot-help-center')).toBeVisible({ timeout: 20000 })
+    await page.locator('.shellpilot-help-center .custom-modal-close').click()
+    await expect(page.locator('.shellpilot-help-center')).toBeHidden()
+
+    await setWindowCase(electronApp, page, { width: 820, height: 600 }, 1)
+    await rail.evaluate(element => { element.scrollLeft = 0 })
+    const desktop = await inspectHitTargets()
+    console.log(`TOPBAR_DESKTOP_INTERACTION_PROBE=${JSON.stringify({ browserName, desktop })}`)
+    expect(desktop.marginRight).toBe('0px')
+    expect(desktop.paddingRight).toBe('138px')
+    expect(desktop.visibleActions.length).toBeGreaterThan(0)
+    expect(desktop.visibleActions.every(item => item.hitsAction)).toBe(true)
+    expect(desktop.visibleActions.some(item => item.hitsWindowControl)).toBe(false)
+  })
+})
+
+test('590px topbar keeps every visible action clear of native controls and preserves real end actions', async ({ browserName }) => {
+  await runWithIsolatedApp('topbar-590-interaction', async (electronApp) => {
+    const page = electronApp.windows()[0] || await electronApp.firstWindow()
+    await page.waitForFunction(() => window.store?.configLoaded === true, { timeout: 20000 })
+    await page.locator('.term-wrap:visible').waitFor({ timeout: 20000 })
+    await setWindowCase(electronApp, page, { width: 590, height: 400 }, 1)
+
+    const rail = page.locator('.not-system-ui .aigshell-topbar-actions')
+    const actions = rail.locator('.aigshell-topbar-action:not(:disabled)')
+    await expect(rail).toBeVisible()
+    await expect(actions).toHaveCount(12)
+
+    const inspectHitTargets = () => rail.evaluate(element => {
+      const railRect = element.getBoundingClientRect()
+      const controls = document.querySelector('.window-controls')
+      const controlsRect = controls?.getBoundingClientRect() || null
+      const visibleActions = [...element.querySelectorAll('.aigshell-topbar-action:not(:disabled)')]
+        .map((action, index) => {
+          const rect = action.getBoundingClientRect()
+          const center = {
+            x: rect.left + rect.width / 2,
+            y: rect.top + rect.height / 2
+          }
+          const centerInsideRail = center.x >= railRect.left && center.x <= railRect.right
+          const hit = centerInsideRail ? document.elementFromPoint(center.x, center.y) : null
+          return {
+            index,
+            center,
+            centerInsideRail,
+            hitsAction: Boolean(hit && action.contains(hit)),
+            hitsWindowControl: Boolean(hit?.closest?.('.window-control-box'))
+          }
+        })
+        .filter(item => item.centerInsideRail)
+      return {
+        clientWidth: element.clientWidth,
+        scrollWidth: element.scrollWidth,
+        scrollLeft: element.scrollLeft,
+        maxScrollLeft: element.scrollWidth - element.clientWidth,
+        marginRight: window.getComputedStyle(element).marginRight,
+        reservedRight: window.innerWidth - railRect.right,
+        railRect: { left: railRect.left, right: railRect.right },
+        controlsRect: controlsRect
+          ? { left: controlsRect.left, right: controlsRect.right }
+          : null,
+        visibleActions
+      }
+    })
+
+    await rail.evaluate(element => { element.scrollLeft = 0 })
+    const before = await inspectHitTargets()
+    const railBox = await rail.boundingBox()
+    expect(railBox).not.toBeNull()
+    const safeRight = Math.min(railBox.x + railBox.width, before.controlsRect.left)
+    await page.mouse.move((railBox.x + safeRight) / 2, railBox.y + railBox.height / 2)
+    await page.mouse.wheel(0, 1200)
+    await page.waitForTimeout(160)
+    const afterWheel = await inspectHitTargets()
+
+    await rail.evaluate(element => { element.scrollLeft = 0 })
+    await actions.first().focus()
+    for (let index = 1; index < await actions.count(); index += 1) {
+      await page.keyboard.press('Tab')
+    }
+    const keyboardProbe = await rail.evaluate(element => {
+      const lastAction = element.querySelector('.aigshell-topbar-action-wrap:last-child .aigshell-topbar-action')
+      const railRect = element.getBoundingClientRect()
+      const actionRect = lastAction.getBoundingClientRect()
+      const hit = document.elementFromPoint(
+        actionRect.left + actionRect.width / 2,
+        actionRect.top + actionRect.height / 2
+      )
+      return {
+        lastActionFocused: document.activeElement === lastAction,
+        lastActionFullyVisible: actionRect.left >= railRect.left && actionRect.right <= railRect.right,
+        lastActionHit: Boolean(hit && lastAction.contains(hit)),
+        hitsWindowControl: Boolean(hit?.closest?.('.window-control-box')),
+        scrollLeft: element.scrollLeft,
+        maxScrollLeft: element.scrollWidth - element.clientWidth
+      }
+    })
+    for (let index = (await actions.count()) - 2; index >= 0; index -= 1) {
+      await page.keyboard.press('Shift+Tab')
+    }
+    const shiftTabProbe = await rail.evaluate(element => {
+      const firstAction = element.querySelector('.aigshell-topbar-action:not(:disabled)')
+      const railRect = element.getBoundingClientRect()
+      const actionRect = firstAction.getBoundingClientRect()
+      const hit = document.elementFromPoint(
+        actionRect.left + actionRect.width / 2,
+        actionRect.top + actionRect.height / 2
+      )
+      return {
+        firstActionFocused: document.activeElement === firstAction,
+        firstActionFullyVisible: actionRect.left >= railRect.left && actionRect.right <= railRect.right,
+        firstActionHit: Boolean(hit && firstAction.contains(hit)),
+        hitsWindowControl: Boolean(hit?.closest?.('.window-control-box')),
+        scrollLeft: element.scrollLeft
+      }
+    })
+    console.log(`TOPBAR_590_INTERACTION_PROBE=${JSON.stringify({
+      browserName,
+      before,
+      afterWheel,
+      keyboardProbe,
+      shiftTabProbe
+    })}`)
+
+    expect(before.visibleActions.length).toBeGreaterThan(0)
+    expect(before.visibleActions.every(item => item.hitsAction)).toBe(true)
+    expect(before.visibleActions.some(item => item.hitsWindowControl)).toBe(false)
+    expect(before.reservedRight).toBeGreaterThanOrEqual(138)
+    expect(before.maxScrollLeft).toBeGreaterThan(0)
+    expect(afterWheel.scrollLeft).toBe(afterWheel.maxScrollLeft)
+    expect(afterWheel.visibleActions.length).toBeGreaterThan(0)
+    expect(afterWheel.visibleActions.every(item => item.hitsAction)).toBe(true)
+    expect(afterWheel.visibleActions.some(item => item.hitsWindowControl)).toBe(false)
+    expect(keyboardProbe.lastActionFocused).toBe(true)
+    expect(keyboardProbe.lastActionFullyVisible).toBe(true)
+    expect(keyboardProbe.lastActionHit).toBe(true)
+    expect(keyboardProbe.hitsWindowControl).toBe(false)
+    expect(shiftTabProbe.firstActionFocused).toBe(true)
+    expect(shiftTabProbe.firstActionFullyVisible).toBe(true)
+    expect(shiftTabProbe.firstActionHit).toBe(true)
+    expect(shiftTabProbe.hitsWindowControl).toBe(false)
+    expect(shiftTabProbe.scrollLeft).toBe(0)
+
+    const initialTheme = await page.evaluate(() => window.store.config.theme)
+    const themeAction = rail.locator('button:has(.anticon-sun), button:has(.anticon-moon)')
+    await expect(themeAction).toHaveCount(1)
+    await themeAction.click({ trial: true })
+    await themeAction.click()
+    await expect.poll(() => page.evaluate(() => window.store.config.theme)).not.toBe(initialTheme)
+    await themeAction.click()
+    await expect.poll(() => page.evaluate(() => window.store.config.theme)).toBe(initialTheme)
+
+    const settingAction = rail.locator('button:has(.anticon-setting)')
+    await expect(settingAction).toHaveCount(1)
+    await settingAction.click({ trial: true })
+    await settingAction.click()
+    await expect(page.locator('.setting-wrap')).toBeVisible()
+    await page.locator('.setting-header .close-setting-wrap-icon').click()
+    await expect(page.locator('.setting-wrap')).toBeHidden()
+
+    const helpAction = rail.locator('button:has(.anticon-question-circle)')
+    await expect(helpAction).toHaveCount(1)
+    await helpAction.click({ trial: true })
+    await helpAction.click()
     await expect(page.locator('.shellpilot-help-center')).toBeVisible({ timeout: 20000 })
     await page.locator('.shellpilot-help-center .custom-modal-close').click()
     await expect(page.locator('.shellpilot-help-center')).toBeHidden()

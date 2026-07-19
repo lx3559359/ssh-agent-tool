@@ -69,10 +69,17 @@ test('ShellPilot top bar and AI panel use theme variables in day and night modes
 
 test('top bar has a narrow-window fallback that keeps icon commands available', () => {
   const source = readClient('components/main/aigshell-topbar.styl')
+  const behavior = readClient('components/main/aigshell-topbar.jsx')
 
   assert.match(source, /@media \(max-width: 1440px\)/)
   assert.match(source, /\.aigshell-topbar-action-label[\s\S]*display none/)
   assert.match(source, /@media \(max-width: 900px\)/)
+  assert.match(source, /@media \(max-width: 720px\)[\s\S]*overflow-x auto/)
+  assert.match(source, /@media \(max-width: 720px\)[\s\S]*\.not-system-ui \.aigshell-topbar-actions[\s\S]*margin-right 138px/)
+  assert.match(source, /@media \(max-width: 720px\)[\s\S]*\.system-ui \.aigshell-topbar-actions[\s\S]*margin-right 0/)
+  assert.match(behavior, /function handleActionRailFocus/)
+  assert.match(behavior, /actionRect\.right - railRect\.right/)
+  assert.match(behavior, /onFocusCapture=\{handleActionRailFocus\}/)
   assert.match(source, /z-index 4\d{2}/)
 })
 

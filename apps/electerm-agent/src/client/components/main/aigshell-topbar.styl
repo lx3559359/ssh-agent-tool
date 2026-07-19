@@ -148,15 +148,7 @@
   .aigshell-topbar-brand
     gap 6px
 
-@media (max-width: 480px)
-  .aigshell-topbar
-    padding 0 6px
-  .aigshell-topbar-brand
-    flex 0 0 24px
-    gap 0
-  .aigshell-topbar-name
-  .aigshell-topbar-version
-    display none
+@media (max-width: 720px)
   .aigshell-topbar-actions
     flex 1 1 auto
     gap 0
@@ -176,6 +168,18 @@
   .aigshell-topbar-action-wrap
     flex 0 0 30px
     min-width 0
+    &:last-child
+      margin-right 1px
   .aigshell-topbar-action
     width 100%
     min-width 0
+
+@media (max-width: 480px)
+  .aigshell-topbar
+    padding 0 6px
+  .aigshell-topbar-brand
+    flex 0 0 24px
+    gap 0
+  .aigshell-topbar-name
+  .aigshell-topbar-version
+    display none
