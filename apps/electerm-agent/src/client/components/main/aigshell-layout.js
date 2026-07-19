@@ -60,3 +60,13 @@ export function getAIGShellContentFrame ({
     height: Math.max(0, height - aigshellTopBarHeight - footerHeight - quickBarHeight + resizeTrigger)
   }
 }
+
+export function getAIGShellFrameInsets (options) {
+  const frame = getAIGShellContentFrame(options)
+  return {
+    top: frame.top,
+    left: frame.left,
+    right: Math.max(0, options.width - frame.left - frame.width),
+    bottom: Math.max(0, options.height - frame.top - frame.height)
+  }
+}

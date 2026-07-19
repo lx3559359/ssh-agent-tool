@@ -9,9 +9,7 @@ import {
   sidebarWidth
 } from '../../common/constants'
 import {
-  getAIGShellContentFrame,
-  getMaxRightPanelWidth,
-  normalizeRightPanelWidth
+  getAIGShellFrameInsets
 } from '../main/aigshell-layout'
 import { focusFleetStatusWorkspace } from './fleet-status-navigation'
 import { createFleetStatusStore } from './fleet-status-store.js'
@@ -63,7 +61,7 @@ export default auto(function FleetStatusWorkspace ({
   }, [serviceSelectorStore])
 
   const bookmarkCount = statusState.bookmarkCount
-  const frame = getAIGShellContentFrame({
+  const frame = getAIGShellFrameInsets({
     width: store.width,
     height: store.height,
     footerHeight,
@@ -78,15 +76,6 @@ export default auto(function FleetStatusWorkspace ({
     quickCommandBoxHeight,
     resizeTrigger: store.resizeTrigger
   })
-  frame.width = 'auto'
-  frame.height = 'auto'
-  frame.right = store.rightPanelVisible
-    ? Math.min(
-      normalizeRightPanelWidth(store.rightPanelWidth),
-      getMaxRightPanelWidth(store.width, frame.left + 320)
-    )
-    : 0
-  frame.bottom = Math.max(0, footerHeight - (Number(store.resizeTrigger) || 0))
   const workspaceProps = {
     className: classnames('fleet-status-workspace', {
       'fleet-status-workspace-active': active

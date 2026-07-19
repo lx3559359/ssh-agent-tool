@@ -14,11 +14,7 @@ import Footer from '../footer/footer-entry'
 import SessionsWrap from '../session/sessions'
 import QuickCommandsFooterBox from '../quick-commands/quick-commands-box'
 import pixed from './pixed'
-import {
-  aigshellTopBarHeight,
-  getAIGShellContentFrame,
-  normalizeRightPanelWidth
-} from '../main/aigshell-layout'
+import { getAIGShellContentFrame } from '../main/aigshell-layout'
 import { pick } from 'lodash-es'
 import './layout.styl'
 
@@ -65,33 +61,13 @@ export default auto(function Layout (props) {
     })
   }
 
-  const buildLayoutStyles = () => {
-    const {
-      layout,
-      height,
-      width,
-      pinnedQuickCommandBar,
-      leftSidebarWidth,
-      rightPanelVisible,
-      rightPanelPinned,
-      rightPanelWidth,
-      pinned
-    } = props.store
-    const l = pinned ? leftSidebarWidth : 0
-    const r = rightPanelPinned && rightPanelVisible
-      ? normalizeRightPanelWidth(rightPanelWidth)
-      : 0
-    const w = width - l - r - 42
-    const h = height - aigshellTopBarHeight - footerHeight - (pinnedQuickCommandBar ? quickCommandBoxHeight : 0)
-    return layoutAlg(layout, w, h)
-  }
   const layoutSize = calcLayoutStyle()
   const {
     width,
     height
   } = layoutSize
   const pixedLayoutStyle = pixed(layoutSize)
-  const styles = buildLayoutStyles(conf, layout)
+  const styles = layoutAlg(layout, width, height)
   const layoutProps = {
     layout,
     ...styles,

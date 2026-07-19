@@ -128,3 +128,56 @@ test('clamps invalid right panel width so AI chat remains visible', async () => 
   assert.equal(normalizeRightPanelWidth(520), 520)
   assert.equal(normalizeRightPanelWidth(1600), 1000)
 })
+
+test('derives shared absolute insets for overlay and pinned right panels', async () => {
+  const module = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/components/main/aigshell-layout.js')))
+  assert.equal(typeof module.getAIGShellFrameInsets, 'function')
+
+  const base = {
+    height: 228,
+    footerHeight: 36,
+    sidebarWidth: 72,
+    leftSidebarWidth: 300,
+    rightPanelWidth: 320,
+    pinned: false,
+    rightPanelVisible: true,
+    pinnedQuickCommandBar: false,
+    inActiveTerminal: false,
+    quickCommandBoxHeight: 180,
+    resizeTrigger: 0
+  }
+  assert.deepEqual(module.getAIGShellContentFrame({
+    ...base,
+    width: 337,
+    rightPanelPinned: false
+  }), { top: 44, left: 72, width: 265, height: 148 })
+  assert.deepEqual(module.getAIGShellContentFrame({
+    ...base,
+    width: 295,
+    height: 200,
+    rightPanelPinned: true
+  }), { top: 44, left: 72, width: 223, height: 120 })
+  assert.deepEqual(module.getAIGShellContentFrame({
+    ...base,
+    width: 1100,
+    height: 700,
+    rightPanelPinned: true
+  }), { top: 44, left: 72, width: 708, height: 620 })
+  assert.deepEqual(module.getAIGShellFrameInsets({
+    ...base,
+    width: 337,
+    rightPanelPinned: false
+  }), { top: 44, left: 72, right: 0, bottom: 36 })
+  assert.deepEqual(module.getAIGShellFrameInsets({
+    ...base,
+    width: 295,
+    height: 200,
+    rightPanelPinned: true
+  }), { top: 44, left: 72, right: 0, bottom: 36 })
+  assert.deepEqual(module.getAIGShellFrameInsets({
+    ...base,
+    width: 1100,
+    height: 700,
+    rightPanelPinned: true
+  }), { top: 44, left: 72, right: 320, bottom: 36 })
+})

@@ -95,6 +95,17 @@ test('right panel width and SFTP list height are bounded for small windows', () 
   assert.match(sftp, /Math\.max\(0, height - 42 - 30 - 32 - 90\)/)
 })
 
+test('split layouts and fleet workspace consume the shared content reservation', () => {
+  const layout = readClient('components/layout/layout.jsx')
+  const fleet = readClient('components/fleet-status/fleet-status-workspace.jsx')
+
+  assert.match(layout, /layoutAlg\(layout, width, height\)/)
+  assert.doesNotMatch(layout, /normalizeRightPanelWidth|\s-\s42/)
+  assert.match(fleet, /getAIGShellFrameInsets/)
+  assert.doesNotMatch(fleet, /frame\.right\s*=\s*store\.rightPanelVisible/)
+  assert.doesNotMatch(fleet, /getMaxRightPanelWidth|normalizeRightPanelWidth/)
+})
+
 test('overlay sidebar stays inside the effective viewport at high zoom', () => {
   const sidebar = readClient('components/sidebar/sidebar.styl')
 
@@ -458,7 +469,18 @@ test('tool center uses a vertically reachable compact layout instead of the ordi
   assert.match(compact[1], /\.setting-tabs-widgets[\s\S]*\.setting-row-left[\s\S]*height auto[\s\S]*overflow visible/)
   assert.match(widgets, /\.widgets-shell[\s\S]*min-width 0[\s\S]*width 100%/)
   assert.match(widgets, /@media \(max-width: 820px\)[\s\S]*\.setting-tabs-widgets[\s\S]*\.widgets-card-list[\s\S]*min-width 0[\s\S]*max-height clamp\(180px, 45vh, 360px\)[\s\S]*overflow-y auto/)
+  assert.match(widgets, /@media \(max-width: 820px\)[\s\S]*\.widget-card-meta[\s\S]*flex-wrap wrap/)
   assert.doesNotMatch(widgetsTab, /className='setting-tabs-profile'/)
+})
+
+test('low compact settings let oversized navigation scroll away from tool content', () => {
+  const wrap = readClient('components/setting-panel/setting-wrap.styl')
+  const lowCompact = wrap.match(/@media \(max-width: 820px\) and \(max-height: 360px\)([\s\S]*)/)
+
+  assert.ok(lowCompact)
+  assert.match(lowCompact[1], /\.setting-header[\s\S]*position static !important/)
+  assert.match(lowCompact[1], /\.setting-tabs[\s\S]*position static[\s\S]*top auto/)
+  assert.match(lowCompact[1], /\.setting-tabs-widgets[\s\S]*flex 0 0 auto/)
 })
 
 test('bookmark narrow layout reserves a usable vertical viewport and keeps the editor visible', () => {

@@ -3082,25 +3082,118 @@ test('tool center and batch editor stay reachable in compact real app windows', 
       { width: 590, height: 400 },
       { width: 472, height: 320 },
       { width: 393, height: 267 },
+      { width: 590, height: 400, zoom: 1.75 },
       { width: 590, height: 400, zoom: 2 }
     ]
 
     for (const size of compactSizes) {
       await setWindowCase(electronApp, page, size, size.zoom || 1)
       await resetSurface(page, 'en_us')
-      if (size.zoom === 2) {
+      if (size.zoom >= 1.75) {
         const documentWidths = await inspectDocumentBaseline(page)
         for (const node of documentWidths.nodes) {
           expect(node.scrollWidth, JSON.stringify({ size, documentWidths }))
             .toBeLessThanOrEqual(node.clientWidth)
         }
+        await page.evaluate(() => {
+          const store = window.store
+          store.closeFleetStatus()
+          store.pinned = false
+          store.rightPanelVisible = true
+          store.rightPanelPinned = true
+          store.rightPanelWidth = 320
+          store.setLayout('c3')
+        })
+        await expect(page.locator('.layout-wrap-c3 .layout-item')).toHaveCount(3)
+        const splitMetrics = await page.locator('.layout-wrap-c3').evaluate((wrap) => {
+          const rect = wrap.getBoundingClientRect()
+          const panes = [...wrap.querySelectorAll('.layout-item')].map(element => element.getBoundingClientRect().toJSON())
+          const overlaps = []
+          for (let leftIndex = 0; leftIndex < panes.length; leftIndex += 1) {
+            for (let rightIndex = leftIndex + 1; rightIndex < panes.length; rightIndex += 1) {
+              const left = panes[leftIndex]
+              const right = panes[rightIndex]
+              const overlapWidth = Math.min(left.right, right.right) - Math.max(left.left, right.left)
+              const overlapHeight = Math.min(left.bottom, right.bottom) - Math.max(left.top, right.top)
+              if (overlapWidth > 1 && overlapHeight > 1) overlaps.push([leftIndex, rightIndex])
+            }
+          }
+          return {
+            frame: rect.toJSON(),
+            panes,
+            overlaps
+          }
+        })
+        const splitContext = JSON.stringify({ size, splitMetrics })
+        expect(splitMetrics.frame.width, splitContext).toBeGreaterThan(0)
+        expect(splitMetrics.panes.every(pane => pane.width > 0 && pane.height > 0), splitContext).toBe(true)
+
+        await page.evaluate(() => window.store.openFleetStatus())
+        await page.locator('.fleet-status-workspace-active').waitFor()
+        const fleetMetrics = await page.locator('.fleet-status-workspace-active').evaluate((workspace) => {
+          const rect = workspace.getBoundingClientRect()
+          return {
+            rect: rect.toJSON(),
+            viewport: { width: window.innerWidth, height: window.innerHeight }
+          }
+        })
+        const fleetContext = JSON.stringify({ size, fleetMetrics })
+        expect(fleetMetrics.rect.width, fleetContext).toBeGreaterThan(0)
+        expect(fleetMetrics.rect.height, fleetContext).toBeGreaterThan(0)
+        expect(fleetMetrics.rect.left, fleetContext).toBeGreaterThanOrEqual(0)
+        expect(fleetMetrics.rect.right, fleetContext).toBeLessThanOrEqual(fleetMetrics.viewport.width + 1)
+        expect(splitMetrics.overlaps, splitContext).toEqual([])
+
+        await page.evaluate(() => window.store.closeFleetStatus())
+        await ensureVisualBookmark(page)
+        const chromeMetrics = await page.evaluate(() => {
+          const describe = element => {
+            const rect = element.getBoundingClientRect()
+            return { rect: rect.toJSON(), scrollWidth: element.scrollWidth, clientWidth: element.clientWidth }
+          }
+          return {
+            documentElement: describe(document.documentElement),
+            body: describe(document.body),
+            root: describe(document.getElementById('container')),
+            bookmark: describe(document.querySelector('.sidebar-list')),
+            footer: describe(document.querySelector('.main-footer')),
+            viewport: { width: window.innerWidth, height: window.innerHeight }
+          }
+        })
+        const chromeContext = JSON.stringify({ size, chromeMetrics })
+        for (const name of ['documentElement', 'body', 'root']) {
+          expect(chromeMetrics[name].scrollWidth, chromeContext).toBeLessThanOrEqual(chromeMetrics[name].clientWidth)
+        }
+        expect(chromeMetrics.bookmark.rect.right, chromeContext).toBeLessThanOrEqual(chromeMetrics.viewport.width + 1)
+        expect(chromeMetrics.footer.rect.left, chromeContext).toBeGreaterThanOrEqual(0)
+        expect(chromeMetrics.footer.rect.right, chromeContext).toBeLessThanOrEqual(chromeMetrics.viewport.width + 1)
+
+        await resetSurface(page, 'en_us')
+        await page.evaluate(() => window.store.setLayout('c1'))
+        await ensureTwoTerminalTabs(page)
+        const terminal = await inspectTerminalInvariant(page)
+        assertTerminalInvariant(terminal, { runner: browserName, size, surface: 'compact-terminal-invariant' })
       }
       await openWidgets(page)
       const metrics = await page.locator('.setting-tabs-widgets').evaluate(root => {
         const shell = root.querySelector('.widgets-shell')
         const cards = root.querySelector('.widgets-card-list')
+        const firstCard = cards.querySelector('.widget-card')
         const style = window.getComputedStyle(root)
         const cardsStyle = window.getComputedStyle(cards)
+        const describeWidth = (element) => {
+          const elementStyle = window.getComputedStyle(element)
+          const rect = element.getBoundingClientRect()
+          return {
+            className: element.className,
+            width: rect.width,
+            clientWidth: element.clientWidth,
+            scrollWidth: element.scrollWidth,
+            minWidth: elementStyle.minWidth,
+            whiteSpace: elementStyle.whiteSpace,
+            wordBreak: elementStyle.wordBreak
+          }
+        }
         return {
           rootClientWidth: root.clientWidth,
           rootScrollWidth: root.scrollWidth,
@@ -3112,7 +3205,16 @@ test('tool center and batch editor stay reachable in compact real app windows', 
           cardsClientHeight: cards.clientHeight,
           cardsScrollHeight: cards.scrollHeight,
           cardsOverflowY: cardsStyle.overflowY,
-          cardCount: cards.querySelectorAll('.widget-card').length
+          cardCount: cards.querySelectorAll('.widget-card').length,
+          firstCardWidths: [
+            firstCard,
+            firstCard.querySelector('.widget-card-main'),
+            firstCard.querySelector('.widget-card-head'),
+            firstCard.querySelector('.widget-card-title'),
+            firstCard.querySelector('.widget-card-desc'),
+            firstCard.querySelector('.widget-card-meta'),
+            ...firstCard.querySelectorAll('.widget-card-meta span')
+          ].map(describeWidth)
         }
       })
       const context = JSON.stringify({ runner: browserName, size, metrics })
@@ -3127,6 +3229,39 @@ test('tool center and batch editor stay reachable in compact real app windows', 
       const lastCard = page.locator('.widgets-card-list .widget-card').last()
       await lastCard.scrollIntoViewIfNeeded()
       await expect(lastCard).toBeVisible()
+
+      const batchCard = page.locator('.widget-card[data-widget-id="batch-op"][data-widget-type="frontend"]')
+      await batchCard.scrollIntoViewIfNeeded()
+      const batchReachability = await batchCard.evaluate((card) => {
+        const header = document.querySelector('.setting-header')
+        const tabs = document.querySelector('.setting-tabs')
+        const widgets = document.querySelector('.setting-tabs-widgets')
+        const cards = document.querySelector('.widgets-card-list')
+        const describe = element => ({
+          rect: element.getBoundingClientRect().toJSON(),
+          clientHeight: element.clientHeight,
+          scrollHeight: element.scrollHeight,
+          overflowY: window.getComputedStyle(element).overflowY,
+          position: window.getComputedStyle(element).position
+        })
+        const cardRect = card.getBoundingClientRect()
+        const visibleTop = Math.max(0, cardRect.top)
+        const visibleBottom = Math.min(window.innerHeight, cardRect.bottom)
+        const hitTarget = visibleBottom > visibleTop
+          ? document.elementFromPoint(cardRect.left + Math.min(24, cardRect.width / 2), (visibleTop + visibleBottom) / 2)
+          : null
+        return {
+          card: describe(card),
+          header: describe(header),
+          tabs: describe(tabs),
+          widgets: describe(widgets),
+          cards: describe(cards),
+          viewportHeight: window.innerHeight,
+          pointerReachable: Boolean(hitTarget && card.contains(hitTarget)),
+          hitTarget: hitTarget?.className || hitTarget?.tagName || ''
+        }
+      })
+      expect(batchReachability.pointerReachable, JSON.stringify({ size, batchReachability })).toBe(true)
 
       await selectBatchWidget(page)
       const editor = page.locator('.batch-op-editor')
@@ -3150,7 +3285,7 @@ test('tool center and batch editor stay reachable in compact real app windows', 
     }
 
     console.log(`SECONDARY_TOOL_CENTER_COMPACT_CHECKS=${compactChecks}`)
-    expect(compactChecks).toBe(5)
+    expect(compactChecks).toBe(6)
   })
 })
 
