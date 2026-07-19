@@ -2,11 +2,45 @@
   background var(--sp-page)
   color var(--sp-text)
 
-.sp-card
+.sp-level-0
+  color var(--sp-text)
+  background var(--sp-page)
+
+.sp-level-1
+  color var(--sp-text)
   background var(--sp-surface)
   border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-control)
+  box-shadow inset 0 1px 0 var(--sp-highlight-top), var(--sp-shadow-control)
+
+.sp-level-2,
+.sp-card
+  color var(--sp-text)
+  background var(--sp-surface-elevated)
+  border 1px solid var(--sp-border)
   border-radius var(--sp-radius-card)
-  box-shadow var(--sp-shadow-card)
+  box-shadow inset 0 1px 0 var(--sp-highlight-top), var(--sp-shadow-card)
+
+.sp-level-3
+  color var(--sp-text)
+  background var(--sp-surface-elevated)
+  border 1px solid var(--sp-border-strong)
+  border-radius var(--sp-radius-overlay)
+  box-shadow inset 0 1px 0 var(--sp-highlight-top), var(--sp-shadow-overlay)
+
+.sp-lift-interactive
+  transition transform var(--sp-motion-fast) ease, box-shadow var(--sp-motion-fast) ease
+  &:hover
+    transform translateY(-1px)
+  &:active
+    transform translateY(0)
+
+@media (prefers-reduced-motion: reduce)
+  .sp-lift-interactive
+    transition none
+    &:hover,
+    &:active
+      transform none
 
 .sp-muted
   color var(--sp-text-muted)

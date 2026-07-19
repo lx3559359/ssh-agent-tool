@@ -692,6 +692,19 @@ test('menu builders keep action keys while exposing runtime bilingual label keys
   assert.equal(enItems.find(item => item.key === 'delete').labelKey, 'shellpilotBookmarkDeleteConnection')
 })
 
+test('defines L0-L3 contracts without styling terminal canvases', () => {
+  const source = readClient('css/includes/secondary-ui.styl')
+  for (const selector of ['.sp-level-0', '.sp-level-1', '.sp-level-2', '.sp-level-3']) {
+    assert.match(source, new RegExp(selector.replace('.', '\\.')))
+  }
+  assert.match(source, /box-shadow[^\r\n]*var\(--sp-shadow-control\)/)
+  assert.match(source, /box-shadow[^\r\n]*var\(--sp-shadow-card\)/)
+  assert.match(source, /box-shadow[^\r\n]*var\(--sp-shadow-overlay\)/)
+  assert.match(source, /@media \(prefers-reduced-motion: reduce\)/)
+  assert.doesNotMatch(source, /\.xterm(?:\s|,|$)/)
+  assert.doesNotMatch(source, /\.term-wrap(?:\s|,|$)/)
+})
+
 test('SFTP overflow more defaults safely to English and follows the current preview translator', async () => {
   const { splitOverflowMenu } = await import(moduleUrl('components/sftp/context-menu-utils.js'))
   const items = Array.from({ length: 10 }, (_, index) => ({ key: String(index) }))
