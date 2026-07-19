@@ -89,21 +89,42 @@ test('right panel width and SFTP list height are bounded for small windows', () 
   const sftp = readClient('components/sftp/list-table-ui.jsx')
 
   assert.match(layout, /minRightPanelWidth = 320/)
-  assert.match(layout, /getMaxRightPanelWidth/)
-  assert.match(layout, /Math\.max\(0, width - left - right\)/)
-  assert.match(panel, /getMaxRightPanelWidth/)
+  assert.match(layout, /getAIGShellGeometry/)
+  assert.doesNotMatch(layout, /export function getMaxRightPanelWidth/)
+  assert.match(panel, /\} = shellGeometry\.rightPanel/)
+  assert.match(panel, /max: maxWidth/)
+  assert.doesNotMatch(panel, /getMaxRightPanelWidth|normalizeRightPanelWidth|window\.innerWidth/)
   assert.match(sftp, /Math\.max\(0, height - 42 - 30 - 32 - 90\)/)
 })
 
-test('split layouts and fleet workspace consume the shared content reservation', () => {
+test('all shell surfaces consume one shared explicit geometry result', () => {
+  const main = readClient('components/main/main.jsx')
   const layout = readClient('components/layout/layout.jsx')
   const fleet = readClient('components/fleet-status/fleet-status-workspace.jsx')
+  const sidebar = readClient('components/sidebar/index.jsx')
+  const sidePanel = readClient('components/sidebar/side-panel.jsx')
+  const rightPanel = readClient('components/side-panel-r/side-panel-r.jsx')
+  const footer = readClient('components/footer/footer-entry.jsx')
+  const quickCommands = readClient('components/quick-commands/quick-commands-box.jsx')
 
+  assert.match(main, /getAIGShellGeometry/)
+  assert.match(main, /const shellGeometry = getAIGShellGeometry\(\{/)
+  assert.match(main, /openedSideBar: store\.openedSideBar/)
+  assert.match(main, /shellGeometry/)
+  assert.match(layout, /shellGeometry\.terminalFrame/)
   assert.match(layout, /layoutAlg\(layout, width, height\)/)
-  assert.doesNotMatch(layout, /normalizeRightPanelWidth|\s-\s42/)
-  assert.match(fleet, /getAIGShellFrameInsets/)
-  assert.doesNotMatch(fleet, /frame\.right\s*=\s*store\.rightPanelVisible/)
-  assert.doesNotMatch(fleet, /getMaxRightPanelWidth|normalizeRightPanelWidth/)
+  assert.match(fleet, /shellGeometry\.terminalInsets/)
+  assert.match(sidebar, /shellGeometry\.leftPanel\.width/)
+  assert.match(sidePanel, /\} = props\.shellGeometry\.leftPanel/)
+  assert.match(sidePanel, /max: maxWidth/)
+  assert.match(rightPanel, /\} = shellGeometry\.rightPanel/)
+  assert.match(rightPanel, /max: maxWidth/)
+  assert.match(footer, /shellGeometry\.terminalInsets/)
+  assert.match(quickCommands, /shellGeometry\.terminalInsets/)
+  assert.doesNotMatch(
+    [layout, fleet, sidebar, sidePanel, rightPanel, footer, quickCommands].join('\n'),
+    /getMaxRightPanelWidth|normalizeRightPanelWidth|window\.innerWidth|frame\.right\s*=|openedSideBar \? sidebarWidth \+ leftSidebarWidth/
+  )
 })
 
 test('overlay sidebar stays inside the effective viewport at high zoom', () => {
@@ -541,4 +562,22 @@ test('secondary surface overflow is compared with main chrome immediately before
   assert.ok(resetIndex >= 0)
   assert.ok(baselineIndex > resetIndex)
   assert.ok(openIndex > baselineIndex)
+})
+
+test('022 persists compact shell geometry states and restores every mutated store field', () => {
+  const matrix = readProject('test/e2e/022.secondary-ui-visual-matrix.spec.js')
+  const compact = matrix.match(/test\('tool center and batch editor stay reachable[\s\S]*?\n}\)/)
+
+  assert.ok(compact)
+  assert.match(compact[0], /const compactGeometryStates = \[/)
+  assert.match(compact[0], /openedSideBar: 'bookmarks'/)
+  assert.match(compact[0], /openedSideBar: ''/)
+  assert.match(compact[0], /pinned: true/)
+  assert.match(compact[0], /pinned: false/)
+  assert.match(compact[0], /leftSidebarWidth: 1000/)
+  assert.match(compact[0], /rightPanelWidth: 1000/)
+  assert.match(compact[0], /language: 'en_us'/)
+  assert.match(compact[0], /language: 'zh_cn'/)
+  assert.match(compact[0], /finally \{[\s\S]*restoreCompactShellState/)
+  assert.doesNotMatch(compact[0], /store\.pinned = false[\s\S]{0,120}store\.rightPanelWidth = 320/)
 })

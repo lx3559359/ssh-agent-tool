@@ -34,7 +34,6 @@ export default function Sidebar (props) {
     upgradeInfo,
     settingTab,
     settingItem,
-    leftSidebarWidth,
     pinned,
     fileTransfers,
     openedSideBar,
@@ -43,7 +42,8 @@ export default function Sidebar (props) {
     showModal,
     showInfoModal,
     sidebarPanelTab,
-    zoom
+    zoom,
+    shellGeometry
   } = props
 
   const { store } = window
@@ -135,7 +135,7 @@ export default function Sidebar (props) {
     ? {
         className: 'sidebar-list',
         style: {
-          width: `${leftSidebarWidth}px`
+          width: `${shellGeometry.leftPanel.width}px`
         }
       }
     : {
@@ -259,7 +259,7 @@ export default function Sidebar (props) {
       <SidePanel
         sideProps={sideProps}
         setLeftSidePanelWidth={setLeftSidePanelWidth}
-        leftSidebarWidth={leftSidebarWidth}
+        shellGeometry={shellGeometry}
       >
         <SideBarPanel
           pinned={pinned}

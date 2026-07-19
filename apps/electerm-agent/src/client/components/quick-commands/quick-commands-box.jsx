@@ -3,11 +3,7 @@
  */
 
 import { useEffect, useState, useRef } from 'react'
-import { pinnedQuickCommandBarKey, quickCommandLabelsLsKey, sidebarWidth } from '../../common/constants'
-import {
-  getMaxRightPanelWidth,
-  normalizeRightPanelWidth
-} from '../main/aigshell-layout'
+import { pinnedQuickCommandBarKey, quickCommandLabelsLsKey } from '../../common/constants'
 import { sortBy } from 'lodash-es'
 import { Button, Input, InputNumber, Select, Space, Flex, Modal } from 'antd'
 import * as ls from '../../common/safe-local-storage'
@@ -275,17 +271,6 @@ export default function QuickCommandsFooterBox (props) {
   function handleChangeLabels (v) {
     ls.setItem(quickCommandLabelsLsKey, v || '')
     setLabel(v)
-  }
-
-  function getRightOffset () {
-    if (!props.rightPanelVisible) {
-      return 10
-    }
-    const maxWidth = getMaxRightPanelWidth(window.innerWidth)
-    return Math.min(
-      normalizeRightPanelWidth(props.rightPanelWidth),
-      maxWidth
-    ) + 10
   }
 
   // function filterFunc (v, opt) {
@@ -631,8 +616,7 @@ export default function QuickCommandsFooterBox (props) {
     pinnedQuickCommandBar,
     qmSortByFrequency,
     inActiveTerminal,
-    leftSidebarWidth,
-    openedSideBar
+    shellGeometry
   } = props
   if ((!openQuickCommandBar && !pinnedQuickCommandBar) || !inActiveTerminal) {
     return null
@@ -658,12 +642,12 @@ export default function QuickCommandsFooterBox (props) {
     : 'text'
   const cls = classNames('qm-list-wrap')
   const type = qmSortByFrequency ? 'primary' : 'default'
-  const w = openedSideBar ? sidebarWidth + leftSidebarWidth : sidebarWidth
+  const { left, right } = shellGeometry.terminalInsets
   const qmProps = {
     className: 'qm-wrap-tooltip',
     style: {
-      left: w,
-      '--quick-command-right-offset': `${getRightOffset()}px`
+      left,
+      '--quick-command-right-offset': `${right + 10}px`
     },
     onMouseLeave: handleMouseLeave,
     onMouseEnter: handleMouseEnter

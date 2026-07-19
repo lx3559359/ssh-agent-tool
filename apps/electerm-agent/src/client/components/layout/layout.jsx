@@ -2,10 +2,7 @@ import { auto } from 'manate/react'
 import Layouts from './layouts'
 import TabsWrap from '../tabs/index'
 import {
-  splitConfig,
-  quickCommandBoxHeight,
-  footerHeight,
-  sidebarWidth
+  splitConfig
 } from '../../common/constants'
 import layoutAlg from './layout-alg'
 import calcSessionSize from './session-size-alg'
@@ -14,12 +11,11 @@ import Footer from '../footer/footer-entry'
 import SessionsWrap from '../session/sessions'
 import QuickCommandsFooterBox from '../quick-commands/quick-commands-box'
 import pixed from './pixed'
-import { getAIGShellContentFrame } from '../main/aigshell-layout'
 import { pick } from 'lodash-es'
 import './layout.styl'
 
 export default auto(function Layout (props) {
-  const { store } = props
+  const { store, shellGeometry } = props
   const {
     layout, config, currentTab
   } = store
@@ -29,39 +25,7 @@ export default auto(function Layout (props) {
 
   }
 
-  const calcLayoutStyle = () => {
-    const {
-      width,
-      height,
-      pinnedQuickCommandBar,
-      // tabsHeight,
-      leftSidebarWidth,
-      // infoPanelPinned,
-      pinned,
-      rightPanelVisible,
-      rightPanelPinned,
-      rightPanelWidth,
-      resizeTrigger,
-      inActiveTerminal
-    } = props.store
-    return getAIGShellContentFrame({
-      width,
-      height,
-      footerHeight,
-      sidebarWidth,
-      leftSidebarWidth,
-      rightPanelWidth,
-      pinned,
-      rightPanelVisible,
-      rightPanelPinned,
-      pinnedQuickCommandBar,
-      inActiveTerminal,
-      quickCommandBoxHeight,
-      resizeTrigger
-    })
-  }
-
-  const layoutSize = calcLayoutStyle()
+  const layoutSize = shellGeometry.terminalFrame
   const {
     width,
     height
@@ -134,7 +98,8 @@ export default auto(function Layout (props) {
     ])
   }
   const footerProps = {
-    store
+    store,
+    shellGeometry
   }
   const qmProps = pick(store, [
     'quickCommandTags',
@@ -143,10 +108,6 @@ export default auto(function Layout (props) {
     'pinnedQuickCommandBar',
     'qmSortByFrequency',
     'inActiveTerminal',
-    'leftSidebarWidth',
-    'openedSideBar',
-    'rightPanelVisible',
-    'rightPanelWidth',
     'currentQuickCommands'
   ])
   const sessionsProps = {
@@ -190,6 +151,7 @@ export default auto(function Layout (props) {
     <QuickCommandsFooterBox
       key='QuickCommandsFooterBox'
       {...qmProps}
+      shellGeometry={shellGeometry}
       currentTab={currentTab}
     />,
     <Footer

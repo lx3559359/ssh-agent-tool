@@ -1,6 +1,5 @@
 import { useCallback, useRef } from 'react'
 import DragHandle from '../common/drag-handle'
-import { sidebarWidth } from '../../common/constants'
 
 export default function SidePanel (props) {
   const panelRef = useRef(null)
@@ -10,21 +9,16 @@ export default function SidePanel (props) {
     window.store.onResize()
   }, [props])
 
-  const onDragMove = useCallback((nw) => {
-    if (panelRef.current) {
-      panelRef.current.style.width = nw + 'px'
-    }
-    const el1 = document.querySelector('.sessions')
-    if (el1) {
-      el1.style.left = (nw + sidebarWidth) + 'px'
-    }
-  }, [props.leftSidebarWidth])
+  const {
+    visible,
+    width,
+    maxWidth
+  } = props.shellGeometry.leftPanel
   const dragProps = {
-    min: 300 + sidebarWidth,
-    max: 600,
-    width: props.leftSidebarWidth,
+    min: Math.min(300, maxWidth),
+    max: maxWidth,
+    width,
     onDragEnd,
-    onDragMove,
     left: true
   }
   return (
@@ -33,9 +27,11 @@ export default function SidePanel (props) {
       ref={panelRef}
       draggable={false}
     >
-      <DragHandle
-        {...dragProps}
-      />
+      {
+        visible && maxWidth > 0
+          ? <DragHandle {...dragProps} />
+          : null
+      }
       {props.children}
     </div>
   )

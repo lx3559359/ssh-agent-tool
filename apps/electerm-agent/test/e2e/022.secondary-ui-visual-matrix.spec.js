@@ -217,6 +217,7 @@ async function resetSurface (page, language) {
     document.body.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     store.previewLanguage = nextLanguage
     store.showAIConfigModal = false
+    store.upgradeInfo.showUpgradeModal = false
     store.setOpenedSideBar('')
     if (store.showModal) {
       store.hideSettingModal()
@@ -3071,6 +3072,112 @@ test('context menus keep pointer placement and compact long-menu reachability', 
   })
 })
 
+async function captureCompactShellState (page) {
+  return page.evaluate(() => {
+    const store = window.store
+    return {
+      openedSideBar: store.openedSideBar,
+      pinned: store.pinned,
+      leftSidebarWidth: store.leftSidebarWidth,
+      rightPanelVisible: store.rightPanelVisible,
+      rightPanelPinned: store.rightPanelPinned,
+      rightPanelWidth: store.rightPanelWidth,
+      layout: store.layout,
+      mainWorkspaceMode: store.mainWorkspaceMode
+    }
+  })
+}
+
+async function applyCompactShellState (page, state) {
+  await page.evaluate((nextState) => {
+    const store = window.store
+    store.closeFleetStatus()
+    store.setOpenedSideBar(nextState.openedSideBar)
+    store.pinned = nextState.pinned
+    store.setLeftSidePanelWidth(nextState.leftSidebarWidth)
+    store.rightPanelVisible = nextState.rightPanelVisible
+    store.rightPanelPinned = nextState.rightPanelPinned
+    store.setRightSidePanelWidth(nextState.rightPanelWidth)
+    store.setLayout('c3')
+  }, state)
+}
+
+async function restoreCompactShellState (page, state) {
+  await page.evaluate((originalState) => {
+    const store = window.store
+    store.setOpenedSideBar(originalState.openedSideBar)
+    store.pinned = originalState.pinned
+    store.setLeftSidePanelWidth(originalState.leftSidebarWidth)
+    store.rightPanelVisible = originalState.rightPanelVisible
+    store.rightPanelPinned = originalState.rightPanelPinned
+    store.setRightSidePanelWidth(originalState.rightPanelWidth)
+    store.setLayout(originalState.layout)
+    if (originalState.mainWorkspaceMode === 'fleet-status') {
+      store.openFleetStatus()
+    } else {
+      store.closeFleetStatus()
+    }
+  }, state)
+}
+
+async function inspectCompactShellGeometry (page) {
+  return page.evaluate(() => {
+    const describe = (selector) => {
+      const element = document.querySelector(selector)
+      if (!element) return null
+      const rect = element.getBoundingClientRect()
+      return {
+        rect: rect.toJSON(),
+        clientWidth: element.clientWidth,
+        scrollWidth: element.scrollWidth
+      }
+    }
+    const inspectPointer = (selector) => {
+      const element = document.querySelector(selector)
+      if (!element) return { reachable: false, rect: null, target: '' }
+      const rect = element.getBoundingClientRect()
+      if (rect.width <= 0 || rect.height <= 0) {
+        return { reachable: false, rect: rect.toJSON(), target: '' }
+      }
+      const target = document.elementFromPoint(
+        Math.max(0, Math.min(window.innerWidth - 1, rect.left + rect.width / 2)),
+        Math.max(0, Math.min(window.innerHeight - 1, rect.top + rect.height / 2))
+      )
+      return {
+        reachable: Boolean(target && element.contains(target)),
+        rect: rect.toJSON(),
+        target: target?.className?.baseVal || target?.className || target?.tagName || ''
+      }
+    }
+    const panes = [...document.querySelectorAll('.layout-wrap-c3 .layout-item')]
+      .map(element => element.getBoundingClientRect().toJSON())
+    const overlaps = []
+    for (let leftIndex = 0; leftIndex < panes.length; leftIndex += 1) {
+      for (let rightIndex = leftIndex + 1; rightIndex < panes.length; rightIndex += 1) {
+        const left = panes[leftIndex]
+        const right = panes[rightIndex]
+        const overlapWidth = Math.min(left.right, right.right) - Math.max(left.left, right.left)
+        const overlapHeight = Math.min(left.bottom, right.bottom) - Math.max(left.top, right.top)
+        if (overlapWidth > 1 && overlapHeight > 1) overlaps.push([leftIndex, rightIndex])
+      }
+    }
+    return {
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+      documentElement: describe('html'),
+      body: describe('body'),
+      root: describe('#container'),
+      leftPanel: describe('.sidebar-list'),
+      rightPanel: describe('.right-side-panel'),
+      terminal: describe('.layout-wrap-c3'),
+      footer: describe('.main-footer'),
+      panes,
+      overlaps,
+      pinControl: inspectPointer('.right-side-panel-pin'),
+      closeControl: inspectPointer('.right-side-panel-close')
+    }
+  })
+}
+
 test('tool center and batch editor stay reachable in compact real app windows', async ({ browserName }) => {
   let compactChecks = 0
   await runWithIsolatedApp('compact-tools', async (electronApp) => {
@@ -3085,6 +3192,72 @@ test('tool center and batch editor stay reachable in compact real app windows', 
       { width: 590, height: 400, zoom: 1.75 },
       { width: 590, height: 400, zoom: 2 }
     ]
+    const compactGeometryStates = [
+      {
+        name: 'dual-pinned-overlay',
+        language: 'en_us',
+        openedSideBar: 'bookmarks',
+        pinned: true,
+        leftSidebarWidth: 300,
+        rightPanelVisible: true,
+        rightPanelPinned: true,
+        rightPanelWidth: 1000
+      },
+      {
+        name: 'closed-left-pinned-right-overlay',
+        language: 'zh_cn',
+        openedSideBar: '',
+        pinned: true,
+        leftSidebarWidth: 300,
+        rightPanelVisible: true,
+        rightPanelPinned: true,
+        rightPanelWidth: 1000
+      },
+      {
+        name: 'dual-unpinned-overlay',
+        language: 'en_us',
+        openedSideBar: 'bookmarks',
+        pinned: false,
+        leftSidebarWidth: 300,
+        rightPanelVisible: true,
+        rightPanelPinned: false,
+        rightPanelWidth: 1000
+      },
+      {
+        name: 'oversized-dual-pinned-overlay',
+        language: 'zh_cn',
+        openedSideBar: 'bookmarks',
+        pinned: true,
+        leftSidebarWidth: 1000,
+        rightPanelVisible: true,
+        rightPanelPinned: true,
+        rightPanelWidth: 1000
+      }
+    ]
+    const originalCompactShellState = await captureCompactShellState(page)
+
+    try {
+      await setWindowCase(electronApp, page, { width: 1100, height: 700 }, 1)
+      await resetSurface(page, 'en_us')
+      await applyCompactShellState(page, compactGeometryStates[0])
+      await expect(page.locator('.layout-wrap-c3 .layout-item')).toHaveCount(3)
+      await expect(page.locator('.right-side-panel')).toBeVisible()
+      const sideBySideMetrics = await inspectCompactShellGeometry(page)
+      const sideBySideContext = JSON.stringify({ surface: 'desktop-side-by-side', sideBySideMetrics })
+      expect(sideBySideMetrics.leftPanel.rect.width, sideBySideContext).toBeCloseTo(300, 0)
+      expect(sideBySideMetrics.rightPanel.rect.width, sideBySideContext).toBeCloseTo(408, 0)
+      expect(sideBySideMetrics.terminal.rect.width, sideBySideContext).toBeGreaterThanOrEqual(319)
+      expect(sideBySideMetrics.leftPanel.rect.right, sideBySideContext)
+        .toBeLessThanOrEqual(sideBySideMetrics.terminal.rect.left + 1)
+      expect(sideBySideMetrics.terminal.rect.right, sideBySideContext)
+        .toBeLessThanOrEqual(sideBySideMetrics.rightPanel.rect.left + 1)
+      expect(Math.abs(sideBySideMetrics.footer.rect.left - sideBySideMetrics.terminal.rect.left), sideBySideContext)
+        .toBeLessThanOrEqual(1)
+      expect(Math.abs(sideBySideMetrics.footer.rect.right - sideBySideMetrics.terminal.rect.right), sideBySideContext)
+        .toBeLessThanOrEqual(1)
+    } finally {
+      await restoreCompactShellState(page, originalCompactShellState)
+    }
 
     for (const size of compactSizes) {
       await setWindowCase(electronApp, page, size, size.zoom || 1)
@@ -3095,84 +3268,105 @@ test('tool center and batch editor stay reachable in compact real app windows', 
           expect(node.scrollWidth, JSON.stringify({ size, documentWidths }))
             .toBeLessThanOrEqual(node.clientWidth)
         }
-        await page.evaluate(() => {
-          const store = window.store
-          store.closeFleetStatus()
-          store.pinned = false
-          store.rightPanelVisible = true
-          store.rightPanelPinned = true
-          store.rightPanelWidth = 320
-          store.setLayout('c3')
-        })
-        await expect(page.locator('.layout-wrap-c3 .layout-item')).toHaveCount(3)
-        const splitMetrics = await page.locator('.layout-wrap-c3').evaluate((wrap) => {
-          const rect = wrap.getBoundingClientRect()
-          const panes = [...wrap.querySelectorAll('.layout-item')].map(element => element.getBoundingClientRect().toJSON())
-          const overlaps = []
-          for (let leftIndex = 0; leftIndex < panes.length; leftIndex += 1) {
-            for (let rightIndex = leftIndex + 1; rightIndex < panes.length; rightIndex += 1) {
-              const left = panes[leftIndex]
-              const right = panes[rightIndex]
-              const overlapWidth = Math.min(left.right, right.right) - Math.max(left.left, right.left)
-              const overlapHeight = Math.min(left.bottom, right.bottom) - Math.max(left.top, right.top)
-              if (overlapWidth > 1 && overlapHeight > 1) overlaps.push([leftIndex, rightIndex])
+        const originalGeometryState = await captureCompactShellState(page)
+        try {
+          let splitMetrics
+          for (const geometryState of compactGeometryStates) {
+            await resetSurface(page, geometryState.language)
+            await applyCompactShellState(page, geometryState)
+            await expect(page.locator('.layout-wrap-c3 .layout-item')).toHaveCount(3)
+            await expect(page.locator('.right-side-panel')).toBeVisible()
+            const geometryMetrics = await inspectCompactShellGeometry(page)
+            const geometryContext = JSON.stringify({ size, geometryState, geometryMetrics })
+            const expectedTerminalWidth = geometryMetrics.viewport.width - 72
+
+            expect(geometryMetrics.terminal.rect.width, geometryContext)
+              .toBeGreaterThanOrEqual(expectedTerminalWidth - 1)
+            expect(geometryMetrics.terminal.rect.width, geometryContext).toBeGreaterThan(0)
+            expect(geometryMetrics.rightPanel.rect.width, geometryContext)
+              .toBeLessThanOrEqual(geometryMetrics.viewport.width + 1)
+            expect(geometryMetrics.leftPanel.rect.width, geometryContext)
+              .toBeLessThanOrEqual(Math.max(0, geometryMetrics.viewport.width - 72) + 1)
+            expect(geometryMetrics.leftPanel.rect.width, geometryContext)
+              .toBeCloseTo(geometryState.openedSideBar ? expectedTerminalWidth : 0, 0)
+            expect(Math.abs(geometryMetrics.footer.rect.left - geometryMetrics.terminal.rect.left), geometryContext)
+              .toBeLessThanOrEqual(1)
+            expect(Math.abs(geometryMetrics.footer.rect.right - geometryMetrics.terminal.rect.right), geometryContext)
+              .toBeLessThanOrEqual(1)
+            expect(geometryMetrics.panes.every(pane => pane.width > 0 && pane.height > 0), geometryContext).toBe(true)
+            expect(geometryMetrics.overlaps, geometryContext).toEqual([])
+            expect(geometryMetrics.pinControl.reachable, geometryContext).toBe(true)
+            expect(geometryMetrics.closeControl.reachable, geometryContext).toBe(true)
+            for (const name of ['documentElement', 'body', 'root']) {
+              expect(geometryMetrics[name].scrollWidth, geometryContext)
+                .toBeLessThanOrEqual(geometryMetrics[name].clientWidth)
+            }
+            splitMetrics = geometryMetrics
+
+            if (geometryState.name === 'dual-pinned-overlay') {
+              const pin = page.locator('.right-side-panel-pin')
+              const close = page.locator('.right-side-panel-close')
+              await pin.click()
+              await expect.poll(() => page.evaluate(() => window.store.rightPanelPinned)).toBe(false)
+              await pin.click()
+              await expect.poll(() => page.evaluate(() => window.store.rightPanelPinned)).toBe(true)
+              await close.click()
+              await expect(page.locator('.right-side-panel')).toHaveCount(0)
+              await page.evaluate(() => { window.store.rightPanelVisible = true })
+              await expect(page.locator('.right-side-panel')).toBeVisible()
             }
           }
-          return {
-            frame: rect.toJSON(),
-            panes,
-            overlaps
-          }
-        })
-        const splitContext = JSON.stringify({ size, splitMetrics })
-        expect(splitMetrics.frame.width, splitContext).toBeGreaterThan(0)
-        expect(splitMetrics.panes.every(pane => pane.width > 0 && pane.height > 0), splitContext).toBe(true)
+          const splitContext = JSON.stringify({ size, splitMetrics })
+          expect(splitMetrics.terminal.rect.width, splitContext).toBeGreaterThan(0)
 
-        await page.evaluate(() => window.store.openFleetStatus())
-        await page.locator('.fleet-status-workspace-active').waitFor()
-        const fleetMetrics = await page.locator('.fleet-status-workspace-active').evaluate((workspace) => {
-          const rect = workspace.getBoundingClientRect()
-          return {
-            rect: rect.toJSON(),
-            viewport: { width: window.innerWidth, height: window.innerHeight }
-          }
-        })
-        const fleetContext = JSON.stringify({ size, fleetMetrics })
-        expect(fleetMetrics.rect.width, fleetContext).toBeGreaterThan(0)
-        expect(fleetMetrics.rect.height, fleetContext).toBeGreaterThan(0)
-        expect(fleetMetrics.rect.left, fleetContext).toBeGreaterThanOrEqual(0)
-        expect(fleetMetrics.rect.right, fleetContext).toBeLessThanOrEqual(fleetMetrics.viewport.width + 1)
-        expect(splitMetrics.overlaps, splitContext).toEqual([])
+          await page.evaluate(() => window.store.openFleetStatus())
+          await page.locator('.fleet-status-workspace-active').waitFor()
+          const fleetMetrics = await page.locator('.fleet-status-workspace-active').evaluate((workspace) => {
+            const rect = workspace.getBoundingClientRect()
+            return {
+              rect: rect.toJSON(),
+              viewport: { width: window.innerWidth, height: window.innerHeight }
+            }
+          })
+          const fleetContext = JSON.stringify({ size, fleetMetrics })
+          expect(fleetMetrics.rect.width, fleetContext).toBeGreaterThan(0)
+          expect(fleetMetrics.rect.height, fleetContext).toBeGreaterThan(0)
+          expect(fleetMetrics.rect.left, fleetContext).toBeGreaterThanOrEqual(0)
+          expect(fleetMetrics.rect.right, fleetContext).toBeLessThanOrEqual(fleetMetrics.viewport.width + 1)
+          expect(splitMetrics.overlaps, splitContext).toEqual([])
 
-        await page.evaluate(() => window.store.closeFleetStatus())
-        await ensureVisualBookmark(page)
-        const chromeMetrics = await page.evaluate(() => {
-          const describe = element => {
-            const rect = element.getBoundingClientRect()
-            return { rect: rect.toJSON(), scrollWidth: element.scrollWidth, clientWidth: element.clientWidth }
+          await page.evaluate(() => window.store.closeFleetStatus())
+          await ensureVisualBookmark(page)
+          const chromeMetrics = await page.evaluate(() => {
+            const describe = element => {
+              const rect = element.getBoundingClientRect()
+              return { rect: rect.toJSON(), scrollWidth: element.scrollWidth, clientWidth: element.clientWidth }
+            }
+            return {
+              documentElement: describe(document.documentElement),
+              body: describe(document.body),
+              root: describe(document.getElementById('container')),
+              bookmark: describe(document.querySelector('.sidebar-list')),
+              footer: describe(document.querySelector('.main-footer')),
+              viewport: { width: window.innerWidth, height: window.innerHeight }
+            }
+          })
+          const chromeContext = JSON.stringify({ size, chromeMetrics })
+          for (const name of ['documentElement', 'body', 'root']) {
+            expect(chromeMetrics[name].scrollWidth, chromeContext).toBeLessThanOrEqual(chromeMetrics[name].clientWidth)
           }
-          return {
-            documentElement: describe(document.documentElement),
-            body: describe(document.body),
-            root: describe(document.getElementById('container')),
-            bookmark: describe(document.querySelector('.sidebar-list')),
-            footer: describe(document.querySelector('.main-footer')),
-            viewport: { width: window.innerWidth, height: window.innerHeight }
-          }
-        })
-        const chromeContext = JSON.stringify({ size, chromeMetrics })
-        for (const name of ['documentElement', 'body', 'root']) {
-          expect(chromeMetrics[name].scrollWidth, chromeContext).toBeLessThanOrEqual(chromeMetrics[name].clientWidth)
+          expect(chromeMetrics.bookmark.rect.right, chromeContext).toBeLessThanOrEqual(chromeMetrics.viewport.width + 1)
+          expect(chromeMetrics.footer.rect.left, chromeContext).toBeGreaterThanOrEqual(0)
+          expect(chromeMetrics.footer.rect.right, chromeContext).toBeLessThanOrEqual(chromeMetrics.viewport.width + 1)
+
+          await resetSurface(page, 'en_us')
+          await page.evaluate(() => window.store.setLayout('c1'))
+          await ensureTwoTerminalTabs(page)
+          const terminal = await inspectTerminalInvariant(page)
+          assertTerminalInvariant(terminal, { runner: browserName, size, surface: 'compact-terminal-invariant' })
+        } finally {
+          await restoreCompactShellState(page, originalGeometryState)
         }
-        expect(chromeMetrics.bookmark.rect.right, chromeContext).toBeLessThanOrEqual(chromeMetrics.viewport.width + 1)
-        expect(chromeMetrics.footer.rect.left, chromeContext).toBeGreaterThanOrEqual(0)
-        expect(chromeMetrics.footer.rect.right, chromeContext).toBeLessThanOrEqual(chromeMetrics.viewport.width + 1)
-
-        await resetSurface(page, 'en_us')
-        await page.evaluate(() => window.store.setLayout('c1'))
-        await ensureTwoTerminalTabs(page)
-        const terminal = await inspectTerminalInvariant(page)
-        assertTerminalInvariant(terminal, { runner: browserName, size, surface: 'compact-terminal-invariant' })
       }
       await openWidgets(page)
       const metrics = await page.locator('.setting-tabs-widgets').evaluate(root => {

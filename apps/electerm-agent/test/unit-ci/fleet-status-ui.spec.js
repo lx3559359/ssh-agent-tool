@@ -476,9 +476,9 @@ test('025 proves short unpinned AI layout and preserves themes Escape and focus'
   const workspace = readClient('components/fleet-status/fleet-status-workspace.jsx')
   const source = readTest('e2e/025.fleet-service-selector.spec.js')
 
-  assert.match(workspace, /getAIGShellFrameInsets/)
+  assert.match(workspace, /shellGeometry\.terminalInsets/)
   assert.doesNotMatch(workspace, /frame\.right = store\.rightPanelVisible/)
-  assert.doesNotMatch(workspace, /getMaxRightPanelWidth|normalizeRightPanelWidth/)
+  assert.doesNotMatch(workspace, /getMaxRightPanelWidth|normalizeRightPanelWidth|getAIGShellFrameInsets/)
   assert.match(source, /const selectorThemes = \[/)
   assert.match(source, /theme: 'default'/)
   assert.match(source, /theme: 'defaultLight'/)

@@ -4,14 +4,13 @@ import {
 } from 'antd'
 import { InfoCircleOutlined } from '@ant-design/icons'
 import './footer.styl'
-import { sidebarWidth, statusMap } from '../../common/constants'
+import { statusMap } from '../../common/constants'
 import BatchInput from './batch-input'
 import encodes from '../bookmark-form/common/encodes'
 import { refs } from '../common/ref'
 import Qm from '../quick-commands/quick-commands-select'
 import AIIcon from '../icons/ai-icon'
 import CmdHistory from './cmd-history'
-import { getAIGShellFooterLeft } from '../main/aigshell-layout'
 
 const {
   Option
@@ -162,21 +161,12 @@ export default auto(function FooterEntry (props) {
     )
   }
 
-  const {
-    leftSidebarWidth,
-    openedSideBar,
-    pinned,
-    inActiveTerminal
-  } = props.store
-  const footerLeft = getAIGShellFooterLeft({
-    sidebarWidth,
-    leftSidebarWidth,
-    openedSideBar,
-    pinned
-  })
+  const { inActiveTerminal } = props.store
+  const { left, right } = props.shellGeometry.terminalInsets
   const sideProps = {
     style: {
-      left: `${footerLeft}px`
+      left: `${left}px`,
+      right: `${right}px`
     }
   }
   if (

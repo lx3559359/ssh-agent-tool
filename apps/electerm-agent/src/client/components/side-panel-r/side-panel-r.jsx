@@ -8,11 +8,6 @@ import {
   PushpinOutlined
 } from '@ant-design/icons'
 import { Flex, Tag, Typography } from 'antd'
-import {
-  getMaxRightPanelWidth,
-  minRightPanelWidth,
-  normalizeRightPanelWidth
-} from '../main/aigshell-layout'
 import AgentTakeoverControls from '../ai/agent-takeover-controls'
 
 const RightSidePanelAIHeader = lazy(() => import('./right-side-panel-ai-header'))
@@ -20,7 +15,7 @@ const RightSidePanelAIHeader = lazy(() => import('./right-side-panel-ai-header')
 export default memo(function RightSidePanel ({
   rightPanelVisible,
   rightPanelPinned,
-  rightPanelWidth,
+  shellGeometry,
   children,
   title,
   rightPanelTab,
@@ -37,17 +32,14 @@ export default memo(function RightSidePanel ({
   const tag = isAI
     ? <Tag className='mg1r aigshell-ai-tag'>AI</Tag>
     : <InfoCircleOutlined className='mg1r' />
-  const maxWidth = getMaxRightPanelWidth(window.innerWidth)
-  const width = Math.min(normalizeRightPanelWidth(rightPanelWidth), maxWidth)
+  const {
+    width,
+    minWidth,
+    maxWidth
+  } = shellGeometry.rightPanel
 
   function onDragEnd (nextWidth) {
     window.store.setRightSidePanelWidth(nextWidth)
-  }
-
-  function onDragMove (nextWidth) {
-    if (panelRef.current) {
-      panelRef.current.style.width = nextWidth + 'px'
-    }
   }
 
   function onClose () {
@@ -70,11 +62,10 @@ export default memo(function RightSidePanel ({
     onClick: togglePin
   }
   const dragProps = {
-    min: minRightPanelWidth,
+    min: minWidth,
     max: maxWidth,
     width,
     onDragEnd,
-    onDragMove,
     left: false
   }
 

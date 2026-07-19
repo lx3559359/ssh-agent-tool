@@ -3,42 +3,28 @@ export const minRightPanelWidth = 320
 export const maxRightPanelWidth = 1000
 const minPinnedTerminalWidth = 320
 
+function toNonNegativeNumber (value, fallback = 0) {
+  const number = Number(value)
+  return Number.isFinite(number) && number >= 0 ? number : fallback
+}
+
 export function normalizeRightPanelWidth (value) {
-  const width = Number.parseInt(value, 10)
+  const width = Number(value)
   if (!Number.isFinite(width) || width < minRightPanelWidth) {
     return minRightPanelWidth
   }
   return Math.min(width, maxRightPanelWidth)
 }
 
-export function getMaxRightPanelWidth (windowWidth, reservedWidth = 420) {
-  const width = Number(windowWidth)
-  if (!Number.isFinite(width)) {
-    return maxRightPanelWidth
-  }
-  return Math.max(
-    minRightPanelWidth,
-    Math.min(maxRightPanelWidth, width - reservedWidth)
-  )
-}
-
-export function getAIGShellFooterLeft ({
-  sidebarWidth,
-  leftSidebarWidth,
-  openedSideBar,
-  pinned
-}) {
-  return sidebarWidth + (openedSideBar && pinned ? leftSidebarWidth : 0)
-}
-
-export function getAIGShellContentFrame ({
+export function getAIGShellGeometry ({
   width,
   height,
   footerHeight,
   sidebarWidth,
   leftSidebarWidth,
-  rightPanelWidth,
+  openedSideBar,
   pinned,
+  rightPanelWidth,
   rightPanelVisible,
   rightPanelPinned,
   pinnedQuickCommandBar,
@@ -46,27 +32,80 @@ export function getAIGShellContentFrame ({
   quickCommandBoxHeight,
   resizeTrigger = 0
 }) {
-  const left = pinned ? sidebarWidth + leftSidebarWidth : sidebarWidth
-  const maxPinnedPanelWidth = Math.max(0, width - left - minPinnedTerminalWidth)
-  const right = rightPanelVisible && rightPanelPinned && maxPinnedPanelWidth >= minRightPanelWidth
-    ? Math.min(normalizeRightPanelWidth(rightPanelWidth), maxPinnedPanelWidth)
+  const viewportWidth = toNonNegativeNumber(width)
+  const viewportHeight = toNonNegativeNumber(height)
+  const effectiveSidebarWidth = Math.min(
+    toNonNegativeNumber(sidebarWidth),
+    viewportWidth
+  )
+  const leftPanelVisible = Boolean(openedSideBar)
+  const leftPanelMaxWidth = Math.max(0, viewportWidth - effectiveSidebarWidth)
+  const leftPanelWidth = leftPanelVisible
+    ? Math.min(toNonNegativeNumber(leftSidebarWidth), leftPanelMaxWidth)
     : 0
-  const quickBarHeight = inActiveTerminal && pinnedQuickCommandBar ? quickCommandBoxHeight : 0
+  const leftPanelCanReserve = leftPanelVisible && Boolean(pinned) &&
+    viewportWidth - effectiveSidebarWidth - leftPanelWidth >= minPinnedTerminalWidth
+  const leftPanelReservation = leftPanelCanReserve ? leftPanelWidth : 0
+  const terminalLeft = effectiveSidebarWidth + leftPanelReservation
 
-  return {
+  const rightPanelIsVisible = Boolean(rightPanelVisible)
+  const requestedRightPanelWidth = normalizeRightPanelWidth(rightPanelWidth)
+  const pinnedRightPanelMaxWidth = Math.max(
+    0,
+    viewportWidth - terminalLeft - minPinnedTerminalWidth
+  )
+  const rightPanelCanReserve = rightPanelIsVisible && Boolean(rightPanelPinned) &&
+    pinnedRightPanelMaxWidth >= minRightPanelWidth
+  const rightPanelMaxWidth = rightPanelCanReserve
+    ? Math.min(maxRightPanelWidth, pinnedRightPanelMaxWidth)
+    : Math.min(maxRightPanelWidth, viewportWidth)
+  const rightPanelWidthValue = rightPanelIsVisible
+    ? Math.min(requestedRightPanelWidth, rightPanelMaxWidth)
+    : 0
+  const rightPanelReservation = rightPanelCanReserve ? rightPanelWidthValue : 0
+
+  const effectiveFooterHeight = toNonNegativeNumber(footerHeight)
+  const effectiveQuickCommandBoxHeight = toNonNegativeNumber(quickCommandBoxHeight)
+  const effectiveResizeTrigger = toNonNegativeNumber(resizeTrigger)
+  const quickBarHeight = Boolean(inActiveTerminal) && Boolean(pinnedQuickCommandBar)
+    ? effectiveQuickCommandBoxHeight
+    : 0
+  const terminalFrame = {
     top: aigshellTopBarHeight,
-    left,
-    width: Math.max(0, width - left - right),
-    height: Math.max(0, height - aigshellTopBarHeight - footerHeight - quickBarHeight + resizeTrigger)
+    left: terminalLeft,
+    width: Math.max(0, viewportWidth - terminalLeft - rightPanelReservation),
+    height: Math.max(
+      0,
+      viewportHeight - aigshellTopBarHeight - effectiveFooterHeight - quickBarHeight + effectiveResizeTrigger
+    )
   }
-}
 
-export function getAIGShellFrameInsets (options) {
-  const frame = getAIGShellContentFrame(options)
   return {
-    top: frame.top,
-    left: frame.left,
-    right: Math.max(0, options.width - frame.left - frame.width),
-    bottom: Math.max(0, options.height - frame.top - frame.height)
+    viewport: {
+      width: viewportWidth,
+      height: viewportHeight
+    },
+    leftPanel: {
+      visible: leftPanelVisible,
+      width: leftPanelWidth,
+      reservation: leftPanelReservation,
+      overlay: leftPanelVisible && leftPanelWidth > 0 && !leftPanelCanReserve,
+      maxWidth: leftPanelMaxWidth
+    },
+    rightPanel: {
+      visible: rightPanelIsVisible,
+      width: rightPanelWidthValue,
+      reservation: rightPanelReservation,
+      overlay: rightPanelIsVisible && rightPanelWidthValue > 0 && !rightPanelCanReserve,
+      minWidth: Math.min(minRightPanelWidth, rightPanelMaxWidth),
+      maxWidth: rightPanelMaxWidth
+    },
+    terminalFrame,
+    terminalInsets: {
+      top: terminalFrame.top,
+      left: terminalFrame.left,
+      right: rightPanelReservation,
+      bottom: Math.max(0, viewportHeight - terminalFrame.top - terminalFrame.height)
+    }
   }
 }

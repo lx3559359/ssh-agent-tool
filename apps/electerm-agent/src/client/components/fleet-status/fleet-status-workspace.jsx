@@ -3,14 +3,6 @@ import { useEffect, useRef, useSyncExternalStore } from 'react'
 import classnames from 'classnames'
 import { Button } from 'antd'
 import { DashboardOutlined, ReloadOutlined } from '@ant-design/icons'
-import {
-  footerHeight,
-  quickCommandBoxHeight,
-  sidebarWidth
-} from '../../common/constants'
-import {
-  getAIGShellFrameInsets
-} from '../main/aigshell-layout'
 import { focusFleetStatusWorkspace } from './fleet-status-navigation'
 import { createFleetStatusStore } from './fleet-status-store.js'
 import { createFleetServiceSelectorStore } from './fleet-service-selector-store.js'
@@ -21,6 +13,7 @@ import './fleet-status.styl'
 
 export default auto(function FleetStatusWorkspace ({
   store,
+  shellGeometry,
   active,
   onAiDiagnose
 }) {
@@ -61,21 +54,7 @@ export default auto(function FleetStatusWorkspace ({
   }, [serviceSelectorStore])
 
   const bookmarkCount = statusState.bookmarkCount
-  const frame = getAIGShellFrameInsets({
-    width: store.width,
-    height: store.height,
-    footerHeight,
-    sidebarWidth,
-    leftSidebarWidth: store.leftSidebarWidth,
-    rightPanelWidth: store.rightPanelWidth,
-    pinned: store.pinned,
-    rightPanelVisible: store.rightPanelVisible,
-    rightPanelPinned: store.rightPanelPinned,
-    pinnedQuickCommandBar: store.pinnedQuickCommandBar,
-    inActiveTerminal: false,
-    quickCommandBoxHeight,
-    resizeTrigger: store.resizeTrigger
-  })
+  const frame = shellGeometry.terminalInsets
   const workspaceProps = {
     className: classnames('fleet-status-workspace', {
       'fleet-status-workspace-active': active

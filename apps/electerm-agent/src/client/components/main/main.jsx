@@ -18,7 +18,14 @@ import TerminalCmdSuggestions from '../terminal/terminal-command-dropdown'
 import TransportsActionStore from '../file-transfer/transports-action-store.jsx'
 import classnames from 'classnames'
 import ShortcutControl from '../shortcuts/shortcut-control.jsx'
-import { isMac, isWin, textTerminalBgValue } from '../../common/constants'
+import {
+  footerHeight,
+  isMac,
+  isWin,
+  quickCommandBoxHeight,
+  sidebarWidth,
+  textTerminalBgValue
+} from '../../common/constants'
 import { ConfigProvider } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 import { NotificationContainer } from '../common/notification'
@@ -48,6 +55,7 @@ import './term-fullscreen.styl'
 import {
   installAgentTakeoverLifecycle
 } from '../ai/agent-takeover-lifecycle.js'
+import { getAIGShellGeometry } from './aigshell-layout'
 
 const FleetStatusWorkspace = lazy(() => import('../fleet-status/fleet-status-workspace'))
 const UpdateCheck = lazy(() => import('./upgrade'))
@@ -203,6 +211,22 @@ export default auto(function Index (props) {
   }
   const copiedTransfer = deepCopy(fileTransfers)
   const copiedHistory = deepCopy(transferHistory)
+  const shellGeometry = getAIGShellGeometry({
+    width: store.width,
+    height: store.height,
+    footerHeight,
+    sidebarWidth,
+    leftSidebarWidth: store.leftSidebarWidth,
+    openedSideBar: store.openedSideBar,
+    pinned: store.pinned,
+    rightPanelWidth: store.rightPanelWidth,
+    rightPanelVisible: store.rightPanelVisible,
+    rightPanelPinned: store.rightPanelPinned,
+    pinnedQuickCommandBar: store.pinnedQuickCommandBar,
+    inActiveTerminal: store.inActiveTerminal,
+    quickCommandBoxHeight,
+    resizeTrigger: store.resizeTrigger
+  })
   const sidebarProps = {
     ...pick(store, [
       'activeItemId',
@@ -214,7 +238,6 @@ export default auto(function Index (props) {
       'settingTab',
       'settingItem',
       'isSyncingSetting',
-      'leftSidebarWidth',
       'transferTab',
       'sidebarPanelTab',
       'openWidgetsModal'
@@ -223,7 +246,8 @@ export default auto(function Index (props) {
     fileTransfers: copiedTransfer,
     transferHistory: copiedHistory,
     upgradeInfo,
-    pinned
+    pinned,
+    shellGeometry
   }
 
   const infoModalProps = {
@@ -247,12 +271,12 @@ export default auto(function Index (props) {
   const rightPanelProps = {
     rightPanelVisible: store.rightPanelVisible,
     rightPanelPinned: store.rightPanelPinned,
-    rightPanelWidth: store.rightPanelWidth,
     title: rightPanelTitle,
     rightPanelTab,
     activeTabId: aiSessionTabId,
     activeSessionStatus: currentTab?.status || '',
-    config
+    config,
+    shellGeometry
   }
   const terminalInfoProps = {
     rightPanelTab,
@@ -341,6 +365,7 @@ export default auto(function Index (props) {
           <div {...terminalWorkspaceProps}>
             <Layout
               store={store}
+              shellGeometry={shellGeometry}
             />
           </div>
           {
@@ -350,6 +375,7 @@ export default auto(function Index (props) {
                   <Suspense fallback={null}>
                     <FleetStatusWorkspace
                       store={store}
+                      shellGeometry={shellGeometry}
                       active
                     />
                   </Suspense>
