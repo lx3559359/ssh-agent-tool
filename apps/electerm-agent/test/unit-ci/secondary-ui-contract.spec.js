@@ -42,6 +42,129 @@ function readClient (relativePath) {
   return fs.readFileSync(path.join(clientRoot, relativePath), 'utf8')
 }
 
+async function compileStylusSource (source, filename) {
+  return await new Promise((resolve, reject) => {
+    stylus(source)
+      .set('filename', filename)
+      .render((error, css) => error ? reject(error) : resolve(css))
+  })
+}
+
+function topLevelCssBlocks (source) {
+  const blocks = []
+  let cursor = 0
+  while (cursor < source.length) {
+    const openBrace = source.indexOf('{', cursor)
+    if (openBrace === -1) break
+    let depth = 1
+    let closeBrace = openBrace + 1
+    while (closeBrace < source.length && depth > 0) {
+      if (source[closeBrace] === '{') depth += 1
+      else if (source[closeBrace] === '}') depth -= 1
+      closeBrace += 1
+    }
+    assert.equal(depth, 0, `Unclosed CSS block: ${source.slice(cursor, openBrace).trim()}`)
+    blocks.push({
+      header: source.slice(cursor, openBrace).trim(),
+      body: source.slice(openBrace + 1, closeBrace - 1)
+    })
+    cursor = closeBrace
+  }
+  return blocks
+}
+
+function normalizeCssHeader (header) {
+  return header
+    .split(',')
+    .map(part => part.trim().replace(/\s+/g, ' '))
+    .join(', ')
+}
+
+function cssDeclarations (body) {
+  return Object.fromEntries(
+    body
+      .split(';')
+      .map(declaration => declaration.trim())
+      .filter(Boolean)
+      .map(declaration => {
+        const colon = declaration.indexOf(':')
+        assert.notEqual(colon, -1, `Invalid CSS declaration: ${declaration}`)
+        return [
+          declaration.slice(0, colon).trim(),
+          declaration.slice(colon + 1).trim().replace(/\s+/g, ' ')
+        ]
+      })
+  )
+}
+
+function assertCssRule (blocks, selector, expectedDeclarations) {
+  const normalizedSelector = normalizeCssHeader(selector)
+  const matches = blocks.filter(block => normalizeCssHeader(block.header) === normalizedSelector)
+  assert.equal(matches.length, 1, `Expected one CSS rule for ${selector}`)
+  const declarations = cssDeclarations(matches[0].body)
+  for (const [property, value] of Object.entries(expectedDeclarations)) {
+    assert.equal(declarations[property], value, `${selector} must define ${property}`)
+  }
+}
+
+async function assertUiElevationContracts (source) {
+  const filename = path.join(clientRoot, 'css/includes/secondary-ui.styl')
+  const css = await compileStylusSource(source, filename)
+  const blocks = topLevelCssBlocks(css)
+  assertCssRule(blocks, '.sp-level-0', {
+    color: 'var(--sp-text)',
+    background: 'var(--sp-page)'
+  })
+  assertCssRule(blocks, '.sp-level-1', {
+    color: 'var(--sp-text)',
+    background: 'var(--sp-surface)',
+    border: '1px solid var(--sp-border)',
+    'border-radius': 'var(--sp-radius-control)',
+    'box-shadow': 'inset 0 1px 0 var(--sp-highlight-top), var(--sp-shadow-control)'
+  })
+  assertCssRule(blocks, '.sp-level-2, .sp-card', {
+    color: 'var(--sp-text)',
+    background: 'var(--sp-surface-elevated)',
+    border: '1px solid var(--sp-border)',
+    'border-radius': 'var(--sp-radius-card)',
+    'box-shadow': 'inset 0 1px 0 var(--sp-highlight-top), var(--sp-shadow-card)'
+  })
+  assertCssRule(blocks, '.sp-level-3', {
+    color: 'var(--sp-text)',
+    background: 'var(--sp-surface-elevated)',
+    border: '1px solid var(--sp-border-strong)',
+    'border-radius': 'var(--sp-radius-overlay)',
+    'box-shadow': 'inset 0 1px 0 var(--sp-highlight-top), var(--sp-shadow-overlay)'
+  })
+  assertCssRule(blocks, '.sp-lift-interactive', {
+    transition: 'transform var(--sp-motion-fast) ease, box-shadow var(--sp-motion-fast) ease'
+  })
+  assertCssRule(blocks, '.sp-lift-interactive:hover', {
+    transform: 'translateY(-1px)'
+  })
+  assertCssRule(blocks, '.sp-lift-interactive:active', {
+    transform: 'translateY(0)'
+  })
+
+  const reducedMotion = blocks.filter(block => (
+    normalizeCssHeader(block.header) === '@media (prefers-reduced-motion: reduce)'
+  ))
+  assert.equal(reducedMotion.length, 1, 'Expected one reduced-motion media rule')
+  const reducedMotionBlocks = topLevelCssBlocks(reducedMotion[0].body)
+  assertCssRule(reducedMotionBlocks, '.sp-lift-interactive', {
+    transition: 'none'
+  })
+  assertCssRule(reducedMotionBlocks, '.sp-lift-interactive:hover, .sp-lift-interactive:active', {
+    transform: 'none'
+  })
+}
+
+const terminalCanvasSelectorPattern = /\.(?:xterm|term-wrap)\b/
+
+function assertNoTerminalCanvasSelectors (source) {
+  assert.doesNotMatch(source, terminalCanvasSelectorPattern)
+}
+
 function moduleUrl (relativePath) {
   return pathToFileURL(path.join(clientRoot, relativePath)).href
 }
@@ -692,17 +815,33 @@ test('menu builders keep action keys while exposing runtime bilingual label keys
   assert.equal(enItems.find(item => item.key === 'delete').labelKey, 'shellpilotBookmarkDeleteConnection')
 })
 
-test('defines L0-L3 contracts without styling terminal canvases', () => {
+test('defines L0-L3 contracts without styling terminal canvases', async () => {
   const source = readClient('css/includes/secondary-ui.styl')
-  for (const selector of ['.sp-level-0', '.sp-level-1', '.sp-level-2', '.sp-level-3']) {
-    assert.match(source, new RegExp(selector.replace('.', '\\.')))
+  await assertUiElevationContracts(source)
+  assertNoTerminalCanvasSelectors(source)
+})
+
+test('elevation contract validator rejects tokens assigned to the wrong levels', async () => {
+  const source = readClient('css/includes/secondary-ui.styl')
+  const misplacedTokens = source
+    .replace('var(--sp-shadow-control)', '__CONTROL_SHADOW__')
+    .replace('var(--sp-shadow-overlay)', 'var(--sp-shadow-control)')
+    .replace('__CONTROL_SHADOW__', 'var(--sp-shadow-overlay)')
+  await assert.rejects(assertUiElevationContracts(misplacedTokens))
+})
+
+test('terminal selector guard rejects decorated terminal canvas selectors', () => {
+  for (const selector of [
+    '.xterm:hover',
+    '.xterm.foo',
+    '.xterm-screen',
+    '.term-wrap:focus'
+  ]) {
+    assert.throws(() => assertNoTerminalCanvasSelectors(`${selector}\n  color red`))
   }
-  assert.match(source, /box-shadow[^\r\n]*var\(--sp-shadow-control\)/)
-  assert.match(source, /box-shadow[^\r\n]*var\(--sp-shadow-card\)/)
-  assert.match(source, /box-shadow[^\r\n]*var\(--sp-shadow-overlay\)/)
-  assert.match(source, /@media \(prefers-reduced-motion: reduce\)/)
-  assert.doesNotMatch(source, /\.xterm(?:\s|,|$)/)
-  assert.doesNotMatch(source, /\.term-wrap(?:\s|,|$)/)
+  for (const selector of ['.xterminal', '.term-wrapper']) {
+    assert.doesNotThrow(() => assertNoTerminalCanvasSelectors(`${selector}\n  color red`))
+  }
 })
 
 test('SFTP overflow more defaults safely to English and follows the current preview translator', async () => {
@@ -733,11 +872,7 @@ test('SFTP overflow more defaults safely to English and follows the current prev
 
 async function compileStylus (relativePath) {
   const absolutePath = path.join(clientRoot, relativePath)
-  return await new Promise((resolve, reject) => {
-    stylus(readClient(relativePath))
-      .set('filename', absolutePath)
-      .render((error, css) => error ? reject(error) : resolve(css))
-  })
+  return await compileStylusSource(readClient(relativePath), absolutePath)
 }
 
 test('long Chinese and English fixture copy remains visible at minimum window zoom equivalents', { timeout: 30000 }, async (t) => {
