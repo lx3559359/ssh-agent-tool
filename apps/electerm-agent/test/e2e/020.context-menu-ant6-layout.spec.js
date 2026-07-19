@@ -295,7 +295,6 @@ test('real Ant6 menu fits a 393px window at 200% effective viewport', async () =
   try {
     const popup = await openMenu(page)
     const depth = await inspectMenuDepth(popup)
-    console.log(`ANT6_HIGH_ZOOM_MENU_DEPTH=${JSON.stringify(depth)}`)
     assertMenuDepth(depth)
 
     const reachability = await popup.locator('.ant-dropdown-menu').evaluate(menu => {

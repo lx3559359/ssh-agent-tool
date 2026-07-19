@@ -172,6 +172,42 @@ async function setWindowCase (electronApp, page, size, zoom) {
   await page.waitForTimeout(160)
 }
 
+async function captureWindowState (electronApp) {
+  return electronApp.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()[0]
+    if (!window || window.isDestroyed()) {
+      throw new Error('Cannot capture state for a closed BrowserWindow')
+    }
+    const [minimumWidth, minimumHeight] = window.getMinimumSize()
+    const [contentWidth, contentHeight] = window.getContentSize()
+    return {
+      minimumSize: { width: minimumWidth, height: minimumHeight },
+      contentSize: { width: contentWidth, height: contentHeight },
+      bounds: window.getBounds(),
+      zoom: window.webContents.getZoomFactor()
+    }
+  })
+}
+
+async function restoreWindowState (electronApp, page, state) {
+  const result = await electronApp.evaluate(({ BrowserWindow }, original) => {
+    const window = BrowserWindow.getAllWindows()[0]
+    if (!window || window.isDestroyed()) {
+      return { restored: false, reason: 'window-closed' }
+    }
+    const webContents = window.webContents
+    if (webContents && !webContents.isDestroyed()) {
+      webContents.setZoomFactor(original.zoom)
+    }
+    window.setContentSize(original.contentSize.width, original.contentSize.height)
+    window.setBounds(original.bounds)
+    window.setMinimumSize(original.minimumSize.width, original.minimumSize.height)
+    return { restored: true }
+  }, state)
+  if (result.restored && !page.isClosed()) await page.waitForTimeout(160)
+  return result
+}
+
 async function resetSurface (page, language) {
   await page.keyboard.press('Escape').catch(() => {})
   await page.keyboard.press('Escape').catch(() => {})
@@ -1821,71 +1857,80 @@ test('context menus keep pointer placement and compact long-menu reachability', 
     expect(submenuPointerReachable, JSON.stringify({ runner: browserName })).toBe(true)
 
     await resetSurface(page, 'en_us')
-    const originalMinimumSize = await electronApp.evaluate(({ BrowserWindow }) => {
-      const window = BrowserWindow.getAllWindows()[0]
-      const [width, height] = window.getMinimumSize()
-      window.setMinimumSize(1, 1)
-      return { width, height }
-    })
-    await setWindowCase(electronApp, page, { width: 393, height: 267 }, 2)
-    const highZoomSystemMenu = await openSystemMenu(page, { dispatchClick: true })
-    const highZoomDepth = await inspectMenuDepth(highZoomSystemMenu)
-    console.log(`SECONDARY_SYSTEM_MENU_HIGH_ZOOM=${JSON.stringify(highZoomDepth)}`)
-    expect(highZoomDepth.viewport.width).toBeGreaterThanOrEqual(196)
-    expect(highZoomDepth.viewport.width).toBeLessThanOrEqual(198)
-    expect(highZoomDepth.viewport.height).toBeGreaterThanOrEqual(132)
-    expect(highZoomDepth.viewport.height).toBeLessThanOrEqual(135)
-    assertMenuDepth(highZoomDepth, {
-      runner: browserName,
-      surface: 'system-menu',
-      viewport: '393x267@200%'
-    })
-    const highZoomReachability = await highZoomSystemMenu.evaluate(menu => {
-      const items = [...menu.querySelectorAll('.context-item')]
-      const visibleInside = item => {
-        const itemRect = item.getBoundingClientRect()
-        const menuRect = menu.getBoundingClientRect()
-        return itemRect.top >= menuRect.top - 1 && itemRect.bottom <= menuRect.bottom + 1
-      }
-      menu.scrollTop = 0
-      const firstReachable = visibleInside(items[0])
-      items.at(-1).scrollIntoView({ block: 'nearest' })
-      return {
-        itemCount: items.length,
-        firstReachable,
-        lastReachable: visibleInside(items.at(-1)),
-        scrollTop: menu.scrollTop,
-        maxScrollTop: menu.scrollHeight - menu.clientHeight
-      }
-    })
-    expect(highZoomReachability.itemCount, JSON.stringify({ browserName, highZoomReachability }))
-      .toBeGreaterThan(1)
-    expect(highZoomReachability.firstReachable, JSON.stringify({ browserName, highZoomReachability }))
-      .toBe(true)
-    expect(highZoomReachability.lastReachable, JSON.stringify({ browserName, highZoomReachability }))
-      .toBe(true)
-    expect(highZoomReachability.scrollTop, JSON.stringify({ browserName, highZoomReachability }))
-      .toBeGreaterThan(0)
-    expect(highZoomReachability.scrollTop, JSON.stringify({ browserName, highZoomReachability }))
-      .toBeLessThanOrEqual(highZoomReachability.maxScrollTop + 1)
+    const originalWindowState = await captureWindowState(electronApp)
+    let highZoomError
+    try {
+      await electronApp.evaluate(({ BrowserWindow }) => {
+        const window = BrowserWindow.getAllWindows()[0]
+        if (!window || window.isDestroyed()) {
+          throw new Error('Cannot resize a closed BrowserWindow')
+        }
+        window.setMinimumSize(1, 1)
+      })
+      await setWindowCase(electronApp, page, { width: 393, height: 267 }, 2)
+      const highZoomSystemMenu = await openSystemMenu(page, { dispatchClick: true })
+      const highZoomDepth = await inspectMenuDepth(highZoomSystemMenu)
+      expect(highZoomDepth.viewport.width).toBeGreaterThanOrEqual(196)
+      expect(highZoomDepth.viewport.width).toBeLessThanOrEqual(198)
+      expect(highZoomDepth.viewport.height).toBeGreaterThanOrEqual(132)
+      expect(highZoomDepth.viewport.height).toBeLessThanOrEqual(135)
+      assertMenuDepth(highZoomDepth, {
+        runner: browserName,
+        surface: 'system-menu',
+        viewport: '393x267@200%'
+      })
+      const highZoomReachability = await highZoomSystemMenu.evaluate(menu => {
+        const items = [...menu.querySelectorAll('.context-item')]
+        const visibleInside = item => {
+          const itemRect = item.getBoundingClientRect()
+          const menuRect = menu.getBoundingClientRect()
+          return itemRect.top >= menuRect.top - 1 && itemRect.bottom <= menuRect.bottom + 1
+        }
+        menu.scrollTop = 0
+        const firstReachable = visibleInside(items[0])
+        items.at(-1).scrollIntoView({ block: 'nearest' })
+        return {
+          itemCount: items.length,
+          firstReachable,
+          lastReachable: visibleInside(items.at(-1)),
+          scrollTop: menu.scrollTop,
+          maxScrollTop: menu.scrollHeight - menu.clientHeight
+        }
+      })
+      expect(highZoomReachability.itemCount, JSON.stringify({ browserName, highZoomReachability }))
+        .toBeGreaterThan(1)
+      expect(highZoomReachability.firstReachable, JSON.stringify({ browserName, highZoomReachability }))
+        .toBe(true)
+      expect(highZoomReachability.lastReachable, JSON.stringify({ browserName, highZoomReachability }))
+        .toBe(true)
+      expect(highZoomReachability.scrollTop, JSON.stringify({ browserName, highZoomReachability }))
+        .toBeGreaterThan(0)
+      expect(highZoomReachability.scrollTop, JSON.stringify({ browserName, highZoomReachability }))
+        .toBeLessThanOrEqual(highZoomReachability.maxScrollTop + 1)
 
-    const highZoomSubmenuTrigger = highZoomSystemMenu.locator('.with-sub-menu').first()
-    await highZoomSubmenuTrigger.scrollIntoViewIfNeeded()
-    await highZoomSubmenuTrigger.hover()
-    const highZoomSubmenu = highZoomSubmenuTrigger.locator('.sub-context-menu')
-    await expect(highZoomSubmenu).toBeVisible()
-    const highZoomSubmenuReachable = await highZoomSubmenu.evaluate(element => {
-      const rect = element.getBoundingClientRect()
-      const x = Math.min(window.innerWidth - 1, Math.max(0, rect.left + rect.width / 2))
-      const y = Math.min(window.innerHeight - 1, Math.max(0, rect.top + Math.min(rect.height, 32) / 2))
-      return element.contains(document.elementFromPoint(x, y))
-    })
-    expect(highZoomSubmenuReachable, JSON.stringify({ browserName })).toBe(true)
+      const highZoomSubmenuTrigger = highZoomSystemMenu.locator('.with-sub-menu').first()
+      await highZoomSubmenuTrigger.scrollIntoViewIfNeeded()
+      await highZoomSubmenuTrigger.hover()
+      const highZoomSubmenu = highZoomSubmenuTrigger.locator('.sub-context-menu')
+      await expect(highZoomSubmenu).toBeVisible()
+      const highZoomSubmenuReachable = await highZoomSubmenu.evaluate(element => {
+        const rect = element.getBoundingClientRect()
+        const x = Math.min(window.innerWidth - 1, Math.max(0, rect.left + rect.width / 2))
+        const y = Math.min(window.innerHeight - 1, Math.max(0, rect.top + Math.min(rect.height, 32) / 2))
+        return element.contains(document.elementFromPoint(x, y))
+      })
+      expect(highZoomSubmenuReachable, JSON.stringify({ browserName })).toBe(true)
+    } catch (error) {
+      highZoomError = error
+      throw error
+    } finally {
+      await cleanupPreservingPrimaryError(
+        () => restoreWindowState(electronApp, page, originalWindowState),
+        highZoomError
+      )
+    }
 
     await resetSurface(page, 'en_us')
-    await electronApp.evaluate(({ BrowserWindow }, size) => {
-      BrowserWindow.getAllWindows()[0].setMinimumSize(size.width, size.height)
-    }, originalMinimumSize)
     await setWindowCase(electronApp, page, { width: 1100, height: 700 }, 1)
     const desktopSystemMenu = await openSystemMenu(page)
     const desktopSubmenuTrigger = desktopSystemMenu.locator('.with-sub-menu').first()
