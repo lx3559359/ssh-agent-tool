@@ -10,6 +10,7 @@ const {
   getSpawnStatus,
   assertSpawnSuccess
 } = require('./github-release-utils')
+const { assertCurrentReleaseBaseline } = require('./release-version-baseline')
 
 const repo = process.env.GITHUB_REPOSITORY || 'lx3559359/ssh-agent-tool'
 const distDir = path.resolve(__dirname, '../../dist')
@@ -43,6 +44,7 @@ function executeGitHubReleaseCommands (commands, spawn = spawnSync) {
 }
 
 function main () {
+  assertCurrentReleaseBaseline()
   if (!fs.existsSync(distDir)) {
     throw new Error(`dist 目录不存在，请先运行 Windows 打包：${distDir}`)
   }

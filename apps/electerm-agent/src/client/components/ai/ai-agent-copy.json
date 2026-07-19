@@ -17,6 +17,7 @@
   "noResponseText": "AI 未返回内容。",
   "errorLabel": "错误",
   "toolCall": {
+    "cancelledDetail": "任务已取消，未完成的操作没有继续执行。",
     "status": {
       "running": "执行中",
       "completed": "已完成",

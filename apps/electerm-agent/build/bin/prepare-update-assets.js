@@ -11,6 +11,7 @@ const {
 } = require('./github-release-utils')
 const { writeChecksums } = require('./update-checksums')
 const { writeUpdateReleaseIndex } = require('./update-release-index')
+const { assertCurrentReleaseBaseline } = require('./release-version-baseline')
 
 function readUpdateMetadataVersion (filePath) {
   if (!fs.existsSync(filePath)) {
@@ -123,6 +124,7 @@ function prepareUpdateAssets (options = {}) {
 }
 
 function main () {
+  assertCurrentReleaseBaseline()
   const result = prepareUpdateAssets()
   console.log('ShellPilot online update assets are prepared.')
   console.log(`- latest.yml: ${result.copiedLatest ? `created from ${path.basename(result.localMetadataPath)}` : 'kept existing file'}`)

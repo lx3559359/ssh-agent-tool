@@ -127,7 +127,9 @@ async function startAgentApi () {
 }
 
 async function acceptHostKeyIfShown (client) {
-  const modal = client.locator('.custom-modal-wrap').last()
+  const modal = client.locator('.custom-modal-wrap')
+    .filter({ hasText: 'SHA256:' })
+    .last()
   if (await modal.waitFor({ state: 'visible', timeout: 20000 }).then(() => true).catch(() => false)) {
     await expect(modal).toContainText('SHA256:')
     await modal.locator('button.custom-modal-ok-btn, button.ant-btn-primary').last().click()

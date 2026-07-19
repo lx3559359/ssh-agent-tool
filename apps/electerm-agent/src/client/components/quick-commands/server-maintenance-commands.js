@@ -561,8 +561,8 @@ echo "未检测到 firewalld 或 ufw，请手动确认 iptables/nftables 规则"
     command({
       id: 'builtin-server-service-status',
       name: '服务状态查询',
-      description: '默认查询 nginx，可改成 docker、mysql 等服务名。',
-      usage: '把服务名改成你要排查的服务后再执行。',
+      description: '自动识别当前服务器上的 systemd 服务，可多选查看运行状态和日志。',
+      usage: '连接 SSH 后从列表选择服务；未识别到时也可以手动输入完整服务名。',
       labels: [NEED_EDIT, '服务'],
       editBeforeRun: true,
       confirmRequired: true,
@@ -570,10 +570,13 @@ echo "未检测到 firewalld 或 ufw，请手动确认 iptables/nftables 规则"
         {
           name: '服务名',
           label: '服务名',
-          type: 'input',
-          defaultValue: '{{服务名}}',
-          placeholder: '例如 nginx、docker、mysql',
-          help: '填写 systemd 服务名；不确定时可先用“失败服务与日志”查看。'
+          type: 'service-target',
+          targetType: 'service',
+          sources: ['systemd'],
+          multiple: true,
+          defaultValue: '',
+          placeholder: '自动识别后选择一个或多个服务',
+          help: '支持多选；也可以输入完整的 systemd 服务名后按回车。'
         },
         {
           name: '日志行数',
@@ -597,11 +600,25 @@ echo "未检测到 firewalld 或 ufw，请手动确认 iptables/nftables 规则"
         }
       ],
       advancedUsage: [
-        '重启服务：sudo systemctl restart {{服务名}}',
-        '开机自启：sudo systemctl enable {{服务名}}'
+        '需要启动、停止或重启服务时，请使用“服务控制”，修改前会生成回滚脚本。',
+        '服务列表来自当前连接的服务器，不会在后台持续扫描。'
       ],
       commands: [
-        step('SERVICE="{{服务名}}"\nLOG_LINES="{{日志行数}}"\nSHOW_LOG="{{查看日志}}"\nif [ -z "$SERVICE" ]; then echo "请填写服务名"; exit 1; fi\nsystemctl status "$SERVICE" --no-pager\nif [ "$SHOW_LOG" = "yes" ]; then\n  journalctl -u "$SERVICE" -n "$LOG_LINES" --no-pager\nfi')
+        step(`SERVICES="{{服务名}}"
+LOG_LINES="{{日志行数}}"
+SHOW_LOG="{{查看日志}}"
+if [ -z "$SERVICES" ]; then echo "请选择或填写服务名"; exit 1; fi
+OLD_IFS="$IFS"
+IFS=','
+for SERVICE in $SERVICES; do
+  case "$SERVICE" in *[!a-zA-Z0-9_.@-]*|"") echo "服务名称不合法: $SERVICE"; continue;; esac
+  echo "===== $SERVICE ====="
+  systemctl status "$SERVICE" --no-pager || true
+  if [ "$SHOW_LOG" = "yes" ]; then
+    journalctl -u "$SERVICE" -n "$LOG_LINES" --no-pager || true
+  fi
+done
+IFS="$OLD_IFS"`)
       ]
     }),
     command({
@@ -868,7 +885,17 @@ done`)
         confirmValue: 'yes'
       },
       params: [
-        inputParam('服务名称', '服务名称', 'nginx', '填写 systemd 服务名，例如 nginx、docker、mysql。', '例如 nginx'),
+        {
+          name: '服务名称',
+          label: '服务名称',
+          type: 'service-target',
+          targetType: 'service',
+          sources: ['systemd'],
+          multiple: false,
+          defaultValue: '',
+          placeholder: '自动识别后选择服务',
+          help: '列表来自当前 SSH 服务器；也可以手动输入完整 systemd 服务名。'
+        },
         selectParam('操作', '操作', 'status', '默认查询状态；启动、停止、重启、重载和开机自启属于修改操作。', [
           { label: '查询状态', value: 'status' },
           { label: '启动', value: 'start' },
@@ -928,7 +955,17 @@ echo "回滚脚本: $ROLLBACK_SCRIPT"`)
         confirmValue: 'yes'
       },
       params: [
-        inputParam('容器名称', '容器名称或 ID', '', '留空会先列出容器；操作指定容器时填写名称或 ID。', '例如 web-api'),
+        {
+          name: '容器名称',
+          label: '容器名称或 ID',
+          type: 'service-target',
+          targetType: 'container',
+          sources: ['docker', 'compose'],
+          multiple: false,
+          defaultValue: '',
+          placeholder: '自动识别后选择容器',
+          help: '列表来自当前 SSH 服务器；留空执行时会列出全部容器。'
+        },
         selectParam('操作', '操作', 'logs', '日志、配置和资源为只读；启动、停止和重启会修改容器状态。', [
           { label: '查看日志', value: 'logs' },
           { label: '查看配置', value: 'inspect' },

@@ -52,7 +52,9 @@ function formatRawJson (args, result) {
 }
 
 export default function AgentToolCallCard ({ toolCall }) {
-  const [expanded, setExpanded] = useState(toolCall.status === 'running')
+  const [expanded, setExpanded] = useState(
+    toolCall.status === 'running' && toolCall.name !== 'send_terminal_command'
+  )
   const [outputExpanded, setOutputExpanded] = useState(false)
   const [rawExpanded, setRawExpanded] = useState(false)
   const [fillActionReason, setFillActionReason] = useState('')

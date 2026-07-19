@@ -373,6 +373,49 @@ export function createSafetyCommandEntrypoint (options = {}) {
     }
   }
 
+  function canUseUntrackedReadonlyFallback (run, request, source) {
+    return run.runOptions.allowUntrackedReadonlyFallback === true &&
+      source === 'quick-command' &&
+      request.risk === 'readonly' &&
+      request.requiresConfirmation !== true &&
+      (run.runOptions.executionMode || 'foreground') === 'foreground' &&
+      !run.hookState &&
+      !run.riskDelegation
+  }
+
+  async function runUntrackedReadonlyFallback (
+    run,
+    request,
+    executionPlan,
+    readinessError
+  ) {
+    const submittedCommand = executionPlan.submittedCommand
+    const token = `untracked-${request.id}`
+    if (!isCurrent(run)) return staleRunResult(request)
+    if (submitCommand(submittedCommand, token) === false) {
+      throw new Error('快捷命令降级发送失败，命令尚未发送。')
+    }
+    const completion = {
+      operationId: request.id,
+      command: run.command,
+      submittedCommand,
+      exitCode: null,
+      untracked: true,
+      trackerError: safeErrorMessage(readinessError)
+    }
+    recordRunEvent(run, 'completed', 'completed')
+    return {
+      sent: true,
+      operationId: request.id,
+      token,
+      request,
+      execution: executionPlan,
+      untracked: true,
+      trackerError: completion.trackerError,
+      waitForCompletion: async () => completion
+    }
+  }
+
   async function armRetry (run, request, error, cancelOperation) {
     let cancelError
     if (cancelOperation && run.operationId) {
@@ -545,12 +588,6 @@ export function createSafetyCommandEntrypoint (options = {}) {
       if (!supportedSources.has(source)) {
         throw new Error('命令安全事务来源不受支持。')
       }
-      await ensureTrackerReady({
-        command,
-        source,
-        executionMode: runOptions.executionMode || 'foreground'
-      })
-      if (!isCurrent(run)) return staleRunResult({ id: run.operationId })
       const operationId = run.operationId
       const executionPlan = buildCommandExecution({
         command,
@@ -594,6 +631,25 @@ export function createSafetyCommandEntrypoint (options = {}) {
         }
       }
       run.operationId = request.id
+      try {
+        await ensureTrackerReady({
+          command,
+          source,
+          executionMode: runOptions.executionMode || 'foreground',
+          risk: request.risk
+        })
+      } catch (error) {
+        if (canUseUntrackedReadonlyFallback(run, request, source)) {
+          return runUntrackedReadonlyFallback(
+            run,
+            request,
+            executionPlan,
+            error
+          )
+        }
+        throw error
+      }
+      if (!isCurrent(run)) return staleRunResult(request)
       const prepared = await runner.prepare(request)
       if (prepared?.state !== operationStates.awaitingConfirmation) {
         throw new Error(prepared?.error || '无法安全准备执行，命令尚未发送。')

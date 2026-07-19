@@ -690,6 +690,65 @@
   max-width 760px
   margin 0 auto
 
+.sp-ai-provider-guide
+  max-width 900px
+  margin 8px auto 18px
+  padding-top 18px
+  border-top 1px solid var(--sp-border)
+
+.sp-ai-provider-guide-head
+  margin-bottom 8px
+
+.sp-ai-provider-guide-title
+  color var(--text-light)
+  font-size 14px
+  font-weight 700
+
+.sp-ai-provider-guide-description
+  margin-top 4px
+  color var(--text-dark)
+  font-size 12px
+  line-height 1.6
+
+.sp-ai-provider-list
+  display grid
+  grid-template-columns repeat(2, minmax(0, 1fr))
+  column-gap 22px
+
+.sp-ai-provider-item
+  display flex
+  align-items center
+  justify-content space-between
+  gap 12px
+  min-width 0
+  padding 12px 0
+  border-bottom 1px solid var(--sp-border)
+
+.sp-ai-provider-item-main
+  min-width 0
+
+.sp-ai-provider-name-row
+  display flex
+  align-items center
+  gap 6px
+  color var(--text-light)
+
+.sp-ai-provider-description
+  margin-top 3px
+  color var(--text)
+  font-size 12px
+  line-height 1.5
+
+.sp-ai-provider-tags
+  margin-top 2px
+  color var(--text-dark)
+  font-size 11px
+
+.sp-ai-provider-actions
+  flex 0 0 auto
+  a
+    display inline-flex
+
 .sp-ai-config-advanced
   margin-top 6px
   border-top 1px solid var(--sp-border)
@@ -731,3 +790,8 @@
   .sp-ai-config-advanced
     .ant-collapse-extra
       display none
+  .sp-ai-provider-list
+    grid-template-columns 1fr
+  .sp-ai-provider-item
+    align-items flex-start
+    flex-direction column

@@ -705,6 +705,10 @@ test('readonly tool card uses the shared fill controller and exposes disabled re
     path.join(aiRoot, 'agent-tool-call-card.jsx'),
     'utf8'
   )
+  const agentSource = fs.readFileSync(
+    path.join(aiRoot, 'agent.js'),
+    'utf8'
+  )
   const copy = JSON.parse(fs.readFileSync(
     path.join(aiRoot, 'ai-agent-copy.json'),
     'utf8'
@@ -715,10 +719,16 @@ test('readonly tool card uses the shared fill controller and exposes disabled re
   assert.equal(copy.toolCall.copyCommand, '复制命令')
   assert.equal(copy.toolCall.fillTerminal, '填入终端')
   assert.equal(copy.toolCall.status.cancelled, '已取消')
+  assert.equal(
+    copy.toolCall.cancelledDetail,
+    '任务已取消，未完成的操作没有继续执行。'
+  )
   assert.equal(copy.toolCall.truncatedLabel, '截断')
   assert.equal(copy.toolCall.yesLabel, '是')
   assert.equal(copy.toolCall.noLabel, '否')
   assert.match(source, /aiAgentCopy\.toolCall\.readonlyTitle/)
+  assert.match(source, /toolCall\.name !== 'send_terminal_command'/)
+  assert.match(agentSource, /aiAgentCopy\.toolCall\.cancelledDetail/)
   assert.match(source, /presentation\.command/)
   assert.match(source, /presentation\.target/)
   assert.match(source, /presentation\.durationMs/)

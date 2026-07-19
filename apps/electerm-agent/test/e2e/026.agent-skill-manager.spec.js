@@ -3,6 +3,7 @@ const { once } = require('node:events')
 const fsp = require('node:fs/promises')
 const os = require('node:os')
 const path = require('node:path')
+const fs = require('node:fs')
 const tar = require('tar')
 const { test, expect } = require('@playwright/test')
 const {
@@ -12,6 +13,14 @@ const {
 } = require('./common/bookmark-lifecycle')
 
 test.setTimeout(150000)
+
+async function captureAuditScreenshot (client, fileName) {
+  const root = process.env.SHELLPILOT_AUDIT_DIR
+  if (!root) return
+  const outputPath = path.resolve(root, fileName)
+  fs.mkdirSync(path.dirname(outputPath), { recursive: true })
+  await client.screenshot({ path: outputPath, animations: 'disabled' })
+}
 
 function skillDocument (version) {
   return `---
@@ -177,6 +186,7 @@ test('isolated Skill manager covers conversational draft, review, selection and 
 
     await openSkillManager(client)
     await expect(client.locator('.agent-skill-manager .ant-empty').first()).toBeVisible()
+    await captureAuditScreenshot(client, '09-skill-empty-state.png')
     await client.locator('.agent-skill-manager-actions button').first().click()
     const creator = client.locator('.agent-skill-create-modal')
     await expect(creator).toBeVisible()
