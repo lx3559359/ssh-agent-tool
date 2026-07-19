@@ -59,20 +59,20 @@
     background var(--sp-surface-inset) !important
     border-color var(--sp-border) !important
     box-shadow inset 0 2px 4px rgba(0, 0, 0, .08)
-  .ant-input:hover:not([disabled])
-  textarea:hover:not([disabled])
-  .ant-input-affix-wrapper:hover:not(.ant-input-affix-wrapper-disabled)
-  .ant-input-number:hover:not(.ant-input-number-disabled)
-  .ant-select:not(.ant-select-disabled):hover .ant-select-selector
+  .ant-input:hover:not([disabled]):not(.ant-input-status-error)
+  textarea:hover:not([disabled]):not(.ant-input-status-error)
+  .ant-input-affix-wrapper:hover:not(.ant-input-affix-wrapper-disabled):not(.ant-input-status-error):not(.ant-input-affix-wrapper-status-error)
+  .ant-input-number:hover:not(.ant-input-number-disabled):not(.ant-input-number-status-error)
+  .ant-select:not(.ant-select-disabled):not(.ant-select-status-error):hover .ant-select-selector
     border-color var(--sp-primary) !important
-  .ant-input:focus
-  textarea:focus
-  .ant-input-focused
-  .ant-input-affix-wrapper-focused
-  .ant-input-affix-wrapper:focus-within
-  .ant-input-number-focused
-  .ant-input-number:focus-within
-  .ant-select-focused .ant-select-selector
+  .ant-input:focus:not([disabled]):not(.ant-input-status-error)
+  textarea:focus:not([disabled]):not(.ant-input-status-error)
+  .ant-input-focused:not(.ant-input-disabled):not(.ant-input-status-error)
+  .ant-input-affix-wrapper-focused:not(.ant-input-affix-wrapper-disabled):not(.ant-input-status-error):not(.ant-input-affix-wrapper-status-error)
+  .ant-input-affix-wrapper:focus-within:not(.ant-input-affix-wrapper-disabled):not(.ant-input-status-error):not(.ant-input-affix-wrapper-status-error)
+  .ant-input-number-focused:not(.ant-input-number-disabled):not(.ant-input-number-status-error)
+  .ant-input-number:focus-within:not(.ant-input-number-disabled):not(.ant-input-number-status-error)
+  .ant-select-focused:not(.ant-select-disabled):not(.ant-select-status-error) .ant-select-selector
     border-color var(--sp-primary) !important
     box-shadow 0 0 0 2px var(--sp-primary-soft) !important
   .ant-input-status-error
@@ -91,6 +91,10 @@
     color var(--sp-text-disabled) !important
     background var(--sp-surface-subtle) !important
     border-color var(--sp-border) !important
+    box-shadow none !important
+  .ant-input-affix-wrapper > .ant-input
+  .ant-input-affix-wrapper > .ant-input:focus:not([disabled]):not(.ant-input-status-error)
+    background transparent !important
     box-shadow none !important
 
 .sp-settings-page-header

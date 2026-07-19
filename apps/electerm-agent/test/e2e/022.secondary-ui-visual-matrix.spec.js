@@ -199,126 +199,185 @@ async function openSettings (page) {
 }
 
 async function inspectSettingsControlStates (page) {
-  return page.locator('.sp-settings-form').evaluate(form => {
-    const previousFocus = document.activeElement
-    const fixture = document.createElement('div')
-    fixture.dataset.settingsStateFixture = 'true'
-    fixture.style.position = 'fixed'
-    fixture.style.left = '-9999px'
-    fixture.style.width = '240px'
-    form.appendChild(fixture)
+  const form = page.locator('.sp-settings-form')
+  let result
+  let cleanup = { fixtureRemoved: false, focusRestored: false }
 
-    const snapshot = element => {
-      const style = window.getComputedStyle(element)
+  try {
+    result = await form.evaluate(form => {
+      const fixture = document.createElement('div')
+      fixture.dataset.settingsStateFixture = 'true'
+      fixture.style.position = 'fixed'
+      fixture.style.left = '8px'
+      fixture.style.bottom = '8px'
+      fixture.style.width = '240px'
+      fixture.style.zIndex = '9999'
+      fixture.style.display = 'grid'
+      fixture.style.gap = '4px'
+      fixture.__previousSettingsFocus = document.activeElement
+      form.appendChild(fixture)
+
+      const snapshot = element => {
+        const style = window.getComputedStyle(element)
+        return {
+          background: style.backgroundColor,
+          border: style.borderTopColor,
+          color: style.color,
+          shadow: style.boxShadow
+        }
+      }
+      const resolveToken = (token, property) => {
+        const probe = document.createElement('span')
+        probe.style[property] = `var(${token})`
+        fixture.appendChild(probe)
+        const value = window.getComputedStyle(probe)[property]
+        probe.remove()
+        return value
+      }
+      const createControl = kind => {
+        let root
+        let target
+        let focusable
+        let focusClasses
+        let errorClasses
+        let disabledClasses
+
+        if (kind === 'input' || kind === 'textarea') {
+          root = document.createElement(kind)
+          root.className = 'ant-input ant-input-outlined'
+          target = root
+          focusable = root
+          focusClasses = ['ant-input-focused']
+          errorClasses = ['ant-input-status-error']
+          disabledClasses = ['ant-input-disabled']
+        } else if (kind === 'affix') {
+          root = document.createElement('div')
+          root.className = 'ant-input-affix-wrapper ant-input-outlined'
+          focusable = document.createElement('input')
+          focusable.className = 'ant-input'
+          root.appendChild(focusable)
+          target = root
+          focusClasses = ['ant-input-affix-wrapper-focused']
+          errorClasses = ['ant-input-status-error', 'ant-input-affix-wrapper-status-error']
+          disabledClasses = ['ant-input-affix-wrapper-disabled']
+        } else if (kind === 'inputNumber') {
+          root = document.createElement('div')
+          root.className = 'ant-input-number ant-input-number-outlined'
+          focusable = document.createElement('input')
+          focusable.className = 'ant-input-number-input'
+          root.appendChild(focusable)
+          target = root
+          focusClasses = ['ant-input-number-focused']
+          errorClasses = ['ant-input-number-status-error']
+          disabledClasses = ['ant-input-number-disabled']
+        } else {
+          root = document.createElement('div')
+          root.className = 'ant-select ant-select-outlined'
+          root.tabIndex = 0
+          target = document.createElement('div')
+          target.className = 'ant-select-selector'
+          root.appendChild(target)
+          focusable = root
+          focusClasses = ['ant-select-focused']
+          errorClasses = ['ant-select-status-error']
+          disabledClasses = ['ant-select-disabled']
+        }
+
+        root.style.minHeight = '28px'
+        return { root, target, focusable, focusClasses, errorClasses, disabledClasses }
+      }
+      const setClasses = (element, classes, enabled) => {
+        for (const className of classes) element.classList.toggle(className, enabled)
+      }
+      const setFocused = (control, enabled) => {
+        if (enabled) {
+          control.focusable.focus()
+        } else {
+          control.focusable.blur()
+        }
+        setClasses(control.root, control.focusClasses, enabled)
+      }
+      const inspectControl = kind => {
+        const control = createControl(kind)
+        fixture.appendChild(control.root)
+        const normal = snapshot(control.target)
+
+        setFocused(control, true)
+        const focus = snapshot(control.target)
+        const focusInnerShadow = kind === 'affix' ? snapshot(control.focusable).shadow : null
+        setFocused(control, false)
+
+        setClasses(control.root, control.errorClasses, true)
+        const error = snapshot(control.target)
+        setFocused(control, true)
+        const errorFocus = snapshot(control.target)
+        setFocused(control, false)
+        setClasses(control.root, control.errorClasses, false)
+
+        setClasses(control.root, control.disabledClasses, true)
+        if ('disabled' in control.focusable) control.focusable.disabled = true
+        const disabled = snapshot(control.target)
+        setClasses(control.root, control.errorClasses, true)
+        const disabledError = snapshot(control.target)
+        control.root.remove()
+        return { normal, focus, focusInnerShadow, error, errorFocus, disabled, disabledError }
+      }
+      const addHoverErrorControl = kind => {
+        const control = createControl(kind)
+        setClasses(control.root, control.errorClasses, true)
+        control.root.dataset.settingsHoverError = kind
+        fixture.appendChild(control.root)
+      }
+
+      const controls = {}
+      for (const kind of ['input', 'textarea', 'affix', 'inputNumber', 'select']) {
+        controls[kind] = inspectControl(kind)
+      }
+      addHoverErrorControl('input')
+      addHoverErrorControl('affix')
       return {
-        background: style.backgroundColor,
-        border: style.borderTopColor,
-        color: style.color,
-        shadow: style.boxShadow
+        controls,
+        tokens: {
+          primary: resolveToken('--sp-primary', 'color'),
+          danger: resolveToken('--sp-danger', 'color'),
+          surfaceInset: resolveToken('--sp-surface-inset', 'backgroundColor'),
+          surfaceSubtle: resolveToken('--sp-surface-subtle', 'backgroundColor'),
+          textDisabled: resolveToken('--sp-text-disabled', 'color')
+        }
       }
-    }
-    const resolveToken = (token, property) => {
-      const probe = document.createElement('span')
-      probe.style[property] = `var(${token})`
-      fixture.appendChild(probe)
-      const value = window.getComputedStyle(probe)[property]
-      probe.remove()
-      return value
-    }
-    const createControl = kind => {
-      let root
-      let target
-      let focusable
-      let focusClasses
-      let errorClasses
-      let disabledClasses
+    })
 
-      if (kind === 'input' || kind === 'textarea') {
-        root = document.createElement(kind)
-        root.className = 'ant-input ant-input-outlined'
-        target = root
-        focusable = root
-        focusClasses = ['ant-input-focused']
-        errorClasses = ['ant-input-status-error']
-        disabledClasses = ['ant-input-disabled']
-      } else if (kind === 'affix') {
-        root = document.createElement('div')
-        root.className = 'ant-input-affix-wrapper ant-input-outlined'
-        focusable = document.createElement('input')
-        focusable.className = 'ant-input'
-        root.appendChild(focusable)
-        target = root
-        focusClasses = ['ant-input-affix-wrapper-focused']
-        errorClasses = ['ant-input-status-error', 'ant-input-affix-wrapper-status-error']
-        disabledClasses = ['ant-input-affix-wrapper-disabled']
-      } else if (kind === 'inputNumber') {
-        root = document.createElement('div')
-        root.className = 'ant-input-number ant-input-number-outlined'
-        focusable = document.createElement('input')
-        focusable.className = 'ant-input-number-input'
-        root.appendChild(focusable)
-        target = root
-        focusClasses = ['ant-input-number-focused']
-        errorClasses = ['ant-input-number-status-error']
-        disabledClasses = ['ant-input-number-disabled']
-      } else {
-        root = document.createElement('div')
-        root.className = 'ant-select ant-select-outlined'
-        root.tabIndex = 0
-        target = document.createElement('div')
-        target.className = 'ant-select-selector'
-        root.appendChild(target)
-        focusable = root
-        focusClasses = ['ant-select-focused']
-        errorClasses = ['ant-select-status-error']
-        disabledClasses = ['ant-select-disabled']
+    for (const kind of ['input', 'affix']) {
+      const hoverControl = page.locator(`[data-settings-hover-error="${kind}"]`)
+      await hoverControl.hover()
+      result.controls[kind].errorHover = await hoverControl.evaluate(element => {
+        const style = window.getComputedStyle(element)
+        return {
+          background: style.backgroundColor,
+          border: style.borderTopColor,
+          color: style.color,
+          shadow: style.boxShadow
+        }
+      })
+    }
+  } finally {
+    cleanup = await page.evaluate(async () => {
+      const fixture = document.querySelector('[data-settings-state-fixture="true"]')
+      const previousFocus = fixture?.__previousSettingsFocus
+      fixture?.remove()
+      await new Promise(resolve => {
+        window.requestAnimationFrame(() => window.requestAnimationFrame(resolve))
+      })
+      if (previousFocus instanceof window.HTMLElement && previousFocus.isConnected) previousFocus.focus()
+      await new Promise(resolve => window.requestAnimationFrame(resolve))
+      return {
+        fixtureRemoved: !document.querySelector('[data-settings-state-fixture="true"]'),
+        focusRestored: document.activeElement === previousFocus
       }
+    })
+  }
 
-      return { root, target, focusable, focusClasses, errorClasses, disabledClasses }
-    }
-    const inspectControl = kind => {
-      const control = createControl(kind)
-      fixture.appendChild(control.root)
-      const normal = snapshot(control.target)
-
-      control.focusable.focus()
-      control.focusClasses.forEach(className => control.root.classList.add(className))
-      const focus = snapshot(control.target)
-      control.focusable.blur()
-      control.focusClasses.forEach(className => control.root.classList.remove(className))
-
-      control.errorClasses.forEach(className => control.root.classList.add(className))
-      const error = snapshot(control.target)
-      control.errorClasses.forEach(className => control.root.classList.remove(className))
-
-      control.disabledClasses.forEach(className => control.root.classList.add(className))
-      if ('disabled' in control.focusable) control.focusable.disabled = true
-      const disabled = snapshot(control.target)
-      control.root.remove()
-      return { normal, focus, error, disabled }
-    }
-
-    const controls = {}
-    for (const kind of ['input', 'textarea', 'affix', 'inputNumber', 'select']) {
-      controls[kind] = inspectControl(kind)
-    }
-    const tokens = {
-      primary: resolveToken('--sp-primary', 'color'),
-      danger: resolveToken('--sp-danger', 'color'),
-      surfaceInset: resolveToken('--sp-surface-inset', 'backgroundColor'),
-      surfaceSubtle: resolveToken('--sp-surface-subtle', 'backgroundColor'),
-      textDisabled: resolveToken('--sp-text-disabled', 'color')
-    }
-    fixture.remove()
-    if (previousFocus instanceof window.HTMLElement && previousFocus.isConnected) previousFocus.focus()
-
-    return {
-      controls,
-      tokens,
-      fixtureRemoved: !document.querySelector('[data-settings-state-fixture="true"]'),
-      focusRestored: document.activeElement === previousFocus
-    }
-  })
+  return { ...result, ...cleanup }
 }
 
 function assertSettingsControlStates (snapshot, context) {
@@ -334,11 +393,21 @@ function assertSettingsControlStates (snapshot, context) {
     expect(states.focus.shadow, stateContext).not.toContain('inset')
     expect(states.error.border, stateContext).not.toBe(states.normal.border)
     expect(states.error.border, stateContext).toBe(snapshot.tokens.danger)
+    expect(states.errorFocus.border, stateContext).toBe(snapshot.tokens.danger)
+    expect(states.errorFocus.shadow, stateContext).toBe(states.error.shadow)
     expect(states.disabled.background, stateContext).not.toBe(states.normal.background)
     expect(states.disabled.background, stateContext).toBe(snapshot.tokens.surfaceSubtle)
     expect(states.disabled.shadow, stateContext).toBe('none')
     expect(states.disabled.color, stateContext).toBe(snapshot.tokens.textDisabled)
+    expect(states.disabledError.background, stateContext).toBe(snapshot.tokens.surfaceSubtle)
+    expect(states.disabledError.shadow, stateContext).toBe('none')
+    expect(states.disabledError.color, stateContext).toBe(snapshot.tokens.textDisabled)
   }
+  expect(snapshot.controls.affix.focusInnerShadow, context).toBe('none')
+  expect(snapshot.controls.input.errorHover.border, context).toBe(snapshot.tokens.danger)
+  expect(snapshot.controls.input.errorHover.shadow, context).toBe(snapshot.controls.input.error.shadow)
+  expect(snapshot.controls.affix.errorHover.border, context).toBe(snapshot.tokens.danger)
+  expect(snapshot.controls.affix.errorHover.shadow, context).toBe(snapshot.controls.affix.error.shadow)
 }
 
 async function openConnection (page) {
@@ -1391,9 +1460,10 @@ test('settings search supports visible results, keyboard navigation, preview lan
     expect(settingsDepth.shadow).not.toBe('none')
     expect(settingsDepth.radius).toBe('10px')
     expect(settingsDepth.overflow).toBe(false)
+    const searchInput = page.locator('.setting-header-search input')
+    await expect(searchInput).toBeFocused()
     const settingsControlStates = await inspectSettingsControlStates(page)
     assertSettingsControlStates(settingsControlStates, JSON.stringify({ runner: browserName }))
-    const searchInput = page.locator('.setting-header-search input')
     await expect(searchInput).toBeFocused()
     await expect(searchInput).toHaveAttribute('role', 'combobox')
     await expect(searchInput).toHaveAttribute('aria-expanded', 'false')

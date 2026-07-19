@@ -273,24 +273,25 @@ test('settings inset controls restore scoped hover focus error and disabled stat
   const focus = findNestedRuleByDeclaration(formBlock, /box-shadow 0 0 0 2px var\(--sp-primary-soft\) !important/)
   const error = findNestedRuleByDeclaration(formBlock, /border-color var\(--sp-danger\) !important/)
   const disabled = findNestedRuleByDeclaration(formBlock, /background var\(--sp-surface-subtle\) !important/)
+  const affixInner = findNestedRuleByDeclaration(formBlock, /background transparent !important/)
 
   assert.ok(form)
   assertRuleSelectors(hover, [
-    '.ant-input:hover:not([disabled])',
-    'textarea:hover:not([disabled])',
-    '.ant-input-affix-wrapper:hover:not(.ant-input-affix-wrapper-disabled)',
-    '.ant-input-number:hover:not(.ant-input-number-disabled)',
-    '.ant-select:not(.ant-select-disabled):hover .ant-select-selector'
+    '.ant-input:hover:not([disabled]):not(.ant-input-status-error)',
+    'textarea:hover:not([disabled]):not(.ant-input-status-error)',
+    '.ant-input-affix-wrapper:hover:not(.ant-input-affix-wrapper-disabled):not(.ant-input-status-error):not(.ant-input-affix-wrapper-status-error)',
+    '.ant-input-number:hover:not(.ant-input-number-disabled):not(.ant-input-number-status-error)',
+    '.ant-select:not(.ant-select-disabled):not(.ant-select-status-error):hover .ant-select-selector'
   ])
   assertRuleSelectors(focus, [
-    '.ant-input:focus',
-    'textarea:focus',
-    '.ant-input-focused',
-    '.ant-input-affix-wrapper-focused',
-    '.ant-input-affix-wrapper:focus-within',
-    '.ant-input-number-focused',
-    '.ant-input-number:focus-within',
-    '.ant-select-focused .ant-select-selector'
+    '.ant-input:focus:not([disabled]):not(.ant-input-status-error)',
+    'textarea:focus:not([disabled]):not(.ant-input-status-error)',
+    '.ant-input-focused:not(.ant-input-disabled):not(.ant-input-status-error)',
+    '.ant-input-affix-wrapper-focused:not(.ant-input-affix-wrapper-disabled):not(.ant-input-status-error):not(.ant-input-affix-wrapper-status-error)',
+    '.ant-input-affix-wrapper:focus-within:not(.ant-input-affix-wrapper-disabled):not(.ant-input-status-error):not(.ant-input-affix-wrapper-status-error)',
+    '.ant-input-number-focused:not(.ant-input-number-disabled):not(.ant-input-number-status-error)',
+    '.ant-input-number:focus-within:not(.ant-input-number-disabled):not(.ant-input-number-status-error)',
+    '.ant-select-focused:not(.ant-select-disabled):not(.ant-select-status-error) .ant-select-selector'
   ])
   assertRuleSelectors(error, [
     '.ant-input-status-error',
@@ -307,6 +308,10 @@ test('settings inset controls restore scoped hover focus error and disabled stat
     '.ant-input-number-disabled',
     '.ant-select-disabled .ant-select-selector'
   ])
+  assertRuleSelectors(affixInner, [
+    '.ant-input-affix-wrapper > .ant-input',
+    '.ant-input-affix-wrapper > .ant-input:focus:not([disabled]):not(.ant-input-status-error)'
+  ])
   assert.match(focus.body, /border-color var\(--sp-primary\) !important/)
   assert.match(focus.body, /box-shadow 0 0 0 2px var\(--sp-primary-soft\) !important/)
   assert.match(error.body, /border-color var\(--sp-danger\) !important/)
@@ -314,6 +319,8 @@ test('settings inset controls restore scoped hover focus error and disabled stat
   assert.match(disabled.body, /background var\(--sp-surface-subtle\) !important/)
   assert.match(disabled.body, /color var\(--sp-text-disabled\) !important/)
   assert.match(disabled.body, /box-shadow none !important/)
+  assert.match(affixInner.body, /box-shadow none !important/)
+  assert.ok(formBlock.indexOf('.ant-input[disabled]') > formBlock.indexOf('.ant-input-status-error'))
 })
 
 test('settings depth migration preserves compact wrapping and internal scrolling contracts', () => {
