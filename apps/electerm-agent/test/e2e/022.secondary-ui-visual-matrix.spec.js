@@ -545,6 +545,66 @@ async function waitForPopupMotion (popup) {
   }, { timeout: 5000 }).toBe('none')
 }
 
+async function inspectOpenOverlayDepth (page, selectors) {
+  const overlayMetrics = await page.evaluate((targetSelectors) => targetSelectors.map(selector => {
+    const element = document.querySelector(selector)
+    if (!element) return null
+    const style = window.getComputedStyle(element)
+    return {
+      selector,
+      shadow: style.boxShadow,
+      radius: style.borderRadius,
+      overflow: element.scrollWidth > element.clientWidth + 1
+    }
+  }).filter(Boolean), selectors)
+  expect(overlayMetrics, JSON.stringify({ selectors, overlayMetrics })).toHaveLength(selectors.length)
+  for (const metric of overlayMetrics) {
+    expect(metric.shadow, JSON.stringify(metric)).not.toBe('none')
+    expect(metric.radius, JSON.stringify(metric)).toBe('10px')
+    expect(metric.overflow, JSON.stringify(metric)).toBe(false)
+  }
+  return overlayMetrics
+}
+
+async function inspectMenuDepth (menuRoot) {
+  return menuRoot.evaluate((root) => {
+    const surface = root.querySelector('.ant-dropdown-menu') || root
+    const style = window.getComputedStyle(surface)
+    const rect = root.getBoundingClientRect()
+    const items = [...surface.querySelectorAll('[role="menuitem"], .context-item')]
+    const surfaceRect = surface.getBoundingClientRect()
+    const isReachable = item => {
+      if (!item) return false
+      const itemRect = item.getBoundingClientRect()
+      return itemRect.top >= surfaceRect.top - 1 && itemRect.bottom <= surfaceRect.bottom + 1
+    }
+    return {
+      radius: style.borderRadius,
+      shadow: style.boxShadow,
+      viewport: {
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+        width: window.innerWidth,
+        height: window.innerHeight
+      },
+      firstReachable: isReachable(items[0]),
+      lastReachable: isReachable(items.at(-1))
+    }
+  })
+}
+
+function assertMenuDepth (metrics, context) {
+  const message = JSON.stringify({ context, metrics })
+  expect(metrics.radius, message).toBe('10px')
+  expect(metrics.shadow, message).not.toBe('none')
+  expect(metrics.viewport.left, message).toBeGreaterThanOrEqual(-1)
+  expect(metrics.viewport.top, message).toBeGreaterThanOrEqual(-1)
+  expect(metrics.viewport.right, message).toBeLessThanOrEqual(metrics.viewport.width + 1)
+  expect(metrics.viewport.bottom, message).toBeLessThanOrEqual(metrics.viewport.height + 1)
+}
+
 async function openInputMenu (page) {
   await openSettings(page)
   const input = page.locator('.setting-header input').first()
@@ -597,6 +657,18 @@ async function openTerminalMenu (page) {
   const popup = page.locator('.shellpilot-context-menu.ant-dropdown:visible').last()
   await popup.waitFor()
   await waitForPopupMotion(popup)
+}
+
+async function openSystemMenu (page) {
+  await page.locator('.menu-control').first().click()
+  const popup = page.locator('.ant-popover:visible').filter({
+    has: page.locator('.context-menu')
+  }).last()
+  await popup.waitFor()
+  await waitForPopupMotion(popup)
+  const menu = popup.locator('.context-menu')
+  await menu.waitFor()
+  return menu
 }
 
 async function ensureTwoTerminalTabs (page) {
@@ -917,6 +989,12 @@ async function inspectSurface (page, selector, menu, documentBaseline) {
             maxHeight: menuStyle.maxHeight
           }
         : null,
+      menuDepth: menuElement
+        ? {
+            radius: menuStyle.borderRadius,
+            shadow: menuStyle.boxShadow
+          }
+        : null,
       clippedText,
       primaryClipping,
       overlaps,
@@ -934,6 +1012,11 @@ function assertSurfaceSnapshot (snapshot, context, surface) {
   expect(snapshot.rootContentOverflow, JSON.stringify({ context, snapshot })).toBe(false)
   expect(snapshot.rootHorizontalClip, JSON.stringify({ context, snapshot })).toBe(false)
   expect(snapshot.menuViewportClip, JSON.stringify({ context, snapshot })).toBe(false)
+  if (surface.menu) {
+    expect(snapshot.menuDepth, JSON.stringify({ context, snapshot })).not.toBeNull()
+    expect(snapshot.menuDepth.radius, JSON.stringify({ context, snapshot })).toBe('10px')
+    expect(snapshot.menuDepth.shadow, JSON.stringify({ context, snapshot })).not.toBe('none')
+  }
   expect(snapshot.clippedText, JSON.stringify({ context, snapshot })).toEqual([])
   expect(snapshot.primaryClipping, JSON.stringify({ context, snapshot })).toEqual([])
   expect(snapshot.overlaps, JSON.stringify({ context, snapshot })).toEqual([])
@@ -1238,6 +1321,9 @@ async function runSurfaceCase (page, testInfo, failures, context, surface, stats
     const documentBaseline = await inspectDocumentBaseline(page)
     console.log(`SECONDARY_MAIN_CHROME_BASELINE=${JSON.stringify({ ...context, surface: surface.name, ...documentBaseline })}`)
     await surface.open(page)
+    if (surface.name === 'ai-config') {
+      await inspectOpenOverlayDepth(page, ['.ai-config-modal .custom-modal-content'])
+    }
     const snapshot = await inspectSurface(page, surface.selector, surface.menu, documentBaseline)
     const surfaceContext = { ...context, surface: surface.name }
     stats.disabledContrastChecks += snapshot.disabledContrast.length
@@ -1323,6 +1409,10 @@ async function exerciseLanguageAndThemeState (page) {
   await page.locator('.setting-header button.ant-btn-primary').click()
   expect(await page.evaluate(() => window.store.previewLanguage)).toBe('')
   expect(await page.evaluate(() => window.store.config.language)).toBe(targetLanguage)
+  await page.locator('.notification').waitFor({ state: 'visible' })
+  await inspectOpenOverlayDepth(page, ['.notification'])
+  await page.locator('.notification-close').click()
+  await page.locator('.notification').waitFor({ state: 'detached' })
 
   await page.evaluate((language) => window.store.setConfig({ language }), initial.language)
   await resetSurface(page, 'en_us')
@@ -1571,6 +1661,10 @@ test('context menus keep pointer placement and compact long-menu reachability', 
       .toBeGreaterThanOrEqual(pointer.y - 8)
     expect(shortRect.top, JSON.stringify({ runner: browserName, pointer, shortRect }))
       .toBeLessThanOrEqual(pointer.y + 24)
+    const shortDepth = await inspectMenuDepth(shortMenu)
+    assertMenuDepth(shortDepth, { runner: browserName, surface: 'input-menu' })
+    expect(shortDepth.firstReachable).toBe(true)
+    expect(shortDepth.lastReachable).toBe(true)
 
     await resetSurface(page, 'en_us')
     await setWindowCase(electronApp, page, { width: 590, height: 400 }, 1.5)
@@ -1607,6 +1701,54 @@ test('context menus keep pointer placement and compact long-menu reachability', 
     expect(reachability.scrollTop, JSON.stringify({ runner: browserName, reachability })).toBeGreaterThan(0)
     expect(reachability.scrollTop, JSON.stringify({ runner: browserName, reachability }))
       .toBeLessThanOrEqual(reachability.maxScrollTop + 1)
+
+    await resetSurface(page, 'en_us')
+    await setWindowCase(electronApp, page, { width: 590, height: 400 }, 1)
+    const systemMenu = await openSystemMenu(page)
+    const systemDepth = await inspectMenuDepth(systemMenu)
+    assertMenuDepth(systemDepth, { runner: browserName, surface: 'system-menu' })
+    expect(systemDepth.firstReachable).toBe(true)
+    const systemReachability = await systemMenu.evaluate(menu => {
+      const items = [...menu.querySelectorAll('.context-item')]
+      const visibleInside = item => {
+        const itemRect = item.getBoundingClientRect()
+        const menuRect = menu.getBoundingClientRect()
+        return itemRect.top >= menuRect.top - 1 && itemRect.bottom <= menuRect.bottom + 1
+      }
+      menu.scrollTop = 0
+      const firstReachable = visibleInside(items[0])
+      items.at(-1).scrollIntoView({ block: 'nearest' })
+      return {
+        itemCount: items.length,
+        firstReachable,
+        lastReachable: visibleInside(items.at(-1)),
+        scrollTop: menu.scrollTop,
+        maxScrollTop: menu.scrollHeight - menu.clientHeight
+      }
+    })
+    expect(systemReachability.itemCount, JSON.stringify({ runner: browserName, systemReachability }))
+      .toBeGreaterThan(1)
+    expect(systemReachability.firstReachable, JSON.stringify({ runner: browserName, systemReachability }))
+      .toBe(true)
+    expect(systemReachability.lastReachable, JSON.stringify({ runner: browserName, systemReachability }))
+      .toBe(true)
+    expect(systemReachability.scrollTop, JSON.stringify({ runner: browserName, systemReachability }))
+      .toBeGreaterThan(0)
+    expect(systemReachability.scrollTop, JSON.stringify({ runner: browserName, systemReachability }))
+      .toBeLessThanOrEqual(systemReachability.maxScrollTop + 1)
+
+    const submenuTrigger = systemMenu.locator('.with-sub-menu').first()
+    await submenuTrigger.scrollIntoViewIfNeeded()
+    await submenuTrigger.hover()
+    const systemSubmenu = submenuTrigger.locator('.sub-context-menu')
+    await expect(systemSubmenu).toBeVisible()
+    const submenuPointerReachable = await systemSubmenu.evaluate(element => {
+      const rect = element.getBoundingClientRect()
+      const x = Math.min(window.innerWidth - 1, Math.max(0, rect.left + rect.width / 2))
+      const y = Math.min(window.innerHeight - 1, Math.max(0, rect.top + Math.min(rect.height, 32) / 2))
+      return element.contains(document.elementFromPoint(x, y))
+    })
+    expect(submenuPointerReachable, JSON.stringify({ runner: browserName })).toBe(true)
   })
 })
 

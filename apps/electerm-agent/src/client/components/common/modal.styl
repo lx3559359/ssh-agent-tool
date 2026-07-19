@@ -26,9 +26,12 @@
 
 .custom-modal-content
   position relative
-  background var(--main)
-  border-radius 8px
-  box-shadow 0 6px 16px 0 rgba(0, 0, 0, 0.08), 0 3px 6px -4px rgba(0, 0, 0, 0.12), 0 9px 28px 8px rgba(0, 0, 0, 0.05)
+  min-width 0
+  color var(--sp-text)
+  background var(--sp-surface-elevated)
+  border 1px solid var(--sp-border-strong)
+  border-radius var(--sp-radius-overlay)
+  box-shadow inset 0 1px 0 var(--sp-highlight-top, rgba(255, 255, 255, .35)), var(--sp-shadow-overlay)
   margin-top 50px
   max-width calc(100vw - 48px)
 
@@ -36,18 +39,20 @@
   display flex
   align-items center
   justify-content space-between
+  min-width 0
   padding 16px 24px
-  border-bottom 1px solid var(--main-darker)
+  border-bottom 1px solid var(--sp-border)
 
 .custom-modal-title
+  min-width 0
   font-size 16px
   font-weight 600
-  color var(--text)
+  color var(--sp-text)
   line-height 1.5
   flex 1
-  overflow hidden
-  text-overflow ellipsis
-  white-space nowrap
+  white-space normal
+  overflow-wrap anywhere
+  word-break normal
 
 .custom-modal-close
   display flex
@@ -73,16 +78,21 @@
     background var(--sp-primary-soft)
 
 .custom-modal-body
+  min-width 0
   padding 0 24px 24px 24px
-  color var(--text)
+  color var(--sp-text)
+  white-space normal
+  overflow-wrap anywhere
+  word-break normal
 
 .custom-modal-footer
   padding 12px 24px
-  border-top 1px solid var(--main-darker)
+  border-top 1px solid var(--sp-border)
   text-align right
 
 .custom-modal-footer-buttons
   display flex
+  flex-wrap wrap
   justify-content flex-end
   gap 8px
 

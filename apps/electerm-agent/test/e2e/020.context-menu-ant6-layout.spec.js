@@ -52,6 +52,44 @@ async function documentHasNoHorizontalOverflow (page) {
   })
 }
 
+async function inspectMenuDepth (popup) {
+  return popup.evaluate((popupElement) => {
+    const surface = popupElement.querySelector('.ant-dropdown-menu') || popupElement
+    const style = window.getComputedStyle(surface)
+    const rect = popupElement.getBoundingClientRect()
+    const items = [...surface.querySelectorAll('[role="menuitem"]')]
+    const menuRect = surface.getBoundingClientRect()
+    const reachable = item => {
+      if (!item) return false
+      const itemRect = item.getBoundingClientRect()
+      return itemRect.top >= menuRect.top - 1 && itemRect.bottom <= menuRect.bottom + 1
+    }
+    return {
+      radius: style.borderRadius,
+      shadow: style.boxShadow,
+      viewport: {
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+        width: window.innerWidth,
+        height: window.innerHeight
+      },
+      firstReachable: reachable(items[0]),
+      lastReachable: reachable(items.at(-1))
+    }
+  })
+}
+
+function assertMenuDepth (metrics) {
+  expect(metrics.radius).toBe('10px')
+  expect(metrics.shadow).not.toBe('none')
+  expect(metrics.viewport.left).toBeGreaterThanOrEqual(-1)
+  expect(metrics.viewport.top).toBeGreaterThanOrEqual(-1)
+  expect(metrics.viewport.right).toBeLessThanOrEqual(metrics.viewport.width + 1)
+  expect(metrics.viewport.bottom).toBeLessThanOrEqual(metrics.viewport.height + 1)
+}
+
 test.beforeAll(async () => {
   const { createServer } = await import('vite')
   const react = (await import('@vitejs/plugin-react')).default
@@ -111,6 +149,10 @@ test('real Ant6 runtime preserves semantic menu tokens and grid columns', async 
       disabledColor: 'rgb(136, 146, 164)',
       normalDisplay: 'grid'
     })
+    const depth = await inspectMenuDepth(popup)
+    assertMenuDepth(depth)
+    expect(depth.firstReachable).toBe(true)
+    expect(depth.lastReachable).toBe(true)
 
     await normal.hover()
     await expect.poll(async () => {
@@ -171,6 +213,9 @@ for (const viewport of [
     )
     try {
       const { popup } = await openSubmenu(page)
+      const depth = await inspectMenuDepth(popup)
+      assertMenuDepth(depth)
+      expect(depth.firstReachable).toBe(true)
       const bounds = await popup.boundingBox()
       expect(bounds.x).toBeGreaterThanOrEqual(8)
       expect(bounds.x + bounds.width).toBeLessThanOrEqual(viewport.width - 8)
