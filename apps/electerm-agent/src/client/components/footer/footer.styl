@@ -1,13 +1,14 @@
 .main-footer
-  background #f7f8fa
+  background var(--sp-surface-elevated)
   height 36px
   position absolute
   left 72px
   right 0
   bottom 0
   z-index 200
-  border-top 1px solid #dfe3ea
-  color #374151
+  border-top 1px solid var(--sp-border)
+  box-shadow 0 -3px 8px -6px var(--sp-border-strong)
+  color var(--sp-text)
 .pinned
   .main-footer
   .qm-wrap-tooltip
@@ -17,6 +18,8 @@
   display flex
   align-items center
   height 100%
+  min-width 0
+  overflow hidden
   .terminal-footer-unit .ant-select-selector .ant-select-selection-placeholder
     line-height 24px
 .terminal-footer-unit
@@ -47,17 +50,18 @@
   display flex
   align-items center
   gap 8px
-  min-width 260px
+  min-width 0
+  overflow hidden
   white-space nowrap
 .terminal-footer-muted
-  color #64748b
+  color var(--sp-text-muted)
 .terminal-footer-dot
   width 8px
   height 8px
   border-radius 50%
-  background #aeb6c2
+  background var(--sp-text-disabled)
   &.online
-    background #22c55e
+    background var(--sp-success)
 .batch-input-outer
   .bi-full
     display none

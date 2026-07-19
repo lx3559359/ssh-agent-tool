@@ -1332,18 +1332,33 @@ async function inspectTerminalInvariant (page) {
       '.terminal-control',
       '.term-wrap',
       '.xterm',
+      '.xterm-screen',
       '.xterm-viewport'
     ]
+    const effectiveBackground = element => {
+      let current = element
+      while (current) {
+        const background = window.getComputedStyle(current).backgroundColor
+        if (background && background !== 'rgba(0, 0, 0, 0)' && background !== 'transparent') {
+          return background
+        }
+        current = current.parentElement
+      }
+      return ''
+    }
     return selectors.map(selector => {
       const element = [...document.querySelectorAll(selector)].find(candidate => {
         const rect = candidate.getBoundingClientRect()
         const style = window.getComputedStyle(candidate)
         return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden'
       })
+      const style = element ? window.getComputedStyle(element) : null
       return {
         selector,
         found: Boolean(element),
-        background: element ? window.getComputedStyle(element).backgroundColor : ''
+        background: element ? effectiveBackground(element) : '',
+        directBackground: style?.backgroundColor || '',
+        shadow: style?.boxShadow || ''
       }
     })
   })
@@ -1354,7 +1369,133 @@ function assertTerminalInvariant (terminal, context) {
   for (const item of terminal) {
     expect(item.found, JSON.stringify({ context, item })).toBe(true)
     expect(item.background, JSON.stringify({ context, item })).toBe(lockedTerminalRgb)
+    expect(item.shadow, JSON.stringify({ context, item })).toBe('none')
   }
+}
+
+async function inspectShellChrome (page) {
+  return page.evaluate(() => {
+    const resolveToken = (token, property) => {
+      const probe = document.createElement('span')
+      probe.style[property] = `var(${token})`
+      document.body.appendChild(probe)
+      const value = window.getComputedStyle(probe)[property]
+      probe.remove()
+      return value
+    }
+    const shellSelectors = [
+      ['topbar', '.aigshell-topbar', 'borderBottomColor'],
+      ['sidebar', '.sidebar', 'borderRightColor'],
+      ['rightPanel', '.right-side-panel', 'borderLeftColor'],
+      ['footer', '.main-footer', 'borderTopColor']
+    ]
+    const shell = Object.fromEntries(shellSelectors.map(([name, selector, borderProperty]) => {
+      const element = [...document.querySelectorAll(selector)].find(candidate => {
+        const rect = candidate.getBoundingClientRect()
+        const style = window.getComputedStyle(candidate)
+        return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden'
+      })
+      if (!element) return [name, { selector, found: false }]
+      const rect = element.getBoundingClientRect()
+      const style = window.getComputedStyle(element)
+      const interactiveOverflow = [...element.querySelectorAll('button, input, textarea, select, [role="button"], [role="combobox"]')]
+        .flatMap(control => {
+          const controlRect = control.getBoundingClientRect()
+          const controlStyle = window.getComputedStyle(control)
+          if (
+            controlRect.width <= 0 || controlRect.height <= 0 ||
+            controlStyle.visibility === 'hidden' || controlStyle.display === 'none' ||
+            (controlRect.left >= rect.left - 1 && controlRect.right <= rect.right + 1)
+          ) return []
+          return [{
+            tag: control.tagName,
+            className: String(control.className || ''),
+            left: controlRect.left,
+            right: controlRect.right
+          }]
+        })
+      return [name, {
+        selector,
+        found: true,
+        background: style.backgroundColor,
+        border: style[borderProperty],
+        shadow: style.boxShadow,
+        overflowX: style.overflowX,
+        horizontalOverflow: element.scrollWidth > element.clientWidth + 1,
+        interactiveOverflow,
+        rect: {
+          left: rect.left,
+          right: rect.right,
+          width: rect.width,
+          height: rect.height
+        },
+        scrollWidth: element.scrollWidth,
+        clientWidth: element.clientWidth
+      }]
+    }))
+    const scrollContainers = [...document.querySelectorAll('.right-side-panel-content, .right-side-panel-content *')]
+      .flatMap(element => {
+        const style = window.getComputedStyle(element)
+        const rect = element.getBoundingClientRect()
+        if (!['auto', 'scroll'].includes(style.overflowY) || rect.width <= 0 || rect.height <= 0) return []
+        return [{
+          className: String(element.className || ''),
+          overflowY: style.overflowY,
+          scrollHeight: element.scrollHeight,
+          clientHeight: element.clientHeight,
+          scrollWidth: element.scrollWidth,
+          clientWidth: element.clientWidth
+        }]
+      })
+    return {
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+      shell,
+      scrollContainers,
+      tokens: {
+        surface: resolveToken('--sp-surface', 'backgroundColor'),
+        surfaceElevated: resolveToken('--sp-surface-elevated', 'backgroundColor'),
+        border: resolveToken('--sp-border', 'borderTopColor'),
+        shadowControl: resolveToken('--sp-shadow-control', 'boxShadow'),
+        shadowCard: resolveToken('--sp-shadow-card', 'boxShadow'),
+        shadowOverlay: resolveToken('--sp-shadow-overlay', 'boxShadow')
+      }
+    }
+  })
+}
+
+function assertShellChrome (snapshot, context) {
+  const message = JSON.stringify({ context, snapshot })
+  const expectedBackgrounds = {
+    topbar: snapshot.tokens.surfaceElevated,
+    sidebar: snapshot.tokens.surface,
+    rightPanel: snapshot.tokens.surface,
+    footer: snapshot.tokens.surfaceElevated
+  }
+  for (const [name, item] of Object.entries(snapshot.shell)) {
+    const itemMessage = JSON.stringify({ context, name, item, tokens: snapshot.tokens })
+    expect(item.found, itemMessage).toBe(true)
+    expect(item.background, itemMessage).toBe(expectedBackgrounds[name])
+    expect(item.background, itemMessage).not.toBe('rgba(0, 0, 0, 0)')
+    expect(item.border, itemMessage).toBe(snapshot.tokens.border)
+    expect(item.horizontalOverflow, itemMessage).toBe(false)
+    if (name === 'topbar' || name === 'footer') {
+      expect(item.interactiveOverflow, itemMessage).toEqual([])
+    }
+    expect(item.rect.left, itemMessage).toBeGreaterThanOrEqual(-overflowTolerance)
+    expect(item.rect.right, itemMessage).toBeLessThanOrEqual(snapshot.viewport.width + overflowTolerance)
+  }
+  expect(snapshot.shell.topbar.shadow, message).toContain(snapshot.tokens.shadowControl)
+  expect(snapshot.shell.topbar.shadow, message).not.toContain(snapshot.tokens.shadowCard)
+  expect(snapshot.shell.topbar.shadow, message).not.toContain(snapshot.tokens.shadowOverlay)
+  expect(snapshot.shell.footer.shadow, message).toMatch(/\s-\d+px\s/)
+  expect(snapshot.shell.footer.shadow, message).not.toContain(snapshot.tokens.shadowCard)
+  expect(snapshot.shell.footer.shadow, message).not.toContain(snapshot.tokens.shadowOverlay)
+  expect(snapshot.scrollContainers, message).not.toEqual([])
+  expect(snapshot.scrollContainers.some(item => (
+    item.clientHeight > 0 &&
+    item.scrollHeight >= item.clientHeight &&
+    item.scrollWidth <= item.clientWidth + overflowTolerance
+  )), message).toBe(true)
 }
 
 async function recordCaseFailure (page, testInfo, failures, context, error) {
@@ -1543,6 +1684,40 @@ test('active terminal session tab keeps the locked SSH background', async ({ bro
     await ensureTwoTerminalTabs(page)
     const terminal = await inspectTerminalInvariant(page)
     assertTerminalInvariant(terminal, { runner: browserName, surface: 'terminal-invariant' })
+  })
+})
+
+test('shell chrome keeps restrained depth, compact geometry and terminal isolation', async ({ browserName }) => {
+  await runWithIsolatedApp('shell-chrome', async (electronApp) => {
+    const page = electronApp.windows()[0] || await electronApp.firstWindow()
+    await page.waitForFunction(() => window.store?.configLoaded === true, { timeout: 20000 })
+    await page.locator('.term-wrap:visible').waitFor({ timeout: 20000 })
+    await page.evaluate(() => {
+      window.store.handleOpenAIPanel()
+      window.store.rightPanelPinned = false
+    })
+    await page.locator('.right-side-panel:visible').waitFor({ timeout: 20000 })
+    await page.locator('.right-side-panel-content .ai-history-wrap:visible').waitFor({ timeout: 20000 })
+    await ensureTwoTerminalTabs(page)
+
+    const cases = [
+      { size: { width: 590, height: 400 }, zoom: 1 },
+      { size: { width: 820, height: 600 }, zoom: 1 },
+      { size: { width: 820, height: 600 }, zoom: 2 }
+    ]
+    for (const item of cases) {
+      await setWindowCase(electronApp, page, item.size, item.zoom)
+      const context = {
+        runner: browserName,
+        surface: 'shell-chrome',
+        size: `${item.size.width}x${item.size.height}`,
+        zoom: item.zoom
+      }
+      const shell = await inspectShellChrome(page)
+      assertShellChrome(shell, context)
+      const terminal = await inspectTerminalInvariant(page)
+      assertTerminalInvariant(terminal, context)
+    }
   })
 })
 

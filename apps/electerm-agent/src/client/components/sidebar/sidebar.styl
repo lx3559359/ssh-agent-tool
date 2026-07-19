@@ -22,8 +22,8 @@
   width 72px
   z-index 100
   bottom 0
-  background #f7f8fa
-  border-right 1px solid #dfe3ea
+  background var(--sp-surface)
+  border-right 1px solid var(--sp-border)
 
   .item-list
     padding-right 0
@@ -86,9 +86,9 @@
   text-align center
   &.active
     .control-icon
-      color #2563eb
+      color var(--sp-primary)
     .control-icon-label
-      color #2563eb
+      color var(--sp-primary)
       font-weight 650
   .control-icon-main
     display flex
@@ -98,15 +98,28 @@
     gap 3px
     min-height 42px
   .control-icon
-    color #4b5563
+    color var(--sp-text-muted)
     cursor pointer
     &:hover
-      color #2563eb
+      color var(--sp-primary)
   .control-icon-label
-    color #4b5563
+    color var(--sp-text-muted)
     font-size 12px
     line-height 14px
     white-space nowrap
+.sidebar .control-icon-wrap
+  border-radius var(--sp-radius-control)
+  box-shadow none
+  transition background var(--sp-motion-fast) ease, box-shadow var(--sp-motion-fast) ease
+  &:hover
+    background var(--sp-surface-elevated)
+    box-shadow var(--sp-shadow-control)
+  &.active
+    background var(--sp-primary-soft)
+    box-shadow var(--sp-shadow-control)
+.sidebar .control-icon:focus-visible
+  outline 2px solid var(--sp-primary)
+  outline-offset 2px
 .sidebar-list
   position absolute
   left 72px
@@ -127,22 +140,22 @@
       color var(--success)
 //btns
 .btns
-  background #f7f8fa
-  border-color #dfe3ea
+  background var(--sp-surface)
+  border-color var(--sp-border)
   .control-icon-wrap
     padding 8px 0
     .control-icon
-      color #4b5563
+      color var(--sp-text-muted)
       &:hover
-        color #2563eb
+        color var(--sp-primary)
   .open-about-icon
-    color #4b5563
+    color var(--sp-text-muted)
     &:hover
-      color #2563eb
+      color var(--sp-primary)
   .zoom-reset-icon
-    color #2563eb
+    color var(--sp-primary)
     &:hover
-      color #1d4ed8
+      color var(--sp-text)
 
 .btns .upgrade-icon
   color var(--success)

@@ -107,6 +107,25 @@ function assertCssRule (blocks, selector, expectedDeclarations) {
   }
 }
 
+function assertNoProtectedTerminalElevation (css, filename) {
+  const protectedTerminalSelector = /(?:\.tabs\.terminal-session-tabs|\.term-wrap|\.xterm(?:-screen)?)(?=$|[\s,>+~.:[#])/i
+  const visit = source => {
+    for (const block of topLevelCssBlocks(source)) {
+      if (block.header.startsWith('@')) {
+        visit(block.body)
+        continue
+      }
+      if (!protectedTerminalSelector.test(block.header)) continue
+      assert.doesNotMatch(
+        block.body,
+        /box-shadow\s*:[^;]*(?:--sp-shadow-card|--sp-shadow-overlay)/i,
+        `${filename} must not apply card or overlay elevation to ${block.header}`
+      )
+    }
+  }
+  visit(css)
+}
+
 async function assertUiElevationContracts (source) {
   const filename = path.join(clientRoot, 'css/includes/secondary-ui.styl')
   const css = await compileStylusSource(source, filename)
@@ -842,6 +861,97 @@ test('terminal selector guard rejects decorated terminal canvas selectors', () =
   for (const selector of ['.xterminal', '.term-wrapper']) {
     assert.doesNotThrow(() => assertNoTerminalCanvasSelectors(`${selector}\n  color red`))
   }
+})
+
+test('client chrome maps concrete shell selectors to restrained semantic depth', async () => {
+  const files = [
+    'components/main/aigshell-topbar.styl',
+    'components/sidebar/sidebar.styl',
+    'components/side-panel-r/right-side-panel.styl',
+    'components/footer/footer.styl'
+  ]
+  for (const file of files) {
+    assert.doesNotMatch(
+      readClient(file),
+      /#(?:f7f8fa|dfe3ea)\b/i,
+      `${file} must not retain fixed legacy light chrome colors`
+    )
+  }
+
+  const topbarBlocks = topLevelCssBlocks(await compileStylus(files[0]))
+  assertCssRule(topbarBlocks, '.aigshell-topbar', {
+    background: 'var(--sp-surface-elevated)',
+    'border-bottom': '1px solid var(--sp-border)',
+    'box-shadow': 'inset 0 1px 0 var(--sp-highlight-top), var(--sp-shadow-control)'
+  })
+
+  const sidebarBlocks = topLevelCssBlocks(await compileStylus(files[1]))
+  assertCssRule(sidebarBlocks, '.sidebar', {
+    background: 'var(--sp-surface)',
+    'border-right': '1px solid var(--sp-border)'
+  })
+  assertCssRule(sidebarBlocks, '.sidebar .control-icon-wrap', {
+    'box-shadow': 'none'
+  })
+  assertCssRule(sidebarBlocks, '.sidebar .control-icon-wrap:hover', {
+    background: 'var(--sp-surface-elevated)',
+    'box-shadow': 'var(--sp-shadow-control)'
+  })
+  assertCssRule(sidebarBlocks, '.sidebar .control-icon-wrap.active', {
+    background: 'var(--sp-primary-soft)',
+    'box-shadow': 'var(--sp-shadow-control)'
+  })
+  assertCssRule(sidebarBlocks, '.sidebar .control-icon:focus-visible', {
+    outline: '2px solid var(--sp-primary)',
+    'outline-offset': '2px'
+  })
+
+  const panelBlocks = topLevelCssBlocks(await compileStylus(files[2]))
+  assertCssRule(panelBlocks, '.right-side-panel', {
+    background: 'var(--sp-surface)',
+    'border-left': '1px solid var(--sp-border)'
+  })
+  assertCssRule(panelBlocks, '.right-panel-title', {
+    background: 'var(--sp-surface)',
+    'border-bottom': '1px solid var(--sp-border)',
+    'box-shadow': 'inset 0 1px 0 var(--sp-highlight-top), var(--sp-shadow-control)'
+  })
+  assertCssRule(panelBlocks, '.right-panel-ai-config-card', {
+    background: 'var(--sp-surface-elevated)',
+    border: '1px solid var(--sp-border)',
+    'border-radius': 'var(--sp-radius-card)',
+    'box-shadow': 'inset 0 1px 0 var(--sp-highlight-top), var(--sp-shadow-card)'
+  })
+  assertCssRule(panelBlocks, '.right-side-panel-content', {
+    'overflow-y': 'auto'
+  })
+
+  const footerBlocks = topLevelCssBlocks(await compileStylus(files[3]))
+  assertCssRule(footerBlocks, '.main-footer', {
+    background: 'var(--sp-surface-elevated)',
+    'border-top': '1px solid var(--sp-border)',
+    'box-shadow': '0 -3px 8px -6px var(--sp-border-strong)'
+  })
+})
+
+test('client chrome cannot decorate protected terminal surfaces with UI card elevation', async () => {
+  const chromeFiles = [
+    'components/main/aigshell-topbar.styl',
+    'components/sidebar/sidebar.styl',
+    'components/side-panel-r/right-side-panel.styl',
+    'components/footer/footer.styl'
+  ]
+  for (const file of chromeFiles) {
+    assertNoProtectedTerminalElevation(await compileStylus(file), file)
+  }
+
+  const tabs = readClient('components/tabs/tabs.styl')
+  const terminal = readClient('components/terminal/terminal.styl')
+  assert.match(tabs, /\.tabs\.terminal-session-tabs\s*\n\s*background var\(--shellpilot-terminal-background\)[\s\S]*?\.tab\s*\n\s*background var\(--shellpilot-terminal-background\)[\s\S]*?\.tab\.active\s*\n\s*background var\(--shellpilot-terminal-background\)/)
+  assert.match(terminal, /shellPilotTerminalBackground\s*=\s*#0E0F12/)
+  assert.match(terminal, /\.terms-box\s*\n\s*background shellPilotTerminalBackground/)
+  assert.match(terminal, /\.term-wrap\s*\n\s*background shellPilotTerminalBackground/)
+  assert.match(terminal, /#container[\s\S]*?\.xterm\s*\n\s*background shellPilotTerminalBackground/)
 })
 
 test('SFTP overflow more defaults safely to English and follows the current preview translator', async () => {
