@@ -16,8 +16,6 @@ test('current release notes clearly separate added fixed and changed items', () 
 })
 
 test('v0.4.6 release metadata documents the readonly Agent usability release', () => {
-  assert.equal(pack.version, '0.4.6')
-
   const notes = read('docs/releases/v0.4.6.md')
   for (const section of ['新增', '修复', '改动']) {
     assert.match(notes, new RegExp(`^## \\[${section}\\]`, 'm'))
@@ -29,6 +27,24 @@ test('v0.4.6 release metadata documents the readonly Agent usability release', (
     '运行图标',
     '工具卡',
     '真实 VPS 只读验证'
+  ]) {
+    assert.match(notes, new RegExp(phrase))
+  }
+})
+
+test('v0.4.7 release metadata documents the online update republish', () => {
+  assert.equal(pack.version, '0.4.7')
+
+  const notes = read('docs/releases/v0.4.7.md')
+  for (const section of ['新增', '修复', '改动']) {
+    assert.match(notes, new RegExp(`^## \\[${section}\\]`, 'm'))
+  }
+  for (const phrase of [
+    '0.4.7',
+    '0.4.6',
+    '在线更新',
+    'ModelScope',
+    'latest.yml'
   ]) {
     assert.match(notes, new RegExp(phrase))
   }
