@@ -1235,6 +1235,19 @@ test('settings search supports visible results, keyboard navigation, preview lan
 
     await page.keyboard.press('Control+K')
     await page.locator('.setting-wrap').waitFor({ state: 'visible' })
+    const settingsDepth = await page.locator('.sp-setting-section').first().evaluate(element => {
+      const style = window.getComputedStyle(element)
+      return {
+        background: style.backgroundColor,
+        shadow: style.boxShadow,
+        radius: style.borderRadius,
+        overflow: element.scrollWidth > element.clientWidth + 1
+      }
+    })
+    expect(settingsDepth.background).not.toBe('rgba(0, 0, 0, 0)')
+    expect(settingsDepth.shadow).not.toBe('none')
+    expect(settingsDepth.radius).toBe('10px')
+    expect(settingsDepth.overflow).toBe(false)
     const searchInput = page.locator('.setting-header-search input')
     await expect(searchInput).toBeFocused()
     await expect(searchInput).toHaveAttribute('role', 'combobox')
