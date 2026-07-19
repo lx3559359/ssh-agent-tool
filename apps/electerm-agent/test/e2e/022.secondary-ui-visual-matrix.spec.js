@@ -48,6 +48,7 @@ const screenshotTimeout = 1800
 const geometryTimeout = 1200
 const overflowTolerance = 1
 const bookmarkId = `visual-matrix-${process.pid}-${Date.now()}`
+const fleetBookmarkId = `visual-matrix-fleet-${process.pid}-${Date.now()}`
 
 test.setTimeout(20 * 60 * 1000)
 
@@ -738,6 +739,27 @@ async function ensureVisualBookmark (page) {
     store.setOpenedSideBar('bookmarks')
   }, bookmarkId)
   await page.locator(`.sidebar-panel-bookmarks .tree-item[data-item-id="${bookmarkId}"]`).waitFor()
+}
+
+async function ensureVisualFleetBookmark (page) {
+  await page.evaluate((id) => {
+    const store = window.store
+    if (!store.bookmarks.some(bookmark => bookmark.id === id)) {
+      store.setBookmarks([...store.bookmarks, {
+        id,
+        type: 'ssh',
+        title: 'Visual Matrix Fleet Connection',
+        host: '127.0.0.1',
+        port: 22,
+        username: 'visual-matrix'
+      }])
+    }
+    store.setBookmarkGroups(store.bookmarkGroups.map(group => (
+      group.id === 'default' && !group.bookmarkIds.includes(id)
+        ? { ...group, bookmarkIds: [id, ...group.bookmarkIds] }
+        : group
+    )))
+  }, fleetBookmarkId)
 }
 
 async function openBookmarkMenu (page) {
@@ -3082,6 +3104,8 @@ async function captureCompactShellState (page) {
       rightPanelVisible: store.rightPanelVisible,
       rightPanelPinned: store.rightPanelPinned,
       rightPanelWidth: store.rightPanelWidth,
+      openQuickCommandBar: store.openQuickCommandBar,
+      pinnedQuickCommandBar: store.pinnedQuickCommandBar,
       layout: store.layout,
       mainWorkspaceMode: store.mainWorkspaceMode
     }
@@ -3098,6 +3122,8 @@ async function applyCompactShellState (page, state) {
     store.rightPanelVisible = nextState.rightPanelVisible
     store.rightPanelPinned = nextState.rightPanelPinned
     store.setRightSidePanelWidth(nextState.rightPanelWidth)
+    store.openQuickCommandBar = nextState.openQuickCommandBar
+    store.pinnedQuickCommandBar = nextState.pinnedQuickCommandBar
     store.setLayout('c3')
   }, state)
 }
@@ -3111,6 +3137,8 @@ async function restoreCompactShellState (page, state) {
     store.rightPanelVisible = originalState.rightPanelVisible
     store.rightPanelPinned = originalState.rightPanelPinned
     store.setRightSidePanelWidth(originalState.rightPanelWidth)
+    store.openQuickCommandBar = originalState.openQuickCommandBar
+    store.pinnedQuickCommandBar = originalState.pinnedQuickCommandBar
     store.setLayout(originalState.layout)
     if (originalState.mainWorkspaceMode === 'fleet-status') {
       store.openFleetStatus()
@@ -3180,6 +3208,7 @@ async function inspectCompactShellGeometry (page) {
 
 test('tool center and batch editor stay reachable in compact real app windows', async ({ browserName }) => {
   let compactChecks = 0
+  const fleetQuickbarChecks = []
   await runWithIsolatedApp('compact-tools', async (electronApp) => {
     const page = electronApp.windows()[0] || await electronApp.firstWindow()
     await page.waitForFunction(() => window.store?.configLoaded === true, { timeout: 20000 })
@@ -3201,7 +3230,9 @@ test('tool center and batch editor stay reachable in compact real app windows', 
         leftSidebarWidth: 300,
         rightPanelVisible: true,
         rightPanelPinned: true,
-        rightPanelWidth: 1000
+        rightPanelWidth: 1000,
+        openQuickCommandBar: false,
+        pinnedQuickCommandBar: false
       },
       {
         name: 'closed-left-pinned-right-overlay',
@@ -3211,7 +3242,9 @@ test('tool center and batch editor stay reachable in compact real app windows', 
         leftSidebarWidth: 300,
         rightPanelVisible: true,
         rightPanelPinned: true,
-        rightPanelWidth: 1000
+        rightPanelWidth: 1000,
+        openQuickCommandBar: false,
+        pinnedQuickCommandBar: false
       },
       {
         name: 'dual-unpinned-overlay',
@@ -3221,7 +3254,9 @@ test('tool center and batch editor stay reachable in compact real app windows', 
         leftSidebarWidth: 300,
         rightPanelVisible: true,
         rightPanelPinned: false,
-        rightPanelWidth: 1000
+        rightPanelWidth: 1000,
+        openQuickCommandBar: false,
+        pinnedQuickCommandBar: false
       },
       {
         name: 'oversized-dual-pinned-overlay',
@@ -3231,9 +3266,22 @@ test('tool center and batch editor stay reachable in compact real app windows', 
         leftSidebarWidth: 1000,
         rightPanelVisible: true,
         rightPanelPinned: true,
-        rightPanelWidth: 1000
+        rightPanelWidth: 1000,
+        openQuickCommandBar: false,
+        pinnedQuickCommandBar: false
       }
     ]
+    const fleetQuickbarState = {
+      name: 'fleet-with-terminal-quickbar-pinned',
+      openedSideBar: '',
+      pinned: true,
+      leftSidebarWidth: 300,
+      rightPanelVisible: false,
+      rightPanelPinned: false,
+      rightPanelWidth: 320,
+      openQuickCommandBar: true,
+      pinnedQuickCommandBar: true
+    }
     const originalCompactShellState = await captureCompactShellState(page)
 
     try {
@@ -3319,23 +3367,185 @@ test('tool center and batch editor stay reachable in compact real app windows', 
           const splitContext = JSON.stringify({ size, splitMetrics })
           expect(splitMetrics.terminal.rect.width, splitContext).toBeGreaterThan(0)
 
+          await ensureVisualBookmark(page)
+          await ensureVisualFleetBookmark(page)
+          await applyCompactShellState(page, fleetQuickbarState)
+          const terminalBeforeFleet = await inspectCompactShellGeometry(page)
           await page.evaluate(() => window.store.openFleetStatus())
-          await page.locator('.fleet-status-workspace-active').waitFor()
+          await expect.poll(() => page.evaluate(() => window.store.mainWorkspaceMode)).toBe('fleet-status')
+          await expect(page.locator('.fleet-status-toolbar')).toHaveCount(1)
           const fleetMetrics = await page.locator('.fleet-status-workspace-active').evaluate((workspace) => {
+            const scroll = workspace.querySelector('.fleet-status-scroll')
+            const toolbar = workspace.querySelector('.fleet-status-toolbar')
+            const footer = document.querySelector('.main-footer')
+            scroll.scrollTop = toolbar.offsetTop
             const rect = workspace.getBoundingClientRect()
+            const toolbarRect = toolbar.getBoundingClientRect()
+            const footerRect = footer.getBoundingClientRect()
+            const control = toolbar.querySelector('input, button, [role="combobox"]')
+            const controlRect = control.getBoundingClientRect()
+            const hitTarget = document.elementFromPoint(
+              controlRect.left + controlRect.width / 2,
+              Math.max(0, Math.min(window.innerHeight - 1, controlRect.top + controlRect.height / 2))
+            )
             return {
               rect: rect.toJSON(),
+              footer: footerRect.toJSON(),
+              scroll: {
+                clientHeight: scroll.clientHeight,
+                scrollHeight: scroll.scrollHeight,
+                overflowY: window.getComputedStyle(scroll).overflowY
+              },
+              toolbar: toolbarRect.toJSON(),
+              controlReachable: Boolean(hitTarget && control.contains(hitTarget)),
               viewport: { width: window.innerWidth, height: window.innerHeight }
             }
           })
           const fleetContext = JSON.stringify({ size, fleetMetrics })
           expect(fleetMetrics.rect.width, fleetContext).toBeGreaterThan(0)
-          expect(fleetMetrics.rect.height, fleetContext).toBeGreaterThan(0)
+          expect(Math.abs(
+            fleetMetrics.rect.height - (fleetMetrics.viewport.height - 44 - 36)
+          ), fleetContext).toBeLessThanOrEqual(1)
           expect(fleetMetrics.rect.left, fleetContext).toBeGreaterThanOrEqual(0)
           expect(fleetMetrics.rect.right, fleetContext).toBeLessThanOrEqual(fleetMetrics.viewport.width + 1)
+          expect(Math.abs(fleetMetrics.footer.left - fleetMetrics.rect.left), fleetContext).toBeLessThanOrEqual(1)
+          expect(Math.abs(fleetMetrics.footer.right - fleetMetrics.rect.right), fleetContext).toBeLessThanOrEqual(1)
+          expect(Math.abs(fleetMetrics.footer.top - fleetMetrics.rect.bottom), fleetContext).toBeLessThanOrEqual(1)
+          expect(fleetMetrics.scroll.clientHeight, fleetContext).toBeGreaterThan(0)
+          expect(fleetMetrics.scroll.scrollHeight, fleetContext).toBeGreaterThan(fleetMetrics.scroll.clientHeight)
+          expect(fleetMetrics.scroll.overflowY, fleetContext).toBe('auto')
+          expect(fleetMetrics.toolbar.height, fleetContext).toBeGreaterThan(0)
+          expect(fleetMetrics.controlReachable, fleetContext).toBe(true)
           expect(splitMetrics.overlaps, splitContext).toEqual([])
 
           await page.evaluate(() => window.store.closeFleetStatus())
+          await expect.poll(() => page.evaluate(() => window.store.mainWorkspaceMode)).toBe('terminal')
+          const terminalAfterFleet = await inspectCompactShellGeometry(page)
+          const quickbarMetrics = await page.locator('.qm-wrap-tooltip').evaluate((panel) => {
+            const body = panel.querySelector(':scope > .pd2')
+            const pin = panel.querySelector('.qm-flex .ant-space-compact button')
+            const list = panel.querySelector('.qm-list-wrap')
+            const content = list.querySelector('.qm-item, button')
+            const terminal = document.querySelector('.layout-wrap-c3')
+            const footer = document.querySelector('.main-footer')
+            body.scrollTop = pin.offsetTop
+            const panelRect = panel.getBoundingClientRect()
+            const pinRect = pin.getBoundingClientRect()
+            const pinHitTarget = document.elementFromPoint(
+              pinRect.left + pinRect.width / 2,
+              Math.max(0, Math.min(window.innerHeight - 1, pinRect.top + pinRect.height / 2))
+            )
+            body.scrollTop = list.offsetTop
+            const contentRect = content.getBoundingClientRect()
+            const contentHitTarget = document.elementFromPoint(
+              contentRect.left + Math.min(16, contentRect.width / 2),
+              Math.max(0, Math.min(window.innerHeight - 1, contentRect.top + Math.min(16, contentRect.height / 2)))
+            )
+            return {
+              panel: panelRect.toJSON(),
+              body: {
+                clientHeight: body.clientHeight,
+                scrollHeight: body.scrollHeight,
+                overflowY: window.getComputedStyle(body).overflowY
+              },
+              pin: pinRect.toJSON(),
+              pinReachable: Boolean(pinHitTarget && pin.contains(pinHitTarget)),
+              content: contentRect.toJSON(),
+              contentReachable: Boolean(contentHitTarget && content.contains(contentHitTarget)),
+              terminal: terminal.getBoundingClientRect().toJSON(),
+              footer: footer.getBoundingClientRect().toJSON(),
+              documentScroll: { x: window.scrollX, y: window.scrollY }
+            }
+          })
+          const quickbarContext = JSON.stringify({ size, quickbarMetrics })
+          expect(quickbarMetrics.terminal.height, quickbarContext).toBeGreaterThanOrEqual(64)
+          expect(Math.abs(
+            quickbarMetrics.panel.height - (quickbarMetrics.footer.top - quickbarMetrics.terminal.bottom)
+          ), quickbarContext).toBeLessThanOrEqual(1)
+          expect(Math.abs(quickbarMetrics.panel.bottom - quickbarMetrics.footer.top), quickbarContext)
+            .toBeLessThanOrEqual(1)
+          expect(quickbarMetrics.body.overflowY, quickbarContext).toBe('auto')
+          expect(quickbarMetrics.body.scrollHeight, quickbarContext)
+            .toBeGreaterThan(quickbarMetrics.body.clientHeight)
+          expect(quickbarMetrics.pinReachable, quickbarContext).toBe(true)
+          expect(quickbarMetrics.contentReachable, quickbarContext).toBe(true)
+          expect(quickbarMetrics.documentScroll, quickbarContext).toEqual({ x: 0, y: 0 })
+          const pinnedTerminalTheme = await inspectTerminalInvariant(page)
+          for (const selector of ['.term-wrap', '.xterm', '.xterm-viewport']) {
+            const surface = pinnedTerminalTheme.find(item => item.selector === selector)
+            expect(surface?.found, JSON.stringify({ size, selector, pinnedTerminalTheme })).toBe(true)
+            expect(surface.background, JSON.stringify({ size, selector, surface })).toBe(lockedTerminalRgb)
+            expect(surface.directBackground, JSON.stringify({ size, selector, surface })).toBe(lockedTerminalRgb)
+          }
+
+          const quickbarPin = page.getByRole('button', { name: '取消固定快捷命令面板' })
+          await quickbarPin.evaluate((button) => {
+            const body = button.closest('.qm-wrap-tooltip').querySelector(':scope > .pd2')
+            const bodyRect = body.getBoundingClientRect()
+            const buttonRect = button.getBoundingClientRect()
+            body.scrollTop += buttonRect.top - bodyRect.top - (body.clientHeight - buttonRect.height) / 2
+          })
+          await quickbarPin.click()
+          await expect.poll(() => page.evaluate(() => window.store.pinnedQuickCommandBar)).toBe(false)
+          const terminalAfterUnpin = await inspectCompactShellGeometry(page)
+          expect(terminalAfterUnpin.terminal.rect.height, quickbarContext)
+            .toBeGreaterThan(quickbarMetrics.terminal.height)
+          expect(Math.abs(
+            terminalAfterUnpin.terminal.rect.top - quickbarMetrics.terminal.top
+          ), quickbarContext).toBeLessThanOrEqual(1)
+          const quickbarRepin = page.getByRole('button', { name: '固定快捷命令面板' })
+          await quickbarRepin.evaluate((button) => {
+            const body = button.closest('.qm-wrap-tooltip').querySelector(':scope > .pd2')
+            const bodyRect = body.getBoundingClientRect()
+            const buttonRect = button.getBoundingClientRect()
+            body.scrollTop += buttonRect.top - bodyRect.top - (body.clientHeight - buttonRect.height) / 2
+          })
+          await quickbarRepin.click()
+          await expect.poll(() => page.evaluate(() => window.store.pinnedQuickCommandBar)).toBe(true)
+          const terminalAfterRepin = await inspectCompactShellGeometry(page)
+          const quickbarAfterRepin = await page.locator('.qm-wrap-tooltip').evaluate(panel => (
+            panel.getBoundingClientRect().toJSON()
+          ))
+          expect(Math.abs(
+            terminalAfterRepin.terminal.rect.height - quickbarMetrics.terminal.height
+          ), quickbarContext).toBeLessThanOrEqual(1)
+          expect(Math.abs(
+            quickbarAfterRepin.height - quickbarMetrics.panel.height
+          ), quickbarContext).toBeLessThanOrEqual(1)
+          for (const edge of ['top', 'right', 'bottom', 'left']) {
+            expect(Math.abs(
+              terminalAfterRepin.terminal.rect[edge] - quickbarMetrics.terminal[edge]
+            ), quickbarContext).toBeLessThanOrEqual(1)
+          }
+          expect(await page.evaluate(() => ({ x: window.scrollX, y: window.scrollY })), quickbarContext)
+            .toEqual({ x: 0, y: 0 })
+          fleetQuickbarChecks.push({
+            zoom: size.zoom,
+            viewport: fleetMetrics.viewport,
+            fleet: {
+              height: fleetMetrics.rect.height,
+              bottom: fleetMetrics.rect.bottom,
+              footerTop: fleetMetrics.footer.top,
+              overflowY: fleetMetrics.scroll.overflowY,
+              controlReachable: fleetMetrics.controlReachable
+            },
+            terminalBefore: terminalBeforeFleet.terminal.rect,
+            terminalAfter: terminalAfterFleet.terminal.rect,
+            quickbar: quickbarMetrics,
+            terminalAfterUnpin: terminalAfterUnpin.terminal.rect,
+            terminalAfterRepin: terminalAfterRepin.terminal.rect
+          })
+          const restoredContext = JSON.stringify({ size, terminalBeforeFleet, fleetMetrics, terminalAfterFleet })
+          expect(terminalBeforeFleet.terminal.rect.height, restoredContext).toBeGreaterThanOrEqual(64)
+          expect(terminalAfterFleet.terminal.rect.height, restoredContext).toBeGreaterThanOrEqual(64)
+          expect(fleetMetrics.rect.height, restoredContext)
+            .toBeGreaterThan(terminalAfterFleet.terminal.rect.height)
+          expect(fleetMetrics.viewport.height - terminalAfterFleet.terminal.rect.bottom, restoredContext)
+            .toBeGreaterThan(fleetMetrics.viewport.height - fleetMetrics.rect.bottom)
+          await page.evaluate(() => {
+            window.store.pinnedQuickCommandBar = false
+            window.store.openQuickCommandBar = false
+          })
           await ensureVisualBookmark(page)
           const chromeMetrics = await page.evaluate(() => {
             const describe = element => {
@@ -3479,6 +3689,7 @@ test('tool center and batch editor stay reachable in compact real app windows', 
     }
 
     console.log(`SECONDARY_TOOL_CENTER_COMPACT_CHECKS=${compactChecks}`)
+    console.log(`SECONDARY_FLEET_QUICKBAR_CHECKS=${JSON.stringify(fleetQuickbarChecks)}`)
     expect(compactChecks).toBe(6)
   })
 })

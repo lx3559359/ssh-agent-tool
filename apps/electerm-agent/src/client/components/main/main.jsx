@@ -223,7 +223,7 @@ export default auto(function Index (props) {
     rightPanelVisible: store.rightPanelVisible,
     rightPanelPinned: store.rightPanelPinned,
     pinnedQuickCommandBar: store.pinnedQuickCommandBar,
-    inActiveTerminal: store.inActiveTerminal,
+    inActiveTerminal: !fleetStatusActive && store.inActiveTerminal,
     quickCommandBoxHeight,
     resizeTrigger: store.resizeTrigger
   })

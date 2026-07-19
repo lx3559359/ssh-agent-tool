@@ -643,11 +643,18 @@ export default function QuickCommandsFooterBox (props) {
   const cls = classNames('qm-list-wrap')
   const type = qmSortByFrequency ? 'primary' : 'default'
   const { left, right } = shellGeometry.terminalInsets
+  const pinnedGeometry = pinnedQuickCommandBar
+    ? {
+        height: shellGeometry.quickCommandBar.height,
+        bottom: shellGeometry.quickCommandBar.bottom
+      }
+    : {}
   const qmProps = {
     className: 'qm-wrap-tooltip',
     style: {
       left,
-      '--quick-command-right-offset': `${right + 10}px`
+      '--quick-command-right-offset': `${right + 10}px`,
+      ...pinnedGeometry
     },
     onMouseLeave: handleMouseLeave,
     onMouseEnter: handleMouseEnter
@@ -691,6 +698,7 @@ export default function QuickCommandsFooterBox (props) {
               onClick={handleTogglePinned}
               icon={<PushpinOutlined />}
               type={tp}
+              aria-label={pinnedQuickCommandBar ? '取消固定快捷命令面板' : '固定快捷命令面板'}
             />
             <Button
               onClick={window.store.handleOpenQuickCommandsSetting}

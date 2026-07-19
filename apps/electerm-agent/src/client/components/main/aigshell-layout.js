@@ -1,6 +1,7 @@
 export const aigshellTopBarHeight = 44
 export const minRightPanelWidth = 320
 export const maxRightPanelWidth = 1000
+export const minTerminalVertical = 64
 const minPinnedTerminalWidth = 320
 
 function toNonNegativeNumber (value, fallback = 0) {
@@ -67,17 +68,22 @@ export function getAIGShellGeometry ({
   const effectiveFooterHeight = toNonNegativeNumber(footerHeight)
   const effectiveQuickCommandBoxHeight = toNonNegativeNumber(quickCommandBoxHeight)
   const effectiveResizeTrigger = toNonNegativeNumber(resizeTrigger)
+  const terminalAvailableHeight = Math.max(
+    0,
+    viewportHeight - aigshellTopBarHeight - effectiveFooterHeight + effectiveResizeTrigger
+  )
+  const terminalHeightFloor = Math.min(minTerminalVertical, terminalAvailableHeight)
   const quickBarHeight = Boolean(inActiveTerminal) && Boolean(pinnedQuickCommandBar)
-    ? effectiveQuickCommandBoxHeight
+    ? Math.min(
+      effectiveQuickCommandBoxHeight,
+      Math.max(0, terminalAvailableHeight - terminalHeightFloor)
+    )
     : 0
   const terminalFrame = {
     top: aigshellTopBarHeight,
     left: terminalLeft,
     width: Math.max(0, viewportWidth - terminalLeft - rightPanelReservation),
-    height: Math.max(
-      0,
-      viewportHeight - aigshellTopBarHeight - effectiveFooterHeight - quickBarHeight + effectiveResizeTrigger
-    )
+    height: Math.max(0, terminalAvailableHeight - quickBarHeight)
   }
 
   return {
@@ -99,6 +105,11 @@ export function getAIGShellGeometry ({
       overlay: rightPanelIsVisible && rightPanelWidthValue > 0 && !rightPanelCanReserve,
       minWidth: Math.min(minRightPanelWidth, rightPanelMaxWidth),
       maxWidth: rightPanelMaxWidth
+    },
+    quickCommandBar: {
+      height: quickBarHeight,
+      reservation: quickBarHeight,
+      bottom: effectiveFooterHeight
     },
     terminalFrame,
     terminalInsets: {

@@ -11,6 +11,7 @@
   padding 12px 2px 14px 0
   overscroll-behavior contain
 .qm-wrap-tooltip
+  box-sizing border-box
   background var(--main-light)
   position absolute
   left 72px
@@ -24,15 +25,19 @@
   box-shadow 0 -12px 28px rgba(0, 0, 0, .18)
   overflow hidden
   .pd2
+    box-sizing border-box
     display flex
     flex-direction column
     height 100%
     min-height 0
+    overflow-x hidden
+    overflow-y auto
+    overscroll-behavior contain
 
 .qm-pinned
-  .qm-wrap-tooltip
-    height 300px
   .qm-list-wrap
+    flex none
+    min-height 132px
     max-height 210px
 
 .qm-search-input

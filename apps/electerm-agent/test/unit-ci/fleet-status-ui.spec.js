@@ -147,6 +147,11 @@ test('toolbar exposes filters refresh cancel and honest batch actions', () => {
   assert.deepEqual(callbackArguments.get('onAiDiagnose'), ['selectedRows'])
 })
 
+test('workspace keeps Fleet controls vertically reachable in short frames', () => {
+  const style = readClient('components/fleet-status/fleet-status.styl')
+  assert.match(style, /\.fleet-status-scroll[\s\S]*?overflow-x hidden[\s\S]*?overflow-y auto/)
+})
+
 test('service selector exposes complete read-only Chinese tool UI and responsive scrolling', () => {
   const source = readClient('components/fleet-status/fleet-service-selector.jsx')
   parseClient('components/fleet-status/fleet-service-selector.jsx')

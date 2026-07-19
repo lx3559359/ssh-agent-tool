@@ -127,6 +127,19 @@ test('all shell surfaces consume one shared explicit geometry result', () => {
   )
 })
 
+test('fleet geometry excludes the terminal-only pinned quick command reservation', () => {
+  const main = readClient('components/main/main.jsx')
+
+  assert.match(main, /const fleetStatusActive = store\.mainWorkspaceMode === 'fleet-status'/)
+  assert.match(main, /inActiveTerminal: !fleetStatusActive && store\.inActiveTerminal/)
+})
+
+test('pinned quick commands consume the shared capped vertical geometry', () => {
+  const quickCommands = readClient('components/quick-commands/quick-commands-box.jsx')
+  assert.match(quickCommands, /height: shellGeometry\.quickCommandBar\.height/)
+  assert.match(quickCommands, /bottom: shellGeometry\.quickCommandBar\.bottom/)
+})
+
 test('overlay sidebar stays inside the effective viewport at high zoom', () => {
   const sidebar = readClient('components/sidebar/sidebar.styl')
 
@@ -578,6 +591,8 @@ test('022 persists compact shell geometry states and restores every mutated stor
   assert.match(compact[0], /rightPanelWidth: 1000/)
   assert.match(compact[0], /language: 'en_us'/)
   assert.match(compact[0], /language: 'zh_cn'/)
+  assert.match(compact[0], /openQuickCommandBar/)
+  assert.match(compact[0], /pinnedQuickCommandBar/)
   assert.match(compact[0], /finally \{[\s\S]*restoreCompactShellState/)
   assert.doesNotMatch(compact[0], /store\.pinned = false[\s\S]{0,120}store\.rightPanelWidth = 320/)
 })

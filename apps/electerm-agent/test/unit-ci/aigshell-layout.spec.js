@@ -65,6 +65,47 @@ test('keeps unpinned layout on narrow icon rail only', async () => {
   })
 })
 
+test('caps pinned quick command geometry to preserve a readable compact terminal', async () => {
+  const {
+    getAIGShellGeometry,
+    minTerminalVertical
+  } = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/components/main/aigshell-layout.js')))
+  const base = {
+    width: 337,
+    footerHeight: 36,
+    sidebarWidth: 72,
+    leftSidebarWidth: 300,
+    openedSideBar: '',
+    pinned: true,
+    rightPanelWidth: 320,
+    rightPanelVisible: false,
+    rightPanelPinned: false,
+    pinnedQuickCommandBar: true,
+    inActiveTerminal: true,
+    quickCommandBoxHeight: 180,
+    resizeTrigger: 0
+  }
+  const cases = [
+    { height: 228, quickBarHeight: 84, terminalBottom: 120 },
+    { height: 200, quickBarHeight: 56, terminalBottom: 92 }
+  ]
+
+  assert.equal(minTerminalVertical, 64)
+  const desktop = getAIGShellGeometry({ ...base, height: 720 })
+  assert.equal(desktop.quickCommandBar.height, 180)
+  assert.equal(desktop.terminalFrame.height, 460)
+  for (const expected of cases) {
+    const geometry = getAIGShellGeometry({ ...base, height: expected.height })
+    assert.equal(geometry.terminalFrame.height, minTerminalVertical)
+    assert.deepEqual(geometry.quickCommandBar, {
+      height: expected.quickBarHeight,
+      reservation: expected.quickBarHeight,
+      bottom: 36
+    })
+    assert.equal(geometry.terminalInsets.bottom, expected.terminalBottom)
+  }
+})
+
 test('keeps a usable terminal frame when a pinned panel cannot fit beside it', async () => {
   const {
     getAIGShellGeometry
@@ -372,6 +413,7 @@ test('normalizes numeric strings and invalid geometry inputs without NaN or conc
     invalid.rightPanel.reservation,
     invalid.rightPanel.minWidth,
     invalid.rightPanel.maxWidth,
+    ...Object.values(invalid.quickCommandBar),
     ...Object.values(invalid.terminalFrame),
     ...Object.values(invalid.terminalInsets)
   ]
