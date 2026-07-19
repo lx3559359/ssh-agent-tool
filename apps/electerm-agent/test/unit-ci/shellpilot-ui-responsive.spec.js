@@ -16,6 +16,40 @@ function readProject (relativePath) {
   return fs.readFileSync(path.resolve(__dirname, '../..', relativePath), 'utf8')
 }
 
+function findNestedRuleByDeclaration (block, declarationPattern) {
+  if (!block) return null
+  const lines = block.split(/\r?\n/)
+  const declarationIndex = lines.findIndex(line => {
+    return /^ {4}\S/.test(line) && declarationPattern.test(line.trim())
+  })
+  if (declarationIndex < 0) return null
+
+  let bodyStart = declarationIndex
+  while (bodyStart > 0 && /^ {4}\S/.test(lines[bodyStart - 1])) {
+    bodyStart -= 1
+  }
+  let selectorStart = bodyStart - 1
+  while (selectorStart >= 0 && /^ {2}\S/.test(lines[selectorStart])) {
+    selectorStart -= 1
+  }
+  let bodyEnd = declarationIndex
+  while (bodyEnd + 1 < lines.length && /^ {4}\S/.test(lines[bodyEnd + 1])) {
+    bodyEnd += 1
+  }
+
+  return {
+    selectors: lines.slice(selectorStart + 1, bodyStart).map(line => line.trim()),
+    body: lines.slice(bodyStart, bodyEnd + 1).map(line => line.trim()).join('\n')
+  }
+}
+
+function assertRuleSelectors (rule, expectedSelectors) {
+  assert.ok(rule)
+  for (const selector of expectedSelectors) {
+    assert.ok(rule.selectors.includes(selector), `${selector} must belong to the scoped rule`)
+  }
+}
+
 test('ShellPilot top bar and AI panel use theme variables in day and night modes', () => {
   const topbar = readClient('components/main/aigshell-topbar.styl')
   const panel = readClient('components/side-panel-r/right-side-panel.styl')
@@ -194,14 +228,23 @@ test('settings depth tokens stay scoped to cards, inset controls and selected na
   const wrap = readClient('components/setting-panel/setting-wrap.styl')
   const section = setting.match(/\.sp-setting-section\r?\n([\s\S]*?)\r?\n\.sp-setting-section-header/)
   const form = setting.match(/\.sp-settings-form\r?\n([\s\S]*?)\r?\n\.sp-settings-page-header/)
-  const insetControls = form && form[1].match(/ {2}\.ant-input\r?\n {2}\.ant-input-affix-wrapper\r?\n {2}\.ant-input-number\r?\n {2}\.ant-select-selector\r?\n {2}textarea\r?\n((?: {4}.+(?:\r?\n|$))+)/)
+  const insetControls = findNestedRuleByDeclaration(
+    form && form[1],
+    /background var\(--sp-surface-inset\) !important/
+  )
   const shell = wrap.match(/\.setting-wrap\r?\n([\s\S]*?)\r?\n\.setting-header/)
   const headerLevel = wrap.match(/\.setting-header\r?\n([\s\S]*?)\r?\n {2}> \*/)
   const tabs = wrap.match(/\.setting-tabs\r?\n([\s\S]*?)\r?\n\.setting-tabs-setting/)
 
   assert.ok(section)
   assert.ok(form)
-  assert.ok(insetControls)
+  assertRuleSelectors(insetControls, [
+    '.ant-input',
+    '.ant-input-affix-wrapper',
+    '.ant-input-number',
+    '.ant-select-selector',
+    'textarea'
+  ])
   assert.ok(shell)
   assert.ok(headerLevel)
   assert.ok(tabs)
@@ -210,9 +253,9 @@ test('settings depth tokens stay scoped to cards, inset controls and selected na
   assert.match(section[1], /border 1px solid var\(--sp-border\)/)
   assert.match(section[1], /border-radius var\(--sp-radius-card\)/)
   assert.match(section[1], /box-shadow inset 0 1px 0 var\(--sp-highlight-top\), var\(--sp-shadow-card\)/)
-  assert.match(insetControls[1], /background var\(--sp-surface-inset\) !important/)
-  assert.match(insetControls[1], /border-color var\(--sp-border\) !important/)
-  assert.match(insetControls[1], /box-shadow inset 0 2px 4px rgba\(0, 0, 0, \.08\)/)
+  assert.match(insetControls.body, /background var\(--sp-surface-inset\) !important/)
+  assert.match(insetControls.body, /border-color var\(--sp-border\) !important/)
+  assert.match(insetControls.body, /box-shadow inset 0 2px 4px rgba\(0, 0, 0, \.08\)/)
   assert.match(shell[1], /background var\(--sp-page\)/)
   assert.match(headerLevel[1], /background var\(--sp-surface\)/)
   assert.match(headerLevel[1], /border 1px solid var\(--sp-border\)/)
@@ -220,6 +263,57 @@ test('settings depth tokens stay scoped to cards, inset controls and selected na
   assert.match(headerLevel[1], /box-shadow inset 0 1px 0 var\(--sp-highlight-top\), var\(--sp-shadow-control\)/)
   assert.doesNotMatch(headerLevel[1], /var\(--sp-shadow-card\)/)
   assert.match(tabs[1], /\.ant-tabs-tab-active[\s\S]*background var\(--sp-primary-soft\)/)
+})
+
+test('settings inset controls restore scoped hover focus error and disabled states', () => {
+  const setting = readClient('components/setting-panel/setting.styl')
+  const form = setting.match(/\.sp-settings-form\r?\n([\s\S]*?)\r?\n\.sp-settings-page-header/)
+  const formBlock = form && form[1]
+  const hover = findNestedRuleByDeclaration(formBlock, /border-color var\(--sp-primary\) !important/)
+  const focus = findNestedRuleByDeclaration(formBlock, /box-shadow 0 0 0 2px var\(--sp-primary-soft\) !important/)
+  const error = findNestedRuleByDeclaration(formBlock, /border-color var\(--sp-danger\) !important/)
+  const disabled = findNestedRuleByDeclaration(formBlock, /background var\(--sp-surface-subtle\) !important/)
+
+  assert.ok(form)
+  assertRuleSelectors(hover, [
+    '.ant-input:hover:not([disabled])',
+    'textarea:hover:not([disabled])',
+    '.ant-input-affix-wrapper:hover:not(.ant-input-affix-wrapper-disabled)',
+    '.ant-input-number:hover:not(.ant-input-number-disabled)',
+    '.ant-select:not(.ant-select-disabled):hover .ant-select-selector'
+  ])
+  assertRuleSelectors(focus, [
+    '.ant-input:focus',
+    'textarea:focus',
+    '.ant-input-focused',
+    '.ant-input-affix-wrapper-focused',
+    '.ant-input-affix-wrapper:focus-within',
+    '.ant-input-number-focused',
+    '.ant-input-number:focus-within',
+    '.ant-select-focused .ant-select-selector'
+  ])
+  assertRuleSelectors(error, [
+    '.ant-input-status-error',
+    'textarea.ant-input-status-error',
+    '.ant-input-affix-wrapper-status-error',
+    '.ant-input-number-status-error',
+    '.ant-select-status-error .ant-select-selector'
+  ])
+  assertRuleSelectors(disabled, [
+    '.ant-input[disabled]',
+    'textarea[disabled]',
+    '.ant-input-disabled',
+    '.ant-input-affix-wrapper-disabled',
+    '.ant-input-number-disabled',
+    '.ant-select-disabled .ant-select-selector'
+  ])
+  assert.match(focus.body, /border-color var\(--sp-primary\) !important/)
+  assert.match(focus.body, /box-shadow 0 0 0 2px var\(--sp-primary-soft\) !important/)
+  assert.match(error.body, /border-color var\(--sp-danger\) !important/)
+  assert.match(error.body, /box-shadow 0 0 0 1px var\(--sp-danger\) !important/)
+  assert.match(disabled.body, /background var\(--sp-surface-subtle\) !important/)
+  assert.match(disabled.body, /color var\(--sp-text-disabled\) !important/)
+  assert.match(disabled.body, /box-shadow none !important/)
 })
 
 test('settings depth migration preserves compact wrapping and internal scrolling contracts', () => {

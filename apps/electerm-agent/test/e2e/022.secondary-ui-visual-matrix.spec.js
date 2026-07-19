@@ -198,6 +198,149 @@ async function openSettings (page) {
   await page.locator('.sp-settings-form').waitFor({ state: 'visible' })
 }
 
+async function inspectSettingsControlStates (page) {
+  return page.locator('.sp-settings-form').evaluate(form => {
+    const previousFocus = document.activeElement
+    const fixture = document.createElement('div')
+    fixture.dataset.settingsStateFixture = 'true'
+    fixture.style.position = 'fixed'
+    fixture.style.left = '-9999px'
+    fixture.style.width = '240px'
+    form.appendChild(fixture)
+
+    const snapshot = element => {
+      const style = window.getComputedStyle(element)
+      return {
+        background: style.backgroundColor,
+        border: style.borderTopColor,
+        color: style.color,
+        shadow: style.boxShadow
+      }
+    }
+    const resolveToken = (token, property) => {
+      const probe = document.createElement('span')
+      probe.style[property] = `var(${token})`
+      fixture.appendChild(probe)
+      const value = window.getComputedStyle(probe)[property]
+      probe.remove()
+      return value
+    }
+    const createControl = kind => {
+      let root
+      let target
+      let focusable
+      let focusClasses
+      let errorClasses
+      let disabledClasses
+
+      if (kind === 'input' || kind === 'textarea') {
+        root = document.createElement(kind)
+        root.className = 'ant-input ant-input-outlined'
+        target = root
+        focusable = root
+        focusClasses = ['ant-input-focused']
+        errorClasses = ['ant-input-status-error']
+        disabledClasses = ['ant-input-disabled']
+      } else if (kind === 'affix') {
+        root = document.createElement('div')
+        root.className = 'ant-input-affix-wrapper ant-input-outlined'
+        focusable = document.createElement('input')
+        focusable.className = 'ant-input'
+        root.appendChild(focusable)
+        target = root
+        focusClasses = ['ant-input-affix-wrapper-focused']
+        errorClasses = ['ant-input-status-error', 'ant-input-affix-wrapper-status-error']
+        disabledClasses = ['ant-input-affix-wrapper-disabled']
+      } else if (kind === 'inputNumber') {
+        root = document.createElement('div')
+        root.className = 'ant-input-number ant-input-number-outlined'
+        focusable = document.createElement('input')
+        focusable.className = 'ant-input-number-input'
+        root.appendChild(focusable)
+        target = root
+        focusClasses = ['ant-input-number-focused']
+        errorClasses = ['ant-input-number-status-error']
+        disabledClasses = ['ant-input-number-disabled']
+      } else {
+        root = document.createElement('div')
+        root.className = 'ant-select ant-select-outlined'
+        root.tabIndex = 0
+        target = document.createElement('div')
+        target.className = 'ant-select-selector'
+        root.appendChild(target)
+        focusable = root
+        focusClasses = ['ant-select-focused']
+        errorClasses = ['ant-select-status-error']
+        disabledClasses = ['ant-select-disabled']
+      }
+
+      return { root, target, focusable, focusClasses, errorClasses, disabledClasses }
+    }
+    const inspectControl = kind => {
+      const control = createControl(kind)
+      fixture.appendChild(control.root)
+      const normal = snapshot(control.target)
+
+      control.focusable.focus()
+      control.focusClasses.forEach(className => control.root.classList.add(className))
+      const focus = snapshot(control.target)
+      control.focusable.blur()
+      control.focusClasses.forEach(className => control.root.classList.remove(className))
+
+      control.errorClasses.forEach(className => control.root.classList.add(className))
+      const error = snapshot(control.target)
+      control.errorClasses.forEach(className => control.root.classList.remove(className))
+
+      control.disabledClasses.forEach(className => control.root.classList.add(className))
+      if ('disabled' in control.focusable) control.focusable.disabled = true
+      const disabled = snapshot(control.target)
+      control.root.remove()
+      return { normal, focus, error, disabled }
+    }
+
+    const controls = {}
+    for (const kind of ['input', 'textarea', 'affix', 'inputNumber', 'select']) {
+      controls[kind] = inspectControl(kind)
+    }
+    const tokens = {
+      primary: resolveToken('--sp-primary', 'color'),
+      danger: resolveToken('--sp-danger', 'color'),
+      surfaceInset: resolveToken('--sp-surface-inset', 'backgroundColor'),
+      surfaceSubtle: resolveToken('--sp-surface-subtle', 'backgroundColor'),
+      textDisabled: resolveToken('--sp-text-disabled', 'color')
+    }
+    fixture.remove()
+    if (previousFocus instanceof window.HTMLElement && previousFocus.isConnected) previousFocus.focus()
+
+    return {
+      controls,
+      tokens,
+      fixtureRemoved: !document.querySelector('[data-settings-state-fixture="true"]'),
+      focusRestored: document.activeElement === previousFocus
+    }
+  })
+}
+
+function assertSettingsControlStates (snapshot, context) {
+  expect(snapshot.fixtureRemoved, context).toBe(true)
+  expect(snapshot.focusRestored, context).toBe(true)
+  for (const [kind, states] of Object.entries(snapshot.controls)) {
+    const stateContext = JSON.stringify({ context, kind, states, tokens: snapshot.tokens })
+    expect(states.normal.background, stateContext).toBe(snapshot.tokens.surfaceInset)
+    expect(states.normal.shadow, stateContext).toContain('inset')
+    expect(states.focus.border, stateContext).not.toBe(states.normal.border)
+    expect(states.focus.border, stateContext).toBe(snapshot.tokens.primary)
+    expect(states.focus.shadow, stateContext).not.toBe('none')
+    expect(states.focus.shadow, stateContext).not.toContain('inset')
+    expect(states.error.border, stateContext).not.toBe(states.normal.border)
+    expect(states.error.border, stateContext).toBe(snapshot.tokens.danger)
+    expect(states.disabled.background, stateContext).not.toBe(states.normal.background)
+    expect(states.disabled.background, stateContext).toBe(snapshot.tokens.surfaceSubtle)
+    expect(states.disabled.shadow, stateContext).toBe('none')
+    expect(states.disabled.color, stateContext).toBe(snapshot.tokens.textDisabled)
+  }
+}
+
 async function openConnection (page) {
   await page.evaluate(() => window.store.onNewSsh())
   await page.locator('.sp-configuration-form').waitFor({ state: 'visible' })
@@ -1248,6 +1391,8 @@ test('settings search supports visible results, keyboard navigation, preview lan
     expect(settingsDepth.shadow).not.toBe('none')
     expect(settingsDepth.radius).toBe('10px')
     expect(settingsDepth.overflow).toBe(false)
+    const settingsControlStates = await inspectSettingsControlStates(page)
+    assertSettingsControlStates(settingsControlStates, JSON.stringify({ runner: browserName }))
     const searchInput = page.locator('.setting-header-search input')
     await expect(searchInput).toBeFocused()
     await expect(searchInput).toHaveAttribute('role', 'combobox')
@@ -1318,6 +1463,20 @@ test('settings search supports visible results, keyboard navigation, preview lan
     }))
     expect(expandedMetrics.scrollWidth, JSON.stringify({ runner: browserName, expandedMetrics }))
       .toBeLessThanOrEqual(expandedMetrics.clientWidth)
+
+    let zoomedSectionMetrics
+    try {
+      await setWindowCase(electronApp, page, { width: 590, height: 400 }, 1.5)
+      zoomedSectionMetrics = await page.locator('.sp-setting-section').first().evaluate(element => ({
+        clientWidth: element.clientWidth,
+        scrollWidth: element.scrollWidth,
+        overflow: element.scrollWidth > element.clientWidth + 1
+      }))
+    } finally {
+      await setWindowCase(electronApp, page, { width: 590, height: 400 }, 1)
+    }
+    expect(zoomedSectionMetrics.overflow, JSON.stringify({ runner: browserName, zoom: 1.5, zoomedSectionMetrics }))
+      .toBe(false)
   })
 })
 
