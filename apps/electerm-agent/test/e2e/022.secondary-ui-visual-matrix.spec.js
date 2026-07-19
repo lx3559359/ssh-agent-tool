@@ -570,9 +570,42 @@ async function inspectMenuDepth (menuRoot) {
   return menuRoot.evaluate((root) => {
     const surface = root.querySelector('.ant-dropdown-menu') || root
     const style = window.getComputedStyle(surface)
-    const rect = root.getBoundingClientRect()
+    const rootStyle = window.getComputedStyle(document.documentElement)
+    const rect = surface.getBoundingClientRect()
+    const rootRect = root.getBoundingClientRect()
     const items = [...surface.querySelectorAll('[role="menuitem"], .context-item')]
     const surfaceRect = surface.getBoundingClientRect()
+    const splitShadowLayers = value => {
+      if (!value || value === 'none') return []
+      const layers = []
+      let depth = 0
+      let start = 0
+      for (let index = 0; index < value.length; index += 1) {
+        if (value[index] === '(') depth += 1
+        if (value[index] === ')') depth -= 1
+        if (value[index] === ',' && depth === 0) {
+          layers.push(value.slice(start, index).trim())
+          start = index + 1
+        }
+      }
+      layers.push(value.slice(start).trim())
+      return layers
+    }
+    const resolveStyle = (property, value) => {
+      if (!value) return ''
+      const probe = document.createElement('span')
+      probe.style[property] = value
+      document.body.appendChild(probe)
+      const resolved = window.getComputedStyle(probe)[property]
+      probe.remove()
+      return resolved
+    }
+    const tokens = {
+      surfaceElevated: rootStyle.getPropertyValue('--sp-surface-elevated').trim(),
+      borderStrong: rootStyle.getPropertyValue('--sp-border-strong').trim(),
+      highlightTop: rootStyle.getPropertyValue('--sp-highlight-top').trim(),
+      shadowOverlay: rootStyle.getPropertyValue('--sp-shadow-overlay').trim()
+    }
     const isReachable = item => {
       if (!item) return false
       const itemRect = item.getBoundingClientRect()
@@ -581,6 +614,18 @@ async function inspectMenuDepth (menuRoot) {
     return {
       radius: style.borderRadius,
       shadow: style.boxShadow,
+      shadowLayers: splitShadowLayers(style.boxShadow),
+      background: style.backgroundColor,
+      border: style.borderTopColor,
+      borderWidth: style.borderTopWidth,
+      borderStyle: style.borderTopStyle,
+      tokens,
+      expected: {
+        background: resolveStyle('backgroundColor', tokens.surfaceElevated),
+        border: resolveStyle('color', tokens.borderStrong),
+        highlight: resolveStyle('boxShadow', `inset 0 1px 0 ${tokens.highlightTop}`),
+        overlay: resolveStyle('boxShadow', tokens.shadowOverlay)
+      },
       viewport: {
         left: rect.left,
         top: rect.top,
@@ -588,6 +633,12 @@ async function inspectMenuDepth (menuRoot) {
         bottom: rect.bottom,
         width: window.innerWidth,
         height: window.innerHeight
+      },
+      rootViewport: {
+        left: rootRect.left,
+        top: rootRect.top,
+        right: rootRect.right,
+        bottom: rootRect.bottom
       },
       firstReachable: isReachable(items[0]),
       lastReachable: isReachable(items.at(-1))
@@ -599,6 +650,17 @@ function assertMenuDepth (metrics, context) {
   const message = JSON.stringify({ context, metrics })
   expect(metrics.radius, message).toBe('10px')
   expect(metrics.shadow, message).not.toBe('none')
+  for (const value of Object.values(metrics.tokens)) {
+    expect(value, message).not.toBe('')
+  }
+  expect(metrics.background, message).toBe(metrics.expected.background)
+  expect(metrics.border, message).toBe(metrics.expected.border)
+  expect(metrics.borderWidth, message).toBe('1px')
+  expect(metrics.borderStyle, message).toBe('solid')
+  expect(metrics.shadowLayers, message).toEqual([
+    metrics.expected.highlight,
+    metrics.expected.overlay
+  ])
   expect(metrics.viewport.left, message).toBeGreaterThanOrEqual(-1)
   expect(metrics.viewport.top, message).toBeGreaterThanOrEqual(-1)
   expect(metrics.viewport.right, message).toBeLessThanOrEqual(metrics.viewport.width + 1)
@@ -659,8 +721,16 @@ async function openTerminalMenu (page) {
   await waitForPopupMotion(popup)
 }
 
-async function openSystemMenu (page) {
-  await page.locator('.menu-control').first().click()
+async function openSystemMenu (page, options = {}) {
+  await page.locator('.upgrade-panel:not(.upgrade-panel-hide) .close-upgrade-panel')
+    .click({ timeout: 1000 })
+    .catch(() => {})
+  const control = page.locator('.menu-control').first()
+  if (options.dispatchClick) {
+    await control.evaluate(element => element.click())
+  } else {
+    await control.click()
+  }
   const popup = page.locator('.ant-popover:visible').filter({
     has: page.locator('.context-menu')
   }).last()
@@ -1751,6 +1821,71 @@ test('context menus keep pointer placement and compact long-menu reachability', 
     expect(submenuPointerReachable, JSON.stringify({ runner: browserName })).toBe(true)
 
     await resetSurface(page, 'en_us')
+    const originalMinimumSize = await electronApp.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows()[0]
+      const [width, height] = window.getMinimumSize()
+      window.setMinimumSize(1, 1)
+      return { width, height }
+    })
+    await setWindowCase(electronApp, page, { width: 393, height: 267 }, 2)
+    const highZoomSystemMenu = await openSystemMenu(page, { dispatchClick: true })
+    const highZoomDepth = await inspectMenuDepth(highZoomSystemMenu)
+    console.log(`SECONDARY_SYSTEM_MENU_HIGH_ZOOM=${JSON.stringify(highZoomDepth)}`)
+    expect(highZoomDepth.viewport.width).toBeGreaterThanOrEqual(196)
+    expect(highZoomDepth.viewport.width).toBeLessThanOrEqual(198)
+    expect(highZoomDepth.viewport.height).toBeGreaterThanOrEqual(132)
+    expect(highZoomDepth.viewport.height).toBeLessThanOrEqual(135)
+    assertMenuDepth(highZoomDepth, {
+      runner: browserName,
+      surface: 'system-menu',
+      viewport: '393x267@200%'
+    })
+    const highZoomReachability = await highZoomSystemMenu.evaluate(menu => {
+      const items = [...menu.querySelectorAll('.context-item')]
+      const visibleInside = item => {
+        const itemRect = item.getBoundingClientRect()
+        const menuRect = menu.getBoundingClientRect()
+        return itemRect.top >= menuRect.top - 1 && itemRect.bottom <= menuRect.bottom + 1
+      }
+      menu.scrollTop = 0
+      const firstReachable = visibleInside(items[0])
+      items.at(-1).scrollIntoView({ block: 'nearest' })
+      return {
+        itemCount: items.length,
+        firstReachable,
+        lastReachable: visibleInside(items.at(-1)),
+        scrollTop: menu.scrollTop,
+        maxScrollTop: menu.scrollHeight - menu.clientHeight
+      }
+    })
+    expect(highZoomReachability.itemCount, JSON.stringify({ browserName, highZoomReachability }))
+      .toBeGreaterThan(1)
+    expect(highZoomReachability.firstReachable, JSON.stringify({ browserName, highZoomReachability }))
+      .toBe(true)
+    expect(highZoomReachability.lastReachable, JSON.stringify({ browserName, highZoomReachability }))
+      .toBe(true)
+    expect(highZoomReachability.scrollTop, JSON.stringify({ browserName, highZoomReachability }))
+      .toBeGreaterThan(0)
+    expect(highZoomReachability.scrollTop, JSON.stringify({ browserName, highZoomReachability }))
+      .toBeLessThanOrEqual(highZoomReachability.maxScrollTop + 1)
+
+    const highZoomSubmenuTrigger = highZoomSystemMenu.locator('.with-sub-menu').first()
+    await highZoomSubmenuTrigger.scrollIntoViewIfNeeded()
+    await highZoomSubmenuTrigger.hover()
+    const highZoomSubmenu = highZoomSubmenuTrigger.locator('.sub-context-menu')
+    await expect(highZoomSubmenu).toBeVisible()
+    const highZoomSubmenuReachable = await highZoomSubmenu.evaluate(element => {
+      const rect = element.getBoundingClientRect()
+      const x = Math.min(window.innerWidth - 1, Math.max(0, rect.left + rect.width / 2))
+      const y = Math.min(window.innerHeight - 1, Math.max(0, rect.top + Math.min(rect.height, 32) / 2))
+      return element.contains(document.elementFromPoint(x, y))
+    })
+    expect(highZoomSubmenuReachable, JSON.stringify({ browserName })).toBe(true)
+
+    await resetSurface(page, 'en_us')
+    await electronApp.evaluate(({ BrowserWindow }, size) => {
+      BrowserWindow.getAllWindows()[0].setMinimumSize(size.width, size.height)
+    }, originalMinimumSize)
     await setWindowCase(electronApp, page, { width: 1100, height: 700 }, 1)
     const desktopSystemMenu = await openSystemMenu(page)
     const desktopSubmenuTrigger = desktopSystemMenu.locator('.with-sub-menu').first()
