@@ -1827,6 +1827,10 @@ async function runSurfaceCase (page, testInfo, failures, context, surface, stats
     await resetSurface(page, context.language)
     if (surface.prepare) await surface.prepare(page)
     const documentBaseline = await inspectDocumentBaseline(page)
+    for (const node of documentBaseline.nodes) {
+      expect(node.scrollWidth, JSON.stringify({ ...context, surface: surface.name, documentBaseline }))
+        .toBeLessThanOrEqual(node.clientWidth)
+    }
     console.log(`SECONDARY_MAIN_CHROME_BASELINE=${JSON.stringify({ ...context, surface: surface.name, ...documentBaseline })}`)
     await surface.open(page)
     if (surface.name === 'ai-config') {
@@ -3077,12 +3081,20 @@ test('tool center and batch editor stay reachable in compact real app windows', 
       { width: 820, height: 600 },
       { width: 590, height: 400 },
       { width: 472, height: 320 },
-      { width: 393, height: 267 }
+      { width: 393, height: 267 },
+      { width: 590, height: 400, zoom: 2 }
     ]
 
     for (const size of compactSizes) {
-      await setWindowCase(electronApp, page, size, 1)
+      await setWindowCase(electronApp, page, size, size.zoom || 1)
       await resetSurface(page, 'en_us')
+      if (size.zoom === 2) {
+        const documentWidths = await inspectDocumentBaseline(page)
+        for (const node of documentWidths.nodes) {
+          expect(node.scrollWidth, JSON.stringify({ size, documentWidths }))
+            .toBeLessThanOrEqual(node.clientWidth)
+        }
+      }
       await openWidgets(page)
       const metrics = await page.locator('.setting-tabs-widgets').evaluate(root => {
         const shell = root.querySelector('.widgets-shell')
@@ -3138,7 +3150,7 @@ test('tool center and batch editor stay reachable in compact real app windows', 
     }
 
     console.log(`SECONDARY_TOOL_CENTER_COMPACT_CHECKS=${compactChecks}`)
-    expect(compactChecks).toBe(4)
+    expect(compactChecks).toBe(5)
   })
 })
 

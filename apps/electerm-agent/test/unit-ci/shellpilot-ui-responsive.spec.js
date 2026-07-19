@@ -95,6 +95,12 @@ test('right panel width and SFTP list height are bounded for small windows', () 
   assert.match(sftp, /Math\.max\(0, height - 42 - 30 - 32 - 90\)/)
 })
 
+test('overlay sidebar stays inside the effective viewport at high zoom', () => {
+  const sidebar = readClient('components/sidebar/sidebar.styl')
+
+  assert.match(sidebar, /\.sidebar-list[\s\S]*max-width calc\(100vw - 72px\)/)
+})
+
 test('AI panel reports tested model state instead of claiming it is always online', () => {
   const panel = readClient('components/side-panel-r/side-panel-r.jsx')
   const header = readClient('components/side-panel-r/right-side-panel-ai-header.jsx')
@@ -491,6 +497,15 @@ test('secondary UI work leaves the main terminal footer layout contract untouche
   assert.ok(flexBlock)
   assert.doesNotMatch(flexBlock[1], /overflow-x|overflow-y|::-webkit-scrollbar/)
   assert.doesNotMatch(flexBlock[1], /width 100%|max-width 100%/)
+})
+
+test('terminal footer reduces control margins at 200 percent compact width', () => {
+  const footer = readClient('components/footer/footer.styl')
+  const compact = footer.match(/@media \(max-width: 360px\)([\s\S]*)$/)
+
+  assert.ok(compact)
+  assert.match(compact[1], /\.terminal-footer-unit[\s\S]*margin-left 2px/)
+  assert.match(compact[1], /\.terminal-footer-info[\s\S]*margin-right 2px/)
 })
 
 test('secondary surface overflow is compared with main chrome immediately before that surface opens', () => {

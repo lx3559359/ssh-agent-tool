@@ -63,6 +63,60 @@ test('keeps unpinned layout on narrow icon rail only', async () => {
   })
 })
 
+test('keeps a usable terminal frame when a pinned panel cannot fit beside it', async () => {
+  const {
+    getAIGShellContentFrame
+  } = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/components/main/aigshell-layout.js')))
+
+  const frame = getAIGShellContentFrame({
+    width: 337,
+    height: 228,
+    footerHeight: 36,
+    sidebarWidth: 72,
+    leftSidebarWidth: 280,
+    rightPanelWidth: 320,
+    pinned: false,
+    rightPanelVisible: true,
+    rightPanelPinned: true,
+    pinnedQuickCommandBar: false,
+    inActiveTerminal: true,
+    quickCommandBoxHeight: 180,
+    resizeTrigger: 0
+  })
+
+  assert.deepEqual(frame, {
+    top: 44,
+    left: 72,
+    width: 265,
+    height: 148
+  })
+})
+
+test('keeps an overlay sidebar from shifting the terminal footer offscreen', async () => {
+  const {
+    getAIGShellFooterLeft
+  } = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/components/main/aigshell-layout.js')))
+
+  assert.equal(getAIGShellFooterLeft({
+    sidebarWidth: 72,
+    leftSidebarWidth: 300,
+    openedSideBar: 'bookmarks',
+    pinned: false
+  }), 72)
+  assert.equal(getAIGShellFooterLeft({
+    sidebarWidth: 72,
+    leftSidebarWidth: 300,
+    openedSideBar: 'bookmarks',
+    pinned: true
+  }), 372)
+  assert.equal(getAIGShellFooterLeft({
+    sidebarWidth: 72,
+    leftSidebarWidth: 300,
+    openedSideBar: false,
+    pinned: true
+  }), 72)
+})
+
 test('clamps invalid right panel width so AI chat remains visible', async () => {
   const {
     normalizeRightPanelWidth

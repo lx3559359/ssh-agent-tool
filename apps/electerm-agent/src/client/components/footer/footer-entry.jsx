@@ -11,6 +11,7 @@ import { refs } from '../common/ref'
 import Qm from '../quick-commands/quick-commands-select'
 import AIIcon from '../icons/ai-icon'
 import CmdHistory from './cmd-history'
+import { getAIGShellFooterLeft } from '../main/aigshell-layout'
 
 const {
   Option
@@ -164,19 +165,20 @@ export default auto(function FooterEntry (props) {
   const {
     leftSidebarWidth,
     openedSideBar,
+    pinned,
     inActiveTerminal
   } = props.store
-  const w = sidebarWidth + leftSidebarWidth
-  const sideProps = openedSideBar
-    ? {
-        className: 'main-footer',
-        style: {
-          left: `${w}px`
-        }
-      }
-    : {
-        className: 'main-footer'
-      }
+  const footerLeft = getAIGShellFooterLeft({
+    sidebarWidth,
+    leftSidebarWidth,
+    openedSideBar,
+    pinned
+  })
+  const sideProps = {
+    style: {
+      left: `${footerLeft}px`
+    }
+  }
   if (
     !inActiveTerminal
   ) {
@@ -185,7 +187,7 @@ export default auto(function FooterEntry (props) {
     )
   }
   return (
-    <div {...sideProps}>
+    <div className='main-footer' {...sideProps}>
       <div className='terminal-footer-flex'>
         {renderConnectionStatus()}
         {renderAIIcon()}

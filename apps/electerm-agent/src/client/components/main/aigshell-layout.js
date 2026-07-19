@@ -1,6 +1,7 @@
 export const aigshellTopBarHeight = 44
 export const minRightPanelWidth = 320
 export const maxRightPanelWidth = 1000
+const minPinnedTerminalWidth = 320
 
 export function normalizeRightPanelWidth (value) {
   const width = Number.parseInt(value, 10)
@@ -21,6 +22,15 @@ export function getMaxRightPanelWidth (windowWidth, reservedWidth = 420) {
   )
 }
 
+export function getAIGShellFooterLeft ({
+  sidebarWidth,
+  leftSidebarWidth,
+  openedSideBar,
+  pinned
+}) {
+  return sidebarWidth + (openedSideBar && pinned ? leftSidebarWidth : 0)
+}
+
 export function getAIGShellContentFrame ({
   width,
   height,
@@ -37,11 +47,9 @@ export function getAIGShellContentFrame ({
   resizeTrigger = 0
 }) {
   const left = pinned ? sidebarWidth + leftSidebarWidth : sidebarWidth
-  const right = rightPanelVisible && rightPanelPinned
-    ? Math.min(
-      normalizeRightPanelWidth(rightPanelWidth),
-      getMaxRightPanelWidth(width, left + 320)
-    )
+  const maxPinnedPanelWidth = Math.max(0, width - left - minPinnedTerminalWidth)
+  const right = rightPanelVisible && rightPanelPinned && maxPinnedPanelWidth >= minRightPanelWidth
+    ? Math.min(normalizeRightPanelWidth(rightPanelWidth), maxPinnedPanelWidth)
     : 0
   const quickBarHeight = inActiveTerminal && pinnedQuickCommandBar ? quickCommandBoxHeight : 0
 

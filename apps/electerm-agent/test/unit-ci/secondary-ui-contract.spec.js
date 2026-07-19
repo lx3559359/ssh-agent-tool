@@ -580,6 +580,17 @@ test('batch operation copy follows preview language without remounting editor st
   assert.match(shortcutEditor, /window\.translate\('shellpilotShortcutAlreadyExists'\)/)
 })
 
+test('simple editor search control can shrink in narrow tool panels', async () => {
+  const source = readClient('css/includes/secondary-ui.styl')
+  const filename = path.join(clientRoot, 'css/includes/secondary-ui.styl')
+  const css = await compileStylusSource(source, filename)
+  const blocks = topLevelCssBlocks(css)
+  assertCssRule(blocks, '.simple-editor > .ant-flex > .ant-input-search', {
+    'min-width': '0',
+    flex: '1 1 auto'
+  })
+})
+
 test('batch operation formatted copy preserves technical and backend details', async () => {
   const i18n = await import(moduleUrl('common/shellpilot-i18n-overrides.js'))
   const { formatBatchOpMessage } = await import(moduleUrl('components/batch-op/batch-op-i18n.js'))
