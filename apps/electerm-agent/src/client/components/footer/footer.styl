@@ -19,7 +19,6 @@
   align-items center
   height 100%
   min-width 0
-  overflow hidden
   .terminal-footer-unit .ant-select-selector .ant-select-selection-placeholder
     line-height 24px
 .terminal-footer-unit
@@ -36,6 +35,7 @@
 
 .terminal-footer-center
   flex-grow 1
+  min-width 0
 .terminal-footer-info
   margin-right 10px
   line-height 34px
@@ -51,8 +51,11 @@
   align-items center
   gap 8px
   min-width 0
-  overflow hidden
   white-space nowrap
+.terminal-footer-status > span:not(.terminal-footer-dot)
+  min-width 0
+  overflow hidden
+  text-overflow ellipsis
 .terminal-footer-muted
   color var(--sp-text-muted)
 .terminal-footer-dot

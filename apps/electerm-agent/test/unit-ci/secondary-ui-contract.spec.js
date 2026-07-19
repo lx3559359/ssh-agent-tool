@@ -108,7 +108,7 @@ function assertCssRule (blocks, selector, expectedDeclarations) {
 }
 
 function assertNoProtectedTerminalElevation (css, filename) {
-  const protectedTerminalSelector = /(?:\.tabs\.terminal-session-tabs|\.term-wrap|\.xterm(?:-screen)?)(?=$|[\s,>+~.:[#])/i
+  const protectedTerminalSelector = /(?:\.tabs\.terminal-session-tabs|\.terms-box|\.terminal-control|\.term-wrap|\.xterm(?:-screen|-viewport)?)(?=$|[\s,>+~.:[#])/i
   const visit = source => {
     for (const block of topLevelCssBlocks(source)) {
       if (block.header.startsWith('@')) {
@@ -118,8 +118,8 @@ function assertNoProtectedTerminalElevation (css, filename) {
       if (!protectedTerminalSelector.test(block.header)) continue
       assert.doesNotMatch(
         block.body,
-        /box-shadow\s*:[^;]*(?:--sp-shadow-card|--sp-shadow-overlay)/i,
-        `${filename} must not apply card or overlay elevation to ${block.header}`
+        /box-shadow\s*:[^;]*--sp-shadow-[a-z0-9-]+/i,
+        `${filename} must not apply semantic UI elevation to ${block.header}`
       )
     }
   }
@@ -934,7 +934,7 @@ test('client chrome maps concrete shell selectors to restrained semantic depth',
   })
 })
 
-test('client chrome cannot decorate protected terminal surfaces with UI card elevation', async () => {
+test('client chrome cannot decorate protected terminal surfaces with semantic UI elevation', async () => {
   const chromeFiles = [
     'components/main/aigshell-topbar.styl',
     'components/sidebar/sidebar.styl',
@@ -952,6 +952,60 @@ test('client chrome cannot decorate protected terminal surfaces with UI card ele
   assert.match(terminal, /\.terms-box\s*\n\s*background shellPilotTerminalBackground/)
   assert.match(terminal, /\.term-wrap\s*\n\s*background shellPilotTerminalBackground/)
   assert.match(terminal, /#container[\s\S]*?\.xterm\s*\n\s*background shellPilotTerminalBackground/)
+})
+
+test('terminal elevation guard covers every rendered terminal layer and semantic shadow', () => {
+  const selectors = [
+    '.tabs.terminal-session-tabs',
+    '.terms-box',
+    '.terminal-control',
+    '.term-wrap',
+    '.xterm',
+    '.xterm-screen',
+    '.xterm-viewport'
+  ]
+  for (const selector of selectors) {
+    assert.throws(
+      () => assertNoProtectedTerminalElevation(
+        `${selector} { box-shadow: var(--sp-shadow-control); }`,
+        'terminal-shadow-mutation.css'
+      ),
+      `${selector} must reject every --sp-shadow-* token`
+    )
+  }
+})
+
+test('shell chrome E2E uses concrete scroll mutation, clipping ancestry and document overflow gates', () => {
+  const source = fs.readFileSync(path.join(projectRoot, 'test/e2e/022.secondary-ui-visual-matrix.spec.js'), 'utf8')
+  const inspect = source.match(/async function inspectShellChrome \(page\) \{([\s\S]*?)\n\}\n\nfunction assertShellChrome/)
+
+  assert.ok(inspect)
+  assert.match(source, /async function exerciseRightPanelScroll/)
+  assert.match(source, /\.right-side-panel-content \.ai-history-wrap/)
+  assert.match(source, /scrollTop/)
+  assert.match(source, /finally\s*\{/)
+  assert.match(source, /scrollFixture\.remove\(\)/)
+  assert.doesNotMatch(inspect[1], /querySelectorAll\('\.right-side-panel-content, \.right-side-panel-content \*'\)/)
+  for (const selector of ['.ai-icon', '.terminal-info-icon', 'a[href]', '[tabindex]']) {
+    assert.ok(inspect[1].includes(selector), `${selector} must be included in shell interactive reachability`)
+  }
+  assert.match(inspect[1], /clippingAncestors/)
+  assert.match(inspect[1], /aria-disabled/)
+  assert.match(inspect[1], /documentElement/)
+  assert.match(inspect[1], /document\.body/)
+  assert.match(inspect[1], /getElementById\('container'\)/)
+})
+
+test('footer uses per-text ellipsis instead of clipping the whole status and control row', () => {
+  const source = readClient('components/footer/footer.styl')
+  const flex = source.match(/\.terminal-footer-flex\r?\n([\s\S]*?)\r?\n\.terminal-footer-unit/)
+  const status = source.match(/\.terminal-footer-status\r?\n((?: {2}[^\r\n]*(?:\r?\n|$))*)/)
+
+  assert.ok(flex)
+  assert.ok(status)
+  assert.doesNotMatch(flex[1], /overflow hidden/)
+  assert.doesNotMatch(status[1], /overflow hidden/)
+  assert.match(source, /\.terminal-footer-status > span:not\(\.terminal-footer-dot\)[\s\S]*min-width 0[\s\S]*overflow hidden[\s\S]*text-overflow ellipsis/)
 })
 
 test('SFTP overflow more defaults safely to English and follows the current preview translator', async () => {

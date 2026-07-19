@@ -1329,6 +1329,7 @@ async function inspectTerminalInvariant (page) {
       '.tabs.terminal-session-tabs',
       '.tabs.terminal-session-tabs .tab.active',
       '.tabs.terminal-session-tabs .tab:not(.active)',
+      '.terms-box',
       '.terminal-control',
       '.term-wrap',
       '.xterm',
@@ -1369,6 +1370,9 @@ function assertTerminalInvariant (terminal, context) {
   for (const item of terminal) {
     expect(item.found, JSON.stringify({ context, item })).toBe(true)
     expect(item.background, JSON.stringify({ context, item })).toBe(lockedTerminalRgb)
+    if (item.selector !== '.xterm-screen') {
+      expect(item.directBackground, JSON.stringify({ context, item })).toBe(lockedTerminalRgb)
+    }
     expect(item.shadow, JSON.stringify({ context, item })).toBe('none')
   }
 }
@@ -1389,6 +1393,54 @@ async function inspectShellChrome (page) {
       ['rightPanel', '.right-side-panel', 'borderLeftColor'],
       ['footer', '.main-footer', 'borderTopColor']
     ]
+    const interactiveSelector = [
+      'button',
+      'input',
+      'textarea',
+      'select',
+      'a[href]',
+      '[role="button"]',
+      '[role="link"]',
+      '[role="combobox"]',
+      '[tabindex]',
+      '.ai-icon',
+      '.terminal-info-icon'
+    ].join(', ')
+    const renderedAndEnabled = element => {
+      const rect = element.getBoundingClientRect()
+      const style = window.getComputedStyle(element)
+      const hiddenAncestor = element.closest('[hidden], [inert], [aria-hidden="true"]')
+      return !hiddenAncestor &&
+        !element.matches(':disabled, [disabled], [aria-disabled="true"]') &&
+        rect.width > 0 && rect.height > 0 &&
+        style.display !== 'none' && style.visibility !== 'hidden' &&
+        Number.parseFloat(style.opacity || '1') > 0
+    }
+    const clippingAncestors = (element, shellRoot) => {
+      const result = []
+      let current = element.parentElement
+      while (current) {
+        const style = window.getComputedStyle(current)
+        const clipsX = ['hidden', 'clip', 'auto', 'scroll'].includes(style.overflowX)
+        const clipsY = ['hidden', 'clip', 'auto', 'scroll'].includes(style.overflowY)
+        if (clipsX || clipsY || current === shellRoot) {
+          const rect = current.getBoundingClientRect()
+          result.push({
+            className: String(current.className || ''),
+            root: current === shellRoot,
+            clipsX,
+            clipsY,
+            left: rect.left,
+            right: rect.right,
+            top: rect.top,
+            bottom: rect.bottom
+          })
+        }
+        if (current === shellRoot) break
+        current = current.parentElement
+      }
+      return result
+    }
     const shell = Object.fromEntries(shellSelectors.map(([name, selector, borderProperty]) => {
       const element = [...document.querySelectorAll(selector)].find(candidate => {
         const rect = candidate.getBoundingClientRect()
@@ -1398,20 +1450,44 @@ async function inspectShellChrome (page) {
       if (!element) return [name, { selector, found: false }]
       const rect = element.getBoundingClientRect()
       const style = window.getComputedStyle(element)
-      const interactiveOverflow = [...element.querySelectorAll('button, input, textarea, select, [role="button"], [role="combobox"]')]
+      const unreachableInteractive = [...element.querySelectorAll(interactiveSelector)]
+        .filter(renderedAndEnabled)
         .flatMap(control => {
           const controlRect = control.getBoundingClientRect()
-          const controlStyle = window.getComputedStyle(control)
-          if (
-            controlRect.width <= 0 || controlRect.height <= 0 ||
-            controlStyle.visibility === 'hidden' || controlStyle.display === 'none' ||
-            (controlRect.left >= rect.left - 1 && controlRect.right <= rect.right + 1)
-          ) return []
+          const ancestors = clippingAncestors(control, element)
+          const bounds = ancestors.reduce((current, ancestor) => ({
+            left: ancestor.clipsX || ancestor.root
+              ? Math.max(current.left, ancestor.left)
+              : current.left,
+            right: ancestor.clipsX || ancestor.root
+              ? Math.min(current.right, ancestor.right)
+              : current.right,
+            top: ancestor.clipsY || ancestor.root
+              ? Math.max(current.top, ancestor.top)
+              : current.top,
+            bottom: ancestor.clipsY || ancestor.root
+              ? Math.min(current.bottom, ancestor.bottom)
+              : current.bottom
+          }), {
+            left: 0,
+            right: window.innerWidth,
+            top: 0,
+            bottom: window.innerHeight
+          })
+          const insideBounds = controlRect.left >= bounds.left - 1 &&
+            controlRect.right <= bounds.right + 1 &&
+            controlRect.top >= bounds.top - 1 &&
+            controlRect.bottom <= bounds.bottom + 1
+          if (insideBounds) return []
           return [{
             tag: control.tagName,
             className: String(control.className || ''),
             left: controlRect.left,
-            right: controlRect.right
+            right: controlRect.right,
+            top: controlRect.top,
+            bottom: controlRect.bottom,
+            bounds,
+            clippingAncestors: ancestors
           }]
         })
       return [name, {
@@ -1422,7 +1498,7 @@ async function inspectShellChrome (page) {
         shadow: style.boxShadow,
         overflowX: style.overflowX,
         horizontalOverflow: element.scrollWidth > element.clientWidth + 1,
-        interactiveOverflow,
+        unreachableInteractive,
         rect: {
           left: rect.left,
           right: rect.right,
@@ -1433,24 +1509,40 @@ async function inspectShellChrome (page) {
         clientWidth: element.clientWidth
       }]
     }))
-    const scrollContainers = [...document.querySelectorAll('.right-side-panel-content, .right-side-panel-content *')]
-      .flatMap(element => {
-        const style = window.getComputedStyle(element)
-        const rect = element.getBoundingClientRect()
-        if (!['auto', 'scroll'].includes(style.overflowY) || rect.width <= 0 || rect.height <= 0) return []
-        return [{
-          className: String(element.className || ''),
-          overflowY: style.overflowY,
-          scrollHeight: element.scrollHeight,
-          clientHeight: element.clientHeight,
-          scrollWidth: element.scrollWidth,
-          clientWidth: element.clientWidth
-        }]
-      })
+    const documentWidths = [
+      ['documentElement', document.documentElement],
+      ['body', document.body],
+      ['container', document.getElementById('container')]
+    ].map(([name, element]) => ({
+      name,
+      found: Boolean(element),
+      scrollWidth: element?.scrollWidth || 0,
+      clientWidth: element?.clientWidth || 0
+    }))
+    const footerFlex = document.querySelector('.main-footer .terminal-footer-flex')
+    const footerStatus = document.querySelector('.main-footer .terminal-footer-status')
+    const footerText = footerStatus
+      ? [...footerStatus.querySelectorAll(':scope > span:not(.terminal-footer-dot)')].map(element => {
+          const style = window.getComputedStyle(element)
+          return {
+            text: element.textContent.trim(),
+            ariaHidden: element.getAttribute('aria-hidden'),
+            scrollWidth: element.scrollWidth,
+            clientWidth: element.clientWidth,
+            overflowX: style.overflowX,
+            textOverflow: style.textOverflow
+          }
+        })
+      : []
     return {
       viewport: { width: window.innerWidth, height: window.innerHeight },
       shell,
-      scrollContainers,
+      documentWidths,
+      footerText,
+      footerClipping: {
+        flexOverflowX: footerFlex ? window.getComputedStyle(footerFlex).overflowX : '',
+        statusOverflowX: footerStatus ? window.getComputedStyle(footerStatus).overflowX : ''
+      },
       tokens: {
         surface: resolveToken('--sp-surface', 'backgroundColor'),
         surfaceElevated: resolveToken('--sp-surface-elevated', 'backgroundColor'),
@@ -1460,6 +1552,70 @@ async function inspectShellChrome (page) {
         shadowOverlay: resolveToken('--sp-shadow-overlay', 'boxShadow')
       }
     }
+  })
+}
+
+async function exerciseRightPanelScroll (page) {
+  await page.evaluate(() => {
+    window.store.handleOpenAIPanel()
+    window.store.rightPanelPinned = false
+  })
+  await page.locator('.right-side-panel:visible').waitFor({ timeout: 20000 })
+  const scroller = page.locator('.right-side-panel-content .ai-history-wrap')
+  await scroller.waitFor({ state: 'attached', timeout: 20000 })
+  return scroller.evaluate(async container => {
+    const nextFrame = () => new Promise(resolve => window.requestAnimationFrame(resolve))
+    const scrollFixture = document.createElement('div')
+    const originalScrollTop = container.scrollTop
+    const originalScrollBehavior = container.style.scrollBehavior
+    const originalHeight = container.style.height
+    const originalMinHeight = container.style.minHeight
+    const originalFlex = container.style.flex
+    const result = {
+      className: String(container.className || ''),
+      overflowY: window.getComputedStyle(container).overflowY,
+      originalScrollTop
+    }
+    scrollFixture.dataset.shellChromeScrollFixture = 'true'
+    scrollFixture.style.height = `${Math.max(640, container.clientHeight * 2)}px`
+    scrollFixture.style.minHeight = scrollFixture.style.height
+    scrollFixture.style.width = '1px'
+    container.style.scrollBehavior = 'auto'
+    container.style.height = '64px'
+    container.style.minHeight = '64px'
+    container.style.flex = '0 0 64px'
+    try {
+      container.appendChild(scrollFixture)
+      await nextFrame()
+      await nextFrame()
+      container.scrollTop = 0
+      const maxScrollTop = container.scrollHeight - container.clientHeight
+      const targetScrollTop = Math.min(64, maxScrollTop)
+      container.scrollTop = targetScrollTop
+      await nextFrame()
+      result.clientHeight = container.clientHeight
+      result.scrollHeight = container.scrollHeight
+      result.maxScrollTop = maxScrollTop
+      result.targetScrollTop = targetScrollTop
+      result.scrolledTop = container.scrollTop
+    } finally {
+      scrollFixture.remove()
+      container.style.scrollBehavior = originalScrollBehavior
+      container.style.height = originalHeight
+      container.style.minHeight = originalMinHeight
+      container.style.flex = originalFlex
+      container.scrollTop = originalScrollTop
+      await nextFrame()
+      result.cleanup = {
+        fixtureRemoved: !container.querySelector('[data-shell-chrome-scroll-fixture="true"]'),
+        restoredScrollTop: container.scrollTop,
+        stylesRestored: container.style.height === originalHeight &&
+          container.style.minHeight === originalMinHeight &&
+          container.style.flex === originalFlex &&
+          container.style.scrollBehavior === originalScrollBehavior
+      }
+    }
+    return result
   })
 }
 
@@ -1479,7 +1635,7 @@ function assertShellChrome (snapshot, context) {
     expect(item.border, itemMessage).toBe(snapshot.tokens.border)
     expect(item.horizontalOverflow, itemMessage).toBe(false)
     if (name === 'topbar' || name === 'footer') {
-      expect(item.interactiveOverflow, itemMessage).toEqual([])
+      expect(item.unreachableInteractive, itemMessage).toEqual([])
     }
     expect(item.rect.left, itemMessage).toBeGreaterThanOrEqual(-overflowTolerance)
     expect(item.rect.right, itemMessage).toBeLessThanOrEqual(snapshot.viewport.width + overflowTolerance)
@@ -1490,12 +1646,38 @@ function assertShellChrome (snapshot, context) {
   expect(snapshot.shell.footer.shadow, message).toMatch(/\s-\d+px\s/)
   expect(snapshot.shell.footer.shadow, message).not.toContain(snapshot.tokens.shadowCard)
   expect(snapshot.shell.footer.shadow, message).not.toContain(snapshot.tokens.shadowOverlay)
-  expect(snapshot.scrollContainers, message).not.toEqual([])
-  expect(snapshot.scrollContainers.some(item => (
-    item.clientHeight > 0 &&
-    item.scrollHeight >= item.clientHeight &&
-    item.scrollWidth <= item.clientWidth + overflowTolerance
-  )), message).toBe(true)
+  for (const item of snapshot.documentWidths) {
+    const itemMessage = JSON.stringify({ context, item })
+    expect(item.found, itemMessage).toBe(true)
+    expect(item.scrollWidth, itemMessage).toBeLessThanOrEqual(item.clientWidth + overflowTolerance)
+  }
+  expect(snapshot.footerClipping.flexOverflowX, message).not.toMatch(/^(?:hidden|clip)$/)
+  expect(snapshot.footerClipping.statusOverflowX, message).not.toMatch(/^(?:hidden|clip)$/)
+  expect(snapshot.footerText, message).not.toEqual([])
+  for (const item of snapshot.footerText) {
+    const itemMessage = JSON.stringify({ context, item })
+    expect(item.text, itemMessage).not.toBe('')
+    expect(item.ariaHidden, itemMessage).not.toBe('true')
+    if (item.scrollWidth > item.clientWidth + overflowTolerance) {
+      expect(item.overflowX, itemMessage).toBe('hidden')
+      expect(item.textOverflow, itemMessage).toBe('ellipsis')
+    }
+  }
+}
+
+function assertRightPanelScroll (snapshot, context) {
+  const message = JSON.stringify({ context, snapshot })
+  expect(snapshot.className.split(/\s+/), message).toContain('ai-history-wrap')
+  expect(snapshot.overflowY, message).toBe('auto')
+  expect(snapshot.clientHeight, message).toBeGreaterThan(0)
+  expect(snapshot.scrollHeight, message).toBeGreaterThan(snapshot.clientHeight)
+  expect(snapshot.maxScrollTop, message).toBeGreaterThan(0)
+  expect(snapshot.targetScrollTop, message).toBeGreaterThan(0)
+  expect(snapshot.scrolledTop, message).toBeGreaterThan(0)
+  expect(snapshot.scrolledTop, message).toBeLessThanOrEqual(snapshot.maxScrollTop)
+  expect(snapshot.cleanup.fixtureRemoved, message).toBe(true)
+  expect(snapshot.cleanup.restoredScrollTop, message).toBe(snapshot.originalScrollTop)
+  expect(snapshot.cleanup.stylesRestored, message).toBe(true)
 }
 
 async function recordCaseFailure (page, testInfo, failures, context, error) {
@@ -1713,6 +1895,8 @@ test('shell chrome keeps restrained depth, compact geometry and terminal isolati
         size: `${item.size.width}x${item.size.height}`,
         zoom: item.zoom
       }
+      const scroll = await exerciseRightPanelScroll(page)
+      assertRightPanelScroll(scroll, context)
       const shell = await inspectShellChrome(page)
       assertShellChrome(shell, context)
       const terminal = await inspectTerminalInvariant(page)
