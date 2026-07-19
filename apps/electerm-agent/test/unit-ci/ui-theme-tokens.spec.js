@@ -17,7 +17,9 @@ const tokenKeys = [
   'page',
   'surface',
   'surfaceSubtle',
+  'surfaceInset',
   'surfaceElevated',
+  'highlightTop',
   'text',
   'textMuted',
   'textDisabled',
@@ -32,10 +34,17 @@ const tokenKeys = [
   'radiusControl',
   'radiusCard',
   'radiusOverlay',
+  'shadowControl',
   'shadowCard',
-  'shadowOverlay'
+  'shadowOverlay',
+  'motionFast',
+  'motionNormal'
 ]
-const colorTokenKeys = tokenKeys.slice(0, 15)
+const colorTokenKeys = [
+  'page', 'surface', 'surfaceSubtle', 'surfaceInset', 'surfaceElevated',
+  'text', 'textMuted', 'textDisabled', 'border', 'borderStrong',
+  'primary', 'primarySoft', 'success', 'info', 'warning', 'danger'
+]
 const minimumTextContrast = 4.5
 
 function toCssVariable (key) {
@@ -241,7 +250,36 @@ test('keeps muted and danger text readable on secondary page and card surfaces',
   }
 })
 
-test('serializes the exact twenty-token secondary UI contract', async () => {
+test('derives restrained four-level depth values for light and dark themes', async () => {
+  const { deriveSecondaryThemeTokens } = await import(moduleUrl)
+  const light = deriveSecondaryThemeTokens({
+    main: '#F2F6FA',
+    'main-light': '#F8FAFC',
+    text: '#253249',
+    primary: '#2878E6'
+  })
+  const dark = deriveSecondaryThemeTokens({
+    main: '#10161E',
+    'main-light': '#151D27',
+    text: '#E8EEF6',
+    primary: '#4C93F4'
+  })
+  for (const tokens of [light, dark]) {
+    assert.notEqual(tokens.surfaceElevated, tokens.surface)
+    assert.notEqual(tokens.surfaceInset, tokens.surface)
+    assert.match(tokens.highlightTop, /^rgba\(/)
+    assert.match(tokens.shadowControl, /^0 2px/)
+    assert.match(tokens.shadowCard, /^0 (?:7|8)px/)
+    assert.match(tokens.shadowOverlay, /^0 (?:18|20)px/)
+    assert.equal(tokens.radiusOverlay, '10px')
+    assert.equal(tokens.motionFast, '120ms')
+    assert.equal(tokens.motionNormal, '180ms')
+  }
+  assert.notEqual(light.shadowCard, dark.shadowCard)
+  assert.notEqual(light.shadowOverlay, dark.shadowOverlay)
+})
+
+test('serializes the exact twenty-five-token secondary UI contract', async () => {
   const { deriveSecondaryThemeTokens, buildUiThemeCss } = await import(moduleUrl)
   const tokens = deriveSecondaryThemeTokens()
   const css = buildUiThemeCss({
@@ -256,7 +294,7 @@ test('serializes the exact twenty-token secondary UI contract', async () => {
 
   assert.deepEqual(Object.keys(tokens), tokenKeys)
   assert.deepEqual(variables, tokenKeys.map(toCssVariable))
-  assert.equal(new Set(variables).size, 20)
+  assert.equal(new Set(variables).size, 25)
   assert.match(css, /--sp-primary: #2878E6;/)
   assert.match(css, /--sp-radius-card: 10px;/)
   assert.equal((css.match(/:root/g) || []).length, 1)

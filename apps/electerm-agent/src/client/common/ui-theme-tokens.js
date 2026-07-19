@@ -73,7 +73,14 @@ export function deriveSecondaryThemeTokens (theme = {}) {
   const page = expandHex(theme.main, '#F3F6FA')
   const surfaceMixRatio = relativeLuminance(page) < 0.5 ? 0.12 : 0.84
   const surface = expandHex(theme['main-light'], mix(page, '#FFFFFF', surfaceMixRatio))
+  const darkSurface = relativeLuminance(surface) < 0.5
+  const surfaceElevated = mix(surface, '#FFFFFF', darkSurface ? 0.06 : 0.34)
+  const surfaceInset = mix(surface, page, darkSurface ? 0.42 : 0.58)
+  const highlightTop = darkSurface
+    ? 'rgba(255, 255, 255, 0.06)'
+    : 'rgba(255, 255, 255, 0.88)'
   const backgrounds = [page, surface]
+  const disabledTextBackgrounds = [...backgrounds, surfaceElevated]
   const textFallback = relativeLuminance(surface) < 0.5 ? '#FFFFFF' : '#253249'
   const text = ensureTextContrast(expandHex(theme.text, textFallback), backgrounds)
   const primary = expandHex(theme.primary, '#2878E6')
@@ -87,12 +94,14 @@ export function deriveSecondaryThemeTokens (theme = {}) {
     page,
     surface,
     surfaceSubtle: mix(surface, page, 0.55),
-    surfaceElevated: surface,
+    surfaceInset,
+    surfaceElevated,
+    highlightTop,
     text,
     textMuted,
     textDisabled: ensureContrast(
       expandHex(theme['text-disabled'], mix(text, page, 0.64)),
-      backgrounds,
+      disabledTextBackgrounds,
       3
     ),
     border: mix(text, surface, 0.84),
@@ -105,9 +114,18 @@ export function deriveSecondaryThemeTokens (theme = {}) {
     danger,
     radiusControl: '7px',
     radiusCard: '10px',
-    radiusOverlay: '9px',
-    shadowCard: '0 3px 12px rgba(30, 58, 95, 0.08)',
-    shadowOverlay: '0 13px 30px rgba(30, 41, 59, 0.18)'
+    radiusOverlay: '10px',
+    shadowControl: darkSurface
+      ? '0 2px 6px rgba(0, 0, 0, 0.28)'
+      : '0 2px 5px rgba(28, 50, 78, 0.10)',
+    shadowCard: darkSurface
+      ? '0 8px 20px rgba(0, 0, 0, 0.30)'
+      : '0 7px 18px rgba(30, 58, 95, 0.11)',
+    shadowOverlay: darkSurface
+      ? '0 20px 46px rgba(0, 0, 0, 0.48)'
+      : '0 18px 40px rgba(26, 44, 70, 0.24)',
+    motionFast: '120ms',
+    motionNormal: '180ms'
   }
 }
 
