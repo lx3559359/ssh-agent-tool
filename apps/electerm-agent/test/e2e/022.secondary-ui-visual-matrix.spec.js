@@ -1430,6 +1430,9 @@ async function inspectShellChrome (page) {
             root: current === shellRoot,
             clipsX,
             clipsY,
+            clientWidth: current.clientWidth,
+            scrollWidth: current.scrollWidth,
+            horizontalScrollReachable: clipsX && current.scrollWidth > current.clientWidth + 1,
             left: rect.left,
             right: rect.right,
             top: rect.top,
@@ -1478,7 +1481,13 @@ async function inspectShellChrome (page) {
             controlRect.right <= bounds.right + 1 &&
             controlRect.top >= bounds.top - 1 &&
             controlRect.bottom <= bounds.bottom + 1
-          if (insideBounds) return []
+          const verticallyInsideBounds = controlRect.top >= bounds.top - 1 &&
+            controlRect.bottom <= bounds.bottom + 1
+          const horizontalScrollReachable = ancestors.some(ancestor => {
+            return ancestor.horizontalScrollReachable &&
+              controlRect.width <= ancestor.clientWidth + 1
+          })
+          if (insideBounds || (verticallyInsideBounds && horizontalScrollReachable)) return []
           return [{
             tag: control.tagName,
             className: String(control.className || ''),
@@ -1848,6 +1857,15 @@ async function runSurfaceCase (page, testInfo, failures, context, surface, stats
 }
 
 async function exerciseLanguageAndThemeState (page) {
+  await page.waitForFunction(() => {
+    const info = window.store?.upgradeInfo
+    return Boolean(info?.lastCheckedAt) && info.checkingRemoteVersion === false
+  }, undefined, { timeout: 30000 })
+  const updatePanelClose = page.locator('.upgrade-panel:not(.upgrade-panel-hide) .close-upgrade-panel')
+  if (await updatePanelClose.isVisible().catch(() => false)) {
+    await updatePanelClose.click()
+    await expect(page.locator('.upgrade-panel:not(.upgrade-panel-hide)')).toHaveCount(0)
+  }
   await resetSurface(page, 'zh_cn')
   await openSettings(page)
   const initial = await page.evaluate(() => ({
@@ -1862,21 +1880,79 @@ async function exerciseLanguageAndThemeState (page) {
   const targetIndex = await page.evaluate((language) => {
     return window.et.langs.findIndex(item => item.id === language)
   }, targetLanguage)
+  const initialIndex = await page.evaluate((language) => {
+    return window.et.langs.findIndex(item => item.id === language)
+  }, initial.language)
   expect(targetText).not.toBe('')
   expect(targetIndex).toBeGreaterThanOrEqual(0)
+  expect(initialIndex).toBeGreaterThanOrEqual(0)
   const languageSelect = page.locator('.setting-header .ant-select')
   const languageCombobox = languageSelect.getByRole('combobox')
   const chooseTargetOption = async () => {
-    if (await languageCombobox.getAttribute('aria-expanded') !== 'true') {
+    const dropdown = page.locator('.ant-select-dropdown:visible')
+    for (let attempt = 0; attempt < 3 && await dropdown.count() !== 1; attempt += 1) {
+      await languageCombobox.focus()
       await languageCombobox.press('ArrowDown')
+      await expect(languageCombobox).toHaveAttribute('aria-expanded', 'true', { timeout: 5000 })
+      await dropdown.waitFor({ state: 'visible', timeout: 2000 }).catch(() => {})
     }
-    await expect(languageCombobox).toHaveAttribute('aria-expanded', 'true', { timeout: 5000 })
-    const listboxId = await languageCombobox.getAttribute('aria-controls')
-    expect(listboxId).not.toBeFalsy()
-    const targetOption = page.locator(`[role="option"][id=${JSON.stringify(`${listboxId}_${targetIndex}`)}]`)
+    await expect(dropdown).toHaveCount(1)
+    await expect(dropdown.getByRole('listbox')).toHaveCount(1)
+    const holder = dropdown.locator('.rc-virtual-list-holder')
+    await expect(holder).toBeVisible()
+    const targetOption = dropdown.locator('.ant-select-item-option').filter({ hasText: targetText })
+    const wheelDelta = targetIndex < initialIndex ? -480 : 480
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      const ready = await targetOption.count() === 1 && await targetOption.evaluate(option => {
+        const holder = option.closest('.rc-virtual-list-holder')
+        if (!holder) return false
+        const optionRect = option.getBoundingClientRect()
+        const holderRect = holder.getBoundingClientRect()
+        const visibleLeft = Math.max(holderRect.left, 0)
+        const visibleRight = Math.min(holderRect.right, window.innerWidth)
+        const visibleTop = Math.max(holderRect.top, 0)
+        const visibleBottom = Math.min(holderRect.bottom, window.innerHeight)
+        const hit = document.elementFromPoint(
+          (Math.max(optionRect.left, visibleLeft) + Math.min(optionRect.right, visibleRight)) / 2,
+          (Math.max(optionRect.top, visibleTop) + Math.min(optionRect.bottom, visibleBottom)) / 2
+        )
+        return optionRect.left >= visibleLeft && optionRect.right <= visibleRight &&
+          optionRect.top >= visibleTop && optionRect.bottom <= visibleBottom &&
+          Boolean(hit && option.contains(hit))
+      })
+      if (ready) break
+      const holderBox = await holder.boundingBox()
+      expect(holderBox).not.toBeNull()
+      const viewport = await page.evaluate(() => ({
+        width: window.innerWidth,
+        height: window.innerHeight
+      }))
+      const visibleLeft = Math.max(holderBox.x, 0)
+      const visibleRight = Math.min(holderBox.x + holderBox.width, viewport.width)
+      const visibleTop = Math.max(holderBox.y, 0)
+      const visibleBottom = Math.min(holderBox.y + holderBox.height, viewport.height)
+      expect(visibleRight - visibleLeft).toBeGreaterThan(2)
+      expect(visibleBottom - visibleTop).toBeGreaterThan(2)
+      await page.mouse.move(
+        (visibleLeft + visibleRight) / 2,
+        (visibleTop + visibleBottom) / 2
+      )
+      await page.mouse.wheel(0, wheelDelta)
+      await page.waitForTimeout(80)
+    }
     await expect(targetOption).toHaveCount(1)
     await expect(targetOption).toHaveText(targetText)
-    await targetOption.evaluate(option => option.click())
+    await expect(targetOption).toBeVisible()
+    await expect(targetOption).toBeEnabled()
+    const firstBox = await targetOption.boundingBox()
+    expect(firstBox).not.toBeNull()
+    await page.waitForTimeout(120)
+    const stableBox = await targetOption.boundingBox()
+    expect(stableBox).not.toBeNull()
+    expect(Math.abs(stableBox.x - firstBox.x)).toBeLessThan(1)
+    expect(Math.abs(stableBox.y - firstBox.y)).toBeLessThan(1)
+    await targetOption.click({ trial: true })
+    await targetOption.click()
     await expect(languageCombobox).toHaveAttribute('aria-expanded', 'false', { timeout: 5000 })
   }
   await chooseTargetOption()
@@ -1918,6 +1994,430 @@ test('active terminal session tab keeps the locked SSH background', async ({ bro
     await ensureTwoTerminalTabs(page)
     const terminal = await inspectTerminalInvariant(page)
     assertTerminalInvariant(terminal, { runner: browserName, surface: 'terminal-invariant' })
+  })
+})
+
+test('narrow topbar actions avoid native window controls and keep the last action operable', async ({ browserName }) => {
+  await runWithIsolatedApp('topbar-interaction', async (electronApp) => {
+    const page = electronApp.windows()[0] || await electronApp.firstWindow()
+    await page.waitForFunction(() => window.store?.configLoaded === true, { timeout: 20000 })
+    await page.locator('.term-wrap:visible').waitFor({ timeout: 20000 })
+    await setWindowCase(electronApp, page, { width: 820, height: 600 }, 2)
+
+    const rail = page.locator('.not-system-ui .aigshell-topbar-actions')
+    const actions = rail.locator('.aigshell-topbar-action:not(:disabled)')
+    await expect(rail).toBeVisible()
+    await expect(actions).toHaveCount(12)
+
+    await rail.evaluate(element => { element.scrollLeft = 0 })
+    await actions.first().focus()
+    for (let index = 1; index < await actions.count(); index += 1) {
+      await page.keyboard.press('Tab')
+    }
+    const keyboardProbe = await rail.evaluate(element => {
+      const lastAction = element.querySelector('.aigshell-topbar-action-wrap:last-child .aigshell-topbar-action')
+      const railRect = element.getBoundingClientRect()
+      const actionRect = lastAction.getBoundingClientRect()
+      const hit = document.elementFromPoint(
+        actionRect.left + actionRect.width / 2,
+        actionRect.top + actionRect.height / 2
+      )
+      return {
+        lastActionFocused: document.activeElement === lastAction,
+        lastActionFullyVisible: actionRect.left >= railRect.left && actionRect.right <= railRect.right,
+        lastActionHit: Boolean(hit && lastAction.contains(hit)),
+        hitsWindowControl: Boolean(hit?.closest?.('.window-control-box')),
+        scrollLeft: element.scrollLeft,
+        maxScrollLeft: element.scrollWidth - element.clientWidth
+      }
+    })
+    const systemUiMarginRight = await page.evaluate(() => {
+      const rail = document.querySelector('.aigshell-topbar-actions')
+      const modeRoot = rail.closest('.not-system-ui, .system-ui') || document.body
+      const wasNotSystemUi = modeRoot.classList.contains('not-system-ui')
+      const wasSystemUi = modeRoot.classList.contains('system-ui')
+      modeRoot.classList.remove('not-system-ui')
+      modeRoot.classList.add('system-ui')
+      const marginRight = window.getComputedStyle(rail).marginRight
+      modeRoot.classList.toggle('not-system-ui', wasNotSystemUi)
+      modeRoot.classList.toggle('system-ui', wasSystemUi)
+      return marginRight
+    })
+    await page.keyboard.press('Enter')
+    await expect(page.locator('.shellpilot-help-center')).toBeVisible({ timeout: 20000 })
+    await page.locator('.shellpilot-help-center .custom-modal-close').click()
+    await expect(page.locator('.shellpilot-help-center')).toBeHidden()
+    await rail.evaluate(element => { element.scrollLeft = 0 })
+
+    const inspectHitTargets = () => rail.evaluate(element => {
+      const railRect = element.getBoundingClientRect()
+      const controls = document.querySelector('.window-controls')
+      const controlsRect = controls?.getBoundingClientRect() || null
+      const visibleActions = [...element.querySelectorAll('.aigshell-topbar-action:not(:disabled)')]
+        .map((action, index) => {
+          const rect = action.getBoundingClientRect()
+          const center = {
+            x: rect.left + rect.width / 2,
+            y: rect.top + rect.height / 2
+          }
+          const centerInsideRail = center.x >= railRect.left && center.x <= railRect.right
+          const hit = centerInsideRail ? document.elementFromPoint(center.x, center.y) : null
+          return {
+            index,
+            center,
+            centerInsideRail,
+            hitClass: String(hit?.className || ''),
+            hitsAction: Boolean(hit && action.contains(hit)),
+            hitsWindowControl: Boolean(hit?.closest?.('.window-control-box'))
+          }
+        })
+        .filter(item => item.centerInsideRail)
+      return {
+        clientWidth: element.clientWidth,
+        scrollWidth: element.scrollWidth,
+        scrollLeft: element.scrollLeft,
+        maxScrollLeft: element.scrollWidth - element.clientWidth,
+        paddingRight: window.getComputedStyle(element).paddingRight,
+        marginRight: window.getComputedStyle(element).marginRight,
+        reservedRight: window.innerWidth - railRect.right,
+        railRect: { left: railRect.left, right: railRect.right },
+        controlsRect: controlsRect
+          ? { left: controlsRect.left, right: controlsRect.right }
+          : null,
+        visibleActions
+      }
+    })
+
+    const before = await inspectHitTargets()
+    let lastTrialError = ''
+    try {
+      await actions.last().click({ trial: true, timeout: 3000 })
+    } catch (error) {
+      lastTrialError = error?.message || String(error)
+    }
+    const railBox = await rail.boundingBox()
+    expect(railBox).not.toBeNull()
+    await page.mouse.move(railBox.x + railBox.width / 2, railBox.y + railBox.height / 2)
+    await page.mouse.wheel(0, 1200)
+    await page.waitForTimeout(160)
+    const afterWheel = await inspectHitTargets()
+    console.log(`TOPBAR_INTERACTION_PROBE=${JSON.stringify({ browserName, keyboardProbe, systemUiMarginRight, before, lastTrialError, afterWheel })}`)
+
+    expect(keyboardProbe.lastActionFocused).toBe(true)
+    expect(keyboardProbe.hitsWindowControl).toBe(false)
+    expect(keyboardProbe.scrollLeft).toBeGreaterThan(0)
+    expect(systemUiMarginRight).toBe('0px')
+    expect(before.marginRight).toBe('138px')
+    expect(before.reservedRight).toBeGreaterThanOrEqual(138)
+    expect(before.maxScrollLeft).toBeGreaterThan(0)
+    expect(before.visibleActions.some(item => item.hitsWindowControl)).toBe(false)
+    expect(lastTrialError).toBe('')
+    expect(afterWheel.scrollLeft).toBeGreaterThan(before.scrollLeft)
+    expect(afterWheel.scrollLeft).toBe(afterWheel.maxScrollLeft)
+    expect(afterWheel.visibleActions.some(item => item.hitsWindowControl)).toBe(false)
+    expect(afterWheel.visibleActions.every(item => item.hitsAction)).toBe(true)
+
+    await actions.last().click()
+    await expect(page.locator('.shellpilot-help-center')).toBeVisible({ timeout: 20000 })
+    await page.locator('.shellpilot-help-center .custom-modal-close').click()
+    await expect(page.locator('.shellpilot-help-center')).toBeHidden()
+  })
+})
+
+test('sidebar standard tiles expose one consistent mouse keyboard and active affordance', async ({ browserName }) => {
+  await runWithIsolatedApp('sidebar-interaction', async (electronApp) => {
+    const page = electronApp.windows()[0] || await electronApp.firstWindow()
+    await page.waitForFunction(() => window.store?.configLoaded === true, { timeout: 20000 })
+    await page.locator('.term-wrap:visible').waitFor({ timeout: 20000 })
+
+    const dashboardTile = page.locator('.sidebar-bar .control-icon-wrap:has(.anticon-dashboard)')
+    const transferTile = page.locator('.sidebar-bar .control-icon-wrap:has(.anticon-swap)')
+    await expect(dashboardTile).toHaveCount(1)
+    await expect(transferTile).toHaveCount(1)
+
+    const resetFleet = () => page.evaluate(() => window.store.closeFleetStatus())
+    const readMode = () => page.evaluate(() => window.store.mainWorkspaceMode)
+    const tabBackToDashboard = async () => {
+      await dashboardTile.focus()
+      await page.keyboard.press('Shift+Tab')
+      const movedAway = await dashboardTile.evaluate(element => document.activeElement !== element)
+      await page.keyboard.press('Tab')
+      return movedAway && await dashboardTile.evaluate(element => document.activeElement === element)
+    }
+    await resetFleet()
+    await dashboardTile.locator('.control-icon-label').click()
+    const labelMode = await readMode()
+
+    await resetFleet()
+    const dashboardBox = await dashboardTile.boundingBox()
+    expect(dashboardBox).not.toBeNull()
+    await dashboardTile.click({ position: { x: dashboardBox.width / 2, y: 2 } })
+    const blankMode = await readMode()
+
+    await resetFleet()
+    const tabReached = await tabBackToDashboard()
+    let enterMode = await readMode()
+    let spaceMode = await readMode()
+    if (tabReached) {
+      await page.keyboard.press('Enter')
+      await page.waitForFunction(() => window.store.mainWorkspaceMode === 'fleet-status', { timeout: 1000 }).catch(() => {})
+      enterMode = await readMode()
+      await resetFleet()
+      if (!await dashboardTile.evaluate(element => document.activeElement === element)) {
+        await dashboardTile.focus()
+      }
+      await page.keyboard.press('Space')
+      await page.waitForFunction(() => window.store.mainWorkspaceMode === 'fleet-status', { timeout: 1000 }).catch(() => {})
+      spaceMode = await readMode()
+    }
+
+    await page.evaluate(() => window.store.openFleetStatus())
+    await expect(dashboardTile).toHaveClass(/active/)
+    const activeColors = await dashboardTile.evaluate(element => {
+      const probe = document.createElement('span')
+      probe.style.color = 'var(--sp-primary)'
+      document.body.appendChild(probe)
+      const primary = window.getComputedStyle(probe).color
+      probe.remove()
+      return {
+        primary,
+        icon: window.getComputedStyle(element.querySelector('.control-icon')).color,
+        label: window.getComputedStyle(element.querySelector('.control-icon-label')).color
+      }
+    })
+
+    await transferTile.locator('.control-icon-main').click({ button: 'right' })
+    const transferPopoverVisible = await page.locator('.shellpilot-transfer-history-popover:visible').count() === 1
+    const probe = {
+      browserName,
+      tagName: await dashboardTile.evaluate(element => element.tagName),
+      tabIndex: await dashboardTile.evaluate(element => element.tabIndex),
+      nestedButtons: await dashboardTile.locator('button').count(),
+      labelMode,
+      blankMode,
+      tabReached,
+      enterMode,
+      spaceMode,
+      activeColors,
+      transferTagName: await transferTile.evaluate(element => element.tagName),
+      transferPopoverVisible
+    }
+    console.log(`SIDEBAR_INTERACTION_PROBE=${JSON.stringify(probe)}`)
+
+    expect(probe.tagName).toBe('BUTTON')
+    expect(probe.tabIndex).toBe(0)
+    expect(probe.nestedButtons).toBe(0)
+    expect(probe.labelMode).toBe('fleet-status')
+    expect(probe.blankMode).toBe('fleet-status')
+    expect(probe.tabReached).toBe(true)
+    expect(probe.enterMode).toBe('fleet-status')
+    expect(probe.spaceMode).toBe('fleet-status')
+    expect(probe.activeColors.icon).toBe(probe.activeColors.primary)
+    expect(probe.activeColors.label).toBe(probe.activeColors.primary)
+    expect(probe.transferTagName).toBe('BUTTON')
+    expect(probe.transferPopoverVisible).toBe(true)
+  })
+})
+
+test('low-height AI panel keeps meaningful history and real auxiliary rail interaction', async ({ browserName }) => {
+  await runWithIsolatedApp('ai-compact-interaction', async (electronApp) => {
+    const page = electronApp.windows()[0] || await electronApp.firstWindow()
+    await page.waitForFunction(() => window.store?.configLoaded === true, { timeout: 20000 })
+    await page.locator('.term-wrap:visible').waitFor({ timeout: 20000 })
+    const updatePanelClose = page.locator('.upgrade-panel:not(.upgrade-panel-hide) .close-upgrade-panel')
+    if (await updatePanelClose.isVisible().catch(() => false)) {
+      await updatePanelClose.click()
+      await expect(page.locator('.upgrade-panel:not(.upgrade-panel-hide)')).toHaveCount(0)
+    }
+    await page.evaluate(() => {
+      window.store.handleOpenAIPanel()
+      window.store.rightPanelPinned = false
+    })
+    await page.locator('.right-side-panel-content-ai .ai-chat-container').waitFor({ state: 'visible', timeout: 20000 })
+    await setWindowCase(electronApp, page, { width: 820, height: 600 }, 2)
+
+    const fileInput = page.locator('.right-side-panel-content-ai input[type="file"]')
+    await fileInput.setInputFiles([
+      { name: 'compact-layout-attachment-one-with-long-name.txt', mimeType: 'text/plain', buffer: Buffer.from('one') },
+      { name: 'compact-layout-attachment-two-with-long-name.txt', mimeType: 'text/plain', buffer: Buffer.from('two') },
+      { name: 'compact-layout-attachment-three-with-long-name.txt', mimeType: 'text/plain', buffer: Buffer.from('three') },
+      { name: 'compact-layout-attachment-four-with-long-name.txt', mimeType: 'text/plain', buffer: Buffer.from('four') }
+    ])
+    await expect(page.locator('.right-side-panel-content-ai .ai-attachment-chip')).toHaveCount(4)
+
+    await page.evaluate(() => {
+      const title = document.querySelector('.right-panel-title-text')
+      const controls = document.querySelector('.right-panel-title .agent-takeover-controls')
+      const availability = controls?.querySelector('.agent-takeover-availability')
+      if (!title || !controls || !availability) throw new Error('AI compact header fixture target missing')
+      const titleFixture = document.createElement('span')
+      titleFixture.dataset.aiCompactFixture = 'title'
+      titleFixture.textContent = ' — exceptionally long active takeover and model status'
+      title.appendChild(titleFixture)
+      const badge = document.createElement('span')
+      badge.dataset.aiCompactFixture = 'badge'
+      badge.className = 'agent-takeover-badge running'
+      badge.textContent = 'running'
+      const stop = document.createElement('button')
+      stop.type = 'button'
+      stop.dataset.aiCompactFixture = 'stop'
+      stop.className = 'agent-takeover-stop'
+      stop.textContent = 'stop'
+      controls.insertBefore(badge, availability)
+      controls.insertBefore(stop, availability)
+      availability.dataset.aiCompactOriginalText = availability.textContent || ''
+      availability.textContent = 'Active takeover endpoint with a deliberately long availability status that must not collide'
+    })
+    if (await updatePanelClose.isVisible().catch(() => false)) {
+      await updatePanelClose.click()
+      await expect(page.locator('.upgrade-panel:not(.upgrade-panel-hide)')).toHaveCount(0)
+    }
+
+    const contextRail = page.locator('.right-side-panel-content-ai .ai-context-actions')
+    const attachmentRail = page.locator('.right-side-panel-content-ai .ai-attachment-queue')
+    const wheelRail = async locator => {
+      const box = await locator.boundingBox()
+      expect(box).not.toBeNull()
+      const before = await locator.evaluate(element => ({
+        scrollLeft: element.scrollLeft,
+        maxScrollLeft: element.scrollWidth - element.clientWidth
+      }))
+      await page.mouse.move(
+        box.x + box.width / 2,
+        box.y + box.height / 2
+      )
+      await page.mouse.wheel(0, 1200)
+      await page.waitForTimeout(120)
+      const after = await locator.evaluate(element => element.scrollLeft)
+      await page.mouse.wheel(0, -1200)
+      await page.waitForTimeout(120)
+      const restored = await locator.evaluate(element => element.scrollLeft)
+      return { ...before, after, restored }
+    }
+
+    let snapshot
+    try {
+      const contextWheel = await wheelRail(contextRail)
+      const attachmentWheel = await wheelRail(attachmentRail)
+      const contextActions = contextRail.locator('.ai-context-action')
+      await contextActions.first().focus()
+      for (let index = 1; index < await contextActions.count(); index += 1) {
+        await page.keyboard.press('Tab')
+      }
+      const lastContextFocused = await contextActions.last().evaluate(element => document.activeElement === element)
+      const contextFocusScrollLeft = await contextRail.evaluate(element => element.scrollLeft)
+      await page.locator('.right-side-panel-content-ai .ai-chat-textarea').focus()
+      const contextBox = await contextRail.boundingBox()
+      await page.mouse.move(
+        contextBox.x + contextBox.width / 2,
+        contextBox.y + contextBox.height / 2
+      )
+      await page.mouse.wheel(0, -1200)
+      await page.waitForTimeout(120)
+      const contextRestoredAfterFocus = await contextRail.evaluate(element => element.scrollLeft)
+
+      snapshot = await page.locator('.right-side-panel').evaluate(panel => {
+        const describe = selector => {
+          const element = panel.querySelector(selector)
+          if (!element) return null
+          const rect = element.getBoundingClientRect()
+          return {
+            clientWidth: element.clientWidth,
+            scrollWidth: element.scrollWidth,
+            clientHeight: element.clientHeight,
+            scrollHeight: element.scrollHeight,
+            left: rect.left,
+            right: rect.right,
+            top: rect.top,
+            bottom: rect.bottom
+          }
+        }
+        const header = panel.querySelector('.right-panel-title')
+        const interactive = [
+          '.right-panel-ai-profile-select',
+          '.right-panel-ai-model-select',
+          '.agent-takeover-switch',
+          '[data-ai-compact-fixture="stop"]',
+          '.right-panel-model-status',
+          '.right-side-panel-pin',
+          '.right-side-panel-close'
+        ].map(selector => panel.querySelector(selector)).filter(Boolean)
+        const overlaps = []
+        for (let left = 0; left < interactive.length; left += 1) {
+          for (let right = left + 1; right < interactive.length; right += 1) {
+            const a = interactive[left].getBoundingClientRect()
+            const b = interactive[right].getBoundingClientRect()
+            const overlapX = Math.min(a.right, b.right) - Math.max(a.left, b.left)
+            const overlapY = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top)
+            if (overlapX > 1 && overlapY > 1) {
+              overlaps.push({
+                left: String(interactive[left].className || ''),
+                right: String(interactive[right].className || ''),
+                overlapX,
+                overlapY
+              })
+            }
+          }
+        }
+        const headerRect = header.getBoundingClientRect()
+        return {
+          history: describe('.ai-history-wrap'),
+          context: describe('.ai-context-actions'),
+          attachments: describe('.ai-attachment-queue'),
+          textarea: describe('.ai-chat-textarea'),
+          composerControls: describe('.ai-chat-terminals'),
+          header: describe('.right-panel-title'),
+          panelContent: describe('.right-side-panel-content-ai'),
+          pageScroll: {
+            x: window.scrollX,
+            y: window.scrollY,
+            devicePixelRatio: window.devicePixelRatio
+          },
+          headerControlsInside: interactive.every(element => {
+            const rect = element.getBoundingClientRect()
+            return rect.left >= headerRect.left && rect.right <= headerRect.right &&
+              rect.top >= headerRect.top && rect.bottom <= headerRect.bottom
+          }),
+          overlaps
+        }
+      })
+      snapshot.contextWheel = contextWheel
+      snapshot.attachmentWheel = attachmentWheel
+      snapshot.lastContextFocused = lastContextFocused
+      snapshot.contextFocusScrollLeft = contextFocusScrollLeft
+      snapshot.contextRestoredAfterFocus = contextRestoredAfterFocus
+      console.log(`AI_COMPACT_INTERACTION_PROBE=${JSON.stringify({ browserName, snapshot })}`)
+
+      expect(snapshot.history.clientHeight).toBeGreaterThanOrEqual(64)
+      expect(snapshot.contextWheel.maxScrollLeft).toBeGreaterThan(0)
+      expect(snapshot.contextWheel.after).toBeGreaterThan(0)
+      expect(snapshot.contextWheel.restored).toBe(0)
+      expect(snapshot.attachmentWheel.maxScrollLeft).toBeGreaterThan(0)
+      expect(snapshot.attachmentWheel.after).toBeGreaterThan(0)
+      expect(snapshot.attachmentWheel.restored).toBe(0)
+      expect(snapshot.lastContextFocused).toBe(true)
+      expect(snapshot.contextFocusScrollLeft).toBeGreaterThan(0)
+      expect(snapshot.contextRestoredAfterFocus).toBe(0)
+      expect(snapshot.headerControlsInside).toBe(true)
+      expect(snapshot.overlaps).toEqual([])
+      expect(snapshot.pageScroll.y).toBe(0)
+      expect(snapshot.textarea.bottom).toBeLessThanOrEqual(snapshot.panelContent.bottom)
+      expect(snapshot.composerControls.bottom).toBeLessThanOrEqual(snapshot.panelContent.bottom)
+    } finally {
+      await page.evaluate(() => {
+        document.querySelectorAll('[data-ai-compact-fixture]').forEach(element => element.remove())
+        const availability = document.querySelector('.agent-takeover-availability[data-ai-compact-original-text]')
+        if (availability) {
+          availability.textContent = availability.dataset.aiCompactOriginalText || ''
+          delete availability.dataset.aiCompactOriginalText
+        }
+      })
+      const removeButtons = page.locator('.right-side-panel-content-ai .ai-attachment-remove')
+      while (await removeButtons.count()) {
+        await removeButtons.first().click()
+      }
+      await expect(page.locator('.right-side-panel-content-ai .ai-attachment-chip')).toHaveCount(0)
+    }
   })
 })
 

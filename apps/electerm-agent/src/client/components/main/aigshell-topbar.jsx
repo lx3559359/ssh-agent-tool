@@ -119,6 +119,21 @@ export default auto(function AIGShellTopBar ({ store }) {
     window.store.openQuickCommandBar = true
   }
 
+  function handleActionRailWheel (event) {
+    const rail = event.currentTarget
+    if (
+      rail.scrollWidth <= rail.clientWidth ||
+      Math.abs(event.deltaY) <= Math.abs(event.deltaX)
+    ) {
+      return
+    }
+    const previousScrollLeft = rail.scrollLeft
+    rail.scrollLeft += event.deltaY
+    if (rail.scrollLeft !== previousScrollLeft) {
+      event.preventDefault()
+    }
+  }
+
   const actions = [
     {
       key: 'serverStatus',
@@ -242,7 +257,7 @@ export default auto(function AIGShellTopBar ({ store }) {
           <span className={'aigshell-topbar-dot ' + (online ? 'online' : '')} />
         </Tooltip>
       </div>
-      <div className='aigshell-topbar-actions'>
+      <div className='aigshell-topbar-actions' onWheel={handleActionRailWheel}>
         {
           actions.map(item => (
             <span key={item.key} className='aigshell-topbar-action-wrap'>

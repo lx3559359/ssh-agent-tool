@@ -59,7 +59,9 @@ export default memo(function RightSidePanel ({
   }
 
   const panelProps = {
-    className: 'right-side-panel animate-fast' + (rightPanelPinned ? ' right-side-panel-pinned' : ''),
+    className: 'right-side-panel animate-fast' +
+      (rightPanelPinned ? ' right-side-panel-pinned' : '') +
+      (isAI ? ' right-side-panel-ai' : ''),
     ref: panelRef,
     style: { width: `${width}px` }
   }

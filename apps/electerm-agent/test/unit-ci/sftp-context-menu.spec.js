@@ -145,7 +145,8 @@ test('shared and system menu styles compile with viewport-safe wrapping contract
   ])
 
   assert.match(basic, /@require '\.\.\/components\/common\/context-menu'/)
-  assert.match(shared, /min-width 220px/)
+  assert.match(shared, /min-width unquote\('min\(220px, calc\(100vw - 16px\)\)'\)/)
+  assert.match(sharedCss, /min-width:\s*min\(220px, calc\(100vw - 16px\)\)/)
   assert.match(sharedCss, /max-width:\s*min\(360px, calc\(100vw - 16px\)\)/)
   assert.match(shared, /max-height calc\(100vh - 16px\)/)
   assert.match(shared, /overflow-y auto/)

@@ -7,6 +7,7 @@ export default function SideIcon (props) {
     title = '',
     label,
     active,
+    onClick,
     children
   } = props
   if (show === false) {
@@ -16,18 +17,20 @@ export default function SideIcon (props) {
     active
   })
   return (
-    <div
+    <button
+      type='button'
       className={cls}
       title={title}
+      onClick={onClick}
     >
-      <div className='control-icon-main'>
+      <span className='control-icon-main'>
         {children}
         {
           label
             ? <span className='control-icon-label'>{label}</span>
             : null
         }
-      </div>
-    </div>
+      </span>
+    </button>
   )
 }

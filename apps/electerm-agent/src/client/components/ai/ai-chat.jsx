@@ -487,7 +487,7 @@ export default function AIChat (props) {
     ]
 
     return (
-      <Flex className='ai-context-actions' wrap='wrap' gap={6}>
+      <Flex className='ai-context-actions' wrap='wrap' gap={6} onWheel={handleHorizontalRailWheel}>
         {
           items.map(item => (
             <button
@@ -511,7 +511,7 @@ export default function AIChat (props) {
       return null
     }
     return (
-      <Flex className='ai-attachment-queue' wrap='wrap' gap={6}>
+      <Flex className='ai-attachment-queue' wrap='wrap' gap={6} onWheel={handleHorizontalRailWheel}>
         {
           attachmentQueue.map(item => (
             <button
@@ -545,6 +545,21 @@ export default function AIChat (props) {
         <span>上传</span>
       </button>
     )
+  }
+
+  function handleHorizontalRailWheel (event) {
+    const rail = event.currentTarget
+    if (
+      rail.scrollWidth <= rail.clientWidth ||
+      Math.abs(event.deltaY) <= Math.abs(event.deltaX)
+    ) {
+      return
+    }
+    const previousScrollLeft = rail.scrollLeft
+    rail.scrollLeft += event.deltaY
+    if (rail.scrollLeft !== previousScrollLeft) {
+      event.preventDefault()
+    }
   }
 
   useEffect(() => {

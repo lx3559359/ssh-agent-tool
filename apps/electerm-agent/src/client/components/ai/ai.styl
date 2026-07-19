@@ -197,24 +197,25 @@
     color var(--primary-contrast)
 
 @media (max-height: 500px)
-  .ai-chat-input
-    margin-top 6px
-    .ant-input.ai-chat-textarea
-      height 64px !important
-      min-height 64px !important
-      max-height 64px !important
-      padding 8px 40px 30px 8px
-      overflow-y auto !important
-    .ai-context-actions,
-    .ai-attachment-queue
-      flex 0 0 24px
-      flex-wrap nowrap
-      max-height 24px
-      margin-bottom 4px
-      overflow-x auto
-      overflow-y hidden
-      &::-webkit-scrollbar
-        height 0
+  .right-side-panel-content-ai
+    .ai-chat-input
+      margin-top 4px
+      .ant-input.ai-chat-textarea
+        height 52px !important
+        min-height 52px !important
+        max-height 52px !important
+        padding 6px 40px 30px 8px
+        overflow-y auto !important
+      .ai-context-actions,
+      .ai-attachment-queue
+        flex 0 0 24px
+        flex-wrap nowrap
+        max-height 24px
+        margin-bottom 2px
+        overflow-x auto
+        overflow-y hidden
+        &::-webkit-scrollbar
+          height 0
 
 .ai-config-inline-help
   display grid

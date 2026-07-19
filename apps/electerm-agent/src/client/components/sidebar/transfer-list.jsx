@@ -39,14 +39,16 @@ export default memo(function TransferList (props) {
     content: <TransferModal {...transferModalProps} />
   }
   return (
-    <div
-      className={`control-icon-wrap${active ? ' active' : ''}`}
-      title='SFTP 文件管理，右键查看传输记录'
+    <Popover
+      {...popProps}
     >
-      <Popover
-        {...popProps}
+      <button
+        type='button'
+        className={`control-icon-wrap${active ? ' active' : ''}`}
+        onClick={onOpenSftp}
+        title='SFTP 文件管理，右键查看传输记录'
       >
-        <div className='control-icon-main' onClick={onOpenSftp}>
+        <span className='control-icon-main'>
           <Badge
             {...bdProps}
           >
@@ -55,8 +57,8 @@ export default memo(function TransferList (props) {
             />
           </Badge>
           <span className='control-icon-label'>SFTP</span>
-        </div>
-      </Popover>
-    </div>
+        </span>
+      </button>
+    </Popover>
   )
 })

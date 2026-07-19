@@ -161,10 +161,20 @@
     flex 1 1 auto
     gap 0
     min-width 0
+    overflow-x auto
+    overflow-y hidden
+    overscroll-behavior-x contain
+    scrollbar-width none
+    &::-webkit-scrollbar
+      height 0
+  .not-system-ui .aigshell-topbar-actions
+    margin-right 138px
     padding-right 0
-    overflow hidden
+  .system-ui .aigshell-topbar-actions
+    margin-right 0
+    padding-right 0
   .aigshell-topbar-action-wrap
-    flex 1 1 0
+    flex 0 0 30px
     min-width 0
   .aigshell-topbar-action
     width 100%

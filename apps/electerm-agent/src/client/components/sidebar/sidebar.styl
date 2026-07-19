@@ -82,8 +82,15 @@
   &:hover
     color var(--success)
 .control-icon-wrap
+  width 100%
   padding 8px 0
+  border 0
+  appearance none
   text-align center
+  font inherit
+  color inherit
+  background transparent
+  cursor pointer
   &.active
     .control-icon
       color var(--sp-primary)
@@ -114,10 +121,13 @@
   &:hover
     background var(--sp-surface-elevated)
     box-shadow var(--sp-shadow-control)
+    .control-icon
+    .control-icon-label
+      color var(--sp-primary)
   &.active
     background var(--sp-primary-soft)
     box-shadow var(--sp-shadow-control)
-.sidebar .control-icon:focus-visible
+.sidebar .control-icon-wrap:focus-visible
   outline 2px solid var(--sp-primary)
   outline-offset 2px
 .sidebar-list
@@ -144,10 +154,6 @@
   border-color var(--sp-border)
   .control-icon-wrap
     padding 8px 0
-    .control-icon
-      color var(--sp-text-muted)
-      &:hover
-        color var(--sp-primary)
   .open-about-icon
     color var(--sp-text-muted)
     &:hover

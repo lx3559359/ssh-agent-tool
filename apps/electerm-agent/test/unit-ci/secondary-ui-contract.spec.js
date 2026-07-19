@@ -901,7 +901,7 @@ test('client chrome maps concrete shell selectors to restrained semantic depth',
     background: 'var(--sp-primary-soft)',
     'box-shadow': 'var(--sp-shadow-control)'
   })
-  assertCssRule(sidebarBlocks, '.sidebar .control-icon:focus-visible', {
+  assertCssRule(sidebarBlocks, '.sidebar .control-icon-wrap:focus-visible', {
     outline: '2px solid var(--sp-primary)',
     'outline-offset': '2px'
   })
@@ -941,7 +941,12 @@ test('client chrome cannot decorate protected terminal surfaces with semantic UI
     'components/side-panel-r/right-side-panel.styl',
     'components/footer/footer.styl'
   ]
-  for (const file of chromeFiles) {
+  const protectedSurfaceFiles = [
+    ...chromeFiles,
+    'components/tabs/tabs.styl',
+    'components/terminal/terminal.styl'
+  ]
+  for (const file of protectedSurfaceFiles) {
     assertNoProtectedTerminalElevation(await compileStylus(file), file)
   }
 
@@ -964,14 +969,25 @@ test('terminal elevation guard covers every rendered terminal layer and semantic
     '.xterm-screen',
     '.xterm-viewport'
   ]
+  const states = ['', ':hover', ':focus-visible', '.active', '[data-state="active"]']
+  const shadows = [
+    '--sp-shadow-control',
+    '--sp-shadow-card',
+    '--sp-shadow-overlay',
+    '--sp-shadow-future-token'
+  ]
   for (const selector of selectors) {
-    assert.throws(
-      () => assertNoProtectedTerminalElevation(
-        `${selector} { box-shadow: var(--sp-shadow-control); }`,
-        'terminal-shadow-mutation.css'
-      ),
-      `${selector} must reject every --sp-shadow-* token`
-    )
+    for (const state of states) {
+      for (const shadow of shadows) {
+        assert.throws(
+          () => assertNoProtectedTerminalElevation(
+            `${selector}${state} { box-shadow: var(${shadow}); }`,
+            'terminal-shadow-mutation.css'
+          ),
+          `${selector}${state} must reject ${shadow}`
+        )
+      }
+    }
   }
 })
 
@@ -994,6 +1010,8 @@ test('shell chrome E2E uses concrete scroll mutation, clipping ancestry and docu
     assert.ok(inspect[1].includes(selector), `${selector} must be included in shell interactive reachability`)
   }
   assert.match(inspect[1], /clippingAncestors/)
+  assert.match(inspect[1], /horizontalScrollReachable/)
+  assert.match(inspect[1], /scrollWidth > current\.clientWidth/)
   assert.match(inspect[1], /aria-disabled/)
   assert.match(inspect[1], /documentElement/)
   assert.match(inspect[1], /document\.body/)

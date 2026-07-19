@@ -163,9 +163,9 @@ export default function Sidebar (props) {
           title='状态总览'
           label='状态总览'
           active={fleetStatusActive}
+          onClick={handleOpenFleetStatus}
         >
           <DashboardOutlined
-            onClick={handleOpenFleetStatus}
             className='font20 iblock control-icon'
           />
         </SideIcon>
@@ -173,9 +173,9 @@ export default function Sidebar (props) {
           title='服务器'
           label='服务器'
           active={bookmarksActive}
+          onClick={() => handleOpenTerminalSidebarPanel('bookmarks')}
         >
           <BookOutlined
-            onClick={() => handleOpenTerminalSidebarPanel('bookmarks')}
             className='font20 iblock control-icon'
           />
         </SideIcon>
@@ -188,48 +188,49 @@ export default function Sidebar (props) {
           title='历史'
           label='历史'
           active={historyActive}
+          onClick={() => handleOpenTerminalSidebarPanel('history')}
         >
           <HistoryOutlined
             className='font20 iblock control-icon'
-            onClick={() => handleOpenTerminalSidebarPanel('history')}
           />
         </SideIcon>
         <SideIcon
           title='密钥'
           label='密钥'
           active={passwordsActive}
+          onClick={() => handleOpenSettingItem(settingPasswordsId)}
         >
           <KeyOutlined
             className='font20 iblock control-icon'
-            onClick={() => handleOpenSettingItem(settingPasswordsId)}
           />
         </SideIcon>
         <SideIcon
           title='日志'
           label='日志'
           active={logActive}
+          onClick={() => openAbout(infoTabs.log)}
         >
           <FileTextOutlined
             className='font20 iblock control-icon'
-            onClick={() => openAbout(infoTabs.log)}
           />
         </SideIcon>
         <SideIcon
           title='设置'
           label='设置'
           active={settingActive}
+          onClick={openSetting}
         >
-          <SettingOutlined className='iblock font20 control-icon' onClick={openSetting} />
+          <SettingOutlined className='iblock font20 control-icon' />
         </SideIcon>
         {
           Math.round((zoom ?? 1) * 100) !== 100
             ? (
               <SideIcon
                 title={e('resetzoom')}
+                onClick={handleZoomReset}
               >
                 <AimOutlined
                   className='iblock font16 control-icon zoom-reset-icon'
-                  onClick={handleZoomReset}
                 />
               </SideIcon>
               )
