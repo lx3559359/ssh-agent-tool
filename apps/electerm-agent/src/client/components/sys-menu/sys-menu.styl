@@ -4,9 +4,6 @@
   min-width 220px
   width max-content
   max-width unquote('min(360px, calc(100vw - 16px))')
-  max-height calc(100vh - 24px)
-  overflow-x hidden
-  overflow-y auto
   color var(--sp-text)
   background var(--sp-surface-elevated)
   border 1px solid var(--sp-border-strong)
@@ -135,6 +132,11 @@
     display block
 
 @media (max-height: 480px)
+  .context-menu
+    max-height calc(100vh - 24px)
+    overflow-x hidden
+    overflow-y auto
+
   .context-menu .with-sub-menu .sub-context-menu
     position static
     grid-column 1 / -1

@@ -1749,6 +1749,59 @@ test('context menus keep pointer placement and compact long-menu reachability', 
       return element.contains(document.elementFromPoint(x, y))
     })
     expect(submenuPointerReachable, JSON.stringify({ runner: browserName })).toBe(true)
+
+    await resetSurface(page, 'en_us')
+    await setWindowCase(electronApp, page, { width: 1100, height: 700 }, 1)
+    const desktopSystemMenu = await openSystemMenu(page)
+    const desktopSubmenuTrigger = desktopSystemMenu.locator('.with-sub-menu').first()
+    await desktopSubmenuTrigger.hover()
+    const desktopSubmenu = desktopSubmenuTrigger.locator('.sub-context-menu')
+    await expect(desktopSubmenu).toBeVisible()
+    const desktopSubmenuGeometry = await desktopSubmenu.evaluate((submenu) => {
+      const root = submenu.closest('.context-menu')
+      const trigger = submenu.closest('.with-sub-menu')
+      const rootRect = root.getBoundingClientRect()
+      const triggerRect = trigger.getBoundingClientRect()
+      const submenuRect = submenu.getBoundingClientRect()
+      const rootStyle = window.getComputedStyle(root)
+      const x = Math.min(window.innerWidth - 1, Math.max(0, submenuRect.left + submenuRect.width / 2))
+      const y = Math.min(window.innerHeight - 1, Math.max(0, submenuRect.top + Math.min(submenuRect.height, 32) / 2))
+      return {
+        rootOverflowX: rootStyle.overflowX,
+        root: {
+          left: rootRect.left,
+          right: rootRect.right
+        },
+        trigger: {
+          left: triggerRect.left,
+          right: triggerRect.right
+        },
+        submenu: {
+          left: submenuRect.left,
+          top: submenuRect.top,
+          right: submenuRect.right,
+          bottom: submenuRect.bottom
+        },
+        viewport: {
+          width: window.innerWidth,
+          height: window.innerHeight
+        },
+        pointerReachable: submenu.contains(document.elementFromPoint(x, y))
+      }
+    })
+    const desktopContext = JSON.stringify({ runner: browserName, desktopSubmenuGeometry })
+    console.log(`SECONDARY_SYSTEM_SUBMENU_DESKTOP=${desktopContext}`)
+    expect(desktopSubmenuGeometry.rootOverflowX, desktopContext).toBe('visible')
+    expect(desktopSubmenuGeometry.submenu.left, desktopContext)
+      .toBeGreaterThanOrEqual(desktopSubmenuGeometry.trigger.right - 1)
+    expect(desktopSubmenuGeometry.submenu.left, desktopContext)
+      .toBeGreaterThanOrEqual(desktopSubmenuGeometry.root.right - 1)
+    expect(desktopSubmenuGeometry.submenu.top, desktopContext).toBeGreaterThanOrEqual(-1)
+    expect(desktopSubmenuGeometry.submenu.right, desktopContext)
+      .toBeLessThanOrEqual(desktopSubmenuGeometry.viewport.width + 1)
+    expect(desktopSubmenuGeometry.submenu.bottom, desktopContext)
+      .toBeLessThanOrEqual(desktopSubmenuGeometry.viewport.height + 1)
+    expect(desktopSubmenuGeometry.pointerReachable, desktopContext).toBe(true)
   })
 })
 
