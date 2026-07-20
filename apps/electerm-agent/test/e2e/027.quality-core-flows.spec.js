@@ -103,6 +103,41 @@ test('isolated client completes SSH, SFTP, AI, update and rollback quality flows
     await page.keyboard.press('Control+C')
     await expect.poll(() => sshServer.state.ctrlCCount).toBeGreaterThan(0)
 
+    const quickCommandResult = await page.evaluate(async () => {
+      const term = window.refs.get('term-' + window.store.activeTabId)
+      const run = async command => {
+        const started = await term.runSafetyCommand(command, {
+          source: 'quick-command',
+          title: 'Quality quick command regression'
+        })
+        const completion = await started.waitForCompletion({ timeoutMs: 15000 })
+        return {
+          submittedCommand: started.execution?.submittedCommand,
+          exitCode: completion.exitCode
+        }
+      }
+      return {
+        first: await run('uname -s && id -un'),
+        second: await run('pwd')
+      }
+    })
+    expect(quickCommandResult.first.submittedCommand).toMatch(/^sh -c /)
+    expect(quickCommandResult.first.exitCode).toBe(0)
+    expect(quickCommandResult.second.submittedCommand).toBe('pwd')
+    expect(quickCommandResult.second.exitCode).toBe(0)
+
+    await page.evaluate(() => window.dispatchEvent(new CustomEvent('shellpilot-open-safety-center')))
+    const quickCommandSafetyCenter = page.locator('.safety-operation-center-modal')
+    await expect(quickCommandSafetyCenter).toBeVisible({ timeout: 20000 })
+    await expect(quickCommandSafetyCenter.locator('.safety-center-summary span').first())
+      .toHaveText(/执行中\s+0/)
+    await quickCommandSafetyCenter.locator('.safety-center-tabs .ant-tabs-tab').nth(2).click()
+    const quickCommandHistory = quickCommandSafetyCenter.locator('.safety-center-record-list')
+    await expect(quickCommandHistory).toContainText('uname -s && id -un')
+    await expect(quickCommandHistory).toContainText('pwd')
+    await expect(quickCommandHistory).toContainText('已保留')
+    await quickCommandSafetyCenter.locator('.ant-modal-close').click()
+
     await page.locator('.session-current .term-sftp-tabs .type-tab:visible').nth(1).click()
     await expect.poll(() => sshServer.state.sftpSessions, { timeout: 20000 }).toBeGreaterThan(0)
     await expect.poll(() => page.evaluate(() => {

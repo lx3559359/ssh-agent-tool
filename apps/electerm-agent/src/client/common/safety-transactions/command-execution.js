@@ -17,6 +17,64 @@ function shellQuote (value) {
   return `${quote}${String(value).replaceAll(quote, escapedQuote)}${quote}`
 }
 
+function needsTrackedShellEnvelope (command) {
+  const text = String(command || '')
+  let quote = ''
+  let escaped = false
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index]
+    if (escaped) {
+      escaped = false
+      continue
+    }
+    if (character === '\\' && quote !== "'") {
+      escaped = true
+      continue
+    }
+    if (quote) {
+      if (character === quote) quote = ''
+      continue
+    }
+    if (character === "'" || character === '"') {
+      quote = character
+      continue
+    }
+    if ('\r\n;&|<>(){}`'.includes(character)) return true
+  }
+  return false
+}
+
+function isSshEndpoint (endpoint = {}) {
+  return endpoint.sessionType === 'ssh' || (
+    Boolean(endpoint.host) && endpoint.sessionType !== 'local'
+  )
+}
+
+function buildTrackedForegroundExecution (command) {
+  const payload = encodeBase64Utf8(String(command).replaceAll('\r', ''))
+  const runnerScript = [
+    'printf "\\r\\033[2K"',
+    'payload=$(printf %s "$1" | base64 -d 2>/dev/null) || exit 126',
+    'if command -v bash >/dev/null 2>&1; then bash -c "$payload"; else sh -c "$payload"; fi'
+  ].join('; ')
+  const submittedCommand = [
+    'sh -c',
+    shellQuote(runnerScript),
+    'shellpilot',
+    shellQuote(payload)
+  ].join(' ')
+  return {
+    mode: 'foreground',
+    submittedCommand,
+    metadata: {
+      mode: 'foreground',
+      submittedCommand,
+      trackedEnvelope: true,
+      payloadEncoding: 'base64'
+    }
+  }
+}
+
 function buildBackgroundExecution (command, operationId) {
   const taskId = safeTaskId(operationId)
   const logFile = `/tmp/shellpilot-${taskId}.log`
@@ -48,8 +106,16 @@ function buildBackgroundExecution (command, operationId) {
   }
 }
 
-export function buildCommandExecution ({ command, operationId, mode = 'foreground' }) {
+export function buildCommandExecution ({
+  command,
+  operationId,
+  mode = 'foreground',
+  endpoint
+}) {
   if (mode === 'foreground') {
+    if (isSshEndpoint(endpoint) && needsTrackedShellEnvelope(command)) {
+      return buildTrackedForegroundExecution(command)
+    }
     return {
       mode,
       submittedCommand: command,

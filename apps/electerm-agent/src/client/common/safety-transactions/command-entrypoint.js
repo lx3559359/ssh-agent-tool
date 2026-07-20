@@ -589,13 +589,14 @@ export function createSafetyCommandEntrypoint (options = {}) {
         throw new Error('命令安全事务来源不受支持。')
       }
       const operationId = run.operationId
+      const endpoint = getEndpoint()
       const executionPlan = buildCommandExecution({
         command,
         operationId,
-        mode: runOptions.executionMode || 'foreground'
+        mode: runOptions.executionMode || 'foreground',
+        endpoint
       })
       run.execution = executionPlan
-      const endpoint = getEndpoint()
       if (run.riskDelegation) {
         assertSameSessionEndpoint(run.riskDelegation.endpoint, endpoint)
       }

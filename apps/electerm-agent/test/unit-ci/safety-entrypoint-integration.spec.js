@@ -302,6 +302,48 @@ test('quick, AI and Agent commands use one classified safety request shape', asy
   assert.equal(harness.completions.length, 2)
 })
 
+test('compound SSH quick commands finish through one trackable submission and release the next command', async () => {
+  const { createSafetyCommandEntrypoint } = await import(moduleUrl)
+  const harness = createHarness({
+    getEndpoint: () => ({
+      tabId: 'tab-1',
+      host: 'prod.example.com',
+      port: 22,
+      username: 'root',
+      pid: 1001,
+      sessionType: 'ssh'
+    })
+  })
+  const entrypoint = createSafetyCommandEntrypoint(harness.options)
+  entrypoint.beginSession()
+  const command = 'systemctl status nginx --no-pager && journalctl -u nginx -n 20 --no-pager'
+
+  const first = await entrypoint.runSafetyCommand(command, {
+    source: 'quick-command',
+    title: '服务状态查询'
+  })
+
+  assert.equal(harness.requests[0].command, command)
+  assert.notEqual(first.execution.submittedCommand, command)
+  assert.match(first.execution.submittedCommand, /^sh -c /)
+  assert.doesNotMatch(first.execution.submittedCommand, /[\r\n]/)
+  assert.equal(first.execution.metadata.trackedEnvelope, true)
+
+  const waiting = first.waitForCompletion({ timeoutMs: 1000 })
+  assert.equal(await entrypoint.handleCommandFinished({
+    token: first.token,
+    command: first.execution.submittedCommand,
+    exitCode: 0
+  }), true)
+  assert.equal((await waiting).exitCode, 0)
+
+  const second = await entrypoint.runSafetyCommand('uptime', {
+    source: 'quick-command'
+  })
+  assert.equal(second.sent, true)
+  assert.equal(second.execution.submittedCommand, 'uptime')
+})
+
 test('delegated Agent resource risks receive exactly one lower confirmation and one dispatch', async () => {
   const { createSafetyCommandEntrypoint } = await import(moduleUrl)
   const { createDelegatedAgentSafetyPreparation } = await import(agentRiskDelegationUrl)

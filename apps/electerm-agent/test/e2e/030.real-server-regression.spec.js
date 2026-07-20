@@ -117,6 +117,38 @@ async function runReadOnlySshChecks (page) {
   }
 }
 
+async function runTrackedQuickCommandChecks (page) {
+  const result = await page.evaluate(async () => {
+    const term = window.refs.get('term-' + window.store.activeTabId)
+    if (!term?.runSafetyCommand) {
+      throw new Error('Current terminal safety entrypoint is unavailable')
+    }
+
+    const run = async command => {
+      const started = await term.runSafetyCommand(command, {
+        source: 'quick-command',
+        title: 'Real server quick command regression'
+      })
+      const completion = await started.waitForCompletion({ timeoutMs: 15000 })
+      return {
+        operationId: started.operationId,
+        command: started.execution?.submittedCommand,
+        exitCode: completion.exitCode
+      }
+    }
+
+    const first = await run('uname -s && id -un')
+    const second = await run('pwd')
+    return { first, second }
+  })
+
+  expect(result.first.command).not.toBe('uname -s && id -un')
+  expect(result.first.command).toMatch(/^sh -c /)
+  expect(result.first.exitCode).toBe(0)
+  expect(result.second.command).toBe('pwd')
+  expect(result.second.exitCode).toBe(0)
+}
+
 async function openSftp (page) {
   await page.locator('.session-current .term-sftp-tabs .type-tab:visible').nth(1).click()
   await expect.poll(() => page.evaluate(() => {
@@ -199,6 +231,7 @@ test('real server supports read-only SSH checks and isolated reversible SFTP ope
     run = await launchQualityApp(electron)
     await connectRealServer(run.page, config)
     await runReadOnlySshChecks(run.page)
+    await runTrackedQuickCommandChecks(run.page)
     await openSftp(run.page)
 
     await createRemoteSandbox(run.page, sandboxPath)
