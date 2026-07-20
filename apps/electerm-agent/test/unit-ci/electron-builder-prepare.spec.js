@@ -69,26 +69,29 @@ test('electron builder prepare generates cpu-features build config for pnpm inst
   } = require(path.resolve(__dirname, '../../build/bin/prepare-electron-build.js'))
 
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'shellpilot-cpu-features-'))
-  const packageDir = path.join(
-    tmpRoot,
-    'node_modules/.pnpm/cpu-features@0.0.10/node_modules/cpu-features'
-  )
-  fs.mkdirSync(packageDir, { recursive: true })
-  fs.writeFileSync(
-    path.join(packageDir, 'buildcheck.js'),
-    'console.log(JSON.stringify({ conditions: [] }, null, 2))\n',
-    'utf8'
-  )
+  const packageDirs = [
+    'node_modules/.pnpm/cpu-features@0.0.10/node_modules/cpu-features',
+    'work/app/node_modules/.pnpm/node_modules/cpu-features'
+  ].map(relativePath => path.join(tmpRoot, relativePath))
+  for (const packageDir of packageDirs) {
+    fs.mkdirSync(packageDir, { recursive: true })
+    fs.writeFileSync(
+      path.join(packageDir, 'buildcheck.js'),
+      'console.log(JSON.stringify({ conditions: [] }, null, 2))\n',
+      'utf8'
+    )
+  }
 
   try {
     const prepared = prepareCpuFeaturesBuildConfig({ cwd: tmpRoot })
-    const generated = JSON.parse(fs.readFileSync(
-      path.join(packageDir, 'buildcheck.gypi'),
-      'utf8'
-    ))
-
-    assert.deepEqual(prepared, [packageDir])
-    assert.deepEqual(generated, { conditions: [] })
+    assert.deepEqual(prepared, packageDirs)
+    for (const packageDir of packageDirs) {
+      const generated = JSON.parse(fs.readFileSync(
+        path.join(packageDir, 'buildcheck.gypi'),
+        'utf8'
+      ))
+      assert.deepEqual(generated, { conditions: [] })
+    }
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true })
   }

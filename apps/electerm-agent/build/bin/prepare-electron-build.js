@@ -42,6 +42,7 @@ function findCpuFeaturesPackageDirs (cwd) {
         'node_modules/cpu-features'
       ))
     }
+    candidates.push(path.join(pnpmStore, 'node_modules/cpu-features'))
   }
 
   return [...new Set(candidates
