@@ -1,3 +1,23 @@
+import {
+  NETWORK_ERRORS_DIAGNOSTIC_COMMAND,
+  ROUTE_MTU_DIAGNOSTIC_COMMAND,
+  TCP_STATES_DIAGNOSTIC_COMMAND
+} from '../../components/quick-commands/server-maintenance/network.js'
+import {
+  SSH_SECURITY_EVENTS_DIAGNOSTIC_COMMAND
+} from '../../components/quick-commands/server-maintenance/security.js'
+import {
+  DOCKER_HEALTH_STORAGE_DIAGNOSTIC_COMMAND
+} from '../../components/quick-commands/server-maintenance/containers.js'
+
+const fixedReadonlyMaintenanceDiagnosticCommands = new Set([
+  NETWORK_ERRORS_DIAGNOSTIC_COMMAND,
+  TCP_STATES_DIAGNOSTIC_COMMAND,
+  ROUTE_MTU_DIAGNOSTIC_COMMAND,
+  SSH_SECURITY_EVENTS_DIAGNOSTIC_COMMAND,
+  DOCKER_HEALTH_STORAGE_DIAGNOSTIC_COMMAND
+])
+
 const riskRank = {
   readonly: 0,
   change: 1,
@@ -1186,7 +1206,10 @@ export function classifyCommand (command) {
     return result('unknown', '\u547d\u4ee4\u5305\u542b\u65e0\u6cd5\u5b89\u5168\u6267\u884c\u7684\u88f8\u56de\u8f66\uff0c\u65e0\u6cd5\u5206\u7c7b')
   }
   if (!text) return result('unknown', '命令为空，无法分类')
-  if (fixedReadonlyStorageDiagnosticCommands.has(text)) return result('readonly', '\u547d\u4ee4\u5c5e\u4e8e\u5df2\u8bc6\u522b\u7684\u53ea\u8bfb\u8bca\u65ad\u64cd\u4f5c')
+  if (fixedReadonlyStorageDiagnosticCommands.has(text) ||
+    fixedReadonlyMaintenanceDiagnosticCommands.has(text)) {
+    return result('readonly', '\u547d\u4ee4\u5c5e\u4e8e\u5df2\u8bc6\u522b\u7684\u53ea\u8bfb\u8bca\u65ad\u64cd\u4f5c')
+  }
   const parts = splitCommands(text)
   if (!parts.length) return result('unknown', '命令为空，无法分类')
   if (parts.some(isDatabaseClient) && hasDestructiveDatabaseOperation(text)) {

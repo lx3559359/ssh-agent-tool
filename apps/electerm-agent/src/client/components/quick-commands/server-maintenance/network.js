@@ -71,6 +71,269 @@ const NETWORK_CHANGE_COMMAND = [
 export function getNetworkCommands () {
   return [
     defineCommand({
+      id: 'builtin-server-network-errors',
+      name: '网络错误与链路状态',
+      description: '查看网卡收发错误、丢包、运行状态以及可用的物理链路信息。',
+      usage: '用于排查网卡异常、链路断开、双工或速率不匹配导致的网络问题。',
+      labels: [READ_ONLY, '网络'],
+      advancedUsage: [
+        '最多检查前 20 个网卡，链路统计和每个网卡的 ethtool 字段均有输出上限。',
+        '未安装 ip 时仍会继续读取 /sys/class/net 中可访问的网卡状态。'
+      ],
+      commands: [
+        step(String.raw`(
+  run_bounded_link_stats () {
+    {
+      ip -s link 2>/dev/null
+      printf '\\036SHELLPILOT_NETWORK_STATUS=%s\\n' "$?"
+    } | awk '
+      BEGIN {
+        limit = 100
+        marker = sprintf("%c", 30) "SHELLPILOT_NETWORK_STATUS="
+      }
+      {
+        marker_position = index($0, marker)
+        if (marker_position > 0) {
+          prefix = substr($0, 1, marker_position - 1)
+          if (length(prefix) > 0 && emitted < limit) {
+            print prefix
+            emitted++
+          }
+          command_status = substr($0, marker_position + length(marker))
+          status_seen = 1
+          next
+        }
+        if (emitted < limit) {
+          print
+          emitted++
+          next
+        }
+        truncated = 1
+        exit
+      }
+      END {
+        if (truncated || (status_seen && command_status == 0)) {
+          exit 0
+        }
+        exit 1
+      }
+    '
+  }
+
+  printf '===== 网卡错误与丢包统计 =====\\n'
+  if command -v ip >/dev/null 2>&1; then
+    run_bounded_link_stats || printf '无法读取 ip 链路统计。\\n'
+  else
+    printf '未安装 ip，跳过链路统计。\\n'
+  fi
+
+  printf '===== 网卡运行与物理链路状态 =====\\n'
+  interface_count=0
+  for interface_path in /sys/class/net/*; do
+    [ -d "$interface_path" ] || continue
+    interface_count=$((interface_count + 1))
+    [ "$interface_count" -le 20 ] || break
+    interface_name="$(basename "$interface_path")"
+    interface_state="未知"
+    if [ -r "$interface_path/operstate" ]; then
+      IFS= read -r interface_state < "$interface_path/operstate" || interface_state="未知"
+      [ -n "$interface_state" ] || interface_state="未知"
+    fi
+    printf '%s operstate=%s\\n' "$interface_name" "$interface_state"
+    if command -v ethtool >/dev/null 2>&1; then
+      ethtool "$interface_name" 2>/dev/null | awk '
+        /^[[:space:]]*(Speed|Duplex|Link detected):/ {
+          print
+          matched++
+          if (matched >= 3) exit
+        }
+      ' || true
+    fi
+  done
+)
+true`)
+      ]
+    }),
+    defineCommand({
+      id: 'builtin-server-tcp-states',
+      name: 'TCP 连接状态汇总',
+      description: '汇总 TCP 连接状态并显示套接字总体统计，兼容 ss 与 netstat。',
+      usage: '用于排查连接堆积、握手异常、TIME-WAIT 过多和连接资源压力。',
+      labels: [READ_ONLY, '网络'],
+      advancedUsage: [
+        '优先使用 ss；仅在 ss 不可用或执行失败时回退到 netstat。',
+        '状态聚合最多读取 10000 行并最多输出 32 种状态。'
+      ],
+      commands: [
+        step(String.raw`(
+  run_ss_summary () {
+    {
+      ss -s 2>/dev/null
+      printf '\\036SHELLPILOT_TCP_STATUS=%s\\n' "$?"
+    } | awk '
+      BEGIN {
+        limit = 40
+        marker = sprintf("%c", 30) "SHELLPILOT_TCP_STATUS="
+      }
+      {
+        marker_position = index($0, marker)
+        if (marker_position > 0) {
+          prefix = substr($0, 1, marker_position - 1)
+          if (length(prefix) > 0 && emitted < limit) {
+            print prefix
+            emitted++
+          }
+          command_status = substr($0, marker_position + length(marker))
+          status_seen = 1
+          next
+        }
+        if (emitted < limit) {
+          print
+          emitted++
+          next
+        }
+        truncated = 1
+        exit
+      }
+      END {
+        if (truncated || (status_seen && command_status == 0)) {
+          exit 0
+        }
+        exit 1
+      }
+    '
+  }
+
+  aggregate_tcp_states () {
+    source_kind="$1"
+    shift
+    {
+      "$@" 2>/dev/null
+      printf '\\036SHELLPILOT_TCP_STATUS=%s\\n' "$?"
+    } | awk -v source_kind="$source_kind" '
+      BEGIN {
+        input_limit = 10000
+        output_limit = 32
+        marker = sprintf("%c", 30) "SHELLPILOT_TCP_STATUS="
+      }
+      {
+        marker_position = index($0, marker)
+        if (marker_position > 0) {
+          command_status = substr($0, marker_position + length(marker))
+          status_seen = 1
+          next
+        }
+        if (line_count >= input_limit) {
+          truncated = 1
+          exit
+        }
+        line_count++
+        state = ""
+        if (source_kind == "ss") {
+          if ($1 != "State" && $1 != "") state = $1
+        } else if ($1 ~ /^tcp/) {
+          state = $NF
+        }
+        if (state != "") states[state]++
+      }
+      END {
+        if (!(truncated || (status_seen && command_status == 0))) exit 1
+        print "TCP 状态汇总:"
+        emitted = 0
+        for (state in states) {
+          if (emitted >= output_limit) {
+            print "其余状态已省略"
+            break
+          }
+          printf "%s %d\\n", state, states[state]
+          emitted++
+        }
+        exit 0
+      }
+    '
+  }
+
+  if command -v ss >/dev/null 2>&1 &&
+    run_ss_summary &&
+    aggregate_tcp_states ss ss -tan
+  then
+    true
+  elif command -v netstat >/dev/null 2>&1 &&
+    aggregate_tcp_states netstat netstat -ant
+  then
+    true
+  else
+    printf '未检测到可用的 ss 或 netstat，无法统计 TCP 状态。\\n'
+  fi
+)
+true`)
+      ]
+    }),
+    defineCommand({
+      id: 'builtin-server-route-mtu',
+      name: '路由策略与 MTU',
+      description: '查看全部路由表、策略路由规则以及网卡 MTU 和链路详细信息。',
+      usage: '用于排查多路由表选择错误、策略路由冲突和 MTU 不匹配问题。',
+      labels: [READ_ONLY, '网络'],
+      advancedUsage: [
+        '三个区段分别限制为 80、40 和 80 行，避免大型路由表刷屏。'
+      ],
+      commands: [
+        step(String.raw`(
+  run_bounded_ip_section () {
+    limit="$1"
+    shift
+    {
+      "$@" 2>/dev/null
+      printf '\\036SHELLPILOT_ROUTE_STATUS=%s\\n' "$?"
+    } | awk -v limit="$limit" '
+      BEGIN {
+        marker = sprintf("%c", 30) "SHELLPILOT_ROUTE_STATUS="
+      }
+      {
+        marker_position = index($0, marker)
+        if (marker_position > 0) {
+          prefix = substr($0, 1, marker_position - 1)
+          if (length(prefix) > 0 && emitted < limit) {
+            print prefix
+            emitted++
+          }
+          command_status = substr($0, marker_position + length(marker))
+          status_seen = 1
+          next
+        }
+        if (emitted < limit) {
+          print
+          emitted++
+          next
+        }
+        truncated = 1
+        exit
+      }
+      END {
+        if (truncated || (status_seen && command_status == 0)) {
+          exit 0
+        }
+        exit 1
+      }
+    '
+  }
+
+  if ! command -v ip >/dev/null 2>&1; then
+    printf '未安装 ip，无法读取路由策略与 MTU。\\n'
+  else
+    printf '===== 全部路由表 =====\\n'
+    run_bounded_ip_section 80 ip route show table all || printf '无法读取全部路由表。\\n'
+    printf '===== 策略路由规则 =====\\n'
+    run_bounded_ip_section 40 ip rule || printf '无法读取策略路由规则。\\n'
+    printf '===== 网卡 MTU 与链路详情 =====\\n'
+    run_bounded_ip_section 80 ip -details link || printf '无法读取网卡链路详情。\\n'
+  fi
+)
+true`)
+      ]
+    }),
+    defineCommand({
       id: 'builtin-server-network-listen',
       name: '端口监听总览',
       description: '查看 TCP/UDP 监听端口、进程和路由信息。',
@@ -471,3 +734,12 @@ timeout "$TIMEOUT" openssl s_client -connect "$DOMAIN:$PORT" -servername "$DOMAI
     })
   ]
 }
+
+const fixedNetworkDiagnosticCommands = getNetworkCommands()
+
+export const NETWORK_ERRORS_DIAGNOSTIC_COMMAND = fixedNetworkDiagnosticCommands
+  .find(command => command.id === 'builtin-server-network-errors').commands[0].command
+export const TCP_STATES_DIAGNOSTIC_COMMAND = fixedNetworkDiagnosticCommands
+  .find(command => command.id === 'builtin-server-tcp-states').commands[0].command
+export const ROUTE_MTU_DIAGNOSTIC_COMMAND = fixedNetworkDiagnosticCommands
+  .find(command => command.id === 'builtin-server-route-mtu').commands[0].command

@@ -3,6 +3,92 @@ import { READ_ONLY, NEED_EDIT, step, defineCommand, inputParam, selectParam } fr
 export function getSecurityCommands () {
   return [
     defineCommand({
+      id: 'builtin-server-ssh-security-events',
+      name: 'SSH 安全事件',
+      description: '筛选最近 24 小时的 SSH 失败、无效用户、成功登录和断开事件。',
+      usage: '用于排查暴力尝试、异常登录来源、认证成功记录和频繁断连。',
+      labels: [READ_ONLY, '安全'],
+      advancedUsage: [
+        '优先读取 ssh 与 sshd 的 systemd 日志，失败时回退到 auth.log 或 secure。',
+        '只输出匹配的最近诊断流，最多 200 行，不启动 pager 或持续跟随。'
+      ],
+      commands: [
+        step(String.raw`(
+  run_journal_security_events () {
+    {
+      journalctl -u ssh -u sshd --since "-24 hours" --no-pager 2>/dev/null
+      printf '\\036SHELLPILOT_SSH_STATUS=%s\\n' "$?"
+    } | awk '
+      BEGIN {
+        limit = 200
+        marker = sprintf("%c", 30) "SHELLPILOT_SSH_STATUS="
+      }
+      {
+        marker_position = index($0, marker)
+        if (marker_position > 0) {
+          prefix = substr($0, 1, marker_position - 1)
+          if (length(prefix) > 0 && tolower(prefix) ~ /(failed|invalid|accepted|disconnect)/) {
+            if (emitted < limit) {
+              print prefix
+              emitted++
+            } else {
+              truncated = 1
+            }
+          }
+          command_status = substr($0, marker_position + length(marker))
+          status_seen = 1
+          next
+        }
+        if (tolower($0) ~ /(failed|invalid|accepted|disconnect)/) {
+          if (emitted < limit) {
+            print
+            emitted++
+            next
+          }
+          truncated = 1
+          exit
+        }
+      }
+      END {
+        if (truncated || (status_seen && command_status == 0)) {
+          exit 0
+        }
+        exit 1
+      }
+    '
+  }
+
+  run_log_security_events () {
+    {
+      if [ -r /var/log/auth.log ]; then
+        awk 'tolower($0) ~ /(failed|invalid|accepted|disconnect)/ { print }' /var/log/auth.log
+      fi
+      if [ -r /var/log/secure ]; then
+        awk 'tolower($0) ~ /(failed|invalid|accepted|disconnect)/ { print }' /var/log/secure
+      fi
+    } | awk '
+      NR <= 200 {
+        print
+        next
+      }
+      {
+        exit
+      }
+    '
+  }
+
+  if command -v journalctl >/dev/null 2>&1 && run_journal_security_events; then
+    true
+  elif [ -r /var/log/auth.log ] || [ -r /var/log/secure ]; then
+    run_log_security_events
+  else
+    printf '未找到可读的 SSH 安全日志（/var/log/auth.log 或 /var/log/secure）。\\n'
+  fi
+)
+true`)
+      ]
+    }),
+    defineCommand({
       id: 'builtin-server-firewall-status',
       name: '防火墙状态',
       description: '查看 firewalld、ufw、iptables/nftables 当前规则。',
@@ -186,3 +272,8 @@ echo "回滚脚本: $ROLLBACK_SCRIPT"`)
     })
   ]
 }
+
+const fixedSecurityDiagnosticCommands = getSecurityCommands()
+
+export const SSH_SECURITY_EVENTS_DIAGNOSTIC_COMMAND = fixedSecurityDiagnosticCommands
+  .find(command => command.id === 'builtin-server-ssh-security-events').commands[0].command
