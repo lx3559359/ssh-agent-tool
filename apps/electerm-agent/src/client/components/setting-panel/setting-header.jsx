@@ -118,19 +118,8 @@ export default function SettingHeader (props) {
     if (language && language !== store.config.language) {
       store.setConfig({ language })
       store.previewLanguage = ''
-      notification.info({
-        message: (
-          <div>
-            {e('saveLang')}
-            <Button
-              onClick={() => window.location.reload()}
-              className='mg1l'
-              size='small'
-            >
-              {e('restartNow')}
-            </Button>
-          </div>
-        )
+      notification.success({
+        message: e('saved')
       })
       return
     }

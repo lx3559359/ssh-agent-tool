@@ -29,6 +29,7 @@ import {
 } from '../../common/constants'
 import { ConfigProvider } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
+import enUS from 'antd/locale/en_US'
 import { NotificationContainer } from '../common/notification'
 import LazyModuleBoundary from '../common/lazy-module-boundary'
 import InfoModal from '../sidebar/info-modal.jsx'
@@ -149,6 +150,7 @@ export default auto(function Index (props) {
   } = store
   const rawConfig = store.config
   const config = rawConfig || {}
+  const effectiveLanguage = store.previewLanguage || config.language || 'zh_cn'
   const effectiveUiFontPresetId = store.previewUiFontPresetId ||
     config.uiFontPresetId || 'system'
   const rightPanelTitle = getSafeRightPanelTitle(store, rawConfig)
@@ -328,7 +330,7 @@ export default auto(function Index (props) {
   return (
     <ConfigProvider
       theme={uiThemeConfig}
-      locale={zhCN}
+      locale={effectiveLanguage === 'en_us' ? enUS : zhCN}
     >
       <div {...ext1}>
         <InputContextMenu />

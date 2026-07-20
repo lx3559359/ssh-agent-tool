@@ -283,13 +283,14 @@ function dismissRecoveryPlan () {
 
 async function initAppServer () {
   const {
+    userConfig,
     config
   } = await getConfig(globalState.get('serverInited'))
   const {
     langs,
     sysLocale
   } = await loadLocales()
-  const language = getLang(config, sysLocale, langs)
+  const language = getLang(userConfig, sysLocale, langs)
   config.language = language
   if (!globalState.get('serverInited')) {
     const child = await initServer(config, {

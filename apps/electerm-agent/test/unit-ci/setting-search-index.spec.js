@@ -174,7 +174,7 @@ test('language previews rerender the active tab without changing the content tre
   )
 })
 
-test('applying a changed preview keeps the existing localized restart prompt', () => {
+test('applying a changed preview persists live without a reload prompt', () => {
   const headerSource = readClientSource('components/setting-panel/setting-header.jsx')
   const applySource = headerSource.match(
     /function handleApplyLanguage \(\) \{([\s\S]*?)\n\s{2}function handleCancelLanguage/
@@ -182,9 +182,8 @@ test('applying a changed preview keeps the existing localized restart prompt', (
 
   assert.ok(applySource)
   assert.match(headerSource, /import \{ notification \} from '\.\.\/common\/notification'/)
-  assert.match(applySource[1], /if \(language && language !== store\.config\.language\) \{[\s\S]*?store\.setConfig\(\{ language \}\)[\s\S]*?store\.previewLanguage = ''[\s\S]*?notification\.info\(/)
+  assert.match(applySource[1], /if \(language && language !== store\.config\.language\) \{[\s\S]*?store\.setConfig\(\{ language \}\)[\s\S]*?store\.previewLanguage = ''[\s\S]*?notification\.success\(/)
   assert.match(applySource[1], /return[\s\S]*?\}\s*store\.previewLanguage = ''/)
-  assert.match(headerSource, /e\('saveLang'\)/)
-  assert.match(headerSource, /onClick=\{\(\) => window\.location\.reload\(\)\}/)
-  assert.match(headerSource, /e\('restartNow'\)/)
+  assert.match(headerSource, /message: e\('saved'\)/)
+  assert.doesNotMatch(headerSource, /window\.location\.reload/)
 })
