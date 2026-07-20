@@ -1,3 +1,7 @@
+import {
+  validateQuickCommandParams as validateMaintenanceQuickCommandParams
+} from './server-maintenance/shared/validation.js'
+
 function toStringValue (value, fallback = '') {
   if (value === undefined || value === null || value === '') {
     return fallback
@@ -72,6 +76,17 @@ function normalizeParamValues (values = {}) {
     acc[key] = toStringValue(value)
     return acc
   }, {})
+}
+
+export function validateQuickCommandParams (item = {}, values = {}) {
+  return validateMaintenanceQuickCommandParams(item, values)
+}
+
+export function clearQuickCommandParamError (paramErrors = {}, name) {
+  if (!paramErrors || typeof paramErrors !== 'object') return {}
+  const nextErrors = { ...paramErrors }
+  delete nextErrors[name]
+  return nextErrors
 }
 
 export function buildQuickCommandContext (tab = {}) {

@@ -25,7 +25,9 @@ import {
   buildQuickCommandContext,
   buildQuickCommandRollbackContext,
   buildQuickCommandParamValues,
-  describeQuickCommandContext
+  clearQuickCommandParamError,
+  describeQuickCommandContext,
+  validateQuickCommandParams
 } from './quick-command-context'
 import {
   buildNetworkProbeCommand,
@@ -138,6 +140,7 @@ export default function QuickCommandsFooterBox (props) {
           inputOnly: item.inputOnly,
           params: item.params || [],
           paramValues,
+          paramErrors: {},
           text: getCommandText(item, context, paramValues)
         })
         setShowPendingPreview(!(item.params || []).length)
@@ -283,6 +286,7 @@ export default function QuickCommandsFooterBox (props) {
       return {
         ...old,
         paramValues,
+        paramErrors: clearQuickCommandParamError(old.paramErrors, name),
         text: getCommandText(old.item, old.context, paramValues)
       }
     })
@@ -340,6 +344,17 @@ export default function QuickCommandsFooterBox (props) {
   }
 
   function handlePendingOk () {
+    const errors = validateQuickCommandParams(pendingCommand.item, pendingCommand.paramValues)
+    if (Object.keys(errors).length) {
+      setPendingCommand(current => {
+        if (!current) return current
+        return {
+          ...current,
+          paramErrors: errors
+        }
+      })
+      return
+    }
     if (!pendingCommand?.text?.trim()) {
       return
     }
@@ -438,7 +453,7 @@ export default function QuickCommandsFooterBox (props) {
     )
   }
 
-  function renderPendingParamControl (param, value) {
+  function renderPendingParamControl (param, value, error) {
     if (param.type === 'service-target') {
       if (param.multiple) {
         const values = Array.isArray(value)
@@ -455,6 +470,7 @@ export default function QuickCommandsFooterBox (props) {
             loading={targetDiscovery.loading}
             placeholder={param.placeholder}
             onChange={next => handlePendingParamChange(param.name, next)}
+            status={error ? 'error' : undefined}
             className='qm-command-param-control'
           />
         )
@@ -465,6 +481,7 @@ export default function QuickCommandsFooterBox (props) {
           options={targetDiscovery.options}
           filterOption={(input, option) => String(option?.label || option?.value || '').toLowerCase().includes(input.toLowerCase())}
           onChange={next => handlePendingParamChange(param.name, next)}
+          status={error ? 'error' : undefined}
           className='qm-command-param-control'
         >
           <Input placeholder={param.placeholder} />
@@ -480,6 +497,7 @@ export default function QuickCommandsFooterBox (props) {
             value={value}
             showSearch
             onChange={next => handlePendingParamChange(param.name, next)}
+            status={error ? 'error' : undefined}
             className='qm-command-param-control'
           >
             {
@@ -498,6 +516,7 @@ export default function QuickCommandsFooterBox (props) {
         <Select
           value={value || param.defaultValue}
           onChange={next => handlePendingParamChange(param.name, next)}
+          status={error ? 'error' : undefined}
           className='qm-command-param-control'
         >
           {
@@ -519,6 +538,7 @@ export default function QuickCommandsFooterBox (props) {
           max={param.max}
           placeholder={param.placeholder}
           onChange={next => handlePendingParamChange(param.name, next)}
+          status={error ? 'error' : undefined}
           className='qm-command-param-control'
         />
       )
@@ -528,6 +548,7 @@ export default function QuickCommandsFooterBox (props) {
         value={value}
         placeholder={param.placeholder}
         onChange={event => handlePendingParamChange(param.name, event.target.value)}
+        status={error ? 'error' : undefined}
         className='qm-command-param-control'
       />
     )
@@ -538,10 +559,16 @@ export default function QuickCommandsFooterBox (props) {
       return null
     }
     const value = pendingCommand?.paramValues?.[param.name] ?? ''
+    const error = pendingCommand?.paramErrors?.[param.name]
     return (
       <div className='qm-command-param-item' key={param.name}>
         <div className='qm-command-param-label'>{param.label || param.name}</div>
-        {renderPendingParamControl(param, value)}
+        {renderPendingParamControl(param, value, error)}
+        {
+          error
+            ? <div className='qm-command-param-error color-red' role='alert'>{error}</div>
+            : null
+        }
         {
           param.help
             ? <div className='qm-command-param-help'>{param.help}</div>

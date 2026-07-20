@@ -50,14 +50,14 @@ export function defineCommand (item) {
   }
 }
 
-export function inputParam (name, label, defaultValue, help, placeholder = '') {
-  return { name, label, type: 'input', defaultValue, help, placeholder }
+export function inputParam (name, label, defaultValue, help, placeholder = '', options = {}) {
+  return { name, label, type: 'input', defaultValue, help, placeholder, ...options }
 }
 
-export function numberParam (name, label, defaultValue, help, min = 1, max = 10000) {
-  return { name, label, type: 'number', defaultValue, help, min, max }
+export function numberParam (name, label, defaultValue, help, min = 1, max = 10000, options = {}) {
+  return { name, label, type: 'number', defaultValue, help, min, max, ...options }
 }
 
-export function selectParam (name, label, defaultValue, help, options) {
-  return { name, label, type: 'select', defaultValue, help, options }
+export function selectParam (name, label, defaultValue, help, choices, options = {}) {
+  return { name, label, type: 'select', defaultValue, help, options: choices, ...options }
 }
