@@ -97,6 +97,7 @@ export default auto(function SettingModalWrap (props) {
 
   function handleClose () {
     store.previewLanguage = ''
+    store.cancelUiFontPreview()
     setQuery('')
     store.hideSettingModal()
   }

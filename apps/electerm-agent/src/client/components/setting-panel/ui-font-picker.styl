@@ -1,0 +1,131 @@
+.sp-ui-font-picker
+  gap 8px
+  min-width 0
+
+.sp-ui-font-heading
+  display flex
+  flex-direction column
+  gap 2px
+  min-width 0
+
+  span
+    white-space normal
+    overflow-wrap anywhere
+
+.sp-ui-font-layout
+  display grid
+  grid-template-columns minmax(280px, 1fr) minmax(260px, 1fr)
+  gap 16px
+  min-width 0
+
+.sp-ui-font-browser
+  display flex
+  flex-direction column
+  gap 10px
+  min-width 0
+
+.sp-ui-font-list
+  display grid
+  grid-template-columns repeat(2, minmax(0, 1fr))
+  gap 8px
+  max-height 320px
+  padding 2px
+  overflow-y auto
+  overflow-x hidden
+
+.sp-ui-font-group
+  display contents
+
+  h4
+    grid-column 1 / -1
+    margin 6px 0 0
+    color var(--text-light)
+    font-size 12px
+
+.sp-ui-font-option
+  appearance none
+  display flex
+  flex-direction column
+  justify-content center
+  gap 2px
+  min-width 0
+  min-height 48px
+  padding 8px 10px
+  border 1px solid var(--sp-border)
+  border-radius 8px
+  background var(--sp-surface-inset)
+  color var(--text)
+  text-align left
+  cursor pointer
+  transition border-color .16s ease, box-shadow .16s ease, transform .16s ease
+
+  span,
+  small
+    white-space normal
+    overflow-wrap anywhere
+
+  small
+    color var(--text-light)
+    font-family var(--sp-ui-font-family)
+
+  &:hover:not(:disabled)
+    border-color var(--primary)
+    transform translateY(-1px)
+
+  &:focus-visible
+    outline none
+    border-color var(--primary)
+    box-shadow 0 0 0 2px var(--sp-primary-soft)
+
+  &[aria-selected='true']
+    border-color var(--primary)
+    box-shadow inset 0 0 0 1px var(--primary)
+
+  &:disabled
+    background var(--sp-surface-subtle)
+    color var(--text-disabled)
+    cursor not-allowed
+
+.sp-ui-font-preview
+  align-self start
+  display flex
+  flex-direction column
+  gap 8px
+  min-width 0
+  padding 16px
+  border 1px solid var(--sp-border)
+  border-radius 10px
+  background var(--sp-surface-elevated)
+  box-shadow var(--sp-shadow-card)
+
+  h4,
+  p
+    margin 0
+    white-space normal
+    overflow-wrap anywhere
+
+  code
+    display block
+    max-width 100%
+    padding 8px
+    border-radius 6px
+    background var(--sp-surface-inset)
+    color var(--text)
+    white-space pre-wrap
+    overflow-wrap anywhere
+
+.sp-ui-font-actions
+  margin-top 8px
+
+  .ant-btn
+    height auto
+    min-height 32px
+    white-space normal
+
+@media (max-width: 820px)
+  .sp-ui-font-layout
+    grid-template-columns minmax(0, 1fr)
+
+@media (max-width: 590px)
+  .sp-ui-font-list
+    grid-template-columns minmax(0, 1fr)

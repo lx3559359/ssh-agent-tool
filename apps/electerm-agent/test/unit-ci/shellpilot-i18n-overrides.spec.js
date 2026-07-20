@@ -300,3 +300,32 @@ test('basic entry resolves preview language and upstream English without changin
   assert.match(source, /resolveShellPilotTranslation\([\s\S]*?_get\(lang, `\[\$\{txt\}\]`\)[\s\S]*?_get\(english, `\[\$\{txt\}\]`\)[\s\S]*?txt[\s\S]*?\)/)
   assert.match(source, /return window\.capitalizeFirstLetter\(value\)/)
 })
+
+test('provides bilingual UI font picker copy', async () => {
+  const { getShellPilotTranslation } = await import(moduleUrl)
+  const expected = {
+    uiFont: ['UI 字体', 'UI Font'],
+    uiFontDescription: [
+      '仅调整客户端界面；SSH 终端字体保持独立。',
+      'Changes the client interface only; SSH terminal fonts remain independent.'
+    ],
+    searchUiFonts: ['搜索 20 种预设字体', 'Search 20 preset fonts'],
+    fontGroupRecommended: ['推荐与中文', 'Recommended and Chinese'],
+    fontGroupModern: ['现代界面', 'Modern UI'],
+    fontGroupMore: ['更多样式', 'More styles'],
+    fontNotInstalled: ['系统未安装', 'Not installed on this system'],
+    fontDetectionUnavailable: ['无法检测字体', 'Font detection unavailable'],
+    uiFontPreview: ['即时预览', 'Live Preview'],
+    applyUiFont: ['应用字体', 'Apply Font'],
+    cancelUiFontPreview: ['取消并恢复', 'Cancel and Restore'],
+    uiFontFallbackNotice: [
+      '所选 UI 字体不可用，已临时恢复系统字体。',
+      'The selected UI font is unavailable. System Default is being used temporarily.'
+    ]
+  }
+
+  for (const [key, [chinese, english]] of Object.entries(expected)) {
+    assert.equal(getShellPilotTranslation(key, 'zh_cn'), chinese)
+    assert.equal(getShellPilotTranslation(key, 'en_us'), english)
+  }
+})

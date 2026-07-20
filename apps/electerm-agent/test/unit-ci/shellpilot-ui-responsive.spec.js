@@ -596,3 +596,15 @@ test('022 persists compact shell geometry states and restores every mutated stor
   assert.match(compact[0], /finally \{[\s\S]*restoreCompactShellState/)
   assert.doesNotMatch(compact[0], /store\.pinned = false[\s\S]{0,120}store\.rightPanelWidth = 320/)
 })
+
+test('UI font picker stacks and wraps without squeezing labels', () => {
+  const source = readClient('components/setting-panel/ui-font-picker.styl')
+
+  assert.match(source, /\.sp-ui-font-layout[\s\S]*grid-template-columns minmax\(280px, 1fr\) minmax\(260px, 1fr\)/)
+  assert.match(source, /\.sp-ui-font-list[\s\S]*grid-template-columns repeat\(2, minmax\(0, 1fr\)\)/)
+  assert.match(source, /\.sp-ui-font-list[\s\S]*overflow-y auto[\s\S]*overflow-x hidden/)
+  assert.match(source, /@media \(max-width: 820px\)[\s\S]*\.sp-ui-font-layout[\s\S]*grid-template-columns minmax\(0, 1fr\)/)
+  assert.match(source, /@media \(max-width: 590px\)[\s\S]*\.sp-ui-font-list[\s\S]*grid-template-columns minmax\(0, 1fr\)/)
+  assert.match(source, /white-space normal/)
+  assert.match(source, /overflow-wrap anywhere/)
+})

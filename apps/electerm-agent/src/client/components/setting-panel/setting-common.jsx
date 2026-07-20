@@ -34,6 +34,7 @@ import isColorDark from '../../common/is-color-dark'
 import DeepLinkControl from './deep-link-control'
 import HotkeySetting from './hotkey'
 import SettingSection from './setting-section'
+import UiFontPicker from './ui-font-picker'
 import './setting.styl'
 
 const { Option } = Select
@@ -508,6 +509,8 @@ export default class SettingCommon extends Component {
             }
           </Select>
         </div>
+
+        <UiFontPicker store={this.props.store} />
 
         <div className='sp-setting-field sp-setting-field-stacked pd2b'>
           <span className='inline-title mg1r'>{e('customCss')}</span>

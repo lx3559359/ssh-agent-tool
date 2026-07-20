@@ -1,5 +1,6 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
+const fs = require('node:fs')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
 
@@ -46,4 +47,22 @@ test('reports available unavailable and unknown font detection states', async ()
     { id: 'broken', family: 'Broken UI' },
     { measure: () => { throw new Error('canvas unavailable') } }
   ), 'unknown')
+})
+
+test('font picker uses the fixed catalog and exposes accessible explicit controls', () => {
+  const source = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/components/setting-panel/ui-font-picker.jsx'
+  ), 'utf8')
+
+  assert.match(source, /searchUiFontPresets/)
+  assert.match(source, /getUiFontAvailability/)
+  assert.match(source, /role='searchbox'/)
+  assert.match(source, /role='listbox'/)
+  assert.match(source, /role='option'/)
+  assert.match(source, /aria-disabled/)
+  assert.match(source, /fontNotInstalled/)
+  assert.match(source, /fontDetectionUnavailable/)
+  assert.match(source, /applyUiFont/)
+  assert.match(source, /cancelUiFontPreview/)
 })
