@@ -62,7 +62,7 @@ export default function EditWithCustomEditor ({ loading, editWithCustom }) {
         disabled={loading}
         onClick={handleToggleAutoOpen}
       >
-        {autoOpenLabel}: {autoOpen ? 'On' : 'Off'}
+        {autoOpenLabel}: {autoOpen ? e('shellpilotOn') : e('shellpilotOff')}
       </Button>
     </Space.Compact>
   )

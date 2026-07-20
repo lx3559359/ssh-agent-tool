@@ -24,44 +24,35 @@ function parseClient (file) {
   })
 }
 
-function jsxText (ast) {
-  const values = []
-  traverse(ast, {
-    JSXText (textPath) {
-      const value = textPath.node.value.trim()
-      if (value) values.push(value)
-    },
-    StringLiteral (literalPath) {
-      if (literalPath.parentPath.isJSXAttribute()) {
-        values.push(literalPath.node.value)
-      }
-    }
-  })
-  return values
-}
-
 test('toolbar exposes filters refresh cancel and honest batch actions', () => {
   const source = readClient('components/fleet-status/fleet-status-toolbar.jsx')
   const ast = parseClient('components/fleet-status/fleet-status-toolbar.jsx')
-  const text = jsxText(ast)
   for (const expected of [
-    '搜索名称、IP 或标签',
-    '搜索服务器',
-    '全部分组',
-    '全部状态',
-    '刷新',
-    '取消',
-    '检查服务',
-    'AI 批量诊断',
-    '检查端口',
-    '收集日志',
-    '导出报告',
-    '后续版本提供'
+    'shellpilotFleetSearchPlaceholder',
+    'shellpilotFleetSearchServers',
+    'shellpilotFleetAllGroups',
+    'shellpilotFleetAllStatuses',
+    'shellpilotFleetRefresh',
+    'shellpilotFleetCancel',
+    'shellpilotFleetCheckServices',
+    'shellpilotFleetAiBatchDiagnosis',
+    'shellpilotFleetCheckPorts',
+    'shellpilotFleetCollectLogs',
+    'shellpilotFleetExportReport',
+    'shellpilotFleetComingLater'
   ]) {
-    assert.ok(text.includes(expected), `missing toolbar text: ${expected}`)
+    assert.ok(source.includes(expected), `missing toolbar translation key: ${expected}`)
   }
 
-  let placeholderDisabled = 0
+  const placeholderDisabled = [
+    'shellpilotFleetCheckPorts',
+    'shellpilotFleetCollectLogs',
+    'shellpilotFleetExportReport'
+  ].filter(key => {
+    const labelIndex = source.indexOf(`e('${key}')`)
+    const buttonStart = source.lastIndexOf('<Button', labelIndex)
+    return labelIndex > buttonStart && source.slice(buttonStart, labelIndex).includes('disabled')
+  }).length
   let accessibleDisabledWrappers = 0
   let openServiceSelectorCallback = false
   let aiCallback = false
@@ -85,19 +76,6 @@ test('toolbar exposes filters refresh cancel and honest batch actions', () => {
           accessibleDisabledWrappers += 1
         }
       }
-      if (!t.isJSXIdentifier(opening.name, { name: 'Button' })) return
-      const label = elementPath.node.children
-        .filter(t.isJSXText)
-        .map(child => child.value.trim())
-        .join('')
-      const disabled = opening.attributes.some(attribute => (
-        t.isJSXAttribute(attribute) &&
-        t.isJSXIdentifier(attribute.name, { name: 'disabled' }) &&
-        attribute.value === null
-      ))
-      if (['检查端口', '收集日志', '导出报告'].includes(label) && disabled) {
-        placeholderDisabled += 1
-      }
     },
     CallExpression (callPath) {
       if (t.isIdentifier(callPath.node.callee, { name: 'onOpenServiceSelector' })) {
@@ -119,14 +97,14 @@ test('toolbar exposes filters refresh cancel and honest batch actions', () => {
   assert.match(source, /disabled={!state\.selectedCount}/)
   assert.match(source, /disabled={!aiDiagnoseEnabled}/)
   assert.doesNotMatch(source, /checkServicesEnabled|服务选择器尚未启用/)
-  assert.ok(source.includes('AI 批量诊断尚未启用'))
+  assert.ok(source.includes("e('shellpilotFleetAiBatchUnavailable')"))
   assert.match(
     source,
-    /<Input[\s\S]*?aria-label='搜索服务器'[\s\S]*?placeholder='搜索名称、IP 或标签'/
+    /<Input[\s\S]*?aria-label=\{e\('shellpilotFleetSearchServers'\)\}[\s\S]*?placeholder=\{e\('shellpilotFleetSearchPlaceholder'\)\}/
   )
   assert.match(
     source,
-    /<Tooltip title=\{aiDiagnoseEnabled \? null : 'AI 批量诊断尚未启用'\}>\s*<span\s+className='fleet-status-disabled-action'\s+tabIndex=\{aiDiagnoseEnabled \? undefined : 0\}\s+aria-label=\{aiDiagnoseEnabled \? undefined : 'AI 批量诊断尚未启用'\}/
+    /<Tooltip title=\{aiDiagnoseEnabled \? null : e\('shellpilotFleetAiBatchUnavailable'\)\}>\s*<span\s+className='fleet-status-disabled-action'\s+tabIndex=\{aiDiagnoseEnabled \? undefined : 0\}\s+aria-label=\{aiDiagnoseEnabled \? undefined : e\('shellpilotFleetAiBatchUnavailable'\)\}/
   )
 
   const callbackArguments = new Map()
@@ -156,44 +134,44 @@ test('service selector exposes complete read-only Chinese tool UI and responsive
   const source = readClient('components/fleet-status/fleet-service-selector.jsx')
   parseClient('components/fleet-status/fleet-service-selector.jsx')
   for (const expected of [
-    '自动识别服务',
-    '目标服务器',
-    '搜索服务',
-    '全部类型',
-    '系统服务',
-    '容器',
-    '进程管理器',
-    '全部状态',
-    '运行中',
-    '已停止',
-    '异常',
-    '重新检测',
-    '取消检测',
-    '选择当前筛选结果',
-    '选择全部异常',
-    '清空选择',
-    '服务器',
-    '服务名称',
-    '类型',
-    '来源',
-    '运行状态',
-    '自启动',
-    '说明',
-    '结果可能已截断',
-    '高级信息',
-    '本功能仅执行固定只读探针',
-    '未连接或连接已断开',
-    '权限不足',
-    '当前服务器不支持服务检测',
-    '已取消'
+    'shellpilotFleetAutoDetectServices',
+    'shellpilotFleetTargetServers',
+    'shellpilotFleetSearchServices',
+    'shellpilotFleetAllTypes',
+    'shellpilotFleetSystemService',
+    'shellpilotFleetContainer',
+    'shellpilotFleetProcessManager',
+    'shellpilotFleetAllStatuses',
+    'shellpilotFleetRunning',
+    'shellpilotFleetStopped',
+    'shellpilotFleetAbnormal',
+    'shellpilotFleetDetectAgain',
+    'shellpilotFleetCancelDetection',
+    'shellpilotFleetSelectFiltered',
+    'shellpilotFleetSelectAllAbnormal',
+    'shellpilotFleetClearSelection',
+    'shellpilotFleetServer',
+    'shellpilotFleetServiceName',
+    'shellpilotFleetType',
+    'shellpilotFleetSource',
+    'shellpilotFleetRunningStatus',
+    'shellpilotFleetAutostart',
+    'shellpilotFleetDescription',
+    'shellpilotFleetResultsTruncated',
+    'shellpilotFleetAdvancedInformation',
+    'shellpilotFleetReadonlyProbeNotice',
+    'shellpilotFleetDisconnected',
+    'shellpilotFleetPermissionDenied',
+    'shellpilotFleetServiceDetectionUnsupported',
+    'shellpilotFleetCancelled'
   ]) {
-    assert.ok(source.includes(expected), `missing service selector text: ${expected}`)
+    assert.ok(source.includes(expected), `missing service selector translation key: ${expected}`)
   }
 
-  assert.match(source, /aria-label='关闭服务面板'/)
-  assert.match(source, /aria-label='搜索自动发现的服务'/)
-  assert.match(source, /aria-label='服务类型筛选'/)
-  assert.match(source, /aria-label='服务状态筛选'/)
+  assert.match(source, /aria-label=\{e\('shellpilotFleetCloseServicePanel'\)\}/)
+  assert.match(source, /aria-label=\{e\('shellpilotFleetSearchDiscoveredServices'\)\}/)
+  assert.match(source, /aria-label=\{e\('shellpilotFleetServiceTypeFilter'\)\}/)
+  assert.match(source, /aria-label=\{e\('shellpilotFleetServiceStatusFilter'\)\}/)
   assert.match(source, /disabled=\{state\.running \|\| !state\.targetCount\}/)
   assert.match(source, /disabled=\{!state\.running\}/)
   assert.match(source, /disabled=\{!state\.visibleRows\.length\}/)
@@ -265,25 +243,23 @@ test('workspace restores check-services focus with a safe animation-frame fallba
 
 test('table renders every required column with a unified unknown value', () => {
   const source = readClient('components/fleet-status/fleet-status-table.jsx')
-  const ast = parseClient('components/fleet-status/fleet-status-table.jsx')
-  const text = jsxText(ast)
   for (const heading of [
-    '名称',
-    '分组',
-    'IP:端口',
-    'SSH 状态与延迟',
+    'shellpilotFleetName',
+    'shellpilotFleetGroup',
+    'shellpilotFleetIpPort',
+    'shellpilotFleetSshStatusLatency',
     'CPU',
-    '内存',
-    '磁盘',
-    '负载',
-    '运行时间',
-    '网卡 IP',
-    '防火墙',
-    '异常服务',
-    '平台服务',
-    '采集时间'
+    'shellpilotFleetMemory',
+    'shellpilotFleetDisk',
+    'shellpilotFleetLoad',
+    'shellpilotFleetUptime',
+    'shellpilotFleetNetworkIp',
+    'shellpilotFleetFirewall',
+    'shellpilotFleetAbnormalServices',
+    'shellpilotFleetPlatformServices',
+    'shellpilotFleetCollectedAt'
   ]) {
-    assert.ok(text.includes(heading), `missing table heading: ${heading}`)
+    assert.ok(source.includes(heading), `missing table heading translation key: ${heading}`)
   }
   assert.match(source, /const unknownValue = '--'/)
   assert.doesNotMatch(source, /username|password|privateKey|apiKey/i)
@@ -291,10 +267,9 @@ test('table renders every required column with a unified unknown value', () => {
 
 test('workspace keeps empty and uncollected states honest', () => {
   const source = readClient('components/fleet-status/fleet-status-workspace.jsx')
-  const ast = parseClient('components/fleet-status/fleet-status-workspace.jsx')
-  const text = jsxText(ast)
-  assert.ok(text.includes('请先在服务器中添加连接'))
-  assert.ok(text.includes('尚未采集服务器状态'))
+  parseClient('components/fleet-status/fleet-status-workspace.jsx')
+  assert.match(source, /shellpilotFleetAddConnectionFirst/)
+  assert.match(source, /shellpilotFleetNotCollectedYet/)
   assert.match(source, /FleetStatusToolbar/)
   assert.match(source, /FleetStatusTable/)
   assert.match(source, /const bookmarkCount = statusState\.bookmarkCount/)

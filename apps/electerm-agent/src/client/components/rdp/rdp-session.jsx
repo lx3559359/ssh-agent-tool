@@ -31,6 +31,7 @@ import ShowItem from '../common/show-item'
 import './rdp.styl'
 
 const { Option } = Select
+const e = window.translate
 
 async function loadWasmModule () {
   if (window.ironRdp) return
@@ -210,7 +211,7 @@ export default class RdpSession extends PureComponent {
         },
         (filePath, fileName, fileSize) => {
           notification.success({
-            message: 'File downloaded from remote',
+            message: e('shellpilotRdpFileDownloaded'),
             description: (
               <ShowItem to={filePath}>
                 {`${fileName} (${this.fileTransfer.formatFileSize(fileSize)})`}
@@ -560,8 +561,8 @@ export default class RdpSession extends PureComponent {
     ]
 
     const files = await window.api.openDialog({
-      title: 'Choose files to upload to remote desktop',
-      message: 'Choose files to upload',
+      title: e('shellpilotRdpChooseFilesTitle'),
+      message: e('shellpilotRdpChooseFiles'),
       properties,
       noBrowserTransfer: true
     }).catch((err) => {

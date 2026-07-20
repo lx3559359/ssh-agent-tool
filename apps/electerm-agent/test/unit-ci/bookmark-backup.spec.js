@@ -502,7 +502,7 @@ test('uses secure bookmark backup actions from every toolbar export entry', () =
   assert.match(source, /window\.prompt/)
   assert.match(source, /includeCredentials:\s*false/)
   assert.match(source, /onClick:\s*handleDownloadEncrypted/)
-  assert.match(source, /label:\s*`\$\{e\('export'\)\} \(不含凭据\)`[\s\S]*?onClick:\s*handleDownloadWithoutCredentials/)
+  assert.match(source, /label:\s*`\$\{e\('export'\)\} \$\{e\('shellpilotWithoutCredentials'\)\}`[\s\S]*?onClick:\s*handleDownloadWithoutCredentials/)
   assert.match(source, /handleDownloadPlaintext/)
   assert.match(source, /window\.confirm/)
   assert.doesNotMatch(source, /onClick:\s*onExport/)

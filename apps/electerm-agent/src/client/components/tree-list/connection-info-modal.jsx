@@ -16,6 +16,8 @@ import {
   getConnectionInfoFields
 } from '../../common/connection-inventory'
 
+const e = window.translate
+
 function safeName (value = 'connection') {
   return String(value || 'connection')
     .replace(/[\\/:*?"<>|]/g, '-')
@@ -30,7 +32,7 @@ export default function ConnectionInfoModal ({
 }) {
   const [showSecrets, setShowSecrets] = useState(false)
   const fields = useMemo(
-    () => getConnectionInfoFields(bookmark || {}, { showSecrets, bookmarkGroups }),
+    () => getConnectionInfoFields(bookmark || {}, { showSecrets, bookmarkGroups, translate: e }),
     [bookmark, showSecrets, bookmarkGroups]
   )
 
@@ -39,7 +41,7 @@ export default function ConnectionInfoModal ({
   }
 
   const handleCopyAll = () => {
-    copy(formatConnectionInfoText(bookmark, { showSecrets, bookmarkGroups }))
+    copy(formatConnectionInfoText(bookmark, { showSecrets, bookmarkGroups, translate: e }))
   }
 
   const handleCopyValue = (field) => {
@@ -47,12 +49,13 @@ export default function ConnectionInfoModal ({
   }
 
   const handleExport = () => {
-    if (!window.confirm('将导出当前连接的明文账号、密码和密钥路径，请只保存在可信位置。是否继续？')) {
+    if (!window.confirm(e('shellpilotCurrentConnectionExportWarning'))) {
       return
     }
     const txt = '\uFEFF' + createConnectionInventoryCsv([bookmark], {
       headerType: 'label',
-      bookmarkGroups
+      bookmarkGroups,
+      translate: e
     })
     const stamp = time(undefined, 'YYYY-MM-DD-HH-mm-ss')
     download(`shellpilot-connection-${safeName(bookmark.title || bookmark.host)}-${stamp}.csv`, txt)
@@ -64,16 +67,16 @@ export default function ConnectionInfoModal ({
         icon={showSecrets ? <EyeInvisibleOutlined /> : <EyeOutlined />}
         onClick={() => setShowSecrets(!showSecrets)}
       >
-        {showSecrets ? '隐藏密码' : '显示密码'}
+        {showSecrets ? e('shellpilotHidePassword') : e('shellpilotShowPassword')}
       </Button>
       <Button icon={<CopyOutlined />} onClick={handleCopyAll}>
-        复制全部
+        {e('shellpilotCopyAll')}
       </Button>
       <Button icon={<DownloadOutlined />} onClick={handleExport}>
-        导出当前连接
+        {e('shellpilotExportCurrentConnection')}
       </Button>
       <Button type='primary' onClick={onClose}>
-        关闭
+        {e('shellpilotClose')}
       </Button>
     </Space>
   )
@@ -81,7 +84,7 @@ export default function ConnectionInfoModal ({
   return (
     <Modal
       open
-      title='连接信息'
+      title={e('shellpilotConnectionInfo')}
       width={640}
       onCancel={onClose}
       footer={footer}
@@ -101,7 +104,7 @@ export default function ConnectionInfoModal ({
                 onClick={() => handleCopyValue(field)}
                 disabled={!field.hasValue}
               >
-                复制
+                {e('shellpilotCopy')}
               </Button>
             </div>
           ))

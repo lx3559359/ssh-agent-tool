@@ -6,6 +6,8 @@
 import { PureComponent } from 'react'
 import { getLocalFileInfo } from '../sftp/file-read'
 
+const e = window.translate
+
 /**
  * Open a single file select dialog
  * Supports browser upload in web app mode
@@ -20,8 +22,8 @@ const openFileSelect = async () => {
     'dontAddToRecent'
   ]
   const files = await window.api.openDialog({
-    title: 'Choose a file',
-    message: 'Choose a file',
+    title: e('shellpilotChooseFile'),
+    message: e('shellpilotChooseFile'),
     properties
   }).catch(() => false)
   if (!files) {

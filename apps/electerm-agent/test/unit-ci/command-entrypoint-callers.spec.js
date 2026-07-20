@@ -276,7 +276,7 @@ test('footer and batch operation commands have no raw terminal send path', () =>
   assert.match(terminal, /cancelCurrentExecution\([\s\S]*?终端已切换/)
   assert.match(
     readClientSource('components/terminal/terminal-command-safety-modal.jsx'),
-    /命令发送失败[\s\S]*?重新准备并重试/
+    /shellpilotCommandRetry[\s\S]*?shellpilotCommandPrepareRetry/
   )
   const commandStep = batchRunner.match(
     /async _batchStepCommand[\s\S]*?async _batchStepSftpUpload/

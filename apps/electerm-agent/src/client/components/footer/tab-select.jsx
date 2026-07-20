@@ -6,6 +6,8 @@ import {
   CodeOutlined
 } from '@ant-design/icons'
 
+const e = window.translate
+
 export default function TabSelect (props) {
   const { selectedTabIds, tabs, activeTabId } = props
   function renderTabs () {
@@ -39,13 +41,13 @@ export default function TabSelect (props) {
           className='mg1r pointer'
           onClick={onSelectAll}
         >
-          All
+          {e('shellpilotAll')}
         </span>
         <span
           className='pointer'
           onClick={onSelectNone}
         >
-          None
+          {e('shellpilotNone')}
         </span>
       </div>
     )

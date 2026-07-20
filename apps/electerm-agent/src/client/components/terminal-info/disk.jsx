@@ -7,6 +7,8 @@ import { isEmpty } from 'lodash-es'
 import colsParser from './data-cols-parser'
 import { PartitionOutlined } from '@ant-design/icons'
 
+const e = window.translate
+
 export default function TerminalInfoDisk (props) {
   const { disks, isRemote, terminalInfos } = props
   if (isEmpty(disks) || !isRemote || !terminalInfos.includes('disks')) {
@@ -34,7 +36,7 @@ export default function TerminalInfoDisk (props) {
   }
   return (
     <div className='terminal-info-section terminal-info-disk'>
-      <div className='pd1y bold'><PartitionOutlined /> File system</div>
+      <div className='pd1y bold'><PartitionOutlined /> {e('shellpilotFileSystem')}</div>
       <Table {...ps} />
     </div>
   )

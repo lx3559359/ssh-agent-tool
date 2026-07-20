@@ -639,13 +639,13 @@ test('task progress component exposes compact counts and capability-gated cancel
   const styles = readSource('src/client/components/main/safety-task-progress.styl')
 
   assert.match(component, /summarizeSafetyTaskProgress/)
-  assert.match(component, /成功/)
-  assert.match(component, /失败/)
-  assert.match(component, /取消/)
-  assert.match(component, /来源/)
+  assert.match(component, /shellpilotSafetySuccess/)
+  assert.match(component, /shellpilotSafetyFailed/)
+  assert.match(component, /shellpilotSafetyCancelled/)
+  assert.match(component, /shellpilotSafetySource/)
   assert.match(component, /canCancel/)
   assert.match(component, /disabled=!canCancel|disabled=\{!canCancel/)
-  assert.match(component, /任务执行器尚未接入/)
+  assert.match(component, /shellpilotSafetyRunnerUnavailable/)
   assert.match(component, /Progress/)
   assert.match(styles, /overflow-y auto/)
   assert.match(styles, /border-radius 6px/)
@@ -811,13 +811,13 @@ test('UI keeps one topbar entry and reads the encrypted transaction store', () =
   const terminal = readSource('src/client/components/terminal/terminal.jsx')
 
   assert.equal((topbar.match(/<SafetyOperationCenterModal/g) || []).length, 1)
-  assert.match(topbar, /安全中心/)
+  assert.match(topbar, /shellpilotTopbarSafetyCenter/)
   assert.match(modal, /listOperations/)
   assert.match(modal, /listTasks/)
   assert.match(modal, /buildSafetyRecoveryIntegrityResults/)
   assert.match(modal, /setIntegrityResults\(new Map\(\)\)/)
   assert.match(modal, /ReloadOutlined/)
-  assert.match(modal, /aria-label='刷新'/)
+  assert.match(modal, /aria-label=\{e\('refresh'\)\}/)
   assert.match(modal, /groupSafetyCenterRecords/)
   assert.match(modal, /SafetyTaskProgress/)
   assert.match(modal, /findMatchingSafetyTerminal/)
@@ -830,8 +830,13 @@ test('UI keeps one topbar entry and reads the encrypted transaction store', () =
   assert.match(modal, /safetyTaskCapability/)
   assert.doesNotMatch(modal, /\bpatchOperation\b/)
   assert.doesNotMatch(modal, /readSafetyOperationRecords/)
-  for (const label of ['执行中', '可回滚', '历史记录', '旧版记录']) {
-    assert.match(modal, new RegExp(label))
+  for (const key of [
+    'shellpilotSafetyRunning',
+    'shellpilotSafetyRollbackAvailable',
+    'shellpilotSafetyHistory',
+    'shellpilotSafetyLegacy'
+  ]) {
+    assert.match(modal, new RegExp(key))
   }
   assert.match(terminal, /rollbackSafetyOperation/)
   assert.match(terminal, /keepSafetyOperation/)

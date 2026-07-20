@@ -92,7 +92,7 @@ export default function QuickConnect ({ batch, inputOnly, formOnly }) {
 
     const opts = window.store.parseQuickConnect(inputValue)
     if (!opts) {
-      return message.error('连接信息格式不正确，请检查服务器地址、用户名、端口或协议', 10)
+      return message.error(e('shellpilotQuickConnectInvalidString'), 10)
     }
 
     connectWithOptions(opts, batch)
@@ -102,11 +102,11 @@ export default function QuickConnect ({ batch, inputOnly, formOnly }) {
 
   const handleFormConnect = () => {
     if (!formValues.host.trim()) {
-      return message.error('请填写服务器地址或 IP')
+      return message.error(e('shellpilotQuickConnectHostRequired'))
     }
     const opts = buildQuickConnectOptions(formValues)
     if (!opts) {
-      return message.error('连接信息格式不正确，请检查主机和端口')
+      return message.error(e('shellpilotQuickConnectInvalidHostPort'))
     }
     if (formValues.saveAsBookmark) {
       window.store.addItem(buildQuickConnectBookmark(opts), 'bookmarks')
@@ -132,7 +132,7 @@ export default function QuickConnect ({ batch, inputOnly, formOnly }) {
       onChange: handleChange,
       className: 'width-100 quick-connect-input',
       onPressEnter: handleConnect,
-      placeholder: '粘贴连接字符串，或使用上方快速连接表单填写服务器信息',
+      placeholder: e('shellpilotQuickConnectPastePlaceholder'),
       prefix: inputOnly ? <HelpIcon link={wiki} /> : undefined
     }
     const iconProps = {
@@ -170,7 +170,7 @@ export default function QuickConnect ({ batch, inputOnly, formOnly }) {
       <div className='quick-connect-form'>
         <div className='quick-connect-form-title'>
           <ThunderboltOutlined />
-          <span>快速连接服务器</span>
+          <span>{e('shellpilotQuickConnectServer')}</span>
         </div>
         <Space.Compact className='width-100 mg1b'>
           <Select
@@ -182,13 +182,13 @@ export default function QuickConnect ({ batch, inputOnly, formOnly }) {
           <Input
             value={formValues.host}
             onChange={e => updateFormValue('host', e.target.value)}
-            placeholder='服务器 IP 或域名，例如 10.0.1.23'
+            placeholder={e('shellpilotQuickConnectHostPlaceholder')}
             onPressEnter={handleFormConnect}
           />
           <Input
             value={formValues.port}
             onChange={e => updateFormValue('port', e.target.value)}
-            placeholder='端口'
+            placeholder={e('shellpilotPort')}
             className='quick-connect-port'
             onPressEnter={handleFormConnect}
           />
@@ -197,7 +197,7 @@ export default function QuickConnect ({ batch, inputOnly, formOnly }) {
           <Input
             value={formValues.username}
             onChange={e => updateFormValue('username', e.target.value)}
-            placeholder='用户名，选填'
+            placeholder={e('shellpilotOptionalUsername')}
             onPressEnter={handleFormConnect}
           />
           {
@@ -207,12 +207,12 @@ export default function QuickConnect ({ batch, inputOnly, formOnly }) {
                   value={formValues.authType}
                   onChange={value => updateFormValue('authType', value)}
                   className='quick-connect-auth-type'
-                  placeholder='认证方式'
+                  placeholder={e('shellpilotAuthenticationMethod')}
                   options={[
-                    { value: 'password', label: '密码' },
-                    { value: 'privateKey', label: '私钥' },
+                    { value: 'password', label: e('shellpilotPassword') },
+                    { value: 'privateKey', label: e('shellpilotPrivateKey') },
                     { value: 'sshAgent', label: 'SSH Agent' },
-                    { value: 'profiles', label: '凭据档案' }
+                    { value: 'profiles', label: e('shellpilotCredentialProfile') }
                   ]}
                 />
                 )
@@ -220,7 +220,7 @@ export default function QuickConnect ({ batch, inputOnly, formOnly }) {
                 <Input.Password
                   value={formValues.password}
                   onChange={e => updateFormValue('password', e.target.value)}
-                  placeholder='密码，选填'
+                  placeholder={e('shellpilotOptionalPassword')}
                   onPressEnter={handleFormConnect}
                 />
                 )
@@ -232,7 +232,7 @@ export default function QuickConnect ({ batch, inputOnly, formOnly }) {
               <Input.Password
                 value={formValues.password}
                 onChange={e => updateFormValue('password', e.target.value)}
-                placeholder='密码，选填'
+                placeholder={e('shellpilotOptionalPassword')}
                 className='width-100 mg1b'
                 onPressEnter={handleFormConnect}
               />
@@ -246,14 +246,14 @@ export default function QuickConnect ({ batch, inputOnly, formOnly }) {
                 <TextArea
                   value={formValues.privateKey}
                   onChange={e => updateFormValue('privateKey', e.target.value)}
-                  placeholder='私钥，可粘贴 OpenSSH 私钥内容'
+                  placeholder={e('shellpilotPrivateKeyPlaceholder')}
                   className='width-100 mg1b'
                   autoSize={{ minRows: 3, maxRows: 6 }}
                 />
                 <Input.Password
                   value={formValues.passphrase}
                   onChange={e => updateFormValue('passphrase', e.target.value)}
-                  placeholder='私钥口令，选填'
+                  placeholder={e('shellpilotOptionalPassphrase')}
                   className='width-100 mg1b'
                   onPressEnter={handleFormConnect}
                 />
@@ -267,7 +267,7 @@ export default function QuickConnect ({ batch, inputOnly, formOnly }) {
               <Input
                 value={formValues.sshAgent}
                 onChange={e => updateFormValue('sshAgent', e.target.value)}
-                placeholder='SSH Agent 路径，留空自动使用系统 Agent'
+                placeholder={e('shellpilotSshAgentPathPlaceholder')}
                 className='width-100 mg1b'
                 onPressEnter={handleFormConnect}
               />
@@ -281,7 +281,7 @@ export default function QuickConnect ({ batch, inputOnly, formOnly }) {
                 value={formValues.profile || undefined}
                 onChange={value => updateFormValue('profile', value)}
                 className='width-100 mg1b'
-                placeholder='选择凭据档案'
+                placeholder={e('shellpilotSelectCredentialProfile')}
                 options={profileOptions}
                 allowClear
               />
@@ -292,7 +292,7 @@ export default function QuickConnect ({ batch, inputOnly, formOnly }) {
           <Input
             value={formValues.title}
             onChange={e => updateFormValue('title', e.target.value)}
-            placeholder='连接名称，保存时使用'
+            placeholder={e('shellpilotConnectionNamePlaceholder')}
             onPressEnter={handleFormConnect}
           />
         </Space.Compact>
@@ -301,7 +301,7 @@ export default function QuickConnect ({ batch, inputOnly, formOnly }) {
           onChange={e => updateFormValue('saveAsBookmark', e.target.checked)}
           className='mg1b'
         >
-          保存为连接
+          {e('shellpilotSaveAsConnection')}
         </Checkbox>
         <Button
           type='primary'
@@ -309,7 +309,7 @@ export default function QuickConnect ({ batch, inputOnly, formOnly }) {
           onClick={handleFormConnect}
           block
         >
-          连接
+          {e('connect')}
         </Button>
       </div>
     )

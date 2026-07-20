@@ -42,8 +42,10 @@ import {
   writeSafetyOperationRecords
 } from '../../common/safety-operation-records'
 import './qm.styl'
+import { formatShellPilotTranslation } from '../../common/shellpilot-i18n-overrides.js'
 
 const e = window.translate
+const tf = (key, replacements) => formatShellPilotTranslation(e, key, replacements)
 const addQuickCommands = 'addQuickCommands'
 const networkChangeCommandId = 'builtin-server-network-change-ip'
 const { Option } = Select
@@ -358,7 +360,7 @@ export default function QuickCommandsFooterBox (props) {
             {
               interfaces.map(networkInterface => (
                 <Option value={networkInterface.name} key={networkInterface.name}>
-                  {networkInterface.name} · {networkInterface.cidr || '无 IPv4'} · {networkInterface.state}
+                  {networkInterface.name} · {networkInterface.cidr || e('shellpilotQuickNoIpv4')} · {networkInterface.state}
                 </Option>
               ))
             }
@@ -436,22 +438,22 @@ export default function QuickCommandsFooterBox (props) {
       <div className={classNames('qm-network-probe', { 'qm-network-probe-error': networkProbe.error })}>
         <Flex justify='space-between' align='center' gap='small'>
           <div>
-            <div className='qm-network-probe-title'>当前服务器网络</div>
+            <div className='qm-network-probe-title'>{e('shellpilotQuickCurrentServerNetwork')}</div>
             {
               networkProbe.loading
-                ? <div className='qm-network-probe-status'>正在自动识别网卡和网络参数...</div>
+                ? <div className='qm-network-probe-status'>{e('shellpilotQuickDetectingNetwork')}</div>
                 : null
             }
             {
               detected
                 ? (
                   <div className='qm-network-probe-values'>
-                    <span>识别到 {interfaceCount} 张网卡</span>
-                    <span>当前选择：{selectedName}</span>
-                    <span>当前 CIDR：{selectedInterface?.cidr || detected.cidr || '未获取'}</span>
-                    <span>状态：{selectedInterface?.state || '未知'}</span>
-                    <span>网关：{detected.gateway || '未获取'}</span>
-                    <span>DNS：{detected.dns || '未获取'}</span>
+                    <span>{tf('shellpilotQuickInterfacesDetected', { count: interfaceCount })}</span>
+                    <span>{e('shellpilotQuickCurrentSelection')}：{selectedName}</span>
+                    <span>{e('shellpilotQuickCurrentCidr')}：{selectedInterface?.cidr || detected.cidr || e('shellpilotQuickNotAvailable')}</span>
+                    <span>{e('shellpilotQuickStatus')}：{selectedInterface?.state || e('shellpilotUnknown')}</span>
+                    <span>{e('shellpilotQuickGateway')}：{detected.gateway || e('shellpilotQuickNotAvailable')}</span>
+                    <span>{e('shellpilotQuickDns')}：{detected.dns || e('shellpilotQuickNotAvailable')}</span>
                   </div>
                   )
                 : null
@@ -467,7 +469,7 @@ export default function QuickCommandsFooterBox (props) {
             loading={networkProbe.loading}
             onClick={() => mcpRunQuickCommandNetworkProbe(pendingCommand.item, pendingCommand.context)}
           >
-            重新检测
+            {e('shellpilotQuickDetectAgain')}
           </Button>
         </Flex>
       </div>
@@ -484,24 +486,24 @@ export default function QuickCommandsFooterBox (props) {
     return (
       <div className={classNames('qm-rollback-preview', { 'qm-rollback-preview-disabled': isNetworkChange && !enabled })}>
         <div className='qm-rollback-preview-head'>
-          <div className='qm-rollback-preview-title'>快捷回滚：{pendingCommand.item.rollback.title}</div>
+          <div className='qm-rollback-preview-title'>{e('shellpilotQuickRollback')}：{pendingCommand.item.rollback.title}</div>
           <Button
             danger
             size='small'
             disabled={!(rollbackRecord?.rollbackPath || rollbackRecord?.path)}
             onClick={() => handleRollbackAction('rollback')}
           >
-            {(rollbackRecord?.rollbackPath || rollbackRecord?.path) ? '立即回滚上一次修改' : '暂无可回滚修改'}
+            {(rollbackRecord?.rollbackPath || rollbackRecord?.path) ? e('shellpilotQuickRollbackLastChange') : e('shellpilotQuickNoRollbackAvailable')}
           </Button>
         </div>
         <div>
           {isNetworkChange
             ? (enabled
-                ? `执行修改后 ${values.自动回滚秒数 || 120} 秒内未确认保留，服务器将自动恢复原 IP、路由和 NetworkManager 配置。`
-                : '关闭后客户端仍会生成回滚脚本，但不会自动恢复网络。')
-            : '执行修改前会记录原状态并生成远端回滚脚本；执行后可在快捷命令面板点击“立即回滚”。'}
+                ? tf('shellpilotQuickAutoRollbackProtection', { seconds: values.自动回滚秒数 || 120 })
+                : e('shellpilotQuickManualRollbackOnly'))
+            : e('shellpilotQuickRollbackDescription')}
         </div>
-        <div className='qm-rollback-preview-path'>回滚脚本：{values[pendingCommand.item.rollback.pathParam] || pendingCommand.context.rollbackPath}</div>
+        <div className='qm-rollback-preview-path'>{e('shellpilotQuickRollbackScript')}：{values[pendingCommand.item.rollback.pathParam] || pendingCommand.context.rollbackPath}</div>
       </div>
     )
   }
@@ -514,9 +516,9 @@ export default function QuickCommandsFooterBox (props) {
     return (
       <div className='qm-rollback-record'>
         <div>
-          <div className='qm-rollback-record-title'>{rollbackRecord.title || '服务器修改'} · 快捷回滚</div>
+          <div className='qm-rollback-record-title'>{rollbackRecord.title || e('shellpilotQuickServerChange')} · {e('shellpilotQuickRollback')}</div>
           <div className='qm-rollback-record-desc'>
-            {rollbackRecord.host || '当前服务器'} · {rollbackRecord.protected ? `${rollbackRecord.seconds} 秒自动回滚保护已启动` : '已生成手动回滚脚本'}
+            {rollbackRecord.host || e('shellpilotQuickCurrentServer')} · {rollbackRecord.protected ? tf('shellpilotQuickAutoRollbackStarted', { seconds: rollbackRecord.seconds }) : e('shellpilotQuickManualRollbackCreated')}
           </div>
           <div className='qm-rollback-record-path'>{path}</div>
         </div>
@@ -526,7 +528,7 @@ export default function QuickCommandsFooterBox (props) {
             loading={rollbackRunning === rollbackRecord.id}
             onClick={() => handleRollbackAction('keep')}
           >
-            保留新配置
+            {e('shellpilotQuickKeepNewConfiguration')}
           </Button>
           <Button
             danger
@@ -535,7 +537,7 @@ export default function QuickCommandsFooterBox (props) {
             loading={rollbackRunning === rollbackRecord.id}
             onClick={() => handleRollbackAction('rollback')}
           >
-            立即回滚
+            {e('shellpilotQuickRollbackNow')}
           </Button>
         </Space>
       </div>
@@ -548,7 +550,7 @@ export default function QuickCommandsFooterBox (props) {
     }
     return (
       <div className='qm-command-param-section'>
-        <div className='qm-command-param-title'>按表单填写参数（推荐）</div>
+        <div className='qm-command-param-title'>{e('shellpilotQuickFillParameters')}</div>
         <div className='qm-command-param-grid'>
           {pendingCommand.params.map(renderPendingParam)}
         </div>
@@ -567,7 +569,7 @@ export default function QuickCommandsFooterBox (props) {
           className='qm-command-preview-toggle'
           onClick={() => setShowPendingPreview(true)}
         >
-          高级：查看/微调命令
+          {e('shellpilotQuickAdvancedEditCommand')}
         </Button>
       )
     }
@@ -581,12 +583,12 @@ export default function QuickCommandsFooterBox (props) {
                 className='qm-command-preview-toggle qm-command-preview-toggle-inline'
                 onClick={() => setShowPendingPreview(false)}
               >
-                收起命令预览
+                {e('shellpilotQuickCollapsePreview')}
               </Button>
               )
             : null
         }
-        <div className='qm-command-preview-label'>最终命令预览（高级用户可手动微调）</div>
+        <div className='qm-command-preview-label'>{e('shellpilotQuickFinalCommandPreview')}</div>
         <Input.TextArea
           value={pendingCommand?.text || ''}
           onChange={handlePendingChange}
@@ -666,8 +668,8 @@ export default function QuickCommandsFooterBox (props) {
       <div className='pd2'>
         <Flex className='qm-panel-head' justify='space-between' align='center'>
           <div>
-            <div className='qm-panel-title'>快捷命令</div>
-            <div className='qm-panel-subtitle'>常用服务器维护、调试、排查命令，带参数的命令会先编辑确认。</div>
+            <div className='qm-panel-title'>{e('shellpilotQuickCommands')}</div>
+            <div className='qm-panel-subtitle'>{e('shellpilotQuickCommandsDescription')}</div>
           </div>
           <div className='qm-panel-count'>{sorted.length}/{all.length}</div>
         </Flex>
@@ -675,7 +677,7 @@ export default function QuickCommandsFooterBox (props) {
           <Input.Search
             value={keyword}
             onChange={handleChange}
-            placeholder='搜索命令、用途或标签'
+            placeholder={e('shellpilotQuickSearchPlaceholder')}
             className='qm-search-input'
           />
           <Flex gap='small'>
@@ -698,7 +700,7 @@ export default function QuickCommandsFooterBox (props) {
               onClick={handleTogglePinned}
               icon={<PushpinOutlined />}
               type={tp}
-              aria-label={pinnedQuickCommandBar ? '取消固定快捷命令面板' : '固定快捷命令面板'}
+              aria-label={pinnedQuickCommandBar ? e('shellpilotQuickUnpinPanel') : e('shellpilotQuickPinPanel')}
             />
             <Button
               onClick={window.store.handleOpenQuickCommandsSetting}
@@ -719,17 +721,17 @@ export default function QuickCommandsFooterBox (props) {
         </div>
       </div>
       <Modal
-        title={`确认快捷命令：${pendingCommand?.name || ''}`}
+        title={tf('shellpilotQuickConfirmCommand', { name: pendingCommand?.name || '' })}
         open={Boolean(pendingCommand)}
         onCancel={handlePendingCancel}
         onOk={handlePendingOk}
-        okText='发送到 SSH'
-        cancelText='取消'
+        okText={e('shellpilotQuickSendToSsh')}
+        cancelText={e('cancel')}
         className='qm-command-modal'
         width={720}
       >
         <div className='qm-command-modal-desc'>
-          <div className='qm-command-modal-context'>当前上下文：{pendingCommand?.contextLabel}</div>
+          <div className='qm-command-modal-context'>{e('shellpilotQuickCurrentContext')}：{pendingCommand?.contextLabel}</div>
           <div>{pendingCommand?.description}</div>
           <div>{pendingCommand?.usage}</div>
         </div>
@@ -740,7 +742,7 @@ export default function QuickCommandsFooterBox (props) {
           pendingCommand?.advancedUsage?.length
             ? (
               <div className='qm-command-modal-tips'>
-                <div className='qm-command-modal-tips-title'>进阶用法</div>
+                <div className='qm-command-modal-tips-title'>{e('shellpilotQuickAdvancedUsage')}</div>
                 {
                   pendingCommand.advancedUsage.map((tip, index) => (
                     <div className='qm-command-modal-tip' key={`${tip}-${index}`}>{tip}</div>

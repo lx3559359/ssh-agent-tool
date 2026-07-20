@@ -362,9 +362,7 @@ test('upgrade panel gives users a rollback hint after manual or automatic update
   )
 
   assert.match(upgradeSource, /renderRollbackHint/)
-  assert.match(upgradeSource, /回滚/)
-  assert.match(upgradeSource, /上一稳定版本/)
-  assert.match(upgradeSource, /覆盖安装/)
+  assert.match(upgradeSource, /shellpilotUpgradeRollbackHint/)
   assert.match(upgradeSource, /this\.renderRollbackHint\(\)/)
 })
 

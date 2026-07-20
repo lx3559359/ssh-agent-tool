@@ -43,7 +43,7 @@ export default function ServerDataStatus (props) {
           onClick={handleCompare}
         >
           <DiffOutlined className='mg1r' />
-          {e('compare') || 'compare'}
+          {e('compare')}
         </span>
       </span>
     )

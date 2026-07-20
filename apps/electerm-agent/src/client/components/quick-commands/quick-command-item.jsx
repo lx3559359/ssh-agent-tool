@@ -10,6 +10,8 @@ import {
 } from 'antd'
 import classNames from 'classnames'
 
+const e = window.translate
+
 export default class QuickCommandsItem extends PureComponent {
   handleSelect = (id) => {
     this.props.onSelect(
@@ -62,12 +64,12 @@ export default class QuickCommandsItem extends PureComponent {
             <span className='qm-item-title'>{name}</span>
             {
               editBeforeRun
-                ? <span className='qm-item-pill qm-item-pill-warn'>先编辑</span>
+                ? <span className='qm-item-pill qm-item-pill-warn'>{e('shellpilotQuickEditFirst')}</span>
                 : null
             }
             {
               confirmRequired && !editBeforeRun
-                ? <span className='qm-item-pill qm-item-pill-warn'>需确认</span>
+                ? <span className='qm-item-pill qm-item-pill-warn'>{e('shellpilotQuickConfirmationRequired')}</span>
                 : null
             }
           </span>

@@ -74,9 +74,9 @@ test('AI chat copy is readable Simplified Chinese', () => {
   assert.match(copy, /"ask":\s*"对话"/)
   assert.match(copy, /输入你的问题/)
   assert.match(copy, /Enter 发送/)
-  assert.match(chat, /引用终端/)
-  assert.match(chat, /引用选中/)
-  assert.match(chat, /生成命令/)
+  assert.match(chat, /shellpilotAiQuoteTerminal/)
+  assert.match(chat, /shellpilotAiQuoteSelection/)
+  assert.match(chat, /shellpilotAiGenerateCommand/)
   assert.doesNotMatch(chat, /ai-help-link/)
   assert.doesNotMatch(chat, />帮助</)
 })
@@ -94,15 +94,15 @@ test('only the ShellPilot top bar renders desktop window controls', () => {
 test('AIGShell top bar labels avoid ambiguous unfinished actions', () => {
   const topbar = read('src/client/components/main/aigshell-topbar.jsx')
 
-  assert.match(topbar, /label:\s*'备份同步'/)
-  assert.match(topbar, /label:\s*'检查更新'/)
+  assert.match(topbar, /label:\s*e\('shellpilotTopbarBackupSync'\)/)
+  assert.match(topbar, /label:\s*e\('shellpilotTopbarCheckUpdates'\)/)
   assert.doesNotMatch(topbar, /label:\s*'备份'/)
 })
 test('right AI panel title avoids duplicate AI wording', () => {
   const sidePanel = read('src/client/components/side-panel-r/side-panel-r.jsx')
 
   assert.doesNotMatch(sidePanel, /\{tag\}\s*\{isAI\s*\?\s*'AI\s/)
-  assert.match(sidePanel, /isAI\s*\?\s*'助手'/)
+  assert.match(sidePanel, /isAI\s*\?\s*e\('shellpilotAssistant'\)/)
 })
 
 test('renderer shell guards empty tabs and a missing current tab', () => {

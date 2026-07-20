@@ -12,6 +12,6 @@ test('connection info modal copies all fields with bookmark group context', () =
 
   assert.match(
     source,
-    /formatConnectionInfoText\(bookmark,\s*\{\s*showSecrets,\s*bookmarkGroups\s*\}\)/
+    /formatConnectionInfoText\(bookmark,\s*\{\s*showSecrets,\s*bookmarkGroups,\s*translate:\s*e\s*\}\)/
   )
 })

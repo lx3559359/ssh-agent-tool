@@ -3,17 +3,17 @@ const assert = require('node:assert/strict')
 const path = require('node:path')
 const fs = require('node:fs')
 
-test('quick connect form uses beginner friendly Chinese SSH labels', () => {
+test('quick connect form uses beginner friendly localized SSH labels', () => {
   const source = fs.readFileSync(
     path.resolve(__dirname, '../../src/client/components/tabs/quick-connect.jsx'),
     'utf8'
   )
 
-  assert.match(source, /快速连接服务器/)
-  assert.match(source, /服务器 IP 或域名/)
-  assert.match(source, /用户名，选填/)
-  assert.match(source, /密码，选填/)
-  assert.match(source, /请填写服务器地址或 IP/)
+  assert.match(source, /shellpilotQuickConnectServer/)
+  assert.match(source, /shellpilotQuickConnectHostPlaceholder/)
+  assert.match(source, /shellpilotOptionalUsername/)
+  assert.match(source, /shellpilotOptionalPassword/)
+  assert.match(source, /shellpilotQuickConnectHostRequired/)
   assert.doesNotMatch(source, /Format error, please check the input/)
   assert.doesNotMatch(source, /ssh\|rdp\|vnc\|spice/)
 })
@@ -34,8 +34,8 @@ test('quick connect form exposes SSH auth method and save controls', () => {
     'utf8'
   )
 
-  assert.match(source, /认证方式/)
-  assert.match(source, /私钥/)
+  assert.match(source, /shellpilotAuthenticationMethod/)
+  assert.match(source, /shellpilotPrivateKey/)
   assert.match(source, /SSH Agent/)
-  assert.match(source, /保存为连接/)
+  assert.match(source, /shellpilotSaveAsConnection/)
 })

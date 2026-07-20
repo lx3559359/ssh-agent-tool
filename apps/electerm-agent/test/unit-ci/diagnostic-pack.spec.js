@@ -287,7 +287,7 @@ test('about dialog exposes diagnostic pack export to users', () => {
 
   assert.match(infoModalSource, /exportDiagnosticPack/)
   assert.match(infoModalSource, /saveDialog/)
-  assert.match(infoModalSource, /导出诊断包/)
+  assert.match(infoModalSource, /shellpilotExportDiagnosticPack/)
   assert.match(infoModalSource, /hasOmissions/)
-  assert.match(infoModalSource, /诊断包已导出，但有/)
+  assert.match(infoModalSource, /shellpilotDiagnosticExportOmissions/)
 })

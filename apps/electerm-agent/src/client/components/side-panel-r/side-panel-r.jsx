@@ -11,6 +11,7 @@ import { Flex, Tag, Typography } from 'antd'
 import AgentTakeoverControls from '../ai/agent-takeover-controls'
 
 const RightSidePanelAIHeader = lazy(() => import('./right-side-panel-ai-header'))
+const e = window.translate
 
 export default memo(function RightSidePanel ({
   rightPanelVisible,
@@ -75,12 +76,12 @@ export default memo(function RightSidePanel ({
       <Flex className='right-panel-title pd2' justify='space-between' align='flex-start'>
         <div className='right-panel-title-main'>
           <Typography.Text className='right-panel-title-text'>
-            {tag} {isAI ? '助手' : title}
+            {tag} {isAI ? e('shellpilotAssistant') : title}
           </Typography.Text>
           {
             isAI
               ? (
-                <LazyModuleBoundary moduleName='AI 模型状态' fallback={<div className='right-panel-subtitle'>{title}</div>}>
+                <LazyModuleBoundary moduleName={e('shellpilotAiModelStatus')} fallback={<div className='right-panel-subtitle'>{title}</div>}>
                   <Suspense fallback={<div className='right-panel-subtitle'>{title}</div>}>
                     <RightSidePanelAIHeader
                       config={config}
@@ -102,7 +103,7 @@ export default memo(function RightSidePanel ({
           {
             isAI
               ? (
-                <LazyModuleBoundary moduleName='AI 模型状态' fallback={null}>
+                <LazyModuleBoundary moduleName={e('shellpilotAiModelStatus')} fallback={null}>
                   <Suspense fallback={null}>
                     <RightSidePanelAIHeader
                       config={config}

@@ -42,6 +42,8 @@ import {
   treeRowHeight
 } from './tree-list-layout'
 
+const translate = window.translate
+
 export default class ItemListTree extends Component {
   constructor (props) {
     super(props)
@@ -471,8 +473,8 @@ export default class ItemListTree extends Component {
     try {
       await testTerminalConnection(item)
       notification.success({
-        message: '连接测试成功',
-        description: item?.title || item?.host || '当前连接'
+        message: translate('shellpilotConnectionTestSucceeded'),
+        description: item?.title || item?.host || translate('shellpilotCurrentConnection')
       })
     } catch (err) {
       window.store.onError(err)
@@ -481,12 +483,13 @@ export default class ItemListTree extends Component {
 
   exportConnection = (e, item) => {
     e.stopPropagation()
-    if (!window.confirm('将导出当前连接的明文账号、密码和密钥路径，请只保存在可信位置。是否继续？')) {
+    if (!window.confirm(translate('shellpilotCurrentConnectionExportWarning'))) {
       return
     }
     const txt = '\uFEFF' + createConnectionInventoryCsv([item], {
       headerType: 'label',
-      bookmarkGroups: this.props.bookmarkGroups
+      bookmarkGroups: this.props.bookmarkGroups,
+      translate
     })
     const stamp = time(undefined, 'YYYY-MM-DD-HH-mm-ss')
     const safeName = String(item?.title || item?.host || 'connection')

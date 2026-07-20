@@ -69,28 +69,34 @@ function hoppingCountOf (item = {}) {
 }
 
 export const connectionInfoFields = [
-  { key: 'title', label: '名称', pick: item => item.title || item.name || '' },
-  { key: 'groupName', label: '所在分组', pick: groupNameOf },
-  { key: 'type', label: '类型', pick: item => item.type || 'ssh' },
-  { key: 'connectionAddress', label: '连接地址', pick: connectionAddressOf },
-  { key: 'host', label: 'IP / 主机', pick: hostOf },
-  { key: 'port', label: '端口', pick: portOf },
-  { key: 'username', label: '账号', pick: usernameOf },
-  { key: 'authType', label: '认证方式', pick: item => item.authType || '' },
-  { key: 'password', label: '密码', secret: true, pick: item => item.password || '' },
-  { key: 'privateKey', label: '私钥', secret: true, pick: item => item.privateKey || '' },
-  { key: 'passphrase', label: '私钥口令', secret: true, pick: item => item.passphrase || '' },
-  { key: 'profileId', label: '凭据档案', pick: item => item.profile || item.profileId || item.sshProfile || '' },
-  { key: 'hoppingCount', label: '跳板数量', pick: hoppingCountOf },
-  { key: 'proxy', label: '代理', pick: item => item.proxy || '' },
-  { key: 'createdAt', label: '创建时间', pick: item => item.createdAt || item.createTime || '' },
-  { key: 'updatedAt', label: '更新时间', pick: item => item.updatedAt || item.updateTime || '' },
-  { key: 'description', label: '备注', pick: item => item.description || '' }
+  { key: 'title', label: '名称', labelKey: 'shellpilotConnectionFieldName', pick: item => item.title || item.name || '' },
+  { key: 'groupName', label: '所在分组', labelKey: 'shellpilotConnectionFieldGroup', pick: groupNameOf },
+  { key: 'type', label: '类型', labelKey: 'shellpilotConnectionFieldType', pick: item => item.type || 'ssh' },
+  { key: 'connectionAddress', label: '连接地址', labelKey: 'shellpilotConnectionFieldAddress', pick: connectionAddressOf },
+  { key: 'host', label: 'IP / 主机', labelKey: 'shellpilotIpHost', pick: hostOf },
+  { key: 'port', label: '端口', labelKey: 'shellpilotPort', pick: portOf },
+  { key: 'username', label: '账号', labelKey: 'shellpilotAccount', pick: usernameOf },
+  { key: 'authType', label: '认证方式', labelKey: 'shellpilotAuthenticationMethod', pick: item => item.authType || '' },
+  { key: 'password', label: '密码', labelKey: 'shellpilotPassword', secret: true, pick: item => item.password || '' },
+  { key: 'privateKey', label: '私钥', labelKey: 'shellpilotPrivateKey', secret: true, pick: item => item.privateKey || '' },
+  { key: 'passphrase', label: '私钥口令', labelKey: 'shellpilotConnectionFieldPassphrase', secret: true, pick: item => item.passphrase || '' },
+  { key: 'profileId', label: '凭据档案', labelKey: 'shellpilotCredentialProfile', pick: item => item.profile || item.profileId || item.sshProfile || '' },
+  { key: 'hoppingCount', label: '跳板数量', labelKey: 'shellpilotConnectionFieldHops', pick: hoppingCountOf },
+  { key: 'proxy', label: '代理', labelKey: 'shellpilotConnectionFieldProxy', pick: item => item.proxy || '' },
+  { key: 'createdAt', label: '创建时间', labelKey: 'shellpilotConnectionFieldCreatedAt', pick: item => item.createdAt || item.createTime || '' },
+  { key: 'updatedAt', label: '更新时间', labelKey: 'shellpilotConnectionFieldUpdatedAt', pick: item => item.updatedAt || item.updateTime || '' },
+  { key: 'description', label: '备注', labelKey: 'shellpilotConnectionFieldNotes', pick: item => item.description || '' }
 ]
+
+function fieldLabel (field, translate) {
+  const translated = typeof translate === 'function' ? translate(field.labelKey) : ''
+  return translated && translated !== field.labelKey ? translated : field.label
+}
 
 export function getConnectionInfoFields (bookmark = {}, {
   showSecrets = false,
-  bookmarkGroups = []
+  bookmarkGroups = [],
+  translate
 } = {}) {
   const context = { bookmarkGroups }
   return connectionInfoFields.map(field => {
@@ -98,7 +104,7 @@ export function getConnectionInfoFields (bookmark = {}, {
     const hasSecret = field.secret && String(rawValue || '').trim() !== ''
     return {
       key: field.key,
-      label: field.label,
+      label: fieldLabel(field, translate),
       rawValue,
       value: hasSecret && !showSecrets ? maskedSecret : rawValue,
       secret: Boolean(field.secret),
@@ -121,11 +127,12 @@ function csvCell (value) {
 
 export function createConnectionInventoryCsv (bookmarks = [], {
   headerType = 'key',
-  bookmarkGroups = []
+  bookmarkGroups = [],
+  translate
 } = {}) {
   const context = { bookmarkGroups }
   const headers = connectionInfoFields.map(field => {
-    return headerType === 'label' ? field.label : field.key
+    return headerType === 'label' ? fieldLabel(field, translate) : field.key
   })
   const rows = (bookmarks || []).map(item => {
     return connectionInfoFields.map(field => field.pick(item, context))

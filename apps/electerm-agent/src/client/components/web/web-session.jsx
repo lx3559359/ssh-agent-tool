@@ -2,6 +2,8 @@ import AddressBar from './address-bar'
 import WebAuthModal from './web-auth-modal'
 import React, { useState, useRef, useEffect, useCallback } from 'react'
 
+const e = window.translate
+
 export default function WebSession (props) {
   const {
     tab,
@@ -98,7 +100,7 @@ export default function WebSession (props) {
     if (!urlRegex.test(tab.url)) {
       return (
         <div>
-          URL: <b>{url}</b> not valid
+          {e('shellpilotWebInvalidUrl')}：<b>{url}</b>
         </div>
       )
     }

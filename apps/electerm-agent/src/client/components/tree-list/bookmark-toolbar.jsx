@@ -37,7 +37,7 @@ export default function BookmarkToolbar (props) {
   const beforeUpload = beforeBookmarkUpload
 
   const handleDownloadPlaintext = () => {
-    const ok = window.confirm('警告：该文件将以明文包含服务器密码、私钥和代理凭据。仅应保存在可信位置，是否继续？')
+    const ok = window.confirm(e('shellpilotPlaintextBackupWarning'))
     if (!ok) {
       return
     }
@@ -62,13 +62,13 @@ export default function BookmarkToolbar (props) {
     download('shellpilot-bookmarks-no-credentials-' + stamp + '.json', txt)
   }
   const handleDownloadEncrypted = async () => {
-    const passphrase = window.prompt('请输入备份加密密码')
+    const passphrase = window.prompt(e('shellpilotBackupPasswordPrompt'))
     if (!passphrase) {
       return
     }
-    const confirmation = window.prompt('再次输入备份加密密码')
+    const confirmation = window.prompt(e('shellpilotBackupPasswordConfirm'))
     if (confirmation !== passphrase) {
-      message.error('两次输入的备份密码不一致')
+      message.error(e('shellpilotBackupPasswordMismatch'))
       return
     }
     const backup = await createEncryptedBookmarkBackup({
@@ -82,7 +82,7 @@ export default function BookmarkToolbar (props) {
     download('shellpilot-bookmarks-encrypted-' + stamp + '.json', txt)
   }
   const handleDownloadConnectionInventory = () => {
-    const ok = window.confirm('将导出包含明文密码/密钥路径的连接清单 CSV，请只保存在可信位置。是否继续？')
+    const ok = window.confirm(e('shellpilotConnectionCsvWarning'))
     if (!ok) {
       return
     }
@@ -95,19 +95,19 @@ export default function BookmarkToolbar (props) {
   }
   const handleShowMigrationGuide = () => {
     Modal.info({
-      title: '跨电脑迁移说明',
-      okText: '知道了',
+      title: e('shellpilotMigrationGuideTitle'),
+      okText: e('shellpilotUnderstood'),
       width: 620,
       content: (
         <div>
           <ol>
-            <li>在源电脑选择“加密备份（推荐）”，设置并牢记备份密码。</li>
-            <li>通过可信方式把加密 JSON 文件传到目标电脑。</li>
-            <li>在目标电脑打开“服务器”，点击“导入”，选择文件并输入备份密码。</li>
-            <li>出现冲突时，按需要选择保留本地、使用备份覆盖或创建副本。</li>
+            <li>{e('shellpilotMigrationStepOne')}</li>
+            <li>{e('shellpilotMigrationStepTwo')}</li>
+            <li>{e('shellpilotMigrationStepThree')}</li>
+            <li>{e('shellpilotMigrationStepFour')}</li>
           </ol>
-          <p>备份包含服务器连接、分组和连接凭据，并使用密码加密。</p>
-          <p>不包含本地私钥文件、AI 模型配置、终端历史和客户端其他设置；使用私钥路径的连接需要在目标电脑重新选择私钥文件。</p>
+          <p>{e('shellpilotMigrationIncludes')}</p>
+          <p>{e('shellpilotMigrationExcludes')}</p>
         </div>
       )
     })
@@ -144,27 +144,27 @@ export default function BookmarkToolbar (props) {
       icon: <ImportOutlined />
     },
     {
-      label: '加密备份（推荐）',
+      label: e('shellpilotEncryptedBackupRecommended'),
       onClick: handleDownloadEncrypted,
       icon: <ExportOutlined />
     },
     {
-      label: `${e('export')} (不含凭据)`,
+      label: `${e('export')} ${e('shellpilotWithoutCredentials')}`,
       onClick: handleDownloadWithoutCredentials,
       icon: <ExportOutlined />
     },
     {
-      label: '明文备份（含凭据，不推荐）',
+      label: e('shellpilotPlaintextBackupNotRecommended'),
       onClick: handleDownloadPlaintext,
       icon: <ExportOutlined />
     },
     {
-      label: '导出连接清单 CSV（含账号密码）',
+      label: e('shellpilotExportConnectionCsvWithCredentials'),
       onClick: handleDownloadConnectionInventory,
       icon: <ExportOutlined />
     },
     {
-      label: '服务器详情 / 连接信息',
+      label: e('shellpilotServerDetailsConnectionInfo'),
       onClick: onConnectionInventory,
       icon: <ProfileOutlined />
     },
@@ -174,7 +174,7 @@ export default function BookmarkToolbar (props) {
       icon: <CodeOutlined />
     },
     {
-      label: '跨电脑迁移说明',
+      label: e('shellpilotMigrationGuideTitle'),
       onClick: handleShowMigrationGuide,
       icon: <QuestionCircleOutlined />
     }
@@ -206,7 +206,7 @@ export default function BookmarkToolbar (props) {
             <Button
               icon={<ExportOutlined />}
               onClick={handleDownloadEncrypted}
-              title='加密备份（推荐）'
+              title={e('shellpilotEncryptedBackupRecommended')}
               className='download-bookmark-icon'
             />
             <Upload

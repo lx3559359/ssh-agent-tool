@@ -542,33 +542,13 @@ test('main keeps Layout mounted while the AI panel stays outside the terminal la
 })
 
 test('fleet skeleton exposes real controls without fabricated status data', () => {
-  const ast = parseClient('components/fleet-status/fleet-status-workspace.jsx')
-  const text = []
-  let refreshDisabled = false
-  traverse(ast, {
-    JSXText (textPath) {
-      const value = textPath.node.value.trim()
-      if (value) text.push(value)
-    },
-    JSXElement (elementPath) {
-      const opening = elementPath.node.openingElement
-      const isRefreshButton = (
-        t.isJSXIdentifier(opening.name, { name: 'Button' }) &&
-        elementPath.node.children.some(child => (
-          t.isJSXText(child) && child.value.trim() === '\u5237\u65b0'
-        ))
-      )
-      if (isRefreshButton) {
-        refreshDisabled = opening.attributes.some(attribute => (
-          t.isJSXAttribute(attribute) &&
-          t.isJSXIdentifier(attribute.name, { name: 'disabled' })
-        ))
-      }
-    }
-  })
-  assert.ok(text.includes('\u670d\u52a1\u5668\u72b6\u6001\u603b\u89c8'))
-  assert.ok(text.includes('\u6682\u65e0\u72b6\u6001\u6570\u636e'))
-  assert.equal(refreshDisabled, true)
+  const source = readClient('components/fleet-status/fleet-status-workspace.jsx')
+  assert.match(source, /shellpilotFleetServerStatusOverview/)
+  assert.match(source, /shellpilotFleetNoStatusData/)
+  assert.match(
+    source,
+    /<Button[\s\S]*?disabled=\{statusState\.running\}[\s\S]*?shellpilotFleetRefresh/
+  )
 
   const styles = readClient('components/fleet-status/fleet-status.styl')
   assert.doesNotMatch(styles, /border-radius\s+(?:9|[1-9]\d+)px/)

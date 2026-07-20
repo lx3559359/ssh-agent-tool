@@ -43,7 +43,7 @@ export default function RemoteFloatControl (props) {
   if (onSendCtrlAltDel) {
     items.push({
       key: 'ctrl-alt-del',
-      label: 'Send Ctrl+Alt+Del',
+      label: e('shellpilotSendCtrlAltDel'),
       icon: <AppstoreOutlined />,
       onClick: onSendCtrlAltDel
     })
@@ -52,7 +52,7 @@ export default function RemoteFloatControl (props) {
   if (screens && screens.length > 0) {
     items.push({
       key: 'screens',
-      label: 'Select Screen',
+      label: e('shellpilotSelectScreen'),
       icon: <DesktopOutlined />,
       children: screens.map(s => ({
         key: s.id,

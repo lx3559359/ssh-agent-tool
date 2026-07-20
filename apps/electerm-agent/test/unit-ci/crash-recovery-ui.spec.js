@@ -14,15 +14,15 @@ function readSource (relativePath) {
 test('crash recovery notice exposes safe Chinese recovery actions', () => {
   const source = readSource('src/client/components/main/crash-recovery-notice.jsx')
 
-  for (const text of [
-    '上次运行异常结束',
-    '恢复标签',
-    '待重新连接',
-    '查看安全中心',
-    '查看更新中心',
-    '忽略'
+  for (const key of [
+    'shellpilotCrashRecoveryTitle',
+    'shellpilotCrashRecoveryRestoreTabs',
+    'shellpilotCrashRecoveryAvailable',
+    'shellpilotCrashRecoveryOpenSafety',
+    'shellpilotCrashRecoveryOpenUpdates',
+    'shellpilotIgnore'
   ]) {
-    assert.match(source, new RegExp(text))
+    assert.match(source, new RegExp(key))
   }
 
   assert.doesNotMatch(source, /ipcOpenTab|runSafetyCommand|nativeUpdateInstall/)
@@ -32,7 +32,7 @@ test('recovered tabs remain dormant until an explicit reconnect', () => {
   const source = readSource('src/client/components/session/session.jsx')
 
   assert.match(source, /recoveryPending/)
-  assert.match(source, /重新连接/)
+  assert.match(source, /shellpilotReconnect/)
   assert.match(source, /handleRecoveryReconnect/)
   assert.match(source, /renderRecoveryPending/)
 })

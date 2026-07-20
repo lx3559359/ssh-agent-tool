@@ -530,7 +530,7 @@ export default class SessionWrapper extends Component {
     }
     return (
       <div className='type-tab'>
-        <span className='mg1r'>Try <b>Shift + Backspace</b>?</span>
+        <span className='mg1r'>{e('shellpilotTry')} <b>Shift + Backspace</b>?</span>
         <CloseOutlined
           onClick={this.handleDismissDelKeyTip}
           className='pointer'
@@ -830,15 +830,15 @@ export default class SessionWrapper extends Component {
     const { tab } = this.props
     const target = tab.host
       ? `${tab.username ? tab.username + '@' : ''}${tab.host}:${tab.port || 22}`
-      : '本地终端'
+      : e('shellpilotLocalTerminal')
     return (
       <div className='session-recovery-pending' role='status'>
         <SafetyCertificateOutlined className='session-recovery-pending-icon' />
-        <h3>待重新连接</h3>
+        <h3>{e('shellpilotRecoveryWaitingReconnect')}</h3>
         <p>{target}</p>
-        <p>为避免异常恢复后自动连接或执行命令，请手动确认。</p>
+        <p>{e('shellpilotRecoveryManualConfirmHint')}</p>
         <Button type='primary' icon={<ReloadOutlined />} onClick={this.handleRecoveryReconnect}>
-          重新连接
+          {e('shellpilotReconnect')}
         </Button>
       </div>
     )

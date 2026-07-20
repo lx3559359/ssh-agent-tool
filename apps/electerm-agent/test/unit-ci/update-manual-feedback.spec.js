@@ -9,7 +9,7 @@ test('top bar exposes a clear check update action label for Chinese users', () =
     'utf8'
   )
 
-  assert.match(topbarSource, /key:\s*'update'[\s\S]{0,120}label:\s*'检查更新'/)
+  assert.match(topbarSource, /key:\s*'update'[\s\S]{0,160}label:\s*e\('shellpilotTopbarCheckUpdates'\)/)
   assert.doesNotMatch(topbarSource, /key:\s*'update'[\s\S]{0,120}label:\s*'更新'/)
 })
 

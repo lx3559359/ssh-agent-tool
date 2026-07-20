@@ -133,7 +133,7 @@ test('isolated Electron readiness uses a staged condition and reports startup di
   )
   assert.equal(
     (matrix.match(/await waitForSecondaryAppReady\(electronApp, page,/g) || []).length,
-    11,
+    13,
     'every isolated secondary-app launch must use the staged readiness helper'
   )
 })

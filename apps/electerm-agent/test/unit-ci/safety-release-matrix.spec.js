@@ -14,7 +14,10 @@ const fingerprintHex = fingerprintDigest.toString('hex')
 const fingerprint = `SHA256:${fingerprintDigest.toString('base64').replace(/=+$/, '')}`
 
 test('Chinese help explains the complete safety transaction workflow and limits', () => {
-  const help = read('src/client/components/main/help-center-modal.jsx')
+  const help = [
+    read('src/client/components/main/help-center-modal.jsx'),
+    read('src/client/common/shellpilot-i18n-overrides.js')
+  ].join('\n')
 
   for (const text of [
     '服务器与 SSH 终端',

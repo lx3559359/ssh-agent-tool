@@ -46,7 +46,7 @@ export default auto(function WorkspaceSelect (props) {
         ? (
           <Empty
             image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description='No items'
+            description={e('shellpilotNoItems')}
           />
           )
         : (

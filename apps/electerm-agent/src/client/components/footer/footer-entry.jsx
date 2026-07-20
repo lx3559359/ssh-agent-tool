@@ -26,7 +26,7 @@ export default auto(function FooterEntry (props) {
   function batchInput (cmd, selectedTabIds) {
     window.store.runBatchSafetyCommand(cmd, selectedTabIds, {
       source: 'quick-command',
-      title: '批量终端命令',
+      title: e('shellpilotBatchTerminalCommand'),
       timeoutMs: 30000
     }).catch(window.store.onError)
   }
@@ -95,13 +95,13 @@ export default auto(function FooterEntry (props) {
     return (
       <div className='terminal-footer-unit terminal-footer-status'>
         <span className={'terminal-footer-dot ' + (connected ? 'online' : '')} />
-        <span>{connected ? 'SSH 已连接' : 'SSH 未连接'}</span>
+        <span>{connected ? e('shellpilotFooterSshConnected') : e('shellpilotFooterSshDisconnected')}</span>
         {
           userHost
             ? <span className='terminal-footer-muted'>{userHost}</span>
             : null
         }
-        <span className='terminal-footer-muted'>日志正常</span>
+        <span className='terminal-footer-muted'>{e('shellpilotFooterLogHealthy')}</span>
       </div>
     )
   }

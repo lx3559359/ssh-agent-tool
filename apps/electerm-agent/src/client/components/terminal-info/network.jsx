@@ -9,6 +9,8 @@ import { filesize } from 'filesize'
 import copy from 'json-deep-copy'
 import { ApiOutlined } from '@ant-design/icons'
 
+const e = window.translate
+
 export default function TerminalInfoDisk (props) {
   const { network, isRemote, terminalInfos } = props
   if (isEmpty(network) || !isRemote || !terminalInfos.includes('network')) {
@@ -110,7 +112,7 @@ export default function TerminalInfoDisk (props) {
   }
   return (
     <div className='terminal-info-section terminal-info-network'>
-      <div className='pd1y bold'><ApiOutlined /> Network</div>
+      <div className='pd1y bold'><ApiOutlined /> {e('shellpilotNetwork')}</div>
       <Table {...ps} />
     </div>
   )

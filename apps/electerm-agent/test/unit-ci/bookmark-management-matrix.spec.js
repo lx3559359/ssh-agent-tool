@@ -57,6 +57,6 @@ test('服务器管理矩阵覆盖常规连接管理流程', () => {
   assertEvidence(importConflict, /keep-local preserves local conflicts/, 'keep local import strategy')
   assertEvidence(importConflict, /overwrite replaces id and connection identity conflicts/, 'overwrite import strategy')
   assertEvidence(importConflict, /duplicate remaps conflicting bookmark and group references/, 'duplicate import strategy')
-  assertEvidence(importIntegration, /bookmark conflict dialog exposes three clear Chinese strategies/, 'conflict dialog and migration flow')
+  assertEvidence(importIntegration, /bookmark conflict dialog exposes three localized strategies/, 'conflict dialog and migration flow')
   assertEvidence(all, /copyPublicInfo|duplicate|move|delete|openAll/, 'common right click actions')
 })

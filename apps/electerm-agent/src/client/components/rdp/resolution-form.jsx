@@ -34,7 +34,7 @@ export default function ResolutionForm (props) {
       key: 'index',
       render: (k) => k
     }, {
-      title: 'Resolutions',
+      title: e('shellpilotRdpResolutions'),
       key: 'customResolutions',
       render: (k, item) => {
         return `${item.width}x${item.height}`

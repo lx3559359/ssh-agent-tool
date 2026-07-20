@@ -18,7 +18,7 @@ test('common user-facing copy uses translation while legacy fallback messages re
   assert.match(aiConfig, /message\.success\(e\('saved'\)\)/)
   assert.match(aiConfig, /title=\{e\('shellpilotAiConfigTitle'\)\}/)
   assert.doesNotMatch(webAuth, />\s*Cancel\s*</)
-  assert.match(webAuth, />\s*取消\s*</)
+  assert.match(webAuth, /\{e\('cancel'\)\}/)
   assert.doesNotMatch(terminalLog, /Failed to (?:start|stop|write)/)
   assert.match(xmodem, /XMODEM 错误/)
   assert.match(trzsz, /TRZSZ 错误/)
@@ -29,6 +29,6 @@ test('diagnostic export uses the ShellPilot product name', () => {
   const source = readClient('components/sidebar/info-modal.jsx')
 
   assert.match(source, /ShellPilot-diagnostic-/)
-  assert.match(source, /ShellPilot 诊断包/)
+  assert.match(source, /shellpilotDiagnosticPackFilter/)
   assert.doesNotMatch(source, /AIGShell-diagnostic-/)
 })

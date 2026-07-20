@@ -10,6 +10,8 @@ import time from '../../common/time'
 import createName from '../../common/create-title'
 import { createConnectionInventoryCsv } from '../../common/connection-inventory'
 
+const e = window.translate
+
 function hostOf (bookmark = {}) {
   return bookmark.host || bookmark.hostname || bookmark.url || bookmark.path || '-'
 }
@@ -29,13 +31,14 @@ export default function ConnectionInventoryModal ({
   onViewConnectionInfo
 }) {
   const handleExport = () => {
-    const ok = window.confirm('将导出包含明文密码/密钥路径的连接清单 CSV，请只保存在可信位置。是否继续？')
+    const ok = window.confirm(e('shellpilotConnectionCsvWarning'))
     if (!ok) {
       return
     }
     const txt = '\uFEFF' + createConnectionInventoryCsv(bookmarks, {
       headerType: 'label',
-      bookmarkGroups
+      bookmarkGroups,
+      translate: e
     })
     const stamp = time(undefined, 'YYYY-MM-DD-HH-mm-ss')
     download('shellpilot-connections-with-credentials-' + stamp + '.csv', txt)
@@ -48,10 +51,10 @@ export default function ConnectionInventoryModal ({
         onClick={handleExport}
         disabled={!bookmarks.length}
       >
-        导出连接清单 CSV
+        {e('shellpilotExportConnectionCsv')}
       </Button>
       <Button type='primary' onClick={onClose}>
-        关闭
+        {e('shellpilotClose')}
       </Button>
     </Space>
   )
@@ -59,7 +62,7 @@ export default function ConnectionInventoryModal ({
   return (
     <Modal
       open
-      title='服务器详情'
+      title={e('shellpilotServerDetails')}
       width={780}
       onCancel={onClose}
       footer={footer}
@@ -67,14 +70,14 @@ export default function ConnectionInventoryModal ({
     >
       <div className='connection-inventory-head'>
         <ProfileOutlined />
-        <span>集中查看已保存服务器，单个连接可查看账号、端口、密码并复制或导出。</span>
+        <span>{e('shellpilotServerDetailsDescription')}</span>
       </div>
       {
         !bookmarks.length
           ? (
             <Empty
               image={Empty.PRESENTED_IMAGE_SIMPLE}
-              description='暂无已保存服务器，请先新建并保存 SSH 连接。'
+              description={e('shellpilotNoSavedServers')}
             />
             )
           : (
@@ -85,9 +88,9 @@ export default function ConnectionInventoryModal ({
                     <div className='connection-inventory-main'>
                       <div className='connection-inventory-title'>{createName(bookmark)}</div>
                       <div className='connection-inventory-meta'>
-                        <span>IP/主机：{hostOf(bookmark)}</span>
-                        <span>端口：{portOf(bookmark)}</span>
-                        <span>账号：{userOf(bookmark)}</span>
+                        <span>{e('shellpilotIpHost')}：{hostOf(bookmark)}</span>
+                        <span>{e('shellpilotPort')}：{portOf(bookmark)}</span>
+                        <span>{e('shellpilotAccount')}：{userOf(bookmark)}</span>
                       </div>
                     </div>
                     <Button
@@ -95,7 +98,7 @@ export default function ConnectionInventoryModal ({
                       icon={<EyeOutlined />}
                       onClick={() => onViewConnectionInfo(bookmark)}
                     >
-                      查看连接信息
+                      {e('shellpilotViewConnectionInfo')}
                     </Button>
                   </div>
                 ))

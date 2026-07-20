@@ -8,10 +8,13 @@ const read = file => fs.readFileSync(path.join(root, file), 'utf8')
 
 test('top bar exposes an in-client Chinese help center', () => {
   const topbar = read('src/client/components/main/aigshell-topbar.jsx')
-  const help = read('src/client/components/main/help-center-modal.jsx')
+  const help = [
+    read('src/client/components/main/help-center-modal.jsx'),
+    read('src/client/common/shellpilot-i18n-overrides.js')
+  ].join('\n')
 
   assert.match(topbar, /QuestionCircleOutlined/)
-  assert.match(topbar, /label:\s*'帮助'/)
+  assert.match(topbar, /label:\s*e\('shellpilotTopbarHelp'\)/)
   assert.match(topbar, /<HelpCenterModal/)
   assert.match(help, /ShellPilot 帮助中心/)
   for (const topic of [

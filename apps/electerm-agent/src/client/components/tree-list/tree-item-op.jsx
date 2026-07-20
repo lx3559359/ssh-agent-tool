@@ -107,7 +107,7 @@ export default function TreeItemOp (props) {
     buttons.push(
       <FavoriteIcon
         key='favorite-tree'
-        title={isBookmarkFavorite(item) ? '取消收藏' : '收藏'}
+        title={isBookmarkFavorite(item) ? e('shellpilotUnfavorite') : e('shellpilotFavorite')}
         className='pointer tree-control-btn'
         onClick={handleToggleFavorite}
       />

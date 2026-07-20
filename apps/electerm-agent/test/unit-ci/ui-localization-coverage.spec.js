@@ -18,6 +18,8 @@ const allowedTechnicalCopy = new Set([
   'XMODEM', 'trz', 'rz', 'src:', 'GitHub ➾', 'Markdown', 'HTML',
   'Groq', 'xAI Grok', 'Together AI', 'stdio', 'AtlasCloud',
   'Digest', 'Digest:', 'CPU', 'PID', 'DNS', 'inode',
+  'CAPS', 'SSH Agent', 'Try', 'Shift + Backspace', 'wiki', 'Shift+Enter',
+  'root@server:~#', 'systemctl status nginx', '● active (running)',
   'connect, command, sftp_upload, sftp_download'
 ])
 const allowedTechnicalCopyLower = new Set(
@@ -181,6 +183,7 @@ const finalSurfaceFiles = [
   ...jsxFilesUnder('components/main')
 ]
 const allAuditedSurfaceFiles = [...new Set([
+  ...jsxFilesUnder('components'),
   ...coreSurfaceFiles,
   ...connectionSurfaceFiles,
   ...finalSurfaceFiles
