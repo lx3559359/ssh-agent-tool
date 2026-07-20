@@ -53,6 +53,32 @@ test('quick commands reuse service inventory and expose readable systemd choices
   })
 })
 
+test('quick command target discovery localizes visible state labels when requested', async () => {
+  const { discoverQuickCommandTargets } = await import(discoveryUrl)
+  const translations = {
+    shellpilotFleetRunning: 'Running'
+  }
+  const result = await discoverQuickCommandTargets({}, {
+    client: {
+      inventory: async () => ({
+        status: 'completed',
+        items: [{
+          id: 'systemd:sshd.service',
+          name: 'sshd.service',
+          type: 'service',
+          source: 'systemd',
+          state: 'running',
+          description: ''
+        }]
+      })
+    },
+    type: 'service',
+    translate: key => translations[key] || key
+  })
+
+  assert.equal(result.options[0].label, 'sshd.service · Running · systemd')
+})
+
 test('quick command target discovery reports partial results without hiding choices', async () => {
   const { discoverQuickCommandTargets } = await import(discoveryUrl)
   const client = {

@@ -51,6 +51,16 @@ const addQuickCommands = 'addQuickCommands'
 const networkChangeCommandId = 'builtin-server-network-change-ip'
 const { Option } = Select
 
+const targetDiscoveryMessageKeys = Object.freeze({
+  cancelled: 'shellpilotFleetCancelled',
+  permission: 'shellpilotFleetPermissionDenied',
+  unsupported: 'shellpilotFleetServiceDetectionUnsupported',
+  disconnected: 'shellpilotFleetDisconnected',
+  error: 'shellpilotFleetDetectionFailed',
+  empty: 'shellpilotFleetNoServicesFound',
+  partial: 'shellpilotFleetResultsTruncated'
+})
+
 export default function QuickCommandsFooterBox (props) {
   const [keyword, setKeyword] = useState('')
   const [label, setLabel] = useState(ls.getItem(quickCommandLabelsLsKey, ''))
@@ -169,19 +179,20 @@ export default function QuickCommandsFooterBox (props) {
       loading: true,
       error: '',
       status: 'loading',
-      message: '正在读取当前服务器的服务与容器...',
+      message: e('shellpilotQuickDiscoveringServicesContainers'),
       options: [],
       truncated: false
     })
     try {
       const bookmark = props.currentTab
       if (!bookmark?.host) {
-        throw new Error('当前标签不是已连接的 SSH 会话，请连接服务器后重新检测')
+        throw new Error(e('shellpilotQuickDiscoveryRequiresSsh'))
       }
       const result = await discoverQuickCommandTargets(bookmark, {
         type: targetParam.targetType,
         sources: targetParam.sources,
-        signal: controller.signal
+        signal: controller.signal,
+        translate: e
       })
       if (controller.signal.aborted) return
       setTargetDiscovery({
@@ -189,8 +200,11 @@ export default function QuickCommandsFooterBox (props) {
         error: '',
         status: result.status,
         message: result.options.length
-          ? `已识别 ${result.options.length} 项${result.truncated ? '，结果可能已截断' : ''}`
-          : result.message,
+          ? tf(
+            result.truncated ? 'shellpilotFleetFoundItemsPartial' : 'shellpilotFleetFoundItems',
+            { count: result.options.length }
+          )
+          : e(targetDiscoveryMessageKeys[result.status] || 'shellpilotFleetDetectionFailed'),
         options: result.options,
         truncated: result.truncated
       })
@@ -198,7 +212,7 @@ export default function QuickCommandsFooterBox (props) {
       if (error?.name === 'AbortError') return
       setTargetDiscovery({
         loading: false,
-        error: error?.message || '自动识别失败，可手动输入名称',
+        error: error?.message || e('shellpilotQuickTargetDiscoveryFailed'),
         status: 'error',
         message: '',
         options: [],
@@ -213,7 +227,7 @@ export default function QuickCommandsFooterBox (props) {
       const tabId = props.currentTab?.id || window.store.activeTabId
       const terminal = refs.get('term-' + tabId)
       if (!terminal?.pid || !terminal?.isSsh?.()) {
-        throw new Error('当前标签不是已连接的 SSH 会话，请连接服务器后重新检测')
+        throw new Error(e('shellpilotQuickDiscoveryRequiresSsh'))
       }
       const output = await runCmd(terminal.pid, buildNetworkProbeCommand())
       const detected = parseNetworkProbeOutput(String(output || ''))
@@ -233,7 +247,7 @@ export default function QuickCommandsFooterBox (props) {
     } catch (error) {
       setNetworkProbe({
         loading: false,
-        error: error?.message || '自动识别失败，请手动填写网络参数',
+        error: error?.message || e('shellpilotQuickNetworkDiscoveryFailed'),
         detected: null
       })
     }
@@ -292,7 +306,7 @@ export default function QuickCommandsFooterBox (props) {
       tabId => refs.get('term-' + tabId)
     )
     if (!terminal) {
-      message.warning(`请先连接服务器 ${rollbackRecord.host || ''}，再执行快捷回滚。`)
+      message.warning(tf('shellpilotQuickConnectBeforeRollback', { host: rollbackRecord.host || '' }))
       return
     }
     rollbackRunningRef.current = rollbackRecord.id
@@ -590,14 +604,16 @@ export default function QuickCommandsFooterBox (props) {
   function renderTargetDiscovery () {
     const targetParam = pendingCommand?.params?.find(param => param.type === 'service-target')
     if (!targetParam) return null
-    const typeLabel = targetParam.targetType === 'container' ? '容器' : '服务'
+    const typeLabel = e(targetParam.targetType === 'container'
+      ? 'shellpilotQuickTargetContainer'
+      : 'shellpilotQuickTargetService')
     return (
       <div className={classNames('qm-target-discovery', { 'qm-target-discovery-error': targetDiscovery.error })}>
         <Flex justify='space-between' align='center' gap='small'>
           <div>
-            <div className='qm-target-discovery-title'>自动识别服务与容器</div>
+            <div className='qm-target-discovery-title'>{e('shellpilotQuickAutoDetectServicesContainers')}</div>
             <div className='qm-target-discovery-status'>
-              {targetDiscovery.error || targetDiscovery.message || `连接 SSH 后自动读取可用${typeLabel}`}
+              {targetDiscovery.error || targetDiscovery.message || tf('shellpilotQuickAvailableTargetsAfterSsh', { type: typeLabel })}
             </div>
           </div>
           <Button
@@ -605,7 +621,7 @@ export default function QuickCommandsFooterBox (props) {
             loading={targetDiscovery.loading}
             onClick={() => runTargetDiscovery(targetParam)}
           >
-            重新检测
+            {e('shellpilotQuickDetectAgain')}
           </Button>
         </Flex>
       </div>

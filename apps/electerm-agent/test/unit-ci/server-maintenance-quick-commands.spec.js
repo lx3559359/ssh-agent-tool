@@ -401,8 +401,8 @@ test('quick command modal renders discovered targets with manual fallback', () =
   assert.match(source, /discoverQuickCommandTargets/)
   assert.match(source, /param\.type === 'service-target'/)
   assert.match(source, /mode=\{param\.multiple \? 'tags' : undefined\}/)
-  assert.match(source, /自动识别服务与容器/)
-  assert.match(source, /重新检测/)
+  assert.match(source, /shellpilotQuickAutoDetectServicesContainers/)
+  assert.match(source, /shellpilotQuickDetectAgain/)
 })
 
 test('every mutating maintenance command provides a reusable rollback action', async () => {

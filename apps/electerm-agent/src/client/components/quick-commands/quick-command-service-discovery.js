@@ -11,6 +11,26 @@ const stateLabels = Object.freeze({
   unknown: '未知'
 })
 
+const stateLabelKeys = Object.freeze({
+  running: 'shellpilotFleetRunning',
+  stopped: 'shellpilotFleetStopped',
+  failed: 'shellpilotFleetAbnormal',
+  starting: 'shellpilotFleetStarting',
+  restarting: 'shellpilotFleetRestarting',
+  paused: 'shellpilotFleetPaused',
+  unknown: 'shellpilotFleetUnknown'
+})
+
+function getStateLabel (state, translate) {
+  const normalizedState = stateLabels[state] ? state : 'unknown'
+  const fallback = stateLabels[normalizedState]
+  if (typeof translate !== 'function') return fallback
+  const translated = translate(stateLabelKeys[normalizedState])
+  return translated && translated !== stateLabelKeys[normalizedState]
+    ? translated
+    : fallback
+}
+
 function normalizeSources (sources) {
   return new Set(
     (Array.isArray(sources) ? sources : [])
@@ -32,7 +52,7 @@ export async function discoverQuickCommandTargets (bookmark, options = {}) {
     .filter(item => (!type || item.type === type) && (!sources.size || sources.has(item.source)))
     .map(item => ({
       value: item.name,
-      label: `${item.name} · ${stateLabels[item.state] || stateLabels.unknown} · ${item.source}`,
+      label: `${item.name} · ${getStateLabel(item.state, options.translate)} · ${item.source}`,
       state: item.state,
       source: item.source,
       description: item.description
