@@ -1004,8 +1004,8 @@ test('terminal elevation guard covers every rendered terminal layer and semantic
 
 test('shell chrome E2E uses concrete scroll mutation, clipping ancestry and document overflow gates', () => {
   const source = fs.readFileSync(path.join(projectRoot, 'test/e2e/022.secondary-ui-visual-matrix.spec.js'), 'utf8')
-  const inspect = source.match(/async function inspectShellChrome \(page\) \{([\s\S]*?)\n\}\n\nfunction assertShellChrome/)
-  const scrollExercise = source.match(/async function exerciseRightPanelScroll \(page\) \{([\s\S]*?)\n\}\n\nfunction assertShellChrome/)
+  const inspect = source.match(/async function inspectShellChrome \(page\) \{([\s\S]*?)\r?\n\}\r?\n\r?\nfunction assertShellChrome/)
+  const scrollExercise = source.match(/async function exerciseRightPanelScroll \(page\) \{([\s\S]*?)\r?\n\}\r?\n\r?\nfunction assertShellChrome/)
 
   assert.ok(inspect)
   assert.ok(scrollExercise)
