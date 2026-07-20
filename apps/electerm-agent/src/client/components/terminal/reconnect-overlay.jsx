@@ -1,4 +1,7 @@
 import { memo } from 'react'
+import { formatShellPilotTranslation } from '../../common/shellpilot-i18n-overrides.js'
+
+const e = window.translate
 
 export default memo(function ReconnectOverlay ({
   reconnectState,
@@ -12,13 +15,20 @@ export default memo(function ReconnectOverlay ({
   const { status, attempt, maxAttempts, countdown } = reconnectState
   let message = ''
   if (status === 'waiting') {
-    message = `自动重连：第 ${attempt}/${maxAttempts} 次，${countdown} 秒后重试`
+    message = formatShellPilotTranslation(e, 'shellpilotReconnectWaiting', {
+      attempt,
+      maxAttempts,
+      countdown
+    })
   } else if (status === 'reconnecting') {
-    message = `正在进行第 ${attempt}/${maxAttempts} 次自动重连...`
+    message = formatShellPilotTranslation(e, 'shellpilotReconnecting', {
+      attempt,
+      maxAttempts
+    })
   } else if (status === 'failed') {
-    message = `自动重连失败：已达到 ${maxAttempts} 次上限，请手动重连。`
+    message = formatShellPilotTranslation(e, 'shellpilotReconnectFailed', { maxAttempts })
   } else if (status === 'stopped') {
-    message = '已停止自动重连'
+    message = e('shellpilotReconnectStopped')
   }
 
   if (!message) {
@@ -34,8 +44,8 @@ export default memo(function ReconnectOverlay ({
       <span className='terminal-reconnect-message'>{message}</span>
       {status === 'waiting' && (
         <span className='terminal-reconnect-actions'>
-          <button type='button' onClick={onReconnectNow}>立即重连</button>
-          <button type='button' onClick={onStopReconnect}>停止重连</button>
+          <button type='button' onClick={onReconnectNow}>{e('shellpilotReconnectNow')}</button>
+          <button type='button' onClick={onStopReconnect}>{e('shellpilotStopReconnect')}</button>
         </span>
       )}
     </div>

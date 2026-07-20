@@ -6,10 +6,21 @@ import {
   SearchOutlined,
   StopOutlined
 } from '@ant-design/icons'
-import { fleetServiceGroupLabels } from './fleet-service-selector-model.js'
+import { formatShellPilotTranslation } from '../../common/shellpilot-i18n-overrides.js'
 import './fleet-service-selector.styl'
 
-const typeLabels = { service: '系统服务', container: '容器', process: '进程' }
+const e = window.translate
+const tf = (key, replacements) => formatShellPilotTranslation(e, key, replacements)
+const typeLabelKeys = {
+  service: 'shellpilotFleetSystemService',
+  container: 'shellpilotFleetContainer',
+  process: 'shellpilotFleetProcess'
+}
+const groupLabelKeys = {
+  system: 'shellpilotFleetSystemService',
+  container: 'shellpilotFleetContainer',
+  'process-manager': 'shellpilotFleetProcessManager'
+}
 const sourceLabels = {
   systemd: 'systemd',
   openrc: 'OpenRC',
@@ -19,33 +30,33 @@ const sourceLabels = {
   supervisor: 'Supervisor',
   pm2: 'PM2'
 }
-const stateLabels = {
-  running: '运行中',
-  stopped: '已停止',
-  failed: '异常',
-  starting: '启动中',
-  restarting: '重启中',
-  paused: '已暂停',
-  unknown: '未知'
+const stateLabelKeys = {
+  running: 'shellpilotFleetRunning',
+  stopped: 'shellpilotFleetStopped',
+  failed: 'shellpilotFleetAbnormal',
+  starting: 'shellpilotFleetStarting',
+  restarting: 'shellpilotFleetRestarting',
+  paused: 'shellpilotFleetPaused',
+  unknown: 'shellpilotFleetUnknown'
 }
-const autostartLabels = {
-  enabled: '已启用',
-  disabled: '未启用',
-  static: '静态',
-  masked: '已屏蔽',
-  unknown: '未知'
+const autostartLabelKeys = {
+  enabled: 'shellpilotFleetEnabled',
+  disabled: 'shellpilotFleetDisabled',
+  static: 'shellpilotFleetStatic',
+  masked: 'shellpilotFleetMasked',
+  unknown: 'shellpilotFleetUnknown'
 }
 
 function ServerStatus ({ server }) {
-  if (server.status === 'loading') return <>正在检测</>
-  if (server.status === 'ready') return <>已发现 {server.itemCount} 项</>
-  if (server.status === 'partial') return <>已发现 {server.itemCount} 项，部分检测项失败</>
-  if (server.status === 'empty') return <>未发现服务</>
-  if (server.status === 'disconnected') return <>未连接或连接已断开</>
-  if (server.status === 'permission') return <>权限不足</>
-  if (server.status === 'unsupported') return <>当前服务器不支持服务检测</>
-  if (server.status === 'cancelled') return <>已取消</>
-  return <>检测失败</>
+  if (server.status === 'loading') return <>{e('shellpilotFleetDetecting')}</>
+  if (server.status === 'ready') return <>{tf('shellpilotFleetFoundItems', { count: server.itemCount })}</>
+  if (server.status === 'partial') return <>{tf('shellpilotFleetFoundItemsPartial', { count: server.itemCount })}</>
+  if (server.status === 'empty') return <>{e('shellpilotFleetNoServicesFound')}</>
+  if (server.status === 'disconnected') return <>{e('shellpilotFleetDisconnected')}</>
+  if (server.status === 'permission') return <>{e('shellpilotFleetPermissionDenied')}</>
+  if (server.status === 'unsupported') return <>{e('shellpilotFleetServiceDetectionUnsupported')}</>
+  if (server.status === 'cancelled') return <>{e('shellpilotFleetCancelled')}</>
+  return <>{e('shellpilotFleetDetectionFailed')}</>
 }
 
 function endpoint (server) {
@@ -63,7 +74,7 @@ function ServiceRows ({ rows, selectedIds, handleToggle }) {
       group = row.group
       rendered.push(
         <tr className='fleet-service-selector-group-row' key={`group:${group}`}>
-          <th colSpan={8}>{fleetServiceGroupLabels[group] || '其他'}</th>
+          <th colSpan={8}>{e(groupLabelKeys[group] || 'shellpilotFleetOther')}</th>
         </tr>
       )
     }
@@ -71,21 +82,24 @@ function ServiceRows ({ rows, selectedIds, handleToggle }) {
       <tr className='fleet-service-selector-service-row' key={row.id}>
         <td className='fleet-service-selector-selection-cell'>
           <Checkbox
-            aria-label={`选择 ${row.serverName} 的 ${row.name}`}
+            aria-label={tf('shellpilotFleetSelectServerService', {
+              server: row.serverName,
+              service: row.name
+            })}
             checked={selected.has(row.id)}
             onChange={() => handleToggle(row.id)}
           />
         </td>
         <td title={row.serverName}>{row.serverName}</td>
         <td title={row.name}><strong>{row.name}</strong></td>
-        <td>{typeLabels[row.type] || '未知'}</td>
+        <td>{e(typeLabelKeys[row.type] || 'shellpilotFleetUnknown')}</td>
         <td>{sourceLabels[row.source] || row.source || '--'}</td>
         <td>
           <span className={`fleet-service-selector-state fleet-service-selector-state-${row.state}`}>
-            {stateLabels[row.state] || '未知'}
+            {e(stateLabelKeys[row.state] || 'shellpilotFleetUnknown')}
           </span>
         </td>
-        <td>{autostartLabels[row.autostart] || '未知'}</td>
+        <td>{e(autostartLabelKeys[row.autostart] || 'shellpilotFleetUnknown')}</td>
         <td title={row.description}>{row.description || '--'}</td>
       </tr>
     )
@@ -121,12 +135,15 @@ export default function FleetServiceSelector ({ serviceStore, onAfterClose }) {
       }}
       title={(
         <div className='fleet-service-selector-title'>
-          <div><strong>自动识别服务</strong><span>{state.targetCount} 台服务器</span></div>
-          <Tooltip title='关闭'>
+          <div>
+            <strong>{e('shellpilotFleetAutoDetectServices')}</strong>
+            <span>{tf('shellpilotFleetServerCount', { count: state.targetCount })}</span>
+          </div>
+          <Tooltip title={e('shellpilotFleetClose')}>
             <Button
               type='text'
               icon={<CloseOutlined />}
-              aria-label='关闭服务面板'
+              aria-label={e('shellpilotFleetCloseServicePanel')}
               onClick={() => serviceStore.close()}
             />
           </Tooltip>
@@ -135,7 +152,7 @@ export default function FleetServiceSelector ({ serviceStore, onAfterClose }) {
     >
       <div className='fleet-service-selector-content'>
         <section className='fleet-service-selector-targets' aria-live='polite'>
-          <h3>目标服务器</h3>
+          <h3>{e('shellpilotFleetTargetServers')}</h3>
           <ul>
             {state.servers.map(server => (
               <li key={server.key}>
@@ -143,72 +160,80 @@ export default function FleetServiceSelector ({ serviceStore, onAfterClose }) {
                 <span className={`fleet-service-selector-server-status fleet-service-selector-server-${server.status}`}>
                   <ServerStatus server={server} />
                 </span>
-                {server.truncated ? <em>结果可能已截断</em> : null}
+                {server.truncated ? <em>{e('shellpilotFleetResultsTruncated')}</em> : null}
               </li>
             ))}
           </ul>
         </section>
 
-        <div className='fleet-service-selector-toolbar' role='toolbar' aria-label='服务查看工具栏'>
+        <div
+          className='fleet-service-selector-toolbar'
+          role='toolbar'
+          aria-label={e('shellpilotFleetServiceToolbar')}
+        >
           <Input
             className='fleet-service-selector-search'
-            aria-label='搜索自动发现的服务'
+            aria-label={e('shellpilotFleetSearchDiscoveredServices')}
             allowClear
             prefix={<SearchOutlined />}
-            placeholder='搜索服务'
+            placeholder={e('shellpilotFleetSearchServices')}
             value={state.filters.search}
             onChange={event => serviceStore.setFilters({ search: event.target.value })}
           />
           <Select
             className='fleet-service-selector-filter'
-            aria-label='服务类型筛选'
+            aria-label={e('shellpilotFleetServiceTypeFilter')}
             value={state.filters.group}
             onChange={group => serviceStore.setFilters({ group })}
             options={[
-              { value: 'all', label: '全部类型' },
-              { value: 'system', label: '系统服务' },
-              { value: 'container', label: '容器' },
-              { value: 'process-manager', label: '进程管理器' }
+              { value: 'all', label: e('shellpilotFleetAllTypes') },
+              { value: 'system', label: e('shellpilotFleetSystemService') },
+              { value: 'container', label: e('shellpilotFleetContainer') },
+              { value: 'process-manager', label: e('shellpilotFleetProcessManager') }
             ]}
           />
           <Select
             className='fleet-service-selector-filter'
-            aria-label='服务状态筛选'
+            aria-label={e('shellpilotFleetServiceStatusFilter')}
             value={state.filters.status}
             onChange={status => serviceStore.setFilters({ status })}
             options={[
-              { value: 'all', label: '全部状态' },
-              { value: 'running', label: '运行中' },
-              { value: 'stopped', label: '已停止' },
-              { value: 'abnormal', label: '异常' }
+              { value: 'all', label: e('shellpilotFleetAllStatuses') },
+              { value: 'running', label: e('shellpilotFleetRunning') },
+              { value: 'stopped', label: e('shellpilotFleetStopped') },
+              { value: 'abnormal', label: e('shellpilotFleetAbnormal') }
             ]}
           />
           <Button
             icon={<ReloadOutlined />}
             disabled={state.running || !state.targetCount}
             onClick={() => serviceStore.refresh({ force: true })}
-          >重新检测
+          >{e('shellpilotFleetDetectAgain')}
           </Button>
           <Button
             icon={<StopOutlined />}
             disabled={!state.running}
             onClick={() => serviceStore.cancel()}
-          >取消检测
+          >{e('shellpilotFleetCancelDetection')}
           </Button>
         </div>
 
-        <div className='fleet-service-selector-selection-bar' role='toolbar' aria-label='服务多选工具栏'>
-          <span>已选择 {state.selectedCount} 项</span>
+        <div
+          className='fleet-service-selector-selection-bar'
+          role='toolbar'
+          aria-label={e('shellpilotFleetServiceSelectionToolbar')}
+        >
+          <span>{tf('shellpilotFleetSelectedItems', { count: state.selectedCount })}</span>
           <Button size='small' disabled={!state.visibleRows.length} onClick={() => serviceStore.selectVisible()}>
-            选择当前筛选结果
+            {e('shellpilotFleetSelectFiltered')}
           </Button>
           <Button size='small' disabled={!state.abnormalCount} onClick={() => serviceStore.selectAbnormal()}>
-            选择全部异常
+            {e('shellpilotFleetSelectAllAbnormal')}
           </Button>
           <Button size='small' type='text' disabled={!state.selectedCount} onClick={() => serviceStore.clearSelected()}>
-            清空选择
+            {e('shellpilotFleetClearSelection')}
           </Button>
-          {state.truncated ? <strong>结果可能已截断</strong> : null}
+          {state.truncated ? <strong>{e('shellpilotFleetResultsTruncated')}</strong> : null}
         </div>
 
         <div className='fleet-service-selector-table-scroll'>
@@ -217,15 +242,20 @@ export default function FleetServiceSelector ({ serviceStore, onAfterClose }) {
               <tr>
                 <th className='fleet-service-selector-selection-cell'>
                   <Checkbox
-                    aria-label='选择当前筛选结果中的全部服务'
+                    aria-label={e('shellpilotFleetSelectAllFilteredServices')}
                     checked={allVisibleSelected}
                     indeterminate={partlyVisibleSelected}
                     disabled={!state.visibleRows.length}
                     onChange={toggleVisible}
                   />
                 </th>
-                <th>服务器</th><th>服务名称</th><th>类型</th><th>来源</th>
-                <th>运行状态</th><th>自启动</th><th>说明</th>
+                <th>{e('shellpilotFleetServer')}</th>
+                <th>{e('shellpilotFleetServiceName')}</th>
+                <th>{e('shellpilotFleetType')}</th>
+                <th>{e('shellpilotFleetSource')}</th>
+                <th>{e('shellpilotFleetRunningStatus')}</th>
+                <th>{e('shellpilotFleetAutostart')}</th>
+                <th>{e('shellpilotFleetDescription')}</th>
               </tr>
             </thead>
             <tbody>
@@ -240,7 +270,9 @@ export default function FleetServiceSelector ({ serviceStore, onAfterClose }) {
                 : (
                   <tr>
                     <td className='fleet-service-selector-empty' colSpan={8}>
-                      {state.running ? '正在检测所选服务器' : '没有符合条件的服务'}
+                      {state.running
+                        ? e('shellpilotFleetDetectingSelectedServers')
+                        : e('shellpilotFleetNoMatchingServices')}
                     </td>
                   </tr>
                   )}
@@ -249,8 +281,8 @@ export default function FleetServiceSelector ({ serviceStore, onAfterClose }) {
         </div>
 
         <details className='fleet-service-selector-advanced'>
-          <summary>高级信息</summary>
-          <p>本功能仅执行固定只读探针</p>
+          <summary>{e('shellpilotFleetAdvancedInformation')}</summary>
+          <p>{e('shellpilotFleetReadonlyProbeNotice')}</p>
         </details>
       </div>
     </Drawer>

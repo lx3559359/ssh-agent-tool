@@ -347,7 +347,7 @@ export default auto(function Index (props) {
         <UiFont presetId={effectiveUiFontPresetId} />
         <CustomCss customCss={config.customCss} configLoaded={configLoaded} />
         <TextEditor />
-        <LazyModuleBoundary moduleName='更新检查' fallback={null}>
+        <LazyModuleBoundary moduleName={window.translate('shellpilotUpdateCheckModule')} fallback={null}>
           <Suspense fallback={null}>
             <UpdateCheck
               skipVersion={config.skipVersion}
@@ -377,7 +377,7 @@ export default auto(function Index (props) {
           {
             fleetStatusActive
               ? (
-                <LazyModuleBoundary moduleName='服务器状态工作区' fallback={null}>
+                <LazyModuleBoundary moduleName={window.translate('shellpilotFleetWorkspaceModule')} fallback={null}>
                   <Suspense fallback={null}>
                     <FleetStatusWorkspace
                       store={store}
@@ -420,7 +420,7 @@ export default auto(function Index (props) {
         {
           store.showAIConfigModal
             ? (
-              <LazyModuleBoundary moduleName='模型 API 配置' fallback={null}>
+              <LazyModuleBoundary moduleName={window.translate('shellpilotModelApiConfigModule')} fallback={null}>
                 <Suspense fallback={null}>
                   <AIConfigModal store={store} />
                 </Suspense>

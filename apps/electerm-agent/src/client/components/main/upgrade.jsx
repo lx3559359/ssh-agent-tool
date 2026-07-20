@@ -17,6 +17,7 @@ import { refsStatic } from '../common/ref'
 import message from '../common/message'
 import { createTraceContext } from '../../common/quality/trace-context.js'
 import { recordQualityEvent } from '../../common/quality/quality-events.js'
+import { formatShellPilotTranslation } from '../../common/shellpilot-i18n-overrides.js'
 import './upgrade.styl'
 
 const e = window.translate
@@ -353,20 +354,20 @@ export default class Upgrade extends PureComponent {
       <div className='upgrade-panel'>
         <div className='upgrade-panel-title fix'>
           <span className='fleft'>
-            检查升级失败：{err}
+            {e('shellpilotUpgradeCheckFailed')}：{err}
           </span>
           <span className='fright'>
             <CloseOutlined className='pointer font16 close-upgrade-panel' onClick={this.handleClose} />
           </span>
         </div>
         <div className='upgrade-panel-body'>
-          你可以访问
+          {e('shellpilotUpgradeVisit')}
           <Link
             to={homepage}
             className='mg1x'
           >{homepage}
           </Link>
-          手动下载新版本。
+          {e('shellpilotUpgradeManualDownload')}
         </div>
       </div>
     )
@@ -381,7 +382,7 @@ export default class Upgrade extends PureComponent {
     }
     return (
       <div className='pd1t'>
-        <div className='bold'>更新日志：</div>
+        <div className='bold'>{e('shellpilotUpdateChangelog')}：</div>
         <Markdown text={releaseInfo.body} />
         <Link
           to={packInfo.releases}
@@ -406,7 +407,7 @@ export default class Upgrade extends PureComponent {
   renderRollbackHint = () => {
     return (
       <p className='upgrade-rollback-hint'>
-        回滚提示：如果新版本安装后出现异常，可以在 GitHub Releases 下载上一稳定版本，并覆盖安装到当前目录。
+        {e('shellpilotUpgradeRollbackHint')}
       </p>
     )
   }
@@ -444,7 +445,7 @@ export default class Upgrade extends PureComponent {
           onClick={() => this.doUpgrade()}
           className='mg1b'
         >
-          重启完成更新
+          {e('shellpilotUpdateRestartInstall')}
         </Button>
       )
     }
@@ -458,7 +459,11 @@ export default class Upgrade extends PureComponent {
           disabled
           className='mg1b'
         >
-          <span>{`正在下载更新... ${Math.round(percent)}%`}</span>
+          <span>
+            {formatShellPilotTranslation(e, 'shellpilotUpgradeDownloadingPercent', {
+              percent: Math.round(percent)
+            })}
+          </span>
         </Button>
       )
     }
@@ -471,7 +476,7 @@ export default class Upgrade extends PureComponent {
         onClick={() => this.doUpgrade()}
         className='mg1b'
       >
-        立即更新
+        {e('shellpilotUpgradeNow')}
       </Button>
     )
   }
@@ -503,7 +508,7 @@ export default class Upgrade extends PureComponent {
       <div className={cls}>
         <div className='upgrade-panel-title fix'>
           <span className='fleft'>
-            {e('newVersion')} <b>{remoteVersion} [{releaseInfo?.date || '未知日期'}]</b>
+            {e('newVersion')} <b>{remoteVersion} [{releaseInfo?.date || e('shellpilotUnknownDate')}]</b>
           </span>
           <span className='fright'>
             <MinusSquareOutlined className='pointer font16 close-upgrade-panel' onClick={this.handleMinimize} />

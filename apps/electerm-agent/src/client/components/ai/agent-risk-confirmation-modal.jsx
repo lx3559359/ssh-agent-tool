@@ -1,8 +1,10 @@
 import { useMemo } from 'react'
 
+const e = window.translate
+
 function textOrUnknown (value) {
   const text = String(value ?? '').trim()
-  return text || 'unknown'
+  return text || e('shellpilotUnknown')
 }
 
 export function AgentRiskConfirmationContent ({ transaction }) {
@@ -39,12 +41,12 @@ export function AgentRiskConfirmationContent ({ transaction }) {
       : ['unknown']
     const worstCase = textOrUnknown(transaction.worstCase)
     const resourceImpact = transaction.resourceImpact || {}
-    const disconnectPossible = transaction.disconnectPossible ? '是' : '否'
+    const disconnectPossible = transaction.disconnectPossible ? e('yes') : e('no')
     const recovery = transaction.recovery || { type: 'unknown', verified: false }
     const rollbackLimits = textOrUnknown(transaction.rollbackLimits)
     const verification = transaction.verification.length
       ? transaction.verification
-      : ['无额外条件（会话控制操作）']
+      : [e('shellpilotAgentRiskNoExtraVerification')]
     const cancellationBehavior = textOrUnknown(transaction.cancellationBehavior)
     return {
       targetIdentity,
@@ -65,20 +67,20 @@ export function AgentRiskConfirmationContent ({ transaction }) {
 
   return (
     <div className='agent-risk-confirmation-content'>
-      <p className='agent-risk-warning'>这是高风险二次确认。确认后仅执行已冻结的调用。</p>
+      <p className='agent-risk-warning'>{e('shellpilotAgentRiskWarning')}</p>
       {details.recovery.verified !== true && (
         <p className='agent-risk-warning'>
-          Exact recovery is not ready at this dialog. The lower safety transaction must prepare and verify it before remote dispatch; non-reversible work has no automatic rollback.
+          {e('shellpilotAgentRiskRecoveryNotReady')}
         </p>
       )}
       <dl className='agent-risk-details'>
-        <dt>目标 SSH 身份</dt><dd>{details.targetIdentity}</dd>
-        <dt>目的</dt><dd>{details.purpose}</dd>
-        <dt>完整命令</dt><dd>{details.fullCommands.map(command => <pre key={command}>{command}</pre>)}</dd>
-        <dt>脚本入口</dt><dd>{details.scriptEntries.length ? details.scriptEntries.join(', ') : 'unknown'}</dd>
+        <dt>{e('shellpilotAgentRiskTargetIdentity')}</dt><dd>{details.targetIdentity}</dd>
+        <dt>{e('shellpilotPurpose')}</dt><dd>{details.purpose}</dd>
+        <dt>{e('shellpilotAgentRiskFullCommand')}</dt><dd>{details.fullCommands.map(command => <pre key={command}>{command}</pre>)}</dd>
+        <dt>{e('shellpilotAgentRiskScriptEntry')}</dt><dd>{details.scriptEntries.length ? details.scriptEntries.join(', ') : e('shellpilotUnknown')}</dd>
         {details.skillArtifacts.length > 0 && (
           <>
-            <dt>Skill 脚本完整内容</dt>
+            <dt>{e('shellpilotAgentRiskSkillContent')}</dt>
             <dd>{details.skillArtifacts.map(artifact => (
               <div key={`${artifact.skillId}:${artifact.artifactId}:${artifact.fileDigest}`}>
                 <pre>{JSON.stringify({ ...artifact, content: undefined }, null, 2)}</pre>
@@ -88,18 +90,18 @@ export function AgentRiskConfirmationContent ({ transaction }) {
             </dd>
           </>
         )}
-        <dt>影响对象</dt><dd>{details.affectedObjects.join(', ')}</dd>
-        <dt>最坏结果</dt><dd>{details.worstCase}</dd>
-        <dt>资源影响</dt>
+        <dt>{e('shellpilotSafetyAffectedObjects')}</dt><dd>{details.affectedObjects.join(', ')}</dd>
+        <dt>{e('shellpilotSafetyWorstCase')}</dt><dd>{details.worstCase}</dd>
+        <dt>{e('shellpilotAgentRiskResourceImpact')}</dt>
         <dd>{['cpu', 'memory', 'disk', 'network', 'duration'].map(key => (
           <span key={key}>{key}: {textOrUnknown(details.resourceImpact[key])}</span>
         ))}
         </dd>
-        <dt>可能断开连接</dt><dd>{details.disconnectPossible}</dd>
-        <dt>恢复点</dt><dd>{textOrUnknown(details.recovery.type)} / verified={String(details.recovery.verified === true)}</dd>
-        <dt>回滚限制</dt><dd>{details.rollbackLimits}</dd>
-        <dt>验证步骤</dt><dd><pre>{JSON.stringify(details.verification, null, 2)}</pre></dd>
-        <dt>取消行为</dt><dd>{details.cancellationBehavior}</dd>
+        <dt>{e('shellpilotAgentRiskDisconnectPossible')}</dt><dd>{details.disconnectPossible}</dd>
+        <dt>{e('shellpilotAgentRiskRecoveryPoint')}</dt><dd>{textOrUnknown(details.recovery.type)} / {e('shellpilotAgentRiskVerified')}={String(details.recovery.verified === true)}</dd>
+        <dt>{e('shellpilotSafetyRollbackLimits')}</dt><dd>{details.rollbackLimits}</dd>
+        <dt>{e('shellpilotAgentRiskVerificationSteps')}</dt><dd><pre>{JSON.stringify(details.verification, null, 2)}</pre></dd>
+        <dt>{e('shellpilotAgentRiskCancellationBehavior')}</dt><dd>{details.cancellationBehavior}</dd>
       </dl>
     </div>
   )
@@ -123,11 +125,11 @@ export async function requestAgentRiskConfirmation (transaction, options = {}) {
     const onAbort = () => settle(false)
     signal?.addEventListener('abort', onAbort, { once: true })
     modalRef.current = Modal.confirm({
-      title: 'Agent 高风险事务二次确认',
+      title: e('shellpilotAgentRiskConfirmTitle'),
       content: <AgentRiskConfirmationContent transaction={transaction} />,
       width: 760,
-      okText: '确认冻结内容并执行',
-      cancelText: '取消',
+      okText: e('shellpilotAgentRiskConfirmExecute'),
+      cancelText: e('cancel'),
       okButtonProps: { danger: true },
       maskClosable: false,
       keyboard: true,

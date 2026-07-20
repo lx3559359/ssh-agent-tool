@@ -72,6 +72,7 @@ import './ai.styl'
 
 const { TextArea } = Input
 const MAX_HISTORY = 100
+const e = window.translate
 
 export default function AIChat (props) {
   const [prompt, setPrompt] = useState('')
@@ -409,11 +410,11 @@ export default function AIChat (props) {
         onChange={value => setMode(value)}
         options={[
           {
-            label: '对话',
+            label: e('shellpilotAiModeChat'),
             value: 'ask'
           },
           {
-            label: 'Agent',
+            label: e('shellpilotAiModeAgent'),
             value: 'agent',
             disabled: agentRunning
           }
@@ -450,37 +451,37 @@ export default function AIChat (props) {
     const items = [
       {
         key: 'terminal',
-        text: '引用终端',
+        text: e('shellpilotAiQuoteTerminal'),
         icon: <CodeOutlined />,
         handleClick: handleQuoteTerminalOutput
       },
       {
         key: 'selection',
-        text: '引用选中',
+        text: e('shellpilotAiQuoteSelection'),
         icon: <HighlightOutlined />,
         handleClick: handleQuoteTerminalSelection
       },
       {
         key: 'file',
-        text: '引用文件',
+        text: e('shellpilotAiQuoteFile'),
         icon: <FileTextOutlined />,
         handleClick: handleQuoteSftpFile
       },
       {
         key: 'command',
-        text: '生成命令',
+        text: e('shellpilotAiGenerateCommand'),
         icon: <ToolOutlined />,
         handleClick: handleGenerateCommand
       },
       {
         key: 'mcp',
-        text: '引用 MCP 配置',
+        text: e('shellpilotAiQuoteMcpConfiguration'),
         icon: <ApiOutlined />,
         handleClick: handleQuoteMcpServers
       },
       {
         key: 'cli',
-        text: '引用 CLI 能力',
+        text: e('shellpilotAiQuoteCliCapabilities'),
         icon: <ToolOutlined />,
         handleClick: handleQuoteLocalCliTools
       }
@@ -539,10 +540,10 @@ export default function AIChat (props) {
         type='button'
         className='ai-attachment-upload-button'
         onClick={handlePickLocalAttachments}
-        title='上传文件，也支持粘贴文件或从 SFTP 拖入'
+        title={e('shellpilotAiUploadHint')}
       >
         <PaperClipOutlined />
-        <span>上传</span>
+        <span>{e('shellpilotAiUpload')}</span>
       </button>
     )
   }

@@ -6,7 +6,10 @@ import {
 } from '@ant-design/icons'
 import { Button } from 'antd'
 import { auto } from 'manate/react'
+import { formatShellPilotTranslation } from '../../common/shellpilot-i18n-overrides.js'
 import './crash-recovery-notice.styl'
+
+const e = window.translate
 
 function countPendingConnections (tabs = []) {
   return tabs.filter(tab => tab?.host || tab?.type === 'local').length
@@ -39,11 +42,15 @@ export default auto(function CrashRecoveryNotice ({ store, recoveryPlan }) {
         <SafetyCertificateOutlined />
       </div>
       <div className='crash-recovery-notice-content'>
-        <strong>上次运行异常结束</strong>
+        <strong>{e('shellpilotCrashRecoveryTitle')}</strong>
         <span>
           {restored
-            ? `已恢复 ${tabCount} 个标签，均处于待重新连接状态。`
-            : `可恢复 ${tabCount} 个标签，${reconnectCount} 个连接待重新连接，${interruptedCount} 个任务已中断。`}
+            ? formatShellPilotTranslation(e, 'shellpilotCrashRecoveryRestored', { tabCount })
+            : formatShellPilotTranslation(e, 'shellpilotCrashRecoveryAvailable', {
+              tabCount,
+              reconnectCount,
+              interruptedCount
+            })}
         </span>
       </div>
       <div className='crash-recovery-notice-actions'>
@@ -55,26 +62,26 @@ export default auto(function CrashRecoveryNotice ({ store, recoveryPlan }) {
               icon={<SyncOutlined />}
               onClick={() => store.restoreRecoveryTabs()}
             >
-              恢复标签
+              {e('shellpilotCrashRecoveryRestoreTabs')}
             </Button>
             )
           : null}
         {interruptedCount > 0
           ? (
             <Button size='small' icon={<SafetyCertificateOutlined />} onClick={openSafetyCenter}>
-              查看安全中心
+              {e('shellpilotCrashRecoveryOpenSafety')}
             </Button>
             )
           : null}
         {pendingTasks.some(task => task?.type === 'update')
           ? (
             <Button size='small' icon={<ReloadOutlined />} onClick={openUpdateCenter}>
-              查看更新中心
+              {e('shellpilotCrashRecoveryOpenUpdates')}
             </Button>
             )
           : null}
         <Button size='small' type='text' icon={<CloseOutlined />} onClick={() => store.dismissRecoveryNotice()}>
-          忽略
+          {e('shellpilotIgnore')}
         </Button>
       </div>
     </section>

@@ -11,6 +11,8 @@ import FleetStatusToolbar from './fleet-status-toolbar.jsx'
 import FleetStatusTable from './fleet-status-table.jsx'
 import './fleet-status.styl'
 
+const e = window.translate
+
 export default auto(function FleetStatusWorkspace ({
   store,
   shellGeometry,
@@ -105,10 +107,10 @@ export default auto(function FleetStatusWorkspace ({
         <div className='fleet-status-scroll'>
           <header className='fleet-status-header'>
             <div className='fleet-status-heading'>
-              <h1>服务器状态总览</h1>
+              <h1>{e('shellpilotFleetServerStatusOverview')}</h1>
             </div>
             <div className='fleet-status-bookmark-count'>
-              <span>已保存服务器</span>
+              <span>{e('shellpilotFleetSavedServers')}</span>
               <strong>{bookmarkCount}</strong>
             </div>
           </header>
@@ -136,14 +138,14 @@ export default auto(function FleetStatusWorkspace ({
                   : (
                     <section className='fleet-status-empty' aria-live='polite'>
                       <DashboardOutlined className='fleet-status-empty-icon' />
-                      <h2>暂无状态数据</h2>
-                      <p>尚未采集服务器状态</p>
+                      <h2>{e('shellpilotFleetNoStatusData')}</h2>
+                      <p>{e('shellpilotFleetNotCollectedYet')}</p>
                       <Button
                         icon={<ReloadOutlined />}
                         disabled={statusState.running}
                         onClick={() => statusStore.refreshAll()}
                       >
-                        刷新
+                        {e('shellpilotFleetRefresh')}
                       </Button>
                     </section>
                     )}
@@ -152,7 +154,7 @@ export default auto(function FleetStatusWorkspace ({
             : (
               <section className='fleet-status-empty' aria-live='polite'>
                 <DashboardOutlined className='fleet-status-empty-icon' />
-                <h2>请先在服务器中添加连接</h2>
+                <h2>{e('shellpilotFleetAddConnectionFirst')}</h2>
               </section>
               )}
         </div>

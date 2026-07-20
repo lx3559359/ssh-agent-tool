@@ -1,18 +1,20 @@
 import Modal from '../common/modal'
 import './terminal-command-safety-modal.styl'
 
+const e = window.translate
+
 function modalTitle (kind) {
-  if (kind === 'blocked') return '命令已拦截'
-  if (kind === 'reversible') return '执行前保护'
-  if (kind === 'retry') return '命令发送失败'
-  return '高风险命令确认'
+  if (kind === 'blocked') return e('shellpilotCommandBlocked')
+  if (kind === 'reversible') return e('shellpilotCommandReversible')
+  if (kind === 'retry') return e('shellpilotCommandRetry')
+  return e('shellpilotCommandHighRisk')
 }
 
 function serializeExpected (step) {
   try {
     return JSON.stringify(step.expected)
   } catch {
-    return '无法序列化'
+    return e('shellpilotCommandSerializeFailed')
   }
 }
 
@@ -29,17 +31,17 @@ export default function TerminalCommandSafetyModal ({
   const riskContext = confirmation.classification?.riskContext
   const endpoint = confirmation.classification?.endpoint
   const executeText = reversible
-    ? '创建恢复点并执行'
+    ? e('shellpilotCommandCreateRecoveryAndRun')
     : confirmation.kind === 'retry'
-      ? '重新准备并重试'
-      : '确认风险并执行一次'
+      ? e('shellpilotCommandPrepareRetry')
+      : e('shellpilotCommandConfirmRunOnce')
   const detail = reversible
-    ? '将先创建并验证恢复点，成功后才会释放当前命令。'
+    ? e('shellpilotCommandReversibleDetail')
     : confirmation.kind === 'retry'
       ? confirmation.message
       : confirmation.kind === 'blocked'
         ? confirmation.message
-        : '此操作没有自动回滚。请确认风险后仅执行一次。'
+        : e('shellpilotCommandNoRollback')
   const footer = (
     <div className='terminal-command-safety-actions'>
       <button
@@ -48,7 +50,7 @@ export default function TerminalCommandSafetyModal ({
         disabled={busy}
         onClick={onCancel}
       >
-        取消
+        {e('cancel')}
       </button>
       {confirmation.kind !== 'blocked'
         ? (
@@ -58,7 +60,7 @@ export default function TerminalCommandSafetyModal ({
             disabled={busy}
             onClick={onExecute}
           >
-            {busy ? '正在准备...' : executeText}
+            {busy ? e('shellpilotPreparing') : executeText}
           </button>
           )
         : null}
@@ -86,24 +88,26 @@ export default function TerminalCommandSafetyModal ({
               ? (
                 <div className='terminal-command-safety-endpoint'>
                   <div>
-                    <strong>绑定 SSH：</strong>
+                    <strong>{e('shellpilotBoundSsh')}：</strong>
                     {endpoint.username}@{endpoint.host}:{endpoint.port}
                   </div>
                   <div>
-                    <strong>主机指纹：</strong>
+                    <strong>{e('shellpilotHostFingerprint')}：</strong>
                     <code>{endpoint.hostKeyFingerprint}</code>
                   </div>
                 </div>
                 )
               : null}
-            <div><strong>目的：</strong>{riskContext.purpose}</div>
+            <div><strong>{e('shellpilotPurpose')}：</strong>{riskContext.purpose}</div>
             <div>
-              <strong>影响目标：</strong>
-              {riskContext.impactTargets.join('、')}
+              <strong>{e('shellpilotImpactTargets')}：</strong>
+              {riskContext.impactTargets.join(
+                e('shellpilotListSeparator') === ',' ? ', ' : e('shellpilotListSeparator')
+              )}
             </div>
             <div>
-              <strong>执行后验证：</strong>
-              {riskContext.verification.length === 0 ? '无额外条件' : null}
+              <strong>{e('shellpilotPostExecutionVerification')}：</strong>
+              {riskContext.verification.length === 0 ? e('shellpilotNoExtraConditions') : null}
             </div>
             {riskContext.verification.length > 0
               ? (
@@ -112,10 +116,10 @@ export default function TerminalCommandSafetyModal ({
                     <li key={`${step.name}-${index}`}>
                       {step.name} <code>{JSON.stringify(step.args)}</code>
                       {step.expected === undefined
-                        ? '；无额外条件'
+                        ? `；${e('shellpilotNoExtraConditions')}`
                         : (
                           <>
-                            ；期望 <code>{serializeExpected(step)}</code>
+                            ；{e('shellpilotExpected')} <code>{serializeExpected(step)}</code>
                           </>
                           )}
                     </li>

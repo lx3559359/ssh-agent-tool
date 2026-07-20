@@ -158,7 +158,7 @@ export default class ConfirmModalStore extends Component {
             ({toPath})
           </p>
           <p>
-            with
+            {e('shellpilotTransferConflictWith')}
           </p>
           <p className='bold font14'>
             {otherTypeTitle} {typeTxt}: <Icon className='mg1r' />{name}

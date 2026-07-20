@@ -5,6 +5,8 @@
 import { CloseCircleOutlined } from '@ant-design/icons'
 import { memo } from 'react'
 
+const e = window.translate
+
 export default memo(function NormalBuffer (props) {
   if (!props.lines.length) {
     return null
@@ -20,7 +22,7 @@ export default memo(function NormalBuffer (props) {
       </div>
       <div className='terminal-normal-buffer-footer fix'>
         <span className='fleft pd1l'>
-          Normal buffer content
+          {e('shellpilotNormalBufferContent')}
         </span>
         <span className='fright pd1r'>
           <CloseCircleOutlined

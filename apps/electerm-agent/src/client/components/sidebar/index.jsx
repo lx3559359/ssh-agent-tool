@@ -160,8 +160,8 @@ export default function Sidebar (props) {
           <MenuBtn store={store} config={store.config} />
         </div>
         <SideIcon
-          title='状态总览'
-          label='状态总览'
+          title={e('shellpilotSidebarFleetStatus')}
+          label={e('shellpilotSidebarFleetStatus')}
           active={fleetStatusActive}
           onClick={handleOpenFleetStatus}
         >
@@ -170,8 +170,8 @@ export default function Sidebar (props) {
           />
         </SideIcon>
         <SideIcon
-          title='服务器'
-          label='服务器'
+          title={e('shellpilotSidebarServers')}
+          label={e('shellpilotSidebarServers')}
           active={bookmarksActive}
           onClick={() => handleOpenTerminalSidebarPanel('bookmarks')}
         >
@@ -185,8 +185,8 @@ export default function Sidebar (props) {
           onOpenSftp={handleOpenSftp}
         />
         <SideIcon
-          title='历史'
-          label='历史'
+          title={e('shellpilotSidebarHistory')}
+          label={e('shellpilotSidebarHistory')}
           active={historyActive}
           onClick={() => handleOpenTerminalSidebarPanel('history')}
         >
@@ -195,8 +195,8 @@ export default function Sidebar (props) {
           />
         </SideIcon>
         <SideIcon
-          title='密钥'
-          label='密钥'
+          title={e('shellpilotSidebarKeys')}
+          label={e('shellpilotSidebarKeys')}
           active={passwordsActive}
           onClick={() => handleOpenSettingItem(settingPasswordsId)}
         >
@@ -205,8 +205,8 @@ export default function Sidebar (props) {
           />
         </SideIcon>
         <SideIcon
-          title='日志'
-          label='日志'
+          title={e('shellpilotSidebarLogs')}
+          label={e('shellpilotSidebarLogs')}
           active={logActive}
           onClick={() => openAbout(infoTabs.log)}
         >
@@ -215,8 +215,8 @@ export default function Sidebar (props) {
           />
         </SideIcon>
         <SideIcon
-          title='设置'
-          label='设置'
+          title={e('shellpilotSidebarSettings')}
+          label={e('shellpilotSidebarSettings')}
           active={settingActive}
           onClick={openSetting}
         >

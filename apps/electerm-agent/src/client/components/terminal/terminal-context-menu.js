@@ -103,7 +103,7 @@ export function buildTerminalContextMenuItems ({
     item({
       key: 'onDisconnect',
       iconKey: 'CloseCircleOutlined',
-      labelKey: 'disconnect',
+      labelKey: 'shellpilotTerminalDisconnect',
       danger: true
     }),
     item({

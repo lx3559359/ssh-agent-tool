@@ -1,6 +1,9 @@
 import { Collapse } from 'antd'
 import Modal from '../common/modal'
+import { shellpilotEnglishHelpItems } from '../../common/shellpilot-help-content.js'
 import './help-center-modal.styl'
+
+const e = window.translate
 
 function Guide ({ intro, steps = [], tips = [], warning }) {
   return (
@@ -29,10 +32,10 @@ function Guide ({ intro, steps = [], tips = [], warning }) {
   )
 }
 
-const helpItems = [
+const helpItemsZh = [
   {
     key: 'start',
-    label: '第一次使用：5 分钟快速上手',
+    labelKey: 'shellpilotHelpStart',
     children: (
       <Guide
         intro='建议新用户按下面顺序完成首次配置。'
@@ -49,7 +52,7 @@ const helpItems = [
   },
   {
     key: 'servers',
-    label: '服务器与 SSH 终端',
+    labelKey: 'shellpilotHelpServers',
     children: (
       <Guide
         intro='本节介绍服务器与连接信息。顶部“新建”和左侧“服务器”用于建立、分组和重复使用连接。'
@@ -66,7 +69,7 @@ const helpItems = [
   },
   {
     key: 'auth',
-    label: '认证与密钥',
+    labelKey: 'shellpilotHelpAuth',
     children: (
       <Guide
         intro='ShellPilot 支持密码、私钥和 SSH Agent 等常见认证方式。'
@@ -82,7 +85,7 @@ const helpItems = [
   },
   {
     key: 'terminal',
-    label: 'SSH 终端',
+    labelKey: 'shellpilotHelpTerminal',
     children: (
       <Guide
         intro='只有普通只读命令保持常规终端直达；已识别修改先判断能否建立恢复点；可恢复修改在恢复点验证后等待确认；不可恢复修改进入风险确认或被阻止。'
@@ -98,7 +101,7 @@ const helpItems = [
   },
   {
     key: 'terminal-recovery',
-    label: '终端手工修改与自动恢复',
+    labelKey: 'shellpilotHelpTerminalRecovery',
     children: (
       <Guide
         intro='终端会在回车提交前识别可解析的单行命令；只读命令保持直接执行，已识别的修改命令会先判断是否能建立恢复点。'
@@ -121,7 +124,7 @@ const helpItems = [
   },
   {
     key: 'server-status',
-    label: '服务器状态与异常一键诊断',
+    labelKey: 'shellpilotHelpServerStatus',
     children: (
       <Guide
         intro='顶部“服务器状态”打开服务器状态中心，对当前已连接的 SSH 服务器执行一次只读巡检，并把常用运维信息集中展示。'
@@ -148,7 +151,7 @@ const helpItems = [
   },
   {
     key: 'sftp',
-    label: 'SFTP 文件与传输',
+    labelKey: 'shellpilotHelpSftp',
     children: (
       <Guide
         intro='SFTP 文件管理与传输支持同时浏览本地目录和远程目录。'
@@ -167,7 +170,7 @@ const helpItems = [
   },
   {
     key: 'safety',
-    label: '安全操作中心与恢复',
+    labelKey: 'shellpilotHelpSafety',
     children: (
       <Guide
         intro='安全备份与恢复记录统一收纳在安全操作中心，为高风险操作提供备份、预览、确认和回滚能力。'
@@ -189,7 +192,7 @@ const helpItems = [
   },
   {
     key: 'ai-api',
-    label: '模型 API 配置',
+    labelKey: 'shellpilotHelpModelApi',
     children: (
       <Guide
         intro='顶部“模型 API”用于添加官方模型接口、本地模型或 OpenAI 兼容中转站。'
@@ -210,7 +213,7 @@ const helpItems = [
   },
   {
     key: 'ai',
-    label: 'AI 助手与 Agent',
+    labelKey: 'shellpilotHelpAi',
     children: (
       <Guide
         intro='AI 助手用于解释输出、分析日志、生成排查建议和协助组织命令。'
@@ -227,7 +230,7 @@ const helpItems = [
   },
   {
     key: 'ai-takeover',
-    label: 'AI 接管与用户 Skill',
+    labelKey: 'shellpilotHelpAiTakeover',
     children: (
       <Guide
         intro='AI 接管默认关闭，通过每个 SSH 会话独立开关按需启用；它提供分级自治，不代表 AI 获得无限制服务器权限。'
@@ -251,7 +254,7 @@ const helpItems = [
   },
   {
     key: 'large-logs',
-    label: '大日志与附件分析',
+    labelKey: 'shellpilotHelpLargeLogs',
     children: (
       <Guide
         intro='日志过大时不要一次全部发送，可分段、搜索后再交给 AI。'
@@ -267,7 +270,7 @@ const helpItems = [
   },
   {
     key: 'commands',
-    label: '快捷命令表单与风险确认',
+    labelKey: 'shellpilotHelpCommands',
     children: (
       <Guide
         intro='顶部“快捷命令”提供适合初学者的服务器维护和排障入口。'
@@ -285,7 +288,7 @@ const helpItems = [
   },
   {
     key: 'forwarding',
-    label: '端口转发',
+    labelKey: 'shellpilotHelpForwarding',
     children: (
       <Guide
         intro='顶部“端口转发”可把本地端口、远程端口或 SOCKS 代理与 SSH 会话关联。'
@@ -301,7 +304,7 @@ const helpItems = [
   },
   {
     key: 'extensions',
-    label: 'MCP、CLI 与 Skill',
+    labelKey: 'shellpilotHelpExtensions',
     children: (
       <Guide
         intro='MCP 与 CLI 用于扩展 Agent 能力，Skill 用于封装可复用流程，它们不是固定功能列表。'
@@ -317,7 +320,7 @@ const helpItems = [
   },
   {
     key: 'sync',
-    label: '备份同步与迁移',
+    labelKey: 'shellpilotHelpSync',
     children: (
       <Guide
         intro='顶部“备份同步”用于备份或迁移客户端配置。'
@@ -333,7 +336,7 @@ const helpItems = [
   },
   {
     key: 'update',
-    label: '在线更新',
+    labelKey: 'shellpilotHelpUpdate',
     children: (
       <Guide
         intro='顶部“检查更新”用于查看当前版本、更新说明、下载进度和更新源。'
@@ -349,7 +352,7 @@ const helpItems = [
   },
   {
     key: 'settings',
-    label: '设置与主题',
+    labelKey: 'shellpilotHelpSettings',
     children: (
       <Guide
         intro='顶部“日间/夜间”可快速切换主题，完整选项位于“设置”。'
@@ -364,7 +367,7 @@ const helpItems = [
   },
   {
     key: 'logs',
-    label: '工具日志与问题排查',
+    labelKey: 'shellpilotHelpLogs',
     children: (
       <Guide
         intro='左侧“日志”记录 ShellPilot 自身运行情况，用于排查启动、连接、AI、SFTP 和更新问题。'
@@ -388,9 +391,23 @@ const helpItems = [
 
 export default function HelpCenterModal ({ open, onClose }) {
   if (!open) return null
+  const language = window.store.previewLanguage || window.store.config?.language || 'zh_cn'
+  const sourceItems = language === 'en_us' ? shellpilotEnglishHelpItems : helpItemsZh
+  const helpItems = sourceItems.map(item => ({
+    key: item.key,
+    label: e(item.labelKey),
+    children: item.children || (
+      <Guide
+        intro={item.intro}
+        steps={item.steps}
+        tips={item.tips}
+        warning={item.warning}
+      />
+    )
+  }))
   return (
     <Modal
-      title='ShellPilot 帮助中心'
+      title={e('shellpilotHelpCenterTitle')}
       open
       onCancel={onClose}
       footer={null}
@@ -398,11 +415,11 @@ export default function HelpCenterModal ({ open, onClose }) {
       wrapClassName='shellpilot-help-center'
     >
       <div className='shellpilot-help-heading'>
-        <strong>从连接服务器到 AI 辅助排障，一份文档快速了解全部主要功能</strong>
-        <span>新用户建议先阅读“第一次使用”，再按功能展开对应章节。</span>
+        <strong>{e('shellpilotHelpCenterHeading')}</strong>
+        <span>{e('shellpilotHelpCenterIntro')}</span>
       </div>
       <Collapse items={helpItems} defaultActiveKey={['start']} />
-      <p className='shellpilot-help-safety'>安全提示：修改网络、防火墙、SSH、权限和系统服务前，请确认有可用的控制台、备份和回滚方案。</p>
+      <p className='shellpilot-help-safety'>{e('shellpilotHelpCenterSafety')}</p>
     </Modal>
   )
 }

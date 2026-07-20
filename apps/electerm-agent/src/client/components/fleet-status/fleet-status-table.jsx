@@ -1,20 +1,23 @@
 import { Button, Checkbox, Tooltip } from 'antd'
 import { ReloadOutlined } from '@ant-design/icons'
+import { formatShellPilotTranslation } from '../../common/shellpilot-i18n-overrides.js'
 
 const unknownValue = '--'
+const e = window.translate
+const tf = (key, replacements) => formatShellPilotTranslation(e, key, replacements)
 
-const connectionLabels = {
-  pending: '未采集',
-  connecting: '连接中',
-  connected: '已连接',
-  failed: '连接失败',
-  offline: '离线',
-  timeout: '超时',
-  auth: '认证失败',
-  'host-key': '主机密钥异常',
-  permission: '权限不足',
-  unsupported: '不支持',
-  cancelled: '已取消'
+const connectionLabelKeys = {
+  pending: 'shellpilotFleetPending',
+  connecting: 'shellpilotFleetConnecting',
+  connected: 'shellpilotFleetConnected',
+  failed: 'shellpilotFleetConnectionFailed',
+  offline: 'shellpilotFleetOffline',
+  timeout: 'shellpilotFleetTimeout',
+  auth: 'shellpilotFleetAuthenticationFailed',
+  'host-key': 'shellpilotFleetHostKeyError',
+  permission: 'shellpilotFleetPermissionDenied',
+  unsupported: 'shellpilotFleetUnsupported',
+  cancelled: 'shellpilotFleetCancelled'
 }
 
 const abnormalServiceStates = new Set([
@@ -76,9 +79,9 @@ function formatUptime (value) {
   const days = Math.floor(seconds / 86400)
   const hours = Math.floor((seconds % 86400) / 3600)
   const minutes = Math.floor((seconds % 3600) / 60)
-  if (days) return `${days} 天 ${hours} 小时`
-  if (hours) return `${hours} 小时 ${minutes} 分钟`
-  return `${minutes} 分钟`
+  if (days) return tf('shellpilotFleetUptimeDaysHours', { days, hours })
+  if (hours) return tf('shellpilotFleetUptimeHoursMinutes', { hours, minutes })
+  return tf('shellpilotFleetUptimeMinutes', { minutes })
 }
 
 function formatEndpoint (row) {
@@ -89,8 +92,8 @@ function formatEndpoint (row) {
 
 function formatConnection (row) {
   const connection = row.snapshot?.connection
-  if (!connection) return connectionLabels.pending
-  const label = connectionLabels[connection.status] || connectionLabels.pending
+  if (!connection) return e(connectionLabelKeys.pending)
+  const label = e(connectionLabelKeys[connection.status] || connectionLabelKeys.pending)
   const latency = finiteNumber(connection.latencyMs)
   return latency === null ? label : `${label} · ${Math.round(latency)} ms`
 }
@@ -108,8 +111,8 @@ function formatFirewall (snapshot) {
     return unknownValue
   }
   const enabled = firewall.enabled === true
-    ? '已启用'
-    : (firewall.enabled === false ? '未启用' : unknownValue)
+    ? e('shellpilotFleetEnabled')
+    : (firewall.enabled === false ? e('shellpilotFleetDisabled') : unknownValue)
   return firewall.provider
     ? `${firewall.provider} · ${enabled}`
     : enabled
@@ -127,7 +130,9 @@ function summarizeServices (services, predicate) {
   const names = matching.slice(0, 3).map(service => (
     service.name || service.service || unknownValue
   ))
-  if (matching.length > names.length) names.push(`另 ${matching.length - names.length} 项`)
+  if (matching.length > names.length) {
+    names.push(tf('shellpilotFleetMoreItems', { count: matching.length - names.length }))
+  }
   return names.join(', ')
 }
 
@@ -149,7 +154,8 @@ function formatCollectedAt (snapshot) {
   if (!snapshot?.collectedAt) return unknownValue
   const date = new Date(snapshot.collectedAt)
   if (Number.isNaN(date.getTime())) return unknownValue
-  return date.toLocaleString('zh-CN', { hour12: false })
+  const language = window.store?.previewLanguage || window.store?.config?.language
+  return date.toLocaleString(language === 'en_us' ? 'en-US' : 'zh-CN', { hour12: false })
 }
 
 function statusClass (row) {
@@ -181,27 +187,27 @@ export default function FleetStatusTable ({
           <tr>
             <th className='fleet-status-selection-cell'>
               <Checkbox
-                aria-label='选择当前列表全部服务器'
+                aria-label={e('shellpilotFleetSelectAllVisibleServers')}
                 checked={allVisibleSelected}
                 indeterminate={partlySelected}
                 disabled={!rows.length}
                 onChange={toggleVisible}
               />
             </th>
-            <th className='fleet-status-name-cell'>名称</th>
-            <th>分组</th>
-            <th>IP:端口</th>
-            <th>SSH 状态与延迟</th>
+            <th className='fleet-status-name-cell'>{e('shellpilotFleetName')}</th>
+            <th>{e('shellpilotFleetGroup')}</th>
+            <th>{e('shellpilotFleetIpPort')}</th>
+            <th>{e('shellpilotFleetSshStatusLatency')}</th>
             <th>CPU</th>
-            <th>内存</th>
-            <th>磁盘</th>
-            <th>负载</th>
-            <th>运行时间</th>
-            <th>网卡 IP</th>
-            <th>防火墙</th>
-            <th>异常服务</th>
-            <th>平台服务</th>
-            <th>采集时间</th>
+            <th>{e('shellpilotFleetMemory')}</th>
+            <th>{e('shellpilotFleetDisk')}</th>
+            <th>{e('shellpilotFleetLoad')}</th>
+            <th>{e('shellpilotFleetUptime')}</th>
+            <th>{e('shellpilotFleetNetworkIp')}</th>
+            <th>{e('shellpilotFleetFirewall')}</th>
+            <th>{e('shellpilotFleetAbnormalServices')}</th>
+            <th>{e('shellpilotFleetPlatformServices')}</th>
+            <th>{e('shellpilotFleetCollectedAt')}</th>
           </tr>
         </thead>
         <tbody>
@@ -210,7 +216,7 @@ export default function FleetStatusTable ({
               <tr key={row.id}>
                 <td className='fleet-status-selection-cell'>
                   <Checkbox
-                    aria-label={`选择 ${row.name}`}
+                    aria-label={tf('shellpilotFleetSelectServer', { name: row.name })}
                     checked={selected.has(row.id)}
                     onChange={() => onToggleSelected(row.id)}
                   />
@@ -218,12 +224,12 @@ export default function FleetStatusTable ({
                 <td className='fleet-status-name-cell'>
                   <div className='fleet-status-name-content'>
                     <Tooltip title={row.name}><strong>{row.name}</strong></Tooltip>
-                    <Tooltip title='重新采集该服务器'>
+                    <Tooltip title={e('shellpilotFleetCollectServerAgain')}>
                       <Button
                         type='text'
                         size='small'
                         icon={<ReloadOutlined />}
-                        aria-label={`重新采集 ${row.name}`}
+                        aria-label={tf('shellpilotFleetCollectNamedServerAgain', { name: row.name })}
                         disabled={running}
                         onClick={() => onRefreshOne(row.id, { force: true })}
                       />
@@ -252,7 +258,7 @@ export default function FleetStatusTable ({
             : (
               <tr>
                 <td className='fleet-status-no-results' colSpan={15}>
-                  没有符合筛选条件的服务器
+                  {e('shellpilotFleetNoMatchingServers')}
                 </td>
               </tr>
               )}

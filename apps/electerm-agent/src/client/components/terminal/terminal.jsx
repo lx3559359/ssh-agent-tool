@@ -526,7 +526,7 @@ class Term extends Component {
   warnSftpFollowUnsupported = () => {
     message.warning(
       <span>
-        Fish shell/windows shell is not supported for SFTP follow SSH path feature. See: <ExternalLink to='https://github.com/lx3559359/ssh-agent-tool/blob/master/docs/USER_GUIDE_ZH.md'>ShellPilot 使用指南</ExternalLink>
+        {e('shellpilotSftpFollowUnsupported')} <ExternalLink to='https://github.com/lx3559359/ssh-agent-tool/blob/master/docs/USER_GUIDE_ZH.md'>{e('shellpilotUserGuide')}</ExternalLink>
       </span>
       , 7)
   }
@@ -2022,7 +2022,7 @@ class Term extends Component {
   batchInput = (cmd) => {
     return this.runSafetyCommand(cmd, {
       source: 'quick-command',
-      title: '批量终端命令',
+      title: e('shellpilotBatchTerminalCommand'),
       metadata: { batchCommand: true }
     })
   }

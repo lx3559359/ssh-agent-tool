@@ -36,6 +36,8 @@ import { refsStatic } from '../common/ref'
 import message from '../common/message'
 import './agent-task-runner.styl'
 
+const e = window.translate
+
 const finalStatuses = new Set([
   'completed',
   'failed',
@@ -44,25 +46,26 @@ const finalStatuses = new Set([
 ])
 
 const stepStatusMeta = {
-  pending: ['等待', 'default'],
-  running: ['执行中', 'processing'],
-  completed: ['成功', 'success'],
-  failed: ['失败', 'error'],
-  cancelled: ['已取消', 'default']
+  pending: ['shellpilotSafetyStepPending', 'default'],
+  running: ['shellpilotSafetyStepRunning', 'processing'],
+  completed: ['shellpilotSafetyStepSuccess', 'success'],
+  failed: ['shellpilotSafetyStepFailed', 'error'],
+  cancelled: ['shellpilotSafetyStepCancelled', 'default']
 }
 
-const taskStatusLabels = {
-  'awaiting-plan-confirmation': '等待确认',
-  'running-readonly': '只读诊断中',
-  completed: '诊断完成',
-  failed: '诊断失败',
-  cancelled: '已取消',
-  'partially-completed': '部分完成'
+const taskStatusLabelKeys = {
+  'awaiting-plan-confirmation': 'shellpilotAgentTaskAwaitingConfirmation',
+  'running-readonly': 'shellpilotAgentTaskRunningReadonly',
+  completed: 'shellpilotAgentTaskCompleted',
+  failed: 'shellpilotAgentTaskFailed',
+  cancelled: 'shellpilotSafetyStatusCancelled',
+  'partially-completed': 'shellpilotSafetyStatusPartiallyCompleted'
 }
 
-function displayError (error, fallback = '操作失败。') {
+function displayError (error, fallback = e('shellpilotOperationFailed')) {
   const text = String(error?.message || error || fallback).trim()
-  return /[\u3400-\u9fff]/.test(text) ? text : `${fallback}${text}`
+  const separator = /[:：]\s*$/.test(fallback) ? '' : ' '
+  return /[\u3400-\u9fff]/.test(text) ? text : `${fallback}${separator}${text}`
 }
 
 function eventTaskStatus (event, current) {
@@ -139,7 +142,7 @@ export default function AgentTaskRunner ({
         setPhase('plan')
       } catch (requestError) {
         if (!mountedRef.current || controller.signal.aborted || generationRequestRef.current !== generationToken) return
-        setError(displayError(requestError, 'AI 诊断计划生成失败：'))
+        setError(displayError(requestError, e('shellpilotAgentTaskPlanFailed')))
         setPhase('error')
       }
     }
@@ -193,7 +196,7 @@ export default function AgentTaskRunner ({
             return getCurrentEndpoint()
           }
           if (!terminal.pid || !terminal.isSsh?.()) {
-            throw new Error('当前 SSH 连接已断开，诊断任务已停止。')
+            throw new Error(e('shellpilotAgentTaskSshDisconnected'))
           }
           return terminal.getTerminalSafetyEndpoint()
         },
@@ -208,7 +211,7 @@ export default function AgentTaskRunner ({
       setPhase('finished')
     } catch (runError) {
       if (!mountedRef.current || activeRunRef.current !== runToken) return
-      setError(displayError(runError, '只读诊断执行失败：'))
+      setError(displayError(runError, e('shellpilotAgentTaskRunFailed')))
       setPhase('finished')
     }
   }
@@ -222,7 +225,7 @@ export default function AgentTaskRunner ({
       setTask(cancelled)
       setPhase('finished')
     } catch (cancelError) {
-      if (mountedRef.current) setError(displayError(cancelError, '取消任务失败：'))
+      if (mountedRef.current) setError(displayError(cancelError, e('shellpilotAgentTaskCancelFailed')))
     } finally {
       if (mountedRef.current) setCancelling(false)
     }
@@ -238,7 +241,7 @@ export default function AgentTaskRunner ({
     store?.handleOpenAIPanel?.()
     setTimeout(() => {
       if (!refsStatic.get('AIChat')?.setPrompt) {
-        message.warning('AI 助手尚未准备完成，请稍后重试。')
+        message.warning(e('shellpilotAgentTaskAssistantNotReady'))
         return
       }
       refsStatic.get('AIChat')?.setPrompt(prompt)
@@ -253,24 +256,24 @@ export default function AgentTaskRunner ({
         <Alert
           type='info'
           showIcon
-          message='只读诊断计划待确认'
-          description='确认前不会创建任务或执行远程命令。执行时仍会逐步复核命令和当前 SSH 端点。'
+          message={e('shellpilotAgentTaskPlanAwaiting')}
+          description={e('shellpilotAgentTaskPlanDescription')}
         />
         <div className='agent-task-summary'>{plan.summary}</div>
         <div className='agent-task-step-list'>
           {plan.steps.map((step, index) => (
             <section className='agent-task-step' key={step.id}>
-              <header><strong>{index + 1}. {step.title}</strong><Tag color='success'>只读</Tag></header>
+              <header><strong>{index + 1}. {step.title}</strong><Tag color='success'>{e('shellpilotSafetyAuditReadonly')}</Tag></header>
               <p>{step.purpose}</p>
               <pre>{step.command}</pre>
-              <small>超时上限：{step.timeoutMs} ms</small>
+              <small>{e('shellpilotAgentTaskTimeoutLimit')}：{step.timeoutMs} ms</small>
             </section>
           ))}
         </div>
         <div className='agent-task-signals'>
-          <strong>预期信号</strong>
+          <strong>{e('shellpilotAgentTaskExpectedSignals')}</strong>
           <ul>{plan.expectedSignals.map(item => <li key={item}>{item}</li>)}</ul>
-          <strong>停止条件</strong>
+          <strong>{e('shellpilotAgentTaskStopConditions')}</strong>
           <ul>{plan.stopConditions.map(item => <li key={item}>{item}</li>)}</ul>
         </div>
       </div>
@@ -279,30 +282,30 @@ export default function AgentTaskRunner ({
 
   function renderTask () {
     if (!task) {
-      return <Spin tip='正在创建并确认只读审计任务…'><div className='agent-task-loading-space' /></Spin>
+      return <Spin tip={e('shellpilotAgentTaskCreatingAudit')}><div className='agent-task-loading-space' /></Spin>
     }
     const finished = finalStatuses.has(task.status)
     return (
       <div className='agent-task-progress'>
         <div className='agent-task-progress-head'>
           <div>
-            <strong>{finished ? '诊断报告' : '实时进度'}</strong>
-            <span>{taskStatusLabels[task.status] || task.status}</span>
+            <strong>{finished ? e('shellpilotAgentTaskReport') : e('shellpilotAgentTaskLiveProgress')}</strong>
+            <span>{taskStatusLabelKeys[task.status] ? e(taskStatusLabelKeys[task.status]) : task.status}</span>
           </div>
           <Progress percent={progress} size='small' status={task.status === 'failed' ? 'exception' : undefined} />
         </div>
         {error || task.error ? <Alert type='error' showIcon message={error || task.error} /> : null}
         <div className='agent-task-step-list'>
           {(task.steps || []).map((step, index) => {
-            const meta = stepStatusMeta[step.status] || [step.status || '等待', 'default']
+            const meta = stepStatusMeta[step.status] || [step.status || 'shellpilotSafetyStepPending', 'default']
             const audit = step.audit?.at(-1)
             return (
               <section className={`agent-task-step ${step.status || 'pending'}`} key={step.id}>
-                <header><strong>{index + 1}. {step.title}</strong><Tag color={meta[1]}>{meta[0]}</Tag></header>
+                <header><strong>{index + 1}. {step.title}</strong><Tag color={meta[1]}>{meta[0].startsWith('shellpilot') ? e(meta[0]) : meta[0]}</Tag></header>
                 <p>{step.purpose}</p>
                 <pre>{step.command}</pre>
-                {audit ? <small>退出码：{Number.isFinite(audit.code) ? audit.code : '未返回'}</small> : null}
-                {step.output ? <div className='agent-task-output'><span>证据预览</span><pre>{step.output}</pre></div> : null}
+                {audit ? <small>{e('shellpilotExitCode')}：{Number.isFinite(audit.code) ? audit.code : e('shellpilotAgentTaskNoExitCode')}</small> : null}
+                {step.output ? <div className='agent-task-output'><span>{e('shellpilotAgentTaskEvidencePreview')}</span><pre>{step.output}</pre></div> : null}
                 {step.error ? <div className='agent-task-step-error'>{step.error}</div> : null}
               </section>
             )
@@ -311,13 +314,16 @@ export default function AgentTaskRunner ({
         {finished
           ? (
             <div className='agent-task-final'>
-              <strong>结论摘要</strong>
+              <strong>{e('shellpilotAgentTaskSummary')}</strong>
               <p>{task.summary || plan?.summary}</p>
-              <strong>计划停止条件</strong>
+              <strong>{e('shellpilotAgentTaskPlannedStopConditions')}</strong>
               <p>{(task.stopConditions || plan?.stopConditions || []).join('；')}</p>
-              <strong>停止条件命中</strong>
-              <p>{task.status === 'completed' ? '系统级停止条件未命中；计划中的语义条件未自动判定。' : '已因失败、超时、取消或端点变化停止后续步骤；计划中的语义条件未自动判定。'}</p>
-              <div>完整步骤证据和结果已形成审计记录，可在安全中心查看。</div>
+              <strong>{e('shellpilotAgentTaskStopConditionResult')}</strong>
+              <p>{task.status === 'completed'
+                ? e('shellpilotAgentTaskNoSystemStop')
+                : e('shellpilotAgentTaskStoppedEarly')}
+              </p>
+              <div>{e('shellpilotAgentTaskAuditRecorded')}</div>
             </div>
             )
           : null}
@@ -328,37 +334,37 @@ export default function AgentTaskRunner ({
   const footer = phase === 'plan'
     ? (
       <Space wrap>
-        <Tooltip title='放弃该计划，不创建审计任务'><Button onClick={handleClose}>取消计划</Button></Tooltip>
-        <Tooltip title='创建审计任务并按顺序执行计划中的只读命令'>
-          <Button type='primary' icon={<SafetyCertificateOutlined />} onClick={handleConfirm}>确认并执行</Button>
+        <Tooltip title={e('shellpilotAgentTaskCancelPlanHint')}><Button onClick={handleClose}>{e('shellpilotAgentTaskCancelPlan')}</Button></Tooltip>
+        <Tooltip title={e('shellpilotAgentTaskConfirmHint')}>
+          <Button type='primary' icon={<SafetyCertificateOutlined />} onClick={handleConfirm}>{e('shellpilotAgentTaskConfirmRun')}</Button>
         </Tooltip>
       </Space>
       )
     : phase === 'running'
       ? (
         <Space wrap>
-          <Tooltip title='关闭窗口后任务仍会继续，可在安全中心取消'><Button onClick={handleClose}>关闭窗口</Button></Tooltip>
-          <Tooltip title='终止当前 SSH 命令并取消剩余步骤'>
-            <Button danger icon={<StopOutlined />} loading={cancelling} disabled={!task?.id || !agentTaskRegistry.has(task.id)} onClick={handleCancelTask}>取消任务</Button>
+          <Tooltip title={e('shellpilotAgentTaskCloseHint')}><Button onClick={handleClose}>{e('shellpilotAgentTaskCloseWindow')}</Button></Tooltip>
+          <Tooltip title={e('shellpilotAgentTaskCancelHint')}>
+            <Button danger icon={<StopOutlined />} loading={cancelling} disabled={!task?.id || !agentTaskRegistry.has(task.id)} onClick={handleCancelTask}>{e('shellpilotSafetyCancelTask')}</Button>
           </Tooltip>
         </Space>
         )
       : phase === 'finished'
         ? (
           <Space wrap>
-            <Button onClick={handleClose}>关闭</Button>
-            <Tooltip title='仅填入脱敏诊断结果，不会自动发送'>
-              <Button icon={<SendOutlined />} disabled={!task} onClick={handleSendToAi}>发送到 AI 对话</Button>
+            <Button onClick={handleClose}>{e('close')}</Button>
+            <Tooltip title={e('shellpilotAgentTaskSendHint')}>
+              <Button icon={<SendOutlined />} disabled={!task} onClick={handleSendToAi}>{e('shellpilotAgentTaskSendToAi')}</Button>
             </Tooltip>
           </Space>
           )
         : phase === 'generating'
-          ? <Tooltip title='停止当前 AI 流式请求'><Button danger icon={<StopOutlined />} onClick={handleClose}>取消生成</Button></Tooltip>
-          : <Button onClick={handleClose}>关闭</Button>
+          ? <Tooltip title={e('shellpilotAgentTaskCancelGenerationHint')}><Button danger icon={<StopOutlined />} onClick={handleClose}>{e('shellpilotAgentTaskCancelGeneration')}</Button></Tooltip>
+          : <Button onClick={handleClose}>{e('close')}</Button>
 
   return (
     <Modal
-      title={<Space><RobotOutlined />AI 只读诊断 · {getDiagnosticTargetName(target)}</Space>}
+      title={<Space><RobotOutlined />{e('shellpilotAgentTaskReadonlyDiagnosis')} · {getDiagnosticTargetName(target)}</Space>}
       open={open}
       onCancel={handleClose}
       footer={footer}
@@ -370,9 +376,9 @@ export default function AgentTaskRunner ({
     >
       <div className='agent-task-runner-body'>
         {phase === 'generating'
-          ? <Spin tip='正在生成仅限当前目标的只读诊断计划…'><div className='agent-task-loading-space' /></Spin>
+          ? <Spin tip={e('shellpilotAgentTaskGeneratingPlan')}><div className='agent-task-loading-space' /></Spin>
           : null}
-        {phase === 'error' ? <Alert type='error' showIcon message={error || 'AI 诊断计划生成失败。'} /> : null}
+        {phase === 'error' ? <Alert type='error' showIcon message={error || e('shellpilotAgentTaskPlanFailed')} /> : null}
         {phase === 'plan' ? renderPlan() : null}
         {['running', 'finished'].includes(phase) ? renderTask() : null}
       </div>

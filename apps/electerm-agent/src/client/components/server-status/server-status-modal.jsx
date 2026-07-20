@@ -47,20 +47,23 @@ import {
   recoverOrphanedAgentTasks
 } from '../ai/agent-task-registry.js'
 import * as transactionStore from '../../common/safety-transactions/transaction-store.js'
+import { formatShellPilotTranslation } from '../../common/shellpilot-i18n-overrides.js'
 import './server-status-modal.styl'
 
 const customRulesKey = 'shellpilot-server-platform-rules'
+const e = window.translate
+const tf = (key, replacements) => formatShellPilotTranslation(e, key, replacements)
 
 const statusMeta = {
-  healthy: ['正常', 'success'],
-  warning: ['警告', 'warning'],
-  critical: ['异常', 'error'],
-  unknown: ['未知', 'default'],
-  success: ['成功', 'success'],
-  permission: ['权限受限', 'warning'],
-  unsupported: ['不支持', 'default'],
-  timeout: ['超时', 'error'],
-  error: ['失败', 'error']
+  healthy: ['shellpilotServerStatusHealthy', 'success'],
+  warning: ['shellpilotServerStatusWarning', 'warning'],
+  critical: ['shellpilotServerStatusAbnormal', 'error'],
+  unknown: ['shellpilotServerStatusUnknown', 'default'],
+  success: ['shellpilotServerStatusSuccess', 'success'],
+  permission: ['shellpilotServerStatusPermissionLimited', 'warning'],
+  unsupported: ['shellpilotServerStatusUnsupported', 'default'],
+  timeout: ['shellpilotServerStatusTimeout', 'error'],
+  error: ['shellpilotServerStatusFailed', 'error']
 }
 
 function endpointUser (tab = {}) {
@@ -129,18 +132,18 @@ function assembleSnapshot (tab, results, customRules) {
 }
 
 function statusTag (status) {
-  const [label, color] = statusMeta[status] || [status || '未知', 'default']
-  return <Tag color={color}>{label}</Tag>
+  const [labelKey, color] = statusMeta[status] || ['shellpilotServerStatusUnknown', 'default']
+  return <Tag color={color}>{e(labelKey)}</Tag>
 }
 
 function formatPercent (value) {
   const number = Number(value)
-  return Number.isFinite(number) ? `${Math.round(number)}%` : '未知'
+  return Number.isFinite(number) ? `${Math.round(number)}%` : e('shellpilotServerStatusUnknown')
 }
 
 function formatBytes (value) {
   const number = Number(value)
-  if (!Number.isFinite(number)) return '未知'
+  if (!Number.isFinite(number)) return e('shellpilotServerStatusUnknown')
   const units = ['B', 'KB', 'MB', 'GB', 'TB']
   let result = number
   let index = 0
@@ -153,10 +156,12 @@ function formatBytes (value) {
 
 function formatUptime (seconds) {
   const value = Number(seconds)
-  if (!Number.isFinite(value)) return '未知'
+  if (!Number.isFinite(value)) return e('shellpilotServerStatusUnknown')
   const days = Math.floor(value / 86400)
   const hours = Math.floor((value % 86400) / 3600)
-  return days ? `${days} 天 ${hours} 小时` : `${hours} 小时`
+  return days
+    ? tf('shellpilotServerStatusUptimeDaysHours', { days, hours })
+    : tf('shellpilotServerStatusUptimeHours', { hours })
 }
 
 function emptyRuleDraft () {
@@ -197,14 +202,14 @@ export default function ServerStatusModal ({ open, onClose, store, tab = {} }) {
 
   function getCurrentDiagnosticEndpoint () {
     const terminal = resolveTerminal(liveTabRef.current)
-    if (!terminal) throw new Error('当前 SSH 连接已断开，诊断任务已停止。')
+    if (!terminal) throw new Error(e('shellpilotServerStatusDiagnosisDisconnected'))
     return terminal.getTerminalSafetyEndpoint()
   }
 
   function openDiagnostic (type, data) {
     const terminal = resolveTerminal(tab)
     if (!snapshot || !terminal) {
-      message.warning('当前 SSH 会话已断开，无法启动 AI 诊断。')
+      message.warning(e('shellpilotServerStatusAiDiagnosisDisconnected'))
       return
     }
     setDiagnosticTarget({
@@ -219,7 +224,7 @@ export default function ServerStatusModal ({ open, onClose, store, tab = {} }) {
   async function scanCurrentServer () {
     const terminal = resolveTerminal(tab)
     if (!terminal) {
-      message.warning('请先连接 SSH 服务器后再查看状态。')
+      message.warning(e('shellpilotServerStatusConnectFirst'))
       return
     }
     const scanId = ++scanRef.current
@@ -277,7 +282,7 @@ export default function ServerStatusModal ({ open, onClose, store, tab = {} }) {
     setTimeout(() => {
       const aiChat = refsStatic.get('AIChat')
       if (!aiChat?.setPrompt) {
-        message.warning('AI 助手尚未准备完成，请稍后重试。')
+        message.warning(e('shellpilotAgentTaskAssistantNotReady'))
         return
       }
       aiChat.setPrompt(prompt)
@@ -303,9 +308,9 @@ export default function ServerStatusModal ({ open, onClose, store, tab = {} }) {
       ls.safeSetItemJSON(customRulesKey, next)
       setCustomRules(next)
       setRuleDraft(emptyRuleDraft())
-      message.success('识别规则已保存，刷新检测后生效。')
+      message.success(e('shellpilotServerStatusRuleSaved'))
     } catch (error) {
-      message.error('规则无效：名称至少 2 个字符，并填写具体的服务前缀、服务名、安装路径或 Compose 项目。')
+      message.error(e('shellpilotServerStatusRuleInvalid'))
     }
   }
 
@@ -318,7 +323,7 @@ export default function ServerStatusModal ({ open, onClose, store, tab = {} }) {
   function renderRulesModal () {
     return (
       <Modal
-        title='平台识别规则'
+        title={e('shellpilotServerStatusPlatformRules')}
         open={showRules}
         onCancel={() => setShowRules(false)}
         footer={null}
@@ -326,15 +331,32 @@ export default function ServerStatusModal ({ open, onClose, store, tab = {} }) {
         destroyOnClose={false}
       >
         <div className='server-status-rule-help'>
-          用于识别内部或小众平台。匹配项越具体越可靠；不支持通配符和正则表达式，避免把系统服务错误归组。
+          {e('shellpilotServerStatusPlatformRulesHelp')}
         </div>
         <div className='server-status-rule-form'>
-          <label><span>平台名称</span><Input value={ruleDraft.name} onChange={event => updateRuleDraft('name', event.target.value)} placeholder='例如：公司 ERP 平台' /></label>
-          <label><span>服务名前缀</span><Input value={ruleDraft.servicePrefixes} onChange={event => updateRuleDraft('servicePrefixes', event.target.value)} placeholder='例如：erp-' /></label>
-          <label><span>完整服务名</span><Input value={ruleDraft.serviceNames} onChange={event => updateRuleDraft('serviceNames', event.target.value)} placeholder='例如：erp-api.service, erp-worker.service' /></label>
-          <label><span>安装路径</span><Input value={ruleDraft.pathPrefixes} onChange={event => updateRuleDraft('pathPrefixes', event.target.value)} placeholder='例如：/opt/company/erp' /></label>
-          <label><span>Compose 项目</span><Input value={ruleDraft.composeProjects} onChange={event => updateRuleDraft('composeProjects', event.target.value)} placeholder='例如：erp-prod' /></label>
-          <Button type='primary' icon={<PlusOutlined />} onClick={handleAddRule}>新增规则</Button>
+          <label>
+            <span>{e('shellpilotServerStatusPlatformName')}</span>
+            <Input value={ruleDraft.name} onChange={event => updateRuleDraft('name', event.target.value)} placeholder={e('shellpilotServerStatusPlatformNamePlaceholder')} />
+          </label>
+          <label>
+            <span>{e('shellpilotServerStatusServicePrefix')}</span>
+            <Input value={ruleDraft.servicePrefixes} onChange={event => updateRuleDraft('servicePrefixes', event.target.value)} placeholder={e('shellpilotServerStatusServicePrefixPlaceholder')} />
+          </label>
+          <label>
+            <span>{e('shellpilotServerStatusFullServiceName')}</span>
+            <Input value={ruleDraft.serviceNames} onChange={event => updateRuleDraft('serviceNames', event.target.value)} placeholder={e('shellpilotServerStatusFullServiceNamePlaceholder')} />
+          </label>
+          <label>
+            <span>{e('shellpilotServerStatusInstallPath')}</span>
+            <Input value={ruleDraft.pathPrefixes} onChange={event => updateRuleDraft('pathPrefixes', event.target.value)} placeholder={e('shellpilotServerStatusInstallPathPlaceholder')} />
+          </label>
+          <label>
+            <span>{e('shellpilotServerStatusComposeProject')}</span>
+            <Input value={ruleDraft.composeProjects} onChange={event => updateRuleDraft('composeProjects', event.target.value)} placeholder={e('shellpilotServerStatusComposeProjectPlaceholder')} />
+          </label>
+          <Button type='primary' icon={<PlusOutlined />} onClick={handleAddRule}>
+            {e('shellpilotServerStatusAddRule')}
+          </Button>
         </div>
         <div className='server-status-rule-list'>
           {customRules.length
@@ -351,12 +373,12 @@ export default function ServerStatusModal ({ open, onClose, store, tab = {} }) {
                     ].join('、')}
                   </span>
                 </div>
-                <Popconfirm title='删除这条识别规则？' onConfirm={() => handleDeleteRule(rule.id)}>
-                  <Button danger type='text' icon={<DeleteOutlined />} title='删除规则' />
+                <Popconfirm title={e('shellpilotServerStatusDeleteRuleConfirm')} onConfirm={() => handleDeleteRule(rule.id)}>
+                  <Button danger type='text' icon={<DeleteOutlined />} title={e('shellpilotServerStatusDeleteRule')} />
                 </Popconfirm>
               </div>
             ))
-            : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description='尚未添加自定义规则' />}
+            : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={e('shellpilotServerStatusNoCustomRules')} />}
         </div>
       </Modal>
     )
@@ -370,12 +392,15 @@ export default function ServerStatusModal ({ open, onClose, store, tab = {} }) {
       ? Number(memory.availableBytes || 0) / Number(memory.totalBytes) * 100
       : null
     const items = [
-      ['整体状态', statusTag(snapshot.overallStatus)],
-      ['运行时间', formatUptime(snapshot.system?.uptimeSeconds)],
-      ['系统负载', summary.normalizedLoad ?? '未知'],
-      ['可用内存', memoryAvailable === null ? '未知' : formatPercent(memoryAvailable)],
-      ['磁盘最高', formatPercent(maxDisk)],
-      ['服务', `${summary.runningServices || 0} 正常 / ${summary.failedServices || 0} 异常`]
+      [e('shellpilotServerStatusOverall'), statusTag(snapshot.overallStatus)],
+      [e('shellpilotServerStatusUptime'), formatUptime(snapshot.system?.uptimeSeconds)],
+      [e('shellpilotServerStatusSystemLoad'), summary.normalizedLoad ?? e('shellpilotServerStatusUnknown')],
+      [e('shellpilotServerStatusAvailableMemory'), memoryAvailable === null ? e('shellpilotServerStatusUnknown') : formatPercent(memoryAvailable)],
+      [e('shellpilotServerStatusHighestDisk'), formatPercent(maxDisk)],
+      [e('shellpilotServerStatusServices'), tf('shellpilotServerStatusServiceSummary', {
+        running: summary.runningServices || 0,
+        failed: summary.failedServices || 0
+      })]
     ]
     return (
       <div className='server-status-summary'>
@@ -390,7 +415,9 @@ export default function ServerStatusModal ({ open, onClose, store, tab = {} }) {
 
   function renderPlatformGroups (compact = false) {
     const platforms = snapshot?.platforms || []
-    if (!platforms.length) return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description='未识别到平台服务组' />
+    if (!platforms.length) {
+      return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={e('shellpilotServerStatusNoPlatformGroups')} />
+    }
     return (
       <div className='server-status-platform-list'>
         {platforms.map(platform => (
@@ -398,28 +425,49 @@ export default function ServerStatusModal ({ open, onClose, store, tab = {} }) {
             <summary>
               <strong>{platform.name}</strong>
               <span className='server-status-platform-tags'>
-                <Tag>{platform.confidence === 'high' ? '高置信度' : platform.confidence === 'medium' ? '中置信度' : '低置信度'}</Tag>
-                <Tag>{platform.services?.length || 0} 个服务</Tag>
-                {platform.containers?.length ? <Tag>{platform.containers.length} 个容器</Tag> : null}
+                <Tag>{e(platform.confidence === 'high'
+                  ? 'shellpilotServerStatusHighConfidence'
+                  : platform.confidence === 'medium'
+                    ? 'shellpilotServerStatusMediumConfidence'
+                    : 'shellpilotServerStatusLowConfidence')}
+                </Tag>
+                <Tag>{tf('shellpilotServerStatusServiceCount', { count: platform.services?.length || 0 })}</Tag>
+                {platform.containers?.length
+                  ? <Tag>{tf('shellpilotServerStatusContainerCount', { count: platform.containers.length })}</Tag>
+                  : null}
                 {isDiagnosticTargetAbnormal(platform)
                   ? (
-                    <Tooltip title='生成该异常平台的只读 AI 诊断计划'>
-                      <Button size='small' disabled={loading} icon={<RobotOutlined />} onClick={event => { event.preventDefault(); event.stopPropagation(); openDiagnostic('platform', platform) }}>AI 诊断</Button>
+                    <Tooltip title={e('shellpilotServerStatusDiagnosePlatformHint')}>
+                      <Button size='small' disabled={loading} icon={<RobotOutlined />} onClick={event => { event.preventDefault(); event.stopPropagation(); openDiagnostic('platform', platform) }}>
+                        {e('shellpilotServerStatusAiDiagnosis')}
+                      </Button>
                     </Tooltip>
                     )
                   : null}
               </span>
             </summary>
             <div className='server-status-evidence'>
-              识别依据：{(platform.evidence || []).map(item => item.value || item.type).join('、') || '服务清单'}
+              {e('shellpilotServerStatusRecognitionBasis')} {(platform.evidence || [])
+                .map(item => item.value || item.type)
+                .join(`${e('shellpilotListSeparator')}${
+                  (window.store?.previewLanguage || window.store?.config?.language) === 'en_us'
+                    ? ' '
+                    : ''
+                }`) || e('shellpilotServerStatusServiceList')}
             </div>
             {(platform.services || []).slice(0, compact ? 8 : 80).map(service => (
               <div className={`server-status-row ${isDiagnosticTargetAbnormal(service) ? 'has-diagnostic' : ''}`} key={service.name}>
                 <span title={service.description}>{service.name}</span>
-                <span>{service.activeState || service.subState || '未知'}</span>
+                <span>{service.activeState || service.subState || e('shellpilotServerStatusUnknown')}</span>
                 <span>{service.workingDirectory || service.fragmentPath || ''}</span>
                 {isDiagnosticTargetAbnormal(service)
-                  ? <Tooltip title='生成该异常服务的只读 AI 诊断计划'><Button size='small' type='text' disabled={loading} icon={<RobotOutlined />} onClick={() => openDiagnostic('service', service)}>AI 诊断</Button></Tooltip>
+                  ? (
+                    <Tooltip title={e('shellpilotServerStatusDiagnoseServiceHint')}>
+                      <Button size='small' type='text' disabled={loading} icon={<RobotOutlined />} onClick={() => openDiagnostic('service', service)}>
+                        {e('shellpilotServerStatusAiDiagnosis')}
+                      </Button>
+                    </Tooltip>
+                    )
                   : null}
               </div>
             ))}
@@ -427,7 +475,13 @@ export default function ServerStatusModal ({ open, onClose, store, tab = {} }) {
               <div className={`server-status-row ${isDiagnosticTargetAbnormal(container) ? 'has-diagnostic' : ''}`} key={`${container.engine}-${container.name}`}>
                 <span>{container.name}</span><span>{container.status}</span><span>{container.ports}</span>
                 {isDiagnosticTargetAbnormal(container)
-                  ? <Tooltip title='生成该异常容器的只读 AI 诊断计划'><Button size='small' type='text' disabled={loading} icon={<RobotOutlined />} onClick={() => openDiagnostic('container', container)}>AI 诊断</Button></Tooltip>
+                  ? (
+                    <Tooltip title={e('shellpilotServerStatusDiagnoseContainerHint')}>
+                      <Button size='small' type='text' disabled={loading} icon={<RobotOutlined />} onClick={() => openDiagnostic('container', container)}>
+                        {e('shellpilotServerStatusAiDiagnosis')}
+                      </Button>
+                    </Tooltip>
+                    )
                   : null}
               </div>
             ))}
@@ -439,12 +493,20 @@ export default function ServerStatusModal ({ open, onClose, store, tab = {} }) {
 
   function renderAlerts () {
     const alerts = snapshot?.alerts || []
-    if (!alerts.length) return <div className='server-status-empty-ok'>当前检测未发现明确异常。</div>
+    if (!alerts.length) {
+      return <div className='server-status-empty-ok'>{e('shellpilotServerStatusNoClearAbnormality')}</div>
+    }
     return alerts.map((alert, index) => (
       <div className={`server-status-alert ${alert.status || 'warning'}`} key={`${alert.code}-${index}`}>
         {statusTag(alert.status)}<span>{alert.message || alert.target || alert.code}</span>
         {isDiagnosticTargetAbnormal({ status: 'warning', ...alert })
-          ? <Tooltip title='生成该告警的只读 AI 诊断计划'><Button size='small' type='text' disabled={loading} icon={<RobotOutlined />} onClick={() => openDiagnostic('alert', alert)}>AI 诊断</Button></Tooltip>
+          ? (
+            <Tooltip title={e('shellpilotServerStatusDiagnoseAlertHint')}>
+              <Button size='small' type='text' disabled={loading} icon={<RobotOutlined />} onClick={() => openDiagnostic('alert', alert)}>
+                {e('shellpilotServerStatusAiDiagnosis')}
+              </Button>
+            </Tooltip>
+            )
           : null}
       </div>
     ))
@@ -455,24 +517,24 @@ export default function ServerStatusModal ({ open, onClose, store, tab = {} }) {
     return (
       <div className='server-status-overview'>
         <section className='server-status-section'>
-          <header>自动识别的平台与服务组</header>
+          <header>{e('shellpilotServerStatusDetectedPlatforms')}</header>
           <div className='server-status-section-scroll'>{renderPlatformGroups(true)}</div>
         </section>
         <div className='server-status-overview-side'>
           <section className='server-status-section'>
-            <header>网络与防火墙</header>
+            <header>{e('shellpilotServerStatusNetworkFirewall')}</header>
             <div className='server-status-compact-list'>
               {(network.interfaces || []).slice(0, 6).map(item => (
                 <div className='server-status-row' key={item.name}>
-                  <span>{item.name}</span><span>{(item.addresses || []).join(', ') || '无地址'}</span><span>{item.state}</span>
+                  <span>{item.name}</span><span>{(item.addresses || []).join(', ') || e('shellpilotServerStatusNoAddress')}</span><span>{item.state}</span>
                 </div>
               ))}
-              <div className='server-status-row'><span>默认路由</span><span>{network.defaultRoute?.gateway || '未检测到'}</span><span>{network.defaultRoute?.interface || ''}</span></div>
-              <div className='server-status-row'><span>防火墙</span><span>{snapshot.firewall?.provider || '未识别'}</span><span>{snapshot.firewall?.enabled ? '已启用' : '未启用'}</span></div>
+              <div className='server-status-row'><span>{e('shellpilotServerStatusDefaultRoute')}</span><span>{network.defaultRoute?.gateway || e('shellpilotServerStatusNotDetected')}</span><span>{network.defaultRoute?.interface || ''}</span></div>
+              <div className='server-status-row'><span>{e('shellpilotServerStatusFirewall')}</span><span>{snapshot.firewall?.provider || e('shellpilotServerStatusUnrecognized')}</span><span>{snapshot.firewall?.enabled ? e('shellpilotServerStatusEnabled') : e('shellpilotServerStatusDisabled')}</span></div>
             </div>
           </section>
           <section className='server-status-section'>
-            <header>需要关注</header>
+            <header>{e('shellpilotServerStatusNeedsAttention')}</header>
             <div className='server-status-section-scroll'>{renderAlerts()}</div>
           </section>
         </div>
@@ -486,16 +548,32 @@ export default function ServerStatusModal ({ open, onClose, store, tab = {} }) {
     return (
       <div className='server-status-two-columns'>
         <section className='server-status-section'>
-          <header>内存与负载</header>
+          <header>{e('shellpilotServerStatusMemoryLoad')}</header>
           <div className='server-status-resource-block'>
-            <div>内存：{formatBytes(memory.availableBytes)} 可用 / {formatBytes(memory.totalBytes)}</div>
+            <div>
+              {tf('shellpilotServerStatusMemoryAvailable', {
+                available: formatBytes(memory.availableBytes),
+                total: formatBytes(memory.totalBytes)
+              })}
+            </div>
             <Progress percent={memory.totalBytes ? Math.round((1 - memory.availableBytes / memory.totalBytes) * 100) : 0} size='small' />
-            <div>Swap：{formatBytes((resources.swap?.totalBytes || 0) - (resources.swap?.freeBytes || 0))} 已用 / {formatBytes(resources.swap?.totalBytes)}</div>
-            <div>负载：{resources.load?.one ?? '-'} / {resources.load?.five ?? '-'} / {resources.load?.fifteen ?? '-'}</div>
+            <div>
+              {tf('shellpilotServerStatusSwapUsed', {
+                used: formatBytes((resources.swap?.totalBytes || 0) - (resources.swap?.freeBytes || 0)),
+                total: formatBytes(resources.swap?.totalBytes)
+              })}
+            </div>
+            <div>
+              {tf('shellpilotServerStatusLoadValues', {
+                one: resources.load?.one ?? '-',
+                five: resources.load?.five ?? '-',
+                fifteen: resources.load?.fifteen ?? '-'
+              })}
+            </div>
           </div>
         </section>
         <section className='server-status-section'>
-          <header>磁盘与 inode</header>
+          <header>{e('shellpilotServerStatusDiskInode')}</header>
           <div className='server-status-section-scroll'>
             {(resources.filesystems || []).map(item => (
               <div className='server-status-row' key={`${item.filesystem}-${item.mount}`}>
@@ -505,11 +583,18 @@ export default function ServerStatusModal ({ open, onClose, store, tab = {} }) {
           </div>
         </section>
         <section className='server-status-section server-status-span-two'>
-          <header>资源占用较高的进程</header>
+          <header>{e('shellpilotServerStatusHighResourceProcesses')}</header>
           <div className='server-status-section-scroll'>
             {(resources.processes || []).map(item => (
               <div className='server-status-row server-status-process-row' key={`${item.pid}-${item.command}`}>
-                <span>{item.command}</span><span>PID {item.pid}</span><span>CPU {item.cpuPercent}% · 内存 {item.memoryPercent}%</span>
+                <span>{item.command}</span>
+                <span>PID {item.pid}</span>
+                <span>
+                  {tf('shellpilotServerStatusProcessUsage', {
+                    cpu: item.cpuPercent,
+                    memory: item.memoryPercent
+                  })}
+                </span>
               </div>
             ))}
           </div>
@@ -523,25 +608,25 @@ export default function ServerStatusModal ({ open, onClose, store, tab = {} }) {
     return (
       <div className='server-status-two-columns'>
         <section className='server-status-section'>
-          <header>网卡与 IP</header>
+          <header>{e('shellpilotServerStatusInterfacesIp')}</header>
           <div className='server-status-section-scroll'>
             {(network.interfaces || []).map(item => (
-              <div className='server-status-row' key={item.name}><span>{item.name}</span><span>{(item.addresses || []).join(', ') || '无地址'}</span><span>{item.state}</span></div>
+              <div className='server-status-row' key={item.name}><span>{item.name}</span><span>{(item.addresses || []).join(', ') || e('shellpilotServerStatusNoAddress')}</span><span>{item.state}</span></div>
             ))}
           </div>
         </section>
         <section className='server-status-section'>
-          <header>路由与 DNS</header>
+          <header>{e('shellpilotServerStatusRoutesDns')}</header>
           <div className='server-status-compact-list'>
-            <div className='server-status-row'><span>网关</span><span>{network.defaultRoute?.gateway || '未检测到'}</span><span>{network.defaultRoute?.interface || ''}</span></div>
-            <div className='server-status-row'><span>DNS</span><span>{(network.dnsServers || []).join(', ') || '未检测到'}</span><span /></div>
+            <div className='server-status-row'><span>{e('shellpilotServerStatusGateway')}</span><span>{network.defaultRoute?.gateway || e('shellpilotServerStatusNotDetected')}</span><span>{network.defaultRoute?.interface || ''}</span></div>
+            <div className='server-status-row'><span>DNS</span><span>{(network.dnsServers || []).join(', ') || e('shellpilotServerStatusNotDetected')}</span><span /></div>
           </div>
         </section>
         <section className='server-status-section server-status-span-two'>
-          <header>监听端口与进程</header>
+          <header>{e('shellpilotServerStatusListeningPorts')}</header>
           <div className='server-status-section-scroll'>
             {(network.listeningPorts || []).map((item, index) => (
-              <div className='server-status-row' key={`${item.protocol}-${item.port}-${index}`}><span>{item.protocol.toUpperCase()} {item.address}:{item.port}</span><span>{item.process || '未知进程'}</span><span>{item.pid ? `PID ${item.pid}` : ''}</span></div>
+              <div className='server-status-row' key={`${item.protocol}-${item.port}-${index}`}><span>{item.protocol.toUpperCase()} {item.address}:{item.port}</span><span>{item.process || e('shellpilotServerStatusUnknownProcess')}</span><span>{item.pid ? `PID ${item.pid}` : ''}</span></div>
             ))}
           </div>
         </section>
@@ -555,24 +640,24 @@ export default function ServerStatusModal ({ open, onClose, store, tab = {} }) {
     return (
       <div className='server-status-two-columns'>
         <section className='server-status-section'>
-          <header>防火墙</header>
+          <header>{e('shellpilotServerStatusFirewall')}</header>
           <div className='server-status-resource-block'>
-            <div>类型：{firewall.provider || '未识别'}</div>
-            <div>状态：{firewall.enabled ? '已启用' : '未启用或权限不足'}</div>
-            <div>规则数量：{firewall.ruleCount ?? '未知'}</div>
+            <div>{tf('shellpilotServerStatusFirewallType', { value: firewall.provider || e('shellpilotServerStatusUnrecognized') })}</div>
+            <div>{tf('shellpilotServerStatusFirewallState', { value: firewall.enabled ? e('shellpilotServerStatusEnabled') : e('shellpilotServerStatusDisabledOrPermission') })}</div>
+            <div>{tf('shellpilotServerStatusFirewallRuleCount', { count: firewall.ruleCount ?? e('shellpilotServerStatusUnknown') })}</div>
           </div>
         </section>
         <section className='server-status-section'>
-          <header>安全模块</header>
+          <header>{e('shellpilotServerStatusSecurityModules')}</header>
           <div className='server-status-resource-block'>
-            <div>SELinux：{security.selinux || firewall.selinux || '未安装'}</div>
-            <div>AppArmor：{security.appArmor || '未安装或权限不足'}</div>
-            <div>当前登录：{security.loggedInUsers?.length || 0} 条会话</div>
+            <div>{tf('shellpilotServerStatusSelinux', { value: security.selinux || firewall.selinux || e('shellpilotServerStatusNotInstalled') })}</div>
+            <div>{tf('shellpilotServerStatusAppArmor', { value: security.appArmor || e('shellpilotServerStatusNotInstalledOrPermission') })}</div>
+            <div>{tf('shellpilotServerStatusCurrentSessions', { count: security.loggedInUsers?.length || 0 })}</div>
           </div>
         </section>
         <section className='server-status-section server-status-span-two'>
-          <header>近期失败登录</header>
-          <pre className='server-status-pre'>{(security.failedLogins || []).join('\n') || '未检测到，或当前账号无读取权限。'}</pre>
+          <header>{e('shellpilotServerStatusRecentFailedLogins')}</header>
+          <pre className='server-status-pre'>{(security.failedLogins || []).join('\n') || e('shellpilotServerStatusNoFailedLogins')}</pre>
         </section>
       </div>
     )
@@ -580,16 +665,22 @@ export default function ServerStatusModal ({ open, onClose, store, tab = {} }) {
 
   function renderContainers () {
     const containers = snapshot?.containers || []
-    if (!containers.length) return <Empty description='未安装容器引擎，或当前账号无访问权限' />
+    if (!containers.length) return <Empty description={e('shellpilotServerStatusNoContainerAccess')} />
     return (
       <section className='server-status-section server-status-full-section'>
-        <header>Docker / Podman 容器</header>
+        <header>{e('shellpilotServerStatusDockerPodmanContainers')}</header>
         <div className='server-status-section-scroll'>
           {containers.map(item => (
             <div className={`server-status-row ${isDiagnosticTargetAbnormal(item) ? 'has-diagnostic' : ''}`} key={`${item.engine}-${item.name}`}>
               <span>{item.name}</span><span>{item.status}</span><span>{item.composeProject || item.image}</span>
               {isDiagnosticTargetAbnormal(item)
-                ? <Tooltip title='生成该异常容器的只读 AI 诊断计划'><Button size='small' type='text' disabled={loading} icon={<RobotOutlined />} onClick={() => openDiagnostic('container', item)}>AI 诊断</Button></Tooltip>
+                ? (
+                  <Tooltip title={e('shellpilotServerStatusDiagnoseContainerHint')}>
+                    <Button size='small' type='text' disabled={loading} icon={<RobotOutlined />} onClick={() => openDiagnostic('container', item)}>
+                      {e('shellpilotServerStatusAiDiagnosis')}
+                    </Button>
+                  </Tooltip>
+                  )
                 : null}
             </div>
           ))}
@@ -605,7 +696,7 @@ export default function ServerStatusModal ({ open, onClose, store, tab = {} }) {
           <details className='server-status-raw-probe' key={probe.id}>
             <summary><strong>{probe.label || probe.id}</strong>{statusTag(probe.status)}<span>{probe.durationMs} ms</span></summary>
             {probe.message ? <div className='server-status-probe-message'>{probe.message}</div> : null}
-            <pre className='server-status-pre'>{probe.rawOutput || probe.stderr || '无输出'}</pre>
+            <pre className='server-status-pre'>{probe.rawOutput || probe.stderr || e('shellpilotServerStatusNoOutput')}</pre>
           </details>
         ))}
       </div>
@@ -614,13 +705,13 @@ export default function ServerStatusModal ({ open, onClose, store, tab = {} }) {
 
   const tabItems = snapshot
     ? [
-        { key: 'overview', label: '总览', children: renderOverview() },
-        { key: 'platforms', label: '平台与服务', children: renderPlatformGroups() },
-        { key: 'resources', label: '资源', children: renderResources() },
-        { key: 'network', label: '网络', children: renderNetwork() },
-        { key: 'security', label: '防火墙与安全', children: renderSecurity() },
-        { key: 'containers', label: '容器', children: renderContainers() },
-        { key: 'raw', label: '原始结果', children: renderRawResults() }
+        { key: 'overview', label: e('shellpilotServerStatusOverview'), children: renderOverview() },
+        { key: 'platforms', label: e('shellpilotServerStatusPlatformsServices'), children: renderPlatformGroups() },
+        { key: 'resources', label: e('shellpilotServerStatusResources'), children: renderResources() },
+        { key: 'network', label: e('shellpilotServerStatusNetwork'), children: renderNetwork() },
+        { key: 'security', label: e('shellpilotServerStatusFirewallSecurity'), children: renderSecurity() },
+        { key: 'containers', label: e('shellpilotServerStatusContainers'), children: renderContainers() },
+        { key: 'raw', label: e('shellpilotServerStatusRawResults'), children: renderRawResults() }
       ]
     : []
 
@@ -632,7 +723,7 @@ export default function ServerStatusModal ({ open, onClose, store, tab = {} }) {
   return (
     <>
       <Modal
-        title={<Space><DashboardOutlined />服务器状态中心</Space>}
+        title={<Space><DashboardOutlined />{e('shellpilotServerStatusCenter')}</Space>}
         open={open}
         onCancel={onClose}
         footer={null}
@@ -642,23 +733,25 @@ export default function ServerStatusModal ({ open, onClose, store, tab = {} }) {
       >
         <div className='server-status-toolbar'>
           <div className='server-status-endpoint'>
-            {endpointUser(tab) ? `${endpointUser(tab)}@` : ''}{tab.host || '未连接'}:{tab.port || 22}
+            {endpointUser(tab) ? `${endpointUser(tab)}@` : ''}{tab.host || e('shellpilotServerStatusNotConnected')}:{tab.port || 22}
             {snapshot?.system?.hostname ? <span> · {snapshot.system.hostname}</span> : null}
           </div>
           <Space wrap>
-            <Tooltip title='复制 Markdown 摘要'><Button icon={<CopyOutlined />} disabled={!snapshot} onClick={handleCopy}>复制结果</Button></Tooltip>
-            <Button icon={<SettingOutlined />} onClick={() => setShowRules(true)}>识别规则</Button>
-            <Button icon={<DownloadOutlined />} disabled={!snapshot} onClick={() => handleExport('markdown')}>导出 Markdown</Button>
-            <Button icon={<DownloadOutlined />} disabled={!snapshot} onClick={() => handleExport('json')}>导出 JSON</Button>
-            <Button icon={<RobotOutlined />} disabled={!snapshot} onClick={handleSendToAi}>发送给 AI</Button>
-            <Button type='primary' icon={<ReloadOutlined />} loading={loading} onClick={scanCurrentServer}>刷新检测</Button>
+            <Tooltip title={e('shellpilotServerStatusCopyMarkdownSummary')}>
+              <Button icon={<CopyOutlined />} disabled={!snapshot} onClick={handleCopy}>{e('shellpilotServerStatusCopyResults')}</Button>
+            </Tooltip>
+            <Button icon={<SettingOutlined />} onClick={() => setShowRules(true)}>{e('shellpilotServerStatusRecognitionRules')}</Button>
+            <Button icon={<DownloadOutlined />} disabled={!snapshot} onClick={() => handleExport('markdown')}>{e('shellpilotServerStatusExportMarkdown')}</Button>
+            <Button icon={<DownloadOutlined />} disabled={!snapshot} onClick={() => handleExport('json')}>{e('shellpilotServerStatusExportJson')}</Button>
+            <Button icon={<RobotOutlined />} disabled={!snapshot} onClick={handleSendToAi}>{e('shellpilotServerStatusSendToAi')}</Button>
+            <Button type='primary' icon={<ReloadOutlined />} loading={loading} onClick={scanCurrentServer}>{e('shellpilotServerStatusRefreshDetection')}</Button>
           </Space>
         </div>
         {renderSummary()}
-        <Spin spinning={loading} tip='正在执行只读检测，请稍候…'>
+        <Spin spinning={loading} tip={e('shellpilotServerStatusRunningReadonlyDetection')}>
           <div className='server-status-content'>
             {!snapshot && !loading
-              ? <Empty description='尚未获取服务器状态，点击“刷新检测”开始。' />
+              ? <Empty description={e('shellpilotServerStatusNoSnapshotHint')} />
               : snapshot
                 ? <Tabs activeKey={activeTab} onChange={setActiveTab} items={tabItems} />
                 : <div className='server-status-loading-placeholder' />}
@@ -667,8 +760,18 @@ export default function ServerStatusModal ({ open, onClose, store, tab = {} }) {
         {snapshot
           ? (
             <div className='server-status-footer'>
-              <span>检测完成：{probeCounts.success || 0} 项成功，{probeCounts.permission || 0} 项权限受限，{(probeCounts.error || 0) + (probeCounts.timeout || 0)} 项失败；未执行任何修改命令。</span>
-              <span>{new Date(snapshot.collectedAt).toLocaleString()}</span>
+              <span>
+                {tf('shellpilotServerStatusDetectionSummary', {
+                  success: probeCounts.success || 0,
+                  permission: probeCounts.permission || 0,
+                  failed: (probeCounts.error || 0) + (probeCounts.timeout || 0)
+                })}
+              </span>
+              <span>
+                {new Date(snapshot.collectedAt).toLocaleString(
+                  (store.previewLanguage || store.config?.language) === 'en_us' ? 'en-US' : 'zh-CN'
+                )}
+              </span>
             </div>
             )
           : null}

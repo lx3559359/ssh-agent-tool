@@ -61,7 +61,7 @@ export default function TermInteractiveUI ({
         key={prompt + i}
         label={prompt}
         rules={[{
-          required: true, message: 'required'
+          required: true, message: e('shellpilotFieldRequiredGeneric')
         }]}
       >
         <div>

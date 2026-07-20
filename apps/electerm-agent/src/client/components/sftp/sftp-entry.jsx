@@ -55,6 +55,7 @@ import { buildSideEffectSafetyRequest } from '../../common/safety-transactions/s
 import { assertSameSessionEndpoint } from '../../common/safety-transactions/endpoint-guard.js'
 import { buildSftpSafetyEndpoint } from './sftp-safety-endpoint.js'
 import * as sftpSafetyStore from '../../common/safety-transactions/transaction-store.js'
+import { formatShellPilotTranslation } from '../../common/shellpilot-i18n-overrides.js'
 import {
   mergeSafetyOperationRecords,
   matchesSafetyOperationEndpoint,
@@ -563,9 +564,9 @@ export default class Sftp extends Component {
     return new Promise(resolve => {
       Modal.confirm({
         title,
-        content: '恢复快照已验证完成。确认后才会修改远程文件；修改完成后仍可在安全操作中心回滚。',
-        okText: '确认执行',
-        cancelText: '取消',
+        content: e('shellpilotSftpRestoreConfirmDescription'),
+        okText: e('shellpilotSftpConfirmExecute'),
+        cancelText: e('cancel'),
         onOk: () => resolve(true),
         onCancel: () => resolve(false)
       })
@@ -606,7 +607,7 @@ export default class Sftp extends Component {
       id: plan.operationId,
       source: 'sftp',
       endpoint: this.getSftpSafetyEndpoint(),
-      title: 'SFTP 文件传输',
+      title: e('shellpilotSftpFileTransfer'),
       effect: {
         adapter: 'sftp',
         action: plan.action,
@@ -681,9 +682,9 @@ export default class Sftp extends Component {
       type,
       requestedMode: mode,
       expected: { mode, type },
-      title: 'SFTP 权限修改'
+      title: e('shellpilotSftpPermissionChange')
     })
-    if (result) message.success('权限修改已验证，可在安全操作中心回滚。')
+    if (result) message.success(e('shellpilotSftpPermissionRecoveryRecorded'))
     return result
   }
 
@@ -697,9 +698,9 @@ export default class Sftp extends Component {
       paths: { source: sourcePath, target: targetPath },
       type,
       expected: {},
-      title: 'SFTP 重命名'
+      title: e('shellpilotSftpRename')
     })
-    if (result) message.success('重命名已验证，可在安全操作中心回滚。')
+    if (result) message.success(e('shellpilotSftpRenameRecoveryRecorded'))
     return result
   }
 
@@ -716,11 +717,11 @@ export default class Sftp extends Component {
       type: 'file',
       requestedMode,
       expected,
-      title: 'SFTP 编辑器保存'
+      title: e('shellpilotSftpEditorSave')
     }, {
       input: { text }
     })
-    if (result) message.success('远程文件保存已验证，可在安全操作中心回滚。')
+    if (result) message.success(e('shellpilotSftpEditorSaveVerified'))
     return result
   }
 
@@ -744,7 +745,7 @@ export default class Sftp extends Component {
           paths: { source },
           type: file.isDirectory ? 'directory' : 'file',
           expected: { absent: true },
-          title: 'SFTP 删除',
+          title: e('shellpilotSftpDelete'),
           signal: options.signal
         }))
       }
@@ -789,7 +790,9 @@ export default class Sftp extends Component {
         return false
       }
     }
-    message.success(`已删除 ${operations.length} 项，恢复快照仍保留在安全操作中心。`)
+    message.success(formatShellPilotTranslation(e, 'shellpilotSftpDeletedWithRecovery', {
+      count: operations.length
+    }))
     return true
   }
 
@@ -813,7 +816,9 @@ export default class Sftp extends Component {
       })
       this.addSftpRecoveryRecords(records)
       if (!options.silent) {
-        message.success(`已备份 ${records.length} 项，可在安全操作中心恢复。`)
+        message.success(formatShellPilotTranslation(e, 'shellpilotSftpBackedUpWithRecovery', {
+          count: records.length
+        }))
       }
       return true
     } catch (err) {
@@ -903,7 +908,7 @@ export default class Sftp extends Component {
         if (!deleted) return false
       } catch (err) {
         window.store.onError(err)
-        message.error('SFTP 删除事务失败，恢复快照仍保留。')
+        message.error(e('shellpilotSftpDeleteFailedRecoveryRetained'))
         return false
       } finally {
         this.onDelete = false
@@ -1497,7 +1502,7 @@ export default class Sftp extends Component {
     }
     if (!isValidPath(np)) {
       return notification.warning({
-        message: 'path not valid'
+        message: e('shellpilotPathNotValid')
       })
     }
     this.setState({
@@ -1691,7 +1696,9 @@ export default class Sftp extends Component {
               disabled={!selectedCount}
               onClick={this.handleQuickBackupSelected}
             >
-              一键备份{selectedCount ? `（${selectedCount}）` : ''}
+              {selectedCount
+                ? formatShellPilotTranslation(e, 'shellpilotSftpQuickBackupCount', { count: selectedCount })
+                : e('shellpilotSftpQuickBackup')}
             </Button>
             <Button
               size='small'
@@ -1699,7 +1706,7 @@ export default class Sftp extends Component {
               icon={<SafetyCertificateOutlined />}
               onClick={this.handleOpenSftpSafetyCenter}
             >
-              安全操作中心
+              {e('shellpilotSftpSafetyCenter')}
             </Button>
           </span>
           <ReloadOutlined

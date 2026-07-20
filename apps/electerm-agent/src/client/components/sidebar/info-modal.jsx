@@ -15,6 +15,7 @@ import RunningTime from './app-running-time'
 import message from '../common/message'
 import { auto } from 'manate/react'
 import { useState } from 'react'
+import { formatShellPilotTranslation } from '../../common/shellpilot-i18n-overrides.js'
 
 import {
   packInfo,
@@ -67,10 +68,10 @@ export default auto(function InfoModal (props) {
 
   const handleExportDiagnosticPack = async () => {
     const result = await window.api.saveDialog({
-      title: '导出诊断包',
+      title: e('shellpilotExportDiagnosticPack'),
       defaultPath: `ShellPilot-diagnostic-${Date.now()}.tar`,
       filters: [
-        { name: 'ShellPilot 诊断包', extensions: ['tar'] }
+        { name: e('shellpilotDiagnosticPackFilter'), extensions: ['tar'] }
       ],
       properties: ['createDirectory', 'showOverwriteConfirmation']
     })
@@ -82,13 +83,17 @@ export default auto(function InfoModal (props) {
       const output = await window.pre.runGlobalAsync('exportDiagnosticPack', result.filePath)
       const outputPath = output?.outputPath || result.filePath
       if (output?.hasOmissions) {
-        message.warning(`诊断包已导出，但有 ${output.omittedCount || 0} 个日志未包含`)
+        message.warning(formatShellPilotTranslation(e, 'shellpilotDiagnosticExportOmissions', {
+          count: output.omittedCount || 0
+        }))
       } else {
-        message.success('诊断包已导出')
+        message.success(e('shellpilotDiagnosticExported'))
       }
       window.pre.showItemInFolder(outputPath)
     } catch (err) {
-      message.error('导出诊断包失败：' + (err?.message || err))
+      message.error(formatShellPilotTranslation(e, 'shellpilotDiagnosticExportFailed', {
+        detail: err?.message || err
+      }))
     } finally {
       setExportingDiagnosticPack(false)
     }
@@ -105,7 +110,7 @@ export default auto(function InfoModal (props) {
           loading={exportingDiagnosticPack}
           onClick={handleExportDiagnosticPack}
         >
-          导出诊断包
+          {e('shellpilotExportDiagnosticPack')}
         </Button>
       </div>
     )
@@ -215,7 +220,7 @@ export default auto(function InfoModal (props) {
             </Link>
           </p>
           <p className='mg1b'>
-            <GithubOutlined /> <b className='mg1r'>github ➾</b>
+            <GithubOutlined /> <b className='mg1r'>GitHub ➾</b>
             <Link to={link} className='mg1l'>
               {link}
             </Link>

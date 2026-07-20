@@ -17,6 +17,7 @@ import {
   getVisibleAIHistory,
   syncAIHistoryWindow
 } from './ai-history-window'
+import { formatShellPilotTranslation } from '../../common/shellpilot-i18n-overrides.js'
 
 const e = window.translate
 
@@ -110,7 +111,9 @@ export default auto(function AIChatHistory ({ history, agentRunning }) {
                   ? (
                     <div className='ai-history-load-earlier'>
                       <Button size='small' onClick={handleLoadEarlier}>
-                        加载更早消息（剩余 {list.length - visibleList.length} 条）
+                        {formatShellPilotTranslation(e, 'shellpilotAiLoadEarlier', {
+                          count: list.length - visibleList.length
+                        })}
                       </Button>
                     </div>
                     )

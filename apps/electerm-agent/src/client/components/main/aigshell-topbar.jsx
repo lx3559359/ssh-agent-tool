@@ -29,11 +29,13 @@ import {
   commandOrphanRecoveryStartedAt,
   recoverOrphanedCommandOperationsOnce
 } from '../../common/safety-transactions/command-orphan-recovery.js'
+import { formatShellPilotTranslation } from '../../common/shellpilot-i18n-overrides.js'
 import './aigshell-topbar.styl'
 
 const UpdateCenterModal = lazy(() => import('./update-center-modal'))
 const HelpCenterModal = lazy(() => import('./help-center-modal'))
 const ServerStatusModal = lazy(() => import('../server-status/server-status-modal'))
+const e = window.translate
 
 export default auto(function AIGShellTopBar ({ store }) {
   const [showConnectionInventory, setShowConnectionInventory] = useState(false)
@@ -43,7 +45,7 @@ export default auto(function AIGShellTopBar ({ store }) {
   const [showServerStatus, setShowServerStatus] = useState(false)
   const [connectionInfoBookmark, setConnectionInfoBookmark] = useState(null)
   const currentTab = store.tabs.find(tab => tab.id === store.activeTabId) || store.currentTab || {}
-  const title = currentTab.title || currentTab.name || currentTab.host || '未连接'
+  const title = currentTab.title || currentTab.name || currentTab.host || e('shellpilotTopbarDisconnected')
   const online = currentTab.status === statusMap.success
   const serverStatusAvailable = Boolean(
     online &&
@@ -70,7 +72,7 @@ export default auto(function AIGShellTopBar ({ store }) {
       store: safetyTransactionStore,
       startedAt: commandOrphanRecoveryStartedAt
     }).catch(() => {
-      window.store.onError?.(new Error('后台安全事务启动恢复失败。'))
+      window.store.onError?.(new Error(e('shellpilotSafetyRecoveryFailed')))
     })
   }, [])
 
@@ -152,82 +154,84 @@ export default auto(function AIGShellTopBar ({ store }) {
   const actions = [
     {
       key: 'serverStatus',
-      label: '服务器状态',
+      label: e('shellpilotTopbarServerStatus'),
       icon: <DashboardOutlined />,
       onClick: () => setShowServerStatus(true),
       disabled: !serverStatusAvailable
     },
     {
       key: 'new',
-      label: '新建',
+      label: e('shellpilotTopbarNewConnection'),
       icon: <PlusCircleOutlined />,
       onClick: window.store.onNewSsh
     },
     {
       key: 'quick',
-      label: '快连',
+      label: e('shellpilotTopbarQuickConnect'),
       icon: <ThunderboltOutlined />,
       popover: <QuickConnect formOnly />,
       onClick: handleFastNew
     },
     {
       key: 'quickCommands',
-      label: '快捷命令',
+      label: e('shellpilotTopbarQuickCommands'),
       icon: <CodeOutlined />,
       onClick: handleOpenQuickCommands,
       primary: true
     },
     {
       key: 'ai',
-      label: 'AI助手',
+      label: e('shellpilotTopbarAiAssistant'),
       icon: <MessageOutlined />,
       onClick: window.store.handleOpenAIPanel
     },
     {
       key: 'model',
-      label: '模型API',
+      label: e('shellpilotTopbarModelApi'),
       icon: <ApiOutlined />,
       onClick: window.store.toggleAIConfig
     },
     {
       key: 'backup',
-      label: '备份同步',
+      label: e('shellpilotTopbarBackupSync'),
       icon: <FolderAddOutlined />,
       onClick: window.store.openSettingSync
     },
     {
       key: 'connections',
-      label: '连接信息',
+      label: e('shellpilotTopbarConnectionInfo'),
       icon: <ProfileOutlined />,
       onClick: handleOpenConnectionInventory
     },
     {
       key: 'safetyCenter',
-      label: '安全中心',
+      label: e('shellpilotTopbarSafetyCenter'),
       icon: <SafetyCertificateOutlined />,
       onClick: () => setShowSafetyCenter(true)
     },
     {
       key: 'update',
-      label: '检查更新',
+      label: e('shellpilotTopbarCheckUpdates'),
       icon: <ReloadOutlined />,
       onClick: handleCheckUpdate
     },
     {
       key: 'theme',
-      label: isLightTheme ? '夜间' : '日间',
+      label: isLightTheme
+        ? e('shellpilotTopbarDarkMode')
+        : e('shellpilotTopbarLightMode'),
       icon: isLightTheme ? <MoonOutlined /> : <SunOutlined />,
       onClick: handleToggleTheme
     },
     {
       key: 'setting',
-      label: '设置',
+      label: e('shellpilotTopbarSettings'),
       icon: <SettingOutlined />,
       onClick: window.store.openSetting
     },
     {
       key: 'help',
-      label: '帮助',
+      label: e('shellpilotTopbarHelp'),
       icon: <QuestionCircleOutlined />,
       onClick: () => setShowHelpCenter(true)
     }
@@ -265,10 +269,20 @@ export default auto(function AIGShellTopBar ({ store }) {
       <div className='aigshell-topbar-brand'>
         <img src={logoPath1} alt='ShellPilot' />
         <span className='aigshell-topbar-name'>ShellPilot</span>
-        <span className='aigshell-topbar-version' title={`当前版本 ${packInfo.version}`}>v{packInfo.version}</span>
+        <span
+          className='aigshell-topbar-version'
+          title={formatShellPilotTranslation(e, 'shellpilotTopbarCurrentVersion', {
+            version: packInfo.version
+          })}
+        >v{packInfo.version}
+        </span>
         <span className='aigshell-topbar-separator' />
         <span className='aigshell-topbar-current' title={title}>{title}</span>
-        <Tooltip title={online ? '已连接' : '未连接'}>
+        <Tooltip
+          title={online
+            ? e('shellpilotTopbarConnected')
+            : e('shellpilotTopbarDisconnected')}
+        >
           <span className={'aigshell-topbar-dot ' + (online ? 'online' : '')} />
         </Tooltip>
       </div>
@@ -306,7 +320,7 @@ export default auto(function AIGShellTopBar ({ store }) {
       {
         showUpdateCenter
           ? (
-            <LazyModuleBoundary moduleName='更新中心' fallback={null}>
+            <LazyModuleBoundary moduleName={e('shellpilotTopbarUpdateCenter')} fallback={null}>
               <Suspense fallback={null}>
                 <UpdateCenterModal
                   open
@@ -320,7 +334,7 @@ export default auto(function AIGShellTopBar ({ store }) {
       {
         showHelpCenter
           ? (
-            <LazyModuleBoundary moduleName='帮助中心' fallback={null}>
+            <LazyModuleBoundary moduleName={e('shellpilotTopbarHelpCenter')} fallback={null}>
               <Suspense fallback={null}>
                 <HelpCenterModal
                   open
@@ -339,7 +353,7 @@ export default auto(function AIGShellTopBar ({ store }) {
       {
         showServerStatus
           ? (
-            <LazyModuleBoundary moduleName='服务器状态' fallback={null}>
+            <LazyModuleBoundary moduleName={e('shellpilotTopbarServerStatus')} fallback={null}>
               <Suspense fallback={null}>
                 <ServerStatusModal
                   open

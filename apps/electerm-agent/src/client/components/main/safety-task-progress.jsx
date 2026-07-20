@@ -14,25 +14,27 @@ import './safety-task-progress.styl'
 
 export { summarizeSafetyTaskProgress }
 
-const sourceLabels = {
-  terminal: 'SSH 终端',
-  agent: 'AI 助手',
-  'quick-command': '快捷命令',
-  'server-status': '服务器状态',
-  sftp: 'SFTP 文件',
-  unknown: '未知'
+const e = window.translate
+
+const sourceLabelKeys = {
+  terminal: 'shellpilotSafetySourceTerminal',
+  agent: 'shellpilotSafetySourceAgent',
+  'quick-command': 'shellpilotSafetySourceQuickCommand',
+  'server-status': 'shellpilotSafetySourceServerStatus',
+  sftp: 'shellpilotSafetySourceSftp',
+  unknown: 'shellpilotUnknown'
 }
 
-const stepStatusLabels = {
-  pending: '等待',
-  running: '执行中',
-  completed: '成功',
-  success: '成功',
-  succeeded: '成功',
-  failed: '失败',
-  cancelled: '已取消',
-  skipped: '已跳过',
-  'awaiting-confirmation': '等待确认'
+const stepStatusLabelKeys = {
+  pending: 'shellpilotSafetyStepPending',
+  running: 'shellpilotSafetyStepRunning',
+  completed: 'shellpilotSafetyStepSuccess',
+  success: 'shellpilotSafetyStepSuccess',
+  succeeded: 'shellpilotSafetyStepSuccess',
+  failed: 'shellpilotSafetyStepFailed',
+  cancelled: 'shellpilotSafetyStepCancelled',
+  skipped: 'shellpilotSafetyStepSkipped',
+  'awaiting-confirmation': 'shellpilotSafetyStepAwaitingConfirmation'
 }
 
 function StepStatusIcon ({ status }) {
@@ -61,46 +63,46 @@ export default function SafetyTaskProgress ({
       disabled={!canCancel || cancelling}
       onClick={canCancel ? onCancel : undefined}
     >
-      取消任务
+      {e('shellpilotSafetyCancelTask')}
     </Button>
   )
 
   return (
-    <section className='safety-task-progress' aria-label={`任务 ${summary.title}`}>
+    <section className='safety-task-progress' aria-label={`${e('shellpilotSafetyTask')} ${summary.title}`}>
       <div className='safety-task-progress-header'>
         <div className='safety-task-progress-heading'>
-          <Tag>来源：{sourceLabels[summary.source] || summary.source}</Tag>
+          <Tag>{e('shellpilotSafetySource')}：{sourceLabelKeys[summary.source] ? e(sourceLabelKeys[summary.source]) : summary.source}</Tag>
           <strong>{summary.title}</strong>
           <Tag color={statusColor}>{statusText}</Tag>
         </div>
         {canCancel
           ? cancelButton
-          : <Tooltip title='任务执行器尚未接入'>{cancelButton}</Tooltip>}
+          : <Tooltip title={e('shellpilotSafetyRunnerUnavailable')}>{cancelButton}</Tooltip>}
       </div>
 
       <div className='safety-task-progress-endpoint'>{summary.endpoint}</div>
       <div className='safety-task-progress-current'>
-        当前步骤：{summary.currentStep?.title || '等待下一步'}
+        {e('shellpilotSafetyCurrentStep')}：{summary.currentStep?.title || e('shellpilotSafetyWaitingNextStep')}
       </div>
       <Progress percent={summary.percent} size='small' showInfo={false} />
       <div className='safety-task-progress-counts'>
-        <span>总计 {summary.total}</span>
-        <span className='is-success'>成功 {summary.successCount}</span>
-        <span className='is-error'>失败 {summary.failedCount}</span>
-        <span>取消 {summary.cancelledCount}</span>
+        <span>{e('shellpilotSafetyTotal')} {summary.total}</span>
+        <span className='is-success'>{e('shellpilotSafetySuccess')} {summary.successCount}</span>
+        <span className='is-error'>{e('shellpilotSafetyFailed')} {summary.failedCount}</span>
+        <span>{e('shellpilotSafetyCancelled')} {summary.cancelledCount}</span>
       </div>
 
       {summary.riskDetails
         ? (
           <div className='safety-task-risk-details'>
-            <strong>Agent 风险事务</strong>
-            <span>目的：{summary.riskDetails.purpose}</span>
-            <span>影响对象：{summary.riskDetails.affectedObjects.join(', ') || 'unknown'}</span>
-            <span>最坏结果：{summary.riskDetails.worstCase}</span>
-            <span>资源：{Object.entries(summary.riskDetails.resourceImpact).map(([key, value]) => `${key}=${value}`).join(', ')}</span>
-            <span>恢复：{summary.riskDetails.recovery}</span>
-            <span>回滚限制：{summary.riskDetails.rollbackLimits}</span>
-            <span>取消：{summary.riskDetails.cancellationBehavior}</span>
+            <strong>{e('shellpilotSafetyAgentRiskTransaction')}</strong>
+            <span>{e('shellpilotPurpose')}：{summary.riskDetails.purpose}</span>
+            <span>{e('shellpilotSafetyAffectedObjects')}：{summary.riskDetails.affectedObjects.join(', ') || e('shellpilotUnknown')}</span>
+            <span>{e('shellpilotSafetyWorstCase')}：{summary.riskDetails.worstCase}</span>
+            <span>{e('shellpilotSafetyResources')}：{Object.entries(summary.riskDetails.resourceImpact).map(([key, value]) => `${key}=${value}`).join(', ')}</span>
+            <span>{e('shellpilotSafetyRecovery')}：{summary.riskDetails.recovery}</span>
+            <span>{e('shellpilotSafetyRollbackLimits')}：{summary.riskDetails.rollbackLimits}</span>
+            <span>{e('shellpilotSafetyCancellation')}：{summary.riskDetails.cancellationBehavior}</span>
           </div>
           )
         : null}
@@ -111,7 +113,7 @@ export default function SafetyTaskProgress ({
             <div className='safety-task-progress-step-line'>
               <StepStatusIcon status={step.status} />
               <strong>{step.title}</strong>
-              <span>{stepStatusLabels[step.status] || step.status}</span>
+              <span>{stepStatusLabelKeys[step.status] ? e(stepStatusLabelKeys[step.status]) : step.status}</span>
             </div>
             {step.commandSummary
               ? <code className='safety-task-progress-command'>{step.commandSummary}</code>

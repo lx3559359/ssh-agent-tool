@@ -48,6 +48,8 @@ import {
   recordQualityEvent
 } from '../../common/quality/quality-events.js'
 
+const e = window.translate
+
 function createAIQualityState (traceContext, performance = null) {
   return {
     context: normalizeTraceContext(traceContext),
@@ -831,7 +833,7 @@ export default memo(function AIChatHistoryItem ({
         <DownloadOutlined
           className='pointer mg1l'
           onClick={e => e.stopPropagation()}
-          title='导出诊断报告'
+          title={e('shellpilotAiExportDiagnosticReport')}
         />
       </Dropdown>
     )
@@ -854,7 +856,7 @@ export default memo(function AIChatHistoryItem ({
           <ReloadOutlined
             className={retryDisabled ? 'mg1l disabled' : 'pointer mg1l'}
             onClick={handleRetry}
-            title={retryDisabled ? '当前任务运行中，暂时不能重试' : aiAgentCopy.retryTitle}
+            title={retryDisabled ? e('shellpilotAiRetryUnavailable') : aiAgentCopy.retryTitle}
           />
           {renderReportExportAction()}
           <CloseOutlined

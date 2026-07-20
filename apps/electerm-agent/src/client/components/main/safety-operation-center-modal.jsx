@@ -58,12 +58,14 @@ import './safety-operation-center-modal.styl'
 
 export { groupSafetyCenterRecords }
 
-const sourceLabels = {
-  terminal: 'SSH 终端',
-  agent: 'AI 助手',
-  'quick-command': '快捷命令',
-  'server-status': '服务器状态',
-  sftp: 'SFTP 文件'
+const e = window.translate
+
+const sourceLabelKeys = {
+  terminal: 'shellpilotSafetySourceTerminal',
+  agent: 'shellpilotSafetySourceAgent',
+  'quick-command': 'shellpilotSafetySourceQuickCommand',
+  'server-status': 'shellpilotSafetySourceServerStatus',
+  sftp: 'shellpilotSafetySourceSftp'
 }
 
 const sourceColors = {
@@ -74,43 +76,83 @@ const sourceColors = {
   sftp: 'geekblue'
 }
 
-const providerLabels = {
-  file: '文件',
-  permissions: '权限与属主',
-  systemd: 'systemd 服务',
-  firewall: '防火墙',
-  network: '网络',
-  docker: '容器',
-  sftp: 'SFTP 快照',
-  无: '无'
+const providerLabelKeys = {
+  file: 'shellpilotSafetyProviderFile',
+  permissions: 'shellpilotSafetyProviderPermissions',
+  systemd: 'shellpilotSafetyProviderSystemd',
+  firewall: 'shellpilotSafetyProviderFirewall',
+  network: 'shellpilotSafetyProviderNetwork',
+  docker: 'shellpilotSafetyProviderContainer',
+  sftp: 'shellpilotSafetyProviderSftp',
+  无: 'shellpilotNone'
 }
 
 const statusLabels = {
   ...safetyOperationStatusPresentations,
   ...safetyTaskStatusPresentations
 }
+const statusLabelKeys = {
+  preparing: 'shellpilotSafetyStatusPreparing',
+  'recovery-ready': 'shellpilotSafetyStatusRecoveryReady',
+  'awaiting-confirmation': 'shellpilotSafetyStatusAwaitingConfirmation',
+  executing: 'shellpilotSafetyStatusExecuting',
+  'verification-passed': 'shellpilotSafetyStatusVerified',
+  'rollback-available': 'shellpilotSafetyStatusRollbackAvailable',
+  kept: 'shellpilotSafetyStatusKept',
+  'rolling-back': 'shellpilotSafetyStatusRollingBack',
+  restored: 'shellpilotSafetyStatusRestored',
+  failed: 'shellpilotSafetyStatusFailed',
+  cancelled: 'shellpilotSafetyStatusCancelled',
+  draft: 'shellpilotSafetyStatusDraft',
+  'awaiting-plan-confirmation': 'shellpilotSafetyStatusAwaitingPlan',
+  'running-readonly': 'shellpilotSafetyStatusRunningReadonly',
+  'awaiting-change-confirmation': 'shellpilotSafetyStatusAwaitingChange',
+  'running-change': 'shellpilotSafetyStatusRunningChange',
+  completed: 'shellpilotSafetyStatusCompleted',
+  'partially-completed': 'shellpilotSafetyStatusPartiallyCompleted'
+}
 
 const actionLabels = {
   rollback: {
-    title: '确认立即回滚',
-    ok: '立即回滚',
-    success: '回滚已完成。'
+    title: 'shellpilotSafetyConfirmRollback',
+    ok: 'shellpilotSafetyRollbackNow',
+    success: 'shellpilotSafetyRollbackComplete'
   },
   keep: {
-    title: '确认保留修改',
-    ok: '保留修改',
-    success: '修改已保留。'
+    title: 'shellpilotSafetyConfirmKeep',
+    ok: 'shellpilotSafetyKeepChanges',
+    success: 'shellpilotSafetyChangesKept'
   },
   cancel: {
-    title: '确认取消任务',
-    ok: '取消任务',
-    success: '取消请求已提交。'
+    title: 'shellpilotSafetyConfirmCancelTask',
+    ok: 'shellpilotSafetyCancelTask',
+    success: 'shellpilotSafetyCancelSubmitted'
   }
+}
+const timelineLabelKeys = {
+  已创建: 'shellpilotSafetyTimelineCreated',
+  恢复点已就绪: 'shellpilotSafetyStatusRecoveryReady',
+  已验证: 'shellpilotSafetyTimelineVerified',
+  准备阶段: 'shellpilotSafetyTimelinePreparePhase',
+  执行阶段: 'shellpilotSafetyTimelineExecutePhase',
+  回滚阶段: 'shellpilotSafetyTimelineRollbackPhase',
+  验证阶段: 'shellpilotSafetyTimelineVerifyPhase',
+  取消阶段: 'shellpilotSafetyTimelineCancelPhase',
+  只读阶段: 'shellpilotSafetyTimelineReadonlyPhase',
+  已更新: 'shellpilotSafetyTimelineUpdated'
+}
+const verificationLabelKeys = {
+  验证通过: 'shellpilotSafetyVerificationPassed',
+  验证失败: 'shellpilotSafetyVerificationFailed',
+  暂无验证结果: 'shellpilotSafetyVerificationMissing'
 }
 
 function formatTime (value) {
   const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? '未知时间' : date.toLocaleString('zh-CN')
+  const language = window.store?.previewLanguage || window.store?.config?.language || 'zh_cn'
+  return Number.isNaN(date.getTime())
+    ? e('shellpilotUnknownTime')
+    : date.toLocaleString(language === 'en_us' ? 'en-US' : 'zh-CN')
 }
 
 function recordStatus (record) {
@@ -133,7 +175,7 @@ function confirmSafetyAction (action, view) {
       resolve(value)
     }
     Modal.confirm({
-      title: labels.title,
+      title: e(labels.title),
       content: (
         <div className='safety-center-confirm-content'>
           <strong>{view.title}</strong>
@@ -142,8 +184,8 @@ function confirmSafetyAction (action, view) {
           {view.error ? <span>{view.error}</span> : null}
         </div>
       ),
-      okText: labels.ok,
-      cancelText: '取消',
+      okText: e(labels.ok),
+      cancelText: e('cancel'),
       okButtonProps: { danger: action !== 'keep' },
       onOk: () => finish(true),
       onCancel: () => finish(false)
@@ -357,10 +399,10 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
             findModernCapability: findOperationCapability,
             taskCapability: getTaskCancelCapability(record)
           })
-          message.success(actionLabels[action].success)
+          message.success(e(actionLabels[action].success))
         } catch (error) {
           reportError(error)
-          message.error('操作失败，详情已写入工具日志。')
+          message.error(e('shellpilotSafetyActionFailed'))
         } finally {
           await refreshRecords()
         }
@@ -396,7 +438,11 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
             disabled={busy || record.metadata?.legacyEndpointIncomplete}
             onClick={() => handleSafetyAction(record, 'rollback')}
           >
-            {staleClaim ? '接管并重试' : record.state === 'failed' ? '重试恢复' : '立即恢复'}
+            {staleClaim
+              ? e('shellpilotSafetyTakeOverRetry')
+              : record.state === 'failed'
+                ? e('shellpilotSafetyRetryRestore')
+                : e('shellpilotSafetyRestoreNow')}
           </Button>
         )
       }
@@ -409,7 +455,7 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
             disabled={busy || record.metadata?.legacyEndpointIncomplete}
             onClick={() => handleSafetyAction(record, 'keep')}
           >
-            {staleClaim ? '接管并保留' : '保留修改'}
+            {staleClaim ? e('shellpilotSafetyTakeOverKeep') : e('shellpilotSafetyKeepChanges')}
           </Button>
           <Button
             danger
@@ -419,7 +465,11 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
             disabled={busy || record.metadata?.legacyEndpointIncomplete}
             onClick={() => handleSafetyAction(record, 'rollback')}
           >
-            {staleClaim ? '接管并重试' : record.state === 'failed' ? '重试回滚' : '立即回滚'}
+            {staleClaim
+              ? e('shellpilotSafetyTakeOverRetry')
+              : record.state === 'failed'
+                ? e('shellpilotSafetyRetryRollback')
+                : e('shellpilotSafetyRollbackNow')}
           </Button>
         </Space>
       )
@@ -434,7 +484,7 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
           disabled={busy}
           onClick={() => handleSafetyAction(record, 'cancel')}
         >
-          取消任务
+          {e('shellpilotSafetyCancelTask')}
         </Button>
       )
     }
@@ -449,7 +499,7 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
               disabled={busy}
               onClick={() => handleSafetyAction(record, 'keep')}
             >
-              保留修改
+              {e('shellpilotSafetyKeepChanges')}
             </Button>
             )
           : null}
@@ -461,7 +511,9 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
           disabled={busy}
           onClick={() => handleSafetyAction(record, 'rollback')}
         >
-          {record.state === 'failed' ? '重试回滚' : '立即回滚'}
+          {record.state === 'failed'
+            ? e('shellpilotSafetyRetryRollback')
+            : e('shellpilotSafetyRollbackNow')}
         </Button>
       </Space>
     )
@@ -469,21 +521,32 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
 
   const renderAudit = view => {
     return view.audit.map(entry => {
-      const code = entry.code === null ? '' : `，退出码 ${entry.code}`
-      return `${formatTime(entry.timestamp)} [${entry.phaseLabel || '审计'}${code}]\n${entry.preview}`
+      const code = entry.code === null ? '' : `，${e('shellpilotExitCode')} ${entry.code}`
+      const phaseKey = {
+        prepare: 'shellpilotSafetyAuditPrepare',
+        execute: 'shellpilotSafetyAuditExecute',
+        rollback: 'shellpilotSafetyAuditRollback',
+        verify: 'shellpilotSafetyAuditVerify',
+        cancel: 'shellpilotSafetyAuditCancel',
+        readonly: 'shellpilotSafetyAuditReadonly'
+      }[entry.phase]
+      return `${formatTime(entry.timestamp)} [${phaseKey ? e(phaseKey) : e('shellpilotSafetyAudit')}${code}]\n${entry.preview}`
     }).join('\n\n')
   }
 
   const renderOperation = record => {
     const view = buildSafetyRecordViewModel(record, integrityResults)
-    const [statusText, statusColor] = statusLabels[view.status] || [view.status, 'default']
+    const [, statusColor] = statusLabels[view.status] || [view.status, 'default']
+    const statusText = statusLabelKeys[view.status]
+      ? e(statusLabelKeys[view.status])
+      : view.status
     const auditExpanded = expandedAuditId === record.id
     return (
       <article className='safety-center-record' key={record.id}>
         <div className='safety-center-record-header'>
           <div className='safety-center-record-title'>
             <Tag color={sourceColors[view.source] || 'default'}>
-              {sourceLabels[view.source] || view.source}
+              {sourceLabelKeys[view.source] ? e(sourceLabelKeys[view.source]) : view.source}
             </Tag>
             <strong>{view.title}</strong>
             <Tag color={statusColor}>{statusText}</Tag>
@@ -497,40 +560,43 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
           {view.commandSummary}
         </code>
         <div className='safety-center-record-grid'>
-          <span className='safety-center-label'>服务器</span>
+          <span className='safety-center-label'>{e('shellpilotSafetyServer')}</span>
           <span>{view.endpoint}</span>
-          <span className='safety-center-label'>恢复类型</span>
-          <span>{providerLabels[view.provider] || view.provider}</span>
+          <span className='safety-center-label'>{e('shellpilotSafetyRecoveryType')}</span>
+          <span>{providerLabelKeys[view.provider] ? e(providerLabelKeys[view.provider]) : view.provider}</span>
           {view.effectAction
-            ? <><span className='safety-center-label'>SFTP effect</span><span>{view.effectAdapter} / {view.effectAction}</span></>
+            ? <><span className='safety-center-label'>{e('shellpilotSafetySftpEffect')}</span><span>{view.effectAdapter} / {view.effectAction}</span></>
             : null}
           {view.resourcePaths.length
-            ? <><span className='safety-center-label'>资源路径</span><span className='safety-center-path'>{view.resourcePaths.join('；')}</span></>
+            ? <><span className='safety-center-label'>{e('shellpilotSafetyResourcePaths')}</span><span className='safety-center-path'>{view.resourcePaths.join('；')}</span></>
             : null}
           {view.artifactPaths.length
-            ? <><span className='safety-center-label'>恢复产物</span><span className='safety-center-path'>{view.artifactPaths.join('；')}</span></>
+            ? <><span className='safety-center-label'>{e('shellpilotSafetyRecoveryArtifacts')}</span><span className='safety-center-path'>{view.artifactPaths.join('；')}</span></>
             : null}
-          <span className='safety-center-label'>创建时间</span>
+          <span className='safety-center-label'>{e('shellpilotSafetyCreatedAt')}</span>
           <span>{formatTime(view.createdAt)}</span>
-          <span className='safety-center-label'>验证结果</span>
-          <span>{view.verification}</span>
+          <span className='safety-center-label'>{e('shellpilotSafetyVerificationResult')}</span>
+          <span>{verificationLabelKeys[view.verification]
+            ? e(verificationLabelKeys[view.verification])
+            : view.verification}
+          </span>
           {view.backupPath
-            ? <><span className='safety-center-label'>备份路径</span><span className='safety-center-path'>{view.backupPath}</span></>
+            ? <><span className='safety-center-label'>{e('shellpilotSafetyBackupPath')}</span><span className='safety-center-path'>{view.backupPath}</span></>
             : null}
           {view.recoveryPath
-            ? <><span className='safety-center-label'>恢复路径</span><span className='safety-center-path'>{view.recoveryPath}</span></>
+            ? <><span className='safety-center-label'>{e('shellpilotSafetyRecoveryPath')}</span><span className='safety-center-path'>{view.recoveryPath}</span></>
             : null}
         </div>
 
-        <div className='safety-center-timeline' aria-label='状态时间线'>
+        <div className='safety-center-timeline' aria-label={e('shellpilotSafetyTimeline')}>
           {view.timeline.map((item, index) => (
             <span className='safety-center-timeline-item' key={`${item.timestamp}-${index}`}>
-              {item.label} · {formatTime(item.timestamp)}
+              {timelineLabelKeys[item.label] ? e(timelineLabelKeys[item.label]) : item.label} · {formatTime(item.timestamp)}
             </span>
           ))}
         </div>
         {view.error
-          ? <div className='safety-center-record-error'>错误：{view.error}</div>
+          ? <div className='safety-center-record-error'>{e('shellpilotError')}：{view.error}</div>
           : null}
         {view.auditCount
           ? (
@@ -541,7 +607,7 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
                 icon={auditExpanded ? <DownOutlined /> : <RightOutlined />}
                 onClick={() => setExpandedAuditId(auditExpanded ? '' : record.id)}
               >
-                审计输出（{view.auditCount}）
+                {e('shellpilotSafetyAuditOutput')}（{view.auditCount}）
               </Button>
               {auditExpanded
                 ? <pre className='safety-center-audit-output'>{renderAudit(view)}</pre>
@@ -571,18 +637,18 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
   }
 
   const tabItems = [
-    ['running', '执行中'],
-    ['rollback', '可回滚'],
-    ['history', '历史记录'],
-    ['legacy', '旧版记录']
-  ].map(([key, label]) => ({
+    ['running', 'shellpilotSafetyRunning'],
+    ['rollback', 'shellpilotSafetyRollbackAvailable'],
+    ['history', 'shellpilotSafetyHistory'],
+    ['legacy', 'shellpilotSafetyLegacy']
+  ].map(([key, labelKey]) => ({
     key,
-    label: `${label} ${groups[key].length}`
+    label: `${e(labelKey)} ${groups[key].length}`
   }))
 
   return (
     <Modal
-      title={<Space><SafetyCertificateOutlined />安全操作中心</Space>}
+      title={<Space><SafetyCertificateOutlined />{e('shellpilotSftpSafetyCenter')}</Space>}
       open={open}
       onCancel={onClose}
       footer={null}
@@ -591,10 +657,10 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
       className='safety-operation-center-modal'
     >
       <div className='safety-center-summary'>
-        <span>执行中 <strong>{groups.running.length}</strong></span>
-        <span>可回滚 <strong>{groups.rollback.length}</strong></span>
-        <span>历史 <strong>{groups.history.length}</strong></span>
-        <span>旧版 <strong>{groups.legacy.length}</strong></span>
+        <span>{e('shellpilotSafetyRunning')} <strong>{groups.running.length}</strong></span>
+        <span>{e('shellpilotSafetyRollbackAvailable')} <strong>{groups.rollback.length}</strong></span>
+        <span>{e('shellpilotSafetyHistoryShort')} <strong>{groups.history.length}</strong></span>
+        <span>{e('shellpilotSafetyLegacyShort')} <strong>{groups.legacy.length}</strong></span>
       </div>
 
       <Tabs
@@ -605,44 +671,44 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
       />
       <div className='safety-center-filters'>
         <Input.Search
-          placeholder='搜索命令、路径或服务器'
+          placeholder={e('shellpilotSafetySearchPlaceholder')}
           allowClear
           value={keyword}
           onChange={event => setKeyword(event.target.value)}
         />
         <Select
-          aria-label='服务器'
+          aria-label={e('shellpilotSafetyServer')}
           value={host}
           onChange={setHost}
           options={[
-            { value: '', label: '全部服务器' },
+            { value: '', label: e('shellpilotSafetyAllServers') },
             ...hosts.map(value => ({ value, label: value }))
           ]}
         />
         <Select
-          aria-label='来源'
+          aria-label={e('shellpilotSafetySource')}
           value={source}
           onChange={setSource}
           options={[
-            { value: '', label: '全部来源' },
-            ...Object.entries(sourceLabels).map(([value, label]) => ({ value, label }))
+            { value: '', label: e('shellpilotSafetyAllSources') },
+            ...Object.entries(sourceLabelKeys).map(([value, labelKey]) => ({ value, label: e(labelKey) }))
           ]}
         />
         <Select
-          aria-label='状态'
+          aria-label={e('shellpilotSafetyStatus')}
           value={status}
           onChange={setStatus}
           options={[
-            { value: '', label: '全部状态' },
+            { value: '', label: e('shellpilotSafetyAllStatuses') },
             ...statuses.map(value => ({
               value,
-              label: statusLabels[value]?.[0] || value
+              label: statusLabelKeys[value] ? e(statusLabelKeys[value]) : value
             }))
           ]}
         />
         <Button
-          aria-label='刷新'
-          title='刷新'
+          aria-label={e('refresh')}
+          title={e('refresh')}
           icon={<ReloadOutlined />}
           loading={loading}
           onClick={refreshRecords}
@@ -655,7 +721,7 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
             ? <div className='safety-center-loading'><Spin /></div>
             : filteredRecords.length
               ? filteredRecords.map(renderRecord)
-              : <Empty description={loadError || '暂无符合条件的安全记录'} />}
+              : <Empty description={loadError || e('shellpilotSafetyNoRecords')} />}
         </div>
       </div>
     </Modal>
