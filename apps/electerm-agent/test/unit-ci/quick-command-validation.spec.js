@@ -102,7 +102,7 @@ test('quick command validators reject boundary controls before trimming spaces',
   ]
 
   for (const value of unsafePorts) {
-    assert.match(validateValue('port', value), /换行|NUL/)
+    assert.match(validateValue('port', value), /控制字符|换行|NUL/)
   }
   assert.equal(validateValue('port', ' 443 '), '')
 })
@@ -195,7 +195,7 @@ test('shell assignment builders only emit explicitly validated and quoted fields
   for (const value of ['443\n', '\n443', '443\r', '\r443', '443\0', '\0' + '443']) {
     assert.throws(
       () => buildShellAssignment('TARGET_PORT', value, 'port', { label: '目标端口' }),
-      /换行|NUL/
+      /控制字符|换行|NUL/
     )
   }
   assert.throws(
@@ -299,6 +299,7 @@ test('mutation safety metadata requires verification and builds fail-closed pref
   assert.deepEqual(metadata, {
     title: '更新 Nginx 配置',
     minFreeKb: 10240,
+    maxBackupKb: 8192,
     backupTargets: ['/etc/nginx/nginx.conf'],
     verifyCommands: ['nginx -t'],
     rollbackDirectory: '/tmp/shellpilot-rollback',
@@ -1164,13 +1165,334 @@ test('ufw state and verification checks match the complete rule column', async (
 
   assert.equal(result.submitted, true)
   assert.ok(result.commandText.includes(
-    'ufw status | awk -v rule="$PORT/$PROTO" \'$1 == rule'
+    'ufw status | awk -v rule="$PORT/$PROTO" \'($1 == rule && $2 == "ALLOW"'
   ))
   const verifyText = result.commandText.slice(
     result.commandText.indexOf('# __SHELLPILOT_MUTATION_VERIFY__')
   )
   assert.ok(verifyText.includes(
-    'ufw status | awk -v rule="43/tcp" \'$1 == rule'
+    'ufw status | awk -v rule="43/tcp" \'($1 == rule && $2 == "ALLOW"'
   ))
   assert.doesNotMatch(verifyText, /ufw status \| grep -F/)
+})
+
+test('maintenance submission rejects unresolved template tokens before store expansion', async () => {
+  const { getServerMaintenanceQuickCommands } = await import(commandsUrl)
+  const {
+    buildQuickCommandContext,
+    buildQuickCommandParamValues,
+    submitValidatedQuickCommand
+  } = await import(contextUrl)
+  const item = getServerMaintenanceQuickCommands()
+    .find(command => command.id === 'builtin-server-log-search')
+  const context = buildQuickCommandContext({ host: 'server.example.com', port: '22' })
+  const submissions = []
+  const result = submitValidatedQuickCommand({
+    id: item.id,
+    item,
+    context,
+    inputOnly: false,
+    text: 'stale command text',
+    paramValues: {
+      ...buildQuickCommandParamValues(item, context),
+      关键词: '{{clipboard}}'
+    }
+  }, (...args) => submissions.push(args))
+
+  assert.equal(result.submitted, false)
+  assert.equal(result.commandText, '')
+  assert.ok(result.errors.关键词)
+  assert.equal(submissions.length, 0)
+})
+
+test('maintenance validation rejects every C0 and C1 control character', async () => {
+  const { validateValue } = await import(validationUrl)
+  const controls = [
+    ...Array.from({ length: 0x20 }, (_, code) => code),
+    ...Array.from({ length: 0x21 }, (_, offset) => 0x7f + offset)
+  ]
+
+  for (const code of controls) {
+    const value = `safe${String.fromCharCode(code)}value`
+    assert.notEqual(
+      validateValue('template-text', value),
+      '',
+      `must reject control U+${code.toString(16).padStart(4, '0')}`
+    )
+  }
+})
+
+test('PTY control characters become field errors and submit nothing', async () => {
+  const { getServerMaintenanceQuickCommands } = await import(commandsUrl)
+  const {
+    buildQuickCommandContext,
+    buildQuickCommandParamValues,
+    submitValidatedQuickCommand
+  } = await import(contextUrl)
+  const item = getServerMaintenanceQuickCommands()
+    .find(command => command.id === 'builtin-server-log-search')
+  const context = buildQuickCommandContext({ host: 'server.example.com', port: '22' })
+
+  for (const code of [0x03, 0x04, 0x09, 0x1b, 0x7f, 0x85]) {
+    const submissions = []
+    const result = submitValidatedQuickCommand({
+      id: item.id,
+      item,
+      context,
+      inputOnly: false,
+      text: 'stale command text',
+      paramValues: {
+        ...buildQuickCommandParamValues(item, context),
+        关键词: `safe${String.fromCharCode(code)}value`
+      }
+    }, (...args) => submissions.push(args))
+
+    assert.equal(result.submitted, false, `U+${code.toString(16)}`)
+    assert.equal(result.commandText, '')
+    assert.ok(result.errors.关键词)
+    assert.equal(submissions.length, 0)
+  }
+})
+
+test('custom packet filters reject quoted option injection on the real submit path', async () => {
+  const { validateValue } = await import(validationUrl)
+  const { getServerMaintenanceQuickCommands } = await import(commandsUrl)
+  const {
+    buildQuickCommandContext,
+    buildQuickCommandParamValues,
+    submitValidatedQuickCommand
+  } = await import(contextUrl)
+  const maliciousFilter = "tcp and port 443 '-w' '/tmp/owned.pcap'"
+  const legitimateFilter = 'tcp and (dst port 443 or src host 192.0.2.10)'
+  assert.equal(validateValue('packet-filter', legitimateFilter), '')
+  assert.notEqual(validateValue('packet-filter', maliciousFilter), '')
+
+  const item = getServerMaintenanceQuickCommands()
+    .find(command => command.id === 'builtin-server-packet-capture')
+  const context = buildQuickCommandContext({ host: 'server.example.com', port: '22' })
+  const submissions = []
+  const result = submitValidatedQuickCommand({
+    id: item.id,
+    item,
+    context,
+    inputOnly: false,
+    text: 'stale command text',
+    paramValues: {
+      ...buildQuickCommandParamValues(item, context),
+      网卡: 'any',
+      过滤类型: 'custom',
+      自定义过滤: maliciousFilter,
+      数量: '10',
+      抓包文件: '/tmp/safe.pcap'
+    }
+  }, (...args) => submissions.push(args))
+
+  assert.equal(result.submitted, false)
+  assert.equal(result.commandText, '')
+  assert.ok(result.errors.自定义过滤)
+  assert.equal(submissions.length, 0)
+
+  const safeResult = submitValidatedQuickCommand({
+    id: item.id,
+    item,
+    context,
+    inputOnly: false,
+    paramValues: {
+      ...buildQuickCommandParamValues(item, context),
+      网卡: 'any',
+      过滤类型: 'custom',
+      自定义过滤: legitimateFilter,
+      数量: '10',
+      抓包文件: '/tmp/safe.pcap'
+    }
+  }, () => {})
+  assert.equal(safeResult.submitted, true)
+  assert.match(
+    safeResult.commandText,
+    /tcpdump -nn -i any 'tcp' 'and' '\(' 'dst' 'port' '443' 'or' 'src' 'host' '192\.0\.2\.10' '\)'/
+  )
+})
+
+test('all mutation rollback scripts use private unpredictable temporary files', async t => {
+  const { getServerMaintenanceQuickCommands } = await import(commandsUrl)
+  const {
+    buildQuickCommandContext,
+    buildQuickCommandParamValues,
+    submitValidatedQuickCommand
+  } = await import(contextUrl)
+  const context = buildQuickCommandContext({ host: 'server.example.com', port: '22' })
+  const commands = getServerMaintenanceQuickCommands()
+  const cases = [
+    ['builtin-server-network-change-ip', {
+      网卡: 'eth0',
+      '新IP/CIDR': '192.0.2.20/24',
+      配置方式: 'temporary',
+      确认执行: 'yes'
+    }],
+    ['builtin-server-firewall-open-port', {
+      端口: '443',
+      防火墙类型: 'ufw',
+      生效方式: 'runtime',
+      确认执行: 'yes'
+    }],
+    ['builtin-server-service-action', {
+      服务名称: 'nginx.service',
+      操作: 'restart',
+      确认执行: 'yes'
+    }],
+    ['builtin-server-docker-action', {
+      容器名称: 'web-1',
+      操作: 'restart',
+      确认执行: 'yes'
+    }],
+    ['builtin-server-file-permission', {
+      目标路径: '/var/www/app',
+      操作: 'apply',
+      确认执行: 'yes'
+    }]
+  ]
+
+  for (const [id, overrides] of cases) {
+    await t.test(id, () => {
+      const item = commands.find(command => command.id === id)
+      const result = submitValidatedQuickCommand({
+        id,
+        item,
+        context,
+        inputOnly: false,
+        paramValues: {
+          ...buildQuickCommandParamValues(item, context),
+          ...overrides
+        }
+      }, () => {})
+      assert.equal(result.submitted, true)
+      assert.doesNotMatch(result.commandText, /TMP_ROLLBACK="\/tmp\/[^"\n]*\$\$\.sh"/)
+      assert.match(
+        result.commandText,
+        /TMP_ROLLBACK="\$\(mktemp "\$OPERATION_ROLLBACK_DIR\/rollback\.XXXXXX"\)" \|\|/
+      )
+      assert.match(result.commandText, /\[ -L "\$TMP_ROLLBACK" \] \|\| \[ ! -f "\$TMP_ROLLBACK" \]/)
+      assert.match(result.commandText, /case "\$ROLLBACK_SCRIPT" in "\$ROLLBACK_DIR"\/\*\)/)
+      assert.match(result.commandText, /\[ -L "\$ROLLBACK_SCRIPT" \] \|\| \[ ! -f "\$ROLLBACK_SCRIPT" \]/)
+    })
+  }
+})
+
+test('UFW detection verifies a global ALLOW and rollback restores exact rules files', async () => {
+  const { getServerMaintenanceQuickCommands } = await import(commandsUrl)
+  const {
+    buildQuickCommandContext,
+    buildQuickCommandParamValues,
+    submitValidatedQuickCommand
+  } = await import(contextUrl)
+  const isGlobalAllow = (line, rule) => {
+    const columns = line.trim().split(/\s+/)
+    return (columns[0] === rule && columns[1] === 'ALLOW' && columns[2] === 'Anywhere') ||
+      (columns[0] === rule && columns[1] === '(v6)' && columns[2] === 'ALLOW' &&
+        columns[3] === 'Anywhere' && columns[4] === '(v6)')
+  }
+  assert.equal(isGlobalAllow('443/tcp DENY Anywhere', '443/tcp'), false)
+  assert.equal(isGlobalAllow('443/tcp ALLOW 192.0.2.0/24', '443/tcp'), false)
+  assert.equal(isGlobalAllow('443/tcp ALLOW Anywhere', '443/tcp'), true)
+  assert.equal(isGlobalAllow('443/tcp (v6) ALLOW Anywhere (v6)', '443/tcp'), true)
+
+  const item = getServerMaintenanceQuickCommands()
+    .find(command => command.id === 'builtin-server-firewall-open-port')
+  assert.deepEqual(item.safetyMetadata.backupTargets, [
+    '/etc/ufw/user.rules',
+    '/etc/ufw/user6.rules',
+    '/etc/firewalld/zones'
+  ])
+  const context = buildQuickCommandContext({ host: 'server.example.com', port: '22' })
+  const result = submitValidatedQuickCommand({
+    id: item.id,
+    item,
+    context,
+    inputOnly: false,
+    paramValues: {
+      ...buildQuickCommandParamValues(item, context),
+      端口: '443',
+      协议: 'tcp',
+      防火墙类型: 'ufw',
+      生效方式: 'runtime',
+      确认执行: 'yes'
+    }
+  }, () => {})
+
+  assert.equal(result.submitted, true)
+  assert.match(result.commandText, /\$1 == rule && \$2 == "ALLOW" && \$3 == "Anywhere"/)
+  assert.match(result.commandText, /\$1 == rule && \$2 == "\(v6\)" && \$3 == "ALLOW"/)
+  assert.match(result.commandText, /OPERATION_ROLLBACK_DIR\/target-1[\s\S]*\/etc\/ufw\/user\.rules/)
+  assert.match(result.commandText, /OPERATION_ROLLBACK_DIR\/target-2[\s\S]*\/etc\/ufw\/user6\.rules/)
+  assert.doesNotMatch(result.commandText, /\$1 == rule \{ found=1 \}/)
+})
+
+test('mutation safety metadata locks and enforces a bounded backup budget', async () => {
+  const {
+    buildMutationBackup,
+    buildMutationPreflight,
+    createMutationSafetyMetadata
+  } = await import(safetyMetadataUrl)
+  const metadata = createMutationSafetyMetadata({
+    title: 'bounded backup',
+    backupTargets: ['/etc/hosts'],
+    verifyCommands: ['test -s /etc/hosts']
+  })
+
+  assert.equal(metadata.maxBackupKb, 8192)
+  assert.throws(
+    () => buildMutationPreflight({ ...metadata, maxBackupKb: 8193 }),
+    /备份.*上限/
+  )
+  assert.throws(
+    () => buildMutationBackup({ ...metadata, maxBackupKb: 1 }),
+    /备份.*上限/
+  )
+
+  const preflight = buildMutationPreflight(metadata)
+  assert.match(preflight, /BACKUP_AS="sudo"/)
+  assert.match(preflight, /sudo -v/)
+  const backup = buildMutationBackup(metadata)
+  assert.match(backup, /MAX_BACKUP_KB=8192/)
+  assert.match(backup, /du -sk --/)
+  assert.match(backup, /SHELLPILOT_BACKUP_TOTAL_KB/)
+  assert.match(backup, /\$BACKUP_AS cp -a --/)
+  assert.ok(backup.indexOf('du -sk --') < backup.indexOf('$BACKUP_AS cp -a --'))
+})
+
+test('network probe request gate rejects a cancelled A result after B opens', async () => {
+  const { createNetworkProbeRequestGate } = await import(networkUrl)
+  assert.equal(typeof createNetworkProbeRequestGate, 'function')
+
+  const gate = createNetworkProbeRequestGate()
+  let pending = { probeSessionId: 'session-a', detectedNetwork: null }
+  const requestA = gate.begin(pending.probeSessionId)
+  gate.cancel()
+  pending = { probeSessionId: 'session-b', detectedNetwork: null }
+  const requestB = gate.begin(pending.probeSessionId)
+
+  if (gate.isCurrent(requestA, pending.probeSessionId)) {
+    pending = { ...pending, detectedNetwork: { interface: 'late-a' } }
+  }
+  assert.equal(pending.detectedNetwork, null)
+  assert.equal(gate.isCurrent(requestA, pending.probeSessionId), false)
+  assert.equal(gate.isCurrent(requestB, pending.probeSessionId), true)
+
+  if (gate.isCurrent(requestB, pending.probeSessionId)) {
+    pending = { ...pending, detectedNetwork: { interface: 'eth-b' } }
+  }
+  assert.equal(pending.detectedNetwork.interface, 'eth-b')
+
+  gate.cancel()
+  assert.equal(gate.isCurrent(requestB, pending.probeSessionId), false)
+
+  const boxSource = fs.readFileSync(quickCommandsBoxPath, 'utf8')
+  assert.match(boxSource, /createNetworkProbeRequestGate/)
+  assert.match(
+    boxSource,
+    /function handlePendingCancel \(\) \{\s+resetTargetDiscovery\(\)\s+cancelNetworkProbe\(\)\s+setPendingCommand\(null\)/
+  )
+  assert.match(boxSource, /probeSessionId/)
+  assert.match(boxSource, /networkProbeRequestGateRef\.current\.isCurrent/)
+  assert.match(boxSource, /networkProbeRequestGateRef\.current\.cancel\(\)/)
 })

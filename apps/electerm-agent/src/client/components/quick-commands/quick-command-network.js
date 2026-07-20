@@ -1,6 +1,33 @@
 const NETWORK_BEGIN = '__SHELLPILOT_NETWORK_BEGIN__'
 const NETWORK_END = '__SHELLPILOT_NETWORK_END__'
 
+export function createNetworkProbeRequestGate () {
+  let sequence = 0
+  let activeRequest = null
+  return {
+    begin (sessionId) {
+      activeRequest = Object.freeze({
+        token: ++sequence,
+        sessionId: String(sessionId || '')
+      })
+      return activeRequest
+    },
+    cancel () {
+      sequence += 1
+      activeRequest = null
+    },
+    isCurrent (request, sessionId) {
+      return Boolean(
+        request &&
+        activeRequest &&
+        request.token === activeRequest.token &&
+        request.sessionId === activeRequest.sessionId &&
+        request.sessionId === String(sessionId || '')
+      )
+    }
+  }
+}
+
 export function buildNetworkProbeCommand () {
   return [
     'IFACE="$(ip route show default 2>/dev/null | awk \'NR==1 {print $5}\')"',

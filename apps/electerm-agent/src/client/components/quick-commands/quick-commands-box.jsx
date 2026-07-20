@@ -32,6 +32,7 @@ import {
 } from './quick-command-context'
 import {
   buildNetworkProbeCommand,
+  createNetworkProbeRequestGate,
   mergeDetectedNetworkParams,
   parseNetworkProbeOutput
 } from './quick-command-network'
@@ -81,6 +82,9 @@ export default function QuickCommandsFooterBox (props) {
   const [safetyRecords, setSafetyRecords] = useState(() => readSafetyOperationRecords(ls))
   const timer = useRef(null)
   const targetDiscoveryAbortRef = useRef(null)
+  const networkProbeRequestGateRef = useRef(createNetworkProbeRequestGate())
+  const networkProbeSessionSequenceRef = useRef(0)
+  const activeNetworkProbeSessionRef = useRef('')
   const rollbackRunningRef = useRef('')
   const [rollbackRunning, setRollbackRunning] = useState('')
   const rollbackRecord = safetyRecords.find(record => {
@@ -93,7 +97,10 @@ export default function QuickCommandsFooterBox (props) {
     return () => window.removeEventListener(safetyOperationUpdatedEvent, refresh)
   }, [])
 
-  useEffect(() => () => targetDiscoveryAbortRef.current?.abort(), [])
+  useEffect(() => () => {
+    targetDiscoveryAbortRef.current?.abort()
+    networkProbeRequestGateRef.current.cancel()
+  }, [])
 
   function handleMouseLeave () {
     timer.current = setTimeout(() => {
@@ -116,6 +123,7 @@ export default function QuickCommandsFooterBox (props) {
   }
 
   async function handleSelect (id) {
+    cancelNetworkProbe()
     const {
       store
     } = window
@@ -128,9 +136,12 @@ export default function QuickCommandsFooterBox (props) {
           item,
           buildQuickCommandContext(props.currentTab)
         )
+        const probeSessionId = `${props.currentTab?.id || 'tab'}:${item.id}:${++networkProbeSessionSequenceRef.current}`
+        activeNetworkProbeSessionRef.current = probeSessionId
         const paramValues = buildQuickCommandParamValues(item, context)
         setPendingCommand({
           item,
+          probeSessionId,
           context,
           id: item.id,
           name: item.name,
@@ -152,7 +163,7 @@ export default function QuickCommandsFooterBox (props) {
           resetTargetDiscovery()
         }
         if (item.id === networkChangeCommandId) {
-          mcpRunQuickCommandNetworkProbe(item, context)
+          mcpRunQuickCommandNetworkProbe(item, context, probeSessionId)
         } else {
           setNetworkProbe({ loading: false, error: '', detected: null })
         }
@@ -225,7 +236,14 @@ export default function QuickCommandsFooterBox (props) {
     }
   }
 
-  async function mcpRunQuickCommandNetworkProbe (item, context) {
+  function cancelNetworkProbe () {
+    networkProbeRequestGateRef.current.cancel()
+    activeNetworkProbeSessionRef.current = ''
+    setNetworkProbe({ loading: false, error: '', detected: null })
+  }
+
+  async function mcpRunQuickCommandNetworkProbe (item, context, probeSessionId) {
+    const request = networkProbeRequestGateRef.current.begin(probeSessionId)
     setNetworkProbe({ loading: true, error: '', detected: null })
     try {
       const tabId = props.currentTab?.id || window.store.activeTabId
@@ -235,8 +253,13 @@ export default function QuickCommandsFooterBox (props) {
       }
       const output = await runCmd(terminal.pid, buildNetworkProbeCommand())
       const detected = parseNetworkProbeOutput(String(output || ''))
+      if (!networkProbeRequestGateRef.current.isCurrent(
+        request,
+        activeNetworkProbeSessionRef.current
+      )) return
       setPendingCommand(old => {
-        if (!old || old.id !== networkChangeCommandId) {
+        if (!old || old.id !== networkChangeCommandId ||
+          !networkProbeRequestGateRef.current.isCurrent(request, old.probeSessionId)) {
           return old
         }
         const paramValues = mergeDetectedNetworkParams(old.paramValues, detected)
@@ -248,8 +271,16 @@ export default function QuickCommandsFooterBox (props) {
           detectedNetwork: detected
         }
       })
+      if (!networkProbeRequestGateRef.current.isCurrent(
+        request,
+        activeNetworkProbeSessionRef.current
+      )) return
       setNetworkProbe({ loading: false, error: '', detected })
     } catch (error) {
+      if (!networkProbeRequestGateRef.current.isCurrent(
+        request,
+        activeNetworkProbeSessionRef.current
+      )) return
       setNetworkProbe({
         loading: false,
         error: error?.message || e('shellpilotQuickNetworkDiscoveryFailed'),
@@ -294,6 +325,7 @@ export default function QuickCommandsFooterBox (props) {
 
   function handlePendingCancel () {
     resetTargetDiscovery()
+    cancelNetworkProbe()
     setPendingCommand(null)
     setShowPendingPreview(false)
   }
@@ -369,6 +401,7 @@ export default function QuickCommandsFooterBox (props) {
     ls.setItem(pinnedQuickCommandBarKey, 'n')
     window.store.pinnedQuickCommandBar = false
     window.store.openQuickCommandBar = false
+    cancelNetworkProbe()
   }
 
   function handleChange (e) {
@@ -616,7 +649,11 @@ export default function QuickCommandsFooterBox (props) {
           <Button
             size='small'
             loading={networkProbe.loading}
-            onClick={() => mcpRunQuickCommandNetworkProbe(pendingCommand.item, pendingCommand.context)}
+            onClick={() => mcpRunQuickCommandNetworkProbe(
+              pendingCommand.item,
+              pendingCommand.context,
+              pendingCommand.probeSessionId
+            )}
           >
             {e('shellpilotQuickDetectAgain')}
           </Button>

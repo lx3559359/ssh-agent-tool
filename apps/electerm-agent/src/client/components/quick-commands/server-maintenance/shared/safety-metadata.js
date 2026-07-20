@@ -1,11 +1,16 @@
-import { rollbackScriptDirectory, validateAndNormalizeValue } from './validation.js'
+import {
+  containsControlCharacters,
+  rollbackScriptDirectory,
+  validateAndNormalizeValue
+} from './validation.js'
 
 const minimumFreeKilobytes = 10240
+const maximumBackupKilobytes = 8192
 const rollbackDirectory = rollbackScriptDirectory
 
 function assertSafeString (value, label) {
   if (typeof value !== 'string') throw new Error(`${label}必须是非空字符串`)
-  if (/[\r\n\0]/.test(value)) throw new Error(`${label}不能包含换行或 NUL 字符`)
+  if (containsControlCharacters(value)) throw new Error(`${label}不能包含控制字符`)
   if (!value.trim()) throw new Error(`${label}不能为空`)
   return value
 }
@@ -46,6 +51,9 @@ function validateMutationSafetyMetadata (metadata) {
   if (!Number.isSafeInteger(metadata.minFreeKb) || metadata.minFreeKb < minimumFreeKilobytes) {
     throw new Error(`回滚目录最低可用空间不能小于 ${minimumFreeKilobytes} KB`)
   }
+  if (metadata.maxBackupKb !== maximumBackupKilobytes) {
+    throw new Error(`备份大小上限必须固定为 ${maximumBackupKilobytes} KB`)
+  }
   const validated = {
     ...metadata,
     title,
@@ -67,6 +75,7 @@ export function createMutationSafetyMetadata ({
   const metadata = {
     title: assertSafeString(title, '修改标题'),
     minFreeKb: minimumFreeKilobytes,
+    maxBackupKb: maximumBackupKilobytes,
     backupTargets: cloneStringArray(backupTargets, '备份目标', { allowUndefined: true }),
     verifyCommands: cloneStringArray(verifyCommands, '验证命令', { required: true }),
     rollbackDirectory,
@@ -80,7 +89,7 @@ export function createMutationSafetyMetadata ({
 
 export function buildMutationPreflight (metadata) {
   const validated = validateMutationSafetyMetadata(metadata)
-  return [
+  const lines = [
     'set -u',
     'umask 077',
     `ROLLBACK_DIR='${rollbackDirectory}'`,
@@ -99,9 +108,22 @@ export function buildMutationPreflight (metadata) {
     'if [ -L "$OPERATION_ROLLBACK_DIR" ] || [ ! -d "$OPERATION_ROLLBACK_DIR" ]; then echo "操作回滚目录类型不安全"; exit 1; fi',
     'OPERATION_OWNER=$(stat -c %u -- "$OPERATION_ROLLBACK_DIR" 2>/dev/null) || { echo "无法确认操作回滚目录所有者"; exit 1; }',
     'OPERATION_MODE=$(stat -c %a -- "$OPERATION_ROLLBACK_DIR" 2>/dev/null) || { echo "无法确认操作回滚目录权限"; exit 1; }',
-    'if [ "$OPERATION_OWNER" != "$CURRENT_UID" ] || [ "$OPERATION_MODE" != "700" ]; then echo "操作回滚目录所有者或权限不安全"; exit 1; fi',
-    'export OPERATION_ROLLBACK_DIR'
-  ].join('\n')
+    'if [ "$OPERATION_OWNER" != "$CURRENT_UID" ] || [ "$OPERATION_MODE" != "700" ]; then echo "操作回滚目录所有者或权限不安全"; exit 1; fi'
+  ]
+  if (validated.backupTargets.length) {
+    lines.push(
+      'BACKUP_AS=""',
+      'if [ "$CURRENT_UID" != "0" ]; then',
+      '  if ! command -v sudo >/dev/null 2>&1; then echo "当前不是 root 且没有 sudo，无法安全备份"; exit 1; fi',
+      '  if ! sudo -v; then echo "sudo 授权失败，未执行修改"; exit 1; fi',
+      '  BACKUP_AS="sudo"',
+      'fi'
+    )
+  } else {
+    lines.push('BACKUP_AS=""')
+  }
+  lines.push('export OPERATION_ROLLBACK_DIR BACKUP_AS')
+  return lines.join('\n')
 }
 
 function quoteShellLiteral (value) {
@@ -115,7 +137,9 @@ export function buildMutationBackup (metadata) {
   const lines = [
     '# __SHELLPILOT_MUTATION_BACKUP__',
     'SHELLPILOT_BACKUP_MANIFEST="$OPERATION_ROLLBACK_DIR/manifest"',
-    'if ! : > "$SHELLPILOT_BACKUP_MANIFEST"; then echo "无法创建备份清单"; exit 1; fi'
+    'if ! : > "$SHELLPILOT_BACKUP_MANIFEST"; then echo "无法创建备份清单"; exit 1; fi',
+    `MAX_BACKUP_KB=${validated.maxBackupKb}`,
+    'SHELLPILOT_BACKUP_TOTAL_KB=0'
   ]
   if (validated.rollbackScript) {
     lines.push(
@@ -129,11 +153,18 @@ export function buildMutationBackup (metadata) {
   validated.backupTargets.forEach((target, index) => {
     const number = index + 1
     const variable = `SHELLPILOT_BACKUP_TARGET_${number}`
+    const sizeVariable = `SHELLPILOT_BACKUP_SIZE_${number}`
     const destination = `$OPERATION_ROLLBACK_DIR/target-${number}`
     lines.push(
       `${variable}=${quoteShellLiteral(target)}`,
-      `if [ -e "$${variable}" ] || [ -L "$${variable}" ]; then`,
-      `  if ! cp -a -- "$${variable}" "${destination}"; then rm -rf -- "${destination}"; echo "备份目标失败: $${variable}"; exit 1; fi`,
+      `if $BACKUP_AS test -e "$${variable}" || $BACKUP_AS test -L "$${variable}"; then`,
+      `  ${sizeVariable}="$($BACKUP_AS du -sk -- "$${variable}" 2>/dev/null | awk 'NR == 1 { print $1 }')"`,
+      `  case "$${sizeVariable}" in ""|*[!0-9]*) echo "无法计算备份大小: $${variable}"; exit 1;; esac`,
+      `  SHELLPILOT_BACKUP_TOTAL_KB=$((SHELLPILOT_BACKUP_TOTAL_KB + ${sizeVariable}))`,
+      '  if [ "$SHELLPILOT_BACKUP_TOTAL_KB" -gt "$MAX_BACKUP_KB" ]; then echo "备份目标总大小超过安全上限"; exit 1; fi',
+      '  if [ "$SHELLPILOT_BACKUP_TOTAL_KB" -gt "$FREE_KB" ]; then echo "备份所需空间超过 /tmp 可用空间"; exit 1; fi',
+      `  if ! $BACKUP_AS cp -a -- "$${variable}" "${destination}"; then $BACKUP_AS rm -rf -- "${destination}"; echo "备份目标失败: $${variable}"; exit 1; fi`,
+      `  if ! $BACKUP_AS test -e "${destination}" && ! $BACKUP_AS test -L "${destination}"; then echo "备份结果不存在: $${variable}"; exit 1; fi`,
       `  if ! printf 'saved\\t%s\\n' "$${variable}" >> "$SHELLPILOT_BACKUP_MANIFEST"; then echo "无法记录备份结果"; exit 1; fi`,
       'else',
       `  if ! printf 'missing\\t%s\\n' "$${variable}" >> "$SHELLPILOT_BACKUP_MANIFEST"; then echo "无法记录缺失目标"; exit 1; fi`,

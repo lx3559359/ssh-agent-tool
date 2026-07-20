@@ -7,6 +7,7 @@ import {
   buildMutationSafetyCommand
 } from './server-maintenance/shared/safety-metadata.js'
 import {
+  buildPacketFilterArguments,
   hardenMutationCommand
 } from './server-maintenance/shared/command-builders.js'
 
@@ -74,7 +75,7 @@ function getPacketFilterFromParams (values = {}) {
     return ip ? `host ${ip}` : (port ? `port ${port}` : 'tcp')
   }
   if (type === 'custom') {
-    return custom || 'tcp'
+    return buildPacketFilterArguments(custom || 'tcp')
   }
   return 'tcp'
 }

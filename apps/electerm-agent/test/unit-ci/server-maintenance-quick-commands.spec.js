@@ -244,7 +244,7 @@ test('packet capture form params build a concrete tcpdump command', async () => 
     过滤类型: 'custom',
     自定义过滤: 'tcp and dst port 443'
   }, context)
-  assert.match(custom, /tcpdump -nn -i any tcp and dst port 443 -c 50/)
+  assert.match(custom, /tcpdump -nn -i any 'tcp' 'and' 'dst' 'port' '443' -c 50/)
 })
 
 test('editable maintenance commands use form params instead of raw placeholders', async () => {

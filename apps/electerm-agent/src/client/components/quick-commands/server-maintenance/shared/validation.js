@@ -21,6 +21,7 @@ const typeLabels = {
 
 const maintenanceCommandPrefix = 'builtin-server-'
 export const rollbackScriptDirectory = '/tmp/shellpilot-rollback'
+const unresolvedTemplatePattern = /\{\{[^{}]*\}\}/
 
 const cronMacros = new Set([
   '@reboot',
@@ -92,9 +93,17 @@ function hasUnclosedQuotes (value) {
   return Boolean(quote)
 }
 
+export function containsControlCharacters (value) {
+  return Array.from(toStringValue(value)).some(character => {
+    const code = character.charCodeAt(0)
+    return code <= 0x1f ||
+      (code >= 0x7f && code <= 0x9f)
+  })
+}
+
 function validateStructuralSafety (value, label) {
-  if (/[\r\n\0]/.test(value)) {
-    return `${label}不能包含换行或 NUL 字符`
+  if (containsControlCharacters(value)) {
+    return `${label}不能包含控制字符`
   }
   if (hasUnclosedQuotes(value)) {
     return `${label}包含未闭合引号`
@@ -203,9 +212,10 @@ function isCidr (value, requiredIpVersion) {
 }
 
 function isPacketFilter (value) {
-  if (/[;&|`$\\<>#]/.test(value)) return false
-  if (!/^[a-zA-Z0-9_.:/\s'"()[\]=!+*-]+$/.test(value)) return false
-  return !value.split(/\s+/).some(token => token.startsWith('-'))
+  if (/['";&|`$\\<>#]/.test(value)) return false
+  if (!/^[a-zA-Z0-9_.:/\s()[\]=!+*-]+$/.test(value)) return false
+  const tokens = value.replace(/[()]/g, ' ').split(/\s+/).filter(Boolean)
+  return !tokens.some(token => token.startsWith('-'))
 }
 
 function isHttpUrl (value) {
@@ -341,6 +351,12 @@ function validateDoubleQuotedTemplateSafety (value, label) {
     : ''
 }
 
+function validateUnresolvedTemplateSafety (value, label) {
+  return unresolvedTemplatePattern.test(value)
+    ? `${label}不能包含未解析的模板变量`
+    : ''
+}
+
 export function isServerMaintenanceQuickCommand (item = {}) {
   return typeof item.id === 'string' && item.id.startsWith(maintenanceCommandPrefix)
 }
@@ -391,9 +407,12 @@ export function validateAndNormalizeValue (type, rawValue, options = {}) {
   const templateError = options.doubleQuotedTemplate
     ? validateDoubleQuotedTemplateSafety(value, label)
     : ''
+  const unresolvedTemplateError = options.rejectTemplateTokens
+    ? validateUnresolvedTemplateSafety(originalValue, label)
+    : ''
   return {
     value,
-    error: structuralError || templateError || validateNormalizedValue(
+    error: structuralError || unresolvedTemplateError || templateError || validateNormalizedValue(
       normalizedType,
       value,
       options,
@@ -447,7 +466,8 @@ export function validateAndNormalizeQuickCommandParams (item = {}, values = {}) 
         const result = validateAndNormalizeValue(validationType, itemValue, {
           ...param,
           required: param.required,
-          doubleQuotedTemplate: isMaintenance
+          doubleQuotedTemplate: isMaintenance,
+          rejectTemplateTokens: isMaintenance
         })
         normalizedItems.push(result.value)
         if (result.error && !errors[param.name]) {
@@ -460,7 +480,8 @@ export function validateAndNormalizeQuickCommandParams (item = {}, values = {}) 
     }
     const result = validateAndNormalizeValue(validationType, rawValue, {
       ...param,
-      doubleQuotedTemplate: isMaintenance
+      doubleQuotedTemplate: isMaintenance,
+      rejectTemplateTokens: isMaintenance
     })
     normalizedValues[param.name] = result.value
     if (result.error) errors[param.name] = result.error

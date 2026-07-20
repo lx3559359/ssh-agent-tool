@@ -1,10 +1,10 @@
 import { createMutationSafetyMetadata } from './safety-metadata.js'
+import { ufwGlobalAllowAwk } from './command-builders.js'
 
 const mutationSafetyByCommandId = {
   'builtin-server-network-change-ip': {
     backupTargets: [
-      '/etc/resolv.conf',
-      '/etc/NetworkManager/system-connections'
+      '/etc/resolv.conf'
     ],
     verifyCommands: [
       'ip -4 address show dev "{{网卡}}" | grep -F -- "inet {{新IP/CIDR}}" >/dev/null'
@@ -12,32 +12,28 @@ const mutationSafetyByCommandId = {
   },
   'builtin-server-firewall-open-port': {
     backupTargets: [
-      '/etc/firewalld/firewalld.conf',
-      '/etc/default/ufw',
-      '/etc/ufw/ufw.conf'
+      '/etc/ufw/user.rules',
+      '/etc/ufw/user6.rules',
+      '/etc/firewalld/zones'
     ],
     verifyCommands: [
-      'VERIFY_AS=""; [ "$(id -u)" = "0" ] || VERIFY_AS="sudo"; VERIFY_FIREWALL_KIND="{{防火墙类型}}"; VERIFY_FIREWALL_ARGS=""; [ "{{生效方式}}" = "permanent" ] && VERIFY_FIREWALL_ARGS="--permanent"; case "$VERIFY_FIREWALL_KIND" in firewalld) command -v firewall-cmd >/dev/null 2>&1 && $VERIFY_AS firewall-cmd $VERIFY_FIREWALL_ARGS --query-port="{{端口}}/{{协议}}" >/dev/null ;; ufw) command -v ufw >/dev/null 2>&1 && $VERIFY_AS ufw status | awk -v rule="{{端口}}/{{协议}}" \'$1 == rule { found=1 } END { exit found ? 0 : 1 }\' ;; auto) if command -v firewall-cmd >/dev/null 2>&1; then $VERIFY_AS firewall-cmd $VERIFY_FIREWALL_ARGS --query-port="{{端口}}/{{协议}}" >/dev/null; elif command -v ufw >/dev/null 2>&1; then $VERIFY_AS ufw status | awk -v rule="{{端口}}/{{协议}}" \'$1 == rule { found=1 } END { exit found ? 0 : 1 }\'; else exit 1; fi ;; *) exit 1 ;; esac'
+      `VERIFY_AS=""; [ "$(id -u)" = "0" ] || VERIFY_AS="sudo"; VERIFY_FIREWALL_KIND="{{防火墙类型}}"; VERIFY_FIREWALL_ARGS=""; [ "{{生效方式}}" = "permanent" ] && VERIFY_FIREWALL_ARGS="--permanent"; case "$VERIFY_FIREWALL_KIND" in firewalld) command -v firewall-cmd >/dev/null 2>&1 && $VERIFY_AS firewall-cmd $VERIFY_FIREWALL_ARGS --query-port="{{端口}}/{{协议}}" >/dev/null ;; ufw) command -v ufw >/dev/null 2>&1 && $VERIFY_AS ufw status | awk -v rule="{{端口}}/{{协议}}" ${ufwGlobalAllowAwk} ;; auto) if command -v firewall-cmd >/dev/null 2>&1; then $VERIFY_AS firewall-cmd $VERIFY_FIREWALL_ARGS --query-port="{{端口}}/{{协议}}" >/dev/null; elif command -v ufw >/dev/null 2>&1; then $VERIFY_AS ufw status | awk -v rule="{{端口}}/{{协议}}" ${ufwGlobalAllowAwk}; else exit 1; fi ;; *) exit 1 ;; esac`
     ]
   },
   'builtin-server-service-action': {
-    backupTargets: [
-      '/etc/systemd/system/{{服务名称}}',
-      '/lib/systemd/system/{{服务名称}}',
-      '/usr/lib/systemd/system/{{服务名称}}'
-    ],
+    backupTargets: [],
     verifyCommands: [
       'LOAD_STATE="$(systemctl show -p LoadState --value "{{服务名称}}" 2>/dev/null)"; [ -n "$LOAD_STATE" ] && [ "$LOAD_STATE" != "not-found" ] && case "{{操作}}" in start|restart|reload) systemctl is-active --quiet "{{服务名称}}" ;; stop) ! systemctl is-active --quiet "{{服务名称}}" ;; enable) systemctl is-enabled --quiet "{{服务名称}}" ;; disable) ! systemctl is-enabled --quiet "{{服务名称}}" ;; *) exit 1 ;; esac'
     ]
   },
   'builtin-server-docker-action': {
-    backupTargets: ['/etc/docker/daemon.json'],
+    backupTargets: [],
     verifyCommands: [
       'case "{{操作}}" in stop) EXPECTED_RUNNING=false ;; start|restart) EXPECTED_RUNNING=true ;; *) exit 1 ;; esac; [ "$(docker inspect -f \'{{.State.Running}}\' "{{容器名称}}" 2>/dev/null)" = "$EXPECTED_RUNNING" ]'
     ]
   },
   'builtin-server-file-permission': {
-    backupTargets: ['{{目标路径}}'],
+    backupTargets: [],
     verifyCommands: [
       'EXPECTED_MODE="$(printf \'%s\' "{{权限模式}}" | sed \'s/^0*//\')"; [ -n "$EXPECTED_MODE" ] || EXPECTED_MODE=0; [ "$(stat -c %a -- "{{目标路径}}")" = "$EXPECTED_MODE" ] && { [ -z "{{所有者}}" ] || [ "$(stat -c %U -- "{{目标路径}}")" = "{{所有者}}" ]; } && { [ -z "{{所属组}}" ] || [ "$(stat -c %G -- "{{目标路径}}")" = "{{所属组}}" ]; }'
     ]
