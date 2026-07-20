@@ -11,6 +11,8 @@ import {
   hardenMutationCommand
 } from './server-maintenance/shared/command-builders.js'
 
+const quickCommandSessionMismatchMessage = '当前服务器已切换，请重新打开快捷命令后再执行'
+
 function toStringValue (value, fallback = '') {
   if (value === undefined || value === null || value === '') {
     return fallback
@@ -130,6 +132,14 @@ export function buildQuickCommandContext (tab = {}) {
     defaultLogPath: '/var/log',
     defaultKeyword: 'error'
   }
+}
+
+export function buildQuickCommandContextIdentity (context = {}) {
+  return JSON.stringify([
+    toStringValue(context.username),
+    toStringValue(context.host),
+    toStringValue(context.port)
+  ])
 }
 
 export function buildQuickCommandRollbackContext (item = {}, context = {}) {
@@ -298,7 +308,35 @@ export function updatePendingQuickCommandParams (pendingCommand, nextValues = {}
   }
 }
 
-export function submitValidatedQuickCommand (pendingCommand = {}, submit) {
+export function validateQuickCommandSession (pendingCommand = {}, activeSession) {
+  if (activeSession === undefined) return ''
+  const boundTabId = toStringValue(pendingCommand.boundTabId)
+  const activeTabId = toStringValue(activeSession?.tabId)
+  const boundContextIdentity = toStringValue(pendingCommand.contextIdentity)
+  const activeContextIdentity = toStringValue(activeSession?.contextIdentity)
+  const pendingCommandId = toStringValue(pendingCommand.id)
+  const activeCommandId = toStringValue(activeSession?.commandId)
+  if (!boundTabId || !activeTabId || !boundContextIdentity || !activeContextIdentity) {
+    return quickCommandSessionMismatchMessage
+  }
+  if (boundTabId !== activeTabId || boundContextIdentity !== activeContextIdentity ||
+    (activeCommandId && activeCommandId !== pendingCommandId)) {
+    return quickCommandSessionMismatchMessage
+  }
+  return ''
+}
+
+export function submitValidatedQuickCommand (pendingCommand = {}, submit, activeSession) {
+  const sessionError = validateQuickCommandSession(pendingCommand, activeSession)
+  if (sessionError) {
+    return {
+      submitted: false,
+      errors: pendingCommand.paramErrors || {},
+      paramValues: pendingCommand.paramValues || {},
+      commandText: '',
+      sessionError
+    }
+  }
   const item = pendingCommand.item || {}
   const validation = validateAndNormalizeMaintenanceParams(
     item,

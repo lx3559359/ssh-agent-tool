@@ -1,14 +1,32 @@
 const NETWORK_BEGIN = '__SHELLPILOT_NETWORK_BEGIN__'
 const NETWORK_END = '__SHELLPILOT_NETWORK_END__'
 
+function normalizeProbeIdentity (identity) {
+  if (typeof identity === 'string') {
+    return {
+      sessionId: identity,
+      commandId: '',
+      tabId: '',
+      contextIdentity: ''
+    }
+  }
+  return {
+    sessionId: String(identity?.sessionId || ''),
+    commandId: String(identity?.commandId || ''),
+    tabId: String(identity?.tabId || ''),
+    contextIdentity: String(identity?.contextIdentity || '')
+  }
+}
+
 export function createNetworkProbeRequestGate () {
   let sequence = 0
   let activeRequest = null
   return {
-    begin (sessionId) {
+    begin (identity) {
+      const normalized = normalizeProbeIdentity(identity)
       activeRequest = Object.freeze({
         token: ++sequence,
-        sessionId: String(sessionId || '')
+        ...normalized
       })
       return activeRequest
     },
@@ -16,13 +34,20 @@ export function createNetworkProbeRequestGate () {
       sequence += 1
       activeRequest = null
     },
-    isCurrent (request, sessionId) {
+    isCurrent (request, identity) {
+      const current = normalizeProbeIdentity(identity)
       return Boolean(
         request &&
         activeRequest &&
         request.token === activeRequest.token &&
         request.sessionId === activeRequest.sessionId &&
-        request.sessionId === String(sessionId || '')
+        request.commandId === activeRequest.commandId &&
+        request.tabId === activeRequest.tabId &&
+        request.contextIdentity === activeRequest.contextIdentity &&
+        request.sessionId === current.sessionId &&
+        request.commandId === current.commandId &&
+        request.tabId === current.tabId &&
+        request.contextIdentity === current.contextIdentity
       )
     }
   }

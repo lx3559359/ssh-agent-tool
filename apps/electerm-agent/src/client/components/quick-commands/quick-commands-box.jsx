@@ -23,6 +23,7 @@ import {
   applyQuickCommandParamValues,
   buildAdvancedUsage,
   buildQuickCommandContext,
+  buildQuickCommandContextIdentity,
   buildQuickCommandRollbackContext,
   buildQuickCommandParamValues,
   buildQuickCommandText,
@@ -84,12 +85,19 @@ export default function QuickCommandsFooterBox (props) {
   const targetDiscoveryAbortRef = useRef(null)
   const networkProbeRequestGateRef = useRef(createNetworkProbeRequestGate())
   const networkProbeSessionSequenceRef = useRef(0)
-  const activeNetworkProbeSessionRef = useRef('')
+  const activeNetworkProbeIdentityRef = useRef(null)
+  const activeTabContextIdentityRef = useRef({ tabId: '', contextIdentity: '' })
   const rollbackRunningRef = useRef('')
   const [rollbackRunning, setRollbackRunning] = useState('')
   const rollbackRecord = safetyRecords.find(record => {
     return record.source === 'quick-command' && record.status === 'available'
   })
+
+  const renderedTabContext = buildQuickCommandContext(props.currentTab)
+  activeTabContextIdentityRef.current = {
+    tabId: String(props.currentTab?.id || ''),
+    contextIdentity: buildQuickCommandContextIdentity(renderedTabContext)
+  }
 
   useEffect(() => {
     const refresh = () => setSafetyRecords(readSafetyOperationRecords(ls))
@@ -122,6 +130,28 @@ export default function QuickCommandsFooterBox (props) {
     window.store.pinnedQuickCommandBar = current
   }
 
+  function getCurrentQuickCommandSession (commandId) {
+    const rendered = activeTabContextIdentityRef.current
+    const activeTabId = String(window.store.activeTabId || rendered.tabId || '')
+    return {
+      commandId: String(commandId || ''),
+      tabId: activeTabId,
+      contextIdentity: activeTabId === rendered.tabId
+        ? rendered.contextIdentity
+        : ''
+    }
+  }
+
+  function getCurrentNetworkProbeIdentity () {
+    const active = activeNetworkProbeIdentityRef.current
+    return active
+      ? {
+          ...active,
+          ...getCurrentQuickCommandSession(active.commandId)
+        }
+      : null
+  }
+
   async function handleSelect (id) {
     cancelNetworkProbe()
     const {
@@ -136,12 +166,22 @@ export default function QuickCommandsFooterBox (props) {
           item,
           buildQuickCommandContext(props.currentTab)
         )
-        const probeSessionId = `${props.currentTab?.id || 'tab'}:${item.id}:${++networkProbeSessionSequenceRef.current}`
-        activeNetworkProbeSessionRef.current = probeSessionId
+        const commandSession = getCurrentQuickCommandSession(item.id)
+        if (!commandSession.tabId || !commandSession.contextIdentity) {
+          message.warning('当前服务器会话已变化，请重新打开快捷命令')
+          return
+        }
+        const probeSessionId = `${commandSession.tabId}:${item.id}:${++networkProbeSessionSequenceRef.current}`
+        const probeIdentity = {
+          ...commandSession,
+          sessionId: probeSessionId
+        }
         const paramValues = buildQuickCommandParamValues(item, context)
         setPendingCommand({
           item,
           probeSessionId,
+          boundTabId: commandSession.tabId,
+          contextIdentity: commandSession.contextIdentity,
           context,
           id: item.id,
           name: item.name,
@@ -163,7 +203,7 @@ export default function QuickCommandsFooterBox (props) {
           resetTargetDiscovery()
         }
         if (item.id === networkChangeCommandId) {
-          mcpRunQuickCommandNetworkProbe(item, context, probeSessionId)
+          mcpRunQuickCommandNetworkProbe(item, context, probeIdentity)
         } else {
           setNetworkProbe({ loading: false, error: '', detected: null })
         }
@@ -238,15 +278,26 @@ export default function QuickCommandsFooterBox (props) {
 
   function cancelNetworkProbe () {
     networkProbeRequestGateRef.current.cancel()
-    activeNetworkProbeSessionRef.current = ''
+    activeNetworkProbeIdentityRef.current = null
     setNetworkProbe({ loading: false, error: '', detected: null })
   }
 
-  async function mcpRunQuickCommandNetworkProbe (item, context, probeSessionId) {
-    const request = networkProbeRequestGateRef.current.begin(probeSessionId)
+  async function mcpRunQuickCommandNetworkProbe (item, context, probeIdentity) {
+    const currentSession = getCurrentQuickCommandSession(probeIdentity.commandId)
+    if (probeIdentity.tabId !== currentSession.tabId ||
+      probeIdentity.contextIdentity !== currentSession.contextIdentity) {
+      setNetworkProbe({
+        loading: false,
+        error: '当前服务器已切换，网络探测已取消',
+        detected: null
+      })
+      return
+    }
+    activeNetworkProbeIdentityRef.current = probeIdentity
+    const request = networkProbeRequestGateRef.current.begin(probeIdentity)
     setNetworkProbe({ loading: true, error: '', detected: null })
     try {
-      const tabId = props.currentTab?.id || window.store.activeTabId
+      const tabId = probeIdentity.tabId
       const terminal = refs.get('term-' + tabId)
       if (!terminal?.pid || !terminal?.isSsh?.()) {
         throw new Error(e('shellpilotQuickDiscoveryRequiresSsh'))
@@ -255,11 +306,20 @@ export default function QuickCommandsFooterBox (props) {
       const detected = parseNetworkProbeOutput(String(output || ''))
       if (!networkProbeRequestGateRef.current.isCurrent(
         request,
-        activeNetworkProbeSessionRef.current
+        getCurrentNetworkProbeIdentity()
       )) return
       setPendingCommand(old => {
+        const currentSession = getCurrentQuickCommandSession(old?.id)
+        const pendingIdentity = old
+          ? {
+              sessionId: old.probeSessionId,
+              ...currentSession
+            }
+          : null
         if (!old || old.id !== networkChangeCommandId ||
-          !networkProbeRequestGateRef.current.isCurrent(request, old.probeSessionId)) {
+          old.boundTabId !== currentSession.tabId ||
+          old.contextIdentity !== currentSession.contextIdentity ||
+          !networkProbeRequestGateRef.current.isCurrent(request, pendingIdentity)) {
           return old
         }
         const paramValues = mergeDetectedNetworkParams(old.paramValues, detected)
@@ -273,13 +333,13 @@ export default function QuickCommandsFooterBox (props) {
       })
       if (!networkProbeRequestGateRef.current.isCurrent(
         request,
-        activeNetworkProbeSessionRef.current
+        getCurrentNetworkProbeIdentity()
       )) return
       setNetworkProbe({ loading: false, error: '', detected })
     } catch (error) {
       if (!networkProbeRequestGateRef.current.isCurrent(
         request,
-        activeNetworkProbeSessionRef.current
+        getCurrentNetworkProbeIdentity()
       )) return
       setNetworkProbe({
         loading: false,
@@ -378,8 +438,17 @@ export default function QuickCommandsFooterBox (props) {
   function handlePendingOk () {
     const result = submitValidatedQuickCommand(
       pendingCommand,
-      (id, options) => window.store.runQuickCommandItem(id, options)
+      (id, options) => window.store.runQuickCommandItem(id, options),
+      getCurrentQuickCommandSession(pendingCommand?.id)
     )
+    if (result.sessionError) {
+      resetTargetDiscovery()
+      cancelNetworkProbe()
+      setPendingCommand(null)
+      setShowPendingPreview(false)
+      message.warning(result.sessionError)
+      return
+    }
     if (!result.submitted) {
       setPendingCommand(current => {
         if (!current) return current
@@ -393,6 +462,7 @@ export default function QuickCommandsFooterBox (props) {
       return
     }
     resetTargetDiscovery()
+    cancelNetworkProbe()
     setPendingCommand(null)
     setShowPendingPreview(false)
   }
@@ -652,7 +722,12 @@ export default function QuickCommandsFooterBox (props) {
             onClick={() => mcpRunQuickCommandNetworkProbe(
               pendingCommand.item,
               pendingCommand.context,
-              pendingCommand.probeSessionId
+              {
+                sessionId: pendingCommand.probeSessionId,
+                commandId: pendingCommand.id,
+                tabId: pendingCommand.boundTabId,
+                contextIdentity: pendingCommand.contextIdentity
+              }
             )}
           >
             {e('shellpilotQuickDetectAgain')}

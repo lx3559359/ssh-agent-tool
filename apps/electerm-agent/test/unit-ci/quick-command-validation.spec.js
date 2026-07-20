@@ -1496,3 +1496,94 @@ test('network probe request gate rejects a cancelled A result after B opens', as
   assert.match(boxSource, /networkProbeRequestGateRef\.current\.isCurrent/)
   assert.match(boxSource, /networkProbeRequestGateRef\.current\.cancel\(\)/)
 })
+
+test('network probe gate binds token command tab and context identity', async () => {
+  const { createNetworkProbeRequestGate } = await import(networkUrl)
+  const gate = createNetworkProbeRequestGate()
+  const identityA = {
+    sessionId: 'probe-a',
+    commandId: 'builtin-server-network-change-ip',
+    tabId: 'tab-a',
+    contextIdentity: 'root@server-a.example.com:22'
+  }
+  const requestA = gate.begin(identityA)
+
+  assert.equal(gate.isCurrent(requestA, identityA), true)
+  for (const changedIdentity of [
+    { ...identityA, sessionId: 'probe-b' },
+    { ...identityA, commandId: 'builtin-server-log-search' },
+    { ...identityA, tabId: 'tab-b' },
+    { ...identityA, contextIdentity: 'root@server-b.example.com:22' }
+  ]) {
+    assert.equal(gate.isCurrent(requestA, changedIdentity), false)
+  }
+
+  let pendingB = { detectedNetwork: null }
+  const identityB = {
+    ...identityA,
+    sessionId: 'probe-b',
+    tabId: 'tab-b',
+    contextIdentity: 'root@server-b.example.com:22'
+  }
+  if (gate.isCurrent(requestA, identityB)) {
+    pendingB = { detectedNetwork: { interface: 'late-a' } }
+  }
+  assert.equal(pendingB.detectedNetwork, null)
+})
+
+test('pending maintenance command cannot submit after the active tab changes', async () => {
+  const { getServerMaintenanceQuickCommands } = await import(commandsUrl)
+  const {
+    buildQuickCommandContext,
+    buildQuickCommandParamValues,
+    submitValidatedQuickCommand
+  } = await import(contextUrl)
+  const item = getServerMaintenanceQuickCommands()
+    .find(command => command.id === 'builtin-server-network-change-ip')
+  const context = buildQuickCommandContext({
+    host: 'server-a.example.com',
+    port: '22',
+    username: 'root'
+  })
+  const submissions = []
+  const result = submitValidatedQuickCommand({
+    id: item.id,
+    item,
+    context,
+    boundTabId: 'tab-a',
+    contextIdentity: 'root@server-a.example.com:22',
+    inputOnly: false,
+    paramValues: {
+      ...buildQuickCommandParamValues(item, context),
+      网卡: 'eth0',
+      '新IP/CIDR': '192.0.2.20/24',
+      配置方式: 'temporary',
+      确认执行: 'yes'
+    }
+  }, (...args) => submissions.push(args), {
+    tabId: 'tab-b',
+    contextIdentity: 'root@server-b.example.com:22'
+  })
+
+  assert.equal(result.submitted, false)
+  assert.equal(result.commandText, '')
+  assert.match(result.sessionError, /当前服务器已切换/)
+  assert.equal(submissions.length, 0)
+})
+
+test('quick command modal wires active tab identity into probe and submit', () => {
+  const boxSource = fs.readFileSync(quickCommandsBoxPath, 'utf8')
+  assert.match(
+    boxSource,
+    /buildQuickCommandContextIdentity/
+  )
+  assert.match(boxSource, /boundTabId: commandSession\.tabId/)
+  assert.match(boxSource, /activeNetworkProbeIdentityRef/)
+  const submitStart = boxSource.indexOf('function handlePendingOk () {')
+  const submitEnd = boxSource.indexOf('function handleClose () {', submitStart)
+  assert.ok(submitStart >= 0 && submitEnd > submitStart)
+  const submitHandler = boxSource.slice(submitStart, submitEnd)
+  assert.match(submitHandler, /submitValidatedQuickCommand\(/)
+  assert.match(submitHandler, /getCurrentQuickCommandSession\(pendingCommand\?\.id\)/)
+  assert.match(submitHandler, /message\.warning\(result\.sessionError\)/)
+})
