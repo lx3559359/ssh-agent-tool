@@ -371,7 +371,8 @@ export function submitValidatedQuickCommand (pendingCommand = {}, submit, active
   submit(pendingCommand.id, {
     commandText,
     inputOnly: pendingCommand.inputOnly,
-    confirmed: true
+    confirmed: true,
+    tabId: pendingCommand.boundTabId
   })
   return { ...result, submitted: true }
 }

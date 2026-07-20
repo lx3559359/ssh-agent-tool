@@ -1587,3 +1587,61 @@ test('quick command modal wires active tab identity into probe and submit', () =
   assert.match(submitHandler, /getCurrentQuickCommandSession\(pendingCommand\?\.id\)/)
   assert.match(submitHandler, /message\.warning\(result\.sessionError\)/)
 })
+
+test('successful submission keeps the bound tab through delayed execution', async () => {
+  const { getServerMaintenanceQuickCommands } = await import(commandsUrl)
+  const {
+    buildQuickCommandContext,
+    buildQuickCommandParamValues,
+    submitValidatedQuickCommand
+  } = await import(contextUrl)
+  const item = getServerMaintenanceQuickCommands()
+    .find(command => command.id === 'builtin-server-network-change-ip')
+  const context = buildQuickCommandContext({
+    host: 'server-a.example.com',
+    port: '22',
+    username: 'root'
+  })
+  const pendingCommand = {
+    id: item.id,
+    item,
+    context,
+    boundTabId: 'tab-a',
+    contextIdentity: 'root@server-a.example.com:22',
+    inputOnly: false,
+    paramValues: {
+      ...buildQuickCommandParamValues(item, context),
+      网卡: 'eth0',
+      '新IP/CIDR': '192.0.2.20/24',
+      配置方式: 'temporary',
+      确认执行: 'yes'
+    }
+  }
+  let activeTabId = 'tab-a'
+  let submittedOptions
+  let resolveExecution
+  const execution = new Promise(resolve => {
+    resolveExecution = resolve
+  })
+
+  const result = submitValidatedQuickCommand(
+    pendingCommand,
+    (id, options) => {
+      submittedOptions = options
+      setTimeout(() => {
+        resolveExecution(options.tabId || activeTabId)
+      }, 5)
+    },
+    {
+      commandId: item.id,
+      tabId: 'tab-a',
+      contextIdentity: 'root@server-a.example.com:22'
+    }
+  )
+
+  assert.equal(result.submitted, true)
+  activeTabId = 'tab-b'
+  const executionTabId = await execution
+  assert.equal(submittedOptions.tabId, 'tab-a')
+  assert.equal(executionTabId, 'tab-a')
+})
