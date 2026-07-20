@@ -1,9 +1,9 @@
-import { systemCommands } from './system.js'
-import { storageCommands } from './storage.js'
-import { networkCommands } from './network.js'
-import { securityCommands } from './security.js'
-import { servicesCommands } from './services.js'
-import { containersCommands } from './containers.js'
+import { getSystemCommands } from './system.js'
+import { getStorageCommands } from './storage.js'
+import { getNetworkCommands } from './network.js'
+import { getSecurityCommands } from './security.js'
+import { getServicesCommands } from './services.js'
+import { getContainersCommands } from './containers.js'
 
 const LEGACY_ORDER = [
   'builtin-server-overview',
@@ -34,17 +34,17 @@ const LEGACY_ORDER = [
   'builtin-server-packet-capture'
 ]
 
-const DOMAIN_COMMANDS = [
-  systemCommands,
-  storageCommands,
-  networkCommands,
-  securityCommands,
-  servicesCommands,
-  containersCommands
+const DOMAIN_COMMAND_FACTORIES = [
+  getSystemCommands,
+  getStorageCommands,
+  getNetworkCommands,
+  getSecurityCommands,
+  getServicesCommands,
+  getContainersCommands
 ]
 
-export function getServerMaintenanceQuickCommands () {
-  const commands = DOMAIN_COMMANDS.flat()
+export function buildServerMaintenanceQuickCommands (commandFactories = DOMAIN_COMMAND_FACTORIES) {
+  const commands = commandFactories.flatMap(getCommands => getCommands())
   const commandById = new Map()
 
   for (const command of commands) {
@@ -65,4 +65,8 @@ export function getServerMaintenanceQuickCommands () {
   const newCommands = commands.filter(command => !legacyIds.has(command.id))
 
   return [...legacyCommands, ...newCommands]
+}
+
+export function getServerMaintenanceQuickCommands () {
+  return buildServerMaintenanceQuickCommands()
 }
