@@ -642,11 +642,14 @@ test('security readonly command covers bounded SSH authentication events and log
   assert.equal(command.commands.length, 1)
 
   const text = commandText(command)
-  assert.match(text, /journalctl -u ssh -u sshd --since "-24 hours" --no-pager/)
+  assert.match(text, /journalctl -r -u ssh -u sshd --since '-24 hours' --no-pager/)
   assert.match(text, /failed\|invalid\|accepted\|disconnect/)
   assert.match(text, /\/var\/log\/auth\.log/)
   assert.match(text, /\/var\/log\/secure/)
   assert.match(text, /limit = 200/)
+  assert.match(text, /tail -n 5000/)
+  assert.match(text, /-mtime -1/)
+  assert.match(text, /最近日志尾部近似范围/)
   assert.match(text, /\u672a\u627e\u5230\u53ef\u8bfb\u7684 SSH \u5b89\u5168\u65e5\u5fd7/)
 })
 
@@ -739,8 +742,11 @@ test('Task 5 readonly scripts are bounded side-effect-free and exact-classifier-
 
   const security = byId.get('builtin-server-ssh-security-events').commands[0].command
   assert.match(security, /status_seen && command_status == 0/)
-  assert.match(security, /NR <= 200/)
-  assert.doesNotMatch(security, /\|\s*(?:head|tail)\b/)
+  assert.match(security, /journalctl -r/)
+  assert.match(security, /tail -n 5000/)
+  assert.match(security, /limit = 200/)
+  assert.match(security, /events\[slot\]/)
+  assert.doesNotMatch(security, /awk '[^']+' \/var\/log\/(?:auth\.log|secure)/)
 
   const docker = byId.get('builtin-server-docker-health-storage').commands[0].command
   assert.match(docker, /run_bounded_docker_output 100 docker ps -a --format/)
@@ -964,18 +970,17 @@ test('SSH security diagnostics filter and bound journal or readable-log fallback
   assert.match(journal.stdout, /disconnect from host/)
 
   const fallbackCommand = command
-    .replaceAll('/var/log/auth.log', '/dev/stdin')
+    .replaceAll('/var/log/auth.log', '/dev/null')
     .replaceAll('/var/log/secure', '/__shellpilot_missing_secure__')
+  const fallbackEventsCommand = fallbackCommand.replace(
+    'tail -n 5000 "$auth_log" 2>/dev/null',
+    "printf 'noise\\nInvalid user guest\\nAccepted password for ops\\nunrelated\\n'"
+  )
   const fallback = runPosixShell(
-    'journalctl () { return 7; }\n' + fallbackCommand,
-    {
-      input: [
-        'noise',
-        'Invalid user guest',
-        'Accepted password for ops',
-        'unrelated'
-      ].join('\n') + '\n'
-    }
+    [
+      'journalctl () { return 7; }',
+      'find () { printf \'%s\\n\' "$1"; }'
+    ].join('\n') + '\n' + fallbackEventsCommand
   )
   assert.doesNotMatch(fallback.stdout, /noise|unrelated/)
   assert.match(fallback.stdout, /Invalid user guest/)
@@ -983,15 +988,76 @@ test('SSH security diagnostics filter and bound journal or readable-log fallback
 
   const limitPrelude = [
     'journalctl () {',
-    '  count=0',
-    '  while [ "$count" -lt 250 ]; do',
-    '    count=$((count + 1))',
-    "    printf 'Failed password row %s\\n' \"$count\"",
+    '  reverse=no',
+    '  for argument in "$@"; do',
+    '    if [ "$argument" = "-r" ]; then reverse=yes; fi',
     '  done',
+    '  if [ "$reverse" = "yes" ]; then',
+    '    count=250',
+    '    while [ "$count" -gt 0 ]; do',
+    "      printf 'Failed password row %s\\n' \"$count\"",
+    '      count=$((count - 1))',
+    '    done',
+    '  else',
+    '    count=0',
+    '    while [ "$count" -lt 250 ]; do',
+    '      count=$((count + 1))',
+    "      printf 'Failed password row %s\\n' \"$count\"",
+    '    done',
+    '  fi',
     '}'
   ].join('\n')
   const bounded = runPosixShell(limitPrelude + '\n' + command)
-  assert.equal(outputLineCount(bounded.stdout, 'Failed password row '), 200)
+  const journalRows = bounded.stdout
+    .split(/\r?\n/)
+    .filter(line => line.startsWith('Failed password row '))
+    .map(line => Number(line.slice('Failed password row '.length)))
+  assert.deepEqual(
+    journalRows,
+    Array.from({ length: 200 }, (_, index) => 250 - index)
+  )
+  assert.equal(journalRows.some(row => row <= 50), false)
+
+  const boundedFallbackCommand = fallbackCommand.replace(
+    'tail -n 5000 "$auth_log" 2>/dev/null',
+    [
+      'count=0',
+      'while [ "$count" -lt 250 ]; do',
+      '  count=$((count + 1))',
+      "  printf 'Failed password fallback row %s\\n' \"$count\"",
+      'done'
+    ].join('\n')
+  )
+  const boundedFallback = runPosixShell(
+    [
+      'journalctl () { return 7; }',
+      'find () { printf \'%s\\n\' "$1"; }'
+    ].join('\n') + '\n' + boundedFallbackCommand
+  )
+  const fallbackRows = boundedFallback.stdout
+    .split(/\r?\n/)
+    .filter(line => line.startsWith('Failed password fallback row '))
+    .map(line => Number(line.slice('Failed password fallback row '.length)))
+  assert.deepEqual(
+    fallbackRows,
+    Array.from({ length: 200 }, (_, index) => index + 51)
+  )
+  assert.equal(fallbackRows.some(row => row <= 50), false)
+  assert.match(boundedFallback.stdout, /最近日志尾部近似范围/)
+
+  const staleFallbackCommand = fallbackCommand.replace(
+    'tail -n 5000 "$auth_log" 2>/dev/null',
+    "printf 'Failed password stale fallback row 250\\n'"
+  )
+  const staleFallback = runPosixShell(
+    [
+      'journalctl () { return 7; }',
+      'find () { return 0; }'
+    ].join('\n') + '\n' + staleFallbackCommand
+  )
+  assert.doesNotMatch(staleFallback.stdout, /stale fallback row/)
+  assert.match(staleFallback.stdout, /最近日志尾部近似范围/)
+  assert.match(staleFallback.stdout, /未找到最近 24 小时内更新的可读 SSH 安全日志/)
 
   const noLogs = command
     .replaceAll('/var/log/auth.log', '/__shellpilot_missing_auth__')

@@ -16,7 +16,7 @@ export function getSecurityCommands () {
         step(String.raw`(
   run_journal_security_events () {
     {
-      journalctl -u ssh -u sshd --since "-24 hours" --no-pager 2>/dev/null
+      journalctl -r -u ssh -u sshd --since '-24 hours' --no-pager 2>/dev/null
       printf '\\036SHELLPILOT_SSH_STATUS=%s\\n' "$?"
     } | awk '
       BEGIN {
@@ -28,11 +28,11 @@ export function getSecurityCommands () {
         if (marker_position > 0) {
           prefix = substr($0, 1, marker_position - 1)
           if (length(prefix) > 0 && tolower(prefix) ~ /(failed|invalid|accepted|disconnect)/) {
-            if (emitted < limit) {
-              print prefix
-              emitted++
-            } else {
+            print prefix
+            emitted++
+            if (emitted >= limit) {
               truncated = 1
+              exit
             }
           }
           command_status = substr($0, marker_position + length(marker))
@@ -40,13 +40,12 @@ export function getSecurityCommands () {
           next
         }
         if (tolower($0) ~ /(failed|invalid|accepted|disconnect)/) {
-          if (emitted < limit) {
-            print
-            emitted++
-            next
+          print
+          emitted++
+          if (emitted >= limit) {
+            truncated = 1
+            exit
           }
-          truncated = 1
-          exit
         }
       }
       END {
@@ -59,20 +58,43 @@ export function getSecurityCommands () {
   }
 
   run_log_security_events () {
+    auth_log=
+    secure_log=
+
+    if [ -r /var/log/auth.log ] && [ -n "$(find /var/log/auth.log -mtime -1 -print 2>/dev/null)" ]; then
+      auth_log=/var/log/auth.log
+    fi
+    if [ -r /var/log/secure ] && [ -n "$(find /var/log/secure -mtime -1 -print 2>/dev/null)" ]; then
+      secure_log=/var/log/secure
+    fi
+
+    printf '说明：传统日志时间格式无法可靠严格解析 24 小时，仅显示最近日志尾部近似范围。\\n'
+    if [ -z "$auth_log$secure_log" ]; then
+      printf '未找到最近 24 小时内更新的可读 SSH 安全日志；未展示可能陈旧的历史事件。\\n'
+      return 0
+    fi
+
     {
-      if [ -r /var/log/auth.log ]; then
-        awk 'tolower($0) ~ /(failed|invalid|accepted|disconnect)/ { print }' /var/log/auth.log
+      if [ -n "$auth_log" ]; then
+        tail -n 5000 "$auth_log" 2>/dev/null
       fi
-      if [ -r /var/log/secure ]; then
-        awk 'tolower($0) ~ /(failed|invalid|accepted|disconnect)/ { print }' /var/log/secure
+      if [ -n "$secure_log" ]; then
+        tail -n 5000 "$secure_log" 2>/dev/null
       fi
     } | awk '
-      NR <= 200 {
-        print
-        next
+      BEGIN {
+        limit = 200
       }
-      {
-        exit
+      tolower($0) ~ /(failed|invalid|accepted|disconnect)/ {
+        slot = matched % limit
+        events[slot] = $0
+        matched++
+      }
+      END {
+        start = matched > limit ? matched - limit : 0
+        for (event_index = start; event_index < matched; event_index++) {
+          print events[event_index % limit]
+        }
       }
     '
   }
