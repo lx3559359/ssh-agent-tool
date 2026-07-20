@@ -1,11 +1,24 @@
+import { rollbackScriptDirectory, validateAndNormalizeValue } from './validation.js'
+
 const minimumFreeKilobytes = 10240
-const rollbackDirectory = '/tmp/shellpilot-rollback'
+const rollbackDirectory = rollbackScriptDirectory
 
 function assertSafeString (value, label) {
   if (typeof value !== 'string') throw new Error(`${label}必须是非空字符串`)
   if (/[\r\n\0]/.test(value)) throw new Error(`${label}不能包含换行或 NUL 字符`)
   if (!value.trim()) throw new Error(`${label}不能为空`)
   return value
+}
+
+function assertSafeRollbackScript (value) {
+  const safeValue = assertSafeString(value, '回滚脚本')
+  const result = validateAndNormalizeValue('rollback-path', safeValue, {
+    label: '回滚脚本',
+    required: true
+  })
+  if (result.error) throw new Error(result.error)
+  if (result.value !== safeValue) throw new Error('回滚脚本必须使用规范路径')
+  return result.value
 }
 
 function cloneStringArray (value, label, options = {}) {
@@ -40,7 +53,7 @@ function validateMutationSafetyMetadata (metadata) {
     verifyCommands: cloneStringArray(metadata.verifyCommands, '验证命令', { required: true })
   }
   if (metadata.rollbackScript !== undefined) {
-    validated.rollbackScript = assertSafeString(metadata.rollbackScript, '回滚脚本')
+    validated.rollbackScript = assertSafeRollbackScript(metadata.rollbackScript)
   }
   return validated
 }
@@ -60,7 +73,7 @@ export function createMutationSafetyMetadata ({
     requireConfirmation: true
   }
   if (rollbackScript !== undefined) {
-    metadata.rollbackScript = assertSafeString(rollbackScript, '回滚脚本')
+    metadata.rollbackScript = assertSafeRollbackScript(rollbackScript)
   }
   return validateMutationSafetyMetadata(metadata)
 }
@@ -107,6 +120,7 @@ export function buildMutationBackup (metadata) {
   if (validated.rollbackScript) {
     lines.push(
       `SHELLPILOT_ROLLBACK_SCRIPT=${quoteShellLiteral(validated.rollbackScript)}`,
+      'if [ -L "$SHELLPILOT_ROLLBACK_SCRIPT" ]; then echo "回滚脚本不能是符号链接"; exit 1; fi',
       'if ! printf \'rollback-script\\t%s\\n\' "$SHELLPILOT_ROLLBACK_SCRIPT" >> "$SHELLPILOT_BACKUP_MANIFEST"; then echo "无法关联回滚脚本"; exit 1; fi',
       'export SHELLPILOT_ROLLBACK_SCRIPT'
     )

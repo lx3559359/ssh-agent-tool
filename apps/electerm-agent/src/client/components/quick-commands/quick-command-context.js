@@ -215,16 +215,18 @@ export function applyQuickCommandParamValues (text = '', values = {}, context = 
   return replaceQuickCommandPlaceholders(text, replacements)
 }
 
-function resolveMutationSafetyMetadata (metadata, values, context) {
+function resolveMutationSafetyMetadata (metadata, values, context, item) {
   if (!metadata) {
     throw new Error('修改命令缺少安全元数据')
   }
   const resolve = text => applyQuickCommandParamValues(text, values, context)
+  const rollbackParam = item.rollback?.pathParam
+  const rollbackScript = rollbackParam ? values[rollbackParam] : metadata.rollbackScript
   return {
     ...metadata,
     backupTargets: metadata.backupTargets.map(resolve),
     verifyCommands: metadata.verifyCommands.map(resolve),
-    rollbackScript: metadata.rollbackScript ? resolve(metadata.rollbackScript) : undefined
+    rollbackScript: rollbackScript ? resolve(rollbackScript) : undefined
   }
 }
 
@@ -244,7 +246,8 @@ export function buildQuickCommandText (item = {}, context = {}, paramValues = {}
   const safetyMetadata = resolveMutationSafetyMetadata(
     item.safetyMetadata,
     paramValues,
-    context
+    context,
+    item
   )
   const mutationCommand = hardenMutationCommand(item.id, commandText)
   return buildMutationSafetyCommand(safetyMetadata, mutationCommand)

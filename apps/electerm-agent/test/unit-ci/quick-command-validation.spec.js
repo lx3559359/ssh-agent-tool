@@ -980,3 +980,197 @@ test('firewall rollback and verification stay bound to the selected backend', as
     assert.match(verifyText, /ufw\)[\s\S]*ufw status[\s\S]*;;/)
   }
 })
+
+test('rollback scripts stay inside the fixed direct-child directory', async t => {
+  const { validateValue } = await import(validationUrl)
+  const {
+    buildMutationBackup,
+    createMutationSafetyMetadata
+  } = await import(safetyMetadataUrl)
+  const { getServerMaintenanceQuickCommands } = await import(commandsUrl)
+  const {
+    buildQuickCommandContext,
+    buildQuickCommandParamValues,
+    submitValidatedQuickCommand
+  } = await import(contextUrl)
+  const rollbackScript = '\u56de\u6eda\u811a\u672c'
+  const confirmation = '\u786e\u8ba4\u6267\u884c'
+  const operation = '\u64cd\u4f5c'
+  const validPath = '/tmp/shellpilot-rollback/network-current.sh'
+  const forgedPath = '/etc/profile.d/x.sh'
+
+  assert.equal(validateValue('rollback-path', validPath), '')
+  for (const invalidPath of [
+    '',
+    '   ',
+    '/tmp/shellpilot-rollback',
+    '/tmp/shellpilot-rollback/',
+    '/tmp/shellpilot-rollback/../x.sh',
+    '/tmp/shellpilot-rollback/sub/x.sh',
+    '/tmp//shellpilot-rollback/x.sh',
+    '/tmp/shellpilot-rollback/x?.sh',
+    '/tmp/shellpilot-rollback/x\n.sh',
+    forgedPath
+  ]) {
+    assert.notEqual(
+      validateValue('rollback-path', invalidPath),
+      '',
+      `must reject ${JSON.stringify(invalidPath)}`
+    )
+  }
+
+  const metadata = createMutationSafetyMetadata({
+    title: 'test mutation',
+    rollbackScript: validPath,
+    verifyCommands: ['true']
+  })
+  assert.throws(() => createMutationSafetyMetadata({
+    title: 'test mutation',
+    rollbackScript: forgedPath,
+    verifyCommands: ['true']
+  }), /\u56de\u6eda\u811a\u672c|rollback/i)
+  assert.throws(() => buildMutationBackup({
+    ...metadata,
+    rollbackScript: forgedPath
+  }), /\u56de\u6eda\u811a\u672c|rollback/i)
+
+  const context = buildQuickCommandContext({ host: 'server.example.com', port: '22' })
+  const commands = getServerMaintenanceQuickCommands()
+  const mutationCases = [
+    ['builtin-server-network-change-ip', {
+      网卡: 'eth0',
+      '\u65b0IP/CIDR': '192.0.2.20/24',
+      配置方式: 'temporary',
+      [confirmation]: 'yes'
+    }],
+    ['builtin-server-firewall-open-port', {
+      端口: '443',
+      防火墙类型: 'ufw',
+      生效方式: 'runtime',
+      [confirmation]: 'yes'
+    }],
+    ['builtin-server-service-action', {
+      服务名称: 'nginx.service',
+      [operation]: 'restart',
+      [confirmation]: 'yes'
+    }],
+    ['builtin-server-docker-action', {
+      容器名称: 'web-1',
+      [operation]: 'restart',
+      [confirmation]: 'yes'
+    }],
+    ['builtin-server-file-permission', {
+      目标路径: '/var/www/app',
+      [operation]: 'apply',
+      [confirmation]: 'yes'
+    }]
+  ]
+
+  for (const [id, overrides] of mutationCases) {
+    await t.test(id, () => {
+      const item = commands.find(command => command.id === id)
+      const submissions = []
+      const result = submitValidatedQuickCommand({
+        id,
+        item,
+        context,
+        inputOnly: false,
+        text: 'stale command text',
+        paramValues: {
+          ...buildQuickCommandParamValues(item, context),
+          ...overrides,
+          [rollbackScript]: forgedPath
+        }
+      }, (...args) => submissions.push(args))
+
+      assert.equal(result.submitted, false)
+      assert.equal(result.commandText, '')
+      assert.ok(result.errors[rollbackScript])
+      assert.equal(submissions.length, 0)
+    })
+  }
+})
+
+test('network IP mutation rejects IPv6 CIDR at the field boundary', async () => {
+  const { getServerMaintenanceQuickCommands } = await import(commandsUrl)
+  const {
+    buildQuickCommandContext,
+    buildQuickCommandParamValues,
+    submitValidatedQuickCommand
+  } = await import(contextUrl)
+  const item = getServerMaintenanceQuickCommands()
+    .find(command => command.id === 'builtin-server-network-change-ip')
+  const context = buildQuickCommandContext({ host: 'server.example.com', port: '22' })
+  const newCidr = '\u65b0IP/CIDR'
+  const submissions = []
+  const result = submitValidatedQuickCommand({
+    id: item.id,
+    item,
+    context,
+    inputOnly: false,
+    text: 'stale command text',
+    paramValues: {
+      ...buildQuickCommandParamValues(item, context),
+      网卡: 'eth0',
+      [newCidr]: '2001:db8::20/64',
+      配置方式: 'temporary',
+      确认执行: 'yes'
+    }
+  }, (...args) => submissions.push(args))
+
+  assert.equal(result.submitted, false)
+  assert.equal(result.commandText, '')
+  assert.ok(result.errors[newCidr])
+  assert.equal(submissions.length, 0)
+})
+
+test('ufw state and verification checks match the complete rule column', async () => {
+  const { getServerMaintenanceQuickCommands } = await import(commandsUrl)
+  const {
+    buildQuickCommandContext,
+    buildQuickCommandParamValues,
+    submitValidatedQuickCommand
+  } = await import(contextUrl)
+  const statusOutput = [
+    'Status: active',
+    '',
+    'To                         Action      From',
+    '--                         ------      ----',
+    '443/tcp                    ALLOW       Anywhere',
+    '443/tcp (v6)               ALLOW       Anywhere (v6)'
+  ].join('\n')
+  const statusRuleColumns = statusOutput
+    .split(/\r?\n/)
+    .map(line => line.trim().split(/\s+/)[0])
+  assert.equal(statusRuleColumns.includes('43/tcp'), false)
+
+  const item = getServerMaintenanceQuickCommands()
+    .find(command => command.id === 'builtin-server-firewall-open-port')
+  const context = buildQuickCommandContext({ host: 'server.example.com', port: '22' })
+  const result = submitValidatedQuickCommand({
+    id: item.id,
+    item,
+    context,
+    inputOnly: false,
+    paramValues: {
+      ...buildQuickCommandParamValues(item, context),
+      端口: '43',
+      协议: 'tcp',
+      防火墙类型: 'ufw',
+      生效方式: 'runtime',
+      确认执行: 'yes'
+    }
+  }, () => {})
+
+  assert.equal(result.submitted, true)
+  assert.ok(result.commandText.includes(
+    'ufw status | awk -v rule="$PORT/$PROTO" \'$1 == rule'
+  ))
+  const verifyText = result.commandText.slice(
+    result.commandText.indexOf('# __SHELLPILOT_MUTATION_VERIFY__')
+  )
+  assert.ok(verifyText.includes(
+    'ufw status | awk -v rule="43/tcp" \'$1 == rule'
+  ))
+  assert.doesNotMatch(verifyText, /ufw status \| grep -F/)
+})

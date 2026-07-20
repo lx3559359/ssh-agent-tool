@@ -15,10 +15,12 @@ const typeLabels = {
   'ipv4-list': 'IPv4 地址列表',
   'file-mode': '文件权限',
   account: '账号',
-  'template-text': '文本'
+  'template-text': '文本',
+  'rollback-path': '回滚脚本'
 }
 
 const maintenanceCommandPrefix = 'builtin-server-'
+export const rollbackScriptDirectory = '/tmp/shellpilot-rollback'
 
 const cronMacros = new Set([
   '@reboot',
@@ -215,6 +217,14 @@ function isHttpUrl (value) {
   }
 }
 
+function isRollbackScriptPath (value) {
+  const prefix = `${rollbackScriptDirectory}/`
+  if (!value.startsWith(prefix)) return false
+  const filename = value.slice(prefix.length)
+  return /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(filename) &&
+    !filename.includes('..')
+}
+
 function validateNumber (value, options, label) {
   if (!/^-?\d+$/.test(value)) return `${label}必须是整数`
   const number = Number(value)
@@ -233,6 +243,9 @@ function validateEnum (value, options, label) {
 }
 
 function validateNormalizedValue (normalizedType, value, options, label) {
+  if (normalizedType === 'rollback-path' && !value) {
+    return `${label}不能为空`
+  }
   if (options.required && !value) return `${label}不能为空`
   if (!value) return ''
 
@@ -251,6 +264,11 @@ function validateNormalizedValue (normalizedType, value, options, label) {
     return /^\/[a-zA-Z0-9_./@:+-]*$/.test(value)
       ? ''
       : `${label}必须是安全的绝对路径`
+  }
+  if (normalizedType === 'rollback-path') {
+    return isRollbackScriptPath(value)
+      ? ''
+      : `${label}必须位于 /tmp/shellpilot-rollback 且使用安全的直接子文件名`
   }
   if (normalizedType === 'cron') {
     return isCronExpression(value) ? '' : `${label}格式不正确`
@@ -332,7 +350,7 @@ const validationTypeByParamName = new Map([
   ['目标端口', 'port'],
   ['TLS端口', 'port'],
   ['过滤端口', 'port'],
-  ['新IP/CIDR', 'cidr'],
+  ['新IP/CIDR', 'ipv4-cidr'],
   ['网关', 'ipv4'],
   ['过滤IP', 'ipv4'],
   ['DNS服务器', 'ipv4'],
@@ -341,7 +359,7 @@ const validationTypeByParamName = new Map([
   ['分析目录', 'path'],
   ['目标路径', 'path'],
   ['抓包文件', 'path'],
-  ['回滚脚本', 'path'],
+  ['回滚脚本', 'rollback-path'],
   ['域名', 'hostname'],
   ['证书域名', 'hostname'],
   ['目标地址', 'hostname-or-ip'],

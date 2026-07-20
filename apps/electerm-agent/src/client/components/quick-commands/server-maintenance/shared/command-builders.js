@@ -52,7 +52,7 @@ if [ "$FIREWALL_KIND" = "firewalld" ] || { [ "$FIREWALL_KIND" = "auto" ] && comm
   if [ "$APPLY_MODE" = "permanent" ]; then QUERY_PERMANENT="--permanent"; fi
   if $RUN_AS firewall-cmd $QUERY_PERMANENT --query-port="$PORT/$PROTO" >/dev/null 2>&1; then RULE_WAS_PRESENT="yes"; fi
 elif [ "$FIREWALL_KIND" = "ufw" ] || { [ "$FIREWALL_KIND" = "auto" ] && command -v ufw >/dev/null 2>&1; }; then
-  if $RUN_AS ufw status | grep -F -- "$PORT/$PROTO" >/dev/null 2>&1; then RULE_WAS_PRESENT="yes"; fi
+  if $RUN_AS ufw status | awk -v rule="$PORT/$PROTO" '$1 == rule { found=1 } END { exit found ? 0 : 1 }'; then RULE_WAS_PRESENT="yes"; fi
 fi`
   const firewalldRollback = `  {
     echo '#!/bin/sh'
