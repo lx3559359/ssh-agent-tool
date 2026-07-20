@@ -782,3 +782,201 @@ test('network discovery merge recalculates errors for every changed field', asyn
   assert.match(next.text, /IFACE="eth0"/)
   assert.match(next.text, /GATEWAY="192\.0\.2\.1"/)
 })
+
+test('maintenance scalar params reject arrays before command construction', async () => {
+  const { getServerMaintenanceQuickCommands } = await import(commandsUrl)
+  const {
+    buildQuickCommandContext,
+    buildQuickCommandParamValues,
+    submitValidatedQuickCommand,
+    validateAndNormalizeQuickCommandParams
+  } = await import(contextUrl)
+  const commands = getServerMaintenanceQuickCommands()
+  const context = buildQuickCommandContext({ host: 'server.example.com', port: '22' })
+  const firewall = commands.find(item => item.id === 'builtin-server-firewall-open-port')
+  const defaults = buildQuickCommandParamValues(firewall, context)
+
+  for (const param of firewall.params.filter(param => param.multiple !== true)) {
+    const validation = validateAndNormalizeQuickCommandParams(firewall, {
+      ...defaults,
+      [param.name]: [defaults[param.name]]
+    })
+    assert.match(
+      validation.errors[param.name],
+      /单个值|多个值|数组/,
+      `${param.name} must reject array input`
+    )
+  }
+
+  const serviceStatus = commands.find(item => item.id === 'builtin-server-service-status')
+  const serviceValidation = validateAndNormalizeQuickCommandParams(serviceStatus, {
+    ...buildQuickCommandParamValues(serviceStatus, context),
+    服务名: ['nginx.service', 'docker.service']
+  })
+  assert.equal(serviceValidation.errors.服务名, undefined)
+
+  const submissions = []
+  const result = submitValidatedQuickCommand({
+    id: firewall.id,
+    item: firewall,
+    context,
+    inputOnly: false,
+    text: 'stale command text',
+    paramValues: {
+      ...defaults,
+      防火墙类型: 'ufw',
+      生效方式: 'runtime',
+      确认执行: ['yes']
+    }
+  }, (...args) => submissions.push(args))
+
+  assert.equal(result.submitted, false)
+  assert.equal(submissions.length, 0)
+  assert.match(result.errors.确认执行, /单个值|多个值|数组/)
+  assert.equal(result.commandText, '')
+})
+
+test('update and submit report structural errors before building mutation text', async () => {
+  const { getServerMaintenanceQuickCommands } = await import(commandsUrl)
+  const {
+    buildQuickCommandContext,
+    buildQuickCommandParamValues,
+    submitValidatedQuickCommand,
+    updatePendingQuickCommandParams
+  } = await import(contextUrl)
+  const item = getServerMaintenanceQuickCommands()
+    .find(command => command.id === 'builtin-server-firewall-open-port')
+  const context = buildQuickCommandContext({ host: 'server.example.com', port: '22' })
+  const baseValues = {
+    ...buildQuickCommandParamValues(item, context),
+    防火墙类型: 'ufw',
+    生效方式: 'runtime',
+    确认执行: 'yes'
+  }
+
+  for (const invalidPort of ['443\n', '443\r', '443\0']) {
+    const nextValues = { ...baseValues, 端口: invalidPort }
+    let updated
+    assert.doesNotThrow(() => {
+      updated = updatePendingQuickCommandParams({
+        item,
+        context,
+        paramValues: baseValues,
+        paramErrors: {},
+        text: 'last-valid-preview'
+      }, nextValues)
+    }, JSON.stringify(invalidPort))
+    assert.ok(updated.paramErrors.端口, JSON.stringify(invalidPort))
+    assert.equal(updated.text, 'last-valid-preview')
+
+    const submissions = []
+    let result
+    assert.doesNotThrow(() => {
+      result = submitValidatedQuickCommand({
+        id: item.id,
+        item,
+        context,
+        inputOnly: false,
+        text: 'stale command text',
+        paramValues: nextValues
+      }, (...args) => submissions.push(args))
+    }, JSON.stringify(invalidPort))
+    assert.equal(result.submitted, false)
+    assert.equal(result.commandText, '')
+    assert.ok(result.errors.端口, JSON.stringify(invalidPort))
+    assert.equal(submissions.length, 0)
+  }
+})
+
+test('confirmed mutations guard and associate the user rollback entrypoint', async () => {
+  const { getServerMaintenanceQuickCommands } = await import(commandsUrl)
+  const {
+    buildQuickCommandContext,
+    buildQuickCommandParamValues,
+    submitValidatedQuickCommand
+  } = await import(contextUrl)
+  const context = buildQuickCommandContext({ host: 'server.example.com', port: '22' })
+  const commands = getServerMaintenanceQuickCommands()
+  const cases = [
+    ['builtin-server-network-change-ip', { 网卡: 'eth0', '新IP/CIDR': '192.0.2.20/24', 配置方式: 'temporary', 确认执行: 'yes' }, '$RUN_AS ip addr add "$NEW_CIDR" dev "$IFACE"'],
+    ['builtin-server-firewall-open-port', { 端口: '443', 防火墙类型: 'ufw', 生效方式: 'runtime', 确认执行: 'yes' }, '$RUN_AS ufw allow $PORT/$PROTO'],
+    ['builtin-server-service-action', { 服务名称: 'nginx.service', 操作: 'restart', 确认执行: 'yes' }, '$RUN_AS systemctl "$ACTION" "$SERVICE"'],
+    ['builtin-server-docker-action', { 容器名称: 'web-1', 操作: 'restart', 确认执行: 'yes' }, 'docker "$ACTION" "$CONTAINER"'],
+    ['builtin-server-file-permission', { 目标路径: '/var/www/app', 操作: 'apply', 确认执行: 'yes' }, '$RUN_AS chmod "$MODE" "$TARGET"']
+  ]
+
+  for (const [id, overrides, mutationToken] of cases) {
+    const item = commands.find(command => command.id === id)
+    const result = submitValidatedQuickCommand({
+      id,
+      item,
+      context,
+      inputOnly: false,
+      text: 'stale',
+      paramValues: {
+        ...buildQuickCommandParamValues(item, context),
+        ...overrides
+      }
+    }, () => {})
+    assert.equal(result.submitted, true, id)
+    const text = result.commandText
+    const backupIndex = text.indexOf('# __SHELLPILOT_MUTATION_BACKUP__')
+    const mutationIndex = text.indexOf('# __SHELLPILOT_MUTATION_EXECUTE__')
+    const backupText = text.slice(backupIndex, mutationIndex)
+    const mutationText = text.slice(mutationIndex)
+
+    assert.match(backupText, /SHELLPILOT_ROLLBACK_SCRIPT='/, id)
+    assert.match(backupText, /rollback-script\\t%s\\n/, id)
+    assert.match(mutationText, /\(\nset -e\n/, id)
+    assert.ok(mutationText.indexOf('set -e') < mutationText.indexOf('TMP_ROLLBACK='), id)
+    assert.ok(mutationText.indexOf('TMP_ROLLBACK=') < mutationText.indexOf('chmod 700'), id)
+    assert.ok(mutationText.lastIndexOf('chmod 700') < mutationText.lastIndexOf(mutationToken), id)
+
+    if (id === 'builtin-server-service-action') {
+      assert.match(mutationText, /OLD_ACTIVE=/)
+      assert.match(mutationText, /OLD_ENABLED=/)
+    }
+    if (id === 'builtin-server-docker-action') {
+      assert.match(mutationText, /OLD_RUNNING=/)
+      assert.match(mutationText, /docker (?:start|stop)/)
+    }
+  }
+})
+
+test('firewall rollback and verification stay bound to the selected backend', async () => {
+  const { getServerMaintenanceQuickCommands } = await import(commandsUrl)
+  const {
+    buildQuickCommandContext,
+    buildQuickCommandParamValues,
+    submitValidatedQuickCommand
+  } = await import(contextUrl)
+  const item = getServerMaintenanceQuickCommands()
+    .find(command => command.id === 'builtin-server-firewall-open-port')
+  const context = buildQuickCommandContext({ host: 'server.example.com', port: '22' })
+
+  for (const firewallKind of ['firewalld', 'ufw']) {
+    const result = submitValidatedQuickCommand({
+      id: item.id,
+      item,
+      context,
+      inputOnly: false,
+      paramValues: {
+        ...buildQuickCommandParamValues(item, context),
+        端口: '443',
+        防火墙类型: firewallKind,
+        生效方式: 'runtime',
+        确认执行: 'yes'
+      }
+    }, () => {})
+    assert.equal(result.submitted, true)
+    const verifyText = result.commandText.slice(
+      result.commandText.indexOf('# __SHELLPILOT_MUTATION_VERIFY__')
+    )
+    assert.match(result.commandText, /RULE_WAS_PRESENT=/)
+    assert.match(result.commandText, /if \[ "\$RULE_WAS_PRESENT" = "yes" \]/)
+    assert.match(verifyText, new RegExp(`VERIFY_FIREWALL_KIND="${firewallKind}"`))
+    assert.match(verifyText, /case "\$VERIFY_FIREWALL_KIND" in/)
+    assert.match(verifyText, /firewalld\)[\s\S]*firewall-cmd[\s\S]*;;/)
+    assert.match(verifyText, /ufw\)[\s\S]*ufw status[\s\S]*;;/)
+  }
+})

@@ -400,22 +400,32 @@ export function validateAndNormalizeQuickCommandParams (item = {}, values = {}) 
   const normalizedValues = isMaintenance ? {} : { ...(values || {}) }
 
   for (const param of item.params || []) {
+    const rawValue = values?.[param.name]
+    const label = param.label || param.name || '参数'
+    if (Array.isArray(rawValue) && param.multiple !== true) {
+      errors[param.name] = `${label}必须是单个值，不能使用数组`
+      normalizedValues[param.name] = ''
+      continue
+    }
     const validationType = inferQuickCommandParamValidation(item, param)
     if (!validationType) {
       if (isMaintenance && item.mutatesServer) {
-        errors[param.name] = `${param.label || param.name || '参数'}无法识别安全校验策略`
+        errors[param.name] = `${label}无法识别安全校验策略`
       }
       continue
     }
-    const rawValue = values?.[param.name]
     if (Array.isArray(rawValue)) {
       if (param.required && rawValue.length === 0) {
-        errors[param.name] = `${param.label || param.name || '参数'}不能为空`
+        errors[param.name] = `${label}不能为空`
         normalizedValues[param.name] = []
         continue
       }
       const normalizedItems = []
       for (const itemValue of rawValue) {
+        if (itemValue !== null && typeof itemValue === 'object') {
+          errors[param.name] = `${label}包含非标量值`
+          break
+        }
         const result = validateAndNormalizeValue(validationType, itemValue, {
           ...param,
           required: param.required,

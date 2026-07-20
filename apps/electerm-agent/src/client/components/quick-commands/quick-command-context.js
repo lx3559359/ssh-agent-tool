@@ -6,6 +6,9 @@ import {
 import {
   buildMutationSafetyCommand
 } from './server-maintenance/shared/safety-metadata.js'
+import {
+  hardenMutationCommand
+} from './server-maintenance/shared/command-builders.js'
 
 function toStringValue (value, fallback = '') {
   if (value === undefined || value === null || value === '') {
@@ -220,7 +223,8 @@ function resolveMutationSafetyMetadata (metadata, values, context) {
   return {
     ...metadata,
     backupTargets: metadata.backupTargets.map(resolve),
-    verifyCommands: metadata.verifyCommands.map(resolve)
+    verifyCommands: metadata.verifyCommands.map(resolve),
+    rollbackScript: metadata.rollbackScript ? resolve(metadata.rollbackScript) : undefined
   }
 }
 
@@ -242,7 +246,8 @@ export function buildQuickCommandText (item = {}, context = {}, paramValues = {}
     paramValues,
     context
   )
-  return buildMutationSafetyCommand(safetyMetadata, commandText)
+  const mutationCommand = hardenMutationCommand(item.id, commandText)
+  return buildMutationSafetyCommand(safetyMetadata, mutationCommand)
 }
 
 function sameParamValue (left, right) {
@@ -269,16 +274,23 @@ export function updatePendingQuickCommandParams (pendingCommand, nextValues = {}
       delete paramErrors[name]
     }
   }
+  const hasValidationErrors = Object.keys(validation.errors).length > 0
+  const canBuildText = !hasValidationErrors || !shouldTrackRollback(
+    pendingCommand.item,
+    validation.values
+  )
 
   return {
     ...pendingCommand,
     paramValues: nextValues,
     paramErrors,
-    text: buildQuickCommandText(
-      pendingCommand.item,
-      pendingCommand.context,
-      validation.values
-    )
+    text: canBuildText
+      ? buildQuickCommandText(
+        pendingCommand.item,
+        pendingCommand.context,
+        validation.values
+      )
+      : pendingCommand.text
   }
 }
 
@@ -288,6 +300,14 @@ export function submitValidatedQuickCommand (pendingCommand = {}, submit) {
     item,
     pendingCommand.paramValues || {}
   )
+  if (Object.keys(validation.errors).length) {
+    return {
+      submitted: false,
+      errors: validation.errors,
+      paramValues: validation.values,
+      commandText: ''
+    }
+  }
   const rebuildText = isServerMaintenanceQuickCommand(item) ||
     (item.params || []).some(param => param.validationType)
   const commandText = rebuildText
@@ -300,7 +320,7 @@ export function submitValidatedQuickCommand (pendingCommand = {}, submit) {
     commandText
   }
 
-  if (Object.keys(validation.errors).length || !commandText.trim()) {
+  if (!commandText.trim()) {
     return result
   }
   if (typeof submit !== 'function') {

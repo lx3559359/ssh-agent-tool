@@ -33,18 +33,23 @@ function validateMutationSafetyMetadata (metadata) {
   if (!Number.isSafeInteger(metadata.minFreeKb) || metadata.minFreeKb < minimumFreeKilobytes) {
     throw new Error(`回滚目录最低可用空间不能小于 ${minimumFreeKilobytes} KB`)
   }
-  return {
+  const validated = {
     ...metadata,
     title,
     backupTargets: cloneStringArray(metadata.backupTargets, '备份目标'),
     verifyCommands: cloneStringArray(metadata.verifyCommands, '验证命令', { required: true })
   }
+  if (metadata.rollbackScript !== undefined) {
+    validated.rollbackScript = assertSafeString(metadata.rollbackScript, '回滚脚本')
+  }
+  return validated
 }
 
 export function createMutationSafetyMetadata ({
   title,
   backupTargets,
-  verifyCommands
+  verifyCommands,
+  rollbackScript
 } = {}) {
   const metadata = {
     title: assertSafeString(title, '修改标题'),
@@ -53,6 +58,9 @@ export function createMutationSafetyMetadata ({
     verifyCommands: cloneStringArray(verifyCommands, '验证命令', { required: true }),
     rollbackDirectory,
     requireConfirmation: true
+  }
+  if (rollbackScript !== undefined) {
+    metadata.rollbackScript = assertSafeString(rollbackScript, '回滚脚本')
   }
   return validateMutationSafetyMetadata(metadata)
 }
@@ -96,6 +104,13 @@ export function buildMutationBackup (metadata) {
     'SHELLPILOT_BACKUP_MANIFEST="$OPERATION_ROLLBACK_DIR/manifest"',
     'if ! : > "$SHELLPILOT_BACKUP_MANIFEST"; then echo "无法创建备份清单"; exit 1; fi'
   ]
+  if (validated.rollbackScript) {
+    lines.push(
+      `SHELLPILOT_ROLLBACK_SCRIPT=${quoteShellLiteral(validated.rollbackScript)}`,
+      'if ! printf \'rollback-script\\t%s\\n\' "$SHELLPILOT_ROLLBACK_SCRIPT" >> "$SHELLPILOT_BACKUP_MANIFEST"; then echo "无法关联回滚脚本"; exit 1; fi',
+      'export SHELLPILOT_ROLLBACK_SCRIPT'
+    )
+  }
 
   validated.backupTargets.forEach((target, index) => {
     const number = index + 1
@@ -146,6 +161,7 @@ export function buildMutationSafetyCommand (metadata, mutationCommand) {
     buildMutationBackup(metadata),
     '# __SHELLPILOT_MUTATION_EXECUTE__',
     '(',
+    'set -e',
     mutationCommand,
     ')',
     'SHELLPILOT_MUTATION_STATUS=$?',

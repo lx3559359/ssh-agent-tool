@@ -17,7 +17,7 @@ const mutationSafetyByCommandId = {
       '/etc/ufw/ufw.conf'
     ],
     verifyCommands: [
-      'VERIFY_AS=""; [ "$(id -u)" = "0" ] || VERIFY_AS="sudo"; if command -v firewall-cmd >/dev/null 2>&1; then $VERIFY_AS firewall-cmd --query-port="{{端口}}/{{协议}}" >/dev/null; elif command -v ufw >/dev/null 2>&1; then $VERIFY_AS ufw status | grep -F -- "{{端口}}/{{协议}}" >/dev/null; else exit 1; fi'
+      'VERIFY_AS=""; [ "$(id -u)" = "0" ] || VERIFY_AS="sudo"; VERIFY_FIREWALL_KIND="{{防火墙类型}}"; VERIFY_FIREWALL_ARGS=""; [ "{{生效方式}}" = "permanent" ] && VERIFY_FIREWALL_ARGS="--permanent"; case "$VERIFY_FIREWALL_KIND" in firewalld) command -v firewall-cmd >/dev/null 2>&1 && $VERIFY_AS firewall-cmd $VERIFY_FIREWALL_ARGS --query-port="{{端口}}/{{协议}}" >/dev/null ;; ufw) command -v ufw >/dev/null 2>&1 && $VERIFY_AS ufw status | grep -F -- "{{端口}}/{{协议}}" >/dev/null ;; auto) if command -v firewall-cmd >/dev/null 2>&1; then $VERIFY_AS firewall-cmd $VERIFY_FIREWALL_ARGS --query-port="{{端口}}/{{协议}}" >/dev/null; elif command -v ufw >/dev/null 2>&1; then $VERIFY_AS ufw status | grep -F -- "{{端口}}/{{协议}}" >/dev/null; else exit 1; fi ;; *) exit 1 ;; esac'
     ]
   },
   'builtin-server-service-action': {
@@ -65,6 +65,7 @@ function createCommandSafetyMetadata (item) {
   const configured = item.mutationSafety || mutationSafetyByCommandId[item.id] || {}
   return createMutationSafetyMetadata({
     title: configured.title || item.rollback?.title || item.name || item.id,
+    rollbackScript: item.rollback?.pathParam ? `{{${item.rollback.pathParam}}}` : undefined,
     backupTargets: configured.backupTargets || [],
     verifyCommands: configured.verifyCommands || [
       'test -s "{{回滚脚本}}"'
