@@ -1,4 +1,4 @@
-import { quoteShellValue, validateValue } from './validation.js'
+import { quoteShellValue, validateAndNormalizeValue } from './validation.js'
 
 const shellVariablePattern = /^[a-zA-Z_][a-zA-Z0-9_]*$/
 
@@ -9,9 +9,9 @@ export function buildShellAssignment (shellName, value, validationType, options 
   if (!validationType) {
     throw new Error(`${options.label || shellName}缺少校验类型，已拒绝生成 Shell 赋值`)
   }
-  const message = validateValue(validationType, value, options)
-  if (message) throw new Error(message)
-  return `${shellName}=${quoteShellValue(value)}`
+  const validated = validateAndNormalizeValue(validationType, value, options)
+  if (validated.error) throw new Error(validated.error)
+  return `${shellName}=${quoteShellValue(validated.value)}`
 }
 
 export function buildShellAssignments (fields = [], values = {}) {

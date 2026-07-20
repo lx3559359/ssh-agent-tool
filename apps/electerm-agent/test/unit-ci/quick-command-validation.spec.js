@@ -76,6 +76,23 @@ test('quick command validators reject invalid formats and command injection', as
   }
 })
 
+test('quick command validators reject boundary controls before trimming spaces', async () => {
+  const { validateValue } = await import(validationUrl)
+  const unsafePorts = [
+    '443\n',
+    '\n443',
+    '443\r',
+    '\r443',
+    '443\0',
+    '\0' + '443'
+  ]
+
+  for (const value of unsafePorts) {
+    assert.match(validateValue('port', value), /换行|NUL/)
+  }
+  assert.equal(validateValue('port', ' 443 '), '')
+})
+
 test('quick command validation reports required errors by field and quotes shell values', async () => {
   const {
     quoteShellValue,
@@ -157,6 +174,16 @@ test('shell assignment builders only emit explicitly validated and quoted fields
     buildShellAssignment('TARGET_PORT', '443', 'port', { label: '目标端口' }),
     "TARGET_PORT='443'"
   )
+  assert.equal(
+    buildShellAssignment('TARGET_PORT', ' 443 ', 'port', { label: '目标端口' }),
+    "TARGET_PORT='443'"
+  )
+  for (const value of ['443\n', '\n443', '443\r', '\r443', '443\0', '\0' + '443']) {
+    assert.throws(
+      () => buildShellAssignment('TARGET_PORT', value, 'port', { label: '目标端口' }),
+      /换行|NUL/
+    )
+  }
   assert.throws(
     () => buildShellAssignments(fields, {
       服务名: 'nginx;id',

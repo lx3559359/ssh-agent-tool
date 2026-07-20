@@ -214,16 +214,9 @@ function validateEnum (value, options, label) {
   return allowed.includes(value) ? '' : `${label}不是允许的选项`
 }
 
-export function validateValue (type, rawValue, options = {}) {
-  const value = toStringValue(rawValue).trim()
-  const normalizedType = type === 'absolute-path' ? 'path' : type
-  const label = displayLabel(normalizedType, options)
-
+function validateNormalizedValue (normalizedType, value, options, label) {
   if (options.required && !value) return `${label}不能为空`
   if (!value) return ''
-
-  const structuralError = validateStructuralSafety(value, label)
-  if (structuralError) return structuralError
 
   if (normalizedType === 'hostname') {
     return isHostname(value) ? '' : `${label}格式不正确`
@@ -294,6 +287,27 @@ export function validateValue (type, rawValue, options = {}) {
   }
   if (!normalizedType) return ''
   return `${label}使用了不支持的校验类型`
+}
+
+export function validateAndNormalizeValue (type, rawValue, options = {}) {
+  const originalValue = toStringValue(rawValue)
+  const normalizedType = type === 'absolute-path' ? 'path' : type
+  const label = displayLabel(normalizedType, options)
+  const structuralError = validateStructuralSafety(originalValue, label)
+  const value = originalValue.trim()
+  return {
+    value,
+    error: structuralError || validateNormalizedValue(
+      normalizedType,
+      value,
+      options,
+      label
+    )
+  }
+}
+
+export function validateValue (type, rawValue, options = {}) {
+  return validateAndNormalizeValue(type, rawValue, options).error
 }
 
 export function quoteShellValue (value) {
