@@ -295,7 +295,7 @@ test('editable maintenance commands use form params instead of raw placeholders'
     {
       id: 'builtin-server-service-status',
       values: { 服务名: 'docker', 日志行数: '80', 查看日志: 'yes' },
-      expected: /SERVICE="docker"[\s\S]*LOG_LINES="80"/
+      expected: /SERVICES="docker"[\s\S]*LOG_LINES="80"/
     },
     {
       id: 'builtin-server-log-search',
@@ -364,6 +364,45 @@ test('new parameterized maintenance actions use read-only or preview defaults', 
   assert.equal(dockerAction.params.find(param => param.name === '确认执行').defaultValue, 'no')
   assert.equal(filePermission.params.find(param => param.name === '操作').defaultValue, 'preview')
   assert.equal(filePermission.params.find(param => param.name === '确认执行').defaultValue, 'no')
+})
+
+test('service and container commands declare auto-discovered target selectors', async () => {
+  const { getServerMaintenanceQuickCommands } = await import(commandsUrl)
+  const commands = getServerMaintenanceQuickCommands()
+  const serviceStatus = commands.find(command => command.id === 'builtin-server-service-status')
+  const serviceAction = commands.find(command => command.id === 'builtin-server-service-action')
+  const dockerAction = commands.find(command => command.id === 'builtin-server-docker-action')
+
+  const statusTarget = serviceStatus.params.find(param => param.name === '服务名')
+  assert.equal(statusTarget.type, 'service-target')
+  assert.equal(statusTarget.targetType, 'service')
+  assert.equal(statusTarget.multiple, true)
+  assert.deepEqual(statusTarget.sources, ['systemd'])
+  assert.match(serviceStatus.commands[0].command, /for SERVICE in/)
+
+  const serviceTarget = serviceAction.params.find(param => param.name === '服务名称')
+  assert.equal(serviceTarget.type, 'service-target')
+  assert.equal(serviceTarget.multiple, false)
+  assert.deepEqual(serviceTarget.sources, ['systemd'])
+
+  const containerTarget = dockerAction.params.find(param => param.name === '容器名称')
+  assert.equal(containerTarget.type, 'service-target')
+  assert.equal(containerTarget.targetType, 'container')
+  assert.equal(containerTarget.multiple, false)
+  assert.deepEqual(containerTarget.sources, ['docker', 'compose'])
+})
+
+test('quick command modal renders discovered targets with manual fallback', () => {
+  const source = fs.readFileSync(
+    path.resolve(__dirname, '../../src/client/components/quick-commands/quick-commands-box.jsx'),
+    'utf8'
+  )
+
+  assert.match(source, /discoverQuickCommandTargets/)
+  assert.match(source, /param\.type === 'service-target'/)
+  assert.match(source, /mode=\{param\.multiple \? 'tags' : undefined\}/)
+  assert.match(source, /自动识别服务与容器/)
+  assert.match(source, /重新检测/)
 })
 
 test('every mutating maintenance command provides a reusable rollback action', async () => {

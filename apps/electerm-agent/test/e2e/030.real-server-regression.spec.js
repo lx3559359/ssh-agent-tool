@@ -68,7 +68,9 @@ function assertPathInsideSandbox (sandboxPath, candidatePath) {
 }
 
 async function acceptHostKeyIfPrompted (page) {
-  const modal = page.locator('.custom-modal-wrap').last()
+  const modal = page.locator('.custom-modal-wrap')
+    .filter({ hasText: 'SHA256:' })
+    .last()
   try {
     await modal.waitFor({ state: 'visible', timeout: 10000 })
   } catch {

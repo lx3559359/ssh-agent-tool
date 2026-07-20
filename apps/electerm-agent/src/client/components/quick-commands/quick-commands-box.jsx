@@ -5,7 +5,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { pinnedQuickCommandBarKey, quickCommandLabelsLsKey } from '../../common/constants'
 import { sortBy } from 'lodash-es'
-import { Button, Input, InputNumber, Select, Space, Flex, Modal } from 'antd'
+import { AutoComplete, Button, Input, InputNumber, Select, Space, Flex, Modal } from 'antd'
 import * as ls from '../../common/safe-local-storage'
 import { refs } from '../common/ref'
 import { runCmd } from '../terminal/terminal-apis'
@@ -32,6 +32,7 @@ import {
   mergeDetectedNetworkParams,
   parseNetworkProbeOutput
 } from './quick-command-network'
+import { discoverQuickCommandTargets } from './quick-command-service-discovery.js'
 import {
   assertVerifiedQuickCommandRollbackResult,
   buildVerifiedQuickCommandRollbackAction,
@@ -56,8 +57,17 @@ export default function QuickCommandsFooterBox (props) {
   const [pendingCommand, setPendingCommand] = useState(null)
   const [showPendingPreview, setShowPendingPreview] = useState(false)
   const [networkProbe, setNetworkProbe] = useState({ loading: false, error: '', detected: null })
+  const [targetDiscovery, setTargetDiscovery] = useState({
+    loading: false,
+    error: '',
+    status: 'idle',
+    message: '',
+    options: [],
+    truncated: false
+  })
   const [safetyRecords, setSafetyRecords] = useState(() => readSafetyOperationRecords(ls))
   const timer = useRef(null)
+  const targetDiscoveryAbortRef = useRef(null)
   const rollbackRunningRef = useRef('')
   const [rollbackRunning, setRollbackRunning] = useState('')
   const rollbackRecord = safetyRecords.find(record => {
@@ -69,6 +79,8 @@ export default function QuickCommandsFooterBox (props) {
     window.addEventListener(safetyOperationUpdatedEvent, refresh)
     return () => window.removeEventListener(safetyOperationUpdatedEvent, refresh)
   }, [])
+
+  useEffect(() => () => targetDiscoveryAbortRef.current?.abort(), [])
 
   function handleMouseLeave () {
     timer.current = setTimeout(() => {
@@ -119,6 +131,12 @@ export default function QuickCommandsFooterBox (props) {
           text: getCommandText(item, context, paramValues)
         })
         setShowPendingPreview(!(item.params || []).length)
+        const targetParam = (item.params || []).find(param => param.type === 'service-target')
+        if (targetParam) {
+          runTargetDiscovery(targetParam)
+        } else {
+          resetTargetDiscovery()
+        }
         if (item.id === networkChangeCommandId) {
           mcpRunQuickCommandNetworkProbe(item, context)
         } else {
@@ -127,6 +145,65 @@ export default function QuickCommandsFooterBox (props) {
         return
       }
       store.runQuickCommandItem(id)
+    }
+  }
+
+  function resetTargetDiscovery () {
+    targetDiscoveryAbortRef.current?.abort()
+    targetDiscoveryAbortRef.current = null
+    setTargetDiscovery({
+      loading: false,
+      error: '',
+      status: 'idle',
+      message: '',
+      options: [],
+      truncated: false
+    })
+  }
+
+  async function runTargetDiscovery (targetParam) {
+    targetDiscoveryAbortRef.current?.abort()
+    const controller = new AbortController()
+    targetDiscoveryAbortRef.current = controller
+    setTargetDiscovery({
+      loading: true,
+      error: '',
+      status: 'loading',
+      message: '正在读取当前服务器的服务与容器...',
+      options: [],
+      truncated: false
+    })
+    try {
+      const bookmark = props.currentTab
+      if (!bookmark?.host) {
+        throw new Error('当前标签不是已连接的 SSH 会话，请连接服务器后重新检测')
+      }
+      const result = await discoverQuickCommandTargets(bookmark, {
+        type: targetParam.targetType,
+        sources: targetParam.sources,
+        signal: controller.signal
+      })
+      if (controller.signal.aborted) return
+      setTargetDiscovery({
+        loading: false,
+        error: '',
+        status: result.status,
+        message: result.options.length
+          ? `已识别 ${result.options.length} 项${result.truncated ? '，结果可能已截断' : ''}`
+          : result.message,
+        options: result.options,
+        truncated: result.truncated
+      })
+    } catch (error) {
+      if (error?.name === 'AbortError') return
+      setTargetDiscovery({
+        loading: false,
+        error: error?.message || '自动识别失败，可手动输入名称',
+        status: 'error',
+        message: '',
+        options: [],
+        truncated: false
+      })
     }
   }
 
@@ -198,6 +275,7 @@ export default function QuickCommandsFooterBox (props) {
   }
 
   function handlePendingCancel () {
+    resetTargetDiscovery()
     setPendingCommand(null)
     setShowPendingPreview(false)
   }
@@ -256,6 +334,7 @@ export default function QuickCommandsFooterBox (props) {
       inputOnly: pendingCommand.inputOnly,
       confirmed: true
     })
+    resetTargetDiscovery()
     setPendingCommand(null)
     setShowPendingPreview(false)
   }
@@ -346,6 +425,38 @@ export default function QuickCommandsFooterBox (props) {
   }
 
   function renderPendingParamControl (param, value) {
+    if (param.type === 'service-target') {
+      if (param.multiple) {
+        const values = Array.isArray(value)
+          ? value
+          : String(value || '').split(',').map(item => item.trim()).filter(Boolean)
+        return (
+          <Select
+            mode={param.multiple ? 'tags' : undefined}
+            value={values}
+            options={targetDiscovery.options}
+            tokenSeparators={[',']}
+            showSearch
+            allowClear
+            loading={targetDiscovery.loading}
+            placeholder={param.placeholder}
+            onChange={next => handlePendingParamChange(param.name, next)}
+            className='qm-command-param-control'
+          />
+        )
+      }
+      return (
+        <AutoComplete
+          value={value}
+          options={targetDiscovery.options}
+          filterOption={(input, option) => String(option?.label || option?.value || '').toLowerCase().includes(input.toLowerCase())}
+          onChange={next => handlePendingParamChange(param.name, next)}
+          className='qm-command-param-control'
+        >
+          <Input placeholder={param.placeholder} />
+        </AutoComplete>
+      )
+    }
     if (param.type === 'network-interface') {
       const detected = networkProbe.detected || pendingCommand?.detectedNetwork
       const interfaces = detected?.networkInterfaces || []
@@ -470,6 +581,31 @@ export default function QuickCommandsFooterBox (props) {
             onClick={() => mcpRunQuickCommandNetworkProbe(pendingCommand.item, pendingCommand.context)}
           >
             {e('shellpilotQuickDetectAgain')}
+          </Button>
+        </Flex>
+      </div>
+    )
+  }
+
+  function renderTargetDiscovery () {
+    const targetParam = pendingCommand?.params?.find(param => param.type === 'service-target')
+    if (!targetParam) return null
+    const typeLabel = targetParam.targetType === 'container' ? '容器' : '服务'
+    return (
+      <div className={classNames('qm-target-discovery', { 'qm-target-discovery-error': targetDiscovery.error })}>
+        <Flex justify='space-between' align='center' gap='small'>
+          <div>
+            <div className='qm-target-discovery-title'>自动识别服务与容器</div>
+            <div className='qm-target-discovery-status'>
+              {targetDiscovery.error || targetDiscovery.message || `连接 SSH 后自动读取可用${typeLabel}`}
+            </div>
+          </div>
+          <Button
+            size='small'
+            loading={targetDiscovery.loading}
+            onClick={() => runTargetDiscovery(targetParam)}
+          >
+            重新检测
           </Button>
         </Flex>
       </div>
@@ -736,6 +872,7 @@ export default function QuickCommandsFooterBox (props) {
           <div>{pendingCommand?.usage}</div>
         </div>
         {renderNetworkProbe()}
+        {renderTargetDiscovery()}
         {renderPendingParams()}
         {renderRollbackProtection()}
         {

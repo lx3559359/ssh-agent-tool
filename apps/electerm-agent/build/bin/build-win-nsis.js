@@ -9,8 +9,10 @@ const {
 const {
   prepareElectronBuilderConfig
 } = require('./prepare-electron-build')
+const { assertCurrentReleaseBaseline } = require('./release-version-baseline')
 
 async function main () {
+  assertCurrentReleaseBaseline()
   const pb = builder
   echo('running build for win part nsis installer')
 

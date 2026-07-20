@@ -187,7 +187,10 @@ const settleAgentCancellation = async activeCancellation => {
         errorLabel: 'Error',
         stoppedText: 'Stopped',
         noResponseText: 'No response',
-        maxIterationsText: 'Maximum iterations reached'
+        maxIterationsText: 'Maximum iterations reached',
+        toolCall: {
+          cancelledDetail: 'Task cancelled; unfinished operations were not continued.'
+        }
       })}\n`
     )
     .replace(

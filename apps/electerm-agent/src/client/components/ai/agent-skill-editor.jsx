@@ -20,7 +20,8 @@ function evidenceList (items = []) {
 export default function AgentSkillEditor ({
   skill,
   validation,
-  onSaved
+  onSaved,
+  onEditStateChange
 }) {
   const [selectedPath, setSelectedPath] = useState('')
   const [content, setContent] = useState('')
@@ -31,6 +32,11 @@ export default function AgentSkillEditor ({
     () => Array.isArray(skill?.filePaths) ? skill.filePaths : [],
     [skill]
   )
+  const editBlocked = loading || saving || content !== savedContent
+
+  useEffect(() => {
+    onEditStateChange?.(editBlocked)
+  }, [editBlocked, onEditStateChange])
 
   useEffect(() => {
     setSelectedPath(current => filePaths.includes(current)
@@ -66,7 +72,7 @@ export default function AgentSkillEditor ({
         content
       )
       setSavedContent(content)
-      onSaved?.(updated)
+      await onSaved?.(updated)
       message.success(e('shellpilotSkillSavedAsDraft'))
     } catch (error) {
       message.error(error.message)

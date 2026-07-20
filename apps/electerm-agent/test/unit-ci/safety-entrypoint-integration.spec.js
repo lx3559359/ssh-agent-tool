@@ -1218,6 +1218,37 @@ test('explicit safety commands wait for tracker readiness under default configur
   assert.equal(unavailableEntrypoint.hasPendingConfirmation(), false)
 })
 
+test('single readonly quick commands can fall back when shell integration is unavailable', async () => {
+  const { createSafetyCommandEntrypoint } = await import(moduleUrl)
+  const unavailable = createHarness({
+    ensureTrackerReady: async () => {
+      throw new Error('Shell Integration 尚未就绪')
+    },
+    submitCommand: (command, token) => {
+      unavailable.submissions.push({ command, token })
+      return true
+    }
+  })
+  const entrypoint = createSafetyCommandEntrypoint(unavailable.options)
+  entrypoint.beginSession()
+
+  const result = await entrypoint.runSafetyCommand('uptime', {
+    source: 'quick-command',
+    allowUntrackedReadonlyFallback: true
+  })
+  const completion = await result.waitForCompletion()
+
+  assert.equal(result.sent, true)
+  assert.equal(result.untracked, true)
+  assert.deepEqual(unavailable.requests, [])
+  assert.deepEqual(unavailable.submissions, [{
+    command: 'uptime',
+    token: result.token
+  }])
+  assert.equal(completion.untracked, true)
+  assert.equal(completion.exitCode, null)
+})
+
 test('background network changes still fail closed from the original command', async () => {
   const harness = await createRealRunnerHarness({
     buildRecoveryPlan: () => {

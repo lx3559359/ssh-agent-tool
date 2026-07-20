@@ -264,7 +264,7 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
       toolEntry.presentation = buildAgentToolPresentation(
         toolEntry.name,
         toolEntry.args,
-        { error: cancellationReason },
+        { error: aiAgentCopy.toolCall.cancelledDetail },
         { endpoint: agentRuntime.endpoint }
       )
       toolEntry.result = boundAgentToolResult(JSON.stringify({

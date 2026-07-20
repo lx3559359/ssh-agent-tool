@@ -7,10 +7,12 @@ import {
   Checkbox,
   Collapse,
   Space,
-  Select
+  Select,
+  Tag
 } from 'antd'
 import {
   DownloadOutlined,
+  GlobalOutlined,
   MinusCircleOutlined,
   PlusOutlined,
   UploadOutlined
@@ -48,6 +50,7 @@ import {
   mergeAIProfileImport
 } from './ai-profile-transfer'
 import { listAgentSkills } from './agent-skill-client.js'
+import { recommendedAIProviders } from './ai-provider-catalog.js'
 
 const AgentSkillManagerModal = lazy(() => import('./agent-skill-manager-modal.jsx'))
 
@@ -666,6 +669,45 @@ export default function AIConfigForm ({ initialValues, languageVersion, onSubmit
     return e('shellpilotApiAddress')
   }
 
+  function renderRecommendedProviders () {
+    return (
+      <section className='sp-ai-provider-guide' aria-label={e('shellpilotAiRecommendedProviders')}>
+        <div className='sp-ai-provider-guide-head'>
+          <div>
+            <div className='sp-ai-provider-guide-title'>{e('shellpilotAiRecommendedProviders')}</div>
+            <div className='sp-ai-provider-guide-description'>
+              {e('shellpilotAiRecommendedProvidersDescription')}
+            </div>
+          </div>
+        </div>
+        <div className='sp-ai-provider-list'>
+          {recommendedAIProviders.map(provider => (
+            <div className='sp-ai-provider-item' key={provider.preset}>
+              <div className='sp-ai-provider-item-main'>
+                <div className='sp-ai-provider-name-row'>
+                  <strong>{provider.name}</strong>
+                  <Tag>{provider.region}</Tag>
+                </div>
+                <div className='sp-ai-provider-description'>{provider.description}</div>
+                <div className='sp-ai-provider-tags'>{provider.tags.join(' · ')}</div>
+              </div>
+              <Space size='small' className='sp-ai-provider-actions'>
+                <Button size='small' onClick={() => handlePresetChange(provider.preset)}>
+                  {e('shellpilotAiUseProviderTemplate')}
+                </Button>
+                <Link to={provider.website}>
+                  <Button size='small' type='text' icon={<GlobalOutlined />}>
+                    {e('shellpilotAiOpenProviderWebsite')}
+                  </Button>
+                </Link>
+              </Space>
+            </div>
+          ))}
+        </div>
+      </section>
+    )
+  }
+
   if (!showAIConfig) {
     return null
   }
@@ -732,6 +774,8 @@ export default function AIConfigForm ({ initialValues, languageVersion, onSubmit
             </Button>
           </Form.Item>
         </div>
+
+        {renderRecommendedProviders()}
 
         <Collapse
           ghost

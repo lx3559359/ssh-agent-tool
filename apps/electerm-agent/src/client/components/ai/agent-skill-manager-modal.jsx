@@ -60,6 +60,7 @@ export default function AgentSkillManagerModal ({
   const [rollbackDigest, setRollbackDigest] = useState('')
   const [loading, setLoading] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
+  const [editorBlocked, setEditorBlocked] = useState(false)
   const selected = useMemo(
     () => catalog.find(item => item.id === selectedId) || null,
     [catalog, selectedId]
@@ -89,6 +90,7 @@ export default function AgentSkillManagerModal ({
   useEffect(() => {
     setValidation(null)
     setRollbackDigest(selected?.historyDigests?.[0] || '')
+    setEditorBlocked(true)
   }, [selectedId])
 
   async function importSelection (event) {
@@ -187,12 +189,13 @@ export default function AgentSkillManagerModal ({
     })
   }
 
-  function handleSaved (draft) {
+  async function handleSaved (draft) {
     setValidation(null)
-    refresh(draft.id)
+    await refresh(draft.id)
   }
 
-  const canEnable = selected?.state === 'draft' &&
+  const canValidate = selected?.state === 'draft' && !editorBlocked
+  const canEnable = canValidate &&
     validation && validation.valid &&
     validation.packageDigest === selected.packageDigest
 
@@ -232,7 +235,7 @@ export default function AgentSkillManagerModal ({
           />
           <Button
             onClick={validateSelected}
-            disabled={selected?.state !== 'draft'}
+            disabled={!canValidate}
           >
             {e('shellpilotSkillValidate')}
           </Button>
@@ -301,6 +304,7 @@ export default function AgentSkillManagerModal ({
             skill={selected}
             validation={validation}
             onSaved={handleSaved}
+            onEditStateChange={setEditorBlocked}
           />
         </div>
         <AgentSkillCreateModal

@@ -1,5 +1,7 @@
 const http = require('node:http')
 const { once } = require('node:events')
+const fs = require('node:fs')
+const path = require('node:path')
 const { test, expect } = require('@playwright/test')
 const {
   launchBookmarkApp,
@@ -20,6 +22,14 @@ const riskContext = Object.freeze({
     expected: { exitCode: 0, contains: 'ActiveState=active' }
   }]
 })
+
+async function captureAuditScreenshot (client, fileName) {
+  const root = process.env.SHELLPILOT_AUDIT_DIR
+  if (!root) return
+  const outputPath = path.resolve(root, fileName)
+  fs.mkdirSync(path.dirname(outputPath), { recursive: true })
+  await client.screenshot({ path: outputPath, animations: 'disabled' })
+}
 
 function toolCall (id, name, args) {
   return {
@@ -99,7 +109,9 @@ async function startAgentApi () {
 }
 
 async function acceptHostKeyIfShown (client, timeout = 1000) {
-  const modal = client.locator('.custom-modal-wrap').last()
+  const modal = client.locator('.custom-modal-wrap')
+    .filter({ hasText: 'SHA256:' })
+    .last()
   if (await modal.waitFor({ state: 'visible', timeout }).then(() => true).catch(() => false)) {
     await modal.locator('button.ant-btn-primary').last().click()
     return true
@@ -154,8 +166,10 @@ async function enableTakeover (client) {
   const confirmation = client.locator('.agent-takeover-confirm-modal')
   await expect(confirmation).toBeVisible()
   await expect(confirmation).toContainText('SHA256:')
+  await captureAuditScreenshot(client, '02-takeover-confirmation.png')
   await confirmation.locator('.custom-modal-ok-btn').click()
   await expect(toggle).toHaveAttribute('aria-checked', 'true')
+  await captureAuditScreenshot(client, '03-takeover-active.png')
 }
 
 async function submitAgentPrompt (client, prompt) {
@@ -228,6 +242,7 @@ test('per-session takeover uses readonly exec, direct manual input and one risky
     const firstSession = await openSshSession(client, sshServer)
     const firstTab = firstSession.tabId
     await openAiPanel(client)
+    await captureAuditScreenshot(client, '01-ai-panel-takeover-off.png')
     await enableTakeover(client)
 
     const secondSession = await openSshSession(client, sshServer)
@@ -240,6 +255,7 @@ test('per-session takeover uses readonly exec, direct manual input and one risky
     for (const command of ['ip a', 'ip addr', 'systemctl restart nginx']) {
       await typeManualCommand(client, sshServer, firstSession.sessionId, command)
     }
+    await captureAuditScreenshot(client, '04-manual-command-direct.png')
     await expect.poll(() => client.evaluate(async () => {
       const terminal = window.refs.get('term-' + window.store.activeTabId)
       await terminal?.injectShellIntegration?.({ forceForSafety: true })
@@ -256,6 +272,7 @@ test('per-session takeover uses readonly exec, direct manual input and one risky
     const readonlyExecBefore = sshServer.state.execCommands.filter(value => value === 'ip addr').length
     const readonlyRun = await submitAgentPrompt(client, 'readonly-e2e')
     await expect(client.locator('.agent-send-running')).toBeVisible()
+    await captureAuditScreenshot(client, '05-readonly-running.png')
     await expect(client.locator('.ant-modal-confirm')).toHaveCount(0)
     await expect(client.locator('.terminal-command-safety-modal')).toHaveCount(0)
     await expectAgentCompleted(client, readonlyRun.item, 'readonly complete')
@@ -286,6 +303,7 @@ test('per-session takeover uses readonly exec, direct manual input and one risky
     )
     await readonlyCard.locator('.agent-readonly-toggle').first().click()
     await expect(readonlyCard.locator('.agent-readonly-output')).toContainText('LOOPBACK')
+    await captureAuditScreenshot(client, '06-readonly-complete.png')
 
     const fillButton = readonlyCard.locator('.agent-readonly-actions button').nth(1)
     await expect(fillButton).toBeDisabled()
@@ -343,6 +361,7 @@ test('per-session takeover uses readonly exec, direct manual input and one risky
     const riskyBefore = sshServer.state.commands.filter(value => value === 'systemctl restart nginx').length
     const cancelRun = await submitAgentPrompt(client, 'risk-cancel-e2e')
     const cancelModal = client.locator('.terminal-command-safety-modal')
+    await expect(cancelRun.item.locator('.agent-tool-detail')).toHaveCount(0)
     await expect(cancelModal).toHaveCount(1)
     await expect(cancelModal).toContainText('systemctl restart nginx')
     const boundEndpoint = await client.evaluate(() => window.refs
@@ -357,6 +376,7 @@ test('per-session takeover uses readonly exec, direct manual input and one risky
       `${boundEndpoint.username}@${boundEndpoint.host}:${boundEndpoint.port}`
     )
     await expect(client.locator('.agent-risk-confirmation-content')).toHaveCount(0)
+    await captureAuditScreenshot(client, '07-risk-confirmation.png')
     await cancelModal.locator('.custom-modal-cancel-btn').click()
     await expectAgentCompleted(client, cancelRun.item, 'risk cancelled complete')
     expect(sshServer.state.commands.filter(value => value === 'systemctl restart nginx')).toHaveLength(riskyBefore)
@@ -377,10 +397,18 @@ test('per-session takeover uses readonly exec, direct manual input and one risky
     ).toBe(1)
     await expect(client.locator('.agent-send-running')).toBeVisible()
     await client.locator('.agent-takeover-stop').click()
-    await expect(stopRun.item).toContainText(/stopped|cancel/i, { timeout: 30000 })
+    await expect(stopRun.item).toContainText(
+      /stopped|cancel|已停止|已取消/i,
+      { timeout: 30000 }
+    )
     await expect(client.locator('.agent-takeover-switch')).toHaveAttribute('aria-checked', 'false')
     await expect.poll(() => sshServer.state.cancelledExecCommands)
       .toContain('cat /proc/loadavg')
+    const stoppedReadonlyError = stopRun.item.locator('.agent-readonly-error')
+    await expect(stoppedReadonlyError)
+      .toHaveText('任务已取消，未完成的操作没有继续执行。')
+    await expect(stoppedReadonlyError).not.toContainText('AbortError')
+    await captureAuditScreenshot(client, '08-takeover-stopped.png')
 
     await client.evaluate(tabId => window.store.mcpSwitchTab({ tabId }), secondTab)
     await expect(client.locator('.agent-takeover-switch')).toHaveAttribute('aria-checked', 'true')

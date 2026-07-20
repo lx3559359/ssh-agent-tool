@@ -10,6 +10,7 @@ const {
 const {
   modelScopeRepo
 } = require('../../src/app/common/update-sources')
+const { assertCurrentReleaseBaseline } = require('./release-version-baseline')
 
 const distDir = process.env.AIGSHELL_RELEASE_DIST ||
   path.resolve(__dirname, '../../dist')
@@ -180,6 +181,7 @@ function syncModelScopeRelease (options = {}) {
 }
 
 function main () {
+  assertCurrentReleaseBaseline()
   const result = syncModelScopeRelease()
   console.log(`ModelScope ShellPilot ${result.version} update assets synced.`)
   result.copied.forEach(name => console.log(`- ${name}`))

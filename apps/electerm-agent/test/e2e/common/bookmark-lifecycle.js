@@ -27,6 +27,7 @@ async function launchBookmarkApp () {
     extendClient(client, electronApp)
     await client.waitForFunction(() => {
       return window.store &&
+        window.migrating === false &&
         window.store.configLoaded === true &&
         Array.isArray(window.store.bookmarks) &&
         Array.isArray(window.store.bookmarkGroups)

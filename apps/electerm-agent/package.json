@@ -1,6 +1,6 @@
 {
   "name": "ssh-agent-tool",
-  "version": "0.4.6",
+  "version": "0.4.7",
   "productName": "ShellPilot",
   "description": "面向 Windows 的 SSH、SFTP 与 AI 运维客户端",
   "main": "app.js",

@@ -38,6 +38,9 @@ test('Skill manager keeps imports disabled and exposes the complete lifecycle', 
   assert.match(manager, /getFilePath\(file\)/)
   assert.match(manager, /AgentSkillCreateModal/)
   assert.match(manager, /shellpilotSkillCreateWithAi/)
+  assert.match(manager, /const canValidate = selected\?\.state === 'draft' && !editorBlocked/)
+  assert.match(manager, /disabled=\{!canValidate\}/)
+  assert.match(manager, /onEditStateChange=\{setEditorBlocked\}/)
 })
 
 test('Skill editor shows the full file plus permission, risk, and validation evidence', () => {
@@ -51,6 +54,9 @@ test('Skill editor shows the full file plus permission, risk, and validation evi
   assert.match(editor, /errors/)
   assert.match(editor, /warnings/)
   assert.match(editor, /aria-live='polite'/)
+  assert.match(editor, /const editBlocked = loading \|\| saving \|\| content !== savedContent/)
+  assert.match(editor, /onEditStateChange\?\.\(editBlocked\)/)
+  assert.match(editor, /await onSaved\?\.\(updated\)/)
 })
 
 test('Skill manager is a bounded secondary surface and does not change the main columns', () => {

@@ -146,6 +146,8 @@ export default Store => {
       }
     }
     const qms = getQuickCommandSteps(qm, options)
+    const allowUntrackedReadonlyFallback = qms.length === 1 &&
+      options.allowUntrackedReadonlyFallback !== false
     try {
       return await runSafetyCommandSequence(qms, {
         timeoutMs: options.completionTimeoutMs || 30000,
@@ -157,7 +159,10 @@ export default Store => {
             realCmd,
             options.inputOnly ?? qm?.inputOnly,
             options.tabId,
-            { title: qm?.name || options.title }
+            {
+              title: qm?.name || options.title,
+              allowUntrackedReadonlyFallback
+            }
           )
         },
         onStepComplete: () => {
