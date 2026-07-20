@@ -642,7 +642,7 @@ test('security readonly command covers bounded SSH authentication events and log
   assert.equal(command.commands.length, 1)
 
   const text = commandText(command)
-  assert.match(text, /journalctl -r -u ssh -u sshd --since '-24 hours' --no-pager/)
+  assert.match(text, /journalctl -r -n 5000 -u ssh -u sshd --since '-24 hours' --no-pager/)
   assert.match(text, /failed\|invalid\|accepted\|disconnect/)
   assert.match(text, /\/var\/log\/auth\.log/)
   assert.match(text, /\/var\/log\/secure/)
@@ -1032,6 +1032,53 @@ test('SSH security diagnostics filter and bound journal or readable-log fallback
   assert.match(permissionDeniedJournal.stdout, /Invalid user guest/)
   assert.match(permissionDeniedJournal.stdout, /最近日志尾部近似范围/)
   assert.doesNotMatch(permissionDeniedJournal.stdout, /最近 24 小时无相关 SSH 安全事件/)
+
+  const fullJournalWithReadError = runPosixShell(
+    [
+      'journalctl () {',
+      '  count=0',
+      '  while [ "$count" -lt 200 ]; do',
+      '    count=$((count + 1))',
+      "    printf 'Failed password full row %s\\n' \"$count\"",
+      '  done',
+      "  printf 'Permission denied\\n' >&2",
+      '  return 0',
+      '}',
+      'find () { printf \'%s\\n\' "$1"; }'
+    ].join('\n') + '\n' + fallbackEventsCommand
+  )
+  assert.equal(
+    outputLineCount(fullJournalWithReadError.stdout, 'Failed password full row '),
+    200
+  )
+  assert.match(fullJournalWithReadError.stdout, /Invalid user guest/)
+  assert.match(fullJournalWithReadError.stdout, /最近日志尾部近似范围/)
+  assert.doesNotMatch(
+    fullJournalWithReadError.stdout,
+    /最近 24 小时无相关 SSH 安全事件/
+  )
+
+  const fullJournalWithoutReadError = runPosixShell(
+    [
+      'journalctl () {',
+      '  count=0',
+      '  while [ "$count" -lt 200 ]; do',
+      '    count=$((count + 1))',
+      "    printf 'Accepted publickey full row %s\\n' \"$count\"",
+      '  done',
+      '  return 0',
+      '}',
+      'find () { printf \'%s\\n\' "$1"; }'
+    ].join('\n') + '\n' + fallbackEventsCommand
+  )
+  assert.equal(
+    outputLineCount(fullJournalWithoutReadError.stdout, 'Accepted publickey full row '),
+    200
+  )
+  assert.doesNotMatch(
+    fullJournalWithoutReadError.stdout,
+    /Invalid user guest|最近日志尾部近似范围/
+  )
 
   const fallback = runPosixShell(
     [

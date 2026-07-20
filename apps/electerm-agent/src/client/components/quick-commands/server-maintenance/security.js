@@ -18,7 +18,7 @@ export function getSecurityCommands () {
     {
       journal_control="$(
         {
-          journalctl -r -u ssh -u sshd --since '-24 hours' --no-pager 2>&1 1>&3
+          journalctl -r -n 5000 -u ssh -u sshd --since '-24 hours' --no-pager 2>&1 1>&3
           printf '\\036SHELLPILOT_SSH_STATUS=%s\\n' "$?"
         } | awk '
           BEGIN {
@@ -51,13 +51,9 @@ export function getSecurityCommands () {
         marker_position = index($0, marker)
         if (marker_position > 0) {
           prefix = substr($0, 1, marker_position - 1)
-          if (length(prefix) > 0 && tolower(prefix) ~ /(failed|invalid|accepted|disconnect)/) {
+          if (length(prefix) > 0 && emitted < limit && tolower(prefix) ~ /(failed|invalid|accepted|disconnect)/) {
             print prefix
             emitted++
-            if (emitted >= limit) {
-              truncated = 1
-              exit
-            }
           }
           control = substr($0, marker_position + length(marker))
           split(control, control_fields, " ")
@@ -66,17 +62,12 @@ export function getSecurityCommands () {
           status_seen = 1
           next
         }
-        if (tolower($0) ~ /(failed|invalid|accepted|disconnect)/) {
+        if (emitted < limit && tolower($0) ~ /(failed|invalid|accepted|disconnect)/) {
           print
           emitted++
-          if (emitted >= limit) {
-            truncated = 1
-            exit
-          }
         }
       }
       END {
-        if (truncated) exit 0
         if (status_seen && command_status == 0 && stderr_seen == 0) {
           if (emitted == 0) {
             print "最近 24 小时无相关 SSH 安全事件。"
