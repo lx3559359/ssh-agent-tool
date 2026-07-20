@@ -1,5 +1,6 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
+const { spawnSync } = require('node:child_process')
 const fs = require('node:fs')
 const path = require('node:path')
 const vm = require('node:vm')
@@ -98,29 +99,55 @@ function commandText (command) {
   return command.commands.map(item => item.command).join('\n')
 }
 
-const diskIoDiagnosticCommand = `if IOSTAT_OUTPUT="$(iostat -xz 1 3 2>/dev/null)"; then
-  printf '%s' "$IOSTAT_OUTPUT" | head -n 200
+const bashExecutable = process.platform === 'win32'
+  ? path.join(process.env.ProgramFiles || 'C:\\Program Files', 'Git', 'bin', 'bash.exe')
+  : 'bash'
+
+function runBash (script, options = {}) {
+  const result = spawnSync(
+    bashExecutable,
+    ['--noprofile', '--norc', '-c', script],
+    {
+      encoding: 'utf8',
+      timeout: options.timeout || 5000,
+      stdio: ['ignore', 'pipe', 'pipe']
+    }
+  )
+  assert.equal(result.error, undefined, result.error?.message)
+  assert.equal(result.signal, null, String(result.signal) + ': ' + result.stderr)
+  assert.equal(result.status, 0, result.stderr)
+  return result
+}
+
+const diskIoDiagnosticCommand = `iostat -xz 1 3 2>/dev/null | head -n 200
+IOSTAT_STATUS=\${PIPESTATUS[0]}
+if [ "$IOSTAT_STATUS" -eq 0 ] || [ "$IOSTAT_STATUS" -eq 141 ]; then
+  true
 else
   vmstat 1 4 2>/dev/null | head -n 20 || true
   head -n 200 /proc/diskstats 2>/dev/null || true
 fi
-unset IOSTAT_OUTPUT
+unset IOSTAT_STATUS
 true`
 
-const inodeMountDiagnosticCommand = `if FINDMNT_OUTPUT="$(findmnt -o TARGET,SOURCE,FSTYPE,OPTIONS 2>/dev/null)"; then
-  printf '%s' "$FINDMNT_OUTPUT" | head -n 200
+const inodeMountDiagnosticCommand = `findmnt -o TARGET,SOURCE,FSTYPE,OPTIONS 2>/dev/null | head -n 200
+FINDMNT_STATUS=\${PIPESTATUS[0]}
+if [ "$FINDMNT_STATUS" -eq 0 ] || [ "$FINDMNT_STATUS" -eq 141 ]; then
+  true
 else
   head -n 200 /proc/mounts 2>/dev/null || true
 fi
-unset FINDMNT_OUTPUT
+unset FINDMNT_STATUS
 true`
 
-const deletedOpenFilesDiagnosticCommand = `if LSOF_OUTPUT="$(lsof +L1 2>/dev/null)"; then
-  printf '%s' "$LSOF_OUTPUT" | head -n 200
+const deletedOpenFilesDiagnosticCommand = `lsof +L1 2>/dev/null | head -n 200
+LSOF_STATUS=\${PIPESTATUS[0]}
+if [ "$LSOF_STATUS" -eq 0 ] || [ "$LSOF_STATUS" -eq 141 ]; then
+  true
 else
   find /proc/[0-9]*/fd -lname '* (deleted)' -ls 2>/dev/null | head -n 200 || true
 fi
-unset LSOF_OUTPUT
+unset LSOF_STATUS
 true`
 
 test('system readonly commands cover CPU, kernel, boot and scheduled task diagnostics', async () => {
@@ -275,7 +302,7 @@ test('storage readonly commands stay best-effort bounded and classifier-safe', a
   }
 })
 
-test('storage readonly fallbacks run only after primary command failure', async () => {
+test('storage readonly fallbacks follow bounded primary pipeline status', async () => {
   const { getServerMaintenanceQuickCommands } = await import(registryUrl)
   const commands = getServerMaintenanceQuickCommands()
   const byId = new Map(commands.map(command => [command.id, command]))
@@ -283,22 +310,27 @@ test('storage readonly fallbacks run only after primary command failure', async 
     {
       id: 'builtin-server-disk-io',
       primary: 'iostat -xz 1 3',
+      status: 'IOSTAT_STATUS',
       fallbacks: ['vmstat 1 4', '/proc/diskstats']
     },
     {
       id: 'builtin-server-inode-mount',
       primary: 'findmnt -o TARGET,SOURCE,FSTYPE,OPTIONS',
+      status: 'FINDMNT_STATUS',
       fallbacks: ['/proc/mounts']
     },
     {
       id: 'builtin-server-deleted-open-files',
       primary: 'lsof +L1',
+      status: 'LSOF_STATUS',
       fallbacks: ['/proc/[0-9]*/fd']
     }
   ]
 
   for (const item of cases) {
     const conditional = byId.get(item.id).commands.at(-1).command
+    const pipeline = `${item.primary} 2>/dev/null | head -n 200`
+    const statusCapture = `${item.status}=\${PIPESTATUS[0]}`
     const branches = conditional.split('\nelse\n')
     assert.equal(branches.length, 2, `${item.id} should use an if/else fallback`)
     const [successBranch, failedRemainder] = branches
@@ -306,14 +338,105 @@ test('storage readonly fallbacks run only after primary command failure', async 
     assert.equal(failedParts.length, 2, `${item.id} should close its fallback branch`)
     const [failureBranch, cleanup] = failedParts
 
-    assert.ok(successBranch.includes(item.primary), `${item.id} should run its primary first`)
-    assert.match(successBranch, /^if [A-Z_]+_OUTPUT="\$\(.+\)"; then\n/)
+    assert.ok(successBranch.startsWith(pipeline + '\n' + statusCapture + '\n'))
+    assert.ok(
+      successBranch.endsWith(
+        `if [ "$${item.status}" -eq 0 ] || [ "$${item.status}" -eq 141 ]; then\n  true`
+      )
+    )
+    assert.ok(
+      conditional.indexOf(pipeline) < conditional.indexOf(statusCapture),
+      `${item.id} must truncate before capturing pipeline status`
+    )
+    assert.doesNotMatch(conditional, /[A-Z_]+_OUTPUT=|="\$\(/)
     for (const fallback of item.fallbacks) {
       assert.equal(successBranch.includes(fallback), false, `${fallback} leaked into success branch`)
       assert.ok(failureBranch.includes(fallback), `${fallback} missing from failure branch`)
     }
-    assert.match(cleanup, /^unset [A-Z_]+_OUTPUT\ntrue$/)
+    assert.equal(cleanup, `unset ${item.status}\ntrue`)
   }
+})
+
+test('storage readonly Bash execution selects fallback only for real primary failures', async () => {
+  const { getServerMaintenanceQuickCommands } = await import(registryUrl)
+  const byId = new Map(
+    getServerMaintenanceQuickCommands().map(command => [command.id, command])
+  )
+  const cases = [
+    {
+      id: 'builtin-server-disk-io',
+      primary: '__PRIMARY_IOSTAT__',
+      fallback: '__VMSTAT_FALLBACK__',
+      failureStatus: 127
+    },
+    {
+      id: 'builtin-server-inode-mount',
+      primary: '__PRIMARY_FINDMNT__',
+      fallback: '__MOUNTS_FALLBACK__',
+      failureStatus: 7
+    },
+    {
+      id: 'builtin-server-deleted-open-files',
+      primary: '__PRIMARY_LSOF__',
+      fallback: '__FIND_FALLBACK__',
+      failureStatus: 7
+    }
+  ]
+  const fakeTools = status => [
+    `PRIMARY_STATUS=${status}`,
+    "iostat () { printf '__PRIMARY_IOSTAT__\\n'; return \"$PRIMARY_STATUS\"; }",
+    "findmnt () { printf '__PRIMARY_FINDMNT__\\n'; return \"$PRIMARY_STATUS\"; }",
+    "lsof () { printf '__PRIMARY_LSOF__\\n'; return \"$PRIMARY_STATUS\"; }",
+    "vmstat () { printf '__VMSTAT_FALLBACK__\\n'; }",
+    "find () { printf '__FIND_FALLBACK__\\n'; }",
+    'head () {',
+    '  case "$3" in',
+    "    /proc/diskstats) printf '__DISKSTATS_FALLBACK__\\n'; return 0 ;;",
+    "    /proc/mounts) printf '__MOUNTS_FALLBACK__\\n'; return 0 ;;",
+    '  esac',
+    '  command head "$@"',
+    '}'
+  ].join('\n')
+
+  for (const item of cases) {
+    const command = byId.get(item.id).commands.at(-1).command
+    const success = runBash(`${fakeTools(0)}\n${command}`)
+    assert.match(success.stdout, new RegExp(item.primary), item.id)
+    assert.doesNotMatch(success.stdout, new RegExp(item.fallback), item.id)
+
+    const failure = runBash(`${fakeTools(item.failureStatus)}\n${command}`)
+    assert.match(failure.stdout, new RegExp(item.primary), item.id)
+    assert.match(failure.stdout, new RegExp(item.fallback), item.id)
+
+    const sigpipe = runBash(`${fakeTools(141)}\n${command}`)
+    assert.match(sigpipe.stdout, new RegExp(item.primary), item.id)
+    assert.doesNotMatch(sigpipe.stdout, new RegExp(item.fallback), item.id)
+  }
+})
+
+test('storage readonly lsof pipeline stops a large producer at the output boundary', async () => {
+  const { getServerMaintenanceQuickCommands } = await import(registryUrl)
+  const command = getServerMaintenanceQuickCommands()
+    .find(item => item.id === 'builtin-server-deleted-open-files')
+    .commands.at(-1).command
+  const payload = 'x'.repeat(256)
+  const prelude = [
+    'lsof () {',
+    '  count=0',
+    `  payload='${payload}'`,
+    '  while :; do',
+    '    count=$((count + 1))',
+    "    printf 'row-%s-%s\\n' \"$count\" \"$payload\"",
+    '  done',
+    '}',
+    "find () { printf '__FIND_FALLBACK__\\n'; }"
+  ].join('\n')
+  const result = runBash(`${prelude}\n${command}`, { timeout: 2000 })
+  const outputLines = result.stdout.trimEnd().split('\n')
+
+  assert.equal(outputLines.length, 200)
+  assert.match(outputLines.at(-1), /^row-/)
+  assert.doesNotMatch(result.stdout, /__FIND_FALLBACK__/)
 })
 
 test('Windows quick-command path keeps storage step order and readonly classification', async () => {

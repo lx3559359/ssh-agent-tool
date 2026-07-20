@@ -737,27 +737,33 @@ function changeProvider (command) {
 }
 
 const fixedReadonlyStorageDiagnosticCommands = new Set([
-  `if IOSTAT_OUTPUT="$(iostat -xz 1 3 2>/dev/null)"; then
-  printf '%s' "$IOSTAT_OUTPUT" | head -n 200
+  `iostat -xz 1 3 2>/dev/null | head -n 200
+IOSTAT_STATUS=\${PIPESTATUS[0]}
+if [ "$IOSTAT_STATUS" -eq 0 ] || [ "$IOSTAT_STATUS" -eq 141 ]; then
+  true
 else
   vmstat 1 4 2>/dev/null | head -n 20 || true
   head -n 200 /proc/diskstats 2>/dev/null || true
 fi
-unset IOSTAT_OUTPUT
+unset IOSTAT_STATUS
 true`,
-  `if FINDMNT_OUTPUT="$(findmnt -o TARGET,SOURCE,FSTYPE,OPTIONS 2>/dev/null)"; then
-  printf '%s' "$FINDMNT_OUTPUT" | head -n 200
+  `findmnt -o TARGET,SOURCE,FSTYPE,OPTIONS 2>/dev/null | head -n 200
+FINDMNT_STATUS=\${PIPESTATUS[0]}
+if [ "$FINDMNT_STATUS" -eq 0 ] || [ "$FINDMNT_STATUS" -eq 141 ]; then
+  true
 else
   head -n 200 /proc/mounts 2>/dev/null || true
 fi
-unset FINDMNT_OUTPUT
+unset FINDMNT_STATUS
 true`,
-  `if LSOF_OUTPUT="$(lsof +L1 2>/dev/null)"; then
-  printf '%s' "$LSOF_OUTPUT" | head -n 200
+  `lsof +L1 2>/dev/null | head -n 200
+LSOF_STATUS=\${PIPESTATUS[0]}
+if [ "$LSOF_STATUS" -eq 0 ] || [ "$LSOF_STATUS" -eq 141 ]; then
+  true
 else
   find /proc/[0-9]*/fd -lname '* (deleted)' -ls 2>/dev/null | head -n 200 || true
 fi
-unset LSOF_OUTPUT
+unset LSOF_STATUS
 true`
 ])
 
@@ -1130,7 +1136,10 @@ function classifySingle (command) {
 }
 
 export function classifyCommand (command) {
-  const text = String(command || '').replace(/\r\n|\n\r|\r/g, '\n')
+  const text = String(command || '').replace(/\r\n|\n\r/g, '\n')
+  if (text.includes('\r')) {
+    return result('unknown', '\u547d\u4ee4\u5305\u542b\u65e0\u6cd5\u5b89\u5168\u6267\u884c\u7684\u88f8\u56de\u8f66\uff0c\u65e0\u6cd5\u5206\u7c7b')
+  }
   if (!text) return result('unknown', '命令为空，无法分类')
   if (fixedReadonlyStorageDiagnosticCommands.has(text)) return result('readonly', '\u547d\u4ee4\u5c5e\u4e8e\u5df2\u8bc6\u522b\u7684\u53ea\u8bfb\u8bca\u65ad\u64cd\u4f5c')
   const parts = splitCommands(text)

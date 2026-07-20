@@ -663,29 +663,35 @@ test('bounded system diagnostic fallbacks stay readonly without widening mutatio
   }
 })
 
-const fixedDiskIoDiagnosticCommand = `if IOSTAT_OUTPUT="$(iostat -xz 1 3 2>/dev/null)"; then
-  printf '%s' "$IOSTAT_OUTPUT" | head -n 200
+const fixedDiskIoDiagnosticCommand = `iostat -xz 1 3 2>/dev/null | head -n 200
+IOSTAT_STATUS=\${PIPESTATUS[0]}
+if [ "$IOSTAT_STATUS" -eq 0 ] || [ "$IOSTAT_STATUS" -eq 141 ]; then
+  true
 else
   vmstat 1 4 2>/dev/null | head -n 20 || true
   head -n 200 /proc/diskstats 2>/dev/null || true
 fi
-unset IOSTAT_OUTPUT
+unset IOSTAT_STATUS
 true`
 
-const fixedInodeMountDiagnosticCommand = `if FINDMNT_OUTPUT="$(findmnt -o TARGET,SOURCE,FSTYPE,OPTIONS 2>/dev/null)"; then
-  printf '%s' "$FINDMNT_OUTPUT" | head -n 200
+const fixedInodeMountDiagnosticCommand = `findmnt -o TARGET,SOURCE,FSTYPE,OPTIONS 2>/dev/null | head -n 200
+FINDMNT_STATUS=\${PIPESTATUS[0]}
+if [ "$FINDMNT_STATUS" -eq 0 ] || [ "$FINDMNT_STATUS" -eq 141 ]; then
+  true
 else
   head -n 200 /proc/mounts 2>/dev/null || true
 fi
-unset FINDMNT_OUTPUT
+unset FINDMNT_STATUS
 true`
 
-const fixedDeletedOpenFilesDiagnosticCommand = `if LSOF_OUTPUT="$(lsof +L1 2>/dev/null)"; then
-  printf '%s' "$LSOF_OUTPUT" | head -n 200
+const fixedDeletedOpenFilesDiagnosticCommand = `lsof +L1 2>/dev/null | head -n 200
+LSOF_STATUS=\${PIPESTATUS[0]}
+if [ "$LSOF_STATUS" -eq 0 ] || [ "$LSOF_STATUS" -eq 141 ]; then
+  true
 else
   find /proc/[0-9]*/fd -lname '* (deleted)' -ls 2>/dev/null | head -n 200 || true
 fi
-unset LSOF_OUTPUT
+unset LSOF_STATUS
 true`
 
 test('bounded storage diagnostic fallbacks stay readonly without widening unsafe forms', async () => {
@@ -741,7 +747,11 @@ test('storage fixed commands normalize line endings without accepting syntax cha
   const lineEndingVariants = [
     command => command.replace(/\n/g, '\r\n'),
     command => command.replace(/\n/g, '\n\r'),
-    command => command.replace(/\n/g, '\r')
+    command => {
+      let index = 0
+      const endings = ['\n', '\r\n', '\n\r']
+      return command.replace(/\n/g, () => endings[index++ % endings.length])
+    }
   ]
 
   for (const fixedCommand of fixedCommands) {
@@ -751,6 +761,14 @@ test('storage fixed commands normalize line endings without accepting syntax cha
       assert.equal(classification.risk, 'readonly', JSON.stringify(command))
       assert.equal(classification.requiresConfirmation, false, JSON.stringify(command))
     }
+  }
+
+  for (const fixedCommand of fixedCommands) {
+    const command = fixedCommand.replace(/\n/g, '\r')
+    const classification = classifyCommand(command)
+    assert.equal(classification.risk, 'unknown', JSON.stringify(command))
+    assert.equal(classification.reversible, false, JSON.stringify(command))
+    assert.equal(classification.requiresConfirmation, true, JSON.stringify(command))
   }
 
   const windowsCommand = command => command.replace(/\n/g, '\n\r')
@@ -767,8 +785,8 @@ test('storage fixed commands normalize line endings without accepting syntax cha
     fixedDiskIoDiagnosticCommand.replace('\nelse\n', '\nelif true; then\n'),
     `${fixedInodeMountDiagnosticCommand} `,
     fixedDeletedOpenFilesDiagnosticCommand.replace(
-      "  printf '%s'",
-      "   printf '%s'"
+      'lsof +L1 2>/dev/null | head -n 200',
+      'lsof  +L1 2>/dev/null | head -n 200'
     )
   ].map(windowsCommand)
 

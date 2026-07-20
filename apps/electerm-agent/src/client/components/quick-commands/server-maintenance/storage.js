@@ -1,28 +1,34 @@
 import { READ_ONLY, NEED_EDIT, step, defineCommand, inputParam, numberParam } from './shared/definition.js'
 
-const diskIoDiagnosticCommand = `if IOSTAT_OUTPUT="$(iostat -xz 1 3 2>/dev/null)"; then
-  printf '%s' "$IOSTAT_OUTPUT" | head -n 200
+const diskIoDiagnosticCommand = `iostat -xz 1 3 2>/dev/null | head -n 200
+IOSTAT_STATUS=\${PIPESTATUS[0]}
+if [ "$IOSTAT_STATUS" -eq 0 ] || [ "$IOSTAT_STATUS" -eq 141 ]; then
+  true
 else
   vmstat 1 4 2>/dev/null | head -n 20 || true
   head -n 200 /proc/diskstats 2>/dev/null || true
 fi
-unset IOSTAT_OUTPUT
+unset IOSTAT_STATUS
 true`
 
-const inodeMountDiagnosticCommand = `if FINDMNT_OUTPUT="$(findmnt -o TARGET,SOURCE,FSTYPE,OPTIONS 2>/dev/null)"; then
-  printf '%s' "$FINDMNT_OUTPUT" | head -n 200
+const inodeMountDiagnosticCommand = `findmnt -o TARGET,SOURCE,FSTYPE,OPTIONS 2>/dev/null | head -n 200
+FINDMNT_STATUS=\${PIPESTATUS[0]}
+if [ "$FINDMNT_STATUS" -eq 0 ] || [ "$FINDMNT_STATUS" -eq 141 ]; then
+  true
 else
   head -n 200 /proc/mounts 2>/dev/null || true
 fi
-unset FINDMNT_OUTPUT
+unset FINDMNT_STATUS
 true`
 
-const deletedOpenFilesDiagnosticCommand = `if LSOF_OUTPUT="$(lsof +L1 2>/dev/null)"; then
-  printf '%s' "$LSOF_OUTPUT" | head -n 200
+const deletedOpenFilesDiagnosticCommand = `lsof +L1 2>/dev/null | head -n 200
+LSOF_STATUS=\${PIPESTATUS[0]}
+if [ "$LSOF_STATUS" -eq 0 ] || [ "$LSOF_STATUS" -eq 141 ]; then
+  true
 else
   find /proc/[0-9]*/fd -lname '* (deleted)' -ls 2>/dev/null | head -n 200 || true
 fi
-unset LSOF_OUTPUT
+unset LSOF_STATUS
 true`
 
 export function getStorageCommands () {
