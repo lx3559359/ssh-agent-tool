@@ -736,35 +736,80 @@ function changeProvider (command) {
   return null
 }
 
-const fixedReadonlyStorageDiagnosticCommands = new Set([
-  `iostat -xz 1 3 2>/dev/null | head -n 200
-IOSTAT_STATUS=\${PIPESTATUS[0]}
-if [ "$IOSTAT_STATUS" -eq 0 ] || [ "$IOSTAT_STATUS" -eq 141 ]; then
-  true
-else
-  vmstat 1 4 2>/dev/null | head -n 20 || true
-  head -n 200 /proc/diskstats 2>/dev/null || true
-fi
-unset IOSTAT_STATUS
-true`,
-  `findmnt -o TARGET,SOURCE,FSTYPE,OPTIONS 2>/dev/null | head -n 200
-FINDMNT_STATUS=\${PIPESTATUS[0]}
-if [ "$FINDMNT_STATUS" -eq 0 ] || [ "$FINDMNT_STATUS" -eq 141 ]; then
-  true
-else
-  head -n 200 /proc/mounts 2>/dev/null || true
-fi
-unset FINDMNT_STATUS
-true`,
-  `lsof +L1 2>/dev/null | head -n 200
-LSOF_STATUS=\${PIPESTATUS[0]}
-if [ "$LSOF_STATUS" -eq 0 ] || [ "$LSOF_STATUS" -eq 141 ]; then
-  true
-else
-  find /proc/[0-9]*/fd -lname '* (deleted)' -ls 2>/dev/null | head -n 200 || true
-fi
-unset LSOF_STATUS
+function buildFixedStorageDiagnosticCommand (primaryCommand, fallbackCommand) {
+  return `(
+  run_storage_primary () {
+    "$@" &
+    primary_pid=$!
+    (
+      sleep 15
+      kill -KILL "$primary_pid" 2>/dev/null
+    ) >/dev/null 2>&1 &
+    timer_pid=$!
+    wait "$primary_pid"
+    primary_status=$?
+    kill -KILL "$timer_pid" 2>/dev/null || true
+    wait "$timer_pid" 2>/dev/null || true
+    return "$primary_status"
+  }
+
+  if {
+    run_storage_primary ${primaryCommand}
+    printf '\\036SHELLPILOT_STORAGE_STATUS=%s\\n' "$?"
+  } | awk '
+    BEGIN {
+      limit = 200
+      marker = sprintf("%c", 30) "SHELLPILOT_STORAGE_STATUS="
+    }
+    {
+      marker_position = index($0, marker)
+      if (marker_position > 0) {
+        prefix = substr($0, 1, marker_position - 1)
+        if (length(prefix) > 0 && emitted < limit) {
+          print prefix
+          emitted++
+        }
+        primary_status = substr($0, marker_position + length(marker))
+        status_seen = 1
+        next
+      }
+      if (emitted < limit) {
+        print
+        emitted++
+        next
+      }
+      truncated = 1
+      exit
+    }
+    END {
+      if (truncated || (status_seen && primary_status == 0)) {
+        exit 0
+      }
+      exit 1
+    }
+  '; then
+    true
+  else
+${fallbackCommand}
+  fi
+)
 true`
+}
+
+const fixedReadonlyStorageDiagnosticCommands = new Set([
+  buildFixedStorageDiagnosticCommand(
+    'iostat -xz 1 3 2>/dev/null',
+    '    vmstat 1 4 2>/dev/null | head -n 20 || true\n' +
+      '    head -n 200 /proc/diskstats 2>/dev/null || true'
+  ),
+  buildFixedStorageDiagnosticCommand(
+    'findmnt -o TARGET,SOURCE,FSTYPE,OPTIONS 2>/dev/null',
+    '    head -n 200 /proc/mounts 2>/dev/null || true'
+  ),
+  buildFixedStorageDiagnosticCommand(
+    'lsof +L1 2>/dev/null',
+    "    find /proc/[0-9]*/fd -lname '* (deleted)' -ls 2>/dev/null | head -n 200 || true"
+  )
 ])
 
 const inherentlyReadonlyCommands = new Set([

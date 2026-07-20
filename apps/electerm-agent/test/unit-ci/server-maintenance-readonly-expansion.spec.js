@@ -99,16 +99,41 @@ function commandText (command) {
   return command.commands.map(item => item.command).join('\n')
 }
 
-const bashExecutable = process.platform === 'win32'
-  ? path.join(process.env.ProgramFiles || 'C:\\Program Files', 'Git', 'bin', 'bash.exe')
-  : 'bash'
+function resolvePosixShell () {
+  const candidates = process.platform === 'win32'
+    ? [
+        path.join(process.env.ProgramFiles || 'C:\\Program Files', 'Git', 'usr', 'bin', 'dash.exe'),
+        path.join(process.env.ProgramFiles || 'C:\\Program Files', 'Git', 'bin', 'sh.exe')
+      ]
+    : ['dash', 'sh']
+  for (const candidate of candidates) {
+    const probe = spawnSync(candidate, ['-c', 'exit 0'], {
+      encoding: 'utf8',
+      timeout: 2000
+    })
+    if (!probe.error && probe.status === 0) {
+      return candidate
+    }
+  }
+  throw new Error('No POSIX sh implementation is available for storage command tests')
+}
 
-function runBash (script, options = {}) {
+const posixShellExecutable = resolvePosixShell()
+const posixShellEnv = { ...process.env }
+const posixPathKey = Object.keys(posixShellEnv)
+  .find(key => key.toLowerCase() === 'path') || 'PATH'
+posixShellEnv[posixPathKey] = [
+  path.dirname(posixShellExecutable),
+  posixShellEnv[posixPathKey]
+].filter(Boolean).join(path.delimiter)
+
+function runPosixShell (script, options = {}) {
   const result = spawnSync(
-    bashExecutable,
-    ['--noprofile', '--norc', '-c', script],
+    posixShellExecutable,
+    ['-c', script],
     {
       encoding: 'utf8',
+      env: posixShellEnv,
       timeout: options.timeout || 5000,
       stdio: ['ignore', 'pipe', 'pipe']
     }
@@ -119,36 +144,81 @@ function runBash (script, options = {}) {
   return result
 }
 
-const diskIoDiagnosticCommand = `iostat -xz 1 3 2>/dev/null | head -n 200
-IOSTAT_STATUS=\${PIPESTATUS[0]}
-if [ "$IOSTAT_STATUS" -eq 0 ] || [ "$IOSTAT_STATUS" -eq 141 ]; then
-  true
-else
-  vmstat 1 4 2>/dev/null | head -n 20 || true
-  head -n 200 /proc/diskstats 2>/dev/null || true
-fi
-unset IOSTAT_STATUS
-true`
+function buildBoundedStorageDiagnosticCommand (primaryCommand, fallbackCommand) {
+  return `(
+  run_storage_primary () {
+    "$@" &
+    primary_pid=$!
+    (
+      sleep 15
+      kill -KILL "$primary_pid" 2>/dev/null
+    ) >/dev/null 2>&1 &
+    timer_pid=$!
+    wait "$primary_pid"
+    primary_status=$?
+    kill -KILL "$timer_pid" 2>/dev/null || true
+    wait "$timer_pid" 2>/dev/null || true
+    return "$primary_status"
+  }
 
-const inodeMountDiagnosticCommand = `findmnt -o TARGET,SOURCE,FSTYPE,OPTIONS 2>/dev/null | head -n 200
-FINDMNT_STATUS=\${PIPESTATUS[0]}
-if [ "$FINDMNT_STATUS" -eq 0 ] || [ "$FINDMNT_STATUS" -eq 141 ]; then
-  true
-else
-  head -n 200 /proc/mounts 2>/dev/null || true
-fi
-unset FINDMNT_STATUS
+  if {
+    run_storage_primary ${primaryCommand}
+    printf '\\036SHELLPILOT_STORAGE_STATUS=%s\\n' "$?"
+  } | awk '
+    BEGIN {
+      limit = 200
+      marker = sprintf("%c", 30) "SHELLPILOT_STORAGE_STATUS="
+    }
+    {
+      marker_position = index($0, marker)
+      if (marker_position > 0) {
+        prefix = substr($0, 1, marker_position - 1)
+        if (length(prefix) > 0 && emitted < limit) {
+          print prefix
+          emitted++
+        }
+        primary_status = substr($0, marker_position + length(marker))
+        status_seen = 1
+        next
+      }
+      if (emitted < limit) {
+        print
+        emitted++
+        next
+      }
+      truncated = 1
+      exit
+    }
+    END {
+      if (truncated || (status_seen && primary_status == 0)) {
+        exit 0
+      }
+      exit 1
+    }
+  '; then
+    true
+  else
+${fallbackCommand}
+  fi
+)
 true`
+}
 
-const deletedOpenFilesDiagnosticCommand = `lsof +L1 2>/dev/null | head -n 200
-LSOF_STATUS=\${PIPESTATUS[0]}
-if [ "$LSOF_STATUS" -eq 0 ] || [ "$LSOF_STATUS" -eq 141 ]; then
-  true
-else
-  find /proc/[0-9]*/fd -lname '* (deleted)' -ls 2>/dev/null | head -n 200 || true
-fi
-unset LSOF_STATUS
-true`
+const diskIoDiagnosticCommand = buildBoundedStorageDiagnosticCommand(
+  'iostat -xz 1 3 2>/dev/null',
+  '    vmstat 1 4 2>/dev/null | head -n 20 || true\n' +
+    '    head -n 200 /proc/diskstats 2>/dev/null || true'
+)
+
+const inodeMountDiagnosticCommand = buildBoundedStorageDiagnosticCommand(
+  'findmnt -o TARGET,SOURCE,FSTYPE,OPTIONS 2>/dev/null',
+  '    head -n 200 /proc/mounts 2>/dev/null || true'
+)
+
+const deletedOpenFilesDiagnosticCommand = buildBoundedStorageDiagnosticCommand(
+  'lsof +L1 2>/dev/null',
+  "    find /proc/[0-9]*/fd -lname '* (deleted)' -ls 2>/dev/null | head -n 200 || true"
+)
 
 test('system readonly commands cover CPU, kernel, boot and scheduled task diagnostics', async () => {
   const { getServerMaintenanceQuickCommands } = await import(registryUrl)
@@ -302,7 +372,7 @@ test('storage readonly commands stay best-effort bounded and classifier-safe', a
   }
 })
 
-test('storage readonly fallbacks follow bounded primary pipeline status', async () => {
+test('storage readonly fallbacks follow bounded POSIX pipeline status', async () => {
   const { getServerMaintenanceQuickCommands } = await import(registryUrl)
   const commands = getServerMaintenanceQuickCommands()
   const byId = new Map(commands.map(command => [command.id, command]))
@@ -310,54 +380,60 @@ test('storage readonly fallbacks follow bounded primary pipeline status', async 
     {
       id: 'builtin-server-disk-io',
       primary: 'iostat -xz 1 3',
-      status: 'IOSTAT_STATUS',
       fallbacks: ['vmstat 1 4', '/proc/diskstats']
     },
     {
       id: 'builtin-server-inode-mount',
       primary: 'findmnt -o TARGET,SOURCE,FSTYPE,OPTIONS',
-      status: 'FINDMNT_STATUS',
       fallbacks: ['/proc/mounts']
     },
     {
       id: 'builtin-server-deleted-open-files',
       primary: 'lsof +L1',
-      status: 'LSOF_STATUS',
       fallbacks: ['/proc/[0-9]*/fd']
     }
   ]
 
   for (const item of cases) {
     const conditional = byId.get(item.id).commands.at(-1).command
-    const pipeline = `${item.primary} 2>/dev/null | head -n 200`
-    const statusCapture = `${item.status}=\${PIPESTATUS[0]}`
-    const branches = conditional.split('\nelse\n')
+    const primaryInvocation = `run_storage_primary ${item.primary} 2>/dev/null`
+    const branches = conditional.split('\n  else\n')
     assert.equal(branches.length, 2, `${item.id} should use an if/else fallback`)
     const [successBranch, failedRemainder] = branches
-    const failedParts = failedRemainder.split('\nfi\n')
+    const failedParts = failedRemainder.split('\n  fi\n')
     assert.equal(failedParts.length, 2, `${item.id} should close its fallback branch`)
     const [failureBranch, cleanup] = failedParts
 
-    assert.ok(successBranch.startsWith(pipeline + '\n' + statusCapture + '\n'))
+    assert.ok(successBranch.startsWith('(\n  run_storage_primary () {'))
+    assert.ok(successBranch.includes(primaryInvocation), item.id)
     assert.ok(
-      successBranch.endsWith(
-        `if [ "$${item.status}" -eq 0 ] || [ "$${item.status}" -eq 141 ]; then\n  true`
+      conditional.indexOf(primaryInvocation) < conditional.indexOf("} | awk '"),
+      `${item.id} must stream the primary output into awk`
+    )
+    assert.match(conditional, /sleep 15/)
+    assert.match(conditional, /kill -KILL "\$primary_pid"/)
+    assert.match(conditional, /kill -KILL "\$timer_pid"/)
+    assert.match(conditional, /limit = 200/)
+    assert.match(conditional, /SHELLPILOT_STORAGE_STATUS/)
+    assert.doesNotMatch(conditional, /PIPESTATUS|\$\{|\$\(|<\(|\btrap\b/)
+    const shellRedirections = conditional.match(/\d*>[^\s;]+/g) || []
+    assert.ok(shellRedirections.length > 0)
+    for (const redirection of shellRedirections) {
+      assert.ok(
+        ['2>/dev/null', '>/dev/null', '2>&1'].includes(redirection),
+        `${item.id} has an unsafe redirection: ${redirection}`
       )
-    )
-    assert.ok(
-      conditional.indexOf(pipeline) < conditional.indexOf(statusCapture),
-      `${item.id} must truncate before capturing pipeline status`
-    )
-    assert.doesNotMatch(conditional, /[A-Z_]+_OUTPUT=|="\$\(/)
+    }
+    assert.doesNotMatch(conditional, /\/tmp\/|\bmktemp\b/)
     for (const fallback of item.fallbacks) {
       assert.equal(successBranch.includes(fallback), false, `${fallback} leaked into success branch`)
       assert.ok(failureBranch.includes(fallback), `${fallback} missing from failure branch`)
     }
-    assert.equal(cleanup, `unset ${item.status}\ntrue`)
+    assert.equal(cleanup, ')\ntrue')
   }
 })
 
-test('storage readonly Bash execution selects fallback only for real primary failures', async () => {
+test('storage readonly POSIX sh execution handles success unavailable and failure branches', async () => {
   const { getServerMaintenanceQuickCommands } = await import(registryUrl)
   const byId = new Map(
     getServerMaintenanceQuickCommands().map(command => [command.id, command])
@@ -366,27 +442,42 @@ test('storage readonly Bash execution selects fallback only for real primary fai
     {
       id: 'builtin-server-disk-io',
       primary: '__PRIMARY_IOSTAT__',
-      fallback: '__VMSTAT_FALLBACK__',
-      failureStatus: 127
+      fallback: '__VMSTAT_FALLBACK__'
     },
     {
       id: 'builtin-server-inode-mount',
       primary: '__PRIMARY_FINDMNT__',
-      fallback: '__MOUNTS_FALLBACK__',
-      failureStatus: 7
+      fallback: '__MOUNTS_FALLBACK__'
     },
     {
       id: 'builtin-server-deleted-open-files',
       primary: '__PRIMARY_LSOF__',
-      fallback: '__FIND_FALLBACK__',
-      failureStatus: 7
+      fallback: '__FIND_FALLBACK__'
     }
   ]
-  const fakeTools = status => [
-    `PRIMARY_STATUS=${status}`,
-    "iostat () { printf '__PRIMARY_IOSTAT__\\n'; return \"$PRIMARY_STATUS\"; }",
-    "findmnt () { printf '__PRIMARY_FINDMNT__\\n'; return \"$PRIMARY_STATUS\"; }",
-    "lsof () { printf '__PRIMARY_LSOF__\\n'; return \"$PRIMARY_STATUS\"; }",
+  const fakeTools = mode => [
+    `PRIMARY_MODE=${mode}`,
+    'iostat () {',
+    '  case "$PRIMARY_MODE" in',
+    '    missing) command __missing_storage_iostat__ ;;',
+    "    failure) printf '__PRIMARY_IOSTAT__\\n'; return 7 ;;",
+    "    *) printf '__PRIMARY_IOSTAT__\\n' ;;",
+    '  esac',
+    '}',
+    'findmnt () {',
+    '  case "$PRIMARY_MODE" in',
+    '    missing) command __missing_storage_findmnt__ ;;',
+    "    failure) printf '__PRIMARY_FINDMNT__\\n'; return 7 ;;",
+    "    *) printf '__PRIMARY_FINDMNT__\\n' ;;",
+    '  esac',
+    '}',
+    'lsof () {',
+    '  case "$PRIMARY_MODE" in',
+    '    missing) command __missing_storage_lsof__ ;;',
+    "    failure) printf '__PRIMARY_LSOF__\\n'; return 7 ;;",
+    "    *) printf '__PRIMARY_LSOF__\\n' ;;",
+    '  esac',
+    '}',
     "vmstat () { printf '__VMSTAT_FALLBACK__\\n'; }",
     "find () { printf '__FIND_FALLBACK__\\n'; }",
     'head () {',
@@ -400,21 +491,24 @@ test('storage readonly Bash execution selects fallback only for real primary fai
 
   for (const item of cases) {
     const command = byId.get(item.id).commands.at(-1).command
-    const success = runBash(`${fakeTools(0)}\n${command}`)
+    const success = runPosixShell(`${fakeTools('success')}\n${command}`)
     assert.match(success.stdout, new RegExp(item.primary), item.id)
     assert.doesNotMatch(success.stdout, new RegExp(item.fallback), item.id)
+    assert.doesNotMatch(success.stdout + success.stderr, /Bad substitution|syntax error/i)
 
-    const failure = runBash(`${fakeTools(item.failureStatus)}\n${command}`)
+    const unavailable = runPosixShell(`${fakeTools('missing')}\n${command}`)
+    assert.doesNotMatch(unavailable.stdout, new RegExp(item.primary), item.id)
+    assert.match(unavailable.stdout, new RegExp(item.fallback), item.id)
+    assert.doesNotMatch(unavailable.stdout + unavailable.stderr, /Bad substitution|syntax error/i)
+
+    const failure = runPosixShell(`${fakeTools('failure')}\n${command}`)
     assert.match(failure.stdout, new RegExp(item.primary), item.id)
     assert.match(failure.stdout, new RegExp(item.fallback), item.id)
-
-    const sigpipe = runBash(`${fakeTools(141)}\n${command}`)
-    assert.match(sigpipe.stdout, new RegExp(item.primary), item.id)
-    assert.doesNotMatch(sigpipe.stdout, new RegExp(item.fallback), item.id)
+    assert.doesNotMatch(failure.stdout + failure.stderr, /Bad substitution|syntax error/i)
   }
 })
 
-test('storage readonly lsof pipeline stops a large producer at the output boundary', async () => {
+test('storage readonly POSIX pipeline stops an unbounded producer at 200 lines', async () => {
   const { getServerMaintenanceQuickCommands } = await import(registryUrl)
   const command = getServerMaintenanceQuickCommands()
     .find(item => item.id === 'builtin-server-deleted-open-files')
@@ -431,12 +525,13 @@ test('storage readonly lsof pipeline stops a large producer at the output bounda
     '}',
     "find () { printf '__FIND_FALLBACK__\\n'; }"
   ].join('\n')
-  const result = runBash(`${prelude}\n${command}`, { timeout: 2000 })
+  const result = runPosixShell(`${prelude}\n${command}`, { timeout: 3000 })
   const outputLines = result.stdout.trimEnd().split('\n')
 
   assert.equal(outputLines.length, 200)
   assert.match(outputLines.at(-1), /^row-/)
   assert.doesNotMatch(result.stdout, /__FIND_FALLBACK__/)
+  assert.doesNotMatch(result.stdout + result.stderr, /Bad substitution|syntax error/i)
 })
 
 test('Windows quick-command path keeps storage step order and readonly classification', async () => {

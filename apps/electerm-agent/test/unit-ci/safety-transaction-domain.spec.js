@@ -663,36 +663,81 @@ test('bounded system diagnostic fallbacks stay readonly without widening mutatio
   }
 })
 
-const fixedDiskIoDiagnosticCommand = `iostat -xz 1 3 2>/dev/null | head -n 200
-IOSTAT_STATUS=\${PIPESTATUS[0]}
-if [ "$IOSTAT_STATUS" -eq 0 ] || [ "$IOSTAT_STATUS" -eq 141 ]; then
-  true
-else
-  vmstat 1 4 2>/dev/null | head -n 20 || true
-  head -n 200 /proc/diskstats 2>/dev/null || true
-fi
-unset IOSTAT_STATUS
-true`
+function buildBoundedStorageDiagnosticCommand (primaryCommand, fallbackCommand) {
+  return `(
+  run_storage_primary () {
+    "$@" &
+    primary_pid=$!
+    (
+      sleep 15
+      kill -KILL "$primary_pid" 2>/dev/null
+    ) >/dev/null 2>&1 &
+    timer_pid=$!
+    wait "$primary_pid"
+    primary_status=$?
+    kill -KILL "$timer_pid" 2>/dev/null || true
+    wait "$timer_pid" 2>/dev/null || true
+    return "$primary_status"
+  }
 
-const fixedInodeMountDiagnosticCommand = `findmnt -o TARGET,SOURCE,FSTYPE,OPTIONS 2>/dev/null | head -n 200
-FINDMNT_STATUS=\${PIPESTATUS[0]}
-if [ "$FINDMNT_STATUS" -eq 0 ] || [ "$FINDMNT_STATUS" -eq 141 ]; then
-  true
-else
-  head -n 200 /proc/mounts 2>/dev/null || true
-fi
-unset FINDMNT_STATUS
+  if {
+    run_storage_primary ${primaryCommand}
+    printf '\\036SHELLPILOT_STORAGE_STATUS=%s\\n' "$?"
+  } | awk '
+    BEGIN {
+      limit = 200
+      marker = sprintf("%c", 30) "SHELLPILOT_STORAGE_STATUS="
+    }
+    {
+      marker_position = index($0, marker)
+      if (marker_position > 0) {
+        prefix = substr($0, 1, marker_position - 1)
+        if (length(prefix) > 0 && emitted < limit) {
+          print prefix
+          emitted++
+        }
+        primary_status = substr($0, marker_position + length(marker))
+        status_seen = 1
+        next
+      }
+      if (emitted < limit) {
+        print
+        emitted++
+        next
+      }
+      truncated = 1
+      exit
+    }
+    END {
+      if (truncated || (status_seen && primary_status == 0)) {
+        exit 0
+      }
+      exit 1
+    }
+  '; then
+    true
+  else
+${fallbackCommand}
+  fi
+)
 true`
+}
 
-const fixedDeletedOpenFilesDiagnosticCommand = `lsof +L1 2>/dev/null | head -n 200
-LSOF_STATUS=\${PIPESTATUS[0]}
-if [ "$LSOF_STATUS" -eq 0 ] || [ "$LSOF_STATUS" -eq 141 ]; then
-  true
-else
-  find /proc/[0-9]*/fd -lname '* (deleted)' -ls 2>/dev/null | head -n 200 || true
-fi
-unset LSOF_STATUS
-true`
+const fixedDiskIoDiagnosticCommand = buildBoundedStorageDiagnosticCommand(
+  'iostat -xz 1 3 2>/dev/null',
+  '    vmstat 1 4 2>/dev/null | head -n 20 || true\n' +
+    '    head -n 200 /proc/diskstats 2>/dev/null || true'
+)
+
+const fixedInodeMountDiagnosticCommand = buildBoundedStorageDiagnosticCommand(
+  'findmnt -o TARGET,SOURCE,FSTYPE,OPTIONS 2>/dev/null',
+  '    head -n 200 /proc/mounts 2>/dev/null || true'
+)
+
+const fixedDeletedOpenFilesDiagnosticCommand = buildBoundedStorageDiagnosticCommand(
+  'lsof +L1 2>/dev/null',
+  "    find /proc/[0-9]*/fd -lname '* (deleted)' -ls 2>/dev/null | head -n 200 || true"
+)
 
 test('bounded storage diagnostic fallbacks stay readonly without widening unsafe forms', async () => {
   const { classifyCommand } = await importDomainModule('command-classifier.js')
@@ -774,19 +819,19 @@ test('storage fixed commands normalize line endings without accepting syntax cha
   const windowsCommand = command => command.replace(/\n/g, '\n\r')
   const unsafeVariants = [
     fixedDiskIoDiagnosticCommand.replace(
-      '\nelse\n',
-      '\nelse\n  rm -rf /tmp/storage-report\n'
+      '\n  else\n',
+      '\n  else\n    rm -rf /tmp/storage-report\n'
     ),
     `${fixedInodeMountDiagnosticCommand}\nrm -rf /tmp/storage-report`,
     fixedDeletedOpenFilesDiagnosticCommand.replace(
       'lsof +L1 2>/dev/null',
       'lsof +L1 -nP 2>/dev/null'
     ),
-    fixedDiskIoDiagnosticCommand.replace('\nelse\n', '\nelif true; then\n'),
+    fixedDiskIoDiagnosticCommand.replace('\n  else\n', '\n  elif true; then\n'),
     `${fixedInodeMountDiagnosticCommand} `,
     fixedDeletedOpenFilesDiagnosticCommand.replace(
-      'lsof +L1 2>/dev/null | head -n 200',
-      'lsof  +L1 2>/dev/null | head -n 200'
+      'run_storage_primary lsof +L1 2>/dev/null',
+      'run_storage_primary lsof  +L1 2>/dev/null'
     )
   ].map(windowsCommand)
 
