@@ -4,6 +4,7 @@ const cwd = process.cwd()
 module.exports = {
   env: {
     ...process.env,
+    NODE_ENV: 'test',
     NODE_TEST: 'yes'
   },
   args: [

@@ -5,6 +5,24 @@ const path = require('node:path')
 
 const helperPath = path.resolve(__dirname, '../e2e/common/isolated-electron-app.js')
 const matrixPath = path.resolve(__dirname, '../e2e/022.secondary-ui-visual-matrix.spec.js')
+const appOptionsPath = path.resolve(__dirname, '../e2e/common/app-options.js')
+
+test('compiled Electron E2E launch does not inherit Vite development mode', () => {
+  const originalNodeEnv = process.env.NODE_ENV
+  try {
+    process.env.NODE_ENV = 'development'
+    delete require.cache[appOptionsPath]
+    const options = require(appOptionsPath)
+    assert.equal(options.env.NODE_ENV, 'test')
+  } finally {
+    if (originalNodeEnv === undefined) {
+      delete process.env.NODE_ENV
+    } else {
+      process.env.NODE_ENV = originalNodeEnv
+    }
+    delete require.cache[appOptionsPath]
+  }
+})
 
 test('language selection uses rendered option semantics instead of virtual-row math', () => {
   const source = fs.readFileSync(matrixPath, 'utf8')
@@ -98,4 +116,52 @@ test('isolated app body cleanup preserves the primary failure', async () => {
   const matrix = fs.readFileSync(matrixPath, 'utf8')
   assert.match(matrix, /runWithIsolatedApp/)
   assert.doesNotMatch(matrix, /finally\s*{\s*await closeIsolatedApp/)
+})
+
+test('isolated Electron readiness uses a staged condition and reports startup diagnostics', () => {
+  const matrix = fs.readFileSync(matrixPath, 'utf8')
+
+  assert.match(matrix, /async function waitForSecondaryAppReady \(electronApp, page, label\)/)
+  assert.match(matrix, /page\.waitForFunction\([\s\S]*?null,\s*\{[\s\S]*?timeout:/)
+  assert.match(matrix, /readyState/)
+  assert.match(matrix, /configLoaded/)
+  assert.match(matrix, /processId/)
+  assert.match(matrix, /startupMs/)
+  assert.doesNotMatch(
+    matrix,
+    /waitForFunction\(\(\) => window\.store\?\.configLoaded === true, \{ timeout:/
+  )
+  assert.equal(
+    (matrix.match(/await waitForSecondaryAppReady\(electronApp, page,/g) || []).length,
+    11,
+    'every isolated secondary-app launch must use the staged readiness helper'
+  )
+})
+
+test('surface focus coverage enters each surface from an adjacent keyboard sentinel', () => {
+  const matrix = fs.readFileSync(matrixPath, 'utf8')
+  const focusInspection = matrix.match(
+    /async function inspectKeyboardFocus \(page, surface\) \{[\s\S]*?\r?\n}\r?\n\r?\nfunction assertFocusSnapshot/
+  )
+
+  assert.ok(focusInspection)
+  assert.match(focusInspection[0], /data-secondary-focus-sentinel/)
+  assert.match(focusInspection[0], /root\.parentNode\.insertBefore\(sentinel, root\)/)
+  assert.match(focusInspection[0], /sentinel\.focus\(\)/)
+  assert.match(focusInspection[0], /await page\.keyboard\.press\('Tab'\)/)
+  assert.doesNotMatch(focusInspection[0], /enabledCount \* 3/)
+})
+
+test('the complete visual matrix runs in a fresh Playwright worker pool', () => {
+  const matrix = fs.readFileSync(matrixPath, 'utf8')
+
+  assert.match(matrix, /const matrixTest = test\.extend\(/)
+  assert.match(
+    matrix,
+    /matrixTest\('real app covers the secondary UI visual acceptance matrix'/
+  )
+  assert.doesNotMatch(
+    matrix,
+    /test\('real app covers the secondary UI visual acceptance matrix'/
+  )
 })

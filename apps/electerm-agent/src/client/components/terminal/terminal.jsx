@@ -452,6 +452,20 @@ class Term extends Component {
     this.props.tab.pane === paneMap.terminal
   }
 
+  focusAfterAsyncTerminalReady = (term = this.term) => {
+    const activeElement = window.document.activeElement
+    const terminalOwnsFocus = (
+      activeElement === window.document.body ||
+      activeElement === window.document.documentElement ||
+      term?.element?.contains(activeElement)
+    )
+    if (!term || window.store.showModal || !this.isActiveTerminal() || !terminalOwnsFocus) {
+      return false
+    }
+    term.focus()
+    return true
+  }
+
   clearShortcut = (e) => {
     e.stopPropagation()
     this.onClear()
@@ -1856,7 +1870,7 @@ class Term extends Component {
       this.runInitScript()
       try {
         this.fitAddon.fit()
-        term.focus()
+        this.focusAfterAsyncTerminalReady(term)
         recordPerformanceMark('first_terminal_ready', Date.now(), {
           terminalType: tab.host ? 'ssh' : 'local'
         })
@@ -1871,7 +1885,7 @@ class Term extends Component {
     term.buffer.onBufferChange(this.onBufferChange)
     const WebLinksAddon = await loadWebLinksAddon()
     term.loadAddon(new WebLinksAddon(this.webLinkHandler))
-    term.focus()
+    this.focusAfterAsyncTerminalReady(term)
     this.zmodemClient = new ZmodemClient(this)
     this.zmodemClient.init(socket)
     this.trzszClient = new TrzszClient(this)

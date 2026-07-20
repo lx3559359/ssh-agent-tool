@@ -49,6 +49,13 @@ const geometryTimeout = 1200
 const overflowTolerance = 1
 const bookmarkId = `visual-matrix-${process.pid}-${Date.now()}`
 const fleetBookmarkId = `visual-matrix-fleet-${process.pid}-${Date.now()}`
+const secondaryAppReadyTimeout = 30000
+const isolatedAppStartedAt = new WeakMap()
+const matrixTest = test.extend({
+  matrixWorkerIsolation: [async ({ browserName }, use) => {
+    await use(browserName)
+  }, { scope: 'worker', auto: true }]
+})
 
 test.setTimeout(20 * 60 * 1000)
 
@@ -72,6 +79,7 @@ function assertSafeProfileRoot (profileRoot) {
 }
 
 async function launchIsolatedApp (label) {
+  const startedAt = Date.now()
   const { electronApp, profileRoot, userDataPath } = await acquireIsolatedApp({
     createProfileRoot: () => fs.mkdtemp(resolve(tmpdir(), `${profilePrefix}${label}-`)),
     validateProfileRoot: assertSafeProfileRoot,
@@ -84,8 +92,76 @@ async function launchIsolatedApp (label) {
     },
     cleanup: closeIsolatedApp
   })
-  console.log(`SECONDARY_ISOLATED_PROFILE=${JSON.stringify({ label, profileRoot, userDataPath })}`)
+  isolatedAppStartedAt.set(electronApp, startedAt)
+  console.log(`SECONDARY_ISOLATED_PROFILE=${JSON.stringify({
+    label,
+    profileRoot,
+    userDataPath,
+    processId: electronApp.process().pid,
+    launchMs: Date.now() - startedAt
+  })}`)
   return { electronApp, profileRoot }
+}
+
+async function waitForSecondaryAppReady (electronApp, page, label) {
+  const readyWaitStartedAt = Date.now()
+  const startedAt = isolatedAppStartedAt.get(electronApp) || readyWaitStartedAt
+  const deadline = readyWaitStartedAt + secondaryAppReadyTimeout
+  const phases = {}
+  const errors = []
+  const remaining = () => Math.max(1, deadline - Date.now())
+  page.on('pageerror', error => errors.push(String(error?.stack || error)))
+
+  try {
+    await page.waitForLoadState('domcontentloaded', { timeout: remaining() })
+    phases.domContentLoadedMs = Date.now() - startedAt
+    await page.waitForFunction(() => Boolean(window.store), null, {
+      polling: 100,
+      timeout: remaining()
+    })
+    phases.storeAvailableMs = Date.now() - startedAt
+    await page.waitForFunction(() => window.store.configLoaded === true, null, {
+      polling: 100,
+      timeout: remaining()
+    })
+    phases.configLoadedMs = Date.now() - startedAt
+    console.log(`SECONDARY_APP_READY=${JSON.stringify({
+      label,
+      processId: electronApp.process().pid,
+      startupMs: Date.now() - startedAt,
+      phases
+    })}`)
+  } catch (error) {
+    const renderer = await page.evaluate(() => ({
+      href: window.location.href.slice(0, 240),
+      readyState: document.readyState,
+      storePresent: Boolean(window.store),
+      configLoaded: window.store?.configLoaded,
+      bodyChildren: document.body?.children.length || 0
+    })).catch(evaluationError => ({ evaluationError: String(evaluationError) }))
+    const windows = await electronApp.evaluate(({ BrowserWindow }) => (
+      BrowserWindow.getAllWindows().map(window => ({
+        destroyed: window.isDestroyed(),
+        visible: window.isVisible(),
+        url: window.webContents.isDestroyed() ? '' : window.webContents.getURL().slice(0, 240),
+        loading: window.webContents.isDestroyed() ? false : window.webContents.isLoading(),
+        processId: window.webContents.isDestroyed() ? 0 : window.webContents.getOSProcessId()
+      }))
+    )).catch(evaluationError => [{ evaluationError: String(evaluationError) }])
+    const diagnostics = {
+      label,
+      processId: electronApp.process().pid,
+      startupMs: Date.now() - startedAt,
+      phases,
+      pageUrl: page.url().slice(0, 240),
+      renderer,
+      windows,
+      errors
+    }
+    console.error(`SECONDARY_APP_READY_FAILURE=${JSON.stringify(diagnostics)}`)
+    error.message += `\nSecondary app readiness diagnostics: ${JSON.stringify(diagnostics)}`
+    throw error
+  }
 }
 
 async function closeIsolatedApp (electronApp, profileRoot) {
@@ -1250,7 +1326,6 @@ async function inspectKeyboardFocus (page, surface) {
     return after
   }
 
-  await page.evaluate(() => document.activeElement?.blur?.())
   const interactiveSelector = [
     'button:not([disabled])', 'input:not([disabled])', 'textarea:not([disabled])',
     'select:not([disabled])', 'a[href]',
@@ -1260,13 +1335,40 @@ async function inspectKeyboardFocus (page, surface) {
     '[role="switch"]:not([aria-disabled="true"])',
     '[tabindex]:not([tabindex="-1"]):not([aria-disabled="true"])'
   ].join(',')
-  const enabledCount = await rootLocator.locator(interactiveSelector).count()
-  if (enabledCount === 0) {
+  const focusSetup = await rootLocator.evaluate((root, selector) => {
+    document.querySelector('[data-secondary-focus-sentinel="true"]')?.remove()
+    const enabledCount = root.querySelectorAll(selector).length
+    const sentinel = document.createElement('button')
+    sentinel.type = 'button'
+    sentinel.dataset.secondaryFocusSentinel = 'true'
+    sentinel.setAttribute('aria-label', 'Surface keyboard entry')
+    Object.assign(sentinel.style, {
+      position: 'fixed',
+      left: '0',
+      top: '0',
+      width: '1px',
+      height: '1px',
+      padding: '0',
+      border: '0',
+      opacity: '0'
+    })
+    root.parentNode.insertBefore(sentinel, root)
+    sentinel.focus()
+    return {
+      enabledCount,
+      sentinelFocused: document.activeElement === sentinel
+    }
+  }, interactiveSelector)
+  if (focusSetup.enabledCount === 0) {
     throw new Error(`Surface ${surface.name} has no enabled interactive element and is not allowlisted`)
   }
-  for (let attempt = 1; attempt <= Math.max(24, enabledCount * 3); attempt += 1) {
+  if (!focusSetup.sentinelFocused) {
+    throw new Error(`Surface ${surface.name} keyboard sentinel could not receive focus`)
+  }
+  let focus
+  try {
     await page.keyboard.press('Tab')
-    const focus = await rootLocator.evaluate((root, attemptNumber) => {
+    focus = await rootLocator.evaluate((root, enabledCount) => {
       const active = document.activeElement
       if (!active || !root.contains(active)) return null
       const rect = active.getBoundingClientRect()
@@ -1318,8 +1420,8 @@ async function inspectKeyboardFocus (page, surface) {
       })
       return {
         method: 'Tab',
-        attempt: attemptNumber,
-        enabledCount: root.querySelectorAll('button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), a[href], [role="button"]:not([aria-disabled="true"]), [role="tab"]:not([aria-disabled="true"]), [role="checkbox"]:not([aria-disabled="true"]), [role="switch"]:not([aria-disabled="true"]), [tabindex]:not([tabindex="-1"]):not([aria-disabled="true"])').length,
+        attempt: 1,
+        enabledCount,
         activeText: (active.getAttribute('aria-label') || active.textContent || active.getAttribute('placeholder') || active.tagName).trim().slice(0, 100),
         activeTag: active.tagName,
         activeVisible: visible,
@@ -1328,10 +1430,20 @@ async function inspectKeyboardFocus (page, surface) {
         focusedOwners,
         baseOwners
       }
-    }, attempt)
-    if (focus) return focus
+    }, focusSetup.enabledCount)
+  } finally {
+    await page.evaluate(() => {
+      document.querySelector('[data-secondary-focus-sentinel="true"]')?.remove()
+    })
   }
-  throw new Error(`Tab did not enter an enabled interactive element on ${surface.name} after ${Math.max(24, enabledCount * 3)} attempts`)
+  if (!focus) {
+    const activeElement = await page.evaluate(() => ({
+      tag: document.activeElement?.tagName,
+      className: String(document.activeElement?.className || '')
+    }))
+    throw new Error(`Tab did not enter ${surface.name} from its adjacent sentinel: ${JSON.stringify(activeElement)}`)
+  }
+  return focus
 }
 
 function assertFocusSnapshot (focus, context) {
@@ -2016,8 +2128,10 @@ async function exerciseLanguageAndThemeState (page) {
 test('active terminal session tab keeps the locked SSH background', async ({ browserName }) => {
   await runWithIsolatedApp('terminal', async (electronApp) => {
     const page = electronApp.windows()[0] || await electronApp.firstWindow()
-    await page.waitForFunction(() => window.store?.configLoaded === true, { timeout: 20000 })
+    await waitForSecondaryAppReady(electronApp, page, 'terminal')
     await page.locator('.term-wrap:visible').waitFor({ timeout: 20000 })
+    await page.waitForFunction(() => window.store?.currentTab?.status === 'success', { timeout: 20000 })
+    await expect(page.locator('.term-wrap:visible .xterm-helper-textarea')).toBeFocused()
     await ensureTwoTerminalTabs(page)
     const terminal = await inspectTerminalInvariant(page)
     assertTerminalInvariant(terminal, { runner: browserName, surface: 'terminal-invariant' })
@@ -2027,7 +2141,7 @@ test('active terminal session tab keeps the locked SSH background', async ({ bro
 test('narrow topbar actions avoid native window controls and keep the last action operable', async ({ browserName }) => {
   await runWithIsolatedApp('topbar-interaction', async (electronApp) => {
     const page = electronApp.windows()[0] || await electronApp.firstWindow()
-    await page.waitForFunction(() => window.store?.configLoaded === true, { timeout: 20000 })
+    await waitForSecondaryAppReady(electronApp, page, 'topbar-interaction')
     await page.locator('.term-wrap:visible').waitFor({ timeout: 20000 })
     await setWindowCase(electronApp, page, { width: 820, height: 600 }, 2)
 
@@ -2166,7 +2280,7 @@ test('narrow topbar actions avoid native window controls and keep the last actio
 test('590px topbar keeps every visible action clear of native controls and preserves real end actions', async ({ browserName }) => {
   await runWithIsolatedApp('topbar-590-interaction', async (electronApp) => {
     const page = electronApp.windows()[0] || await electronApp.firstWindow()
-    await page.waitForFunction(() => window.store?.configLoaded === true, { timeout: 20000 })
+    await waitForSecondaryAppReady(electronApp, page, 'topbar-590-interaction')
     await page.locator('.term-wrap:visible').waitFor({ timeout: 20000 })
     await setWindowCase(electronApp, page, { width: 590, height: 400 }, 1)
 
@@ -2320,7 +2434,7 @@ test('590px topbar keeps every visible action clear of native controls and prese
 test('sidebar standard tiles expose one consistent mouse keyboard and active affordance', async ({ browserName }) => {
   await runWithIsolatedApp('sidebar-interaction', async (electronApp) => {
     const page = electronApp.windows()[0] || await electronApp.firstWindow()
-    await page.waitForFunction(() => window.store?.configLoaded === true, { timeout: 20000 })
+    await waitForSecondaryAppReady(electronApp, page, 'sidebar-interaction')
     await page.locator('.term-wrap:visible').waitFor({ timeout: 20000 })
 
     const dashboardTile = page.locator('.sidebar-bar .control-icon-wrap:has(.anticon-dashboard)')
@@ -2415,7 +2529,7 @@ test('sidebar standard tiles expose one consistent mouse keyboard and active aff
 test('low-height AI panel keeps meaningful history and real auxiliary rail interaction', async ({ browserName }) => {
   await runWithIsolatedApp('ai-compact-interaction', async (electronApp) => {
     const page = electronApp.windows()[0] || await electronApp.firstWindow()
-    await page.waitForFunction(() => window.store?.configLoaded === true, { timeout: 20000 })
+    await waitForSecondaryAppReady(electronApp, page, 'ai-compact-interaction')
     await page.locator('.term-wrap:visible').waitFor({ timeout: 20000 })
     const updatePanelClose = page.locator('.upgrade-panel:not(.upgrade-panel-hide) .close-upgrade-panel')
     if (await updatePanelClose.isVisible().catch(() => false)) {
@@ -2617,7 +2731,7 @@ test('low-height AI panel keeps meaningful history and real auxiliary rail inter
 test('shell chrome keeps restrained depth, compact geometry and terminal isolation', async ({ browserName }) => {
   await runWithIsolatedApp('shell-chrome', async (electronApp) => {
     const page = electronApp.windows()[0] || await electronApp.firstWindow()
-    await page.waitForFunction(() => window.store?.configLoaded === true, { timeout: 20000 })
+    await waitForSecondaryAppReady(electronApp, page, 'shell-chrome')
     await page.locator('.term-wrap:visible').waitFor({ timeout: 20000 })
     await page.evaluate(() => {
       window.store.handleOpenAIPanel()
@@ -2658,7 +2772,7 @@ test('shell chrome keeps restrained depth, compact geometry and terminal isolati
 test('theme center deletes the active terminal palette without changing the ShellPilot UI palette', async ({ browserName }) => {
   await runWithIsolatedApp('terminal-theme-deletion', async (electronApp) => {
     const page = electronApp.windows()[0] || await electronApp.firstWindow()
-    await page.waitForFunction(() => window.store?.configLoaded === true, { timeout: 20000 })
+    await waitForSecondaryAppReady(electronApp, page, 'terminal-theme-deletion')
     await page.locator('.term-wrap:visible').waitFor({ timeout: 20000 })
     await setWindowCase(electronApp, page, { width: 1100, height: 700 }, 1)
     await resetSurface(page, 'en_us')
@@ -2700,7 +2814,7 @@ test('theme center deletes the active terminal palette without changing the Shel
 test('settings search supports visible results, keyboard navigation, preview language and compact mouse entry', async ({ browserName }) => {
   await runWithIsolatedApp('settings-search', async (electronApp) => {
     const page = electronApp.windows()[0] || await electronApp.firstWindow()
-    await page.waitForFunction(() => window.store?.configLoaded === true, { timeout: 20000 })
+    await waitForSecondaryAppReady(electronApp, page, 'settings-search')
     await page.locator('.term-wrap:visible').waitFor({ timeout: 20000 })
 
     await setWindowCase(electronApp, page, { width: 1100, height: 700 }, 1)
@@ -2769,6 +2883,12 @@ test('settings search supports visible results, keyboard navigation, preview lan
     await expect(searchInput).toBeFocused()
     const settingsControlStates = await inspectSettingsControlStates(page)
     assertSettingsControlStates(settingsControlStates, JSON.stringify({ runner: browserName }))
+    await expect(searchInput).toBeFocused()
+    await searchInput.click()
+    await expect(searchInput).toBeFocused()
+    await page.keyboard.press('Tab')
+    await expect(searchInput).not.toBeFocused()
+    await page.keyboard.press('Shift+Tab')
     await expect(searchInput).toBeFocused()
     await expect(searchInput).toHaveAttribute('role', 'combobox')
     await expect(searchInput).toHaveAttribute('aria-expanded', 'false')
@@ -2858,7 +2978,7 @@ test('settings search supports visible results, keyboard navigation, preview lan
 test('context menus keep pointer placement and compact long-menu reachability', async ({ browserName }) => {
   await runWithIsolatedApp('context-menu-placement', async (electronApp) => {
     const page = electronApp.windows()[0] || await electronApp.firstWindow()
-    await page.waitForFunction(() => window.store?.configLoaded === true, { timeout: 20000 })
+    await waitForSecondaryAppReady(electronApp, page, 'context-menu-placement')
     await page.locator('.term-wrap:visible').waitFor({ timeout: 20000 })
 
     await setWindowCase(electronApp, page, { width: 1100, height: 700 }, 1)
@@ -3211,7 +3331,7 @@ test('tool center and batch editor stay reachable in compact real app windows', 
   const fleetQuickbarChecks = []
   await runWithIsolatedApp('compact-tools', async (electronApp) => {
     const page = electronApp.windows()[0] || await electronApp.firstWindow()
-    await page.waitForFunction(() => window.store?.configLoaded === true, { timeout: 20000 })
+    await waitForSecondaryAppReady(electronApp, page, 'compact-tools')
     await page.locator('.term-wrap:visible').waitFor({ timeout: 20000 })
     const compactSizes = [
       { width: 820, height: 600 },
@@ -3694,7 +3814,7 @@ test('tool center and batch editor stay reachable in compact real app windows', 
   })
 })
 
-test('real app covers the secondary UI visual acceptance matrix', async ({ browserName }, testInfo) => {
+matrixTest('real app covers the secondary UI visual acceptance matrix', async ({ browserName }, testInfo) => {
   const runner = browserName
   const expected = assertMatrixConfiguration()
   const failures = []
@@ -3704,7 +3824,7 @@ test('real app covers the secondary UI visual acceptance matrix', async ({ brows
   await runWithIsolatedApp('matrix', async (electronApp) => {
     try {
       const page = electronApp.windows()[0] || await electronApp.firstWindow()
-      await page.waitForFunction(() => window.store?.configLoaded === true, { timeout: 20000 })
+      await waitForSecondaryAppReady(electronApp, page, 'matrix')
       await page.locator('.term-wrap:visible').waitFor({ timeout: 20000 })
       await exerciseLanguageAndThemeState(page)
 
