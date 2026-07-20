@@ -18,6 +18,21 @@ export function getServicesCommands () {
       ]
     }),
     defineCommand({
+      id: 'builtin-server-scheduled-tasks',
+      name: '\u5b9a\u65f6\u4efb\u52a1\u6e05\u5355',
+      description: '\u67e5\u770b systemd \u5b9a\u65f6\u5668\u3001\u5f53\u524d\u7528\u6237 crontab \u548c\u7cfb\u7edf cron \u76ee\u5f55\u6e05\u5355\u3002',
+      usage: '\u7528\u4e8e\u6392\u67e5\u5b9a\u65f6\u4efb\u52a1\u7684\u89e6\u53d1\u8ba1\u5212\u3001\u9057\u6f0f\u6267\u884c\u548c\u4efb\u52a1\u6765\u6e90\u3002',
+      labels: [READ_ONLY, '\u8ba1\u5212\u4efb\u52a1'],
+      advancedUsage: [
+        '\u7cfb\u7edf\u7ea7 crontab \u53ef\u80fd\u9700\u8981\u4f7f\u7528\u5bf9\u5e94\u8d26\u53f7\u6216\u63d0\u5347\u6743\u9650\u540e\u67e5\u770b\u3002'
+      ],
+      commands: [
+        step('systemctl list-timers --all --no-pager'),
+        step('crontab -l 2>/dev/null || true'),
+        step('ls -la /etc/cron.* 2>/dev/null || true')
+      ]
+    }),
+    defineCommand({
       id: 'builtin-server-service-status',
       name: '服务状态查询',
       description: '自动识别当前服务器上的 systemd 服务，可多选查看运行状态和日志。',
