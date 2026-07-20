@@ -6,6 +6,9 @@ const { pathToFileURL } = require('node:url')
 const registryUrl = pathToFileURL(
   path.resolve(__dirname, '../../src/client/components/quick-commands/server-maintenance/index.js')
 ).href
+const classifierUrl = pathToFileURL(
+  path.resolve(__dirname, '../../src/client/common/safety-transactions/command-classifier.js')
+).href
 
 function commandText (command) {
   return command.commands.map(item => item.command).join('\n')
@@ -52,4 +55,53 @@ test('system readonly commands cover CPU, kernel, boot and scheduled task diagno
   assert.match(scheduledText, /systemctl list-timers --all --no-pager/)
   assert.match(scheduledText, /crontab -l/)
   assert.match(scheduledText, /\/etc\/cron\.\*/)
+})
+
+test('system readonly commands stay best-effort bounded and classifier-safe', async () => {
+  const [registry, classifier] = await Promise.all([
+    import(registryUrl),
+    import(classifierUrl)
+  ])
+  const commands = registry.getServerMaintenanceQuickCommands()
+  const byId = new Map(commands.map(command => [command.id, command]))
+  const ids = [
+    'builtin-server-cpu-pressure',
+    'builtin-server-kernel-errors',
+    'builtin-server-boot-history',
+    'builtin-server-scheduled-tasks'
+  ]
+
+  for (const id of ids) {
+    const command = byId.get(id)
+    for (const item of command.commands) {
+      const classification = classifier.classifyCommand(item.command)
+      assert.equal(classification.risk, 'readonly', `${id}: ${item.command}`)
+      assert.equal(classification.requiresConfirmation, false, `${id}: ${item.command}`)
+      assert.doesNotMatch(item.command, /\b(?:less|more|watch)\b|--follow/)
+    }
+  }
+
+  const cpu = byId.get('builtin-server-cpu-pressure')
+  const cpuSampleIndex = cpu.commands.findIndex(item => item.command.includes('mpstat -P ALL 1 3'))
+  const cpuPressureIndex = cpu.commands.findIndex(item => item.command.includes('/proc/pressure/cpu'))
+  assert.ok(cpuSampleIndex >= 0 && cpuSampleIndex < cpuPressureIndex)
+  assert.match(cpu.commands[cpuSampleIndex].command, /mpstat -P ALL 1 3 \|\| vmstat 1 4 \|\| true$/)
+  for (const pressurePath of ['/proc/pressure/cpu', '/proc/pressure/io', '/proc/pressure/memory']) {
+    const pressureStep = cpu.commands.find(item => item.command.includes(pressurePath))
+    assert.match(pressureStep.command, /\|\| true$/)
+  }
+
+  const kernelText = commandText(byId.get('builtin-server-kernel-errors'))
+  assert.match(kernelText, /journalctl[\s\S]*-n 200 --no-pager/)
+  assert.match(kernelText, /dmesg -T \| (?:head|tail) -n 200/)
+  assert.match(kernelText, /\|\| true$/)
+
+  const boot = byId.get('builtin-server-boot-history')
+  assert.match(boot.commands[0].command, /last -x -n 30 \|\| true$/)
+  assert.match(boot.commands[1].command, /journalctl --list-boots --no-pager \| tail -n 30 \|\| true$/)
+
+  const scheduled = byId.get('builtin-server-scheduled-tasks')
+  for (const item of scheduled.commands) {
+    assert.match(item.command, /\| head -n 200 \|\| true$/)
+  }
 })

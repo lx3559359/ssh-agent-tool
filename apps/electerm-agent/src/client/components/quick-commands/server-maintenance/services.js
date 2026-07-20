@@ -27,9 +27,9 @@ export function getServicesCommands () {
         '\u7cfb\u7edf\u7ea7 crontab \u53ef\u80fd\u9700\u8981\u4f7f\u7528\u5bf9\u5e94\u8d26\u53f7\u6216\u63d0\u5347\u6743\u9650\u540e\u67e5\u770b\u3002'
       ],
       commands: [
-        step('systemctl list-timers --all --no-pager'),
-        step('crontab -l 2>/dev/null || true'),
-        step('ls -la /etc/cron.* 2>/dev/null || true')
+        step('systemctl list-timers --all --no-pager | head -n 200 || true'),
+        step('crontab -l | head -n 200 || true'),
+        step('ls -la /etc/cron.* | head -n 200 || true')
       ]
     }),
     defineCommand({

@@ -738,9 +738,18 @@ function changeProvider (command) {
 
 const inherentlyReadonlyCommands = new Set([
   'uptime', 'whoami', 'id', 'pwd', 'df', 'du', 'free', 'ps', 'ls',
-  'stat', 'wc', 'which', 'uname', 'lsof', 'cat', 'head', 'tail', 'grep'
+  'stat', 'wc', 'which', 'uname', 'lsof', 'cat', 'head', 'tail', 'grep',
+  'last', 'mpstat', 'true', 'vmstat'
 ])
 const journalctlShortOptions = /^-[abDefFgklmMnopqrStuUWxN]+$/
+
+function isReadonlyDmesg (words) {
+  return words.slice(1).every(word => word === '-T' || word === '--ctime')
+}
+
+function isReadonlyCrontab (words) {
+  return words.length === 2 && words[1] === '-l'
+}
 
 function isReadonlyDate (words) {
   const noValueOptions = new Set([
@@ -975,6 +984,8 @@ function isReadonly (command) {
   if (inherentlyReadonlyCommands.has(executable)) return true
   if (executable === 'hostname') return words.length === 1
   if (executable === 'date') return isReadonlyDate(words)
+  if (executable === 'dmesg') return isReadonlyDmesg(words)
+  if (executable === 'crontab') return isReadonlyCrontab(words)
   if (executable === 'journalctl') return isReadonlyJournalctl(words)
   if (executable === 'ss') return isReadonlySs(words)
   if (executable === 'less') return isReadonlyLess(words)

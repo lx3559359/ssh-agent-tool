@@ -627,6 +627,42 @@ test('readonly commands accept only query-safe option forms', async () => {
   }
 })
 
+test('bounded system diagnostic fallbacks stay readonly without widening mutation options', async () => {
+  const { classifyCommand } = await importDomainModule('command-classifier.js')
+  const readonlyCommands = [
+    'uptime || true',
+    'mpstat -P ALL 1 3 || vmstat 1 4 || true',
+    'cat /proc/pressure/cpu || true',
+    "journalctl -k -p warning..alert --since '-24 hours' -n 200 --no-pager || dmesg -T | tail -n 200 || true",
+    'last -x -n 30 || true',
+    'journalctl --list-boots --no-pager | tail -n 30 || true',
+    'systemctl list-timers --all --no-pager | head -n 200 || true',
+    'crontab -l | head -n 200 || true',
+    'ls -la /etc/cron.* | head -n 200 || true'
+  ]
+
+  for (const command of readonlyCommands) {
+    const classification = classifyCommand(command)
+    assert.equal(classification.risk, 'readonly', command)
+    assert.equal(classification.requiresConfirmation, false, command)
+  }
+
+  for (const command of [
+    'dmesg -C',
+    'dmesg -c',
+    'dmesg -n 1',
+    'dmesg --clear || true',
+    'crontab -r',
+    'crontab -e',
+    'crontab /tmp/jobs',
+    'crontab -r || true'
+  ]) {
+    const classification = classifyCommand(command)
+    assert.notEqual(classification.risk, 'readonly', command)
+    assert.equal(classification.requiresConfirmation, true, command)
+  }
+})
+
 test('device redirection never creates a file recovery promise', async () => {
   const { classifyCommand } = await importDomainModule('command-classifier.js')
 

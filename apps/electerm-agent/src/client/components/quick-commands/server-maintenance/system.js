@@ -75,9 +75,11 @@ export function getSystemCommands () {
         '\u538b\u529b\u6307\u6807\u4f9d\u8d56 Linux PSI\uff0c\u65e7\u5185\u6838\u53ef\u80fd\u6ca1\u6709\u5bf9\u5e94\u6587\u4ef6\u3002'
       ],
       commands: [
-        step('uptime'),
-        step('if command -v mpstat >/dev/null 2>&1; then mpstat -P ALL 1 3; else vmstat 1 4; fi'),
-        step('for PRESSURE_FILE in /proc/pressure/cpu /proc/pressure/io /proc/pressure/memory; do echo "===== $PRESSURE_FILE ====="; cat "$PRESSURE_FILE" 2>/dev/null || true; done')
+        step('uptime || true'),
+        step('mpstat -P ALL 1 3 || vmstat 1 4 || true'),
+        step('cat /proc/pressure/cpu || true'),
+        step('cat /proc/pressure/io || true'),
+        step('cat /proc/pressure/memory || true')
       ]
     }),
     defineCommand({
@@ -90,7 +92,7 @@ export function getSystemCommands () {
         'journalctl \u67e5\u8be2\u5931\u8d25\u65f6\u4f1a\u56de\u9000\u5230\u5e26\u65f6\u95f4\u6233\u7684 dmesg \u8f93\u51fa\u3002'
       ],
       commands: [
-        step("journalctl -k -p warning..alert --since '-24 hours' --no-pager 2>/dev/null || dmesg -T")
+        step("journalctl -k -p warning..alert --since '-24 hours' -n 200 --no-pager || dmesg -T | tail -n 200 || true")
       ]
     }),
     defineCommand({
@@ -103,8 +105,8 @@ export function getSystemCommands () {
         '\u53ef\u7ed3\u5408 journalctl -b -1 \u67e5\u770b\u4e0a\u4e00\u6b21\u542f\u52a8\u4f1a\u8bdd\u7684\u65e5\u5fd7\u3002'
       ],
       commands: [
-        step('last -x -n 30'),
-        step('journalctl --list-boots --no-pager')
+        step('last -x -n 30 || true'),
+        step('journalctl --list-boots --no-pager | tail -n 30 || true')
       ]
     }),
     defineCommand({
