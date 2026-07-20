@@ -3814,6 +3814,131 @@ test('tool center and batch editor stay reachable in compact real app windows', 
   })
 })
 
+test('UI font preview applies cancels persists and leaves terminal unchanged', async ({ browserName }) => {
+  await runWithIsolatedApp('ui-font-lifecycle', async (electronApp) => {
+    const page = electronApp.windows()[0] || await electronApp.firstWindow()
+    await waitForSecondaryAppReady(electronApp, page, 'ui-font-lifecycle')
+    await page.locator('.term-wrap:visible').waitFor({ timeout: 20000 })
+    await page.evaluate(() => {
+      window.store.upgradeInfo.showUpgradeModal = false
+      window.store.previewLanguage = 'en_us'
+    })
+    await openSettings(page)
+
+    const options = page.locator('.sp-ui-font-option')
+    await expect(options).toHaveCount(20)
+    const availability = await options.evaluateAll(items => items.map(item => ({
+      id: item.dataset.fontPresetId,
+      status: item.dataset.fontAvailability,
+      disabled: item.disabled
+    })))
+    expect(availability.filter(item => item.status === 'available').length).toBeGreaterThan(0)
+    expect(availability.every(item => (
+      item.status === 'available' ? !item.disabled : item.disabled
+    )), JSON.stringify({ browserName, availability })).toBe(true)
+
+    const search = page.getByRole('searchbox', { name: 'Search 20 preset fonts' })
+    await search.fill('雅黑')
+    await expect(options).toHaveCount(1)
+    await expect(options.first()).toHaveAttribute('data-font-preset-id', 'microsoft-yahei-ui')
+    await search.fill('')
+    await expect(options).toHaveCount(20)
+
+    await setWindowCase(electronApp, page, { width: 590, height: 400 }, 1)
+    await page.locator('.sp-ui-font-picker').scrollIntoViewIfNeeded()
+    const compact = await page.locator('.sp-ui-font-picker').evaluate(root => {
+      const list = root.querySelector('.sp-ui-font-list')
+      const layout = root.querySelector('.sp-ui-font-layout')
+      return {
+        rootOverflow: root.scrollWidth > root.clientWidth + 1,
+        layoutOverflow: layout.scrollWidth > layout.clientWidth + 1,
+        listOverflow: list.scrollWidth > list.clientWidth + 1,
+        optionOverflow: [...list.querySelectorAll('.sp-ui-font-option')]
+          .some(item => item.scrollWidth > item.clientWidth + 1)
+      }
+    })
+    expect(compact, JSON.stringify({ browserName, compact })).toEqual({
+      rootOverflow: false,
+      layoutOverflow: false,
+      listOverflow: false,
+      optionOverflow: false
+    })
+
+    const before = await page.evaluate(() => ({
+      saved: window.store.config.uiFontPresetId || 'system',
+      theme: window.store.config.theme,
+      terminalFont: window.store.config.fontFamily,
+      terminalBackgroundFont: window.store.config.terminalBackgroundTextFontFamily,
+      terminalBackground: window.store.getThemeConfig().background,
+      uiFont: document.documentElement.style.getPropertyValue('--sp-ui-font-family')
+    }))
+    expect(before.terminalBackground).toBe('#0E0F12')
+
+    const segoe = page.locator('[data-font-preset-id="segoe-ui"]')
+    await expect(segoe).toBeEnabled()
+    await segoe.click()
+    expect(await page.evaluate(() => window.store.previewUiFontPresetId)).toBe('segoe-ui')
+    await expect.poll(() => page.evaluate(() => (
+      document.documentElement.style.getPropertyValue('--sp-ui-font-family')
+    ))).toContain('Segoe UI')
+    const terminalDuringPreview = await page.evaluate(() => ({
+      terminalFont: window.store.config.fontFamily,
+      terminalBackgroundFont: window.store.config.terminalBackgroundTextFontFamily,
+      terminalBackground: window.store.getThemeConfig().background
+    }))
+    expect(terminalDuringPreview).toEqual({
+      terminalFont: before.terminalFont,
+      terminalBackgroundFont: before.terminalBackgroundFont,
+      terminalBackground: '#0E0F12'
+    })
+
+    await page.getByRole('button', { name: 'Cancel and Restore' }).click()
+    expect(await page.evaluate(() => window.store.previewUiFontPresetId)).toBe('')
+    expect(await page.evaluate(() => window.store.config.uiFontPresetId || 'system')).toBe(before.saved)
+
+    await segoe.click()
+    await page.getByRole('button', { name: 'Apply Font' }).click()
+    const after = await page.evaluate(() => ({
+      saved: window.store.config.uiFontPresetId,
+      theme: window.store.config.theme,
+      terminalFont: window.store.config.fontFamily,
+      terminalBackgroundFont: window.store.config.terminalBackgroundTextFontFamily,
+      terminalBackground: window.store.getThemeConfig().background
+    }))
+    expect(after).toEqual({
+      saved: 'segoe-ui',
+      theme: before.theme,
+      terminalFont: before.terminalFont,
+      terminalBackgroundFont: before.terminalBackgroundFont,
+      terminalBackground: '#0E0F12'
+    })
+
+    await page.evaluate(() => window.store.setTheme('shellpilot-jade'))
+    await page.waitForTimeout(160)
+    expect(await page.evaluate(() => window.store.config.uiFontPresetId)).toBe('segoe-ui')
+    expect(await page.evaluate(() => window.store.getThemeConfig().background)).toBe('#0E0F12')
+    await page.evaluate(theme => window.store.setTheme(theme), before.theme)
+
+    await page.waitForTimeout(300)
+    await page.reload()
+    await waitForSecondaryAppReady(electronApp, page, 'ui-font-lifecycle-reload')
+    expect(await page.evaluate(() => window.store.config.uiFontPresetId)).toBe('segoe-ui')
+    expect(await page.evaluate(() => window.store.config.fontFamily)).toBe(before.terminalFont)
+    expect(await page.evaluate(() => window.store.getThemeConfig().background)).toBe('#0E0F12')
+
+    await page.evaluate(() => {
+      window.store.upgradeInfo.showUpgradeModal = false
+      window.store.previewLanguage = 'en_us'
+    })
+    await openSettings(page)
+    await page.locator('[data-font-preset-id="arial"]').click()
+    expect(await page.evaluate(() => window.store.previewUiFontPresetId)).toBe('arial')
+    await page.locator('.close-setting-wrap').click()
+    expect(await page.evaluate(() => window.store.previewUiFontPresetId)).toBe('')
+    expect(await page.evaluate(() => window.store.config.uiFontPresetId)).toBe('segoe-ui')
+  })
+})
+
 matrixTest('real app covers the secondary UI visual acceptance matrix', async ({ browserName }, testInfo) => {
   const runner = browserName
   const expected = assertMatrixConfiguration()
