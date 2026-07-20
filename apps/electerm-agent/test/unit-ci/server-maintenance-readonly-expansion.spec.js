@@ -14,6 +14,31 @@ function commandText (command) {
   return command.commands.map(item => item.command).join('\n')
 }
 
+const diskIoDiagnosticCommand = `if IOSTAT_OUTPUT="$(iostat -xz 1 3 2>/dev/null)"; then
+  printf '%s' "$IOSTAT_OUTPUT" | head -n 200
+else
+  vmstat 1 4 2>/dev/null | head -n 20 || true
+  head -n 200 /proc/diskstats 2>/dev/null || true
+fi
+unset IOSTAT_OUTPUT
+true`
+
+const inodeMountDiagnosticCommand = `if FINDMNT_OUTPUT="$(findmnt -o TARGET,SOURCE,FSTYPE,OPTIONS 2>/dev/null)"; then
+  printf '%s' "$FINDMNT_OUTPUT" | head -n 200
+else
+  head -n 200 /proc/mounts 2>/dev/null || true
+fi
+unset FINDMNT_OUTPUT
+true`
+
+const deletedOpenFilesDiagnosticCommand = `if LSOF_OUTPUT="$(lsof +L1 2>/dev/null)"; then
+  printf '%s' "$LSOF_OUTPUT" | head -n 200
+else
+  find /proc/[0-9]*/fd -lname '* (deleted)' -ls 2>/dev/null | head -n 200 || true
+fi
+unset LSOF_OUTPUT
+true`
+
 test('system readonly commands cover CPU, kernel, boot and scheduled task diagnostics', async () => {
   const { getServerMaintenanceQuickCommands } = await import(registryUrl)
   const commands = getServerMaintenanceQuickCommands()
@@ -127,21 +152,16 @@ test('storage readonly commands cover disk I/O, inode mounts and deleted open fi
   }
 
   const disk = byId.get('builtin-server-disk-io')
-  assert.match(disk.commands[0].command, /^iostat -xz 1 3 \| head -n 200 \|\| true$/)
-  assert.match(disk.commands[1].command, /^vmstat 1 4 \| head -n 20 \|\| true$/)
-  assert.match(disk.commands[2].command, /^head -n 200 \/proc\/diskstats \|\| true$/)
+  assert.deepEqual(disk.commands.map(item => item.command), [diskIoDiagnosticCommand])
 
   const inode = byId.get('builtin-server-inode-mount')
-  assert.match(inode.commands[0].command, /^df -iP \| head -n 200 \|\| true$/)
-  assert.match(inode.commands[1].command, /^findmnt -o TARGET,SOURCE,FSTYPE,OPTIONS \| head -n 200 \|\| true$/)
-  assert.match(inode.commands[2].command, /^head -n 200 \/proc\/mounts \|\| true$/)
+  assert.deepEqual(inode.commands.map(item => item.command), [
+    'df -iP | head -n 200 || true',
+    inodeMountDiagnosticCommand
+  ])
 
   const deleted = byId.get('builtin-server-deleted-open-files')
-  assert.match(deleted.commands[0].command, /^lsof \+L1 \| head -n 200 \|\| true$/)
-  assert.equal(
-    deleted.commands[1].command,
-    "find /proc/[0-9]*/fd -lname '* (deleted)' -ls 2>/dev/null | head -n 200 || true"
-  )
+  assert.deepEqual(deleted.commands.map(item => item.command), [deletedOpenFilesDiagnosticCommand])
 })
 
 test('storage readonly commands stay best-effort bounded and classifier-safe', async () => {
@@ -165,8 +185,49 @@ test('storage readonly commands stay best-effort bounded and classifier-safe', a
       assert.equal(classification.risk, 'readonly', `${id}: ${item.command}`)
       assert.equal(classification.requiresConfirmation, false, `${id}: ${item.command}`)
       assert.match(item.command, /\bhead -n (?:20|200)\b/)
-      assert.match(item.command, /\|\| true$/)
+      assert.ok(item.command.endsWith('|| true') || item.command.endsWith('\ntrue'))
       assert.doesNotMatch(item.command, /\b(?:less|more|watch)\b|--follow/)
     }
+  }
+})
+
+test('storage readonly fallbacks run only after primary command failure', async () => {
+  const { getServerMaintenanceQuickCommands } = await import(registryUrl)
+  const commands = getServerMaintenanceQuickCommands()
+  const byId = new Map(commands.map(command => [command.id, command]))
+  const cases = [
+    {
+      id: 'builtin-server-disk-io',
+      primary: 'iostat -xz 1 3',
+      fallbacks: ['vmstat 1 4', '/proc/diskstats']
+    },
+    {
+      id: 'builtin-server-inode-mount',
+      primary: 'findmnt -o TARGET,SOURCE,FSTYPE,OPTIONS',
+      fallbacks: ['/proc/mounts']
+    },
+    {
+      id: 'builtin-server-deleted-open-files',
+      primary: 'lsof +L1',
+      fallbacks: ['/proc/[0-9]*/fd']
+    }
+  ]
+
+  for (const item of cases) {
+    const conditional = byId.get(item.id).commands.at(-1).command
+    const branches = conditional.split('\nelse\n')
+    assert.equal(branches.length, 2, `${item.id} should use an if/else fallback`)
+    const [successBranch, failedRemainder] = branches
+    const failedParts = failedRemainder.split('\nfi\n')
+    assert.equal(failedParts.length, 2, `${item.id} should close its fallback branch`)
+    const [failureBranch, cleanup] = failedParts
+
+    assert.ok(successBranch.includes(item.primary), `${item.id} should run its primary first`)
+    assert.match(successBranch, /^if [A-Z_]+_OUTPUT="\$\(.+\)"; then\n/)
+    for (const fallback of item.fallbacks) {
+      assert.equal(successBranch.includes(fallback), false, `${fallback} leaked into success branch`)
+      assert.ok(failureBranch.includes(fallback), `${fallback} missing from failure branch`)
+    }
+    assert.match(cleanup, /^unset [A-Z_]+_OUTPUT\ntrue$/)
   }
 })

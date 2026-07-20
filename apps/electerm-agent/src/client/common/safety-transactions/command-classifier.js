@@ -736,9 +736,34 @@ function changeProvider (command) {
   return null
 }
 
+const fixedReadonlyStorageDiagnosticCommands = new Set([
+  `if IOSTAT_OUTPUT="$(iostat -xz 1 3 2>/dev/null)"; then
+  printf '%s' "$IOSTAT_OUTPUT" | head -n 200
+else
+  vmstat 1 4 2>/dev/null | head -n 20 || true
+  head -n 200 /proc/diskstats 2>/dev/null || true
+fi
+unset IOSTAT_OUTPUT
+true`,
+  `if FINDMNT_OUTPUT="$(findmnt -o TARGET,SOURCE,FSTYPE,OPTIONS 2>/dev/null)"; then
+  printf '%s' "$FINDMNT_OUTPUT" | head -n 200
+else
+  head -n 200 /proc/mounts 2>/dev/null || true
+fi
+unset FINDMNT_OUTPUT
+true`,
+  `if LSOF_OUTPUT="$(lsof +L1 2>/dev/null)"; then
+  printf '%s' "$LSOF_OUTPUT" | head -n 200
+else
+  find /proc/[0-9]*/fd -lname '* (deleted)' -ls 2>/dev/null | head -n 200 || true
+fi
+unset LSOF_OUTPUT
+true`
+])
+
 const inherentlyReadonlyCommands = new Set([
   'uptime', 'whoami', 'id', 'pwd', 'df', 'du', 'free', 'ps', 'ls',
-  'stat', 'wc', 'which', 'uname', 'lsof', 'cat', 'head', 'tail', 'grep',
+  'stat', 'wc', 'which', 'uname', 'cat', 'head', 'tail', 'grep',
   'last', 'mpstat', 'true', 'vmstat'
 ])
 
@@ -756,7 +781,7 @@ function isReadonlyFindmnt (words) {
 }
 
 function isReadonlyLsof (words) {
-  return words.slice(1).every(word => !/^[+-]r(?:\d+(?:\.\d+)?)?$/.test(word))
+  return words.length === 2 && words[1] === '+L1'
 }
 
 const journalctlShortOptions = /^-[abDefFgklmMnopqrStuUWxN]+$/
@@ -1107,6 +1132,7 @@ function classifySingle (command) {
 export function classifyCommand (command) {
   const text = String(command || '')
   if (!text) return result('unknown', '命令为空，无法分类')
+  if (fixedReadonlyStorageDiagnosticCommands.has(text)) return result('readonly', '\u547d\u4ee4\u5c5e\u4e8e\u5df2\u8bc6\u522b\u7684\u53ea\u8bfb\u8bca\u65ad\u64cd\u4f5c')
   const parts = splitCommands(text)
   if (!parts.length) return result('unknown', '命令为空，无法分类')
   if (parts.some(isDatabaseClient) && hasDestructiveDatabaseOperation(text)) {

@@ -663,9 +663,37 @@ test('bounded system diagnostic fallbacks stay readonly without widening mutatio
   }
 })
 
+const fixedDiskIoDiagnosticCommand = `if IOSTAT_OUTPUT="$(iostat -xz 1 3 2>/dev/null)"; then
+  printf '%s' "$IOSTAT_OUTPUT" | head -n 200
+else
+  vmstat 1 4 2>/dev/null | head -n 20 || true
+  head -n 200 /proc/diskstats 2>/dev/null || true
+fi
+unset IOSTAT_OUTPUT
+true`
+
+const fixedInodeMountDiagnosticCommand = `if FINDMNT_OUTPUT="$(findmnt -o TARGET,SOURCE,FSTYPE,OPTIONS 2>/dev/null)"; then
+  printf '%s' "$FINDMNT_OUTPUT" | head -n 200
+else
+  head -n 200 /proc/mounts 2>/dev/null || true
+fi
+unset FINDMNT_OUTPUT
+true`
+
+const fixedDeletedOpenFilesDiagnosticCommand = `if LSOF_OUTPUT="$(lsof +L1 2>/dev/null)"; then
+  printf '%s' "$LSOF_OUTPUT" | head -n 200
+else
+  find /proc/[0-9]*/fd -lname '* (deleted)' -ls 2>/dev/null | head -n 200 || true
+fi
+unset LSOF_OUTPUT
+true`
+
 test('bounded storage diagnostic fallbacks stay readonly without widening unsafe forms', async () => {
   const { classifyCommand } = await importDomainModule('command-classifier.js')
   const readonlyCommands = [
+    fixedDiskIoDiagnosticCommand,
+    fixedInodeMountDiagnosticCommand,
+    fixedDeletedOpenFilesDiagnosticCommand,
     'iostat -xz 1 3 | head -n 200 || true',
     'vmstat 1 4 | head -n 20 || true',
     'head -n 200 /proc/diskstats || true',
@@ -686,6 +714,14 @@ test('bounded storage diagnostic fallbacks stay readonly without widening unsafe
     'iostat -xz 1',
     'findmnt -o TARGET,SOURCE,FSTYPE,OPTIONS --poll',
     'lsof +L1 -r 1',
+    'lsof +L1 -r1m%s',
+    'lsof +L1 -r2.5m%T',
+    'lsof +L1 +r1m%s',
+    'lsof +L1 -nP',
+    fixedDiskIoDiagnosticCommand.replace('iostat -xz 1 3', 'iostat -xz 1'),
+    fixedInodeMountDiagnosticCommand.replace('findmnt -o TARGET,SOURCE,FSTYPE,OPTIONS', 'findmnt -o TARGET,SOURCE,FSTYPE,OPTIONS --poll'),
+    fixedDeletedOpenFilesDiagnosticCommand.replace('lsof +L1', 'lsof +L1 -r1m%s'),
+    fixedDeletedOpenFilesDiagnosticCommand.replace('-ls 2>/dev/null', '-delete 2>/dev/null'),
     "find /proc/[0-9]*/fd -lname '* (deleted)' -delete 2>/dev/null | head -n 200 || true"
   ]) {
     const classification = classifyCommand(command)

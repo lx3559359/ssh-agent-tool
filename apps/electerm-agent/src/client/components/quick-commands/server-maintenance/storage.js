@@ -1,5 +1,30 @@
 import { READ_ONLY, NEED_EDIT, step, defineCommand, inputParam, numberParam } from './shared/definition.js'
 
+const diskIoDiagnosticCommand = `if IOSTAT_OUTPUT="$(iostat -xz 1 3 2>/dev/null)"; then
+  printf '%s' "$IOSTAT_OUTPUT" | head -n 200
+else
+  vmstat 1 4 2>/dev/null | head -n 20 || true
+  head -n 200 /proc/diskstats 2>/dev/null || true
+fi
+unset IOSTAT_OUTPUT
+true`
+
+const inodeMountDiagnosticCommand = `if FINDMNT_OUTPUT="$(findmnt -o TARGET,SOURCE,FSTYPE,OPTIONS 2>/dev/null)"; then
+  printf '%s' "$FINDMNT_OUTPUT" | head -n 200
+else
+  head -n 200 /proc/mounts 2>/dev/null || true
+fi
+unset FINDMNT_OUTPUT
+true`
+
+const deletedOpenFilesDiagnosticCommand = `if LSOF_OUTPUT="$(lsof +L1 2>/dev/null)"; then
+  printf '%s' "$LSOF_OUTPUT" | head -n 200
+else
+  find /proc/[0-9]*/fd -lname '* (deleted)' -ls 2>/dev/null | head -n 200 || true
+fi
+unset LSOF_OUTPUT
+true`
+
 export function getStorageCommands () {
   return [
     defineCommand({
@@ -27,11 +52,7 @@ export function getStorageCommands () {
         'iostat \u4e0d\u53ef\u7528\u65f6\uff0c\u540e\u7eed vmstat \u4e0e /proc/diskstats \u4ecd\u4f1a\u63d0\u4f9b\u964d\u7ea7\u4fe1\u606f\u3002',
         '\u6240\u6709\u91c7\u6837\u548c\u8f93\u51fa\u5747\u6709\u56fa\u5b9a\u8fb9\u754c\uff0c\u4e0d\u4f1a\u8fdb\u5165\u6301\u7eed\u5237\u65b0\u6a21\u5f0f\u3002'
       ],
-      commands: [
-        step('iostat -xz 1 3 | head -n 200 || true'),
-        step('vmstat 1 4 | head -n 20 || true'),
-        step('head -n 200 /proc/diskstats || true')
-      ]
+      commands: [step(diskIoDiagnosticCommand)]
     }),
     defineCommand({
       id: 'builtin-server-inode-mount',
@@ -44,8 +65,7 @@ export function getStorageCommands () {
       ],
       commands: [
         step('df -iP | head -n 200 || true'),
-        step('findmnt -o TARGET,SOURCE,FSTYPE,OPTIONS | head -n 200 || true'),
-        step('head -n 200 /proc/mounts || true')
+        step(inodeMountDiagnosticCommand)
       ]
     }),
     defineCommand({
@@ -58,10 +78,7 @@ export function getStorageCommands () {
         'lsof \u4e0d\u53ef\u7528\u6216\u6743\u9650\u4e0d\u8db3\u65f6\uff0c\u540e\u7eed /proc \u6587\u4ef6\u63cf\u8ff0\u7b26\u626b\u63cf\u4f1a\u7ee7\u7eed\u6267\u884c\u3002',
         '\u666e\u901a\u7528\u6237\u53ea\u80fd\u770b\u5230\u6709\u6743\u9650\u8bbf\u95ee\u7684\u8fdb\u7a0b\uff0c\u7ed3\u679c\u6700\u591a\u663e\u793a 200 \u884c\u3002'
       ],
-      commands: [
-        step('lsof +L1 | head -n 200 || true'),
-        step("find /proc/[0-9]*/fd -lname '* (deleted)' -ls 2>/dev/null | head -n 200 || true")
-      ]
+      commands: [step(deletedOpenFilesDiagnosticCommand)]
     }),
     defineCommand({
       id: 'builtin-server-directory-analysis',
