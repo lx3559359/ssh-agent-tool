@@ -25,6 +25,7 @@ import {
   buildQuickCommandContext,
   buildQuickCommandRollbackContext,
   buildQuickCommandParamValues,
+  buildQuickCommandText,
   describeQuickCommandContext,
   submitValidatedQuickCommand,
   updatePendingQuickCommandParams
@@ -258,6 +259,9 @@ export default function QuickCommandsFooterBox (props) {
   }
 
   function getCommandText (item, context, paramValues) {
+    if (item?.mutatesServer) {
+      return buildQuickCommandText(item, context, paramValues)
+    }
     const text = item?.commands?.length
       ? item.commands.map(step => step.command).join('\n')
       : item?.command || ''

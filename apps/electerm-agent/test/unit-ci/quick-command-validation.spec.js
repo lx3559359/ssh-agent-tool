@@ -643,6 +643,101 @@ test('mutation preflight validates the full schema and creates a private rollbac
   }
 })
 
+test('mutation preflight cannot lower the shared minimum free space', async () => {
+  const {
+    createMutationSafetyMetadata,
+    buildMutationPreflight
+  } = await import(safetyMetadataUrl)
+  const metadata = createMutationSafetyMetadata({
+    title: '固定空间下限',
+    verifyCommands: ['test -d /tmp']
+  })
+
+  assert.throws(
+    () => buildMutationPreflight({ ...metadata, minFreeKb: 1 }),
+    /10240|最低可用空间/
+  )
+})
+
+test('every confirmed mutation submits preflight backup mutation and verification in order', async () => {
+  const { getServerMaintenanceQuickCommands } = await import(commandsUrl)
+  const {
+    buildQuickCommandContext,
+    buildQuickCommandParamValues,
+    submitValidatedQuickCommand
+  } = await import(contextUrl)
+  const context = buildQuickCommandContext({ host: 'server.example.com', port: '22' })
+  const commands = getServerMaintenanceQuickCommands()
+  const mutationCases = [
+    {
+      id: 'builtin-server-network-change-ip',
+      values: {
+        网卡: 'eth0',
+        '新IP/CIDR': '192.0.2.20/24',
+        网关: '192.0.2.1',
+        DNS: '223.5.5.5,8.8.8.8',
+        配置方式: 'temporary',
+        确认执行: 'yes'
+      }
+    },
+    {
+      id: 'builtin-server-firewall-open-port',
+      values: { 端口: '443', 生效方式: 'runtime', 确认执行: 'yes' }
+    },
+    {
+      id: 'builtin-server-service-action',
+      values: { 服务名称: 'nginx.service', 操作: 'restart', 确认执行: 'yes' }
+    },
+    {
+      id: 'builtin-server-docker-action',
+      values: { 容器名称: 'web-1', 操作: 'restart', 确认执行: 'yes' }
+    },
+    {
+      id: 'builtin-server-file-permission',
+      values: { 目标路径: '/var/www/app', 操作: 'apply', 确认执行: 'yes' }
+    }
+  ]
+
+  for (const testCase of mutationCases) {
+    const item = commands.find(command => command.id === testCase.id)
+    assert.ok(item, `missing ${testCase.id}`)
+    assert.equal(item.safetyMetadata?.requireConfirmation, true)
+    assert.ok(item.safetyMetadata.verifyCommands.length >= 1)
+
+    const submissions = []
+    const result = submitValidatedQuickCommand({
+      id: item.id,
+      item,
+      context,
+      inputOnly: false,
+      text: 'stale command text',
+      paramValues: {
+        ...buildQuickCommandParamValues(item, context),
+        ...testCase.values
+      }
+    }, (...args) => submissions.push(args))
+
+    assert.equal(result.submitted, true, testCase.id)
+    assert.equal(submissions.length, 1, testCase.id)
+    assert.equal(submissions[0][1].commandText, result.commandText)
+    const text = result.commandText
+    const preflightIndex = text.indexOf('# __SHELLPILOT_MUTATION_PREFLIGHT__')
+    const backupIndex = text.indexOf('# __SHELLPILOT_MUTATION_BACKUP__')
+    const mutationIndex = text.indexOf('# __SHELLPILOT_MUTATION_EXECUTE__')
+    const verifyIndex = text.indexOf('# __SHELLPILOT_MUTATION_VERIFY__')
+
+    assert.ok(preflightIndex >= 0, `${testCase.id} missing preflight`)
+    assert.ok(preflightIndex < backupIndex, `${testCase.id} preflight must precede backup`)
+    assert.ok(backupIndex < mutationIndex, `${testCase.id} backup must precede mutation`)
+    assert.ok(mutationIndex < verifyIndex, `${testCase.id} mutation must precede verify`)
+    assert.match(text, /MIN_FREE_KB=10240/)
+    const backupText = text.slice(backupIndex, mutationIndex)
+    assert.match(backupText, /BACKUP_COMPLETE/)
+    assert.match(backupText, /if ![\s\S]+exit 1/)
+    assert.match(text.slice(verifyIndex), /if ! \([\s\S]+exit 1/)
+  }
+})
+
 test('network discovery merge recalculates errors for every changed field', async () => {
   const { getServerMaintenanceQuickCommands } = await import(commandsUrl)
   const { mergeDetectedNetworkParams } = await import(networkUrl)

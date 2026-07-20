@@ -3,6 +3,9 @@ import {
   validateAndNormalizeQuickCommandParams as validateAndNormalizeMaintenanceParams,
   validateQuickCommandParams as validateMaintenanceQuickCommandParams
 } from './server-maintenance/shared/validation.js'
+import {
+  buildMutationSafetyCommand
+} from './server-maintenance/shared/safety-metadata.js'
 
 function toStringValue (value, fallback = '') {
   if (value === undefined || value === null || value === '') {
@@ -209,14 +212,37 @@ export function applyQuickCommandParamValues (text = '', values = {}, context = 
   return replaceQuickCommandPlaceholders(text, replacements)
 }
 
+function resolveMutationSafetyMetadata (metadata, values, context) {
+  if (!metadata) {
+    throw new Error('修改命令缺少安全元数据')
+  }
+  const resolve = text => applyQuickCommandParamValues(text, values, context)
+  return {
+    ...metadata,
+    backupTargets: metadata.backupTargets.map(resolve),
+    verifyCommands: metadata.verifyCommands.map(resolve)
+  }
+}
+
 export function buildQuickCommandText (item = {}, context = {}, paramValues = {}) {
   const text = item.commands?.length
     ? item.commands.map(commandStep => commandStep.command).join('\n')
     : item.command || ''
+  let commandText
   if (item.params?.length) {
-    return applyQuickCommandParamValues(text, paramValues, context)
+    commandText = applyQuickCommandParamValues(text, paramValues, context)
+  } else {
+    commandText = applyQuickCommandDefaults(text, context)
   }
-  return applyQuickCommandDefaults(text, context)
+  if (!shouldTrackRollback(item, paramValues)) {
+    return commandText
+  }
+  const safetyMetadata = resolveMutationSafetyMetadata(
+    item.safetyMetadata,
+    paramValues,
+    context
+  )
+  return buildMutationSafetyCommand(safetyMetadata, commandText)
 }
 
 function sameParamValue (left, right) {
