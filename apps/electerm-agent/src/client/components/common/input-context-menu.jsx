@@ -7,6 +7,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { Dropdown } from 'antd'
 import { contextMenuAlign, createContextMenuId } from './context-menu-props'
+import { shouldUseInputContextMenu } from './input-context-menu-target.js'
 import iconsMap from '../sys-menu/icons-map.jsx'
 import { copy, readClipboard, readClipboardAsync } from '../../common/clipboard.js'
 
@@ -240,7 +241,7 @@ const InputContextMenu = () => {
   useEffect(() => {
     const handleContextMenu = (event) => {
       const target = event.target
-      if (isInputElement(target)) {
+      if (shouldUseInputContextMenu(target)) {
         event.preventDefault()
         event.stopPropagation()
         setPosition({ x: event.clientX, y: event.clientY })

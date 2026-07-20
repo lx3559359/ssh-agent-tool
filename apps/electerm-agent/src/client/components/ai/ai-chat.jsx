@@ -67,7 +67,6 @@ import { agentTaskRegistry } from './agent-task-registry.js'
 import { resolveAgentRuntimeEndpoint } from './agent-runtime-context.js'
 import { createAIRequestCredentialReference } from './ai-request-credentials'
 import message from '../common/message'
-import aiAgentCopy from './ai-agent-copy.json'
 import './ai.styl'
 
 const { TextArea } = Input
@@ -429,7 +428,7 @@ export default function AIChat (props) {
         <LoadingOutlined
           spin
           className='mg1l send-to-ai-icon agent-send-running'
-          title={aiAgentCopy.runningTitle}
+          title={e('shellpilotAiRunningTitle')}
         />
       )
     }
@@ -442,7 +441,7 @@ export default function AIChat (props) {
             ? 'agent-send-disabled'
             : 'pointer icon-hover'
         }`}
-        title={aiAgentCopy.sendTitle}
+        title={e('shellpilotAiSendTitle')}
       />
     )
   }
@@ -636,7 +635,7 @@ export default function AIChat (props) {
           value={prompt}
           onChange={handlePromptChange}
           onPressEnter={handleKeyPress}
-          placeholder={aiAgentCopy.inputPlaceholder}
+          placeholder={e('shellpilotAiInputPlaceholder')}
           autoSize={{ minRows: 3, maxRows: 10 }}
           className='ai-chat-textarea'
         />
@@ -664,7 +663,7 @@ export default function AIChat (props) {
             >
               <UnorderedListOutlined
                 className='mg2x pointer clear-ai-icon icon-hover'
-                title={aiAgentCopy.clearHistoryTitle}
+                title={e('shellpilotAiClearHistoryTitle')}
               />
             </Popconfirm>
           </Flex>
