@@ -382,11 +382,11 @@ test('safety smoke runs local checks without credentials and never prints secret
   assert.equal(summary.remote.skipped, true)
 })
 
-test('candidate package metadata is consistently set to 0.4.7', () => {
+test('candidate package metadata is consistently set to 0.4.8', () => {
   const pack = JSON.parse(read('package.json'))
   const lock = JSON.parse(read('package-lock.json'))
 
-  assert.equal(pack.version, '0.4.7')
-  assert.equal(lock.version, '0.4.7')
-  assert.equal(lock.packages[''].version, '0.4.7')
+  assert.equal(pack.version, '0.4.8')
+  assert.equal(lock.version, '0.4.8')
+  assert.equal(lock.packages[''].version, '0.4.8')
 })

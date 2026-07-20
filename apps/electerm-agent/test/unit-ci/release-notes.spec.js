@@ -33,8 +33,6 @@ test('v0.4.6 release metadata documents the readonly Agent usability release', (
 })
 
 test('v0.4.7 release metadata documents the online update republish', () => {
-  assert.equal(pack.version, '0.4.7')
-
   const notes = read('docs/releases/v0.4.7.md')
   for (const section of ['新增', '修复', '改动']) {
     assert.match(notes, new RegExp(`^## \\[${section}\\]`, 'm'))
@@ -45,6 +43,25 @@ test('v0.4.7 release metadata documents the online update republish', () => {
     '在线更新',
     'ModelScope',
     'latest.yml'
+  ]) {
+    assert.match(notes, new RegExp(phrase))
+  }
+})
+
+test('v0.4.8 release metadata documents the UI modernization release', () => {
+  assert.equal(pack.version, '0.4.8')
+
+  const notes = read('docs/releases/v0.4.8.md')
+  for (const section of ['新增', '修复', '改动']) {
+    assert.match(notes, new RegExp(`^## \\[${section}\\]`, 'm'))
+  }
+  for (const phrase of [
+    'UI 配色',
+    '20 种 UI 字体',
+    '简体中文与英文',
+    '终端背景',
+    '右键菜单',
+    '文字挤压'
   ]) {
     assert.match(notes, new RegExp(phrase))
   }
