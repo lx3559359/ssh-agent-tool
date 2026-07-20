@@ -62,6 +62,7 @@ module.exports = exports.default = {
   hideIP: false,
   dataSyncSelected: 'all',
   language: 'zh_cn',
+  uiFontPresetId: 'system',
   languageAI: '简体中文',
   nameAI: '',
   baseURLAI: 'https://api.atlascloud.ai/v1',

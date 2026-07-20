@@ -759,6 +759,7 @@ export default (Store) => {
       'terminalTimeout',
       'theme',
       'language',
+      'uiFontPresetId',
       'copyWhenSelect',
       'customCss',
       'dataSyncSelected',

@@ -19,6 +19,7 @@ import sidebarExtend from './sidebar'
 import sysMenuExtend from './system-menu'
 import tabExtend from './tab'
 import uiThemeExtend from './ui-theme'
+import uiFontExtend from './ui-font'
 import terminalThemeExtend from './terminal-theme'
 import transferHistoryExtend from './transfer-history'
 import batchInputHistory from './batch-input-history'
@@ -323,6 +324,7 @@ sysMenuExtend(Store)
 tabExtend(Store)
 terminalThemeExtend(Store)
 uiThemeExtend(Store)
+uiFontExtend(Store)
 transferHistoryExtend(Store)
 batchInputHistory(Store)
 transferExtend(Store)
