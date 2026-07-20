@@ -663,6 +663,38 @@ test('bounded system diagnostic fallbacks stay readonly without widening mutatio
   }
 })
 
+test('bounded storage diagnostic fallbacks stay readonly without widening unsafe forms', async () => {
+  const { classifyCommand } = await importDomainModule('command-classifier.js')
+  const readonlyCommands = [
+    'iostat -xz 1 3 | head -n 200 || true',
+    'vmstat 1 4 | head -n 20 || true',
+    'head -n 200 /proc/diskstats || true',
+    'df -iP | head -n 200 || true',
+    'findmnt -o TARGET,SOURCE,FSTYPE,OPTIONS | head -n 200 || true',
+    'head -n 200 /proc/mounts || true',
+    'lsof +L1 | head -n 200 || true',
+    "find /proc/[0-9]*/fd -lname '* (deleted)' -ls 2>/dev/null | head -n 200 || true"
+  ]
+
+  for (const command of readonlyCommands) {
+    const classification = classifyCommand(command)
+    assert.equal(classification.risk, 'readonly', command)
+    assert.equal(classification.requiresConfirmation, false, command)
+  }
+
+  for (const command of [
+    'iostat -xz 1',
+    'findmnt -o TARGET,SOURCE,FSTYPE,OPTIONS --poll',
+    'lsof +L1 -r 1',
+    "find /proc/[0-9]*/fd -lname '* (deleted)' -delete 2>/dev/null | head -n 200 || true"
+  ]) {
+    const classification = classifyCommand(command)
+    assert.equal(classification.risk, 'unknown', command)
+    assert.equal(classification.reversible, false, command)
+    assert.equal(classification.requiresConfirmation, true, command)
+  }
+})
+
 test('device redirection never creates a file recovery promise', async () => {
   const { classifyCommand } = await importDomainModule('command-classifier.js')
 

@@ -741,6 +741,24 @@ const inherentlyReadonlyCommands = new Set([
   'stat', 'wc', 'which', 'uname', 'lsof', 'cat', 'head', 'tail', 'grep',
   'last', 'mpstat', 'true', 'vmstat'
 ])
+
+function isReadonlyIostat (words) {
+  return words.length === 4 &&
+    words[1] === '-xz' &&
+    words[2] === '1' &&
+    words[3] === '3'
+}
+
+function isReadonlyFindmnt (words) {
+  return words.length === 3 &&
+    words[1] === '-o' &&
+    words[2] === 'TARGET,SOURCE,FSTYPE,OPTIONS'
+}
+
+function isReadonlyLsof (words) {
+  return words.slice(1).every(word => !/^[+-]r(?:\d+(?:\.\d+)?)?$/.test(word))
+}
+
 const journalctlShortOptions = /^-[abDefFgklmMnopqrStuUWxN]+$/
 
 function isReadonlyDmesg (words) {
@@ -981,6 +999,9 @@ function isReadonly (command) {
   const tokens = shellTokens(text)
   const words = tokens.map(token => token.value)
   const executable = (words[0] || '').toLowerCase()
+  if (executable === 'iostat') return isReadonlyIostat(words)
+  if (executable === 'findmnt') return isReadonlyFindmnt(words)
+  if (executable === 'lsof') return isReadonlyLsof(words)
   if (inherentlyReadonlyCommands.has(executable)) return true
   if (executable === 'hostname') return words.length === 1
   if (executable === 'date') return isReadonlyDate(words)
@@ -1043,6 +1064,13 @@ function classifySingle (command) {
   const bareExecutable = hasDirectBareExecutableIdentity(command)
   if (!trustedExecutable && !bareExecutable) {
     return result('unknown', '无法证明可执行程序身份，普通命令、alias、function 或非系统路径不进入严格安全分类')
+  }
+  const harmlessStderrRedirect = redirects.length === 1 &&
+    redirects[0].target === '/dev/null' &&
+    /\s2>\s*\/dev\/null\s*$/.test(command)
+  if (harmlessStderrRedirect) {
+    const readonlyCommand = command.replace(/\s2>\s*\/dev\/null\s*$/, '')
+    if (isReadonly(readonlyCommand)) return result('readonly', '\u547d\u4ee4\u5c5e\u4e8e\u5df2\u8bc6\u522b\u7684\u53ea\u8bfb\u8bca\u65ad\u64cd\u4f5c')
   }
   const stripped = stripCommandPrefix(command)
   if (/^(?:systemctl|docker|podman)\s+restart\b/i.test(stripped) ||

@@ -105,3 +105,68 @@ test('system readonly commands stay best-effort bounded and classifier-safe', as
     assert.match(item.command, /\| head -n 200 \|\| true$/)
   }
 })
+
+test('storage readonly commands cover disk I/O, inode mounts and deleted open files', async () => {
+  const { getServerMaintenanceQuickCommands } = await import(registryUrl)
+  const commands = getServerMaintenanceQuickCommands()
+  const byId = new Map(commands.map(command => [command.id, command]))
+  const ids = [
+    'builtin-server-disk-io',
+    'builtin-server-inode-mount',
+    'builtin-server-deleted-open-files'
+  ]
+
+  for (const id of ids) {
+    const command = byId.get(id)
+    assert.ok(command, `missing ${id}`)
+    assert.ok(command.labels.includes('\u53ea\u8bfb'), `${id} should be readonly`)
+    assert.equal(command.mutatesServer, undefined, `${id} must not mutate the server`)
+    assert.match(command.name, /[\u4e00-\u9fff]/, `${id} name should be Chinese`)
+    assert.match(command.description, /[\u4e00-\u9fff]/, `${id} description should be Chinese`)
+    assert.match(command.usage, /[\u4e00-\u9fff]/, `${id} usage should be Chinese`)
+  }
+
+  const disk = byId.get('builtin-server-disk-io')
+  assert.match(disk.commands[0].command, /^iostat -xz 1 3 \| head -n 200 \|\| true$/)
+  assert.match(disk.commands[1].command, /^vmstat 1 4 \| head -n 20 \|\| true$/)
+  assert.match(disk.commands[2].command, /^head -n 200 \/proc\/diskstats \|\| true$/)
+
+  const inode = byId.get('builtin-server-inode-mount')
+  assert.match(inode.commands[0].command, /^df -iP \| head -n 200 \|\| true$/)
+  assert.match(inode.commands[1].command, /^findmnt -o TARGET,SOURCE,FSTYPE,OPTIONS \| head -n 200 \|\| true$/)
+  assert.match(inode.commands[2].command, /^head -n 200 \/proc\/mounts \|\| true$/)
+
+  const deleted = byId.get('builtin-server-deleted-open-files')
+  assert.match(deleted.commands[0].command, /^lsof \+L1 \| head -n 200 \|\| true$/)
+  assert.equal(
+    deleted.commands[1].command,
+    "find /proc/[0-9]*/fd -lname '* (deleted)' -ls 2>/dev/null | head -n 200 || true"
+  )
+})
+
+test('storage readonly commands stay best-effort bounded and classifier-safe', async () => {
+  const [registry, classifier] = await Promise.all([
+    import(registryUrl),
+    import(classifierUrl)
+  ])
+  const commands = registry.getServerMaintenanceQuickCommands()
+  const byId = new Map(commands.map(command => [command.id, command]))
+  const ids = [
+    'builtin-server-disk-io',
+    'builtin-server-inode-mount',
+    'builtin-server-deleted-open-files'
+  ]
+
+  for (const id of ids) {
+    const command = byId.get(id)
+    assert.ok(command, `missing ${id}`)
+    for (const item of command.commands) {
+      const classification = classifier.classifyCommand(item.command)
+      assert.equal(classification.risk, 'readonly', `${id}: ${item.command}`)
+      assert.equal(classification.requiresConfirmation, false, `${id}: ${item.command}`)
+      assert.match(item.command, /\bhead -n (?:20|200)\b/)
+      assert.match(item.command, /\|\| true$/)
+      assert.doesNotMatch(item.command, /\b(?:less|more|watch)\b|--follow/)
+    }
+  }
+})
