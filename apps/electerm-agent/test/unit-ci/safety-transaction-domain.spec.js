@@ -731,6 +731,55 @@ test('bounded storage diagnostic fallbacks stay readonly without widening unsafe
   }
 })
 
+test('storage fixed commands normalize line endings without accepting syntax changes', async () => {
+  const { classifyCommand } = await importDomainModule('command-classifier.js')
+  const fixedCommands = [
+    fixedDiskIoDiagnosticCommand,
+    fixedInodeMountDiagnosticCommand,
+    fixedDeletedOpenFilesDiagnosticCommand
+  ]
+  const lineEndingVariants = [
+    command => command.replace(/\n/g, '\r\n'),
+    command => command.replace(/\n/g, '\n\r'),
+    command => command.replace(/\n/g, '\r')
+  ]
+
+  for (const fixedCommand of fixedCommands) {
+    for (const makeVariant of lineEndingVariants) {
+      const command = makeVariant(fixedCommand)
+      const classification = classifyCommand(command)
+      assert.equal(classification.risk, 'readonly', JSON.stringify(command))
+      assert.equal(classification.requiresConfirmation, false, JSON.stringify(command))
+    }
+  }
+
+  const windowsCommand = command => command.replace(/\n/g, '\n\r')
+  const unsafeVariants = [
+    fixedDiskIoDiagnosticCommand.replace(
+      '\nelse\n',
+      '\nelse\n  rm -rf /tmp/storage-report\n'
+    ),
+    `${fixedInodeMountDiagnosticCommand}\nrm -rf /tmp/storage-report`,
+    fixedDeletedOpenFilesDiagnosticCommand.replace(
+      'lsof +L1 2>/dev/null',
+      'lsof +L1 -nP 2>/dev/null'
+    ),
+    fixedDiskIoDiagnosticCommand.replace('\nelse\n', '\nelif true; then\n'),
+    `${fixedInodeMountDiagnosticCommand} `,
+    fixedDeletedOpenFilesDiagnosticCommand.replace(
+      "  printf '%s'",
+      "   printf '%s'"
+    )
+  ].map(windowsCommand)
+
+  for (const command of unsafeVariants) {
+    const classification = classifyCommand(command)
+    assert.equal(classification.risk, 'unknown', JSON.stringify(command))
+    assert.equal(classification.reversible, false, JSON.stringify(command))
+    assert.equal(classification.requiresConfirmation, true, JSON.stringify(command))
+  }
+})
+
 test('device redirection never creates a file recovery promise', async () => {
   const { classifyCommand } = await importDomainModule('command-classifier.js')
 

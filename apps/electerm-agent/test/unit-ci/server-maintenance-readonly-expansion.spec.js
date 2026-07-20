@@ -1,6 +1,12 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
+const fs = require('node:fs')
 const path = require('node:path')
+const vm = require('node:vm')
+const parser = require('@babel/parser')
+const traverse = require('@babel/traverse').default
+const generate = require('@babel/generator').default
+const t = require('@babel/types')
 const { pathToFileURL } = require('node:url')
 
 const registryUrl = pathToFileURL(
@@ -9,6 +15,84 @@ const registryUrl = pathToFileURL(
 const classifierUrl = pathToFileURL(
   path.resolve(__dirname, '../../src/client/common/safety-transactions/command-classifier.js')
 ).href
+
+function loadQuickCommandInstaller (runSafetyCommandSequence) {
+  const sourcePath = path.resolve(__dirname, '../../src/client/store/quick-command.js')
+  const ast = parser.parse(fs.readFileSync(sourcePath, 'utf8'), {
+    sourceType: 'module'
+  })
+
+  const importExpression = (source, property) => {
+    const imported = t.callExpression(t.identifier('__import'), [
+      t.stringLiteral(source)
+    ])
+    return property
+      ? t.memberExpression(imported, t.identifier(property))
+      : imported
+  }
+
+  traverse(ast, {
+    ImportDeclaration (modulePath) {
+      const source = modulePath.node.source.value
+      const declarations = modulePath.node.specifiers.map(specifier => {
+        let value
+        if (t.isImportDefaultSpecifier(specifier)) {
+          value = importExpression(source, 'default')
+        } else if (t.isImportNamespaceSpecifier(specifier)) {
+          value = importExpression(source)
+        } else {
+          value = importExpression(source, specifier.imported.name)
+        }
+        return t.variableDeclaration('const', [
+          t.variableDeclarator(t.identifier(specifier.local.name), value)
+        ])
+      })
+      modulePath.replaceWithMultiple(declarations)
+    },
+    ExportDefaultDeclaration (exportPath) {
+      exportPath.replaceWith(
+        t.expressionStatement(
+          t.assignmentExpression(
+            '=',
+            t.memberExpression(t.identifier('module'), t.identifier('exports')),
+            t.toExpression(exportPath.node.declaration)
+          )
+        )
+      )
+    }
+  })
+
+  const imports = {
+    '../common/constants': {
+      settingMap: { quickCommands: 'quickCommands' },
+      qmSortByFrequencyKey: 'qmSortByFrequency',
+      isWin: true
+    },
+    '../common/wait': { default: async () => {} },
+    '../common/uid': { default: () => 'generated-id' },
+    '../common/safe-local-storage': {},
+    'lodash-es': { debounce: callback => callback },
+    '../components/common/ref': { refs: { get: () => null } },
+    '../components/quick-commands/templates': { default: [] },
+    '../common/clipboard': { readClipboardAsync: async () => '' },
+    '../common/safety-transactions/command-orchestration.js': {
+      runSafetyCommandBatch: async () => [],
+      runSafetyCommandSequence
+    }
+  }
+  const module = { exports: {} }
+  const context = {
+    module,
+    exports: module.exports,
+    __import: source => imports[source],
+    window: {},
+    console,
+    setTimeout,
+    clearTimeout
+  }
+  vm.runInNewContext(generate(ast).code, context, { filename: sourcePath })
+  return { install: module.exports, window: context.window }
+}
 
 function commandText (command) {
   return command.commands.map(item => item.command).join('\n')
@@ -229,5 +313,57 @@ test('storage readonly fallbacks run only after primary command failure', async 
       assert.ok(failureBranch.includes(fallback), `${fallback} missing from failure branch`)
     }
     assert.match(cleanup, /^unset [A-Z_]+_OUTPUT\ntrue$/)
+  }
+})
+
+test('Windows quick-command path keeps storage step order and readonly classification', async () => {
+  const [registry, classifier] = await Promise.all([
+    import(registryUrl),
+    import(classifierUrl)
+  ])
+  const ids = [
+    'builtin-server-disk-io',
+    'builtin-server-inode-mount',
+    'builtin-server-deleted-open-files'
+  ]
+  const commands = registry.getServerMaintenanceQuickCommands()
+    .filter(command => ids.includes(command.id))
+    .sort((left, right) => ids.indexOf(left.id) - ids.indexOf(right.id))
+  const queued = []
+  const sent = []
+  const runSafetyCommandSequence = async (steps, { runStep }) => {
+    const results = []
+    for (const step of steps) {
+      queued.push(step.command)
+      results.push(await runStep(step))
+    }
+    return results
+  }
+  const { install, window } = loadQuickCommandInstaller(runSafetyCommandSequence)
+  class Store {}
+  install(Store)
+  const store = new Store()
+  store.currentQuickCommands = commands
+  store.runSafetyCommand = async command => {
+    sent.push(command)
+    return classifier.classifyCommand(command)
+  }
+  window.store = store
+
+  for (const id of ids) {
+    await store.runQuickCommandItem(id)
+  }
+
+  const originalSteps = commands.flatMap(command => (
+    command.commands.map(step => step.command)
+  ))
+  const windowsSteps = originalSteps.map(command => command.replace(/\n/g, '\n\r'))
+  assert.deepEqual(queued, originalSteps)
+  assert.deepEqual(sent, windowsSteps)
+  assert.ok(sent.some(command => command.includes('\n\r')))
+  for (const command of sent) {
+    const classification = classifier.classifyCommand(command)
+    assert.equal(classification.risk, 'readonly', command)
+    assert.equal(classification.requiresConfirmation, false, command)
   }
 })

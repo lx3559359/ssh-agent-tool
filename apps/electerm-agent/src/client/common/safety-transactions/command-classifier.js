@@ -1130,7 +1130,7 @@ function classifySingle (command) {
 }
 
 export function classifyCommand (command) {
-  const text = String(command || '')
+  const text = String(command || '').replace(/\r\n|\n\r|\r/g, '\n')
   if (!text) return result('unknown', '命令为空，无法分类')
   if (fixedReadonlyStorageDiagnosticCommands.has(text)) return result('readonly', '\u547d\u4ee4\u5c5e\u4e8e\u5df2\u8bc6\u522b\u7684\u53ea\u8bfb\u8bca\u65ad\u64cd\u4f5c')
   const parts = splitCommands(text)
