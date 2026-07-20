@@ -1169,11 +1169,33 @@ async function inspectSurface (page, selector, menu, documentBaseline) {
         }]
       })
       .slice(0, 30)
+    const rootOverflowOffenders = [root, ...root.querySelectorAll('*')]
+      .flatMap(element => {
+        const itemRect = element.getBoundingClientRect()
+        const style = window.getComputedStyle(element)
+        const contentOverflow = element.scrollWidth > element.clientWidth + options.overflowTolerance
+        const escapesRoot = itemRect.left < rect.left - options.overflowTolerance ||
+          itemRect.right > rect.right + options.overflowTolerance
+        if ((!contentOverflow && !escapesRoot) || style.display === 'none') return []
+        return [{
+          tag: element.tagName,
+          className: String(element.className).slice(0, 180),
+          text: element.textContent.trim().replace(/\s+/g, ' ').slice(0, 100),
+          rect: itemRect.toJSON(),
+          scrollWidth: element.scrollWidth,
+          clientWidth: element.clientWidth,
+          overflowX: style.overflowX,
+          minWidth: style.minWidth,
+          width: style.width
+        }]
+      })
+      .slice(0, 40)
     return {
       viewport: { width: window.innerWidth, height: window.innerHeight },
       documentOverflow: overflowNodes.some(item => !item.found || item.overflow),
       documentOverflowDetails: overflowNodes,
       documentOverflowOffenders,
+      rootOverflowOffenders,
       rootContentOverflow,
       rootScrollWidth: root.scrollWidth,
       rootClientWidth: root.clientWidth,

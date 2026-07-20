@@ -28,4 +28,3 @@ test('English help covers every section with paired navigation labels', async ()
     assert.ok(getShellPilotTranslation(item.labelKey, 'en_us'))
   }
 })
-
