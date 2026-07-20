@@ -345,7 +345,7 @@ export default class Upgrade extends PureComponent {
       remoteVersion: latestVer,
       manualDownloadUrl: releaseStatus.html_url,
       canAutoUpgrade,
-      showUpgradeModal: !window.store.upgradeInfo.showUpdateCenter
+      showUpgradeModal: Boolean(isManual && !window.store.upgradeInfo.showUpdateCenter)
     })
   }
 

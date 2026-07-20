@@ -51,7 +51,7 @@ class MenuBtn extends PureComponent {
   }
 
   onCheckUpdate = () => {
-    window.store.onCheckUpdate()
+    window.store.onCheckUpdate(true)
   }
 
   restart = () => {

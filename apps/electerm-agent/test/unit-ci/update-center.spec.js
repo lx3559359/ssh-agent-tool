@@ -32,6 +32,23 @@ test('top bar opens the update center before checking for updates', () => {
   assert.match(source, /onCheckUpdate\(true\)/)
 })
 
+test('automatic update checks stay minimized and cannot cover active workflows', () => {
+  const upgrade = readSource('client/components/main/upgrade.jsx')
+  const sidebar = readSource('client/components/sidebar/index.jsx')
+
+  assert.match(
+    upgrade,
+    /showUpgradeModal:\s*Boolean\(isManual && !window\.store\.upgradeInfo\.showUpdateCenter\)/
+  )
+  assert.match(sidebar, /!showUpgradeModal && shouldUpgrade/)
+})
+
+test('explicit system-menu update checks are marked as manual', () => {
+  const source = readSource('client/components/sys-menu/menu-btn.jsx')
+
+  assert.match(source, /onCheckUpdate\s*=\s*\(\)\s*=>\s*\{[\s\S]*?window\.store\.onCheckUpdate\(true\)/)
+})
+
 test('upgrade flow only offers restart after the native updater confirms download completion', () => {
   const source = readSource('client/components/main/upgrade.jsx')
 
