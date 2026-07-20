@@ -1208,3 +1208,16 @@ test('main workbench layout constants remain untouched by secondary UI copy work
   assert.match(layout, /aigshellTopBarHeight = 44/)
   assert.match(layout, /minRightPanelWidth = 320/)
 })
+
+test('injects a UI-only font variable and leaves terminal font fields separate', () => {
+  const main = readClient('components/main/main.jsx')
+  const basic = readClient('css/basic.styl')
+  const injector = readClient('components/main/ui-font.jsx')
+  assert.match(main, /<UiFont presetId=\{effectiveUiFontPresetId\}/)
+  assert.match(basic, /font-family var\(--sp-ui-font-family/)
+  assert.match(injector, /--sp-ui-font-family/)
+  assert.match(injector, /getUiFontAvailability/)
+  assert.match(injector, /getUiFontPreset\('system'\)/)
+  assert.doesNotMatch(injector, /fontFamily|terminalBackgroundTextFontFamily/)
+  assert.doesNotMatch(basic, /\.xterm[\s\S]{0,120}--sp-ui-font-family/)
+})

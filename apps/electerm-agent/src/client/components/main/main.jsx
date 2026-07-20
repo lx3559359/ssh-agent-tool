@@ -8,6 +8,7 @@ import TextEditor from '../text-editor/text-editor-entry'
 import Sidebar from '../sidebar'
 import CssOverwrite from '../bg/css-overwrite'
 import UiTheme from './ui-theme'
+import UiFont from './ui-font'
 import CustomCss from '../bg/custom-css.jsx'
 import Resolutions from '../rdp/resolution-edit'
 import TerminalInteractive from '../terminal/terminal-interactive'
@@ -148,6 +149,8 @@ export default auto(function Index (props) {
   } = store
   const rawConfig = store.config
   const config = rawConfig || {}
+  const effectiveUiFontPresetId = store.previewUiFontPresetId ||
+    config.uiFontPresetId || 'system'
   const rightPanelTitle = getSafeRightPanelTitle(store, rawConfig)
   const tabs = (store.getTabs() || []).filter(Boolean)
   const currentTab = store.currentTab || null
@@ -339,6 +342,7 @@ export default auto(function Index (props) {
         <UiTheme
           {...themeProps}
         />
+        <UiFont presetId={effectiveUiFontPresetId} />
         <CustomCss customCss={config.customCss} configLoaded={configLoaded} />
         <TextEditor />
         <LazyModuleBoundary moduleName='更新检查' fallback={null}>
