@@ -17,6 +17,14 @@ const contextUrl = pathToFileURL(path.resolve(
   __dirname,
   '../../src/client/components/quick-commands/quick-command-context.js'
 )).href
+const commandsUrl = pathToFileURL(path.resolve(
+  __dirname,
+  '../../src/client/components/quick-commands/server-maintenance/index.js'
+)).href
+const networkUrl = pathToFileURL(path.resolve(
+  __dirname,
+  '../../src/client/components/quick-commands/quick-command-network.js'
+)).href
 const quickCommandsBoxPath = path.resolve(
   __dirname,
   '../../src/client/components/quick-commands/quick-commands-box.jsx'
@@ -35,6 +43,7 @@ test('quick command validators accept supported maintenance value types', async 
     ['ipv4', '192.0.2.10'],
     ['cidr', '10.20.30.0/24'],
     ['cidr', '2001:db8::/64'],
+    ['cidr', '::ffff:192.0.2.1/128'],
     ['packet-filter', 'tcp and dst port 443']
   ]
 
@@ -59,6 +68,11 @@ test('quick command validators reject invalid formats and command injection', as
     ['port', '0'],
     ['port', '65536'],
     ['ipv4', '192.0.2.999'],
+    ['ipv4', '192.0.002.1'],
+    ['hostname-or-ip', '192.0.002.1'],
+    ['cidr', '192.0.2.1::/64'],
+    ['cidr', '192.0.2.1::1/64'],
+    ['cidr', '::ffff:192.0.002.1/128'],
     ['cidr', '10.0.0.999/24'],
     ['cidr', '10.0.0.0/33'],
     ['cidr', '2001:db8::/129'],
@@ -210,7 +224,10 @@ test('maintenance discovery command and parser use complete capability boundarie
     buildMaintenanceDiscoveryCommand,
     parseMaintenanceDiscoveryOutput
   } = await import(discoveryUrl)
-  const command = buildMaintenanceDiscoveryCommand()
+  const nonce = 'fixtureNonce123456789'
+  const begin = `__SHELLPILOT_CAP_BEGIN__:${nonce}`
+  const end = `__SHELLPILOT_CAP_END__:${nonce}`
+  const command = buildMaintenanceDiscoveryCommand(nonce)
 
   assert.match(command, /__SHELLPILOT_CAP_BEGIN__/)
   assert.match(command, /__SHELLPILOT_CAP_END__/)
@@ -231,16 +248,16 @@ test('maintenance discovery command and parser use complete capability boundarie
 
   const output = [
     'login banner',
-    '__SHELLPILOT_CAP_BEGIN__',
+    begin,
     'os=ubuntu',
     'init=systemd',
     'tool=ss',
     'tool=journalctl',
     'tool=docker',
-    '__SHELLPILOT_CAP_END__',
+    end,
     'prompt'
   ].join('\n')
-  assert.deepEqual(parseMaintenanceDiscoveryOutput(output), {
+  assert.deepEqual(parseMaintenanceDiscoveryOutput(output, nonce), {
     os: 'ubuntu',
     init: 'systemd',
     tools: ['ss', 'journalctl', 'docker']
@@ -249,15 +266,18 @@ test('maintenance discovery command and parser use complete capability boundarie
 
 test('maintenance discovery fails closed for incomplete or missing required output', async () => {
   const { parseMaintenanceDiscoveryOutput } = await import(discoveryUrl)
+  const nonce = 'fixtureNonce123456789'
+  const begin = `__SHELLPILOT_CAP_BEGIN__:${nonce}`
+  const end = `__SHELLPILOT_CAP_END__:${nonce}`
 
   for (const output of [
-    '__SHELLPILOT_CAP_BEGIN__\nos=ubuntu\ninit=systemd',
-    'os=ubuntu\ninit=systemd\n__SHELLPILOT_CAP_END__',
-    '__SHELLPILOT_CAP_BEGIN__\ninit=systemd\n__SHELLPILOT_CAP_END__',
-    '__SHELLPILOT_CAP_BEGIN__\nos=ubuntu\n__SHELLPILOT_CAP_END__'
+    `${begin}\nos=ubuntu\ninit=systemd`,
+    `os=ubuntu\ninit=systemd\n${end}`,
+    `${begin}\ninit=systemd\n${end}`,
+    `${begin}\nos=ubuntu\n${end}`
   ]) {
     assert.throws(
-      () => parseMaintenanceDiscoveryOutput(output),
+      () => parseMaintenanceDiscoveryOutput(output, nonce),
       /未获取到完整的服务器能力探测结果|能力探测结果缺少/
     )
   }
@@ -352,11 +372,318 @@ test('quick command confirmation uses unified field validation and visible error
   })
 
   const source = fs.readFileSync(quickCommandsBoxPath, 'utf8')
-  assert.match(source, /validateQuickCommandParams\(pendingCommand\.item, pendingCommand\.paramValues\)/)
+  assert.match(source, /submitValidatedQuickCommand\(/)
   assert.match(source, /paramErrors/)
   assert.match(source, /status=\{error \? 'error' : undefined\}/)
   assert.match(source, /qm-command-param-error/)
   assert.match(source, /role='alert'/)
-  assert.match(source, /clearQuickCommandParamError\(old\.paramErrors, name\)/)
+  assert.match(source, /updatePendingQuickCommandParams\(/)
   assert.match(source, /shellpilotQuickFinalCommandPreview/)
+})
+
+test('maintenance params infer validation without changing legacy custom commands', async () => {
+  const {
+    inferQuickCommandParamValidation,
+    validateAndNormalizeQuickCommandParams
+  } = await import(validationUrl)
+  const { getServerMaintenanceQuickCommands } = await import(commandsUrl)
+  const {
+    buildQuickCommandContext,
+    buildQuickCommandParamValues
+  } = await import(contextUrl)
+  const commands = getServerMaintenanceQuickCommands()
+  const context = buildQuickCommandContext({ host: 'server.example.com', port: '22' })
+
+  for (const item of commands) {
+    for (const param of item.params || []) {
+      assert.ok(
+        inferQuickCommandParamValidation(item, param),
+        `${item.id}:${param.name} should have an inferred validation policy`
+      )
+    }
+  }
+
+  const logSearch = commands.find(item => item.id === 'builtin-server-log-search')
+  const logValues = {
+    ...buildQuickCommandParamValues(logSearch, context),
+    关键词: 'error|timeout'
+  }
+  assert.deepEqual(validateAndNormalizeQuickCommandParams(logSearch, logValues), {
+    errors: {},
+    values: logValues
+  })
+
+  const httpCheck = commands.find(item => item.id === 'builtin-server-http-check')
+  const httpValues = {
+    ...buildQuickCommandParamValues(httpCheck, context),
+    请求地址: 'https://example.com/health?full=true&format=text'
+  }
+  assert.deepEqual(validateAndNormalizeQuickCommandParams(httpCheck, httpValues), {
+    errors: {},
+    values: httpValues
+  })
+
+  const serviceStatus = commands.find(item => item.id === 'builtin-server-service-status')
+  const serviceValues = {
+    ...buildQuickCommandParamValues(serviceStatus, context),
+    服务名: ['nginx.service', 'docker.service']
+  }
+  assert.deepEqual(validateAndNormalizeQuickCommandParams(serviceStatus, serviceValues), {
+    errors: {},
+    values: serviceValues
+  })
+
+  const custom = {
+    id: 'custom-command',
+    params: [{ name: 'freeform', type: 'input' }]
+  }
+  assert.deepEqual(validateAndNormalizeQuickCommandParams(custom, {
+    freeform: '  $(kept-for-legacy-custom-command)  '
+  }), {
+    errors: {},
+    values: { freeform: '  $(kept-for-legacy-custom-command)  ' }
+  })
+
+  const unknownMutation = {
+    id: 'builtin-server-review-fixture',
+    mutatesServer: true,
+    params: [{ name: '未知字段', label: '未知字段', type: 'input' }]
+  }
+  assert.match(
+    validateAndNormalizeQuickCommandParams(unknownMutation, { 未知字段: 'value' }).errors.未知字段,
+    /无法识别|校验策略/
+  )
+})
+
+test('validated submission rebuilds command text and never submits unsafe maintenance values', async () => {
+  const { getServerMaintenanceQuickCommands } = await import(commandsUrl)
+  const {
+    buildQuickCommandContext,
+    buildQuickCommandParamValues,
+    submitValidatedQuickCommand
+  } = await import(contextUrl)
+  const commands = getServerMaintenanceQuickCommands()
+  const context = buildQuickCommandContext({ host: 'server.example.com', port: '22' })
+  const logSearch = commands.find(item => item.id === 'builtin-server-log-search')
+
+  for (const dangerousKeyword of [
+    'ok"; id',
+    '$(id)',
+    '`id`',
+    'safe\\$(id)',
+    'safe\nreboot',
+    'safe\rreboot',
+    'safe\0reboot'
+  ]) {
+    const submissions = []
+    const result = submitValidatedQuickCommand({
+      id: logSearch.id,
+      item: logSearch,
+      context,
+      inputOnly: false,
+      text: 'echo stale-and-unsafe',
+      paramValues: {
+        ...buildQuickCommandParamValues(logSearch, context),
+        关键词: dangerousKeyword
+      }
+    }, (...args) => submissions.push(args))
+    assert.equal(result.submitted, false, JSON.stringify(dangerousKeyword))
+    assert.equal(submissions.length, 0, JSON.stringify(dangerousKeyword))
+    assert.ok(result.errors.关键词, JSON.stringify(dangerousKeyword))
+  }
+
+  const firewall = commands.find(item => item.id === 'builtin-server-firewall-open-port')
+  const submissions = []
+  const result = submitValidatedQuickCommand({
+    id: firewall.id,
+    item: firewall,
+    context,
+    inputOnly: false,
+    text: 'echo stale-and-unsafe',
+    paramValues: {
+      ...buildQuickCommandParamValues(firewall, context),
+      端口: ' 443 '
+    }
+  }, (...args) => submissions.push(args))
+
+  assert.equal(result.submitted, true)
+  assert.equal(submissions.length, 1)
+  assert.equal(submissions[0][0], firewall.id)
+  assert.match(submissions[0][1].commandText, /PORT="443"/)
+  assert.doesNotMatch(submissions[0][1].commandText, /PORT=" 443 "/)
+  assert.doesNotMatch(submissions[0][1].commandText, /stale-and-unsafe/)
+  assert.equal(result.paramValues.端口, '443')
+
+  const undeclaredValueSubmissions = []
+  const extraValueItem = {
+    id: 'builtin-server-extra-value-fixture',
+    params: [{ name: '端口', label: '端口', type: 'input' }],
+    command: [
+      'PORT="{{端口}}"',
+      'HOST="{{服务器IP}}"'
+    ].join('\n')
+  }
+  const extraValueResult = submitValidatedQuickCommand({
+    id: extraValueItem.id,
+    item: extraValueItem,
+    context,
+    inputOnly: false,
+    text: 'echo stale-and-unsafe',
+    paramValues: {
+      端口: '443',
+      服务器IP: 'safe"; id; echo "'
+    }
+  }, (...args) => undeclaredValueSubmissions.push(args))
+
+  assert.equal(extraValueResult.submitted, true)
+  assert.equal(undeclaredValueSubmissions.length, 1)
+  assert.deepEqual(extraValueResult.paramValues, { 端口: '443' })
+  assert.match(
+    undeclaredValueSubmissions[0][1].commandText,
+    /HOST="server\.example\.com"/
+  )
+  assert.doesNotMatch(undeclaredValueSubmissions[0][1].commandText, /; id;/)
+})
+
+test('maintenance discovery binds a unique nonce and rejects ambiguous capability blocks', async () => {
+  const {
+    buildMaintenanceDiscoveryCommand,
+    parseMaintenanceDiscoveryOutput
+  } = await import(discoveryUrl)
+  const nonce = 'reviewNonce123456789'
+  const command = buildMaintenanceDiscoveryCommand(nonce)
+  const begin = `__SHELLPILOT_CAP_BEGIN__:${nonce}`
+  const end = `__SHELLPILOT_CAP_END__:${nonce}`
+
+  assert.match(command, new RegExp(begin))
+  assert.match(command, new RegExp(end))
+  assert.notEqual(buildMaintenanceDiscoveryCommand(), buildMaintenanceDiscoveryCommand())
+
+  const output = [
+    '__SHELLPILOT_CAP_BEGIN__',
+    'os=attacker',
+    'init=other',
+    '__SHELLPILOT_CAP_END__',
+    begin,
+    'os=ubuntu',
+    'init=systemd',
+    'tool=ss',
+    'tool=docker',
+    end
+  ].join('\n')
+  assert.deepEqual(parseMaintenanceDiscoveryOutput(output, nonce), {
+    os: 'ubuntu',
+    init: 'systemd',
+    tools: ['ss', 'docker']
+  })
+
+  for (const invalidBody of [
+    [begin, 'os=ubuntu', 'init=systemd'].join('\n'),
+    [begin, 'os=ubuntu', 'os=debian', 'init=systemd', end].join('\n'),
+    [begin, 'os=ubuntu', 'init=systemd', 'init=other', end].join('\n'),
+    [begin, 'os=ubuntu', 'init=systemd', 'tool=ss', 'tool=ss', end].join('\n'),
+    [begin, 'os=ubuntu', 'init=systemd', 'tool=curl', end].join('\n'),
+    [begin, 'os=ubuntu', 'init=systemd', 'unexpected=value', end].join('\n'),
+    [begin, begin, 'os=ubuntu', 'init=systemd', end].join('\n'),
+    [begin, 'os=ubuntu', 'init=systemd', end, end].join('\n'),
+    [begin, 'os=ubuntu', 'init=systemd', '__SHELLPILOT_CAP_END__:otherNonce123456', end].join('\n')
+  ]) {
+    assert.throws(() => parseMaintenanceDiscoveryOutput(invalidBody, nonce), /能力探测|完整|重复|未知|无效/)
+  }
+})
+
+test('mutation preflight validates the full schema and creates a private rollback directory', async () => {
+  const {
+    createMutationSafetyMetadata,
+    buildMutationPreflight
+  } = await import(safetyMetadataUrl)
+  const metadata = createMutationSafetyMetadata({
+    title: '安全修改',
+    backupTargets: ['/etc/hosts'],
+    verifyCommands: ['test -s /etc/hosts']
+  })
+  const preflight = buildMutationPreflight(metadata)
+
+  assert.match(preflight, /umask 077/)
+  assert.match(preflight, /\[ -L "\$ROLLBACK_DIR" \]/)
+  assert.match(preflight, /stat -c %u/)
+  assert.match(preflight, /stat -c %a/)
+  assert.match(preflight, /mktemp -d "\$ROLLBACK_DIR\/operation\.XXXXXX"/)
+  assert.match(preflight, /OPERATION_ROLLBACK_DIR/)
+
+  const invalidMetadata = [
+    {},
+    { ...metadata, requireConfirmation: false },
+    { ...metadata, rollbackDirectory: '/tmp/other' },
+    { ...metadata, minFreeKb: '10240' },
+    { ...metadata, minFreeKb: 0 },
+    { ...metadata, verifyCommands: [] },
+    { ...metadata, verifyCommands: [true] },
+    { ...metadata, verifyCommands: [null] },
+    { ...metadata, verifyCommands: [''] },
+    { ...metadata, verifyCommands: ['true\nid'] },
+    { ...metadata, verifyCommands: new Array(1) },
+    { ...metadata, backupTargets: new Array(1) },
+    { ...metadata, backupTargets: [true] },
+    { ...metadata, backupTargets: ['/etc/hosts\r/tmp/x'] }
+  ]
+  for (const invalid of invalidMetadata) {
+    assert.throws(() => buildMutationPreflight(invalid), /确认|回滚|空间|验证命令|备份目标|不能为空|换行|NUL/)
+  }
+
+  for (const input of [
+    { title: 'bad', verifyCommands: [true] },
+    { title: 'bad', verifyCommands: [null] },
+    { title: 'bad', verifyCommands: [''] },
+    { title: 'bad', verifyCommands: ['ok\0bad'] },
+    { title: 'bad', verifyCommands: new Array(1) },
+    { title: 'bad', verifyCommands: ['ok'], backupTargets: [true] }
+  ]) {
+    assert.throws(() => createMutationSafetyMetadata(input), /验证命令|备份目标|不能为空|换行|NUL/)
+  }
+})
+
+test('network discovery merge recalculates errors for every changed field', async () => {
+  const { getServerMaintenanceQuickCommands } = await import(commandsUrl)
+  const { mergeDetectedNetworkParams } = await import(networkUrl)
+  const {
+    buildQuickCommandContext,
+    buildQuickCommandParamValues,
+    updatePendingQuickCommandParams
+  } = await import(contextUrl)
+  const item = getServerMaintenanceQuickCommands()
+    .find(command => command.id === 'builtin-server-network-change-ip')
+  const context = buildQuickCommandContext({ host: 'server.example.com' })
+  const oldValues = {
+    ...buildQuickCommandParamValues(item, context),
+    网卡: 'bad;id',
+    网关: '999.0.0.1',
+    DNS: '999.0.0.2',
+    '新IP/CIDR': 'bad-cidr'
+  }
+  const pending = {
+    item,
+    context,
+    paramValues: oldValues,
+    paramErrors: {
+      网卡: '旧网卡错误',
+      网关: '旧网关错误',
+      DNS: '旧 DNS 错误',
+      '新IP/CIDR': '仍需用户修复'
+    },
+    text: 'stale'
+  }
+  const merged = mergeDetectedNetworkParams(oldValues, {
+    interface: 'eth0',
+    gateway: '192.0.2.1',
+    dns: '223.5.5.5,8.8.8.8'
+  })
+  const next = updatePendingQuickCommandParams(pending, merged)
+
+  assert.equal(next.paramErrors.网卡, undefined)
+  assert.equal(next.paramErrors.网关, undefined)
+  assert.equal(next.paramErrors.DNS, undefined)
+  assert.equal(next.paramErrors['新IP/CIDR'], '仍需用户修复')
+  assert.match(next.text, /IFACE="eth0"/)
+  assert.match(next.text, /GATEWAY="192\.0\.2\.1"/)
 })

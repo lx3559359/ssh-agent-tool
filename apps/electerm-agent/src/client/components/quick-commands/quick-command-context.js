@@ -1,4 +1,6 @@
 import {
+  isServerMaintenanceQuickCommand,
+  validateAndNormalizeQuickCommandParams as validateAndNormalizeMaintenanceParams,
   validateQuickCommandParams as validateMaintenanceQuickCommandParams
 } from './server-maintenance/shared/validation.js'
 
@@ -82,6 +84,10 @@ export function validateQuickCommandParams (item = {}, values = {}) {
   return validateMaintenanceQuickCommandParams(item, values)
 }
 
+export function validateAndNormalizeQuickCommandParams (item = {}, values = {}) {
+  return validateAndNormalizeMaintenanceParams(item, values)
+}
+
 export function clearQuickCommandParamError (paramErrors = {}, name) {
   if (!paramErrors || typeof paramErrors !== 'object') return {}
   const nextErrors = { ...paramErrors }
@@ -95,7 +101,8 @@ export function buildQuickCommandContext (tab = {}) {
   const username = toStringValue(tab.username || tab.user)
   const title = toStringValue(tab.title || tab.name || host, host || '当前服务器')
   const safeHost = safePathPart(host || title)
-  const capturePath = `/tmp/shellpilot-capture-${safeHost}-$(date +%Y%m%d-%H%M%S).pcap`
+  const timestamp = new Date().toISOString().replace(/\D/g, '').slice(0, 14)
+  const capturePath = `/tmp/shellpilot-capture-${safeHost}-${timestamp}.pcap`
   const rollbackPath = `/tmp/shellpilot-rollback/network-${safeHost}-${Date.now()}.sh`
   const defaultDomain = host && !isIpLike(host) ? host : 'example.com'
   const packetFilter = 'tcp'
@@ -200,6 +207,85 @@ export function applyQuickCommandParamValues (text = '', values = {}, context = 
   }
 
   return replaceQuickCommandPlaceholders(text, replacements)
+}
+
+export function buildQuickCommandText (item = {}, context = {}, paramValues = {}) {
+  const text = item.commands?.length
+    ? item.commands.map(commandStep => commandStep.command).join('\n')
+    : item.command || ''
+  if (item.params?.length) {
+    return applyQuickCommandParamValues(text, paramValues, context)
+  }
+  return applyQuickCommandDefaults(text, context)
+}
+
+function sameParamValue (left, right) {
+  if (!Array.isArray(left) || !Array.isArray(right)) return left === right
+  return left.length === right.length && left.every((value, index) => value === right[index])
+}
+
+export function updatePendingQuickCommandParams (pendingCommand, nextValues = {}) {
+  if (!pendingCommand) return pendingCommand
+  const currentValues = pendingCommand.paramValues || {}
+  const changedNames = (pendingCommand.item?.params || [])
+    .map(param => param.name)
+    .filter(name => !sameParamValue(currentValues[name], nextValues[name]))
+  const validation = validateAndNormalizeMaintenanceParams(
+    pendingCommand.item,
+    nextValues
+  )
+  const paramErrors = { ...(pendingCommand.paramErrors || {}) }
+
+  for (const name of changedNames) {
+    if (validation.errors[name]) {
+      paramErrors[name] = validation.errors[name]
+    } else {
+      delete paramErrors[name]
+    }
+  }
+
+  return {
+    ...pendingCommand,
+    paramValues: nextValues,
+    paramErrors,
+    text: buildQuickCommandText(
+      pendingCommand.item,
+      pendingCommand.context,
+      validation.values
+    )
+  }
+}
+
+export function submitValidatedQuickCommand (pendingCommand = {}, submit) {
+  const item = pendingCommand.item || {}
+  const validation = validateAndNormalizeMaintenanceParams(
+    item,
+    pendingCommand.paramValues || {}
+  )
+  const rebuildText = isServerMaintenanceQuickCommand(item) ||
+    (item.params || []).some(param => param.validationType)
+  const commandText = rebuildText
+    ? buildQuickCommandText(item, pendingCommand.context, validation.values)
+    : toStringValue(pendingCommand.text)
+  const result = {
+    submitted: false,
+    errors: validation.errors,
+    paramValues: validation.values,
+    commandText
+  }
+
+  if (Object.keys(validation.errors).length || !commandText.trim()) {
+    return result
+  }
+  if (typeof submit !== 'function') {
+    throw new Error('快捷命令执行入口不可用')
+  }
+  submit(pendingCommand.id, {
+    commandText,
+    inputOnly: pendingCommand.inputOnly,
+    confirmed: true
+  })
+  return { ...result, submitted: true }
 }
 
 export function buildAdvancedUsage (item = {}, context = {}) {

@@ -25,9 +25,9 @@ import {
   buildQuickCommandContext,
   buildQuickCommandRollbackContext,
   buildQuickCommandParamValues,
-  clearQuickCommandParamError,
   describeQuickCommandContext,
-  validateQuickCommandParams
+  submitValidatedQuickCommand,
+  updatePendingQuickCommandParams
 } from './quick-command-context'
 import {
   buildNetworkProbeCommand,
@@ -239,11 +239,12 @@ export default function QuickCommandsFooterBox (props) {
           return old
         }
         const paramValues = mergeDetectedNetworkParams(old.paramValues, detected)
+        const next = updatePendingQuickCommandParams(old, paramValues)
         return {
-          ...old,
-          detectedNetwork: detected,
-          paramValues,
-          text: getCommandText(item || old.item, context || old.context, paramValues)
+          ...next,
+          item: item || next.item,
+          context: context || next.context,
+          detectedNetwork: detected
         }
       })
       setNetworkProbe({ loading: false, error: '', detected })
@@ -283,12 +284,7 @@ export default function QuickCommandsFooterBox (props) {
         ...(old.paramValues || {}),
         [name]: value === undefined || value === null ? '' : value
       }
-      return {
-        ...old,
-        paramValues,
-        paramErrors: clearQuickCommandParamError(old.paramErrors, name),
-        text: getCommandText(old.item, old.context, paramValues)
-      }
+      return updatePendingQuickCommandParams(old, paramValues)
     })
   }
 
@@ -344,25 +340,22 @@ export default function QuickCommandsFooterBox (props) {
   }
 
   function handlePendingOk () {
-    const errors = validateQuickCommandParams(pendingCommand.item, pendingCommand.paramValues)
-    if (Object.keys(errors).length) {
+    const result = submitValidatedQuickCommand(
+      pendingCommand,
+      (id, options) => window.store.runQuickCommandItem(id, options)
+    )
+    if (!result.submitted) {
       setPendingCommand(current => {
         if (!current) return current
         return {
           ...current,
-          paramErrors: errors
+          paramErrors: result.errors,
+          paramValues: result.paramValues,
+          text: result.commandText
         }
       })
       return
     }
-    if (!pendingCommand?.text?.trim()) {
-      return
-    }
-    window.store.runQuickCommandItem(pendingCommand.id, {
-      commandText: pendingCommand.text,
-      inputOnly: pendingCommand.inputOnly,
-      confirmed: true
-    })
     resetTargetDiscovery()
     setPendingCommand(null)
     setShowPendingPreview(false)
