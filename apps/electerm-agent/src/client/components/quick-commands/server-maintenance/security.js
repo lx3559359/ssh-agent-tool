@@ -16,12 +16,36 @@ export function getSecurityCommands () {
         step(String.raw`(
   run_journal_security_events () {
     {
-      journalctl -r -u ssh -u sshd --since '-24 hours' --no-pager 2>/dev/null
-      printf '\\036SHELLPILOT_SSH_STATUS=%s\\n' "$?"
-    } | awk '
+      journal_control="$(
+        {
+          journalctl -r -u ssh -u sshd --since '-24 hours' --no-pager 2>&1 1>&3
+          printf '\\036SHELLPILOT_SSH_STATUS=%s\\n' "$?"
+        } | awk '
+          BEGIN {
+            marker = sprintf("%c", 30) "SHELLPILOT_SSH_STATUS="
+          }
+          {
+            marker_position = index($0, marker)
+            if (marker_position > 0) {
+              prefix = substr($0, 1, marker_position - 1)
+              if (length(prefix) > 0) stderr_seen = 1
+              command_status = substr($0, marker_position + length(marker))
+              status_seen = 1
+              next
+            }
+            stderr_seen = 1
+          }
+          END {
+            if (!status_seen) command_status = 1
+            printf "%s %d\\n", command_status, stderr_seen
+          }
+        '
+      )"
+      printf '\\036SHELLPILOT_SSH_CONTROL=%s\\n' "$journal_control"
+    } 3>&1 | awk '
       BEGIN {
         limit = 200
-        marker = sprintf("%c", 30) "SHELLPILOT_SSH_STATUS="
+        marker = sprintf("%c", 30) "SHELLPILOT_SSH_CONTROL="
       }
       {
         marker_position = index($0, marker)
@@ -35,7 +59,10 @@ export function getSecurityCommands () {
               exit
             }
           }
-          command_status = substr($0, marker_position + length(marker))
+          control = substr($0, marker_position + length(marker))
+          split(control, control_fields, " ")
+          command_status = control_fields[1]
+          stderr_seen = control_fields[2]
           status_seen = 1
           next
         }
@@ -49,7 +76,11 @@ export function getSecurityCommands () {
         }
       }
       END {
-        if (truncated || (status_seen && command_status == 0)) {
+        if (truncated) exit 0
+        if (status_seen && command_status == 0 && stderr_seen == 0) {
+          if (emitted == 0) {
+            print "最近 24 小时无相关 SSH 安全事件。"
+          }
           exit 0
         }
         exit 1
@@ -70,7 +101,7 @@ export function getSecurityCommands () {
 
     printf '说明：传统日志时间格式无法可靠严格解析 24 小时，仅显示最近日志尾部近似范围。\\n'
     if [ -z "$auth_log$secure_log" ]; then
-      printf '未找到最近 24 小时内更新的可读 SSH 安全日志；未展示可能陈旧的历史事件。\\n'
+      printf '未找到最近 24 小时内更新的可读 SSH 安全日志；可能权限不足或日志不可用，且未展示可能陈旧的历史事件。\\n'
       return 0
     fi
 
@@ -104,7 +135,7 @@ export function getSecurityCommands () {
   elif [ -r /var/log/auth.log ] || [ -r /var/log/secure ]; then
     run_log_security_events
   else
-    printf '未找到可读的 SSH 安全日志（/var/log/auth.log 或 /var/log/secure）。\\n'
+    printf '未找到可读的 SSH 安全日志（/var/log/auth.log 或 /var/log/secure）：权限不足或日志不可用。\\n'
   fi
 )
 true`)

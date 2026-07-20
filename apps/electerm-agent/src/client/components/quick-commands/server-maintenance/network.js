@@ -219,9 +219,11 @@ true`)
       {
         marker_position = index($0, marker)
         if (marker_position > 0) {
+          prefix = substr($0, 1, marker_position - 1)
           command_status = substr($0, marker_position + length(marker))
           status_seen = 1
-          next
+          if (length(prefix) == 0) next
+          $0 = prefix
         }
         if (line_count >= input_limit) {
           truncated = 1

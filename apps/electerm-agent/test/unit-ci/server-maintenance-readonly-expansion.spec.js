@@ -649,6 +649,8 @@ test('security readonly command covers bounded SSH authentication events and log
   assert.match(text, /limit = 200/)
   assert.match(text, /tail -n 5000/)
   assert.match(text, /-mtime -1/)
+  assert.match(text, /最近 24 小时无相关 SSH 安全事件/)
+  assert.match(text, /权限不足或日志不可用/)
   assert.match(text, /最近日志尾部近似范围/)
   assert.match(text, /\u672a\u627e\u5230\u53ef\u8bfb\u7684 SSH \u5b89\u5168\u65e5\u5fd7/)
 })
@@ -674,6 +676,9 @@ test('container readonly command covers bounded Docker health and storage diagno
   assert.match(text, /\.State\.Health\.Status/)
   assert.match(text, /\.RestartCount/)
   assert.match(text, /docker system df/)
+  assert.match(text, /部分容器详情读取失败\/权限或容器已变化/)
+  assert.match(text, /printf '%.64s'/)
+  assert.doesNotMatch(text, /docker inspect[^\n]*\|\| true/)
   assert.doesNotMatch(text, /docker inspect\s+"?\$?\w+"?(?:\s|$)/)
 })
 
@@ -742,6 +747,8 @@ test('Task 5 readonly scripts are bounded side-effect-free and exact-classifier-
 
   const security = byId.get('builtin-server-ssh-security-events').commands[0].command
   assert.match(security, /status_seen && command_status == 0/)
+  assert.match(security, /stderr_seen/)
+  assert.doesNotMatch(security, /journalctl[^\n]*2>\/dev\/null/)
   assert.match(security, /journalctl -r/)
   assert.match(security, /tail -n 5000/)
   assert.match(security, /limit = 200/)
@@ -755,6 +762,7 @@ test('Task 5 readonly scripts are bounded side-effect-free and exact-classifier-
     docker,
     /NR <= 20[\s\S]*while IFS= read -r container_id[\s\S]*docker inspect --format[\s\S]*"\$container_id"/
   )
+  assert.doesNotMatch(docker, /docker inspect[^\n]*\|\| true/)
   assert.match(docker, /run_bounded_docker_output 50 docker system df/)
   assert.equal((docker.match(/docker inspect --format/g) || []).length, 1)
 })
@@ -920,6 +928,23 @@ test('TCP diagnostics use ss then real netstat fallback and keep output bounded 
   assert.match(success.stdout, /LISTEN 1/)
   assert.doesNotMatch(success.stdout, /__NETSTAT_MUST_NOT_RUN__/)
 
+  const ssNoFinalNewlinePrelude = [
+    'ss () {',
+    '  if [ "$1" = "-s" ]; then',
+    "    printf '__SS_NO_NEWLINE_SUMMARY__\\n'",
+    '  else',
+    "    printf 'State Recv-Q Send-Q Local Peer\\n'",
+    "    printf 'ESTAB 0 0 a b'",
+    '  fi',
+    '}',
+    "netstat () { printf '__NETSTAT_MUST_NOT_RUN__\\n'; }"
+  ].join('\n')
+  const ssNoFinalNewline = runPosixShell(
+    ssNoFinalNewlinePrelude + '\n' + command
+  )
+  assert.match(ssNoFinalNewline.stdout, /ESTAB 1/)
+  assert.doesNotMatch(ssNoFinalNewline.stdout, /__NETSTAT_MUST_NOT_RUN__/)
+
   const fallbackPrelude = [
     "ss () { printf '__FAILED_SS__\\n'; return 7; }",
     'netstat () {',
@@ -930,6 +955,18 @@ test('TCP diagnostics use ss then real netstat fallback and keep output bounded 
   const fallback = runPosixShell(fallbackPrelude + '\n' + command)
   assert.match(fallback.stdout, /LISTEN 1/)
   assert.match(fallback.stdout, /ESTABLISHED 1/)
+
+  const netstatNoFinalNewlinePrelude = [
+    'ss () { return 7; }',
+    'netstat () {',
+    "  printf 'Proto Recv-Q Send-Q Local Foreign State\\n'",
+    "  printf 'tcp 0 0 a b ESTABLISHED'",
+    '}'
+  ].join('\n')
+  const netstatNoFinalNewline = runPosixShell(
+    netstatNoFinalNewlinePrelude + '\n' + command
+  )
+  assert.match(netstatNoFinalNewline.stdout, /ESTABLISHED 1/)
 
   const boundedPrelude = [
     'ss () {',
@@ -976,6 +1013,26 @@ test('SSH security diagnostics filter and bound journal or readable-log fallback
     'tail -n 5000 "$auth_log" 2>/dev/null',
     "printf 'noise\\nInvalid user guest\\nAccepted password for ops\\nunrelated\\n'"
   )
+  const noMatchingJournalEvents = runPosixShell(
+    "journalctl () { printf 'sshd service heartbeat\\n'; }\n" +
+      fallbackEventsCommand
+  )
+  assert.match(
+    noMatchingJournalEvents.stdout,
+    /最近 24 小时无相关 SSH 安全事件/
+  )
+  assert.doesNotMatch(noMatchingJournalEvents.stdout, /Invalid user guest/)
+
+  const permissionDeniedJournal = runPosixShell(
+    [
+      "journalctl () { printf 'Permission denied\\n' >&2; return 0; }",
+      'find () { printf \'%s\\n\' "$1"; }'
+    ].join('\n') + '\n' + fallbackEventsCommand
+  )
+  assert.match(permissionDeniedJournal.stdout, /Invalid user guest/)
+  assert.match(permissionDeniedJournal.stdout, /最近日志尾部近似范围/)
+  assert.doesNotMatch(permissionDeniedJournal.stdout, /最近 24 小时无相关 SSH 安全事件/)
+
   const fallback = runPosixShell(
     [
       'journalctl () { return 7; }',
@@ -1064,6 +1121,12 @@ test('SSH security diagnostics filter and bound journal or readable-log fallback
     .replaceAll('/var/log/secure', '/__shellpilot_missing_secure__')
   const unavailable = runPosixShell('journalctl () { return 7; }\n' + noLogs)
   assert.match(unavailable.stdout, /未找到可读的 SSH 安全日志/)
+  assert.match(unavailable.stdout, /权限不足或日志不可用/)
+  const permissionUnavailable = runPosixShell(
+    "journalctl () { printf 'Permission denied\\n' >&2; return 0; }\n" +
+      noLogs
+  )
+  assert.match(permissionUnavailable.stdout, /权限不足或日志不可用/)
 })
 
 test('Docker diagnostics succeed without Docker and cap lists inspect calls and storage output', async () => {
@@ -1115,4 +1178,47 @@ test('Docker diagnostics succeed without Docker and cap lists inspect calls and 
   assert.equal(outputLineCount(result.stdout, '__DOCKER_DF__'), 50)
   assert.match(result.stdout, /__DOCKER_INSPECT__container-20/)
   assert.doesNotMatch(result.stdout, /__DOCKER_INSPECT__container-21/)
+})
+
+test('Docker diagnostics report inspect failures and continue through storage output', async () => {
+  const { getServerMaintenanceQuickCommands } = await import(registryUrl)
+  const command = getServerMaintenanceQuickCommands()
+    .find(item => item.id === 'builtin-server-docker-health-storage')
+    .commands[0].command
+  const failedContainerId = 'container-fail-' + 'x'.repeat(80)
+  const dockerPrelude = [
+    'docker () {',
+    '  if [ "$1" = "ps" ]; then',
+    '    if [ "$4" = "{{.ID}}" ]; then',
+    "      printf 'container-good\\n" + failedContainerId + "\\ncontainer-after\\n'",
+    '    else',
+    "      printf '__DOCKER_LIST_AFTER_FAILURE_TEST__\\n'",
+    '    fi',
+    '    return 0',
+    '  fi',
+    '  if [ "$1" = "inspect" ]; then',
+    '    for last_arg in "$@"; do :; done',
+    '    if [ "$last_arg" = "' + failedContainerId + '" ]; then',
+    "      printf 'permission denied\\n' >&2",
+    '      return 13',
+    '    fi',
+    "    printf '__DOCKER_INSPECT_OK__%s\\n' \"$last_arg\"",
+    '    return 0',
+    '  fi',
+    '  if [ "$1" = "system" ] && [ "$2" = "df" ]; then',
+    "    printf '__DOCKER_DF_AFTER_INSPECT_FAILURE__\\n'",
+    '    return 0',
+    '  fi',
+    '  return 7',
+    '}'
+  ].join('\n')
+  const result = runPosixShell(dockerPrelude + '\n' + command)
+
+  assert.match(result.stdout, /__DOCKER_INSPECT_OK__container-good/)
+  assert.match(result.stdout, /__DOCKER_INSPECT_OK__container-after/)
+  assert.match(result.stdout, /部分容器详情读取失败\/权限或容器已变化/)
+  assert.match(result.stdout, /失败数量=1/)
+  assert.match(result.stdout, new RegExp(failedContainerId.slice(0, 64)))
+  assert.doesNotMatch(result.stdout, new RegExp(failedContainerId))
+  assert.match(result.stdout, /__DOCKER_DF_AFTER_INSPECT_FAILURE__/)
 })

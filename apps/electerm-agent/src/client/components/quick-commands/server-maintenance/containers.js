@@ -71,10 +71,22 @@ export function getContainersCommands () {
           exit
         }
       ' |
-      while IFS= read -r container_id; do
-        [ -n "$container_id" ] || continue
-        docker inspect --format '名称={{.Name}} 健康={{if .State.Health}}{{.State.Health.Status}}{{else}}未配置{{end}} 重启次数={{.RestartCount}}' "$container_id" 2>/dev/null || true
-      done
+      {
+        inspect_failure_count=0
+        while IFS= read -r container_id; do
+          [ -n "$container_id" ] || continue
+          if docker inspect --format '名称={{.Name}} 健康={{if .State.Health}}{{.State.Health.Status}}{{else}}未配置{{end}} 重启次数={{.RestartCount}}' "$container_id" 2>/dev/null; then
+            true
+          else
+            inspect_failure_count=$((inspect_failure_count + 1))
+            safe_container_id="$(printf '%.64s' "$container_id" | tr -c '[:alnum:]_.:-' '?')"
+            printf '容器详情读取失败：%s（权限或容器已变化）。\\n' "$safe_container_id"
+          fi
+        done
+        if [ "$inspect_failure_count" -gt 0 ]; then
+          printf '部分容器详情读取失败/权限或容器已变化：失败数量=%s。\\n' "$inspect_failure_count"
+        fi
+      }
 
     printf '===== Docker 存储占用 =====\\n'
     run_bounded_docker_output 50 docker system df || printf '无法读取 Docker 存储统计。\\n'
