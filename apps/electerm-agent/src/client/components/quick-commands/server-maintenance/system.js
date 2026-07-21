@@ -1,5 +1,6 @@
 import { READ_ONLY, NEED_EDIT, step, defineCommand, inputParam, numberParam, selectParam } from './shared/definition.js'
 import { withRollback } from './shared/safety-metadata.js'
+import { rollbackScriptFilenameMaxLength } from './shared/validation.js'
 
 const HOSTNAME_CHANGE_COMMAND = `set -u
 NEW_HOSTNAME="{{\u65b0\u4e3b\u673a\u540d}}"
@@ -51,6 +52,8 @@ case "$ROLLBACK_SCRIPT" in "$ROLLBACK_DIR"/*) ;; *) echo "\u56de\u6eda\u811a\u67
 [ "$(dirname -- "$ROLLBACK_SCRIPT")" = "$ROLLBACK_DIR" ] || { echo "\u56de\u6eda\u811a\u672c\u8def\u5f84\u5fc5\u987b\u4f4d\u4e8e\u53d7\u63a7\u76ee\u5f55"; exit 1; }
 ROLLBACK_NAME="$(basename -- "$ROLLBACK_SCRIPT")"
 case "$ROLLBACK_NAME" in ""|*..*|*[!A-Za-z0-9._-]*) echo "\u56de\u6eda\u811a\u672c\u6587\u4ef6\u540d\u4e0d\u5b89\u5168"; exit 1 ;; esac
+[ "\${#ROLLBACK_NAME}" -le ${rollbackScriptFilenameMaxLength} ] ||
+  { echo "\u56de\u6eda\u811a\u672c\u6587\u4ef6\u540d\u8fc7\u957f\uff0c\u65e0\u6cd5\u5b89\u5168\u521b\u5efa\u6062\u590d\u8d44\u4ea7"; exit 1; }
 [ ! -L "$ROLLBACK_DIR" ] || { echo "\u56de\u6eda\u76ee\u5f55\u4e0d\u80fd\u662f\u7b26\u53f7\u94fe\u63a5"; exit 1; }
 if [ -L "$ROLLBACK_SCRIPT" ]; then echo "\u56de\u6eda\u811a\u672c\u4e0d\u80fd\u662f\u7b26\u53f7\u94fe\u63a5"; exit 1; fi
 [ ! -e "$ROLLBACK_SCRIPT" ] || { echo "\u56de\u6eda\u811a\u672c\u8def\u5f84\u5df2\u5b58\u5728\uff0c\u62d2\u7edd\u8986\u76d6"; exit 1; }

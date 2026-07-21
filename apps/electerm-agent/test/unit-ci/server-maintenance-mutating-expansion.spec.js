@@ -705,6 +705,47 @@ test('Task 6 validation rejects unsafe host IP timezone action and rollback valu
   assert.deepEqual(validUtc.errors, {})
 })
 
+test('hostname shell preflight reserves room for its longest recovery suffix', async t => {
+  const runtime = await loadConfirmedTask6Runtime()
+  const testCase = confirmedCommandCases
+    .find(testCase => testCase.state === 'hostname')
+  const item = runtime.byId.get(testCase.id)
+  const maxRollbackBasename = 255 - '.running.lock'.length
+  const prefix = '/tmp/shellpilot-rollback/'
+  const acceptedFilename =
+    'r'.repeat(maxRollbackBasename - '.sh'.length) + '.sh'
+  const rejectedFilename =
+    'r'.repeat(maxRollbackBasename - '.sh'.length + 1) + '.sh'
+
+  for (const [name, filename, expectedStatus] of [
+    ['exact boundary', acceptedFilename, 0],
+    ['one character over', rejectedFilename, 1]
+  ]) {
+    await t.test(name, child => {
+      const sandbox = createShellSandbox(child)
+      const context = { rollbackPath: prefix + filename }
+      const values = {
+        ...runtime.buildQuickCommandParamValues(item, context),
+        ...testCase.values,
+        确认执行: 'no'
+      }
+      const command = rewriteSandboxPaths(
+        runtime.buildQuickCommandText(item, context, values),
+        sandbox
+      )
+      const result = runPosixShell([
+        buildShellPrelude(sandbox),
+        command
+      ].join('\n'), undefined)
+
+      assert.equal(result.status, expectedStatus, result.stderr || result.stdout)
+      assertOriginalTask6State(sandbox)
+      assert.equal(fs.existsSync(sandbox.mutationLog), false)
+      assert.equal(fs.existsSync(sandbox.rollbackDirectory), false)
+    })
+  }
+})
+
 test('Task 6 command workflows read state and preflight before creating rollback artifacts', async () => {
   const { getServerMaintenanceQuickCommands } = await import(registryUrl)
   const byId = new Map(

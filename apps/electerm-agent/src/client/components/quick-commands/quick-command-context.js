@@ -1,5 +1,7 @@
 import {
   isServerMaintenanceQuickCommand,
+  rollbackScriptDirectory,
+  rollbackScriptFilenameMaxLength,
   validateAndNormalizeQuickCommandParams as validateAndNormalizeMaintenanceParams,
   validateQuickCommandParams as validateMaintenanceQuickCommandParams
 } from './server-maintenance/shared/validation.js'
@@ -38,6 +40,33 @@ function safePathPart (value) {
     .replace(/[^a-zA-Z0-9.-]+/g, '-')
     .replace(/\./g, '-')
     .replace(/^-+|-+$/g, '') || 'server'
+}
+
+function stablePathDigest (value) {
+  let hash = 0x811c9dc5
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index)
+    hash = Math.imul(hash, 0x01000193)
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0')
+}
+
+function boundRollbackFilename (filename) {
+  if (filename.length <= rollbackScriptFilenameMaxLength) return filename
+  const timestampSuffix = filename.match(/-[0-9]+\.sh$/)?.[0] || '.sh'
+  const stem = filename.slice(0, -timestampSuffix.length)
+  const digest = stablePathDigest(filename)
+  const visibleLength = rollbackScriptFilenameMaxLength -
+    timestampSuffix.length - digest.length - 1
+  return `${stem.slice(0, visibleLength)}-${digest}${timestampSuffix}`
+}
+
+function boundRollbackPath (rollbackPath) {
+  const prefix = `${rollbackScriptDirectory}/`
+  if (!rollbackPath.startsWith(prefix)) return rollbackPath
+  const filename = rollbackPath.slice(prefix.length)
+  if (filename.includes('/')) return rollbackPath
+  return prefix + boundRollbackFilename(filename)
 }
 
 function replaceQuickCommandPlaceholders (text = '', replacements = {}) {
@@ -120,7 +149,9 @@ export function buildQuickCommandContext (tab = {}) {
   const safeHost = safePathPart(host || title)
   const timestamp = new Date().toISOString().replace(/\D/g, '').slice(0, 14)
   const capturePath = `/tmp/shellpilot-capture-${safeHost}-${timestamp}.pcap`
-  const rollbackPath = `/tmp/shellpilot-rollback/network-${safeHost}-${Date.now()}.sh`
+  const rollbackPath = boundRollbackPath(
+    `${rollbackScriptDirectory}/network-${safeHost}-${Date.now()}.sh`
+  )
   const defaultDomain = host && !isIpLike(host) ? host : 'example.com'
   const packetFilter = 'tcp'
 
@@ -158,10 +189,10 @@ export function buildQuickCommandRollbackContext (item = {}, context = {}) {
     String(item.id || 'change').replace(/^builtin-server-/, '')
   )
   const currentPath = context.rollbackPath || '/tmp/shellpilot-rollback/change-server.sh'
-  const rollbackPath = currentPath.replace(
+  const rollbackPath = boundRollbackPath(currentPath.replace(
     /\/network-([^/]+)\.sh$/,
     `/${commandPart}-$1.sh`
-  )
+  ))
   return {
     ...context,
     rollbackPath

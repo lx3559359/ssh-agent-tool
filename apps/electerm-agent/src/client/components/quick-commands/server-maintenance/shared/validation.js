@@ -23,6 +23,10 @@ const typeLabels = {
 
 const maintenanceCommandPrefix = 'builtin-server-'
 export const rollbackScriptDirectory = '/tmp/shellpilot-rollback'
+const linuxFilenameMaxLength = 255
+const longestRollbackDerivedSuffix = '.running.lock'
+export const rollbackScriptFilenameMaxLength =
+  linuxFilenameMaxLength - longestRollbackDerivedSuffix.length
 const unresolvedTemplatePattern = /\{\{[^{}]*\}\}/
 
 const cronMacros = new Set([
@@ -243,7 +247,8 @@ function isRollbackScriptPath (value) {
   if (!value.startsWith(prefix)) return false
   const filename = value.slice(prefix.length)
   return /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(filename) &&
-    !filename.includes('..')
+    !filename.includes('..') &&
+    filename.length <= rollbackScriptFilenameMaxLength
 }
 
 function validateNumber (value, options, label) {
@@ -289,7 +294,7 @@ function validateNormalizedValue (normalizedType, value, options, label) {
   if (normalizedType === 'rollback-path') {
     return isRollbackScriptPath(value)
       ? ''
-      : `${label}必须位于 /tmp/shellpilot-rollback 且使用安全的直接子文件名`
+      : `${label}必须位于 /tmp/shellpilot-rollback，使用安全且长度受限的直接子文件名`
   }
   if (normalizedType === 'cron') {
     return isCronExpression(value) ? '' : `${label}格式不正确`

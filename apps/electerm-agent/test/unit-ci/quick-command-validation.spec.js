@@ -90,6 +90,106 @@ test('quick command validators reject invalid formats and command injection', as
   }
 })
 
+test('rollback path validation reserves NAME_MAX for every derived asset', async () => {
+  const { validateValue } = await import(validationUrl)
+  const maxRollbackBasename = 255 - '.running.lock'.length
+  const acceptedFilename =
+    'r'.repeat(maxRollbackBasename - '.sh'.length) + '.sh'
+  const rejectedFilename =
+    'r'.repeat(maxRollbackBasename - '.sh'.length + 1) + '.sh'
+  const prefix = '/tmp/shellpilot-rollback/'
+  const derivedBasenames = [
+    acceptedFilename,
+    acceptedFilename.slice(0, -3) + '.verify.sh',
+    acceptedFilename + '.running',
+    acceptedFilename + '.running.lock',
+    acceptedFilename + '.consumed'
+  ]
+
+  assert.equal(validateValue('rollback-path', prefix + acceptedFilename), '')
+  assert.notEqual(validateValue('rollback-path', prefix + rejectedFilename), '')
+  assert.equal(Math.max(...derivedBasenames.map(name => name.length)), 255)
+  assert.equal(derivedBasenames.every(name => name.length <= 255), true)
+})
+
+test('ordinary default rollback paths remain compatible', async () => {
+  const {
+    buildQuickCommandContext,
+    buildQuickCommandRollbackContext
+  } = await import(contextUrl)
+  const originalNow = Date.now
+  Date.now = () => 1700000000000
+  try {
+    const context = buildQuickCommandContext({ host: 'server.example.com' })
+    assert.equal(
+      context.rollbackPath,
+      '/tmp/shellpilot-rollback/network-server-example-com-1700000000000.sh'
+    )
+    assert.equal(
+      buildQuickCommandRollbackContext({
+        id: 'builtin-server-hostname-change',
+        mutatesServer: true
+      }, context).rollbackPath,
+      '/tmp/shellpilot-rollback/hostname-change-server-example-com-1700000000000.sh'
+    )
+  } finally {
+    Date.now = originalNow
+  }
+})
+
+test('long legal hosts produce bounded distinct rollback asset names', async () => {
+  const { validateValue } = await import(validationUrl)
+  const {
+    buildQuickCommandContext,
+    buildQuickCommandRollbackContext
+  } = await import(contextUrl)
+  const prefixLabels = [
+    'a'.repeat(63),
+    'b'.repeat(63),
+    'c'.repeat(63)
+  ]
+  const hostA = [...prefixLabels, 'd'.repeat(61)].join('.')
+  const hostB = [...prefixLabels, 'd'.repeat(60) + 'e'].join('.')
+  const originalNow = Date.now
+  Date.now = () => 1700000000000
+  try {
+    const item = {
+      id: 'builtin-server-hostname-change',
+      mutatesServer: true
+    }
+    const contextA = buildQuickCommandContext({ host: hostA })
+    const contextB = buildQuickCommandContext({ host: hostB })
+    const rollbackA = buildQuickCommandRollbackContext(
+      item,
+      contextA
+    ).rollbackPath
+    const rollbackB = buildQuickCommandRollbackContext(
+      item,
+      contextB
+    ).rollbackPath
+    const rollbackBasename = path.posix.basename(rollbackA)
+    const assetBasenames = [
+      rollbackBasename,
+      rollbackBasename.slice(0, -3) + '.verify.sh',
+      rollbackBasename + '.running',
+      rollbackBasename + '.running.lock',
+      rollbackBasename + '.consumed'
+    ]
+
+    assert.equal(hostA.length, 253)
+    assert.equal(validateValue('hostname', hostA), '')
+    assert.equal(path.posix.basename(contextA.rollbackPath).length <= 242, true)
+    assert.equal(validateValue('rollback-path', contextA.rollbackPath), '')
+    assert.equal(validateValue('rollback-path', rollbackA), '')
+    assert.equal(assetBasenames.every(name => name.length <= 255), true)
+    assert.match(rollbackBasename, /-[a-f0-9]{8}-1700000000000\.sh$/)
+    assert.notEqual(contextA.rollbackPath, contextB.rollbackPath)
+    assert.notEqual(rollbackA, rollbackB)
+  } finally {
+    Date.now = originalNow
+  }
+})
+
 test('quick command validators reject boundary controls before trimming spaces', async () => {
   const { validateValue } = await import(validationUrl)
   const unsafePorts = [
