@@ -462,6 +462,19 @@ case "$1" in
   *) exit 2 ;;
 esac
 `,
+    timedatectl: `#!/bin/sh
+case "$1" in
+  show) cat "$TIMEZONE_STATE" ;;
+  list-timezones) printf "UTC\\nAsia/Shanghai\\nEurope/London\\n" ;;
+  set-timezone)
+    [ "$FAIL_RECOVERY" != "yes" ] || exit 1
+    [ "$FAIL_RECOVERY_STEP" != "timezone" ] || exit 1
+    printf "timezone:%s\\n" "$2" >> "$MUTATION_LOG"
+    printf "%s\\n" "$2" > "$TIMEZONE_STATE"
+    ;;
+  *) exit 2 ;;
+esac
+`,
     id: '#!/bin/sh\n[ "$1" = "-u" ] && { printf "0\\n"; exit 0; }\nexec /usr/bin/id "$@"\n',
     stat: `#!/bin/sh
 format=""
@@ -842,9 +855,12 @@ test('Task 6 preview reads current state and leaves the sandbox byte-for-byte un
       assert.deepEqual(after, before)
       assert.equal(fs.existsSync(sandbox.mutationLog), false)
       assert.equal(fs.existsSync(sandbox.rollbackDirectory), false)
-      if (testCase.id === 'builtin-server-hostname-change') {
+      if (testCase.id === 'builtin-server-hostname-change' ||
+          testCase.id === 'builtin-server-timezone-change') {
         assert.equal(fs.existsSync(sandbox.verifierScript), false)
+        assert.equal(fs.existsSync(sandbox.rollbackScript), false)
       }
+      assert.equal(fs.existsSync(sandbox.consumedMarker), false)
     })
   }
 })
@@ -1115,13 +1131,14 @@ function assertOriginalTask6State (sandbox) {
   assert.equal(fs.readFileSync(sandbox.hosts, 'utf8'), originalHostsFixture)
 }
 
-function listHostnameRecoveryAssets (sandbox) {
+function listOneShotRecoveryAssets (sandbox, state) {
   const root = sandbox.rollbackDirectory.replaceAll('/', path.sep)
   if (!fs.existsSync(root)) return []
+  const temporaryPattern = new RegExp(state + '-(?:rollback|verify)\\.')
   return snapshotTree(root)
     .map(entry => entry[0])
     .filter(relative => {
-      return /hostname-(?:rollback|verify)\./.test(relative) ||
+      return temporaryPattern.test(relative) ||
         /task6-test-1700000000000(?:\.verify)?\.sh$/.test(relative)
     })
 }
@@ -1152,7 +1169,7 @@ function runTask6RollbackTwice (sandbox) {
   ].join('\n'))
 }
 
-function runHostnameVerifierReadOnly (sandbox) {
+function runOneShotVerifierReadOnly (sandbox) {
   const root = sandbox.root.replaceAll('/', path.sep)
   const before = snapshotTree(root)
   const result = runPosixShell([
@@ -1167,7 +1184,7 @@ function runHostnameVerifierReadOnly (sandbox) {
 function runHostnameOneShotRecovery (sandbox) {
   const rollback = shellLiteral(sandbox.rollbackScript)
   const verifier = shellLiteral(sandbox.verifierScript)
-  const beforeRollback = runHostnameVerifierReadOnly(sandbox)
+  const beforeRollback = runOneShotVerifierReadOnly(sandbox)
   assert.notEqual(beforeRollback.status, 0)
 
   runPosixShell([
@@ -1182,7 +1199,7 @@ function runHostnameOneShotRecovery (sandbox) {
   ].join('\n'), undefined)
   assert.notEqual(consumed.status, 0)
 
-  assert.equal(runHostnameVerifierReadOnly(sandbox).status, 0)
+  assert.equal(runOneShotVerifierReadOnly(sandbox).status, 0)
 
   fs.writeFileSync(sandbox.hostname, 'OLD-HOST.EXAMPLE.COM\n')
   runPosixShell([
@@ -1217,6 +1234,25 @@ function runHostnameOneShotRecovery (sandbox) {
     ].join('\n'), undefined)
     assert.notEqual(metadataMismatch.status, 0, variable)
   }
+}
+
+function runTimezoneOneShotRecovery (sandbox) {
+  const rollback = shellLiteral(sandbox.rollbackScript)
+  assert.notEqual(runOneShotVerifierReadOnly(sandbox).status, 0)
+
+  runPosixShell([
+    buildConfirmedShellPrelude(sandbox),
+    'sh -- ' + rollback
+  ].join('\n'))
+  assert.equal(fs.existsSync(sandbox.consumedMarker), true)
+
+  const consumed = runPosixShell([
+    buildConfirmedShellPrelude(sandbox),
+    'sh -- ' + rollback
+  ].join('\n'), undefined)
+  assert.notEqual(consumed.status, 0)
+
+  assert.equal(runOneShotVerifierReadOnly(sandbox).status, 0)
 }
 
 test('hosts update and delete preserve aliases and comments while deduplicating the target', async t => {
@@ -1772,8 +1808,23 @@ test('confirmed Task 6 commands create usable recovery assets before mutation', 
         assert.match(verifierText, /stat -c %u/)
         assert.match(verifierText, /stat -c %g/)
         runHostnameOneShotRecovery(sandbox)
+      } else if (testCase.state === 'timezone') {
+        assert.equal(fs.existsSync(sandbox.verifierScript), true)
+        assert.equal(fs.lstatSync(sandbox.rollbackScript).isSymbolicLink(), false)
+        assert.equal(fs.lstatSync(sandbox.verifierScript).isSymbolicLink(), false)
+        assert.match(command, /chmod 700 "\$TMP_ROLLBACK" "\$TMP_VERIFIER"/)
+
+        const rollbackText = fs.readFileSync(sandbox.rollbackScript, 'utf8')
+        const verifierText = fs.readFileSync(sandbox.verifierScript, 'utf8')
+        assert.match(verifierText, /^#!\/bin\/sh/)
+        assert.match(rollbackText, /timedatectl set-timezone "\$OLD_TIMEZONE"/)
+        assert.doesNotMatch(
+          verifierText,
+          /set-timezone|\binstall\b|\bcp\b|\bmv\b|\brm\b|\bmkdir\b|\brmdir\b|\bchmod\b|\bchown\b/
+        )
+        assert.match(verifierText, /timedatectl show/)
+        runTimezoneOneShotRecovery(sandbox)
       } else {
-        assert.equal(fs.existsSync(sandbox.verifierScript), false)
         runTask6RollbackTwice(sandbox)
       }
       assertOriginalTask6State(sandbox)
@@ -1818,9 +1869,10 @@ test('rollback script creation failures stop every Task 6 command before mutatio
       assertOriginalTask6State(sandbox)
       assert.equal(fs.existsSync(sandbox.mutationLog), false)
       assert.equal(fs.existsSync(sandbox.rollbackScript), false)
-      if (testCase.state === 'hostname') {
+      if (testCase.state === 'hostname' ||
+          testCase.state === 'timezone') {
         assert.equal(fs.existsSync(sandbox.verifierScript), false)
-        assert.deepEqual(listHostnameRecoveryAssets(sandbox), [])
+        assert.deepEqual(listOneShotRecoveryAssets(sandbox, testCase.state), [])
       }
     })
   }
@@ -1841,7 +1893,54 @@ test('hostname verifier creation failures remove every recovery asset before mut
   assert.equal(fs.existsSync(sandbox.mutationLog), false)
   assert.equal(fs.existsSync(sandbox.rollbackScript), false)
   assert.equal(fs.existsSync(sandbox.verifierScript), false)
-  assert.deepEqual(listHostnameRecoveryAssets(sandbox), [])
+  assert.deepEqual(listOneShotRecoveryAssets(sandbox, 'hostname'), [])
+})
+
+test('timezone verifier creation failure removes the recovery pair before mutation', async t => {
+  const runtime = await loadConfirmedTask6Runtime()
+  const testCase = confirmedCommandCases.find(testCase => testCase.state === 'timezone')
+  const sandbox = createShellSandbox(t)
+  const command = renderConfirmedTask6Command(runtime, testCase, sandbox)
+  const result = runPosixShell([
+    buildConfirmedShellPrelude(sandbox, { failVerifier: true }),
+    command
+  ].join('\n'), undefined)
+
+  assert.notEqual(result.status, 0)
+  assertOriginalTask6State(sandbox)
+  assert.equal(fs.existsSync(sandbox.mutationLog), false)
+  assert.equal(fs.existsSync(sandbox.rollbackScript), false)
+  assert.equal(fs.existsSync(sandbox.verifierScript), false)
+  assert.deepEqual(listOneShotRecoveryAssets(sandbox, 'timezone'), [])
+})
+
+test('timezone rollback remains retryable after restore failure', async t => {
+  const runtime = await loadConfirmedTask6Runtime()
+  const testCase = confirmedCommandCases.find(testCase => testCase.state === 'timezone')
+  const sandbox = createShellSandbox(t)
+  runPosixShell([
+    buildConfirmedShellPrelude(sandbox),
+    renderConfirmedTask6Command(runtime, testCase, sandbox)
+  ].join('\n'))
+
+  const rollback = shellLiteral(sandbox.rollbackScript)
+  const failed = runPosixShell([
+    buildConfirmedShellPrelude(sandbox, { failRecovery: true }),
+    'sh -- ' + rollback
+  ].join('\n'), undefined)
+  assert.notEqual(failed.status, 0)
+  assert.equal(
+    fs.readFileSync(sandbox.timezone, 'utf8'),
+    testCase.values['\u65b0\u65f6\u533a'] + '\n'
+  )
+  assert.equal(fs.existsSync(sandbox.consumedMarker), false)
+
+  runPosixShell([
+    buildConfirmedShellPrelude(sandbox),
+    'sh -- ' + rollback
+  ].join('\n'))
+  assertOriginalTask6State(sandbox)
+  assert.equal(fs.existsSync(sandbox.consumedMarker), true)
 })
 
 test('hostname asset cleanup preserves files owned by a concurrent publisher', async t => {
@@ -2167,6 +2266,8 @@ test('verification failures retain a usable rollback path for every Task 6 comma
 
       if (testCase.state === 'hostname') {
         runHostnameOneShotRecovery(sandbox)
+      } else if (testCase.state === 'timezone') {
+        runTimezoneOneShotRecovery(sandbox)
       } else {
         runTask6RollbackTwice(sandbox)
       }
