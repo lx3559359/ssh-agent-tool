@@ -125,19 +125,36 @@ if [ "$SYNC_HOSTS" = "yes" ]; then
   HOSTS_TMP="$(mktemp "$OPERATION_ROLLBACK_DIR/hosts.XXXXXX")" || { echo "\u65e0\u6cd5\u521b\u5efa hosts \u4e34\u65f6\u6587\u4ef6\uff1b\u56de\u6eda: $ROLLBACK_SCRIPT"; exit 1; }
   if ! awk -v oldHost="$OLD_HOSTNAME" -v newHost="$NEW_HOSTNAME" '
     BEGIN { changed = 0 }
-    /^[[:space:]]*#/ || NF < 2 { print; next }
+    /^[[:space:]]*#/ || NF == 0 { print; next }
     {
-      dataEnd = NF
-      for (field = 2; field <= NF; field++) {
-        if ($field ~ /^#/) { dataEnd = field - 1; break }
+      original = $0
+      content = original
+      comment = ""
+      hashIndex = index(original, "#")
+      if (hashIndex > 0) {
+        content = substr(original, 1, hashIndex - 1)
+        match(content, /[[:space:]]*$/)
+        comment = substr(content, RSTART, RLENGTH) substr(original, hashIndex)
+        content = substr(content, 1, RSTART - 1)
       }
-      for (field = 2; field <= dataEnd; field++) {
+      $0 = content
+      if (NF < 2) { print original; next }
+
+      lineChanged = 0
+      for (field = 2; field <= NF; field++) {
         if ($field == oldHost) {
           $field = newHost
           changed = 1
+          lineChanged = 1
         }
       }
-      print
+      if (lineChanged) {
+        output = $1
+        for (field = 2; field <= NF; field++) output = output OFS $field
+        print output comment
+      } else {
+        print original
+      }
     }
     END {
       if (!changed) print "127.0.1.1\\t" newHost
@@ -156,11 +173,14 @@ if [ "$FINAL_HOSTNAME" != "$NEW_HOSTNAME" ]; then
   exit 1
 fi
 if [ "$SYNC_HOSTS" = "yes" ] && ! awk -v host="$NEW_HOSTNAME" '
-  /^[[:space:]]*#/ || NF < 2 { next }
+  /^[[:space:]]*#/ { next }
   {
-    dataEnd = NF
-    for (field = 2; field <= NF; field++) if ($field ~ /^#/) { dataEnd = field - 1; break }
-    for (field = 2; field <= dataEnd; field++) if ($field == host) found = 1
+    effective = $0
+    hashIndex = index(effective, "#")
+    if (hashIndex > 0) effective = substr(effective, 1, hashIndex - 1)
+    $0 = effective
+    if (NF < 2) next
+    for (field = 2; field <= NF; field++) if ($field == host) found = 1
   }
   END { exit !found }
 ' "$HOSTS_FILE"; then

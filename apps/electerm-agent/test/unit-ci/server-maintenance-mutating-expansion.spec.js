@@ -766,6 +766,7 @@ function buildConfirmedShellPrelude (sandbox, options = {}) {
     'VERIFY_FAILURE=' + shellLiteral(verifyFailure),
     'EXPECTED_IP=' + shellLiteral(expectedIp),
     'EXPECTED_HOST=' + shellLiteral(expectedHost),
+    'COMMENT_ONLY_HOSTS_AFTER_INSTALL=' + shellLiteral(options.commentOnlyHostsAfterInstall ? 'yes' : 'no'),
     'stat () {',
     '  format=""',
     '  if [ "$1" = "-c" ]; then format="$2"; shift 2; fi',
@@ -816,6 +817,9 @@ function buildConfirmedShellPrelude (sandbox, options = {}) {
     '  command cp -- "$1" "$2" || return 1',
     '  if [ "$2" = "$HOSTS_FIXTURE" ]; then',
     '    printf "hosts:%s\\n" "$2" >> "$MUTATION_LOG"',
+    '    if [ "$COMMENT_ONLY_HOSTS_AFTER_INSTALL" = "yes" ]; then',
+    '      printf "127.0.0.1 localhost# %s\\n" "$EXPECTED_HOST" > "$2"',
+    '    fi',
     '    if [ "$VERIFY_FAILURE" = "hosts" ]; then',
     '      printf "%s %s\\n" "$EXPECTED_IP" "$EXPECTED_HOST" >> "$2"',
     '    fi',
@@ -887,6 +891,94 @@ function runTask6RollbackTwice (sandbox) {
 
 test('hosts update and delete preserve aliases and comments while deduplicating the target', async t => {
   const runtime = await loadConfirmedTask6Runtime()
+
+  await t.test('update rejects a target that exists only after a glued hash boundary', child => {
+    const sandbox = createShellSandbox(child)
+    const originalHosts = [
+      '127.0.0.1 localhost',
+      '192.0.2.10 alias# target.example.com',
+      ''
+    ].join('\n')
+    fs.writeFileSync(sandbox.hosts, originalHosts)
+    const command = renderConfirmedTask6Command(runtime, {
+      id: 'builtin-server-hosts-manage',
+      values: {
+        IP地址: '203.0.113.9',
+        主机名: 'target.example.com',
+        动作: 'update'
+      }
+    }, sandbox)
+
+    const result = runPosixShell([
+      buildConfirmedShellPrelude(sandbox, {
+        expectedIp: '203.0.113.9',
+        expectedHost: 'target.example.com'
+      }),
+      command
+    ].join('\n'), undefined)
+
+    assert.notEqual(result.status, 0)
+    assert.equal(fs.readFileSync(sandbox.hosts, 'utf8'), originalHosts)
+  })
+
+  await t.test('update preserves a glued comment after moving the exact target token', child => {
+    const sandbox = createShellSandbox(child)
+    fs.writeFileSync(sandbox.hosts, [
+      '127.0.0.1 localhost',
+      '192.0.2.10 target.example.com alias# target.example.com keep-comment',
+      ''
+    ].join('\n'))
+    const command = renderConfirmedTask6Command(runtime, {
+      id: 'builtin-server-hosts-manage',
+      values: {
+        IP地址: '203.0.113.9',
+        主机名: 'target.example.com',
+        动作: 'update'
+      }
+    }, sandbox)
+
+    runPosixShell([
+      buildConfirmedShellPrelude(sandbox, {
+        expectedIp: '203.0.113.9',
+        expectedHost: 'target.example.com'
+      }),
+      command
+    ].join('\n'))
+
+    const hosts = fs.readFileSync(sandbox.hosts, 'utf8')
+    assert.match(hosts, /^192\.0\.2\.10 alias# target\.example\.com keep-comment$/m)
+    assert.match(hosts, /^203\.0\.113\.9 target\.example\.com$/m)
+  })
+
+  await t.test('delete preserves a glued comment after removing the exact target token', child => {
+    const sandbox = createShellSandbox(child)
+    fs.writeFileSync(sandbox.hosts, [
+      '127.0.0.1 localhost',
+      '192.0.2.10 target.example.com alias# target.example.com keep-comment',
+      ''
+    ].join('\n'))
+    const command = renderConfirmedTask6Command(runtime, {
+      id: 'builtin-server-hosts-manage',
+      values: {
+        IP地址: '192.0.2.10',
+        主机名: 'target.example.com',
+        动作: 'delete'
+      }
+    }, sandbox)
+
+    runPosixShell([
+      buildConfirmedShellPrelude(sandbox, {
+        expectedIp: '192.0.2.10',
+        expectedHost: 'target.example.com'
+      }),
+      command
+    ].join('\n'))
+
+    assert.match(
+      fs.readFileSync(sandbox.hosts, 'utf8'),
+      /^192\.0\.2\.10 alias# target\.example\.com keep-comment$/m
+    )
+  })
 
   await t.test('update moves only the target hostname to the new IP', child => {
     const sandbox = createShellSandbox(child)
@@ -989,6 +1081,66 @@ test('hostname hosts synchronization ignores old hostname tokens in comments', a
     hosts.split('\n').filter(line => /^[^#]*\bnew-host\.example\.com\b/.test(line)).length,
     1
   )
+})
+
+test('hostname synchronization and verification ignore tokens after a glued hash boundary', async t => {
+  const runtime = await loadConfirmedTask6Runtime()
+  const sandbox = createShellSandbox(t)
+  fs.writeFileSync(sandbox.hosts, [
+    '127.0.0.1 localhost# old-host.example.com',
+    ''
+  ].join('\n'))
+  const command = renderConfirmedTask6Command(runtime, {
+    id: 'builtin-server-hostname-change',
+    values: {
+      新主机名: 'new-host.example.com',
+      同步Hosts: 'yes'
+    }
+  }, sandbox)
+
+  runPosixShell([
+    buildConfirmedShellPrelude(sandbox, {
+      expectedHost: 'new-host.example.com'
+    }),
+    command
+  ].join('\n'))
+
+  const hosts = fs.readFileSync(sandbox.hosts, 'utf8')
+  const effectiveLines = hosts.split('\n').map(line => line.split('#', 1)[0])
+  assert.match(hosts, /^127\.0\.0\.1 localhost# old-host\.example\.com$/m)
+  assert.match(hosts, /^127\.0\.1\.1[ \t]+new-host\.example\.com$/m)
+  assert.equal(
+    effectiveLines.filter(line => /\bnew-host\.example\.com\b/.test(line)).length,
+    1
+  )
+})
+
+test('hostname post-verification rejects a new hostname found only in a glued comment', async t => {
+  const runtime = await loadConfirmedTask6Runtime()
+  const sandbox = createShellSandbox(t)
+  const command = renderConfirmedTask6Command(runtime, {
+    id: 'builtin-server-hostname-change',
+    values: {
+      新主机名: 'new-host.example.com',
+      同步Hosts: 'yes'
+    }
+  }, sandbox)
+
+  const result = runPosixShell([
+    buildConfirmedShellPrelude(sandbox, {
+      expectedHost: 'new-host.example.com',
+      commentOnlyHostsAfterInstall: true
+    }),
+    command
+  ].join('\n'), undefined)
+
+  assert.notEqual(result.status, 0)
+  assert.equal(
+    fs.readFileSync(sandbox.hosts, 'utf8'),
+    '127.0.0.1 localhost# new-host.example.com\n'
+  )
+  assert.equal(fs.existsSync(sandbox.rollbackScript), true)
+  assert.ok(result.stdout.includes(sandbox.rollbackScript))
 })
 
 test('confirmed Task 6 commands mutate only after rollback artifacts exist and rollback idempotently', async t => {
