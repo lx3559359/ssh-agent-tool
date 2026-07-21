@@ -7,6 +7,10 @@ SYNC_HOSTS="{{\u540c\u6b65Hosts}}"
 APPLY_CHANGE="{{\u786e\u8ba4\u6267\u884c}}"
 ROLLBACK_DIR="/tmp/shellpilot-rollback"
 ROLLBACK_SCRIPT="{{\u56de\u6eda\u811a\u672c}}"
+case "$ROLLBACK_SCRIPT" in
+  *.sh) VERIFY_SCRIPT="\${ROLLBACK_SCRIPT%.sh}.verify.sh" ;;
+  *) echo "\u56de\u6eda\u811a\u672c\u5fc5\u987b\u4ee5 .sh \u7ed3\u5c3e"; exit 1 ;;
+esac
 HOSTS_FILE="/etc/hosts"
 
 OLD_HOSTNAME="$(hostnamectl --static 2>/dev/null)" || { echo "\u65e0\u6cd5\u8bfb\u53d6\u5f53\u524d\u4e3b\u673a\u540d"; exit 1; }
@@ -28,7 +32,7 @@ if ! awk -v host="$NEW_HOSTNAME" 'BEGIN {
   }
 }' </dev/null; then echo "\u65b0\u4e3b\u673a\u540d\u683c\u5f0f\u4e0d\u6b63\u786e"; exit 1; fi
 case "$SYNC_HOSTS" in yes|no) ;; *) echo "\u540c\u6b65 Hosts \u9009\u9879\u65e0\u6548"; exit 1 ;; esac
-for TOOL in hostnamectl awk df stat mktemp chmod ln rm cat install cp dirname basename id; do
+for TOOL in hostnamectl awk cmp df stat mktemp chmod chown ln rm mkdir rmdir cat install cp dirname basename id; do
   command -v "$TOOL" >/dev/null 2>&1 || { echo "\u7f3a\u5c11\u5fc5\u8981\u5de5\u5177: $TOOL"; exit 1; }
 done
 FREE_KB="$(df -Pk /tmp 2>/dev/null | awk 'NR == 2 { print $4 }')"
@@ -47,6 +51,8 @@ case "$ROLLBACK_NAME" in ""|*..*|*[!A-Za-z0-9._-]*) echo "\u56de\u6eda\u811a\u67
 [ ! -L "$ROLLBACK_DIR" ] || { echo "\u56de\u6eda\u76ee\u5f55\u4e0d\u80fd\u662f\u7b26\u53f7\u94fe\u63a5"; exit 1; }
 if [ -L "$ROLLBACK_SCRIPT" ]; then echo "\u56de\u6eda\u811a\u672c\u4e0d\u80fd\u662f\u7b26\u53f7\u94fe\u63a5"; exit 1; fi
 [ ! -e "$ROLLBACK_SCRIPT" ] || { echo "\u56de\u6eda\u811a\u672c\u8def\u5f84\u5df2\u5b58\u5728\uff0c\u62d2\u7edd\u8986\u76d6"; exit 1; }
+if [ -L "$VERIFY_SCRIPT" ]; then echo "\u56de\u6eda\u9a8c\u8bc1\u811a\u672c\u4e0d\u80fd\u662f\u7b26\u53f7\u94fe\u63a5"; exit 1; fi
+[ ! -e "$VERIFY_SCRIPT" ] || { echo "\u56de\u6eda\u9a8c\u8bc1\u811a\u672c\u8def\u5f84\u5df2\u5b58\u5728\uff0c\u62d2\u7edd\u8986\u76d6"; exit 1; }
 if [ "$SYNC_HOSTS" = "yes" ] && [ -L "$HOSTS_FILE" ]; then echo "hosts \u4e0d\u80fd\u662f\u7b26\u53f7\u94fe\u63a5"; exit 1; fi
 
 printf '\u5c06\u4fee\u6539\u4e3b\u673a\u540d\u4e3a: %s\uff1b\u540c\u6b65 hosts: %s\\n' "$NEW_HOSTNAME" "$SYNC_HOSTS"
@@ -55,6 +61,7 @@ if [ "$APPLY_CHANGE" != "yes" ]; then
   echo "\u5f53\u524d\u4e3a\u9884\u6f14\u6a21\u5f0f\uff0c\u672a\u521b\u5efa\u6587\u4ef6\uff0c\u4e5f\u672a\u6267\u884c\u4efb\u4f55\u4fee\u6539\u3002"
   exit 0
 fi
+printf '\u8ba1\u5212\u56de\u6eda\u9a8c\u8bc1\u811a\u672c: %s\\n' "$VERIFY_SCRIPT"
 
 if [ "$CURRENT_UID" != "0" ]; then
   sudo -v || { echo "sudo \u6388\u6743\u5931\u8d25\uff0c\u672a\u6267\u884c\u4fee\u6539"; exit 1; }
@@ -72,12 +79,68 @@ chmod 600 "$STATE_FILE" || { echo "\u65e0\u6cd5\u4fdd\u62a4\u4e3b\u673a\u540d\u7
 if [ "$SYNC_HOSTS" = "yes" ]; then
   [ -e "$HOSTS_BACKUP" ] && [ ! -L "$HOSTS_BACKUP" ] || { echo "hosts \u5907\u4efd\u4e0d\u53ef\u7528"; exit 1; }
 fi
+TMP_ROLLBACK=""
+TMP_VERIFIER=""
+RECOVERY_ASSETS_READY=no
+cleanup_recovery_assets () {
+  if [ "$RECOVERY_ASSETS_READY" != "yes" ]; then
+    for RECOVERY_ASSET in "$TMP_ROLLBACK" "$TMP_VERIFIER" "$ROLLBACK_SCRIPT" "$VERIFY_SCRIPT"; do
+      [ -z "$RECOVERY_ASSET" ] || rm -f -- "$RECOVERY_ASSET" 2>/dev/null || true
+    done
+  fi
+}
+trap cleanup_recovery_assets EXIT
+trap 'exit 1' HUP INT TERM
 TMP_ROLLBACK="$(mktemp "$OPERATION_ROLLBACK_DIR/hostname-rollback.XXXXXX")" || { echo "\u65e0\u6cd5\u521b\u5efa\u56de\u6eda\u811a\u672c\u4e34\u65f6\u6587\u4ef6"; exit 1; }
+TMP_VERIFIER="$(mktemp "$OPERATION_ROLLBACK_DIR/hostname-verify.XXXXXX")" || { echo "\u65e0\u6cd5\u521b\u5efa\u56de\u6eda\u9a8c\u8bc1\u811a\u672c\u4e34\u65f6\u6587\u4ef6"; exit 1; }
 if ! {
   printf '%s\\n' '#!/bin/sh' 'set -eu'
   printf "STATE_FILE='%s'\\n" "$STATE_FILE"
   printf "HOSTS_BACKUP='%s'\\n" "$HOSTS_BACKUP"
+  printf "RUN_AS='%s'\\n" "$RUN_AS"
+  printf "CONSUMED_DIR='%s.consumed'\\n" "$ROLLBACK_SCRIPT"
   cat <<'SHELLPILOT_HOSTNAME_ROLLBACK'
+HOSTS_FILE="/etc/hosts"
+umask 077
+if ! mkdir -- "$CONSUMED_DIR" 2>/dev/null; then
+  echo "\u56de\u6eda\u811a\u672c\u5df2\u88ab\u6d88\u8d39\u6216\u6b63\u5728\u6267\u884c"; exit 1
+fi
+ROLLBACK_COMPLETE=no
+release_consumption_lock () {
+  if [ "$ROLLBACK_COMPLETE" != "yes" ]; then rmdir -- "$CONSUMED_DIR" 2>/dev/null || true; fi
+}
+trap release_consumption_lock EXIT
+trap 'release_consumption_lock; exit 1' HUP INT TERM
+[ -r "$STATE_FILE" ] || { echo "\u4e3b\u673a\u540d\u56de\u6eda\u72b6\u6001\u4e0d\u5b58\u5728"; exit 1; }
+{
+  IFS= read -r OLD_HOSTNAME
+  IFS= read -r SYNC_HOSTS
+  IFS= read -r OLD_HOSTS_MODE
+  IFS= read -r OLD_HOSTS_UID
+  IFS= read -r OLD_HOSTS_GID
+} < "$STATE_FILE"
+command -v hostnamectl >/dev/null 2>&1 || { echo "\u7f3a\u5c11 hostnamectl\uff0c\u65e0\u6cd5\u56de\u6eda"; exit 1; }
+$RUN_AS hostnamectl set-hostname "$OLD_HOSTNAME"
+if [ "$SYNC_HOSTS" = "yes" ]; then
+  [ -f "$HOSTS_BACKUP" ] && [ ! -L "$HOSTS_BACKUP" ] || { echo "hosts \u56de\u6eda\u5907\u4efd\u4e0d\u53ef\u7528"; exit 1; }
+  [ ! -L "$HOSTS_FILE" ] || { echo "hosts \u5df2\u53d8\u6210\u7b26\u53f7\u94fe\u63a5\uff0c\u62d2\u7edd\u56de\u6eda"; exit 1; }
+  command -v cp >/dev/null 2>&1 && command -v chmod >/dev/null 2>&1 && command -v chown >/dev/null 2>&1 ||
+    { echo "\u7f3a\u5c11 hosts \u6062\u590d\u5de5\u5177"; exit 1; }
+  $RUN_AS cp -- "$HOSTS_BACKUP" "$HOSTS_FILE"
+  $RUN_AS chmod "$OLD_HOSTS_MODE" -- "$HOSTS_FILE"
+  $RUN_AS chown "$OLD_HOSTS_UID:$OLD_HOSTS_GID" -- "$HOSTS_FILE"
+fi
+ROLLBACK_COMPLETE=yes
+printf '\u5df2\u6062\u590d\u539f\u4e3b\u673a\u540d: %s\\n' "$OLD_HOSTNAME"
+SHELLPILOT_HOSTNAME_ROLLBACK
+} > "$TMP_ROLLBACK"; then
+  echo "\u65e0\u6cd5\u5199\u5165\u56de\u6eda\u811a\u672c"; exit 1
+fi
+if ! {
+  printf '%s\\n' '#!/bin/sh' 'set -eu'
+  printf "STATE_FILE='%s'\\n" "$STATE_FILE"
+  printf "HOSTS_BACKUP='%s'\\n" "$HOSTS_BACKUP"
+  cat <<'SHELLPILOT_HOSTNAME_VERIFY'
 HOSTS_FILE="/etc/hosts"
 [ -r "$STATE_FILE" ] || { echo "\u4e3b\u673a\u540d\u56de\u6eda\u72b6\u6001\u4e0d\u5b58\u5728"; exit 1; }
 {
@@ -87,39 +150,49 @@ HOSTS_FILE="/etc/hosts"
   IFS= read -r OLD_HOSTS_UID
   IFS= read -r OLD_HOSTS_GID
 } < "$STATE_FILE"
-RUN_AS=""
-if [ "$(id -u)" != "0" ]; then
-  command -v sudo >/dev/null 2>&1 || { echo "\u56de\u6eda\u9700\u8981 root \u6216 sudo"; exit 1; }
-  sudo -v || exit 1
-  RUN_AS="sudo"
+command -v hostnamectl >/dev/null 2>&1 && command -v awk >/dev/null 2>&1 ||
+  { echo "\u7f3a\u5c11\u4e3b\u673a\u540d\u9a8c\u8bc1\u5de5\u5177"; exit 1; }
+CURRENT_HOSTNAME="$(hostnamectl --static 2>/dev/null)" || { echo "\u65e0\u6cd5\u8bfb\u53d6\u5f53\u524d\u4e3b\u673a\u540d"; exit 1; }
+if ! awk -v actual="$CURRENT_HOSTNAME" -v expected="$OLD_HOSTNAME" 'BEGIN {
+  exit tolower(actual) != tolower(expected)
+}' </dev/null; then
+  echo "\u539f\u4e3b\u673a\u540d\u6062\u590d\u9a8c\u8bc1\u5931\u8d25"; exit 1
 fi
-command -v hostnamectl >/dev/null 2>&1 || { echo "\u7f3a\u5c11 hostnamectl\uff0c\u65e0\u6cd5\u56de\u6eda"; exit 1; }
-$RUN_AS hostnamectl set-hostname "$OLD_HOSTNAME"
 if [ "$SYNC_HOSTS" = "yes" ]; then
-  [ -e "$HOSTS_BACKUP" ] && [ ! -L "$HOSTS_BACKUP" ] || { echo "hosts \u56de\u6eda\u5907\u4efd\u4e0d\u53ef\u7528"; exit 1; }
-  [ ! -L "$HOSTS_FILE" ] || { echo "hosts \u5df2\u53d8\u6210\u7b26\u53f7\u94fe\u63a5\uff0c\u62d2\u7edd\u56de\u6eda"; exit 1; }
-  $RUN_AS cp -a -- "$HOSTS_BACKUP" "$HOSTS_FILE"
-  [ "$($RUN_AS stat -c %a -- "$HOSTS_FILE")" = "$OLD_HOSTS_MODE" ] &&
-    [ "$($RUN_AS stat -c %u -- "$HOSTS_FILE")" = "$OLD_HOSTS_UID" ] &&
-    [ "$($RUN_AS stat -c %g -- "$HOSTS_FILE")" = "$OLD_HOSTS_GID" ] ||
+  [ -f "$HOSTS_BACKUP" ] && [ ! -L "$HOSTS_BACKUP" ] || { echo "hosts \u56de\u6eda\u5907\u4efd\u4e0d\u53ef\u7528"; exit 1; }
+  [ -f "$HOSTS_FILE" ] && [ ! -L "$HOSTS_FILE" ] || { echo "hosts \u6587\u4ef6\u4e0d\u53ef\u7528"; exit 1; }
+  command -v cmp >/dev/null 2>&1 && command -v stat >/dev/null 2>&1 ||
+    { echo "\u7f3a\u5c11 hosts \u9a8c\u8bc1\u5de5\u5177"; exit 1; }
+  cmp -s -- "$HOSTS_BACKUP" "$HOSTS_FILE" || { echo "hosts \u5185\u5bb9\u6062\u590d\u9a8c\u8bc1\u5931\u8d25"; exit 1; }
+  [ "$(stat -c %a -- "$HOSTS_FILE")" = "$OLD_HOSTS_MODE" ] &&
+    [ "$(stat -c %u -- "$HOSTS_FILE")" = "$OLD_HOSTS_UID" ] &&
+    [ "$(stat -c %g -- "$HOSTS_FILE")" = "$OLD_HOSTS_GID" ] ||
     { echo "hosts \u6743\u9650\u6216\u5c5e\u4e3b\u6062\u590d\u9a8c\u8bc1\u5931\u8d25"; exit 1; }
 fi
-hostnamectl --static 2>/dev/null | awk -v expected="$OLD_HOSTNAME" '{ exit tolower($0) != tolower(expected) }' ||
-  { echo "\u539f\u4e3b\u673a\u540d\u6062\u590d\u9a8c\u8bc1\u5931\u8d25"; exit 1; }
-printf '\u5df2\u6062\u590d\u539f\u4e3b\u673a\u540d: %s\\n' "$OLD_HOSTNAME"
-SHELLPILOT_HOSTNAME_ROLLBACK
-} > "$TMP_ROLLBACK"; then
-  rm -f -- "$TMP_ROLLBACK"; echo "\u65e0\u6cd5\u5199\u5165\u56de\u6eda\u811a\u672c"; exit 1
+printf '\u4e3b\u673a\u540d\u56de\u6eda\u72b6\u6001\u9a8c\u8bc1\u6210\u529f: %s\\n' "$OLD_HOSTNAME"
+SHELLPILOT_HOSTNAME_VERIFY
+} > "$TMP_VERIFIER"; then
+  echo "\u65e0\u6cd5\u5199\u5165\u56de\u6eda\u9a8c\u8bc1\u811a\u672c"; exit 1
 fi
-chmod 700 "$TMP_ROLLBACK" || { rm -f -- "$TMP_ROLLBACK"; echo "\u65e0\u6cd5\u8bbe\u7f6e\u56de\u6eda\u811a\u672c\u6743\u9650"; exit 1; }
+chmod 700 "$TMP_ROLLBACK" "$TMP_VERIFIER" || { echo "\u65e0\u6cd5\u8bbe\u7f6e\u56de\u6eda\u8d44\u4ea7\u6743\u9650"; exit 1; }
 if ! ln -- "$TMP_ROLLBACK" "$ROLLBACK_SCRIPT"; then
-  rm -f -- "$TMP_ROLLBACK"; echo "\u65e0\u6cd5\u539f\u5b50\u521b\u5efa\u56de\u6eda\u811a\u672c"; exit 1
+  echo "\u65e0\u6cd5\u539f\u5b50\u521b\u5efa\u56de\u6eda\u811a\u672c"; exit 1
 fi
-rm -f -- "$TMP_ROLLBACK" || { echo "\u65e0\u6cd5\u6e05\u7406\u56de\u6eda\u811a\u672c\u4e34\u65f6\u6587\u4ef6"; exit 1; }
-[ -f "$ROLLBACK_SCRIPT" ] && [ ! -L "$ROLLBACK_SCRIPT" ] || { echo "\u56de\u6eda\u811a\u672c\u521b\u5efa\u9a8c\u8bc1\u5931\u8d25"; exit 1; }
-[ "$(stat -c %a -- "$ROLLBACK_SCRIPT")" = "700" ] || { echo "\u56de\u6eda\u811a\u672c\u6743\u9650\u9a8c\u8bc1\u5931\u8d25"; exit 1; }
+if ! ln -- "$TMP_VERIFIER" "$VERIFY_SCRIPT"; then
+  echo "\u65e0\u6cd5\u539f\u5b50\u521b\u5efa\u56de\u6eda\u9a8c\u8bc1\u811a\u672c"; exit 1
+fi
+rm -f -- "$TMP_ROLLBACK" "$TMP_VERIFIER" || { echo "\u65e0\u6cd5\u6e05\u7406\u56de\u6eda\u8d44\u4ea7\u4e34\u65f6\u6587\u4ef6"; exit 1; }
+[ -f "$ROLLBACK_SCRIPT" ] && [ ! -L "$ROLLBACK_SCRIPT" ] &&
+  [ -f "$VERIFY_SCRIPT" ] && [ ! -L "$VERIFY_SCRIPT" ] ||
+  { echo "\u56de\u6eda\u8d44\u4ea7\u521b\u5efa\u9a8c\u8bc1\u5931\u8d25"; exit 1; }
+[ "$(stat -c %a -- "$ROLLBACK_SCRIPT")" = "700" ] &&
+  [ "$(stat -c %a -- "$VERIFY_SCRIPT")" = "700" ] ||
+  { echo "\u56de\u6eda\u8d44\u4ea7\u6743\u9650\u9a8c\u8bc1\u5931\u8d25"; exit 1; }
+RECOVERY_ASSETS_READY=yes
+trap - EXIT HUP INT TERM
 
 printf '\u56de\u6eda\u811a\u672c: %s\\n' "$ROLLBACK_SCRIPT"
+printf '\u56de\u6eda\u9a8c\u8bc1\u811a\u672c: %s\\n' "$VERIFY_SCRIPT"
 $RUN_AS hostnamectl set-hostname "$NEW_HOSTNAME"
 if [ "$SYNC_HOSTS" = "yes" ]; then
   HOSTS_TMP="$(mktemp "$OPERATION_ROLLBACK_DIR/hosts.XXXXXX")" || { echo "\u65e0\u6cd5\u521b\u5efa hosts \u4e34\u65f6\u6587\u4ef6\uff1b\u56de\u6eda: $ROLLBACK_SCRIPT"; exit 1; }
