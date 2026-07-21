@@ -79,6 +79,14 @@ function loadQuickCommandInstaller (runSafetyCommandSequence) {
     '../common/safety-transactions/command-orchestration.js': {
       runSafetyCommandBatch: async () => [],
       runSafetyCommandSequence
+    },
+    '../common/safety-transactions/maintenance-recovery-delegation.js': {
+      consumeInternalMaintenanceRecoveryIntent: () => {
+        throw new Error('readonly quick commands must not consume maintenance recovery intents')
+      },
+      createInternalMaintenanceRecoveryDelegation: () => {
+        throw new Error('readonly quick commands must not create maintenance recovery delegations')
+      }
     }
   }
   const module = { exports: {} }
