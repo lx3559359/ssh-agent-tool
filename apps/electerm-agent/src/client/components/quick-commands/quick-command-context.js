@@ -4,12 +4,20 @@ import {
   validateQuickCommandParams as validateMaintenanceQuickCommandParams
 } from './server-maintenance/shared/validation.js'
 import {
-  buildMutationSafetyCommand
+  buildMutationSafetyCommand,
+  createMutationSafetyMetadata
 } from './server-maintenance/shared/safety-metadata.js'
+import {
+  getValidatedCommandSafetyMetadata
+} from './server-maintenance/shared/definition.js'
 import {
   buildPacketFilterArguments,
   hardenMutationCommand
 } from './server-maintenance/shared/command-builders.js'
+import {
+  createInternalMaintenanceRecoveryIntent,
+  isMaintenanceRecoveryQuickCommand
+} from '../../common/safety-transactions/maintenance-recovery-delegation.js'
 
 const quickCommandSessionMismatchMessage = '当前服务器已切换，请重新打开快捷命令后再执行'
 
@@ -226,19 +234,17 @@ export function applyQuickCommandParamValues (text = '', values = {}, context = 
   return replaceQuickCommandPlaceholders(text, replacements)
 }
 
-function resolveMutationSafetyMetadata (metadata, values, context, item) {
-  if (!metadata) {
-    throw new Error('修改命令缺少安全元数据')
-  }
+function resolveMutationSafetyMetadata (values, context, item) {
+  const metadata = getValidatedCommandSafetyMetadata(item)
   const resolve = text => applyQuickCommandParamValues(text, values, context)
   const rollbackParam = item.rollback?.pathParam
   const rollbackScript = rollbackParam ? values[rollbackParam] : metadata.rollbackScript
-  return {
-    ...metadata,
+  return createMutationSafetyMetadata({
+    title: metadata.title,
     backupTargets: metadata.backupTargets.map(resolve),
     verifyCommands: metadata.verifyCommands.map(resolve),
     rollbackScript: rollbackScript ? resolve(rollbackScript) : undefined
-  }
+  })
 }
 
 export function buildQuickCommandText (item = {}, context = {}, paramValues = {}) {
@@ -255,7 +261,6 @@ export function buildQuickCommandText (item = {}, context = {}, paramValues = {}
     return commandText
   }
   const safetyMetadata = resolveMutationSafetyMetadata(
-    item.safetyMetadata,
     paramValues,
     context,
     item
@@ -368,11 +373,35 @@ export function submitValidatedQuickCommand (pendingCommand = {}, submit, active
   if (typeof submit !== 'function') {
     throw new Error('快捷命令执行入口不可用')
   }
+  let maintenanceRecoveryIntent
+  if (shouldTrackRollback(item, validation.values) &&
+    isMaintenanceRecoveryQuickCommand(item.id)) {
+    const safetyMetadata = resolveMutationSafetyMetadata(
+      validation.values,
+      pendingCommand.context,
+      item
+    )
+    maintenanceRecoveryIntent = createInternalMaintenanceRecoveryIntent({
+      quickCommandId: item.id,
+      command: commandText,
+      title: item.name,
+      rollbackPath: safetyMetadata.rollbackScript,
+      endpoint: {
+        tabId: pendingCommand.boundTabId,
+        host: pendingCommand.context?.host,
+        port: pendingCommand.context?.port,
+        username: pendingCommand.context?.username
+      },
+      backupTargets: safetyMetadata.backupTargets,
+      verification: safetyMetadata.verifyCommands
+    })
+  }
   submit(pendingCommand.id, {
     commandText,
     inputOnly: pendingCommand.inputOnly,
     confirmed: true,
-    tabId: pendingCommand.boundTabId
+    tabId: pendingCommand.boundTabId,
+    ...(maintenanceRecoveryIntent ? { maintenanceRecoveryIntent } : {})
   })
   return { ...result, submitted: true }
 }

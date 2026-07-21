@@ -1,5 +1,10 @@
-import { createMutationSafetyMetadata } from './safety-metadata.js'
+import {
+  createMutationSafetyMetadata,
+  validateMutationSafetyMetadata
+} from './safety-metadata.js'
 import { ufwGlobalAllowAwk } from './command-builders.js'
+
+const authoritativeSafetyMetadata = new WeakMap()
 
 const mutationSafetyByCommandId = {
   'builtin-server-network-change-ip': {
@@ -102,14 +107,24 @@ export function defineCommand (item) {
     labels: [BUILTIN, MAINTENANCE, ...(item.labels || [])]
   }
   if (item.mutatesServer) {
+    const safetyMetadata = createCommandSafetyMetadata(item)
     Object.defineProperty(command, 'safetyMetadata', {
       configurable: false,
       enumerable: false,
-      value: createCommandSafetyMetadata(item),
+      value: safetyMetadata,
       writable: false
     })
+    authoritativeSafetyMetadata.set(command, safetyMetadata)
   }
   return command
+}
+
+export function getValidatedCommandSafetyMetadata (command) {
+  const authoritative = authoritativeSafetyMetadata.get(command)
+  if (!authoritative || command?.safetyMetadata !== authoritative) {
+    throw new Error('命令安全元数据不是权威定义或完整结构。')
+  }
+  return validateMutationSafetyMetadata(authoritative)
 }
 
 export function inputParam (name, label, defaultValue, help, placeholder = '', options = {}) {

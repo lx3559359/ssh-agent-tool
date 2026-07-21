@@ -18,6 +18,10 @@ import {
   runSafetyCommandBatch,
   runSafetyCommandSequence
 } from '../common/safety-transactions/command-orchestration.js'
+import {
+  consumeInternalMaintenanceRecoveryIntent,
+  createInternalMaintenanceRecoveryDelegation
+} from '../common/safety-transactions/maintenance-recovery-delegation.js'
 
 async function parseTemplates (cmd) {
   if (!cmd.includes('{{')) return cmd
@@ -137,6 +141,14 @@ export default Store => {
     const qm = store.currentQuickCommands.find(
       a => a.id === id
     )
+    const hasRecoveryIntent = options.maintenanceRecoveryIntent !== undefined
+    const recoveryIntent = hasRecoveryIntent
+      ? consumeInternalMaintenanceRecoveryIntent(options.maintenanceRecoveryIntent)
+      : undefined
+    if (hasRecoveryIntent && (!recoveryIntent || recoveryIntent.quickCommandId !== qm?.id ||
+      recoveryIntent.command !== options.commandText || options.inputOnly === true)) {
+      throw new Error('快捷命令维护恢复授权无效。')
+    }
     if (qm?.confirmRequired && !options.confirmed) {
       const ok = window.confirm
         ? window.confirm(`确认执行「${qm.name}」？该命令可能需要较高权限或产生较多输出。`)
@@ -146,6 +158,9 @@ export default Store => {
       }
     }
     const qms = getQuickCommandSteps(qm, options)
+    if (recoveryIntent && qms.length !== 1) {
+      throw new Error('维护恢复授权只能绑定一个最终命令。')
+    }
     const allowUntrackedReadonlyFallback = qms.length === 1 &&
       options.allowUntrackedReadonlyFallback !== false
     try {
@@ -155,13 +170,20 @@ export default Store => {
           let realCmd = normalizeCommandForShell(q.command)
           realCmd = await parseTemplates(realCmd)
           await delay(q.delay || 100)
+          const maintenanceRecovery = recoveryIntent
+            ? createInternalMaintenanceRecoveryDelegation({
+              ...recoveryIntent,
+              command: realCmd
+            })
+            : undefined
           return store.runQuickCommand(
             realCmd,
             options.inputOnly ?? qm?.inputOnly,
             options.tabId,
             {
               title: qm?.name || options.title,
-              allowUntrackedReadonlyFallback
+              allowUntrackedReadonlyFallback,
+              ...(maintenanceRecovery ? { maintenanceRecovery } : {})
             }
           )
         },

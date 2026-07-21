@@ -163,8 +163,21 @@ if awk -v ip="$TARGET_IP" -v host="$TARGET_HOST" -v action="$ACTION" '
     if (pairFound) pairMatches++
 
     if (action == "update" && hostFound) {
-      $1 = ip
-      print
+      output = $1
+      remaining = 0
+      for (field = 2; field <= dataEnd; field++) {
+        if ($field == host) continue
+        output = output OFS $field
+        remaining++
+      }
+      if (remaining > 0) {
+        for (field = commentStart; field > 0 && field <= NF; field++) output = output OFS $field
+        print output
+      } else if (commentStart > 0) {
+        output = $commentStart
+        for (field = commentStart + 1; field <= NF; field++) output = output OFS $field
+        print output
+      }
       next
     }
     if (action == "delete" && pairFound) {
@@ -192,9 +205,10 @@ if awk -v ip="$TARGET_IP" -v host="$TARGET_HOST" -v action="$ACTION" '
       if (hostMatches != 0) exit 2
       print ip OFS host
     } else if (action == "update") {
-      if (hostMatches != 1) exit 3
+      if (hostMatches < 1) exit 3
+      print ip OFS host
     } else if (action == "delete") {
-      if (pairMatches != 1) exit 4
+      if (pairMatches < 1) exit 4
     } else {
       exit 5
     }

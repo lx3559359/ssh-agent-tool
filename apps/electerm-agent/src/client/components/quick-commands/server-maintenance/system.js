@@ -127,7 +127,11 @@ if [ "$SYNC_HOSTS" = "yes" ]; then
     BEGIN { changed = 0 }
     /^[[:space:]]*#/ || NF < 2 { print; next }
     {
+      dataEnd = NF
       for (field = 2; field <= NF; field++) {
+        if ($field ~ /^#/) { dataEnd = field - 1; break }
+      }
+      for (field = 2; field <= dataEnd; field++) {
         if ($field == oldHost) {
           $field = newHost
           changed = 1
@@ -153,7 +157,11 @@ if [ "$FINAL_HOSTNAME" != "$NEW_HOSTNAME" ]; then
 fi
 if [ "$SYNC_HOSTS" = "yes" ] && ! awk -v host="$NEW_HOSTNAME" '
   /^[[:space:]]*#/ || NF < 2 { next }
-  { for (field = 2; field <= NF; field++) if ($field == host) found = 1 }
+  {
+    dataEnd = NF
+    for (field = 2; field <= NF; field++) if ($field ~ /^#/) { dataEnd = field - 1; break }
+    for (field = 2; field <= dataEnd; field++) if ($field == host) found = 1
+  }
   END { exit !found }
 ' "$HOSTS_FILE"; then
   echo "\u4fee\u6539\u540e hosts \u9a8c\u8bc1\u5931\u8d25\uff1b\u8bf7\u56de\u6eda: $ROLLBACK_SCRIPT"

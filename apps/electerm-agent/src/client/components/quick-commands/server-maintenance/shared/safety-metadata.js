@@ -41,6 +41,12 @@ function cloneStringArray (value, label, options = {}) {
   return result
 }
 
+function deepFreeze (value) {
+  if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value
+  for (const child of Object.values(value)) deepFreeze(child)
+  return Object.freeze(value)
+}
+
 function freezeStringArray (value, label, options = {}) {
   return Object.freeze(cloneStringArray(value, label, options))
 }
@@ -136,7 +142,7 @@ export function withRollback (item, options = {}) {
   }
 }
 
-function validateMutationSafetyMetadata (metadata) {
+export function validateMutationSafetyMetadata (metadata) {
   if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
     throw new Error('修改命令安全元数据不完整')
   }
@@ -160,7 +166,7 @@ function validateMutationSafetyMetadata (metadata) {
   if (metadata.rollbackScript !== undefined) {
     validated.rollbackScript = assertSafeRollbackScript(metadata.rollbackScript)
   }
-  return validated
+  return deepFreeze(validated)
 }
 
 export function createMutationSafetyMetadata ({

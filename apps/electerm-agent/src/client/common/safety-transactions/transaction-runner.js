@@ -16,6 +16,12 @@ import {
   buildVerifiedRemoteAction,
   parseRemoteActionMarker
 } from './remote-recovery.js'
+import {
+  assertAuthorizedMaintenanceRecovery,
+  assertPersistedMaintenanceRecoveryOperation,
+  consumeInternalMaintenanceRecoveryAuthorization,
+  maintenanceRecoveryProvider
+} from './maintenance-recovery-delegation.js'
 
 export const maxAuditPreviewBytes = 64 * 1024
 
@@ -383,7 +389,7 @@ function boundRecoverySnapshot (operation) {
   })
 }
 
-function stricterClassification (operation) {
+function stricterClassification (operation, maintenanceAuthorization) {
   if (operation.operationKind === 'side-effect') {
     const supportedAction = operation.effect?.adapter === 'sftp' &&
       sftpSideEffectActions.includes(operation.effect?.action)
@@ -407,6 +413,37 @@ function stricterClassification (operation) {
       recoveryProvider: 'sftp',
       requiresConfirmation: true,
       reason: 'SFTP side-effect requires a verified recovery point.'
+    }
+  }
+  if (maintenanceAuthorization ||
+    operation.recoveryProvider === maintenanceRecoveryProvider) {
+    let authorized = false
+    try {
+      if (maintenanceAuthorization) {
+        assertAuthorizedMaintenanceRecovery(maintenanceAuthorization, operation)
+      } else {
+        if (!operation.recoveryBinding) throw new Error('维护恢复记录尚未绑定。')
+        assertPersistedMaintenanceRecoveryOperation(operation)
+      }
+      authorized = true
+    } catch {}
+    const forged = !authorized || operation.risk !== 'change' ||
+      operation.provider !== maintenanceRecoveryProvider ||
+      operation.reversible !== true ||
+      operation.recoveryProvider !== maintenanceRecoveryProvider ||
+      operation.requiresConfirmation !== true
+    return {
+      classified: {
+        risk: 'change',
+        reversible: true,
+        provider: maintenanceRecoveryProvider
+      },
+      forged,
+      risk: 'change',
+      reversible: true,
+      recoveryProvider: maintenanceRecoveryProvider,
+      requiresConfirmation: true,
+      reason: 'Authenticated quick command provides a fixed rollback script.'
     }
   }
   const classified = classifyCommand(operation.command)
@@ -473,6 +510,7 @@ export function createTransactionRunner (options = {}) {
   const activeExecutions = new Map()
   const cancellationRequests = new Set()
   const boundRecoveries = new Map()
+  const authorizedMaintenanceRecoveries = new Map()
   let executionSequence = 0
 
   function emit (operationId, status, phase) {
@@ -689,7 +727,10 @@ export function createTransactionRunner (options = {}) {
   }
 
   async function enforceClassification (operation) {
-    const safety = stricterClassification(operation)
+    const safety = stricterClassification(
+      operation,
+      authorizedMaintenanceRecoveries.get(operation.id)
+    )
     const effectivePatch = classificationPatch(operation, safety)
     const current = effectivePatch
       ? await patch(operation.id, { ...effectivePatch, updatedAt: timestamp() })
@@ -1003,11 +1044,28 @@ export function createTransactionRunner (options = {}) {
   function prepare (request = {}) {
     const id = String(request.id || '')
     if (!id) return Promise.reject(new Error('安全事务标识不能为空。'))
+    const hasMaintenanceAuthorization =
+      request.maintenanceRecoveryAuthorization !== undefined
+    const maintenanceAuthorization = hasMaintenanceAuthorization
+      ? consumeInternalMaintenanceRecoveryAuthorization(
+        request.maintenanceRecoveryAuthorization
+      )
+      : undefined
+    if (hasMaintenanceAuthorization && (!maintenanceAuthorization ||
+      maintenanceAuthorization.operationId !== id ||
+      maintenanceAuthorization.command !== request.command)) {
+      return Promise.reject(new Error('维护操作恢复授权无效。'))
+    }
     return serialize(id, async () => {
       let operation
       try {
         boundRecoveries.delete(id)
-        const { signal, ...persistedRequest } = request
+        if (maintenanceAuthorization) {
+          authorizedMaintenanceRecoveries.set(id, maintenanceAuthorization)
+        } else {
+          authorizedMaintenanceRecoveries.delete(id)
+        }
+        const { signal, maintenanceRecoveryAuthorization, ...persistedRequest } = request
         operation = await save({
           ...persistedRequest,
           state: operationStates.preparing,
@@ -1131,6 +1189,7 @@ export function createTransactionRunner (options = {}) {
           )
         })
       } catch (error) {
+        authorizedMaintenanceRecoveries.delete(id)
         if (!operation) throw sanitizeError(error)
         const current = await get(operation.id) || operation
         if (error.cancelled || cancellationRequests.has(operation.id) ||
@@ -2084,6 +2143,7 @@ export function createTransactionRunner (options = {}) {
             audits
           )
           boundRecoveries.delete(operation.id)
+          authorizedMaintenanceRecoveries.delete(operation.id)
           return restored
         })
       } catch (error) {
@@ -2108,6 +2168,7 @@ export function createTransactionRunner (options = {}) {
         completedAt: timestamp()
       }, 'keep')
       boundRecoveries.delete(operation.id)
+      authorizedMaintenanceRecoveries.delete(operation.id)
       return kept
     })
   }

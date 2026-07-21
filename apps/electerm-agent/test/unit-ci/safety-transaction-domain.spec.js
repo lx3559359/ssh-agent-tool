@@ -50,7 +50,8 @@ test('operation model defines and enforces risk and recovery provider invariants
 
   assert.deepEqual(Object.values(operationRisks), ['readonly', 'change', 'unknown', 'blocked'])
   assert.deepEqual(Object.values(recoveryProviders), [
-    'file', 'permissions', 'systemd', 'firewall', 'network', 'docker'
+    'file', 'permissions', 'systemd', 'firewall', 'network', 'docker',
+    'quick-command'
   ])
 
   for (const risk of ['readonly', 'unknown', 'blocked']) {

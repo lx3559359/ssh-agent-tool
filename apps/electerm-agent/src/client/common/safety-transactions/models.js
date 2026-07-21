@@ -161,7 +161,8 @@ export const recoveryProviders = Object.freeze({
   systemd: 'systemd',
   firewall: 'firewall',
   network: 'network',
-  docker: 'docker'
+  docker: 'docker',
+  quickCommand: 'quick-command'
 })
 
 const validStates = new Set(Object.values(operationStates))

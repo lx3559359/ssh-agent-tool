@@ -7,6 +7,12 @@ import {
 } from './command-risk-delegation.js'
 import { resolveInternalSubmissionHooks } from './command-submission-hooks.js'
 import { assertSameSessionEndpoint } from './endpoint-guard.js'
+import {
+  consumeInternalMaintenanceRecoveryDelegation,
+  createInternalMaintenanceRecoveryAuthorization,
+  createPersistedMaintenanceRecovery,
+  maintenanceRecoveryProvider
+} from './maintenance-recovery-delegation.js'
 import { createTraceContext } from '../quality/trace-context.js'
 import { recordQualityEvent } from '../quality/quality-events.js'
 
@@ -45,6 +51,24 @@ function resolveRiskDelegation (command, runOptions) {
     throw riskDelegationError()
   }
   return delegation
+}
+
+function maintenanceRecoveryError () {
+  const error = new Error('Quick command maintenance recovery capability is invalid')
+  error.code = 'MAINTENANCE_RECOVERY_CAPABILITY_INVALID'
+  return error
+}
+
+function resolveMaintenanceRecovery (command, runOptions) {
+  if (runOptions.maintenanceRecovery === undefined) return undefined
+  const recovery = consumeInternalMaintenanceRecoveryDelegation(
+    runOptions.maintenanceRecovery
+  )
+  if (!recovery || runOptions.source !== 'quick-command' ||
+    runOptions.inputOnly === true || recovery.command !== command) {
+    throw maintenanceRecoveryError()
+  }
+  return recovery
 }
 
 function createHookState (hooks) {
@@ -209,7 +233,8 @@ export function createSafetyCommandEntrypoint (options = {}) {
         .then(() => startSafetyCommand(
           pending.command,
           pending.runOptions,
-          pending.riskDelegation
+          pending.riskDelegation,
+          pending.maintenanceRecovery
         ))
         .catch(error => {
           if (!live || generation !== retryGeneration) return
@@ -380,7 +405,8 @@ export function createSafetyCommandEntrypoint (options = {}) {
       request.requiresConfirmation !== true &&
       (run.runOptions.executionMode || 'foreground') === 'foreground' &&
       !run.hookState &&
-      !run.riskDelegation
+      !run.riskDelegation &&
+      !run.maintenanceRecovery
   }
 
   async function runUntrackedReadonlyFallback (
@@ -454,6 +480,7 @@ export function createSafetyCommandEntrypoint (options = {}) {
       command: run.command,
       runOptions: run.runOptions,
       riskDelegation: run.riskDelegation,
+      maintenanceRecovery: run.maintenanceRecovery,
       confirmation
     }
     updateState({ confirmation, busy: false, error: message })
@@ -584,6 +611,10 @@ export function createSafetyCommandEntrypoint (options = {}) {
   async function executeRun (run) {
     const { command, runOptions } = run
     try {
+      const callerMetadata = { ...(runOptions.metadata || {}) }
+      if (Object.hasOwn(callerMetadata, 'maintenanceRecovery')) {
+        throw maintenanceRecoveryError()
+      }
       const source = runOptions.source || 'quick-command'
       if (!supportedSources.has(source)) {
         throw new Error('命令安全事务来源不受支持。')
@@ -600,14 +631,17 @@ export function createSafetyCommandEntrypoint (options = {}) {
       if (run.riskDelegation) {
         assertSameSessionEndpoint(run.riskDelegation.endpoint, endpoint)
       }
+      if (run.maintenanceRecovery) {
+        assertSameSessionEndpoint(run.maintenanceRecovery.endpoint, endpoint)
+      }
       let request = buildSafetyRequest({
         id: operationId,
         source,
         endpoint,
-        title: runOptions.title || '终端命令',
+        title: run.maintenanceRecovery?.title || runOptions.title || '终端命令',
         command,
         metadata: {
-          ...(runOptions.metadata || {}),
+          ...callerMetadata,
           commandEntrypoint: true,
           execution: executionPlan.metadata,
           traceId: run.traceContext.traceId,
@@ -629,6 +663,28 @@ export function createSafetyCommandEntrypoint (options = {}) {
           recoveryProvider: null,
           requiresConfirmation: true,
           reason: `Agent policy requires confirmation: ${run.riskDelegation.classification.reasonCode}`
+        }
+      }
+      if (run.maintenanceRecovery) {
+        request = {
+          ...request,
+          risk: 'change',
+          provider: maintenanceRecoveryProvider,
+          reversible: true,
+          recoveryProvider: maintenanceRecoveryProvider,
+          requiresConfirmation: true,
+          reason: 'Authenticated quick command provides a fixed rollback script.',
+          metadata: {
+            ...request.metadata,
+            maintenanceRecovery: createPersistedMaintenanceRecovery(
+              run.maintenanceRecovery,
+              request.id
+            )
+          },
+          maintenanceRecoveryAuthorization: createInternalMaintenanceRecoveryAuthorization(
+            run.maintenanceRecovery,
+            request.id
+          )
         }
       }
       run.operationId = request.id
@@ -769,14 +825,19 @@ export function createSafetyCommandEntrypoint (options = {}) {
   function startSafetyCommand (
     value,
     runOptions = {},
-    trustedRiskDelegation
+    trustedRiskDelegation,
+    trustedMaintenanceRecovery
   ) {
     const command = String(value || '')
     let riskDelegation
+    let maintenanceRecovery
     try {
       riskDelegation = trustedRiskDelegation === undefined
         ? resolveRiskDelegation(command, runOptions)
         : trustedRiskDelegation
+      maintenanceRecovery = trustedMaintenanceRecovery === undefined
+        ? resolveMaintenanceRecovery(command, runOptions)
+        : trustedMaintenanceRecovery
     } catch (error) {
       return Promise.reject(error)
     }
@@ -849,6 +910,7 @@ export function createSafetyCommandEntrypoint (options = {}) {
       generation,
       hookState: createHookState(internalHooks),
       riskDelegation,
+      maintenanceRecovery,
       operationId,
       traceContext,
       qualityFinished: false

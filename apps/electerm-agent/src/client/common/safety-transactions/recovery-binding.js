@@ -7,6 +7,10 @@ import {
   sideEffectRecoveryBindingSchemaVersion
 } from './models.js'
 import { buildSideEffectKey } from './side-effect-model.js'
+import {
+  assertPersistedMaintenanceRecoveryOperation,
+  maintenanceRecoveryProvider
+} from './maintenance-recovery-delegation.js'
 
 const recoveryIntegrityFailureMessage = '恢复记录完整性校验失败'
 
@@ -79,7 +83,22 @@ export function recoveryBindingPayload (operation, plan, artifacts) {
       artifacts
     }
   }
-  const classification = classifyCommand(operation.command)
+  let maintenanceRecovery
+  let classification
+  if (operation.recoveryProvider === maintenanceRecoveryProvider) {
+    try {
+      maintenanceRecovery = assertPersistedMaintenanceRecoveryOperation(operation)
+    } catch {
+      throw recoveryBindingError()
+    }
+    classification = {
+      risk: 'change',
+      reversible: true,
+      provider: maintenanceRecoveryProvider
+    }
+  } else {
+    classification = classifyCommand(operation.command)
+  }
   const provider = classification.provider
   const operationDir = typeof plan?.operationDir === 'string'
     ? plan.operationDir
@@ -107,7 +126,8 @@ export function recoveryBindingPayload (operation, plan, artifacts) {
     provider,
     operationDir,
     plan,
-    artifacts
+    artifacts,
+    ...(maintenanceRecovery ? { maintenanceRecovery } : {})
   }
 }
 

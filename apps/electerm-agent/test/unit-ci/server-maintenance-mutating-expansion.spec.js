@@ -18,6 +18,9 @@ const contextUrl = pathToFileURL(
 const validationUrl = pathToFileURL(
   path.resolve(__dirname, '../../src/client/components/quick-commands/server-maintenance/shared/validation.js')
 ).href
+const maintenanceRecoveryUrl = pathToFileURL(
+  path.resolve(__dirname, '../../src/client/common/safety-transactions/maintenance-recovery-delegation.js')
+).href
 
 const commandCases = [
   {
@@ -181,6 +184,144 @@ test('withRollback ignores forged critical fields and owns immutable safety meta
   assert.equal(Object.isFrozen(item.mutationSafety.verifyCommands), true)
   assert.equal(Object.isFrozen(item.verification), true)
 })
+
+test('defined Task 6 safety metadata is deeply immutable and rejected when detached or forged', async () => {
+  const [
+    { getServerMaintenanceQuickCommands },
+    { buildQuickCommandParamValues, buildQuickCommandText }
+  ] = await Promise.all([
+    import(registryUrl),
+    import(contextUrl)
+  ])
+  const item = getServerMaintenanceQuickCommands()
+    .find(command => command.id === 'builtin-server-hosts-manage')
+
+  assert.equal(Object.isFrozen(item.safetyMetadata), true)
+  assert.equal(Object.isFrozen(item.safetyMetadata.backupTargets), true)
+  assert.equal(Object.isFrozen(item.safetyMetadata.verifyCommands), true)
+  assert.equal(Reflect.set(item.safetyMetadata, 'minFreeKb', 1), false)
+  assert.equal(Reflect.set(item.safetyMetadata.backupTargets, 0, '/etc/shadow'), false)
+  assert.throws(
+    () => item.safetyMetadata.verifyCommands.push('true'),
+    TypeError
+  )
+  assert.deepEqual(item.safetyMetadata.backupTargets, ['/etc/hosts'])
+  assert.deepEqual(item.safetyMetadata.verifyCommands, item.verification)
+
+  const context = {
+    host: 'prod.example.com',
+    port: '22',
+    username: 'root',
+    rollbackPath: '/tmp/shellpilot-rollback/task6-metadata-1700000000000.sh'
+  }
+  const values = {
+    ...buildQuickCommandParamValues(item, context),
+    IP地址: '192.0.2.20',
+    主机名: 'target.example.com',
+    动作: 'update',
+    确认执行: 'yes'
+  }
+  const detached = { ...item }
+  Object.defineProperty(detached, 'safetyMetadata', {
+    value: {
+      ...item.safetyMetadata,
+      backupTargets: ['/etc/shadow'],
+      verifyCommands: ['true']
+    }
+  })
+  assert.throws(
+    () => buildQuickCommandText(detached, context, values),
+    /安全元数据|权威|完整/
+  )
+})
+
+test('confirmed Task 6 submissions carry one-time validated recovery intents', async () => {
+  const [
+    { getServerMaintenanceQuickCommands },
+    {
+      buildQuickCommandContextIdentity,
+      buildQuickCommandParamValues,
+      submitValidatedQuickCommand
+    },
+    { consumeInternalMaintenanceRecoveryIntent }
+  ] = await Promise.all([
+    import(registryUrl),
+    import(contextUrl),
+    import(maintenanceRecoveryUrl)
+  ])
+  const byId = new Map(
+    getServerMaintenanceQuickCommands().map(command => [command.id, command])
+  )
+  const context = {
+    host: 'prod.example.com',
+    port: '22',
+    username: 'root',
+    title: 'Production',
+    rollbackPath: '/tmp/shellpilot-rollback/task6-recovery-1700000000000.sh'
+  }
+  const cases = [
+    {
+      id: 'builtin-server-hostname-change',
+      values: { 新主机名: 'new-host.example.com', 同步Hosts: 'yes' }
+    },
+    {
+      id: 'builtin-server-hosts-manage',
+      values: { IP地址: '192.0.2.20', 主机名: 'target.example.com', 动作: 'update' }
+    },
+    {
+      id: 'builtin-server-timezone-change',
+      values: { 新时区: 'Asia/Shanghai' }
+    }
+  ]
+
+  for (const testCase of cases) {
+    const item = byId.get(testCase.id)
+    const paramValues = {
+      ...buildQuickCommandParamValues(item, context),
+      ...testCase.values,
+      确认执行: 'yes'
+    }
+    let submitted
+    const result = submitValidatedQuickCommand({
+      id: item.id,
+      item,
+      boundTabId: 'tab-prod',
+      contextIdentity: buildQuickCommandContextIdentity(context),
+      context,
+      paramValues
+    }, (id, options) => {
+      submitted = { id, options }
+    }, {
+      commandId: item.id,
+      tabId: 'tab-prod',
+      contextIdentity: buildQuickCommandContextIdentity(context)
+    })
+
+    assert.equal(result.submitted, true)
+    assert.equal(submitted.id, item.id)
+    const intent = consumeInternalMaintenanceRecoveryIntent(
+      submitted.options.maintenanceRecoveryIntent
+    )
+    assert.equal(intent.quickCommandId, item.id)
+    assert.equal(intent.command, result.commandText)
+    assert.equal(intent.title, item.name)
+    assert.equal(intent.rollbackPath, context.rollbackPath)
+    assert.deepEqual(intent.endpoint, {
+      tabId: 'tab-prod',
+      host: context.host,
+      port: 22,
+      username: context.username
+    })
+    assert.ok(intent.verification.length >= 1)
+    assert.equal(
+      consumeInternalMaintenanceRecoveryIntent(
+        submitted.options.maintenanceRecoveryIntent
+      ),
+      undefined
+    )
+  }
+})
+
 function commandText (item) {
   return item.commands.map(command => command.command).join('\n')
 }
@@ -743,6 +884,112 @@ function runTask6RollbackTwice (sandbox) {
     '. ' + rollback
   ].join('\n'))
 }
+
+test('hosts update and delete preserve aliases and comments while deduplicating the target', async t => {
+  const runtime = await loadConfirmedTask6Runtime()
+
+  await t.test('update moves only the target hostname to the new IP', child => {
+    const sandbox = createShellSandbox(child)
+    fs.writeFileSync(sandbox.hosts, [
+      '127.0.0.1 localhost',
+      '192.0.2.10 target.example.com alias-a # first',
+      '198.51.100.5 alias-b target.example.com # second',
+      ''
+    ].join('\n'))
+    const command = renderConfirmedTask6Command(runtime, {
+      id: 'builtin-server-hosts-manage',
+      values: {
+        IP地址: '203.0.113.9',
+        主机名: 'target.example.com',
+        动作: 'update'
+      }
+    }, sandbox)
+
+    runPosixShell([
+      buildConfirmedShellPrelude(sandbox, {
+        expectedIp: '203.0.113.9',
+        expectedHost: 'target.example.com'
+      }),
+      command
+    ].join('\n'))
+
+    const hosts = fs.readFileSync(sandbox.hosts, 'utf8')
+    assert.match(hosts, /^192\.0\.2\.10 alias-a # first$/m)
+    assert.match(hosts, /^198\.51\.100\.5 alias-b # second$/m)
+    assert.match(hosts, /^203\.0\.113\.9 target\.example\.com$/m)
+    assert.equal(
+      hosts.split(/\s+/).filter(token => token === 'target.example.com').length,
+      1
+    )
+  })
+
+  await t.test('delete removes only exact target tokens', child => {
+    const sandbox = createShellSandbox(child)
+    fs.writeFileSync(sandbox.hosts, [
+      '127.0.0.1 localhost',
+      '192.0.2.10 target.example.com alias-a target.example.com # keep',
+      '198.51.100.5 target.example.com alias-b # other-ip',
+      ''
+    ].join('\n'))
+    const command = renderConfirmedTask6Command(runtime, {
+      id: 'builtin-server-hosts-manage',
+      values: {
+        IP地址: '192.0.2.10',
+        主机名: 'target.example.com',
+        动作: 'delete'
+      }
+    }, sandbox)
+
+    runPosixShell([
+      buildConfirmedShellPrelude(sandbox, {
+        expectedIp: '192.0.2.10',
+        expectedHost: 'target.example.com'
+      }),
+      command
+    ].join('\n'))
+
+    const hosts = fs.readFileSync(sandbox.hosts, 'utf8')
+    assert.match(hosts, /^192\.0\.2\.10 alias-a # keep$/m)
+    assert.match(hosts, /^198\.51\.100\.5 target\.example\.com alias-b # other-ip$/m)
+    assert.equal(
+      hosts.split('\n')[1].split(/\s+/).includes('target.example.com'),
+      false
+    )
+  })
+})
+
+test('hostname hosts synchronization ignores old hostname tokens in comments', async t => {
+  const runtime = await loadConfirmedTask6Runtime()
+  const sandbox = createShellSandbox(t)
+  fs.writeFileSync(sandbox.hosts, [
+    '127.0.0.1 localhost # old-host.example.com',
+    '192.0.2.10 alias-a # old-host.example.com',
+    ''
+  ].join('\n'))
+  const command = renderConfirmedTask6Command(runtime, {
+    id: 'builtin-server-hostname-change',
+    values: {
+      新主机名: 'new-host.example.com',
+      同步Hosts: 'yes'
+    }
+  }, sandbox)
+
+  runPosixShell([
+    buildConfirmedShellPrelude(sandbox, {
+      expectedHost: 'new-host.example.com'
+    }),
+    command
+  ].join('\n'))
+
+  const hosts = fs.readFileSync(sandbox.hosts, 'utf8')
+  assert.match(hosts, /^127\.0\.0\.1 localhost # old-host\.example\.com$/m)
+  assert.match(hosts, /^192\.0\.2\.10 alias-a # old-host\.example\.com$/m)
+  assert.match(hosts, /^127\.0\.1\.1[ \t]+new-host\.example\.com$/m)
+  assert.equal(
+    hosts.split('\n').filter(line => /^[^#]*\bnew-host\.example\.com\b/.test(line)).length,
+    1
+  )
+})
 
 test('confirmed Task 6 commands mutate only after rollback artifacts exist and rollback idempotently', async t => {
   const runtime = await loadConfirmedTask6Runtime()

@@ -5,6 +5,10 @@ import {
   tokenizeStaticShell
 } from './command-classifier.js'
 import { buildVerifiedRemoteAction } from './remote-recovery.js'
+import {
+  assertPersistedMaintenanceRecoveryOperation,
+  maintenanceRecoveryProvider
+} from './maintenance-recovery-delegation.js'
 
 const safeIdPattern = /^[A-Za-z0-9_-]+$/
 const supportedProviders = new Set([
@@ -13,7 +17,8 @@ const supportedProviders = new Set([
   'systemd',
   'firewall',
   'network',
-  'docker'
+  'docker',
+  maintenanceRecoveryProvider
 ])
 const blockedPathRoots = ['/dev', '/proc', '/sys', '/run', '/var/run']
 
@@ -754,6 +759,15 @@ function validateChange (change) {
     refuse('输入不是 buildSafetyRequest 产生的可逆 change。', provider)
   }
   const command = String(change?.command || '')
+  if (provider === maintenanceRecoveryProvider) {
+    let maintenanceRecovery
+    try {
+      maintenanceRecovery = assertPersistedMaintenanceRecoveryOperation(change)
+    } catch (error) {
+      refuse(error.message || '维护操作恢复记录无效。', provider)
+    }
+    return { id, provider, command, maintenanceRecovery }
+  }
   const classification = classifyCommand(command)
   if (classification.risk !== 'change' || classification.reversible !== true ||
     classification.provider !== provider) {
@@ -779,8 +793,58 @@ function buildScriptAction (id, action) {
   return buildVerifiedRemoteAction(command, action, id)
 }
 
+function buildMaintenanceRecoveryPlan (validated) {
+  const { id, command, maintenanceRecovery } = validated
+  const rollbackDirectory = '/tmp/shellpilot-rollback'
+  const rollbackPath = maintenanceRecovery.rollbackPath
+  const quotedDirectory = shellQuote(rollbackDirectory)
+  const quotedPath = shellQuote(rollbackPath)
+  const prepareCommand = [
+    'set -eu',
+    `rollback_dir=${quotedDirectory}`,
+    `rollback_script=${quotedPath}`,
+    'if [ -L "$rollback_dir" ]; then echo "回滚目录不能是符号链接" >&2; exit 46; fi',
+    'if [ -e "$rollback_dir" ]; then [ -d "$rollback_dir" ] || { echo "回滚目录类型不安全" >&2; exit 46; }; current_uid="$(id -u)"; [ "$(stat -c %u -- "$rollback_dir")" = "$current_uid" ] || { echo "回滚目录属主不安全" >&2; exit 46; }; [ "$(stat -c %a -- "$rollback_dir")" = "700" ] || { echo "回滚目录权限不安全" >&2; exit 46; }; fi',
+    'if [ -e "$rollback_script" ] || [ -L "$rollback_script" ]; then echo "回滚脚本路径已存在" >&2; exit 46; fi'
+  ].join('; ')
+  const actionCommand = [
+    'set -eu',
+    `rollback_dir=${quotedDirectory}`,
+    `rollback_script=${quotedPath}`,
+    'current_uid="$(id -u)"',
+    '[ -d "$rollback_dir" ] && [ ! -L "$rollback_dir" ] || { echo "回滚目录不安全" >&2; exit 46; }',
+    '[ "$(stat -c %u -- "$rollback_dir")" = "$current_uid" ] || { echo "回滚目录属主不安全" >&2; exit 46; }',
+    '[ "$(stat -c %a -- "$rollback_dir")" = "700" ] || { echo "回滚目录权限不安全" >&2; exit 46; }',
+    '[ -f "$rollback_script" ] && [ ! -L "$rollback_script" ] || { echo "回滚脚本不存在或类型不安全" >&2; exit 46; }',
+    '[ "$(stat -c %u -- "$rollback_script")" = "$current_uid" ] || { echo "回滚脚本属主不安全" >&2; exit 46; }',
+    '[ "$(stat -c %a -- "$rollback_script")" = "700" ] || { echo "回滚脚本权限不安全" >&2; exit 46; }',
+    `/bin/sh -- ${quotedPath}`
+  ].join('; ')
+  const artifacts = {
+    rollbackScript: rollbackPath,
+    quickCommandId: maintenanceRecovery.quickCommandId,
+    backupTargets: maintenanceRecovery.backupTargets,
+    verification: maintenanceRecovery.verification
+  }
+  return {
+    provider: maintenanceRecoveryProvider,
+    operationDir: rollbackDirectory + '/',
+    prepareCommand,
+    executeCommand: command,
+    rollbackCommand: buildVerifiedRemoteAction(actionCommand, 'rollback', id),
+    verifyCommand: buildVerifiedRemoteAction(actionCommand, 'verify', id),
+    allowUnsafeExecute: true,
+    summary: maintenanceRecovery.title,
+    artifacts
+  }
+}
+
 export function buildRecoveryPlan (change) {
-  const { id, provider, command } = validateChange(change)
+  const validated = validateChange(change)
+  const { id, provider, command } = validated
+  if (provider === maintenanceRecoveryProvider) {
+    return buildMaintenanceRecoveryPlan(validated)
+  }
   let recovery
   try {
     recovery = providerBuilders[provider](command, id)
