@@ -1037,7 +1037,7 @@ function buildConfirmedShellPrelude (sandbox, options = {}) {
     '  destination=""',
     '  for argument in "$@"; do destination="$argument"; done',
     '  if [ "$FAIL_STATE" = "yes" ]; then',
-    '    case "$destination" in *.state) return 1 ;; esac',
+    '    case "$destination" in *.state|*/timezone-state.*) return 1 ;; esac',
     '  fi',
     '  command chmod "$@"',
     '}',
@@ -1062,7 +1062,8 @@ function buildConfirmedShellPrelude (sandbox, options = {}) {
     '    command ln "$@" || return 1',
     '    return 1',
     '  fi',
-    '  if [ "$FAIL_ROLLBACK" = "yes" ]; then return 1; fi',
+    '  if [ "$FAIL_ROLLBACK" = "yes" ] &&',
+    '    [ "$destination" = "$ROLLBACK_SCRIPT_FIXTURE" ]; then return 1; fi',
     '  if [ "$FAIL_VERIFIER" = "yes" ]; then',
     '    case "$destination" in *.verify.sh) return 1 ;; esac',
     '  fi',
@@ -1134,12 +1135,14 @@ function assertOriginalTask6State (sandbox) {
 function listOneShotRecoveryAssets (sandbox, state) {
   const root = sandbox.rollbackDirectory.replaceAll('/', path.sep)
   if (!fs.existsSync(root)) return []
-  const temporaryPattern = new RegExp(state + '-(?:rollback|verify)\\.')
+  const temporaryPattern = new RegExp(state + '-(?:state|rollback|verify)\\.')
   return snapshotTree(root)
     .map(entry => entry[0])
     .filter(relative => {
       return temporaryPattern.test(relative) ||
-        /task6-test-1700000000000(?:\.verify)?\.sh$/.test(relative)
+        /task6-test-1700000000000(?:\.verify)?\.sh$/.test(relative) ||
+        (state === 'timezone' &&
+          /(?:^|\/)operation\.[^/]+\/timezone\.state$/.test(relative))
     })
 }
 
@@ -1850,6 +1853,9 @@ test('backup failures stop every Task 6 command before mutation', async t => {
       assertOriginalTask6State(sandbox)
       assert.equal(fs.existsSync(sandbox.mutationLog), false)
       assert.equal(fs.existsSync(sandbox.rollbackScript), false)
+      if (testCase.state === 'timezone') {
+        assert.deepEqual(listOneShotRecoveryAssets(sandbox, 'timezone'), [])
+      }
     })
   }
 })

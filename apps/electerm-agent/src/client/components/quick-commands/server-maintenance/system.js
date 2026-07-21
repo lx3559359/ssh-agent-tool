@@ -499,13 +499,13 @@ umask 077
 case "$OPERATION_ROLLBACK_DIR" in "$ROLLBACK_DIR"/operation.*) ;; *) echo "\u64cd\u4f5c\u56de\u6eda\u76ee\u5f55\u4e0d\u53d7\u63a7"; exit 1 ;; esac
 [ -d "$OPERATION_ROLLBACK_DIR" ] && [ ! -L "$OPERATION_ROLLBACK_DIR" ] || { echo "\u64cd\u4f5c\u56de\u6eda\u76ee\u5f55\u4e0d\u5b89\u5168"; exit 1; }
 STATE_FILE="$OPERATION_ROLLBACK_DIR/timezone.state"
-if ! printf '%s\\n' "$OLD_TIMEZONE" > "$STATE_FILE"; then echo "\u65e0\u6cd5\u521b\u5efa\u65f6\u533a\u72b6\u6001\u5907\u4efd"; exit 1; fi
-chmod 600 "$STATE_FILE" || { echo "\u65e0\u6cd5\u4fdd\u62a4\u65f6\u533a\u72b6\u6001\u5907\u4efd"; exit 1; }
-[ -s "$STATE_FILE" ] || { echo "\u65f6\u533a\u72b6\u6001\u5907\u4efd\u4e3a\u7a7a"; exit 1; }
+TMP_STATE=""
 TMP_ROLLBACK=""
 TMP_VERIFIER=""
+TMP_STATE_INODE=""
 TMP_ROLLBACK_INODE=""
 TMP_VERIFIER_INODE=""
+STATE_LINK_ATTEMPTED=no
 ROLLBACK_LINK_ATTEMPTED=no
 VERIFIER_LINK_ATTEMPTED=no
 RECOVERY_ASSETS_READY=no
@@ -513,6 +513,7 @@ cleanup_owned_recovery_asset () {
   RECOVERY_FINAL="$1"
   RECOVERY_EXPECTED_INODE="$2"
   RECOVERY_LINK_ATTEMPTED="$3"
+  [ -n "$RECOVERY_FINAL" ] && [ -n "$RECOVERY_EXPECTED_INODE" ] || return 0
   [ "$RECOVERY_LINK_ATTEMPTED" = "yes" ] || return 0
   [ -f "$RECOVERY_FINAL" ] && [ ! -L "$RECOVERY_FINAL" ] || return 0
   RECOVERY_CURRENT_INODE="$(stat -c %d:%i -- "$RECOVERY_FINAL" 2>/dev/null)" || return 0
@@ -522,17 +523,43 @@ cleanup_owned_recovery_asset () {
 }
 cleanup_recovery_assets () {
   if [ "$RECOVERY_ASSETS_READY" != "yes" ]; then
+    cleanup_owned_recovery_asset "$STATE_FILE" "$TMP_STATE_INODE" "$STATE_LINK_ATTEMPTED"
     cleanup_owned_recovery_asset "$ROLLBACK_SCRIPT" "$TMP_ROLLBACK_INODE" "$ROLLBACK_LINK_ATTEMPTED"
     cleanup_owned_recovery_asset "$VERIFY_SCRIPT" "$TMP_VERIFIER_INODE" "$VERIFIER_LINK_ATTEMPTED"
-    for RECOVERY_ASSET in "$TMP_ROLLBACK" "$TMP_VERIFIER"; do
-      [ -z "$RECOVERY_ASSET" ] || rm -f -- "$RECOVERY_ASSET" 2>/dev/null || true
-    done
+    cleanup_owned_recovery_asset "$TMP_STATE" "$TMP_STATE_INODE" yes
+    cleanup_owned_recovery_asset "$TMP_ROLLBACK" "$TMP_ROLLBACK_INODE" yes
+    cleanup_owned_recovery_asset "$TMP_VERIFIER" "$TMP_VERIFIER_INODE" yes
   fi
 }
 trap cleanup_recovery_assets EXIT
 trap 'exit 1' HUP INT TERM
+TMP_STATE="$(mktemp "$OPERATION_ROLLBACK_DIR/timezone-state.XXXXXX")" || { echo "\u65e0\u6cd5\u521b\u5efa\u65f6\u533a\u72b6\u6001\u4e34\u65f6\u6587\u4ef6"; exit 1; }
+TMP_STATE_INODE="$(stat -c %d:%i -- "$TMP_STATE" 2>/dev/null)" ||
+  { echo "\u65e0\u6cd5\u8bc6\u522b\u65f6\u533a\u72b6\u6001\u4e34\u65f6\u6587\u4ef6"; exit 1; }
+if ! printf '%s\\n' "$OLD_TIMEZONE" > "$TMP_STATE"; then echo "\u65e0\u6cd5\u521b\u5efa\u65f6\u533a\u72b6\u6001\u5907\u4efd"; exit 1; fi
+chmod 600 "$TMP_STATE" || { echo "\u65e0\u6cd5\u4fdd\u62a4\u65f6\u533a\u72b6\u6001\u5907\u4efd"; exit 1; }
+[ -s "$TMP_STATE" ] || { echo "\u65f6\u533a\u72b6\u6001\u5907\u4efd\u4e3a\u7a7a"; exit 1; }
+[ "$(stat -c %d:%i -- "$TMP_STATE" 2>/dev/null)" = "$TMP_STATE_INODE" ] ||
+  { echo "\u65f6\u533a\u72b6\u6001\u4e34\u65f6\u6587\u4ef6\u88ab\u66ff\u6362"; exit 1; }
+STATE_LINK_ATTEMPTED=yes
+if ln -- "$TMP_STATE" "$STATE_FILE"; then
+  :
+else
+  echo "\u65e0\u6cd5\u539f\u5b50\u521b\u5efa\u65f6\u533a\u72b6\u6001\u5907\u4efd"; exit 1
+fi
+[ -f "$STATE_FILE" ] && [ ! -L "$STATE_FILE" ] &&
+  [ "$(stat -c %d:%i -- "$STATE_FILE" 2>/dev/null)" = "$TMP_STATE_INODE" ] ||
+  { echo "\u65f6\u533a\u72b6\u6001\u5907\u4efd\u5728\u53d1\u5e03\u671f\u95f4\u88ab\u66ff\u6362"; exit 1; }
+cleanup_owned_recovery_asset "$TMP_STATE" "$TMP_STATE_INODE" yes
+if [ -e "$TMP_STATE" ] || [ -L "$TMP_STATE" ]; then
+  echo "\u65e0\u6cd5\u6e05\u7406\u65f6\u533a\u72b6\u6001\u4e34\u65f6\u6587\u4ef6"; exit 1
+fi
 TMP_ROLLBACK="$(mktemp "$OPERATION_ROLLBACK_DIR/timezone-rollback.XXXXXX")" || { echo "\u65e0\u6cd5\u521b\u5efa\u56de\u6eda\u811a\u672c\u4e34\u65f6\u6587\u4ef6"; exit 1; }
+TMP_ROLLBACK_INODE="$(stat -c %d:%i -- "$TMP_ROLLBACK" 2>/dev/null)" ||
+  { echo "\u65e0\u6cd5\u8bc6\u522b\u56de\u6eda\u811a\u672c\u4e34\u65f6\u6587\u4ef6"; exit 1; }
 TMP_VERIFIER="$(mktemp "$OPERATION_ROLLBACK_DIR/timezone-verify.XXXXXX")" || { echo "\u65e0\u6cd5\u521b\u5efa\u56de\u6eda\u9a8c\u8bc1\u811a\u672c\u4e34\u65f6\u6587\u4ef6"; exit 1; }
+TMP_VERIFIER_INODE="$(stat -c %d:%i -- "$TMP_VERIFIER" 2>/dev/null)" ||
+  { echo "\u65e0\u6cd5\u8bc6\u522b\u56de\u6eda\u9a8c\u8bc1\u4e34\u65f6\u6587\u4ef6"; exit 1; }
 if ! {
   printf '%s\\n' '#!/bin/sh' 'set -efu'
   printf "STATE_FILE='%s'\\n" "$STATE_FILE"
@@ -693,10 +720,6 @@ SHELLPILOT_TIMEZONE_VERIFY
   echo "\u65e0\u6cd5\u5199\u5165\u56de\u6eda\u9a8c\u8bc1\u811a\u672c"; exit 1
 fi
 chmod 700 "$TMP_ROLLBACK" "$TMP_VERIFIER" || { echo "\u65e0\u6cd5\u8bbe\u7f6e\u56de\u6eda\u8d44\u4ea7\u6743\u9650"; exit 1; }
-TMP_ROLLBACK_INODE="$(stat -c %d:%i -- "$TMP_ROLLBACK" 2>/dev/null)" ||
-  { echo "\u65e0\u6cd5\u8bc6\u522b\u56de\u6eda\u811a\u672c\u4e34\u65f6\u6587\u4ef6"; exit 1; }
-TMP_VERIFIER_INODE="$(stat -c %d:%i -- "$TMP_VERIFIER" 2>/dev/null)" ||
-  { echo "\u65e0\u6cd5\u8bc6\u522b\u56de\u6eda\u9a8c\u8bc1\u4e34\u65f6\u6587\u4ef6"; exit 1; }
 ROLLBACK_LINK_ATTEMPTED=yes
 if ln -- "$TMP_ROLLBACK" "$ROLLBACK_SCRIPT"; then
   :
@@ -709,7 +732,13 @@ if ln -- "$TMP_VERIFIER" "$VERIFY_SCRIPT"; then
 else
   echo "\u65e0\u6cd5\u539f\u5b50\u521b\u5efa\u56de\u6eda\u9a8c\u8bc1\u811a\u672c"; exit 1
 fi
-rm -f -- "$TMP_ROLLBACK" "$TMP_VERIFIER" || { echo "\u65e0\u6cd5\u6e05\u7406\u56de\u6eda\u8d44\u4ea7\u4e34\u65f6\u6587\u4ef6"; exit 1; }
+cleanup_owned_recovery_asset "$TMP_ROLLBACK" "$TMP_ROLLBACK_INODE" yes
+cleanup_owned_recovery_asset "$TMP_VERIFIER" "$TMP_VERIFIER_INODE" yes
+if [ -e "$TMP_ROLLBACK" ] || [ -L "$TMP_ROLLBACK" ] ||
+  [ -e "$TMP_VERIFIER" ] || [ -L "$TMP_VERIFIER" ]; then
+  echo "\u65e0\u6cd5\u6e05\u7406\u56de\u6eda\u8d44\u4ea7\u4e34\u65f6\u6587\u4ef6"
+  exit 1
+fi
 [ -f "$ROLLBACK_SCRIPT" ] && [ ! -L "$ROLLBACK_SCRIPT" ] &&
   [ -f "$VERIFY_SCRIPT" ] && [ ! -L "$VERIFY_SCRIPT" ] ||
   { echo "\u56de\u6eda\u8d44\u4ea7\u521b\u5efa\u9a8c\u8bc1\u5931\u8d25"; exit 1; }
