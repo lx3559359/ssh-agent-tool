@@ -20,6 +20,7 @@ RUN_LOCK_OWNED=no
 RUN_OWNER_OWNED=no
 RUN_LOCK_INODE=""
 RUN_OWNER_INODE=""
+export RUN_LOCK_FILE
 path_inode () {
   stat -c %d:%i -- "$1" 2>/dev/null
 }
@@ -45,6 +46,14 @@ release_running_lock () {
   fi
 }
 acquire_running_lock () {
+  RECOVERY_UID="$(id -u 2>/dev/null)" || { echo "\u65e0\u6cd5\u786e\u8ba4 hosts \u6062\u590d\u6267\u884c\u7528\u6237"; return 1; }
+  if [ -e "$RUN_LOCK_FILE" ] || [ -L "$RUN_LOCK_FILE" ]; then
+    [ -f "$RUN_LOCK_FILE" ] && [ ! -L "$RUN_LOCK_FILE" ] ||
+      { echo "hosts \u6062\u590d\u8fd0\u884c\u9501\u7c7b\u578b\u4e0d\u5b89\u5168"; return 1; }
+    [ "$(stat -c %u -- "$RUN_LOCK_FILE" 2>/dev/null)" = "$RECOVERY_UID" ] &&
+      [ "$(stat -c %a -- "$RUN_LOCK_FILE" 2>/dev/null)" = "600" ] ||
+      { echo "hosts \u6062\u590d\u8fd0\u884c\u9501\u6240\u6709\u8005\u6216\u6743\u9650\u4e0d\u5b89\u5168"; return 1; }
+  fi
   [ ! -L "$RUN_LOCK_FILE" ] || { echo "hosts \u6062\u590d\u8fd0\u884c\u9501\u4e0d\u80fd\u662f\u7b26\u53f7\u94fe\u63a5"; return 1; }
   exec 9>> "$RUN_LOCK_FILE" || { echo "\u65e0\u6cd5\u6253\u5f00 hosts \u6062\u590d\u8fd0\u884c\u9501"; return 1; }
   flock -n 9 || { printf '\\345\\217\\246\\344\\270\\200\\344\\270\\252 hosts \\346\\201\\242\\345\\244\\215\\346\\223\\215\\344\\275\\234\\344\\273\\215\\345\\234\\250\\350\\277\\220\\350\\241\\214\\n'; return 1; }
@@ -59,8 +68,10 @@ acquire_running_lock () {
     { echo "hosts \u6062\u590d\u8fd0\u884c\u9501\u5728\u83b7\u53d6\u671f\u95f4\u88ab\u66ff\u6362"; return 1; }
   RUN_LOCK_INODE="$RUN_LOCK_FD_INODE"
   RUN_LOCK_OWNED=yes
-  RECOVERY_UID="$(id -u 2>/dev/null)" || { echo "\u65e0\u6cd5\u786e\u8ba4 hosts \u6062\u590d\u6267\u884c\u7528\u6237"; return 1; }
-  [ "$(stat -c %u -- "$RUN_LOCK_FILE" 2>/dev/null)" = "$RECOVERY_UID" ] &&
+  [ -f "$RUN_LOCK_FILE" ] && [ ! -L "$RUN_LOCK_FILE" ] ||
+    { echo "hosts \u6062\u590d\u8fd0\u884c\u9501\u7c7b\u578b\u4e0d\u5b89\u5168"; return 1; }
+  [ "$(stat -c %d:%i -- "$RUN_LOCK_FILE" 2>/dev/null)" = "$RUN_LOCK_INODE" ] &&
+    [ "$(stat -c %u -- "$RUN_LOCK_FILE" 2>/dev/null)" = "$RECOVERY_UID" ] &&
     [ "$(stat -c %a -- "$RUN_LOCK_FILE" 2>/dev/null)" = "600" ] ||
     { echo "hosts \u6062\u590d\u8fd0\u884c\u9501\u6240\u6709\u8005\u6216\u6743\u9650\u4e0d\u5b89\u5168"; return 1; }
   for RECOVERY_DIRECTORY in "\${RUN_LOCK_FILE%/*}" "\${HOSTS_BACKUP%/*}"; do
@@ -110,7 +121,7 @@ case "$ROLLBACK_SCRIPT" in
 esac
 CONSUMED_MARKER="$ROLLBACK_SCRIPT.consumed"
 RUN_OWNER_FILE="$ROLLBACK_SCRIPT.running"
-RUN_LOCK_FILE="$ROLLBACK_SCRIPT.running.lock"
+RUN_LOCK_FILE="$ROLLBACK_DIR/.hosts.resource.lock"
 HOSTS_FILE="/etc/hosts"
 [ -f "$HOSTS_FILE" ] && [ ! -L "$HOSTS_FILE" ] || { echo "hosts \u6587\u4ef6\u7c7b\u578b\u4e0d\u5b89\u5168"; exit 1; }
 
@@ -191,7 +202,7 @@ if [ -L "$ROLLBACK_SCRIPT" ]; then echo "\u56de\u6eda\u811a\u672c\u4e0d\u80fd\u6
 [ ! -e "$ROLLBACK_SCRIPT" ] || { echo "\u56de\u6eda\u811a\u672c\u8def\u5f84\u5df2\u5b58\u5728\uff0c\u62d2\u7edd\u8986\u76d6"; exit 1; }
 if [ -L "$VERIFY_SCRIPT" ]; then echo "\u56de\u6eda\u9a8c\u8bc1\u811a\u672c\u4e0d\u80fd\u662f\u7b26\u53f7\u94fe\u63a5"; exit 1; fi
 [ ! -e "$VERIFY_SCRIPT" ] || { echo "\u56de\u6eda\u9a8c\u8bc1\u811a\u672c\u8def\u5f84\u5df2\u5b58\u5728\uff0c\u62d2\u7edd\u8986\u76d6"; exit 1; }
-for RECOVERY_MARKER in "$CONSUMED_MARKER" "$RUN_OWNER_FILE" "$RUN_LOCK_FILE"; do
+for RECOVERY_MARKER in "$CONSUMED_MARKER" "$RUN_OWNER_FILE"; do
   if [ -e "$RECOVERY_MARKER" ] || [ -L "$RECOVERY_MARKER" ]; then
     echo "hosts \u6062\u590d\u6807\u8bb0\u5df2\u5b58\u5728\uff0c\u62d2\u7edd\u4fee\u6539"; exit 1
   fi
@@ -217,6 +228,15 @@ ${HOSTS_RECOVERY_RUNTIME_SHELL}
 trap release_running_lock EXIT
 trap 'exit 1' HUP INT TERM
 acquire_running_lock || exit 1
+[ -f "$HOSTS_FILE" ] && [ ! -L "$HOSTS_FILE" ] || { echo "hosts \u6587\u4ef6\u5728\u9501\u5b9a\u524d\u53d8\u5f97\u4e0d\u5b89\u5168"; exit 1; }
+OLD_HOSTS_MODE="$(stat -c %a -- "$HOSTS_FILE" 2>/dev/null)" || { echo "\u65e0\u6cd5\u5728\u9501\u5185\u8bfb\u53d6 hosts \u6743\u9650"; exit 1; }
+OLD_HOSTS_UID="$(stat -c %u -- "$HOSTS_FILE" 2>/dev/null)" || { echo "\u65e0\u6cd5\u5728\u9501\u5185\u8bfb\u53d6 hosts \u6240\u6709\u8005"; exit 1; }
+OLD_HOSTS_GID="$(stat -c %g -- "$HOSTS_FILE" 2>/dev/null)" || { echo "\u65e0\u6cd5\u5728\u9501\u5185\u8bfb\u53d6 hosts \u6240\u5c5e\u7ec4"; exit 1; }
+case "$OLD_HOSTS_MODE" in ""|*[!0-7]*) echo "hosts \u6743\u9650\u683c\u5f0f\u4e0d\u5b89\u5168"; exit 1 ;; esac
+case "$OLD_HOSTS_UID" in ""|*[!0-9]*) echo "hosts \u6240\u6709\u8005\u683c\u5f0f\u4e0d\u5b89\u5168"; exit 1 ;; esac
+case "$OLD_HOSTS_GID" in ""|*[!0-9]*) echo "hosts \u6240\u5c5e\u7ec4\u683c\u5f0f\u4e0d\u5b89\u5168"; exit 1 ;; esac
+$RUN_AS cp -a -- "$HOSTS_FILE" "$HOSTS_BACKUP" ||
+  { echo "\u65e0\u6cd5\u5728 hosts \u8d44\u6e90\u9501\u5185\u5237\u65b0\u5907\u4efd"; exit 1; }
 [ -f "$HOSTS_BACKUP" ] && [ ! -L "$HOSTS_BACKUP" ] || { echo "hosts \u5907\u4efd\u521b\u5efa\u5931\u8d25\u6216\u4e0d\u53ef\u7528"; exit 1; }
 [ "$(stat -c %a -- "$HOSTS_BACKUP")" = "$OLD_HOSTS_MODE" ] &&
   [ "$(stat -c %u -- "$HOSTS_BACKUP")" = "$OLD_HOSTS_UID" ] &&
@@ -323,7 +343,7 @@ if [ "$ROLLBACK_UID" != "0" ]; then
   sudo -v || { echo "sudo \u6388\u6743\u5931\u8d25\uff0c\u672a\u6062\u590d hosts"; exit 1; }
   ROLLBACK_AS="sudo"
 fi
-$ROLLBACK_AS cp -- "$HOSTS_BACKUP" "$HOSTS_FILE"
+$ROLLBACK_AS cp -a -- "$HOSTS_BACKUP" "$HOSTS_FILE"
 $ROLLBACK_AS chown "$OLD_HOSTS_UID:$OLD_HOSTS_GID" -- "$HOSTS_FILE"
 $ROLLBACK_AS chmod "$OLD_HOSTS_MODE" -- "$HOSTS_FILE"
 sh -- "$VERIFY_SCRIPT"

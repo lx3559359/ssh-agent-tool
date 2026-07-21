@@ -420,6 +420,10 @@ function shellLiteral (value) {
   return quote + String(value).split(quote).join(quote + '\\' + quote + quote) + quote
 }
 
+function flockStatePath (sandbox, lockFile = sandbox.runningLock) {
+  return sandbox.flockState + '.' + path.posix.basename(lockFile)
+}
+
 function createShellSandbox (t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shellpilot-task6-'))
   t.after(() => fs.rmSync(root, { force: true, recursive: true }))
@@ -438,6 +442,8 @@ function createShellSandbox (t) {
     setupRelease: toPosixPath(path.join(root, 'setup-release')),
     cleanupReady: toPosixPath(path.join(root, 'cleanup-ready')),
     cleanupRelease: toPosixPath(path.join(root, 'cleanup-release')),
+    hostsLockReady: toPosixPath(path.join(root, 'hosts-lock-ready')),
+    hostsLockRelease: toPosixPath(path.join(root, 'hosts-lock-release')),
     installRollbackStatus: toPosixPath(path.join(root, 'install-rollback-status')),
     rollbackDirectory: toPosixPath(path.join(root, 'rollback')),
     commandDirectory: toPosixPath(path.join(root, 'bin'))
@@ -448,6 +454,7 @@ function createShellSandbox (t) {
   result.runningMarker = result.rollbackScript + '.running'
   result.runningLock = result.rollbackScript + '.running.lock'
   fs.writeFileSync(result.hosts, '127.0.0.1 localhost\n192.0.2.10 old.example.com\n')
+  result.hostsResourceLock = result.rollbackDirectory + '/.hosts.resource.lock'
   fs.writeFileSync(result.hostname, 'old-host.example.com\n')
   fs.writeFileSync(result.timezone, 'UTC\n')
   fs.mkdirSync(result.commandDirectory)
@@ -496,7 +503,7 @@ case "$format" in
       printf "%s\\n" "$HOSTS_MODE_OVERRIDE"
     else
       case "$1" in
-        "$ROLLBACK_ROOT"/*.running.lock) printf "600\\n" ;;
+        "$ROLLBACK_ROOT"/*.running.lock|"$ROLLBACK_ROOT"/.hosts.resource.lock) printf "600\\n" ;;
         "$ROLLBACK_ROOT"/*.sh.consumed) printf "700\\n" ;;
         "$ROLLBACK_ROOT"/operation.*/timezone.state) printf "600\\n" ;;
         "$ROLLBACK_ROOT"/operation.*/timezone-state.*) printf "600\\n" ;;
@@ -546,12 +553,22 @@ fi
 exec /usr/bin/chmod "$@"
 `,
     flock: `#!/bin/sh
+lock_key="\${RUN_LOCK_FILE##*/}"
+[ -n "$lock_key" ] || lock_key=default
+lock_state="$FLOCK_STATE.$lock_key"
 if [ "$1" = "-n" ] && [ "$2" = "9" ]; then
-  mkdir -- "$FLOCK_STATE" 2>/dev/null
-  exit $?
+  if [ -n "$HOSTS_BASELINE_BEFORE_LOCK" ]; then
+    printf "%s" "$HOSTS_BASELINE_BEFORE_LOCK" > "$HOSTS_FIXTURE" || exit 1
+  fi
+  mkdir -- "$lock_state" 2>/dev/null || exit $?
+  if [ "$PAUSE_HOSTS_RESOURCE_LOCK" = "yes" ]; then
+    : > "$HOSTS_LOCK_READY"
+    while [ ! -e "$HOSTS_LOCK_RELEASE" ]; do sleep 0.02; done
+  fi
+  exit 0
 fi
 if [ "$1" = "-u" ] && [ "$2" = "9" ]; then
-  rmdir -- "$FLOCK_STATE" 2>/dev/null || true
+  rmdir -- "$lock_state" 2>/dev/null || true
   exit 0
 fi
 exit 2
@@ -1104,14 +1121,16 @@ async function loadConfirmedTask6Runtime () {
   }
 }
 
-function renderConfirmedTask6Command (runtime, testCase, sandbox) {
+function renderConfirmedTask6Command (runtime, testCase, sandbox, overrides = {}) {
   const item = runtime.byId.get(testCase.id)
   const context = {
-    rollbackPath: '/tmp/shellpilot-rollback/task6-test-1700000000000.sh'
+    rollbackPath: overrides.rollbackPath ||
+      '/tmp/shellpilot-rollback/task6-test-1700000000000.sh'
   }
   const values = {
     ...runtime.buildQuickCommandParamValues(item, context),
     ...testCase.values,
+    ...overrides.values,
     确认执行: 'yes'
   }
   return rewriteSandboxPaths(
@@ -1140,6 +1159,8 @@ function buildConfirmedShellPrelude (sandbox, options = {}) {
     'ROLLBACK_DURING_HOSTS_INSTALL=' + shellLiteral(options.rollbackDuringHostsInstall ? 'yes' : 'no'),
     'PAUSE_SETUP=' + shellLiteral(options.pauseSetup ? 'yes' : 'no'),
     'PAUSE_CLEANUP_STAT=' + shellLiteral(options.pauseCleanupStat ? 'yes' : 'no'),
+    'PAUSE_HOSTS_RESOURCE_LOCK=' + shellLiteral(options.pauseHostsResourceLock ? 'yes' : 'no'),
+    'HOSTS_BASELINE_BEFORE_LOCK=' + shellLiteral(options.hostsBaselineBeforeLock || ''),
     'RECOVERY_LOG=' + shellLiteral(sandbox.recoveryLog),
     'RECOVERY_READY=' + shellLiteral(sandbox.recoveryReady),
     'RECOVERY_RELEASE=' + shellLiteral(sandbox.recoveryRelease),
@@ -1150,6 +1171,8 @@ function buildConfirmedShellPrelude (sandbox, options = {}) {
     'SETUP_READY=' + shellLiteral(sandbox.setupReady),
     'SETUP_RELEASE=' + shellLiteral(sandbox.setupRelease),
     'CLEANUP_READY=' + shellLiteral(sandbox.cleanupReady),
+    'HOSTS_LOCK_READY=' + shellLiteral(sandbox.hostsLockReady),
+    'HOSTS_LOCK_RELEASE=' + shellLiteral(sandbox.hostsLockRelease),
     'CLEANUP_RELEASE=' + shellLiteral(sandbox.cleanupRelease),
     'CONSUMED_MARKER_FIXTURE=' + shellLiteral(sandbox.consumedMarker),
     'SUDO_LOG=' + shellLiteral(sandbox.sudoLog),
@@ -1162,10 +1185,12 @@ function buildConfirmedShellPrelude (sandbox, options = {}) {
     'export PATH HOSTNAME_STATE TIMEZONE_STATE MUTATION_LOG HOSTS_FIXTURE',
     'export ROLLBACK_ROOT',
     'export FAIL_RECOVERY FAIL_RECOVERY_STEP PAUSE_RECOVERY RECOVERY_LOG',
-    'export RECOVERY_READY RECOVERY_RELEASE FLOCK_STATE FAIL_CONSUMED',
+    'export RECOVERY_READY RECOVERY_RELEASE FLOCK_STATE FAIL_CONSUMED RUN_LOCK_FILE',
     'export ROLLBACK_DURING_HOSTS_INSTALL INSTALL_ROLLBACK_STATUS',
     'export CONSUMED_MARKER_FIXTURE SUDO_LOG',
     'COMMENT_ONLY_HOSTS_AFTER_INSTALL=' + shellLiteral(options.commentOnlyHostsAfterInstall ? 'yes' : 'no'),
+    'export PAUSE_HOSTS_RESOURCE_LOCK HOSTS_BASELINE_BEFORE_LOCK',
+    'export HOSTS_LOCK_READY HOSTS_LOCK_RELEASE',
     'CASE_FOLD_HOSTS_AFTER_INSTALL=' + shellLiteral(options.caseFoldHostsAfterInstall ? 'yes' : 'no'),
     'CLEANUP_STAT_ARMED=no',
     'stat () {',
@@ -1190,7 +1215,7 @@ function buildConfirmedShellPrelude (sandbox, options = {}) {
     '    %g) printf "0\\n" ;;',
     '    %a)',
     '      case "$target" in',
-    '        "$ROLLBACK_ROOT"/*.running.lock) printf "600\\n" ;;',
+    '        "$ROLLBACK_ROOT"/*.running.lock|"$ROLLBACK_ROOT"/.hosts.resource.lock) printf "600\\n" ;;',
     '        "$ROLLBACK_ROOT"/operation.*/timezone.state) printf "600\\n" ;;',
     '        "$ROLLBACK_ROOT"/operation.*/timezone-state.*) printf "600\\n" ;;',
     '        "$ROLLBACK_ROOT"/operation.*/*) printf "644\\n" ;;',
@@ -2221,6 +2246,178 @@ test('hosts mutation holds rollback flock through install and final verification
   )
   assert.equal(fs.existsSync(sandbox.consumedMarker), true)
 })
+test('hosts rollback command uses metadata-preserving cp -a', async t => {
+  const runtime = await loadConfirmedTask6Runtime()
+  const testCase = confirmedCommandCases.find(testCase => testCase.state === 'hosts')
+  const sandbox = createShellSandbox(t)
+  runPosixShell([
+    buildConfirmedShellPrelude(sandbox),
+    renderConfirmedTask6Command(runtime, testCase, sandbox)
+  ].join('\n'))
+
+  const rollbackText = fs.readFileSync(sandbox.rollbackScript, 'utf8')
+  assert.match(
+    rollbackText,
+    /\$ROLLBACK_AS cp -a -- "\$HOSTS_BACKUP" "\$HOSTS_FILE"/
+  )
+})
+
+test('hosts mutations with different rollback paths share one resource lock', async t => {
+  const runtime = await loadConfirmedTask6Runtime()
+  const testCase = confirmedCommandCases.find(testCase => testCase.state === 'hosts')
+  const sandbox = createShellSandbox(t)
+  const firstRollbackPath = '/tmp/shellpilot-rollback/hosts-first.sh'
+  const secondRollbackPath = '/tmp/shellpilot-rollback/hosts-second.sh'
+  const firstRollbackScript = sandbox.rollbackDirectory + '/hosts-first.sh'
+  const secondRollbackScript = sandbox.rollbackDirectory + '/hosts-second.sh'
+  const firstCommand = renderConfirmedTask6Command(runtime, testCase, sandbox, {
+    rollbackPath: firstRollbackPath,
+    values: {
+      IP\u5730\u5740: '192.0.2.21',
+      \u4e3b\u673a\u540d: 'first-lock.example.com'
+    }
+  })
+  const secondCommand = renderConfirmedTask6Command(runtime, testCase, sandbox, {
+    rollbackPath: secondRollbackPath,
+    values: {
+      IP\u5730\u5740: '192.0.2.22',
+      \u4e3b\u673a\u540d: 'second-lock.example.com'
+    }
+  })
+  const first = runPosixShellAsync([
+    buildConfirmedShellPrelude(sandbox, { pauseHostsResourceLock: true }),
+    firstCommand
+  ].join('\n'))
+  let firstResult
+
+  try {
+    await waitForPath(sandbox.hostsLockReady)
+    const second = runPosixShell([
+      buildConfirmedShellPrelude(sandbox),
+      secondCommand
+    ].join('\n'), undefined)
+
+    assert.notEqual(second.status, 0, second.stderr || second.stdout)
+    assert.equal(fs.readFileSync(sandbox.hosts, 'utf8'), originalHostsFixture)
+    assert.equal(fs.existsSync(secondRollbackScript), false)
+    assert.equal(fs.existsSync(sandbox.hostsResourceLock), true)
+    assert.equal(
+      fs.existsSync(flockStatePath(sandbox, sandbox.hostsResourceLock)),
+      true
+    )
+  } finally {
+    fs.writeFileSync(sandbox.hostsLockRelease, '')
+    firstResult = await first.completion
+  }
+
+  assert.equal(firstResult.status, 0, firstResult.stderr || firstResult.stdout)
+  assert.equal(firstResult.signal, null)
+  const hosts = fs.readFileSync(sandbox.hosts, 'utf8')
+  assert.match(hosts, /192\.0\.2\.21 first-lock\.example\.com/)
+  assert.doesNotMatch(hosts, /second-lock\.example\.com/)
+  assert.equal(fs.existsSync(firstRollbackScript), true)
+  assert.equal(fs.existsSync(sandbox.hostsResourceLock), false)
+  assert.equal(
+    fs.existsSync(flockStatePath(sandbox, sandbox.hostsResourceLock)),
+    false
+  )
+})
+
+test('hosts refreshes rollback snapshot after acquiring resource lock', async t => {
+  const runtime = await loadConfirmedTask6Runtime()
+  const testCase = confirmedCommandCases.find(testCase => testCase.state === 'hosts')
+  const sandbox = createShellSandbox(t)
+  const lockedBaseline = originalHostsFixture +
+    '198.51.100.77 lock-baseline.example.com\n'
+  const mutation = runPosixShell([
+    buildConfirmedShellPrelude(sandbox, {
+      hostsBaselineBeforeLock: lockedBaseline
+    }),
+    renderConfirmedTask6Command(runtime, testCase, sandbox)
+  ].join('\n'), undefined)
+
+  assert.equal(mutation.status, 0, mutation.stderr || mutation.stdout)
+  const rollback = runPosixShell([
+    buildConfirmedShellPrelude(sandbox),
+    'sh -- ' + shellLiteral(sandbox.rollbackScript)
+  ].join('\n'), undefined)
+
+  assert.equal(rollback.status, 0, rollback.stderr || rollback.stdout)
+  assert.equal(fs.readFileSync(sandbox.hosts, 'utf8'), lockedBaseline)
+})
+
+test('hosts accepts and releases a stale safe resource lock', async t => {
+  const runtime = await loadConfirmedTask6Runtime()
+  const testCase = confirmedCommandCases.find(testCase => testCase.state === 'hosts')
+  const sandbox = createShellSandbox(t)
+  fs.mkdirSync(sandbox.rollbackDirectory)
+  fs.writeFileSync(sandbox.hostsResourceLock, '')
+  fs.chmodSync(sandbox.hostsResourceLock, 0o600)
+
+  const result = runPosixShell([
+    buildConfirmedShellPrelude(sandbox),
+    renderConfirmedTask6Command(runtime, testCase, sandbox)
+  ].join('\n'), undefined)
+
+  assert.equal(result.status, 0, result.stderr || result.stdout)
+  assertConfirmedTask6Mutation(sandbox, testCase)
+  assert.equal(fs.existsSync(sandbox.hostsResourceLock), false)
+})
+
+test('hosts rollback restores supported extended metadata', async t => {
+  const hasXattr = runPosixShell(
+    'command -v setfattr >/dev/null 2>&1 && command -v getfattr >/dev/null 2>&1',
+    undefined
+  ).status === 0
+  const hasAcl = runPosixShell(
+    'command -v setfacl >/dev/null 2>&1 && command -v getfacl >/dev/null 2>&1',
+    undefined
+  ).status === 0
+  if (!hasXattr && !hasAcl) {
+    t.skip('setfattr/getfattr and setfacl/getfacl are unavailable')
+    return
+  }
+
+  const runtime = await loadConfirmedTask6Runtime()
+  const testCase = confirmedCommandCases.find(testCase => testCase.state === 'hosts')
+  const sandbox = createShellSandbox(t)
+  const hosts = shellLiteral(sandbox.hosts)
+  const setMetadata = hasXattr
+    ? 'setfattr -n user.shellpilot_task6 -v snapshot -- ' + hosts
+    : 'setfacl -m u:65534:r-- -- ' + hosts
+  const readMetadata = hasXattr
+    ? 'getfattr --only-values -n user.shellpilot_task6 -- ' + hosts
+    : 'getfacl -- ' + hosts
+  const metadataResult = runPosixShell(setMetadata, undefined)
+  if (metadataResult.status !== 0) {
+    t.skip('the temporary filesystem does not support available metadata tools')
+    return
+  }
+  const metadataProbe = runPosixShell(readMetadata, undefined)
+  if (metadataProbe.status !== 0) {
+    t.skip('the temporary filesystem cannot read the available metadata type')
+    return
+  }
+
+  runPosixShell([
+    buildConfirmedShellPrelude(sandbox),
+    renderConfirmedTask6Command(runtime, testCase, sandbox)
+  ].join('\n'))
+  runPosixShell(hasXattr
+    ? 'setfattr -x user.shellpilot_task6 -- ' + hosts + ' 2>/dev/null || true'
+    : 'setfacl -x u:65534 -- ' + hosts + ' 2>/dev/null || true')
+  runPosixShell([
+    buildConfirmedShellPrelude(sandbox),
+    'sh -- ' + shellLiteral(sandbox.rollbackScript)
+  ].join('\n'))
+
+  const restoredMetadata = runPosixShell(readMetadata)
+  if (hasXattr) {
+    assert.equal(restoredMetadata.stdout.trim(), 'snapshot')
+  } else {
+    assert.match(restoredMetadata.stdout, /^user:(?:65534|nobody):r--$/m)
+  }
+})
 
 test('hosts rollback does not consume a failed restore and reconciles retries idempotently', async t => {
   const runtime = await loadConfirmedTask6Runtime()
@@ -2350,6 +2547,7 @@ test('timezone cleanup keeps the mutex across the inode-check unlink window', as
     await waitForPath(sandbox.cleanupReady)
     const replacement = runPosixShell([
       buildConfirmedShellPrelude(sandbox),
+      'RUN_LOCK_FILE="$ROLLBACK_SCRIPT_FIXTURE.running.lock"',
       '[ ! -L "$ROLLBACK_SCRIPT_FIXTURE.running.lock" ] || exit 72',
       'exec 9>> "$ROLLBACK_SCRIPT_FIXTURE.running.lock" || exit 72',
       'flock -n 9 || exit 73',
@@ -2512,7 +2710,7 @@ test('timezone rollback signal trap releases its owner and mutex', async t => {
   const result = await rollback.completion
   assert.notEqual(result.status, 0)
   assert.equal(fs.existsSync(sandbox.runningMarker), false)
-  assert.equal(fs.existsSync(sandbox.flockState), false)
+  assert.equal(fs.existsSync(flockStatePath(sandbox)), false)
   assert.equal(fs.existsSync(sandbox.consumedMarker), false)
   assert.equal(
     fs.readFileSync(sandbox.timezone, 'utf8'),
@@ -2560,7 +2758,7 @@ test('timezone rollback reconciles a consumed restore after response loss', asyn
   assert.notEqual(interrupted.status, 0)
   assertOriginalTask6State(sandbox)
   assert.equal(fs.existsSync(sandbox.runningMarker), false)
-  assert.equal(fs.existsSync(sandbox.flockState), false)
+  assert.equal(fs.existsSync(flockStatePath(sandbox)), false)
 
   const mutations = fs.readFileSync(sandbox.mutationLog, 'utf8')
   assert.equal(mutations.split('\n').filter(line => line === 'timezone:UTC').length, 1)
@@ -2600,7 +2798,7 @@ test('timezone rollback releases its mutex when consumed publication fails', asy
   assert.notEqual(failed.status, 0)
   assert.equal(fs.existsSync(sandbox.consumedMarker), false)
   assert.equal(fs.existsSync(sandbox.runningMarker), false)
-  assert.equal(fs.existsSync(sandbox.flockState), false)
+  assert.equal(fs.existsSync(flockStatePath(sandbox)), false)
 
   runPosixShell([
     buildConfirmedShellPrelude(sandbox),
