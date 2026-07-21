@@ -430,9 +430,14 @@ function createShellSandbox (t) {
     timezone: toPosixPath(path.join(root, 'timezone-state')),
     mutationLog: toPosixPath(path.join(root, 'mutation.log')),
     recoveryLog: toPosixPath(path.join(root, 'recovery.log')),
+    sudoLog: toPosixPath(path.join(root, 'sudo.log')),
     flockState: toPosixPath(path.join(root, 'flock-held')),
     recoveryReady: toPosixPath(path.join(root, 'recovery-ready')),
     recoveryRelease: toPosixPath(path.join(root, 'recovery-release')),
+    setupReady: toPosixPath(path.join(root, 'setup-ready')),
+    setupRelease: toPosixPath(path.join(root, 'setup-release')),
+    cleanupReady: toPosixPath(path.join(root, 'cleanup-ready')),
+    cleanupRelease: toPosixPath(path.join(root, 'cleanup-release')),
     rollbackDirectory: toPosixPath(path.join(root, 'rollback')),
     commandDirectory: toPosixPath(path.join(root, 'bin'))
   }
@@ -483,9 +488,25 @@ if [ "$1" = "-c" ]; then format="$2"; shift 2; fi
 if [ "$1" = "-Lc" ]; then dereference="-L"; format="$2"; shift 2; fi
 [ "$1" != "--" ] || shift
 case "$format" in
-  %u) [ -n "$HOSTS_UID_OVERRIDE" ] && printf "%s\\n" "$HOSTS_UID_OVERRIDE" || printf "0\\n" ;;
+  %u) [ -n "$HOSTS_UID_OVERRIDE" ] && printf "%s\\n" "$HOSTS_UID_OVERRIDE" || id -u ;;
   %g) [ -n "$HOSTS_GID_OVERRIDE" ] && printf "%s\\n" "$HOSTS_GID_OVERRIDE" || printf "0\\n" ;;
-  %a) [ -n "$HOSTS_MODE_OVERRIDE" ] && printf "%s\\n" "$HOSTS_MODE_OVERRIDE" || printf "644\\n" ;;
+  %a)
+    if [ -n "$HOSTS_MODE_OVERRIDE" ]; then
+      printf "%s\\n" "$HOSTS_MODE_OVERRIDE"
+    else
+      case "$1" in
+        "$ROLLBACK_ROOT"/*.running.lock) printf "600\\n" ;;
+        "$ROLLBACK_ROOT"/operation.*/timezone.state) printf "600\\n" ;;
+        "$ROLLBACK_ROOT"/operation.*/timezone-state.*) printf "600\\n" ;;
+        "$ROLLBACK_ROOT"/operation.*/timezone-rollback.*) printf "700\\n" ;;
+        "$ROLLBACK_ROOT"/operation.*/timezone-verify.*) printf "700\\n" ;;
+        "$ROLLBACK_ROOT"/operation.*/*) printf "644\\n" ;;
+        "$ROLLBACK_ROOT"|"$ROLLBACK_ROOT"/operation.*) printf "700\\n" ;;
+        "$ROLLBACK_ROOT"/*.sh) printf "700\\n" ;;
+        *) printf "644\\n" ;;
+      esac
+    fi
+    ;;
   *) exec /usr/bin/stat $dereference -c "$format" -- "$1" ;;
 esac
 `,
@@ -533,6 +554,15 @@ if [ "$1" = "-u" ] && [ "$2" = "9" ]; then
 fi
 exit 2
 `,
+    mkdir: `#!/bin/sh
+destination=""
+for argument in "$@"; do destination="$argument"; done
+if [ "$FAIL_CONSUMED" = "yes" ] &&
+  [ "$destination" = "$CONSUMED_MARKER_FIXTURE" ]; then
+  exit 1
+fi
+exec /usr/bin/mkdir "$@"
+`,
     ps: `#!/bin/sh
 pid=""
 while [ "$#" -gt 0 ]; do
@@ -562,6 +592,75 @@ command cp -- "$1" "$2" || exit 1
     fs.chmodSync(commandPath, 0o755)
   }
   return result
+}
+
+function writeSandboxCommand (sandbox, name, contents) {
+  const commandPath = path.join(
+    sandbox.commandDirectory.replaceAll('/', path.sep),
+    name
+  )
+  fs.writeFileSync(commandPath, contents)
+  fs.chmodSync(commandPath, 0o755)
+}
+
+function setSandboxUid (sandbox, uid) {
+  writeSandboxCommand(sandbox, 'id', `#!/bin/sh
+if [ "$1" = "-u" ]; then printf "${uid}\\n"; exit 0; fi
+exec /usr/bin/id "$@"
+`)
+}
+
+function installSandboxSudo (sandbox, { failAuthorization = false } = {}) {
+  writeSandboxCommand(sandbox, 'sudo', `#!/bin/sh
+printf "sudo" >> "$SUDO_LOG"
+for argument in "$@"; do printf "\\t%s" "$argument" >> "$SUDO_LOG"; done
+printf "\\n" >> "$SUDO_LOG"
+if [ "$1" = "-v" ]; then exit ${failAuthorization ? 1 : 0}; fi
+exec "$@"
+`)
+}
+
+function configureRecoveryProcFixture (sandbox, {
+  exists = true,
+  pid = '4242',
+  start = '777',
+  state = 'S'
+} = {}) {
+  const root = path.join(sandbox.root.replaceAll('/', path.sep), 'proc-fixture')
+  fs.mkdirSync(path.join(root, 'sys', 'kernel', 'random'), { recursive: true })
+  fs.writeFileSync(path.join(root, 'sys', 'kernel', 'random', 'boot_id'), 'fixture-boot\n')
+  if (exists) {
+    fs.mkdirSync(path.join(root, pid), { recursive: true })
+    fs.writeFileSync(path.join(root, pid, 'stat'), [
+      pid,
+      '(fixture)',
+      state,
+      ...Array(18).fill('1'),
+      start
+    ].join(' ') + '\n')
+  }
+
+  const procRoot = toPosixPath(root)
+  const rollbackPath = sandbox.rollbackScript.replaceAll('/', path.sep)
+  let rollback = fs.readFileSync(rollbackPath, 'utf8')
+  if (rollback.includes('PROC_ROOT="/proc"')) {
+    rollback = rollback.replace('PROC_ROOT="/proc"', 'PROC_ROOT=' + shellLiteral(procRoot))
+  } else {
+    rollback = rollback.replace('umask 077\n', 'umask 077\nPROC_ROOT=' + shellLiteral(procRoot) + '\n')
+    rollback = rollback
+      .replaceAll('"/proc/$PROCESS_PID/stat"', '"$PROC_ROOT/$PROCESS_PID/stat"')
+      .replaceAll('/proc/sys/kernel/random/boot_id', '"$PROC_ROOT/sys/kernel/random/boot_id"')
+  }
+  rollback = rollback.replace(
+    '  kill -0 "$OWNER_PID" 2>/dev/null || return 1',
+    '  : # fixture PID is observable'
+  )
+  fs.writeFileSync(rollbackPath, rollback)
+  return {
+    pid,
+    procIdentity: `proc:fixture-boot:${start}`,
+    psIdentity: `ps:fixture-start-${pid}`
+  }
 }
 
 function snapshotTree (root) {
@@ -988,15 +1087,24 @@ function buildConfirmedShellPrelude (sandbox, options = {}) {
     'FAIL_STATE=' + shellLiteral(options.failState ? 'yes' : 'no'),
     'FAIL_ROLLBACK=' + shellLiteral(options.failRollback ? 'yes' : 'no'),
     'FAIL_VERIFIER=' + shellLiteral(options.failVerifier ? 'yes' : 'no'),
+    'FAIL_CONSUMED=' + shellLiteral(options.failConsumed ? 'yes' : 'no'),
     'FAIL_RECOVERY=' + shellLiteral(options.failRecovery ? 'yes' : 'no'),
     'FAIL_RECOVERY_STEP=' + shellLiteral(options.failRecoveryStep || ''),
     'PAUSE_RECOVERY=' + shellLiteral(options.pauseRecovery ? 'yes' : 'no'),
+    'PAUSE_SETUP=' + shellLiteral(options.pauseSetup ? 'yes' : 'no'),
+    'PAUSE_CLEANUP_STAT=' + shellLiteral(options.pauseCleanupStat ? 'yes' : 'no'),
     'RECOVERY_LOG=' + shellLiteral(sandbox.recoveryLog),
     'RECOVERY_READY=' + shellLiteral(sandbox.recoveryReady),
     'RECOVERY_RELEASE=' + shellLiteral(sandbox.recoveryRelease),
     'FLOCK_STATE=' + shellLiteral(sandbox.flockState),
     'ROLLBACK_SCRIPT_FIXTURE=' + shellLiteral(sandbox.rollbackScript),
     'VERIFIER_SCRIPT_FIXTURE=' + shellLiteral(sandbox.verifierScript),
+    'SETUP_READY=' + shellLiteral(sandbox.setupReady),
+    'SETUP_RELEASE=' + shellLiteral(sandbox.setupRelease),
+    'CLEANUP_READY=' + shellLiteral(sandbox.cleanupReady),
+    'CLEANUP_RELEASE=' + shellLiteral(sandbox.cleanupRelease),
+    'CONSUMED_MARKER_FIXTURE=' + shellLiteral(sandbox.consumedMarker),
+    'SUDO_LOG=' + shellLiteral(sandbox.sudoLog),
     'CONCURRENT_PAIR_ON_ROLLBACK_LINK=' + shellLiteral(options.concurrentPair ? 'yes' : 'no'),
     'REPLACE_ROLLBACK_ON_VERIFIER_LINK=' + shellLiteral(options.replaceRollback ? 'yes' : 'no'),
     'PUBLISH_ROLLBACK_THEN_FAIL=' + shellLiteral(options.publishThenFail ? 'yes' : 'no'),
@@ -1004,25 +1112,49 @@ function buildConfirmedShellPrelude (sandbox, options = {}) {
     'EXPECTED_IP=' + shellLiteral(expectedIp),
     'EXPECTED_HOST=' + shellLiteral(expectedHost),
     'export PATH HOSTNAME_STATE TIMEZONE_STATE MUTATION_LOG HOSTS_FIXTURE',
+    'export ROLLBACK_ROOT',
     'export FAIL_RECOVERY FAIL_RECOVERY_STEP PAUSE_RECOVERY RECOVERY_LOG',
-    'export RECOVERY_READY RECOVERY_RELEASE FLOCK_STATE',
+    'export RECOVERY_READY RECOVERY_RELEASE FLOCK_STATE FAIL_CONSUMED',
+    'export CONSUMED_MARKER_FIXTURE SUDO_LOG',
     'COMMENT_ONLY_HOSTS_AFTER_INSTALL=' + shellLiteral(options.commentOnlyHostsAfterInstall ? 'yes' : 'no'),
     'CASE_FOLD_HOSTS_AFTER_INSTALL=' + shellLiteral(options.caseFoldHostsAfterInstall ? 'yes' : 'no'),
+    'CLEANUP_STAT_ARMED=no',
     'stat () {',
     '  format=""',
+    '  dereference=""',
     '  if [ "$1" = "-c" ]; then format="$2"; shift 2; fi',
+    '  if [ "$1" = "-Lc" ]; then dereference="-L"; format="$2"; shift 2; fi',
     '  if [ "$1" = "--" ]; then shift; fi',
     '  target="$1"',
+    '  if [ "$PAUSE_CLEANUP_STAT" = "yes" ] &&',
+    '    [ "$CLEANUP_STAT_ARMED" = "yes" ] &&',
+    '    [ "$format" = "%d:%i" ] &&',
+    '    [ "$target" = "$ROLLBACK_SCRIPT_FIXTURE" ]; then',
+    '    cleanup_inode="$(command stat -c "$format" -- "$target")" || return 1',
+    '    printf "%s\\n" "$cleanup_inode"',
+    '    : > "$CLEANUP_READY"',
+    '    while [ ! -e "$CLEANUP_RELEASE" ]; do sleep 0.02; done',
+    '    return 0',
+    '  fi',
     '  case "$format" in',
-    '    %u|%g) printf "0\\n" ;;',
+    '    %u) id -u ;;',
+    '    %g) printf "0\\n" ;;',
     '    %a)',
     '      case "$target" in',
+    '        "$ROLLBACK_ROOT"/*.running.lock) printf "600\\n" ;;',
+    '        "$ROLLBACK_ROOT"/operation.*/timezone.state) printf "600\\n" ;;',
+    '        "$ROLLBACK_ROOT"/operation.*/timezone-state.*) printf "600\\n" ;;',
     '        "$ROLLBACK_ROOT"/operation.*/*) printf "644\\n" ;;',
     '        "$ROLLBACK_ROOT"|"$ROLLBACK_ROOT"/operation.*|"$ROLLBACK_ROOT"/*.sh) printf "700\\n" ;;',
     '        *) printf "644\\n" ;;',
     '      esac',
     '      ;;',
-    '    *) command stat -c "$format" -- "$target" ;;',
+    '    *)',
+    '      if [ -n "$dereference" ]; then',
+    '        command stat -L -c "$format" -- "$target"',
+    '      else command stat -c "$format" -- "$target"',
+    '      fi',
+    '      ;;',
     '  esac',
     '}',
     'cp () {',
@@ -1060,6 +1192,7 @@ function buildConfirmedShellPrelude (sandbox, options = {}) {
     '  if [ "$PUBLISH_ROLLBACK_THEN_FAIL" = "yes" ] &&',
     '    [ "$destination" = "$ROLLBACK_SCRIPT_FIXTURE" ]; then',
     '    command ln "$@" || return 1',
+    '    CLEANUP_STAT_ARMED=yes',
     '    return 1',
     '  fi',
     '  if [ "$FAIL_ROLLBACK" = "yes" ] &&',
@@ -1113,6 +1246,14 @@ function buildConfirmedShellPrelude (sandbox, options = {}) {
     '    show) cat "$TIMEZONE_STATE" ;;',
     '    list-timezones) printf "UTC\\nAsia/Shanghai\\nEurope/London\\n" ;;',
     '    set-timezone)',
+    '      if [ "$PAUSE_RECOVERY" = "yes" ]; then',
+    '        : > "$RECOVERY_READY"',
+    '        while [ ! -e "$RECOVERY_RELEASE" ]; do sleep 0.02; done',
+    '      fi',
+    '      if [ "$PAUSE_SETUP" = "yes" ]; then',
+    '        printf "%s\\n" "$$" > "$SETUP_READY"',
+    '        while [ ! -e "$SETUP_RELEASE" ]; do :; done',
+    '      fi',
     '      printf "timezone:%s\\n" "$2" >> "$MUTATION_LOG"',
     '      if [ "$VERIFY_FAILURE" = "timezone" ]; then',
     '        printf "Verification/Mismatch\\n" > "$TIMEZONE_STATE"',
@@ -1935,6 +2076,7 @@ test('timezone rollback remains retryable after restore failure', async t => {
     'sh -- ' + rollback
   ].join('\n'), undefined)
   assert.notEqual(failed.status, 0)
+  assert.match(failed.stdout + failed.stderr, /UTC/)
   assert.equal(
     fs.readFileSync(sandbox.timezone, 'utf8'),
     testCase.values['\u65b0\u65f6\u533a'] + '\n'
@@ -1947,6 +2089,286 @@ test('timezone rollback remains retryable after restore failure', async t => {
   ].join('\n'))
   assertOriginalTask6State(sandbox)
   assert.equal(fs.existsSync(sandbox.consumedMarker), true)
+})
+
+test('timezone setup excludes rollback until mutation verification completes', async t => {
+  const runtime = await loadConfirmedTask6Runtime()
+  const testCase = confirmedCommandCases.find(testCase => testCase.state === 'timezone')
+  const sandbox = createShellSandbox(t)
+  const setup = runPosixShellAsync([
+    buildConfirmedShellPrelude(sandbox, { pauseSetup: true }),
+    renderConfirmedTask6Command(runtime, testCase, sandbox)
+  ].join('\n'))
+  let setupResult
+
+  try {
+    await waitForPath(sandbox.setupReady)
+    assert.equal(fs.existsSync(sandbox.rollbackScript), true)
+    assert.equal(fs.existsSync(sandbox.verifierScript), true)
+    const rollback = runPosixShell([
+      buildConfirmedShellPrelude(sandbox),
+      'sh -- ' + shellLiteral(sandbox.rollbackScript)
+    ].join('\n'), undefined)
+    assert.notEqual(rollback.status, 0)
+    assert.notEqual((rollback.stdout + rollback.stderr).trim(), '')
+    assert.equal(fs.existsSync(sandbox.consumedMarker), false)
+    assert.equal(fs.readFileSync(sandbox.timezone, 'utf8'), 'UTC\n')
+    assert.equal(fs.existsSync(sandbox.mutationLog), false)
+  } finally {
+    fs.writeFileSync(sandbox.setupRelease, '')
+    setupResult = await setup.completion
+  }
+
+  assert.equal(setupResult.status, 0, setupResult.stderr || setupResult.stdout)
+  assert.equal(setupResult.signal, null)
+  assert.equal(
+    fs.readFileSync(sandbox.timezone, 'utf8'),
+    testCase.values['\u65b0\u65f6\u533a'] + '\n'
+  )
+})
+
+test('timezone cleanup keeps the mutex across the inode-check unlink window', async t => {
+  const runtime = await loadConfirmedTask6Runtime()
+  const testCase = confirmedCommandCases.find(testCase => testCase.state === 'timezone')
+  const sandbox = createShellSandbox(t)
+  const setup = runPosixShellAsync([
+    buildConfirmedShellPrelude(sandbox, {
+      pauseCleanupStat: true,
+      publishThenFail: true
+    }),
+    renderConfirmedTask6Command(runtime, testCase, sandbox)
+  ].join('\n'))
+  let setupResult
+
+  try {
+    await waitForPath(sandbox.cleanupReady)
+    const replacement = runPosixShell([
+      buildConfirmedShellPrelude(sandbox),
+      '[ ! -L "$ROLLBACK_SCRIPT_FIXTURE.running.lock" ] || exit 72',
+      'exec 9>> "$ROLLBACK_SCRIPT_FIXTURE.running.lock" || exit 72',
+      'flock -n 9 || exit 73',
+      'rm -f -- "$ROLLBACK_SCRIPT_FIXTURE"',
+      'printf "foreign replacement\\n" > "$ROLLBACK_SCRIPT_FIXTURE"',
+      'flock -u 9'
+    ].join('\n'), undefined)
+    assert.notEqual(replacement.status, 0)
+    assert.equal(
+      fs.readFileSync(sandbox.rollbackScript, 'utf8') === 'foreign replacement\n',
+      false
+    )
+  } finally {
+    fs.writeFileSync(sandbox.cleanupRelease, '')
+    setupResult = await setup.completion
+  }
+
+  assert.notEqual(setupResult.status, 0)
+  assertOriginalTask6State(sandbox)
+  assert.equal(fs.existsSync(sandbox.mutationLog), false)
+  assert.deepEqual(listOneShotRecoveryAssets(sandbox, 'timezone'), [])
+})
+
+test('timezone rollback classifies live stale zombie and missing owners', async t => {
+  const runtime = await loadConfirmedTask6Runtime()
+  const testCase = confirmedCommandCases.find(testCase => testCase.state === 'timezone')
+  const cases = [
+    {
+      name: 'live owner',
+      state: 'S',
+      identity: 'proc',
+      rejected: true
+    },
+    {
+      name: 'reused pid identity',
+      state: 'S',
+      identity: 'stale',
+      rejected: false
+    },
+    {
+      name: 'zombie owner',
+      state: 'Z',
+      identity: 'proc',
+      rejected: false
+    },
+    {
+      name: 'dead owner',
+      state: 'X',
+      identity: 'proc',
+      rejected: false
+    },
+    {
+      name: 'missing owner',
+      exists: false,
+      identity: 'ps',
+      rejected: false
+    }
+  ]
+
+  for (const fixture of cases) {
+    await t.test(fixture.name, child => {
+      const sandbox = createShellSandbox(child)
+      runPosixShell([
+        buildConfirmedShellPrelude(sandbox),
+        renderConfirmedTask6Command(runtime, testCase, sandbox)
+      ].join('\n'))
+      const owner = configureRecoveryProcFixture(sandbox, fixture)
+      const identity = fixture.identity === 'proc'
+        ? owner.procIdentity
+        : fixture.identity === 'ps'
+          ? owner.psIdentity
+          : 'proc:fixture-boot:stale-start'
+      fs.writeFileSync(sandbox.runningMarker, owner.pid + '\n' + identity + '\n')
+
+      const result = runPosixShell([
+        buildConfirmedShellPrelude(sandbox),
+        'sh -- ' + shellLiteral(sandbox.rollbackScript)
+      ].join('\n'), undefined)
+      if (fixture.rejected) {
+        assert.notEqual(result.status, 0)
+        assert.equal(fs.existsSync(sandbox.consumedMarker), false)
+        assert.equal(fs.existsSync(sandbox.runningMarker), true)
+        assert.equal(
+          fs.readFileSync(sandbox.timezone, 'utf8'),
+          testCase.values['\u65b0\u65f6\u533a'] + '\n'
+        )
+      } else {
+        assert.equal(result.status, 0, result.stderr || result.stdout)
+        assertOriginalTask6State(sandbox)
+        assert.equal(fs.existsSync(sandbox.consumedMarker), true)
+        assert.equal(fs.existsSync(sandbox.runningMarker), false)
+      }
+    })
+  }
+})
+
+test('timezone rollback signal trap releases its owner and mutex', async t => {
+  const runtime = await loadConfirmedTask6Runtime()
+  const testCase = confirmedCommandCases.find(testCase => testCase.state === 'timezone')
+  const sandbox = createShellSandbox(t)
+  runPosixShell([
+    buildConfirmedShellPrelude(sandbox),
+    renderConfirmedTask6Command(runtime, testCase, sandbox)
+  ].join('\n'))
+  const rollbackPath = sandbox.rollbackScript.replaceAll('/', path.sep)
+  const ownerClaim = 'claim_running_owner || exit 1\n'
+  const rollbackScript = fs.readFileSync(rollbackPath, 'utf8')
+  assert.equal(rollbackScript.includes(ownerClaim), true)
+  fs.writeFileSync(rollbackPath, rollbackScript.replace(
+    ownerClaim,
+    ownerClaim + [
+      'if [ "$PAUSE_RECOVERY" = "yes" ]; then',
+      '  : > "$RECOVERY_READY"',
+      '  while [ ! -e "$RECOVERY_RELEASE" ]; do sleep 0.02; done',
+      'fi'
+    ].join('\n') + '\n'
+  ))
+  const rollback = runPosixShellAsync([
+    buildConfirmedShellPrelude(sandbox, { pauseRecovery: true }),
+    'sh -- ' + shellLiteral(sandbox.rollbackScript)
+  ].join('\n'))
+  t.after(() => {
+    if (fs.existsSync(sandbox.root) &&
+      !fs.existsSync(sandbox.recoveryRelease)) {
+      fs.writeFileSync(sandbox.recoveryRelease, '')
+    }
+    rollback.child.kill('SIGTERM')
+  })
+
+  await waitForPath(sandbox.recoveryReady, 15000)
+  const rollbackPid = fs.readFileSync(sandbox.runningMarker, 'utf8')
+    .split('\n')[0]
+  assert.match(rollbackPid, /^[0-9]+$/)
+  runPosixShell('kill -TERM ' + rollbackPid)
+  fs.writeFileSync(sandbox.recoveryRelease, '')
+  const result = await rollback.completion
+  assert.notEqual(result.status, 0)
+  assert.equal(fs.existsSync(sandbox.runningMarker), false)
+  assert.equal(fs.existsSync(sandbox.flockState), false)
+  assert.equal(fs.existsSync(sandbox.consumedMarker), false)
+  assert.equal(
+    fs.readFileSync(sandbox.timezone, 'utf8'),
+    testCase.values['\u65b0\u65f6\u533a'] + '\n'
+  )
+
+  const retry = runPosixShell([
+    buildConfirmedShellPrelude(sandbox),
+    'sh -- ' + shellLiteral(sandbox.rollbackScript)
+  ].join('\n'), undefined)
+  assert.equal(retry.status, 0, retry.stderr || retry.stdout)
+  assertOriginalTask6State(sandbox)
+  assert.equal(fs.existsSync(sandbox.consumedMarker), true)
+})
+
+test('timezone rollback releases its mutex when consumed publication fails', async t => {
+  const runtime = await loadConfirmedTask6Runtime()
+  const testCase = confirmedCommandCases.find(testCase => testCase.state === 'timezone')
+  const sandbox = createShellSandbox(t)
+  runPosixShell([
+    buildConfirmedShellPrelude(sandbox),
+    renderConfirmedTask6Command(runtime, testCase, sandbox)
+  ].join('\n'))
+  const rollback = 'sh -- ' + shellLiteral(sandbox.rollbackScript)
+  const failed = runPosixShell([
+    buildConfirmedShellPrelude(sandbox, { failConsumed: true }),
+    rollback
+  ].join('\n'), undefined)
+  assert.notEqual(failed.status, 0)
+  assert.equal(fs.existsSync(sandbox.consumedMarker), false)
+  assert.equal(fs.existsSync(sandbox.runningMarker), false)
+  assert.equal(fs.existsSync(sandbox.flockState), false)
+
+  runPosixShell([
+    buildConfirmedShellPrelude(sandbox),
+    rollback
+  ].join('\n'))
+  assertOriginalTask6State(sandbox)
+  assert.equal(fs.existsSync(sandbox.consumedMarker), true)
+})
+
+test('timezone rollback resolves sudo from its current execution identity', async t => {
+  const runtime = await loadConfirmedTask6Runtime()
+  const testCase = confirmedCommandCases.find(testCase => testCase.state === 'timezone')
+  const cases = [
+    { name: 'sudo missing', install: false, authorizationFails: false, succeeds: false },
+    { name: 'sudo authorization fails', install: true, authorizationFails: true, succeeds: false },
+    { name: 'sudo succeeds', install: true, authorizationFails: false, succeeds: true }
+  ]
+
+  for (const fixture of cases) {
+    await t.test(fixture.name, child => {
+      const sandbox = createShellSandbox(child)
+      runPosixShell([
+        buildConfirmedShellPrelude(sandbox),
+        renderConfirmedTask6Command(runtime, testCase, sandbox)
+      ].join('\n'))
+      setSandboxUid(sandbox, 1000)
+      if (fixture.install) {
+        installSandboxSudo(sandbox, {
+          failAuthorization: fixture.authorizationFails
+        })
+      }
+
+      const result = runPosixShell([
+        buildConfirmedShellPrelude(sandbox),
+        'sh -- ' + shellLiteral(sandbox.rollbackScript)
+      ].join('\n'), undefined)
+      if (fixture.succeeds) {
+        assert.equal(result.status, 0, result.stderr || result.stdout)
+        assertOriginalTask6State(sandbox)
+        const sudoLog = fs.readFileSync(sandbox.sudoLog, 'utf8')
+        assert.match(sudoLog, /sudo\t-v/)
+        assert.match(sudoLog, /sudo\ttimedatectl\tset-timezone\tUTC/)
+      } else {
+        assert.notEqual(result.status, 0)
+        assert.match(result.stdout + result.stderr, /sudo/)
+        assert.equal(fs.existsSync(sandbox.consumedMarker), false)
+        assert.equal(fs.existsSync(sandbox.runningMarker), false)
+        assert.equal(
+          fs.readFileSync(sandbox.timezone, 'utf8'),
+          testCase.values['\u65b0\u65f6\u533a'] + '\n'
+        )
+      }
+    })
+  }
 })
 
 test('hostname asset cleanup preserves files owned by a concurrent publisher', async t => {

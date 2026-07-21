@@ -2,6 +2,189 @@ import { READ_ONLY, NEED_EDIT, step, defineCommand, inputParam, numberParam, sel
 import { withRollback } from './shared/safety-metadata.js'
 import { rollbackScriptFilenameMaxLength } from './shared/validation.js'
 
+const RECOVERY_ASSET_CLEANUP_SHELL = `cleanup_owned_recovery_asset () {
+  RECOVERY_FINAL="$1"
+  RECOVERY_EXPECTED_INODE="$2"
+  RECOVERY_LINK_ATTEMPTED="$3"
+  [ -n "$RECOVERY_FINAL" ] && [ -n "$RECOVERY_EXPECTED_INODE" ] || return 0
+  [ "$RECOVERY_LINK_ATTEMPTED" = "yes" ] || return 0
+  [ -f "$RECOVERY_FINAL" ] && [ ! -L "$RECOVERY_FINAL" ] || return 0
+  RECOVERY_CURRENT_INODE="$(stat -c %d:%i -- "$RECOVERY_FINAL" 2>/dev/null)" || return 0
+  if [ "$RECOVERY_CURRENT_INODE" = "$RECOVERY_EXPECTED_INODE" ]; then
+    rm -f -- "$RECOVERY_FINAL" 2>/dev/null || true
+  fi
+}`
+
+const RECOVERY_RUNTIME_SHELL = `PROC_ROOT="/proc"
+RUN_LOCK_HELD=no
+RUN_LOCK_OWNED=no
+RUN_OWNER_OWNED=no
+RUN_LOCK_INODE=""
+RUN_OWNER_INODE=""
+path_inode () {
+  stat -c %d:%i -- "$1" 2>/dev/null
+}
+process_state_is_live () {
+  PROCESS_PID="$1"
+  case "$PROCESS_PID" in ""|*[!0-9]*) return 1 ;; esac
+  if [ -r "$PROC_ROOT/sys/kernel/random/boot_id" ]; then
+    [ -r "$PROC_ROOT/$PROCESS_PID/stat" ] || return 1
+    PROCESS_STAT="$(cat -- "$PROC_ROOT/$PROCESS_PID/stat" 2>/dev/null)" || return 1
+    PROCESS_FIELDS="\${PROCESS_STAT##*) }"
+    set -- $PROCESS_FIELDS
+    [ "$#" -ge 20 ] || return 1
+    case "$1" in Z|X) return 1 ;; esac
+    return 0
+  fi
+  return 0
+}
+process_start_identity () {
+  PROCESS_PID="$1"
+  case "$PROCESS_PID" in ""|*[!0-9]*) return 1 ;; esac
+  if [ -r "$PROC_ROOT/$PROCESS_PID/stat" ]; then
+    PROCESS_STAT="$(cat -- "$PROC_ROOT/$PROCESS_PID/stat" 2>/dev/null)" || PROCESS_STAT=""
+    if [ -n "$PROCESS_STAT" ]; then
+      PROCESS_FIELDS="\${PROCESS_STAT##*) }"
+      set -- $PROCESS_FIELDS
+      if [ "$#" -ge 20 ]; then
+        shift 19
+        PROCESS_BOOT_ID="$(cat -- "$PROC_ROOT/sys/kernel/random/boot_id" 2>/dev/null)" || PROCESS_BOOT_ID=""
+        if [ -n "$PROCESS_BOOT_ID" ]; then
+          printf 'proc:%s:%s\\n' "$PROCESS_BOOT_ID" "$1"
+          return 0
+        fi
+      fi
+    fi
+  fi
+  command -v ps >/dev/null 2>&1 || return 1
+  PROCESS_START="$(ps -o lstart= -p "$PROCESS_PID" 2>/dev/null)" || return 1
+  [ -n "$PROCESS_START" ] || return 1
+  printf 'ps:%s\\n' "$PROCESS_START"
+}
+read_running_owner () {
+  OWNER_PID=""
+  OWNER_START=""
+  [ -f "$RUN_OWNER_FILE" ] && [ ! -L "$RUN_OWNER_FILE" ] || return 1
+  {
+    IFS= read -r OWNER_PID || return 1
+    IFS= read -r OWNER_START || return 1
+  } < "$RUN_OWNER_FILE"
+}
+running_owner_is_live () {
+  read_running_owner || return 1
+  process_state_is_live "$OWNER_PID" || return 1
+  kill -0 "$OWNER_PID" 2>/dev/null || return 1
+  OWNER_CURRENT_START="$(process_start_identity "$OWNER_PID")" || return 1
+  [ "$OWNER_CURRENT_START" = "$OWNER_START" ]
+}
+remove_owned_path () {
+  OWNED_PATH="$1"
+  OWNED_INODE="$2"
+  OWNED_FLAG="$3"
+  [ "$OWNED_FLAG" = "yes" ] && [ -n "$OWNED_INODE" ] || return 0
+  [ -e "$OWNED_PATH" ] && [ ! -L "$OWNED_PATH" ] || return 0
+  OWNED_CURRENT_INODE="$(path_inode "$OWNED_PATH")" || return 0
+  if [ "$OWNED_CURRENT_INODE" = "$OWNED_INODE" ]; then
+    rm -f -- "$OWNED_PATH" 2>/dev/null || true
+  fi
+}
+release_running_lock () {
+  remove_owned_path "$RUN_OWNER_FILE" "$RUN_OWNER_INODE" "$RUN_OWNER_OWNED"
+  RUN_OWNER_OWNED=no
+  if [ "$RUN_LOCK_HELD" = "yes" ]; then
+    if [ "$PRESERVE_RUN_LOCK" != "yes" ]; then
+      remove_owned_path "$RUN_LOCK_FILE" "$RUN_LOCK_INODE" "$RUN_LOCK_OWNED"
+    fi
+    RUN_LOCK_OWNED=no
+    flock -u 9 >/dev/null 2>&1 || true
+    RUN_LOCK_HELD=no
+  fi
+}
+acquire_running_lock () {
+  [ ! -L "$RUN_LOCK_FILE" ] || { echo "$RECOVERY_LABEL \u8fd0\u884c\u9501\u4e0d\u80fd\u662f\u7b26\u53f7\u94fe\u63a5"; return 1; }
+  exec 9>> "$RUN_LOCK_FILE" || { echo "\u65e0\u6cd5\u6253\u5f00 $RECOVERY_LABEL \u8fd0\u884c\u9501"; return 1; }
+  if ! flock -n 9; then
+    if running_owner_is_live; then
+      echo "\u53e6\u4e00\u4e2a $RECOVERY_LABEL \u64cd\u4f5c\u4ecd\u5728\u8fd0\u884c"
+    else
+      echo "$RECOVERY_LABEL \u8fd0\u884c\u9501\u5df2\u88ab\u5360\u7528"
+    fi
+    return 1
+  fi
+  RUN_LOCK_HELD=yes
+  RUN_LOCK_PATH_INODE="$(path_inode "$RUN_LOCK_FILE")" || { echo "\u65e0\u6cd5\u8bc6\u522b $RECOVERY_LABEL \u8fd0\u884c\u9501"; return 1; }
+  RUN_LOCK_FD_INODE="$RUN_LOCK_PATH_INODE"
+  if [ -e "$PROC_ROOT/$$/fd/9" ]; then
+    RUN_LOCK_FD_INODE="$(stat -Lc %d:%i -- "$PROC_ROOT/$$/fd/9" 2>/dev/null)" ||
+      { echo "\u65e0\u6cd5\u9a8c\u8bc1 $RECOVERY_LABEL \u8fd0\u884c\u9501"; return 1; }
+  fi
+  [ "$RUN_LOCK_PATH_INODE" = "$RUN_LOCK_FD_INODE" ] ||
+    { echo "$RECOVERY_LABEL \u8fd0\u884c\u9501\u5728\u83b7\u53d6\u671f\u95f4\u88ab\u66ff\u6362"; return 1; }
+  RUN_LOCK_INODE="$RUN_LOCK_FD_INODE"
+  RUN_LOCK_OWNED=yes
+  if [ "$REQUIRE_SECURE_STORAGE" = "yes" ]; then
+    RECOVERY_UID="$(id -u 2>/dev/null)" ||
+      { echo "\u65e0\u6cd5\u786e\u8ba4 $RECOVERY_LABEL \u6267\u884c\u7528\u6237"; return 1; }
+    RUN_LOCK_OWNER="$(stat -c %u -- "$RUN_LOCK_FILE" 2>/dev/null)" ||
+      { echo "\u65e0\u6cd5\u786e\u8ba4 $RECOVERY_LABEL \u8fd0\u884c\u9501\u6240\u6709\u8005"; return 1; }
+    RUN_LOCK_MODE="$(stat -c %a -- "$RUN_LOCK_FILE" 2>/dev/null)" ||
+      { echo "\u65e0\u6cd5\u786e\u8ba4 $RECOVERY_LABEL \u8fd0\u884c\u9501\u6743\u9650"; return 1; }
+    [ "$RUN_LOCK_OWNER" = "$RECOVERY_UID" ] && [ "$RUN_LOCK_MODE" = "600" ] ||
+      { echo "$RECOVERY_LABEL \u8fd0\u884c\u9501\u6240\u6709\u8005\u6216\u6743\u9650\u4e0d\u5b89\u5168"; return 1; }
+    for RECOVERY_DIRECTORY in "\${RUN_LOCK_FILE%/*}" "\${STATE_FILE%/*}"; do
+      [ -d "$RECOVERY_DIRECTORY" ] && [ ! -L "$RECOVERY_DIRECTORY" ] ||
+        { echo "$RECOVERY_LABEL \u6062\u590d\u76ee\u5f55\u4e0d\u5b89\u5168"; return 1; }
+      RECOVERY_DIRECTORY_OWNER="$(stat -c %u -- "$RECOVERY_DIRECTORY" 2>/dev/null)" ||
+        { echo "\u65e0\u6cd5\u786e\u8ba4 $RECOVERY_LABEL \u6062\u590d\u76ee\u5f55\u6240\u6709\u8005"; return 1; }
+      RECOVERY_DIRECTORY_MODE="$(stat -c %a -- "$RECOVERY_DIRECTORY" 2>/dev/null)" ||
+        { echo "\u65e0\u6cd5\u786e\u8ba4 $RECOVERY_LABEL \u6062\u590d\u76ee\u5f55\u6743\u9650"; return 1; }
+      [ "$RECOVERY_DIRECTORY_OWNER" = "$RECOVERY_UID" ] &&
+        [ "$RECOVERY_DIRECTORY_MODE" = "700" ] ||
+        { echo "$RECOVERY_LABEL \u6062\u590d\u76ee\u5f55\u6240\u6709\u8005\u6216\u6743\u9650\u4e0d\u5b89\u5168"; return 1; }
+    done
+  fi
+}
+claim_running_owner () {
+  if [ -e "$RUN_OWNER_FILE" ] || [ -L "$RUN_OWNER_FILE" ]; then
+    [ ! -L "$RUN_OWNER_FILE" ] || { echo "$RECOVERY_LABEL \u8fd0\u884c\u6807\u8bb0\u4e0d\u80fd\u662f\u7b26\u53f7\u94fe\u63a5"; return 1; }
+    if running_owner_is_live; then
+      echo "\u8fd0\u884c\u6807\u8bb0\u5c5e\u4e8e\u4ecd\u5b58\u6d3b\u7684\u8fdb\u7a0b\uff0c\u62d2\u7edd\u63a5\u7ba1"
+      return 1
+    fi
+    STALE_OWNER_INODE="$(path_inode "$RUN_OWNER_FILE")" || { echo "\u65e0\u6cd5\u8bc6\u522b stale \u8fd0\u884c\u6807\u8bb0"; return 1; }
+    remove_owned_path "$RUN_OWNER_FILE" "$STALE_OWNER_INODE" yes
+    [ ! -e "$RUN_OWNER_FILE" ] && [ ! -L "$RUN_OWNER_FILE" ] ||
+      { echo "\u65e0\u6cd5\u56de\u6536 stale \u8fd0\u884c\u6807\u8bb0"; return 1; }
+  fi
+  SELF_START="$(process_start_identity "$$")" || { echo "\u65e0\u6cd5\u8bc6\u522b\u5f53\u524d $RECOVERY_LABEL \u8fdb\u7a0b"; return 1; }
+  if ! (set -C; printf '%s\\n%s\\n' "$$" "$SELF_START" > "$RUN_OWNER_FILE") 2>/dev/null; then
+    echo "\u65e0\u6cd5\u539f\u5b50\u521b\u5efa $RECOVERY_LABEL \u8fd0\u884c\u6807\u8bb0"
+    return 1
+  fi
+  RUN_OWNER_INODE="$(path_inode "$RUN_OWNER_FILE")" || {
+    rm -f -- "$RUN_OWNER_FILE" 2>/dev/null || true
+    echo "\u65e0\u6cd5\u8bc6\u522b $RECOVERY_LABEL \u8fd0\u884c\u6807\u8bb0"
+    return 1
+  }
+  RUN_OWNER_OWNED=yes
+}
+create_consumed_marker () {
+  if ! mkdir -- "$CONSUMED_MARKER" 2>/dev/null; then
+    echo "\u65e0\u6cd5\u521b\u5efa $RECOVERY_LABEL \u56de\u6eda\u6d88\u8d39\u6807\u8bb0"
+    return 1
+  fi
+}`
+
+function buildRecoveryRuntimeShell (label, {
+  preserveLock = false,
+  secureStorage = false
+} = {}) {
+  return `RECOVERY_LABEL="${label}"
+PRESERVE_RUN_LOCK="${preserveLock ? 'yes' : 'no'}"
+REQUIRE_SECURE_STORAGE="${secureStorage ? 'yes' : 'no'}"
+${RECOVERY_RUNTIME_SHELL}`
+}
+
 const HOSTNAME_CHANGE_COMMAND = `set -u
 NEW_HOSTNAME="{{\u65b0\u4e3b\u673a\u540d}}"
 SYNC_HOSTS="{{\u540c\u6b65Hosts}}"
@@ -100,17 +283,7 @@ TMP_VERIFIER_INODE=""
 ROLLBACK_LINK_ATTEMPTED=no
 VERIFIER_LINK_ATTEMPTED=no
 RECOVERY_ASSETS_READY=no
-cleanup_owned_recovery_asset () {
-  RECOVERY_FINAL="$1"
-  RECOVERY_EXPECTED_INODE="$2"
-  RECOVERY_LINK_ATTEMPTED="$3"
-  [ "$RECOVERY_LINK_ATTEMPTED" = "yes" ] || return 0
-  [ -f "$RECOVERY_FINAL" ] && [ ! -L "$RECOVERY_FINAL" ] || return 0
-  RECOVERY_CURRENT_INODE="$(stat -c %d:%i -- "$RECOVERY_FINAL" 2>/dev/null)" || return 0
-  if [ "$RECOVERY_CURRENT_INODE" = "$RECOVERY_EXPECTED_INODE" ]; then
-    rm -f -- "$RECOVERY_FINAL" 2>/dev/null || true
-  fi
-}
+${RECOVERY_ASSET_CLEANUP_SHELL}
 cleanup_recovery_assets () {
   if [ "$RECOVERY_ASSETS_READY" != "yes" ]; then
     cleanup_owned_recovery_asset "$ROLLBACK_SCRIPT" "$TMP_ROLLBACK_INODE" "$ROLLBACK_LINK_ATTEMPTED"
@@ -136,119 +309,15 @@ if ! {
   cat <<'SHELLPILOT_HOSTNAME_ROLLBACK'
 HOSTS_FILE="/etc/hosts"
 umask 077
-RUN_LOCK_HELD=no
-RUN_LOCK_OWNED=no
-RUN_OWNER_OWNED=no
-RUN_LOCK_INODE=""
-RUN_OWNER_INODE=""
-path_inode () {
-  stat -c %d:%i -- "$1" 2>/dev/null
-}
-process_start_identity () {
-  PROCESS_PID="$1"
-  case "$PROCESS_PID" in ""|*[!0-9]*) return 1 ;; esac
-  if [ -r "/proc/$PROCESS_PID/stat" ]; then
-    PROCESS_STAT="$(cat -- "/proc/$PROCESS_PID/stat" 2>/dev/null)" || PROCESS_STAT=""
-    if [ -n "$PROCESS_STAT" ]; then
-      PROCESS_FIELDS="\${PROCESS_STAT##*) }"
-      set -- $PROCESS_FIELDS
-      if [ "$#" -ge 20 ]; then
-        shift 19
-        PROCESS_BOOT_ID="$(cat -- /proc/sys/kernel/random/boot_id 2>/dev/null)" || PROCESS_BOOT_ID=""
-        if [ -n "$PROCESS_BOOT_ID" ]; then
-          printf 'proc:%s:%s\\n' "$PROCESS_BOOT_ID" "$1"
-          return 0
-        fi
-      fi
-    fi
-  fi
-  command -v ps >/dev/null 2>&1 || return 1
-  PROCESS_START="$(ps -o lstart= -p "$PROCESS_PID" 2>/dev/null)" || return 1
-  [ -n "$PROCESS_START" ] || return 1
-  printf 'ps:%s\\n' "$PROCESS_START"
-}
-read_running_owner () {
-  OWNER_PID=""
-  OWNER_START=""
-  [ -f "$RUN_OWNER_FILE" ] && [ ! -L "$RUN_OWNER_FILE" ] || return 1
-  {
-    IFS= read -r OWNER_PID || return 1
-    IFS= read -r OWNER_START || return 1
-  } < "$RUN_OWNER_FILE"
-}
-running_owner_is_live () {
-  read_running_owner || return 1
-  case "$OWNER_PID" in ""|*[!0-9]*) return 1 ;; esac
-  kill -0 "$OWNER_PID" 2>/dev/null || return 1
-  OWNER_CURRENT_START="$(process_start_identity "$OWNER_PID")" || return 1
-  [ "$OWNER_CURRENT_START" = "$OWNER_START" ]
-}
-remove_owned_path () {
-  OWNED_PATH="$1"
-  OWNED_INODE="$2"
-  OWNED_FLAG="$3"
-  [ "$OWNED_FLAG" = "yes" ] && [ -n "$OWNED_INODE" ] || return 0
-  [ -e "$OWNED_PATH" ] && [ ! -L "$OWNED_PATH" ] || return 0
-  OWNED_CURRENT_INODE="$(path_inode "$OWNED_PATH")" || return 0
-  if [ "$OWNED_CURRENT_INODE" = "$OWNED_INODE" ]; then
-    rm -f -- "$OWNED_PATH" 2>/dev/null || true
-  fi
-}
-release_running_lock () {
-  remove_owned_path "$RUN_OWNER_FILE" "$RUN_OWNER_INODE" "$RUN_OWNER_OWNED"
-  RUN_OWNER_OWNED=no
-  if [ "$RUN_LOCK_HELD" = "yes" ]; then
-    remove_owned_path "$RUN_LOCK_FILE" "$RUN_LOCK_INODE" "$RUN_LOCK_OWNED"
-    RUN_LOCK_OWNED=no
-    flock -u 9 >/dev/null 2>&1 || true
-    RUN_LOCK_HELD=no
-  fi
-}
+${buildRecoveryRuntimeShell('\u4e3b\u673a\u540d\u6062\u590d')}
 trap release_running_lock EXIT
 trap 'release_running_lock; exit 1' HUP INT TERM
-for ROLLBACK_TOOL in flock stat cat hostnamectl sh rm mkdir; do
+for ROLLBACK_TOOL in flock stat cat hostnamectl sh rm mkdir kill ps; do
   command -v "$ROLLBACK_TOOL" >/dev/null 2>&1 ||
     { echo "\u7f3a\u5c11\u4e3b\u673a\u540d\u6062\u590d\u5de5\u5177: $ROLLBACK_TOOL"; exit 1; }
 done
-[ ! -L "$RUN_LOCK_FILE" ] || { echo "\u8fd0\u884c\u9501\u4e0d\u80fd\u662f\u7b26\u53f7\u94fe\u63a5"; exit 1; }
-exec 9>> "$RUN_LOCK_FILE" || { echo "\u65e0\u6cd5\u6253\u5f00\u4e3b\u673a\u540d\u6062\u590d\u8fd0\u884c\u9501"; exit 1; }
-if ! flock -n 9; then
-  if running_owner_is_live; then
-    echo "\u53e6\u4e00\u4e2a\u4e3b\u673a\u540d\u6062\u590d\u8fdb\u7a0b\u4ecd\u5728\u8fd0\u884c"
-  else
-    echo "\u4e3b\u673a\u540d\u6062\u590d\u8fd0\u884c\u9501\u5df2\u88ab\u5360\u7528"
-  fi
-  exit 1
-fi
-RUN_LOCK_HELD=yes
-RUN_LOCK_PATH_INODE="$(path_inode "$RUN_LOCK_FILE")" ||
-  { echo "\u65e0\u6cd5\u8bc6\u522b\u4e3b\u673a\u540d\u6062\u590d\u8fd0\u884c\u9501"; exit 1; }
-RUN_LOCK_FD_INODE="$RUN_LOCK_PATH_INODE"
-if [ -e "/proc/$$/fd/9" ]; then
-  RUN_LOCK_FD_INODE="$(stat -Lc %d:%i -- "/proc/$$/fd/9" 2>/dev/null)" ||
-    { echo "\u65e0\u6cd5\u9a8c\u8bc1\u4e3b\u673a\u540d\u6062\u590d\u8fd0\u884c\u9501"; exit 1; }
-fi
-[ "$RUN_LOCK_PATH_INODE" = "$RUN_LOCK_FD_INODE" ] ||
-  { echo "\u4e3b\u673a\u540d\u6062\u590d\u8fd0\u884c\u9501\u5728\u83b7\u53d6\u671f\u95f4\u88ab\u66ff\u6362"; exit 1; }
-RUN_LOCK_INODE="$RUN_LOCK_FD_INODE"
-RUN_LOCK_OWNED=yes
-if [ -e "$RUN_OWNER_FILE" ] || [ -L "$RUN_OWNER_FILE" ]; then
-  if running_owner_is_live; then
-    echo "\u8fd0\u884c\u6807\u8bb0\u5c5e\u4e8e\u4ecd\u5b58\u6d3b\u7684\u8fdb\u7a0b\uff0c\u62d2\u7edd\u63a5\u7ba1"; exit 1
-  fi
-  rm -f -- "$RUN_OWNER_FILE" 2>/dev/null ||
-    { echo "\u65e0\u6cd5\u56de\u6536 stale \u8fd0\u884c\u6807\u8bb0"; exit 1; }
-fi
-SELF_START="$(process_start_identity "$$")" ||
-  { echo "\u65e0\u6cd5\u8bc6\u522b\u5f53\u524d\u6062\u590d\u8fdb\u7a0b"; exit 1; }
-if ! (set -C; printf '%s\\n%s\\n' "$$" "$SELF_START" > "$RUN_OWNER_FILE") 2>/dev/null; then
-  echo "\u65e0\u6cd5\u539f\u5b50\u521b\u5efa\u8fd0\u884c\u6807\u8bb0"; exit 1
-fi
-RUN_OWNER_INODE="$(path_inode "$RUN_OWNER_FILE")" || {
-  rm -f -- "$RUN_OWNER_FILE" 2>/dev/null || true
-  echo "\u65e0\u6cd5\u8bc6\u522b\u8fd0\u884c\u6807\u8bb0"; exit 1
-}
-RUN_OWNER_OWNED=yes
+acquire_running_lock || exit 1
+claim_running_owner || exit 1
 if [ -e "$CONSUMED_MARKER" ] || [ -L "$CONSUMED_MARKER" ]; then
   echo "\u56de\u6eda\u811a\u672c\u5df2\u88ab\u6d88\u8d39"; exit 1
 fi
@@ -274,9 +343,7 @@ fi
 [ -f "$VERIFY_SCRIPT" ] && [ ! -L "$VERIFY_SCRIPT" ] ||
   { echo "\u4e3b\u673a\u540d\u56de\u6eda\u9a8c\u8bc1\u811a\u672c\u4e0d\u53ef\u7528"; exit 1; }
 sh -- "$VERIFY_SCRIPT"
-if ! mkdir -- "$CONSUMED_MARKER" 2>/dev/null; then
-  echo "\u65e0\u6cd5\u521b\u5efa\u4e3b\u673a\u540d\u56de\u6eda\u6d88\u8d39\u6807\u8bb0"; exit 1
-fi
+create_consumed_marker || exit 1
 release_running_lock
 trap - EXIT HUP INT TERM
 printf '\u5df2\u6062\u590d\u539f\u4e3b\u673a\u540d: %s\\n' "$OLD_HOSTNAME"
@@ -475,11 +542,15 @@ if [ -L "$ROLLBACK_SCRIPT" ]; then echo "\u56de\u6eda\u811a\u672c\u4e0d\u80fd\u6
 [ ! -e "$ROLLBACK_SCRIPT" ] || { echo "\u56de\u6eda\u811a\u672c\u8def\u5f84\u5df2\u5b58\u5728\uff0c\u62d2\u7edd\u8986\u76d6"; exit 1; }
 if [ -L "$VERIFY_SCRIPT" ]; then echo "\u56de\u6eda\u9a8c\u8bc1\u811a\u672c\u4e0d\u80fd\u662f\u7b26\u53f7\u94fe\u63a5"; exit 1; fi
 [ ! -e "$VERIFY_SCRIPT" ] || { echo "\u56de\u6eda\u9a8c\u8bc1\u811a\u672c\u8def\u5f84\u5df2\u5b58\u5728\uff0c\u62d2\u7edd\u8986\u76d6"; exit 1; }
-for RECOVERY_MARKER in "$CONSUMED_MARKER" "$RUN_OWNER_FILE" "$RUN_LOCK_FILE"; do
+for RECOVERY_MARKER in "$CONSUMED_MARKER" "$RUN_OWNER_FILE"; do
   if [ -e "$RECOVERY_MARKER" ] || [ -L "$RECOVERY_MARKER" ]; then
     echo "\u65f6\u533a\u6062\u590d\u6807\u8bb0\u5df2\u5b58\u5728\uff0c\u62d2\u7edd\u4fee\u6539"; exit 1
   fi
 done
+[ ! -L "$RUN_LOCK_FILE" ] || { echo "\u65f6\u533a\u64cd\u4f5c\u9501\u4e0d\u80fd\u662f\u7b26\u53f7\u94fe\u63a5"; exit 1; }
+if [ -e "$RUN_LOCK_FILE" ] && [ ! -f "$RUN_LOCK_FILE" ]; then
+  echo "\u65f6\u533a\u64cd\u4f5c\u9501\u7c7b\u578b\u4e0d\u5b89\u5168"; exit 1
+fi
 
 printf '\u5c06\u4fee\u6539\u65f6\u533a\u4e3a: %s\\n' "$NEW_TIMEZONE"
 printf '\u8ba1\u5212\u56de\u6eda\u811a\u672c: %s\\n' "$ROLLBACK_SCRIPT"
@@ -509,18 +580,17 @@ STATE_LINK_ATTEMPTED=no
 ROLLBACK_LINK_ATTEMPTED=no
 VERIFIER_LINK_ATTEMPTED=no
 RECOVERY_ASSETS_READY=no
-cleanup_owned_recovery_asset () {
-  RECOVERY_FINAL="$1"
-  RECOVERY_EXPECTED_INODE="$2"
-  RECOVERY_LINK_ATTEMPTED="$3"
-  [ -n "$RECOVERY_FINAL" ] && [ -n "$RECOVERY_EXPECTED_INODE" ] || return 0
-  [ "$RECOVERY_LINK_ATTEMPTED" = "yes" ] || return 0
-  [ -f "$RECOVERY_FINAL" ] && [ ! -L "$RECOVERY_FINAL" ] || return 0
-  RECOVERY_CURRENT_INODE="$(stat -c %d:%i -- "$RECOVERY_FINAL" 2>/dev/null)" || return 0
-  if [ "$RECOVERY_CURRENT_INODE" = "$RECOVERY_EXPECTED_INODE" ]; then
-    rm -f -- "$RECOVERY_FINAL" 2>/dev/null || true
-  fi
+${buildRecoveryRuntimeShell('\u65f6\u533a\u64cd\u4f5c', { preserveLock: true, secureStorage: true })}
+acquire_timezone_setup_lock () {
+  acquire_running_lock || exit 1
+  for RECOVERY_PATH in "$ROLLBACK_SCRIPT" "$VERIFY_SCRIPT" "$CONSUMED_MARKER"; do
+    if [ -e "$RECOVERY_PATH" ] || [ -L "$RECOVERY_PATH" ]; then
+      echo "\u65f6\u533a\u6062\u590d\u8d44\u4ea7\u5728\u52a0\u9501\u671f\u95f4\u5df2\u5b58\u5728\uff0c\u62d2\u7edd\u4fee\u6539"; exit 1
+    fi
+  done
+  claim_running_owner || exit 1
 }
+${RECOVERY_ASSET_CLEANUP_SHELL}
 cleanup_recovery_assets () {
   if [ "$RECOVERY_ASSETS_READY" != "yes" ]; then
     cleanup_owned_recovery_asset "$STATE_FILE" "$TMP_STATE_INODE" "$STATE_LINK_ATTEMPTED"
@@ -531,8 +601,13 @@ cleanup_recovery_assets () {
     cleanup_owned_recovery_asset "$TMP_VERIFIER" "$TMP_VERIFIER_INODE" yes
   fi
 }
-trap cleanup_recovery_assets EXIT
+cleanup_timezone_setup () {
+  cleanup_recovery_assets
+  release_running_lock
+}
+trap cleanup_timezone_setup EXIT
 trap 'exit 1' HUP INT TERM
+acquire_timezone_setup_lock
 TMP_STATE="$(mktemp "$OPERATION_ROLLBACK_DIR/timezone-state.XXXXXX")" || { echo "\u65e0\u6cd5\u521b\u5efa\u65f6\u533a\u72b6\u6001\u4e34\u65f6\u6587\u4ef6"; exit 1; }
 TMP_STATE_INODE="$(stat -c %d:%i -- "$TMP_STATE" 2>/dev/null)" ||
   { echo "\u65e0\u6cd5\u8bc6\u522b\u65f6\u533a\u72b6\u6001\u4e34\u65f6\u6587\u4ef6"; exit 1; }
@@ -548,7 +623,9 @@ else
   echo "\u65e0\u6cd5\u539f\u5b50\u521b\u5efa\u65f6\u533a\u72b6\u6001\u5907\u4efd"; exit 1
 fi
 [ -f "$STATE_FILE" ] && [ ! -L "$STATE_FILE" ] &&
-  [ "$(stat -c %d:%i -- "$STATE_FILE" 2>/dev/null)" = "$TMP_STATE_INODE" ] ||
+  [ "$(stat -c %d:%i -- "$STATE_FILE" 2>/dev/null)" = "$TMP_STATE_INODE" ] &&
+  [ "$(stat -c %u -- "$STATE_FILE" 2>/dev/null)" = "$RECOVERY_UID" ] &&
+  [ "$(stat -c %a -- "$STATE_FILE" 2>/dev/null)" = "600" ] ||
   { echo "\u65f6\u533a\u72b6\u6001\u5907\u4efd\u5728\u53d1\u5e03\u671f\u95f4\u88ab\u66ff\u6362"; exit 1; }
 cleanup_owned_recovery_asset "$TMP_STATE" "$TMP_STATE_INODE" yes
 if [ -e "$TMP_STATE" ] || [ -L "$TMP_STATE" ]; then
@@ -563,139 +640,46 @@ TMP_VERIFIER_INODE="$(stat -c %d:%i -- "$TMP_VERIFIER" 2>/dev/null)" ||
 if ! {
   printf '%s\\n' '#!/bin/sh' 'set -efu'
   printf "STATE_FILE='%s'\\n" "$STATE_FILE"
-  printf "RUN_AS='%s'\\n" "$RUN_AS"
   printf "VERIFY_SCRIPT='%s'\\n" "$VERIFY_SCRIPT"
   printf "CONSUMED_MARKER='%s'\\n" "$CONSUMED_MARKER"
   printf "RUN_OWNER_FILE='%s'\\n" "$RUN_OWNER_FILE"
   printf "RUN_LOCK_FILE='%s'\\n" "$RUN_LOCK_FILE"
   cat <<'SHELLPILOT_TIMEZONE_ROLLBACK'
 umask 077
-RUN_LOCK_HELD=no
-RUN_LOCK_OWNED=no
-RUN_OWNER_OWNED=no
-RUN_LOCK_INODE=""
-RUN_OWNER_INODE=""
-path_inode () {
-  stat -c %d:%i -- "$1" 2>/dev/null
-}
-process_start_identity () {
-  PROCESS_PID="$1"
-  case "$PROCESS_PID" in ""|*[!0-9]*) return 1 ;; esac
-  if [ -r "/proc/$PROCESS_PID/stat" ]; then
-    PROCESS_STAT="$(cat -- "/proc/$PROCESS_PID/stat" 2>/dev/null)" || PROCESS_STAT=""
-    if [ -n "$PROCESS_STAT" ]; then
-      PROCESS_FIELDS="\${PROCESS_STAT##*) }"
-      set -- $PROCESS_FIELDS
-      if [ "$#" -ge 20 ]; then
-        shift 19
-        PROCESS_BOOT_ID="$(cat -- /proc/sys/kernel/random/boot_id 2>/dev/null)" || PROCESS_BOOT_ID=""
-        if [ -n "$PROCESS_BOOT_ID" ]; then
-          printf 'proc:%s:%s\\n' "$PROCESS_BOOT_ID" "$1"
-          return 0
-        fi
-      fi
-    fi
-  fi
-  command -v ps >/dev/null 2>&1 || return 1
-  PROCESS_START="$(ps -o lstart= -p "$PROCESS_PID" 2>/dev/null)" || return 1
-  [ -n "$PROCESS_START" ] || return 1
-  printf 'ps:%s\\n' "$PROCESS_START"
-}
-read_running_owner () {
-  OWNER_PID=""
-  OWNER_START=""
-  [ -f "$RUN_OWNER_FILE" ] && [ ! -L "$RUN_OWNER_FILE" ] || return 1
-  {
-    IFS= read -r OWNER_PID || return 1
-    IFS= read -r OWNER_START || return 1
-  } < "$RUN_OWNER_FILE"
-}
-running_owner_is_live () {
-  read_running_owner || return 1
-  case "$OWNER_PID" in ""|*[!0-9]*) return 1 ;; esac
-  kill -0 "$OWNER_PID" 2>/dev/null || return 1
-  OWNER_CURRENT_START="$(process_start_identity "$OWNER_PID")" || return 1
-  [ "$OWNER_CURRENT_START" = "$OWNER_START" ]
-}
-remove_owned_path () {
-  OWNED_PATH="$1"
-  OWNED_INODE="$2"
-  OWNED_FLAG="$3"
-  [ "$OWNED_FLAG" = "yes" ] && [ -n "$OWNED_INODE" ] || return 0
-  [ -e "$OWNED_PATH" ] && [ ! -L "$OWNED_PATH" ] || return 0
-  OWNED_CURRENT_INODE="$(path_inode "$OWNED_PATH")" || return 0
-  if [ "$OWNED_CURRENT_INODE" = "$OWNED_INODE" ]; then
-    rm -f -- "$OWNED_PATH" 2>/dev/null || true
-  fi
-}
-release_running_lock () {
-  remove_owned_path "$RUN_OWNER_FILE" "$RUN_OWNER_INODE" "$RUN_OWNER_OWNED"
-  RUN_OWNER_OWNED=no
-  if [ "$RUN_LOCK_HELD" = "yes" ]; then
-    remove_owned_path "$RUN_LOCK_FILE" "$RUN_LOCK_INODE" "$RUN_LOCK_OWNED"
-    RUN_LOCK_OWNED=no
-    flock -u 9 >/dev/null 2>&1 || true
-    RUN_LOCK_HELD=no
-  fi
-}
+${buildRecoveryRuntimeShell('\u65f6\u533a\u6062\u590d', { preserveLock: true, secureStorage: true })}
 trap release_running_lock EXIT
 trap 'release_running_lock; exit 1' HUP INT TERM
-for ROLLBACK_TOOL in flock stat cat timedatectl sh rm mkdir kill ps; do
+for ROLLBACK_TOOL in flock stat cat timedatectl sh rm mkdir kill ps id; do
   command -v "$ROLLBACK_TOOL" >/dev/null 2>&1 ||
     { echo "\u7f3a\u5c11\u65f6\u533a\u6062\u590d\u5de5\u5177: $ROLLBACK_TOOL"; exit 1; }
 done
-[ ! -L "$RUN_LOCK_FILE" ] || { echo "\u8fd0\u884c\u9501\u4e0d\u80fd\u662f\u7b26\u53f7\u94fe\u63a5"; exit 1; }
-exec 9>> "$RUN_LOCK_FILE" || { echo "\u65e0\u6cd5\u6253\u5f00\u65f6\u533a\u6062\u590d\u8fd0\u884c\u9501"; exit 1; }
-if ! flock -n 9; then
-  if running_owner_is_live; then
-    echo "\u53e6\u4e00\u4e2a\u65f6\u533a\u6062\u590d\u8fdb\u7a0b\u4ecd\u5728\u8fd0\u884c"
-  else
-    echo "\u65f6\u533a\u6062\u590d\u8fd0\u884c\u9501\u5df2\u88ab\u5360\u7528"
-  fi
-  exit 1
-fi
-RUN_LOCK_HELD=yes
-RUN_LOCK_PATH_INODE="$(path_inode "$RUN_LOCK_FILE")" ||
-  { echo "\u65e0\u6cd5\u8bc6\u522b\u65f6\u533a\u6062\u590d\u8fd0\u884c\u9501"; exit 1; }
-RUN_LOCK_FD_INODE="$RUN_LOCK_PATH_INODE"
-if [ -e "/proc/$$/fd/9" ]; then
-  RUN_LOCK_FD_INODE="$(stat -Lc %d:%i -- "/proc/$$/fd/9" 2>/dev/null)" ||
-    { echo "\u65e0\u6cd5\u9a8c\u8bc1\u65f6\u533a\u6062\u590d\u8fd0\u884c\u9501"; exit 1; }
-fi
-[ "$RUN_LOCK_PATH_INODE" = "$RUN_LOCK_FD_INODE" ] ||
-  { echo "\u65f6\u533a\u6062\u590d\u8fd0\u884c\u9501\u5728\u83b7\u53d6\u671f\u95f4\u88ab\u66ff\u6362"; exit 1; }
-RUN_LOCK_INODE="$RUN_LOCK_FD_INODE"
-RUN_LOCK_OWNED=yes
-if [ -e "$RUN_OWNER_FILE" ] || [ -L "$RUN_OWNER_FILE" ]; then
-  if running_owner_is_live; then
-    echo "\u8fd0\u884c\u6807\u8bb0\u5c5e\u4e8e\u4ecd\u5b58\u6d3b\u7684\u8fdb\u7a0b\uff0c\u62d2\u7edd\u63a5\u7ba1"; exit 1
-  fi
-  rm -f -- "$RUN_OWNER_FILE" 2>/dev/null ||
-    { echo "\u65e0\u6cd5\u56de\u6536 stale \u8fd0\u884c\u6807\u8bb0"; exit 1; }
-fi
-SELF_START="$(process_start_identity "$$")" ||
-  { echo "\u65e0\u6cd5\u8bc6\u522b\u5f53\u524d\u6062\u590d\u8fdb\u7a0b"; exit 1; }
-if ! (set -C; printf '%s\\n%s\\n' "$$" "$SELF_START" > "$RUN_OWNER_FILE") 2>/dev/null; then
-  echo "\u65e0\u6cd5\u539f\u5b50\u521b\u5efa\u8fd0\u884c\u6807\u8bb0"; exit 1
-fi
-RUN_OWNER_INODE="$(path_inode "$RUN_OWNER_FILE")" || {
-  rm -f -- "$RUN_OWNER_FILE" 2>/dev/null || true
-  echo "\u65e0\u6cd5\u8bc6\u522b\u8fd0\u884c\u6807\u8bb0"; exit 1
-}
-RUN_OWNER_OWNED=yes
+acquire_running_lock || exit 1
+claim_running_owner || exit 1
 if [ -e "$CONSUMED_MARKER" ] || [ -L "$CONSUMED_MARKER" ]; then
   echo "\u56de\u6eda\u811a\u672c\u5df2\u88ab\u6d88\u8d39"; exit 1
 fi
-[ -r "$STATE_FILE" ] || { echo "\u65f6\u533a\u56de\u6eda\u72b6\u6001\u4e0d\u5b58\u5728"; exit 1; }
+[ -f "$STATE_FILE" ] && [ ! -L "$STATE_FILE" ] ||
+  { echo "\u65f6\u533a\u56de\u6eda\u72b6\u6001\u4e0d\u5b58\u5728"; exit 1; }
+[ "$(stat -c %u -- "$STATE_FILE" 2>/dev/null)" = "$RECOVERY_UID" ] &&
+  [ "$(stat -c %a -- "$STATE_FILE" 2>/dev/null)" = "600" ] ||
+  { echo "\u65f6\u533a\u56de\u6eda\u72b6\u6001\u6240\u6709\u8005\u6216\u6743\u9650\u4e0d\u5b89\u5168"; exit 1; }
 IFS= read -r OLD_TIMEZONE < "$STATE_FILE"
-command -v timedatectl >/dev/null 2>&1 || { echo "\u7f3a\u5c11 timedatectl\uff0c\u65e0\u6cd5\u56de\u6eda"; exit 1; }
-$RUN_AS timedatectl set-timezone "$OLD_TIMEZONE"
+ROLLBACK_UID="$(id -u 2>/dev/null)" ||
+  { echo "\u65e0\u6cd5\u786e\u8ba4\u5f53\u524d\u7528\u6237\uff0c\u672a\u6062\u590d\u65f6\u533a"; exit 1; }
+ROLLBACK_AS=""
+if [ "$ROLLBACK_UID" != "0" ]; then
+  command -v sudo >/dev/null 2>&1 ||
+    { echo "\u5f53\u524d\u4e0d\u662f root \u4e14\u6ca1\u6709 sudo\uff0c\u65e0\u6cd5\u6062\u590d\u65f6\u533a"; exit 1; }
+  sudo -v || { echo "sudo \u6388\u6743\u5931\u8d25\uff0c\u672a\u6062\u590d\u65f6\u533a"; exit 1; }
+  ROLLBACK_AS="sudo"
+fi
+if ! $ROLLBACK_AS timedatectl set-timezone "$OLD_TIMEZONE"; then
+  echo "\u6062\u590d\u539f\u65f6\u533a\u5931\u8d25: $OLD_TIMEZONE"; exit 1
+fi
 [ -f "$VERIFY_SCRIPT" ] && [ ! -L "$VERIFY_SCRIPT" ] ||
   { echo "\u65f6\u533a\u56de\u6eda\u9a8c\u8bc1\u811a\u672c\u4e0d\u53ef\u7528"; exit 1; }
 sh -- "$VERIFY_SCRIPT"
-if ! mkdir -- "$CONSUMED_MARKER" 2>/dev/null; then
-  echo "\u65e0\u6cd5\u521b\u5efa\u65f6\u533a\u56de\u6eda\u6d88\u8d39\u6807\u8bb0"; exit 1
-fi
+create_consumed_marker || exit 1
 release_running_lock
 trap - EXIT HUP INT TERM
 printf '\u5df2\u6062\u590d\u539f\u65f6\u533a: %s\\n' "$OLD_TIMEZONE"
@@ -749,22 +733,19 @@ fi
   [ "$(stat -c %d:%i -- "$VERIFY_SCRIPT")" = "$TMP_VERIFIER_INODE" ] ||
   { echo "\u56de\u6eda\u8d44\u4ea7\u5728\u53d1\u5e03\u671f\u95f4\u88ab\u66ff\u6362"; exit 1; }
 RECOVERY_ASSETS_READY=yes
-trap - EXIT HUP INT TERM
-
-for RECOVERY_MARKER in "$CONSUMED_MARKER" "$RUN_OWNER_FILE" "$RUN_LOCK_FILE"; do
-  if [ -e "$RECOVERY_MARKER" ] || [ -L "$RECOVERY_MARKER" ]; then
-    echo "\u65f6\u533a\u6062\u590d\u6807\u8bb0\u5728\u4fee\u6539\u524d\u51fa\u73b0\uff0c\u62d2\u7edd\u4fee\u6539"; exit 1
-  fi
-done
 
 printf '\u56de\u6eda\u811a\u672c: %s\\n' "$ROLLBACK_SCRIPT"
 printf '\u56de\u6eda\u9a8c\u8bc1\u811a\u672c: %s\\n' "$VERIFY_SCRIPT"
-$RUN_AS timedatectl set-timezone "$NEW_TIMEZONE"
+if ! $RUN_AS timedatectl set-timezone "$NEW_TIMEZONE"; then
+  echo "\u4fee\u6539\u65f6\u533a\u5931\u8d25: $NEW_TIMEZONE"; exit 1
+fi
 FINAL_TIMEZONE="$(timedatectl show -p Timezone --value 2>/dev/null)" || FINAL_TIMEZONE=""
 if [ "$FINAL_TIMEZONE" != "$NEW_TIMEZONE" ]; then
   echo "\u4fee\u6539\u540e\u65f6\u533a\u9a8c\u8bc1\u5931\u8d25\uff1b\u8bf7\u56de\u6eda: $ROLLBACK_SCRIPT"
   exit 1
 fi
+release_running_lock
+trap - EXIT HUP INT TERM
 printf '\u65f6\u533a\u4fee\u6539\u5e76\u9a8c\u8bc1\u6210\u529f\u3002\u56de\u6eda\u811a\u672c: %s\\n' "$ROLLBACK_SCRIPT"`
 
 export function getSystemCommands () {
