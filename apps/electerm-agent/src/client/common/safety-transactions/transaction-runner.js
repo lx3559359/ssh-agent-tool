@@ -2114,30 +2114,34 @@ export function createTransactionRunner (options = {}) {
           }
           await assertCurrentEndpoint(operation)
           boundRecovery = await requireBoundRecovery(operation)
+          const rollbackAlreadyApplied = Boolean(operation.rollbackAppliedAt)
           operation = await transition(operation, operationStates.rollingBack, {}, 'rollback')
           operation = await get(operation.id) || operation
           operation = await postCheckBoundRecovery(operation, boundRecovery)
-          const rollbackCommand = operation.plan.rollbackCommand
-          const rollbackPhase = await runMarkedPhase(
-            operation,
-            rollbackCommand,
-            'rollback',
-            { alreadyMarked: true, signal: rollbackOptions.signal }
-          )
-          audits.push(rollbackPhase.audit)
-          if (rollbackPhase.cancelRequested) throw cancellationError()
-          operation = await guardedRecoveryTransition(
-            operation,
-            boundRecovery,
-            operationStates.rollingBack,
-            current => ({
-              audit: appendAudit(current, audits),
-              executionId: undefined
-            }),
-            'rollback',
-            audits,
-            false
-          )
+          if (!rollbackAlreadyApplied) {
+            const rollbackCommand = operation.plan.rollbackCommand
+            const rollbackPhase = await runMarkedPhase(
+              operation,
+              rollbackCommand,
+              'rollback',
+              { alreadyMarked: true, signal: rollbackOptions.signal }
+            )
+            audits.push(rollbackPhase.audit)
+            if (rollbackPhase.cancelRequested) throw cancellationError()
+            operation = await guardedRecoveryTransition(
+              operation,
+              boundRecovery,
+              operationStates.rollingBack,
+              current => ({
+                audit: appendAudit(current, audits),
+                executionId: undefined,
+                rollbackAppliedAt: timestamp()
+              }),
+              'rollback',
+              audits,
+              false
+            )
+          }
           audits.length = 0
           const verifyCommand = operation.plan.verifyCommand
           const verifyPhase = await runMarkedPhase(

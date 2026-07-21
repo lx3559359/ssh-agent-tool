@@ -194,6 +194,7 @@ test('operation CRUD normalizes records and explicitly propagates database failu
       algorithm: 'SHA-256',
       fingerprint: 'a'.repeat(64)
     },
+    rollbackAppliedAt: '2026-07-13T08:09:11.000Z',
     integrityError: '恢复计划完整性校验失败，已拒绝提交远程结果。'
   })
   assert.equal(patched.id, 'op-1')
@@ -201,6 +202,7 @@ test('operation CRUD normalizes records and explicitly propagates database failu
   assert.equal(patched.state, 'executing')
   assert.equal(patched.endpoint.host, '10.0.0.1')
   assert.equal(patched.endpoint.title, '生产服务器')
+  assert.equal(patched.rollbackAppliedAt, '2026-07-13T08:09:11.000Z')
   assert.deepEqual(patched.recoveryBinding, {
     schemaVersion: 1,
     algorithm: 'SHA-256',

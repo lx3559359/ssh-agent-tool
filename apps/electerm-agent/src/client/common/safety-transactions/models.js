@@ -182,7 +182,7 @@ const normalizedOperationFields = [
   'recoveryReadyAt', 'recoveryRevokedAt', 'recoveryRevokedReason', 'executionId', 'error', 'integrityError', 'failedAt', 'completedAt',
   'mutationStarted', 'mutationStartedAt', 'commitPoint', 'commitPointAt',
   'timeoutMs', 'prepareTimeoutMs', 'executeTimeoutMs',
-  'rollbackTimeoutMs', 'verifyTimeoutMs'
+  'rollbackTimeoutMs', 'verifyTimeoutMs', 'rollbackAppliedAt'
 ]
 const redactedOperationFields = new Set([
   'plan', 'artifacts', 'artifactReferences', 'audit', 'error', 'integrityError'

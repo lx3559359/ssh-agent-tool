@@ -1222,7 +1222,9 @@ test('failed rollback remains retryable and keep only accepts rollback-available
   })
   await rollbackContext.runner.execute('op-1', { confirmed: true })
   await assert.rejects(rollbackContext.runner.rollback('op-1'), /退出码 31/)
-  assert.equal((await rollbackContext.store.get('op-1')).state, 'failed')
+  const failedRollback = await rollbackContext.store.get('op-1')
+  assert.equal(failedRollback.state, 'failed')
+  assert.equal(failedRollback.rollbackAppliedAt, undefined)
   assert.equal((await rollbackContext.runner.rollback('op-1')).state, 'restored')
 
   const keepContext = await createPreparedRunner()
@@ -1230,6 +1232,77 @@ test('failed rollback remains retryable and keep only accepts rollback-available
   await keepContext.runner.execute('op-1', { confirmed: true })
   assert.equal((await keepContext.runner.keep('op-1')).state, 'kept')
   await assert.rejects(keepContext.runner.rollback('op-1'), /状态|回滚/)
+})
+
+test('rollback applies once and retries verification after the first verification failure', async () => {
+  let verifyAttempts = 0
+  const phases = []
+  const context = await createPreparedRunner({
+    runRemote: async (command, options) => {
+      phases.push(options.phase)
+      const code = options.phase === 'verify' && verifyAttempts++ === 0 ? 31 : 0
+      return { stdout: marker(options.phase, 'op-1', code), code }
+    }
+  })
+
+  await context.runner.execute('op-1', { confirmed: true })
+  await assert.rejects(context.runner.rollback('op-1'), /退出码 31/)
+  const failed = await context.store.get('op-1')
+  assert.equal(failed.state, 'failed')
+  assert.ok(failed.rollbackAppliedAt)
+
+  const restored = await context.runner.rollback('op-1')
+
+  assert.equal(restored.state, 'restored')
+  assert.equal(phases.filter(phase => phase === 'rollback').length, 1)
+  assert.equal(phases.filter(phase => phase === 'verify').length, 2)
+})
+
+test('reloaded store skips rollback after rollbackAppliedAt was persisted', async () => {
+  const { createTransactionRunner } = await importDomainModule('transaction-runner.js')
+  const { createTransactionStore } = await importDomainModule('transaction-store.js')
+  const request = await createRequest({ id: 'op-reload-rollback' })
+  const adapter = createPersistenceAdapter()
+  const store = createTransactionStore({ adapter, now: createClock() })
+  const phases = []
+  let verifyAttempts = 0
+  const runRemote = async (command, options) => {
+    phases.push(options.phase)
+    const code = options.phase === 'verify' && verifyAttempts++ === 0 ? 31 : 0
+    return { stdout: marker(options.phase, request.id, code), code }
+  }
+  const createRunner = currentStore => createTransactionRunner({
+    runRemote,
+    cancelRemote: async () => {},
+    store: currentStore,
+    getCurrentEndpoint: async () => request.endpoint,
+    buildRecoveryPlan: createPlan,
+    now: createClock()
+  })
+
+  const runner = createRunner(store)
+  await runner.prepare(request)
+  await runner.execute(request.id, { confirmed: true })
+  await assert.rejects(runner.rollback(request.id), /退出码 31/)
+  assert.ok((await store.getOperation(request.id)).rollbackAppliedAt)
+
+  const reloadedStore = createTransactionStore({ adapter, now: createClock() })
+  const restored = await createRunner(reloadedStore).rollback(request.id)
+
+  assert.equal(restored.state, 'restored')
+  assert.equal(phases.filter(phase => phase === 'rollback').length, 1)
+  assert.equal(phases.filter(phase => phase === 'verify').length, 2)
+})
+
+test('repeating rollback after restored performs no remote action', async () => {
+  const context = await createPreparedRunner()
+  await context.runner.execute(context.request.id, { confirmed: true })
+  await context.runner.rollback(context.request.id)
+  const callsAfterRestore = context.remoteCalls.length
+
+  await assert.rejects(context.runner.rollback(context.request.id), /状态不允许回滚/)
+
+  assert.equal(context.remoteCalls.length, callsAfterRestore)
 })
 
 test('concurrent execute cancellation stops the active execution without late state overwrite', async () => {
