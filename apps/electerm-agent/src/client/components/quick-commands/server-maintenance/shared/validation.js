@@ -1,3 +1,11 @@
+import {
+  isSafeRollbackScriptPath,
+  rollbackScriptDirectory,
+  rollbackScriptFilenameMaxLength
+} from '../../../../common/safety-transactions/rollback-script-path.js'
+
+export { rollbackScriptDirectory, rollbackScriptFilenameMaxLength }
+
 const typeLabels = {
   hostname: '主机名',
   service: '服务名',
@@ -22,11 +30,6 @@ const typeLabels = {
 }
 
 const maintenanceCommandPrefix = 'builtin-server-'
-export const rollbackScriptDirectory = '/tmp/shellpilot-rollback'
-const linuxFilenameMaxLength = 255
-const longestRollbackDerivedSuffix = '.running.lock'
-export const rollbackScriptFilenameMaxLength =
-  linuxFilenameMaxLength - longestRollbackDerivedSuffix.length
 const unresolvedTemplatePattern = /\{\{[^{}]*\}\}/
 
 const cronMacros = new Set([
@@ -242,15 +245,6 @@ function isHttpUrl (value) {
   }
 }
 
-function isRollbackScriptPath (value) {
-  const prefix = `${rollbackScriptDirectory}/`
-  if (!value.startsWith(prefix)) return false
-  const filename = value.slice(prefix.length)
-  return /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(filename) &&
-    !filename.includes('..') &&
-    filename.length <= rollbackScriptFilenameMaxLength
-}
-
 function validateNumber (value, options, label) {
   if (!/^-?\d+$/.test(value)) return `${label}必须是整数`
   const number = Number(value)
@@ -292,7 +286,7 @@ function validateNormalizedValue (normalizedType, value, options, label) {
       : `${label}必须是安全的绝对路径`
   }
   if (normalizedType === 'rollback-path') {
-    return isRollbackScriptPath(value)
+    return isSafeRollbackScriptPath(value)
       ? ''
       : `${label}必须位于 /tmp/shellpilot-rollback，使用安全且长度受限的直接子文件名`
   }

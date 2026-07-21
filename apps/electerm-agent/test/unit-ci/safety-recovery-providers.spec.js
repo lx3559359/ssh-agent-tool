@@ -163,6 +163,84 @@ test('maintenance recovery binds separate rollback and read-only verifier artifa
   }
 })
 
+test('maintenance recovery persistence and reload enforce the rollback basename budget', async () => {
+  const { buildRecoveryPlan } = await importDomainModule('recovery-providers.js')
+  const {
+    createPersistedMaintenanceRecovery,
+    maintenanceRecoveryProvider
+  } = await importDomainModule('maintenance-recovery-delegation.js')
+  const endpoint = {
+    tabId: 'tab-task6-reload',
+    host: 'prod.example.com',
+    port: 22,
+    username: 'root'
+  }
+  const prefix = '/tmp/shellpilot-rollback/'
+  const maxRollbackBasename = 255 - '.running.lock'.length
+  const acceptedFilename =
+    'r'.repeat(maxRollbackBasename - '.sh'.length) + '.sh'
+  const rejectedFilename =
+    'r'.repeat(maxRollbackBasename - '.sh'.length + 1) + '.sh'
+
+  assert.equal(Buffer.byteLength(acceptedFilename), 242)
+  assert.equal(Buffer.byteLength(rejectedFilename), 243)
+
+  function reloadChange (rollbackPath, id) {
+    const details = {
+      quickCommandId: 'builtin-server-hostname-change',
+      command: `ROLLBACK_SCRIPT='${rollbackPath}'\nprintf mutate`,
+      title: 'Task 6 hostname',
+      rollbackPath,
+      endpoint,
+      backupTargets: ['/etc/hostname'],
+      verification: ['hostname matches backup']
+    }
+    return JSON.parse(JSON.stringify({
+      id,
+      source: 'quick-command',
+      endpoint,
+      command: details.command,
+      title: details.title,
+      risk: 'change',
+      reversible: true,
+      recoveryProvider: maintenanceRecoveryProvider,
+      metadata: {
+        maintenanceRecovery: createPersistedMaintenanceRecovery(details, id)
+      }
+    }))
+  }
+
+  const ordinaryPath = prefix + 'hostname-change-prod-1700000000000.sh'
+  const acceptedPath = prefix + acceptedFilename
+  for (const [id, rollbackPath] of [
+    ['task6-reload-ordinary', ordinaryPath],
+    ['task6-reload-boundary', acceptedPath]
+  ]) {
+    const plan = buildRecoveryPlan(reloadChange(rollbackPath, id))
+    assert.equal(plan.artifacts.rollbackScript, rollbackPath)
+    assert.equal(
+      plan.artifacts.verifyScript,
+      rollbackPath.slice(0, -3) + '.verify.sh'
+    )
+    assert.equal(
+      Buffer.byteLength(path.posix.basename(plan.artifacts.verifyScript)) <= 255,
+      true
+    )
+  }
+
+  const rejectedPath = prefix + rejectedFilename
+  assert.throws(
+    () => reloadChange(rejectedPath, 'task6-persist-overlong'),
+    /维护操作回滚路径|长度|恢复记录/
+  )
+  const forged = reloadChange(acceptedPath, 'task6-reload-overlong')
+  forged.metadata.maintenanceRecovery.rollbackPath = rejectedPath
+  assert.throws(
+    () => buildRecoveryPlan(forged),
+    /维护操作回滚路径|长度|恢复记录/
+  )
+})
+
 test('trusted executable and quoted backslash target stay bound through recovery plan', async () => {
   const { buildRecoveryPlan } = await importDomainModule('recovery-providers.js')
   const command = String.raw`/usr/bin/chmod 600 "/tmp/a\q"`

@@ -3,6 +3,7 @@ import {
   normalizeEndpoint
 } from './endpoint-guard.js'
 import { assertTrustedOperationId } from './operation-id.js'
+import { isSafeRollbackScriptPath } from './rollback-script-path.js'
 
 export const maintenanceRecoveryProvider = 'quick-command'
 
@@ -11,7 +12,6 @@ const supportedQuickCommandIds = new Set([
   'builtin-server-hosts-manage',
   'builtin-server-timezone-change'
 ])
-const rollbackPathPattern = /^\/tmp\/shellpilot-rollback\/[A-Za-z0-9][A-Za-z0-9._-]*\.sh$/
 const intentCapabilities = new WeakMap()
 const delegationCapabilities = new WeakMap()
 const authorizationCapabilities = new WeakMap()
@@ -61,9 +61,8 @@ function safeEndpoint (endpoint) {
 
 function safeRollbackPath (value) {
   const rollbackPath = safeText(value, '维护操作回滚路径')
-  const filename = rollbackPath.slice(rollbackPath.lastIndexOf('/') + 1)
-  if (!rollbackPathPattern.test(rollbackPath) || filename.includes('..')) {
-    throw new Error('维护操作回滚路径必须是受控目录中的直接 .sh 子文件。')
+  if (!isSafeRollbackScriptPath(rollbackPath) || !rollbackPath.endsWith('.sh')) {
+    throw new Error('维护操作回滚路径必须是受控目录中安全且长度受限的直接 .sh 子文件。')
   }
   return rollbackPath
 }
