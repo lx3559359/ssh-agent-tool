@@ -11,6 +11,8 @@ const typeLabels = {
   number: '数字',
   enum: '选项',
   'hostname-or-ip': '主机名或 IP 地址',
+  ip: 'IP \u5730\u5740',
+  timezone: '\u65f6\u533a',
   url: 'URL',
   'ipv4-list': 'IPv4 地址列表',
   'file-mode': '文件权限',
@@ -164,6 +166,15 @@ function isHostname (value) {
   })
 }
 
+function isTimezone (value) {
+  if (!value || value.length > 255) return false
+  const parts = value.split('/')
+  return parts.every(part => {
+    if (part === '.' || part === '..') return false
+    return /^[a-zA-Z0-9][a-zA-Z0-9._+-]*$/.test(part)
+  })
+}
+
 function parseCronNumber (value, names) {
   const upperValue = value.toUpperCase()
   if (names?.has(upperValue)) return names.get(upperValue)
@@ -290,6 +301,12 @@ function validateNormalizedValue (normalizedType, value, options, label) {
   }
   if (normalizedType === 'ipv4') {
     return isIpv4(value) ? '' : `${label}格式不正确`
+  }
+  if (normalizedType === 'ip') {
+    return isIpv4(value) || isIpv6(value) ? '' : `${label}\u683c\u5f0f\u4e0d\u6b63\u786e`
+  }
+  if (normalizedType === 'timezone') {
+    return isTimezone(value) ? '' : `${label}\u683c\u5f0f\u4e0d\u6b63\u786e`
   }
   if (normalizedType === 'cidr') {
     return isCidr(value) ? '' : `${label}格式不正确`

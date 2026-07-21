@@ -1,4 +1,250 @@
 import { READ_ONLY, NEED_EDIT, step, defineCommand, inputParam, numberParam, selectParam } from './shared/definition.js'
+import { withRollback } from './shared/safety-metadata.js'
+
+const HOSTS_MANAGE_COMMAND = `set -u
+TARGET_IP="{{IP\u5730\u5740}}"
+TARGET_HOST="{{\u4e3b\u673a\u540d}}"
+ACTION="{{\u52a8\u4f5c}}"
+APPLY_CHANGE="{{\u786e\u8ba4\u6267\u884c}}"
+ROLLBACK_DIR="/tmp/shellpilot-rollback"
+ROLLBACK_SCRIPT="{{\u56de\u6eda\u811a\u672c}}"
+HOSTS_FILE="/etc/hosts"
+
+OLD_HOSTS_MODE="$(stat -c %a -- "$HOSTS_FILE" 2>/dev/null)" || { echo "\u65e0\u6cd5\u8bfb\u53d6 hosts \u6743\u9650"; exit 1; }
+OLD_HOSTS_UID="$(stat -c %u -- "$HOSTS_FILE" 2>/dev/null)" || { echo "\u65e0\u6cd5\u8bfb\u53d6 hosts \u6240\u6709\u8005"; exit 1; }
+OLD_HOSTS_GID="$(stat -c %g -- "$HOSTS_FILE" 2>/dev/null)" || { echo "\u65e0\u6cd5\u8bfb\u53d6 hosts \u6240\u5c5e\u7ec4"; exit 1; }
+printf '\u5f53\u524d hosts \u6743\u9650/\u5c5e\u4e3b: %s %s:%s\\n' "$OLD_HOSTS_MODE" "$OLD_HOSTS_UID" "$OLD_HOSTS_GID"
+printf '\u5f53\u524d hosts \u5185\u5bb9\uff08\u524d 80 \u884c\uff09:\\n'
+awk 'NR <= 80 { print }' "$HOSTS_FILE" || { echo "\u65e0\u6cd5\u8bfb\u53d6 hosts"; exit 1; }
+
+if ! awk -v ip="$TARGET_IP" '
+  function validIpv4(value, parts, count, partIndex, octet) {
+    if (value !~ /^[0-9.]+$/) return 0
+    count = split(value, parts, ".")
+    if (count != 4) return 0
+    for (partIndex = 1; partIndex <= 4; partIndex++) {
+      octet = parts[partIndex]
+      if (octet == "" || octet !~ /^[0-9]+$/ || octet + 0 > 255) return 0
+      if (length(octet) > 1 && substr(octet, 1, 1) == "0") return 0
+    }
+    return 1
+  }
+  function validIpv6(value, parts, count, partIndex, group, remainder, compressed, nonempty) {
+    if (length(value) < 2 || length(value) > 39 || value !~ /^[0-9A-Fa-f:]+$/ || value !~ /:/) return 0
+    if (value ~ /:::/) return 0
+    compressed = index(value, "::") > 0
+    remainder = value
+    sub(/::/, "", remainder)
+    if (index(remainder, "::") > 0) return 0
+    if (!compressed && (value ~ /^:/ || value ~ /:$/)) return 0
+    count = split(value, parts, ":")
+    nonempty = 0
+    for (partIndex = 1; partIndex <= count; partIndex++) {
+      group = parts[partIndex]
+      if (group == "") continue
+      if (length(group) > 4 || group !~ /^[0-9A-Fa-f]+$/) return 0
+      nonempty++
+    }
+    return compressed ? nonempty < 8 : nonempty == 8
+  }
+  BEGIN { exit !(validIpv4(ip) || validIpv6(ip)) }
+' </dev/null; then echo "IP \u5730\u5740\u683c\u5f0f\u4e0d\u6b63\u786e"; exit 1; fi
+if ! awk -v host="$TARGET_HOST" 'BEGIN {
+  if (length(host) < 1 || length(host) > 253) exit 1
+  count = split(host, labels, ".")
+  for (labelIndex = 1; labelIndex <= count; labelIndex++) {
+    label = labels[labelIndex]
+    if (length(label) < 1 || length(label) > 63 ||
+        label !~ /^[A-Za-z0-9-]+$/ || label ~ /^-/ || label ~ /-$/) exit 1
+  }
+}' </dev/null; then echo "\u4e3b\u673a\u540d\u683c\u5f0f\u4e0d\u6b63\u786e"; exit 1; fi
+case "$ACTION" in add|update|delete) ;; *) echo "hosts \u52a8\u4f5c\u65e0\u6548"; exit 1 ;; esac
+for TOOL in awk df stat mktemp chmod chown ln rm cat install cp dirname basename id; do
+  command -v "$TOOL" >/dev/null 2>&1 || { echo "\u7f3a\u5c11\u5fc5\u8981\u5de5\u5177: $TOOL"; exit 1; }
+done
+FREE_KB="$(df -Pk /tmp 2>/dev/null | awk 'NR == 2 { print $4 }')"
+case "$FREE_KB" in ""|*[!0-9]*) echo "\u65e0\u6cd5\u786e\u8ba4 /tmp \u53ef\u7528\u7a7a\u95f4"; exit 1 ;; esac
+[ "$FREE_KB" -ge 10240 ] || { echo "/tmp \u53ef\u7528\u7a7a\u95f4\u4e0d\u8db3"; exit 1; }
+CURRENT_UID="$(id -u 2>/dev/null)" || { echo "\u65e0\u6cd5\u8bfb\u53d6\u5f53\u524d\u7528\u6237"; exit 1; }
+RUN_AS=""
+if [ "$CURRENT_UID" != "0" ]; then
+  command -v sudo >/dev/null 2>&1 || { echo "\u5f53\u524d\u4e0d\u662f root \u4e14\u6ca1\u6709 sudo"; exit 1; }
+  RUN_AS="sudo"
+fi
+case "$ROLLBACK_SCRIPT" in "$ROLLBACK_DIR"/*) ;; *) echo "\u56de\u6eda\u811a\u672c\u8def\u5f84\u5fc5\u987b\u4f4d\u4e8e\u53d7\u63a7\u76ee\u5f55"; exit 1 ;; esac
+[ "$(dirname -- "$ROLLBACK_SCRIPT")" = "$ROLLBACK_DIR" ] || { echo "\u56de\u6eda\u811a\u672c\u8def\u5f84\u5fc5\u987b\u76f4\u63a5\u4f4d\u4e8e\u53d7\u63a7\u76ee\u5f55"; exit 1; }
+ROLLBACK_NAME="$(basename -- "$ROLLBACK_SCRIPT")"
+case "$ROLLBACK_NAME" in ""|*..*|*[!A-Za-z0-9._-]*) echo "\u56de\u6eda\u811a\u672c\u6587\u4ef6\u540d\u4e0d\u5b89\u5168"; exit 1 ;; esac
+[ ! -L "$ROLLBACK_DIR" ] || { echo "\u56de\u6eda\u76ee\u5f55\u4e0d\u80fd\u662f\u7b26\u53f7\u94fe\u63a5"; exit 1; }
+if [ -L "$ROLLBACK_SCRIPT" ]; then echo "\u56de\u6eda\u811a\u672c\u4e0d\u80fd\u662f\u7b26\u53f7\u94fe\u63a5"; exit 1; fi
+[ ! -e "$ROLLBACK_SCRIPT" ] || { echo "\u56de\u6eda\u811a\u672c\u8def\u5f84\u5df2\u5b58\u5728\uff0c\u62d2\u7edd\u8986\u76d6"; exit 1; }
+[ ! -L "$HOSTS_FILE" ] || { echo "hosts \u4e0d\u80fd\u662f\u7b26\u53f7\u94fe\u63a5"; exit 1; }
+
+printf '\u8ba1\u5212 hosts \u52a8\u4f5c: %s %s %s\\n' "$ACTION" "$TARGET_IP" "$TARGET_HOST"
+printf '\u8ba1\u5212\u56de\u6eda\u811a\u672c: %s\\n' "$ROLLBACK_SCRIPT"
+if [ "$APPLY_CHANGE" != "yes" ]; then
+  echo "\u5f53\u524d\u4e3a\u9884\u6f14\u6a21\u5f0f\uff0c\u672a\u521b\u5efa\u6587\u4ef6\uff0c\u4e5f\u672a\u6267\u884c\u4efb\u4f55\u4fee\u6539\u3002"
+  exit 0
+fi
+
+if [ "$CURRENT_UID" != "0" ]; then
+  sudo -v || { echo "sudo \u6388\u6743\u5931\u8d25\uff0c\u672a\u6267\u884c\u4fee\u6539"; exit 1; }
+fi
+umask 077
+case "$OPERATION_ROLLBACK_DIR" in "$ROLLBACK_DIR"/operation.*) ;; *) echo "\u64cd\u4f5c\u56de\u6eda\u76ee\u5f55\u4e0d\u53d7\u63a7"; exit 1 ;; esac
+[ -d "$OPERATION_ROLLBACK_DIR" ] && [ ! -L "$OPERATION_ROLLBACK_DIR" ] || { echo "\u64cd\u4f5c\u56de\u6eda\u76ee\u5f55\u4e0d\u5b89\u5168"; exit 1; }
+HOSTS_BACKUP="$OPERATION_ROLLBACK_DIR/target-1"
+[ -f "$HOSTS_BACKUP" ] && [ ! -L "$HOSTS_BACKUP" ] && [ -s "$HOSTS_BACKUP" ] || { echo "hosts \u5907\u4efd\u521b\u5efa\u5931\u8d25\u6216\u4e0d\u53ef\u7528"; exit 1; }
+[ "$(stat -c %a -- "$HOSTS_BACKUP")" = "$OLD_HOSTS_MODE" ] &&
+  [ "$(stat -c %u -- "$HOSTS_BACKUP")" = "$OLD_HOSTS_UID" ] &&
+  [ "$(stat -c %g -- "$HOSTS_BACKUP")" = "$OLD_HOSTS_GID" ] ||
+  { echo "hosts \u5907\u4efd\u6743\u9650\u6216\u5c5e\u4e3b\u9a8c\u8bc1\u5931\u8d25"; exit 1; }
+
+TMP_ROLLBACK="$(mktemp "$OPERATION_ROLLBACK_DIR/hosts-rollback.XXXXXX")" || { echo "\u65e0\u6cd5\u521b\u5efa\u56de\u6eda\u811a\u672c\u4e34\u65f6\u6587\u4ef6"; exit 1; }
+if ! {
+  printf '%s\\n' '#!/bin/sh' 'set -eu'
+  printf "HOSTS_FILE='%s'\\n" "$HOSTS_FILE"
+  printf "HOSTS_BACKUP='%s'\\n" "$HOSTS_BACKUP"
+  printf "OLD_HOSTS_MODE='%s'\\n" "$OLD_HOSTS_MODE"
+  printf "OLD_HOSTS_UID='%s'\\n" "$OLD_HOSTS_UID"
+  printf "OLD_HOSTS_GID='%s'\\n" "$OLD_HOSTS_GID"
+  cat <<'SHELLPILOT_HOSTS_ROLLBACK'
+[ -f "$HOSTS_BACKUP" ] && [ ! -L "$HOSTS_BACKUP" ] || { echo "hosts \u56de\u6eda\u5907\u4efd\u4e0d\u53ef\u7528"; exit 1; }
+[ ! -L "$HOSTS_FILE" ] || { echo "hosts \u5df2\u53d8\u6210\u7b26\u53f7\u94fe\u63a5\uff0c\u62d2\u7edd\u56de\u6eda"; exit 1; }
+RUN_AS=""
+if [ "$(id -u)" != "0" ]; then
+  command -v sudo >/dev/null 2>&1 || { echo "\u56de\u6eda\u9700\u8981 root \u6216 sudo"; exit 1; }
+  sudo -v || exit 1
+  RUN_AS="sudo"
+fi
+for TOOL in cp chmod chown stat; do command -v "$TOOL" >/dev/null 2>&1 || { echo "\u7f3a\u5c11\u56de\u6eda\u5de5\u5177: $TOOL"; exit 1; }; done
+$RUN_AS cp -a -- "$HOSTS_BACKUP" "$HOSTS_FILE"
+$RUN_AS chown "$OLD_HOSTS_UID:$OLD_HOSTS_GID" "$HOSTS_FILE"
+$RUN_AS chmod "$OLD_HOSTS_MODE" "$HOSTS_FILE"
+[ "$($RUN_AS stat -c %a -- "$HOSTS_FILE")" = "$OLD_HOSTS_MODE" ] &&
+  [ "$($RUN_AS stat -c %u -- "$HOSTS_FILE")" = "$OLD_HOSTS_UID" ] &&
+  [ "$($RUN_AS stat -c %g -- "$HOSTS_FILE")" = "$OLD_HOSTS_GID" ] ||
+  { echo "hosts \u6743\u9650\u6216\u5c5e\u4e3b\u6062\u590d\u9a8c\u8bc1\u5931\u8d25"; exit 1; }
+echo "hosts \u5df2\u6062\u590d\u5230\u4fee\u6539\u524d\u72b6\u6001\u3002"
+SHELLPILOT_HOSTS_ROLLBACK
+} > "$TMP_ROLLBACK"; then
+  rm -f -- "$TMP_ROLLBACK"; echo "\u65e0\u6cd5\u5199\u5165\u56de\u6eda\u811a\u672c"; exit 1
+fi
+chmod 700 "$TMP_ROLLBACK" || { rm -f -- "$TMP_ROLLBACK"; echo "\u65e0\u6cd5\u8bbe\u7f6e\u56de\u6eda\u811a\u672c\u6743\u9650"; exit 1; }
+if ! ln -- "$TMP_ROLLBACK" "$ROLLBACK_SCRIPT"; then
+  rm -f -- "$TMP_ROLLBACK"; echo "\u65e0\u6cd5\u539f\u5b50\u521b\u5efa\u56de\u6eda\u811a\u672c"; exit 1
+fi
+rm -f -- "$TMP_ROLLBACK" || { echo "\u65e0\u6cd5\u6e05\u7406\u56de\u6eda\u811a\u672c\u4e34\u65f6\u6587\u4ef6"; exit 1; }
+[ -f "$ROLLBACK_SCRIPT" ] && [ ! -L "$ROLLBACK_SCRIPT" ] || { echo "\u56de\u6eda\u811a\u672c\u521b\u5efa\u9a8c\u8bc1\u5931\u8d25"; exit 1; }
+[ "$(stat -c %a -- "$ROLLBACK_SCRIPT")" = "700" ] || { echo "\u56de\u6eda\u811a\u672c\u6743\u9650\u9a8c\u8bc1\u5931\u8d25"; exit 1; }
+printf '\u56de\u6eda\u811a\u672c: %s\\n' "$ROLLBACK_SCRIPT"
+
+HOSTS_TMP="$(mktemp "$OPERATION_ROLLBACK_DIR/hosts-new.XXXXXX")" || { echo "\u65e0\u6cd5\u521b\u5efa hosts \u4e34\u65f6\u6587\u4ef6\uff1b\u56de\u6eda: $ROLLBACK_SCRIPT"; exit 1; }
+if awk -v ip="$TARGET_IP" -v host="$TARGET_HOST" -v action="$ACTION" '
+  BEGIN { hostMatches = 0; pairMatches = 0 }
+  /^[[:space:]]*#/ || NF == 0 { print; next }
+  {
+    original = $0
+    dataEnd = NF
+    commentStart = 0
+    for (field = 2; field <= NF; field++) {
+      if ($field ~ /^#/) {
+        dataEnd = field - 1
+        commentStart = field
+        break
+      }
+    }
+    hostFound = 0
+    for (field = 2; field <= dataEnd; field++) {
+      if ($field == host) hostFound = 1
+    }
+    pairFound = ($1 == ip && hostFound)
+    if (hostFound) hostMatches++
+    if (pairFound) pairMatches++
+
+    if (action == "update" && hostFound) {
+      $1 = ip
+      print
+      next
+    }
+    if (action == "delete" && pairFound) {
+      output = $1
+      remaining = 0
+      for (field = 2; field <= dataEnd; field++) {
+        if ($field == host) continue
+        output = output OFS $field
+        remaining++
+      }
+      if (remaining > 0) {
+        for (field = commentStart; field > 0 && field <= NF; field++) output = output OFS $field
+        print output
+      } else if (commentStart > 0) {
+        output = $commentStart
+        for (field = commentStart + 1; field <= NF; field++) output = output OFS $field
+        print output
+      }
+      next
+    }
+    print original
+  }
+  END {
+    if (action == "add") {
+      if (hostMatches != 0) exit 2
+      print ip OFS host
+    } else if (action == "update") {
+      if (hostMatches != 1) exit 3
+    } else if (action == "delete") {
+      if (pairMatches != 1) exit 4
+    } else {
+      exit 5
+    }
+  }
+' "$HOSTS_FILE" > "$HOSTS_TMP"; then
+  :
+else
+  AWK_STATUS=$?
+  rm -f -- "$HOSTS_TMP"
+  case "$AWK_STATUS" in
+    2) echo "\u65b0\u589e\u88ab\u62d2\u7edd\uff1a\u8be5\u4e3b\u673a\u540d\u5df2\u5b58\u5728\uff0c\u8bf7\u4f7f\u7528\u66f4\u65b0\u52a8\u4f5c" ;;
+    3) echo "\u66f4\u65b0\u88ab\u62d2\u7edd\uff1a\u4e3b\u673a\u540d\u5fc5\u987b\u7cbe\u786e\u5339\u914d\u4e00\u6761\u8bb0\u5f55" ;;
+    4) echo "\u5220\u9664\u88ab\u62d2\u7edd\uff1aIP \u4e0e\u4e3b\u673a\u540d\u5fc5\u987b\u7cbe\u786e\u5339\u914d\u4e00\u6761\u8bb0\u5f55" ;;
+    *) echo "\u751f\u6210 hosts \u65b0\u5185\u5bb9\u5931\u8d25" ;;
+  esac
+  exit 1
+fi
+
+$RUN_AS install -o "$OLD_HOSTS_UID" -g "$OLD_HOSTS_GID" -m "$OLD_HOSTS_MODE" -- "$HOSTS_TMP" "$HOSTS_FILE" ||
+  { rm -f -- "$HOSTS_TMP"; echo "\u5199\u5165 hosts \u5931\u8d25\uff1b\u8bf7\u56de\u6eda: $ROLLBACK_SCRIPT"; exit 1; }
+rm -f -- "$HOSTS_TMP" || { echo "\u6e05\u7406 hosts \u4e34\u65f6\u6587\u4ef6\u5931\u8d25\uff1b\u8bf7\u56de\u6eda: $ROLLBACK_SCRIPT"; exit 1; }
+
+FINAL_HOSTS_MODE="$(stat -c %a -- "$HOSTS_FILE" 2>/dev/null)" || FINAL_HOSTS_MODE=""
+FINAL_HOSTS_UID="$(stat -c %u -- "$HOSTS_FILE" 2>/dev/null)" || FINAL_HOSTS_UID=""
+FINAL_HOSTS_GID="$(stat -c %g -- "$HOSTS_FILE" 2>/dev/null)" || FINAL_HOSTS_GID=""
+if [ "$FINAL_HOSTS_MODE" != "$OLD_HOSTS_MODE" ] ||
+  [ "$FINAL_HOSTS_UID" != "$OLD_HOSTS_UID" ] ||
+  [ "$FINAL_HOSTS_GID" != "$OLD_HOSTS_GID" ]; then
+  echo "hosts \u6743\u9650\u6216\u5c5e\u4e3b\u9a8c\u8bc1\u5931\u8d25\uff1b\u8bf7\u56de\u6eda: $ROLLBACK_SCRIPT"
+  exit 1
+fi
+if ! awk -v ip="$TARGET_IP" -v host="$TARGET_HOST" -v action="$ACTION" '
+  /^[[:space:]]*#/ || NF < 2 { next }
+  {
+    dataEnd = NF
+    for (field = 2; field <= NF; field++) if ($field ~ /^#/) { dataEnd = field - 1; break }
+    hostFound = 0
+    for (field = 2; field <= dataEnd; field++) if ($field == host) hostFound = 1
+    if (hostFound) hostMatches++
+    if ($1 == ip && hostFound) pairMatches++
+  }
+  END {
+    if (action == "delete") exit pairMatches != 0
+    exit !(pairMatches == 1 && hostMatches == 1)
+  }
+' "$HOSTS_FILE"; then
+  echo "hosts \u4fee\u6539\u540e\u7cbe\u786e\u9a8c\u8bc1\u5931\u8d25\uff1b\u8bf7\u56de\u6eda: $ROLLBACK_SCRIPT"
+  exit 1
+fi
+printf 'hosts \u4fee\u6539\u5e76\u9a8c\u8bc1\u6210\u529f\u3002\u56de\u6eda\u811a\u672c: %s\\n' "$ROLLBACK_SCRIPT"`
 
 const NETWORK_CHANGE_COMMAND = [
   'IFACE="{{网卡}}"',
@@ -394,6 +640,40 @@ true`)
         step('curl -4 -s --max-time 5 ifconfig.me || curl -4 -s --max-time 5 ip.sb || true')
       ]
     }),
+    defineCommand(withRollback({
+      id: 'builtin-server-hosts-manage',
+      name: '\u7ba1\u7406 hosts \u6620\u5c04',
+      description: '\u8bfb\u53d6\u5f53\u524d /etc/hosts \u540e\u6309\u7cbe\u786e IP \u4e0e\u4e3b\u673a\u540d\u6267\u884c\u65b0\u589e\u3001\u66f4\u65b0\u6216\u5220\u9664\uff0c\u5e76\u4fdd\u7559\u6743\u9650\u4e0e\u5c5e\u4e3b\u3002',
+      usage: '\u9ed8\u8ba4\u53ea\u9884\u89c8\uff1b\u786e\u8ba4\u540e\u5148\u521b\u5efa\u53d7\u63a7\u5907\u4efd\u548c\u5e42\u7b49\u56de\u6eda\u811a\u672c\uff0c\u518d\u5199\u5165\u5e76\u7cbe\u786e\u9a8c\u8bc1\u76ee\u6807\u6620\u5c04\u3002',
+      labels: [NEED_EDIT, '\u7f51\u7edc', '\u9ad8\u98ce\u9669'],
+      params: [
+        inputParam('IP\u5730\u5740', 'IP \u5730\u5740', '', '\u586b\u5199\u4e25\u683c IPv4 \u6216 IPv6 \u5730\u5740\uff0c\u4e0d\u63a5\u53d7\u7f51\u6bb5\u3001\u7a7a\u767d\u6216\u63a7\u5236\u5b57\u7b26\u3002', '\u4f8b\u5982 192.0.2.20 \u6216 2001:db8::20', {
+          validationType: 'ip',
+          required: true
+        }),
+        inputParam('\u4e3b\u673a\u540d', '\u4e3b\u673a\u540d', '', '\u586b\u5199\u9700\u8981\u7cbe\u786e\u5339\u914d\u7684\u5b8c\u6574\u4e3b\u673a\u540d\u3002', '\u4f8b\u5982 web-01.example.com', {
+          validationType: 'hostname',
+          required: true
+        }),
+        selectParam('\u52a8\u4f5c', '\u52a8\u4f5c', 'add', '\u65b0\u589e\u62d2\u7edd\u91cd\u590d\u4e3b\u673a\u540d\uff0c\u66f4\u65b0\u6309\u4e3b\u673a\u540d\u7cbe\u786e\u5339\u914d\uff0c\u5220\u9664\u6309 IP \u4e0e\u4e3b\u673a\u540d\u7cbe\u786e\u5339\u914d\u3002', [
+          { label: '\u65b0\u589e', value: 'add' },
+          { label: '\u66f4\u65b0', value: 'update' },
+          { label: '\u5220\u9664', value: 'delete' }
+        ], {
+          validationType: 'enum',
+          required: true
+        })
+      ],
+      commands: [step(HOSTS_MANAGE_COMMAND)]
+    }, {
+      title: '\u7ba1\u7406 hosts \u6620\u5c04',
+      actionParam: '\u52a8\u4f5c',
+      mutatingValues: ['add', 'update', 'delete'],
+      backupTargets: ['/etc/hosts'],
+      verifyCommands: [
+        'awk -v ip="{{IP\u5730\u5740}}" -v host="{{\u4e3b\u673a\u540d}}" -v action="{{\u52a8\u4f5c}}" \'BEGIN { hostMatches = 0; pairMatches = 0 } /^[[:space:]]*#/ || NF < 2 { next } { dataEnd = NF; for (field = 2; field <= NF; field++) if ($field ~ /^#/) { dataEnd = field - 1; break } hostFound = 0; for (field = 2; field <= dataEnd; field++) if ($field == host) hostFound = 1; if (hostFound) hostMatches++; if ($1 == ip && hostFound) pairMatches++ } END { if (action == "delete") exit pairMatches != 0; exit !(pairMatches == 1 && hostMatches == 1) }\' /etc/hosts'
+      ]
+    })),
     defineCommand({
       id: 'builtin-server-network-change-ip',
       name: '修改服务器 IP',

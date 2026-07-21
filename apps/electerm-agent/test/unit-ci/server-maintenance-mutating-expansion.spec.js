@@ -1,0 +1,862 @@
+const test = require('node:test')
+const assert = require('node:assert/strict')
+const { spawnSync } = require('node:child_process')
+const fs = require('node:fs')
+const os = require('node:os')
+const path = require('node:path')
+const { pathToFileURL } = require('node:url')
+
+const registryUrl = pathToFileURL(
+  path.resolve(__dirname, '../../src/client/components/quick-commands/server-maintenance/index.js')
+).href
+const safetyMetadataUrl = pathToFileURL(
+  path.resolve(__dirname, '../../src/client/components/quick-commands/server-maintenance/shared/safety-metadata.js')
+).href
+const contextUrl = pathToFileURL(
+  path.resolve(__dirname, '../../src/client/components/quick-commands/quick-command-context.js')
+).href
+const validationUrl = pathToFileURL(
+  path.resolve(__dirname, '../../src/client/components/quick-commands/server-maintenance/shared/validation.js')
+).href
+
+const commandCases = [
+  {
+    id: 'builtin-server-hostname-change',
+    domain: '系统',
+    fields: [
+      ['新主机名', 'hostname'],
+      ['同步Hosts', 'enum']
+    ]
+  },
+  {
+    id: 'builtin-server-hosts-manage',
+    domain: '网络',
+    fields: [
+      ['IP地址', 'ip'],
+      ['主机名', 'hostname'],
+      ['动作', 'enum']
+    ]
+  },
+  {
+    id: 'builtin-server-timezone-change',
+    domain: '时间',
+    fields: [
+      ['新时区', 'timezone']
+    ]
+  }
+]
+
+test('Task 6 forms expose locked rollback metadata and strictly typed params', async () => {
+  const { getServerMaintenanceQuickCommands } = await import(registryUrl)
+  const byId = new Map(
+    getServerMaintenanceQuickCommands().map(command => [command.id, command])
+  )
+
+  for (const testCase of commandCases) {
+    const item = byId.get(testCase.id)
+    assert.ok(item, `missing ${testCase.id}`)
+    assert.match(item.name, /[\u4e00-\u9fff]/)
+    assert.match(item.description, /[\u4e00-\u9fff]/)
+    assert.match(item.usage, /[\u4e00-\u9fff]/)
+    assert.ok(item.labels.includes('需编辑'))
+    assert.ok(item.labels.includes(testCase.domain))
+    assert.ok(item.labels.includes('高风险'))
+    assert.equal(item.editBeforeRun, true)
+    assert.equal(item.mutatesServer, true)
+    assert.equal(item.confirmRequired, true)
+    assert.deepEqual(item.rollback, {
+      title: item.name,
+      pathParam: '回滚脚本',
+      actionParam: item.rollback.actionParam,
+      mutatingValues: item.rollback.mutatingValues,
+      confirmParam: '确认执行',
+      confirmValue: 'yes'
+    })
+    assert.ok(item.rollback.mutatingValues.length >= 1)
+    assert.ok(Array.isArray(item.verification))
+    assert.ok(item.verification.length >= 1)
+    assert.deepEqual(item.safetyMetadata.verifyCommands, item.verification)
+    assert.equal(item.safetyMetadata.requireConfirmation, true)
+    assert.equal(item.safetyMetadata.rollbackDirectory, '/tmp/shellpilot-rollback')
+
+    for (const [name, validationType] of testCase.fields) {
+      const param = item.params.find(candidate => candidate.name === name)
+      assert.ok(param, `${testCase.id} missing ${name}`)
+      assert.equal(param.validationType, validationType)
+      assert.equal(param.required, true)
+    }
+
+    const confirmation = item.params.find(param => param.name === '确认执行')
+    assert.equal(confirmation.type, 'select')
+    assert.equal(confirmation.validationType, 'enum')
+    assert.equal(confirmation.required, true)
+    assert.equal(confirmation.defaultValue, 'no')
+    assert.deepEqual(confirmation.options.map(option => option.value), ['no', 'yes'])
+
+    const rollbackPath = item.params.find(param => param.name === '回滚脚本')
+    assert.equal(rollbackPath.type, 'hidden')
+    assert.equal(rollbackPath.validationType, 'rollback-path')
+    assert.equal(rollbackPath.required, true)
+    assert.equal(rollbackPath.defaultValue, '{{回滚脚本}}')
+
+    const text = item.commands.map(command => command.command).join('\n')
+    assert.match(text, /\/tmp\/shellpilot-rollback/)
+  }
+})
+
+test('withRollback ignores forged critical fields and owns immutable safety metadata', async () => {
+  const { withRollback } = await import(safetyMetadataUrl)
+  const forgedConfirmation = {
+    name: '确认执行',
+    type: 'select',
+    defaultValue: 'yes',
+    options: [{ label: '绕过', value: 'yes' }]
+  }
+  const forgedRollbackPath = {
+    name: '回滚脚本',
+    type: 'input',
+    defaultValue: '/tmp/elsewhere.sh'
+  }
+  const item = withRollback({
+    id: 'builtin-server-forged-mutation',
+    name: '安全修改',
+    editBeforeRun: false,
+    mutatesServer: false,
+    confirmRequired: false,
+    params: [forgedConfirmation, forgedRollbackPath],
+    rollback: {
+      pathParam: '任意路径',
+      confirmParam: '跳过确认',
+      confirmValue: 'no'
+    },
+    mutationSafety: {
+      rollbackDirectory: '/tmp/attacker',
+      requireConfirmation: false,
+      verifyCommands: []
+    },
+    safetyMetadata: {
+      rollbackDirectory: '/tmp/attacker',
+      requireConfirmation: false
+    },
+    verification: []
+  }, {
+    title: '安全修改',
+    actionParam: '动作',
+    mutatingValues: ['apply'],
+    backupTargets: ['/etc/hosts'],
+    verifyCommands: ['test -s /etc/hosts'],
+    pathParam: '伪造路径',
+    confirmParam: '伪造确认',
+    confirmValue: 'no',
+    rollbackDirectory: '/tmp/attacker',
+    requireConfirmation: false
+  })
+
+  assert.equal(item.editBeforeRun, true)
+  assert.equal(item.mutatesServer, true)
+  assert.equal(item.confirmRequired, true)
+  assert.deepEqual(item.rollback, {
+    title: '安全修改',
+    pathParam: '回滚脚本',
+    actionParam: '动作',
+    mutatingValues: ['apply'],
+    confirmParam: '确认执行',
+    confirmValue: 'yes'
+  })
+  assert.deepEqual(item.mutationSafety, {
+    title: '安全修改',
+    backupTargets: ['/etc/hosts'],
+    verifyCommands: ['test -s /etc/hosts']
+  })
+  assert.deepEqual(item.verification, ['test -s /etc/hosts'])
+  assert.equal(item.safetyMetadata, undefined)
+  assert.equal(item.params.filter(param => param.name === '确认执行').length, 1)
+  assert.equal(item.params.find(param => param.name === '确认执行').defaultValue, 'no')
+  assert.equal(item.params.filter(param => param.name === '回滚脚本').length, 1)
+  assert.equal(item.params.find(param => param.name === '回滚脚本').type, 'hidden')
+  assert.equal(Object.isFrozen(item.rollback), true)
+  assert.equal(Object.isFrozen(item.rollback.mutatingValues), true)
+  assert.equal(Object.isFrozen(item.mutationSafety), true)
+  assert.equal(Object.isFrozen(item.mutationSafety.backupTargets), true)
+  assert.equal(Object.isFrozen(item.mutationSafety.verifyCommands), true)
+  assert.equal(Object.isFrozen(item.verification), true)
+})
+function commandText (item) {
+  return item.commands.map(command => command.command).join('\n')
+}
+
+function resolvePosixShell () {
+  const candidates = process.platform === 'win32'
+    ? [
+        path.join(process.env.ProgramFiles || 'C:\\Program Files', 'Git', 'usr', 'bin', 'dash.exe'),
+        path.join(process.env.ProgramFiles || 'C:\\Program Files', 'Git', 'bin', 'sh.exe')
+      ]
+    : ['dash', 'sh']
+  for (const candidate of candidates) {
+    const probe = spawnSync(candidate, ['-c', 'exit 0'], {
+      encoding: 'utf8',
+      timeout: 2000
+    })
+    if (!probe.error && probe.status === 0) return candidate
+  }
+  throw new Error('No POSIX sh implementation is available for Task 6 tests')
+}
+
+const posixShellExecutable = resolvePosixShell()
+const posixShellEnv = { ...process.env }
+const posixPathKey = Object.keys(posixShellEnv)
+  .find(key => key.toLowerCase() === 'path') || 'PATH'
+posixShellEnv[posixPathKey] = [
+  path.dirname(posixShellExecutable),
+  posixShellEnv[posixPathKey]
+].filter(Boolean).join(path.delimiter)
+
+function runPosixShell (script, expectedStatus) {
+  const statusToAssert = arguments.length < 2 ? 0 : expectedStatus
+  const result = spawnSync(posixShellExecutable, ['-s'], {
+    encoding: 'utf8',
+    env: posixShellEnv,
+    input: script,
+    timeout: 10000,
+    stdio: ['pipe', 'pipe', 'pipe']
+  })
+  const failureLine = Number(/: (\d+):/.exec(result.stderr)?.[1] || 0)
+  const shellLines = script.split('\n')
+  const contextStart = Math.max(0, failureLine - 8)
+  const shellContext = failureLine
+    ? shellLines.slice(contextStart, failureLine + 6)
+      .map((line, index) => `${contextStart + index + 1}: ${line}`).join('\n')
+    : ''
+  assert.equal(result.error, undefined, result.error?.message)
+  assert.equal(result.signal, null, String(result.signal) + ': ' + result.stderr)
+  if (statusToAssert !== undefined) {
+    assert.equal(result.status, statusToAssert, [result.stderr || result.stdout, shellContext].filter(Boolean).join('\n'))
+  }
+  return result
+}
+
+function toPosixPath (value) {
+  return value.replaceAll('\\', '/')
+}
+
+function shellLiteral (value) {
+  const quote = String.fromCharCode(39)
+  return quote + String(value).split(quote).join(quote + '\\' + quote + quote) + quote
+}
+
+function createShellSandbox (t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shellpilot-task6-'))
+  t.after(() => fs.rmSync(root, { force: true, recursive: true }))
+  const result = {
+    root: toPosixPath(root),
+    hosts: toPosixPath(path.join(root, 'etc-hosts')),
+    hostname: toPosixPath(path.join(root, 'hostname-state')),
+    timezone: toPosixPath(path.join(root, 'timezone-state')),
+    mutationLog: toPosixPath(path.join(root, 'mutation.log')),
+    rollbackDirectory: toPosixPath(path.join(root, 'rollback'))
+  }
+  result.rollbackScript = result.rollbackDirectory + '/task6-test-1700000000000.sh'
+  fs.writeFileSync(result.hosts, '127.0.0.1 localhost\n192.0.2.10 old.example.com\n')
+  fs.writeFileSync(result.hostname, 'old-host.example.com\n')
+  fs.writeFileSync(result.timezone, 'UTC\n')
+  return result
+}
+
+function snapshotTree (root) {
+  const entries = []
+  const visit = current => {
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })
+      .sort((left, right) => left.name.localeCompare(right.name))) {
+      const absolute = path.join(current, entry.name)
+      const relative = path.relative(root, absolute).replaceAll('\\', '/')
+      if (entry.isDirectory()) {
+        entries.push([relative, 'directory'])
+        visit(absolute)
+      } else {
+        entries.push([relative, 'file', fs.readFileSync(absolute).toString('base64')])
+      }
+    }
+  }
+  visit(root)
+  return entries
+}
+
+function buildShellPrelude (sandbox) {
+  return [
+    'HOSTNAME_STATE=' + shellLiteral(sandbox.hostname),
+    'TIMEZONE_STATE=' + shellLiteral(sandbox.timezone),
+    'MUTATION_LOG=' + shellLiteral(sandbox.mutationLog),
+    'hostnamectl () {',
+    '  case "$1" in',
+    '    --static) cat "$HOSTNAME_STATE" ;;',
+    '    set-hostname) printf "%s\\n" "$2" > "$HOSTNAME_STATE"; printf "hostname:%s\\n" "$2" >> "$MUTATION_LOG" ;;',
+    '    *) return 2 ;;',
+    '  esac',
+    '}',
+    'hostname () { cat "$HOSTNAME_STATE"; }',
+    'timedatectl () {',
+    '  case "$1" in',
+    '    show) cat "$TIMEZONE_STATE" ;;',
+    '    list-timezones) printf "UTC\\nAsia/Shanghai\\nEurope/London\\n" ;;',
+    '    set-timezone) printf "%s\\n" "$2" > "$TIMEZONE_STATE"; printf "timezone:%s\\n" "$2" >> "$MUTATION_LOG" ;;',
+    '    *) return 2 ;;',
+    '  esac',
+    '}',
+    'df () { printf "Filesystem 1024-blocks Used Available Capacity Mounted on\\nfixture 100000 1 99999 1%% /tmp\\n"; }',
+    'id () { if [ "$1" = "-u" ]; then printf "0\\n"; else command id "$@"; fi; }'
+  ].join('\n')
+}
+
+function rewriteSandboxPaths (text, sandbox) {
+  return text
+    .replaceAll('/tmp/shellpilot-rollback', sandbox.rollbackDirectory)
+    .replaceAll('/etc/hosts', sandbox.hosts)
+}
+
+test('Task 6 validation rejects unsafe host IP timezone action and rollback values', async () => {
+  const [
+    { getServerMaintenanceQuickCommands },
+    { buildQuickCommandParamValues },
+    { validateAndNormalizeQuickCommandParams }
+  ] = await Promise.all([
+    import(registryUrl),
+    import(contextUrl),
+    import(validationUrl)
+  ])
+  const byId = new Map(
+    getServerMaintenanceQuickCommands().map(command => [command.id, command])
+  )
+  const context = { rollbackPath: '/tmp/shellpilot-rollback/task6-validation-1.sh' }
+  const cases = [
+    {
+      id: 'builtin-server-hostname-change',
+      safe: { \u65b0\u4e3b\u673a\u540d: 'web-01.example.com', \u540c\u6b65Hosts: 'yes' },
+      invalid: [
+        ['\u65b0\u4e3b\u673a\u540d', 'web;reboot'],
+        ['\u65b0\u4e3b\u673a\u540d', 'bad\nname'],
+        ['\u540c\u6b65Hosts', 'maybe']
+      ]
+    },
+    {
+      id: 'builtin-server-hosts-manage',
+      safe: { IP\u5730\u5740: '192.0.2.20', \u4e3b\u673a\u540d: 'web-01.example.com', \u52a8\u4f5c: 'add' },
+      invalid: [
+        ['IP\u5730\u5740', '999.0.2.20'],
+        ['IP\u5730\u5740', '192.0.2.20;id'],
+        ['\u4e3b\u673a\u540d', 'web_01.example.com'],
+        ['\u52a8\u4f5c', 'replace-all']
+      ]
+    },
+    {
+      id: 'builtin-server-timezone-change',
+      safe: { \u65b0\u65f6\u533a: 'Asia/Shanghai' },
+      invalid: [
+        ['\u65b0\u65f6\u533a', '../etc/passwd'],
+        ['\u65b0\u65f6\u533a', 'Asia/\nShanghai'],
+        ['\u65b0\u65f6\u533a', 'Asia/$(id)']
+      ]
+    }
+  ]
+
+  for (const testCase of cases) {
+    const item = byId.get(testCase.id)
+    const defaults = buildQuickCommandParamValues(item, context)
+    for (const [name, value] of testCase.invalid) {
+      const result = validateAndNormalizeQuickCommandParams(item, {
+        ...defaults,
+        ...testCase.safe,
+        [name]: value
+      })
+      assert.ok(result.errors[name], testCase.id + ' must reject ' + JSON.stringify(value))
+    }
+    for (const rollbackPath of [
+      '/tmp/shellpilot-rollback/../escape.sh',
+      '/tmp/shellpilot-rollback/nested/escape.sh',
+      '/tmp/other.sh',
+      '/tmp/shellpilot-rollback/bad\nname.sh'
+    ]) {
+      const result = validateAndNormalizeQuickCommandParams(item, {
+        ...defaults,
+        ...testCase.safe,
+        \u56de\u6eda\u811a\u672c: rollbackPath
+      })
+      assert.ok(result.errors.\u56de\u6eda\u811a\u672c, testCase.id + ' must reject ' + JSON.stringify(rollbackPath))
+    }
+  }
+
+  const hosts = byId.get('builtin-server-hosts-manage')
+  const validIpv6 = validateAndNormalizeQuickCommandParams(hosts, {
+    ...buildQuickCommandParamValues(hosts, context),
+    IP\u5730\u5740: '2001:db8::10',
+    \u4e3b\u673a\u540d: 'web-01.example.com',
+    \u52a8\u4f5c: 'add'
+  })
+  assert.deepEqual(validIpv6.errors, {})
+
+  const timezone = byId.get('builtin-server-timezone-change')
+  const validUtc = validateAndNormalizeQuickCommandParams(timezone, {
+    ...buildQuickCommandParamValues(timezone, context),
+    \u65b0\u65f6\u533a: 'UTC'
+  })
+  assert.deepEqual(validUtc.errors, {})
+})
+
+test('Task 6 command workflows read state and preflight before creating rollback artifacts', async () => {
+  const { getServerMaintenanceQuickCommands } = await import(registryUrl)
+  const byId = new Map(
+    getServerMaintenanceQuickCommands().map(command => [command.id, command])
+  )
+  const cases = [
+    ['builtin-server-hostname-change', 'OLD_HOSTNAME'],
+    ['builtin-server-hosts-manage', 'OLD_HOSTS_MODE'],
+    ['builtin-server-timezone-change', 'OLD_TIMEZONE']
+  ]
+
+  for (const [id, stateMarker] of cases) {
+    const text = commandText(byId.get(id))
+    const stateIndex = text.indexOf(stateMarker)
+    const previewIndex = text.indexOf('if [ "$APPLY_CHANGE" != "yes" ]')
+    const rollbackIndex = text.indexOf('ln -- "$TMP_ROLLBACK" "$ROLLBACK_SCRIPT"')
+    assert.ok(stateIndex >= 0, id + ' must read original state')
+    assert.ok(stateIndex < previewIndex, id + ' must read state before preview')
+    assert.match(text, /command -v/)
+    assert.match(text, /df -Pk \/tmp/)
+    assert.match(text, /umask 077/)
+    assert.match(text, /case "\$ROLLBACK_SCRIPT"/)
+    assert.match(text, /\[ -L "\$ROLLBACK_SCRIPT" \]/)
+    assert.ok(rollbackIndex > previewIndex, id + ' must create rollback only after confirmation')
+  }
+
+  const hostname = commandText(byId.get('builtin-server-hostname-change'))
+  assert.match(hostname, /hostnamectl set-hostname "\$NEW_HOSTNAME"/)
+  assert.match(hostname, /SYNC_HOSTS/)
+  assert.match(hostname, /\$field == oldHost/)
+
+  const hosts = commandText(byId.get('builtin-server-hosts-manage'))
+  assert.match(hosts, /awk/)
+  assert.match(hosts, /\$1 == ip/)
+  assert.match(hosts, /\$field == host/)
+  assert.doesNotMatch(hosts, /\bsed\b/)
+
+  const timezone = commandText(byId.get('builtin-server-timezone-change'))
+  assert.match(timezone, /timedatectl list-timezones/)
+  assert.match(timezone, /grep -Fqx -- "\$NEW_TIMEZONE"/)
+  assert.match(timezone, /timedatectl set-timezone "\$NEW_TIMEZONE"/)
+  assert.doesNotMatch(timezone, /\/etc\/localtime|zoneinfo|ln -s/)
+})
+
+test('Task 6 preview reads current state and leaves the sandbox byte-for-byte unchanged', async t => {
+  const [
+    { getServerMaintenanceQuickCommands },
+    { buildQuickCommandParamValues, buildQuickCommandText }
+  ] = await Promise.all([
+    import(registryUrl),
+    import(contextUrl)
+  ])
+  const byId = new Map(
+    getServerMaintenanceQuickCommands().map(command => [command.id, command])
+  )
+  const cases = [
+    {
+      id: 'builtin-server-hostname-change',
+      values: { \u65b0\u4e3b\u673a\u540d: 'new-host.example.com', \u540c\u6b65Hosts: 'yes' },
+      expected: /old-host\.example\.com/
+    },
+    {
+      id: 'builtin-server-hosts-manage',
+      values: { IP\u5730\u5740: '192.0.2.20', \u4e3b\u673a\u540d: 'new-host.example.com', \u52a8\u4f5c: 'add' },
+      expected: /127\.0\.0\.1 localhost/
+    },
+    {
+      id: 'builtin-server-timezone-change',
+      values: { \u65b0\u65f6\u533a: 'Asia/Shanghai' },
+      expected: /\bUTC\b/
+    }
+  ]
+
+  for (const testCase of cases) {
+    await t.test(testCase.id, () => {
+      const sandbox = createShellSandbox(t)
+      const item = byId.get(testCase.id)
+      const context = { rollbackPath: '/tmp/shellpilot-rollback/task6-test-1700000000000.sh' }
+      const values = {
+        ...buildQuickCommandParamValues(item, context),
+        ...testCase.values,
+        \u786e\u8ba4\u6267\u884c: 'no'
+      }
+      const before = snapshotTree(sandbox.root.replaceAll('/', path.sep))
+      const script = rewriteSandboxPaths(
+        buildQuickCommandText(item, context, values),
+        sandbox
+      )
+      const result = runPosixShell(buildShellPrelude(sandbox) + '\n' + script)
+      const after = snapshotTree(sandbox.root.replaceAll('/', path.sep))
+
+      assert.match(result.stdout, /\u9884\u6f14/)
+      assert.match(result.stdout, testCase.expected)
+      assert.deepEqual(after, before)
+      assert.equal(fs.existsSync(sandbox.mutationLog), false)
+      assert.equal(fs.existsSync(sandbox.rollbackDirectory), false)
+    })
+  }
+})
+
+test('confirmed Task 6 commands bind verification to normalized final values', async () => {
+  const [
+    { getServerMaintenanceQuickCommands },
+    { buildQuickCommandParamValues, buildQuickCommandText }
+  ] = await Promise.all([
+    import(registryUrl),
+    import(contextUrl)
+  ])
+  const byId = new Map(
+    getServerMaintenanceQuickCommands().map(command => [command.id, command])
+  )
+  const context = { rollbackPath: '/tmp/shellpilot-rollback/task6-bind-1700000000000.sh' }
+  const cases = [
+    {
+      id: 'builtin-server-hostname-change',
+      values: { \u65b0\u4e3b\u673a\u540d: 'final-host.example.com', \u540c\u6b65Hosts: 'yes' },
+      expected: 'final-host.example.com'
+    },
+    {
+      id: 'builtin-server-hosts-manage',
+      values: { IP\u5730\u5740: '2001:db8::20', \u4e3b\u673a\u540d: 'final-host.example.com', \u52a8\u4f5c: 'update' },
+      expected: '2001:db8::20'
+    },
+    {
+      id: 'builtin-server-timezone-change',
+      values: { \u65b0\u65f6\u533a: 'Europe/London' },
+      expected: 'Europe/London'
+    }
+  ]
+
+  for (const testCase of cases) {
+    const item = byId.get(testCase.id)
+    const values = {
+      ...buildQuickCommandParamValues(item, context),
+      ...testCase.values,
+      \u786e\u8ba4\u6267\u884c: 'yes'
+    }
+    const text = buildQuickCommandText(item, context, values)
+    const verification = text.slice(text.indexOf('# __SHELLPILOT_MUTATION_VERIFY__'))
+    assert.match(text, /# __SHELLPILOT_MUTATION_PREFLIGHT__/)
+    assert.match(text, /# __SHELLPILOT_MUTATION_BACKUP__/)
+    assert.match(text, /# __SHELLPILOT_MUTATION_EXECUTE__/)
+    assert.match(verification, /if ! \(/)
+    assert.ok(verification.includes(testCase.expected), testCase.id)
+    assert.doesNotMatch(text, /\{\{.+?\}\}/)
+  }
+})
+
+const originalHostsFixture = '127.0.0.1 localhost\n192.0.2.10 old.example.com\n'
+
+const confirmedCommandCases = [
+  {
+    id: 'builtin-server-hostname-change',
+    state: 'hostname',
+    values: {
+      新主机名: 'new-host.example.com',
+      同步Hosts: 'yes'
+    }
+  },
+  {
+    id: 'builtin-server-hosts-manage',
+    state: 'hosts',
+    values: {
+      IP地址: '192.0.2.20',
+      主机名: 'new-host.example.com',
+      动作: 'add'
+    }
+  },
+  {
+    id: 'builtin-server-timezone-change',
+    state: 'timezone',
+    values: {
+      新时区: 'Asia/Shanghai'
+    }
+  }
+]
+
+async function loadConfirmedTask6Runtime () {
+  const [
+    { getServerMaintenanceQuickCommands },
+    { buildQuickCommandParamValues, buildQuickCommandText }
+  ] = await Promise.all([
+    import(registryUrl),
+    import(contextUrl)
+  ])
+  return {
+    byId: new Map(
+      getServerMaintenanceQuickCommands().map(command => [command.id, command])
+    ),
+    buildQuickCommandParamValues,
+    buildQuickCommandText
+  }
+}
+
+function renderConfirmedTask6Command (runtime, testCase, sandbox) {
+  const item = runtime.byId.get(testCase.id)
+  const context = {
+    rollbackPath: '/tmp/shellpilot-rollback/task6-test-1700000000000.sh'
+  }
+  const values = {
+    ...runtime.buildQuickCommandParamValues(item, context),
+    ...testCase.values,
+    确认执行: 'yes'
+  }
+  return rewriteSandboxPaths(
+    runtime.buildQuickCommandText(item, context, values),
+    sandbox
+  )
+}
+
+function buildConfirmedShellPrelude (sandbox, options = {}) {
+  const verifyFailure = options.verifyFailure || ''
+  const expectedIp = options.expectedIp || '192.0.2.20'
+  const expectedHost = options.expectedHost || 'new-host.example.com'
+  return [
+    buildShellPrelude(sandbox),
+    'ROLLBACK_ROOT=' + shellLiteral(sandbox.rollbackDirectory),
+    'HOSTS_FIXTURE=' + shellLiteral(sandbox.hosts),
+    'FAIL_BACKUP=' + shellLiteral(options.failBackup ? 'yes' : 'no'),
+    'FAIL_STATE=' + shellLiteral(options.failState ? 'yes' : 'no'),
+    'FAIL_ROLLBACK=' + shellLiteral(options.failRollback ? 'yes' : 'no'),
+    'VERIFY_FAILURE=' + shellLiteral(verifyFailure),
+    'EXPECTED_IP=' + shellLiteral(expectedIp),
+    'EXPECTED_HOST=' + shellLiteral(expectedHost),
+    'stat () {',
+    '  format=""',
+    '  if [ "$1" = "-c" ]; then format="$2"; shift 2; fi',
+    '  if [ "$1" = "--" ]; then shift; fi',
+    '  target="$1"',
+    '  case "$format" in',
+    '    %u|%g) printf "0\\n" ;;',
+    '    %a)',
+    '      case "$target" in',
+    '        "$ROLLBACK_ROOT"/operation.*/*) printf "644\\n" ;;',
+    '        "$ROLLBACK_ROOT"|"$ROLLBACK_ROOT"/operation.*|"$ROLLBACK_ROOT"/*.sh) printf "700\\n" ;;',
+    '        *) printf "644\\n" ;;',
+    '      esac',
+    '      ;;',
+    '    *) command stat -c "$format" -- "$target" ;;',
+    '  esac',
+    '}',
+    'cp () {',
+    '  destination=""',
+    '  for argument in "$@"; do destination="$argument"; done',
+    '  if [ "$FAIL_BACKUP" = "yes" ]; then',
+    '    case "$destination" in */target-1) return 1 ;; esac',
+    '  fi',
+    '  command cp "$@"',
+    '}',
+    'chmod () {',
+    '  destination=""',
+    '  for argument in "$@"; do destination="$argument"; done',
+    '  if [ "$FAIL_STATE" = "yes" ]; then',
+    '    case "$destination" in *.state) return 1 ;; esac',
+    '  fi',
+    '  command chmod "$@"',
+    '}',
+    'chown () { :; }',
+    'ln () {',
+    '  if [ "$FAIL_ROLLBACK" = "yes" ]; then return 1; fi',
+    '  command ln "$@"',
+    '}',
+    'install () {',
+    '  while [ "$#" -gt 0 ]; do',
+    '    case "$1" in',
+    '      -o|-g|-m) shift 2 ;;',
+    '      --) shift; break ;;',
+    '      *) break ;;',
+    '    esac',
+    '  done',
+    '  [ "$#" -eq 2 ] || return 2',
+    '  command cp -- "$1" "$2" || return 1',
+    '  if [ "$2" = "$HOSTS_FIXTURE" ]; then',
+    '    printf "hosts:%s\\n" "$2" >> "$MUTATION_LOG"',
+    '    if [ "$VERIFY_FAILURE" = "hosts" ]; then',
+    '      printf "%s %s\\n" "$EXPECTED_IP" "$EXPECTED_HOST" >> "$2"',
+    '    fi',
+    '  fi',
+    '}',
+    'hostnamectl () {',
+    '  case "$1" in',
+    '    --static) cat "$HOSTNAME_STATE" ;;',
+    '    set-hostname)',
+    '      printf "hostname:%s\\n" "$2" >> "$MUTATION_LOG"',
+    '      if [ "$VERIFY_FAILURE" = "hostname" ]; then',
+    '        printf "verification-mismatch\\n" > "$HOSTNAME_STATE"',
+    '      else',
+    '        printf "%s\\n" "$2" > "$HOSTNAME_STATE"',
+    '      fi',
+    '      ;;',
+    '    *) return 2 ;;',
+    '  esac',
+    '}',
+    'timedatectl () {',
+    '  case "$1" in',
+    '    show) cat "$TIMEZONE_STATE" ;;',
+    '    list-timezones) printf "UTC\\nAsia/Shanghai\\nEurope/London\\n" ;;',
+    '    set-timezone)',
+    '      printf "timezone:%s\\n" "$2" >> "$MUTATION_LOG"',
+    '      if [ "$VERIFY_FAILURE" = "timezone" ]; then',
+    '        printf "Verification/Mismatch\\n" > "$TIMEZONE_STATE"',
+    '      else',
+    '        printf "%s\\n" "$2" > "$TIMEZONE_STATE"',
+    '      fi',
+    '      ;;',
+    '    *) return 2 ;;',
+    '  esac',
+    '}'
+  ].join('\n')
+}
+
+function assertOriginalTask6State (sandbox) {
+  assert.equal(fs.readFileSync(sandbox.hostname, 'utf8'), 'old-host.example.com\n')
+  assert.equal(fs.readFileSync(sandbox.timezone, 'utf8'), 'UTC\n')
+  assert.equal(fs.readFileSync(sandbox.hosts, 'utf8'), originalHostsFixture)
+}
+
+function assertConfirmedTask6Mutation (sandbox, testCase) {
+  if (testCase.state === 'hostname') {
+    assert.equal(
+      fs.readFileSync(sandbox.hostname, 'utf8'),
+      testCase.values['\u65b0\u4e3b\u673a\u540d'] + '\n'
+    )
+  } else if (testCase.state === 'timezone') {
+    assert.equal(
+      fs.readFileSync(sandbox.timezone, 'utf8'),
+      testCase.values['\u65b0\u65f6\u533a'] + '\n'
+    )
+  } else {
+    const hosts = fs.readFileSync(sandbox.hosts, 'utf8')
+    assert.match(hosts, /192\.0\.2\.20 new-host\.example\.com/)
+  }
+}
+
+function runTask6RollbackTwice (sandbox) {
+  const rollback = shellLiteral(sandbox.rollbackScript)
+  runPosixShell([
+    buildConfirmedShellPrelude(sandbox),
+    '. ' + rollback,
+    '. ' + rollback
+  ].join('\n'))
+}
+
+test('confirmed Task 6 commands mutate only after rollback artifacts exist and rollback idempotently', async t => {
+  const runtime = await loadConfirmedTask6Runtime()
+  for (const testCase of confirmedCommandCases) {
+    await t.test(testCase.id, child => {
+      const sandbox = createShellSandbox(child)
+      const command = renderConfirmedTask6Command(runtime, testCase, sandbox)
+      const result = runPosixShell([
+        buildConfirmedShellPrelude(sandbox, {
+          expectedIp: testCase.values['IP\u5730\u5740'],
+          expectedHost: testCase.values['\u4e3b\u673a\u540d']
+        }),
+        command
+      ].join('\n'))
+
+      assertConfirmedTask6Mutation(sandbox, testCase)
+      assert.equal(fs.existsSync(sandbox.rollbackScript), true)
+      assert.match(fs.readFileSync(sandbox.rollbackScript, 'utf8'), /^#!\/bin\/sh/)
+      assert.ok(result.stdout.includes(sandbox.rollbackScript))
+      assert.equal(fs.existsSync(sandbox.mutationLog), true)
+
+      runTask6RollbackTwice(sandbox)
+      assertOriginalTask6State(sandbox)
+    })
+  }
+})
+
+test('backup failures stop every Task 6 command before mutation', async t => {
+  const runtime = await loadConfirmedTask6Runtime()
+  for (const testCase of confirmedCommandCases) {
+    await t.test(testCase.id, child => {
+      const sandbox = createShellSandbox(child)
+      const command = renderConfirmedTask6Command(runtime, testCase, sandbox)
+      const result = runPosixShell([
+        buildConfirmedShellPrelude(sandbox, {
+          failBackup: testCase.state !== 'timezone',
+          failState: testCase.state === 'timezone'
+        }),
+        command
+      ].join('\n'), undefined)
+
+      assert.notEqual(result.status, 0)
+      assertOriginalTask6State(sandbox)
+      assert.equal(fs.existsSync(sandbox.mutationLog), false)
+      assert.equal(fs.existsSync(sandbox.rollbackScript), false)
+    })
+  }
+})
+
+test('rollback script creation failures stop every Task 6 command before mutation', async t => {
+  const runtime = await loadConfirmedTask6Runtime()
+  for (const testCase of confirmedCommandCases) {
+    await t.test(testCase.id, child => {
+      const sandbox = createShellSandbox(child)
+      const command = renderConfirmedTask6Command(runtime, testCase, sandbox)
+      const result = runPosixShell([
+        buildConfirmedShellPrelude(sandbox, { failRollback: true }),
+        command
+      ].join('\n'), undefined)
+
+      assert.notEqual(result.status, 0)
+      assertOriginalTask6State(sandbox)
+      assert.equal(fs.existsSync(sandbox.mutationLog), false)
+      assert.equal(fs.existsSync(sandbox.rollbackScript), false)
+    })
+  }
+})
+
+test('Task 6 rejects a symlink rollback directory before mutation', async t => {
+  const runtime = await loadConfirmedTask6Runtime()
+  const sandbox = createShellSandbox(t)
+  const target = sandbox.rollbackDirectory + '-target'
+  fs.mkdirSync(target)
+  fs.symlinkSync(
+    target,
+    sandbox.rollbackDirectory,
+    process.platform === 'win32' ? 'junction' : 'dir'
+  )
+  assert.equal(fs.lstatSync(sandbox.rollbackDirectory).isSymbolicLink(), true)
+
+  const testCase = confirmedCommandCases[0]
+  const result = runPosixShell([
+    buildConfirmedShellPrelude(sandbox),
+    renderConfirmedTask6Command(runtime, testCase, sandbox)
+  ].join('\n'), undefined)
+
+  assert.notEqual(result.status, 0)
+  assertOriginalTask6State(sandbox)
+  assert.equal(fs.existsSync(sandbox.mutationLog), false)
+  assert.equal(fs.existsSync(sandbox.rollbackScript), false)
+})
+
+test('verification failures retain a usable rollback path for every Task 6 command', async t => {
+  const runtime = await loadConfirmedTask6Runtime()
+  for (const testCase of confirmedCommandCases) {
+    await t.test(testCase.id, child => {
+      const sandbox = createShellSandbox(child)
+      const command = renderConfirmedTask6Command(runtime, testCase, sandbox)
+      const result = runPosixShell([
+        buildConfirmedShellPrelude(sandbox, {
+          verifyFailure: testCase.state,
+          expectedIp: testCase.values['IP\u5730\u5740'],
+          expectedHost: testCase.values['\u4e3b\u673a\u540d']
+        }),
+        command
+      ].join('\n'), undefined)
+
+      assert.notEqual(result.status, 0)
+      assert.equal(fs.existsSync(sandbox.rollbackScript), true)
+      assert.ok(result.stdout.includes(sandbox.rollbackScript))
+      assert.equal(fs.existsSync(sandbox.mutationLog), true)
+
+      runTask6RollbackTwice(sandbox)
+      assertOriginalTask6State(sandbox)
+    })
+  }
+})

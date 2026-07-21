@@ -7,6 +7,8 @@ import {
 const minimumFreeKilobytes = 10240
 const maximumBackupKilobytes = 8192
 const rollbackDirectory = rollbackScriptDirectory
+const rollbackPathParam = '回滚脚本'
+const confirmationParam = '确认执行'
 
 function assertSafeString (value, label) {
   if (typeof value !== 'string') throw new Error(`${label}必须是非空字符串`)
@@ -37,6 +39,101 @@ function cloneStringArray (value, label, options = {}) {
     throw new Error(`修改命令必须提供至少一个${label}`)
   }
   return result
+}
+
+function freezeStringArray (value, label, options = {}) {
+  return Object.freeze(cloneStringArray(value, label, options))
+}
+
+function lockedConfirmationParam () {
+  return Object.freeze({
+    name: confirmationParam,
+    label: confirmationParam,
+    type: 'select',
+    validationType: 'enum',
+    required: true,
+    defaultValue: 'no',
+    help: '默认不修改服务器；只有选择“是”才会执行变更并创建回滚点。',
+    options: Object.freeze([
+      Object.freeze({ label: '否，只预览', value: 'no' }),
+      Object.freeze({ label: '是，执行修改', value: 'yes' })
+    ])
+  })
+}
+
+function lockedRollbackPathParam () {
+  return Object.freeze({
+    name: rollbackPathParam,
+    label: rollbackPathParam,
+    type: 'hidden',
+    validationType: 'rollback-path',
+    required: true,
+    defaultValue: '{{回滚脚本}}',
+    help: '由 ShellPilot 自动生成并保存在服务器 /tmp/shellpilot-rollback 目录。'
+  })
+}
+
+export function withRollback (item, options = {}) {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) {
+    throw new Error('修改命令定义不完整')
+  }
+  const title = assertSafeString(options.title || item.name || item.id, '修改标题')
+  const actionParam = assertSafeString(options.actionParam, '修改动作参数')
+  const mutatingValues = freezeStringArray(
+    options.mutatingValues,
+    '修改动作值',
+    { required: true }
+  )
+  const backupTargets = freezeStringArray(
+    options.backupTargets,
+    '备份目标',
+    { allowUndefined: true }
+  )
+  const verifyCommands = freezeStringArray(
+    options.verifyCommands,
+    '验证命令',
+    { required: true }
+  )
+  const params = Array.isArray(item.params)
+    ? item.params.filter(param => (
+      param?.name !== confirmationParam && param?.name !== rollbackPathParam
+    ))
+    : []
+  const {
+    rollback: ignoredRollback,
+    mutationSafety: ignoredMutationSafety,
+    safetyMetadata: ignoredSafetyMetadata,
+    verification: ignoredVerification,
+    ...safeItem
+  } = item
+  const rollback = Object.freeze({
+    title,
+    pathParam: rollbackPathParam,
+    actionParam,
+    mutatingValues,
+    confirmParam: confirmationParam,
+    confirmValue: 'yes'
+  })
+  const mutationSafety = Object.freeze({
+    title,
+    backupTargets,
+    verifyCommands
+  })
+
+  return {
+    ...safeItem,
+    editBeforeRun: true,
+    mutatesServer: true,
+    confirmRequired: true,
+    params: [
+      ...params,
+      lockedConfirmationParam(),
+      lockedRollbackPathParam()
+    ],
+    rollback,
+    mutationSafety,
+    verification: verifyCommands
+  }
 }
 
 function validateMutationSafetyMetadata (metadata) {
