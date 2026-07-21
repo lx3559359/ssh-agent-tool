@@ -563,3 +563,22 @@ test('modern stale state and endpoint mismatch never invoke runner', async () =>
   )
   assert.equal(runnerCalls, 0)
 })
+
+test('modern revoked recovery never invokes rollback runner', async () => {
+  const { executeSafetyCenterAction } = await import(actionsModuleUrl)
+  const record = modernOperation({ state: 'failed', recoveryRevokedAt: '2026-07-13T11:00:00.000Z' })
+  const store = createActionStore(record)
+  let runnerCalls = 0
+
+  await assert.rejects(
+    executeSafetyCenterAction({
+      record,
+      action: 'rollback',
+      getOperation: store.getOperation,
+      guardedPatchOperation: store.guardedPatchOperation,
+      findModernTerminal: () => ({ rollbackSafetyOperation: async () => { runnerCalls += 1; return { ...record, state: 'restored' } } })
+    }),
+    /状态已变化|已撤销/
+  )
+  assert.equal(runnerCalls, 0)
+})
