@@ -177,6 +177,7 @@ export async function buildSafetyRecoveryIntegrityResults (
 }
 
 export function isSafetyOperationRollbackable (record, integrityResults) {
+  if (record?.recoveryRevokedAt) return false
   if (!recoveryOperationStates.has(record?.state) ||
     !validateRecoveryStructure(record).valid) return false
   if (integrityResults === undefined) return true
@@ -553,6 +554,7 @@ export async function routeSafetyCenterAction ({
   terminal,
   taskCapability
 }) {
+  if (action === 'rollback' && record?.recoveryRevokedAt) throw new Error('该恢复记录已撤销，不能再次回滚。')
   if (!isRecord(record)) throw new Error('安全记录无效。')
   if (record.recordType === 'task') {
     if (action !== 'cancel' || taskCapability?.canCancel !== true ||

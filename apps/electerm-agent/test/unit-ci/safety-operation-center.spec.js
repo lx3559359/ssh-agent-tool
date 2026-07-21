@@ -529,6 +529,28 @@ test('rollback keep and cancel route only through explicit capabilities', async 
   )
 })
 
+test('revoked rollback is rejected without invoking the terminal runner', async () => {
+  const { routeSafetyCenterAction } = await importModel()
+  const record = operation('revoked-route', 'rollback-available', '2026-07-13T10:00:00.000Z', {
+    ...recoveryStructure('revoked-route'),
+    recoveryRevokedAt: '2026-07-13T11:00:00.000Z'
+  })
+  let rollbackCalls = 0
+
+  await assert.rejects(
+    routeSafetyCenterAction({
+      action: 'rollback',
+      record,
+      terminal: {
+        rollbackSafetyOperation: async () => {
+          rollbackCalls += 1
+        }
+      }
+    }),
+    /该恢复记录已撤销，不能再次回滚。/
+  )
+  assert.equal(rollbackCalls, 0)
+})
 test('action routing rejects terminal runner results that did not reach the requested state', async () => {
   const { routeSafetyCenterAction } = await importModel()
   const op = operation('op-failed-result', 'rollback-available', '2026-07-13T10:00:00.000Z')
@@ -844,4 +866,24 @@ test('UI keeps one topbar entry and reads the encrypted transaction store', () =
   assert.match(terminal, /terminalSafetyRunner\.rollback/)
   assert.match(terminal, /terminalSafetyRunner\.keep/)
   assert.match(terminal, /terminalSafetyRunner\.cancel/)
+})
+
+test('revoked recovery records have no rollback capability or center action', async () => {
+  const { groupSafetyCenterRecords, isSafetyOperationRollbackable } = await importModel()
+  const time = '2026-07-13T10:00:00.000Z'
+  const records = [
+    operation('revoked-failed', 'failed', time, {
+      ...recoveryStructure('revoked-failed'),
+      recoveryRevokedAt: '2026-07-13T11:00:00.000Z'
+    }),
+    operation('revoked-ready', 'rollback-available', time, {
+      ...recoveryStructure('revoked-ready'),
+      recoveryRevokedAt: '2026-07-13T11:00:00.000Z'
+    })
+  ]
+
+  assert.deepEqual(records.map(record => isSafetyOperationRollbackable(record)), [false, false])
+  const groups = groupSafetyCenterRecords(records, [])
+  assert.deepEqual(groups.rollback, [])
+  assert.deepEqual(groups.history.map(item => item.id), ['revoked-failed', 'revoked-ready'])
 })
