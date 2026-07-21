@@ -71,6 +71,26 @@ function resolveMaintenanceRecovery (command, runOptions) {
   return recovery
 }
 
+function rotateMaintenanceRecovery (command, recovery) {
+  if (!recovery) return { command, recovery }
+  const oldPath = recovery.rollbackPath
+  const retryId = String(generate()).replace(/[^A-Za-z0-9_-]/g, '') ||
+    String(Date.now())
+  const nextPath = oldPath.replace(/\.sh$/, `-retry-${retryId}.sh`)
+  if (nextPath === oldPath || !command.includes(oldPath)) {
+    throw new Error('维护快捷命令无法轮换回滚脚本，已禁止重试。')
+  }
+  const nextCommand = command.replaceAll(oldPath, nextPath)
+  return {
+    command: nextCommand,
+    recovery: Object.freeze({
+      ...recovery,
+      command: nextCommand,
+      rollbackPath: nextPath
+    })
+  }
+}
+
 function createHookState (hooks) {
   if (!hooks) return undefined
   let beforePromise
@@ -444,9 +464,18 @@ export function createSafetyCommandEntrypoint (options = {}) {
 
   async function armRetry (run, request, error, cancelOperation) {
     let cancelError
-    if (cancelOperation && run.operationId) {
+    if (run.operationId) {
       try {
-        await cancelRunOperation(run)
+        if (cancelOperation) await cancelRunOperation(run)
+        if (run.maintenanceRecovery) {
+          if (typeof runner.revokeRecovery !== 'function') {
+            throw new Error('安全事务执行器不支持撤销旧回滚授权。')
+          }
+          await runner.revokeRecovery(
+            run.operationId,
+            '命令提交失败，旧回滚授权已退休。'
+          )
+        }
       } catch (caught) {
         cancelError = caught
       }
@@ -473,14 +502,42 @@ export function createSafetyCommandEntrypoint (options = {}) {
       }
     }
     const message = `鍛戒护鍙戦�佸け璐ワ紝鍛戒护灏氭湭鍙戦�侊細${safeErrorMessage(error)}`
-    const confirmation = retryConfirmation(run, request)
+    let retry
+    try {
+      retry = rotateMaintenanceRecovery(run.command, run.maintenanceRecovery)
+    } catch (caught) {
+      onError(caught)
+      const blockedConfirmation = {
+        ...retryConfirmation(run, request),
+        kind: 'blocked',
+        executeAllowed: false,
+        message: safeErrorMessage(caught)
+      }
+      pendingConfirmation = { run, confirmation: blockedConfirmation }
+      updateState({
+        confirmation: blockedConfirmation,
+        busy: false,
+        error: message
+      })
+      return {
+        sent: false,
+        retryable: false,
+        blocked: true,
+        operationId: request.id,
+        error: message
+      }
+    }
+    const confirmation = {
+      ...retryConfirmation(run, request),
+      command: retry.command
+    }
     pendingConfirmation = {
       retry: true,
       run,
-      command: run.command,
+      command: retry.command,
       runOptions: run.runOptions,
       riskDelegation: run.riskDelegation,
-      maintenanceRecovery: run.maintenanceRecovery,
+      maintenanceRecovery: retry.recovery,
       confirmation
     }
     updateState({ confirmation, busy: false, error: message })

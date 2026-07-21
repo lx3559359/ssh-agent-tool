@@ -23,6 +23,10 @@ const recoveryProvidersUrl = pathToFileURL(path.resolve(
   __dirname,
   '../../src/client/common/safety-transactions/recovery-providers.js'
 )).href
+const recoveryBindingUrl = pathToFileURL(path.resolve(
+  __dirname,
+  '../../src/client/common/safety-transactions/recovery-binding.js'
+)).href
 const maintenanceRecoveryUrl = pathToFileURL(path.resolve(
   __dirname,
   '../../src/client/common/safety-transactions/maintenance-recovery-delegation.js'
@@ -266,11 +270,12 @@ const task6RecoveryCases = [
 ]
 
 function task6RecoveryDetails (harness, [quickCommandId, title, backupTarget], index = 0) {
+  const rollbackPath = `/tmp/shellpilot-rollback/${quickCommandId}-${1700000000000 + index}.sh`
   return {
     quickCommandId,
-    command: `task6-${quickCommandId}-${index}\nprintf 'mutate'`,
+    command: `ROLLBACK_SCRIPT='${rollbackPath}'\ntask6-${quickCommandId}-${index}\nprintf 'mutate'`,
     title,
-    rollbackPath: `/tmp/shellpilot-rollback/${quickCommandId}-${1700000000000 + index}.sh`,
+    rollbackPath,
     endpoint: {
       tabId: harness.endpoint.tabId,
       host: harness.endpoint.host,
@@ -280,6 +285,27 @@ function task6RecoveryDetails (harness, [quickCommandId, title, backupTarget], i
     backupTargets: [backupTarget],
     verification: [`verify-${quickCommandId}`]
   }
+}
+
+async function createReloadedTask6Runner (harness, remoteCalls = []) {
+  const { createTransactionRunner } = await import(runnerModuleUrl)
+  const { buildRecoveryPlan } = await import(recoveryProvidersUrl)
+  return createTransactionRunner({
+    store: harness.store,
+    buildRecoveryPlan,
+    cancelRemote: async () => true,
+    getCurrentEndpoint: async () => harness.endpoint,
+    runRemote: async (command, options) => {
+      remoteCalls.push({ command, options })
+      const operationId = command.match(
+        /__SHELLPILOT_[A-Z]+_RC_([A-Za-z0-9_-]+)/
+      )?.[1]
+      return {
+        stdout: marker(options.phase, operationId),
+        code: 0
+      }
+    }
+  })
 }
 
 async function completeTask6SafetyOperation (harness, details, capability) {
@@ -435,6 +461,176 @@ test('Task 6 recovery binding rejects persisted path tampering and records rollb
     (await failureHarness.store.get(failed.result.operationId)).state,
     'failed'
   )
+})
+
+test('persisted Task 6 terminal records cannot be reactivated after runner reload', async () => {
+  for (const [index, terminalState] of ['kept', 'restored', 'cancelled'].entries()) {
+    const harness = await createRealRunnerHarness({ useRealRecoveryPlan: true })
+    const details = task6RecoveryDetails(
+      harness,
+      task6RecoveryCases[index],
+      20 + index
+    )
+    const { createInternalMaintenanceRecoveryDelegation } = await import(maintenanceRecoveryUrl)
+    const completed = await completeTask6SafetyOperation(
+      harness,
+      details,
+      createInternalMaintenanceRecoveryDelegation(details)
+    )
+    await harness.store.patch(completed.result.operationId, { state: terminalState })
+    await harness.store.patch(completed.result.operationId, { state: 'failed' })
+
+    const reloadCalls = []
+    const reloadedRunner = await createReloadedTask6Runner(harness, reloadCalls)
+    await assert.rejects(
+      reloadedRunner.rollback(completed.result.operationId),
+      error => error instanceof Error,
+      terminalState
+    )
+    assert.deepEqual(reloadCalls, [], terminalState)
+  }
+})
+
+test('persisted Task 6 command or path tampering stays denied after recomputing the public digest', async () => {
+  const { createRecoveryBinding, verifyRecoveryBinding } = await import(recoveryBindingUrl)
+  const { createInternalMaintenanceRecoveryDelegation } = await import(maintenanceRecoveryUrl)
+
+  for (const [index, tamperKind] of ['command', 'path'].entries()) {
+    const harness = await createRealRunnerHarness({ useRealRecoveryPlan: true })
+    const details = task6RecoveryDetails(
+      harness,
+      task6RecoveryCases[index],
+      30 + index
+    )
+    const completed = await completeTask6SafetyOperation(
+      harness,
+      details,
+      createInternalMaintenanceRecoveryDelegation(details)
+    )
+    const operation = await harness.store.get(completed.result.operationId)
+    operation.state = 'failed'
+    if (tamperKind === 'command') {
+      operation.command = operation.command.replace("printf 'mutate'", "printf 'forged'")
+      operation.plan.executeCommand = operation.command
+    } else {
+      const forgedPath = `/tmp/shellpilot-rollback/forged-reload-${index}.sh`
+      operation.metadata.maintenanceRecovery.rollbackPath = forgedPath
+      operation.plan.rollbackCommand = operation.plan.rollbackCommand.replaceAll(
+        details.rollbackPath,
+        forgedPath
+      )
+      operation.plan.verifyCommand = operation.plan.verifyCommand.replaceAll(
+        details.rollbackPath,
+        forgedPath
+      )
+      operation.artifacts.rollbackScript = forgedPath
+      operation.plan.artifacts = clone(operation.artifacts)
+    }
+    operation.recoveryBinding = await createRecoveryBinding(
+      operation,
+      operation.plan,
+      operation.artifacts
+    )
+    assert.deepEqual(
+      await verifyRecoveryBinding(operation),
+      { valid: true, error: '' },
+      tamperKind
+    )
+    await harness.store.patch(operation.id, operation)
+
+    const reloadCalls = []
+    const reloadedRunner = await createReloadedTask6Runner(harness, reloadCalls)
+    await assert.rejects(
+      reloadedRunner.rollback(operation.id),
+      error => error instanceof Error,
+      tamperKind
+    )
+    assert.deepEqual(reloadCalls, [], tamperKind)
+  }
+})
+
+test('Task 6 retry rotates recovery identity and retires the failed record', async () => {
+  const submitted = []
+  let submitAttempts = 0
+  const harness = await createRealRunnerHarness({
+    useRealRecoveryPlan: true,
+    submitCommand: (command, token) => {
+      submitAttempts += 1
+      if (submitAttempts === 1) return false
+      submitted.push({ command, token })
+      return true
+    }
+  })
+  const { createInternalMaintenanceRecoveryDelegation } = await import(maintenanceRecoveryUrl)
+  const details = task6RecoveryDetails(harness, task6RecoveryCases[1], 40)
+  const firstRun = harness.entrypoint.runSafetyCommand(details.command, {
+    source: 'quick-command',
+    title: details.title,
+    maintenanceRecovery: createInternalMaintenanceRecoveryDelegation(details)
+  })
+  await waitFor(() => harness.entrypoint.hasPendingConfirmation())
+  assert.equal(harness.entrypoint.confirmPending(), true)
+  const firstResult = await firstRun
+  assert.equal(firstResult.retryable, true)
+  const viewCountBeforeRetry = harness.views.length
+
+  assert.equal(harness.entrypoint.confirmPending(), true)
+  await waitFor(() => harness.views.slice(viewCountBeforeRetry).some(view => {
+    return view.confirmation?.kind === 'reversible'
+  }))
+  assert.equal(harness.entrypoint.confirmPending(), true)
+  await waitFor(() => submitted.length === 1)
+
+  const secondOperationId = 'operation-2'
+  await harness.entrypoint.handleCommandFinished({
+    token: submitted[0].token,
+    command: submitted[0].command,
+    exitCode: 0
+  })
+  await harness.runner.keep(secondOperationId)
+
+  const oldOperation = await harness.store.get(firstResult.operationId)
+  const newOperation = await harness.store.get(secondOperationId)
+  assert.equal(oldOperation.state, 'failed')
+  assert.ok(oldOperation.recoveryRevokedAt)
+  assert.equal(newOperation.state, 'kept')
+  assert.notEqual(
+    oldOperation.metadata.maintenanceRecovery.rollbackPath,
+    newOperation.metadata.maintenanceRecovery.rollbackPath
+  )
+  assert.ok(newOperation.command.includes(newOperation.metadata.maintenanceRecovery.rollbackPath))
+  assert.equal(newOperation.command.includes(details.rollbackPath), false)
+
+  const callsBeforeOldRollback = harness.remoteCalls.length
+  await assert.rejects(
+    harness.runner.rollback(firstResult.operationId),
+    error => error instanceof Error
+  )
+  assert.equal(harness.remoteCalls.length, callsBeforeOldRollback)
+})
+
+test('Task 6 rollback invokes the mutating script once and verifies read-only state', async () => {
+  const harness = await createRealRunnerHarness({ useRealRecoveryPlan: true })
+  const { createInternalMaintenanceRecoveryDelegation } = await import(maintenanceRecoveryUrl)
+  const details = task6RecoveryDetails(harness, task6RecoveryCases[2], 50)
+  const completed = await completeTask6SafetyOperation(
+    harness,
+    details,
+    createInternalMaintenanceRecoveryDelegation(details)
+  )
+
+  const restored = await harness.runner.rollback(completed.result.operationId)
+  const recoveryCalls = harness.remoteCalls.filter(call => {
+    return call.options.phase === 'rollback' || call.options.phase === 'verify'
+  })
+  const scriptInvocation = `/bin/sh -- '${details.rollbackPath}'`
+  assert.equal(restored.state, 'restored')
+  assert.deepEqual(recoveryCalls.map(call => call.options.phase), ['rollback', 'verify'])
+  assert.equal(
+    recoveryCalls.filter(call => call.command.includes(scriptInvocation)).length,
+    1
+  )
+  assert.equal(recoveryCalls[1].command.includes(scriptInvocation), false)
 })
 
 test('quick, AI and Agent commands use one classified safety request shape', async () => {

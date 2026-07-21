@@ -159,7 +159,7 @@ if awk -v ip="$TARGET_IP" -v host="$TARGET_HOST" -v action="$ACTION" '
 
     hostFound = 0
     for (field = 2; field <= NF; field++) {
-      if ($field == host) hostFound = 1
+      if (tolower($field) == tolower(host)) hostFound = 1
     }
     pairFound = ($1 == ip && hostFound)
     if (hostFound) hostMatches++
@@ -169,7 +169,7 @@ if awk -v ip="$TARGET_IP" -v host="$TARGET_HOST" -v action="$ACTION" '
       output = $1
       remaining = 0
       for (field = 2; field <= NF; field++) {
-        if ($field == host) continue
+        if (tolower($field) == tolower(host)) continue
         output = output OFS $field
         remaining++
       }
@@ -184,7 +184,7 @@ if awk -v ip="$TARGET_IP" -v host="$TARGET_HOST" -v action="$ACTION" '
       output = $1
       remaining = 0
       for (field = 2; field <= NF; field++) {
-        if ($field == host) continue
+        if (tolower($field) == tolower(host)) continue
         output = output OFS $field
         remaining++
       }
@@ -246,7 +246,7 @@ if ! awk -v ip="$TARGET_IP" -v host="$TARGET_HOST" -v action="$ACTION" '
     $0 = effective
     if (NF < 2) next
     hostFound = 0
-    for (field = 2; field <= NF; field++) if ($field == host) hostFound = 1
+    for (field = 2; field <= NF; field++) if (tolower($field) == tolower(host)) hostFound = 1
     if (hostFound) hostMatches++
     if ($1 == ip && hostFound) pairMatches++
   }
@@ -685,7 +685,7 @@ true`)
       mutatingValues: ['add', 'update', 'delete'],
       backupTargets: ['/etc/hosts'],
       verifyCommands: [
-        'awk -v ip="{{IP\u5730\u5740}}" -v host="{{\u4e3b\u673a\u540d}}" -v action="{{\u52a8\u4f5c}}" \'BEGIN { hostMatches = 0; pairMatches = 0 } /^[[:space:]]*#/ { next } { effective = $0; hashIndex = index(effective, "#"); if (hashIndex > 0) effective = substr(effective, 1, hashIndex - 1); $0 = effective; if (NF < 2) next; hostFound = 0; for (field = 2; field <= NF; field++) if ($field == host) hostFound = 1; if (hostFound) hostMatches++; if ($1 == ip && hostFound) pairMatches++ } END { if (action == "delete") exit pairMatches != 0; exit !(pairMatches == 1 && hostMatches == 1) }\' /etc/hosts'
+        'awk -v ip="{{IP\u5730\u5740}}" -v host="{{\u4e3b\u673a\u540d}}" -v action="{{\u52a8\u4f5c}}" \'BEGIN { hostMatches = 0; pairMatches = 0 } /^[[:space:]]*#/ { next } { effective = $0; hashIndex = index(effective, "#"); if (hashIndex > 0) effective = substr(effective, 1, hashIndex - 1); $0 = effective; if (NF < 2) next; hostFound = 0; for (field = 2; field <= NF; field++) if (tolower($field) == tolower(host)) hostFound = 1; if (hostFound) hostMatches++; if ($1 == ip && hostFound) pairMatches++ } END { if (action == "delete") exit pairMatches != 0; exit !(pairMatches == 1 && hostMatches == 1) }\' /etc/hosts'
       ]
     })),
     defineCommand({

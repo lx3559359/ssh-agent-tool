@@ -807,7 +807,7 @@ function buildMaintenanceRecoveryPlan (validated) {
     'if [ -e "$rollback_dir" ]; then [ -d "$rollback_dir" ] || { echo "回滚目录类型不安全" >&2; exit 46; }; current_uid="$(id -u)"; [ "$(stat -c %u -- "$rollback_dir")" = "$current_uid" ] || { echo "回滚目录属主不安全" >&2; exit 46; }; [ "$(stat -c %a -- "$rollback_dir")" = "700" ] || { echo "回滚目录权限不安全" >&2; exit 46; }; fi',
     'if [ -e "$rollback_script" ] || [ -L "$rollback_script" ]; then echo "回滚脚本路径已存在" >&2; exit 46; fi'
   ].join('; ')
-  const actionCommand = [
+  const recoveryArtifactChecks = [
     'set -eu',
     `rollback_dir=${quotedDirectory}`,
     `rollback_script=${quotedPath}`,
@@ -817,9 +817,13 @@ function buildMaintenanceRecoveryPlan (validated) {
     '[ "$(stat -c %a -- "$rollback_dir")" = "700" ] || { echo "回滚目录权限不安全" >&2; exit 46; }',
     '[ -f "$rollback_script" ] && [ ! -L "$rollback_script" ] || { echo "回滚脚本不存在或类型不安全" >&2; exit 46; }',
     '[ "$(stat -c %u -- "$rollback_script")" = "$current_uid" ] || { echo "回滚脚本属主不安全" >&2; exit 46; }',
-    '[ "$(stat -c %a -- "$rollback_script")" = "700" ] || { echo "回滚脚本权限不安全" >&2; exit 46; }',
+    '[ "$(stat -c %a -- "$rollback_script")" = "700" ] || { echo "回滚脚本权限不安全" >&2; exit 46; }'
+  ]
+  const rollbackCommand = [
+    ...recoveryArtifactChecks,
     `/bin/sh -- ${quotedPath}`
   ].join('; ')
+  const verifyCommand = recoveryArtifactChecks.join('; ')
   const artifacts = {
     rollbackScript: rollbackPath,
     quickCommandId: maintenanceRecovery.quickCommandId,
@@ -831,8 +835,8 @@ function buildMaintenanceRecoveryPlan (validated) {
     operationDir: rollbackDirectory + '/',
     prepareCommand,
     executeCommand: command,
-    rollbackCommand: buildVerifiedRemoteAction(actionCommand, 'rollback', id),
-    verifyCommand: buildVerifiedRemoteAction(actionCommand, 'verify', id),
+    rollbackCommand: buildVerifiedRemoteAction(rollbackCommand, 'rollback', id),
+    verifyCommand: buildVerifiedRemoteAction(verifyCommand, 'verify', id),
     allowUnsafeExecute: true,
     summary: maintenanceRecovery.title,
     artifacts

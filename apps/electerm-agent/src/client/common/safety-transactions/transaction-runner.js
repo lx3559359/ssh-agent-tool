@@ -785,8 +785,15 @@ export function createTransactionRunner (options = {}) {
   }
 
   async function requireBoundRecovery (operation) {
+    if (operation.recoveryRevokedAt) {
+      throw new Error('当前维护恢复记录已撤销，不能再次执行回滚。')
+    }
     const bound = boundRecoveries.get(operation.id)
     if (!bound) {
+      if (operation.recoveryProvider === maintenanceRecoveryProvider &&
+        !authorizedMaintenanceRecoveries.has(operation.id)) {
+        throw new Error('当前维护恢复记录缺少本次会话授权，不能执行回滚。')
+      }
       await assertRecoveryBinding(operation)
       return rememberBoundRecovery(operation)
     }
@@ -2173,6 +2180,28 @@ export function createTransactionRunner (options = {}) {
     })
   }
 
+  function revokeRecovery (id, reason = '维护恢复授权已撤销。') {
+    return serialize(String(id), async () => {
+      const operation = await get(id)
+      if (!operation) throw new Error(`未找到安全事务：${id}`)
+      if (operation.recoveryProvider !== maintenanceRecoveryProvider) {
+        throw new Error('只有维护快捷命令恢复记录可以显式撤销。')
+      }
+      if (![operationStates.failed, operationStates.cancelled].includes(operation.state)) {
+        throw new Error('只有提交失败或已取消的维护事务可以撤销恢复授权。')
+      }
+      const revoked = await patch(operation.id, {
+        recoveryRevokedAt: timestamp(),
+        recoveryRevocationReason: redactAndTruncateAuditText(reason),
+        updatedAt: timestamp()
+      })
+      boundRecoveries.delete(operation.id)
+      authorizedMaintenanceRecoveries.delete(operation.id)
+      emit(operation.id, revoked.state, 'revoke-recovery')
+      return revoked
+    })
+  }
+
   async function cancel (id) {
     const operationId = String(id)
     cancellationRequests.add(operationId)
@@ -2243,6 +2272,7 @@ export function createTransactionRunner (options = {}) {
     completeExternalExecution,
     rollback,
     keep,
+    revokeRecovery,
     cancel
   }
 }

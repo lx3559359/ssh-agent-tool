@@ -571,12 +571,12 @@ test('Task 6 command workflows read state and preflight before creating rollback
   const hostname = commandText(byId.get('builtin-server-hostname-change'))
   assert.match(hostname, /hostnamectl set-hostname "\$NEW_HOSTNAME"/)
   assert.match(hostname, /SYNC_HOSTS/)
-  assert.match(hostname, /\$field == oldHost/)
+  assert.match(hostname, /tolower\(\$field\) == tolower\(oldHost\)/)
 
   const hosts = commandText(byId.get('builtin-server-hosts-manage'))
   assert.match(hosts, /awk/)
   assert.match(hosts, /\$1 == ip/)
-  assert.match(hosts, /\$field == host/)
+  assert.match(hosts, /tolower\(\$field\) == tolower\(host\)/)
   assert.doesNotMatch(hosts, /\bsed\b/)
 
   const timezone = commandText(byId.get('builtin-server-timezone-change'))
@@ -767,6 +767,7 @@ function buildConfirmedShellPrelude (sandbox, options = {}) {
     'EXPECTED_IP=' + shellLiteral(expectedIp),
     'EXPECTED_HOST=' + shellLiteral(expectedHost),
     'COMMENT_ONLY_HOSTS_AFTER_INSTALL=' + shellLiteral(options.commentOnlyHostsAfterInstall ? 'yes' : 'no'),
+    'CASE_FOLD_HOSTS_AFTER_INSTALL=' + shellLiteral(options.caseFoldHostsAfterInstall ? 'yes' : 'no'),
     'stat () {',
     '  format=""',
     '  if [ "$1" = "-c" ]; then format="$2"; shift 2; fi',
@@ -819,6 +820,11 @@ function buildConfirmedShellPrelude (sandbox, options = {}) {
     '    printf "hosts:%s\\n" "$2" >> "$MUTATION_LOG"',
     '    if [ "$COMMENT_ONLY_HOSTS_AFTER_INSTALL" = "yes" ]; then',
     '      printf "127.0.0.1 localhost# %s\\n" "$EXPECTED_HOST" > "$2"',
+    '    fi',
+    '    if [ "$CASE_FOLD_HOSTS_AFTER_INSTALL" = "yes" ]; then',
+    '      case_tmp="$2.case-fold"',
+    '      tr "[:lower:]" "[:upper:]" < "$2" > "$case_tmp" || return 1',
+    '      command mv -- "$case_tmp" "$2" || return 1',
     '    fi',
     '    if [ "$VERIFY_FAILURE" = "hosts" ]; then',
     '      printf "%s %s\\n" "$EXPECTED_IP" "$EXPECTED_HOST" >> "$2"',
@@ -1048,6 +1054,134 @@ test('hosts update and delete preserve aliases and comments while deduplicating 
       false
     )
   })
+
+  await t.test('add rejects a hostname that differs only by case', child => {
+    const sandbox = createShellSandbox(child)
+    const originalHosts = [
+      '127.0.0.1 localhost',
+      '192.0.2.10 TARGET.Example.COM Alias-One # Keep Case',
+      ''
+    ].join('\n')
+    fs.writeFileSync(sandbox.hosts, originalHosts)
+    const command = renderConfirmedTask6Command(runtime, {
+      id: 'builtin-server-hosts-manage',
+      values: {
+        IP地址: '203.0.113.9',
+        主机名: 'target.example.com',
+        动作: 'add'
+      }
+    }, sandbox)
+
+    const result = runPosixShell([
+      buildConfirmedShellPrelude(sandbox, {
+        expectedIp: '203.0.113.9',
+        expectedHost: 'target.example.com'
+      }),
+      command
+    ].join('\n'), undefined)
+
+    assert.notEqual(result.status, 0)
+    assert.equal(fs.readFileSync(sandbox.hosts, 'utf8'), originalHosts)
+  })
+
+  await t.test('update matches case-insensitively and preserves alias and comment text', child => {
+    const sandbox = createShellSandbox(child)
+    fs.writeFileSync(sandbox.hosts, [
+      '127.0.0.1 localhost',
+      '192.0.2.10 TARGET.Example.COM Alias-One # Keep Case',
+      '198.51.100.5 Alias-Two target.EXAMPLE.com# Keep Glued',
+      ''
+    ].join('\n'))
+    const command = renderConfirmedTask6Command(runtime, {
+      id: 'builtin-server-hosts-manage',
+      values: {
+        IP地址: '203.0.113.9',
+        主机名: 'target.example.com',
+        动作: 'update'
+      }
+    }, sandbox)
+
+    runPosixShell([
+      buildConfirmedShellPrelude(sandbox, {
+        expectedIp: '203.0.113.9',
+        expectedHost: 'target.example.com'
+      }),
+      command
+    ].join('\n'))
+
+    const hosts = fs.readFileSync(sandbox.hosts, 'utf8')
+    assert.match(hosts, /^192\.0\.2\.10 Alias-One # Keep Case$/m)
+    assert.match(hosts, /^198\.51\.100\.5 Alias-Two# Keep Glued$/m)
+    assert.match(hosts, /^203\.0\.113\.9 target\.example\.com$/m)
+    assert.equal(
+      hosts.split(/\s+/).filter(token => {
+        return token.toLowerCase() === 'target.example.com'
+      }).length,
+      1
+    )
+  })
+
+  await t.test('delete removes case-insensitive target tokens only on the exact IP', child => {
+    const sandbox = createShellSandbox(child)
+    fs.writeFileSync(sandbox.hosts, [
+      '127.0.0.1 localhost',
+      '192.0.2.10 TARGET.Example.COM Alias-One target.EXAMPLE.com # Keep Case',
+      '198.51.100.5 Target.Example.Com Alias-Two # Other IP',
+      ''
+    ].join('\n'))
+    const command = renderConfirmedTask6Command(runtime, {
+      id: 'builtin-server-hosts-manage',
+      values: {
+        IP地址: '192.0.2.10',
+        主机名: 'target.example.com',
+        动作: 'delete'
+      }
+    }, sandbox)
+
+    runPosixShell([
+      buildConfirmedShellPrelude(sandbox, {
+        expectedIp: '192.0.2.10',
+        expectedHost: 'target.example.com'
+      }),
+      command
+    ].join('\n'))
+
+    const hosts = fs.readFileSync(sandbox.hosts, 'utf8')
+    assert.match(hosts, /^192\.0\.2\.10 Alias-One # Keep Case$/m)
+    assert.match(hosts, /^198\.51\.100\.5 Target\.Example\.Com Alias-Two # Other IP$/m)
+  })
+
+  await t.test('post verification accepts only a case-different effective hostname', child => {
+    const sandbox = createShellSandbox(child)
+    fs.writeFileSync(sandbox.hosts, [
+      '127.0.0.1 localhost',
+      '192.0.2.10 TARGET.Example.COM Alias-One # Keep Case',
+      ''
+    ].join('\n'))
+    const command = renderConfirmedTask6Command(runtime, {
+      id: 'builtin-server-hosts-manage',
+      values: {
+        IP地址: '203.0.113.9',
+        主机名: 'target.example.com',
+        动作: 'update'
+      }
+    }, sandbox)
+
+    const result = runPosixShell([
+      buildConfirmedShellPrelude(sandbox, {
+        expectedIp: '203.0.113.9',
+        expectedHost: 'target.example.com',
+        caseFoldHostsAfterInstall: true
+      }),
+      command
+    ].join('\n'), undefined)
+
+    assert.equal(result.status, 0, result.stderr || result.stdout)
+    assert.match(
+      fs.readFileSync(sandbox.hosts, 'utf8'),
+      /^203\.0\.113\.9 TARGET\.EXAMPLE\.COM$/m
+    )
+  })
 })
 
 test('hostname hosts synchronization ignores old hostname tokens in comments', async t => {
@@ -1141,6 +1275,73 @@ test('hostname post-verification rejects a new hostname found only in a glued co
   )
   assert.equal(fs.existsSync(sandbox.rollbackScript), true)
   assert.ok(result.stdout.includes(sandbox.rollbackScript))
+})
+
+test('hostname synchronization matches old host case-insensitively and preserves text', async t => {
+  const runtime = await loadConfirmedTask6Runtime()
+  const sandbox = createShellSandbox(t)
+  fs.writeFileSync(sandbox.hosts, [
+    '127.0.0.1 localhost',
+    '127.0.1.1 OLD-HOST.Example.COM Alias-One# Keep Original Case',
+    ''
+  ].join('\n'))
+  const command = renderConfirmedTask6Command(runtime, {
+    id: 'builtin-server-hostname-change',
+    values: {
+      新主机名: 'new-host.example.com',
+      同步Hosts: 'yes'
+    }
+  }, sandbox)
+
+  runPosixShell([
+    buildConfirmedShellPrelude(sandbox, {
+      expectedHost: 'new-host.example.com'
+    }),
+    command
+  ].join('\n'))
+
+  const hosts = fs.readFileSync(sandbox.hosts, 'utf8')
+  assert.match(
+    hosts,
+    /^127\.0\.1\.1 new-host\.example\.com Alias-One# Keep Original Case$/m
+  )
+  assert.equal(
+    hosts.split(/\s+/).some(token => {
+      return token.toLowerCase() === 'old-host.example.com'
+    }),
+    false
+  )
+})
+
+test('hostname hosts verification accepts an effective hostname with different case', async t => {
+  const runtime = await loadConfirmedTask6Runtime()
+  const sandbox = createShellSandbox(t)
+  fs.writeFileSync(sandbox.hosts, [
+    '127.0.0.1 localhost',
+    '127.0.1.1 OLD-HOST.EXAMPLE.COM Alias-One # Keep',
+    ''
+  ].join('\n'))
+  const command = renderConfirmedTask6Command(runtime, {
+    id: 'builtin-server-hostname-change',
+    values: {
+      新主机名: 'new-host.example.com',
+      同步Hosts: 'yes'
+    }
+  }, sandbox)
+
+  const result = runPosixShell([
+    buildConfirmedShellPrelude(sandbox, {
+      expectedHost: 'new-host.example.com',
+      caseFoldHostsAfterInstall: true
+    }),
+    command
+  ].join('\n'), undefined)
+
+  assert.equal(result.status, 0, result.stderr || result.stdout)
+  assert.match(
+    fs.readFileSync(sandbox.hosts, 'utf8'),
+    /^127\.0\.1\.1 NEW-HOST\.EXAMPLE\.COM ALIAS-ONE # KEEP$/m
+  )
 })
 
 test('confirmed Task 6 commands mutate only after rollback artifacts exist and rollback idempotently', async t => {

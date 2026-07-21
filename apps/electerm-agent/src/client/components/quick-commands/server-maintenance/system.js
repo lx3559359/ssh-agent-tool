@@ -104,7 +104,7 @@ if [ "$SYNC_HOSTS" = "yes" ]; then
     [ "$($RUN_AS stat -c %g -- "$HOSTS_FILE")" = "$OLD_HOSTS_GID" ] ||
     { echo "hosts \u6743\u9650\u6216\u5c5e\u4e3b\u6062\u590d\u9a8c\u8bc1\u5931\u8d25"; exit 1; }
 fi
-[ "$(hostnamectl --static 2>/dev/null)" = "$OLD_HOSTNAME" ] ||
+hostnamectl --static 2>/dev/null | awk -v expected="$OLD_HOSTNAME" '{ exit tolower($0) != tolower(expected) }' ||
   { echo "\u539f\u4e3b\u673a\u540d\u6062\u590d\u9a8c\u8bc1\u5931\u8d25"; exit 1; }
 printf '\u5df2\u6062\u590d\u539f\u4e3b\u673a\u540d: %s\\n' "$OLD_HOSTNAME"
 SHELLPILOT_HOSTNAME_ROLLBACK
@@ -142,7 +142,7 @@ if [ "$SYNC_HOSTS" = "yes" ]; then
 
       lineChanged = 0
       for (field = 2; field <= NF; field++) {
-        if ($field == oldHost) {
+        if (tolower($field) == tolower(oldHost)) {
           $field = newHost
           changed = 1
           lineChanged = 1
@@ -168,7 +168,7 @@ if [ "$SYNC_HOSTS" = "yes" ]; then
 fi
 
 FINAL_HOSTNAME="$(hostnamectl --static 2>/dev/null)" || FINAL_HOSTNAME=""
-if [ "$FINAL_HOSTNAME" != "$NEW_HOSTNAME" ]; then
+if ! printf '%s\n' "$FINAL_HOSTNAME" | awk -v expected="$NEW_HOSTNAME" '{ exit tolower($0) != tolower(expected) }'; then
   echo "\u4fee\u6539\u540e\u4e3b\u673a\u540d\u9a8c\u8bc1\u5931\u8d25\uff1b\u8bf7\u56de\u6eda: $ROLLBACK_SCRIPT"
   exit 1
 fi
@@ -180,7 +180,7 @@ if [ "$SYNC_HOSTS" = "yes" ] && ! awk -v host="$NEW_HOSTNAME" '
     if (hashIndex > 0) effective = substr(effective, 1, hashIndex - 1)
     $0 = effective
     if (NF < 2) next
-    for (field = 2; field <= NF; field++) if ($field == host) found = 1
+    for (field = 2; field <= NF; field++) if (tolower($field) == tolower(host)) found = 1
   }
   END { exit !found }
 ' "$HOSTS_FILE"; then
@@ -371,7 +371,7 @@ export function getSystemCommands () {
       mutatingValues: ['yes'],
       backupTargets: ['/etc/hosts'],
       verifyCommands: [
-        'test "$(hostnamectl --static 2>/dev/null)" = "{{\u65b0\u4e3b\u673a\u540d}}"'
+        'hostnamectl --static 2>/dev/null | awk -v expected="{{\u65b0\u4e3b\u673a\u540d}}" \'{ exit tolower($0) != tolower(expected) }\''
       ]
     })),
     defineCommand(withRollback({
