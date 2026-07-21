@@ -626,11 +626,15 @@ function configureRecoveryProcFixture (sandbox, {
   pid = '4242',
   start = '777',
   state = 'S',
-  current = false
+  current = false,
+  bootId = true,
+  psState = 'S'
 } = {}) {
   const root = path.join(sandbox.root.replaceAll('/', path.sep), 'proc-fixture')
   fs.mkdirSync(path.join(root, 'sys', 'kernel', 'random'), { recursive: true })
-  fs.writeFileSync(path.join(root, 'sys', 'kernel', 'random', 'boot_id'), 'fixture-boot\n')
+  if (bootId) {
+    fs.writeFileSync(path.join(root, 'sys', 'kernel', 'random', 'boot_id'), 'fixture-boot\n')
+  }
   if (exists) {
     fs.mkdirSync(path.join(root, pid), { recursive: true })
     fs.writeFileSync(path.join(root, pid, 'stat'), [
@@ -641,6 +645,24 @@ function configureRecoveryProcFixture (sandbox, {
       start
     ].join(' ') + '\n')
   }
+
+  writeSandboxCommand(sandbox, 'ps', `#!/bin/sh
+format=""
+pid=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o) format="$2"; shift 2 ;;
+    -p) pid="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+[ -n "$pid" ] || exit 1
+case "$format" in
+  stat=) printf "${psState}\\n" ;;
+  lstart=) printf "fixture-start-%s\\n" "$pid" ;;
+  *) exit 1 ;;
+esac
+`)
 
   const procRoot = toPosixPath(root)
   const rollbackPath = sandbox.rollbackScript.replaceAll('/', path.sep)
@@ -2214,15 +2236,51 @@ test('timezone rollback classifies live stale zombie and missing owners', async 
       rejected: false
     },
     {
+      name: 'zombie owner without boot id',
+      state: 'Z',
+      bootId: false,
+      identity: 'ps',
+      rejected: false
+    },
+    {
       name: 'dead owner',
       state: 'X',
       identity: 'proc',
       rejected: false
     },
     {
+      name: 'dead owner without boot id',
+      state: 'X',
+      bootId: false,
+      identity: 'ps',
+      rejected: false
+    },
+    {
       name: 'missing owner',
       exists: false,
       identity: 'ps',
+      rejected: false
+    },
+    {
+      name: 'ps zombie owner without proc',
+      exists: false,
+      bootId: false,
+      psState: 'Z',
+      identity: 'ps',
+      rejected: false
+    },
+    {
+      name: 'live owner without proc uses ps identity',
+      exists: false,
+      bootId: false,
+      identity: 'ps',
+      rejected: true
+    },
+    {
+      name: 'reused owner without proc uses ps identity',
+      exists: false,
+      bootId: false,
+      identity: 'stale',
       rejected: false
     }
   ]

@@ -27,14 +27,23 @@ path_inode () {
 process_state_is_live () {
   PROCESS_PID="$1"
   case "$PROCESS_PID" in ""|*[!0-9]*) return 1 ;; esac
-  if [ -r "$PROC_ROOT/sys/kernel/random/boot_id" ]; then
-    [ -r "$PROC_ROOT/$PROCESS_PID/stat" ] || return 1
+  if [ -r "$PROC_ROOT/$PROCESS_PID/stat" ]; then
     PROCESS_STAT="$(cat -- "$PROC_ROOT/$PROCESS_PID/stat" 2>/dev/null)" || return 1
     PROCESS_FIELDS="\${PROCESS_STAT##*) }"
     set -- $PROCESS_FIELDS
-    [ "$#" -ge 20 ] || return 1
+    [ "$#" -ge 1 ] || return 1
     case "$1" in Z|X) return 1 ;; esac
     return 0
+  fi
+  if [ -r "$PROC_ROOT/sys/kernel/random/boot_id" ]; then
+    return 1
+  fi
+  if command -v ps >/dev/null 2>&1; then
+    PROCESS_STATE="$(ps -o stat= -p "$PROCESS_PID" 2>/dev/null)" || PROCESS_STATE=""
+    set -- $PROCESS_STATE
+    if [ "$#" -ge 1 ]; then
+      case "$1" in Z*|X*) return 1 ;; esac
+    fi
   fi
   return 0
 }
