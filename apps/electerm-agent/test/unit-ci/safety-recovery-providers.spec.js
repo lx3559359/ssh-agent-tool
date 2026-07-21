@@ -105,6 +105,64 @@ test('builds a strict permission recovery package from a safety request', async 
   assert.doesNotMatch(JSON.stringify(plan), /\/tmp\/shellpilot/)
 })
 
+test('maintenance recovery binds separate rollback and read-only verifier artifacts', async () => {
+  const { buildRecoveryPlan } = await importDomainModule('recovery-providers.js')
+  const {
+    createPersistedMaintenanceRecovery,
+    maintenanceRecoveryProvider
+  } = await importDomainModule('maintenance-recovery-delegation.js')
+  const id = 'task6-paired-artifacts'
+  const rollbackPath = '/tmp/shellpilot-rollback/task6-paired-artifacts.sh'
+  const verifierPath = '/tmp/shellpilot-rollback/task6-paired-artifacts.verify.sh'
+  const endpoint = {
+    tabId: 'tab-task6',
+    host: 'prod.example.com',
+    port: 22,
+    username: 'root'
+  }
+  const details = {
+    quickCommandId: 'builtin-server-hosts-manage',
+    command: `ROLLBACK_SCRIPT='${rollbackPath}'\nprintf mutate`,
+    title: 'Task 6 hosts',
+    rollbackPath,
+    endpoint,
+    backupTargets: ['/etc/hosts'],
+    verification: ['cmp /etc/hosts backup']
+  }
+  const change = {
+    id,
+    source: 'quick-command',
+    endpoint,
+    command: details.command,
+    title: details.title,
+    risk: 'change',
+    reversible: true,
+    recoveryProvider: maintenanceRecoveryProvider,
+    metadata: {
+      maintenanceRecovery: createPersistedMaintenanceRecovery(details, id)
+    }
+  }
+
+  const plan = buildRecoveryPlan(change)
+
+  assert.equal(plan.artifacts.rollbackScript, rollbackPath)
+  assert.equal(plan.artifacts.verifyScript, verifierPath)
+  assert.ok(plan.prepareCommand.includes(rollbackPath))
+  assert.ok(plan.prepareCommand.includes(verifierPath))
+  assert.match(plan.prepareCommand, /\[ -e "\$rollback_script" \]/)
+  assert.match(plan.prepareCommand, /\[ -e "\$rollback_verifier" \]/)
+  assert.match(plan.rollbackCommand, new RegExp(`/bin/sh -- '${rollbackPath}'`))
+  assert.doesNotMatch(plan.rollbackCommand, new RegExp(`/bin/sh -- '${verifierPath}'`))
+  assert.match(plan.verifyCommand, new RegExp(`/bin/sh -- '${verifierPath}'`))
+  assert.doesNotMatch(plan.verifyCommand, new RegExp(`/bin/sh -- '${rollbackPath}'`))
+  for (const command of [plan.rollbackCommand, plan.verifyCommand]) {
+    assert.match(command, /\[ -f "\$rollback_script" \]/)
+    assert.match(command, /\[ -f "\$rollback_verifier" \]/)
+    assert.match(command, /stat -c %u/)
+    assert.match(command, /stat -c %a/)
+  }
+})
+
 test('trusted executable and quoted backslash target stay bound through recovery plan', async () => {
   const { buildRecoveryPlan } = await importDomainModule('recovery-providers.js')
   const command = String.raw`/usr/bin/chmod 600 "/tmp/a\q"`

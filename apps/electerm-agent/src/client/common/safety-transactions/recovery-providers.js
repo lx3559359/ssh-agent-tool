@@ -797,35 +797,47 @@ function buildMaintenanceRecoveryPlan (validated) {
   const { id, command, maintenanceRecovery } = validated
   const rollbackDirectory = '/tmp/shellpilot-rollback'
   const rollbackPath = maintenanceRecovery.rollbackPath
+  const verifierPath = rollbackPath.slice(0, -3) + '.verify.sh'
   const quotedDirectory = shellQuote(rollbackDirectory)
   const quotedPath = shellQuote(rollbackPath)
+  const quotedVerifierPath = shellQuote(verifierPath)
   const prepareCommand = [
     'set -eu',
     `rollback_dir=${quotedDirectory}`,
     `rollback_script=${quotedPath}`,
+    `rollback_verifier=${quotedVerifierPath}`,
     'if [ -L "$rollback_dir" ]; then echo "回滚目录不能是符号链接" >&2; exit 46; fi',
     'if [ -e "$rollback_dir" ]; then [ -d "$rollback_dir" ] || { echo "回滚目录类型不安全" >&2; exit 46; }; current_uid="$(id -u)"; [ "$(stat -c %u -- "$rollback_dir")" = "$current_uid" ] || { echo "回滚目录属主不安全" >&2; exit 46; }; [ "$(stat -c %a -- "$rollback_dir")" = "700" ] || { echo "回滚目录权限不安全" >&2; exit 46; }; fi',
-    'if [ -e "$rollback_script" ] || [ -L "$rollback_script" ]; then echo "回滚脚本路径已存在" >&2; exit 46; fi'
+    'if [ -e "$rollback_script" ] || [ -L "$rollback_script" ]; then echo "回滚脚本路径已存在" >&2; exit 46; fi',
+    'if [ -e "$rollback_verifier" ] || [ -L "$rollback_verifier" ]; then echo "回滚校验脚本路径已存在" >&2; exit 46; fi'
   ].join('; ')
   const recoveryArtifactChecks = [
     'set -eu',
     `rollback_dir=${quotedDirectory}`,
     `rollback_script=${quotedPath}`,
+    `rollback_verifier=${quotedVerifierPath}`,
     'current_uid="$(id -u)"',
     '[ -d "$rollback_dir" ] && [ ! -L "$rollback_dir" ] || { echo "回滚目录不安全" >&2; exit 46; }',
     '[ "$(stat -c %u -- "$rollback_dir")" = "$current_uid" ] || { echo "回滚目录属主不安全" >&2; exit 46; }',
     '[ "$(stat -c %a -- "$rollback_dir")" = "700" ] || { echo "回滚目录权限不安全" >&2; exit 46; }',
     '[ -f "$rollback_script" ] && [ ! -L "$rollback_script" ] || { echo "回滚脚本不存在或类型不安全" >&2; exit 46; }',
     '[ "$(stat -c %u -- "$rollback_script")" = "$current_uid" ] || { echo "回滚脚本属主不安全" >&2; exit 46; }',
-    '[ "$(stat -c %a -- "$rollback_script")" = "700" ] || { echo "回滚脚本权限不安全" >&2; exit 46; }'
+    '[ "$(stat -c %a -- "$rollback_script")" = "700" ] || { echo "回滚脚本权限不安全" >&2; exit 46; }',
+    '[ -f "$rollback_verifier" ] && [ ! -L "$rollback_verifier" ] || { echo "回滚校验脚本不存在或类型不安全" >&2; exit 46; }',
+    '[ "$(stat -c %u -- "$rollback_verifier")" = "$current_uid" ] || { echo "回滚校验脚本属主不安全" >&2; exit 46; }',
+    '[ "$(stat -c %a -- "$rollback_verifier")" = "700" ] || { echo "回滚校验脚本权限不安全" >&2; exit 46; }'
   ]
   const rollbackCommand = [
     ...recoveryArtifactChecks,
     `/bin/sh -- ${quotedPath}`
   ].join('; ')
-  const verifyCommand = recoveryArtifactChecks.join('; ')
+  const verifyCommand = [
+    ...recoveryArtifactChecks,
+    `/bin/sh -- ${quotedVerifierPath}`
+  ].join('; ')
   const artifacts = {
     rollbackScript: rollbackPath,
+    verifyScript: verifierPath,
     quickCommandId: maintenanceRecovery.quickCommandId,
     backupTargets: maintenanceRecovery.backupTargets,
     verification: maintenanceRecovery.verification
