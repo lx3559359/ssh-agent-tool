@@ -1,6 +1,6 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { spawnSync } = require('node:child_process')
+const { spawn, spawnSync } = require('node:child_process')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
@@ -376,6 +376,36 @@ function runPosixShell (script, expectedStatus) {
   return result
 }
 
+function runPosixShellAsync (script) {
+  const child = spawn(posixShellExecutable, ['-s'], {
+    env: posixShellEnv,
+    stdio: ['pipe', 'pipe', 'pipe']
+  })
+  let stdout = ''
+  let stderr = ''
+  child.stdout.setEncoding('utf8')
+  child.stderr.setEncoding('utf8')
+  child.stdout.on('data', chunk => { stdout += chunk })
+  child.stderr.on('data', chunk => { stderr += chunk })
+  const completion = new Promise((resolve, reject) => {
+    child.once('error', reject)
+    child.once('close', (status, signal) => {
+      resolve({ status, signal, stdout, stderr })
+    })
+  })
+  child.stdin.end(script)
+  return { child, completion }
+}
+
+async function waitForPath (target, timeout = 5000) {
+  const deadline = Date.now() + timeout
+  while (Date.now() < deadline) {
+    if (fs.existsSync(target)) return
+    await new Promise(resolve => setTimeout(resolve, 20))
+  }
+  throw new Error(`Timed out waiting for ${target}`)
+}
+
 function toPosixPath (value) {
   return value.replaceAll('\\', '/')
 }
@@ -399,11 +429,18 @@ function createShellSandbox (t) {
     hostname: toPosixPath(path.join(root, 'hostname-state')),
     timezone: toPosixPath(path.join(root, 'timezone-state')),
     mutationLog: toPosixPath(path.join(root, 'mutation.log')),
+    recoveryLog: toPosixPath(path.join(root, 'recovery.log')),
+    flockState: toPosixPath(path.join(root, 'flock-held')),
+    recoveryReady: toPosixPath(path.join(root, 'recovery-ready')),
+    recoveryRelease: toPosixPath(path.join(root, 'recovery-release')),
     rollbackDirectory: toPosixPath(path.join(root, 'rollback')),
     commandDirectory: toPosixPath(path.join(root, 'bin'))
   }
   result.rollbackScript = result.rollbackDirectory + '/task6-test-1700000000000.sh'
   result.verifierScript = result.rollbackDirectory + '/task6-test-1700000000000.verify.sh'
+  result.consumedMarker = result.rollbackScript + '.consumed'
+  result.runningMarker = result.rollbackScript + '.running'
+  result.runningLock = result.rollbackScript + '.running.lock'
   fs.writeFileSync(result.hosts, '127.0.0.1 localhost\n192.0.2.10 old.example.com\n')
   fs.writeFileSync(result.hostname, 'old-host.example.com\n')
   fs.writeFileSync(result.timezone, 'UTC\n')
@@ -413,7 +450,12 @@ function createShellSandbox (t) {
 case "$1" in
   --static) cat "$HOSTNAME_STATE" ;;
   set-hostname)
+    if [ "$PAUSE_RECOVERY" = "yes" ]; then
+      : > "$RECOVERY_READY"
+      while [ ! -e "$RECOVERY_RELEASE" ]; do sleep 0.02; done
+    fi
     [ "$FAIL_RECOVERY" != "yes" ] || exit 1
+    [ "$FAIL_RECOVERY_STEP" != "hostname" ] || exit 1
     printf "hostname:%s\\n" "$2" >> "$MUTATION_LOG"
     printf "%s\\n" "$2" > "$HOSTNAME_STATE"
     ;;
@@ -423,16 +465,69 @@ esac
     id: '#!/bin/sh\n[ "$1" = "-u" ] && { printf "0\\n"; exit 0; }\nexec /usr/bin/id "$@"\n',
     stat: `#!/bin/sh
 format=""
+dereference=""
 if [ "$1" = "-c" ]; then format="$2"; shift 2; fi
+if [ "$1" = "-Lc" ]; then dereference="-L"; format="$2"; shift 2; fi
 [ "$1" != "--" ] || shift
 case "$format" in
   %u) [ -n "$HOSTS_UID_OVERRIDE" ] && printf "%s\\n" "$HOSTS_UID_OVERRIDE" || printf "0\\n" ;;
   %g) [ -n "$HOSTS_GID_OVERRIDE" ] && printf "%s\\n" "$HOSTS_GID_OVERRIDE" || printf "0\\n" ;;
   %a) [ -n "$HOSTS_MODE_OVERRIDE" ] && printf "%s\\n" "$HOSTS_MODE_OVERRIDE" || printf "644\\n" ;;
-  *) exec /usr/bin/stat -c "$format" -- "$1" ;;
+  *) exec /usr/bin/stat $dereference -c "$format" -- "$1" ;;
 esac
 `,
-    chown: '#!/bin/sh\nexit 0\n',
+    cp: `#!/bin/sh
+destination=""
+for argument in "$@"; do destination="$argument"; done
+if [ "$destination" = "$HOSTS_FIXTURE" ]; then
+  printf "cp" >> "$RECOVERY_LOG"
+  for argument in "$@"; do printf "\\t%s" "$argument" >> "$RECOVERY_LOG"; done
+  printf "\\n" >> "$RECOVERY_LOG"
+  [ "$FAIL_RECOVERY_STEP" != "cp" ] || exit 1
+fi
+exec /usr/bin/cp "$@"
+`,
+    chown: `#!/bin/sh
+destination=""
+for argument in "$@"; do destination="$argument"; done
+if [ "$destination" = "$HOSTS_FIXTURE" ]; then
+  printf "chown" >> "$RECOVERY_LOG"
+  for argument in "$@"; do printf "\\t%s" "$argument" >> "$RECOVERY_LOG"; done
+  printf "\\n" >> "$RECOVERY_LOG"
+  [ "$FAIL_RECOVERY_STEP" != "chown" ] || exit 1
+fi
+exit 0
+`,
+    chmod: `#!/bin/sh
+destination=""
+for argument in "$@"; do destination="$argument"; done
+if [ "$destination" = "$HOSTS_FIXTURE" ]; then
+  printf "chmod" >> "$RECOVERY_LOG"
+  for argument in "$@"; do printf "\\t%s" "$argument" >> "$RECOVERY_LOG"; done
+  printf "\\n" >> "$RECOVERY_LOG"
+  [ "$FAIL_RECOVERY_STEP" != "chmod" ] || exit 1
+fi
+exec /usr/bin/chmod "$@"
+`,
+    flock: `#!/bin/sh
+if [ "$1" = "-n" ] && [ "$2" = "9" ]; then
+  mkdir -- "$FLOCK_STATE" 2>/dev/null
+  exit $?
+fi
+if [ "$1" = "-u" ] && [ "$2" = "9" ]; then
+  rmdir -- "$FLOCK_STATE" 2>/dev/null || true
+  exit 0
+fi
+exit 2
+`,
+    ps: `#!/bin/sh
+pid=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-p" ]; then pid="$2"; shift 2; else shift; fi
+done
+[ -n "$pid" ] || exit 1
+printf "fixture-start-%s\\n" "$pid"
+`,
     install: `#!/bin/sh
 mode=""
 while [ "$#" -gt 0 ]; do
@@ -463,11 +558,18 @@ function snapshotTree (root) {
       .sort((left, right) => left.name.localeCompare(right.name))) {
       const absolute = path.join(current, entry.name)
       const relative = path.relative(root, absolute).replaceAll('\\', '/')
+      const metadata = fs.lstatSync(absolute)
+      const attributes = [metadata.mode & 0o7777, metadata.uid, metadata.gid]
       if (entry.isDirectory()) {
-        entries.push([relative, 'directory'])
+        entries.push([relative, 'directory', ...attributes])
         visit(absolute)
       } else {
-        entries.push([relative, 'file', fs.readFileSync(absolute).toString('base64')])
+        entries.push([
+          relative,
+          'file',
+          ...attributes,
+          fs.readFileSync(absolute).toString('base64')
+        ])
       }
     }
   }
@@ -830,10 +932,23 @@ function buildConfirmedShellPrelude (sandbox, options = {}) {
     'FAIL_ROLLBACK=' + shellLiteral(options.failRollback ? 'yes' : 'no'),
     'FAIL_VERIFIER=' + shellLiteral(options.failVerifier ? 'yes' : 'no'),
     'FAIL_RECOVERY=' + shellLiteral(options.failRecovery ? 'yes' : 'no'),
+    'FAIL_RECOVERY_STEP=' + shellLiteral(options.failRecoveryStep || ''),
+    'PAUSE_RECOVERY=' + shellLiteral(options.pauseRecovery ? 'yes' : 'no'),
+    'RECOVERY_LOG=' + shellLiteral(sandbox.recoveryLog),
+    'RECOVERY_READY=' + shellLiteral(sandbox.recoveryReady),
+    'RECOVERY_RELEASE=' + shellLiteral(sandbox.recoveryRelease),
+    'FLOCK_STATE=' + shellLiteral(sandbox.flockState),
+    'ROLLBACK_SCRIPT_FIXTURE=' + shellLiteral(sandbox.rollbackScript),
+    'VERIFIER_SCRIPT_FIXTURE=' + shellLiteral(sandbox.verifierScript),
+    'CONCURRENT_PAIR_ON_ROLLBACK_LINK=' + shellLiteral(options.concurrentPair ? 'yes' : 'no'),
+    'REPLACE_ROLLBACK_ON_VERIFIER_LINK=' + shellLiteral(options.replaceRollback ? 'yes' : 'no'),
+    'PUBLISH_ROLLBACK_THEN_FAIL=' + shellLiteral(options.publishThenFail ? 'yes' : 'no'),
     'VERIFY_FAILURE=' + shellLiteral(verifyFailure),
     'EXPECTED_IP=' + shellLiteral(expectedIp),
     'EXPECTED_HOST=' + shellLiteral(expectedHost),
-    'export PATH HOSTNAME_STATE TIMEZONE_STATE MUTATION_LOG FAIL_RECOVERY',
+    'export PATH HOSTNAME_STATE TIMEZONE_STATE MUTATION_LOG HOSTS_FIXTURE',
+    'export FAIL_RECOVERY FAIL_RECOVERY_STEP PAUSE_RECOVERY RECOVERY_LOG',
+    'export RECOVERY_READY RECOVERY_RELEASE FLOCK_STATE',
     'COMMENT_ONLY_HOSTS_AFTER_INSTALL=' + shellLiteral(options.commentOnlyHostsAfterInstall ? 'yes' : 'no'),
     'CASE_FOLD_HOSTS_AFTER_INSTALL=' + shellLiteral(options.caseFoldHostsAfterInstall ? 'yes' : 'no'),
     'stat () {',
@@ -873,6 +988,23 @@ function buildConfirmedShellPrelude (sandbox, options = {}) {
     'ln () {',
     '  destination=""',
     '  for argument in "$@"; do destination="$argument"; done',
+    '  if [ "$CONCURRENT_PAIR_ON_ROLLBACK_LINK" = "yes" ] &&',
+    '    [ "$destination" = "$ROLLBACK_SCRIPT_FIXTURE" ]; then',
+    '    printf "foreign rollback\\n" > "$ROLLBACK_SCRIPT_FIXTURE"',
+    '    printf "foreign verifier\\n" > "$VERIFIER_SCRIPT_FIXTURE"',
+    '    return 1',
+    '  fi',
+    '  if [ "$REPLACE_ROLLBACK_ON_VERIFIER_LINK" = "yes" ] &&',
+    '    [ "$destination" = "$VERIFIER_SCRIPT_FIXTURE" ]; then',
+    '    command rm -f -- "$ROLLBACK_SCRIPT_FIXTURE"',
+    '    printf "foreign replacement\\n" > "$ROLLBACK_SCRIPT_FIXTURE"',
+    '    return 1',
+    '  fi',
+    '  if [ "$PUBLISH_ROLLBACK_THEN_FAIL" = "yes" ] &&',
+    '    [ "$destination" = "$ROLLBACK_SCRIPT_FIXTURE" ]; then',
+    '    command ln "$@" || return 1',
+    '    return 1',
+    '  fi',
     '  if [ "$FAIL_ROLLBACK" = "yes" ]; then return 1; fi',
     '  if [ "$FAIL_VERIFIER" = "yes" ]; then',
     '    case "$destination" in *.verify.sh) return 1 ;; esac',
@@ -979,13 +1111,22 @@ function runTask6RollbackTwice (sandbox) {
   ].join('\n'))
 }
 
+function runHostnameVerifierReadOnly (sandbox) {
+  const root = sandbox.root.replaceAll('/', path.sep)
+  const before = snapshotTree(root)
+  const result = runPosixShell([
+    buildConfirmedShellPrelude(sandbox),
+    'sh -- ' + shellLiteral(sandbox.verifierScript)
+  ].join('\n'), undefined)
+  const after = snapshotTree(root)
+  assert.deepEqual(after, before)
+  return result
+}
+
 function runHostnameOneShotRecovery (sandbox) {
   const rollback = shellLiteral(sandbox.rollbackScript)
   const verifier = shellLiteral(sandbox.verifierScript)
-  const beforeRollback = runPosixShell([
-    buildConfirmedShellPrelude(sandbox),
-    'sh -- ' + verifier
-  ].join('\n'), undefined)
+  const beforeRollback = runHostnameVerifierReadOnly(sandbox)
   assert.notEqual(beforeRollback.status, 0)
 
   runPosixShell([
@@ -1000,10 +1141,7 @@ function runHostnameOneShotRecovery (sandbox) {
   ].join('\n'), undefined)
   assert.notEqual(consumed.status, 0)
 
-  runPosixShell([
-    buildConfirmedShellPrelude(sandbox),
-    'sh -- ' + verifier
-  ].join('\n'))
+  assert.equal(runHostnameVerifierReadOnly(sandbox).status, 0)
 
   fs.writeFileSync(sandbox.hostname, 'OLD-HOST.EXAMPLE.COM\n')
   runPosixShell([
@@ -1664,7 +1802,160 @@ test('hostname verifier creation failures remove every recovery asset before mut
   assert.equal(fs.existsSync(sandbox.verifierScript), false)
   assert.deepEqual(listHostnameRecoveryAssets(sandbox), [])
 })
-test('hostname rollback releases its consumed lock after failure and can retry', async t => {
+
+test('hostname asset cleanup preserves files owned by a concurrent publisher', async t => {
+  const runtime = await loadConfirmedTask6Runtime()
+  const testCase = confirmedCommandCases.find(testCase => testCase.state === 'hostname')
+  const cases = [
+    {
+      name: 'another publisher wins the first link',
+      options: { concurrentPair: true },
+      expectedRollback: 'foreign rollback\n',
+      expectedVerifier: 'foreign verifier\n'
+    },
+    {
+      name: 'the published rollback is replaced before verifier failure',
+      options: { replaceRollback: true },
+      expectedRollback: 'foreign replacement\n',
+      expectedVerifier: null
+    },
+    {
+      name: 'the first link succeeds but reports failure',
+      options: { publishThenFail: true },
+      expectedRollback: null,
+      expectedVerifier: null
+    }
+  ]
+
+  for (const fixture of cases) {
+    await t.test(fixture.name, child => {
+      const sandbox = createShellSandbox(child)
+      const command = renderConfirmedTask6Command(runtime, testCase, sandbox)
+      const result = runPosixShell([
+        buildConfirmedShellPrelude(sandbox, fixture.options),
+        command
+      ].join('\n'), undefined)
+
+      assert.notEqual(result.status, 0)
+      assertOriginalTask6State(sandbox)
+      assert.equal(fs.existsSync(sandbox.mutationLog), false)
+      if (fixture.expectedRollback === null) {
+        assert.equal(fs.existsSync(sandbox.rollbackScript), false)
+      } else {
+        assert.equal(
+          fs.readFileSync(sandbox.rollbackScript, 'utf8'),
+          fixture.expectedRollback
+        )
+      }
+      if (fixture.expectedVerifier === null) {
+        assert.equal(fs.existsSync(sandbox.verifierScript), false)
+      } else {
+        assert.equal(
+          fs.readFileSync(sandbox.verifierScript, 'utf8'),
+          fixture.expectedVerifier
+        )
+      }
+    })
+  }
+})
+
+test('hostname mutation rejects every pre-existing recovery marker', async t => {
+  const runtime = await loadConfirmedTask6Runtime()
+  const testCase = confirmedCommandCases.find(testCase => testCase.state === 'hostname')
+  const markers = [
+    ['consumed marker', 'consumedMarker', 'directory'],
+    ['running owner', 'runningMarker', 'file'],
+    ['running lock', 'runningLock', 'file']
+  ]
+
+  for (const [name, property, type] of markers) {
+    await t.test(name, child => {
+      const sandbox = createShellSandbox(child)
+      fs.mkdirSync(sandbox.rollbackDirectory)
+      if (type === 'directory') {
+        fs.mkdirSync(sandbox[property])
+      } else {
+        fs.writeFileSync(sandbox[property], 'pre-existing\n')
+      }
+      const result = runPosixShell([
+        buildConfirmedShellPrelude(sandbox),
+        renderConfirmedTask6Command(runtime, testCase, sandbox)
+      ].join('\n'), undefined)
+
+      assert.notEqual(result.status, 0)
+      assertOriginalTask6State(sandbox)
+      assert.equal(fs.existsSync(sandbox.mutationLog), false)
+      assert.equal(fs.existsSync(sandbox[property]), true)
+      assert.equal(fs.existsSync(sandbox.rollbackScript), false)
+      assert.equal(fs.existsSync(sandbox.verifierScript), false)
+    })
+  }
+})
+
+test('hostname rollback reclaims a stale running owner and lock', async t => {
+  const runtime = await loadConfirmedTask6Runtime()
+  const testCase = confirmedCommandCases.find(testCase => testCase.state === 'hostname')
+  const sandbox = createShellSandbox(t)
+  runPosixShell([
+    buildConfirmedShellPrelude(sandbox),
+    renderConfirmedTask6Command(runtime, testCase, sandbox)
+  ].join('\n'))
+  fs.writeFileSync(sandbox.runningLock, 'stale lock inode\n')
+  fs.writeFileSync(sandbox.runningMarker, '999999\nstale-start\n')
+
+  runPosixShell([
+    buildConfirmedShellPrelude(sandbox),
+    'sh -- ' + shellLiteral(sandbox.rollbackScript)
+  ].join('\n'))
+
+  assertOriginalTask6State(sandbox)
+  assert.equal(fs.existsSync(sandbox.consumedMarker), true)
+  assert.equal(fs.existsSync(sandbox.runningMarker), false)
+  assert.equal(fs.existsSync(sandbox.runningLock), false)
+})
+
+test('hostname rollback rejects a live concurrent recovery', async t => {
+  const runtime = await loadConfirmedTask6Runtime()
+  const testCase = confirmedCommandCases.find(testCase => testCase.state === 'hostname')
+  const sandbox = createShellSandbox(t)
+  runPosixShell([
+    buildConfirmedShellPrelude(sandbox),
+    renderConfirmedTask6Command(runtime, testCase, sandbox)
+  ].join('\n'))
+  const mutationBeforeRecovery = fs.readFileSync(sandbox.mutationLog, 'utf8')
+  const first = runPosixShellAsync([
+    buildConfirmedShellPrelude(sandbox, { pauseRecovery: true }),
+    'sh -- ' + shellLiteral(sandbox.rollbackScript)
+  ].join('\n'))
+  let firstResult
+
+  try {
+    await waitForPath(sandbox.recoveryReady)
+    assert.equal(fs.existsSync(sandbox.runningMarker), true)
+    assert.equal(fs.existsSync(sandbox.consumedMarker), false)
+    const concurrent = runPosixShell([
+      buildConfirmedShellPrelude(sandbox),
+      'sh -- ' + shellLiteral(sandbox.rollbackScript)
+    ].join('\n'), undefined)
+    assert.notEqual(concurrent.status, 0)
+    assert.equal(
+      fs.readFileSync(sandbox.mutationLog, 'utf8'),
+      mutationBeforeRecovery
+    )
+  } finally {
+    fs.writeFileSync(sandbox.recoveryRelease, '')
+    firstResult = await first.completion
+  }
+
+  assert.equal(firstResult.status, 0, firstResult.stderr || firstResult.stdout)
+  assert.equal(firstResult.signal, null)
+  assertOriginalTask6State(sandbox)
+  assert.equal(fs.existsSync(sandbox.consumedMarker), true)
+  assert.equal(fs.existsSync(sandbox.runningMarker), false)
+  assert.equal(fs.existsSync(sandbox.runningLock), false)
+})
+
+test('hostname rollback retries idempotently after a partial restore failure', async t => {
   const runtime = await loadConfirmedTask6Runtime()
   const testCase = confirmedCommandCases.find(testCase => testCase.state === 'hostname')
   const sandbox = createShellSandbox(t)
@@ -1675,25 +1966,86 @@ test('hostname rollback releases its consumed lock after failure and can retry',
   ].join('\n'))
 
   const rollback = shellLiteral(sandbox.rollbackScript)
+  const operationName = fs.readdirSync(sandbox.rollbackDirectory)
+    .find(name => name.startsWith('operation.'))
+  assert.ok(operationName)
+  const hostsBackup = toPosixPath(path.join(
+    sandbox.rollbackDirectory,
+    operationName,
+    'target-1'
+  ))
+  fs.writeFileSync(sandbox.recoveryLog, '')
   const failed = runPosixShell([
-    buildConfirmedShellPrelude(sandbox, { failRecovery: true }),
+    buildConfirmedShellPrelude(sandbox, { failRecoveryStep: 'chmod' }),
     'sh -- ' + rollback
   ].join('\n'), undefined)
   assert.notEqual(failed.status, 0)
-  assert.equal(fs.existsSync(sandbox.rollbackScript + '.consumed'), false)
-  assertConfirmedTask6Mutation(sandbox, testCase)
+  assert.equal(fs.existsSync(sandbox.consumedMarker), false)
+  assert.equal(fs.existsSync(sandbox.runningMarker), false)
+  assert.equal(fs.existsSync(sandbox.runningLock), false)
+  assert.deepEqual(
+    fs.readFileSync(sandbox.recoveryLog, 'utf8').trimEnd().split('\n'),
+    [
+      ['cp', '--', hostsBackup, sandbox.hosts].join('\t'),
+      ['chown', '0:0', '--', sandbox.hosts].join('\t'),
+      ['chmod', '644', '--', sandbox.hosts].join('\t')
+    ]
+  )
+
+  fs.writeFileSync(sandbox.recoveryLog, '')
+  runPosixShell([
+    buildConfirmedShellPrelude(sandbox),
+    'sh -- ' + rollback
+  ].join('\n'))
+  assert.equal(fs.existsSync(sandbox.consumedMarker), true)
+  const recoveryCalls = fs.readFileSync(sandbox.recoveryLog, 'utf8')
+    .trimEnd()
+    .split('\n')
+  assert.deepEqual(recoveryCalls.map(line => line.split('\t')[0]), [
+    'cp',
+    'chown',
+    'chmod'
+  ])
+  assert.deepEqual(recoveryCalls.map(line => line.split('\t').slice(1)), [
+    ['--', hostsBackup, sandbox.hosts],
+    ['0:0', '--', sandbox.hosts],
+    ['644', '--', sandbox.hosts]
+  ])
+  assertOriginalTask6State(sandbox)
+})
+
+test('hostname rollback consumes only after its verifier succeeds', async t => {
+  const runtime = await loadConfirmedTask6Runtime()
+  const testCase = confirmedCommandCases.find(testCase => testCase.state === 'hostname')
+  const sandbox = createShellSandbox(t)
+  runPosixShell([
+    buildConfirmedShellPrelude(sandbox),
+    renderConfirmedTask6Command(runtime, testCase, sandbox)
+  ].join('\n'))
+  const rollback = shellLiteral(sandbox.rollbackScript)
+  const failed = runPosixShell([
+    buildConfirmedShellPrelude(sandbox),
+    'HOSTS_MODE_OVERRIDE=600 sh -- ' + rollback
+  ].join('\n'), undefined)
+
+  assert.notEqual(failed.status, 0)
+  assert.equal(fs.existsSync(sandbox.consumedMarker), false)
+  assert.equal(fs.existsSync(sandbox.runningMarker), false)
+  assert.equal(fs.existsSync(sandbox.runningLock), false)
 
   runPosixShell([
     buildConfirmedShellPrelude(sandbox),
     'sh -- ' + rollback
   ].join('\n'))
-  assert.equal(fs.existsSync(sandbox.rollbackScript + '.consumed'), true)
-  runPosixShell([
+  assert.equal(fs.existsSync(sandbox.consumedMarker), true)
+  const consumed = runPosixShell([
     buildConfirmedShellPrelude(sandbox),
-    'sh -- ' + shellLiteral(sandbox.verifierScript)
-  ].join('\n'))
+    'sh -- ' + rollback
+  ].join('\n'), undefined)
+  assert.notEqual(consumed.status, 0)
   assertOriginalTask6State(sandbox)
 })
+
 test('hostname verifier ignores hosts when no hosts backup was requested', async t => {
   const runtime = await loadConfirmedTask6Runtime()
   const baseCase = confirmedCommandCases.find(testCase => testCase.state === 'hostname')
