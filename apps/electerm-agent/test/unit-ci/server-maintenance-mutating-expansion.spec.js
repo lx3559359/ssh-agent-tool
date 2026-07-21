@@ -1576,6 +1576,13 @@ test('confirmed Task 6 commands create usable recovery assets before mutation', 
         const verifierText = fs.readFileSync(sandbox.verifierScript, 'utf8')
         assert.match(verifierText, /^#!\/bin\/sh/)
         assert.doesNotMatch(rollbackText, /hostnamectl --static|\bcmp\b/)
+        const restoreChownIndex = rollbackText.indexOf('$RUN_AS chown ')
+        const restoreChmodIndex = rollbackText.indexOf('$RUN_AS chmod ')
+        assert.ok(restoreChownIndex >= 0, 'rollback must restore hosts ownership')
+        assert.ok(
+          restoreChmodIndex > restoreChownIndex,
+          'rollback must restore hosts mode after ownership'
+        )
         assert.doesNotMatch(
           verifierText,
           /set-hostname|\binstall\b|\bcp\b|\bmv\b|\brm\b|\bmkdir\b|\brmdir\b|\bchmod\b|\bchown\b/

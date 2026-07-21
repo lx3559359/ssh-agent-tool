@@ -127,8 +127,8 @@ if [ "$SYNC_HOSTS" = "yes" ]; then
   command -v cp >/dev/null 2>&1 && command -v chmod >/dev/null 2>&1 && command -v chown >/dev/null 2>&1 ||
     { echo "\u7f3a\u5c11 hosts \u6062\u590d\u5de5\u5177"; exit 1; }
   $RUN_AS cp -- "$HOSTS_BACKUP" "$HOSTS_FILE"
-  $RUN_AS chmod "$OLD_HOSTS_MODE" -- "$HOSTS_FILE"
   $RUN_AS chown "$OLD_HOSTS_UID:$OLD_HOSTS_GID" -- "$HOSTS_FILE"
+  $RUN_AS chmod "$OLD_HOSTS_MODE" -- "$HOSTS_FILE"
 fi
 ROLLBACK_COMPLETE=yes
 printf '\u5df2\u6062\u590d\u539f\u4e3b\u673a\u540d: %s\\n' "$OLD_HOSTNAME"
