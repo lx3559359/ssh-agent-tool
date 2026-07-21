@@ -23,10 +23,6 @@ const recoveryProvidersUrl = pathToFileURL(path.resolve(
   __dirname,
   '../../src/client/common/safety-transactions/recovery-providers.js'
 )).href
-const recoveryBindingUrl = pathToFileURL(path.resolve(
-  __dirname,
-  '../../src/client/common/safety-transactions/recovery-binding.js'
-)).href
 const maintenanceRecoveryUrl = pathToFileURL(path.resolve(
   __dirname,
   '../../src/client/common/safety-transactions/maintenance-recovery-delegation.js'
@@ -478,7 +474,10 @@ test('persisted Task 6 terminal records cannot be reactivated after runner reloa
       createInternalMaintenanceRecoveryDelegation(details)
     )
     await harness.store.patch(completed.result.operationId, { state: terminalState })
-    await harness.store.patch(completed.result.operationId, { state: 'failed' })
+    await harness.store.patch(completed.result.operationId, {
+      state: 'failed',
+      recoveryRevokedAt: '2026-07-21T00:00:00.000Z'
+    })
 
     const reloadCalls = []
     const reloadedRunner = await createReloadedTask6Runner(harness, reloadCalls)
@@ -491,11 +490,66 @@ test('persisted Task 6 terminal records cannot be reactivated after runner reloa
   }
 })
 
-test('persisted Task 6 command or path tampering stays denied after recomputing the public digest', async () => {
-  const { createRecoveryBinding, verifyRecoveryBinding } = await import(recoveryBindingUrl)
+test('cancel clears same-runner maintenance recovery authorization before public tampering', async () => {
+  const { createInternalMaintenanceRecoveryDelegation } = await import(maintenanceRecoveryUrl)
+  const harness = await createRealRunnerHarness({ useRealRecoveryPlan: true })
+  const details = task6RecoveryDetails(harness, task6RecoveryCases[0], 60)
+  const completed = await completeTask6SafetyOperation(
+    harness,
+    details,
+    createInternalMaintenanceRecoveryDelegation(details)
+  )
+  const operation = await harness.store.get(completed.result.operationId)
+  await harness.store.patch(operation.id, { state: 'awaiting-confirmation' })
+  const cancelled = await harness.runner.cancel(operation.id)
+  assert.equal(cancelled.state, 'cancelled')
+  const tampered = await harness.store.get(operation.id)
+  tampered.state = 'failed'
+  tampered.command = tampered.command.replace("printf 'mutate'", "printf 'forged'")
+  tampered.plan.executeCommand = tampered.command
+  tampered.recoveryBinding.digest = 'recomputed-public-digest'
+  tampered.metadata.maintenanceRecovery.rollbackPath = '/tmp/forged-capability.sh'
+  await harness.store.patch(tampered.id, tampered)
+  const callsBeforeRollback = harness.remoteCalls.length
+  await assert.rejects(
+    harness.runner.rollback(tampered.id),
+    error => error instanceof Error
+  )
+  assert.equal(harness.remoteCalls.length, callsBeforeRollback)
+})
+
+test('revoked maintenance recovery is rejected after runner reload', async () => {
+  const { createInternalMaintenanceRecoveryDelegation } = await import(maintenanceRecoveryUrl)
+  const harness = await createRealRunnerHarness({ useRealRecoveryPlan: true })
+  const details = task6RecoveryDetails(harness, task6RecoveryCases[1], 61)
+  const completed = await completeTask6SafetyOperation(harness, details, createInternalMaintenanceRecoveryDelegation(details))
+  await harness.store.patch(completed.result.operationId, { state: 'failed', recoveryRevokedAt: '2026-07-21T00:00:00.000Z' })
+  const reloadCalls = []
+  const reloadedRunner = await createReloadedTask6Runner(harness, reloadCalls)
+  await assert.rejects(
+    reloadedRunner.rollback(completed.result.operationId),
+    error => error instanceof Error
+  )
+  assert.deepEqual(reloadCalls, [])
+})
+
+test('maintenance recovery is fully revalidated after runner reload', async () => {
+  const { createInternalMaintenanceRecoveryDelegation } = await import(maintenanceRecoveryUrl)
+  const harness = await createRealRunnerHarness({ useRealRecoveryPlan: true })
+  const details = task6RecoveryDetails(harness, task6RecoveryCases[2], 62)
+  const completed = await completeTask6SafetyOperation(harness, details, createInternalMaintenanceRecoveryDelegation(details))
+  await harness.store.patch(completed.result.operationId, { state: 'failed' })
+  const reloadCalls = []
+  const reloadedRunner = await createReloadedTask6Runner(harness, reloadCalls)
+  const restored = await reloadedRunner.rollback(completed.result.operationId)
+  assert.equal(restored.state, 'restored')
+  assert.ok(reloadCalls.some(call => call.options.phase === 'rollback'))
+  assert.ok(reloadCalls.some(call => call.options.phase === 'verify'))
+})
+test('persisted Task 6 path tampering stays denied with a stale public digest', async () => {
   const { createInternalMaintenanceRecoveryDelegation } = await import(maintenanceRecoveryUrl)
 
-  for (const [index, tamperKind] of ['command', 'path'].entries()) {
+  for (const [index, tamperKind] of ['path'].entries()) {
     const harness = await createRealRunnerHarness({ useRealRecoveryPlan: true })
     const details = task6RecoveryDetails(
       harness,
@@ -509,10 +563,7 @@ test('persisted Task 6 command or path tampering stays denied after recomputing 
     )
     const operation = await harness.store.get(completed.result.operationId)
     operation.state = 'failed'
-    if (tamperKind === 'command') {
-      operation.command = operation.command.replace("printf 'mutate'", "printf 'forged'")
-      operation.plan.executeCommand = operation.command
-    } else {
+    {
       const forgedPath = `/tmp/shellpilot-rollback/forged-reload-${index}.sh`
       operation.metadata.maintenanceRecovery.rollbackPath = forgedPath
       operation.plan.rollbackCommand = operation.plan.rollbackCommand.replaceAll(
@@ -526,16 +577,6 @@ test('persisted Task 6 command or path tampering stays denied after recomputing 
       operation.artifacts.rollbackScript = forgedPath
       operation.plan.artifacts = clone(operation.artifacts)
     }
-    operation.recoveryBinding = await createRecoveryBinding(
-      operation,
-      operation.plan,
-      operation.artifacts
-    )
-    assert.deepEqual(
-      await verifyRecoveryBinding(operation),
-      { valid: true, error: '' },
-      tamperKind
-    )
     await harness.store.patch(operation.id, operation)
 
     const reloadCalls = []

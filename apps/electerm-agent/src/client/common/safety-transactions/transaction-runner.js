@@ -786,14 +786,25 @@ export function createTransactionRunner (options = {}) {
 
   async function requireBoundRecovery (operation) {
     if (operation.recoveryRevokedAt) {
-      throw new Error('µ±Ç°Î¬»¤»Ö¸´¼ÇÂ¼ÒÑ³·Ïú£¬²»ÄÜÔÙ´ÎÖ´ÐÐ»Ø¹ö¡£')
+      throw new Error('Maintenance recovery has been revoked.')
+    }
+    const isMaintenanceRecovery =
+      operation.recoveryProvider === maintenanceRecoveryProvider
+    const authorization = authorizedMaintenanceRecoveries.get(operation.id)
+    if (isMaintenanceRecovery) {
+      if (authorization) {
+        assertAuthorizedMaintenanceRecovery(authorization, operation)
+      } else {
+        const persisted = operation.metadata?.maintenanceRecovery
+        assertAuthorizedMaintenanceRecovery({
+          ...persisted,
+          command: operation.command,
+          title: persisted?.title
+        }, operation)
+      }
     }
     const bound = boundRecoveries.get(operation.id)
     if (!bound) {
-      if (operation.recoveryProvider === maintenanceRecoveryProvider &&
-        !authorizedMaintenanceRecoveries.has(operation.id)) {
-        throw new Error('µ±Ç°Î¬»¤»Ö¸´¼ÇÂ¼È±ÉÙ±¾´Î»á»°ÊÚÈ¨£¬²»ÄÜÖ´ÐÐ»Ø¹ö¡£')
-      }
       await assertRecoveryBinding(operation)
       return rememberBoundRecovery(operation)
     }
@@ -2180,23 +2191,23 @@ export function createTransactionRunner (options = {}) {
     })
   }
 
-  function revokeRecovery (id, reason = 'Î¬»¤»Ö¸´ÊÚÈ¨ÒÑ³·Ïú¡£') {
+  function revokeRecovery (id, reason = 'Î¬ï¿½ï¿½ï¿½Ö¸ï¿½ï¿½ï¿½È¨ï¿½Ñ³ï¿½ï¿½ï¿½ï¿½ï¿½') {
     return serialize(String(id), async () => {
       const operation = await get(id)
-      if (!operation) throw new Error(`Î´ÕÒµ½°²È«ÊÂÎñ£º${id}`)
+      if (!operation) throw new Error(`Î´ï¿½Òµï¿½ï¿½ï¿½È«ï¿½ï¿½ï¿½ï¿½${id}`)
       if (operation.recoveryProvider !== maintenanceRecoveryProvider) {
-        throw new Error('Ö»ÓÐÎ¬»¤¿ì½ÝÃüÁî»Ö¸´¼ÇÂ¼¿ÉÒÔÏÔÊ½³·Ïú¡£')
+        throw new Error('Ö»ï¿½ï¿½Î¬ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö¸ï¿½ï¿½ï¿½Â¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½')
       }
       if (![operationStates.failed, operationStates.cancelled].includes(operation.state)) {
-        throw new Error('Ö»ÓÐÌá½»Ê§°Ü»òÒÑÈ¡ÏûµÄÎ¬»¤ÊÂÎñ¿ÉÒÔ³·Ïú»Ö¸´ÊÚÈ¨¡£')
+        throw new Error('Ö»ï¿½ï¿½ï¿½á½»Ê§ï¿½Ü»ï¿½ï¿½ï¿½È¡ï¿½ï¿½ï¿½ï¿½Î¬ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ô³ï¿½ï¿½ï¿½ï¿½Ö¸ï¿½ï¿½ï¿½È¨ï¿½ï¿½')
       }
-      const revoked = await patch(operation.id, {
-        recoveryRevokedAt: timestamp(),
-        recoveryRevocationReason: redactAndTruncateAuditText(reason),
-        updatedAt: timestamp()
-      })
       boundRecoveries.delete(operation.id)
       authorizedMaintenanceRecoveries.delete(operation.id)
+      const revoked = await patch(operation.id, {
+        recoveryRevokedAt: timestamp(),
+        recoveryRevokedReason: redactAndTruncateAuditText(reason),
+        updatedAt: timestamp()
+      })
       emit(operation.id, revoked.state, 'revoke-recovery')
       return revoked
     })
@@ -2257,6 +2268,7 @@ export function createTransactionRunner (options = {}) {
         current = await cancelState(current)
         if (current.state === operationStates.cancelled) {
           boundRecoveries.delete(operationId)
+          authorizedMaintenanceRecoveries.delete(operationId)
         }
       }
     } finally {
