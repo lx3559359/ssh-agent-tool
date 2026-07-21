@@ -179,7 +179,7 @@ const normalizedOperationFields = [
   'metadata', 'risk', 'provider', 'reversible', 'recoveryProvider',
   'requiresConfirmation', 'reason', 'plan', 'recoveryBinding', 'artifacts', 'audit',
   'artifactReferences',
-  'recoveryReadyAt', 'executionId', 'error', 'integrityError', 'failedAt', 'completedAt',
+  'recoveryReadyAt', 'recoveryRevokedAt', 'recoveryRevokedReason', 'executionId', 'error', 'integrityError', 'failedAt', 'completedAt',
   'mutationStarted', 'mutationStartedAt', 'commitPoint', 'commitPointAt',
   'timeoutMs', 'prepareTimeoutMs', 'executeTimeoutMs',
   'rollbackTimeoutMs', 'verifyTimeoutMs'

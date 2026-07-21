@@ -223,6 +223,24 @@ test('operation CRUD normalizes records and explicitly propagates database failu
   )
 })
 
+test('operation recovery revocation audit fields survive patch and reload', async () => {
+  const { createTransactionStore } = await importStore()
+  const adapter = createMemoryAdapter()
+  const fixedNow = new Date('2026-07-13T08:09:10.000Z')
+  const store = createTransactionStore({ adapter, now: () => fixedNow })
+
+  await store.saveOperation(createOperation())
+  await store.patchOperation('op-1', {
+    recoveryRevokedAt: '2026-07-13T08:10:11.000Z',
+    recoveryRevokedReason: 'recovery binding no longer trusted'
+  })
+
+  const reloadedStore = createTransactionStore({ adapter, now: () => fixedNow })
+  const reloaded = await reloadedStore.getOperation('op-1')
+  assert.equal(reloaded.recoveryRevokedAt, '2026-07-13T08:10:11.000Z')
+  assert.equal(reloaded.recoveryRevokedReason, 'recovery binding no longer trusted')
+})
+
 test('operation storage rejects instead of swallowing database errors', async () => {
   const { createTransactionStore } = await importStore()
   const expected = new Error('disk full')
