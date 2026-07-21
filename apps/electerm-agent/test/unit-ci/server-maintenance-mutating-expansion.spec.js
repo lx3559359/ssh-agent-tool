@@ -1349,13 +1349,40 @@ function assertConfirmedTask6Mutation (sandbox, testCase) {
   }
 }
 
-function runTask6RollbackTwice (sandbox) {
+function runHostsOneShotRecovery (sandbox) {
   const rollback = shellLiteral(sandbox.rollbackScript)
+  const tamperedHosts = originalHostsFixture + '# tampered after recovery\n'
+
+  assert.notEqual(runOneShotVerifierReadOnly(sandbox).status, 0)
+
   runPosixShell([
     buildConfirmedShellPrelude(sandbox),
-    '. ' + rollback,
-    '. ' + rollback
+    'sh -- ' + rollback
   ].join('\n'))
+  assertOriginalTask6State(sandbox)
+  assert.equal(fs.existsSync(sandbox.consumedMarker), true)
+  assert.equal(runOneShotVerifierReadOnly(sandbox).status, 0)
+
+  fs.writeFileSync(sandbox.recoveryLog, '')
+  const reconciled = runPosixShell([
+    buildConfirmedShellPrelude(sandbox),
+    'sh -- ' + rollback
+  ].join('\n'), undefined)
+  assert.equal(reconciled.status, 0, reconciled.stderr || reconciled.stdout)
+  assert.equal(runOneShotVerifierReadOnly(sandbox).status, 0)
+  assert.equal(fs.readFileSync(sandbox.recoveryLog, 'utf8'), '')
+
+  fs.writeFileSync(sandbox.hosts, tamperedHosts)
+  assert.notEqual(runOneShotVerifierReadOnly(sandbox).status, 0)
+  const rejected = runPosixShell([
+    buildConfirmedShellPrelude(sandbox),
+    'sh -- ' + rollback
+  ].join('\n'), undefined)
+  assert.notEqual(rejected.status, 0, rejected.stderr || rejected.stdout)
+  assert.equal(fs.readFileSync(sandbox.hosts, 'utf8'), tamperedHosts)
+  assert.equal(fs.readFileSync(sandbox.recoveryLog, 'utf8'), '')
+
+  fs.writeFileSync(sandbox.hosts, originalHostsFixture)
 }
 
 function runOneShotVerifierReadOnly (sandbox) {
@@ -2015,7 +2042,26 @@ test('confirmed Task 6 commands create usable recovery assets before mutation', 
         assert.match(verifierText, /timedatectl show/)
         runTimezoneOneShotRecovery(sandbox)
       } else {
-        runTask6RollbackTwice(sandbox)
+        assert.equal(fs.existsSync(sandbox.verifierScript), true)
+        assert.equal(fs.lstatSync(sandbox.rollbackScript).isFile(), true)
+        assert.equal(fs.lstatSync(sandbox.verifierScript).isFile(), true)
+        assert.equal(
+          sandbox.verifierScript,
+          sandbox.rollbackScript.replace(/\.sh$/, '.verify.sh')
+        )
+        assert.match(command, /chmod 700 "\$TMP_ROLLBACK" "\$TMP_VERIFIER"/)
+
+        const verifierText = fs.readFileSync(sandbox.verifierScript, 'utf8')
+        assert.match(verifierText, /^#!\/bin\/sh/)
+        assert.doesNotMatch(
+          verifierText,
+          /\binstall\b|\bcp\b|\bmv\b|\brm\b|\bmkdir\b|\brmdir\b|\bchmod\b|\bchown\b/
+        )
+        assert.match(verifierText, /\bcmp\b/)
+        assert.match(verifierText, /stat -c %a/)
+        assert.match(verifierText, /stat -c %u/)
+        assert.match(verifierText, /stat -c %g/)
+        runHostsOneShotRecovery(sandbox)
       }
       assertOriginalTask6State(sandbox)
     })
@@ -2105,6 +2151,24 @@ test('timezone verifier creation failure removes the recovery pair before mutati
   assert.equal(fs.existsSync(sandbox.rollbackScript), false)
   assert.equal(fs.existsSync(sandbox.verifierScript), false)
   assert.deepEqual(listOneShotRecoveryAssets(sandbox, 'timezone'), [])
+})
+
+test('hosts verifier publication failure removes the recovery pair before mutation', async t => {
+  const runtime = await loadConfirmedTask6Runtime()
+  const testCase = confirmedCommandCases.find(testCase => testCase.state === 'hosts')
+  const sandbox = createShellSandbox(t)
+  const command = renderConfirmedTask6Command(runtime, testCase, sandbox)
+  const result = runPosixShell([
+    buildConfirmedShellPrelude(sandbox, { failVerifier: true }),
+    command
+  ].join('\n'), undefined)
+
+  assert.notEqual(result.status, 0)
+  assertOriginalTask6State(sandbox)
+  assert.equal(fs.existsSync(sandbox.mutationLog), false)
+  assert.equal(fs.existsSync(sandbox.rollbackScript), false)
+  assert.equal(fs.existsSync(sandbox.verifierScript), false)
+  assert.deepEqual(listOneShotRecoveryAssets(sandbox, 'hosts'), [])
 })
 
 test('timezone rollback remains retryable after restore failure', async t => {
@@ -2876,7 +2940,10 @@ test('verification failures retain a usable rollback path for every Task 6 comma
       } else if (testCase.state === 'timezone') {
         runTimezoneOneShotRecovery(sandbox)
       } else {
-        runTask6RollbackTwice(sandbox)
+        assert.equal(fs.existsSync(sandbox.verifierScript), true)
+        assert.equal(fs.lstatSync(sandbox.rollbackScript).isFile(), true)
+        assert.equal(fs.lstatSync(sandbox.verifierScript).isFile(), true)
+        runHostsOneShotRecovery(sandbox)
       }
       assertOriginalTask6State(sandbox)
     })

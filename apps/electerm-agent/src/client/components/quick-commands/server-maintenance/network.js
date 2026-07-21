@@ -1,5 +1,101 @@
 import { READ_ONLY, NEED_EDIT, step, defineCommand, inputParam, numberParam, selectParam } from './shared/definition.js'
 import { withRollback } from './shared/safety-metadata.js'
+import { rollbackScriptFilenameMaxLength } from './shared/validation.js'
+
+const HOSTS_RECOVERY_ASSET_CLEANUP_SHELL = `cleanup_owned_recovery_asset () {
+  RECOVERY_FINAL="$1"
+  RECOVERY_EXPECTED_INODE="$2"
+  RECOVERY_LINK_ATTEMPTED="$3"
+  [ -n "$RECOVERY_FINAL" ] && [ -n "$RECOVERY_EXPECTED_INODE" ] || return 0
+  [ "$RECOVERY_LINK_ATTEMPTED" = "yes" ] || return 0
+  [ -f "$RECOVERY_FINAL" ] && [ ! -L "$RECOVERY_FINAL" ] || return 0
+  RECOVERY_CURRENT_INODE="$(stat -c %d:%i -- "$RECOVERY_FINAL" 2>/dev/null)" || return 0
+  if [ "$RECOVERY_CURRENT_INODE" = "$RECOVERY_EXPECTED_INODE" ]; then
+    rm -f -- "$RECOVERY_FINAL" 2>/dev/null || true
+  fi
+}`
+
+const HOSTS_RECOVERY_RUNTIME_SHELL = `RUN_LOCK_HELD=no
+RUN_LOCK_OWNED=no
+RUN_OWNER_OWNED=no
+RUN_LOCK_INODE=""
+RUN_OWNER_INODE=""
+path_inode () {
+  stat -c %d:%i -- "$1" 2>/dev/null
+}
+remove_owned_path () {
+  OWNED_PATH="$1"
+  OWNED_INODE="$2"
+  OWNED_FLAG="$3"
+  [ "$OWNED_FLAG" = "yes" ] && [ -n "$OWNED_INODE" ] || return 0
+  [ -e "$OWNED_PATH" ] && [ ! -L "$OWNED_PATH" ] || return 0
+  OWNED_CURRENT_INODE="$(path_inode "$OWNED_PATH")" || return 0
+  if [ "$OWNED_CURRENT_INODE" = "$OWNED_INODE" ]; then
+    rm -f -- "$OWNED_PATH" 2>/dev/null || true
+  fi
+}
+release_running_lock () {
+  remove_owned_path "$RUN_OWNER_FILE" "$RUN_OWNER_INODE" "$RUN_OWNER_OWNED"
+  RUN_OWNER_OWNED=no
+  if [ "$RUN_LOCK_HELD" = "yes" ]; then
+    remove_owned_path "$RUN_LOCK_FILE" "$RUN_LOCK_INODE" "$RUN_LOCK_OWNED"
+    RUN_LOCK_OWNED=no
+    flock -u 9 >/dev/null 2>&1 || true
+    RUN_LOCK_HELD=no
+  fi
+}
+acquire_running_lock () {
+  [ ! -L "$RUN_LOCK_FILE" ] || { echo "hosts \u6062\u590d\u8fd0\u884c\u9501\u4e0d\u80fd\u662f\u7b26\u53f7\u94fe\u63a5"; return 1; }
+  exec 9>> "$RUN_LOCK_FILE" || { echo "\u65e0\u6cd5\u6253\u5f00 hosts \u6062\u590d\u8fd0\u884c\u9501"; return 1; }
+  flock -n 9 || { echo "\u53e6\u4e00\u4e2a hosts \u6062\u590d\u64cd\u4f5c\u4ecd\u5728\u8fd0\u884c"; return 1; }
+  RUN_LOCK_HELD=yes
+  RUN_LOCK_PATH_INODE="$(path_inode "$RUN_LOCK_FILE")" || { echo "\u65e0\u6cd5\u8bc6\u522b hosts \u6062\u590d\u8fd0\u884c\u9501"; return 1; }
+  RUN_LOCK_FD_INODE="$RUN_LOCK_PATH_INODE"
+  if [ -e "/proc/$$/fd/9" ]; then
+    RUN_LOCK_FD_INODE="$(stat -Lc %d:%i -- "/proc/$$/fd/9" 2>/dev/null)" ||
+      { echo "\u65e0\u6cd5\u9a8c\u8bc1 hosts \u6062\u590d\u8fd0\u884c\u9501"; return 1; }
+  fi
+  [ "$RUN_LOCK_PATH_INODE" = "$RUN_LOCK_FD_INODE" ] ||
+    { echo "hosts \u6062\u590d\u8fd0\u884c\u9501\u5728\u83b7\u53d6\u671f\u95f4\u88ab\u66ff\u6362"; return 1; }
+  RUN_LOCK_INODE="$RUN_LOCK_FD_INODE"
+  RUN_LOCK_OWNED=yes
+  RECOVERY_UID="$(id -u 2>/dev/null)" || { echo "\u65e0\u6cd5\u786e\u8ba4 hosts \u6062\u590d\u6267\u884c\u7528\u6237"; return 1; }
+  [ "$(stat -c %u -- "$RUN_LOCK_FILE" 2>/dev/null)" = "$RECOVERY_UID" ] &&
+    [ "$(stat -c %a -- "$RUN_LOCK_FILE" 2>/dev/null)" = "600" ] ||
+    { echo "hosts \u6062\u590d\u8fd0\u884c\u9501\u6240\u6709\u8005\u6216\u6743\u9650\u4e0d\u5b89\u5168"; return 1; }
+  for RECOVERY_DIRECTORY in "\${RUN_LOCK_FILE%/*}" "\${HOSTS_BACKUP%/*}"; do
+    [ -d "$RECOVERY_DIRECTORY" ] && [ ! -L "$RECOVERY_DIRECTORY" ] ||
+      { echo "hosts \u6062\u590d\u76ee\u5f55\u4e0d\u5b89\u5168"; return 1; }
+    [ "$(stat -c %u -- "$RECOVERY_DIRECTORY" 2>/dev/null)" = "$RECOVERY_UID" ] &&
+      [ "$(stat -c %a -- "$RECOVERY_DIRECTORY" 2>/dev/null)" = "700" ] ||
+      { echo "hosts \u6062\u590d\u76ee\u5f55\u6240\u6709\u8005\u6216\u6743\u9650\u4e0d\u5b89\u5168"; return 1; }
+  done
+}
+claim_running_owner () {
+  if [ -e "$RUN_OWNER_FILE" ] || [ -L "$RUN_OWNER_FILE" ]; then
+    [ -f "$RUN_OWNER_FILE" ] && [ ! -L "$RUN_OWNER_FILE" ] ||
+      { echo "hosts \u6062\u590d\u8fd0\u884c\u6807\u8bb0\u4e0d\u5b89\u5168"; return 1; }
+    STALE_OWNER_INODE="$(path_inode "$RUN_OWNER_FILE")" || return 1
+    remove_owned_path "$RUN_OWNER_FILE" "$STALE_OWNER_INODE" yes
+    [ ! -e "$RUN_OWNER_FILE" ] && [ ! -L "$RUN_OWNER_FILE" ] ||
+      { echo "\u65e0\u6cd5\u56de\u6536 stale hosts \u6062\u590d\u8fd0\u884c\u6807\u8bb0"; return 1; }
+  fi
+  if ! (set -C; printf '%s\\n' "$$" > "$RUN_OWNER_FILE") 2>/dev/null; then
+    echo "\u65e0\u6cd5\u539f\u5b50\u521b\u5efa hosts \u6062\u590d\u8fd0\u884c\u6807\u8bb0"
+    return 1
+  fi
+  RUN_OWNER_INODE="$(path_inode "$RUN_OWNER_FILE")" || {
+    rm -f -- "$RUN_OWNER_FILE" 2>/dev/null || true
+    return 1
+  }
+  RUN_OWNER_OWNED=yes
+}
+create_consumed_marker () {
+  if ! mkdir -- "$CONSUMED_MARKER" 2>/dev/null; then
+    echo "\u65e0\u6cd5\u521b\u5efa hosts \u56de\u6eda\u6d88\u8d39\u6807\u8bb0"
+    return 1
+  fi
+}`
 
 const HOSTS_MANAGE_COMMAND = `set -u
 TARGET_IP="{{IP\u5730\u5740}}"
@@ -8,7 +104,15 @@ ACTION="{{\u52a8\u4f5c}}"
 APPLY_CHANGE="{{\u786e\u8ba4\u6267\u884c}}"
 ROLLBACK_DIR="/tmp/shellpilot-rollback"
 ROLLBACK_SCRIPT="{{\u56de\u6eda\u811a\u672c}}"
+case "$ROLLBACK_SCRIPT" in
+  *.sh) VERIFY_SCRIPT="\${ROLLBACK_SCRIPT%.sh}.verify.sh" ;;
+  *) echo "\u56de\u6eda\u811a\u672c\u5fc5\u987b\u4ee5 .sh \u7ed3\u5c3e"; exit 1 ;;
+esac
+CONSUMED_MARKER="$ROLLBACK_SCRIPT.consumed"
+RUN_OWNER_FILE="$ROLLBACK_SCRIPT.running"
+RUN_LOCK_FILE="$ROLLBACK_SCRIPT.running.lock"
 HOSTS_FILE="/etc/hosts"
+[ -f "$HOSTS_FILE" ] && [ ! -L "$HOSTS_FILE" ] || { echo "hosts \u6587\u4ef6\u7c7b\u578b\u4e0d\u5b89\u5168"; exit 1; }
 
 OLD_HOSTS_MODE="$(stat -c %a -- "$HOSTS_FILE" 2>/dev/null)" || { echo "\u65e0\u6cd5\u8bfb\u53d6 hosts \u6743\u9650"; exit 1; }
 OLD_HOSTS_UID="$(stat -c %u -- "$HOSTS_FILE" 2>/dev/null)" || { echo "\u65e0\u6cd5\u8bfb\u53d6 hosts \u6240\u6709\u8005"; exit 1; }
@@ -64,7 +168,7 @@ if ! awk -v host="$TARGET_HOST" 'BEGIN {
   }
 }' </dev/null; then echo "\u4e3b\u673a\u540d\u683c\u5f0f\u4e0d\u6b63\u786e"; exit 1; fi
 case "$ACTION" in add|update|delete) ;; *) echo "hosts \u52a8\u4f5c\u65e0\u6548"; exit 1 ;; esac
-for TOOL in awk df stat mktemp chmod chown ln rm cat install cp dirname basename id; do
+for TOOL in awk cmp df stat mktemp chmod chown ln rm cat install cp dirname basename id mkdir sh; do
   command -v "$TOOL" >/dev/null 2>&1 || { echo "\u7f3a\u5c11\u5fc5\u8981\u5de5\u5177: $TOOL"; exit 1; }
 done
 FREE_KB="$(df -Pk /tmp 2>/dev/null | awk 'NR == 2 { print $4 }')"
@@ -80,10 +184,18 @@ case "$ROLLBACK_SCRIPT" in "$ROLLBACK_DIR"/*) ;; *) echo "\u56de\u6eda\u811a\u67
 [ "$(dirname -- "$ROLLBACK_SCRIPT")" = "$ROLLBACK_DIR" ] || { echo "\u56de\u6eda\u811a\u672c\u8def\u5f84\u5fc5\u987b\u76f4\u63a5\u4f4d\u4e8e\u53d7\u63a7\u76ee\u5f55"; exit 1; }
 ROLLBACK_NAME="$(basename -- "$ROLLBACK_SCRIPT")"
 case "$ROLLBACK_NAME" in ""|*..*|*[!A-Za-z0-9._-]*) echo "\u56de\u6eda\u811a\u672c\u6587\u4ef6\u540d\u4e0d\u5b89\u5168"; exit 1 ;; esac
+[ "\${#ROLLBACK_NAME}" -le ${rollbackScriptFilenameMaxLength} ] ||
+  { echo "\u56de\u6eda\u811a\u672c\u6587\u4ef6\u540d\u8fc7\u957f\uff0c\u65e0\u6cd5\u5b89\u5168\u521b\u5efa\u6062\u590d\u8d44\u4ea7"; exit 1; }
 [ ! -L "$ROLLBACK_DIR" ] || { echo "\u56de\u6eda\u76ee\u5f55\u4e0d\u80fd\u662f\u7b26\u53f7\u94fe\u63a5"; exit 1; }
 if [ -L "$ROLLBACK_SCRIPT" ]; then echo "\u56de\u6eda\u811a\u672c\u4e0d\u80fd\u662f\u7b26\u53f7\u94fe\u63a5"; exit 1; fi
 [ ! -e "$ROLLBACK_SCRIPT" ] || { echo "\u56de\u6eda\u811a\u672c\u8def\u5f84\u5df2\u5b58\u5728\uff0c\u62d2\u7edd\u8986\u76d6"; exit 1; }
-[ ! -L "$HOSTS_FILE" ] || { echo "hosts \u4e0d\u80fd\u662f\u7b26\u53f7\u94fe\u63a5"; exit 1; }
+if [ -L "$VERIFY_SCRIPT" ]; then echo "\u56de\u6eda\u9a8c\u8bc1\u811a\u672c\u4e0d\u80fd\u662f\u7b26\u53f7\u94fe\u63a5"; exit 1; fi
+[ ! -e "$VERIFY_SCRIPT" ] || { echo "\u56de\u6eda\u9a8c\u8bc1\u811a\u672c\u8def\u5f84\u5df2\u5b58\u5728\uff0c\u62d2\u7edd\u8986\u76d6"; exit 1; }
+for RECOVERY_MARKER in "$CONSUMED_MARKER" "$RUN_OWNER_FILE" "$RUN_LOCK_FILE"; do
+  if [ -e "$RECOVERY_MARKER" ] || [ -L "$RECOVERY_MARKER" ]; then
+    echo "hosts \u6062\u590d\u6807\u8bb0\u5df2\u5b58\u5728\uff0c\u62d2\u7edd\u4fee\u6539"; exit 1
+  fi
+done
 
 printf '\u8ba1\u5212 hosts \u52a8\u4f5c: %s %s %s\\n' "$ACTION" "$TARGET_IP" "$TARGET_HOST"
 printf '\u8ba1\u5212\u56de\u6eda\u811a\u672c: %s\\n' "$ROLLBACK_SCRIPT"
@@ -91,6 +203,8 @@ if [ "$APPLY_CHANGE" != "yes" ]; then
   echo "\u5f53\u524d\u4e3a\u9884\u6f14\u6a21\u5f0f\uff0c\u672a\u521b\u5efa\u6587\u4ef6\uff0c\u4e5f\u672a\u6267\u884c\u4efb\u4f55\u4fee\u6539\u3002"
   exit 0
 fi
+printf '\u8ba1\u5212\u56de\u6eda\u9a8c\u8bc1\u811a\u672c: %s\\n' "$VERIFY_SCRIPT"
+command -v flock >/dev/null 2>&1 || { echo "\u7f3a\u5c11\u6062\u590d\u5fc5\u8981\u5de5\u5177: flock"; exit 1; }
 
 if [ "$CURRENT_UID" != "0" ]; then
   sudo -v || { echo "sudo \u6388\u6743\u5931\u8d25\uff0c\u672a\u6267\u884c\u4fee\u6539"; exit 1; }
@@ -105,7 +219,115 @@ HOSTS_BACKUP="$OPERATION_ROLLBACK_DIR/target-1"
   [ "$(stat -c %g -- "$HOSTS_BACKUP")" = "$OLD_HOSTS_GID" ] ||
   { echo "hosts \u5907\u4efd\u6743\u9650\u6216\u5c5e\u4e3b\u9a8c\u8bc1\u5931\u8d25"; exit 1; }
 
+TMP_ROLLBACK=""
+TMP_VERIFIER=""
+TMP_ROLLBACK_INODE=""
+TMP_VERIFIER_INODE=""
+ROLLBACK_LINK_ATTEMPTED=no
+VERIFIER_LINK_ATTEMPTED=no
+RECOVERY_ASSETS_READY=no
+${HOSTS_RECOVERY_ASSET_CLEANUP_SHELL}
+cleanup_recovery_assets () {
+  if [ "$RECOVERY_ASSETS_READY" != "yes" ]; then
+    cleanup_owned_recovery_asset "$ROLLBACK_SCRIPT" "$TMP_ROLLBACK_INODE" "$ROLLBACK_LINK_ATTEMPTED"
+    cleanup_owned_recovery_asset "$VERIFY_SCRIPT" "$TMP_VERIFIER_INODE" "$VERIFIER_LINK_ATTEMPTED"
+    cleanup_owned_recovery_asset "$TMP_ROLLBACK" "$TMP_ROLLBACK_INODE" yes
+    cleanup_owned_recovery_asset "$TMP_VERIFIER" "$TMP_VERIFIER_INODE" yes
+  fi
+}
+trap cleanup_recovery_assets EXIT
+trap 'exit 1' HUP INT TERM
+
 TMP_ROLLBACK="$(mktemp "$OPERATION_ROLLBACK_DIR/hosts-rollback.XXXXXX")" || { echo "\u65e0\u6cd5\u521b\u5efa\u56de\u6eda\u811a\u672c\u4e34\u65f6\u6587\u4ef6"; exit 1; }
+TMP_ROLLBACK_INODE="$(stat -c %d:%i -- "$TMP_ROLLBACK" 2>/dev/null)" ||
+  { echo "\u65e0\u6cd5\u8bc6\u522b\u56de\u6eda\u811a\u672c\u4e34\u65f6\u6587\u4ef6"; exit 1; }
+TMP_VERIFIER="$(mktemp "$OPERATION_ROLLBACK_DIR/hosts-verify.XXXXXX")" || { echo "\u65e0\u6cd5\u521b\u5efa\u56de\u6eda\u9a8c\u8bc1\u811a\u672c\u4e34\u65f6\u6587\u4ef6"; exit 1; }
+TMP_VERIFIER_INODE="$(stat -c %d:%i -- "$TMP_VERIFIER" 2>/dev/null)" ||
+  { echo "\u65e0\u6cd5\u8bc6\u522b\u56de\u6eda\u9a8c\u8bc1\u811a\u672c\u4e34\u65f6\u6587\u4ef6"; exit 1; }
+
+if ! {
+  printf '%s\\n' '#!/bin/sh' 'set -efu'
+  printf "HOSTS_FILE='%s'\\n" "$HOSTS_FILE"
+  printf "HOSTS_BACKUP='%s'\\n" "$HOSTS_BACKUP"
+  printf "OLD_HOSTS_MODE='%s'\\n" "$OLD_HOSTS_MODE"
+  printf "OLD_HOSTS_UID='%s'\\n" "$OLD_HOSTS_UID"
+  printf "OLD_HOSTS_GID='%s'\\n" "$OLD_HOSTS_GID"
+  printf "VERIFY_SCRIPT='%s'\\n" "$VERIFY_SCRIPT"
+  printf "CONSUMED_MARKER='%s'\\n" "$CONSUMED_MARKER"
+  printf "RUN_OWNER_FILE='%s'\\n" "$RUN_OWNER_FILE"
+  printf "RUN_LOCK_FILE='%s'\\n" "$RUN_LOCK_FILE"
+  cat <<'SHELLPILOT_HOSTS_ROLLBACK'
+umask 077
+${HOSTS_RECOVERY_RUNTIME_SHELL}
+trap release_running_lock EXIT
+trap 'release_running_lock; exit 1' HUP INT TERM
+for ROLLBACK_TOOL in flock stat id sh rm mkdir; do
+  command -v "$ROLLBACK_TOOL" >/dev/null 2>&1 ||
+    { echo "\u7f3a\u5c11 hosts \u6062\u590d\u5de5\u5177: $ROLLBACK_TOOL"; exit 1; }
+done
+acquire_running_lock || exit 1
+claim_running_owner || exit 1
+[ -f "$0" ] && [ ! -L "$0" ] ||
+  { echo "hosts \u56de\u6eda\u811a\u672c\u7c7b\u578b\u4e0d\u5b89\u5168"; exit 1; }
+[ "$(stat -c %u -- "$0" 2>/dev/null)" = "$RECOVERY_UID" ] &&
+  [ "$(stat -c %a -- "$0" 2>/dev/null)" = "700" ] ||
+  { echo "hosts \u56de\u6eda\u811a\u672c\u6240\u6709\u8005\u6216\u6743\u9650\u4e0d\u5b89\u5168"; exit 1; }
+[ -f "$HOSTS_BACKUP" ] && [ ! -L "$HOSTS_BACKUP" ] ||
+  { echo "hosts \u56de\u6eda\u5907\u4efd\u4e0d\u53ef\u7528"; exit 1; }
+[ "$(stat -c %a -- "$HOSTS_BACKUP" 2>/dev/null)" = "$OLD_HOSTS_MODE" ] &&
+  [ "$(stat -c %u -- "$HOSTS_BACKUP" 2>/dev/null)" = "$OLD_HOSTS_UID" ] &&
+  [ "$(stat -c %g -- "$HOSTS_BACKUP" 2>/dev/null)" = "$OLD_HOSTS_GID" ] ||
+  { echo "hosts \u56de\u6eda\u5907\u4efd\u6240\u6709\u8005\u6216\u6743\u9650\u4e0d\u5b89\u5168"; exit 1; }
+[ -f "$VERIFY_SCRIPT" ] && [ ! -L "$VERIFY_SCRIPT" ] ||
+  { echo "hosts \u56de\u6eda\u9a8c\u8bc1\u811a\u672c\u4e0d\u53ef\u7528"; exit 1; }
+[ "$(stat -c %u -- "$VERIFY_SCRIPT" 2>/dev/null)" = "$RECOVERY_UID" ] &&
+  [ "$(stat -c %a -- "$VERIFY_SCRIPT" 2>/dev/null)" = "700" ] ||
+  { echo "hosts \u56de\u6eda\u9a8c\u8bc1\u811a\u672c\u6240\u6709\u8005\u6216\u6743\u9650\u4e0d\u5b89\u5168"; exit 1; }
+
+if [ -e "$CONSUMED_MARKER" ] || [ -L "$CONSUMED_MARKER" ]; then
+  [ -d "$CONSUMED_MARKER" ] && [ ! -L "$CONSUMED_MARKER" ] ||
+    { echo "hosts \u56de\u6eda\u6d88\u8d39\u6807\u8bb0\u4e0d\u5b89\u5168"; exit 1; }
+  [ "$(stat -c %u -- "$CONSUMED_MARKER" 2>/dev/null)" = "$RECOVERY_UID" ] &&
+    [ "$(stat -c %a -- "$CONSUMED_MARKER" 2>/dev/null)" = "700" ] ||
+    { echo "hosts \u56de\u6eda\u6d88\u8d39\u6807\u8bb0\u6240\u6709\u8005\u6216\u6743\u9650\u4e0d\u5b89\u5168"; exit 1; }
+  if ! sh -- "$VERIFY_SCRIPT"; then
+    echo "hosts \u5df2\u6807\u8bb0\u4e3a\u5df2\u6d88\u8d39\uff0c\u4f46\u5f53\u524d\u72b6\u6001\u5df2\u88ab\u7be1\u6539\uff0c\u62d2\u7edd\u91cd\u590d\u6062\u590d"
+    exit 1
+  fi
+  release_running_lock
+  trap - EXIT HUP INT TERM
+  echo "hosts \u5df2\u6062\u590d\uff0c\u56de\u6eda\u72b6\u6001\u5df2\u8c03\u548c\u3002"
+  exit 0
+fi
+
+[ -f "$HOSTS_FILE" ] && [ ! -L "$HOSTS_FILE" ] ||
+  { echo "hosts \u6587\u4ef6\u7c7b\u578b\u4e0d\u5b89\u5168\uff0c\u62d2\u7edd\u56de\u6eda"; exit 1; }
+for RESTORE_TOOL in cp chmod chown; do
+  command -v "$RESTORE_TOOL" >/dev/null 2>&1 ||
+    { echo "\u7f3a\u5c11 hosts \u6062\u590d\u5de5\u5177: $RESTORE_TOOL"; exit 1; }
+done
+ROLLBACK_UID="$(id -u 2>/dev/null)" ||
+  { echo "\u65e0\u6cd5\u786e\u8ba4\u5f53\u524d\u7528\u6237\uff0c\u672a\u6062\u590d hosts"; exit 1; }
+ROLLBACK_AS=""
+if [ "$ROLLBACK_UID" != "0" ]; then
+  command -v sudo >/dev/null 2>&1 ||
+    { echo "\u5f53\u524d\u4e0d\u662f root \u4e14\u6ca1\u6709 sudo\uff0c\u65e0\u6cd5\u6062\u590d hosts"; exit 1; }
+  sudo -v || { echo "sudo \u6388\u6743\u5931\u8d25\uff0c\u672a\u6062\u590d hosts"; exit 1; }
+  ROLLBACK_AS="sudo"
+fi
+$ROLLBACK_AS cp -- "$HOSTS_BACKUP" "$HOSTS_FILE"
+$ROLLBACK_AS chown "$OLD_HOSTS_UID:$OLD_HOSTS_GID" -- "$HOSTS_FILE"
+$ROLLBACK_AS chmod "$OLD_HOSTS_MODE" -- "$HOSTS_FILE"
+sh -- "$VERIFY_SCRIPT"
+create_consumed_marker || exit 1
+release_running_lock
+trap - EXIT HUP INT TERM
+echo "hosts \u5df2\u6062\u590d\u5230\u4fee\u6539\u524d\u72b6\u6001\u3002"
+SHELLPILOT_HOSTS_ROLLBACK
+} > "$TMP_ROLLBACK"; then
+  echo "\u65e0\u6cd5\u5199\u5165\u56de\u6eda\u811a\u672c"; exit 1
+fi
+
 if ! {
   printf '%s\\n' '#!/bin/sh' 'set -eu'
   printf "HOSTS_FILE='%s'\\n" "$HOSTS_FILE"
@@ -113,36 +335,71 @@ if ! {
   printf "OLD_HOSTS_MODE='%s'\\n" "$OLD_HOSTS_MODE"
   printf "OLD_HOSTS_UID='%s'\\n" "$OLD_HOSTS_UID"
   printf "OLD_HOSTS_GID='%s'\\n" "$OLD_HOSTS_GID"
-  cat <<'SHELLPILOT_HOSTS_ROLLBACK'
-[ -f "$HOSTS_BACKUP" ] && [ ! -L "$HOSTS_BACKUP" ] || { echo "hosts \u56de\u6eda\u5907\u4efd\u4e0d\u53ef\u7528"; exit 1; }
-[ ! -L "$HOSTS_FILE" ] || { echo "hosts \u5df2\u53d8\u6210\u7b26\u53f7\u94fe\u63a5\uff0c\u62d2\u7edd\u56de\u6eda"; exit 1; }
-RUN_AS=""
-if [ "$(id -u)" != "0" ]; then
-  command -v sudo >/dev/null 2>&1 || { echo "\u56de\u6eda\u9700\u8981 root \u6216 sudo"; exit 1; }
-  sudo -v || exit 1
-  RUN_AS="sudo"
-fi
-for TOOL in cp chmod chown stat; do command -v "$TOOL" >/dev/null 2>&1 || { echo "\u7f3a\u5c11\u56de\u6eda\u5de5\u5177: $TOOL"; exit 1; }; done
-$RUN_AS cp -a -- "$HOSTS_BACKUP" "$HOSTS_FILE"
-$RUN_AS chown "$OLD_HOSTS_UID:$OLD_HOSTS_GID" "$HOSTS_FILE"
-$RUN_AS chmod "$OLD_HOSTS_MODE" "$HOSTS_FILE"
-[ "$($RUN_AS stat -c %a -- "$HOSTS_FILE")" = "$OLD_HOSTS_MODE" ] &&
-  [ "$($RUN_AS stat -c %u -- "$HOSTS_FILE")" = "$OLD_HOSTS_UID" ] &&
-  [ "$($RUN_AS stat -c %g -- "$HOSTS_FILE")" = "$OLD_HOSTS_GID" ] ||
+  cat <<'SHELLPILOT_HOSTS_VERIFY'
+[ -f "$HOSTS_BACKUP" ] && [ ! -L "$HOSTS_BACKUP" ] ||
+  { echo "hosts \u56de\u6eda\u5907\u4efd\u4e0d\u53ef\u7528"; exit 1; }
+[ -f "$HOSTS_FILE" ] && [ ! -L "$HOSTS_FILE" ] ||
+  { echo "hosts \u6587\u4ef6\u4e0d\u53ef\u7528"; exit 1; }
+command -v cmp >/dev/null 2>&1 && command -v stat >/dev/null 2>&1 ||
+  { echo "\u7f3a\u5c11 hosts \u9a8c\u8bc1\u5de5\u5177"; exit 1; }
+cmp -s -- "$HOSTS_BACKUP" "$HOSTS_FILE" ||
+  { echo "hosts \u5185\u5bb9\u6062\u590d\u9a8c\u8bc1\u5931\u8d25"; exit 1; }
+[ "$(stat -c %a -- "$HOSTS_FILE" 2>/dev/null)" = "$OLD_HOSTS_MODE" ] &&
+  [ "$(stat -c %u -- "$HOSTS_FILE" 2>/dev/null)" = "$OLD_HOSTS_UID" ] &&
+  [ "$(stat -c %g -- "$HOSTS_FILE" 2>/dev/null)" = "$OLD_HOSTS_GID" ] ||
   { echo "hosts \u6743\u9650\u6216\u5c5e\u4e3b\u6062\u590d\u9a8c\u8bc1\u5931\u8d25"; exit 1; }
-echo "hosts \u5df2\u6062\u590d\u5230\u4fee\u6539\u524d\u72b6\u6001\u3002"
-SHELLPILOT_HOSTS_ROLLBACK
-} > "$TMP_ROLLBACK"; then
-  rm -f -- "$TMP_ROLLBACK"; echo "\u65e0\u6cd5\u5199\u5165\u56de\u6eda\u811a\u672c"; exit 1
+echo "hosts \u56de\u6eda\u72b6\u6001\u9a8c\u8bc1\u6210\u529f\u3002"
+SHELLPILOT_HOSTS_VERIFY
+} > "$TMP_VERIFIER"; then
+  echo "\u65e0\u6cd5\u5199\u5165\u56de\u6eda\u9a8c\u8bc1\u811a\u672c"; exit 1
 fi
-chmod 700 "$TMP_ROLLBACK" || { rm -f -- "$TMP_ROLLBACK"; echo "\u65e0\u6cd5\u8bbe\u7f6e\u56de\u6eda\u811a\u672c\u6743\u9650"; exit 1; }
-if ! ln -- "$TMP_ROLLBACK" "$ROLLBACK_SCRIPT"; then
-  rm -f -- "$TMP_ROLLBACK"; echo "\u65e0\u6cd5\u539f\u5b50\u521b\u5efa\u56de\u6eda\u811a\u672c"; exit 1
+
+chmod 700 "$TMP_ROLLBACK" "$TMP_VERIFIER" || { echo "\u65e0\u6cd5\u8bbe\u7f6e\u56de\u6eda\u8d44\u4ea7\u6743\u9650"; exit 1; }
+[ "$(stat -c %d:%i -- "$TMP_ROLLBACK" 2>/dev/null)" = "$TMP_ROLLBACK_INODE" ] &&
+  [ "$(stat -c %d:%i -- "$TMP_VERIFIER" 2>/dev/null)" = "$TMP_VERIFIER_INODE" ] ||
+  { echo "\u56de\u6eda\u8d44\u4ea7\u4e34\u65f6\u6587\u4ef6\u5df2\u88ab\u66ff\u6362"; exit 1; }
+
+ROLLBACK_LINK_ATTEMPTED=yes
+if ln -- "$TMP_ROLLBACK" "$ROLLBACK_SCRIPT"; then
+  :
+else
+  echo "\u65e0\u6cd5\u539f\u5b50\u521b\u5efa\u56de\u6eda\u811a\u672c"; exit 1
 fi
-rm -f -- "$TMP_ROLLBACK" || { echo "\u65e0\u6cd5\u6e05\u7406\u56de\u6eda\u811a\u672c\u4e34\u65f6\u6587\u4ef6"; exit 1; }
-[ -f "$ROLLBACK_SCRIPT" ] && [ ! -L "$ROLLBACK_SCRIPT" ] || { echo "\u56de\u6eda\u811a\u672c\u521b\u5efa\u9a8c\u8bc1\u5931\u8d25"; exit 1; }
-[ "$(stat -c %a -- "$ROLLBACK_SCRIPT")" = "700" ] || { echo "\u56de\u6eda\u811a\u672c\u6743\u9650\u9a8c\u8bc1\u5931\u8d25"; exit 1; }
+VERIFIER_LINK_ATTEMPTED=yes
+if ln -- "$TMP_VERIFIER" "$VERIFY_SCRIPT"; then
+  :
+else
+  echo "\u65e0\u6cd5\u539f\u5b50\u521b\u5efa\u56de\u6eda\u9a8c\u8bc1\u811a\u672c"; exit 1
+fi
+
+cleanup_owned_recovery_asset "$TMP_ROLLBACK" "$TMP_ROLLBACK_INODE" yes
+cleanup_owned_recovery_asset "$TMP_VERIFIER" "$TMP_VERIFIER_INODE" yes
+if [ -e "$TMP_ROLLBACK" ] || [ -L "$TMP_ROLLBACK" ] ||
+  [ -e "$TMP_VERIFIER" ] || [ -L "$TMP_VERIFIER" ]; then
+  echo "\u65e0\u6cd5\u6e05\u7406\u56de\u6eda\u8d44\u4ea7\u4e34\u65f6\u6587\u4ef6"; exit 1
+fi
+[ -f "$ROLLBACK_SCRIPT" ] && [ ! -L "$ROLLBACK_SCRIPT" ] &&
+  [ -f "$VERIFY_SCRIPT" ] && [ ! -L "$VERIFY_SCRIPT" ] ||
+  { echo "\u56de\u6eda\u8d44\u4ea7\u521b\u5efa\u9a8c\u8bc1\u5931\u8d25"; exit 1; }
+[ "$(stat -c %u -- "$ROLLBACK_SCRIPT")" = "$CURRENT_UID" ] &&
+  [ "$(stat -c %u -- "$VERIFY_SCRIPT")" = "$CURRENT_UID" ] &&
+  [ "$(stat -c %a -- "$ROLLBACK_SCRIPT")" = "700" ] &&
+  [ "$(stat -c %a -- "$VERIFY_SCRIPT")" = "700" ] ||
+  { echo "\u56de\u6eda\u8d44\u4ea7\u6240\u6709\u8005\u6216\u6743\u9650\u9a8c\u8bc1\u5931\u8d25"; exit 1; }
+[ "$(stat -c %d:%i -- "$ROLLBACK_SCRIPT")" = "$TMP_ROLLBACK_INODE" ] &&
+  [ "$(stat -c %d:%i -- "$VERIFY_SCRIPT")" = "$TMP_VERIFIER_INODE" ] ||
+  { echo "\u56de\u6eda\u8d44\u4ea7\u5728\u53d1\u5e03\u671f\u95f4\u88ab\u66ff\u6362"; exit 1; }
+RECOVERY_ASSETS_READY=yes
+trap - EXIT HUP INT TERM
+
+for RECOVERY_MARKER in "$CONSUMED_MARKER" "$RUN_OWNER_FILE" "$RUN_LOCK_FILE"; do
+  if [ -e "$RECOVERY_MARKER" ] || [ -L "$RECOVERY_MARKER" ]; then
+    echo "hosts \u6062\u590d\u6807\u8bb0\u5728\u4fee\u6539\u524d\u51fa\u73b0\uff0c\u62d2\u7edd\u4fee\u6539"; exit 1
+  fi
+done
+
 printf '\u56de\u6eda\u811a\u672c: %s\\n' "$ROLLBACK_SCRIPT"
+printf '\u56de\u6eda\u9a8c\u8bc1\u811a\u672c: %s\\n' "$VERIFY_SCRIPT"
 
 HOSTS_TMP="$(mktemp "$OPERATION_ROLLBACK_DIR/hosts-new.XXXXXX")" || { echo "\u65e0\u6cd5\u521b\u5efa hosts \u4e34\u65f6\u6587\u4ef6\uff1b\u56de\u6eda: $ROLLBACK_SCRIPT"; exit 1; }
 if awk -v ip="$TARGET_IP" -v host="$TARGET_HOST" -v action="$ACTION" '
