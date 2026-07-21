@@ -438,6 +438,7 @@ function createShellSandbox (t) {
     setupRelease: toPosixPath(path.join(root, 'setup-release')),
     cleanupReady: toPosixPath(path.join(root, 'cleanup-ready')),
     cleanupRelease: toPosixPath(path.join(root, 'cleanup-release')),
+    installRollbackStatus: toPosixPath(path.join(root, 'install-rollback-status')),
     rollbackDirectory: toPosixPath(path.join(root, 'rollback')),
     commandDirectory: toPosixPath(path.join(root, 'bin'))
   }
@@ -1136,11 +1137,13 @@ function buildConfirmedShellPrelude (sandbox, options = {}) {
     'FAIL_RECOVERY=' + shellLiteral(options.failRecovery ? 'yes' : 'no'),
     'FAIL_RECOVERY_STEP=' + shellLiteral(options.failRecoveryStep || ''),
     'PAUSE_RECOVERY=' + shellLiteral(options.pauseRecovery ? 'yes' : 'no'),
+    'ROLLBACK_DURING_HOSTS_INSTALL=' + shellLiteral(options.rollbackDuringHostsInstall ? 'yes' : 'no'),
     'PAUSE_SETUP=' + shellLiteral(options.pauseSetup ? 'yes' : 'no'),
     'PAUSE_CLEANUP_STAT=' + shellLiteral(options.pauseCleanupStat ? 'yes' : 'no'),
     'RECOVERY_LOG=' + shellLiteral(sandbox.recoveryLog),
     'RECOVERY_READY=' + shellLiteral(sandbox.recoveryReady),
     'RECOVERY_RELEASE=' + shellLiteral(sandbox.recoveryRelease),
+    'INSTALL_ROLLBACK_STATUS=' + shellLiteral(sandbox.installRollbackStatus),
     'FLOCK_STATE=' + shellLiteral(sandbox.flockState),
     'ROLLBACK_SCRIPT_FIXTURE=' + shellLiteral(sandbox.rollbackScript),
     'VERIFIER_SCRIPT_FIXTURE=' + shellLiteral(sandbox.verifierScript),
@@ -1160,6 +1163,7 @@ function buildConfirmedShellPrelude (sandbox, options = {}) {
     'export ROLLBACK_ROOT',
     'export FAIL_RECOVERY FAIL_RECOVERY_STEP PAUSE_RECOVERY RECOVERY_LOG',
     'export RECOVERY_READY RECOVERY_RELEASE FLOCK_STATE FAIL_CONSUMED',
+    'export ROLLBACK_DURING_HOSTS_INSTALL INSTALL_ROLLBACK_STATUS',
     'export CONSUMED_MARKER_FIXTURE SUDO_LOG',
     'COMMENT_ONLY_HOSTS_AFTER_INSTALL=' + shellLiteral(options.commentOnlyHostsAfterInstall ? 'yes' : 'no'),
     'CASE_FOLD_HOSTS_AFTER_INSTALL=' + shellLiteral(options.caseFoldHostsAfterInstall ? 'yes' : 'no'),
@@ -1256,6 +1260,11 @@ function buildConfirmedShellPrelude (sandbox, options = {}) {
     '    esac',
     '  done',
     '  [ "$#" -eq 2 ] || return 2',
+    '  if [ "$ROLLBACK_DURING_HOSTS_INSTALL" = "yes" ] &&',
+    '    [ "$2" = "$HOSTS_FIXTURE" ]; then',
+    '    sh -- "$ROLLBACK_SCRIPT_FIXTURE"',
+    '    printf "%s\\n" "$?" > "$INSTALL_ROLLBACK_STATUS"',
+    '  fi',
     '  command cp -- "$1" "$2" || return 1',
     '  if [ "$2" = "$HOSTS_FIXTURE" ]; then',
     '    printf "hosts:%s\\n" "$2" >> "$MUTATION_LOG"',
@@ -2169,6 +2178,93 @@ test('hosts verifier publication failure removes the recovery pair before mutati
   assert.equal(fs.existsSync(sandbox.rollbackScript), false)
   assert.equal(fs.existsSync(sandbox.verifierScript), false)
   assert.deepEqual(listOneShotRecoveryAssets(sandbox, 'hosts'), [])
+})
+
+test('hosts mutation holds rollback flock through install and final verification', async t => {
+  const runtime = await loadConfirmedTask6Runtime()
+  const testCase = confirmedCommandCases.find(testCase => testCase.state === 'hosts')
+  const sandbox = createShellSandbox(t)
+  const mutation = runPosixShell([
+    buildConfirmedShellPrelude(sandbox, { rollbackDuringHostsInstall: true }),
+    renderConfirmedTask6Command(runtime, testCase, sandbox)
+  ].join('\n'), undefined)
+
+  assert.equal(fs.existsSync(sandbox.installRollbackStatus), true)
+  const concurrentStatus = Number(
+    fs.readFileSync(sandbox.installRollbackStatus, 'utf8').trim()
+  )
+  const mutationApplied = fs.readFileSync(sandbox.hosts, 'utf8')
+    .includes('192.0.2.20 new-host.example.com')
+  const rollback = runPosixShell([
+    buildConfirmedShellPrelude(sandbox),
+    'sh -- ' + shellLiteral(sandbox.rollbackScript)
+  ].join('\n'), undefined)
+  const restored = fs.readFileSync(sandbox.hosts, 'utf8') === originalHostsFixture
+
+  assert.deepEqual({
+    concurrentStatus,
+    mutationStatus: mutation.status,
+    mutationApplied,
+    rollbackStatus: rollback.status,
+    restored
+  }, {
+    concurrentStatus: 1,
+    mutationStatus: 0,
+    mutationApplied: true,
+    rollbackStatus: 0,
+    restored: true
+  }, [mutation.stderr || mutation.stdout, rollback.stderr || rollback.stdout]
+    .filter(Boolean).join('\n'))
+  assert.match(
+    mutation.stdout + mutation.stderr,
+    /\u53e6\u4e00\u4e2a hosts \u6062\u590d\u64cd\u4f5c\u4ecd\u5728\u8fd0\u884c/
+  )
+  assert.equal(fs.existsSync(sandbox.consumedMarker), true)
+})
+
+test('hosts rollback does not consume a failed restore and reconciles retries idempotently', async t => {
+  const runtime = await loadConfirmedTask6Runtime()
+  const testCase = confirmedCommandCases.find(testCase => testCase.state === 'hosts')
+  const sandbox = createShellSandbox(t)
+  runPosixShell([
+    buildConfirmedShellPrelude(sandbox),
+    renderConfirmedTask6Command(runtime, testCase, sandbox)
+  ].join('\n'))
+  const rollback = 'sh -- ' + shellLiteral(sandbox.rollbackScript)
+  fs.writeFileSync(sandbox.recoveryLog, '')
+
+  const failed = runPosixShell([
+    buildConfirmedShellPrelude(sandbox, { failRecoveryStep: 'cp' }),
+    rollback
+  ].join('\n'), undefined)
+  assert.notEqual(failed.status, 0)
+  assert.equal(fs.existsSync(sandbox.consumedMarker), false)
+  assertConfirmedTask6Mutation(sandbox, testCase)
+
+  const retried = runPosixShell([
+    buildConfirmedShellPrelude(sandbox),
+    rollback
+  ].join('\n'), undefined)
+  assert.equal(retried.status, 0, retried.stderr || retried.stdout)
+  assertOriginalTask6State(sandbox)
+  assert.equal(fs.existsSync(sandbox.consumedMarker), true)
+  const recoveryCallsAfterRetry = fs.readFileSync(sandbox.recoveryLog, 'utf8')
+  assert.equal(
+    recoveryCallsAfterRetry.split('\n')
+      .filter(line => line.startsWith('cp\t')).length,
+    2
+  )
+
+  const reconciled = runPosixShell([
+    buildConfirmedShellPrelude(sandbox),
+    rollback
+  ].join('\n'), undefined)
+  assert.equal(reconciled.status, 0, reconciled.stderr || reconciled.stdout)
+  assertOriginalTask6State(sandbox)
+  assert.equal(
+    fs.readFileSync(sandbox.recoveryLog, 'utf8'),
+    recoveryCallsAfterRetry
+  )
 })
 
 test('timezone rollback remains retryable after restore failure', async t => {

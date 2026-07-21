@@ -47,7 +47,7 @@ release_running_lock () {
 acquire_running_lock () {
   [ ! -L "$RUN_LOCK_FILE" ] || { echo "hosts \u6062\u590d\u8fd0\u884c\u9501\u4e0d\u80fd\u662f\u7b26\u53f7\u94fe\u63a5"; return 1; }
   exec 9>> "$RUN_LOCK_FILE" || { echo "\u65e0\u6cd5\u6253\u5f00 hosts \u6062\u590d\u8fd0\u884c\u9501"; return 1; }
-  flock -n 9 || { echo "\u53e6\u4e00\u4e2a hosts \u6062\u590d\u64cd\u4f5c\u4ecd\u5728\u8fd0\u884c"; return 1; }
+  flock -n 9 || { printf '\\345\\217\\246\\344\\270\\200\\344\\270\\252 hosts \\346\\201\\242\\345\\244\\215\\346\\223\\215\\344\\275\\234\\344\\273\\215\\345\\234\\250\\350\\277\\220\\350\\241\\214\\n'; return 1; }
   RUN_LOCK_HELD=yes
   RUN_LOCK_PATH_INODE="$(path_inode "$RUN_LOCK_FILE")" || { echo "\u65e0\u6cd5\u8bc6\u522b hosts \u6062\u590d\u8fd0\u884c\u9501"; return 1; }
   RUN_LOCK_FD_INODE="$RUN_LOCK_PATH_INODE"
@@ -213,6 +213,10 @@ umask 077
 case "$OPERATION_ROLLBACK_DIR" in "$ROLLBACK_DIR"/operation.*) ;; *) echo "\u64cd\u4f5c\u56de\u6eda\u76ee\u5f55\u4e0d\u53d7\u63a7"; exit 1 ;; esac
 [ -d "$OPERATION_ROLLBACK_DIR" ] && [ ! -L "$OPERATION_ROLLBACK_DIR" ] || { echo "\u64cd\u4f5c\u56de\u6eda\u76ee\u5f55\u4e0d\u5b89\u5168"; exit 1; }
 HOSTS_BACKUP="$OPERATION_ROLLBACK_DIR/target-1"
+${HOSTS_RECOVERY_RUNTIME_SHELL}
+trap release_running_lock EXIT
+trap 'exit 1' HUP INT TERM
+acquire_running_lock || exit 1
 [ -f "$HOSTS_BACKUP" ] && [ ! -L "$HOSTS_BACKUP" ] || { echo "hosts \u5907\u4efd\u521b\u5efa\u5931\u8d25\u6216\u4e0d\u53ef\u7528"; exit 1; }
 [ "$(stat -c %a -- "$HOSTS_BACKUP")" = "$OLD_HOSTS_MODE" ] &&
   [ "$(stat -c %u -- "$HOSTS_BACKUP")" = "$OLD_HOSTS_UID" ] &&
@@ -235,7 +239,11 @@ cleanup_recovery_assets () {
     cleanup_owned_recovery_asset "$TMP_VERIFIER" "$TMP_VERIFIER_INODE" yes
   fi
 }
-trap cleanup_recovery_assets EXIT
+cleanup_hosts_setup () {
+  cleanup_recovery_assets
+  release_running_lock
+}
+trap cleanup_hosts_setup EXIT
 trap 'exit 1' HUP INT TERM
 
 TMP_ROLLBACK="$(mktemp "$OPERATION_ROLLBACK_DIR/hosts-rollback.XXXXXX")" || { echo "\u65e0\u6cd5\u521b\u5efa\u56de\u6eda\u811a\u672c\u4e34\u65f6\u6587\u4ef6"; exit 1; }
@@ -390,13 +398,15 @@ fi
   [ "$(stat -c %d:%i -- "$VERIFY_SCRIPT")" = "$TMP_VERIFIER_INODE" ] ||
   { echo "\u56de\u6eda\u8d44\u4ea7\u5728\u53d1\u5e03\u671f\u95f4\u88ab\u66ff\u6362"; exit 1; }
 RECOVERY_ASSETS_READY=yes
-trap - EXIT HUP INT TERM
 
-for RECOVERY_MARKER in "$CONSUMED_MARKER" "$RUN_OWNER_FILE" "$RUN_LOCK_FILE"; do
+for RECOVERY_MARKER in "$CONSUMED_MARKER" "$RUN_OWNER_FILE"; do
   if [ -e "$RECOVERY_MARKER" ] || [ -L "$RECOVERY_MARKER" ]; then
     echo "hosts \u6062\u590d\u6807\u8bb0\u5728\u4fee\u6539\u524d\u51fa\u73b0\uff0c\u62d2\u7edd\u4fee\u6539"; exit 1
   fi
 done
+[ -f "$RUN_LOCK_FILE" ] && [ ! -L "$RUN_LOCK_FILE" ] &&
+  [ "$(stat -c %d:%i -- "$RUN_LOCK_FILE" 2>/dev/null)" = "$RUN_LOCK_INODE" ] ||
+  { echo "hosts \u4fee\u6539\u8fd0\u884c\u9501\u5728\u6062\u590d\u8d44\u4ea7\u53d1\u5e03\u671f\u95f4\u88ab\u66ff\u6362"; exit 1; }
 
 printf '\u56de\u6eda\u811a\u672c: %s\\n' "$ROLLBACK_SCRIPT"
 printf '\u56de\u6eda\u9a8c\u8bc1\u811a\u672c: %s\\n' "$VERIFY_SCRIPT"
@@ -520,6 +530,8 @@ if ! awk -v ip="$TARGET_IP" -v host="$TARGET_HOST" -v action="$ACTION" '
   echo "hosts \u4fee\u6539\u540e\u7cbe\u786e\u9a8c\u8bc1\u5931\u8d25\uff1b\u8bf7\u56de\u6eda: $ROLLBACK_SCRIPT"
   exit 1
 fi
+release_running_lock
+trap - EXIT HUP INT TERM
 printf 'hosts \u4fee\u6539\u5e76\u9a8c\u8bc1\u6210\u529f\u3002\u56de\u6eda\u811a\u672c: %s\\n' "$ROLLBACK_SCRIPT"`
 
 const NETWORK_CHANGE_COMMAND = [
