@@ -30,7 +30,7 @@ if ! awk -v ip="$TARGET_IP" '
     return 1
   }
   function validIpv6(value, parts, count, partIndex, group, remainder, compressed, nonempty) {
-    if (length(value) < 2 || length(value) > 39 || value !~ /^[0-9A-Fa-f:]+$/ || value !~ /:/) return 0
+    if (length(value) < 2 || length(value) > 45 || value !~ /^[0-9A-Fa-f:.]+$/ || value !~ /:/) return 0
     if (value ~ /:::/) return 0
     compressed = index(value, "::") > 0
     remainder = value
@@ -42,8 +42,13 @@ if ! awk -v ip="$TARGET_IP" '
     for (partIndex = 1; partIndex <= count; partIndex++) {
       group = parts[partIndex]
       if (group == "") continue
-      if (length(group) > 4 || group !~ /^[0-9A-Fa-f]+$/) return 0
-      nonempty++
+      if (index(group, ".") > 0) {
+        if (partIndex != count || !validIpv4(group)) return 0
+        nonempty += 2
+      } else {
+        if (length(group) > 4 || group !~ /^[0-9A-Fa-f]+$/) return 0
+        nonempty++
+      }
     }
     return compressed ? nonempty < 8 : nonempty == 8
   }
@@ -94,7 +99,7 @@ umask 077
 case "$OPERATION_ROLLBACK_DIR" in "$ROLLBACK_DIR"/operation.*) ;; *) echo "\u64cd\u4f5c\u56de\u6eda\u76ee\u5f55\u4e0d\u53d7\u63a7"; exit 1 ;; esac
 [ -d "$OPERATION_ROLLBACK_DIR" ] && [ ! -L "$OPERATION_ROLLBACK_DIR" ] || { echo "\u64cd\u4f5c\u56de\u6eda\u76ee\u5f55\u4e0d\u5b89\u5168"; exit 1; }
 HOSTS_BACKUP="$OPERATION_ROLLBACK_DIR/target-1"
-[ -f "$HOSTS_BACKUP" ] && [ ! -L "$HOSTS_BACKUP" ] && [ -s "$HOSTS_BACKUP" ] || { echo "hosts \u5907\u4efd\u521b\u5efa\u5931\u8d25\u6216\u4e0d\u53ef\u7528"; exit 1; }
+[ -f "$HOSTS_BACKUP" ] && [ ! -L "$HOSTS_BACKUP" ] || { echo "hosts \u5907\u4efd\u521b\u5efa\u5931\u8d25\u6216\u4e0d\u53ef\u7528"; exit 1; }
 [ "$(stat -c %a -- "$HOSTS_BACKUP")" = "$OLD_HOSTS_MODE" ] &&
   [ "$(stat -c %u -- "$HOSTS_BACKUP")" = "$OLD_HOSTS_UID" ] &&
   [ "$(stat -c %g -- "$HOSTS_BACKUP")" = "$OLD_HOSTS_GID" ] ||
@@ -161,7 +166,7 @@ if awk -v ip="$TARGET_IP" -v host="$TARGET_HOST" -v action="$ACTION" '
     for (field = 2; field <= NF; field++) {
       if (tolower($field) == tolower(host)) hostFound = 1
     }
-    pairFound = ($1 == ip && hostFound)
+    pairFound = (tolower($1) == tolower(ip) && hostFound)
     if (hostFound) hostMatches++
     if (pairFound) pairMatches++
 
@@ -248,7 +253,7 @@ if ! awk -v ip="$TARGET_IP" -v host="$TARGET_HOST" -v action="$ACTION" '
     hostFound = 0
     for (field = 2; field <= NF; field++) if (tolower($field) == tolower(host)) hostFound = 1
     if (hostFound) hostMatches++
-    if ($1 == ip && hostFound) pairMatches++
+    if (tolower($1) == tolower(ip) && hostFound) pairMatches++
   }
   END {
     if (action == "delete") exit pairMatches != 0
@@ -685,7 +690,7 @@ true`)
       mutatingValues: ['add', 'update', 'delete'],
       backupTargets: ['/etc/hosts'],
       verifyCommands: [
-        'awk -v ip="{{IP\u5730\u5740}}" -v host="{{\u4e3b\u673a\u540d}}" -v action="{{\u52a8\u4f5c}}" \'BEGIN { hostMatches = 0; pairMatches = 0 } /^[[:space:]]*#/ { next } { effective = $0; hashIndex = index(effective, "#"); if (hashIndex > 0) effective = substr(effective, 1, hashIndex - 1); $0 = effective; if (NF < 2) next; hostFound = 0; for (field = 2; field <= NF; field++) if (tolower($field) == tolower(host)) hostFound = 1; if (hostFound) hostMatches++; if ($1 == ip && hostFound) pairMatches++ } END { if (action == "delete") exit pairMatches != 0; exit !(pairMatches == 1 && hostMatches == 1) }\' /etc/hosts'
+        'awk -v ip="{{IP\u5730\u5740}}" -v host="{{\u4e3b\u673a\u540d}}" -v action="{{\u52a8\u4f5c}}" \'BEGIN { hostMatches = 0; pairMatches = 0 } /^[[:space:]]*#/ { next } { effective = $0; hashIndex = index(effective, "#"); if (hashIndex > 0) effective = substr(effective, 1, hashIndex - 1); $0 = effective; if (NF < 2) next; hostFound = 0; for (field = 2; field <= NF; field++) if (tolower($field) == tolower(host)) hostFound = 1; if (hostFound) hostMatches++; if (tolower($1) == tolower(ip) && hostFound) pairMatches++ } END { if (action == "delete") exit pairMatches != 0; exit !(pairMatches == 1 && hostMatches == 1) }\' /etc/hosts'
       ]
     })),
     defineCommand({

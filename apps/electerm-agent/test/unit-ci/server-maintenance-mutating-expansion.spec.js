@@ -534,6 +534,14 @@ test('Task 6 validation rejects unsafe host IP timezone action and rollback valu
   })
   assert.deepEqual(validIpv6.errors, {})
 
+  const validMappedIpv6 = validateAndNormalizeQuickCommandParams(hosts, {
+    ...buildQuickCommandParamValues(hosts, context),
+    IP\u5730\u5740: '::ffff:192.0.2.1',
+    \u4e3b\u673a\u540d: 'mapped.example.com',
+    \u52a8\u4f5c: 'add'
+  })
+  assert.deepEqual(validMappedIpv6.errors, {})
+
   const timezone = byId.get('builtin-server-timezone-change')
   const validUtc = validateAndNormalizeQuickCommandParams(timezone, {
     ...buildQuickCommandParamValues(timezone, context),
@@ -575,7 +583,7 @@ test('Task 6 command workflows read state and preflight before creating rollback
 
   const hosts = commandText(byId.get('builtin-server-hosts-manage'))
   assert.match(hosts, /awk/)
-  assert.match(hosts, /\$1 == ip/)
+  assert.match(hosts, /tolower\(\$1\) == tolower\(ip\)/)
   assert.match(hosts, /tolower\(\$field\) == tolower\(host\)/)
   assert.doesNotMatch(hosts, /\bsed\b/)
 
@@ -1342,6 +1350,63 @@ test('hostname hosts verification accepts an effective hostname with different c
     fs.readFileSync(sandbox.hosts, 'utf8'),
     /^127\.0\.1\.1 NEW-HOST\.EXAMPLE\.COM ALIAS-ONE # KEEP$/m
   )
+})
+
+test('hosts shell accepts mapped IPv6, matches IPv6 case-insensitively, and accepts empty backups', async t => {
+  const runtime = await loadConfirmedTask6Runtime()
+
+  await t.test('IPv4-mapped IPv6 with an empty hosts file', child => {
+    const sandbox = createShellSandbox(child)
+    fs.writeFileSync(sandbox.hosts, '')
+    const command = renderConfirmedTask6Command(runtime, {
+      id: 'builtin-server-hosts-manage',
+      values: {
+        IP\u5730\u5740: '::ffff:192.0.2.1',
+        \u4e3b\u673a\u540d: 'mapped.example.com',
+        \u52a8\u4f5c: 'add'
+      }
+    }, sandbox)
+
+    const result = runPosixShell([
+      buildConfirmedShellPrelude(sandbox, {
+        expectedIp: '::ffff:192.0.2.1',
+        expectedHost: 'mapped.example.com',
+        caseFoldHostsAfterInstall: true
+      }),
+      command
+    ].join('\n'), undefined)
+
+    assert.equal(result.status, 0, result.stderr || result.stdout)
+    assert.equal(fs.readFileSync(sandbox.hosts, 'utf8'), '::FFFF:192.0.2.1 MAPPED.EXAMPLE.COM\n')
+  })
+
+  await t.test('delete matches an IPv6 address with different casing', child => {
+    const sandbox = createShellSandbox(child)
+    const original = '2001:DB8::10 target.example.com alias.example.com # Keep\n'
+    fs.writeFileSync(sandbox.hosts, original)
+    const command = renderConfirmedTask6Command(runtime, {
+      id: 'builtin-server-hosts-manage',
+      values: {
+        IP\u5730\u5740: '2001:db8::10',
+        \u4e3b\u673a\u540d: 'target.example.com',
+        \u52a8\u4f5c: 'delete'
+      }
+    }, sandbox)
+
+    const result = runPosixShell([
+      buildConfirmedShellPrelude(sandbox, {
+        expectedIp: '2001:db8::10',
+        expectedHost: 'target.example.com'
+      }),
+      command
+    ].join('\n'), undefined)
+
+    assert.equal(result.status, 0, result.stderr || result.stdout)
+    assert.equal(
+      fs.readFileSync(sandbox.hosts, 'utf8'),
+      '2001:DB8::10 alias.example.com # Keep\n'
+    )
+  })
 })
 
 test('confirmed Task 6 commands mutate only after rollback artifacts exist and rollback idempotently', async t => {
