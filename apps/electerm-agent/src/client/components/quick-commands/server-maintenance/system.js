@@ -256,7 +256,7 @@ if [ "$APPLY_CHANGE" != "yes" ]; then
   exit 0
 fi
 printf '\u8ba1\u5212\u56de\u6eda\u9a8c\u8bc1\u811a\u672c: %s\\n' "$VERIFY_SCRIPT"
-for RECOVERY_TOOL in flock kill ps sh; do
+for RECOVERY_TOOL in flock kill sh; do
   command -v "$RECOVERY_TOOL" >/dev/null 2>&1 || { echo "\u7f3a\u5c11\u6062\u590d\u5fc5\u8981\u5de5\u5177: $RECOVERY_TOOL"; exit 1; }
 done
 
@@ -312,7 +312,7 @@ umask 077
 ${buildRecoveryRuntimeShell('\u4e3b\u673a\u540d\u6062\u590d')}
 trap release_running_lock EXIT
 trap 'release_running_lock; exit 1' HUP INT TERM
-for ROLLBACK_TOOL in flock stat cat hostnamectl sh rm mkdir kill ps; do
+for ROLLBACK_TOOL in flock stat cat hostnamectl sh rm mkdir kill; do
   command -v "$ROLLBACK_TOOL" >/dev/null 2>&1 ||
     { echo "\u7f3a\u5c11\u4e3b\u673a\u540d\u6062\u590d\u5de5\u5177: $ROLLBACK_TOOL"; exit 1; }
 done
@@ -655,15 +655,33 @@ for ROLLBACK_TOOL in flock stat cat timedatectl sh rm mkdir kill ps id; do
 done
 acquire_running_lock || exit 1
 claim_running_owner || exit 1
-if [ -e "$CONSUMED_MARKER" ] || [ -L "$CONSUMED_MARKER" ]; then
-  echo "\u56de\u6eda\u811a\u672c\u5df2\u88ab\u6d88\u8d39"; exit 1
-fi
 [ -f "$STATE_FILE" ] && [ ! -L "$STATE_FILE" ] ||
   { echo "\u65f6\u533a\u56de\u6eda\u72b6\u6001\u4e0d\u5b58\u5728"; exit 1; }
 [ "$(stat -c %u -- "$STATE_FILE" 2>/dev/null)" = "$RECOVERY_UID" ] &&
   [ "$(stat -c %a -- "$STATE_FILE" 2>/dev/null)" = "600" ] ||
   { echo "\u65f6\u533a\u56de\u6eda\u72b6\u6001\u6240\u6709\u8005\u6216\u6743\u9650\u4e0d\u5b89\u5168"; exit 1; }
-IFS= read -r OLD_TIMEZONE < "$STATE_FILE"
+IFS= read -r OLD_TIMEZONE < "$STATE_FILE" && [ -n "$OLD_TIMEZONE" ] ||
+  { echo "\u65e0\u6cd5\u8bfb\u53d6\u539f\u65f6\u533a\u56de\u6eda\u72b6\u6001"; exit 1; }
+[ -f "$VERIFY_SCRIPT" ] && [ ! -L "$VERIFY_SCRIPT" ] ||
+  { echo "\u65f6\u533a\u56de\u6eda\u9a8c\u8bc1\u811a\u672c\u4e0d\u53ef\u7528"; exit 1; }
+[ "$(stat -c %u -- "$VERIFY_SCRIPT" 2>/dev/null)" = "$RECOVERY_UID" ] &&
+  [ "$(stat -c %a -- "$VERIFY_SCRIPT" 2>/dev/null)" = "700" ] ||
+  { echo "\u65f6\u533a\u56de\u6eda\u9a8c\u8bc1\u811a\u672c\u6240\u6709\u8005\u6216\u6743\u9650\u4e0d\u5b89\u5168"; exit 1; }
+if [ -e "$CONSUMED_MARKER" ] || [ -L "$CONSUMED_MARKER" ]; then
+  [ -d "$CONSUMED_MARKER" ] && [ ! -L "$CONSUMED_MARKER" ] ||
+    { echo "\u65f6\u533a\u56de\u6eda\u6d88\u8d39\u6807\u8bb0\u4e0d\u5b89\u5168"; exit 1; }
+  [ "$(stat -c %u -- "$CONSUMED_MARKER" 2>/dev/null)" = "$RECOVERY_UID" ] &&
+    [ "$(stat -c %a -- "$CONSUMED_MARKER" 2>/dev/null)" = "700" ] ||
+    { echo "\u65f6\u533a\u56de\u6eda\u6d88\u8d39\u6807\u8bb0\u6240\u6709\u8005\u6216\u6743\u9650\u4e0d\u5b89\u5168"; exit 1; }
+  if ! sh -- "$VERIFY_SCRIPT"; then
+    echo "\u65f6\u533a\u5df2\u6807\u8bb0\u4e3a\u5df2\u6d88\u8d39\uff0c\u4f46\u539f\u65f6\u533a\u9a8c\u8bc1\u5931\u8d25\uff0c\u65e0\u6cd5\u8c03\u548c"
+    exit 1
+  fi
+  release_running_lock
+  trap - EXIT HUP INT TERM
+  printf '\u539f\u65f6\u533a\u5df2\u6062\u590d\uff0c\u56de\u6eda\u72b6\u6001\u5df2\u8c03\u548c: %s\\n' "$OLD_TIMEZONE"
+  exit 0
+fi
 ROLLBACK_UID="$(id -u 2>/dev/null)" ||
   { echo "\u65e0\u6cd5\u786e\u8ba4\u5f53\u524d\u7528\u6237\uff0c\u672a\u6062\u590d\u65f6\u533a"; exit 1; }
 ROLLBACK_AS=""
@@ -676,8 +694,6 @@ fi
 if ! $ROLLBACK_AS timedatectl set-timezone "$OLD_TIMEZONE"; then
   echo "\u6062\u590d\u539f\u65f6\u533a\u5931\u8d25: $OLD_TIMEZONE"; exit 1
 fi
-[ -f "$VERIFY_SCRIPT" ] && [ ! -L "$VERIFY_SCRIPT" ] ||
-  { echo "\u65f6\u533a\u56de\u6eda\u9a8c\u8bc1\u811a\u672c\u4e0d\u53ef\u7528"; exit 1; }
 sh -- "$VERIFY_SCRIPT"
 create_consumed_marker || exit 1
 release_running_lock

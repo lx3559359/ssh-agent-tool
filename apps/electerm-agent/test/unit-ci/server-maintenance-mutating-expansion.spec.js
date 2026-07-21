@@ -496,6 +496,7 @@ case "$format" in
     else
       case "$1" in
         "$ROLLBACK_ROOT"/*.running.lock) printf "600\\n" ;;
+        "$ROLLBACK_ROOT"/*.sh.consumed) printf "700\\n" ;;
         "$ROLLBACK_ROOT"/operation.*/timezone.state) printf "600\\n" ;;
         "$ROLLBACK_ROOT"/operation.*/timezone-state.*) printf "600\\n" ;;
         "$ROLLBACK_ROOT"/operation.*/timezone-rollback.*) printf "700\\n" ;;
@@ -624,7 +625,8 @@ function configureRecoveryProcFixture (sandbox, {
   exists = true,
   pid = '4242',
   start = '777',
-  state = 'S'
+  state = 'S',
+  current = false
 } = {}) {
   const root = path.join(sandbox.root.replaceAll('/', path.sep), 'proc-fixture')
   fs.mkdirSync(path.join(root, 'sys', 'kernel', 'random'), { recursive: true })
@@ -655,12 +657,33 @@ function configureRecoveryProcFixture (sandbox, {
     '  kill -0 "$OWNER_PID" 2>/dev/null || return 1',
     '  : # fixture PID is observable'
   )
+  if (current) {
+    const ownerClaim = 'claim_running_owner || exit 1\n'
+    assert.equal(rollback.includes(ownerClaim), true)
+    rollback = rollback.replace(ownerClaim, () => [
+      'mkdir -p -- "$PROC_ROOT/$$"',
+      `printf '%s\\n' "$$ (fixture) S ${Array(18).fill('1').join(' ')} ${start}" > "$PROC_ROOT/$$/stat"`,
+      ownerClaim.trimEnd()
+    ].join('\n') + '\n')
+  }
   fs.writeFileSync(rollbackPath, rollback)
   return {
     pid,
     procIdentity: `proc:fixture-boot:${start}`,
     psIdentity: `ps:fixture-start-${pid}`
   }
+}
+
+function injectRecoveryPauseAfter (sandbox, anchor) {
+  const rollbackPath = sandbox.rollbackScript.replaceAll('/', path.sep)
+  const rollback = fs.readFileSync(rollbackPath, 'utf8')
+  assert.equal(rollback.includes(anchor), true)
+  fs.writeFileSync(rollbackPath, rollback.replace(anchor, anchor + [
+    'if [ "$PAUSE_RECOVERY" = "yes" ]; then',
+    '  : > "$RECOVERY_READY"',
+    '  while [ ! -e "$RECOVERY_RELEASE" ]; do sleep 0.02; done',
+    'fi'
+  ].join('\n') + '\n'))
 }
 
 function snapshotTree (root) {
@@ -1394,7 +1417,8 @@ function runTimezoneOneShotRecovery (sandbox) {
     buildConfirmedShellPrelude(sandbox),
     'sh -- ' + rollback
   ].join('\n'), undefined)
-  assert.notEqual(consumed.status, 0)
+  assert.equal(consumed.status, 0, consumed.stderr || consumed.stdout)
+  assert.match(consumed.stdout + consumed.stderr, /\u5df2.*\u6062.*\u590d.*\u5df2.*\u8c03.*\u548c/)
 
   assert.equal(runOneShotVerifierReadOnly(sandbox).status, 0)
 }
@@ -2248,19 +2272,7 @@ test('timezone rollback signal trap releases its owner and mutex', async t => {
     buildConfirmedShellPrelude(sandbox),
     renderConfirmedTask6Command(runtime, testCase, sandbox)
   ].join('\n'))
-  const rollbackPath = sandbox.rollbackScript.replaceAll('/', path.sep)
-  const ownerClaim = 'claim_running_owner || exit 1\n'
-  const rollbackScript = fs.readFileSync(rollbackPath, 'utf8')
-  assert.equal(rollbackScript.includes(ownerClaim), true)
-  fs.writeFileSync(rollbackPath, rollbackScript.replace(
-    ownerClaim,
-    ownerClaim + [
-      'if [ "$PAUSE_RECOVERY" = "yes" ]; then',
-      '  : > "$RECOVERY_READY"',
-      '  while [ ! -e "$RECOVERY_RELEASE" ]; do sleep 0.02; done',
-      'fi'
-    ].join('\n') + '\n'
-  ))
+  injectRecoveryPauseAfter(sandbox, 'claim_running_owner || exit 1\n')
   const rollback = runPosixShellAsync([
     buildConfirmedShellPrelude(sandbox, { pauseRecovery: true }),
     'sh -- ' + shellLiteral(sandbox.rollbackScript)
@@ -2296,6 +2308,62 @@ test('timezone rollback signal trap releases its owner and mutex', async t => {
   assert.equal(retry.status, 0, retry.stderr || retry.stdout)
   assertOriginalTask6State(sandbox)
   assert.equal(fs.existsSync(sandbox.consumedMarker), true)
+})
+
+test('timezone rollback reconciles a consumed restore after response loss', async t => {
+  const runtime = await loadConfirmedTask6Runtime()
+  const testCase = confirmedCommandCases.find(testCase => testCase.state === 'timezone')
+  const sandbox = createShellSandbox(t)
+  runPosixShell([
+    buildConfirmedShellPrelude(sandbox),
+    renderConfirmedTask6Command(runtime, testCase, sandbox)
+  ].join('\n'))
+  injectRecoveryPauseAfter(sandbox, 'create_consumed_marker || exit 1\n')
+
+  const first = runPosixShellAsync([
+    buildConfirmedShellPrelude(sandbox, { pauseRecovery: true }),
+    'sh -- ' + shellLiteral(sandbox.rollbackScript)
+  ].join('\n'))
+  t.after(() => {
+    if (fs.existsSync(sandbox.root) &&
+      !fs.existsSync(sandbox.recoveryRelease)) {
+      fs.writeFileSync(sandbox.recoveryRelease, '')
+    }
+    first.child.kill('SIGTERM')
+  })
+
+  await waitForPath(sandbox.recoveryReady, 15000)
+  assert.equal(fs.existsSync(sandbox.consumedMarker), true)
+  const rollbackPid = fs.readFileSync(sandbox.runningMarker, 'utf8')
+    .split('\n')[0]
+  runPosixShell('kill -TERM ' + rollbackPid)
+  fs.writeFileSync(sandbox.recoveryRelease, '')
+  const interrupted = await first.completion
+  assert.notEqual(interrupted.status, 0)
+  assertOriginalTask6State(sandbox)
+  assert.equal(fs.existsSync(sandbox.runningMarker), false)
+  assert.equal(fs.existsSync(sandbox.flockState), false)
+
+  const mutations = fs.readFileSync(sandbox.mutationLog, 'utf8')
+  assert.equal(mutations.split('\n').filter(line => line === 'timezone:UTC').length, 1)
+  for (const attempt of ['second retry', 'third retry']) {
+    const reconciled = runPosixShell([
+      buildConfirmedShellPrelude(sandbox),
+      'sh -- ' + shellLiteral(sandbox.rollbackScript)
+    ].join('\n'), undefined)
+    assert.equal(reconciled.status, 0, attempt + ': ' + (reconciled.stderr || reconciled.stdout))
+    assert.match(reconciled.stdout + reconciled.stderr, /\u5df2.*\u6062.*\u590d.*\u5df2.*\u8c03.*\u548c/)
+    assert.equal(fs.readFileSync(sandbox.mutationLog, 'utf8'), mutations)
+  }
+
+  fs.writeFileSync(sandbox.timezone, testCase.values['\u65b0\u65f6\u533a'] + '\n')
+  const unknown = runPosixShell([
+    buildConfirmedShellPrelude(sandbox),
+    'sh -- ' + shellLiteral(sandbox.rollbackScript)
+  ].join('\n'), undefined)
+  assert.notEqual(unknown.status, 0)
+  assert.match(unknown.stdout + unknown.stderr, /\u9a8c.*\u8bc1.*\u5931.*\u8d25|\u65e0.*\u6cd5.*\u8c03.*\u548c/)
+  assert.equal(fs.readFileSync(sandbox.mutationLog, 'utf8'), mutations)
 })
 
 test('timezone rollback releases its mutex when consumed publication fails', async t => {
@@ -2480,6 +2548,59 @@ test('hostname rollback reclaims a stale running owner and lock', async t => {
   assert.equal(fs.existsSync(sandbox.consumedMarker), true)
   assert.equal(fs.existsSync(sandbox.runningMarker), false)
   assert.equal(fs.existsSync(sandbox.runningLock), false)
+})
+
+test('hostname rollback uses proc identity before optional ps fallback', async t => {
+  const runtime = await loadConfirmedTask6Runtime()
+  const testCase = confirmedCommandCases.find(testCase => testCase.state === 'hostname')
+  const cases = [
+    { name: 'readable proc without ps', current: true, withoutPs: true },
+    { name: 'missing proc with ps fallback', current: false, withoutPs: false }
+  ]
+
+  for (const fixture of cases) {
+    await t.test(fixture.name, child => {
+      const sandbox = createShellSandbox(child)
+      runPosixShell([
+        buildConfirmedShellPrelude(sandbox),
+        renderConfirmedTask6Command(runtime, testCase, sandbox)
+      ].join('\n'))
+      configureRecoveryProcFixture(sandbox, {
+        exists: false,
+        current: fixture.current
+      })
+      const recoveryPrelude = [buildConfirmedShellPrelude(sandbox)]
+      if (fixture.withoutPs) {
+        fs.rmSync(path.join(
+          sandbox.commandDirectory.replaceAll('/', path.sep),
+          'ps'
+        ))
+        for (const [name, target] of [
+          ['awk', '/usr/bin/awk'],
+          ['cat', '/usr/bin/cat'],
+          ['cmp', '/usr/bin/cmp'],
+          ['rm', '/usr/bin/rm'],
+          ['rmdir', '/usr/bin/rmdir'],
+          ['sh', '/bin/sh']
+        ]) {
+          writeSandboxCommand(sandbox, name, `#!/bin/sh\nexec ${target} "$@"\n`)
+        }
+        recoveryPrelude.push(
+          'PATH=' + shellLiteral(toPosixSearchPath(sandbox.commandDirectory)),
+          'export PATH'
+        )
+      }
+      recoveryPrelude.push(
+        (fixture.withoutPs ? '/bin/sh' : 'sh') +
+          ' -- ' + shellLiteral(sandbox.rollbackScript)
+      )
+
+      const result = runPosixShell(recoveryPrelude.join('\n'), undefined)
+      assert.equal(result.status, 0, result.stderr || result.stdout)
+      assertOriginalTask6State(sandbox)
+      assert.equal(fs.existsSync(sandbox.consumedMarker), true)
+    })
+  }
 })
 
 test('hostname rollback rejects a live concurrent recovery', async t => {
