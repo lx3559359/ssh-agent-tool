@@ -2009,8 +2009,7 @@ test('single readonly quick commands can fall back when shell integration is una
   entrypoint.beginSession()
 
   const result = await entrypoint.runSafetyCommand('uptime', {
-    source: 'quick-command',
-    allowUntrackedReadonlyFallback: true
+    source: 'quick-command'
   })
   const completion = await result.waitForCompletion()
 
@@ -2023,6 +2022,26 @@ test('single readonly quick commands can fall back when shell integration is una
   }])
   assert.equal(completion.untracked, true)
   assert.equal(completion.exitCode, null)
+})
+
+test('readonly quick command fallback can still be disabled explicitly', async () => {
+  const { createSafetyCommandEntrypoint } = await import(moduleUrl)
+  const unavailable = createHarness({
+    ensureTrackerReady: async () => {
+      throw new Error('Shell Integration unavailable')
+    }
+  })
+  const entrypoint = createSafetyCommandEntrypoint(unavailable.options)
+  entrypoint.beginSession()
+
+  await assert.rejects(
+    entrypoint.runSafetyCommand('uptime', {
+      source: 'quick-command',
+      allowUntrackedReadonlyFallback: false
+    }),
+    /Shell Integration/
+  )
+  assert.deepEqual(unavailable.submissions, [])
 })
 
 test('background network changes still fail closed from the original command', async () => {

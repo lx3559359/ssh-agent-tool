@@ -208,7 +208,12 @@ export default class AttachAddonCustom {
       }
 
       if (this.checkForShellIntegration(str)) {
+        const marker = String.fromCharCode(27) + ']633;'
+        const integrationData = str.slice(str.indexOf(marker))
         this.onShellIntegrationDetected()
+        if (integrationData) {
+          this.writeToTerminalDirect(integrationData)
+        }
         return
       }
 

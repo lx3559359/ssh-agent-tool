@@ -129,11 +129,36 @@ async function runTrackedQuickCommandChecks (page) {
         source: 'quick-command',
         title: 'Real server quick command regression'
       })
-      const completion = await started.waitForCompletion({ timeoutMs: 15000 })
+      let completion
+      try {
+        completion = await started.waitForCompletion({ timeoutMs: 15000 })
+      } catch (error) {
+        const tail = term.getTerminalBufferText?.().slice(-1200) || ''
+        const tracker = term.cmdAddon
+        throw new Error([
+          error?.message || String(error),
+          `command=${command}`,
+          `shellType=${term.shellType || ''}`,
+          `shellPhase=${tracker?.shellPhase || ''}`,
+          `executedCommand=${tracker?.executedCommand || ''}`,
+          `lastExitCode=${tracker?.lastExitCode ?? ''}`,
+          `oscSequence=${tracker?._oscSequence || 0}`,
+          `inputGeneration=${tracker?._inputGeneration || 0}`,
+          `expectedSubmissions=${tracker?._expectedSubmissions?.length || 0}`,
+          `terminalTail=${tail}`
+        ].join('\n'))
+      }
       return {
         operationId: started.operationId,
         command: started.execution?.submittedCommand,
-        exitCode: completion.exitCode
+        exitCode: completion.exitCode,
+        untracked: completion.untracked === true,
+        trackerError: completion.trackerError || '',
+        shellType: term.shellType || '',
+        shellInjected: term.shellInjected === true,
+        shellPhase: term.cmdAddon?.shellPhase || '',
+        integrationActive: term.cmdAddon?.hasShellIntegration?.() === true,
+        terminalTail: term.getTerminalBufferText?.().slice(-800) || ''
       }
     }
 
@@ -144,9 +169,9 @@ async function runTrackedQuickCommandChecks (page) {
 
   expect(result.first.command).not.toBe('uname -s && id -un')
   expect(result.first.command).toMatch(/^sh -c /)
-  expect(result.first.exitCode).toBe(0)
+  expect(result.first.exitCode, JSON.stringify(result.first, null, 2)).toBe(0)
   expect(result.second.command).toBe('pwd')
-  expect(result.second.exitCode).toBe(0)
+  expect(result.second.exitCode, JSON.stringify(result.second, null, 2)).toBe(0)
 }
 
 async function openSftp (page) {

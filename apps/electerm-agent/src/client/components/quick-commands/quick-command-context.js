@@ -142,6 +142,7 @@ export function clearQuickCommandParamError (paramErrors = {}, name) {
 }
 
 export function buildQuickCommandContext (tab = {}) {
+  tab = tab || {}
   const host = toStringValue(tab.host || tab.hostname || tab.ip)
   const port = toStringValue(tab.port || tab.sshPort, '22')
   const username = toStringValue(tab.username || tab.user)

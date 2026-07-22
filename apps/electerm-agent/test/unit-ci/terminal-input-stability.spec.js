@@ -94,6 +94,27 @@ function createDirectAttachHarness () {
   })
 }
 
+test('shell integration detection forwards authenticated OSC data after hidden injection echo', async () => {
+  const writes = []
+  const term = {
+    write: data => writes.push(data),
+    buffer: { active: { type: 'normal' } }
+  }
+  const AttachAddon = await importAttachAddon()
+  const addon = new AttachAddon(term, {}, false)
+  let suppressionEnded = false
+  addon.startOutputSuppression(1000, () => { suppressionEnded = true })
+
+  addon.writeToTerminal(
+    ` hidden injection echo\r\n\u001b]633;A;${testTrackerNonce}\u0007prompt`
+  )
+
+  assert.equal(suppressionEnded, true)
+  assert.deepEqual(writes, [
+    `\u001b]633;A;${testTrackerNonce}\u0007prompt`
+  ])
+})
+
 function createTrackerTerminal (options = {}) {
   const cols = options.cols || 40
   let oscHandler
@@ -377,6 +398,20 @@ test('shell integration variants emit OSC B after their prompt content', () => {
       functionNames[index]
     )
   }
+})
+
+test('bash shell integration isolates an existing PROMPT_COMMAND from command tracking', async () => {
+  const { getInlineShellIntegration } = await importShellIntegration()
+  const integration = getInlineShellIntegration(
+    'bash',
+    '0123456789abcdef0123456789abcdef'
+  )
+
+  assert.match(integration, /__e_old_prompt_command="\$\{PROMPT_COMMAND:-\}"/)
+  assert.match(integration, /__e_prompting:-0/)
+  assert.match(integration, /builtin eval "\$__e_old_prompt_command"/)
+  assert.match(integration, /PROMPT_COMMAND="__e_cmd"/)
+  assert.doesNotMatch(integration, /PROMPT_COMMAND="__e_cmd\$\{PROMPT_COMMAND:/)
 })
 
 test('terminal safety alone never makes forced-command or TUI output injectable', async () => {

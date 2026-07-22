@@ -139,6 +139,17 @@ test('ordinary default rollback paths remain compatible', async () => {
   }
 })
 
+test('quick command context tolerates an absent current tab during startup', async () => {
+  const { buildQuickCommandContext } = await import(contextUrl)
+
+  const context = buildQuickCommandContext(null)
+
+  assert.equal(context.host, '')
+  assert.equal(context.port, '22')
+  assert.equal(context.username, '')
+  assert.equal(context.packetInterface, 'any')
+})
+
 test('long legal hosts produce bounded distinct rollback asset names', async () => {
   const { validateValue } = await import(validationUrl)
   const {

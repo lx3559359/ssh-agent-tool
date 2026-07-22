@@ -49,8 +49,6 @@ test('v0.4.7 release metadata documents the online update republish', () => {
 })
 
 test('v0.4.8 release metadata documents the UI modernization release', () => {
-  assert.equal(pack.version, '0.4.8')
-
   const notes = read('docs/releases/v0.4.8.md')
   for (const section of ['新增', '修复', '改动']) {
     assert.match(notes, new RegExp(`^## \\[${section}\\]`, 'm'))
@@ -62,6 +60,22 @@ test('v0.4.8 release metadata documents the UI modernization release', () => {
     '终端背景',
     '右键菜单',
     '文字挤压'
+  ]) {
+    assert.match(notes, new RegExp(phrase))
+  }
+})
+
+test('v0.4.9 release metadata documents quick command safety and tracking fixes', () => {
+  const notes = read('docs/releases/v0.4.9.md')
+  for (const section of ['新增', '修复', '改动']) {
+    assert.match(notes, new RegExp(`^## \\[${section}\\]`, 'm'))
+  }
+  for (const phrase of [
+    '快捷命令',
+    'Shell Integration',
+    'PROMPT_COMMAND',
+    'SFTP',
+    'UI 美化'
   ]) {
     assert.match(notes, new RegExp(phrase))
   }

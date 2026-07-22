@@ -500,7 +500,7 @@ export function createSafetyCommandEntrypoint (options = {}) {
   }
 
   function canUseUntrackedReadonlyFallback (run, request, source) {
-    return run.runOptions.allowUntrackedReadonlyFallback === true &&
+    return run.runOptions.allowUntrackedReadonlyFallback !== false &&
       source === 'quick-command' &&
       request.risk === 'readonly' &&
       request.requiresConfirmation !== true &&
