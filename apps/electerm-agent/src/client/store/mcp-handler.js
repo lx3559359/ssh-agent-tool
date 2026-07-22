@@ -913,6 +913,7 @@ export default Store => {
       source: 'agent',
       title: '后台命令',
       executionMode: 'background',
+      backgroundFinalizationRetry: true,
       ...(options.riskDelegation
         ? { riskDelegation: options.riskDelegation }
         : {})

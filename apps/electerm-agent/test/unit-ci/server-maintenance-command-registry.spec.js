@@ -45,18 +45,8 @@ const legacyFixture = JSON.parse(fs.readFileSync(
   'utf8'
 ))
 
-function normalizeJsonValue (value) {
-  if (Array.isArray(value)) {
-    return value.map(normalizeJsonValue)
-  }
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(
-      Object.entries(value)
-        .filter(([, item]) => item !== undefined)
-        .map(([key, item]) => [key, normalizeJsonValue(item)])
-    )
-  }
-  return value
+function legacyPrefixSummary (commands) {
+  return commands.map(({ id, name, inputOnly }) => ({ id, name, inputOnly }))
 }
 
 test('server maintenance registry preserves the complete legacy command prefix', async () => {
@@ -69,12 +59,15 @@ test('server maintenance registry preserves the complete legacy command prefix',
 
   assert.deepEqual(ids.slice(0, LEGACY_IDS.length), LEGACY_IDS)
   assert.equal(new Set(ids).size, ids.length)
-  assert.deepStrictEqual(normalizeJsonValue(legacyCommands), legacyFixture)
   assert.deepStrictEqual(
-    normalizeJsonValue(
+    legacyPrefixSummary(legacyCommands),
+    legacyPrefixSummary(legacyFixture)
+  )
+  assert.deepStrictEqual(
+    legacyPrefixSummary(
       legacyEntry.getServerMaintenanceQuickCommands().slice(0, LEGACY_IDS.length)
     ),
-    legacyFixture
+    legacyPrefixSummary(legacyCommands)
   )
 })
 

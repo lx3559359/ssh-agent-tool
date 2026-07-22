@@ -769,7 +769,7 @@ test('every confirmed mutation submits preflight backup mutation and verificatio
     buildQuickCommandParamValues,
     submitValidatedQuickCommand
   } = await import(contextUrl)
-  const context = buildQuickCommandContext({ host: 'server.example.com', port: '22' })
+  const context = buildQuickCommandContext({ host: 'server.example.com', port: '22', username: 'root' })
   const commands = getServerMaintenanceQuickCommands()
   const mutationCases = [
     {
@@ -812,6 +812,7 @@ test('every confirmed mutation submits preflight backup mutation and verificatio
       id: item.id,
       item,
       context,
+      boundTabId: 'tab-maintenance-test',
       inputOnly: false,
       text: 'stale command text',
       paramValues: {
@@ -998,7 +999,7 @@ test('confirmed mutations guard and associate the user rollback entrypoint', asy
     buildQuickCommandParamValues,
     submitValidatedQuickCommand
   } = await import(contextUrl)
-  const context = buildQuickCommandContext({ host: 'server.example.com', port: '22' })
+  const context = buildQuickCommandContext({ host: 'server.example.com', port: '22', username: 'root' })
   const commands = getServerMaintenanceQuickCommands()
   const cases = [
     ['builtin-server-network-change-ip', { 网卡: 'eth0', '新IP/CIDR': '192.0.2.20/24', 配置方式: 'temporary', 确认执行: 'yes' }, '$RUN_AS ip addr add "$NEW_CIDR" dev "$IFACE"'],
@@ -1014,6 +1015,7 @@ test('confirmed mutations guard and associate the user rollback entrypoint', asy
       id,
       item,
       context,
+      boundTabId: 'tab-maintenance-test',
       inputOnly: false,
       text: 'stale',
       paramValues: {
@@ -1065,13 +1067,14 @@ test('firewall rollback and verification stay bound to the selected backend', as
   } = await import(contextUrl)
   const item = getServerMaintenanceQuickCommands()
     .find(command => command.id === 'builtin-server-firewall-open-port')
-  const context = buildQuickCommandContext({ host: 'server.example.com', port: '22' })
+  const context = buildQuickCommandContext({ host: 'server.example.com', port: '22', username: 'root' })
 
   for (const firewallKind of ['firewalld', 'ufw']) {
     const result = submitValidatedQuickCommand({
       id: item.id,
       item,
       context,
+      boundTabId: 'tab-maintenance-test',
       inputOnly: false,
       paramValues: {
         ...buildQuickCommandParamValues(item, context),
@@ -1103,11 +1106,12 @@ test('auto firewall verification reads the persisted backend without probing aga
   } = await import(contextUrl)
   const item = getServerMaintenanceQuickCommands()
     .find(command => command.id === 'builtin-server-firewall-open-port')
-  const context = buildQuickCommandContext({ host: 'server.example.com', port: '22' })
+  const context = buildQuickCommandContext({ host: 'server.example.com', port: '22', username: 'root' })
   const result = submitValidatedQuickCommand({
     id: item.id,
     item,
     context,
+    boundTabId: 'tab-maintenance-test',
     inputOnly: false,
     paramValues: {
       ...buildQuickCommandParamValues(item, context),
@@ -1141,11 +1145,12 @@ test('nftables verification marker binds action source port and protocol', async
   } = await import(contextUrl)
   const item = getServerMaintenanceQuickCommands()
     .find(command => command.id === 'builtin-server-firewall-open-port')
-  const context = buildQuickCommandContext({ host: 'server.example.com', port: '22' })
+  const context = buildQuickCommandContext({ host: 'server.example.com', port: '22', username: 'root' })
   const result = submitValidatedQuickCommand({
     id: item.id,
     item,
     context,
+    boundTabId: 'tab-maintenance-test',
     inputOnly: false,
     paramValues: {
       ...buildQuickCommandParamValues(item, context),
@@ -1180,11 +1185,12 @@ test('firewalld permanent rollback restores independent runtime and permanent st
   } = await import(contextUrl)
   const item = getServerMaintenanceQuickCommands()
     .find(command => command.id === 'builtin-server-firewall-open-port')
-  const context = buildQuickCommandContext({ host: 'server.example.com', port: '22' })
+  const context = buildQuickCommandContext({ host: 'server.example.com', port: '22', username: 'root' })
   const result = submitValidatedQuickCommand({
     id: item.id,
     item,
     context,
+    boundTabId: 'tab-maintenance-test',
     inputOnly: false,
     paramValues: {
       ...buildQuickCommandParamValues(item, context),
@@ -1216,11 +1222,12 @@ test('firewalld query errors stop mutation and rollback without deleting rules',
   } = await import(contextUrl)
   const item = getServerMaintenanceQuickCommands()
     .find(command => command.id === 'builtin-server-firewall-open-port')
-  const context = buildQuickCommandContext({ host: 'server.example.com', port: '22' })
+  const context = buildQuickCommandContext({ host: 'server.example.com', port: '22', username: 'root' })
   const result = submitValidatedQuickCommand({
     id: item.id,
     item,
     context,
+    boundTabId: 'tab-maintenance-test',
     inputOnly: false,
     paramValues: {
       ...buildQuickCommandParamValues(item, context),
@@ -1312,11 +1319,12 @@ test('UFW rollback stops before reload when either rules file restore fails', as
   } = await import(contextUrl)
   const item = getServerMaintenanceQuickCommands()
     .find(command => command.id === 'builtin-server-firewall-open-port')
-  const context = buildQuickCommandContext({ host: 'server.example.com', port: '22' })
+  const context = buildQuickCommandContext({ host: 'server.example.com', port: '22', username: 'root' })
   const result = submitValidatedQuickCommand({
     id: item.id,
     item,
     context,
+    boundTabId: 'tab-maintenance-test',
     inputOnly: false,
     paramValues: {
       ...buildQuickCommandParamValues(item, context),
@@ -1503,11 +1511,12 @@ test('ufw state and verification checks match the complete rule column', async (
 
   const item = getServerMaintenanceQuickCommands()
     .find(command => command.id === 'builtin-server-firewall-open-port')
-  const context = buildQuickCommandContext({ host: 'server.example.com', port: '22' })
+  const context = buildQuickCommandContext({ host: 'server.example.com', port: '22', username: 'root' })
   const result = submitValidatedQuickCommand({
     id: item.id,
     item,
     context,
+    boundTabId: 'tab-maintenance-test',
     inputOnly: false,
     paramValues: {
       ...buildQuickCommandParamValues(item, context),
@@ -1676,7 +1685,7 @@ test('all mutation rollback scripts use private unpredictable temporary files', 
     buildQuickCommandParamValues,
     submitValidatedQuickCommand
   } = await import(contextUrl)
-  const context = buildQuickCommandContext({ host: 'server.example.com', port: '22' })
+  const context = buildQuickCommandContext({ host: 'server.example.com', port: '22', username: 'root' })
   const commands = getServerMaintenanceQuickCommands()
   const cases = [
     ['builtin-server-network-change-ip', {
@@ -1715,6 +1724,7 @@ test('all mutation rollback scripts use private unpredictable temporary files', 
         id,
         item,
         context,
+        boundTabId: 'tab-maintenance-test',
         inputOnly: false,
         paramValues: {
           ...buildQuickCommandParamValues(item, context),
@@ -1759,11 +1769,12 @@ test('UFW detection verifies a global ALLOW and rollback restores exact rules fi
     '/etc/ufw/user6.rules',
     '/etc/firewalld/zones'
   ])
-  const context = buildQuickCommandContext({ host: 'server.example.com', port: '22' })
+  const context = buildQuickCommandContext({ host: 'server.example.com', port: '22', username: 'root' })
   const result = submitValidatedQuickCommand({
     id: item.id,
     item,
     context,
+    boundTabId: 'tab-maintenance-test',
     inputOnly: false,
     paramValues: {
       ...buildQuickCommandParamValues(item, context),

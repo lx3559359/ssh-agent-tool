@@ -403,6 +403,19 @@ export function createSafetyCommandEntrypoint (options = {}) {
     }
   }
 
+  function abandonExecution (execution, reason) {
+    if (!execution || execution.settled) return false
+    removeExecution(execution)
+    tracker.cancelExpectedSubmission(execution.token)
+    settleExecution(execution, {
+      interrupted: true,
+      error: reason || '后台任务取消结果未知，已停止本地跟踪。',
+      operationId: execution.id
+    })
+    recordRunEvent(execution.qualityRun, 'failed', 'failed')
+    return true
+  }
+
   async function cancelForegroundExecutionById (
     operationId,
     interrupt,
@@ -708,6 +721,11 @@ export function createSafetyCommandEntrypoint (options = {}) {
         return true
       } catch (error) {
         if (execution.cancelled) return false
+        if (execution.keepFinalizationRetry && execution.mode === 'background' && execution.launched) {
+          // The remote payload has already exited; keep its identity for a safe retry.
+          onError(error)
+          return false
+        }
         try {
           await cancelExecution(
             execution,
@@ -931,7 +949,8 @@ export function createSafetyCommandEntrypoint (options = {}) {
         cancelled: false,
         cancelling: false,
         cancelPromise: null,
-        qualityRun: run
+        qualityRun: run,
+        keepFinalizationRetry: runOptions.backgroundFinalizationRetry === true
       }
       activeExecution = execution
       try {
@@ -973,10 +992,16 @@ export function createSafetyCommandEntrypoint (options = {}) {
       }
       if (executionPlan.mode === 'background') {
         result.finalizeBackground = exitCode => finalizeExecution(execution, exitCode)
-        result.cancelBackground = reason => cancelExecution(
-          execution,
-          reason || '后台任务已取消。'
-        )
+        result.cancelBackground = async reason => {
+          const cancellationReason = reason || '后台任务已取消。'
+          try {
+            return await cancelExecution(execution, cancellationReason)
+          } catch (error) {
+            // The registry records an unknown terminal state; release the local command slot.
+            abandonExecution(execution, cancellationReason)
+            throw error
+          }
+        }
       }
       return result
     } finally {

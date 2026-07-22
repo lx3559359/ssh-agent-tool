@@ -177,7 +177,8 @@ async function createProductionBackgroundHarness (failureMode, cancelMode = 'suc
   entrypoint.beginSession()
   const submission = await entrypoint.runSafetyCommand('uptime', {
     source: 'agent',
-    executionMode: 'background'
+    executionMode: 'background',
+    backgroundFinalizationRetry: true
   })
   assert.equal(await entrypoint.handleCommandFinished({
     token: submission.token,
