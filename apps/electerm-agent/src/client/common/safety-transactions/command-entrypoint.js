@@ -346,6 +346,7 @@ export function createSafetyCommandEntrypoint (options = {}) {
   function removeExecution (execution) {
     if (activeExecution === execution) activeExecution = null
     detachedExecutions.delete(execution.id)
+    completingExecutions.delete(execution.id)
   }
 
   function settleExecution (execution, outcome) {
@@ -361,7 +362,12 @@ export function createSafetyCommandEntrypoint (options = {}) {
       completingExecutions.get(operationId)
   }
 
-  async function cancelExecution (execution, reason, interrupt) {
+  async function cancelExecution (
+    execution,
+    reason,
+    interrupt,
+    qualityState = 'cancelled'
+  ) {
     if (!execution || execution.settled || execution.cancelled ||
       execution.cancelling) return false
     execution.cancelling = true
@@ -386,7 +392,7 @@ export function createSafetyCommandEntrypoint (options = {}) {
         error: reason || '命令执行已取消。',
         operationId: execution.id
       })
-      recordRunEvent(execution.qualityRun, 'cancelled', 'cancelled')
+      recordRunEvent(execution.qualityRun, qualityState, qualityState)
       return true
     } catch (error) {
       execution.cancelling = false
@@ -422,8 +428,16 @@ export function createSafetyCommandEntrypoint (options = {}) {
       ...completingExecutions.values()
     ].filter(Boolean))
     let cancelled = false
+    const errors = []
     for (const execution of executions) {
-      cancelled = await cancelExecution(execution, reason) || cancelled
+      try {
+        cancelled = await cancelExecution(execution, reason) || cancelled
+      } catch (error) {
+        errors.push(error)
+      }
+    }
+    if (errors.length) {
+      throw new AggregateError(errors, '一个或多个安全任务取消失败。')
     }
     return cancelled
   }
@@ -665,17 +679,14 @@ export function createSafetyCommandEntrypoint (options = {}) {
           throw new Error('安全事务完成返回失败。')
         }
         if (execution.cancelled || !live || execution.generation !== generation) {
-          if (!execution.cancelPromise) {
-            execution.cancelPromise = Promise.resolve()
-              .then(() => runner.cancel(execution.id))
+          try {
+            await cancelExecution(
+              execution,
+              '终端会话已断开或取消，已忽略迟到的命令完成结果。'
+            )
+          } catch (cancelError) {
+            onError(cancelError)
           }
-          await execution.cancelPromise
-          settleExecution(execution, {
-            cancelled: true,
-            error: '终端会话已断开或取消，已忽略迟到的命令完成结果。',
-            operationId: execution.id
-          })
-          recordRunEvent(execution.qualityRun, 'cancelled', 'cancelled')
           return false
         }
         removeExecution(execution)
@@ -697,23 +708,20 @@ export function createSafetyCommandEntrypoint (options = {}) {
         return true
       } catch (error) {
         if (execution.cancelled) return false
-        removeExecution(execution)
-        tracker.cancelExpectedSubmission(execution.token)
         try {
-          await runner.cancel(execution.id)
+          await cancelExecution(
+            execution,
+            `安全事务完成失败：${safeErrorMessage(error)}`,
+            undefined,
+            'failed'
+          )
         } catch (cancelError) {
           onError(cancelError)
         }
-        await abortHookState(execution.hookState)
-        settleExecution(execution, {
-          operationId: execution.id,
-          error: `安全事务完成失败：${safeErrorMessage(error)}`
-        })
-        recordRunEvent(execution.qualityRun, 'failed', 'failed')
         onError(error)
         return false
       } finally {
-        completingExecutions.delete(execution.id)
+        if (execution.settled) completingExecutions.delete(execution.id)
       }
     })()
     execution.finalizationPromise = finalizationPromise
@@ -879,15 +887,17 @@ export function createSafetyCommandEntrypoint (options = {}) {
           allowUnsafe: request.risk !== 'readonly' && !request.reversible
         })
       } catch (error) {
-        return armRetry(run, request, error, true)
+        const retryResult = await armRetry(run, request, error, true)
+        return retryResult
       }
       if (begun?.state !== operationStates.executing || !begun.executionId) {
-        return armRetry(
+        const retryResult = await armRetry(
           run,
           request,
           new Error(begun?.error || '安全事务未进入执行状态。'),
           begun?.state !== operationStates.failed
         )
+        return retryResult
       }
       if (!isCurrent(run)) {
         await cancelRunOperation(run)
@@ -898,12 +908,13 @@ export function createSafetyCommandEntrypoint (options = {}) {
       const token = tracker.expectExternalSubmission(submittedCommand)
       if (!token || tracker.markExpectedSubmissionReleased(token) !== true) {
         if (token) tracker.cancelExpectedSubmission(token)
-        return armRetry(
+        const retryResult = await armRetry(
           run,
           request,
           new Error('无法绑定当前终端命令。'),
           true
         )
+        return retryResult
       }
       const completion = deferred()
       const execution = {
@@ -942,7 +953,8 @@ export function createSafetyCommandEntrypoint (options = {}) {
           error: '命令提交失败，命令尚未发送。',
           operationId: request.id
         })
-        return armRetry(run, request, error, true)
+        const retryResult = await armRetry(run, request, error, true)
+        return retryResult
       }
       updateState({})
       const result = {

@@ -219,7 +219,7 @@ async function createRealRunnerHarness (overrides = {}) {
   const { createTransactionRunner } = await import(runnerModuleUrl)
   const { buildRecoveryPlan: realRecoveryPlan } = await import(recoveryProvidersUrl)
   const base = createHarness(overrides)
-  const store = createMemoryStore()
+  const store = overrides.store || createMemoryStore()
   const endpoint = base.options.getEndpoint()
   const remoteCalls = []
   let recoveryOperationId
@@ -818,6 +818,74 @@ test('retry link failure plus uncertain replacement cancellation blocks retry', 
   assert.equal(state.confirmation.executeAllowed, false)
   assert.match(state.error, /无法确认|禁止重试|终止状态/)
   assert.equal(entrypoint.confirmPending(), false)
+})
+
+test('retry preparation keeps slot occupied while cancellation is pending', async () => {
+  const { createSafetyCommandEntrypoint } = await import(moduleUrl)
+  const cancelling = deferred()
+  let submitAttempts = 0
+  const harness = createHarness({
+    submitCommand: () => {
+      submitAttempts += 1
+      return submitAttempts !== 1
+    },
+    cancel: id => cancelling.promise.then(() => ({ id, state: 'cancelled' }))
+  })
+  const entrypoint = createSafetyCommandEntrypoint(harness.options)
+  entrypoint.beginSession()
+
+  const first = entrypoint.runSafetyCommand('uptime', { source: 'agent' })
+  await waitFor(() => harness.cancellations.length === 1)
+
+  assert.equal(entrypoint.hasPending(), true)
+  await assert.rejects(
+    entrypoint.runSafetyCommand('pwd', { source: 'agent' }),
+    /等待处理|正在执行|失败命令/
+  )
+  assert.equal(submitAttempts, 1)
+
+  cancelling.resolve()
+  assert.equal((await first).retryable, true)
+  await entrypoint.cancelPending()
+})
+
+test('retry lineage commit-then-error is accepted after readback', async () => {
+  const baseStore = createMemoryStore()
+  let loseAcknowledgement = true
+  const store = {
+    ...baseStore,
+    async patch (id, value) {
+      const result = await baseStore.patch(id, value)
+      if (loseAcknowledgement && Object.hasOwn(value, 'supersededBy')) {
+        loseAcknowledgement = false
+        throw new Error('lineage acknowledgement lost')
+      }
+      return result
+    }
+  }
+  let submitAttempts = 0
+  const submitted = []
+  const harness = await createRealRunnerHarness({
+    store,
+    submitCommand: (command, token) => {
+      submitAttempts += 1
+      if (submitAttempts === 1) return false
+      submitted.push({ command, token })
+      return true
+    }
+  })
+
+  const first = await harness.entrypoint.runSafetyCommand('uptime', {
+    source: 'agent'
+  })
+  assert.equal(first.retryable, true)
+  assert.equal(harness.entrypoint.confirmPending(), true)
+  await waitFor(() => submitted.length === 1)
+
+  assert.equal((await store.get('operation-1')).supersededBy, 'operation-2')
+  assert.equal((await store.get('operation-2')).retryOf, 'operation-1')
+  assert.equal(submitAttempts, 2)
+  await harness.entrypoint.cancelCurrentExecution('测试清理')
 })
 
 test('callers cannot forge persisted retry lineage through metadata', async () => {
@@ -2210,6 +2278,75 @@ test('completion failure is cancelled and reported without an unhandled rejectio
   assert.equal(entrypoint.hasPending(), false)
 })
 
+test('completion and cancellation failure keep slot occupied', async () => {
+  const { createSafetyCommandEntrypoint } = await import(moduleUrl)
+  let cancelAttempts = 0
+  const harness = createHarness({
+    completeExternalExecution: async () => {
+      throw new Error('事务完成写入失败')
+    },
+    cancel: async id => {
+      cancelAttempts += 1
+      if (cancelAttempts === 1) throw new Error('事务取消写入失败')
+      return { id, state: 'cancelled' }
+    }
+  })
+  const entrypoint = createSafetyCommandEntrypoint(harness.options)
+  entrypoint.beginSession()
+  const result = await entrypoint.runSafetyCommand('uptime', { source: 'agent' })
+
+  assert.equal(await entrypoint.handleCommandFinished({
+    token: result.token,
+    command: result.execution.submittedCommand,
+    exitCode: 0
+  }), false)
+  assert.equal(entrypoint.hasPending(), true)
+  await assert.rejects(
+    entrypoint.runSafetyCommand('pwd', { source: 'agent' }),
+    /正在执行|等待处理/
+  )
+
+  assert.equal(await entrypoint.cancelCurrentExecution('测试清理'), true)
+  assert.equal(entrypoint.hasPending(), false)
+})
+
+test('cancelAllExecutions attempts every execution and aggregates failures', async () => {
+  const { createSafetyCommandEntrypoint } = await import(moduleUrl)
+  let failedOnce = false
+  const harness = createHarness({
+    cancel: async id => {
+      if (id === 'operation-2' && !failedOnce) {
+        failedOnce = true
+        throw new Error('active cancellation failed')
+      }
+      return { id, state: 'cancelled' }
+    }
+  })
+  const entrypoint = createSafetyCommandEntrypoint(harness.options)
+  entrypoint.beginSession()
+
+  const background = await entrypoint.runSafetyCommand('uptime', {
+    source: 'agent',
+    executionMode: 'background'
+  })
+  await entrypoint.handleCommandFinished({
+    token: background.token,
+    command: background.execution.submittedCommand,
+    exitCode: 0
+  })
+  await entrypoint.runSafetyCommand('pwd', { source: 'agent' })
+
+  await assert.rejects(
+    entrypoint.cancelCurrentExecution('全部取消'),
+    /取消|cancellation/i
+  )
+  assert.deepEqual(harness.cancellations, ['operation-2', 'operation-1'])
+  assert.equal(entrypoint.hasPending(), true)
+
+  assert.equal(await entrypoint.cancelCurrentExecution('测试清理'), true)
+  assert.equal(entrypoint.hasPending(), false)
+})
+
 test('background finalization failures settle and release the command slot', async () => {
   const { createSafetyCommandEntrypoint } = await import(moduleUrl)
   const failures = [
@@ -2291,7 +2428,7 @@ test('late retry cancellation cannot re-arm confirmation after session invalidat
   await waitFor(() => harness.cancellations.length === 1)
 
   const invalidating = entrypoint.invalidateSession()
-  cancelling.resolve({ state: 'cancelled' })
+  cancelling.resolve({ id: 'operation-1', state: 'cancelled' })
   const [result] = await Promise.all([running, invalidating])
 
   assert.equal(result.sent, false)

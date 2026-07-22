@@ -592,10 +592,34 @@ export function createTransactionRunner (options = {}) {
         throw new Error('替代事务的重试谱系不一致。')
       }
       if (previous.supersededBy === nextId) return replacement
-      await patch(previous.id, {
-        supersededBy: nextId,
-        updatedAt: timestamp()
-      })
+      try {
+        await patch(previous.id, {
+          supersededBy: nextId,
+          updatedAt: timestamp()
+        })
+      } catch (error) {
+        let persistedPrevious
+        let persistedReplacement
+        try {
+          persistedPrevious = await get(retryOf)
+          persistedReplacement = await get(nextId)
+        } catch {
+          throw error
+        }
+        const linked = persistedPrevious?.supersededBy === nextId &&
+          [operationStates.failed, operationStates.cancelled].includes(
+            persistedPrevious.state
+          ) &&
+          persistedPrevious.endpointKey === persistedReplacement?.endpointKey &&
+          persistedPrevious.source === persistedReplacement?.source &&
+          persistedReplacement.retryOf === retryOf &&
+          persistedReplacement.retryRootOperationId === rootId &&
+          persistedReplacement.retryAttempt === retryAttempt
+        if (!linked) throw error
+        emit(persistedPrevious.id, persistedPrevious.state, 'retry-superseded')
+        emit(persistedReplacement.id, persistedReplacement.state, 'retry-linked')
+        return persistedReplacement
+      }
       emit(previous.id, previous.state, 'retry-superseded')
       emit(replacement.id, replacement.state, 'retry-linked')
       return replacement
