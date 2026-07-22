@@ -1,4 +1,5 @@
-import { READ_ONLY, NEED_EDIT, step, defineCommand, inputParam, numberParam } from './shared/definition.js'
+import { READ_ONLY, NEED_EDIT, step, defineCommand, inputParam, numberParam, selectParam } from './shared/definition.js'
+import { withRollback } from './shared/safety-metadata.js'
 
 function buildBoundedStorageDiagnosticCommand (primaryCommand, fallbackCommand) {
   return `(
@@ -156,6 +157,141 @@ if [ ! -d "$TARGET_DIR" ]; then echo "目录不存在: $TARGET_DIR"; exit 1; fi
 echo "目录占用排行:"; du -xh --max-depth="$DEPTH" -- "$TARGET_DIR" 2>/dev/null | sort -h | tail -n "$TOP"
 echo "大文件排行:"; find "$TARGET_DIR" -type f -printf '%s %p\n' 2>/dev/null | sort -n | tail -n "$TOP" | numfmt --field=1 --to=iec 2>/dev/null || true`)
       ]
-    })
+    }),
+    defineCommand(withRollback({
+      id: 'builtin-server-swap-manage',
+      name: '\u7ba1\u7406 Swap',
+      description: '\u67e5\u8be2 Swap \u72b6\u6001\uff0c\u6216\u5b89\u5168\u521b\u5efa\u3001\u542f\u7528\u3001\u505c\u7528\u548c\u79fb\u9664 Swap \u914d\u7f6e\u3002',
+      usage: '\u9ed8\u8ba4\u53ea\u67e5\u8be2\uff1b\u4fee\u6539\u524d\u5907\u4efd /etc/fstab \u5e76\u4fdd\u5b58\u539f Swap \u6fc0\u6d3b\u72b6\u6001\u3002',
+      labels: [NEED_EDIT, '\u5b58\u50a8', '\u9ad8\u98ce\u9669'],
+      params: [
+        selectParam('\u64cd\u4f5c', '\u64cd\u4f5c', 'status', '\u9ed8\u8ba4\u67e5\u8be2\uff1b\u53ea\u6709\u786e\u8ba4\u540e\u624d\u4f1a\u6267\u884c\u4fee\u6539\u3002', [
+          { label: '\u67e5\u8be2\u72b6\u6001', value: 'status' },
+          { label: '\u521b\u5efa\u5e76\u542f\u7528', value: 'create' },
+          { label: '\u542f\u7528\u5df2\u6709 Swap', value: 'enable' },
+          { label: '\u4e34\u65f6\u505c\u7528', value: 'disable' },
+          { label: '\u79fb\u9664\u914d\u7f6e\uff08\u4fdd\u7559\u6587\u4ef6\uff09', value: 'remove' }
+        ], { validationType: 'enum', required: true }),
+        inputParam('Swap\u8def\u5f84', 'Swap \u8def\u5f84', '/swapfile', '\u5fc5\u987b\u662f\u5b89\u5168\u7684\u7edd\u5bf9\u8def\u5f84\u3002', '\u4f8b\u5982 /swapfile', {
+          validationType: 'path',
+          required: true
+        }),
+        numberParam('\u5927\u5c0fMB', '\u5927\u5c0f\uff08MB\uff09', '2048', '\u4ec5\u521b\u5efa\u65f6\u4f7f\u7528\uff0c\u6267\u884c\u524d\u4f1a\u68c0\u67e5\u53ef\u7528\u7a7a\u95f4\u3002', 64, 1048576, {
+          validationType: 'integer',
+          required: true
+        })
+      ],
+      advancedUsage: [
+        '\u79fb\u9664\u914d\u7f6e\u4f1a\u505c\u7528 Swap \u5e76\u4ece /etc/fstab \u5220\u9664\u5bf9\u5e94\u9879\uff0c\u4f46\u4e0d\u5220\u9664\u5927\u578b Swap \u6587\u4ef6\u3002',
+        '\u5feb\u6377\u56de\u6eda\u4f1a\u6062\u590d /etc/fstab\u3001\u539f\u6fc0\u6d3b\u72b6\u6001\uff0c\u5e76\u5220\u9664\u672c\u6b21\u65b0\u521b\u5efa\u7684 Swap \u6587\u4ef6\u3002'
+      ],
+      commands: [
+        step(`SWAP_PATH="{{Swap\u8def\u5f84}}"
+SIZE_MB="{{\u5927\u5c0fMB}}"
+ACTION="{{\u64cd\u4f5c}}"
+APPLY_CHANGE="{{\u786e\u8ba4\u6267\u884c}}"
+ROLLBACK_SCRIPT="{{\u56de\u6eda\u811a\u672c}}"
+RUN_AS=""
+if [ "$(id -u)" != "0" ]; then
+  if command -v sudo >/dev/null 2>&1; then RUN_AS="sudo"; else echo "\u5f53\u524d\u8d26\u53f7\u65e0\u6cd5\u4fee\u6539 Swap"; exit 1; fi
+fi
+is_swap_active () {
+  awk -v target="$SWAP_PATH" 'NR > 1 && $1 == target { found = 1 } END { exit found ? 0 : 1 }' /proc/swaps
+}
+show_swap_status () {
+  echo "===== Swap \u72b6\u6001 ====="
+  swapon --show 2>/dev/null || cat /proc/swaps
+  echo "===== /etc/fstab \u914d\u7f6e ====="
+  awk -v target="$SWAP_PATH" '$1 == target { print }' /etc/fstab 2>/dev/null || true
+}
+if [ "$ACTION" = "status" ]; then show_swap_status; exit 0; fi
+echo "\u9884\u89c8: $ACTION $SWAP_PATH\uff0c\u5927\u5c0f $SIZE_MB MB"
+if [ "$APPLY_CHANGE" != "yes" ]; then echo "\u5f53\u524d\u4e3a\u53ea\u8bfb\u9884\u89c8\uff0c\u672a\u4fee\u6539 Swap"; exit 0; fi
+OLD_ACTIVE=no
+if is_swap_active; then OLD_ACTIVE=yes; fi
+SWAP_FILE_EXISTED=no
+if [ -e "$SWAP_PATH" ]; then SWAP_FILE_EXISTED=yes; fi
+TMP_ROLLBACK="$OPERATION_ROLLBACK_DIR/swap-rollback.sh"
+{
+  echo '#!/bin/sh'
+  echo 'set -e'
+  echo "SWAP_PATH='$SWAP_PATH'"
+  echo "OLD_ACTIVE='$OLD_ACTIVE'"
+  echo "SWAP_FILE_EXISTED='$SWAP_FILE_EXISTED'"
+  echo "OPERATION_DIR='$OPERATION_ROLLBACK_DIR'"
+  cat <<'SHELLPILOT_SWAP_ROLLBACK'
+RUN_AS=""
+if [ "$(id -u)" != "0" ]; then RUN_AS="sudo"; fi
+if awk -v target="$SWAP_PATH" 'NR > 1 && $1 == target { found = 1 } END { exit found ? 0 : 1 }' /proc/swaps; then
+  $RUN_AS swapoff "$SWAP_PATH"
+fi
+if [ -f "$OPERATION_DIR/target-1" ]; then
+  $RUN_AS cp -a -- "$OPERATION_DIR/target-1" /etc/fstab
+fi
+if [ "$SWAP_FILE_EXISTED" = "no" ] && [ -e "$SWAP_PATH" ]; then
+  $RUN_AS rm -f -- "$SWAP_PATH"
+fi
+if [ "$OLD_ACTIVE" = "yes" ] && [ -e "$SWAP_PATH" ]; then
+  $RUN_AS swapon "$SWAP_PATH"
+fi
+SHELLPILOT_SWAP_ROLLBACK
+} > "$TMP_ROLLBACK"
+$RUN_AS install -m 700 -- "$TMP_ROLLBACK" "$ROLLBACK_SCRIPT"
+ensure_fstab_entry () {
+  if ! awk -v target="$SWAP_PATH" '$1 == target { found = 1 } END { exit found ? 0 : 1 }' /etc/fstab 2>/dev/null; then
+    echo "$SWAP_PATH none swap sw 0 0" | $RUN_AS tee -a /etc/fstab >/dev/null
+  fi
+}
+remove_fstab_entry () {
+  if [ -f /etc/fstab ]; then
+    NEXT_FSTAB="$OPERATION_ROLLBACK_DIR/fstab.next"
+    awk -v target="$SWAP_PATH" '$1 != target { print }' /etc/fstab > "$NEXT_FSTAB"
+    $RUN_AS install -m 644 -- "$NEXT_FSTAB" /etc/fstab
+  fi
+}
+case "$ACTION" in
+  create)
+    if [ -e "$SWAP_PATH" ]; then echo "Swap \u8def\u5f84\u5df2\u5b58\u5728"; exit 1; fi
+    PARENT_DIR=$(dirname -- "$SWAP_PATH")
+    if [ ! -d "$PARENT_DIR" ]; then echo "Swap \u7236\u76ee\u5f55\u4e0d\u5b58\u5728"; exit 1; fi
+    AVAILABLE_KB=$(df -Pk "$PARENT_DIR" | awk 'NR == 2 { print $4 }')
+    REQUIRED_KB=$((SIZE_MB * 1024))
+    if [ "$AVAILABLE_KB" -le "$REQUIRED_KB" ]; then echo "\u53ef\u7528\u7a7a\u95f4\u4e0d\u8db3"; exit 1; fi
+    if command -v fallocate >/dev/null 2>&1; then
+      $RUN_AS fallocate -l "$SIZE_MB"M "$SWAP_PATH"
+    else
+      $RUN_AS dd if=/dev/zero of="$SWAP_PATH" bs=1M count="$SIZE_MB" status=none
+    fi
+    $RUN_AS chmod 600 "$SWAP_PATH"
+    $RUN_AS mkswap "$SWAP_PATH"
+    $RUN_AS swapon "$SWAP_PATH"
+    ensure_fstab_entry
+    ;;
+  enable)
+    if [ ! -f "$SWAP_PATH" ]; then echo "Swap \u6587\u4ef6\u4e0d\u5b58\u5728"; exit 1; fi
+    if ! is_swap_active; then $RUN_AS swapon "$SWAP_PATH"; fi
+    ensure_fstab_entry
+    ;;
+  disable)
+    if is_swap_active; then $RUN_AS swapoff "$SWAP_PATH"; fi
+    ;;
+  remove)
+    if is_swap_active; then $RUN_AS swapoff "$SWAP_PATH"; fi
+    remove_fstab_entry
+    ;;
+  *) echo "\u4e0d\u652f\u6301\u7684 Swap \u64cd\u4f5c"; exit 1;;
+esac
+show_swap_status
+echo "\u56de\u6eda\u811a\u672c: $ROLLBACK_SCRIPT"`)
+      ]
+    }, {
+      title: '\u7ba1\u7406 Swap',
+      actionParam: '\u64cd\u4f5c',
+      mutatingValues: ['create', 'enable', 'disable', 'remove'],
+      backupTargets: ['/etc/fstab'],
+      verifyCommands: [
+        'test -s "{{\u56de\u6eda\u811a\u672c}}" && case "{{\u64cd\u4f5c}}" in create|enable) awk -v target="{{Swap\u8def\u5f84}}" \'NR > 1 && $1 == target { found = 1 } END { exit found ? 0 : 1 }\' /proc/swaps && awk -v target="{{Swap\u8def\u5f84}}" \'$1 == target { found = 1 } END { exit found ? 0 : 1 }\' /etc/fstab ;; disable) ! awk -v target="{{Swap\u8def\u5f84}}" \'NR > 1 && $1 == target { found = 1 } END { exit found ? 0 : 1 }\' /proc/swaps ;; remove) ! awk -v target="{{Swap\u8def\u5f84}}" \'NR > 1 && $1 == target { found = 1 } END { exit found ? 0 : 1 }\' /proc/swaps && ! awk -v target="{{Swap\u8def\u5f84}}" \'$1 == target { found = 1 } END { exit found ? 0 : 1 }\' /etc/fstab ;; *) exit 1 ;; esac'
+      ]
+    }))
   ]
 }

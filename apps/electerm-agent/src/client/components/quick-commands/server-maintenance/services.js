@@ -1,4 +1,5 @@
-import { READ_ONLY, NEED_EDIT, step, defineCommand, numberParam, selectParam } from './shared/definition.js'
+import { READ_ONLY, NEED_EDIT, step, defineCommand, inputParam, numberParam, selectParam } from './shared/definition.js'
+import { withRollback } from './shared/safety-metadata.js'
 
 export function getServicesCommands () {
   return [
@@ -234,6 +235,192 @@ systemctl status "$SERVICE" --no-pager || true
 journalctl -u "$SERVICE" -n "$LOG_LINES" --no-pager || true
 echo "回滚脚本: $ROLLBACK_SCRIPT"`)
       ]
-    })
+    }),
+    defineCommand(withRollback({
+      id: 'builtin-server-service-boot-policy',
+      name: '\u670d\u52a1\u5f00\u673a\u7b56\u7565',
+      description: '\u81ea\u52a8\u8bc6\u522b systemd \u670d\u52a1\uff0c\u652f\u6301\u591a\u9009\u67e5\u8be2\u3001\u542f\u7528\u6216\u7981\u7528\u5f00\u673a\u81ea\u542f\u3002',
+      usage: '\u9ed8\u8ba4\u53ea\u67e5\u8be2\u5df2\u9009\u670d\u52a1\u7684\u5f00\u673a\u72b6\u6001\uff1b\u4fee\u6539\u524d\u8bb0\u5f55\u6bcf\u4e2a\u670d\u52a1\u7684\u539f is-enabled \u72b6\u6001\u3002',
+      labels: [NEED_EDIT, '\u670d\u52a1', '\u9ad8\u98ce\u9669'],
+      params: [
+        {
+          name: '\u670d\u52a1\u540d\u79f0',
+          label: '\u670d\u52a1\u540d\u79f0',
+          type: 'service-target',
+          targetType: 'service',
+          sources: ['systemd'],
+          multiple: true,
+          required: true,
+          defaultValue: '',
+          placeholder: '\u81ea\u52a8\u8bc6\u522b\u540e\u591a\u9009 systemd \u670d\u52a1',
+          help: '\u5217\u8868\u6765\u81ea\u5f53\u524d SSH \u670d\u52a1\u5668\uff0c\u53ef\u4e00\u6b21\u9009\u62e9\u591a\u4e2a\u670d\u52a1\u3002'
+        },
+        selectParam('\u64cd\u4f5c', '\u64cd\u4f5c', 'status', '\u9ed8\u8ba4\u67e5\u8be2\uff1b\u542f\u7528\u548c\u7981\u7528\u5747\u9700\u8981\u4e8c\u6b21\u786e\u8ba4\u3002', [
+          { label: '\u67e5\u8be2\u5f00\u673a\u72b6\u6001', value: 'status' },
+          { label: '\u542f\u7528\u5f00\u673a\u81ea\u542f', value: 'enable' },
+          { label: '\u7981\u7528\u5f00\u673a\u81ea\u542f', value: 'disable' }
+        ], { validationType: 'enum', required: true })
+      ],
+      advancedUsage: [
+        '\u6267\u884c\u524d\u4f1a\u5148\u6821\u9a8c\u5168\u90e8\u670d\u52a1\uff0c\u907f\u514d\u591a\u9009\u65f6\u53ea\u4fee\u6539\u4e00\u90e8\u5206\u3002',
+        '\u5feb\u6377\u56de\u6eda\u6309\u670d\u52a1\u9010\u4e2a\u6062\u590d\u539f enabled \u6216 disabled \u72b6\u6001\u3002'
+      ],
+      commands: [
+        step(`SERVICES="{{\u670d\u52a1\u540d\u79f0}}"
+ACTION="{{\u64cd\u4f5c}}"
+APPLY_CHANGE="{{\u786e\u8ba4\u6267\u884c}}"
+ROLLBACK_SCRIPT="{{\u56de\u6eda\u811a\u672c}}"
+RUN_AS=""
+if [ "$(id -u)" != "0" ]; then
+  if command -v sudo >/dev/null 2>&1; then RUN_AS="sudo"; else echo "\u5f53\u524d\u8d26\u53f7\u65e0\u6cd5\u4fee\u6539 systemd \u7b56\u7565"; exit 1; fi
+fi
+if [ -z "$SERVICES" ]; then echo "\u8bf7\u9009\u62e9\u81f3\u5c11\u4e00\u4e2a systemd \u670d\u52a1"; exit 1; fi
+show_boot_policy () {
+  OLD_IFS="$IFS"; IFS=','
+  for SERVICE in $SERVICES; do
+    case "$SERVICE" in *[!a-zA-Z0-9_.@:-]*|"") echo "\u670d\u52a1\u540d\u79f0\u4e0d\u5408\u6cd5: $SERVICE"; continue;; esac
+    printf '%s: active=%s, enabled=%s\\n' "$SERVICE" "$(systemctl is-active "$SERVICE" 2>/dev/null || true)" "$(systemctl is-enabled "$SERVICE" 2>/dev/null || true)"
+  done
+  IFS="$OLD_IFS"
+}
+if [ "$ACTION" = "status" ]; then show_boot_policy; exit 0; fi
+echo "\u9884\u89c8: $ACTION $SERVICES"
+if [ "$APPLY_CHANGE" != "yes" ]; then echo "\u5f53\u524d\u4e3a\u53ea\u8bfb\u9884\u89c8\uff0c\u672a\u4fee\u6539\u670d\u52a1"; exit 0; fi
+STATE_FILE="$OPERATION_ROLLBACK_DIR/service-boot.before"
+: > "$STATE_FILE"
+OLD_IFS="$IFS"; IFS=','
+for SERVICE in $SERVICES; do
+  case "$SERVICE" in *[!a-zA-Z0-9_.@:-]*|"") echo "\u670d\u52a1\u540d\u79f0\u4e0d\u5408\u6cd5: $SERVICE"; exit 1;; esac
+  LOAD_STATE=$(systemctl show -p LoadState --value "$SERVICE" 2>/dev/null || true)
+  if [ -z "$LOAD_STATE" ] || [ "$LOAD_STATE" = "not-found" ]; then echo "\u670d\u52a1\u4e0d\u5b58\u5728: $SERVICE"; exit 1; fi
+  OLD_ENABLED=$(systemctl is-enabled "$SERVICE" 2>/dev/null || true)
+  case "$OLD_ENABLED" in enabled|enabled-runtime|disabled) ;; *) echo "\u4e0d\u652f\u6301\u4fee\u6539\u8be5\u670d\u52a1\u7684\u5f00\u673a\u72b6\u6001: $SERVICE ($OLD_ENABLED)"; exit 1;; esac
+  printf '%s\\t%s\\n' "$SERVICE" "$OLD_ENABLED" >> "$STATE_FILE"
+done
+IFS="$OLD_IFS"
+TMP_ROLLBACK="$OPERATION_ROLLBACK_DIR/service-boot-rollback.sh"
+{
+  echo '#!/bin/sh'
+  echo 'set -e'
+  echo "STATE_FILE='$STATE_FILE'"
+  cat <<'SHELLPILOT_SERVICE_BOOT_ROLLBACK'
+RUN_AS=""
+if [ "$(id -u)" != "0" ]; then RUN_AS="sudo"; fi
+TAB=$(printf '\\t')
+while IFS="$TAB" read -r SERVICE OLD_ENABLED; do
+  [ -n "$SERVICE" ] || continue
+  case "$OLD_ENABLED" in
+    enabled|enabled-runtime) $RUN_AS systemctl enable "$SERVICE" ;;
+    disabled) $RUN_AS systemctl disable "$SERVICE" ;;
+    *) echo "\u65e0\u6cd5\u6062\u590d $SERVICE \u7684\u672a\u77e5\u72b6\u6001: $OLD_ENABLED"; exit 1;;
+  esac
+done < "$STATE_FILE"
+SHELLPILOT_SERVICE_BOOT_ROLLBACK
+} > "$TMP_ROLLBACK"
+$RUN_AS install -m 700 -- "$TMP_ROLLBACK" "$ROLLBACK_SCRIPT"
+IFS=','
+for SERVICE in $SERVICES; do $RUN_AS systemctl "$ACTION" "$SERVICE"; done
+IFS="$OLD_IFS"
+show_boot_policy
+echo "\u56de\u6eda\u811a\u672c: $ROLLBACK_SCRIPT"`)
+      ]
+    }, {
+      title: '\u670d\u52a1\u5f00\u673a\u7b56\u7565',
+      actionParam: '\u64cd\u4f5c',
+      mutatingValues: ['enable', 'disable'],
+      backupTargets: [],
+      verifyCommands: [
+        'test -s "{{\u56de\u6eda\u811a\u672c}}" && { SERVICES="{{\u670d\u52a1\u540d\u79f0}}"; OLD_IFS="$IFS"; IFS=,; for SERVICE in $SERVICES; do case "{{\u64cd\u4f5c}}" in enable) systemctl is-enabled --quiet "$SERVICE" ;; disable) ! systemctl is-enabled --quiet "$SERVICE" ;; *) exit 1 ;; esac || exit 1; done; IFS="$OLD_IFS"; }'
+      ]
+    })),
+    defineCommand(withRollback({
+      id: 'builtin-server-cron-manage',
+      name: '\u7ba1\u7406 Cron \u4efb\u52a1',
+      description: '\u67e5\u770b\u5f53\u524d\u7528\u6237 crontab\uff0c\u6216\u6309 ShellPilot \u6807\u8bc6\u65b0\u589e\u3001\u505c\u7528\u548c\u79fb\u9664\u4efb\u52a1\u3002',
+      usage: '\u9ed8\u8ba4\u53ea\u5217\u51fa\u4efb\u52a1\uff1b\u4fee\u6539\u524d\u4fdd\u5b58\u5b8c\u6574 crontab \u5feb\u7167\uff0c\u5e76\u751f\u6210\u5feb\u6377\u56de\u6eda\u3002',
+      labels: [NEED_EDIT, '\u8ba1\u5212\u4efb\u52a1', '\u9ad8\u98ce\u9669'],
+      params: [
+        selectParam('\u64cd\u4f5c', '\u64cd\u4f5c', 'list', '\u9ed8\u8ba4\u5217\u51fa\uff1b\u65b0\u589e\u3001\u505c\u7528\u548c\u79fb\u9664\u9700\u8981\u786e\u8ba4\u3002', [
+          { label: '\u5217\u51fa\u4efb\u52a1', value: 'list' },
+          { label: '\u65b0\u589e\u4efb\u52a1', value: 'add' },
+          { label: '\u505c\u7528\u5339\u914d\u4efb\u52a1', value: 'disable' },
+          { label: '\u79fb\u9664\u5339\u914d\u4efb\u52a1', value: 'remove' }
+        ], { validationType: 'enum', required: true }),
+        inputParam('\u8ba1\u5212\u8868\u8fbe\u5f0f', '\u8ba1\u5212\u8868\u8fbe\u5f0f', '0 2 * * *', '\u4f7f\u7528\u6807\u51c6 5 \u6bb5 Cron \u8868\u8fbe\u5f0f\u3002', '\u4f8b\u5982 0 2 * * *', {
+          validationType: 'cron',
+          required: true
+        }),
+        inputParam('\u4efb\u52a1\u547d\u4ee4', '\u4efb\u52a1\u547d\u4ee4', '/usr/local/bin/backup.sh', '\u4e3a\u907f\u514d Shell \u6ce8\u5165\uff0c\u4e0d\u5141\u8bb8\u7ba1\u9053\u3001\u91cd\u5b9a\u5411\u548c\u547d\u4ee4\u66ff\u6362\u8bed\u6cd5\u3002', '\u4f8b\u5982 /usr/local/bin/backup.sh', {
+          validationType: 'text',
+          required: true
+        }),
+        inputParam('\u5339\u914d\u6807\u8bc6', '\u5339\u914d\u6807\u8bc6', 'daily-backup', '\u7528\u4e8e\u7cbe\u786e\u627e\u5230 ShellPilot \u521b\u5efa\u7684\u4efb\u52a1\uff0c\u4ec5\u5141\u8bb8\u5b57\u6bcd\u3001\u6570\u5b57\u3001\u70b9\u3001\u4e0b\u5212\u7ebf\u548c\u77ed\u6a2a\u7ebf\u3002', '\u4f8b\u5982 daily-backup', {
+          validationType: 'text',
+          required: true
+        })
+      ],
+      advancedUsage: [
+        '\u65b0\u589e\u4efb\u52a1\u4f1a\u81ea\u52a8\u9644\u52a0 # shellpilot:<\u6807\u8bc6>\uff0c\u505c\u7528\u548c\u79fb\u9664\u53ea\u5f71\u54cd\u8be5\u6807\u8bc6\u7684\u884c\u3002',
+        '\u5feb\u6377\u56de\u6eda\u4f1a\u6062\u590d\u4fee\u6539\u524d\u7684\u5b8c\u6574\u7528\u6237 crontab\u3002'
+      ],
+      commands: [
+        step(`ACTION="{{\u64cd\u4f5c}}"
+SCHEDULE="{{\u8ba1\u5212\u8868\u8fbe\u5f0f}}"
+TASK_COMMAND="{{\u4efb\u52a1\u547d\u4ee4}}"
+MARKER="{{\u5339\u914d\u6807\u8bc6}}"
+APPLY_CHANGE="{{\u786e\u8ba4\u6267\u884c}}"
+ROLLBACK_SCRIPT="{{\u56de\u6eda\u811a\u672c}}"
+if [ "$ACTION" = "list" ]; then crontab -l 2>/dev/null || echo "\u5f53\u524d\u7528\u6237\u6ca1\u6709 crontab"; exit 0; fi
+echo "\u9884\u89c8: $ACTION # shellpilot:$MARKER"
+if [ "$APPLY_CHANGE" != "yes" ]; then echo "\u5f53\u524d\u4e3a\u53ea\u8bfb\u9884\u89c8\uff0c\u672a\u4fee\u6539 crontab"; exit 0; fi
+case "$MARKER" in *[!a-zA-Z0-9_.-]*|"") echo "\u5339\u914d\u6807\u8bc6\u4e0d\u5408\u6cd5"; exit 1;; esac
+SNAPSHOT="$OPERATION_ROLLBACK_DIR/cron.before"
+HAD_CRONTAB=no
+if crontab -l > "$SNAPSHOT" 2>/dev/null; then HAD_CRONTAB=yes; else : > "$SNAPSHOT"; fi
+TMP_ROLLBACK="$OPERATION_ROLLBACK_DIR/cron-rollback.sh"
+{
+  echo '#!/bin/sh'
+  echo 'set -e'
+  echo "HAD_CRONTAB='$HAD_CRONTAB'"
+  echo "SNAPSHOT='$SNAPSHOT'"
+  cat <<'SHELLPILOT_CRON_ROLLBACK'
+if [ "$HAD_CRONTAB" = "yes" ]; then
+  crontab "$SNAPSHOT"
+else
+  crontab -r 2>/dev/null || true
+fi
+SHELLPILOT_CRON_ROLLBACK
+} > "$TMP_ROLLBACK"
+install -m 700 -- "$TMP_ROLLBACK" "$ROLLBACK_SCRIPT"
+CURRENT="$OPERATION_ROLLBACK_DIR/cron.current"
+NEXT="$OPERATION_ROLLBACK_DIR/cron.next"
+crontab -l > "$CURRENT" 2>/dev/null || : > "$CURRENT"
+MARKER_TEXT="# shellpilot:$MARKER"
+case "$ACTION" in
+  add)
+    awk -v marker="$MARKER_TEXT" 'index($0, marker) == 0 { print }' "$CURRENT" > "$NEXT"
+    printf '%s %s # shellpilot:%s\\n' "$SCHEDULE" "$TASK_COMMAND" "$MARKER" >> "$NEXT"
+    ;;
+  disable)
+    awk -v marker="$MARKER_TEXT" 'index($0, marker) > 0 { if (index($0, "# shellpilot-disabled ") == 1) print; else print "# shellpilot-disabled " $0; next } { print }' "$CURRENT" > "$NEXT"
+    ;;
+  remove)
+    awk -v marker="$MARKER_TEXT" 'index($0, marker) == 0 { print }' "$CURRENT" > "$NEXT"
+    ;;
+  *) echo "\u4e0d\u652f\u6301\u7684 Cron \u64cd\u4f5c"; exit 1;;
+esac
+crontab "$NEXT"
+crontab -l 2>/dev/null || true
+echo "\u56de\u6eda\u811a\u672c: $ROLLBACK_SCRIPT"`)
+      ]
+    }, {
+      title: '\u7ba1\u7406 Cron \u4efb\u52a1',
+      actionParam: '\u64cd\u4f5c',
+      mutatingValues: ['add', 'disable', 'remove'],
+      backupTargets: [],
+      verifyCommands: [
+        'test -s "{{\u56de\u6eda\u811a\u672c}}" && case "{{\u64cd\u4f5c}}" in add) crontab -l | grep -F -- "# shellpilot:{{\u5339\u914d\u6807\u8bc6}}" >/dev/null ;; disable) crontab -l | awk -v marker="# shellpilot:{{\u5339\u914d\u6807\u8bc6}}" \'index($0, marker) > 0 && index($0, "# shellpilot-disabled ") == 1 { found = 1 } END { exit found ? 0 : 1 }\' ;; remove) ! crontab -l 2>/dev/null | grep -F -- "# shellpilot:{{\u5339\u914d\u6807\u8bc6}}" >/dev/null ;; *) exit 1 ;; esac'
+      ]
+    }))
   ]
 }

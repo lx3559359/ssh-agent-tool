@@ -1,4 +1,105 @@
 import { READ_ONLY, NEED_EDIT, step, defineCommand, inputParam, selectParam } from './shared/definition.js'
+import { withRollback } from './shared/safety-metadata.js'
+
+const firewallPolicyCommand = `PORT="{{\u7aef\u53e3}}"
+ACTION="{{\u64cd\u4f5c}}"
+SOURCE_CIDR="{{\u6765\u6e90CIDR}}"
+PROTO="{{\u534f\u8bae}}"
+FIREWALL_KIND="{{\u9632\u706b\u5899\u7c7b\u578b}}"
+APPLY_MODE="{{\u751f\u6548\u65b9\u5f0f}}"
+APPLY_CHANGE="{{\u786e\u8ba4\u6267\u884c}}"
+ROLLBACK_SCRIPT="{{\u56de\u6eda\u811a\u672c}}"
+RUN_AS=""
+if [ "$(id -u)" != "0" ]; then
+  if command -v sudo >/dev/null 2>&1; then RUN_AS="sudo"; else echo "\u5f53\u524d\u8d26\u53f7\u65e0\u6cd5\u4fee\u6539\u9632\u706b\u5899"; exit 1; fi
+fi
+echo "\u9884\u89c8: $ACTION $SOURCE_CIDR -> $PORT/$PROTO\uff0c\u7c7b\u578b $FIREWALL_KIND\uff0c\u65b9\u5f0f $APPLY_MODE"
+if [ "$APPLY_CHANGE" != "yes" ]; then echo "\u5f53\u524d\u4e3a\u53ea\u8bfb\u9884\u89c8\uff0c\u672a\u4fee\u6539\u9632\u706b\u5899"; exit 0; fi
+if [ "$FIREWALL_KIND" = "auto" ]; then
+  if command -v firewall-cmd >/dev/null 2>&1; then FIREWALL_KIND=firewalld
+  elif command -v ufw >/dev/null 2>&1; then FIREWALL_KIND=ufw
+  elif command -v iptables >/dev/null 2>&1; then FIREWALL_KIND=iptables
+  elif command -v nft >/dev/null 2>&1; then FIREWALL_KIND=nftables
+  else echo "\u672a\u68c0\u6d4b\u5230\u53ef\u7528\u7684\u9632\u706b\u5899\u5de5\u5177"; exit 1; fi
+fi
+TMP_ROLLBACK="$OPERATION_ROLLBACK_DIR/firewall-rollback.sh"
+case "$FIREWALL_KIND" in
+  firewalld)
+    command -v firewall-cmd >/dev/null 2>&1 || { echo "firewall-cmd \u4e0d\u53ef\u7528"; exit 1; }
+    $RUN_AS firewall-cmd --list-all-zones > "$OPERATION_ROLLBACK_DIR/firewalld.before"
+    RICH_ACTION=accept; [ "$ACTION" = "deny" ] && RICH_ACTION=drop
+    RICH_RULE="rule family=ipv4 source address=$SOURCE_CIDR port port=$PORT protocol=$PROTO $RICH_ACTION"
+    PERMANENT_ARG=""; [ "$APPLY_MODE" = "permanent" ] && PERMANENT_ARG="--permanent"
+    {
+      echo '#!/bin/sh'
+      echo 'set -e'
+      echo 'RUN_AS=""; if [ "$(id -u)" != "0" ]; then RUN_AS="sudo"; fi'
+      echo "$RUN_AS firewall-cmd $PERMANENT_ARG --remove-rich-rule='$RICH_RULE'"
+      if [ "$APPLY_MODE" = "permanent" ]; then echo "$RUN_AS firewall-cmd --reload"; fi
+    } > "$TMP_ROLLBACK"
+    $RUN_AS install -m 700 -- "$TMP_ROLLBACK" "$ROLLBACK_SCRIPT"
+    $RUN_AS firewall-cmd $PERMANENT_ARG --add-rich-rule="$RICH_RULE"
+    if [ "$APPLY_MODE" = "permanent" ]; then $RUN_AS firewall-cmd --reload; fi
+    $RUN_AS firewall-cmd $PERMANENT_ARG --query-rich-rule="$RICH_RULE" >/dev/null
+    ;;
+  ufw)
+    command -v ufw >/dev/null 2>&1 || { echo "ufw \u4e0d\u53ef\u7528"; exit 1; }
+    $RUN_AS ufw status numbered > "$OPERATION_ROLLBACK_DIR/ufw.before"
+    {
+      echo '#!/bin/sh'
+      echo 'set -e'
+      echo 'RUN_AS=""; if [ "$(id -u)" != "0" ]; then RUN_AS="sudo"; fi'
+      echo "$RUN_AS ufw --force delete $ACTION proto $PROTO from $SOURCE_CIDR to any port $PORT"
+    } > "$TMP_ROLLBACK"
+    $RUN_AS install -m 700 -- "$TMP_ROLLBACK" "$ROLLBACK_SCRIPT"
+    $RUN_AS ufw --force "$ACTION" proto "$PROTO" from "$SOURCE_CIDR" to any port "$PORT"
+    EXPECTED_RULE=ALLOW; [ "$ACTION" = "deny" ] && EXPECTED_RULE=DENY
+    $RUN_AS ufw status | grep -F -- "$PORT/$PROTO" | grep -i -- "$EXPECTED_RULE" >/dev/null
+    ;;
+  iptables)
+    command -v iptables >/dev/null 2>&1 || { echo "iptables \u4e0d\u53ef\u7528"; exit 1; }
+    if [ "$APPLY_MODE" = "permanent" ]; then echo "iptables \u5c06\u6309\u8fd0\u884c\u65f6\u89c4\u5219\u5904\u7406\uff0c\u6301\u4e45\u5316\u65b9\u5f0f\u53d6\u51b3\u4e8e\u53d1\u884c\u7248"; fi
+    IPTABLES_SNAPSHOT="$OPERATION_ROLLBACK_DIR/iptables.before"
+    $RUN_AS iptables-save > "$IPTABLES_SNAPSHOT"
+    {
+      echo '#!/bin/sh'
+      echo 'set -e'
+      echo "SNAPSHOT='$IPTABLES_SNAPSHOT'"
+      echo 'RUN_AS=""; if [ "$(id -u)" != "0" ]; then RUN_AS="sudo"; fi'
+      echo '$RUN_AS iptables-restore < "$SNAPSHOT"'
+    } > "$TMP_ROLLBACK"
+    $RUN_AS install -m 700 -- "$TMP_ROLLBACK" "$ROLLBACK_SCRIPT"
+    TARGET=ACCEPT; [ "$ACTION" = "deny" ] && TARGET=DROP
+    if ! $RUN_AS iptables -C INPUT -p "$PROTO" -s "$SOURCE_CIDR" --dport "$PORT" -j "$TARGET" 2>/dev/null; then
+      $RUN_AS iptables -A INPUT -p "$PROTO" -s "$SOURCE_CIDR" --dport "$PORT" -j "$TARGET"
+    fi
+    $RUN_AS iptables -C INPUT -p "$PROTO" -s "$SOURCE_CIDR" --dport "$PORT" -j "$TARGET"
+    ;;
+  nftables)
+    command -v nft >/dev/null 2>&1 || { echo "nft \u4e0d\u53ef\u7528"; exit 1; }
+    if [ "$APPLY_MODE" = "permanent" ]; then echo "nftables \u5c06\u6309\u8fd0\u884c\u65f6\u89c4\u5219\u5904\u7406\uff0c\u6301\u4e45\u5316\u65b9\u5f0f\u53d6\u51b3\u4e8e\u53d1\u884c\u7248"; fi
+    NFT_SNAPSHOT="$OPERATION_ROLLBACK_DIR/nftables.before"
+    $RUN_AS nft list ruleset > "$NFT_SNAPSHOT"
+    {
+      echo '#!/bin/sh'
+      echo 'set -e'
+      echo "SNAPSHOT='$NFT_SNAPSHOT'"
+      echo 'RUN_AS=""; if [ "$(id -u)" != "0" ]; then RUN_AS="sudo"; fi'
+      echo '$RUN_AS nft flush ruleset'
+      echo '$RUN_AS nft -f "$SNAPSHOT"'
+    } > "$TMP_ROLLBACK"
+    $RUN_AS install -m 700 -- "$TMP_ROLLBACK" "$ROLLBACK_SCRIPT"
+    $RUN_AS nft list table inet shellpilot >/dev/null 2>&1 || $RUN_AS nft add table inet shellpilot
+    $RUN_AS nft list chain inet shellpilot input >/dev/null 2>&1 || $RUN_AS nft 'add chain inet shellpilot input { type filter hook input priority 0; policy accept; }'
+    NFT_ACTION=accept; [ "$ACTION" = "deny" ] && NFT_ACTION=drop
+    RULE_MARKER="shellpilot-$ACTION-$PORT-$PROTO"
+    $RUN_AS nft add rule inet shellpilot input ip saddr "$SOURCE_CIDR" "$PROTO" dport "$PORT" "$NFT_ACTION" comment "$RULE_MARKER"
+    $RUN_AS nft list chain inet shellpilot input | grep -F -- "$RULE_MARKER" >/dev/null
+    ;;
+  *) echo "\u4e0d\u652f\u6301\u7684\u9632\u706b\u5899\u7c7b\u578b: $FIREWALL_KIND"; exit 1;;
+esac
+printf 'verified\\n' > "$ROLLBACK_SCRIPT.verified"
+echo "\u9632\u706b\u5899\u89c4\u5219\u5df2\u9a8c\u8bc1\uff0c\u56de\u6eda\u811a\u672c: $ROLLBACK_SCRIPT"`
 
 export function getSecurityCommands () {
   return [
@@ -148,7 +249,7 @@ true`)
         step('iptables -S 2>/dev/null || nft list ruleset 2>/dev/null || true')
       ]
     }),
-    defineCommand({
+    defineCommand(withRollback({
       id: 'builtin-server-firewall-open-port',
       name: '放行防火墙端口',
       description: '按当前连接端口生成 firewalld/ufw 放行命令。',
@@ -166,6 +267,14 @@ true`)
         confirmValue: 'yes'
       },
       params: [
+        selectParam('\u64cd\u4f5c', '\u64cd\u4f5c', 'allow', '\u5141\u8bb8\u4f1a\u653e\u884c\u5339\u914d\u6d41\u91cf\uff0c\u62d2\u7edd\u4f1a\u589e\u52a0\u663e\u5f0f\u62e6\u622a\u89c4\u5219\u3002', [
+          { label: '\u5141\u8bb8\u8bbf\u95ee', value: 'allow' },
+          { label: '\u62d2\u7edd\u8bbf\u95ee', value: 'deny' }
+        ], { validationType: 'enum', required: true }),
+        inputParam('\u6765\u6e90CIDR', '\u6765\u6e90 CIDR', '0.0.0.0/0', '\u9650\u5236\u5141\u8bb8\u6216\u62d2\u7edd\u7684 IPv4 \u6765\u6e90\uff1b0.0.0.0/0 \u8868\u793a\u4efb\u610f\u6765\u6e90\u3002', '\u4f8b\u5982 192.0.2.0/24', {
+          validationType: 'cidr',
+          required: true
+        }),
         {
           name: '端口',
           label: '端口',
@@ -194,7 +303,9 @@ true`)
           options: [
             { label: '自动识别', value: 'auto' },
             { label: 'firewalld', value: 'firewalld' },
-            { label: 'ufw', value: 'ufw' }
+            { label: 'ufw', value: 'ufw' },
+            { label: 'iptables', value: 'iptables' },
+            { label: 'nftables', value: 'nftables' }
           ]
         },
         {
@@ -216,49 +327,17 @@ true`)
         'ufw 回滚：sudo ufw delete allow {{端口}}/{{协议}}'
       ],
       commands: [
-        step(`PORT="{{端口}}"
-PROTO="{{协议}}"
-FIREWALL_KIND="{{防火墙类型}}"
-APPLY_MODE="{{生效方式}}"
-APPLY_CHANGE="{{确认执行}}"
-ROLLBACK_SCRIPT="{{回滚脚本}}"
-RUN_AS=""
-if [ "$(id -u)" != "0" ]; then
-  if command -v sudo >/dev/null 2>&1; then RUN_AS="sudo"; else echo "当前不是 root 且没有 sudo，无法修改防火墙"; exit 1; fi
-fi
-case "$PORT" in *[!0-9]*|"") echo "端口必须是数字"; exit 1;; esac
-echo "准备放行: $PORT/$PROTO，类型=$FIREWALL_KIND，方式=$APPLY_MODE"
-echo "回滚参考 firewalld: $RUN_AS firewall-cmd --remove-port=$PORT/$PROTO --permanent && $RUN_AS firewall-cmd --reload"
-echo "回滚参考 ufw: $RUN_AS ufw delete allow $PORT/$PROTO"
-if [ "$APPLY_CHANGE" != "yes" ]; then echo "当前为预览模式，未修改防火墙。"; exit 0; fi
-$RUN_AS mkdir -p /tmp/shellpilot-rollback
-TMP_ROLLBACK="/tmp/shellpilot-firewall-rollback-$$.sh"
-if [ "$FIREWALL_KIND" = "firewalld" ] || { [ "$FIREWALL_KIND" = "auto" ] && command -v firewall-cmd >/dev/null 2>&1; }; then
-  {
-    echo '#!/bin/sh'
-    if [ "$APPLY_MODE" = "permanent" ]; then
-      echo "$RUN_AS firewall-cmd --remove-port=$PORT/$PROTO --permanent && $RUN_AS firewall-cmd --reload"
-    else
-      echo "$RUN_AS firewall-cmd --remove-port=$PORT/$PROTO"
-    fi
-  } > "$TMP_ROLLBACK"
-  $RUN_AS mv "$TMP_ROLLBACK" "$ROLLBACK_SCRIPT"; $RUN_AS chmod 700 "$ROLLBACK_SCRIPT"
-  if [ "$APPLY_MODE" = "permanent" ]; then
-    $RUN_AS firewall-cmd --add-port=$PORT/$PROTO --permanent && $RUN_AS firewall-cmd --reload
-  else
-    $RUN_AS firewall-cmd --add-port=$PORT/$PROTO
-  fi
-  echo "回滚脚本: $ROLLBACK_SCRIPT"; exit $?
-fi
-if [ "$FIREWALL_KIND" = "ufw" ] || { [ "$FIREWALL_KIND" = "auto" ] && command -v ufw >/dev/null 2>&1; }; then
-  printf '%s\n' '#!/bin/sh' "$RUN_AS ufw delete allow $PORT/$PROTO" > "$TMP_ROLLBACK"
-  $RUN_AS mv "$TMP_ROLLBACK" "$ROLLBACK_SCRIPT"; $RUN_AS chmod 700 "$ROLLBACK_SCRIPT"
-  $RUN_AS ufw allow $PORT/$PROTO
-  echo "回滚脚本: $ROLLBACK_SCRIPT"; exit $?
-fi
-echo "未检测到 firewalld 或 ufw，请手动确认 iptables/nftables 规则"; exit 1`)
+        step(firewallPolicyCommand)
       ]
-    }),
+    }, {
+      title: '\u9632\u706b\u5899\u8bbf\u95ee\u7b56\u7565',
+      actionParam: '\u64cd\u4f5c',
+      mutatingValues: ['allow', 'deny'],
+      backupTargets: ['/etc/ufw/user.rules', '/etc/ufw/user6.rules', '/etc/firewalld/zones'],
+      verifyCommands: [
+        'test -s "{{\u56de\u6eda\u811a\u672c}}" && test -s "{{\u56de\u6eda\u811a\u672c}}.verified"'
+      ]
+    })),
     defineCommand({
       id: 'builtin-server-file-permission',
       name: '文件权限与归属',

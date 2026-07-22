@@ -48,9 +48,53 @@ test('quick commands reuse service inventory and expose readable systemd choices
     value: 'nginx.service',
     label: 'nginx.service · 运行中 · systemd',
     state: 'running',
+    autostart: 'enabled',
     source: 'systemd',
     description: 'A high performance web server'
   })
+})
+
+test('service boot policy discovery preserves systemd autostart state and filters other sources', async () => {
+  const { discoverQuickCommandTargets } = await import(discoveryUrl)
+  const result = await discoverQuickCommandTargets({}, {
+    client: {
+      inventory: async () => ({
+        status: 'completed',
+        items: [
+          {
+            id: 'systemd:sshd.service',
+            name: 'sshd.service',
+            type: 'service',
+            source: 'systemd',
+            state: 'running',
+            autostart: 'enabled',
+            description: 'OpenSSH server'
+          },
+          {
+            id: 'docker:sshd',
+            name: 'sshd',
+            type: 'service',
+            source: 'docker',
+            state: 'running',
+            autostart: 'unknown',
+            description: 'container'
+          }
+        ]
+      })
+    },
+    type: 'service',
+    sources: ['systemd']
+  })
+
+  assert.deepEqual(result.options.map(option => ({
+    value: option.value,
+    source: option.source,
+    autostart: option.autostart
+  })), [{
+    value: 'sshd.service',
+    source: 'systemd',
+    autostart: 'enabled'
+  }])
 })
 
 test('quick command target discovery localizes visible state labels when requested', async () => {

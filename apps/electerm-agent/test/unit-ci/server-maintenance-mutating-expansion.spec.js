@@ -49,6 +49,108 @@ const commandCases = [
   }
 ]
 
+function getParam (item, name) {
+  return item.params.find(param => param.name === name)
+}
+
+test('Task 7 exposes rollback-safe Swap service boot Cron and firewall forms', async () => {
+  const { getServerMaintenanceQuickCommands } = await import(registryUrl)
+  const byId = new Map(
+    getServerMaintenanceQuickCommands().map(command => [command.id, command])
+  )
+  const cases = [
+    {
+      id: 'builtin-server-swap-manage',
+      action: '\u64cd\u4f5c',
+      values: ['create', 'enable', 'disable', 'remove'],
+      backup: '/etc/fstab'
+    },
+    {
+      id: 'builtin-server-service-boot-policy',
+      action: '\u64cd\u4f5c',
+      values: ['enable', 'disable'],
+      backup: null
+    },
+    {
+      id: 'builtin-server-cron-manage',
+      action: '\u64cd\u4f5c',
+      values: ['add', 'disable', 'remove'],
+      backup: null
+    },
+    {
+      id: 'builtin-server-firewall-open-port',
+      action: '\u64cd\u4f5c',
+      values: ['allow', 'deny'],
+      backup: '/etc/firewalld/zones'
+    }
+  ]
+
+  for (const testCase of cases) {
+    const item = byId.get(testCase.id)
+    assert.ok(item, 'missing ' + testCase.id)
+    assert.equal(item.editBeforeRun, true)
+    assert.equal(item.confirmRequired, true)
+    assert.equal(item.mutatesServer, true)
+    assert.equal(item.rollback.actionParam, testCase.action)
+    assert.deepEqual(item.rollback.mutatingValues, testCase.values)
+    assert.equal(item.rollback.pathParam, '\u56de\u6eda\u811a\u672c')
+    assert.equal(item.rollback.confirmParam, '\u786e\u8ba4\u6267\u884c')
+    assert.equal(item.rollback.confirmValue, 'yes')
+    assert.equal(getParam(item, '\u786e\u8ba4\u6267\u884c').defaultValue, 'no')
+    assert.equal(getParam(item, '\u56de\u6eda\u811a\u672c').type, 'hidden')
+    assert.ok(item.safetyMetadata.verifyCommands.length >= 1)
+    if (testCase.backup) {
+      assert.ok(item.safetyMetadata.backupTargets.includes(testCase.backup))
+    }
+    const text = commandText(item)
+    assert.match(text, /ROLLBACK_SCRIPT/)
+    assert.match(text, /ROLLBACK_SCRIPT/)
+  }
+})
+
+test('Task 7 forms default to read-only preview and expose typed parameters', async () => {
+  const { getServerMaintenanceQuickCommands } = await import(registryUrl)
+  const byId = new Map(
+    getServerMaintenanceQuickCommands().map(command => [command.id, command])
+  )
+  const swap = byId.get('builtin-server-swap-manage')
+  assert.deepEqual(getParam(swap, '\u64cd\u4f5c').options.map(item => item.value), [
+    'status', 'create', 'enable', 'disable', 'remove'
+  ])
+  assert.equal(getParam(swap, '\u64cd\u4f5c').defaultValue, 'status')
+  assert.equal(getParam(swap, 'Swap\u8def\u5f84').validationType, 'path')
+  assert.equal(getParam(swap, '\u5927\u5c0fMB').type, 'number')
+
+  const boot = byId.get('builtin-server-service-boot-policy')
+  const services = getParam(boot, '\u670d\u52a1\u540d\u79f0')
+  assert.equal(services.type, 'service-target')
+  assert.deepEqual(services.sources, ['systemd'])
+  assert.equal(services.multiple, true)
+  assert.equal(services.required, true)
+  assert.deepEqual(getParam(boot, '\u64cd\u4f5c').options.map(item => item.value), [
+    'status', 'enable', 'disable'
+  ])
+  assert.equal(getParam(boot, '\u64cd\u4f5c').defaultValue, 'status')
+
+  const cron = byId.get('builtin-server-cron-manage')
+  assert.deepEqual(getParam(cron, '\u64cd\u4f5c').options.map(item => item.value), [
+    'list', 'add', 'disable', 'remove'
+  ])
+  assert.equal(getParam(cron, '\u64cd\u4f5c').defaultValue, 'list')
+  assert.equal(getParam(cron, '\u8ba1\u5212\u8868\u8fbe\u5f0f').validationType, 'cron')
+  assert.equal(getParam(cron, '\u4efb\u52a1\u547d\u4ee4').validationType, 'text')
+  assert.equal(getParam(cron, '\u5339\u914d\u6807\u8bc6').validationType, 'text')
+
+  const firewall = byId.get('builtin-server-firewall-open-port')
+  assert.deepEqual(getParam(firewall, '\u64cd\u4f5c').options.map(item => item.value), [
+    'allow', 'deny'
+  ])
+  assert.deepEqual(getParam(firewall, '\u534f\u8bae').options.map(item => item.value), [
+    'tcp', 'udp'
+  ])
+  assert.equal(getParam(firewall, '\u6765\u6e90CIDR').validationType, 'cidr')
+})
+
 test('Task 6 forms expose locked rollback metadata and strictly typed params', async () => {
   const { getServerMaintenanceQuickCommands } = await import(registryUrl)
   const byId = new Map(

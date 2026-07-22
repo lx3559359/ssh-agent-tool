@@ -54,6 +54,7 @@ export async function discoverQuickCommandTargets (bookmark, options = {}) {
       value: item.name,
       label: `${item.name} · ${getStateLabel(item.state, options.translate)} · ${item.source}`,
       state: item.state,
+      autostart: item.autostart,
       source: item.source,
       description: item.description
     }))
