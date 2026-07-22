@@ -173,6 +173,7 @@ function clone (value) {
 
 function createMemoryStore () {
   const records = new Map()
+  const patches = []
   async function guardedPatch (id, predicate, value) {
     const current = records.get(id)
     if (!current) throw new Error(`missing record: ${id}`)
@@ -188,6 +189,7 @@ function createMemoryStore () {
   }
   return {
     records,
+    patches,
     async save (value) {
       records.set(value.id, clone(value))
       return clone(value)
@@ -196,6 +198,7 @@ function createMemoryStore () {
       return clone(records.get(id))
     },
     async patch (id, value) {
+      patches.push({ id, value: clone(value) })
       const current = records.get(id)
       if (!current) throw new Error(`missing record: ${id}`)
       const next = { ...current, ...clone(value) }
@@ -714,6 +717,18 @@ test('Task 6 consecutive retries preserve trace lineage and retire every recover
   const first = await harness.store.get('operation-1')
   const second = await harness.store.get('operation-2')
   const third = await harness.store.get('operation-3')
+  const lineagePatches = harness.store.patches.filter(({ value }) => {
+    return Object.hasOwn(value, 'supersededBy') ||
+      Object.hasOwn(value, 'retryOf')
+  })
+  assert.deepEqual(lineagePatches.map(({ id, value }) => ({
+    id,
+    retryOf: value.retryOf,
+    supersededBy: value.supersededBy
+  })), [
+    { id: first.id, retryOf: undefined, supersededBy: second.id },
+    { id: second.id, retryOf: undefined, supersededBy: third.id }
+  ])
   assert.equal(first.supersededBy, second.id)
   assert.equal(second.retryOf, first.id)
   assert.equal(second.retryRootOperationId, first.id)
@@ -765,6 +780,44 @@ test('retry lineage update failure blocks dispatch and cancels the replacement r
   assert.equal(harness.entrypoint.hasPendingConfirmation(), true)
   assert.equal((await harness.store.get('operation-2')).state, 'cancelled')
   assert.equal((await harness.store.get('operation-1')).supersededBy, undefined)
+})
+
+test('retry link failure plus uncertain replacement cancellation blocks retry', async () => {
+  let cancelAttempts = 0
+  let submitAttempts = 0
+  const harness = createHarness({
+    submitCommand: () => {
+      submitAttempts += 1
+      return false
+    },
+    cancel: async id => {
+      cancelAttempts += 1
+      return cancelAttempts === 1
+        ? { id, state: 'cancelled' }
+        : undefined
+    },
+    linkRetryLineage: async () => {
+      throw new Error('retry lineage link failed')
+    }
+  })
+  const { createSafetyCommandEntrypoint } = await import(moduleUrl)
+  const entrypoint = createSafetyCommandEntrypoint(harness.options)
+  entrypoint.beginSession()
+
+  const first = await entrypoint.runSafetyCommand('uptime', {
+    source: 'agent'
+  })
+  assert.equal(first.retryable, true)
+  assert.equal(entrypoint.confirmPending(), true)
+  await waitFor(() => harness.views.at(-1)?.confirmation?.kind === 'blocked')
+
+  const state = harness.views.at(-1)
+  assert.equal(submitAttempts, 1)
+  assert.equal(cancelAttempts, 2)
+  assert.equal(entrypoint.hasPendingConfirmation(), true)
+  assert.equal(state.confirmation.executeAllowed, false)
+  assert.match(state.error, /无法确认|禁止重试|终止状态/)
+  assert.equal(entrypoint.confirmPending(), false)
 })
 
 test('callers cannot forge persisted retry lineage through metadata', async () => {
@@ -1353,6 +1406,44 @@ test('foreground cancellation is bound to the exact active operation identity', 
     'duplicate Agent cancellation'
   ), false)
   assert.equal(interrupts, 1)
+})
+
+test('active execution cancellation fails closed on invalid runner results', async () => {
+  const { createSafetyCommandEntrypoint } = await import(moduleUrl)
+  const invalidResults = [
+    false,
+    null,
+    undefined,
+    { id: 'wrong-operation', state: 'cancelled' },
+    { id: 'operation-1', state: 'executing' }
+  ]
+
+  for (const result of invalidResults) {
+    const harness = createHarness({ cancel: async () => result })
+    const entrypoint = createSafetyCommandEntrypoint(harness.options)
+    entrypoint.beginSession()
+    const running = await entrypoint.runSafetyCommand('uptime', {
+      source: 'agent'
+    })
+    let interrupts = 0
+
+    await assert.rejects(entrypoint.cancelForegroundExecutionById(
+      running.operationId,
+      () => { interrupts += 1 },
+      'cancel requested'
+    ), /明确的终止状态/)
+    assert.equal(interrupts, 1)
+    assert.equal(entrypoint.hasPending(), true)
+    await assert.rejects(entrypoint.runSafetyCommand('whoami', {
+      source: 'agent'
+    }), /正在执行/)
+    await entrypoint.handleCommandFinished({
+      token: running.token,
+      command: running.execution.submittedCommand,
+      exitCode: 130
+    })
+    assert.equal(entrypoint.hasPending(), false)
+  }
 })
 
 test('accepted foreground completion retires its interrupt identity before audit persistence', async () => {

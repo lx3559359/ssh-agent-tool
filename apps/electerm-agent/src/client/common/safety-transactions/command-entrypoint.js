@@ -38,6 +38,18 @@ function safeErrorMessage (error, fallback = '未知错误') {
   return redactAuditText(String(error?.message || fallback))
 }
 
+function isExplicitlyStoppedOperation (result, operationId) {
+  return Boolean(result && result.id === operationId &&
+    [operationStates.failed, operationStates.cancelled].includes(result.state))
+}
+
+function retryBlockedError (cause) {
+  const error = new Error('无法确认替代事务已经终止，已禁止继续重试。')
+  error.retryBlocked = true
+  error.cause = cause
+  return error
+}
+
 function riskDelegationError () {
   const error = new Error('Agent command risk delegation capability is invalid')
   error.code = 'AGENT_RISK_DELEGATION_INVALID'
@@ -202,11 +214,7 @@ export function createSafetyCommandEntrypoint (options = {}) {
       run.cancelPromise = Promise.resolve()
         .then(() => runner.cancel(run.operationId))
         .then(result => {
-          const stopped = result && result.id === run.operationId &&
-            [operationStates.failed, operationStates.cancelled].includes(
-              result.state
-            )
-          if (!stopped) {
+          if (!isExplicitlyStoppedOperation(result, run.operationId)) {
             throw new Error('安全事务取消未返回明确的终止状态。')
           }
           run.operationCancelled = true
@@ -273,6 +281,22 @@ export function createSafetyCommandEntrypoint (options = {}) {
         ))
         .catch(error => {
           if (!live || generation !== retryGeneration) return
+          if (error?.retryBlocked === true) {
+            const confirmation = {
+              ...pending.confirmation,
+              kind: 'blocked',
+              executeAllowed: false,
+              message: '无法确认替代事务已经终止，已禁止继续重试。'
+            }
+            pendingConfirmation = { run: pending.run, confirmation }
+            updateState({
+              confirmation,
+              busy: false,
+              error: safeErrorMessage(error)
+            })
+            onError(error)
+            return
+          }
           pendingConfirmation = pending
           const message = `命令重试失败，命令尚未发送：${safeErrorMessage(error)}`
           updateState({
@@ -338,24 +362,39 @@ export function createSafetyCommandEntrypoint (options = {}) {
   }
 
   async function cancelExecution (execution, reason, interrupt) {
-    if (!execution || execution.settled || execution.cancelled) return false
-    execution.cancelled = true
-    removeExecution(execution)
-    tracker.cancelExpectedSubmission(execution.token)
+    if (!execution || execution.settled || execution.cancelled ||
+      execution.cancelling) return false
+    execution.cancelling = true
+    const cancelPromise = Promise.resolve()
+      .then(() => runner.cancel(execution.id))
+      .then(result => {
+        if (!isExplicitlyStoppedOperation(result, execution.id)) {
+          throw new Error('安全事务取消未返回明确的终止状态。')
+        }
+        execution.cancelled = true
+        return result
+      })
+    execution.cancelPromise = cancelPromise
     if (typeof interrupt === 'function') interrupt()
     await abortHookState(execution.hookState)
-    settleExecution(execution, {
-      cancelled: true,
-      error: reason || '命令执行已取消。',
-      operationId: execution.id
-    })
-    recordRunEvent(execution.qualityRun, 'cancelled', 'cancelled')
-    if (!execution.cancelPromise) {
-      execution.cancelPromise = Promise.resolve()
-        .then(() => runner.cancel(execution.id))
+    try {
+      await cancelPromise
+      removeExecution(execution)
+      tracker.cancelExpectedSubmission(execution.token)
+      settleExecution(execution, {
+        cancelled: true,
+        error: reason || '命令执行已取消。',
+        operationId: execution.id
+      })
+      recordRunEvent(execution.qualityRun, 'cancelled', 'cancelled')
+      return true
+    } catch (error) {
+      execution.cancelling = false
+      if (execution.cancelPromise === cancelPromise) {
+        execution.cancelPromise = null
+      }
+      throw error
     }
-    const cancelled = await execution.cancelPromise
-    return cancelled !== false
   }
 
   async function cancelForegroundExecutionById (
@@ -366,7 +405,7 @@ export function createSafetyCommandEntrypoint (options = {}) {
     const execution = activeExecution
     if (!operationId || !execution || execution.id !== operationId ||
       execution.mode !== 'foreground' || execution.settled ||
-      execution.cancelled) {
+      execution.cancelled || execution.cancelling) {
       return false
     }
     return cancelExecution(execution, reason, interrupt)
@@ -611,6 +650,12 @@ export function createSafetyCommandEntrypoint (options = {}) {
     completingExecutions.set(execution.id, execution)
     const finalizationPromise = (async () => {
       try {
+        if (execution.cancelling && execution.cancelPromise) {
+          try {
+            await execution.cancelPromise
+          } catch {}
+          if (execution.cancelled) return false
+        }
         const operation = await runner.completeExternalExecution(execution.id, {
           executionId: execution.executionId,
           command: execution.originalCommand,
@@ -627,7 +672,7 @@ export function createSafetyCommandEntrypoint (options = {}) {
           await execution.cancelPromise
           settleExecution(execution, {
             cancelled: true,
-            error: '终端会话已失效，已忽略迟到的命令完成结果。',
+            error: '终端会话已断开或取消，已忽略迟到的命令完成结果。',
             operationId: execution.id
           })
           recordRunEvent(execution.qualityRun, 'cancelled', 'cancelled')
@@ -810,6 +855,7 @@ export function createSafetyCommandEntrypoint (options = {}) {
             await cancelRunOperation(run)
           } catch (cancelError) {
             onError(cancelError)
+            throw retryBlockedError(cancelError)
           }
           throw error
         }
@@ -872,6 +918,8 @@ export function createSafetyCommandEntrypoint (options = {}) {
         hookState: run.hookState,
         settled: false,
         cancelled: false,
+        cancelling: false,
+        cancelPromise: null,
         qualityRun: run
       }
       activeExecution = execution

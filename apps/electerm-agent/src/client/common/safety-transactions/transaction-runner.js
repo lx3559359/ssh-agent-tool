@@ -586,40 +586,19 @@ export function createTransactionRunner (options = {}) {
       if (previous.supersededBy && previous.supersededBy !== nextId) {
         throw new Error('原事务已关联其他重试事务。')
       }
-      if ((replacement.retryOf && replacement.retryOf !== retryOf) ||
-        (replacement.retryRootOperationId &&
-          replacement.retryRootOperationId !== rootId) ||
-        (replacement.retryAttempt !== undefined &&
-          replacement.retryAttempt !== retryAttempt)) {
+      if (replacement.retryOf !== retryOf ||
+        replacement.retryRootOperationId !== rootId ||
+        replacement.retryAttempt !== retryAttempt) {
         throw new Error('替代事务的重试谱系不一致。')
       }
-      let previousPatched = false
-      try {
-        await patch(previous.id, {
-          supersededBy: nextId,
-          updatedAt: timestamp()
-        })
-        previousPatched = true
-        const next = await patch(replacement.id, {
-          retryOf,
-          retryRootOperationId: rootId,
-          retryAttempt,
-          updatedAt: timestamp()
-        })
-        emit(previous.id, previous.state, 'retry-superseded')
-        emit(next.id, next.state, 'retry-linked')
-        return next
-      } catch (error) {
-        if (previousPatched && !previous.supersededBy) {
-          try {
-            await patch(previous.id, {
-              supersededBy: undefined,
-              updatedAt: previous.updatedAt
-            })
-          } catch {}
-        }
-        throw error
-      }
+      if (previous.supersededBy === nextId) return replacement
+      await patch(previous.id, {
+        supersededBy: nextId,
+        updatedAt: timestamp()
+      })
+      emit(previous.id, previous.state, 'retry-superseded')
+      emit(replacement.id, replacement.state, 'retry-linked')
+      return replacement
     }))
   }
   async function assertCurrentEndpoint (operation) {
