@@ -121,6 +121,24 @@ test('Task 7 forms default to read-only preview and expose typed parameters', as
   assert.equal(getParam(swap, 'Swap\u8def\u5f84').validationType, 'path')
   assert.equal(getParam(swap, '\u5927\u5c0fMB').type, 'number')
 
+  const swapText = commandText(swap)
+  const swapStatusGuard = swapText.indexOf('if [ "$ACTION" = "status" ]')
+  const swapPreviewGuard = swapText.indexOf('if [ "$APPLY_CHANGE" != "yes" ]')
+  const swapRunAs = swapText.indexOf('RUN_AS=""')
+  const swapSudoProbe = swapText.indexOf('command -v sudo')
+  const swapPermissionProbe = swapText.indexOf('id -u')
+  assert.ok(swapStatusGuard >= 0, 'missing Swap status guard')
+  assert.ok(swapPreviewGuard >= 0, 'missing Swap preview guard')
+  assert.ok(swapRunAs >= 0, 'missing Swap RUN_AS resolution')
+  assert.ok(swapSudoProbe >= 0, 'missing Swap sudo probe')
+  assert.ok(swapPermissionProbe >= 0, 'missing Swap permission probe')
+  assert.ok(swapStatusGuard < swapRunAs)
+  assert.ok(swapPreviewGuard < swapRunAs)
+  assert.ok(swapStatusGuard < swapSudoProbe)
+  assert.ok(swapStatusGuard < swapPermissionProbe)
+  assert.ok(swapPreviewGuard < swapSudoProbe)
+  assert.ok(swapPreviewGuard < swapPermissionProbe)
+
   const boot = byId.get('builtin-server-service-boot-policy')
   const services = getParam(boot, '\u670d\u52a1\u540d\u79f0')
   assert.equal(services.type, 'service-target')
@@ -167,6 +185,56 @@ test('Task 7 forms default to read-only preview and expose typed parameters', as
     'tcp', 'udp'
   ])
   assert.equal(getParam(firewall, '\u6765\u6e90CIDR').validationType, 'cidr')
+
+  const firewallText = commandText(firewall)
+  const firewallPreviewGuard = firewallText.indexOf('if [ "$APPLY_CHANGE" != "yes" ]')
+  const firewallRunAs = firewallText.indexOf('RUN_AS=""')
+  const firewallSudoProbe = firewallText.indexOf('command -v sudo')
+  const firewallPermissionProbe = firewallText.indexOf('id -u')
+  assert.ok(firewallPreviewGuard >= 0, 'missing firewall preview guard')
+  assert.ok(firewallRunAs >= 0, 'missing firewall RUN_AS resolution')
+  assert.ok(firewallSudoProbe >= 0, 'missing firewall sudo probe')
+  assert.ok(firewallPermissionProbe >= 0, 'missing firewall permission probe')
+  assert.ok(firewallPreviewGuard < firewallRunAs)
+  assert.ok(firewallPreviewGuard < firewallSudoProbe)
+  assert.ok(firewallPreviewGuard < firewallPermissionProbe)
+})
+
+test('Swap persists and reports its complete pre-mutation activation snapshot', async () => {
+  const { getServerMaintenanceQuickCommands } = await import(registryUrl)
+  const swap = getServerMaintenanceQuickCommands().find(command => {
+    return command.id === 'builtin-server-swap-manage'
+  })
+  const text = commandText(swap)
+  const snapshotPath = text.indexOf(
+    'SWAPON_SNAPSHOT="$OPERATION_ROLLBACK_DIR/swapon.before"'
+  )
+  const rawSnapshot = text.indexOf(
+    'swapon --show --noheadings --raw --output NAME,TYPE,SIZE,USED,PRIO'
+  )
+  const procFallback = text.indexOf('cat /proc/swaps > "$SWAPON_SNAPSHOT"')
+  const rollbackAssociation = text.indexOf(
+    'echo "SWAPON_SNAPSHOT=\'$SWAPON_SNAPSHOT\'"'
+  )
+  const snapshotOutput = text.indexOf(
+    'echo "Swap \u6fc0\u6d3b\u72b6\u6001\u5feb\u7167: $SWAPON_SNAPSHOT"'
+  )
+  const mutation = text.indexOf('case "$ACTION" in')
+  const oldActiveRestore = text.indexOf(
+    'if [ "$OLD_ACTIVE" = "yes" ] && [ -e "$SWAP_PATH" ]'
+  )
+  assert.ok(snapshotPath >= 0, 'missing swapon.before snapshot path')
+  assert.ok(rawSnapshot >= 0, 'missing stable raw swapon snapshot')
+  assert.ok(procFallback >= 0, 'missing /proc/swaps fallback')
+  assert.ok(rollbackAssociation >= 0, 'rollback must reference swapon.before')
+  assert.ok(snapshotOutput >= 0, 'execution must print the snapshot path')
+  assert.ok(mutation >= 0, 'missing Swap mutation dispatch')
+  assert.ok(oldActiveRestore >= 0, 'missing target OLD_ACTIVE restoration')
+  assert.ok(snapshotPath < rawSnapshot)
+  assert.ok(rawSnapshot < mutation)
+  assert.ok(procFallback < mutation)
+  assert.ok(rollbackAssociation < mutation)
+  assert.ok(snapshotOutput < mutation)
 })
 
 test('Cron actions and postValidation match the complete ShellPilot marker', async () => {

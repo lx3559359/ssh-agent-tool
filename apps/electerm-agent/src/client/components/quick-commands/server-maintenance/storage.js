@@ -191,10 +191,6 @@ SIZE_MB="{{\u5927\u5c0fMB}}"
 ACTION="{{\u64cd\u4f5c}}"
 APPLY_CHANGE="{{\u786e\u8ba4\u6267\u884c}}"
 ROLLBACK_SCRIPT="{{\u56de\u6eda\u811a\u672c}}"
-RUN_AS=""
-if [ "$(id -u)" != "0" ]; then
-  if command -v sudo >/dev/null 2>&1; then RUN_AS="sudo"; else echo "\u5f53\u524d\u8d26\u53f7\u65e0\u6cd5\u4fee\u6539 Swap"; exit 1; fi
-fi
 is_swap_active () {
   awk -v target="$SWAP_PATH" 'NR > 1 && $1 == target { found = 1 } END { exit found ? 0 : 1 }' /proc/swaps
 }
@@ -207,6 +203,16 @@ show_swap_status () {
 if [ "$ACTION" = "status" ]; then show_swap_status; exit 0; fi
 echo "\u9884\u89c8: $ACTION $SWAP_PATH\uff0c\u5927\u5c0f $SIZE_MB MB"
 if [ "$APPLY_CHANGE" != "yes" ]; then echo "\u5f53\u524d\u4e3a\u53ea\u8bfb\u9884\u89c8\uff0c\u672a\u4fee\u6539 Swap"; exit 0; fi
+RUN_AS=""
+if [ "$(id -u)" != "0" ]; then
+  if command -v sudo >/dev/null 2>&1; then RUN_AS="sudo"; else echo "\u5f53\u524d\u8d26\u53f7\u65e0\u6cd5\u4fee\u6539 Swap"; exit 1; fi
+fi
+SWAPON_SNAPSHOT="$OPERATION_ROLLBACK_DIR/swapon.before"
+if command -v swapon >/dev/null 2>&1 && swapon --show --noheadings --raw --output NAME,TYPE,SIZE,USED,PRIO > "$SWAPON_SNAPSHOT" 2>/dev/null; then
+  :
+else
+  cat /proc/swaps > "$SWAPON_SNAPSHOT" || { echo "\u65e0\u6cd5\u4fdd\u5b58 Swap \u6fc0\u6d3b\u72b6\u6001"; exit 1; }
+fi
 OLD_ACTIVE=no
 if is_swap_active; then OLD_ACTIVE=yes; fi
 SWAP_FILE_EXISTED=no
@@ -219,9 +225,12 @@ TMP_ROLLBACK="$OPERATION_ROLLBACK_DIR/swap-rollback.sh"
   echo "OLD_ACTIVE='$OLD_ACTIVE'"
   echo "SWAP_FILE_EXISTED='$SWAP_FILE_EXISTED'"
   echo "OPERATION_DIR='$OPERATION_ROLLBACK_DIR'"
+  echo "SWAPON_SNAPSHOT='$SWAPON_SNAPSHOT'"
   cat <<'SHELLPILOT_SWAP_ROLLBACK'
 RUN_AS=""
 if [ "$(id -u)" != "0" ]; then RUN_AS="sudo"; fi
+test -f "$SWAPON_SNAPSHOT" || { echo "Swap \u6fc0\u6d3b\u72b6\u6001\u5feb\u7167\u4e0d\u5b58\u5728: $SWAPON_SNAPSHOT"; exit 1; }
+echo "Swap \u6fc0\u6d3b\u72b6\u6001\u5feb\u7167: $SWAPON_SNAPSHOT"
 if awk -v target="$SWAP_PATH" 'NR > 1 && $1 == target { found = 1 } END { exit found ? 0 : 1 }' /proc/swaps; then
   $RUN_AS swapoff "$SWAP_PATH"
 fi
@@ -237,6 +246,7 @@ fi
 SHELLPILOT_SWAP_ROLLBACK
 } > "$TMP_ROLLBACK"
 $RUN_AS install -m 700 -- "$TMP_ROLLBACK" "$ROLLBACK_SCRIPT"
+echo "Swap \u6fc0\u6d3b\u72b6\u6001\u5feb\u7167: $SWAPON_SNAPSHOT"
 ensure_fstab_entry () {
   if ! awk -v target="$SWAP_PATH" '$1 == target { found = 1 } END { exit found ? 0 : 1 }' /etc/fstab 2>/dev/null; then
     echo "$SWAP_PATH none swap sw 0 0" | $RUN_AS tee -a /etc/fstab >/dev/null

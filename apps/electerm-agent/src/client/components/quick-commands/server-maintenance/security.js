@@ -23,12 +23,12 @@ FIREWALL_KIND="{{\u9632\u706b\u5899\u7c7b\u578b}}"
 APPLY_MODE="{{\u751f\u6548\u65b9\u5f0f}}"
 APPLY_CHANGE="{{\u786e\u8ba4\u6267\u884c}}"
 ROLLBACK_SCRIPT="{{\u56de\u6eda\u811a\u672c}}"
+echo "\u9884\u89c8: $ACTION $SOURCE_CIDR -> $PORT/$PROTO\uff0c\u7c7b\u578b $FIREWALL_KIND\uff0c\u65b9\u5f0f $APPLY_MODE"
+if [ "$APPLY_CHANGE" != "yes" ]; then echo "\u5f53\u524d\u4e3a\u53ea\u8bfb\u9884\u89c8\uff0c\u672a\u4fee\u6539\u9632\u706b\u5899"; exit 0; fi
 RUN_AS=""
 if [ "$(id -u)" != "0" ]; then
   if command -v sudo >/dev/null 2>&1; then RUN_AS="sudo"; else echo "\u5f53\u524d\u8d26\u53f7\u65e0\u6cd5\u4fee\u6539\u9632\u706b\u5899"; exit 1; fi
 fi
-echo "\u9884\u89c8: $ACTION $SOURCE_CIDR -> $PORT/$PROTO\uff0c\u7c7b\u578b $FIREWALL_KIND\uff0c\u65b9\u5f0f $APPLY_MODE"
-if [ "$APPLY_CHANGE" != "yes" ]; then echo "\u5f53\u524d\u4e3a\u53ea\u8bfb\u9884\u89c8\uff0c\u672a\u4fee\u6539\u9632\u706b\u5899"; exit 0; fi
 if [ "$FIREWALL_KIND" = "auto" ]; then
   if command -v firewall-cmd >/dev/null 2>&1; then FIREWALL_KIND=firewalld
   elif command -v ufw >/dev/null 2>&1; then FIREWALL_KIND=ufw
