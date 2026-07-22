@@ -142,11 +142,18 @@ test('Task 7 forms default to read-only preview and expose typed parameters', as
   assert.equal(getParam(cron, '\u5339\u914d\u6807\u8bc6').validationType, 'text')
 
   const bootText = commandText(boot)
+  const statusGuard = bootText.indexOf('if [ "$ACTION" = "status" ]')
+  const previewGuard = bootText.indexOf('if [ "$APPLY_CHANGE" != "yes" ]')
   const sudoProbe = bootText.indexOf('command -v sudo')
   const permissionProbe = bootText.indexOf('id -u')
-  assert.ok(bootText.indexOf('if [ "$ACTION" = "status" ]') < sudoProbe)
-  assert.ok(bootText.indexOf('if [ "$APPLY_CHANGE" != "yes" ]') < sudoProbe)
-  assert.ok(bootText.indexOf('if [ "$APPLY_CHANGE" != "yes" ]') < permissionProbe)
+  assert.ok(statusGuard >= 0, 'missing status guard')
+  assert.ok(previewGuard >= 0, 'missing preview guard')
+  assert.ok(sudoProbe >= 0, 'missing sudo probe')
+  assert.ok(permissionProbe >= 0, 'missing permission probe')
+  assert.ok(statusGuard < sudoProbe)
+  assert.ok(statusGuard < permissionProbe)
+  assert.ok(previewGuard < sudoProbe)
+  assert.ok(previewGuard < permissionProbe)
   assert.match(
     bootText,
     /enabled-runtime\) \$RUN_AS systemctl enable --runtime "\$SERVICE"/
