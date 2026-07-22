@@ -1031,7 +1031,17 @@ test('confirmed mutations guard and associate the user rollback entrypoint', asy
     assert.match(mutationText, /\(\nset -e\n/, id)
     assert.ok(mutationText.indexOf('set -e') < mutationText.indexOf('TMP_ROLLBACK='), id)
     assert.ok(mutationText.indexOf('TMP_ROLLBACK=') < mutationText.indexOf('chmod 700'), id)
-    assert.ok(mutationText.lastIndexOf('chmod 700') < mutationText.lastIndexOf(mutationToken), id)
+    if (id === 'builtin-server-firewall-open-port') {
+      const branchStart = mutationText.indexOf('  ufw)')
+      const branchEnd = mutationText.indexOf('    ;;', branchStart)
+      const branchText = mutationText.slice(branchStart, branchEnd)
+      assert.ok(branchStart >= 0, id)
+      assert.ok(branchEnd > branchStart, id)
+      assert.ok(branchText.indexOf('chmod 700') >= 0, id)
+      assert.ok(branchText.indexOf('chmod 700') < branchText.indexOf(mutationToken), id)
+    } else {
+      assert.ok(mutationText.lastIndexOf('chmod 700') < mutationText.lastIndexOf(mutationToken), id)
+    }
 
     if (id === 'builtin-server-service-action') {
       assert.match(mutationText, /OLD_ACTIVE=/)

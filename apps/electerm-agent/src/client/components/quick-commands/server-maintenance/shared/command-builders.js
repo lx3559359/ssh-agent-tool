@@ -42,7 +42,7 @@ const rollbackMutationIds = new Set([
   'builtin-server-file-permission'
 ])
 export const ufwGlobalAllowAwk = '\'($1 == rule && $2 == "ALLOW" && $3 == "Anywhere") || ($1 == rule && $2 == "(v6)" && $3 == "ALLOW" && $4 == "Anywhere" && $5 == "(v6)") { found=1 } END { exit found ? 0 : 1 }\''
-const rollbackTempPattern = /TMP_ROLLBACK="\/tmp\/[^"\n]*rollback[^"\n]*\$\$\.sh"/
+const rollbackTempPattern = /TMP_ROLLBACK=(?:"\/tmp\/[^"\n]*rollback[^"\n]*\$\$\.sh"|"\$OPERATION_ROLLBACK_DIR\/firewall-rollback\.sh")/
 
 export function buildPacketFilterArguments (value) {
   const validated = validateAndNormalizeValue('packet-filter', value, {
@@ -63,40 +63,50 @@ function replaceRequired (text, search, replacement, label) {
   return text.replace(search, () => replacement)
 }
 
+function replaceAllRequired (text, search, replacement, label) {
+  if (!text.includes(search)) {
+    throw new Error(`\u65e0\u6cd5\u5b89\u5168\u6784\u5efa${label}`)
+  }
+  return text.split(search).join(replacement)
+}
+
 function hardenFirewallMutationCommand (commandText) {
-  const rollbackMarker = 'TMP_ROLLBACK="/tmp/shellpilot-firewall-rollback-$$.sh"'
-  const stateCapture = `${rollbackMarker}
+  const templateRollbackMarker = 'TMP_ROLLBACK="$OPERATION_ROLLBACK_DIR/firewall-rollback.sh"'
+  const stateCapture = `${templateRollbackMarker}
 RULE_WAS_PRESENT="no"
-if [ "$FIREWALL_KIND" = "firewalld" ] || { [ "$FIREWALL_KIND" = "auto" ] && command -v firewall-cmd >/dev/null 2>&1; }; then
+if [ "$FIREWALL_KIND" = "firewalld" ]; then
+  RICH_ACTION=accept; [ "$ACTION" = "deny" ] && RICH_ACTION=drop
+  RICH_RULE="rule family=ipv4 source address=$SOURCE_CIDR port port=$PORT protocol=$PROTO $RICH_ACTION"
   QUERY_PERMANENT=""
   if [ "$APPLY_MODE" = "permanent" ]; then QUERY_PERMANENT="--permanent"; fi
-  if $RUN_AS firewall-cmd $QUERY_PERMANENT --query-port="$PORT/$PROTO" >/dev/null 2>&1; then RULE_WAS_PRESENT="yes"; fi
-elif [ "$FIREWALL_KIND" = "ufw" ] || { [ "$FIREWALL_KIND" = "auto" ] && command -v ufw >/dev/null 2>&1; }; then
-  if $RUN_AS ufw status | awk -v rule="$PORT/$PROTO" ${ufwGlobalAllowAwk}; then RULE_WAS_PRESENT="yes"; fi
+  if $RUN_AS firewall-cmd $QUERY_PERMANENT --query-rich-rule="$RICH_RULE" >/dev/null 2>&1; then RULE_WAS_PRESENT="yes"; fi
+elif [ "$FIREWALL_KIND" = "ufw" ]; then
+  if [ "$ACTION" = "allow" ] && [ "$SOURCE_CIDR" = "0.0.0.0/0" ]; then
+    if $RUN_AS ufw status | awk -v rule="$PORT/$PROTO" ${ufwGlobalAllowAwk}; then RULE_WAS_PRESENT="yes"; fi
+  else
+    UFW_EXPECTED_ACTION=ALLOW; [ "$ACTION" = "deny" ] && UFW_EXPECTED_ACTION=DENY
+    UFW_EXPECTED_SOURCE="$SOURCE_CIDR"; [ "$SOURCE_CIDR" = "0.0.0.0/0" ] && UFW_EXPECTED_SOURCE=Anywhere
+    if $RUN_AS ufw status | awk -v rule="$PORT/$PROTO" -v verdict="$UFW_EXPECTED_ACTION" -v source="$UFW_EXPECTED_SOURCE" '$1 == rule && $2 == verdict && $3 == source { found=1 } END { exit found ? 0 : 1 }'; then RULE_WAS_PRESENT="yes"; fi
+  fi
 fi`
   const firewalldRollback = `  {
     echo '#!/bin/sh'
     printf '# ShellPilot backup directory: %s\\n' "$OPERATION_ROLLBACK_DIR"
     if [ "$RULE_WAS_PRESENT" = "yes" ]; then
-      if [ "$APPLY_MODE" = "permanent" ]; then
-        echo "$RUN_AS firewall-cmd --add-port=$PORT/$PROTO --permanent && $RUN_AS firewall-cmd --reload"
-      else
-        echo "$RUN_AS firewall-cmd --add-port=$PORT/$PROTO"
-      fi
+      echo ':'
     elif [ "$APPLY_MODE" = "permanent" ]; then
-      echo "$RUN_AS firewall-cmd --remove-port=$PORT/$PROTO --permanent && $RUN_AS firewall-cmd --reload"
+      echo "$RUN_AS firewall-cmd --permanent --remove-rich-rule='$RICH_RULE' && $RUN_AS firewall-cmd --reload"
     else
-      echo "$RUN_AS firewall-cmd --remove-port=$PORT/$PROTO"
+      echo "$RUN_AS firewall-cmd --remove-rich-rule='$RICH_RULE'"
     fi
   } > "$TMP_ROLLBACK"`
-  const originalFirewalldRollback = `  {
-    echo '#!/bin/sh'
-    if [ "$APPLY_MODE" = "permanent" ]; then
-      echo "$RUN_AS firewall-cmd --remove-port=$PORT/$PROTO --permanent && $RUN_AS firewall-cmd --reload"
-    else
-      echo "$RUN_AS firewall-cmd --remove-port=$PORT/$PROTO"
-    fi
-  } > "$TMP_ROLLBACK"`
+  const originalFirewalldRollback = `    {
+      echo '#!/bin/sh'
+      echo 'set -e'
+      echo 'RUN_AS=""; if [ "$(id -u)" != "0" ]; then RUN_AS="sudo"; fi'
+      echo "$RUN_AS firewall-cmd $PERMANENT_ARG --remove-rich-rule='$RICH_RULE'"
+      if [ "$APPLY_MODE" = "permanent" ]; then echo "$RUN_AS firewall-cmd --reload"; fi
+    } > "$TMP_ROLLBACK"`
   const ufwRollback = `  {
     echo '#!/bin/sh'
     printf '# ShellPilot backup directory: %s\\n' "$OPERATION_ROLLBACK_DIR"
@@ -112,11 +122,16 @@ fi`
     fi
     echo "$RUN_AS ufw reload"
   } > "$TMP_ROLLBACK"`
-  const originalUfwRollback = / {2}printf '%s\n' '#!\/bin\/sh' "\$RUN_AS ufw delete allow \$PORT\/\$PROTO" > "\$TMP_ROLLBACK"/
+  const originalUfwRollback = `    {
+      echo '#!/bin/sh'
+      echo 'set -e'
+      echo 'RUN_AS=""; if [ "$(id -u)" != "0" ]; then RUN_AS="sudo"; fi'
+      echo "$RUN_AS ufw --force delete $ACTION proto $PROTO from $SOURCE_CIDR to any port $PORT"
+    } > "$TMP_ROLLBACK"`
 
   let hardened = replaceRequired(
     commandText,
-    rollbackMarker,
+    templateRollbackMarker,
     stateCapture,
     '防火墙规则状态备份'
   )
@@ -165,8 +180,17 @@ if [ "$TMP_ROLLBACK_OWNER" != "$CURRENT_UID" ] || [ "$TMP_ROLLBACK_MODE" != "600
     '私有回滚临时文件'
   )
   const privilegedFinalize = '$RUN_AS mv "$TMP_ROLLBACK" "$ROLLBACK_SCRIPT"; $RUN_AS chmod 700 "$ROLLBACK_SCRIPT"'
+  const privilegedInstallFinalize = '$RUN_AS install -m 700 -- "$TMP_ROLLBACK" "$ROLLBACK_SCRIPT"'
   const localFinalize = 'mv "$TMP_ROLLBACK" "$ROLLBACK_SCRIPT"; chmod 700 "$ROLLBACK_SCRIPT"'
-  if (hardened.includes(privilegedFinalize)) {
+
+  if (hardened.includes(privilegedInstallFinalize)) {
+    hardened = replaceAllRequired(
+      hardened,
+      privilegedInstallFinalize,
+      buildRollbackFinalize('$RUN_AS '),
+      '\u9632\u706b\u5899\u56de\u6eda\u811a\u672c\u843d\u76d8\u590d\u9a8c'
+    )
+  } else if (hardened.includes(privilegedFinalize)) {
     hardened = replaceRequired(
       hardened,
       privilegedFinalize,

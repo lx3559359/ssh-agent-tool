@@ -1,5 +1,18 @@
 import { READ_ONLY, NEED_EDIT, step, defineCommand, inputParam, selectParam } from './shared/definition.js'
 import { withRollback } from './shared/safety-metadata.js'
+import { ufwGlobalAllowAwk } from './shared/command-builders.js'
+
+const verifyUfwRule = `if [ "$VERIFY_ACTION" = "allow" ] && [ "$VERIFY_SOURCE_CIDR" = "0.0.0.0/0" ]; then $VERIFY_AS ufw status | awk -v rule="{{\u7aef\u53e3}}/{{\u534f\u8bae}}" ${ufwGlobalAllowAwk}; else $VERIFY_AS ufw status | awk -v rule="$VERIFY_RULE" -v verdict="$VERIFY_UFW_ACTION" -v source="$VERIFY_UFW_SOURCE" '$1 == rule && $2 == verdict && $3 == source { found=1 } END { exit found ? 0 : 1 }'; fi`
+const verifyFirewalldRule = '$VERIFY_AS firewall-cmd $VERIFY_PERMANENT_ARG --query-rich-rule="$VERIFY_RICH_RULE" >/dev/null'
+const verifyIptablesRule = '$VERIFY_AS iptables -C INPUT -p "$VERIFY_PROTO" -s "$VERIFY_SOURCE_CIDR" --dport "$VERIFY_PORT" -j "$VERIFY_TARGET"'
+const verifyNftablesRule = '$VERIFY_AS nft list chain inet shellpilot input | grep -F -- "$VERIFY_MARKER" >/dev/null'
+const firewallVerificationCommand = [
+  'VERIFY_AS=""; [ "$(id -u)" = "0" ] || VERIFY_AS="sudo";',
+  'VERIFY_FIREWALL_KIND="{{\u9632\u706b\u5899\u7c7b\u578b}}"; VERIFY_ACTION="{{\u64cd\u4f5c}}"; VERIFY_SOURCE_CIDR="{{\u6765\u6e90CIDR}}"; VERIFY_PORT="{{\u7aef\u53e3}}"; VERIFY_PROTO="{{\u534f\u8bae}}"; VERIFY_RULE="{{\u7aef\u53e3}}/{{\u534f\u8bae}}";',
+  'VERIFY_PERMANENT_ARG=""; [ "{{\u751f\u6548\u65b9\u5f0f}}" = "permanent" ] && VERIFY_PERMANENT_ARG="--permanent"; VERIFY_RICH_ACTION="accept"; VERIFY_TARGET="ACCEPT"; VERIFY_UFW_ACTION="ALLOW"; [ "$VERIFY_ACTION" = "deny" ] && { VERIFY_RICH_ACTION="drop"; VERIFY_TARGET="DROP"; VERIFY_UFW_ACTION="DENY"; };',
+  'VERIFY_RICH_RULE="rule family=ipv4 source address=$VERIFY_SOURCE_CIDR port port=$VERIFY_PORT protocol=$VERIFY_PROTO $VERIFY_RICH_ACTION"; VERIFY_UFW_SOURCE="$VERIFY_SOURCE_CIDR"; [ "$VERIFY_SOURCE_CIDR" = "0.0.0.0/0" ] && VERIFY_UFW_SOURCE="Anywhere"; VERIFY_MARKER="shellpilot-$VERIFY_ACTION-$VERIFY_PORT-$VERIFY_PROTO";',
+  `case "$VERIFY_FIREWALL_KIND" in firewalld) command -v firewall-cmd >/dev/null 2>&1 && ${verifyFirewalldRule} ;; ufw) command -v ufw >/dev/null 2>&1 || exit 1; ${verifyUfwRule} ;; iptables) command -v iptables >/dev/null 2>&1 && ${verifyIptablesRule} ;; nftables) command -v nft >/dev/null 2>&1 && ${verifyNftablesRule} ;; auto) if command -v firewall-cmd >/dev/null 2>&1; then ${verifyFirewalldRule}; elif command -v ufw >/dev/null 2>&1; then ${verifyUfwRule}; elif command -v iptables >/dev/null 2>&1; then ${verifyIptablesRule}; elif command -v nft >/dev/null 2>&1; then ${verifyNftablesRule}; else exit 1; fi ;; *) exit 1 ;; esac`
+].join(' ')
 
 const firewallPolicyCommand = `PORT="{{\u7aef\u53e3}}"
 ACTION="{{\u64cd\u4f5c}}"
@@ -52,9 +65,18 @@ case "$FIREWALL_KIND" in
       echo "$RUN_AS ufw --force delete $ACTION proto $PROTO from $SOURCE_CIDR to any port $PORT"
     } > "$TMP_ROLLBACK"
     $RUN_AS install -m 700 -- "$TMP_ROLLBACK" "$ROLLBACK_SCRIPT"
-    $RUN_AS ufw --force "$ACTION" proto "$PROTO" from "$SOURCE_CIDR" to any port "$PORT"
+    if [ "$ACTION" = "allow" ] && [ "$SOURCE_CIDR" = "0.0.0.0/0" ]; then
+      $RUN_AS ufw allow $PORT/$PROTO
+    else
+      $RUN_AS ufw --force "$ACTION" proto "$PROTO" from "$SOURCE_CIDR" to any port "$PORT"
+    fi
     EXPECTED_RULE=ALLOW; [ "$ACTION" = "deny" ] && EXPECTED_RULE=DENY
-    $RUN_AS ufw status | grep -F -- "$PORT/$PROTO" | grep -i -- "$EXPECTED_RULE" >/dev/null
+    EXPECTED_SOURCE="$SOURCE_CIDR"; [ "$SOURCE_CIDR" = "0.0.0.0/0" ] && EXPECTED_SOURCE=Anywhere
+    if [ "$ACTION" = "allow" ] && [ "$SOURCE_CIDR" = "0.0.0.0/0" ]; then
+      $RUN_AS ufw status | awk -v rule="$PORT/$PROTO" ${ufwGlobalAllowAwk}
+    else
+      $RUN_AS ufw status | awk -v rule="$PORT/$PROTO" -v verdict="$EXPECTED_RULE" -v source="$EXPECTED_SOURCE" '$1 == rule && $2 == verdict && $3 == source { found=1 } END { exit found ? 0 : 1 }'
+    fi
     ;;
   iptables)
     command -v iptables >/dev/null 2>&1 || { echo "iptables \u4e0d\u53ef\u7528"; exit 1; }
@@ -335,6 +357,7 @@ true`)
       mutatingValues: ['allow', 'deny'],
       backupTargets: ['/etc/ufw/user.rules', '/etc/ufw/user6.rules', '/etc/firewalld/zones'],
       verifyCommands: [
+        firewallVerificationCommand,
         'test -s "{{\u56de\u6eda\u811a\u672c}}" && test -s "{{\u56de\u6eda\u811a\u672c}}.verified"'
       ]
     })),
