@@ -228,11 +228,13 @@ if snapshot_has_target; then OLD_ACTIVE=yes; fi
 SWAP_FILE_EXISTED=no
 if [ -e "$SWAP_PATH" ]; then SWAP_FILE_EXISTED=yes; fi
 TMP_ROLLBACK="$OPERATION_ROLLBACK_DIR/swap-rollback.sh"
-CURRENT_ACTIVE=no
-if is_swap_active; then CURRENT_ACTIVE=yes; fi
-if [ "$CURRENT_ACTIVE" != "$OLD_ACTIVE" ]; then
-  echo "Swap \u72b6\u6001\u5df2\u53d8\u5316\uff0c\u62d2\u7edd\u6267\u884c\u53d8\u66f4"; exit 1
-fi
+assert_snapshot_state () {
+  CURRENT_ACTIVE=no
+  if is_swap_active; then CURRENT_ACTIVE=yes; fi
+  if [ "$CURRENT_ACTIVE" != "$OLD_ACTIVE" ]; then
+    echo "Swap \u72b6\u6001\u5df2\u53d8\u5316\uff0c\u62d2\u7edd\u6267\u884c\u53d8\u66f4"; exit 1
+  fi
+}
 {
   echo '#!/bin/sh'
   echo 'set -e'
@@ -270,18 +272,18 @@ if [ "$OLD_ACTIVE" = "yes" ] && [ -e "$SWAP_PATH" ]; then
 fi
 SHELLPILOT_SWAP_ROLLBACK
 } > "$TMP_ROLLBACK"
-$RUN_AS install -m 700 -- "$TMP_ROLLBACK" "$ROLLBACK_SCRIPT"
+$RUN_AS install -m 700 -- "$TMP_ROLLBACK" "$ROLLBACK_SCRIPT" || exit 1
 echo "Swap \u6fc0\u6d3b\u72b6\u6001\u5feb\u7167: $SWAPON_SNAPSHOT"
 ensure_fstab_entry () {
   if ! awk -v target="$SWAP_PATH" '$1 == target { found = 1 } END { exit found ? 0 : 1 }' /etc/fstab 2>/dev/null; then
-    echo "$SWAP_PATH none swap sw 0 0" | $RUN_AS tee -a /etc/fstab >/dev/null
+    echo "$SWAP_PATH none swap sw 0 0" | $RUN_AS tee -a /etc/fstab >/dev/null || exit 1
   fi
 }
 remove_fstab_entry () {
   if [ -f /etc/fstab ]; then
     NEXT_FSTAB="$OPERATION_ROLLBACK_DIR/fstab.next"
-    awk -v target="$SWAP_PATH" '$1 != target { print }' /etc/fstab > "$NEXT_FSTAB"
-    $RUN_AS install -m 644 -- "$NEXT_FSTAB" /etc/fstab
+    awk -v target="$SWAP_PATH" '$1 != target { print }' /etc/fstab > "$NEXT_FSTAB" || exit 1
+    $RUN_AS install -m 644 -- "$NEXT_FSTAB" /etc/fstab || exit 1
   fi
 }
 case "$ACTION" in
@@ -292,26 +294,30 @@ case "$ACTION" in
     AVAILABLE_KB=$(df -Pk "$PARENT_DIR" | awk 'NR == 2 { print $4 }')
     REQUIRED_KB=$((SIZE_MB * 1024))
     if [ "$AVAILABLE_KB" -le "$REQUIRED_KB" ]; then echo "\u53ef\u7528\u7a7a\u95f4\u4e0d\u8db3"; exit 1; fi
+    assert_snapshot_state
     if command -v fallocate >/dev/null 2>&1; then
-      $RUN_AS fallocate -l "$SIZE_MB"M "$SWAP_PATH"
+      $RUN_AS fallocate -l "$SIZE_MB"M "$SWAP_PATH" || exit 1
     else
-      $RUN_AS dd if=/dev/zero of="$SWAP_PATH" bs=1M count="$SIZE_MB" status=none
+      $RUN_AS dd if=/dev/zero of="$SWAP_PATH" bs=1M count="$SIZE_MB" status=none || exit 1
     fi
-    $RUN_AS chmod 600 "$SWAP_PATH"
-    $RUN_AS mkswap "$SWAP_PATH"
-    $RUN_AS swapon "$SWAP_PATH"
+    $RUN_AS chmod 600 "$SWAP_PATH" || exit 1
+    $RUN_AS mkswap "$SWAP_PATH" || exit 1
+    $RUN_AS swapon "$SWAP_PATH" || exit 1
     ensure_fstab_entry
     ;;
   enable)
     if [ ! -f "$SWAP_PATH" ]; then echo "Swap \u6587\u4ef6\u4e0d\u5b58\u5728"; exit 1; fi
-    if ! is_swap_active; then $RUN_AS swapon "$SWAP_PATH"; fi
+    assert_snapshot_state
+    if [ "$OLD_ACTIVE" = "no" ]; then $RUN_AS swapon "$SWAP_PATH" || exit 1; fi
     ensure_fstab_entry
     ;;
   disable)
-    if is_swap_active; then $RUN_AS swapoff "$SWAP_PATH"; fi
+    assert_snapshot_state
+    if [ "$OLD_ACTIVE" = "yes" ]; then $RUN_AS swapoff "$SWAP_PATH" || exit 1; fi
     ;;
   remove)
-    if is_swap_active; then $RUN_AS swapoff "$SWAP_PATH"; fi
+    assert_snapshot_state
+    if [ "$OLD_ACTIVE" = "yes" ]; then $RUN_AS swapoff "$SWAP_PATH" || exit 1; fi
     remove_fstab_entry
     ;;
   *) echo "\u4e0d\u652f\u6301\u7684 Swap \u64cd\u4f5c"; exit 1;;

@@ -308,9 +308,18 @@ PAUSE_USED=${shellLiteral(sandbox.pauseUsed)}
 DRIFT_USED=${shellLiteral(sandbox.driftUsed)}
 PAUSE_SNAPSHOT=${options.pauseSnapshot ? 'yes' : 'no'}
 DRIFT_AFTER_SNAPSHOT=${options.driftAfterSnapshot ? 'yes' : 'no'}
-export OPERATION_ROLLBACK_DIR CURRENT_UID SWAP_STATE MUTATION_LOG PAUSE_READY PAUSE_RELEASE PAUSE_USED DRIFT_USED PAUSE_SNAPSHOT DRIFT_AFTER_SNAPSHOT
+DRIFT_DURING_ROLLBACK_INSTALL=${options.driftDuringRollbackInstall ? 'yes' : 'no'}
+export OPERATION_ROLLBACK_DIR CURRENT_UID SWAP_STATE MUTATION_LOG PAUSE_READY PAUSE_RELEASE PAUSE_USED DRIFT_USED PAUSE_SNAPSHOT DRIFT_AFTER_SNAPSHOT DRIFT_DURING_ROLLBACK_INSTALL
 id () { printf '0\\n'; }
-install () { while [ "$#" -gt 2 ]; do shift; done; /bin/cp -- "$1" "$2"; /bin/chmod 700 "$2"; }
+install () {
+  while [ "$#" -gt 2 ]; do shift; done
+  /bin/cp -- "$1" "$2" || return 1
+  /bin/chmod 700 "$2" || return 1
+  if [ "$DRIFT_DURING_ROLLBACK_INSTALL" = "yes" ] && [ "$2" = "$ROLLBACK_SCRIPT" ] && [ ! -e "$DRIFT_USED" ]; then
+    : > "$DRIFT_USED"
+    : > "$SWAP_STATE"
+  fi
+}
 swapon () {
   if [ "$1" = "--show" ]; then
     /bin/cat "$SWAP_STATE"
@@ -359,7 +368,19 @@ test('Swap serializes mutation, rejects drift, and restores activation from its 
     assert.notEqual(result.status, 0)
     assert.match(result.stdout + result.stderr, /\u72b6\u6001.*\u53d8\u5316|drift/i)
     assert.equal(fs.existsSync(sandbox.mutationLog.replaceAll('/', path.sep)), false)
-    assert.equal(fs.existsSync(sandbox.rollbackScript.replaceAll('/', path.sep)), false)
+    assert.equal(fs.existsSync(sandbox.rollbackScript.replaceAll('/', path.sep)), true)
+  })
+
+  await t.test('drift during rollback installation is rejected before mutation', child => {
+    const sandbox = createSwapShellSandbox(child)
+    const result = runPosixShell([
+      buildSwapShellPrelude(sandbox, { driftDuringRollbackInstall: true }),
+      renderSwapShell(swap, sandbox, 'disable')
+    ].join('\n'), undefined)
+    assert.notEqual(result.status, 0)
+    assert.match(result.stdout + result.stderr, /\u72b6\u6001.*\u53d8\u5316|drift/i)
+    assert.equal(fs.existsSync(sandbox.mutationLog.replaceAll('/', path.sep)), false)
+    assert.equal(fs.existsSync(sandbox.rollbackScript.replaceAll('/', path.sep)), true)
   })
 
   await t.test('rollback reads swapon.before to restore the target activation', child => {
