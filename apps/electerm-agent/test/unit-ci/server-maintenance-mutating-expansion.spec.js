@@ -236,6 +236,159 @@ test('Swap persists and reports its complete pre-mutation activation snapshot', 
   assert.ok(rollbackAssociation < mutation)
   assert.ok(snapshotOutput < mutation)
 })
+function createSwapShellSandbox (t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shellpilot-swap-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const sandbox = {
+    root: toPosixPath(root),
+    commandDirectory: toPosixPath(path.join(root, 'bin')),
+    operationDir: toPosixPath(path.join(root, 'operation')),
+    rollbackScript: toPosixPath(path.join(root, 'rollback.sh')),
+    swapPath: toPosixPath(path.join(root, 'swapfile')),
+    swapState: toPosixPath(path.join(root, 'proc-swaps')),
+    fstab: toPosixPath(path.join(root, 'fstab')),
+    lockDir: toPosixPath(path.join(root, 'swap.lock')),
+    mutationLog: toPosixPath(path.join(root, 'mutations')),
+    pauseReady: toPosixPath(path.join(root, 'pause-ready')),
+    pauseRelease: toPosixPath(path.join(root, 'pause-release')),
+    pauseUsed: toPosixPath(path.join(root, 'pause-used')),
+    driftUsed: toPosixPath(path.join(root, 'drift-used'))
+  }
+  fs.mkdirSync(sandbox.commandDirectory.replaceAll('/', path.sep))
+  fs.mkdirSync(sandbox.operationDir.replaceAll('/', path.sep))
+  fs.writeFileSync(sandbox.swapPath.replaceAll('/', path.sep), 'swap\n')
+  fs.writeFileSync(sandbox.fstab.replaceAll('/', path.sep), sandbox.swapPath + ' none swap sw 0 0\n')
+  fs.copyFileSync(
+    sandbox.fstab.replaceAll('/', path.sep),
+    path.join(sandbox.operationDir.replaceAll('/', path.sep), 'target-1')
+  )
+  fs.writeFileSync(
+    sandbox.swapState.replaceAll('/', path.sep),
+    sandbox.swapPath + ' file 65536 0 -2\n'
+  )
+  writeSandboxCommand(sandbox, 'id', '#!/bin/sh\nprintf "0\\n"\n')
+  writeSandboxCommand(sandbox, 'sudo', '#!/bin/sh\nexec "$@"\n')
+  writeSandboxCommand(sandbox, 'swapon', `#!/bin/sh
+if [ "$1" = "--show" ]; then
+  cat "$SWAP_STATE"
+else
+  printf 'swapon\\t%s\\n' "$1" >> "$MUTATION_LOG"
+  printf '%s file 65536 0 -2\\n' "$1" > "$SWAP_STATE"
+fi
+`)
+  writeSandboxCommand(sandbox, 'swapoff', `#!/bin/sh
+printf 'swapoff\\t%s\\n' "$1" >> "$MUTATION_LOG"
+: > "$SWAP_STATE"
+`)
+  return sandbox
+}
+
+function renderSwapShell (item, sandbox, action) {
+  return commandText(item)
+    .replaceAll('{{Swap\u8def\u5f84}}', sandbox.swapPath)
+    .replaceAll('{{\u5927\u5c0fMB}}', '64')
+    .replaceAll('{{\u64cd\u4f5c}}', action)
+    .replaceAll('{{\u786e\u8ba4\u6267\u884c}}', 'yes')
+    .replaceAll('{{\u56de\u6eda\u811a\u672c}}', sandbox.rollbackScript)
+    .replaceAll('/proc/swaps', sandbox.swapState)
+    .replaceAll('/etc/fstab', sandbox.fstab)
+    .replaceAll('/tmp/shellpilot-swap-manage.lock', sandbox.lockDir)
+}
+
+function buildSwapShellPrelude (sandbox, options = {}) {
+  return `PATH=${shellLiteral(toPosixSearchPath(sandbox.commandDirectory))}:$PATH
+export PATH
+OPERATION_ROLLBACK_DIR=${shellLiteral(sandbox.operationDir)}
+CURRENT_UID=0
+SWAP_STATE=${shellLiteral(sandbox.swapState)}
+MUTATION_LOG=${shellLiteral(sandbox.mutationLog)}
+PAUSE_READY=${shellLiteral(sandbox.pauseReady)}
+PAUSE_RELEASE=${shellLiteral(sandbox.pauseRelease)}
+PAUSE_USED=${shellLiteral(sandbox.pauseUsed)}
+DRIFT_USED=${shellLiteral(sandbox.driftUsed)}
+PAUSE_SNAPSHOT=${options.pauseSnapshot ? 'yes' : 'no'}
+DRIFT_AFTER_SNAPSHOT=${options.driftAfterSnapshot ? 'yes' : 'no'}
+export OPERATION_ROLLBACK_DIR CURRENT_UID SWAP_STATE MUTATION_LOG PAUSE_READY PAUSE_RELEASE PAUSE_USED DRIFT_USED PAUSE_SNAPSHOT DRIFT_AFTER_SNAPSHOT
+id () { printf '0\\n'; }
+install () { while [ "$#" -gt 2 ]; do shift; done; /bin/cp -- "$1" "$2"; /bin/chmod 700 "$2"; }
+swapon () {
+  if [ "$1" = "--show" ]; then
+    /bin/cat "$SWAP_STATE"
+    if [ "$PAUSE_SNAPSHOT" = "yes" ] && [ ! -e "$PAUSE_USED" ]; then
+      : > "$PAUSE_USED"; : > "$PAUSE_READY"
+      while [ ! -e "$PAUSE_RELEASE" ]; do sleep 0.02; done
+    fi
+    if [ "$DRIFT_AFTER_SNAPSHOT" = "yes" ] && [ ! -e "$DRIFT_USED" ]; then
+      : > "$DRIFT_USED"; : > "$SWAP_STATE"
+    fi
+  else
+    printf 'swapon\\t%s\\n' "$1" >> "$MUTATION_LOG"
+    printf '%s file 65536 0 -2\\n' "$1" > "$SWAP_STATE"
+  fi
+}
+swapoff () {
+  printf 'swapoff\\t%s\\n' "$1" >> "$MUTATION_LOG"
+  : > "$SWAP_STATE"
+}`
+}
+
+test('Swap serializes mutation, rejects drift, and restores activation from its snapshot', async t => {
+  const { getServerMaintenanceQuickCommands } = await import(registryUrl)
+  const swap = getServerMaintenanceQuickCommands().find(command => {
+    return command.id === 'builtin-server-swap-manage'
+  })
+
+  await t.test('a concurrent operation is rejected while the first owns the lock', child => {
+    const sandbox = createSwapShellSandbox(child)
+    fs.mkdirSync(sandbox.lockDir.replaceAll('/', path.sep))
+    const second = runPosixShell([
+      buildSwapShellPrelude(sandbox),
+      renderSwapShell(swap, sandbox, 'disable')
+    ].join('\n'), undefined)
+    assert.notEqual(second.status, 0)
+    assert.match(second.stdout + second.stderr, /Swap.*\u64cd\u4f5c.*\u8fdb\u884c|lock/i)
+    assert.equal(fs.existsSync(sandbox.mutationLog.replaceAll('/', path.sep)), false)
+  })
+
+  await t.test('state drift after snapshot prevents every mutation', child => {
+    const sandbox = createSwapShellSandbox(child)
+    const result = runPosixShell([
+      buildSwapShellPrelude(sandbox, { driftAfterSnapshot: true }),
+      renderSwapShell(swap, sandbox, 'disable')
+    ].join('\n'), undefined)
+    assert.notEqual(result.status, 0)
+    assert.match(result.stdout + result.stderr, /\u72b6\u6001.*\u53d8\u5316|drift/i)
+    assert.equal(fs.existsSync(sandbox.mutationLog.replaceAll('/', path.sep)), false)
+    assert.equal(fs.existsSync(sandbox.rollbackScript.replaceAll('/', path.sep)), false)
+  })
+
+  await t.test('rollback reads swapon.before to restore the target activation', child => {
+    const sandbox = createSwapShellSandbox(child)
+    runPosixShell([
+      buildSwapShellPrelude(sandbox),
+      renderSwapShell(swap, sandbox, 'disable')
+    ].join('\n'))
+    assert.equal(fs.readFileSync(sandbox.swapState.replaceAll('/', path.sep), 'utf8'), '')
+    const rollbackText = fs.readFileSync(sandbox.rollbackScript.replaceAll('/', path.sep), 'utf8')
+    assert.match(rollbackText, /SWAPON_SNAPSHOT/)
+    assert.doesNotMatch(rollbackText, /echo "OLD_ACTIVE=/)
+    assert.match(
+      rollbackText,
+      /awk -v target="\$SWAP_PATH"[^\n]+"\$SWAPON_SNAPSHOT"/)
+    runPosixShell([
+      buildSwapShellPrelude(sandbox),
+      'sh -- ' + shellLiteral(sandbox.rollbackScript)
+    ].join('\n'))
+    assert.match(
+      fs.readFileSync(sandbox.swapState.replaceAll('/', path.sep), 'utf8'),
+      new RegExp('^' + sandbox.swapPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ' ')
+    )
+    assert.match(
+      fs.readFileSync(sandbox.mutationLog.replaceAll('/', path.sep), 'utf8'),
+      /swapon\t/
+    )
+  })
+})
 
 test('Cron actions and postValidation match the complete ShellPilot marker', async () => {
   const { getServerMaintenanceQuickCommands } = await import(registryUrl)

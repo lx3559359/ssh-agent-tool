@@ -192,7 +192,7 @@ ACTION="{{\u64cd\u4f5c}}"
 APPLY_CHANGE="{{\u786e\u8ba4\u6267\u884c}}"
 ROLLBACK_SCRIPT="{{\u56de\u6eda\u811a\u672c}}"
 is_swap_active () {
-  awk -v target="$SWAP_PATH" 'NR > 1 && $1 == target { found = 1 } END { exit found ? 0 : 1 }' /proc/swaps
+  awk -v target="$SWAP_PATH" '$1 == target { found = 1 } END { exit found ? 0 : 1 }' /proc/swaps
 }
 show_swap_status () {
   echo "===== Swap \u72b6\u6001 ====="
@@ -207,29 +207,54 @@ RUN_AS=""
 if [ "$(id -u)" != "0" ]; then
   if command -v sudo >/dev/null 2>&1; then RUN_AS="sudo"; else echo "\u5f53\u524d\u8d26\u53f7\u65e0\u6cd5\u4fee\u6539 Swap"; exit 1; fi
 fi
+SWAP_LOCK_DIR="/tmp/shellpilot-swap-manage.lock"
+if ! mkdir -- "$SWAP_LOCK_DIR" 2>/dev/null; then
+  echo "\u53e6\u4e00\u4e2a Swap \u64cd\u4f5c\u6b63\u5728\u8fdb\u884c"; exit 1
+fi
+release_swap_lock () { rmdir -- "$SWAP_LOCK_DIR" 2>/dev/null || true; }
+trap release_swap_lock EXIT HUP INT TERM
+chmod 700 "$SWAP_LOCK_DIR" || exit 1
 SWAPON_SNAPSHOT="$OPERATION_ROLLBACK_DIR/swapon.before"
 if command -v swapon >/dev/null 2>&1 && swapon --show --noheadings --raw --output NAME,TYPE,SIZE,USED,PRIO > "$SWAPON_SNAPSHOT" 2>/dev/null; then
   :
 else
   cat /proc/swaps > "$SWAPON_SNAPSHOT" || { echo "\u65e0\u6cd5\u4fdd\u5b58 Swap \u6fc0\u6d3b\u72b6\u6001"; exit 1; }
 fi
+snapshot_has_target () {
+  awk -v target="$SWAP_PATH" '$1 == target { found = 1 } END { exit found ? 0 : 1 }' "$SWAPON_SNAPSHOT"
+}
 OLD_ACTIVE=no
-if is_swap_active; then OLD_ACTIVE=yes; fi
+if snapshot_has_target; then OLD_ACTIVE=yes; fi
 SWAP_FILE_EXISTED=no
 if [ -e "$SWAP_PATH" ]; then SWAP_FILE_EXISTED=yes; fi
 TMP_ROLLBACK="$OPERATION_ROLLBACK_DIR/swap-rollback.sh"
+CURRENT_ACTIVE=no
+if is_swap_active; then CURRENT_ACTIVE=yes; fi
+if [ "$CURRENT_ACTIVE" != "$OLD_ACTIVE" ]; then
+  echo "Swap \u72b6\u6001\u5df2\u53d8\u5316\uff0c\u62d2\u7edd\u6267\u884c\u53d8\u66f4"; exit 1
+fi
 {
   echo '#!/bin/sh'
   echo 'set -e'
   echo "SWAP_PATH='$SWAP_PATH'"
-  echo "OLD_ACTIVE='$OLD_ACTIVE'"
   echo "SWAP_FILE_EXISTED='$SWAP_FILE_EXISTED'"
   echo "OPERATION_DIR='$OPERATION_ROLLBACK_DIR'"
   echo "SWAPON_SNAPSHOT='$SWAPON_SNAPSHOT'"
+  echo "SWAP_LOCK_DIR='$SWAP_LOCK_DIR'"
   cat <<'SHELLPILOT_SWAP_ROLLBACK'
 RUN_AS=""
 if [ "$(id -u)" != "0" ]; then RUN_AS="sudo"; fi
-test -f "$SWAPON_SNAPSHOT" || { echo "Swap \u6fc0\u6d3b\u72b6\u6001\u5feb\u7167\u4e0d\u5b58\u5728: $SWAPON_SNAPSHOT"; exit 1; }
+if ! mkdir -- "$SWAP_LOCK_DIR" 2>/dev/null; then
+  echo "\u53e6\u4e00\u4e2a Swap \u64cd\u4f5c\u6b63\u5728\u8fdb\u884c"; exit 1
+fi
+release_swap_lock () { rmdir -- "$SWAP_LOCK_DIR" 2>/dev/null || true; }
+trap release_swap_lock EXIT HUP INT TERM
+chmod 700 "$SWAP_LOCK_DIR" || exit 1
+test -r "$SWAPON_SNAPSHOT" || { echo "Swap \u6fc0\u6d3b\u72b6\u6001\u5feb\u7167\u4e0d\u53ef\u8bfb: $SWAPON_SNAPSHOT"; exit 1; }
+OLD_ACTIVE=no
+if awk -v target="$SWAP_PATH" '$1 == target { found = 1 } END { exit found ? 0 : 1 }' "$SWAPON_SNAPSHOT"; then
+  OLD_ACTIVE=yes
+fi
 echo "Swap \u6fc0\u6d3b\u72b6\u6001\u5feb\u7167: $SWAPON_SNAPSHOT"
 if awk -v target="$SWAP_PATH" 'NR > 1 && $1 == target { found = 1 } END { exit found ? 0 : 1 }' /proc/swaps; then
   $RUN_AS swapoff "$SWAP_PATH"
