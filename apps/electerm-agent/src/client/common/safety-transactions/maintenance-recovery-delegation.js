@@ -10,7 +10,11 @@ export const maintenanceRecoveryProvider = 'quick-command'
 const supportedQuickCommandIds = new Set([
   'builtin-server-hostname-change',
   'builtin-server-hosts-manage',
-  'builtin-server-timezone-change'
+  'builtin-server-timezone-change',
+  'builtin-server-swap-manage',
+  'builtin-server-service-boot-policy',
+  'builtin-server-cron-manage',
+  'builtin-server-firewall-open-port'
 ])
 const intentCapabilities = new WeakMap()
 const delegationCapabilities = new WeakMap()

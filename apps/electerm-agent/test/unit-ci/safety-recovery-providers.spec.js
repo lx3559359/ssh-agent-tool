@@ -163,6 +163,41 @@ test('maintenance recovery binds separate rollback and read-only verifier artifa
   }
 })
 
+test('new mutating maintenance commands are eligible for safety recovery', async () => {
+  const {
+    createPersistedMaintenanceRecovery,
+    isMaintenanceRecoveryQuickCommand
+  } = await importDomainModule('maintenance-recovery-delegation.js')
+  const endpoint = {
+    tabId: 'tab-maintenance-recovery',
+    host: 'prod.example.com',
+    port: 22,
+    username: 'root'
+  }
+  const commandIds = [
+    'builtin-server-swap-manage',
+    'builtin-server-service-boot-policy',
+    'builtin-server-cron-manage',
+    'builtin-server-firewall-open-port'
+  ]
+
+  for (const quickCommandId of commandIds) {
+    assert.equal(isMaintenanceRecoveryQuickCommand(quickCommandId), true)
+    const persisted = createPersistedMaintenanceRecovery({
+      quickCommandId,
+      command: 'printf mutate',
+      title: quickCommandId,
+      rollbackPath: `/tmp/shellpilot-rollback/${quickCommandId}.sh`,
+      endpoint,
+      backupTargets: ['/etc/example.conf'],
+      verification: ['test -f /etc/example.conf']
+    }, `recovery-${quickCommandId}`)
+    assert.equal(persisted.quickCommandId, quickCommandId)
+    assert.equal(persisted.endpoint.host, endpoint.host)
+    assert.equal(persisted.verification.length, 1)
+  }
+})
+
 test('maintenance recovery persistence and reload enforce the rollback basename budget', async () => {
   const { buildRecoveryPlan } = await importDomainModule('recovery-providers.js')
   const {
