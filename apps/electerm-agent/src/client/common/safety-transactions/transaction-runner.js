@@ -557,6 +557,71 @@ export function createTransactionRunner (options = {}) {
     return next
   }
 
+  function linkRetryLineage (previousId, replacementId, lineage = {}) {
+    const retryOf = String(previousId || '')
+    const nextId = String(replacementId || '')
+    const rootId = String(lineage.retryRootOperationId || '')
+    const retryAttempt = Number(lineage.retryAttempt)
+    if (!retryOf || !nextId || retryOf === nextId || !rootId ||
+      !Number.isInteger(retryAttempt) || retryAttempt < 1 ||
+      lineage.retryOf !== retryOf) {
+      return Promise.reject(new Error('重试谱系参数无效。'))
+    }
+    const ids = [retryOf, nextId].sort()
+    return serialize(ids[0], () => serialize(ids[1], async () => {
+      const previous = await get(retryOf)
+      const replacement = await get(nextId)
+      if (!previous || !replacement) {
+        throw new Error('重试谱系事务记录不存在。')
+      }
+      if (![operationStates.failed, operationStates.cancelled].includes(
+        previous.state
+      )) {
+        throw new Error('仅失败或已取消事务可以发起重试。')
+      }
+      if (previous.endpointKey !== replacement.endpointKey ||
+        previous.source !== replacement.source) {
+        throw new Error('重试事务必须绑定相同会话和来源。')
+      }
+      if (previous.supersededBy && previous.supersededBy !== nextId) {
+        throw new Error('原事务已关联其他重试事务。')
+      }
+      if ((replacement.retryOf && replacement.retryOf !== retryOf) ||
+        (replacement.retryRootOperationId &&
+          replacement.retryRootOperationId !== rootId) ||
+        (replacement.retryAttempt !== undefined &&
+          replacement.retryAttempt !== retryAttempt)) {
+        throw new Error('替代事务的重试谱系不一致。')
+      }
+      let previousPatched = false
+      try {
+        await patch(previous.id, {
+          supersededBy: nextId,
+          updatedAt: timestamp()
+        })
+        previousPatched = true
+        const next = await patch(replacement.id, {
+          retryOf,
+          retryRootOperationId: rootId,
+          retryAttempt,
+          updatedAt: timestamp()
+        })
+        emit(previous.id, previous.state, 'retry-superseded')
+        emit(next.id, next.state, 'retry-linked')
+        return next
+      } catch (error) {
+        if (previousPatched && !previous.supersededBy) {
+          try {
+            await patch(previous.id, {
+              supersededBy: undefined,
+              updatedAt: previous.updatedAt
+            })
+          } catch {}
+        }
+        throw error
+      }
+    }))
+  }
   async function assertCurrentEndpoint (operation) {
     const current = await getCurrentEndpoint(operation)
     assertSameSessionEndpoint(operation.endpoint, current)
@@ -2289,6 +2354,7 @@ export function createTransactionRunner (options = {}) {
     rollback,
     keep,
     revokeRecovery,
+    linkRetryLineage,
     cancel
   }
 }

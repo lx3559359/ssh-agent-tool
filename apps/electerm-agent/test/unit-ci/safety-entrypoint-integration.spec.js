@@ -67,6 +67,16 @@ function createHarness (overrides = {}) {
     async cancel (id) {
       cancellations.push(id)
       if (overrides.cancel) return overrides.cancel(id)
+      return { id, state: 'cancelled' }
+    },
+    async linkRetryLineage (previousId, replacementId, lineage) {
+      if (overrides.linkRetryLineage) {
+        return overrides.linkRetryLineage(previousId, replacementId, lineage)
+      }
+      return {
+        previous: { id: previousId, supersededBy: replacementId },
+        replacement: { id: replacementId, ...lineage }
+      }
     }
   }
   const tracker = {
@@ -648,6 +658,132 @@ test('Task 6 retry rotates recovery identity and retires the failed record', asy
     error => error instanceof Error
   )
   assert.equal(harness.remoteCalls.length, callsBeforeOldRollback)
+})
+
+test('Task 6 consecutive retries preserve trace lineage and retire every recovery', async () => {
+  const submitted = []
+  let submitAttempts = 0
+  const harness = await createRealRunnerHarness({
+    useRealRecoveryPlan: true,
+    submitCommand: (command, token) => {
+      submitAttempts += 1
+      if (submitAttempts < 3) return false
+      submitted.push({ command, token })
+      return true
+    }
+  })
+  const { createInternalMaintenanceRecoveryDelegation } = await import(maintenanceRecoveryUrl)
+  const details = task6RecoveryDetails(harness, task6RecoveryCases[1], 41)
+  const firstRun = harness.entrypoint.runSafetyCommand(details.command, {
+    source: 'quick-command',
+    title: details.title,
+    maintenanceRecovery: createInternalMaintenanceRecoveryDelegation(details)
+  })
+  await waitFor(() => harness.entrypoint.hasPendingConfirmation())
+  assert.equal(harness.entrypoint.confirmPending(), true)
+  assert.equal((await firstRun).retryable, true)
+
+  let viewOffset = harness.views.length
+  assert.equal(harness.entrypoint.confirmPending(), true)
+  assert.equal(harness.entrypoint.confirmPending(), false)
+  await waitFor(() => harness.store.records.size === 2 &&
+    harness.views.slice(viewOffset).some(view => {
+      return view.confirmation?.kind === 'reversible'
+    }))
+  assert.equal(harness.entrypoint.confirmPending(), true)
+  await waitFor(() => submitAttempts === 2 &&
+    harness.views.at(-1)?.confirmation?.kind === 'retry')
+
+  viewOffset = harness.views.length
+  assert.equal(harness.entrypoint.confirmPending(), true)
+  assert.equal(harness.entrypoint.confirmPending(), false)
+  await waitFor(() => harness.store.records.size === 3 &&
+    harness.views.slice(viewOffset).some(view => {
+      return view.confirmation?.kind === 'reversible'
+    }))
+  assert.equal(harness.entrypoint.confirmPending(), true)
+  await waitFor(() => submitted.length === 1)
+
+  await harness.entrypoint.handleCommandFinished({
+    token: submitted[0].token,
+    command: submitted[0].command,
+    exitCode: 0
+  })
+  await harness.runner.keep('operation-3')
+
+  const first = await harness.store.get('operation-1')
+  const second = await harness.store.get('operation-2')
+  const third = await harness.store.get('operation-3')
+  assert.equal(first.supersededBy, second.id)
+  assert.equal(second.retryOf, first.id)
+  assert.equal(second.retryRootOperationId, first.id)
+  assert.equal(second.retryAttempt, 1)
+  assert.equal(second.supersededBy, third.id)
+  assert.equal(third.retryOf, second.id)
+  assert.equal(third.retryRootOperationId, first.id)
+  assert.equal(third.retryAttempt, 2)
+  assert.equal(first.metadata.traceId, second.metadata.traceId)
+  assert.equal(second.metadata.traceId, third.metadata.traceId)
+  assert.ok(first.recoveryRevokedAt)
+  assert.ok(second.recoveryRevokedAt)
+
+  const callsBeforeRollback = harness.remoteCalls.length
+  for (const operation of [first, second]) {
+    await assert.rejects(
+      harness.runner.rollback(operation.id),
+      error => error instanceof Error
+    )
+  }
+  assert.equal(harness.remoteCalls.length, callsBeforeRollback)
+  assert.equal(harness.store.records.size, 3)
+  assert.equal(submitAttempts, 3)
+})
+
+test('retry lineage update failure blocks dispatch and cancels the replacement record', async () => {
+  let submitAttempts = 0
+  const harness = await createRealRunnerHarness({
+    submitCommand: () => {
+      submitAttempts += 1
+      return submitAttempts !== 1
+    }
+  })
+  const first = await harness.entrypoint.runSafetyCommand('uptime', {
+    source: 'agent',
+    title: '只读诊断'
+  })
+  assert.equal(first.retryable, true)
+  harness.runner.linkRetryLineage = async () => {
+    throw new Error('retry lineage patch failed')
+  }
+
+  assert.equal(harness.entrypoint.confirmPending(), true)
+  await waitFor(() => harness.errors.some(error => {
+    return /retry lineage patch failed/.test(error.message)
+  }))
+
+  assert.equal(submitAttempts, 1)
+  assert.equal(harness.entrypoint.hasPendingConfirmation(), true)
+  assert.equal((await harness.store.get('operation-2')).state, 'cancelled')
+  assert.equal((await harness.store.get('operation-1')).supersededBy, undefined)
+})
+
+test('callers cannot forge persisted retry lineage through metadata', async () => {
+  const { createSafetyCommandEntrypoint } = await import(moduleUrl)
+  const harness = createHarness()
+  const entrypoint = createSafetyCommandEntrypoint(harness.options)
+  entrypoint.beginSession()
+
+  await assert.rejects(entrypoint.runSafetyCommand('uptime', {
+    source: 'agent',
+    metadata: {
+      retryOf: 'forged-operation',
+      retryRootOperationId: 'forged-root',
+      retryAttempt: 99,
+      supersededBy: 'forged-next'
+    }
+  }), /retry|lineage|谱系|保留字段/i)
+  assert.deepEqual(harness.requests, [])
+  assert.deepEqual(harness.submissions, [])
 })
 
 test('Task 6 rollback invokes the mutating script once and verifies read-only state', async () => {
@@ -1910,6 +2046,36 @@ test('submit failure cannot retry when the executing transaction cannot be cance
   assert.equal(entrypoint.confirmPending(), false)
 })
 
+test('submit failure blocks retry unless cancellation returns an explicit success', async () => {
+  const { createSafetyCommandEntrypoint } = await import(moduleUrl)
+  const invalidResults = [
+    ['false', false],
+    ['null', null],
+    ['undefined', undefined],
+    ['executing state', { state: 'executing' }],
+    ['missing state', { id: 'operation-1' }]
+  ]
+
+  for (const [label, cancellationResult] of invalidResults) {
+    const harness = createHarness({
+      submitCommand: () => false,
+      cancel: async () => cancellationResult
+    })
+    const entrypoint = createSafetyCommandEntrypoint(harness.options)
+    entrypoint.beginSession()
+    const result = await entrypoint.runSafetyCommand('uptime', {
+      source: 'agent',
+      title: '只读诊断'
+    })
+
+    assert.equal(result.sent, false, label)
+    assert.equal(result.retryable, false, label)
+    assert.equal(result.blocked, true, label)
+    assert.equal(harness.views.at(-1).confirmation.kind, 'blocked', label)
+    assert.equal(entrypoint.confirmPending(), false, label)
+  }
+})
+
 test('completion timeout cancels the active transaction and reports Chinese feedback', async () => {
   const { createSafetyCommandEntrypoint } = await import(moduleUrl)
   const harness = createHarness()
@@ -1951,6 +2117,48 @@ test('completion failure is cancelled and reported without an unhandled rejectio
   assert.equal(harness.errors.length, 1)
   assert.match(harness.errors[0].message, /事务完成写入失败/)
   assert.equal(entrypoint.hasPending(), false)
+})
+
+test('background finalization failures settle and release the command slot', async () => {
+  const { createSafetyCommandEntrypoint } = await import(moduleUrl)
+  const failures = [
+    ['throws', async () => { throw new Error('background completion failed') }],
+    ['returns false', async () => false]
+  ]
+
+  for (const [label, completeExternalExecution] of failures) {
+    const harness = createHarness({ completeExternalExecution })
+    const entrypoint = createSafetyCommandEntrypoint(harness.options)
+    entrypoint.beginSession()
+    const result = await entrypoint.runSafetyCommand('uptime', {
+      source: 'agent',
+      executionMode: 'background'
+    })
+    const waiting = result.waitForCompletion({ timeoutMs: 250 }).then(
+      () => null,
+      error => error
+    )
+    await entrypoint.handleCommandFinished({
+      token: result.token,
+      command: result.execution.submittedCommand,
+      exitCode: 0
+    })
+
+    assert.equal(await result.finalizeBackground(0), false, label)
+    assert.equal(entrypoint.hasPending(), false, label)
+    const completionError = await waiting
+    assert.match(completionError?.message || '', /完成|失败|completion/i, label)
+    assert.deepEqual(harness.cancellations, [result.operationId], label)
+
+    const next = await entrypoint.runSafetyCommand('pwd', { source: 'agent' })
+    assert.equal(next.sent, true, label)
+    await entrypoint.handleCommandFinished({
+      token: next.token,
+      command: next.execution.submittedCommand,
+      exitCode: 0
+    })
+    assert.equal(entrypoint.hasPending(), false, label)
+  }
 })
 
 test('disconnect during delayed completion cancels the retained identity and ignores late success', async () => {

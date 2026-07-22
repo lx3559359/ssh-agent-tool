@@ -125,6 +125,50 @@ test('normalizes operations and builds classified safety requests', async () => 
   assert.match(request.reason, /systemd/)
 })
 
+test('operation model persists trusted retry lineage but request builder drops forged lineage', async () => {
+  const { normalizeOperation, buildSafetyRequest } = await importDomainModule('models.js')
+  const endpoint = { host: 'prod.example.com', username: 'root' }
+  const lineage = {
+    retryOf: 'operation-1',
+    retryRootOperationId: 'operation-1',
+    retryAttempt: 1
+  }
+  const retry = normalizeOperation({
+    id: 'operation-2',
+    source: 'quick-command',
+    endpoint,
+    ...lineage
+  })
+  const superseded = normalizeOperation({
+    id: 'operation-1',
+    source: 'quick-command',
+    endpoint,
+    supersededBy: 'operation-2'
+  })
+
+  assert.equal(retry.retryOf, 'operation-1')
+  assert.equal(retry.retryRootOperationId, 'operation-1')
+  assert.equal(retry.retryAttempt, 1)
+  assert.equal(superseded.supersededBy, 'operation-2')
+
+  const forged = buildSafetyRequest({
+    id: 'operation-forged',
+    source: 'quick-command',
+    endpoint,
+    command: 'uptime',
+    ...lineage,
+    supersededBy: 'operation-3'
+  })
+  for (const field of [
+    'retryOf',
+    'retryRootOperationId',
+    'retryAttempt',
+    'supersededBy'
+  ]) {
+    assert.equal(Object.hasOwn(forged, field), false, field)
+  }
+})
+
 test('operation model accepts only registered sources and states', async () => {
   const { normalizeOperation } = await importDomainModule('models.js')
   const endpoint = { host: 'example.com', username: 'root' }

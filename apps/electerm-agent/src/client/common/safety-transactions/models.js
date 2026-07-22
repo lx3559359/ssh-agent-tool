@@ -175,6 +175,7 @@ const endpointIdentityFields = [
 ]
 const normalizedOperationFields = [
   'id', 'source', 'command', 'title', 'state', 'createdAt', 'updatedAt',
+  'retryOf', 'retryRootOperationId', 'retryAttempt', 'supersededBy',
   'operationKind', 'effect', 'effectKey',
   'metadata', 'risk', 'provider', 'reversible', 'recoveryProvider',
   'requiresConfirmation', 'reason', 'plan', 'recoveryBinding', 'artifacts', 'audit',
@@ -233,6 +234,38 @@ function normalizeClassification (operation, normalized) {
   normalized.recoveryProvider = reversible ? provider : null
 }
 
+function normalizeRetryLineage (operation, normalized) {
+  const hasRetryLineage = operation.retryOf !== undefined ||
+    operation.retryRootOperationId !== undefined ||
+    operation.retryAttempt !== undefined
+  if (hasRetryLineage) {
+    const retryOf = String(operation.retryOf || '').trim()
+    const retryRootOperationId = String(
+      operation.retryRootOperationId || ''
+    ).trim()
+    const retryAttempt = Number(operation.retryAttempt)
+    if (!retryOf || !retryRootOperationId ||
+      !Number.isInteger(retryAttempt) || retryAttempt < 1) {
+      throw new Error('重试谱系字段不完整或无效。')
+    }
+    if (operation.id !== undefined &&
+      (retryOf === String(operation.id) ||
+        retryRootOperationId === String(operation.id))) {
+      throw new Error('重试谱系不能引用当前事务自身。')
+    }
+    normalized.retryOf = retryOf
+    normalized.retryRootOperationId = retryRootOperationId
+    normalized.retryAttempt = retryAttempt
+  }
+  if (operation.supersededBy !== undefined) {
+    const supersededBy = String(operation.supersededBy || '').trim()
+    if (!supersededBy ||
+      (operation.id !== undefined && supersededBy === String(operation.id))) {
+      throw new Error('替代事务不能引用当前事务自身。')
+    }
+    normalized.supersededBy = supersededBy
+  }
+}
 export function normalizeOperation (operation = {}, options = {}) {
   if (!validSources.has(operation.source)) {
     throw new Error('安全事务来源不受支持')
@@ -263,6 +296,7 @@ export function normalizeOperation (operation = {}, options = {}) {
       normalized[field] = redactSensitiveData(normalized[field])
     }
   }
+  normalizeRetryLineage(operation, normalized)
   normalizeClassification(operation, normalized)
   return {
     ...normalized,

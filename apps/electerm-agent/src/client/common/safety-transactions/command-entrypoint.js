@@ -17,6 +17,9 @@ import { createTraceContext } from '../quality/trace-context.js'
 import { recordQualityEvent } from '../quality/quality-events.js'
 
 const supportedSources = new Set(['quick-command', 'agent'])
+const retryLineageFields = Object.freeze([
+  'retryOf', 'retryRootOperationId', 'retryAttempt', 'supersededBy'
+])
 
 function requireFunction (value, name) {
   if (typeof value !== 'function') {
@@ -78,7 +81,7 @@ function rotateMaintenanceRecovery (command, recovery) {
     String(Date.now())
   const nextPath = oldPath.replace(/\.sh$/, `-retry-${retryId}.sh`)
   if (nextPath === oldPath || !command.includes(oldPath)) {
-    throw new Error('ά����������޷��ֻ��ع��ű����ѽ�ֹ���ԡ�')
+    throw new Error('维护命令无法轮换回滚脚本，已禁止重试。')
   }
   const nextCommand = command.replaceAll(oldPath, nextPath)
   return {
@@ -195,9 +198,20 @@ export function createSafetyCommandEntrypoint (options = {}) {
 
   function cancelRunOperation (run) {
     if (!run?.operationId) return Promise.resolve(undefined)
-    run.operationCancelled = true
     if (!run.cancelPromise) {
-      run.cancelPromise = Promise.resolve().then(() => runner.cancel(run.operationId))
+      run.cancelPromise = Promise.resolve()
+        .then(() => runner.cancel(run.operationId))
+        .then(result => {
+          const stopped = result && result.id === run.operationId &&
+            [operationStates.failed, operationStates.cancelled].includes(
+              result.state
+            )
+          if (!stopped) {
+            throw new Error('安全事务取消未返回明确的终止状态。')
+          }
+          run.operationCancelled = true
+          return result
+        })
     }
     return run.cancelPromise
   }
@@ -254,7 +268,8 @@ export function createSafetyCommandEntrypoint (options = {}) {
           pending.command,
           pending.runOptions,
           pending.riskDelegation,
-          pending.maintenanceRecovery
+          pending.maintenanceRecovery,
+          pending.retryLineage
         ))
         .catch(error => {
           if (!live || generation !== retryGeneration) return
@@ -469,11 +484,11 @@ export function createSafetyCommandEntrypoint (options = {}) {
         if (cancelOperation) await cancelRunOperation(run)
         if (run.maintenanceRecovery) {
           if (typeof runner.revokeRecovery !== 'function') {
-            throw new Error('��ȫ����ִ������֧�ֳ����ɻع���Ȩ��')
+            throw new Error('安全事务执行器不支持撤销可回滚授权。')
           }
           await runner.revokeRecovery(
             run.operationId,
-            '�����ύʧ�ܣ��ɻع���Ȩ�����ݡ�'
+            '命令提交失败，可回滚授权已失效。'
           )
         }
       } catch (caught) {
@@ -527,6 +542,12 @@ export function createSafetyCommandEntrypoint (options = {}) {
         error: message
       }
     }
+    const retryLineage = Object.freeze({
+      retryOf: request.id,
+      retryRootOperationId: run.retryLineage?.retryRootOperationId || request.id,
+      retryAttempt: Number(run.retryLineage?.retryAttempt || 0) + 1,
+      traceId: run.traceContext.traceId
+    })
     const confirmation = {
       ...retryConfirmation(run, request),
       command: retry.command
@@ -535,6 +556,7 @@ export function createSafetyCommandEntrypoint (options = {}) {
       retry: true,
       run,
       command: retry.command,
+      retryLineage,
       runOptions: run.runOptions,
       riskDelegation: run.riskDelegation,
       maintenanceRecovery: retry.recovery,
@@ -595,7 +617,6 @@ export function createSafetyCommandEntrypoint (options = {}) {
           exitCode
         })
         if (operation === false) {
-          if (execution.mode === 'background') return false
           throw new Error('安全事务完成返回失败。')
         }
         if (execution.cancelled || !live || execution.generation !== generation) {
@@ -631,10 +652,6 @@ export function createSafetyCommandEntrypoint (options = {}) {
         return true
       } catch (error) {
         if (execution.cancelled) return false
-        if (execution.mode === 'background') {
-          onError(error)
-          return false
-        }
         removeExecution(execution)
         tracker.cancelExpectedSubmission(execution.token)
         try {
@@ -669,6 +686,11 @@ export function createSafetyCommandEntrypoint (options = {}) {
     const { command, runOptions } = run
     try {
       const callerMetadata = { ...(runOptions.metadata || {}) }
+      if (retryLineageFields.some(field =>
+        Object.hasOwn(callerMetadata, field)
+      )) {
+        throw new Error('调用方不允许指定内部重试谱系。')
+      }
       if (Object.hasOwn(callerMetadata, 'maintenanceRecovery')) {
         throw maintenanceRecoveryError()
       }
@@ -744,6 +766,14 @@ export function createSafetyCommandEntrypoint (options = {}) {
           )
         }
       }
+      if (run.retryLineage) {
+        request = {
+          ...request,
+          retryOf: run.retryLineage.retryOf,
+          retryRootOperationId: run.retryLineage.retryRootOperationId,
+          retryAttempt: run.retryLineage.retryAttempt
+        }
+      }
       run.operationId = request.id
       try {
         await ensureTrackerReady({
@@ -767,6 +797,22 @@ export function createSafetyCommandEntrypoint (options = {}) {
       const prepared = await runner.prepare(request)
       if (prepared?.state !== operationStates.awaitingConfirmation) {
         throw new Error(prepared?.error || '无法安全准备执行，命令尚未发送。')
+      }
+      if (run.retryLineage) {
+        try {
+          await runner.linkRetryLineage(
+            run.retryLineage.retryOf,
+            request.id,
+            run.retryLineage
+          )
+        } catch (error) {
+          try {
+            await cancelRunOperation(run)
+          } catch (cancelError) {
+            onError(cancelError)
+          }
+          throw error
+        }
       }
       if (!isCurrent(run)) {
         if (!run.operationCancelled) await cancelRunOperation(run)
@@ -883,7 +929,8 @@ export function createSafetyCommandEntrypoint (options = {}) {
     value,
     runOptions = {},
     trustedRiskDelegation,
-    trustedMaintenanceRecovery
+    trustedMaintenanceRecovery,
+    trustedRetryLineage
   ) {
     const command = String(value || '')
     let riskDelegation
@@ -909,7 +956,10 @@ export function createSafetyCommandEntrypoint (options = {}) {
     if (!live) {
       return Promise.reject(new Error('当前终端会话未连接，命令尚未发送。'))
     }
-    for (const forbidden of ['submittedCommand', 'beforeSubmit', 'onAbort']) {
+    for (const forbidden of [
+      'submittedCommand', 'beforeSubmit', 'onAbort', 'retryLineage',
+      ...retryLineageFields
+    ]) {
       if (Object.prototype.hasOwnProperty.call(runOptions, forbidden)) {
         return Promise.reject(new Error('调用方不允许指定内部提交命令或安全钩子。'))
       }
@@ -952,10 +1002,12 @@ export function createSafetyCommandEntrypoint (options = {}) {
         new Error('命令包含疑似凭据，无法安全记录，命令尚未发送。')
       )
     }
+    const inheritedTraceId = trustedRetryLineage?.traceId ||
+      runOptions.traceContext?.traceId
     const operationId = createId()
     const traceContext = createTraceContext({
-      ...(runOptions.traceContext?.traceId
-        ? { traceId: runOptions.traceContext.traceId }
+      ...(inheritedTraceId
+        ? { traceId: inheritedTraceId }
         : {}),
       operationId,
       module: 'ssh',
@@ -967,6 +1019,7 @@ export function createSafetyCommandEntrypoint (options = {}) {
       generation,
       hookState: createHookState(internalHooks),
       riskDelegation,
+      retryLineage: trustedRetryLineage,
       maintenanceRecovery,
       operationId,
       traceContext,
