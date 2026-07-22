@@ -270,10 +270,6 @@ echo "回滚脚本: $ROLLBACK_SCRIPT"`)
 ACTION="{{\u64cd\u4f5c}}"
 APPLY_CHANGE="{{\u786e\u8ba4\u6267\u884c}}"
 ROLLBACK_SCRIPT="{{\u56de\u6eda\u811a\u672c}}"
-RUN_AS=""
-if [ "$(id -u)" != "0" ]; then
-  if command -v sudo >/dev/null 2>&1; then RUN_AS="sudo"; else echo "\u5f53\u524d\u8d26\u53f7\u65e0\u6cd5\u4fee\u6539 systemd \u7b56\u7565"; exit 1; fi
-fi
 if [ -z "$SERVICES" ]; then echo "\u8bf7\u9009\u62e9\u81f3\u5c11\u4e00\u4e2a systemd \u670d\u52a1"; exit 1; fi
 show_boot_policy () {
   OLD_IFS="$IFS"; IFS=','
@@ -286,6 +282,10 @@ show_boot_policy () {
 if [ "$ACTION" = "status" ]; then show_boot_policy; exit 0; fi
 echo "\u9884\u89c8: $ACTION $SERVICES"
 if [ "$APPLY_CHANGE" != "yes" ]; then echo "\u5f53\u524d\u4e3a\u53ea\u8bfb\u9884\u89c8\uff0c\u672a\u4fee\u6539\u670d\u52a1"; exit 0; fi
+RUN_AS=""
+if [ "$(id -u)" != "0" ]; then
+  if command -v sudo >/dev/null 2>&1; then RUN_AS="sudo"; else echo "\u5f53\u524d\u8d26\u53f7\u65e0\u6cd5\u4fee\u6539 systemd \u7b56\u7565"; exit 1; fi
+fi
 STATE_FILE="$OPERATION_ROLLBACK_DIR/service-boot.before"
 : > "$STATE_FILE"
 OLD_IFS="$IFS"; IFS=','
@@ -310,7 +310,8 @@ TAB=$(printf '\\t')
 while IFS="$TAB" read -r SERVICE OLD_ENABLED; do
   [ -n "$SERVICE" ] || continue
   case "$OLD_ENABLED" in
-    enabled|enabled-runtime) $RUN_AS systemctl enable "$SERVICE" ;;
+    enabled) $RUN_AS systemctl enable "$SERVICE" ;;
+    enabled-runtime) $RUN_AS systemctl enable --runtime "$SERVICE" ;;
     disabled) $RUN_AS systemctl disable "$SERVICE" ;;
     *) echo "\u65e0\u6cd5\u6062\u590d $SERVICE \u7684\u672a\u77e5\u72b6\u6001: $OLD_ENABLED"; exit 1;;
   esac
@@ -398,14 +399,14 @@ crontab -l > "$CURRENT" 2>/dev/null || : > "$CURRENT"
 MARKER_TEXT="# shellpilot:$MARKER"
 case "$ACTION" in
   add)
-    awk -v marker="$MARKER_TEXT" 'index($0, marker) == 0 { print }' "$CURRENT" > "$NEXT"
+    awk -v marker="$MARKER_TEXT" 'function matches(line) { return length(line) >= length(marker) && substr(line, length(line) - length(marker) + 1) == marker } !matches($0) { print }' "$CURRENT" > "$NEXT"
     printf '%s %s # shellpilot:%s\\n' "$SCHEDULE" "$TASK_COMMAND" "$MARKER" >> "$NEXT"
     ;;
   disable)
-    awk -v marker="$MARKER_TEXT" 'index($0, marker) > 0 { if (index($0, "# shellpilot-disabled ") == 1) print; else print "# shellpilot-disabled " $0; next } { print }' "$CURRENT" > "$NEXT"
+    awk -v marker="$MARKER_TEXT" 'function matches(line) { return length(line) >= length(marker) && substr(line, length(line) - length(marker) + 1) == marker } matches($0) { if (index($0, "# shellpilot-disabled ") == 1) print; else print "# shellpilot-disabled " $0; next } { print }' "$CURRENT" > "$NEXT"
     ;;
   remove)
-    awk -v marker="$MARKER_TEXT" 'index($0, marker) == 0 { print }' "$CURRENT" > "$NEXT"
+    awk -v marker="$MARKER_TEXT" 'function matches(line) { return length(line) >= length(marker) && substr(line, length(line) - length(marker) + 1) == marker } !matches($0) { print }' "$CURRENT" > "$NEXT"
     ;;
   *) echo "\u4e0d\u652f\u6301\u7684 Cron \u64cd\u4f5c"; exit 1;;
 esac
@@ -419,7 +420,7 @@ echo "\u56de\u6eda\u811a\u672c: $ROLLBACK_SCRIPT"`)
       mutatingValues: ['add', 'disable', 'remove'],
       backupTargets: [],
       verifyCommands: [
-        'test -s "{{\u56de\u6eda\u811a\u672c}}" && case "{{\u64cd\u4f5c}}" in add) crontab -l | grep -F -- "# shellpilot:{{\u5339\u914d\u6807\u8bc6}}" >/dev/null ;; disable) crontab -l | awk -v marker="# shellpilot:{{\u5339\u914d\u6807\u8bc6}}" \'index($0, marker) > 0 && index($0, "# shellpilot-disabled ") == 1 { found = 1 } END { exit found ? 0 : 1 }\' ;; remove) ! crontab -l 2>/dev/null | grep -F -- "# shellpilot:{{\u5339\u914d\u6807\u8bc6}}" >/dev/null ;; *) exit 1 ;; esac'
+        'test -s "{{\u56de\u6eda\u811a\u672c}}" && case "{{\u64cd\u4f5c}}" in add) crontab -l | awk -v marker="# shellpilot:{{\u5339\u914d\u6807\u8bc6}}" \'function matches(line) { return length(line) >= length(marker) && substr(line, length(line) - length(marker) + 1) == marker } matches($0) { found = 1 } END { exit found ? 0 : 1 }\' ;; disable) crontab -l | awk -v marker="# shellpilot:{{\u5339\u914d\u6807\u8bc6}}" \'function matches(line) { return length(line) >= length(marker) && substr(line, length(line) - length(marker) + 1) == marker } matches($0) && index($0, "# shellpilot-disabled ") == 1 { found = 1 } END { exit found ? 0 : 1 }\' ;; remove) ! crontab -l 2>/dev/null | awk -v marker="# shellpilot:{{\u5339\u914d\u6807\u8bc6}}" \'function matches(line) { return length(line) >= length(marker) && substr(line, length(line) - length(marker) + 1) == marker } matches($0) { found = 1 } END { exit found ? 0 : 1 }\' ;; *) exit 1 ;; esac'
       ]
     }))
   ]

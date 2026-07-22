@@ -141,6 +141,17 @@ test('Task 7 forms default to read-only preview and expose typed parameters', as
   assert.equal(getParam(cron, '\u4efb\u52a1\u547d\u4ee4').validationType, 'text')
   assert.equal(getParam(cron, '\u5339\u914d\u6807\u8bc6').validationType, 'text')
 
+  const bootText = commandText(boot)
+  const sudoProbe = bootText.indexOf('command -v sudo')
+  const permissionProbe = bootText.indexOf('id -u')
+  assert.ok(bootText.indexOf('if [ "$ACTION" = "status" ]') < sudoProbe)
+  assert.ok(bootText.indexOf('if [ "$APPLY_CHANGE" != "yes" ]') < sudoProbe)
+  assert.ok(bootText.indexOf('if [ "$APPLY_CHANGE" != "yes" ]') < permissionProbe)
+  assert.match(
+    bootText,
+    /enabled-runtime\) \$RUN_AS systemctl enable --runtime "\$SERVICE"/
+  )
+
   const firewall = byId.get('builtin-server-firewall-open-port')
   assert.deepEqual(getParam(firewall, '\u64cd\u4f5c').options.map(item => item.value), [
     'allow', 'deny'
@@ -149,6 +160,52 @@ test('Task 7 forms default to read-only preview and expose typed parameters', as
     'tcp', 'udp'
   ])
   assert.equal(getParam(firewall, '\u6765\u6e90CIDR').validationType, 'cidr')
+})
+
+test('Cron actions and postValidation match the complete ShellPilot marker', async () => {
+  const { getServerMaintenanceQuickCommands } = await import(registryUrl)
+  const cron = getServerMaintenanceQuickCommands().find(command => {
+    return command.id === 'builtin-server-cron-manage'
+  })
+  const text = commandText(cron)
+  const programs = [...text.matchAll(/awk -v marker="\$MARKER_TEXT" '([^']+)'/g)]
+    .map(match => match[1])
+  assert.equal(programs.length, 3)
+  assert.doesNotMatch(text, /index\(\$0, marker\)/)
+  const validationText = cron.safetyMetadata.verifyCommands.join('\n')
+  assert.doesNotMatch(validationText, /grep -F|index\(\$0, marker\)/)
+  assert.equal((validationText.match(/function matches/g) || []).length, 3)
+
+  const fixture = [
+    '0 1 * * * /bin/daily # shellpilot:daily',
+    '0 2 * * * /bin/backup # shellpilot:daily-backup',
+    '# shellpilot-disabled 0 3 * * * /bin/disabled # shellpilot:daily',
+    '# shellpilot-disabled 0 4 * * * /bin/disabled-backup # shellpilot:daily-backup',
+    ''
+  ].join('\n')
+  const withoutDaily = [
+    '0 2 * * * /bin/backup # shellpilot:daily-backup',
+    '# shellpilot-disabled 0 4 * * * /bin/disabled-backup # shellpilot:daily-backup',
+    ''
+  ].join('\n')
+  const expected = [
+    withoutDaily,
+    [
+      '# shellpilot-disabled 0 1 * * * /bin/daily # shellpilot:daily',
+      '0 2 * * * /bin/backup # shellpilot:daily-backup',
+      '# shellpilot-disabled 0 3 * * * /bin/disabled # shellpilot:daily',
+      '# shellpilot-disabled 0 4 * * * /bin/disabled-backup # shellpilot:daily-backup',
+      ''
+    ].join('\n'),
+    withoutDaily
+  ]
+  for (const [index, program] of programs.entries()) {
+    const result = spawnSync(posixShellExecutable, [
+      '-c', '/usr/bin/awk -v marker="$1" "$2"', 'sh', '# shellpilot:daily', program
+    ], { encoding: 'utf8', input: fixture })
+    assert.equal(result.status, 0, result.stderr)
+    assert.equal(result.stdout, expected[index])
+  }
 })
 
 test('Task 6 forms expose locked rollback metadata and strictly typed params', async () => {
