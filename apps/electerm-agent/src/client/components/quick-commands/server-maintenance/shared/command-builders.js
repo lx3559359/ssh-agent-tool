@@ -79,8 +79,18 @@ FIREWALL_PERMANENT_WAS_PRESENT="no"
 if [ "$FIREWALL_KIND" = "firewalld" ]; then
   RICH_ACTION=accept; [ "$ACTION" = "deny" ] && RICH_ACTION=drop
   RICH_RULE="rule family=ipv4 source address=$SOURCE_CIDR port port=$PORT protocol=$PROTO $RICH_ACTION"
-  if $RUN_AS firewall-cmd --query-rich-rule="$RICH_RULE" >/dev/null 2>&1; then FIREWALL_RUNTIME_WAS_PRESENT="yes"; fi
-  if $RUN_AS firewall-cmd --permanent --query-rich-rule="$RICH_RULE" >/dev/null 2>&1; then FIREWALL_PERMANENT_WAS_PRESENT="yes"; fi
+  if $RUN_AS firewall-cmd --query-rich-rule="$RICH_RULE" >/dev/null 2>&1; then
+    FIREWALL_RUNTIME_WAS_PRESENT="yes"
+  else
+    FIREWALL_QUERY_STATUS=$?
+    [ "$FIREWALL_QUERY_STATUS" = "1" ] || { echo "firewalld runtime rule query failed"; exit "$FIREWALL_QUERY_STATUS"; }
+  fi
+  if $RUN_AS firewall-cmd --permanent --query-rich-rule="$RICH_RULE" >/dev/null 2>&1; then
+    FIREWALL_PERMANENT_WAS_PRESENT="yes"
+  else
+    FIREWALL_QUERY_STATUS=$?
+    [ "$FIREWALL_QUERY_STATUS" = "1" ] || { echo "firewalld permanent rule query failed"; exit "$FIREWALL_QUERY_STATUS"; }
+  fi
   if [ "$APPLY_MODE" = "permanent" ]; then RULE_WAS_PRESENT="$FIREWALL_PERMANENT_WAS_PRESENT"; else RULE_WAS_PRESENT="$FIREWALL_RUNTIME_WAS_PRESENT"; fi
 elif [ "$FIREWALL_KIND" = "ufw" ]; then
   if [ "$ACTION" = "allow" ] && [ "$SOURCE_CIDR" = "0.0.0.0/0" ]; then
@@ -95,6 +105,11 @@ fi`
     echo '#!/bin/sh'
     echo 'set -e'
     printf '# ShellPilot backup directory: %s\\n' "$OPERATION_ROLLBACK_DIR"
+    echo 'query_firewalld_rule () {'
+    echo '  if "$@"; then return 0; else FIREWALL_QUERY_STATUS=$?; fi'
+    echo '  if [ "$FIREWALL_QUERY_STATUS" = "1" ]; then return 1; fi'
+    echo '  exit "$FIREWALL_QUERY_STATUS"'
+    echo '}'
     if [ "$RULE_WAS_PRESENT" = "yes" ]; then
       if [ "$APPLY_MODE" != "permanent" ]; then echo ':'; fi
     fi
@@ -104,9 +119,9 @@ fi`
         echo "$RUN_AS firewall-cmd --reload"
       fi
       if [ "$FIREWALL_RUNTIME_WAS_PRESENT" = "yes" ]; then
-        echo "if ! $RUN_AS firewall-cmd --query-rich-rule='$RICH_RULE' >/dev/null 2>&1; then $RUN_AS firewall-cmd --add-rich-rule='$RICH_RULE'; fi"
+        echo "if ! query_firewalld_rule $RUN_AS firewall-cmd --query-rich-rule='$RICH_RULE' >/dev/null 2>&1; then $RUN_AS firewall-cmd --add-rich-rule='$RICH_RULE'; fi"
       else
-        echo "if $RUN_AS firewall-cmd --query-rich-rule='$RICH_RULE' >/dev/null 2>&1; then $RUN_AS firewall-cmd --remove-rich-rule='$RICH_RULE'; fi"
+        echo "if query_firewalld_rule $RUN_AS firewall-cmd --query-rich-rule='$RICH_RULE' >/dev/null 2>&1; then $RUN_AS firewall-cmd --remove-rich-rule='$RICH_RULE'; fi"
       fi
     elif [ "$RULE_WAS_PRESENT" != "yes" ]; then
       echo "$RUN_AS firewall-cmd --remove-rich-rule='$RICH_RULE'"

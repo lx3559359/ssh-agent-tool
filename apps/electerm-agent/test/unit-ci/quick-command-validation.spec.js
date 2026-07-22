@@ -2,6 +2,8 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const path = require('node:path')
 const fs = require('node:fs')
+const os = require('node:os')
+const { spawnSync } = require('node:child_process')
 const { pathToFileURL } = require('node:url')
 
 const sharedDirectory = path.resolve(
@@ -1203,6 +1205,102 @@ test('firewalld permanent rollback restores independent runtime and permanent st
   assert.match(result.commandText, /if \[ "\$FIREWALL_RUNTIME_WAS_PRESENT" = "yes" \]/)
   assert.match(result.commandText, /firewall-cmd --add-rich-rule=/)
   assert.match(result.commandText, /firewall-cmd --remove-rich-rule=/)
+})
+
+test('firewalld query errors stop mutation and rollback without deleting rules', async () => {
+  const { getServerMaintenanceQuickCommands } = await import(commandsUrl)
+  const {
+    buildQuickCommandContext,
+    buildQuickCommandParamValues,
+    submitValidatedQuickCommand
+  } = await import(contextUrl)
+  const item = getServerMaintenanceQuickCommands()
+    .find(command => command.id === 'builtin-server-firewall-open-port')
+  const context = buildQuickCommandContext({ host: 'server.example.com', port: '22' })
+  const result = submitValidatedQuickCommand({
+    id: item.id,
+    item,
+    context,
+    inputOnly: false,
+    paramValues: {
+      ...buildQuickCommandParamValues(item, context),
+      端口: '443',
+      防火墙类型: 'firewalld',
+      生效方式: 'permanent',
+      确认执行: 'yes'
+    }
+  }, () => {})
+  assert.equal(result.submitted, true)
+
+  const shell = process.platform === 'win32'
+    ? 'C:\\Program Files\\Git\\bin\\bash.exe'
+    : '/bin/sh'
+  const runShell = (script, args = []) => spawnSync(
+    shell,
+    ['-c', script, 'firewalld-query-harness', ...args],
+    { encoding: 'utf8' }
+  )
+  const stateStart = result.commandText.indexOf('RULE_WAS_PRESENT="no"')
+  const stateEnd = result.commandText.indexOf('case "$FIREWALL_KIND" in', stateStart)
+  assert.ok(stateStart >= 0 && stateEnd > stateStart)
+  const stateCapture = result.commandText
+    .slice(stateStart, stateEnd)
+    .replaceAll('firewall-cmd', 'firewall_cmd')
+  const mutationHarness = runShell(`
+set -e
+firewall_cmd () { printf 'QUERY\\n'; return 2; }
+RUN_AS=""
+FIREWALL_KIND=firewalld
+ACTION=allow
+SOURCE_CIDR=192.0.2.0/24
+PORT=443
+PROTO=tcp
+APPLY_MODE=permanent
+${stateCapture}
+printf 'MUTATED\\n'
+`)
+  assert.notEqual(mutationHarness.status, 0)
+  assert.doesNotMatch(mutationHarness.stdout, /MUTATED/)
+
+  const executeStart = result.commandText.indexOf('# __SHELLPILOT_MUTATION_EXECUTE__')
+  const branchStart = result.commandText.indexOf('  firewalld)', executeStart)
+  const rollbackStart = result.commandText.indexOf("  {\n    echo '#!/bin/sh'", branchStart)
+  const rollbackTerminator = '  } > "$TMP_ROLLBACK"'
+  const rollbackEnd = result.commandText.indexOf(rollbackTerminator, rollbackStart)
+  assert.ok(rollbackStart >= 0 && rollbackEnd > rollbackStart)
+  const rollbackBuilder = result.commandText
+    .slice(rollbackStart, rollbackEnd + rollbackTerminator.length)
+    .replaceAll('firewall-cmd', 'firewall_cmd')
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'shellpilot-firewalld-query-'))
+  const rollbackPath = path.join(directory, 'rollback.sh').replaceAll('\\', '/')
+  try {
+    const buildRollback = runShell(`
+set -e
+TMP_ROLLBACK="$1"
+OPERATION_ROLLBACK_DIR="$(dirname "$1")"
+RUN_AS=""
+RICH_RULE='rule family=ipv4 source address=192.0.2.0/24 port port=443 protocol=tcp accept'
+RULE_WAS_PRESENT=yes
+FIREWALL_RUNTIME_WAS_PRESENT=no
+FIREWALL_PERMANENT_WAS_PRESENT=yes
+APPLY_MODE=permanent
+${rollbackBuilder}
+`, [rollbackPath])
+    assert.equal(buildRollback.status, 0, buildRollback.stderr)
+    const rollbackHarness = runShell(`
+firewall_cmd () {
+  printf 'QUERY\\n'
+  case "$*" in *--query-rich-rule*) return 2;; esac
+  printf 'MUTATED\\n'
+  return 0
+}
+. "$1"
+`, [rollbackPath])
+    assert.notEqual(rollbackHarness.status, 0)
+    assert.doesNotMatch(rollbackHarness.stdout, /MUTATED/)
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
 })
 
 test('UFW rollback stops before reload when either rules file restore fails', async () => {
