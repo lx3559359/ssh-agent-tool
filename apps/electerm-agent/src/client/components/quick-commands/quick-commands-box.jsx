@@ -69,6 +69,7 @@ const targetDiscoveryMessageKeys = Object.freeze({
 export default function QuickCommandsFooterBox (props) {
   const [keyword, setKeyword] = useState('')
   const [label, setLabel] = useState(ls.getItem(quickCommandLabelsLsKey, ''))
+  const [riskFilter, setRiskFilter] = useState('all')
   const [pendingCommand, setPendingCommand] = useState(null)
   const [showPendingPreview, setShowPendingPreview] = useState(false)
   const [networkProbe, setNetworkProbe] = useState({ loading: false, error: '', detected: null })
@@ -887,7 +888,7 @@ export default function QuickCommandsFooterBox (props) {
     )
   }
 
-  function filterArray (array, keyword, label) {
+  function filterArray (array, keyword, label, riskFilter) {
     return array.filter(obj => {
       const text = [
         obj.name,
@@ -897,7 +898,12 @@ export default function QuickCommandsFooterBox (props) {
       ].filter(Boolean).join(' ').toLowerCase()
       const nameMatches = !keyword || text.includes(keyword)
       const labelMatches = !label || (obj.labels || []).includes(label)
-      return nameMatches && labelMatches
+      const riskMatches = riskFilter === 'all' ||
+        (riskFilter === 'readonly' && !obj.mutatesServer) ||
+        (riskFilter === 'edit' && Boolean(obj.editBeforeRun)) ||
+        (riskFilter === 'highrisk' && Boolean(obj.mutatesServer && obj.confirmRequired)) ||
+        (riskFilter === 'rollback' && Boolean(obj.rollback))
+      return nameMatches && labelMatches && riskMatches
     })
   }
 
@@ -916,7 +922,7 @@ export default function QuickCommandsFooterBox (props) {
   //   return renderNoCmd()
   // }
   const keyword0 = keyword.toLowerCase()
-  const filtered = filterArray(all, keyword0, label)
+  const filtered = filterArray(all, keyword0, label, riskFilter)
   const sorted = qmSortByFrequency
     ? sortBy(filtered, (obj) => -(obj.clickCount || 0))
     : filtered
@@ -969,6 +975,18 @@ export default function QuickCommandsFooterBox (props) {
             className='qm-search-input'
           />
           <Flex gap='small'>
+            <Select
+              value={riskFilter}
+              onChange={setRiskFilter}
+              className='qm-risk-select'
+              aria-label={e('shellpilotQuickRiskFilter')}
+            >
+              <Option value='all'>{e('shellpilotQuickFilterAll')}</Option>
+              <Option value='readonly'>{e('shellpilotQuickFilterReadonly')}</Option>
+              <Option value='edit'>{e('shellpilotQuickFilterEdit')}</Option>
+              <Option value='highrisk'>{e('shellpilotQuickFilterHighRisk')}</Option>
+              <Option value='rollback'>{e('shellpilotQuickFilterRollback')}</Option>
+            </Select>
             <Select
               {...sprops}
             >
