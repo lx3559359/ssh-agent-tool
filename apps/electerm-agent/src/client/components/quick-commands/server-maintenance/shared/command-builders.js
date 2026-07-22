@@ -74,12 +74,14 @@ function hardenFirewallMutationCommand (commandText) {
   const templateRollbackMarker = 'TMP_ROLLBACK="$OPERATION_ROLLBACK_DIR/firewall-rollback.sh"'
   const stateCapture = `${templateRollbackMarker}
 RULE_WAS_PRESENT="no"
+FIREWALL_RUNTIME_WAS_PRESENT="no"
+FIREWALL_PERMANENT_WAS_PRESENT="no"
 if [ "$FIREWALL_KIND" = "firewalld" ]; then
   RICH_ACTION=accept; [ "$ACTION" = "deny" ] && RICH_ACTION=drop
   RICH_RULE="rule family=ipv4 source address=$SOURCE_CIDR port port=$PORT protocol=$PROTO $RICH_ACTION"
-  QUERY_PERMANENT=""
-  if [ "$APPLY_MODE" = "permanent" ]; then QUERY_PERMANENT="--permanent"; fi
-  if $RUN_AS firewall-cmd $QUERY_PERMANENT --query-rich-rule="$RICH_RULE" >/dev/null 2>&1; then RULE_WAS_PRESENT="yes"; fi
+  if $RUN_AS firewall-cmd --query-rich-rule="$RICH_RULE" >/dev/null 2>&1; then FIREWALL_RUNTIME_WAS_PRESENT="yes"; fi
+  if $RUN_AS firewall-cmd --permanent --query-rich-rule="$RICH_RULE" >/dev/null 2>&1; then FIREWALL_PERMANENT_WAS_PRESENT="yes"; fi
+  if [ "$APPLY_MODE" = "permanent" ]; then RULE_WAS_PRESENT="$FIREWALL_PERMANENT_WAS_PRESENT"; else RULE_WAS_PRESENT="$FIREWALL_RUNTIME_WAS_PRESENT"; fi
 elif [ "$FIREWALL_KIND" = "ufw" ]; then
   if [ "$ACTION" = "allow" ] && [ "$SOURCE_CIDR" = "0.0.0.0/0" ]; then
     if $RUN_AS ufw status | awk -v rule="$PORT/$PROTO" ${ufwGlobalAllowAwk}; then RULE_WAS_PRESENT="yes"; fi
@@ -91,12 +93,22 @@ elif [ "$FIREWALL_KIND" = "ufw" ]; then
 fi`
   const firewalldRollback = `  {
     echo '#!/bin/sh'
+    echo 'set -e'
     printf '# ShellPilot backup directory: %s\\n' "$OPERATION_ROLLBACK_DIR"
     if [ "$RULE_WAS_PRESENT" = "yes" ]; then
-      echo ':'
-    elif [ "$APPLY_MODE" = "permanent" ]; then
-      echo "$RUN_AS firewall-cmd --permanent --remove-rich-rule='$RICH_RULE' && $RUN_AS firewall-cmd --reload"
-    else
+      if [ "$APPLY_MODE" != "permanent" ]; then echo ':'; fi
+    fi
+    if [ "$APPLY_MODE" = "permanent" ]; then
+      if [ "$FIREWALL_PERMANENT_WAS_PRESENT" != "yes" ]; then
+        echo "$RUN_AS firewall-cmd --permanent --remove-rich-rule='$RICH_RULE'"
+        echo "$RUN_AS firewall-cmd --reload"
+      fi
+      if [ "$FIREWALL_RUNTIME_WAS_PRESENT" = "yes" ]; then
+        echo "if ! $RUN_AS firewall-cmd --query-rich-rule='$RICH_RULE' >/dev/null 2>&1; then $RUN_AS firewall-cmd --add-rich-rule='$RICH_RULE'; fi"
+      else
+        echo "if $RUN_AS firewall-cmd --query-rich-rule='$RICH_RULE' >/dev/null 2>&1; then $RUN_AS firewall-cmd --remove-rich-rule='$RICH_RULE'; fi"
+      fi
+    elif [ "$RULE_WAS_PRESENT" != "yes" ]; then
       echo "$RUN_AS firewall-cmd --remove-rich-rule='$RICH_RULE'"
     fi
   } > "$TMP_ROLLBACK"`
@@ -109,6 +121,7 @@ fi`
     } > "$TMP_ROLLBACK"`
   const ufwRollback = `  {
     echo '#!/bin/sh'
+    echo 'set -e'
     printf '# ShellPilot backup directory: %s\\n' "$OPERATION_ROLLBACK_DIR"
     if [ -e "$OPERATION_ROLLBACK_DIR/target-1" ]; then
       echo "$RUN_AS cp -a -- '$OPERATION_ROLLBACK_DIR/target-1' '/etc/ufw/user.rules'"

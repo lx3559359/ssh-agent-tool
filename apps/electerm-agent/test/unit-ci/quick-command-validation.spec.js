@@ -1092,6 +1092,154 @@ test('firewall rollback and verification stay bound to the selected backend', as
   }
 })
 
+test('auto firewall verification reads the persisted backend without probing again', async () => {
+  const { getServerMaintenanceQuickCommands } = await import(commandsUrl)
+  const {
+    buildQuickCommandContext,
+    buildQuickCommandParamValues,
+    submitValidatedQuickCommand
+  } = await import(contextUrl)
+  const item = getServerMaintenanceQuickCommands()
+    .find(command => command.id === 'builtin-server-firewall-open-port')
+  const context = buildQuickCommandContext({ host: 'server.example.com', port: '22' })
+  const result = submitValidatedQuickCommand({
+    id: item.id,
+    item,
+    context,
+    inputOnly: false,
+    paramValues: {
+      ...buildQuickCommandParamValues(item, context),
+      端口: '443',
+      防火墙类型: 'auto',
+      生效方式: 'runtime',
+      确认执行: 'yes'
+    }
+  }, () => {})
+
+  assert.equal(result.submitted, true)
+  const verifyText = result.commandText.slice(
+    result.commandText.indexOf('# __SHELLPILOT_MUTATION_VERIFY__')
+  )
+  assert.match(result.commandText, /FIREWALL_BACKEND_FILE="\$OPERATION_ROLLBACK_DIR\/firewall\.backend"/)
+  assert.match(result.commandText, /firewalld\|ufw\|iptables\|nftables/)
+  assert.match(result.commandText, /printf '%s\\n' "\$FIREWALL_KIND" > "\$FIREWALL_BACKEND_FILE"/)
+  assert.match(verifyText, /VERIFY_BACKEND_FILE="\$OPERATION_ROLLBACK_DIR\/firewall\.backend"/)
+  assert.match(verifyText, /\[ -L "\$VERIFY_BACKEND_FILE" \]/)
+  assert.match(verifyText, /IFS= read -r VERIFY_FIREWALL_KIND < "\$VERIFY_BACKEND_FILE"/)
+  assert.match(verifyText, /case "\$VERIFY_FIREWALL_KIND" in firewalld\|ufw\|iptables\|nftables\)/)
+  assert.doesNotMatch(verifyText, /auto\) if command -v/)
+})
+
+test('nftables verification marker binds action source port and protocol', async () => {
+  const { getServerMaintenanceQuickCommands } = await import(commandsUrl)
+  const {
+    buildQuickCommandContext,
+    buildQuickCommandParamValues,
+    submitValidatedQuickCommand
+  } = await import(contextUrl)
+  const item = getServerMaintenanceQuickCommands()
+    .find(command => command.id === 'builtin-server-firewall-open-port')
+  const context = buildQuickCommandContext({ host: 'server.example.com', port: '22' })
+  const result = submitValidatedQuickCommand({
+    id: item.id,
+    item,
+    context,
+    inputOnly: false,
+    paramValues: {
+      ...buildQuickCommandParamValues(item, context),
+      操作: 'deny',
+      来源CIDR: '192.0.2.0/24',
+      端口: '443',
+      协议: 'tcp',
+      防火墙类型: 'nftables',
+      生效方式: 'runtime',
+      确认执行: 'yes'
+    }
+  }, () => {})
+
+  assert.equal(result.submitted, true)
+  const verifyText = result.commandText.slice(
+    result.commandText.indexOf('# __SHELLPILOT_MUTATION_VERIFY__')
+  )
+  const expectedMarker = 'shellpilot-deny-192.0.2.0/24-443-tcp'
+  const staleSourceMarker = 'shellpilot-deny-198.51.100.0/24-443-tcp'
+  assert.notEqual(expectedMarker, staleSourceMarker)
+  assert.match(result.commandText, /RULE_MARKER="shellpilot-\$ACTION-\$SOURCE_CIDR-\$PORT-\$PROTO"/)
+  assert.ok(verifyText.includes(`VERIFY_MARKER="${expectedMarker}"`))
+  assert.equal(verifyText.includes(staleSourceMarker), false)
+})
+
+test('firewalld permanent rollback restores independent runtime and permanent state', async () => {
+  const { getServerMaintenanceQuickCommands } = await import(commandsUrl)
+  const {
+    buildQuickCommandContext,
+    buildQuickCommandParamValues,
+    submitValidatedQuickCommand
+  } = await import(contextUrl)
+  const item = getServerMaintenanceQuickCommands()
+    .find(command => command.id === 'builtin-server-firewall-open-port')
+  const context = buildQuickCommandContext({ host: 'server.example.com', port: '22' })
+  const result = submitValidatedQuickCommand({
+    id: item.id,
+    item,
+    context,
+    inputOnly: false,
+    paramValues: {
+      ...buildQuickCommandParamValues(item, context),
+      端口: '443',
+      防火墙类型: 'firewalld',
+      生效方式: 'permanent',
+      确认执行: 'yes'
+    }
+  }, () => {})
+
+  assert.equal(result.submitted, true)
+  assert.match(result.commandText, /FIREWALL_RUNTIME_WAS_PRESENT="no"/)
+  assert.match(result.commandText, /FIREWALL_PERMANENT_WAS_PRESENT="no"/)
+  assert.match(result.commandText, /firewall-cmd --query-rich-rule="\$RICH_RULE"/)
+  assert.match(result.commandText, /firewall-cmd --permanent --query-rich-rule="\$RICH_RULE"/)
+  assert.match(result.commandText, /if \[ "\$FIREWALL_PERMANENT_WAS_PRESENT" != "yes" \]/)
+  assert.match(result.commandText, /firewall-cmd --permanent --remove-rich-rule=/)
+  assert.match(result.commandText, /if \[ "\$FIREWALL_RUNTIME_WAS_PRESENT" = "yes" \]/)
+  assert.match(result.commandText, /firewall-cmd --add-rich-rule=/)
+  assert.match(result.commandText, /firewall-cmd --remove-rich-rule=/)
+})
+
+test('UFW rollback stops before reload when either rules file restore fails', async () => {
+  const { getServerMaintenanceQuickCommands } = await import(commandsUrl)
+  const {
+    buildQuickCommandContext,
+    buildQuickCommandParamValues,
+    submitValidatedQuickCommand
+  } = await import(contextUrl)
+  const item = getServerMaintenanceQuickCommands()
+    .find(command => command.id === 'builtin-server-firewall-open-port')
+  const context = buildQuickCommandContext({ host: 'server.example.com', port: '22' })
+  const result = submitValidatedQuickCommand({
+    id: item.id,
+    item,
+    context,
+    inputOnly: false,
+    paramValues: {
+      ...buildQuickCommandParamValues(item, context),
+      端口: '443',
+      防火墙类型: 'ufw',
+      生效方式: 'runtime',
+      确认执行: 'yes'
+    }
+  }, () => {})
+
+  assert.equal(result.submitted, true)
+  const firstRestore = result.commandText.indexOf("target-1' '/etc/ufw/user.rules'")
+  const secondRestore = result.commandText.indexOf("target-2' '/etc/ufw/user6.rules'")
+  const reload = result.commandText.indexOf('echo "$RUN_AS ufw reload"', secondRestore)
+  const setE = result.commandText.lastIndexOf("echo 'set -e'", firstRestore)
+  assert.ok(setE >= 0)
+  assert.ok(setE < firstRestore)
+  assert.ok(firstRestore < secondRestore)
+  assert.ok(secondRestore < reload)
+})
+
 test('rollback scripts stay inside the fixed direct-child directory', async t => {
   const { validateValue } = await import(validationUrl)
   const {

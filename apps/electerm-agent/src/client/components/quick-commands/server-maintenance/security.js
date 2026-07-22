@@ -9,9 +9,10 @@ const verifyNftablesRule = '$VERIFY_AS nft list chain inet shellpilot input | gr
 const firewallVerificationCommand = [
   'VERIFY_AS=""; [ "$(id -u)" = "0" ] || VERIFY_AS="sudo";',
   'VERIFY_FIREWALL_KIND="{{\u9632\u706b\u5899\u7c7b\u578b}}"; VERIFY_ACTION="{{\u64cd\u4f5c}}"; VERIFY_SOURCE_CIDR="{{\u6765\u6e90CIDR}}"; VERIFY_PORT="{{\u7aef\u53e3}}"; VERIFY_PROTO="{{\u534f\u8bae}}"; VERIFY_RULE="{{\u7aef\u53e3}}/{{\u534f\u8bae}}";',
+  'if [ "$VERIFY_FIREWALL_KIND" = "auto" ]; then VERIFY_BACKEND_FILE="$OPERATION_ROLLBACK_DIR/firewall.backend"; if [ -L "$VERIFY_BACKEND_FILE" ] || [ ! -f "$VERIFY_BACKEND_FILE" ]; then exit 1; fi; VERIFY_BACKEND_OWNER="$(stat -c %u -- "$VERIFY_BACKEND_FILE" 2>/dev/null)" || exit 1; VERIFY_BACKEND_MODE="$(stat -c %a -- "$VERIFY_BACKEND_FILE" 2>/dev/null)" || exit 1; if [ "$VERIFY_BACKEND_OWNER" != "$CURRENT_UID" ] || [ "$VERIFY_BACKEND_MODE" != "600" ]; then exit 1; fi; VERIFY_BACKEND_LINES="$(wc -l < "$VERIFY_BACKEND_FILE" 2>/dev/null)" || exit 1; [ "$VERIFY_BACKEND_LINES" = "1" ] || exit 1; IFS= read -r VERIFY_FIREWALL_KIND < "$VERIFY_BACKEND_FILE" || exit 1; case "$VERIFY_FIREWALL_KIND" in firewalld|ufw|iptables|nftables) ;; *) exit 1;; esac; fi;',
   'VERIFY_PERMANENT_ARG=""; [ "{{\u751f\u6548\u65b9\u5f0f}}" = "permanent" ] && VERIFY_PERMANENT_ARG="--permanent"; VERIFY_RICH_ACTION="accept"; VERIFY_TARGET="ACCEPT"; VERIFY_UFW_ACTION="ALLOW"; [ "$VERIFY_ACTION" = "deny" ] && { VERIFY_RICH_ACTION="drop"; VERIFY_TARGET="DROP"; VERIFY_UFW_ACTION="DENY"; };',
-  'VERIFY_RICH_RULE="rule family=ipv4 source address=$VERIFY_SOURCE_CIDR port port=$VERIFY_PORT protocol=$VERIFY_PROTO $VERIFY_RICH_ACTION"; VERIFY_UFW_SOURCE="$VERIFY_SOURCE_CIDR"; [ "$VERIFY_SOURCE_CIDR" = "0.0.0.0/0" ] && VERIFY_UFW_SOURCE="Anywhere"; VERIFY_MARKER="shellpilot-$VERIFY_ACTION-$VERIFY_PORT-$VERIFY_PROTO";',
-  `case "$VERIFY_FIREWALL_KIND" in firewalld) command -v firewall-cmd >/dev/null 2>&1 && ${verifyFirewalldRule} ;; ufw) command -v ufw >/dev/null 2>&1 || exit 1; ${verifyUfwRule} ;; iptables) command -v iptables >/dev/null 2>&1 && ${verifyIptablesRule} ;; nftables) command -v nft >/dev/null 2>&1 && ${verifyNftablesRule} ;; auto) if command -v firewall-cmd >/dev/null 2>&1; then ${verifyFirewalldRule}; elif command -v ufw >/dev/null 2>&1; then ${verifyUfwRule}; elif command -v iptables >/dev/null 2>&1; then ${verifyIptablesRule}; elif command -v nft >/dev/null 2>&1; then ${verifyNftablesRule}; else exit 1; fi ;; *) exit 1 ;; esac`
+  'VERIFY_RICH_RULE="rule family=ipv4 source address=$VERIFY_SOURCE_CIDR port port=$VERIFY_PORT protocol=$VERIFY_PROTO $VERIFY_RICH_ACTION"; VERIFY_UFW_SOURCE="$VERIFY_SOURCE_CIDR"; [ "$VERIFY_SOURCE_CIDR" = "0.0.0.0/0" ] && VERIFY_UFW_SOURCE="Anywhere"; VERIFY_MARKER="shellpilot-{{\u64cd\u4f5c}}-{{\u6765\u6e90CIDR}}-{{\u7aef\u53e3}}-{{\u534f\u8bae}}";',
+  `case "$VERIFY_FIREWALL_KIND" in firewalld) command -v firewall-cmd >/dev/null 2>&1 && ${verifyFirewalldRule} ;; ufw) command -v ufw >/dev/null 2>&1 || exit 1; ${verifyUfwRule} ;; iptables) command -v iptables >/dev/null 2>&1 && ${verifyIptablesRule} ;; nftables) command -v nft >/dev/null 2>&1 && ${verifyNftablesRule} ;; *) exit 1 ;; esac`
 ].join(' ')
 
 const firewallPolicyCommand = `PORT="{{\u7aef\u53e3}}"
@@ -35,6 +36,14 @@ if [ "$FIREWALL_KIND" = "auto" ]; then
   elif command -v nft >/dev/null 2>&1; then FIREWALL_KIND=nftables
   else echo "\u672a\u68c0\u6d4b\u5230\u53ef\u7528\u7684\u9632\u706b\u5899\u5de5\u5177"; exit 1; fi
 fi
+case "$FIREWALL_KIND" in firewalld|ufw|iptables|nftables) ;; *) echo "\u4e0d\u652f\u6301\u7684\u9632\u706b\u5899\u7c7b\u578b: $FIREWALL_KIND"; exit 1;; esac
+FIREWALL_BACKEND_FILE="$OPERATION_ROLLBACK_DIR/firewall.backend"
+if [ -L "$FIREWALL_BACKEND_FILE" ] || { [ -e "$FIREWALL_BACKEND_FILE" ] && [ ! -f "$FIREWALL_BACKEND_FILE" ]; }; then echo "\u9632\u706b\u5899\u7c7b\u578b\u8bb0\u5f55\u6587\u4ef6\u4e0d\u5b89\u5168"; exit 1; fi
+(umask 077; printf '%s\\n' "$FIREWALL_KIND" > "$FIREWALL_BACKEND_FILE") || { echo "\u65e0\u6cd5\u8bb0\u5f55\u9632\u706b\u5899\u7c7b\u578b"; exit 1; }
+chmod 600 "$FIREWALL_BACKEND_FILE" || { echo "\u65e0\u6cd5\u4fdd\u62a4\u9632\u706b\u5899\u7c7b\u578b\u8bb0\u5f55"; exit 1; }
+FIREWALL_BACKEND_OWNER="$(stat -c %u -- "$FIREWALL_BACKEND_FILE" 2>/dev/null)" || { echo "\u65e0\u6cd5\u786e\u8ba4\u9632\u706b\u5899\u7c7b\u578b\u8bb0\u5f55\u6240\u6709\u8005"; exit 1; }
+FIREWALL_BACKEND_MODE="$(stat -c %a -- "$FIREWALL_BACKEND_FILE" 2>/dev/null)" || { echo "\u65e0\u6cd5\u786e\u8ba4\u9632\u706b\u5899\u7c7b\u578b\u8bb0\u5f55\u6743\u9650"; exit 1; }
+if [ -L "$FIREWALL_BACKEND_FILE" ] || [ ! -f "$FIREWALL_BACKEND_FILE" ] || [ "$FIREWALL_BACKEND_OWNER" != "$CURRENT_UID" ] || [ "$FIREWALL_BACKEND_MODE" != "600" ]; then echo "\u9632\u706b\u5899\u7c7b\u578b\u8bb0\u5f55\u590d\u9a8c\u5931\u8d25"; exit 1; fi
 TMP_ROLLBACK="$OPERATION_ROLLBACK_DIR/firewall-rollback.sh"
 case "$FIREWALL_KIND" in
   firewalld)
@@ -114,7 +123,7 @@ case "$FIREWALL_KIND" in
     $RUN_AS nft list table inet shellpilot >/dev/null 2>&1 || $RUN_AS nft add table inet shellpilot
     $RUN_AS nft list chain inet shellpilot input >/dev/null 2>&1 || $RUN_AS nft 'add chain inet shellpilot input { type filter hook input priority 0; policy accept; }'
     NFT_ACTION=accept; [ "$ACTION" = "deny" ] && NFT_ACTION=drop
-    RULE_MARKER="shellpilot-$ACTION-$PORT-$PROTO"
+    RULE_MARKER="shellpilot-$ACTION-$SOURCE_CIDR-$PORT-$PROTO"
     $RUN_AS nft add rule inet shellpilot input ip saddr "$SOURCE_CIDR" "$PROTO" dport "$PORT" "$NFT_ACTION" comment "$RULE_MARKER"
     $RUN_AS nft list chain inet shellpilot input | grep -F -- "$RULE_MARKER" >/dev/null
     ;;
