@@ -1,21 +1,290 @@
 .no-sessions
-  background var(--main)
-  text-align center
-  padding 50px 0
+  background var(--sp-page, var(--main))
+  color var(--sp-text, var(--text))
   position absolute
   top 36px
   left 0
   right 0
   bottom 0
   z-index 11
-.no-session-history
+  overflow-y auto
+  overflow-x hidden
+
+.no-session-shell
+  width calc(100% - 64px)
+  max-width 960px
+  min-height 100%
+  margin 0 auto
+  padding 44px 0 56px
+  box-sizing border-box
+
+.no-session-heading
+  display flex
+  align-items center
+  justify-content space-between
+  gap 20px
+  margin-bottom 22px
+
+.no-session-heading-title
+  display flex
+  align-items center
+  gap 12px
+  min-width 0
+  > span:last-child
+    display flex
+    flex-direction column
+    min-width 0
+  strong
+    color var(--sp-text, var(--text))
+    font-size 18px
+    font-weight 650
+    line-height 1.35
+  small
+    color var(--sp-text-muted, var(--text-light))
+    font-size 12px
+    line-height 1.5
+
+.no-session-mark
+  display inline-flex
+  align-items center
+  justify-content center
+  width 40px
+  height 40px
+  flex 0 0 40px
+  border 1px solid var(--sp-border, var(--main-darker))
+  border-radius 8px
+  background var(--sp-surface-elevated, var(--main-light))
+  color var(--sp-primary, var(--primary))
+  font-size 19px
+
+.no-session-status
+  display inline-flex
+  align-items center
+  gap 7px
+  flex 0 0 auto
+  color var(--sp-text-muted, var(--text-light))
+  font-size 12px
+  &::before
+    content ''
+    width 7px
+    height 7px
+    border-radius 50%
+    background var(--sp-text-disabled, var(--text-disabled))
+
+.no-session-actions
+  display grid
+  grid-template-columns repeat(auto-fit, minmax(210px, 1fr))
+  gap 10px
+  margin-bottom 24px
+
+.no-session-action.ant-btn
+.no-session-quick-connect
+  min-width 0
+  height 86px
+  border 1px solid var(--sp-border, var(--main-darker))
+  border-radius 8px
+  background var(--sp-surface-elevated, var(--main-light))
+  box-shadow inset 0 1px 0 var(--sp-highlight-top, transparent)
+
+.no-session-action.ant-btn
+  display flex
+  align-items flex-start
+  justify-content flex-start
+  gap 12px
+  padding 14px
+  color var(--sp-text, var(--text))
+  text-align left
+  white-space normal
+  &:hover
+  &:focus-visible
+    color var(--sp-text, var(--text))
+    border-color var(--sp-primary, var(--primary))
+    background var(--sp-primary-soft, var(--main-lighter))
+  .ant-btn-icon
+    display inline-flex
+    align-items center
+    justify-content center
+    width 28px
+    height 28px
+    flex 0 0 28px
+    border-radius 6px
+    background var(--sp-primary-soft, var(--main-lighter))
+    color var(--sp-primary, var(--primary))
+    font-size 15px
+
+.no-session-action-primary.ant-btn
+  border-color var(--sp-primary, var(--primary))
+  background var(--sp-primary-soft, var(--main-lighter))
+
+.no-session-action-copy
+  display flex
+  flex-direction column
+  align-items flex-start
+  min-width 0
+  strong
+    max-width 100%
+    overflow-wrap anywhere
+    color inherit
+    font-size 13px
+    font-weight 650
+    line-height 1.45
+  small
+    max-width 100%
+    margin-top 3px
+    overflow-wrap anywhere
+    color var(--sp-text-muted, var(--text-light))
+    font-size 11px
+    line-height 1.4
+
+.no-session-quick-connect
+  position relative
+  padding 0
+  > .ant-btn
+    display flex
+    align-items flex-start
+    justify-content flex-start
+    width 100%
+    height 100%
+    padding 14px 14px 14px 54px
+    border 0
+    border-radius 8px
+    background transparent
+    color var(--sp-text, var(--text))
+    text-align left
+    white-space normal
+    .ant-btn-icon
+      display inline-flex
+      align-items center
+      justify-content center
+      position absolute
+      top 14px
+      left 14px
+      width 28px
+      height 28px
+      border-radius 6px
+      background var(--sp-primary-soft, var(--main-lighter))
+      color var(--sp-primary, var(--primary))
+      font-size 14px
+    &:hover
+    &:focus-visible
+      background var(--sp-primary-soft, var(--main-lighter))
+  .quick-connect-form
+    position absolute
+    top calc(100% + 8px)
+    right 0
+    z-index 20
+    width 360px
+    max-width calc(100vw - 80px)
+    border 1px solid var(--sp-border-strong, var(--main-darker))
+    border-radius 8px
+    background var(--sp-surface-elevated, var(--main))
+    box-shadow var(--sp-shadow-overlay, 0 14px 34px rgba(0, 0, 0, .2))
+
+.no-session-quick-connect-hint
   position absolute
-  top 320px
-  bottom 80px
-  left 0
-  right 0
+  left 54px
+  bottom 15px
+  z-index 1
+  max-width calc(100% - 66px)
+  overflow hidden
+  color var(--sp-text-muted, var(--text-light))
+  font-size 11px
+  line-height 1.4
+  text-overflow ellipsis
+  white-space nowrap
+  pointer-events none
+
+.no-session-recents
+  overflow hidden
+  border 1px solid var(--sp-border, var(--main-darker))
+  border-radius 8px
+  background var(--sp-surface-elevated, var(--main-light))
+  box-shadow inset 0 1px 0 var(--sp-highlight-top, transparent)
+
+.no-session-recents-heading
+  display flex
+  align-items center
+  justify-content space-between
+  min-height 46px
+  padding 0 14px
+  border-bottom 1px solid var(--sp-border, var(--main-darker))
+  > span
+    display inline-flex
+    align-items center
+    gap 8px
+  strong
+    color var(--sp-text, var(--text))
+    font-size 13px
+    font-weight 650
+
+.no-session-history
   .sidebar-panel-history
+    width 100%
+    position relative
+    top auto
+    right auto
+    bottom auto
+    left auto
+    display block
+    overflow visible
+  .history-header
+    display flex
+    align-items center
+    justify-content flex-end
+    gap 12px
+    min-height 36px
+    padding 7px 12px
+    border-bottom 1px solid var(--sp-border, var(--main-darker))
+  .history-body
+    max-height 320px
     overflow-y auto
-    .pd2x
-      width 400px
-      margin 0 auto
+  .history-empty
+    display flex
+    align-items center
+    justify-content center
+    min-height 126px
+    padding 24px
+    color var(--sp-text-muted, var(--text-light))
+    font-size 12px
+  .item-list-unit
+    min-height 48px
+    margin 0
+    border-bottom 1px solid var(--sp-border, var(--main-darker))
+    color var(--sp-text, var(--text))
+    &:last-child
+      border-bottom 0
+    > .elli
+      display flex
+      align-items center
+      min-width 0
+      padding 12px 44px 12px 14px
+      line-height 1.6
+    &:hover
+      background var(--sp-primary-soft, var(--main-lighter))
+
+@media (max-width: 900px)
+  .no-session-shell
+    width calc(100% - 40px)
+    max-width 720px
+    padding 32px 0 44px
+  .no-session-actions
+    grid-template-columns repeat(auto-fit, minmax(210px, 1fr))
+
+@media (max-width: 560px)
+  .no-session-shell
+    width calc(100% - 24px)
+    padding 22px 0 32px
+  .no-session-heading
+    align-items flex-start
+    flex-direction column
+    gap 10px
+  .no-session-actions
+    grid-template-columns 1fr
+  .no-session-action.ant-btn
+  .no-session-quick-connect
+    height 76px
+  .no-session-quick-connect
+    .quick-connect-form
+      left 0
+      right auto
+      max-width calc(100vw - 48px)

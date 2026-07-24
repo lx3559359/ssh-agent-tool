@@ -26,7 +26,7 @@ test('disconnected home uses the approved workspace structure', () => {
 test('disconnected home is theme-aware and responsive', () => {
   assert.match(styles, /var\(--main\)/)
   assert.match(styles, /var\(--text\)/)
-  assert.match(styles, /grid-template-columns repeat\(4/)
+  assert.match(styles, /grid-template-columns repeat\(auto-fit, minmax\(210px, 1fr\)\)/)
   assert.match(styles, /@media \(max-width: 900px\)/)
   assert.match(styles, /@media \(max-width: 560px\)/)
   assert.doesNotMatch(styles, /top 320px/)

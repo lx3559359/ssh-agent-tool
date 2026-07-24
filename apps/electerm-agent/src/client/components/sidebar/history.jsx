@@ -72,14 +72,22 @@ export default auto(function HistoryPanel (props) {
       {renderHeader()}
       <div className='history-body'>
         {
-          arr.map((item, i) => {
-            return (
-              <HistoryItem
-                key={item.id}
-                item={item}
-              />
-            )
-          })
+          arr.length
+            ? arr.map((item, i) => {
+              return (
+                <HistoryItem
+                  key={item.id}
+                  item={item}
+                />
+              )
+            })
+            : props.emptyText
+              ? (
+                <div className='history-empty'>
+                  {props.emptyText}
+                </div>
+                )
+              : null
         }
       </div>
     </div>

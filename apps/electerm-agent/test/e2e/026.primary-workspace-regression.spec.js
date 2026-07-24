@@ -172,6 +172,8 @@ test('primary workspace keeps long Chinese AI history usable across Windows size
   await runWithIsolatedApp(async electronApp => {
     const page = electronApp.windows()[0] || await electronApp.firstWindow()
     await page.waitForFunction(() => window.store?.configLoaded === true, { timeout: 20000 })
+    await page.locator('.no-sessions').waitFor({ state: 'visible', timeout: 20000 })
+    await page.locator('.add-new-tab-btn').click()
     await page.locator('.term-wrap:visible').waitFor({ timeout: 20000 })
     await dismissStartupModals(page)
     await installLongConversationFixture(page)

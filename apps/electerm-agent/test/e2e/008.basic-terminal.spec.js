@@ -25,6 +25,10 @@ describe('terminal', function () {
       : 'ls'
     await delay(13500)
     await client.locator('.no-sessions').waitFor({ state: 'visible' })
+    await expect(client.locator('.no-session-heading')).toBeVisible()
+    await expect(client.locator('.no-session-actions')).toBeVisible()
+    await expect(client.locator('.no-session-recents')).toBeVisible()
+    await expect(client.locator('.add-new-tab-btn')).toBeVisible()
     const titleBarBrand = client.locator('.aigshell-topbar-brand')
     const initialMaximized = await client.evaluate(() => window.store.isMaximized)
     await titleBarBrand.dblclick()
