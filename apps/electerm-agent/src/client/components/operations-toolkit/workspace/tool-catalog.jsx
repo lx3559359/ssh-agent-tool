@@ -10,7 +10,9 @@ export default function ToolCatalog ({
   category,
   onKeywordChange,
   onCategoryChange,
-  onSelect
+  onSelect,
+  searchPlaceholder,
+  modeLabel
 }) {
   const categories = ['全部', ...new Set(tools.map(tool => tool.category))]
   const query = keyword.trim().toLowerCase()
@@ -26,7 +28,7 @@ export default function ToolCatalog ({
         prefix={<SearchOutlined />}
         value={keyword}
         onChange={event => onKeywordChange(event.target.value)}
-        placeholder={e('shellpilotOperationsSearch')}
+        placeholder={searchPlaceholder || e('shellpilotOperationsSearch')}
       />
       <div className='operations-categories'>
         {categories.map(item => (
@@ -48,7 +50,9 @@ export default function ToolCatalog ({
           >
             <strong>{tool.title}</strong>
             <span>{tool.description}</span>
-            <small>{tool.category} · {e('shellpilotOperationsReadonly')}</small>
+            <small>
+              {tool.category} · {modeLabel || e('shellpilotOperationsReadonly')}
+            </small>
           </button>
         ))}
         {!visible.length ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={e('shellpilotOperationsNoMatches')} /> : null}

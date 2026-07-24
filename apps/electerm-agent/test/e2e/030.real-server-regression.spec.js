@@ -177,32 +177,55 @@ async function runTrackedQuickCommandChecks (page) {
 async function runOperationsToolkitReadOnlyCheck (page) {
   const result = await page.evaluate(async () => {
     window.store.openOperationsToolkit('diagnostic')
-    const active = window.store.runOperationsTool('system.overview')
-    const task = await active.completion
+    const diagnostic = await window.store
+      .runOperationsTool('system.overview')
+      .completion
+    window.store.operationsToolkitTab = 'custom'
+    const runbook = await window.store
+      .runOperationsTool('runbook.health.baseline')
+      .completion
     return {
-      status: task.status,
-      steps: task.steps.map(step => ({
-        status: step.status,
-        exitCode: step.exitCode,
-        hasOutput: Boolean(step.output)
-      })),
+      diagnostic: {
+        status: diagnostic.status,
+        steps: diagnostic.steps.map(step => ({
+          status: step.status,
+          exitCode: step.exitCode,
+          hasOutput: Boolean(step.output)
+        }))
+      },
+      runbook: {
+        status: runbook.status,
+        steps: runbook.steps.map(step => ({
+          status: step.status,
+          exitCode: step.exitCode,
+          hasOutput: Boolean(step.output)
+        }))
+      },
       storedHistory: Boolean(
         window.localStorage.getItem('shellpilot-operations-task-history-v1')
       )
     }
   })
 
-  expect(result.status, JSON.stringify(result, null, 2)).toBe('completed')
-  expect(result.steps).toEqual([{
+  expect(result.diagnostic.status, JSON.stringify(result, null, 2)).toBe('completed')
+  expect(result.diagnostic.steps).toEqual([{
     status: 'completed',
     exitCode: 0,
     hasOutput: true
   }])
+  expect(result.runbook.status, JSON.stringify(result, null, 2)).toBe('completed')
+  expect(result.runbook.steps).toHaveLength(5)
+  expect(result.runbook.steps.every(step => (
+    step.status === 'completed' &&
+    step.exitCode === 0 &&
+    step.hasOutput
+  ))).toBe(true)
   expect(result.storedHistory, JSON.stringify(result, null, 2)).toBe(true)
   await expect.poll(() => page.evaluate(() => (
     window.store.operationsHistory.length
-  )), { timeout: 5000 }).toBeGreaterThan(0)
+  )), { timeout: 5000 }).toBeGreaterThanOrEqual(2)
   await expect(page.locator('.operations-toolkit-workspace')).toBeVisible()
+  await expect(page.locator('.operations-script-center')).toBeVisible()
   await expect(page.locator('.operations-task-panel')).toContainText('已完成')
 }
 

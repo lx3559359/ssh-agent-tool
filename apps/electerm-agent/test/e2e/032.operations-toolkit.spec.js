@@ -17,6 +17,36 @@ async function dismissStartupModals (page) {
   }
 }
 
+async function assertRunbookLayout (electronApp, page, viewport) {
+  await electronApp.evaluate(({ BrowserWindow }, value) => {
+    const window = BrowserWindow.getAllWindows()[0]
+    window.webContents.setZoomFactor(1)
+    window.setContentSize(
+      Math.round(value.width / value.zoom),
+      Math.round(value.height / value.zoom)
+    )
+  }, viewport)
+  await page.waitForTimeout(150)
+  const layout = await page.locator('.operations-toolkit-workspace').evaluate(element => {
+    const bounds = element.getBoundingClientRect()
+    const body = element.querySelector('.operations-workspace-body')
+    return {
+      top: bounds.top,
+      left: bounds.left,
+      right: bounds.right,
+      bottom: bounds.bottom,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      bodyOverflow: body ? body.scrollWidth - body.clientWidth : 0
+    }
+  })
+  expect(layout.left).toBeGreaterThanOrEqual(0)
+  expect(layout.top).toBeGreaterThanOrEqual(0)
+  expect(layout.right).toBeLessThanOrEqual(layout.viewportWidth + 1)
+  expect(layout.bottom).toBeLessThanOrEqual(layout.viewportHeight + 1)
+  expect(layout.bodyOverflow).toBeLessThanOrEqual(1)
+}
+
 test('operations workspace exposes quick actions and readonly diagnostics without a connection', async () => {
   let run
   let primaryError
@@ -31,11 +61,30 @@ test('operations workspace exposes quick actions and readonly diagnostics withou
     await expect(workspace.locator('.operations-workspace-tabs')).toContainText('快捷操作')
     await expect(workspace.locator('.operations-workspace-tabs')).toContainText('诊断脚本')
     await expect(workspace.locator('.operations-workspace-tabs')).toContainText('安全维护')
-    await expect(workspace.locator('.operations-workspace-tabs')).toContainText('我的工具')
+    await expect(workspace.locator('.operations-workspace-tabs')).toContainText('脚本中心')
     await expect(workspace.locator('.operations-workspace-tabs')).toContainText('执行记录')
     await expect(workspace.locator('.operations-tool-list button')).toHaveCount(24)
     await expect(workspace.locator('.operations-connection-status')).toContainText('尚未连接 SSH')
     await expect(workspace.locator('.operations-run-actions button')).toBeDisabled()
+
+    await workspace.locator('.operations-workspace-tabs').getByText('脚本中心').click()
+    await expect(workspace.locator('.operations-script-center')).toBeVisible()
+    await expect(workspace.locator('.operations-script-center .operations-tool-list button')).toHaveCount(10)
+    await expect(workspace.locator('.operations-script-center .operations-tool-title')).toContainText('服务器综合健康巡检')
+    await expect(workspace.locator('.operations-script-steps li')).toHaveCount(5)
+    await expect(workspace.locator('.operations-run-actions button')).toContainText('运行脚本')
+    await expect(workspace.locator('.operations-run-actions button')).toBeDisabled()
+    await expect(workspace.locator('.operations-run-actions')).toContainText('只读，无需确认')
+    await assertRunbookLayout(run.electronApp, page, {
+      width: 1366,
+      height: 768,
+      zoom: 1.25
+    })
+    await assertRunbookLayout(run.electronApp, page, {
+      width: 1920,
+      height: 1080,
+      zoom: 1
+    })
 
     await workspace.locator('.operations-workspace-tabs').getByText('快捷操作').click()
     await expect(workspace.locator('.qm-wrap-embedded')).toBeVisible()

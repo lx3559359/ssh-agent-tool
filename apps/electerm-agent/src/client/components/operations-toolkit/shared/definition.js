@@ -1,7 +1,8 @@
 export const operationsToolTypes = Object.freeze({
   quick: 'quick',
   diagnostic: 'diagnostic',
-  maintenance: 'maintenance'
+  maintenance: 'maintenance',
+  script: 'script'
 })
 
 export const operationsRiskTypes = Object.freeze({

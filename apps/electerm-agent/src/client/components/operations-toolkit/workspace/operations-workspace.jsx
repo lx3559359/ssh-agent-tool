@@ -44,14 +44,21 @@ const tabs = [
 function OperationsWorkspace (props) {
   const { store, shellGeometry } = props
   const tools = getOperationsCatalog()
+  const diagnosticTools = tools.filter(tool => tool.type === 'diagnostic')
+  const scriptTools = tools.filter(tool => tool.type === 'script')
   const maintenanceTools = getSafeMaintenanceCommands(
     store.currentQuickCommands || []
   )
-  const [selectedToolId, setSelectedToolId] = useState(tools[0]?.id || '')
+  const [selectedToolId, setSelectedToolId] = useState(diagnosticTools[0]?.id || '')
+  const [selectedScriptId, setSelectedScriptId] = useState(scriptTools[0]?.id || '')
   const [keyword, setKeyword] = useState('')
   const [category, setCategory] = useState('全部')
-  const [params, setParams] = useState(() => buildParameterDefaults(tools[0]))
-  const selectedTool = getOperationsTool(selectedToolId) || tools[0]
+  const [scriptKeyword, setScriptKeyword] = useState('')
+  const [scriptCategory, setScriptCategory] = useState('全部')
+  const [params, setParams] = useState(() => buildParameterDefaults(diagnosticTools[0]))
+  const [scriptParams, setScriptParams] = useState(() => buildParameterDefaults(scriptTools[0]))
+  const selectedTool = getOperationsTool(selectedToolId) || diagnosticTools[0]
+  const selectedScript = getOperationsTool(selectedScriptId) || scriptTools[0]
   const endpoint = store.getCurrentOperationsEndpoint?.()
   const endpointKey = endpoint
     ? `${endpoint.username}@${endpoint.host}:${endpoint.port}`
@@ -74,6 +81,10 @@ function OperationsWorkspace (props) {
   }, [selectedToolId])
 
   useEffect(() => {
+    setScriptParams(buildParameterDefaults(selectedScript))
+  }, [selectedScriptId])
+
+  useEffect(() => {
     if (!endpointKey) return
     if (
       store.operationsDiscoveryStatus === 'loading' ||
@@ -88,9 +99,9 @@ function OperationsWorkspace (props) {
     setParams(current => ({ ...current, [id]: value }))
   }
 
-  function handleRun () {
+  function handleRun (tool = selectedTool, values = params) {
     try {
-      const active = store.runOperationsTool(selectedTool.id, params)
+      const active = store.runOperationsTool(tool.id, values)
       active.completion.catch(error => window.store.onError(error))
     } catch (error) {
       message.warning(error?.message || String(error))
@@ -106,31 +117,61 @@ function OperationsWorkspace (props) {
   }
 
   function handleHistorySelect (task) {
+    const tool = getOperationsTool(task.toolId)
     store.activeOperationsTaskId = task.id
     const current = store.operationsTasks.filter(item => item.id !== task.id)
     store.operationsTasks = [task, ...current]
-    store.operationsToolkitTab = 'diagnostic'
+    if (tool?.type === 'script') {
+      setSelectedScriptId(tool.id)
+      setScriptParams(buildParameterDefaults(tool))
+      store.operationsToolkitTab = 'custom'
+    } else {
+      setSelectedToolId(tool?.id || task.toolId)
+      setParams(buildParameterDefaults(tool))
+      store.operationsToolkitTab = 'diagnostic'
+    }
   }
 
-  function renderDiagnostic () {
+  function renderReadOnlyWorkspace ({
+    className,
+    catalogTools,
+    tool,
+    currentKeyword,
+    currentCategory,
+    values,
+    onKeywordChange,
+    onCategoryChange,
+    onSelect,
+    onParamChange,
+    script = false
+  }) {
+    const visibleTask = activeTask?.toolId === tool?.id ? activeTask : null
     return (
-      <div className='operations-diagnostic'>
+      <div className={className}>
         <ToolCatalog
-          tools={tools}
-          selectedToolId={selectedTool?.id}
-          keyword={keyword}
-          category={category}
-          onKeywordChange={setKeyword}
-          onCategoryChange={setCategory}
-          onSelect={setSelectedToolId}
+          tools={catalogTools}
+          selectedToolId={tool?.id}
+          keyword={currentKeyword}
+          category={currentCategory}
+          onKeywordChange={onKeywordChange}
+          onCategoryChange={onCategoryChange}
+          onSelect={onSelect}
+          searchPlaceholder={script ? e('shellpilotOperationsSearchRunbooks') : undefined}
+          modeLabel={script ? e('shellpilotOperationsRunbook') : undefined}
         />
         <main className='operations-tool-detail'>
           <header className='operations-tool-title'>
             <div>
-              <h3>{selectedTool.title}</h3>
-              <p>{selectedTool.description}</p>
+              <h3>{tool.title}</h3>
+              <p>{tool.description}</p>
             </div>
-            <Tag color='green'>{e('shellpilotOperationsReadonly')}</Tag>
+            <Tag color='green'>
+              {script
+                ? tf('shellpilotOperationsRunbookStepCount', {
+                  count: tool.steps.length
+                })
+                : e('shellpilotOperationsReadonly')}
+            </Tag>
           </header>
           <div className='operations-connection-status'>
             <span className={endpoint ? 'connected' : ''} />
@@ -157,27 +198,43 @@ function OperationsWorkspace (props) {
             ? <div className='operations-discovery-error'>{store.operationsDiscoveryError}</div>
             : null}
           <ParameterForm
-            tool={selectedTool}
-            values={params}
+            tool={tool}
+            values={values}
             capabilities={store.operationsCapabilities || {}}
             disabled={!endpoint}
-            onChange={handleParamChange}
+            onChange={onParamChange}
           />
+          {script
+            ? (
+              <section className='operations-script-steps'>
+                <strong>{e('shellpilotOperationsRunbookSteps')}</strong>
+                <ol>
+                  {tool.steps.map(step => <li key={step.id}>{step.title}</li>)}
+                </ol>
+              </section>
+              )
+            : null}
           <div className='operations-run-actions'>
             <Button
               type='primary'
               disabled={!endpoint}
-              onClick={handleRun}
+              onClick={() => handleRun(tool, values)}
             >
-              {e('shellpilotOperationsRunReadonly')}
+              {script
+                ? e('shellpilotOperationsRunScript')
+                : e('shellpilotOperationsRunReadonly')}
             </Button>
-            <span>{e('shellpilotOperationsNoConfirmation')}</span>
+            <span>
+              {script
+                ? e('shellpilotOperationsRunbookNoConfirmation')
+                : e('shellpilotOperationsNoConfirmation')}
+            </span>
           </div>
-          {activeTask
+          {visibleTask
             ? (
               <TaskPanel
-                task={activeTask}
-                tool={getOperationsTool(activeTask.toolId)}
+                task={visibleTask}
+                tool={tool}
                 onCancel={id => store.cancelOperationsTask(id)}
                 onAnalyze={handleAnalyze}
               />
@@ -194,16 +251,37 @@ function OperationsWorkspace (props) {
     )
   }
 
-  function renderPlaceholder (kind) {
-    return (
-      <div className='operations-placeholder'>
-        <Empty
-          description={kind === 'maintenance'
-            ? e('shellpilotOperationsMaintenancePhaseTwo')
-            : e('shellpilotOperationsCustomPhaseTwo')}
-        />
-      </div>
-    )
+  function renderDiagnostic () {
+    return renderReadOnlyWorkspace({
+      className: 'operations-diagnostic',
+      catalogTools: diagnosticTools,
+      tool: selectedTool,
+      currentKeyword: keyword,
+      currentCategory: category,
+      values: params,
+      onKeywordChange: setKeyword,
+      onCategoryChange: setCategory,
+      onSelect: setSelectedToolId,
+      onParamChange: handleParamChange
+    })
+  }
+
+  function renderScriptCenter () {
+    return renderReadOnlyWorkspace({
+      className: 'operations-diagnostic operations-script-center',
+      catalogTools: scriptTools,
+      tool: selectedScript,
+      currentKeyword: scriptKeyword,
+      currentCategory: scriptCategory,
+      values: scriptParams,
+      onKeywordChange: setScriptKeyword,
+      onCategoryChange: setScriptCategory,
+      onSelect: setSelectedScriptId,
+      onParamChange: (id, value) => {
+        setScriptParams(current => ({ ...current, [id]: value }))
+      },
+      script: true
+    })
   }
 
   function renderMaintenance () {
@@ -272,6 +350,7 @@ function OperationsWorkspace (props) {
     }
     if (store.operationsToolkitTab === 'diagnostic') return renderDiagnostic()
     if (store.operationsToolkitTab === 'maintenance') return renderMaintenance()
+    if (store.operationsToolkitTab === 'custom') return renderScriptCenter()
     if (store.operationsToolkitTab === 'history') {
       return (
         <ResultViewer
@@ -283,7 +362,11 @@ function OperationsWorkspace (props) {
         />
       )
     }
-    return renderPlaceholder(store.operationsToolkitTab)
+    return (
+      <div className='operations-placeholder'>
+        <Empty description={e('shellpilotOperationsNoMatches')} />
+      </div>
+    )
   }
 
   return (
@@ -315,7 +398,7 @@ function OperationsWorkspace (props) {
       />
       <div className='operations-workspace-body'>
         {store.operationsDiscoveryStatus === 'loading' &&
-        store.operationsToolkitTab === 'diagnostic' &&
+        ['diagnostic', 'custom'].includes(store.operationsToolkitTab) &&
         !store.operationsCapabilities
           ? <Spin className='operations-discovery-spin' tip={e('shellpilotOperationsDiscovering')} />
           : null}

@@ -3,6 +3,7 @@ import { systemStorageTools } from './diagnostics/system-storage.js'
 import { networkSecurityTools } from './diagnostics/network-security.js'
 import { udpCheckTools } from './diagnostics/udp-check.js'
 import { servicesPlatformTools } from './diagnostics/services-platform.js'
+import { getOperationsRunbooks } from './scripts/index.js'
 
 export function buildOperationsCatalog (groups = []) {
   const toolIds = new Set()
@@ -31,7 +32,8 @@ let operationsCatalog = buildOperationsCatalog([
   systemStorageTools,
   networkSecurityTools,
   udpCheckTools,
-  servicesPlatformTools
+  servicesPlatformTools,
+  getOperationsRunbooks()
 ])
 
 export function setOperationsCatalogGroups (groups) {

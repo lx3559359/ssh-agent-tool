@@ -4,16 +4,21 @@ const fs = require('node:fs')
 const path = require('node:path')
 const { importModule } = require('./helpers/import-esm')
 
-test('phase one operations catalog is complete and read-only', async () => {
+test('operations catalog keeps diagnostics and runbooks complete and read-only', async () => {
   const { getOperationsCatalog } = await importModule(
     'src/client/components/operations-toolkit/catalog/index.js'
   )
   const catalog = getOperationsCatalog()
+  const diagnostics = catalog.filter(tool => tool.type === 'diagnostic')
+  const runbooks = catalog.filter(tool => tool.type === 'script')
 
-  assert.equal(catalog.length, 24)
-  assert.equal(new Set(catalog.map(tool => tool.id)).size, 24)
+  assert.equal(diagnostics.length, 24)
+  assert.equal(runbooks.length, 10)
+  assert.equal(catalog.length, 34)
+  assert.equal(new Set(catalog.map(tool => tool.id)).size, catalog.length)
   assert.equal(catalog.every(tool => tool.risk === 'read-only'), true)
   assert.equal(catalog.every(tool => tool.steps.length > 0), true)
+  assert.equal(runbooks.every(tool => tool.steps.length >= 3), true)
 })
 
 test('public operations completion waits for history synchronization', () => {
