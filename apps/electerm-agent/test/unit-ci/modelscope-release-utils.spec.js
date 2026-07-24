@@ -156,7 +156,14 @@ test('ModelScope release sync prints a concise token error for operators', () =>
   delete env.MODELSCOPE_API_TOKEN
   delete env.MODELSCOPE_SDK_TOKEN
 
-  const result = spawnSync(process.execPath, ['build/bin/sync-modelscope-release.js'], {
+  const script = [
+    "const { syncModelScopeRelease } = require('./build/bin/sync-modelscope-release')",
+    'try { syncModelScopeRelease() } catch (error) {',
+    '  console.error(error.message || error)',
+    '  process.exit(1)',
+    '}'
+  ].join('\n')
+  const result = spawnSync(process.execPath, ['-e', script], {
     cwd: path.resolve(__dirname, '../..'),
     env,
     encoding: 'utf8'
