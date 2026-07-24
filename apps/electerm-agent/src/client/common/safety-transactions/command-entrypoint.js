@@ -5,6 +5,9 @@ import { buildCommandExecution } from './command-execution.js'
 import {
   consumeInternalCommandRiskDelegation
 } from './command-risk-delegation.js'
+import {
+  consumeInternalReadonlyQuickCommandDelegation
+} from './readonly-quick-command-delegation.js'
 import { resolveInternalSubmissionHooks } from './command-submission-hooks.js'
 import { assertSameSessionEndpoint } from './endpoint-guard.js'
 import {
@@ -64,6 +67,24 @@ function resolveRiskDelegation (command, runOptions) {
   if (!delegation || runOptions.source !== 'agent' ||
     runOptions.inputOnly === true || delegation.command !== command) {
     throw riskDelegationError()
+  }
+  return delegation
+}
+
+function readonlyQuickCommandDelegationError () {
+  const error = new Error('Readonly quick command delegation capability is invalid')
+  error.code = 'READONLY_QUICK_COMMAND_DELEGATION_INVALID'
+  return error
+}
+
+function resolveReadonlyQuickCommandDelegation (command, runOptions) {
+  if (runOptions.readonlyQuickCommandDelegation === undefined) return undefined
+  const delegation = consumeInternalReadonlyQuickCommandDelegation(
+    runOptions.readonlyQuickCommandDelegation
+  )
+  if (!delegation || runOptions.source !== 'quick-command' ||
+    runOptions.inputOnly === true || delegation.command !== command) {
+    throw readonlyQuickCommandDelegationError()
   }
   return delegation
 }
@@ -277,7 +298,8 @@ export function createSafetyCommandEntrypoint (options = {}) {
           pending.runOptions,
           pending.riskDelegation,
           pending.maintenanceRecovery,
-          pending.retryLineage
+          pending.retryLineage,
+          pending.readonlyQuickCommandDelegation
         ))
         .catch(error => {
           if (!live || generation !== retryGeneration) return
@@ -626,6 +648,7 @@ export function createSafetyCommandEntrypoint (options = {}) {
       runOptions: run.runOptions,
       riskDelegation: run.riskDelegation,
       maintenanceRecovery: retry.recovery,
+      readonlyQuickCommandDelegation: run.readonlyQuickCommandDelegation,
       confirmation
     }
     updateState({ confirmation, busy: false, error: message })
@@ -784,6 +807,12 @@ export function createSafetyCommandEntrypoint (options = {}) {
       if (run.maintenanceRecovery) {
         assertSameSessionEndpoint(run.maintenanceRecovery.endpoint, endpoint)
       }
+      if (run.readonlyQuickCommandDelegation) {
+        assertSameSessionEndpoint(
+          run.readonlyQuickCommandDelegation.endpoint,
+          endpoint
+        )
+      }
       let request = buildSafetyRequest({
         id: operationId,
         source,
@@ -813,6 +842,22 @@ export function createSafetyCommandEntrypoint (options = {}) {
           recoveryProvider: null,
           requiresConfirmation: true,
           reason: `Agent policy requires confirmation: ${run.riskDelegation.classification.reasonCode}`
+        }
+      }
+      if (run.readonlyQuickCommandDelegation && request.risk === 'unknown') {
+        request = {
+          ...request,
+          risk: 'readonly',
+          provider: null,
+          reversible: false,
+          recoveryProvider: null,
+          requiresConfirmation: false,
+          reason: 'Authenticated built-in quick command is declared read-only.',
+          metadata: {
+            ...request.metadata,
+            readonlyQuickCommandId:
+              run.readonlyQuickCommandDelegation.quickCommandId
+          }
         }
       }
       if (run.maintenanceRecovery) {
@@ -1015,11 +1060,13 @@ export function createSafetyCommandEntrypoint (options = {}) {
     runOptions = {},
     trustedRiskDelegation,
     trustedMaintenanceRecovery,
-    trustedRetryLineage
+    trustedRetryLineage,
+    trustedReadonlyQuickCommandDelegation
   ) {
     const command = String(value || '')
     let riskDelegation
     let maintenanceRecovery
+    let readonlyQuickCommandDelegation
     try {
       riskDelegation = trustedRiskDelegation === undefined
         ? resolveRiskDelegation(command, runOptions)
@@ -1027,6 +1074,10 @@ export function createSafetyCommandEntrypoint (options = {}) {
       maintenanceRecovery = trustedMaintenanceRecovery === undefined
         ? resolveMaintenanceRecovery(command, runOptions)
         : trustedMaintenanceRecovery
+      readonlyQuickCommandDelegation =
+        trustedReadonlyQuickCommandDelegation === undefined
+          ? resolveReadonlyQuickCommandDelegation(command, runOptions)
+          : trustedReadonlyQuickCommandDelegation
     } catch (error) {
       return Promise.reject(error)
     }
@@ -1106,6 +1157,7 @@ export function createSafetyCommandEntrypoint (options = {}) {
       riskDelegation,
       retryLineage: trustedRetryLineage,
       maintenanceRecovery,
+      readonlyQuickCommandDelegation,
       operationId,
       traceContext,
       qualityFinished: false

@@ -27,6 +27,10 @@ const maintenanceRecoveryUrl = pathToFileURL(path.resolve(
   __dirname,
   '../../src/client/common/safety-transactions/maintenance-recovery-delegation.js'
 )).href
+const readonlyQuickCommandDelegationUrl = pathToFileURL(path.resolve(
+  __dirname,
+  '../../src/client/common/safety-transactions/readonly-quick-command-delegation.js'
+)).href
 const safetyCenterModelUrl = pathToFileURL(path.resolve(
   __dirname,
   '../../src/client/components/main/safety-operation-center-model.js'
@@ -1228,6 +1232,61 @@ test('plain readonly commands keep zero confirmations and forged risk delegation
   }), /delegation|capability|risk/i)
   assert.equal(changedCommandHarness.confirmationBuilds.length, 0)
   assert.equal(changedCommandHarness.submissions.length, 0)
+})
+
+test('authenticated built-in readonly scripts skip confirmation without masking real changes', async () => {
+  const { createSafetyCommandEntrypoint } = await import(moduleUrl)
+  const {
+    createInternalReadonlyQuickCommandDelegation
+  } = await import(readonlyQuickCommandDelegationUrl)
+  const endpoint = {
+    tabId: 'tab-1',
+    host: 'prod.example.com',
+    port: 22,
+    username: 'root',
+    pid: 1001
+  }
+  const command = 'TARGET="/var/log"\nprintf "%s\\n" "$TARGET"'
+  const readonlyHarness = createHarness({ getEndpoint: () => endpoint })
+  const readonlyEntrypoint = createSafetyCommandEntrypoint(readonlyHarness.options)
+  readonlyEntrypoint.beginSession()
+
+  const result = await readonlyEntrypoint.runSafetyCommand(command, {
+    source: 'quick-command',
+    readonlyQuickCommandDelegation:
+      createInternalReadonlyQuickCommandDelegation({
+        quickCommandId: 'builtin-server-directory-analysis',
+        command,
+        endpoint
+      })
+  })
+
+  assert.equal(result.sent, true)
+  assert.equal(readonlyHarness.confirmationBuilds.length, 0)
+  assert.equal(readonlyHarness.requests[0].risk, 'readonly')
+  assert.equal(
+    readonlyHarness.requests[0].metadata.readonlyQuickCommandId,
+    'builtin-server-directory-analysis'
+  )
+
+  const changeCommand = 'systemctl restart nginx'
+  const changeHarness = createHarness({ getEndpoint: () => endpoint })
+  const changeEntrypoint = createSafetyCommandEntrypoint(changeHarness.options)
+  changeEntrypoint.beginSession()
+  const changing = changeEntrypoint.runSafetyCommand(changeCommand, {
+    source: 'quick-command',
+    readonlyQuickCommandDelegation:
+      createInternalReadonlyQuickCommandDelegation({
+        quickCommandId: 'builtin-server-directory-analysis',
+        command: changeCommand,
+        endpoint
+      })
+  })
+  await waitFor(() => changeHarness.confirmationBuilds.length === 1)
+  assert.equal(changeHarness.requests[0].risk, 'change')
+  assert.equal(changeHarness.submissions.length, 0)
+  await changeEntrypoint.cancelPending()
+  assert.equal((await changing).cancelled, true)
 })
 
 test('Agent risk delegation capability is consumed by its first validation attempt', async () => {

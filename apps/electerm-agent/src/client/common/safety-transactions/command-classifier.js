@@ -835,8 +835,20 @@ const fixedReadonlyStorageDiagnosticCommands = new Set([
 const inherentlyReadonlyCommands = new Set([
   'uptime', 'whoami', 'id', 'pwd', 'df', 'du', 'free', 'ps', 'ls',
   'stat', 'wc', 'which', 'uname', 'cat', 'head', 'tail', 'grep',
-  'last', 'mpstat', 'true', 'vmstat'
+  'last', 'mpstat', 'true', 'vmstat', 'whereis'
 ])
+
+function isReadonlyShellNavigation (words) {
+  return ['cd', 'pushd', 'popd', 'dirs'].includes((words[0] || '').toLowerCase())
+}
+
+function isReadonlyFileInspection (words) {
+  return !words.slice(1).some(word => (
+    word === '-C' ||
+    word === '--compile' ||
+    word.startsWith('--compile=')
+  ))
+}
 
 function isReadonlyIostat (words) {
   return words.length === 4 &&
@@ -1095,6 +1107,8 @@ function isReadonly (command) {
   const tokens = shellTokens(text)
   const words = tokens.map(token => token.value)
   const executable = (words[0] || '').toLowerCase()
+  if (isReadonlyShellNavigation(words)) return true
+  if (executable === 'file') return isReadonlyFileInspection(words)
   if (executable === 'iostat') return isReadonlyIostat(words)
   if (executable === 'findmnt') return isReadonlyFindmnt(words)
   if (executable === 'lsof') return isReadonlyLsof(words)

@@ -317,6 +317,26 @@ test('bare readonly allowlist stays transparent without trusting slash paths', a
   }
 })
 
+test('session navigation and ordinary inspection commands stay transparent', async () => {
+  const { classifyCommand } = await importDomainModule('command-classifier.js')
+
+  for (const command of [
+    'cd',
+    'cd /var/log',
+    'cd ..',
+    'cd -P /etc',
+    'pushd /var/log',
+    'popd',
+    'dirs -v',
+    'file /etc/os-release',
+    'whereis nginx'
+  ]) {
+    const classification = classifyCommand(command)
+    assert.equal(classification.risk, 'readonly', command)
+    assert.equal(classification.requiresConfirmation, false, command)
+  }
+})
+
 test('bare modifying commands are protected without claiming automatic rollback', async () => {
   const { classifyCommand } = await importDomainModule('command-classifier.js')
 

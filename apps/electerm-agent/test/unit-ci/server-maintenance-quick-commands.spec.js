@@ -93,7 +93,11 @@ test('server maintenance quick commands are beginner-friendly and cover core mai
   const editable = commands.filter(item => item.editBeforeRun)
   assert.ok(editable.length >= 3, 'parameterized commands should be editable before sending to SSH')
   for (const item of editable) {
-    assert.equal(item.confirmRequired, true, `${item.id} should require confirmation`)
+    if (item.mutatesServer || item.id === 'builtin-server-packet-capture') {
+      assert.equal(item.confirmRequired, true, `${item.id} should require confirmation`)
+    } else {
+      assert.notEqual(item.confirmRequired, true, `${item.id} is readonly and must not require confirmation`)
+    }
     assert.ok(item.commands.some(step => /\{\{.+?\}\}/.test(step.command)), `${item.id} should expose placeholders`)
     assert.ok(Array.isArray(item.params), `${item.id} should expose editable form params`)
     assert.ok(item.params.length >= 1, `${item.id} should expose at least one form param`)

@@ -38,9 +38,8 @@ export function getServicesCommands () {
       name: '服务状态查询',
       description: '自动识别当前服务器上的 systemd 服务，可多选查看运行状态和日志。',
       usage: '连接 SSH 后从列表选择服务；未识别到时也可以手动输入完整服务名。',
-      labels: [NEED_EDIT, '服务'],
+      labels: [NEED_EDIT, '服务', READ_ONLY],
       editBeforeRun: true,
-      confirmRequired: true,
       params: [
         {
           name: '服务名',
@@ -101,9 +100,8 @@ IFS="$OLD_IFS"`)
       name: '日志关键词搜索',
       description: '按路径和关键词搜索日志文件，限制输出避免刷屏。',
       usage: '默认搜索 /var/log 里的 error，可改成 timeout、failed 或业务关键词。',
-      labels: [NEED_EDIT, '日志'],
+      labels: [NEED_EDIT, '日志', READ_ONLY],
       editBeforeRun: true,
-      confirmRequired: true,
       params: [
         {
           name: '日志路径',

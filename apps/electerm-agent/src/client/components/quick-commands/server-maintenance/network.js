@@ -910,9 +910,8 @@ true`)
       name: '端口进程查询',
       description: '按当前连接端口生成查询命令，可改成业务端口。',
       usage: '默认端口来自当前连接；可改成 80、443、3306 等端口后再执行。',
-      labels: [NEED_EDIT, '网络'],
+      labels: [NEED_EDIT, '网络', READ_ONLY],
       editBeforeRun: true,
-      confirmRequired: true,
       params: [
         {
           name: '端口',
@@ -1091,9 +1090,8 @@ true`)
       name: 'DNS 解析检查',
       description: '按当前连接域名或示例域名检查 DNS 解析。',
       usage: '默认域名来自当前连接；如果当前连接是 IP，则改成你的业务域名。',
-      labels: [NEED_EDIT, '网络'],
+      labels: [NEED_EDIT, '网络', READ_ONLY],
       editBeforeRun: true,
-      confirmRequired: true,
       params: [
         {
           name: '域名',
@@ -1141,7 +1139,6 @@ true`)
       usage: '适合排查 DNS 正常但端口不通、路由中断或网络超时问题。',
       labels: [NEED_EDIT, '网络', READ_ONLY],
       editBeforeRun: true,
-      confirmRequired: true,
       params: [
         inputParam('目标地址', '目标地址', '8.8.8.8', '可填写 IP 或域名，例如数据库地址、API 域名或公网 DNS。', '例如 8.8.8.8'),
         selectParam('检测方式', '检测方式', 'ping', 'Ping 检查基础连通；TCP 检查端口；路由跟踪定位中断节点。', [
@@ -1177,7 +1174,6 @@ esac`)
       usage: '用于检查网站状态码、响应耗时、证书握手和重定向结果。',
       labels: [NEED_EDIT, 'HTTP', READ_ONLY],
       editBeforeRun: true,
-      confirmRequired: true,
       params: [
         inputParam('请求地址', '请求地址', 'https://example.com', '填写完整 http:// 或 https:// 地址，可包含接口路径。', 'https://example.com/health'),
         selectParam('请求方法', '请求方法', 'HEAD', 'HEAD 不下载响应正文；GET 更接近真实访问。', [
@@ -1213,7 +1209,6 @@ curl $CURL_ARGS -w '\n状态码: %{http_code}\n远端地址: %{remote_ip}\n总�
       usage: '适合排查证书过期、SNI 错误、证书链异常或 HTTPS 握手失败。',
       labels: [NEED_EDIT, '证书', READ_ONLY],
       editBeforeRun: true,
-      confirmRequired: true,
       params: [
         inputParam('证书域名', '证书域名', '{{域名}}', '必须填写证书对应域名，SNI 检查也会使用该值。', '例如 api.example.com'),
         inputParam('TLS端口', 'TLS 端口', '443', 'HTTPS 通常是 443，也可填写邮件或自定义 TLS 端口。', '例如 443'),

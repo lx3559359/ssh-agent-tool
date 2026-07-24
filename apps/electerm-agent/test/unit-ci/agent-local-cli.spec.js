@@ -346,6 +346,29 @@ test('Agent local CLI tool requires user confirmation before execution', async (
   assert.equal(result.cancelled, true)
 })
 
+test('Agent readonly terminal commands execute without asking for confirmation', async () => {
+  const {
+    confirmAgentToolExecution
+  } = await import(confirmModuleUrl)
+  let confirmationCalls = 0
+
+  const result = await confirmAgentToolExecution({
+    toolName: 'send_terminal_command',
+    args: {
+      command: 'cat /etc/os-release'
+    },
+    confirm: () => {
+      confirmationCalls += 1
+      return false
+    }
+  })
+
+  assert.equal(result.accepted, true)
+  assert.equal(result.cancelled, false)
+  assert.equal(result.risk, 'readonly')
+  assert.equal(confirmationCalls, 0)
+})
+
 test('Agent tools expose and route run_local_cli through confirmation and IPC', () => {
   const source = fs.readFileSync(
     path.resolve(__dirname, '../../src/client/components/ai/agent-tools.js'),

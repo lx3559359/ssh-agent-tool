@@ -10,7 +10,8 @@ import {
   createMutationSafetyMetadata
 } from './server-maintenance/shared/safety-metadata.js'
 import {
-  getValidatedCommandSafetyMetadata
+  getValidatedCommandSafetyMetadata,
+  isAuthoritativeReadonlyCommand
 } from './server-maintenance/shared/definition.js'
 import {
   buildPacketFilterArguments,
@@ -20,6 +21,9 @@ import {
   createInternalMaintenanceRecoveryIntent,
   isMaintenanceRecoveryQuickCommand
 } from '../../common/safety-transactions/maintenance-recovery-delegation.js'
+import {
+  createInternalReadonlyQuickCommandDelegation
+} from '../../common/safety-transactions/readonly-quick-command-delegation.js'
 
 const quickCommandSessionMismatchMessage = '当前服务器已切换，请重新打开快捷命令后再执行'
 
@@ -428,12 +432,27 @@ export function submitValidatedQuickCommand (pendingCommand = {}, submit, active
       verification: safetyMetadata.verifyCommands
     })
   }
+  const readonlyQuickCommandDelegation = isAuthoritativeReadonlyCommand(item)
+    ? createInternalReadonlyQuickCommandDelegation({
+      quickCommandId: item.id,
+      command: commandText,
+      endpoint: {
+        tabId: pendingCommand.boundTabId,
+        host: pendingCommand.context?.host,
+        port: pendingCommand.context?.port,
+        username: pendingCommand.context?.username
+      }
+    })
+    : undefined
   submit(pendingCommand.id, {
     commandText,
     inputOnly: pendingCommand.inputOnly,
     confirmed: true,
     tabId: pendingCommand.boundTabId,
-    ...(maintenanceRecoveryIntent ? { maintenanceRecoveryIntent } : {})
+    ...(maintenanceRecoveryIntent ? { maintenanceRecoveryIntent } : {}),
+    ...(readonlyQuickCommandDelegation
+      ? { readonlyQuickCommandDelegation }
+      : {})
   })
   return { ...result, submitted: true }
 }

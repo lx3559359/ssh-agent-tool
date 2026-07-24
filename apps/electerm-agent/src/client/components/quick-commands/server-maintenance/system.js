@@ -940,7 +940,6 @@ export function getSystemCommands () {
       usage: '适合排查进程占用过高、启动参数错误、端口冲突或文件句柄异常。',
       labels: [NEED_EDIT, '进程', READ_ONLY],
       editBeforeRun: true,
-      confirmRequired: true,
       params: [
         selectParam('查询方式', '查询方式', 'name', '知道 PID 时更精确；不知道时可按进程名搜索。', [
           { label: '按进程名', value: 'name' },

@@ -139,7 +139,6 @@ export function getStorageCommands () {
       usage: '用于快速定位日志暴涨、缓存堆积、备份文件或大目录占满磁盘。',
       labels: [NEED_EDIT, '磁盘', READ_ONLY],
       editBeforeRun: true,
-      confirmRequired: true,
       params: [
         inputParam('分析目录', '分析目录', '/var/log', '填写要分析的绝对路径，默认查看日志目录。', '例如 /var/log'),
         numberParam('目录深度', '目录深度', '1', '子目录统计深度，建议 1-3，过大会增加扫描时间。', 1, 8),

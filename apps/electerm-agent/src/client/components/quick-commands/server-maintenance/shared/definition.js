@@ -5,6 +5,7 @@ import {
 import { ufwGlobalAllowAwk } from './command-builders.js'
 
 const authoritativeSafetyMetadata = new WeakMap()
+const authoritativeReadonlyCommands = new WeakSet()
 
 const mutationSafetyByCommandId = {
   'builtin-server-network-change-ip': {
@@ -116,7 +117,14 @@ export function defineCommand (item) {
     })
     authoritativeSafetyMetadata.set(command, safetyMetadata)
   }
+  if (!item.mutatesServer && (item.labels || []).includes(READ_ONLY)) {
+    authoritativeReadonlyCommands.add(command)
+  }
   return command
+}
+
+export function isAuthoritativeReadonlyCommand (command) {
+  return authoritativeReadonlyCommands.has(command)
 }
 
 export function getValidatedCommandSafetyMetadata (command) {

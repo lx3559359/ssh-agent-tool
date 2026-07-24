@@ -31,6 +31,15 @@ export async function confirmAgentToolExecution ({
   }
 
   const risk = classifyAgentCommand(command)
+  if (risk.risk === 'readonly') {
+    return {
+      accepted: true,
+      cancelled: false,
+      risk: risk.risk,
+      message: ''
+    }
+  }
+
   const ask = typeof confirm === 'function'
     ? confirm
     : message => requestAgentConfirmation(message, { signal })

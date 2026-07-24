@@ -158,6 +158,9 @@ export default Store => {
       }
     }
     const qms = getQuickCommandSteps(qm, options)
+    if (options.readonlyQuickCommandDelegation && qms.length !== 1) {
+      throw new Error('只读快捷命令授权只能绑定一个最终命令。')
+    }
     if (recoveryIntent && qms.length !== 1) {
       throw new Error('维护恢复授权只能绑定一个最终命令。')
     }
@@ -183,6 +186,12 @@ export default Store => {
             {
               title: qm?.name || options.title,
               allowUntrackedReadonlyFallback,
+              ...(options.readonlyQuickCommandDelegation
+                ? {
+                    readonlyQuickCommandDelegation:
+                      options.readonlyQuickCommandDelegation
+                  }
+                : {}),
               ...(maintenanceRecovery ? { maintenanceRecovery } : {})
             }
           )
