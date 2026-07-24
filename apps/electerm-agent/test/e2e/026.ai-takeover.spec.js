@@ -186,7 +186,7 @@ async function submitAgentPrompt (client, prompt) {
 
 async function expectAgentCompleted (client, item, text) {
   await expect(item).toContainText(text, { timeout: 30000 })
-  await expect(client.locator('.agent-send-running')).toHaveCount(0)
+  await expect(client.locator('.ai-stop-icon-square')).toHaveCount(0)
   await expect(client.locator('.send-to-ai-icon')).toBeVisible()
 }
 
@@ -271,7 +271,7 @@ test('per-session takeover uses readonly exec, direct manual input and one risky
     const readonlyCommandsBefore = sshServer.state.commands.filter(value => value === 'ip addr').length
     const readonlyExecBefore = sshServer.state.execCommands.filter(value => value === 'ip addr').length
     const readonlyRun = await submitAgentPrompt(client, 'readonly-e2e')
-    await expect(client.locator('.agent-send-running')).toBeVisible()
+    await expect(client.locator('.ai-chat-terminals .ai-stop-icon-square')).toBeVisible()
     await captureAuditScreenshot(client, '05-readonly-running.png')
     await expect(client.locator('.ant-modal-confirm')).toHaveCount(0)
     await expect(client.locator('.terminal-command-safety-modal')).toHaveCount(0)
@@ -395,13 +395,14 @@ test('per-session takeover uses readonly exec, direct manual input and one risky
       () => sshServer.state.execCommands.filter(value => value === 'cat /proc/loadavg').length,
       { timeout: 15000 }
     ).toBe(1)
-    await expect(client.locator('.agent-send-running')).toBeVisible()
-    await client.locator('.agent-takeover-stop').click()
+    const composerStop = client.locator('.ai-chat-terminals .ai-stop-icon-square')
+    await expect(composerStop).toBeVisible()
+    await composerStop.click()
     await expect(stopRun.item).toContainText(
       /stopped|cancel|已停止|已取消/i,
       { timeout: 30000 }
     )
-    await expect(client.locator('.agent-takeover-switch')).toHaveAttribute('aria-checked', 'false')
+    await expect(client.locator('.agent-takeover-switch')).toHaveAttribute('aria-checked', 'true')
     await expect.poll(() => sshServer.state.cancelledExecCommands)
       .toContain('cat /proc/loadavg')
     const stoppedReadonlyError = stopRun.item.locator('.agent-readonly-error')

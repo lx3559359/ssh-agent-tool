@@ -408,7 +408,7 @@ test('application lifecycle hooks collect only low-frequency performance events'
   )
   assert.match(
     stopBlock,
-    /finishAIQuality\(qualityStateRef\.current,\s*'cancelled',\s*'cancelled'\)/
+    /recordQualityEvent:\s*\(context,\s*event\)\s*=>\s*\{[\s\S]*finishAIQuality\(\s*qualityStateRef\.current,\s*event\.phase,\s*event\.result/
   )
   assert.doesNotMatch(terminal, /onData[\s\S]{0,500}recordPerformance/)
   assert.doesNotMatch(ai, /recordPerformanceDuration[\s\S]{0,200}streamResponse\.content/)
