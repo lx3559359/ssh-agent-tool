@@ -1,6 +1,9 @@
 import { Button, Empty, Popconfirm } from 'antd'
 import { DeleteOutlined, RobotOutlined } from '@ant-design/icons'
+import { formatShellPilotTranslation } from '../../../common/shellpilot-i18n-overrides.js'
 
+const e = window.translate
+const tf = (key, replacements) => formatShellPilotTranslation(e, key, replacements)
 const statusLabels = {
   completed: '已完成',
   cancelled: '已取消',
@@ -18,18 +21,18 @@ export default function ResultViewer ({
   onClear
 }) {
   if (!records.length) {
-    return <Empty description='还没有执行记录' />
+    return <Empty description={e('shellpilotOperationsNoHistory')} />
   }
   return (
     <div className='operations-history'>
       <div className='operations-history-head'>
-        <span>共 {records.length} 条本地记录</span>
+        <span>{tf('shellpilotOperationsHistoryCount', { count: records.length })}</span>
         <Popconfirm
-          title='清空全部运维记录？'
-          description='仅删除本机的任务历史，不会改动服务器。'
+          title={e('shellpilotOperationsClearHistoryTitle')}
+          description={e('shellpilotOperationsClearHistoryDescription')}
           onConfirm={onClear}
         >
-          <Button danger size='small' icon={<DeleteOutlined />}>清空</Button>
+          <Button danger size='small' icon={<DeleteOutlined />}>{e('shellpilotOperationsClear')}</Button>
         </Popconfirm>
       </div>
       {records.map(record => {
@@ -50,7 +53,7 @@ export default function ResultViewer ({
               icon={<RobotOutlined />}
               onClick={() => onAnalyze(record)}
             >
-              AI 分析
+              {e('shellpilotOperationsAIAnalysis')}
             </Button>
           </article>
         )

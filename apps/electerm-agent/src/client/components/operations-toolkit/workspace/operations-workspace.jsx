@@ -18,18 +18,21 @@ import { refsStatic } from '../../common/ref'
 import { getOperationsCatalog, getOperationsTool } from '../catalog'
 import { hiddenQuickActionIds } from '../catalog/migrations'
 import { buildOperationsAIContext } from '../shared/ai-context'
+import { formatShellPilotTranslation } from '../../../common/shellpilot-i18n-overrides.js'
 import ToolCatalog from './tool-catalog'
 import ParameterForm, { buildParameterDefaults } from './parameter-form'
 import TaskPanel from './task-panel'
 import ResultViewer from './result-viewer'
 import './operations-workspace.styl'
 
+const e = window.translate
+const tf = (key, replacements) => formatShellPilotTranslation(e, key, replacements)
 const tabs = [
-  { value: 'quick', label: '快捷操作' },
-  { value: 'diagnostic', label: '诊断脚本' },
-  { value: 'maintenance', label: '安全维护' },
-  { value: 'custom', label: '我的工具' },
-  { value: 'history', label: '执行记录' }
+  { value: 'quick', label: e('shellpilotOperationsQuickActions') },
+  { value: 'diagnostic', label: e('shellpilotOperationsDiagnostics') },
+  { value: 'maintenance', label: e('shellpilotOperationsSafeMaintenance') },
+  { value: 'custom', label: e('shellpilotOperationsMyTools') },
+  { value: 'history', label: e('shellpilotOperationsHistory') }
 ]
 
 function OperationsWorkspace (props) {
@@ -90,7 +93,7 @@ function OperationsWorkspace (props) {
     const prompt = buildOperationsAIContext({ task, tool })
     store.handleOpenAIPanel()
     refsStatic.get('AIChat')?.setPrompt(prompt)
-    message.info('诊断结果已放入 AI 输入框，请确认后发送')
+    message.info(e('shellpilotOperationsAIContextReady'))
   }
 
   function handleHistorySelect (task) {
@@ -118,13 +121,13 @@ function OperationsWorkspace (props) {
               <h3>{selectedTool.title}</h3>
               <p>{selectedTool.description}</p>
             </div>
-            <Tag color='green'>只读</Tag>
+            <Tag color='green'>{e('shellpilotOperationsReadonly')}</Tag>
           </header>
           <div className='operations-connection-status'>
             <span className={endpoint ? 'connected' : ''} />
             {endpoint
-              ? `当前服务器：${endpointKey}`
-              : '尚未连接 SSH，可浏览脚本；连接后即可运行'}
+              ? tf('shellpilotOperationsCurrentServer', { endpoint: endpointKey })
+              : e('shellpilotOperationsDisconnectedHint')}
             {endpoint
               ? (
                 <Button
@@ -136,7 +139,7 @@ function OperationsWorkspace (props) {
                     message.warning(error?.message || String(error))
                   })}
                 >
-                  重新识别
+                  {e('shellpilotOperationsRediscover')}
                 </Button>
                 )
               : null}
@@ -157,9 +160,9 @@ function OperationsWorkspace (props) {
               disabled={!endpoint}
               onClick={handleRun}
             >
-              运行只读诊断
+              {e('shellpilotOperationsRunReadonly')}
             </Button>
-            <span>不修改配置、文件或服务，无需二次确认</span>
+            <span>{e('shellpilotOperationsNoConfirmation')}</span>
           </div>
           {activeTask
             ? (
@@ -173,8 +176,8 @@ function OperationsWorkspace (props) {
             : (
               <div className='operations-no-task'>
                 <SafetyCertificateOutlined />
-                <strong>等待执行诊断</strong>
-                <span>结果在独立后台任务中采集，不会占用当前 SSH 输入区。</span>
+                <strong>{e('shellpilotOperationsAwaiting')}</strong>
+                <span>{e('shellpilotOperationsIndependentTaskHint')}</span>
               </div>
               )}
         </main>
@@ -187,8 +190,8 @@ function OperationsWorkspace (props) {
       <div className='operations-placeholder'>
         <Empty
           description={kind === 'maintenance'
-            ? '安全维护将在下一阶段接入备份、确认和快捷回滚'
-            : '我的工具将在下一阶段支持自定义脚本和导入'}
+            ? e('shellpilotOperationsMaintenancePhaseTwo')
+            : e('shellpilotOperationsCustomPhaseTwo')}
         />
       </div>
     )
@@ -230,13 +233,13 @@ function OperationsWorkspace (props) {
     >
       <header className='operations-workspace-head'>
         <div>
-          <strong>运维工具</strong>
-          <span>快捷操作与只读诊断</span>
+          <strong>{e('shellpilotOperationsTitle')}</strong>
+          <span>{e('shellpilotOperationsSubtitle')}</span>
         </div>
         <Button
           type='text'
           icon={<CloseOutlined />}
-          aria-label='关闭运维工具'
+          aria-label={e('shellpilotOperationsClose')}
           onClick={() => store.closeOperationsToolkit()}
         />
       </header>
@@ -250,7 +253,7 @@ function OperationsWorkspace (props) {
         {store.operationsDiscoveryStatus === 'loading' &&
         store.operationsToolkitTab === 'diagnostic' &&
         !store.operationsCapabilities
-          ? <Spin className='operations-discovery-spin' tip='正在识别服务器环境...' />
+          ? <Spin className='operations-discovery-spin' tip={e('shellpilotOperationsDiscovering')} />
           : null}
         {renderContent()}
       </div>

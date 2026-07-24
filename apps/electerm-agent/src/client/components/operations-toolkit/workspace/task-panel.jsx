@@ -2,6 +2,7 @@ import { Button, Progress, Tag } from 'antd'
 import { StopOutlined } from '@ant-design/icons'
 import VirtualLog from './virtual-log'
 
+const e = window.translate
 const statusLabels = {
   created: '已创建',
   discovering: '正在识别环境',
@@ -75,10 +76,10 @@ export default function TaskPanel ({ task, tool, onCancel, onAnalyze }) {
               loading={task.status === 'cancelling'}
               onClick={() => onCancel(task.id)}
             >
-              停止任务
+              {e('shellpilotOperationsStopTask')}
             </Button>
             )
-          : <Button onClick={() => onAnalyze(task)}>交给 AI 分析</Button>}
+          : <Button onClick={() => onAnalyze(task)}>{e('shellpilotOperationsAnalyzeWithAI')}</Button>}
       </footer>
     </section>
   )

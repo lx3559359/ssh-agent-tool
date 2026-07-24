@@ -1,5 +1,7 @@
 import { Input, InputNumber, Select } from 'antd'
 
+const e = window.translate
+
 function optionsFor (parameter, capabilities = {}) {
   if (parameter.source === 'services') {
     return (capabilities.services || []).map(service => ({
@@ -9,7 +11,7 @@ function optionsFor (parameter, capabilities = {}) {
   }
   if (parameter.source === 'interfaces') {
     return [
-      { label: '任意网卡', value: 'any' },
+      { label: e('shellpilotOperationsAnyInterface'), value: 'any' },
       ...(capabilities.interfaces || []).map(item => ({
         label: `${item.name}${item.cidr ? ` · ${item.cidr}` : ''}${item.state ? ` · ${item.state}` : ''}`,
         value: item.name
@@ -41,7 +43,7 @@ export default function ParameterForm ({
   if (!tool?.parameters?.length) {
     return (
       <div className='operations-parameter-empty'>
-        此诊断无需填写参数，可直接运行。
+        {e('shellpilotOperationsNoParameters')}
       </div>
     )
   }
@@ -67,10 +69,10 @@ export default function ParameterForm ({
                     options={options}
                     showSearch
                     optionFilterProp='label'
-                    placeholder={options.length ? '请选择' : '连接后自动读取'}
+                    placeholder={options.length ? e('shellpilotOperationsSelect') : e('shellpilotOperationsConnectToDiscover')}
                   />
                   )
-                : <Input {...common} placeholder={parameter.placeholder || `请输入${parameter.label}`} />}
+                : <Input {...common} placeholder={parameter.placeholder || parameter.label} />}
             {parameter.help ? <small>{parameter.help}</small> : null}
           </label>
         )

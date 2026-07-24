@@ -1,6 +1,8 @@
 import { Empty, Input } from 'antd'
 import { SearchOutlined } from '@ant-design/icons'
 
+const e = window.translate
+
 export default function ToolCatalog ({
   tools,
   selectedToolId,
@@ -24,7 +26,7 @@ export default function ToolCatalog ({
         prefix={<SearchOutlined />}
         value={keyword}
         onChange={event => onKeywordChange(event.target.value)}
-        placeholder='搜索诊断脚本'
+        placeholder={e('shellpilotOperationsSearch')}
       />
       <div className='operations-categories'>
         {categories.map(item => (
@@ -46,10 +48,10 @@ export default function ToolCatalog ({
           >
             <strong>{tool.title}</strong>
             <span>{tool.description}</span>
-            <small>{tool.category} · 只读</small>
+            <small>{tool.category} · {e('shellpilotOperationsReadonly')}</small>
           </button>
         ))}
-        {!visible.length ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description='没有匹配的脚本' /> : null}
+        {!visible.length ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={e('shellpilotOperationsNoMatches')} /> : null}
       </div>
     </aside>
   )
