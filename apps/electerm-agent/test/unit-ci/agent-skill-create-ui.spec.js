@@ -7,37 +7,54 @@ function source (relativePath) {
   return fs.readFileSync(path.resolve(__dirname, '../../', relativePath), 'utf8')
 }
 
-test('conversational creator exposes requirements, progress, review, and revision actions', () => {
+test('conversational creator exposes a minimal summary and revision actions', () => {
   const modal = source('src/client/components/ai/agent-skill-create-modal.jsx')
   const review = source('src/client/components/ai/agent-skill-draft-review.jsx')
+  const summary = source('src/client/components/ai/agent-skill-draft-summary.jsx')
 
   assert.match(modal, /createAgentSkillCreatorController/)
   assert.match(modal, /requirements/)
   assert.match(modal, /conversation/)
   assert.match(modal, /gathering|generating|validating/)
   assert.match(modal, /shellpilotSkillContinueConversation/)
-  assert.match(modal, /shellpilotSkillManualEdit/)
   assert.match(modal, /shellpilotSkillSaveDraftOnly/)
   assert.match(modal, /shellpilotSkillSaveAndEnable/)
+  assert.match(modal, /data-testid='agent-skill-save-draft'/)
+  assert.match(modal, /data-testid='agent-skill-save-enable'/)
+  assert.doesNotMatch(modal, /shellpilotSkillManualEdit/)
+  assert.doesNotMatch(modal, /<Button onClick=\{validate\}/)
+  assert.match(review, /AgentSkillDraftSummary/)
+  assert.match(review, /Collapse/)
+  assert.match(review, /shellpilotSkillTechnicalDetails/)
+  assert.match(review, /data-testid='agent-skill-technical-details'/)
   assert.match(review, /AgentSkillEditor/)
   assert.match(review, /fileDigests/)
   assert.match(review, /requestedPermissions/)
   assert.match(review, /riskSummary/)
   assert.match(review, /errors/)
   assert.match(review, /warnings/)
+  assert.match(review, /detailsOpen &&/)
+  assert.match(summary, /data-testid='agent-skill-draft-summary'/)
+  assert.match(summary, /name/)
+  assert.match(summary, /purpose/)
+  assert.match(summary, /triggers/)
+  assert.match(summary, /capabilityCount/)
+  assert.match(summary, /safetyStatus/)
+  assert.match(summary, /validationState/)
 })
 
-test('save and enable requires a fresh matching validation digest', () => {
+test('save and enable automatically obtains a fresh matching validation digest', () => {
   const modal = source('src/client/components/ai/agent-skill-create-modal.jsx')
 
   assert.match(modal, /validateAgentSkillDraft/)
+  assert.match(modal, /validateDraft\(result\.draft\)/)
   assert.match(modal, /validation\.valid/)
   assert.match(modal, /validation\.packageDigest === draft\.packageDigest/)
   assert.match(modal, /enableAgentSkillDraft/)
   assert.match(modal, /setValidation\(null\)/)
 })
 
-test('creator and review use accessible bounded modal regions without another main column', () => {
+test('creator and review use accessible bounded responsive regions', () => {
   const modal = source('src/client/components/ai/agent-skill-create-modal.jsx')
   const review = source('src/client/components/ai/agent-skill-draft-review.jsx')
   const styles = source('src/client/components/ai/agent-skill-manager.styl')
@@ -49,5 +66,7 @@ test('creator and review use accessible bounded modal regions without another ma
   assert.match(styles, /\.agent-skill-create-modal/)
   assert.match(styles, /max-height/)
   assert.match(styles, /overflow-y auto/)
+  assert.match(styles, /\.agent-skill-draft-summary/)
+  assert.match(styles, /grid-template-columns/)
   assert.match(styles, /@media \(max-width: 820px\)/)
 })

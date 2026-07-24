@@ -89,12 +89,68 @@
   min-width 0
   margin-top 14px
 
+.agent-skill-draft-summary
+  min-width 0
+  padding 14px 16px
+  margin-bottom 10px
+  border-left 3px solid var(--primary)
+  background var(--main-light)
+
+  .ant-typography
+    margin-bottom 0
+
+.agent-skill-draft-summary-heading
+  display flex
+  align-items flex-start
+  justify-content space-between
+  gap 12px
+
+  h4.ant-typography
+    margin-top 2px
+
+.agent-skill-draft-summary-status
+  display flex
+  flex-wrap wrap
+  justify-content flex-end
+  gap 6px
+
+.agent-skill-draft-purpose
+  margin-top 10px
+  color var(--text)
+  overflow-wrap anywhere
+
+.agent-skill-draft-facts
+  display grid
+  grid-template-columns repeat(3, minmax(0, 1fr))
+  gap 8px 16px
+  margin 12px 0 0
+
+  > div
+    min-width 0
+
+  dt
+    margin-bottom 3px
+    color var(--text-secondary)
+    font-size 12px
+
+  dd
+    margin 0
+    color var(--text)
+    overflow-wrap anywhere
+
+.agent-skill-technical-details
+  min-width 0
+
   > .ant-list
     max-height 150px
     overflow-y auto
 
   > .agent-skill-editor
     margin-top 12px
+
+  pre
+    white-space pre-wrap
+    overflow-wrap anywhere
 
 @media (max-width: 820px)
   .agent-skill-create-modal
@@ -113,6 +169,16 @@
   .agent-skill-editor-evidence
     grid-column 1 / -1
     max-height none
+
+  .agent-skill-draft-facts
+    grid-template-columns 1fr
+
+  .agent-skill-draft-summary-heading
+    display block
+
+  .agent-skill-draft-summary-status
+    justify-content flex-start
+    margin-top 8px
 
 @media (max-width: 560px)
   .agent-skill-editor

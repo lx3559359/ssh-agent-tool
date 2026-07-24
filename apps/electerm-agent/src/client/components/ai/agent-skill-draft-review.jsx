@@ -1,28 +1,39 @@
-import { Alert, Descriptions, List, Typography } from 'antd'
+import { Alert, Button, Collapse, Descriptions, List, Typography } from 'antd'
+import { useEffect, useState } from 'react'
+import AgentSkillDraftSummary from './agent-skill-draft-summary.jsx'
 import AgentSkillEditor from './agent-skill-editor.jsx'
 
 const e = window.translate
 
 function lines (items = []) {
-  return Array.isArray(items) && items.length ? items.join('\n') : e('shellpilotSkillNone')
+  return Array.isArray(items) && items.length
+    ? items.join('\n')
+    : e('shellpilotSkillNone')
 }
 
 export default function AgentSkillDraftReview ({
   draft,
   generated,
   validation,
-  onDraftChange
+  onDraftChange,
+  onValidate
 }) {
+  const [detailsOpen, setDetailsOpen] = useState(false)
+  const errors = validation?.errors || draft?.errors || []
+  const warnings = validation?.warnings || draft?.warnings || []
+
+  useEffect(() => {
+    if (errors.length) setDetailsOpen(true)
+  }, [errors.length])
+
   if (!draft) return null
   const fileDigests = generated?.fileDigests || {}
-  const errors = validation?.errors || draft.errors || []
-  const warnings = validation?.warnings || draft.warnings || []
-  return (
-    <section className='agent-skill-draft-review' aria-live='polite'>
+  const details = (
+    <div
+      className='agent-skill-technical-details'
+      data-testid='agent-skill-technical-details'
+    >
       <Descriptions bordered size='small' column={1}>
-        <Descriptions.Item label={e('shellpilotSkillDraftSummary')}>
-          {generated?.summary || draft.description}
-        </Descriptions.Item>
         <Descriptions.Item label='Digest'>
           <Typography.Text code copyable>{draft.packageDigest}</Typography.Text>
         </Descriptions.Item>
@@ -60,10 +71,36 @@ export default function AgentSkillDraftReview ({
           description={<pre>{lines(warnings.map(item => item.message || String(item)))}</pre>}
         />
       )}
-      <AgentSkillEditor
-        skill={draft}
+      {validation?.valid === false && (
+        <Button className='mg1b' onClick={onValidate}>
+          {e('shellpilotSkillRetryValidation')}
+        </Button>
+      )}
+      {detailsOpen && (
+        <AgentSkillEditor
+          skill={draft}
+          validation={validation}
+          onSaved={onDraftChange}
+        />
+      )}
+    </div>
+  )
+
+  return (
+    <section className='agent-skill-draft-review' aria-live='polite'>
+      <AgentSkillDraftSummary
+        draft={draft}
+        generated={generated}
         validation={validation}
-        onSaved={onDraftChange}
+      />
+      <Collapse
+        activeKey={detailsOpen ? ['technical'] : []}
+        onChange={keys => setDetailsOpen(keys.includes('technical'))}
+        items={[{
+          key: 'technical',
+          label: e('shellpilotSkillTechnicalDetails'),
+          children: details
+        }]}
       />
     </section>
   )

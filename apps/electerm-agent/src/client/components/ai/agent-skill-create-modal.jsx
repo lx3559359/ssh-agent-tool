@@ -25,7 +25,6 @@ export default function AgentSkillCreateModal ({
   open,
   onClose,
   onDraftReady,
-  onManualEdit,
   onEnabled
 }) {
   const controller = useMemo(
@@ -75,15 +74,16 @@ export default function AgentSkillCreateModal ({
       ])
       setRequirements('')
       onDraftReady?.(result.draft)
+      await validateDraft(result.draft)
     } catch (error) {
       if (error.code !== 'SKILL_CREATOR_CANCELLED') message.error(error.message)
     }
   }
 
-  async function validate () {
-    if (!draft) return null
+  async function validateDraft (candidate = draft) {
+    if (!candidate) return null
     try {
-      const result = await validateAgentSkillDraft(draft.id)
+      const result = await validateAgentSkillDraft(candidate.id)
       setValidation(result)
       return result
     } catch (error) {
@@ -97,14 +97,15 @@ export default function AgentSkillCreateModal ({
     }
   }
 
-  function handleDraftChange (updated) {
+  async function handleDraftChange (updated) {
     setDraft(updated)
     setValidation(null)
     onDraftReady?.(updated)
+    await validateDraft(updated)
   }
 
   async function saveAndEnable () {
-    const fresh = await validate()
+    const fresh = await validateDraft(draft)
     if (!fresh?.valid || fresh.packageDigest !== draft.packageDigest) return
     Modal.confirm({
       title: e('shellpilotSkillEnableConfirm'),
@@ -171,15 +172,21 @@ export default function AgentSkillCreateModal ({
               : e('shellpilotSkillGenerateDraft')}
           </Button>
           {busy && <Button onClick={() => controller.cancel()}>{e('cancel')}</Button>}
-          {draft && <Button onClick={validate}>{e('shellpilotSkillValidate')}</Button>}
           {draft && (
-            <Button onClick={() => onManualEdit?.(draft)}>
-              {e('shellpilotSkillManualEdit')}
+            <Button
+              data-testid='agent-skill-save-draft'
+              onClick={close}
+            >
+              {e('shellpilotSkillSaveDraftOnly')}
             </Button>
           )}
-          {draft && <Button onClick={close}>{e('shellpilotSkillSaveDraftOnly')}</Button>}
           {draft && (
-            <Button type='primary' disabled={!canEnable} onClick={saveAndEnable}>
+            <Button
+              type='primary'
+              data-testid='agent-skill-save-enable'
+              disabled={!canEnable}
+              onClick={saveAndEnable}
+            >
               {e('shellpilotSkillSaveAndEnable')}
             </Button>
           )}
@@ -202,6 +209,7 @@ export default function AgentSkillCreateModal ({
           generated={generated}
           validation={validation}
           onDraftChange={handleDraftChange}
+          onValidate={() => validateDraft(draft)}
         />
       </div>
     </Modal>

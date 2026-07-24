@@ -311,10 +311,6 @@ export default function AgentSkillManagerModal ({
           open={createOpen}
           onClose={() => setCreateOpen(false)}
           onDraftReady={draft => refresh(draft.id)}
-          onManualEdit={draft => {
-            setCreateOpen(false)
-            refresh(draft.id)
-          }}
           onEnabled={skill => {
             setCreateOpen(false)
             refresh(skill.id)
