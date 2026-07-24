@@ -14,7 +14,8 @@ const {
   verifyReleaseVersionConsistency
 } = require('./release-version-consistency')
 
-const distDir = path.resolve(__dirname, '../../dist')
+const distDir = process.env.AIGSHELL_RELEASE_DIST ||
+  path.resolve(__dirname, '../../dist')
 const releaseArch = process.env.AIGSHELL_RELEASE_ARCH
 const releaseChannel = process.env.AIGSHELL_UPDATE_CHANNEL
 const releaseAssetPrefix = pack.productName || 'ShellPilot'

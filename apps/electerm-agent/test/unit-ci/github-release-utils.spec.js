@@ -270,6 +270,16 @@ test('release verification scripts accept an explicit Windows release architectu
   assert.match(githubVerifySource, /buildReleaseAssetReport\(\{[\s\S]*arch:\s*releaseArch/s)
 })
 
+test('local release verification reads assets from the configured release directory', () => {
+  const localVerifySource = fs.readFileSync(
+    path.resolve(__dirname, '../../build/bin/verify-local-release-assets.js'),
+    'utf8'
+  )
+
+  assert.match(localVerifySource, /process\.env\.AIGSHELL_RELEASE_DIST/)
+  assert.match(localVerifySource, /path\.resolve\(__dirname, '\.\.\/\.\.\/dist'\)/)
+})
+
 test('local release verification validates the update approval manifest content', () => {
   const localVerifySource = fs.readFileSync(
     path.resolve(__dirname, '../../build/bin/verify-local-release-assets.js'),
