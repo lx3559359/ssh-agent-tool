@@ -24,6 +24,7 @@ test('runner completes readonly task and releases endpoint slot', async () => {
   const { createOperationsTaskRunner } = await importModule(
     'src/client/components/operations-toolkit/runtime/task-runner.js'
   )
+  const statuses = []
   const runner = createOperationsTaskRunner({
     channel: {
       execute: async ({ onChunk }) => {
@@ -31,13 +32,15 @@ test('runner completes readonly task and releases endpoint slot', async () => {
         return { exitCode: 0 }
       }
     },
-    discover: async () => ({ tools: ['uptime'] })
+    discover: async () => ({ tools: ['uptime'] }),
+    onTaskChange: task => statuses.push(task.status)
   })
   const running = runner.run({ tool, endpoint, params: {} })
   const completed = await running.completion
   assert.equal(completed.status, 'completed')
   assert.equal(completed.steps[0].output, 'up 10 days')
   assert.equal(runner.getActiveCount('root@example.com:22'), 0)
+  assert.deepEqual(statuses, ['created', 'discovering', 'running', 'running', 'completed'])
 })
 
 test('runner releases endpoint slot after cancellation', async () => {

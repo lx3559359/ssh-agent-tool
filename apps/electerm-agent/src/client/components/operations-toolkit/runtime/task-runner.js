@@ -35,7 +35,8 @@ export function createOperationsTaskRunner ({
   discover = async () => ({}),
   maxReadonlyPerEndpoint = 2,
   now = Date.now,
-  createTaskId = () => createTrustedOperationId('operations')
+  createTaskId = () => createTrustedOperationId('operations'),
+  onTaskChange = () => {}
 } = {}) {
   if (!channel?.execute) throw new Error('运维任务执行通道不可用')
   const tasks = new Map()
@@ -46,6 +47,7 @@ export function createOperationsTaskRunner ({
 
   function setTask (task) {
     tasks.set(task.id, task)
+    onTaskChange(task)
     return task
   }
 

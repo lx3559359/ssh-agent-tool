@@ -159,6 +159,10 @@ export default () => {
     quickCommands: [],
     quickCommandId: '',
     openQuickCommandBar: false,
+    operationsToolkitTab: 'quick',
+    operationsTasks: [],
+    activeOperationsTaskId: '',
+    operationsHistory: [],
     pinnedQuickCommandBar: ls.getItem(pinnedQuickCommandBarKey) === 'y',
     qmSortByFrequency: ls.getItem(qmSortByFrequencyKey) === 'yes',
 
