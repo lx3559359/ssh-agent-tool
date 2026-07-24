@@ -1,4 +1,8 @@
 import { defineOperationsTool } from '../shared/definition.js'
+import { systemStorageTools } from './diagnostics/system-storage.js'
+import { networkSecurityTools } from './diagnostics/network-security.js'
+import { udpCheckTools } from './diagnostics/udp-check.js'
+import { servicesPlatformTools } from './diagnostics/services-platform.js'
 
 export function buildOperationsCatalog (groups = []) {
   const toolIds = new Set()
@@ -23,7 +27,12 @@ export function buildOperationsCatalog (groups = []) {
   return Object.freeze(tools)
 }
 
-let operationsCatalog = Object.freeze([])
+let operationsCatalog = buildOperationsCatalog([
+  systemStorageTools,
+  networkSecurityTools,
+  udpCheckTools,
+  servicesPlatformTools
+])
 
 export function setOperationsCatalogGroups (groups) {
   operationsCatalog = buildOperationsCatalog(groups)

@@ -26,7 +26,14 @@ function freezeTool (tool) {
 }
 
 export function defineOperationsTool (input) {
-  const tool = structuredClone(input)
+  const tool = {
+    ...input,
+    steps: (input?.steps || []).map(step => ({ ...step })),
+    legacyIds: input?.legacyIds ? [...input.legacyIds] : undefined,
+    parameters: input?.parameters
+      ? input.parameters.map(parameter => ({ ...parameter }))
+      : undefined
+  }
   if (!toolIdPattern.test(tool.id || '')) {
     throw new Error('运维工具标识无效')
   }
