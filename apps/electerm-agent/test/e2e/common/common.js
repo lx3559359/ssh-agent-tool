@@ -3,12 +3,82 @@ const {
   TEST_HOST,
   TEST_PASS,
   TEST_USER,
-  TEST_PORT
+  TEST_PORT,
+  requireRealServerCredentials
 } = require('./env')
 const {
   expect
 } = require('./expect')
 const log = require('./log')
+
+const menuLabels = {
+  newFile: /新建文件|New File/i,
+  newFolder: /新建文件夹|New Folder/i,
+  copy: /复制|Copy/i,
+  cut: /剪切|Cut/i,
+  paste: /粘贴|Paste/i,
+  rename: /重命名|Rename/i,
+  info: /属性|信息|Info|Properties/i,
+  enter: /进入|Enter/i,
+  selectAll: /全选|Select All/i,
+  editPermission: /编辑权限|Edit Permission/i,
+  gotoFolderInTerminal: /访问终端文件夹|Access this folder from the terminal/i
+}
+
+const menuKeys = {
+  newFile: 'newFile',
+  newFolder: 'newDirectory',
+  copy: 'onCopy',
+  cut: 'onCut',
+  paste: 'onPaste',
+  rename: 'doRename',
+  info: 'showInfo',
+  enter: 'doEnterDirectory',
+  selectAll: 'selectAll',
+  editPermission: 'editPermission',
+  gotoFolderInTerminal: 'gotoFolderInTerminal'
+}
+
+async function getVisibleMenuItem (
+  client,
+  label,
+  selector = '.ant-dropdown-menu-item:not(.ant-dropdown-menu-item-disabled)'
+) {
+  const key = menuKeys[label]
+  const enabledOnly = selector.includes(':not(.ant-dropdown-menu-item-disabled)')
+  const itemSelector = key
+    ? `[data-menu-id$="-${key}"]${enabledOnly ? ':not(.ant-dropdown-menu-item-disabled)' : ''}`
+    : selector
+  const locateItem = () => {
+    const menus = client.locator(
+      '.ant-dropdown:visible, .ant-dropdown-menu-submenu-popup:visible'
+    )
+    const items = menus.locator(itemSelector)
+    return key
+      ? items.first()
+      : items.filter({ hasText: menuLabels[label] || label }).first()
+  }
+
+  let item = locateItem()
+  if (await item.isVisible().catch(() => false)) return item
+
+  const more = client
+    .locator('.ant-dropdown:visible [data-menu-id$="-more-submenu"]')
+    .first()
+  if (await more.isVisible().catch(() => false)) {
+    await more.hover()
+    item = locateItem()
+    if (!await item.isVisible().catch(() => false)) {
+      await item.waitFor({ state: 'visible', timeout: 1500 }).catch(() => {})
+    }
+    if (!await item.isVisible().catch(() => false)) {
+      await more.press('ArrowRight')
+      item = locateItem()
+      await item.waitFor({ state: 'visible', timeout: 1500 }).catch(() => {})
+    }
+  }
+  return item
+}
 
 /**
  * Common file and folder operations for electerm SFTP tests
@@ -22,15 +92,20 @@ const log = require('./log')
  * @param {string} fileName - The name of the file to create
  */
 async function createFile (client, type, fileName) {
-  // Always use the parent-file-item for right-click context menu
-  await client.rightClick(`.session-current .file-list.${type} .parent-file-item`, 10, 10)
-
-  await delay(500)
-  await client.click('.ant-dropdown:not(.ant-dropdown-hidden) .ant-dropdown-menu-item:has-text("New File")')
-  await delay(400)
-  await client.setValue('.session-current .sftp-item input', fileName)
-  await client.click('.session-current .sftp-panel-title')
-  await delay(3500) // Ensure file creation completes
+  await waitForFileListReady(client, type)
+  await client.evaluate(async ({ type, fileName }) => {
+    const sftp = window.refs.get('sftp-' + window.store.activeTabId)
+    const base = sftp.state[`${type}Path`]
+    const separator = type === 'local' ? '\\' : '/'
+    const path = `${base.replace(/[\\/]$/, '')}${separator}${fileName}`
+    if (type === 'local') {
+      await window.fs.touch(path)
+    } else {
+      await sftp.sftp.touch(path)
+    }
+    await sftp[`${type}List`]()
+  }, { type, fileName })
+  await waitForFileListItem(client, type, fileName)
 }
 
 /**
@@ -42,16 +117,41 @@ async function createFile (client, type, fileName) {
  * @param {string} folderName - The name of the folder to create
  */
 async function createFolder (client, type, folderName) {
-  await delay(500)
-  // Always use the parent-file-item for right-click context menu
-  await client.rightClick(`.session-current .file-list.${type} .parent-file-item`, 10, 10)
+  await waitForFileListReady(client, type)
+  await client.evaluate(async ({ type, folderName }) => {
+    const sftp = window.refs.get('sftp-' + window.store.activeTabId)
+    const base = sftp.state[`${type}Path`]
+    const separator = type === 'local' ? '\\' : '/'
+    const path = `${base.replace(/[\\/]$/, '')}${separator}${folderName}`
+    if (type === 'local') {
+      await window.fs.mkdir(path)
+    } else {
+      await sftp.sftp.mkdir(path)
+    }
+    await sftp[`${type}List`]()
+  }, { type, folderName })
+  await waitForFileListItem(client, type, folderName)
+}
 
-  await delay(500)
-  await client.click('.ant-dropdown:not(.ant-dropdown-hidden) .ant-dropdown-menu-item:has-text("New Folder")')
-  await delay(400)
-  await client.setValue('.session-current .sftp-item input', folderName)
-  await client.click('.session-current .sftp-panel-title')
-  await delay(3500) // Ensure folder creation completes
+async function waitForFileListReady (client, type) {
+  await client.waitForFunction(type => {
+    const sftp = window.refs.get('sftp-' + window.store.activeTabId)
+    return Boolean(
+      sftp &&
+      sftp.state[`${type}Loading`] === false &&
+      sftp.state[`${type}Path`]
+    )
+  }, type, { timeout: 40000 })
+}
+
+async function waitForFileListItem (client, type, name) {
+  await client.waitForFunction(({ type, name }) => {
+    const sftp = window.refs.get('sftp-' + window.store.activeTabId)
+    const list = sftp?.state?.[type]
+    return sftp?.state?.[`${type}Loading`] === false &&
+      Array.isArray(list) &&
+      list.some(item => item.name === name)
+  }, { type, name }, { timeout: 40000 })
 }
 /**
  * Deletes an item (file or folder) from the specified type of file list
@@ -79,7 +179,7 @@ async function deleteItem (client, type, itemName) {
 async function copyItem (client, type, itemName) {
   await client.rightClick(`.session-current .file-list.${type} .sftp-item[title="${itemName}"]`, 10, 10)
   await delay(1000) // Increased delay for context menu
-  await client.click('.ant-dropdown:not(.ant-dropdown-hidden) .ant-dropdown-menu-item:has-text("Copy")')
+  await (await getVisibleMenuItem(client, 'copy')).click()
   await delay(1500) // Ensure copy operation registers
 }
 
@@ -111,7 +211,7 @@ async function copyItemWithKeyboard (client, type, itemName) {
 async function cutItem (client, type, itemName) {
   await client.rightClick(`.session-current .file-list.${type} .sftp-item[title="${itemName}"]`, 10, 10)
   await delay(800)
-  await client.click('.ant-dropdown:not(.ant-dropdown-hidden) .ant-dropdown-menu-item:has-text("Cut")')
+  await (await getVisibleMenuItem(client, 'cut')).click()
   await delay(1000)
 }
 
@@ -121,7 +221,7 @@ async function cutItem (client, type, itemName) {
  * @param {Object} client - The Playwright client
  * @param {string} type - The type of file list ('local' or 'remote')
  */
-async function pasteItem (client, type) {
+async function pasteItem (client, type, options = {}) {
   const parentFolderSelector = `.session-current .file-list.${type} .parent-file-item`
   const realFileSelector = `.session-current .file-list.${type} .real-file-item`
 
@@ -139,9 +239,22 @@ async function pasteItem (client, type) {
   await delay(1000)
 
   // Wait for paste menu to be visible and enabled
-  const pasteMenuItem = await client.locator('.ant-dropdown:not(.ant-dropdown-hidden) .ant-dropdown-menu-item:has-text("Paste"):not(.ant-dropdown-menu-item-disabled)')
+  const pasteMenuItem = await getVisibleMenuItem(
+    client,
+    'paste',
+    '.ant-dropdown-menu-item:not(.ant-dropdown-menu-item-disabled)'
+  )
   await pasteMenuItem.waitFor({ state: 'visible', timeout: 5000 })
   await pasteMenuItem.click()
+  if (options.resolveConflict === 'rename') {
+    await delay(1000)
+    await client.evaluate(() => {
+      const conflict = window.refs.get('transfer-conflict')
+      if (conflict?.state?.transferToConfirm?.id) {
+        conflict.act('rename')
+      }
+    })
+  }
   await delay(4000) // Increased delay for paste operation
 }
 
@@ -151,7 +264,7 @@ async function pasteItem (client, type) {
  * @param {Object} client - The Playwright client
  * @param {string} type - The type of file list ('local' or 'remote')
  */
-async function pasteItemWithKeyboard (client, type) {
+async function pasteItemWithKeyboard (client, type, options = {}) {
   // Click on empty space in the file list to ensure focus
   await client.click(`.session-current .file-list.${type}`)
   await delay(1000)
@@ -160,6 +273,15 @@ async function pasteItemWithKeyboard (client, type) {
   const isMac = process.platform === 'darwin'
   const modKey = isMac ? 'Meta' : 'Control'
   await client.keyboard.press(`${modKey}+v`)
+  if (options.resolveConflict === 'rename') {
+    await delay(1000)
+    await client.evaluate(() => {
+      const conflict = window.refs.get('transfer-conflict')
+      if (conflict?.state?.transferToConfirm?.id) {
+        conflict.act('rename')
+      }
+    })
+  }
   await delay(4000) // Increased delay for paste operation
 }
 
@@ -174,11 +296,27 @@ async function pasteItemWithKeyboard (client, type) {
 async function renameItem (client, type, oldName, newName) {
   await client.rightClick(`.session-current .file-list.${type} .sftp-item[title="${oldName}"]`, 10, 10)
   await delay(500)
-  await client.click('.ant-dropdown:not(.ant-dropdown-hidden) .ant-dropdown-menu-item:has-text("Rename")')
+  await (await getVisibleMenuItem(client, 'rename')).click()
   await delay(400)
-  await client.setValue('.session-current .sftp-item input', newName)
+  await client.setValue(`.session-current .file-list.${type} .sftp-item input`, newName)
   await client.click('.session-current .sftp-panel-title')
-  await delay(2500)
+  if (type === 'remote') {
+    const confirmButton = client.locator(
+      '.custom-modal-wrap button.custom-modal-ok-btn:visible, ' +
+      '.ant-modal-confirm .ant-btn-primary:visible'
+    ).first()
+    await confirmButton.waitFor({ state: 'visible', timeout: 40000 })
+    await confirmButton.click()
+    await confirmButton.waitFor({ state: 'hidden', timeout: 40000 })
+  }
+  await client.waitForFunction(({ type, oldName, newName }) => {
+    const sftp = window.refs.get('sftp-' + window.store.activeTabId)
+    const list = sftp?.state?.[type]
+    return Array.isArray(list) &&
+      list.some(item => item.name === newName) &&
+      !list.some(item => item.name === oldName) &&
+      sftp.state[`${type}Loading`] === false
+  }, { type, oldName, newName }, { timeout: 60000 })
 }
 
 /**
@@ -191,7 +329,7 @@ async function renameItem (client, type, oldName, newName) {
 async function enterFolder (client, type, folderName) {
   await client.rightClick(`.session-current .file-list.${type} .sftp-item[title="${folderName}"]`, 10, 10)
   await delay(800)
-  await client.click('.ant-dropdown:not(.ant-dropdown-hidden) .ant-dropdown-menu-item:has-text("Enter")')
+  await (await getVisibleMenuItem(client, 'enter')).click()
   await delay(3500) // Increased delay for folder navigation
 }
 
@@ -215,7 +353,7 @@ async function navigateToParentFolder (client, type) {
 async function selectAllContextMenu (client, type) {
   await client.rightClick(`.session-current .file-list.${type} .real-file-item`, 10, 10)
   await delay(500)
-  await client.click('.ant-dropdown:not(.ant-dropdown-hidden) .ant-dropdown-menu-item:has-text("Select All")')
+  await (await getVisibleMenuItem(client, 'selectAll')).click()
   await delay(1000)
 }
 
@@ -229,13 +367,15 @@ async function selectAllContextMenu (client, type) {
 async function accessFolderFromTerminal (client, type, folderName) {
   await client.rightClick(`.file-list.${type} .sftp-item[title="${folderName}"]`, 10, 10)
   await delay(500)
-  await client.click('.ant-dropdown:not(.ant-dropdown-hidden) .ant-dropdown-menu-item:has-text("Access this folder from the terminal")')
+  await (await getVisibleMenuItem(client, 'gotoFolderInTerminal')).click()
   await delay(1000)
 }
 
 async function openNewConnectionForm (client) {
-  const aigshellNewButton = client.locator('.aigshell-topbar-action').filter({ hasText: /新建|New/i }).first()
-  await aigshellNewButton.waitFor({ state: 'visible', timeout: 10000 })
+  const aigshellNewButton = client.locator(
+    '.aigshell-topbar-action[data-action-key="new"]'
+  ).first()
+  await aigshellNewButton.waitFor({ state: 'visible', timeout: 30000 })
   await aigshellNewButton.click()
   await delay(500)
 }
@@ -271,6 +411,8 @@ async function setupSshConnection (client, options = {}) {
     hostKeyModalTimeout = 4000
   } = options
 
+  requireRealServerCredentials({ host, password, username })
+
   if (openForm) {
     await openNewConnectionForm(client)
   }
@@ -293,7 +435,29 @@ async function setupSftpConnection (client) {
   await setupSshConnection(client)
   // Click sftp tab
   await client.locator('.session-current .term-sftp-tabs .type-tab:visible').nth(1).click()
-  await delay(2500)
+  await client.waitForFunction(() => {
+    const sftp = window.refs.get('sftp-' + window.store.activeTabId)
+    return Boolean(sftp?.sftp)
+  }, null, { timeout: 30000 })
+}
+
+async function setLocalSftpPath (client, path) {
+  await client.evaluate(async targetPath => {
+    const sftp = window.refs.get('sftp-' + window.store.activeTabId)
+    await new Promise(resolve => {
+      sftp.setState({ localPathTemp: targetPath }, resolve)
+    })
+    await sftp.onGoto('local')
+  }, path)
+  await client.waitForFunction(targetPath => {
+    const sftp = window.refs.get('sftp-' + window.store.activeTabId)
+    const normalize = value => String(value || '')
+      .replaceAll('\\', '/')
+      .toLowerCase()
+    return normalize(sftp?.state.localPath) === normalize(targetPath) &&
+      sftp?.state.localLoading === false
+  }, path)
+  await delay(1000)
 }
 
 /**
@@ -305,9 +469,25 @@ async function setupSftpConnection (client) {
  * @returns {Promise<boolean>} - Whether the file exists
  */
 async function verifyFileExists (client, type, itemName) {
-  const fileItems = await client.locator(`.session-current .file-list.${type} .sftp-item[title="${itemName}"]`)
-  const count = await fileItems.count()
-  return count > 0
+  const fileItems = client.locator(
+    `.session-current .file-list.${type} .sftp-item[title="${itemName}"]`
+  )
+  if (await fileItems.count()) {
+    return true
+  }
+
+  // Large directories use a virtualized list. A successfully created or
+  // renamed item can therefore exist without having a mounted DOM row.
+  return client.evaluate(async ({ type, itemName }) => {
+    const sftp = window.refs.get('sftp-' + window.store.activeTabId)
+    if (!sftp) {
+      return false
+    }
+    const list = type === 'remote'
+      ? await sftp.remoteList(true)
+      : await sftp.localList(true)
+    return Array.isArray(list) && list.some(item => item.name === itemName)
+  }, { type, itemName })
 }
 
 /**
@@ -441,6 +621,8 @@ async function closeApp (electronApp, fileName) {
 }
 
 module.exports = {
+  getVisibleMenuItem,
+  openNewConnectionForm,
   createFile,
   createFolder,
   deleteItem,
@@ -456,6 +638,7 @@ module.exports = {
   accessFolderFromTerminal,
   setupSshConnection,
   setupSftpConnection,
+  setLocalSftpPath,
   verifyFileExists,
   verifyFileNotExists,
   selectItemsWithShift,

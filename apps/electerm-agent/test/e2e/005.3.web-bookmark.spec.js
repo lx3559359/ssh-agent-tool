@@ -5,6 +5,7 @@ const delay = require('./common/wait')
 const { nanoid } = require('nanoid')
 const appOptions = require('./common/app-options')
 const extendClient = require('./common/client-extend')
+const { openNewConnectionForm } = require('./common/common')
 
 describe('Web session', function () {
   it('should create a web bookmark and verify history and webview', async function () {
@@ -19,8 +20,7 @@ describe('Web session', function () {
     })
 
     // Open bookmark form
-    await client.click('.btns .anticon-plus-circle')
-    await delay(500)
+    await openNewConnectionForm(client)
 
     // Select web bookmark type
     await client.click('.setting-wrap .ant-radio-button-wrapper:has-text("Web")')
@@ -61,7 +61,7 @@ describe('Web session', function () {
       const webview = document.querySelector('webview')
       return webview ? webview.getAttribute('src') : ''
     })
-    expect(webviewUrl).toEqual(testUrl + '/')
+    expect(new URL(webviewUrl).href).toEqual(new URL(testUrl).href)
 
     await electronApp.close().catch(console.log)
   })

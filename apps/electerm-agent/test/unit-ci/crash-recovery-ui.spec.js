@@ -59,3 +59,11 @@ test('crash recovery notice preserves native CSS min syntax for Stylus builds', 
   assert.match(style, /width unquote\('min\(860px, calc\(100vw - 176px\)\)'\)/)
   assert.doesNotMatch(style, /^\s*width min\(/m)
 })
+
+test('crash recovery notice does not block terminal toolbar controls', () => {
+  const style = readSource('src/client/components/main/crash-recovery-notice.styl')
+
+  assert.match(style, /^\s*top 88px$/m)
+  assert.match(style, /^\s*pointer-events none$/m)
+  assert.match(style, /\.crash-recovery-notice-actions[\s\S]*?pointer-events auto/)
+})

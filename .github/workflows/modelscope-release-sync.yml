@@ -81,6 +81,11 @@ jobs:
             --pattern "checksums.json" \
             --pattern "shellpilot-release.json"
 
+      - name: Verify downloaded release version consistency
+        run: npm run release:local:verify
+        env:
+          AIGSHELL_RELEASE_UPDATE_ONLY: "1"
+
       - name: Mirror release assets to ModelScope
         run: npm run release:modelscope:hub
 

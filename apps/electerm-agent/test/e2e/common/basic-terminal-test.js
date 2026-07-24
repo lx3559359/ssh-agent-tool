@@ -15,10 +15,18 @@ exports.basicTerminalTest = async (client, cmd) => {
   await client.keyboard.type(cmd)
   await client.keyboard.press('Enter')
   await delay(2000)
-  const text = await client.locator('.session-current').innerText()
+  const text = await client.evaluate(() => {
+    return window.refs
+      .get('term-' + window.store.activeTabId)
+      ?.getTerminalBufferText?.() || ''
+  })
   expect(text).includes(cmd)
 }
 
 exports.getTerminalContent = async function (client) {
-  return client.locator('.session-current').innerText()
+  return client.evaluate(() => {
+    return window.refs
+      .get('term-' + window.store.activeTabId)
+      ?.getTerminalBufferText?.() || ''
+  })
 }

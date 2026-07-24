@@ -2,6 +2,7 @@ const { _electron: electron } = require('@playwright/test')
 const { test: it } = require('@playwright/test')
 const { expect } = require('./common/expect')
 const delay = require('./common/wait')
+const log = require('./common/log')
 const appOptions = require('./common/app-options')
 const extendClient = require('./common/client-extend')
 
@@ -25,10 +26,21 @@ it('should respect default split view setting when creating new tabs', async () 
   await delay(500)
 
   // Create new tab
+  log('Creating a tab with split view enabled')
   await client.click('.tabs-add-btn')
   await delay(500)
-  await client.click('.add-menu-wrap .context-item:has-text("New tab")')
-  await client.click('.tabs .tabs-add-btn')
+  const newTabItem = client.locator('.add-menu-wrap .context-item').filter({
+    hasText: /新建连接|新标签页|New tab/i
+  })
+  const hasNodePty = await client.evaluate(() => window.store.hasNodePty)
+  if (!hasNodePty) {
+    await expect(newTabItem).toHaveCount(0)
+    await electronApp.close().catch(console.log)
+    return
+  }
+  await newTabItem.click()
+  await client.keyboard.press('Escape')
+  await client.waitForFunction(() => window.store.currentTab?.sshSftpSplitView === true)
   await delay(1000)
 
   // New tab should open with split view enabled
@@ -42,10 +54,14 @@ it('should respect default split view setting when creating new tabs', async () 
   await delay(500)
 
   // Create another new tab
+  log('Creating a tab with split view disabled')
   await client.click('.tabs-add-btn')
   await delay(500)
-  await client.click('.add-menu-wrap .context-item:has-text("New tab")')
-  await client.click('.tabs .tabs-add-btn')
+  await client.locator('.add-menu-wrap .context-item').filter({
+    hasText: /新建连接|新标签页|New tab/i
+  }).click()
+  await client.keyboard.press('Escape')
+  await client.waitForFunction(() => window.store.currentTab?.sshSftpSplitView === false)
   await delay(1000)
 
   // New tab should open with split view disabled

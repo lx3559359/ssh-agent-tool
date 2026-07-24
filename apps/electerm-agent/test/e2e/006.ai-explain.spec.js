@@ -45,8 +45,22 @@ describe('Terminal Explain with AI', function () {
   it('should explain selected text with AI', async function () {
     // Type some text in the terminal
     await client.evaluate(() => {
+      const profile = {
+        id: 'e2e-ai-explain',
+        nameAI: 'E2E AI Explain',
+        baseURLAI: 'http://localhost:43434',
+        apiPathAI: '/chat/completions',
+        modelAI: 'gpt-3.5-turbo',
+        apiKeyAI: 'test-api-key',
+        authHeaderNameAI: 'Authorization: Bearer',
+        roleAI: '',
+        languageAI: '简体中文'
+      }
       return window.store.setConfig({
-        showCmdSuggestions: true
+        showCmdSuggestions: true,
+        activeAIProfileId: profile.id,
+        aiProfiles: [profile],
+        ...profile
       })
     })
     const testCommand = 'ls -la'
@@ -54,16 +68,24 @@ describe('Terminal Explain with AI', function () {
     await client.keyboard.press('Enter')
     await delay(1000)
 
-    // Use terminal's built-in select all command (usually Cmd+A or Ctrl+A)
-    await client.keyboard.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A')
+    // Ctrl+A is a shell shortcut. Use xterm's selection API to create a real
+    // terminal selection before opening the context menu.
+    await client.evaluate(() => {
+      window.refs
+        .get('term-' + window.store.activeTabId)
+        ?.term?.selectAll()
+    })
     await delay(500)
 
     // Right-click to open context menu
     await client.rightClick('.term-wrap', 10, 10)
     await delay(500)
 
-    // Click "Explain with AI" in the context menu
-    await client.click('.ant-dropdown:not(.ant-dropdown-hidden) .ant-dropdown-menu-item:has-text("Explain with AI")')
+    // Click the localized "Explain with AI" action in the context menu.
+    await client
+      .locator('.ant-dropdown:not(.ant-dropdown-hidden) .ant-dropdown-menu-item')
+      .filter({ hasText: /用AI解释|Explain with AI/i })
+      .click()
 
     // Verify that the AI panel is opened
     await expect(client.locator('.ai-chat-container')).toBeVisible()

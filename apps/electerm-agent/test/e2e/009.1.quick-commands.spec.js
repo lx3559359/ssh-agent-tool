@@ -52,13 +52,13 @@ describe('quick commands', function () {
       })
     })
     await delay(1150)
-    const c1 = await client.evaluate(() => {
-      return window.store.quickCommands.length
-    })
-    const c2 = await client.evaluate(() => {
-      return window.store.currentQuickCommands.length
-    })
-    expect(c2).equal(c1 + 1)
+    const commandSets = await client.evaluate(() => ({
+      saved: window.store.quickCommands.map(item => item.name),
+      current: window.store.currentQuickCommands.map(item => item.name)
+    }))
+    expect(commandSets.saved).toContain('ls')
+    expect(commandSets.current).toContain('ls')
+    expect(commandSets.current).toContain('xx')
     await electronApp.close().catch(console.log)
   })
 })

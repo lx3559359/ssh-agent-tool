@@ -27,11 +27,11 @@ describe('workspace', function () {
     // Test 2: Verify Layout tab is active by default
     log('Test 2: Verifying Layout tab is default')
     const activeTab = await client.getText('.layout-workspace-dropdown .ant-tabs-tab.ant-tabs-tab-active')
-    expect(activeTab).includes('Layout')
+    expect(activeTab).toMatch(/布局|Layout/)
 
     // Test 3: Switch to Workspaces tab
     log('Test 3: Switching to Workspaces tab')
-    await client.click('.layout-workspace-dropdown .ant-tabs-tab:has-text("Workspaces")')
+    await client.locator('.layout-workspace-dropdown .ant-tabs-tab').filter({ hasText: /工作区|Workspaces/ }).click()
     await delay(300)
 
     // Test 4: Verify workspace content is shown
@@ -61,7 +61,7 @@ describe('workspace', function () {
     const workspaceName = 'Test Workspace ' + Date.now()
     await client.setValue('.custom-modal-wrap .ant-input', workspaceName)
     await delay(200)
-    await client.click('.custom-modal-wrap .ant-btn-primary:has-text("Save")')
+    await client.locator('.custom-modal-wrap button.ant-btn-primary').click()
     await delay(500)
 
     // Test 9: Verify modal is closed
@@ -73,7 +73,7 @@ describe('workspace', function () {
     log('Test 11: Reopening dropdown')
     await client.click('.tabs .layout-dd-icon')
     await delay(300)
-    await client.click('.layout-workspace-dropdown .ant-tabs-tab:has-text("Workspaces")')
+    await client.locator('.layout-workspace-dropdown .ant-tabs-tab').filter({ hasText: /工作区|Workspaces/ }).click()
     await delay(300)
 
     // Test 12: Verify workspace appears in the list
@@ -89,7 +89,7 @@ describe('workspace', function () {
     // Test 14: Change layout then load workspace to restore
     log('Test 14: Testing workspace load')
     // First change layout to something different
-    await client.click('.layout-workspace-dropdown .ant-tabs-tab:has-text("Layout")')
+    await client.locator('.layout-workspace-dropdown .ant-tabs-tab').filter({ hasText: /布局|Layout/ }).click()
     await delay(300)
     await client.click('.layout-menu-item:nth-child(2)') // select c2 layout
     await delay(500)
@@ -97,7 +97,7 @@ describe('workspace', function () {
     // Reopen dropdown and switch back to Workspaces tab
     await client.click('.tabs .layout-dd-icon')
     await delay(300)
-    await client.click('.layout-workspace-dropdown .ant-tabs-tab:has-text("Workspaces")')
+    await client.locator('.layout-workspace-dropdown .ant-tabs-tab').filter({ hasText: /工作区|Workspaces/ }).click()
     await delay(300)
 
     // Now load the workspace by clicking on it
@@ -109,7 +109,7 @@ describe('workspace', function () {
     // Reopen dropdown
     await client.click('.tabs .layout-dd-icon')
     await delay(300)
-    await client.click('.layout-workspace-dropdown .ant-tabs-tab:has-text("Workspaces")')
+    await client.locator('.layout-workspace-dropdown .ant-tabs-tab').filter({ hasText: /工作区|Workspaces/ }).click()
     await delay(300)
 
     // Click delete icon

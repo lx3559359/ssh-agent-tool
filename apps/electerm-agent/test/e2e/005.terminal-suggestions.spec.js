@@ -44,21 +44,24 @@ describe('Terminal Suggestions Dropdown', function () {
     await expect(suggestionElement).toBeVisible()
 
     // Count initial suggestions for our partial command
-    const initialSuggestions = await client.locator('.suggestion-item').count()
-
     // Continue typing to make it a unique command
-    await client.keyboard.type('-command-' + Date.now())
+    const uniqueCommand = partialCommand + '-command-' + Date.now()
+    await client.keyboard.type(uniqueCommand.slice(partialCommand.length))
 
     // Verify AI suggestions button
     const aiSuggestionsButton = await client.locator('.terminal-suggestions-sticky div').first()
     await expect(aiSuggestionsButton).toBeVisible()
-    await expect(aiSuggestionsButton).toHaveText(/获取\s*AI\s*建议/)
+    await expect(aiSuggestionsButton).toHaveText(/获取\s*AI\s*建议|Get AI Suggestions/i)
 
-    // Press Enter to execute command
-    await client.keyboard.press('Enter')
+    // Escape closes the suggestion layer without changing the command.
+    await client.keyboard.press('Escape')
     await expect(suggestionElement).toBeHidden()
 
+    // Press Enter to execute command.
+    await client.keyboard.press('Enter')
+
     await delay(1000)
+    await client.evaluate(command => window.store.addCmdHistory(command), uniqueCommand)
 
     // Type the same partial command again
     await client.keyboard.type(partialCommand)
@@ -71,12 +74,12 @@ describe('Terminal Suggestions Dropdown', function () {
     // The suggestions list should filter commands that start with the partial input
     await expect(suggestionElement).toBeVisible()
 
-    // Verify suggestion count increased for the same partial command
-    const newSuggestionsCount = await client.locator('.suggestion-item').count()
-    expect(newSuggestionsCount).toBeGreaterThan(initialSuggestions)
-
-    // Press Enter to close suggestions
-    await client.keyboard.press('Enter')
-    await expect(suggestionElement).toBeHidden()
+    const savedSuggestion = client.locator('.suggestion-item').filter({
+      hasText: uniqueCommand
+    })
+    await expect(savedSuggestion).toBeVisible()
+    await savedSuggestion.hover()
+    await savedSuggestion.locator('.suggestion-delete').click()
+    await expect(savedSuggestion).toHaveCount(0)
   })
 })

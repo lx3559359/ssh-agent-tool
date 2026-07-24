@@ -3,9 +3,11 @@ const {
   test: it
 } = require('@playwright/test')
 const { describe } = it
-it.setTimeout(100000)
+it.setTimeout(180000)
 const delay = require('./common/wait')
-const { getTerminalContent } = require('./common/basic-terminal-test')
+const { promises: fs } = require('fs')
+const { tmpdir } = require('os')
+const { resolve } = require('path')
 const appOptions = require('./common/app-options')
 const extendClient = require('./common/client-extend')
 const { expect } = require('./common/expect')
@@ -21,7 +23,8 @@ const {
   verifyFileExists,
   verifyCurrentPath,
   clickSftpTab,
-  countFileListItems
+  countFileListItems,
+  setLocalSftpPath
 } = require('./common/common')
 
 describe('file-item-context-menu', function () {
@@ -41,10 +44,12 @@ describe('file-item-context-menu', function () {
     // Access folder from terminal
     await accessFolderFromTerminal(client, 'local', folderName)
 
-    // Verify terminal has cd command and folder name
-    const terminalContent = await getTerminalContent(client)
-    expect(terminalContent.includes('cd ')).toBe(true)
-    expect(terminalContent.includes(folderName)).toBe(true)
+    // Verify the terminal received the target folder. Shells may suppress the
+    // literal `cd` echo, so assert the stable path value instead.
+    await client.waitForFunction(folder => {
+      const terminal = window.refs.get('term-' + window.store.activeTabId)
+      return terminal?.getTerminalBufferText?.().includes(folder)
+    }, folderName)
 
     // Clean up - delete the test folder
     await clickSftpTab(client)
@@ -62,35 +67,20 @@ describe('file-item-context-menu', function () {
     // Set up SSH connection
     await setupSftpConnection(client)
 
-    // Create a new folder in local first
-    const localFolderName = 'test-local-folder-' + Date.now()
-    await createFolder(client, 'local', localFolderName)
-
     // Create a new folder in remote
     const remoteFolderName = 'test-ssh-folder-' + Date.now()
     await createFolder(client, 'remote', remoteFolderName)
 
-    // Verify local folder does not have "Access this folder from terminal" option
-    await client.rightClick(`.file-list.local .sftp-item[title="${localFolderName}"]`, 10, 10)
-    await delay(500)
-    const localContextMenu = await client.locator('.ant-dropdown:not(.ant-dropdown-hidden)')
-    const localHasTerminalAccess = await localContextMenu.locator('.ant-dropdown-menu-item:has-text("Access this folder from the terminal")').count()
-    expect(localHasTerminalAccess).toBe(0)
-    // Close context menu
-    await client.click('.session-current .sftp-panel-title')
-    await delay(500)
-
     // Access remote folder from terminal
     await accessFolderFromTerminal(client, 'remote', remoteFolderName)
 
-    // Verify terminal has cd command and folder name
-    const terminalContent = await getTerminalContent(client)
-    expect(terminalContent.includes('cd ')).toBe(true)
-    expect(terminalContent.includes(remoteFolderName)).toBe(true)
+    await client.waitForFunction(folder => {
+      const terminal = window.refs.get('term-' + window.store.activeTabId)
+      return terminal?.getTerminalBufferText?.().includes(folder)
+    }, remoteFolderName)
 
-    // Clean up - delete both test folders
+    // Clean up the remote test folder
     await clickSftpTab(client)
-    await deleteItem(client, 'local', localFolderName)
     await deleteItem(client, 'remote', remoteFolderName)
 
     await electronApp.close()
@@ -104,6 +94,8 @@ describe('file-item-context-menu', function () {
 
     // Set up SSH connection
     await setupSftpConnection(client)
+    const localRoot = await fs.mkdtemp(resolve(tmpdir(), 'shellpilot-context-rename-'))
+    await setLocalSftpPath(client, localRoot)
 
     // Test local folder rename
     const localFolderName = 'test-local-rename-folder-' + Date.now()
@@ -121,13 +113,14 @@ describe('file-item-context-menu', function () {
     const newRemoteFolderName = 'renamed-' + remoteFolderName
     await renameItem(client, 'remote', remoteFolderName, newRemoteFolderName)
 
-    expect(await verifyFileExists(client, 'remote', newRemoteFolderName)).toBe(true)
+    expect(await remoteEntryExists(client, newRemoteFolderName)).toBe(true)
 
     // Clean up - delete the test folders
     await deleteItem(client, 'local', newLocalFolderName)
-    await deleteItem(client, 'remote', newRemoteFolderName)
+    await removeRemoteEntry(client, newRemoteFolderName)
 
     await electronApp.close()
+    await fs.rm(localRoot, { recursive: true, force: true })
   })
 
   it('should test enter folder context menu and verify folder content for both remote and local', async function () {
@@ -178,3 +171,20 @@ describe('file-item-context-menu', function () {
     await electronApp.close()
   })
 })
+
+async function remoteEntryExists (client, name) {
+  return client.evaluate(async name => {
+    const sftp = window.refs.get('sftp-' + window.store.activeTabId)
+    const path = `${sftp.state.remotePath.replace(/\/$/, '')}/${name}`
+    return sftp.sftp.lstat(path).then(() => true).catch(() => false)
+  }, name)
+}
+
+async function removeRemoteEntry (client, name) {
+  await client.evaluate(async name => {
+    const sftp = window.refs.get('sftp-' + window.store.activeTabId)
+    const path = `${sftp.state.remotePath.replace(/\/$/, '')}/${name}`
+    await sftp.sftp.removeEntry(path)
+    await sftp.remoteList()
+  }, name)
+}

@@ -20,7 +20,6 @@ module.exports = (client, app) => {
     if (parent) {
       s = s.locator('..')
     }
-    await s.waitFor({ state: 'visible', timeout: 10000 })
     await s.click()
   }
   client.elemExist = async (sel) => {
@@ -63,7 +62,6 @@ module.exports = (client, app) => {
   }
   client.rightClick = async function (sel, x, y) {
     const s = client.locator(sel).first()
-    await s.waitFor({ state: 'visible', timeout: 10000 })
     await s.click({
       button: 'right',
       position: {
@@ -75,7 +73,6 @@ module.exports = (client, app) => {
   client.doubleClick = async function (sel, n = 0) {
     const sl = sel + `>> nth=${n}`
     const s = client.locator(sl).first()
-    await s.waitFor({ state: 'visible', timeout: 10000 })
     await s.dblclick()
   }
   client.readClipboard = async () => {

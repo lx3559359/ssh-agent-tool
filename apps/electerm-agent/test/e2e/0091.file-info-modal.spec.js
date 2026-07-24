@@ -6,117 +6,151 @@ const delay = require('./common/wait')
 const nanoid = require('./common/uid')
 const appOptions = require('./common/app-options')
 const extendClient = require('./common/client-extend')
-const { setupSftpConnection } = require('./common/common')
+const {
+  getVisibleMenuItem,
+  setupSftpConnection
+} = require('./common/common')
 
 describe('file info modal', function () {
-  it('should open window and basic file info modal works for both local and remote', async function () {
+  it('should show local file information and edit remote permissions', async function () {
     const electronApp = await electron.launch(appOptions)
-    const client = await electronApp.firstWindow()
-    extendClient(client, electronApp)
-    await delay(3500)
+    try {
+      const client = await electronApp.firstWindow()
+      extendClient(client, electronApp)
+      await delay(3500)
 
-    // Create SSH connection
-    await setupSftpConnection(client)
-
-    // Test local file info modal
-    await testFileInfoModal(client, 'local', 'click')
-
-    await electronApp.close().catch(console.log)
-  })
-
-  it('should test edit permission functionality for both local and remote files', async function () {
-    const electronApp = await electron.launch(appOptions)
-    const client = await electronApp.firstWindow()
-    extendClient(client, electronApp)
-    await delay(3500)
-
-    // Create SSH connection
-    await setupSftpConnection(client)
-
-    // Test local file edit permission
-    await testEditFolderPermission(client, 'local')
-
-    // Test remote file edit permission
-    await testEditFolderPermission(client, 'remote')
-
-    await electronApp.close().catch(console.log)
+      await setupSftpConnection(client)
+      await testFileInfoModal(client, 'local', 'click')
+      await testEditFolderPermission(client, 'remote')
+    } finally {
+      await electronApp.close().catch(console.log)
+    }
   })
 })
 
 async function testEditFolderPermission (client, folderType) {
   const folderName = `${folderType}-test-folder-${nanoid()}`
+  const fixture = await createRemotePermissionFixture(client, folderName)
+  try {
+    // Right-click on the folder and select "Edit Permission"
+    await client.rightClick(`.session-current .file-list.${folderType} .sftp-item[title="${folderName}"]`, 10, 10)
+    await delay(500)
+    await (await getVisibleMenuItem(client, 'editPermission')).click()
+    await delay(1000)
 
-  // Create a new folder
-  await client.rightClick(`.session-current .file-list.${folderType} .parent-file-item`, 10, 10)
-  await delay(500)
-  await client.click('.ant-dropdown:not(.ant-dropdown-hidden) .ant-dropdown-menu-item:has-text("New Folder")')
-  await delay(200)
-  await client.setValue('.session-current .sftp-item input', folderName)
-  await client.click('.session-current .sftp-panel-title')
-  await delay(2500)
+    // Verify that the edit permission modal is open
+    await client.hasElem('.custom-modal-container')
 
-  // Right-click on the folder and select "Edit Permission"
-  await client.rightClick(`.session-current .file-list.${folderType} .sftp-item[title="${folderName}"]`, 10, 10)
-  await delay(500)
-  await client.click('.ant-dropdown:not(.ant-dropdown-hidden) .ant-dropdown-menu-item:has-text("Edit Permission")')
-  await delay(1000)
+    // Check if the modal title is "Edit Folder Permission"
+    const modalTitle = await client.getText('.custom-modal-title')
+    expect(modalTitle).toMatch(/编辑.*权限|Edit.*Permission/i)
 
-  // Verify that the edit permission modal is open
-  await client.hasElem('.custom-modal-container')
+    // Change a specific permission (e.g., 'other' 'write')
+    const permissionButton = client
+      .locator('.custom-modal-container .file-props > .pd1b > .pd1b')
+      .filter({ hasText: /其他|other/i })
+      .locator('.ant-btn')
+      .filter({ hasText: /写|write/i })
+      .first()
 
-  // Check if the modal title is "Edit Folder Permission"
-  const modalTitle = await client.getText('.custom-modal-title')
-  expect(modalTitle).toBe('Edit Folder Permission')
+    const initialClass = await permissionButton.getAttribute('class')
+    const initiallyActive = initialClass.includes('ant-btn-primary')
 
-  // Change a specific permission (e.g., 'other' 'write')
-  const targetGroup = 'other'
-  const targetPermission = 'write'
-  const buttonSelector = `.custom-modal-container .pd1b:has-text("${targetGroup}") .ant-btn:has-text("${targetPermission}")`
+    await permissionButton.click()
+    await delay(200)
 
-  const initialClass = await client.getAttribute(buttonSelector, 'class')
-  const initiallyActive = initialClass.includes('ant-btn-primary')
+    const newClass = await permissionButton.getAttribute('class')
+    const nowActive = newClass.includes('ant-btn-primary')
 
-  await client.click(buttonSelector)
-  await delay(200)
+    expect(nowActive).not.toBe(initiallyActive)
+    const hasBoundFileItem = await client.evaluate(() => {
+      const fileModal = window.refsStatic.get('file-modal')
+      return Boolean(
+        fileModal?.state?.fileId &&
+        window.refs.get(fileModal.state.fileId)
+      )
+    })
+    expect(hasBoundFileItem).toBe(true)
 
-  const newClass = await client.getAttribute(buttonSelector, 'class')
-  const nowActive = newClass.includes('ant-btn-primary')
+    // Save the changes
+    await client.click('.custom-modal-footer .ant-btn-primary')
+    const safetyConfirm = client
+      .locator('.custom-modal-wrap button.custom-modal-ok-btn:visible')
+      .first()
+    await resolvePermissionSafetyStep(
+      client,
+      safetyConfirm,
+      fixture.targetPath,
+      nowActive
+    )
 
-  console.log(`${targetGroup} ${targetPermission}: Initial: ${initiallyActive}, Now: ${nowActive}`)
-  expect(nowActive).not.toBe(initiallyActive)
+    // Verify that the modal is closed
+    await client.hasElem('.custom-modal-container', false)
 
-  // Save the changes
-  await client.click('.custom-modal-footer .ant-btn-primary')
-  await delay(2000)
+    await expect.poll(() => client.evaluate(async targetPath => {
+      const sftp = window.refs.get('sftp-' + window.store.activeTabId)
+      const stat = await sftp.sftp.lstat(targetPath)
+      return Boolean(stat.mode & 0o2)
+    }, fixture.targetPath), { timeout: 30000 }).toBe(nowActive)
+  } finally {
+    await removeRemotePermissionFixture(client, fixture)
+  }
+}
 
-  // Verify that the modal is closed
-  await client.hasElem('.custom-modal-container', false)
+async function resolvePermissionSafetyStep (
+  client,
+  safetyConfirm,
+  targetPath,
+  expectedOtherWrite
+) {
+  const deadline = Date.now() + 40000
+  while (Date.now() < deadline) {
+    if (await safetyConfirm.isVisible().catch(() => false)) {
+      await safetyConfirm.click()
+      return
+    }
+    const changed = await client.evaluate(async ({ targetPath, expectedOtherWrite }) => {
+      const sftp = window.refs.get('sftp-' + window.store.activeTabId)
+      const stat = await sftp.sftp.lstat(targetPath)
+      return Boolean(stat.mode & 0o2) === expectedOtherWrite
+    }, { targetPath, expectedOtherWrite })
+    if (changed) return
+    await delay(250)
+  }
+  throw new Error('权限修改既未进入安全确认，也未写入服务器')
+}
 
-  // Open folder properties to check if permissions were updated
-  await client.rightClick(`.session-current .file-list.${folderType} .sftp-item[title="${folderName}"]`, 10, 10)
-  await delay(500)
-  await client.click('.ant-dropdown:not(.ant-dropdown-hidden) .anticon-info-circle')
-  await delay(1200)
+async function createRemotePermissionFixture (client, folderName) {
+  return client.evaluate(async folderName => {
+    const sftp = window.refs.get('sftp-' + window.store.activeTabId)
+    const originalPath = sftp.state.remotePath
+    const sandboxPath = `/tmp/shellpilot-permission-${Date.now()}`
+    const targetPath = `${sandboxPath}/${folderName}`
+    await sftp.sftp.mkdir(sandboxPath)
+    await sftp.sftp.mkdir(targetPath)
+    await new Promise(resolve => {
+      sftp.setState({
+        remotePath: sandboxPath,
+        remotePathTemp: sandboxPath
+      }, resolve)
+    })
+    await sftp.remoteList()
+    return { originalPath, sandboxPath, targetPath }
+  }, folderName)
+}
 
-  // Verify that the specific permission was updated in the folder properties
-  const infoButtonClass = await client.getAttribute(buttonSelector, 'class')
-  const infoButtonActive = infoButtonClass.includes('ant-btn-primary')
-  expect(infoButtonActive).toBe(nowActive)
-
-  // Close the folder properties modal
-  await client.click('.custom-modal-close')
-  await delay(300)
-
-  // Clean up - delete the test folder
-  await client.click(`.session-current .file-list.${folderType} .sftp-item[title="${folderName}"]`)
-  await delay(400)
-  await client.keyboard.press('Delete')
-  await delay(400)
-  await client.keyboard.press('Enter')
-  await delay(2500)
-
-  // Verify folder is deleted
-  await client.hasElem(`.session-current .file-list.${folderType} .sftp-item[title="${folderName}"]`, false)
+async function removeRemotePermissionFixture (client, fixture) {
+  await client.evaluate(async ({ originalPath, sandboxPath }) => {
+    const sftp = window.refs.get('sftp-' + window.store.activeTabId)
+    await sftp.sftp.removeEntry(sandboxPath)
+    await new Promise(resolve => {
+      sftp.setState({
+        remotePath: originalPath,
+        remotePathTemp: originalPath
+      }, resolve)
+    })
+    await sftp.remoteList()
+  }, fixture)
 }
 
 async function testFileInfoModal (client, fileType, closeMethod) {

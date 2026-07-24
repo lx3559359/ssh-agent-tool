@@ -11,6 +11,9 @@ const {
   modelScopeRepo
 } = require('../../src/app/common/update-sources')
 const { assertCurrentReleaseBaseline } = require('./release-version-baseline')
+const {
+  verifyLocalReleaseArtifacts
+} = require('./verify-local-release-assets')
 
 const distDir = process.env.AIGSHELL_RELEASE_DIST ||
   path.resolve(__dirname, '../../dist')
@@ -182,6 +185,12 @@ function syncModelScopeRelease (options = {}) {
 
 function main () {
   assertCurrentReleaseBaseline()
+  verifyLocalReleaseArtifacts({
+    distDir,
+    version: resolveModelScopeReleaseVersion(),
+    updateOnly: true,
+    skipPackageVersion: true
+  })
   const result = syncModelScopeRelease()
   console.log(`ModelScope ShellPilot ${result.version} update assets synced.`)
   result.copied.forEach(name => console.log(`- ${name}`))

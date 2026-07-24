@@ -1,4 +1,5 @@
 const { once } = require('node:events')
+const { generateKeyPairSync } = require('node:crypto')
 const fs = require('node:fs')
 const path = require('node:path')
 const { Server, utils } = require('@electerm/ssh2')
@@ -6,8 +7,16 @@ const { resolveVirtualPath } = require('./local-sftp-fixture')
 
 const TEST_USERNAME = 'shellpilot-e2e'
 const TEST_PASSWORD = 'shellpilot-e2e-password'
-const HOST_KEY = utils.generateKeyPairSync('ed25519', {
-  comment: 'shellpilot-e2e-host'
+const { privateKey: HOST_KEY } = generateKeyPairSync('rsa', {
+  modulusLength: 2048,
+  privateKeyEncoding: {
+    type: 'pkcs1',
+    format: 'pem'
+  },
+  publicKeyEncoding: {
+    type: 'pkcs1',
+    format: 'pem'
+  }
 })
 
 const execResults = Object.freeze({
@@ -343,7 +352,7 @@ async function startLocalSshServer (options = {}) {
     shellSessionIds: []
   }
   const server = new Server({
-    hostKeys: [HOST_KEY.private]
+    hostKeys: [HOST_KEY]
   }, client => {
     const sessionId = `local-ssh-${nextConnectionId++}`
     clients.add(client)

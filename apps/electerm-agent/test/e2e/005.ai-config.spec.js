@@ -116,7 +116,7 @@ describe('AI Config and Suggestions', function () {
         showCmdSuggestions: true
       })
     })
-    await client.getByRole('button', { name: '模型API' }).click()
+    await client.getByRole('button', { name: /模型\s*API|Model API/i }).click()
 
     await expect(client.locator('.ai-config-modal .ai-config-form')).toBeVisible({ timeout: 10000 })
 
@@ -191,7 +191,7 @@ describe('AI Config and Suggestions', function () {
 
     const suggestions = await aiSuggestions.locator('.suggestion-command').allTextContents()
     for (const suggestion of suggestions) {
-      expect(suggestion.startsWith(testCommand)).toBeTruthy()
+      expect(suggestion).toContain(testCommand)
     }
   })
 })

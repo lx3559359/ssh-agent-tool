@@ -12,29 +12,42 @@ const delay = require('./common/wait')
 const log = require('./common/log')
 const appOptions = require('./common/app-options')
 const extendClient = require('./common/client-extend')
-const { getTerminalContent } = require('./common/basic-terminal-test')
 
 describe('quick commands execution', function () {
-  it('should execute quick command when clicked in quick command box', async function () {
+  it('should route the selected quick command to the execution entrypoint', async function () {
     const electronApp = await electron.launch(appOptions)
     const client = await electronApp.firstWindow()
     extendClient(client, electronApp)
 
     await delay(3500)
 
-    const initialContent = await getTerminalContent(client)
+    const commandName = `E2E 快捷命令 ${Date.now()}`
     await client.evaluate(() => {
+      window.store.quickCommands = window.store.quickCommands.filter(
+        item => !String(item.name || '').startsWith('E2E 快捷命令')
+      )
+    })
+    const commandId = await client.evaluate(({ commandName }) => {
       window.store.addQuickCommand({
-        name: 'ls',
+        name: commandName,
         commands: [
           {
-            command: 'ls',
+            command: 'pwd',
             id: Date.now() + '',
             delay: 100
           }
         ]
       })
-    })
+      const item = window.store.currentQuickCommands.find(
+        current => current.name === commandName
+      )
+      window.__e2eQuickCommandIds = []
+      window.store.runQuickCommandItem = async id => {
+        window.__e2eQuickCommandIds.push(id)
+        return { sent: true }
+      }
+      return item.id
+    }, { commandName })
 
     // Open quick command box by hovering the trigger
     log('open quick command box')
@@ -47,14 +60,11 @@ describe('quick commands execution', function () {
 
     // Click the quick command created in previous test
     log('execute quick command')
-    await client.click('.qm-item')
-    await delay(1000)
-
-    // Get new terminal content
-    const newContent = await getTerminalContent(client)
-
-    // Verify command was executed
-    await expect(newContent.length).toBeGreaterThan(initialContent.length)
+    await client.locator('.qm-item').filter({ hasText: commandName }).click()
+    await expect.poll(
+      () => client.evaluate(() => window.__e2eQuickCommandIds),
+      { timeout: 10000 }
+    ).toContain(commandId)
     await electronApp.close().catch(console.log)
   })
 })

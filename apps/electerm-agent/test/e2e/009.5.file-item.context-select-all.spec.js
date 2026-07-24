@@ -1,17 +1,16 @@
 const { _electron: electron } = require('@playwright/test')
 const {
-  test: it
+  test: it,
+  expect
 } = require('@playwright/test')
 const { describe } = it
 it.setTimeout(100000)
 const delay = require('./common/wait')
 const appOptions = require('./common/app-options')
 const extendClient = require('./common/client-extend')
-const { expect } = require('./common/expect')
 const {
   setupSftpConnection,
   createFolder,
-  deleteItem,
   selectAllContextMenu
 } = require('./common/common')
 
@@ -22,8 +21,11 @@ describe('File List Context Menu Select All Operation', function () {
     extendClient(client, electronApp)
     await delay(3500)
 
-    // Set up SSH connection first for remote testing
+    // Establish the SSH/SFTP session before exercising both file lists.
     await setupSftpConnection(client)
+
+    await cleanupStaleTestFolders(client, 'local')
+    await cleanupStaleTestFolders(client, 'remote')
 
     // Test for both local and remote
     await testSelectAll(client, 'local')
@@ -38,43 +40,92 @@ async function testSelectAll (client, type) {
   const folderName1 = `test-folder-1-${Date.now()}`
   const folderName2 = `test-folder-2-${Date.now()}`
 
-  await createFolder(client, type, folderName1)
-  await createFolder(client, type, folderName2)
+  try {
+    await createFolder(client, type, folderName1)
+    await createFolder(client, type, folderName2)
 
-  // Select all items using context menu
-  await selectAllContextMenu(client, type)
+    // Select all items using context menu
+    await selectAllContextMenu(client, type)
 
-  // Check if all real file items have the 'selected' class
-  let fileItems = await client.locator(`.session-current .file-list.${type} .real-file-item`)
-  let count = await fileItems.count()
-  expect(count).toBeGreaterThanOrEqual(2)
+    await expect.poll(async () => client.evaluate(type => {
+      const sftp = window.refs.get('sftp-' + window.store.activeTabId)
+      const list = sftp.getFileList(type)
+      return list.length >= 2 &&
+        list.every(item => sftp.state.selectedFiles.has(item.id))
+    }, type)).toBe(true)
 
-  for (let i = 0; i < count; i++) {
-    const hasSelectedClass = await fileItems.nth(i).evaluate(el => el.classList.contains('selected'))
-    expect(hasSelectedClass).toBe(true)
+    const selectedKeys = await client.evaluate(type => {
+      const sftp = window.refs.get('sftp-' + window.store.activeTabId)
+      return sftp.getFileList(type)
+        .filter(item => sftp.state.selectedFiles.has(item.id))
+        .map(item => `${item.type}\u0000${item.path}\u0000${item.name}`)
+        .sort()
+    }, type)
+
+    // A refresh regenerates row ids; the same files must remain selected.
+    await client.evaluate(async type => {
+      const sftp = window.refs.get('sftp-' + window.store.activeTabId)
+      await sftp[`${type}List`]()
+    }, type)
+    await expect.poll(async () => client.evaluate(({ type, selectedKeys }) => {
+      const sftp = window.refs.get('sftp-' + window.store.activeTabId)
+      const selected = sftp.getFileList(type)
+        .filter(item => sftp.state.selectedFiles.has(item.id))
+        .map(item => `${item.type}\u0000${item.path}\u0000${item.name}`)
+        .sort()
+      return JSON.stringify(selected) === JSON.stringify(selectedKeys)
+    }, { type, selectedKeys })).toBe(true)
+
+    // Check that the refreshed selected files keep their visible state.
+    let fileItems = client.locator(`.session-current .file-list.${type} .real-file-item`)
+    await expect.poll(async () => fileItems.evaluateAll(items => (
+      items.length >= 2 && items.every(item => item.classList.contains('selected'))
+    ))).toBe(true)
+
+    // Click on a single file item to deselect all except the clicked one
+    await client.click(`.session-current .file-list.${type} .real-file-item`)
+    await delay(500)
+
+    // Check that only the clicked item has the 'selected' class
+    fileItems = client.locator(`.session-current .file-list.${type} .real-file-item`)
+    await expect.poll(async () => fileItems.evaluateAll(items => (
+      items.filter(item => item.classList.contains('selected')).length
+    ))).toBe(1)
+
+    // Deselect without clicking the same row twice (which would enter a folder).
+    await client.click('.session-current .sftp-panel-title')
+    await delay(500)
+  } finally {
+    await cleanupTestFolders(client, type, [folderName1, folderName2])
   }
+}
 
-  // Click on a single file item to deselect all except the clicked one
-  await client.click(`.session-current .file-list.${type} .real-file-item`)
-  await delay(500)
-
-  // Check that only the clicked item has the 'selected' class
-  fileItems = await client.locator(`.session-current .file-list.${type} .real-file-item`)
-  count = await fileItems.count()
-  let selectedCount = 0
-  for (let i = 0; i < count; i++) {
-    const hasSelectedClass = await fileItems.nth(i).evaluate(el => el.classList.contains('selected'))
-    if (hasSelectedClass) {
-      selectedCount++
+async function cleanupTestFolders (client, type, folderNames) {
+  await client.evaluate(async ({ type, folderNames }) => {
+    const sftp = window.refs.get('sftp-' + window.store.activeTabId)
+    const base = sftp.state[`${type}Path`].replace(/[\\/]$/, '')
+    const separator = type === 'local' ? '\\' : '/'
+    for (const folderName of folderNames) {
+      const path = `${base}${separator}${folderName}`
+      if (type === 'local') {
+        await window.fs.rmrf(path).catch(() => {})
+      } else {
+        await sftp.sftp.removeEntry(path).catch(() => {})
+      }
     }
-  }
-  expect(selectedCount).toBe(1)
+    await sftp[`${type}List`]()
+  }, { type, folderNames })
+}
 
-  // Deselect all for the next test by clicking on empty space
-  await client.click(`.session-current .file-list.${type}`)
-  await delay(500)
-
-  // Clean up - delete the test folders
-  await deleteItem(client, type, folderName1)
-  await deleteItem(client, type, folderName2)
+async function cleanupStaleTestFolders (client, type) {
+  const folderNames = await client.evaluate(type => {
+    const sftp = window.refs.get('sftp-' + window.store.activeTabId)
+    return sftp.getFileList(type)
+      .filter(item => (
+        item.isDirectory &&
+        /^test-folder-[12]-\d+$/.test(item.name)
+      ))
+      .map(item => item.name)
+  }, type)
+  await cleanupTestFolders(client, type, folderNames)
 }

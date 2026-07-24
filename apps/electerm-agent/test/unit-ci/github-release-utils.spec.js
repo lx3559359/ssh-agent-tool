@@ -263,7 +263,8 @@ test('release verification scripts accept an explicit Windows release architectu
   )
 
   assert.match(localVerifySource, /AIGSHELL_RELEASE_ARCH/)
-  assert.match(localVerifySource, /buildLocalReleaseAssetReport\(\{[\s\S]*arch:\s*releaseArch/s)
+  assert.match(localVerifySource, /const arch = options\.arch \|\| releaseArch \|\| 'x64'/)
+  assert.match(localVerifySource, /buildLocalReleaseAssetReport\(\{[\s\S]*arch[\s\S]*\}\)/s)
   assert.match(githubVerifySource, /AIGSHELL_RELEASE_ARCH/)
   assert.match(githubVerifySource, /getAllowedGitHubReleaseAssetNames\(pack\.version,\s*\{[\s\S]*arch:\s*releaseArch/s)
   assert.match(githubVerifySource, /buildReleaseAssetReport\(\{[\s\S]*arch:\s*releaseArch/s)
@@ -279,7 +280,8 @@ test('local release verification validates the update approval manifest content'
   assert.match(localVerifySource, /aigshell-update\.json/)
   assert.match(localVerifySource, /pack\.version/)
   assert.match(localVerifySource, /AIGSHELL_UPDATE_CHANNEL/)
-  assert.match(localVerifySource, /channel:\s*releaseChannel/)
+  assert.match(localVerifySource, /const channel = options\.channel \|\| releaseChannel/)
+  assert.match(localVerifySource, /validateLocalUpdateApprovalManifest\(dir, version, channel\)/)
 })
 
 test('local release verification validates latest.yml matches the package version and installer', () => {
@@ -291,7 +293,8 @@ test('local release verification validates latest.yml matches the package versio
   assert.match(localVerifySource, /validateLocalLatestMetadata/)
   assert.match(localVerifySource, /latest\.yml/)
   assert.match(localVerifySource, /releaseAssetPrefix = pack\.productName \|\| 'ShellPilot'/)
-  assert.match(localVerifySource, /\$\{releaseAssetPrefix\}-\$\{pack\.version\}-win-\$\{releaseArch \|\| 'x64'\}-installer\.exe/)
+  assert.match(localVerifySource, /\$\{assetPrefix\}-\$\{version\}-win-\$\{arch \|\| 'x64'\}-installer\.exe/)
+  assert.match(localVerifySource, /verifyReleaseVersionConsistency\(\{[\s\S]*version[\s\S]*arch[\s\S]*assetPrefix/s)
 })
 
 test('windows ci workflow runs unit tests for normal code changes without publishing', () => {

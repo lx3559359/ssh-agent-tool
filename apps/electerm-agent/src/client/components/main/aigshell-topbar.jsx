@@ -246,6 +246,7 @@ export default auto(function AIGShellTopBar ({ store }) {
         disabled={item.disabled}
         onClick={item.popover ? undefined : item.onClick}
         aria-label={item.label}
+        data-action-key={item.key}
         className={'aigshell-topbar-action' + (item.primary ? ' aigshell-topbar-action-primary' : '')}
       >
         <span className='aigshell-topbar-action-label'>{item.label}</span>

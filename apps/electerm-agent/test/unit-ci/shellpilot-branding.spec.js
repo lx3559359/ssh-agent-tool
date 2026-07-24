@@ -30,7 +30,9 @@ test('ShellPilot top bar shows the current app version', () => {
 
 test('ShellPilot release assets use the public ShellPilot file prefix', () => {
   const builder = JSON.parse(read('build/electron-builder.json'))
-  const releaseVerifier = read('build/bin/verify-local-release-assets.js')
+  const {
+    getRequiredReleaseAssetNames
+  } = require(path.join(root, 'build/bin/github-release-utils'))
   const updateVersion = read('src/client/common/update-version.js')
   const versionTemplate = '$' + '{version}'
   const osTemplate = '$' + '{os}'
@@ -39,8 +41,9 @@ test('ShellPilot release assets use the public ShellPilot file prefix', () => {
 
   assert.equal(builder.artifactName, `ShellPilot-${versionTemplate}-${osTemplate}-${archTemplate}.${extTemplate}`)
   assert.equal(builder.nsis.artifactName, `ShellPilot-${versionTemplate}-${osTemplate}-${archTemplate}-installer.${extTemplate}`)
-  assert.match(releaseVerifier, /releaseAssetPrefix = pack\.productName \|\| 'ShellPilot'/)
-  assert.match(releaseVerifier, /\$\{releaseAssetPrefix\}-\$\{pack\.version\}-win-/)
+  assert.ok(getRequiredReleaseAssetNames('0.4.9').includes(
+    'ShellPilot-0.4.9-win-x64-installer.exe'
+  ))
   assert.match(updateVersion, /ShellPilot-\$\{version\}-win-\$\{arch\}-installer\.exe/)
   assert.match(updateVersion, /AIGShell-\$\{version\}-win-\$\{arch\}-installer\.exe/)
 })

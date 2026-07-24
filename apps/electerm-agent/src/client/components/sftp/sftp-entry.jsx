@@ -50,6 +50,7 @@ import {
   createSftpTransactionAdapter,
   digestSftpText
 } from './sftp-transaction-adapter.js'
+import { reconcileSelectedFileIds } from './file-selection.js'
 import { createTransactionRunner } from '../../common/safety-transactions/transaction-runner.js'
 import { buildSideEffectSafetyRequest } from '../../common/safety-transactions/side-effect-model.js'
 import { assertSameSessionEndpoint } from '../../common/safety-transactions/endpoint-guard.js'
@@ -392,7 +393,8 @@ export default class Sftp extends Component {
   selectAll = (type, e) => {
     e && e.preventDefault && e.preventDefault()
     this.setState({
-      selectedFiles: new Set(this.getFileList(type).map(f => f.id))
+      selectedFiles: new Set(this.getFileList(type).map(f => f.id)),
+      selectedType: type
     })
   }
 
@@ -1264,7 +1266,18 @@ export default class Sftp extends Component {
           ...this.state.remotePathHistory
         ]).slice(0, maxSftpHistory)
       }
-      this.setState(update, () => {
+      this.setState(prevState => {
+        return prevState.selectedType === typeMap.remote
+          ? {
+              ...update,
+              selectedFiles: reconcileSelectedFileIds(
+                prevState.remote,
+                remote,
+                prevState.selectedFiles
+              )
+            }
+          : update
+      }, () => {
         if (this.type !== 'ftp') {
           this.updateRemoteList(remote, remotePath, sftp)
         }
@@ -1339,7 +1352,18 @@ export default class Sftp extends Component {
       remote,
       remoteFileTree: this.buildTree(remote, typeMap.remote)
     }
-    this.setState(update)
+    this.setState(prevState => {
+      return prevState.selectedType === typeMap.remote
+        ? {
+            ...update,
+            selectedFiles: reconcileSelectedFileIds(
+              prevState.remote,
+              remote,
+              prevState.selectedFiles
+            )
+          }
+        : update
+    })
   }
 
   getLocalHome = () => {
@@ -1393,7 +1417,18 @@ export default class Sftp extends Component {
           ...this.state.localPathHistory
         ]).slice(0, maxSftpHistory)
       }
-      this.setState(update)
+      this.setState(prevState => {
+        return prevState.selectedType === typeMap.local
+          ? {
+              ...update,
+              selectedFiles: reconcileSelectedFileIds(
+                prevState.local,
+                local,
+                prevState.selectedFiles
+              )
+            }
+          : update
+      })
     } catch (e) {
       const update = {
         localLoading: false,

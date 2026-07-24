@@ -5,6 +5,9 @@ const {
 const { describe } = it
 it.setTimeout(10000000)
 const delay = require('./common/wait')
+const { promises: fs } = require('fs')
+const { tmpdir } = require('os')
+const { resolve } = require('path')
 const appOptions = require('./common/app-options')
 const extendClient = require('./common/client-extend')
 const { expect } = require('./common/expect')
@@ -16,24 +19,31 @@ const {
   copyItem,
   pasteItem,
   enterFolder,
-  navigateToParentFolder
+  navigateToParentFolder,
+  verifyFileExists,
+  verifyFileTransfersComplete,
+  setLocalSftpPath
 } = require('./common/common')
 
 describe('file-copy-paste-operation', function () {
-  it('should test file copy and paste operations', async function () {
-    const electronApp = await electron.launch(appOptions)
-    const client = await electronApp.firstWindow()
-    extendClient(client, electronApp)
-    await delay(3500)
+  for (const type of ['local', 'remote']) {
+    it(`should test ${type} file copy and paste operations`, async function () {
+      const electronApp = await electron.launch(appOptions)
+      const localRoot = await fs.mkdtemp(resolve(tmpdir(), 'shellpilot-copy-paste-'))
+      try {
+        const client = await electronApp.firstWindow()
+        extendClient(client, electronApp)
+        await delay(3500)
 
-    await setupSftpConnection(client)
-
-    // Test for both local and remote
-    await testCopyPasteOperation(client, 'local')
-    await testCopyPasteOperation(client, 'remote')
-
-    await electronApp.close()
-  })
+        await setupSftpConnection(client)
+        await setLocalSftpPath(client, localRoot)
+        await testCopyPasteOperation(client, type)
+      } finally {
+        await electronApp.close()
+        await fs.rm(localRoot, { recursive: true, force: true })
+      }
+    })
+  }
 })
 
 async function testCopyPasteOperation (client, type) {
@@ -55,16 +65,26 @@ async function testCopyPasteOperation (client, type) {
   await delay(2000)
 
   // Test 1: Paste in the same directory
-  await pasteItem(client, type)
+  await pasteItem(client, type, {
+    resolveConflict: type === 'remote' ? 'rename' : undefined
+  })
+  await verifyFileTransfersComplete(client)
 
   // Verify that a renamed file was created
-  const renamedFiles = await client.locator(`.session-current .file-list.${type} .sftp-item[title*="${fileName.slice(0, -3)}("]`)
-  const count = await renamedFiles.count()
-  expect(count).toBeGreaterThanOrEqual(1)
+  const renamedFileName = await client.evaluate(async ({ type, fileName }) => {
+    const sftp = window.refs.get('sftp-' + window.store.activeTabId)
+    const list = type === 'remote'
+      ? await sftp.remoteList(true)
+      : await sftp.localList(true)
+    const base = fileName.replace(/\.js$/, '')
+    return list
+      .map(item => item.name)
+      .find(name => name.startsWith(`${base}(rename-`) && name.endsWith('.js'))
+  }, { type, fileName })
+  expect(renamedFileName).toBeTruthy()
 
   // Verify the renamed file follows the pattern
-  const renamedFileName = await renamedFiles.first().getAttribute('title')
-  expect(renamedFileName).toMatch(/^original-file-\d+\([\w\d-]+\)\.js$/)
+  expect(renamedFileName).toMatch(/^original-file-\d+\(rename-[\w\d-]+\)\.js$/)
 
   // Test 2: Create folder, paste into subfolder
   // Create a subfolder
@@ -82,14 +102,10 @@ async function testCopyPasteOperation (client, type) {
 
   // Paste the file in the subfolder
   await pasteItem(client, type)
-
-  // Give time for the paste to complete
-  await delay(2000)
+  await verifyFileTransfersComplete(client)
 
   // Verify the file was created in the subfolder
-  const copiedFiles = await client.locator(`.session-current .file-list.${type} .sftp-item[title="${fileName}"]`)
-  const copiedCount = await copiedFiles.count()
-  expect(copiedCount).toBe(1)
+  expect(await verifyFileExists(client, type, fileName)).toBe(true)
 
   // Navigate back to main test folder
   await navigateToParentFolder(client, type)
