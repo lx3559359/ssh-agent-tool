@@ -126,6 +126,17 @@ test('AI chat actions close orphaned running requests after an app restart', asy
     completionStatus: 'pending',
     pending: true
   }), null)
+  const stoppingUpdate = getInterruptedAIChatUpdate({
+    completionStatus: 'stopping',
+    pending: false,
+    sessionId: '',
+    requestId: '',
+    response: 'partial answer'
+  })
+  assert.equal(stoppingUpdate.pending, false)
+  assert.equal(stoppingUpdate.completionStatus, 'failed')
+  assert.equal(stoppingUpdate.requestId, '')
+  assert.match(stoppingUpdate.response, /^partial answer/)
 })
 
 test('AI chat history migrates legacy trace fields to metadata-only persistence', async () => {

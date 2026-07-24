@@ -118,7 +118,7 @@ export function getInterruptedAIChatUpdate (item = {}, {
 } = {}) {
   if (
     item.pending === true ||
-    item.completionStatus !== 'running' ||
+    !['running', 'stopping'].includes(item.completionStatus) ||
     (!includeSession && item.sessionId)
   ) {
     return null
@@ -388,7 +388,8 @@ export function appendAIChatHistory (store, entry, maxHistory = 100) {
 }
 
 function isActiveAIChatEntry (item = {}) {
-  return item.pending === true || ['pending', 'running'].includes(item.completionStatus)
+  return item.pending === true ||
+    ['pending', 'running', 'stopping'].includes(item.completionStatus)
 }
 
 export function getAIChatStreamSessionId (item = {}, store) {
