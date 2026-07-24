@@ -14,6 +14,7 @@ const progressByState = {
   idle: 0,
   gathering: 15,
   generating: 55,
+  repairing: 70,
   validating: 85,
   'draft-ready': 100,
   failed: 100,
@@ -128,7 +129,7 @@ export default function AgentSkillCreateModal ({
     onClose?.()
   }
 
-  const busy = ['gathering', 'generating', 'validating']
+  const busy = ['gathering', 'generating', 'repairing', 'validating']
     .includes(creatorState.status)
   const canEnable = Boolean(
     draft && validation && validation.valid &&

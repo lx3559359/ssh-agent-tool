@@ -125,6 +125,85 @@ test('invalid JSON and API errors preserve the existing draft and redact secrets
   }
 })
 
+test('repairs a generated draft once when package validation rejects it', async () => {
+  const { createAgentSkillCreatorController } = await import(moduleUrl)
+  const prompts = []
+  let saves = 0
+  const controller = createAgentSkillCreatorController({
+    runGlobalAsync: async (name, prompt) => {
+      prompts.push(prompt)
+      return { response: response() }
+    },
+    createDraft: async () => {
+      saves += 1
+      if (saves === 1) {
+        const error = new Error('Skill package did not pass validation.')
+        error.code = 'SKILL_VALIDATION_FAILED'
+        error.validation = {
+          valid: false,
+          errors: [{
+            code: 'SKILL_FRONTMATTER_KEY_INVALID',
+            message: 'Unsupported Skill frontmatter key: examples',
+            path: 'SKILL.md'
+          }]
+        }
+        throw error
+      }
+      return {
+        id: 'inspect-web-service-draft-1',
+        state: 'draft',
+        enabled: false,
+        valid: true,
+        packageDigest: 'a'.repeat(64)
+      }
+    }
+  })
+
+  const result = await controller.generate({
+    requirements: 'Create a keyword search Skill',
+    config
+  })
+
+  assert.equal(saves, 2)
+  assert.equal(prompts.length, 2)
+  assert.match(prompts[1], /SKILL_FRONTMATTER_KEY_INVALID/)
+  assert.match(prompts[1], /SKILL\.md/)
+  assert.equal(result.draft.valid, true)
+})
+
+test('reports package validation details after the repair attempt also fails', async () => {
+  const { createAgentSkillCreatorController } = await import(moduleUrl)
+  let calls = 0
+  const controller = createAgentSkillCreatorController({
+    runGlobalAsync: async () => {
+      calls += 1
+      return { response: response() }
+    },
+    createDraft: async () => {
+      const error = new Error('Skill package did not pass validation.')
+      error.code = 'SKILL_VALIDATION_FAILED'
+      error.validation = {
+        valid: false,
+        errors: [{
+          code: 'SKILL_FRONTMATTER_REQUIRED_FIELD',
+          message: 'Skill frontmatter requires triggers.',
+          path: 'SKILL.md'
+        }]
+      }
+      throw error
+    }
+  })
+
+  await assert.rejects(
+    controller.generate({ requirements: 'Create a keyword search Skill', config }),
+    error => (
+      calls === 2 &&
+      error.message.includes('SKILL.md') &&
+      error.message.includes('triggers')
+    )
+  )
+})
+
 test('reset returns a completed creator to a clean idle state without cancelling AI', async () => {
   const { createAgentSkillCreatorController } = await import(moduleUrl)
   const calls = []

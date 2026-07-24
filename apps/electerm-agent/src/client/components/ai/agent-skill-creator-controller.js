@@ -17,8 +17,40 @@ function requestId () {
     `skill-creator-${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
 
+function validationIssues (error) {
+  const issues = error?.validation?.errors
+  if (!Array.isArray(issues)) return []
+  return issues.slice(0, 12).map(issue => ({
+    code: String(issue?.code || 'SKILL_VALIDATION_FAILED'),
+    path: String(issue?.path || ''),
+    message: String(issue?.message || 'Skill package validation failed.').slice(0, 500)
+  }))
+}
+
+function validationFailureMessage (error) {
+  const issues = validationIssues(error)
+  if (!issues.length) return ''
+  const details = issues.map(issue => {
+    const location = issue.path ? `${issue.path}：` : ''
+    return `${location}${issue.message}（${issue.code}）`
+  })
+  return `Skill 草稿校验失败：${details.join('；')}`
+}
+
+function repairPrompt (originalPrompt, error) {
+  return [
+    originalPrompt,
+    '',
+    'The previous generated package was rejected by the local validator.',
+    'Correct every validation issue below and return one complete replacement JSON object.',
+    'Do not explain the correction and do not use Markdown fences.',
+    JSON.stringify(validationIssues(error))
+  ].join('\n')
+}
+
 function safeError (error, secrets = []) {
-  let message = String(error?.message || error || 'Skill generation failed.')
+  let message = validationFailureMessage(error) ||
+    String(error?.message || error || 'Skill generation failed.')
   for (const secret of secrets) {
     const value = String(secret || '')
     if (value) message = message.split(value).join('[REDACTED]')
@@ -105,28 +137,42 @@ export function createAgentSkillCreatorController ({
     })
 
     try {
-      transition('generating')
-      const response = await runGlobalAsync(
-        'AIchat',
-        prompt,
-        config.modelAI,
-        AGENT_SKILL_CREATOR_SYSTEM_PROMPT,
-        config.baseURLAI,
-        config.apiPathAI,
-        config.apiKeyAI,
-        config.proxyAI,
-        false,
-        config.authHeaderNameAI,
-        generation.requestId
-      )
-      assertCurrent(generation)
-      if (response?.error) throw new Error(response.error)
+      let generated
+      let draft
+      let currentPrompt = prompt
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        transition(attempt === 0 ? 'generating' : 'repairing')
+        const response = await runGlobalAsync(
+          'AIchat',
+          currentPrompt,
+          config.modelAI,
+          AGENT_SKILL_CREATOR_SYSTEM_PROMPT,
+          config.baseURLAI,
+          config.apiPathAI,
+          config.apiKeyAI,
+          config.proxyAI,
+          false,
+          config.authHeaderNameAI,
+          generation.requestId
+        )
+        assertCurrent(generation)
+        if (response?.error) throw new Error(response.error)
 
-      transition('validating')
-      const generated = await parseAgentSkillDraftResponse(response)
-      assertCurrent(generation)
-      const draft = await createDraft(generated.files)
-      assertCurrent(generation)
+        transition('validating')
+        generated = await parseAgentSkillDraftResponse(response)
+        assertCurrent(generation)
+        try {
+          draft = await createDraft(generated.files)
+          assertCurrent(generation)
+          break
+        } catch (error) {
+          if (attempt === 0 && validationIssues(error).length) {
+            currentPrompt = repairPrompt(prompt, error)
+            continue
+          }
+          throw error
+        }
+      }
       if (!draft || draft.enabled !== false || draft.state !== 'draft' ||
         draft.valid !== true) {
         throw controllerError(

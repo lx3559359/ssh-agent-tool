@@ -11,7 +11,18 @@ Security boundaries:
 
 Return exactly one JSON object with no Markdown fence and no surrounding prose. Use exactly this schema:
 {"schemaVersion":1,"summary":"...","files":[{"path":"SKILL.md","content":"..."}],"requestedPermissions":["ssh.read"],"riskSummary":["..."],"validationIntent":["..."]}
-Every draft must include SKILL.md. Add skill.json, scripts, references, templates, checks, or tests only when the workflow genuinely requires them.`
+Every draft must include SKILL.md. Its controlled frontmatter must use exactly this shape:
+---
+id: lowercase-ascii-kebab-case
+name: Human readable name
+description: One-line description
+version: 1.0.0
+triggers:
+  - first trigger phrase
+permissions:
+  - ssh.read
+---
+Only id, name, description, version, triggers, and permissions are allowed in frontmatter. Use indented YAML list items exactly as shown; inline arrays, nested objects, extra fields, and non-semantic versions are invalid. The id must contain only lowercase ASCII letters, digits, and hyphens. Add skill.json, scripts, references, templates, checks, or tests only when the workflow genuinely requires them.`
 
 export function buildAgentSkillCreatorPrompt ({
   requirements,
