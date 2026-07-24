@@ -88,11 +88,11 @@ test('MCP server config validation explains missing required connection fields',
   assert.match(prompt, /尚未内置直接调用外部 MCP Server/)
 })
 
-test('AI chat exposes MCP context action and no longer treats it as unavailable only', () => {
+test('MCP support remains available while its AI composer entry is hidden', () => {
   const source = readSource('src/client/components/ai/ai-chat.jsx')
 
-  assert.match(source, /handleQuoteMcpServers/)
-  assert.match(source, /buildMcpServerContextPrompt/)
+  assert.doesNotMatch(source, /handleQuoteMcpServers/)
+  assert.doesNotMatch(source, /buildMcpServerContextPrompt/)
   assert.doesNotMatch(source, /showUnavailableContextAction\('mcp'\)/)
 })
 

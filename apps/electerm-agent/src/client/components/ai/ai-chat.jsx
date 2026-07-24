@@ -6,7 +6,6 @@ import AIStopIcon from './ai-stop-icon'
 import uid from '../../common/uid'
 import { pick } from 'lodash-es'
 import {
-  ApiOutlined,
   CodeOutlined,
   FileTextOutlined,
   HighlightOutlined,
@@ -39,12 +38,6 @@ import {
   buildCommandSuggestionPrompt,
   buildTerminalContextPrompt
 } from './ai-ssh-context'
-import {
-  buildMcpServerContextPrompt
-} from './agent-mcp-servers'
-import {
-  buildLocalCliContextPrompt
-} from './agent-local-cli-tools'
 import {
   getActiveSftpRef,
   getActiveTerminalRef,
@@ -347,21 +340,6 @@ export default function AIChat (props) {
     )
   }
 
-  function handleQuoteMcpServers () {
-    const text = buildMcpServerContextPrompt({
-      mcpServers: activeAIConfig?.mcpServers || window.store.config?.mcpServers || []
-    })
-    if (!text) {
-      message.warning(getAIContextUnavailableMessage('mcp'))
-      return
-    }
-    setPrompt(text)
-  }
-
-  function handleQuoteLocalCliTools () {
-    setPrompt(buildLocalCliContextPrompt())
-  }
-
   function appendAttachments (items = []) {
     const nextItems = items.filter(Boolean)
     if (!nextItems.length) {
@@ -505,18 +483,6 @@ export default function AIChat (props) {
         text: e('shellpilotAiGenerateCommand'),
         icon: <ToolOutlined />,
         handleClick: handleGenerateCommand
-      },
-      {
-        key: 'mcp',
-        text: e('shellpilotAiQuoteMcpConfiguration'),
-        icon: <ApiOutlined />,
-        handleClick: handleQuoteMcpServers
-      },
-      {
-        key: 'cli',
-        text: e('shellpilotAiQuoteCliCapabilities'),
-        icon: <ToolOutlined />,
-        handleClick: handleQuoteLocalCliTools
       }
     ]
 

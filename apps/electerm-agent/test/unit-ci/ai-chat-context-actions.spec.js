@@ -8,6 +8,23 @@ const moduleUrl = pathToFileURL(
   path.resolve(__dirname, '../../src/client/components/ai/ai-chat-context-actions.js')
 ).href
 
+test('AI composer keeps useful context actions while hiding unfinished MCP and CLI entries', () => {
+  const source = fs.readFileSync(
+    path.resolve(__dirname, '../../src/client/components/ai/ai-chat.jsx'),
+    'utf8'
+  )
+  const start = source.indexOf('function renderContextActions')
+  const end = source.indexOf('function renderAttachments', start)
+  const actionSource = source.slice(start, end)
+
+  assert.match(actionSource, /key: 'terminal'/)
+  assert.match(actionSource, /key: 'selection'/)
+  assert.match(actionSource, /key: 'file'/)
+  assert.match(actionSource, /key: 'command'/)
+  assert.doesNotMatch(actionSource, /key: 'mcp'/)
+  assert.doesNotMatch(actionSource, /key: 'cli'/)
+})
+
 test('AI chat context actions read current terminal selection and output', async () => {
   const {
     getActiveTerminalRef,
@@ -262,7 +279,7 @@ test('AI chat context actions build user-facing Chinese unavailable messages', a
   )
 })
 
-test('AI chat panel wires completed context actions with clear Chinese labels', () => {
+test('AI chat panel keeps core context actions and hides MCP and CLI composer entries', () => {
   const source = fs.readFileSync(
     path.resolve(__dirname, '../../src/client/components/ai/ai-chat.jsx'),
     'utf8'
@@ -279,8 +296,8 @@ test('AI chat panel wires completed context actions with clear Chinese labels', 
   assert.match(source, /shellpilotAiQuoteSelection/)
   assert.match(source, /shellpilotAiQuoteFile/)
   assert.match(source, /shellpilotAiGenerateCommand/)
-  assert.match(source, /shellpilotAiQuoteMcpConfiguration/)
-  assert.match(source, /shellpilotAiQuoteCliCapabilities/)
+  assert.doesNotMatch(source, /shellpilotAiQuoteMcpConfiguration/)
+  assert.doesNotMatch(source, /shellpilotAiQuoteCliCapabilities/)
   assert.doesNotMatch(source, /联网搜索/)
   assert.doesNotMatch(source, /showUnavailableContextAction\('web'\)/)
 })

@@ -14,7 +14,7 @@ import {
   SunOutlined,
   ThunderboltOutlined
 } from '@ant-design/icons'
-import { lazy, Suspense, useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import LazyModuleBoundary from '../common/lazy-module-boundary'
 import { auto } from 'manate/react'
 import { Button, Popover, Tooltip } from 'antd'
@@ -44,6 +44,7 @@ export default auto(function AIGShellTopBar ({ store }) {
   const [showSafetyCenter, setShowSafetyCenter] = useState(false)
   const [showServerStatus, setShowServerStatus] = useState(false)
   const [connectionInfoBookmark, setConnectionInfoBookmark] = useState(null)
+  const titleBarDraggingRef = useRef(false)
   const currentTab = store.tabs.find(tab => tab.id === store.activeTabId) || store.currentTab || {}
   const title = currentTab.title || currentTab.name || currentTab.host || e('shellpilotTopbarDisconnected')
   const online = currentTab.status === statusMap.success
@@ -75,6 +76,24 @@ export default auto(function AIGShellTopBar ({ store }) {
       window.store.onError?.(new Error(e('shellpilotSafetyRecoveryFailed')))
     })
   }, [])
+
+  useEffect(() => {
+    if (!store.shouldSendWindowMove) {
+      return
+    }
+    const stopTitleBarDrag = () => {
+      if (!titleBarDraggingRef.current) {
+        return
+      }
+      titleBarDraggingRef.current = false
+      window.pre.runSync('windowMove', false)
+    }
+    document.addEventListener('mouseup', stopTitleBarDrag)
+    return () => {
+      document.removeEventListener('mouseup', stopTitleBarDrag)
+      stopTitleBarDrag()
+    }
+  }, [store.shouldSendWindowMove])
 
   function handleFastNew () {
     if (window.store.hasNodePty) {
@@ -119,6 +138,47 @@ export default auto(function AIGShellTopBar ({ store }) {
 
   function handleOpenQuickCommands () {
     window.store.openQuickCommandBar = true
+  }
+
+  function isInteractiveTitleBarTarget (target) {
+    return Boolean(target?.closest?.(
+      'button, a, input, textarea, select, [role="button"], .window-controls, .aigshell-topbar-actions'
+    ))
+  }
+
+  function handleTitleBarMouseDown (event) {
+    if (
+      !store.shouldSendWindowMove ||
+      event.button !== 0 ||
+      isInteractiveTitleBarTarget(event.target)
+    ) {
+      return
+    }
+    titleBarDraggingRef.current = true
+    window.pre.runSync('windowMove', true)
+  }
+
+  function handleTitleBarMouseUp () {
+    if (!titleBarDraggingRef.current) {
+      return
+    }
+    titleBarDraggingRef.current = false
+    window.pre.runSync('windowMove', false)
+  }
+
+  function handleTitleBarDoubleClick (event) {
+    if (isInteractiveTitleBarTarget(event.target)) {
+      return
+    }
+    handleTitleBarMouseUp()
+    event.preventDefault()
+    if (store.isMaximized) {
+      window.pre.runGlobalAsync('unmaximize')
+      window.store.isMaximized = false
+      return
+    }
+    window.pre.runGlobalAsync('maximize')
+    window.store.isMaximized = true
   }
 
   function handleActionRailWheel (event) {
@@ -267,7 +327,13 @@ export default auto(function AIGShellTopBar ({ store }) {
   }
 
   return (
-    <div className='aigshell-topbar'>
+    <div
+      className='aigshell-topbar'
+      onDoubleClick={handleTitleBarDoubleClick}
+      onMouseDown={handleTitleBarMouseDown}
+      onMouseUp={handleTitleBarMouseUp}
+      style={store.shouldSendWindowMove ? { WebkitAppRegion: 'no-drag' } : undefined}
+    >
       <div className='aigshell-topbar-brand'>
         <img src={logoPath1} alt='ShellPilot' />
         <span className='aigshell-topbar-name'>ShellPilot</span>

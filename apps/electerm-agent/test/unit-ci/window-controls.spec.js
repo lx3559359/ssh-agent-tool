@@ -21,3 +21,16 @@ test('custom Windows title bar exposes distinct minimize maximize restore and cl
   assert.match(source, /runGlobalAsync\('unmaximize'\)/)
   assert.match(source, /window\.store\.exit\(\)/)
 })
+
+test('main title bar toggles maximize on non-interactive double click', () => {
+  const source = fs.readFileSync(
+    path.resolve(__dirname, '../../src/client/components/main/aigshell-topbar.jsx'),
+    'utf8'
+  )
+
+  assert.match(source, /function handleTitleBarDoubleClick/)
+  assert.match(source, /closest\(/)
+  assert.match(source, /window\.pre\.runGlobalAsync\('maximize'\)/)
+  assert.match(source, /window\.pre\.runGlobalAsync\('unmaximize'\)/)
+  assert.match(source, /onDoubleClick=\{handleTitleBarDoubleClick\}/)
+})

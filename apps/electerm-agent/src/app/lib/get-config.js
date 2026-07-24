@@ -10,7 +10,20 @@ exports.getConfig = async (inited) => {
   const storedUserConfig = await dbAction('data', 'findOne', {
     _id: userConfigId
   }) || {}
+  if (storedUserConfig.shellpilotStartupHomeDefaultV1 !== true) {
+    storedUserConfig.initDefaultTabOnStart = false
+    storedUserConfig.shellpilotStartupHomeDefaultV1 = true
+    await dbAction('data', 'update', {
+      _id: userConfigId
+    }, {
+      ...storedUserConfig,
+      _id: userConfigId
+    }, {
+      upsert: true
+    }).catch(() => {})
+  }
   const userConfig = restoreAIConfigCredentials(storedUserConfig)
+  delete userConfig.shellpilotStartupHomeDefaultV1
   const requireAuth = userConfig.hashedPassword
   delete userConfig._id
   delete userConfig.host

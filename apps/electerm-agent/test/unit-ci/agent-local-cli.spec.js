@@ -416,7 +416,7 @@ test('main process exposes runLocalCli through the async IPC allowlist', () => {
   assert.match(source, /cancelLocalCli/)
 })
 
-test('AI chat exposes a usable local CLI context action', async () => {
+test('local CLI context remains available while its AI composer entry is hidden', async () => {
   const {
     buildLocalCliContextPrompt
   } = await import(clientLocalCliModuleUrl)
@@ -430,8 +430,8 @@ test('AI chat exposes a usable local CLI context action', async () => {
     path.resolve(__dirname, '../../src/client/components/ai/ai-chat.jsx'),
     'utf8'
   )
-  assert.match(source, /handleQuoteLocalCliTools/)
-  assert.match(source, /buildLocalCliContextPrompt/)
+  assert.doesNotMatch(source, /handleQuoteLocalCliTools/)
+  assert.doesNotMatch(source, /buildLocalCliContextPrompt/)
   assert.doesNotMatch(source, /showUnavailableContextAction\('cli'\)/)
 })
 
