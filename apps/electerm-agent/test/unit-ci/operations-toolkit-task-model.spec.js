@@ -96,3 +96,29 @@ test('task record store truncates UTF-8 without replacement characters', async (
   assert.doesNotMatch(output, /\uFFFD/)
   assert.equal(new TextEncoder().encode(output).length <= 7, true)
 })
+
+test('task record store strips runtime proxies from persisted history', async () => {
+  const { createOperationsTaskRecordStore } = await importModule(
+    'src/client/components/operations-toolkit/runtime/task-record-store.js'
+  )
+  let persisted = []
+  const records = createOperationsTaskRecordStore({
+    storage: {
+      read: () => persisted,
+      write: value => {
+        persisted = value
+      }
+    }
+  })
+
+  records.save({
+    id: 'ops-runtime-proxy',
+    capabilities: new Proxy({ tools: ['uptime'] }, {}),
+    runtimeCallback: () => {},
+    steps: [{ output: 'ok' }]
+  })
+
+  assert.doesNotThrow(() => records.list())
+  assert.deepEqual(records.list()[0].capabilities, { tools: ['uptime'] })
+  assert.equal(records.list()[0].runtimeCallback, undefined)
+})

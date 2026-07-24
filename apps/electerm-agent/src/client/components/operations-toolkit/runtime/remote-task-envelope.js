@@ -34,7 +34,7 @@ export function buildStartRemoteTaskCommand (taskId) {
     'cd "$task_dir" || exit 1',
     'setsid sh -c \'sh ./run.sh > output.log 2>&1; printf "%s" "$?" > exit\' </dev/null >/dev/null 2>&1 &',
     'printf \'%s\' "$!" > "$task_dir/pid"'
-  ].join('; ')
+  ].join('\n')
 }
 
 export function buildPollRemoteTaskCommand (taskId, byteOffset = 0) {

@@ -110,10 +110,11 @@ export default Store => {
     if (!tool) throw new Error('未找到指定的运维工具')
     const active = ensureRuntime(store).runner.run({ tool, params, endpoint })
     store.activeOperationsTaskId = active.taskId
-    active.completion.then(() => {
+    const completion = active.completion.then(task => {
       store.operationsHistory = ensureRuntime(store).taskStore.list()
+      return task
     })
-    return active
+    return { ...active, completion }
   }
 
   Store.prototype.refreshOperationsCapabilities = async function () {

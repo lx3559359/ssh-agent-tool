@@ -20,8 +20,17 @@ describe('quick commands', function () {
     const electronApp = await electron.launch(appOptions)
     const client = await electronApp.firstWindow()
     extendClient(client, electronApp)
+    await client.waitForFunction(
+      () => window.store?.configLoaded === true,
+      { timeout: 20000 }
+    )
+    await client.locator('.no-sessions').waitFor({
+      state: 'visible',
+      timeout: 20000
+    })
+    await client.click('.add-new-tab-btn')
+    await client.locator('.term-wrap:visible').waitFor({ timeout: 20000 })
     log('open setting')
-    await delay(2000)
     await client.click('.btns .anticon-setting')
     await delay(2500)
     log('click quick commands')

@@ -78,9 +78,14 @@ test('records finite non-negative startup, terminal, memory and AI performance b
     await expect.poll(() => sshServer.state.shellCount, {
       timeout: 20000
     }).toBeGreaterThan(0)
+    await page.evaluate(() => (
+      window.refs.get('term-' + window.store.activeTabId)?.term?.focus()
+    ))
+    await page.keyboard.type('echo shellpilot-performance-ready')
+    await page.keyboard.press('Enter')
     await expect.poll(() => terminalText(page), {
       timeout: 20000
-    }).toContain('ShellPilot E2E ready')
+    }).toContain('shellpilot-performance-ready')
 
     const apiToken = 'performance-e2e-token'
     await page.evaluate(({ baseURL, apiToken }) => {

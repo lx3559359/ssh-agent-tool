@@ -35,7 +35,10 @@ function taskOutput (task) {
 
 export default function TaskPanel ({ task, tool, onCancel, onAnalyze }) {
   if (!task) return null
-  const completeSteps = task.steps?.length || 0
+  const completeSteps = (task.steps || []).filter(step => {
+    const hasExitCode = step.exitCode !== undefined && step.exitCode !== null
+    return ['completed', 'failed'].includes(step.status) || hasExitCode
+  }).length
   const totalSteps = tool?.steps?.length || Math.max(1, completeSteps)
   const progress = Math.min(100, Math.round(completeSteps / totalSteps * 100))
   const running = activeStatuses.has(task.status)

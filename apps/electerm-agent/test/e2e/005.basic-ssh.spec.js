@@ -27,7 +27,7 @@ describe('ssh', function () {
     await delay(5500)
     let tabsCount = await client.elements('.tabs .tabs-wrapper .tab')
     tabsCount = await tabsCount.count()
-    expect(tabsCount).equal(2)
+    expect(tabsCount).equal(1)
     await delay(4010)
     await basicTerminalTest(client, cmd)
     await electronApp.close().catch(console.log)

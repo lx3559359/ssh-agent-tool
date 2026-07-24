@@ -39,11 +39,11 @@ test('operations workspace keeps quick actions and readonly diagnostics separate
     path.join(root, 'src/client/components/operations-toolkit/workspace/operations-workspace.jsx'),
     'utf8'
   )
-  assert.match(workspace, /快捷操作/)
-  assert.match(workspace, /诊断脚本/)
-  assert.match(workspace, /安全维护/)
+  assert.match(workspace, /shellpilotOperationsQuickActions/)
+  assert.match(workspace, /shellpilotOperationsDiagnostics/)
+  assert.match(workspace, /shellpilotOperationsSafeMaintenance/)
   assert.match(workspace, /hiddenCommandIds=\{hiddenQuickActionIds\}/)
-  assert.match(workspace, /运行只读诊断/)
+  assert.match(workspace, /shellpilotOperationsRunReadonly/)
   assert.match(workspace, /cancelOperationsTask/)
   assert.match(workspace, /buildOperationsAIContext/)
 })

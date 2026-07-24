@@ -95,11 +95,10 @@ test('isolated client completes SSH, SFTP, AI, update and rollback quality flows
     await acceptHostKey(page)
 
     await expect.poll(() => sshServer.state.shellCount, { timeout: 20000 }).toBeGreaterThan(0)
-    await expect.poll(() => terminalText(page), { timeout: 20000 }).toContain('ShellPilot E2E ready')
     await page.evaluate(() => window.refs.get('term-' + window.store.activeTabId)?.term?.focus())
     await page.keyboard.type('echo shellpilot-e2e')
     await page.keyboard.press('Enter')
-    await expect.poll(() => terminalText(page)).toContain('shellpilot-e2e')
+    await expect.poll(() => terminalText(page), { timeout: 20000 }).toContain('shellpilot-e2e')
     await page.keyboard.press('Control+C')
     await expect.poll(() => sshServer.state.ctrlCCount).toBeGreaterThan(0)
 

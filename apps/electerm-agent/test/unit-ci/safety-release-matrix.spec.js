@@ -59,7 +59,11 @@ test('Chinese help explains the complete safety transaction workflow and limits'
   assert.match(help, /vim、nano[^。\n]*无法预快照[^。\n]*警告/)
   assert.match(help, /回滚完成后[^。\n]*回滚验证/)
   assert.doesNotMatch(help, /手工(?:输入的)?\s*(?:SSH\s*)?命令(?:会)?直接执行/)
-  assert.doesNotMatch(help, /(?:无需|不需要)二次确认/)
+  assert.match(help, /只读诊断[^。\n]*(?:无需|不需要|不要求)二次确认/)
+  assert.doesNotMatch(
+    help,
+    /(?:有风险|已识别修改|不可恢复修改)[^。\n]*(?:无需|不需要|不要求)二次确认/
+  )
   assert.doesNotMatch(help, /electerm\/electerm\/wiki/i)
 })
 

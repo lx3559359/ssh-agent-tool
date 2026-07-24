@@ -174,6 +174,38 @@ async function runTrackedQuickCommandChecks (page) {
   expect(result.second.exitCode, JSON.stringify(result.second, null, 2)).toBe(0)
 }
 
+async function runOperationsToolkitReadOnlyCheck (page) {
+  const result = await page.evaluate(async () => {
+    window.store.openOperationsToolkit('diagnostic')
+    const active = window.store.runOperationsTool('system.overview')
+    const task = await active.completion
+    return {
+      status: task.status,
+      steps: task.steps.map(step => ({
+        status: step.status,
+        exitCode: step.exitCode,
+        hasOutput: Boolean(step.output)
+      })),
+      storedHistory: Boolean(
+        window.localStorage.getItem('shellpilot-operations-task-history-v1')
+      )
+    }
+  })
+
+  expect(result.status, JSON.stringify(result, null, 2)).toBe('completed')
+  expect(result.steps).toEqual([{
+    status: 'completed',
+    exitCode: 0,
+    hasOutput: true
+  }])
+  expect(result.storedHistory, JSON.stringify(result, null, 2)).toBe(true)
+  await expect.poll(() => page.evaluate(() => (
+    window.store.operationsHistory.length
+  )), { timeout: 5000 }).toBeGreaterThan(0)
+  await expect(page.locator('.operations-toolkit-workspace')).toBeVisible()
+  await expect(page.locator('.operations-task-panel')).toContainText('已完成')
+}
+
 async function openSftp (page) {
   await page.locator('.session-current .term-sftp-tabs .type-tab:visible').nth(1).click()
   await expect.poll(() => page.evaluate(() => {
@@ -257,6 +289,7 @@ test('real server supports read-only SSH checks and isolated reversible SFTP ope
     await connectRealServer(run.page, config)
     await runReadOnlySshChecks(run.page)
     await runTrackedQuickCommandChecks(run.page)
+    await runOperationsToolkitReadOnlyCheck(run.page)
     await openSftp(run.page)
 
     await createRemoteSandbox(run.page, sandboxPath)

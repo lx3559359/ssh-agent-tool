@@ -1,5 +1,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
+const fs = require('node:fs')
+const { spawnSync } = require('node:child_process')
 const { importModule } = require('./helpers/import-esm')
 
 function result (stdout, code = 0) {
@@ -11,6 +13,28 @@ function result (stdout, code = 0) {
     truncated: false
   }
 }
+
+test('remote task start command is valid POSIX shell syntax', async () => {
+  const { buildStartRemoteTaskCommand } = await importModule(
+    'src/client/components/operations-toolkit/runtime/remote-task-envelope.js'
+  )
+  const command = buildStartRemoteTaskCommand('operations-syntax-check')
+  const shellCandidates = process.platform === 'win32'
+    ? [
+        'C:\\Program Files\\Git\\bin\\sh.exe',
+        'C:\\Program Files\\Git\\usr\\bin\\sh.exe'
+      ]
+    : ['/bin/sh', '/usr/bin/sh']
+  const shell = shellCandidates.find(candidate => fs.existsSync(candidate))
+
+  assert.ok(shell, 'a POSIX shell is required to validate the task command')
+  assert.doesNotMatch(command, /&;/)
+  const syntax = spawnSync(shell, ['-n'], {
+    encoding: 'utf8',
+    input: command
+  })
+  assert.equal(syntax.status, 0, syntax.stderr || syntax.stdout)
+})
 
 test('ssh task channel uses runCmd and never writes to terminal', async () => {
   const calls = []

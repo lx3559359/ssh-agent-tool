@@ -36,6 +36,10 @@ function sanitizeRecord (record, maxStepBytes) {
   }
 }
 
+function createPersistableSnapshot (value) {
+  return JSON.parse(JSON.stringify(value))
+}
+
 export function createOperationsTaskRecordStore ({
   maxRecords = 100,
   maxStepBytes = 256 * 1024,
@@ -53,7 +57,9 @@ export function createOperationsTaskRecordStore ({
 
   return Object.freeze({
     save (record) {
-      const safe = sanitizeRecord(record, maxStepBytes)
+      const safe = createPersistableSnapshot(
+        sanitizeRecord(record, maxStepBytes)
+      )
       records = [
         safe,
         ...records.filter(item => item.id !== safe.id)
@@ -65,7 +71,7 @@ export function createOperationsTaskRecordStore ({
       return records.find(item => item.id === id) || null
     },
     list () {
-      return structuredClone(records)
+      return createPersistableSnapshot(records)
     },
     clear () {
       records = []
