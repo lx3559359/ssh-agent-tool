@@ -40,7 +40,9 @@ test('runner completes readonly task and releases endpoint slot', async () => {
   assert.equal(completed.status, 'completed')
   assert.equal(completed.steps[0].output, 'up 10 days')
   assert.equal(runner.getActiveCount('root@example.com:22'), 0)
-  assert.deepEqual(statuses, ['created', 'discovering', 'running', 'running', 'completed'])
+  assert.deepEqual(statuses.slice(0, 3), ['created', 'discovering', 'running'])
+  assert.ok(statuses.filter(status => status === 'running').length >= 2)
+  assert.equal(statuses.at(-1), 'completed')
 })
 
 test('runner releases endpoint slot after cancellation', async () => {

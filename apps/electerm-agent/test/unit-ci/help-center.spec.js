@@ -26,7 +26,7 @@ test('top bar exposes an in-client Chinese help center', () => {
     '安全备份与恢复',
     'AI 助手',
     '大日志与附件分析',
-    '快捷命令',
+    '运维工具',
     '端口转发',
     'MCP 与 CLI',
     '备份同步',
@@ -47,6 +47,9 @@ test('top bar exposes an in-client Chinese help center', () => {
   assert.match(help, /平台与服务自动识别/)
   assert.match(help, /权限受限/)
   assert.match(help, /发送给 AI/)
+  assert.match(help, /24 个只读工具/)
+  assert.match(help, /已安装服务/)
+  assert.match(help, /停止任务/)
 })
 
 test('repository includes an offline Chinese user guide', () => {

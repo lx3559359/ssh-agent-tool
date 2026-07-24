@@ -105,24 +105,45 @@ export function createOperationsTaskRunner ({
           const command = typeof step.buildCommand === 'function'
             ? step.buildCommand(params, capabilities)
             : step.command
+          const stepRecord = {
+            id: step.id,
+            title: step.title || step.id,
+            command,
+            output: '',
+            truncated: false,
+            exitCode: null,
+            status: 'running'
+          }
+          steps.push(stepRecord)
+          task = setTask({
+            ...task,
+            activeStepId: step.id,
+            steps: structuredClone(steps)
+          })
           const result = await channel.execute({
             pid: endpoint.pid,
             taskId: `${taskId}-${step.id}`,
             script: command,
             timeoutMs: step.timeoutMs,
             signal: controller.signal,
-            onChunk: chunk => output.append(chunk)
+            onChunk: chunk => {
+              output.append(chunk)
+              const snapshot = output.snapshot()
+              stepRecord.output = snapshot.lines.join('\n')
+              stepRecord.truncated = snapshot.truncated
+              task = setTask({
+                ...task,
+                steps: structuredClone(steps)
+              })
+            }
           })
-          steps.push({
-            id: step.id,
-            title: step.title || step.id,
-            command,
-            output: output.toString(),
-            truncated: output.snapshot().truncated,
-            exitCode: result.exitCode
-          })
+          stepRecord.output = output.toString()
+          stepRecord.truncated = output.snapshot().truncated
+          stepRecord.exitCode = result.exitCode
+          stepRecord.status = result.exitCode === 0 ? 'completed' : 'failed'
           task = setTask({
             ...task,
+            activeStepId: '',
             steps: structuredClone(steps)
           })
           if (result.exitCode !== 0) {
@@ -174,6 +195,10 @@ export function createOperationsTaskRunner ({
 
   return Object.freeze({
     run,
+    async discover (endpoint) {
+      const key = assertEndpoint(endpoint)
+      return capabilitiesFor(endpoint, key)
+    },
     async cancel (taskId) {
       const controller = controllers.get(taskId)
       if (!controller) return false

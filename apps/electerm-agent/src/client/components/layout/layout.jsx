@@ -9,7 +9,7 @@ import calcSessionSize from './session-size-alg'
 import TermSearch from '../terminal/term-search'
 import Footer from '../footer/footer-entry'
 import SessionsWrap from '../session/sessions'
-import QuickCommandsFooterBox from '../quick-commands/quick-commands-box'
+import OperationsToolkitEntry from '../operations-toolkit/entry'
 import pixed from './pixed'
 import { pick } from 'lodash-es'
 import './layout.styl'
@@ -148,8 +148,9 @@ export default auto(function Layout (props) {
       key='TermSearch'
       {...termProps}
     />,
-    <QuickCommandsFooterBox
-      key='QuickCommandsFooterBox'
+    <OperationsToolkitEntry
+      key='OperationsToolkitEntry'
+      store={store}
       {...qmProps}
       shellGeometry={shellGeometry}
       currentTab={currentTab}

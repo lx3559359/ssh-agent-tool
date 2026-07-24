@@ -163,6 +163,10 @@ export default () => {
     operationsTasks: [],
     activeOperationsTaskId: '',
     operationsHistory: [],
+    operationsCapabilities: null,
+    operationsCapabilitiesEndpointKey: '',
+    operationsDiscoveryStatus: 'idle',
+    operationsDiscoveryError: '',
     pinnedQuickCommandBar: ls.getItem(pinnedQuickCommandBarKey) === 'y',
     qmSortByFrequency: ls.getItem(qmSortByFrequencyKey) === 'yes',
 

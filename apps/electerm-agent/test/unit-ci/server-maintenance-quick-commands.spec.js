@@ -595,11 +595,11 @@ test('top bar exposes a primary quick command entry', () => {
 
   assert.match(topbarSource, /key:\s*'quickCommands'/)
   assert.match(topbarSource, /label:\s*e\('shellpilotTopbarQuickCommands'\)/)
-  assert.match(topbarSource, /openQuickCommandBar\s*=\s*true/)
+  assert.match(topbarSource, /openOperationsToolkit\('quick'\)/)
   assert.match(topbarSource, /aigshell-topbar-action-primary/)
   assert.match(topbarStyle, /\.aigshell-topbar-action-primary/)
   assert.match(layoutSource, /currentTab/)
   assert.match(layoutSource, /shellGeometry/)
   assert.doesNotMatch(layoutSource, /rightPanelVisible|rightPanelWidth/)
-  assert.match(layoutSource, /<QuickCommandsFooterBox[\s\S]*shellGeometry[\s\S]*currentTab/)
+  assert.match(layoutSource, /<OperationsToolkitEntry[\s\S]*shellGeometry[\s\S]*currentTab/)
 })

@@ -72,7 +72,10 @@ function createRuntime (store) {
         timeoutMs: 30000,
         maxOutputBytes: 1024 * 1024
       })
-      return parseOperationsDiscoveryOutput(response?.stdout || '', nonce)
+      return parseOperationsDiscoveryOutput(
+        typeof response === 'string' ? response : response?.stdout || '',
+        nonce
+      )
     }
   })
   store.operationsHistory = taskStore.list()
@@ -111,6 +114,32 @@ export default Store => {
       store.operationsHistory = ensureRuntime(store).taskStore.list()
     })
     return active
+  }
+
+  Store.prototype.refreshOperationsCapabilities = async function () {
+    const store = window.store
+    const endpoint = resolveCurrentEndpoint()
+    if (!endpoint) {
+      store.operationsCapabilities = null
+      store.operationsCapabilitiesEndpointKey = ''
+      store.operationsDiscoveryStatus = 'disconnected'
+      return null
+    }
+    store.operationsDiscoveryStatus = 'loading'
+    store.operationsDiscoveryError = ''
+    try {
+      const capabilities = await ensureRuntime(store).runner.discover(endpoint)
+      store.operationsCapabilities = capabilities
+      store.operationsCapabilitiesEndpointKey =
+        `${endpoint.username}@${endpoint.host}:${endpoint.port}`
+      store.operationsDiscoveryStatus = 'ready'
+      return capabilities
+    } catch (error) {
+      store.operationsCapabilities = null
+      store.operationsDiscoveryStatus = 'failed'
+      store.operationsDiscoveryError = String(error?.message || error)
+      throw error
+    }
   }
 
   Store.prototype.cancelOperationsTask = async function (taskId) {

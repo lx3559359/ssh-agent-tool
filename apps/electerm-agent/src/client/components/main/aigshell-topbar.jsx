@@ -137,7 +137,7 @@ export default auto(function AIGShellTopBar ({ store }) {
   }
 
   function handleOpenQuickCommands () {
-    window.store.openQuickCommandBar = true
+    window.store.openOperationsToolkit('quick')
   }
 
   function isInteractiveTitleBarTarget (target) {
