@@ -33,14 +33,20 @@ test('session takeover controls wrap inside the current AI header dimensions', (
   assert.doesNotMatch(panelStyle, /agent-takeover[^\n]*width\s+\d+px/)
 })
 
-test('Agent send affordance uses the shared composer state model and loading icon', () => {
+test('AI composer exposes a fixed shared stop control for chat and Agent', () => {
   const aiChatSource = read('src/client/components/ai/ai-chat.jsx')
+  const stopIcon = read('src/client/components/ai/ai-stop-icon.jsx')
+  const style = read('src/client/components/ai/ai.styl')
 
   assert.match(aiChatSource, /const agentRunning = activeEndpoint[\s\S]*?agentTaskRegistry\.isEndpointBusy\(activeEndpoint\)[\s\S]*?agentTaskRegistry\.isScopeBusy\(conversationScopeId\)/)
-  assert.match(aiChatSource, /const submitDisabled = isAgent && agentRunning/)
+  assert.match(aiChatSource, /getActiveScopedAIChatRun\([\s\S]*?props\.aiChatHistory,[\s\S]*?conversationScopeId/)
+  assert.match(aiChatSource, /cancelScopedAIChatRun\(\{/)
   assert.match(aiChatSource, /getAgentComposerActionState\(\{[\s\S]*?isAgent,[\s\S]*?agentRunning,[\s\S]*?disabled: submitDisabled/)
-  assert.match(aiChatSource, /composerActionState\.kind === 'loading'[\s\S]*?<LoadingOutlined[\s\S]*?spin[\s\S]*?agent-send-running/)
+  assert.match(aiChatSource, /\['stop', 'stopping'\]\.includes\(composerActionState\.kind\)[\s\S]*?<AIStopIcon/)
   assert.match(aiChatSource, /<SendOutlined[\s\S]*?composerActionState\.disabled[\s\S]*?send-to-ai-icon/)
+  assert.match(stopIcon, /aria-label=/)
+  assert.match(stopIcon, /StopOutlined/)
+  assert.match(style, /\.ai-stop-icon-square[\s\S]*?width 28px[\s\S]*?height 28px/)
 })
 
 test('composer state renders disabled Send without pretending a task is running', async () => {

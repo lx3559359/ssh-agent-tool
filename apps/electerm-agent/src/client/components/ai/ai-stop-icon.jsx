@@ -1,15 +1,19 @@
-import { LoadingOutlined } from '@ant-design/icons'
+import { LoadingOutlined, StopOutlined } from '@ant-design/icons'
 
 const e = window.translate
 
 export default function AIStopIcon (props) {
+  const label = props.title || e('shellpilotAiStopRequest')
   return (
-    <div
-      className='ai-stop-icon-square mg1l pointer'
+    <button
+      type='button'
+      className='ai-stop-icon-square mg1l'
       onClick={props.onClick}
-      title={props.title || e('shellpilotAiStopRequest')}
+      title={label}
+      aria-label={label}
+      disabled={props.stopping}
     >
-      <LoadingOutlined spin />
-    </div>
+      {props.stopping ? <LoadingOutlined spin /> : <StopOutlined />}
+    </button>
   )
 }

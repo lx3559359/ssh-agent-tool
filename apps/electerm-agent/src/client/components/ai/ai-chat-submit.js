@@ -13,10 +13,17 @@ export function getAIChatSubmitAction ({
 }
 
 export function getAgentComposerActionState ({
+  activeRunStatus = '',
   isAgent = false,
   agentRunning = false,
   disabled = false
 } = {}) {
+  if (activeRunStatus === 'stopping') {
+    return Object.freeze({ kind: 'stopping', disabled: true })
+  }
+  if (['pending', 'running'].includes(activeRunStatus)) {
+    return Object.freeze({ kind: 'stop', disabled: false })
+  }
   if (isAgent && agentRunning) {
     return Object.freeze({ kind: 'loading', disabled: true })
   }

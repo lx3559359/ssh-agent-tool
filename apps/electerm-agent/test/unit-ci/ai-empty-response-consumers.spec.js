@@ -312,7 +312,7 @@ test('history item stops a known stream only after an explicit stop action', asy
   const source = read('src/client/components/ai/ai-chat-history-item.jsx')
   assert.match(
     source,
-    /async function handleStop[\s\S]*?getAIChatStreamSessionId\(item,\s*window\.store\)[\s\S]*?runGlobalAsync\('stopStream'/
+    /async function handleStop[\s\S]*?cancelScopedAIChatRun\(\{[\s\S]*?stopStream:\s*sessionId\s*=>\s*window\.pre\.runGlobalAsync\('stopStream'/
   )
   const effectStart = source.indexOf('useEffect(() => {')
   const effectEnd = source.indexOf('\n  async function handleStop', effectStart)
@@ -407,9 +407,10 @@ test('detached AI stream ignores a late response after explicit cancellation', a
 
 test('history item persists the initial request id and resumes detached streams', () => {
   const source = read('src/client/components/ai/ai-chat-history-item.jsx')
+  const cancellation = read('src/client/components/ai/ai-run-cancellation.js')
 
   assert.match(source, /completionStatus:\s*'running',\s*\n\s*requestId/)
-  assert.match(source, /getAIChatRequestId\(item,\s*window\.store\)/)
+  assert.match(cancellation, /getAIChatRequestId\(current,\s*store\)/)
   assert.match(source, /onInactiveResponse:\s*aiResponse\s*=>[\s\S]{0,900}startDetachedAIStream\(/)
   assert.match(source, /return \(\) => \{[\s\S]{0,700}startDetachedAIStream\(/)
 })
@@ -420,7 +421,7 @@ test('history item treats persisted completion status as authoritative after rem
   assert.match(source, /const requestIsRunning = item\.completionStatus === 'running' && isStreaming/)
   assert.match(source, /if \(!requestIsRunning\)[\s\S]{0,120}return null/)
   assert.match(source, /const retryDisabled = requestIsRunning/)
-  assert.match(source, /if \(latest\?\.completionStatus !== 'running'\)[\s\S]{0,160}return/)
+  assert.match(source, /if \(!\['pending', 'running', 'stopping'\]\.includes\(latest\?\.completionStatus\)\)[\s\S]{0,160}return/)
 })
 
 test('initial request rejection after disposal persists a failed state', () => {

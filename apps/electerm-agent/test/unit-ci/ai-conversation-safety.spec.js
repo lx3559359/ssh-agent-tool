@@ -436,7 +436,8 @@ test('chat cancellation invalidates late polling and request failures stay visib
   assert.match(historyItem, /completionStatus:\s*'failed'/)
   assert.match(historyItem, /response:\s*buildAIRequestFailureText/)
   assert.match(historyItem, /setIsStreaming\(true\)[\s\S]*runGlobalAsync\(\s*'AIchat'/)
-  assert.match(historyItem, /runGlobalAsync\(\s*'AIChatCancel',\s*initialRequestId/)
+  assert.match(historyItem, /cancelScopedAIChatRun\(\{/)
+  assert.match(historyItem, /cancelRequest:\s*requestId\s*=>\s*window\.pre\.runGlobalAsync\('AIChatCancel',\s*requestId\)/)
   assert.match(
     historyItem,
     /const pollStreamContent = useCallback[\s\S]{0,500}const isActive = \(\) => \([\s\S]{0,250}shouldApplyAIChatAsyncUpdate\(window\.store,\s*item\.id\)/
@@ -529,7 +530,8 @@ test('remounted Agent stop awaits and reports task registry cancellation failure
     'utf8'
   )
   assert.match(agent, /return agentTaskRegistry\.cancel\(taskId\)/)
-  assert.match(historyItem, /else\s*\{[\s\S]*?await cancelAgentRun\(item\.id\)[\s\S]*?cancellationError = error/)
+  assert.match(historyItem, /abortRef\.cancelCurrent[\s\S]*?\? abortRef\.cancelCurrent\(\)[\s\S]*?: cancelAgentRun\(item\.id\)/)
+  assert.match(historyItem, /cancelScopedAIChatRun\(\{/)
 })
 
 test('long chat history avoids rerendering every unchanged message', () => {

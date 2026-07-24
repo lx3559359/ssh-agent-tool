@@ -1,4 +1,5 @@
 import { buildAgentCancellationUpdate } from './agent-cancellation-status.js'
+import { sanitizeAIStoredText } from './ai-request-credentials.js'
 import {
   cancelAIChatEntryLifecycle,
   getAIChatHistoryForScope,
@@ -87,7 +88,9 @@ async function cancelRunOnce ({
   updateAIChatHistoryEntry(store, id, buildAgentCancellationUpdate({
     response: finalEntry.response,
     stoppedText,
-    error: cancellationError
+    error: cancellationError && sanitizeAIStoredText(
+      cancellationError?.message || cancellationError
+    )
   }))
 
   return {
@@ -104,10 +107,11 @@ export function cancelScopedAIChatRun (options = {}) {
 
   const cancellation = cancelRunOnce(options)
   cancellations.set(id, cancellation)
-  cancellation.finally(() => {
+  const cleanup = () => {
     if (cancellations.get(id) === cancellation) {
       cancellations.delete(id)
     }
-  })
+  }
+  cancellation.then(cleanup, cleanup)
   return cancellation
 }

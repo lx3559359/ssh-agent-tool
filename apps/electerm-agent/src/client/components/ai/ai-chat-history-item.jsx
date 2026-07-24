@@ -18,20 +18,18 @@ import download from '../../common/download'
 import { normalizeAsyncResult } from '../../common/async-result.js'
 import aiAgentCopy from './ai-agent-copy.json'
 import uid from '../../common/uid'
-import { buildAgentCancellationUpdate } from './agent-cancellation-status.js'
 import { buildAgentDiagnosticReportFiles } from './agent-diagnostic-report'
 import {
   appendAIChatHistory,
   buildAIChatRole,
-  cancelAIChatEntryLifecycle,
   createRetryChatEntry,
   getAIChatCopyText,
-  getAIChatRequestId,
   getAIChatStreamSessionId,
   getAIChatTraceId,
   recoverInterruptedAIChatEntry,
   updateAIChatHistoryEntry
 } from './ai-chat-actions'
+import { cancelScopedAIChatRun } from './ai-run-cancellation.js'
 import { buildAIConversationMessages } from './ai-conversation-context'
 import {
   createAIStoredTextAccumulator,
@@ -724,63 +722,44 @@ export default memo(function AIChatHistoryItem ({
   async function handleStop (e) {
     e.stopPropagation()
     const latest = window.store.aiChatHistory?.find(chat => chat.id === item.id)
-    if (latest?.completionStatus !== 'running') {
+    if (!['pending', 'running', 'stopping'].includes(latest?.completionStatus)) {
       setIsStreaming(false)
-      return
-    }
-    const initialRequestId = getAIChatRequestId(item, window.store) || initialRequestIdRef.current
-    const activeSessionId = getAIChatStreamSessionId(item, window.store)
-    if (mode === 'agent') {
-      cancelAIChatEntryLifecycle(window.store, item)
-      finishAIQuality(qualityStateRef.current, 'cancelled', 'cancelled')
-      abortRef.current = true
-      setIsStreaming(false)
-      let cancellationError
-      if (abortRef.cancelCurrent) {
-        await abortRef.cancelCurrent().catch(error => {
-          cancellationError = error
-          window.store.onError?.(error)
-        })
-      } else {
-        await cancelAgentRun(item.id).catch(error => {
-          cancellationError = error
-          window.store.onError?.(error)
-        })
-      }
-      const current = window.store.aiChatHistory?.find(chat => chat.id === item.id)
-      updateAIChatHistoryEntry(window.store, item.id, buildAgentCancellationUpdate({
-        response: current?.response || item.response,
-        stoppedText: aiAgentCopy.stoppedText,
-        error: cancellationError && sanitizeAIStoredText(
-          cancellationError?.message || cancellationError
-        )
-      }))
       return
     }
     requestEpochRef.current += 1
-    cancelDetachedAIStream(item.id)
     streamPollingRef.current = ''
     if (pollTimerRef.current !== null) {
       clearTimeout(pollTimerRef.current)
       pollTimerRef.current = null
     }
     setIsStreaming(false)
-    cancelAIChatEntryLifecycle(window.store, item)
-    finishAIQuality(qualityStateRef.current, 'cancelled', 'cancelled')
     initialRequestIdRef.current = ''
-    if (initialRequestId) {
-      try {
-        await window.pre.runGlobalAsync('AIChatCancel', initialRequestId)
-      } catch (error) {
-        console.error('Error cancelling AI request:', error)
+    const result = await cancelScopedAIChatRun({
+      store: window.store,
+      item: latest,
+      cancelAgent: async () => {
+        abortRef.current = true
+        return abortRef.cancelCurrent
+          ? abortRef.cancelCurrent()
+          : cancelAgentRun(item.id)
+      },
+      cancelDetachedStream: cancelDetachedAIStream,
+      cancelRequest: requestId => window.pre.runGlobalAsync('AIChatCancel', requestId),
+      stopStream: sessionId => window.pre.runGlobalAsync('stopStream', sessionId),
+      stoppedText: mode === 'agent'
+        ? aiAgentCopy.stoppedText
+        : e('shellpilotAiStoppedByUser'),
+      recordQualityEvent: (context, event) => {
+        finishAIQuality(
+          qualityStateRef.current,
+          event.phase,
+          event.result
+        )
+        return true
       }
-    }
-    if (!activeSessionId) return
-
-    try {
-      await window.pre.runGlobalAsync('stopStream', activeSessionId)
-    } catch (error) {
-      console.error('Error stopping stream:', error)
+    })
+    if (result.error) {
+      window.store.onError?.(result.error)
     }
   }
 

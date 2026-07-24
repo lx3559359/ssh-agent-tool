@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { Flex, Input, Popconfirm, Segmented } from 'antd'
 import TabSelect from '../footer/tab-select'
 import AiChatHistory from './ai-chat-history'
+import AIStopIcon from './ai-stop-icon'
 import uid from '../../common/uid'
 import { pick } from 'lodash-es'
 import {
@@ -30,6 +31,10 @@ import {
 } from './ai-chat-actions'
 import { cancelAgentRun } from './agent'
 import { cancelDetachedAIStream } from './ai-chat-history-item'
+import {
+  cancelScopedAIChatRun,
+  getActiveScopedAIChatRun
+} from './ai-run-cancellation.js'
 import {
   buildCommandSuggestionPrompt,
   buildTerminalContextPrompt
@@ -88,8 +93,17 @@ export default function AIChat (props) {
   const agentRunning = activeEndpoint
     ? agentTaskRegistry.isEndpointBusy(activeEndpoint)
     : agentTaskRegistry.isScopeBusy(conversationScopeId)
-  const submitDisabled = isAgent && agentRunning
+  const visibleHistory = getAIChatHistoryForScope(
+    props.aiChatHistory,
+    conversationScopeId
+  )
+  const activeRun = getActiveScopedAIChatRun(
+    props.aiChatHistory,
+    conversationScopeId
+  )
+  const submitDisabled = Boolean(activeRun) || (isAgent && agentRunning)
   const composerActionState = getAgentComposerActionState({
+    activeRunStatus: activeRun?.completionStatus,
     isAgent,
     agentRunning,
     disabled: submitDisabled
@@ -98,11 +112,6 @@ export default function AIChat (props) {
     () => getActiveAIConfig(props.config),
     [props.config]
   )
-  const visibleHistory = getAIChatHistoryForScope(
-    props.aiChatHistory,
-    conversationScopeId
-  )
-
   useEffect(() => {
     if (props.activeTabId) {
       adoptLegacyAIChatHistoryScope(window.store, conversationScopeId)
@@ -224,6 +233,22 @@ export default function AIChat (props) {
     props.activeTabId,
     conversationScopeId
   ])
+
+  const handleStopActiveRun = useCallback(async () => {
+    if (!activeRun) return
+    const result = await cancelScopedAIChatRun({
+      store: window.store,
+      item: activeRun,
+      cancelAgent: cancelAgentRun,
+      cancelDetachedStream: cancelDetachedAIStream,
+      cancelRequest: requestId => window.pre.runGlobalAsync('AIChatCancel', requestId),
+      stopStream: sessionId => window.pre.runGlobalAsync('stopStream', sessionId),
+      stoppedText: e('shellpilotAiStoppedByUser')
+    })
+    if (result.error) {
+      window.store.onError?.(result.error)
+    }
+  }, [activeRun])
 
   function renderHistory () {
     return (
@@ -423,6 +448,15 @@ export default function AIChat (props) {
   }
 
   function renderSendIcon () {
+    if (['stop', 'stopping'].includes(composerActionState.kind)) {
+      return (
+        <AIStopIcon
+          onClick={handleStopActiveRun}
+          stopping={composerActionState.kind === 'stopping'}
+          title={e('shellpilotAiStopRequest')}
+        />
+      )
+    }
     if (composerActionState.kind === 'loading') {
       return (
         <LoadingOutlined
@@ -610,7 +644,10 @@ export default function AIChat (props) {
     }
     if (!e.shiftKey) {
       e.preventDefault()
-      if (!composerActionState.disabled) {
+      if (
+        composerActionState.kind === 'send' &&
+        !composerActionState.disabled
+      ) {
         handleSubmit()
       }
     }

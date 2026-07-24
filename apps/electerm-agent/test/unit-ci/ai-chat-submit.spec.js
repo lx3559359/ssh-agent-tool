@@ -84,3 +84,30 @@ test('AI terminal context submit passes the generated prompt directly instead of
     /refsStatic\.get\('AIChat'\)\?\.handleSubmit\(prompt\)/
   )
 })
+
+test('AI composer switches between send stop and stopping states', async () => {
+  const {
+    getAgentComposerActionState
+  } = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/components/ai/ai-chat-submit.js'
+  )))
+
+  assert.deepEqual(getAgentComposerActionState({
+    activeRunStatus: 'running'
+  }), { kind: 'stop', disabled: false })
+  assert.deepEqual(getAgentComposerActionState({
+    activeRunStatus: 'pending'
+  }), { kind: 'stop', disabled: false })
+  assert.deepEqual(getAgentComposerActionState({
+    activeRunStatus: 'stopping'
+  }), { kind: 'stopping', disabled: true })
+  assert.deepEqual(getAgentComposerActionState({
+    isAgent: true,
+    agentRunning: true
+  }), { kind: 'loading', disabled: true })
+  assert.deepEqual(getAgentComposerActionState({
+    isAgent: false,
+    agentRunning: false
+  }), { kind: 'send', disabled: false })
+})
