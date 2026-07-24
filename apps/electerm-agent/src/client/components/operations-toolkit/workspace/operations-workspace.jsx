@@ -8,7 +8,9 @@ import {
   Tag
 } from 'antd'
 import {
+  CheckCircleOutlined,
   CloseOutlined,
+  HistoryOutlined,
   ReloadOutlined,
   SafetyCertificateOutlined
 } from '@ant-design/icons'
@@ -16,6 +18,10 @@ import QuickCommandsFooterBox from '../../quick-commands/quick-commands-box'
 import message from '../../common/message'
 import { refsStatic } from '../../common/ref'
 import { getOperationsCatalog, getOperationsTool } from '../catalog'
+import {
+  getSafeMaintenanceCommands,
+  isSafeMaintenanceCommand
+} from '../catalog/maintenance.js'
 import { hiddenQuickActionIds } from '../catalog/migrations'
 import { buildOperationsAIContext } from '../shared/ai-context'
 import { formatShellPilotTranslation } from '../../../common/shellpilot-i18n-overrides.js'
@@ -38,6 +44,9 @@ const tabs = [
 function OperationsWorkspace (props) {
   const { store, shellGeometry } = props
   const tools = getOperationsCatalog()
+  const maintenanceTools = getSafeMaintenanceCommands(
+    store.currentQuickCommands || []
+  )
   const [selectedToolId, setSelectedToolId] = useState(tools[0]?.id || '')
   const [keyword, setKeyword] = useState('')
   const [category, setCategory] = useState('全部')
@@ -197,17 +206,72 @@ function OperationsWorkspace (props) {
     )
   }
 
+  function renderMaintenance () {
+    const openSafetyCenter = () => {
+      window.dispatchEvent(new CustomEvent('shellpilot-open-safety-center'))
+    }
+    return (
+      <div className='operations-maintenance'>
+        <section className='operations-maintenance-safety'>
+          <div className='operations-maintenance-guarantees'>
+            <div>
+              <SafetyCertificateOutlined />
+              <span>
+                <strong>{e('shellpilotOperationsBackupBeforeChange')}</strong>
+                <small>{e('shellpilotOperationsBackupBeforeChangeHint')}</small>
+              </span>
+            </div>
+            <div>
+              <CheckCircleOutlined />
+              <span>
+                <strong>{e('shellpilotOperationsVerifyAfterChange')}</strong>
+                <small>{e('shellpilotOperationsVerifyAfterChangeHint')}</small>
+              </span>
+            </div>
+            <div>
+              <HistoryOutlined />
+              <span>
+                <strong>{e('shellpilotOperationsRollbackFromCenter')}</strong>
+                <small>{e('shellpilotOperationsRollbackFromCenterHint')}</small>
+              </span>
+            </div>
+          </div>
+          <Button onClick={openSafetyCenter}>
+            {e('shellpilotOperationsOpenSafetyCenter')}
+          </Button>
+        </section>
+        <div className='operations-maintenance-catalog'>
+          <QuickCommandsFooterBox
+            {...props}
+            embedded
+            commandFilter={isSafeMaintenanceCommand}
+            panelTitle={e('shellpilotOperationsMaintenanceCatalog')}
+            panelSubtitle={tf('shellpilotOperationsMaintenanceCatalogHint', {
+              count: maintenanceTools.length
+            })}
+            initialLabel=''
+            persistFilters={false}
+            showRiskFilter={false}
+            showPanelActions={false}
+          />
+        </div>
+      </div>
+    )
+  }
+
   function renderContent () {
     if (store.operationsToolkitTab === 'quick') {
       return (
         <QuickCommandsFooterBox
+          {...props}
           embedded
           hiddenCommandIds={hiddenQuickActionIds}
-          {...props}
+          showPanelActions={false}
         />
       )
     }
     if (store.operationsToolkitTab === 'diagnostic') return renderDiagnostic()
+    if (store.operationsToolkitTab === 'maintenance') return renderMaintenance()
     if (store.operationsToolkitTab === 'history') {
       return (
         <ResultViewer

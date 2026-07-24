@@ -40,6 +40,17 @@ test('operations workspace exposes quick actions and readonly diagnostics withou
     await workspace.locator('.operations-workspace-tabs').getByText('快捷操作').click()
     await expect(workspace.locator('.qm-wrap-embedded')).toBeVisible()
 
+    await workspace.locator('.operations-workspace-tabs').getByText('安全维护').click()
+    await expect(workspace.locator('.operations-maintenance-safety')).toContainText('修改前自动保护')
+    await expect(workspace.locator('.operations-maintenance-safety')).toContainText('执行后自动校验')
+    await expect(workspace.locator('.operations-maintenance-safety')).toContainText('安全中心一键回滚')
+    await expect(workspace.locator('.qm-item')).toHaveCount(11)
+    await expect(workspace.locator('.qm-panel-subtitle')).toContainText('共 11 项')
+    await expect(workspace.locator('.qm-risk-select')).toHaveCount(0)
+    await workspace.getByRole('button', { name: '打开安全中心' }).click()
+    await expect(page.locator('.safety-operation-center-modal')).toBeVisible()
+    await page.keyboard.press('Escape')
+
     await workspace.locator('button[aria-label="关闭运维工具"]').click()
     await expect(workspace).toBeHidden()
   } catch (error) {

@@ -68,8 +68,10 @@ const targetDiscoveryMessageKeys = Object.freeze({
 
 export default function QuickCommandsFooterBox (props) {
   const [keyword, setKeyword] = useState('')
-  const [label, setLabel] = useState(ls.getItem(quickCommandLabelsLsKey, ''))
-  const [riskFilter, setRiskFilter] = useState('all')
+  const [label, setLabel] = useState(
+    props.initialLabel ?? ls.getItem(quickCommandLabelsLsKey, '')
+  )
+  const [riskFilter, setRiskFilter] = useState(props.initialRiskFilter || 'all')
   const [pendingCommand, setPendingCommand] = useState(null)
   const [showPendingPreview, setShowPendingPreview] = useState(false)
   const [networkProbe, setNetworkProbe] = useState({ loading: false, error: '', detected: null })
@@ -480,7 +482,9 @@ export default function QuickCommandsFooterBox (props) {
   }
 
   function handleChangeLabels (v) {
-    ls.setItem(quickCommandLabelsLsKey, v || '')
+    if (props.persistFilters !== false) {
+      ls.setItem(quickCommandLabelsLsKey, v || '')
+    }
     setLabel(v)
   }
 
@@ -918,9 +922,12 @@ export default function QuickCommandsFooterBox (props) {
     (!inActiveTerminal && !props.embedded)) {
     return null
   }
-  const all = props.hiddenCommandIds
-    ? props.currentQuickCommands.filter(item => !props.hiddenCommandIds.has(item.id))
+  const scopedCommands = typeof props.commandFilter === 'function'
+    ? props.currentQuickCommands.filter(props.commandFilter)
     : props.currentQuickCommands
+  const all = props.hiddenCommandIds
+    ? scopedCommands.filter(item => !props.hiddenCommandIds.has(item.id))
+    : scopedCommands
   // if (!all.length) {
   //   return renderNoCmd()
   // }
@@ -936,6 +943,9 @@ export default function QuickCommandsFooterBox (props) {
     className: 'qm-label-select',
     allowClear: true
   }
+  const availableLabels = Array.from(new Set(
+    all.flatMap(item => item.labels || [])
+  ))
   const tp = pinnedQuickCommandBar
     ? 'primary'
     : 'text'
@@ -971,8 +981,12 @@ export default function QuickCommandsFooterBox (props) {
       <div className='pd2'>
         <Flex className='qm-panel-head' justify='space-between' align='center'>
           <div>
-            <div className='qm-panel-title'>{e('shellpilotQuickCommands')}</div>
-            <div className='qm-panel-subtitle'>{e('shellpilotQuickCommandsDescription')}</div>
+            <div className='qm-panel-title'>
+              {props.panelTitle || e('shellpilotQuickCommands')}
+            </div>
+            <div className='qm-panel-subtitle'>
+              {props.panelSubtitle || e('shellpilotQuickCommandsDescription')}
+            </div>
           </div>
           <div className='qm-panel-count'>{sorted.length}/{all.length}</div>
         </Flex>
@@ -984,22 +998,26 @@ export default function QuickCommandsFooterBox (props) {
             className='qm-search-input'
           />
           <Flex gap='small'>
-            <Select
-              value={riskFilter}
-              onChange={setRiskFilter}
-              className='qm-risk-select'
-              aria-label={e('shellpilotQuickRiskFilter')}
-            >
-              <Option value='all'>{e('shellpilotQuickFilterAll')}</Option>
-              <Option value='readonly'>{e('shellpilotQuickFilterReadonly')}</Option>
-              <Option value='edit'>{e('shellpilotQuickFilterEdit')}</Option>
-              <Option value='highrisk'>{e('shellpilotQuickFilterHighRisk')}</Option>
-              <Option value='rollback'>{e('shellpilotQuickFilterRollback')}</Option>
-            </Select>
+            {props.showRiskFilter === false
+              ? null
+              : (
+                <Select
+                  value={riskFilter}
+                  onChange={setRiskFilter}
+                  className='qm-risk-select'
+                  aria-label={e('shellpilotQuickRiskFilter')}
+                >
+                  <Option value='all'>{e('shellpilotQuickFilterAll')}</Option>
+                  <Option value='readonly'>{e('shellpilotQuickFilterReadonly')}</Option>
+                  <Option value='edit'>{e('shellpilotQuickFilterEdit')}</Option>
+                  <Option value='highrisk'>{e('shellpilotQuickFilterHighRisk')}</Option>
+                  <Option value='rollback'>{e('shellpilotQuickFilterRollback')}</Option>
+                </Select>
+                )}
             <Select
               {...sprops}
             >
-              {props.quickCommandTags.map(
+              {availableLabels.map(
                 renderTag
               )}
             </Select>
@@ -1010,22 +1028,26 @@ export default function QuickCommandsFooterBox (props) {
               {e('sortByFrequency')}
             </Button>
           </Flex>
-          <Space.Compact className='mg2l'>
-            <Button
-              onClick={handleTogglePinned}
-              icon={<PushpinOutlined />}
-              type={tp}
-              aria-label={pinnedQuickCommandBar ? e('shellpilotQuickUnpinPanel') : e('shellpilotQuickPinPanel')}
-            />
-            <Button
-              onClick={window.store.handleOpenQuickCommandsSetting}
-              icon={<EditOutlined />}
-            />
-            <Button
-              onClick={handleClose}
-              icon={<CloseCircleOutlined />}
-            />
-          </Space.Compact>
+          {props.showPanelActions === false
+            ? null
+            : (
+              <Space.Compact className='mg2l'>
+                <Button
+                  onClick={handleTogglePinned}
+                  icon={<PushpinOutlined />}
+                  type={tp}
+                  aria-label={pinnedQuickCommandBar ? e('shellpilotQuickUnpinPanel') : e('shellpilotQuickPinPanel')}
+                />
+                <Button
+                  onClick={window.store.handleOpenQuickCommandsSetting}
+                  icon={<EditOutlined />}
+                />
+                <Button
+                  onClick={handleClose}
+                  icon={<CloseCircleOutlined />}
+                />
+              </Space.Compact>
+              )}
         </Flex>
         {renderRollbackRecord()}
         <div className={cls}>

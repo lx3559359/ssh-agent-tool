@@ -322,6 +322,63 @@
   align-items center
   justify-content center
 
+.operations-maintenance
+  height 100%
+  min-height 0
+  padding 0 14px 14px
+  display flex
+  flex-direction column
+  gap 10px
+
+.operations-maintenance-safety
+  flex 0 0 auto
+  padding 10px 12px
+  display flex
+  align-items center
+  gap 12px
+  border 1px solid var(--main-darker)
+  border-radius 8px
+  background var(--main-light)
+  > button
+    flex 0 0 auto
+
+.operations-maintenance-guarantees
+  flex 1
+  min-width 0
+  display grid
+  grid-template-columns repeat(3, minmax(0, 1fr))
+  gap 10px
+  > div
+    min-width 0
+    display flex
+    align-items flex-start
+    gap 8px
+    > svg
+      flex 0 0 auto
+      margin-top 2px
+      color var(--primary)
+    > span
+      min-width 0
+      display flex
+      flex-direction column
+      gap 2px
+      strong
+        color var(--text-light)
+        font-size 12px
+      small
+        color var(--text-dark)
+        font-size 11px
+        line-height 1.4
+
+.operations-maintenance-catalog
+  flex 1
+  min-height 0
+  overflow hidden
+  border: 1px solid var(--main-darker)
+  border-radius 8px
+  .qm-wrap-embedded
+    background var(--main-light)
+
 @media (max-width: 900px)
   .operations-toolkit-workspace
     left 8px !important
@@ -330,6 +387,10 @@
     grid-template-columns minmax(200px, 36%) minmax(0, 1fr)
   .operations-parameter-grid
     grid-template-columns 1fr
+  .operations-maintenance-guarantees
+    grid-template-columns 1fr
+  .operations-maintenance-safety
+    align-items flex-end
 
 @media (max-height: 620px)
   .operations-toolkit-workspace
