@@ -914,10 +914,13 @@ export default function QuickCommandsFooterBox (props) {
     inActiveTerminal,
     shellGeometry
   } = props
-  if ((!openQuickCommandBar && !pinnedQuickCommandBar) || !inActiveTerminal) {
+  if ((!openQuickCommandBar && !pinnedQuickCommandBar) ||
+    (!inActiveTerminal && !props.embedded)) {
     return null
   }
-  const all = props.currentQuickCommands
+  const all = props.hiddenCommandIds
+    ? props.currentQuickCommands.filter(item => !props.hiddenCommandIds.has(item.id))
+    : props.currentQuickCommands
   // if (!all.length) {
   //   return renderNoCmd()
   // }
@@ -946,10 +949,16 @@ export default function QuickCommandsFooterBox (props) {
       }
     : {}
   const qmProps = {
-    className: 'qm-wrap-tooltip',
+    className: classNames('qm-wrap-tooltip', {
+      'qm-wrap-embedded': props.embedded
+    }),
     style: {
-      left,
-      '--quick-command-right-offset': `${right + 10}px`,
+      ...(props.embedded
+        ? {}
+        : {
+            left,
+            '--quick-command-right-offset': `${right + 10}px`
+          }),
       ...pinnedGeometry
     },
     onMouseLeave: handleMouseLeave,
