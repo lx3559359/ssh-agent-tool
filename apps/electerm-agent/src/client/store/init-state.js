@@ -121,6 +121,7 @@ export default () => {
     rightPanelVisible: true,
     rightPanelTab: 'ai',
     rightPanelPinned: true,
+    rightPanelAutoExpanded: false,
     rightPanelWidth: normalizeRightPanelWidth(ls.getItem(rightSidebarWidthKey)),
     showAIConfigModal: false,
 

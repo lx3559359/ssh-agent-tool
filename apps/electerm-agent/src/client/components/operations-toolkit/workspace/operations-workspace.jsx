@@ -40,6 +40,12 @@ const tabs = [
   { value: 'custom', label: e('shellpilotOperationsMyTools') },
   { value: 'history', label: e('shellpilotOperationsHistory') }
 ]
+const recommendedDiagnosticIds = [
+  'service.inventory-health',
+  'network.tcp-connections',
+  'logs.system-anomaly-summary',
+  'network.interface-health'
+]
 
 function OperationsWorkspace (props) {
   const { store, shellGeometry } = props
@@ -135,6 +141,38 @@ function OperationsWorkspace (props) {
     }
   }
 
+  function handleRecommendedDiagnostic (toolId) {
+    const tool = getOperationsTool(toolId)
+    if (!tool) return
+    setSelectedToolId(tool.id)
+    setParams(buildParameterDefaults(tool))
+    store.operationsToolkitTab = 'diagnostic'
+  }
+
+  function renderRecommendedFlow () {
+    const items = recommendedDiagnosticIds
+      .map(id => getOperationsTool(id))
+      .filter(Boolean)
+    if (!items.length) return null
+    return (
+      <section className='operations-recommended-flow' aria-label={e('shellpilotOperationsRecommendedFlow')}>
+        <span>{e('shellpilotOperationsRecommendedFlow')}</span>
+        <div>
+          {items.map((tool, index) => (
+            <Button
+              key={tool.id}
+              type='text'
+              size='small'
+              onClick={() => handleRecommendedDiagnostic(tool.id)}
+            >
+              {index + 1}. {tool.title}
+            </Button>
+          ))}
+        </div>
+      </section>
+    )
+  }
+
   function renderReadOnlyWorkspace ({
     className,
     catalogTools,
@@ -195,7 +233,15 @@ function OperationsWorkspace (props) {
                   {e('shellpilotOperationsRediscover')}
                 </Button>
                 )
-              : null}
+              : (
+                <Button
+                  type='link'
+                  size='small'
+                  onClick={() => window.store.onNewSsh()}
+                >
+                  {e('shellpilotOperationsConnectServer')}
+                </Button>
+                )}
           </div>
           {store.operationsDiscoveryError
             ? <div className='operations-discovery-error'>{store.operationsDiscoveryError}</div>
@@ -220,17 +266,26 @@ function OperationsWorkspace (props) {
           <div className='operations-run-actions'>
             <Button
               type='primary'
-              disabled={!endpoint}
-              onClick={() => handleRun(tool, values)}
+              onClick={() => {
+                if (!endpoint) {
+                  window.store.onNewSsh()
+                  return
+                }
+                handleRun(tool, values)
+              }}
             >
-              {script
-                ? e('shellpilotOperationsRunScript')
-                : e('shellpilotOperationsRunReadonly')}
+              {!endpoint
+                ? e('shellpilotOperationsConnectAndRun')
+                : (script
+                    ? e('shellpilotOperationsRunScript')
+                    : e('shellpilotOperationsRunReadonly'))}
             </Button>
             <span>
-              {script
-                ? e('shellpilotOperationsRunbookNoConfirmation')
-                : e('shellpilotOperationsNoConfirmation')}
+              {!endpoint
+                ? e('shellpilotOperationsDisconnectedHint')
+                : (script
+                    ? e('shellpilotOperationsRunbookNoConfirmation')
+                    : e('shellpilotOperationsNoConfirmation'))}
             </span>
           </div>
           {visibleTask
@@ -410,6 +465,7 @@ function OperationsWorkspace (props) {
         value={store.operationsToolkitTab}
         onChange={value => { store.operationsToolkitTab = value }}
       />
+      {renderRecommendedFlow()}
       <div className='operations-workspace-body'>
         {store.operationsDiscoveryStatus === 'loading' &&
         ['diagnostic', 'custom'].includes(store.operationsToolkitTab) &&

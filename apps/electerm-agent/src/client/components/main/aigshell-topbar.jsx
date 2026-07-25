@@ -19,6 +19,7 @@ import LazyModuleBoundary from '../common/lazy-module-boundary'
 import { auto } from 'manate/react'
 import { Button, Popover, Tooltip } from 'antd'
 import QuickConnect from '../tabs/quick-connect'
+import QuickConnectWizard from '../tabs/quick-connect-wizard'
 import WindowControl from '../tabs/window-control'
 import ConnectionInventoryModal from '../tree-list/connection-inventory-modal'
 import ConnectionInfoModal from '../tree-list/connection-info-modal'
@@ -43,6 +44,7 @@ export default auto(function AIGShellTopBar ({ store }) {
   const [showHelpCenter, setShowHelpCenter] = useState(false)
   const [showSafetyCenter, setShowSafetyCenter] = useState(false)
   const [showServerStatus, setShowServerStatus] = useState(false)
+  const [showConnectionWizard, setShowConnectionWizard] = useState(false)
   const [connectionInfoBookmark, setConnectionInfoBookmark] = useState(null)
   const titleBarDraggingRef = useRef(false)
   const currentTab = store.tabs.find(tab => tab.id === store.activeTabId) || store.currentTab || {}
@@ -60,11 +62,17 @@ export default auto(function AIGShellTopBar ({ store }) {
       setShowUpdateCenter(true)
       window.store.upgradeInfo.showUpdateCenter = true
     }
+    const openConnectionWizard = () => setShowConnectionWizard(true)
+    const openHelpCenter = () => setShowHelpCenter(true)
     window.addEventListener('shellpilot-open-safety-center', openSafetyCenter)
     window.addEventListener('shellpilot-open-update-center', openUpdateCenter)
+    window.addEventListener('shellpilot-open-connect-wizard', openConnectionWizard)
+    window.addEventListener('shellpilot-open-help-center', openHelpCenter)
     return () => {
       window.removeEventListener('shellpilot-open-safety-center', openSafetyCenter)
       window.removeEventListener('shellpilot-open-update-center', openUpdateCenter)
+      window.removeEventListener('shellpilot-open-connect-wizard', openConnectionWizard)
+      window.removeEventListener('shellpilot-open-help-center', openHelpCenter)
     }
   }, [])
 
@@ -368,6 +376,10 @@ export default auto(function AIGShellTopBar ({ store }) {
         }
       </div>
       <WindowControl store={store} />
+      <QuickConnectWizard
+        open={showConnectionWizard}
+        onClose={() => setShowConnectionWizard(false)}
+      />
       {
         showConnectionInventory
           ? (

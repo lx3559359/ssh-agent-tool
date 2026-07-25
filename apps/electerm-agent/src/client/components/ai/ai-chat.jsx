@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
-import { Flex, Input, Popconfirm, Segmented } from 'antd'
+import { Button, Flex, Input, Popconfirm, Segmented } from 'antd'
 import TabSelect from '../footer/tab-select'
 import AiChatHistory from './ai-chat-history'
 import AIStopIcon from './ai-stop-icon'
@@ -604,6 +604,24 @@ export default function AIChat (props) {
 
   if (props.rightPanelTab !== 'ai') {
     return null
+  }
+
+  const aiConfigured = Boolean(
+    String(activeAIConfig.baseURLAI || '').trim() &&
+    String(activeAIConfig.apiKeyAI || '').trim()
+  )
+
+  if (!aiConfigured) {
+    return (
+      <Flex vertical className='ai-chat-container ai-chat-unconfigured' align='center' justify='center'>
+        <ToolOutlined className='ai-chat-unconfigured-icon' />
+        <strong>{e('shellpilotAiUnconfigured')}</strong>
+        <span>{e('shellpilotAiConfigureHint')}</span>
+        <Button type='primary' onClick={toggleConfig}>
+          {e('shellpilotAiApiConfiguration')}
+        </Button>
+      </Flex>
+    )
   }
 
   const handleKeyPress = (e) => {

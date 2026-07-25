@@ -1,4 +1,5 @@
 import { Input, InputNumber, Select } from 'antd'
+import { normalizeOperationsParameterValue } from './parameter-value.js'
 
 const e = window.translate
 
@@ -54,7 +55,10 @@ export default function ParameterForm ({
         const common = {
           disabled,
           value: values[parameter.id],
-          onChange: value => onChange(parameter.id, value)
+          onChange: value => onChange(
+            parameter.id,
+            normalizeOperationsParameterValue(value)
+          )
         }
         return (
           <label className='operations-parameter-field' key={parameter.id}>

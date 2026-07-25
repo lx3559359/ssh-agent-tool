@@ -53,14 +53,19 @@ export default Store => {
     }
   }
 
-  Store.prototype.onNewSsh = function () {
+  Store.prototype.openAdvancedSsh = function () {
     const { store } = window
-    beginTerminalWorkspaceIntent(store)
     store.storeAssign({
       settingTab: settingMap.bookmarks
     })
     store.setSettingItem(getInitItem([], settingMap.bookmarks))
     store.openSettingModal()
+  }
+
+  Store.prototype.onNewSsh = function () {
+    const { store } = window
+    beginTerminalWorkspaceIntent(store)
+    window.dispatchEvent(new Event('shellpilot-open-connect-wizard'))
   }
 
   Store.prototype.onNewSshAI = function () {
@@ -71,7 +76,7 @@ export default Store => {
       return
     }
     window.et.openBookmarkWithAIMode = true
-    store.onNewSsh()
+    store.openAdvancedSsh()
   }
 
   Store.prototype.confirmExit = function (type) {

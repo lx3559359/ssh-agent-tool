@@ -116,7 +116,7 @@ describe('AI Config and Suggestions', function () {
         showCmdSuggestions: true
       })
     })
-    await client.getByRole('button', { name: /模型\s*API|Model API/i }).click()
+    await client.locator('.aigshell-topbar-action[data-action-key="model"]').click()
 
     await expect(client.locator('.ai-config-modal .ai-config-form')).toBeVisible({ timeout: 10000 })
 
@@ -126,6 +126,14 @@ describe('AI Config and Suggestions', function () {
 
     await client.click('.ai-config-form button[type="submit"]')
     await expect(client.locator('.ai-config-modal .ai-config-form')).not.toBeVisible({ timeout: 10000 })
+  })
+
+  it('opens configuration from the unconfigured AI status', async function () {
+    const status = client.locator('.right-panel-model-status')
+    await expect(status).toBeVisible({ timeout: 10000 })
+    await expect(status).toHaveClass(/not-configured/)
+    await status.click()
+    await expect(client.locator('.ai-config-modal .ai-config-form')).toBeVisible({ timeout: 10000 })
   })
 
   it('should verify AI functionality after configuration', async function () {
@@ -144,7 +152,18 @@ describe('AI Config and Suggestions', function () {
   })
 
   it('should test AI suggestions functionality', async function () {
-    const previousTabId = await client.evaluate(async profile => {
+    await client.locator('.add-new-tab-btn').click()
+    await client.locator('.session-current .term-wrap').waitFor({ state: 'visible', timeout: 20000 })
+    await client.waitForFunction(() => {
+      const term = window.refs
+        ?.get(`term-${window.store.activeTabId}`)
+        ?.term
+      if (!term?.buffer?.active) return false
+      const buffer = term.buffer.active
+      const line = buffer.getLine(buffer.baseY + buffer.cursorY)
+      return Boolean(line?.translateToString(true).trim())
+    }, { timeout: 20000 })
+    await client.evaluate(async profile => {
       await window.store.setConfig({
         showCmdSuggestions: true,
         execWindows: 'System32/cmd.exe',
@@ -152,21 +171,8 @@ describe('AI Config and Suggestions', function () {
         aiProfiles: [profile],
         ...profile
       })
-      const tabId = window.store.activeTabId
-      window.store.reloadTab(tabId)
-      return tabId
     }, aiProfile())
-
-    await client.waitForFunction(previousId => {
-      const tab = window.store?.currentTab
-      const terminal = tab && window.refs?.get(`term-${tab.id}`)
-      if (tab?.id === previousId || tab?.status !== 'success' || !terminal?.pid || !terminal.term) {
-        return false
-      }
-      const buffer = terminal.term.buffer.active
-      const line = buffer.getLine(buffer.baseY + buffer.cursorY)
-      return Boolean(line?.translateToString(true).trim())
-    }, previousTabId, { timeout: 20000 })
+    await client.waitForTimeout(250)
 
     const testCommand = 'test'
     await client.locator('.xterm-helper-textarea').first().evaluate(element => element.focus())

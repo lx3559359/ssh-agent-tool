@@ -23,6 +23,8 @@ const PROFILE_KEYS = [
 
 const COMPAT_KEYS = PROFILE_KEYS.filter(key => key !== 'id')
 const LEGACY_PROFILE_ID = 'ai-profile-legacy'
+const RETIRED_PLACEHOLDER_API = 'https://api.atlascloud.ai/v1'
+const RETIRED_PLACEHOLDER_MODEL = 'deepseek-chat'
 
 export function createAICredentialRevision () {
   if (globalThis.crypto?.randomUUID) {
@@ -111,6 +113,26 @@ function hasUsableProfileFields (profile = {}) {
   return Boolean(profile.baseURLAI || profile.apiKeyAI || profile.modelAI || profile.nameAI)
 }
 
+function isRetiredPlaceholderAIConfig (config = {}) {
+  if (Array.isArray(config.aiProfiles) && config.aiProfiles.length) return false
+  if (String(config.apiKeyAI || '').trim()) return false
+  if (String(config.baseURLAI || '').trim() !== RETIRED_PLACEHOLDER_API) return false
+  if (String(config.modelAI || '').trim() !== RETIRED_PLACEHOLDER_MODEL) return false
+
+  return ![
+    'nameAI',
+    'modelOptionsAI',
+    'roleAI',
+    'apiPathAI',
+    'proxyAI',
+    'agentSkills',
+    'mcpServers'
+  ].some(key => {
+    const value = config[key]
+    return Array.isArray(value) ? value.length : Boolean(String(value || '').trim())
+  })
+}
+
 function getLegacyProfile (config = {}) {
   const legacy = {
     id: config.activeAIProfileId || LEGACY_PROFILE_ID
@@ -139,17 +161,20 @@ function dedupeProfiles (profiles = []) {
 }
 
 export function migrateAIProfiles (config = {}) {
-  const existingProfiles = dedupeProfiles(config.aiProfiles || [])
-  const legacyProfile = getLegacyProfile(config)
+  const normalizedConfig = isRetiredPlaceholderAIConfig(config)
+    ? { ...config, baseURLAI: '', modelAI: '' }
+    : config
+  const existingProfiles = dedupeProfiles(normalizedConfig.aiProfiles || [])
+  const legacyProfile = getLegacyProfile(normalizedConfig)
   const aiProfiles = existingProfiles.length
     ? existingProfiles
     : (legacyProfile ? [legacyProfile] : [])
-  const activeAIProfileId = aiProfiles.find(profile => profile.id === config.activeAIProfileId)?.id ||
+  const activeAIProfileId = aiProfiles.find(profile => profile.id === normalizedConfig.activeAIProfileId)?.id ||
     aiProfiles[0]?.id ||
     ''
   const active = aiProfiles.find(profile => profile.id === activeAIProfileId) || {}
   return {
-    ...config,
+    ...normalizedConfig,
     ...active,
     aiProfiles,
     activeAIProfileId

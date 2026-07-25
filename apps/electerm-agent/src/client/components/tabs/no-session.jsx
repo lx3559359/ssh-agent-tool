@@ -1,12 +1,12 @@
 import { Button } from 'antd'
 import {
+  ApiOutlined,
   CodeOutlined,
   HistoryOutlined,
   PlusOutlined,
-  RobotOutlined
+  QuestionCircleOutlined
 } from '@ant-design/icons'
 import HistoryPanel from '../sidebar/history'
-import QuickConnect from './quick-connect'
 import './no-session.styl'
 
 const e = window.translate
@@ -21,8 +21,19 @@ export default function NoSessionPanel ({ height, onNewTab, onNewSsh, batch }) {
     window.openTabBatch = batch
   }
 
-  const handleCreateAIBookmark = () => {
-    window.store.onNewSshAI()
+  const handleOpenHelp = () => {
+    window.dispatchEvent(new Event('shellpilot-open-help-center'))
+  }
+
+  const handleShowRecent = () => {
+    document.querySelector('.no-session-recents')?.scrollIntoView({
+      block: 'nearest',
+      behavior: 'smooth'
+    })
+  }
+
+  const handleConfigureAI = () => {
+    window.store.toggleAIConfig()
   }
 
   const newTabDom = window.store.hasNodePty
@@ -57,6 +68,12 @@ export default function NoSessionPanel ({ height, onNewTab, onNewSsh, batch }) {
             {e('shellpilotTopbarDisconnected')}
           </span>
         </header>
+        <div className='no-session-start-hint'>
+          <span>{e('shellpilotHomeStartHint')}</span>
+          <Button type='link' size='small' onClick={onNewSsh}>
+            {e('shellpilotHomeStartAction')}
+          </Button>
+        </div>
         <div className='no-session-actions'>
           <Button
             onClick={onNewSsh}
@@ -69,25 +86,41 @@ export default function NoSessionPanel ({ height, onNewTab, onNewSsh, batch }) {
               <small>{e('shellpilotHomeNewConnectionHint')}</small>
             </span>
           </Button>
-          {newTabDom}
           <Button
-            onClick={handleCreateAIBookmark}
+            onClick={handleShowRecent}
             type='text'
             className='no-session-action'
-            icon={<RobotOutlined />}
+            icon={<HistoryOutlined />}
           >
             <span className='no-session-action-copy'>
-              <strong>{e('createBookmarkByAI')}</strong>
-              <small>{e('shellpilotHomeAiConnectionHint')}</small>
+              <strong>{e('shellpilotHomeRecentConnections')}</strong>
+              <small>{e('shellpilotHomeNoRecentConnections')}</small>
             </span>
           </Button>
-          <div className='no-session-quick-connect'>
-            <QuickConnect batch={batch} />
-            <small className='no-session-quick-connect-hint'>
-              {e('shellpilotHomeQuickConnectHint')}
-            </small>
-          </div>
+          <Button
+            onClick={handleConfigureAI}
+            type='text'
+            className='no-session-action'
+            icon={<ApiOutlined />}
+          >
+            <span className='no-session-action-copy'>
+              <strong>{e('shellpilotTopbarModelApi')}</strong>
+              <small>{e('shellpilotAiConfigureHint')}</small>
+            </span>
+          </Button>
+          <Button
+            onClick={handleOpenHelp}
+            type='text'
+            className='no-session-action'
+            icon={<QuestionCircleOutlined />}
+          >
+            <span className='no-session-action-copy'>
+              <strong>{e('shellpilotTopbarHelp')}</strong>
+              <small>{e('shellpilotHomeStartHint')}</small>
+            </span>
+          </Button>
         </div>
+        {newTabDom ? <div className='no-session-secondary-actions'>{newTabDom}</div> : null}
         <section className='no-session-recents'>
           <header className='no-session-recents-heading'>
             <span>

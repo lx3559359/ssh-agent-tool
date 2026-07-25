@@ -16,6 +16,7 @@ const TAB_SCOPED_AGENT_TOOLS = new Set([
   'sftp_stat',
   'sftp_read_file',
   'sftp_del',
+  'sftp_write_text',
   'sftp_upload',
   'sftp_download',
   'sftp_transfer_list',

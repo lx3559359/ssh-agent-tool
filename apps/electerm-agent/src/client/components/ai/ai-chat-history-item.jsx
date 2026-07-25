@@ -19,6 +19,7 @@ import { normalizeAsyncResult } from '../../common/async-result.js'
 import aiAgentCopy from './ai-agent-copy.json'
 import uid from '../../common/uid'
 import { buildAgentDiagnosticReportFiles } from './agent-diagnostic-report'
+import { buildAIResponseExports } from './ai-generated-artifacts.js'
 import {
   appendAIChatHistory,
   buildAIChatRole,
@@ -775,25 +776,30 @@ export default memo(function AIChatHistoryItem ({
     )
   }
 
-  const reportExportItems = [
-    {
-      key: 'markdown',
-      label: 'Markdown'
-    },
-    {
-      key: 'html',
-      label: 'HTML'
-    },
-    {
-      key: 'json',
-      label: 'JSON'
-    }
-  ]
+  const responseExports = buildAIResponseExports(item.response, {
+    filenameStem: item.displayPrompt || 'ShellPilot-AI-回答'
+  })
+  const reportExportItems = Object.entries(responseExports).map(([key, file]) => ({
+    key: `response:${key}`,
+    label: `${e('shellpilotAiSaveAnswer')} · ${file.format.toUpperCase()}`
+  })).concat(mode === 'agent'
+    ? [
+        { type: 'divider' },
+        { key: 'report:markdown', label: e('shellpilotAiExportDiagnosticMarkdown') },
+        { key: 'report:html', label: e('shellpilotAiExportDiagnosticHtml') },
+        { key: 'report:json', label: e('shellpilotAiExportDiagnosticJson') }
+      ]
+    : [])
 
   async function handleExportReport (format, e) {
     e?.stopPropagation?.()
+    if (format.startsWith('response:')) {
+      const file = responseExports[format.slice('response:'.length)]
+      if (file) await download(file.filename, file.content)
+      return
+    }
     const files = buildAgentDiagnosticReportFiles({ item })
-    const file = files[format]
+    const file = files[format.slice('report:'.length)]
     if (!file) {
       return
     }
@@ -812,7 +818,7 @@ export default memo(function AIChatHistoryItem ({
         <DownloadOutlined
           className='pointer mg1l'
           onClick={e => e.stopPropagation()}
-          title={e('shellpilotAiExportDiagnosticReport')}
+          title={e('shellpilotAiExportResponseTitle')}
         />
       </Dropdown>
     )

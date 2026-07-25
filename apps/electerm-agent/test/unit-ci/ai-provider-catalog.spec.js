@@ -31,7 +31,7 @@ test('recommended API catalog contains official China-friendly and international
     assert.match(provider.website, /^https:\/\//)
     assert.ok(provider.name.length >= 2)
     assert.ok(provider.description.length >= 6)
-    assert.ok(['国内', '海外', '本地'].includes(provider.region))
+    assert.ok(['domestic', 'international', 'local'].includes(provider.region))
     assert.ok(Array.isArray(provider.tags) && provider.tags.length >= 1)
     assert.equal('apiKey' in provider, false)
   }

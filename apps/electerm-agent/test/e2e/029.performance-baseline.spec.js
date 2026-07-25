@@ -82,14 +82,15 @@ test('enforces startup, terminal, memory and AI performance budgets', async () =
     const page = run.page
 
     await page.locator('.aigshell-topbar-action .anticon-plus-circle').click()
-    const form = page.locator('.setting-wrap #ssh-form')
-    await expect(form).toBeVisible()
-    await form.locator('#ssh-form_title').fill('ShellPilot Performance Local')
-    await form.locator('#ssh-form_host').fill(sshServer.host)
-    await form.locator('#ssh-form_port').fill(String(sshServer.port))
-    await form.locator('#ssh-form_username').fill(sshServer.username)
-    await form.locator('#ssh-form_password').fill(sshServer.password)
-    await page.getByTestId('bookmark-save-connect').click()
+    const wizard = page.locator('.quick-connect-wizard')
+    await expect(wizard).toBeVisible()
+    await wizard.locator('input:not([readonly])').first().fill(sshServer.host)
+    await wizard.locator('.quick-connect-port').fill(String(sshServer.port))
+    await wizard.locator('.quick-connect-wizard-footer button.ant-btn-primary').click()
+    await wizard.locator('input:not([readonly])').first().fill(sshServer.username)
+    await wizard.locator('input[type="password"]').fill(sshServer.password)
+    await wizard.locator('.quick-connect-wizard-footer button.ant-btn-primary').click()
+    await wizard.locator('.quick-connect-wizard-footer button.ant-btn-primary').click()
     await acceptHostKey(page)
 
     await expect.poll(() => sshServer.state.shellCount, {

@@ -26,6 +26,7 @@ export const AGENT_TOOL_SCOPES = Object.freeze({
   sftp_stat: 'session-read',
   sftp_read_file: 'session-read',
   sftp_del: 'session-write',
+  sftp_write_text: 'session-write',
   sftp_upload: 'session-write',
   sftp_download: 'session-write',
   sftp_transfer_list: 'session-read',

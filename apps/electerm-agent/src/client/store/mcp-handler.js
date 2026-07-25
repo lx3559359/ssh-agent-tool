@@ -45,6 +45,14 @@ function assertMcpActive (signal, message) {
   if (signal?.aborted) throw mcpAbortError(message)
 }
 
+function isSingleRemotePath (value) {
+  const path = String(value || '')
+  return Boolean(path) && [...path].every(character => {
+    const code = character.charCodeAt(0)
+    return code !== 0 && code !== 10 && code !== 13
+  })
+}
+
 function abortableDelay (milliseconds, signal, message) {
   assertMcpActive(signal, message)
   return new Promise((resolve, reject) => {
@@ -1136,6 +1144,51 @@ export default Store => {
       host: tab.host,
       path: remotePath,
       ...decoded
+    }
+  }
+
+  Store.prototype.mcpSftpWriteText = async function (args, options = {}) {
+    assertMcpActive(options.signal, 'SFTP text write cancelled')
+    const { sftpEntry, tab, tabId } = window.store.mcpGetSshSftpRef(args.tabId)
+    const remotePath = String(args.remotePath || '').trim()
+    const content = args.content
+    if (!isSingleRemotePath(remotePath)) {
+      throw new Error('remotePath must be a single remote file path')
+    }
+    if (typeof content !== 'string' || content.length > 256 * 1024) {
+      throw new Error('content must be UTF-8 text no larger than 256 KiB')
+    }
+    const requestedMode = args.mode === undefined || args.mode === null || args.mode === ''
+      ? undefined
+      : Number(args.mode)
+    if (requestedMode !== undefined && (
+      !Number.isSafeInteger(requestedMode) || requestedMode < 0 || requestedMode > 0o7777
+    )) {
+      throw new Error('mode must be a permission value between 0 and 07777')
+    }
+    const result = await abortableMcpOperation(
+      sftpEntry.saveRemoteEditorFile({
+        path: remotePath,
+        text: content,
+        mode: requestedMode
+      }),
+      options.signal,
+      'SFTP text write cancelled'
+    )
+    assertMcpActive(options.signal, 'SFTP text write cancelled')
+    const isFtp = sftpEntry.props?.isFtp === true ||
+      String(tab.type || '').toLowerCase() === 'ftp'
+    return {
+      success: Boolean(result),
+      recoverable: Boolean(result) && !isFtp,
+      tabId,
+      host: tab.host,
+      path: remotePath,
+      message: result
+        ? isFtp
+          ? 'Remote text file saved. FTP does not provide a rollback snapshot.'
+          : '远程文本文件已保存，快照与回滚入口已记录到安全操作中心。'
+        : '用户已取消远程文本文件写入。'
     }
   }
 

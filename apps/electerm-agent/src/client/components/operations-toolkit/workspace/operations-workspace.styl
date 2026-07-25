@@ -47,16 +47,43 @@
   margin 10px 14px 0
   flex 0 0 auto
 
+.operations-recommended-flow
+  min-height 34px
+  margin 8px 14px 0
+  display flex
+  align-items center
+  gap 8px
+  overflow-x auto
+  color var(--text-dark)
+  border-bottom 1px solid var(--main-darker)
+  font-size 12px
+  > span
+    flex 0 0 auto
+    font-weight 650
+  > div
+    display flex
+    align-items center
+    gap 2px
+    min-width max-content
+  .ant-btn
+    color var(--text)
+    border-radius 5px
+    &:hover,
+    &:focus-visible
+      color var(--primary)
+      background var(--main-light)
+
 .operations-workspace-body
   position relative
   flex 1
   min-height 0
-  margin-top 10px
+  margin-top 8px
   overflow hidden
 
 .operations-toolkit-compact-pinned
   .operations-workspace-head,
-  .operations-workspace-tabs
+  .operations-workspace-tabs,
+  .operations-recommended-flow
     display none
   .operations-workspace-body
     margin-top 0
@@ -227,6 +254,18 @@
   span
     color var(--text-dark)
     font-size 12px
+  .ant-btn-primary
+    color #fff !important
+    font-weight 600
+    text-shadow none
+    &:hover,
+    &:focus
+      color #fff !important
+    &:focus-visible
+      outline 2px solid var(--primary)
+      outline-offset 2px
+    &[disabled]
+      color rgba(255, 255, 255, .72) !important
 
 .operations-no-task
   min-height 180px

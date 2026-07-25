@@ -13,6 +13,7 @@ const globalState = require('./glob-state')
 const {
   normalizeWindowBounds
 } = require('./window-bounds')
+const { getRestoreBounds } = require('./window-restore-bounds')
 
 exports.getScreenCurrent = () => {
   const rect = globalState.get('win')
@@ -38,20 +39,31 @@ exports.getScreenSize = () => {
 
 exports.maximize = () => {
   const win = globalState.get('win')
-  globalState.set('oldRectangle', win.getBounds())
+  if (!win.isMaximized?.()) {
+    globalState.set('oldRectangle', win.getBounds())
+  }
   win.maximize()
 }
 
 exports.unmaximize = () => {
-  const oldRectangle = globalState.get('oldRectangle') || {
-    width: minWindowWidth,
-    height: minWindowHeight,
-    x: 200,
-    y: 200
-  }
-  globalState.get('win').unmaximize()
-  globalState.get('win').setBounds(oldRectangle)
+  const win = globalState.get('win')
+  const display = exports.getScreenCurrent()
+  const oldRectangle = getRestoreBounds(
+    globalState.get('oldRectangle'),
+    display.workArea,
+    {
+      minWidth: minWindowWidth,
+      minHeight: minWindowHeight
+    }
+  )
+  win.unmaximize()
+  win.setBounds(oldRectangle)
 }
+
+exports.getRestoreBounds = (bounds, workArea) => getRestoreBounds(bounds, workArea, {
+  minWidth: minWindowWidth,
+  minHeight: minWindowHeight
+})
 
 exports.getWindowSize = async () => {
   const rect = await exports.getWindowSizeDep()

@@ -398,6 +398,39 @@ export const agentTools = withAgentToolPolicy(withAgentToolScopes([
   {
     type: 'function',
     function: {
+      name: 'sftp_write_text',
+      description: '通过 SFTP 安全创建或修改远程文本文件。仅用于 UTF-8 文本和配置文件；执行时会显示一次确认，自动快照、写入校验并在安全操作中心提供回滚。不要使用 Shell 重定向或 HereDoc 写文件。',
+      parameters: {
+        type: 'object',
+        properties: {
+          remotePath: {
+            type: 'string',
+            description: '要创建或修改的远程文本文件绝对路径。'
+          },
+          content: {
+            type: 'string',
+            maxLength: 262144,
+            description: '完整 UTF-8 文本内容，最大 256 KiB。'
+          },
+          mode: {
+            type: 'integer',
+            minimum: 0,
+            maximum: 4095,
+            description: '可选文件权限数字，例如 420 表示 0644。'
+          },
+          tabId: {
+            type: 'string',
+            description: 'SSH/FTP 标签页 ID。省略时由系统绑定当前接管会话。'
+          },
+          riskContext: agentRemoteRiskContextSchema
+        },
+        required: ['remotePath', 'content', 'riskContext']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'sftp_upload',
       description: '通过 SFTP 上传本地文件到远程服务器。',
       parameters: {
@@ -1137,6 +1170,11 @@ async function executeResolvedAgentTool (toolName, args, runtime, endpoint, prep
       return JSON.stringify(await store.mcpSftpReadFile(args))
     case 'sftp_del': {
       const result = await store.mcpSftpDel(args, { signal: runtime.signal })
+      assertAgentRuntimeActive(runtime)
+      return JSON.stringify(result)
+    }
+    case 'sftp_write_text': {
+      const result = await store.mcpSftpWriteText(args, { signal: runtime.signal })
       assertAgentRuntimeActive(runtime)
       return JSON.stringify(result)
     }

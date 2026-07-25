@@ -57,7 +57,9 @@ import './term-fullscreen.styl'
 import {
   installAgentTakeoverLifecycle
 } from '../ai/agent-takeover-lifecycle.js'
-import { getAIGShellGeometry } from './aigshell-layout'
+import {
+  getAIGShellGeometry
+} from './aigshell-layout'
 
 const FleetStatusWorkspace = lazy(() => import('../fleet-status/fleet-status-workspace'))
 const UpdateCheck = lazy(() => import('./upgrade'))
@@ -227,6 +229,8 @@ export default auto(function Index (props) {
     rightPanelWidth: store.rightPanelWidth,
     rightPanelVisible: store.rightPanelVisible,
     rightPanelPinned: store.rightPanelPinned,
+    rightPanelTab,
+    rightPanelAutoExpanded: store.rightPanelAutoExpanded,
     pinnedQuickCommandBar: store.pinnedQuickCommandBar,
     inActiveTerminal: !fleetStatusActive && store.inActiveTerminal,
     quickCommandBoxHeight,
@@ -274,8 +278,9 @@ export default auto(function Index (props) {
   }
 
   const rightPanelProps = {
-    rightPanelVisible: store.rightPanelVisible,
+    rightPanelVisible: shellGeometry.rightPanel.visible,
     rightPanelPinned: store.rightPanelPinned,
+    rightPanelAutoCollapsed: shellGeometry.rightPanel.autoCollapsed,
     title: rightPanelTitle,
     rightPanelTab,
     activeTabId: aiSessionTabId,

@@ -266,6 +266,8 @@ test('shares one side-by-side geometry for dual pinned panels and the terminal',
   })
   assert.deepEqual(geometry.rightPanel, {
     visible: true,
+    requestedVisible: true,
+    autoCollapsed: false,
     width: 408,
     reservation: 408,
     overlay: false,
@@ -352,6 +354,8 @@ test('uses compact left panels as overlays only while keeping their actual width
   })
   assert.deepEqual(dualOverlay.rightPanel, {
     visible: true,
+    requestedVisible: true,
+    autoCollapsed: false,
     width: 337,
     reservation: 0,
     overlay: true,

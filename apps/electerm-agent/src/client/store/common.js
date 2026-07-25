@@ -19,7 +19,10 @@ import { action } from 'manate'
 import uid from '../common/uid'
 import deepCopy from 'json-deep-copy'
 import { isAIConfigMissing } from '../components/ai/ai-config-props'
-import { normalizeRightPanelWidth } from '../components/main/aigshell-layout'
+import {
+  normalizeRightPanelWidth,
+  rightPanelAutoCollapseWidth
+} from '../components/main/aigshell-layout'
 import { buildTerminalContextPrompt } from '../components/ai/ai-ssh-context'
 import {
   closeFleetStatus as closeFleetStatusState,
@@ -57,6 +60,7 @@ export default Store => {
   Store.prototype.openInfoPanel = action(function () {
     const { store } = window
     store.rightPanelVisible = true
+    store.rightPanelAutoExpanded = true
     store.rightPanelTab = 'info'
     store.openInfoPanelAction()
   })
@@ -82,6 +86,9 @@ export default Store => {
       screenWidth: width,
       screenHeight: height,
       isMaximized
+    }
+    if (window.innerWidth < rightPanelAutoCollapseWidth) {
+      update.rightPanelAutoExpanded = false
     }
     window.store.storeAssign(update)
     window.pre.runGlobalAsync('setWindowSize', {
@@ -247,6 +254,8 @@ export default Store => {
   Store.prototype.handleOpenAIPanel = function () {
     const { store } = window
     store.rightPanelVisible = true
+    // Narrow windows collapse the panel by default; an explicit click opens it as an overlay.
+    store.rightPanelAutoExpanded = true
     store.rightPanelTab = 'ai'
   }
 

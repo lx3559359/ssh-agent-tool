@@ -66,6 +66,10 @@ export default memo(function RightSidePanelAIHeader ({
   }
 
   function handleManualAIHealthCheck () {
+    if (!activeAIConfig.baseURLAI || !activeAIConfig.apiKeyAI) {
+      window.store.toggleAIConfig()
+      return
+    }
     aiHealthCoordinator.checkNow(activeAIConfig, { force: true }).catch(() => {})
   }
 
@@ -105,6 +109,18 @@ export default memo(function RightSidePanelAIHeader ({
 
   const aiProfileOptions = getAIProfileOptions(safeConfig, e)
   const aiModelOptions = getAIModelOptions(activeAIConfig)
+  const aiConfigured = Boolean(activeAIConfig.baseURLAI && activeAIConfig.apiKeyAI)
+  if (!aiConfigured) {
+    return (
+      <button
+        type='button'
+        className='right-panel-ai-config-empty'
+        onClick={() => window.store.toggleAIConfig()}
+      >
+        {e('shellpilotAiConfigureHint')}
+      </button>
+    )
+  }
   if (!aiProfileOptions.length) {
     return (
       <div className='right-panel-subtitle'>

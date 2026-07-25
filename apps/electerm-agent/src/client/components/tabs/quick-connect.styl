@@ -17,3 +17,49 @@
 
 .quick-connect-port
   width 82px
+
+.quick-connect-wizard
+  .ant-modal-body
+    padding-top 18px
+
+.quick-connect-wizard-body
+  min-height 258px
+  padding 22px 0 8px
+  > p
+    margin 0 0 14px
+    color var(--text-dark)
+    font-size 13px
+
+.quick-connect-wizard-summary
+  padding 14px
+  display flex
+  flex-direction column
+  gap 5px
+  color var(--text)
+  background var(--main-light)
+  border 1px solid var(--main-darker)
+  border-radius 6px
+  > span
+    color var(--text-dark)
+    font-size 12px
+
+.quick-connect-wizard-advanced
+  margin-top 16px
+  border-top 1px solid var(--main-darker)
+  .ant-collapse-header
+    padding-left 0 !important
+    padding-right 0 !important
+  .ant-collapse-content-box
+    padding-left 0 !important
+    padding-right 0 !important
+
+.quick-connect-wizard-footer
+  display flex
+  align-items center
+  justify-content space-between
+  padding-top 14px
+  border-top 1px solid var(--main-darker)
+
+@media (max-width: 700px)
+  .quick-connect-wizard
+    max-width calc(100vw - 24px)

@@ -86,3 +86,50 @@ test('AI config keeps only address key model and save in the primary section', (
   assert.match(advancedSource, /name='authHeaderNameAI'/)
   assert.match(source, /shellpilotAiAdvancedOptions/)
 })
+
+test('fresh installs do not present a provider or model before the user configures AI', () => {
+  const clientDefaults = fs.readFileSync(
+    path.resolve(__dirname, '../../src/client/common/default-setting.js'),
+    'utf8'
+  )
+  const appDefaults = fs.readFileSync(
+    path.resolve(__dirname, '../../src/app/common/default-setting.js'),
+    'utf8'
+  )
+
+  for (const source of [clientDefaults, appDefaults]) {
+    assert.match(source, /baseURLAI:\s*''/)
+    assert.match(source, /modelAI:\s*''/)
+  }
+})
+
+test('upgraded empty profiles do not retain the retired placeholder API as a real configuration', async () => {
+  const {
+    migrateAIProfiles
+  } = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/components/ai/ai-profiles.js')))
+
+  const migrated = migrateAIProfiles({
+    baseURLAI: 'https://api.atlascloud.ai/v1',
+    modelAI: 'deepseek-chat',
+    apiKeyAI: '',
+    aiProfiles: []
+  })
+
+  assert.equal(migrated.baseURLAI, '')
+  assert.equal(migrated.modelAI, '')
+  assert.deepEqual(migrated.aiProfiles, [])
+})
+
+test('the AI status affordance opens model configuration when the API is missing', () => {
+  const source = fs.readFileSync(
+    path.resolve(__dirname, '../../src/client/components/side-panel-r/right-side-panel-ai-header.jsx'),
+    'utf8'
+  )
+  const handlerStart = source.indexOf('function handleManualAIHealthCheck ()')
+  const handlerEnd = source.indexOf('function handleAIHealthKeyDown', handlerStart)
+  const handlerSource = source.slice(handlerStart, handlerEnd)
+
+  assert.match(handlerSource, /!activeAIConfig\.baseURLAI \|\| !activeAIConfig\.apiKeyAI/)
+  assert.match(handlerSource, /window\.store\.toggleAIConfig\(\)/)
+  assert.match(handlerSource, /aiHealthCoordinator\.checkNow/)
+})

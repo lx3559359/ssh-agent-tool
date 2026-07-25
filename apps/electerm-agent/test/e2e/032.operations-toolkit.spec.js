@@ -58,27 +58,37 @@ test('operations workspace exposes quick actions and readonly diagnostics withou
 
     const workspace = page.locator('.operations-toolkit-workspace')
     await expect(workspace).toBeVisible()
-    await expect(workspace.locator('.operations-workspace-tabs')).toContainText('快捷操作')
+    await expect(workspace.locator('.operations-workspace-tabs')).toContainText('常用操作')
     await expect(workspace.locator('.operations-workspace-tabs')).toContainText('诊断脚本')
     await expect(workspace.locator('.operations-workspace-tabs')).toContainText('安全维护')
     await expect(workspace.locator('.operations-workspace-tabs')).toContainText('脚本中心')
     await expect(workspace.locator('.operations-workspace-tabs')).toContainText('执行记录')
     await expect(workspace.locator('.operations-tool-list button')).toHaveCount(24)
     await expect(workspace.locator('.operations-connection-status')).toContainText('尚未连接 SSH')
-    await expect(workspace.locator('.operations-run-actions button')).toBeDisabled()
+    await expect(workspace.getByRole('button', { name: '连接服务器' })).toBeVisible()
+    await expect(workspace.getByRole('button', { name: '连接后运行' })).toBeVisible()
+    await expect(workspace.locator('.operations-run-actions button')).toBeEnabled()
+    await workspace.locator('.operations-run-actions button').click()
+    await expect(page.locator('.quick-connect-wizard')).toBeVisible()
+    await page.keyboard.press('Escape')
 
     await workspace.locator('.operations-workspace-tabs').getByText('脚本中心').click()
     await expect(workspace.locator('.operations-script-center')).toBeVisible()
     await expect(workspace.locator('.operations-script-center .operations-tool-list button')).toHaveCount(10)
     await expect(workspace.locator('.operations-script-center .operations-tool-title')).toContainText('服务器综合健康巡检')
     await expect(workspace.locator('.operations-script-steps li')).toHaveCount(5)
-    await expect(workspace.locator('.operations-run-actions button')).toContainText('运行脚本')
-    await expect(workspace.locator('.operations-run-actions button')).toBeDisabled()
-    await expect(workspace.locator('.operations-run-actions')).toContainText('只读，无需确认')
+    await expect(workspace.locator('.operations-run-actions button')).toContainText('连接后运行')
+    await expect(workspace.locator('.operations-run-actions button')).toBeEnabled()
+    await expect(workspace.locator('.operations-run-actions')).toContainText('尚未连接 SSH')
     await assertRunbookLayout(run.electronApp, page, {
       width: 1366,
       height: 768,
       zoom: 1.25
+    })
+    await assertRunbookLayout(run.electronApp, page, {
+      width: 1366,
+      height: 768,
+      zoom: 1.5
     })
     await assertRunbookLayout(run.electronApp, page, {
       width: 1920,
@@ -86,7 +96,7 @@ test('operations workspace exposes quick actions and readonly diagnostics withou
       zoom: 1
     })
 
-    await workspace.locator('.operations-workspace-tabs').getByText('快捷操作').click()
+    await workspace.locator('.operations-workspace-tabs').getByText('常用操作').click()
     await expect(workspace.locator('.qm-wrap-embedded')).toBeVisible()
 
     await workspace.locator('.operations-workspace-tabs').getByText('安全维护').click()

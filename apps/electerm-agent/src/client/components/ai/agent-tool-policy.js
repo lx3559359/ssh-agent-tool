@@ -36,6 +36,7 @@ const RAW_SHELL_TOOLS = new Set([
 
 const STRUCTURED_WRITE_TOOLS = new Set([
   'sftp_del',
+  'sftp_write_text',
   'sftp_upload',
   'sftp_download'
 ])

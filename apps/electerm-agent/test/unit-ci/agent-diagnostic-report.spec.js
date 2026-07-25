@@ -65,7 +65,7 @@ test('AI chat history item exposes report export formats to users', () => {
 
   assert.match(source, /buildAgentDiagnosticReportFiles/)
   assert.match(source, /download\(file\.filename,\s*file\.content\)/)
-  assert.match(source, /Markdown/)
-  assert.match(source, /HTML/)
-  assert.match(source, /JSON/)
+  assert.match(source, /shellpilotAiExportDiagnosticMarkdown/)
+  assert.match(source, /shellpilotAiExportDiagnosticHtml/)
+  assert.match(source, /shellpilotAiExportDiagnosticJson/)
 })

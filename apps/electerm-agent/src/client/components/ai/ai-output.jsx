@@ -3,9 +3,14 @@ import ReactMarkdown from 'react-markdown'
 import { copy } from '../../common/clipboard'
 import Link from '../common/external-link'
 import { Tag } from 'antd'
-import { CopyOutlined, PlayCircleOutlined } from '@ant-design/icons'
+import { CopyOutlined, DownloadOutlined, PlayCircleOutlined } from '@ant-design/icons'
 import getBrand from './get-brand'
 import { refsStatic } from '../common/ref'
+import download from '../../common/download'
+import {
+  extractAIGeneratedArtifacts,
+  stripAIGeneratedArtifactBlocks
+} from './ai-generated-artifacts.js'
 import {
   acquireAICommandExecutionLock,
   buildAICommandResultSummaryPrompt,
@@ -115,11 +120,34 @@ export default function AIOutput ({ item, isStreaming = false }) {
     )
   }
 
+  const visibleResponse = stripAIGeneratedArtifactBlocks(response)
+  const artifacts = isStreaming ? [] : extractAIGeneratedArtifacts(response)
   const mdProps = {
-    children: response,
+    children: visibleResponse,
     components: {
       code: renderCode
     }
+  }
+
+  function renderGeneratedArtifacts () {
+    if (!artifacts.length) return null
+    return (
+      <div className='ai-generated-artifacts'>
+        <strong>{e('shellpilotAiGeneratedFiles')}</strong>
+        {artifacts.map((artifact, index) => (
+          <button
+            type='button'
+            className='ai-generated-artifact'
+            key={`${artifact.filename}-${index}`}
+            onClick={() => download(artifact.filename, artifact.content)}
+          >
+            <span>{artifact.filename}</span>
+            <small>{artifact.format.toUpperCase()}</small>
+            <DownloadOutlined />
+          </button>
+        ))}
+      </div>
+    )
   }
 
   return (
@@ -128,11 +156,12 @@ export default function AIOutput ({ item, isStreaming = false }) {
         {renderBrand()}
         {isStreaming
           ? (
-            <pre className='ai-stream-plain-output'>{response}</pre>
+            <pre className='ai-stream-plain-output'>{visibleResponse}</pre>
             )
           : (
             <ReactMarkdown {...mdProps} />
             )}
+        {renderGeneratedArtifacts()}
       </div>
     </div>
   )

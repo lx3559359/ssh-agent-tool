@@ -2,7 +2,9 @@ export const aigshellTopBarHeight = 44
 export const minRightPanelWidth = 320
 export const maxRightPanelWidth = 1000
 export const minTerminalVertical = 64
+export const rightPanelAutoCollapseWidth = 1120
 const minPinnedTerminalWidth = 320
+const preferredTerminalWidth = 640
 
 function toNonNegativeNumber (value, fallback = 0) {
   const number = Number(value)
@@ -28,6 +30,8 @@ export function getAIGShellGeometry ({
   rightPanelWidth,
   rightPanelVisible,
   rightPanelPinned,
+  rightPanelTab,
+  rightPanelAutoExpanded = false,
   pinnedQuickCommandBar,
   inActiveTerminal,
   quickCommandBoxHeight,
@@ -51,16 +55,21 @@ export function getAIGShellGeometry ({
 
   const rightPanelIsVisible = Boolean(rightPanelVisible)
   const requestedRightPanelWidth = normalizeRightPanelWidth(rightPanelWidth)
+  const rightPanelNeedsSpace = viewportWidth < rightPanelAutoCollapseWidth ||
+    viewportWidth - terminalLeft < preferredTerminalWidth + minRightPanelWidth
+  const rightPanelShouldAutoCollapse = rightPanelIsVisible &&
+    rightPanelTab === 'ai' && !rightPanelAutoExpanded && rightPanelNeedsSpace
+  const renderedRightPanelVisible = rightPanelIsVisible && !rightPanelShouldAutoCollapse
   const pinnedRightPanelMaxWidth = Math.max(
     0,
     viewportWidth - terminalLeft - minPinnedTerminalWidth
   )
-  const rightPanelCanReserve = rightPanelIsVisible && Boolean(rightPanelPinned) &&
+  const rightPanelCanReserve = renderedRightPanelVisible && Boolean(rightPanelPinned) &&
     pinnedRightPanelMaxWidth >= minRightPanelWidth
   const rightPanelMaxWidth = rightPanelCanReserve
     ? Math.min(maxRightPanelWidth, pinnedRightPanelMaxWidth)
     : Math.min(maxRightPanelWidth, viewportWidth)
-  const rightPanelWidthValue = rightPanelIsVisible
+  const rightPanelWidthValue = renderedRightPanelVisible
     ? Math.min(requestedRightPanelWidth, rightPanelMaxWidth)
     : 0
   const rightPanelReservation = rightPanelCanReserve ? rightPanelWidthValue : 0
@@ -99,7 +108,9 @@ export function getAIGShellGeometry ({
       maxWidth: leftPanelMaxWidth
     },
     rightPanel: {
-      visible: rightPanelIsVisible,
+      visible: renderedRightPanelVisible,
+      requestedVisible: rightPanelIsVisible,
+      autoCollapsed: rightPanelShouldAutoCollapse,
       width: rightPanelWidthValue,
       reservation: rightPanelReservation,
       overlay: rightPanelIsVisible && rightPanelWidthValue > 0 && !rightPanelCanReserve,

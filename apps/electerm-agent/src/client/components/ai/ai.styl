@@ -3,6 +3,26 @@
   display flex
   flex-direction column
 
+.ai-chat-unconfigured
+  gap 10px
+  min-height 0
+  padding 32px 20px
+  color var(--text-dark)
+  text-align center
+  > strong
+    color var(--text-light)
+    font-size 15px
+  > span
+    max-width 280px
+    font-size 12px
+    line-height 1.65
+  .ant-btn
+    margin-top 4px
+
+.ai-chat-unconfigured-icon
+  color var(--primary)
+  font-size 28px
+
 .ai-chat-history
   flex 1 1 auto
   display flex
@@ -86,6 +106,47 @@
   white-space pre-wrap
   overflow-wrap anywhere
   font-family inherit
+
+.ai-generated-artifacts
+  margin-top 12px
+  padding-top 10px
+  display flex
+  flex-wrap wrap
+  align-items center
+  gap 6px
+  border-top 1px solid var(--main-darker)
+  > strong
+    flex 1 0 100%
+    color var(--text-dark)
+    font-size 12px
+    font-weight 600
+
+.ai-generated-artifact
+  max-width 100%
+  min-height 30px
+  padding 4px 8px
+  display inline-flex
+  align-items center
+  gap 6px
+  color var(--text)
+  background var(--main-light)
+  border 1px solid var(--main-darker)
+  border-radius 6px
+  cursor pointer
+  > span
+    max-width 210px
+    overflow hidden
+    text-overflow ellipsis
+    white-space nowrap
+  > small
+    color var(--text-dark)
+    font-size 10px
+  &:hover
+    color var(--primary)
+    border-color var(--primary)
+  &:focus-visible
+    outline 2px solid var(--primary)
+    outline-offset 2px
 
 .ai-chat-input
   position relative
@@ -730,6 +791,10 @@
   border-top 1px solid var(--sp-border)
 
 .sp-ai-provider-guide-head
+  display flex
+  align-items flex-end
+  justify-content space-between
+  gap 14px
   margin-bottom 8px
 
 .sp-ai-provider-guide-title
@@ -747,6 +812,19 @@
   display grid
   grid-template-columns repeat(2, minmax(0, 1fr))
   column-gap 22px
+
+.sp-ai-provider-guide-controls
+  flex 0 1 360px
+  min-width 260px
+  .ant-input-search
+    min-width 150px
+  .ant-select
+    min-width 108px
+
+.sp-ai-provider-empty
+  padding 16px 0
+  color var(--text-dark)
+  font-size 12px
 
 .sp-ai-provider-item
   display flex
@@ -776,6 +854,12 @@
   margin-top 2px
   color var(--text-dark)
   font-size 11px
+
+.sp-ai-config-save-hint
+  margin-top 7px
+  color var(--text-dark)
+  font-size 12px
+  line-height 1.5
 
 .sp-ai-provider-actions
   flex 0 0 auto
@@ -825,6 +909,12 @@
       display none
   .sp-ai-provider-list
     grid-template-columns 1fr
+  .sp-ai-provider-guide-head
+    align-items stretch
+    flex-direction column
+  .sp-ai-provider-guide-controls
+    width 100%
+    min-width 0
   .sp-ai-provider-item
     align-items flex-start
     flex-direction column

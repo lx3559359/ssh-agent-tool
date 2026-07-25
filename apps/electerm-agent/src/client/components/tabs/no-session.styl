@@ -71,11 +71,38 @@
     border-radius 50%
     background var(--sp-text-disabled, var(--text-disabled))
 
+.no-session-start-hint
+  display flex
+  align-items center
+  flex-wrap wrap
+  gap 4px 10px
+  margin-bottom 18px
+  color var(--sp-text-muted, var(--text-light))
+  font-size 12px
+  line-height 1.55
+  .ant-btn-link
+    height auto
+    padding 0
+    color var(--sp-primary, var(--primary))
+
 .no-session-actions
   display grid
   grid-template-columns repeat(auto-fit, minmax(210px, 1fr))
   gap 10px
   margin-bottom 24px
+
+.no-session-secondary-actions
+  display flex
+  justify-content flex-start
+  margin-top -12px
+  margin-bottom 20px
+  .no-session-action.ant-btn
+    width auto
+    height 34px
+    padding 0 10px
+    align-items center
+    .no-session-action-copy small
+      display none
 
 .no-session-action.ant-btn
 .no-session-quick-connect
@@ -180,6 +207,10 @@
     background var(--sp-surface-elevated, var(--main))
     box-shadow var(--sp-shadow-overlay, 0 14px 34px rgba(0, 0, 0, .2))
 
+.no-session-quick-connect-primary
+  border-color var(--sp-primary, var(--primary))
+  background var(--sp-primary-soft, var(--main-lighter))
+
 .no-session-quick-connect-hint
   position absolute
   left 54px
@@ -278,6 +309,8 @@
     align-items flex-start
     flex-direction column
     gap 10px
+  .no-session-start-hint
+    align-items flex-start
   .no-session-actions
     grid-template-columns 1fr
   .no-session-action.ant-btn

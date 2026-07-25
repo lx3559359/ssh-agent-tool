@@ -27,12 +27,18 @@ describe('terminal', function () {
     await client.locator('.no-sessions').waitFor({ state: 'visible' })
     await expect(client.locator('.no-session-heading')).toBeVisible()
     await expect(client.locator('.no-session-actions')).toBeVisible()
+    await expect(client.locator('.no-session-action-primary')).toBeVisible()
     await expect(client.locator('.no-session-recents')).toBeVisible()
     await expect(client.locator('.add-new-tab-btn')).toBeVisible()
     const titleBarBrand = client.locator('.aigshell-topbar-brand')
     const initialMaximized = await client.evaluate(() => window.store.isMaximized)
     await titleBarBrand.dblclick()
     await expect.poll(() => client.evaluate(() => window.store.isMaximized)).toBe(!initialMaximized)
+    if (initialMaximized) {
+      const bounds = await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getBounds())
+      expect(bounds.width).toBeGreaterThanOrEqual(1000)
+      expect(bounds.height).toBeGreaterThanOrEqual(650)
+    }
     await titleBarBrand.dblclick()
     await expect.poll(() => client.evaluate(() => window.store.isMaximized)).toBe(initialMaximized)
     await client.locator('.add-new-tab-btn').click()

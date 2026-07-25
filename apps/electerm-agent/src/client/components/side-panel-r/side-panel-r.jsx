@@ -16,6 +16,7 @@ const e = window.translate
 export default memo(function RightSidePanel ({
   rightPanelVisible,
   rightPanelPinned,
+  rightPanelAutoCollapsed,
   shellGeometry,
   children,
   title,
@@ -45,6 +46,7 @@ export default memo(function RightSidePanel ({
 
   function onClose () {
     window.store.rightPanelVisible = false
+    window.store.rightPanelAutoExpanded = false
   }
 
   function togglePin () {
@@ -54,6 +56,7 @@ export default memo(function RightSidePanel ({
   const panelProps = {
     className: 'right-side-panel animate-fast' +
       (rightPanelPinned ? ' right-side-panel-pinned' : '') +
+      (rightPanelAutoCollapsed ? ' right-side-panel-auto-collapsed' : '') +
       (isAI ? ' right-side-panel-ai' : ''),
     ref: panelRef,
     style: { width: `${width}px` }

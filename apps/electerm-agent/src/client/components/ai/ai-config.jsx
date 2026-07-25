@@ -300,6 +300,8 @@ export default function AIConfigForm ({ initialValues, languageVersion, onSubmit
   const [profileOptions, setProfileOptions] = useState([])
   const [skillManagerOpen, setSkillManagerOpen] = useState(false)
   const [skillCount, setSkillCount] = useState(0)
+  const [providerQuery, setProviderQuery] = useState('')
+  const [providerRegion, setProviderRegion] = useState('all')
   const baseURLAI = Form.useWatch('baseURLAI', form)
   const apiPathAI = Form.useWatch('apiPathAI', form)
   const activeAIProfileId = Form.useWatch('activeAIProfileId', form)
@@ -308,6 +310,20 @@ export default function AIConfigForm ({ initialValues, languageVersion, onSubmit
     () => getEndpointPreview(baseURLAI, apiPathAI),
     [baseURLAI, apiPathAI]
   )
+
+  const visibleRecommendedProviders = useMemo(() => {
+    const query = String(providerQuery || '').trim().toLowerCase()
+    return recommendedAIProviders.filter(provider => {
+      if (providerRegion !== 'all' && provider.region !== providerRegion) {
+        return false
+      }
+      if (!query) return true
+      return [provider.name, provider.description, ...(provider.tags || [])]
+        .join(' ')
+        .toLowerCase()
+        .includes(query)
+    })
+  }, [providerQuery, providerRegion])
 
   useEffect(() => {
     if (!initialValues || isEqual(appliedSourceRef.current, initialValues)) return
@@ -670,6 +686,11 @@ export default function AIConfigForm ({ initialValues, languageVersion, onSubmit
   }
 
   function renderRecommendedProviders () {
+    const regionLabel = {
+      domestic: e('shellpilotAiProviderRegionDomestic'),
+      international: e('shellpilotAiProviderRegionInternational'),
+      local: e('shellpilotAiProviderRegionLocal')
+    }
     return (
       <section className='sp-ai-provider-guide' aria-label={e('shellpilotAiRecommendedProviders')}>
         <div className='sp-ai-provider-guide-head'>
@@ -679,14 +700,33 @@ export default function AIConfigForm ({ initialValues, languageVersion, onSubmit
               {e('shellpilotAiRecommendedProvidersDescription')}
             </div>
           </div>
+          <Space className='sp-ai-provider-guide-controls' size='small'>
+            <Input.Search
+              allowClear
+              value={providerQuery}
+              onChange={event => setProviderQuery(event.target.value)}
+              placeholder={e('shellpilotAiSearchProviders')}
+            />
+            <Select
+              value={providerRegion}
+              onChange={setProviderRegion}
+              options={[
+                { value: 'all', label: e('shellpilotAiProviderRegionAll') },
+                { value: 'domestic', label: e('shellpilotAiProviderRegionDomestic') },
+                { value: 'international', label: e('shellpilotAiProviderRegionInternational') },
+                { value: 'local', label: e('shellpilotAiProviderRegionLocal') }
+              ]}
+            />
+          </Space>
         </div>
         <div className='sp-ai-provider-list'>
-          {recommendedAIProviders.map(provider => (
+          {visibleRecommendedProviders.map(provider => (
             <div className='sp-ai-provider-item' key={provider.preset}>
               <div className='sp-ai-provider-item-main'>
                 <div className='sp-ai-provider-name-row'>
                   <strong>{provider.name}</strong>
-                  <Tag>{provider.region}</Tag>
+                  <Tag>{regionLabel[provider.region]}</Tag>
+                  {provider.openAICompatible ? <Tag color='blue'>{e('shellpilotAiOpenAiCompatible')}</Tag> : null}
                 </div>
                 <div className='sp-ai-provider-description'>{provider.description}</div>
                 <div className='sp-ai-provider-tags'>{provider.tags.join(' · ')}</div>
@@ -704,6 +744,7 @@ export default function AIConfigForm ({ initialValues, languageVersion, onSubmit
             </div>
           ))}
         </div>
+        {!visibleRecommendedProviders.length ? <div className='sp-ai-provider-empty'>{e('shellpilotAiNoRecommendedProviders')}</div> : null}
       </section>
     )
   }
@@ -769,9 +810,15 @@ export default function AIConfigForm ({ initialValues, languageVersion, onSubmit
           </Form.Item>
 
           <Form.Item>
-            <Button type='primary' htmlType='submit'>
-              {e('save')}
-            </Button>
+            <Space>
+              <Button type='primary' htmlType='submit'>
+                {e('save')}
+              </Button>
+              <Button loading={testing} onClick={handleTest}>
+                {e('testConnection')}
+              </Button>
+            </Space>
+            <div className='sp-ai-config-save-hint'>{e('shellpilotAiSaveTestHint')}</div>
           </Form.Item>
         </div>
 
@@ -1032,14 +1079,6 @@ export default function AIConfigForm ({ initialValues, languageVersion, onSubmit
                   </AutoComplete>
                 </Form.Item>
 
-                <Form.Item>
-                  <Button
-                    loading={testing}
-                    onClick={handleTest}
-                  >
-                    {e('testConnection')}
-                  </Button>
-                </Form.Item>
               </div>
             )
           }]}
