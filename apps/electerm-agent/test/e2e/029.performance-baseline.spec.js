@@ -16,6 +16,16 @@ const REQUIRED_METRICS = [
   'ai_total_ms'
 ]
 
+const PERFORMANCE_BUDGETS = {
+  app_start_ms: Number(process.env.SHELLPILOT_BUDGET_APP_START_MS || 15000),
+  first_window_interactive_ms: Number(process.env.SHELLPILOT_BUDGET_WINDOW_INTERACTIVE_MS || 20000),
+  first_terminal_ready_ms: Number(process.env.SHELLPILOT_BUDGET_TERMINAL_READY_MS || 30000),
+  memory_main_mb: Number(process.env.SHELLPILOT_BUDGET_MAIN_MEMORY_MB || 500),
+  memory_renderer_mb: Number(process.env.SHELLPILOT_BUDGET_RENDERER_MEMORY_MB || 750),
+  ai_first_token_ms: Number(process.env.SHELLPILOT_BUDGET_AI_FIRST_TOKEN_MS || 5000),
+  ai_total_ms: Number(process.env.SHELLPILOT_BUDGET_AI_TOTAL_MS || 10000)
+}
+
 test.setTimeout(120000)
 
 async function acceptHostKey (page) {
@@ -51,7 +61,14 @@ function expectFiniteNonNegative (value) {
   expect(value).toBeGreaterThanOrEqual(0)
 }
 
-test('records finite non-negative startup, terminal, memory and AI performance baselines', async () => {
+function expectWithinPerformanceBudget (name, value) {
+  const budget = PERFORMANCE_BUDGETS[name]
+  expect(Number.isFinite(budget), `${name} budget must be finite`).toBe(true)
+  expect(budget, `${name} budget must be positive`).toBeGreaterThan(0)
+  expect(value, `${name} exceeded its ${budget} budget`).toBeLessThanOrEqual(budget)
+}
+
+test('enforces startup, terminal, memory and AI performance budgets', async () => {
   const sshServer = await startLocalSshServer()
   const aiServer = await startLocalAiServer({
     firstChunkDelayMs: 40,
@@ -78,9 +95,14 @@ test('records finite non-negative startup, terminal, memory and AI performance b
     await expect.poll(() => sshServer.state.shellCount, {
       timeout: 20000
     }).toBeGreaterThan(0)
+    const terminalInput = page.locator(
+      '.session-current .xterm-helper-textarea'
+    ).last()
+    await expect(terminalInput).toBeAttached()
     await page.evaluate(() => (
       window.refs.get('term-' + window.store.activeTabId)?.term?.focus()
     ))
+    await expect(terminalInput).toBeFocused()
     await page.keyboard.type('echo shellpilot-performance-ready')
     await page.keyboard.press('Enter')
     await expect.poll(() => terminalText(page), {
@@ -126,7 +148,9 @@ test('records finite non-negative startup, terminal, memory and AI performance b
 
     const summary = await performanceSummary(page)
     for (const name of REQUIRED_METRICS) {
-      expectFiniteNonNegative(latestMetric(summary, name))
+      const value = latestMetric(summary, name)
+      expectFiniteNonNegative(value)
+      expectWithinPerformanceBudget(name, value)
     }
     expect(latestMetric(summary, 'ai_first_token_ms'))
       .toBeLessThanOrEqual(latestMetric(summary, 'ai_total_ms'))

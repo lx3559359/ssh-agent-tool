@@ -72,9 +72,12 @@ function OperationsWorkspace (props) {
   const pinnedGeometry = store.pinnedQuickCommandBar
     ? {
         height: shellGeometry.quickCommandBar.height,
-        bottom: shellGeometry.quickCommandBar.bottom
+        bottom: shellGeometry.quickCommandBar.bottom,
+        minHeight: 0
       }
     : {}
+  const compactPinned = store.pinnedQuickCommandBar &&
+    shellGeometry.quickCommandBar.height < 220
 
   useEffect(() => {
     setParams(buildParameterDefaults(selectedTool))
@@ -371,13 +374,24 @@ function OperationsWorkspace (props) {
 
   return (
     <section
-      className='operations-toolkit-workspace'
+      className={`operations-toolkit-workspace${compactPinned ? ' operations-toolkit-compact-pinned' : ''}`}
       style={{
         left,
         '--operations-right-offset': `${right + 10}px`,
         ...pinnedGeometry
       }}
     >
+      {compactPinned
+        ? (
+          <Button
+            className='operations-toolkit-compact-close'
+            type='text'
+            icon={<CloseOutlined />}
+            aria-label={e('shellpilotOperationsClose')}
+            onClick={() => store.closeOperationsToolkit()}
+          />
+          )
+        : null}
       <header className='operations-workspace-head'>
         <div>
           <strong>{e('shellpilotOperationsTitle')}</strong>

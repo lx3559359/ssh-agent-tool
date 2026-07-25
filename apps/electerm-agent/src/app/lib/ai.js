@@ -87,12 +87,22 @@ function scheduleStreamingSessionCleanup (sessionId, session) {
   session.cleanupTimer.unref?.()
 }
 
+function releaseAIChatRequest (requestId, controller) {
+  const id = String(requestId || '')
+  if (id && activeAIChatRequests.get(id) === controller) {
+    activeAIChatRequests.delete(id)
+  }
+}
+
 // Stop an ongoing streaming session
 exports.stopStream = (sessionId) => {
   const session = streamingSessions.get(sessionId)
   if (!session) {
     return { error: 'Session not found' }
   }
+
+  session.controller?.abort()
+  releaseAIChatRequest(session.requestId, session.controller)
 
   // Destroy the stream to stop receiving data
   if (session.stream && !session.stream.destroyed) {
@@ -1105,6 +1115,7 @@ exports.AIchat = async (
     normalizedRequestId
   )
   let streamSlotReserved = false
+  let streamSessionStarted = false
   try {
     if (normalizedRequestId) {
       activeAIChatRequests.get(normalizedRequestId)?.abort()
@@ -1179,6 +1190,7 @@ exports.AIchat = async (
       const sessionData = {
         stream: response.data,
         controller,
+        requestId: normalizedRequestId,
         content: '',
         completed: false,
         error: null,
@@ -1187,6 +1199,7 @@ exports.AIchat = async (
       }
 
       streamingSessions.set(sessionId, sessionData)
+      streamSessionStarted = true
 
       // Start processing the stream
       processStream(sessionId, sessionData, errorContext)
@@ -1231,11 +1244,8 @@ exports.AIchat = async (
     if (streamSlotReserved) {
       activeStreamingReservations = Math.max(0, activeStreamingReservations - 1)
     }
-    if (
-      normalizedRequestId &&
-      activeAIChatRequests.get(normalizedRequestId) === controller
-    ) {
-      activeAIChatRequests.delete(normalizedRequestId)
+    if (!streamSessionStarted) {
+      releaseAIChatRequest(normalizedRequestId, controller)
     }
   }
 }
@@ -1285,6 +1295,7 @@ function processStream (sessionId, sessionData, errorContext = {}) {
   const finishSession = (error = '') => {
     if (sessionData.completed) return
     sessionData.completed = true
+    releaseAIChatRequest(sessionData.requestId, sessionData.controller)
     if (error) sessionData.error = error
     finishAIQuality(
       sessionData.qualityState,

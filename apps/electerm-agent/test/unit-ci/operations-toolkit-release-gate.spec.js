@@ -34,3 +34,24 @@ test('public operations completion waits for history synchronization', () => {
   assert.match(source, /store\.operationsHistory = .*taskStore\.list\(\)/)
   assert.match(source, /return \{ \.\.\.active, completion \}/)
 })
+
+test('operations workspace remains open until the user closes it', () => {
+  const quickCommandsSource = fs.readFileSync(
+    path.resolve(
+      __dirname,
+      '../../src/client/components/quick-commands/quick-commands-box.jsx'
+    ),
+    'utf8'
+  )
+  const workspaceSource = fs.readFileSync(
+    path.resolve(
+      __dirname,
+      '../../src/client/components/operations-toolkit/workspace/operations-workspace.jsx'
+    ),
+    'utf8'
+  )
+
+  assert.doesNotMatch(quickCommandsSource, /onMouseLeave:\s*handleMouseLeave/)
+  assert.doesNotMatch(quickCommandsSource, /setTimeout\(\(\) => \{\s*toggle\(false\)/)
+  assert.match(workspaceSource, /onClick=\{\(\) => store\.closeOperationsToolkit\(\)\}/)
+})

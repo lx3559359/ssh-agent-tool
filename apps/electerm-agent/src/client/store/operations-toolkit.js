@@ -1,4 +1,5 @@
 import * as ls from '../common/safe-local-storage'
+import { pinnedQuickCommandBarKey } from '../common/constants'
 import { refs } from '../components/common/ref'
 import {
   cancelRunCmd,
@@ -95,6 +96,8 @@ export default Store => {
   }
 
   Store.prototype.closeOperationsToolkit = function () {
+    ls.setItem(pinnedQuickCommandBarKey, 'n')
+    window.store.pinnedQuickCommandBar = false
     window.store.openQuickCommandBar = false
   }
 

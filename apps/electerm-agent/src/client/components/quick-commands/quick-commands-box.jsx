@@ -84,7 +84,6 @@ export default function QuickCommandsFooterBox (props) {
     truncated: false
   })
   const [safetyRecords, setSafetyRecords] = useState(() => readSafetyOperationRecords(ls))
-  const timer = useRef(null)
   const targetDiscoveryAbortRef = useRef(null)
   const networkProbeRequestGateRef = useRef(createNetworkProbeRequestGate())
   const networkProbeSessionSequenceRef = useRef(0)
@@ -112,20 +111,6 @@ export default function QuickCommandsFooterBox (props) {
     targetDiscoveryAbortRef.current?.abort()
     networkProbeRequestGateRef.current.cancel()
   }, [])
-
-  function handleMouseLeave () {
-    timer.current = setTimeout(() => {
-      toggle(false)
-    }, 500)
-  }
-
-  function handleMouseEnter () {
-    clearTimeout(timer.current)
-  }
-
-  function toggle (openQuickCommandBar) {
-    window.store.openQuickCommandBar = openQuickCommandBar
-  }
 
   function handleTogglePinned () {
     const current = !window.store.pinnedQuickCommandBar
@@ -952,7 +937,7 @@ export default function QuickCommandsFooterBox (props) {
   const cls = classNames('qm-list-wrap')
   const type = qmSortByFrequency ? 'primary' : 'default'
   const { left, right } = shellGeometry.terminalInsets
-  const pinnedGeometry = pinnedQuickCommandBar
+  const pinnedGeometry = pinnedQuickCommandBar && !props.embedded
     ? {
         height: shellGeometry.quickCommandBar.height,
         bottom: shellGeometry.quickCommandBar.bottom
@@ -970,9 +955,7 @@ export default function QuickCommandsFooterBox (props) {
             '--quick-command-right-offset': `${right + 10}px`
           }),
       ...pinnedGeometry
-    },
-    onMouseLeave: handleMouseLeave,
-    onMouseEnter: handleMouseEnter
+    }
   }
   return (
     <div

@@ -54,6 +54,21 @@
   margin-top 10px
   overflow hidden
 
+.operations-toolkit-compact-pinned
+  .operations-workspace-head,
+  .operations-workspace-tabs
+    display none
+  .operations-workspace-body
+    margin-top 0
+
+.operations-toolkit-compact-close
+  position absolute
+  top 4px
+  right 4px
+  z-index 4
+  width 32px
+  height 32px
+
 .operations-discovery-spin
   position absolute
   top 48px
@@ -403,7 +418,7 @@
 
 @media (max-width: 900px)
   .operations-toolkit-workspace
-    left 8px !important
+    left 72px !important
     right 8px
   .operations-diagnostic
     grid-template-columns minmax(200px, 36%) minmax(0, 1fr)

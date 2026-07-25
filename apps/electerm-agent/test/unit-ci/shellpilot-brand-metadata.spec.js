@@ -48,6 +48,23 @@ test('about dialog does not render upstream author sponsor privacy or cloud prom
   assert.match(source, /releaseLink/)
 })
 
+test('client does not expose Electerm update or cloud sync services', () => {
+  const constants = fs.readFileSync(
+    path.resolve(__dirname, '../../src/client/common/constants.js'),
+    'utf8'
+  )
+  const syncForm = fs.readFileSync(
+    path.resolve(
+      __dirname,
+      '../../src/client/components/setting-sync/setting-sync-form.jsx'
+    ),
+    'utf8'
+  )
+
+  assert.doesNotMatch(constants, /sync\.electerm\.org|github-zxdong262\/electerm/i)
+  assert.doesNotMatch(syncForm, /sync\.electerm\.org/i)
+})
+
 test('client help links stay within the ShellPilot project instead of upstream product pages', () => {
   const clientSource = readTree(path.join(root, 'src/client'))
 

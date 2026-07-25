@@ -481,6 +481,91 @@ test('AI backend records one terminal after normal end or explicit stop followed
   }
 })
 
+test('AI backend keeps streaming cancellation active until the stream finishes', async () => {
+  const axios = require('axios')
+  const originalCreate = axios.create
+  const stream = new PassThrough()
+  let requestSignal
+
+  axios.create = () => ({
+    post: async (path, data, options) => {
+      requestSignal = options.signal
+      return { data: stream }
+    }
+  })
+
+  delete require.cache[aiResolvedPath]
+  const { AIchat, AIChatCancel } = require(aiPath)
+
+  try {
+    const result = await AIchat(
+      'cancel streaming request',
+      'test-model',
+      '',
+      'https://relay.example.com/v1',
+      '',
+      'key',
+      '',
+      true,
+      'Authorization: Bearer',
+      'request-stream-cancel'
+    )
+
+    assert.ok(result.sessionId)
+    assert.equal(requestSignal.aborted, false)
+    assert.deepEqual(
+      AIChatCancel('request-stream-cancel'),
+      { cancelled: true }
+    )
+    assert.equal(requestSignal.aborted, true)
+  } finally {
+    stream.destroy()
+    axios.create = originalCreate
+    delete require.cache[aiResolvedPath]
+  }
+})
+
+test('stopping an AI stream aborts its network request', async () => {
+  const axios = require('axios')
+  const originalCreate = axios.create
+  const stream = new PassThrough()
+  let requestSignal
+
+  axios.create = () => ({
+    post: async (path, data, options) => {
+      requestSignal = options.signal
+      return { data: stream }
+    }
+  })
+
+  delete require.cache[aiResolvedPath]
+  const { AIchat, stopStream } = require(aiPath)
+
+  try {
+    const result = await AIchat(
+      'stop streaming request',
+      'test-model',
+      '',
+      'https://relay.example.com/v1',
+      '',
+      'key',
+      '',
+      true,
+      'Authorization: Bearer',
+      'request-stream-stop'
+    )
+
+    assert.equal(requestSignal.aborted, false)
+    assert.deepEqual(stopStream(result.sessionId), { stopped: true })
+    assert.equal(requestSignal.aborted, true)
+    assert.equal(stream.destroyed, true)
+  } finally {
+    stream.destroy()
+    axios.create = originalCreate
+    delete require.cache[aiResolvedPath]
+  }
+})
+
 test('AI backend caps concurrent streaming sessions', async () => {
   const axios = require('axios')
   const originalCreate = axios.create

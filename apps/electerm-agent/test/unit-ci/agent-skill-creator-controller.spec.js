@@ -55,7 +55,10 @@ test('creator calls only plain AIchat then saves one disabled draft', async () =
     },
     createDraft: async files => {
       calledGlobalNames.push('createAgentSkillDraft')
-      assert.equal(files.find(file => file.path === 'SKILL.md')?.content, skillDocument)
+      const document = files.find(file => file.path === 'SKILL.md')?.content
+      assert.match(document, /id: inspect-web-service/)
+      assert.match(document, /triggers:\n {2}- "web service health"/)
+      assert.match(document, /permissions:\n {2}- "ssh\.read"/)
       return {
         id: 'inspect-web-service-draft-1',
         state: 'draft',
@@ -199,9 +202,58 @@ test('reports package validation details after the repair attempt also fails', a
     error => (
       calls === 2 &&
       error.message.includes('SKILL.md') &&
-      error.message.includes('triggers')
+      error.message.includes('触发条件')
     )
   )
+})
+
+test('normalizes common AI frontmatter mistakes before saving the draft', async () => {
+  const { createAgentSkillCreatorController } = await import(moduleUrl)
+  let savedDocument = ''
+  const looseResponse = JSON.stringify({
+    schemaVersion: 1,
+    summary: '关键词搜索',
+    files: [{
+      path: 'SKILL.md',
+      content: `---
+id: 关键词搜索
+name: 关键词搜索
+description: 搜索关键词并整理结果
+version: v1
+examples:
+  - 搜索 nginx
+---
+
+# 工作流程
+
+返回匹配的结果。`
+    }],
+    requestedPermissions: [],
+    riskSummary: [],
+    validationIntent: []
+  })
+  const controller = createAgentSkillCreatorController({
+    runGlobalAsync: async () => ({ response: looseResponse }),
+    createDraft: async files => {
+      savedDocument = files.find(file => file.path === 'SKILL.md').content
+      return {
+        id: 'keyword-search-draft-1',
+        state: 'draft',
+        enabled: false,
+        valid: true,
+        packageDigest: 'c'.repeat(64)
+      }
+    }
+  })
+
+  await controller.generate({
+    requirements: '创建一个关键词搜索，给出搜索结果条目的 Skill',
+    config
+  })
+
+  assert.match(savedDocument, /id: custom-skill-[a-f0-9]{8}/)
+  assert.match(savedDocument, /triggers:/)
+  assert.doesNotMatch(savedDocument, /examples:/)
 })
 
 test('reset returns a completed creator to a clean idle state without cancelling AI', async () => {

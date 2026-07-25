@@ -199,21 +199,18 @@ export const commonLineEndings = commonTxLineEndings
 export const maxBatchInput = 30
 export const windowControlWidth = 94
 export const baseUpdateCheckUrls = [
-  packInfo.homepage,
-  'https://gitee.com/github-zxdong262/electerm/raw/gh-pages'
+  packInfo.homepage
 ]
 export const syncTypes = buildConst([
   'github',
   'gitee',
   'custom',
-  'cloud',
   'webdav'
 ])
 export const syncTokenCreateUrls = {
-  gitee: 'https://gitee.com/github-zxdong262/electerm/wikis/Create%20personal%20access%20token?sort_id=3028409',
+  gitee: 'https://github.com/lx3559359/ssh-agent-tool/blob/master/docs/USER_GUIDE_ZH.md',
   github: 'https://github.com/lx3559359/ssh-agent-tool/blob/master/docs/USER_GUIDE_ZH.md',
   custom: 'https://github.com/lx3559359/ssh-agent-tool/blob/master/docs/USER_GUIDE_ZH.md',
-  cloud: 'https://sync.electerm.org',
   webdav: 'https://github.com/lx3559359/ssh-agent-tool/blob/master/docs/USER_GUIDE_ZH.md'
 }
 export const settingSyncId = 'setting-sync'

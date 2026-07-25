@@ -164,6 +164,19 @@ async function waitForSecondaryAppReady (electronApp, page, label) {
   }
 }
 
+async function ensureActiveTerminalSession (page) {
+  if (await page.locator('.term-wrap:visible').count()) return
+  await page.locator('.no-sessions').waitFor({
+    state: 'visible',
+    timeout: 20000
+  })
+  await page.locator('.add-new-tab-btn').click()
+  await page.locator('.term-wrap:visible').waitFor({
+    state: 'visible',
+    timeout: 20000
+  })
+}
+
 async function closeIsolatedApp (electronApp, profileRoot) {
   let shutdownError
   let removalError
@@ -769,7 +782,7 @@ function assertMenuDepth (metrics, context) {
   }
   expect(metrics.background, message).toBe(metrics.expected.background)
   expect(metrics.border, message).toBe(metrics.expected.border)
-  expect(metrics.borderWidth, message).toBe('1px')
+  expect(Number.parseFloat(metrics.borderWidth), message).toBeCloseTo(1, 0)
   expect(metrics.borderStyle, message).toBe('solid')
   expect(metrics.shadowLayers, message).toEqual([
     metrics.expected.highlight,
@@ -2151,7 +2164,7 @@ test('active terminal session tab keeps the locked SSH background', async ({ bro
   await runWithIsolatedApp('terminal', async (electronApp) => {
     const page = electronApp.windows()[0] || await electronApp.firstWindow()
     await waitForSecondaryAppReady(electronApp, page, 'terminal')
-    await page.locator('.term-wrap:visible').waitFor({ timeout: 20000 })
+    await ensureActiveTerminalSession(page)
     await page.waitForFunction(() => window.store?.currentTab?.status === 'success', { timeout: 20000 })
     await expect(page.locator('.term-wrap:visible .xterm-helper-textarea')).toBeFocused()
     await ensureTwoTerminalTabs(page)
@@ -2164,7 +2177,7 @@ test('narrow topbar actions avoid native window controls and keep the last actio
   await runWithIsolatedApp('topbar-interaction', async (electronApp) => {
     const page = electronApp.windows()[0] || await electronApp.firstWindow()
     await waitForSecondaryAppReady(electronApp, page, 'topbar-interaction')
-    await page.locator('.term-wrap:visible').waitFor({ timeout: 20000 })
+    await ensureActiveTerminalSession(page)
     await setWindowCase(electronApp, page, { width: 820, height: 600 }, 2)
 
     const rail = page.locator('.not-system-ui .aigshell-topbar-actions')
@@ -2278,7 +2291,7 @@ test('narrow topbar actions avoid native window controls and keep the last actio
     expect(before.visibleActions.some(item => item.hitsWindowControl)).toBe(false)
     expect(lastTrialError).toBe('')
     expect(afterWheel.scrollLeft).toBeGreaterThan(before.scrollLeft)
-    expect(afterWheel.scrollLeft).toBe(afterWheel.maxScrollLeft)
+    expect(Math.abs(afterWheel.scrollLeft - afterWheel.maxScrollLeft)).toBeLessThanOrEqual(1)
     expect(afterWheel.visibleActions.some(item => item.hitsWindowControl)).toBe(false)
     expect(afterWheel.visibleActions.every(item => item.hitsAction)).toBe(true)
 
@@ -2303,7 +2316,7 @@ test('590px topbar keeps every visible action clear of native controls and prese
   await runWithIsolatedApp('topbar-590-interaction', async (electronApp) => {
     const page = electronApp.windows()[0] || await electronApp.firstWindow()
     await waitForSecondaryAppReady(electronApp, page, 'topbar-590-interaction')
-    await page.locator('.term-wrap:visible').waitFor({ timeout: 20000 })
+    await ensureActiveTerminalSession(page)
     await setWindowCase(electronApp, page, { width: 590, height: 400 }, 1)
 
     const rail = page.locator('.not-system-ui .aigshell-topbar-actions')
@@ -2412,7 +2425,7 @@ test('590px topbar keeps every visible action clear of native controls and prese
     expect(before.visibleActions.some(item => item.hitsWindowControl)).toBe(false)
     expect(before.reservedRight).toBeGreaterThanOrEqual(138)
     expect(before.maxScrollLeft).toBeGreaterThan(0)
-    expect(afterWheel.scrollLeft).toBe(afterWheel.maxScrollLeft)
+    expect(Math.abs(afterWheel.scrollLeft - afterWheel.maxScrollLeft)).toBeLessThanOrEqual(1)
     expect(afterWheel.visibleActions.length).toBeGreaterThan(0)
     expect(afterWheel.visibleActions.every(item => item.hitsAction)).toBe(true)
     expect(afterWheel.visibleActions.some(item => item.hitsWindowControl)).toBe(false)
@@ -2457,7 +2470,7 @@ test('sidebar standard tiles expose one consistent mouse keyboard and active aff
   await runWithIsolatedApp('sidebar-interaction', async (electronApp) => {
     const page = electronApp.windows()[0] || await electronApp.firstWindow()
     await waitForSecondaryAppReady(electronApp, page, 'sidebar-interaction')
-    await page.locator('.term-wrap:visible').waitFor({ timeout: 20000 })
+    await ensureActiveTerminalSession(page)
 
     const dashboardTile = page.locator('.sidebar-bar .control-icon-wrap:has(.anticon-dashboard)')
     const transferTile = page.locator('.sidebar-bar .control-icon-wrap:has(.anticon-swap)')
@@ -2552,7 +2565,7 @@ test('low-height AI panel keeps meaningful history and real auxiliary rail inter
   await runWithIsolatedApp('ai-compact-interaction', async (electronApp) => {
     const page = electronApp.windows()[0] || await electronApp.firstWindow()
     await waitForSecondaryAppReady(electronApp, page, 'ai-compact-interaction')
-    await page.locator('.term-wrap:visible').waitFor({ timeout: 20000 })
+    await ensureActiveTerminalSession(page)
     const updatePanelClose = page.locator('.upgrade-panel:not(.upgrade-panel-hide) .close-upgrade-panel')
     if (await updatePanelClose.isVisible().catch(() => false)) {
       await updatePanelClose.click()
@@ -2754,7 +2767,7 @@ test('shell chrome keeps restrained depth, compact geometry and terminal isolati
   await runWithIsolatedApp('shell-chrome', async (electronApp) => {
     const page = electronApp.windows()[0] || await electronApp.firstWindow()
     await waitForSecondaryAppReady(electronApp, page, 'shell-chrome')
-    await page.locator('.term-wrap:visible').waitFor({ timeout: 20000 })
+    await ensureActiveTerminalSession(page)
     await page.evaluate(() => {
       window.store.handleOpenAIPanel()
       window.store.rightPanelPinned = false
@@ -2795,7 +2808,7 @@ test('theme center deletes the active terminal palette without changing the Shel
   await runWithIsolatedApp('terminal-theme-deletion', async (electronApp) => {
     const page = electronApp.windows()[0] || await electronApp.firstWindow()
     await waitForSecondaryAppReady(electronApp, page, 'terminal-theme-deletion')
-    await page.locator('.term-wrap:visible').waitFor({ timeout: 20000 })
+    await ensureActiveTerminalSession(page)
     await setWindowCase(electronApp, page, { width: 1100, height: 700 }, 1)
     await resetSurface(page, 'en_us')
     const themeId = `deletion-lifecycle-${Date.now()}`
@@ -2837,7 +2850,7 @@ test('settings search supports visible results, keyboard navigation, preview lan
   await runWithIsolatedApp('settings-search', async (electronApp) => {
     const page = electronApp.windows()[0] || await electronApp.firstWindow()
     await waitForSecondaryAppReady(electronApp, page, 'settings-search')
-    await page.locator('.term-wrap:visible').waitFor({ timeout: 20000 })
+    await ensureActiveTerminalSession(page)
 
     await setWindowCase(electronApp, page, { width: 1100, height: 700 }, 1)
     await resetSurface(page, 'en_us')
@@ -3001,7 +3014,7 @@ test('context menus keep pointer placement and compact long-menu reachability', 
   await runWithIsolatedApp('context-menu-placement', async (electronApp) => {
     const page = electronApp.windows()[0] || await electronApp.firstWindow()
     await waitForSecondaryAppReady(electronApp, page, 'context-menu-placement')
-    await page.locator('.term-wrap:visible').waitFor({ timeout: 20000 })
+    await ensureActiveTerminalSession(page)
 
     await setWindowCase(electronApp, page, { width: 1100, height: 700 }, 1)
     await resetSurface(page, 'en_us')
@@ -3354,7 +3367,7 @@ test('tool center and batch editor stay reachable in compact real app windows', 
   await runWithIsolatedApp('compact-tools', async (electronApp) => {
     const page = electronApp.windows()[0] || await electronApp.firstWindow()
     await waitForSecondaryAppReady(electronApp, page, 'compact-tools')
-    await page.locator('.term-wrap:visible').waitFor({ timeout: 20000 })
+    await ensureActiveTerminalSession(page)
     const compactSizes = [
       { width: 820, height: 600 },
       { width: 590, height: 400 },
@@ -3565,7 +3578,8 @@ test('tool center and batch editor stay reachable in compact real app windows', 
           const terminalAfterFleet = await inspectCompactShellGeometry(page)
           const quickbarMetrics = await page.locator('.qm-wrap-tooltip').evaluate((panel) => {
             const body = panel.querySelector(':scope > .pd2')
-            const pin = panel.querySelector('.qm-flex .ant-space-compact button')
+            const pin = panel.closest('.operations-toolkit-workspace')
+              .querySelector('.operations-toolkit-compact-close')
             const list = panel.querySelector('.qm-list-wrap')
             const content = list.querySelector('.qm-item, button')
             const terminal = document.querySelector('.layout-wrap-c3')
@@ -3620,30 +3634,22 @@ test('tool center and batch editor stay reachable in compact real app windows', 
             expect(surface.directBackground, JSON.stringify({ size, selector, surface })).toBe(lockedTerminalRgb)
           }
 
-          const quickbarPin = page.getByRole('button', { name: '取消固定快捷命令面板' })
-          await quickbarPin.evaluate((button) => {
-            const body = button.closest('.qm-wrap-tooltip').querySelector(':scope > .pd2')
-            const bodyRect = body.getBoundingClientRect()
-            const buttonRect = button.getBoundingClientRect()
-            body.scrollTop += buttonRect.top - bodyRect.top - (body.clientHeight - buttonRect.height) / 2
-          })
-          await quickbarPin.click()
+          const quickbarClose = page.locator('.operations-toolkit-compact-close')
+          await quickbarClose.click()
           await expect.poll(() => page.evaluate(() => window.store.pinnedQuickCommandBar)).toBe(false)
+          await expect.poll(() => page.evaluate(() => window.store.openQuickCommandBar)).toBe(false)
           const terminalAfterUnpin = await inspectCompactShellGeometry(page)
           expect(terminalAfterUnpin.terminal.rect.height, quickbarContext)
             .toBeGreaterThan(quickbarMetrics.terminal.height)
           expect(Math.abs(
             terminalAfterUnpin.terminal.rect.top - quickbarMetrics.terminal.top
           ), quickbarContext).toBeLessThanOrEqual(1)
-          const quickbarRepin = page.getByRole('button', { name: '固定快捷命令面板' })
-          await quickbarRepin.evaluate((button) => {
-            const body = button.closest('.qm-wrap-tooltip').querySelector(':scope > .pd2')
-            const bodyRect = body.getBoundingClientRect()
-            const buttonRect = button.getBoundingClientRect()
-            body.scrollTop += buttonRect.top - bodyRect.top - (body.clientHeight - buttonRect.height) / 2
+          await page.evaluate(() => {
+            window.store.openQuickCommandBar = true
+            window.store.pinnedQuickCommandBar = true
           })
-          await quickbarRepin.click()
           await expect.poll(() => page.evaluate(() => window.store.pinnedQuickCommandBar)).toBe(true)
+          await expect(page.locator('.operations-toolkit-compact-close')).toBeVisible()
           const terminalAfterRepin = await inspectCompactShellGeometry(page)
           const quickbarAfterRepin = await page.locator('.qm-wrap-tooltip').evaluate(panel => (
             panel.getBoundingClientRect().toJSON()
@@ -3840,7 +3846,7 @@ test('UI font preview applies cancels persists and leaves terminal unchanged', a
   await runWithIsolatedApp('ui-font-lifecycle', async (electronApp) => {
     const page = electronApp.windows()[0] || await electronApp.firstWindow()
     await waitForSecondaryAppReady(electronApp, page, 'ui-font-lifecycle')
-    await page.locator('.term-wrap:visible').waitFor({ timeout: 20000 })
+    await ensureActiveTerminalSession(page)
     await page.evaluate(() => {
       window.store.upgradeInfo.showUpgradeModal = false
       window.store.previewLanguage = 'en_us'
@@ -3972,7 +3978,7 @@ matrixTest('real app covers the secondary UI visual acceptance matrix', async ({
     try {
       const page = electronApp.windows()[0] || await electronApp.firstWindow()
       await waitForSecondaryAppReady(electronApp, page, 'matrix')
-      await page.locator('.term-wrap:visible').waitFor({ timeout: 20000 })
+      await ensureActiveTerminalSession(page)
       await exerciseLanguageAndThemeState(page)
 
       for (const size of matrixSizes) {

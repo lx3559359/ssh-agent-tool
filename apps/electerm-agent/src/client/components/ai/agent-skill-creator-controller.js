@@ -5,6 +5,7 @@ import {
   buildAgentSkillCreatorPrompt
 } from './agent-skill-creator-prompt.js'
 import { parseAgentSkillDraftResponse } from './agent-skill-draft.js'
+import { normalizeAgentSkillDraftFiles } from './agent-skill-draft-normalizer.js'
 
 function controllerError (code, message) {
   const error = new Error(message)
@@ -29,10 +30,29 @@ function validationIssues (error) {
 
 function validationFailureMessage (error) {
   const issues = validationIssues(error)
-  if (!issues.length) return ''
+  if (!issues.length) {
+    return error?.code === 'SKILL_VALIDATION_FAILED'
+      ? 'AI 生成的 Skill 结构不完整，自动修正后仍未通过校验。请补充触发条件和预期结果后重试。'
+      : ''
+  }
+  const messages = {
+    SKILL_DOCUMENT_REQUIRED: '缺少 SKILL.md 主文件',
+    SKILL_FRONTMATTER_REQUIRED: 'SKILL.md 缺少标准元数据区',
+    SKILL_FRONTMATTER_REQUIRED_FIELD: '缺少必要字段或触发条件',
+    SKILL_FRONTMATTER_KEY_INVALID: '包含不支持的元数据字段',
+    SKILL_FRONTMATTER_INVALID: '元数据格式不正确',
+    SKILL_FRONTMATTER_UNSAFE: '元数据包含不支持的嵌套或 YAML 语法',
+    SKILL_ID_INVALID: 'Skill 标识必须使用小写英文、数字和连字符',
+    SKILL_VERSION_INVALID: '版本号必须采用 1.0.0 格式',
+    SKILL_MANIFEST_JSON_INVALID: 'skill.json 不是有效的 JSON',
+    SKILL_MANIFEST_MISMATCH: 'skill.json 与 SKILL.md 的标识或版本不一致',
+    SKILL_ARTIFACT_MISSING: '声明的脚本或文件不存在',
+    SKILL_SCRIPT_UNSAFE: '脚本包含被安全策略阻止的写法'
+  }
   const details = issues.map(issue => {
     const location = issue.path ? `${issue.path}：` : ''
-    return `${location}${issue.message}（${issue.code}）`
+    const message = messages[issue.code] || '结构不符合 Skill 安全规范'
+    return `${location}${message}（${issue.code}）`
   })
   return `Skill 草稿校验失败：${details.join('；')}`
 }
@@ -48,9 +68,37 @@ function repairPrompt (originalPrompt, error) {
   ].join('\n')
 }
 
+async function normalizeGeneratedDraft (generated, requirements) {
+  const normalized = normalizeAgentSkillDraftFiles({
+    files: generated.files,
+    requirements,
+    requestedPermissions: generated.requestedPermissions
+  })
+  if (!normalized.changed) return generated
+  return parseAgentSkillDraftResponse(JSON.stringify({
+    schemaVersion: generated.schemaVersion,
+    summary: generated.summary,
+    files: normalized.files,
+    requestedPermissions: generated.requestedPermissions,
+    riskSummary: generated.riskSummary,
+    validationIntent: generated.validationIntent
+  }))
+}
+
 function safeError (error, secrets = []) {
+  const creatorMessages = {
+    SKILL_CREATOR_RESPONSE_INVALID: '模型返回的草稿格式不完整，请重新生成。',
+    SKILL_CREATOR_SCHEMA_INVALID: '模型返回的草稿字段不符合 Skill 规范，请重新生成。',
+    SKILL_CREATOR_FILES_INVALID: '模型没有生成有效的 Skill 文件，请重新生成。',
+    SKILL_CREATOR_SKILL_DOCUMENT_REQUIRED: '模型未生成 SKILL.md，请重新生成。',
+    SKILL_CREATOR_PATH_INVALID: '模型生成了不安全的文件路径，草稿未保存。',
+    SKILL_CREATOR_PATH_DUPLICATE: '模型生成了重复文件，草稿未保存。',
+    SKILL_CREATOR_CONTENT_TOO_LARGE: '模型生成的 Skill 内容超过大小限制，草稿未保存。',
+    SKILL_CREATOR_TOOL_CALL_FORBIDDEN: '创建 Skill 时禁止执行工具或命令，本次草稿未保存。'
+  }
   let message = validationFailureMessage(error) ||
-    String(error?.message || error || 'Skill generation failed.')
+    creatorMessages[error?.code] ||
+    String(error?.message || error || 'Skill 生成失败，请重试。')
   for (const secret of secrets) {
     const value = String(secret || '')
     if (value) message = message.split(value).join('[REDACTED]')
@@ -160,6 +208,7 @@ export function createAgentSkillCreatorController ({
 
         transition('validating')
         generated = await parseAgentSkillDraftResponse(response)
+        generated = await normalizeGeneratedDraft(generated, requirements)
         assertCurrent(generation)
         try {
           draft = await createDraft(generated.files)

@@ -495,6 +495,7 @@ export default function AIChat (props) {
               type='button'
               className='ai-context-action'
               onClick={item.handleClick}
+              onFocus={handleHorizontalRailFocus}
               title={item.text}
             >
               {item.icon}
@@ -518,6 +519,7 @@ export default function AIChat (props) {
               key={item.id}
               type='button'
               className='ai-attachment-chip'
+              onFocus={handleHorizontalRailFocus}
               title={item.path || item.name}
             >
               <FileTextOutlined />
@@ -560,6 +562,13 @@ export default function AIChat (props) {
     if (rail.scrollLeft !== previousScrollLeft) {
       event.preventDefault()
     }
+  }
+
+  function handleHorizontalRailFocus (event) {
+    event.currentTarget.scrollIntoView({
+      block: 'nearest',
+      inline: 'nearest'
+    })
   }
 
   useEffect(() => {

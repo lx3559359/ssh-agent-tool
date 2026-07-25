@@ -217,9 +217,25 @@ test('primary workspace keeps long Chinese AI history usable across Windows size
       await page.locator('.term-wrap').evaluateAll(elements => {
         for (const element of elements) element.style.opacity = '0'
       })
+      await page.locator('.ai-history-wrap').evaluate(element => {
+        element.scrollTop = 0
+        element.dispatchEvent(new Event('scroll', { bubbles: true }))
+      })
+      await page.waitForTimeout(120)
+      const snapshotWidth = Math.round(viewport.width / viewport.zoom)
+      const snapshotHeight = Math.round(viewport.height / viewport.zoom)
       const screenshot = await page.screenshot({
         animations: 'disabled',
-        caret: 'hide'
+        caret: 'hide',
+        clip: {
+          x: 0,
+          y: 0,
+          width: Math.min(snapshotWidth, metrics.viewportWidth),
+          height: Math.min(snapshotHeight, metrics.viewportHeight)
+        },
+        mask: [page.locator('.aigshell-topbar-version')],
+        maskColor: '#3b424a',
+        scale: 'css'
       })
       expect(screenshot).toMatchSnapshot(`primary-workspace-${viewport.label}.png`, {
         maxDiffPixelRatio: 0.01

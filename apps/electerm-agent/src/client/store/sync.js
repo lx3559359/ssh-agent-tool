@@ -56,11 +56,9 @@ export default (Store) => {
   }
 
   Store.prototype.getSyncToken = function (type) {
-    if (type === syncTypes.custom || type === syncTypes.cloud) {
+    if (type === syncTypes.custom) {
       const arr = ['AccessToken', 'ApiUrl']
-      if (type === syncTypes.custom) {
-        arr.push('GistId')
-      }
+      arr.push('GistId')
       return arr.map(
         p => {
           return get(window.store.config, 'syncSetting.' + type + p)
@@ -348,11 +346,11 @@ export default (Store) => {
     const { store } = window
     const token = store.getSyncToken(type)
     const gistId = store.getSyncGistId(type)
-    // if (!gistId && type !== syncTypes.cloud && type !== syncTypes.custom) {
+    // if (!gistId && type !== syncTypes.custom) {
     //   await store.createGist(type)
     //   gistId = store.getSyncGistId(type)
     // }
-    if (!gistId && type !== syncTypes.custom && type !== syncTypes.cloud && type !== syncTypes.webdav) {
+    if (!gistId && type !== syncTypes.custom && type !== syncTypes.webdav) {
       return
     }
     const pass = store.getSyncPassword(type)
@@ -457,11 +455,11 @@ export default (Store) => {
     const { store } = window
     const token = store.getSyncToken(type)
     const gistId = store.getSyncGistId(type)
-    // if (!gistId && type !== syncTypes.cloud && type !== syncTypes.custom) {
+    // if (!gistId && type !== syncTypes.custom) {
     //   await store.createGist(type)
     //   gistId = store.getSyncGistId(type)
     // }
-    if (!gistId && type !== syncTypes.custom && type !== syncTypes.cloud && type !== syncTypes.webdav) {
+    if (!gistId && type !== syncTypes.custom && type !== syncTypes.webdav) {
       return
     }
     const pass = store.getSyncPassword(type)

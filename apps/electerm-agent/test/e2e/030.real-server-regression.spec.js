@@ -227,6 +227,8 @@ async function runOperationsToolkitReadOnlyCheck (page) {
   await expect(page.locator('.operations-toolkit-workspace')).toBeVisible()
   await expect(page.locator('.operations-script-center')).toBeVisible()
   await expect(page.locator('.operations-task-panel')).toContainText('已完成')
+  await page.locator('.operations-workspace-head button').click()
+  await expect(page.locator('.operations-toolkit-workspace')).toBeHidden()
 }
 
 async function openSftp (page) {

@@ -13,7 +13,7 @@ export default function ServerDataStatus (props) {
   const [showCompare, setShowCompare] = useState(false)
   const token = store.getSyncToken(type)
   const gistId = store.getSyncGistId(type)
-  const canSync = token && (gistId || type === 'custom' || type === 'cloud' || type === syncTypes.webdav)
+  const canSync = token && (gistId || type === 'custom' || type === syncTypes.webdav)
 
   async function handleReload () {
     setLoading(true)
