@@ -67,6 +67,8 @@ const structuredSource = {
         ['+cmd', 'formula'],
         ['-cmd', 'formula'],
         ['@SUM(A1:A2)', 'formula'],
+        ['\t=2+2', 'tab-prefixed formula'],
+        ['\r\n@SUM(A1:A2)', 'line-prefixed formula'],
         ['-42.5', 'ordinary negative number'],
         ['line 1\r\nline 2', 'multiline']
       ]
@@ -90,22 +92,22 @@ test('registry registers handlers by format and generates buffers', async () => 
     format: 'md',
     generate: async (source, context) => {
       calls.push({ source, context })
-      return Buffer.from('# Report')
+      return { content: Buffer.from('# Report') }
     }
   }])
   const source = { title: 'Report' }
   const context = { version: 2 }
 
-  const content = await registry.generate('MD', source, context)
+  const result = await registry.generate('MD', source, context)
 
-  assert.equal(content.toString('utf8'), '# Report')
+  assert.equal(result.content.toString('utf8'), '# Report')
   assert.deepEqual(calls, [{ source, context }])
 })
 
 test('registry reports unsupported, duplicate and malformed generators', async () => {
   const handler = {
     format: 'md',
-    generate: () => Buffer.from('ok')
+    generate: () => ({ content: Buffer.from('ok') })
   }
   const registry = createGeneratorRegistry([handler])
 
@@ -130,7 +132,7 @@ test('registry reports unsupported, duplicate and malformed generators', async (
 test('registry rejects generator results that are not buffers', async () => {
   const registry = createGeneratorRegistry([{
     format: 'md',
-    generate: () => '# Report'
+    generate: () => ({ content: '# Report' })
   }])
 
   await assert.rejects(
@@ -140,8 +142,8 @@ test('registry rejects generator results that are not buffers', async () => {
 })
 
 test('Markdown generator deterministically includes and escapes every section and table', async () => {
-  const first = await markdownGenerator.generate(structuredSource)
-  const second = await markdownGenerator.generate(structuredSource)
+  const { content: first } = await markdownGenerator.generate(structuredSource)
+  const { content: second } = await markdownGenerator.generate(structuredSource)
   const markdown = first.toString('utf8')
 
   assert.equal(Buffer.compare(first, second), 0)
@@ -165,8 +167,8 @@ test('Markdown generator deterministically includes and escapes every section an
 })
 
 test('CSV generator emits every table with RFC4180 quoting and formula safety', async () => {
-  const first = await csvGenerator.generate(structuredSource)
-  const second = await csvGenerator.generate(structuredSource)
+  const { content: first } = await csvGenerator.generate(structuredSource)
+  const { content: second } = await csvGenerator.generate(structuredSource)
   const csv = first.toString('utf8')
 
   assert.equal(Buffer.compare(first, second), 0)
@@ -186,6 +188,9 @@ test('CSV generator emits every table with RFC4180 quoting and formula safety', 
       "'+cmd,formula",
       "'-cmd,formula",
       "'@SUM(A1:A2),formula",
+      "'\t=2+2,tab-prefixed formula",
+      "\"'",
+      '@SUM(A1:A2)",line-prefixed formula',
       '-42.5,ordinary negative number',
       '"line 1',
       'line 2",multiline',

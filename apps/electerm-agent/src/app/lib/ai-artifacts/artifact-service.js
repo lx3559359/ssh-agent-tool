@@ -75,7 +75,7 @@ function createArtifactService (options = {}) {
     const safeFormats = validateArtifactFormats(formats)
     const generatedAt = now()
     const outputs = await Promise.all(safeFormats.map(async format => {
-      const content = await registry.generate(
+      const result = await registry.generate(
         format,
         selected.selectedVersion.source,
         {
@@ -83,6 +83,7 @@ function createArtifactService (options = {}) {
           version: selected.version
         }
       )
+      const { content } = result
       return {
         format,
         filename: `artifact-v${String(selected.version).padStart(4, '0')}.${format}`,

@@ -6,8 +6,14 @@ const ORDINARY_NEGATIVE_NUMBER =
   /^-(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i
 
 function neutralizeFormula (value) {
-  if (/^[=+@]/.test(value) ||
-    (value.startsWith('-') && !ORDINARY_NEGATIVE_NUMBER.test(value))) {
+  let index = 0
+  while (index < value.length && value.charCodeAt(index) <= 32) {
+    index += 1
+  }
+  const candidate = value.slice(index)
+  if (/^[=+@]/.test(candidate) ||
+    (candidate.startsWith('-') &&
+      !ORDINARY_NEGATIVE_NUMBER.test(candidate))) {
     return `'${value}`
   }
   return value
@@ -33,10 +39,12 @@ function generate (source) {
       lines.push(row.map(csvCell).join(','))
     }
   }
-  return Buffer.from(
-    lines.length ? `${lines.join('\r\n')}\r\n` : '',
-    'utf8'
-  )
+  return {
+    content: Buffer.from(
+      lines.length ? `${lines.join('\r\n')}\r\n` : '',
+      'utf8'
+    )
+  }
 }
 
 module.exports = Object.freeze({

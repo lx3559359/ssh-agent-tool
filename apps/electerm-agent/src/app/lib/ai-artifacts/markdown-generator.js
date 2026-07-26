@@ -76,7 +76,9 @@ function generate (source) {
   for (const [index, table] of draft.tables.entries()) {
     blocks.push(renderTable(table, index))
   }
-  return Buffer.from(`${blocks.join('\n\n')}\n`, 'utf8')
+  return {
+    content: Buffer.from(`${blocks.join('\n\n')}\n`, 'utf8')
+  }
 }
 
 module.exports = Object.freeze({

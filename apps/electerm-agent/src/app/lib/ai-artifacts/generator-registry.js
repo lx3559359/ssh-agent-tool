@@ -48,11 +48,12 @@ function createGeneratorRegistry (initialHandlers = []) {
         'Artifact format is unsupported.'
       )
     }
-    const content = await handler.generate(source, context)
-    if (!Buffer.isBuffer(content)) {
+    const result = await handler.generate(source, context)
+    if (!result || typeof result !== 'object' ||
+      !Buffer.isBuffer(result.content)) {
       throw invalidGeneratorError()
     }
-    return content
+    return result
   }
 
   for (const handler of initialHandlers) {
