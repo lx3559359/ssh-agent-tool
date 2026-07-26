@@ -104,9 +104,16 @@ const {
   nativeUpdateInstall,
   nativeUpdateState
 } = require('./native-updater')
+const {
+  createArtifactRepository
+} = require('./ai-artifacts/artifact-repository')
+const {
+  createArtifactService
+} = require('./ai-artifacts/artifact-service')
 
 let agentSkillServices
 let agentSkillMigrationPromise
+let aiArtifactService
 
 function getAgentSkillServices () {
   if (agentSkillServices) return agentSkillServices
@@ -172,6 +179,36 @@ function safeAgentSkillResult (operation) {
         ...(error?.validation ? { validation: error.validation } : {})
       }
     }))
+}
+
+function getAIArtifactService () {
+  if (aiArtifactService) return aiArtifactService
+  const dataRoot = process.env.DATA_PATH || path.resolve(appPath, 'electerm')
+  aiArtifactService = createArtifactService({
+    repository: createArtifactRepository({
+      rootPath: path.resolve(dataRoot, 'ai-artifacts')
+    })
+  })
+  return aiArtifactService
+}
+
+function safeAIArtifactResult (operation) {
+  return Promise.resolve()
+    .then(operation)
+    .then(value => ({ ok: true, value }))
+    .catch(error => {
+      const isArtifactError = String(error?.code || '')
+        .startsWith('ARTIFACT_')
+      return {
+        ok: false,
+        error: {
+          code: isArtifactError ? error.code : 'ARTIFACT_IPC_ERROR',
+          message: isArtifactError
+            ? error.message
+            : 'Artifact operation failed.'
+        }
+      }
+    })
 }
 
 // Security: whitelist of safe environment variables for Linux/Mac/Windows
@@ -358,8 +395,18 @@ function initIpc () {
     removeAgentSkill: id => safeAgentSkillResult(() => afterAgentSkillMigration(() => getAgentSkillServices().repository.remove(id))),
     importAgentSkill: sourcePath => safeAgentSkillResult(() => afterAgentSkillMigration(() => getAgentSkillServices().importer.importSkill(sourcePath)))
   }
+  const aiArtifactAsyncGlobals = {
+    listAIArtifacts: filters => safeAIArtifactResult(() => getAIArtifactService().listAIArtifacts(filters)),
+    getAIArtifact: id => safeAIArtifactResult(() => getAIArtifactService().getAIArtifact(id)),
+    createAIArtifact: (draft, provenance) => safeAIArtifactResult(() => getAIArtifactService().createAIArtifact(draft, provenance)),
+    createAIArtifactVersion: (id, draft) => safeAIArtifactResult(() => getAIArtifactService().createAIArtifactVersion(id, draft)),
+    generateAIArtifact: (id, version, formats) => safeAIArtifactResult(() => getAIArtifactService().generateAIArtifact(id, version, formats)),
+    exportAIArtifactFile: (id, version, format, destination) => safeAIArtifactResult(() => getAIArtifactService().exportAIArtifactFile(id, version, format, destination)),
+    deleteAIArtifact: id => safeAIArtifactResult(() => getAIArtifactService().deleteAIArtifact(id))
+  }
   const asyncGlobals = {
     ...agentSkillAsyncGlobals,
+    ...aiArtifactAsyncGlobals,
     confirmExit: () => {
       globalState.set('confirmExit', true)
     },

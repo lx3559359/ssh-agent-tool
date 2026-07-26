@@ -1,0 +1,297 @@
+const test = require('node:test')
+const assert = require('node:assert/strict')
+const fsp = require('node:fs/promises')
+const os = require('node:os')
+const path = require('node:path')
+const { pathToFileURL } = require('node:url')
+const {
+  createArtifactRepository
+} = require(path.resolve(
+  __dirname,
+  '../../src/app/lib/ai-artifacts/artifact-repository'
+))
+const {
+  createArtifactService
+} = require(path.resolve(
+  __dirname,
+  '../../src/app/lib/ai-artifacts/artifact-service'
+))
+const {
+  assertArtifactId,
+  validateArtifactDraft,
+  validateArtifactFormats,
+  validateArtifactVersion
+} = require(path.resolve(
+  __dirname,
+  '../../src/app/lib/ai-artifacts/artifact-validator'
+))
+
+const sourceDraft = {
+  schemaVersion: 1,
+  type: 'inspection-report',
+  title: 'Server inspection',
+  server: 'prod-web-01',
+  summary: 'version one',
+  sections: [],
+  tables: [],
+  risks: [],
+  recommendations: []
+}
+
+async function makeTempRoot () {
+  return fsp.mkdtemp(path.join(os.tmpdir(), 'ai-artifact-repository-'))
+}
+
+async function listFilesRecursively (root) {
+  const entries = await fsp.readdir(root, { withFileTypes: true })
+  const nested = await Promise.all(entries.map(async entry => {
+    const target = path.join(root, entry.name)
+    return entry.isDirectory()
+      ? listFilesRecursively(target)
+      : [target]
+  }))
+  return nested.flat()
+}
+
+test('creates immutable versions with atomic manifests and no temporary files', async () => {
+  const tempRoot = await makeTempRoot()
+  try {
+    const repository = createArtifactRepository({
+      rootPath: tempRoot,
+      now: () => 1000
+    })
+
+    const created = await repository.create(sourceDraft, {
+      origin: 'unit-test'
+    })
+    const updated = await repository.createVersion(created.id, {
+      ...sourceDraft,
+      summary: 'version two'
+    })
+    const artifact = await repository.get(created.id)
+
+    assert.match(created.id, /^[a-z0-9][a-z0-9-]{7,79}$/)
+    assert.equal(created.version, 1)
+    assert.equal(updated.version, 2)
+    assert.equal(artifact.version, 2)
+    assert.equal(artifact.versions.length, 2)
+    assert.equal(artifact.versions[0].source.summary, 'version one')
+    assert.equal(artifact.versions[1].source.summary, 'version two')
+
+    const artifactRoot = path.join(tempRoot, created.id)
+    const manifest = JSON.parse(await fsp.readFile(
+      path.join(artifactRoot, 'manifest.json'),
+      'utf8'
+    ))
+    const firstSource = JSON.parse(await fsp.readFile(
+      path.join(artifactRoot, 'versions', '0001', 'source.json'),
+      'utf8'
+    ))
+    const secondSource = JSON.parse(await fsp.readFile(
+      path.join(artifactRoot, 'versions', '0002', 'source.json'),
+      'utf8'
+    ))
+
+    assert.equal(manifest.id, created.id)
+    assert.deepEqual(manifest.versions.map(item => item.version), [1, 2])
+    assert.equal(firstSource.summary, 'version one')
+    assert.equal(secondSource.summary, 'version two')
+    assert.equal((await fsp.stat(
+      path.join(artifactRoot, 'versions', '0001', 'files')
+    )).isDirectory(), true)
+    assert.equal((await fsp.stat(
+      path.join(artifactRoot, 'versions', '0002', 'files')
+    )).isDirectory(), true)
+
+    const files = await listFilesRecursively(tempRoot)
+    assert.equal(files.some(file => file.endsWith('.tmp')), false)
+  } finally {
+    await fsp.rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('rejects artifact IDs that can traverse outside the repository root', async () => {
+  const tempRoot = await makeTempRoot()
+  try {
+    const repository = createArtifactRepository({ rootPath: tempRoot })
+    await assert.rejects(
+      repository.get('../outside'),
+      error => error && error.code === 'ARTIFACT_ID_INVALID'
+    )
+  } finally {
+    await fsp.rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('never overwrites an existing version directory', async () => {
+  const tempRoot = await makeTempRoot()
+  try {
+    const repository = createArtifactRepository({
+      rootPath: tempRoot,
+      now: () => 1000
+    })
+    const created = await repository.create(sourceDraft)
+    const conflictingVersion = path.join(
+      tempRoot,
+      created.id,
+      'versions',
+      '0002'
+    )
+    const conflictingSource = path.join(conflictingVersion, 'source.json')
+    await fsp.mkdir(path.join(conflictingVersion, 'files'), {
+      recursive: true
+    })
+    await fsp.writeFile(
+      conflictingSource,
+      JSON.stringify({ protected: true }),
+      'utf8'
+    )
+
+    await assert.rejects(
+      repository.createVersion(created.id, {
+        ...sourceDraft,
+        summary: 'must not overwrite'
+      }),
+      error => error && error.code === 'ARTIFACT_VERSION_EXISTS'
+    )
+    assert.deepEqual(
+      JSON.parse(await fsp.readFile(conflictingSource, 'utf8')),
+      { protected: true }
+    )
+    assert.equal((await repository.get(created.id)).versions.length, 1)
+  } finally {
+    await fsp.rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('validates draft, ID, version and format boundaries with stable codes', () => {
+  assert.equal(assertArtifactId('artifact-1234'), 'artifact-1234')
+  assert.equal(validateArtifactVersion(1), 1)
+  assert.deepEqual(validateArtifactFormats(['MD', 'csv']), ['md', 'csv'])
+  assert.deepEqual(validateArtifactDraft(sourceDraft), sourceDraft)
+
+  assert.throws(
+    () => assertArtifactId('C:\\outside\\artifact'),
+    error => error && error.code === 'ARTIFACT_ID_INVALID'
+  )
+  assert.throws(
+    () => validateArtifactVersion(0),
+    error => error && error.code === 'ARTIFACT_VERSION_INVALID'
+  )
+  assert.throws(
+    () => validateArtifactFormats(['exe']),
+    error => error && error.code === 'ARTIFACT_FORMAT_UNSUPPORTED'
+  )
+  assert.throws(
+    () => validateArtifactDraft({ ...sourceDraft, title: '' }),
+    error => error && error.code === 'ARTIFACT_TITLE_INVALID'
+  )
+})
+
+test('service exposes bounded operations and reports unavailable generators', async () => {
+  const tempRoot = await makeTempRoot()
+  try {
+    const repository = createArtifactRepository({
+      rootPath: tempRoot,
+      now: () => 1000
+    })
+    const service = createArtifactService({ repository })
+    const created = await service.createAIArtifact(sourceDraft, {
+      origin: 'unit-test'
+    })
+
+    assert.equal((await service.listAIArtifacts()).length, 1)
+    assert.equal((await service.getAIArtifact(created.id)).id, created.id)
+    assert.equal(
+      (await service.createAIArtifactVersion(created.id, {
+        ...sourceDraft,
+        summary: 'service version'
+      })).version,
+      2
+    )
+    await assert.rejects(
+      service.generateAIArtifact(created.id, 2, ['md']),
+      error => error && error.code === 'ARTIFACT_GENERATOR_UNAVAILABLE'
+    )
+    await assert.rejects(
+      service.exportAIArtifactFile(created.id, 2, 'md', 'report.md'),
+      error => error && error.code === 'ARTIFACT_GENERATOR_UNAVAILABLE'
+    )
+    assert.equal(await service.deleteAIArtifact(created.id), true)
+    assert.equal(await service.getAIArtifact(created.id), null)
+  } finally {
+    await fsp.rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('IPC and renderer client expose only named artifact operations', async () => {
+  const ipcSource = await fsp.readFile(path.resolve(
+    __dirname,
+    '../../src/app/lib/ipc.js'
+  ), 'utf8')
+  const clientSource = await fsp.readFile(path.resolve(
+    __dirname,
+    '../../src/client/components/artifacts/artifact-client.js'
+  ), 'utf8')
+  const operations = [
+    'listAIArtifacts',
+    'getAIArtifact',
+    'createAIArtifact',
+    'createAIArtifactVersion',
+    'generateAIArtifact',
+    'exportAIArtifactFile',
+    'deleteAIArtifact'
+  ]
+
+  for (const operation of operations) {
+    assert.match(ipcSource, new RegExp(`\\b${operation}\\b`))
+    assert.match(clientSource, new RegExp(`['"]${operation}['"]`))
+  }
+  assert.match(clientSource, /window\.pre\.runGlobalAsync/)
+  assert.doesNotMatch(clientSource, /stack/)
+})
+
+test('renderer client unwraps values and throws coded errors', async () => {
+  const calls = []
+  const originalWindow = global.window
+  global.window = {
+    pre: {
+      runGlobalAsync: async (...args) => {
+        calls.push(args)
+        return args[0] === 'getAIArtifact'
+          ? { ok: true, value: { id: args[1] } }
+          : {
+              ok: false,
+              error: {
+                code: 'ARTIFACT_NOT_FOUND',
+                message: 'Artifact was not found.'
+              }
+            }
+      }
+    }
+  }
+
+  try {
+    const moduleUrl = pathToFileURL(path.resolve(
+      __dirname,
+      '../../src/client/components/artifacts/artifact-client.js'
+    )).href
+    const client = await import(`${moduleUrl}?test=${Date.now()}`)
+    assert.deepEqual(
+      await client.getArtifact('artifact-1234'),
+      { id: 'artifact-1234' }
+    )
+    await assert.rejects(
+      client.deleteArtifact('artifact-1234'),
+      error => error &&
+        error.code === 'ARTIFACT_NOT_FOUND' &&
+        !('stack' in (error.payload || {}))
+    )
+    assert.deepEqual(calls.map(call => call[0]), [
+      'getAIArtifact',
+      'deleteAIArtifact'
+    ])
+  } finally {
+    global.window = originalWindow
+  }
+})
