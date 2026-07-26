@@ -11,6 +11,8 @@ const {
   validateArtifactVersion
 } = require('./artifact-validator')
 
+const ROOT_MUTATION_LOCKS = new Map()
+
 function resolveInside (rootPath, ...segments) {
   const target = path.resolve(rootPath, ...segments)
   const relative = path.relative(rootPath, target)
@@ -58,6 +60,38 @@ async function ensureRepositoryRoot (rootPath) {
     throw unsafePathError()
   }
   return fsp.realpath(rootPath)
+}
+
+function normalizedRootKey (realRoot) {
+  const normalized = path.normalize(realRoot)
+  return process.platform === 'win32'
+    ? normalized.toLowerCase()
+    : normalized
+}
+
+function withRootMutationLock (realRoot, operation) {
+  const key = normalizedRootKey(realRoot)
+  const previous = ROOT_MUTATION_LOCKS.get(key) || Promise.resolve()
+  const run = previous.catch(() => {}).then(operation)
+  const settled = run.catch(() => {}).finally(() => {
+    if (ROOT_MUTATION_LOCKS.get(key) === settled) {
+      ROOT_MUTATION_LOCKS.delete(key)
+    }
+  })
+  ROOT_MUTATION_LOCKS.set(key, settled)
+  return run
+}
+
+async function withRepositoryMutation (rootPath, operation) {
+  const initialRealRoot = await ensureRepositoryRoot(rootPath)
+  return withRootMutationLock(initialRealRoot, async () => {
+    const lockedRealRoot = await ensureRepositoryRoot(rootPath)
+    if (normalizedRootKey(lockedRealRoot) !==
+      normalizedRootKey(initialRealRoot)) {
+      throw unsafePathError()
+    }
+    return operation(lockedRealRoot)
+  })
 }
 
 async function assertExistingSafePath (
@@ -193,17 +227,6 @@ function createArtifactRepository (options = {}) {
   }
   const rootPath = path.resolve(String(options.rootPath))
   const now = typeof options.now === 'function' ? options.now : Date.now
-  const locks = new Map()
-
-  function withLock (id, operation) {
-    const previous = locks.get(id) || Promise.resolve()
-    const run = previous.catch(() => {}).then(operation)
-    const settled = run.catch(() => {}).finally(() => {
-      if (locks.get(id) === settled) locks.delete(id)
-    })
-    locks.set(id, settled)
-    return run
-  }
 
   function artifactPath (id) {
     return resolveInside(rootPath, assertArtifactId(id))
@@ -328,60 +351,60 @@ function createArtifactRepository (options = {}) {
         ? input.provenance
         : provenance
     )
-    const realRoot = await ensureRepositoryRoot(rootPath)
-    const timestamp = now()
-    const id = await allocateId(timestamp)
-    const directory = artifactPath(id)
-    const firstVersionPath = versionPath(id, 1)
-    const manifest = {
-      schemaVersion: 1,
-      id,
-      type: source.type,
-      title: source.title,
-      server: source.server,
-      createdAt: timestamp,
-      updatedAt: timestamp,
-      version: 1,
-      provenance: safeProvenance,
-      versions: [{
-        version: 1,
+    return withRepositoryMutation(rootPath, async realRoot => {
+      const timestamp = now()
+      const id = await allocateId(timestamp)
+      const directory = artifactPath(id)
+      const firstVersionPath = versionPath(id, 1)
+      const manifest = {
+        schemaVersion: 1,
+        id,
+        type: source.type,
+        title: source.title,
+        server: source.server,
         createdAt: timestamp,
-        formats: []
-      }]
-    }
+        updatedAt: timestamp,
+        version: 1,
+        provenance: safeProvenance,
+        versions: [{
+          version: 1,
+          createdAt: timestamp,
+          formats: []
+        }]
+      }
 
-    await ensureSafeDirectory(rootPath, realRoot, directory)
-    try {
-      await ensureSafeDirectory(
-        rootPath,
-        realRoot,
-        resolveInside(firstVersionPath, 'files')
-      )
-      const sourcePath = resolveInside(firstVersionPath, 'source.json')
-      await assertSafeWriteTarget(rootPath, realRoot, sourcePath)
-      await writeJsonAtomic(
-        sourcePath,
-        source
-      )
-      const targetManifestPath = manifestPath(id)
-      await assertSafeWriteTarget(
-        rootPath,
-        realRoot,
-        targetManifestPath
-      )
-      await writeJsonAtomic(targetManifestPath, manifest)
-      return get(id)
-    } catch (error) {
-      await removeSafeTree(rootPath, realRoot, directory)
-      throw error
-    }
+      await ensureSafeDirectory(rootPath, realRoot, directory)
+      try {
+        await ensureSafeDirectory(
+          rootPath,
+          realRoot,
+          resolveInside(firstVersionPath, 'files')
+        )
+        const sourcePath = resolveInside(firstVersionPath, 'source.json')
+        await assertSafeWriteTarget(rootPath, realRoot, sourcePath)
+        await writeJsonAtomic(
+          sourcePath,
+          source
+        )
+        const targetManifestPath = manifestPath(id)
+        await assertSafeWriteTarget(
+          rootPath,
+          realRoot,
+          targetManifestPath
+        )
+        await writeJsonAtomic(targetManifestPath, manifest)
+        return get(id)
+      } catch (error) {
+        await removeSafeTree(rootPath, realRoot, directory)
+        throw error
+      }
+    })
   }
 
   async function createVersion (id, draft) {
     assertArtifactId(id)
     const source = validateArtifactDraft(draft)
-    return withLock(id, async () => {
-      const realRoot = await ensureRepositoryRoot(rootPath)
+    return withRepositoryMutation(rootPath, async realRoot => {
       const manifest = await readManifest(id, realRoot)
       if (!manifest) {
         throw artifactError(
@@ -499,8 +522,7 @@ function createArtifactRepository (options = {}) {
 
   async function remove (id) {
     assertArtifactId(id)
-    return withLock(id, async () => {
-      const realRoot = await ensureRepositoryRoot(rootPath)
+    return withRepositoryMutation(rootPath, async realRoot => {
       const directory = artifactPath(id)
       if (!await lstatOrNull(directory)) return false
       await assertSafeTree(rootPath, realRoot, directory)

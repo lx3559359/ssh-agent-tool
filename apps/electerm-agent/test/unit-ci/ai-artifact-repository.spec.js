@@ -165,6 +165,124 @@ test('never overwrites an existing version directory', async () => {
   }
 })
 
+test('serializes mutations across repositories that share one normalized root', async () => {
+  const tempRoot = await makeTempRoot()
+  const originalMkdir = fsp.mkdir
+  let arrivals = 0
+  let releaseGate
+  let releaseTimer
+  const gate = new Promise(resolve => {
+    releaseGate = resolve
+  })
+  try {
+    const firstRepository = createArtifactRepository({
+      rootPath: tempRoot,
+      now: () => 1000
+    })
+    const secondRepository = createArtifactRepository({
+      rootPath: path.join(tempRoot, '.'),
+      now: () => 1000
+    })
+    const created = await firstRepository.create(sourceDraft)
+
+    fsp.mkdir = async (target, options) => {
+      if (path.basename(String(target)) === '0002') {
+        arrivals += 1
+        if (arrivals === 1) {
+          releaseTimer = setTimeout(releaseGate, 50)
+        } else {
+          clearTimeout(releaseTimer)
+          releaseGate()
+        }
+        await gate
+      }
+      return originalMkdir(target, options)
+    }
+
+    const settled = await Promise.allSettled([
+      firstRepository.createVersion(created.id, {
+        ...sourceDraft,
+        summary: 'concurrent version A'
+      }),
+      secondRepository.createVersion(created.id, {
+        ...sourceDraft,
+        summary: 'concurrent version B'
+      })
+    ])
+
+    assert.equal(arrivals, 1)
+    assert.deepEqual(
+      settled.map(result => result.status),
+      ['fulfilled', 'fulfilled']
+    )
+    const results = settled.map(result => result.value)
+    assert.deepEqual(
+      results.map(result => result.version).sort(),
+      [2, 3]
+    )
+    const artifact = await firstRepository.get(created.id)
+    assert.equal(artifact.version, 3)
+    assert.deepEqual(
+      artifact.versions.slice(1)
+        .map(item => item.source.summary)
+        .sort(),
+      ['concurrent version A', 'concurrent version B']
+    )
+  } finally {
+    clearTimeout(releaseTimer)
+    releaseGate()
+    fsp.mkdir = originalMkdir
+    await fsp.rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('keeps a committed version when the post-commit read fails', async () => {
+  const tempRoot = await makeTempRoot()
+  const originalReadFile = fsp.readFile
+  try {
+    const repository = createArtifactRepository({
+      rootPath: tempRoot,
+      now: () => 1000
+    })
+    const created = await repository.create(sourceDraft)
+    const secondSourcePath = path.join(
+      tempRoot,
+      created.id,
+      'versions',
+      '0002',
+      'source.json'
+    )
+    fsp.readFile = async (target, ...args) => {
+      if (path.resolve(String(target)) === secondSourcePath) {
+        const error = new Error('injected post-commit read failure')
+        error.code = 'EIO'
+        throw error
+      }
+      return originalReadFile(target, ...args)
+    }
+
+    await assert.rejects(
+      repository.createVersion(created.id, {
+        ...sourceDraft,
+        summary: 'committed version'
+      }),
+      error => error && error.code === 'ARTIFACT_SOURCE_INVALID'
+    )
+    fsp.readFile = originalReadFile
+
+    const manifest = JSON.parse(await fsp.readFile(
+      path.join(tempRoot, created.id, 'manifest.json'),
+      'utf8'
+    ))
+    assert.deepEqual(manifest.versions.map(item => item.version), [1, 2])
+    assert.equal((await fsp.stat(secondSourcePath)).isFile(), true)
+    assert.equal((await repository.get(created.id)).version, 2)
+  } finally {
+    fsp.readFile = originalReadFile
+    await fsp.rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
 test('rejects linked artifact paths that resolve outside the repository', async t => {
   const fixtureRoot = await makeTempRoot()
   const tempRoot = path.join(fixtureRoot, 'repository')
