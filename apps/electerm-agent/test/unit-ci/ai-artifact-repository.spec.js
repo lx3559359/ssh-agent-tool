@@ -5,7 +5,8 @@ const os = require('node:os')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
 const {
-  createArtifactRepository
+  createArtifactRepository,
+  writeJsonAtomic
 } = require(path.resolve(
   __dirname,
   '../../src/app/lib/ai-artifacts/artifact-repository'
@@ -159,6 +160,82 @@ test('never overwrites an existing version directory', async () => {
       { protected: true }
     )
     assert.equal((await repository.get(created.id)).versions.length, 1)
+  } finally {
+    await fsp.rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('rejects linked artifact paths that resolve outside the repository', async t => {
+  const fixtureRoot = await makeTempRoot()
+  const tempRoot = path.join(fixtureRoot, 'repository')
+  const outsideRoot = path.join(fixtureRoot, 'outside')
+  await fsp.mkdir(tempRoot)
+  await fsp.mkdir(outsideRoot)
+  try {
+    const repository = createArtifactRepository({
+      rootPath: tempRoot,
+      now: () => 1000
+    })
+    const created = await repository.create(sourceDraft)
+    const artifactRoot = path.join(tempRoot, created.id)
+    const outsideArtifact = path.join(outsideRoot, created.id)
+    await fsp.rename(artifactRoot, outsideArtifact)
+    try {
+      await fsp.symlink(
+        outsideArtifact,
+        artifactRoot,
+        process.platform === 'win32' ? 'junction' : 'dir'
+      )
+    } catch (error) {
+      if (['EACCES', 'EPERM', 'UNKNOWN'].includes(error?.code)) {
+        t.skip(`linked directories are unavailable: ${error.code}`)
+        return
+      }
+      throw error
+    }
+
+    const operations = [
+      () => repository.get(created.id),
+      () => repository.list(),
+      () => repository.createVersion(created.id, {
+        ...sourceDraft,
+        summary: 'must stay inside root'
+      }),
+      () => repository.delete(created.id)
+    ]
+    for (const operation of operations) {
+      await assert.rejects(
+        operation(),
+        error => error && error.code === 'ARTIFACT_PATH_UNSAFE'
+      )
+    }
+    assert.equal(
+      JSON.parse(await fsp.readFile(
+        path.join(outsideArtifact, 'versions', '0001', 'source.json'),
+        'utf8'
+      )).summary,
+      'version one'
+    )
+  } finally {
+    await fsp.rm(fixtureRoot, { recursive: true, force: true })
+  }
+})
+
+test('removes the temporary JSON file when atomic rename fails', async () => {
+  const tempRoot = await makeTempRoot()
+  const target = path.join(tempRoot, 'manifest.json')
+  try {
+    await assert.rejects(
+      writeJsonAtomic(target, { ok: true }, {
+        rename: async () => {
+          const error = new Error('rename failed')
+          error.code = 'EIO'
+          throw error
+        }
+      }),
+      error => error && error.code === 'EIO'
+    )
+    assert.deepEqual(await fsp.readdir(tempRoot), [])
   } finally {
     await fsp.rm(tempRoot, { recursive: true, force: true })
   }

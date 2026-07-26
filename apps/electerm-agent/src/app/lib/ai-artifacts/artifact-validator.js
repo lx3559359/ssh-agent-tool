@@ -247,7 +247,7 @@ function validateArtifactFormats (value) {
 
 function cloneJsonValue (value, depth = 0) {
   if (value === null || typeof value === 'boolean' ||
-    typeof value === 'number' && Number.isFinite(value)) {
+    (typeof value === 'number' && Number.isFinite(value))) {
     return value
   }
   if (typeof value === 'string') {

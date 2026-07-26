@@ -24,23 +24,144 @@ function resolveInside (rootPath, ...segments) {
   return target
 }
 
-async function pathExists (target) {
+function unsafePathError () {
+  return artifactError(
+    'ARTIFACT_PATH_UNSAFE',
+    'Artifact path contains a symbolic link or leaves the repository.'
+  )
+}
+
+function isInside (rootPath, target, allowRoot = false) {
+  const relative = path.relative(rootPath, target)
+  return (allowRoot && relative === '') ||
+    (
+      Boolean(relative) &&
+      relative !== '..' &&
+      !relative.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(relative)
+    )
+}
+
+async function lstatOrNull (target) {
   try {
-    await fsp.access(target)
-    return true
-  } catch {
-    return false
+    return await fsp.lstat(target)
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null
+    throw error
   }
 }
 
-async function writeJsonAtomic (filePath, value) {
+async function ensureRepositoryRoot (rootPath) {
+  await fsp.mkdir(rootPath, { recursive: true })
+  const stat = await fsp.lstat(rootPath)
+  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    throw unsafePathError()
+  }
+  return fsp.realpath(rootPath)
+}
+
+async function assertExistingSafePath (
+  rootPath,
+  realRoot,
+  target,
+  expectedType
+) {
+  const relative = path.relative(rootPath, target)
+  if (!isInside(rootPath, target)) throw unsafePathError()
+  let current = rootPath
+  let stat
+  for (const segment of relative.split(path.sep)) {
+    current = path.join(current, segment)
+    stat = await lstatOrNull(current)
+    if (!stat || stat.isSymbolicLink()) throw unsafePathError()
+    const actual = await fsp.realpath(current)
+    if (!isInside(realRoot, actual, true)) throw unsafePathError()
+  }
+  if (expectedType === 'directory' && !stat.isDirectory()) {
+    throw unsafePathError()
+  }
+  if (expectedType === 'file' && !stat.isFile()) {
+    throw unsafePathError()
+  }
+  return stat
+}
+
+async function assertSafeTree (rootPath, realRoot, target) {
+  const stat = await assertExistingSafePath(
+    rootPath,
+    realRoot,
+    target
+  )
+  if (stat.isDirectory()) {
+    const entries = await fsp.readdir(target)
+    for (const entry of entries) {
+      await assertSafeTree(
+        rootPath,
+        realRoot,
+        resolveInside(target, entry)
+      )
+    }
+  } else if (!stat.isFile()) {
+    throw unsafePathError()
+  }
+}
+
+async function ensureSafeDirectory (rootPath, realRoot, target) {
+  const relative = path.relative(rootPath, target)
+  if (!isInside(rootPath, target)) throw unsafePathError()
+  let current = rootPath
+  for (const segment of relative.split(path.sep)) {
+    current = path.join(current, segment)
+    let stat = await lstatOrNull(current)
+    if (!stat) {
+      await fsp.mkdir(current)
+      stat = await fsp.lstat(current)
+    }
+    if (stat.isSymbolicLink() || !stat.isDirectory()) {
+      throw unsafePathError()
+    }
+    const actual = await fsp.realpath(current)
+    if (!isInside(realRoot, actual, true)) throw unsafePathError()
+  }
+}
+
+async function assertSafeWriteTarget (
+  rootPath,
+  realRoot,
+  target
+) {
+  await assertExistingSafePath(
+    rootPath,
+    realRoot,
+    path.dirname(target),
+    'directory'
+  )
+  const stat = await lstatOrNull(target)
+  if (stat) {
+    await assertExistingSafePath(
+      rootPath,
+      realRoot,
+      target,
+      'file'
+    )
+  }
+}
+
+async function removeSafeTree (rootPath, realRoot, target) {
+  if (!await lstatOrNull(target)) return
+  await assertSafeTree(rootPath, realRoot, target)
+  await fsp.rm(target, { recursive: true, force: true })
+}
+
+async function writeJsonAtomic (filePath, value, options = {}) {
+  const rename = options.rename || fsp.rename
   const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`
   try {
     await fsp.writeFile(tempPath, JSON.stringify(value, null, 2), {
       encoding: 'utf8',
       flag: 'wx'
     })
-    await fsp.rename(tempPath, filePath)
+    await rename(tempPath, filePath)
   } finally {
     await fsp.rm(tempPath, { force: true }).catch(() => {})
   }
@@ -100,7 +221,11 @@ function createArtifactRepository (options = {}) {
     )
   }
 
-  async function readManifest (id) {
+  async function readManifest (id, realRoot) {
+    const directory = artifactPath(id)
+    const directoryStat = await lstatOrNull(directory)
+    if (!directoryStat) return null
+    await assertSafeTree(rootPath, realRoot, directory)
     const manifest = await readJson(
       manifestPath(id),
       'ARTIFACT_MANIFEST_INVALID',
@@ -116,10 +241,30 @@ function createArtifactRepository (options = {}) {
     return manifest
   }
 
-  async function readVersion (id, entry) {
+  async function readVersion (id, entry, realRoot) {
     const version = validateArtifactVersion(entry?.version)
+    const directory = versionPath(id, version)
+    await assertExistingSafePath(
+      rootPath,
+      realRoot,
+      directory,
+      'directory'
+    )
+    await assertExistingSafePath(
+      rootPath,
+      realRoot,
+      resolveInside(directory, 'files'),
+      'directory'
+    )
+    const sourcePath = resolveInside(directory, 'source.json')
+    await assertExistingSafePath(
+      rootPath,
+      realRoot,
+      sourcePath,
+      'file'
+    )
     const source = await readJson(
-      resolveInside(versionPath(id, version), 'source.json'),
+      sourcePath,
       'ARTIFACT_SOURCE_INVALID',
       'Artifact source is invalid.'
     )
@@ -138,10 +283,11 @@ function createArtifactRepository (options = {}) {
 
   async function get (id) {
     assertArtifactId(id)
-    const manifest = await readManifest(id)
+    const realRoot = await ensureRepositoryRoot(rootPath)
+    const manifest = await readManifest(id, realRoot)
     if (!manifest) return null
     const versions = await Promise.all(manifest.versions.map(entry => (
-      readVersion(id, entry)
+      readVersion(id, entry, realRoot)
     )))
     const latest = versions.find(item => item.version === manifest.version) ||
       versions[versions.length - 1]
@@ -156,7 +302,7 @@ function createArtifactRepository (options = {}) {
   async function allocateId (timestamp) {
     for (let attempt = 0; attempt < 20; attempt += 1) {
       const id = generatedArtifactId(timestamp)
-      if (!await pathExists(artifactPath(id))) return id
+      if (!await lstatOrNull(artifactPath(id))) return id
     }
     throw artifactError(
       'ARTIFACT_ID_ALLOCATION_FAILED',
@@ -182,7 +328,7 @@ function createArtifactRepository (options = {}) {
         ? input.provenance
         : provenance
     )
-    await fsp.mkdir(rootPath, { recursive: true })
+    const realRoot = await ensureRepositoryRoot(rootPath)
     const timestamp = now()
     const id = await allocateId(timestamp)
     const directory = artifactPath(id)
@@ -204,20 +350,29 @@ function createArtifactRepository (options = {}) {
       }]
     }
 
-    await fsp.mkdir(directory)
+    await ensureSafeDirectory(rootPath, realRoot, directory)
     try {
-      await fsp.mkdir(
-        resolveInside(firstVersionPath, 'files'),
-        { recursive: true }
+      await ensureSafeDirectory(
+        rootPath,
+        realRoot,
+        resolveInside(firstVersionPath, 'files')
       )
+      const sourcePath = resolveInside(firstVersionPath, 'source.json')
+      await assertSafeWriteTarget(rootPath, realRoot, sourcePath)
       await writeJsonAtomic(
-        resolveInside(firstVersionPath, 'source.json'),
+        sourcePath,
         source
       )
-      await writeJsonAtomic(manifestPath(id), manifest)
+      const targetManifestPath = manifestPath(id)
+      await assertSafeWriteTarget(
+        rootPath,
+        realRoot,
+        targetManifestPath
+      )
+      await writeJsonAtomic(targetManifestPath, manifest)
       return get(id)
     } catch (error) {
-      await fsp.rm(directory, { recursive: true, force: true })
+      await removeSafeTree(rootPath, realRoot, directory)
       throw error
     }
   }
@@ -226,7 +381,8 @@ function createArtifactRepository (options = {}) {
     assertArtifactId(id)
     const source = validateArtifactDraft(draft)
     return withLock(id, async () => {
-      const manifest = await readManifest(id)
+      const realRoot = await ensureRepositoryRoot(rootPath)
+      const manifest = await readManifest(id, realRoot)
       if (!manifest) {
         throw artifactError(
           'ARTIFACT_NOT_FOUND',
@@ -255,28 +411,41 @@ function createArtifactRepository (options = {}) {
         ]
       }
 
-      await fsp.mkdir(path.dirname(directory), { recursive: true })
-      try {
-        await fsp.mkdir(directory)
-      } catch (error) {
-        if (error?.code === 'EEXIST') {
-          throw artifactError(
-            'ARTIFACT_VERSION_EXISTS',
-            'Artifact version already exists.'
-          )
-        }
-        throw error
+      const existingVersion = await lstatOrNull(directory)
+      if (existingVersion) {
+        await assertExistingSafePath(
+          rootPath,
+          realRoot,
+          directory
+        )
+        throw artifactError(
+          'ARTIFACT_VERSION_EXISTS',
+          'Artifact version already exists.'
+        )
       }
+      await ensureSafeDirectory(rootPath, realRoot, directory)
       try {
-        await fsp.mkdir(resolveInside(directory, 'files'))
+        await ensureSafeDirectory(
+          rootPath,
+          realRoot,
+          resolveInside(directory, 'files')
+        )
+        const sourcePath = resolveInside(directory, 'source.json')
+        await assertSafeWriteTarget(rootPath, realRoot, sourcePath)
         await writeJsonAtomic(
-          resolveInside(directory, 'source.json'),
+          sourcePath,
           source
         )
-        await writeJsonAtomic(manifestPath(id), nextManifest)
+        const targetManifestPath = manifestPath(id)
+        await assertSafeWriteTarget(
+          rootPath,
+          realRoot,
+          targetManifestPath
+        )
+        await writeJsonAtomic(targetManifestPath, nextManifest)
         return get(id)
       } catch (error) {
-        await fsp.rm(directory, { recursive: true, force: true })
+        await removeSafeTree(rootPath, realRoot, directory)
         throw error
       }
     })
@@ -284,14 +453,21 @@ function createArtifactRepository (options = {}) {
 
   async function list (input = {}) {
     const filters = validateArtifactFilters(input)
-    await fsp.mkdir(rootPath, { recursive: true })
+    const realRoot = await ensureRepositoryRoot(rootPath)
     const entries = await fsp.readdir(rootPath, { withFileTypes: true })
     const manifests = []
     for (const entry of entries) {
-      if (!entry.isDirectory() || !ARTIFACT_ID_PATTERN.test(entry.name)) {
+      if (!ARTIFACT_ID_PATTERN.test(entry.name)) {
         continue
       }
-      const manifest = await readManifest(entry.name)
+      const directory = artifactPath(entry.name)
+      const stat = await assertExistingSafePath(
+        rootPath,
+        realRoot,
+        directory
+      )
+      if (!stat.isDirectory()) continue
+      const manifest = await readManifest(entry.name, realRoot)
       if (!manifest) continue
       const haystack = `${manifest.title || ''}\n${manifest.server || ''}`
         .toLowerCase()
@@ -316,7 +492,7 @@ function createArtifactRepository (options = {}) {
       manifests.push(manifest)
     }
     return manifests.sort((left, right) => (
-      Number(right.updatedAt) - Number(left.updatedAt) ||
+      (Number(right.updatedAt) - Number(left.updatedAt)) ||
       left.id.localeCompare(right.id)
     ))
   }
@@ -324,8 +500,10 @@ function createArtifactRepository (options = {}) {
   async function remove (id) {
     assertArtifactId(id)
     return withLock(id, async () => {
+      const realRoot = await ensureRepositoryRoot(rootPath)
       const directory = artifactPath(id)
-      if (!await pathExists(manifestPath(id))) return false
+      if (!await lstatOrNull(directory)) return false
+      await assertSafeTree(rootPath, realRoot, directory)
       await fsp.rm(directory, { recursive: true, force: true })
       return true
     })
