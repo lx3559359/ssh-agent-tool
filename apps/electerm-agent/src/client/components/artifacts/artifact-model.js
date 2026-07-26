@@ -109,7 +109,7 @@ function pemBlockLabelFromLine (value) {
 }
 
 function isPemBodyLine (value) {
-  return /^[A-Za-z0-9+/=]{4,128}$/.test(String(value || '').trim())
+  return /^[A-Za-z0-9+/=]{4,}$/.test(String(value || '').trim())
 }
 
 function redactPemBlocks (value) {

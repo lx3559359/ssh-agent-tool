@@ -69,6 +69,21 @@ test('preserves ordinary text after a truncated private key block', async () => 
   assert.match(redacted, /more notes here/i)
 })
 
+test('redacts a long single-line body from a truncated private key block', async () => {
+  const { redactArtifactText } = await import(moduleUrl)
+  const privateKeyBody = 'QUJD'.repeat(64)
+  const explanation = '这是必须保留的普通中文说明'
+  const redacted = redactArtifactText([
+    '-----BEGIN PRIVATE KEY-----',
+    privateKeyBody,
+    explanation
+  ].join('\n'))
+
+  assert.equal(privateKeyBody.length, 256)
+  assert.doesNotMatch(redacted, new RegExp(privateKeyBody))
+  assert.match(redacted, new RegExp(explanation))
+})
+
 test('normalizes artifact drafts without mutating input or preserving numeric table cells', async () => {
   const { normalizeArtifactDraft } = await import(moduleUrl)
   const input = {
