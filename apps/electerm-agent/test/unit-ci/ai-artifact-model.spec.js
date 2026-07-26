@@ -32,25 +32,29 @@ test('redacts secrets and PEM private keys in artifact text', async () => {
     'password : hunter2',
     'passwd=super-secret',
     'cookie: session=abc123',
+    '-----BEGIN PRIVATE KEY-----',
+    'plain private key material',
+    '-----END PRIVATE KEY-----',
     '-----BEGIN RSA PRIVATE KEY-----',
     'top secret key material',
     '-----END RSA PRIVATE KEY-----'
   ].join('\n'))
 
-  assert.match(redacted, /api key=\[宸查殣钘廬/i)
-  assert.match(redacted, /token=\[宸查殣钘廬/i)
-  assert.match(redacted, /password=\[宸查殣钘廬/i)
-  assert.match(redacted, /passwd=\[宸查殣钘廬/i)
-  assert.match(redacted, /cookie=\[宸查殣钘廬/i)
-  assert.doesNotMatch(redacted, /BEGIN RSA PRIVATE KEY/i)
-  assert.doesNotMatch(redacted, /END RSA PRIVATE KEY/i)
+  assert.match(redacted, /api key=/i)
+  assert.match(redacted, /token=/i)
+  assert.match(redacted, /password=/i)
+  assert.match(redacted, /passwd=/i)
+  assert.match(redacted, /cookie=/i)
+  assert.doesNotMatch(redacted, /abcd-1234|secret-token|hunter2|super-secret|abc123/i)
+  assert.doesNotMatch(redacted, /BEGIN (?:RSA )?PRIVATE KEY/i)
+  assert.doesNotMatch(redacted, /END (?:RSA )?PRIVATE KEY/i)
 })
 
 test('normalizes artifact drafts without mutating input or preserving numeric table cells', async () => {
   const { normalizeArtifactDraft } = await import(moduleUrl)
   const input = {
     type: 'diagnostic-report',
-    title: '  '.repeat(100),
+    title: '   ',
     server: 42,
     summary: 'token=secret',
     sections: [
@@ -74,13 +78,28 @@ test('normalizes artifact drafts without mutating input or preserving numeric ta
   assert.equal(draft.type, 'diagnostic-report')
   assert.equal(draft.title, '未命名成果')
   assert.equal(draft.server, '42')
-  assert.equal(draft.summary, 'token=[宸查殣钘廬')
-  assert.equal(draft.sections[0].content, 'api key=[宸查殣钘廬')
+  assert.match(draft.summary, /^token=/i)
+  assert.match(draft.sections[0].content, /^api key=/i)
+  assert.doesNotMatch(draft.summary, /secret/i)
+  assert.doesNotMatch(draft.sections[0].content, /secret/i)
   assert.deepEqual(draft.tables[0].rows, [['443', 'open']])
   assert.deepEqual(draft.risks, ['1'])
   assert.deepEqual(draft.recommendations, ['true'])
   assert.equal(Object.isFrozen(draft), true)
   assert.deepEqual(input, snapshot)
+})
+
+test('redacts a long PEM block before applying the summary length cap', async () => {
+  const { normalizeArtifactDraft } = await import(moduleUrl)
+  const draft = normalizeArtifactDraft({
+    type: 'security-report',
+    title: 'x',
+    summary: `${'x'.repeat(15950)}-----BEGIN PRIVATE KEY-----\nSECRET-MATERIAL\n-----END PRIVATE KEY-----${'y'.repeat(1000)}`
+  })
+
+  assert.equal(draft.summary.length, 16000)
+  assert.doesNotMatch(draft.summary, /BEGIN PRIVATE KEY/i)
+  assert.doesNotMatch(draft.summary, /SECRET-MATERIAL/i)
 })
 
 test('rejects unsupported artifact types and oversized normalized payloads', async () => {

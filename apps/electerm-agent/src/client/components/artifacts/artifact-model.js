@@ -52,13 +52,12 @@ function normalizeWhitespace (value) {
 }
 
 function normalizeFreeText (value, maxLength, fallback = '') {
-  const text = normalizeWhitespace(value)
-  const bounded = (text || fallback).slice(0, maxLength)
-  return redactArtifactText(bounded)
+  const text = redactArtifactText(normalizeWhitespace(value))
+  return (text || fallback).slice(0, maxLength)
 }
 
 function normalizeLongText (value, maxLength) {
-  return redactArtifactText(String(value ?? '').slice(0, maxLength))
+  return redactArtifactText(String(value ?? '')).slice(0, maxLength)
 }
 
 function normalizeArrayText (value, maxItems) {
@@ -104,7 +103,7 @@ export function redactArtifactText (value) {
   )
 
   return redactedSecrets.replace(
-    /-----BEGIN [^-]+ PRIVATE KEY-----[\s\S]*?-----END [^-]+ PRIVATE KEY-----/gi,
+    /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----[\s\S]*?(?:-----END (?:[A-Z0-9]+ )*PRIVATE KEY-----|$)/gi,
     REDACTED_PRIVATE_KEY
   )
 }
