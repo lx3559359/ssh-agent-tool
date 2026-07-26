@@ -1,3 +1,4 @@
+const crypto = require('node:crypto')
 const {
   artifactError,
   assertArtifactId,
@@ -9,6 +10,11 @@ const {
   validateArtifactProvenance,
   validateArtifactVersion
 } = require('./artifact-validator')
+const {
+  createGeneratorRegistry
+} = require('./generator-registry')
+const markdownGenerator = require('./markdown-generator')
+const csvGenerator = require('./csv-generator')
 
 function createArtifactService (options = {}) {
   const repository = options.repository
@@ -18,6 +24,11 @@ function createArtifactService (options = {}) {
       'Artifact repository is required.'
     )
   }
+  const now = typeof options.now === 'function' ? options.now : Date.now
+  const registry = options.registry || createGeneratorRegistry([
+    markdownGenerator,
+    csvGenerator
+  ])
 
   async function requireVersion (id, version) {
     const artifact = await repository.get(assertArtifactId(id))
@@ -25,13 +36,16 @@ function createArtifactService (options = {}) {
       throw artifactError('ARTIFACT_NOT_FOUND', 'Artifact was not found.')
     }
     const safeVersion = validateArtifactVersion(version)
-    if (!artifact.versions.some(item => item.version === safeVersion)) {
+    const selectedVersion = artifact.versions.find(
+      item => item.version === safeVersion
+    )
+    if (!selectedVersion) {
       throw artifactError(
         'ARTIFACT_VERSION_NOT_FOUND',
         'Artifact version was not found.'
       )
     }
-    return artifact
+    return { artifact, selectedVersion, version: safeVersion }
   }
 
   function listAIArtifacts (filters = {}) {
@@ -57,11 +71,31 @@ function createArtifactService (options = {}) {
   }
 
   async function generateAIArtifact (id, version, formats) {
-    await requireVersion(id, version)
-    validateArtifactFormats(formats)
-    throw artifactError(
-      'ARTIFACT_GENERATOR_UNAVAILABLE',
-      'Artifact generators are not available yet.'
+    const selected = await requireVersion(id, version)
+    const safeFormats = validateArtifactFormats(formats)
+    const generatedAt = now()
+    const outputs = await Promise.all(safeFormats.map(async format => {
+      const content = await registry.generate(
+        format,
+        selected.selectedVersion.source,
+        {
+          artifactId: selected.artifact.id,
+          version: selected.version
+        }
+      )
+      return {
+        format,
+        filename: `artifact-v${String(selected.version).padStart(4, '0')}.${format}`,
+        content,
+        bytes: content.byteLength,
+        sha256: crypto.createHash('sha256').update(content).digest('hex'),
+        generatedAt
+      }
+    }))
+    return repository.saveGeneratedOutputs(
+      selected.artifact.id,
+      selected.version,
+      outputs
     )
   }
 
@@ -71,12 +105,14 @@ function createArtifactService (options = {}) {
     format,
     destination
   ) {
-    await requireVersion(id, version)
-    validateArtifactFormat(format)
-    validateArtifactDestination(destination)
-    throw artifactError(
-      'ARTIFACT_GENERATOR_UNAVAILABLE',
-      'Artifact generators are not available yet.'
+    const selected = await requireVersion(id, version)
+    const safeFormat = validateArtifactFormat(format)
+    const safeDestination = validateArtifactDestination(destination)
+    return repository.exportGeneratedFile(
+      selected.artifact.id,
+      selected.version,
+      safeFormat,
+      safeDestination
     )
   }
 

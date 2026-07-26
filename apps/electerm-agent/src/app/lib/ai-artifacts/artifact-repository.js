@@ -5,7 +5,9 @@ const {
   ARTIFACT_ID_PATTERN,
   artifactError,
   assertArtifactId,
+  validateArtifactDestination,
   validateArtifactDraft,
+  validateArtifactFormat,
   validateArtifactFilters,
   validateArtifactProvenance,
   validateArtifactVersion
@@ -201,6 +203,16 @@ async function writeJsonAtomic (filePath, value, options = {}) {
   }
 }
 
+async function writeBufferAtomic (filePath, content) {
+  const tempPath = `${filePath}.${process.pid}.${Date.now()}.${crypto.randomBytes(6).toString('hex')}.tmp`
+  try {
+    await fsp.writeFile(tempPath, content, { flag: 'wx' })
+    await fsp.rename(tempPath, filePath)
+  } finally {
+    await fsp.rm(tempPath, { force: true }).catch(() => {})
+  }
+}
+
 async function readJson (filePath, code, message) {
   try {
     return JSON.parse(await fsp.readFile(filePath, 'utf8'))
@@ -216,6 +228,46 @@ function versionName (version) {
 
 function generatedArtifactId (timestamp) {
   return `artifact-${Number(timestamp).toString(36)}-${crypto.randomBytes(6).toString('hex')}`
+}
+
+function validateGeneratedOutput (value) {
+  if (!value || typeof value !== 'object' || !Buffer.isBuffer(value.content) ||
+    typeof value.filename !== 'string' ||
+    !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,199}$/.test(value.filename) ||
+    !Number.isSafeInteger(value.generatedAt) || value.generatedAt < 0) {
+    throw artifactError(
+      'ARTIFACT_OUTPUT_INVALID',
+      'Artifact generated output is invalid.'
+    )
+  }
+  const format = validateArtifactFormat(value.format)
+  const sha256 = crypto.createHash('sha256')
+    .update(value.content)
+    .digest('hex')
+  if (value.bytes !== value.content.byteLength || value.sha256 !== sha256) {
+    throw artifactError(
+      'ARTIFACT_OUTPUT_INVALID',
+      'Artifact generated output is invalid.'
+    )
+  }
+  return {
+    format,
+    filename: value.filename,
+    bytes: value.bytes,
+    sha256,
+    generatedAt: value.generatedAt,
+    content: value.content
+  }
+}
+
+function outputMetadata (output) {
+  return {
+    format: output.format,
+    filename: output.filename,
+    bytes: output.bytes,
+    sha256: output.sha256,
+    generatedAt: output.generatedAt
+  }
 }
 
 function createArtifactRepository (options = {}) {
@@ -474,6 +526,192 @@ function createArtifactRepository (options = {}) {
     })
   }
 
+  async function saveGeneratedOutputs (id, version, values) {
+    assertArtifactId(id)
+    const safeVersion = validateArtifactVersion(version)
+    if (!Array.isArray(values) || values.length < 1) {
+      throw artifactError(
+        'ARTIFACT_OUTPUT_INVALID',
+        'Artifact generated output is invalid.'
+      )
+    }
+    const outputs = values.map(validateGeneratedOutput)
+    if (new Set(outputs.map(output => output.format)).size !== outputs.length) {
+      throw artifactError(
+        'ARTIFACT_OUTPUT_INVALID',
+        'Artifact generated output is invalid.'
+      )
+    }
+
+    return withRepositoryMutation(rootPath, async realRoot => {
+      const manifest = await readManifest(id, realRoot)
+      if (!manifest) {
+        throw artifactError('ARTIFACT_NOT_FOUND', 'Artifact was not found.')
+      }
+      const versionIndex = manifest.versions.findIndex(
+        item => item.version === safeVersion
+      )
+      if (versionIndex < 0) {
+        throw artifactError(
+          'ARTIFACT_VERSION_NOT_FOUND',
+          'Artifact version was not found.'
+        )
+      }
+
+      const directory = versionPath(id, safeVersion)
+      const filesPath = resolveInside(directory, 'files')
+      await assertExistingSafePath(
+        rootPath,
+        realRoot,
+        filesPath,
+        'directory'
+      )
+      const replacements = []
+      try {
+        for (const [index, output] of outputs.entries()) {
+          const target = resolveInside(filesPath, output.filename)
+          await assertSafeWriteTarget(rootPath, realRoot, target)
+          const existing = await lstatOrNull(target)
+          const replacement = {
+            target,
+            backup: null,
+            targetWritten: false
+          }
+          replacements.push(replacement)
+          if (existing) {
+            const backup = resolveInside(
+              filesPath,
+              `.${output.filename}.${process.pid}.${Date.now()}.${index}.bak`
+            )
+            await fsp.rename(target, backup)
+            replacement.backup = backup
+          }
+          await writeBufferAtomic(target, output.content)
+          replacement.targetWritten = true
+        }
+
+        const currentVersion = manifest.versions[versionIndex]
+        const replacementFormats = new Map(
+          outputs.map(output => [output.format, outputMetadata(output)])
+        )
+        const nextFormats = []
+        for (const existing of currentVersion.formats || []) {
+          const format = typeof existing === 'string'
+            ? existing
+            : existing?.format
+          if (replacementFormats.has(format)) {
+            nextFormats.push(replacementFormats.get(format))
+            replacementFormats.delete(format)
+          } else {
+            nextFormats.push(existing)
+          }
+        }
+        nextFormats.push(...replacementFormats.values())
+        const nextVersions = manifest.versions.map((entry, index) => (
+          index === versionIndex
+            ? { ...entry, formats: nextFormats }
+            : entry
+        ))
+        const nextManifest = {
+          ...manifest,
+          updatedAt: Math.max(
+            Number(manifest.updatedAt) || 0,
+            ...outputs.map(output => output.generatedAt)
+          ),
+          versions: nextVersions
+        }
+        const targetManifestPath = manifestPath(id)
+        await assertSafeWriteTarget(
+          rootPath,
+          realRoot,
+          targetManifestPath
+        )
+        await writeJsonAtomic(targetManifestPath, nextManifest)
+      } catch (error) {
+        for (const replacement of replacements.reverse()) {
+          if (replacement.backup || replacement.targetWritten) {
+            await fsp.rm(replacement.target, { force: true }).catch(() => {})
+          }
+          if (replacement.backup) {
+            await fsp.rename(
+              replacement.backup,
+              replacement.target
+            ).catch(() => {})
+          }
+        }
+        throw error
+      }
+      for (const replacement of replacements) {
+        if (replacement.backup) {
+          await fsp.rm(replacement.backup, { force: true }).catch(() => {})
+        }
+      }
+      return get(id)
+    })
+  }
+
+  async function exportGeneratedFile (
+    id,
+    version,
+    format,
+    destination
+  ) {
+    assertArtifactId(id)
+    const safeVersion = validateArtifactVersion(version)
+    const safeFormat = validateArtifactFormat(format)
+    const safeDestination = validateArtifactDestination(destination)
+    return withRepositoryMutation(rootPath, async realRoot => {
+      const manifest = await readManifest(id, realRoot)
+      if (!manifest) {
+        throw artifactError('ARTIFACT_NOT_FOUND', 'Artifact was not found.')
+      }
+      const versionEntry = manifest.versions.find(
+        item => item.version === safeVersion
+      )
+      if (!versionEntry) {
+        throw artifactError(
+          'ARTIFACT_VERSION_NOT_FOUND',
+          'Artifact version was not found.'
+        )
+      }
+      const registered = (versionEntry.formats || []).find(item => (
+        item && typeof item === 'object' && item.format === safeFormat
+      ))
+      if (!registered) {
+        throw artifactError(
+          'ARTIFACT_FILE_NOT_GENERATED',
+          'Artifact file has not been generated.'
+        )
+      }
+      let output
+      try {
+        output = validateGeneratedOutput({
+          ...registered,
+          content: await fsp.readFile(resolveInside(
+            versionPath(id, safeVersion),
+            'files',
+            registered.filename
+          ))
+        })
+      } catch (error) {
+        if (String(error?.code || '').startsWith('ARTIFACT_')) throw error
+        throw artifactError(
+          'ARTIFACT_FILE_READ_FAILED',
+          'Artifact file could not be read.'
+        )
+      }
+      try {
+        await writeBufferAtomic(path.resolve(safeDestination), output.content)
+      } catch {
+        throw artifactError(
+          'ARTIFACT_EXPORT_FAILED',
+          'Artifact file could not be exported.'
+        )
+      }
+      return outputMetadata(output)
+    })
+  }
+
   async function list (input = {}) {
     const filters = validateArtifactFilters(input)
     const realRoot = await ensureRepositoryRoot(rootPath)
@@ -535,8 +773,10 @@ function createArtifactRepository (options = {}) {
     create,
     createVersion,
     delete: remove,
+    exportGeneratedFile,
     get,
-    list
+    list,
+    saveGeneratedOutputs
   })
 }
 

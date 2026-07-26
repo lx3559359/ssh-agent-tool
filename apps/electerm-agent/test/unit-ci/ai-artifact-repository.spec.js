@@ -383,7 +383,7 @@ test('validates draft, ID, version and format boundaries with stable codes', () 
   )
 })
 
-test('service exposes bounded operations and reports unavailable generators', async () => {
+test('service exposes bounded operations and rejects ungenerated exports', async () => {
   const tempRoot = await makeTempRoot()
   try {
     const repository = createArtifactRepository({
@@ -404,13 +404,18 @@ test('service exposes bounded operations and reports unavailable generators', as
       })).version,
       2
     )
-    await assert.rejects(
-      service.generateAIArtifact(created.id, 2, ['md']),
-      error => error && error.code === 'ARTIFACT_GENERATOR_UNAVAILABLE'
+    const generated = await service.generateAIArtifact(
+      created.id,
+      2,
+      ['md']
+    )
+    assert.deepEqual(
+      generated.versions[1].formats.map(item => item.format),
+      ['md']
     )
     await assert.rejects(
-      service.exportAIArtifactFile(created.id, 2, 'md', 'report.md'),
-      error => error && error.code === 'ARTIFACT_GENERATOR_UNAVAILABLE'
+      service.exportAIArtifactFile(created.id, 2, 'csv', 'report.csv'),
+      error => error && error.code === 'ARTIFACT_FILE_NOT_GENERATED'
     )
     assert.equal(await service.deleteAIArtifact(created.id), true)
     assert.equal(await service.getAIArtifact(created.id), null)
