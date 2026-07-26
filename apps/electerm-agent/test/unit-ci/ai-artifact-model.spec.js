@@ -33,10 +33,12 @@ test('redacts secrets and PEM private keys in artifact text', async () => {
     'passwd=super-secret',
     'cookie: session=abc123',
     '-----BEGIN PRIVATE KEY-----',
-    'plain private key material',
+    'MIIEvQIBADANBgkqhkiG9w0BAQEFAASC',
+    'AQAB',
     '-----END PRIVATE KEY-----',
     '-----BEGIN RSA PRIVATE KEY-----',
-    'top secret key material',
+    'MIIEpAIBAAKCAQEAv9gqQ9r2pQd0q1uM',
+    'AQAB',
     '-----END RSA PRIVATE KEY-----'
   ].join('\n'))
 
@@ -48,6 +50,23 @@ test('redacts secrets and PEM private keys in artifact text', async () => {
   assert.doesNotMatch(redacted, /abcd-1234|secret-token|hunter2|super-secret|abc123/i)
   assert.doesNotMatch(redacted, /BEGIN (?:RSA )?PRIVATE KEY/i)
   assert.doesNotMatch(redacted, /END (?:RSA )?PRIVATE KEY/i)
+})
+
+test('preserves ordinary text after a truncated private key block', async () => {
+  const { redactArtifactText } = await import(moduleUrl)
+  const redacted = redactArtifactText([
+    '-----BEGIN PRIVATE KEY-----',
+    'MIIEvQIBADANBgkqhkiG9w0BAQEFAASC',
+    'AQAB',
+    '',
+    'ordinary explanation that must remain visible',
+    'more notes here'
+  ].join('\n'))
+
+  assert.doesNotMatch(redacted, /MIIEvQIBADANBgkqhkiG9w0BAQEFAASC/i)
+  assert.doesNotMatch(redacted, /AQAB/i)
+  assert.match(redacted, /ordinary explanation that must remain visible/i)
+  assert.match(redacted, /more notes here/i)
 })
 
 test('normalizes artifact drafts without mutating input or preserving numeric table cells', async () => {
@@ -91,10 +110,11 @@ test('normalizes artifact drafts without mutating input or preserving numeric ta
 
 test('redacts a long PEM block before applying the summary length cap', async () => {
   const { normalizeArtifactDraft } = await import(moduleUrl)
+  const pemBody = Array.from({ length: 240 }, () => 'A'.repeat(64)).join('\n')
   const draft = normalizeArtifactDraft({
     type: 'security-report',
     title: 'x',
-    summary: `${'x'.repeat(15950)}-----BEGIN PRIVATE KEY-----\nSECRET-MATERIAL\n-----END PRIVATE KEY-----${'y'.repeat(1000)}`
+    summary: `${'x'.repeat(15950)}-----BEGIN PRIVATE KEY-----\n${pemBody}\n-----END PRIVATE KEY-----${'y'.repeat(1000)}`
   })
 
   assert.equal(draft.summary.length, 16000)

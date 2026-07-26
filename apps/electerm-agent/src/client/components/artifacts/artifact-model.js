@@ -95,17 +95,85 @@ function normalizeTables (value) {
   return value.slice(0, MAX_TABLES).map(table => normalizeTable(table))
 }
 
+function normalizePemBlockLabel (value) {
+  return String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toUpperCase()
+}
+
+function pemBlockLabelFromLine (value) {
+  const match = String(value || '').match(/^\s*-----BEGIN ((?:[A-Z0-9]+ )*PRIVATE KEY)-----\s*$/i) ||
+    String(value || '').match(/^\s*-----END ((?:[A-Z0-9]+ )*PRIVATE KEY)-----\s*$/i)
+  return match ? normalizePemBlockLabel(match[1]) : ''
+}
+
+function isPemBodyLine (value) {
+  return /^[A-Za-z0-9+/=]{4,128}$/.test(String(value || '').trim())
+}
+
+function redactPemBlocks (value) {
+  const lines = String(value ?? '').split(/\r?\n/)
+  const output = []
+  let index = 0
+  let redacting = false
+  let pemLabel = ''
+
+  while (index < lines.length) {
+    const line = lines[index]
+    if (!redacting) {
+      const beginMatch = String(line || '').match(/^(.*?)(-----BEGIN ((?:[A-Z0-9]+ )*PRIVATE KEY)-----)(.*)$/i)
+      if (!beginMatch) {
+        output.push(line)
+        index += 1
+        continue
+      }
+
+      output.push(`${beginMatch[1]}${REDACTED_PRIVATE_KEY}`)
+      pemLabel = normalizePemBlockLabel(beginMatch[3])
+      redacting = true
+      index += 1
+      continue
+    }
+
+    const currentLabel = pemBlockLabelFromLine(line)
+    if (currentLabel && currentLabel === pemLabel && /^\s*-----END /i.test(line)) {
+      redacting = false
+      pemLabel = ''
+      index += 1
+      continue
+    }
+
+    if (!String(line || '').trim()) {
+      output.push(line)
+      redacting = false
+      pemLabel = ''
+      index += 1
+      continue
+    }
+
+    if (isPemBodyLine(line)) {
+      index += 1
+      continue
+    }
+
+    redacting = false
+    pemLabel = ''
+    output.push(line)
+    index += 1
+  }
+
+  return output.join('\n')
+}
+
 export function redactArtifactText (value) {
-  const source = String(value ?? '')
+  const source = redactPemBlocks(String(value ?? ''))
   const redactedSecrets = source.replace(
     /\b(api[_ -]?key|token|password|passwd|cookie)\b\s*[:=]\s*[^\r\n,;]+/gi,
     (_, name) => `${name}=${REDACTED_VALUE}`
   )
 
-  return redactedSecrets.replace(
-    /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----[\s\S]*?(?:-----END (?:[A-Z0-9]+ )*PRIVATE KEY-----|$)/gi,
-    REDACTED_PRIVATE_KEY
-  )
+  return redactedSecrets
 }
 
 export function normalizeArtifactDraft (input = {}) {
