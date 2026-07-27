@@ -62,6 +62,7 @@ import {
 } from './aigshell-layout'
 
 const FleetStatusWorkspace = lazy(() => import('../fleet-status/fleet-status-workspace'))
+const ArtifactWorkspace = lazy(() => import('../artifacts/entry'))
 const UpdateCheck = lazy(() => import('./upgrade'))
 const AIConfigModal = lazy(() => import('../ai/ai-config-modal'))
 
@@ -105,7 +106,6 @@ export default auto(function Index (props) {
     }
     store.isSecondInstance = window.pre.runSync('isSecondInstance')
     store.initData()
-    store.checkForDbUpgrade()
     store.handleGetSerials()
     store.checkPendingDeepLink()
 
@@ -161,10 +161,15 @@ export default auto(function Index (props) {
   const activeTabId = currentTab?.id || store.activeTabId || ''
   const upgradeInfo = deepCopy(store.upgradeInfo)
   const fleetStatusActive = store.mainWorkspaceMode === 'fleet-status'
-  const aiSessionTabId = fleetStatusActive ? '' : activeTabId
+  const artifactWorkspaceActive = store.mainWorkspaceMode === 'artifacts'
+  const nonTerminalWorkspaceActive = fleetStatusActive ||
+    artifactWorkspaceActive
+  const aiSessionTabId = nonTerminalWorkspaceActive ? '' : activeTabId
   const aiConversationScopeId = fleetStatusActive
     ? 'fleet-status'
-    : String(activeTabId || 'global')
+    : artifactWorkspaceActive
+      ? 'artifacts'
+      : String(activeTabId || 'global')
   const cls = classnames({
     loaded: configLoaded,
     'not-webapp': !window.et.isWebApp,
@@ -232,7 +237,7 @@ export default auto(function Index (props) {
     rightPanelTab,
     rightPanelAutoExpanded: store.rightPanelAutoExpanded,
     pinnedQuickCommandBar: store.pinnedQuickCommandBar,
-    inActiveTerminal: !fleetStatusActive && store.inActiveTerminal,
+    inActiveTerminal: !nonTerminalWorkspaceActive && store.inActiveTerminal,
     quickCommandBoxHeight,
     resizeTrigger: store.resizeTrigger
   })
@@ -328,9 +333,10 @@ export default auto(function Index (props) {
   }
   const terminalWorkspaceProps = {
     className: classnames('terminal-workspace-layer', {
-      'fleet-status-active': fleetStatusActive
+      'fleet-status-active': fleetStatusActive,
+      'artifacts-active': artifactWorkspaceActive
     }),
-    ...getTerminalWorkspaceAccessibility(fleetStatusActive)
+    ...getTerminalWorkspaceAccessibility(nonTerminalWorkspaceActive)
   }
   return (
     <ConfigProvider
@@ -385,6 +391,24 @@ export default auto(function Index (props) {
                 <LazyModuleBoundary moduleName={window.translate('shellpilotFleetWorkspaceModule')} fallback={null}>
                   <Suspense fallback={null}>
                     <FleetStatusWorkspace
+                      store={store}
+                      shellGeometry={shellGeometry}
+                      active
+                    />
+                  </Suspense>
+                </LazyModuleBoundary>
+                )
+              : null
+          }
+          {
+            artifactWorkspaceActive
+              ? (
+                <LazyModuleBoundary
+                  moduleName={window.translate('shellpilotArtifactWorkspaceModule')}
+                  fallback={null}
+                >
+                  <Suspense fallback={null}>
+                    <ArtifactWorkspace
                       store={store}
                       shellGeometry={shellGeometry}
                       active

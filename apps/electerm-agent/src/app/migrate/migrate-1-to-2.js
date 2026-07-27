@@ -69,6 +69,15 @@ function createMigration (options = {}) {
     return resolve(appPath, 'electerm', 'users', defaultUserName, `electerm.${name}.nedb`)
   }
 
+  function resolveBackupPath (sourcePath) {
+    const { existsSync } = getDependencies()
+    const basePath = sourcePath + '.bak'
+    if (!existsSync(basePath)) return basePath
+    let index = 1
+    while (existsSync(`${basePath}.${index}`)) index += 1
+    return `${basePath}.${index}`
+  }
+
   function checkMigrate () {
     const nodeVersion = options.nodeVersion || process.versions.node
     if (Number(String(nodeVersion).split('.')[0]) < 22) return false
@@ -130,7 +139,7 @@ function createMigration (options = {}) {
         log.info(`Table ${table} is empty, nothing to migrate`)
       }
 
-      const backupPath = nedbPath + '.bak'
+      const backupPath = resolveBackupPath(nedbPath)
       try {
         renameSync(nedbPath, backupPath)
         log.info(`Backed up ${nedbPath} to ${backupPath}`)

@@ -12,6 +12,7 @@ const {
   shell
 } = require('electron')
 const path = require('path')
+const fsp = require('node:fs/promises')
 const globalState = require('./glob-state')
 const ipcSyncFuncs = require('./ipc-sync')
 const { dbAction } = require('./db')
@@ -110,6 +111,9 @@ const {
 const {
   createArtifactService
 } = require('./ai-artifacts/artifact-service')
+const {
+  artifactFilename
+} = require('./ai-artifacts/filename-utils')
 
 let agentSkillServices
 let agentSkillMigrationPromise
@@ -402,6 +406,73 @@ function initIpc () {
     createAIArtifactVersion: (id, draft) => safeAIArtifactResult(() => getAIArtifactService().createAIArtifactVersion(id, draft)),
     generateAIArtifact: (id, version, formats) => safeAIArtifactResult(() => getAIArtifactService().generateAIArtifact(id, version, formats)),
     exportAIArtifactFile: (id, version, format, destination) => safeAIArtifactResult(() => getAIArtifactService().exportAIArtifactFile(id, version, format, destination)),
+    saveAIArtifactFile: (id, version, format, options = {}) => safeAIArtifactResult(async () => {
+      const artifact = await getAIArtifactService().getAIArtifact(id)
+      if (!artifact) {
+        const error = new Error('Artifact was not found.')
+        error.code = 'ARTIFACT_NOT_FOUND'
+        throw error
+      }
+      await getAIArtifactService().generateAIArtifact(id, version, [format])
+      const win = globalState.get('win')
+      const result = await dialog.showSaveDialog(win, {
+        title: '保存 AI 成果',
+        defaultPath: `${artifact.title || 'ShellPilot-成果'}.${format}`,
+        filters: [{
+          name: `${String(format).toUpperCase()} 文件`,
+          extensions: [format]
+        }],
+        properties: ['createDirectory', 'showOverwriteConfirmation']
+      })
+      if (result.canceled || !result.filePath) return { canceled: true }
+      const saved = await getAIArtifactService().saveAIArtifactFileToTrustedPath(
+        id,
+        version,
+        format,
+        result.filePath
+      )
+      if (options?.openAfterSave === true) {
+        const openError = await shell.openPath(result.filePath)
+        if (openError) {
+          const error = new Error('无法使用系统应用打开该成果文件。')
+          error.code = 'ARTIFACT_EXTERNAL_OPEN_FAILED'
+          throw error
+        }
+      }
+      return {
+        canceled: false,
+        filename: path.basename(result.filePath),
+        bytes: saved.bytes
+      }
+    }),
+    prepareAIArtifactUploadSource: (id, version, format) => safeAIArtifactResult(async () => {
+      const artifact = await getAIArtifactService().getAIArtifact(id)
+      if (!artifact) {
+        const error = new Error('Artifact was not found.')
+        error.code = 'ARTIFACT_NOT_FOUND'
+        throw error
+      }
+      await getAIArtifactService().generateAIArtifact(id, version, [format])
+      const uploadRoot = path.join(
+        app.getPath('temp'),
+        'shellpilot-artifact-upload'
+      )
+      await fsp.mkdir(uploadRoot, { recursive: true })
+      const uploadDir = await fsp.mkdtemp(path.join(uploadRoot, 'artifact-'))
+      const filename = artifactFilename(artifact.title, format)
+      const localPath = path.join(uploadDir, filename)
+      const saved = await getAIArtifactService().saveAIArtifactFileToTrustedPath(
+        id,
+        version,
+        format,
+        localPath
+      )
+      return {
+        localPath,
+        filename,
+        bytes: saved.bytes
+      }
+    }),
     deleteAIArtifact: id => safeAIArtifactResult(() => getAIArtifactService().deleteAIArtifact(id))
   }
   const asyncGlobals = {

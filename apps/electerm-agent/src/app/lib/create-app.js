@@ -86,6 +86,24 @@ function stopPerformanceCollection (metrics) {
   } catch (error) {}
 }
 
+async function prepareDatabase () {
+  const {
+    checkMigrate,
+    migrate
+  } = require('../migrate/migrate-1-to-2')
+  if (checkMigrate()) {
+    await migrate()
+    return
+  }
+  const {
+    checkDbUpgrade,
+    doUpgrade
+  } = require('../upgrade')
+  if (await checkDbUpgrade()) {
+    await doUpgrade()
+  }
+}
+
 // GPU error suggestion message
 const GPU_ERROR_SUGGESTION = `
 ================================================================================
@@ -233,6 +251,11 @@ exports.createApp = async function () {
     }
   })
   app.whenReady().then(async () => {
+    try {
+      await prepareDatabase()
+    } catch (error) {
+      log.error('database startup migration failed', error)
+    }
     conf = await getDbConfig()
     createWindow(conf)
     startMemorySampling(performanceMetrics)

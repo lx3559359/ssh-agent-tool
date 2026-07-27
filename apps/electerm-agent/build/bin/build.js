@@ -7,6 +7,13 @@ const fs = require('fs')
 const os = require('os')
 const { resolve } = require('path')
 
+function runStep (command) {
+  const result = exec(command)
+  if (result.code !== 0) {
+    throw new Error(`Build step failed (${result.code}): ${command}`)
+  }
+}
+
 function cleanGeneratedFrontendAssets () {
   const assetsRoot = resolve(__dirname, '../../work/app/assets')
   const targets = ['chunk', 'js', 'css']
@@ -49,13 +56,13 @@ const timeStart = +new Date()
 cleanGeneratedFrontendAssets()
 echo('version file')
 echo('js/css file')
-exec('npm run vite-build')
+runStep('npm run vite-build')
 echo('copy file')
-exec('node.exe ./build/bin/copy.js')
+runStep('node.exe ./build/bin/copy.js')
 echo('runtime file')
 syncRuntimeFiles()
 echo('html file')
-exec('node.exe ./build/bin/pug.js')
+runStep('node.exe ./build/bin/pug.js')
 
 const endTime = +new Date()
 echo(`done build in ${(endTime - timeStart) / 1000} s`)

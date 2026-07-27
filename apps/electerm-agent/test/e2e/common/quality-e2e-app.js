@@ -65,7 +65,11 @@ async function launchQualityApp (electron, options = {}) {
     createProfileRoot: () => reusableProfileRoot || fs.mkdtemp(path.join(tmpdir(), profilePrefix)),
     validateProfileRoot: assertSafeQualityRoot,
     launch: root => electron.launch(qualityLaunchOptions(root, options.env)),
-    readUserDataPath: app => app.evaluate(({ app }) => app.getPath('userData')),
+    // Playwright's main-process evaluate context is transient with newer
+    // Electron releases. NODE_TEST + DATA_PATH deterministically controls
+    // userData through common/user-data-path.js, so validate that contract
+    // without racing the inspector context during startup.
+    readUserDataPath: (app, root) => path.resolve(root, 'data', 'electron-user-data'),
     validateUserDataPath: (root, actualPath) => {
       const expected = path.resolve(root) + path.sep
       if (!path.resolve(actualPath).startsWith(expected)) {

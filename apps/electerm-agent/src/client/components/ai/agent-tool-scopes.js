@@ -40,7 +40,11 @@ export const AGENT_TOOL_SCOPES = Object.freeze({
   run_background_command: 'session-write',
   get_background_task_status: 'session-read',
   get_background_task_log: 'session-read',
-  cancel_background_task: 'session-control'
+  cancel_background_task: 'session-control',
+  create_artifact: 'conversation',
+  update_artifact: 'conversation',
+  regenerate_artifact: 'conversation',
+  export_artifact: 'conversation'
 })
 
 const validScopes = new Set(VALID_AGENT_TOOL_SCOPES)

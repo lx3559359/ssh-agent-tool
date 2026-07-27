@@ -439,7 +439,7 @@ test('IPC and renderer client expose only named artifact operations', async () =
     'createAIArtifact',
     'createAIArtifactVersion',
     'generateAIArtifact',
-    'exportAIArtifactFile',
+    'saveAIArtifactFile',
     'deleteAIArtifact'
   ]
 
@@ -448,6 +448,10 @@ test('IPC and renderer client expose only named artifact operations', async () =
     assert.match(clientSource, new RegExp(`['"]${operation}['"]`))
   }
   assert.match(clientSource, /window\.pre\.runGlobalAsync/)
+  assert.doesNotMatch(
+    clientSource,
+    /runArtifactCall\(['"]exportAIArtifactFile['"]/
+  )
   assert.doesNotMatch(clientSource, /stack/)
 })
 

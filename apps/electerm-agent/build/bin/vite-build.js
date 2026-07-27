@@ -8,4 +8,7 @@ assertCurrentReleaseBaseline()
 const p = resolve(__dirname, '../vite')
 cd(p)
 
-exec('npm run build')
+const result = exec('npm run build')
+if (result.code !== 0) {
+  process.exit(result.code)
+}

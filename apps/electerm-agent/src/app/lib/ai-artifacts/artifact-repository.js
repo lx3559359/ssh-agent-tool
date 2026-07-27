@@ -650,23 +650,35 @@ function createArtifactRepository (options = {}) {
     })
   }
 
-  async function exportGeneratedFile (
+  function validateTrustedArtifactDestination (destination) {
+    if (
+      typeof destination !== 'string' ||
+      destination.length < 1 ||
+      destination.length > 4096 ||
+      destination.includes('\0') ||
+      !path.isAbsolute(destination)
+    ) {
+      throw artifactError(
+        'ARTIFACT_DESTINATION_INVALID',
+        'Artifact destination is invalid.'
+      )
+    }
+    return path.resolve(destination)
+  }
+
+  async function exportGeneratedFileInternal (
     id,
     version,
     format,
-    destination
+    safeDestination
   ) {
-    assertArtifactId(id)
-    const safeVersion = validateArtifactVersion(version)
-    const safeFormat = validateArtifactFormat(format)
-    const safeDestination = validateArtifactDestination(destination)
     return withRepositoryMutation(rootPath, async realRoot => {
       const manifest = await readManifest(id, realRoot)
       if (!manifest) {
         throw artifactError('ARTIFACT_NOT_FOUND', 'Artifact was not found.')
       }
       const versionEntry = manifest.versions.find(
-        item => item.version === safeVersion
+        item => item.version === version
       )
       if (!versionEntry) {
         throw artifactError(
@@ -675,7 +687,7 @@ function createArtifactRepository (options = {}) {
         )
       }
       const registered = (versionEntry.formats || []).find(item => (
-        item && typeof item === 'object' && item.format === safeFormat
+        item && typeof item === 'object' && item.format === format
       ))
       if (!registered) {
         throw artifactError(
@@ -688,7 +700,7 @@ function createArtifactRepository (options = {}) {
         output = validateGeneratedOutput({
           ...registered,
           content: await fsp.readFile(resolveInside(
-            versionPath(id, safeVersion),
+            versionPath(id, version),
             'files',
             registered.filename
           ))
@@ -710,6 +722,29 @@ function createArtifactRepository (options = {}) {
       }
       return outputMetadata(output)
     })
+  }
+
+  function exportGeneratedFile (id, version, format, destination) {
+    return exportGeneratedFileInternal(
+      assertArtifactId(id),
+      validateArtifactVersion(version),
+      validateArtifactFormat(format),
+      validateArtifactDestination(destination)
+    )
+  }
+
+  function exportGeneratedFileToTrustedPath (
+    id,
+    version,
+    format,
+    destination
+  ) {
+    return exportGeneratedFileInternal(
+      assertArtifactId(id),
+      validateArtifactVersion(version),
+      validateArtifactFormat(format),
+      validateTrustedArtifactDestination(destination)
+    )
   }
 
   async function list (input = {}) {
@@ -774,6 +809,7 @@ function createArtifactRepository (options = {}) {
     createVersion,
     delete: remove,
     exportGeneratedFile,
+    exportGeneratedFileToTrustedPath,
     get,
     list,
     saveGeneratedOutputs

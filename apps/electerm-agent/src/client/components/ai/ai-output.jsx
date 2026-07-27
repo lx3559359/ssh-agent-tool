@@ -7,6 +7,7 @@ import { CopyOutlined, DownloadOutlined, PlayCircleOutlined } from '@ant-design/
 import getBrand from './get-brand'
 import { refsStatic } from '../common/ref'
 import download from '../../common/download'
+import ArtifactCard from '../artifacts/artifact-card'
 import {
   extractAIGeneratedArtifacts,
   stripAIGeneratedArtifactBlocks
@@ -37,7 +38,7 @@ export default function AIOutput ({ item, isStreaming = false }) {
     }
   }, [response])
 
-  if (!response) {
+  if (!response && !item.artifactIds?.length) {
     return null
   }
 
@@ -122,11 +123,29 @@ export default function AIOutput ({ item, isStreaming = false }) {
 
   const visibleResponse = stripAIGeneratedArtifactBlocks(response)
   const artifacts = isStreaming ? [] : extractAIGeneratedArtifacts(response)
+  const persistedArtifactIds = isStreaming
+    ? []
+    : [...new Set(
+        (Array.isArray(item.artifactIds) ? item.artifactIds : [])
+          .map(id => String(id || '').trim())
+          .filter(Boolean)
+      )]
   const mdProps = {
     children: visibleResponse,
     components: {
       code: renderCode
     }
+  }
+
+  function renderPersistedArtifactCards () {
+    if (!persistedArtifactIds.length) return null
+    return (
+      <div className='ai-persisted-artifacts'>
+        {persistedArtifactIds.map(artifactId => (
+          <ArtifactCard key={artifactId} artifactId={artifactId} />
+        ))}
+      </div>
+    )
   }
 
   function renderGeneratedArtifacts () {
@@ -161,6 +180,7 @@ export default function AIOutput ({ item, isStreaming = false }) {
           : (
             <ReactMarkdown {...mdProps} />
             )}
+        {renderPersistedArtifactCards()}
         {renderGeneratedArtifacts()}
       </div>
     </div>

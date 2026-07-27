@@ -55,6 +55,17 @@ export default () => {
     tabs: [],
     activeTabId: '',
     mainWorkspaceMode: 'terminal',
+    activeArtifactId: '',
+    activeArtifact: null,
+    artifactItems: [],
+    artifactFilters: {
+      category: 'recent',
+      query: '',
+      server: '',
+      format: ''
+    },
+    artifactLoading: false,
+    artifactError: '',
     history: [],
     sshConfigs: [],
     bookmarks: [],

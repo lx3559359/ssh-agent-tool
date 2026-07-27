@@ -65,6 +65,7 @@ import { agentTaskRegistry } from './agent-task-registry.js'
 import { resolveAgentRuntimeEndpoint } from './agent-runtime-context.js'
 import { createAIRequestCredentialReference } from './ai-request-credentials'
 import message from '../common/message'
+import CreateArtifactMenu from '../artifacts/create-artifact-menu'
 import './ai.styl'
 
 const { TextArea } = Input
@@ -76,6 +77,7 @@ export default function AIChat (props) {
   const [mode, setMode] = useState('ask')
   const [attachmentQueue, setAttachmentQueue] = useState([])
   const fileInputRef = useRef(null)
+  const composerRef = useRef(null)
   const submittedHealthChecksRef = useRef(new Map())
   const [, setAgentTaskVersion] = useState(0)
   const isAgent = mode === 'agent'
@@ -458,6 +460,11 @@ export default function AIChat (props) {
     )
   }
 
+  function handleSeedArtifactPrompt (nextPrompt) {
+    setPrompt(nextPrompt)
+    requestAnimationFrame(() => composerRef.current?.focus())
+  }
+
   function renderContextActions () {
     const items = [
       {
@@ -662,6 +669,7 @@ export default function AIChat (props) {
         {renderContextActions()}
         {renderAttachments()}
         <TextArea
+          ref={composerRef}
           value={prompt}
           onChange={handlePromptChange}
           onPressEnter={handleKeyPress}
@@ -681,6 +689,7 @@ export default function AIChat (props) {
             {renderModeSwitch()}
             {renderTabSelect()}
             {renderUploadButton()}
+            <CreateArtifactMenu onSeedPrompt={handleSeedArtifactPrompt} />
             <SettingOutlined
               onClick={toggleConfig}
               className='mg1l pointer icon-hover toggle-ai-setting-icon'

@@ -18,7 +18,8 @@ const { session } = require('../../src/app/server/session-ssh')
 const USERNAME = 'tester'
 const PASSWORD = 'electerm-test-password'
 
-const HOST_KEY = utils.generateKeyPairSync('ed25519', {
+const HOST_KEY = utils.generateKeyPairSync('rsa', {
+  bits: 2048,
   comment: 'electerm-test-host'
 })
 

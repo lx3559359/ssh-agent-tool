@@ -3,6 +3,7 @@
  */
 
 const pack = require('../../package.json')
+const fs = require('fs')
 const os = require('os')
 const { resolve } = require('path')
 const { version } = pack
@@ -45,7 +46,7 @@ rm('-rf', 'work/app/assets/js/index*')
 rm('-rf', 'work/app/assets/js/*.txt')
 rm('-rf', 'node_modules/cpu-features')
 
-require('fs').writeFileSync(
+fs.writeFileSync(
   resolve(__dirname, '../../work/app/package.json'),
   JSON.stringify(
     pack, null, 2
@@ -131,6 +132,9 @@ rm('-rf', 'work/app/node_modules/node-pty/lib/testUtils.test.js.map')
 // yarn auto clean
 cp('-r', 'build/bin/.yarnclean', 'work/app/')
 exec(`cd work/app && yarn generate-lock-entry > yarn.lock && yarn autoclean --force && cd ${cwd}`)
+if (isWin && fs.existsSync(resolve(cwd, 'node_modules/exceljs/lib/doc'))) {
+  cp('-r', 'node_modules/exceljs/lib/doc', 'work/app/node_modules/exceljs/lib/')
+}
 rm('-rf', 'work/app/.yarnclean')
 rm('-rf', 'work/app/package-lock.json')
 rm('-rf', 'work/app/yarn.lock')

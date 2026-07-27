@@ -28,17 +28,27 @@ export const createArtifactVersion = (id, draft) => (
 export const generateArtifact = (id, version, formats) => (
   runArtifactCall('generateAIArtifact', id, version, formats)
 )
-export const exportArtifactFile = (
+export const saveArtifactFile = (
   id,
   version,
   format,
-  destination
+  options = {}
 ) => runArtifactCall(
-  'exportAIArtifactFile',
+  'saveAIArtifactFile',
   id,
   version,
   format,
-  destination
+  options
+)
+export const prepareArtifactUploadSource = (
+  id,
+  version,
+  format
+) => runArtifactCall(
+  'prepareAIArtifactUploadSource',
+  id,
+  version,
+  format
 )
 export const deleteArtifact = id => (
   runArtifactCall('deleteAIArtifact', id)
@@ -50,6 +60,7 @@ export const artifactClient = Object.freeze({
   createArtifact,
   createArtifactVersion,
   generateArtifact,
-  exportArtifactFile,
+  saveArtifactFile,
+  prepareArtifactUploadSource,
   deleteArtifact
 })

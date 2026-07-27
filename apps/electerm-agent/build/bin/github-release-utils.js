@@ -167,8 +167,7 @@ function buildGitHubReleaseCommands ({
   return [
     ['gh', ['release', 'view', tag, '--repo', repo]],
     ['gh', ['release', 'create', tag, '--repo', repo, '--draft', '--title', title, '--notes', notes]],
-    ['gh', ['release', 'edit', tag, '--repo', repo, '--title', title, '--notes', notes]],
-    ['gh', ['release', 'upload', tag, ...assets, '--repo', repo, '--clobber']],
+    ['gh', ['release', 'upload', tag, ...assets, '--repo', repo]],
     ['gh', ['release', 'edit', tag, '--repo', repo, '--draft=false']]
   ]
 }

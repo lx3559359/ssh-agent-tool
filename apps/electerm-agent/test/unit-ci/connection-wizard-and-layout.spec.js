@@ -22,7 +22,9 @@ test('new SSH connections use the beginner connection wizard while advanced sett
 })
 
 test('narrow viewports automatically collapse only the AI panel', async () => {
-  const { getAIGShellGeometry } = await import(pathToFileURL(path.join(
+  const {
+    getAIGShellGeometry
+  } = await import(pathToFileURL(path.join(
     root,
     'src/client/components/main/aigshell-layout.js'
   )))

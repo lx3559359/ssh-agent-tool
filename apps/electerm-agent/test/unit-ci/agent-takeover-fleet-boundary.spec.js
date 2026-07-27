@@ -58,8 +58,9 @@ test('Fleet workspace receives an isolated conversation scope and no SSH tab id'
     'src/client/components/fleet-status/fleet-status-ai-context.js'
   ), 'utf8')
 
-  assert.match(main, /aiSessionTabId\s*=\s*fleetStatusActive\s*\?\s*''\s*:\s*activeTabId/)
+  assert.match(main, /aiSessionTabId\s*=\s*nonTerminalWorkspaceActive\s*\?\s*''\s*:\s*activeTabId/)
   assert.match(main, /aiConversationScopeId\s*=\s*fleetStatusActive[\s\S]*?'fleet-status'/)
+  assert.match(main, /artifactWorkspaceActive[\s\S]*?'artifacts'/)
   assert.match(chat, /props\.conversationScopeId \|\| props\.activeTabId \|\| 'global'/)
   assert.match(fleetContext, /buildFleetStatusAiPrompt/)
   assert.doesNotMatch(fleetContext, /agentTakeoverRegistry|takeoverGrants/)

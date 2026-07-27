@@ -10,6 +10,7 @@ const scopesUrl = pathToFileURL(path.join(aiRoot, 'agent-tool-scopes.js')).href
 const runtimeUrl = pathToFileURL(path.join(aiRoot, 'agent-runtime-context.js')).href
 const agentToolsPath = path.join(aiRoot, 'agent-tools.js')
 const structuredToolsPath = path.join(aiRoot, 'agent-structured-tools.js')
+const artifactToolsPath = path.join(aiRoot, 'artifact-agent-tools.js')
 
 function endpoint (overrides = {}) {
   return {
@@ -31,7 +32,7 @@ test('assigns one valid scope to every exported Agent tool descriptor', async ()
     VALID_AGENT_TOOL_SCOPES,
     withAgentToolScopes
   } = await import(scopesUrl)
-  const source = [agentToolsPath, structuredToolsPath]
+  const source = [agentToolsPath, structuredToolsPath, artifactToolsPath]
     .map(file => fs.readFileSync(file, 'utf8'))
     .join('\n')
   const names = [...source.matchAll(/name:\s*'([^']+)'/g)].map(match => match[1])

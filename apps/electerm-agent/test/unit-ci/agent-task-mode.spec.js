@@ -16,10 +16,37 @@ test('Agent task mode prefers zero-confirmation readonly exec and structured rea
   assert.match(prompt, /简短分析/)
   assert.match(prompt, /结构化读取/)
   assert.match(prompt, /run_readonly_command/)
+  assert.match(prompt, /sftp_write_text/)
+  assert.match(prompt, /Shell.*重定向|HereDoc/)
+  assert.match(prompt, /自动.*快照.*校验.*回滚/s)
   assert.match(prompt, /目的.*影响.*结构化验证/s)
   assert.match(prompt, /读取成功.*不得.*get_terminal_status/s)
   assert.match(prompt, /不得调用.*通用计划确认/)
   assert.doesNotMatch(prompt, /confirm_agent_plan/)
+})
+
+test('Agent prompt only asks confirmation for state-changing operations', () => {
+  const copy = JSON.parse(fs.readFileSync(
+    path.join(aiRoot, 'ai-agent-copy.json'),
+    'utf8'
+  ))
+  const prompt = copy.agentPromptRules.join('\n')
+
+  assert.match(prompt, /查询、读取、列目录和查看状态.*无需确认/)
+  assert.match(prompt, /写入.*删除.*重启.*确认/)
+  assert.doesNotMatch(prompt, /执行命令前.*必须等待用户确认/)
+})
+
+test('safe terminal directory changes stay in the interactive SSH session', () => {
+  const source = fs.readFileSync(path.join(aiRoot, 'agent-tools.js'), 'utf8')
+  const sendCase = source.match(
+    /case 'send_terminal_command':[\s\S]*?(?=\n\s*case ')/
+  )?.[0] || ''
+
+  assert.match(source, /isTerminalSessionNavigationCommand/)
+  assert.match(sendCase, /isTerminalSessionNavigationCommand/)
+  assert.match(sendCase, /runTerminalTool/)
+  assert.match(sendCase, /runReadonlyTool/)
 })
 
 test('Agent command classifier separates readonly diagnostics from dangerous operations', async () => {

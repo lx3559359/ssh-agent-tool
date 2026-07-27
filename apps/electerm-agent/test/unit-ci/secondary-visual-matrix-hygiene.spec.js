@@ -138,7 +138,7 @@ test('isolated Electron readiness uses a staged condition and reports startup di
   )
 })
 
-test('surface focus coverage enters each surface from an adjacent keyboard sentinel', () => {
+test('surface focus coverage enters each surface from an internal keyboard sentinel', () => {
   const matrix = fs.readFileSync(matrixPath, 'utf8')
   const focusInspection = matrix.match(
     /async function inspectKeyboardFocus \(page, surface\) \{[\s\S]*?\r?\n}\r?\n\r?\nfunction assertFocusSnapshot/
@@ -146,7 +146,7 @@ test('surface focus coverage enters each surface from an adjacent keyboard senti
 
   assert.ok(focusInspection)
   assert.match(focusInspection[0], /data-secondary-focus-sentinel/)
-  assert.match(focusInspection[0], /root\.parentNode\.insertBefore\(sentinel, root\)/)
+  assert.match(focusInspection[0], /root\.insertBefore\(sentinel, root\.firstChild\)/)
   assert.match(focusInspection[0], /sentinel\.focus\(\)/)
   assert.match(focusInspection[0], /await page\.keyboard\.press\('Tab'\)/)
   assert.doesNotMatch(focusInspection[0], /enabledCount \* 3/)

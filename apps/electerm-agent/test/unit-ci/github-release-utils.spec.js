@@ -777,8 +777,7 @@ test('creates deterministic gh commands for release create and upload', () => {
   assert.deepEqual(commands, [
     ['gh', ['release', 'view', 'v3.15.105', '--repo', 'lx3559359/ssh-agent-tool']],
     ['gh', ['release', 'create', 'v3.15.105', '--repo', 'lx3559359/ssh-agent-tool', '--draft', '--title', 'ShellPilot v3.15.105', '--notes', 'ShellPilot Windows release']],
-    ['gh', ['release', 'edit', 'v3.15.105', '--repo', 'lx3559359/ssh-agent-tool', '--title', 'ShellPilot v3.15.105', '--notes', 'ShellPilot Windows release']],
-    ['gh', ['release', 'upload', 'v3.15.105', 'dist/ShellPilot-3.15.105-win-x64-installer.exe', 'dist/ShellPilot-3.15.105-win-x64-installer.exe.blockmap', 'dist/latest.yml', 'dist/shellpilot-local.yml', 'dist/aigshell-update.json', 'dist/shellpilot-update.json', 'dist/checksums.json', 'dist/shellpilot-release.json', 'dist/ShellPilot-3.15.105-win-x64-portable.zip', '--repo', 'lx3559359/ssh-agent-tool', '--clobber']],
+    ['gh', ['release', 'upload', 'v3.15.105', 'dist/ShellPilot-3.15.105-win-x64-installer.exe', 'dist/ShellPilot-3.15.105-win-x64-installer.exe.blockmap', 'dist/latest.yml', 'dist/shellpilot-local.yml', 'dist/aigshell-update.json', 'dist/shellpilot-update.json', 'dist/checksums.json', 'dist/shellpilot-release.json', 'dist/ShellPilot-3.15.105-win-x64-portable.zip', '--repo', 'lx3559359/ssh-agent-tool']],
     ['gh', ['release', 'edit', 'v3.15.105', '--repo', 'lx3559359/ssh-agent-tool', '--draft=false']]
   ])
 })
@@ -796,7 +795,7 @@ test('spawn result validation fails closed for ENOENT null and non-integer statu
   assert.equal(assertSpawnSuccess({ status: 0 }, 'gh', ['release']), 0)
 })
 
-test('existing draft releases update notes before upload and publish only after upload succeeds', () => {
+test('release publication refuses to overwrite an existing version', () => {
   const commands = buildGitHubReleaseCommands({
     repo: 'owner/repo',
     tag: 'v0.4.6',
@@ -810,22 +809,61 @@ test('existing draft releases update notes before upload and publish only after 
     return { status: 0 }
   }
 
+  assert.throws(
+    () => executeGitHubReleaseCommands(commands, spawn),
+    /already exists|已存在/i
+  )
+  assert.equal(calls.length, 1)
+})
+
+test('new releases publish only after create and upload succeed', () => {
+  const commands = buildGitHubReleaseCommands({
+    repo: 'owner/repo',
+    tag: 'v0.4.14',
+    title: 'ShellPilot v0.4.14',
+    notes: '# ShellPilot v0.4.14',
+    assets: ['dist/asset.exe']
+  })
+  const calls = []
+  const spawn = (command, args) => {
+    calls.push([command, args])
+    return { status: calls.length === 1 ? 1 : 0 }
+  }
+
   executeGitHubReleaseCommands(commands, spawn)
   assert.deepEqual(calls.map(call => call[1].slice(0, 2)), [
     ['release', 'view'],
-    ['release', 'edit'],
+    ['release', 'create'],
     ['release', 'upload'],
     ['release', 'edit']
   ])
-  assert.ok(calls[1][1].includes('# ShellPilot v0.4.6'))
+  assert.ok(calls[1][1].includes('# ShellPilot v0.4.14'))
   assert.ok(calls[3][1].includes('--draft=false'))
 
   assert.throws(
     () => executeGitHubReleaseCommands(commands, (command, args) => ({
-      status: args.includes('--draft=false') ? 4 : 0,
+      status: args.includes('view') ? 1 : (args.includes('--draft=false') ? 4 : 0),
       stderr: args.includes('--draft=false') ? 'publish failed' : ''
     })),
     /publish failed/
+  )
+})
+
+test('release publication fails closed when existing-version lookup is inconclusive', () => {
+  const commands = buildGitHubReleaseCommands({
+    repo: 'owner/repo',
+    tag: 'v0.4.14',
+    title: 'ShellPilot v0.4.14',
+    notes: '# ShellPilot v0.4.14',
+    assets: ['dist/asset.exe']
+  })
+
+  assert.throws(
+    () => executeGitHubReleaseCommands(commands, (command, args) => ({
+      status: args.includes('view') ? 4 : 0,
+      stderr: args.includes('view') ? 'authentication failed' : ''
+    })),
+    /confirm|确认/i
   )
 })
 

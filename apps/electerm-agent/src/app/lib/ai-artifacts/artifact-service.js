@@ -15,6 +15,10 @@ const {
 } = require('./generator-registry')
 const markdownGenerator = require('./markdown-generator')
 const csvGenerator = require('./csv-generator')
+const docxGenerator = require('./docx-generator')
+const xlsxGenerator = require('./xlsx-generator')
+const pdfGenerator = require('./pdf-generator')
+const htmlGenerator = require('./html-generator')
 
 function createArtifactService (options = {}) {
   const repository = options.repository
@@ -27,7 +31,11 @@ function createArtifactService (options = {}) {
   const now = typeof options.now === 'function' ? options.now : Date.now
   const registry = options.registry || createGeneratorRegistry([
     markdownGenerator,
-    csvGenerator
+    csvGenerator,
+    docxGenerator,
+    xlsxGenerator,
+    pdfGenerator,
+    htmlGenerator
   ])
 
   async function requireVersion (id, version) {
@@ -117,6 +125,22 @@ function createArtifactService (options = {}) {
     )
   }
 
+  async function saveAIArtifactFileToTrustedPath (
+    id,
+    version,
+    format,
+    destination
+  ) {
+    const selected = await requireVersion(id, version)
+    const safeFormat = validateArtifactFormat(format)
+    return repository.exportGeneratedFileToTrustedPath(
+      selected.artifact.id,
+      selected.version,
+      safeFormat,
+      destination
+    )
+  }
+
   function deleteAIArtifact (id) {
     return repository.delete(assertArtifactId(id))
   }
@@ -128,6 +152,7 @@ function createArtifactService (options = {}) {
     createAIArtifactVersion,
     generateAIArtifact,
     exportAIArtifactFile,
+    saveAIArtifactFileToTrustedPath,
     deleteAIArtifact
   })
 }

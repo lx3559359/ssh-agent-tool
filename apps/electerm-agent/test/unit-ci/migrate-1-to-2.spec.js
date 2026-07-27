@@ -195,3 +195,26 @@ test('migration rejects an undecrypted safety shell with empty ciphertext before
   assert.equal(sqliteWrites, 0)
   assert.equal(backups, 0)
 })
+
+test('migration preserves an existing backup and retires the source file', async () => {
+  const migrationModule = loadMigrationModule()
+  const appPath = fs.mkdtempSync(path.join(os.tmpdir(), 'shellpilot-migrate-backup-collision-'))
+  const defaultUserName = 'testuser'
+  const dbFolder = path.join(appPath, 'electerm', 'users', defaultUserName)
+  const sourcePath = path.join(dbFolder, 'electerm.bookmarks.nedb')
+  const backupPath = sourcePath + '.bak'
+  fs.mkdirSync(dbFolder, { recursive: true })
+  fs.writeFileSync(sourcePath, '')
+  fs.writeFileSync(backupPath, 'previous backup')
+
+  const migration = createTestMigration(migrationModule, appPath, defaultUserName)
+  await migration.migrate()
+
+  assert.equal(fs.existsSync(sourcePath), false)
+  assert.equal(fs.readFileSync(backupPath, 'utf8'), 'previous backup')
+  assert.equal(
+    fs.readdirSync(dbFolder).some(name => name.startsWith('electerm.bookmarks.nedb.bak.')),
+    true
+  )
+  assert.equal(migration.checkMigrate(), false)
+})

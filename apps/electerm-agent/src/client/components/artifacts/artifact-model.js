@@ -9,7 +9,7 @@ const ARTIFACT_TYPE_VALUES = [
   'custom-spreadsheet'
 ]
 
-const ARTIFACT_FORMAT_VALUES = ['docx', 'xlsx', 'pdf', 'md', 'csv']
+const ARTIFACT_FORMAT_VALUES = ['docx', 'xlsx', 'pdf', 'md', 'csv', 'html']
 
 const MAX_TITLE_LENGTH = 160
 const MAX_SERVER_LENGTH = 160

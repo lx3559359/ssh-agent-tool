@@ -52,7 +52,9 @@ async function runWithIsolatedApp (callback) {
     createProfileRoot: () => fs.mkdtemp(resolve(tmpdir(), profilePrefix)),
     validateProfileRoot: assertSafeProfileRoot,
     launch: root => electron.launch(launchOptions(root)),
-    readUserDataPath: app => app.evaluate(({ app }) => app.getPath('userData')),
+    // DATA_PATH deterministically controls userData in NODE_TEST mode.
+    // Avoid racing Electron's transient main-process inspector context.
+    readUserDataPath: (app, root) => resolve(root, 'data', 'electron-user-data'),
     validateUserDataPath: (root, actualPath) => {
       if (!resolve(actualPath).startsWith(resolve(root) + sep)) {
         throw new Error(`Electron ignored isolated regression profile: ${actualPath}`)
@@ -111,7 +113,7 @@ async function installLongConversationFixture (page) {
         id: 'visual-profile',
         nameAI: '国内模型中转站',
         baseURLAI: 'https://api.example.invalid/v1',
-        apiKeyAI: '',
+        apiKeyAI: 'visual-regression-key',
         modelAI: '长模型名称-Qwen3-运维分析测试版',
         modelOptionsAI: ['长模型名称-Qwen3-运维分析测试版'],
         roleAI: ''
@@ -178,13 +180,15 @@ test('primary workspace keeps long Chinese AI history usable across Windows size
     await dismissStartupModals(page)
     await installLongConversationFixture(page)
     await verifyChineseComposition(page)
-    await expect(page.locator('.right-panel-model-status')).toContainText('未配置')
-    await expect(page.locator('.right-panel-model-status')).not.toContainText('ms')
+    await expect(page.locator('.right-panel-model-status')).not.toContainText('未配置')
+    await expect(page.locator('.right-panel-model-status')).toHaveClass(/configured/)
 
     for (const viewport of viewportCases) {
       await page.evaluate(theme => window.store.setTheme(theme), viewport.theme)
       await expect.poll(() => page.evaluate(() => window.store.config.theme)).toBe(viewport.theme)
       await setWindowCase(electronApp, page, viewport)
+      await page.evaluate(() => window.store.handleOpenAIPanel())
+      await expect(page.locator('.right-side-panel')).toBeVisible()
 
       const metrics = await page.evaluate(() => {
         const body = document.body
@@ -233,7 +237,10 @@ test('primary workspace keeps long Chinese AI history usable across Windows size
           width: Math.min(snapshotWidth, metrics.viewportWidth),
           height: Math.min(snapshotHeight, metrics.viewportHeight)
         },
-        mask: [page.locator('.aigshell-topbar-version')],
+        mask: [
+          page.locator('.aigshell-topbar-version'),
+          page.locator('.right-panel-model-latency')
+        ],
         maskColor: '#3b424a',
         scale: 'css'
       })

@@ -38,10 +38,15 @@ function runRequired (command, args, options = {}, spawn = spawnSync) {
 }
 
 function executeGitHubReleaseCommands (commands, spawn = spawnSync) {
-  const [view, create, edit, upload, publish] = commands
-  const exists = run(view[0], view[1], { stdio: 'ignore' }, spawn) === 0
-  const prepare = exists ? edit : create
-  runRequired(prepare[0], prepare[1], {}, spawn)
+  const [view, create, upload, publish] = commands
+  const lookupStatus = run(view[0], view[1], { stdio: 'ignore' }, spawn)
+  if (lookupStatus === 0) {
+    throw new Error(`Release ${view[1][2]} already exists. Bump the version; historical releases are immutable.`)
+  }
+  if (lookupStatus !== 1) {
+    throw new Error(`Unable to confirm that Release ${view[1][2]} is new. Publication stopped.`)
+  }
+  runRequired(create[0], create[1], {}, spawn)
   runRequired(upload[0], upload[1], {}, spawn)
   runRequired(publish[0], publish[1], {}, spawn)
 }

@@ -18,6 +18,10 @@ const csvGenerator = require(path.resolve(
   __dirname,
   '../../src/app/lib/ai-artifacts/csv-generator'
 ))
+const htmlGenerator = require(path.resolve(
+  __dirname,
+  '../../src/app/lib/ai-artifacts/html-generator'
+))
 const {
   createArtifactRepository
 } = require(path.resolve(
@@ -197,6 +201,23 @@ test('CSV generator emits every table with RFC4180 quoting and formula safety', 
       ''
     ].join('\r\n')
   )
+})
+
+test('HTML generator creates a standalone escaped Chinese report', async () => {
+  const { content, contentType, filename } = await htmlGenerator.generate({
+    ...structuredSource,
+    title: '服务器巡检网页',
+    summary: '<script>alert("x")</script>'
+  })
+  const html = content.toString('utf8')
+
+  assert.equal(contentType, 'text/html; charset=utf-8')
+  assert.equal(filename, '服务器巡检网页.html')
+  assert.match(html, /<!doctype html>/i)
+  assert.match(html, /lang="zh-CN"/)
+  assert.match(html, /服务器巡检网页/)
+  assert.doesNotMatch(html, /<script>alert/)
+  assert.match(html, /&lt;script&gt;/)
 })
 
 test('service persists generated Markdown and CSV metadata on only the selected version', async () => {

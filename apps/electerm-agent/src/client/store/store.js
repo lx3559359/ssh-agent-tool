@@ -29,6 +29,7 @@ import widgetsExtend from './widgets'
 import mcpHandlerExtend from './mcp-handler'
 import workspaceExtend from './workspace'
 import operationsToolkitExtend from './operations-toolkit'
+import aiArtifactsExtend from './ai-artifacts'
 import isColorDark from '../common/is-color-dark'
 import { getReverseColor } from '../common/reverse-color'
 import { uniq } from 'lodash-es'
@@ -334,5 +335,6 @@ widgetsExtend(Store)
 mcpHandlerExtend(Store)
 workspaceExtend(Store)
 operationsToolkitExtend(Store)
+aiArtifactsExtend(Store)
 
 export const StateStore = Store

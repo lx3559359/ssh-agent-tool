@@ -10,7 +10,7 @@ async function acquireIsolatedApp (options) {
     profileRoot = await options.createProfileRoot()
     options.validateProfileRoot(profileRoot)
     electronApp = await options.launch(profileRoot)
-    const userDataPath = await options.readUserDataPath(electronApp)
+    const userDataPath = await options.readUserDataPath(electronApp, profileRoot)
     options.validateUserDataPath(profileRoot, userDataPath)
     ready = true
     acquiredApp = { electronApp, profileRoot, userDataPath }

@@ -19,10 +19,7 @@ import { action } from 'manate'
 import uid from '../common/uid'
 import deepCopy from 'json-deep-copy'
 import { isAIConfigMissing } from '../components/ai/ai-config-props'
-import {
-  normalizeRightPanelWidth,
-  rightPanelAutoCollapseWidth
-} from '../components/main/aigshell-layout'
+import { normalizeRightPanelWidth } from '../components/main/aigshell-layout'
 import { buildTerminalContextPrompt } from '../components/ai/ai-ssh-context'
 import {
   closeFleetStatus as closeFleetStatusState,
@@ -86,9 +83,6 @@ export default Store => {
       screenWidth: width,
       screenHeight: height,
       isMaximized
-    }
-    if (window.innerWidth < rightPanelAutoCollapseWidth) {
-      update.rightPanelAutoExpanded = false
     }
     window.store.storeAssign(update)
     window.pre.runGlobalAsync('setWindowSize', {

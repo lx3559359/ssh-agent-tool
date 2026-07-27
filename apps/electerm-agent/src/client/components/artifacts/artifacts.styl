@@ -1,0 +1,349 @@
+.artifact-workspace
+  display none
+  position absolute
+  z-index 7
+  min-width 0
+  min-height 0
+  overflow hidden
+  color var(--text)
+  background var(--main)
+
+.artifact-workspace-active
+  display flex
+  flex-direction column
+
+.artifact-workspace-header
+  flex none
+  min-height 66px
+  padding 12px 16px
+  display flex
+  align-items center
+  justify-content space-between
+  gap 16px
+  border-bottom 1px solid var(--main-darker)
+  background var(--main-light)
+
+.artifact-workspace-header h1
+  margin 0
+  font-size 18px
+  line-height 1.4
+
+.artifact-workspace-header p
+  margin 2px 0 0
+  color var(--text-light)
+  font-size 12px
+
+.artifact-workspace-header-actions
+  display flex
+  gap 8px
+
+.artifact-workspace-error
+  margin 10px 16px 0
+
+.artifact-workspace-grid
+  flex 1
+  min-height 0
+  display grid
+  grid-template-columns minmax(220px, 300px) minmax(0, 1fr)
+
+.artifact-list-panel
+  min-width 0
+  overflow auto
+  padding 12px
+  border-right 1px solid var(--main-darker)
+  background var(--main-light)
+
+.artifact-list-filters
+  display grid
+  gap 8px
+  margin-bottom 12px
+
+.artifact-list-items
+  display grid
+  gap 6px
+
+.artifact-list-item
+  width 100%
+  min-height 66px
+  display grid
+  grid-template-columns 20px minmax(0, 1fr) auto
+  align-items center
+  gap 8px
+  padding 9px 10px
+  border 1px solid transparent
+  border-radius 6px
+  color var(--text)
+  background transparent
+  text-align left
+  cursor pointer
+
+.artifact-list-item:hover
+  background var(--main-hover)
+
+.artifact-list-item.active
+  border-color var(--primary)
+  background var(--primary-bg)
+
+.artifact-list-item-copy
+  min-width 0
+  display grid
+  gap 3px
+
+.artifact-list-item-copy strong,
+.artifact-list-item-copy small
+  overflow hidden
+  text-overflow ellipsis
+  white-space nowrap
+
+.artifact-list-item-copy small
+  color var(--text-light)
+
+.artifact-list-item-formats
+  display flex
+  gap 3px
+
+.artifact-list-item-formats .ant-tag
+  margin 0
+
+.artifact-preview
+  min-width 0
+  min-height 0
+  display flex
+  flex-direction column
+  padding 16px
+  overflow hidden
+
+.artifact-preview-empty
+  align-items center
+  justify-content center
+  color var(--text-light)
+
+.artifact-preview-empty > .anticon
+  font-size 38px
+
+.artifact-preview-empty h2
+  margin 12px 0 4px
+  color var(--text)
+
+.artifact-preview-header
+  flex none
+  display flex
+  align-items flex-start
+  justify-content space-between
+  gap 16px
+  margin-bottom 12px
+
+.artifact-preview-header h2
+  margin 0
+  font-size 17px
+
+.artifact-preview-header p
+  margin 4px 0 0
+  color var(--text-light)
+
+.artifact-preview-actions
+  display flex
+  align-items center
+  justify-content flex-end
+  gap 8px
+  flex-wrap wrap
+
+.artifact-upload-field
+  display grid
+  gap 8px
+
+  > span
+    font-weight 600
+
+  > small
+    color var(--text-light)
+
+.artifact-preview-body
+  flex 1
+  min-height 0
+  overflow auto
+
+.artifact-editor-toolbar,
+.artifact-spreadsheet-toolbar
+  position sticky
+  top 0
+  z-index 2
+  min-height 44px
+  display flex
+  align-items center
+  gap 8px
+  padding 6px 8px
+  border-bottom 1px solid var(--main-darker)
+  background var(--main)
+
+.artifact-editor-toolbar > span,
+.artifact-spreadsheet-toolbar > span
+  margin-left auto
+  color var(--text-light)
+  font-size 12px
+
+.artifact-document-preview
+  min-height 100%
+  padding-bottom 24px
+
+.artifact-document-page
+  width calc(100% - 32px)
+  max-width 794px
+  min-height 1040px
+  display grid
+  align-content start
+  gap 18px
+  margin 18px auto
+  padding 54px 62px
+  border 1px solid var(--main-darker)
+  border-radius 6px
+  color var(--text)
+  background var(--main-light)
+  box-shadow 0 4px 18px rgba(0, 0, 0, .12)
+
+.artifact-document-title
+  font-size 25px
+  font-weight 700
+
+.artifact-document-section
+  display grid
+  gap 8px
+
+.artifact-document-section-heading
+  display grid
+  grid-template-columns minmax(0, 1fr) repeat(3, 32px)
+  gap 4px
+
+.artifact-spreadsheet-preview
+  min-width 720px
+  padding-bottom 20px
+
+.artifact-spreadsheet-toolbar .ant-select
+  min-width 150px
+
+.artifact-spreadsheet-toolbar .ant-input-search
+  max-width 260px
+
+.artifact-grid-header,
+.artifact-grid-row
+  min-width max-content
+  display grid
+  grid-auto-flow column
+  grid-auto-columns minmax(140px, 1fr)
+
+.artifact-grid-header
+  position sticky
+  top 44px
+  z-index 2
+  min-height 38px
+  border-bottom 1px solid var(--main-darker)
+  background var(--main-light)
+
+.artifact-grid-header strong,
+.artifact-grid-row > div
+  width 180px
+  padding 8px 10px
+  overflow hidden
+  border-right 1px solid var(--main-darker)
+  border-bottom 1px solid var(--main-darker)
+  text-overflow ellipsis
+  white-space nowrap
+
+.artifact-grid-viewport
+  overflow auto
+
+.artifact-grid-spacer
+  position relative
+  min-width max-content
+
+.artifact-grid-row
+  position absolute
+  left 0
+  top 0
+
+.artifact-grid-row > div:focus
+  outline 2px solid var(--primary)
+  outline-offset -2px
+  background var(--primary-bg)
+
+@media (max-width: 1099px)
+  .artifact-workspace-grid
+    grid-template-columns minmax(0, 1fr)
+    grid-template-rows auto minmax(0, 1fr)
+
+  .artifact-list-panel
+    max-height 220px
+    border-right 0
+    border-bottom 1px solid var(--main-darker)
+
+  .artifact-list-filters
+    grid-template-columns minmax(160px, 1fr) minmax(130px, .6fr) minmax(120px, .45fr)
+
+  .artifact-list-items
+    grid-auto-flow column
+    grid-auto-columns minmax(220px, 280px)
+    overflow-x auto
+    padding-bottom 4px
+
+  .artifact-preview-header
+    align-items stretch
+    flex-direction column
+
+  .artifact-preview-actions
+    justify-content flex-start
+
+  .artifact-document-page
+    width calc(100% - 16px)
+    min-height 0
+    margin 8px
+    padding 24px
+
+
+.ai-persisted-artifacts
+  display grid
+  gap 8px
+  margin 10px 0
+
+.artifact-card
+  display grid
+  grid-template-columns 28px minmax(0, 1fr) auto 32px
+  align-items center
+  gap 8px
+  padding 10px
+  border 1px solid var(--main-darker)
+  border-radius 6px
+  color var(--text)
+  background var(--main-light)
+
+.artifact-card-icon
+  color var(--primary)
+  font-size 20px
+
+.artifact-card-copy
+  min-width 0
+  display grid
+  gap 2px
+
+.artifact-card-copy strong,
+.artifact-card-copy span
+  overflow hidden
+  text-overflow ellipsis
+  white-space nowrap
+
+.artifact-card-copy span
+  color var(--text-light)
+  font-size 12px
+
+.artifact-action-disabled
+  display block
+
+.create-artifact-button
+  border-color var(--primary)
+  color var(--primary)
+
+@media (max-width: 560px)
+  .artifact-card
+    grid-template-columns 24px minmax(0, 1fr) 32px
+
+  .artifact-card > .ant-btn-primary
+    display none

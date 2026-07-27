@@ -11,7 +11,14 @@ const ARTIFACT_TYPES = new Set([
   'custom-document',
   'custom-spreadsheet'
 ])
-const ARTIFACT_FORMATS = new Set(['docx', 'xlsx', 'pdf', 'md', 'csv'])
+const ARTIFACT_FORMATS = new Set([
+  'docx',
+  'xlsx',
+  'pdf',
+  'md',
+  'csv',
+  'html'
+])
 const MAX_JSON_LENGTH = 1_000_000
 const MAX_VERSION = 9999
 

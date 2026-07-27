@@ -100,6 +100,26 @@ test('gateway rejects blocked and unauditable calls without invoking prepare or 
   }
 })
 
+test('unauditable shell file writes tell the Agent to retry with structured SFTP', async () => {
+  const { executeAgentTool } = await import(gatewayUrl)
+  const registry = await activeRegistry()
+  await assert.rejects(executeAgentTool({
+    toolName: 'send_terminal_command',
+    args: {
+      command: "cat <<'EOF' > /tmp/example.conf\nvalue=true\nEOF"
+    },
+    endpoint: endpoint(),
+    resolveEndpoint: endpoint,
+    registry,
+    execute: async () => 'unexpected'
+  }), error => {
+    assert.equal(error.code, 'AGENT_TOOL_UNAUDITABLE')
+    assert.match(error.message, /sftp_write_text/)
+    assert.match(error.message, /自动备份|回滚/)
+    return true
+  })
+})
+
 test('gateway sends readonly directly and prepares risky work', async () => {
   const { executeAgentTool } = await import(gatewayUrl)
   for (const [toolName, args, expectedPrepare] of [

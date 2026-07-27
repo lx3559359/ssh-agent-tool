@@ -381,8 +381,15 @@ test('AI startup migration replaces legacy NeDB plaintext with one encrypted rec
   const enc = value => Buffer.from(value, 'utf8').toString('base64')
   const dec = value => Buffer.from(value, 'base64').toString('utf8')
 
-  const legacyDb = createDb(appPath, 'default_user')
-  await legacyDb.dbAction('aiChatHistory', 'insert', legacyRecord)
+  const userDataPath = path.join(
+    appPath,
+    'electerm',
+    'users',
+    'default_user'
+  )
+  fs.mkdirSync(userDataPath, { recursive: true })
+  const historyFile = path.join(userDataPath, 'electerm.aiChatHistory.nedb')
+  fs.writeFileSync(historyFile, `${JSON.stringify(legacyRecord)}\n`, 'utf8')
 
   const encryptedDb = createDb(appPath, 'default_user', { enc, dec })
   const loaded = await encryptedDb.dbAction('aiChatHistory', 'find', {})
@@ -407,14 +414,15 @@ test('AI startup migration replaces legacy NeDB plaintext with one encrypted rec
     writeOrder: () => {}
   })
 
-  const rawDb = createDb(appPath, 'default_user')
-  const rawRecord = await rawDb.dbAction('aiChatHistory', 'findOne', {
-    _id: legacyRecord._id
-  })
+  const rawRecord = fs.readFileSync(historyFile, 'utf8')
+    .trim()
+    .split(/\r?\n/)
+    .map(line => JSON.parse(line))
+    .reverse()
+    .find(item => item._id === legacyRecord._id && item._encdata)
   assert.deepEqual(Object.keys(rawRecord).sort(), ['_encdata', '_id'])
 
-  const reopenedDb = createDb(appPath, 'default_user', { enc, dec })
-  const migrated = await reopenedDb.dbAction('aiChatHistory', 'findOne', {
+  const migrated = await encryptedDb.dbAction('aiChatHistory', 'findOne', {
     _id: legacyRecord._id
   })
   assert.equal(migrated.traceId, undefined)

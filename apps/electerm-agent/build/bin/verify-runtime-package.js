@@ -4,7 +4,9 @@ const path = require('path')
 const defaultRequiredFiles = [
   'node_modules/form-data/lib/form_data.js',
   'node_modules/combined-stream/lib/combined_stream.js',
-  'node_modules/delayed-stream/lib/delayed_stream.js'
+  'node_modules/delayed-stream/lib/delayed_stream.js',
+  'node_modules/docx/dist/index.cjs',
+  'node_modules/exceljs/lib/doc/workbook.js'
 ]
 
 function readJson (file) {

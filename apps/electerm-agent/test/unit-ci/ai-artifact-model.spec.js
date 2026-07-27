@@ -21,7 +21,10 @@ test('exports the supported artifact types and formats', async () => {
     'custom-document',
     'custom-spreadsheet'
   ])
-  assert.deepEqual([...ARTIFACT_FORMATS], ['docx', 'xlsx', 'pdf', 'md', 'csv'])
+  assert.deepEqual(
+    [...ARTIFACT_FORMATS],
+    ['docx', 'xlsx', 'pdf', 'md', 'csv', 'html']
+  )
 })
 
 test('redacts secrets and PEM private keys in artifact text', async () => {

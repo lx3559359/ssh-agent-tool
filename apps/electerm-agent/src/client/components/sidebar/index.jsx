@@ -1,6 +1,7 @@
 import {
   BookOutlined,
   DashboardOutlined,
+  FileDoneOutlined,
   FileTextOutlined,
   HistoryOutlined,
   KeyOutlined,
@@ -85,6 +86,7 @@ export default function Sidebar (props) {
 
   const handleOpenTerminalSidebarPanel = tab => {
     store.closeFleetStatus()
+    store.closeArtifactWorkspace()
     handleOpenSidebarPanel(tab)
   }
 
@@ -92,8 +94,13 @@ export default function Sidebar (props) {
     store.openFleetStatus()
   }
 
+  const handleOpenArtifacts = () => {
+    store.openArtifactWorkspace()
+  }
+
   const handleOpenSftp = () => {
     store.closeFleetStatus()
+    store.closeArtifactWorkspace()
     store.updateTab(store.activeTabId, { pane: paneMap.fileManager })
   }
 
@@ -130,6 +137,7 @@ export default function Sidebar (props) {
   const bookmarksActive = openedSideBar === 'bookmarks' && sidebarPanelTab === 'bookmarks'
   const historyActive = openedSideBar === 'bookmarks' && sidebarPanelTab === 'history'
   const fleetStatusActive = store.mainWorkspaceMode === 'fleet-status'
+  const artifactWorkspaceActive = store.mainWorkspaceMode === 'artifacts'
   const logActive = showInfoModal && store.infoModalTab === infoTabs.log
   const sideProps = openedSideBar
     ? {
@@ -166,6 +174,16 @@ export default function Sidebar (props) {
           onClick={handleOpenFleetStatus}
         >
           <DashboardOutlined
+            className='font20 iblock control-icon'
+          />
+        </SideIcon>
+        <SideIcon
+          title={e('shellpilotSidebarArtifacts')}
+          label={e('shellpilotSidebarArtifacts')}
+          active={artifactWorkspaceActive}
+          onClick={handleOpenArtifacts}
+        >
+          <FileDoneOutlined
             className='font20 iblock control-icon'
           />
         </SideIcon>

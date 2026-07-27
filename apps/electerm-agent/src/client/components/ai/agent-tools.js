@@ -59,6 +59,11 @@ import {
   assertAgentRiskVerificationAllowed
 } from './agent-risk-verification-gate.js'
 import { prepareSelectedSkillArtifactCall } from './agent-skill-execution.js'
+import {
+  artifactAgentTools,
+  executeArtifactAgentTool,
+  isArtifactAgentTool
+} from './artifact-agent-tools.js'
 
 function createAgentOperationId (prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`
@@ -112,6 +117,7 @@ function withRequiredRiskContextParameters (parameters, riskContextSchema) {
 
 export const agentTools = withAgentToolPolicy(withAgentToolScopes([
   ...structuredAgentTools,
+  ...artifactAgentTools,
   {
     type: 'function',
     function: {
@@ -1098,8 +1104,21 @@ export async function runReadonlyTool (args, endpoint, runtime = {}) {
   })
 }
 
+function isTerminalSessionNavigationCommand (command) {
+  return /^\s*(?:builtin\s+)?(?:cd|pushd|popd)(?:\s|$)/i.test(
+    String(command || '')
+  )
+}
+
 async function executeResolvedAgentTool (toolName, args, runtime, endpoint, preparation) {
   const store = window.store
+  if (isArtifactAgentTool(toolName)) {
+    return JSON.stringify(await executeArtifactAgentTool(
+      toolName,
+      args,
+      runtime
+    ))
+  }
   switch (toolName) {
     case 'run_readonly_command':
       return JSON.stringify(await runReadonlyTool(args, endpoint, runtime))
@@ -1127,6 +1146,14 @@ async function executeResolvedAgentTool (toolName, args, runtime, endpoint, prep
     case 'send_terminal_command': {
       if (!preparation && classifyAgentCall({ toolName, args }).outcome ===
         'allowlisted-readonly') {
+        if (isTerminalSessionNavigationCommand(args.command)) {
+          return JSON.stringify(await runTerminalTool(
+            store,
+            args,
+            runtime,
+            preparation
+          ))
+        }
         return JSON.stringify(await runReadonlyTool(args, endpoint, runtime))
       }
       return JSON.stringify(await runTerminalTool(

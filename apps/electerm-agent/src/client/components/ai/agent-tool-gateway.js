@@ -9,11 +9,16 @@ import {
 } from './agent-tool-policy.js'
 import { validateConfirmedRiskTransaction } from './agent-risk-transaction.js'
 
-function policyError (classification) {
+function policyError (classification, toolName) {
   const unauditable = classification.outcome === 'unauditable'
-  const error = new Error(unauditable
-    ? 'Agent tool call cannot be audited safely'
-    : 'Agent tool call is blocked by system policy')
+  const structuredWriteHint = unauditable &&
+    toolName === 'send_terminal_command' &&
+    classification.reasonCode === 'DYNAMIC_OR_PIPED_SHELL'
+  const error = new Error(structuredWriteHint
+    ? '该 Shell 命令无法安全审计。若要创建或修改 UTF-8 文件，请改用 sftp_write_text 并提供完整路径和完整内容；系统会自动备份、校验并提供回滚。'
+    : unauditable
+      ? 'Agent tool call cannot be audited safely'
+      : 'Agent tool call is blocked by system policy')
   error.code = classification.errorCode || (unauditable
     ? 'AGENT_TOOL_UNAUDITABLE'
     : 'AGENT_TOOL_BLOCKED')
@@ -79,7 +84,7 @@ export async function executeAgentTool ({
   })
   if (classification.outcome === 'blocked' ||
     classification.outcome === 'unauditable') {
-    throw policyError(classification)
+    throw policyError(classification, toolName)
   }
   const risky = classification.outcome === 'risky'
   if (risky && typeof prepareRisky !== 'function') {

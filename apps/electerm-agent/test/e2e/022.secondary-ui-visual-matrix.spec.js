@@ -84,7 +84,9 @@ async function launchIsolatedApp (label) {
     createProfileRoot: () => fs.mkdtemp(resolve(tmpdir(), `${profilePrefix}${label}-`)),
     validateProfileRoot: assertSafeProfileRoot,
     launch: root => electron.launch(launchOptions(root)),
-    readUserDataPath: app => app.evaluate(({ app }) => app.getPath('userData')),
+    // DATA_PATH deterministically controls userData in NODE_TEST mode.
+    // Avoid racing Electron's transient main-process inspector context.
+    readUserDataPath: (app, root) => resolve(root, 'data', 'electron-user-data'),
     validateUserDataPath: (root, actualPath) => {
       if (!resolve(actualPath).startsWith(resolve(root) + sep)) {
         throw new Error(`Electron ignored the isolated profile: ${JSON.stringify({ profileRoot: root, userDataPath: actualPath })}`)
@@ -177,6 +179,34 @@ async function ensureActiveTerminalSession (page) {
   })
 }
 
+async function configureVisualAI (page) {
+  await page.evaluate(() => {
+    const store = window.store
+    const profile = {
+      id: 'visual-e2e-profile',
+      nameAI: 'Visual E2E',
+      baseURLAI: 'https://api.example.invalid/v1',
+      apiKeyAI: 'visual-e2e-key',
+      modelAI: 'visual-e2e-model',
+      modelOptionsAI: ['visual-e2e-model'],
+      roleAI: ''
+    }
+    const current = store.config || {}
+    const aiProfiles = [
+      ...(Array.isArray(current.aiProfiles)
+        ? current.aiProfiles.filter(item => item?.id !== profile.id)
+        : []),
+      profile
+    ]
+    store.setConfig({
+      ...current,
+      ...profile,
+      aiProfiles,
+      activeAIProfileId: profile.id
+    })
+  })
+}
+
 async function closeIsolatedApp (electronApp, profileRoot) {
   let shutdownError
   let removalError
@@ -259,7 +289,9 @@ async function setWindowCase (electronApp, page, size, zoom) {
     window.setContentSize(values.size.width, values.size.height)
     window.webContents.setZoomFactor(values.zoom)
   }, { size, zoom })
-  await page.waitForTimeout(160)
+  // Electron can emit several resize events after setContentSize/zoom.
+  // Let the debounced app resize handler settle before opening overlays.
+  await page.waitForTimeout(400)
 }
 
 async function captureWindowState (electronApp) {
@@ -539,7 +571,7 @@ function assertSettingsControlStates (snapshot, context) {
 
 async function openConnection (page) {
   await page.evaluate(() => window.store.onNewSsh())
-  await page.locator('.sp-configuration-form').waitFor({ state: 'visible' })
+  await page.locator('.quick-connect-wizard').waitFor({ state: 'visible' })
 }
 
 async function openAi (page) {
@@ -902,7 +934,7 @@ async function ensureTwoTerminalTabs (page) {
 const surfaces = [
   { name: 'settings-shell', selector: '.setting-wrap', open: openSettings },
   { name: 'general-settings', selector: '.sp-settings-form', open: openSettings },
-  { name: 'connection-form', selector: '.sp-configuration-form', open: openConnection },
+  { name: 'connection-form', selector: '.quick-connect-wizard', open: openConnection },
   { name: 'ai-config', selector: '.ai-config-modal', open: openAi },
   { name: 'sync-config', selector: '.sp-sync-config', open: openSync },
   { name: 'theme-center', selector: '.sp-theme-center', open: openThemes },
@@ -1387,7 +1419,10 @@ async function inspectKeyboardFocus (page, surface) {
       border: '0',
       opacity: '0'
     })
-    root.parentNode.insertBefore(sentinel, root)
+    // Modal focus traps correctly reject focus outside the dialog. Keep the
+    // keyboard-entry sentinel inside the tested surface so Tab still verifies
+    // the first real interactive control without fighting the focus trap.
+    root.insertBefore(sentinel, root.firstChild)
     sentinel.focus()
     return {
       enabledCount,
@@ -1738,6 +1773,15 @@ async function exerciseRightPanelScroll (page) {
   await page.evaluate(() => {
     window.store.handleOpenAIPanel()
     window.store.rightPanelPinned = false
+  })
+  await expect.poll(() => page.evaluate(() => ({
+    visible: window.store.rightPanelVisible,
+    expanded: window.store.rightPanelAutoExpanded,
+    tab: window.store.rightPanelTab
+  }))).toEqual({
+    visible: true,
+    expanded: true,
+    tab: 'ai'
   })
   await page.locator('.right-side-panel:visible').waitFor({ timeout: 20000 })
   const scroller = page.locator('.right-side-panel-content .ai-history-wrap')
@@ -2566,6 +2610,7 @@ test('low-height AI panel keeps meaningful history and real auxiliary rail inter
     const page = electronApp.windows()[0] || await electronApp.firstWindow()
     await waitForSecondaryAppReady(electronApp, page, 'ai-compact-interaction')
     await ensureActiveTerminalSession(page)
+    await configureVisualAI(page)
     const updatePanelClose = page.locator('.upgrade-panel:not(.upgrade-panel-hide) .close-upgrade-panel')
     if (await updatePanelClose.isVisible().catch(() => false)) {
       await updatePanelClose.click()
@@ -2577,6 +2622,11 @@ test('low-height AI panel keeps meaningful history and real auxiliary rail inter
     })
     await page.locator('.right-side-panel-content-ai .ai-chat-container').waitFor({ state: 'visible', timeout: 20000 })
     await setWindowCase(electronApp, page, { width: 820, height: 600 }, 2)
+    await page.evaluate(() => window.store.handleOpenAIPanel())
+    await page.locator('.right-side-panel-content-ai .ai-chat-textarea').waitFor({
+      state: 'visible',
+      timeout: 20000
+    })
 
     const fileInput = page.locator('.right-side-panel-content-ai input[type="file"]')
     await fileInput.setInputFiles([
@@ -2618,6 +2668,23 @@ test('low-height AI panel keeps meaningful history and real auxiliary rail inter
     const contextRail = page.locator('.right-side-panel-content-ai .ai-context-actions')
     const attachmentRail = page.locator('.right-side-panel-content-ai .ai-attachment-queue')
     const wheelRail = async locator => {
+      try {
+        await expect(locator).toBeVisible({ timeout: 5000 })
+      } catch (error) {
+        const panelState = await page.evaluate(() => ({
+          innerWidth: window.innerWidth,
+          storedInnerWidth: window.store.innerWidth,
+          rightPanelVisible: window.store.rightPanelVisible,
+          rightPanelAutoExpanded: window.store.rightPanelAutoExpanded,
+          rightPanelTab: window.store.rightPanelTab,
+          activeTabId: window.store.activeTabId,
+          panelPresent: Boolean(document.querySelector('.right-side-panel')),
+          aiContentPresent: Boolean(document.querySelector('.right-side-panel-content-ai')),
+          aiChatPresent: Boolean(document.querySelector('.ai-chat-container')),
+          attachmentCount: document.querySelectorAll('.ai-attachment-chip').length
+        }))
+        throw new Error(`AI auxiliary rail unavailable before wheel interaction: ${JSON.stringify(panelState)}; ${error.message}`)
+      }
       const box = await locator.boundingBox()
       expect(box).not.toBeNull()
       const before = await locator.evaluate(element => ({
@@ -2630,9 +2697,35 @@ test('low-height AI panel keeps meaningful history and real auxiliary rail inter
       )
       await page.mouse.wheel(0, 1200)
       await page.waitForTimeout(120)
+      if (!await locator.count()) {
+        const panelState = await page.evaluate(() => ({
+          innerWidth: window.innerWidth,
+          storedInnerWidth: window.store.innerWidth,
+          rightPanelVisible: window.store.rightPanelVisible,
+          rightPanelAutoExpanded: window.store.rightPanelAutoExpanded,
+          rightPanelOpenGeneration: window.store.rightPanelOpenGeneration,
+          rightPanelTab: window.store.rightPanelTab,
+          panelPresent: Boolean(document.querySelector('.right-side-panel'))
+        }))
+        throw new Error(`AI auxiliary rail disappeared after forward wheel interaction: ${JSON.stringify(panelState)}`)
+      }
       const after = await locator.evaluate(element => element.scrollLeft)
       await page.mouse.wheel(0, -1200)
       await page.waitForTimeout(120)
+      if (!await locator.count()) {
+        const panelState = await page.evaluate(() => ({
+          innerWidth: window.innerWidth,
+          storedInnerWidth: window.store.innerWidth,
+          rightPanelVisible: window.store.rightPanelVisible,
+          rightPanelAutoExpanded: window.store.rightPanelAutoExpanded,
+          rightPanelTab: window.store.rightPanelTab,
+          activeTabId: window.store.activeTabId,
+          panelPresent: Boolean(document.querySelector('.right-side-panel')),
+          aiContentPresent: Boolean(document.querySelector('.right-side-panel-content-ai')),
+          aiChatPresent: Boolean(document.querySelector('.ai-chat-container'))
+        }))
+        throw new Error(`AI auxiliary rail disappeared during wheel interaction: ${JSON.stringify(panelState)}`)
+      }
       const restored = await locator.evaluate(element => element.scrollLeft)
       return { ...before, after, restored }
     }
@@ -2768,6 +2861,7 @@ test('shell chrome keeps restrained depth, compact geometry and terminal isolati
     const page = electronApp.windows()[0] || await electronApp.firstWindow()
     await waitForSecondaryAppReady(electronApp, page, 'shell-chrome')
     await ensureActiveTerminalSession(page)
+    await configureVisualAI(page)
     await page.evaluate(() => {
       window.store.handleOpenAIPanel()
       window.store.rightPanelPinned = false
@@ -3258,6 +3352,7 @@ async function captureCompactShellState (page) {
       leftSidebarWidth: store.leftSidebarWidth,
       rightPanelVisible: store.rightPanelVisible,
       rightPanelPinned: store.rightPanelPinned,
+      rightPanelAutoExpanded: store.rightPanelAutoExpanded,
       rightPanelWidth: store.rightPanelWidth,
       openQuickCommandBar: store.openQuickCommandBar,
       pinnedQuickCommandBar: store.pinnedQuickCommandBar,
@@ -3276,6 +3371,7 @@ async function applyCompactShellState (page, state) {
     store.setLeftSidePanelWidth(nextState.leftSidebarWidth)
     store.rightPanelVisible = nextState.rightPanelVisible
     store.rightPanelPinned = nextState.rightPanelPinned
+    store.rightPanelAutoExpanded = Boolean(nextState.rightPanelVisible)
     store.setRightSidePanelWidth(nextState.rightPanelWidth)
     store.openQuickCommandBar = nextState.openQuickCommandBar
     store.pinnedQuickCommandBar = nextState.pinnedQuickCommandBar
@@ -3291,6 +3387,7 @@ async function restoreCompactShellState (page, state) {
     store.setLeftSidePanelWidth(originalState.leftSidebarWidth)
     store.rightPanelVisible = originalState.rightPanelVisible
     store.rightPanelPinned = originalState.rightPanelPinned
+    store.rightPanelAutoExpanded = originalState.rightPanelAutoExpanded
     store.setRightSidePanelWidth(originalState.rightPanelWidth)
     store.openQuickCommandBar = originalState.openQuickCommandBar
     store.pinnedQuickCommandBar = originalState.pinnedQuickCommandBar
@@ -3515,7 +3612,10 @@ test('tool center and batch editor stay reachable in compact real app windows', 
               await expect.poll(() => page.evaluate(() => window.store.rightPanelPinned)).toBe(true)
               await close.click()
               await expect(page.locator('.right-side-panel')).toHaveCount(0)
-              await page.evaluate(() => { window.store.rightPanelVisible = true })
+              await page.evaluate(() => {
+                window.store.rightPanelVisible = true
+                window.store.rightPanelAutoExpanded = true
+              })
               await expect(page.locator('.right-side-panel')).toBeVisible()
             }
           }

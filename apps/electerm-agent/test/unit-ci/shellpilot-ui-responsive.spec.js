@@ -132,7 +132,8 @@ test('fleet geometry excludes the terminal-only pinned quick command reservation
   const main = readClient('components/main/main.jsx')
 
   assert.match(main, /const fleetStatusActive = store\.mainWorkspaceMode === 'fleet-status'/)
-  assert.match(main, /inActiveTerminal: !fleetStatusActive && store\.inActiveTerminal/)
+  assert.match(main, /const nonTerminalWorkspaceActive = fleetStatusActive \|\|[\s\S]*artifactWorkspaceActive/)
+  assert.match(main, /inActiveTerminal: !nonTerminalWorkspaceActive && store\.inActiveTerminal/)
 })
 
 test('pinned quick commands consume the shared capped vertical geometry', () => {

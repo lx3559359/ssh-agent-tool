@@ -174,6 +174,7 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
     goal: String(chatEntry.prompt || 'Agent SSH task'),
     selectedSkillBindings: [],
     selectedSkillArtifactDigests: [],
+    createdArtifactIds: new Set(),
     sourceTabId,
     traceContext: parentTrace,
     endpoint: resolveEndpoint(),
@@ -304,13 +305,16 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
       current.completionStatus === 'cancelled'
     setIsStreaming(false)
     try {
-      updateChatEntry(chatEntry, buildAgentCancellationUpdate({
-        response: accumulatedContent,
-        stoppedText: aiAgentCopy.stoppedText,
-        error: cancellationFailure && sanitizeAIStoredText(
-          cancellationFailure?.message || cancellationFailure
-        )
-      }))
+      updateChatEntry(chatEntry, {
+        ...buildAgentCancellationUpdate({
+          response: accumulatedContent,
+          stoppedText: aiAgentCopy.stoppedText,
+          error: cancellationFailure && sanitizeAIStoredText(
+            cancellationFailure?.message || cancellationFailure
+          )
+        }),
+        artifactIds: [...agentRuntime.createdArtifactIds]
+      })
     } catch (error) {
       reportCancellationPersistenceError(error)
     }
@@ -418,6 +422,7 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
         setIsStreaming(false)
         updateChatEntry(chatEntry, {
           response: accumulatedContent,
+          artifactIds: [...agentRuntime.createdArtifactIds],
           completionStatus: 'completed'
         })
         finishQuality('completed', 'completed')
