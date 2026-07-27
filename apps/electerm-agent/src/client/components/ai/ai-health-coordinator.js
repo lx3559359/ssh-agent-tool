@@ -103,7 +103,14 @@ function classifyChatFailure (item = {}) {
 
 export function resolveAIChatHealthTransitions (history = [], tracked = new Map()) {
   const entries = new Map(
-    (Array.isArray(history) ? history : []).map(item => [item.id, item])
+    (Array.isArray(history) ? history : [])
+      .filter(item => (
+        item &&
+        typeof item === 'object' &&
+        !Array.isArray(item) &&
+        item.id
+      ))
+      .map(item => [item.id, item])
   )
   const nextTracked = new Map()
   const updates = []

@@ -101,6 +101,33 @@ test('AI chat actions create a clean retry entry without stale stream state', as
   assert.equal(retry.timestamp, 2)
 })
 
+test('AI chat startup normalizes malformed legacy entries before rendering', async () => {
+  const {
+    normalizeAIChatHistoryOnStartup
+  } = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/components/ai/ai-chat-actions.js')))
+
+  const history = normalizeAIChatHistoryOnStartup([
+    null,
+    'invalid entry',
+    {
+      id: 'legacy-chat',
+      prompt: { text: 'check disk' },
+      displayPrompt: { content: 'visible prompt' },
+      response: { content: 'disk is healthy' },
+      toolCalls: { id: 'not-an-array' },
+      artifactIds: 'artifact-1'
+    }
+  ])
+
+  assert.equal(history.length, 1)
+  assert.equal(history[0].id, 'legacy-chat')
+  assert.equal(history[0].prompt, 'check disk')
+  assert.equal(history[0].displayPrompt, 'visible prompt')
+  assert.equal(history[0].response, 'disk is healthy')
+  assert.deepEqual(history[0].toolCalls, [])
+  assert.deepEqual(history[0].artifactIds, [])
+})
+
 test('AI chat actions close orphaned running requests after an app restart', async () => {
   const {
     getInterruptedAIChatUpdate
@@ -137,6 +164,34 @@ test('AI chat actions close orphaned running requests after an app restart', asy
   assert.equal(stoppingUpdate.completionStatus, 'failed')
   assert.equal(stoppingUpdate.requestId, '')
   assert.match(stoppingUpdate.response, /^partial answer/)
+})
+
+test('AI restart recovery ignores malformed legacy history entries', async () => {
+  const {
+    recoverInterruptedAIChatEntry
+  } = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/components/ai/ai-chat-actions.js')))
+  const interrupted = {
+    id: 'valid-running-chat',
+    mode: 'ask',
+    completionStatus: 'running',
+    pending: false,
+    sessionId: '',
+    requestId: 'request-1',
+    response: 'partial answer'
+  }
+  const store = {
+    aiChatHistory: [
+      null,
+      'legacy-corrupt-entry',
+      {},
+      interrupted
+    ]
+  }
+
+  assert.equal(recoverInterruptedAIChatEntry(store, interrupted), true)
+  const recovered = store.aiChatHistory.find(item => item?.id === interrupted.id)
+  assert.equal(recovered.completionStatus, 'failed')
+  assert.equal(recovered.pending, false)
 })
 
 test('AI chat history migrates legacy trace fields to metadata-only persistence', async () => {

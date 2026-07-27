@@ -299,7 +299,7 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
     }
     finalizeCancelledToolCalls()
     const current = window.store.aiChatHistory?.find(item => (
-      item.id === chatEntry.id
+      item?.id === chatEntry.id
     ))
     const terminalAlreadyRecorded = !current ||
       current.completionStatus === 'cancelled'

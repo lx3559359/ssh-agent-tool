@@ -127,4 +127,56 @@ describe('AI Config and Suggestions', function () {
 
     await expect(client.locator('.chat-history-item')).toHaveCount(0, { timeout: 10000 })
   })
+
+  it('should render normalized legacy object fields without failing the AI panel', async function () {
+    await client.evaluate(() => {
+      window.__aiRendererErrors = []
+      const runGlobalAsync = window.pre.runGlobalAsync.bind(window.pre)
+      window.pre.runGlobalAsync = (name, ...args) => {
+        if (name === 'reportRendererError') {
+          window.__aiRendererErrors.push(args[0])
+        }
+        return runGlobalAsync(name, ...args)
+      }
+      const profile = {
+        id: 'e2e-ai-legacy',
+        nameAI: 'E2E Legacy AI',
+        baseURLAI: 'http://localhost:43434',
+        apiPathAI: '/chat/completions',
+        modelAI: 'gpt-3.5-turbo',
+        apiKeyAI: 'test-api-key',
+        authHeaderNameAI: 'Authorization: Bearer',
+        roleAI: '',
+        languageAI: '简体中文'
+      }
+      window.store.aiChatHistory = [
+        null,
+        'legacy-corrupt-entry',
+        {},
+        {
+          id: 'legacy-chat',
+          prompt: { text: 'check disk' },
+          displayPrompt: { content: 'visible prompt' },
+          response: { content: 'disk is healthy' },
+          toolCalls: { id: 'not-an-array' },
+          artifactIds: 'artifact-1'
+        }
+      ]
+      window.store.setConfig({
+        activeAIProfileId: profile.id,
+        aiProfiles: [profile],
+        ...profile
+      })
+      window.store.handleOpenAIPanel()
+    })
+
+    await client.waitForTimeout(1000)
+    const rendererErrors = await client.evaluate(() => window.__aiRendererErrors)
+    expect(rendererErrors).toEqual([])
+    await expect(client.locator('.ai-chat-container')).toBeVisible({ timeout: 10000 })
+    await expect(client.locator('.lazy-module-error')).toHaveCount(0)
+    await expect(client.locator('.chat-history-item')).toHaveCount(1)
+    await expect(client.locator('.chat-history-item')).toContainText('visible prompt')
+    await expect(client.locator('.chat-history-item')).toContainText('disk is healthy')
+  })
 })

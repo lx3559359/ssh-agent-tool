@@ -17,7 +17,14 @@ export default class LazyModuleBoundary extends React.Component {
     return { error }
   }
 
-  componentDidCatch (error) {
+  componentDidCatch (error, errorInfo) {
+    window.pre?.runGlobalAsync?.('reportRendererError', {
+      message: error?.message || String(error),
+      stack: error?.stack || '',
+      componentStack: errorInfo?.componentStack || '',
+      location: window.location?.href || '',
+      userAgent: window.navigator?.userAgent || ''
+    }).catch(() => {})
     if (tryAutoRecoverChunkLoad(error)) {
       this.setState({ recovering: true })
     }

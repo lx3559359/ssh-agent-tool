@@ -67,8 +67,77 @@ function normalizeAIChatTraceStorage (item = {}) {
   return normalized
 }
 
+function normalizeAIChatText (value) {
+  if (typeof value === 'string') return value
+  if (value === undefined || value === null) return ''
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value)
+  }
+  if (typeof value === 'object') {
+    for (const field of ['content', 'text', 'message', 'value']) {
+      if (typeof value[field] === 'string') return value[field]
+    }
+    try {
+      return JSON.stringify(value)
+    } catch {
+      return ''
+    }
+  }
+  return ''
+}
+
+function normalizeAIChatToolCall (toolCall, index) {
+  if (!toolCall || typeof toolCall !== 'object' || Array.isArray(toolCall)) {
+    return null
+  }
+  const normalized = {
+    ...toolCall,
+    id: normalizeAIChatText(toolCall.id) || `legacy-tool-${index}`,
+    name: normalizeAIChatText(toolCall.name),
+    status: normalizeAIChatText(toolCall.status) || 'failed',
+    args: toolCall.args && typeof toolCall.args === 'object' && !Array.isArray(toolCall.args)
+      ? toolCall.args
+      : {},
+    result: normalizeAIChatText(toolCall.result)
+  }
+  if (toolCall.presentation && typeof toolCall.presentation === 'object') {
+    normalized.presentation = {
+      ...toolCall.presentation,
+      command: normalizeAIChatText(toolCall.presentation.command),
+      target: normalizeAIChatText(toolCall.presentation.target),
+      output: normalizeAIChatText(toolCall.presentation.output),
+      error: normalizeAIChatText(toolCall.presentation.error)
+    }
+  } else {
+    delete normalized.presentation
+  }
+  return normalized
+}
+
+export function normalizeAIChatHistoryItem (item) {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return null
+  const id = normalizeAIChatText(item.id)
+  if (!id) return null
+  const normalized = {
+    ...item,
+    id,
+    prompt: normalizeAIChatText(item.prompt),
+    displayPrompt: normalizeAIChatText(item.displayPrompt),
+    response: normalizeAIChatText(item.response),
+    toolCalls: (Array.isArray(item.toolCalls) ? item.toolCalls : [])
+      .map(normalizeAIChatToolCall)
+      .filter(Boolean),
+    artifactIds: (Array.isArray(item.artifactIds) ? item.artifactIds : [])
+      .map(normalizeAIChatText)
+      .filter(Boolean)
+  }
+  return normalizeAIChatTraceStorage(normalized)
+}
+
 function normalizeAIChatHistoryForStorage (history = []) {
-  return sanitizeAIChatHistory(history).map(normalizeAIChatTraceStorage)
+  return sanitizeAIChatHistory(history)
+    .map(normalizeAIChatHistoryItem)
+    .filter(Boolean)
 }
 
 export function buildAIChatRole ({
@@ -143,7 +212,7 @@ export function recoverInterruptedAIChatEntry (store, item = {}, {
   includeSession = false
 } = {}) {
   if (!store || !item?.id) return false
-  const current = store.aiChatHistory?.find(entry => entry.id === item.id) || item
+  const current = store.aiChatHistory?.find(entry => entry?.id === item.id) || item
   const interruptedUpdate = getInterruptedAIChatUpdate(current, {
     includeSession
   })
@@ -194,9 +263,8 @@ function isLegacyAIChatEntry (item = {}) {
 
 export function getAIChatHistoryForScope (history, scopeId) {
   const scope = String(scopeId || 'global')
-  return (Array.isArray(history) ? history : [])
+  return normalizeAIChatHistoryForStorage(history)
     .filter(item => isLegacyAIChatEntry(item) || getAIChatScopeId(item) === scope)
-    .map(normalizeAIChatTraceStorage)
 }
 
 export function adoptLegacyAIChatHistoryScope (store, scopeId) {
@@ -230,7 +298,7 @@ export function cancelAIChatEntryLifecycle (store, item = {}, {
   recordQualityEvent = writeQualityEvent
 } = {}) {
   if (!store || !item?.id) return false
-  const current = store.aiChatHistory?.find(entry => entry.id === item.id)
+  const current = store.aiChatHistory?.find(entry => entry?.id === item.id)
   if (!current || !isActiveAIChatEntry(current)) return false
   const traceId = getAIChatTraceId(current)
   const agent = current.mode === 'agent'
@@ -332,7 +400,7 @@ export function updateAIChatHistoryEntry (
     return false
   }
   const history = Array.isArray(store.aiChatHistory) ? store.aiChatHistory : []
-  const index = history.findIndex(item => item.id === id)
+  const index = history.findIndex(item => item?.id === id)
   if (index === -1) {
     return false
   }
@@ -393,11 +461,11 @@ function isActiveAIChatEntry (item = {}) {
 }
 
 export function getAIChatStreamSessionId (item = {}, store) {
-  const latest = store?.aiChatHistory?.find(chat => chat.id === item.id)
+  const latest = store?.aiChatHistory?.find(chat => chat?.id === item.id)
   return latest?.sessionId || item.sessionId || ''
 }
 
 export function getAIChatRequestId (item = {}, store) {
-  const latest = store?.aiChatHistory?.find(chat => chat.id === item.id)
+  const latest = store?.aiChatHistory?.find(chat => chat?.id === item.id)
   return latest?.requestId || item.requestId || ''
 }

@@ -34,6 +34,25 @@ test('chat health transition observer reports real success and disappearance fai
   assert.equal(result.tracked.get('new').seen, true)
 })
 
+test('chat health transition observer ignores malformed legacy history entries', async () => {
+  const { resolveAIChatHealthTransitions } = await import(coordinatorUrl)
+  const tracked = new Map([
+    ['healthy', { key: 'profile::model-a', seen: true }]
+  ])
+
+  const result = resolveAIChatHealthTransitions([
+    null,
+    'legacy-corrupt-entry',
+    {},
+    { id: 'healthy', response: '正常', completionStatus: 'completed' }
+  ], tracked)
+
+  assert.deepEqual(result.updates, [
+    { id: 'healthy', key: 'profile::model-a', ok: true }
+  ])
+  assert.equal(result.tracked.size, 0)
+})
+
 test('right AI panel automatically checks current selection and offers compact manual refresh', () => {
   const panel = source('side-panel-r/right-side-panel-ai-header.jsx')
   const style = source('side-panel-r/right-side-panel.styl')

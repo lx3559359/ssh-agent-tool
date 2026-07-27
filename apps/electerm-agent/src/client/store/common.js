@@ -295,7 +295,7 @@ export default Store => {
 
   Store.prototype.removeAiHistory = function (id) {
     const { store } = window
-    const index = store.aiChatHistory.findIndex(d => d.id === id)
+    const index = store.aiChatHistory.findIndex(d => d?.id === id)
     if (index === -1) {
       return
     }

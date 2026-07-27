@@ -9,9 +9,17 @@ export function unwrapArtifactResult (result) {
   return result.value
 }
 
+function toArtifactIpcValue (value) {
+  if (value === undefined) return value
+  return JSON.parse(JSON.stringify(value))
+}
+
 async function runArtifactCall (method, ...args) {
   return unwrapArtifactResult(
-    await window.pre.runGlobalAsync(method, ...args)
+    await window.pre.runGlobalAsync(
+      method,
+      ...args.map(toArtifactIpcValue)
+    )
   )
 }
 

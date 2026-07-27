@@ -70,3 +70,14 @@ test('error boundary reports renderer crashes to the main process log', () => {
   assert.match(source, /runGlobalAsync\?\.\('reportRendererError'/)
   assert.match(source, /componentStack/)
 })
+
+test('lazy module boundary also reports render failures to the main process log', () => {
+  const source = fs.readFileSync(
+    path.resolve(__dirname, '../../src/client/components/common/lazy-module-boundary.jsx'),
+    'utf8'
+  )
+
+  assert.match(source, /componentDidCatch\s*\(\s*error\s*,\s*errorInfo\s*\)/)
+  assert.match(source, /runGlobalAsync\?\.\('reportRendererError'/)
+  assert.match(source, /componentStack/)
+})

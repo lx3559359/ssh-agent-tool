@@ -137,7 +137,7 @@ const detachedAIStreams = new Map()
 const DETACHED_STREAM_POLL_DELAY = 200
 
 export function shouldApplyAIChatAsyncUpdate (store, chatId) {
-  const latest = store?.aiChatHistory?.find(chat => chat.id === chatId)
+  const latest = store?.aiChatHistory?.find(chat => chat?.id === chatId)
   return latest?.completionStatus === 'running'
 }
 
@@ -238,7 +238,7 @@ export function startDetachedAIStream ({
     }
   })().catch(error => {
     if (!active.cancelled && shouldApplyAIChatAsyncUpdate(store, chatId)) {
-      const latest = store.aiChatHistory?.find(chat => chat.id === chatId)
+      const latest = store.aiChatHistory?.find(chat => chat?.id === chatId)
       updateAIChatHistoryEntry(store, chatId, {
         response: buildAIRequestFailureText(error?.message || error, latest?.response),
         completionStatus: 'failed',
@@ -318,7 +318,7 @@ export default memo(function AIChatHistoryItem ({
   function markRequestFailed (error) {
     if (!shouldApplyAIChatAsyncUpdate(window.store, item.id)) return
     const safeError = sanitizeAIStoredText(error?.message || error)
-    const latest = window.store.aiChatHistory?.find(chat => chat.id === item.id)
+    const latest = window.store.aiChatHistory?.find(chat => chat?.id === item.id)
     updateAIChatHistoryEntry(window.store, item.id, {
       response: buildAIRequestFailureText(safeError, latest?.response || item.response),
       completionStatus: 'failed',
@@ -351,7 +351,7 @@ export default memo(function AIChatHistoryItem ({
               ? partial + streamResponse.content
               : streamResponse.content
           }
-          const latest = window.store.aiChatHistory?.find(chat => chat.id === item.id)
+          const latest = window.store.aiChatHistory?.find(chat => chat?.id === item.id)
           updateAIChatHistoryEntry(window.store, item.id, {
             response: buildAIRequestFailureText(error, partial || latest?.response),
             completionStatus: 'failed',
@@ -679,7 +679,7 @@ export default memo(function AIChatHistoryItem ({
     }
 
     return () => {
-      const latest = window.store.aiChatHistory?.find(chat => chat.id === item.id)
+      const latest = window.store.aiChatHistory?.find(chat => chat?.id === item.id)
       const activeSessionId = getAIChatStreamSessionId(item, window.store)
       if (
         mode !== 'agent' &&
@@ -722,7 +722,7 @@ export default memo(function AIChatHistoryItem ({
 
   async function handleStop (e) {
     e.stopPropagation()
-    const latest = window.store.aiChatHistory?.find(chat => chat.id === item.id)
+    const latest = window.store.aiChatHistory?.find(chat => chat?.id === item.id)
     if (!['pending', 'running', 'stopping'].includes(latest?.completionStatus)) {
       setIsStreaming(false)
       return

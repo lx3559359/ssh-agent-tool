@@ -16,7 +16,7 @@ function isActiveRun (item = {}) {
 }
 
 function currentEntry (store, id) {
-  return store?.aiChatHistory?.find(item => item.id === id) || null
+  return store?.aiChatHistory?.find(item => item?.id === id) || null
 }
 
 export function getActiveScopedAIChatRun (history, scopeId) {
