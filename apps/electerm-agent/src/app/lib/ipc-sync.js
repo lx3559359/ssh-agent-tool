@@ -113,6 +113,7 @@ module.exports = {
         'statAsync',
         'lstatAsync',
         'describeTransferEntry',
+        'describeResumeEntry',
         'cp',
         'mv',
         'mkdir',

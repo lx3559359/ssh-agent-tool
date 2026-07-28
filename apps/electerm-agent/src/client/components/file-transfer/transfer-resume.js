@@ -5,6 +5,30 @@ const sourceFingerprintKeys = [
   'lastSha256'
 ]
 
+export function buildTransferResumeCheckpoint ({
+  checkpoint,
+  source,
+  target
+}) {
+  return {
+    ...checkpoint,
+    source,
+    target
+  }
+}
+
+export function buildTransferResumeOptions (checkpoint) {
+  const offset = Number(checkpoint?.offset)
+  const partialPath = String(checkpoint?.partialPath || '')
+  if (!Number.isSafeInteger(offset) || offset <= 0 || !partialPath) {
+    return {}
+  }
+  return {
+    startOffset: offset,
+    partialPath
+  }
+}
+
 export function validateTransferResume ({
   checkpoint,
   source,

@@ -148,6 +148,45 @@ test('resume validator rejects changed source or changed partial target', async 
   }).code, 'TRANSFER_PARTIAL_CHANGED')
 })
 
+test('resume checkpoint keeps both source and partial target fingerprints', async () => {
+  const {
+    buildTransferResumeCheckpoint,
+    buildTransferResumeOptions
+  } = await import(resumeUrl)
+  const source = {
+    size: 8192,
+    mtimeMs: 1000,
+    firstSha256: 'source-first',
+    lastSha256: 'source-last'
+  }
+  const target = {
+    size: 4096,
+    mtimeMs: 2000,
+    firstSha256: 'target-first',
+    lastSha256: 'target-last',
+    boundarySha256: 'target-last'
+  }
+  const checkpoint = buildTransferResumeCheckpoint({
+    checkpoint: {
+      offset: 4096,
+      partialPath: '/tmp/.upload.part'
+    },
+    source,
+    target
+  })
+
+  assert.deepEqual(checkpoint, {
+    offset: 4096,
+    partialPath: '/tmp/.upload.part',
+    source,
+    target
+  })
+  assert.deepEqual(buildTransferResumeOptions(checkpoint), {
+    startOffset: 4096,
+    partialPath: '/tmp/.upload.part'
+  })
+})
+
 test('paused atomic upload keeps its partial file and resumes at checkpoint', async () => {
   const tmp = makeTmpDir()
   const localPath = path.join(tmp, 'source.bin')
@@ -332,4 +371,29 @@ test('resume entry fingerprint reads only bounded first and last chunks', async 
       maxBytes: 64 * 1024
     }
   ])
+})
+
+test('local resume entry fingerprint matches bounded file content', async () => {
+  const root = makeTmpDir()
+  const sourcePath = path.join(root, 'local-resume.bin')
+  const source = crypto.randomBytes((64 * 1024 * 2) + 17)
+  fs.writeFileSync(sourcePath, source)
+  const {
+    describeResumeEntry
+  } = require('../../src/app/lib/file-resume-fingerprint.js')
+
+  const result = await describeResumeEntry(sourcePath)
+  const first = source.subarray(0, 64 * 1024)
+  const last = source.subarray(source.length - (64 * 1024))
+
+  assert.equal(result.size, source.length)
+  assert.equal(
+    result.firstSha256,
+    crypto.createHash('sha256').update(first).digest('hex')
+  )
+  assert.equal(
+    result.lastSha256,
+    crypto.createHash('sha256').update(last).digest('hex')
+  )
+  assert.equal(result.boundarySha256, result.lastSha256)
 })

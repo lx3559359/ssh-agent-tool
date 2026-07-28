@@ -29,6 +29,9 @@ import {
   agentTaskRegistry,
   recoverOrphanedAgentTasks
 } from '../components/ai/agent-task-registry.js'
+import {
+  markUnfinishedOperationTasksInterrupted
+} from '../common/operation-tasks/task-store.js'
 
 function getHost (argv, opts) {
   const arr = argv
@@ -331,6 +334,19 @@ export default (Store) => {
       ext.lastDataUpdateTime = await getData('lastDataUpdateTime') || 0
       ext.initLoadingData = false
       Object.assign(store, ext)
+      const interruptedOperationTasks = await markUnfinishedOperationTasksInterrupted()
+        .catch(error => {
+          console.warn('Failed to recover operation tasks:', error)
+          return []
+        })
+      if (interruptedOperationTasks.length) {
+        const interruptedById = new Map(
+          interruptedOperationTasks.map(task => [task.id, task])
+        )
+        store.operationTasks = (store.operationTasks || []).map(task => {
+          return interruptedById.get(task.id) || task
+        })
+      }
       await store.loadRecoveryPlan()
       store.loadFontList()
       store.fetchItermThemes()

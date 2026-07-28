@@ -36,6 +36,11 @@ import {
   mvCmd,
   mkdirCmd
 } from './zip'
+import { createTransferTaskAdapter } from './transfer-task-adapter.js'
+import {
+  buildTransferResumeCheckpoint,
+  buildTransferResumeOptions
+} from './transfer-resume.js'
 import './transfer.styl'
 
 const { assign } = Object
@@ -50,6 +55,7 @@ export default class TransportAction extends Component {
     } = props.transfer
     const sftp = refs.get('sftp-' + tabId)
     this.id = `tr-${transferBatch}-${id}`
+    this.operationTaskId = `sftp-transfer-${id}`
     this.tabId = tabId
     refsTransfers.add(this.id, this)
     this.total = 0
@@ -63,6 +69,8 @@ export default class TransportAction extends Component {
     this.folderItemResults = []
     this.localSourceDescriptor = props.transfer?.sourceDescriptor || null
     this.agentRiskTerminalPromise = null
+    this.transferTaskAdapter = createTransferTaskAdapter()
+    this.transferTaskStarted = false
     this.transferSafety = createTransferSafetyController({
       getTransfer: this.getTransferSafetyInput,
       getCapability: () => refs.get('sftp-' + this.tabId),
@@ -83,14 +91,17 @@ export default class TransportAction extends Component {
     ) {
       this.initTransfer()
     }
-    if (
-      this.props.pausing !== prevProps.pausing
-    ) {
-      if (this.props.pausing) {
+    if (this.props.status !== prevProps.status) {
+      if (this.props.status === 'pausing') {
         this.pause()
-      } else {
+      } else if (this.props.status === 'resuming') {
         this.resume()
       }
+    } else if (
+      !this.props.status &&
+      this.props.pausing !== prevProps.pausing
+    ) {
+      this.props.pausing ? this.pause() : this.resume()
     }
   }
 
@@ -100,7 +111,12 @@ export default class TransportAction extends Component {
     this.activeAttemptToken = null
     clearTimeout(this.retryTimer)
     this.retryTimer = null
-    this.transport && this.transport.destroy()
+    if (!this.queueRemoved && !this.userCancelling && !this.finishing) {
+      this.transport?.interrupt()
+      this.runTransferTask('onInterrupted', 'client-unmounted')
+    } else {
+      this.transport?.destroy()
+    }
     this.transport = null
     this.destroySubTransports()
     Promise.resolve(this.transferSafety.dispose()).catch(error => {
@@ -108,6 +124,61 @@ export default class TransportAction extends Component {
     })
     this.fromFile = null
     refsTransfers.remove(this.id)
+  }
+
+  runTransferTask = (method, ...args) => {
+    if (method !== 'start' && !this.transferTaskStarted) {
+      return Promise.resolve(null)
+    }
+    return Promise.resolve(
+      this.transferTaskAdapter[method](this.operationTaskId, ...args)
+    ).catch(error => {
+      console.warn('SFTP task history update failed:', error)
+      return null
+    })
+  }
+
+  getTransferTaskEndpoint = () => {
+    const transfer = this.props.transfer
+    const tab = window.store?.tabs?.find(item => item.id === this.tabId) || {}
+    return {
+      host: transfer.host || tab.host || '',
+      port: transfer.port || tab.port || 22,
+      username: transfer.username || tab.username || ''
+    }
+  }
+
+  beginTransferTask = async (fromFile) => {
+    if (this.transferTaskStarted) return
+    const { transfer } = this.props
+    if (transfer.typeFrom === transfer.typeTo) return
+    this.transferTaskStarted = true
+    this.update({
+      status: 'running',
+      total: Number(fromFile?.size) || 0,
+      paused: false,
+      pausing: false
+    })
+    await this.runTransferTask('start', {
+      title: transfer.typeFrom === typeMap.local
+        ? `上传 ${transfer.fromPath}`
+        : `下载 ${transfer.fromPath}`,
+      endpoint: this.getTransferTaskEndpoint(),
+      progress: {
+        transferred: 0,
+        total: Number(fromFile?.size) || 0
+      },
+      metadata: {
+        tabId: this.tabId,
+        transferId: transfer.id,
+        transferBatch: transfer.transferBatch || '',
+        typeFrom: transfer.typeFrom,
+        typeTo: transfer.typeTo,
+        fromPath: transfer.fromPath,
+        toPath: transfer.toPath,
+        isDirectory: Boolean(fromFile?.isDirectory)
+      }
+    })
   }
 
   getTransferSafetyInput = () => ({
@@ -295,6 +366,18 @@ export default class TransportAction extends Component {
     } catch (error) {
       window.store.onError(error)
     }
+    const taskFailed = update.status === 'exception' || Boolean(update.error)
+    if (taskFailed) {
+      await this.runTransferTask('onFailed', update.error || 'SFTP transfer failed')
+    } else {
+      const size = update.size ?? update.transferred ?? this.total
+      await this.runTransferTask('onCompleted', {
+        transferred: size,
+        total: this.total || size,
+        speed: 0,
+        etaSeconds: 0
+      })
+    }
     const {
       transfer,
       config
@@ -366,7 +449,7 @@ export default class TransportAction extends Component {
     percent = percent >= 100 ? 100 : percent
     this.total = total
     up.percent = percent
-    up.status = 'active'
+    up.status = 'running'
     up.retrying = false
     up.transferred = transferredValue
     this.lastTransferred = transferredValue
@@ -378,15 +461,28 @@ export default class TransportAction extends Component {
     )
     up.passedTime = computePassedTime(up.startTime)
     this.update(up)
+    const elapsedSeconds = Math.max(0.001, (Date.now() - up.startTime) / 1000)
+    this.runTransferTask('onProgress', {
+      transferred: transferredValue,
+      total,
+      speed: transferredValue / elapsedSeconds,
+      etaSeconds: Math.max(0, Number(up.leftTimeInt) || 0) / 1000
+    })
   }
 
-  stopTransport = () => {
+  stopTransport = (reason = 'completed') => {
     this.onCancel = true
     this.transferAttempts.invalidate(this.activeAttemptToken)
     this.activeAttemptToken = null
     clearTimeout(this.retryTimer)
     this.retryTimer = null
-    this.transport && this.transport.destroy()
+    if (reason === 'cancelled') {
+      this.transport?.cancel()
+    } else if (reason === 'interrupted') {
+      this.transport?.interrupt()
+    } else {
+      this.transport?.destroy()
+    }
     this.transport = null
     this.destroySubTransports()
   }
@@ -409,8 +505,8 @@ export default class TransportAction extends Component {
     }
   }
 
-  finishTransfer = async (callback) => {
-    this.stopTransport()
+  finishTransfer = async (callback, reason = 'completed') => {
+    this.stopTransport(reason)
     if (!this.queueRemovalPromise) {
       this.queueRemoved = true
       this.queueRemovalPromise = this.removeTransferFromQueue()
@@ -431,7 +527,8 @@ export default class TransportAction extends Component {
   }
 
   cancelProtectedTransport = async () => {
-    await this.finishTransfer()
+    await this.runTransferTask('onCancelled')
+    await this.finishTransfer(undefined, 'cancelled')
   }
 
   cancelAndWait = () => {
@@ -439,6 +536,7 @@ export default class TransportAction extends Component {
     this.userCancelling = true
     this.cancellationPromise = (async () => {
       try {
+        this.transport?.cancel()
         await this.transferSafety.cancel()
       } finally {
         try {
@@ -448,7 +546,8 @@ export default class TransportAction extends Component {
             transferId: this.props.transfer.id
           })
         } finally {
-          await this.finishTransfer()
+          await this.runTransferTask('onCancelled')
+          await this.finishTransfer(undefined, 'cancelled')
         }
       }
     })()
@@ -465,12 +564,54 @@ export default class TransportAction extends Component {
     }
   }
 
+  onPauseAcknowledged = async (checkpoint) => {
+    const transfer = this.props.transfer
+    let persistedCheckpoint = checkpoint
+    if (
+      checkpoint?.partialPath &&
+      transfer.typeFrom === typeMap.local &&
+      transfer.typeTo === typeMap.remote &&
+      !this.fromFile?.isDirectory
+    ) {
+      try {
+        const source = await window.fs.describeResumeEntry(transfer.fromPath)
+        const sftp = this.getTransferRuntimeTransport(transfer).sftp
+        const target = await sftp.describeResumeEntry(checkpoint.partialPath)
+        persistedCheckpoint = buildTransferResumeCheckpoint({
+          checkpoint,
+          source,
+          target
+        })
+      } catch (error) {
+        console.warn('SFTP pause checkpoint fingerprint failed:', error)
+        persistedCheckpoint = {
+          ...checkpoint,
+          validationError: String(error?.message || error || '')
+        }
+      }
+    }
+    this.update({
+      status: 'paused',
+      pausing: false,
+      paused: true,
+      checkpoint: persistedCheckpoint
+    })
+    await this.runTransferTask('onPaused', persistedCheckpoint)
+  }
+
   pause = () => {
+    this.runTransferTask('requestPause')
     this.transport?.pause()
   }
 
   resume = () => {
     this.transport?.resume()
+    this.runTransferTask('onResume')
+    this.update({
+      status: 'running',
+      pausing: false,
+      paused: false
+    })
   }
 
   mvOrCp = async () => {
@@ -541,6 +682,7 @@ export default class TransportAction extends Component {
     const mode = toFile.mode || fromMode
     const sftp = this.getTransferRuntimeTransport(transfer).sftp
     const atomicUpload = !isDown && !fromFile.isDirectory && !this.isFtp
+    const resumeOptions = buildTransferResumeOptions(transfer.checkpoint)
     const handleEnd = onEnd
       ? update => onEnd(update, attemptToken)
       : update => this.onEnd(update, attemptToken)
@@ -553,10 +695,13 @@ export default class TransportAction extends Component {
           mode,
           atomicUpload,
           atomicOverwrite: atomicUpload &&
-            this.conflictPolicy === fileActions.mergeOrOverwrite
+            this.conflictPolicy === fileActions.mergeOrOverwrite,
+          keepPartial: atomicUpload,
+          ...resumeOptions
         },
         onData: transferred => this.onData(transferred, attemptToken),
         onError: error => this.onError(error, attemptToken),
+        onPaused: this.onPauseAcknowledged,
         onEnd: handleEnd
       })
       if (!this.transferAttempts.isCurrent(attemptToken)) {
@@ -803,6 +948,7 @@ export default class TransportAction extends Component {
         this.transferAttempts.invalidate(attemptToken)
         return
       }
+      await this.beginTransferTask(fromFile)
       await this.prepareLocalSource(transfer)
       if (transfer.remote2remoteStep === 1 && !this.crossHostSourcePin) {
         const sourcePreflight = await verifyCrossHostSourcePreflight({
@@ -887,7 +1033,7 @@ export default class TransportAction extends Component {
     this.currentProgress = Math.min(this.currentProgress + 0.2, 99)
 
     up.percent = Math.floor(this.currentProgress)
-    up.status = 'active'
+    up.status = 'running'
     up.transferred = this.transferred
     up.startTime = this.startTime
     up.speed = format(this.transferred, up.startTime)
@@ -1185,7 +1331,7 @@ export default class TransportAction extends Component {
       total: this.total
     })
     this.update({
-      status: 'active',
+      status: 'running',
       error: '',
       retrying: true,
       transferred: retryProgress.transferred,

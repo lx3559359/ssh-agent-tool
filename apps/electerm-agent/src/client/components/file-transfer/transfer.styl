@@ -31,6 +31,7 @@
   padding 10px 0
 .sftp-transport
   display flex
+  align-items center
   padding 8px 5px
   &:hover
     font-weight bold
@@ -42,6 +43,24 @@
       color var(--primary-contrast)
       background var(--primary)
       border-radius 20px
+  .transfer-progress-block
+    flex 1 1 260px
+    min-width 180px
+    max-width 420px
+    gap 2px
+  .transfer-progress-meta
+    color var(--text-light)
+    font-size 11px
+    font-weight normal
+    line-height 16px
+    overflow hidden
+    text-overflow ellipsis
+    white-space nowrap
+  .ant-progress
+    line-height 1
+    margin 0
+  .ant-progress-inner
+    background var(--border)
 
 .flex-child + .flex-child
   margin-left 5px

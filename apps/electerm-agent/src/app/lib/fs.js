@@ -19,6 +19,9 @@ const {
   readArchiveTextEntry
 } = require('../common/archive-reader')
 const { searchTextReader } = require('../common/log-search')
+const {
+  describeResumeEntry
+} = require('./file-resume-fingerprint')
 
 const ROOT_PATH = '/'
 const TRANSFER_DIGEST_CHUNK_BYTES = 64 * 1024
@@ -575,7 +578,8 @@ const fsExport = Object.assign(
     openCustom,
     closeCustom,
     statCustom,
-    describeTransferEntry
+    describeTransferEntry,
+    describeResumeEntry
   },
   {
     readdirAsync: (_path) => {
