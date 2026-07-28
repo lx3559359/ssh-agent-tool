@@ -13,6 +13,7 @@ import {
 import { action } from 'manate'
 import { addClass, removeClass } from '../../common/class'
 import { refsStatic } from '../common/ref'
+import { filesize } from 'filesize'
 import './transfer.styl'
 
 const e = window.translate
@@ -32,6 +33,9 @@ export default function Transporter (props) {
     leftTime,
     passedTime,
     error,
+    retrying,
+    retryMode,
+    retryPreservedBytes,
     inited,
     id
   } = props.transfer
@@ -228,8 +232,14 @@ export default function Transporter (props) {
         <span
           className='sftp-file-percent'
         >
-          {percent || 0}%
-          {speed ? `(${speed})` : null}
+          {retrying && retryMode === 'restart'
+            ? `${e('shellpilotTransferRestarting')} ${filesize(retryPreservedBytes || 0)}`
+            : (
+              <>
+                {percent || 0}%
+                {speed ? `(${speed})` : null}
+              </>
+              )}
         </span>
       </Flex>
       <Flex>

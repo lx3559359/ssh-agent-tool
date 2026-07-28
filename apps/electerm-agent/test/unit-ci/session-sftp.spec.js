@@ -770,6 +770,7 @@ describe('session-sftp transport flows', () => {
         sftp: sftp.sftp,
         conn: term.conn,
         options: {
+          atomicUpload: true,
           chunkSize: 64 * 1024,
           concurrency: 4
         },
@@ -778,6 +779,11 @@ describe('session-sftp transport flows', () => {
 
       uploadResult.transfer.kill()
       assert.deepEqual(fs.readFileSync(toLocalPath(root, uploadRemotePath)), uploadSource)
+      assert.deepEqual(
+        fs.readdirSync(path.dirname(toLocalPath(root, uploadRemotePath)))
+          .filter(name => name.includes('.shellpilot-upload-')),
+        []
+      )
       assert.ok(
         uploadResult.messages.some(message => message.id === 'transfer:data:ssh-sftp-upload-large'),
         'upload should emit transfer progress'

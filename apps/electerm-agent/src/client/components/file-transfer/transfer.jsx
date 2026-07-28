@@ -12,9 +12,11 @@ import {
 import resolve from '../../common/resolve'
 import { refsTransfers, refsStatic, refs } from '../common/ref'
 import {
+  createTransferRetryProgress,
   createTransferRetryState,
   shouldRetryTransfer
 } from '../../common/transfer-retry'
+import { collectFolderTransferResults } from './folder-transfer-results.js'
 import {
   captureLocalTransferSource,
   createTransferAttemptGuard,
@@ -58,6 +60,7 @@ export default class TransportAction extends Component {
     this.transferRetryState = createTransferRetryState(props.transfer?.retry)
     this.transferAttempts = createTransferAttemptGuard()
     this.subTransports = new Set()
+    this.folderItemResults = []
     this.localSourceDescriptor = props.transfer?.sourceDescriptor || null
     this.agentRiskTerminalPromise = null
     this.transferSafety = createTransferSafetyController({
@@ -319,7 +322,13 @@ export default class TransportAction extends Component {
         next: null,
         speed: format(size, this?.startTime),
         status: update.status || 'success',
-        error: update.error || ''
+        error: update.error || '',
+        ...(this.folderItemResults.length
+          ? {
+              itemResults: this.folderItemResults.slice(0, 1000),
+              itemResultCount: this.folderItemResults.length
+            }
+          : {})
       })
       window.store.addTransferHistory(
         r
@@ -358,7 +367,9 @@ export default class TransportAction extends Component {
     this.total = total
     up.percent = percent
     up.status = 'active'
+    up.retrying = false
     up.transferred = transferredValue
+    this.lastTransferred = transferredValue
     up.startTime = this.startTime
     up.speed = format(transferredValue, up.startTime)
     assign(
@@ -529,6 +540,7 @@ export default class TransportAction extends Component {
       : toPath
     const mode = toFile.mode || fromMode
     const sftp = this.getTransferRuntimeTransport(transfer).sftp
+    const atomicUpload = !isDown && !fromFile.isDirectory && !this.isFtp
     const handleEnd = onEnd
       ? update => onEnd(update, attemptToken)
       : update => this.onEnd(update, attemptToken)
@@ -537,7 +549,12 @@ export default class TransportAction extends Component {
         remotePath,
         localPath,
         isDirectory: !!fromFile.isDirectory,
-        options: { mode },
+        options: {
+          mode,
+          atomicUpload,
+          atomicOverwrite: atomicUpload &&
+            this.conflictPolicy === fileActions.mergeOrOverwrite
+        },
         onData: transferred => this.onData(transferred, attemptToken),
         onError: error => this.onError(error, attemptToken),
         onEnd: handleEnd
@@ -901,6 +918,7 @@ export default class TransportAction extends Component {
     const remotePath = isDown ? fromPath : toPath
     const mode = toFile.mode || fromMode
     const sftp = this.getTransferRuntimeTransport(transfer).sftp
+    const atomicUpload = !isDown && !transfer.fromFile?.isDirectory && !this.isFtp
 
     return new Promise((resolve, reject) => {
       let transport
@@ -911,9 +929,6 @@ export default class TransportAction extends Component {
           const error = new Error('传输尝试已失效。')
           error.code = 'STALE_TRANSFER_ATTEMPT'
           return reject(error)
-        }
-        if (fileSize) {
-          this.onFolderData(fileSize, attemptToken)
         }
         if (transport) {
           this.subTransports.delete(transport)
@@ -941,7 +956,12 @@ export default class TransportAction extends Component {
       sftp[transferType]({
         remotePath,
         localPath,
-        options: { mode },
+        options: {
+          mode,
+          atomicUpload,
+          atomicOverwrite: atomicUpload &&
+            this.conflictPolicy === fileActions.mergeOrOverwrite
+        },
         onData: () => {},
         onError: onSubError,
         onEnd: onSubEnd
@@ -1006,14 +1026,22 @@ export default class TransportAction extends Component {
         return this.transferFileAsSubTransfer(itemTransfer, attemptToken)
       })
 
-      // Wait for all files in batch to complete
-      const results = await Promise.all(promises)
+      const results = await Promise.allSettled(promises)
       this.assertCurrentAttempt(attemptToken)
 
-      // Update progress once for the entire batch
-      const batchTotalSize = results.reduce((sum, size) => sum + size, 0)
-      if (batchTotalSize > 0) {
-        this.onFolderData(batchTotalSize, attemptToken)
+      const summary = collectFolderTransferResults(batchFiles, results)
+      this.folderItemResults.push(...summary.items)
+      if (summary.completedBytes > 0) {
+        this.onFolderData(summary.completedBytes, attemptToken)
+      }
+      if (summary.failed.length) {
+        const firstFailure = summary.failed[0]
+        const error = new Error(
+          `${summary.failed.length} 个文件传输失败：${firstFailure.file?.name || ''} ${firstFailure.error.message}`
+        )
+        error.code = 'SFTP_FOLDER_ITEM_FAILED'
+        error.itemResults = summary.items
+        throw error
       }
     }
   }
@@ -1152,10 +1180,18 @@ export default class TransportAction extends Component {
     this.crossHostSourcePin = retrySource.sourcePin
     this.verifiedCrossHostSource = retrySource.verifiedSource
     this.crossHostSourcePreflight = retrySource.sourcePreflight
+    const retryProgress = createTransferRetryProgress({
+      transferred: this.transferred || this.lastTransferred,
+      total: this.total
+    })
     this.update({
       status: 'active',
       error: '',
       retrying: true,
+      transferred: retryProgress.transferred,
+      retryMode: retryProgress.mode,
+      retryPreservedBytes: retryProgress.preservedTransferred,
+      retryTotalBytes: retryProgress.total,
       retryAttempt: this.transferRetryState.attempt,
       retryMax: this.transferRetryState.maxRetries
     })

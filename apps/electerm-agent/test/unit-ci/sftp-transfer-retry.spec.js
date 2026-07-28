@@ -45,3 +45,19 @@ test('file transfer component wires retry policy before marking a transfer faile
   assert.match(source, /shouldRetryTransfer\(e,\s*this\.transferRetryState\)/)
   assert.match(source, /setTimeout\(\(\)\s*=>\s*this\.startTransfer\(\)/)
 })
+
+test('retry progress preserves diagnostic bytes while declaring a safe restart', async () => {
+  const {
+    createTransferRetryProgress
+  } = await import(retryModuleUrl)
+
+  assert.deepEqual(createTransferRetryProgress({
+    transferred: 8192,
+    total: 32768
+  }), {
+    mode: 'restart',
+    transferred: 0,
+    preservedTransferred: 8192,
+    total: 32768
+  })
+})

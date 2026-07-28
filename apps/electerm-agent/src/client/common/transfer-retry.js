@@ -30,3 +30,15 @@ export function shouldRetryTransfer (error, state = createTransferRetryState()) 
   state.attempt += 1
   return true
 }
+
+export function createTransferRetryProgress ({
+  transferred = 0,
+  total = 0
+} = {}) {
+  return {
+    mode: 'restart',
+    transferred: 0,
+    preservedTransferred: Math.max(0, Number(transferred) || 0),
+    total: Math.max(0, Number(total) || 0)
+  }
+}

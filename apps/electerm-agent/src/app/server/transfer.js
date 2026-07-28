@@ -9,6 +9,16 @@ const log = require('../common/log')
 
 const { FolderTransfer } = require('ssh2-scp/folder-transfer')
 
+function atomicUploadPath (remotePath, id) {
+  const value = String(remotePath || '')
+  const separatorIndex = Math.max(value.lastIndexOf('/'), value.lastIndexOf('\\'))
+  const directory = separatorIndex >= 0 ? value.slice(0, separatorIndex + 1) : ''
+  const name = (separatorIndex >= 0 ? value.slice(separatorIndex + 1) : value) || 'upload'
+  const safeName = name.slice(0, 96).replace(/[^a-zA-Z0-9._-]/g, '_')
+  const safeId = String(id || 'transfer').replace(/[^a-zA-Z0-9_-]/g, '_')
+  return `${directory}.${safeName}.shellpilot-upload-${safeId}.part`
+}
+
 class Transfer {
   constructor ({
     remotePath,
@@ -33,9 +43,19 @@ class Transfer {
     this.conn = conn
     this.pausing = false
     this.hadError = false
-    this.isUpload = isd
+    this.isUpload = !isd
     this.isDirectory = isDirectory
     this.options = options
+    this.atomicUpload = this.isUpload &&
+      !isDirectory &&
+      options.atomicUpload === true &&
+      sftp &&
+      sftp !== fs
+    this.atomicOverwrite = options.atomicOverwrite === true
+    if (this.atomicUpload) {
+      this.finalDstPath = this.dstPath
+      this.dstPath = atomicUploadPath(this.finalDstPath, id)
+    }
     this.concurrency = options.concurrency || 64
     this.chunkSize = options.chunkSize || 32768
     this.mode = options.mode
@@ -124,10 +144,77 @@ class Transfer {
         }
       })
       await this.scpTransfer.startTransfer()
-      this.onEnd()
+      await this.finishSuccessfulTransfer()
     } catch (err) {
       this.onError(err)
     }
+  }
+
+  callSftp = (method, ...args) => {
+    return new Promise((resolve, reject) => {
+      if (typeof method !== 'function') {
+        reject(new Error('SFTP operation is not supported by the server'))
+        return
+      }
+      method.call(this.dst, ...args, err => {
+        if (err) reject(err)
+        else resolve()
+      })
+    })
+  }
+
+  cleanupAtomicUpload = async () => {
+    if (!this.atomicUpload || this.atomicUploadCommitted || !this.dstPath || !this.dst) return
+    if (!this.atomicCleanupPromise) {
+      this.atomicCleanupPromise = (async () => {
+        try {
+          await this.callSftp(this.dst.unlink, this.dstPath)
+        } catch (error) {
+          if (!/no such|not found/i.test(String(error?.message || error))) {
+            log.warn('cleanup atomic SFTP upload failed', error)
+          }
+        }
+      })()
+    }
+    await this.atomicCleanupPromise
+  }
+
+  supportsOpenSshRename = () => {
+    return this.dst?._extensions?.['posix-rename@openssh.com'] === '1'
+  }
+
+  renameAtomicUpload = async () => {
+    const { dst, dstPath, finalDstPath } = this
+    if (this.supportsOpenSshRename() &&
+      typeof dst.ext_openssh_rename === 'function') {
+      try {
+        await this.callSftp(dst.ext_openssh_rename, dstPath, finalDstPath)
+        return
+      } catch (error) {
+        if (!/unsupported|not supported|does not support|unknown/i.test(String(error?.message || error))) {
+          throw error
+        }
+      }
+    }
+    try {
+      await this.callSftp(dst.rename, dstPath, finalDstPath)
+    } catch (error) {
+      if (!this.atomicOverwrite || typeof dst.unlink !== 'function') throw error
+      await this.callSftp(dst.unlink, finalDstPath)
+      await this.callSftp(dst.rename, dstPath, finalDstPath)
+    }
+  }
+
+  finishSuccessfulTransfer = async (data) => {
+    if (this.atomicUpload) {
+      try {
+        await this.renameAtomicUpload()
+        this.atomicUploadCommitted = true
+      } catch (error) {
+        return this.onError(error)
+      }
+    }
+    this.onEnd(data)
   }
 
   tryCreateBuffer = (size) => {
@@ -227,12 +314,12 @@ class Transfer {
         const finish = () => {
           if (--left === 0) {
             if (err) th.onError(err)
-            else th.onEnd()
+            else th.finishSuccessfulTransfer()
           }
         }
         if (left === 0) {
           if (err) th.onError(err)
-          else th.onEnd()
+          else th.finishSuccessfulTransfer()
           return
         }
         if (canCloseSrc) {
@@ -400,14 +487,16 @@ class Transfer {
 
   onError = (err = '', id = this.id, ws = this.ws) => {
     if (!err) {
-      return this.onEnd()
+      return this.finishSuccessfulTransfer()
     }
-    ws && ws.s({
-      id: 'transfer:err:' + id,
-      error: {
-        message: err.message,
-        stack: err.stack
-      }
+    Promise.resolve(this.cleanupAtomicUpload()).finally(() => {
+      ws && ws.s({
+        id: 'transfer:err:' + id,
+        error: {
+          message: err.message,
+          stack: err.stack
+        }
+      })
     })
   }
 
@@ -437,6 +526,7 @@ class Transfer {
   destroy = () => {
     this.onDestroy = true
     this.scpTransfer && this.scpTransfer.destroy && this.scpTransfer.destroy()
+    this.cleanupAtomicUpload()
     setTimeout(this.kill, 200)
     if (this.ws) {
       this.ws.close()
@@ -456,6 +546,7 @@ class Transfer {
 
 module.exports = {
   Transfer,
+  atomicUploadPath,
   transferKeys: [
     'pause',
     'resume',
