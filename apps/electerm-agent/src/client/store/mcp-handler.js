@@ -1171,6 +1171,8 @@ export default Store => {
         path: remotePath,
         text: content,
         mode: requestedMode
+      }, {
+        signal: options.signal
       }),
       options.signal,
       'SFTP text write cancelled'

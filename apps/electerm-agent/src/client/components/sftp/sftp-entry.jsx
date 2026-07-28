@@ -50,6 +50,10 @@ import {
   createSftpTransactionAdapter,
   digestSftpText
 } from './sftp-transaction-adapter.js'
+import {
+  buildSftpTextChangePreview,
+  readSftpSnapshotText
+} from './sftp-text-change-preview.js'
 import { reconcileSelectedFileIds } from './file-selection.js'
 import { createTransactionRunner } from '../../common/safety-transactions/transaction-runner.js'
 import { buildSideEffectSafetyRequest } from '../../common/safety-transactions/side-effect-model.js'
@@ -562,11 +566,75 @@ export default class Sftp extends Component {
     return this.sftpSafetyRunner.cancel(id)
   }
 
-  confirmPreparedSftpOperation = (title) => {
+  confirmPreparedSftpOperation = (title, confirmationDetails) => {
+    const preview = confirmationDetails?.preview
+    const prefix = {
+      add: '+',
+      remove: '-',
+      context: ' '
+    }
     return new Promise(resolve => {
       Modal.confirm({
         title,
-        content: e('shellpilotSftpRestoreConfirmDescription'),
+        content: (
+          <div className='sftp-safety-confirmation'>
+            <div>{e('shellpilotSftpRestoreConfirmDescription')}</div>
+            {
+              confirmationDetails && (
+                <div className='sftp-text-change-confirmation'>
+                  <div className='sftp-text-change-path'>
+                    {confirmationDetails.path}
+                  </div>
+                  {
+                    preview
+                      ? (
+                        <>
+                          <div className='sftp-text-change-summary'>
+                            {formatShellPilotTranslation(
+                              e('shellpilotSftpTextChangeSummary'),
+                              {
+                                added: preview.addedLines,
+                                removed: preview.removedLines
+                              }
+                            )}
+                          </div>
+                          {
+                            preview.lines.length > 0 && (
+                              <pre className='sftp-text-change-preview'>
+                                {
+                                  preview.lines.map((line, index) => (
+                                    <div
+                                      className={`sftp-text-change-line is-${line.type}`}
+                                      key={`${line.type}-${line.oldLine || 0}-${line.newLine || 0}-${index}`}
+                                    >
+                                      <span>{prefix[line.type]}</span>
+                                      <code>{line.text || ' '}</code>
+                                    </div>
+                                  ))
+                                }
+                              </pre>
+                            )
+                          }
+                          {
+                            preview.truncated && (
+                              <div className='sftp-text-change-note'>
+                                {e('shellpilotSftpTextChangeTruncated')}
+                              </div>
+                            )
+                          }
+                        </>
+                        )
+                      : (
+                        <div className='sftp-text-change-note'>
+                          {e('shellpilotSftpTextChangeUnavailable')}
+                        </div>
+                        )
+                  }
+                </div>
+              )
+            }
+          </div>
+        ),
         okText: e('shellpilotSftpConfirmExecute'),
         cancelText: e('cancel'),
         onOk: () => resolve(true),
@@ -664,8 +732,23 @@ export default class Sftp extends Component {
 
   runSftpSafetyOperation = async (spec, options = {}) => {
     const operation = await this.prepareSftpSafetyOperation(spec)
+    let confirmationDetails = options.confirmationDetails
+    if (!confirmationDetails && options.buildConfirmationDetails) {
+      try {
+        confirmationDetails = await options.buildConfirmationDetails(operation)
+      } catch (error) {
+        if (error?.name === 'AbortError') {
+          await this.sftpSafetyRunner.cancel(operation.id)
+          throw error
+        }
+        confirmationDetails = {
+          path: Object.values(spec.paths || {})[0] || ''
+        }
+      }
+    }
     const confirmed = await this.confirmPreparedSftpOperation(
-      options.confirmTitle || `确认${spec.title || '执行 SFTP 修改'}？`
+      options.confirmTitle || `确认${spec.title || '执行 SFTP 修改'}？`,
+      options.confirmationDetails || confirmationDetails
     )
     if (!confirmed) {
       await this.sftpSafetyRunner.cancel(operation.id)
@@ -673,7 +756,8 @@ export default class Sftp extends Component {
     }
     return this.sftpSafetyRunner.execute(operation.id, {
       confirmed: true,
-      sideEffectInput: options.input
+      sideEffectInput: options.input,
+      signal: options.signal
     })
   }
 
@@ -706,7 +790,7 @@ export default class Sftp extends Component {
     return result
   }
 
-  saveRemoteEditorFile = async ({ path, text, mode }) => {
+  saveRemoteEditorFile = async ({ path, text, mode }, options = {}) => {
     if (this.props.isFtp) {
       await this.sftp.writeFile(path, text, mode)
       return true
@@ -719,9 +803,28 @@ export default class Sftp extends Component {
       type: 'file',
       requestedMode,
       expected,
-      title: e('shellpilotSftpEditorSave')
+      title: e('shellpilotSftpEditorSave'),
+      signal: options.signal
     }, {
-      input: { text }
+      input: { text },
+      signal: options.signal,
+      buildConfirmationDetails: async operation => {
+        const resource = operation.plan?.resources?.[0]
+        if (!resource) return { path }
+        const snapshot = await readSftpSnapshotText(this.sftp, resource, {
+          signal: options.signal
+        })
+        if (!snapshot.available) return { path }
+        return {
+          path,
+          preview: buildSftpTextChangePreview({
+            path,
+            beforeText: snapshot.text,
+            afterText: text,
+            existed: snapshot.existed
+          })
+        }
+      }
     })
     if (result) message.success(e('shellpilotSftpEditorSaveVerified'))
     return result
