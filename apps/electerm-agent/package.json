@@ -1,6 +1,6 @@
 {
   "name": "ssh-agent-tool",
-  "version": "0.4.15",
+  "version": "0.4.16",
   "productName": "ShellPilot",
   "description": "面向 Windows 的 SSH、SFTP 与 AI 运维客户端",
   "main": "app.js",
@@ -82,6 +82,7 @@
     "@electerm/electerm-resource": "2.1.7",
     "@fontsource/maple-mono": "^5.2.5",
     "@novnc/novnc": "1.7.0",
+    "@playwright/test": "1.61.1",
     "@serialport/binding-mock": "^10.2.2",
     "@types/node": "22.12.0",
     "@vitejs/plugin-react": "^5.2.0",
