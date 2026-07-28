@@ -10,7 +10,8 @@ const {
   forwardRemoteToLocal
 } = require('../../src/app/server/ssh-tunnel')
 const {
-  createSshTunnelRuntime
+  createSshTunnelRuntime,
+  serializeTunnelError
 } = require('../../src/app/server/ssh-tunnel-runtime')
 
 function createSocket () {
@@ -203,4 +204,57 @@ test('runtime closeAll continues when one controller cleanup fails', async () =>
   assert.equal(result.closed, 1)
   assert.equal(result.failed, 1)
   assert.deepEqual(runtime.list(), [])
+})
+
+test('runtime preserves only safe structured details from start errors', async () => {
+  const cause = Object.assign(new Error('本地端口 3307 已被占用'), {
+    code: 'SSH_TUNNEL_PORT_IN_USE',
+    details: {
+      requestedPort: 3307,
+      suggestedPort: 3308,
+      host: '127.0.0.1',
+      stack: 'should not leak',
+      localPath: 'C:\\private\\file'
+    }
+  })
+  const runtime = createSshTunnelRuntime({
+    startController: async () => {
+      throw cause
+    }
+  })
+
+  await assert.rejects(
+    runtime.start({ id: 'conflict', sshTunnel: 'forwardLocalToRemote' }),
+    error => {
+      assert.equal(error.code, 'SSH_TUNNEL_PORT_IN_USE')
+      assert.deepEqual(error.details, {
+        requestedPort: 3307,
+        suggestedPort: 3308,
+        host: '127.0.0.1'
+      })
+      return true
+    }
+  )
+})
+
+test('serializeTunnelError returns safe structured details', () => {
+  const error = Object.assign(new Error('本地端口已被占用'), {
+    code: 'SSH_TUNNEL_PORT_IN_USE',
+    details: {
+      requestedPort: 3307,
+      suggestedPort: 3308,
+      host: '127.0.0.1',
+      unsafe: { stack: 'hidden' }
+    }
+  })
+
+  assert.deepEqual(serializeTunnelError(error), {
+    code: 'SSH_TUNNEL_PORT_IN_USE',
+    message: '本地端口已被占用',
+    details: {
+      requestedPort: 3307,
+      suggestedPort: 3308,
+      host: '127.0.0.1'
+    }
+  })
 })

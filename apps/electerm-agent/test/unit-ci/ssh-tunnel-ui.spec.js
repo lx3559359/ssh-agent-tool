@@ -109,3 +109,16 @@ test('help center explains tunnel lifecycle, safety and common failures', () => 
   }
   assert.match(translations, /shellpilotHelpForwarding: 'SSH 隧道'/)
 })
+
+test('SSH tunnel manager offers an explicit suggested port without auto-starting it', () => {
+  const modal = source('src/client/components/ssh-tunnel/ssh-tunnel-modal.jsx')
+  const translations = source('src/client/common/shellpilot-i18n-overrides.js')
+
+  assert.match(modal, /portConflict/)
+  assert.match(modal, /SSH_TUNNEL_PORT_IN_USE/)
+  assert.match(modal, /suggestedPort/)
+  assert.match(modal, /shellpilotTunnelUseSuggestedPort/)
+  assert.doesNotMatch(modal, /startSshTunnelRuntime\([^)]*suggestedPort/)
+  assert.match(translations, /shellpilotTunnelPortConflict:/)
+  assert.match(translations, /shellpilotTunnelUseSuggestedPort:/)
+})

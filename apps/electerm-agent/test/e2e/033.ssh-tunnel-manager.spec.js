@@ -43,7 +43,8 @@ async function installFakeSshSession (page) {
     }
     const state = {
       tunnels: [],
-      failNext: false
+      failNext: false,
+      portConflictNext: false
     }
     const pending = new Map()
     window.__sshTunnelE2E = state
@@ -61,6 +62,22 @@ async function installFakeSshSession (page) {
                 name: 'Error',
                 code: 'SSH_TUNNEL_E2E_FAILURE',
                 message: '模拟隧道 API 失败'
+              }
+            })
+            return
+          }
+          if (state.portConflictNext && request.action === 'ssh-tunnel-start') {
+            state.portConflictNext = false
+            deliver({
+              error: {
+                name: 'Error',
+                code: 'SSH_TUNNEL_PORT_IN_USE',
+                message: '本地端口 3307 已被占用',
+                details: {
+                  requestedPort: 3307,
+                  suggestedPort: 3308,
+                  host: '127.0.0.1'
+                }
               }
             })
             return
@@ -160,6 +177,18 @@ test('SSH tunnel manager supports disconnected planning and connected lifecycle'
     await expect(modal.locator('.ssh-tunnel-running-card')).toHaveCount(1)
     await modal.getByRole('button', { name: '停止' }).click()
     await expect(modal.locator('.ssh-tunnel-running-card')).toHaveCount(0)
+
+    await page.evaluate(() => {
+      window.__sshTunnelE2E.portConflictNext = true
+    })
+    await modal.getByRole('button', { name: '启动隧道' }).click()
+    await expect(modal.locator('.ssh-tunnel-port-conflict')).toContainText('127.0.0.1:3307 当前无法监听')
+    await modal.getByRole('button', { name: '改用 3308' }).click()
+    await expect(modal.getByLabel('本机监听端口')).toHaveValue('3308')
+    await expect(modal.locator('.ssh-tunnel-running-card')).toHaveCount(0)
+    await modal.getByRole('button', { name: '启动隧道' }).click()
+    await expect(modal.locator('.ssh-tunnel-running-card')).toHaveCount(1)
+    await modal.getByRole('button', { name: '停止' }).click()
 
     await modal.getByLabel('本机监听地址').fill('0.0.0.0')
     await modal.getByRole('button', { name: '启动隧道' }).click()

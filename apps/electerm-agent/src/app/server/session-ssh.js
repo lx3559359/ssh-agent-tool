@@ -13,6 +13,7 @@ const { algDefault, algAlt } = require('./ssh2-alg')
 const { createHostVerifier } = require('./ssh-known-hosts')
 const sshTunnelFuncs = require('./ssh-tunnel')
 const { createSshTunnelRuntime } = require('./ssh-tunnel-runtime')
+const { ensureTunnelLocalPort } = require('./ssh-tunnel-port')
 const deepCopy = require('json-deep-copy')
 const { TerminalBase } = require('./session-base')
 const { commonExtends } = require('./session-common')
@@ -738,8 +739,9 @@ class TerminalSshBase extends TerminalBase {
     return this.sshTunnelRuntime
   }
 
-  startSshTunnel (input) {
+  async startSshTunnel (input) {
     const tunnel = this.normalizeRuntimeTunnel(input)
+    await ensureTunnelLocalPort(tunnel)
     return this.ensureSshTunnelRuntime().start(tunnel)
   }
 
@@ -789,6 +791,25 @@ class TerminalSshBase extends TerminalBase {
       })
   }
 
+  async startConfiguredSshTunnels () {
+    const sshTunnels = getConfiguredSshTunnels(this.initOptions)
+    const sshTunnelResults = await Promise.all(
+      sshTunnels.map(sshTunnel => this.runTunnel(sshTunnel))
+    )
+    if (!this.ws) {
+      this.sshTunnelResults = sshTunnelResults
+    } else {
+      this.ws.s({
+        update: {
+          sshTunnelResults
+        },
+        action: 'ssh-tunnel-result',
+        tabId: this.initOptions.srcTabId
+      })
+    }
+    return sshTunnelResults
+  }
+
   async onInitSshReady () {
     const {
       initOptions,
@@ -808,23 +829,6 @@ class TerminalSshBase extends TerminalBase {
       globalState.setSession(this.pid, this)
       return this
     }
-    const sshTunnels = getConfiguredSshTunnels(initOptions)
-    const sshTunnelResults = []
-    for (const sshTunnel of sshTunnels) {
-      const result = await this.runTunnel(sshTunnel)
-      sshTunnelResults.push(result)
-    }
-    if (!this.ws) {
-      this.sshTunnelResults = sshTunnelResults
-    } else {
-      this.ws?.s({
-        update: {
-          sshTunnelResults
-        },
-        action: 'ssh-tunnel-result',
-        tabId: this.initOptions.srcTabId
-      })
-    }
     return new Promise((resolve, reject) => {
       this.conn.shell(
         shellWindow,
@@ -836,6 +840,11 @@ class TerminalSshBase extends TerminalBase {
           this.channel = channel
           this.setNoDelay(true)
           globalState.setSession(this.pid, this)
+          queueMicrotask(() => {
+            this.startConfiguredSshTunnels().catch(error => {
+              log.error('Failed to auto-start configured SSH tunnels:', error)
+            })
+          })
           resolve(this)
         }
       )

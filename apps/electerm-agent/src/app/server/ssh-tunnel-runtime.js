@@ -1,7 +1,30 @@
+const safeDetailKeys = [
+  'requestedPort',
+  'suggestedPort',
+  'host',
+  'tunnelId'
+]
+
+function safeTunnelErrorDetails (details) {
+  if (!details || typeof details !== 'object' || Array.isArray(details)) {
+    return undefined
+  }
+  const safe = {}
+  for (const key of safeDetailKeys) {
+    const value = details[key]
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' || value === null) {
+      safe[key] = value
+    }
+  }
+  return Object.keys(safe).length ? safe : undefined
+}
+
 function tunnelError (code, message, cause) {
   const error = new Error(message)
   error.code = code
   if (cause) error.cause = cause
+  const details = safeTunnelErrorDetails(cause?.details)
+  if (details) error.details = details
   return error
 }
 
@@ -138,10 +161,13 @@ function createSshTunnelRuntime ({
 }
 
 function serializeTunnelError (error) {
-  return {
+  const serialized = {
     code: String(error?.code || 'SSH_TUNNEL_ERROR'),
     message: String(error?.message || 'SSH 隧道操作失败')
   }
+  const details = safeTunnelErrorDetails(error?.details)
+  if (details) serialized.details = details
+  return serialized
 }
 
 exports.createSshTunnelRuntime = createSshTunnelRuntime

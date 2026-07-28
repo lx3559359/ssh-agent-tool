@@ -109,6 +109,16 @@ test('SSH tunnel errors sent to the renderer never expose stack traces', () => {
   })
 })
 
+test('renderer fetch errors preserve only the SSH tunnel port suggestion fields', () => {
+  const contents = source('src/client/common/fetch-from-server.js')
+
+  assert.match(contents, /remoteError\.details/)
+  assert.match(contents, /requestedPort/)
+  assert.match(contents, /suggestedPort/)
+  assert.match(contents, /error\.details/)
+  assert.doesNotMatch(contents, /Object\.assign\(error,\s*remoteError/)
+})
+
 test('SSH sessions own tunnel runtime lifecycle and close it on disconnect', () => {
   const contents = source('src/app/server/session-ssh.js')
   for (const method of [
@@ -119,7 +129,7 @@ test('SSH sessions own tunnel runtime lifecycle and close it on disconnect', () 
     'testSshTunnel',
     'closeAllSshTunnels'
   ]) {
-    assert.match(contents, new RegExp(`\\n  ${method} \\(`))
+    assert.match(contents, new RegExp(`\\n  (?:async )?${method} \\(`))
   }
   assert.match(
     contents,
@@ -182,5 +192,93 @@ test('SSH session probes the local tunnel endpoint and reports latency', async (
     assert.equal(Number.isInteger(result.latencyMs), true)
   } finally {
     await new Promise(resolve => server.close(resolve))
+  }
+})
+
+test('SSH session rejects an occupied local tunnel port before starting its controller', async () => {
+  const { TerminalSshBase } = require('../../src/app/server/session-ssh')
+  const occupied = net.createServer()
+  await new Promise((resolve, reject) => {
+    occupied.once('error', reject)
+    occupied.listen(0, '127.0.0.1', resolve)
+  })
+  const port = occupied.address().port
+  const session = new TerminalSshBase({
+    uid: 'ssh-tunnel-conflict',
+    type: 'ssh'
+  })
+  let controllerStarted = false
+  session.ensureSshTunnelRuntime = () => ({
+    start: async () => {
+      controllerStarted = true
+      return { state: 'running' }
+    }
+  })
+
+  try {
+    await assert.rejects(
+      session.startSshTunnel({
+        id: 'occupied-local-port',
+        sshTunnel: 'forwardLocalToRemote',
+        sshTunnelLocalHost: '127.0.0.1',
+        sshTunnelLocalPort: port,
+        sshTunnelRemoteHost: '127.0.0.1',
+        sshTunnelRemotePort: 80
+      }),
+      error => {
+        assert.equal(error.code, 'SSH_TUNNEL_PORT_IN_USE')
+        assert.equal(error.details.requestedPort, port)
+        assert.equal(typeof error.details.suggestedPort, 'number')
+        return true
+      }
+    )
+    assert.equal(controllerStarted, false)
+  } finally {
+    await new Promise(resolve => occupied.close(resolve))
+  }
+})
+
+test('SSH shell becomes ready before saved tunnels finish auto-starting', async () => {
+  const { TerminalSshBase } = require('../../src/app/server/session-ssh')
+  const session = new TerminalSshBase({
+    uid: 'ssh-shell-before-tunnels',
+    type: 'ssh',
+    srcTabId: 'ssh-shell-before-tunnels-tab',
+    sshTunnels: [{
+      id: 'slow-auto-start',
+      sshTunnel: 'dynamicForward',
+      sshTunnelLocalPort: 1080,
+      autoStart: true
+    }]
+  })
+  let finishTunnel
+  let tunnelStarted = false
+  session.runTunnel = async tunnel => {
+    tunnelStarted = true
+    return new Promise(resolve => {
+      finishTunnel = () => resolve({ state: 'running', sshTunnel: tunnel })
+    })
+  }
+  session.conn = {
+    shell: (window, options, callback) => callback(null, {
+      stderr: new EventTarget(),
+      on: () => {}
+    })
+  }
+  session.shellWindow = {}
+  session.shellOpts = {}
+  session.ws = { s: () => {} }
+
+  try {
+    const ready = session.onInitSshReady()
+    const result = await Promise.race([
+      ready.then(() => 'ready'),
+      new Promise(resolve => setTimeout(() => resolve('blocked'), 40))
+    ])
+    assert.equal(result, 'ready')
+    assert.equal(tunnelStarted, true)
+  } finally {
+    finishTunnel?.()
+    globalState.removeSession(session.pid)
   }
 })

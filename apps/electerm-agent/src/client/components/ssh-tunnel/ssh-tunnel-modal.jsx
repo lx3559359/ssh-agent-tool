@@ -148,6 +148,7 @@ export default function SshTunnelModal ({
   const [loading, setLoading] = useState(false)
   const [actionId, setActionId] = useState('')
   const [selectedTemplate, setSelectedTemplate] = useState('http')
+  const [portConflict, setPortConflict] = useState(null)
   const connected = runtime.session.connected
   const currentBookmark = findBookmarkForTab(store?.bookmarks || [], tab)
 
@@ -181,6 +182,7 @@ export default function SshTunnelModal ({
   }, [draft])
 
   function updateDraft (key, value) {
+    setPortConflict(null)
     setDraft(current => ({
       ...current,
       [key]: value,
@@ -189,6 +191,7 @@ export default function SshTunnelModal ({
   }
 
   function selectType (sshTunnel) {
+    setPortConflict(null)
     const currentPort = Number(draft.sshTunnelLocalPort || 0)
     setDraft(current => ({
       ...current,
@@ -205,6 +208,7 @@ export default function SshTunnelModal ({
   }
 
   function applyTemplate (templateName) {
+    setPortConflict(null)
     const next = getTunnelTemplate(templateName)
     setSelectedTemplate(templateName)
     setDraft({
@@ -252,13 +256,34 @@ export default function SshTunnelModal ({
     setActionId('start')
     try {
       await startSshTunnelRuntime(store, tab, tunnel)
+      setPortConflict(null)
       message.success(e('shellpilotTunnelStarted'))
       await refresh(true)
     } catch (error) {
-      message.error(readableError(error))
+      if (
+        error?.code === 'SSH_TUNNEL_PORT_IN_USE' &&
+        Number(error?.details?.requestedPort) > 0
+      ) {
+        setPortConflict(error.details)
+        message.warning(e('shellpilotTunnelPortConflict'))
+      } else {
+        message.error(readableError(error))
+      }
     } finally {
       setActionId('')
     }
+  }
+
+  function handleUseSuggestedPort () {
+    const suggestedPort = Number(portConflict?.suggestedPort)
+    if (!suggestedPort) return
+    setDraft(current => ({
+      ...current,
+      id: '',
+      sshTunnelLocalPort: suggestedPort
+    }))
+    setPortConflict(null)
+    message.info(e('shellpilotTunnelSuggestedPortApplied'))
   }
 
   async function handleStop (id) {
@@ -516,6 +541,34 @@ export default function SshTunnelModal ({
                 <span>{e('shellpilotTunnelFlow')}</span>
                 <strong>{getTunnelFlowText(normalizedPreview)}</strong>
               </div>
+
+              {
+                portConflict
+                  ? (
+                    <Alert
+                      showIcon
+                      type='warning'
+                      className='ssh-tunnel-port-conflict'
+                      message={translated('shellpilotTunnelPortConflictDetail', {
+                        host: portConflict.host || '127.0.0.1',
+                        port: portConflict.requestedPort
+                      })}
+                      description={portConflict.suggestedPort
+                        ? e('shellpilotTunnelPortConflictSuggestion')
+                        : e('shellpilotTunnelPortConflictNoSuggestion')}
+                      action={portConflict.suggestedPort
+                        ? (
+                          <Button size='small' onClick={handleUseSuggestedPort}>
+                            {translated('shellpilotTunnelUseSuggestedPort', {
+                              port: portConflict.suggestedPort
+                            })}
+                          </Button>
+                          )
+                        : null}
+                    />
+                    )
+                  : null
+              }
 
               <div className='ssh-tunnel-editor-actions'>
                 <Tooltip
