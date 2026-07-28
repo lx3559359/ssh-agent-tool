@@ -21,7 +21,8 @@ test('top bar exposes a lazy-loaded SSH tunnel manager', () => {
 test('SSH tunnel manager covers three tunnel types and common templates', () => {
   const modal = source('src/client/components/ssh-tunnel/ssh-tunnel-modal.jsx')
   const definition = source('src/client/components/ssh-tunnel/ssh-tunnel-definition.js')
-  const combined = `${modal}\n${definition}`
+  const translations = source('src/client/common/shellpilot-i18n-overrides.js')
+  const combined = `${modal}\n${definition}\n${translations}`
 
   for (const label of [
     '本地转发',
@@ -35,10 +36,10 @@ test('SSH tunnel manager covers three tunnel types and common templates', () => 
   ]) {
     assert.match(combined, new RegExp(label))
   }
-  assert.match(modal, /连接 SSH 后启动/)
-  assert.match(modal, /复制说明/)
-  assert.match(modal, /编辑并重启/)
-  assert.match(modal, /停止/)
+  assert.match(modal, /shellpilotTunnelConnectToStart/)
+  assert.match(modal, /shellpilotTunnelCopyDescription/)
+  assert.match(modal, /shellpilotTunnelEditAndRestart/)
+  assert.match(modal, /shellpilotTunnelStop/)
 })
 
 test('SSH tunnel manager calls the native session API without terminal command injection', () => {
@@ -69,13 +70,16 @@ test('SSH tunnel manager remains usable on narrow desktop windows', () => {
 
 test('SSH tunnel manager persists profiles to the active server bookmark', () => {
   const modal = source('src/client/components/ssh-tunnel/ssh-tunnel-modal.jsx')
+  const translations = source('src/client/common/shellpilot-i18n-overrides.js')
 
   assert.match(modal, /findBookmarkForTab/)
   assert.match(modal, /upsertBookmarkTunnel/)
   assert.match(modal, /removeBookmarkTunnel/)
   assert.match(modal, /store\.editItem\(currentBookmark\.id/)
-  assert.match(modal, /已保存的隧道配置/)
-  assert.match(modal, /下次连接自动启动/)
+  assert.match(modal, /shellpilotTunnelSavedProfiles/)
+  assert.match(modal, /shellpilotTunnelAutoStartNext/)
+  assert.match(translations, /shellpilotTunnelSavedProfiles: '已保存的隧道配置'/)
+  assert.match(translations, /shellpilotTunnelAutoStartNext: '下次连接自动启动'/)
 })
 
 test('SSH tunnel validation messages and flow previews are readable Chinese', () => {

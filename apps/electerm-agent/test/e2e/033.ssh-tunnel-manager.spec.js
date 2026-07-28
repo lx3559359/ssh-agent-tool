@@ -170,8 +170,10 @@ test('SSH tunnel manager supports disconnected planning and connected lifecycle'
     await page.evaluate(() => {
       window.__sshTunnelE2E.failNext = true
     })
+    const failureNotice = page.getByText('模拟隧道 API 失败')
+      .waitFor({ state: 'visible', timeout: 10000 })
     await modal.getByRole('button', { name: '刷新状态' }).click()
-    await expect(page.getByText('模拟隧道 API 失败')).toBeVisible()
+    await failureNotice
     await expect(modal.getByRole('button', { name: '刷新状态' })).toBeEnabled()
   } catch (error) {
     primaryError = error

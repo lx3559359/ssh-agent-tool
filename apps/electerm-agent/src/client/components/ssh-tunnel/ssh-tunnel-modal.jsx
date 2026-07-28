@@ -48,21 +48,23 @@ import {
 } from './ssh-tunnel-api.js'
 import './ssh-tunnel-modal.styl'
 
+const e = window.translate
+
 const typeOptions = [
   {
     value: 'forwardLocalToRemote',
-    label: '本地转发',
-    description: '从本机端口访问 SSH 服务器能够访问的服务'
+    label: e('shellpilotTunnelTypeLocal'),
+    description: e('shellpilotTunnelTypeLocalHint')
   },
   {
     value: 'forwardRemoteToLocal',
-    label: '远程转发',
-    description: '让 SSH 服务器通过远程端口访问本机服务'
+    label: e('shellpilotTunnelTypeRemote'),
+    description: e('shellpilotTunnelTypeRemoteHint')
   },
   {
     value: 'dynamicForward',
-    label: 'SOCKS5 动态代理',
-    description: '在本机建立经过 SSH 服务器转发的 SOCKS5 代理'
+    label: e('shellpilotTunnelTypeDynamic'),
+    description: e('shellpilotTunnelTypeDynamicHint')
   }
 ]
 
@@ -80,13 +82,20 @@ function createDefaultTunnel () {
 }
 
 function readableError (error) {
-  return String(error?.message || 'SSH 隧道操作失败')
+  return String(error?.message || e('shellpilotTunnelOperationFailed'))
 }
 
 function tunnelName (entry = {}) {
   return entry.definition?.name ||
     typeOptions.find(item => item.value === entry.definition?.sshTunnel)?.label ||
-    'SSH 隧道'
+    e('shellpilotTopbarSshTunnel')
+}
+
+function translated (key, values = {}) {
+  return Object.entries(values).reduce(
+    (text, [name, value]) => text.replaceAll(`{${name}}`, String(value)),
+    e(key)
+  )
 }
 
 function TunnelTypeCards ({ value, onChange }) {
@@ -211,15 +220,15 @@ export default function SshTunnelModal ({
     if (!risk.requiresConfirmation) return true
     return new Promise(resolve => {
       Modal.confirm({
-        title: '确认开放监听地址',
+        title: e('shellpilotTunnelExposureTitle'),
         content: (
           <div>
             <p>{risk.message}</p>
-            <p>请确认防火墙、访问来源和服务认证均已正确配置。</p>
+            <p>{e('shellpilotTunnelExposureHint')}</p>
           </div>
         ),
-        okText: '确认启动',
-        cancelText: '取消',
+        okText: e('shellpilotTunnelConfirmStart'),
+        cancelText: e('shellpilotFleetCancel'),
         okButtonProps: { danger: true },
         onOk: () => resolve(true),
         onCancel: () => resolve(false)
@@ -236,14 +245,14 @@ export default function SshTunnelModal ({
       return
     }
     if (!connected) {
-      message.info('请先连接 SSH 服务器，再启动隧道')
+      message.info(e('shellpilotTunnelConnectFirst'))
       return
     }
     if (!await confirmExposure(tunnel)) return
     setActionId('start')
     try {
       await startSshTunnelRuntime(store, tab, tunnel)
-      message.success('SSH 隧道已启动')
+      message.success(e('shellpilotTunnelStarted'))
       await refresh(true)
     } catch (error) {
       message.error(readableError(error))
@@ -256,7 +265,7 @@ export default function SshTunnelModal ({
     setActionId(id)
     try {
       await stopSshTunnelRuntime(store, tab, id)
-      message.success('SSH 隧道已停止')
+      message.success(e('shellpilotTunnelStopped'))
       await refresh(true)
     } catch (error) {
       message.error(readableError(error))
@@ -270,9 +279,9 @@ export default function SshTunnelModal ({
     try {
       const result = await testSshTunnelRuntime(store, tab, id)
       if (result?.ok) {
-        message.success(`连通正常${Number.isFinite(result.latencyMs) ? `，延迟 ${result.latencyMs} ms` : ''}`)
+        message.success(`${e('shellpilotTunnelTestHealthy')}${Number.isFinite(result.latencyMs) ? ` · ${result.latencyMs} ms` : ''}`)
       } else {
-        message.warning(result?.message || '当前隧道暂不可用')
+        message.warning(result?.message || e('shellpilotTunnelUnavailable'))
       }
       await refresh(true)
     } catch (error) {
@@ -293,12 +302,12 @@ export default function SshTunnelModal ({
   async function handleEditAndRestart (entry) {
     await handleStop(entry.id)
     handleEdit(entry)
-    message.info('原隧道已停止，请确认参数后重新启动')
+    message.info(e('shellpilotTunnelRestartHint'))
   }
 
   function handleSave () {
     if (!currentBookmark) {
-      message.warning('当前会话不是服务器书签，请先保存连接后再保存隧道配置')
+      message.warning(e('shellpilotTunnelBookmarkRequired'))
       return
     }
     try {
@@ -313,7 +322,7 @@ export default function SshTunnelModal ({
       setSavedTunnels(updatedBookmark.sshTunnels)
       setSavedEditingId(tunnel.id)
       setDraft(tunnel)
-      message.success('隧道配置已保存到当前服务器书签')
+      message.success(e('shellpilotTunnelSaved'))
     } catch (error) {
       message.warning(readableError(error))
     }
@@ -328,10 +337,12 @@ export default function SshTunnelModal ({
   function handleRemoveSaved (tunnel) {
     if (!currentBookmark) return
     Modal.confirm({
-      title: '删除已保存的隧道配置',
-      content: `确认从服务器书签中删除“${tunnel.name || 'SSH 隧道'}”吗？正在运行的隧道不会被停止。`,
-      okText: '删除',
-      cancelText: '取消',
+      title: e('shellpilotTunnelDeleteTitle'),
+      content: translated('shellpilotTunnelDeletePrompt', {
+        name: tunnel.name || e('shellpilotTopbarSshTunnel')
+      }),
+      okText: e('shellpilotDelete'),
+      cancelText: e('shellpilotFleetCancel'),
       okButtonProps: { danger: true },
       onOk: () => {
         const updatedBookmark = removeBookmarkTunnel(currentBookmark, tunnel.id)
@@ -344,14 +355,16 @@ export default function SshTunnelModal ({
           setDraft(createDefaultTunnel())
           setSelectedTemplate('http')
         }
-        message.success('已删除隧道配置')
+        message.success(e('shellpilotTunnelDeleted'))
       }
     })
   }
 
   const isDynamic = draft.sshTunnel === 'dynamicForward'
   const isRemote = draft.sshTunnel === 'forwardRemoteToLocal'
-  const primaryText = connected ? '启动隧道' : '连接 SSH 后启动'
+  const primaryText = connected
+    ? e('shellpilotTunnelStart')
+    : e('shellpilotTunnelConnectToStart')
 
   return (
     <Modal
@@ -363,7 +376,7 @@ export default function SshTunnelModal ({
       title={(
         <span className='ssh-tunnel-modal-title'>
           <LinkOutlined />
-          SSH 隧道
+          {e('shellpilotTopbarSshTunnel')}
         </span>
       )}
       className='ssh-tunnel-modal'
@@ -372,17 +385,21 @@ export default function SshTunnelModal ({
         <div className='ssh-tunnel-scroll'>
           <section className='ssh-tunnel-context'>
             <div>
-              <strong>{connected ? '当前 SSH 会话' : '当前未连接 SSH'}</strong>
+              <strong>
+                {connected
+                  ? e('shellpilotTunnelCurrentSession')
+                  : e('shellpilotTunnelDisconnected')}
+              </strong>
               <span>
                 {
                   connected
                     ? `${runtime.session.username}@${runtime.session.host}:${runtime.session.port}`
-                    : '可以先配置参数，连接服务器后再启动'
+                    : e('shellpilotTunnelConfigureFirst')
                 }
               </span>
             </div>
             <Button icon={<ReloadOutlined />} onClick={() => refresh()}>
-              刷新状态
+              {e('shellpilotTunnelRefresh')}
             </Button>
           </section>
 
@@ -390,8 +407,8 @@ export default function SshTunnelModal ({
             <section className='ssh-tunnel-editor'>
               <div className='ssh-tunnel-section-title'>
                 <div>
-                  <strong>新建隧道</strong>
-                  <span>选择类型和模板后，只需确认端口与目标地址</span>
+                  <strong>{e('shellpilotTunnelNew')}</strong>
+                  <span>{e('shellpilotTunnelNewHint')}</span>
                 </div>
               </div>
 
@@ -401,27 +418,34 @@ export default function SshTunnelModal ({
               />
 
               <div className='ssh-tunnel-template-row'>
-                <span>常用模板</span>
+                <span>{e('shellpilotTunnelTemplates')}</span>
                 <Select
                   value={selectedTemplate || undefined}
-                  placeholder='选择模板'
+                  placeholder={e('shellpilotTunnelSelectTemplate')}
                   options={templateOptions}
                   onChange={applyTemplate}
                 />
               </div>
 
               <div className='ssh-tunnel-form-grid'>
-                <TunnelField label='配置名称' hint='用于在运行列表中识别此隧道'>
+                <TunnelField
+                  label={e('shellpilotTunnelName')}
+                  hint={e('shellpilotTunnelNameHint')}
+                >
                   <Input
                     value={draft.name}
                     maxLength={80}
-                    placeholder='例如：本地 MySQL'
+                    placeholder={e('shellpilotTunnelNamePlaceholder')}
                     onChange={event => updateDraft('name', event.target.value)}
                   />
                 </TunnelField>
                 <TunnelField
-                  label={isRemote ? '本机目标地址' : '本机监听地址'}
-                  hint={isRemote ? 'SSH 服务器最终访问的本机地址' : '建议保持 127.0.0.1，避免对局域网开放'}
+                  label={isRemote
+                    ? e('shellpilotTunnelLocalTargetHost')
+                    : e('shellpilotTunnelLocalListenHost')}
+                  hint={isRemote
+                    ? e('shellpilotTunnelLocalTargetHostHint')
+                    : e('shellpilotTunnelLocalListenHostHint')}
                 >
                   <Input
                     value={draft.sshTunnelLocalHost}
@@ -429,8 +453,10 @@ export default function SshTunnelModal ({
                   />
                 </TunnelField>
                 <TunnelField
-                  label={isRemote ? '本机目标端口' : '本机监听端口'}
-                  hint='端口范围 1-65535'
+                  label={isRemote
+                    ? e('shellpilotTunnelLocalTargetPort')
+                    : e('shellpilotTunnelLocalListenPort')}
+                  hint={e('shellpilotTunnelPortHint')}
                 >
                   <InputNumber
                     min={1}
@@ -444,8 +470,12 @@ export default function SshTunnelModal ({
                     ? (
                       <>
                         <TunnelField
-                          label={isRemote ? '远程监听地址' : '远程目标地址'}
-                          hint={isRemote ? '建议保持 127.0.0.1，避免对公网开放' : '目标服务相对于 SSH 服务器的地址'}
+                          label={isRemote
+                            ? e('shellpilotTunnelRemoteListenHost')
+                            : e('shellpilotTunnelRemoteTargetHost')}
+                          hint={isRemote
+                            ? e('shellpilotTunnelRemoteListenHostHint')
+                            : e('shellpilotTunnelRemoteTargetHostHint')}
                         >
                           <Input
                             value={draft.sshTunnelRemoteHost}
@@ -453,8 +483,10 @@ export default function SshTunnelModal ({
                           />
                         </TunnelField>
                         <TunnelField
-                          label={isRemote ? '远程监听端口' : '远程目标端口'}
-                          hint='端口范围 1-65535'
+                          label={isRemote
+                            ? e('shellpilotTunnelRemoteListenPort')
+                            : e('shellpilotTunnelRemoteTargetPort')}
+                          hint={e('shellpilotTunnelPortHint')}
                         >
                           <InputNumber
                             min={1}
@@ -467,31 +499,38 @@ export default function SshTunnelModal ({
                       )
                     : null
                 }
-                <TunnelField label='自动启动' hint='保存到服务器书签后，连接成功时自动启动'>
+                <TunnelField
+                  label={e('shellpilotTunnelAutoStart')}
+                  hint={e('shellpilotTunnelAutoStartHint')}
+                >
                   <Switch
                     checked={draft.autoStart !== false}
-                    checkedChildren='开启'
-                    unCheckedChildren='关闭'
+                    checkedChildren={e('shellpilotOn')}
+                    unCheckedChildren={e('shellpilotOff')}
                     onChange={value => updateDraft('autoStart', value)}
                   />
                 </TunnelField>
               </div>
 
               <div className='ssh-tunnel-flow'>
-                <span>流量路径</span>
+                <span>{e('shellpilotTunnelFlow')}</span>
                 <strong>{getTunnelFlowText(normalizedPreview)}</strong>
               </div>
 
               <div className='ssh-tunnel-editor-actions'>
                 <Tooltip
-                  title={currentBookmark ? '保存到当前服务器书签' : '请先将当前连接保存为服务器书签'}
+                  title={currentBookmark
+                    ? e('shellpilotTunnelSaveToBookmark')
+                    : e('shellpilotTunnelSaveConnectionFirst')}
                 >
                   <Button
                     icon={<SaveOutlined />}
                     disabled={!currentBookmark}
                     onClick={handleSave}
                   >
-                    {savedEditingId ? '更新配置' : '保存配置'}
+                    {savedEditingId
+                      ? e('shellpilotTunnelUpdateProfile')
+                      : e('shellpilotTunnelSaveProfile')}
                   </Button>
                 </Tooltip>
                 <Button
@@ -510,16 +549,20 @@ export default function SshTunnelModal ({
               <div className='ssh-tunnel-saved-section'>
                 <div className='ssh-tunnel-section-title'>
                   <div>
-                    <strong>已保存的隧道配置</strong>
+                    <strong>{e('shellpilotTunnelSavedProfiles')}</strong>
                     <span>
                       {
                         currentBookmark
-                          ? `保存在“${currentBookmark.title || currentBookmark.name || currentBookmark.host}”服务器书签中`
-                          : '连接服务器书签后可保存和管理配置'
+                          ? translated('shellpilotTunnelSavedInBookmark', {
+                            name: currentBookmark.title || currentBookmark.name || currentBookmark.host
+                          })
+                          : e('shellpilotTunnelBookmarkProfilesHint')
                       }
                     </span>
                   </div>
-                  <Tag>{savedTunnels.length} 个</Tag>
+                  <Tag>
+                    {translated('shellpilotTunnelCount', { count: savedTunnels.length })}
+                  </Tag>
                 </div>
                 {
                   savedTunnels.length
@@ -535,18 +578,20 @@ export default function SshTunnelModal ({
                                 <strong>{tunnel.name || tunnelName({ definition: tunnel })}</strong>
                                 <span>{getTunnelFlowText(tunnel)}</span>
                                 <Tag color={tunnel.autoStart !== false ? 'blue' : 'default'}>
-                                  {tunnel.autoStart !== false ? '下次连接自动启动' : '仅手动启动'}
+                                  {tunnel.autoStart !== false
+                                    ? e('shellpilotTunnelAutoStartNext')
+                                    : e('shellpilotTunnelManualStartOnly')}
                                 </Tag>
                               </div>
                               <Space>
                                 <Button size='small' onClick={() => handleLoadSaved(tunnel)}>
-                                  编辑
+                                  {e('shellpilotTunnelEdit')}
                                 </Button>
-                                <Tooltip title='从书签删除'>
+                                <Tooltip title={e('shellpilotTunnelRemoveFromBookmark')}>
                                   <Button
                                     size='small'
                                     danger
-                                    aria-label='删除已保存的隧道'
+                                    aria-label={e('shellpilotTunnelDeleteSaved')}
                                     icon={<DeleteOutlined />}
                                     onClick={() => handleRemoveSaved(tunnel)}
                                   />
@@ -557,18 +602,27 @@ export default function SshTunnelModal ({
                         }
                       </div>
                       )
-                    : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description='暂无已保存的隧道配置' />
+                    : (
+                      <Empty
+                        image={Empty.PRESENTED_IMAGE_SIMPLE}
+                        description={e('shellpilotTunnelNoSavedProfiles')}
+                      />
+                      )
                 }
               </div>
 
               <div className='ssh-tunnel-runtime-section'>
                 <div className='ssh-tunnel-section-title'>
                   <div>
-                    <strong>运行中的隧道</strong>
-                    <span>无需重新连接 SSH，可随时测试或停止</span>
+                    <strong>{e('shellpilotTunnelRunning')}</strong>
+                    <span>{e('shellpilotTunnelRunningHint')}</span>
                   </div>
                   <Tag color={connected ? 'success' : 'default'}>
-                    {connected ? `${runtime.tunnels.length} 个运行中` : '未连接'}
+                    {connected
+                      ? translated('shellpilotTunnelRunningCount', {
+                        count: runtime.tunnels.length
+                      })
+                      : e('shellpilotTunnelDisconnectedShort')}
                   </Tag>
                 </div>
 
@@ -578,8 +632,8 @@ export default function SshTunnelModal ({
                     <Alert
                       showIcon
                       type='info'
-                      message='连接 SSH 后可启动和管理隧道'
-                      description='当前填写的参数不会丢失。'
+                      message={e('shellpilotTunnelConnectToManage')}
+                      description={e('shellpilotTunnelDraftPreserved')}
                     />
                     )
                   : null
@@ -587,7 +641,12 @@ export default function SshTunnelModal ({
 
                 {
                 connected && runtime.tunnels.length === 0
-                  ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description='暂无运行中的 SSH 隧道' />
+                  ? (
+                    <Empty
+                      image={Empty.PRESENTED_IMAGE_SIMPLE}
+                      description={e('shellpilotTunnelNoRunning')}
+                    />
+                    )
                   : null
               }
 
@@ -598,13 +657,13 @@ export default function SshTunnelModal ({
                       <header>
                         <div>
                           <strong>{tunnelName(entry)}</strong>
-                          <Tag color='success'>运行中</Tag>
+                          <Tag color='success'>{e('shellpilotTunnelRunningStatus')}</Tag>
                         </div>
-                        <Tooltip title='复制流量路径'>
+                        <Tooltip title={e('shellpilotTunnelCopyFlow')}>
                           <Button
                             type='text'
                             size='small'
-                            aria-label='复制说明'
+                            aria-label={e('shellpilotTunnelCopyDescription')}
                             icon={<CopyOutlined />}
                             onClick={() => copy(getTunnelFlowText(entry.definition))}
                           />
@@ -617,8 +676,8 @@ export default function SshTunnelModal ({
                             <div className={'ssh-tunnel-test-result ' + (entry.lastTest.ok ? 'ok' : 'failed')}>
                               <CheckCircleOutlined />
                               {entry.lastTest.ok
-                                ? `最近测试正常${Number.isFinite(entry.lastTest.latencyMs) ? ` · ${entry.lastTest.latencyMs} ms` : ''}`
-                                : entry.lastTest.message || '最近测试失败'}
+                                ? `${e('shellpilotTunnelLastTestHealthy')}${Number.isFinite(entry.lastTest.latencyMs) ? ` · ${entry.lastTest.latencyMs} ms` : ''}`
+                                : entry.lastTest.message || e('shellpilotTunnelLastTestFailed')}
                             </div>
                             )
                           : null
@@ -629,13 +688,13 @@ export default function SshTunnelModal ({
                           loading={actionId === entry.id}
                           onClick={() => handleTest(entry.id)}
                         >
-                          测试
+                          {e('shellpilotTunnelTest')}
                         </Button>
                         <Button size='small' onClick={() => handleEdit(entry)}>
-                          编辑
+                          {e('shellpilotTunnelEdit')}
                         </Button>
                         <Button size='small' onClick={() => handleEditAndRestart(entry)}>
-                          编辑并重启
+                          {e('shellpilotTunnelEditAndRestart')}
                         </Button>
                         <Button
                           size='small'
@@ -644,7 +703,7 @@ export default function SshTunnelModal ({
                           loading={actionId === entry.id}
                           onClick={() => handleStop(entry.id)}
                         >
-                          停止
+                          {e('shellpilotTunnelStop')}
                         </Button>
                       </Space>
                     </article>
