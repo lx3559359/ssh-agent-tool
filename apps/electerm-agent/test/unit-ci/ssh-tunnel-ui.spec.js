@@ -86,3 +86,22 @@ test('SSH tunnel validation messages and flow previews are readable Chinese', ()
   assert.match(definition, /仅监听回环地址/)
   assert.match(definition, /本机 .*SSH 服务器/)
 })
+
+test('help center explains tunnel lifecycle, safety and common failures', () => {
+  const help = source('src/client/components/main/help-center-modal.jsx')
+  const translations = source('src/client/common/shellpilot-i18n-overrides.js')
+
+  for (const text of [
+    '本地转发',
+    '远程转发',
+    'SOCKS5',
+    '自动启动',
+    'SSH 断开',
+    'EADDRINUSE',
+    'administratively prohibited',
+    '目标服务拒绝连接'
+  ]) {
+    assert.match(help, new RegExp(text))
+  }
+  assert.match(translations, /shellpilotHelpForwarding: 'SSH 隧道'/)
+})

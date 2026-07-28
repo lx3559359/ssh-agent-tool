@@ -37,6 +37,7 @@
     "test-performance-e2e": "playwright test test/e2e/029.performance-baseline.spec.js --workers=1",
     "test-real-server-e2e": "playwright test test/e2e/030.real-server-regression.spec.js --workers=1",
     "test-agent-readonly-real-server": "playwright test test/e2e/031.agent-readonly-real-server.spec.js --workers=1",
+    "test-ssh-tunnel": "node --test test/unit-ci/ssh-tunnel-*.spec.js && playwright test test/e2e/033.ssh-tunnel-manager.spec.js --workers=1",
     "b": "npm run clean && npm run compile && npm run prepare-file",
     "r": "./build/bin/release",
     "release:github": "node build/bin/release-github.js",
