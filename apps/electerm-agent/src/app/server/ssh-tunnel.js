@@ -1,204 +1,307 @@
 const log = require('../common/log')
 
-function forwardRemoteToLocal ({
-  conn,
-  sshTunnelRemotePort,
-  sshTunnelLocalPort,
-  sshTunnelRemoteHost = '127.0.0.1',
-  sshTunnelLocalHost = '127.0.0.1'
-}) {
-  return new Promise((resolve, reject) => {
-    const result = `remote:${sshTunnelRemoteHost}:${sshTunnelRemotePort} => local:${sshTunnelLocalHost}:${sshTunnelLocalPort}`
+function tunnelDescriptor (options) {
+  return {
+    id: options.id,
+    name: options.name || '',
+    sshTunnel: options.sshTunnel,
+    sshTunnelLocalHost: options.sshTunnelLocalHost || '127.0.0.1',
+    sshTunnelLocalPort: Number(options.sshTunnelLocalPort),
+    sshTunnelRemoteHost: options.sshTunnelRemoteHost || '127.0.0.1',
+    sshTunnelRemotePort: options.sshTunnelRemotePort === undefined
+      ? undefined
+      : Number(options.sshTunnelRemotePort),
+    autoStart: options.autoStart !== false
+  }
+}
 
-    const handleTcpConnection = (info, accept, rejectConn) => {
-      // Check if this connection is for this tunnel
-      if (info.destPort !== sshTunnelRemotePort && info.destPort !== Number(sshTunnelRemotePort)) {
-        return
+function destroySocket (socket) {
+  if (!socket) return
+  try {
+    socket.destroy()
+  } catch (error) {
+    log.error('Failed to close SSH tunnel socket:', error)
+  }
+}
+
+function closeServer (server) {
+  return new Promise(resolve => {
+    if (!server) return resolve()
+    try {
+      server.close(() => resolve())
+    } catch (error) {
+      if (error?.code !== 'ERR_SERVER_NOT_RUNNING') {
+        log.error('Failed to close SSH tunnel server:', error)
       }
+      resolve()
+    }
+  })
+}
 
-      const srcStream = accept() // Source stream for forwarding
+function createController ({
+  descriptor,
+  close
+}) {
+  let closed = false
+  return {
+    state: 'running',
+    descriptor,
+    async close () {
+      if (closed) return
+      closed = true
+      await close()
+    }
+  }
+}
 
-      if (!srcStream) {
+function forwardRemoteToLocal (options) {
+  const {
+    conn,
+    sshTunnelRemotePort,
+    sshTunnelLocalPort,
+    sshTunnelRemoteHost = '127.0.0.1',
+    sshTunnelLocalHost = '127.0.0.1',
+    netImpl = require('net')
+  } = options
+  const descriptor = tunnelDescriptor({
+    ...options,
+    sshTunnel: 'forwardRemoteToLocal'
+  })
+  const result = `remote:${sshTunnelRemoteHost}:${sshTunnelRemotePort} => local:${sshTunnelLocalHost}:${sshTunnelLocalPort}`
+  const sockets = new Set()
+  let connectionClosed = false
+
+  return new Promise((resolve, reject) => {
+    const trackSocket = socket => {
+      if (!socket) return socket
+      sockets.add(socket)
+      socket.once?.('close', () => sockets.delete(socket))
+      return socket
+    }
+    const handleTcpConnection = (info, accept) => {
+      if (Number(info.destPort) !== Number(sshTunnelRemotePort)) return
+      const source = trackSocket(accept())
+      if (!source) {
         log.error(`Failed to accept connection for tunnel ${result}`)
         return
       }
-
-      // Add error handling for source stream immediately
-      srcStream.on('error', (err) => {
-        log.error(`Source stream error for tunnel ${result}:`, err)
+      source.on('error', error => {
+        log.error(`Source stream error for tunnel ${result}:`, error)
       })
-
-      // Connect the local machine source stream to the local port
-      // Create a NEW server connection for each forwarded connection
-      const server = require('net').connect(sshTunnelLocalPort, sshTunnelLocalHost)
-
-      // CRITICAL: Add error handling IMMEDIATELY before any async operations
-      // This prevents unhandled errors from crashing the SSH session
-      server.on('error', (err) => {
-        log.error(`Server connection error for tunnel ${result}:`, err.message)
-        // Just close this specific connection, don't break the tunnel
-        srcStream.destroy()
-        server.destroy()
+      const target = trackSocket(
+        netImpl.connect(sshTunnelLocalPort, sshTunnelLocalHost)
+      )
+      target.on('error', error => {
+        log.error(`Target connection error for tunnel ${result}:`, error)
+        destroySocket(source)
+        destroySocket(target)
       })
-
-      server.on('close', () => {
-        log.log(`Local server connection closed for tunnel ${result}`)
-        srcStream.end()
-      })
-
-      srcStream.on('close', () => {
-        server.destroy()
-      })
-
-      srcStream.pipe(server).pipe(srcStream)
+      target.on('close', () => source.end?.())
+      source.on('close', () => destroySocket(target))
+      source.pipe(target).pipe(source)
     }
-
-    conn.on('tcp connection', handleTcpConnection)
-
-    const handleClose = () => {
-      log.log(`SSH connection closed for tunnel ${result}`)
+    const handleConnectionClose = () => {
+      connectionClosed = true
+      for (const socket of sockets) destroySocket(socket)
+      sockets.clear()
+    }
+    const detach = () => {
       conn.removeListener('tcp connection', handleTcpConnection)
-      conn.removeListener('close', handleClose)
+      conn.removeListener('close', handleConnectionClose)
     }
-
-    conn.on('close', handleClose)
-
-    // Forward the remote server's port to the local machine's port
-    conn.forwardIn(sshTunnelRemoteHost, sshTunnelRemotePort, (err) => {
-      if (err) {
-        log.error('Error forwarding port:', err)
-        return reject(err)
+    conn.on('tcp connection', handleTcpConnection)
+    conn.on('close', handleConnectionClose)
+    conn.forwardIn(sshTunnelRemoteHost, sshTunnelRemotePort, error => {
+      if (error) {
+        detach()
+        return reject(error)
       }
       log.log(`Port forwarded: ${result}`)
-      resolve(1)
-    })
-  })
-}
-
-function forwardLocalToRemote ({
-  conn,
-  sshTunnelRemotePort,
-  sshTunnelLocalPort,
-  sshTunnelRemoteHost = '127.0.0.1',
-  sshTunnelLocalHost = '127.0.0.1'
-}) {
-  return new Promise((resolve, reject) => {
-    const activeSockets = new Set()
-    const localServer = require('net').createServer((socket) => {
-      // ⬇️ 2. Add new sockets to the set and remove them when they close
-      activeSockets.add(socket)
-      socket.on('close', () => {
-        activeSockets.delete(socket)
-      })
-
-      socket.on('error', (err) => {
-        log.error('Client socket error:', err)
-        socket.end()
-      })
-
-      conn.forwardOut(sshTunnelLocalHost, sshTunnelLocalPort, sshTunnelRemoteHost, sshTunnelRemotePort, (err, remoteSocket) => {
-        if (err) {
-          log.error('Error forwarding connection:', err)
-          socket.destroy()
-          // Don't reject - just close this connection
-          // Rejecting would break the entire tunnel
-          return
+      resolve(createController({
+        descriptor,
+        close: async () => {
+          detach()
+          for (const socket of sockets) destroySocket(socket)
+          sockets.clear()
+          if (connectionClosed || typeof conn.unforwardIn !== 'function') return
+          await new Promise((resolve, reject) => {
+            conn.unforwardIn(
+              sshTunnelRemoteHost,
+              sshTunnelRemotePort,
+              error => error ? reject(error) : resolve()
+            )
+          })
         }
-
-        // Add error handlers immediately
-        remoteSocket.on('error', (err) => {
-          log.error('Remote socket error:', err)
-          socket.destroy()
-        })
-
-        socket.on('close', () => {
-          remoteSocket.destroy()
-        })
-
-        socket.pipe(remoteSocket).pipe(socket)
-      })
-    })
-
-    localServer.listen(sshTunnelLocalPort, sshTunnelLocalHost, () => {
-      log.log(`Local server listening on port ${sshTunnelLocalPort}`)
-      resolve(1)
-    })
-    localServer.on('error', (err) => {
-      log.error('Error listening for local connections:', err)
-      reject(err)
-    })
-
-    conn.on('close', () => {
-      log.log('SSH connection closed, closing local server.')
-      // ⬇️ 3. Destroy all active sockets before closing the server
-      for (const socket of activeSockets) {
-        socket.destroy()
-      }
-      localServer && localServer.close()
+      }))
     })
   })
 }
 
-function dynamicForward ({
-  conn,
-  sshTunnelLocalPort,
-  sshTunnelLocalHost = '127.0.0.1'
-}) {
-  const socks = require('socksv5-server')
+function forwardLocalToRemote (options) {
+  const {
+    conn,
+    sshTunnelRemotePort,
+    sshTunnelLocalPort,
+    sshTunnelRemoteHost = '127.0.0.1',
+    sshTunnelLocalHost = '127.0.0.1',
+    netImpl = require('net')
+  } = options
+  const descriptor = tunnelDescriptor({
+    ...options,
+    sshTunnel: 'forwardLocalToRemote'
+  })
+  const sockets = new Set()
+  let ready = false
+
   return new Promise((resolve, reject) => {
-    const dproxyServer = socks.createServer((info, accept, deny) => {
+    const localServer = netImpl.createServer(socket => {
+      sockets.add(socket)
+      socket.once('close', () => sockets.delete(socket))
+      socket.on('error', error => {
+        log.error('SSH tunnel client socket error:', error)
+        destroySocket(socket)
+      })
+      conn.forwardOut(
+        sshTunnelLocalHost,
+        sshTunnelLocalPort,
+        sshTunnelRemoteHost,
+        sshTunnelRemotePort,
+        (error, remoteSocket) => {
+          if (error) {
+            log.error('SSH tunnel target connection failed:', error)
+            destroySocket(socket)
+            return
+          }
+          sockets.add(remoteSocket)
+          remoteSocket.once('close', () => sockets.delete(remoteSocket))
+          remoteSocket.on('error', remoteError => {
+            log.error('SSH tunnel remote socket error:', remoteError)
+            destroySocket(socket)
+            destroySocket(remoteSocket)
+          })
+          socket.on('close', () => destroySocket(remoteSocket))
+          socket.pipe(remoteSocket).pipe(socket)
+        }
+      )
+    })
+    const closeLocalResources = async () => {
+      for (const socket of sockets) destroySocket(socket)
+      sockets.clear()
+      await closeServer(localServer)
+    }
+    const handleConnectionClose = () => {
+      closeLocalResources().catch(error => {
+        log.error('Failed to close local SSH tunnel:', error)
+      })
+    }
+    const handleServerError = error => {
+      log.error('SSH tunnel listener error:', error)
+      if (!ready) reject(error)
+    }
+    localServer.on('error', handleServerError)
+    conn.on('close', handleConnectionClose)
+    localServer.listen(
+      sshTunnelLocalPort,
+      sshTunnelLocalHost,
+      () => {
+        ready = true
+        log.log(`Local tunnel listening on ${sshTunnelLocalHost}:${sshTunnelLocalPort}`)
+        resolve(createController({
+          descriptor,
+          close: async () => {
+            conn.removeListener('close', handleConnectionClose)
+            localServer.removeListener('error', handleServerError)
+            await closeLocalResources()
+          }
+        }))
+      }
+    )
+  })
+}
+
+function dynamicForward (options) {
+  const {
+    conn,
+    sshTunnelLocalPort,
+    sshTunnelLocalHost = '127.0.0.1',
+    socksImpl = require('socksv5-server')
+  } = options
+  const descriptor = tunnelDescriptor({
+    ...options,
+    sshTunnel: 'dynamicForward'
+  })
+  const sockets = new Set()
+  let ready = false
+
+  return new Promise((resolve, reject) => {
+    const proxyServer = socksImpl.createServer((info, accept, deny) => {
       conn.forwardOut(
         info.srcAddr,
         info.srcPort,
         info.dstAddr,
         info.dstPort,
-        (err, stream) => {
-          if (err) {
-            log.error('SOCKS forward error:', err)
+        (error, stream) => {
+          if (error) {
+            log.error('SOCKS5 target connection failed:', error)
             deny()
-            // Don't reject - just deny this connection
-            // Rejecting would break the entire tunnel
             return
           }
           const clientSocket = accept(true)
-          if (clientSocket) {
-            // Add error handling for stream immediately
-            stream.on('error', (err) => {
-              log.error('SOCKS stream error:', err)
-              clientSocket.destroy()
-            })
-
-            // Add error handling for client socket immediately
-            clientSocket.on('error', (err) => {
-              log.error('SOCKS client socket error:', err)
-              stream.destroy()
-            })
-
-            stream.on('close', () => {
-              clientSocket.destroy()
-            })
-
-            clientSocket.on('close', () => {
-              stream.destroy()
-            })
-
-            stream.pipe(clientSocket).pipe(stream)
+          if (!clientSocket) {
+            destroySocket(stream)
+            return
           }
-        })
+          sockets.add(stream)
+          sockets.add(clientSocket)
+          stream.once('close', () => sockets.delete(stream))
+          clientSocket.once('close', () => sockets.delete(clientSocket))
+          stream.on('error', streamError => {
+            log.error('SOCKS5 stream error:', streamError)
+            destroySocket(clientSocket)
+          })
+          clientSocket.on('error', clientError => {
+            log.error('SOCKS5 client error:', clientError)
+            destroySocket(stream)
+          })
+          stream.on('close', () => destroySocket(clientSocket))
+          clientSocket.on('close', () => destroySocket(stream))
+          stream.pipe(clientSocket).pipe(stream)
+        }
+      )
     })
-    dproxyServer.on('error', (err) => {
-      log.error('Error listening for local connections:', err)
-      reject(err)
-    })
-    dproxyServer.listen(sshTunnelLocalPort, sshTunnelLocalHost, () => {
-      log.log(`SOCKS server listening on ${sshTunnelLocalHost}:${sshTunnelLocalPort}`)
-      resolve(1)
-    }).useAuth(socks.auth.None())
-
-    // close socks proxy when ssh connection is closed.
-    conn.on('close', () => {
-      dproxyServer && dproxyServer.close()
-    })
+    const closeProxyResources = async () => {
+      for (const socket of sockets) destroySocket(socket)
+      sockets.clear()
+      await closeServer(proxyServer)
+    }
+    const handleConnectionClose = () => {
+      closeProxyResources().catch(error => {
+        log.error('Failed to close SOCKS5 tunnel:', error)
+      })
+    }
+    const handleServerError = error => {
+      log.error('SOCKS5 listener error:', error)
+      if (!ready) reject(error)
+    }
+    proxyServer.on('error', handleServerError)
+    proxyServer.useAuth(socksImpl.auth.None())
+    conn.on('close', handleConnectionClose)
+    proxyServer.listen(
+      sshTunnelLocalPort,
+      sshTunnelLocalHost,
+      () => {
+        ready = true
+        log.log(`SOCKS5 tunnel listening on ${sshTunnelLocalHost}:${sshTunnelLocalPort}`)
+        resolve(createController({
+          descriptor,
+          close: async () => {
+            conn.removeListener('close', handleConnectionClose)
+            proxyServer.removeListener('error', handleServerError)
+            await closeProxyResources()
+          }
+        }))
+      }
+    )
   })
 }
 
