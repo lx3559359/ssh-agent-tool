@@ -16,6 +16,7 @@ import {
 import {
   CheckCircleOutlined,
   CopyOutlined,
+  DeleteOutlined,
   LinkOutlined,
   PlayCircleOutlined,
   ReloadOutlined,
@@ -29,9 +30,16 @@ import {
   getTunnelRisk,
   getTunnelTemplate,
   normalizeTunnel,
+  serializeTunnelForBookmark,
   tunnelTemplates,
   validateTunnel
 } from './ssh-tunnel-definition.js'
+import {
+  findBookmarkForTab,
+  getBookmarkTunnels,
+  removeBookmarkTunnel,
+  upsertBookmarkTunnel
+} from './ssh-tunnel-bookmark.js'
 import {
   loadSshTunnelRuntime,
   startSshTunnelRuntime,
@@ -119,10 +127,11 @@ export default function SshTunnelModal ({
   open,
   onClose,
   store,
-  tab,
-  onSave
+  tab
 }) {
   const [draft, setDraft] = useState(createDefaultTunnel)
+  const [savedTunnels, setSavedTunnels] = useState([])
+  const [savedEditingId, setSavedEditingId] = useState('')
   const [runtime, setRuntime] = useState({
     session: { connected: false },
     tunnels: []
@@ -131,6 +140,7 @@ export default function SshTunnelModal ({
   const [actionId, setActionId] = useState('')
   const [selectedTemplate, setSelectedTemplate] = useState('http')
   const connected = runtime.session.connected
+  const currentBookmark = findBookmarkForTab(store?.bookmarks || [], tab)
 
   const refresh = useCallback(async (silent = false) => {
     if (!open) return
@@ -147,6 +157,11 @@ export default function SshTunnelModal ({
   useEffect(() => {
     refresh()
   }, [refresh])
+
+  useEffect(() => {
+    setSavedTunnels(getBookmarkTunnels(currentBookmark || {}))
+    setSavedEditingId('')
+  }, [open, tab?.srcId])
 
   const normalizedPreview = useMemo(() => {
     try {
@@ -176,6 +191,7 @@ export default function SshTunnelModal ({
       sshTunnelRemoteHost: current.sshTunnelRemoteHost || '127.0.0.1',
       sshTunnelRemotePort: Number(current.sshTunnelRemotePort || 80)
     }))
+    setSavedEditingId('')
     setSelectedTemplate('')
   }
 
@@ -187,6 +203,7 @@ export default function SshTunnelModal ({
       id: '',
       name: tunnelTemplates[templateName].name
     })
+    setSavedEditingId('')
   }
 
   async function confirmExposure (tunnel) {
@@ -266,6 +283,7 @@ export default function SshTunnelModal ({
   }
 
   function handleEdit (entry) {
+    setSavedEditingId('')
     setDraft({
       ...entry.definition,
       id: ''
@@ -279,13 +297,56 @@ export default function SshTunnelModal ({
   }
 
   function handleSave () {
+    if (!currentBookmark) {
+      message.warning('当前会话不是服务器书签，请先保存连接后再保存隧道配置')
+      return
+    }
     try {
-      const tunnel = validateTunnel(draft)
-      onSave?.(tunnel)
-      message.success('当前配置已准备保存')
+      const tunnel = {
+        ...serializeTunnelForBookmark(draft),
+        id: savedEditingId || validateTunnel(draft).id
+      }
+      const updatedBookmark = upsertBookmarkTunnel(currentBookmark, tunnel)
+      store.editItem(currentBookmark.id, {
+        sshTunnels: updatedBookmark.sshTunnels
+      }, 'bookmarks')
+      setSavedTunnels(updatedBookmark.sshTunnels)
+      setSavedEditingId(tunnel.id)
+      setDraft(tunnel)
+      message.success('隧道配置已保存到当前服务器书签')
     } catch (error) {
       message.warning(readableError(error))
     }
+  }
+
+  function handleLoadSaved (tunnel) {
+    setSavedEditingId(tunnel.id)
+    setSelectedTemplate('')
+    setDraft({ ...tunnel })
+  }
+
+  function handleRemoveSaved (tunnel) {
+    if (!currentBookmark) return
+    Modal.confirm({
+      title: '删除已保存的隧道配置',
+      content: `确认从服务器书签中删除“${tunnel.name || 'SSH 隧道'}”吗？正在运行的隧道不会被停止。`,
+      okText: '删除',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: () => {
+        const updatedBookmark = removeBookmarkTunnel(currentBookmark, tunnel.id)
+        store.editItem(currentBookmark.id, {
+          sshTunnels: updatedBookmark.sshTunnels
+        }, 'bookmarks')
+        setSavedTunnels(updatedBookmark.sshTunnels)
+        if (savedEditingId === tunnel.id) {
+          setSavedEditingId('')
+          setDraft(createDefaultTunnel())
+          setSelectedTemplate('http')
+        }
+        message.success('已删除隧道配置')
+      }
+    })
   }
 
   const isDynamic = draft.sshTunnel === 'dynamicForward'
@@ -422,9 +483,17 @@ export default function SshTunnelModal ({
               </div>
 
               <div className='ssh-tunnel-editor-actions'>
-                <Button icon={<SaveOutlined />} onClick={handleSave}>
-                  保存配置
-                </Button>
+                <Tooltip
+                  title={currentBookmark ? '保存到当前服务器书签' : '请先将当前连接保存为服务器书签'}
+                >
+                  <Button
+                    icon={<SaveOutlined />}
+                    disabled={!currentBookmark}
+                    onClick={handleSave}
+                  >
+                    {savedEditingId ? '更新配置' : '保存配置'}
+                  </Button>
+                </Tooltip>
                 <Button
                   type='primary'
                   icon={<PlayCircleOutlined />}
@@ -438,17 +507,72 @@ export default function SshTunnelModal ({
             </section>
 
             <section className='ssh-tunnel-runtime'>
-              <div className='ssh-tunnel-section-title'>
-                <div>
-                  <strong>运行中的隧道</strong>
-                  <span>无需重新连接 SSH，可随时测试或停止</span>
+              <div className='ssh-tunnel-saved-section'>
+                <div className='ssh-tunnel-section-title'>
+                  <div>
+                    <strong>已保存的隧道配置</strong>
+                    <span>
+                      {
+                        currentBookmark
+                          ? `保存在“${currentBookmark.title || currentBookmark.name || currentBookmark.host}”服务器书签中`
+                          : '连接服务器书签后可保存和管理配置'
+                      }
+                    </span>
+                  </div>
+                  <Tag>{savedTunnels.length} 个</Tag>
                 </div>
-                <Tag color={connected ? 'success' : 'default'}>
-                  {connected ? `${runtime.tunnels.length} 个运行中` : '未连接'}
-                </Tag>
+                {
+                  savedTunnels.length
+                    ? (
+                      <div className='ssh-tunnel-saved-list'>
+                        {
+                          savedTunnels.map(tunnel => (
+                            <article
+                              className={'ssh-tunnel-saved-card' + (savedEditingId === tunnel.id ? ' active' : '')}
+                              key={tunnel.id}
+                            >
+                              <div>
+                                <strong>{tunnel.name || tunnelName({ definition: tunnel })}</strong>
+                                <span>{getTunnelFlowText(tunnel)}</span>
+                                <Tag color={tunnel.autoStart !== false ? 'blue' : 'default'}>
+                                  {tunnel.autoStart !== false ? '下次连接自动启动' : '仅手动启动'}
+                                </Tag>
+                              </div>
+                              <Space>
+                                <Button size='small' onClick={() => handleLoadSaved(tunnel)}>
+                                  编辑
+                                </Button>
+                                <Tooltip title='从书签删除'>
+                                  <Button
+                                    size='small'
+                                    danger
+                                    aria-label='删除已保存的隧道'
+                                    icon={<DeleteOutlined />}
+                                    onClick={() => handleRemoveSaved(tunnel)}
+                                  />
+                                </Tooltip>
+                              </Space>
+                            </article>
+                          ))
+                        }
+                      </div>
+                      )
+                    : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description='暂无已保存的隧道配置' />
+                }
               </div>
 
-              {
+              <div className='ssh-tunnel-runtime-section'>
+                <div className='ssh-tunnel-section-title'>
+                  <div>
+                    <strong>运行中的隧道</strong>
+                    <span>无需重新连接 SSH，可随时测试或停止</span>
+                  </div>
+                  <Tag color={connected ? 'success' : 'default'}>
+                    {connected ? `${runtime.tunnels.length} 个运行中` : '未连接'}
+                  </Tag>
+                </div>
+
+                {
                 !connected
                   ? (
                     <Alert
@@ -461,14 +585,14 @@ export default function SshTunnelModal ({
                   : null
               }
 
-              {
+                {
                 connected && runtime.tunnels.length === 0
                   ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description='暂无运行中的 SSH 隧道' />
                   : null
               }
 
-              <div className='ssh-tunnel-running-list'>
-                {
+                <div className='ssh-tunnel-running-list'>
+                  {
                   runtime.tunnels.map(entry => (
                     <article className='ssh-tunnel-running-card' key={entry.id}>
                       <header>
@@ -526,6 +650,7 @@ export default function SshTunnelModal ({
                     </article>
                   ))
                 }
+                </div>
               </div>
             </section>
           </div>

@@ -23,6 +23,37 @@ const {
   redactDiagnosticText
 } = require('../lib/diagnostic-pack')
 
+const sshTunnelTypes = new Set([
+  'forwardLocalToRemote',
+  'forwardRemoteToLocal',
+  'dynamicForward'
+])
+
+function getConfiguredSshTunnels (initOptions = {}) {
+  const configured = Array.isArray(initOptions.sshTunnels)
+    ? initOptions.sshTunnels
+    : (
+        sshTunnelTypes.has(initOptions.sshTunnel)
+          ? [{
+              id: `legacy-${initOptions.id || 'ssh-tunnel'}`,
+              sshTunnel: initOptions.sshTunnel,
+              sshTunnelLocalHost: initOptions.sshTunnelLocalHost,
+              sshTunnelLocalPort: initOptions.sshTunnelLocalPort,
+              sshTunnelRemoteHost: initOptions.sshTunnelRemoteHost,
+              sshTunnelRemotePort: initOptions.sshTunnelRemotePort,
+              autoStart: initOptions.autoStart !== false,
+              name: initOptions.name
+            }]
+          : []
+      )
+  return configured.filter(tunnel => (
+    tunnel &&
+    sshTunnelTypes.has(tunnel.sshTunnel) &&
+    Number(tunnel.sshTunnelLocalPort) > 0 &&
+    tunnel.autoStart !== false
+  ))
+}
+
 // Encodings that are equivalent to UTF-8 (no conversion needed)
 const utf8Aliases = new Set(['utf-8', 'utf8', 'utf-8-strict'])
 
@@ -777,18 +808,11 @@ class TerminalSshBase extends TerminalBase {
       globalState.setSession(this.pid, this)
       return this
     }
-    const { sshTunnels = [] } = initOptions
+    const sshTunnels = getConfiguredSshTunnels(initOptions)
     const sshTunnelResults = []
     for (const sshTunnel of sshTunnels) {
-      if (
-        sshTunnel &&
-        sshTunnel.sshTunnel &&
-        sshTunnel.sshTunnelLocalPort &&
-        sshTunnel.autoStart !== false
-      ) {
-        const result = await this.runTunnel(sshTunnel)
-        sshTunnelResults.push(result)
-      }
+      const result = await this.runTunnel(sshTunnel)
+      sshTunnelResults.push(result)
     }
     if (!this.ws) {
       this.sshTunnelResults = sshTunnelResults
@@ -1345,6 +1369,7 @@ exports.session = async function (initOptions, ws) {
 exports.normalizeSshConnectionError = normalizeSshConnectionError
 exports.shouldLogSshConnectErrorAsError = shouldLogSshConnectErrorAsError
 exports.reorderConnectionHoppings = reorderConnectionHoppings
+exports.getConfiguredSshTunnels = getConfiguredSshTunnels
 exports.TerminalSshBase = TerminalSshBase
 
 /**

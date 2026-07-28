@@ -67,6 +67,17 @@ test('SSH tunnel manager remains usable on narrow desktop windows', () => {
   assert.match(styles, /overflow-y auto/)
 })
 
+test('SSH tunnel manager persists profiles to the active server bookmark', () => {
+  const modal = source('src/client/components/ssh-tunnel/ssh-tunnel-modal.jsx')
+
+  assert.match(modal, /findBookmarkForTab/)
+  assert.match(modal, /upsertBookmarkTunnel/)
+  assert.match(modal, /removeBookmarkTunnel/)
+  assert.match(modal, /store\.editItem\(currentBookmark\.id/)
+  assert.match(modal, /已保存的隧道配置/)
+  assert.match(modal, /下次连接自动启动/)
+})
+
 test('SSH tunnel validation messages and flow previews are readable Chinese', () => {
   const definition = source('src/client/components/ssh-tunnel/ssh-tunnel-definition.js')
 

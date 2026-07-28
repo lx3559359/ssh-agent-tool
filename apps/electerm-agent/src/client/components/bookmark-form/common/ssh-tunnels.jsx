@@ -9,6 +9,7 @@ import { tailFormItemLayout } from '../../../common/form-layout'
 import uid from '../../../common/uid'
 import Modal from '../../common/modal'
 import SshTunnelForm from './ssh-tunnel-form'
+import { getBookmarkTunnels } from '../../ssh-tunnel/ssh-tunnel-bookmark.js'
 
 const FormItem = Form.Item
 const e = window.translate
@@ -31,14 +32,18 @@ export default function renderSshTunnels (props) {
   const [initialValues] = useState(defaultInitialValues)
   const [editModalVisible, setEditModalVisible] = useState(false)
   const [editingItem, setEditingItem] = useState(null)
-  const [list, setList] = useState(formData.sshTunnels || [])
+  const [list, setList] = useState(() => getBookmarkTunnels(formData))
+  function currentList () {
+    const value = form.getFieldValue('sshTunnels')
+    return Array.isArray(value) ? value : getBookmarkTunnels(formData)
+  }
   function handleFinish (data) {
     const nd = {
       ...data,
       id: uid()
     }
     const v = [
-      ...(form.getFieldValue('sshTunnels') || []),
+      ...currentList(),
       nd
     ]
     form.setFieldsValue({
@@ -57,7 +62,7 @@ export default function renderSshTunnels (props) {
     setList(old => {
       return old.filter(i => i.id !== id)
     })
-    const v = (form.getFieldValue('sshTunnels') || []).filter(i => i.id !== id)
+    const v = currentList().filter(i => i.id !== id)
     form.setFieldsValue({
       sshTunnels: v
     })
@@ -78,7 +83,7 @@ export default function renderSshTunnels (props) {
       id: editingItem.id
     }
     setList(old => old.map(item => item.id === editingItem.id ? updatedItem : item))
-    const v = (form.getFieldValue('sshTunnels') || []).map(
+    const v = currentList().map(
       item => item.id === editingItem.id ? updatedItem : item
     )
     form.setFieldsValue({

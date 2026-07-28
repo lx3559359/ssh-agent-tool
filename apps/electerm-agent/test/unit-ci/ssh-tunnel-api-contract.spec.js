@@ -131,6 +131,34 @@ test('SSH sessions own tunnel runtime lifecycle and close it on disconnect', () 
   )
 })
 
+test('SSH sessions preserve legacy tunnel bookmarks and isolate auto-start selection', () => {
+  const { getConfiguredSshTunnels } = require('../../src/app/server/session-ssh')
+  const legacy = {
+    id: 'server-1',
+    sshTunnel: 'dynamicForward',
+    sshTunnelLocalHost: '127.0.0.1',
+    sshTunnelLocalPort: 1080
+  }
+
+  assert.deepEqual(getConfiguredSshTunnels(legacy), [{
+    id: 'legacy-server-1',
+    sshTunnel: 'dynamicForward',
+    sshTunnelLocalHost: '127.0.0.1',
+    sshTunnelLocalPort: 1080,
+    sshTunnelRemoteHost: undefined,
+    sshTunnelRemotePort: undefined,
+    autoStart: true,
+    name: undefined
+  }])
+  assert.deepEqual(getConfiguredSshTunnels({
+    sshTunnels: [
+      { id: 'auto', sshTunnel: 'dynamicForward', sshTunnelLocalPort: 1080 },
+      { id: 'manual', sshTunnel: 'dynamicForward', sshTunnelLocalPort: 1081, autoStart: false },
+      { id: 'invalid', sshTunnel: 'dynamicForward' }
+    ]
+  }).map(item => item.id), ['auto'])
+})
+
 test('SSH session probes the local tunnel endpoint and reports latency', async () => {
   const { TerminalSshBase } = require('../../src/app/server/session-ssh')
   assert.equal(typeof TerminalSshBase, 'function')

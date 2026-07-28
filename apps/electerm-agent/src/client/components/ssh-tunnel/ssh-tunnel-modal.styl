@@ -166,6 +166,44 @@
   gap 10px
   margin-top 12px
 
+.ssh-tunnel-saved-section
+  padding-bottom 16px
+  margin-bottom 16px
+  border-bottom 1px solid var(--border-color, rgba(127, 127, 127, .2))
+
+.ssh-tunnel-saved-list
+  display grid
+  gap 8px
+
+.ssh-tunnel-saved-card
+  display flex
+  align-items flex-start
+  justify-content space-between
+  gap 10px
+  padding 11px
+  border 1px solid var(--border-color, rgba(127, 127, 127, .25))
+  border-radius 6px
+
+  &.active
+    border-color #1677ff
+    background rgba(22, 119, 255, .07)
+
+  > div
+    min-width 0
+
+  strong,
+  span
+    display block
+
+  span
+    margin 5px 0 8px
+    line-height 1.45
+    opacity .72
+    overflow-wrap anywhere
+
+.ssh-tunnel-runtime-section
+  min-width 0
+
 .ssh-tunnel-running-card
   padding 13px
   border 1px solid var(--border-color, rgba(127, 127, 127, .25))
