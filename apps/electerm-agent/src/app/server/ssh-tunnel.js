@@ -1,4 +1,5 @@
 const log = require('../common/log')
+const { EventEmitter } = require('node:events')
 
 function tunnelDescriptor (options) {
   return {
@@ -40,18 +41,18 @@ function closeServer (server) {
 
 function createController ({
   descriptor,
-  close
+  close,
+  lifecycle = new EventEmitter()
 }) {
   let closed = false
-  return {
-    state: 'running',
-    descriptor,
-    async close () {
-      if (closed) return
-      closed = true
-      await close()
-    }
+  lifecycle.state = 'running'
+  lifecycle.descriptor = descriptor
+  lifecycle.close = async () => {
+    if (closed) return
+    closed = true
+    await close()
   }
+  return lifecycle
 }
 
 function forwardRemoteToLocal (options) {
@@ -70,6 +71,8 @@ function forwardRemoteToLocal (options) {
   const result = `remote:${sshTunnelRemoteHost}:${sshTunnelRemotePort} => local:${sshTunnelLocalHost}:${sshTunnelLocalPort}`
   const sockets = new Set()
   let connectionClosed = false
+  const lifecycle = new EventEmitter()
+  lifecycle.on('error', () => {})
 
   return new Promise((resolve, reject) => {
     const trackSocket = socket => {
@@ -104,6 +107,10 @@ function forwardRemoteToLocal (options) {
       connectionClosed = true
       for (const socket of sockets) destroySocket(socket)
       sockets.clear()
+      lifecycle.emit('close', {
+        code: 'SSH_CONNECTION_CLOSED',
+        message: 'SSH 会话已断开'
+      })
     }
     const detach = () => {
       conn.removeListener('tcp connection', handleTcpConnection)
@@ -119,6 +126,7 @@ function forwardRemoteToLocal (options) {
       log.log(`Port forwarded: ${result}`)
       resolve(createController({
         descriptor,
+        lifecycle,
         close: async () => {
           detach()
           for (const socket of sockets) destroySocket(socket)
@@ -152,6 +160,9 @@ function forwardLocalToRemote (options) {
   })
   const sockets = new Set()
   let ready = false
+  let resourcesClosed = false
+  const lifecycle = new EventEmitter()
+  lifecycle.on('error', () => {})
 
   return new Promise((resolve, reject) => {
     const localServer = netImpl.createServer(socket => {
@@ -185,6 +196,8 @@ function forwardLocalToRemote (options) {
       )
     })
     const closeLocalResources = async () => {
+      if (resourcesClosed) return
+      resourcesClosed = true
       for (const socket of sockets) destroySocket(socket)
       sockets.clear()
       await closeServer(localServer)
@@ -193,10 +206,15 @@ function forwardLocalToRemote (options) {
       closeLocalResources().catch(error => {
         log.error('Failed to close local SSH tunnel:', error)
       })
+      lifecycle.emit('close', {
+        code: 'SSH_CONNECTION_CLOSED',
+        message: 'SSH 会话已断开'
+      })
     }
     const handleServerError = error => {
       log.error('SSH tunnel listener error:', error)
       if (!ready) reject(error)
+      if (ready) lifecycle.emit('error', error)
     }
     localServer.on('error', handleServerError)
     conn.on('close', handleConnectionClose)
@@ -208,6 +226,7 @@ function forwardLocalToRemote (options) {
         log.log(`Local tunnel listening on ${sshTunnelLocalHost}:${sshTunnelLocalPort}`)
         resolve(createController({
           descriptor,
+          lifecycle,
           close: async () => {
             conn.removeListener('close', handleConnectionClose)
             localServer.removeListener('error', handleServerError)
@@ -232,6 +251,9 @@ function dynamicForward (options) {
   })
   const sockets = new Set()
   let ready = false
+  let resourcesClosed = false
+  const lifecycle = new EventEmitter()
+  lifecycle.on('error', () => {})
 
   return new Promise((resolve, reject) => {
     const proxyServer = socksImpl.createServer((info, accept, deny) => {
@@ -270,6 +292,8 @@ function dynamicForward (options) {
       )
     })
     const closeProxyResources = async () => {
+      if (resourcesClosed) return
+      resourcesClosed = true
       for (const socket of sockets) destroySocket(socket)
       sockets.clear()
       await closeServer(proxyServer)
@@ -278,10 +302,15 @@ function dynamicForward (options) {
       closeProxyResources().catch(error => {
         log.error('Failed to close SOCKS5 tunnel:', error)
       })
+      lifecycle.emit('close', {
+        code: 'SSH_CONNECTION_CLOSED',
+        message: 'SSH 会话已断开'
+      })
     }
     const handleServerError = error => {
       log.error('SOCKS5 listener error:', error)
       if (!ready) reject(error)
+      if (ready) lifecycle.emit('error', error)
     }
     proxyServer.on('error', handleServerError)
     proxyServer.useAuth(socksImpl.auth.None())
@@ -294,6 +323,7 @@ function dynamicForward (options) {
         log.log(`SOCKS5 tunnel listening on ${sshTunnelLocalHost}:${sshTunnelLocalPort}`)
         resolve(createController({
           descriptor,
+          lifecycle,
           close: async () => {
             conn.removeListener('close', handleConnectionClose)
             proxyServer.removeListener('error', handleServerError)

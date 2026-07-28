@@ -247,6 +247,34 @@
     color #ff4d4f
     background rgba(255, 77, 79, .1)
 
+.ssh-tunnel-history-list
+  display grid
+  gap 8px
+  max-height 420px
+  overflow-y auto
+  padding-right 4px
+
+.ssh-tunnel-history-item
+  display grid
+  gap 6px
+  padding 10px
+  border 1px solid var(--border-color, rgba(127, 127, 127, .24))
+  border-radius 6px
+
+  > div
+    display flex
+    align-items center
+    justify-content space-between
+    gap 8px
+
+  span,
+  code
+    opacity .7
+
+  strong,
+  code
+    overflow-wrap anywhere
+
 @media (max-width: 1100px)
   .ssh-tunnel-layout
     grid-template-columns 1fr

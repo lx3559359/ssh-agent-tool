@@ -122,3 +122,18 @@ test('SSH tunnel manager offers an explicit suggested port without auto-starting
   assert.match(translations, /shellpilotTunnelPortConflict:/)
   assert.match(translations, /shellpilotTunnelUseSuggestedPort:/)
 })
+
+test('SSH tunnel manager shows health states and bounded disconnect history', () => {
+  const modal = source('src/client/components/ssh-tunnel/ssh-tunnel-modal.jsx')
+  const styles = source('src/client/components/ssh-tunnel/ssh-tunnel-modal.styl')
+  const translations = source('src/client/common/shellpilot-i18n-overrides.js')
+
+  assert.match(modal, /tunnelHealthPresentation/)
+  assert.match(modal, /shellpilotTunnelDisconnectHistory/)
+  assert.match(modal, /entry\.events/)
+  assert.match(modal, /showDisconnectHistory/)
+  assert.match(styles, /\.ssh-tunnel-history-list/)
+  assert.match(translations, /shellpilotTunnelHealthHealthy: '健康'/)
+  assert.match(translations, /shellpilotTunnelHealthReconnecting: '重连中'/)
+  assert.match(translations, /shellpilotTunnelDisconnectHistory: '断线记录'/)
+})

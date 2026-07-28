@@ -73,6 +73,12 @@ test('local forwarding returns an idempotent closeable controller', async () => 
 
   assert.equal(controller.state, 'running')
   assert.equal(controller.descriptor.id, 'local-1')
+  let sessionLost = 0
+  controller.on('close', event => {
+    if (event.code === 'SSH_CONNECTION_CLOSED') sessionLost += 1
+  })
+  conn.emit('close')
+  assert.equal(sessionLost, 1)
   await controller.close()
   await controller.close()
   assert.equal(localServer.closeCount, 1)
@@ -167,7 +173,7 @@ test('runtime isolates controllers, rejects duplicates, and serializes state', a
     sshTunnelLocalPort: 1080
   })
 
-  assert.equal(started.state, 'running')
+  assert.equal(started.state, 'healthy')
   await assert.rejects(
     runtime.start({ id: 'one', sshTunnel: 'dynamicForward' }),
     error => error.code === 'SSH_TUNNEL_EXISTS'
@@ -182,6 +188,70 @@ test('runtime isolates controllers, rejects duplicates, and serializes state', a
   await runtime.stop('one')
   await runtime.stop('one')
   assert.deepEqual(closed, ['one'])
+})
+
+test('runtime records session loss and reconnects with bounded backoff', async () => {
+  const controllers = []
+  const scheduled = []
+  const runtime = createSshTunnelRuntime({
+    startController: async definition => {
+      const controller = new EventEmitter()
+      controller.descriptor = definition
+      controller.close = async () => {}
+      controllers.push(controller)
+      return controller
+    },
+    schedule: (callback, delay) => {
+      const task = { callback, delay, cancelled: false }
+      scheduled.push(task)
+      return task
+    },
+    cancelSchedule: task => {
+      task.cancelled = true
+    }
+  })
+
+  await runtime.start({ id: 'unstable', sshTunnel: 'dynamicForward' })
+  controllers[0].emit('close', { code: 'SSH_CONNECTION_CLOSED' })
+
+  assert.equal(runtime.list()[0].state, 'session-lost')
+  assert.equal(scheduled[0].delay, 1000)
+  assert.equal(runtime.list()[0].events.at(-1).code, 'SSH_CONNECTION_CLOSED')
+
+  await scheduled[0].callback()
+  assert.equal(controllers.length, 2)
+  assert.equal(runtime.list()[0].state, 'healthy')
+  assert.ok(runtime.list()[0].events.some(event => event.state === 'reconnecting'))
+})
+
+test('runtime does not reconnect after manual stop or port conflict', async () => {
+  const scheduled = []
+  const controller = new EventEmitter()
+  controller.close = async () => {}
+  const runtime = createSshTunnelRuntime({
+    startController: async definition => {
+      controller.descriptor = definition
+      return controller
+    },
+    schedule: (callback, delay) => {
+      const task = { callback, delay, cancelled: false }
+      scheduled.push(task)
+      return task
+    },
+    cancelSchedule: task => {
+      task.cancelled = true
+    }
+  })
+
+  await runtime.start({ id: 'manual', sshTunnel: 'dynamicForward' })
+  controller.emit('error', { code: 'EADDRINUSE', message: 'busy' })
+  assert.equal(runtime.list()[0].state, 'port-conflict')
+  assert.equal(scheduled.length, 0)
+
+  await runtime.stop('manual')
+  controller.emit('close', { code: 'SSH_CONNECTION_CLOSED' })
+  assert.equal(scheduled.length, 0)
+  assert.deepEqual(runtime.list(), [])
 })
 
 test('runtime closeAll continues when one controller cleanup fails', async () => {

@@ -17,6 +17,7 @@ import {
   CheckCircleOutlined,
   CopyOutlined,
   DeleteOutlined,
+  HistoryOutlined,
   LinkOutlined,
   PlayCircleOutlined,
   ReloadOutlined,
@@ -73,6 +74,17 @@ const templateOptions = Object.entries(tunnelTemplates).map(([value, item]) => (
   label: item.name
 }))
 
+const tunnelHealthPresentation = {
+  running: { color: 'success', label: 'shellpilotTunnelRunningStatus' },
+  starting: { color: 'processing', label: 'shellpilotTunnelHealthStarting' },
+  healthy: { color: 'success', label: 'shellpilotTunnelHealthHealthy' },
+  reconnecting: { color: 'warning', label: 'shellpilotTunnelHealthReconnecting' },
+  'port-conflict': { color: 'error', label: 'shellpilotTunnelHealthPortConflict' },
+  'session-lost': { color: 'error', label: 'shellpilotTunnelHealthSessionLost' },
+  stopped: { color: 'default', label: 'shellpilotTunnelHealthStopped' },
+  failed: { color: 'error', label: 'shellpilotTunnelHealthFailed' }
+}
+
 function createDefaultTunnel () {
   return {
     ...getTunnelTemplate('http'),
@@ -96,6 +108,40 @@ function translated (key, values = {}) {
     (text, [name, value]) => text.replaceAll(`{${name}}`, String(value)),
     e(key)
   )
+}
+
+function healthPresentation (state) {
+  return tunnelHealthPresentation[state] || tunnelHealthPresentation.failed
+}
+
+function showDisconnectHistory (entry) {
+  const events = Array.isArray(entry.events) ? entry.events : []
+  Modal.info({
+    title: e('shellpilotTunnelDisconnectHistory'),
+    width: 680,
+    okText: e('shellpilotConfirm'),
+    content: events.length
+      ? (
+        <div className='ssh-tunnel-history-list'>
+          {
+            events.slice().reverse().map((event, index) => {
+              const health = healthPresentation(event.state)
+              return (
+                <div className='ssh-tunnel-history-item' key={`${event.at}-${index}`}>
+                  <div>
+                    <Tag color={health.color}>{e(health.label)}</Tag>
+                    <span>{new Date(event.at).toLocaleString()}</span>
+                  </div>
+                  <strong>{event.message}</strong>
+                  <code>{event.code}</code>
+                </div>
+              )
+            })
+          }
+        </div>
+        )
+      : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={e('shellpilotTunnelNoDisconnectHistory')} />
+  })
 }
 
 function TunnelTypeCards ({ value, onChange }) {
@@ -167,6 +213,12 @@ export default function SshTunnelModal ({
   useEffect(() => {
     refresh()
   }, [refresh])
+
+  useEffect(() => {
+    if (!open || !connected) return
+    const timer = window.setInterval(() => refresh(true), 3000)
+    return () => window.clearInterval(timer)
+  }, [connected, open, refresh])
 
   useEffect(() => {
     setSavedTunnels(getBookmarkTunnels(currentBookmark || {}))
@@ -710,7 +762,9 @@ export default function SshTunnelModal ({
                       <header>
                         <div>
                           <strong>{tunnelName(entry)}</strong>
-                          <Tag color='success'>{e('shellpilotTunnelRunningStatus')}</Tag>
+                          <Tag color={healthPresentation(entry.state).color}>
+                            {e(healthPresentation(entry.state).label)}
+                          </Tag>
                         </div>
                         <Tooltip title={e('shellpilotTunnelCopyFlow')}>
                           <Button
@@ -748,6 +802,13 @@ export default function SshTunnelModal ({
                         </Button>
                         <Button size='small' onClick={() => handleEditAndRestart(entry)}>
                           {e('shellpilotTunnelEditAndRestart')}
+                        </Button>
+                        <Button
+                          size='small'
+                          icon={<HistoryOutlined />}
+                          onClick={() => showDisconnectHistory(entry)}
+                        >
+                          {e('shellpilotTunnelDisconnectHistory')}
                         </Button>
                         <Button
                           size='small'
