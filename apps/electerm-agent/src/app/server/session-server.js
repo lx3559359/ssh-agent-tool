@@ -20,6 +20,10 @@ const {
   resize,
   runCmd,
   cancelRunCmd,
+  startSshTunnel,
+  stopSshTunnel,
+  listSshTunnels,
+  testSshTunnel,
   toggleTerminalLog,
   toggleTerminalLogTimestamp,
   setTerminalLogPath,
@@ -34,6 +38,7 @@ const { trzszManager } = require('./trzsz')
 const { xmodemManager } = require('./xmodem')
 const { parseTerminalControlMessage } = require('./terminal-control-message')
 const { serializeRunCmdError } = require('./session-common')
+const { serializeTunnelError } = require('./ssh-tunnel-runtime')
 
 const {
   tokenElecterm,
@@ -484,6 +489,14 @@ process.on('message', async (message) => {
       promise = runCmd(body)
     } else if (action === 'cancel-run-cmd') {
       promise = cancelRunCmd(body)
+    } else if (action === 'ssh-tunnel-start') {
+      promise = startSshTunnel(body)
+    } else if (action === 'ssh-tunnel-stop') {
+      promise = stopSshTunnel(body)
+    } else if (action === 'ssh-tunnel-list') {
+      promise = listSshTunnels(body)
+    } else if (action === 'ssh-tunnel-test') {
+      promise = testSshTunnel(body)
     }
 
     const result = await promise
@@ -497,7 +510,9 @@ process.on('message', async (message) => {
         log.error('common message error', err)
         return {
           id,
-          error: serializeRunCmdError(err)
+          error: action.startsWith('ssh-tunnel-')
+            ? serializeTunnelError(err)
+            : serializeRunCmdError(err)
         }
       })
 

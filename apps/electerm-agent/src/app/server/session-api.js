@@ -34,6 +34,33 @@ async function cancelRunCmd (body) {
   return await term.cancelRunCmd(executionId) === true
 }
 
+function requireTerminal (pid) {
+  const term = terminals(pid)
+  if (term) return term
+  const error = new Error('SSH 会话不存在或已经断开')
+  error.code = 'SSH_TUNNEL_SESSION_NOT_FOUND'
+  throw error
+}
+
+async function startSshTunnel (body) {
+  const { pid, tunnel } = body
+  return requireTerminal(pid).startSshTunnel(tunnel)
+}
+
+async function stopSshTunnel (body) {
+  const { pid, tunnelId } = body
+  return requireTerminal(pid).stopSshTunnel(tunnelId)
+}
+
+async function listSshTunnels (body) {
+  return requireTerminal(body.pid).listSshTunnels()
+}
+
+async function testSshTunnel (body) {
+  const { pid, tunnelId } = body
+  return requireTerminal(pid).testSshTunnel(tunnelId)
+}
+
 async function resize (body) {
   const { pid, cols, rows } = body
   const term = terminals(pid)
@@ -106,6 +133,10 @@ exports.testTerm = testTerm
 exports.resize = resize
 exports.runCmd = runCmd
 exports.cancelRunCmd = cancelRunCmd
+exports.startSshTunnel = startSshTunnel
+exports.stopSshTunnel = stopSshTunnel
+exports.listSshTunnels = listSshTunnels
+exports.testSshTunnel = testSshTunnel
 exports.toggleTerminalLog = toggleTerminalLog
 exports.toggleTerminalLogTimestamp = toggleTerminalLogTimestamp
 exports.setTerminalLogPath = setTerminalLogPath
