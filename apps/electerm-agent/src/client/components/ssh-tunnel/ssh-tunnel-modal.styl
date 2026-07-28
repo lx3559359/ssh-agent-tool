@@ -1,0 +1,214 @@
+.ssh-tunnel-modal
+  .ant-modal-content
+    padding 0
+    overflow hidden
+
+  .ant-modal-header
+    padding 18px 22px
+    margin 0
+    border-bottom 1px solid var(--border-color, rgba(127, 127, 127, .2))
+
+  .ant-modal-body
+    padding 0
+
+.ssh-tunnel-modal-title
+  display inline-flex
+  align-items center
+  gap 8px
+
+.ssh-tunnel-scroll
+  max-height calc(100vh - 150px)
+  overflow-y auto
+  padding 18px 22px 22px
+
+.ssh-tunnel-context
+  display flex
+  align-items center
+  justify-content space-between
+  gap 16px
+  padding 12px 14px
+  margin-bottom 16px
+  border 1px solid var(--border-color, rgba(127, 127, 127, .25))
+  border-radius 6px
+  background rgba(127, 127, 127, .06)
+
+  > div
+    min-width 0
+
+  strong,
+  span
+    display block
+
+  span
+    margin-top 3px
+    opacity .7
+    overflow hidden
+    text-overflow ellipsis
+    white-space nowrap
+
+.ssh-tunnel-layout
+  display grid
+  grid-template-columns minmax(0, 1.08fr) minmax(320px, .92fr)
+  gap 16px
+
+.ssh-tunnel-editor,
+.ssh-tunnel-runtime
+  min-width 0
+  padding 16px
+  border 1px solid var(--border-color, rgba(127, 127, 127, .25))
+  border-radius 6px
+
+.ssh-tunnel-section-title
+  display flex
+  align-items flex-start
+  justify-content space-between
+  gap 12px
+  margin-bottom 14px
+
+  strong,
+  span
+    display block
+
+  span
+    margin-top 3px
+    opacity .68
+
+.ssh-tunnel-type-grid
+  display grid
+  grid-template-columns repeat(3, minmax(0, 1fr))
+  gap 8px
+
+.ssh-tunnel-type-card
+  min-width 0
+  min-height 84px
+  padding 12px
+  text-align left
+  color inherit
+  background transparent
+  border 1px solid var(--border-color, rgba(127, 127, 127, .28))
+  border-radius 6px
+  cursor pointer
+
+  strong,
+  span
+    display block
+
+  span
+    margin-top 6px
+    opacity .66
+    line-height 1.5
+
+  &:hover,
+  &.active
+    border-color #1677ff
+    background rgba(22, 119, 255, .08)
+
+.ssh-tunnel-template-row
+  display flex
+  align-items center
+  gap 12px
+  margin 14px 0
+
+  > span
+    flex none
+    opacity .72
+
+  .ant-select
+    flex 1
+
+.ssh-tunnel-form-grid
+  display grid
+  grid-template-columns repeat(2, minmax(0, 1fr))
+  gap 12px
+
+.ssh-tunnel-field
+  display flex
+  min-width 0
+  flex-direction column
+  gap 6px
+
+  .ant-input-number
+    width 100%
+
+  small
+    min-height 34px
+    line-height 1.5
+    opacity .62
+
+.ssh-tunnel-field-label
+  font-weight 600
+
+.ssh-tunnel-flow
+  padding 12px
+  margin-top 14px
+  border-left 3px solid #1677ff
+  background rgba(22, 119, 255, .07)
+
+  span,
+  strong
+    display block
+
+  span
+    margin-bottom 5px
+    opacity .66
+
+  strong
+    overflow-wrap anywhere
+
+.ssh-tunnel-editor-actions
+  display flex
+  justify-content flex-end
+  gap 8px
+  margin-top 14px
+
+.ssh-tunnel-running-list
+  display grid
+  gap 10px
+  margin-top 12px
+
+.ssh-tunnel-running-card
+  padding 13px
+  border 1px solid var(--border-color, rgba(127, 127, 127, .25))
+  border-radius 6px
+
+  header
+    display flex
+    align-items center
+    justify-content space-between
+    gap 8px
+
+    > div
+      display flex
+      min-width 0
+      align-items center
+      gap 8px
+
+  p
+    margin 10px 0
+    line-height 1.55
+    opacity .76
+    overflow-wrap anywhere
+
+.ssh-tunnel-test-result
+  display flex
+  align-items center
+  gap 6px
+  padding 7px 9px
+  margin-bottom 10px
+  border-radius 4px
+  background rgba(82, 196, 26, .1)
+  color #52c41a
+
+  &.failed
+    color #ff4d4f
+    background rgba(255, 77, 79, .1)
+
+@media (max-width: 1100px)
+  .ssh-tunnel-layout
+    grid-template-columns 1fr
+
+  .ssh-tunnel-type-grid
+    grid-template-columns 1fr
+
+  .ssh-tunnel-form-grid
+    grid-template-columns 1fr

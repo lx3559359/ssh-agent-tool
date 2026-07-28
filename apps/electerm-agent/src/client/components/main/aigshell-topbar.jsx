@@ -3,6 +3,7 @@ import {
   CodeOutlined,
   DashboardOutlined,
   FolderAddOutlined,
+  LinkOutlined,
   MessageOutlined,
   MoonOutlined,
   PlusCircleOutlined,
@@ -36,6 +37,7 @@ import './aigshell-topbar.styl'
 const UpdateCenterModal = lazy(() => import('./update-center-modal'))
 const HelpCenterModal = lazy(() => import('./help-center-modal'))
 const ServerStatusModal = lazy(() => import('../server-status/server-status-modal'))
+const SshTunnelModal = lazy(() => import('../ssh-tunnel/ssh-tunnel-modal'))
 const e = window.translate
 
 export default auto(function AIGShellTopBar ({ store }) {
@@ -44,6 +46,7 @@ export default auto(function AIGShellTopBar ({ store }) {
   const [showHelpCenter, setShowHelpCenter] = useState(false)
   const [showSafetyCenter, setShowSafetyCenter] = useState(false)
   const [showServerStatus, setShowServerStatus] = useState(false)
+  const [showSshTunnel, setShowSshTunnel] = useState(false)
   const [showConnectionWizard, setShowConnectionWizard] = useState(false)
   const [connectionInfoBookmark, setConnectionInfoBookmark] = useState(null)
   const titleBarDraggingRef = useRef(false)
@@ -248,6 +251,12 @@ export default auto(function AIGShellTopBar ({ store }) {
       primary: true
     },
     {
+      key: 'sshTunnel',
+      label: e('shellpilotTopbarSshTunnel'),
+      icon: <LinkOutlined />,
+      onClick: () => setShowSshTunnel(true)
+    },
+    {
       key: 'ai',
       label: e('shellpilotTopbarAiAssistant'),
       icon: <MessageOutlined />,
@@ -438,6 +447,22 @@ export default auto(function AIGShellTopBar ({ store }) {
                 <ServerStatusModal
                   open
                   onClose={() => setShowServerStatus(false)}
+                  store={store}
+                  tab={currentTab}
+                />
+              </Suspense>
+            </LazyModuleBoundary>
+            )
+          : null
+      }
+      {
+        showSshTunnel
+          ? (
+            <LazyModuleBoundary moduleName={e('shellpilotTopbarSshTunnel')} fallback={null}>
+              <Suspense fallback={null}>
+                <SshTunnelModal
+                  open
+                  onClose={() => setShowSshTunnel(false)}
                   store={store}
                   tab={currentTab}
                 />
