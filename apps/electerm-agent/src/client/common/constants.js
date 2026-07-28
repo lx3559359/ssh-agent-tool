@@ -284,6 +284,7 @@ export const instSftpKeys = [
   'readFilePreview',
   'readFileRange',
   'readFileChunk',
+  'describeResumeEntry',
   'searchFileText',
   'listArchive',
   'readArchiveTextEntry',

@@ -12,11 +12,13 @@ class Transfer {
     onData,
     onEnd,
     onError,
+    onPaused,
     ...rest
   }) {
     const id = generate()
     this.id = id
     const th = this
+    this.onPaused = onPaused
     const {
       sftpId,
       isFtp,
@@ -38,7 +40,7 @@ class Transfer {
           sftpId,
           args
         })
-        if (func === 'destroy') {
+        if (['cancel', 'interrupt', 'destroy'].includes(func)) {
           th.onDestroy(ws)
         }
       }
@@ -62,6 +64,9 @@ class Transfer {
       onError(new Error(arg.error.message))
       th.onDestroy(ws)
     }, 'transfer:err:' + id)
+    ws.once((arg) => {
+      this.onPaused?.(arg)
+    }, 'transfer:paused:' + id)
   }
 
   onDestroy (ws) {

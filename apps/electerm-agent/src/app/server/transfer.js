@@ -19,6 +19,54 @@ function atomicUploadPath (remotePath, id) {
   return `${directory}.${safeName}.shellpilot-upload-${safeId}.part`
 }
 
+function atomicUploadDirectoryAndName (remotePath) {
+  const value = String(remotePath || '')
+  const separatorIndex = Math.max(value.lastIndexOf('/'), value.lastIndexOf('\\'))
+  const directory = separatorIndex >= 0 ? value.slice(0, separatorIndex + 1) : ''
+  const name = (separatorIndex >= 0 ? value.slice(separatorIndex + 1) : value) || 'upload'
+  return {
+    directory,
+    safeName: name.slice(0, 96).replace(/[^a-zA-Z0-9._-]/g, '_')
+  }
+}
+
+function validateAtomicPartialPath (remotePath, partialPath) {
+  if (!partialPath) return null
+  const candidate = String(partialPath)
+  const expected = atomicUploadDirectoryAndName(remotePath)
+  const actual = atomicUploadDirectoryAndName(candidate)
+  const escapedName = expected.safeName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const pattern = new RegExp(
+    `^\\.${escapedName}\\.shellpilot-upload-[a-zA-Z0-9_-]+\\.part$`
+  )
+  if (
+    actual.directory !== expected.directory ||
+    !pattern.test(candidate.slice(actual.directory.length))
+  ) {
+    const error = new Error('Invalid resumable upload partial path')
+    error.code = 'TRANSFER_PARTIAL_PATH_INVALID'
+    throw error
+  }
+  return candidate
+}
+
+function isRecoverableTransferError (error) {
+  return [
+    'ECONNRESET',
+    'ECONNABORTED',
+    'ETIMEDOUT',
+    'EPIPE',
+    'ENETDOWN',
+    'ENETRESET',
+    'ENETUNREACH',
+    'EHOSTDOWN',
+    'EHOSTUNREACH'
+  ].includes(error?.code) ||
+    /socket|connection|channel.*closed|timed?\s*out/i.test(
+      String(error?.message || error)
+    )
+}
+
 class Transfer {
   constructor ({
     remotePath,
@@ -46,6 +94,13 @@ class Transfer {
     this.isUpload = !isd
     this.isDirectory = isDirectory
     this.options = options
+    this.startOffset = Math.max(0, Number(options.startOffset) || 0)
+    this.keepPartial = options.keepPartial === true
+    this.transferred = this.startOffset
+    this.inFlightOperations = 0
+    this.pauseAcknowledged = false
+    this.pausedReads = new Map()
+    this.stopReason = null
     this.atomicUpload = this.isUpload &&
       !isDirectory &&
       options.atomicUpload === true &&
@@ -54,7 +109,10 @@ class Transfer {
     this.atomicOverwrite = options.atomicOverwrite === true
     if (this.atomicUpload) {
       this.finalDstPath = this.dstPath
-      this.dstPath = atomicUploadPath(this.finalDstPath, id)
+      this.dstPath = validateAtomicPartialPath(
+        this.finalDstPath,
+        options.partialPath
+      ) || atomicUploadPath(this.finalDstPath, id)
     }
     this.concurrency = options.concurrency || 64
     this.chunkSize = options.chunkSize || 32768
@@ -269,7 +327,30 @@ class Transfer {
     this.srcMtime = attrs.mtime instanceof Date
       ? attrs.mtime.getTime()
       : attrs.mtime * 1000
-    dst.open(dstPath, 'w', this.onDstOpen)
+    if (this.startOffset > this.fsize) {
+      const error = new Error('Transfer checkpoint exceeds source size')
+      error.code = 'TRANSFER_CHECKPOINT_INVALID'
+      return this.onError(error)
+    }
+    const openDestination = () => {
+      dst.open(
+        dstPath,
+        this.startOffset > 0 ? 'r+' : 'w',
+        this.onDstOpen
+      )
+    }
+    if (this.startOffset <= 0) {
+      return openDestination()
+    }
+    dst.stat(dstPath, (statError, targetAttrs) => {
+      if (statError) return this.onError(statError)
+      if (Number(targetAttrs?.size) !== this.startOffset) {
+        const error = new Error('Transfer partial size no longer matches checkpoint')
+        error.code = 'TRANSFER_PARTIAL_CHANGED'
+        return this.onError(error)
+      }
+      openDestination()
+    })
   }
 
   onDstOpen = (err, destHandle) => {
@@ -291,13 +372,14 @@ class Transfer {
     const th = this
 
     // internal state variables
-    let pdst = 0
-    let total = 0
+    let pdst = this.startOffset
+    let total = this.startOffset
     let bufsize = chunkSize * concurrency
 
     const { fsize } = this
 
     th.dstHandle = destHandle
+    th.transferred = total
 
     let hadError = false
 
@@ -355,14 +437,15 @@ class Transfer {
       closeHandles()
     }
 
-    if (fsize <= 0) {
+    if (fsize <= 0 || total === fsize) {
       return onerror()
     }
 
     // Use less memory where possible
-    while (bufsize > fsize) {
+    const remaining = fsize - total
+    while (bufsize > remaining) {
       if (concurrency === 1) {
-        bufsize = fsize
+        bufsize = remaining
         break
       }
       bufsize -= chunkSize
@@ -395,10 +478,12 @@ class Transfer {
         return
       }
       if (err) {
+        th.inFlightOperations = Math.max(0, th.inFlightOperations - 1)
         return onerror(err)
       }
 
       if (th.onDestroy) {
+        th.inFlightOperations = Math.max(0, th.inFlightOperations - 1)
         return
       }
 
@@ -407,6 +492,7 @@ class Transfer {
       dst.write(th.dstHandle, readbuf, datapos, nb, dstpos, writeCb)
 
       function writeCb (err) {
+        th.inFlightOperations = Math.max(0, th.inFlightOperations - 1)
         if (hadError) {
           return
         }
@@ -415,6 +501,7 @@ class Transfer {
         }
 
         total += nb
+        th.transferred = total
         onstep && onstep({
           transferred: total,
           chunk: nb,
@@ -436,6 +523,7 @@ class Transfer {
         const chunk = (pdst + chunkSize > fsize ? fsize - pdst : chunkSize)
         singleRead(datapos, pdst, chunk)
         pdst += chunk
+        th.maybeAcknowledgePause()
       }
     }
 
@@ -450,11 +538,15 @@ class Transfer {
         return
       }
       if (th.pausing) {
-        th.timers[psrc + ':' + pdst] = setTimeout(() => {
-          singleRead(psrc, pdst, chunk)
-        }, 2)
+        th.pausedReads.set(psrc + ':' + pdst, {
+          psrc,
+          pdst,
+          chunk
+        })
+        th.maybeAcknowledgePause()
         return
       }
+      th.inFlightOperations += 1
       src.read(
         th.srcHandle,
         readbuf,
@@ -463,6 +555,14 @@ class Transfer {
         pdst,
         makeCb(psrc, pdst, chunk)
       )
+    }
+
+    th.resumePausedReads = () => {
+      const reads = [...th.pausedReads.values()]
+      th.pausedReads.clear()
+      reads.forEach(({ psrc, pdst, chunk }) => {
+        singleRead(psrc, pdst, chunk)
+      })
     }
 
     function startReads () {
@@ -489,7 +589,10 @@ class Transfer {
     if (!err) {
       return this.finishSuccessfulTransfer()
     }
-    Promise.resolve(this.cleanupAtomicUpload()).finally(() => {
+    if (this.keepPartial && isRecoverableTransferError(err)) {
+      this.stopReason = 'connection-lost'
+    }
+    Promise.resolve(this.cleanupAfterStop()).finally(() => {
       ws && ws.s({
         id: 'transfer:err:' + id,
         error: {
@@ -500,14 +603,53 @@ class Transfer {
     })
   }
 
+  shouldKeepPartial = () => {
+    return this.keepPartial &&
+      ['paused', 'interrupted', 'connection-lost'].includes(this.stopReason)
+  }
+
+  cleanupAfterStop = () => {
+    return this.shouldKeepPartial()
+      ? Promise.resolve()
+      : this.cleanupAtomicUpload()
+  }
+
+  maybeAcknowledgePause = () => {
+    if (
+      !this.pausing ||
+      this.pauseAcknowledged ||
+      this.inFlightOperations > 0
+    ) {
+      return
+    }
+    this.pauseAcknowledged = true
+    this.stopReason = 'paused'
+    this.ws?.s({
+      id: 'transfer:paused:' + this.id,
+      data: {
+        offset: this.transferred,
+        total: this.fsize,
+        partialPath: this.atomicUpload ? this.dstPath : null,
+        source: {
+          size: this.fsize,
+          mtimeMs: this.srcMtime
+        }
+      }
+    })
+  }
+
   pause = () => {
     this.pausing = true
     this.scpTransfer && this.scpTransfer.pause && this.scpTransfer.pause()
+    this.maybeAcknowledgePause()
   }
 
   resume = () => {
     this.pausing = false
+    this.pauseAcknowledged = false
+    this.stopReason = null
     this.scpTransfer && this.scpTransfer.resume && this.scpTransfer.resume()
+    this.resumePausedReads?.()
   }
 
   kill = () => {
@@ -523,10 +665,23 @@ class Transfer {
     this.dstHandle = null
   }
 
+  cancel = () => {
+    this.stopReason = 'cancelled'
+    this.destroy()
+  }
+
+  interrupt = () => {
+    this.stopReason = 'interrupted'
+    this.destroy()
+  }
+
   destroy = () => {
+    if (!this.stopReason) {
+      this.stopReason = this.keepPartial ? 'interrupted' : 'cancelled'
+    }
     this.onDestroy = true
     this.scpTransfer && this.scpTransfer.destroy && this.scpTransfer.destroy()
-    this.cleanupAtomicUpload()
+    this.cleanupAfterStop()
     setTimeout(this.kill, 200)
     if (this.ws) {
       this.ws.close()
@@ -547,9 +702,12 @@ class Transfer {
 module.exports = {
   Transfer,
   atomicUploadPath,
+  validateAtomicPartialPath,
   transferKeys: [
     'pause',
     'resume',
+    'cancel',
+    'interrupt',
     'destroy'
   ]
 }

@@ -15,6 +15,7 @@ const { TerminalBase } = require('./session-base.js')
 const { Transform } = require('stream')
 const { pipeline } = require('stream/promises')
 const { posix: pathPosix } = require('path')
+const crypto = require('crypto')
 const {
   getSizeCount,
   getSizeCountWin
@@ -934,6 +935,39 @@ class Sftp extends TerminalBase {
 
   readFileChunk (remotePath, options) {
     return readRemoteFileChunk(this.sftp, remotePath, options)
+  }
+
+  async describeResumeEntry (remotePath, boundarySize = 64 * 1024) {
+    const limit = Math.min(
+      64 * 1024,
+      Math.max(1, Number(boundarySize) || 64 * 1024)
+    )
+    const stat = await this.lstat(remotePath)
+    const size = Math.max(0, Number(stat?.size) || 0)
+    const readHash = async offset => {
+      const chunk = await this.readFileChunk(remotePath, {
+        offset,
+        maxBytes: limit
+      })
+      return crypto
+        .createHash('sha256')
+        .update(Buffer.from(chunk.base64 || '', 'base64'))
+        .digest('hex')
+    }
+    const firstSha256 = await readHash(0)
+    const lastSha256 = size > limit
+      ? await readHash(size - limit)
+      : firstSha256
+    const mtimeMs = stat?.mtime instanceof Date
+      ? stat.mtime.getTime()
+      : Number(stat?.mtime || 0) * 1000
+    return {
+      size,
+      mtimeMs,
+      firstSha256,
+      lastSha256,
+      boundarySha256: lastSha256
+    }
   }
 
   searchFileText (remotePath, options) {
