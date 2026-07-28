@@ -119,7 +119,7 @@ function showDisconnectHistory (entry) {
   Modal.info({
     title: e('shellpilotTunnelDisconnectHistory'),
     width: 680,
-    okText: e('shellpilotConfirm'),
+    okText: e('confirm'),
     content: events.length
       ? (
         <div className='ssh-tunnel-history-list'>

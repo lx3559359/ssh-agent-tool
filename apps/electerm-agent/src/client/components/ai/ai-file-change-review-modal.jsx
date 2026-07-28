@@ -7,6 +7,8 @@ import {
 } from './ai-file-change-set.js'
 import './ai-file-change-review-modal.styl'
 
+const e = window.translate
+
 export function AiFileChangeReviewModal ({
   initialChangeSet,
   onChange
@@ -30,8 +32,8 @@ export function AiFileChangeReviewModal ({
   return (
     <div className='ai-file-change-review'>
       <div className='ai-file-change-review-summary'>
-        AI 准备修改 {changeSet.files.length} 个远程文件。请逐项审查，
-        取消不需要的文件后再执行。
+        {e('shellpilotAiFileReviewSummaryPrefix')} {changeSet.files.length}{' '}
+        {e('shellpilotAiFileReviewSummarySuffix')}
       </div>
       <div className='ai-file-change-review-body'>
         <div className='ai-file-change-review-list'>
@@ -46,12 +48,12 @@ export function AiFileChangeReviewModal ({
                 <input
                   type='checkbox'
                   checked={file.selected}
-                  aria-label={`选择 ${file.path}`}
+                  aria-label={`${e('shellpilotAiFileReviewSelect')} ${file.path}`}
                   onClick={event => event.stopPropagation()}
                   onChange={event => toggleFile(file.path, event.target.checked)}
                 />
                 <span title={file.path}>{file.path}</span>
-                {file.truncated && <small>预览已截断</small>}
+                {file.truncated && <small>{e('shellpilotAiFileReviewTruncated')}</small>}
               </button>
             ))
           }
@@ -60,11 +62,13 @@ export function AiFileChangeReviewModal ({
           <div className='ai-file-change-review-path'>
             {activeFile?.path}
           </div>
-          <pre>{activeFile?.diffPreview || '没有可显示的文本差异。'}</pre>
+          <pre>{activeFile?.diffPreview || e('shellpilotAiFileReviewNoDiff')}</pre>
         </div>
       </div>
       <div className='ai-file-change-review-footer'>
-        已选择 {countSelectedAiFileChanges(changeSet)} / {changeSet.files.length} 个文件
+        {e('shellpilotAiFileReviewSelected')}{' '}
+        {countSelectedAiFileChanges(changeSet)} / {changeSet.files.length}{' '}
+        {e('shellpilotAiFileReviewFiles')}
       </div>
     </div>
   )
@@ -89,7 +93,7 @@ export function requestAiFileChangeReview (initialChangeSet, options = {}) {
     const onAbort = () => settle(false, true)
     signal?.addEventListener('abort', onAbort, { once: true })
     modalRef.current = Modal.confirm({
-      title: '审查 AI 多文件修改',
+      title: e('shellpilotAiFileReviewTitle'),
       width: 960,
       content: (
         <AiFileChangeReviewModal
@@ -97,12 +101,12 @@ export function requestAiFileChangeReview (initialChangeSet, options = {}) {
           onChange={value => { current = value }}
         />
       ),
-      okText: '创建恢复点并执行',
-      cancelText: '取消',
+      okText: e('shellpilotAiFileReviewExecute'),
+      cancelText: e('cancel'),
       maskClosable: false,
       onOk: () => {
         if (countSelectedAiFileChanges(current) < 1) {
-          message.warning('请至少选择一个要修改的文件。')
+          message.warning(e('shellpilotAiFileReviewSelectOne'))
           settle(false)
           return
         }

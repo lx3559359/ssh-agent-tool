@@ -704,9 +704,9 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
   const showTunnelTaskHistory = task => {
     const view = buildOperationTaskView(task)
     Modal.info({
-      title: `${view.title} · 断线与健康记录`,
+      title: `${view.title} · ${e('shellpilotSafetyTunnelHistory')}`,
       width: 680,
-      okText: e('shellpilotConfirm'),
+      okText: e('confirm'),
       content: view.events.length
         ? (
           <div className='safety-center-operation-events'>
@@ -722,7 +722,10 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
             ))}
           </div>
           )
-        : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description='暂无断线记录' />
+        : <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description={e('shellpilotSafetyTunnelNoEvents')}
+          />
     })
   }
 
@@ -753,7 +756,7 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
                   icon={<PauseOutlined />}
                   onClick={() => handleTransferTaskAction(record, 'pause')}
                 >
-                  暂停
+                  {e('shellpilotSafetyTransferPause')}
                 </Button>
                 )
               : null}
@@ -764,7 +767,7 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
                   icon={<PlayCircleOutlined />}
                   onClick={() => handleTransferTaskAction(record, 'resume')}
                 >
-                  继续传输
+                  {e('shellpilotSafetyTransferResume')}
                 </Button>
                 )
               : null}
@@ -774,18 +777,18 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
                   icon={<HistoryOutlined />}
                   onClick={() => showTunnelTaskHistory(record)}
                 >
-                  断线记录
+                  {e('shellpilotSafetyTunnelEvents')}
                 </Button>
                 )
               : null}
           </Space>
         </div>
         <div className='safety-center-record-grid'>
-          <span className='safety-center-label'>服务器</span>
+          <span className='safety-center-label'>{e('shellpilotSafetyServer')}</span>
           <span>{view.endpoint}</span>
-          <span className='safety-center-label'>详情</span>
-          <span className='safety-center-path'>{view.detail || '无'}</span>
-          <span className='safety-center-label'>更新时间</span>
+          <span className='safety-center-label'>{e('shellpilotSafetyDetails')}</span>
+          <span className='safety-center-path'>{view.detail || e('shellpilotNone')}</span>
+          <span className='safety-center-label'>{e('shellpilotSafetyUpdatedAt')}</span>
           <span>{formatTime(view.updatedAt)}</span>
         </div>
         {record.kind === operationTaskKinds.sftpTransfer
@@ -799,7 +802,8 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
                   : undefined}
               />
               <span>
-                {view.progress.transferred} / {view.progress.total} 字节
+                {view.progress.transferred} / {view.progress.total}{' '}
+                {e('shellpilotSafetyBytes')}
               </span>
             </div>
             )

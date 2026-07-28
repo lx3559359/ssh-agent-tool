@@ -43,5 +43,5 @@ test('the review modal provides file selection and a unified diff preview', () =
   assert.match(modal, /type='checkbox'/)
   assert.match(modal, /ai-file-change-review-list/)
   assert.match(modal, /ai-file-change-review-diff/)
-  assert.match(modal, /创建恢复点并执行/)
+  assert.match(modal, /shellpilotAiFileReviewExecute/)
 })
