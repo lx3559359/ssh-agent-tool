@@ -437,6 +437,52 @@ export const agentTools = withAgentToolPolicy(withAgentToolScopes([
   {
     type: 'function',
     function: {
+      name: 'sftp_write_text_batch',
+      description: '通过 SFTP 统一审查并安全修改多个 UTF-8 文本文件。系统会在一个窗口中展示全部差异，执行前统一复核文件指纹，并为每个成功修改的文件保留独立回滚入口。修改两个或更多文件时必须优先使用此工具。',
+      parameters: {
+        type: 'object',
+        properties: {
+          files: {
+            type: 'array',
+            minItems: 2,
+            maxItems: 50,
+            items: {
+              type: 'object',
+              properties: {
+                remotePath: {
+                  type: 'string',
+                  description: '远程文本文件的绝对路径。'
+                },
+                content: {
+                  type: 'string',
+                  maxLength: 262144,
+                  description: '该文件修改后的完整 UTF-8 文本，最大 256 KiB。'
+                },
+                mode: {
+                  type: 'integer',
+                  minimum: 0,
+                  maximum: 4095,
+                  description: '可选文件权限，例如 420 表示 0644。'
+                }
+              },
+              required: ['remotePath', 'content'],
+              additionalProperties: false
+            }
+          },
+          tabId: {
+            type: 'string',
+            description: '由系统绑定当前接管的 SSH/SFTP 会话。'
+          },
+          riskContext: agentRemoteRiskContextSchema
+        },
+        required: ['files', 'riskContext'],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'sftp_upload',
       description: '通过 SFTP 上传本地文件到远程服务器。',
       parameters: {
@@ -1202,6 +1248,13 @@ async function executeResolvedAgentTool (toolName, args, runtime, endpoint, prep
     }
     case 'sftp_write_text': {
       const result = await store.mcpSftpWriteText(args, { signal: runtime.signal })
+      assertAgentRuntimeActive(runtime)
+      return JSON.stringify(result)
+    }
+    case 'sftp_write_text_batch': {
+      const result = await store.mcpSftpWriteTextBatch(args, {
+        signal: runtime.signal
+      })
       assertAgentRuntimeActive(runtime)
       return JSON.stringify(result)
     }

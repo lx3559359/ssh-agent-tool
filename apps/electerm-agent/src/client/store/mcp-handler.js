@@ -1194,6 +1194,62 @@ export default Store => {
     }
   }
 
+  Store.prototype.mcpSftpWriteTextBatch = async function (args, options = {}) {
+    assertMcpActive(options.signal, 'SFTP multi-file write cancelled')
+    const { sftpEntry, tab, tabId } = window.store.mcpGetSshSftpRef(args.tabId)
+    if (!Array.isArray(args.files) || args.files.length < 2 ||
+      args.files.length > 50) {
+      throw new Error('files must contain between 2 and 50 text files')
+    }
+    let totalCharacters = 0
+    const paths = new Set()
+    const files = args.files.map(file => {
+      const remotePath = String(file?.remotePath || '').trim()
+      const content = file?.content
+      if (!isSingleRemotePath(remotePath)) {
+        throw new Error('each remotePath must be a single remote file path')
+      }
+      if (paths.has(remotePath)) {
+        throw new Error(`duplicate remotePath: ${remotePath}`)
+      }
+      paths.add(remotePath)
+      if (typeof content !== 'string' || content.length > 256 * 1024) {
+        throw new Error('each content must be UTF-8 text no larger than 256 KiB')
+      }
+      totalCharacters += content.length
+      if (totalCharacters > 1024 * 1024) {
+        throw new Error('multi-file content must not exceed 1 MiB in total')
+      }
+      const mode = file.mode === undefined || file.mode === null ||
+        file.mode === ''
+        ? undefined
+        : Number(file.mode)
+      if (mode !== undefined && (
+        !Number.isSafeInteger(mode) || mode < 0 || mode > 0o7777
+      )) {
+        throw new Error('mode must be a permission value between 0 and 07777')
+      }
+      return {
+        path: remotePath,
+        text: content,
+        mode
+      }
+    })
+    const result = await abortableMcpOperation(
+      sftpEntry.saveRemoteEditorFiles(files, {
+        signal: options.signal
+      }),
+      options.signal,
+      'SFTP multi-file write cancelled'
+    )
+    assertMcpActive(options.signal, 'SFTP multi-file write cancelled')
+    return {
+      ...result,
+      tabId,
+      host: tab.host
+    }
+  }
+
   Store.prototype.mcpSftpDel = async function (args, options = {}) {
     if (options.signal?.aborted) {
       const error = new Error('SFTP delete cancelled')

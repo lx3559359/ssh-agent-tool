@@ -20,7 +20,11 @@ export {
   resolveAgentRiskContextMode
 } from './agent-risk-context.js'
 
-const delegatedStructuredTools = new Set(['sftp_del', 'sftp_write_text'])
+const delegatedStructuredTools = new Set([
+  'sftp_del',
+  'sftp_write_text',
+  'sftp_write_text_batch'
+])
 const delegatedCommandTools = new Set([
   'send_terminal_command',
   'run_background_command'

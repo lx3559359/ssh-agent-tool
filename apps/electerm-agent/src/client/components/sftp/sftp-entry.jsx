@@ -54,6 +54,13 @@ import {
   buildSftpTextChangePreview,
   readSftpSnapshotText
 } from './sftp-text-change-preview.js'
+import {
+  createAiFileChangeSet,
+  formatAiFileChangeDiffPreview
+} from '../ai/ai-file-change-set.js'
+import {
+  requestAiFileChangeReview
+} from '../ai/ai-file-change-review-modal.jsx'
 import { reconcileSelectedFileIds } from './file-selection.js'
 import { createTransactionRunner } from '../../common/safety-transactions/transaction-runner.js'
 import { buildSideEffectSafetyRequest } from '../../common/safety-transactions/side-effect-model.js'
@@ -650,7 +657,8 @@ export default class Sftp extends Component {
     requestedMode,
     expected,
     title,
-    signal
+    signal,
+    metadata
   }) => {
     const request = buildSideEffectSafetyRequest({
       id: `sftp-${action}-${Date.now()}-${generate()}`,
@@ -666,7 +674,10 @@ export default class Sftp extends Component {
         requestedMode,
         expected: expected || {}
       },
-      metadata: { sftpSafetyTransaction: true }
+      metadata: {
+        sftpSafetyTransaction: true,
+        ...metadata
+      }
     })
     request.signal = signal
     return this.sftpSafetyRunner.prepare(request)
@@ -828,6 +839,159 @@ export default class Sftp extends Component {
     })
     if (result) message.success(e('shellpilotSftpEditorSaveVerified'))
     return result
+  }
+
+  saveRemoteEditorFiles = async (files, options = {}) => {
+    if (this.props.isFtp) {
+      throw new Error('AI 多文件统一审查仅支持可创建恢复点的 SSH/SFTP 会话。')
+    }
+    if (!Array.isArray(files) || files.length < 2 || files.length > 50) {
+      throw new Error('AI 多文件修改数量必须在 2 到 50 之间。')
+    }
+    const changeSetId = `ai-file-change-${Date.now()}-${generate()}`
+    const prepared = []
+    try {
+      for (const file of files) {
+        const expected = await digestSftpText(file.text)
+        const requestedMode = file.mode === undefined
+          ? undefined
+          : Number(file.mode) & 0o7777
+        const operation = await this.prepareSftpSafetyOperation({
+          action: 'editor-save',
+          paths: { target: file.path },
+          type: 'file',
+          requestedMode,
+          expected,
+          title: e('shellpilotSftpEditorSave'),
+          signal: options.signal,
+          metadata: {
+            aiFileChangeSetId: changeSetId,
+            aiFileChangeCount: files.length
+          }
+        })
+        const resource = operation.plan?.resources?.[0]
+        const snapshot = resource
+          ? await readSftpSnapshotText(this.sftp, resource, {
+            signal: options.signal
+          })
+          : { available: false, existed: false, text: '' }
+        const preview = snapshot.available
+          ? buildSftpTextChangePreview({
+            path: file.path,
+            beforeText: snapshot.text,
+            afterText: file.text,
+            existed: snapshot.existed
+          })
+          : null
+        prepared.push({
+          file,
+          operation,
+          originalFingerprint: {
+            existed: resource?.original?.absent !== true,
+            size: resource?.original?.size || 0,
+            digest: resource?.original?.digest || '',
+            digestAlgorithm: resource?.original?.digestAlgorithm || ''
+          },
+          proposedFingerprint: {
+            existed: true,
+            ...expected
+          },
+          diffPreview: formatAiFileChangeDiffPreview(preview)
+        })
+      }
+    } catch (error) {
+      await Promise.allSettled(prepared.map(item => (
+        this.sftpSafetyRunner.cancel(item.operation.id)
+      )))
+      throw error
+    }
+
+    const review = await requestAiFileChangeReview(createAiFileChangeSet({
+      id: changeSetId,
+      files: prepared.map(item => ({
+        path: item.file.path,
+        originalFingerprint: item.originalFingerprint,
+        proposedFingerprint: item.proposedFingerprint,
+        diffPreview: item.diffPreview
+      }))
+    }), { signal: options.signal })
+    const selectedPaths = new Set(
+      review.changeSet.files.filter(file => file.selected).map(file => file.path)
+    )
+    const selected = prepared.filter(item => selectedPaths.has(item.file.path))
+    const excluded = prepared.filter(item => !selectedPaths.has(item.file.path))
+    await Promise.allSettled(excluded.map(item => (
+      this.sftpSafetyRunner.cancel(item.operation.id)
+    )))
+    if (!review.accepted || !selected.length) {
+      await Promise.allSettled(selected.map(item => (
+        this.sftpSafetyRunner.cancel(item.operation.id)
+      )))
+      return {
+        success: false,
+        cancelled: true,
+        status: 'cancelled',
+        files: []
+      }
+    }
+
+    try {
+      for (const item of selected) {
+        await this.assertSftpSafetyOperationEndpoint(item.operation.id)
+        await this.sftpSafetyAdapter.validatePrepared(item.operation, {
+          signal: options.signal
+        })
+      }
+    } catch (cause) {
+      await Promise.allSettled(selected.map(item => (
+        this.sftpSafetyRunner.cancel(item.operation.id)
+      )))
+      const error = new Error('文件在审查后发生变化，已停止全部 AI 文件修改。')
+      error.code = 'AI_FILE_CHANGED_SINCE_REVIEW'
+      error.cause = cause
+      throw error
+    }
+
+    const results = []
+    for (let index = 0; index < selected.length; index += 1) {
+      const item = selected[index]
+      try {
+        await this.sftpSafetyRunner.execute(item.operation.id, {
+          confirmed: true,
+          sideEffectInput: { text: item.file.text },
+          signal: options.signal
+        })
+        results.push({
+          path: item.file.path,
+          status: 'completed',
+          recoveryOperationId: item.operation.id
+        })
+      } catch (error) {
+        results.push({
+          path: item.file.path,
+          status: 'failed',
+          message: error?.message || String(error)
+        })
+        await Promise.allSettled(selected.slice(index + 1).map(pending => (
+          this.sftpSafetyRunner.cancel(pending.operation.id)
+        )))
+        return {
+          success: false,
+          cancelled: false,
+          status: results.some(result => result.status === 'completed')
+            ? 'partially-completed'
+            : 'failed',
+          files: results
+        }
+      }
+    }
+    message.success(`已安全修改 ${results.length} 个远程文件。`)
+    return {
+      success: true,
+      cancelled: false,
+      status: 'completed',
+      files: results
+    }
   }
 
   deleteRemoteFilesWithSafety = async (files, options = {}) => {

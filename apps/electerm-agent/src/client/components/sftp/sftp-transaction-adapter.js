@@ -1088,6 +1088,20 @@ export function createSftpTransactionAdapter ({ getSftp } = {}) {
       return existing || prepareNewManifest(sftp, operation, context.signal)
     },
 
+    async validatePrepared (operation, context = {}) {
+      const sftp = requireSftp()
+      await requireManifest(sftp, operation, context.signal)
+      for (const resource of operation.plan.resources) {
+        await assertOriginalState(
+          sftp,
+          resource,
+          operation.effect.action,
+          context.signal
+        )
+      }
+      return { verified: true }
+    },
+
     async beforeExecute (operation, context = {}) {
       const sftp = requireSftp()
       const { signal } = context

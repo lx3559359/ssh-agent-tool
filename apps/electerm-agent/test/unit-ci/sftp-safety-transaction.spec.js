@@ -1681,6 +1681,56 @@ test('SFTP adapter snapshots and verifies editor saves with bounded chunk reads'
   assert.equal(sftp.text(prepared.artifacts.target), oldText)
 })
 
+test('SFTP adapter validates every prepared editor save before batch execution', async () => {
+  const {
+    createSftpTransactionAdapter,
+    digestSftpText
+  } = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/components/sftp/sftp-transaction-adapter.js'
+  )).href)
+  const sftp = createFakeSftp({
+    '/srv/app/a.conf': {
+      type: 'file',
+      content: 'a=1\n',
+      mode: 0o640
+    },
+    '/srv/app/b.conf': {
+      type: 'file',
+      content: 'b=1\n',
+      mode: 0o640
+    }
+  })
+  const adapter = createSftpTransactionAdapter({ getSftp: () => sftp })
+  const operations = []
+  for (const [id, target, text] of [
+    ['validate-a', '/srv/app/a.conf', 'a=2\n'],
+    ['validate-b', '/srv/app/b.conf', 'b=2\n']
+  ]) {
+    const operation = await buildSftpOperation({
+      id,
+      action: 'editor-save',
+      paths: { target },
+      type: 'file',
+      requestedMode: 0o640,
+      expected: await digestSftpText(text)
+    })
+    Object.assign(operation, await adapter.prepare(operation))
+    operations.push(operation)
+  }
+
+  assert.deepEqual(await adapter.validatePrepared(operations[0]), {
+    verified: true
+  })
+  await sftp.writeFile('/srv/app/b.conf', 'external-change\n', 0o640)
+  await assert.rejects(
+    adapter.validatePrepared(operations[1]),
+    /changed|external|original|变化|未执行/i
+  )
+  assert.equal(sftp.text('/srv/app/a.conf'), 'a=1\n')
+  assert.equal(sftp.text('/srv/app/b.conf'), 'external-change\n')
+})
+
 test('SFTP adapter forwards lifecycle AbortSignal to snapshot copy and recursive delete', async () => {
   const { createSftpTransactionAdapter } = await import(pathToFileURL(path.resolve(
     __dirname,
