@@ -49,11 +49,12 @@ function createTestMigration (module, appPath, defaultUserName = 'testuser') {
   })
 }
 
-test('v1 to v2 migration table set includes safety operations and agent tasks', () => {
+test('v1 to v2 migration table set includes safety operations and operation tasks', () => {
   const migrationModule = loadMigrationModule()
 
   assert.equal(migrationModule.tables.includes('safetyOperations'), true)
   assert.equal(migrationModule.tables.includes('agentTasks'), true)
+  assert.equal(migrationModule.tables.includes('operationTasks'), true)
 })
 
 test('migration refuses to run when encryption or decryption is not configured', () => {
@@ -90,8 +91,16 @@ test('encrypted NeDB safety tables migrate into encrypted and readable SQLite ta
     _id: 'legacy-task',
     output: 'legacy-secret-task-output'
   }
+  const operationTask = {
+    _id: 'legacy-operation-task',
+    title: 'legacy-secret-operation-task-title',
+    metadata: {
+      sourcePath: 'legacy-secret-operation-task-path'
+    }
+  }
   await source.dbAction('safetyOperations', 'insert', operation)
   await source.dbAction('agentTasks', 'insert', task)
+  await source.dbAction('operationTasks', 'insert', operationTask)
 
   const migration = createTestMigration(migrationModule, appPath, defaultUserName)
   assert.equal(migration.checkMigrate(), true)
@@ -107,14 +116,21 @@ test('encrypted NeDB safety tables migrate into encrypted and readable SQLite ta
     (await target.dbAction('agentTasks', 'findOne', { _id: task._id })).output,
     task.output
   )
+  assert.equal(
+    (await target.dbAction('operationTasks', 'findOne', { _id: operationTask._id })).title,
+    operationTask.title
+  )
 
   const dbFolder = path.join(appPath, 'electerm', 'users', defaultUserName)
   const sqliteRaw = fs.readFileSync(path.join(dbFolder, 'electerm.db'), 'latin1')
   assert.equal(sqliteRaw.includes(operation.command), false)
   assert.equal(sqliteRaw.includes(operation.endpoint.host), false)
   assert.equal(sqliteRaw.includes(task.output), false)
+  assert.equal(sqliteRaw.includes(operationTask.title), false)
+  assert.equal(sqliteRaw.includes(operationTask.metadata.sourcePath), false)
   assert.equal(fs.existsSync(path.join(dbFolder, 'electerm.safetyOperations.nedb.bak')), true)
   assert.equal(fs.existsSync(path.join(dbFolder, 'electerm.agentTasks.nedb.bak')), true)
+  assert.equal(fs.existsSync(path.join(dbFolder, 'electerm.operationTasks.nedb.bak')), true)
 })
 
 test('corrupt encrypted safety data aborts migration without backing up the source file', async () => {

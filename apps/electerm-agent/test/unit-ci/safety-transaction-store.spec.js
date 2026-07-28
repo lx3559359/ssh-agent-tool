@@ -955,7 +955,7 @@ test('legacy completed status migrates as a terminal restored operation', async 
   assert.equal(adapter.read('safetyOperations', record.id).state, 'restored')
 })
 
-test('SQLite and NeDB encrypt safety operations, agent tasks, and bounded artifacts at rest', async t => {
+test('SQLite and NeDB encrypt safety operations, agent tasks, bounded artifacts, and operation tasks at rest', async t => {
   const backends = [
     ['SQLite', '../../src/app/lib/sqlite', 'electerm.db'],
     ['NeDB', '../../src/app/lib/nedb', 'electerm.safetyOperations.nedb']
@@ -984,18 +984,32 @@ test('SQLite and NeDB encrypt safety operations, agent tasks, and bounded artifa
         summary: 'secret-artifact-summary-7419',
         evidence: 'secret-artifact-evidence-7419'
       }
+      const operationTask = {
+        _id: 'operation-task-secret',
+        title: 'secret-operation-task-title-7419',
+        metadata: {
+          sourcePath: 'secret-operation-task-path-7419'
+        }
+      }
 
       assert.equal(tables.includes('safetyOperations'), true)
       assert.equal(tables.includes('agentTasks'), true)
       assert.equal(tables.includes('agentArtifacts'), true)
+      assert.equal(tables.includes('operationTasks'), true)
       await dbAction('safetyOperations', 'insert', operation)
       await dbAction('agentTasks', 'insert', task)
       await dbAction('agentArtifacts', 'insert', artifact)
+      await dbAction('operationTasks', 'insert', operationTask)
 
       const dbFolder = path.join(appPath, 'electerm', 'users', 'default_user')
       const files = name === 'SQLite'
         ? [operationFile]
-        : [operationFile, 'electerm.agentTasks.nedb', 'electerm.agentArtifacts.nedb']
+        : [
+            operationFile,
+            'electerm.agentTasks.nedb',
+            'electerm.agentArtifacts.nedb',
+            'electerm.operationTasks.nedb'
+          ]
       const storedText = files
         .map(file => fs.readFileSync(path.join(dbFolder, file), 'utf8'))
         .join('\n')
@@ -1006,7 +1020,9 @@ test('SQLite and NeDB encrypt safety operations, agent tasks, and bounded artifa
         task.output,
         task.endpoint.host,
         artifact.summary,
-        artifact.evidence
+        artifact.evidence,
+        operationTask.title,
+        operationTask.metadata.sourcePath
       ]) {
         assert.equal(storedText.includes(secret), false, `${name} leaked ${secret}`)
       }
@@ -1022,6 +1038,10 @@ test('SQLite and NeDB encrypt safety operations, agent tasks, and bounded artifa
       assert.equal(
         (await dbAction('agentArtifacts', 'findOne', { _id: artifact._id })).evidence,
         artifact.evidence
+      )
+      assert.equal(
+        (await dbAction('operationTasks', 'findOne', { _id: operationTask._id })).title,
+        operationTask.title
       )
     })
   }

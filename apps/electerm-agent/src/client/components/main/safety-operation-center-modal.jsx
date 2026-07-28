@@ -72,6 +72,7 @@ import {
   findLiveTransferTask,
   operationTaskStatusPresentations
 } from './safety-center-operation-tasks.js'
+import { loadSafetyCenterRecords } from './safety-operation-center-loader.js'
 import './safety-operation-center-modal.styl'
 
 export { groupSafetyCenterRecords }
@@ -242,20 +243,20 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
     setIntegrityResults(new Map())
     setLoading(true)
     try {
-      const [nextRecords, nextTasks, nextOperationTasks] = await Promise.all([
-        listOperations(),
-        listTasks(),
-        listOperationTasks()
-      ])
-      const safeRecords = Array.isArray(nextRecords) ? nextRecords : []
-      const nextIntegrityResults = await buildSafetyRecoveryIntegrityResults(safeRecords)
+      const loaded = await loadSafetyCenterRecords({
+        listOperations,
+        listTasks,
+        listOperationTasks,
+        buildIntegrityResults: buildSafetyRecoveryIntegrityResults,
+        onOptionalError: error => {
+          console.warn('Operation task history unavailable:', error)
+        }
+      })
       if (version !== refreshVersion.current) return
-      setRecords(safeRecords)
-      setTasks(Array.isArray(nextTasks) ? nextTasks : [])
-      setOperationTasks(
-        Array.isArray(nextOperationTasks) ? nextOperationTasks : []
-      )
-      setIntegrityResults(nextIntegrityResults)
+      setRecords(loaded.records)
+      setTasks(loaded.tasks)
+      setOperationTasks(loaded.operationTasks)
+      setIntegrityResults(loaded.integrityResults)
       setLoadError('')
     } catch (error) {
       if (version !== refreshVersion.current) return
