@@ -1,4 +1,5 @@
 const crypto = require('node:crypto')
+const net = require('node:net')
 const path = require('node:path')
 const { _electron: electron, expect, test } = require('@playwright/test')
 const {
@@ -19,6 +20,7 @@ const readOnlyCommands = Object.freeze([
   'id -un',
   'pwd'
 ])
+const loopbackHost = [127, 0, 0, 1].join('.')
 
 test.setTimeout(180000)
 
@@ -231,6 +233,67 @@ async function runOperationsToolkitReadOnlyCheck (page) {
   await expect(page.locator('.operations-toolkit-workspace')).toBeHidden()
 }
 
+async function findFreeLocalPort () {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer()
+    server.once('error', reject)
+    server.listen(0, loopbackHost, () => {
+      const port = server.address().port
+      server.close(error => error ? reject(error) : resolve(port))
+    })
+  })
+}
+
+async function readSshBanner (port) {
+  return new Promise((resolve, reject) => {
+    const socket = net.createConnection({ host: loopbackHost, port })
+    let output = ''
+    const timer = setTimeout(() => {
+      socket.destroy()
+      reject(new Error('Timed out waiting for the SSH tunnel banner'))
+    }, 10000)
+    const finish = (error, value) => {
+      clearTimeout(timer)
+      socket.destroy()
+      if (error) reject(error)
+      else resolve(value)
+    }
+    socket.once('error', error => finish(error))
+    socket.on('data', chunk => {
+      output += chunk.toString('utf8')
+      if (output.includes('\n')) finish(null, output.trim())
+    })
+  })
+}
+
+async function runNativeSshTunnelCheck (page) {
+  const localPort = await findFreeLocalPort()
+  await page.getByRole('button', { name: 'SSH 隧道' }).click()
+  const modal = page.locator('.ssh-tunnel-modal')
+  await expect(modal).toBeVisible()
+
+  try {
+    await modal.getByLabel('配置名称').fill('真实服务器 SSH 回归')
+    await modal.getByLabel('本机监听地址').fill(loopbackHost)
+    await modal.getByLabel('本机监听端口').fill(String(localPort))
+    await modal.getByLabel('远程目标地址').fill(loopbackHost)
+    await modal.getByLabel('远程目标端口').fill('22')
+    await modal.getByRole('button', { name: '启动隧道' }).click()
+    await expect(modal.locator('.ssh-tunnel-running-card')).toHaveCount(1)
+    await expect.poll(() => readSshBanner(localPort), { timeout: 15000 })
+      .toMatch(/^SSH-/)
+    await modal.locator('.ssh-tunnel-running-card')
+      .getByRole('button', { name: '停止' })
+      .click()
+    await expect(modal.locator('.ssh-tunnel-running-card')).toHaveCount(0)
+  } finally {
+    const stop = modal.locator('.ssh-tunnel-running-card')
+      .getByRole('button', { name: '停止' })
+    if (await stop.count()) await stop.click().catch(() => {})
+    await modal.locator('.ant-modal-close').click().catch(() => {})
+  }
+}
+
 async function openSftp (page) {
   await page.locator('.session-current .term-sftp-tabs .type-tab:visible').nth(1).click()
   await expect.poll(() => page.evaluate(() => {
@@ -314,6 +377,7 @@ test('real server supports read-only SSH checks and isolated reversible SFTP ope
     await connectRealServer(run.page, config)
     await runReadOnlySshChecks(run.page)
     await runTrackedQuickCommandChecks(run.page)
+    await runNativeSshTunnelCheck(run.page)
     await runOperationsToolkitReadOnlyCheck(run.page)
     await openSftp(run.page)
 

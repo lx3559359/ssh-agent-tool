@@ -12,6 +12,7 @@ const log = require('../common/log')
 const { algDefault, algAlt } = require('./ssh2-alg')
 const { createHostVerifier } = require('./ssh-known-hosts')
 const sshTunnelFuncs = require('./ssh-tunnel')
+const { createSshTunnelRuntime } = require('./ssh-tunnel-runtime')
 const deepCopy = require('json-deep-copy')
 const { TerminalBase } = require('./session-base')
 const { commonExtends } = require('./session-common')
@@ -21,6 +22,37 @@ const { resolveSshAgent } = require('./ssh-agent-resolver')
 const {
   redactDiagnosticText
 } = require('../lib/diagnostic-pack')
+
+const sshTunnelTypes = new Set([
+  'forwardLocalToRemote',
+  'forwardRemoteToLocal',
+  'dynamicForward'
+])
+
+function getConfiguredSshTunnels (initOptions = {}) {
+  const configured = Array.isArray(initOptions.sshTunnels)
+    ? initOptions.sshTunnels
+    : (
+        sshTunnelTypes.has(initOptions.sshTunnel)
+          ? [{
+              id: `legacy-${initOptions.id || 'ssh-tunnel'}`,
+              sshTunnel: initOptions.sshTunnel,
+              sshTunnelLocalHost: initOptions.sshTunnelLocalHost,
+              sshTunnelLocalPort: initOptions.sshTunnelLocalPort,
+              sshTunnelRemoteHost: initOptions.sshTunnelRemoteHost,
+              sshTunnelRemotePort: initOptions.sshTunnelRemotePort,
+              autoStart: initOptions.autoStart !== false,
+              name: initOptions.name
+            }]
+          : []
+      )
+  return configured.filter(tunnel => (
+    tunnel &&
+    sshTunnelTypes.has(tunnel.sshTunnel) &&
+    Number(tunnel.sshTunnelLocalPort) > 0 &&
+    tunnel.autoStart !== false
+  ))
+}
 
 // Encodings that are equivalent to UTF-8 (no conversion needed)
 const utf8Aliases = new Set(['utf-8', 'utf8', 'utf-8-strict'])
@@ -641,7 +673,98 @@ class TerminalSshBase extends TerminalBase {
     }
   }
 
+  normalizeRuntimeTunnel (input = {}) {
+    const type = String(input.sshTunnel || '')
+    if (typeof sshTunnelFuncs[type] !== 'function') {
+      const error = new Error('不支持的 SSH 隧道类型')
+      error.code = 'SSH_TUNNEL_INVALID'
+      throw error
+    }
+    return {
+      ...input,
+      id: String(input.id || '').trim() || generate(),
+      sshTunnel: type
+    }
+  }
+
+  probeSshTunnel (definition) {
+    const hostValue = String(definition.sshTunnelLocalHost || '127.0.0.1')
+    let host = hostValue
+    if (['0.0.0.0', '*'].includes(hostValue)) host = '127.0.0.1'
+    if (['::', '[::]'].includes(hostValue)) host = '::1'
+    const port = Number(definition.sshTunnelLocalPort)
+    return new Promise((resolve, reject) => {
+      const startedAt = Date.now()
+      const socket = net.connect({ host, port })
+      const timeout = setTimeout(() => {
+        const error = new Error('SSH 隧道连通性检测超时')
+        error.code = 'SSH_TUNNEL_TEST_TIMEOUT'
+        socket.destroy()
+        reject(error)
+      }, 3000)
+      const finish = callback => value => {
+        clearTimeout(timeout)
+        socket.destroy()
+        callback(value)
+      }
+      socket.once('connect', () => {
+        finish(resolve)({
+          ok: true,
+          latencyMs: Date.now() - startedAt
+        })
+      })
+      socket.once('error', finish(reject))
+    })
+  }
+
+  ensureSshTunnelRuntime () {
+    if (!this.sshTunnelRuntime) {
+      this.sshTunnelRuntime = createSshTunnelRuntime({
+        startController: definition => {
+          const tunnel = this.normalizeRuntimeTunnel(definition)
+          if (!this.conn) {
+            const error = new Error('SSH 会话不存在或已经断开')
+            error.code = 'SSH_TUNNEL_SESSION_NOT_FOUND'
+            throw error
+          }
+          return sshTunnelFuncs[tunnel.sshTunnel]({
+            ...tunnel,
+            conn: this.conn
+          })
+        },
+        probe: definition => this.probeSshTunnel(definition)
+      })
+    }
+    return this.sshTunnelRuntime
+  }
+
+  startSshTunnel (input) {
+    const tunnel = this.normalizeRuntimeTunnel(input)
+    return this.ensureSshTunnelRuntime().start(tunnel)
+  }
+
+  stopSshTunnel (id) {
+    return this.ensureSshTunnelRuntime().stop(id)
+  }
+
+  listSshTunnels () {
+    return this.sshTunnelRuntime ? this.sshTunnelRuntime.list() : []
+  }
+
+  testSshTunnel (id) {
+    return this.ensureSshTunnelRuntime().test(id)
+  }
+
+  closeAllSshTunnels (reason) {
+    return this.sshTunnelRuntime
+      ? this.sshTunnelRuntime.closeAll(reason)
+      : Promise.resolve({ reason, closed: 0, failed: 0 })
+  }
+
   endConns () {
+    this.closeAllSshTunnels('ssh-disconnected').catch(error => {
+      log.error('Failed to close SSH tunnels:', error)
+    })
     this.conn && this.conn.end && this.conn.end()
     while (this.conns && this.conns.length) {
       const conn = this.conns.shift()
@@ -650,12 +773,10 @@ class TerminalSshBase extends TerminalBase {
   }
 
   async runTunnel (sshTunnel) {
-    return sshTunnelFuncs[sshTunnel.sshTunnel]({
-      ...sshTunnel,
-      conn: this.conn
-    })
-      .then(r => {
+    return this.startSshTunnel(sshTunnel)
+      .then(state => {
         return {
+          state,
           sshTunnel
         }
       })
@@ -687,17 +808,11 @@ class TerminalSshBase extends TerminalBase {
       globalState.setSession(this.pid, this)
       return this
     }
-    const { sshTunnels = [] } = initOptions
+    const sshTunnels = getConfiguredSshTunnels(initOptions)
     const sshTunnelResults = []
     for (const sshTunnel of sshTunnels) {
-      if (
-        sshTunnel &&
-        sshTunnel.sshTunnel &&
-        sshTunnel.sshTunnelLocalPort
-      ) {
-        const result = await this.runTunnel(sshTunnel)
-        sshTunnelResults.push(result)
-      }
+      const result = await this.runTunnel(sshTunnel)
+      sshTunnelResults.push(result)
     }
     if (!this.ws) {
       this.sshTunnelResults = sshTunnelResults
@@ -1157,6 +1272,9 @@ class TerminalSshBase extends TerminalBase {
   }
 
   kill () {
+    this.closeAllSshTunnels('session-killed').catch(error => {
+      log.error('Failed to close SSH tunnels:', error)
+    })
     this.initOptions = null
     this.connectOptions = null
     this.alg = null
@@ -1173,6 +1291,7 @@ class TerminalSshBase extends TerminalBase {
     this.hoppingOptions = null
     this.initHoppingOptions = null
     this.nextConn = null
+    this.sshTunnelRuntime = null
     this.doKill()
   }
 
@@ -1250,6 +1369,8 @@ exports.session = async function (initOptions, ws) {
 exports.normalizeSshConnectionError = normalizeSshConnectionError
 exports.shouldLogSshConnectErrorAsError = shouldLogSshConnectErrorAsError
 exports.reorderConnectionHoppings = reorderConnectionHoppings
+exports.getConfiguredSshTunnels = getConfiguredSshTunnels
+exports.TerminalSshBase = TerminalSshBase
 
 /**
  * test ssh connection

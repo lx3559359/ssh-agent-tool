@@ -499,6 +499,34 @@ function getTerminal (pid) {
         body: { pid, executionId }
       })
     },
+    startSshTunnel: async (tunnel, id) => {
+      return sendMsgToChildProcess(entry.child, {
+        id,
+        action: 'ssh-tunnel-start',
+        body: { pid, tunnel }
+      })
+    },
+    stopSshTunnel: async (tunnelId, id) => {
+      return sendMsgToChildProcess(entry.child, {
+        id,
+        action: 'ssh-tunnel-stop',
+        body: { pid, tunnelId }
+      })
+    },
+    listSshTunnels: async id => {
+      return sendMsgToChildProcess(entry.child, {
+        id,
+        action: 'ssh-tunnel-list',
+        body: { pid }
+      })
+    },
+    testSshTunnel: async (tunnelId, id) => {
+      return sendMsgToChildProcess(entry.child, {
+        id,
+        action: 'ssh-tunnel-test',
+        body: { pid, tunnelId }
+      })
+    },
     resize: (cols, rows, id) => {
       sendMsgToChildProcess(entry.child, {
         id,
