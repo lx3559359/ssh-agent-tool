@@ -15,6 +15,10 @@ import {
   safetyTransactionUpdatedEvent,
   taskStatuses
 } from '../../common/safety-transactions/transaction-store.js'
+import {
+  operationTaskGroup,
+  operationTaskSource
+} from './safety-center-operation-tasks.js'
 
 export { safetyTransactionUpdatedEvent }
 export { legacySafetyOperationUpdatedEvent }
@@ -225,7 +229,12 @@ function taskGroup (record) {
     : 'history'
 }
 
-export function groupSafetyCenterRecords (records, tasks, integrityResults) {
+export function groupSafetyCenterRecords (
+  records,
+  tasks,
+  integrityResults,
+  operationTasks
+) {
   const groups = {
     running: [],
     rollback: [],
@@ -235,6 +244,7 @@ export function groupSafetyCenterRecords (records, tasks, integrityResults) {
   let order = 0
   const operations = Array.isArray(records) ? records : []
   const agentTasks = Array.isArray(tasks) ? tasks : []
+  const backgroundTasks = Array.isArray(operationTasks) ? operationTasks : []
 
   for (const record of operations) {
     if (!isRecord(record)) continue
@@ -248,6 +258,17 @@ export function groupSafetyCenterRecords (records, tasks, integrityResults) {
     groups[taskGroup(record)].push({
       order: order++,
       record: { ...record, recordType: 'task' }
+    })
+  }
+  for (const record of backgroundTasks) {
+    if (!isRecord(record)) continue
+    groups[operationTaskGroup(record)].push({
+      order: order++,
+      record: {
+        ...record,
+        source: operationTaskSource(record),
+        recordType: 'operation-task'
+      }
     })
   }
   for (const key of Object.keys(groups)) {
@@ -271,7 +292,7 @@ function endpointHost (record) {
 }
 
 function recordStatus (record) {
-  return record?.recordType === 'task'
+  return ['task', 'operation-task'].includes(record?.recordType)
     ? record.status
     : record.state || record.status
 }

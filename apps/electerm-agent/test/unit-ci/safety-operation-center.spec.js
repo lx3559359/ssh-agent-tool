@@ -129,6 +129,44 @@ test('groups operations and tasks into four mutually exclusive tabs', async () =
   assert.equal(allIds.length, new Set(allIds).size)
 })
 
+test('groups resumable transfers and tunnel history with the unified safety center', async () => {
+  const { groupSafetyCenterRecords } = await importModel()
+  const operationTasks = [
+    {
+      id: 'transfer-paused',
+      kind: 'sftp-transfer',
+      status: 'paused',
+      endpoint: {
+        host: 'prod.example.com',
+        port: 22,
+        username: 'root'
+      },
+      createdAt: '2026-07-28T08:00:00.000Z',
+      updatedAt: '2026-07-28T08:02:00.000Z'
+    },
+    {
+      id: 'tunnel-completed',
+      kind: 'ssh-tunnel',
+      status: 'completed',
+      endpoint: {
+        host: 'prod.example.com',
+        port: 22,
+        username: 'root'
+      },
+      createdAt: '2026-07-28T08:00:00.000Z',
+      updatedAt: '2026-07-28T08:01:00.000Z'
+    }
+  ]
+
+  const groups = groupSafetyCenterRecords([], [], new Map(), operationTasks)
+
+  assert.deepEqual(groups.running.map(item => item.id), ['transfer-paused'])
+  assert.equal(groups.running[0].recordType, 'operation-task')
+  assert.equal(groups.running[0].source, 'sftp')
+  assert.deepEqual(groups.history.map(item => item.id), ['tunnel-completed'])
+  assert.equal(groups.history[0].source, 'ssh-tunnel')
+})
+
 test('groups every declared operation and task lifecycle status exactly once', async () => {
   const [
     { groupSafetyCenterRecords },

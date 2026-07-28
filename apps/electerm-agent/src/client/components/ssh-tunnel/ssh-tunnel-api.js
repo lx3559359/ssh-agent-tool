@@ -6,6 +6,15 @@ import {
   stopSshTunnel,
   testSshTunnel
 } from '../terminal/terminal-apis.js'
+import {
+  sshTunnelOperationTaskTracker
+} from './ssh-tunnel-operation-task.js'
+
+function trackTunnel (promise) {
+  return Promise.resolve(promise).catch(error => {
+    console.warn('SSH tunnel task history update failed:', error)
+  })
+}
 
 function endpointUser (tab = {}) {
   return tab.username || tab.user || ''
@@ -61,6 +70,7 @@ export async function loadSshTunnelRuntime (store, tab) {
     return { session, tunnels: [] }
   }
   const tunnels = await listSshTunnels(session.pid)
+  await trackTunnel(sshTunnelOperationTaskTracker.sync(session, tunnels))
   return {
     session,
     tunnels: Array.isArray(tunnels) ? tunnels : []
@@ -69,15 +79,39 @@ export async function loadSshTunnelRuntime (store, tab) {
 
 export async function startSshTunnelRuntime (store, tab, tunnel) {
   const session = requireSession(store, tab)
-  return startSshTunnel(session.pid, tunnel)
+  const started = await startSshTunnel(session.pid, tunnel)
+  await trackTunnel(sshTunnelOperationTaskTracker.sync(session, [started]))
+  return started
 }
 
 export async function stopSshTunnelRuntime (store, tab, tunnelId) {
   const session = requireSession(store, tab)
-  return stopSshTunnel(session.pid, tunnelId)
+  const tunnels = await listSshTunnels(session.pid)
+  const existing = (Array.isArray(tunnels) ? tunnels : [])
+    .find(entry => entry.id === tunnelId)
+  const stopped = await stopSshTunnel(session.pid, tunnelId)
+  if (existing) {
+    await trackTunnel(sshTunnelOperationTaskTracker.stopped(session, {
+      ...existing,
+      state: 'stopped',
+      events: [
+        ...(Array.isArray(existing.events) ? existing.events : []),
+        {
+          at: Date.now(),
+          state: 'stopped',
+          code: 'SSH_TUNNEL_STOPPED',
+          message: 'SSH 隧道已手动停止'
+        }
+      ]
+    }))
+  }
+  return stopped
 }
 
 export async function testSshTunnelRuntime (store, tab, tunnelId) {
   const session = requireSession(store, tab)
-  return testSshTunnel(session.pid, tunnelId)
+  const result = await testSshTunnel(session.pid, tunnelId)
+  const tunnels = await listSshTunnels(session.pid)
+  await trackTunnel(sshTunnelOperationTaskTracker.sync(session, tunnels))
+  return result
 }

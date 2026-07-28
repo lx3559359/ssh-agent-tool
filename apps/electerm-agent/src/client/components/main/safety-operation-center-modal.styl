@@ -118,6 +118,46 @@
   font-size 12px
   overflow-wrap anywhere
 
+.safety-center-operation-task
+  border-left 3px solid var(--primary)
+
+.safety-center-transfer-progress
+  display flex
+  align-items center
+  gap 12px
+  margin-top 10px
+
+.safety-center-transfer-progress .ant-progress
+  flex 1
+  min-width 180px
+
+.safety-center-transfer-progress > span
+  flex none
+  color var(--text-light)
+  font-size 11px
+  white-space nowrap
+
+.safety-center-operation-events
+  max-height 420px
+  overflow auto
+
+.safety-center-operation-events > div
+  display grid
+  grid-template-columns 90px 150px minmax(180px, 1fr)
+  gap 8px
+  align-items start
+  padding 8px 0
+  border-bottom 1px solid var(--main-darker)
+
+.safety-center-operation-events time,
+.safety-center-operation-events code
+  color var(--text-light)
+  font-size 11px
+
+.safety-center-operation-events code
+  grid-column 2 / 4
+  overflow-wrap anywhere
+
 .safety-center-audit
   margin-top 5px
 
@@ -162,3 +202,10 @@
     flex-direction column
   .safety-center-record-actions
     align-self flex-start
+  .safety-center-transfer-progress
+    align-items stretch
+    flex-direction column
+  .safety-center-operation-events > div
+    grid-template-columns 1fr
+  .safety-center-operation-events code
+    grid-column auto

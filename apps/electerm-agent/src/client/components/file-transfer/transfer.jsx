@@ -176,7 +176,10 @@ export default class TransportAction extends Component {
         typeTo: transfer.typeTo,
         fromPath: transfer.fromPath,
         toPath: transfer.toPath,
-        isDirectory: Boolean(fromFile?.isDirectory)
+        isDirectory: Boolean(fromFile?.isDirectory),
+        sourceDescriptor: transfer.sourceDescriptor || this.localSourceDescriptor,
+        safetyOperationId: transfer.safetyOperationId || '',
+        conflictPolicy: transfer.conflictPolicy || ''
       }
     })
   }

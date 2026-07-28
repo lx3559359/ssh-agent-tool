@@ -7,6 +7,20 @@ import {
 
 const taskTable = 'operationTasks'
 const patchQueues = new WeakMap()
+export const operationTaskUpdatedEvent = 'shellpilot-operation-task-updated'
+
+function notifyOperationTaskUpdated (task) {
+  if (typeof window === 'undefined' ||
+    typeof window.dispatchEvent !== 'function' ||
+    typeof CustomEvent !== 'function') return
+  window.dispatchEvent(new CustomEvent(operationTaskUpdatedEvent, {
+    detail: {
+      id: task?.id || '',
+      kind: task?.kind || '',
+      status: task?.status || ''
+    }
+  }))
+}
 
 const defaultAdapter = {
   async update (...args) {
@@ -55,6 +69,7 @@ export async function saveOperationTask (
     true,
     true
   )
+  notifyOperationTaskUpdated(normalized)
   return normalized
 }
 
