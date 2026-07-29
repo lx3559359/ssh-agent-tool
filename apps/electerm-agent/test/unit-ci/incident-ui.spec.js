@@ -35,6 +35,18 @@ function assertSourceMatches (file, expression) {
   assert.match(readClient(file), expression)
 }
 
+function findJsxOpening (ast, name) {
+  let result
+  traverse(ast, {
+    JSXOpeningElement (elementPath) {
+      if (!result && t.isJSXIdentifier(elementPath.node.name, { name })) {
+        result = elementPath
+      }
+    }
+  })
+  return result
+}
+
 test('incident workspace renders a paginated list and detail region', () => {
   assertJsxExists('components/incidents/incident-workspace.jsx', 'IncidentList')
   assertJsxExists('components/incidents/incident-workspace.jsx', 'IncidentDetail')
@@ -118,5 +130,64 @@ test('incident notes and backup restore have explicit safety gates', () => {
   assertSourceMatches(
     'components/incidents/incident-storage-modal.jsx',
     /shellpilotIncidentRestoreWarning/
+  )
+})
+
+test('main lazily mounts incident archives without unmounting terminal or AI', () => {
+  const source = readClient('components/main/main.jsx')
+  assert.match(
+    source,
+    /const IncidentArchiveWorkspace = lazy\(\(\) => import\('\.\.\/incidents\/entry'\)\)/
+  )
+  assert.match(
+    source,
+    /store\.mainWorkspaceMode === 'incident-archives'/
+  )
+  assert.match(
+    source,
+    /incident:\$\{store\.activeIncidentId \|\| 'workspace'\}/
+  )
+
+  const ast = parseClient('components/main/main.jsx')
+  const layout = findJsxOpening(ast, 'Layout')
+  const incidents = findJsxOpening(ast, 'IncidentArchiveWorkspace')
+  const rightPanel = findJsxOpening(ast, 'RightSidePanel')
+  assert.ok(layout)
+  assert.ok(incidents)
+  assert.ok(rightPanel)
+  assert.equal(
+    Boolean(layout.findParent(parentPath => (
+      parentPath.isConditionalExpression() || parentPath.isLogicalExpression()
+    ))),
+    false
+  )
+  assert.ok(incidents.node.start > layout.node.start)
+  assert.ok(rightPanel.node.start > incidents.node.start)
+})
+
+test('sidebar exposes a dedicated incident archive entry', () => {
+  assertSourceMatches(
+    'components/sidebar/index.jsx',
+    /shellpilotSidebarIncidents/
+  )
+  assertSourceMatches(
+    'components/sidebar/index.jsx',
+    /store\.openIncidentArchiveWorkspace\(\)/
+  )
+})
+
+test('empty workspace surfaces unresolved incident summary', () => {
+  assertJsxExists('components/tabs/no-session.jsx', 'IncidentHomeSummary')
+  assertSourceMatches(
+    'components/incidents/incident-home-summary.jsx',
+    /store\.loadIncidentSummary\(\)/
+  )
+  assertSourceMatches(
+    'components/incidents/incident-home-summary.jsx',
+    /summary\.unresolvedCount/
+  )
+  assertSourceMatches(
+    'components/incidents/incident-home-summary.jsx',
+    /summary\.recentUnresolved/
   )
 })

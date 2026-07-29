@@ -7,6 +7,7 @@ import {
   QuestionCircleOutlined
 } from '@ant-design/icons'
 import HistoryPanel from '../sidebar/history'
+import IncidentHomeSummary from '../incidents/incident-home-summary'
 import './no-session.styl'
 
 const e = window.translate
@@ -121,6 +122,7 @@ export default function NoSessionPanel ({ height, onNewTab, onNewSsh, batch }) {
           </Button>
         </div>
         {newTabDom ? <div className='no-session-secondary-actions'>{newTabDom}</div> : null}
+        <IncidentHomeSummary store={window.store} />
         <section className='no-session-recents'>
           <header className='no-session-recents-heading'>
             <span>

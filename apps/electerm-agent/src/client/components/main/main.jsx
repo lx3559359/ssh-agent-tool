@@ -63,6 +63,7 @@ import {
 
 const FleetStatusWorkspace = lazy(() => import('../fleet-status/fleet-status-workspace'))
 const ArtifactWorkspace = lazy(() => import('../artifacts/entry'))
+const IncidentArchiveWorkspace = lazy(() => import('../incidents/entry'))
 const UpdateCheck = lazy(() => import('./upgrade'))
 const AIConfigModal = lazy(() => import('../ai/ai-config-modal'))
 
@@ -162,14 +163,18 @@ export default auto(function Index (props) {
   const upgradeInfo = deepCopy(store.upgradeInfo)
   const fleetStatusActive = store.mainWorkspaceMode === 'fleet-status'
   const artifactWorkspaceActive = store.mainWorkspaceMode === 'artifacts'
+  const incidentWorkspaceActive = store.mainWorkspaceMode === 'incident-archives'
   const nonTerminalWorkspaceActive = fleetStatusActive ||
-    artifactWorkspaceActive
+    artifactWorkspaceActive ||
+    incidentWorkspaceActive
   const aiSessionTabId = nonTerminalWorkspaceActive ? '' : activeTabId
   const aiConversationScopeId = fleetStatusActive
     ? 'fleet-status'
     : artifactWorkspaceActive
       ? 'artifacts'
-      : String(activeTabId || 'global')
+      : incidentWorkspaceActive
+        ? `incident:${store.activeIncidentId || 'workspace'}`
+        : String(activeTabId || 'global')
   const cls = classnames({
     loaded: configLoaded,
     'not-webapp': !window.et.isWebApp,
@@ -334,7 +339,8 @@ export default auto(function Index (props) {
   const terminalWorkspaceProps = {
     className: classnames('terminal-workspace-layer', {
       'fleet-status-active': fleetStatusActive,
-      'artifacts-active': artifactWorkspaceActive
+      'artifacts-active': artifactWorkspaceActive,
+      'incident-archives-active': incidentWorkspaceActive
     }),
     ...getTerminalWorkspaceAccessibility(nonTerminalWorkspaceActive)
   }
@@ -409,6 +415,24 @@ export default auto(function Index (props) {
                 >
                   <Suspense fallback={null}>
                     <ArtifactWorkspace
+                      store={store}
+                      shellGeometry={shellGeometry}
+                      active
+                    />
+                  </Suspense>
+                </LazyModuleBoundary>
+                )
+              : null
+          }
+          {
+            incidentWorkspaceActive
+              ? (
+                <LazyModuleBoundary
+                  moduleName={window.translate('shellpilotIncidentWorkspaceModule')}
+                  fallback={null}
+                >
+                  <Suspense fallback={null}>
+                    <IncidentArchiveWorkspace
                       store={store}
                       shellGeometry={shellGeometry}
                       active

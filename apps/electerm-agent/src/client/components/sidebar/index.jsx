@@ -1,4 +1,5 @@
 import {
+  AlertOutlined,
   BookOutlined,
   DashboardOutlined,
   FileDoneOutlined,
@@ -98,6 +99,10 @@ export default function Sidebar (props) {
     store.openArtifactWorkspace()
   }
 
+  const handleOpenIncidents = () => {
+    store.openIncidentArchiveWorkspace()
+  }
+
   const handleOpenSftp = () => {
     store.closeFleetStatus()
     store.closeArtifactWorkspace()
@@ -138,6 +143,7 @@ export default function Sidebar (props) {
   const historyActive = openedSideBar === 'bookmarks' && sidebarPanelTab === 'history'
   const fleetStatusActive = store.mainWorkspaceMode === 'fleet-status'
   const artifactWorkspaceActive = store.mainWorkspaceMode === 'artifacts'
+  const incidentWorkspaceActive = store.mainWorkspaceMode === 'incident-archives'
   const logActive = showInfoModal && store.infoModalTab === infoTabs.log
   const sideProps = openedSideBar
     ? {
@@ -184,6 +190,16 @@ export default function Sidebar (props) {
           onClick={handleOpenArtifacts}
         >
           <FileDoneOutlined
+            className='font20 iblock control-icon'
+          />
+        </SideIcon>
+        <SideIcon
+          title={e('shellpilotSidebarIncidents')}
+          label={e('shellpilotSidebarIncidents')}
+          active={incidentWorkspaceActive}
+          onClick={handleOpenIncidents}
+        >
+          <AlertOutlined
             className='font20 iblock control-icon'
           />
         </SideIcon>

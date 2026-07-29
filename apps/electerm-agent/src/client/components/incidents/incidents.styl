@@ -8,6 +8,83 @@
   color var(--text)
   background var(--main)
 
+.incident-home-summary
+  margin-bottom 24px
+  overflow hidden
+  border 1px solid var(--sp-border, var(--main-darker))
+  border-radius 8px
+  background var(--sp-surface-elevated, var(--main-light))
+
+  > header
+    min-height 44px
+    padding 0 14px
+    border-bottom 1px solid var(--sp-border, var(--main-darker))
+    display flex
+    align-items center
+    justify-content space-between
+    gap 12px
+
+    > span
+      display inline-flex
+      align-items center
+      gap 8px
+
+    > button
+      border 0
+      background transparent
+      color var(--sp-primary, var(--primary))
+      cursor pointer
+
+      .anticon
+        margin-left 6px
+
+.incident-home-summary-body
+  min-height 68px
+  padding 12px 14px
+  display grid
+  grid-template-columns auto auto minmax(0, 1fr)
+  align-items center
+  gap 8px
+
+  > strong
+    color var(--sp-primary, var(--primary))
+    font-size 19px
+
+  > span
+    color var(--sp-text-muted, var(--text-light))
+    font-size 12px
+
+  > div
+    min-width 0
+    display flex
+    justify-content flex-end
+    gap 8px
+
+    > button
+      min-width 0
+      max-width 190px
+      padding 7px 9px
+      border 1px solid var(--sp-border, var(--main-darker))
+      border-radius 6px
+      background transparent
+      color var(--sp-text, var(--text))
+      cursor pointer
+      text-align left
+
+      &:hover
+        border-color var(--sp-primary, var(--primary))
+
+      span,
+      small
+        display block
+        overflow hidden
+        text-overflow ellipsis
+        white-space nowrap
+
+      small
+        margin-top 2px
+        color var(--sp-text-muted, var(--text-light))
+
 .incident-workspace-active
   display flex
   flex-direction column
