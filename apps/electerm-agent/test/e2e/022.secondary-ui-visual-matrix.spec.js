@@ -4067,6 +4067,100 @@ test('UI font preview applies cancels persists and leaves terminal unchanged', a
   })
 })
 
+matrixTest('bookmark group management remains usable at desktop acceptance sizes', async ({ browserName }, testInfo) => {
+  await runWithIsolatedApp('bookmark-groups', async (electronApp) => {
+    const page = electronApp.windows()[0] || await electronApp.firstWindow()
+    await waitForSecondaryAppReady(electronApp, page, 'bookmark-groups')
+    await page.evaluate(() => {
+      window.store.upgradeInfo.showUpgradeModal = false
+      const suffix = `${Date.now()}`
+      const parent = window.store.createBookmarkGroup({
+        title: '生产环境',
+        parentId: 'default'
+      })
+      const child = window.store.createBookmarkGroup({
+        title: 'Web 服务器',
+        parentId: parent.id
+      })
+      window.store.saveBookmarkInGroup({
+        id: `visual-bookmark-${suffix}`,
+        type: 'ssh',
+        title: '生产 Web 01',
+        host: '10.0.0.8',
+        port: '22',
+        username: 'root'
+      }, child.id)
+      window.store.storeAssign({
+        expandedKeys: [
+          ...new Set([
+            ...(window.store.expandedKeys || []),
+            'default',
+            parent.id,
+            child.id
+          ])
+        ]
+      })
+      window.store.handleSidebarPanelTab('bookmarks')
+      window.store.setOpenedSideBar('bookmarks')
+      window.store.bookmarkSelectMode = true
+    })
+
+    const panel = page.locator('.sidebar-panel-bookmarks')
+    const wrapper = panel.locator('.tree-select-wrapper')
+    const picker = wrapper.locator('.bookmark-group-picker')
+    const header = wrapper.locator('.tree-select-header')
+    await expect(panel).toBeVisible()
+    await expect(wrapper).toBeVisible()
+    await expect(picker).toBeVisible()
+    await expect(wrapper).toContainText('生产环境')
+    await expect(wrapper).toContainText('Web 服务器')
+    await expect(wrapper).toContainText('生产 Web 01')
+
+    const cases = [
+      { theme: 'defaultLight', width: 1366, height: 768 },
+      { theme: 'defaultLight', width: 1920, height: 1080 },
+      { theme: 'shellpilot-ocean', width: 1366, height: 768 },
+      { theme: 'shellpilot-ocean', width: 1920, height: 1080 }
+    ]
+    for (const item of cases) {
+      await page.evaluate(theme => window.store.setTheme(theme), item.theme)
+      await setWindowCase(electronApp, page, {
+        width: item.width,
+        height: item.height
+      }, 1)
+      await expect(header).toBeVisible()
+      const layout = await page.evaluate(() => {
+        const panel = document.querySelector('.sidebar-panel-bookmarks')
+        const wrapper = panel?.querySelector('.tree-select-wrapper')
+        const header = wrapper?.querySelector('.tree-select-header')
+        if (!panel || !wrapper || !header) {
+          return null
+        }
+        const panelRect = panel.getBoundingClientRect()
+        const headerRect = header.getBoundingClientRect()
+        const style = window.getComputedStyle(wrapper)
+        return {
+          documentOverflow: document.documentElement.scrollWidth > window.innerWidth + 1,
+          panelInsideViewport: panelRect.left >= -1 && panelRect.right <= window.innerWidth + 1,
+          headerInsidePanel: headerRect.left >= panelRect.left - 1 && headerRect.top >= panelRect.top - 1,
+          horizontalOverflowMode: style.overflowX,
+          canReachFullWidth: wrapper.scrollWidth <= wrapper.clientWidth + 1 || style.overflowX === 'auto'
+        }
+      })
+      expect(layout, JSON.stringify({ browserName, item, layout })).toEqual({
+        documentOverflow: false,
+        panelInsideViewport: true,
+        headerInsidePanel: true,
+        horizontalOverflowMode: 'auto',
+        canReachFullWidth: true
+      })
+      await page.screenshot({
+        path: testInfo.outputPath(`bookmark-groups-${item.theme}-${item.width}x${item.height}.png`)
+      })
+    }
+  })
+})
+
 matrixTest('real app covers the secondary UI visual acceptance matrix', async ({ browserName }, testInfo) => {
   const runner = browserName
   const expected = assertMatrixConfiguration()

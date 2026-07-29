@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef } from 'react'
+import { auto } from 'manate/react'
 import createTitle, { createTitleWithTag } from '../../common/create-title'
 import { DeleteOutlined, BookFilled } from '@ant-design/icons'
 import { Dropdown } from 'antd'
@@ -6,7 +7,7 @@ import { refsStatic } from '../common/ref'
 
 const e = window.translate
 
-export default function HistoryItem (props) {
+export default auto(function HistoryItem (props) {
   const { store } = window
   const {
     item
@@ -106,7 +107,7 @@ export default function HistoryItem (props) {
       </div>
     </Dropdown>
   )
-}
+})
 
 function sameConnection (bookmark, tab) {
   const leftPort = String(bookmark.port || defaultPort(bookmark.type))
