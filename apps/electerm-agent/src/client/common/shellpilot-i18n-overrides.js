@@ -1665,7 +1665,8 @@ const catalogs = Object.freeze({
     shellpilotCreateServerGroupFailed: '创建分组失败',
     shellpilotSaveHistoryAsServer: '保存到服务器',
     shellpilotHistoryAlreadySaved: '已保存',
-    shellpilotAuthenticationNeedsCompletion: '认证信息待补充，保存后请编辑服务器凭据'
+    shellpilotAuthenticationNeedsCompletion: '认证信息待补充，保存后请编辑服务器凭据',
+    shellpilotMoveSelectedServers: '移动所选服务器'
   }),
   en_us: Object.freeze({
     bookmarks: 'Bookmarks',
@@ -3333,7 +3334,8 @@ const catalogs = Object.freeze({
     shellpilotCreateServerGroupFailed: 'Failed to create group',
     shellpilotSaveHistoryAsServer: 'Save to servers',
     shellpilotHistoryAlreadySaved: 'Saved',
-    shellpilotAuthenticationNeedsCompletion: 'Authentication is incomplete. Edit the saved server credentials before connecting.'
+    shellpilotAuthenticationNeedsCompletion: 'Authentication is incomplete. Edit the saved server credentials before connecting.',
+    shellpilotMoveSelectedServers: 'Move selected servers'
   })
 })
 

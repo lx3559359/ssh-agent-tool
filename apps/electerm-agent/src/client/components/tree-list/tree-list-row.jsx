@@ -27,6 +27,7 @@ export default function TreeListRow (props) {
     activeItemId,
     searchSelectedRowKey,
     staticList,
+    managementEnabled,
     leftSidebarWidth,
     handleExpand,
     handleUnExpand,
@@ -64,6 +65,7 @@ export default function TreeListRow (props) {
     itemLevel: item?.level,
     leftSidebarWidth,
     staticList,
+    managementEnabled,
     selectedItemId: activeItemId,
     searchSelected: searchSelectedRowKey === row.key,
     del,
@@ -155,6 +157,7 @@ export default function TreeListRow (props) {
     item,
     isGroup,
     staticList,
+    managementEnabled,
     translate: e
   })
   const dropdownProps = {
@@ -176,6 +179,7 @@ export default function TreeListRow (props) {
           item={item}
           isGroup={isGroup}
           staticList={staticList}
+          managementEnabled={managementEnabled}
           del={del}
           openAll={openAll}
           openMoveModal={openMoveModal}
@@ -215,6 +219,7 @@ export default function TreeListRow (props) {
         item={item}
         isGroup={isGroup}
         staticList={staticList}
+        managementEnabled={managementEnabled}
         del={del}
         openAll={openAll}
         openMoveModal={openMoveModal}

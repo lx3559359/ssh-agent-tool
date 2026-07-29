@@ -74,3 +74,30 @@ test('history saving uses an editable form and the shared group entry', () => {
   assert.match(item, /shellpilotSaveHistoryAsServer/)
   assert.match(item, /shellpilotHistoryAlreadySaved/)
 })
+
+test('server sidebar exposes group management without changing connection selection', () => {
+  const sidebar = fs.readFileSync(
+    path.join(root, 'src/client/components/sidebar/bookmark-select.jsx'),
+    'utf8'
+  )
+  const tree = fs.readFileSync(
+    path.join(root, 'src/client/components/tree-list/tree-list.jsx'),
+    'utf8'
+  )
+  const menu = fs.readFileSync(
+    path.join(root, 'src/client/components/tree-list/bookmark-context-menu.js'),
+    'utf8'
+  )
+  const selection = fs.readFileSync(
+    path.join(root, 'src/client/components/bookmark-form/tree-select.jsx'),
+    'utf8'
+  )
+
+  assert.match(sidebar, /managementEnabled:\s*true/)
+  assert.match(sidebar, /BookmarkTreeSelect/)
+  assert.match(sidebar, /store\.onSelectBookmark/)
+  assert.match(menu, /managementEnabled/)
+  assert.match(tree, /store\.moveBookmarksToGroup\(\[idDragged\]/)
+  assert.match(selection, /store\.moveBookmarksToGroup/)
+  assert.match(selection, /BookmarkGroupPicker/)
+})

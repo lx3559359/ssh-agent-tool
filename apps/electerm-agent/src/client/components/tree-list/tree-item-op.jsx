@@ -28,6 +28,7 @@ export default function TreeItemOp (props) {
     item,
     isGroup,
     staticList,
+    managementEnabled,
     del,
     openAll,
     openMoveModal,
@@ -42,7 +43,8 @@ export default function TreeItemOp (props) {
   }
 
   const isDefaultGroup = item.id === defaultBookmarkGroupId
-  const canShowSharedOps = !staticList && !isDefaultGroup
+  const canManage = managementEnabled || !staticList
+  const canShowSharedOps = canManage && !isDefaultGroup
 
   const handleDel = (event) => {
     del(pendingDeleteItem || item, event)
@@ -79,7 +81,7 @@ export default function TreeItemOp (props) {
 
   const buttons = []
 
-  if (isGroup && !staticList) {
+  if (isGroup && canManage) {
     buttons.push(
       <FolderAddOutlined
         key='new-tree'
@@ -102,7 +104,7 @@ export default function TreeItemOp (props) {
     )
   }
 
-  if (!isGroup && !staticList && item.id) {
+  if (!isGroup && canManage && item.id) {
     const FavoriteIcon = isBookmarkFavorite(item) ? StarFilled : StarOutlined
     buttons.push(
       <FavoriteIcon
@@ -132,7 +134,7 @@ export default function TreeItemOp (props) {
     )
   }
 
-  if (!isDefaultGroup && !staticList) {
+  if (!isDefaultGroup && canManage) {
     buttons.push(
       <Popconfirm
         key='delete-tree'
@@ -149,7 +151,8 @@ export default function TreeItemOp (props) {
     )
   }
 
-  const shouldShowEdit = !((staticList && isGroup) || (!staticList && !isGroup))
+  const shouldShowEdit = (!isGroup && staticList) ||
+    (canManage && (!isGroup || !isDefaultGroup))
   if (shouldShowEdit) {
     buttons.push(
       <EditOutlined
