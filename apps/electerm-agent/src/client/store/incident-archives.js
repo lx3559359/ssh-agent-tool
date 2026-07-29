@@ -128,17 +128,21 @@ export default Store => {
   Store.prototype.addActiveIncidentNote = async function (body) {
     const store = window.store
     if (!store.activeIncidentId) return null
-    return saveIncident(store, () => (
-      incidentClient.addNote(store.activeIncidentId, body)
-    ))
+    const incidentId = store.activeIncidentId
+    return saveIncident(store, async () => {
+      await incidentClient.addNote(incidentId, body)
+      return incidentClient.get(incidentId)
+    })
   }
 
   Store.prototype.deleteActiveIncidentNote = async function (noteId) {
     const store = window.store
     if (!store.activeIncidentId) return null
-    return saveIncident(store, () => (
-      incidentClient.deleteNote(store.activeIncidentId, noteId)
-    ))
+    const incidentId = store.activeIncidentId
+    return saveIncident(store, async () => {
+      await incidentClient.deleteNote(incidentId, noteId)
+      return incidentClient.get(incidentId)
+    })
   }
 
   Store.prototype.loadIncidentSummary = async function () {

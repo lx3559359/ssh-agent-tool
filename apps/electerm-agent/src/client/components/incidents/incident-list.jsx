@@ -102,10 +102,10 @@ export default function IncidentList ({
   const updateFilter = (field, value) => {
     store.loadIncidentArchives({ [field]: value, page: 1 })
   }
-  const updateRange = (_, dateStrings) => {
+  const updateRange = (dates) => {
     store.loadIncidentArchives({
-      updatedFrom: dateStrings?.[0] || null,
-      updatedTo: dateStrings?.[1] || null,
+      updatedFrom: dates?.[0]?.startOf('day')?.valueOf() || null,
+      updatedTo: dates?.[1]?.endOf('day')?.valueOf() || null,
       page: 1
     })
   }

@@ -81,16 +81,25 @@ function createHarness () {
         total: 1
       }
     },
-    get: async id => ({ id, state: 'investigating' }),
+    get: async id => {
+      calls.push(['get', id])
+      return { id, state: 'investigating' }
+    },
     create: async draft => ({ id: 'incident-created', ...draft }),
     update: async (id, patch) => ({ id, ...patch }),
     transition: async (id, input) => ({ id, ...input }),
-    addNote: async (id, body) => ({
-      id,
-      notes: [{ id: 'note-1', body }]
-    }),
-    deleteNote: async id => ({ id, notes: [] }),
-    summary: async () => ({ unresolved: 1 }),
+    addNote: async (id, body) => {
+      calls.push(['addNote', id, body])
+      return { id: 'note-1', incidentId: id, body }
+    },
+    deleteNote: async (id, noteId) => {
+      calls.push(['deleteNote', id, noteId])
+      return { deleted: true, noteId }
+    },
+    summary: async () => {
+      calls.push(['summary'])
+      return { unresolved: 1 }
+    },
     storage: async () => ({ backups: [{ filename: 'backup.db' }] }),
     createBackup: async () => ({ filename: 'backup.db' }),
     restoreBackup: async (filename, confirmation) => ({
@@ -207,4 +216,25 @@ test('writes refresh the active incident, list and summary', async () => {
   assert.equal(store.activeIncident, null)
   assert.equal(store.incidentPage, 1)
   assert.equal(store.incidentStorage.backups[0].filename, 'backup.db')
+})
+
+test('note mutations reload the complete active incident', async () => {
+  const { calls, store } = createHarness()
+  store.activeIncidentId = 'incident-1'
+
+  await store.addActiveIncidentNote('timeline evidence')
+  assert.deepEqual(
+    calls.slice(-3).map(([name]) => name),
+    ['get', 'list', 'summary']
+  )
+  assert.equal(store.activeIncident.id, 'incident-1')
+  assert.equal(store.activeIncident.state, 'investigating')
+
+  await store.deleteActiveIncidentNote('note-1')
+  assert.deepEqual(
+    calls.slice(-3).map(([name]) => name),
+    ['get', 'list', 'summary']
+  )
+  assert.equal(store.activeIncident.id, 'incident-1')
+  assert.equal(store.activeIncident.state, 'investigating')
 })

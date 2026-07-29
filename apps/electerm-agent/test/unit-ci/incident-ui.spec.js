@@ -73,6 +73,14 @@ test('incident list exposes bounded filters and a debounced search', () => {
   assert.match(source, /pageSizeOptions=\{\[20, 40, 80\]\}/)
 })
 
+test('incident date range sends complete-day timestamps to the repository', () => {
+  const source = readClient('components/incidents/incident-list.jsx')
+  assert.match(source, /dates\?\.\[0\]\?\.startOf\('day'\)\?\.valueOf\(\)/)
+  assert.match(source, /dates\?\.\[1\]\?\.endOf\('day'\)\?\.valueOf\(\)/)
+  assert.doesNotMatch(source, /updatedFrom:\s*dateStrings/)
+  assert.doesNotMatch(source, /updatedTo:\s*dateStrings/)
+})
+
 test('incident workspace layout is compact and does not use oversized text', () => {
   const styles = readClient('components/incidents/incidents.styl')
   assert.match(
@@ -253,4 +261,15 @@ test('incident archive layout adapts to narrow and short windows', () => {
     'components/incidents/incident-workspace.jsx',
     /incident-workspace-show-detail/
   )
+})
+
+test('incident archive stays above the mounted terminal workspace', () => {
+  const styles = readClient('components/incidents/incidents.styl')
+  assert.match(
+    styles,
+    /\.terminal-workspace-layer\.incident-archives-active/
+  )
+  assert.match(styles, /visibility hidden/)
+  assert.match(styles, /\.incident-workspace[\s\S]*z-index 90/)
+  assert.match(styles, /\.incident-workspace-active[\s\S]*pointer-events auto/)
 })

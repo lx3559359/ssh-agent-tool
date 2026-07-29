@@ -1,10 +1,22 @@
+.terminal-workspace-layer.incident-archives-active
+  > *:not(.main-footer)
+    visibility hidden
+    pointer-events none
+
+  > .main-footer
+    pointer-events none
+
 .incident-workspace
-  display none
+  display flex
+  flex-direction column
   position absolute
-  z-index 7
+  z-index 90
   min-width 0
   min-height 0
   overflow hidden
+  visibility hidden
+  opacity 0
+  pointer-events none
   color var(--text)
   background var(--main)
 
@@ -86,8 +98,9 @@
         color var(--sp-text-muted, var(--text-light))
 
 .incident-workspace-active
-  display flex
-  flex-direction column
+  visibility visible
+  opacity 1
+  pointer-events auto
 
 .incident-workspace-header
   min-height 64px
