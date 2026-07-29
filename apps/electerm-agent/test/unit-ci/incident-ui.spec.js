@@ -70,3 +70,53 @@ test('incident workspace layout is compact and does not use oversized text', () 
   assert.match(styles, /border-radius\s+6px/)
   assert.doesNotMatch(styles, /font-size\s+[2-9]\dpx/)
 })
+
+test('incident detail keeps a local draft and enforces verification', () => {
+  assertSourceMatches(
+    'components/incidents/incident-detail.jsx',
+    /shellpilotIncidentVerificationRequired/
+  )
+  assertSourceMatches(
+    'components/incidents/incident-detail.jsx',
+    /setDraft\(toIncidentDraft\(incident\)\)/
+  )
+  assertSourceMatches(
+    'components/incidents/incident-detail.jsx',
+    /store\.updateActiveIncident/
+  )
+  assertSourceMatches(
+    'components/incidents/incident-detail.jsx',
+    /store\.transitionActiveIncident/
+  )
+  assertSourceMatches(
+    'components/incidents/incident-detail.jsx',
+    /passed_manual/
+  )
+  assertSourceMatches(
+    'components/incidents/incident-detail.jsx',
+    /passed_auto/
+  )
+})
+
+test('incident notes and backup restore have explicit safety gates', () => {
+  assertSourceMatches(
+    'components/incidents/incident-detail.jsx',
+    /store\.addActiveIncidentNote/
+  )
+  assertSourceMatches(
+    'components/incidents/incident-detail.jsx',
+    /event\.ctrlKey && event\.key === 'Enter'/
+  )
+  assertSourceMatches(
+    'components/incidents/incident-storage-modal.jsx',
+    /confirmation !== 'RESTORE'/
+  )
+  assertSourceMatches(
+    'components/incidents/incident-storage-modal.jsx',
+    /store\.restoreIncidentBackup/
+  )
+  assertSourceMatches(
+    'components/incidents/incident-storage-modal.jsx',
+    /shellpilotIncidentRestoreWarning/
+  )
+})

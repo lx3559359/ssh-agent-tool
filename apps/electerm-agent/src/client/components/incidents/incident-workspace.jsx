@@ -1,30 +1,19 @@
 import { auto } from 'manate/react'
 import { useEffect, useRef, useState } from 'react'
 import classnames from 'classnames'
-import { Alert, Button, Empty } from 'antd'
+import { Alert, Button, Modal } from 'antd'
 import {
   CloseOutlined,
   DatabaseOutlined,
   ReloadOutlined
 } from '@ant-design/icons'
 import IncidentList from './incident-list'
+import IncidentDetail from './incident-detail'
+import IncidentStorageModal from './incident-storage-modal'
 import { focusIncidentWorkspace } from './incident-navigation'
 import './incidents.styl'
 
 const e = window.translate
-
-function IncidentDetail ({ creating }) {
-  return (
-    <section className='incident-detail-panel'>
-      <Empty
-        image={Empty.PRESENTED_IMAGE_SIMPLE}
-        description={creating
-          ? e('shellpilotIncidentCreatePrompt')
-          : e('shellpilotIncidentSelectPrompt')}
-      />
-    </section>
-  )
-}
 
 export default auto(function IncidentWorkspace ({
   store,
@@ -33,6 +22,7 @@ export default auto(function IncidentWorkspace ({
 }) {
   const workspaceRef = useRef(null)
   const [creating, setCreating] = useState(false)
+  const [detailDirty, setDetailDirty] = useState(false)
 
   useEffect(() => {
     if (!active) return
@@ -41,9 +31,39 @@ export default auto(function IncidentWorkspace ({
     focusIncidentWorkspace(true, workspaceRef.current)
   }, [active])
 
+  const continueAfterDirtyCheck = action => {
+    if (!detailDirty) {
+      action()
+      return
+    }
+    Modal.confirm({
+      title: e('shellpilotIncidentUnsavedTitle'),
+      content: e('shellpilotIncidentUnsavedMessage'),
+      okText: e('shellpilotIncidentDiscardAndContinue'),
+      cancelText: e('shellpilotIncidentKeepEditing'),
+      onOk: action
+    })
+  }
   const openCreate = () => {
-    store.selectIncidentArchive('')
-    setCreating(true)
+    continueAfterDirtyCheck(() => {
+      store.selectIncidentArchive('')
+      setCreating(true)
+      setDetailDirty(false)
+    })
+  }
+  const selectIncident = id => {
+    continueAfterDirtyCheck(() => {
+      setCreating(false)
+      setDetailDirty(false)
+      store.selectIncidentArchive(id)
+    })
+  }
+  const closeWorkspace = () => {
+    continueAfterDirtyCheck(() => {
+      setCreating(false)
+      setDetailDirty(false)
+      store.closeIncidentArchiveWorkspace()
+    })
   }
   const openStorage = () => {
     store.incidentStorageOpen = true
@@ -82,7 +102,7 @@ export default auto(function IncidentWorkspace ({
           <Button
             aria-label={e('shellpilotIncidentClose')}
             icon={<CloseOutlined />}
-            onClick={() => store.closeIncidentArchiveWorkspace()}
+            onClick={closeWorkspace}
           />
         </div>
       </header>
@@ -101,13 +121,20 @@ export default auto(function IncidentWorkspace ({
           store={store}
           onCreate={openCreate}
           onOpenStorage={openStorage}
+          onSelect={selectIncident}
         />
         <IncidentDetail
           store={store}
           creating={creating}
-          onCancelCreate={() => setCreating(false)}
+          onCreated={() => setCreating(false)}
+          onCancelCreate={() => continueAfterDirtyCheck(() => {
+            setCreating(false)
+            setDetailDirty(false)
+          })}
+          onDirtyChange={setDetailDirty}
         />
       </div>
+      <IncidentStorageModal store={store} />
     </main>
   )
 })

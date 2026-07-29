@@ -69,7 +69,8 @@ function filterOptions (values, prefix) {
 export default function IncidentList ({
   store,
   onCreate,
-  onOpenStorage
+  onOpenStorage,
+  onSelect
 }) {
   const [search, setSearch] = useState(store.incidentFilters.query || '')
   const serviceTags = useMemo(
@@ -207,7 +208,11 @@ export default function IncidentList ({
                 className={classnames('incident-list-item', {
                   active: item.id === store.activeIncidentId
                 })}
-                onClick={() => store.selectIncidentArchive(item.id)}
+                onClick={() => (
+                  onSelect
+                    ? onSelect(item.id)
+                    : store.selectIncidentArchive(item.id)
+                )}
               >
                 <span
                   className={
