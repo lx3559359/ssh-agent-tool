@@ -1,0 +1,170 @@
+.incident-workspace
+  display none
+  position absolute
+  z-index 7
+  min-width 0
+  min-height 0
+  overflow hidden
+  color var(--text)
+  background var(--main)
+
+.incident-workspace-active
+  display flex
+  flex-direction column
+
+.incident-workspace-header
+  min-height 64px
+  padding 10px 14px
+  display flex
+  align-items center
+  justify-content space-between
+  gap 12px
+  border-bottom 1px solid var(--main-darker)
+
+  h1
+    margin 0
+    font-size 18px
+    line-height 24px
+
+  p
+    margin 2px 0 0
+    color var(--text-light)
+    font-size 12px
+
+.incident-workspace-actions,
+.incident-list-primary-actions
+  display flex
+  align-items center
+  gap 8px
+
+.incident-workspace-error
+  margin 8px 14px 0
+
+.incident-workspace-grid
+  flex 1
+  min-height 0
+  display grid
+  grid-template-columns minmax(260px, 340px) minmax(0, 1fr)
+
+.incident-list-panel
+  min-width 0
+  overflow hidden
+  display flex
+  flex-direction column
+  border-right 1px solid var(--main-darker)
+
+.incident-list-toolbar
+  padding 10px
+  display flex
+  flex-direction column
+  gap 8px
+  border-bottom 1px solid var(--main-darker)
+
+.incident-list-filter-grid
+  display grid
+  grid-template-columns repeat(2, minmax(0, 1fr))
+  gap 8px
+
+.incident-favorite-filter
+  min-height 24px
+  display flex
+  align-items center
+  gap 8px
+  color var(--text-light)
+  font-size 12px
+
+.incident-list-scroll
+  flex 1
+  min-height 0
+  overflow auto
+  padding 8px
+
+.incident-list-item
+  width 100%
+  min-height 76px
+  margin-bottom 6px
+  padding 10px
+  border 1px solid transparent
+  border-radius 6px
+  color var(--text)
+  background transparent
+  text-align left
+  display grid
+  grid-template-columns 4px minmax(0, 1fr)
+  gap 9px
+  cursor pointer
+
+  &:hover
+    background var(--main-light)
+
+  &.active
+    border-color var(--primary)
+    background var(--main-light)
+
+.incident-severity
+  width 4px
+  height 100%
+  min-height 50px
+  border-radius 4px
+  background #8c8c8c
+
+.incident-severity-critical
+  background #cf1322
+
+.incident-severity-high
+  background #d46b08
+
+.incident-severity-medium
+  background #d4b106
+
+.incident-severity-low
+  background #389e0d
+
+.incident-list-copy
+  min-width 0
+  display flex
+  flex-direction column
+  gap 4px
+
+  strong
+    overflow hidden
+    text-overflow ellipsis
+    white-space nowrap
+    font-size 13px
+
+    .anticon
+      margin-right 5px
+      color #d48806
+
+  small
+    overflow hidden
+    text-overflow ellipsis
+    white-space nowrap
+    color var(--text-light)
+
+  > span
+    display flex
+    align-items center
+    justify-content space-between
+    gap 8px
+
+  time
+    color var(--text-light)
+    font-size 11px
+
+.incident-list-empty
+  padding 28px 8px
+
+.incident-list-panel > .ant-pagination
+  flex none
+  padding 8px 10px
+  border-top 1px solid var(--main-darker)
+
+.incident-detail-panel
+  min-width 0
+  min-height 0
+  overflow auto
+  padding 16px
+
+  > .ant-empty
+    margin-top 80px
