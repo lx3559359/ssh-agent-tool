@@ -114,10 +114,20 @@ const {
 const {
   artifactFilename
 } = require('./ai-artifacts/filename-utils')
+const {
+  createIncidentDatabase
+} = require('./incidents/incident-database')
+const {
+  createIncidentRepository
+} = require('./incidents/incident-repository')
+const {
+  createIncidentArchiveService
+} = require('./incidents/incident-service')
 
 let agentSkillServices
 let agentSkillMigrationPromise
 let aiArtifactService
+let incidentArchiveService
 
 function getAgentSkillServices () {
   if (agentSkillServices) return agentSkillServices
@@ -210,6 +220,43 @@ function safeAIArtifactResult (operation) {
           message: isArtifactError
             ? error.message
             : 'Artifact operation failed.'
+        }
+      }
+    })
+}
+
+function getIncidentArchiveService () {
+  if (incidentArchiveService) return incidentArchiveService
+  const dataRoot = process.env.DATA_PATH || path.resolve(appPath, 'electerm')
+  const database = createIncidentDatabase({
+    rootPath: path.resolve(dataRoot, 'incident-archives')
+  })
+  incidentArchiveService = createIncidentArchiveService({
+    database,
+    repository: createIncidentRepository({
+      getDatabase: () => database.db
+    })
+  })
+  return incidentArchiveService
+}
+
+function safeIncidentResult (operation) {
+  return Promise.resolve()
+    .then(operation)
+    .then(value => ({
+      ok: true,
+      value: JSON.parse(JSON.stringify(value))
+    }))
+    .catch(error => {
+      const isIncidentError = String(error?.code || '')
+        .startsWith('INCIDENT_')
+      return {
+        ok: false,
+        error: {
+          code: isIncidentError ? error.code : 'INCIDENT_IPC_ERROR',
+          message: isIncidentError
+            ? error.message
+            : 'Incident archive operation failed.'
         }
       }
     })
@@ -475,9 +522,23 @@ function initIpc () {
     }),
     deleteAIArtifact: id => safeAIArtifactResult(() => getAIArtifactService().deleteAIArtifact(id))
   }
+  const incidentArchiveAsyncGlobals = {
+    listIncidentArchives: filters => safeIncidentResult(() => getIncidentArchiveService().list(filters)),
+    getIncidentArchive: id => safeIncidentResult(() => getIncidentArchiveService().get(id)),
+    createIncidentArchive: draft => safeIncidentResult(() => getIncidentArchiveService().create(draft)),
+    updateIncidentArchive: (id, patch) => safeIncidentResult(() => getIncidentArchiveService().update(id, patch)),
+    transitionIncidentArchive: (id, input) => safeIncidentResult(() => getIncidentArchiveService().transition(id, input)),
+    addIncidentNote: (id, body) => safeIncidentResult(() => getIncidentArchiveService().addNote(id, body)),
+    deleteIncidentNote: (id, noteId) => safeIncidentResult(() => getIncidentArchiveService().deleteNote(id, noteId)),
+    getIncidentArchiveSummary: () => safeIncidentResult(() => getIncidentArchiveService().summary()),
+    getIncidentArchiveStorage: () => safeIncidentResult(() => getIncidentArchiveService().storage()),
+    createIncidentArchiveBackup: () => safeIncidentResult(() => getIncidentArchiveService().createBackup()),
+    restoreIncidentArchiveBackup: (filename, confirmation) => safeIncidentResult(() => getIncidentArchiveService().restoreBackup(filename, confirmation))
+  }
   const asyncGlobals = {
     ...agentSkillAsyncGlobals,
     ...aiArtifactAsyncGlobals,
+    ...incidentArchiveAsyncGlobals,
     confirmExit: () => {
       globalState.set('confirmExit', true)
     },
