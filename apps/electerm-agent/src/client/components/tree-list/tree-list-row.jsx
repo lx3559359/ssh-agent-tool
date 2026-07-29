@@ -12,6 +12,8 @@ import {
   formatBookmarkPublicInfo,
   formatBookmarkSshCommand
 } from './bookmark-context-menu'
+import { defaultBookmarkGroupId } from '../../common/constants'
+import { describeBookmarkGroupDeletion } from '../../common/bookmark-deletion'
 
 const e = window.translate
 
@@ -101,13 +103,31 @@ export default function TreeListRow (props) {
     stopPropagation: () => domEvent?.stopPropagation?.()
   })
 
+  const deleteConfirmTitle = (() => {
+    if (!isGroup) {
+      return e('shellpilotBookmarkConfirmDeleteConnection')
+    }
+    const groups = window.store?.bookmarkGroups || []
+    const impact = describeBookmarkGroupDeletion(
+      groups,
+      item.id,
+      defaultBookmarkGroupId
+    )
+    if (!impact.canDelete) {
+      return e('shellpilotBookmarkConfirmDeleteGroup')
+    }
+    const target = groups.find(group => group.id === impact.targetGroupId)
+    return e('shellpilotBookmarkDeleteGroupImpact')
+      .replace('{servers}', String(impact.bookmarkCount))
+      .replace('{groups}', String(impact.childGroupCount))
+      .replace('{target}', target?.title || e('shellpilotUngrouped'))
+  })()
+
   const confirmDelete = () => {
     if (typeof window === 'undefined' || typeof window.confirm !== 'function') {
       return true
     }
-    return window.confirm(isGroup
-      ? e('shellpilotBookmarkConfirmDeleteGroup')
-      : e('shellpilotBookmarkConfirmDeleteConnection'))
+    return window.confirm(deleteConfirmTitle)
   }
 
   const onContextMenuAction = ({ key, domEvent }) => {
@@ -180,6 +200,7 @@ export default function TreeListRow (props) {
           isGroup={isGroup}
           staticList={staticList}
           managementEnabled={managementEnabled}
+          deleteTitle={deleteConfirmTitle}
           del={del}
           openAll={openAll}
           openMoveModal={openMoveModal}
@@ -220,6 +241,7 @@ export default function TreeListRow (props) {
         isGroup={isGroup}
         staticList={staticList}
         managementEnabled={managementEnabled}
+        deleteTitle={deleteConfirmTitle}
         del={del}
         openAll={openAll}
         openMoveModal={openMoveModal}

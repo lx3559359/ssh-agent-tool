@@ -16,6 +16,44 @@ async function loadDeletionHelper () {
   }
 }
 
+test('describeBookmarkGroupDeletion reports migrated servers and child groups', async () => {
+  const { describeBookmarkGroupDeletion } = await loadDeletionHelper()
+  const groups = [
+    { id: 'default', bookmarkIds: [], bookmarkGroupIds: ['prod'] },
+    { id: 'prod', bookmarkIds: ['server-1', 'server-2'], bookmarkGroupIds: ['web'] },
+    { id: 'web', bookmarkIds: ['server-3'], bookmarkGroupIds: [] }
+  ]
+
+  assert.deepEqual(describeBookmarkGroupDeletion(groups, 'prod', 'default'), {
+    canDelete: true,
+    targetGroupId: 'default',
+    bookmarkCount: 2,
+    childGroupCount: 1
+  })
+})
+
+test('describeBookmarkGroupDeletion rejects default and unknown groups', async () => {
+  const { describeBookmarkGroupDeletion } = await loadDeletionHelper()
+  const groups = [
+    { id: 'default', bookmarkIds: [], bookmarkGroupIds: [] }
+  ]
+  const expected = {
+    canDelete: false,
+    targetGroupId: null,
+    bookmarkCount: 0,
+    childGroupCount: 0
+  }
+
+  assert.deepEqual(
+    describeBookmarkGroupDeletion(groups, 'default', 'default'),
+    expected
+  )
+  assert.deepEqual(
+    describeBookmarkGroupDeletion(groups, 'missing', 'default'),
+    expected
+  )
+})
+
 test('deleting a nested group removes every reference and migrates contents once', async () => {
   const { deleteBookmarkGroupState } = await loadDeletionHelper()
   const groups = [
@@ -83,6 +121,42 @@ test('deleting a nested group removes every reference and migrates contents once
       bookmarkGroupIds: []
     }
   ])
+})
+
+test('deleting a deeply nested group migrates contents to its real parent', async () => {
+  const { deleteBookmarkGroupState } = await loadDeletionHelper()
+  const groups = [
+    {
+      id: 'default',
+      level: 1,
+      bookmarkIds: [],
+      bookmarkGroupIds: ['prod']
+    },
+    {
+      id: 'prod',
+      level: 2,
+      bookmarkIds: [],
+      bookmarkGroupIds: ['web']
+    },
+    {
+      id: 'web',
+      level: 3,
+      bookmarkIds: [],
+      bookmarkGroupIds: ['nginx']
+    },
+    {
+      id: 'nginx',
+      level: 4,
+      bookmarkIds: ['server-1'],
+      bookmarkGroupIds: []
+    }
+  ]
+
+  assert.deepEqual(deleteBookmarkGroupState(groups, 'nginx', 'default'), {
+    deleted: true,
+    parentGroupId: 'web'
+  })
+  assert.deepEqual(groups.find(group => group.id === 'web').bookmarkIds, ['server-1'])
 })
 
 test('deleting a top-level group migrates connections and child groups to default', async () => {

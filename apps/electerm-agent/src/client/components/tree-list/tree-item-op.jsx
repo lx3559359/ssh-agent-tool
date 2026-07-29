@@ -29,6 +29,7 @@ export default function TreeItemOp (props) {
     isGroup,
     staticList,
     managementEnabled,
+    deleteTitle,
     del,
     openAll,
     openMoveModal,
@@ -138,7 +139,7 @@ export default function TreeItemOp (props) {
     buttons.push(
       <Popconfirm
         key='delete-tree'
-        title={e('del') + '?'}
+        title={deleteTitle || e('del') + '?'}
         onConfirm={handleDel}
         onCancel={() => setPendingDeleteItem(null)}
         onOpenChange={handleDeleteOpenChange}
