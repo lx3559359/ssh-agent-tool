@@ -52,3 +52,25 @@ test('quick connection saves through the shared group entry', () => {
     /store\.addItem\(buildQuickConnectBookmark/
   )
 })
+
+test('history saving uses an editable form and the shared group entry', () => {
+  const modal = fs.readFileSync(
+    path.join(
+      root,
+      'src/client/components/bookmark-form/bookmark-from-history-modal.jsx'
+    ),
+    'utf8'
+  )
+  const item = fs.readFileSync(
+    path.join(root, 'src/client/components/sidebar/history-item.jsx'),
+    'utf8'
+  )
+
+  assert.match(modal, /BookmarkGroupPicker/)
+  assert.match(modal, /store\.saveBookmarkInGroup/)
+  assert.match(modal, /shellpilotAuthenticationNeedsCompletion/)
+  assert.doesNotMatch(modal, /bookmark-json-preview/)
+  assert.match(item, /Dropdown/)
+  assert.match(item, /shellpilotSaveHistoryAsServer/)
+  assert.match(item, /shellpilotHistoryAlreadySaved/)
+})

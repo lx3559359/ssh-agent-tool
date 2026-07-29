@@ -1662,7 +1662,10 @@ const catalogs = Object.freeze({
     shellpilotCreateServerGroup: '新建分组',
     shellpilotParentGroup: '上级分组',
     shellpilotDuplicateServerGroup: '同一级已存在同名分组',
-    shellpilotCreateServerGroupFailed: '创建分组失败'
+    shellpilotCreateServerGroupFailed: '创建分组失败',
+    shellpilotSaveHistoryAsServer: '保存到服务器',
+    shellpilotHistoryAlreadySaved: '已保存',
+    shellpilotAuthenticationNeedsCompletion: '认证信息待补充，保存后请编辑服务器凭据'
   }),
   en_us: Object.freeze({
     bookmarks: 'Bookmarks',
@@ -3327,7 +3330,10 @@ const catalogs = Object.freeze({
     shellpilotCreateServerGroup: 'New group',
     shellpilotParentGroup: 'Parent group',
     shellpilotDuplicateServerGroup: 'A group with this name already exists here',
-    shellpilotCreateServerGroupFailed: 'Failed to create group'
+    shellpilotCreateServerGroupFailed: 'Failed to create group',
+    shellpilotSaveHistoryAsServer: 'Save to servers',
+    shellpilotHistoryAlreadySaved: 'Saved',
+    shellpilotAuthenticationNeedsCompletion: 'Authentication is incomplete. Edit the saved server credentials before connecting.'
   })
 })
 
