@@ -191,3 +191,66 @@ test('empty workspace surfaces unresolved incident summary', () => {
     /summary\.recentUnresolved/
   )
 })
+
+test('incident archive copy is complete in Chinese and English', () => {
+  const source = readClient('common/shellpilot-i18n-overrides.js')
+  const componentSources = fs.readdirSync(
+    path.join(root, 'src/client/components/incidents')
+  )
+    .filter(file => /\.(?:js|jsx)$/.test(file))
+    .map(file => readClient(`components/incidents/${file}`))
+    .join('\n')
+  const requiredKeys = new Set([
+    'shellpilotSidebarIncidents',
+    'shellpilotHelpIncidentArchives',
+    ...(componentSources.match(/shellpilotIncident[A-Za-z0-9_]+/g) || [])
+      .filter(key => !key.endsWith('_')),
+    ...['critical', 'high', 'medium', 'low']
+      .map(value => `shellpilotIncidentSeverity_${value}`),
+    ...[
+      'investigating',
+      'waiting_action',
+      'verifying',
+      'resolved',
+      'unresolved',
+      'archived',
+      'false_positive'
+    ].flatMap(value => [
+      `shellpilotIncidentState_${value}`,
+      `shellpilotIncidentMoveTo_${value}`
+    ]),
+    ...['pending', 'mitigated', 'passed_manual', 'passed_auto']
+      .map(value => `shellpilotIncidentVerification_${value}`)
+  ])
+
+  for (const key of requiredKeys) {
+    const matches = source.match(new RegExp(`${key}:`, 'g')) || []
+    assert.equal(matches.length, 2, `${key} must exist in zh_cn and en_us`)
+  }
+})
+
+test('help center documents the local incident archive workflow', () => {
+  const source = readClient('components/main/help-center-modal.jsx')
+  assert.match(source, /key: 'incident-archives'/)
+  assert.match(source, /手动新建故障档案/)
+  assert.match(source, /状态与验证/)
+  assert.match(source, /备份与恢复/)
+  assert.match(source, /不会保存密码、API Key/)
+  assert.match(source, /第一阶段仅保存在当前电脑/)
+})
+
+test('incident archive layout adapts to narrow and short windows', () => {
+  const styles = readClient('components/incidents/incidents.styl')
+  assert.match(styles, /@media \(max-width: 1180px\)/)
+  assert.match(styles, /@media \(max-width: 900px\)/)
+  assert.match(styles, /@media \(max-height: 760px\)/)
+  assert.match(styles, /\.incident-mobile-back/)
+  assertSourceMatches(
+    'components/incidents/incident-detail.jsx',
+    /shellpilotIncidentBackToList/
+  )
+  assertSourceMatches(
+    'components/incidents/incident-workspace.jsx',
+    /incident-workspace-show-detail/
+  )
+})

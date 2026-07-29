@@ -10,6 +10,7 @@ import {
   Tag
 } from 'antd'
 import {
+  ArrowLeftOutlined,
   DeleteOutlined,
   SaveOutlined,
   StarFilled,
@@ -79,6 +80,7 @@ export default function IncidentDetail ({
   store,
   creating,
   onCreated,
+  onBack,
   onCancelCreate,
   onDirtyChange
 }) {
@@ -190,6 +192,14 @@ export default function IncidentDetail ({
 
   return (
     <section className='incident-detail-panel'>
+      <Button
+        type='text'
+        className='incident-mobile-back'
+        icon={<ArrowLeftOutlined />}
+        onClick={onBack}
+      >
+        {e('shellpilotIncidentBackToList')}
+      </Button>
       <header className='incident-detail-header'>
         <div>
           <h2>

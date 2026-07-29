@@ -23,6 +23,9 @@ export default auto(function IncidentWorkspace ({
   const workspaceRef = useRef(null)
   const [creating, setCreating] = useState(false)
   const [detailDirty, setDetailDirty] = useState(false)
+  const [mobileDetailOpen, setMobileDetailOpen] = useState(
+    Boolean(store.activeIncidentId)
+  )
 
   useEffect(() => {
     if (!active) return
@@ -30,6 +33,10 @@ export default auto(function IncidentWorkspace ({
     store.loadIncidentSummary()
     focusIncidentWorkspace(true, workspaceRef.current)
   }, [active])
+
+  useEffect(() => {
+    if (active && store.activeIncidentId) setMobileDetailOpen(true)
+  }, [active, store.activeIncidentId])
 
   const continueAfterDirtyCheck = action => {
     if (!detailDirty) {
@@ -49,6 +56,7 @@ export default auto(function IncidentWorkspace ({
       store.selectIncidentArchive('')
       setCreating(true)
       setDetailDirty(false)
+      setMobileDetailOpen(true)
     })
   }
   const selectIncident = id => {
@@ -56,13 +64,22 @@ export default auto(function IncidentWorkspace ({
       setCreating(false)
       setDetailDirty(false)
       store.selectIncidentArchive(id)
+      setMobileDetailOpen(true)
     })
   }
   const closeWorkspace = () => {
     continueAfterDirtyCheck(() => {
       setCreating(false)
       setDetailDirty(false)
+      setMobileDetailOpen(false)
       store.closeIncidentArchiveWorkspace()
+    })
+  }
+  const showIncidentList = () => {
+    continueAfterDirtyCheck(() => {
+      setCreating(false)
+      setDetailDirty(false)
+      setMobileDetailOpen(false)
     })
   }
   const openStorage = () => {
@@ -116,7 +133,11 @@ export default auto(function IncidentWorkspace ({
         />
       )}
 
-      <div className='incident-workspace-grid'>
+      <div
+        className={classnames('incident-workspace-grid', {
+          'incident-workspace-show-detail': mobileDetailOpen
+        })}
+      >
         <IncidentList
           store={store}
           onCreate={openCreate}
@@ -127,9 +148,11 @@ export default auto(function IncidentWorkspace ({
           store={store}
           creating={creating}
           onCreated={() => setCreating(false)}
+          onBack={showIncidentList}
           onCancelCreate={() => continueAfterDirtyCheck(() => {
             setCreating(false)
             setDetailDirty(false)
+            setMobileDetailOpen(false)
           })}
           onDirtyChange={setDetailDirty}
         />
