@@ -34,3 +34,21 @@ test('group picker supports nested selection and inline creation', () => {
   assert.match(source, /shellpilotCreateServerGroup/)
   assert.match(source, /shellpilotParentGroup/)
 })
+
+test('quick connection saves through the shared group entry', () => {
+  const source = fs.readFileSync(
+    path.join(
+      root,
+      'src/client/components/tabs/quick-connect-wizard.jsx'
+    ),
+    'utf8'
+  )
+
+  assert.match(source, /BookmarkGroupPicker/)
+  assert.match(source, /selectedGroupId/)
+  assert.match(source, /store\.saveBookmarkInGroup/)
+  assert.doesNotMatch(
+    source,
+    /store\.addItem\(buildQuickConnectBookmark/
+  )
+})
