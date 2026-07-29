@@ -18,3 +18,19 @@ test('bookmark group store exposes shared save, move, create and repair entries'
   assert.match(source, /cloneBookmarkMembership/)
   assert.match(source, /restoreBookmarkMembership/)
 })
+
+test('group picker supports nested selection and inline creation', () => {
+  const source = fs.readFileSync(
+    path.join(
+      root,
+      'src/client/components/bookmark-form/common/bookmark-group-picker.jsx'
+    ),
+    'utf8'
+  )
+
+  assert.match(source, /formatBookmarkGroups/)
+  assert.match(source, /treeDefaultExpandAll/)
+  assert.match(source, /store\.createBookmarkGroup/)
+  assert.match(source, /shellpilotCreateServerGroup/)
+  assert.match(source, /shellpilotParentGroup/)
+})

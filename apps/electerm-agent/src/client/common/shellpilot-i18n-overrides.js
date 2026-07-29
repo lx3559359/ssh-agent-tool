@@ -1657,7 +1657,12 @@ const catalogs = Object.freeze({
     shellpilotArtifactSortBy: '按 {column} 排序',
     shellpilotArtifactSort: '排序',
     shellpilotArtifactFilteredRows: '筛选 {count} 行',
-    shellpilotArtifactColumnLabel: '列 {index}'
+    shellpilotArtifactColumnLabel: '列 {index}',
+    shellpilotSelectServerGroup: '选择服务器分组',
+    shellpilotCreateServerGroup: '新建分组',
+    shellpilotParentGroup: '上级分组',
+    shellpilotDuplicateServerGroup: '同一级已存在同名分组',
+    shellpilotCreateServerGroupFailed: '创建分组失败'
   }),
   en_us: Object.freeze({
     bookmarks: 'Bookmarks',
@@ -3317,7 +3322,12 @@ const catalogs = Object.freeze({
     shellpilotArtifactSortBy: 'Sort by {column}',
     shellpilotArtifactSort: 'Sort',
     shellpilotArtifactFilteredRows: '{count} filtered rows',
-    shellpilotArtifactColumnLabel: 'Column {index}'
+    shellpilotArtifactColumnLabel: 'Column {index}',
+    shellpilotSelectServerGroup: 'Select server group',
+    shellpilotCreateServerGroup: 'New group',
+    shellpilotParentGroup: 'Parent group',
+    shellpilotDuplicateServerGroup: 'A group with this name already exists here',
+    shellpilotCreateServerGroupFailed: 'Failed to create group'
   })
 })
 
