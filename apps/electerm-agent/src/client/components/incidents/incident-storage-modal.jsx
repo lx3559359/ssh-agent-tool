@@ -141,7 +141,7 @@ export default function IncidentStorageModal ({ store }) {
             <span>{e('shellpilotIncidentRestoreConfirmation')}</span>
             <Input
               value={confirmation}
-              placeholder='RESTORE'
+              placeholder={e('shellpilotIncidentRestoreToken')}
               onChange={event => setConfirmation(event.target.value)}
             />
           </label>

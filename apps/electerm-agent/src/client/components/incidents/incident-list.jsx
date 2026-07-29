@@ -33,6 +33,23 @@ const incidentStates = [
 
 const incidentSeverities = ['critical', 'high', 'medium', 'low']
 
+const incidentStateLabelKeys = {
+  investigating: 'shellpilotIncidentState_investigating',
+  waiting_action: 'shellpilotIncidentState_waiting_action',
+  verifying: 'shellpilotIncidentState_verifying',
+  resolved: 'shellpilotIncidentState_resolved',
+  unresolved: 'shellpilotIncidentState_unresolved',
+  archived: 'shellpilotIncidentState_archived',
+  false_positive: 'shellpilotIncidentState_false_positive'
+}
+
+const incidentSeverityLabelKeys = {
+  critical: 'shellpilotIncidentSeverity_critical',
+  high: 'shellpilotIncidentSeverity_high',
+  medium: 'shellpilotIncidentSeverity_medium',
+  low: 'shellpilotIncidentSeverity_low'
+}
+
 function uniqueTags (items, property) {
   return [...new Set(
     (items || []).flatMap(item => item[property] || []).filter(Boolean)
@@ -59,10 +76,10 @@ function formatIncidentTime (value) {
   }).format(date)
 }
 
-function filterOptions (values, prefix) {
+function filterOptions (values, labelKeys) {
   return values.map(value => ({
     value,
-    label: prefix ? e(`${prefix}${value}`) : value
+    label: labelKeys ? e(labelKeys[value]) : value
   }))
 }
 
@@ -151,7 +168,7 @@ export default function IncidentList ({
             value={store.incidentFilters.state}
             options={filterOptions(
               incidentStates,
-              'shellpilotIncidentState_'
+              incidentStateLabelKeys
             )}
             placeholder={e('shellpilotIncidentStateFilter')}
             onChange={value => updateFilter('state', value)}
@@ -162,7 +179,7 @@ export default function IncidentList ({
             value={store.incidentFilters.severity}
             options={filterOptions(
               incidentSeverities,
-              'shellpilotIncidentSeverity_'
+              incidentSeverityLabelKeys
             )}
             placeholder={e('shellpilotIncidentSeverityFilter')}
             onChange={value => updateFilter('severity', value)}
