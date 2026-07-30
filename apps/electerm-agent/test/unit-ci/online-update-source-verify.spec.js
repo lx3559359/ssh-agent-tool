@@ -5,6 +5,7 @@ const os = require('node:os')
 const path = require('node:path')
 
 const {
+  buildJsonRequestHeaders,
   buildOnlineUpdateSourceReport,
   resolveOnlineUpdateVersion
 } = require(path.resolve(__dirname, '../../build/bin/verify-online-update-sources'))
@@ -36,6 +37,24 @@ function approvedManifest (version) {
     version
   }
 }
+
+test('online update verifier authenticates only GitHub API requests', () => {
+  const githubHeaders = buildJsonRequestHeaders(
+    'https://api.github.com/repos/lx3559359/ssh-agent-tool/releases/latest',
+    { GH_TOKEN: 'test-token' }
+  )
+  assert.equal(githubHeaders.Authorization, 'Bearer test-token')
+  assert.equal(githubHeaders.Accept, 'application/vnd.github+json')
+  assert.equal(githubHeaders['X-GitHub-Api-Version'], '2022-11-28')
+
+  for (const url of [
+    'https://github.com/lx3559359/ssh-agent-tool/releases/download/v0.4.20/latest.yml',
+    'https://modelscope.cn/models/lx3559359/ShellPilot-Updates/resolve/master/shellpilot-release.json',
+    'https://example.com/release.json'
+  ]) {
+    assert.equal(buildJsonRequestHeaders(url, { GH_TOKEN: 'test-token' }).Authorization, undefined)
+  }
+})
 
 function prepareRealModelScopeRelease (version) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shellpilot-modelscope-index-'))
