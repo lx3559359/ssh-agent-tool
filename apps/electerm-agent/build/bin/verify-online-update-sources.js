@@ -268,12 +268,29 @@ async function verifySourceAssetBytes ({
   return { assetErrors, verifiedAssetCount }
 }
 
+function buildJsonRequestHeaders (rawUrl, env = process.env) {
+  const headers = {
+    'User-Agent': 'ShellPilot update verifier'
+  }
+  let hostname = ''
+  try {
+    hostname = new URL(rawUrl).hostname.toLowerCase()
+  } catch (error) {
+    return headers
+  }
+  const githubToken = String(env.GH_TOKEN || env.GITHUB_TOKEN || '').trim()
+  if (hostname === 'api.github.com' && githubToken) {
+    headers.Authorization = `Bearer ${githubToken}`
+    headers.Accept = 'application/vnd.github+json'
+    headers['X-GitHub-Api-Version'] = '2022-11-28'
+  }
+  return headers
+}
+
 async function defaultFetchJson (url) {
   const res = await axios.get(url, {
     timeout: 15000,
-    headers: {
-      'User-Agent': 'ShellPilot update verifier'
-    }
+    headers: buildJsonRequestHeaders(url)
   })
   return res.data
 }
@@ -510,6 +527,7 @@ if (require.main === module) {
 
 module.exports = {
   buildLocalApprovedAssets,
+  buildJsonRequestHeaders,
   buildOnlineUpdateSourceReport,
   checkOnlineUpdateSource,
   cleanVersion,
