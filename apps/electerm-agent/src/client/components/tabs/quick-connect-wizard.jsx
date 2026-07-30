@@ -23,6 +23,7 @@ import {
   QUICK_CONNECT_DEFAULT_PORTS,
   QUICK_CONNECT_PROTOCOLS
 } from './quick-connect-options.js'
+import BookmarkGroupPicker from '../bookmark-form/common/bookmark-group-picker'
 import './quick-connect.styl'
 
 const e = window.translate
@@ -39,7 +40,8 @@ function getInitialValues () {
     passphrase: '',
     profile: '',
     title: '',
-    saveAsBookmark: true
+    saveAsBookmark: true,
+    selectedGroupId: window.store.getLastBookmarkGroup?.() || 'default'
   }
 }
 
@@ -109,7 +111,11 @@ export default function QuickConnectWizard ({ open, onClose, batch }) {
     const options = getOptions()
     if (!options) return
     if (values.saveAsBookmark) {
-      window.store.addItem(buildQuickConnectBookmark(options), 'bookmarks')
+      const bookmark = buildQuickConnectBookmark(options)
+      window.store.saveBookmarkInGroup(
+        bookmark,
+        values.selectedGroupId
+      )
     }
     window.store.addTab({
       ...options,
@@ -283,6 +289,22 @@ export default function QuickConnectWizard ({ open, onClose, batch }) {
                 >
                   {e('shellpilotSaveAsConnection')}
                 </Checkbox>
+                {values.saveAsBookmark
+                  ? (
+                    <div className='quick-connect-group-field'>
+                      <label>
+                        {e('shellpilotSelectServerGroup')}
+                      </label>
+                      <BookmarkGroupPicker
+                        value={values.selectedGroupId}
+                        onChange={value => updateValue(
+                          'selectedGroupId',
+                          value
+                        )}
+                      />
+                    </div>
+                    )
+                  : null}
                 <Button type='link' size='small' icon={<LinkOutlined />} onClick={openAdvancedSettings}>
                   {e('shellpilotConnectionWizardOpenAdvanced')}
                 </Button>

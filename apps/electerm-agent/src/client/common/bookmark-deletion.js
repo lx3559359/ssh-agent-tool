@@ -4,6 +4,36 @@ function unique (items) {
   return [...new Set(items)]
 }
 
+export function describeBookmarkGroupDeletion (
+  bookmarkGroups = [],
+  groupId,
+  defaultGroupId
+) {
+  const empty = {
+    canDelete: false,
+    targetGroupId: null,
+    bookmarkCount: 0,
+    childGroupCount: 0
+  }
+  if (!groupId || groupId === defaultGroupId) {
+    return empty
+  }
+  const group = bookmarkGroups.find(item => item.id === groupId)
+  if (!group) {
+    return empty
+  }
+  const parent = bookmarkGroups.find(item =>
+    item.id !== groupId &&
+    (item.bookmarkGroupIds || []).includes(groupId)
+  ) || bookmarkGroups.find(item => item.id === defaultGroupId)
+  return {
+    canDelete: Boolean(parent),
+    targetGroupId: parent?.id || null,
+    bookmarkCount: unique(group.bookmarkIds || []).length,
+    childGroupCount: unique(group.bookmarkGroupIds || []).length
+  }
+}
+
 export function deleteBookmarkGroupState (
   bookmarkGroups = [],
   groupId,
@@ -25,12 +55,10 @@ export function deleteBookmarkGroupState (
   }
 
   const deletedGroup = bookmarkGroups[groupIndex]
-  const referencedParent = deletedGroup.level === 2
-    ? bookmarkGroups.find(group =>
-      group.id !== groupId &&
-      (group.bookmarkGroupIds || []).includes(groupId)
-    )
-    : null
+  const referencedParent = bookmarkGroups.find(group =>
+    group.id !== groupId &&
+    (group.bookmarkGroupIds || []).includes(groupId)
+  )
   const parentGroup = referencedParent || bookmarkGroups.find(
     group => group.id === defaultGroupId
   )

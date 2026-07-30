@@ -2075,10 +2075,6 @@ async function runSurfaceCase (page, testInfo, failures, context, surface, stats
 }
 
 async function exerciseLanguageAndThemeState (page) {
-  await page.waitForFunction(() => {
-    const info = window.store?.upgradeInfo
-    return Boolean(info?.lastCheckedAt) && info.checkingRemoteVersion === false
-  }, undefined, { timeout: 30000 })
   const updatePanelClose = page.locator('.upgrade-panel:not(.upgrade-panel-hide) .close-upgrade-panel')
   if (await updatePanelClose.isVisible().catch(() => false)) {
     await updatePanelClose.click()
@@ -2227,7 +2223,7 @@ test('narrow topbar actions avoid native window controls and keep the last actio
     const rail = page.locator('.not-system-ui .aigshell-topbar-actions')
     const actions = rail.locator('.aigshell-topbar-action:not(:disabled)')
     await expect(rail).toBeVisible()
-    await expect(actions).toHaveCount(12)
+    await expect(actions).toHaveCount(13)
 
     await rail.evaluate(element => { element.scrollLeft = 0 })
     await actions.first().focus()
@@ -2366,7 +2362,7 @@ test('590px topbar keeps every visible action clear of native controls and prese
     const rail = page.locator('.not-system-ui .aigshell-topbar-actions')
     const actions = rail.locator('.aigshell-topbar-action:not(:disabled)')
     await expect(rail).toBeVisible()
-    await expect(actions).toHaveCount(12)
+    await expect(actions).toHaveCount(13)
 
     const inspectHitTargets = () => rail.evaluate(element => {
       const railRect = element.getBoundingClientRect()
@@ -4064,6 +4060,100 @@ test('UI font preview applies cancels persists and leaves terminal unchanged', a
     await page.locator('.close-setting-wrap').click()
     expect(await page.evaluate(() => window.store.previewUiFontPresetId)).toBe('')
     expect(await page.evaluate(() => window.store.config.uiFontPresetId)).toBe('segoe-ui')
+  })
+})
+
+matrixTest('bookmark group management remains usable at desktop acceptance sizes', async ({ browserName }, testInfo) => {
+  await runWithIsolatedApp('bookmark-groups', async (electronApp) => {
+    const page = electronApp.windows()[0] || await electronApp.firstWindow()
+    await waitForSecondaryAppReady(electronApp, page, 'bookmark-groups')
+    await page.evaluate(() => {
+      window.store.upgradeInfo.showUpgradeModal = false
+      const suffix = `${Date.now()}`
+      const parent = window.store.createBookmarkGroup({
+        title: '生产环境',
+        parentId: 'default'
+      })
+      const child = window.store.createBookmarkGroup({
+        title: 'Web 服务器',
+        parentId: parent.id
+      })
+      window.store.saveBookmarkInGroup({
+        id: `visual-bookmark-${suffix}`,
+        type: 'ssh',
+        title: '生产 Web 01',
+        host: '10.0.0.8',
+        port: '22',
+        username: 'root'
+      }, child.id)
+      window.store.storeAssign({
+        expandedKeys: [
+          ...new Set([
+            ...(window.store.expandedKeys || []),
+            'default',
+            parent.id,
+            child.id
+          ])
+        ]
+      })
+      window.store.handleSidebarPanelTab('bookmarks')
+      window.store.setOpenedSideBar('bookmarks')
+      window.store.bookmarkSelectMode = true
+    })
+
+    const panel = page.locator('.sidebar-panel-bookmarks')
+    const wrapper = panel.locator('.tree-select-wrapper')
+    const picker = wrapper.locator('.bookmark-group-picker')
+    const header = wrapper.locator('.tree-select-header')
+    await expect(panel).toBeVisible()
+    await expect(wrapper).toBeVisible()
+    await expect(picker).toBeVisible()
+    await expect(wrapper).toContainText('生产环境')
+    await expect(wrapper).toContainText('Web 服务器')
+    await expect(wrapper).toContainText('生产 Web 01')
+
+    const cases = [
+      { theme: 'defaultLight', width: 1366, height: 768 },
+      { theme: 'defaultLight', width: 1920, height: 1080 },
+      { theme: 'shellpilot-ocean', width: 1366, height: 768 },
+      { theme: 'shellpilot-ocean', width: 1920, height: 1080 }
+    ]
+    for (const item of cases) {
+      await page.evaluate(theme => window.store.setTheme(theme), item.theme)
+      await setWindowCase(electronApp, page, {
+        width: item.width,
+        height: item.height
+      }, 1)
+      await expect(header).toBeVisible()
+      const layout = await page.evaluate(() => {
+        const panel = document.querySelector('.sidebar-panel-bookmarks')
+        const wrapper = panel?.querySelector('.tree-select-wrapper')
+        const header = wrapper?.querySelector('.tree-select-header')
+        if (!panel || !wrapper || !header) {
+          return null
+        }
+        const panelRect = panel.getBoundingClientRect()
+        const headerRect = header.getBoundingClientRect()
+        const style = window.getComputedStyle(wrapper)
+        return {
+          documentOverflow: document.documentElement.scrollWidth > window.innerWidth + 1,
+          panelInsideViewport: panelRect.left >= -1 && panelRect.right <= window.innerWidth + 1,
+          headerInsidePanel: headerRect.left >= panelRect.left - 1 && headerRect.top >= panelRect.top - 1,
+          horizontalOverflowMode: style.overflowX,
+          canReachFullWidth: wrapper.scrollWidth <= wrapper.clientWidth + 1 || style.overflowX === 'auto'
+        }
+      })
+      expect(layout, JSON.stringify({ browserName, item, layout })).toEqual({
+        documentOverflow: false,
+        panelInsideViewport: true,
+        headerInsidePanel: true,
+        horizontalOverflowMode: 'auto',
+        canReachFullWidth: true
+      })
+      await page.screenshot({
+        path: testInfo.outputPath(`bookmark-groups-${item.theme}-${item.width}x${item.height}.png`)
+      })
+    }
   })
 })
 

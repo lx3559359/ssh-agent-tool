@@ -4,6 +4,7 @@
 
 import { auto } from 'manate/react'
 import TreeList from '../tree-list/tree-list'
+import BookmarkTreeSelect from '../bookmark-form/tree-select'
 
 export default auto(function BookmarkSelect (props) {
   const { store, from, autoFocus } = props
@@ -14,6 +15,7 @@ export default auto(function BookmarkSelect (props) {
     expandedKeys,
     bookmarks,
     bookmarksMap,
+    bookmarkSelectMode,
     initLoadingData
   } = store
   if (from === 'sidebar' && openedSideBar !== 'bookmarks') {
@@ -30,7 +32,8 @@ export default auto(function BookmarkSelect (props) {
     type: 'bookmarks',
     onClickItem,
     listStyle,
-    staticList: true
+    staticList: true,
+    managementEnabled: true
   }
   const propsTree = {
     ...base,
@@ -42,6 +45,14 @@ export default auto(function BookmarkSelect (props) {
     bookmarkGroupTree: store.bookmarkGroupTree,
     autoFocus,
     initLoadingData
+  }
+  if (bookmarkSelectMode) {
+    return (
+      <BookmarkTreeSelect
+        {...propsTree}
+        type='manage'
+      />
+    )
   }
   return (
     <TreeList

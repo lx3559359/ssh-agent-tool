@@ -142,43 +142,31 @@ export default auto(function MoveItemModal (props) {
     if (!group && groupId !== rootId) {
       return
     }
+    if (!moveItemIsGroup) {
+      window.store.moveBookmarksToGroup([moveItem.id], groupId)
+      return onCancelMoveItem()
+    }
     // Find and update the original parent group
     const currentParentGroup = bookmarkGroups.find(bg => {
-      if (moveItemIsGroup) {
-        return (bg.bookmarkGroupIds || []).includes(moveItem.id)
-      }
-      return (bg.bookmarkIds || []).includes(moveItem.id)
+      return (bg.bookmarkGroupIds || []).includes(moveItem.id)
     })
 
     // Remove from original parent if found
     if (currentParentGroup) {
-      if (moveItemIsGroup) {
-        currentParentGroup.bookmarkGroupIds = currentParentGroup.bookmarkGroupIds.filter(
-          id => id !== moveItem.id
-        )
-      } else {
-        currentParentGroup.bookmarkIds = currentParentGroup.bookmarkIds.filter(
-          id => id !== moveItem.id
-        )
-      }
+      currentParentGroup.bookmarkGroupIds = currentParentGroup.bookmarkGroupIds.filter(
+        id => id !== moveItem.id
+      )
     }
     if (groupId === rootId) {
       delete moveItem.level
       return onCancelMoveItem()
     }
 
-    if (moveItemIsGroup) {
-      moveItem.level = (group.level || 1) + 1
-      group.bookmarkGroupIds = [
-        moveItem.id,
-        ...(group.bookmarkGroupIds || [])
-      ]
-    } else {
-      group.bookmarkIds = [
-        moveItem.id,
-        ...(group.bookmarkIds || [])
-      ]
-    }
+    moveItem.level = (group.level || 1) + 1
+    group.bookmarkGroupIds = [
+      moveItem.id,
+      ...(group.bookmarkGroupIds || [])
+    ]
     onCancelMoveItem()
   }
 

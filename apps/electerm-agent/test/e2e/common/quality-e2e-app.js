@@ -46,11 +46,21 @@ async function forceKillQualityApp (electronApp) {
   if (child.exitCode !== null) return
   const exited = once(child, 'exit')
   if (process.platform === 'win32') {
+    let taskkillError
     await execFileAsync('taskkill', ['/PID', String(child.pid), '/T', '/F'], {
       windowsHide: true
     }).catch(error => {
-      if (child.exitCode === null) throw error
+      taskkillError = error
     })
+    if (child.exitCode === null && taskkillError) {
+      await Promise.race([
+        exited,
+        new Promise(resolve => setTimeout(resolve, 2000))
+      ])
+    }
+    if (child.exitCode === null) {
+      child.kill('SIGKILL')
+    }
   } else {
     child.kill('SIGKILL')
   }

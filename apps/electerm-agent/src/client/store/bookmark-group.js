@@ -8,6 +8,16 @@ import {
 } from '../common/constants'
 import { removeCyclicBookmarkGroupIds } from '../common/bookmark-group-tree'
 import { deleteBookmarkGroupState } from '../common/bookmark-deletion'
+import uid from '../common/uid'
+import { getRandomDefaultColor } from '../common/rand-hex-color.js'
+import {
+  assignBookmarkToGroup,
+  cloneBookmarkMembership,
+  createBookmarkGroupInParent,
+  moveBookmarksToGroup as moveMembership,
+  repairBookmarkMembership,
+  restoreBookmarkMembership
+} from '../common/bookmark-membership'
 import { action } from 'manate'
 
 export default Store => {
@@ -25,6 +35,73 @@ export default Store => {
 
   Store.prototype.editBookmarkGroup = function (id, updates) {
     window.store.editItem(id, updates, settingMap.bookmarkGroups)
+  }
+
+  Store.prototype.saveBookmarkInGroup = function (bookmark, groupId) {
+    const { store } = window
+    const snapshot = cloneBookmarkMembership(store.bookmarkGroups)
+    try {
+      store.addItem(bookmark, settingMap.bookmarks)
+      const result = assignBookmarkToGroup(
+        store.bookmarkGroups,
+        bookmark.id,
+        groupId,
+        defaultBookmarkGroupId
+      )
+      store.rememberLastBookmarkGroup(result.groupId)
+      return { bookmark, groupId: result.groupId }
+    } catch (error) {
+      store.delItem({ id: bookmark.id }, settingMap.bookmarks)
+      restoreBookmarkMembership(store.bookmarkGroups, snapshot)
+      throw error
+    }
+  }
+
+  Store.prototype.moveBookmarksToGroup = function (bookmarkIds, groupId) {
+    const { store } = window
+    const result = moveMembership(
+      store.bookmarkGroups,
+      bookmarkIds,
+      groupId,
+      defaultBookmarkGroupId
+    )
+    store.rememberLastBookmarkGroup(result.groupId)
+    return result
+  }
+
+  Store.prototype.createBookmarkGroup = function ({
+    title,
+    parentId,
+    color
+  }) {
+    return createBookmarkGroupInParent(window.store.bookmarkGroups, {
+      id: uid(),
+      title,
+      parentId,
+      color: color || getRandomDefaultColor()
+    })
+  }
+
+  Store.prototype.rememberLastBookmarkGroup = function (groupId) {
+    const valid = window.store.bookmarkGroups.some(
+      group => group.id === groupId
+    )
+      ? groupId
+      : defaultBookmarkGroupId
+    window.localStorage?.setItem(
+      'shellpilot-last-bookmark-group-id',
+      valid
+    )
+    return valid
+  }
+
+  Store.prototype.getLastBookmarkGroup = function () {
+    const saved = window.localStorage?.getItem(
+      'shellpilot-last-bookmark-group-id'
+    )
+    return window.store.bookmarkGroups.some(group => group.id === saved)
+      ? saved
+      : defaultBookmarkGroupId
   }
 
   Store.prototype.openAllBookmarkInCategory = function (item) {
@@ -61,70 +138,12 @@ export default Store => {
   Store.prototype.fixBookmarkGroups = function () {
     const { store } = window
     const { bookmarks, bookmarkGroups } = store
-
-    // Create sets for quick lookup
-    const bookmarkIds = new Set(bookmarks.map(b => b.id))
-    const groupIds = new Set(bookmarkGroups.map(g => g.id))
-
-    // Fix bookmarkGroups
-    for (const group of bookmarkGroups) {
-      // Fix bookmarkIds - remove non-existent bookmark references
-      if (group.bookmarkIds) {
-        group.bookmarkIds = group.bookmarkIds.filter(id => bookmarkIds.has(id))
-      } else {
-        group.bookmarkIds = []
-      }
-
-      // Fix bookmarkGroupIds - remove non-existent group references
-      if (group.bookmarkGroupIds) {
-        group.bookmarkGroupIds = group.bookmarkGroupIds.filter(id =>
-          groupIds.has(id) && id !== group.id // Prevent self-reference
-        )
-      } else {
-        group.bookmarkGroupIds = []
-      }
-    }
-
+    const result = repairBookmarkMembership(
+      bookmarks,
+      bookmarkGroups,
+      defaultBookmarkGroupId
+    )
     removeCyclicBookmarkGroupIds(bookmarkGroups)
-
-    // Find stray bookmarks (not belonging to any group)
-    const assignedBookmarkIds = new Set(
-      bookmarkGroups.reduce((acc, group) =>
-        [...acc, ...(group.bookmarkIds || [])],
-      [])
-    )
-    const defaultGroup = bookmarkGroups.find(g => g.id === defaultBookmarkGroupId)
-    const strayBookmarkIds = bookmarks
-      .map(b => b.id)
-      .filter(id => !assignedBookmarkIds.has(id))
-
-    // Add stray bookmarks to default group
-    if (strayBookmarkIds.length) {
-      if (defaultGroup) {
-        defaultGroup.bookmarkIds = [
-          ...new Set([...defaultGroup.bookmarkIds, ...strayBookmarkIds])
-        ]
-      }
-    }
-
-    // Find stray groups (not belonging to any parent group and not being a top-level group)
-    const assignedGroupIds = new Set(
-      bookmarkGroups.reduce((acc, group) =>
-        [...acc, ...(group.bookmarkGroupIds || [])],
-      [])
-    )
-
-    const strayGroups = bookmarkGroups.filter(group =>
-      group.level === 2 && // Only check non-top-level groups
-      group.id !== defaultBookmarkGroupId && // Exclude default group
-      !assignedGroupIds.has(group.id) // Not assigned to any parent
-    )
-
-    // Find a suitable parent for stray groups
-    if (strayGroups.length) {
-      defaultGroup.bookmarkGroupIds = [
-        ...new Set([...defaultGroup.bookmarkGroupIds, ...strayGroups.map(g => g.id)])
-      ]
-    }
+    return result
   }
 }

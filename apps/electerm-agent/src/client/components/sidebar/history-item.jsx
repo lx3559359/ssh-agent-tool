@@ -1,9 +1,13 @@
 import React, { useCallback, useEffect, useRef } from 'react'
+import { auto } from 'manate/react'
 import createTitle, { createTitleWithTag } from '../../common/create-title'
 import { DeleteOutlined, BookFilled } from '@ant-design/icons'
+import { Dropdown } from 'antd'
 import { refsStatic } from '../common/ref'
 
-export default function HistoryItem (props) {
+const e = window.translate
+
+export default auto(function HistoryItem (props) {
   const { store } = window
   const {
     item
@@ -38,31 +42,86 @@ export default function HistoryItem (props) {
 
   function handleBookmark (e) {
     e.stopPropagation()
+    if (existingBookmark) {
+      return
+    }
     refsStatic.get('bookmark-from-history-modal')?.show(item.tab)
   }
   if (!item.tab) {
     return null
   }
+  const existingBookmark = store.bookmarks.find(bookmark => (
+    sameConnection(bookmark, item.tab)
+  ))
   const title = createTitleWithTag(item.tab)
   const tt = createTitle(item.tab)
+  const menuItems = [
+    {
+      key: 'save',
+      label: existingBookmark
+        ? e('shellpilotHistoryAlreadySaved')
+        : e('shellpilotSaveHistoryAsServer'),
+      disabled: Boolean(existingBookmark)
+    }
+  ]
+  const handleMenuClick = ({ key, domEvent }) => {
+    domEvent?.stopPropagation()
+    if (key === 'save' && !existingBookmark) {
+      refsStatic.get('bookmark-from-history-modal')?.show(item.tab)
+    }
+  }
   return (
-    <div
-      className='item-list-unit'
-      title={tt}
-      onClick={handleClick}
+    <Dropdown
+      trigger={['contextMenu']}
+      menu={{
+        items: menuItems,
+        onClick: handleMenuClick
+      }}
     >
-      <div className='elli pd1y pd2x'>
-        {title}
+      <div
+        className='item-list-unit'
+        title={tt}
+        onClick={handleClick}
+      >
+        <div className='elli pd1y pd2x'>
+          {title}
+          {existingBookmark
+            ? (
+              <span className='history-item-saved'>
+                {e('shellpilotHistoryAlreadySaved')}
+              </span>
+              )
+            : null}
+        </div>
+        <BookFilled
+          className='list-item-bookmark'
+          title={existingBookmark
+            ? e('shellpilotHistoryAlreadySaved')
+            : e('shellpilotSaveHistoryAsServer')}
+          onClick={handleBookmark}
+        />
+        <DeleteOutlined
+          className='list-item-edit'
+          onClick={handleDelete}
+        />
       </div>
-      <BookFilled
-        className='list-item-bookmark'
-        title={window.translate('bookmark')}
-        onClick={handleBookmark}
-      />
-      <DeleteOutlined
-        className='list-item-edit'
-        onClick={handleDelete}
-      />
-    </div>
+    </Dropdown>
   )
+})
+
+function sameConnection (bookmark, tab) {
+  const leftPort = String(bookmark.port || defaultPort(bookmark.type))
+  const rightPort = String(tab.port || defaultPort(tab.type))
+  return normalize(bookmark.type || 'ssh') === normalize(tab.type || 'ssh') &&
+    normalize(bookmark.host) === normalize(tab.host) &&
+    leftPort === rightPort &&
+    normalize(bookmark.username) === normalize(tab.username)
+}
+
+function defaultPort (type) {
+  return normalize(type) === 'telnet' ? 23 : 22
+}
+
+function normalize (value) {
+  return String(value || '').trim().toLowerCase()
 }

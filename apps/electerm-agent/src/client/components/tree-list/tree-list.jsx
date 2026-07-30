@@ -688,40 +688,18 @@ export default class ItemListTree extends Component {
         arr.splice(index, 0, idDragged)
       }
     } else {
-      const parentDrag = bookmarkGroups.find(
-        item => item.id === pidDragged
-      )
-      if (!parentDrag) {
-        return
-      }
-      parentDrag.bookmarkIds = (parentDrag.bookmarkIds || []).filter(
-        id => id !== idDragged
-      )
-      const parentDrop = isGroupDrop
+      const targetGroup = isGroupDrop
         ? bookmarkGroups.find(
           item => item.id === idDrop
         )
         : bookmarkGroups.find(
           item => item.id === pidDrop
         )
-      if (!parentDrop) {
+      if (!targetGroup) {
         return
       }
-      if (isGroupDrop) {
-        parentDrop.bookmarkIds = uniq(
-          [
-            ...(parentDrop.bookmarkIds || []),
-            idDragged
-          ]
-        )
-      } else {
-        const arr = parentDrop.bookmarkIds || []
-        let index = arr.findIndex(item => item === idDrop)
-        if (index < 0) {
-          index = 0
-        }
-        arr.splice(index, 0, idDragged)
-      }
+      window.store.moveBookmarksToGroup([idDragged], targetGroup.id)
+      return
     }
     if (
       isGroupDrag &&
@@ -808,6 +786,7 @@ export default class ItemListTree extends Component {
         activeItemId={this.props.activeItemId}
         searchSelectedRowKey={this.state.searchSelectedRowKey}
         staticList={this.props.staticList}
+        managementEnabled={this.props.managementEnabled}
         leftSidebarWidth={this.props.leftSidebarWidth}
         {...pick(
           this,
@@ -960,6 +939,7 @@ export default class ItemListTree extends Component {
     const {
       type,
       staticList,
+      managementEnabled,
       listStyle = {}
     } = this.props
     const { rows } = this.getVisibleTreeData()
@@ -968,7 +948,7 @@ export default class ItemListTree extends Component {
       <div className={`tree-list item-type-${type}`}>
         <div className='tree-list-header'>
           {
-            staticList
+            staticList && !managementEnabled
               ? null
               : this.renderNewButtons()
           }

@@ -9,6 +9,7 @@ import { defaultBookmarkGroupId } from '../../common/constants'
 import deepCopy from 'json-deep-copy'
 import createTitle, { createTitleWithTag } from '../../common/create-title'
 import { confirmBookmarkSelectionDeletion } from '../../common/bookmark-deletion'
+import BookmarkGroupPicker from './common/bookmark-group-picker.jsx'
 
 const e = window.translate
 
@@ -115,13 +116,16 @@ export default function BookmarkTreeSelect (props) {
   const [checkedKeys, setCheckedKeys] = useState(() => deepCopy(propCheckedKeys || []))
   const [searchText, setSearchText] = useState('')
   const [refreshKey, setRefreshKey] = useState(0)
+  const [targetGroupId, setTargetGroupId] = useState(
+    () => window.store.getLastBookmarkGroup?.() || defaultBookmarkGroupId
+  )
 
   const onCheck = setCheckedKeys
 
   const handleOperation = () => {
     const { store } = window
     const arr = checkedKeys.filter(d => d !== defaultBookmarkGroupId)
-    if (type === 'delete') {
+    if (type === 'delete' || type === 'manage') {
       const confirmed = confirmBookmarkSelectionDeletion(
         arr,
         message => window.confirm(message),
@@ -137,6 +141,18 @@ export default function BookmarkTreeSelect (props) {
         props.onClose()
       }
     }
+    setCheckedKeys([])
+  }
+
+  const handleMove = () => {
+    const { store } = window
+    const bookmarkIds = checkedKeys.filter(id => (
+      store.bookmarks.some(bookmark => bookmark.id === id)
+    ))
+    if (!bookmarkIds.length || !targetGroupId) {
+      return
+    }
+    store.moveBookmarksToGroup(bookmarkIds, targetGroupId)
     setCheckedKeys([])
   }
 
@@ -167,6 +183,9 @@ export default function BookmarkTreeSelect (props) {
     treeData
   }
   const len = checkedKeys.length
+  const bookmarkIds = checkedKeys.filter(id => (
+    window.store.bookmarks.some(bookmark => bookmark.id === id)
+  ))
   return (
     <div className='tree-select-wrapper pd2'>
       <div className='tree-select-header'>
@@ -179,20 +198,49 @@ export default function BookmarkTreeSelect (props) {
             style={{ flex: 1 }}
           />
         </Space.Compact>
-        <Space.Compact className='mg2b'>
-          <Button
-            type='primary'
-            disabled={!len}
-            onClick={handleOperation}
-          >
-            {type === 'delete' ? e('delSelected') : e('open')} ({len})
-          </Button>
-          <Button
-            onClick={handleCancel}
-          >
-            {e('cancel')}
-          </Button>
-        </Space.Compact>
+        {type === 'manage'
+          ? (
+            <div className='bookmark-tree-manage-actions mg2b'>
+              <BookmarkGroupPicker
+                value={targetGroupId}
+                onChange={setTargetGroupId}
+                allowCreate={false}
+              />
+              <Space.Compact>
+                <Button
+                  type='primary'
+                  disabled={!bookmarkIds.length || !targetGroupId}
+                  onClick={handleMove}
+                >
+                  {e('shellpilotMoveSelectedServers')} ({bookmarkIds.length})
+                </Button>
+                <Button
+                  danger
+                  disabled={!len}
+                  onClick={handleOperation}
+                >
+                  {e('delSelected')} ({len})
+                </Button>
+                <Button onClick={handleCancel}>
+                  {e('cancel')}
+                </Button>
+              </Space.Compact>
+            </div>
+            )
+          : (
+            <Space.Compact className='mg2b'>
+              <Button
+                type='primary'
+                disabled={!len}
+                onClick={handleOperation}
+              >
+                {type === 'delete' ? e('delSelected') : e('open')} ({len})
+              </Button>
+              <Button onClick={handleCancel}>
+                {e('cancel')}
+              </Button>
+            </Space.Compact>
+            )}
       </div>
       <div className='tree-select-content'>
         <Tree {...rProps} />

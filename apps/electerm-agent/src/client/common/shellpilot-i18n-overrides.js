@@ -477,6 +477,8 @@ const catalogs = Object.freeze({
     shellpilotBookmarkFieldNotes: '备注',
     shellpilotBookmarkConfirmDeleteGroup: '确认删除这个分组？',
     shellpilotBookmarkConfirmDeleteConnection: '确认删除这个连接？',
+    shellpilotBookmarkDeleteGroupImpact: '删除后，{servers} 台服务器和 {groups} 个子分组将移动到“{target}”。不会删除服务器，是否继续？',
+    shellpilotUngrouped: '未分组',
     shellpilotProtocolRegistered: '协议处理器已注册',
     shellpilotDeepLinkSkipped: '已跳过注册：{detail}',
     shellpilotProtocolRegistrationFailed: '协议处理器注册失败',
@@ -1657,7 +1659,16 @@ const catalogs = Object.freeze({
     shellpilotArtifactSortBy: '按 {column} 排序',
     shellpilotArtifactSort: '排序',
     shellpilotArtifactFilteredRows: '筛选 {count} 行',
-    shellpilotArtifactColumnLabel: '列 {index}'
+    shellpilotArtifactColumnLabel: '列 {index}',
+    shellpilotSelectServerGroup: '选择服务器分组',
+    shellpilotCreateServerGroup: '新建分组',
+    shellpilotParentGroup: '上级分组',
+    shellpilotDuplicateServerGroup: '同一级已存在同名分组',
+    shellpilotCreateServerGroupFailed: '创建分组失败',
+    shellpilotSaveHistoryAsServer: '保存到服务器',
+    shellpilotHistoryAlreadySaved: '已保存',
+    shellpilotAuthenticationNeedsCompletion: '认证信息待补充，保存后请编辑服务器凭据',
+    shellpilotMoveSelectedServers: '移动所选服务器'
   }),
   en_us: Object.freeze({
     bookmarks: 'Bookmarks',
@@ -2137,6 +2148,8 @@ const catalogs = Object.freeze({
     shellpilotBookmarkFieldNotes: 'Notes',
     shellpilotBookmarkConfirmDeleteGroup: 'Delete this group?',
     shellpilotBookmarkConfirmDeleteConnection: 'Delete this connection?',
+    shellpilotBookmarkDeleteGroupImpact: 'After deletion, {servers} server(s) and {groups} child group(s) will move to "{target}". No servers will be deleted. Continue?',
+    shellpilotUngrouped: 'Ungrouped',
     shellpilotProtocolRegistered: 'Protocol handlers registered',
     shellpilotDeepLinkSkipped: 'Registration skipped: {detail}',
     shellpilotProtocolRegistrationFailed: 'Protocol handler registration failed',
@@ -3317,7 +3330,16 @@ const catalogs = Object.freeze({
     shellpilotArtifactSortBy: 'Sort by {column}',
     shellpilotArtifactSort: 'Sort',
     shellpilotArtifactFilteredRows: '{count} filtered rows',
-    shellpilotArtifactColumnLabel: 'Column {index}'
+    shellpilotArtifactColumnLabel: 'Column {index}',
+    shellpilotSelectServerGroup: 'Select server group',
+    shellpilotCreateServerGroup: 'New group',
+    shellpilotParentGroup: 'Parent group',
+    shellpilotDuplicateServerGroup: 'A group with this name already exists here',
+    shellpilotCreateServerGroupFailed: 'Failed to create group',
+    shellpilotSaveHistoryAsServer: 'Save to servers',
+    shellpilotHistoryAlreadySaved: 'Saved',
+    shellpilotAuthenticationNeedsCompletion: 'Authentication is incomplete. Edit the saved server credentials before connecting.',
+    shellpilotMoveSelectedServers: 'Move selected servers'
   })
 })
 
