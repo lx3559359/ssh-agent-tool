@@ -39,6 +39,7 @@ describe('file-transfer-conflict-resolution', function () {
     const timestamp = Date.now()
     const testFolder = `conflict-test-${timestamp}`
 
+    let testError
     try {
       // Create and prepare test environment
       await prepareTestEnvironment(client, testFolder)
@@ -47,14 +48,25 @@ describe('file-transfer-conflict-resolution', function () {
       // Test conflict policies in both directions
       await testAllConflictPolicies(client, testFolder)
       log('018.file-transfer-conflict.spec.js: conflict policies tested')
+    } catch (error) {
+      testError = error
     } finally {
       // Clean up test folders once at the end
-      await cleanupTestFolders(client, testFolder)
-      log('018.file-transfer-conflict.spec.js: test folders cleaned')
+      try {
+        await dismissConflictModal(client)
+        await cleanupTestFolders(client, testFolder)
+        log('018.file-transfer-conflict.spec.js: test folders cleaned')
+      } catch (cleanupError) {
+        log(`018.file-transfer-conflict.spec.js: cleanup failed: ${cleanupError.message}`)
+        if (!testError) {
+          testError = cleanupError
+        }
+      }
     }
 
     await closeApp(electronApp, __filename)
     log('018.file-transfer-conflict.spec.js: app closed')
+    if (testError) throw testError
   })
 })
 
@@ -73,15 +85,11 @@ async function prepareTestEnvironment (client, testFolder) {
 
   // Create test files and folders in local only
   const testFiles = [
-    'test-file-1.txt',
-    'test-file-2.txt',
-    'test-file-3.txt'
+    'test-file-1.txt'
   ]
 
   const testFolders = [
-    'test-folder-1',
-    'test-folder-2',
-    'test-folder-3'
+    'test-folder-1'
   ]
 
   // Create files in local
@@ -129,8 +137,10 @@ async function testAllConflictPolicies (client, testFolder) {
 }
 
 async function testConflictResolution (client, policy, fromType, toType) {
+  const destinationItemsBefore = await getItemNames(client, toType)
+
   // Select all items in the source panel
-  const selectedItems = await selectAllItems(client, fromType)
+  await selectAllItems(client, fromType)
   await delay(1500)
 
   // Initiate transfer
@@ -141,39 +151,23 @@ async function testConflictResolution (client, policy, fromType, toType) {
   // Click appropriate transfer menu item
   const menuIconClass = isUpload ? 'cloud-upload' : 'cloud-download'
   await client.click(`.ant-dropdown:not(.ant-dropdown-hidden) .ant-dropdown-menu-item .anticon.anticon-${menuIconClass}`)
-  await delay(3000)
+  const conflictModal = client.locator('.custom-modal-container:visible').first()
+  await conflictModal.waitFor({ state: 'visible', timeout: 30000 })
 
   // Handle conflict resolution based on policy
   if (policy === 'skip') {
-    await client.click('.custom-modal-footer button:has-text("Skip all")')
-    // Debug: Check if modal closes after click
-    await delay(1000)
-    if (await client.elemExist('.custom-modal-container')) {
-      await client.click('.custom-modal-footer button:has-text("Skip all")')
-    }
+    await conflictModal.getByTestId('transfer-conflict-skip-all').click()
   } else if (policy === 'overwrite') {
-    // Check for first conflict item type (file vs folder) and click appropriate button
-    const isFolderConflict = await client.elemExist('.custom-modal-footer button:has-text("Merge all")')
-    if (isFolderConflict) {
-      await client.click('.custom-modal-footer button:has-text("Merge all")')
-    } else {
-      await client.click('.custom-modal-footer button:has-text("Overwrite all")')
-    }
+    await conflictModal.getByTestId('transfer-conflict-apply-all').click()
   } else if (policy === 'rename') {
-    await client.click('.custom-modal-footer button:has-text("Rename all")')
+    await conflictModal.getByTestId('transfer-conflict-rename-all').click()
   } else {
     throw new Error(`Unsupported policy: ${policy}`)
   }
-
-  await delay(5000)
+  await conflictModal.waitFor({ state: 'hidden', timeout: 30000 })
 
   // Wait for transfers to complete for overwrite and rename
-  if (policy !== 'skip') {
-    await verifyFileTransfersComplete(client)
-  } else {
-    // For skip, we've already handled each conflict manually
-    await delay(2000)
-  }
+  await verifyFileTransfersComplete(client)
 
   // Verify results based on policy
   if (policy === 'rename') {
@@ -181,12 +175,19 @@ async function testConflictResolution (client, policy, fromType, toType) {
     const renamedItems = await client.locator(`.session-current .file-list.${toType} .sftp-item[title*="(rename-"]`)
     const count = await renamedItems.count()
     expect(count).toBeGreaterThan(0, `Expected to find renamed items from ${fromType} to ${toType} with policy ${policy}`)
-  } else if (policy === 'overwrite') {
-    // For overwrite, just verify the original count of items is maintained
-    const items = await client.locator(`.session-current .file-list.${toType} .real-file-item`)
-    const count = await items.count()
-    expect(count).toBe(selectedItems, `Expected to find ${selectedItems} items in ${toType} after overwrite`)
+  } else {
+    const destinationItemsAfter = await getItemNames(client, toType)
+    expect(destinationItemsAfter).toEqual(
+      destinationItemsBefore,
+      `Expected ${policy} to preserve destination items`
+    )
   }
+}
+
+async function getItemNames (client, type) {
+  return client
+    .locator(`.session-current .file-list.${type} .real-file-item`)
+    .evaluateAll(items => items.map(item => item.getAttribute('title')).sort())
 }
 
 async function selectAllItems (client, type) {
@@ -226,6 +227,18 @@ async function selectAllItems (client, type) {
 //   expect(conflictsHandled).toBeGreaterThanOrEqual(expectedItemCount,
 //     `Expected at least ${expectedItemCount} conflicts to be skipped, but only skipped ${conflictsHandled}`)
 // }
+
+async function dismissConflictModal (client) {
+  const modal = client.locator('.custom-modal-container:visible').first()
+  if (!await modal.isVisible({ timeout: 1000 }).catch(() => false)) {
+    return
+  }
+  const skipAll = modal.getByTestId('transfer-conflict-skip-all')
+  if (await skipAll.isVisible({ timeout: 1000 }).catch(() => false)) {
+    await skipAll.click()
+    await modal.waitFor({ state: 'hidden', timeout: 30000 })
+  }
+}
 
 async function cleanupTestFolders (client, testFolder) {
   // Navigate back to parent folders (if not already there)

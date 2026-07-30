@@ -3,6 +3,17 @@ import {
   openIncidentArchive,
   closeIncidentArchive
 } from '../components/incidents/incident-navigation'
+import {
+  getOperation,
+  getTask,
+  safetyTransactionUpdatedEvent
+} from '../common/safety-transactions/transaction-store.js'
+import {
+  captureIncidentTransactionChange
+} from '../components/incidents/incident-transaction-capture.js'
+import {
+  createIncidentReviewArtifact
+} from '../components/incidents/incident-artifacts.js'
 
 function incidentErrorMessage (error) {
   return error?.message || '故障档案操作失败，请稍后重试。'
@@ -31,7 +42,29 @@ async function saveIncident (store, operation) {
   }
 }
 
+async function captureSafetyTransactionChange (event) {
+  await captureIncidentTransactionChange({
+    detail: event?.detail,
+    store: window.store,
+    getOperation,
+    getTask
+  })
+}
+
+let safetyTransactionListenerInstalled = false
+
 export default Store => {
+  if (
+    !safetyTransactionListenerInstalled &&
+    typeof window !== 'undefined' &&
+    typeof window.addEventListener === 'function'
+  ) {
+    safetyTransactionListenerInstalled = true
+    window.addEventListener(safetyTransactionUpdatedEvent, event => {
+      captureSafetyTransactionChange(event).catch(() => {})
+    })
+  }
+
   Store.prototype.openIncidentArchiveWorkspace = function (id = '') {
     const store = window.store
     openIncidentArchive(store, id)
@@ -70,6 +103,138 @@ export default Store => {
       return null
     } finally {
       store.incidentLoading = false
+    }
+  }
+
+  Store.prototype.loadIncidentCandidates = async function (filters = {}) {
+    const store = window.store
+    store.incidentCandidateFilters = {
+      ...store.incidentCandidateFilters,
+      ...filters
+    }
+    store.incidentCandidatePage = (
+      filters.page || store.incidentCandidatePage
+    )
+    store.incidentCandidatePageSize = (
+      filters.pageSize || store.incidentCandidatePageSize
+    )
+    store.incidentCandidateLoading = true
+    try {
+      const result = await incidentClient.listCandidates({
+        ...store.incidentCandidateFilters,
+        page: store.incidentCandidatePage,
+        pageSize: store.incidentCandidatePageSize
+      })
+      store.incidentCandidates = result.items
+      store.incidentCandidatePage = result.page
+      store.incidentCandidatePageSize = result.pageSize
+      store.incidentCandidateTotal = result.total
+      const statuses = store.incidentCandidateFilters.status || []
+      if (statuses.length === 1 && statuses[0] === 'pending') {
+        store.incidentPendingCandidateTotal = result.total
+      } else {
+        const pending = await incidentClient.listCandidates({
+          status: ['pending'],
+          page: 1,
+          pageSize: 20
+        })
+        store.incidentPendingCandidateTotal = pending.total
+      }
+      return result
+    } catch (error) {
+      store.incidentError = incidentErrorMessage(error)
+      return null
+    } finally {
+      store.incidentCandidateLoading = false
+    }
+  }
+
+  Store.prototype.captureIncidentCandidate = async function (draft) {
+    const store = window.store
+    const candidate = await incidentClient.captureCandidate(draft)
+    await store.loadIncidentCandidates()
+    return candidate
+  }
+
+  Store.prototype.captureIncidentCandidateSafely = async function (draft) {
+    try {
+      return await window.store.captureIncidentCandidate(draft)
+    } catch (error) {
+      console.warn('Incident candidate capture failed', error)
+      return null
+    }
+  }
+
+  Store.prototype.dismissIncidentCandidate = async function (id) {
+    const store = window.store
+    const candidate = await incidentClient.dismissCandidate(id)
+    await store.loadIncidentCandidates()
+    return candidate
+  }
+
+  Store.prototype.reopenIncidentCandidate = async function (id) {
+    const store = window.store
+    const candidate = await incidentClient.reopenCandidate(id)
+    await store.loadIncidentCandidates()
+    return candidate
+  }
+
+  Store.prototype.convertIncidentCandidate = async function (id, draft) {
+    const store = window.store
+    store.incidentSaving = true
+    store.incidentError = ''
+    try {
+      const incident = await incidentClient.convertCandidate(id, draft)
+      store.activeIncidentId = incident.id
+      store.activeIncident = incident
+      await Promise.all([
+        refreshIncidentViews(store),
+        store.loadIncidentCandidates()
+      ])
+      return incident
+    } catch (error) {
+      store.incidentError = incidentErrorMessage(error)
+      return null
+    } finally {
+      store.incidentSaving = false
+    }
+  }
+
+  Store.prototype.appendIncidentTimelineEvent = async function (
+    incidentId,
+    draft
+  ) {
+    const store = window.store
+    const event = await incidentClient.appendTimelineEvent(
+      incidentId,
+      draft
+    )
+    if (store.activeIncidentId === incidentId) {
+      store.activeIncident = await incidentClient.get(incidentId)
+    }
+    return event
+  }
+
+  Store.prototype.generateActiveIncidentReview = async function () {
+    const store = window.store
+    if (!store.activeIncident?.id) return null
+    store.incidentArtifactCreating = true
+    store.incidentError = ''
+    try {
+      const artifact = await createIncidentReviewArtifact({
+        incident: store.activeIncident,
+        appendTimelineEvent: (
+          incidentId,
+          timelineEvent
+        ) => store.appendIncidentTimelineEvent(incidentId, timelineEvent)
+      })
+      store.openArtifactWorkspace?.(artifact.id)
+      return artifact
+    } catch (error) {
+      store.incidentError = incidentErrorMessage(error)
+      return null
+    } finally {
+      store.incidentArtifactCreating = false
     }
   }
 

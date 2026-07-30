@@ -4,6 +4,8 @@ const {
   INCIDENT_STATES,
   createIncidentRecord,
   createIncidentPatch,
+  createIncidentCandidate,
+  createIncidentTimelineEvent,
   validateTransition
 } = require('../../src/app/lib/incidents/incident-model')
 
@@ -78,5 +80,71 @@ test('requires verification before resolved and records legal reopen', () => {
       state: 'archived',
       verificationStatus: 'passed_manual'
     }
+  )
+})
+
+test('normalizes candidate evidence and rejects sensitive automatic context', () => {
+  const candidate = createIncidentCandidate({
+    fingerprint: 'fleet:server-1:nginx:failed',
+    source: 'fleet-status',
+    sourceRef: 'server-1:nginx',
+    endpointRef: 'server-1',
+    title: 'Nginx 服务异常',
+    severity: 'high',
+    summary: '服务状态为 failed',
+    evidence: {
+      service: 'nginx',
+      state: 'failed',
+      recentLines: ['upstream timed out']
+    }
+  }, { id: 'candidate-1', now: 2000 })
+
+  assert.equal(candidate.status, 'pending')
+  assert.equal(candidate.occurrenceCount, 1)
+  assert.deepEqual(candidate.evidence.recentLines, ['upstream timed out'])
+  assert.throws(
+    () => createIncidentCandidate({
+      fingerprint: 'unsafe',
+      source: 'operations',
+      title: 'Unsafe evidence',
+      evidence: { authorization: 'Bearer secret' }
+    }, { id: 'candidate-2', now: 2000 }),
+    error => error.code === 'INCIDENT_SENSITIVE_FIELD'
+  )
+})
+
+test('normalizes idempotent incident timeline events', () => {
+  const event = createIncidentTimelineEvent({
+    kind: 'diagnostic',
+    source: 'operations',
+    sourceRef: 'task-1',
+    title: '端口诊断失败',
+    body: '连接任务返回超时。',
+    metadata: {
+      taskStatus: 'timed-out',
+      exitCode: 124
+    }
+  }, {
+    id: 'event-1',
+    incidentId: 'incident-1',
+    now: 3000
+  })
+
+  assert.equal(event.incidentId, 'incident-1')
+  assert.equal(event.kind, 'diagnostic')
+  assert.equal(event.metadata.exitCode, 124)
+  assert.throws(
+    () => createIncidentTimelineEvent({
+      kind: 'diagnostic',
+      source: 'operations',
+      sourceRef: 'task-2',
+      title: 'Unsafe timeline',
+      metadata: { apiKey: 'secret' }
+    }, {
+      id: 'event-2',
+      incidentId: 'incident-1',
+      now: 3000
+    }),
+    error => error.code === 'INCIDENT_SENSITIVE_FIELD'
   )
 })

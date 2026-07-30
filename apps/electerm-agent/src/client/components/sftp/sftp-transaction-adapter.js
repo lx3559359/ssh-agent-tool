@@ -813,9 +813,10 @@ async function verifyExecuteState (sftp, operation, signal) {
       signal
     )
     const sourceDescriptor = operation.effect.expected?.sourceDescriptor
-    if (sourceDescriptor
-      ? !sameCopiedDescriptor(target, sourceDescriptor)
-      : !matchesExpected(target, operation.effect.expected)) {
+    const descriptorMatches = sourceDescriptor
+      ? sameCopiedDescriptor(target, sourceDescriptor)
+      : matchesExpected(target, operation.effect.expected)
+    if (!descriptorMatches) {
       throw new Error('SFTP 上传后的远程目标校验失败。')
     }
     return
@@ -1061,8 +1062,8 @@ export function createSftpTransactionAdapter ({ getSftp } = {}) {
     throw new Error('SFTP 安全事务缺少连接解析器。')
   }
 
-  function requireSftp () {
-    const sftp = getSftp()
+  async function requireSftp (operation) {
+    const sftp = await getSftp(operation)
     if (!sftp) throw new Error('当前 SFTP 连接已断开，未执行远程修改。')
     return sftp
   }
@@ -1083,13 +1084,13 @@ export function createSftpTransactionAdapter ({ getSftp } = {}) {
     },
 
     async prepare (operation, context = {}) {
-      const sftp = requireSftp()
+      const sftp = await requireSftp(operation)
       const existing = await loadManifest(sftp, operation, context.signal)
       return existing || prepareNewManifest(sftp, operation, context.signal)
     },
 
     async validatePrepared (operation, context = {}) {
-      const sftp = requireSftp()
+      const sftp = await requireSftp(operation)
       await requireManifest(sftp, operation, context.signal)
       for (const resource of operation.plan.resources) {
         await assertOriginalState(
@@ -1103,7 +1104,7 @@ export function createSftpTransactionAdapter ({ getSftp } = {}) {
     },
 
     async beforeExecute (operation, context = {}) {
-      const sftp = requireSftp()
+      const sftp = await requireSftp(operation)
       const { signal } = context
       await requireManifest(sftp, operation, signal)
       for (const resource of operation.plan.resources) {
@@ -1219,7 +1220,7 @@ export function createSftpTransactionAdapter ({ getSftp } = {}) {
       if (!['upload', 'copy', 'move'].includes(operation.effect.action)) {
         throw new Error('该 SFTP 操作不支持外部传输生命周期。')
       }
-      const sftp = requireSftp()
+      const sftp = await requireSftp(operation)
       const { signal } = context
       await requireManifest(sftp, operation, signal)
       for (const resource of operation.plan.resources) {
@@ -1232,18 +1233,23 @@ export function createSftpTransactionAdapter ({ getSftp } = {}) {
     },
 
     async verifyExecute (operation, context = {}) {
-      const sftp = requireSftp()
+      const sftp = await requireSftp(operation)
       await requireManifest(sftp, operation, context.signal)
       await verifyExecuteState(sftp, operation, context.signal)
+      const postMutation = await describePostMutation(
+        sftp,
+        operation,
+        context.signal
+      )
       return {
         verified: true,
-        postMutation: await describePostMutation(sftp, operation, context.signal),
+        postMutation,
         summary: 'SFTP 修改后状态验证通过。'
       }
     },
 
     async rollback (operation, context = {}) {
-      const sftp = requireSftp()
+      const sftp = await requireSftp(operation)
       const { signal } = context
       await requireManifest(sftp, operation, signal)
       await assertPostMutationUnchanged(sftp, operation, signal)
@@ -1292,7 +1298,7 @@ export function createSftpTransactionAdapter ({ getSftp } = {}) {
     },
 
     async verifyRollback (operation, context = {}) {
-      const sftp = requireSftp()
+      const sftp = await requireSftp(operation)
       const { signal } = context
       await requireManifest(sftp, operation, signal)
       for (const resource of operation.plan.resources) {

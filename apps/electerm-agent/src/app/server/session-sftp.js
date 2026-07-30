@@ -67,6 +67,51 @@ function isMissingSftpError (error) {
     /no such|not found|does not exist/i.test(String(error?.message || error))
 }
 
+async function closeSftpChannel (channel, timeoutMs = 1000) {
+  if (!channel) return true
+  if (typeof channel.end !== 'function') {
+    channel.destroy?.()
+    return false
+  }
+  if (typeof channel.once !== 'function') {
+    try {
+      channel.end()
+      return true
+    } catch {
+      channel.destroy?.()
+      return false
+    }
+  }
+
+  const graceful = await new Promise(resolve => {
+    let settled = false
+    const finish = value => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      channel.removeListener?.('close', onClosed)
+      channel.removeListener?.('end', onClosed)
+      resolve(value)
+    }
+    const onClosed = () => finish(true)
+    const timer = setTimeout(() => finish(false), timeoutMs)
+    channel.once('close', onClosed)
+    channel.once('end', onClosed)
+    try {
+      channel.end()
+    } catch {
+      finish(false)
+    }
+  })
+
+  if (!graceful) {
+    try {
+      channel.destroy?.()
+    } catch {}
+  }
+  return graceful
+}
+
 class Sftp extends TerminalBase {
   connect (initOptions) {
     return this.remoteInitSftp(initOptions)
@@ -138,6 +183,23 @@ class Sftp extends TerminalBase {
     delete this.sftp
     delete this.initOptions
     this.onEndConn()
+  }
+
+  async destroyGracefully () {
+    if (this.destroyPromise) return this.destroyPromise
+    this.destroyPromise = (async () => {
+      const keys = Object.keys(this.transfers || {})
+      for (const key of keys) {
+        const transfer = this.transfers[key]
+        transfer && transfer.destroy && transfer.destroy()
+        delete this.transfers[key]
+      }
+      await closeSftpChannel(this.sftp)
+      delete this.sftp
+      delete this.initOptions
+      this.onEndConn()
+    })()
+    return this.destroyPromise
   }
 
   cancelOperation (cancelToken) {
@@ -998,3 +1060,4 @@ class Sftp extends TerminalBase {
 }
 
 exports.Sftp = commonExtends(Sftp)
+exports.closeSftpChannel = closeSftpChannel

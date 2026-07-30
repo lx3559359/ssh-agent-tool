@@ -33,6 +33,25 @@ test('public operations completion waits for history synchronization', () => {
   assert.match(source, /const completion = active\.completion\.then/)
   assert.match(source, /store\.operationsHistory = .*taskStore\.list\(\)/)
   assert.match(source, /return \{ \.\.\.active, completion \}/)
+  assert.match(source, /createOperationsIncidentCandidate/)
+  assert.match(source, /captureIncidentCandidateSafely/)
+  assert.match(source, /appendIncidentTimelineEvent/)
+})
+
+test('incident archive listens to safety transaction changes without blocking them', () => {
+  const source = fs.readFileSync(
+    path.resolve(
+      __dirname,
+      '../../src/client/store/incident-archives.js'
+    ),
+    'utf8'
+  )
+
+  assert.match(source, /safetyTransactionUpdatedEvent/)
+  assert.match(source, /getOperation/)
+  assert.match(source, /getTask/)
+  assert.match(source, /captureIncidentTransactionChange/)
+  assert.match(source, /\.catch\(\(\) => \{\}\)/)
 })
 
 test('operations workspace remains open until the user closes it', () => {

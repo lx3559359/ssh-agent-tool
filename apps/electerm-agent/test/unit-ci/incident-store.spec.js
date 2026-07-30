@@ -105,7 +105,40 @@ function createHarness () {
     restoreBackup: async (filename, confirmation) => ({
       filename,
       confirmation
-    })
+    }),
+    listCandidates: async filters => {
+      calls.push(['listCandidates', filters])
+      return {
+        items: [{
+          id: 'candidate-1',
+          status: 'pending',
+          title: 'Nginx 服务异常'
+        }],
+        page: 1,
+        pageSize: 40,
+        total: 1
+      }
+    },
+    captureCandidate: async draft => {
+      calls.push(['captureCandidate', draft])
+      return { id: 'candidate-1', status: 'pending', ...draft }
+    },
+    dismissCandidate: async id => {
+      calls.push(['dismissCandidate', id])
+      return { id, status: 'dismissed' }
+    },
+    reopenCandidate: async id => {
+      calls.push(['reopenCandidate', id])
+      return { id, status: 'pending' }
+    },
+    convertCandidate: async (id, draft) => {
+      calls.push(['convertCandidate', id, draft])
+      return { id: 'incident-from-candidate', ...draft, timelineEvents: [] }
+    },
+    appendTimelineEvent: async (id, draft) => {
+      calls.push(['appendTimelineEvent', id, draft])
+      return { id: 'event-1', incidentId: id, ...draft }
+    }
   }
   const navigation = {
     openIncidentArchive: (store, id = '') => {
@@ -150,7 +183,13 @@ function createHarness () {
     incidentSaving: false,
     incidentError: '',
     incidentStorage: null,
-    incidentStorageOpen: false
+    incidentStorageOpen: false,
+    incidentCandidates: [],
+    incidentCandidateFilters: { status: ['pending'], endpointRef: '' },
+    incidentCandidatePage: 1,
+    incidentCandidatePageSize: 40,
+    incidentCandidateTotal: 0,
+    incidentCandidateLoading: false
   })
   window.store = store
   return { calls, store, tabs }
@@ -165,6 +204,47 @@ test('incident archive state is initialized for a 40 item page', () => {
   assert.match(source, /incidentSummary:\s*null/)
   assert.match(source, /incidentLoading:\s*false/)
   assert.match(source, /incidentError:\s*''/)
+  assert.match(source, /incidentCandidates:\s*\[\]/)
+  assert.match(source, /incidentCandidateTotal:\s*0/)
+})
+
+test('loads, captures, dismisses and converts incident candidates', async () => {
+  const { calls, store } = createHarness()
+
+  await store.loadIncidentCandidates()
+  assert.equal(store.incidentCandidates[0].id, 'candidate-1')
+  assert.equal(store.incidentCandidateTotal, 1)
+
+  await store.captureIncidentCandidate({
+    fingerprint: 'fleet:server-1:nginx',
+    source: 'fleet-status',
+    title: 'Nginx 服务异常'
+  })
+  assert.ok(calls.some(([name]) => name === 'captureCandidate'))
+
+  await store.dismissIncidentCandidate('candidate-1')
+  assert.ok(calls.some(([name]) => name === 'dismissCandidate'))
+
+  const converted = await store.convertIncidentCandidate('candidate-1', {
+    title: 'Nginx 服务异常'
+  })
+  assert.equal(converted.id, 'incident-from-candidate')
+  assert.equal(store.activeIncidentId, 'incident-from-candidate')
+  assert.ok(calls.some(([name]) => name === 'convertCandidate'))
+})
+
+test('automatic candidate capture is best effort and never throws', async () => {
+  const { store } = createHarness()
+  const original = store.captureIncidentCandidate
+  store.captureIncidentCandidate = async () => {
+    throw new Error('storage unavailable')
+  }
+  await assert.doesNotReject(() => store.captureIncidentCandidateSafely({
+    fingerprint: 'operations:task-1',
+    source: 'operations',
+    title: '诊断失败'
+  }))
+  store.captureIncidentCandidate = original
 })
 
 test('workspace and list actions preserve terminal state and pagination', async () => {

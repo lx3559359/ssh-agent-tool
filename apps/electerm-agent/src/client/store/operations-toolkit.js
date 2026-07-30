@@ -13,8 +13,20 @@ import { getOperationsTool } from '../components/operations-toolkit/catalog/inde
 import { createOperationsTaskRecordStore } from '../components/operations-toolkit/runtime/task-record-store.js'
 import { createSshTaskChannel } from '../components/operations-toolkit/runtime/ssh-task-channel.js'
 import { createOperationsTaskRunner } from '../components/operations-toolkit/runtime/task-runner.js'
+import {
+  createOperationsIncidentCandidate,
+  createOperationsTimelineEvent
+} from '../components/incidents/incident-capture.js'
 
 const historyStorageKey = 'shellpilot-operations-task-history-v1'
+const finalOperationsTaskStatuses = new Set([
+  'completed',
+  'cancelled',
+  'timed-out',
+  'failed',
+  'disconnected',
+  'partially-completed'
+])
 
 function endpointUser (tab = {}) {
   return tab.username || tab.user || ''
@@ -53,6 +65,31 @@ function createStorageAdapter () {
   }
 }
 
+function taskMatchesActiveIncident (store, task) {
+  const incident = store.activeIncident
+  if (!incident?.id || !task?.endpoint) return false
+  const endpointRefs = new Set([
+    task.endpoint.tabId,
+    task.endpoint.bookmarkId
+  ].filter(Boolean).map(String))
+  if (!endpointRefs.size) return false
+  if (endpointRefs.has(String(incident.endpointRef || ''))) return true
+  return (incident.sessionRefs || [])
+    .some(reference => endpointRefs.has(String(reference)))
+}
+
+function captureCompletedOperationsTask (store, task) {
+  if (!finalOperationsTaskStatuses.has(task?.status)) return
+  const candidate = createOperationsIncidentCandidate(task)
+  if (candidate) store.captureIncidentCandidateSafely(candidate)
+  if (taskMatchesActiveIncident(store, task)) {
+    store.appendIncidentTimelineEvent(
+      store.activeIncident.id,
+      createOperationsTimelineEvent(task)
+    ).catch(() => {})
+  }
+}
+
 function createRuntime (store) {
   const taskStore = createOperationsTaskRecordStore({
     storage: createStorageAdapter(),
@@ -65,6 +102,7 @@ function createRuntime (store) {
     onTaskChange: task => {
       const current = store.operationsTasks.filter(item => item.id !== task.id)
       store.operationsTasks = [task, ...current]
+      captureCompletedOperationsTask(store, task)
     },
     discover: async endpoint => {
       const nonce = `ops${Date.now()}${Math.random().toString(36).slice(2)}`

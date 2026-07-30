@@ -41,11 +41,31 @@ test('incident client unwraps plain ipc values and preserves error codes', async
     const moduleUrl = pathToFileURL(clientPath).href
     const { incidentClient } = await import(`${moduleUrl}?test=${Date.now()}`)
     await incidentClient.list({ page: 1 })
+    await incidentClient.listCandidates({ status: ['pending'] })
+    await incidentClient.captureCandidate({
+      fingerprint: 'fleet:server-1:nginx'
+    })
+    await incidentClient.appendTimelineEvent('incident-1', {
+      kind: 'diagnostic'
+    })
     await assert.rejects(
       () => incidentClient.get('missing'),
       error => error.code === 'INCIDENT_NOT_FOUND'
     )
     assert.deepEqual(calls[0], ['listIncidentArchives', { page: 1 }])
+    assert.deepEqual(calls[1], [
+      'listIncidentCandidates',
+      { status: ['pending'] }
+    ])
+    assert.deepEqual(calls[2], [
+      'captureIncidentCandidate',
+      { fingerprint: 'fleet:server-1:nginx' }
+    ])
+    assert.deepEqual(calls[3], [
+      'appendIncidentTimelineEvent',
+      'incident-1',
+      { kind: 'diagnostic' }
+    ])
   } finally {
     global.window = originalWindow
   }
@@ -56,6 +76,10 @@ test('ipc registers incident methods without constructing storage at startup', (
   assert.match(source, /let incidentArchiveService/)
   assert.match(source, /function getIncidentArchiveService/)
   assert.match(source, /listIncidentArchives/)
+  assert.match(source, /listIncidentCandidates/)
+  assert.match(source, /captureIncidentCandidate/)
+  assert.match(source, /convertIncidentCandidate/)
+  assert.match(source, /appendIncidentTimelineEvent/)
   assert.doesNotMatch(
     source,
     /const incidentArchiveService = createIncidentArchiveService/

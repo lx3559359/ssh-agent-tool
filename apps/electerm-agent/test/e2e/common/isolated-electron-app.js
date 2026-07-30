@@ -10,7 +10,11 @@ async function acquireIsolatedApp (options) {
     profileRoot = await options.createProfileRoot()
     options.validateProfileRoot(profileRoot)
     electronApp = await options.launch(profileRoot)
-    const userDataPath = await options.readUserDataPath(electronApp, profileRoot)
+    const userDataPath = await readUserDataPathWithRetry(
+      options,
+      electronApp,
+      profileRoot
+    )
     options.validateUserDataPath(profileRoot, userDataPath)
     ready = true
     acquiredApp = { electronApp, profileRoot, userDataPath }
@@ -32,6 +36,27 @@ async function acquireIsolatedApp (options) {
   }
   if (cleanupError) throw cleanupError
   return acquiredApp
+}
+
+async function readUserDataPathWithRetry (
+  options,
+  electronApp,
+  profileRoot,
+  attempts = 5
+) {
+  let lastError
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      return await options.readUserDataPath(electronApp, profileRoot)
+    } catch (error) {
+      lastError = error
+      if (!/execution context was destroyed/i.test(String(error?.message))) {
+        throw error
+      }
+      await new Promise(resolve => setTimeout(resolve, 100))
+    }
+  }
+  throw lastError
 }
 
 async function cleanupPreservingPrimaryError (cleanup, primaryError) {

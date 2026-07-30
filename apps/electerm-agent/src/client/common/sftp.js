@@ -6,6 +6,7 @@ import generate from './uid'
 import Transfer from './transfer'
 import { transferTypeMap, instSftpKeys as keys } from './constants'
 import initWs from './ws'
+import wait from './wait'
 import {
   createSftpAbortError,
   prepareSftpCancelableCall
@@ -66,29 +67,29 @@ class Sftp {
           if (onAbort) {
             prepared.signal.addEventListener('abort', onAbort, { once: true })
           }
-          try {
-            ws.s({
-              action: 'sftp-func',
-              id,
-              uid,
-              func,
-              args: prepared.args,
-              terminalId,
-              type: this.type
-            })
-          } catch (error) {
-            cleanup()
-            reject(error)
-            return
-          }
-          ws.once((arg) => {
+          Promise.resolve(ws.once((arg) => {
             cleanup()
             if (arg.error) {
               console.debug('sftp error', arg.error.message)
               return reject(new Error(arg.error.message))
             }
             resolve(arg.data)
-          }, uid)
+          }, uid))
+            .then(() => {
+              ws.s({
+                action: 'sftp-func',
+                id,
+                uid,
+                func,
+                args: prepared.args,
+                terminalId,
+                type: this.type
+              })
+            })
+            .catch(error => {
+              cleanup()
+              reject(error)
+            })
         })
       }
     })
@@ -96,12 +97,25 @@ class Sftp {
 
   async destroy () {
     const { ws } = this
-    ws.s({
-      action: 'sftp-destroy',
-      id: this.id,
-      terminalId: this.terminalId
-    })
+    if (!ws) return
+    if (!ws.closed) {
+      const uid = `sftp-destroy:${generate()}`
+      await Promise.race([
+        new Promise(resolve => {
+          Promise.resolve(ws.once(resolve, uid)).then(() => {
+            ws.s({
+              action: 'sftp-destroy',
+              id: this.id,
+              uid,
+              terminalId: this.terminalId
+            })
+          }).catch(resolve)
+        }),
+        wait(1500)
+      ])
+    }
     ws.close()
+    delete this.ws
   }
 }
 

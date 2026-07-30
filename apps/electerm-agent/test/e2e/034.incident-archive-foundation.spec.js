@@ -320,6 +320,76 @@ test('incident archive persists, searches every text field, filters, and opens f
   }
 })
 
+test('incident candidate remains pending until the user confirms the formal record', async () => {
+  let run
+  let primaryError
+  try {
+    run = await launchQualityApp(electron)
+    const page = run.page
+    await dismissStartupModals(page)
+    const candidate = await page.evaluate(async () => {
+      return window.store.captureIncidentCandidate({
+        fingerprint: 'e2e:candidate:nginx',
+        source: 'fleet-status',
+        title: 'Nginx service requires review',
+        endpointRef: 'server-candidate-01',
+        severity: 'high',
+        summary: 'The service state was reported as failed.',
+        evidence: {
+          service: 'nginx',
+          state: 'failed'
+        }
+      })
+    })
+    expect(candidate.status).toBe('pending')
+
+    const workspace = await openIncidentWorkspace(page)
+    await workspace.locator('.incident-workspace-actions button').first().click()
+    const candidateWorkspace = page.locator('.incident-candidate-workspace')
+    await expect(candidateWorkspace).toBeVisible()
+    await expect(candidateWorkspace).toContainText(candidate.title)
+    await fs.mkdir(screenshotDir, { recursive: true })
+    await page.screenshot({
+      path: path.join(screenshotDir, 'candidate-review.png'),
+      animations: 'disabled',
+      caret: 'hide',
+      scale: 'css'
+    })
+
+    const review = page.locator('.incident-candidate-review')
+    await review.locator('textarea').fill(
+      'Confirmed impact after reviewing the collected evidence.'
+    )
+    await review.locator('footer .ant-btn-primary').click()
+
+    const detail = page.locator('.incident-detail-panel')
+    await expect(detail).toContainText(candidate.title)
+    await expect(detail).toContainText(
+      'Confirmed impact after reviewing the collected evidence.'
+    )
+    expect(await page.evaluate(() => ({
+      pending: window.store.incidentCandidateTotal,
+      activeTitle: window.store.activeIncident?.title,
+      timelineSources: (
+        window.store.activeIncident?.timelineEvents || []
+      ).map(item => item.source)
+    }))).toEqual({
+      pending: 0,
+      activeTitle: candidate.title,
+      timelineSources: ['fleet-status']
+    })
+  } catch (error) {
+    primaryError = error
+    throw error
+  } finally {
+    if (run) {
+      await cleanupQualityApp(run.electronApp, run.profileRoot).catch(error => {
+        if (!primaryError) throw error
+      })
+    }
+  }
+})
+
 test('incident archive remains usable across themes, desktop sizes, and narrow layout', async () => {
   let run
   let primaryError

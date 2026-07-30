@@ -907,3 +907,30 @@ test('accepts only SSH bookmarks while preserving legacy bookmarks without type'
   await store.refreshAll()
   assert.deepEqual(collected, ['legacy', 'typed', 'term-typed'])
 })
+
+test('reports newly collected public rows without blocking status refresh', async () => {
+  const { createFleetStatusStore } = await loadStore()
+  const batches = []
+  const store = createFleetStatusStore({
+    bookmarks: [bookmark('1')],
+    onCollectionComplete: rows => {
+      batches.push(rows)
+      throw new Error('candidate storage unavailable')
+    },
+    client: {
+      collect: async () => collection(successfulResult('1', {
+        probes: [{
+          id: 'services',
+          status: 'success',
+          data: [{ name: 'nginx', state: 'failed' }]
+        }]
+      })),
+      cancel: async () => ({ cancelled: true })
+    }
+  })
+
+  await assert.doesNotReject(() => store.refreshAll())
+  assert.equal(batches.length, 1)
+  assert.equal(batches[0][0].id, '1')
+  assert.equal(batches[0][0].snapshot.services[0].name, 'nginx')
+})
