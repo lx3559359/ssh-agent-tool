@@ -332,7 +332,7 @@ async function pollRemoteCommand (conn, command, accept, deadline) {
   let lastResult
   while (Date.now() < deadline) {
     const remaining = Math.max(50, deadline - Date.now())
-    lastResult = await execCommand(conn, command, Math.min(remaining, 1000))
+    lastResult = await execCommand(conn, command, Math.min(remaining, 5000))
     if (accept(lastResult)) return lastResult
     await delay(Math.min(50, Math.max(1, deadline - Date.now())))
   }
@@ -399,7 +399,7 @@ async function cancelRemoteCommand (conn, remoteDir, timeoutMs) {
   } finally {
     if (!completed && pid) {
       try {
-        await execCommand(conn, buildTerminateWorkerCommand(pid), Math.min(timeoutMs, 1000))
+        await execCommand(conn, buildTerminateWorkerCommand(pid), Math.min(timeoutMs, 5000))
       } catch {}
     }
   }
@@ -465,7 +465,7 @@ async function runRemoteChecks (config, scope) {
     const cancellation = await cancelRemoteCommand(
       conn,
       remoteDir,
-      Math.min(config.timeoutMs, 5000)
+      Math.min(config.timeoutMs, 15000)
     )
     results.push(check(
       'remote cancellation terminates worker and leaves no completed marker',

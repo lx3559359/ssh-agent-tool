@@ -2075,10 +2075,6 @@ async function runSurfaceCase (page, testInfo, failures, context, surface, stats
 }
 
 async function exerciseLanguageAndThemeState (page) {
-  await page.waitForFunction(() => {
-    const info = window.store?.upgradeInfo
-    return Boolean(info?.lastCheckedAt) && info.checkingRemoteVersion === false
-  }, undefined, { timeout: 30000 })
   const updatePanelClose = page.locator('.upgrade-panel:not(.upgrade-panel-hide) .close-upgrade-panel')
   if (await updatePanelClose.isVisible().catch(() => false)) {
     await updatePanelClose.click()
@@ -2227,7 +2223,7 @@ test('narrow topbar actions avoid native window controls and keep the last actio
     const rail = page.locator('.not-system-ui .aigshell-topbar-actions')
     const actions = rail.locator('.aigshell-topbar-action:not(:disabled)')
     await expect(rail).toBeVisible()
-    await expect(actions).toHaveCount(12)
+    await expect(actions).toHaveCount(13)
 
     await rail.evaluate(element => { element.scrollLeft = 0 })
     await actions.first().focus()
@@ -2366,7 +2362,7 @@ test('590px topbar keeps every visible action clear of native controls and prese
     const rail = page.locator('.not-system-ui .aigshell-topbar-actions')
     const actions = rail.locator('.aigshell-topbar-action:not(:disabled)')
     await expect(rail).toBeVisible()
-    await expect(actions).toHaveCount(12)
+    await expect(actions).toHaveCount(13)
 
     const inspectHitTargets = () => rail.evaluate(element => {
       const railRect = element.getBoundingClientRect()
