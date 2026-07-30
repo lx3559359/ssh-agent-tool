@@ -199,3 +199,83 @@ test('rebuilds missing full text rows from incidents and notes', () => {
     1
   )
 })
+
+test('deduplicates, dismisses and reopens pending incident candidates', () => {
+  const repository = createRepositoryHarness()
+  const first = repository.upsertCandidate({
+    fingerprint: 'fleet:server-1:nginx:failed',
+    source: 'fleet-status',
+    sourceRef: 'server-1:nginx',
+    endpointRef: 'server-1',
+    title: 'Nginx 服务异常',
+    severity: 'high',
+    summary: '服务状态为 failed',
+    evidence: { service: 'nginx', state: 'failed' }
+  })
+  const repeated = repository.upsertCandidate({
+    fingerprint: 'fleet:server-1:nginx:failed',
+    source: 'fleet-status',
+    sourceRef: 'server-1:nginx',
+    endpointRef: 'server-1',
+    title: 'Nginx 服务仍然异常',
+    severity: 'critical',
+    summary: '服务持续为 failed',
+    evidence: { service: 'nginx', state: 'failed', checks: 2 }
+  })
+
+  assert.equal(repeated.id, first.id)
+  assert.equal(repeated.occurrenceCount, 2)
+  assert.equal(repeated.severity, 'critical')
+  assert.equal(repository.listCandidates({ status: ['pending'] }).total, 1)
+
+  assert.equal(repository.dismissCandidate(first.id).status, 'dismissed')
+  assert.equal(repository.listCandidates({ status: ['pending'] }).total, 0)
+  assert.equal(repository.reopenCandidate(first.id).status, 'pending')
+})
+
+test('converts a candidate and appends an idempotent incident timeline', () => {
+  const repository = createRepositoryHarness()
+  const candidate = repository.upsertCandidate({
+    fingerprint: 'operations:server-1:task-1',
+    source: 'operations',
+    sourceRef: 'task-1',
+    endpointRef: 'server-1',
+    title: '端口诊断超时',
+    severity: 'medium',
+    summary: '只读诊断任务超时',
+    evidence: { taskStatus: 'timed-out' }
+  })
+
+  const incident = repository.convertCandidate(candidate.id, {
+    title: '端口诊断超时',
+    endpointRef: 'server-1',
+    severity: 'medium',
+    summary: '只读诊断任务超时'
+  })
+
+  assert.equal(incident.timelineEvents.length, 1)
+  assert.equal(incident.timelineEvents[0].sourceRef, 'task-1')
+  assert.equal(repository.getCandidate(candidate.id).status, 'converted')
+  assert.equal(repository.getCandidate(candidate.id).incidentId, incident.id)
+
+  repository.appendTimelineEvent(incident.id, {
+    kind: 'diagnostic',
+    source: 'operations',
+    sourceRef: 'task-2',
+    title: '服务诊断',
+    body: 'systemd 状态采集完成',
+    metadata: { taskStatus: 'completed' }
+  })
+  repository.appendTimelineEvent(incident.id, {
+    kind: 'diagnostic',
+    source: 'operations',
+    sourceRef: 'task-2',
+    title: '服务诊断重复回调',
+    body: '这条重复回调不应新增记录',
+    metadata: { taskStatus: 'completed' }
+  })
+
+  const detail = repository.get(incident.id)
+  assert.equal(detail.timelineEvents.length, 2)
+  assert.equal(detail.timelineEvents[1].title, '服务诊断')
+})

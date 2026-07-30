@@ -525,6 +525,12 @@ function initIpc () {
   const incidentArchiveAsyncGlobals = {
     listIncidentArchives: filters => safeIncidentResult(() => getIncidentArchiveService().list(filters)),
     getIncidentArchive: id => safeIncidentResult(() => getIncidentArchiveService().get(id)),
+    listIncidentCandidates: filters => safeIncidentResult(() => getIncidentArchiveService().listCandidates(filters)),
+    captureIncidentCandidate: draft => safeIncidentResult(() => getIncidentArchiveService().captureCandidate(draft)),
+    dismissIncidentCandidate: id => safeIncidentResult(() => getIncidentArchiveService().dismissCandidate(id)),
+    reopenIncidentCandidate: id => safeIncidentResult(() => getIncidentArchiveService().reopenCandidate(id)),
+    convertIncidentCandidate: (id, draft) => safeIncidentResult(() => getIncidentArchiveService().convertCandidate(id, draft)),
+    appendIncidentTimelineEvent: (id, draft) => safeIncidentResult(() => getIncidentArchiveService().appendTimelineEvent(id, draft)),
     createIncidentArchive: draft => safeIncidentResult(() => getIncidentArchiveService().create(draft)),
     updateIncidentArchive: (id, patch) => safeIncidentResult(() => getIncidentArchiveService().update(id, patch)),
     transitionIncidentArchive: (id, input) => safeIncidentResult(() => getIncidentArchiveService().transition(id, input)),

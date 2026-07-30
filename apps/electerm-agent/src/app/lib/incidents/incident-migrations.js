@@ -67,10 +67,55 @@ const INCIDENT_MIGRATIONS = Object.freeze([
         );
       `)
     }
+  },
+  {
+    version: 2,
+    run (db) {
+      db.exec(`
+        CREATE TABLE incident_candidates (
+          id TEXT PRIMARY KEY,
+          fingerprint TEXT NOT NULL UNIQUE,
+          source TEXT NOT NULL,
+          source_ref TEXT NOT NULL DEFAULT '',
+          endpoint_ref TEXT NOT NULL DEFAULT '',
+          title TEXT NOT NULL,
+          severity TEXT NOT NULL,
+          summary TEXT NOT NULL DEFAULT '',
+          evidence_json TEXT NOT NULL DEFAULT '{}',
+          status TEXT NOT NULL DEFAULT 'pending',
+          incident_id TEXT REFERENCES incidents(id) ON DELETE SET NULL,
+          first_seen_at INTEGER NOT NULL,
+          last_seen_at INTEGER NOT NULL,
+          occurrence_count INTEGER NOT NULL DEFAULT 1,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE TABLE incident_timeline_events (
+          id TEXT PRIMARY KEY,
+          incident_id TEXT NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+          kind TEXT NOT NULL,
+          source TEXT NOT NULL,
+          source_ref TEXT NOT NULL DEFAULT '',
+          title TEXT NOT NULL,
+          body TEXT NOT NULL DEFAULT '',
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          created_at INTEGER NOT NULL
+        );
+        CREATE INDEX idx_incident_candidates_status_updated
+          ON incident_candidates(status, updated_at DESC);
+        CREATE INDEX idx_incident_candidates_endpoint_updated
+          ON incident_candidates(endpoint_ref, updated_at DESC);
+        CREATE INDEX idx_incident_timeline_incident_created
+          ON incident_timeline_events(incident_id, created_at ASC, id ASC);
+        CREATE UNIQUE INDEX idx_incident_timeline_source
+          ON incident_timeline_events(incident_id, kind, source, source_ref)
+          WHERE source_ref <> '';
+      `)
+    }
   }
 ])
 
 module.exports = {
-  CURRENT_INCIDENT_SCHEMA_VERSION: 1,
+  CURRENT_INCIDENT_SCHEMA_VERSION: 2,
   INCIDENT_MIGRATIONS
 }

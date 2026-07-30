@@ -20,31 +20,37 @@ test.afterEach(() => {
   fs.rmSync(rootPath, { recursive: true, force: true })
 })
 
-function seedVersionOneDatabase (target) {
+function seedCurrentDatabase (target) {
   const manager = createIncidentDatabase({ rootPath: target })
   manager.close()
 }
 
-test('creates version 1 schema with fts and indexes', () => {
+test('creates version 2 schema with candidate and timeline indexes', () => {
   const manager = createIncidentDatabase({ rootPath })
-  assert.equal(manager.db.prepare('PRAGMA user_version').get().user_version, 1)
+  assert.equal(manager.db.prepare('PRAGMA user_version').get().user_version, 2)
   assert.ok(manager.db.prepare(
     "SELECT name FROM sqlite_master WHERE name = 'incident_search'"
   ).get())
   assert.ok(manager.db.prepare(
     "SELECT name FROM sqlite_master WHERE name = 'idx_incidents_state_updated'"
   ).get())
+  assert.ok(manager.db.prepare(
+    "SELECT name FROM sqlite_master WHERE name = 'incident_candidates'"
+  ).get())
+  assert.ok(manager.db.prepare(
+    "SELECT name FROM sqlite_master WHERE name = 'incident_timeline_events'"
+  ).get())
   manager.close()
 })
 
 test('restores pre-migration backup when the next migration fails', () => {
-  seedVersionOneDatabase(rootPath)
+  seedCurrentDatabase(rootPath)
   assert.throws(() => createIncidentDatabase({
     rootPath,
     migrationSteps: [
       ...INCIDENT_MIGRATIONS,
       {
-        version: 2,
+        version: 3,
         run () {
           throw new Error('forced migration failure')
         }
@@ -52,7 +58,7 @@ test('restores pre-migration backup when the next migration fails', () => {
     ]
   }), /forced migration failure/)
   const reopened = createIncidentDatabase({ rootPath })
-  assert.equal(reopened.db.prepare('PRAGMA user_version').get().user_version, 1)
+  assert.equal(reopened.db.prepare('PRAGMA user_version').get().user_version, 2)
   assert.equal(reopened.listBackups().length, 1)
   reopened.close()
 })

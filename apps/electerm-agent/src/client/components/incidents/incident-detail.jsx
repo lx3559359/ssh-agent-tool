@@ -12,6 +12,7 @@ import {
 import {
   ArrowLeftOutlined,
   DeleteOutlined,
+  FileDoneOutlined,
   SaveOutlined,
   StarFilled,
   StarOutlined,
@@ -19,6 +20,20 @@ import {
 } from '@ant-design/icons'
 
 const e = window.translate
+const timelineSourceLabelKeys = Object.freeze({
+  'fleet-status': 'shellpilotIncidentSourceFleet',
+  operations: 'shellpilotIncidentSourceOperations',
+  'safety-operation': 'shellpilotIncidentSourceSafety',
+  'ai-diagnostic': 'shellpilotIncidentSourceAi',
+  manual: 'shellpilotIncidentSourceManual',
+  incident: 'shellpilotIncidentSourceIncident',
+  artifact: 'shellpilotIncidentSourceArtifact'
+})
+
+function timelineSourceLabel (source) {
+  const key = timelineSourceLabelKeys[source]
+  return key ? e(key) : source
+}
 
 const transitionActions = {
   investigating: [
@@ -212,6 +227,16 @@ export default function IncidentDetail ({
           )}
         </div>
         <div className='incident-detail-actions'>
+          {!creating && (
+            <Button
+              icon={<FileDoneOutlined />}
+              loading={store.incidentArtifactCreating}
+              disabled={dirty}
+              onClick={() => store.generateActiveIncidentReview()}
+            >
+              {e('shellpilotIncidentGenerateReview')}
+            </Button>
+          )}
           {creating && (
             <Button onClick={onCancelCreate}>
               {e('cancel')}
@@ -330,6 +355,33 @@ export default function IncidentDetail ({
           />
         </label>
       </div>
+
+      {!creating && (
+        <div className='incident-form-section'>
+          <h3>{e('shellpilotIncidentTimeline')}</h3>
+          <div className='incident-timeline'>
+            {(incident.timelineEvents || []).length
+              ? incident.timelineEvents.map(event => (
+                <article key={event.id}>
+                  <i />
+                  <div>
+                    <header>
+                      <strong>{event.title}</strong>
+                      <time>{formatTime(event.createdAt)}</time>
+                    </header>
+                    {event.body && <p>{event.body}</p>}
+                    <small>{timelineSourceLabel(event.source)}</small>
+                  </div>
+                </article>
+              ))
+              : (
+                <p className='incident-timeline-empty'>
+                  {e('shellpilotIncidentTimelineEmpty')}
+                </p>
+                )}
+          </div>
+        </div>
+      )}
 
       {!creating && (
         <div className='incident-form-section'>

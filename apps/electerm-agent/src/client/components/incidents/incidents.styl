@@ -136,6 +136,213 @@
   display grid
   grid-template-columns minmax(260px, 340px) minmax(0, 1fr)
 
+.incident-candidate-workspace
+  flex 1
+  min-height 0
+  display grid
+  grid-template-columns minmax(280px, 360px) minmax(0, 1fr)
+
+.incident-candidate-list
+  min-width 0
+  min-height 0
+  display flex
+  flex-direction column
+  border-right 1px solid var(--main-darker)
+
+  > header
+    min-height 64px
+    padding 10px 12px
+    border-bottom 1px solid var(--main-darker)
+    display flex
+    align-items center
+    justify-content space-between
+    gap 10px
+
+    > div:first-child
+      min-width 0
+      display flex
+      flex-direction column
+      gap 3px
+
+    span
+      color var(--text-light)
+      font-size 11px
+
+.incident-candidate-list-scroll
+  flex 1
+  min-height 0
+  overflow auto
+  padding 8px
+
+  > button
+    width 100%
+    min-height 82px
+    margin-bottom 7px
+    padding 10px
+    border 1px solid transparent
+    border-radius 6px
+    color var(--text)
+    background transparent
+    text-align left
+    display grid
+    grid-template-columns 4px minmax(0, 1fr)
+    gap 9px
+    cursor pointer
+
+    &:hover,
+    &.active
+      border-color var(--primary)
+      background var(--main-light)
+
+    > span
+      min-width 0
+      display flex
+      flex-direction column
+      gap 4px
+
+    strong,
+    small,
+    em
+      overflow hidden
+      text-overflow ellipsis
+      white-space nowrap
+
+    small,
+    em
+      color var(--text-light)
+      font-size 11px
+      font-style normal
+
+.incident-candidate-review
+  min-width 0
+  min-height 0
+  overflow auto
+  padding 18px
+
+  > header
+    display flex
+    align-items flex-start
+    justify-content space-between
+    gap 12px
+
+    h2
+      margin 0
+      font-size 17px
+
+    p
+      margin 4px 0 0
+      color var(--text-light)
+      font-size 12px
+
+  > footer
+    margin-top 16px
+    padding-top 14px
+    border-top 1px solid var(--main-darker)
+    display flex
+    justify-content flex-end
+    gap 8px
+
+.incident-candidate-form
+  margin-top 18px
+  display grid
+  grid-template-columns minmax(0, 1fr) 160px
+  gap 12px
+
+  label
+    min-width 0
+    display flex
+    flex-direction column
+    gap 6px
+
+    > span
+      color var(--text-light)
+      font-size 12px
+
+.incident-candidate-form-wide
+  grid-column 1 / -1
+
+.incident-candidate-evidence
+  margin-top 16px
+  padding: 12px
+  border 1px solid var(--main-darker)
+  border-radius 6px
+  background var(--main-light)
+
+  h3
+    margin 0 0 9px
+    font-size 13px
+
+  dl
+    margin 0
+    display grid
+    grid-template-columns repeat(2, minmax(0, 1fr))
+    gap 7px 14px
+
+  dl > div
+    min-width 0
+    display grid
+    grid-template-columns 100px minmax(0, 1fr)
+    gap 8px
+
+  dt
+    color var(--text-light)
+
+  dd
+    margin 0
+    overflow-wrap anywhere
+
+.incident-candidate-loading,
+.incident-candidate-empty
+  flex 1
+  min-height 0
+  display grid
+  place-items center
+
+.incident-candidate-empty
+  align-content center
+  gap 12px
+
+.incident-candidate-status-select
+  width 132px
+  flex none
+
+.incident-timeline
+  display flex
+  flex-direction column
+  gap 0
+
+  article
+    display grid
+    grid-template-columns 10px minmax(0, 1fr)
+    gap 10px
+    padding-bottom 14px
+
+    > i
+      width 8px
+      height 8px
+      margin-top 6px
+      border 2px solid var(--primary)
+      border-radius 50%
+
+    header
+      display flex
+      align-items center
+      justify-content space-between
+      gap 10px
+
+    time,
+    small
+      color var(--text-light)
+      font-size 11px
+
+    p
+      margin 4px 0
+      white-space pre-wrap
+      overflow-wrap anywhere
+
+.incident-timeline-empty
+  color var(--text-light)
+
 .incident-list-panel
   min-width 0
   overflow hidden
@@ -485,6 +692,21 @@
 
   .incident-workspace-grid
     grid-template-columns minmax(0, 1fr)
+
+  .incident-candidate-workspace
+    grid-template-columns minmax(0, 1fr)
+
+  .incident-candidate-list
+    max-height 36%
+    border-right 0
+    border-bottom 1px solid var(--main-darker)
+
+  .incident-candidate-form,
+  .incident-candidate-evidence dl
+    grid-template-columns minmax(0, 1fr)
+
+  .incident-candidate-form-wide
+    grid-column auto
 
   .incident-list-panel
     border-right 0

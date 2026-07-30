@@ -87,6 +87,17 @@ export default () => {
     incidentLoading: false,
     incidentSaving: false,
     incidentError: '',
+    incidentCandidates: [],
+    incidentCandidateFilters: {
+      status: ['pending'],
+      endpointRef: ''
+    },
+    incidentCandidatePage: 1,
+    incidentCandidatePageSize: 40,
+    incidentCandidateTotal: 0,
+    incidentPendingCandidateTotal: 0,
+    incidentCandidateLoading: false,
+    incidentArtifactCreating: false,
     incidentStorage: null,
     incidentStorageOpen: false,
     history: [],

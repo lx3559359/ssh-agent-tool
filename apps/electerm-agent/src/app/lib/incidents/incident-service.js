@@ -2,6 +2,14 @@ function createIncidentArchiveService ({ database, repository }) {
   return Object.freeze({
     list: filters => repository.list(filters || {}),
     get: id => repository.get(id),
+    listCandidates: filters => repository.listCandidates(filters || {}),
+    captureCandidate: draft => repository.upsertCandidate(draft),
+    dismissCandidate: id => repository.dismissCandidate(id),
+    reopenCandidate: id => repository.reopenCandidate(id),
+    convertCandidate: (id, draft) => repository.convertCandidate(id, draft),
+    appendTimelineEvent: (id, draft) => (
+      repository.appendTimelineEvent(id, draft)
+    ),
     create: draft => repository.create(draft),
     update: (id, patch) => repository.update(id, patch),
     transition: (id, input) => repository.transition(id, input),

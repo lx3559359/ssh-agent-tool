@@ -23,6 +23,16 @@ async function call (method, ...args) {
 export const incidentClient = Object.freeze({
   list: filters => call('listIncidentArchives', filters || {}),
   get: id => call('getIncidentArchive', id),
+  listCandidates: filters => call('listIncidentCandidates', filters || {}),
+  captureCandidate: draft => call('captureIncidentCandidate', draft),
+  dismissCandidate: id => call('dismissIncidentCandidate', id),
+  reopenCandidate: id => call('reopenIncidentCandidate', id),
+  convertCandidate: (id, draft) => (
+    call('convertIncidentCandidate', id, draft)
+  ),
+  appendTimelineEvent: (id, draft) => (
+    call('appendIncidentTimelineEvent', id, draft)
+  ),
   create: draft => call('createIncidentArchive', draft),
   update: (id, patch) => call('updateIncidentArchive', id, patch),
   transition: (id, input) => call('transitionIncidentArchive', id, input),

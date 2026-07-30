@@ -38,6 +38,35 @@ const CREATE_FIELDS = new Set([
 ])
 
 const SENSITIVE_KEYS = /password|passphrase|private[_-]?key|api[_-]?key|token|cookie|authorization/i
+const INCIDENT_CANDIDATE_STATUSES = Object.freeze({
+  pending: 'pending',
+  dismissed: 'dismissed',
+  converted: 'converted'
+})
+const CANDIDATE_SOURCES = Object.freeze([
+  'fleet-status',
+  'operations',
+  'safety-operation',
+  'ai-diagnostic',
+  'manual'
+])
+const TIMELINE_KINDS = Object.freeze([
+  'candidate',
+  'diagnostic',
+  'command',
+  'backup',
+  'change',
+  'rollback',
+  'verification',
+  'artifact',
+  'note'
+])
+const TIMELINE_SOURCES = Object.freeze([
+  ...CANDIDATE_SOURCES,
+  'incident',
+  'artifact'
+])
+const MAX_CONTEXT_BYTES = 64 * 1024
 
 function incidentError (code, message) {
   const error = new Error(message)
@@ -89,6 +118,75 @@ function assertAllowedFields (value, allowed) {
     if (!allowed.has(key)) {
       throw incidentError('INCIDENT_FIELD_READONLY', `Field cannot be edited: ${key}`)
     }
+  }
+}
+
+function boundedJsonObject (value, field) {
+  const input = value === undefined || value === null ? {} : value
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw incidentError('INCIDENT_VALIDATION_FAILED', `${field} must be an object.`)
+  }
+  assertSafeKeys(input)
+  let serialized
+  try {
+    serialized = JSON.stringify(input)
+  } catch {
+    throw incidentError('INCIDENT_VALIDATION_FAILED', `${field} must be JSON serializable.`)
+  }
+  if (Buffer.byteLength(serialized, 'utf8') > MAX_CONTEXT_BYTES) {
+    throw incidentError(
+      'INCIDENT_VALIDATION_FAILED',
+      `${field} exceeds ${MAX_CONTEXT_BYTES} bytes.`
+    )
+  }
+  return JSON.parse(serialized)
+}
+
+function createIncidentCandidate (draft, options) {
+  assertSafeKeys(draft)
+  const now = Number(options.now)
+  return {
+    id: boundedText(options.id, 'id', 128, true),
+    fingerprint: boundedText(draft.fingerprint, 'fingerprint', 256, true),
+    source: boundedEnum(
+      draft.source,
+      'source',
+      CANDIDATE_SOURCES,
+      'manual'
+    ),
+    sourceRef: boundedText(draft.sourceRef, 'sourceRef', 256),
+    endpointRef: boundedText(draft.endpointRef, 'endpointRef', 128),
+    title: boundedText(draft.title, 'title', 200, true),
+    severity: boundedEnum(
+      draft.severity,
+      'severity',
+      ['low', 'medium', 'high', 'critical'],
+      'medium'
+    ),
+    summary: boundedText(draft.summary, 'summary', 20000),
+    evidence: boundedJsonObject(draft.evidence, 'evidence'),
+    status: INCIDENT_CANDIDATE_STATUSES.pending,
+    incidentId: '',
+    firstSeenAt: now,
+    lastSeenAt: now,
+    occurrenceCount: 1,
+    createdAt: now,
+    updatedAt: now
+  }
+}
+
+function createIncidentTimelineEvent (draft, options) {
+  assertSafeKeys(draft)
+  return {
+    id: boundedText(options.id, 'id', 128, true),
+    incidentId: boundedText(options.incidentId, 'incidentId', 128, true),
+    kind: boundedEnum(draft.kind, 'kind', TIMELINE_KINDS, 'note'),
+    source: boundedEnum(draft.source, 'source', TIMELINE_SOURCES, 'manual'),
+    sourceRef: boundedText(draft.sourceRef, 'sourceRef', 256),
+    title: boundedText(draft.title, 'title', 200, true),
+    body: boundedText(draft.body, 'body', 20000),
+    metadata: boundedJsonObject(draft.metadata, 'metadata'),
+    createdAt: Number(options.now)
   }
 }
 
@@ -209,9 +307,12 @@ function validateTransition (
 
 module.exports = {
   INCIDENT_STATES,
+  INCIDENT_CANDIDATE_STATUSES,
   TRANSITIONS,
   createIncidentRecord,
   createIncidentPatch,
+  createIncidentCandidate,
+  createIncidentTimelineEvent,
   validateTransition,
   incidentError
 }

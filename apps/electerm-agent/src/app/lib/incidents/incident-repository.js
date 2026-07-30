@@ -2,6 +2,8 @@ const crypto = require('node:crypto')
 const {
   createIncidentRecord,
   createIncidentPatch,
+  createIncidentCandidate,
+  createIncidentTimelineEvent,
   validateTransition,
   incidentError
 } = require('./incident-model')
@@ -16,6 +18,17 @@ function parseJsonArray (value) {
     return Array.isArray(parsed) ? parsed : []
   } catch {
     return []
+  }
+}
+
+function parseJsonObject (value) {
+  try {
+    const parsed = JSON.parse(value || '{}')
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed
+      : {}
+  } catch {
+    return {}
   }
 }
 
@@ -62,6 +75,43 @@ function mapStateEvent (row) {
     toState: row.to_state,
     verificationStatus: row.verification_status,
     actor: row.actor,
+    createdAt: row.created_at
+  }
+}
+
+function mapCandidate (row) {
+  if (!row) return null
+  return {
+    id: row.id,
+    fingerprint: row.fingerprint,
+    source: row.source,
+    sourceRef: row.source_ref,
+    endpointRef: row.endpoint_ref,
+    title: row.title,
+    severity: row.severity,
+    summary: row.summary,
+    evidence: parseJsonObject(row.evidence_json),
+    status: row.status,
+    incidentId: row.incident_id || '',
+    firstSeenAt: row.first_seen_at,
+    lastSeenAt: row.last_seen_at,
+    occurrenceCount: row.occurrence_count,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  }
+}
+
+function mapTimelineEvent (row) {
+  if (!row) return null
+  return {
+    id: row.id,
+    incidentId: row.incident_id,
+    kind: row.kind,
+    source: row.source,
+    sourceRef: row.source_ref,
+    title: row.title,
+    body: row.body,
+    metadata: parseJsonObject(row.metadata_json),
     createdAt: row.created_at
   }
 }
@@ -176,6 +226,19 @@ function createIncidentRepository ({
     return row
   }
 
+  function requireCandidateRow (database, id) {
+    const row = database.prepare(
+      'SELECT * FROM incident_candidates WHERE id = ?'
+    ).get(id)
+    if (!row) {
+      throw incidentError(
+        'INCIDENT_CANDIDATE_NOT_FOUND',
+        `Incident candidate not found: ${id}`
+      )
+    }
+    return row
+  }
+
   function refreshSearchIndex (database, incidentId) {
     const incident = requireIncidentRow(database, incidentId)
     const noteRows = database.prepare(`
@@ -210,59 +273,61 @@ function createIncidentRepository ({
     )
   }
 
-  function create (draft) {
+  function insertIncident (database, draft, actor = 'user') {
     const record = createIncidentRecord(draft, {
       id: createId(),
       now: now()
     })
-    return transaction(database => {
-      database.prepare(`
-        INSERT INTO incidents (
-          id, title, endpoint_ref, session_refs_json, state, severity,
-          service_tags_json, custom_tags_json, summary, root_cause,
-          resolution, verification_status, storage_policy, is_pinned,
-          is_favorite, created_at, updated_at, resolved_at, archived_at
-        ) VALUES (
-          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-        )
-      `).run(
-        record.id,
-        record.title,
-        record.endpointRef,
-        JSON.stringify(record.sessionRefs),
-        record.state,
-        record.severity,
-        JSON.stringify(record.serviceTags),
-        JSON.stringify(record.customTags),
-        record.summary,
-        record.rootCause,
-        record.resolution,
-        record.verificationStatus,
-        record.storagePolicy,
-        Number(record.isPinned),
-        Number(record.isFavorite),
-        record.createdAt,
-        record.updatedAt,
-        record.resolvedAt,
-        record.archivedAt
+    database.prepare(`
+      INSERT INTO incidents (
+        id, title, endpoint_ref, session_refs_json, state, severity,
+        service_tags_json, custom_tags_json, summary, root_cause,
+        resolution, verification_status, storage_policy, is_pinned,
+        is_favorite, created_at, updated_at, resolved_at, archived_at
+      ) VALUES (
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
       )
-      database.prepare(`
-        INSERT INTO incident_state_events (
-          id, incident_id, from_state, to_state,
-          verification_status, actor, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        createId(),
-        record.id,
-        null,
-        record.state,
-        record.verificationStatus,
-        'user',
-        record.createdAt
-      )
-      refreshSearchIndex(database, record.id)
-      return record
-    })
+    `).run(
+      record.id,
+      record.title,
+      record.endpointRef,
+      JSON.stringify(record.sessionRefs),
+      record.state,
+      record.severity,
+      JSON.stringify(record.serviceTags),
+      JSON.stringify(record.customTags),
+      record.summary,
+      record.rootCause,
+      record.resolution,
+      record.verificationStatus,
+      record.storagePolicy,
+      Number(record.isPinned),
+      Number(record.isFavorite),
+      record.createdAt,
+      record.updatedAt,
+      record.resolvedAt,
+      record.archivedAt
+    )
+    database.prepare(`
+      INSERT INTO incident_state_events (
+        id, incident_id, from_state, to_state,
+        verification_status, actor, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      createId(),
+      record.id,
+      null,
+      record.state,
+      record.verificationStatus,
+      actor,
+      record.createdAt
+    )
+    refreshSearchIndex(database, record.id)
+    return record
+  }
+
+  function create (draft) {
+    return transaction(database => insertIncident(database, draft))
   }
 
   function get (id) {
@@ -278,11 +343,219 @@ function createIncidentRepository ({
       WHERE incident_id = ?
       ORDER BY created_at ASC, id ASC
     `).all(id).map(mapStateEvent)
+    const timelineEvents = database.prepare(`
+      SELECT * FROM incident_timeline_events
+      WHERE incident_id = ?
+      ORDER BY created_at ASC, id ASC
+    `).all(id).map(mapTimelineEvent)
     return {
       ...incident,
       notes,
-      stateEvents
+      stateEvents,
+      timelineEvents
     }
+  }
+
+  function getCandidate (id) {
+    return mapCandidate(requireCandidateRow(db(), id))
+  }
+
+  function upsertCandidate (draft) {
+    const candidate = createIncidentCandidate(draft, {
+      id: createId(),
+      now: now()
+    })
+    const id = transaction(database => {
+      const existing = database.prepare(
+        'SELECT * FROM incident_candidates WHERE fingerprint = ?'
+      ).get(candidate.fingerprint)
+      if (existing) {
+        database.prepare(`
+          UPDATE incident_candidates
+          SET source = ?, source_ref = ?, endpoint_ref = ?, title = ?,
+              severity = ?, summary = ?, evidence_json = ?,
+              last_seen_at = ?, occurrence_count = occurrence_count + 1,
+              updated_at = ?
+          WHERE id = ?
+        `).run(
+          candidate.source,
+          candidate.sourceRef,
+          candidate.endpointRef,
+          candidate.title,
+          candidate.severity,
+          candidate.summary,
+          JSON.stringify(candidate.evidence),
+          candidate.lastSeenAt,
+          candidate.updatedAt,
+          existing.id
+        )
+        return existing.id
+      }
+      database.prepare(`
+        INSERT INTO incident_candidates (
+          id, fingerprint, source, source_ref, endpoint_ref, title,
+          severity, summary, evidence_json, status, incident_id,
+          first_seen_at, last_seen_at, occurrence_count, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        candidate.id,
+        candidate.fingerprint,
+        candidate.source,
+        candidate.sourceRef,
+        candidate.endpointRef,
+        candidate.title,
+        candidate.severity,
+        candidate.summary,
+        JSON.stringify(candidate.evidence),
+        candidate.status,
+        null,
+        candidate.firstSeenAt,
+        candidate.lastSeenAt,
+        candidate.occurrenceCount,
+        candidate.createdAt,
+        candidate.updatedAt
+      )
+      return candidate.id
+    })
+    return getCandidate(id)
+  }
+
+  function listCandidates (filters = {}) {
+    const statuses = Array.isArray(filters.status) && filters.status.length
+      ? filters.status.slice(0, 3)
+      : ['pending']
+    const pageSize = [20, 40, 80, 100].includes(Number(filters.pageSize))
+      ? Number(filters.pageSize)
+      : 40
+    const page = Math.max(1, Math.floor(Number(filters.page) || 1))
+    const where = []
+    const params = {}
+    const statusNames = statuses.map((_, index) => `$status${index}`)
+    where.push(`status IN (${statusNames.join(', ')})`)
+    statuses.forEach((status, index) => {
+      params[`$status${index}`] = status
+    })
+    if (filters.endpointRef) {
+      where.push('endpoint_ref = $endpointRef')
+      params.$endpointRef = String(filters.endpointRef).slice(0, 128)
+    }
+    const clause = `WHERE ${where.join(' AND ')}`
+    const database = db()
+    const total = database.prepare(`
+      SELECT COUNT(*) AS total FROM incident_candidates ${clause}
+    `).get(params).total
+    const rows = database.prepare(`
+      SELECT * FROM incident_candidates ${clause}
+      ORDER BY updated_at DESC, id ASC
+      LIMIT $limit OFFSET $offset
+    `).all({
+      ...params,
+      $limit: pageSize,
+      $offset: (page - 1) * pageSize
+    })
+    return {
+      items: rows.map(mapCandidate),
+      total,
+      page,
+      pageSize,
+      totalPages: Math.max(1, Math.ceil(total / pageSize))
+    }
+  }
+
+  function setCandidateStatus (id, status) {
+    transaction(database => {
+      const current = requireCandidateRow(database, id)
+      if (current.status === 'converted') {
+        throw incidentError(
+          'INCIDENT_CANDIDATE_CONVERTED',
+          'Converted incident candidates cannot change status.'
+        )
+      }
+      database.prepare(`
+        UPDATE incident_candidates
+        SET status = ?, updated_at = ?
+        WHERE id = ?
+      `).run(status, now(), id)
+    })
+    return getCandidate(id)
+  }
+
+  function dismissCandidate (id) {
+    return setCandidateStatus(id, 'dismissed')
+  }
+
+  function reopenCandidate (id) {
+    return setCandidateStatus(id, 'pending')
+  }
+
+  function insertTimelineEvent (database, incidentId, draft) {
+    requireIncidentRow(database, incidentId)
+    const event = createIncidentTimelineEvent(draft, {
+      id: createId(),
+      incidentId,
+      now: now()
+    })
+    const result = database.prepare(`
+      INSERT OR IGNORE INTO incident_timeline_events (
+        id, incident_id, kind, source, source_ref,
+        title, body, metadata_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      event.id,
+      event.incidentId,
+      event.kind,
+      event.source,
+      event.sourceRef,
+      event.title,
+      event.body,
+      JSON.stringify(event.metadata),
+      event.createdAt
+    )
+    if (!result.changes && event.sourceRef) {
+      return mapTimelineEvent(database.prepare(`
+        SELECT * FROM incident_timeline_events
+        WHERE incident_id = ? AND kind = ? AND source = ? AND source_ref = ?
+      `).get(incidentId, event.kind, event.source, event.sourceRef))
+    }
+    database.prepare(
+      'UPDATE incidents SET updated_at = ? WHERE id = ?'
+    ).run(event.createdAt, incidentId)
+    return event
+  }
+
+  function appendTimelineEvent (incidentId, draft) {
+    return transaction(database => (
+      insertTimelineEvent(database, incidentId, draft)
+    ))
+  }
+
+  function convertCandidate (candidateId, incidentDraft) {
+    const incidentId = transaction(database => {
+      const candidate = requireCandidateRow(database, candidateId)
+      if (candidate.status === 'converted' && candidate.incident_id) {
+        return candidate.incident_id
+      }
+      const incident = insertIncident(database, incidentDraft, 'candidate')
+      insertTimelineEvent(database, incident.id, {
+        kind: 'candidate',
+        source: candidate.source,
+        sourceRef: candidate.source_ref || candidate.id,
+        title: candidate.title,
+        body: candidate.summary,
+        metadata: {
+          candidateId: candidate.id,
+          occurrenceCount: candidate.occurrence_count,
+          evidence: parseJsonObject(candidate.evidence_json)
+        }
+      })
+      database.prepare(`
+        UPDATE incident_candidates
+        SET status = 'converted', incident_id = ?, updated_at = ?
+        WHERE id = ?
+      `).run(incident.id, now(), candidate.id)
+      return incident.id
+    })
+    return get(incidentId)
   }
 
   const COLUMN_BY_FIELD = Object.freeze({
@@ -590,6 +863,13 @@ function createIncidentRepository ({
   return Object.freeze({
     create,
     get,
+    getCandidate,
+    upsertCandidate,
+    listCandidates,
+    dismissCandidate,
+    reopenCandidate,
+    convertCandidate,
+    appendTimelineEvent,
     update,
     transition,
     addNote,
