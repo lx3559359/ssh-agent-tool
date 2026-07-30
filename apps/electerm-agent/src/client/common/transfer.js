@@ -25,11 +25,6 @@ class Transfer {
       port
     } = rest
     const ws = await initWs('transfer', id, sftpId, undefined, port)
-    ws.s({
-      action: 'transfer-new',
-      ...rest,
-      id
-    })
     keys.forEach(func => {
       th[func] = (...args) => {
         ws.s({
@@ -54,19 +49,26 @@ class Transfer {
       }
     }
     ws.addEventListener('message', this.onData)
-    ws.once((arg) => {
-      onEnd(arg)
-      th.onDestroy(ws)
-    }, 'transfer:end:' + id)
-    ws.once((arg) => {
-      console.debug('sftp transfer error')
-      console.debug(arg.error.stack)
-      onError(new Error(arg.error.message))
-      th.onDestroy(ws)
-    }, 'transfer:err:' + id)
-    ws.once((arg) => {
-      this.onPaused?.(arg)
-    }, 'transfer:paused:' + id)
+    await Promise.all([
+      ws.once((arg) => {
+        onEnd(arg)
+        th.onDestroy(ws)
+      }, 'transfer:end:' + id),
+      ws.once((arg) => {
+        console.debug('sftp transfer error')
+        console.debug(arg.error.stack)
+        onError(new Error(arg.error.message))
+        th.onDestroy(ws)
+      }, 'transfer:err:' + id),
+      ws.once((arg) => {
+        this.onPaused?.(arg)
+      }, 'transfer:paused:' + id)
+    ])
+    ws.s({
+      action: 'transfer-new',
+      ...rest,
+      id
+    })
   }
 
   onDestroy (ws) {

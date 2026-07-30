@@ -5,13 +5,16 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
-const { once } = require('node:events')
+const { once, EventEmitter } = require('node:events')
 const { Readable, Writable } = require('node:stream')
 const Module = require('node:module')
 const { Server, utils } = require('@electerm/ssh2')
 const { STATUS_CODE, OPEN_MODE } = require('@electerm/ssh2/lib/protocol/SFTP.js')
 const { session } = require('../../src/app/server/session-ssh')
-const { Sftp } = require('../../src/app/server/session-sftp')
+const {
+  Sftp,
+  closeSftpChannel
+} = require('../../src/app/server/session-sftp')
 
 const originalLoad = Module._load
 Module._load = function (request, parent, isMain) {
@@ -285,6 +288,22 @@ async function startSftpServer (root) {
 }
 
 describe('session-sftp transport flows', () => {
+  test('graceful shutdown force-closes an SFTP channel that never acknowledges end', async () => {
+    const channel = new EventEmitter()
+    let ended = 0
+    let destroyed = 0
+    channel.end = () => { ended += 1 }
+    channel.destroy = () => { destroyed += 1 }
+
+    const graceful = await closeSftpChannel(channel, 5)
+
+    assert.equal(graceful, false)
+    assert.equal(ended, 1)
+    assert.equal(destroyed, 1)
+    assert.equal(channel.listenerCount('close'), 0)
+    assert.equal(channel.listenerCount('end'), 0)
+  })
+
   test('copyEntry meters actual streamed bytes and cleans a growing partial target', async () => {
     const sftp = Object.create(Sftp.prototype)
     const removed = []

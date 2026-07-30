@@ -33,9 +33,13 @@ function transfer (id, sftpId, inst) {
   return ss.transfers[id]
 }
 
-function onDestroySftp (id) {
+function onDestroySftp (id, graceful = false) {
   const inst = sftp(id)
-  inst && inst.kill && inst.kill()
+  if (!inst) return
+  if (graceful && typeof inst.destroyGracefully === 'function') {
+    return inst.destroyGracefully()
+  }
+  return inst.kill && inst.kill()
 }
 
 function onDestroyTransfer (id, sftpId) {

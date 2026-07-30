@@ -244,7 +244,8 @@ test('help center documents the local incident archive workflow', () => {
   assert.match(source, /状态与验证/)
   assert.match(source, /备份与恢复/)
   assert.match(source, /不会保存密码、API Key/)
-  assert.match(source, /第一阶段仅保存在当前电脑/)
+  assert.match(source, /待确认异常/)
+  assert.match(source, /异常候选和正式档案仅保存在当前电脑/)
 })
 
 test('incident archive layout adapts to narrow and short windows', () => {

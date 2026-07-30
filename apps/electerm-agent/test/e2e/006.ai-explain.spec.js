@@ -43,7 +43,13 @@ describe('Terminal Explain with AI', function () {
   })
 
   it('should explain selected text with AI', async function () {
-    // Type some text in the terminal
+    await client.locator('.add-new-tab-btn').click()
+    await client.locator('.session-current .term-wrap').waitFor({
+      state: 'visible',
+      timeout: 20000
+    })
+
+    // Type some text in the explicitly opened local terminal.
     await client.evaluate(() => {
       const profile = {
         id: 'e2e-ai-explain',

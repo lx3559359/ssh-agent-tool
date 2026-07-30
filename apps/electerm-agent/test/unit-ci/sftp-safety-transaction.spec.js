@@ -1295,6 +1295,36 @@ test('SFTP adapter rejects forged ids before constructing a transaction director
   }
 })
 
+test('SFTP adapter can resolve its connection asynchronously', async () => {
+  const { createSftpTransactionAdapter } = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/components/sftp/sftp-transaction-adapter.js'
+  )).href)
+  const sftp = createFakeSftp({
+    '/srv/app/data.txt': { type: 'file', content: 'data' }
+  })
+  let resolveCount = 0
+  const adapter = createSftpTransactionAdapter({
+    getSftp: async () => {
+      resolveCount += 1
+      return sftp
+    }
+  })
+  const operation = await buildSftpOperation({
+    id: 'adapter-async-connection',
+    action: 'delete',
+    paths: { source: '/srv/app/data.txt' },
+    type: 'file',
+    expected: { absent: true }
+  })
+
+  const prepared = await adapter.prepare(operation)
+
+  assert.equal(prepared.plan.action, 'delete')
+  assert.equal(resolveCount, 1)
+  assert.equal(sftp.calls.some(call => call[0] === 'writeFile'), true)
+})
+
 async function runExternalSftpTransfer ({ operation, sftp, mutate }) {
   const context = await createRealSftpTransactionRunner(operation, sftp)
   await context.runner.prepare(operation)
@@ -2497,6 +2527,7 @@ test('SFTP UI routes editor save chmod rename and delete through modern transact
   ]) {
     assert.match(entrySource, new RegExp(method))
   }
+  assert.match(entrySource, /getSftp:\s*\(\)\s*=>\s*this\.sftp/)
 })
 
 test('safety center routes modern SFTP records to SFTP capability and summarizes effects', async () => {

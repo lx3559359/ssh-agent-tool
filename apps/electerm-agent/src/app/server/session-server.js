@@ -396,9 +396,13 @@ if (type === 'rdp') {
             })
         }
       } else if (action === 'sftp-destroy') {
-        const { id } = msg
-        ws.close()
-        onDestroySftp(id)
+        const { id, uid } = msg
+        Promise.resolve(onDestroySftp(id, true))
+          .catch(() => {})
+          .finally(() => {
+            if (uid) ws.s({ id: uid, data: true })
+            ws.close()
+          })
       }
     })
     // end
