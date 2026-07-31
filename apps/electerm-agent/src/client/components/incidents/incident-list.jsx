@@ -12,7 +12,6 @@ import {
   Tag
 } from 'antd'
 import {
-  DatabaseOutlined,
   PlusOutlined,
   SearchOutlined,
   StarFilled
@@ -86,7 +85,6 @@ function filterOptions (values, labelKeys) {
 export default function IncidentList ({
   store,
   onCreate,
-  onOpenStorage,
   onSelect
 }) {
   const [search, setSearch] = useState(store.incidentFilters.query || '')
@@ -137,12 +135,6 @@ export default function IncidentList ({
             onClick={onCreate}
           >
             {e('shellpilotIncidentCreate')}
-          </Button>
-          <Button
-            icon={<DatabaseOutlined />}
-            onClick={onOpenStorage}
-          >
-            {e('shellpilotIncidentStorage')}
           </Button>
         </div>
         <Input

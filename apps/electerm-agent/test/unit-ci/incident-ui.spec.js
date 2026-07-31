@@ -118,7 +118,7 @@ test('incident detail keeps a local draft and enforces verification', () => {
   )
 })
 
-test('incident notes and backup restore have explicit safety gates', () => {
+test('incident notes have an explicit keyboard safety gate', () => {
   assertSourceMatches(
     'components/incidents/incident-detail.jsx',
     /store\.addActiveIncidentNote/
@@ -127,17 +127,12 @@ test('incident notes and backup restore have explicit safety gates', () => {
     'components/incidents/incident-detail.jsx',
     /event\.ctrlKey && event\.key === 'Enter'/
   )
-  assertSourceMatches(
-    'components/incidents/incident-storage-modal.jsx',
-    /confirmation !== 'RESTORE'/
-  )
-  assertSourceMatches(
-    'components/incidents/incident-storage-modal.jsx',
-    /store\.restoreIncidentBackup/
-  )
-  assertSourceMatches(
-    'components/incidents/incident-storage-modal.jsx',
-    /shellpilotIncidentRestoreWarning/
+  assert.equal(
+    fs.existsSync(path.join(
+      root,
+      'src/client/components/incidents/incident-storage-modal.jsx'
+    )),
+    false
   )
 })
 

@@ -109,9 +109,16 @@ test('normal chat and Agent both send the shared conversation context', () => {
   const agent = readSource('src/client/components/ai/agent.js')
   const backend = readSource('src/app/lib/ai.js')
 
-  assert.match(historyItem, /buildAIConversationMessages\(window\.store\.aiChatHistory, item\)/)
+  assert.match(
+    historyItem,
+    /buildAIConversationMessages\(\s*window\.store\.aiChatHistory,\s*item\s*\)/
+  )
   assert.match(historyItem, /'AIchat',\s*conversationMessages,/)
   assert.match(agent, /\.\.\.buildAIConversationMessages\(history, chatEntry\)/)
+  assert.match(
+    readSource('src/client/components/ai/ai-conversation-context.js'),
+    /applyAIContentPartsToMessages\(messages, rawCurrentItem\.id\)/
+  )
   assert.match(backend, /Array\.isArray\(promptOrMessages\)/)
 })
 

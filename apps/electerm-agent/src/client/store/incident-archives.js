@@ -310,6 +310,49 @@ export default Store => {
     })
   }
 
+  Store.prototype.deleteActiveIncident = async function () {
+    const store = window.store
+    if (!store.activeIncidentId) return null
+    const incidentId = store.activeIncidentId
+    store.incidentSaving = true
+    store.incidentError = ''
+    try {
+      const result = await incidentClient.delete(incidentId)
+      store.activeIncidentId = ''
+      store.activeIncident = null
+      await Promise.all([
+        store.loadIncidentArchives({ page: 1 }),
+        store.loadIncidentSummary(),
+        store.loadIncidentCandidates()
+      ])
+      return result
+    } catch (error) {
+      store.incidentError = incidentErrorMessage(error)
+      return null
+    } finally {
+      store.incidentSaving = false
+    }
+  }
+
+  Store.prototype.exportIncidentArchives = async function (
+    format = 'md',
+    incidentId = ''
+  ) {
+    const store = window.store
+    const id = incidentId || store.activeIncidentId
+    if (!id) return null
+    store.incidentSaving = true
+    store.incidentError = ''
+    try {
+      return await incidentClient.export(id, format)
+    } catch (error) {
+      store.incidentError = incidentErrorMessage(error)
+      return null
+    } finally {
+      store.incidentSaving = false
+    }
+  }
+
   Store.prototype.loadIncidentSummary = async function () {
     const store = window.store
     try {
@@ -318,60 +361,6 @@ export default Store => {
     } catch (error) {
       store.incidentError = incidentErrorMessage(error)
       return null
-    }
-  }
-
-  Store.prototype.loadIncidentStorage = async function () {
-    const store = window.store
-    try {
-      store.incidentStorage = await incidentClient.storage()
-      return store.incidentStorage
-    } catch (error) {
-      store.incidentError = incidentErrorMessage(error)
-      return null
-    }
-  }
-
-  Store.prototype.createIncidentBackup = async function () {
-    const store = window.store
-    store.incidentSaving = true
-    store.incidentError = ''
-    try {
-      await incidentClient.createBackup()
-      return await store.loadIncidentStorage()
-    } catch (error) {
-      store.incidentError = incidentErrorMessage(error)
-      return null
-    } finally {
-      store.incidentSaving = false
-    }
-  }
-
-  Store.prototype.restoreIncidentBackup = async function (
-    filename,
-    confirmation
-  ) {
-    const store = window.store
-    store.incidentSaving = true
-    store.incidentError = ''
-    try {
-      const result = await incidentClient.restoreBackup(
-        filename,
-        confirmation
-      )
-      store.activeIncidentId = ''
-      store.activeIncident = null
-      await Promise.all([
-        store.loadIncidentArchives({ page: 1 }),
-        store.loadIncidentSummary(),
-        store.loadIncidentStorage()
-      ])
-      return result
-    } catch (error) {
-      store.incidentError = incidentErrorMessage(error)
-      return null
-    } finally {
-      store.incidentSaving = false
     }
   }
 }

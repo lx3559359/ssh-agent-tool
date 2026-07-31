@@ -12,6 +12,7 @@ import {
 import {
   ArrowLeftOutlined,
   DeleteOutlined,
+  DownloadOutlined,
   FileDoneOutlined,
   SaveOutlined,
   StarFilled,
@@ -190,6 +191,12 @@ export default function IncidentDetail ({
     }
   }
 
+  const deleteIncident = async () => {
+    if (!ensureDraftSaved()) return
+    const deleted = await store.deleteActiveIncident()
+    if (deleted) onBack?.()
+  }
+
   if (!creating && !incident) {
     return (
       <section className='incident-detail-panel'>
@@ -228,14 +235,39 @@ export default function IncidentDetail ({
         </div>
         <div className='incident-detail-actions'>
           {!creating && (
-            <Button
-              icon={<FileDoneOutlined />}
-              loading={store.incidentArtifactCreating}
-              disabled={dirty}
-              onClick={() => store.generateActiveIncidentReview()}
-            >
-              {e('shellpilotIncidentGenerateReview')}
-            </Button>
+            <>
+              <Button
+                icon={<FileDoneOutlined />}
+                loading={store.incidentArtifactCreating}
+                disabled={dirty}
+                onClick={() => store.generateActiveIncidentReview()}
+              >
+                {e('shellpilotIncidentGenerateReview')}
+              </Button>
+              <Button
+                icon={<DownloadOutlined />}
+                disabled={dirty}
+                onClick={() => store.exportIncidentArchives('md')}
+              >
+                {e('shellpilotIncidentExport')}
+              </Button>
+              <Popconfirm
+                title={e('shellpilotIncidentDeleteConfirm')}
+                description={e('shellpilotIncidentDeleteLocalOnly')}
+                okText={e('delete')}
+                cancelText={e('cancel')}
+                okButtonProps={{ danger: true }}
+                onConfirm={deleteIncident}
+              >
+                <Button
+                  danger
+                  icon={<DeleteOutlined />}
+                  disabled={dirty}
+                >
+                  {e('delete')}
+                </Button>
+              </Popconfirm>
+            </>
           )}
           {creating && (
             <Button onClick={onCancelCreate}>

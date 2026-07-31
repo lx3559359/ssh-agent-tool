@@ -65,17 +65,14 @@
 .artifact-list-item
   width 100%
   min-height 66px
-  display grid
-  grid-template-columns 20px minmax(0, 1fr) auto
-  align-items center
-  gap 8px
-  padding 9px 10px
+  display flex
+  align-items stretch
   border 1px solid transparent
   border-radius 6px
   color var(--text)
   background transparent
   text-align left
-  cursor pointer
+  overflow hidden
 
 .artifact-list-item:hover
   background var(--main-hover)
@@ -83,6 +80,25 @@
 .artifact-list-item.active
   border-color var(--primary)
   background var(--primary-bg)
+
+.artifact-list-item-main
+  min-width 0
+  flex 1
+  display grid
+  grid-template-columns 20px minmax(0, 1fr) auto
+  align-items center
+  gap 8px
+  padding 9px 10px
+  border 0
+  color inherit
+  background transparent
+  text-align left
+  cursor pointer
+
+.artifact-list-item-delete
+  align-self center
+  flex none
+  margin-right 4px
 
 .artifact-list-item-copy
   min-width 0

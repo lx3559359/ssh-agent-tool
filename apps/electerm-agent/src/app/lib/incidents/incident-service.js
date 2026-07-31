@@ -1,4 +1,5 @@
 function createIncidentArchiveService ({ database, repository }) {
+  const { exportIncident } = require('./incident-export')
   return Object.freeze({
     list: filters => repository.list(filters || {}),
     get: id => repository.get(id),
@@ -15,6 +16,8 @@ function createIncidentArchiveService ({ database, repository }) {
     transition: (id, input) => repository.transition(id, input),
     addNote: (id, body) => repository.addNote(id, body),
     deleteNote: (id, noteId) => repository.deleteNote(id, noteId),
+    delete: id => repository.delete(id),
+    export: (id, options) => exportIncident(repository.get(id), options),
     summary: () => repository.summary(),
     storage: () => ({
       ...database.getStorageStats(),

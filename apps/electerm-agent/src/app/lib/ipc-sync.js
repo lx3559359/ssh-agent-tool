@@ -124,6 +124,7 @@ module.exports = {
         'rmrf',
         'readdirAsync',
         'readFile',
+        'readFileBase64Preview',
         'readFileAsBase64',
         'writeFile',
         'openFile',

@@ -715,6 +715,19 @@ function createIncidentRepository ({
     return { deleted: true, noteId }
   }
 
+  function deleteIncident (incidentId) {
+    transaction(database => {
+      requireIncidentRow(database, incidentId)
+      database.prepare(
+        'DELETE FROM incident_search WHERE incident_id = ?'
+      ).run(incidentId)
+      database.prepare(
+        'DELETE FROM incidents WHERE id = ?'
+      ).run(incidentId)
+    })
+    return { deleted: true, incidentId }
+  }
+
   function normalizeFilters (filters = {}) {
     const pageSize = PAGE_SIZES.has(Number(filters.pageSize))
       ? Number(filters.pageSize)
@@ -874,6 +887,7 @@ function createIncidentRepository ({
     transition,
     addNote,
     deleteNote,
+    delete: deleteIncident,
     list,
     summary,
     ensureSearchIndex

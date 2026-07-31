@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
-import { Button, Flex, Input, Popconfirm, Segmented } from 'antd'
+import { Button, Flex, Input, Modal, Popconfirm, Segmented } from 'antd'
 import TabSelect from '../footer/tab-select'
 import AiChatHistory from './ai-chat-history'
 import AIStopIcon from './ai-stop-icon'
@@ -15,7 +15,8 @@ import {
   LoadingOutlined,
   SendOutlined,
   ToolOutlined,
-  UnorderedListOutlined
+  UnorderedListOutlined,
+  GlobalOutlined
 } from '@ant-design/icons'
 import { refs, refsStatic } from '../common/ref'
 import {
@@ -44,15 +45,19 @@ import {
   getAIContextUnavailableMessage,
   getTerminalOutputText,
   getTerminalSelectionText,
-  buildSelectedSftpFileAnalysisPrompt,
   replacePromptIfUnchanged,
   shouldAutoAttachSelectedSftpFileContext
 } from './ai-chat-context-actions'
 import {
-  buildAttachmentContextPrompt,
+  buildAttachmentAIContent,
   createLocalFileAttachments,
+  createSftpFileAttachments,
+  createWebAttachment,
   parseSftpDropPayload
 } from './ai-attachments'
+import {
+  registerAIContentParts
+} from './ai-content-registry'
 import {
   getActiveAIConfig
 } from './ai-profiles'
@@ -72,10 +77,35 @@ const { TextArea } = Input
 const MAX_HISTORY = 100
 const e = window.translate
 
+function getSingleSftpAttachment (sftpRef) {
+  const selectedFiles = sftpRef?.getSelectedFiles?.() || []
+  const attachments = createSftpFileAttachments(selectedFiles)
+  if (selectedFiles.length > 1) {
+    return {
+      error: '当前选择了多个文件，请一次只引用一个文件。'
+    }
+  }
+  if (selectedFiles.some(file => file?.isDirectory)) {
+    return {
+      error: '当前选择的是目录，请选择一个文件后再引用。'
+    }
+  }
+  if (attachments.length !== 1) {
+    return {
+      error: '请先在 SFTP 中选择一个文件。'
+    }
+  }
+  return {
+    attachment: attachments[0]
+  }
+}
+
 export default function AIChat (props) {
   const [prompt, setPrompt] = useState('')
   const [mode, setMode] = useState('ask')
   const [attachmentQueue, setAttachmentQueue] = useState([])
+  const [webUrlDialogOpen, setWebUrlDialogOpen] = useState(false)
+  const [webUrl, setWebUrl] = useState('')
   const fileInputRef = useRef(null)
   const composerRef = useRef(null)
   const submittedHealthChecksRef = useRef(new Map())
@@ -124,6 +154,7 @@ export default function AIChat (props) {
   const handleSubmit = useCallback(async function (submitPromptOverride) {
     const promptAtSubmit = prompt
     const attachmentQueueAtSubmit = attachmentQueue
+    let aiContentParts = []
     let submitPrompt = typeof submitPromptOverride === 'string' ? submitPromptOverride : prompt
     if (!String(submitPrompt || '').trim() && attachmentQueueAtSubmit.length) {
       submitPrompt = '请分析附件内容。'
@@ -140,33 +171,39 @@ export default function AIChat (props) {
 
     const userPrompt = String(submitPrompt || '').trim()
 
-    if (shouldAutoAttachSelectedSftpFileContext(submitPrompt)) {
-      const result = await buildSelectedSftpFileAnalysisPrompt({
-        sftpRef: getActiveSftpRef({
-          store: window.store,
-          refs
-        }),
-        termRef: getActiveTerminalRef({
-          store: window.store,
-          refs
-        }),
-        fsApi: window.fs
+    if (
+      shouldAutoAttachSelectedSftpFileContext(submitPrompt) &&
+      !attachmentQueueAtSubmit.length
+    ) {
+      const sftpRef = getActiveSftpRef({
+        store: window.store,
+        refs
+      })
+      const selected = getSingleSftpAttachment(sftpRef)
+      if (selected.error) {
+        message.warning(selected.error)
+        return
+      }
+      const selectedContent = await buildAttachmentAIContent({
+        attachments: [selected.attachment],
+        fsApi: window.fs,
+        sftpRef
       }).catch(err => {
         window.store.onError(err)
         return null
       })
-      if (!result) {
+      if (selectedContent?.errors?.length) {
+        message.warning(selectedContent.errors.join('；'))
+      }
+      if (!selectedContent?.prompt) {
         return
       }
-      if (!result.ok) {
-        message.warning(result.message)
-        return
-      }
-      submitPrompt = `${submitPrompt}\n\n${result.prompt}`
+      submitPrompt = `${submitPrompt}\n\n${selectedContent.prompt}`
+      aiContentParts = selectedContent.aiContentParts || []
     }
 
     if (attachmentQueueAtSubmit.length) {
-      const attachmentPrompt = await buildAttachmentContextPrompt({
+      const attachmentContent = await buildAttachmentAIContent({
         attachments: attachmentQueueAtSubmit,
         fsApi: window.fs,
         sftpRef: getActiveSftpRef({
@@ -175,12 +212,16 @@ export default function AIChat (props) {
         })
       }).catch(err => {
         window.store.onError(err)
-        return ''
+        return null
       })
-      if (!attachmentPrompt) {
+      if (attachmentContent?.errors?.length) {
+        message.warning(attachmentContent.errors.join('；'))
+      }
+      if (!attachmentContent?.prompt) {
         return
       }
-      submitPrompt = `${submitPrompt}\n\n${attachmentPrompt}`
+      submitPrompt = `${submitPrompt}\n\n${attachmentContent.prompt}`
+      aiContentParts = attachmentContent.aiContentParts || []
     }
 
     const chatId = uid()
@@ -206,6 +247,7 @@ export default function AIChat (props) {
       timestamp: Date.now(),
       id: chatId
     }
+    registerAIContentParts(chatId, aiContentParts)
 
     const healthKey = getAIHealthRequestKey(activeAIConfig)
     submittedHealthChecksRef.current.set(chatId, {
@@ -315,31 +357,18 @@ export default function AIChat (props) {
   }
 
   async function handleQuoteSftpFile () {
-    const promptAtStart = prompt
-    const result = await buildSelectedSftpFileAnalysisPrompt({
-      sftpRef: getActiveSftpRef({
-        store: window.store,
-        refs
-      }),
-      termRef: getActiveTerminalRef({
-        store: window.store,
-        refs
-      }),
-      fsApi: window.fs
-    }).catch(err => {
-      window.store.onError(err)
-      return null
+    const sftpRef = getActiveSftpRef({
+      store: window.store,
+      refs
     })
-    if (!result) {
+    const selected = getSingleSftpAttachment(sftpRef)
+    if (selected.error) {
+      message.warning(selected.error)
       return
     }
-    if (!result.ok) {
-      message.warning(result.message)
-      return
-    }
-    setPrompt(current =>
-      replacePromptIfUnchanged(current, promptAtStart, result.prompt)
-    )
+    appendAttachments([selected.attachment])
+    setPrompt(current => current.trim() ? current : '请分析这个文件。')
+    requestAnimationFrame(() => composerRef.current?.focus())
   }
 
   function appendAttachments (items = []) {
@@ -352,6 +381,21 @@ export default function AIChat (props) {
 
   function handlePickLocalAttachments () {
     fileInputRef.current?.click()
+  }
+
+  function handleOpenWebUrl () {
+    setWebUrlDialogOpen(true)
+  }
+
+  function handleConfirmWebUrl () {
+    const attachment = createWebAttachment(webUrl)
+    if (!attachment) {
+      message.warning(e('shellpilotAiWebUrlRequired'))
+      return
+    }
+    appendAttachments([attachment])
+    setWebUrl('')
+    setWebUrlDialogOpen(false)
   }
 
   function handleLocalAttachmentChange (e) {
@@ -490,6 +534,12 @@ export default function AIChat (props) {
         text: e('shellpilotAiGenerateCommand'),
         icon: <ToolOutlined />,
         handleClick: handleGenerateCommand
+      },
+      {
+        key: 'web',
+        text: e('shellpilotAiReadWebUrl'),
+        icon: <GlobalOutlined />,
+        handleClick: handleOpenWebUrl
       }
     ]
 
@@ -654,61 +704,83 @@ export default function AIChat (props) {
   }
 
   return (
-    <Flex vertical className='ai-chat-container'>
-      <Flex className='ai-chat-history' flex='auto'>
-        {renderHistory()}
-      </Flex>
+    <>
+      <Flex vertical className='ai-chat-container'>
+        <Flex className='ai-chat-history' flex='auto'>
+          {renderHistory()}
+        </Flex>
 
-      <Flex
-        vertical
-        className='ai-chat-input'
-        onPaste={handlePasteAttachments}
-        onDrop={handleDropAttachments}
-        onDragOver={handleDragOverAttachments}
-      >
-        {renderContextActions()}
-        {renderAttachments()}
-        <TextArea
-          ref={composerRef}
-          value={prompt}
-          onChange={handlePromptChange}
-          onPressEnter={handleKeyPress}
-          placeholder={e('shellpilotAiInputPlaceholder')}
-          autoSize={{ minRows: 3, maxRows: 10 }}
-          className='ai-chat-textarea'
-        />
-        <input
-          ref={fileInputRef}
-          type='file'
-          multiple
-          className='hide'
-          onChange={handleLocalAttachmentChange}
-        />
-        <Flex className='ai-chat-terminals' justify='space-between' align='center'>
-          <Flex align='center' gap={6}>
-            {renderModeSwitch()}
-            {renderTabSelect()}
-            {renderUploadButton()}
-            <CreateArtifactMenu onSeedPrompt={handleSeedArtifactPrompt} />
-            <SettingOutlined
-              onClick={toggleConfig}
-              className='mg1l pointer icon-hover toggle-ai-setting-icon'
-            />
-            <Popconfirm
-              title={window.translate('clear') + ' AI ' + window.translate('history') + '?'}
-              okText={window.translate('ok')}
-              cancelText={window.translate('cancel')}
-              onConfirm={clearHistory}
-            >
-              <UnorderedListOutlined
-                className='mg2x pointer clear-ai-icon icon-hover'
-                title={e('shellpilotAiClearHistoryTitle')}
+        <Flex
+          vertical
+          className='ai-chat-input'
+          onPaste={handlePasteAttachments}
+          onDrop={handleDropAttachments}
+          onDragOver={handleDragOverAttachments}
+        >
+          {renderContextActions()}
+          {renderAttachments()}
+          <TextArea
+            ref={composerRef}
+            value={prompt}
+            onChange={handlePromptChange}
+            onPressEnter={handleKeyPress}
+            placeholder={e('shellpilotAiInputPlaceholder')}
+            autoSize={{ minRows: 3, maxRows: 10 }}
+            className='ai-chat-textarea'
+          />
+          <input
+            ref={fileInputRef}
+            type='file'
+            multiple
+            className='hide'
+            onChange={handleLocalAttachmentChange}
+          />
+          <Flex className='ai-chat-terminals' justify='space-between' align='center'>
+            <Flex align='center' gap={6}>
+              {renderModeSwitch()}
+              {renderTabSelect()}
+              {renderUploadButton()}
+              <CreateArtifactMenu onSeedPrompt={handleSeedArtifactPrompt} />
+              <SettingOutlined
+                onClick={toggleConfig}
+                className='mg1l pointer icon-hover toggle-ai-setting-icon'
               />
-            </Popconfirm>
+              <Popconfirm
+                title={window.translate('clear') + ' AI ' + window.translate('history') + '?'}
+                okText={window.translate('ok')}
+                cancelText={window.translate('cancel')}
+                onConfirm={clearHistory}
+              >
+                <UnorderedListOutlined
+                  className='mg2x pointer clear-ai-icon icon-hover'
+                  title={e('shellpilotAiClearHistoryTitle')}
+                />
+              </Popconfirm>
+            </Flex>
+            {renderSendIcon()}
           </Flex>
-          {renderSendIcon()}
         </Flex>
       </Flex>
-    </Flex>
+      <Modal
+        title={e('shellpilotAiReadWebUrl')}
+        open={webUrlDialogOpen}
+        okText={e('shellpilotAiAddWebUrl')}
+        cancelText={e('cancel')}
+        onOk={handleConfirmWebUrl}
+        onCancel={() => setWebUrlDialogOpen(false)}
+        destroyOnClose
+      >
+        <Input
+          value={webUrl}
+          onChange={event => setWebUrl(event.target.value)}
+          onPressEnter={handleConfirmWebUrl}
+          placeholder='https://example.com/article'
+          autoFocus
+        />
+        <div className='shellpilot-ai-web-url-hint'>
+          {e('shellpilotAiWebUrlHint')}
+        </div>
+      </Modal>
+    </>
   )
 }

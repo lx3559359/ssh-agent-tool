@@ -18,7 +18,8 @@ const PASSWORD = 'electerm-test'
 const OTP = '123456'
 const PASSPHRASE = 'electerm-passphrase'
 
-const HOST_KEY = utils.generateKeyPairSync('ed25519', {
+const HOST_KEY = utils.generateKeyPairSync('rsa', {
+  bits: 2048,
   comment: 'electerm-test-host'
 })
 
@@ -560,7 +561,7 @@ describe('session-ssh auth flows', () => {
       }, ws)
 
       assert.equal(firstPromptCount, 1)
-      assert.match(fs.readFileSync(knownHostsPath, 'utf8'), /^\[127\.0\.0\.1\]:\d+ ssh-ed25519 /)
+      assert.match(fs.readFileSync(knownHostsPath, 'utf8'), /^\[127\.0\.0\.1\]:\d+ ssh-rsa /)
       term.kill()
       term = null
 
