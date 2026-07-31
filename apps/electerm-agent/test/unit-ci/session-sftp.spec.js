@@ -28,7 +28,8 @@ Module._load = originalLoad
 
 const USERNAME = 'tester'
 const PASSWORD = 'electerm-test'
-const HOST_KEY = utils.generateKeyPairSync('ed25519', {
+const HOST_KEY = utils.generateKeyPairSync('rsa', {
+  bits: 2048,
   comment: 'electerm-sftp-test-host'
 })
 
