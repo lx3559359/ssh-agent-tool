@@ -4,13 +4,13 @@ import classnames from 'classnames'
 import { Alert, Button, Modal } from 'antd'
 import {
   CloseOutlined,
-  DownloadOutlined,
   FileDoneOutlined,
   ReloadOutlined
 } from '@ant-design/icons'
 import IncidentList from './incident-list'
 import IncidentDetail from './incident-detail'
 import IncidentCandidateList from './incident-candidate-list'
+import IncidentExportButton from './incident-export-button'
 import { focusIncidentWorkspace } from './incident-navigation'
 import './incidents.styl'
 
@@ -87,13 +87,6 @@ export default auto(function IncidentWorkspace ({
       setMobileDetailOpen(false)
     })
   }
-  const exportIncidentArchives = () => {
-    if (!store.activeIncidentId) {
-      Modal.info({ title: e('shellpilotIncidentSelectBeforeExport') })
-      return
-    }
-    store.exportIncidentArchives('md')
-  }
   const openCandidateView = () => {
     continueAfterDirtyCheck(() => {
       setCreating(false)
@@ -144,14 +137,11 @@ export default auto(function IncidentWorkspace ({
           >
             {e('refresh')}
           </Button>
-          <Button
-            icon={<DownloadOutlined />}
+          <IncidentExportButton
             disabled={!store.activeIncidentId}
             loading={store.incidentSaving}
-            onClick={exportIncidentArchives}
-          >
-            {e('shellpilotIncidentExport')}
-          </Button>
+            onExport={format => store.exportIncidentArchives(format)}
+          />
           <Button
             aria-label={e('shellpilotIncidentClose')}
             icon={<CloseOutlined />}

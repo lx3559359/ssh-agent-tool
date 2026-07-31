@@ -5,6 +5,8 @@ const pdf = require('pdf-parse')
 
 const MAX_INPUT_BYTES = 10 * 1024 * 1024
 const DEFAULT_MAX_TEXT_CHARS = 120000
+const MAX_OFFICE_ARCHIVE_ENTRIES = 2048
+const MAX_OFFICE_ARCHIVE_UNCOMPRESSED_BYTES = 64 * 1024 * 1024
 const DOCUMENT_EXTENSIONS = new Set([
   '.txt', '.log', '.md', '.json', '.csv', '.xml', '.yaml', '.yml',
   '.ini', '.conf', '.cfg', '.html', '.htm', '.pdf', '.docx', '.xlsx',
@@ -50,8 +52,28 @@ function boundedText (value, maxChars) {
   }
 }
 
-async function readZipXml (buffer, selector) {
+async function loadSafeOfficeArchive (buffer) {
   const zip = await JSZip.loadAsync(buffer)
+  const entries = Object.values(zip.files).filter(file => !file.dir)
+  if (entries.length > MAX_OFFICE_ARCHIVE_ENTRIES) {
+    throw new Error('Office 文档包含过多文件，已拒绝读取。')
+  }
+  let uncompressedBytes = 0
+  for (const file of entries) {
+    const size = Number(file?._data?.uncompressedSize)
+    if (!Number.isSafeInteger(size) || size < 0) {
+      throw new Error('Office 文档压缩信息无效，已拒绝读取。')
+    }
+    uncompressedBytes += size
+    if (uncompressedBytes > MAX_OFFICE_ARCHIVE_UNCOMPRESSED_BYTES) {
+      throw new Error('Office 文档解压后内容超过 64 MB 安全上限。')
+    }
+  }
+  return zip
+}
+
+async function readZipXml (buffer, selector) {
+  const zip = await loadSafeOfficeArchive(buffer)
   const files = Object.values(zip.files)
     .filter(file => !file.dir && selector(file.name))
     .sort((left, right) => left.name.localeCompare(
@@ -67,6 +89,7 @@ async function readZipXml (buffer, selector) {
 }
 
 async function readWorkbook (buffer) {
+  await loadSafeOfficeArchive(buffer)
   const workbook = new ExcelJS.Workbook()
   await workbook.xlsx.load(buffer)
   const rows = []
@@ -119,6 +142,14 @@ async function ingestBuffer ({
 
   const extension = path.extname(name).toLowerCase()
   const declaredImageMime = String(mimeType || '').toLowerCase()
+  if (
+    declaredImageMime.startsWith('image/') &&
+    !SUPPORTED_IMAGE_MIMES.has(declaredImageMime)
+  ) {
+    throw new Error(
+      '暂不支持该图片格式，请转换为 PNG、JPEG、WebP 或 GIF。'
+    )
+  }
   const imageMime = SUPPORTED_IMAGE_MIMES.has(declaredImageMime)
     ? declaredImageMime
     : IMAGE_MIME_BY_EXTENSION[extension]

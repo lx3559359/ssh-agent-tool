@@ -2,6 +2,7 @@ const { redactDiagnosticText } = require('../diagnostic-pack')
 
 const DEFAULT_MAX_BYTES = 2 * 1024 * 1024
 const FORMATS = new Set(['md', 'html', 'json'])
+const TRUNCATION_NOTICE = '[内容已按导出大小上限截断]'
 
 function escapeHtml (value) {
   return String(value || '')
@@ -73,7 +74,7 @@ function toMarkdown (incident) {
   const timeline = incident.timelineEvents.map(
     event => `- ${formatTime(event.createdAt)} [${event.source || 'manual'}] ${event.title}: ${event.body}`
   )
-  return [
+  const sections = [
     `# ${incident.title || '故障档案'}`,
     '',
     `- 档案编号：${incident.id || '-'}`,
@@ -105,7 +106,11 @@ function toMarkdown (incident) {
     '## 备注',
     markdownList(notes),
     ''
-  ].join('\n')
+  ]
+  if (incident.exportTruncated) {
+    sections.push('## 导出提示', TRUNCATION_NOTICE, '')
+  }
+  return sections.join('\n')
 }
 
 function toHtml (incident) {
@@ -129,7 +134,7 @@ function toHtml (incident) {
 function truncateUtf8 (content, maxBytes) {
   const buffer = Buffer.from(content, 'utf8')
   if (buffer.length <= maxBytes) return content
-  const suffix = '\n\n[内容已按导出大小上限截断]\n'
+  const suffix = `\n\n${TRUNCATION_NOTICE}\n`
   const suffixBuffer = Buffer.from(suffix, 'utf8')
   const safeSlice = (value, limit) => {
     let end = Math.min(value.length, Math.max(0, limit))
@@ -147,6 +152,93 @@ function truncateUtf8 (content, maxBytes) {
   ]).toString('utf8')
 }
 
+function renderIncident (incident, format) {
+  if (format === 'json') return JSON.stringify(incident, null, 2)
+  if (format === 'html') return toHtml(incident)
+  return toMarkdown(incident)
+}
+
+function collectShrinkCandidates (value, candidates = [], parent, key) {
+  if (typeof value === 'string' && value.length) {
+    candidates.push({
+      type: 'string',
+      parent,
+      key,
+      weight: Buffer.byteLength(value, 'utf8')
+    })
+    return candidates
+  }
+  if (Array.isArray(value)) {
+    if (value.length) {
+      candidates.push({
+        type: 'array',
+        value,
+        weight: Buffer.byteLength(JSON.stringify(value), 'utf8')
+      })
+    }
+    value.forEach((item, index) => {
+      collectShrinkCandidates(item, candidates, value, index)
+    })
+    return candidates
+  }
+  if (value && typeof value === 'object') {
+    for (const [childKey, item] of Object.entries(value)) {
+      if (childKey === 'exportTruncated') continue
+      collectShrinkCandidates(item, candidates, value, childKey)
+    }
+  }
+  return candidates
+}
+
+function halveString (value) {
+  let end = Math.floor(String(value).length / 2)
+  if (end > 0 && /[\uD800-\uDBFF]/.test(value[end - 1])) end -= 1
+  return value.slice(0, end)
+}
+
+function shrinkLargestValue (incident) {
+  const candidate = collectShrinkCandidates(incident)
+    .sort((left, right) => right.weight - left.weight)[0]
+  if (!candidate) return false
+  if (candidate.type === 'string') {
+    candidate.parent[candidate.key] = halveString(
+      candidate.parent[candidate.key]
+    )
+    return true
+  }
+  candidate.value.splice(Math.floor(candidate.value.length / 2))
+  return true
+}
+
+function minimalIncident (incident) {
+  return {
+    ...normalizeIncident({
+      id: truncateUtf8(incident.id, 256),
+      title: truncateUtf8(incident.title, 512),
+      createdAt: incident.createdAt,
+      updatedAt: incident.updatedAt
+    }),
+    exportTruncated: true
+  }
+}
+
+function renderBoundedIncident (incident, format, maxBytes) {
+  let content = renderIncident(incident, format)
+  if (Buffer.byteLength(content, 'utf8') <= maxBytes) return content
+
+  const bounded = JSON.parse(JSON.stringify(incident))
+  bounded.exportTruncated = true
+  for (let attempt = 0; attempt < 256; attempt++) {
+    content = renderIncident(bounded, format)
+    if (Buffer.byteLength(content, 'utf8') <= maxBytes) return content
+    if (!shrinkLargestValue(bounded)) break
+  }
+
+  content = renderIncident(minimalIncident(incident), format)
+  if (Buffer.byteLength(content, 'utf8') <= maxBytes) return content
+  throw new Error('故障档案最小导出内容仍超过大小上限。')
+}
+
 function exportIncident (incident, options = {}) {
   const format = FORMATS.has(options.format) ? options.format : 'md'
   const maxBytes = Math.max(
@@ -154,14 +246,9 @@ function exportIncident (incident, options = {}) {
     Number(options.maxBytes) || DEFAULT_MAX_BYTES
   )
   const normalized = normalizeIncident(incident)
-  const content = format === 'json'
-    ? JSON.stringify(normalized, null, 2)
-    : format === 'html'
-      ? toHtml(normalized)
-      : toMarkdown(normalized)
   return {
     format,
-    content: truncateUtf8(content, maxBytes),
+    content: renderBoundedIncident(normalized, format, maxBytes),
     extension: format,
     mimeType: format === 'html'
       ? 'text/html'

@@ -136,6 +136,26 @@ test('incident notes have an explicit keyboard safety gate', () => {
   )
 })
 
+test('incident export control exposes Markdown HTML and JSON in both views', () => {
+  const exportButtonPath = path.join(
+    root,
+    'src/client/components/incidents/incident-export-button.jsx'
+  )
+  assert.equal(fs.existsSync(exportButtonPath), true)
+  const exportButton = fs.readFileSync(exportButtonPath, 'utf8')
+  const workspace = readClient('components/incidents/incident-workspace.jsx')
+  const detail = readClient('components/incidents/incident-detail.jsx')
+
+  assert.match(exportButton, /key: 'md'/)
+  assert.match(exportButton, /key: 'html'/)
+  assert.match(exportButton, /key: 'json'/)
+  assert.match(exportButton, /onExport\(key\)/)
+  assert.match(workspace, /<IncidentExportButton/)
+  assert.match(detail, /<IncidentExportButton/)
+  assert.doesNotMatch(workspace, /exportIncidentArchives\('md'\)/)
+  assert.doesNotMatch(detail, /exportIncidentArchives\('md'\)/)
+})
+
 test('main lazily mounts incident archives without unmounting terminal or AI', () => {
   const source = readClient('components/main/main.jsx')
   assert.match(

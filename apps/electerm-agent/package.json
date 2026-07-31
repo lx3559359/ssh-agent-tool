@@ -39,6 +39,7 @@
     "test-agent-readonly-real-server": "playwright test test/e2e/031.agent-readonly-real-server.spec.js --workers=1",
     "test-ssh-tunnel": "node --test test/unit-ci/ssh-tunnel-*.spec.js && playwright test test/e2e/033.ssh-tunnel-manager.spec.js --workers=1",
     "b": "npm run clean && npm run compile && npm run prepare-file",
+    "package:win:dir": "npm run b && npm run pb && electron-builder --win --x64 --dir --publish never",
     "r": "./build/bin/release",
     "release:github": "node build/bin/release-github.js",
     "release:github:dry": "node build/bin/release-github.js --dry-run",
@@ -163,6 +164,18 @@
     "trzsz2": "1.2.0",
     "yauzl": "2.10.0",
     "zmodem2": "1.4.0"
+  },
+  "overrides": {
+    "minimatch@3.1.5": {
+      "brace-expansion": "1.1.18"
+    },
+    "minimatch@5.1.9": {
+      "brace-expansion": "2.1.4"
+    },
+    "exceljs": {
+      "unzipper": "0.12.5",
+      "uuid": "11.1.1"
+    }
   },
   "files": [
     "npm",
