@@ -98,8 +98,6 @@ export default () => {
     incidentPendingCandidateTotal: 0,
     incidentCandidateLoading: false,
     incidentArtifactCreating: false,
-    incidentStorage: null,
-    incidentStorageOpen: false,
     history: [],
     sshConfigs: [],
     bookmarks: [],

@@ -24,6 +24,7 @@ exports.instSftpKeys = [
   'cp',
   'readFile',
   'readFilePreview',
+  'readFileBase64Preview',
   'readFileRange',
   'readFileChunk',
   'describeResumeEntry',

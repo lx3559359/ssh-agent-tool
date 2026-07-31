@@ -1,6 +1,10 @@
 import { auto } from 'manate/react'
-import { Empty, Input, Select, Spin, Tag } from 'antd'
-import { FileTextOutlined, SearchOutlined } from '@ant-design/icons'
+import { Button, Empty, Input, Select, Spin, Tag } from 'antd'
+import {
+  DeleteOutlined,
+  FileTextOutlined,
+  SearchOutlined
+} from '@ant-design/icons'
 
 const e = window.translate
 
@@ -15,7 +19,7 @@ function availableFormats (artifact) {
   )).filter(Boolean)
 }
 
-export default auto(function ArtifactList ({ store }) {
+export default auto(function ArtifactList ({ store, onDelete }) {
   const items = store.artifactItems || []
   const filters = store.artifactFilters || {}
   const serverOptions = [...new Set(items.map(item => item.server).filter(Boolean))]
@@ -64,23 +68,35 @@ export default auto(function ArtifactList ({ store }) {
               const active = store.activeArtifactId === item.id
               const formats = availableFormats(item)
               return (
-                <button
-                  type='button'
+                <div
                   key={item.id}
                   className={`artifact-list-item${active ? ' active' : ''}`}
-                  onClick={() => store.selectArtifact(item.id)}
                 >
-                  <FileTextOutlined />
-                  <span className='artifact-list-item-copy'>
-                    <strong title={item.title}>{item.title}</strong>
-                    <small>{item.server || e('shellpilotArtifactUnlinkedServer')}</small>
-                  </span>
-                  <span className='artifact-list-item-formats'>
-                    {formats.slice(0, 2).map(format => (
-                      <Tag key={format}>{formatLabel(format)}</Tag>
-                    ))}
-                  </span>
-                </button>
+                  <button
+                    type='button'
+                    className='artifact-list-item-main'
+                    onClick={() => store.selectArtifact(item.id)}
+                  >
+                    <FileTextOutlined />
+                    <span className='artifact-list-item-copy'>
+                      <strong title={item.title}>{item.title}</strong>
+                      <small>{item.server || e('shellpilotArtifactUnlinkedServer')}</small>
+                    </span>
+                    <span className='artifact-list-item-formats'>
+                      {formats.slice(0, 2).map(format => (
+                        <Tag key={format}>{formatLabel(format)}</Tag>
+                      ))}
+                    </span>
+                  </button>
+                  <Button
+                    type='text'
+                    danger
+                    className='artifact-list-item-delete'
+                    aria-label={e('delete')}
+                    icon={<DeleteOutlined />}
+                    onClick={() => onDelete(item)}
+                  />
+                </div>
               )
             })
             : (

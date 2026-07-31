@@ -282,6 +282,7 @@ export const instSftpKeys = [
   'chown',
   'readFile',
   'readFilePreview',
+  'readFileBase64Preview',
   'readFileRange',
   'readFileChunk',
   'describeResumeEntry',

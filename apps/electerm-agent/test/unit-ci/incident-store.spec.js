@@ -100,12 +100,6 @@ function createHarness () {
       calls.push(['summary'])
       return { unresolved: 1 }
     },
-    storage: async () => ({ backups: [{ filename: 'backup.db' }] }),
-    createBackup: async () => ({ filename: 'backup.db' }),
-    restoreBackup: async (filename, confirmation) => ({
-      filename,
-      confirmation
-    }),
     listCandidates: async filters => {
       calls.push(['listCandidates', filters])
       return {
@@ -182,8 +176,6 @@ function createHarness () {
     incidentLoading: false,
     incidentSaving: false,
     incidentError: '',
-    incidentStorage: null,
-    incidentStorageOpen: false,
     incidentCandidates: [],
     incidentCandidateFilters: { status: ['pending'], endpointRef: '' },
     incidentCandidatePage: 1,
@@ -290,12 +282,6 @@ test('writes refresh the active incident, list and summary', async () => {
   assert.equal(store.incidentSaving, false)
   assert.equal(store.incidentSummary.unresolved, 1)
   assert.ok(calls.some(([name]) => name === 'list'))
-
-  await store.restoreIncidentBackup('backup.db', 'RESTORE')
-  assert.equal(store.activeIncidentId, '')
-  assert.equal(store.activeIncident, null)
-  assert.equal(store.incidentPage, 1)
-  assert.equal(store.incidentStorage.backups[0].filename, 'backup.db')
 })
 
 test('note mutations reload the complete active incident', async () => {

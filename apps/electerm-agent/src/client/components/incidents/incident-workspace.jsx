@@ -4,14 +4,13 @@ import classnames from 'classnames'
 import { Alert, Button, Modal } from 'antd'
 import {
   CloseOutlined,
-  DatabaseOutlined,
+  DownloadOutlined,
   FileDoneOutlined,
   ReloadOutlined
 } from '@ant-design/icons'
 import IncidentList from './incident-list'
 import IncidentDetail from './incident-detail'
 import IncidentCandidateList from './incident-candidate-list'
-import IncidentStorageModal from './incident-storage-modal'
 import { focusIncidentWorkspace } from './incident-navigation'
 import './incidents.styl'
 
@@ -88,9 +87,12 @@ export default auto(function IncidentWorkspace ({
       setMobileDetailOpen(false)
     })
   }
-  const openStorage = () => {
-    store.incidentStorageOpen = true
-    store.loadIncidentStorage()
+  const exportIncidentArchives = () => {
+    if (!store.activeIncidentId) {
+      Modal.info({ title: e('shellpilotIncidentSelectBeforeExport') })
+      return
+    }
+    store.exportIncidentArchives('md')
   }
   const openCandidateView = () => {
     continueAfterDirtyCheck(() => {
@@ -143,10 +145,12 @@ export default auto(function IncidentWorkspace ({
             {e('refresh')}
           </Button>
           <Button
-            icon={<DatabaseOutlined />}
-            onClick={openStorage}
+            icon={<DownloadOutlined />}
+            disabled={!store.activeIncidentId}
+            loading={store.incidentSaving}
+            onClick={exportIncidentArchives}
           >
-            {e('shellpilotIncidentStorage')}
+            {e('shellpilotIncidentExport')}
           </Button>
           <Button
             aria-label={e('shellpilotIncidentClose')}
@@ -181,7 +185,6 @@ export default auto(function IncidentWorkspace ({
             <IncidentList
               store={store}
               onCreate={openCreate}
-              onOpenStorage={openStorage}
               onSelect={selectIncident}
             />
             <IncidentDetail
@@ -198,7 +201,6 @@ export default auto(function IncidentWorkspace ({
             />
           </div>
           )}
-      <IncidentStorageModal store={store} />
     </main>
   )
 })

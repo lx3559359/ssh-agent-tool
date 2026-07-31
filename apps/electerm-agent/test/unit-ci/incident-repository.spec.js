@@ -279,3 +279,38 @@ test('converts a candidate and appends an idempotent incident timeline', () => {
   assert.equal(detail.timelineEvents.length, 2)
   assert.equal(detail.timelineEvents[1].title, '服务诊断')
 })
+
+test('deletes an incident and dependent rows while preserving its candidate', () => {
+  const repository = createRepositoryHarness()
+  const candidate = repository.upsertCandidate({
+    fingerprint: 'operations:server-1:delete-test',
+    source: 'operations',
+    sourceRef: 'delete-test',
+    endpointRef: 'server-1',
+    title: 'Delete test',
+    severity: 'medium',
+    summary: 'Candidate remains available'
+  })
+  const incident = repository.convertCandidate(candidate.id, {
+    title: 'Delete test incident',
+    endpointRef: 'server-1'
+  })
+  repository.addNote(incident.id, 'Local note')
+  repository.appendTimelineEvent(incident.id, {
+    kind: 'note',
+    source: 'manual',
+    title: 'Local event'
+  })
+
+  assert.deepEqual(repository.delete(incident.id), {
+    deleted: true,
+    incidentId: incident.id
+  })
+  assert.throws(
+    () => repository.get(incident.id),
+    error => error.code === 'INCIDENT_NOT_FOUND'
+  )
+  assert.equal(repository.list({ page: 1, pageSize: 20 }).total, 0)
+  assert.equal(repository.getCandidate(candidate.id).incidentId, '')
+  assert.equal(repository.getCandidate(candidate.id).status, 'converted')
+})

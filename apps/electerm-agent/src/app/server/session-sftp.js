@@ -4,6 +4,7 @@
 const {
   readRemoteFile,
   readRemoteFilePreview,
+  readRemoteFileBase64Preview,
   readRemoteFileRange,
   readRemoteFileChunk,
   listRemoteArchive,
@@ -977,6 +978,10 @@ class Sftp extends TerminalBase {
 
   readFilePreview (remotePath, maxBytes) {
     return readRemoteFilePreview(this.sftp, remotePath, maxBytes)
+  }
+
+  readFileBase64Preview (remotePath, maxBytes) {
+    return readRemoteFileBase64Preview(this.sftp, remotePath, maxBytes)
   }
 
   readFileRange (remotePath, options) {

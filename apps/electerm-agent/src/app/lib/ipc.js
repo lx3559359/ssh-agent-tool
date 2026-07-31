@@ -123,6 +123,13 @@ const {
 const {
   createIncidentArchiveService
 } = require('./incidents/incident-service')
+const {
+  ingestBuffer,
+  MAX_INPUT_BYTES
+} = require('./ai-content/content-ingestion')
+const {
+  readPublicWebPage
+} = require('./ai-content/web-reader')
 
 let agentSkillServices
 let agentSkillMigrationPromise
@@ -260,6 +267,41 @@ function safeIncidentResult (operation) {
         }
       }
     })
+}
+
+function safeAIContentResult (operation) {
+  return Promise.resolve()
+    .then(operation)
+    .then(value => ({
+      ok: true,
+      value: JSON.parse(JSON.stringify(value))
+    }))
+    .catch(error => ({
+      ok: false,
+      error: {
+        code: 'AI_CONTENT_READ_FAILED',
+        message: String(error?.message || '内容读取失败。')
+      }
+    }))
+}
+
+function ingestAIContent (payload = {}) {
+  if (payload?.kind === 'url') {
+    return readPublicWebPage(payload.url)
+  }
+  const encoded = String(payload?.dataBase64 || '')
+  if (!encoded) {
+    throw new Error('没有收到可读取的文件内容。')
+  }
+  const estimatedBytes = Math.ceil(encoded.length * 3 / 4)
+  if (estimatedBytes > MAX_INPUT_BYTES + 3) {
+    throw new Error('文件超过 10 MB 读取上限。')
+  }
+  return ingestBuffer({
+    name: String(payload.name || 'attachment'),
+    mimeType: String(payload.mimeType || ''),
+    buffer: Buffer.from(encoded, 'base64')
+  })
 }
 
 // Security: whitelist of safe environment variables for Linux/Mac/Windows
@@ -536,10 +578,28 @@ function initIpc () {
     transitionIncidentArchive: (id, input) => safeIncidentResult(() => getIncidentArchiveService().transition(id, input)),
     addIncidentNote: (id, body) => safeIncidentResult(() => getIncidentArchiveService().addNote(id, body)),
     deleteIncidentNote: (id, noteId) => safeIncidentResult(() => getIncidentArchiveService().deleteNote(id, noteId)),
-    getIncidentArchiveSummary: () => safeIncidentResult(() => getIncidentArchiveService().summary()),
-    getIncidentArchiveStorage: () => safeIncidentResult(() => getIncidentArchiveService().storage()),
-    createIncidentArchiveBackup: () => safeIncidentResult(() => getIncidentArchiveService().createBackup()),
-    restoreIncidentArchiveBackup: (filename, confirmation) => safeIncidentResult(() => getIncidentArchiveService().restoreBackup(filename, confirmation))
+    deleteIncidentArchive: id => safeIncidentResult(() => getIncidentArchiveService().delete(id)),
+    exportIncidentArchive: (id, format) => safeIncidentResult(async () => {
+      const exported = getIncidentArchiveService().export(id, { format })
+      const win = globalState.get('win')
+      const result = await dialog.showSaveDialog(win, {
+        title: '导出故障档案',
+        defaultPath: `incident-${String(id || '').slice(0, 36)}.${exported.extension}`,
+        filters: [{
+          name: exported.format.toUpperCase(),
+          extensions: [exported.extension]
+        }]
+      })
+      if (result.canceled || !result.filePath) return { canceled: true }
+      await fsp.writeFile(result.filePath, exported.content, 'utf8')
+      return {
+        canceled: false,
+        filename: path.basename(result.filePath),
+        format: exported.format,
+        bytes: Buffer.byteLength(exported.content, 'utf8')
+      }
+    }),
+    getIncidentArchiveSummary: () => safeIncidentResult(() => getIncidentArchiveService().summary())
   }
   const asyncGlobals = {
     ...agentSkillAsyncGlobals,
@@ -629,6 +689,9 @@ function initIpc () {
     saveRecoverySnapshot,
     getRecoveryPlan,
     dismissRecoveryPlan,
+    ingestAIContent: payload => safeAIContentResult(
+      () => ingestAIContent(payload)
+    ),
     reportRendererError: (payload) => reportRendererError(payload, log),
     nativeUpdateCheck,
     nativeUpdateDownload,

@@ -38,10 +38,7 @@ export const incidentClient = Object.freeze({
   transition: (id, input) => call('transitionIncidentArchive', id, input),
   addNote: (id, body) => call('addIncidentNote', id, body),
   deleteNote: (id, noteId) => call('deleteIncidentNote', id, noteId),
-  summary: () => call('getIncidentArchiveSummary'),
-  storage: () => call('getIncidentArchiveStorage'),
-  createBackup: () => call('createIncidentArchiveBackup'),
-  restoreBackup: (filename, confirmation) => (
-    call('restoreIncidentArchiveBackup', filename, confirmation)
-  )
+  delete: id => call('deleteIncidentArchive', id),
+  export: (id, format) => call('exportIncidentArchive', id, format),
+  summary: () => call('getIncidentArchiveSummary')
 })

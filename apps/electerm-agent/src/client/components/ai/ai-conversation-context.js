@@ -2,6 +2,9 @@ import {
   sanitizeAIStoredText,
   sanitizeAIStoredValue
 } from './ai-request-credentials.js'
+import {
+  applyAIContentPartsToMessages
+} from './ai-content-registry.js'
 
 const DEFAULT_MAX_CONVERSATION_TURNS = 20
 const DEFAULT_MAX_HISTORY_CHARS = 24000
@@ -106,7 +109,7 @@ export function buildAIConversationMessages (history = [], currentItem = {}, {
   if (currentPrompt) {
     messages.push({ role: 'user', content: sanitizeConversationContent(currentPrompt) })
   }
-  return messages
+  return applyAIContentPartsToMessages(messages, rawCurrentItem.id)
 }
 
 function buildActiveConversationBranch (entries = [], currentItem = {}) {

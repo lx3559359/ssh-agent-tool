@@ -200,6 +200,25 @@ async function readFilePreview (filePath, maxBytes) {
   }
 }
 
+async function readFileBase64Preview (filePath, maxBytes) {
+  const limit = Math.min(
+    10 * 1024 * 1024,
+    Math.max(1, Number(maxBytes) || 10 * 1024 * 1024)
+  )
+  const handle = await fss.open(filePath, 'r')
+  try {
+    const buffer = Buffer.alloc(limit + 1)
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0)
+    return {
+      base64: buffer.subarray(0, Math.min(bytesRead, limit)).toString('base64'),
+      bytesRead: Math.min(bytesRead, limit),
+      truncated: bytesRead > limit
+    }
+  } finally {
+    await handle.close()
+  }
+}
+
 async function readFileRange (filePath, options) {
   const handle = await fss.open(filePath, 'r')
   try {
@@ -612,6 +631,7 @@ const fsExport = Object.assign(
         })
     },
     readFilePreview,
+    readFileBase64Preview,
     readFileRange,
     searchFileText,
     listArchive,

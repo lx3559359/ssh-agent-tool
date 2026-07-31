@@ -505,7 +505,10 @@ export default memo(function AIChatHistoryItem ({
       metadata: { traceId: traceContext.traceId }
     })
     try {
-      const conversationMessages = buildAIConversationMessages(window.store.aiChatHistory, item)
+      const conversationMessages = buildAIConversationMessages(
+        window.store.aiChatHistory,
+        item
+      )
       await consumeAIChatRequest({
         request: () => {
           if (!traceContext) {
