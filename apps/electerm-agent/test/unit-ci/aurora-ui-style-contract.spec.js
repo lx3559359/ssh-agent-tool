@@ -85,3 +85,14 @@ test('Fleet and artifact workspaces reserve strong depth for page containers', (
   assert.doesNotMatch(fleet, /\.fleet-status-table tbody tr\r?\n(?: {2}[^\r\n]*\r?\n)* {2}box-shadow var\(--sp-shadow-lg\)/)
   assert.doesNotMatch(artifacts, /\.artifact-list-item\r?\n(?: {2}[^\r\n]*\r?\n)* {2}box-shadow var\(--sp-shadow-lg\)/)
 })
+
+test('settings passwords and logs use grouped surfaces instead of per-field cards', () => {
+  const wrap = readClient('components/setting-panel/setting-wrap.styl')
+  const setting = readClient('components/setting-panel/setting.styl')
+  const info = readClient('components/sidebar/info.styl')
+  assert.match(wrap, /\.setting-header[\s\S]*var\(--sp-shadow-md\)/)
+  assert.match(setting, /\.sp-setting-section[\s\S]*var\(--sp-shadow-md\)/)
+  assert.match(setting, /\.setting-passwords[\s\S]*var\(--sp-shadow-lg\)/)
+  assert.match(info, /\.info-modal[\s\S]*var\(--sp-shadow-lg\)/)
+  assert.doesNotMatch(setting, /\.sp-setting-field[\s\S]{0,180}box-shadow/)
+})

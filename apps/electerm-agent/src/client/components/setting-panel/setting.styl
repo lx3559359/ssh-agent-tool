@@ -124,8 +124,8 @@
   box-sizing border-box
   background var(--sp-surface-elevated)
   border 1px solid var(--sp-border)
-  border-radius var(--sp-radius-card)
-  box-shadow inset 0 1px 0 var(--sp-highlight-top), var(--sp-shadow-card)
+  border-radius var(--sp-radius-panel)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
 
 .sp-setting-section-header
   min-width 0
@@ -180,6 +180,30 @@
   align-items center
   gap 8px
   min-width 0
+
+.setting-passwords
+  box-sizing border-box
+  min-width 0
+  padding 20px
+  background var(--sp-surface)
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-panel)
+  box-shadow var(--sp-shadow-lg)
+
+.setting-passwords-header
+  margin-bottom 16px
+  color var(--sp-text)
+
+.setting-passwords .ant-table-wrapper
+  max-width 100%
+  overflow-x auto
+
+.setting-passwords .ant-table-row
+  box-shadow none
+
+.password-edit-form,
+.affected-bookmarks
+  color var(--sp-text)
 
 .sp-setting-toggle-grid
   display grid
