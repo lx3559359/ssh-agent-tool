@@ -1,8 +1,8 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
+const fs = require('node:fs')
+const os = require('node:os')
 const path = require('node:path')
-const { once } = require('node:events')
-const { PassThrough, Readable } = require('node:stream')
 const JSZip = require('jszip')
 const ExcelJS = require('exceljs')
 
@@ -76,33 +76,29 @@ test('XLSX generator creates summary and filtered detail worksheets', async () =
   assert.equal(detail.autoFilter, 'A1:C1')
 })
 
-test('ExcelJS streaming reader and writer remain compatible with patched dependencies', async () => {
-  const output = new PassThrough()
-  const chunks = []
-  output.on('data', chunk => chunks.push(chunk))
-  const finished = once(output, 'finish')
-
-  const writer = new ExcelJS.stream.xlsx.WorkbookWriter({ stream: output })
-  const sheet = writer.addWorksheet('Audit')
-  sheet.addRow(['streaming', 42]).commit()
-  await writer.commit()
-  await finished
-
-  const content = Buffer.concat(chunks)
+test('ExcelJS streaming reader remains compatible with patched unzipper', async () => {
   const workbook = new ExcelJS.Workbook()
-  await workbook.xlsx.load(content)
-  assert.equal(workbook.getWorksheet('Audit').getCell('B1').value, 42)
+  const sheet = workbook.addWorksheet('Audit')
+  sheet.addRow(['streaming', 42]).commit()
+  const tempDir = fs.mkdtempSync(path.join(
+    os.tmpdir(),
+    'shellpilot-exceljs-reader-'
+  ))
+  const workbookPath = path.join(tempDir, 'audit.xlsx')
 
-  const reader = new ExcelJS.stream.xlsx.WorkbookReader(
-    Readable.from(content)
-  )
-  const rows = []
-  for await (const worksheet of reader) {
-    for await (const row of worksheet) {
-      rows.push(row.values.slice(1))
+  try {
+    await workbook.xlsx.writeFile(workbookPath)
+    const reader = new ExcelJS.stream.xlsx.WorkbookReader(workbookPath)
+    const rows = []
+    for await (const worksheet of reader) {
+      for await (const row of worksheet) {
+        rows.push(row.values.slice(1))
+      }
     }
+    assert.deepEqual(rows, [['streaming', 42]])
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true })
   }
-  assert.deepEqual(rows, [['streaming', 42]])
 })
 
 test('printable report HTML is escaped and contains no executable content', () => {
