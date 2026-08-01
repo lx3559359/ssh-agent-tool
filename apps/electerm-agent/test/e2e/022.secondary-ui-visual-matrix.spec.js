@@ -3003,6 +3003,12 @@ test('settings search supports visible results, keyboard navigation, preview lan
     })
     expect(await page.locator('.setting-wrap').count()).toBe(0)
 
+    const shortcutTarget = page.locator('.aigshell-topbar-brand')
+    await shortcutTarget.evaluate(element => {
+      element.tabIndex = -1
+      element.focus()
+    })
+    await expect(shortcutTarget).toBeFocused()
     await page.keyboard.press('Control+K')
     await page.locator('.setting-wrap').waitFor({ state: 'visible' })
     const settingsDepth = await page.locator('.sp-setting-section').first().evaluate(element => {

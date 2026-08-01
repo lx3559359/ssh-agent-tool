@@ -154,6 +154,21 @@ async function installFleetFixture (page) {
       cancelCalls: 0,
       pending: new Map()
     }
+    const aiProfile = {
+      id: 'fleet-e2e-ai',
+      nameAI: 'Fleet E2E AI',
+      baseURLAI: 'https://api.example.invalid/v1',
+      apiKeyAI: 'fleet-e2e-key',
+      modelAI: 'fleet-e2e-model',
+      modelOptionsAI: ['fleet-e2e-model'],
+      roleAI: ''
+    }
+    store.setConfig({
+      ...store.config,
+      ...aiProfile,
+      aiProfiles: [aiProfile],
+      activeAIProfileId: aiProfile.id
+    })
     window.wsFetch = payload => {
       if (payload.action === 'cancel-fleet-status') {
         window.__fleetFixture.cancelCalls += 1
@@ -202,6 +217,8 @@ test('real fleet workspace preserves AI panel, scrolling and interactions across
   await runWithIsolatedApp(async electronApp => {
     const page = electronApp.windows()[0] || await electronApp.firstWindow()
     await page.waitForFunction(() => window.store?.configLoaded === true, { timeout: 20000 })
+    await page.locator('.no-sessions').waitFor({ state: 'visible', timeout: 20000 })
+    await page.locator('.add-new-tab-btn').click()
     await page.locator('.term-wrap:visible').waitFor({ timeout: 20000 })
     await dismissStartupModals(page)
     await installFleetFixture(page)
@@ -223,7 +240,7 @@ test('real fleet workspace preserves AI panel, scrolling and interactions across
     await expect(page.locator('.ai-chat-container')).toBeVisible()
     await aiDiagnose.click()
     await expect(page.locator('.ai-chat-textarea')).toContainText('Fleet Unique Edge')
-    await page.getByRole('button', { name: '清除选择' }).click()
+    await batchBar.locator('button').last().click()
     await expect(batchBar).toHaveCount(0)
 
     await page.evaluate(() => { window.__fleetFixture.mode = 'pending' })

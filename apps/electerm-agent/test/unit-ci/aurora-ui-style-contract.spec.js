@@ -38,9 +38,13 @@ const styleFiles = [
   'components/tabs/no-session.styl',
   'components/sidebar/sidebar.styl',
   'components/tree-list/tree-list.styl',
+  'components/tree-list/bookmark-import-strategy-dialog.styl',
   'components/side-panel-r/right-side-panel.styl',
   'components/ai/ai.styl',
+  'components/ai/agent-task-runner.styl',
+  'components/ai/ai-file-change-review-modal.styl',
   'components/terminal/terminal.styl',
+  'components/terminal/terminal-command-safety-modal.styl',
   'components/tabs/tabs.styl',
   'components/footer/footer.styl',
   'components/sftp/sftp.styl',
@@ -199,4 +203,21 @@ test('specialist workspaces use lifted panels and cards while activity rows stay
   assertSelectorUsesRadius(skills, '.agent-skill-manager-list', 'panel')
   assertSelectorUsesRadius(skills, '.agent-skill-editor-content', 'panel')
   assert.match(skills, /\.agent-skill-manager-list[\s\S]{0,420}var\(--sp-shadow-lg\)/)
+})
+
+test('secondary workflow frames use the Aurora radius hierarchy', () => {
+  const safety = readClient('components/terminal/terminal-command-safety-modal.styl')
+  const tasks = readClient('components/ai/agent-task-runner.styl')
+  const review = readClient('components/ai/ai-file-change-review-modal.styl')
+  const bookmarkImport = readClient('components/tree-list/bookmark-import-strategy-dialog.styl')
+  const operations = readClient('components/operations-toolkit/workspace/operations-workspace.styl')
+
+  assertSelectorUsesRadius(safety, '.terminal-command-safety-command', 'control')
+  assertSelectorUsesRadius(safety, '.terminal-command-safety-risk-context', 'control')
+  assertSelectorUsesRadius(safety, '.terminal-command-safety-execute', 'control')
+  assertSelectorUsesRadius(tasks, '.agent-task-step', 'card')
+  assert.match(tasks, /\.agent-task-signals[\s\S]{0,180}border-radius var\(--sp-radius-card\)/)
+  assertSelectorUsesRadius(review, '.ai-file-change-review-body', 'panel')
+  assertSelectorUsesRadius(bookmarkImport, '.bookmark-import-strategy-option', 'card')
+  assert.match(operations, /\.operations-task-steps[\s\S]{0,320}border-radius var\(--sp-radius-small\)/)
 })

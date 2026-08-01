@@ -50,7 +50,7 @@ test('AgentTaskRunner confirms before execution and exposes live progress cancel
   assert.doesNotMatch(runner, /refsStatic\.get\(['"]AIChat['"]\).*handleSubmit/)
   assert.doesNotMatch(runner, /shellpilotAgentTaskImmediateFix|shellpilotAgentTaskExecuteMutation/)
   assert.match(styles, /overflow-y\s+auto/)
-  assert.match(styles, /border-radius\s+6px/)
+  assert.match(styles, /border-radius\s+var\(--sp-radius-card\)/)
   assert.match(styles, /@media \(max-width:/)
 })
 
