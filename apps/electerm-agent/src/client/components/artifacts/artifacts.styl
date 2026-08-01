@@ -1,7 +1,15 @@
+.terminal-workspace-layer.artifacts-active
+  > *:not(.main-footer)
+    visibility hidden
+    pointer-events none
+
+  > .main-footer
+    pointer-events none
+
 .artifact-workspace
   display none
   position absolute
-  z-index 7
+  z-index 90
   min-width 0
   min-height 0
   overflow hidden
