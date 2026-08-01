@@ -97,17 +97,17 @@ export function deriveSecondaryThemeTokens (theme = {}) {
   )
   const danger = expandHex(theme.error, '#CF3F50')
   const shadowSm = darkSurface
-    ? '0 4px 10px rgba(0, 0, 0, 0.24), 0 0 0 1px rgba(116, 109, 255, 0.10)'
-    : '0 4px 10px rgba(62, 58, 160, 0.10)'
+    ? '0 3px 0 -1px rgba(0, 0, 0, 0.52), 0 10px 20px rgba(0, 0, 0, 0.56), 0 0 0 1px rgba(138, 130, 255, 0.18)'
+    : '0 3px 0 -1px rgba(62, 58, 160, 0.16), 0 8px 18px rgba(62, 58, 160, 0.18)'
   const shadowMd = darkSurface
-    ? '0 10px 24px rgba(0, 0, 0, 0.32), 0 0 0 1px rgba(116, 109, 255, 0.12)'
-    : '0 10px 24px rgba(73, 66, 196, 0.16)'
+    ? '0 6px 0 -2px rgba(0, 0, 0, 0.58), 0 20px 38px rgba(0, 0, 0, 0.64), 0 0 0 1px rgba(138, 130, 255, 0.22)'
+    : '0 6px 0 -2px rgba(73, 66, 196, 0.18), 0 18px 34px rgba(73, 66, 196, 0.26)'
   const shadowLg = darkSurface
-    ? '0 18px 42px rgba(0, 0, 0, 0.42), 0 0 0 1px rgba(116, 109, 255, 0.14)'
-    : '0 18px 42px rgba(75, 66, 202, 0.22)'
+    ? '0 10px 0 -3px rgba(0, 0, 0, 0.64), 0 30px 60px rgba(0, 0, 0, 0.72), 0 0 0 1px rgba(138, 130, 255, 0.28)'
+    : '0 9px 0 -3px rgba(75, 66, 202, 0.20), 0 28px 56px rgba(75, 66, 202, 0.32)'
   const shadowFocus = darkSurface
-    ? '0 8px 18px rgba(116, 109, 255, 0.30)'
-    : '0 8px 18px rgba(77, 70, 245, 0.28)'
+    ? '0 4px 0 -1px rgba(0, 0, 0, 0.50), 0 16px 32px rgba(116, 109, 255, 0.42), 0 0 0 2px rgba(138, 130, 255, 0.30)'
+    : '0 4px 0 -1px rgba(77, 70, 245, 0.22), 0 16px 30px rgba(77, 70, 245, 0.36)'
 
   return {
     page,
@@ -136,12 +136,12 @@ export function deriveSecondaryThemeTokens (theme = {}) {
     info: expandHex(theme.info, cyan),
     warning: expandHex(theme.warn, '#C56A20'),
     danger,
-    radiusSmall: '8px',
-    radiusControl: '10px',
-    radiusToolbar: '14px',
-    radiusCard: '18px',
-    radiusPanel: '18px',
-    radiusOverlay: '18px',
+    radiusSmall: '10px',
+    radiusControl: '14px',
+    radiusToolbar: '18px',
+    radiusCard: '22px',
+    radiusPanel: '28px',
+    radiusOverlay: '28px',
     shadowSm,
     shadowMd,
     shadowLg,

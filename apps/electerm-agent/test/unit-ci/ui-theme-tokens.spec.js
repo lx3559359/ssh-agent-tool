@@ -148,7 +148,7 @@ test('derives canonical secondary tokens from a legacy UI theme', async () => {
   assert.equal(tokens.primary, '#0088CC')
   assert.match(tokens.border, /^#[0-9A-F]{6}$/)
   assert.match(tokens.primarySoft, /^#[0-9A-F]{6}$/)
-  assert.equal(tokens.radiusCard, '18px')
+  assert.equal(tokens.radiusCard, '22px')
 })
 
 test('uses brightness-aware readable fallbacks for malformed themes', async t => {
@@ -305,8 +305,47 @@ test('derives Aurora light and dark depth without changing compatibility aliases
     ['#0B1020', '#11182A', '#171F35', '#EDF1FF', '#9CA6C4', '#746DFF', '#8A82FF', '#2CB7EB', '#32D583', '#F7B84B', '#FF6B70', '#28334F']
   )
   assert.deepEqual(
-    [light.radiusSmall, light.radiusControl, light.radiusToolbar, light.radiusPanel],
-    ['8px', '10px', '14px', '18px']
+    [
+      light.radiusSmall,
+      light.radiusControl,
+      light.radiusToolbar,
+      light.radiusCard,
+      light.radiusPanel,
+      light.radiusOverlay
+    ],
+    ['10px', '14px', '18px', '22px', '28px', '28px']
+  )
+  assert.equal(
+    light.shadowSm,
+    '0 3px 0 -1px rgba(62, 58, 160, 0.16), 0 8px 18px rgba(62, 58, 160, 0.18)'
+  )
+  assert.equal(
+    light.shadowMd,
+    '0 6px 0 -2px rgba(73, 66, 196, 0.18), 0 18px 34px rgba(73, 66, 196, 0.26)'
+  )
+  assert.equal(
+    light.shadowLg,
+    '0 9px 0 -3px rgba(75, 66, 202, 0.20), 0 28px 56px rgba(75, 66, 202, 0.32)'
+  )
+  assert.equal(
+    light.shadowFocus,
+    '0 4px 0 -1px rgba(77, 70, 245, 0.22), 0 16px 30px rgba(77, 70, 245, 0.36)'
+  )
+  assert.equal(
+    dark.shadowSm,
+    '0 3px 0 -1px rgba(0, 0, 0, 0.52), 0 10px 20px rgba(0, 0, 0, 0.56), 0 0 0 1px rgba(138, 130, 255, 0.18)'
+  )
+  assert.equal(
+    dark.shadowMd,
+    '0 6px 0 -2px rgba(0, 0, 0, 0.58), 0 20px 38px rgba(0, 0, 0, 0.64), 0 0 0 1px rgba(138, 130, 255, 0.22)'
+  )
+  assert.equal(
+    dark.shadowLg,
+    '0 10px 0 -3px rgba(0, 0, 0, 0.64), 0 30px 60px rgba(0, 0, 0, 0.72), 0 0 0 1px rgba(138, 130, 255, 0.28)'
+  )
+  assert.equal(
+    dark.shadowFocus,
+    '0 4px 0 -1px rgba(0, 0, 0, 0.50), 0 16px 32px rgba(116, 109, 255, 0.42), 0 0 0 2px rgba(138, 130, 255, 0.30)'
   )
   assert.equal(light.shadowControl, light.shadowSm)
   assert.equal(light.shadowCard, light.shadowMd)
@@ -337,7 +376,12 @@ test('serializes the exact secondary UI token contract', async () => {
   assert.ok(variables.includes('--sp-primary-2'))
   assert.ok(variables.includes('--sp-shadow-focus'))
   assert.match(css, /--sp-primary: #2878E6;/)
-  assert.match(css, /--sp-radius-card: 18px;/)
+  assert.match(css, /--sp-radius-small: 10px;/)
+  assert.match(css, /--sp-radius-control: 14px;/)
+  assert.match(css, /--sp-radius-toolbar: 18px;/)
+  assert.match(css, /--sp-radius-card: 22px;/)
+  assert.match(css, /--sp-radius-panel: 28px;/)
+  assert.match(css, /--sp-radius-overlay: 28px;/)
   assert.equal((css.match(/:root/g) || []).length, 1)
 })
 
