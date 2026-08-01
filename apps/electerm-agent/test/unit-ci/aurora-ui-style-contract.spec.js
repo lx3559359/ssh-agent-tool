@@ -52,6 +52,8 @@ const styleFiles = [
   'components/setting-panel/setting-wrap.styl',
   'components/setting-panel/setting.styl',
   'components/setting-panel/list.styl',
+  'components/setting-panel/ui-font-picker.styl',
+  'components/theme/theme-gallery.styl',
   'components/sidebar/info.styl',
   'components/operations-toolkit/workspace/operations-workspace.styl'
 ]
@@ -138,6 +140,28 @@ test('settings passwords and logs use grouped surfaces instead of per-field card
   assert.match(setting, /\.setting-passwords[\s\S]*var\(--sp-shadow-lg\)/)
   assert.match(info, /\.info-modal[\s\S]*var\(--sp-shadow-lg\)/)
   assert.doesNotMatch(setting, /\.sp-setting-field[\s\S]{0,180}box-shadow/)
+})
+
+test('data and settings workspaces use large selectable cards and rounded controls', () => {
+  const fleet = readClient('components/fleet-status/fleet-status.styl')
+  const drawer = readClient('components/fleet-status/fleet-service-selector.styl')
+  const artifacts = readClient('components/artifacts/artifacts.styl')
+  const setting = readClient('components/setting-panel/setting.styl')
+  const font = readClient('components/setting-panel/ui-font-picker.styl')
+  const theme = readClient('components/theme/theme-gallery.styl')
+
+  assertSelectorUsesRadius(fleet, '.fleet-status-bookmark-count', 'card')
+  assert.match(drawer, /\.fleet-service-selector-targets[\s\S]{0,900}li[\s\S]{0,320}border-radius var\(--sp-radius-card\)/)
+  assertSelectorUsesRadius(artifacts, '.artifact-document-page', 'card')
+  assertSelectorUsesRadius(artifacts, '.artifact-card', 'card')
+  assertSelectorUsesRadius(font, '.sp-ui-font-option', 'card')
+  assertSelectorUsesRadius(font, '.sp-ui-font-preview', 'card')
+  assert.match(font, /\.sp-ui-font-preview[\s\S]{0,420}var\(--sp-shadow-md\)/)
+  assertSelectorUsesRadius(theme, '.sp-theme-card', 'card')
+  assert.match(theme, /\.sp-theme-card[\s\S]{0,420}var\(--sp-shadow-md\)/)
+  assertSelectorUsesRadius(theme, '.sp-theme-preview-scope', 'panel')
+  assert.match(setting, /border-radius var\(--sp-radius-control\)/)
+  assert.match(setting, /var\(--sp-shadow-sm\)/)
 })
 
 test('Operations Toolkit uses Aurora depth while keeping tool and history rows flat', () => {
