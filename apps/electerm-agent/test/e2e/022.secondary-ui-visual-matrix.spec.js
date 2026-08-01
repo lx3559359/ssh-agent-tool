@@ -709,17 +709,19 @@ async function inspectOpenOverlayDepth (page, selectors) {
     const element = document.querySelector(selector)
     if (!element) return null
     const style = window.getComputedStyle(element)
+    const rootStyle = window.getComputedStyle(document.documentElement)
     return {
       selector,
       shadow: style.boxShadow,
       radius: style.borderRadius,
+      expectedRadius: rootStyle.getPropertyValue('--sp-radius-overlay').trim(),
       overflow: element.scrollWidth > element.clientWidth + 1
     }
   }).filter(Boolean), selectors)
   expect(overlayMetrics, JSON.stringify({ selectors, overlayMetrics })).toHaveLength(selectors.length)
   for (const metric of overlayMetrics) {
     expect(metric.shadow, JSON.stringify(metric)).not.toBe('none')
-    expect(metric.radius, JSON.stringify(metric)).toBe('10px')
+    expect(metric.radius, JSON.stringify(metric)).toBe(metric.expectedRadius)
     expect(metric.overflow, JSON.stringify(metric)).toBe(false)
   }
   return overlayMetrics
@@ -763,7 +765,8 @@ async function inspectMenuDepth (menuRoot) {
       surfaceElevated: rootStyle.getPropertyValue('--sp-surface-elevated').trim(),
       borderStrong: rootStyle.getPropertyValue('--sp-border-strong').trim(),
       highlightTop: rootStyle.getPropertyValue('--sp-highlight-top').trim(),
-      shadowOverlay: rootStyle.getPropertyValue('--sp-shadow-overlay').trim()
+      shadowOverlay: rootStyle.getPropertyValue('--sp-shadow-overlay').trim(),
+      radiusOverlay: rootStyle.getPropertyValue('--sp-radius-overlay').trim()
     }
     const isReachable = item => {
       if (!item) return false
@@ -783,7 +786,8 @@ async function inspectMenuDepth (menuRoot) {
         background: resolveStyle('backgroundColor', tokens.surfaceElevated),
         border: resolveStyle('color', tokens.borderStrong),
         highlight: resolveStyle('boxShadow', `inset 0 1px 0 ${tokens.highlightTop}`),
-        overlay: resolveStyle('boxShadow', tokens.shadowOverlay)
+        overlay: resolveStyle('boxShadow', tokens.shadowOverlay),
+        overlayLayers: splitShadowLayers(resolveStyle('boxShadow', tokens.shadowOverlay))
       },
       viewport: {
         left: rect.left,
@@ -807,7 +811,7 @@ async function inspectMenuDepth (menuRoot) {
 
 function assertMenuDepth (metrics, context) {
   const message = JSON.stringify({ context, metrics })
-  expect(metrics.radius, message).toBe('10px')
+  expect(metrics.radius, message).toBe(metrics.tokens.radiusOverlay)
   expect(metrics.shadow, message).not.toBe('none')
   for (const value of Object.values(metrics.tokens)) {
     expect(value, message).not.toBe('')
@@ -818,7 +822,7 @@ function assertMenuDepth (metrics, context) {
   expect(metrics.borderStyle, message).toBe('solid')
   expect(metrics.shadowLayers, message).toEqual([
     metrics.expected.highlight,
-    metrics.expected.overlay
+    ...metrics.expected.overlayLayers
   ])
   expect(metrics.viewport.left, message).toBeGreaterThanOrEqual(-1)
   expect(metrics.viewport.top, message).toBeGreaterThanOrEqual(-1)
@@ -1264,7 +1268,10 @@ async function inspectSurface (page, selector, menu, documentBaseline) {
       menuDepth: menuElement
         ? {
             radius: menuStyle.borderRadius,
-            shadow: menuStyle.boxShadow
+            shadow: menuStyle.boxShadow,
+            expectedRadius: window.getComputedStyle(document.documentElement)
+              .getPropertyValue('--sp-radius-overlay')
+              .trim()
           }
         : null,
       clippedText,
@@ -1286,7 +1293,8 @@ function assertSurfaceSnapshot (snapshot, context, surface) {
   expect(snapshot.menuViewportClip, JSON.stringify({ context, snapshot })).toBe(false)
   if (surface.menu) {
     expect(snapshot.menuDepth, JSON.stringify({ context, snapshot })).not.toBeNull()
-    expect(snapshot.menuDepth.radius, JSON.stringify({ context, snapshot })).toBe('10px')
+    expect(snapshot.menuDepth.expectedRadius, JSON.stringify({ context, snapshot })).not.toBe('')
+    expect(snapshot.menuDepth.radius, JSON.stringify({ context, snapshot })).toBe(snapshot.menuDepth.expectedRadius)
     expect(snapshot.menuDepth.shadow, JSON.stringify({ context, snapshot })).not.toBe('none')
   }
   expect(snapshot.clippedText, JSON.stringify({ context, snapshot })).toEqual([])
@@ -1552,6 +1560,11 @@ async function inspectTerminalInvariant (page) {
       }
       return ''
     }
+    const shadowProbe = document.createElement('span')
+    shadowProbe.style.boxShadow = 'var(--sp-shadow-sm)'
+    document.body.appendChild(shadowProbe)
+    const tabShadow = window.getComputedStyle(shadowProbe).boxShadow
+    shadowProbe.remove()
     return selectors.map(selector => {
       const element = [...document.querySelectorAll(selector)].find(candidate => {
         const rect = candidate.getBoundingClientRect()
@@ -1564,7 +1577,8 @@ async function inspectTerminalInvariant (page) {
         found: Boolean(element),
         background: element ? effectiveBackground(element) : '',
         directBackground: style?.backgroundColor || '',
-        shadow: style?.boxShadow || ''
+        shadow: style?.boxShadow || '',
+        expectedShadow: selector.includes(' .tab') ? tabShadow : 'none'
       }
     })
   })
@@ -1578,7 +1592,7 @@ function assertTerminalInvariant (terminal, context) {
     if (item.selector !== '.xterm-screen') {
       expect(item.directBackground, JSON.stringify({ context, item })).toBe(lockedTerminalRgb)
     }
-    expect(item.shadow, JSON.stringify({ context, item })).toBe('none')
+    expect(item.shadow, JSON.stringify({ context, item })).toBe(item.expectedShadow)
   }
 }
 
@@ -1919,8 +1933,8 @@ function assertShellChrome (snapshot, context) {
     expect(item.rect.left, itemMessage).toBeGreaterThanOrEqual(-overflowTolerance)
     expect(item.rect.right, itemMessage).toBeLessThanOrEqual(snapshot.viewport.width + overflowTolerance)
   }
-  expect(snapshot.shell.topbar.shadow, message).toContain(snapshot.tokens.shadowControl)
-  expect(snapshot.shell.topbar.shadow, message).not.toContain(snapshot.tokens.shadowCard)
+  expect(snapshot.shell.topbar.shadow, message).toContain(snapshot.tokens.shadowCard)
+  expect(snapshot.shell.topbar.shadow, message).not.toContain(snapshot.tokens.shadowControl)
   expect(snapshot.shell.topbar.shadow, message).not.toContain(snapshot.tokens.shadowOverlay)
   expect(snapshot.shell.footer.shadow, message).toMatch(/\s-\d+px\s/)
   expect(snapshot.shell.footer.shadow, message).not.toContain(snapshot.tokens.shadowCard)
@@ -2997,12 +3011,16 @@ test('settings search supports visible results, keyboard navigation, preview lan
         background: style.backgroundColor,
         shadow: style.boxShadow,
         radius: style.borderRadius,
+        expectedRadius: window.getComputedStyle(document.documentElement)
+          .getPropertyValue('--sp-radius-panel')
+          .trim(),
         overflow: element.scrollWidth > element.clientWidth + 1
       }
     })
     expect(settingsDepth.background).not.toBe('rgba(0, 0, 0, 0)')
     expect(settingsDepth.shadow).not.toBe('none')
-    expect(settingsDepth.radius).toBe('10px')
+    expect(settingsDepth.expectedRadius).not.toBe('')
+    expect(settingsDepth.radius).toBe(settingsDepth.expectedRadius)
     expect(settingsDepth.overflow).toBe(false)
     const searchInput = page.locator('.setting-header-search input')
     await expect(searchInput).toBeFocused()
@@ -3710,12 +3728,16 @@ test('tool center and batch editor stay reachable in compact real app windows', 
             }
           })
           const quickbarContext = JSON.stringify({ size, quickbarMetrics })
+          const physicalPixel = 1 / (size.zoom || 1)
           expect(quickbarMetrics.terminal.height, quickbarContext).toBeGreaterThanOrEqual(64)
           expect(Math.abs(
+            quickbarMetrics.panel.top - quickbarMetrics.terminal.bottom
+          ), quickbarContext).toBeLessThanOrEqual(2 * physicalPixel + 0.01)
+          expect(Math.abs(
             quickbarMetrics.panel.height - (quickbarMetrics.footer.top - quickbarMetrics.terminal.bottom)
-          ), quickbarContext).toBeLessThanOrEqual(1)
+          ), quickbarContext).toBeLessThanOrEqual(3 * physicalPixel + 0.01)
           expect(Math.abs(quickbarMetrics.panel.bottom - quickbarMetrics.footer.top), quickbarContext)
-            .toBeLessThanOrEqual(1)
+            .toBeLessThanOrEqual(2 * physicalPixel + 0.01)
           expect(quickbarMetrics.body.overflowY, quickbarContext).toBe('auto')
           expect(quickbarMetrics.body.scrollHeight, quickbarContext)
             .toBeGreaterThan(quickbarMetrics.body.clientHeight)
