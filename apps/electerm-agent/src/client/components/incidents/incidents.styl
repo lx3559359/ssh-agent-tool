@@ -19,13 +19,25 @@
   pointer-events none
   color var(--text)
   background var(--main)
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-panel)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-lg)
+
+  .ant-btn,
+  .ant-input,
+  .ant-input-affix-wrapper,
+  .ant-select-selector,
+  textarea
+    border-radius var(--sp-radius-control) !important
+    box-shadow var(--sp-shadow-sm)
 
 .incident-home-summary
   margin-bottom 24px
   overflow hidden
   border 1px solid var(--sp-border, var(--main-darker))
-  border-radius 8px
+  border-radius var(--sp-radius-card)
   background var(--sp-surface-elevated, var(--main-light))
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
 
   > header
     min-height 44px
@@ -77,8 +89,9 @@
       max-width 190px
       padding 7px 9px
       border 1px solid var(--sp-border, var(--main-darker))
-      border-radius 6px
+      border-radius var(--sp-radius-card)
       background transparent
+      box-shadow var(--sp-shadow-md)
       color var(--sp-text, var(--text))
       cursor pointer
       text-align left
@@ -110,6 +123,9 @@
   justify-content space-between
   gap 12px
   border-bottom 1px solid var(--main-darker)
+  border-radius var(--sp-radius-toolbar)
+  background var(--sp-surface-elevated)
+  box-shadow var(--sp-shadow-md)
 
   h1
     margin 0
@@ -180,7 +196,8 @@
     margin-bottom 7px
     padding 10px
     border 1px solid transparent
-    border-radius 6px
+    border-radius var(--sp-radius-small)
+    box-shadow none
     color var(--text)
     background transparent
     text-align left
@@ -265,8 +282,9 @@
   margin-top 16px
   padding: 12px
   border 1px solid var(--main-darker)
-  border-radius 6px
+  border-radius var(--sp-radius-card)
   background var(--main-light)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
 
   h3
     margin 0 0 9px
@@ -382,7 +400,8 @@
   margin-bottom 6px
   padding 10px
   border 1px solid transparent
-  border-radius 6px
+  border-radius var(--sp-radius-small)
+  box-shadow none
   color var(--text)
   background transparent
   text-align left
@@ -569,7 +588,9 @@
 .incident-note
   padding 9px 10px
   border-left 2px solid var(--primary)
+  border-radius var(--sp-radius-small)
   background var(--main-light)
+  box-shadow none
 
   header
     display flex
@@ -594,7 +615,9 @@
     min-width 0
     padding 10px
     border 1px solid var(--main-darker)
-    border-radius 6px
+    border-radius var(--sp-radius-card)
+    background var(--sp-surface-elevated, var(--main-light))
+    box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
     display flex
     flex-direction column
     gap 4px

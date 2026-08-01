@@ -55,7 +55,11 @@ const styleFiles = [
   'components/setting-panel/ui-font-picker.styl',
   'components/theme/theme-gallery.styl',
   'components/sidebar/info.styl',
-  'components/operations-toolkit/workspace/operations-workspace.styl'
+  'components/operations-toolkit/workspace/operations-workspace.styl',
+  'components/incidents/incidents.styl',
+  'components/ssh-tunnel/ssh-tunnel-modal.styl',
+  'components/server-status/server-status-modal.styl',
+  'components/ai/agent-skill-manager.styl'
 ]
 
 test('all Aurora-owned Stylus files compile', async () => {
@@ -171,4 +175,28 @@ test('Operations Toolkit uses Aurora depth while keeping tool and history rows f
   assert.match(operations, /\.operations-recommended-flow[\s\S]*var\(--sp-shadow-md\)/)
   assert.match(operations, /\.operations-tool-list[\s\S]*box-shadow none/)
   assert.match(operations, /\.operations-history article[\s\S]*box-shadow none/)
+})
+
+test('specialist workspaces use lifted panels and cards while activity rows stay flat', () => {
+  const operations = readClient('components/operations-toolkit/workspace/operations-workspace.styl')
+  const incidents = readClient('components/incidents/incidents.styl')
+  const tunnel = readClient('components/ssh-tunnel/ssh-tunnel-modal.styl')
+  const status = readClient('components/server-status/server-status-modal.styl')
+  const skills = readClient('components/ai/agent-skill-manager.styl')
+
+  assertSelectorUsesRadius(operations, '.operations-tool-detail', 'panel')
+  assertSelectorUsesRadius(incidents, '.incident-workspace', 'panel')
+  assertSelectorUsesRadius(incidents, '.incident-home-summary', 'card')
+  assert.match(incidents, /\.incident-home-summary[\s\S]{0,420}var\(--sp-shadow-md\)/)
+  assert.match(incidents, /\.incident-list-item[\s\S]{0,320}box-shadow none/)
+  assert.match(tunnel, /\.ssh-tunnel-modal[\s\S]{0,420}\.ant-modal-content[\s\S]{0,320}border-radius var\(--sp-radius-overlay\)/)
+  assertSelectorUsesRadius(tunnel, '.ssh-tunnel-editor', 'panel')
+  assertSelectorUsesRadius(tunnel, '.ssh-tunnel-type-card', 'card')
+  assert.match(tunnel, /\.ssh-tunnel-history-item[\s\S]{0,320}box-shadow none/)
+  assert.match(status, /\.server-status-modal[\s\S]{0,420}\.ant-modal-content[\s\S]{0,320}border-radius var\(--sp-radius-overlay\)/)
+  assertSelectorUsesRadius(status, '.server-status-summary', 'card')
+  assertSelectorUsesRadius(status, '.server-status-section', 'card')
+  assertSelectorUsesRadius(skills, '.agent-skill-manager-list', 'panel')
+  assertSelectorUsesRadius(skills, '.agent-skill-editor-content', 'panel')
+  assert.match(skills, /\.agent-skill-manager-list[\s\S]{0,420}var\(--sp-shadow-lg\)/)
 })

@@ -87,7 +87,8 @@ test('incident workspace layout is compact and does not use oversized text', () 
     styles,
     /grid-template-columns\s+minmax\(260px,\s*340px\)\s+minmax\(0,\s*1fr\)/
   )
-  assert.match(styles, /border-radius\s+6px/)
+  assert.match(styles, /border-radius\s+var\(--sp-radius-small\)/)
+  assert.match(styles, /border-radius\s+var\(--sp-radius-card\)/)
   assert.doesNotMatch(styles, /font-size\s+[2-9]\dpx/)
 })
 
