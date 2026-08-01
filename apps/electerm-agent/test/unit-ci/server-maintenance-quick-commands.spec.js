@@ -569,7 +569,7 @@ test('quick command UI exposes descriptions and edit-before-run confirmation', (
   assert.match(styleSource, /\.qm-wrap-tooltip[\s\S]*\.pd2[\s\S]*display flex/)
   assert.match(styleSource, /\.qm-list-wrap[\s\S]*flex 1/)
   assert.match(styleSource, /\.qm-wrap-tooltip[\s\S]*right var\(--quick-command-right-offset/)
-  assert.match(styleSource, /\.qm-item[\s\S]*border-radius 8px/)
+  assert.match(styleSource, /\.qm-item[\s\S]*border-radius var\(--sp-radius-card\)/)
   assert.match(styleSource, /\.qm-command-modal-tips/)
   assert.match(styleSource, /\.qm-command-param-grid/)
   assert.match(styleSource, /\.qm-command-preview-toggle/)

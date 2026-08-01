@@ -254,11 +254,13 @@ test('configuration styles compile and constrain cards, sticky actions and local
   const bookmark = read('src/client/components/bookmark-form/bookmark-form.styl')
   const ai = read('src/client/components/ai/ai.styl')
   const setting = read('src/client/components/setting-panel/setting.styl')
+  const settingWrap = read('src/client/components/setting-panel/setting-wrap.styl')
 
   await Promise.all([
     compileStylus('src/client/components/bookmark-form/bookmark-form.styl'),
     compileStylus('src/client/components/ai/ai.styl'),
-    compileStylus('src/client/components/setting-panel/setting.styl')
+    compileStylus('src/client/components/setting-panel/setting.styl'),
+    compileStylus('src/client/components/setting-panel/setting-wrap.styl')
   ])
 
   assert.match(bookmark, /\.sp-configuration-form[\s\S]*padding-bottom 104px/)
@@ -271,6 +273,9 @@ test('configuration styles compile and constrain cards, sticky actions and local
   assert.match(setting, /\.sp-sync-config-form[\s\S]*var\(--sp-border\)[\s\S]*min-width 0/)
   assert.match(setting, /\.sp-sync-config-actions[\s\S]*flex-wrap wrap/)
   assert.match(setting, /@media \(max-width: 760px\)[\s\S]*\.sp-sync-config-tabs[\s\S]*overflow-x auto/)
+  assert.match(settingWrap, /\.setting-header[\s\S]*border-radius var\(--sp-radius-toolbar\)/)
+  assert.match(setting, /\.sp-setting-section[\s\S]*border-radius var\(--sp-radius-panel\)/)
+  assert.match(setting, /\.setting-passwords \.ant-table-wrapper[\s\S]*overflow-x auto/)
 
   for (const effectiveWidth of [590, 472, 393]) {
     assert.ok(effectiveWidth <= 760, `${effectiveWidth}px must use the local rail contract`)

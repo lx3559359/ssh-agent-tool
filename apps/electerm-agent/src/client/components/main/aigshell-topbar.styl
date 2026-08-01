@@ -11,7 +11,7 @@
   padding 0 14px
   background var(--sp-surface-elevated)
   border-bottom 1px solid var(--sp-border)
-  box-shadow inset 0 1px 0 var(--sp-highlight-top), var(--sp-shadow-control)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
   color var(--text)
   -webkit-app-region drag
 
@@ -85,7 +85,8 @@
   height 30px
   padding 0 10px
   color var(--text)
-  border-radius 6px
+  border-radius var(--sp-radius-control)
+  box-shadow var(--sp-shadow-sm)
   font-size 13px
   font-weight 500
   &:hover
@@ -96,7 +97,7 @@
   border 1px solid var(--primary)
   color var(--primary)
   background var(--main)
-  box-shadow 0 0 0 1px rgba(0, 0, 0, .02)
+  box-shadow var(--sp-shadow-focus)
   &:hover
     border-color var(--primary) !important
     color var(--primary) !important

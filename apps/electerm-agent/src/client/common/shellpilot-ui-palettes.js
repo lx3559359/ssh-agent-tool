@@ -29,10 +29,24 @@ const paletteConfigs = [
     nameKey: 'shellpilotThemeIndigo',
     descriptionKey: 'shellpilotThemeIndigoDesc',
     mode: 'light',
-    main: '#F4F2FA',
+    main: '#F6F7FF',
     mainLight: '#FFFFFF',
-    text: '#302C45',
-    primary: '#5B43C3'
+    mainDark: '#DDE1F3',
+    surfaceSoft: '#F0F2FF',
+    text: '#111B3F',
+    textLight: '#111B3F',
+    textMuted: '#69708E',
+    textDisabled: '#858CA8',
+    primary: '#4D46F5',
+    primaryAlt: '#6C63FF',
+    cyan: '#149BD7',
+    border: '#DDE1F3',
+    statusColors: {
+      info: '#149BD7',
+      success: '#20B66A',
+      error: '#E5484D',
+      warn: '#F2A11D'
+    }
   },
   {
     key: 'amber',
@@ -51,10 +65,24 @@ const paletteConfigs = [
     nameKey: 'shellpilotThemeGraphite',
     descriptionKey: 'shellpilotThemeGraphiteDesc',
     mode: 'dark',
-    main: '#10161F',
-    mainLight: '#19212C',
-    text: '#DBE4EF',
-    primary: '#55A8FF'
+    main: '#0B1020',
+    mainLight: '#11182A',
+    mainDark: '#070B16',
+    surfaceSoft: '#171F35',
+    text: '#EDF1FF',
+    textLight: '#EDF1FF',
+    textMuted: '#9CA6C4',
+    textDisabled: '#727E9E',
+    primary: '#746DFF',
+    primaryAlt: '#8A82FF',
+    cyan: '#2CB7EB',
+    border: '#28334F',
+    statusColors: {
+      info: '#2CB7EB',
+      success: '#32D583',
+      error: '#FF6B70',
+      warn: '#F7B84B'
+    }
   }
 ]
 
@@ -76,7 +104,7 @@ export function getThemeDisplayName (theme = {}, translate) {
 export function buildShellPilotBuiltInThemes (baseTerminalTheme = {}) {
   return paletteConfigs.map(palette => {
     const isDark = palette.mode === 'dark'
-    const statusColors = isDark
+    const currentStatusColors = isDark
       ? {
           info: '#6DB7FF',
           success: '#4FD1B5',
@@ -89,6 +117,10 @@ export function buildShellPilotBuiltInThemes (baseTerminalTheme = {}) {
           error: '#B42338',
           warn: '#9A4A10'
         }
+    const statusColors = {
+      ...currentStatusColors,
+      ...palette.statusColors
+    }
     return {
       id: `shellpilot-${palette.key}`,
       name: palette.name,
@@ -100,12 +132,16 @@ export function buildShellPilotBuiltInThemes (baseTerminalTheme = {}) {
       uiThemeConfig: {
         main: palette.main,
         'main-light': palette.mainLight,
-        'main-dark': isDark ? '#0B1018' : '#DDE5EF',
+        'main-dark': palette.mainDark || (isDark ? '#0B1018' : '#DDE5EF'),
+        ...(palette.surfaceSoft ? { 'surface-soft': palette.surfaceSoft } : {}),
         text: palette.text,
-        'text-light': isDark ? '#FFFFFF' : '#526176',
-        'text-dark': isDark ? '#91A0B5' : '#667489',
-        'text-disabled': isDark ? '#66758A' : '#98A3B3',
+        'text-light': palette.textLight || (isDark ? '#FFFFFF' : '#526176'),
+        'text-dark': palette.textMuted || (isDark ? '#91A0B5' : '#667489'),
+        'text-disabled': palette.textDisabled || (isDark ? '#66758A' : '#98A3B3'),
         primary: palette.primary,
+        ...(palette.primaryAlt ? { 'primary-alt': palette.primaryAlt } : {}),
+        ...(palette.cyan ? { cyan: palette.cyan } : {}),
+        ...(palette.border ? { border: palette.border } : {}),
         ...statusColors
       },
       themeConfig: normalizeTerminalThemeConfig(baseTerminalTheme)

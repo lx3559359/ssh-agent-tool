@@ -51,10 +51,11 @@
   width 40px
   height 40px
   flex 0 0 40px
-  border 1px solid var(--sp-border, var(--main-darker))
-  border-radius 8px
-  background var(--sp-surface-elevated, var(--main-light))
-  color var(--sp-primary, var(--primary))
+  border 1px solid transparent
+  border-radius var(--sp-radius-control)
+  background linear-gradient(135deg, var(--sp-primary), var(--sp-primary-2))
+  box-shadow var(--sp-shadow-focus)
+  color #FFFFFF
   font-size 19px
 
 .no-session-status
@@ -109,9 +110,10 @@
   min-width 0
   height 86px
   border 1px solid var(--sp-border, var(--main-darker))
-  border-radius 8px
+  border-radius var(--sp-radius-card)
   background var(--sp-surface-elevated, var(--main-light))
-  box-shadow inset 0 1px 0 var(--sp-highlight-top, transparent)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
+  transition background-color var(--sp-motion-fast) ease, border-color var(--sp-motion-fast) ease, box-shadow var(--sp-motion-fast) ease
 
 .no-session-action.ant-btn
   display flex
@@ -124,9 +126,8 @@
   white-space normal
   &:hover
   &:focus-visible
-    color var(--sp-text, var(--text))
     border-color var(--sp-primary, var(--primary))
-    background var(--sp-primary-soft, var(--main-lighter))
+    box-shadow var(--sp-shadow-md)
   .ant-btn-icon
     display inline-flex
     align-items center
@@ -134,14 +135,18 @@
     width 28px
     height 28px
     flex 0 0 28px
-    border-radius 6px
+    border-radius var(--sp-radius-control)
     background var(--sp-primary-soft, var(--main-lighter))
     color var(--sp-primary, var(--primary))
     font-size 15px
 
 .no-session-action-primary.ant-btn
-  border-color var(--sp-primary, var(--primary))
-  background var(--sp-primary-soft, var(--main-lighter))
+  color #FFFFFF
+  border-color transparent
+  background linear-gradient(135deg, var(--sp-primary), var(--sp-primary-2))
+  box-shadow var(--sp-shadow-focus)
+  .no-session-action-copy small
+    color rgba(255, 255, 255, .82)
 
 .no-session-action-copy
   display flex
@@ -174,7 +179,7 @@
     height 100%
     padding 14px 14px 14px 54px
     border 0
-    border-radius 8px
+    border-radius var(--sp-radius-card)
     background transparent
     color var(--sp-text, var(--text))
     text-align left
@@ -188,7 +193,7 @@
       left 14px
       width 28px
       height 28px
-      border-radius 6px
+      border-radius var(--sp-radius-control)
       background var(--sp-primary-soft, var(--main-lighter))
       color var(--sp-primary, var(--primary))
       font-size 14px
@@ -203,7 +208,7 @@
     width 360px
     max-width calc(100vw - 80px)
     border 1px solid var(--sp-border-strong, var(--main-darker))
-    border-radius 8px
+    border-radius var(--sp-radius-overlay)
     background var(--sp-surface-elevated, var(--main))
     box-shadow var(--sp-shadow-overlay, 0 14px 34px rgba(0, 0, 0, .2))
 
@@ -228,9 +233,9 @@
 .no-session-recents
   overflow hidden
   border 1px solid var(--sp-border, var(--main-darker))
-  border-radius 8px
+  border-radius var(--sp-radius-panel)
   background var(--sp-surface-elevated, var(--main-light))
-  box-shadow inset 0 1px 0 var(--sp-highlight-top, transparent)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-lg)
 
 .no-session-recents-heading
   display flex

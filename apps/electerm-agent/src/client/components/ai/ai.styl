@@ -50,7 +50,7 @@
   padding 10px 8px 4px
   .ant-btn
     max-width calc(100% - 16px)
-    border-radius 6px
+    border-radius var(--sp-radius-control)
 .ai-history-back-to-latest
   position absolute
   z-index 3
@@ -68,7 +68,7 @@
   height 18px
   margin-left 6px
   padding 0 5px
-  border-radius 9px
+  border-radius 999px
   background rgba(255, 255, 255, 0.2)
   color inherit
   font-size 11px
@@ -80,6 +80,11 @@
   position relative
   content-visibility auto
   contain-intrinsic-size auto 220px
+  > .mg1y .ant-alert
+    border 1px solid var(--sp-border)
+    border-radius var(--sp-radius-toolbar)
+    background var(--sp-surface-elevated)
+    box-shadow var(--sp-shadow-sm)
   > .ai-stop-icon-square
     position absolute
     bottom 8px
@@ -88,7 +93,7 @@
   .code-block
     border 1px dashed var(--main-darker)
     padding 5px
-    border-radius 3px
+    border-radius var(--sp-radius-small)
     pre
       margin-bottom 0
     // .code-block-actions
@@ -129,9 +134,9 @@
   align-items center
   gap 6px
   color var(--text)
-  background var(--main-light)
-  border 1px solid var(--main-darker)
-  border-radius 6px
+  background var(--sp-surface-soft)
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-control)
   cursor pointer
   > span
     max-width 210px
@@ -156,9 +161,10 @@
 
   .ant-input
     padding 10px 44px 34px 10px
-    border-color var(--main-darker)
-    border-radius 8px
-    background var(--main-light)
+    border-color var(--sp-border)
+    border-radius var(--sp-radius-control)
+    background var(--sp-surface-elevated)
+    box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
     color var(--text)
     resize none
   .ai-chat-terminals > .ant-flex:first-child
@@ -192,9 +198,9 @@
   gap 4px
   height 24px
   padding 0 8px
-  border 1px solid var(--main-darker)
-  border-radius 6px
-  background var(--main-light)
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-control)
+  background var(--sp-surface-soft)
   color var(--text)
   font-size 12px
   line-height 22px
@@ -220,9 +226,9 @@
   max-width 100%
   height 24px
   padding 0 7px
-  border 1px solid var(--main-darker)
-  border-radius 6px
-  background var(--main-light)
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-control)
+  background var(--sp-surface-soft)
   color var(--text)
   font-size 12px
   cursor default
@@ -246,7 +252,8 @@
   height 24px
   padding 0 8px
   border 1px solid var(--primary)
-  border-radius 6px
+  border-radius var(--sp-radius-control)
+  box-shadow var(--sp-shadow-sm)
   background var(--main)
   color var(--primary)
   font-size 12px
@@ -307,7 +314,8 @@
   gap 5px
   padding 2px 7px
   border 1px solid var(--main-darker)
-  border-radius 6px
+  border-radius var(--sp-radius-control)
+  box-shadow var(--sp-shadow-sm)
   background var(--main)
   color var(--text)
   font-size 11px
@@ -388,8 +396,9 @@
   margin 12px 0
   padding 12px
   border 1px solid var(--main-darker)
-  border-radius 7px
+  border-radius var(--sp-radius-card)
   background var(--main-light)
+  box-shadow var(--sp-shadow-md)
   dt
     color var(--text-dark)
   dd
@@ -414,9 +423,10 @@
 .agent-risk-warning
   padding 10px 12px
   border 1px solid #ff7875
-  border-radius 6px
+  border-radius var(--sp-radius-card)
   color #cf1322
   background rgba(255, 77, 79, .08)
+  box-shadow var(--sp-shadow-md)
 
 .agent-risk-details
   display grid
@@ -440,7 +450,7 @@
     overflow auto
     white-space pre-wrap
     word-break break-all
-    border-radius 4px
+    border-radius var(--sp-radius-small)
     background var(--main-dark)
 
 @media (max-width: 780px)
@@ -480,7 +490,8 @@
   justify-content center
   width 28px
   height 28px
-  border-radius 7px
+  border-radius var(--sp-radius-control)
+  box-shadow var(--sp-shadow-sm)
   color var(--primary-contrast)
   background var(--primary)
   font-size 14px
@@ -504,7 +515,8 @@
   flex 0 0 28px
   padding 0
   border 0
-  border-radius 7px
+  border-radius var(--sp-radius-control)
+  box-shadow var(--sp-shadow-sm)
   display flex
   align-items center
   justify-content center
@@ -545,9 +557,14 @@
 .agent-tool-calls
   margin 8px 0
 
+.agent-tool-call-card,
+.agent-tool-readonly-card
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-card)
+  background var(--sp-surface-soft)
+  box-shadow var(--sp-shadow-md)
+
 .agent-tool-call-card
-  border 1px solid var(--main-darker)
-  border-radius 4px
   margin-bottom 6px
   font-size 13px
   max-width 100%
