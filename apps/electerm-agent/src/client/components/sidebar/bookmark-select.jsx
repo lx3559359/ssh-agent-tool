@@ -5,6 +5,7 @@
 import { auto } from 'manate/react'
 import TreeList from '../tree-list/tree-list'
 import BookmarkTreeSelect from '../bookmark-form/tree-select'
+import { newBookmarkIdPrefix } from '../../common/constants'
 
 export default auto(function BookmarkSelect (props) {
   const { store, from, autoFocus } = props
@@ -22,6 +23,10 @@ export default auto(function BookmarkSelect (props) {
     return null
   }
   const onClickItem = (item) => {
+    if (item.id.startsWith(newBookmarkIdPrefix)) {
+      store.openBookmarkEdit(item)
+      return
+    }
     if (!store.pinned) {
       store.setOpenedSideBar('')
     }

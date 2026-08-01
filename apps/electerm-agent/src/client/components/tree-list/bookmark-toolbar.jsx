@@ -192,20 +192,30 @@ export default function BookmarkToolbar (props) {
       <Flex justify='space-between' align='center'>
         <div>
           <Space.Compact>
-            <Button onClick={onNewBookmark}>
+            <Button
+              onClick={onNewBookmark}
+              aria-label={titleNew}
+              title={titleNew}
+            >
               <BookOutlined className='with-plus' />
             </Button>
-            <Button onClick={onNewBookmarkGroup}>
+            <Button
+              onClick={onNewBookmarkGroup}
+              aria-label={titleEdit}
+              title={titleEdit}
+            >
               <FolderOutlined className='with-plus' />
             </Button>
             <Button
               icon={<EditOutlined />}
               onClick={handleToggleEdit}
+              aria-label={e('edit')}
               title={e('edit')}
             />
             <Button
               icon={<ExportOutlined />}
               onClick={handleDownloadEncrypted}
+              aria-label={e('shellpilotEncryptedBackupRecommended')}
               title={e('shellpilotEncryptedBackupRecommended')}
               className='download-bookmark-icon'
             />
@@ -216,17 +226,27 @@ export default function BookmarkToolbar (props) {
             >
               <Button
                 icon={<ImportOutlined />}
+                aria-label={e('importFromFile')}
                 title={e('importFromFile')}
               />
             </Upload>
-            <Button onClick={onSshConfigs}>
+            <Button
+              onClick={onSshConfigs}
+              aria-label={e('loadSshConfigs')}
+              title={e('loadSshConfigs')}
+            >
               <CodeOutlined />
             </Button>
           </Space.Compact>
         </div>
         <div>
           <Dropdown {...ddProps}>
-            <MenuOutlined />
+            <Button
+              type='text'
+              icon={<MenuOutlined />}
+              aria-label={e('more')}
+              title={e('more')}
+            />
           </Dropdown>
         </div>
       </Flex>

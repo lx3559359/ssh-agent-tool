@@ -12,24 +12,31 @@ const appOptions = require('./common/app-options')
 const extendClient = require('./common/client-extend')
 
 describe('init setting buttons', function () {
-  it('all buttons open proper setting tab', async function () {
+  it('fresh launch and navigation buttons open current destinations', async function () {
     const electronApp = await electron.launch(appOptions)
     const client = await electronApp.firstWindow()
     extendClient(client, electronApp)
-    // await client.waitUntilWindowLoaded()
     await delay(3500)
-    log('close current tab')
-    await client.hover('.tabs .tab')
-    await client.click('.tabs .tab .tab-close')
-    await delay(1000)
 
-    log('verify tab count')
+    log('fresh launch does not open a terminal tab')
     const tabCount = await client.countElem('.tabs .tab')
     expect(tabCount).toEqual(0)
 
-    log('button:edit')
-    await client.click('.aigshell-topbar-action .anticon-plus-circle')
-    await delay(3500)
+    log('topbar new connection opens the guided connection flow')
+    await client.locator('.aigshell-topbar-action[data-action-key="new"]').click()
+    const wizard = client.locator('.quick-connect-wizard')
+    await expect(wizard).toBeVisible()
+    await expect(wizard.locator('.ant-steps-item')).toHaveCount(3)
+    await wizard.locator('.ant-modal-close').click()
+    await expect(wizard).toBeHidden()
+
+    log('server sidebar add button opens bookmark settings')
+    await client.locator('.sidebar-bar .anticon-book').click()
+    const addBookmark = client.locator('.sidebar-panel-bookmarks button[aria-label][title]').filter({
+      has: client.locator('.anticon-book.with-plus')
+    })
+    await expect(addBookmark).toBeVisible()
+    await addBookmark.click()
     const sel = '.setting-wrap .ant-tabs-nav-list .ant-tabs-tab-active'
     const active = await client.element(sel)
     expect(active).toBeVisible()
@@ -49,26 +56,9 @@ describe('init setting buttons', function () {
     await client.click('.setting-wrap .close-setting-wrap')
     await delay(900)
 
-    log('button:new ssh')
-    await client.click('.aigshell-topbar-action .anticon-plus-circle')
-    await delay(1000)
-    const active2 = await client.element(sel)
-    expect(active2).toBeVisible()
-    await expect(active2).toHaveAttribute('data-node-key', 'bookmarks')
-
-    // log('tab it')
-    // await client.click('.setting-wrap .ant-tabs-tab:nth-child(3)')
-    // await delay(3100)
-    // const text4 = await client.getText(sel)
-    // expect(text4).toEqual(e('setting'))
-    await client.click('.setting-wrap .close-setting-wrap')
-    await delay(600)
-
-    log('button:edit again')
-    await client.click('.aigshell-topbar-action .anticon-plus-circle')
-    await delay(600)
-    const active5 = await client.element(sel)
-    await expect(active5).toHaveAttribute('data-node-key', 'bookmarks')
+    log('topbar new connection remains independent from settings')
+    await client.locator('.aigshell-topbar-action[data-action-key="new"]').click()
+    await expect(wizard).toBeVisible()
 
     await electronApp.close().catch(console.log)
   })

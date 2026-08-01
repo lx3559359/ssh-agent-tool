@@ -43,7 +43,12 @@ describe('bookmarks', function () {
       electronApp = launched.electronApp
       client = launched.client
 
-      await client.locator('.aigshell-topbar-action .anticon-plus-circle').click()
+      await openBookmarksSidebar(client)
+      const addBookmark = client.locator('.sidebar-panel-bookmarks button[aria-label][title]').filter({
+        has: client.locator('.anticon-book.with-plus')
+      })
+      await expect(addBookmark).toBeVisible()
+      await addBookmark.click()
       const localType = client.locator('.setting-wrap label').filter({
         has: client.locator('input[type="radio"][value="local"]')
       })

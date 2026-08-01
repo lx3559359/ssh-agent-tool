@@ -56,6 +56,9 @@ export default memo(function SidebarPanel (props) {
     ...prps,
     onClick: store.collapseBookmarks
   }
+  const handleEditBookmarks = () => {
+    store.bookmarkSelectMode = true
+  }
 
   function renderExpandIcons () {
     if (sidebarPanelTab !== 'bookmarks') {
@@ -93,7 +96,8 @@ export default memo(function SidebarPanel (props) {
           </Tooltip>
           <Tooltip title={`${e('edit')} ${e('bookmarks')}`}>
             <EditOutlined
-              {...pop1}
+              {...prps}
+              onClick={handleEditBookmarks}
             />
           </Tooltip>
           {
