@@ -96,3 +96,12 @@ test('settings passwords and logs use grouped surfaces instead of per-field card
   assert.match(info, /\.info-modal[\s\S]*var\(--sp-shadow-lg\)/)
   assert.doesNotMatch(setting, /\.sp-setting-field[\s\S]{0,180}box-shadow/)
 })
+
+test('Operations Toolkit uses Aurora depth while keeping tool and history rows flat', () => {
+  const operations = readClient('components/operations-toolkit/workspace/operations-workspace.styl')
+  assert.match(operations, /\.operations-toolkit-workspace[\s\S]*var\(--sp-shadow-lg\)/)
+  assert.match(operations, /\.operations-workspace-head[\s\S]*var\(--sp-shadow-md\)/)
+  assert.match(operations, /\.operations-recommended-flow[\s\S]*var\(--sp-shadow-md\)/)
+  assert.match(operations, /\.operations-tool-list[\s\S]*box-shadow none/)
+  assert.match(operations, /\.operations-history article[\s\S]*box-shadow none/)
+})

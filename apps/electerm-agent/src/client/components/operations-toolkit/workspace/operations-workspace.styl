@@ -18,11 +18,11 @@
   display flex
   flex-direction column
   overflow hidden
-  color var(--text)
-  background var(--main)
-  border 1px solid var(--main-darker)
-  border-radius 10px
-  box-shadow 0 -12px 28px rgba(0, 0, 0, .2)
+  color var(--sp-text)
+  background var(--sp-page)
+  border 1px solid var(--sp-border-strong)
+  border-radius var(--sp-radius-panel)
+  box-shadow var(--sp-shadow-lg)
 
 .operations-workspace-head
   min-height 48px
@@ -30,8 +30,9 @@
   display flex
   align-items center
   justify-content space-between
-  border-bottom 1px solid var(--main-darker)
-  background var(--main-light)
+  border-bottom 1px solid var(--sp-border)
+  background var(--sp-surface-elevated)
+  box-shadow var(--sp-shadow-md)
   > div
     min-width 0
     display flex
@@ -54,8 +55,12 @@
   align-items center
   gap 8px
   overflow-x auto
-  color var(--text-dark)
-  border-bottom 1px solid var(--main-darker)
+  padding 8px 10px
+  color var(--sp-text-muted)
+  background var(--sp-surface-elevated)
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-toolbar)
+  box-shadow var(--sp-shadow-md)
   font-size 12px
   > span
     flex 0 0 auto
@@ -150,16 +155,19 @@
     flex-direction column
     gap 4px
     text-align left
-    color var(--text)
-    background var(--main)
-    border 1px solid var(--main-darker)
+    color var(--sp-text)
+    background var(--sp-surface)
+    border 1px solid var(--sp-border)
     border-radius 6px
+    box-shadow none
     cursor pointer
     &:hover
-      border-color var(--primary)
+      border-color var(--sp-primary)
+      background var(--sp-surface-soft)
     &.active
-      border-color var(--primary)
-      box-shadow inset 3px 0 0 var(--primary)
+      border-color var(--sp-primary)
+      background linear-gradient(145deg, var(--sp-primary-soft), var(--sp-surface-elevated))
+      box-shadow var(--sp-shadow-focus)
     strong
       font-size 13px
     span
@@ -177,6 +185,10 @@
   min-width 0
   padding 16px
   overflow-y auto
+  background var(--sp-surface-elevated)
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-toolbar)
+  box-shadow var(--sp-shadow-md)
 
 .operations-tool-title
   display flex
@@ -282,8 +294,11 @@
 
 .operations-task-panel
   margin-top 14px
-  padding-top 14px
-  border-top 1px solid var(--main-darker)
+  padding 14px
+  background var(--sp-surface-elevated)
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-toolbar)
+  box-shadow var(--sp-shadow-md)
   > header
     display flex
     justify-content space-between
@@ -352,9 +367,12 @@
   display flex
   align-items center
   gap 8px
-  background var(--main-light)
-  border 1px solid var(--main-darker)
+  background var(--sp-surface)
+  border 1px solid var(--sp-border)
   border-radius 6px
+  box-shadow none
+  &:hover
+    background var(--sp-surface-soft)
   > button
     flex 1
     min-width 0
@@ -412,9 +430,10 @@
   display flex
   align-items center
   gap 12px
-  border 1px solid var(--main-darker)
-  border-radius 8px
-  background var(--main-light)
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-toolbar)
+  background var(--sp-surface-elevated)
+  box-shadow var(--sp-shadow-md)
   > button
     flex 0 0 auto
 
