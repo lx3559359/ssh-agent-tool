@@ -110,7 +110,7 @@ async function closeWithoutDeletingProfile (run) {
   await new Promise(resolve => setTimeout(resolve, 250))
 }
 
-test('incident archive completes lifecycle, backup restore, and preserves terminal refs', async () => {
+test('incident archive completes lifecycle, persists updates, and preserves terminal refs', async () => {
   let run
   let primaryError
   try {
@@ -160,33 +160,24 @@ test('incident archive completes lifecycle, backup restore, and preserves termin
       { state: 'investigating', verificationStatus: 'pending' }
     ])
 
-    const backupResult = await page.evaluate(async () => {
-      const storage = await window.store.createIncidentBackup()
-      const backup = storage.backups[0]
+    const updateResult = await page.evaluate(async () => {
       await window.store.updateActiveIncident({
-        title: 'Title changed after backup'
+        title: 'Nginx gateway timeout updated'
       })
-      const changedTitle = window.store.activeIncident.title
-      const restored = await window.store.restoreIncidentBackup(
-        backup.filename,
-        'RESTORE'
-      )
       const result = await window.store.loadIncidentArchives({
-        query: 'Nginx gateway timeout',
+        query: 'Nginx gateway timeout updated',
         page: 1,
         pageSize: 20
       })
       return {
-        backupCount: storage.backupCount,
-        changedTitle,
-        restored,
-        restoredTitle: result.items[0]?.title || ''
+        activeTitle: window.store.activeIncident.title,
+        persistedTitle: result.items[0]?.title || ''
       }
     })
-    expect(backupResult.backupCount).toBeGreaterThan(0)
-    expect(backupResult.changedTitle).toBe('Title changed after backup')
-    expect(backupResult.restored).toBeTruthy()
-    expect(backupResult.restoredTitle).toBe('Nginx gateway timeout')
+    expect(updateResult).toEqual({
+      activeTitle: 'Nginx gateway timeout updated',
+      persistedTitle: 'Nginx gateway timeout updated'
+    })
 
     expect(await page.evaluate(tabId => ({
       hasTerminal: window.refs.has('term-' + tabId),

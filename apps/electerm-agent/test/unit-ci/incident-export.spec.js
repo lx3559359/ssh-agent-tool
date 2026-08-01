@@ -163,9 +163,20 @@ test('incident archive renderer API exposes export but no backup or restore', ()
     'lib',
     'ipc.js'
   ), 'utf8')
+  const locale = fs.readFileSync(path.join(
+    __dirname,
+    '..',
+    '..',
+    'src',
+    'client',
+    'common',
+    'shellpilot-i18n-overrides.js'
+  ), 'utf8')
 
   assert.match(client, /exportIncidentArchive/)
   assert.doesNotMatch(client, /IncidentArchiveBackup|IncidentArchiveStorage/)
   assert.doesNotMatch(store, /IncidentBackup|IncidentStorage/)
   assert.doesNotMatch(ipc, /IncidentArchiveBackup|IncidentArchiveStorage/)
+  assert.doesNotMatch(locale, /shellpilotIncidentBackup/)
+  assert.doesNotMatch(locale, /shellpilotIncidentRestore/)
 })
