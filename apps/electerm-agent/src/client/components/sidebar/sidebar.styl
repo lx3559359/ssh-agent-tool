@@ -24,6 +24,7 @@
   bottom 0
   background var(--sp-surface)
   border-right 1px solid var(--sp-border)
+  box-shadow var(--sp-shadow-sm)
 
   .item-list
     padding-right 0
@@ -124,16 +125,16 @@
 .sidebar .control-icon-wrap
   border-radius var(--sp-radius-control)
   box-shadow none
-  transition background var(--sp-motion-fast) ease, box-shadow var(--sp-motion-fast) ease
+  transition background-color var(--sp-motion-fast) ease, box-shadow var(--sp-motion-fast) ease, color var(--sp-motion-fast) ease
   &:hover
     background var(--sp-surface-elevated)
-    box-shadow var(--sp-shadow-control)
+    box-shadow var(--sp-shadow-md)
     .control-icon
     .control-icon-label
       color var(--sp-primary)
   &.active
-    background var(--sp-primary-soft)
-    box-shadow var(--sp-shadow-control)
+    background linear-gradient(145deg, var(--sp-primary-soft), var(--sp-surface-elevated))
+    box-shadow var(--sp-shadow-focus)
 .sidebar .control-icon-wrap:focus-visible
   outline 2px solid var(--sp-primary)
   outline-offset 2px
