@@ -21,7 +21,20 @@ function compileStylus (relativePath) {
   })
 }
 
+function assertSelectorUsesRadius (source, selector, token) {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  assert.match(
+    source,
+    new RegExp(`${escaped}[\\s\\S]{0,320}border-radius\\s+var\\(--sp-radius-${token}\\)`),
+    `${selector} should use --sp-radius-${token}`
+  )
+}
+
 const styleFiles = [
+  'components/main/aigshell-topbar.styl',
+  'components/common/modal.styl',
+  'components/sys-menu/sys-menu.styl',
+  'components/common/context-menu.styl',
   'components/tabs/no-session.styl',
   'components/sidebar/sidebar.styl',
   'components/tree-list/tree-list.styl',
@@ -60,6 +73,27 @@ test('connection server history and AI surfaces use semantic Aurora depth', () =
   assert.doesNotMatch(tree, /background\s+#000\b/)
   assert.match(ai, /\.chat-history-item[\s\S]*var\(--sp-shadow-sm\)/)
   assert.match(ai, /\.ai-chat-input[\s\S]*var\(--sp-shadow-md\)/)
+})
+
+test('Aurora Lift shared chrome uses the approved radius hierarchy', () => {
+  const shared = readClient('css/includes/secondary-ui.styl')
+  const topbar = readClient('components/main/aigshell-topbar.styl')
+  const modal = readClient('components/common/modal.styl')
+  const home = readClient('components/tabs/no-session.styl')
+  const panel = readClient('components/side-panel-r/right-side-panel.styl')
+  const ai = readClient('components/ai/ai.styl')
+
+  assertSelectorUsesRadius(shared, '.sp-level-1', 'small')
+  assertSelectorUsesRadius(shared, '.sp-card', 'card')
+  assertSelectorUsesRadius(shared, '.sp-level-3', 'overlay')
+  assertSelectorUsesRadius(topbar, '.aigshell-topbar-action', 'control')
+  assertSelectorUsesRadius(modal, '.custom-modal-content', 'overlay')
+  assertSelectorUsesRadius(modal, '.custom-modal-ok-btn', 'control')
+  assertSelectorUsesRadius(home, '.no-session-action', 'card')
+  assertSelectorUsesRadius(home, '.no-session-recents', 'panel')
+  assertSelectorUsesRadius(panel, '.right-side-panel', 'panel')
+  assertSelectorUsesRadius(ai, '.ai-chat-input', 'control')
+  assertSelectorUsesRadius(ai, '.agent-tool-readonly-card', 'card')
 })
 
 test('terminal frame and SFTP panels use depth while rendered rows stay flat', () => {

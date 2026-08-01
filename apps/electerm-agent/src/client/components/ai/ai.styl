@@ -50,7 +50,7 @@
   padding 10px 8px 4px
   .ant-btn
     max-width calc(100% - 16px)
-    border-radius 6px
+    border-radius var(--sp-radius-control)
 .ai-history-back-to-latest
   position absolute
   z-index 3
@@ -93,7 +93,7 @@
   .code-block
     border 1px dashed var(--main-darker)
     padding 5px
-    border-radius 3px
+    border-radius var(--sp-radius-small)
     pre
       margin-bottom 0
     // .code-block-actions
@@ -162,7 +162,7 @@
   .ant-input
     padding 10px 44px 34px 10px
     border-color var(--sp-border)
-    border-radius var(--sp-radius-toolbar)
+    border-radius var(--sp-radius-control)
     background var(--sp-surface-elevated)
     box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
     color var(--text)
@@ -252,7 +252,8 @@
   height 24px
   padding 0 8px
   border 1px solid var(--primary)
-  border-radius 6px
+  border-radius var(--sp-radius-control)
+  box-shadow var(--sp-shadow-sm)
   background var(--main)
   color var(--primary)
   font-size 12px
@@ -313,7 +314,8 @@
   gap 5px
   padding 2px 7px
   border 1px solid var(--main-darker)
-  border-radius 6px
+  border-radius var(--sp-radius-control)
+  box-shadow var(--sp-shadow-sm)
   background var(--main)
   color var(--text)
   font-size 11px
@@ -394,8 +396,9 @@
   margin 12px 0
   padding 12px
   border 1px solid var(--main-darker)
-  border-radius 7px
+  border-radius var(--sp-radius-card)
   background var(--main-light)
+  box-shadow var(--sp-shadow-md)
   dt
     color var(--text-dark)
   dd
@@ -420,9 +423,10 @@
 .agent-risk-warning
   padding 10px 12px
   border 1px solid #ff7875
-  border-radius 6px
+  border-radius var(--sp-radius-card)
   color #cf1322
   background rgba(255, 77, 79, .08)
+  box-shadow var(--sp-shadow-md)
 
 .agent-risk-details
   display grid
@@ -446,7 +450,7 @@
     overflow auto
     white-space pre-wrap
     word-break break-all
-    border-radius 4px
+    border-radius var(--sp-radius-small)
     background var(--main-dark)
 
 @media (max-width: 780px)
@@ -486,7 +490,8 @@
   justify-content center
   width 28px
   height 28px
-  border-radius 7px
+  border-radius var(--sp-radius-control)
+  box-shadow var(--sp-shadow-sm)
   color var(--primary-contrast)
   background var(--primary)
   font-size 14px
@@ -510,7 +515,8 @@
   flex 0 0 28px
   padding 0
   border 0
-  border-radius 7px
+  border-radius var(--sp-radius-control)
+  box-shadow var(--sp-shadow-sm)
   display flex
   align-items center
   justify-content center
@@ -554,9 +560,9 @@
 .agent-tool-call-card,
 .agent-tool-readonly-card
   border 1px solid var(--sp-border)
-  border-radius var(--sp-radius-toolbar)
+  border-radius var(--sp-radius-card)
   background var(--sp-surface-soft)
-  box-shadow var(--sp-shadow-sm)
+  box-shadow var(--sp-shadow-md)
 
 .agent-tool-call-card
   margin-bottom 6px

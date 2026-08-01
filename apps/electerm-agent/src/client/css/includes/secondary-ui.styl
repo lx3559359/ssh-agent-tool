@@ -60,3 +60,24 @@
 .simple-editor > .ant-flex > .ant-input-search
   min-width 0
   flex 1 1 auto
+
+.sp-secondary-page,
+.custom-modal-content,
+.sidebar-panel,
+.right-side-panel
+  .ant-btn:not(.ant-btn-text):not(.ant-btn-link),
+  .ant-input,
+  .ant-input-affix-wrapper,
+  .ant-input-number,
+  .ant-picker,
+  .ant-select-selector
+    border-radius var(--sp-radius-control)
+    box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-sm)
+
+  .ant-btn:not(.ant-btn-text):not(.ant-btn-link):focus-visible,
+  .ant-input:focus,
+  .ant-input-affix-wrapper-focused,
+  .ant-input-number-focused,
+  .ant-picker-focused,
+  .ant-select-focused .ant-select-selector
+    box-shadow var(--sp-shadow-focus)
