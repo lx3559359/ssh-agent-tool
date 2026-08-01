@@ -9,7 +9,9 @@
   z-index 200
   width 0
   overflow-y scroll
-  background var(--main)
+  background var(--sp-surface)
+  border-right 1px solid var(--sp-border)
+  box-shadow var(--sp-shadow-lg)
   .item-list-unit:hover
     .list-item-remove
       display none !important
@@ -69,6 +71,9 @@
     flex 1
     overflow-y auto
     overflow-x hidden
+    .item-list-unit
+      border-bottom 1px solid var(--sp-border)
+      box-shadow none
 .not-system-ui.is-mac
   .sidebar-bar
     margin-top 20px
