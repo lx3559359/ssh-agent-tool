@@ -1,5 +1,6 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
+const fs = require('node:fs')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
 
@@ -17,8 +18,19 @@ test('English help covers every section with paired navigation labels', async ()
   const { shellpilotEnglishHelpItems } = await import(helpUrl)
   const { getShellPilotTranslation } = await import(catalogUrl)
   const keys = shellpilotEnglishHelpItems.map(item => item.key)
+  const modalSource = fs.readFileSync(path.join(
+    root,
+    'src/client/components/main/help-center-modal.jsx'
+  ), 'utf8')
+  const chineseHelpSource = modalSource.slice(
+    modalSource.indexOf('const helpItemsZh = ['),
+    modalSource.indexOf('export default')
+  )
+  const chineseKeys = [...chineseHelpSource.matchAll(/\n {4}key: '([^']+)'/g)]
+    .map(match => match[1])
 
-  assert.equal(shellpilotEnglishHelpItems.length, 19)
+  assert.deepEqual(keys, chineseKeys)
+  assert.ok(keys.includes('incident-archives'))
   assert.equal(new Set(keys).size, shellpilotEnglishHelpItems.length)
   for (const item of shellpilotEnglishHelpItems) {
     assert.equal(typeof item.intro, 'string')

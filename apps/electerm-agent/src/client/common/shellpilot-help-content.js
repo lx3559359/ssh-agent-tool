@@ -80,6 +80,24 @@ export const shellpilotEnglishHelpItems = Object.freeze([
     ]
   },
   {
+    key: 'incident-archives',
+    labelKey: 'shellpilotHelpIncidentArchives',
+    intro: 'Incident Archive turns a troubleshooting session into a searchable, verifiable local record for follow-up and review.',
+    steps: [
+      'Review pending anomalies before confirming an incident; candidates never create remote work by themselves.',
+      'Record the title, affected server, severity, symptoms, impact, root cause, resolution, verification, and review notes.',
+      'Link relevant tasks, recovery records, and artifacts so the timeline preserves evidence without duplicate entries.',
+      'Mark an incident resolved only after recording manual or automatic verification.',
+      'Export bounded Markdown, HTML, or JSON when you need to migrate or share the record.'
+    ],
+    tips: [
+      'Incident data stays on this computer and must not contain passwords, API keys, private keys, or other credentials.',
+      'Generated postmortem artifacts should be reviewed in the Artifacts workspace before sharing.',
+      'The client keeps internal automatic storage protection but does not expose manual database backup or restore actions.'
+    ],
+    warning: 'A resolved incident record does not replace monitoring, business acceptance, or formal change auditing.'
+  },
+  {
     key: 'safety',
     labelKey: 'shellpilotHelpSafety',
     intro: 'The Safety Center collects running tasks, verified recovery points, history, and legacy records.',
