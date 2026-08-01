@@ -89,6 +89,65 @@ test('AI attachments build bounded context for local and SFTP files', async () =
   assert.match(prompt, /remote:\/var\/log\/error\.log/)
 })
 
+test('pathless browser text attachments use their File payload instead of a disk path', async () => {
+  const {
+    buildAttachmentAIContent,
+    createLocalFileAttachments
+  } = await import(attachmentsUrl)
+  const originalWindow = global.window
+  let pathReads = 0
+  const payload = 'browser payload'
+
+  global.window = {
+    pre: {
+      runGlobalAsync: async (operation, input) => {
+        assert.equal(operation, 'ingestAIContent')
+        assert.equal(
+          Buffer.from(input.dataBase64, 'base64').toString('utf8'),
+          payload
+        )
+        return {
+          ok: true,
+          value: {
+            kind: 'text',
+            name: input.name,
+            mimeType: input.mimeType,
+            bytes: Buffer.byteLength(payload),
+            text: payload,
+            truncated: false
+          }
+        }
+      }
+    }
+  }
+
+  try {
+    const file = {
+      name: 'browser.txt',
+      size: Buffer.byteLength(payload),
+      type: 'text/plain',
+      arrayBuffer: async () => Uint8Array.from(
+        Buffer.from(payload)
+      ).buffer
+    }
+    const result = await buildAttachmentAIContent({
+      attachments: createLocalFileAttachments([file]),
+      fsApi: {
+        readFilePreview: async () => {
+          pathReads += 1
+          throw new Error('pathless browser files must not use disk reads')
+        }
+      }
+    })
+
+    assert.equal(pathReads, 0)
+    assert.deepEqual(result.errors, [])
+    assert.match(result.prompt, /browser payload/)
+  } finally {
+    global.window = originalWindow
+  }
+})
+
 test('AI attachments explain continuation and archive member context', async () => {
   const {
     buildAttachmentContextPrompt

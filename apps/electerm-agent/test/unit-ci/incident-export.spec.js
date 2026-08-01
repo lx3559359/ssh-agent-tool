@@ -71,6 +71,42 @@ test('incident export truncates Chinese text on a valid UTF-8 boundary', () => {
   assert.match(result.content, /内容已按导出大小上限截断/)
 })
 
+test('bounded structured incident exports remain valid JSON and HTML', () => {
+  const {
+    exportIncident
+  } = require(modulePath)
+  const incident = {
+    id: 'incident-structured',
+    title: 'Large incident export',
+    summary: 'diagnostic detail '.repeat(2000),
+    rootCause: 'root cause detail '.repeat(1000),
+    resolution: 'resolution detail '.repeat(1000),
+    notes: Array.from({ length: 40 }, (_, index) => ({
+      body: `note-${index} ${'x'.repeat(200)}`,
+      createdAt: 1000 + index
+    })),
+    timelineEvents: [],
+    createdAt: 900,
+    updatedAt: 2000
+  }
+
+  const json = exportIncident(incident, {
+    format: 'json',
+    maxBytes: 4096
+  })
+  const parsed = JSON.parse(json.content)
+  assert.equal(parsed.exportTruncated, true)
+  assert.ok(Buffer.byteLength(json.content, 'utf8') <= 4096)
+
+  const html = exportIncident(incident, {
+    format: 'html',
+    maxBytes: 4096
+  })
+  assert.ok(Buffer.byteLength(html.content, 'utf8') <= 4096)
+  assert.match(html.content, /内容已按导出大小上限截断/)
+  assert.match(html.content, /<\/body><\/html>$/)
+})
+
 test('incident workspace replaces manual storage and restore with export', () => {
   const workspace = fs.readFileSync(path.join(
     __dirname,

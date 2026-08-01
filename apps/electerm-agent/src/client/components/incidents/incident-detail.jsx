@@ -12,13 +12,13 @@ import {
 import {
   ArrowLeftOutlined,
   DeleteOutlined,
-  DownloadOutlined,
   FileDoneOutlined,
   SaveOutlined,
   StarFilled,
   StarOutlined,
   VerticalAlignTopOutlined
 } from '@ant-design/icons'
+import IncidentExportButton from './incident-export-button'
 
 const e = window.translate
 const timelineSourceLabelKeys = Object.freeze({
@@ -244,13 +244,13 @@ export default function IncidentDetail ({
               >
                 {e('shellpilotIncidentGenerateReview')}
               </Button>
-              <Button
-                icon={<DownloadOutlined />}
+              <IncidentExportButton
                 disabled={dirty}
-                onClick={() => store.exportIncidentArchives('md')}
-              >
-                {e('shellpilotIncidentExport')}
-              </Button>
+                loading={store.incidentSaving}
+                onExport={format => (
+                  store.exportIncidentArchives(format, incident.id)
+                )}
+              />
               <Popconfirm
                 title={e('shellpilotIncidentDeleteConfirm')}
                 description={e('shellpilotIncidentDeleteLocalOnly')}

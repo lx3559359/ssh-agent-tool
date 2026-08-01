@@ -137,6 +137,7 @@ function getLegacyAttachmentFile (attachment = {}) {
 
 function shouldUseLegacyFileReader (attachment = {}, { fsApi, sftpRef } = {}) {
   if (!['local', 'sftp'].includes(attachment.source)) return false
+  if (attachment.source === 'local' && !attachment.path) return false
   const reader = attachment.source === 'sftp' ? sftpRef?.sftp : fsApi
   const name = String(attachment.name || attachment.path || '')
   if (ARCHIVE_FILE_PATTERN.test(name)) {

@@ -180,7 +180,9 @@ describe('AI Config and Suggestions', function () {
     await client.waitForTimeout(250)
 
     const testCommand = 'test'
-    await client.locator('.xterm-helper-textarea').first().evaluate(element => element.focus())
+    await client.locator(
+      '.session-current .xterm-helper-textarea'
+    ).evaluate(element => element.focus())
     await client.keyboard.type(testCommand)
     await client.keyboard.press('ArrowRight')
     await client.keyboard.press('ArrowRight')

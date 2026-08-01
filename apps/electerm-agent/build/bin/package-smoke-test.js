@@ -19,6 +19,10 @@ function parseArgs (argv = process.argv.slice(2)) {
   }
 }
 
+function buildMissingPackageMessage (exePath) {
+  return `${appExecutableName} package not found: ${exePath}. Run npm run package:win:dir first.`
+}
+
 function sleep (ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
@@ -216,7 +220,7 @@ async function main () {
     exePath: args.app ? path.resolve(args.app) : undefined
   })
   if (!fs.existsSync(paths.exePath)) {
-    throw new Error(`${appExecutableName} package not found: ${paths.exePath}. Run npm run b first.`)
+    throw new Error(buildMissingPackageMessage(paths.exePath))
   }
   validatePackagedRuntime(paths)
 
@@ -259,6 +263,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  buildMissingPackageMessage,
   killWindowsProcessTree,
   main,
   parseArgs,

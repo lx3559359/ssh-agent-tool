@@ -88,6 +88,36 @@ test('rejects image formats that model requests cannot safely carry', async () =
     }),
     /不支持|image/i
   )
+  await assert.rejects(
+    ingestBuffer({
+      name: 'spoofed.png',
+      mimeType: 'image/svg+xml',
+      buffer: Buffer.from('<svg></svg>')
+    }),
+    /不支持|image/i
+  )
+})
+
+test('rejects Office archives with an excessive declared expansion size', async () => {
+  const archive = new JSZip()
+  archive.file(
+    'word/document.xml',
+    `<w:document><w:p>${'A'.repeat(65 * 1024 * 1024)}</w:p></w:document>`
+  )
+  const buffer = await archive.generateAsync({
+    type: 'nodebuffer',
+    compression: 'DEFLATE',
+    compressionOptions: { level: 9 }
+  })
+
+  assert.ok(buffer.length < 10 * 1024 * 1024)
+  await assert.rejects(
+    ingestBuffer({
+      name: 'oversized.docx',
+      buffer
+    }),
+    /解压后|archive/i
+  )
 })
 
 test('extracts XLSX cells and safely bounds SFTP binary reads', async () => {

@@ -1,5 +1,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
+const fs = require('node:fs')
+const os = require('node:os')
 const path = require('node:path')
 const JSZip = require('jszip')
 const ExcelJS = require('exceljs')
@@ -72,6 +74,31 @@ test('XLSX generator creates summary and filtered detail worksheets', async () =
   assert.equal(detail.views[0].state, 'frozen')
   assert.equal(detail.views[0].ySplit, 1)
   assert.equal(detail.autoFilter, 'A1:C1')
+})
+
+test('ExcelJS streaming reader remains compatible with patched unzipper', async () => {
+  const workbook = new ExcelJS.Workbook()
+  const sheet = workbook.addWorksheet('Audit')
+  sheet.addRow(['streaming', 42]).commit()
+  const tempDir = fs.mkdtempSync(path.join(
+    os.tmpdir(),
+    'shellpilot-exceljs-reader-'
+  ))
+  const workbookPath = path.join(tempDir, 'audit.xlsx')
+
+  try {
+    await workbook.xlsx.writeFile(workbookPath)
+    const reader = new ExcelJS.stream.xlsx.WorkbookReader(workbookPath)
+    const rows = []
+    for await (const worksheet of reader) {
+      for await (const row of worksheet) {
+        rows.push(row.values.slice(1))
+      }
+    }
+    assert.deepEqual(rows, [['streaming', 42]])
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true })
+  }
 })
 
 test('printable report HTML is escaped and contains no executable content', () => {
