@@ -72,3 +72,16 @@ test('terminal frame and SFTP panels use depth while rendered rows stay flat', (
   assert.match(sftp, /\.sftp-item[\s\S]*box-shadow none/)
   assert.match(transfer, /\.transfer-list-card[\s\S]*var\(--sp-shadow-lg\)/)
 })
+
+test('Fleet and artifact workspaces reserve strong depth for page containers', () => {
+  const fleet = readClient('components/fleet-status/fleet-status.styl')
+  const drawer = readClient('components/fleet-status/fleet-service-selector.styl')
+  const artifacts = readClient('components/artifacts/artifacts.styl')
+  assert.match(fleet, /\.fleet-status-toolbar[\s\S]*var\(--sp-shadow-md\)/)
+  assert.match(fleet, /\.fleet-status-table-scroll[\s\S]*var\(--sp-shadow-lg\)/)
+  assert.match(drawer, /\.ant-drawer-content[\s\S]*var\(--sp-shadow-lg\)/)
+  assert.match(artifacts, /\.artifact-list-panel[\s\S]*var\(--sp-shadow-lg\)/)
+  assert.match(artifacts, /\.artifact-preview[\s\S]*var\(--sp-shadow-lg\)/)
+  assert.doesNotMatch(fleet, /\.fleet-status-table tbody tr\r?\n(?: {2}[^\r\n]*\r?\n)* {2}box-shadow var\(--sp-shadow-lg\)/)
+  assert.doesNotMatch(artifacts, /\.artifact-list-item\r?\n(?: {2}[^\r\n]*\r?\n)* {2}box-shadow var\(--sp-shadow-lg\)/)
+})

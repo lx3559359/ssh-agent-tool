@@ -46,4 +46,7 @@ test('artifact workspace provides filters, source preview and responsive layout'
   assert.match(preview, /shellpilotArtifactOpenExternal/)
   assert.match(styles, /minmax\(220px,\s*300px\)/)
   assert.match(styles, /@media\s*\(max-width:\s*1099px\)/)
+  assert.match(styles, /\.artifact-list-panel[\s\S]*var\(--sp-shadow-lg\)/)
+  assert.match(styles, /\.artifact-preview[\s\S]*var\(--sp-shadow-lg\)/)
+  assert.match(styles, /\.artifact-list-item\.active[\s\S]*var\(--sp-shadow-focus\)/)
 })

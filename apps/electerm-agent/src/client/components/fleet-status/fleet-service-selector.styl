@@ -7,18 +7,23 @@
     width 1180px !important
     max-width calc(100vw - 32px)
   .ant-drawer-content
-  .ant-drawer-header
-  .ant-drawer-body
-    background var(--main)
-    color var(--text)
+    background var(--sp-surface)
+    color var(--sp-text)
+    border 1px solid var(--sp-border-strong)
+    border-radius var(--sp-radius-panel) 0 0 var(--sp-radius-panel)
+    box-shadow var(--sp-shadow-lg)
   .ant-drawer-header
     padding 12px 16px
-    border-bottom 1px solid var(--main-darker)
+    background var(--sp-surface-elevated)
+    color var(--sp-text)
+    border-bottom 1px solid var(--sp-border)
   .ant-drawer-body
     min-height 0
     padding 0
     overflow-x hidden
     overflow-y auto
+    background var(--sp-surface)
+    color var(--sp-text)
 
 .fleet-service-selector-title
   display flex
@@ -136,7 +141,8 @@
   border-bottom 1px solid var(--main-darker)
 
 .fleet-service-selector-toolbar
-  background var(--main)
+  background var(--sp-surface-elevated)
+  box-shadow var(--sp-shadow-md)
 
 .fleet-service-selector-selection-bar
   min-height 38px
@@ -171,6 +177,8 @@
   table-layout fixed
   color var(--text)
   font-size 12px
+  tbody tr
+    box-shadow none
   th
   td
     box-sizing border-box

@@ -15,8 +15,8 @@
   visibility hidden
   opacity 0
   pointer-events none
-  background var(--main)
-  color var(--text)
+  background var(--sp-page)
+  color var(--sp-text)
   transition opacity .12s ease
 
 .fleet-status-workspace-active
@@ -48,8 +48,8 @@
   min-width 0
   h1
     margin 0
-    color var(--text-light)
-    font-size 20px
+    color var(--sp-text)
+    font-size 28px
     line-height 28px
     font-weight 650
     letter-spacing 0
@@ -78,9 +78,11 @@
   flex-wrap wrap
   gap 8px
   min-width 0
-  padding 10px 0
-  border-top 1px solid var(--main-darker)
-  border-bottom 1px solid var(--main-darker)
+  padding 10px 12px
+  background var(--sp-surface-elevated)
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-toolbar)
+  box-shadow var(--sp-shadow-md)
 
 .fleet-status-search
   width 240px
@@ -113,8 +115,10 @@
   min-width 0
   min-height 40px
   padding 6px 8px
-  border-bottom 1px solid var(--main-darker)
-  background var(--main-light)
+  border 1px solid var(--sp-primary)
+  border-radius var(--sp-radius-toolbar)
+  background var(--sp-primary-soft)
+  box-shadow var(--sp-shadow-focus)
   color var(--text)
   font-size 12px
   strong
@@ -124,12 +128,16 @@
   display inline-flex
 
 .fleet-status-table-scroll
+  box-sizing border-box
   flex 1
   min-width 0
   min-height 0
   overflow-x auto
   overflow-y auto
-  border-bottom 1px solid var(--main-darker)
+  background var(--sp-surface)
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-panel)
+  box-shadow var(--sp-shadow-lg)
 
 .fleet-status-table
   width 100%
@@ -139,15 +147,17 @@
   table-layout fixed
   color var(--text)
   font-size 12px
+  tbody tr
+    box-shadow none
   th
   td
     box-sizing border-box
     height 38px
     padding 7px 9px
     overflow hidden
-    border-right 1px solid var(--main-darker)
-    border-bottom 1px solid var(--main-darker)
-    background var(--main)
+    border-right 1px solid var(--sp-border)
+    border-bottom 1px solid var(--sp-border)
+    background var(--sp-surface)
     text-align left
     text-overflow ellipsis
     vertical-align middle
@@ -157,8 +167,8 @@
     top 0
     z-index 4
     height 36px
-    background var(--main-light)
-    color var(--text-light)
+    background var(--sp-surface-soft)
+    color var(--sp-text)
     font-weight 600
   th:nth-child(1)
     width 38px
@@ -194,28 +204,28 @@
   width 38px
   padding-right 7px
   padding-left 10px
-  background var(--main)
+  background var(--sp-surface)
 
 .fleet-status-table th.fleet-status-selection-cell
   z-index 7
-  background var(--main-light)
+  background var(--sp-surface-soft)
 
 .fleet-status-table .fleet-status-name-cell
   position sticky
   left 38px
   z-index 3
-  background var(--main)
+  background var(--sp-surface)
 
 .fleet-status-table th.fleet-status-name-cell
   z-index 6
-  background var(--main-light)
+  background var(--sp-surface-soft)
 
 .fleet-status-table tbody tr:hover td
-  background var(--main-lighter)
+  background var(--sp-surface-soft)
 
 .fleet-status-table tbody tr:hover .fleet-status-selection-cell
 .fleet-status-table tbody tr:hover .fleet-status-name-cell
-  background var(--main-lighter)
+  background var(--sp-surface-soft)
 
 .fleet-status-name-content
   display grid

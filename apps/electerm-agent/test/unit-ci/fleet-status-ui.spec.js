@@ -184,7 +184,9 @@ test('service selector exposes complete read-only Chinese tool UI and responsive
   assert.match(styles, /overflow-y\s+auto/)
   assert.match(styles, /max-width\s+calc\(100vw\s+-\s+32px\)/)
   assert.match(styles, /min-width\s+1120px/)
-  assert.doesNotMatch(styles, /border-radius\s+(?:9|[1-9]\d+)px/)
+  assert.match(styles, /\.ant-drawer-content[\s\S]*border-radius\s+var\(--sp-radius-panel\)/)
+  assert.match(styles, /\.ant-drawer-content[\s\S]*box-shadow\s+var\(--sp-shadow-lg\)/)
+  assert.match(styles, /\.fleet-service-selector-toolbar[\s\S]*box-shadow\s+var\(--sp-shadow-md\)/)
 })
 
 test('service selector keeps controls and results reachable in short crowded drawers', () => {
@@ -280,7 +282,9 @@ test('workspace keeps empty and uncollected states honest', () => {
   assert.match(styles, /overflow-x\s+auto/)
   assert.match(styles, /position\s+sticky/)
   assert.match(styles, /white-space\s+nowrap/)
-  assert.doesNotMatch(styles, /border-radius\s+(?:9|[1-9]\d+)px/)
+  assert.match(styles, /\.fleet-status-toolbar[\s\S]*border-radius\s+var\(--sp-radius-toolbar\)/)
+  assert.match(styles, /\.fleet-status-table-scroll[\s\S]*border-radius\s+var\(--sp-radius-panel\)/)
+  assert.match(styles, /\.fleet-status-table-scroll[\s\S]*box-shadow\s+var\(--sp-shadow-lg\)/)
 })
 test('inactive workspace closes service discovery and skips hidden focus restoration', () => {
   const source = readClient('components/fleet-status/fleet-status-workspace.jsx')
