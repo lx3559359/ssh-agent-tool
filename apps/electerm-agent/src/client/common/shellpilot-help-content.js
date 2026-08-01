@@ -37,19 +37,20 @@ export const shellpilotEnglishHelpItems = Object.freeze([
   {
     key: 'terminal',
     labelKey: 'shellpilotHelpTerminal',
-    intro: 'Read-only commands run normally; recognized changes use recovery or risk confirmation when available.',
+    intro: 'Manual SSH terminal input goes directly to the native session; ShellPilot does not intercept or classify Enter.',
     tips: [
       'Use Ctrl+C to interrupt a command and the configured copy and paste shortcuts for terminal text.',
       'Multiple tabs, split panes, search, session logs, and context-menu actions are supported.',
       'Use tmux, screen, or nohup for long-running work that must survive a network interruption.',
-      'AI, quick commands, and manual input all remain subject to the same safety classification.'
+      'AI, quick commands, operations tools, and other controlled entry points remain subject to safety classification.'
     ]
   },
   {
     key: 'terminal-recovery',
     labelKey: 'shellpilotHelpTerminalRecovery',
-    intro: 'Before a supported one-line change is sent, ShellPilot can prepare and verify a recovery point.',
+    intro: 'Controlled entry points classify commands before dispatch and can prepare and verify recovery for supported changes.',
     tips: [
+      'Manual SSH input does not use this classification or recovery-point flow; review and back up manual changes yourself.',
       'Only statically understood effects can receive automatic recovery.',
       'Interactive editors, dynamic scripts, aliases, and unknown executables may require risk confirmation without rollback.',
       'A recovery record is bound to the original host, port, account, and session capability.',

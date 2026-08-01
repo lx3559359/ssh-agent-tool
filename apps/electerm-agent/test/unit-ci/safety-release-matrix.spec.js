@@ -19,6 +19,7 @@ test('Chinese help explains the complete safety transaction workflow and limits'
     read('src/client/common/shellpilot-i18n-overrides.js')
   ].join('\n')
   const guide = read('docs/USER_GUIDE_ZH.md')
+  const englishHelp = read('src/client/common/shellpilot-help-content.js')
 
   for (const text of [
     '服务器与 SSH 终端',
@@ -72,6 +73,11 @@ test('Chinese help explains the complete safety transaction workflow and limits'
   assert.match(guide, /不会在回车前拦截、分类或自动建立恢复点/)
   assert.match(guide, /AI、快捷命令、运维工具[^。\n]*受控入口[^。\n]*安全流程/)
   assert.doesNotMatch(guide, /回车前，客户端会尝试区分/)
+  assert.match(englishHelp, /Manual SSH terminal input[^.\n]*direct/)
+  assert.match(englishHelp, /does not intercept or classify Enter/)
+  assert.match(englishHelp, /controlled entry points[^.\n]*safety classification/)
+  assert.doesNotMatch(englishHelp, /manual input all remain subject to the same safety classification/)
+  assert.doesNotMatch(englishHelp, /Before a supported one-line change is sent/)
 })
 
 test('architecture document records states, support boundaries, performance and recovery', () => {
