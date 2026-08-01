@@ -11,6 +11,7 @@ export default class AttachAddonCustom {
     this.suppressedData = []
     this.suppressTimeout = null
     this.onSuppressionEndCallback = null
+    this.pendingInput = []
     this.hasReceivedInitialData = false
     this.onInitialDataCallback = null
     this._bidirectional = true
@@ -73,6 +74,14 @@ export default class AttachAddonCustom {
       const callback = this.onSuppressionEndCallback
       this.onSuppressionEndCallback = null
       callback()
+    }
+    return this.flushPendingInput()
+  }
+
+  flushPendingInput = async () => {
+    const pendingInput = this.pendingInput.splice(0)
+    for (const data of pendingInput) {
+      await this.sendToServer(data)
     }
   }
 
@@ -294,6 +303,10 @@ export default class AttachAddonCustom {
 
   sendToServer = (data) => {
     this._lastInputTime = Date.now()
+    if (this.outputSuppressed) {
+      this.pendingInput.push(data)
+      return
+    }
     const parent = this.term?.parent
     const isStandaloneEnter = data === '\r' || data === '\n'
     const isPaste = isStandaloneEnter && this._terminalPastePending
@@ -417,6 +430,9 @@ export default class AttachAddonCustom {
 
   dispose = () => {
     this._stopKeepalive()
+    clearTimeout(this.suppressTimeout)
+    this.suppressTimeout = null
+    this.pendingInput = []
     clearTimeout(this._echoCheckTimer)
     this._echoCheckTimer = null
     this._pendingTerminalEnter = null

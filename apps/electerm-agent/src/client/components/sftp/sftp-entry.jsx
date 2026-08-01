@@ -126,10 +126,19 @@ export default class Sftp extends Component {
   }
 
   componentDidUpdate (prevProps, prevState) {
-    if (
-      this.props.config.autoRefreshWhenSwitchToSftp &&
+    const switchedToSftp =
       prevProps.pane !== this.props.pane &&
-      this.props.pane === paneMap.fileManager &&
+      this.props.pane === paneMap.fileManager
+    if (
+      switchedToSftp &&
+      !this.state.inited &&
+      !this.state.loadingSftp &&
+      !this.state.remoteLoading
+    ) {
+      this.initRemoteAll()
+    } else if (
+      this.props.config.autoRefreshWhenSwitchToSftp &&
+      switchedToSftp &&
       this.state.inited
     ) {
       this.onGoto(typeMap.local)
@@ -1295,6 +1304,20 @@ export default class Sftp extends Component {
     return props.tab?.host && props.tab?.type !== terminalSerialType
   }
 
+  isSftpVisible = () => {
+    const { isFtp, pane, sshSftpSplitView } = this.props
+    return isFtp || pane === paneMap.fileManager || sshSftpSplitView
+  }
+
+  normalizeSftpError = error => {
+    const message = typeof error?.message === 'string'
+      ? error.message.trim()
+      : ''
+    return message && message !== 'Error'
+      ? error
+      : new Error(e('shellpilotSftpUnavailable'))
+  }
+
   initLocalAll = () => {
     this.localListOwner()
     this.localList()
@@ -1560,7 +1583,13 @@ export default class Sftp extends Component {
           sftpCreated: true
         })
       }, 1000)
-    } catch (e) {
+    } catch (error) {
+      if (sftp && sftp !== this.sftp) {
+        await sftp.destroy().catch(() => {})
+        this.props.editTab(tab.id, {
+          sftpCreated: false
+        })
+      }
       const update = {
         remoteLoading: false,
         remote: oldRemote,
@@ -1571,7 +1600,9 @@ export default class Sftp extends Component {
         update.remotePathTemp = oldPath
       }
       this.setState(update)
-      this.onError(e)
+      if (this.isSftpVisible()) {
+        this.onError(this.normalizeSftpError(error))
+      }
     }
   }
 

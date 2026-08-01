@@ -10,6 +10,13 @@ function readSftpSource (relativePath) {
   )
 }
 
+function readClientCommonSource (relativePath) {
+  return fs.readFileSync(
+    path.resolve(__dirname, '../../src/client/common', relativePath),
+    'utf8'
+  )
+}
+
 test('sftp file item refresh reloads the active side list', () => {
   const source = readSftpSource('file-item.jsx')
   const start = source.indexOf('refresh = () => {')
@@ -60,4 +67,41 @@ test('sftp history click updates path temp and reloads that side', () => {
   assert.match(body, /\[n\]: path/)
   assert.match(body, /\[`\$\{n\}Temp`\]: path/)
   assert.match(body, /this\[`\$\{type\}List`\]\(undefined,\s*undefined,\s*oldPath\)/)
+})
+
+test('opening SFTP retries initialization after a hidden preload failure', () => {
+  const source = readSftpSource('sftp-entry.jsx')
+  const start = source.indexOf('componentDidUpdate (prevProps, prevState) {')
+  const end = source.indexOf('componentWillUnmount () {')
+  const body = source.slice(start, end)
+
+  assert.notEqual(start, -1)
+  assert.notEqual(end, -1)
+  assert.match(body, /const switchedToSftp =/)
+  assert.match(body, /switchedToSftp &&[\s\S]*!this\.state\.inited/)
+  assert.match(body, /!this\.state\.loadingSftp/)
+  assert.match(body, /!this\.state\.remoteLoading/)
+  assert.match(body, /this\.initRemoteAll\(\)/)
+})
+
+test('hidden SFTP preload failures are cleaned up without interrupting SSH', () => {
+  const source = readSftpSource('sftp-entry.jsx')
+  const start = source.indexOf('remoteList = async (')
+  const end = source.indexOf('updateRemoteList = async (', start)
+  const body = source.slice(start, end)
+
+  assert.notEqual(start, -1)
+  assert.notEqual(end, -1)
+  assert.match(body, /sftp && sftp !== this\.sftp/)
+  assert.match(body, /await sftp\.destroy\(\)\.catch\(\(\) => \{\}\)/)
+  assert.match(body, /sftpCreated: false/)
+  assert.match(body, /if \(this\.isSftpVisible\(\)\) \{/)
+  assert.match(body, /this\.onError\(this\.normalizeSftpError\(error\)\)/)
+})
+
+test('SFTP transport supplies a localized fallback for empty backend errors', () => {
+  const source = readClientCommonSource('sftp.js')
+
+  assert.match(source, /window\.translate\('shellpilotSftpUnavailable'\)/)
+  assert.match(source, /new Error\(message\)/)
 })
