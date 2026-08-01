@@ -74,29 +74,51 @@ export function deriveSecondaryThemeTokens (theme = {}) {
   const surfaceMixRatio = relativeLuminance(page) < 0.5 ? 0.12 : 0.84
   const surface = expandHex(theme['main-light'], mix(page, '#FFFFFF', surfaceMixRatio))
   const darkSurface = relativeLuminance(surface) < 0.5
+  const surfaceSoft = expandHex(theme['surface-soft'], mix(surface, page, 0.55))
   const surfaceElevated = mix(surface, '#FFFFFF', darkSurface ? 0.06 : 0.34)
   const surfaceInset = mix(surface, page, darkSurface ? 0.42 : 0.58)
-  const highlightTop = darkSurface
-    ? 'rgba(255, 255, 255, 0.06)'
-    : 'rgba(255, 255, 255, 0.88)'
+  const highlight = darkSurface
+    ? 'rgba(255, 255, 255, 0.08)'
+    : 'rgba(255, 255, 255, 0.82)'
   const backgrounds = [page, surface]
   const disabledTextBackgrounds = [...backgrounds, surfaceElevated]
   const textFallback = relativeLuminance(surface) < 0.5 ? '#FFFFFF' : '#253249'
   const text = ensureTextContrast(expandHex(theme.text, textFallback), backgrounds)
   const primary = expandHex(theme.primary, '#2878E6')
+  const primaryAlt = expandHex(
+    theme['primary-alt'],
+    mix(primary, '#FFFFFF', darkSurface ? 0.18 : 0.12)
+  )
+  const cyan = expandHex(theme.cyan, darkSurface ? '#2CB7EB' : '#149BD7')
+  const border = expandHex(theme.border, mix(text, surface, 0.84))
   const textMuted = ensureTextContrast(
     expandHex(theme['text-dark'], mix(text, page, 0.52)),
     backgrounds
   )
-  const danger = ensureTextContrast(expandHex(theme.error, '#CF3F50'), backgrounds)
+  const danger = expandHex(theme.error, '#CF3F50')
+  const shadowSm = darkSurface
+    ? '0 4px 10px rgba(0, 0, 0, 0.24), 0 0 0 1px rgba(116, 109, 255, 0.10)'
+    : '0 4px 10px rgba(62, 58, 160, 0.10)'
+  const shadowMd = darkSurface
+    ? '0 10px 24px rgba(0, 0, 0, 0.32), 0 0 0 1px rgba(116, 109, 255, 0.12)'
+    : '0 10px 24px rgba(73, 66, 196, 0.16)'
+  const shadowLg = darkSurface
+    ? '0 18px 42px rgba(0, 0, 0, 0.42), 0 0 0 1px rgba(116, 109, 255, 0.14)'
+    : '0 18px 42px rgba(75, 66, 202, 0.22)'
+  const shadowFocus = darkSurface
+    ? '0 8px 18px rgba(116, 109, 255, 0.30)'
+    : '0 8px 18px rgba(77, 70, 245, 0.28)'
 
   return {
     page,
+    canvas: page,
     surface,
-    surfaceSubtle: mix(surface, page, 0.55),
+    surfaceSubtle: surfaceSoft,
+    surfaceSoft,
     surfaceInset,
     surfaceElevated,
-    highlightTop,
+    highlightTop: highlight,
+    highlight,
     text,
     textMuted,
     textDisabled: ensureContrast(
@@ -104,26 +126,29 @@ export function deriveSecondaryThemeTokens (theme = {}) {
       disabledTextBackgrounds,
       3
     ),
-    border: mix(text, surface, 0.84),
+    border,
     borderStrong: mix(text, surface, 0.72),
     primary,
+    primaryAlt,
     primarySoft: mix(primary, surface, 0.88),
+    cyan,
     success: expandHex(theme.success, '#168A74'),
-    info: expandHex(theme.info, '#2878E6'),
+    info: expandHex(theme.info, cyan),
     warning: expandHex(theme.warn, '#C56A20'),
     danger,
-    radiusControl: '7px',
-    radiusCard: '10px',
-    radiusOverlay: '10px',
-    shadowControl: darkSurface
-      ? '0 2px 6px rgba(0, 0, 0, 0.28)'
-      : '0 2px 5px rgba(28, 50, 78, 0.10)',
-    shadowCard: darkSurface
-      ? '0 8px 20px rgba(0, 0, 0, 0.30)'
-      : '0 7px 18px rgba(30, 58, 95, 0.11)',
-    shadowOverlay: darkSurface
-      ? '0 20px 46px rgba(0, 0, 0, 0.48)'
-      : '0 18px 40px rgba(26, 44, 70, 0.24)',
+    radiusSmall: '8px',
+    radiusControl: '10px',
+    radiusToolbar: '14px',
+    radiusCard: '18px',
+    radiusPanel: '18px',
+    radiusOverlay: '18px',
+    shadowSm,
+    shadowMd,
+    shadowLg,
+    shadowFocus,
+    shadowControl: shadowSm,
+    shadowCard: shadowMd,
+    shadowOverlay: shadowLg,
     motionFast: '120ms',
     motionNormal: '180ms'
   }
@@ -132,7 +157,9 @@ export function deriveSecondaryThemeTokens (theme = {}) {
 export function buildUiThemeCss (theme) {
   const tokens = deriveSecondaryThemeTokens(theme)
   const variables = Object.entries(tokens).map(([key, value]) => {
-    const cssKey = key.replace(/[A-Z]/g, match => `-${match.toLowerCase()}`)
+    const cssKey = key === 'primaryAlt'
+      ? 'primary-2'
+      : key.replace(/[A-Z]/g, match => `-${match.toLowerCase()}`)
     return `--sp-${cssKey}: ${value};`
   }).join('\n')
   return `:root {\n${variables}\n}`
