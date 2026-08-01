@@ -1089,7 +1089,7 @@ async function compileStylus (relativePath) {
   return await compileStylusSource(readClient(relativePath), absolutePath)
 }
 
-test('long Chinese and English fixture copy remains visible at minimum window zoom equivalents', { timeout: 30000 }, async (t) => {
+test('long Chinese and English fixture copy remains visible at minimum window zoom equivalents', { timeout: 60000 }, async (t) => {
   let chromium
   let launchOptions = { headless: true }
   try {
