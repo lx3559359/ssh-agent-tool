@@ -45,6 +45,7 @@ const styleFiles = [
   'components/footer/footer.styl',
   'components/sftp/sftp.styl',
   'components/sidebar/transfer.styl',
+  'components/quick-commands/qm.styl',
   'components/fleet-status/fleet-status.styl',
   'components/fleet-status/fleet-service-selector.styl',
   'components/artifacts/artifacts.styl',
@@ -100,11 +101,19 @@ test('terminal frame and SFTP panels use depth while rendered rows stay flat', (
   const terminal = readClient('components/terminal/terminal.styl')
   const sftp = readClient('components/sftp/sftp.styl')
   const transfer = readClient('components/sidebar/transfer.styl')
+  const commands = readClient('components/quick-commands/qm.styl')
+  assertSelectorUsesRadius(terminal, '.terminal-workspace-layer', 'panel')
   assert.match(terminal, /\.terminal-workspace-layer[\s\S]*var\(--sp-shadow-lg\)/)
   assert.doesNotMatch(terminal, /\.(?:xterm|xterm-screen|xterm-viewport)[^{\n]*[\s\S]{0,180}box-shadow/)
+  assertSelectorUsesRadius(sftp, '.sftp-section', 'panel')
+  assertSelectorUsesRadius(sftp, '.sftp-safety-summary', 'card')
   assert.match(sftp, /\.sftp-section[\s\S]*var\(--sp-shadow-md\)/)
   assert.match(sftp, /\.sftp-item[\s\S]*box-shadow none/)
+  assertSelectorUsesRadius(transfer, '.transfer-list-card', 'overlay')
   assert.match(transfer, /\.transfer-list-card[\s\S]*var\(--sp-shadow-lg\)/)
+  assertSelectorUsesRadius(commands, '.qm-wrap-tooltip', 'overlay')
+  assertSelectorUsesRadius(commands, '.qm-command-param-section', 'card')
+  assert.match(commands, /\.qm-wrap-tooltip[\s\S]{0,420}var\(--sp-shadow-lg\)/)
 })
 
 test('Fleet and artifact workspaces reserve strong depth for page containers', () => {
