@@ -225,7 +225,7 @@ test('checks selected servers, filters and multi-selects services, cancels, and 
     await page.getByRole('checkbox', { name: '选择 Worker Production' }).check()
     await page.evaluate(() => {
       window.store.rightPanelVisible = true
-      window.store.rightPanelPinned = true
+      window.store.rightPanelPinned = false
       window.store.rightPanelAutoExpanded = true
       window.store.rightPanelWidth = 320
     })
