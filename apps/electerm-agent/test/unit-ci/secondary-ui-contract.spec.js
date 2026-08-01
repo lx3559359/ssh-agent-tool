@@ -1013,6 +1013,10 @@ test('terminal elevation guard covers every rendered terminal layer and semantic
       }
     }
   }
+  assert.doesNotThrow(() => assertNoProtectedTerminalElevation(
+    '.terminal-workspace-layer { box-shadow: var(--sp-shadow-lg); }',
+    'terminal-outer-frame.css'
+  ))
 })
 
 test('shell chrome E2E uses concrete scroll mutation, clipping ancestry and document overflow gates', () => {

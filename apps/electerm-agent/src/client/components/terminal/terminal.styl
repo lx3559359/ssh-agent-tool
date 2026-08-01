@@ -7,6 +7,10 @@ shellPilotTerminalActiveForeground = #FFFFFF
 :root
   --shellpilot-terminal-background shellPilotTerminalBackground
 
+.terminal-workspace-layer:not(.fleet-status-active):not(.artifacts-active):not(.incident-archives-active)
+  background var(--shellpilot-terminal-background)
+  box-shadow inset 0 0 0 1px var(--sp-border-strong), var(--sp-shadow-lg)
+
 .terms-box
   background shellPilotTerminalBackground
   position relative

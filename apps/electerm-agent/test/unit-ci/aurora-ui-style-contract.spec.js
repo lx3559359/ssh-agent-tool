@@ -61,3 +61,14 @@ test('connection server history and AI surfaces use semantic Aurora depth', () =
   assert.match(ai, /\.chat-history-item[\s\S]*var\(--sp-shadow-sm\)/)
   assert.match(ai, /\.ai-chat-input[\s\S]*var\(--sp-shadow-md\)/)
 })
+
+test('terminal frame and SFTP panels use depth while rendered rows stay flat', () => {
+  const terminal = readClient('components/terminal/terminal.styl')
+  const sftp = readClient('components/sftp/sftp.styl')
+  const transfer = readClient('components/sidebar/transfer.styl')
+  assert.match(terminal, /\.terminal-workspace-layer[\s\S]*var\(--sp-shadow-lg\)/)
+  assert.doesNotMatch(terminal, /\.(?:xterm|xterm-screen|xterm-viewport)[^{\n]*[\s\S]{0,180}box-shadow/)
+  assert.match(sftp, /\.sftp-section[\s\S]*var\(--sp-shadow-md\)/)
+  assert.match(sftp, /\.sftp-item[\s\S]*box-shadow none/)
+  assert.match(transfer, /\.transfer-list-card[\s\S]*var\(--sp-shadow-lg\)/)
+})
