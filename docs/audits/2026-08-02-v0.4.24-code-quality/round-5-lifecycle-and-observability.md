@@ -2,7 +2,7 @@
 
 ## 结论
 
-本轮确认并修复五项实际问题：恢复提示错误地忽略主进程确认值、恢复加载失败完全不可见、MCP 监听器重复安装、SFTP 意外数据包重试分支永久不可达，以及 SFTP 卸载/重复调度漏清 timer 与 debounce。
+本轮及最终差异复核共确认并修复七项实际问题：恢复提示错误地忽略主进程确认值、恢复加载失败完全不可见、MCP 监听器重复安装与畸形请求校验不完整、SFTP 意外数据包重试分支永久不可达、重试会覆盖 terminalId，以及 SFTP 卸载/重复调度漏清 timer、debounce 与 client destroy rejection。
 
 问题的共同根因不是单个语法错误，而是异步操作的“成功确认、状态提交、资源所有权”没有被建模。修复将这些边界提成三个小型可注入模块，巨型 store mixin 和 React class 只保留接线。
 
@@ -15,6 +15,8 @@
 | R5-03 | P1 | 每次启动 MCP server widget 都增加一个匿名 `mcp-request` listener | `initMcpHandler` 没有保存 listener，也没有在再次初始化前 `ipcOffEvent` | `installMcpRequestListener` 替换旧 listener，重复初始化仍只有一个；同时忽略 malformed/unrelated IPC |
 | R5-04 | P1 | SFTP 遇到 `Unexpected packet` 时声明的重试永远不会发生 | `retryCount` 初始为 0，条件要求 `this.retryCount` 为真，而计数只在该分支中递增，形成不可达分支 | 纯策略 `shouldRetryUnexpectedSftpPacket` 允许每次连接尝试重试一次，第二次同类错误停止；成功后重置计数 |
 | R5-05 | P2 | SFTP 卸载漏清 `timer` 和 `retryHandler`，重复 blur/refresh 还会覆盖旧 handle；lodash debounce 未取消 | timer 分散在巨型 class 的多个方法，卸载只记得 `timer4`/`timer5` | `replaceSftpEntryTimer` 先取消旧 callback；`disposeSftpEntryScheduling` 清四个 timer 并取消两个 debounce |
+| R5-06 | P1 | 让重试分支可达后，旧回调 `initData(true)` 会把当前 `terminalId` 覆盖为布尔值，重试连接指向错误会话 | 旧代码把早期 API 的布尔参数残留在已改成 `(terminalId, port)` 的方法调用中；分支长期不可达掩盖了错误 | 重试和无 client 的远端跳转都改走 `reconnectSftpEntryRemote`，只重建远端连接并保留 terminalId/port；client 销毁先 detach、等待完成并吸收 best-effort 清理错误 |
+| R5-07 | P2 | 合法 toolName 但缺失 requestId 的 MCP IPC 仍会执行工具，产生无法关联响应的孤立副作用 | malformed 校验只覆盖 action 和 toolName，没有覆盖响应关联键 | listener 要求非空字符串 requestId；缺失关联键的事件在执行前被拒绝 |
 
 ## 恢复流程数据流证据
 
@@ -57,7 +59,7 @@ false/rejection
 
 | 区域 | 创建/注册 | 取消/释放 | 结果 |
 | --- | --- | --- | --- |
-| SFTP entry | ready、blur、refresh、retry timer；remote/local debounce；SFTP client | 新 helper 在替换和 unmount 时统一清理；client destroy 保持原逻辑 | 修复两项 timer 漏清、覆盖旧 timer 和 debounce 未 cancel |
+| SFTP entry | ready、blur、refresh、retry timer；remote/local debounce；SFTP client | 新 helper 在替换和 unmount 时统一清理；client 先从 entry detach，再等待/吸收 destroy 失败；显式 reload 等待销毁后重连 | 修复 timer 漏清、覆盖旧 timer、debounce 未 cancel、错误 terminalId 与未处理 destroy rejection |
 | Terminal | reconnect scheduler、`this.timers`、WebSocket、xterm、addons、safety entrypoint | unmount invalidate session、dispose scheduler、clear timers、close socket、dispose xterm、清 addon 引用 | 未发现可复现的重复 listener/未关闭 socket；延迟脚本等待在 unmount 清 timer 后不显式 resolve，登记为 P3 设计债务 |
 | MCP renderer | `mcp-request` IPC listener；AbortSignal listener；poll timer | listener 重装先 off；abortable helpers 在 settle/abort 时移除 listener 并清 timer | 修复重复 listener；AbortSignal helper 配对完整 |
 | SSH server | jump connections、tunnel runtime、probe socket/timeout、channel | probe connect/error 均 clear timeout + destroy；`endConns`/`doKill` 关闭 tunnels、connections、channel | 未发现本轮可复现泄漏 |
@@ -81,7 +83,7 @@ false/rejection
 | --- | --- | --- |
 | `recovery-plan-operations.js` | 5/5 因模块不存在而按预期失败 | 5/5 通过 |
 | `mcp-request-listener.js` | 2/2 因模块不存在而按预期失败 | 2/2 通过 |
-| `sftp-entry-lifecycle.js` | 2/2（扩展后 3 项）因模块不存在而按预期失败 | 3/3 通过 |
+| `sftp-entry-lifecycle.js` | 初始 2/2（扩展后 3 项）因模块不存在而按预期失败；最终复核新增上下文/销毁测试 2/2 先失败 | 5/5 通过 |
 
 ## 回归结果
 
@@ -89,7 +91,7 @@ false/rejection
 | --- | --- |
 | 恢复快照、client state、UI、quality event | 19/19 通过 |
 | MCP listener + agent cancellation/structured tools/fleet harness | 31/31 通过 |
-| 17 个 `sftp-*.spec.js` 文件 | 158 tests，0 失败 |
+| 17 个 `sftp-*.spec.js` 文件 | 160 tests，0 失败 |
 | 本轮核心组合 | 18/18 通过 |
 | `npm run lint` | 通过 |
 

@@ -12,6 +12,8 @@ export function installMcpRequestListener ({
     const data = request?.data
     if (
       request?.action !== 'tool-call' ||
+      typeof request?.requestId !== 'string' ||
+      !request.requestId ||
       typeof data?.toolName !== 'string' ||
       !data.toolName
     ) {

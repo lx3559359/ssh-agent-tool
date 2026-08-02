@@ -63,7 +63,10 @@ import {
 } from '../ai/ai-file-change-review-modal.jsx'
 import { reconcileSelectedFileIds } from './file-selection.js'
 import {
+  destroySftpClient,
+  disposeSftpEntryClient,
   disposeSftpEntryScheduling,
+  reconnectSftpEntryRemote,
   replaceSftpEntryTimer,
   shouldRetryUnexpectedSftpPacket
 } from './sftp-entry-lifecycle.js'
@@ -174,8 +177,7 @@ export default class Sftp extends Component {
 
   componentWillUnmount () {
     refs.remove(this.id)
-    this.sftp && this.sftp.destroy()
-    this.sftp = null
+    disposeSftpEntryClient(this)
     disposeSftpEntryScheduling(this)
     // Clear sort cache to prevent memory leaks
     this._sortCache?.clear()
@@ -1505,9 +1507,7 @@ export default class Sftp extends Component {
               replaceSftpEntryTimer(
                 this,
                 'retryHandler',
-                () => this.initData(
-                  true
-                ),
+                () => reconnectSftpEntryRemote(this),
                 sftpRetryInterval
               )
             } else {
@@ -1520,7 +1520,7 @@ export default class Sftp extends Component {
           }
         })
         if (!r) {
-          sftp.destroy()
+          await destroySftpClient(sftp)
           return this.props.editTab(tab.id, {
             sftpCreated: false
           })
@@ -1768,10 +1768,7 @@ export default class Sftp extends Component {
   }
 
   handleReloadRemoteSftp = async () => {
-    if (this.sftp) {
-      this.sftp.destroy()
-      this.sftp = null
-    }
+    await disposeSftpEntryClient(this)
     this.setState({
       remoteLoading: true,
       remote: [],
@@ -1829,7 +1826,7 @@ export default class Sftp extends Component {
   onGoto = async (type, e) => {
     e && e.preventDefault()
     if (type === typeMap.remote && !this.sftp) {
-      return this.initData(true)
+      return reconnectSftpEntryRemote(this)
     }
     const n = `${type}Path`
     const nt = n + 'Temp'

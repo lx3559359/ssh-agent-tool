@@ -44,3 +44,23 @@ export function disposeSftpEntryScheduling (entry, options = {}) {
     entry[key]?.cancel?.()
   }
 }
+
+export async function destroySftpClient (client) {
+  if (!client || typeof client.destroy !== 'function') return false
+  try {
+    await client.destroy()
+    return true
+  } catch (error) {
+    return false
+  }
+}
+
+export function disposeSftpEntryClient (entry) {
+  const client = entry.sftp
+  entry.sftp = null
+  return destroySftpClient(client)
+}
+
+export function reconnectSftpEntryRemote (entry) {
+  return entry.initRemoteAll()
+}

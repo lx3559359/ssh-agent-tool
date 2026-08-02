@@ -83,3 +83,34 @@ test('replacing an SFTP entry timer cancels the previous callback', async () => 
   assert.deepEqual(cleared, [5])
   assert.deepEqual(scheduled, [[callback, 1000]])
 })
+
+test('remote reconnect preserves the active terminal context', async () => {
+  const { reconnectSftpEntryRemote } = await loadModule()
+  const calls = []
+  const entry = {
+    terminalId: 'terminal-42',
+    port: 2200,
+    initRemoteAll: () => {
+      calls.push([entry.terminalId, entry.port])
+      return 'reconnecting'
+    }
+  }
+
+  assert.equal(reconnectSftpEntryRemote(entry), 'reconnecting')
+  assert.equal(entry.terminalId, 'terminal-42')
+  assert.equal(entry.port, 2200)
+  assert.deepEqual(calls, [['terminal-42', 2200]])
+})
+
+test('SFTP client disposal detaches first and absorbs destroy rejection', async () => {
+  const { disposeSftpEntryClient } = await loadModule()
+  const error = new Error('socket already closed')
+  const client = {
+    destroy: async () => { throw error }
+  }
+  const entry = { sftp: client }
+
+  const disposal = disposeSftpEntryClient(entry)
+  assert.equal(entry.sftp, null)
+  assert.equal(await disposal, false)
+})

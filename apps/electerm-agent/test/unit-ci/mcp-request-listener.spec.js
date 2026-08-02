@@ -81,6 +81,7 @@ test('MCP request listener ignores malformed and unrelated events', async () => 
   ipc.emit(undefined)
   ipc.emit({ action: 'status', data: {} })
   ipc.emit({ action: 'tool-call' })
+  ipc.emit({ action: 'tool-call', data: { toolName: 'list_tabs' } })
   ipc.emit({ action: 'tool-call', data: { toolName: '' } })
   assert.deepEqual(calls, [])
 })
