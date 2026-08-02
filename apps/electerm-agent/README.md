@@ -22,11 +22,11 @@ The complete Chinese user guide is available in [docs/USER_GUIDE_ZH.md](docs/USE
 
 ## Development
 
-Requirements: Node.js and npm on Windows.
+Requirements: Windows, Node.js 20.19+ or 22.12+, and npm.
 
 ```bash
 npm install
-npm run dev
+npm start
 ```
 
 Common verification commands:

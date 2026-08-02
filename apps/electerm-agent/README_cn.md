@@ -23,11 +23,11 @@ ShellPilot 是一款以 Windows 为主要使用环境的 SSH、SFTP 与 AI 运�
 
 ## 本地开发
 
-开发环境需要 Windows、Node.js 和 npm。
+开发环境需要 Windows、Node.js 20.19+ 或 22.12+ 和 npm。
 
 ```bash
 npm install
-npm run dev
+npm start
 ```
 
 常用自检命令：

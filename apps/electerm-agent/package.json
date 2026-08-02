@@ -12,7 +12,6 @@
     "app": "node build/bin/app",
     "build": "node build/bin/build.js",
     "start": "node build/bin/start.js",
-    "icon": "node build/bin/icon",
     "clean": "node.exe build/bin/clean",
     "compile": "node.exe build/bin/build.js",
     "vite-build": "node.exe build/bin/vite-build.js",
@@ -73,7 +72,7 @@
   "homepage": "https://github.com/lx3559359/ssh-agent-tool",
   "releases": "https://github.com/lx3559359/ssh-agent-tool/releases",
   "engines": {
-    "node": ">=16.0.0"
+    "node": "^20.19.0 || >=22.12.0"
   },
   "preferGlobal": true,
   "devDependencies": {
