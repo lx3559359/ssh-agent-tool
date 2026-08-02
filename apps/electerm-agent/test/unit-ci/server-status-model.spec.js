@@ -9,6 +9,48 @@ const modelUrl = pathToFileURL(
 const reportUrl = pathToFileURL(
   path.resolve(__dirname, '../../src/client/components/server-status/server-status-report.js')
 ).href
+const presentationUrl = pathToFileURL(
+  path.resolve(__dirname, '../../src/client/common/server-status-presentation.js')
+).href
+
+test('server status presentation explains every stable health state without mutating alerts', async () => {
+  const { buildServerStatusPresentation } = await import(presentationUrl)
+  const translated = {
+    healthy: { severityLabel: '正常', impact: '健康影响', nextStep: '健康下一步' },
+    warning: { severityLabel: '警告', impact: '警告影响', nextStep: '警告下一步' },
+    critical: { severityLabel: '异常', impact: '异常影响', nextStep: '异常下一步' },
+    unknown: { severityLabel: '未知', impact: '未知影响', nextStep: '未知下一步' }
+  }
+  const alerts = Object.freeze([
+    Object.freeze({ code: 'disk-usage', status: 'warning', message: '磁盘占用偏高' })
+  ])
+
+  for (const status of ['healthy', 'warning', 'critical', 'unknown']) {
+    assert.deepEqual(
+      buildServerStatusPresentation({ overallStatus: status, alerts }, translated),
+      {
+        status,
+        severityLabel: translated[status].severityLabel,
+        impact: translated[status].impact,
+        nextStep: translated[status].nextStep,
+        alertCount: 1
+      }
+    )
+  }
+  assert.equal(alerts[0].message, '磁盘占用偏高')
+})
+
+test('server status presentation falls back to unknown and stays free of probe side effects', async () => {
+  const source = require('node:fs').readFileSync(
+    path.resolve(__dirname, '../../src/client/common/server-status-presentation.js'),
+    'utf8'
+  )
+  const { buildServerStatusPresentation } = await import(presentationUrl)
+  const unknown = { severityLabel: '未知', impact: '信息不足', nextStep: '刷新检测' }
+
+  assert.equal(buildServerStatusPresentation({ overallStatus: 'future' }, { unknown }).status, 'unknown')
+  assert.doesNotMatch(source, /runCmd|setInterval|setTimeout|fetch\(|setState|\.push\(|\.splice\(/)
+})
 
 test('creates a stable normalized snapshot without mutating collected data', async () => {
   const { createServerStatusSnapshot } = await import(modelUrl)

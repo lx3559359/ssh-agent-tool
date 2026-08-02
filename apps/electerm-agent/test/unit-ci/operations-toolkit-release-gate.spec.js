@@ -74,3 +74,29 @@ test('operations workspace remains open until the user closes it', () => {
   assert.doesNotMatch(quickCommandsSource, /setTimeout\(\(\) => \{\s*toggle\(false\)/)
   assert.match(workspaceSource, /onClick=\{\(\) => store\.closeOperationsToolkit\(\)\}/)
 })
+
+test('operations presentation preserves tabs, recommended order, named close actions, and safety copy', () => {
+  const workspace = fs.readFileSync(
+    path.resolve(__dirname, '../../src/client/components/operations-toolkit/workspace/operations-workspace.jsx'),
+    'utf8'
+  )
+  const i18n = fs.readFileSync(
+    path.resolve(__dirname, '../../src/client/common/shellpilot-i18n-overrides.js'),
+    'utf8'
+  )
+
+  const expectedTabs = ['quick', 'diagnostic', 'maintenance', 'custom', 'history']
+  assert.deepEqual(
+    [...workspace.matchAll(/\{ value: '([^']+)', label:/g)].slice(0, 5).map(match => match[1]),
+    expectedTabs
+  )
+  assert.match(workspace, /recommendedDiagnosticIds = \[[\s\S]*'service\.inventory-health'[\s\S]*'network\.tcp-connections'[\s\S]*'logs\.system-anomaly-summary'[\s\S]*'network\.interface-health'/)
+  assert.ok((workspace.match(/aria-label=\{e\('shellpilotOperationsClose'\)\}/g) || []).length >= 2)
+  assert.match(workspace, /shellpilotOperationsNeedsEdit/)
+  assert.match(workspace, /shellpilotOperationsPreviewBeforeRun/)
+  assert.match(workspace, /shellpilotOperationsConfirmBeforeChange/)
+  assert.match(workspace, /shellpilotOperationsRollbackFromCenter/)
+  assert.match(i18n, /shellpilotOperationsNeedsEdit: '需编辑'/)
+  assert.match(i18n, /shellpilotOperationsPreviewBeforeRun: '执行前预览'/)
+  assert.match(i18n, /shellpilotOperationsConfirmBeforeChange: '修改前确认'/)
+})

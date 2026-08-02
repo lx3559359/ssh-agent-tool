@@ -118,3 +118,14 @@ test('SFTP uses grid, row, column-header, and roving-focus semantics', () => {
   assert.match(header, /role='columnheader'/)
   assert.match(styles, /\.sftp-item:focus-visible[\s\S]*outline/)
 })
+
+test('safety center records and result updates expose list and live-region semantics', () => {
+  const modal = readClient('components/main/safety-operation-center-modal.jsx')
+
+  assert.match(modal, /role='list'/)
+  assert.ok((modal.match(/role='listitem'/g) || []).length >= 3)
+  assert.match(modal, /role='status'/)
+  assert.match(modal, /aria-live='polite'/)
+  assert.match(modal, /aria-busy=\{loading\}/)
+  assert.match(modal, /aria-label=\{e\('shellpilotSafetySearchPlaceholder'\)\}/)
+})

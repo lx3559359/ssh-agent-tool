@@ -48,6 +48,7 @@ import {
 } from '../ai/agent-task-registry.js'
 import * as transactionStore from '../../common/safety-transactions/transaction-store.js'
 import { formatShellPilotTranslation } from '../../common/shellpilot-i18n-overrides.js'
+import { buildServerStatusPresentation } from '../../common/server-status-presentation.js'
 import './server-status-modal.styl'
 
 const customRulesKey = 'shellpilot-server-platform-rules'
@@ -413,6 +414,48 @@ export default function ServerStatusModal ({ open, onClose, store, tab = {} }) {
     )
   }
 
+  function renderStatusExplanation () {
+    if (!snapshot) return null
+    const presentation = buildServerStatusPresentation({
+      overallStatus: snapshot.overallStatus,
+      alerts: snapshot.alerts
+    }, {
+      healthy: {
+        severityLabel: e('shellpilotServerStatusHealthy'),
+        impact: e('shellpilotServerStatusHealthyImpact'),
+        nextStep: e('shellpilotServerStatusHealthyNextStep')
+      },
+      warning: {
+        severityLabel: e('shellpilotServerStatusWarning'),
+        impact: e('shellpilotServerStatusWarningImpact'),
+        nextStep: e('shellpilotServerStatusWarningNextStep')
+      },
+      critical: {
+        severityLabel: e('shellpilotServerStatusAbnormal'),
+        impact: e('shellpilotServerStatusCriticalImpact'),
+        nextStep: e('shellpilotServerStatusCriticalNextStep')
+      },
+      unknown: {
+        severityLabel: e('shellpilotServerStatusUnknown'),
+        impact: e('shellpilotServerStatusUnknownImpact'),
+        nextStep: e('shellpilotServerStatusUnknownNextStep')
+      }
+    })
+    return (
+      <section
+        className={`server-status-explanation ${presentation.status}`}
+        aria-label={e('shellpilotServerStatusExplanation')}
+      >
+        <div className='server-status-explanation-severity'>
+          <span>{e('shellpilotServerStatusSeverity')}</span>
+          <strong>{presentation.severityLabel}</strong>
+        </div>
+        <p><strong>{e('shellpilotServerStatusImpact')}</strong>{presentation.impact}</p>
+        <p><strong>{e('shellpilotServerStatusNextStep')}</strong>{presentation.nextStep}</p>
+      </section>
+    )
+  }
+
   function renderPlatformGroups (compact = false) {
     const platforms = snapshot?.platforms || []
     if (!platforms.length) {
@@ -438,7 +481,7 @@ export default function ServerStatusModal ({ open, onClose, store, tab = {} }) {
                 {isDiagnosticTargetAbnormal(platform)
                   ? (
                     <Tooltip title={e('shellpilotServerStatusDiagnosePlatformHint')}>
-                      <Button size='small' disabled={loading} icon={<RobotOutlined />} onClick={event => { event.preventDefault(); event.stopPropagation(); openDiagnostic('platform', platform) }}>
+                      <Button className='server-status-diagnostic-action' size='small' type='text' disabled={loading} icon={<RobotOutlined />} onClick={event => { event.preventDefault(); event.stopPropagation(); openDiagnostic('platform', platform) }}>
                         {e('shellpilotServerStatusAiDiagnosis')}
                       </Button>
                     </Tooltip>
@@ -463,7 +506,7 @@ export default function ServerStatusModal ({ open, onClose, store, tab = {} }) {
                 {isDiagnosticTargetAbnormal(service)
                   ? (
                     <Tooltip title={e('shellpilotServerStatusDiagnoseServiceHint')}>
-                      <Button size='small' type='text' disabled={loading} icon={<RobotOutlined />} onClick={() => openDiagnostic('service', service)}>
+                      <Button className='server-status-diagnostic-action' size='small' type='text' disabled={loading} icon={<RobotOutlined />} onClick={() => openDiagnostic('service', service)}>
                         {e('shellpilotServerStatusAiDiagnosis')}
                       </Button>
                     </Tooltip>
@@ -477,7 +520,7 @@ export default function ServerStatusModal ({ open, onClose, store, tab = {} }) {
                 {isDiagnosticTargetAbnormal(container)
                   ? (
                     <Tooltip title={e('shellpilotServerStatusDiagnoseContainerHint')}>
-                      <Button size='small' type='text' disabled={loading} icon={<RobotOutlined />} onClick={() => openDiagnostic('container', container)}>
+                      <Button className='server-status-diagnostic-action' size='small' type='text' disabled={loading} icon={<RobotOutlined />} onClick={() => openDiagnostic('container', container)}>
                         {e('shellpilotServerStatusAiDiagnosis')}
                       </Button>
                     </Tooltip>
@@ -502,7 +545,7 @@ export default function ServerStatusModal ({ open, onClose, store, tab = {} }) {
         {isDiagnosticTargetAbnormal({ status: 'warning', ...alert })
           ? (
             <Tooltip title={e('shellpilotServerStatusDiagnoseAlertHint')}>
-              <Button size='small' type='text' disabled={loading} icon={<RobotOutlined />} onClick={() => openDiagnostic('alert', alert)}>
+              <Button className='server-status-diagnostic-action' size='small' type='text' disabled={loading} icon={<RobotOutlined />} onClick={() => openDiagnostic('alert', alert)}>
                 {e('shellpilotServerStatusAiDiagnosis')}
               </Button>
             </Tooltip>
@@ -676,7 +719,7 @@ export default function ServerStatusModal ({ open, onClose, store, tab = {} }) {
               {isDiagnosticTargetAbnormal(item)
                 ? (
                   <Tooltip title={e('shellpilotServerStatusDiagnoseContainerHint')}>
-                    <Button size='small' type='text' disabled={loading} icon={<RobotOutlined />} onClick={() => openDiagnostic('container', item)}>
+                    <Button className='server-status-diagnostic-action' size='small' type='text' disabled={loading} icon={<RobotOutlined />} onClick={() => openDiagnostic('container', item)}>
                       {e('shellpilotServerStatusAiDiagnosis')}
                     </Button>
                   </Tooltip>
@@ -748,6 +791,7 @@ export default function ServerStatusModal ({ open, onClose, store, tab = {} }) {
           </Space>
         </div>
         {renderSummary()}
+        {renderStatusExplanation()}
         <Spin spinning={loading} tip={e('shellpilotServerStatusRunningReadonlyDetection')}>
           <div className='server-status-content'>
             {!snapshot && !loading

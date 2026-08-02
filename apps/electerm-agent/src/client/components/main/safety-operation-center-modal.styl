@@ -6,15 +6,42 @@
     flex-direction column
 
 .safety-center-summary
-  display flex
-  flex-wrap wrap
-  gap 18px
-  padding 4px 2px 8px
+  display grid
+  grid-template-columns repeat(4, minmax(0, 1fr))
+  gap 1px
+  padding 1px
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-card)
   color var(--text-light)
+  background var(--sp-border)
   font-size 12px
 
+.safety-center-summary > span
+  display flex
+  align-items center
+  justify-content space-between
+  gap 8px
+  padding 9px 12px
+  background var(--sp-surface)
+
 .safety-center-summary strong
-  color var(--text)
+  color var(--sp-text)
+  font-size 16px
+
+.safety-center-tab-label
+  display inline-flex
+  align-items center
+  gap 6px
+
+.safety-center-tab-count
+  min-width 18px
+  padding 0 5px
+  border-radius 9px
+  color var(--sp-text-muted)
+  background var(--sp-surface-subtle)
+  font-size 10px
+  line-height 18px
+  text-align center
 
 .safety-center-tabs
   flex none
@@ -31,6 +58,15 @@
 .safety-center-records
   min-height 220px
   overflow auto
+
+.safety-center-result-status
+  position sticky
+  top 0
+  z-index 1
+  padding 5px 2px 8px
+  color var(--sp-text-muted)
+  background var(--main)
+  font-size 11px
 
 .safety-center-record-list
   min-width 660px
@@ -195,6 +231,8 @@
   word-break break-word
 
 @media (max-width: 760px)
+  .safety-center-summary
+    grid-template-columns repeat(2, minmax(0, 1fr))
   .safety-center-filters
     grid-template-columns 1fr 1fr
   .safety-center-record-header

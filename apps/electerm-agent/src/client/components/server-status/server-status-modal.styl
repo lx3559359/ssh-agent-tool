@@ -69,9 +69,52 @@
   color var(--text)
   font-size 14px
 
+.server-status-explanation
+  display grid
+  grid-template-columns minmax(120px, .35fr) minmax(0, 1fr) minmax(0, 1fr)
+  gap 14px
+  align-items start
+  margin-top 10px
+  padding 10px 12px
+  border 1px solid var(--sp-border)
+  border-left 3px solid var(--sp-info)
+  border-radius var(--sp-radius-card)
+  color var(--sp-text)
+  background var(--sp-surface-subtle)
+  font-size 12px
+  line-height 1.5
+  &.healthy
+    border-left-color var(--success)
+  &.warning
+    border-left-color var(--warning)
+  &.critical
+    border-left-color var(--error)
+  p
+    min-width 0
+    margin 0
+  p strong
+    display block
+    margin-bottom 2px
+    color var(--sp-text-muted)
+    font-size 11px
+
+.server-status-explanation-severity
+  span
+    display block
+    color var(--sp-text-muted)
+    font-size 11px
+  strong
+    display block
+    margin-top 2px
+    color var(--sp-text)
+    font-size 14px
+
+.server-status-diagnostic-action
+  color var(--sp-text-muted)
+
 .server-status-content
-  min-height 410px
-  height calc(100vh - 330px)
+  min-height 330px
+  height calc(100vh - 410px)
   margin-top 10px
   overflow hidden
 
@@ -358,6 +401,9 @@
     flex-direction column
   .server-status-summary
     grid-template-columns repeat(2, minmax(0, 1fr))
+  .server-status-explanation
+    grid-template-columns 1fr
+    gap 7px
   .server-status-summary-item
     border-bottom 1px solid var(--main-darker)
   .server-status-two-columns

@@ -24,7 +24,11 @@ export default function ResultViewer ({
     return <Empty description={e('shellpilotOperationsNoHistory')} />
   }
   return (
-    <div className='operations-history'>
+    <div
+      aria-label={e('shellpilotOperationsHistory')}
+      className='operations-history'
+      role='list'
+    >
       <div className='operations-history-head'>
         <span>{tf('shellpilotOperationsHistoryCount', { count: records.length })}</span>
         <Popconfirm
@@ -38,8 +42,12 @@ export default function ResultViewer ({
       {records.map(record => {
         const tool = tools.find(item => item.id === record.toolId)
         return (
-          <article key={record.id}>
-            <button onClick={() => onSelect(record)}>
+          <article key={record.id} role='listitem'>
+            <button
+              aria-label={tool?.title || record.toolId}
+              onClick={() => onSelect(record)}
+              type='button'
+            >
               <strong>{tool?.title || record.toolId}</strong>
               <span>{record.endpointKey}</span>
               <small>

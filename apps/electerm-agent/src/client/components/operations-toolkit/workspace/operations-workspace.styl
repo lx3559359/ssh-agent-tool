@@ -145,8 +145,9 @@
 .operations-tool-list
   flex 1
   min-height 0
-  display flex
-  flex-direction column
+  display grid
+  grid-template-columns repeat(auto-fit, minmax(190px, 1fr))
+  align-content start
   gap 7px
   overflow-y auto
   > button
@@ -162,6 +163,9 @@
     border-radius var(--sp-radius-small)
     box-shadow none
     cursor pointer
+    &:focus-visible
+      outline 2px solid var(--sp-primary)
+      outline-offset 2px
     &:hover
       border-color var(--sp-primary)
       background var(--sp-surface-soft)
@@ -470,6 +474,21 @@
         font-size 11px
         line-height 1.4
 
+  .operations-maintenance-contract
+    grid-column 1 / -1
+    align-items center
+    flex-wrap wrap
+    padding-top 8px
+    border-top 1px solid var(--sp-border)
+    > span
+      display block
+      color var(--text-dark)
+      font-size 11px
+      line-height 1.5
+
+.operations-toolkit-workspace .qm-list-wrap
+  grid-template-columns repeat(auto-fit, minmax(230px, 1fr))
+
 .operations-maintenance-catalog
   flex 1
   min-height 0
@@ -495,8 +514,38 @@
   .operations-script-steps ol
     grid-template-columns 1fr
 
+@media (max-width: 680px)
+  .operations-toolkit-workspace
+    left 8px !important
+  .operations-diagnostic
+    display flex
+    flex-direction column
+    overflow-y auto
+  .operations-catalog
+    flex 0 0 auto
+    max-height 310px
+    overflow visible
+    border-right 0
+    border-bottom 1px solid var(--main-darker)
+  .operations-tool-list
+    max-height 210px
+    grid-template-columns 1fr
+  .operations-tool-detail
+    flex 0 0 auto
+    overflow visible
+  .operations-maintenance-safety
+    align-items stretch
+    flex-direction column
+  .operations-toolkit-workspace .qm-list-wrap
+    grid-template-columns 1fr
+
 @media (max-height: 620px)
   .operations-toolkit-workspace
     height calc(100vh - 68px)
     max-height none
+    min-height 0
     bottom 34px
+  .operations-workspace-body
+    min-height 0
+    overflow-y auto
+    overscroll-behavior contain

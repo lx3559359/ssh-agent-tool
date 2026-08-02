@@ -52,8 +52,13 @@ export default function ParameterForm ({
     <div className='operations-parameter-grid'>
       {tool.parameters.map(parameter => {
         const options = optionsFor(parameter, capabilities)
+        const inputId = `operations-parameter-${tool.id}-${parameter.id}`
+          .replace(/[^a-zA-Z0-9_-]/g, '-')
+        const helpId = parameter.help ? `${inputId}-help` : undefined
         const common = {
+          'aria-label': parameter.label,
           disabled,
+          id: inputId,
           value: values[parameter.id],
           onChange: value => onChange(
             parameter.id,
@@ -64,11 +69,12 @@ export default function ParameterForm ({
           <label className='operations-parameter-field' key={parameter.id}>
             <span>{parameter.label}</span>
             {parameter.type === 'number' || parameter.type === 'port'
-              ? <InputNumber {...common} min={parameter.type === 'port' ? 1 : undefined} max={parameter.type === 'port' ? 65535 : undefined} />
+              ? <InputNumber {...common} aria-describedby={helpId} min={parameter.type === 'port' ? 1 : undefined} max={parameter.type === 'port' ? 65535 : undefined} />
               : parameter.type === 'select' || parameter.type === 'multi-select'
                 ? (
                   <Select
                     {...common}
+                    aria-describedby={helpId}
                     mode={parameter.type === 'multi-select' ? 'multiple' : undefined}
                     options={options}
                     showSearch
@@ -76,8 +82,8 @@ export default function ParameterForm ({
                     placeholder={options.length ? e('shellpilotOperationsSelect') : e('shellpilotOperationsConnectToDiscover')}
                   />
                   )
-                : <Input {...common} placeholder={parameter.placeholder || parameter.label} />}
-            {parameter.help ? <small>{parameter.help}</small> : null}
+                : <Input {...common} aria-describedby={helpId} placeholder={parameter.placeholder || parameter.label} />}
+            {parameter.help ? <small id={helpId}>{parameter.help}</small> : null}
           </label>
         )
       })}
