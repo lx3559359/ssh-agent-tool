@@ -446,6 +446,7 @@ export default class Sftp extends Component {
       this.setState({
         selectedFiles: new Set([nextFile.id])
       })
+      return nextFile.id
     }
   }
 
@@ -474,6 +475,7 @@ export default class Sftp extends Component {
       this.setState({
         selectedFiles: new Set([nextFile.id])
       })
+      return nextFile.id
     }
   }
 
@@ -1883,6 +1885,8 @@ export default class Sftp extends Component {
         'delFiles',
         'getIndex',
         'selectAll',
+        'selectPrev',
+        'selectNext',
         'getFileList',
         'onGoto',
         'addTransferList',
@@ -2030,6 +2034,10 @@ export default class Sftp extends Component {
               type='text'
               icon={<SaveOutlined />}
               disabled={!selectedCount}
+              aria-label={selectedCount
+                ? formatShellPilotTranslation(e, 'shellpilotSftpQuickBackupCount', { count: selectedCount })
+                : e('shellpilotSftpSelectFilesForBackup')}
+              title={!selectedCount ? e('shellpilotSftpSelectFilesForBackup') : undefined}
               onClick={this.handleQuickBackupSelected}
             >
               {selectedCount

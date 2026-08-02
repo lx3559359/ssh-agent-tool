@@ -211,7 +211,7 @@ export default class SessionWrapper extends Component {
     })
   }
 
-  toggleCheckSftpPathFollowSsh = () => {
+  handleToggleSftpPathFollow = () => {
     this.setState(prevState => ({
       sftpPathFollowSsh: !prevState.sftpPathFollowSsh
     }))
@@ -226,6 +226,25 @@ export default class SessionWrapper extends Component {
       tab.id,
       up
     )
+  }
+
+  handlePaneTabKeyDown = (event, index, types) => {
+    let nextIndex
+    if (event.key === 'ArrowLeft') {
+      nextIndex = (index - 1 + types.length) % types.length
+    } else if (event.key === 'ArrowRight') {
+      nextIndex = (index + 1) % types.length
+    } else if (event.key === 'Home') {
+      nextIndex = 0
+    } else if (event.key === 'End') {
+      nextIndex = types.length - 1
+    } else {
+      return
+    }
+    event.preventDefault()
+    this.onChangePane(types[nextIndex])
+    const tabs = event.currentTarget.parentElement?.querySelectorAll('[role="tab"]')
+    tabs?.[nextIndex]?.focus()
   }
 
   onChangePane = pane => {
@@ -366,6 +385,9 @@ export default class SessionWrapper extends Component {
     }
     return (
       <div
+        id={`session-pane-${paneMap.terminal}-${tab.id}`}
+        role='tabpanel'
+        aria-labelledby={`session-tab-${paneMap.terminal}-${tab.id}`}
         className={cls}
         style={{
           width,
@@ -467,7 +489,12 @@ export default class SessionWrapper extends Component {
       ...this.calcSftpWidthHeight()
     }
     return (
-      <div className={cls}>
+      <div
+        id={`session-pane-${paneMap.fileManager}-${id}`}
+        role='tabpanel'
+        aria-labelledby={`session-tab-${paneMap.fileManager}-${id}`}
+        className={cls}
+      >
         <Sftp
           {...exts}
         />
@@ -481,13 +508,13 @@ export default class SessionWrapper extends Component {
     window.store.toggleSessFullscreen(true, this.props.tab.id)
   }
 
-  toggleBroadcastInput = () => {
+  handleToggleBroadcastInput = () => {
     this.setState({
       broadcastInput: !this.state.broadcastInput
     })
   }
 
-  toggleKeepalive = () => {
+  handleToggleKeepalive = () => {
     const term = refs.get('term-' + this.props.tab.id)
     if (!term) {
       return
@@ -504,10 +531,15 @@ export default class SessionWrapper extends Component {
     const title = e('search')
     return (
       <Tooltip title={title} placement='bottomLeft'>
-        <SearchOutlined
-          className='mg1r icon-info iblock pointer spliter'
+        <button
+          type='button'
+          className='session-icon-button mg1r spliter'
+          aria-label={title}
+          title={title}
           onClick={this.handleOpenSearch}
-        />
+        >
+          <SearchOutlined aria-hidden='true' className='icon-info iblock' />
+        </button>
       </Tooltip>
     )
   }
@@ -516,10 +548,15 @@ export default class SessionWrapper extends Component {
     const title = e('fullscreen')
     return (
       <Tooltip title={title} placement='bottomLeft'>
-        <FullscreenOutlined
-          className='mg1r icon-info iblock pointer spliter fullscreen-control-icon'
+        <button
+          type='button'
+          className='session-icon-button mg1r spliter fullscreen-control-icon'
+          aria-label={title}
+          title={title}
           onClick={this.handleFullscreen}
-        />
+        >
+          <FullscreenOutlined aria-hidden='true' className='icon-info iblock' />
+        </button>
       </Tooltip>
     )
   }
@@ -531,10 +568,15 @@ export default class SessionWrapper extends Component {
     return (
       <div className='type-tab'>
         <span className='mg1r'>{e('shellpilotTry')} <b>Shift + Backspace</b>?</span>
-        <CloseOutlined
+        <button
+          type='button'
+          className='session-icon-button'
+          aria-label={e('close')}
+          title={e('close')}
           onClick={this.handleDismissDelKeyTip}
-          className='pointer'
-        />
+        >
+          <CloseOutlined aria-hidden='true' />
+        </button>
       </div>
     )
   }
@@ -545,15 +587,18 @@ export default class SessionWrapper extends Component {
     }
     const { keepaliveEnabled } = this.state
     const title = e('keepalive')
-    const iconProps = {
-      className: classnames('sess-icon pointer keepalive-icon', {
-        active: keepaliveEnabled
-      }),
-      onClick: this.toggleKeepalive
-    }
     return (
       <Tooltip title={title}>
-        <HeartbeatIcon {...iconProps} />
+        <button
+          type='button'
+          className='session-icon-button sess-icon keepalive-icon'
+          aria-label={title}
+          title={title}
+          aria-pressed={keepaliveEnabled}
+          onClick={this.handleToggleKeepalive}
+        >
+          <HeartbeatIcon aria-hidden='true' />
+        </button>
       </Tooltip>
     )
   }
@@ -566,16 +611,18 @@ export default class SessionWrapper extends Component {
     }
     const { broadcastInput } = this.state
     const title = e('broadcastInput')
-    const iconProps = {
-      className: classnames('sess-icon pointer broadcast-icon', {
-        active: broadcastInput
-      }),
-      onClick: this.toggleBroadcastInput
-    }
-
     return (
       <Tooltip title={title}>
-        <ApartmentOutlined {...iconProps} />
+        <button
+          type='button'
+          className='session-icon-button sess-icon broadcast-icon'
+          aria-label={title}
+          title={title}
+          aria-pressed={broadcastInput}
+          onClick={this.handleToggleBroadcastInput}
+        >
+          <ApartmentOutlined aria-hidden='true' />
+        </button>
       </Tooltip>
     )
   }
@@ -602,20 +649,18 @@ export default class SessionWrapper extends Component {
     const {
       sshSftpSplitView
     } = this.props.tab
-    const cls = classnames(
-      'pointer sess-icon split-view-toggle',
-      {
-        active: sshSftpSplitView
-      }
-    )
     return (
       <Tooltip title={title} placement='bottomLeft'>
-        <span
-          className={cls}
+        <button
+          type='button'
+          className='session-icon-button sess-icon split-view-toggle'
+          aria-label={title}
+          title={title}
+          aria-pressed={sshSftpSplitView}
           onClick={this.handleSshSftpSplitView}
         >
-          <SplitViewIcon />
-        </span>
+          <SplitViewIcon aria-hidden='true' />
+        </button>
       </Tooltip>
     )
   }
@@ -642,14 +687,14 @@ export default class SessionWrapper extends Component {
     const isSsh = tab.authType
     const isLocal = !isSsh && (termType === connectionMap.local || !termType)
     const types = [
-      paneMap.terminal,
-      paneMap.fileManager
+      paneMap.terminal
     ]
     const controls = [
       isSsh ? paneMap.ssh : paneMap.terminal
     ]
     if (isSsh || isLocal) {
       controls.push(isSsh ? paneMap.sftp : paneMap.fileManager)
+      types.push(paneMap.fileManager)
     }
     const simpleMapper = {
       [paneMap.terminal]: 'T',
@@ -657,7 +702,11 @@ export default class SessionWrapper extends Component {
       [paneMap.ssh]: 'T'
     }
     return (
-      <div className='term-sftp-tabs fleft'>
+      <div
+        className='term-sftp-tabs fleft'
+        role='tablist'
+        aria-label={e('shellpilotSessionViews')}
+      >
         {
           controls.map((type, i) => {
             const cls = classnames(
@@ -668,17 +717,24 @@ export default class SessionWrapper extends Component {
               }
             )
             return (
-              <span
+              <button
+                type='button'
+                role='tab'
+                id={`session-tab-${types[i]}-${tab.id}`}
                 className={cls}
                 key={type + '_' + i}
+                aria-selected={types[i] === pane}
+                aria-controls={`session-pane-${types[i]}-${tab.id}`}
+                tabIndex={types[i] === pane ? 0 : -1}
                 onClick={() => this.onChangePane(types[i])}
+                onKeyDown={event => this.handlePaneTabKeyDown(event, i, types)}
               >
                 <span className='type-tab-txt'>
                   <span className='w500'>{e(type)}</span>
                   <span className='l500'>{simpleMapper[type]}</span>
                   <span className='type-tab-line' />
                 </span>
-              </span>
+              </button>
             )
           })
         }
@@ -700,15 +756,6 @@ export default class SessionWrapper extends Component {
     const isSsh = tab.authType
     const isLocal = !isSsh && (termType === connectionMap.local || !termType)
     const checkTxt = e('sftpPathFollowSsh')
-    const checkProps = {
-      onClick: this.toggleCheckSftpPathFollowSsh,
-      className: classnames(
-        'sftp-follow-ssh-icon sess-icon pointer',
-        {
-          active: sftpPathFollowSsh
-        }
-      )
-    }
     const isS = pane === paneMap.terminal ||
       sshSftpSplitView
     return (
@@ -717,9 +764,16 @@ export default class SessionWrapper extends Component {
           (isSsh && enableSsh) || isLocal
             ? (
               <Tooltip title={checkTxt}>
-                <span {...checkProps}>
-                  <PaperClipOutlined />
-                </span>
+                <button
+                  type='button'
+                  className='session-icon-button sftp-follow-ssh-icon sess-icon'
+                  aria-label={checkTxt}
+                  title={checkTxt}
+                  aria-pressed={sftpPathFollowSsh}
+                  onClick={this.handleToggleSftpPathFollow}
+                >
+                  <PaperClipOutlined aria-hidden='true' />
+                </button>
               </Tooltip>
               )
             : null

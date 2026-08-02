@@ -2,6 +2,7 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const path = require('node:path')
 const fs = require('node:fs')
+const { pathToFileURL } = require('node:url')
 
 function readClientSource (relativePath) {
   return fs.readFileSync(
@@ -57,4 +58,74 @@ test('sftp address bar supports Enter navigation and reload-or-jump button actio
   assert.match(source, /onPressEnter=\{e => props\.onGoto\(type,\s*e\)\}/)
   assert.match(source, /onClick=\{handleClick\}/)
   assert.match(source, /if \(!isLoadingRemote\) \{[\s\S]*onGoto\(type\)[\s\S]*\}/)
+})
+
+test('SFTP row labels expose existing side, file, metadata, and selection state', async () => {
+  const { buildSftpRowAriaLabel } = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/common/sftp-accessibility.js'
+  )))
+  const labels = {
+    remote: 'Remote',
+    local: 'Local',
+    shellpilotSftpFolder: 'Folder',
+    shellpilotSftpFile: 'File',
+    shellpilotSftpParentDirectory: 'Parent directory',
+    shellpilotSftpEmptyName: 'Unnamed item',
+    shellpilotSftpSelected: 'Selected',
+    shellpilotSftpNotSelected: 'Not selected'
+  }
+  const translate = key => labels[key] || key
+  const properties = [{ id: 'name' }, { id: 'size' }, { id: 'modifyTime' }]
+  const longName = 'very-long-production-audit-report-that-is-truncated.log'
+
+  assert.equal(buildSftpRowAriaLabel({
+    file: { name: longName, size: 2048, modifyTime: 1700000000 },
+    type: 'remote',
+    selected: true,
+    properties,
+    translate,
+    formatSize: value => `${value / 1024} KB`,
+    formatTime: value => `time:${value}`
+  }), `Remote, ${longName}, File, 2 KB, time:1700000000, Selected`)
+
+  assert.equal(buildSftpRowAriaLabel({
+    file: { name: 'logs', isDirectory: true, size: 0, modifyTime: 1700000001 },
+    type: 'local',
+    selected: false,
+    properties,
+    translate,
+    formatSize: String,
+    formatTime: value => `time:${value}`
+  }), 'Local, logs, Folder, time:1700000001, Not selected')
+
+  assert.equal(buildSftpRowAriaLabel({
+    file: { name: '..', isDirectory: true, isParent: true },
+    type: 'remote',
+    selected: false,
+    properties: [{ id: 'name' }],
+    translate
+  }), 'Remote, .., Parent directory, Not selected')
+})
+
+test('SFTP grid, header, and rows expose a single delegated accessibility model', () => {
+  const table = readClientSource('list-table-ui.jsx')
+  const header = readClientSource('file-table-header.jsx')
+  const row = readClientSource('file-item.jsx')
+
+  assert.match(table, /role='grid'/)
+  assert.match(table, /aria-rowcount=\{rowCount\}/)
+  assert.match(header, /role='row'/)
+  assert.match(header, /role='columnheader'/)
+  assert.match(row, /role='row'/)
+  assert.match(row, /aria-rowindex=\{rowIndex\}/)
+  assert.match(row, /aria-selected=\{selected\}/)
+  assert.match(row, /aria-label=\{ariaLabel\}/)
+  assert.match(row, /tabIndex=\{isRovingTabStop \? 0 : -1\}/)
+  assert.match(row, /!file\.isEmpty[\s\S]*isRovingTabStop/)
+  assert.match(row, /lastClickedFile[\s\S]*activeSelectedId[\s\S]*id === activeSelectedId/)
+  assert.match(row, /renderEditing[\s\S]*role='row'[\s\S]*role='gridcell'/)
+  assert.match(row, /className='file-bg' aria-hidden='true'/)
+  assert.match(row, /title: file\.name/)
+  assert.match(row, /handleRowKeyDown/)
 })

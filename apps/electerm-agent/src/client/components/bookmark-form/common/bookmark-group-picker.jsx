@@ -12,7 +12,9 @@ export default auto(function BookmarkGroupPicker ({
   value,
   onChange,
   allowCreate = true,
-  className = ''
+  className = '',
+  id,
+  'aria-describedby': ariaDescribedBy
 }) {
   const { store } = window
   const [creating, setCreating] = useState(false)
@@ -38,6 +40,8 @@ export default auto(function BookmarkGroupPicker ({
     <div className={`bookmark-group-picker ${className}`}>
       <Space.Compact className='width-100'>
         <TreeSelect
+          id={id}
+          aria-describedby={ariaDescribedBy}
           value={value}
           onChange={onChange}
           treeData={treeData}

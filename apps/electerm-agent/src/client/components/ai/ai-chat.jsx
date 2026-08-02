@@ -670,11 +670,27 @@ export default function AIChat (props) {
 
   if (!aiConfigured) {
     return (
-      <Flex vertical className='ai-chat-container ai-chat-unconfigured' align='center' justify='center'>
-        <ToolOutlined className='ai-chat-unconfigured-icon' />
-        <strong>{e('shellpilotAiUnconfigured')}</strong>
-        <span>{e('shellpilotAiConfigureHint')}</span>
-        <Button type='primary' onClick={toggleConfig}>
+      <Flex
+        vertical
+        className='ai-chat-container ai-chat-unconfigured'
+        align='center'
+        justify='center'
+      >
+        <div
+          className='ai-chat-unconfigured-status'
+          role='status'
+          aria-labelledby='ai-chat-unconfigured-title'
+          aria-describedby='ai-chat-unconfigured-description'
+        >
+          <ToolOutlined className='ai-chat-unconfigured-icon' />
+          <strong id='ai-chat-unconfigured-title'>{e('shellpilotAiUnconfigured')}</strong>
+          <span id='ai-chat-unconfigured-description'>{e('shellpilotAiConfigureHint')}</span>
+        </div>
+        <Button
+          type='primary'
+          onClick={toggleConfig}
+          aria-label={e('shellpilotAiApiConfiguration')}
+        >
           {e('shellpilotAiApiConfiguration')}
         </Button>
       </Flex>

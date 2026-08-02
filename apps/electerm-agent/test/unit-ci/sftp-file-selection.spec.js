@@ -73,3 +73,24 @@ test('drops selected files that disappeared during refresh', () => {
     ['new-a']
   )
 })
+
+test('SFTP keyboard rows reuse the existing selection methods', async () => {
+  const fs = await import('node:fs')
+  const path = await import('node:path')
+  const source = fs.readFileSync(path.resolve(
+    import.meta.dirname,
+    '../../src/client/components/sftp/file-item.jsx'
+  ), 'utf8')
+  const entry = fs.readFileSync(path.resolve(
+    import.meta.dirname,
+    '../../src/client/components/sftp/sftp-entry.jsx'
+  ), 'utf8')
+
+  assert.match(source, /event\.key === 'ArrowUp'[\s\S]*this\.props\.selectPrev\(type\)/)
+  assert.match(source, /event\.key === 'ArrowDown'[\s\S]*this\.props\.selectNext\(type\)/)
+  assert.match(source, /event\.key === 'Enter'[\s\S]*this\.transferOrEnterDirectory\(event\)/)
+  assert.match(source, /event\.key === ' '[\s\S]*this\.onClick\(event\)/)
+  assert.match(entry, /'selectPrev'/)
+  assert.match(entry, /'selectNext'/)
+  assert.doesNotMatch(source, /keyboardSelectedFiles|rowSelectionState/)
+})

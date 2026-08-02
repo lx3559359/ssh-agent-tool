@@ -87,6 +87,42 @@ test('AI config keeps only address key model and save in the primary section', (
   assert.match(source, /shellpilotAiAdvancedOptions/)
 })
 
+test('AI config presents the essential setup before optional provider guidance', () => {
+  const source = fs.readFileSync(path.resolve(__dirname, '../../src/client/components/ai/ai-config.jsx'), 'utf8')
+  const primaryStart = source.indexOf("className='sp-ai-config-primary-fields'")
+  const providerStart = source.indexOf('{renderRecommendedProviders()}', primaryStart)
+  const primarySource = source.slice(primaryStart, providerStart)
+
+  assert.ok(primaryStart > -1)
+  assert.ok(providerStart > primaryStart)
+  assert.match(primarySource, /aria-labelledby='sp-ai-config-primary-title'/)
+  assert.match(primarySource, /shellpilotAiEssentialSetup/)
+  assert.match(primarySource, /shellpilotAiEssentialSetupDescription/)
+  assert.deepEqual(
+    [...primarySource.matchAll(/className='sp-ai-config-step'/g)].map(match => match.index).length,
+    3
+  )
+  assert.ok(primarySource.indexOf("name='baseURLAI'") < primarySource.indexOf("name='apiKeyAI'"))
+  assert.ok(primarySource.indexOf("name='apiKeyAI'") < primarySource.indexOf("name='modelAI'"))
+})
+
+test('unconfigured AI chat is a compact status with one API configuration action', () => {
+  const source = fs.readFileSync(path.resolve(__dirname, '../../src/client/components/ai/ai-chat.jsx'), 'utf8')
+  const start = source.indexOf("className='ai-chat-container ai-chat-unconfigured'")
+  const end = source.indexOf('const handleKeyPress', start)
+  const emptyState = source.slice(start, end)
+
+  assert.ok(start > -1)
+  assert.match(emptyState, /role='status'/)
+  assert.match(emptyState, /aria-labelledby='ai-chat-unconfigured-title'/)
+  assert.match(emptyState, /aria-describedby='ai-chat-unconfigured-description'/)
+  assert.equal((emptyState.match(/<Button/g) || []).length, 1)
+  assert.ok(emptyState.indexOf("className='ai-chat-unconfigured-status'") < emptyState.indexOf('<Button'))
+  assert.ok(emptyState.indexOf('</div>') < emptyState.indexOf('<Button'))
+  assert.match(emptyState, /onClick=\{toggleConfig\}/)
+  assert.doesNotMatch(source, /autoCollapse/)
+})
+
 test('fresh installs do not present a provider or model before the user configures AI', () => {
   const clientDefaults = fs.readFileSync(
     path.resolve(__dirname, '../../src/client/common/default-setting.js'),

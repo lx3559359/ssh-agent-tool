@@ -4,24 +4,30 @@
   flex-direction column
 
 .ai-chat-unconfigured
-  gap 10px
+  gap 8px
   min-height 0
-  padding 32px 20px
+  padding 24px 20px
   color var(--text-dark)
   text-align center
+  .ant-btn
+    margin-top 4px
+
+.ai-chat-unconfigured-status
+  display flex
+  align-items center
+  flex-direction column
+  gap 8px
   > strong
     color var(--text-light)
     font-size 15px
   > span
-    max-width 280px
+    max-width 260px
     font-size 12px
     line-height 1.65
-  .ant-btn
-    margin-top 4px
 
 .ai-chat-unconfigured-icon
   color var(--primary)
-  font-size 28px
+  font-size 24px
 
 .ai-chat-history
   flex 1 1 auto
@@ -800,12 +806,49 @@
 .sp-ai-config-primary-fields
   max-width 760px
   margin 0 auto
+  counter-reset sp-ai-config-step
+
+.sp-ai-config-primary-head
+  margin-bottom 18px
+  h2
+    margin 0
+    color var(--text-light)
+    font-size 18px
+    line-height 1.4
+  p
+    margin 6px 0 0
+    color var(--text-dark)
+    font-size 12px
+    line-height 1.6
+
+.sp-ai-config-step
+  position relative
+  padding-left 34px
+  counter-increment sp-ai-config-step
+  &::before
+    content counter(sp-ai-config-step)
+    position absolute
+    top 1px
+    left 0
+    display flex
+    align-items center
+    justify-content center
+    width 22px
+    height 22px
+    border 1px solid var(--sp-border-strong)
+    border-radius 50%
+    color var(--primary)
+    background var(--sp-surface-subtle)
+    font-size 12px
+    font-weight 700
 
 .sp-ai-provider-guide
   max-width 900px
-  margin 8px auto 18px
-  padding-top 18px
-  border-top 1px solid var(--sp-border)
+  margin 14px auto 18px
+  padding 14px 16px
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-card)
+  background var(--sp-surface-subtle)
 
 .sp-ai-provider-guide-head
   display flex
@@ -815,7 +858,7 @@
   margin-bottom 8px
 
 .sp-ai-provider-guide-title
-  color var(--text-light)
+  color var(--text)
   font-size 14px
   font-weight 700
 
@@ -882,6 +925,10 @@
   flex 0 0 auto
   a
     display inline-flex
+
+.sp-ai-provider-website
+  align-items center
+  justify-content center
 
 .sp-ai-config-advanced
   margin-top 6px

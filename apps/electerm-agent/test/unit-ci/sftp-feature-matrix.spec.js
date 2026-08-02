@@ -45,3 +45,14 @@ test('SFTP 基础功能矩阵覆盖常规文件客户端流程', () => {
   assertEvidence(fileNameValidation, /sftp file item validates blur names before create or rename operations/, 'safe create rename validation')
   assertEvidence(all, /mkdir|rename|rmFolder|rm|writeFile|readFile/, 'core file operation APIs')
 })
+
+test('SFTP accessibility preserves delegated pointer and transfer actions', () => {
+  const table = readFile('../../src/client/components/sftp/list-table-ui.jsx')
+  const row = readFile('../../src/client/components/sftp/file-item.jsx')
+
+  assertEvidence(table, /onClick: this\.handleClick/, 'delegated row click')
+  assertEvidence(table, /onDoubleClick: this\.handleDoubleClick/, 'delegated row double click')
+  assertEvidence(table, /onDragOver: this\.onDragOver[\s\S]*onDrop: this\.onDrop/, 'delegated drag and drop')
+  assertEvidence(row, /onContextMenu=\{this\.handleContextMenuCapture\}/, 'existing context menu')
+  assertEvidence(row, /transferOrEnterDirectory = async/, 'existing transfer or enter action')
+})
