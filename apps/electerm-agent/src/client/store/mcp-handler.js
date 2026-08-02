@@ -34,6 +34,7 @@ import {
   captureLocalTransferSource,
   verifyLocalTransferSource
 } from '../components/file-transfer/file-transfer-safety.js'
+import { installMcpRequestListener } from './mcp-request-listener.js'
 
 function mcpAbortError (message = 'MCP operation cancelled') {
   const error = new Error(message)
@@ -101,12 +102,13 @@ function abortableMcpOperation (operation, signal, message) {
 export default Store => {
   // Initialize MCP handler - called when MCP widget is started
   Store.prototype.initMcpHandler = function () {
-    const { ipcOnEvent } = window.pre
-    // Listen for MCP requests from main process
-    ipcOnEvent('mcp-request', (event, request) => {
-      const { requestId, action, data } = request
-      if (action === 'tool-call') {
-        window.store.handleMcpToolCall(requestId, data.toolName, data.args)
+    const { ipcOnEvent, ipcOffEvent } = window.pre
+    this.mcpRequestListener = installMcpRequestListener({
+      ipcOnEvent,
+      ipcOffEvent,
+      previousListener: this.mcpRequestListener,
+      handleToolCall: (requestId, toolName, args) => {
+        this.handleMcpToolCall(requestId, toolName, args)
       }
     })
   }

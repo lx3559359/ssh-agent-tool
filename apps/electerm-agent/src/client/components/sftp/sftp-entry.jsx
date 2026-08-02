@@ -62,6 +62,11 @@ import {
   requestAiFileChangeReview
 } from '../ai/ai-file-change-review-modal.jsx'
 import { reconcileSelectedFileIds } from './file-selection.js'
+import {
+  disposeSftpEntryScheduling,
+  replaceSftpEntryTimer,
+  shouldRetryUnexpectedSftpPacket
+} from './sftp-entry-lifecycle.js'
 import { createTransactionRunner } from '../../common/safety-transactions/transaction-runner.js'
 import { buildSideEffectSafetyRequest } from '../../common/safety-transactions/side-effect-model.js'
 import { assertSameSessionEndpoint } from '../../common/safety-transactions/endpoint-guard.js'
@@ -118,7 +123,7 @@ export default class Sftp extends Component {
     if (this.props.isFtp) {
       this.initFtpData()
     }
-    this.timer = setTimeout(() => {
+    replaceSftpEntryTimer(this, 'timer', () => {
       this.setState({
         ready: true
       })
@@ -171,10 +176,7 @@ export default class Sftp extends Component {
     refs.remove(this.id)
     this.sftp && this.sftp.destroy()
     this.sftp = null
-    clearTimeout(this.timer4)
-    this.timer4 = null
-    clearTimeout(this.timer5)
-    this.timer5 = null
+    disposeSftpEntryScheduling(this)
     // Clear sort cache to prevent memory leaks
     this._sortCache?.clear()
     this._lastSortArgs = null
@@ -1266,7 +1268,7 @@ export default class Sftp extends Component {
 
   onInputBlur = (type) => {
     this.inputFocus = false
-    this.timer4 = setTimeout(() => {
+    replaceSftpEntryTimer(this, 'timer4', () => {
       this.setState({
         [type + 'InputFocus']: false
       })
@@ -1495,17 +1497,19 @@ export default class Sftp extends Component {
         })
         const r = await sftp.connect(opts)
           .catch(e => {
-            if (
-              e &&
-              e.message.includes(unexpectedPacketErrorDesc) && this.retryCount
-            ) {
-              this.retryHandler = setTimeout(
+            if (shouldRetryUnexpectedSftpPacket(e, {
+              expectedMessage: unexpectedPacketErrorDesc,
+              retryCount: this.retryCount
+            })) {
+              this.retryCount++
+              replaceSftpEntryTimer(
+                this,
+                'retryHandler',
                 () => this.initData(
                   true
                 ),
                 sftpRetryInterval
               )
-              this.retryCount++
             } else {
               throw e
             }
@@ -1522,6 +1526,7 @@ export default class Sftp extends Component {
           })
         } else {
           this.sftp = sftp
+          this.retryCount = 0
         }
       }
 
@@ -1575,7 +1580,7 @@ export default class Sftp extends Component {
           sftpCreated: true
         })
       })
-      this.timer5 = setTimeout(() => {
+      replaceSftpEntryTimer(this, 'timer5', () => {
         if (this.type !== 'ftp') {
           this.updateRemoteList(remote, remotePath, sftp)
         }
