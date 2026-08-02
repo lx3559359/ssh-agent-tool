@@ -34,6 +34,18 @@ export function nextSftpSelectionId (
   return fileList[nextIndex]?.id
 }
 
+export function preserveSftpDraftItems (
+  previousFiles = [],
+  refreshedFiles = []
+) {
+  const drafts = previousFiles.filter(file => (
+    file?.isEditing === true && !file.id
+  ))
+  return drafts.length
+    ? [...drafts, ...refreshedFiles]
+    : refreshedFiles
+}
+
 export function reconcileSelectedFileIds (
   previousFiles = [],
   nextFiles = [],

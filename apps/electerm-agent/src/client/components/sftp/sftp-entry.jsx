@@ -62,6 +62,7 @@ import {
 } from '../ai/ai-file-change-review-modal.jsx'
 import {
   nextSftpSelectionId,
+  preserveSftpDraftItems,
   reconcileSelectedFileIds
 } from './file-selection.js'
 import {
@@ -1536,16 +1537,24 @@ export default class Sftp extends Component {
         ]).slice(0, maxSftpHistory)
       }
       this.setState(prevState => {
+        const nextRemote = preserveSftpDraftItems(prevState.remote, remote)
+        const nextUpdate = nextRemote === remote
+          ? update
+          : {
+              ...update,
+              remote: nextRemote,
+              remoteFileTree: this.buildTree(nextRemote, typeMap.remote)
+            }
         return prevState.selectedType === typeMap.remote
           ? {
-              ...update,
+              ...nextUpdate,
               selectedFiles: reconcileSelectedFileIds(
                 prevState.remote,
-                remote,
+                nextRemote,
                 prevState.selectedFiles
               )
             }
-          : update
+          : nextUpdate
       }, () => {
         if (this.type !== 'ftp') {
           this.updateRemoteList(remote, remotePath, sftp)
@@ -1630,16 +1639,24 @@ export default class Sftp extends Component {
       remoteFileTree: this.buildTree(remote, typeMap.remote)
     }
     this.setState(prevState => {
+      const nextRemote = preserveSftpDraftItems(prevState.remote, remote)
+      const nextUpdate = nextRemote === remote
+        ? update
+        : {
+            ...update,
+            remote: nextRemote,
+            remoteFileTree: this.buildTree(nextRemote, typeMap.remote)
+          }
       return prevState.selectedType === typeMap.remote
         ? {
-            ...update,
+            ...nextUpdate,
             selectedFiles: reconcileSelectedFileIds(
               prevState.remote,
-              remote,
+              nextRemote,
               prevState.selectedFiles
             )
           }
-        : update
+        : nextUpdate
     })
   }
 
@@ -1695,16 +1712,24 @@ export default class Sftp extends Component {
         ]).slice(0, maxSftpHistory)
       }
       this.setState(prevState => {
+        const nextLocal = preserveSftpDraftItems(prevState.local, local)
+        const nextUpdate = nextLocal === local
+          ? update
+          : {
+              ...update,
+              local: nextLocal,
+              localFileTree: this.buildTree(nextLocal, typeMap.local)
+            }
         return prevState.selectedType === typeMap.local
           ? {
-              ...update,
+              ...nextUpdate,
               selectedFiles: reconcileSelectedFileIds(
                 prevState.local,
-                local,
+                nextLocal,
                 prevState.selectedFiles
               )
             }
-          : update
+          : nextUpdate
       })
     } catch (e) {
       const update = {

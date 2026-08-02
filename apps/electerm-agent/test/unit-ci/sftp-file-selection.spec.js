@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   nextSftpSelectionId,
+  preserveSftpDraftItems,
   reconcileSelectedFileIds
 } from '../../src/client/components/sftp/file-selection.js'
 
@@ -72,6 +73,34 @@ test('drops selected files that disappeared during refresh', () => {
       new Set(['old-a', 'old-b'])
     )],
     ['new-a']
+  )
+})
+
+test('keeps an unfinished new-item draft across a background refresh', () => {
+  const draft = {
+    name: '',
+    nameTemp: 'release-notes',
+    isDirectory: true,
+    isEditing: true,
+    type: 'remote'
+  }
+  const refreshed = [remoteFile('new-a', 'a.log')]
+
+  assert.deepEqual(
+    preserveSftpDraftItems([draft, remoteFile('old-a', 'a.log')], refreshed),
+    [draft, ...refreshed]
+  )
+})
+
+test('does not retain committed or cancelled rows during refresh', () => {
+  const refreshed = [remoteFile('new-a', 'a.log')]
+
+  assert.equal(
+    preserveSftpDraftItems([
+      { ...remoteFile('old-a', 'a.log'), isEditing: true },
+      { name: '', isEditing: false, type: 'remote' }
+    ], refreshed),
+    refreshed
   )
 })
 

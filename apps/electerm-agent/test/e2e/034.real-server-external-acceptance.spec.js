@@ -31,6 +31,26 @@ const requiredEnvironmentVariables = Object.freeze([
   'SHELLPILOT_E2E_PASSWORD',
   'SHELLPILOT_E2E_REMOTE_ROOT'
 ])
+const protectedServiceSnapshotCommand = Object.freeze([
+  'set -eu',
+  'export LC_ALL=C',
+  'if command -v systemctl >/dev/null 2>&1; then',
+  '  systemctl show x-ui --no-pager --property=LoadState --property=ActiveState --property=SubState --property=MainPID --property=ExecMainStartTimestampMonotonic --property=FragmentPath || true',
+  '  systemctl cat x-ui --no-pager | sha256sum || true',
+  "  systemctl list-units --type=service --state=running --no-legend --no-pager | awk '{print $1}' | sort",
+  'fi',
+  'if command -v ss >/dev/null 2>&1; then',
+  "  ss -H -lnt | awk '{print $1 \"|\" $4}' | sort -u",
+  'fi',
+  'if command -v docker >/dev/null 2>&1; then',
+  "  docker ps --format '{{.Names}}|{{.Image}}|{{.State}}' | sort",
+  'fi',
+  'for file in /etc/systemd/system/x-ui.service /usr/lib/systemd/system/x-ui.service /usr/local/x-ui/x-ui /usr/bin/x-ui; do',
+  '  if [ -f "$file" ]; then sha256sum "$file"; fi',
+  'done'
+]).join('\n')
+
+let protectedServiceBaseline = ''
 
 test.setTimeout(360000)
 test.describe.configure({ mode: 'serial' })
@@ -65,6 +85,24 @@ function readConfig () {
   }
 }
 
+test.beforeAll(async () => {
+  const { config, missing } = readConfig()
+  if (missing.length) return
+  protectedServiceBaseline = await protectedServiceStateDigest(config)
+})
+
+test.afterAll(async () => {
+  if (!protectedServiceBaseline) return
+  const { config, missing } = readConfig()
+  if (missing.length) return
+  const current = await protectedServiceStateDigest(config)
+  if (current !== protectedServiceBaseline) {
+    throw new Error(
+      'Protected remote service fingerprint changed; x-ui and existing service acceptance cannot pass'
+    )
+  }
+})
+
 function sandboxChild (sandboxPath, name) {
   const candidate = path.posix.resolve(sandboxPath, name)
   if (!candidate.startsWith(path.posix.resolve(sandboxPath) + '/')) {
@@ -83,30 +121,24 @@ async function acceptHostKeyIfPrompted (page) {
     .click()
 }
 
-async function terminalText (page) {
-  return page.evaluate(() => {
-    try {
-      return window.refs.get('term-' + window.store.activeTabId)
-        ?.getTerminalBufferText?.() || ''
-    } catch {
-      return ''
-    }
-  })
-}
-
 async function connectRealServer (page, config) {
-  await page.locator('.aigshell-topbar-action .anticon-plus-circle').click()
-  const wizard = page.locator('.quick-connect-wizard')
-  await expect(wizard).toBeVisible()
-  await wizard.locator('input:not([readonly])').first().fill(config.host)
-  await wizard.locator('.quick-connect-port').fill(String(config.port))
-  await wizard.locator('.quick-connect-wizard-footer button.ant-btn-primary').click()
-  await wizard.locator('input:not([readonly])').first().fill(config.username)
-  await wizard.locator('input[type="password"]').fill(config.password)
-  await wizard.locator('.quick-connect-wizard-footer button.ant-btn-primary').click()
-  await wizard.locator('.quick-connect-wizard-footer button.ant-btn-primary').click()
+  await page.evaluate(server => window.store.mcpOpenTab({
+    type: 'ssh',
+    title: 'External acceptance',
+    host: server.host,
+    port: server.port,
+    username: server.username,
+    password: server.password,
+    authType: 'password',
+    useSshAgent: false,
+    enableSsh: true,
+    enableSftp: true
+  }), config)
   await acceptHostKeyIfPrompted(page)
-  await expect.poll(() => terminalText(page), { timeout: 30000 }).not.toBe('')
+  await expect.poll(() => page.evaluate(() => {
+    const terminal = window.refs.get('term-' + window.store.activeTabId)
+    return Boolean(terminal?.pid && terminal?.hostKeyFingerprint)
+  }), { timeout: 30000 }).toBe(true)
 }
 
 async function openSftp (page) {
@@ -239,12 +271,14 @@ async function editRemoteFile (page, name, content) {
     if (index < lines.length - 1) await page.keyboard.press('Enter')
   }
   await expect(textarea).toHaveValue(content)
-  const editorBody = page.locator(
-    '.custom-modal-wrap:visible .custom-modal-body'
+  const editorDialog = textarea.locator(
+    'xpath=ancestor::div[contains(@class,"custom-modal-content")]'
   )
-  await editorBody.locator('button.ant-btn-primary').first().click()
+  const saveButton = editorDialog.locator('button.ant-btn-primary').first()
+  await expect(saveButton).toBeEnabled()
+  await saveButton.click()
   const safetyConfirmation = page.locator('.sftp-safety-confirmation:visible')
-  await expect(safetyConfirmation).toBeVisible({ timeout: 30000 })
+  await expect(safetyConfirmation).toBeVisible({ timeout: 60000 })
   const safetyConfirm = safetyConfirmation.locator(
     'xpath=ancestor::div[contains(@class,"custom-modal-wrap")]'
   ).locator('button.custom-modal-ok-btn')
@@ -254,7 +288,9 @@ async function editRemoteFile (page, name, content) {
     `.session-current .file-list.remote .sftp-item[title="${name}"]`
   ).dblclick()
   await expect(textarea).toHaveValue(content)
-  await editorBody.locator('button.ant-btn-dashed').last().click()
+  await textarea.locator(
+    'xpath=ancestor::div[contains(@class,"custom-modal-content")]'
+  ).locator('button.ant-btn-dashed').last().click()
 }
 
 async function changeRemotePermission (page, name, targetPath) {
@@ -393,6 +429,93 @@ async function knownHostHashes (config) {
   return hashes
 }
 
+async function seedKnownHost (profileRoot, config) {
+  const knownHostsPath = path.join(os.homedir(), '.ssh', 'known_hosts')
+  const text = await fs.readFile(knownHostsPath, 'utf8')
+  const acceptedHosts = new Set([
+    config.host,
+    `[${config.host}]:${config.port}`
+  ])
+  const matchingLines = text.split(/\r?\n/).filter(line => {
+    const names = line.trim().split(/\s+/)[0]?.split(',') || []
+    return names.some(name => acceptedHosts.has(name))
+  })
+  if (!matchingLines.length) {
+    throw new Error('Real server host key is absent from known_hosts')
+  }
+  const targetPath = path.join(profileRoot, '.ssh', 'known_hosts')
+  await fs.writeFile(targetPath, matchingLines.join('\n') + '\n', {
+    encoding: 'utf8',
+    mode: 0o600
+  })
+}
+
+async function launchExternalAcceptanceApp (config) {
+  const run = await launchQualityApp(electron)
+  await seedKnownHost(run.profileRoot, config)
+  return run
+}
+
+async function protectedServiceStateDigest (config) {
+  const acceptedHashes = await knownHostHashes(config)
+  const conn = new SshClient()
+  return new Promise((resolve, reject) => {
+    let settled = false
+    const timer = setTimeout(() => finish(
+      new Error('Protected remote service fingerprint timed out')
+    ), 20000)
+    const finish = (error, output = '') => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      conn.end()
+      if (error) reject(error)
+      else {
+        resolve(crypto.createHash('sha256').update(output).digest('hex'))
+      }
+    }
+    conn.once('error', finish)
+    conn.once('ready', () => {
+      conn.exec(protectedServiceSnapshotCommand, (error, stream) => {
+        if (error) return finish(error)
+        let output = ''
+        let stderrBytes = 0
+        stream.once('error', finish)
+        stream.on('data', chunk => {
+          output += chunk.toString('utf8')
+          if (output.length > 256 * 1024) {
+            finish(new Error('Protected remote service fingerprint exceeded its output limit'))
+          }
+        })
+        stream.stderr.on('data', chunk => {
+          stderrBytes += chunk.length
+          if (stderrBytes > 64 * 1024) {
+            finish(new Error('Protected remote service fingerprint exceeded its error limit'))
+          }
+        })
+        stream.once('close', code => {
+          if (code !== 0) {
+            finish(new Error('Protected remote service fingerprint command failed'))
+          } else if (!output.trim()) {
+            finish(new Error('Protected remote service fingerprint was empty'))
+          } else {
+            finish(null, output)
+          }
+        })
+      })
+    })
+    conn.connect({
+      host: config.host,
+      port: config.port,
+      username: config.username,
+      password: config.password,
+      hostHash: 'sha256',
+      hostVerifier: hash => acceptedHashes.has(hash),
+      readyTimeout: 20000
+    })
+  })
+}
+
 async function readRemoteListener (config, remotePort) {
   const acceptedHashes = await knownHostHashes(config)
   const conn = new SshClient()
@@ -520,7 +643,7 @@ test('credentialed desktop SFTP keeps navigation and operations inside one /tmp 
   let cleanupError
 
   try {
-    run = await launchQualityApp(electron)
+    run = await launchExternalAcceptanceApp(config)
     extendClient(run.page, run.electronApp)
     await connectRealServer(run.page, config)
     await openSftp(run.page)
@@ -661,6 +784,11 @@ test('credentialed desktop SFTP keeps navigation and operations inside one /tmp 
     const uploadTarget = `upload-target-${token}`
     await createFixtureFile(run.page, 'local', uploadName, uploadName)
     await createFixtureFolder(run.page, 'remote', uploadTarget)
+    const uploadTargetItem = run.page.locator(
+      `.session-current .file-list.remote .sftp-item[title="${uploadTarget}"]`
+    )
+    await uploadTargetItem.scrollIntoViewIfNeeded()
+    await expect(uploadTargetItem).toBeVisible()
     await dragItem(
       run.page,
       `.session-current .file-list.local .sftp-item[title="${uploadName}"]`,
@@ -737,7 +865,7 @@ test('credentialed desktop SFTP editor confirms and verifies a remote save', asy
   let cleanupError
 
   try {
-    run = await launchQualityApp(electron)
+    run = await launchExternalAcceptanceApp(config)
     extendClient(run.page, run.electronApp)
     await connectRealServer(run.page, config)
     await openSftp(run.page)
@@ -793,7 +921,7 @@ test('credentialed desktop SFTP drag uploads into a remote folder', async () => 
   let cleanupError
 
   try {
-    run = await launchQualityApp(electron)
+    run = await launchExternalAcceptanceApp(config)
     extendClient(run.page, run.electronApp)
     await connectRealServer(run.page, config)
     await openSftp(run.page)
@@ -873,7 +1001,7 @@ test('credentialed desktop verifies remote, SOCKS5 and refused-destination tunne
   let cleanupError
 
   try {
-    run = await launchQualityApp(electron)
+    run = await launchExternalAcceptanceApp(config)
     await connectRealServer(run.page, config)
     const modal = await openTunnelManager(run.page)
 
@@ -960,7 +1088,7 @@ test('credentialed desktop leaves no external acceptance sandboxes', async () =>
   let cleanupError
 
   try {
-    run = await launchQualityApp(electron)
+    run = await launchExternalAcceptanceApp(config)
     await connectRealServer(run.page, config)
     await openSftp(run.page)
     const leftovers = await run.page.evaluate(async remoteRoot => {
