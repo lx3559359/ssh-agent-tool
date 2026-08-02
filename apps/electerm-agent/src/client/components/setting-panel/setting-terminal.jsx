@@ -226,6 +226,7 @@ export default class SettingTerminal extends Component {
       },
       defaultValue,
       title,
+      extraDesc: options.extraDesc,
       width,
       step,
       cls

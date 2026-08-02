@@ -1,27 +1,15 @@
-/**
- * render markdown text proper
- */
+import ReactMarkdown from 'react-markdown'
+import Link from './external-link'
+import './markdown.styl'
 
-import classnames from 'classnames'
+const markdownComponents = {
+  a: ({ href = '', children }) => <Link to={href}>{children}</Link>
+}
 
-export default ({ text = '' }) => {
-  const arr = text.split(/[\n\r]+/g)
-  function render (txt, i) {
-    const empty = txt.trim().length
-    const bold = !txt.startsWith('- ') || txt.startsWith('#')
-    const cls = classnames({
-      bold,
-      mg1y: empty || bold
-    })
-    return (
-      <div className={cls} key={'upgrade-info-' + i}>{txt}</div>
-    )
-  }
+export default function Markdown ({ text = '' }) {
   return (
     <div className='markdown-wrap'>
-      {
-        arr.map(render)
-      }
+      <ReactMarkdown components={markdownComponents}>{text}</ReactMarkdown>
     </div>
   )
 }

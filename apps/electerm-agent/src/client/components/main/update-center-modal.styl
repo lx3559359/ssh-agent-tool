@@ -2,6 +2,7 @@
   color var(--text)
 
 .update-center-summary
+  margin 0
   display grid
   grid-template-columns repeat(auto-fit, minmax(150px, 1fr))
   gap 12px 20px
@@ -12,11 +13,14 @@
     display grid
     gap 4px
 
-  span
+  dt
     color var(--text-light)
     font-size 12px
 
-  b
+  dd
+    margin 0
+    color var(--sp-text)
+    font-weight 650
     overflow-wrap anywhere
 
 .update-center-message
@@ -26,7 +30,10 @@
   padding-top 16px
 
 .update-center-section-title
+  margin-top 0
   margin-bottom 8px
+  color var(--sp-text)
+  font-size 14px
   font-weight 600
 
 .update-center-actions

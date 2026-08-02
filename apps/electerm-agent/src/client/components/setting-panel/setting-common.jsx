@@ -190,6 +190,8 @@ export default class SettingCommon extends Component {
       value = options.valueParser(value)
     }
     const defaultValue = defaultSettings[name]
+    const helpId = `setting-number-${name}-help`
+    const description = [title, options.extraDesc].filter(Boolean).join(' · ')
     const {
       step = 1,
       min,
@@ -208,7 +210,7 @@ export default class SettingCommon extends Component {
       placeholder: defaultValue
     }
     if (title) {
-      opts.formatter = v => `${title}${options.extraDesc || ''}: ${v}`
+      opts.formatter = v => `${description}: ${v}`
       opts.parser = (v) => {
         let vv = isNumber(v)
           ? v
@@ -223,7 +225,15 @@ export default class SettingCommon extends Component {
       <div className={`sp-setting-field pd2b ${cls || ''}`}>
         <InputNumberConfirm
           {...opts}
+          aria-describedby={helpId}
+          aria-label={title}
+          aria-valuemax={max}
+          aria-valuemin={min}
+          aria-valuenow={value}
         />
+        <small className='setting-number-help' id={helpId}>
+          {description}
+        </small>
       </div>
     )
   }
@@ -623,7 +633,8 @@ export default class SettingCommon extends Component {
             this.renderNumber('sshReadyTimeout', {
               step: 200,
               min: 100,
-              cls: 'timeout-desc'
+              cls: 'timeout-desc',
+              extraDesc: e('shellpilotMillisecondsUnit')
             }, e('timeoutDesc'))
           }
           {
@@ -632,7 +643,7 @@ export default class SettingCommon extends Component {
               min: 0,
               max: 20000000,
               cls: 'keepalive-interval-desc',
-              extraDesc: '(ms)'
+              extraDesc: e('shellpilotMillisecondsUnit')
             }, e('keepaliveIntervalDesc'))
           }
         </SettingSection>

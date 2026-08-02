@@ -27,12 +27,38 @@
   overflow-wrap break-word
   word-break normal
   text-overflow clip
+.item-list-option
+  min-width 0
+  flex 1
+  display flex
+  padding 0
+  color inherit
+  text-align left
+  background transparent
+  border 0
+  cursor pointer
+
+.item-list-option:focus-visible
+  outline 2px solid var(--sp-primary)
+  outline-offset -2px
+
+.list-item-action
+  padding 0
+  color inherit
+  background transparent
+  border 0
+  cursor pointer
+
+.list-item-action:focus-visible
+  display block
+  outline 2px solid var(--sp-primary)
+  outline-offset -2px
+
 .item-list-unit
   display flex
   min-width 0
   position relative
   margin-bottom 1px
-  cursor pointer
   line-height 1.8
   border-bottom 1px solid var(--sp-border)
   box-shadow none
@@ -46,6 +72,15 @@
     color var(--sp-text)
     outline 2px solid var(--sp-primary)
     outline-offset -2px
+    .list-item-title
+      padding-right 84px
+    .list-item-apply
+    .list-item-edit
+    .list-item-remove
+    .list-item-bookmark
+    .list-item-duplicate
+    .list-item-autorun
+      display block
   &:hover
     background var(--sp-primary-soft)
     color var(--sp-text)

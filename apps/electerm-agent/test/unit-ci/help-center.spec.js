@@ -62,6 +62,20 @@ test('top bar exposes an in-client Chinese help center', () => {
   assert.match(help, /崩溃恢复/)
 })
 
+test('help center keeps its chapter flow while exposing a readable heading hierarchy', () => {
+  const source = read('src/client/components/main/help-center-modal.jsx')
+  const styles = read('src/client/components/main/help-center-modal.styl')
+
+  assert.match(source, /defaultActiveKey=\{\['start'\]\}/)
+  assert.match(source, /label:\s*<h2/)
+  assert.match(source, /<h1 className='shellpilot-help-heading-title'/)
+  assert.match(source, /<aside[\s\S]*shellpilot-help-safety/)
+  assert.doesNotMatch(source, /<(?:Input|Anchor)\b/)
+  assert.doesNotMatch(source, /help-(?:search|toc)/)
+  assert.match(styles, /\.shellpilot-help-heading-title[\s\S]*font-size/)
+  assert.match(styles, /\.shellpilot-help-section-title[\s\S]*font-size/)
+})
+
 test('repository includes an offline Chinese user guide', () => {
   const guide = read('docs/USER_GUIDE_ZH.md')
 

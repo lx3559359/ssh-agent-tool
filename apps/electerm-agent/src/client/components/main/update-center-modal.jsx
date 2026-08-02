@@ -56,18 +56,19 @@ export default auto(function UpdateCenterModal ({ open, onClose }) {
       width='min(720px, calc(100vw - 32px))'
       wrapClassName='update-center-modal'
     >
-      <div className='update-center-summary'>
-        <div><span>{e('shellpilotUpdateCurrentVersion')}</span><b>v{packInfo.version}</b></div>
-        <div><span>{e('shellpilotUpdateLatestVersion')}</span><b>{latestVersion}</b></div>
-        <div><span>{e('shellpilotUpdateStatus')}</span><b>{getStatusText(info)}</b></div>
-        <div><span>{e('shellpilotUpdateLastChecked')}</span><b>{lastCheckedAt}</b></div>
-      </div>
+      <dl className='update-center-summary'>
+        <div><dt>{e('shellpilotUpdateCurrentVersion')}</dt><dd>v{packInfo.version}</dd></div>
+        <div><dt>{e('shellpilotUpdateLatestVersion')}</dt><dd>{latestVersion}</dd></div>
+        <div><dt>{e('shellpilotUpdateStatus')}</dt><dd aria-live='polite' role='status'>{getStatusText(info)}</dd></div>
+        <div><dt>{e('shellpilotUpdateLastChecked')}</dt><dd>{lastCheckedAt}</dd></div>
+      </dl>
       {info.updateMessage
         ? <p className='update-center-message'>{info.updateMessage}</p>
         : null}
       <div className='update-center-source'>
         <span>{e('shellpilotUpdateSource')}</span>
         <Select
+          aria-label={e('shellpilotUpdateSource')}
           value={updateSource}
           onChange={handleUpdateSourceChange}
           options={[
@@ -79,7 +80,7 @@ export default auto(function UpdateCenterModal ({ open, onClose }) {
         <span className='color-grey'>{e('shellpilotUpdateSourceHint')}</span>
       </div>
       <div className='update-center-section'>
-        <div className='update-center-section-title'>{e('shellpilotUpdateDownloadProgress')}</div>
+        <h2 className='update-center-section-title'>{e('shellpilotUpdateDownloadProgress')}</h2>
         <Progress percent={percent} status={info.error ? 'exception' : undefined} />
       </div>
       <div className='update-center-actions'>
@@ -99,7 +100,7 @@ export default auto(function UpdateCenterModal ({ open, onClose }) {
           : null}
       </div>
       <div className='update-center-section update-center-changelog'>
-        <div className='update-center-section-title'>{e('shellpilotUpdateChangelog')}</div>
+        <h2 className='update-center-section-title'>{e('shellpilotUpdateChangelog')}</h2>
         {info.releaseInfo?.body
           ? <Markdown text={info.releaseInfo.body} />
           : <p>{e('shellpilotUpdateNoChangelog')}</p>}
