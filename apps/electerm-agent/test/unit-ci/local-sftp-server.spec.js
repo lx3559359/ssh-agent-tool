@@ -36,6 +36,19 @@ function openShell (client) {
   })
 }
 
+function runExec (client, command) {
+  return new Promise((resolve, reject) => {
+    client.exec(command, (error, stream) => {
+      if (error) return reject(error)
+      let stdout = ''
+      let stderr = ''
+      stream.on('data', data => { stdout += data.toString('utf8') })
+      stream.stderr.on('data', data => { stderr += data.toString('utf8') })
+      stream.once('close', code => resolve({ stdout, stderr, code }))
+    })
+  })
+}
+
 async function waitFor (predicate, timeout = 5000) {
   const deadline = Date.now() + timeout
   while (Date.now() < deadline) {
@@ -112,6 +125,26 @@ test('local SSH fixture records shell commands against stable connection session
     )
   } finally {
     for (const client of clients) client.end()
+    await server.close().catch(() => {})
+  }
+})
+
+test('local SSH fixture accepts deterministic custom exec results', async () => {
+  const server = await startLocalSshServer({
+    execResults: {
+      'shellpilot status probe': ['probe-ok\n', 0]
+    }
+  })
+  let client
+
+  try {
+    client = await connectClient(server)
+    assert.deepEqual(
+      await runExec(client, 'shellpilot status probe'),
+      { stdout: 'probe-ok\n', stderr: '', code: 0 }
+    )
+  } finally {
+    client?.end()
     await server.close().catch(() => {})
   }
 })

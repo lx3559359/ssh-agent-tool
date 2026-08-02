@@ -27,6 +27,23 @@ test('bookmark toolbar exposes new bookmark new group edit import and export act
   assert.match(source, /onSshConfigs/)
 })
 
+test('bookmark toolbar icon-only actions expose localized accessible names', () => {
+  const source = readClientSource('components/tree-list/bookmark-toolbar.jsx')
+
+  assert.match(source, /<Button[\s\S]*?onClick=\{onNewBookmark\}[\s\S]*?aria-label=\{titleNew\}[\s\S]*?title=\{titleNew\}/)
+  assert.match(source, /<Button[\s\S]*?onClick=\{onNewBookmarkGroup\}[\s\S]*?aria-label=\{titleEdit\}[\s\S]*?title=\{titleEdit\}/)
+  assert.match(source, /<Button[\s\S]*?onClick=\{onSshConfigs\}[\s\S]*?aria-label=\{e\('loadSshConfigs'\)\}[\s\S]*?title=\{e\('loadSshConfigs'\)\}/)
+})
+
+test('sidebar bookmark create and edit actions open their intended workflows', () => {
+  const selectSource = readClientSource('components/sidebar/bookmark-select.jsx')
+  const panelSource = readClientSource('components/sidebar/sidebar-panel.jsx')
+
+  assert.match(selectSource, /item\.id\.startsWith\(newBookmarkIdPrefix\)[\s\S]*?store\.openBookmarkEdit\(item\)/)
+  assert.match(panelSource, /const handleEditBookmarks = \(\) => \{[\s\S]*?store\.bookmarkSelectMode = true[\s\S]*?\}/)
+  assert.match(panelSource, /<EditOutlined[\s\S]*?onClick=\{handleEditBookmarks\}/)
+})
+
 test('bookmark form renders new and edit server modes', () => {
   const source = readClientSource('components/bookmark-form/index.jsx')
 

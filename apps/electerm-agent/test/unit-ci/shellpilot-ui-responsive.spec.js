@@ -50,6 +50,19 @@ function assertRuleSelectors (rule, expectedSelectors) {
   }
 }
 
+test('Ant Design Space uses the current orientation property', () => {
+  for (const relativePath of [
+    'components/ai/ai-config.jsx',
+    'components/tabs/workspace-save-modal.jsx'
+  ]) {
+    assert.doesNotMatch(
+      readClient(relativePath),
+      /<Space\b[^>]*\bdirection=/,
+      relativePath
+    )
+  }
+})
+
 test('ShellPilot top bar and AI panel use theme variables in day and night modes', () => {
   const topbar = readClient('components/main/aigshell-topbar.styl')
   const panel = readClient('components/side-panel-r/right-side-panel.styl')

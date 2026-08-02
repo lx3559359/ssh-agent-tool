@@ -393,7 +393,7 @@ async function startLocalSshServer (options = {}) {
           const stream = acceptExec()
           const result = /\$SHELL/.test(info.command)
             ? ['/bin/bash\n', 0]
-            : execResults[info.command]
+            : options.execResults?.[info.command] || execResults[info.command]
           const delayMs = Math.max(
             0,
             Number(options.execDelayMsByCommand?.[info.command]) || 0

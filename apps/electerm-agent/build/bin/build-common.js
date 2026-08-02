@@ -8,15 +8,22 @@ const { writeFileSync, readFileSync } = require('fs')
 const replace = require('replace-in-file')
 const { rm, mv } = require('shelljs')
 
+function getBuildEnvironment (baseEnv = process.env) {
+  return {
+    ...baseEnv,
+    DEBUG: 'electron-builder:*',
+    ELECTRON_BUILDER_CACHE: baseEnv.ELECTRON_BUILDER_CACHE || '',
+    PYTHONUTF8: baseEnv.PYTHONUTF8 || '1'
+  }
+}
+
+exports.getBuildEnvironment = getBuildEnvironment
+
 exports.run = function (cmd) {
   return new Promise((resolve, reject) => {
     console.log('Executing command:', cmd)
     const childProcess = exec(cmd, {
-      env: {
-        ...process.env,
-        DEBUG: 'electron-builder:*',
-        ELECTRON_BUILDER_CACHE: process.env.ELECTRON_BUILDER_CACHE || ''
-      },
+      env: getBuildEnvironment(),
       maxBuffer: 1024 * 1024 * 50 // 50MB buffer for large debug output
     }, (err, stdout, stderr) => {
       // Always log stdout and stderr regardless of success/failure

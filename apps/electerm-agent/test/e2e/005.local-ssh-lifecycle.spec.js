@@ -28,13 +28,6 @@ async function focusActiveTerminal (client) {
   })
 }
 
-async function getFormState (form) {
-  return {
-    visible: await form.isVisible().catch(() => false),
-    errors: await form.locator('.ant-form-item-explain-error').allTextContents()
-  }
-}
-
 test('SSH UI connects to a local server, runs a command and passes Ctrl+C', async () => {
   const sshServer = await startLocalSshServer()
   let electronApp
@@ -44,31 +37,36 @@ test('SSH UI connects to a local server, runs a command and passes Ctrl+C', asyn
     electronApp = launched.electronApp
     const client = launched.client
 
-    await client.locator('.aigshell-topbar-action .anticon-plus-circle').click()
-    const form = client.locator('.setting-wrap #ssh-form')
-    await expect(form).toBeVisible()
-    await form.locator('#ssh-form_title').fill('ShellPilot Local SSH E2E')
-    await form.locator('#ssh-form_host').fill(sshServer.host)
-    await form.locator('#ssh-form_port').fill(String(sshServer.port))
-    await form.locator('#ssh-form_username').fill(sshServer.username)
-    await form.locator('#ssh-form_password').fill(sshServer.password)
-    await client.getByTestId('bookmark-save-connect').click()
-    await expect.poll(() => getFormState(form), { timeout: 10000 }).toMatchObject({
-      visible: false,
-      errors: []
-    })
+    await client.locator('.aigshell-topbar-action[data-action-key="new"]').click()
+    const wizard = client.locator('.quick-connect-wizard')
+    await expect(wizard).toBeVisible()
+    await wizard.locator('input:not([readonly])').first().fill(sshServer.host)
+    await wizard.locator('.quick-connect-port').fill(String(sshServer.port))
+    await wizard.locator('.quick-connect-wizard-footer button.ant-btn-primary').click()
+    await wizard.locator('input:not([readonly])').first().fill(sshServer.username)
+    await wizard.locator('input[type="password"]').fill(sshServer.password)
+    await wizard.locator('.quick-connect-wizard-footer button.ant-btn-primary').click()
+    await wizard.locator('.quick-connect-wizard-footer button.ant-btn-primary').click()
     await acceptHostKey(client)
     await expect.poll(() => sshServer.state.shellCount, { timeout: 20000 }).toBeGreaterThan(0)
 
     const terminal = client.locator('.session-current')
-    await expect.poll(() => getTerminalText(client), { timeout: 20000 }).toContain('ShellPilot E2E ready')
     const input = terminal.locator('.xterm-helper-textarea').last()
     await focusActiveTerminal(client)
     await expect(input).toBeFocused()
     await client.keyboard.type('echo shellpilot-e2e')
     await client.keyboard.press('Enter')
+    await expect.poll(() => sshServer.state.commands, { timeout: 10000 }).toContain('echo shellpilot-e2e')
     await expect.poll(() => getTerminalText(client), { timeout: 10000 }).toContain('shellpilot-e2e')
 
+    await expect(client.locator('.common-err-desc')).toHaveCount(0)
+
+    await terminal.locator('.term-sftp-tabs .type-tab:visible').nth(1).click()
+    await expect(client.locator('.common-err-desc')).toContainText('SFTP', { timeout: 20000 })
+    await expect(client.locator('.common-err-desc')).not.toHaveText(/^Error$/)
+
+    await terminal.locator('.term-sftp-tabs .type-tab:visible').first().click()
+    await focusActiveTerminal(client)
     await client.keyboard.press('Control+C')
     await expect.poll(() => sshServer.state.ctrlCCount).toBeGreaterThan(0)
   } finally {

@@ -115,6 +115,19 @@ test('shell integration detection forwards authenticated OSC data after hidden i
   ])
 })
 
+test('AttachAddon queues user input while shell integration output is suppressed', async () => {
+  const { addon, sent } = await createDirectAttachHarness()
+  addon.startOutputSuppression(1000)
+
+  addon.sendToServer('echo ')
+  addon.sendToServer('shellpilot-e2e')
+  addon.sendToServer('\r')
+
+  assert.deepEqual(sent, [])
+  await addon.stopOutputSuppression(true)
+  assert.deepEqual(sent, ['echo ', 'shellpilot-e2e', '\r'])
+})
+
 function createTrackerTerminal (options = {}) {
   const cols = options.cols || 40
   let oscHandler

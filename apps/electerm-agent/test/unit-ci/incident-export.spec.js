@@ -163,9 +163,34 @@ test('incident archive renderer API exposes export but no backup or restore', ()
     'lib',
     'ipc.js'
   ), 'utf8')
+  const locale = fs.readFileSync(path.join(
+    __dirname,
+    '..',
+    '..',
+    'src',
+    'client',
+    'common',
+    'shellpilot-i18n-overrides.js'
+  ), 'utf8')
+  const help = fs.readFileSync(path.join(
+    __dirname,
+    '..',
+    '..',
+    'src',
+    'client',
+    'components',
+    'main',
+    'help-center-modal.jsx'
+  ), 'utf8')
 
   assert.match(client, /exportIncidentArchive/)
   assert.doesNotMatch(client, /IncidentArchiveBackup|IncidentArchiveStorage/)
   assert.doesNotMatch(store, /IncidentBackup|IncidentStorage/)
   assert.doesNotMatch(ipc, /IncidentArchiveBackup|IncidentArchiveStorage/)
+  assert.doesNotMatch(locale, /shellpilotIncidentBackup/)
+  assert.doesNotMatch(locale, /shellpilotIncidentRestore/)
+  assert.doesNotMatch(locale, /shellpilotIncidentStorage/)
+  assert.doesNotMatch(help, /存储与恢复|恢复数据库必须输入 RESTORE|提供受控备份与恢复/)
+  assert.match(help, /导出 Markdown、HTML 或 JSON/)
+  assert.match(help, /不提供手工数据库备份或恢复入口/)
 })

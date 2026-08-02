@@ -992,59 +992,59 @@ export default function AIConfigForm ({ initialValues, languageVersion, onSubmit
                 >
                   <Form.List name='mcpServers'>
                     {(fields, { add, remove }) => (
-                      <Space direction='vertical' className='width-100'>
+                      <Space orientation='vertical' className='width-100'>
                         {
-                  fields.map(({ key, name }) => (
-                    <div className='pd1 border' key={key}>
-                      <Space align='start' className='width-100'>
-                        <Form.Item
-                          name={[name, 'transport']}
-                          label={e('shellpilotAiConnectionMethod')}
-                          className='width-100'
-                        >
-                          <Select options={mcpTransportOptions} />
-                        </Form.Item>
-                        <Form.Item
-                          name={[name, 'disabled']}
-                          label={e('shellpilotStatus')}
-                          valuePropName='checked'
-                        >
-                          <Checkbox>{e('shellpilotDisabled')}</Checkbox>
-                        </Form.Item>
-                        <Button
-                          danger
-                          icon={<MinusCircleOutlined />}
-                          onClick={() => remove(name)}
-                        >
-                          {e('shellpilotDelete')}
-                        </Button>
-                      </Space>
-                      <Space align='start' className='width-100'>
-                        {
-                          mcpServerFields.map(item => (
-                            <Form.Item
-                              key={item.name}
-                              name={[name, item.name]}
-                              label={e(item.labelKey)}
-                              rules={item.required
-                                ? [{ required: true, message: tf('shellpilotFieldRequired', { field: e(item.labelKey) }) }]
-                                : []}
-                              className='flex1'
-                            >
-                              <Input placeholder={e(item.placeholderKey)} />
-                            </Form.Item>
+                          fields.map(({ key, name }) => (
+                            <div className='pd1 border' key={key}>
+                              <Space align='start' className='width-100'>
+                                <Form.Item
+                                  name={[name, 'transport']}
+                                  label={e('shellpilotAiConnectionMethod')}
+                                  className='width-100'
+                                >
+                                  <Select options={mcpTransportOptions} />
+                                </Form.Item>
+                                <Form.Item
+                                  name={[name, 'disabled']}
+                                  label={e('shellpilotStatus')}
+                                  valuePropName='checked'
+                                >
+                                  <Checkbox>{e('shellpilotDisabled')}</Checkbox>
+                                </Form.Item>
+                                <Button
+                                  danger
+                                  icon={<MinusCircleOutlined />}
+                                  onClick={() => remove(name)}
+                                >
+                                  {e('shellpilotDelete')}
+                                </Button>
+                              </Space>
+                              <Space align='start' className='width-100'>
+                                {
+                                  mcpServerFields.map(item => (
+                                    <Form.Item
+                                      key={item.name}
+                                      name={[name, item.name]}
+                                      label={e(item.labelKey)}
+                                      rules={item.required
+                                        ? [{ required: true, message: tf('shellpilotFieldRequired', { field: e(item.labelKey) }) }]
+                                        : []}
+                                      className='flex1'
+                                    >
+                                      <Input placeholder={e(item.placeholderKey)} />
+                                    </Form.Item>
+                                  ))
+                                }
+                              </Space>
+                              <Form.Item
+                                name={[name, 'args']}
+                                label={e('shellpilotAiStartArguments')}
+                              >
+                                <Input placeholder={e('shellpilotAiStartArgumentsPlaceholder')} />
+                              </Form.Item>
+                            </div>
                           ))
                         }
-                      </Space>
-                      <Form.Item
-                        name={[name, 'args']}
-                        label={e('shellpilotAiStartArguments')}
-                      >
-                        <Input placeholder={e('shellpilotAiStartArgumentsPlaceholder')} />
-                      </Form.Item>
-                    </div>
-                  ))
-                }
                         <Button
                           icon={<PlusOutlined />}
                           onClick={() => add({

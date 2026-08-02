@@ -5,6 +5,23 @@ const fs = require('node:fs')
 const os = require('node:os')
 const workflowNamePlaceholder = '${' + 'env.WORKFLOW_NAME}'
 
+test('electron builds force Python UTF-8 mode for non-ASCII workspace paths', () => {
+  const {
+    getBuildEnvironment
+  } = require(path.resolve(__dirname, '../../build/bin/build-common.js'))
+  const pkg = JSON.parse(fs.readFileSync(
+    path.resolve(__dirname, '../../package.json'),
+    'utf8'
+  ))
+
+  assert.equal(getBuildEnvironment({ PYTHONUTF8: '' }).PYTHONUTF8, '1')
+  assert.equal(getBuildEnvironment({ PYTHONUTF8: '0' }).PYTHONUTF8, '0')
+  assert.match(
+    pkg.scripts['package:win:dir'],
+    /cross-env\s+PYTHONUTF8=1\s+electron-builder/
+  )
+})
+
 test('electron builder prepare script writes a local default publish channel', () => {
   const {
     prepareElectronBuilderConfig

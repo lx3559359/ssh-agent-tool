@@ -62,6 +62,14 @@ import {
   requestAiFileChangeReview
 } from '../ai/ai-file-change-review-modal.jsx'
 import { reconcileSelectedFileIds } from './file-selection.js'
+import {
+  destroySftpClient,
+  disposeSftpEntryClient,
+  disposeSftpEntryScheduling,
+  reconnectSftpEntryRemote,
+  replaceSftpEntryTimer,
+  shouldRetryUnexpectedSftpPacket
+} from './sftp-entry-lifecycle.js'
 import { createTransactionRunner } from '../../common/safety-transactions/transaction-runner.js'
 import { buildSideEffectSafetyRequest } from '../../common/safety-transactions/side-effect-model.js'
 import { assertSameSessionEndpoint } from '../../common/safety-transactions/endpoint-guard.js'
@@ -118,7 +126,7 @@ export default class Sftp extends Component {
     if (this.props.isFtp) {
       this.initFtpData()
     }
-    this.timer = setTimeout(() => {
+    replaceSftpEntryTimer(this, 'timer', () => {
       this.setState({
         ready: true
       })
@@ -126,10 +134,19 @@ export default class Sftp extends Component {
   }
 
   componentDidUpdate (prevProps, prevState) {
-    if (
-      this.props.config.autoRefreshWhenSwitchToSftp &&
+    const switchedToSftp =
       prevProps.pane !== this.props.pane &&
-      this.props.pane === paneMap.fileManager &&
+      this.props.pane === paneMap.fileManager
+    if (
+      switchedToSftp &&
+      !this.state.inited &&
+      !this.state.loadingSftp &&
+      !this.state.remoteLoading
+    ) {
+      this.initRemoteAll()
+    } else if (
+      this.props.config.autoRefreshWhenSwitchToSftp &&
+      switchedToSftp &&
       this.state.inited
     ) {
       this.onGoto(typeMap.local)
@@ -160,12 +177,8 @@ export default class Sftp extends Component {
 
   componentWillUnmount () {
     refs.remove(this.id)
-    this.sftp && this.sftp.destroy()
-    this.sftp = null
-    clearTimeout(this.timer4)
-    this.timer4 = null
-    clearTimeout(this.timer5)
-    this.timer5 = null
+    disposeSftpEntryClient(this)
+    disposeSftpEntryScheduling(this)
     // Clear sort cache to prevent memory leaks
     this._sortCache?.clear()
     this._lastSortArgs = null
@@ -1257,7 +1270,7 @@ export default class Sftp extends Component {
 
   onInputBlur = (type) => {
     this.inputFocus = false
-    this.timer4 = setTimeout(() => {
+    replaceSftpEntryTimer(this, 'timer4', () => {
       this.setState({
         [type + 'InputFocus']: false
       })
@@ -1293,6 +1306,20 @@ export default class Sftp extends Component {
   shouldRenderRemote = () => {
     const { props } = this
     return props.tab?.host && props.tab?.type !== terminalSerialType
+  }
+
+  isSftpVisible = () => {
+    const { isFtp, pane, sshSftpSplitView } = this.props
+    return isFtp || pane === paneMap.fileManager || sshSftpSplitView
+  }
+
+  normalizeSftpError = error => {
+    const message = typeof error?.message === 'string'
+      ? error.message.trim()
+      : ''
+    return message && message !== 'Error'
+      ? error
+      : new Error(e('shellpilotSftpUnavailable'))
   }
 
   initLocalAll = () => {
@@ -1472,17 +1499,17 @@ export default class Sftp extends Component {
         })
         const r = await sftp.connect(opts)
           .catch(e => {
-            if (
-              e &&
-              e.message.includes(unexpectedPacketErrorDesc) && this.retryCount
-            ) {
-              this.retryHandler = setTimeout(
-                () => this.initData(
-                  true
-                ),
+            if (shouldRetryUnexpectedSftpPacket(e, {
+              expectedMessage: unexpectedPacketErrorDesc,
+              retryCount: this.retryCount
+            })) {
+              this.retryCount++
+              replaceSftpEntryTimer(
+                this,
+                'retryHandler',
+                () => reconnectSftpEntryRemote(this),
                 sftpRetryInterval
               )
-              this.retryCount++
             } else {
               throw e
             }
@@ -1493,12 +1520,13 @@ export default class Sftp extends Component {
           }
         })
         if (!r) {
-          sftp.destroy()
+          await destroySftpClient(sftp)
           return this.props.editTab(tab.id, {
             sftpCreated: false
           })
         } else {
           this.sftp = sftp
+          this.retryCount = 0
         }
       }
 
@@ -1552,7 +1580,7 @@ export default class Sftp extends Component {
           sftpCreated: true
         })
       })
-      this.timer5 = setTimeout(() => {
+      replaceSftpEntryTimer(this, 'timer5', () => {
         if (this.type !== 'ftp') {
           this.updateRemoteList(remote, remotePath, sftp)
         }
@@ -1560,7 +1588,13 @@ export default class Sftp extends Component {
           sftpCreated: true
         })
       }, 1000)
-    } catch (e) {
+    } catch (error) {
+      if (sftp && sftp !== this.sftp) {
+        await sftp.destroy().catch(() => {})
+        this.props.editTab(tab.id, {
+          sftpCreated: false
+        })
+      }
       const update = {
         remoteLoading: false,
         remote: oldRemote,
@@ -1571,7 +1605,9 @@ export default class Sftp extends Component {
         update.remotePathTemp = oldPath
       }
       this.setState(update)
-      this.onError(e)
+      if (this.isSftpVisible()) {
+        this.onError(this.normalizeSftpError(error))
+      }
     }
   }
 
@@ -1732,10 +1768,7 @@ export default class Sftp extends Component {
   }
 
   handleReloadRemoteSftp = async () => {
-    if (this.sftp) {
-      this.sftp.destroy()
-      this.sftp = null
-    }
+    await disposeSftpEntryClient(this)
     this.setState({
       remoteLoading: true,
       remote: [],
@@ -1793,7 +1826,7 @@ export default class Sftp extends Component {
   onGoto = async (type, e) => {
     e && e.preventDefault()
     if (type === typeMap.remote && !this.sftp) {
-      return this.initData(true)
+      return reconnectSftpEntryRemote(this)
     }
     const n = `${type}Path`
     const nt = n + 'Temp'

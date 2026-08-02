@@ -71,7 +71,11 @@ class Sftp {
             cleanup()
             if (arg.error) {
               console.debug('sftp error', arg.error.message)
-              return reject(new Error(arg.error.message))
+              const fallback = typeof window !== 'undefined' && window.translate
+                ? window.translate('shellpilotSftpUnavailable')
+                : 'SFTP is unavailable'
+              const message = String(arg.error.message || '').trim() || fallback
+              return reject(new Error(message))
             }
             resolve(arg.data)
           }, uid))

@@ -8,6 +8,17 @@ const ExcelJS = require('exceljs')
 
 const root = path.resolve(__dirname, '../..')
 
+test('ExcelJS archive writer resolves within its declared compatible major', () => {
+  const lock = require(path.join(root, 'package-lock.json'))
+  const excel = lock.packages['node_modules/exceljs']
+  const archiver = lock.packages['node_modules/exceljs/node_modules/archiver'] ||
+    lock.packages['node_modules/archiver']
+
+  assert.equal(excel.dependencies.archiver, '^5.0.0')
+  assert.ok(archiver, 'ExcelJS archiver dependency must be locked')
+  assert.equal(Number(archiver.version.split('.')[0]), 5)
+})
+
 const source = {
   schemaVersion: 1,
   type: 'inspection-report',
