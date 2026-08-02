@@ -108,4 +108,8 @@ test('Agent remote text writes surface the preview through the existing single S
     source,
     /confirmPreparedSftpOperation\([\s\S]{0,180}options\.confirmationDetails/
   )
+  assert.match(
+    source,
+    /formatShellPilotTranslation\(\s*e,\s*'shellpilotSftpTextChangeSummary',\s*\{/
+  )
 })

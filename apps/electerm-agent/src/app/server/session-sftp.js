@@ -707,8 +707,7 @@ class Sftp extends TerminalBase {
    * @return {Promise}
    */
   mv (from, to) {
-    return this.buildRemoteCommand('mv', from, to)
-      .then(cmd => this.runExec(cmd))
+    return this.rename(from, to)
       .then(() => 1)
   }
 

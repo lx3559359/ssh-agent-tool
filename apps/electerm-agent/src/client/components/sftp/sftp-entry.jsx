@@ -611,7 +611,8 @@ export default class Sftp extends Component {
                         <>
                           <div className='sftp-text-change-summary'>
                             {formatShellPilotTranslation(
-                              e('shellpilotSftpTextChangeSummary'),
+                              e,
+                              'shellpilotSftpTextChangeSummary',
                               {
                                 added: preview.addedLines,
                                 removed: preview.removedLines

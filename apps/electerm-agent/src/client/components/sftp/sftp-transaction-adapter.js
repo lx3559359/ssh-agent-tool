@@ -649,12 +649,9 @@ async function prepareNewManifest (sftp, operation, signal) {
     throwIfAborted(signal)
     const targetParent = await sftp.stat(parentRemotePath(target.path))
     throwIfAborted(signal)
-    const sourceParentPath = parentRemotePath(source.path)
-    const targetParentPath = parentRemotePath(target.path)
     const hasDeviceIds = Number.isInteger(sourceParent?.dev) &&
       Number.isInteger(targetParent?.dev)
-    if ((hasDeviceIds && sourceParent.dev !== targetParent.dev) ||
-      (!hasDeviceIds && sourceParentPath !== targetParentPath)) {
+    if (hasDeviceIds && sourceParent.dev !== targetParent.dev) {
       throw new Error('SFTP 重命名跨文件系统，首版已拒绝操作。')
     }
   }
