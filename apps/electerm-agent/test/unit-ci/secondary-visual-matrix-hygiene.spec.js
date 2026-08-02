@@ -131,10 +131,21 @@ test('isolated Electron readiness uses a staged condition and reports startup di
     matrix,
     /waitForFunction\(\(\) => window\.store\?\.configLoaded === true, \{ timeout:/
   )
+  const isolatedRuns = (
+    matrix.match(/await runWithIsolatedApp\(/g) || []
+  ).length
+  const inPlaceReloads = (
+    matrix.match(/await page\.reload\(\)/g) || []
+  ).length
+  const readinessChecks = (
+    matrix.match(/await waitForSecondaryAppReady\(electronApp, page,/g) || []
+  ).length
+
+  assert.ok(isolatedRuns > 0)
   assert.equal(
-    (matrix.match(/await waitForSecondaryAppReady\(electronApp, page,/g) || []).length,
-    14,
-    'every isolated secondary-app launch must use the staged readiness helper'
+    readinessChecks,
+    isolatedRuns + inPlaceReloads,
+    'every isolated launch and in-place reload must use the staged readiness helper'
   )
 })
 

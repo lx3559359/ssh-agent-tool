@@ -36,3 +36,25 @@ test('terminal Ctrl+L is reserved for remote shell clear screen', () => {
   assert.match(body, /shortcut: 'ctrl\+shift\+l'/)
   assert.doesNotMatch(body, /shortcut: 'ctrl\+l/)
 })
+
+test('session pane keyboard navigation stays outside terminal input handling', () => {
+  const source = readClientSource('components/session/session.jsx')
+  const start = source.indexOf('handlePaneTabKeyDown =')
+  const end = source.indexOf('onChangePane =', start)
+  const body = source.slice(start, end)
+
+  assert.notEqual(start, -1)
+  assert.notEqual(end, -1)
+  assert.match(body, /ArrowLeft/)
+  assert.match(body, /ArrowRight/)
+  assert.match(body, /Home/)
+  assert.match(body, /End/)
+  assert.match(body, /this\.onChangePane\(types\[nextIndex\]\)/)
+  assert.doesNotMatch(body, /term\.|write\(|sendData|dispatchEvent/)
+
+  const controlsStart = source.indexOf('renderPaneControl =')
+  const controlsEnd = source.indexOf('renderSftpPathFollowControl =', controlsStart)
+  const controls = source.slice(controlsStart, controlsEnd)
+  assert.match(controls, /const types = \[[\s\S]*paneMap\.terminal[\s\S]*\]/)
+  assert.match(controls, /controls\.push[\s\S]*types\.push\(paneMap\.fileManager\)/)
+})

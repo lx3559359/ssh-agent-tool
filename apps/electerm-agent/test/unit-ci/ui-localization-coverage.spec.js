@@ -208,3 +208,37 @@ test('audited ShellPilot translation keys exist in both complete catalogs', asyn
   ])
   assert.deepEqual(missing, [], missing.join('\n'))
 })
+
+test('v0.4.27 interaction guidance uses paired natural Chinese and English copy', async () => {
+  const { getShellPilotTranslation } = await import(catalogUrl)
+  const expected = {
+    shellpilotRequired: ['必填', 'Required'],
+    shellpilotOptional: ['可选', 'Optional'],
+    shellpilotRecommended: ['建议', 'Recommended'],
+    shellpilotQuickConnectLocalPersistence: [
+      '连接信息仅保存在本机设置中；不修改服务器配置。',
+      'Connection details are stored only in local settings; server configuration is not changed.'
+    ],
+    shellpilotCloseDialog: ['关闭对话框', 'Close dialog'],
+    shellpilotSessionViews: ['会话视图', 'Session views'],
+    shellpilotSftpSelected: ['已选择', 'Selected'],
+    shellpilotSftpNotSelected: ['未选择', 'Not selected'],
+    shellpilotAiEssentialSetup: ['完成 3 项基础配置', 'Complete 3 essential settings'],
+    shellpilotAiEssentialSetupDescription: [
+      '依次填写 API 地址、API Key 和模型；模型可手动输入，也可从服务商加载。',
+      'Enter the API address, API key, and model in order. You can type a model or load one from the provider.'
+    ],
+    shellpilotServerStatusSeverity: ['严重度', 'Severity'],
+    shellpilotServerStatusImpact: ['可能影响', 'Possible impact'],
+    shellpilotServerStatusNextStep: ['建议下一步', 'Recommended next step'],
+    generalSettings: ['常规设置', 'General'],
+    terminalSettings: ['终端设置', 'Terminal'],
+    shellpilotMillisecondsUnit: ['毫秒', 'milliseconds'],
+    disableTransferHistory: ['关闭 SFTP 传输历史', 'Disable SFTP transfer history']
+  }
+
+  for (const [key, [chinese, english]] of Object.entries(expected)) {
+    assert.equal(getShellPilotTranslation(key, 'zh_cn'), chinese, `zh_cn:${key}`)
+    assert.equal(getShellPilotTranslation(key, 'en_us'), english, `en_us:${key}`)
+  }
+})

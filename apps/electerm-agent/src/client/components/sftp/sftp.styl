@@ -149,6 +149,13 @@
     .sftp-file-prop
       background-color var(--sp-primary-soft)
       color var(--sp-text)
+
+.sftp-item:focus-visible
+  outline 2px solid var(--sp-primary)
+  outline-offset -2px
+  .sftp-file-prop
+    background var(--sp-info-soft)
+    color var(--sp-text)
 .sftp-history
   position absolute
   left 0
@@ -245,6 +252,8 @@
   overflow hidden
   white-space nowrap
   text-overflow ellipsis
+  color var(--sp-text-muted)
+  font-weight 650
 
 .sftp-file-table-header
   height 30px

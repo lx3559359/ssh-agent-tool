@@ -7,6 +7,7 @@ import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
 const appOptions = require('../e2e/common/app-options')
+const { qualityLaunchOptions } = require('../e2e/common/quality-e2e-app')
 
 test('legacy E2E launches with an isolated temporary profile', () => {
   const appData = path.resolve(appOptions.env.APPDATA)
@@ -19,6 +20,22 @@ test('legacy E2E launches with an isolated temporary profile', () => {
   assert.equal(localAppData, appData)
   assert.equal(dataPath, path.join(appData, 'data'))
   assert.notEqual(appData, path.resolve(process.env.APPDATA || ''))
+})
+
+test('quality E2E isolates home directories used by SSH known_hosts', () => {
+  const profileRoot = path.join(os.tmpdir(), 'shellpilot-quality-e2e-options-test')
+  const options = qualityLaunchOptions(profileRoot)
+
+  assert.equal(path.resolve(options.env.HOME), path.resolve(profileRoot))
+  assert.equal(path.resolve(options.env.USERPROFILE), path.resolve(profileRoot))
+  assert.equal(
+    path.resolve(options.env.APPDATA),
+    path.resolve(profileRoot, 'AppData', 'Roaming')
+  )
+  assert.equal(
+    path.resolve(options.env.LOCALAPPDATA),
+    path.resolve(profileRoot, 'AppData', 'Local')
+  )
 })
 
 test('E2E package scripts use cross-platform Playwright patterns', () => {

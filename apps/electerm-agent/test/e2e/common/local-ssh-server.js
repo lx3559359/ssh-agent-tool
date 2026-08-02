@@ -138,6 +138,23 @@ function sftpAttrs (stats) {
   }
 }
 
+function sftpLongname (filename, stats) {
+  const type = stats.isDirectory()
+    ? 'd'
+    : stats.isSymbolicLink()
+      ? 'l'
+      : '-'
+  const permissionBits = [
+    [0o400, 'r'], [0o200, 'w'], [0o100, 'x'],
+    [0o040, 'r'], [0o020, 'w'], [0o010, 'x'],
+    [0o004, 'r'], [0o002, 'w'], [0o001, 'x']
+  ]
+  const permissions = permissionBits
+    .map(([bit, label]) => (stats.mode & bit) === bit ? label : '-')
+    .join('')
+  return `${type}${permissions} 1 ${stats.uid || 0} ${stats.gid || 0} ${stats.size} ${filename}`
+}
+
 function sftpStatusForError (error) {
   const status = utils.sftp.STATUS_CODE
   if (error?.code === 'ENOENT') return status.NO_SUCH_FILE
@@ -192,7 +209,7 @@ function attachSftp (sftp, root, state) {
       const filename = path.posix.normalize('/' + String(givenPath || '/').replace(/\\/g, '/'))
       fs.stat(resolve(filename), (error, stats) => {
         if (error) return replyError(reqid, error)
-        sftp.name(reqid, [{ filename, longname: filename, attrs: sftpAttrs(stats) }])
+        sftp.name(reqid, [{ filename, longname: sftpLongname(filename, stats), attrs: sftpAttrs(stats) }])
       })
     } catch (error) {
       replyError(reqid, error)
@@ -219,7 +236,11 @@ function attachSftp (sftp, root, state) {
           const records = []
           for (const entry of entries) {
             const stats = await fs.promises.lstat(path.join(localPath, entry.name))
-            records.push({ filename: entry.name, longname: entry.name, attrs: sftpAttrs(stats) })
+            records.push({
+              filename: entry.name,
+              longname: sftpLongname(entry.name, stats),
+              attrs: sftpAttrs(stats)
+            })
           }
           sftp.handle(reqid, makeHandle({ type: 'dir', records, sent: false }))
         } catch (readError) {

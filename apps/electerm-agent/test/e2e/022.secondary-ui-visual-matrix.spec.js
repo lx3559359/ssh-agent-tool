@@ -2520,6 +2520,88 @@ test('590px topbar keeps every visible action clear of native controls and prese
   })
 })
 
+test('AI config stays horizontally contained in a short English 150% viewport', async ({ browserName }) => {
+  await runWithIsolatedApp('ai-config-short-viewport', async (electronApp) => {
+    const page = electronApp.windows()[0] || await electronApp.firstWindow()
+    await waitForSecondaryAppReady(electronApp, page, 'ai-config-short-viewport')
+    await ensureActiveTerminalSession(page)
+    await setWindowCase(electronApp, page, { width: 590, height: 400 }, 1.5)
+    await resetSurface(page, 'en_us')
+    await openAi(page)
+
+    const metrics = await page.locator('.ai-config-modal .custom-modal-content').evaluate((content) => {
+      const contentRect = content.getBoundingClientRect()
+      const offenders = [...content.querySelectorAll('*')]
+        .map(element => {
+          const rect = element.getBoundingClientRect()
+          const style = window.getComputedStyle(element)
+          return {
+            tag: element.tagName,
+            className: String(element.className || ''),
+            clientWidth: element.clientWidth,
+            scrollWidth: element.scrollWidth,
+            left: Math.round(rect.left * 10) / 10,
+            right: Math.round(rect.right * 10) / 10,
+            minWidth: style.minWidth,
+            width: style.width
+          }
+        })
+        .filter(item => item.scrollWidth > item.clientWidth + 1 || item.right > contentRect.right + 1)
+        .slice(0, 20)
+      return {
+        clientWidth: content.clientWidth,
+        scrollWidth: content.scrollWidth,
+        rect: {
+          left: Math.round(contentRect.left * 10) / 10,
+          right: Math.round(contentRect.right * 10) / 10,
+          width: Math.round(contentRect.width * 10) / 10
+        },
+        offenders
+      }
+    })
+    console.log(`AI_CONFIG_SHORT_VIEWPORT=${JSON.stringify({ browserName, metrics })}`)
+    expect(metrics.scrollWidth, JSON.stringify(metrics)).toBeLessThanOrEqual(metrics.clientWidth + 1)
+  })
+})
+
+test('English tool cards stay readable and horizontally contained at desktop widths', async ({ browserName }) => {
+  await runWithIsolatedApp('tool-cards-1100', async (electronApp) => {
+    const page = electronApp.windows()[0] || await electronApp.firstWindow()
+    await waitForSecondaryAppReady(electronApp, page, 'tool-cards-1100')
+    await ensureActiveTerminalSession(page)
+    for (const size of [{ width: 1100, height: 700 }, { width: 1600, height: 900 }]) {
+      await setWindowCase(electronApp, page, size, 1)
+      await resetSurface(page, 'en_us')
+      await openWidgets(page)
+
+      const metrics = await page.locator('.widgets-card-list').evaluate((list) => {
+        const offenders = [list, ...list.querySelectorAll('*')]
+          .map(element => ({
+            tag: element.tagName,
+            className: String(element.className || ''),
+            text: element.textContent.trim().replace(/\s+/g, ' ').slice(0, 80),
+            clientWidth: element.clientWidth,
+            scrollWidth: element.scrollWidth
+          }))
+          .filter(item => item.scrollWidth > item.clientWidth + 1)
+          .slice(0, 20)
+        const clippedTitles = [...list.querySelectorAll('.widget-card-title')]
+          .filter(element => element.scrollWidth > element.clientWidth + 1)
+          .map(element => element.textContent.trim())
+        return {
+          clientWidth: list.clientWidth,
+          scrollWidth: list.scrollWidth,
+          offenders,
+          clippedTitles
+        }
+      })
+      console.log(`TOOL_CARDS_DESKTOP=${JSON.stringify({ browserName, size, metrics })}`)
+      expect(metrics.offenders, JSON.stringify({ size, metrics })).toEqual([])
+      expect(metrics.clippedTitles, JSON.stringify({ size, metrics })).toEqual([])
+    }
+  })
+})
+
 test('sidebar standard tiles expose one consistent mouse keyboard and active affordance', async ({ browserName }) => {
   await runWithIsolatedApp('sidebar-interaction', async (electronApp) => {
     const page = electronApp.windows()[0] || await electronApp.firstWindow()
@@ -3363,6 +3445,34 @@ test('context menus keep pointer placement and compact long-menu reachability', 
   })
 })
 
+test('setting and theme drawers reopen across repeated entry changes', async () => {
+  await runWithIsolatedApp('setting-reopen', async (electronApp) => {
+    const page = electronApp.windows()[0] || await electronApp.firstWindow()
+    await waitForSecondaryAppReady(electronApp, page, 'setting-reopen')
+    await ensureActiveTerminalSession(page)
+    await setWindowCase(electronApp, page, { width: 590, height: 400 }, 1.25)
+    await exerciseLanguageAndThemeState(page)
+
+    const repeatedSurfaces = [
+      { selector: '.setting-wrap', open: openSettings },
+      { selector: '.sp-settings-form', open: openSettings },
+      { selector: '.quick-connect-wizard', open: openConnection },
+      { selector: '.ai-config-modal', open: openAi },
+      { selector: '.sp-sync-config', open: openSync },
+      { selector: '.sp-theme-center', open: openThemes },
+      { selector: '#terminal-theme-form', open: openThemes }
+    ]
+
+    for (const language of ['zh_cn', 'en_us', 'zh_cn', 'en_us']) {
+      for (const surface of repeatedSurfaces) {
+        await resetSurface(page, language)
+        await surface.open(page)
+        await expect(page.locator(surface.selector)).toBeVisible()
+      }
+    }
+  })
+})
+
 async function captureCompactShellState (page) {
   return page.evaluate(() => {
     const store = window.store
@@ -3717,6 +3827,14 @@ test('tool center and batch editor stay reachable in compact real app windows', 
               contentRect.left + Math.min(16, contentRect.width / 2),
               Math.max(0, Math.min(window.innerHeight - 1, contentRect.top + Math.min(16, contentRect.height / 2)))
             )
+            const describeHitTarget = element => element
+              ? {
+                  tag: element.tagName,
+                  id: element.id,
+                  className: String(element.className || ''),
+                  text: String(element.textContent || '').trim().slice(0, 80)
+                }
+              : null
             return {
               panel: panelRect.toJSON(),
               body: {
@@ -3728,6 +3846,13 @@ test('tool center and batch editor stay reachable in compact real app windows', 
               pinReachable: Boolean(pinHitTarget && pin.contains(pinHitTarget)),
               content: contentRect.toJSON(),
               contentReachable: Boolean(contentHitTarget && content.contains(contentHitTarget)),
+              contentHitTarget: describeHitTarget(contentHitTarget),
+              list: {
+                rect: list.getBoundingClientRect().toJSON(),
+                clientHeight: list.clientHeight,
+                scrollHeight: list.scrollHeight,
+                overflowY: window.getComputedStyle(list).overflowY
+              },
               terminal: terminal.getBoundingClientRect().toJSON(),
               footer: footer.getBoundingClientRect().toJSON(),
               documentScroll: { x: window.scrollX, y: window.scrollY }

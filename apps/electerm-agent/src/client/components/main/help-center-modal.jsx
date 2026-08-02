@@ -444,7 +444,7 @@ export default function HelpCenterModal ({ open, onClose }) {
   const sourceItems = language === 'en_us' ? shellpilotEnglishHelpItems : helpItemsZh
   const helpItems = sourceItems.map(item => ({
     key: item.key,
-    label: e(item.labelKey),
+    label: <h2 className='shellpilot-help-section-title'>{e(item.labelKey)}</h2>,
     children: item.children || (
       <Guide
         intro={item.intro}
@@ -463,12 +463,21 @@ export default function HelpCenterModal ({ open, onClose }) {
       width='min(980px, calc(100vw - 32px))'
       wrapClassName='shellpilot-help-center'
     >
-      <div className='shellpilot-help-heading'>
-        <strong>{e('shellpilotHelpCenterHeading')}</strong>
-        <span>{e('shellpilotHelpCenterIntro')}</span>
-      </div>
-      <Collapse items={helpItems} defaultActiveKey={['start']} />
-      <p className='shellpilot-help-safety'>{e('shellpilotHelpCenterSafety')}</p>
+      <header className='shellpilot-help-heading'>
+        <h1 className='shellpilot-help-heading-title'>{e('shellpilotHelpCenterHeading')}</h1>
+        <p>{e('shellpilotHelpCenterIntro')}</p>
+      </header>
+      <Collapse
+        aria-label={e('shellpilotHelpCenterHeading')}
+        items={helpItems}
+        defaultActiveKey={['start']}
+      />
+      <aside
+        aria-label={e('shellpilotHelpCenterSafety')}
+        className='shellpilot-help-safety'
+      >
+        {e('shellpilotHelpCenterSafety')}
+      </aside>
     </Modal>
   )
 }

@@ -114,7 +114,8 @@ export default Store => {
     const { store } = window
     if (
       store.settingTab === settingMap.terminalThemes &&
-      store.settingItem.id === ''
+      store.settingItem.id === '' &&
+      store.showModal === modals.setting
     ) {
       return store.hideSettingModal()
     }

@@ -26,6 +26,20 @@ function isInputActive () {
   )
 }
 
+const sftpRowHandledKeys = new Set(['ArrowDown', 'ArrowUp', 'Enter', ' '])
+
+function isSftpRowKeyboardEvent (event) {
+  return event.type === 'keydown' &&
+    sftpRowHandledKeys.has(event.key) &&
+    Boolean(event.target?.closest?.('.sftp-item[role="row"]'))
+}
+
+function isForegroundWorkspaceKeyboardEvent (event) {
+  return event.type === 'keydown' && Boolean(event.target?.closest?.(
+    '[role="dialog"], .operations-toolkit-workspace'
+  ))
+}
+
 class ShortcutControl extends React.PureComponent {
   componentDidMount () {
     const onEvent = this.handleKeyboardEvent.bind(this)
@@ -67,6 +81,9 @@ class ShortcutControl extends React.PureComponent {
 
   // SFTP shortcuts handler
   handleSftpKeyboardEvent = (e) => {
+    if (isSftpRowKeyboardEvent(e) || isForegroundWorkspaceKeyboardEvent(e)) {
+      return
+    }
     const activeSftp = this.getActiveSftp()
     if (!activeSftp || activeSftp.state.onDelete || isInputActive()) {
       return

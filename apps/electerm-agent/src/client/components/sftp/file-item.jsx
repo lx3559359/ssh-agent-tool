@@ -44,6 +44,7 @@ import { readSftpFileContext } from '../ai/ai-chat-context-actions'
 import { validateSftpFileName } from './file-name-validation.js'
 import { buildSftpFileContextItems } from './sftp-file-context-menu.js'
 import message from '../common/message'
+import { buildSftpRowAriaLabel } from '../../common/sftp-accessibility.js'
 
 const e = window.translate
 
@@ -495,6 +496,30 @@ export default class FileSection extends React.Component {
       selectedType: type,
       lastClickedFile: file
     })
+  }
+
+  handleRowKeyDown = (event) => {
+    const { id: currentId, type } = this.state.file
+    const focusSelectedRow = nextId => {
+      document.getElementById('file-' + nextId)?.focus()
+    }
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      this.transferOrEnterDirectory(event)
+      return
+    }
+    if (event.key === ' ') {
+      event.preventDefault()
+      this.onClick(event)
+      return
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      this.props.selectPrev(type, currentId, focusSelectedRow)
+    } else if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      this.props.selectNext(type, currentId, focusSelectedRow)
+    }
   }
 
   changeFileMode = async (file) => {
@@ -1096,14 +1121,21 @@ export default class FileSection extends React.Component {
     const Icon = isDirectory ? FolderOutlined : FileOutlined
     const pre = <Icon />
     return (
-      <div className='sftp-item'>
-        <Input
-          value={nameTemp}
-          prefix={pre}
-          onChange={this.handleChange}
-          onBlur={this.handleBlur}
-          onPressEnter={this.handleBlur}
-        />
+      <div
+        className='sftp-item'
+        role='row'
+        aria-rowindex={this.props.rowIndex}
+      >
+        <div role='gridcell' className='file-props-div width-100'>
+          <Input
+            value={nameTemp}
+            prefix={pre}
+            aria-label={e('name')}
+            onChange={this.handleChange}
+            onBlur={this.handleBlur}
+            onPressEnter={this.handleBlur}
+          />
+        </div>
       </div>
     )
   }
@@ -1144,6 +1176,7 @@ export default class FileSection extends React.Component {
     }
     const divProps = {
       className: `sftp-file-prop noise shi-${id}`,
+      role: 'gridcell',
       style: {
         width: size + '%',
         flexBasis: `${size}%`
@@ -1169,7 +1202,15 @@ export default class FileSection extends React.Component {
   }
 
   render () {
-    const { type, selectedFiles, draggable = true, properties = [], onDragStart, cls = '' } = this.props
+    const {
+      type,
+      selectedFiles,
+      draggable = true,
+      properties = [],
+      onDragStart,
+      cls = '',
+      rowIndex
+    } = this.props
     const { file } = this.state
     const {
       isDirectory,
@@ -1181,6 +1222,21 @@ export default class FileSection extends React.Component {
       return this.renderEditing(file)
     }
     const selected = selectedFiles.has(id)
+    const activeSelectedId = selectedFiles.has(this.props.lastClickedFile?.id)
+      ? this.props.lastClickedFile.id
+      : selectedFiles.values().next().value
+    const isRovingTabStop = !file.isEmpty && (
+      (selectedFiles.size ? id === activeSelectedId : rowIndex === 2)
+    )
+    const ariaLabel = buildSftpRowAriaLabel({
+      file,
+      type,
+      selected,
+      properties,
+      translate: e,
+      formatSize: filesize,
+      formatTime: time
+    })
     const className = classnames('sftp-item', cls, type, {
       directory: isDirectory,
       selected
@@ -1198,9 +1254,16 @@ export default class FileSection extends React.Component {
       <div
         ref={this.domRef}
         {...props}
+        role='row'
+        aria-hidden={file.isEmpty ? 'true' : undefined}
+        aria-rowindex={rowIndex}
+        aria-selected={selected}
+        aria-label={ariaLabel}
+        tabIndex={isRovingTabStop ? 0 : -1}
+        onKeyDown={this.handleRowKeyDown}
         onContextMenu={this.handleContextMenuCapture}
       >
-        <div className='file-bg' />
+        <div className='file-bg' aria-hidden='true' />
         <div className='file-props-div'>
           {
             properties.map(this.renderProp)

@@ -273,9 +273,13 @@ export default class FileListTable extends Component {
     const { type } = this.props
     const cls = item.isParent ? 'parent-file-item' : 'real-file-item'
     const key = item.id ?? index + 'file-item'
+    const rowIndex = item.isParent
+      ? 2
+      : index + 2 + (this.props.parentItem ? 1 : 0)
     const fileProps = {
       ...this.props.getFileProps(item, type),
       cls,
+      rowIndex,
       properties: this.state.properties,
       setClickFileId: this.setClickFileId
     }
@@ -348,10 +352,12 @@ export default class FileListTable extends Component {
 
   render () {
     const { fileList, height, type } = this.props
+    const rowCount = fileList.length + (this.props.parentItem ? 1 : 0) + 1
     const containerHeight = Math.max(0, height - 42 - 30 - 32 - 90)
     const props = {
       ref: this.containerRef,
       className: 'sftp-table-content overscroll-y relative',
+      role: 'rowgroup',
       style: {
         height: containerHeight
       },
@@ -378,7 +384,12 @@ export default class FileListTable extends Component {
       overlayClassName: 'shellpilot-context-menu'
     }
     return (
-      <div className={cls}>
+      <div
+        className={cls}
+        role='grid'
+        aria-label={`${e(type)} SFTP`}
+        aria-rowcount={rowCount}
+      >
         {this.renderTableHeader()}
         <Dropdown {...ddProps}>
           <div

@@ -41,6 +41,25 @@ a
   &:hover
     color var(--text-dark)
 
+button:focus-visible,
+a:focus-visible,
+[role='button']:focus-visible,
+[role='tab']:focus-visible,
+[role='listbox']:focus-visible,
+[role='option']:focus-visible,
+.control-icon-wrap:focus-visible,
+.window-control-box:focus-visible
+  outline 2px solid var(--sp-primary)
+  outline-offset var(--sp-focus-offset)
+
+@media (prefers-reduced-motion: reduce)
+  *,
+  *::before,
+  *::after
+    transition none !important
+    animation none !important
+    scroll-behavior auto !important
+
 .cap
   text-transform capitalize
 

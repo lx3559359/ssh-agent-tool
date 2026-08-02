@@ -68,6 +68,22 @@
   &.online
     background var(--success)
 
+.aigshell-topbar-status
+  display inline-flex
+  align-items center
+  flex none
+
+.aigshell-topbar-status-text
+  position absolute
+  width 1px
+  height 1px
+  padding 0
+  margin -1px
+  overflow hidden
+  clip rect(0, 0, 0, 0)
+  white-space nowrap
+  border 0
+
 .aigshell-topbar-actions
   display flex
   align-items center
@@ -81,6 +97,11 @@
   display inline-flex
   align-items center
 
+.aigshell-topbar-action-group-boundary
+  border-left 1px solid var(--sp-border-strong)
+  padding-left 6px
+  margin-left 2px
+
 .aigshell-topbar-action
   height 30px
   padding 0 10px
@@ -92,6 +113,14 @@
   &:hover
     color var(--primary) !important
     background var(--main) !important
+  &:active
+    color var(--sp-primary) !important
+    background var(--sp-primary-soft) !important
+    box-shadow inset 0 1px 3px var(--sp-border-strong)
+  &:disabled
+    color var(--sp-text-disabled) !important
+    background var(--sp-surface) !important
+    box-shadow none
 
 .aigshell-topbar-action-primary
   border 1px solid var(--primary)
@@ -116,6 +145,10 @@
     width 46px
     height 44px
     padding 0
+    border 0
+    border-radius 0
+    background transparent
+    cursor pointer
     display flex
     align-items center
     justify-content center
@@ -124,7 +157,7 @@
       color var(--primary)
       background var(--main)
   .window-control-close:hover
-    color #fff
+    color var(--primary-contrast)
     background var(--error)
 
 .system-ui .aigshell-topbar-actions

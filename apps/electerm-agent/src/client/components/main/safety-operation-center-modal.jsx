@@ -73,11 +73,13 @@ import {
   operationTaskStatusPresentations
 } from './safety-center-operation-tasks.js'
 import { loadSafetyCenterRecords } from './safety-operation-center-loader.js'
+import { formatShellPilotTranslation } from '../../common/shellpilot-i18n-overrides.js'
 import './safety-operation-center-modal.styl'
 
 export { groupSafetyCenterRecords }
 
 const e = window.translate
+const tf = (key, replacements) => formatShellPilotTranslation(e, key, replacements)
 
 const sourceLabelKeys = {
   terminal: 'shellpilotSafetySourceTerminal',
@@ -260,7 +262,7 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
       setLoadError('')
     } catch (error) {
       if (version !== refreshVersion.current) return
-      setLoadError('安全记录加载失败。')
+      setLoadError(e('shellpilotSafetyLoadFailed'))
       reportError(error)
     } finally {
       if (version === refreshVersion.current) {
@@ -590,7 +592,7 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
       : view.status
     const auditExpanded = expandedAuditId === record.id
     return (
-      <article className='safety-center-record' key={record.id}>
+      <article className='safety-center-record' role='listitem' key={record.id}>
         <div className='safety-center-record-header'>
           <div className='safety-center-record-title'>
             <Tag color={sourceColors[view.source] || 'default'}>
@@ -739,7 +741,7 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
       [operationTaskStatuses.paused, operationTaskStatuses.interrupted]
         .includes(record.status)
     return (
-      <article className='safety-center-record safety-center-operation-task' key={record.id}>
+      <article className='safety-center-record safety-center-operation-task' role='listitem' key={record.id}>
         <div className='safety-center-record-header'>
           <div className='safety-center-record-title'>
             <Tag color={sourceColors[record.source] || 'default'}>
@@ -828,9 +830,17 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
         onCancel={() => handleSafetyAction(record, 'cancel')}
       />
     )
-    return record.riskTransaction
-      ? <div className='safety-center-agent-risk-record'>{taskProgress}</div>
-      : taskProgress
+    return (
+      <div
+        className={record.riskTransaction
+          ? 'safety-center-task-record safety-center-agent-risk-record'
+          : 'safety-center-task-record'}
+        role='listitem'
+        key={record.id}
+      >
+        {taskProgress}
+      </div>
+    )
   }
 
   const tabItems = [
@@ -840,8 +850,22 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
     ['legacy', 'shellpilotSafetyLegacy']
   ].map(([key, labelKey]) => ({
     key,
-    label: `${e(labelKey)} ${groups[key].length}`
+    label: (
+      <span className='safety-center-tab-label'>
+        {e(labelKey)}
+        <span
+          className='safety-center-tab-count'
+          aria-label={tf('shellpilotSafetyTabCount', { count: groups[key].length })}
+        >
+          {groups[key].length}
+        </span>
+      </span>
+    )
   }))
+
+  const resultStatusText = loading
+    ? e('shellpilotSafetyLoadingRecords')
+    : loadError || tf('shellpilotSafetyResultCount', { count: filteredRecords.length })
 
   return (
     <Modal
@@ -853,7 +877,7 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
       destroyOnClose={false}
       className='safety-operation-center-modal'
     >
-      <div className='safety-center-summary'>
+      <div className='safety-center-summary' aria-label={e('shellpilotSafetySummary')}>
         <span>{e('shellpilotSafetyRunning')} <strong>{groups.running.length}</strong></span>
         <span>{e('shellpilotSafetyRollbackAvailable')} <strong>{groups.rollback.length}</strong></span>
         <span>{e('shellpilotSafetyHistoryShort')} <strong>{groups.history.length}</strong></span>
@@ -869,6 +893,7 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
       <div className='safety-center-filters'>
         <Input.Search
           placeholder={e('shellpilotSafetySearchPlaceholder')}
+          aria-label={e('shellpilotSafetySearchPlaceholder')}
           allowClear
           value={keyword}
           onChange={event => setKeyword(event.target.value)}
@@ -915,9 +940,22 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
       </div>
 
       <div className='safety-center-records'>
-        <div className='safety-center-record-list'>
+        <div
+          className='safety-center-result-status'
+          role='status'
+          aria-live='polite'
+          aria-atomic='true'
+        >
+          {resultStatusText}
+        </div>
+        <div
+          className='safety-center-record-list'
+          role='list'
+          aria-label={e('shellpilotSafetyRecords')}
+          aria-busy={loading}
+        >
           {loading
-            ? <div className='safety-center-loading'><Spin /></div>
+            ? <div className='safety-center-loading'><Spin aria-hidden='true' /></div>
             : filteredRecords.length
               ? filteredRecords.map(renderRecord)
               : <Empty description={loadError || e('shellpilotSafetyNoRecords')} />}

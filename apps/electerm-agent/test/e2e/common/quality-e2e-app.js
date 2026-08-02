@@ -21,13 +21,17 @@ function assertSafeQualityRoot (profileRoot) {
 
 function qualityLaunchOptions (profileRoot, env = {}) {
   const resolved = assertSafeQualityRoot(profileRoot)
+  const appData = path.resolve(resolved, 'AppData', 'Roaming')
+  const localAppData = path.resolve(resolved, 'AppData', 'Local')
   return {
     ...appOptions,
     env: {
       ...appOptions.env,
       ...env,
-      APPDATA: resolved,
-      LOCALAPPDATA: resolved,
+      HOME: resolved,
+      USERPROFILE: resolved,
+      APPDATA: appData,
+      LOCALAPPDATA: localAppData,
       DATA_PATH: path.resolve(resolved, 'data')
     }
   }
@@ -74,7 +78,15 @@ async function launchQualityApp (electron, options = {}) {
   const acquired = await acquireIsolatedApp({
     createProfileRoot: () => reusableProfileRoot || fs.mkdtemp(path.join(tmpdir(), profilePrefix)),
     validateProfileRoot: assertSafeQualityRoot,
-    launch: root => electron.launch(qualityLaunchOptions(root, options.env)),
+    launch: async root => {
+      const launchOptions = qualityLaunchOptions(root, options.env)
+      await Promise.all([
+        fs.mkdir(launchOptions.env.APPDATA, { recursive: true }),
+        fs.mkdir(launchOptions.env.LOCALAPPDATA, { recursive: true }),
+        fs.mkdir(path.resolve(root, '.ssh'), { recursive: true })
+      ])
+      return electron.launch(launchOptions)
+    },
     // Playwright's main-process evaluate context is transient with newer
     // Electron releases. NODE_TEST + DATA_PATH deterministically controls
     // userData through common/user-data-path.js, so validate that contract
