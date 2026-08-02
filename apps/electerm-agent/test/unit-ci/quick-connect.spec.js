@@ -121,8 +121,19 @@ test('renderer quick connect adapter matches the canonical parser contract', asy
 
 test('renderer quick connect entry is a thin adapter to the canonical parser', () => {
   const source = fs.readFileSync(clientParserPath, 'utf8')
+  const appSource = fs.readFileSync(`${appParserPath}.js`, 'utf8')
   const lines = source.split(/\r?\n/).filter(line => line.trim())
 
   assert.match(source, /\.\.\/\.\.\/app\/common\/parse-quick-connect\.js/)
+  assert.doesNotMatch(
+    source,
+    /^import\s+\w+\s+from\s+['"]\.\.\/\.\.\/app\/common\/parse-quick-connect\.js['"]/m,
+    'Vite serves application source as native ESM, so the renderer adapter must not request a CommonJS default export'
+  )
+  assert.match(
+    appSource,
+    /globalThis\.__shellpilotQuickConnect/,
+    'the canonical CommonJS parser must expose the browser-safe bridge consumed by the renderer adapter'
+  )
   assert.equal(lines.length <= 30, true, `expected a thin adapter, found ${lines.length} non-empty lines`)
 })

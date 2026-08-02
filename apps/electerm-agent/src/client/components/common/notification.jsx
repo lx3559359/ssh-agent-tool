@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { CloseOutlined, CopyOutlined } from '@ant-design/icons'
 import classnames from 'classnames'
 import generateId from '../../common/uid'
@@ -6,6 +7,7 @@ import { messageIcons } from '../../common/icon-helpers.jsx'
 import { copy } from '../../common/clipboard'
 import './notification.styl'
 
+const e = window.translate
 const notifications = []
 const NOTIFICATION_EVENT = 'notification-update'
 
@@ -83,7 +85,7 @@ export function NotificationContainer () {
     return () => window.removeEventListener(NOTIFICATION_EVENT, handler)
   }, [])
 
-  return (
+  return createPortal((
     <div className='notification-container'>
       {nots.map(notif => (
         <NotificationItem
@@ -97,7 +99,7 @@ export function NotificationContainer () {
         />
       ))}
     </div>
-  )
+  ), document.body)
 }
 
 function NotificationItem ({ message, descriptions = [], type, onClose, duration = 18.5, count = 1 }) {
@@ -166,7 +168,14 @@ function NotificationItem ({ message, descriptions = [], type, onClose, duration
           </div>
         )}
       </div>
-      <CloseOutlined className='notification-close' onClick={onClose} />
+      <button
+        type='button'
+        className='notification-close'
+        aria-label={e('shellpilotCloseNotification')}
+        onClick={onClose}
+      >
+        <CloseOutlined aria-hidden='true' />
+      </button>
     </div>
   )
 }

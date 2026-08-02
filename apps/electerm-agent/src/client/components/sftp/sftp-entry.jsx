@@ -6,13 +6,12 @@ import { Spin, Button } from 'antd'
 import { notification } from '../common/notification'
 import Modal from '../common/modal'
 import clone from '../../common/to-simple-obj'
-import { isEqual, last, isNumber, some, isArray, pick, uniq, debounce } from 'lodash-es'
+import { isEqual, some, isArray, pick, uniq, debounce } from 'lodash-es'
 import FileSection from './file-item'
 import resolve from '../../common/resolve'
 import wait from '../../common/wait'
 import isAbsPath from '../../common/is-absolute-path'
 import classnames from 'classnames'
-import sorterIndex from '../../common/index-sorter'
 import { handleErr } from '../../common/fetch'
 import { getLocalFileInfo, getRemoteFileInfo, getFolderFromFilePath } from './file-read'
 import {
@@ -61,7 +60,10 @@ import {
 import {
   requestAiFileChangeReview
 } from '../ai/ai-file-change-review-modal.jsx'
-import { reconcileSelectedFileIds } from './file-selection.js'
+import {
+  nextSftpSelectionId,
+  reconcileSelectedFileIds
+} from './file-selection.js'
 import {
   destroySftpClient,
   disposeSftpEntryClient,
@@ -422,59 +424,28 @@ export default class Sftp extends Component {
     })
   }
 
-  selectNext = type => {
+  selectNext = (type, currentId, onSelected) => {
     const { selectedFiles } = this.state
     const fileList = this.getFileList(type)
-    if (!fileList.length) {
-      return
-    }
-
-    // Convert Set of IDs to array of indices
-    const fileIndices = Array.from(selectedFiles)
-      .map(id => fileList.findIndex(f => f.id === id))
-      .filter(index => index !== -1)
-      .sort(sorterIndex)
-
-    const lastOne = last(fileIndices)
-    let next = 0
-    if (isNumber(lastOne)) {
-      next = (lastOne + 1) % fileList.length
-    }
-
-    const nextFile = fileList[next]
+    const nextId = nextSftpSelectionId(fileList, selectedFiles, 'next', currentId)
+    const nextFile = fileList.find(file => file.id === nextId)
     if (nextFile) {
       this.setState({
         selectedFiles: new Set([nextFile.id])
-      })
+      }, () => onSelected?.(nextFile.id))
       return nextFile.id
     }
   }
 
-  selectPrev = type => {
+  selectPrev = (type, currentId, onSelected) => {
     const { selectedFiles } = this.state
     const fileList = this.getFileList(type)
-    if (!fileList.length) {
-      return
-    }
-
-    // Convert Set of IDs to array of indices
-    const fileIndices = Array.from(selectedFiles)
-      .map(id => fileList.findIndex(f => f.id === id))
-      .filter(index => index !== -1)
-      .sort(sorterIndex)
-
-    const firstOne = fileIndices[0]
-    let next = 0
-    const len = fileList.length
-    if (isNumber(firstOne)) {
-      next = (firstOne - 1 + len) % len
-    }
-
-    const nextFile = fileList[next]
+    const nextId = nextSftpSelectionId(fileList, selectedFiles, 'previous', currentId)
+    const nextFile = fileList.find(file => file.id === nextId)
     if (nextFile) {
       this.setState({
         selectedFiles: new Set([nextFile.id])
-      })
+      }, () => onSelected?.(nextFile.id))
       return nextFile.id
     }
   }

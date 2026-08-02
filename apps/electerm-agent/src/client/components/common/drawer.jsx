@@ -38,9 +38,12 @@ export default function Drawer (props) {
     styles = {},
     onClose
   } = props
+  const overlayRef = useRef(null)
   const contentRef = useRef(null)
+  const onCloseRef = useRef(onClose)
   const titleId = useId()
-  useDialogBackgroundIsolation(open)
+  onCloseRef.current = onClose
+  useDialogBackgroundIsolation(open, overlayRef)
 
   function handleMaskClick (e) {
     if (e.target === e.currentTarget && onClose) {
@@ -53,9 +56,10 @@ export default function Drawer (props) {
     const previouslyFocused = document.activeElement
     const content = contentRef.current
     const handleKeyDown = (event) => {
+      if (event.defaultPrevented) return
       if (event.key === 'Escape') {
-        if (onClose) {
-          onClose()
+        if (onCloseRef.current) {
+          onCloseRef.current()
           event.preventDefault()
         }
         return
@@ -86,7 +90,7 @@ export default function Drawer (props) {
       document.removeEventListener('keydown', handleKeyDown)
       if (previouslyFocused?.isConnected) previouslyFocused.focus()
     }
-  }, [onClose, open])
+  }, [open])
 
   if (!open) {
     return null
@@ -108,7 +112,7 @@ export default function Drawer (props) {
   )
 
   return createPortal((
-    <div className={cls} style={drawerStyle}>
+    <div ref={overlayRef} className={cls} style={drawerStyle}>
       <div
         className='custom-drawer-mask'
         onClick={handleMaskClick}

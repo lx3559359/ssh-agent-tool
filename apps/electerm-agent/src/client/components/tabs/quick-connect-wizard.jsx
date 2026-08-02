@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import {
   Alert,
   Button,
@@ -46,6 +46,7 @@ function getInitialValues () {
 }
 
 export default function QuickConnectWizard ({ open, onClose, batch }) {
+  const hostInputRef = useRef(null)
   const [step, setStep] = useState(0)
   const [values, setValues] = useState(getInitialValues)
   const [testing, setTesting] = useState(false)
@@ -133,6 +134,12 @@ export default function QuickConnectWizard ({ open, onClose, batch }) {
     window.store.openAdvancedSsh?.()
   }
 
+  function handleAfterOpenChange (isOpen) {
+    if (isOpen && step === 0) {
+      hostInputRef.current?.focus({ preventScroll: true })
+    }
+  }
+
   const stepItems = [
     { title: e('shellpilotConnectionWizardHostStep') },
     { title: e('shellpilotConnectionWizardAuthStep') },
@@ -147,6 +154,7 @@ export default function QuickConnectWizard ({ open, onClose, batch }) {
       width={660}
       destroyOnClose={false}
       onCancel={onClose}
+      afterOpenChange={handleAfterOpenChange}
       className='quick-connect-wizard'
     >
       <Steps current={step} size='small' items={stepItems} />
@@ -176,6 +184,7 @@ export default function QuickConnectWizard ({ open, onClose, batch }) {
                       {e('shellpilotQuickConnectServer')} <span>{e('shellpilotRequired')}</span>
                     </label>
                     <Input
+                      ref={hostInputRef}
                       id='shellpilot-connect-host'
                       aria-describedby='shellpilot-connect-host-help'
                       aria-required='true'

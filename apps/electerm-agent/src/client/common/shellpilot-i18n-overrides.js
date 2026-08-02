@@ -2,6 +2,7 @@ const catalogs = Object.freeze({
   zh_cn: Object.freeze({
     shellpilotDialog: '对话框',
     shellpilotCloseDialog: '关闭对话框',
+    shellpilotCloseNotification: '关闭通知',
     bookmarks: '书签',
     history: '历史',
     ssh: '终端',
@@ -1748,6 +1749,7 @@ const catalogs = Object.freeze({
   en_us: Object.freeze({
     shellpilotDialog: 'Dialog',
     shellpilotCloseDialog: 'Close dialog',
+    shellpilotCloseNotification: 'Close notification',
     bookmarks: 'Bookmarks',
     history: 'History',
     ssh: 'Terminal',

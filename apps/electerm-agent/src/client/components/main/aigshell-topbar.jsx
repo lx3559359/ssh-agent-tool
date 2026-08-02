@@ -50,6 +50,7 @@ export default auto(function AIGShellTopBar ({ store }) {
   const [showConnectionWizard, setShowConnectionWizard] = useState(false)
   const [connectionInfoBookmark, setConnectionInfoBookmark] = useState(null)
   const titleBarDraggingRef = useRef(false)
+  const serverStatusTriggerRef = useRef(null)
   const currentTab = store.tabs.find(tab => tab.id === store.activeTabId) || store.currentTab || {}
   const title = currentTab.title || currentTab.name || currentTab.host || e('shellpilotTopbarDisconnected')
   const online = currentTab.status === statusMap.success
@@ -118,6 +119,18 @@ export default auto(function AIGShellTopBar ({ store }) {
     setShowUpdateCenter(true)
     window.store.upgradeInfo.showUpdateCenter = true
     window.store.onCheckUpdate(true)
+  }
+
+  function handleOpenServerStatus (event) {
+    serverStatusTriggerRef.current = event.currentTarget
+    setShowServerStatus(true)
+  }
+
+  function handleCloseServerStatus () {
+    setShowServerStatus(false)
+    window.requestAnimationFrame(() => {
+      serverStatusTriggerRef.current?.focus()
+    })
   }
 
   function handleCloseUpdateCenter () {
@@ -228,7 +241,7 @@ export default auto(function AIGShellTopBar ({ store }) {
       group: 'connection',
       label: e('shellpilotTopbarServerStatus'),
       icon: <DashboardOutlined />,
-      onClick: () => setShowServerStatus(true),
+      onClick: handleOpenServerStatus,
       disabled: !serverStatusAvailable
     },
     {
@@ -478,7 +491,7 @@ export default auto(function AIGShellTopBar ({ store }) {
               <Suspense fallback={null}>
                 <ServerStatusModal
                   open
-                  onClose={() => setShowServerStatus(false)}
+                  onClose={handleCloseServerStatus}
                   store={store}
                   tab={currentTab}
                 />

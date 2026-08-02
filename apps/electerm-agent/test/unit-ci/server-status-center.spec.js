@@ -15,6 +15,8 @@ test('topbar exposes a read-only server status center for connected SSH sessions
   assert.match(topbar, /shellpilotTopbarServerStatus/)
   assert.match(topbar, /serverStatusAvailable/)
   assert.match(topbar, /disabled: !serverStatusAvailable/)
+  assert.match(topbar, /serverStatusTriggerRef\.current = event\.currentTarget/)
+  assert.match(topbar, /requestAnimationFrame\(\(\) => \{\s*serverStatusTriggerRef\.current\?\.focus\(\)/)
   assert.match(topbar, /item\.disabled/)
   assert.match(topbar, /from 'manate\/react'/)
   assert.match(topbar, /export default auto\(function AIGShellTopBar/)

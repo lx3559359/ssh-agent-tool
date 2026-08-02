@@ -896,13 +896,22 @@
   border-bottom 1px solid var(--sp-border)
 
 .sp-ai-provider-item-main
+  flex 1 1 auto
   min-width 0
+  max-width 100%
 
 .sp-ai-provider-name-row
   display flex
   align-items center
+  flex-wrap wrap
   gap 6px
+  min-width 0
   color var(--text-light)
+  .ant-tag
+    max-width 100%
+    height auto
+    white-space normal
+    overflow-wrap anywhere
 
 .sp-ai-provider-description
   margin-top 3px
@@ -982,6 +991,8 @@
   .sp-ai-provider-item
     align-items flex-start
     flex-direction column
+  .sp-ai-provider-item-main
+    width 100%
 
 .shellpilot-ai-web-url-hint
   margin-top 10px

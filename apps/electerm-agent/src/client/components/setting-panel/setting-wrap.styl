@@ -267,7 +267,8 @@
     padding 10px 12px !important
     h2
       order 1
-      flex 1 1 0
+      flex 1 1 180px
+      min-width 160px
     .setting-header-search
       order 3
       display none
@@ -324,3 +325,8 @@
     .setting-row-right
       height auto
       min-height 160px
+
+@media (max-width: 360px)
+  .setting-header h2
+    flex-basis calc(100% - 80px)
+    min-width 0

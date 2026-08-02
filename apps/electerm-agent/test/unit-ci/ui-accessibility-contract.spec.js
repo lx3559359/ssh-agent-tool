@@ -29,16 +29,31 @@ test('custom modal and drawer expose complete dialog semantics', () => {
   const isolation = fs.readFileSync(isolationPath, 'utf8')
 
   assert.match(modal, /createPortal/)
-  assert.match(modal, /useDialogBackgroundIsolation\(open\)/)
+  assert.match(modal, /useDialogBackgroundIsolation\(open, overlayRef\)/)
   assert.match(modal, /aria-labelledby=\{titleId\}/)
   assert.match(modal, /aria-label=\{e\('shellpilotCloseDialog'\)\}/)
+  assert.match(modal, /onCancelRef\.current = onCancel/)
+  assert.match(modal, /keyboardConfirmRef\.current = keyboardConfirm/)
+  assert.match(modal, /\}, \[open\]\)/)
   assert.match(drawer, /createPortal/)
   assert.match(drawer, /role='dialog'/)
   assert.match(drawer, /aria-modal='true'/)
   assert.match(drawer, /aria-labelledby=\{titleId\}/)
-  assert.match(drawer, /useDialogBackgroundIsolation\(open\)/)
+  assert.match(drawer, /useDialogBackgroundIsolation\(open, overlayRef\)/)
+  assert.match(drawer, /onCloseRef\.current = onClose/)
+  assert.match(drawer, /if \(event\.defaultPrevented\) return/)
+  assert.match(drawer, /\}, \[open\]\)/)
   assert.match(isolation, /root\.inert = true/)
   assert.match(isolation, /activeOwners\.size/)
+})
+
+test('foreground notifications stay operable while a dialog is open', () => {
+  const notification = readClient('components/common/notification.jsx')
+
+  assert.match(notification, /createPortal/)
+  assert.match(notification, /document\.body/)
+  assert.match(notification, /<button[\s\S]*className='notification-close'/)
+  assert.match(notification, /aria-label=\{e\('shellpilotCloseNotification'\)\}/)
 })
 
 test('nested dialog isolation restores the exact original background state', async () => {
@@ -77,6 +92,45 @@ test('dialog isolation removes aria-hidden when the background had no prior valu
 
   assert.equal(root.inert, false)
   assert.equal(root.getAttribute('aria-hidden'), null)
+})
+
+test('nested portal isolation keeps only the top dialog interactive', async () => {
+  const {
+    acquireDialogBackgroundIsolation,
+    releaseDialogBackgroundIsolation
+  } = await import(isolationUrl)
+  const root = createRoot()
+  const body = { children: [] }
+  const ownerDocument = { body }
+  const createLayer = (ariaHidden = null) => {
+    const layer = createRoot(ariaHidden)
+    layer.ownerDocument = ownerDocument
+    layer.parentElement = body
+    layer.querySelector = selector => selector === '[role="dialog"]' ? {} : null
+    body.children.push(layer)
+    return layer
+  }
+  const antDialogLayer = createLayer('background-dialog')
+  const firstDialog = createLayer()
+  const nestedDialog = createLayer()
+  const firstOwner = Symbol('first-portal-dialog')
+  const nestedOwner = Symbol('nested-portal-dialog')
+
+  acquireDialogBackgroundIsolation(firstOwner, root, firstDialog)
+  assert.equal(antDialogLayer.inert, true)
+  assert.equal(firstDialog.inert, false)
+
+  acquireDialogBackgroundIsolation(nestedOwner, root, nestedDialog)
+  assert.equal(firstDialog.inert, true)
+  assert.equal(nestedDialog.inert, false)
+
+  releaseDialogBackgroundIsolation(nestedOwner)
+  assert.equal(firstDialog.inert, false)
+  assert.equal(antDialogLayer.inert, true)
+
+  releaseDialogBackgroundIsolation(firstOwner)
+  assert.equal(antDialogLayer.inert, false)
+  assert.equal(antDialogLayer.getAttribute('aria-hidden'), 'background-dialog')
 })
 
 test('session pane tabs and icon controls expose native keyboard semantics', () => {

@@ -492,11 +492,23 @@ function getSupportedProtocols () {
   return [...SUPPORTED_PROTOCOLS]
 }
 
-module.exports = {
+const quickConnectApi = {
   parseQuickConnect,
   getDefaultPort,
   getSupportedProtocols,
   SUPPORTED_PROTOCOLS,
   DEFAULT_PORTS,
   OPTS_DENY_LIST
+}
+
+// Vite serves renderer source as native ESM in development and therefore
+// cannot synthesize a default export for this CommonJS module. Keep one
+// canonical parser while exposing a short-lived browser bridge for the ESM
+// adapter. The adapter removes the bridge after reading it.
+if (typeof globalThis !== 'undefined') {
+  globalThis.__shellpilotQuickConnect = quickConnectApi
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = quickConnectApi
 }

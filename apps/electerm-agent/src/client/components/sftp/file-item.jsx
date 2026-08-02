@@ -499,7 +499,10 @@ export default class FileSection extends React.Component {
   }
 
   handleRowKeyDown = (event) => {
-    const { type } = this.state.file
+    const { id: currentId, type } = this.state.file
+    const focusSelectedRow = nextId => {
+      document.getElementById('file-' + nextId)?.focus()
+    }
     if (event.key === 'Enter') {
       event.preventDefault()
       this.transferOrEnterDirectory(event)
@@ -510,18 +513,12 @@ export default class FileSection extends React.Component {
       this.onClick(event)
       return
     }
-    let nextId
     if (event.key === 'ArrowUp') {
       event.preventDefault()
-      nextId = this.props.selectPrev(type)
+      this.props.selectPrev(type, currentId, focusSelectedRow)
     } else if (event.key === 'ArrowDown') {
       event.preventDefault()
-      nextId = this.props.selectNext(type)
-    }
-    if (nextId) {
-      requestAnimationFrame(() => {
-        document.getElementById('file-' + nextId)?.focus()
-      })
+      this.props.selectNext(type, currentId, focusSelectedRow)
     }
   }
 

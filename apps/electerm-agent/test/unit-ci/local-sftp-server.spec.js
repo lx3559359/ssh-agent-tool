@@ -74,6 +74,8 @@ test('local SSH fixture provides isolated SFTP read, write, rename and cleanup o
     const sftp = await openSftp(client)
     const initialEntries = await callSftp(sftp, 'readdir', '/')
     assert.ok(initialEntries.some(entry => entry.filename === 'remote-seed.txt'))
+    const incomingDirectory = initialEntries.find(entry => entry.filename === 'incoming')
+    assert.equal(incomingDirectory?.longname?.startsWith('d'), true)
 
     const source = path.join(fixture.root, 'remote-seed.txt')
     const expectedHash = await fixture.hashFile('/remote-seed.txt')

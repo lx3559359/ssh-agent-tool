@@ -43,9 +43,14 @@ export default function Modal (props) {
     keyboardConfirm = true,
     onCancel
   } = props
+  const overlayRef = useRef(null)
   const contentRef = useRef(null)
+  const onCancelRef = useRef(onCancel)
+  const keyboardConfirmRef = useRef(keyboardConfirm)
   const titleId = useId()
-  useDialogBackgroundIsolation(open)
+  onCancelRef.current = onCancel
+  keyboardConfirmRef.current = keyboardConfirm
+  useDialogBackgroundIsolation(open, overlayRef)
 
   function handleMaskClick (e) {
     if (e.target === e.currentTarget && maskClosable && onCancel) {
@@ -66,8 +71,8 @@ export default function Modal (props) {
 
     const handleKeyDown = (e) => {
       if (e.key === 'Escape') {
-        if (onCancel) {
-          onCancel()
+        if (onCancelRef.current) {
+          onCancelRef.current()
           e.preventDefault()
         }
       } else if (e.key === 'Tab') {
@@ -87,7 +92,7 @@ export default function Modal (props) {
           e.preventDefault()
           first.focus()
         }
-      } else if (keyboardConfirm && (e.key === 'Enter' || e.key === ' ')) {
+      } else if (keyboardConfirmRef.current && (e.key === 'Enter' || e.key === ' ')) {
         // For confirm, Enter/Space confirms
         const okBtn = document.querySelector('.custom-modal-ok-btn')
         if (okBtn) {
@@ -104,7 +109,7 @@ export default function Modal (props) {
       document.removeEventListener('keydown', handleKeyDown)
       if (previouslyFocused?.isConnected) previouslyFocused.focus()
     }
-  }, [keyboardConfirm, open, onCancel])
+  }, [open])
 
   if (!open) {
     return null
@@ -125,7 +130,7 @@ export default function Modal (props) {
   )
 
   return createPortal((
-    <div className={cls} style={modalStyle}>
+    <div ref={overlayRef} className={cls} style={modalStyle}>
       <div
         className='custom-modal-mask'
         onClick={handleMaskClick}

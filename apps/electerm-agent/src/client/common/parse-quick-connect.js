@@ -1,4 +1,12 @@
-import quickConnect from '../../app/common/parse-quick-connect.js'
+import '../../app/common/parse-quick-connect.js'
+
+const quickConnect = globalThis.__shellpilotQuickConnect
+
+if (!quickConnect) {
+  throw new Error('Quick connect parser bridge is unavailable')
+}
+
+delete globalThis.__shellpilotQuickConnect
 
 const {
   parseQuickConnect,
