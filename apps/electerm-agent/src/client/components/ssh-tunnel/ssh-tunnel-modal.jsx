@@ -114,6 +114,26 @@ function healthPresentation (state) {
   return tunnelHealthPresentation[state] || tunnelHealthPresentation.failed
 }
 
+function latestTunnelFailure (entry = {}) {
+  const failureStates = new Set(['failed', 'port-conflict', 'session-lost'])
+  const events = Array.isArray(entry.events) ? entry.events : []
+  return events.slice().reverse().find(event => failureStates.has(event.state)) || null
+}
+
+function TunnelRuntimeFailure ({ entry }) {
+  const latestFailure = latestTunnelFailure(entry)
+  if (!latestFailure || entry.state === 'healthy') return null
+  return (
+    <Alert
+      showIcon
+      type='error'
+      className='ssh-tunnel-runtime-failure'
+      message={latestFailure.message}
+      description={latestFailure.code}
+    />
+  )
+}
+
 function showDisconnectHistory (entry) {
   const events = Array.isArray(entry.events) ? entry.events : []
   Modal.info({
@@ -777,6 +797,7 @@ export default function SshTunnelModal ({
                         </Tooltip>
                       </header>
                       <p>{getTunnelFlowText(entry.definition)}</p>
+                      <TunnelRuntimeFailure entry={entry} />
                       {
                         entry.lastTest
                           ? (

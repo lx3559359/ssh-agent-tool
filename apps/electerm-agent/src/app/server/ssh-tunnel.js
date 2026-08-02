@@ -25,6 +25,33 @@ function destroySocket (socket) {
   }
 }
 
+function normalizeForwardingError (error = {}) {
+  const message = String(error.message || error)
+  const reason = Number(error.reason)
+  let code = String(error.code || 'SSH_TUNNEL_FORWARDING_FAILED')
+  let readable = message || 'SSH 隧道转发失败'
+
+  if (
+    reason === 1 ||
+    /administratively prohibited|forwarding.*(?:disabled|denied|prohibited)|port forwarding.*(?:disabled|denied|prohibited)/i.test(message)
+  ) {
+    code = 'SSH_TUNNEL_FORWARDING_PROHIBITED'
+    readable = 'SSH 服务器禁止端口转发；请检查 AllowTcpForwarding、PermitOpen 或服务器安全策略。'
+  } else if (
+    reason === 2 ||
+    code === 'ECONNREFUSED' ||
+    /connection refused|connect failed/i.test(message)
+  ) {
+    code = 'SSH_TUNNEL_DESTINATION_REFUSED'
+    readable = '目标服务拒绝连接；请确认目标地址、端口及目标服务当前可访问。'
+  }
+
+  const normalized = new Error(readable)
+  normalized.code = code
+  normalized.cause = error
+  return normalized
+}
+
 function closeServer (server) {
   return new Promise(resolve => {
     if (!server) return resolve()
@@ -96,9 +123,11 @@ function forwardRemoteToLocal (options) {
       )
       target.on('error', error => {
         log.error(`Target connection error for tunnel ${result}:`, error)
+        lifecycle.emit('error', normalizeForwardingError(error))
         destroySocket(source)
         destroySocket(target)
       })
+      target.once?.('connect', () => lifecycle.emit('listening'))
       target.on('close', () => source.end?.())
       source.on('close', () => destroySocket(target))
       source.pipe(target).pipe(source)
@@ -121,7 +150,7 @@ function forwardRemoteToLocal (options) {
     conn.forwardIn(sshTunnelRemoteHost, sshTunnelRemotePort, error => {
       if (error) {
         detach()
-        return reject(error)
+        return reject(normalizeForwardingError(error))
       }
       log.log(`Port forwarded: ${result}`)
       resolve(createController({
@@ -180,9 +209,11 @@ function forwardLocalToRemote (options) {
         (error, remoteSocket) => {
           if (error) {
             log.error('SSH tunnel target connection failed:', error)
+            lifecycle.emit('error', normalizeForwardingError(error))
             destroySocket(socket)
             return
           }
+          lifecycle.emit('listening')
           sockets.add(remoteSocket)
           remoteSocket.once('close', () => sockets.delete(remoteSocket))
           remoteSocket.on('error', remoteError => {
@@ -265,9 +296,11 @@ function dynamicForward (options) {
         (error, stream) => {
           if (error) {
             log.error('SOCKS5 target connection failed:', error)
+            lifecycle.emit('error', normalizeForwardingError(error))
             deny()
             return
           }
+          lifecycle.emit('listening')
           const clientSocket = accept(true)
           if (!clientSocket) {
             destroySocket(stream)
@@ -338,3 +371,4 @@ function dynamicForward (options) {
 exports.dynamicForward = dynamicForward
 exports.forwardLocalToRemote = forwardLocalToRemote
 exports.forwardRemoteToLocal = forwardRemoteToLocal
+exports.normalizeForwardingError = normalizeForwardingError

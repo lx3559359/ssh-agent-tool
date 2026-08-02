@@ -289,6 +289,26 @@ async function startSftpServer (root) {
 }
 
 describe('session-sftp transport flows', () => {
+  test('same-endpoint move uses atomic SFTP rename instead of shell mv', async () => {
+    const sftp = Object.create(Sftp.prototype)
+    const renamed = []
+    sftp.rename = async (from, to) => {
+      renamed.push([from, to])
+      return 1
+    }
+    sftp.buildRemoteCommand = () => {
+      throw new Error('shell mv must not be used')
+    }
+
+    const result = await sftp.mv('/srv/app/source.txt', '/srv/app/archive/source.txt')
+
+    assert.equal(result, 1)
+    assert.deepEqual(renamed, [[
+      '/srv/app/source.txt',
+      '/srv/app/archive/source.txt'
+    ]])
+  })
+
   test('graceful shutdown force-closes an SFTP channel that never acknowledges end', async () => {
     const channel = new EventEmitter()
     let ended = 0

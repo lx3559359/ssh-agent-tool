@@ -2250,6 +2250,23 @@ test('SFTP adapter snapshots both rename paths and blocks cross-filesystem or sp
     getSftp: () => noDeviceIds
   })
   await sameDirectoryAdapter.prepare(sameDirectoryOperation)
+
+  const noDeviceIdsAcrossDirectories = createFakeSftp({
+    '/srv/app/source.txt': { type: 'file', content: 'source' },
+    '/srv/app/archive': { type: 'directory' }
+  }, { omitDev: true })
+  const acrossDirectoriesOperation = await buildSftpOperation({
+    id: 'adapter-rename-no-device-id-across-directories',
+    action: 'rename',
+    paths: {
+      source: '/srv/app/source.txt',
+      target: '/srv/app/archive/source.txt'
+    },
+    type: 'file'
+  })
+  await createSftpTransactionAdapter({
+    getSftp: () => noDeviceIdsAcrossDirectories
+  }).prepare(acrossDirectoriesOperation)
 })
 
 test('SFTP adapter snapshots and restores complete delete trees', async () => {

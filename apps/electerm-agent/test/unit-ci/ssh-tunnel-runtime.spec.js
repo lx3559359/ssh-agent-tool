@@ -86,6 +86,40 @@ test('local forwarding returns an idempotent closeable controller', async () => 
   assert.equal(remoteSocket.destroyCount, 1)
 })
 
+test('local forwarding reports a refused remote destination to its runtime', async () => {
+  const conn = new EventEmitter()
+  conn.forwardOut = (srcHost, srcPort, host, port, callback) => {
+    callback(new Error('Channel open failure: Connection refused'))
+  }
+  let connectionHandler
+  const netImpl = {
+    createServer (handler) {
+      connectionHandler = handler
+      return createServer(handler)
+    }
+  }
+
+  const controller = await forwardLocalToRemote({
+    id: 'local-refused',
+    conn,
+    sshTunnelLocalHost: '127.0.0.1',
+    sshTunnelLocalPort: 43001,
+    sshTunnelRemoteHost: '127.0.0.1',
+    sshTunnelRemotePort: 43002,
+    netImpl
+  })
+  const failures = []
+  controller.on('error', error => failures.push(error))
+
+  connectionHandler(createSocket())
+  await new Promise(resolve => setImmediate(resolve))
+
+  assert.equal(failures.length, 1)
+  assert.equal(failures[0].code, 'SSH_TUNNEL_DESTINATION_REFUSED')
+  assert.match(failures[0].message, /目标服务拒绝连接/)
+  await controller.close()
+})
+
 test('remote forwarding unregisters the listener and remote port', async () => {
   const conn = new EventEmitter()
   let unforwardCount = 0
@@ -112,6 +146,29 @@ test('remote forwarding unregisters the listener and remote port', async () => {
   await controller.close()
   assert.equal(unforwardCount, 1)
   assert.equal(conn.listenerCount('tcp connection'), 0)
+})
+
+test('remote forwarding distinguishes server policy prohibition', async () => {
+  const conn = new EventEmitter()
+  conn.forwardIn = (host, port, callback) => {
+    callback(new Error('Channel open failure: administratively prohibited'))
+  }
+
+  await assert.rejects(
+    forwardRemoteToLocal({
+      id: 'remote-prohibited',
+      conn,
+      sshTunnelLocalHost: '127.0.0.1',
+      sshTunnelLocalPort: 43003,
+      sshTunnelRemoteHost: '127.0.0.1',
+      sshTunnelRemotePort: 43004
+    }),
+    error => {
+      assert.equal(error.code, 'SSH_TUNNEL_FORWARDING_PROHIBITED')
+      assert.match(error.message, /服务器禁止端口转发/)
+      return true
+    }
+  )
 })
 
 test('SOCKS5 forwarding closes its server without closing SSH', async () => {

@@ -137,3 +137,11 @@ test('SSH tunnel manager shows health states and bounded disconnect history', ()
   assert.match(translations, /shellpilotTunnelHealthReconnecting: '重连中'/)
   assert.match(translations, /shellpilotTunnelDisconnectHistory: '断线记录'/)
 })
+
+test('SSH tunnel manager surfaces the latest actionable runtime failure', () => {
+  const modal = source('src/client/components/ssh-tunnel/ssh-tunnel-modal.jsx')
+
+  assert.match(modal, /latestTunnelFailure/)
+  assert.match(modal, /ssh-tunnel-runtime-failure/)
+  assert.match(modal, /latestFailure\.message/)
+})
