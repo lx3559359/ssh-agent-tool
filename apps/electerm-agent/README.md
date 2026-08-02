@@ -29,6 +29,12 @@ npm install
 npm start
 ```
 
+Keep the Vite server running. In a second terminal, start Electron:
+
+```bash
+npm run app
+```
+
 Common verification commands:
 
 ```bash

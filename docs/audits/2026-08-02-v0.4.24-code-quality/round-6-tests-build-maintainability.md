@@ -12,7 +12,7 @@
 | --- | --- | --- | --- | --- |
 | R6-01 | P1 | 声明支持 Node.js `>=16.0.0`，但锁定的 Vite 8 无法在该范围的大部分版本运行 | `node_modules/vite/package.json` 要求 `^20.19.0 || >=22.12.0` | 同步 `package.json`、lockfile 根包与中英文 README；新增 engine 契约测试 |
 | R6-02 | P2 | `npm run icon` 必然报模块不存在 | package script 指向 `build/bin/icon`；当前树和全部 Git 历史都不存在该文件，也无调用者 | 移除死脚本；新增所有直接 Node 脚本入口必须存在的契约测试 |
-| R6-03 | P2 | README 的开发启动步骤不可执行 | 中英文 README 使用 `npm run dev`，scripts 中不存在 `dev`；真实入口为 `npm start` | 两份 README 改为 `npm start`；契约测试保证 README 引用的 `npm run` 命令均已声明 |
+| R6-03 | P2 | README 的开发启动步骤不可执行，且单进程说明不足以打开应用 | 中英文 README 使用 `npm run dev`，scripts 中不存在 `dev`；`npm start` 只启动 Vite，Electron 需要第二终端执行 `npm run app` | 两份 README 改为明确的双终端流程；契约测试保证引用脚本已声明且两个进程均被记录 |
 
 ## TDD 证据
 
@@ -20,7 +20,8 @@
 | --- | --- | --- |
 | Node engine 与锁定 Vite 一致 | 项目和 lockfile 的 `>=16.0.0` 与 Vite 要求不一致，2/2 失败 | 2/2 通过 |
 | 直接 Node 脚本入口存在 | 精确报告 `icon: build/bin/icon`，1/1 失败 | 移除死入口后通过 |
-| README 只引用已声明脚本 | 精确报告 `README.md: dev` 与 `README_cn.md: dev`，1/1 失败 | 改用 `npm start` 后通过 |
+| README 只引用已声明脚本 | 精确报告 `README.md: dev` 与 `README_cn.md: dev`，1/1 失败 | 改用已声明脚本后通过 |
+| README 覆盖完整双进程开发流程 | 首次精确报告缺少 `npm run app`，1/1 失败 | 中英文均记录 Vite + Electron 后通过 |
 
 ## 测试结构审查
 
@@ -37,7 +38,7 @@
 | `npm audit --omit=dev --json` | 0 info / low / moderate / high / critical |
 | `npm audit --json` | 0 info / low / moderate / high / critical |
 | Node/Vite 契约 | 项目、lockfile、Vite 均为 `^20.19.0 || >=22.12.0` |
-| package-script/readme 契约 | 4/4 通过 |
+| package-script/readme/Node 契约 | 5/5 通过 |
 | `npm run lint` | 通过 |
 
 ## 与既有功能要求的关系

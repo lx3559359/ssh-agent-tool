@@ -30,6 +30,12 @@ npm install
 npm start
 ```
 
+保持 Vite 开发服务器运行，然后在第二个终端中启动 Electron：
+
+```bash
+npm run app
+```
+
 常用自检命令：
 
 ```bash

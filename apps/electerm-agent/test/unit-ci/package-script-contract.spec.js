@@ -34,3 +34,11 @@ test('development readmes only reference declared npm run scripts', () => {
 
   assert.deepEqual(missing, [])
 })
+
+test('development readmes document both processes needed for the app', () => {
+  for (const filename of ['README.md', 'README_cn.md']) {
+    const content = fs.readFileSync(path.join(root, filename), 'utf8')
+    assert.match(content, /npm start/, `${filename} must start the Vite server`)
+    assert.match(content, /npm run app/, `${filename} must start Electron separately`)
+  }
+})
