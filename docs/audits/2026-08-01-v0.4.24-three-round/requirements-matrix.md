@@ -6,6 +6,8 @@ Evidence must describe current execution, current source, or current runtime sta
 
 Final closure (2026-08-02): 159 `已满足`, 6 explained `部分满足`, 1 `已废止`, and 0 `未验证`/`未满足`/`无法验证`. “Final closure” evidence refers to the fresh 3,082-test run, the round-three desktop visual/performance runs, the newly built packaged EXE smoke, and the public update-source byte verification documented in the round-three report.
 
+Code-quality recheck (2026-08-02): all 166 dispositions remain unchanged after rounds four through six. Fresh evidence is 3,091 tests / 3,085 passed / 0 failed / 6 skipped, quality and recovery E2E 2/2, performance E2E 1/1, a new Windows x64 package and EXE smoke, and zero production/full dependency advisories. The six partial rows still require the named external SFTP/tunnel/website environments; no new unmet requirement was found.
+
 | ID | Domain | Requirement | Source | Severity | Evidence | Status | Gap / disposition |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | BASE-01 | Base | Fresh launch shows the disconnected home and does not automatically open a local terminal or remote connection. | Guide §1.1; disconnected-home spec | P2 | First-run visual inspection and `008.basic-terminal.spec.js` both opened on `.no-sessions`; the local terminal appeared only after an explicit New Tab action. | 已满足 | Recheck packaged first launch in round three. |
