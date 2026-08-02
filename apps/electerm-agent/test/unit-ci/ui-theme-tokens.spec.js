@@ -33,9 +33,13 @@ const tokenKeys = [
   'primarySoft',
   'cyan',
   'success',
+  'successSoft',
   'info',
+  'infoSoft',
   'warning',
+  'warningSoft',
   'danger',
+  'dangerSoft',
   'radiusSmall',
   'radiusControl',
   'radiusToolbar',
@@ -49,6 +53,7 @@ const tokenKeys = [
   'shadowControl',
   'shadowCard',
   'shadowOverlay',
+  'focusOffset',
   'motionFast',
   'motionNormal'
 ]
@@ -56,8 +61,8 @@ const colorTokenKeys = [
   'page', 'canvas', 'surface', 'surfaceSubtle', 'surfaceSoft',
   'surfaceInset', 'surfaceElevated',
   'text', 'textMuted', 'textDisabled', 'border', 'borderStrong',
-  'primary', 'primaryAlt', 'primarySoft', 'cyan', 'success', 'info',
-  'warning', 'danger'
+  'primary', 'primaryAlt', 'primarySoft', 'cyan', 'success', 'successSoft',
+  'info', 'infoSoft', 'warning', 'warningSoft', 'danger', 'dangerSoft'
 ]
 const minimumTextContrast = 4.5
 

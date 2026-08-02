@@ -1,5 +1,7 @@
 const catalogs = Object.freeze({
   zh_cn: Object.freeze({
+    shellpilotDialog: '对话框',
+    shellpilotCloseDialog: '关闭对话框',
     bookmarks: '书签',
     history: '历史',
     ssh: '终端',
@@ -1702,6 +1704,8 @@ const catalogs = Object.freeze({
     shellpilotMoveSelectedServers: '移动所选服务器'
   }),
   en_us: Object.freeze({
+    shellpilotDialog: 'Dialog',
+    shellpilotCloseDialog: 'Close dialog',
     bookmarks: 'Bookmarks',
     history: 'History',
     ssh: 'Terminal',

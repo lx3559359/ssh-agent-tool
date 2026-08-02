@@ -95,6 +95,9 @@ export function deriveSecondaryThemeTokens (theme = {}) {
     expandHex(theme['text-dark'], mix(text, page, 0.52)),
     backgrounds
   )
+  const success = expandHex(theme.success, '#168A74')
+  const info = expandHex(theme.info, cyan)
+  const warning = expandHex(theme.warn, '#C56A20')
   const danger = expandHex(theme.error, '#CF3F50')
   const shadowSm = darkSurface
     ? '0 3px 0 -1px rgba(0, 0, 0, 0.52), 0 10px 20px rgba(0, 0, 0, 0.56), 0 0 0 1px rgba(138, 130, 255, 0.18)'
@@ -132,10 +135,14 @@ export function deriveSecondaryThemeTokens (theme = {}) {
     primaryAlt,
     primarySoft: mix(primary, surface, 0.88),
     cyan,
-    success: expandHex(theme.success, '#168A74'),
-    info: expandHex(theme.info, cyan),
-    warning: expandHex(theme.warn, '#C56A20'),
+    success,
+    successSoft: mix(success, surface, 0.88),
+    info,
+    infoSoft: mix(info, surface, 0.88),
+    warning,
+    warningSoft: mix(warning, surface, 0.88),
     danger,
+    dangerSoft: mix(danger, surface, 0.88),
     radiusSmall: '10px',
     radiusControl: '14px',
     radiusToolbar: '18px',
@@ -149,6 +156,7 @@ export function deriveSecondaryThemeTokens (theme = {}) {
     shadowControl: shadowSm,
     shadowCard: shadowMd,
     shadowOverlay: shadowLg,
+    focusOffset: '2px',
     motionFast: '120ms',
     motionNormal: '180ms'
   }
