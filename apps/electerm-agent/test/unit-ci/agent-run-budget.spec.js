@@ -1,5 +1,6 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
+const fs = require('node:fs')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
 
@@ -7,6 +8,19 @@ const budgetUrl = pathToFileURL(path.resolve(
   __dirname,
   '../../src/client/components/ai/agent-run-budget.js'
 )).href
+
+test('Agent renderer sends only its model response byte limit to the backend', () => {
+  const source = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/components/ai/agent.js'
+  ), 'utf8')
+  const requestLimits = source.match(
+    /traceContext,\s*(\{\s*maxContentLengthBytes:[\s\S]*?\})\s*\)/
+  )?.[1] || ''
+
+  assert.match(requestLimits, /maxContentLengthBytes:\s*runtimeLimits\.maxModelResponseBytes/)
+  assert.doesNotMatch(requestLimits, /apiKeyAI|\.\.\.config/)
+})
 
 test('default Agent budget exposes approved limits', async () => {
   const { createAgentRunBudget } = await import(budgetUrl)

@@ -7,6 +7,59 @@ process.env.NODE_ENV = 'development'
 
 const aiPath = path.resolve(__dirname, '../../src/app/lib/ai')
 
+test('Agent model clients enforce bounded maxContentLength values', async () => {
+  const axios = require('axios')
+  const originalCreate = axios.create
+  const configs = []
+  axios.create = config => {
+    configs.push(config)
+    return {
+      post: async () => ({
+        data: { choices: [{ message: { role: 'assistant', content: 'ok' } }] }
+      })
+    }
+  }
+  delete require.cache[aiPath]
+  const { AIchatWithTools } = require(aiPath)
+  const call = requestLimits => AIchatWithTools(
+    [],
+    'model-a',
+    'https://example.test/v1',
+    '',
+    '',
+    '',
+    [],
+    '',
+    '',
+    undefined,
+    requestLimits
+  )
+
+  try {
+    await call()
+    await call({ maxContentLengthBytes: 2 * 1024 * 1024 })
+    for (const value of [0, -1, NaN, '1024', 64 * 1024 * 1024 + 1]) {
+      await call({ maxContentLengthBytes: value })
+    }
+
+    assert.deepEqual(
+      configs.map(config => config.maxContentLength),
+      [
+        8 * 1024 * 1024,
+        2 * 1024 * 1024,
+        8 * 1024 * 1024,
+        8 * 1024 * 1024,
+        8 * 1024 * 1024,
+        8 * 1024 * 1024,
+        8 * 1024 * 1024
+      ]
+    )
+  } finally {
+    axios.create = originalCreate
+    delete require.cache[aiPath]
+  }
+})
+
 test('normalizes model list responses from common providers and relays', () => {
   const {
     normalizeAIModelsResponse

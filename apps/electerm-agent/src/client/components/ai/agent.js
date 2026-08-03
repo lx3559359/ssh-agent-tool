@@ -44,6 +44,7 @@ import {
 } from './agent-cancellation-status.js'
 import { buildAgentToolPresentation } from './agent-tool-presentation.js'
 import { runValidatedAgentToolCalls } from './agent-tool-call-parser.js'
+import { resolveAgentRunLimits } from './agent-run-budget.js'
 
 const MAX_ITERATIONS = 150
 const agentApiTools = Object.freeze(
@@ -108,7 +109,7 @@ function updateChatEntry (chatEntry, updates) {
   updateAIChatHistoryEntry(window.store, chatEntry.id, updates)
 }
 
-async function callBackendAIchatWithTools (messages, config, requestId, traceContext) {
+async function callBackendAIchatWithTools (messages, config, requestId, traceContext, runtimeLimits) {
   return window.pre.runGlobalAsync(
     'AIchatWithTools',
     messages,
@@ -120,7 +121,10 @@ async function callBackendAIchatWithTools (messages, config, requestId, traceCon
     agentApiTools,
     config.authHeaderNameAI,
     requestId,
-    traceContext
+    traceContext,
+    {
+      maxContentLengthBytes: runtimeLimits.maxModelResponseBytes
+    }
   )
 }
 
@@ -151,6 +155,7 @@ export function waitForAgentOperation (operation, signal) {
 }
 
 export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming, history = [], traceContext, onQualityTerminal) {
+  const runtimeLimits = resolveAgentRunLimits(config.agentLimits)
   const parentTrace = traceContext?.traceId
     ? createTraceContext({
       traceId: traceContext.traceId,
@@ -382,7 +387,8 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
           buildBoundedAgentMessages(baseMessages, runtimeMessages),
           config,
           activeBackendRequestId,
-          requestTraceContext
+          requestTraceContext,
+          runtimeLimits
         ),
         controller.signal
       )

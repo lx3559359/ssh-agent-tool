@@ -22,6 +22,10 @@ const toolCallParserUrl = pathToFileURL(path.join(
   root,
   'src/client/components/ai/agent-tool-call-parser.js'
 )).href
+const runBudgetUrl = pathToFileURL(path.join(
+  root,
+  'src/client/components/ai/agent-run-budget.js'
+)).href
 
 function toDataUrl (source) {
   return `data:text/javascript;base64,${Buffer.from(source).toString('base64')}`
@@ -207,6 +211,10 @@ const settleAgentCancellation = async activeCancellation => {
     .replace(
       /^import \{ runValidatedAgentToolCalls \} from '\.\/agent-tool-call-parser\.js'\r?\n/m,
       `import { runValidatedAgentToolCalls } from ${JSON.stringify(toolCallParserUrl)}\n`
+    )
+    .replace(
+      /^import \{ resolveAgentRunLimits \} from '\.\/agent-run-budget\.js'\r?\n/m,
+      `import { resolveAgentRunLimits } from ${JSON.stringify(runBudgetUrl)}\n`
     )
     .replace(
       /^import aiAgentCopy from '\.\/ai-agent-copy\.json'\r?\n/m,
@@ -586,6 +594,7 @@ test('agent loop keeps its parent trace internal while propagating it to tool ru
   const { runAgentLoop } = await importAgentModule()
   const chatEntry = { id: 'agent-trace-task', sourceTabId: 'tab-a', prompt: 'check status' }
   const backendContexts = []
+  const backendLimits = []
   const backendMessages = []
   let backendCalls = 0
   let toolRuntime
@@ -601,7 +610,8 @@ test('agent loop keeps its parent trace internal while propagating it to tool ru
         assert.equal(action, 'AIchatWithTools')
         backendCalls += 1
         backendMessages.push(args[0])
-        backendContexts.push(args.at(-1))
+        backendContexts.push(args.at(-2))
+        backendLimits.push(args.at(-1))
         if (backendCalls === 1) {
           return {
             message: {
@@ -664,6 +674,10 @@ test('agent loop keeps its parent trace internal while propagating it to tool ru
     assert.equal(backendContexts.every(context => context.action === 'agent-request'), true)
     assert.equal(backendContexts.every(context => /^agent-agent-trace-task-\d+-\d+$/.test(context.requestId)), true)
     assert.equal(backendContexts.every(context => context.password === undefined), true)
+    assert.deepEqual(backendLimits, [
+      { maxContentLengthBytes: 8 * 1024 * 1024 },
+      { maxContentLengthBytes: 8 * 1024 * 1024 }
+    ])
     assert.doesNotMatch(
       JSON.stringify(backendMessages),
       /sp-1784304000000-12345678|upstream-operation|upstream-request|parent-secret|traceContext/

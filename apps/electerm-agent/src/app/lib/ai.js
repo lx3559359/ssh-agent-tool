@@ -57,6 +57,18 @@ function readPositiveLimit (name, fallback) {
   return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback
 }
 
+const MAX_AI_RESPONSE_BYTES = 64 * 1024 * 1024
+const DEFAULT_AI_RESPONSE_BYTES = 8 * 1024 * 1024
+
+function readBoundedResponseLimit (value, fallback = DEFAULT_AI_RESPONSE_BYTES) {
+  return typeof value === 'number' &&
+    Number.isSafeInteger(value) &&
+    value > 0 &&
+    value <= MAX_AI_RESPONSE_BYTES
+    ? value
+    : fallback
+}
+
 const AI_STREAM_LIMITS = Object.freeze({
   maxActive: readPositiveLimit('SHELLPILOT_AI_STREAM_MAX_ACTIVE', 6),
   maxBytes: readPositiveLimit('SHELLPILOT_AI_STREAM_MAX_BYTES', 8 * 1024 * 1024),
@@ -67,7 +79,10 @@ const AI_STREAM_LIMITS = Object.freeze({
 const AI_REQUEST_LIMITS = Object.freeze({
   timeoutMs: readPositiveLimit('SHELLPILOT_AI_REQUEST_TIMEOUT_MS', 60 * 1000),
   maxRetries: Math.min(readPositiveLimit('SHELLPILOT_AI_REQUEST_MAX_RETRIES', 1), 2),
-  retryDelayMs: readPositiveLimit('SHELLPILOT_AI_REQUEST_RETRY_DELAY_MS', 350)
+  retryDelayMs: readPositiveLimit('SHELLPILOT_AI_REQUEST_RETRY_DELAY_MS', 350),
+  maxContentLengthBytes: readBoundedResponseLimit(
+    readPositiveLimit('SHELLPILOT_AI_RESPONSE_MAX_BYTES', DEFAULT_AI_RESPONSE_BYTES)
+  )
 })
 
 exports.AI_STREAM_LIMITS = AI_STREAM_LIMITS
@@ -169,6 +184,10 @@ const createAIClient = (baseURL, apiKey, proxy, authHeaderName, options = {}) =>
     : apiKey
   const config = {
     baseURL,
+    maxContentLength: readBoundedResponseLimit(
+      options.maxContentLength,
+      AI_REQUEST_LIMITS.maxContentLengthBytes
+    ),
     headers: {
       'Content-Type': 'application/json'
     }
@@ -1032,7 +1051,7 @@ exports.AIModels = async (baseURL, apiKey, proxy, authHeaderName) => {
 
 exports.normalizeAIMessageRequestContent = normalizeAIMessageRequestContent
 
-exports.AIchatWithTools = async (messages, model, baseURL, path, apiKey, proxy, tools, authHeaderName, requestId, traceContext) => {
+exports.AIchatWithTools = async (messages, model, baseURL, path, apiKey, proxy, tools, authHeaderName, requestId, traceContext, requestLimits) => {
   let endpoint
   let errorContext = { model, baseURL, apiPath: path, apiKey, proxy }
   const controller = new AbortController()
@@ -1056,7 +1075,8 @@ exports.AIchatWithTools = async (messages, model, baseURL, path, apiKey, proxy, 
       proxy
     }
     const client = createAIClient(endpoint.baseURL, apiKey, proxy, authHeaderName, {
-      timeout: AI_REQUEST_LIMITS.timeoutMs
+      timeout: AI_REQUEST_LIMITS.timeoutMs,
+      maxContentLength: requestLimits?.maxContentLengthBytes
     })
     const requestData = {
       model,
