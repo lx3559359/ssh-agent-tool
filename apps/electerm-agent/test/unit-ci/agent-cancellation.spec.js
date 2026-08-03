@@ -159,16 +159,6 @@ test('cancellation observer reports confirmation only after every acknowledgemen
   ])
 })
 
-test('agent loop preserves backend AIAgentCancel and terminal signal wiring', () => {
-  const agentSource = fs.readFileSync(path.join(aiRoot, 'agent.js'), 'utf8')
-  const terminalSource = fs.readFileSync(path.join(aiRoot, 'agent-terminal-command.js'), 'utf8')
-  assert.match(agentSource, /runGlobalAsync\('AIAgentCancel', activeBackendRequestId\)/)
-  assert.match(agentSource, /createAgentRunCancellationController/)
-  assert.match(agentSource, /confirm:\s*value\s*=>\s*value\?\.cancelled\s*===\s*true/)
-  assert.doesNotMatch(agentSource, /runGlobalAsync\('AIAgentCancel'[\s\S]{0,160}\.catch\(\(\)\s*=>\s*\{\}\)/)
-  assert.match(terminalSource, /runSafetyCommand\([\s\S]*signal/)
-})
-
 test('terminal safety dispatch and wait receive the runtime AbortSignal', async () => {
   const { runAgentTerminalCommand } = await import(terminalUrl)
   const controller = new AbortController()

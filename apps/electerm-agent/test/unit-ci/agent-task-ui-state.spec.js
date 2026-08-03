@@ -6,6 +6,7 @@ const { pathToFileURL } = require('node:url')
 const aiRoot = path.resolve(__dirname, '../../src/client/components/ai')
 const viewStateUrl = pathToFileURL(path.join(aiRoot, 'agent-task-view-state.js')).href
 const handoffUrl = pathToFileURL(path.join(aiRoot, 'agent-task-handoff.js')).href
+const registryUrl = pathToFileURL(path.join(aiRoot, 'agent-task-registry.js')).href
 
 test('run creation failure is visible without a task object', async () => {
   const { getAgentTaskViewState } = await import(viewStateUrl)
@@ -174,4 +175,47 @@ test('AI prompt handoff cancellation prevents a delayed write', async () => {
     getAiChat: () => ({ setPrompt: () => { promptWrites += 1 } })
   })
   assert.equal(promptWrites, 1)
+})
+
+test('registry cancellation becomes visible and keeps finished task evidence', async () => {
+  const { getAgentTaskViewState } = await import(viewStateUrl)
+  const { createAgentTaskRegistry } = await import(registryUrl)
+  const registry = createAgentTaskRegistry()
+  const task = {
+    id: 'visible-cancelled-task',
+    status: 'running-readonly',
+    endpoint: {
+      host: 'srv.test',
+      port: 22,
+      username: 'ops',
+      tabId: 'tab-a',
+      pid: 'pid-a',
+      terminalPid: 'terminal-a',
+      sessionType: 'ssh',
+      hostKeyFingerprint: 'SHA256:a'
+    },
+    steps: [{
+      id: 'step-a',
+      status: 'completed',
+      output: 'bounded readonly evidence'
+    }]
+  }
+  let aborted = false
+  registry.register({
+    taskId: task.id,
+    endpoint: task.endpoint,
+    controller: { abort: () => { aborted = true } },
+    runner: {
+      cancel: async () => ({ ...task, status: 'cancelled' })
+    }
+  })
+
+  const cancelled = await registry.cancel(task.id)
+  const view = getAgentTaskViewState({ phase: 'finished', task: cancelled })
+
+  assert.equal(aborted, true)
+  assert.equal(registry.has(task.id), false)
+  assert.equal(view.status, 'cancelled')
+  assert.equal(view.showEvidence, true)
+  assert.equal(cancelled.steps[0].output, 'bounded readonly evidence')
 })

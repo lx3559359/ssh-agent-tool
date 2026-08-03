@@ -44,6 +44,10 @@ test('Agent observer records counters, monotonic phases, and one terminal event'
   assert.deepEqual(writes.map(item => item.event.durationMs), [0, 25, 80, 140, 200])
   assert.deepEqual(writes.map(item => item.event.modelRequests), [0, 0, 1, 1, 1])
   assert.deepEqual(writes.map(item => item.event.toolCalls), [0, 0, 0, 1, 1])
+  assert.deepEqual(
+    writes.map(item => item.context.traceId),
+    Array(5).fill('sp-1784304000000-12345678')
+  )
   assert.equal(new Set(writes.map(item => item.event.endpointFingerprint)).size, 1)
   assert.deepEqual(observer.snapshot(), {
     status: 'completed',

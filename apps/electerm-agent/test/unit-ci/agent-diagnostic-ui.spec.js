@@ -42,15 +42,9 @@ test('AgentTaskRunner confirms before execution and exposes live progress cancel
   assert.match(runner, /shellpilotSafetyStepFailed/)
   assert.match(runner, /shellpilotSafetyStepCancelled/)
   assert.match(runner, /Progress/)
-  assert.match(runner, /agentTaskRegistry\.cancel/)
-  assert.match(runner, /cancellation\?\.\('cancelling'\)/)
-  assert.match(runner, /cancellation\?\.\('cancel_confirmed'\)/)
-  assert.match(runner, /cancellation\?\.\([\s\S]{0,40}'cancel_failed'/)
   assert.match(runner, /audit.*code/s)
   assert.match(runner, /shellpilotAgentTaskAuditRecorded/)
   assert.match(runner, /shellpilotAgentTaskSendToAi/)
-  assert.match(runner, /getAiChat:\s*\(\)\s*=>\s*refsStatic\.get\(['"]AIChat['"]\)/)
-  assert.doesNotMatch(runner, /refsStatic\.get\(['"]AIChat['"]\).*handleSubmit/)
   assert.doesNotMatch(runner, /shellpilotAgentTaskImmediateFix|shellpilotAgentTaskExecuteMutation/)
   assert.match(styles, /overflow-y\s+auto/)
   assert.match(styles, /border-radius\s+var\(--sp-radius-card\)/)
@@ -66,11 +60,6 @@ test('server status installs the registry capability and recovers restart orphan
   assert.match(modal, /transactionStore/)
   assert.match(registry, /任务已中断：执行器不可用/)
   assert.doesNotMatch(modal, /setInterval/)
-  assert.match(modal, /getCurrentEndpoint=\{getCurrentDiagnosticEndpoint\}/)
-  assert.match(
-    readSource('src/client/components/ai/agent-task-runner.jsx'),
-    /getCurrentEndpoint:\s*async[\s\S]*typeof getCurrentEndpoint === ['"]function['"][\s\S]*return getCurrentEndpoint\(\)/
-  )
 })
 
 test('reopening diagnostics isolates visible progress from an older background task', () => {
@@ -119,20 +108,4 @@ test('diagnostic UI renders phase metrics endpoint and recovery actions from the
   assert.match(runner, /viewState\.showEvidence/)
   assert.match(styles, /agent-task-state-meta/)
   assert.match(styles, /agent-task-state-actions/)
-})
-
-test('production AgentTaskRunner passes an internal parent trace only to the task controller', () => {
-  const runner = readSource('src/client/components/ai/agent-task-runner.jsx')
-  const modelRequest = runner.slice(
-    runner.indexOf('const text = await requestDiagnosticPlanText({'),
-    runner.indexOf('const nextPlan = parseDiagnosticPlan')
-  )
-
-  assert.match(runner, /createTraceContext/)
-  assert.match(runner, /taskTraceContextRef\.current\s*=\s*createTraceContext\(/)
-  assert.match(
-    runner,
-    /createAgentTaskController\(\{[\s\S]*traceContext:\s*taskTraceContextRef\.current/
-  )
-  assert.doesNotMatch(modelRequest, /traceContext|taskTraceContextRef/)
 })

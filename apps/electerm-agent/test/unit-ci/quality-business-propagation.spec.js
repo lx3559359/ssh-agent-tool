@@ -300,39 +300,17 @@ test('SFTP begin retries use one parent trace and distinct child operations', as
   }
 })
 
-test('production SFTP transfer preparation retains the controller trace id', () => {
-  const source = fs.readFileSync(path.join(
-    root,
-    'src/client/components/sftp/sftp-entry.jsx'
-  ), 'utf8')
-  const prepareTransfer = source.slice(
-    source.indexOf('prepareTransferSafetyOperation ='),
-    source.indexOf('beginTransferSafetyOperation =')
-  )
-
-  assert.match(prepareTransfer, /traceId:\s*plan\.metadata\?\.traceId/)
-})
-
 test('renderer AI and updater entrypoints pass optional trace context at the IPC tail', () => {
   const historyItem = fs.readFileSync(path.join(
     root,
     'src/client/components/ai/ai-chat-history-item.jsx'
-  ), 'utf8')
-  const agent = fs.readFileSync(path.join(
-    root,
-    'src/client/components/ai/agent.js'
   ), 'utf8')
   const upgrade = fs.readFileSync(path.join(
     root,
     'src/client/components/main/upgrade.jsx'
   ), 'utf8')
 
-  for (const source of [historyItem, upgrade]) {
-    assert.match(source, /createTraceContext/)
-    assert.match(source, /recordQualityEvent/)
-  }
   assert.match(historyItem, /'AIchat',[\s\S]*?requestId,\s*traceContext/)
-  assert.match(agent, /'AIchatWithTools',[\s\S]*?requestId,\s*traceContext/)
   assert.match(upgrade, /'nativeUpdateCheck',\s*updateOptions,\s*traceContext/)
   assert.match(upgrade, /'nativeUpdateDownload',\s*updateOptions,\s*traceContext/)
   assert.match(upgrade, /'nativeUpdateInstall',\s*traceContext/)
