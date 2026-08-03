@@ -99,13 +99,55 @@ test('deduplicates concurrent Agent cancellation and reports cancellation failur
 
   const first = cancelScopedAIChatRun(options)
   const second = cancelScopedAIChatRun(options)
+  assert.equal(store.aiChatHistory[0].runState.status, 'cancelling')
+  assert.equal(store.aiChatHistory[0].runState.phase, 'cancelling')
   release.resolve()
   const [firstResult, secondResult] = await Promise.all([first, second])
 
   assert.equal(calls, 1)
   assert.deepEqual(firstResult, secondResult)
   assert.equal(store.aiChatHistory[0].completionStatus, 'partially-completed')
+  assert.equal(store.aiChatHistory[0].runState.status, 'cancel_failed')
+  assert.equal(store.aiChatHistory[0].runState.phase, 'cancel_failed')
+  assert.equal(store.aiChatHistory[0].runState.terminationReason, 'cancel_failed')
   assert.match(store.aiChatHistory[0].response, /remote cancellation not confirmed/)
+})
+
+test('confirmed Agent cancellation stores a cancelled runState', async () => {
+  const { cancelScopedAIChatRun } = await import(moduleUrl)
+  const store = {
+    aiChatHistory: [{
+      id: 'agent-confirmed-cancel',
+      conversationScopeId: 'tab-a',
+      completionStatus: 'running',
+      response: 'evidence',
+      mode: 'agent',
+      runState: {
+        status: 'running',
+        phase: 'tool_execution',
+        endpointFingerprint: 'endpoint-12345678',
+        budget: { elapsedMs: 10, modelRequests: 1, toolCalls: 1 }
+      }
+    }]
+  }
+
+  const result = await cancelScopedAIChatRun({
+    store,
+    item: store.aiChatHistory[0],
+    cancelAgent: async () => ({ cancelled: true }),
+    stoppedText: 'stopped'
+  })
+
+  assert.equal(result.cancelled, true)
+  assert.equal(store.aiChatHistory[0].completionStatus, 'cancelled')
+  assert.deepEqual(store.aiChatHistory[0].runState, {
+    status: 'cancelled',
+    phase: 'cancelled',
+    terminationReason: 'cancelled',
+    errorCode: '',
+    endpointFingerprint: 'endpoint-12345678',
+    budget: { elapsedMs: 10, modelRequests: 1, toolCalls: 1 }
+  })
 })
 
 test('keeps completed state when completion wins the cancellation race', async () => {

@@ -264,12 +264,100 @@ export async function runAgentLoop (
     ...(serviceOptions.observerOptions || {})
   })
 
+  function currentRunState () {
+    return window.store.aiChatHistory?.find(item => item?.id === chatEntry.id)
+      ?.runState || {}
+  }
+
+  function persistAgentRunState (patch = {}) {
+    let observerSnapshot = {}
+    try {
+      observerSnapshot = observer.snapshot?.() || {}
+    } catch (error) {}
+    const budgetSnapshot = budget.snapshot()
+    const previous = currentRunState()
+    const status = String(observerSnapshot.status || previous.status || 'running')
+    const phase = String(observerSnapshot.phase || previous.phase || 'started')
+    let terminationReason
+    if (Object.hasOwn(patch, 'terminationReason')) {
+      terminationReason = patch.terminationReason
+    } else if (status === 'completed') {
+      terminationReason = 'finished'
+    } else if (['cancelled', 'cancel_failed'].includes(status)) {
+      terminationReason = status
+    } else if (status === 'failed') {
+      terminationReason = previous.terminationReason || 'failed'
+    } else {
+      terminationReason = ''
+    }
+    const errorCode = Object.hasOwn(patch, 'errorCode')
+      ? patch.errorCode
+      : status === 'running'
+        ? ''
+        : previous.errorCode || ''
+    try {
+      updateChatEntry(chatEntry, {
+        runState: {
+          status,
+          phase,
+          terminationReason: String(terminationReason || ''),
+          errorCode: String(errorCode || ''),
+          endpointFingerprint: String(
+            observerSnapshot.endpointFingerprint ||
+            previous.endpointFingerprint ||
+            ''
+          ),
+          budget: {
+            elapsedMs: observerSnapshot.durationMs ?? budgetSnapshot.elapsedMs,
+            modelRequests: observerSnapshot.modelRequests ?? budgetSnapshot.modelRequests,
+            toolCalls: observerSnapshot.toolCalls ?? budgetSnapshot.toolCalls
+          }
+        }
+      })
+    } catch (error) {
+      try {
+        window.store.onError?.(error)
+      } catch {}
+    }
+  }
+
+  function observe (method, args = [], patch = {}) {
+    try {
+      observer[method]?.(...args)
+    } catch (error) {}
+    persistAgentRunState(patch)
+  }
+
+  function observationErrorPatch (stage, error) {
+    return {
+      terminationReason: stage === 'endpoint'
+        ? 'endpoint_changed'
+        : stage === 'budget'
+          ? 'budget_exceeded'
+          : 'failed',
+      errorCode: error?.code || 'AGENT_ERROR'
+    }
+  }
+
   const cancellationController = createAgentRunCancellationController({
     abort: () => {
       abortRef.current = true
       controller.abort()
     },
-    observer
+    observer: {
+      cancellation: (status, reasonCode) => observe(
+        'cancellation',
+        [status, reasonCode],
+        {
+          terminationReason: status === 'cancel_confirmed'
+            ? 'cancelled'
+            : status === 'cancel_failed'
+              ? 'cancel_failed'
+              : '',
+          errorCode: reasonCode || ''
+        }
+      )
+    }
   })
   cancellationController.register(() => (
     cancelAgentRuntimeOperations(agentRuntime)
@@ -290,7 +378,7 @@ export async function runAgentLoop (
     return activeCancellation
   }
   abortRef.cancelCurrent = cancelCurrent
-  observer.start?.()
+  observe('start')
   try {
     agentTaskRegistry.register({
       taskId,
@@ -319,12 +407,12 @@ export async function runAgentLoop (
       completionStatus: 'failed'
     })
     finishQuality('failed', 'failed')
-    observer.error?.('ui_handoff', error)
-    observer.finish?.('failed', error?.code)
+    observe('error', ['ui_handoff', error], observationErrorPatch('ui_handoff', error))
+    observe('finish', ['failed', error?.code])
     return lockedResult
   }
   function reportCancellationPersistenceError (error) {
-    observer.error?.('persistence', error)
+    observe('error', ['persistence', error], observationErrorPatch('persistence', error))
     try {
       window.store.onError?.(error)
     } catch {}
@@ -398,10 +486,13 @@ export async function runAgentLoop (
       reportCancellationPersistenceError(error)
     }
     if (!terminalAlreadyRecorded) finishQuality('cancelled', 'cancelled')
-    observer.finish?.(
+    observe('finish', [
       cancellationFailure ? 'cancel_failed' : 'cancelled',
       cancellationFailure?.code
-    )
+    ], {
+      terminationReason: cancellationFailure ? 'cancel_failed' : 'cancelled',
+      errorCode: cancellationFailure?.code || ''
+    })
   }
 
   function finalizeBudgetToolCalls (error, notice) {
@@ -441,7 +532,10 @@ export async function runAgentLoop (
       cancellationFailure = settledError
     }
     const notice = getAgentBudgetExceededText()
-    observer.budgetExceeded?.(error)
+    observe('budgetExceeded', [error], {
+      terminationReason: 'budget_exceeded',
+      errorCode: error.code
+    })
     finalizeBudgetToolCalls(error, notice)
     const snapshot = budget.snapshot()
     const response = accumulatedContent
@@ -466,7 +560,7 @@ export async function runAgentLoop (
       budget: snapshot
     })
     finishQuality('failed', 'failed')
-    observer.finish?.('failed', error.code)
+    observe('finish', ['failed', error.code])
     return result
   }
 
@@ -494,8 +588,15 @@ export async function runAgentLoop (
         response: message,
         completionStatus: 'failed'
       })
-      observer.error?.('ui_handoff', failure)
-      observer.finish?.('failed', failure.code || 'AGENT_SKILL_SELECTION_REQUIRED')
+      observe(
+        'error',
+        ['ui_handoff', failure],
+        observationErrorPatch('ui_handoff', failure)
+      )
+      observe('finish', [
+        'failed',
+        failure.code || 'AGENT_SKILL_SELECTION_REQUIRED'
+      ])
       finishQuality('failed', 'failed')
       return {
         ok: false,
@@ -521,7 +622,7 @@ export async function runAgentLoop (
       currentErrorStage = 'model'
       budget.assertTime()
       budget.reserveModelRequest()
-      observer.modelRequest?.()
+      observe('modelRequest')
       activeBackendRequestId = `agent-${chatEntry.id}-${iteration}-${Date.now()}`
       const requestTraceContext = createTraceContext({
         ...(parentTrace?.traceId ? { traceId: parentTrace.traceId } : {}),
@@ -554,13 +655,11 @@ export async function runAgentLoop (
           response: accumulatedContent + `\n\n**${aiAgentCopy.errorLabel}:** ${safeAgentError}`,
           completionStatus: 'failed'
         })
-        observer.error?.('model', {
+        const modelError = {
           code: agentResult.errorCode || 'AGENT_MODEL_REQUEST_FAILED'
-        })
-        observer.finish?.(
-          'failed',
-          agentResult.errorCode || 'AGENT_MODEL_REQUEST_FAILED'
-        )
+        }
+        observe('error', ['model', modelError], observationErrorPatch('model', modelError))
+        observe('finish', ['failed', modelError.code])
         finishQuality('failed', 'failed')
         return { ...agentResult, error: safeAgentError }
       }
@@ -573,8 +672,13 @@ export async function runAgentLoop (
           response: accumulatedContent || aiAgentCopy.noResponseText,
           completionStatus: 'failed'
         })
-        observer.error?.('model', { code: 'AGENT_MODEL_RESPONSE_EMPTY' })
-        observer.finish?.('failed', 'AGENT_MODEL_RESPONSE_EMPTY')
+        const emptyResponseError = { code: 'AGENT_MODEL_RESPONSE_EMPTY' }
+        observe(
+          'error',
+          ['model', emptyResponseError],
+          observationErrorPatch('model', emptyResponseError)
+        )
+        observe('finish', ['failed', emptyResponseError.code])
         finishQuality('failed', 'failed')
         return
       }
@@ -595,7 +699,7 @@ export async function runAgentLoop (
           artifactIds: [...agentRuntime.createdArtifactIds],
           completionStatus: 'completed'
         })
-        observer.finish?.('completed')
+        observe('finish', ['completed'])
         finishQuality('completed', 'completed')
         return
       }
@@ -616,7 +720,11 @@ export async function runAgentLoop (
         }),
         prepare: parsedCalls => prepareAgentRiskBatch(parsedCalls, agentRuntime),
         onInvalid: (toolCall, error) => {
-          observer.error?.('tool_arguments', error)
+          observe(
+            'error',
+            ['tool_arguments', error],
+            observationErrorPatch('tool_arguments', error)
+          )
           const name = String(toolCall?.function?.name || '')
           const safeError = sanitizeAIStoredText(error?.message || error)
           const failureResult = boundAgentToolResult(JSON.stringify({
@@ -648,7 +756,7 @@ export async function runAgentLoop (
         },
         execute: async parsed => {
           if (abortRef && abortRef.current) throw createAgentAbortError()
-          observer.toolCall?.()
+          observe('toolCall')
           const { id, name, args } = parsed
           const safeArgs = sanitizeAIChatHistory([{ args }])[0]?.args || {}
           const toolEntry = {
@@ -703,7 +811,8 @@ export async function runAgentLoop (
           } catch (err) {
             if (abortRef && abortRef.current) throw createAgentAbortError()
             if (isAgentBudgetError(err)) throw err
-            observer.error?.(getAgentErrorStage(err), err)
+            const stage = getAgentErrorStage(err)
+            observe('error', [stage, err], observationErrorPatch(stage, err))
             await failAgentRiskBatch(agentRuntime, err, {
               toolName: name,
               args
@@ -745,8 +854,9 @@ export async function runAgentLoop (
       response: accumulatedContent + `\n\n*(${aiAgentCopy.maxIterationsText})*`,
       completionStatus: 'failed'
     })
-    observer.error?.('model', { code: 'AGENT_MAX_ITERATIONS' })
-    observer.finish?.('failed', 'AGENT_MAX_ITERATIONS')
+    const iterationError = { code: 'AGENT_MAX_ITERATIONS' }
+    observe('error', ['model', iterationError], observationErrorPatch('model', iterationError))
+    observe('finish', ['failed', iterationError.code])
     finishQuality('failed', 'failed')
   } catch (error) {
     const exceeded = budgetFailure || (isAgentBudgetError(error) ? error : null)
@@ -758,14 +868,15 @@ export async function runAgentLoop (
       return
     }
     const safeError = sanitizeAIStoredText(error?.message || error)
-    observer.error?.(getAgentErrorStage(error, currentErrorStage), error)
+    const stage = getAgentErrorStage(error, currentErrorStage)
+    observe('error', [stage, error], observationErrorPatch(stage, error))
     setIsStreaming(false)
     updateChatEntry(chatEntry, {
       response: accumulatedContent + `\n\n**${aiAgentCopy.errorLabel}:** ${safeError}`,
       completionStatus: 'failed'
     })
     finishQuality('failed', 'failed')
-    observer.finish?.('failed', error?.code || 'AGENT_ERROR')
+    observe('finish', ['failed', error?.code || 'AGENT_ERROR'])
     return { ok: false, data: null, error: safeError }
   } finally {
     budget.dispose()

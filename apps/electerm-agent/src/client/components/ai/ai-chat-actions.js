@@ -16,6 +16,71 @@ const TRACE_METADATA_FIELDS = [
   'action'
 ]
 
+const AGENT_RUN_STATE_TEXT_FIELDS = [
+  'status',
+  'phase',
+  'terminationReason',
+  'errorCode',
+  'endpointFingerprint'
+]
+const AGENT_RUN_COUNTER_FIELDS = [
+  'elapsedMs',
+  'modelRequests',
+  'toolCalls'
+]
+const MAX_AGENT_RUN_COUNTER = 2147483647
+
+function normalizeAgentRunStateText (value) {
+  if (typeof value !== 'string') return ''
+  return value.trim().slice(0, 64)
+}
+
+function normalizeAgentRunCounter (value) {
+  const number = Number(value)
+  if (!Number.isFinite(number) || number < 0) return 0
+  return Math.min(MAX_AGENT_RUN_COUNTER, Math.floor(number))
+}
+
+export function normalizeAgentRunState (runState) {
+  if (!runState || typeof runState !== 'object' || Array.isArray(runState)) {
+    return undefined
+  }
+  const normalized = {}
+  for (const field of AGENT_RUN_STATE_TEXT_FIELDS) {
+    normalized[field] = normalizeAgentRunStateText(runState[field])
+  }
+  const sourceBudget = runState.budget &&
+    typeof runState.budget === 'object' &&
+    !Array.isArray(runState.budget)
+    ? runState.budget
+    : {}
+  normalized.budget = Object.fromEntries(
+    AGENT_RUN_COUNTER_FIELDS.map(field => [
+      field,
+      normalizeAgentRunCounter(sourceBudget[field])
+    ])
+  )
+  return normalized
+}
+
+function mergeAgentRunState (current, update) {
+  if (!update || typeof update !== 'object' || Array.isArray(update)) {
+    return normalizeAgentRunState(update)
+  }
+  return normalizeAgentRunState({
+    ...(current && typeof current === 'object' ? current : {}),
+    ...update,
+    budget: {
+      ...(current?.budget && typeof current.budget === 'object'
+        ? current.budget
+        : {}),
+      ...(update.budget && typeof update.budget === 'object'
+        ? update.budget
+        : {})
+    }
+  })
+}
+
 export function getAIChatTraceId (item = {}) {
   const candidates = [
     item.metadata?.traceId,
@@ -131,6 +196,11 @@ export function normalizeAIChatHistoryItem (item) {
       .map(normalizeAIChatText)
       .filter(Boolean)
   }
+  if (Object.hasOwn(item, 'runState')) {
+    const runState = normalizeAgentRunState(item.runState)
+    if (runState) normalized.runState = runState
+    else delete normalized.runState
+  }
   return normalizeAIChatTraceStorage(normalized)
 }
 
@@ -163,7 +233,7 @@ export function createRetryChatEntry (item = {}, {
   timestamp
 } = {}) {
   const safeItem = normalizeAIChatHistoryForStorage([item])[0] || {}
-  return {
+  const retry = {
     ...safeItem,
     id,
     timestamp,
@@ -176,6 +246,8 @@ export function createRetryChatEntry (item = {}, {
     sessionId: null,
     toolCalls: []
   }
+  delete retry.runState
+  return retry
 }
 
 function getAIChatScopeId (item = {}) {
@@ -199,6 +271,14 @@ export function getInterruptedAIChatUpdate (item = {}, {
     completionStatus: 'failed',
     requestId: '',
     response: partial ? `${partial}\n\n${errorText}` : errorText
+  }
+  if (item.mode === 'agent' && item.runState) {
+    update.runState = {
+      status: 'failed',
+      phase: 'interrupted',
+      terminationReason: 'interrupted',
+      errorCode: 'AGENT_RUN_INTERRUPTED'
+    }
   }
   if (includeSession) {
     update.sessionId = null
@@ -409,13 +489,18 @@ export function updateAIChatHistoryEntry (
     : sanitizeAIChatHistory([updates])[0] || {}
   const next = [...history]
   const merged = { ...history[index], ...safeUpdates }
+  if (Object.hasOwn(safeUpdates, 'runState')) {
+    const runState = mergeAgentRunState(history[index].runState, safeUpdates.runState)
+    if (runState) merged.runState = runState
+    else delete merged.runState
+  }
   if (history[index].metadata || safeUpdates.metadata) {
     merged.metadata = {
       ...(history[index].metadata || {}),
       ...(safeUpdates.metadata || {})
     }
   }
-  next[index] = normalizeAIChatTraceStorage(merged)
+  next[index] = normalizeAIChatHistoryItem(merged)
   store.aiChatHistory = next.map(normalizeAIChatTraceStorage)
   return true
 }

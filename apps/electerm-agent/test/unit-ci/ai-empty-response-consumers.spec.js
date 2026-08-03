@@ -1418,6 +1418,15 @@ test('chat Agent observer records model, tool, and one completed terminal event'
   const { runAgentLoop } = await importAgentModule()
   const chatEntry = { id: 'agent-observer', prompt: 'observe run' }
   const events = []
+  const observerState = {
+    status: 'created',
+    phase: 'created',
+    durationMs: 1234,
+    modelRequests: 0,
+    toolCalls: 0,
+    endpointFingerprint: 'endpoint-feedbeef',
+    terminal: false
+  }
   let backendCalls = 0
   global.__executeToolCall = async () => 'evidence'
   global.window = {
@@ -1451,14 +1460,31 @@ test('chat Agent observer records model, tool, and one completed terminal event'
     }
   }
   const observer = {
-    start: () => events.push('started'),
-    phase: value => events.push(value),
-    modelRequest: () => events.push('model_request'),
-    toolCall: () => events.push('tool_execution'),
+    start: () => {
+      events.push('started')
+      Object.assign(observerState, { status: 'running', phase: 'started' })
+    },
+    phase: value => {
+      events.push(value)
+      Object.assign(observerState, { status: 'running', phase: value })
+    },
+    modelRequest: () => {
+      events.push('model_request')
+      observerState.modelRequests += 1
+      Object.assign(observerState, { status: 'running', phase: 'model_request' })
+    },
+    toolCall: () => {
+      events.push('tool_execution')
+      observerState.toolCalls += 1
+      Object.assign(observerState, { status: 'running', phase: 'tool_execution' })
+    },
     error: stage => events.push(`error:${stage}`),
     budgetExceeded: () => events.push('budget_exceeded'),
-    finish: value => events.push(`finish:${value}`),
-    snapshot: () => ({ endpointFingerprint: 'endpoint-test' })
+    finish: value => {
+      events.push(`finish:${value}`)
+      Object.assign(observerState, { status: value, phase: value, terminal: true })
+    },
+    snapshot: () => ({ ...observerState })
   }
 
   await runAgentLoop(
@@ -1479,4 +1505,16 @@ test('chat Agent observer records model, tool, and one completed terminal event'
     'model_request',
     'finish:completed'
   ])
+  assert.deepEqual(window.store.aiChatHistory[0].runState, {
+    status: 'completed',
+    phase: 'completed',
+    terminationReason: 'finished',
+    errorCode: '',
+    endpointFingerprint: 'endpoint-feedbeef',
+    budget: {
+      elapsedMs: 1234,
+      modelRequests: 2,
+      toolCalls: 1
+    }
+  })
 })

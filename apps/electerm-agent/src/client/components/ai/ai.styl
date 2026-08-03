@@ -563,6 +563,31 @@
 .agent-tool-calls
   margin 8px 0
 
+.agent-run-status
+  display flex
+  align-items center
+  flex-wrap wrap
+  gap 4px 10px
+  margin 6px 0 8px
+  padding 6px 8px
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-control)
+  background var(--sp-surface-soft)
+  color var(--text-dark)
+  font-size 11px
+  strong
+    color var(--text)
+    font-size 12px
+  code
+    max-width 100%
+    overflow-wrap anywhere
+  &.agent-run-status-success
+    border-color var(--success)
+  &.agent-run-status-warning
+    border-color var(--warn)
+  &.agent-run-status-error
+    border-color var(--danger)
+
 .agent-tool-call-card,
 .agent-tool-readonly-card
   border 1px solid var(--sp-border)

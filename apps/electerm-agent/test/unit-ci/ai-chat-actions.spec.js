@@ -82,6 +82,11 @@ test('AI chat actions create a clean retry entry without stale stream state', as
     sessionId: 'stream-1',
     mode: 'ask',
     toolCalls: [{ id: 'tool-1' }],
+    runState: {
+      status: 'completed',
+      phase: 'completed',
+      terminationReason: 'finished'
+    },
     modelAI: 'deepseek-chat',
     baseURLAI: 'https://api.deepseek.com',
     timestamp: 1
@@ -99,6 +104,7 @@ test('AI chat actions create a clean retry entry without stale stream state', as
   assert.deepEqual(retry.toolCalls, [])
   assert.equal(retry.modelAI, 'deepseek-chat')
   assert.equal(retry.timestamp, 2)
+  assert.equal(Object.hasOwn(retry, 'runState'), false)
 })
 
 test('AI chat startup normalizes malformed legacy entries before rendering', async () => {
@@ -126,6 +132,90 @@ test('AI chat startup normalizes malformed legacy entries before rendering', asy
   assert.equal(history[0].response, 'disk is healthy')
   assert.deepEqual(history[0].toolCalls, [])
   assert.deepEqual(history[0].artifactIds, [])
+})
+
+test('AI chat runState normalization is bounded and preserves legacy entries without runState', async () => {
+  const {
+    normalizeAIChatHistoryOnStartup
+  } = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/components/ai/ai-chat-actions.js')))
+
+  const history = normalizeAIChatHistoryOnStartup([{
+    id: 'legacy-without-run-state',
+    response: 'stable answer'
+  }, {
+    id: 'agent-with-run-state',
+    mode: 'agent',
+    completionStatus: 'completed',
+    runState: {
+      status: 'completed',
+      phase: 'finished',
+      terminationReason: '',
+      errorCode: '',
+      endpointFingerprint: 'endpoint-12ab34cd',
+      password: 'must-not-survive',
+      budget: {
+        elapsedMs: 1200.8,
+        modelRequests: 2,
+        toolCalls: -3,
+        rawPrompt: 'must-not-survive'
+      }
+    }
+  }])
+
+  assert.equal(Object.hasOwn(history[0], 'runState'), false)
+  assert.deepEqual(history[1].runState, {
+    status: 'completed',
+    phase: 'finished',
+    terminationReason: '',
+    errorCode: '',
+    endpointFingerprint: 'endpoint-12ab34cd',
+    budget: {
+      elapsedMs: 1200,
+      modelRequests: 2,
+      toolCalls: 0
+    }
+  })
+  assert.doesNotMatch(JSON.stringify(history[1].runState), /password|rawPrompt|must-not-survive/)
+})
+
+test('Agent startup recovery maps running runState to interrupted without deleting evidence', async () => {
+  const {
+    normalizeAIChatHistoryOnStartup
+  } = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/components/ai/ai-chat-actions.js')))
+  const toolCalls = [{
+    id: 'tool-1',
+    name: 'get_terminal_status',
+    status: 'completed',
+    args: {},
+    result: 'ok'
+  }]
+
+  const [recovered] = normalizeAIChatHistoryOnStartup([{
+    id: 'interrupted-agent-run-state',
+    mode: 'agent',
+    pending: false,
+    completionStatus: 'running',
+    response: 'partial evidence',
+    toolCalls,
+    runState: {
+      status: 'cancelling',
+      phase: 'cancelling',
+      endpointFingerprint: 'endpoint-aabbccdd',
+      budget: { elapsedMs: 321, modelRequests: 2, toolCalls: 1 }
+    }
+  }])
+
+  assert.equal(recovered.completionStatus, 'failed')
+  assert.match(recovered.response, /^partial evidence/)
+  assert.deepEqual(recovered.toolCalls, toolCalls)
+  assert.deepEqual(recovered.runState, {
+    status: 'failed',
+    phase: 'interrupted',
+    terminationReason: 'interrupted',
+    errorCode: 'AGENT_RUN_INTERRUPTED',
+    endpointFingerprint: 'endpoint-aabbccdd',
+    budget: { elapsedMs: 321, modelRequests: 2, toolCalls: 1 }
+  })
 })
 
 test('AI chat actions close orphaned running requests after an app restart', async () => {

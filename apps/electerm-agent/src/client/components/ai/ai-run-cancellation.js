@@ -50,7 +50,17 @@ async function cancelRunOnce ({
   const sessionId = getAIChatStreamSessionId(current, store)
   updateAIChatHistoryEntry(store, id, {
     pending: false,
-    completionStatus: 'stopping'
+    completionStatus: 'stopping',
+    ...(current.mode === 'agent'
+      ? {
+          runState: {
+            status: 'cancelling',
+            phase: 'cancelling',
+            terminationReason: '',
+            errorCode: ''
+          }
+        }
+      : {})
   })
 
   let cancellationError
@@ -85,13 +95,27 @@ async function cancelRunOnce ({
 
   cancelAIChatEntryLifecycle(store, latest, { recordQualityEvent })
   const finalEntry = currentEntry(store, id) || latest
-  updateAIChatHistoryEntry(store, id, buildAgentCancellationUpdate({
-    response: finalEntry.response,
-    stoppedText,
-    error: cancellationError && sanitizeAIStoredText(
-      cancellationError?.message || cancellationError
-    )
-  }))
+  updateAIChatHistoryEntry(store, id, {
+    ...buildAgentCancellationUpdate({
+      response: finalEntry.response,
+      stoppedText,
+      error: cancellationError && sanitizeAIStoredText(
+        cancellationError?.message || cancellationError
+      )
+    }),
+    ...(current.mode === 'agent'
+      ? {
+          runState: {
+            status: cancellationError ? 'cancel_failed' : 'cancelled',
+            phase: cancellationError ? 'cancel_failed' : 'cancelled',
+            terminationReason: cancellationError ? 'cancel_failed' : 'cancelled',
+            errorCode: cancellationError
+              ? String(cancellationError?.code || 'AGENT_CANCELLATION_FAILED')
+              : ''
+          }
+        }
+      : {})
+  })
 
   return {
     cancelled: !cancellationError,

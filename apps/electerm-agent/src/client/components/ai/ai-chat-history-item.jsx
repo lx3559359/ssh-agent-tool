@@ -2,6 +2,7 @@ import { memo, useState, useEffect, useRef, useCallback } from 'react'
 import AIOutput from './ai-output'
 import AIStopIcon from './ai-stop-icon'
 import AgentToolCallCard from './agent-tool-call-card'
+import { buildAgentRunStatusView } from './agent-run-status.js'
 import { cancelAgentRun, isAgentRunActive, runAgentLoop } from './agent'
 import {
   Alert,
@@ -903,11 +904,30 @@ export default memo(function AIChatHistoryItem ({
     )
   }
 
+  function renderAgentRunStatus () {
+    const status = buildAgentRunStatusView(item)
+    if (!status) return null
+    const metrics = e('shellpilotAiAgentStatusMetrics')
+      .replace('{elapsed}', (status.elapsedMs / 1000).toFixed(1))
+      .replace('{modelRequests}', status.modelRequests)
+      .replace('{toolCalls}', status.toolCalls)
+    return (
+      <div className={`agent-run-status agent-run-status-${status.tone}`}>
+        <strong>{e(status.labelKey)}</strong>
+        <span>{metrics}</span>
+        {status.endpointFingerprint
+          ? <code>{status.endpointFingerprint}</code>
+          : null}
+      </div>
+    )
+  }
+
   return (
     <div className='chat-history-item'>
       <div className='mg1y'>
         <Alert {...alertProps} />
       </div>
+      {renderAgentRunStatus()}
       {renderToolCalls()}
       <AIOutput item={item} isStreaming={requestIsRunning} />
       {renderStopButton()}
