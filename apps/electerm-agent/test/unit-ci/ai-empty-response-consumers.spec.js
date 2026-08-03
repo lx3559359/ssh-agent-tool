@@ -26,6 +26,10 @@ const runBudgetUrl = pathToFileURL(path.join(
   root,
   'src/client/components/ai/agent-run-budget.js'
 )).href
+const runtimeContextUrl = pathToFileURL(path.join(
+  root,
+  'src/client/components/ai/agent-runtime-context.js'
+)).href
 
 function toDataUrl (source) {
   return `data:text/javascript;base64,${Buffer.from(source).toString('base64')}`
@@ -76,9 +80,14 @@ async function importAgentModule () {
     )
     .replace(
       /^import \{\r?\n\s*createAgentToolObservation,\r?\n\s*serializeAgentObservationForModel\r?\n\} from '\.\/agent-observation\.js'\r?\n/m,
-      'const createAgentToolObservation = (toolName, value) => ({\n' +
-      "  kind: 'untrusted-observation', toolName, data: String(value ?? '')\n" +
-      '})\n' +
+      'const createAgentToolObservation = (toolName, value) => {\n' +
+      "  const data = typeof value === 'string' ? value : JSON.stringify(value)\n" +
+      '  return {\n' +
+      "    kind: 'untrusted-observation', toolName,\n" +
+      '    truncated: value?.truncated === true || data.length > 64 * 1024,\n' +
+      '    data: data.slice(0, 64 * 1024 - 1)\n' +
+      '  }\n' +
+      '}\n' +
       'const serializeAgentObservationForModel = value => JSON.stringify(value)\n'
     )
     .replace(
@@ -124,7 +133,8 @@ async function importAgentModule () {
       "const buildAIConversationMessages = (history, entry) => [{ role: 'user', content: entry.prompt }]\n"
     )
     .replace(
-      /^import \{\r?\n\s*boundAgentToolResult,\r?\n\s*bindAgentToolArgs,\r?\n\s*buildBoundedAgentMessages,\r?\n\s*cancelAgentRuntimeOperations,\r?\n\s*captureAgentRuntimeEndpoint,\r?\n\s*resolveAgentRuntimeEndpoint\r?\n\} from '\.\/agent-runtime-context\.js'\r?\n/m,
+      /^import \{\r?\n\s*boundAgentToolResult,\r?\n\s*boundAgentToolResultToBudget,\r?\n\s*bindAgentToolArgs,\r?\n\s*buildBoundedAgentMessages,\r?\n\s*cancelAgentRuntimeOperations,\r?\n\s*captureAgentRuntimeEndpoint,\r?\n\s*resolveAgentRuntimeEndpoint\r?\n\} from '\.\/agent-runtime-context\.js'\r?\n/m,
+      `import { boundAgentToolResultToBudget } from ${JSON.stringify(runtimeContextUrl)}\n` +
       'const boundAgentToolResult = value => typeof value === \'string\' ? value : JSON.stringify(value)\n' +
       'const bindAgentToolArgs = (name, args) => args\n' +
       'const buildBoundedAgentMessages = (base, runtime) => [...base, ...runtime]\n' +
@@ -213,8 +223,8 @@ const settleAgentCancellation = async activeCancellation => {
       `import { runValidatedAgentToolCalls } from ${JSON.stringify(toolCallParserUrl)}\n`
     )
     .replace(
-      /^import \{ resolveAgentRunLimits \} from '\.\/agent-run-budget\.js'\r?\n/m,
-      `import { resolveAgentRunLimits } from ${JSON.stringify(runBudgetUrl)}\n`
+      /^import \{\r?\n\s*createAgentRunBudget,\r?\n\s*resolveAgentRunLimits\r?\n\} from '\.\/agent-run-budget\.js'\r?\n/m,
+      `import { createAgentRunBudget, resolveAgentRunLimits } from ${JSON.stringify(runBudgetUrl)}\n`
     )
     .replace(
       /^import aiAgentCopy from '\.\/ai-agent-copy\.json'\r?\n/m,
@@ -224,6 +234,7 @@ const settleAgentCancellation = async activeCancellation => {
         stoppedText: 'Stopped',
         noResponseText: 'No response',
         maxIterationsText: 'Maximum iterations reached',
+        budgetExceededText: 'Agent run stopped after reaching its configured limit.',
         toolCall: {
           cancelledDetail: 'Task cancelled; unfinished operations were not continued.'
         }
@@ -1135,4 +1146,229 @@ test('agent cancellation releases the lock without waiting for a hung tool call'
   } finally {
     delete global.__executeToolCall
   }
+})
+
+test('Agent model request budget stops before one request over the limit', async () => {
+  const { runAgentLoop } = await importAgentModule()
+  const chatEntry = { id: 'agent-model-budget', prompt: 'bounded run' }
+  let backendCalls = 0
+  let toolCalls = 0
+  global.__executeToolCall = async () => {
+    toolCalls += 1
+    return 'evidence'
+  }
+  global.window = {
+    pre: {
+      runGlobalAsync: async action => {
+        assert.equal(action, 'AIchatWithTools')
+        backendCalls += 1
+        return {
+          message: {
+            role: 'assistant',
+            content: 'partial answer',
+            tool_calls: [{
+              id: 'budget-tool-1',
+              function: { name: 'get_terminal_status', arguments: '{}' }
+            }]
+          }
+        }
+      }
+    },
+    store: {
+      aiChatHistory: [chatEntry],
+      config: {},
+      getLangName: () => 'English'
+    }
+  }
+
+  const result = await runAgentLoop(chatEntry, {
+    agentLimits: { maxModelRequests: 1 }
+  }, { current: false }, () => {})
+  const stored = window.store.aiChatHistory[0]
+
+  assert.equal(result.errorCode, 'AGENT_BUDGET_EXCEEDED')
+  assert.equal(backendCalls, 1)
+  assert.equal(toolCalls, 1)
+  assert.equal(stored.completionStatus, 'failed')
+  assert.equal(stored.terminationReason, 'budget_exceeded')
+  assert.match(stored.response, /partial answer/)
+  assert.equal(stored.budget.modelRequests, 1)
+})
+
+test('Agent per-turn budget rejects 33 calls before risk preparation or execution', async () => {
+  const { runAgentLoop } = await importAgentModule()
+  const chatEntry = { id: 'agent-turn-budget', prompt: 'bounded tools' }
+  let toolCalls = 0
+  global.__executeToolCall = async () => {
+    toolCalls += 1
+    return 'must not execute'
+  }
+  global.window = {
+    pre: {
+      runGlobalAsync: async () => ({
+        message: {
+          role: 'assistant',
+          content: '',
+          tool_calls: Array.from({ length: 33 }, (_, index) => ({
+            id: `turn-tool-${index}`,
+            function: { name: 'get_terminal_status', arguments: '{}' }
+          }))
+        }
+      })
+    },
+    store: {
+      aiChatHistory: [chatEntry],
+      config: {},
+      getLangName: () => 'English'
+    }
+  }
+
+  const result = await runAgentLoop(chatEntry, {}, { current: false }, () => {})
+
+  assert.equal(result.budgetType, 'tool_calls_per_turn')
+  assert.equal(toolCalls, 0)
+  assert.equal(window.store.aiChatHistory[0].budget.toolCalls, 0)
+})
+
+test('Agent cumulative tool budget stops before reserving one call over', async () => {
+  const { runAgentLoop } = await importAgentModule()
+  const chatEntry = { id: 'agent-total-budget', prompt: 'bounded tools' }
+  let backendCalls = 0
+  let toolCalls = 0
+  global.__executeToolCall = async () => {
+    toolCalls += 1
+    return 'evidence'
+  }
+  global.window = {
+    pre: {
+      runGlobalAsync: async () => {
+        backendCalls += 1
+        const count = backendCalls === 1 ? 2 : 1
+        return {
+          message: {
+            role: 'assistant',
+            content: backendCalls === 1 ? 'first turn' : '',
+            tool_calls: Array.from({ length: count }, (_, index) => ({
+              id: `total-tool-${backendCalls}-${index}`,
+              function: { name: 'get_terminal_status', arguments: '{}' }
+            }))
+          }
+        }
+      }
+    },
+    store: {
+      aiChatHistory: [chatEntry],
+      config: {},
+      getLangName: () => 'English'
+    }
+  }
+
+  const result = await runAgentLoop(chatEntry, {
+    agentLimits: {
+      maxModelRequests: 3,
+      maxToolCalls: 2,
+      maxToolCallsPerTurn: 2
+    }
+  }, { current: false }, () => {})
+
+  assert.equal(result.budgetType, 'tool_calls')
+  assert.equal(backendCalls, 2)
+  assert.equal(toolCalls, 2)
+  assert.equal(window.store.aiChatHistory[0].budget.toolCalls, 2)
+})
+
+test('Agent duration budget aborts an active model request and records failure', async () => {
+  const { runAgentLoop } = await importAgentModule()
+  const chatEntry = { id: 'agent-duration-budget', prompt: 'bounded time' }
+  let deadline
+  let cancelCalls = 0
+  global.window = {
+    pre: {
+      runGlobalAsync: async action => {
+        if (action === 'AIAgentCancel') {
+          cancelCalls += 1
+          return { cancelled: true }
+        }
+        return new Promise(() => {})
+      }
+    },
+    store: {
+      aiChatHistory: [chatEntry],
+      config: {},
+      getLangName: () => 'English'
+    }
+  }
+  const budgetDependencies = {
+    now: () => 0,
+    setTimeout: callback => {
+      deadline = callback
+      return 1
+    },
+    clearTimeout: () => {}
+  }
+  const running = runAgentLoop(
+    chatEntry,
+    {},
+    { current: false },
+    () => {},
+    [],
+    undefined,
+    undefined,
+    budgetDependencies
+  )
+  await new Promise(resolve => setImmediate(resolve))
+  deadline()
+  const result = await running
+
+  assert.equal(result.budgetType, 'duration')
+  assert.equal(cancelCalls, 1)
+  assert.equal(window.store.aiChatHistory[0].terminationReason, 'budget_exceeded')
+})
+
+test('Agent replaces oversized tool results with a truncated observation', async () => {
+  const { runAgentLoop } = await importAgentModule()
+  const chatEntry = { id: 'agent-result-budget', prompt: 'bounded result' }
+  let backendCalls = 0
+  global.__executeToolCall = async () => 'x'.repeat(1024 * 1024 + 1024)
+  global.window = {
+    pre: {
+      runGlobalAsync: async () => {
+        backendCalls += 1
+        return backendCalls === 1
+          ? {
+              message: {
+                role: 'assistant',
+                content: '',
+                tool_calls: [{
+                  id: 'large-result-1',
+                  function: { name: 'get_terminal_status', arguments: '{}' }
+                }]
+              }
+            }
+          : {
+              message: {
+                role: 'assistant',
+                content: 'done',
+                tool_calls: []
+              }
+            }
+      }
+    },
+    store: {
+      aiChatHistory: [chatEntry],
+      config: {},
+      getLangName: () => 'English'
+    }
+  }
+
+  await runAgentLoop(chatEntry, {
+    agentLimits: { maxToolResultMiB: 1 }
+  }, { current: false }, () => {})
+  const stored = window.store.aiChatHistory[0]
+  const observation = JSON.parse(stored.toolCalls[0].result)
+
+  assert.equal(stored.completionStatus, 'completed')
+  assert.equal(observation.truncated, true)
+  assert.match(observation.data, /originalBytes/)
+  assert.ok(Buffer.byteLength(observation.data) < 64 * 1024)
 })

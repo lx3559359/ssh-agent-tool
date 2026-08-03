@@ -7,6 +7,25 @@ const observationUrl = pathToFileURL(path.resolve(
   __dirname,
   '../../src/client/components/ai/agent-observation.js'
 )).href
+const runtimeUrl = pathToFileURL(path.resolve(
+  __dirname,
+  '../../src/client/components/ai/agent-runtime-context.js'
+)).href
+
+test('oversized tool results become bounded explicit previews', async () => {
+  const { boundAgentToolResultToBudget } = await import(runtimeUrl)
+  const source = 'head-' + 'x'.repeat(4096) + '-tail'
+  const bounded = boundAgentToolResultToBudget(source, 1024)
+
+  assert.equal(bounded.truncated, true)
+  assert.ok(bounded.originalBytes > bounded.limitBytes)
+  assert.equal(bounded.value.truncated, true)
+  assert.equal(bounded.value.originalBytes, bounded.originalBytes)
+  assert.equal(bounded.value.limitBytes, 1024)
+  assert.match(bounded.value.preview.head, /^head-/)
+  assert.match(bounded.value.preview.tail, /-tail$/)
+  assert.ok(Buffer.byteLength(JSON.stringify(bounded.value)) <= 1024)
+})
 
 test('bounds a 100 MB async source without consuming or retaining it all', async () => {
   const {

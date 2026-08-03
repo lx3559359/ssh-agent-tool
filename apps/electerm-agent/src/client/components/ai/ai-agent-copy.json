@@ -14,6 +14,7 @@
   "deleteTitle": "删除",
   "stoppedText": "Agent 已停止",
   "maxIterationsText": "Agent 已达到最大执行轮次",
+  "budgetExceededText": "Agent 已达到当前配置的运行限制，任务已安全停止。",
   "noResponseText": "AI 未返回内容。",
   "errorLabel": "错误",
   "toolCall": {

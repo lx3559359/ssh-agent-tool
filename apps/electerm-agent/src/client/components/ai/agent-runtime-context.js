@@ -37,6 +37,75 @@ const MAX_AGENT_BASE_CHARS = 32 * 1024
 const MAX_AGENT_MESSAGE_CHARS = 16 * 1024
 const MAX_AGENT_TOOL_ARGUMENT_CHARS = 4 * 1024
 const MAX_AGENT_RUNTIME_MESSAGES = 32
+const agentBudgetEncoder = new TextEncoder()
+const agentBudgetDecoder = new TextDecoder()
+
+function serializeAgentBudgetValue (value) {
+  if (typeof value === 'string') return value
+  if (value instanceof Uint8Array) return agentBudgetDecoder.decode(value)
+  try {
+    return JSON.stringify(value)
+  } catch (error) {
+    return String(value ?? '')
+  }
+}
+
+function createAgentBudgetPreview (text, originalBytes, limitBytes, previewBytes) {
+  const bytes = agentBudgetEncoder.encode(text)
+  const headBytes = Math.ceil(previewBytes / 2)
+  const tailBytes = Math.max(0, previewBytes - headBytes)
+  return {
+    truncated: true,
+    originalBytes,
+    limitBytes,
+    preview: {
+      head: agentBudgetDecoder.decode(bytes.subarray(0, headBytes)),
+      tail: tailBytes
+        ? agentBudgetDecoder.decode(bytes.subarray(bytes.length - tailBytes))
+        : ''
+    }
+  }
+}
+
+export function boundAgentToolResultToBudget (value, maxBytes) {
+  const limitBytes = Math.max(1, Number(maxBytes) || 1)
+  const text = serializeAgentBudgetValue(value)
+  const originalBytes = agentBudgetEncoder.encode(text).length
+  if (originalBytes <= limitBytes) {
+    return {
+      value,
+      originalBytes,
+      limitBytes,
+      truncated: false
+    }
+  }
+
+  let previewBytes = Math.max(0, limitBytes - 256)
+  let bounded = createAgentBudgetPreview(
+    text,
+    originalBytes,
+    limitBytes,
+    previewBytes
+  )
+  while (
+    previewBytes > 0 &&
+    agentBudgetEncoder.encode(JSON.stringify(bounded)).length > limitBytes
+  ) {
+    previewBytes = Math.floor(previewBytes * 0.75)
+    bounded = createAgentBudgetPreview(
+      text,
+      originalBytes,
+      limitBytes,
+      previewBytes
+    )
+  }
+  return {
+    value: bounded,
+    originalBytes,
+    limitBytes,
+    truncated: true
+  }
+}
 
 function boundedText (value, maxChars = MAX_AGENT_MESSAGE_CHARS) {
   const text = String(value ?? '')

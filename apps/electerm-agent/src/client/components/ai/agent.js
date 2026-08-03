@@ -25,6 +25,7 @@ import { normalizeAsyncResult } from '../../common/async-result.js'
 import { createTraceContext } from '../../common/quality/trace-context.js'
 import {
   boundAgentToolResult,
+  boundAgentToolResultToBudget,
   bindAgentToolArgs,
   buildBoundedAgentMessages,
   cancelAgentRuntimeOperations,
@@ -44,9 +45,13 @@ import {
 } from './agent-cancellation-status.js'
 import { buildAgentToolPresentation } from './agent-tool-presentation.js'
 import { runValidatedAgentToolCalls } from './agent-tool-call-parser.js'
-import { resolveAgentRunLimits } from './agent-run-budget.js'
+import {
+  createAgentRunBudget,
+  resolveAgentRunLimits
+} from './agent-run-budget.js'
 
 const MAX_ITERATIONS = 150
+const agentRunEncoder = new TextEncoder()
 const agentApiTools = Object.freeze(
   agentTools.map(({ type, function: definition }) => ({
     type,
@@ -134,6 +139,28 @@ function createAgentAbortError () {
   return error
 }
 
+function measureAgentValueBytes (value) {
+  let text
+  try {
+    text = JSON.stringify(value)
+  } catch (error) {
+    text = String(value ?? '')
+  }
+  return agentRunEncoder.encode(text ?? '').length
+}
+
+function isAgentBudgetError (error) {
+  return error?.code === 'AGENT_BUDGET_EXCEEDED'
+}
+
+function getAgentBudgetExceededText () {
+  const key = 'shellpilotAiAgentBudgetExceeded'
+  const translated = window.translate?.(key)
+  return translated && translated !== key
+    ? translated
+    : aiAgentCopy.budgetExceededText
+}
+
 export function waitForAgentOperation (operation, signal) {
   if (!signal) return Promise.resolve(operation)
   if (signal.aborted) return Promise.reject(createAgentAbortError())
@@ -154,8 +181,18 @@ export function waitForAgentOperation (operation, signal) {
   })
 }
 
-export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming, history = [], traceContext, onQualityTerminal) {
+export async function runAgentLoop (
+  chatEntry,
+  config,
+  abortRef,
+  setIsStreaming,
+  history = [],
+  traceContext,
+  onQualityTerminal,
+  budgetDependencies
+) {
   const runtimeLimits = resolveAgentRunLimits(config.agentLimits)
+  const budget = createAgentRunBudget(config.agentLimits, budgetDependencies)
   const parentTrace = traceContext?.traceId
     ? createTraceContext({
       traceId: traceContext.traceId,
@@ -176,6 +213,7 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
   let activeBackendRequestId = ''
   let activeCancellation
   let cancellationFailure
+  let budgetFailure
   const taskId = String(chatEntry.id || '')
   const sourceTabId = String(chatEntry.sourceTabId || '')
   const taskScopeId = String(
@@ -194,6 +232,10 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
     resolveEndpoint,
     takeoverRegistry: agentTakeoverRegistry,
     signal: controller.signal,
+    budget: Object.freeze({
+      limits: budget.limits,
+      snapshot: budget.snapshot
+    }),
     cancelActiveTool: null,
     cancellations: new Set(),
     reportCancellationFailure: error => {
@@ -256,7 +298,6 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
     finishQuality('failed', 'failed')
     return lockedResult
   }
-
   function reportCancellationPersistenceError (error) {
     try {
       window.store.onError?.(error)
@@ -333,7 +374,75 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
     if (!terminalAlreadyRecorded) finishQuality('cancelled', 'cancelled')
   }
 
+  function finalizeBudgetToolCalls (error, notice) {
+    let changed = false
+    for (const toolEntry of toolCallsLog) {
+      if (toolEntry.status !== 'running') continue
+      toolEntry.status = 'error'
+      toolEntry.presentation = buildAgentToolPresentation(
+        toolEntry.name,
+        toolEntry.args,
+        { error: notice },
+        { endpoint: agentRuntime.endpoint }
+      )
+      toolEntry.result = boundAgentToolResult(JSON.stringify({
+        error: true,
+        code: error.code,
+        name: error.name,
+        budgetType: error.budgetType,
+        executed: null,
+        completionConfirmed: false,
+        data: notice
+      }))
+      changed = true
+    }
+    return changed
+  }
+
+  async function markBudgetExceeded (error) {
+    if (!activeCancellation) cancelCurrent().catch(() => {})
+    try {
+      await failAgentRiskBatch(agentRuntime, error)
+    } catch (cancelError) {
+      if (!cancellationFailure) cancellationFailure = cancelError
+    }
+    const settledError = await settleAgentCancellation(activeCancellation)
+    if (settledError && !cancellationFailure) {
+      cancellationFailure = settledError
+    }
+    const notice = getAgentBudgetExceededText()
+    finalizeBudgetToolCalls(error, notice)
+    const snapshot = budget.snapshot()
+    const response = accumulatedContent
+      ? `${accumulatedContent}\n\n**${aiAgentCopy.errorLabel}:** ${notice}`
+      : `**${aiAgentCopy.errorLabel}:** ${notice}`
+    const result = {
+      ok: false,
+      data: null,
+      error: notice,
+      errorCode: error.code,
+      budgetType: error.budgetType,
+      budget: snapshot
+    }
+    setIsStreaming(false)
+    updateChatEntry(chatEntry, {
+      response,
+      toolCalls: [...toolCallsLog],
+      artifactIds: [...agentRuntime.createdArtifactIds],
+      completionStatus: 'failed',
+      terminationReason: 'budget_exceeded',
+      errorCode: error.code,
+      budget: snapshot
+    })
+    finishQuality('failed', 'failed')
+    return result
+  }
+
   try {
+    budget.startDeadline(error => {
+      budgetFailure = error
+      cancelCurrent().catch(() => {})
+    })
     setIsStreaming(true)
     updateChatEntry(chatEntry, {
       toolCalls: [],
@@ -375,6 +484,8 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
         return
       }
 
+      budget.assertTime()
+      budget.reserveModelRequest()
       activeBackendRequestId = `agent-${chatEntry.id}-${iteration}-${Date.now()}`
       const requestTraceContext = createTraceContext({
         ...(parentTrace?.traceId ? { traceId: parentTrace.traceId } : {}),
@@ -393,6 +504,7 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
         controller.signal
       )
       activeBackendRequestId = ''
+      budget.assertModelResponse(measureAgentValueBytes(backendResult))
       if (abortRef && abortRef.current) {
         await markCancelled()
         return
@@ -442,9 +554,11 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
         return
       }
 
+      budget.reserveToolCalls(assistantMessage.tool_calls.length)
       await runValidatedAgentToolCalls({
         toolCalls: assistantMessage.tool_calls,
         resolveDescriptor: getAgentToolDescriptor,
+        maxArgumentBytes: budget.limits.maxToolArgumentBytes,
         normalize: parsed => Object.freeze({
           ...parsed,
           args: Object.freeze(bindAgentToolArgs(
@@ -511,6 +625,18 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
               controller.signal
             )
             if (abortRef && abortRef.current) throw createAgentAbortError()
+            const boundedResult = boundAgentToolResultToBudget(
+              toolResult,
+              budget.limits.maxToolResultBytes
+            )
+            try {
+              budget.assertToolResult(boundedResult.originalBytes)
+            } catch (error) {
+              if (!isAgentBudgetError(error) || error.budgetType !== 'tool_result') {
+                throw error
+              }
+              toolResult = boundedResult.value
+            }
             toolEntry.presentation = buildAgentToolPresentation(
               name,
               args,
@@ -527,6 +653,7 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
             toolResult = serializeAgentObservationForModel(observation)
           } catch (err) {
             if (abortRef && abortRef.current) throw createAgentAbortError()
+            if (isAgentBudgetError(err)) throw err
             await failAgentRiskBatch(agentRuntime, err, {
               toolName: name,
               args
@@ -570,6 +697,10 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
     })
     finishQuality('failed', 'failed')
   } catch (error) {
+    const exceeded = budgetFailure || (isAgentBudgetError(error) ? error : null)
+    if (exceeded) {
+      return markBudgetExceeded(exceeded)
+    }
     if (controller.signal.aborted || abortRef.current || error?.name === 'AbortError') {
       await markCancelled()
       return
@@ -583,6 +714,7 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
     finishQuality('failed', 'failed')
     return { ok: false, data: null, error: safeError }
   } finally {
+    budget.dispose()
     agentRuntime.cancellations.clear()
     if (abortRef.cancelCurrent === cancelCurrent) {
       delete abortRef.cancelCurrent
