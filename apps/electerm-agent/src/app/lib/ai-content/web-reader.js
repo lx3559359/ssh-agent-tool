@@ -34,6 +34,92 @@ function htmlToText (html) {
     .trim()
 }
 
+function extractHtmlTitle (html) {
+  const match = String(html || '').match(
+    /<title\b[^>]*>([\s\S]*?)<\/title>/i
+  )
+  return match ? htmlToText(match[1]).slice(0, 160) : ''
+}
+
+function evaluateWebContentQuality ({
+  url,
+  html = '',
+  text = ''
+} = {}) {
+  const source = String(html || '')
+  const visible = String(text || '').replace(/\s+/g, ' ').trim()
+  let parsed
+  try {
+    parsed = new URL(String(url || ''))
+  } catch {
+    parsed = null
+  }
+
+  if (/^#!?\//.test(parsed?.hash || '')) {
+    return {
+      requiresBrowser: true,
+      browserReason: 'hash-route'
+    }
+  }
+
+  const hasPasswordField = /<input\b[^>]*\btype\s*=\s*["']?password\b/i
+    .test(source)
+  const loginText = /(?:\bsign\s*in\b|\blog\s*in\b|\blogin\b|登录|登陆|请先登录|身份验证)/i
+    .test(visible)
+  const loginPath = /(?:^|\/)(?:login|signin|auth)(?:\/|$)/i
+    .test(parsed?.pathname || '')
+  if (
+    hasPasswordField ||
+    (loginText && (loginPath || visible.length < 200))
+  ) {
+    return {
+      requiresBrowser: true,
+      browserReason: 'login-required'
+    }
+  }
+
+  if (
+    /(?:enable|requires?)\s+javascript|请(?:启用|开启)\s*javascript/i
+      .test(visible) ||
+    (
+      /<noscript\b/i.test(source) &&
+      /javascript/i.test(source)
+    )
+  ) {
+    return {
+      requiresBrowser: true,
+      browserReason: 'javascript-required'
+    }
+  }
+
+  const hasMountNode = /<(?:div|main|section)\b[^>]*\bid\s*=\s*["'](?:app|root|main|__next)["']/i
+    .test(source)
+  const scriptCount = (source.match(/<script\b/gi) || []).length
+  const loadingOnly = /^(?:loading|加载中|正在加载)[.…!.。 ]*$/i.test(visible)
+  if (
+    visible.length < 200 &&
+    hasMountNode &&
+    (scriptCount > 0 || loadingOnly)
+  ) {
+    return {
+      requiresBrowser: true,
+      browserReason: 'spa-shell'
+    }
+  }
+
+  if (!visible) {
+    return {
+      requiresBrowser: true,
+      browserReason: 'empty-content'
+    }
+  }
+
+  return {
+    requiresBrowser: false,
+    browserReason: ''
+  }
+}
+
 function createPinnedLookup (address, family) {
   return (_hostname, options, callback) => {
     if (typeof options === 'function') {
@@ -116,17 +202,30 @@ async function readPublicWebPage (input, redirects = 0) {
     ? htmlToText(response.body)
     : response.body
   const truncated = rawText.length > MAX_TEXT_CHARS
+  const quality = evaluateWebContentQuality({
+    url: safe.url.toString(),
+    html: /html/i.test(contentType) ? response.body : '',
+    text: rawText
+  })
   return {
     kind: 'web',
+    source: 'static',
     url: safe.url.toString(),
-    title: rawText.match(/^[^\n]{1,160}/)?.[0] || safe.url.hostname,
+    title: (
+      /html/i.test(contentType)
+        ? extractHtmlTitle(response.body)
+        : ''
+    ) || rawText.match(/^[^\n]{1,160}/)?.[0] || safe.url.hostname,
     text: truncated ? rawText.slice(0, MAX_TEXT_CHARS) : rawText,
-    truncated
+    truncated,
+    ...quality
   }
 }
 
 module.exports = {
   readPublicWebPage,
   htmlToText,
-  createPinnedLookup
+  createPinnedLookup,
+  evaluateWebContentQuality,
+  extractHtmlTitle
 }
