@@ -26,6 +26,7 @@ import {
   boundAgentToolResult,
   buildBoundedAgentMessages,
   cancelAgentRuntimeOperations,
+  captureAgentRuntimeEndpoint,
   resolveAgentRuntimeEndpoint
 } from './agent-runtime-context.js'
 import {
@@ -173,6 +174,7 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
     sourceTabId || chatEntry.conversationScopeId || 'global'
   )
   const resolveEndpoint = () => resolveAgentRuntimeEndpoint(sourceTabId)
+  const endpoint = captureAgentRuntimeEndpoint(resolveEndpoint)
   const agentRuntime = {
     goal: String(chatEntry.prompt || 'Agent SSH task'),
     selectedSkillBindings: [],
@@ -180,7 +182,7 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
     createdArtifactIds: new Set(),
     sourceTabId,
     traceContext: parentTrace,
-    endpoint: resolveEndpoint(),
+    endpoint,
     resolveEndpoint,
     takeoverRegistry: agentTakeoverRegistry,
     signal: controller.signal,

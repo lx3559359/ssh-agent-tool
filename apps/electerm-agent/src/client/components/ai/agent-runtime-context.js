@@ -173,6 +173,28 @@ function takeoverRequiredError (cause) {
   return error
 }
 
+function endpointUnavailableAtStartError () {
+  const error = new Error('Agent endpoint was unavailable when the run started')
+  error.code = 'AGENT_ENDPOINT_UNAVAILABLE_AT_START'
+  return error
+}
+
+function endpointChangedError (cause) {
+  const error = new Error('Agent endpoint changed after the run started')
+  error.code = 'AGENT_ENDPOINT_CHANGED'
+  error.cause = cause
+  return error
+}
+
+export function captureAgentRuntimeEndpoint (resolveEndpoint) {
+  const initialEndpoint = typeof resolveEndpoint === 'function'
+    ? resolveEndpoint()
+    : null
+  return initialEndpoint
+    ? Object.freeze({ ...projectEndpoint(initialEndpoint) })
+    : null
+}
+
 export function resolveAgentRuntimeEndpoint (sourceTabId, options = {}) {
   const tabId = String(sourceTabId || '').trim()
   if (!tabId || tabId === 'global') return null
@@ -200,16 +222,24 @@ export function resolveAgentExecutionEndpoint ({
   runtime = {}
 } = {}) {
   if (descriptor?.scope === 'conversation') return null
+  if (runtime.sourceTabId && !runtime.endpoint) {
+    throw endpointUnavailableAtStartError()
+  }
   try {
     const candidate = typeof runtime.resolveEndpoint === 'function'
       ? runtime.resolveEndpoint()
       : runtime.endpoint
     const current = projectEndpoint(candidate)
     if (runtime.endpoint) {
-      assertSameSessionEndpoint(projectEndpoint(runtime.endpoint), current)
+      try {
+        assertSameSessionEndpoint(projectEndpoint(runtime.endpoint), current)
+      } catch (error) {
+        throw endpointChangedError(error)
+      }
     }
     return current
   } catch (error) {
+    if (error?.code === 'AGENT_ENDPOINT_CHANGED') throw error
     throw takeoverRequiredError(error)
   }
 }
