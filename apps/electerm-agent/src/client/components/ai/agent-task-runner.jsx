@@ -29,6 +29,8 @@ import {
   requestDiagnosticPlanText
 } from './agent-task-controller.js'
 import { agentTaskRegistry } from './agent-task-registry.js'
+import { handoffAgentPromptToAi } from './agent-task-handoff.js'
+import { getAgentTaskViewState } from './agent-task-view-state.js'
 import * as transactionStore from '../../common/safety-transactions/transaction-store.js'
 import { createTraceContext } from '../../common/quality/trace-context.js'
 import { cancelRunCmd, runCmd } from '../terminal/terminal-apis.js'
@@ -96,6 +98,7 @@ export default function AgentTaskRunner ({
   const activeRunRef = useRef(0)
   const mountedRef = useRef(true)
   const taskTraceContextRef = useRef(null)
+  const handoffCancelRef = useRef(null)
   const uiLifecycle = useMemo(() => createAgentTaskUiLifecycle({
     abortGeneration: () => generationAbortRef.current?.abort(),
     closeView: () => onClose?.()
@@ -105,6 +108,7 @@ export default function AgentTaskRunner ({
     mountedRef.current = true
     return () => {
       mountedRef.current = false
+      handoffCancelRef.current?.()
     }
   }, [])
 
@@ -182,6 +186,7 @@ export default function AgentTaskRunner ({
     const runToken = ++activeRunRef.current
     setPhase('running')
     setError('')
+    let createdTask = null
     try {
       const controller = createAgentTaskController({
         store: transactionStore,
@@ -202,6 +207,7 @@ export default function AgentTaskRunner ({
         },
         onEvent: event => handleExecutionEvent(event, runToken),
         onTaskChange: nextTask => {
+          createdTask = nextTask
           if (mountedRef.current && activeRunRef.current === runToken) setTask(nextTask)
         }
       })
@@ -212,7 +218,7 @@ export default function AgentTaskRunner ({
     } catch (runError) {
       if (!mountedRef.current || activeRunRef.current !== runToken) return
       setError(displayError(runError, e('shellpilotAgentTaskRunFailed')))
-      setPhase('finished')
+      setPhase(createdTask ? 'finished' : 'run-error')
     }
   }
 
@@ -239,14 +245,19 @@ export default function AgentTaskRunner ({
     if (!task || !plan) return
     const prompt = buildDiagnosticResultPrompt({ plan, task })
     store?.handleOpenAIPanel?.()
-    setTimeout(() => {
-      if (!refsStatic.get('AIChat')?.setPrompt) {
-        message.warning(e('shellpilotAgentTaskAssistantNotReady'))
-        return
+    handoffCancelRef.current?.()
+    handoffCancelRef.current = handoffAgentPromptToAi({
+      prompt,
+      getAiChat: () => refsStatic.get('AIChat'),
+      onReady: () => {
+        handoffCancelRef.current = null
+        handleClose()
+      },
+      onUnavailable: () => {
+        handoffCancelRef.current = null
+        message.warning(e('shellpilotAgentTaskHandoffTimeout'))
       }
-      refsStatic.get('AIChat')?.setPrompt(prompt)
-      handleClose()
-    }, 120)
+    })
   }
 
   function renderPlan () {
@@ -281,7 +292,11 @@ export default function AgentTaskRunner ({
   }
 
   function renderTask () {
-    if (!task) {
+    const viewState = getAgentTaskViewState({ phase, task, error })
+    if (viewState.kind === 'error') {
+      return <Alert type='error' showIcon message={viewState.message || e('shellpilotAgentTaskCreationFailed')} />
+    }
+    if (viewState.kind === 'creating') {
       return <Spin tip={e('shellpilotAgentTaskCreatingAudit')}><div className='agent-task-loading-space' /></Spin>
     }
     const finished = finalStatuses.has(task.status)
@@ -358,9 +373,16 @@ export default function AgentTaskRunner ({
             </Tooltip>
           </Space>
           )
-        : phase === 'generating'
-          ? <Tooltip title={e('shellpilotAgentTaskCancelGenerationHint')}><Button danger icon={<StopOutlined />} onClick={handleClose}>{e('shellpilotAgentTaskCancelGeneration')}</Button></Tooltip>
-          : <Button onClick={handleClose}>{e('close')}</Button>
+        : phase === 'run-error'
+          ? (
+            <Space wrap>
+              <Button onClick={handleClose}>{e('close')}</Button>
+              <Button type='primary' onClick={handleConfirm}>{e('shellpilotAgentTaskRetryRun')}</Button>
+            </Space>
+            )
+          : phase === 'generating'
+            ? <Tooltip title={e('shellpilotAgentTaskCancelGenerationHint')}><Button danger icon={<StopOutlined />} onClick={handleClose}>{e('shellpilotAgentTaskCancelGeneration')}</Button></Tooltip>
+            : <Button onClick={handleClose}>{e('close')}</Button>
 
   return (
     <Modal
@@ -380,7 +402,7 @@ export default function AgentTaskRunner ({
           : null}
         {phase === 'error' ? <Alert type='error' showIcon message={error || e('shellpilotAgentTaskPlanFailed')} /> : null}
         {phase === 'plan' ? renderPlan() : null}
-        {['running', 'finished'].includes(phase) ? renderTask() : null}
+        {['running', 'finished', 'run-error'].includes(phase) ? renderTask() : null}
       </div>
     </Modal>
   )

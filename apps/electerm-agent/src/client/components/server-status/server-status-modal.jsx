@@ -41,6 +41,7 @@ import {
 import { buildServerStatusAiPrompt } from './server-status-ai-context.js'
 import AgentTaskRunner from '../ai/agent-task-runner.jsx'
 import { isDiagnosticTargetAbnormal } from '../ai/diagnostic-plan.js'
+import { handoffAgentPromptToAi } from '../ai/agent-task-handoff.js'
 import {
   agentTaskRegistry,
   installSafetyTaskCapability,
@@ -190,6 +191,7 @@ export default function ServerStatusModal ({ open, onClose, store, tab = {} }) {
   const scanRef = useRef(0)
   const autoScanRef = useRef('')
   const liveTabRef = useRef(tab)
+  const handoffCancelRef = useRef(null)
   liveTabRef.current = tab
   const snapshot = snapshots[tab.id]
 
@@ -200,6 +202,8 @@ export default function ServerStatusModal ({ open, onClose, store, tab = {} }) {
       registry: agentTaskRegistry
     }).catch(error => window.store.onError(error))
   }, [store])
+
+  useEffect(() => () => handoffCancelRef.current?.(), [])
 
   function getCurrentDiagnosticEndpoint () {
     const terminal = resolveTerminal(liveTabRef.current)
@@ -280,15 +284,19 @@ export default function ServerStatusModal ({ open, onClose, store, tab = {} }) {
     if (!snapshot) return
     store.handleOpenAIPanel()
     const prompt = buildServerStatusAiPrompt(snapshot)
-    setTimeout(() => {
-      const aiChat = refsStatic.get('AIChat')
-      if (!aiChat?.setPrompt) {
-        message.warning(e('shellpilotAgentTaskAssistantNotReady'))
-        return
+    handoffCancelRef.current?.()
+    handoffCancelRef.current = handoffAgentPromptToAi({
+      prompt,
+      getAiChat: () => refsStatic.get('AIChat'),
+      onReady: () => {
+        handoffCancelRef.current = null
+        onClose()
+      },
+      onUnavailable: () => {
+        handoffCancelRef.current = null
+        message.warning(e('shellpilotAgentTaskHandoffTimeout'))
       }
-      aiChat.setPrompt(prompt)
-      onClose()
-    }, 120)
+    })
   }
 
   function updateRuleDraft (key, value) {

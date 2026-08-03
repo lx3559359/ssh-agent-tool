@@ -46,7 +46,7 @@ test('AgentTaskRunner confirms before execution and exposes live progress cancel
   assert.match(runner, /audit.*code/s)
   assert.match(runner, /shellpilotAgentTaskAuditRecorded/)
   assert.match(runner, /shellpilotAgentTaskSendToAi/)
-  assert.match(runner, /refsStatic\.get\(['"]AIChat['"]\).*setPrompt/)
+  assert.match(runner, /getAiChat:\s*\(\)\s*=>\s*refsStatic\.get\(['"]AIChat['"]\)/)
   assert.doesNotMatch(runner, /refsStatic\.get\(['"]AIChat['"]\).*handleSubmit/)
   assert.doesNotMatch(runner, /shellpilotAgentTaskImmediateFix|shellpilotAgentTaskExecuteMutation/)
   assert.match(styles, /overflow-y\s+auto/)
@@ -76,6 +76,19 @@ test('reopening diagnostics isolates visible progress from an older background t
   assert.match(runner, /activeRunRef/)
   assert.match(runner, /runToken/)
   assert.match(runner, /activeRunRef\.current\s*!==\s*runToken/)
+})
+
+test('diagnostic UI exposes run creation errors and uses bounded AI handoff', () => {
+  const runner = readSource('src/client/components/ai/agent-task-runner.jsx')
+  const modal = readSource('src/client/components/server-status/server-status-modal.jsx')
+
+  assert.match(runner, /getAgentTaskViewState/)
+  assert.match(runner, /setPhase\(createdTask \? 'finished' : 'run-error'\)/)
+  assert.match(runner, /shellpilotAgentTaskRetryRun/)
+  assert.match(runner, /handoffAgentPromptToAi/)
+  assert.match(modal, /handoffAgentPromptToAi/)
+  assert.doesNotMatch(runner, /setTimeout\([\s\S]{0,240},\s*120\)/)
+  assert.doesNotMatch(modal, /setTimeout\([\s\S]{0,240},\s*120\)/)
 })
 
 test('production AgentTaskRunner passes an internal parent trace only to the task controller', () => {
