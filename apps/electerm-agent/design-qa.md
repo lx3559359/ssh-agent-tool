@@ -48,3 +48,63 @@
 - 未使用文字阴影、位移或滤镜伪造立体效果；深度仅由边框、圆角、背景和 box-shadow 构成。
 
 final result: passed
+
+---
+
+# AI Attachment Composer Design QA
+
+- Source visual truth: `C:\Users\luojixiang1\.codex\visualizations\2026\08\03\019fc628-1062-7fd2-ade2-0b1961f0f6b7\attachment-ui-audit\01-reference.png`
+- Implementation screenshot: captured and directly inspected through Windows.Graphics.Capture in the Codex Computer Use session
+- Intended comparison viewport: 1920 x 1080 px
+- Source pixels: 1920 x 1080 px
+- Implementation pixels: 1920 x 1032 px
+- CSS viewport and density normalization: maximized Windows desktop application at native capture scale; comparison focuses on the right-side AI composer region
+- State: AI composer with one local image and one JSON document attached before submission
+
+## Full-view comparison evidence
+
+Passed. The isolated packaged Electron build (`v0.4.28`) was opened alongside the reference. The full view showed the composer, attachment surface, action row, and surrounding AI panel without clipping or horizontal overflow.
+
+## Focused region comparison evidence
+
+Passed. The image thumbnail, document card, both remove buttons, prompt area, mode switch, upload/generate actions, and send action were all visible together in the narrow right-side panel. The 72 px image crop remained legible and the document card exposed filename, type, and size without overlap.
+
+## Findings
+
+- No P0, P1, or P2 visual issues found.
+- The implementation follows the reference interaction model: attachments live inside the composer, images use a real thumbnail, and each attachment owns a compact top-right removal control.
+- Mixed image/document attachments fit side by side at the tested panel width; prompt copy and bottom controls remain unobstructed.
+
+## Required fidelity surfaces
+
+- Fonts and typography: existing ShellPilot UI typography remained readable at native scale.
+- Spacing and layout rhythm: attachment cards stayed inside the composer surface with an even gap and clear separation from prompt and action rows.
+- Colors and visual tokens: implementation uses existing Aurora/ShellPilot semantic tokens; Stylus contract tests pass.
+- Image quality and asset fidelity: the uploaded reference image rendered as a real thumbnail with a stable cover crop and no stretching.
+- Copy and content: existing translated product labels are preserved; document metadata is limited to file type and size.
+
+## Primary interactions tested
+
+- Unit contracts cover safe image classification, unsupported MIME fallback, document/web metadata, object URL creation/revocation, and accessible removal.
+- The focused Electron E2E for click upload, paste, drag/drop, multi-attachment, remove, ingestion, and send passed.
+- Runtime accessibility inspection exposed both attachment names and accessible remove buttons; no modal, overflow, or focus obstruction was visible.
+
+## Comparison history
+
+1. Initial implementation: source image inspected; production build, 59 related tests, and the focused Electron attachment E2E passed.
+2. Capture attempt: built `file://` page rejected by browser URL policy.
+3. Safer local HTTP attempt: `http://127.0.0.1:4173/` blocked by the in-app browser client.
+4. A dedicated `ShellPilotReview` package was launched with the repository's `NODE_TEST + DATA_PATH` isolation path so the installed application and user data remained untouched.
+5. The reference PNG and `package.json` were uploaded in the live Electron UI; full-view and focused composer inspection passed at 1920 x 1032 px.
+
+## Implementation checklist
+
+- [x] Render local safe images as thumbnails.
+- [x] Render documents and web sources as typed file cards.
+- [x] Keep attachments inside the composer surface.
+- [x] Preserve attachment upload, parsing, and submission behavior.
+- [x] Add focus-visible and accessible remove actions.
+- [x] Pass related unit, style-contract, lint, and production build checks.
+- [x] Capture the running Electron implementation and compare it with the source visual.
+
+final result: passed
