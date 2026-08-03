@@ -32,6 +32,10 @@ import { agentTaskRegistry } from './agent-task-registry.js'
 import { handoffAgentPromptToAi } from './agent-task-handoff.js'
 import { getAgentTaskViewState } from './agent-task-view-state.js'
 import { createAgentRunObserver } from './agent-run-observer.js'
+import {
+  createAgentDiagnosticKey,
+  restoreAgentDiagnosticTask
+} from './agent-task-recovery.js'
 import * as transactionStore from '../../common/safety-transactions/transaction-store.js'
 import { createTraceContext } from '../../common/quality/trace-context.js'
 import { cancelRunCmd, runCmd } from '../terminal/terminal-apis.js'
@@ -101,6 +105,7 @@ export default function AgentTaskRunner ({
   const taskTraceContextRef = useRef(null)
   const runObserverRef = useRef(null)
   const handoffCancelRef = useRef(null)
+  const diagnosticKey = createAgentDiagnosticKey(target)
   const uiLifecycle = useMemo(() => createAgentTaskUiLifecycle({
     abortGeneration: () => generationAbortRef.current?.abort(),
     closeView: () => onClose?.()
@@ -118,15 +123,6 @@ export default function AgentTaskRunner ({
     if (!open || !snapshot || !target || !terminal) return
     const generationToken = ++generationRequestRef.current
     activeRunRef.current += 1
-    taskTraceContextRef.current = createTraceContext({
-      ...(target.requestId ? { requestId: String(target.requestId) } : {}),
-      module: 'agent',
-      action: 'agent-task'
-    })
-    runObserverRef.current = createAgentRunObserver({
-      context: taskTraceContextRef.current
-    })
-    runObserverRef.current.start()
     generationAbortRef.current?.abort()
     const controller = new AbortController()
     generationAbortRef.current = controller
@@ -136,9 +132,8 @@ export default function AgentTaskRunner ({
     setError('')
     setCancelling(false)
 
-    async function generatePlan () {
+    async function generatePlan (endpoint) {
       try {
-        const endpoint = terminal.getTerminalSafetyEndpoint()
         const prompt = buildTargetedDiagnosticPrompt({ snapshot, target })
         const text = await requestDiagnosticPlanText({
           prompt,
@@ -159,9 +154,45 @@ export default function AgentTaskRunner ({
       }
     }
 
-    generatePlan()
+    async function restoreOrGenerate () {
+      try {
+        const endpoint = terminal.getTerminalSafetyEndpoint()
+        const restored = await restoreAgentDiagnosticTask({
+          registry: agentTaskRegistry,
+          store: transactionStore,
+          scopeId: endpoint.tabId,
+          endpoint,
+          diagnosticKey
+        })
+        if (!mountedRef.current || controller.signal.aborted || generationRequestRef.current !== generationToken) return
+        if (restored) {
+          setPlan(restored.task)
+          setTask(restored.task)
+          setPhase(restored.live ? 'running' : 'finished')
+          return
+        }
+        taskTraceContextRef.current = createTraceContext({
+          ...(target.requestId ? { requestId: String(target.requestId) } : {}),
+          module: 'agent',
+          action: 'agent-task'
+        })
+        runObserverRef.current = createAgentRunObserver({
+          context: taskTraceContextRef.current
+        })
+        runObserverRef.current.start()
+        await generatePlan(endpoint)
+      } catch (requestError) {
+        if (!mountedRef.current || controller.signal.aborted || generationRequestRef.current !== generationToken) return
+        setError(displayError(requestError, e('shellpilotAgentTaskPlanFailed')))
+        setPhase('error')
+        runObserverRef.current?.error?.('persistence', requestError)
+        runObserverRef.current?.finish?.('failed', requestError?.code)
+      }
+    }
+
+    restoreOrGenerate()
     return () => controller.abort()
-  }, [open, target?.requestId])
+  }, [open, diagnosticKey])
 
   const progress = useMemo(() => {
     const steps = task?.steps || plan?.steps || []
@@ -201,6 +232,9 @@ export default function AgentTaskRunner ({
         registry: agentTaskRegistry,
         observer: runObserverRef.current,
         traceContext: taskTraceContextRef.current,
+        diagnosticKey,
+        kind: 'diagnostic',
+        scopeId: plan.endpoint?.tabId,
         endpoint: plan.endpoint,
         pid: terminal.pid,
         runCmd,

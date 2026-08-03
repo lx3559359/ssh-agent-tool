@@ -78,6 +78,7 @@ export function createAgentTaskRegistry () {
       endpoint,
       scopeId,
       kind: String(options.kind || 'diagnostic'),
+      diagnosticKey: String(options.diagnosticKey || ''),
       pid: options.pid,
       cancellationFailed: false,
       registeredAt: new Date().toISOString()

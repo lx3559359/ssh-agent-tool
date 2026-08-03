@@ -192,6 +192,8 @@ export function createAgentTaskController (options = {}) {
   const observer = options.observer || createAgentRunObserver({
     context: options.traceContext
   })
+  const kind = String(options.kind || 'diagnostic')
+  const diagnosticKey = String(options.diagnosticKey || '')
   if (!pid) throw new Error('诊断任务缺少终端 pid。')
 
   function notifyTaskChange (task) {
@@ -225,12 +227,20 @@ export function createAgentTaskController (options = {}) {
       module: 'agent',
       action: 'agent-task'
     })
+    const metadata = {
+      ...(taskPlan.metadata && typeof taskPlan.metadata === 'object'
+        ? taskPlan.metadata
+        : {}),
+      ...(diagnosticKey ? { diagnosticKey } : {})
+    }
     let task = await runner.create({
       ...taskPlan,
       title: taskPlan.title || taskPlan.summary,
       purpose: taskPlan.purpose || taskPlan.summary,
       source: taskPlan.source || 'server-status',
-      endpoint: taskPlan.endpoint || endpoint
+      endpoint: taskPlan.endpoint || endpoint,
+      kind,
+      ...(Object.keys(metadata).length ? { metadata } : {})
     }, taskTraceContext)
     notifyTaskChange(task)
     task = await runner.confirmPlan(task.id)
@@ -241,6 +251,9 @@ export function createAgentTaskController (options = {}) {
       runner,
       controller,
       endpoint: task.endpoint,
+      scopeId: options.scopeId,
+      kind,
+      diagnosticKey,
       pid
     })
     notifyTaskChange({ ...task })

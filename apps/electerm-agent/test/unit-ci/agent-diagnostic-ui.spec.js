@@ -79,6 +79,16 @@ test('reopening diagnostics isolates visible progress from an older background t
   assert.match(runner, /activeRunRef/)
   assert.match(runner, /runToken/)
   assert.match(runner, /activeRunRef\.current\s*!==\s*runToken/)
+  assert.match(runner, /createAgentDiagnosticKey\(target\)/)
+  assert.match(runner, /restoreAgentDiagnosticTask\(\{/)
+  assert.ok(
+    runner.indexOf('const restored = await restoreAgentDiagnosticTask') <
+      runner.indexOf('await generatePlan(endpoint)')
+  )
+  assert.match(
+    runner,
+    /createAgentTaskController\(\{[\s\S]*diagnosticKey/
+  )
 })
 
 test('diagnostic UI exposes run creation errors and uses bounded AI handoff', () => {

@@ -281,6 +281,41 @@ test('real Agent task persistence keeps only the parent trace id in metadata', a
   ])
 })
 
+test('diagnostic controller persists the recovery key and registers diagnostic identity', async () => {
+  const { createAgentTaskController } = await import(controllerUrl)
+  const store = createTaskStore()
+  const registrations = []
+  const registry = {
+    register: options => registrations.push(options),
+    unregister: () => true,
+    cancel: async () => ({ cancelled: true })
+  }
+  const controller = createAgentTaskController({
+    store,
+    registry,
+    diagnosticKey: 'diagnostic:["request-1","service","nginx"]',
+    kind: 'diagnostic',
+    endpoint: endpoint(),
+    pid: 1001,
+    getCurrentEndpoint: async () => endpoint(),
+    runCmd: async () => ({ code: 0, stdout: 'ok' }),
+    cancelRunCmd: async () => true,
+    now: () => new Date('2026-08-03T01:00:00.000Z')
+  })
+
+  const completed = await controller.confirmAndRun(diagnosticPlan({
+    steps: [diagnosticPlan().steps[0]]
+  }))
+
+  assert.equal(completed.kind, 'diagnostic')
+  assert.equal(
+    completed.metadata.diagnosticKey,
+    'diagnostic:["request-1","service","nginx"]'
+  )
+  assert.equal(registrations[0].kind, 'diagnostic')
+  assert.equal(registrations[0].diagnosticKey, completed.metadata.diagnosticKey)
+})
+
 test('registry cancellation reaches cancelRunCmd with the active execution id after UI unmount', async () => {
   const { createAgentTaskRegistry } = await import(registryUrl)
   const { createAgentTaskController } = await import(controllerUrl)

@@ -28,6 +28,22 @@ test('task view distinguishes creation from a real task', async () => {
   })
 })
 
+test('recovered failed diagnostic renders error evidence instead of creation spinner', async () => {
+  const { getAgentTaskViewState } = await import(viewStateUrl)
+  const task = {
+    id: 'recovered-orphan',
+    status: 'failed',
+    error: 'executor unavailable after restart',
+    steps: [{ id: 'evidence', status: 'completed', output: 'partial evidence' }]
+  }
+  const view = getAgentTaskViewState({ phase: 'finished', task })
+
+  assert.equal(view.kind, 'task')
+  assert.equal(view.severity, 'error')
+  assert.equal(view.showEvidence, true)
+  assert.equal(view.task, task)
+})
+
 test('AI prompt handoff waits until the chat composer is ready', async () => {
   const { handoffAgentPromptToAi } = await import(handoffUrl)
   const scheduled = []
