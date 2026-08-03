@@ -225,3 +225,80 @@ test('AI chat component wires local paste drag and SFTP drop attachment UI', () 
   assert.match(source, /buildAttachmentAIContent/)
   assert.match(source, /parseSftpDropPayload/)
 })
+
+test('AI attachment presentation identifies safe local image previews', async () => {
+  const {
+    getAIAttachmentPresentation
+  } = await import(attachmentsUrl)
+
+  assert.equal(typeof getAIAttachmentPresentation, 'function')
+  assert.deepEqual(getAIAttachmentPresentation({
+    source: 'local',
+    name: 'screen.png',
+    size: 1536,
+    mimeType: 'image/png'
+  }), {
+    kind: 'image',
+    extension: 'png',
+    typeLabel: 'PNG',
+    sizeLabel: '1.5 KB',
+    meta: 'PNG · 1.5 KB'
+  })
+})
+
+test('AI attachment presentation does not preview unsupported image MIME types', async () => {
+  const {
+    getAIAttachmentPresentation
+  } = await import(attachmentsUrl)
+
+  assert.equal(typeof getAIAttachmentPresentation, 'function')
+  assert.equal(getAIAttachmentPresentation({
+    source: 'local',
+    name: 'spoofed.png',
+    mimeType: 'image/svg+xml'
+  }).kind, 'file')
+})
+
+test('AI attachment presentation describes documents and web sources', async () => {
+  const {
+    getAIAttachmentPresentation
+  } = await import(attachmentsUrl)
+
+  assert.equal(typeof getAIAttachmentPresentation, 'function')
+  assert.deepEqual(getAIAttachmentPresentation({
+    source: 'local',
+    name: 'report.docx',
+    size: 2 * 1024 * 1024
+  }), {
+    kind: 'file',
+    extension: 'docx',
+    typeLabel: 'DOCX',
+    sizeLabel: '2 MB',
+    meta: 'DOCX · 2 MB'
+  })
+  assert.deepEqual(getAIAttachmentPresentation({
+    source: 'url',
+    name: 'https://example.com/report'
+  }), {
+    kind: 'web',
+    extension: '',
+    typeLabel: 'WEB',
+    sizeLabel: '',
+    meta: 'WEB'
+  })
+})
+
+test('AI attachment card owns local image preview lifecycle and an accessible remove action', () => {
+  const componentPath = path.join(
+    root,
+    'src/client/components/ai/ai-attachment-card.jsx'
+  )
+
+  assert.equal(fs.existsSync(componentPath), true)
+  const source = fs.readFileSync(componentPath, 'utf8')
+  assert.match(source, /URL\.createObjectURL/)
+  assert.match(source, /URL\.revokeObjectURL/)
+  assert.match(source, /className='ai-attachment-preview-image'/)
+  assert.match(source, /className='ai-attachment-remove'/)
+  assert.match(source, /aria-label=/)
+})
