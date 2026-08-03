@@ -38,7 +38,7 @@ test('Agent prompt only asks confirmation for state-changing operations', () => 
 })
 
 test('safe terminal directory changes stay in the interactive SSH session', () => {
-  const source = fs.readFileSync(path.join(aiRoot, 'agent-tools.js'), 'utf8')
+  const source = fs.readFileSync(path.join(aiRoot, 'agent-tool-execution.js'), 'utf8')
   const sendCase = source.match(
     /case 'send_terminal_command':[\s\S]*?(?=\n\s*case ')/
   )?.[0] || ''
@@ -78,7 +78,9 @@ test('Agent command classifier separates readonly diagnostics from dangerous ope
 })
 
 test('Agent tools remove the generic plan grant and expose readonly exec', () => {
-  const source = fs.readFileSync(path.join(aiRoot, 'agent-tools.js'), 'utf8')
+  const catalogSource = fs.readFileSync(path.join(aiRoot, 'agent-tool-catalog.js'), 'utf8')
+  const executionSource = fs.readFileSync(path.join(aiRoot, 'agent-tool-execution.js'), 'utf8')
+  const source = `${catalogSource}\n${executionSource}`
   const agentSource = fs.readFileSync(path.join(aiRoot, 'agent.js'), 'utf8')
 
   assert.match(source, /name:\s*'run_readonly_command'/)
@@ -91,7 +93,7 @@ test('Agent tools remove the generic plan grant and expose readonly exec', () =>
 })
 
 test('readonly execution is not gated on runtime.planGrant', () => {
-  const source = fs.readFileSync(path.join(aiRoot, 'agent-tools.js'), 'utf8')
+  const source = fs.readFileSync(path.join(aiRoot, 'agent-tool-execution.js'), 'utf8')
   const readonlyCase = source.match(
     /case 'run_readonly_command':[\s\S]*?(?=\n\s*case '|\n\s*default:)/
   )?.[0] || ''

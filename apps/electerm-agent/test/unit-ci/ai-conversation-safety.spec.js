@@ -124,7 +124,7 @@ test('legacy history remains visible but is not sent as ambiguous context', asyn
 test('Agent tab-scoped tools stay bound to the tab that started the conversation', async () => {
   const { bindAgentToolArgs } = await import(pathToFileURL(runtimePath))
   const agentTools = fs.readFileSync(
-    path.resolve(__dirname, '../../src/client/components/ai/agent-tools.js'),
+    path.resolve(__dirname, '../../src/client/components/ai/agent-tool-execution.js'),
     'utf8'
   )
   const rawArgs = { command: 'uptime' }
@@ -201,7 +201,7 @@ test('Agent runtime context keeps the current request and bounds tool output', a
     path.resolve(__dirname, '../../src/client/components/ai/agent.js'),
     'utf8'
   )
-  assert.match(agent, /callBackendAIchatWithTools\(\s*buildBoundedAgentMessages\(/)
+  assert.match(agent, /buildAgentContextWindow\([\s\S]*?callBackendAIchatWithTools\([\s\S]*?contextWindow\.messages/)
   assert.match(
     agent,
     /createAgentToolObservation\([\s\S]*?toolResult[\s\S]*?boundAgentToolResult\(JSON\.stringify\(observation\)\)[\s\S]*?serializeAgentObservationForModel\(observation\)/
@@ -225,7 +225,7 @@ test('Agent SFTP reads use a bounded chunk instead of loading the whole file', (
 
 test('Agent SFTP read tool exposes offset and bounded maxBytes pagination', () => {
   const tools = fs.readFileSync(
-    path.resolve(__dirname, '../../src/client/components/ai/agent-tools.js'),
+    path.resolve(__dirname, '../../src/client/components/ai/agent-tool-catalog.js'),
     'utf8'
   )
   const readTool = tools.slice(
@@ -467,18 +467,22 @@ test('Agent cancellation remains effective while a tool confirmation is open', a
   )
   assert.deepEqual(cancelled, ['transfer'])
 
-  const tools = fs.readFileSync(
-    path.resolve(__dirname, '../../src/client/components/ai/agent-tools.js'),
+  const riskSource = fs.readFileSync(
+    path.resolve(__dirname, '../../src/client/components/ai/agent-tool-risk-lifecycle.js'),
     'utf8'
   )
-  assert.match(tools, /prepareResolvedAgentTool[\s\S]*?confirmRiskTransaction\([\s\S]*?signal:\s*runtime\.signal[\s\S]*?assertAgentRuntimeActive\(runtime\)/)
-  assert.match(tools, /resolveEndpoint:[\s\S]*?resolveAgentExecutionEndpoint/)
-  assert.match(tools, /prepareRisky:\s*context\s*=>\s*prepareResolvedAgentTool/)
-  assert.match(tools, /case 'sftp_del':[\s\S]*?mcpSftpDel\(args,\s*\{\s*signal:\s*runtime\.signal\s*\}\)/)
-  assert.match(tools, /case 'sftp_upload':[\s\S]*?registerAgentTransferCancellation/)
-  assert.match(tools, /case 'sftp_download':[\s\S]*?registerAgentTransferCancellation/)
-  assert.match(tools, /case 'run_local_cli':[\s\S]*?cancelLocalCli/)
-  assert.match(tools, /case 'run_background_command':[\s\S]*?mcpCancelBackgroundTask/)
+  const executionSource = fs.readFileSync(
+    path.resolve(__dirname, '../../src/client/components/ai/agent-tool-execution.js'),
+    'utf8'
+  )
+  assert.match(riskSource, /prepareResolvedAgentTool[\s\S]*?confirmRiskTransaction\([\s\S]*?signal:\s*runtime\.signal[\s\S]*?assertAgentRuntimeActive\(runtime\)/)
+  assert.match(executionSource, /resolveEndpoint:[\s\S]*?resolveAgentExecutionEndpoint/)
+  assert.match(executionSource, /prepareRisky:\s*context\s*=>\s*prepareResolvedAgentTool/)
+  assert.match(executionSource, /case 'sftp_del':[\s\S]*?mcpSftpDel\(args,\s*\{\s*signal:\s*runtime\.signal\s*\}\)/)
+  assert.match(executionSource, /case 'sftp_upload':[\s\S]*?registerAgentTransferCancellation/)
+  assert.match(executionSource, /case 'sftp_download':[\s\S]*?registerAgentTransferCancellation/)
+  assert.match(executionSource, /case 'run_local_cli':[\s\S]*?cancelLocalCli/)
+  assert.match(executionSource, /case 'run_background_command':[\s\S]*?mcpCancelBackgroundTask/)
 
   const sftpEntry = fs.readFileSync(
     path.resolve(__dirname, '../../src/client/components/sftp/sftp-entry.jsx'),

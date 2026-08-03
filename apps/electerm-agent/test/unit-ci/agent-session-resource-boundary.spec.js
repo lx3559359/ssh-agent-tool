@@ -39,7 +39,7 @@ test('Agent binds transfer and background resources to its source SSH tab', () =
   ), 'utf8')
   const toolsSource = fs.readFileSync(path.join(
     root,
-    'src/client/components/ai/agent-tools.js'
+    'src/client/components/ai/agent-tool-execution.js'
   ), 'utf8')
   const storeSource = fs.readFileSync(path.join(
     root,

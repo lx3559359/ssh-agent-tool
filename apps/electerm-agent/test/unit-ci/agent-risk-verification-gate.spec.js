@@ -80,5 +80,6 @@ test('risk verification rejects endpoint replacement before any read can start',
     },
     descriptor: { name: 'read_file_range', scope: 'session-read' }
   }), error => error.code === 'AI_TAKEOVER_REQUIRED' ||
-    error.code === 'SAFETY_ENDPOINT_CHANGED')
+    error.code === 'SAFETY_ENDPOINT_CHANGED' ||
+    error.code === 'AGENT_ENDPOINT_CHANGED')
 })

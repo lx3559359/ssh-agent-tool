@@ -18,35 +18,37 @@ function toolDefinition (source, name) {
 }
 
 test('Agent tool execution routes risky tools through frozen transaction confirmation', () => {
-  const source = readSource('agent-tools.js')
+  const riskSource = readSource('agent-tool-risk-lifecycle.js')
+  const executionSource = readSource('agent-tool-execution.js')
 
-  assert.match(source, /buildRiskTransaction/)
-  assert.match(source, /confirmRiskTransaction/)
-  assert.match(source, /requestAgentRiskConfirmation/)
-  assert.match(source, /combineRiskTransactions/)
-  assert.match(source, /export async function prepareAgentRiskBatch/)
-  assert.match(source, /prepareRisky:\s*context\s*=>\s*prepareResolvedAgentTool/)
-  assert.match(source, /validateDelegatedRisk:\s*validateDelegatedAgentSafetyPreparation/)
-  assert.match(source, /executeAgentTool\(\{/)
+  assert.match(riskSource, /buildRiskTransaction/)
+  assert.match(riskSource, /confirmRiskTransaction/)
+  assert.match(riskSource, /requestAgentRiskConfirmation/)
+  assert.match(riskSource, /combineRiskTransactions/)
+  assert.match(riskSource, /export async function prepareAgentRiskBatch/)
+  assert.match(executionSource, /prepareRisky:\s*context\s*=>\s*prepareResolvedAgentTool/)
+  assert.match(executionSource, /validateDelegatedRisk:\s*validateDelegatedAgentSafetyPreparation/)
+  assert.match(executionSource, /executeAgentTool\(\{/)
 })
 
 test('Agent tools route every executor through the single takeover gate', () => {
-  const source = readSource('agent-tools.js')
+  const catalogSource = readSource('agent-tool-catalog.js')
+  const executionSource = readSource('agent-tool-execution.js')
   const agentSource = readSource('agent.js')
 
-  assert.match(source, /withAgentToolPolicy\(withAgentToolScopes\(\[/)
-  assert.match(source, /executeAgentTool/)
-  assert.match(source, /function executeResolvedAgentTool/)
-  assert.match(source, /\.\.\.structuredAgentTools/)
-  assert.match(source, /case 'run_readonly_command'/)
-  assert.match(source, /case 'read_service_status'/)
-  assert.match(source, /case 'read_recent_logs'/)
-  assert.match(source, /case 'verify_listening_port'/)
-  assert.match(source, /case 'read_file_range'/)
-  assert.match(source, /case 'send_terminal_command'/)
-  assert.match(source, /case 'sftp_del'/)
-  assert.match(source, /case 'run_local_cli'/)
-  assert.match(source, /case 'run_background_command'/)
+  assert.match(catalogSource, /withAgentToolPolicy\(withAgentToolScopes\(\[/)
+  assert.match(catalogSource, /\.\.\.structuredAgentTools/)
+  assert.match(executionSource, /executeAgentTool/)
+  assert.match(executionSource, /function executeResolvedAgentTool/)
+  assert.match(executionSource, /case 'run_readonly_command'/)
+  assert.match(executionSource, /case 'read_service_status'/)
+  assert.match(executionSource, /case 'read_recent_logs'/)
+  assert.match(executionSource, /case 'verify_listening_port'/)
+  assert.match(executionSource, /case 'read_file_range'/)
+  assert.match(executionSource, /case 'send_terminal_command'/)
+  assert.match(executionSource, /case 'sftp_del'/)
+  assert.match(executionSource, /case 'run_local_cli'/)
+  assert.match(executionSource, /case 'run_background_command'/)
   assert.match(agentSource, /agentTools\.map\(\(\{ type, function: definition \}\)/)
   assert.match(agentSource, /runValidatedAgentToolCalls\(\{/)
   assert.match(agentSource, /prepareAgentRiskBatch\(parsedCalls, agentRuntime\)/)
@@ -54,7 +56,7 @@ test('Agent tools route every executor through the single takeover gate', () => 
 })
 
 test('Agent readonly commands use SSH exec without terminal or safety fallback', () => {
-  const source = readSource('agent-tools.js')
+  const source = readSource('agent-tool-execution.js')
   const readonlyHelper = source.match(
     /(?:export\s+)?async function runReadonlyTool[\s\S]*?\n}/
   )?.[0] || ''
@@ -73,7 +75,7 @@ test('Agent readonly commands use SSH exec without terminal or safety fallback',
 })
 
 test('Agent exposes readonly exec without the old plan-confirmation tool', () => {
-  const source = readSource('agent-tools.js')
+  const source = `${readSource('agent-tool-catalog.js')}\n${readSource('agent-tool-execution.js')}`
 
   assert.match(source, /name:\s*'run_readonly_command'/)
   assert.doesNotMatch(source, /name:\s*'confirm_agent_plan'/)
@@ -81,7 +83,7 @@ test('Agent exposes readonly exec without the old plan-confirmation tool', () =>
 })
 
 test('structured reads use readonly exec while file ranges keep SFTP read', () => {
-  const source = readSource('agent-tools.js')
+  const source = readSource('agent-tool-execution.js')
   const structuredCases = source.match(
     /case 'read_service_status':[\s\S]*?case 'send_terminal_command'/
   )?.[0] || ''
@@ -92,7 +94,11 @@ test('structured reads use readonly exec while file ranges keep SFTP read', () =
 })
 
 test('every write and control tool schema matches its policy risk context mode', async () => {
-  const source = readSource('agent-tools.js')
+  const source = [
+    'agent-tool-catalog.js',
+    'agent-structured-tools.js',
+    'artifact-agent-tools.js'
+  ].map(readSource).join('\n')
   const { AGENT_TOOL_SCOPES } = await import(scopesUrl)
   const contextTools = Object.entries(AGENT_TOOL_SCOPES).filter(([, scope]) => (
     scope === 'session-write' || scope === 'session-control'
@@ -123,7 +129,7 @@ test('every write and control tool schema matches its policy risk context mode',
 })
 
 test('runtime rejects risky calls without context before risk preparation', () => {
-  const source = readSource('agent-tools.js')
+  const source = readSource('agent-tool-execution.js')
   const entrypoint = source.slice(source.indexOf('export async function executeToolCall'))
 
   assert.match(entrypoint, /assertAgentRiskContextForCall\([\s\S]*initialClassification/)

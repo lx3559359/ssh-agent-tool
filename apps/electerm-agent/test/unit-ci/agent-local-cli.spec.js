@@ -370,37 +370,53 @@ test('Agent readonly terminal commands execute without asking for confirmation',
 })
 
 test('Agent tools expose and route run_local_cli through confirmation and IPC', () => {
-  const source = fs.readFileSync(
-    path.resolve(__dirname, '../../src/client/components/ai/agent-tools.js'),
+  const catalogSource = fs.readFileSync(
+    path.resolve(__dirname, '../../src/client/components/ai/agent-tool-catalog.js'),
+    'utf8'
+  )
+  const riskSource = fs.readFileSync(
+    path.resolve(__dirname, '../../src/client/components/ai/agent-tool-risk-lifecycle.js'),
+    'utf8'
+  )
+  const executionSource = fs.readFileSync(
+    path.resolve(__dirname, '../../src/client/components/ai/agent-tool-execution.js'),
     'utf8'
   )
 
-  assert.match(source, /name:\s*'run_local_cli'/)
-  assert.match(source, /prepareResolvedAgentTool[\s\S]*confirmRiskTransaction/)
-  assert.match(source, /isAgentCommandTool\(toolName\)/)
-  assert.match(source, /case 'run_local_cli':[\s\S]*runGlobalAsync\('runLocalCli'/)
+  assert.match(catalogSource, /name:\s*'run_local_cli'/)
+  assert.match(riskSource, /prepareResolvedAgentTool[\s\S]*confirmRiskTransaction/)
+  assert.match(riskSource, /isAgentCommandTool\(toolName\)/)
+  assert.match(executionSource, /case 'run_local_cli':[\s\S]*runGlobalAsync\('runLocalCli'/)
 })
 
 test('Agent tools expose local CLI discovery without command confirmation', () => {
-  const source = fs.readFileSync(
-    path.resolve(__dirname, '../../src/client/components/ai/agent-tools.js'),
+  const catalogSource = fs.readFileSync(
+    path.resolve(__dirname, '../../src/client/components/ai/agent-tool-catalog.js'),
+    'utf8'
+  )
+  const executionSource = fs.readFileSync(
+    path.resolve(__dirname, '../../src/client/components/ai/agent-tool-execution.js'),
     'utf8'
   )
 
-  assert.match(source, /name:\s*'list_local_cli_tools'/)
-  assert.match(source, /case 'list_local_cli_tools':[\s\S]*runGlobalAsync\('getAllowedLocalCliTools'/)
-  assert.doesNotMatch(source, /case 'list_local_cli_tools':[\s\S]{0,160}confirmAgentToolExecution/)
+  assert.match(catalogSource, /name:\s*'list_local_cli_tools'/)
+  assert.match(executionSource, /case 'list_local_cli_tools':[\s\S]*runGlobalAsync\('getAllowedLocalCliTools'/)
+  assert.doesNotMatch(executionSource, /case 'list_local_cli_tools':[\s\S]{0,160}confirmAgentToolExecution/)
 })
 
 test('Agent tools expose Codex CLI status discovery without command confirmation', () => {
-  const source = fs.readFileSync(
-    path.resolve(__dirname, '../../src/client/components/ai/agent-tools.js'),
+  const catalogSource = fs.readFileSync(
+    path.resolve(__dirname, '../../src/client/components/ai/agent-tool-catalog.js'),
+    'utf8'
+  )
+  const executionSource = fs.readFileSync(
+    path.resolve(__dirname, '../../src/client/components/ai/agent-tool-execution.js'),
     'utf8'
   )
 
-  assert.match(source, /name:\s*'get_codex_cli_status'/)
-  assert.match(source, /case 'get_codex_cli_status':[\s\S]*runGlobalAsync\('getCodexCliStatus'/)
-  assert.doesNotMatch(source, /case 'get_codex_cli_status':[\s\S]{0,180}confirmAgentToolExecution/)
+  assert.match(catalogSource, /name:\s*'get_codex_cli_status'/)
+  assert.match(executionSource, /case 'get_codex_cli_status':[\s\S]*runGlobalAsync\('getCodexCliStatus'/)
+  assert.doesNotMatch(executionSource, /case 'get_codex_cli_status':[\s\S]{0,180}confirmAgentToolExecution/)
 })
 
 test('main process exposes runLocalCli through the async IPC allowlist', () => {

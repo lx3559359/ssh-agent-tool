@@ -8,7 +8,8 @@ const aiRoot = path.resolve(__dirname, '../../src/client/components/ai')
 const gateUrl = pathToFileURL(path.join(aiRoot, 'agent-takeover-gate.js')).href
 const scopesUrl = pathToFileURL(path.join(aiRoot, 'agent-tool-scopes.js')).href
 const runtimeUrl = pathToFileURL(path.join(aiRoot, 'agent-runtime-context.js')).href
-const agentToolsPath = path.join(aiRoot, 'agent-tools.js')
+const agentToolCatalogPath = path.join(aiRoot, 'agent-tool-catalog.js')
+const agentToolExecutionPath = path.join(aiRoot, 'agent-tool-execution.js')
 const structuredToolsPath = path.join(aiRoot, 'agent-structured-tools.js')
 const artifactToolsPath = path.join(aiRoot, 'artifact-agent-tools.js')
 
@@ -32,7 +33,7 @@ test('assigns one valid scope to every exported Agent tool descriptor', async ()
     VALID_AGENT_TOOL_SCOPES,
     withAgentToolScopes
   } = await import(scopesUrl)
-  const source = [agentToolsPath, structuredToolsPath, artifactToolsPath]
+  const source = [agentToolCatalogPath, structuredToolsPath, artifactToolsPath]
     .map(file => fs.readFileSync(file, 'utf8'))
     .join('\n')
   const names = [...source.matchAll(/name:\s*'([^']+)'/g)].map(match => match[1])
@@ -158,16 +159,20 @@ test('runtime endpoint resolver revalidates complete current SSH identity', asyn
         resolveEndpoint: () => endpoint({ hostKeyFingerprint: 'SHA256:replacement' })
       }
     }),
-    error => error.code === 'AI_TAKEOVER_REQUIRED'
+    error => error.code === 'AI_TAKEOVER_REQUIRED' ||
+      error.code === 'AGENT_ENDPOINT_CHANGED'
   )
 })
 
 test('the single tool entrypoint resolves a descriptor before the guarded switch', () => {
-  const source = fs.readFileSync(agentToolsPath, 'utf8')
-  const entrypoint = source.slice(source.indexOf('export async function executeToolCall'))
+  const catalogSource = fs.readFileSync(agentToolCatalogPath, 'utf8')
+  const executionSource = fs.readFileSync(agentToolExecutionPath, 'utf8')
+  const entrypoint = executionSource.slice(
+    executionSource.indexOf('export async function executeToolCall')
+  )
 
-  assert.match(source, /withAgentToolScopes\(\[/)
-  assert.match(source, /function executeResolvedAgentTool/)
+  assert.match(catalogSource, /withAgentToolScopes\(\[/)
+  assert.match(executionSource, /function executeResolvedAgentTool/)
   assert.match(entrypoint, /getAgentToolDescriptor\(toolName\)/)
   assert.match(entrypoint, /resolveAgentExecutionEndpoint/)
   assert.match(entrypoint, /executeAgentTool/)

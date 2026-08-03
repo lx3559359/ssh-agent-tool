@@ -10,13 +10,14 @@ function source (relativePath) {
 }
 
 test('Agent exposes a dedicated reviewed multi-file SFTP write tool', () => {
-  const tools = source('src/client/components/ai/agent-tools.js')
+  const catalog = source('src/client/components/ai/agent-tool-catalog.js')
+  const execution = source('src/client/components/ai/agent-tool-execution.js')
   const policy = source('src/client/components/ai/agent-tool-policy.js')
   const scopes = source('src/client/components/ai/agent-tool-scopes.js')
   const runtime = source('src/client/components/ai/agent-runtime-context.js')
 
-  assert.match(tools, /name:\s*'sftp_write_text_batch'/)
-  assert.match(tools, /mcpSftpWriteTextBatch/)
+  assert.match(catalog, /name:\s*'sftp_write_text_batch'/)
+  assert.match(execution, /mcpSftpWriteTextBatch/)
   assert.match(policy, /'sftp_write_text_batch'/)
   assert.match(scopes, /sftp_write_text_batch:\s*'session-write'/)
   assert.match(runtime, /'sftp_write_text_batch'/)

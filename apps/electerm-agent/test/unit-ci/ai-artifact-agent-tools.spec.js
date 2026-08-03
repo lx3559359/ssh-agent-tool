@@ -13,7 +13,8 @@ function read (relativePath) {
 test('Agent exposes conversation-scoped artifact tools', () => {
   const tools = read('src/client/components/ai/artifact-agent-tools.js')
   const scopes = read('src/client/components/ai/agent-tool-scopes.js')
-  const registry = read('src/client/components/ai/agent-tools.js')
+  const catalog = read('src/client/components/ai/agent-tool-catalog.js')
+  const execution = read('src/client/components/ai/agent-tool-execution.js')
 
   for (const name of [
     'create_artifact',
@@ -24,8 +25,8 @@ test('Agent exposes conversation-scoped artifact tools', () => {
     assert.match(tools, new RegExp(`name:\\s*'${name}'`))
     assert.match(scopes, new RegExp(`${name}:\\s*'conversation'`))
   }
-  assert.match(registry, /artifactAgentTools/)
-  assert.match(registry, /executeArtifactAgentTool/)
+  assert.match(catalog, /artifactAgentTools/)
+  assert.match(execution, /executeArtifactAgentTool/)
 })
 
 test('created artifact ids are persisted on the completed chat entry', () => {

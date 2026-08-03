@@ -43,7 +43,7 @@ before(async () => {
   server = await createServer({
     root: process.cwd(),
     appType: 'custom',
-    server: { middlewareMode: true }
+    server: { middlewareMode: true, hmr: false }
   })
 })
 

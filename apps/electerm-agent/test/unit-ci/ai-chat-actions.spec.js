@@ -941,8 +941,8 @@ test('agent and history response consumers use the sanitized history update boun
     'utf8'
   )
 
-  assert.match(agent, /updateAIChatHistoryEntry\(window\.store/)
-  assert.doesNotMatch(agent, /Object\.assign\(window\.store\.aiChatHistory/)
+  assert.match(agent, /updateAIChatHistoryEntry\(store/)
+  assert.doesNotMatch(agent, /Object\.assign\((?:window\.)?store\.aiChatHistory/)
   assert.match(historyItem, /updateAIChatHistoryEntry\(window\.store/)
   assert.doesNotMatch(
     historyItem,

@@ -48,7 +48,7 @@ test('Agent SFTP reads request at least one complete UTF-8 code point', () => {
   const root = path.resolve(__dirname, '../..')
   const tools = fs.readFileSync(path.join(
     root,
-    'src/client/components/ai/agent-tools.js'
+    'src/client/components/ai/agent-tool-catalog.js'
   ), 'utf8')
   const handler = fs.readFileSync(path.join(
     root,

@@ -19,14 +19,15 @@ test('treats structured remote text writes as a confirmed state change', async (
 })
 
 test('routes Agent text writes through the SFTP transaction-backed store API', () => {
-  const source = fs.readFileSync(path.join(aiRoot, 'agent-tools.js'), 'utf8')
+  const catalogSource = fs.readFileSync(path.join(aiRoot, 'agent-tool-catalog.js'), 'utf8')
+  const executionSource = fs.readFileSync(path.join(aiRoot, 'agent-tool-execution.js'), 'utf8')
   const storeSource = fs.readFileSync(path.resolve(
     __dirname,
     '../../src/client/store/mcp-handler.js'
   ), 'utf8')
 
-  assert.match(source, /name:\s*'sftp_write_text'/)
-  assert.match(source, /case 'sftp_write_text':[\s\S]*mcpSftpWriteText/)
+  assert.match(catalogSource, /name:\s*'sftp_write_text'/)
+  assert.match(executionSource, /case 'sftp_write_text':[\s\S]*mcpSftpWriteText/)
   assert.match(storeSource, /Store\.prototype\.mcpSftpWriteText/)
   assert.match(storeSource, /isSingleRemotePath\(remotePath\)/)
   assert.match(storeSource, /saveRemoteEditorFile|executePreparedRemoteEditorSave/)

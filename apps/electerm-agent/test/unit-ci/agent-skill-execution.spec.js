@@ -317,16 +317,24 @@ test('production selection resolver accepts only a digest-bound selected Skill',
 })
 
 test('Agent production tool chain exposes and routes selected artifacts through the gateway', () => {
-  const source = fs.readFileSync(path.resolve(
+  const catalogSource = fs.readFileSync(path.resolve(
     __dirname,
-    '../../src/client/components/ai/agent-tools.js'
+    '../../src/client/components/ai/agent-tool-catalog.js'
+  ), 'utf8')
+  const executionSource = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/components/ai/agent-tool-execution.js'
+  ), 'utf8')
+  const riskSource = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/components/ai/agent-tool-risk-lifecycle.js'
   ), 'utf8')
 
-  assert.match(source, /name:\s*'run_skill_artifact'/)
-  assert.match(source, /prepareSelectedSkillArtifactCall/)
-  assert.match(source, /skillArtifact:\s*controlledSkillCall\?\.skillArtifact/)
-  assert.match(source, /validateArtifact:\s*controlledSkillCall\?\.validateArtifact/)
-  assert.match(source, /type:\s*'skill-artifact'/)
+  assert.match(catalogSource, /name:\s*'run_skill_artifact'/)
+  assert.match(executionSource, /prepareSelectedSkillArtifactCall/)
+  assert.match(executionSource, /skillArtifact:\s*controlledSkillCall\?\.skillArtifact/)
+  assert.match(executionSource, /validateArtifact:\s*controlledSkillCall\?\.validateArtifact/)
+  assert.match(riskSource, /type:\s*'skill-artifact'/)
 })
 
 test('artifact revalidation rejects package or file changes before gateway dispatch', async () => {

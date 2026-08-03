@@ -66,7 +66,7 @@ test('Agent paths run with injected services while window is absent', async () =
   const server = await createServer({
     root: path.resolve(__dirname, '../..'),
     appType: 'custom',
-    server: { middlewareMode: true }
+    server: { middlewareMode: true, hmr: false }
   })
   try {
     const servicesModule = await server.ssrLoadModule(
