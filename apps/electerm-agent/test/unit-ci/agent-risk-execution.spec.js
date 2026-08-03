@@ -229,6 +229,18 @@ test('post-risk verification is mandatory and command checks use readonly exec',
   assert.doesNotMatch(verification, /runTerminalTool|mcpWaitForTerminalIdle/)
 })
 
+test('risk batch consumes validated parsed entries without reparsing arguments', () => {
+  const source = fs.readFileSync(path.join(aiRoot, 'agent-tools.js'), 'utf8')
+  const batch = source.slice(
+    source.indexOf('export async function prepareAgentRiskBatch'),
+    source.indexOf('async function prepareResolvedAgentTool')
+  )
+  assert.match(batch, /toolCall\?\.name/)
+  assert.match(batch, /toolCall\?\.args/)
+  assert.match(batch, /toolCall\?\.descriptor/)
+  assert.doesNotMatch(batch, /JSON\.parse|function\.arguments/)
+})
+
 test('delegated command risk reaches only the lower safety transaction', () => {
   const source = fs.readFileSync(path.join(aiRoot, 'agent-tools.js'), 'utf8')
   const terminalSource = fs.readFileSync(path.join(aiRoot, 'agent-terminal-command.js'), 'utf8')

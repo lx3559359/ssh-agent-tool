@@ -2,6 +2,7 @@ import {
   agentTools,
   executeToolCall,
   failAgentRiskBatch,
+  getAgentToolDescriptor,
   prepareAgentRiskBatch
 } from './agent-tools'
 import {
@@ -24,6 +25,7 @@ import { normalizeAsyncResult } from '../../common/async-result.js'
 import { createTraceContext } from '../../common/quality/trace-context.js'
 import {
   boundAgentToolResult,
+  bindAgentToolArgs,
   buildBoundedAgentMessages,
   cancelAgentRuntimeOperations,
   captureAgentRuntimeEndpoint,
@@ -41,6 +43,7 @@ import {
   settleAgentCancellation
 } from './agent-cancellation-status.js'
 import { buildAgentToolPresentation } from './agent-tool-presentation.js'
+import { runValidatedAgentToolCalls } from './agent-tool-call-parser.js'
 
 const MAX_ITERATIONS = 150
 const agentApiTools = Object.freeze(
@@ -433,104 +436,125 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
         return
       }
 
-      await prepareAgentRiskBatch(assistantMessage.tool_calls, agentRuntime)
-
-      for (const toolCall of assistantMessage.tool_calls) {
-        if (abortRef && abortRef.current) {
-          await markCancelled()
-          return
-        }
-
-        let args
-        try {
-          args = JSON.parse(toolCall.function.arguments)
-        } catch {
-          args = {}
-        }
-
-        const safeArgs = sanitizeAIChatHistory([{ args }])[0]?.args || {}
-        const toolEntry = {
-          id: toolCall.id,
-          name: toolCall.function.name,
-          args: safeArgs,
-          status: 'running',
-          result: null,
-          presentation: buildAgentToolPresentation(
-            toolCall.function.name,
-            args,
-            null,
-            { endpoint: agentRuntime.endpoint }
-          )
-        }
-        toolCallsLog.push(toolEntry)
-        updateChatEntry(chatEntry, {
-          toolCalls: [...toolCallsLog]
-        })
-
-        let toolResult
-        try {
-          toolResult = await waitForAgentOperation(
-            executeToolCall(toolCall.function.name, args, agentRuntime),
-            controller.signal
-          )
-          if (abortRef && abortRef.current) {
-            await markCancelled()
-            return
-          }
-          toolEntry.presentation = buildAgentToolPresentation(
-            toolCall.function.name,
-            args,
-            toolResult,
-            { endpoint: agentRuntime.endpoint }
-          )
-          const observation = await createAgentToolObservation(
-            toolCall.function.name,
-            toolResult,
+      await runValidatedAgentToolCalls({
+        toolCalls: assistantMessage.tool_calls,
+        resolveDescriptor: getAgentToolDescriptor,
+        normalize: parsed => Object.freeze({
+          ...parsed,
+          args: Object.freeze(bindAgentToolArgs(
+            parsed.name,
+            parsed.args,
             agentRuntime
-          )
-          toolEntry.status = 'completed'
-          toolEntry.result = boundAgentToolResult(JSON.stringify(observation))
-          toolResult = serializeAgentObservationForModel(observation)
-        } catch (err) {
-          if (abortRef && abortRef.current) {
-            await markCancelled()
-            return
-          }
-          await failAgentRiskBatch(agentRuntime, err, {
-            toolName: toolCall.function.name,
-            args
+          ))
+        }),
+        prepare: parsedCalls => prepareAgentRiskBatch(parsedCalls, agentRuntime),
+        onInvalid: (toolCall, error) => {
+          const name = String(toolCall?.function?.name || '')
+          const safeError = sanitizeAIStoredText(error?.message || error)
+          const failureResult = boundAgentToolResult(JSON.stringify({
+            error: true,
+            code: error?.code,
+            name: 'AgentToolArgumentsError',
+            data: safeError,
+            executed: false
+          }))
+          toolCallsLog.push({
+            id: toolCall?.id,
+            name,
+            args: {},
+            status: 'error',
+            result: failureResult,
+            presentation: buildAgentToolPresentation(
+              name,
+              {},
+              { error: safeError },
+              { endpoint: agentRuntime.endpoint }
+            )
           })
-          toolEntry.status = 'error'
-          toolEntry.presentation = buildAgentToolPresentation(
-            toolCall.function.name,
-            args,
-            { error: sanitizeAIStoredText(err.message) },
-            { endpoint: agentRuntime.endpoint }
-          )
-          const observation = await createAgentToolObservation(
-            toolCall.function.name,
-            {
-              error: true,
-              data: sanitizeAIStoredText(err.message)
-            },
-            agentRuntime
-          )
-          toolEntry.result = boundAgentToolResult(JSON.stringify(observation))
-          toolResult = serializeAgentObservationForModel(observation)
+          updateChatEntry(chatEntry, { toolCalls: [...toolCallsLog] })
+          runtimeMessages.push({
+            role: 'tool',
+            tool_call_id: toolCall?.id,
+            content: failureResult
+          })
+        },
+        execute: async parsed => {
+          if (abortRef && abortRef.current) throw createAgentAbortError()
+          const { id, name, args } = parsed
+          const safeArgs = sanitizeAIChatHistory([{ args }])[0]?.args || {}
+          const toolEntry = {
+            id,
+            name,
+            args: safeArgs,
+            status: 'running',
+            result: null,
+            presentation: buildAgentToolPresentation(
+              name,
+              args,
+              null,
+              { endpoint: agentRuntime.endpoint }
+            )
+          }
+          toolCallsLog.push(toolEntry)
+          updateChatEntry(chatEntry, { toolCalls: [...toolCallsLog] })
+
+          let toolResult
+          try {
+            toolResult = await waitForAgentOperation(
+              executeToolCall(name, args, agentRuntime, undefined, parsed),
+              controller.signal
+            )
+            if (abortRef && abortRef.current) throw createAgentAbortError()
+            toolEntry.presentation = buildAgentToolPresentation(
+              name,
+              args,
+              toolResult,
+              { endpoint: agentRuntime.endpoint }
+            )
+            const observation = await createAgentToolObservation(
+              name,
+              toolResult,
+              agentRuntime
+            )
+            toolEntry.status = 'completed'
+            toolEntry.result = boundAgentToolResult(JSON.stringify(observation))
+            toolResult = serializeAgentObservationForModel(observation)
+          } catch (err) {
+            if (abortRef && abortRef.current) throw createAgentAbortError()
+            await failAgentRiskBatch(agentRuntime, err, {
+              toolName: name,
+              args
+            })
+            toolEntry.status = 'error'
+            toolEntry.presentation = buildAgentToolPresentation(
+              name,
+              args,
+              { error: sanitizeAIStoredText(err.message) },
+              { endpoint: agentRuntime.endpoint }
+            )
+            const observation = await createAgentToolObservation(
+              name,
+              {
+                error: true,
+                data: sanitizeAIStoredText(err.message)
+              },
+              agentRuntime
+            )
+            toolEntry.result = boundAgentToolResult(JSON.stringify(observation))
+            toolResult = serializeAgentObservationForModel(observation)
+          }
+
+          updateChatEntry(chatEntry, { toolCalls: [...toolCallsLog] })
+          runtimeMessages.push({
+            role: 'tool',
+            tool_call_id: id,
+            content: toolEntry.status === 'completed'
+              ? toolResult
+              : toolEntry.result
+          })
+          return toolResult
         }
-
-        updateChatEntry(chatEntry, {
-          toolCalls: [...toolCallsLog]
-        })
-
-        runtimeMessages.push({
-          role: 'tool',
-          tool_call_id: toolCall.id,
-          content: toolEntry.status === 'completed'
-            ? toolResult
-            : toolEntry.result
-        })
-      }
+      })
     }
 
     setIsStreaming(false)

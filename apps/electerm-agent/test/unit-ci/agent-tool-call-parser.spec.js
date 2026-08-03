@@ -1,5 +1,6 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
+const fs = require('node:fs')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
 
@@ -145,4 +146,57 @@ test('unknown tools retain the descriptor error without executing validation', a
       throw error
     }
   }), error => error.code === 'UNKNOWN_AGENT_TOOL')
+})
+
+test('risk preparation and execution receive the same parsed arguments object', async () => {
+  const { runValidatedAgentToolCalls } = await import(parserUrl)
+  let riskArgs
+  let executionArgs
+  const result = await runValidatedAgentToolCalls({
+    toolCalls: [{
+      id: 'call-a',
+      function: { name: 'read_recent_logs', arguments: '{"unit":"sshd"}' }
+    }],
+    resolveDescriptor: () => descriptor(),
+    prepare: async parsedCalls => { riskArgs = parsedCalls[0].args },
+    execute: async parsed => {
+      executionArgs = parsed.args
+      return 'ok'
+    }
+  })
+  assert.equal(riskArgs, executionArgs)
+  assert.equal(result.results[0], 'ok')
+})
+
+test('malformed no-argument calls never reach preparation or execution', async () => {
+  const { runValidatedAgentToolCalls } = await import(parserUrl)
+  let prepares = 0
+  let executions = 0
+  const failures = []
+  const result = await runValidatedAgentToolCalls({
+    toolCalls: [{
+      id: 'call-a',
+      function: { name: 'list_tabs', arguments: '{bad' }
+    }],
+    resolveDescriptor: () => descriptor({ properties: {}, required: [] }),
+    prepare: async () => { prepares += 1 },
+    execute: async () => { executions += 1 },
+    onInvalid: (toolCall, error) => failures.push([toolCall.id, error.code])
+  })
+  assert.equal(prepares, 0)
+  assert.equal(executions, 0)
+  assert.deepEqual(failures, [['call-a', 'AGENT_TOOL_ARGUMENTS_INVALID_JSON']])
+  assert.equal(result.parsedCalls.length, 0)
+})
+
+test('Agent loop reports invalid calls without executing and reuses parsed entries', () => {
+  const source = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/components/ai/agent.js'
+  ), 'utf8')
+  assert.match(source, /runValidatedAgentToolCalls/)
+  assert.match(source, /resolveDescriptor:\s*getAgentToolDescriptor/)
+  assert.match(source, /prepare:\s*parsedCalls\s*=>\s*prepareAgentRiskBatch/)
+  assert.match(source, /executed:\s*false/)
+  assert.doesNotMatch(source, /JSON\.parse\(toolCall\.function\.arguments\)/)
 })

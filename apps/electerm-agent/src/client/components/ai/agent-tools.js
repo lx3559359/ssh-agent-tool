@@ -942,25 +942,15 @@ function beginPreparedRiskBatchCall (preparation) {
 export async function prepareAgentRiskBatch (toolCalls, runtime = {}) {
   if (runtime.riskBatch?.terminal === true) runtime.riskBatch = null
   if (!Array.isArray(toolCalls) || toolCalls.length < 2 ||
-    toolCalls.some(call => call?.function?.name === 'run_skill_artifact')) {
+    toolCalls.some(call => call?.name === 'run_skill_artifact')) {
     return null
   }
   const transactions = []
   for (const toolCall of toolCalls) {
-    const toolName = String(toolCall?.function?.name || '')
-    let rawArgs
-    try {
-      rawArgs = JSON.parse(toolCall?.function?.arguments || '{}')
-    } catch {
-      rawArgs = {}
-    }
-    let descriptor
-    try {
-      descriptor = getAgentToolDescriptor(toolName)
-    } catch {
-      continue
-    }
-    const boundArgs = bindAgentToolArgs(toolName, rawArgs, runtime)
+    const toolName = String(toolCall?.name || '')
+    const boundArgs = toolCall?.args
+    const descriptor = toolCall?.descriptor
+    if (!toolName || !boundArgs || !descriptor) continue
     const endpoint = resolveAgentExecutionEndpoint({ descriptor, runtime })
     const expandedContent = boundArgs.script || boundArgs.expandedContent
     const classification = classifyAgentCall({
@@ -1461,11 +1451,14 @@ export async function executeToolCall (
   toolName,
   rawArgs,
   runtime = {},
-  controlledSkillCall
+  controlledSkillCall,
+  validatedCall
 ) {
   if (toolName === 'run_skill_artifact' && !controlledSkillCall) {
-    const pseudoDescriptor = getAgentToolDescriptor(toolName)
-    const args = bindAgentToolArgs(toolName, rawArgs, runtime)
+    const pseudoDescriptor = validatedCall?.descriptor || getAgentToolDescriptor(toolName)
+    const args = validatedCall?.args === rawArgs
+      ? rawArgs
+      : bindAgentToolArgs(toolName, rawArgs, runtime)
     assertAgentRuntimeActive(runtime)
     const initialClassification = classifyAgentCall({
       descriptor: pseudoDescriptor,
@@ -1491,8 +1484,10 @@ export async function executeToolCall (
     })
     return executeToolCall(call.toolName, call.args, runtime, call)
   }
-  const descriptor = getAgentToolDescriptor(toolName)
-  const args = bindAgentToolArgs(toolName, rawArgs, runtime)
+  const descriptor = validatedCall?.descriptor || getAgentToolDescriptor(toolName)
+  const args = validatedCall?.args === rawArgs
+    ? rawArgs
+    : bindAgentToolArgs(toolName, rawArgs, runtime)
   const expandedContent = controlledSkillCall?.expandedContent ||
     args.script || args.expandedContent
   assertAgentRuntimeActive(runtime)

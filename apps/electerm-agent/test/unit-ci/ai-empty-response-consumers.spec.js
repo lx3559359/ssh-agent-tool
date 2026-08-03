@@ -18,6 +18,10 @@ const presentationUrl = pathToFileURL(path.join(
   root,
   'src/client/components/ai/agent-tool-presentation.js'
 )).href
+const toolCallParserUrl = pathToFileURL(path.join(
+  root,
+  'src/client/components/ai/agent-tool-call-parser.js'
+)).href
 
 function toDataUrl (source) {
   return `data:text/javascript;base64,${Buffer.from(source).toString('base64')}`
@@ -57,10 +61,13 @@ async function importAgentModule () {
   let source = read('src/client/components/ai/agent.js')
   source = source
     .replace(
-      /^import \{\r?\n\s*agentTools,\r?\n\s*executeToolCall,\r?\n\s*failAgentRiskBatch,\r?\n\s*prepareAgentRiskBatch\r?\n\} from '\.\/agent-tools'\r?\n/m,
+      /^import \{\r?\n\s*agentTools,\r?\n\s*executeToolCall,\r?\n\s*failAgentRiskBatch,\r?\n\s*getAgentToolDescriptor,\r?\n\s*prepareAgentRiskBatch\r?\n\} from '\.\/agent-tools'\r?\n/m,
       'const agentTools = []\n' +
       'const executeToolCall = (...args) => globalThis.__executeToolCall?.(...args) ?? \'\'\n' +
       'const failAgentRiskBatch = async () => null\n' +
+      'const getAgentToolDescriptor = name => ({\n' +
+      '  name, function: { name, parameters: { type: \'object\', additionalProperties: true } }\n' +
+      '})\n' +
       'const prepareAgentRiskBatch = async () => null\n'
     )
     .replace(
@@ -113,12 +120,14 @@ async function importAgentModule () {
       "const buildAIConversationMessages = (history, entry) => [{ role: 'user', content: entry.prompt }]\n"
     )
     .replace(
-      /^import \{\r?\n\s*boundAgentToolResult,\r?\n\s*buildBoundedAgentMessages,\r?\n\s*cancelAgentRuntimeOperations,\r?\n\s*resolveAgentRuntimeEndpoint\r?\n\} from '\.\/agent-runtime-context\.js'\r?\n/m,
+      /^import \{\r?\n\s*boundAgentToolResult,\r?\n\s*bindAgentToolArgs,\r?\n\s*buildBoundedAgentMessages,\r?\n\s*cancelAgentRuntimeOperations,\r?\n\s*captureAgentRuntimeEndpoint,\r?\n\s*resolveAgentRuntimeEndpoint\r?\n\} from '\.\/agent-runtime-context\.js'\r?\n/m,
       'const boundAgentToolResult = value => typeof value === \'string\' ? value : JSON.stringify(value)\n' +
+      'const bindAgentToolArgs = (name, args) => args\n' +
       'const buildBoundedAgentMessages = (base, runtime) => [...base, ...runtime]\n' +
       'const cancelAgentRuntimeOperations = runtime => {\n' +
       '  for (const cancel of runtime.cancellations || []) cancel()\n' +
       '}\n' +
+      'const captureAgentRuntimeEndpoint = resolve => resolve()\n' +
       'const resolveAgentRuntimeEndpoint = () => globalThis.__agentEndpoint || null\n'
     )
     .replace(
@@ -159,6 +168,21 @@ const agentTaskRegistry = {
 `
     )
     .replace(
+      /^import \{\r?\n\s*createAgentRunCancellationController\r?\n\} from '\.\/agent-run-cancellation-controller\.js'\r?\n/m,
+      `const createAgentRunCancellationController = ({ abort }) => {
+  const operations = []
+  return {
+    register: operation => operations.push(operation),
+    cancel: async () => {
+      abort()
+      for (const operation of operations) await operation()
+      return { cancelled: true }
+    }
+  }
+}
+`
+    )
+    .replace(
       /^import \{\r?\n\s*buildAgentCancellationUpdate,\r?\n\s*settleAgentCancellation\r?\n\} from '\.\/agent-cancellation-status\.js'\r?\n/m,
       `const buildAgentCancellationUpdate = ({ response = '', stoppedText = 'Stopped', error } = {}) => ({
   response: error
@@ -179,6 +203,10 @@ const settleAgentCancellation = async activeCancellation => {
     .replace(
       /^import \{ buildAgentToolPresentation \} from '\.\/agent-tool-presentation\.js'\r?\n/m,
       `import { buildAgentToolPresentation } from ${JSON.stringify(presentationUrl)}\n`
+    )
+    .replace(
+      /^import \{ runValidatedAgentToolCalls \} from '\.\/agent-tool-call-parser\.js'\r?\n/m,
+      `import { runValidatedAgentToolCalls } from ${JSON.stringify(toolCallParserUrl)}\n`
     )
     .replace(
       /^import aiAgentCopy from '\.\/ai-agent-copy\.json'\r?\n/m,

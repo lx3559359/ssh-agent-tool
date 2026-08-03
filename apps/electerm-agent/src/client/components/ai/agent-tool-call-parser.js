@@ -52,3 +52,36 @@ export function parseAgentToolCall (toolCall = {}, {
     descriptor
   })
 }
+
+export async function runValidatedAgentToolCalls ({
+  toolCalls = [],
+  resolveDescriptor,
+  maxArgumentBytes,
+  normalize,
+  prepare,
+  execute,
+  onInvalid
+} = {}) {
+  const parsedCalls = []
+  const failures = []
+  for (const toolCall of toolCalls) {
+    try {
+      const parsed = parseAgentToolCall(toolCall, {
+        resolveDescriptor,
+        ...(maxArgumentBytes === undefined ? {} : { maxArgumentBytes })
+      })
+      parsedCalls.push(normalize ? await normalize(parsed) : parsed)
+    } catch (error) {
+      failures.push({ toolCall, error })
+      await onInvalid?.(toolCall, error)
+    }
+  }
+
+  if (!parsedCalls.length) return { parsedCalls, failures, results: [] }
+  await prepare?.(parsedCalls)
+  const results = []
+  for (const parsed of parsedCalls) {
+    results.push(await execute?.(parsed))
+  }
+  return { parsedCalls, failures, results }
+}

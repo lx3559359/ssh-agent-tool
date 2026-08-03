@@ -48,7 +48,8 @@ test('Agent tools route every executor through the single takeover gate', () => 
   assert.match(source, /case 'run_local_cli'/)
   assert.match(source, /case 'run_background_command'/)
   assert.match(agentSource, /agentTools\.map\(\(\{ type, function: definition \}\)/)
-  assert.match(agentSource, /prepareAgentRiskBatch\(assistantMessage\.tool_calls, agentRuntime\)/)
+  assert.match(agentSource, /runValidatedAgentToolCalls\(\{/)
+  assert.match(agentSource, /prepareAgentRiskBatch\(parsedCalls, agentRuntime\)/)
   assert.match(agentSource, /failAgentRiskBatch\(agentRuntime, err/)
 })
 
