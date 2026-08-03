@@ -70,5 +70,13 @@ test('extracted catalog is descriptor-compatible with the facade', async () => {
     normalizeDescriptors(facade.agentTools)
   )
   assert.equal(catalog.getAgentToolDescriptor('sftp_list')?.function?.name, 'sftp_list')
-  assert.equal(catalog.getAgentToolDescriptor('missing_tool'), undefined)
+  assert.throws(
+    () => catalog.getAgentToolDescriptor('missing_tool'),
+    error => error?.code === 'UNKNOWN_AGENT_TOOL'
+  )
+  assert.deepEqual(catalog.getAgentToolDescriptor('list_tabs').scheduling, {
+    parallelSafe: true,
+    coalesce: true
+  })
+  assert.equal(catalog.getAgentToolDescriptor('sftp_list').scheduling, undefined)
 })
