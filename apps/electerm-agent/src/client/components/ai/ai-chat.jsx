@@ -58,6 +58,7 @@ import {
 import {
   registerAIContentParts
 } from './ai-content-registry'
+import AIWebAccessModal from './ai-web-access-modal'
 import {
   getActiveAIConfig
 } from './ai-profiles'
@@ -106,8 +107,10 @@ export default function AIChat (props) {
   const [attachmentQueue, setAttachmentQueue] = useState([])
   const [webUrlDialogOpen, setWebUrlDialogOpen] = useState(false)
   const [webUrl, setWebUrl] = useState('')
+  const [webAccessChallenge, setWebAccessChallenge] = useState(null)
   const fileInputRef = useRef(null)
   const composerRef = useRef(null)
+  const webAccessResolverRef = useRef(null)
   const submittedHealthChecksRef = useRef(new Map())
   const [, setAgentTaskVersion] = useState(0)
   const isAgent = mode === 'agent'
@@ -151,6 +154,21 @@ export default function AIChat (props) {
     setPrompt(e.target.value)
   }
 
+  const requestWebAccessAuthorization = useCallback(challenge => (
+    new Promise(resolve => {
+      webAccessResolverRef.current?.(null)
+      webAccessResolverRef.current = resolve
+      setWebAccessChallenge(challenge)
+    })
+  ), [])
+
+  const resolveWebAccessAuthorization = useCallback(scope => {
+    const resolve = webAccessResolverRef.current
+    webAccessResolverRef.current = null
+    setWebAccessChallenge(null)
+    resolve?.(scope)
+  }, [])
+
   const handleSubmit = useCallback(async function (submitPromptOverride) {
     const promptAtSubmit = prompt
     const attachmentQueueAtSubmit = attachmentQueue
@@ -187,7 +205,8 @@ export default function AIChat (props) {
       const selectedContent = await buildAttachmentAIContent({
         attachments: [selected.attachment],
         fsApi: window.fs,
-        sftpRef
+        sftpRef,
+        requestWebAccessAuthorization
       }).catch(err => {
         window.store.onError(err)
         return null
@@ -209,7 +228,8 @@ export default function AIChat (props) {
         sftpRef: getActiveSftpRef({
           store: window.store,
           refs
-        })
+        }),
+        requestWebAccessAuthorization
       }).catch(err => {
         window.store.onError(err)
         return null
@@ -267,6 +287,7 @@ export default function AIChat (props) {
     mode,
     activeAIConfig,
     attachmentQueue,
+    requestWebAccessAuthorization,
     props.activeTabId,
     conversationScopeId
   ])
@@ -647,6 +668,8 @@ export default function AIChat (props) {
 
   useEffect(() => () => {
     submittedHealthChecksRef.current.clear()
+    webAccessResolverRef.current?.(null)
+    webAccessResolverRef.current = null
   }, [])
 
   useEffect(() => {
@@ -797,6 +820,12 @@ export default function AIChat (props) {
           {e('shellpilotAiWebUrlHint')}
         </div>
       </Modal>
+      <AIWebAccessModal
+        challenge={webAccessChallenge}
+        activeAIName={activeAIConfig.nameAI || activeAIConfig.modelAI || 'AI'}
+        onDecision={resolveWebAccessAuthorization}
+        onCancel={() => resolveWebAccessAuthorization(null)}
+      />
     </>
   )
 }

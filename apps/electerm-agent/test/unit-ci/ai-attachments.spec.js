@@ -36,6 +36,19 @@ test('AI attachments parse SFTP drop payloads into file attachments', async () =
   assert.equal(attachments[0].file.path, '/var/log')
 })
 
+test('web attachments receive a stable logical read ID', async () => {
+  const {
+    createWebAttachment
+  } = await import(attachmentsUrl)
+  const attachment = createWebAttachment(
+    'http://kb.internal/app#/sharingPath'
+  )
+
+  assert.equal(attachment.source, 'url')
+  assert.equal(typeof attachment.readId, 'string')
+  assert.ok(attachment.readId.length > 0)
+})
+
 test('AI attachments build bounded context for local and SFTP files', async () => {
   const {
     buildAttachmentContextPrompt

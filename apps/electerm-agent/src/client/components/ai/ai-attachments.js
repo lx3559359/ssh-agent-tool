@@ -3,6 +3,7 @@ import {
   AI_FILE_PREVIEW_MAX_BYTES,
   readSftpFileContext
 } from './ai-chat-context-actions.js'
+import { readAIWebContent } from './ai-web-access-client.js'
 
 const MAX_AI_CONTENT_BYTES = 10 * 1024 * 1024
 const LEGACY_TEXT_FILE_PATTERN = /\.(?:txt|log|md|json|csv|xml|ya?ml|ini|conf|cfg|sh|bash|zsh|fish|ps1|bat|cmd|sql|html?|css|js|jsx|ts|tsx|py|rb|php|java|go|rs|c|cc|cpp|h|hpp)$/i
@@ -54,7 +55,10 @@ function arrayBufferToBase64 (buffer) {
 async function unwrapIngestionResult (operation) {
   const result = await operation
   if (!result?.ok) {
-    throw new Error(result?.error?.message || '内容读取失败。')
+    const error = new Error(result?.error?.message || '内容读取失败。')
+    error.code = result?.error?.code
+    error.details = result?.error?.details
+    throw error
   }
   return result.value
 }
@@ -102,11 +106,15 @@ async function readPathFilePayload (attachment, reader) {
   }
 }
 
-async function ingestAttachment (attachment, { fsApi, sftpRef }) {
+async function ingestAttachment (
+  attachment,
+  { fsApi, sftpRef, requestWebAccessAuthorization }
+) {
   if (attachment.source === 'url') {
-    return ingestAIContent({
-      kind: 'url',
-      url: attachment.url
+    return readAIWebContent({
+      url: attachment.url,
+      readId: attachment.readId,
+      requestAuthorization: requestWebAccessAuthorization
     })
   }
   let payload
@@ -212,7 +220,8 @@ export function createWebAttachment (url) {
         source: 'url',
         name: value,
         path: value,
-        url: value
+        url: value,
+        readId: uid()
       }
     : null
 }
@@ -248,6 +257,7 @@ export async function buildAttachmentAIContent ({
   attachments = [],
   fsApi,
   sftpRef,
+  requestWebAccessAuthorization,
   maxBytes = AI_FILE_PREVIEW_MAX_BYTES
 } = {}) {
   const blocks = []
@@ -266,7 +276,8 @@ export async function buildAttachmentAIContent ({
       }
       const content = await ingestAttachment(attachment, {
         fsApi,
-        sftpRef
+        sftpRef,
+        requestWebAccessAuthorization
       })
       if (content.kind === 'image') {
         blocks.push(`图片：${content.name}（已作为视觉内容发送）`)
@@ -286,6 +297,9 @@ export async function buildAttachmentAIContent ({
         blocks.push(formatTextContent(content))
       }
     } catch (error) {
+      if (error?.code === 'WEB_ACCESS_CANCELLED') {
+        continue
+      }
       errors.push(
         `${attachment.name}：${error?.message || '读取失败'}`
       )
