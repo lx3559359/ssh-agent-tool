@@ -19,6 +19,9 @@ const {
   readArchiveTextEntry
 } = require('../common/archive-reader')
 const { searchTextReader } = require('../common/log-search')
+const {
+  describeResumeEntry
+} = require('./file-resume-fingerprint')
 
 const ROOT_PATH = '/'
 const TRANSFER_DIGEST_CHUNK_BYTES = 64 * 1024
@@ -192,6 +195,25 @@ async function readFilePreview (filePath, maxBytes) {
       maxBytes: limit,
       truncated: bytesRead > limit
     })
+  } finally {
+    await handle.close()
+  }
+}
+
+async function readFileBase64Preview (filePath, maxBytes) {
+  const limit = Math.min(
+    10 * 1024 * 1024,
+    Math.max(1, Number(maxBytes) || 10 * 1024 * 1024)
+  )
+  const handle = await fss.open(filePath, 'r')
+  try {
+    const buffer = Buffer.alloc(limit + 1)
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0)
+    return {
+      base64: buffer.subarray(0, Math.min(bytesRead, limit)).toString('base64'),
+      bytesRead: Math.min(bytesRead, limit),
+      truncated: bytesRead > limit
+    }
   } finally {
     await handle.close()
   }
@@ -575,7 +597,8 @@ const fsExport = Object.assign(
     openCustom,
     closeCustom,
     statCustom,
-    describeTransferEntry
+    describeTransferEntry,
+    describeResumeEntry
   },
   {
     readdirAsync: (_path) => {
@@ -608,6 +631,7 @@ const fsExport = Object.assign(
         })
     },
     readFilePreview,
+    readFileBase64Preview,
     readFileRange,
     searchFileText,
     listArchive,

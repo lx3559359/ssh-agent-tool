@@ -5,13 +5,16 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
-const { once } = require('node:events')
+const { once, EventEmitter } = require('node:events')
 const { Readable, Writable } = require('node:stream')
 const Module = require('node:module')
 const { Server, utils } = require('@electerm/ssh2')
 const { STATUS_CODE, OPEN_MODE } = require('@electerm/ssh2/lib/protocol/SFTP.js')
 const { session } = require('../../src/app/server/session-ssh')
-const { Sftp } = require('../../src/app/server/session-sftp')
+const {
+  Sftp,
+  closeSftpChannel
+} = require('../../src/app/server/session-sftp')
 
 const originalLoad = Module._load
 Module._load = function (request, parent, isMain) {
@@ -25,7 +28,8 @@ Module._load = originalLoad
 
 const USERNAME = 'tester'
 const PASSWORD = 'electerm-test'
-const HOST_KEY = utils.generateKeyPairSync('ed25519', {
+const HOST_KEY = utils.generateKeyPairSync('rsa', {
+  bits: 2048,
   comment: 'electerm-sftp-test-host'
 })
 
@@ -285,6 +289,42 @@ async function startSftpServer (root) {
 }
 
 describe('session-sftp transport flows', () => {
+  test('same-endpoint move uses atomic SFTP rename instead of shell mv', async () => {
+    const sftp = Object.create(Sftp.prototype)
+    const renamed = []
+    sftp.rename = async (from, to) => {
+      renamed.push([from, to])
+      return 1
+    }
+    sftp.buildRemoteCommand = () => {
+      throw new Error('shell mv must not be used')
+    }
+
+    const result = await sftp.mv('/srv/app/source.txt', '/srv/app/archive/source.txt')
+
+    assert.equal(result, 1)
+    assert.deepEqual(renamed, [[
+      '/srv/app/source.txt',
+      '/srv/app/archive/source.txt'
+    ]])
+  })
+
+  test('graceful shutdown force-closes an SFTP channel that never acknowledges end', async () => {
+    const channel = new EventEmitter()
+    let ended = 0
+    let destroyed = 0
+    channel.end = () => { ended += 1 }
+    channel.destroy = () => { destroyed += 1 }
+
+    const graceful = await closeSftpChannel(channel, 5)
+
+    assert.equal(graceful, false)
+    assert.equal(ended, 1)
+    assert.equal(destroyed, 1)
+    assert.equal(channel.listenerCount('close'), 0)
+    assert.equal(channel.listenerCount('end'), 0)
+  })
+
   test('copyEntry meters actual streamed bytes and cleans a growing partial target', async () => {
     const sftp = Object.create(Sftp.prototype)
     const removed = []
@@ -770,6 +810,7 @@ describe('session-sftp transport flows', () => {
         sftp: sftp.sftp,
         conn: term.conn,
         options: {
+          atomicUpload: true,
           chunkSize: 64 * 1024,
           concurrency: 4
         },
@@ -778,6 +819,11 @@ describe('session-sftp transport flows', () => {
 
       uploadResult.transfer.kill()
       assert.deepEqual(fs.readFileSync(toLocalPath(root, uploadRemotePath)), uploadSource)
+      assert.deepEqual(
+        fs.readdirSync(path.dirname(toLocalPath(root, uploadRemotePath)))
+          .filter(name => name.includes('.shellpilot-upload-')),
+        []
+      )
       assert.ok(
         uploadResult.messages.some(message => message.id === 'transfer:data:ssh-sftp-upload-large'),
         'upload should emit transfer progress'

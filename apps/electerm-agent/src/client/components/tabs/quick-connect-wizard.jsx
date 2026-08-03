@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import {
   Alert,
   Button,
@@ -23,6 +23,7 @@ import {
   QUICK_CONNECT_DEFAULT_PORTS,
   QUICK_CONNECT_PROTOCOLS
 } from './quick-connect-options.js'
+import BookmarkGroupPicker from '../bookmark-form/common/bookmark-group-picker'
 import './quick-connect.styl'
 
 const e = window.translate
@@ -39,11 +40,13 @@ function getInitialValues () {
     passphrase: '',
     profile: '',
     title: '',
-    saveAsBookmark: true
+    saveAsBookmark: true,
+    selectedGroupId: window.store.getLastBookmarkGroup?.() || 'default'
   }
 }
 
 export default function QuickConnectWizard ({ open, onClose, batch }) {
+  const hostInputRef = useRef(null)
   const [step, setStep] = useState(0)
   const [values, setValues] = useState(getInitialValues)
   const [testing, setTesting] = useState(false)
@@ -109,7 +112,11 @@ export default function QuickConnectWizard ({ open, onClose, batch }) {
     const options = getOptions()
     if (!options) return
     if (values.saveAsBookmark) {
-      window.store.addItem(buildQuickConnectBookmark(options), 'bookmarks')
+      const bookmark = buildQuickConnectBookmark(options)
+      window.store.saveBookmarkInGroup(
+        bookmark,
+        values.selectedGroupId
+      )
     }
     window.store.addTab({
       ...options,
@@ -127,6 +134,12 @@ export default function QuickConnectWizard ({ open, onClose, batch }) {
     window.store.openAdvancedSsh?.()
   }
 
+  function handleAfterOpenChange (isOpen) {
+    if (isOpen && step === 0) {
+      hostInputRef.current?.focus({ preventScroll: true })
+    }
+  }
+
   const stepItems = [
     { title: e('shellpilotConnectionWizardHostStep') },
     { title: e('shellpilotConnectionWizardAuthStep') },
@@ -141,6 +154,7 @@ export default function QuickConnectWizard ({ open, onClose, batch }) {
       width={660}
       destroyOnClose={false}
       onCancel={onClose}
+      afterOpenChange={handleAfterOpenChange}
       className='quick-connect-wizard'
     >
       <Steps current={step} size='small' items={stepItems} />
@@ -149,27 +163,52 @@ export default function QuickConnectWizard ({ open, onClose, batch }) {
           step === 0
             ? (
               <>
-                <p>{e('shellpilotConnectionWizardHostHint')}</p>
-                <Space.Compact className='width-100'>
-                  <Select
-                    value={values.protocol}
-                    options={QUICK_CONNECT_PROTOCOLS}
-                    onChange={value => updateValue('protocol', value)}
-                    className='quick-connect-protocol'
-                  />
-                  <Input
-                    autoFocus
-                    value={values.host}
-                    onChange={event => updateValue('host', event.target.value)}
-                    placeholder={e('shellpilotQuickConnectHostPlaceholder')}
-                  />
-                  <Input
-                    value={values.port}
-                    onChange={event => updateValue('port', event.target.value)}
-                    placeholder={e('shellpilotPort')}
-                    className='quick-connect-port'
-                  />
-                </Space.Compact>
+                <p id='shellpilot-connect-host-help'>{e('shellpilotConnectionWizardHostHint')}</p>
+                <div className='quick-connect-endpoint-fields'>
+                  <div className='quick-connect-field quick-connect-protocol-field'>
+                    <label htmlFor='shellpilot-connect-protocol'>
+                      {e('type')} <span>{e('shellpilotRequired')}</span>
+                    </label>
+                    <Select
+                      id='shellpilot-connect-protocol'
+                      aria-describedby='shellpilot-connect-host-help'
+                      aria-required='true'
+                      value={values.protocol}
+                      options={QUICK_CONNECT_PROTOCOLS}
+                      onChange={value => updateValue('protocol', value)}
+                      className='quick-connect-protocol'
+                    />
+                  </div>
+                  <div className='quick-connect-field quick-connect-host-field'>
+                    <label htmlFor='shellpilot-connect-host'>
+                      {e('shellpilotQuickConnectServer')} <span>{e('shellpilotRequired')}</span>
+                    </label>
+                    <Input
+                      ref={hostInputRef}
+                      id='shellpilot-connect-host'
+                      aria-describedby='shellpilot-connect-host-help'
+                      aria-required='true'
+                      autoFocus
+                      value={values.host}
+                      onChange={event => updateValue('host', event.target.value)}
+                      placeholder={e('shellpilotQuickConnectHostPlaceholder')}
+                    />
+                  </div>
+                  <div className='quick-connect-field quick-connect-port-field'>
+                    <label htmlFor='shellpilot-connect-port'>
+                      {e('shellpilotPort')} <span>{e('shellpilotRequired')}</span>
+                    </label>
+                    <Input
+                      id='shellpilot-connect-port'
+                      aria-describedby='shellpilot-connect-host-help'
+                      aria-required='true'
+                      value={values.port}
+                      onChange={event => updateValue('port', event.target.value)}
+                      placeholder={e('shellpilotPort')}
+                      className='quick-connect-port'
+                    />
+                  </div>
+                </div>
               </>
               )
             : null
@@ -178,37 +217,58 @@ export default function QuickConnectWizard ({ open, onClose, batch }) {
           step === 1
             ? (
               <>
-                <p>{e('shellpilotConnectionWizardAuthHint')}</p>
-                <Input
-                  value={values.username}
-                  onChange={event => updateValue('username', event.target.value)}
-                  placeholder={e('shellpilotOptionalUsername')}
-                  className='mg1b'
-                />
+                <p id='shellpilot-connect-auth-help'>{e('shellpilotConnectionWizardAuthHint')}</p>
+                <div className='quick-connect-field'>
+                  <label htmlFor='shellpilot-connect-username'>
+                    {e('username')} <span>{e('shellpilotOptional')}</span>
+                  </label>
+                  <Input
+                    id='shellpilot-connect-username'
+                    aria-describedby='shellpilot-connect-auth-help'
+                    value={values.username}
+                    onChange={event => updateValue('username', event.target.value)}
+                    placeholder={e('shellpilotOptionalUsername')}
+                  />
+                </div>
                 {
                   isSsh
                     ? (
-                      <Select
-                        value={values.authType}
-                        onChange={value => updateValue('authType', value)}
-                        className='width-100 mg1b'
-                        options={[
-                          { value: 'password', label: e('shellpilotPassword') },
-                          { value: 'privateKey', label: e('shellpilotPrivateKey') },
-                          { value: 'profiles', label: e('shellpilotCredentialProfile') }
-                        ]}
-                      />
+                      <div className='quick-connect-field'>
+                        <label htmlFor='shellpilot-connect-auth-type'>
+                          {e('shellpilotAuthenticationMethod')} <span>{e('shellpilotRequired')}</span>
+                        </label>
+                        <Select
+                          id='shellpilot-connect-auth-type'
+                          aria-describedby='shellpilot-connect-auth-help'
+                          aria-required='true'
+                          value={values.authType}
+                          onChange={value => updateValue('authType', value)}
+                          className='width-100'
+                          options={[
+                            { value: 'password', label: e('shellpilotPassword') },
+                            { value: 'privateKey', label: e('shellpilotPrivateKey') },
+                            { value: 'profiles', label: e('shellpilotCredentialProfile') }
+                          ]}
+                        />
+                      </div>
                       )
                     : null
                 }
                 {
                   !isSsh || values.authType === 'password'
                     ? (
-                      <Input.Password
-                        value={values.password}
-                        onChange={event => updateValue('password', event.target.value)}
-                        placeholder={e('shellpilotOptionalPassword')}
-                      />
+                      <div className='quick-connect-field'>
+                        <label htmlFor='shellpilot-connect-password'>
+                          {e('shellpilotPassword')} <span>{e('shellpilotOptional')}</span>
+                        </label>
+                        <Input.Password
+                          id='shellpilot-connect-password'
+                          aria-describedby='shellpilot-connect-auth-help'
+                          value={values.password}
+                          onChange={event => updateValue('password', event.target.value)}
+                          placeholder={e('shellpilotOptionalPassword')}
+                        />
+                      </div>
                       )
                     : null
                 }
@@ -216,18 +276,32 @@ export default function QuickConnectWizard ({ open, onClose, batch }) {
                   isSsh && values.authType === 'privateKey'
                     ? (
                       <>
-                        <Input.TextArea
-                          value={values.privateKey}
-                          onChange={event => updateValue('privateKey', event.target.value)}
-                          placeholder={e('shellpilotPrivateKeyPlaceholder')}
-                          autoSize={{ minRows: 4, maxRows: 7 }}
-                          className='mg1b'
-                        />
-                        <Input.Password
-                          value={values.passphrase}
-                          onChange={event => updateValue('passphrase', event.target.value)}
-                          placeholder={e('shellpilotOptionalPassphrase')}
-                        />
+                        <div className='quick-connect-field'>
+                          <label htmlFor='shellpilot-connect-private-key'>
+                            {e('shellpilotPrivateKey')} <span>{e('shellpilotRequired')}</span>
+                          </label>
+                          <Input.TextArea
+                            id='shellpilot-connect-private-key'
+                            aria-describedby='shellpilot-connect-auth-help'
+                            aria-required='true'
+                            value={values.privateKey}
+                            onChange={event => updateValue('privateKey', event.target.value)}
+                            placeholder={e('shellpilotPrivateKeyPlaceholder')}
+                            autoSize={{ minRows: 4, maxRows: 7 }}
+                          />
+                        </div>
+                        <div className='quick-connect-field'>
+                          <label htmlFor='shellpilot-connect-passphrase'>
+                            {e('shellpilotOptionalPassphrase')} <span>{e('shellpilotOptional')}</span>
+                          </label>
+                          <Input.Password
+                            id='shellpilot-connect-passphrase'
+                            aria-describedby='shellpilot-connect-auth-help'
+                            value={values.passphrase}
+                            onChange={event => updateValue('passphrase', event.target.value)}
+                            placeholder={e('shellpilotOptionalPassphrase')}
+                          />
+                        </div>
                       </>
                       )
                     : null
@@ -235,13 +309,21 @@ export default function QuickConnectWizard ({ open, onClose, batch }) {
                 {
                   isSsh && values.authType === 'profiles'
                     ? (
-                      <Select
-                        value={values.profile || undefined}
-                        onChange={value => updateValue('profile', value)}
-                        className='width-100'
-                        placeholder={e('shellpilotSelectCredentialProfile')}
-                        options={profileOptions}
-                      />
+                      <div className='quick-connect-field'>
+                        <label htmlFor='shellpilot-connect-profile'>
+                          {e('shellpilotCredentialProfile')} <span>{e('shellpilotRequired')}</span>
+                        </label>
+                        <Select
+                          id='shellpilot-connect-profile'
+                          aria-describedby='shellpilot-connect-auth-help'
+                          aria-required='true'
+                          value={values.profile || undefined}
+                          onChange={value => updateValue('profile', value)}
+                          className='width-100'
+                          placeholder={e('shellpilotSelectCredentialProfile')}
+                          options={profileOptions}
+                        />
+                      </div>
                       )
                     : null
                 }
@@ -271,18 +353,49 @@ export default function QuickConnectWizard ({ open, onClose, batch }) {
             label: e('shellpilotConnectionWizardAdvanced'),
             children: (
               <>
-                <Input
-                  value={values.title}
-                  onChange={event => updateValue('title', event.target.value)}
-                  placeholder={e('shellpilotConnectionNamePlaceholder')}
-                  className='mg1b'
-                />
-                <Checkbox
-                  checked={values.saveAsBookmark}
-                  onChange={event => updateValue('saveAsBookmark', event.target.checked)}
-                >
-                  {e('shellpilotSaveAsConnection')}
-                </Checkbox>
+                <div className='quick-connect-field'>
+                  <label htmlFor='shellpilot-connect-title'>
+                    {e('name')} <span>{e('shellpilotOptional')}</span>
+                  </label>
+                  <Input
+                    id='shellpilot-connect-title'
+                    value={values.title}
+                    onChange={event => updateValue('title', event.target.value)}
+                    placeholder={e('shellpilotConnectionNamePlaceholder')}
+                  />
+                </div>
+                <div className='quick-connect-save-field'>
+                  <label htmlFor='shellpilot-connect-save'>
+                    {e('shellpilotSaveAsConnection')} <span>{e('shellpilotRecommended')}</span>
+                  </label>
+                  <Checkbox
+                    id='shellpilot-connect-save'
+                    aria-describedby='shellpilot-connect-persistence-help'
+                    checked={values.saveAsBookmark}
+                    onChange={event => updateValue('saveAsBookmark', event.target.checked)}
+                  />
+                  <p id='shellpilot-connect-persistence-help'>
+                    {e('shellpilotQuickConnectLocalPersistence')}
+                  </p>
+                </div>
+                {values.saveAsBookmark
+                  ? (
+                    <div className='quick-connect-group-field'>
+                      <label htmlFor='shellpilot-connect-group'>
+                        {e('shellpilotSelectServerGroup')} <span>{e('shellpilotOptional')}</span>
+                      </label>
+                      <BookmarkGroupPicker
+                        id='shellpilot-connect-group'
+                        aria-describedby='shellpilot-connect-persistence-help'
+                        value={values.selectedGroupId}
+                        onChange={value => updateValue(
+                          'selectedGroupId',
+                          value
+                        )}
+                      />
+                    </div>
+                    )
+                  : null}
                 <Button type='link' size='small' icon={<LinkOutlined />} onClick={openAdvancedSettings}>
                   {e('shellpilotConnectionWizardOpenAdvanced')}
                 </Button>

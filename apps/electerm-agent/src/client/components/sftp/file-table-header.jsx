@@ -64,6 +64,10 @@ export default class FileListTableHeader extends Component {
       <Panel {...panelProps} key={id}>
         <div
           {...itemProps}
+          role='columnheader'
+          aria-sort={isSorting
+            ? (sortDirection === 'asc' ? 'ascending' : 'descending')
+            : 'none'}
         >
           {directionIcon} {text}
         </div>
@@ -91,6 +95,8 @@ export default class FileListTableHeader extends Component {
       <Dropdown {...dropdownProps}>
         <div
           className='sftp-file-table-header relative'
+          role='row'
+          aria-rowindex='1'
         >
           <Splitter {...spliterProps}>
             {

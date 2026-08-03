@@ -10,8 +10,8 @@
   color var(--sp-text)
   background var(--sp-surface)
   border 1px solid var(--sp-border)
-  border-radius var(--sp-radius-control)
-  box-shadow inset 0 1px 0 var(--sp-highlight-top), var(--sp-shadow-control)
+  border-radius var(--sp-radius-small)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-sm)
 
 .sp-level-2,
 .sp-card
@@ -19,28 +19,28 @@
   background var(--sp-surface-elevated)
   border 1px solid var(--sp-border)
   border-radius var(--sp-radius-card)
-  box-shadow inset 0 1px 0 var(--sp-highlight-top), var(--sp-shadow-card)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
 
 .sp-level-3
   color var(--sp-text)
   background var(--sp-surface-elevated)
   border 1px solid var(--sp-border-strong)
   border-radius var(--sp-radius-overlay)
-  box-shadow inset 0 1px 0 var(--sp-highlight-top), var(--sp-shadow-overlay)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-lg)
+
+.sp-card .sp-card
+  box-shadow none
 
 .sp-lift-interactive
-  transition transform var(--sp-motion-fast) ease, box-shadow var(--sp-motion-fast) ease
+  transition background-color var(--sp-motion-fast) ease, border-color var(--sp-motion-fast) ease, box-shadow var(--sp-motion-fast) ease, opacity var(--sp-motion-fast) ease
   &:hover
-    transform translateY(-1px)
+    box-shadow var(--sp-shadow-md)
   &:active
-    transform translateY(0)
+    box-shadow inset 0 2px 5px rgba(17, 27, 63, .16), var(--sp-shadow-sm)
 
 @media (prefers-reduced-motion: reduce)
   .sp-lift-interactive
     transition none
-    &:hover,
-    &:active
-      transform none
 
 .sp-muted
   color var(--sp-text-muted)
@@ -63,3 +63,24 @@
 .simple-editor > .ant-flex > .ant-input-search
   min-width 0
   flex 1 1 auto
+
+.sp-secondary-page,
+.custom-modal-content,
+.sidebar-panel,
+.right-side-panel
+  .ant-btn:not(.ant-btn-text):not(.ant-btn-link),
+  .ant-input,
+  .ant-input-affix-wrapper,
+  .ant-input-number,
+  .ant-picker,
+  .ant-select-selector
+    border-radius var(--sp-radius-control)
+    box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-sm)
+
+  .ant-btn:not(.ant-btn-text):not(.ant-btn-link):focus-visible,
+  .ant-input:focus,
+  .ant-input-affix-wrapper-focused,
+  .ant-input-number-focused,
+  .ant-picker-focused,
+  .ant-select-focused .ant-select-selector
+    box-shadow var(--sp-shadow-focus)

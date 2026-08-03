@@ -129,6 +129,44 @@ test('groups operations and tasks into four mutually exclusive tabs', async () =
   assert.equal(allIds.length, new Set(allIds).size)
 })
 
+test('groups resumable transfers and tunnel history with the unified safety center', async () => {
+  const { groupSafetyCenterRecords } = await importModel()
+  const operationTasks = [
+    {
+      id: 'transfer-paused',
+      kind: 'sftp-transfer',
+      status: 'paused',
+      endpoint: {
+        host: 'prod.example.com',
+        port: 22,
+        username: 'root'
+      },
+      createdAt: '2026-07-28T08:00:00.000Z',
+      updatedAt: '2026-07-28T08:02:00.000Z'
+    },
+    {
+      id: 'tunnel-completed',
+      kind: 'ssh-tunnel',
+      status: 'completed',
+      endpoint: {
+        host: 'prod.example.com',
+        port: 22,
+        username: 'root'
+      },
+      createdAt: '2026-07-28T08:00:00.000Z',
+      updatedAt: '2026-07-28T08:01:00.000Z'
+    }
+  ]
+
+  const groups = groupSafetyCenterRecords([], [], new Map(), operationTasks)
+
+  assert.deepEqual(groups.running.map(item => item.id), ['transfer-paused'])
+  assert.equal(groups.running[0].recordType, 'operation-task')
+  assert.equal(groups.running[0].source, 'sftp')
+  assert.deepEqual(groups.history.map(item => item.id), ['tunnel-completed'])
+  assert.equal(groups.history[0].source, 'ssh-tunnel')
+})
+
 test('groups every declared operation and task lifecycle status exactly once', async () => {
   const [
     { groupSafetyCenterRecords },
@@ -866,6 +904,28 @@ test('UI keeps one topbar entry and reads the encrypted transaction store', () =
   assert.match(terminal, /terminalSafetyRunner\.rollback/)
   assert.match(terminal, /terminalSafetyRunner\.keep/)
   assert.match(terminal, /terminalSafetyRunner\.cancel/)
+})
+
+test('safety center exposes one primary summary, auxiliary tab counts, and readable record semantics', () => {
+  const modal = readSource('src/client/components/main/safety-operation-center-modal.jsx')
+  const styles = readSource('src/client/components/main/safety-operation-center-modal.styl')
+
+  assert.match(modal, /className='safety-center-summary'[\s\S]*aria-label=\{e\('shellpilotSafetySummary'\)\}/)
+  assert.match(modal, /className='safety-center-tab-count'/)
+  assert.match(modal, /className='safety-center-record-list'[\s\S]*role='list'/)
+  assert.ok((modal.match(/role='listitem'/g) || []).length >= 3)
+  assert.match(modal, /className='safety-center-result-status'/)
+  assert.match(modal, /role='status'/)
+  assert.match(modal, /aria-live='polite'/)
+  assert.match(modal, /aria-busy=\{loading\}/)
+  assert.match(modal, /<Input\.Search[\s\S]*aria-label=\{e\('shellpilotSafetySearchPlaceholder'\)\}/)
+  assert.match(modal, /shellpilotSafetyLoadingRecords/)
+  assert.match(modal, /shellpilotSafetyResultCount/)
+  assert.match(modal, /shellpilotSafetyLoadFailed/)
+  assert.match(modal, /loadError \|\| e\('shellpilotSafetyNoRecords'\)/)
+  assert.match(styles, /\.safety-center-summary[\s\S]*background/)
+  assert.match(styles, /\.safety-center-tab-count[\s\S]*font-size/)
+  assert.doesNotMatch(styles, /var\(--sp-text-strong\)/)
 })
 
 test('revoked recovery records have no rollback capability or center action', async () => {

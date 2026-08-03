@@ -30,10 +30,10 @@
   min-height var(--sp-setting-header-height)
   gap 10px !important
   padding 12px 20px !important
-  background var(--sp-surface)
+  background var(--sp-surface-elevated)
   border 1px solid var(--sp-border)
-  border-radius var(--sp-radius-control)
-  box-shadow inset 0 1px 0 var(--sp-highlight-top), var(--sp-shadow-control)
+  border-radius var(--sp-radius-toolbar)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
   > *
     min-width 0
   h2
@@ -65,8 +65,8 @@
     padding 6px
     background var(--sp-surface)
     border 1px solid var(--sp-border)
-    border-radius var(--sp-radius-control)
-    box-shadow var(--sp-shadow-card)
+    border-radius var(--sp-radius-overlay)
+    box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-lg)
     overflow-x hidden
     overflow-y auto
     button
@@ -130,8 +130,9 @@
   .ant-tabs-content-holder
     display none
   .ant-tabs-tab-active
-    background var(--sp-primary-soft)
+    background linear-gradient(145deg, var(--sp-primary-soft), var(--sp-surface-elevated))
     border-radius var(--sp-radius-control)
+    box-shadow var(--sp-shadow-sm)
 
 .setting-tabs-setting
 .setting-tabs-bookmarks
@@ -165,7 +166,7 @@
   display flex
   flex-direction column
   padding 16px 12px
-  background var(--sp-surface-subtle)
+  background var(--sp-surface-soft)
   border-right 1px solid var(--sp-border)
   overflow-x hidden
   overflow-y auto
@@ -266,7 +267,8 @@
     padding 10px 12px !important
     h2
       order 1
-      flex 1 1 0
+      flex 1 1 180px
+      min-width 160px
     .setting-header-search
       order 3
       display none
@@ -323,3 +325,8 @@
     .setting-row-right
       height auto
       min-height 160px
+
+@media (max-width: 360px)
+  .setting-header h2
+    flex-basis calc(100% - 80px)
+    min-width 0

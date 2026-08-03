@@ -19,6 +19,9 @@ test('AI chat guards async submit and file quote prompt updates', () => {
 
   assert.match(submitSource, /const promptAtSubmit = prompt/)
   assert.match(submitSource, /setPrompt\(current =>\s*replacePromptIfUnchanged/)
-  assert.match(quoteSource, /const promptAtStart = prompt/)
-  assert.match(quoteSource, /setPrompt\(current =>\s*replacePromptIfUnchanged/)
+  assert.match(quoteSource, /appendAttachments\(\[selected\.attachment\]\)/)
+  assert.match(
+    quoteSource,
+    /setPrompt\(current => current\.trim\(\) \? current :/
+  )
 })

@@ -3,14 +3,21 @@
   flex-direction row
 .sftp-section
   flex 1
+  box-sizing border-box
+  background var(--sp-surface)
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-panel)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
 .sftp-title-wrap
   position relative
+  background var(--sp-surface-soft)
+  border-bottom 1px solid var(--sp-border)
 .sftp-panel-title-remote
   display flex
   align-items center
   gap 8px
   min-width 0
-  border-bottom 1px solid var(--main-darker)
+  border-bottom 0
 .sftp-panel-location
   flex 1
   min-width 80px
@@ -25,14 +32,65 @@
   .ant-btn
     height 26px
     padding 0 7px
-    border-radius 4px
+    border-radius var(--sp-radius-control)
+    box-shadow var(--sp-shadow-sm)
 .sftp-safety-summary
   line-height 1.7
   padding 10px 12px
   margin-bottom 12px
   border 1px solid var(--primary)
-  border-radius 6px
+  border-radius var(--sp-radius-card)
   background var(--main-lighter)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
+.sftp-safety-confirmation
+  line-height 1.65
+.sftp-text-change-confirmation
+  margin-top 12px
+  border 1px solid var(--main-darker)
+  border-radius var(--sp-radius-card)
+  overflow hidden
+  background var(--main)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
+.sftp-text-change-path
+  padding 7px 10px
+  overflow hidden
+  text-overflow ellipsis
+  white-space nowrap
+  color var(--text)
+  font-family monospace
+  border-bottom 1px solid var(--main-darker)
+.sftp-text-change-summary,
+.sftp-text-change-note
+  padding 7px 10px
+  color var(--text-light)
+  font-size 12px
+.sftp-text-change-preview
+  max-height 260px
+  margin 0
+  padding 6px 0
+  overflow auto
+  color var(--text)
+  background var(--main)
+.sftp-text-change-line
+  display flex
+  min-width max-content
+  line-height 20px
+  > span
+    width 24px
+    flex none
+    text-align center
+    user-select none
+  > code
+    padding-right 12px
+    white-space pre
+  &.is-add
+    background rgba(44, 160, 85, .16)
+    > span
+      color var(--success)
+  &.is-remove
+    background rgba(220, 53, 69, .14)
+    > span
+      color var(--error)
 .sftp-safety-records
   max-height 480px
   overflow-y auto
@@ -44,8 +102,9 @@
   padding 12px
   margin-bottom 8px
   border 1px solid var(--main-darker)
-  border-radius 6px
+  border-radius var(--sp-radius-card)
   background var(--main)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
 .sftp-safety-record-main
   flex 1
   min-width 0
@@ -75,17 +134,28 @@
   height 32px
   user-select none
   margin-bottom 4px
+  border-bottom 1px solid var(--sp-border)
+  box-shadow none
   &:nth-child(even)
     .sftp-file-prop
-      background var(--main)
+      background var(--sp-surface)
   &:hover
+    background var(--sp-surface-soft)
     .sftp-file-prop
-      background-color var(--primary)
-      color var(--primary-contrast)
+      background-color var(--sp-surface-soft)
+      color var(--sp-text)
   &.selected
+    background var(--sp-primary-soft)
     .sftp-file-prop
-      background-color var(--primary)
-      color var(--primary-contrast)
+      background-color var(--sp-primary-soft)
+      color var(--sp-text)
+
+.sftp-item:focus-visible
+  outline 2px solid var(--sp-primary)
+  outline-offset -2px
+  .sftp-file-prop
+    background var(--sp-info-soft)
+    color var(--sp-text)
 .sftp-history
   position absolute
   left 0
@@ -97,11 +167,11 @@
   height 0
   background var(--main)
   overflow hidden
-  border-radius 3px
+  border-radius var(--sp-radius-overlay)
   &.focused
     height auto
     border 1px solid var(--main-darker)
-    box-shadow 0px 0px 3px 3px var(--main-lighter)
+    box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-lg)
 
 .sftp-history-item
   padding 5px 10px
@@ -182,9 +252,13 @@
   overflow hidden
   white-space nowrap
   text-overflow ellipsis
+  color var(--sp-text-muted)
+  font-weight 650
 
 .sftp-file-table-header
   height 30px
+  background var(--sp-surface-soft)
+  border-bottom 1px solid var(--sp-border)
 .sftp-table
   z-index 2
   &:hover

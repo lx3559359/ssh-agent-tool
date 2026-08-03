@@ -24,6 +24,20 @@ function safeErrorIdentifier (value, pattern) {
   return pattern.test(value) ? value : undefined
 }
 
+function safeRemoteErrorDetails (details) {
+  if (!details || typeof details !== 'object' || Array.isArray(details)) {
+    return undefined
+  }
+  const safe = {}
+  for (const key of ['requestedPort', 'suggestedPort', 'host', 'tunnelId']) {
+    const value = details[key]
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' || value === null) {
+      safe[key] = value
+    }
+  }
+  return Object.keys(safe).length ? safe : undefined
+}
+
 export function reconstructFetchError (remoteError = {}) {
   const error = new Error(String(remoteError.message || 'Remote request failed'))
   const name = safeErrorIdentifier(
@@ -39,6 +53,8 @@ export function reconstructFetchError (remoteError = {}) {
   if (typeof remoteError.canAutoRetry === 'boolean') {
     error.canAutoRetry = remoteError.canAutoRetry
   }
+  const details = safeRemoteErrorDetails(remoteError.details)
+  if (details) error.details = details
   return error
 }
 

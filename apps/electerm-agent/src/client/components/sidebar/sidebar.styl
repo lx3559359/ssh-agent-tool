@@ -9,7 +9,9 @@
   z-index 200
   width 0
   overflow-y scroll
-  background var(--main)
+  background var(--sp-surface)
+  border-right 0 solid var(--sp-border)
+  box-shadow var(--sp-shadow-lg)
   .item-list-unit:hover
     .list-item-remove
       display none !important
@@ -24,6 +26,7 @@
   bottom 0
   background var(--sp-surface)
   border-right 1px solid var(--sp-border)
+  box-shadow var(--sp-shadow-sm)
 
   .item-list
     padding-right 0
@@ -68,19 +71,31 @@
     flex 1
     overflow-y auto
     overflow-x hidden
+    .item-list-unit
+      border-bottom 1px solid var(--sp-border)
+      box-shadow none
 .not-system-ui.is-mac
   .sidebar-bar
     margin-top 20px
 .type-bookmarks
   .bookmarks-panel
     width 100%
+    border-right-width 1px
 .type-history
   .history-panel
     width 100%
+    border-right-width 1px
 .control-icon-text
   color var(--text)
   &:hover
     color var(--success)
+
+.history-item-saved
+  display inline-block
+  margin-left 8px
+  color var(--sp-success)
+  font-size 11px
+  font-weight normal
 .control-icon-wrap
   width 100%
   padding 8px 0
@@ -117,16 +132,16 @@
 .sidebar .control-icon-wrap
   border-radius var(--sp-radius-control)
   box-shadow none
-  transition background var(--sp-motion-fast) ease, box-shadow var(--sp-motion-fast) ease
+  transition background-color var(--sp-motion-fast) ease, box-shadow var(--sp-motion-fast) ease, color var(--sp-motion-fast) ease
   &:hover
     background var(--sp-surface-elevated)
-    box-shadow var(--sp-shadow-control)
+    box-shadow var(--sp-shadow-md)
     .control-icon
     .control-icon-label
       color var(--sp-primary)
   &.active
-    background var(--sp-primary-soft)
-    box-shadow var(--sp-shadow-control)
+    background linear-gradient(145deg, var(--sp-primary-soft), var(--sp-surface-elevated))
+    box-shadow var(--sp-shadow-focus)
 .sidebar .control-icon-wrap:focus-visible
   outline 2px solid var(--sp-primary)
   outline-offset 2px

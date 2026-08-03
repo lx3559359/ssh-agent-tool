@@ -43,10 +43,13 @@ export default function TaskPanel ({ task, tool, onCancel, onAnalyze }) {
   const progress = Math.min(100, Math.round(completeSteps / totalSteps * 100))
   const running = activeStatuses.has(task.status)
   return (
-    <section className='operations-task-panel'>
+    <section
+      aria-labelledby='operations-task-panel-title'
+      className='operations-task-panel'
+    >
       <header>
         <div>
-          <strong>{tool?.title || task.toolId}</strong>
+          <strong id='operations-task-panel-title'>{tool?.title || task.toolId}</strong>
           <span>{task.endpointKey}</span>
         </div>
         <Tag color={task.status === 'completed' ? 'success' : running ? 'processing' : 'error'}>

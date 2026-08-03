@@ -371,6 +371,20 @@ function OperationsWorkspace (props) {
                 <small>{e('shellpilotOperationsRollbackFromCenterHint')}</small>
               </span>
             </div>
+            <div
+              aria-label={e('shellpilotOperationsSafetyContract')}
+              className='operations-maintenance-contract'
+            >
+              <Tag color='green'>{e('shellpilotOperationsReadonly')}</Tag>
+              <Tag color='orange'>{e('shellpilotOperationsNeedsEdit')}</Tag>
+              <span>
+                {e('shellpilotOperationsPreviewBeforeRun')}
+                {' · '}
+                {e('shellpilotOperationsConfirmBeforeChange')}
+                {' · '}
+                {e('shellpilotOperationsRollbackFromCenter')}
+              </span>
+            </div>
           </div>
           <Button onClick={openSafetyCenter}>
             {e('shellpilotOperationsOpenSafetyCenter')}

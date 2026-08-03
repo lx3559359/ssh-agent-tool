@@ -101,17 +101,26 @@ export function buildBookmarkContextMenuItems ({
   item,
   isGroup,
   staticList,
+  managementEnabled,
   translate
 }) {
   if (!item) {
     return []
   }
 
+  const canManage = managementEnabled || !staticList
+
   if (isGroup) {
-    if (staticList) {
+    if (!canManage) {
       return compactMenuGroups([[
         menuItem('openAll', 'shellpilotBookmarkOpenAll', translate)
       ]])
+    }
+    if (isDefaultGroup(item)) {
+      return compactMenuGroups([
+        [menuItem('openAll', 'shellpilotBookmarkOpenAll', translate)],
+        [menuItem('addSubCat', 'shellpilotBookmarkAddSubgroup', translate)]
+      ])
     }
     if (!isDefaultGroup(item)) {
       return compactMenuGroups([
@@ -143,7 +152,7 @@ export function buildBookmarkContextMenuItems ({
     menuItem('delete', 'shellpilotBookmarkDeleteConnection', translate, { danger: true })
   ]
 
-  if (staticList) {
+  if (!canManage) {
     return compactMenuGroups([
       openActions,
       [menuItem('edit', 'shellpilotBookmarkEditConnection', translate)],

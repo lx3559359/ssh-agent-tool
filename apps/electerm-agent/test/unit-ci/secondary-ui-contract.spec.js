@@ -138,31 +138,31 @@ async function assertUiElevationContracts (source) {
     color: 'var(--sp-text)',
     background: 'var(--sp-surface)',
     border: '1px solid var(--sp-border)',
-    'border-radius': 'var(--sp-radius-control)',
-    'box-shadow': 'inset 0 1px 0 var(--sp-highlight-top), var(--sp-shadow-control)'
+    'border-radius': 'var(--sp-radius-small)',
+    'box-shadow': 'inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-sm)'
   })
   assertCssRule(blocks, '.sp-level-2, .sp-card', {
     color: 'var(--sp-text)',
     background: 'var(--sp-surface-elevated)',
     border: '1px solid var(--sp-border)',
     'border-radius': 'var(--sp-radius-card)',
-    'box-shadow': 'inset 0 1px 0 var(--sp-highlight-top), var(--sp-shadow-card)'
+    'box-shadow': 'inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)'
   })
   assertCssRule(blocks, '.sp-level-3', {
     color: 'var(--sp-text)',
     background: 'var(--sp-surface-elevated)',
     border: '1px solid var(--sp-border-strong)',
     'border-radius': 'var(--sp-radius-overlay)',
-    'box-shadow': 'inset 0 1px 0 var(--sp-highlight-top), var(--sp-shadow-overlay)'
+    'box-shadow': 'inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-lg)'
   })
   assertCssRule(blocks, '.sp-lift-interactive', {
-    transition: 'transform var(--sp-motion-fast) ease, box-shadow var(--sp-motion-fast) ease'
+    transition: 'background-color var(--sp-motion-fast) ease, border-color var(--sp-motion-fast) ease, box-shadow var(--sp-motion-fast) ease, opacity var(--sp-motion-fast) ease'
   })
   assertCssRule(blocks, '.sp-lift-interactive:hover', {
-    transform: 'translateY(-1px)'
+    'box-shadow': 'var(--sp-shadow-md)'
   })
   assertCssRule(blocks, '.sp-lift-interactive:active', {
-    transform: 'translateY(0)'
+    'box-shadow': 'inset 0 2px 5px rgba(17,27,63,0.16), var(--sp-shadow-sm)'
   })
 
   const reducedMotion = blocks.filter(block => (
@@ -172,9 +172,6 @@ async function assertUiElevationContracts (source) {
   const reducedMotionBlocks = topLevelCssBlocks(reducedMotion[0].body)
   assertCssRule(reducedMotionBlocks, '.sp-lift-interactive', {
     transition: 'none'
-  })
-  assertCssRule(reducedMotionBlocks, '.sp-lift-interactive:hover, .sp-lift-interactive:active', {
-    transform: 'none'
   })
 }
 
@@ -854,9 +851,9 @@ test('defines L0-L3 contracts without styling terminal canvases', async () => {
 test('elevation contract validator rejects tokens assigned to the wrong levels', async () => {
   const source = readClient('css/includes/secondary-ui.styl')
   const misplacedTokens = source
-    .replace('var(--sp-shadow-control)', '__CONTROL_SHADOW__')
-    .replace('var(--sp-shadow-overlay)', 'var(--sp-shadow-control)')
-    .replace('__CONTROL_SHADOW__', 'var(--sp-shadow-overlay)')
+    .replace('var(--sp-shadow-sm)', '__SMALL_SHADOW__')
+    .replace('var(--sp-shadow-lg)', 'var(--sp-shadow-sm)')
+    .replace('__SMALL_SHADOW__', 'var(--sp-shadow-lg)')
   await assert.rejects(assertUiElevationContracts(misplacedTokens))
 })
 
@@ -893,24 +890,25 @@ test('client chrome maps concrete shell selectors to restrained semantic depth',
   assertCssRule(topbarBlocks, '.aigshell-topbar', {
     background: 'var(--sp-surface-elevated)',
     'border-bottom': '1px solid var(--sp-border)',
-    'box-shadow': 'inset 0 1px 0 var(--sp-highlight-top), var(--sp-shadow-control)'
+    'box-shadow': 'inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)'
   })
 
   const sidebarBlocks = topLevelCssBlocks(await compileStylus(files[1]))
   assertCssRule(sidebarBlocks, '.sidebar', {
     background: 'var(--sp-surface)',
-    'border-right': '1px solid var(--sp-border)'
+    'border-right': '1px solid var(--sp-border)',
+    'box-shadow': 'var(--sp-shadow-sm)'
   })
   assertCssRule(sidebarBlocks, '.sidebar .control-icon-wrap', {
     'box-shadow': 'none'
   })
   assertCssRule(sidebarBlocks, '.sidebar .control-icon-wrap:hover', {
     background: 'var(--sp-surface-elevated)',
-    'box-shadow': 'var(--sp-shadow-control)'
+    'box-shadow': 'var(--sp-shadow-md)'
   })
   assertCssRule(sidebarBlocks, '.sidebar .control-icon-wrap.active', {
-    background: 'var(--sp-primary-soft)',
-    'box-shadow': 'var(--sp-shadow-control)'
+    background: 'linear-gradient(145deg, var(--sp-primary-soft), var(--sp-surface-elevated))',
+    'box-shadow': 'var(--sp-shadow-focus)'
   })
   assertCssRule(sidebarBlocks, '.sidebar .control-icon-wrap:focus-visible', {
     outline: '2px solid var(--sp-primary)',
@@ -920,12 +918,14 @@ test('client chrome maps concrete shell selectors to restrained semantic depth',
   const panelBlocks = topLevelCssBlocks(await compileStylus(files[2]))
   assertCssRule(panelBlocks, '.right-side-panel', {
     background: 'var(--sp-surface)',
-    'border-left': '1px solid var(--sp-border)'
+    'border-left': '1px solid var(--sp-border)',
+    'border-radius': 'var(--sp-radius-panel) 0 0 var(--sp-radius-panel)',
+    'box-shadow': 'var(--sp-shadow-lg)'
   })
   assertCssRule(panelBlocks, '.right-panel-title', {
     background: 'var(--sp-surface)',
     'border-bottom': '1px solid var(--sp-border)',
-    'box-shadow': 'inset 0 1px 0 var(--sp-highlight-top), var(--sp-shadow-control)'
+    'box-shadow': 'inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-sm)'
   })
   assertCssRule(panelBlocks, '.right-panel-ai-config-card', {
     background: 'var(--sp-surface-elevated)',
@@ -941,8 +941,21 @@ test('client chrome maps concrete shell selectors to restrained semantic depth',
   assertCssRule(footerBlocks, '.main-footer', {
     background: 'var(--sp-surface-elevated)',
     'border-top': '1px solid var(--sp-border)',
-    'box-shadow': '0 -3px 8px -6px var(--sp-border-strong)'
+    'box-shadow': '0 -4px 12px rgba(73,66,196,0.12)'
   })
+})
+
+test('Aurora hover depth never translates layout boxes', () => {
+  const files = [
+    'css/includes/secondary-ui.styl',
+    'components/main/aigshell-topbar.styl',
+    'components/sidebar/sidebar.styl',
+    'components/side-panel-r/right-side-panel.styl',
+    'components/common/modal.styl'
+  ]
+  for (const file of files) {
+    assert.doesNotMatch(readClient(file), /transform\s+translate[XY]?\(/, file)
+  }
 })
 
 test('client chrome cannot decorate protected terminal surfaces with semantic UI elevation', async () => {
@@ -1000,6 +1013,10 @@ test('terminal elevation guard covers every rendered terminal layer and semantic
       }
     }
   }
+  assert.doesNotThrow(() => assertNoProtectedTerminalElevation(
+    '.terminal-workspace-layer { box-shadow: var(--sp-shadow-lg); }',
+    'terminal-outer-frame.css'
+  ))
 })
 
 test('shell chrome E2E uses concrete scroll mutation, clipping ancestry and document overflow gates', () => {
@@ -1072,7 +1089,7 @@ async function compileStylus (relativePath) {
   return await compileStylusSource(readClient(relativePath), absolutePath)
 }
 
-test('long Chinese and English fixture copy remains visible at minimum window zoom equivalents', { timeout: 30000 }, async (t) => {
+test('long Chinese and English fixture copy remains visible at minimum window zoom equivalents', { timeout: 60000 }, async (t) => {
   let chromium
   let launchOptions = { headless: true }
   try {

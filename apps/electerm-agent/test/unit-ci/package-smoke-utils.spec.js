@@ -12,6 +12,7 @@ const {
   validateSmokeResult
 } = require(path.resolve(__dirname, '../../build/bin/package-smoke-utils'))
 const {
+  buildMissingPackageMessage,
   killWindowsProcessTree,
   parseArgs,
   stopChild
@@ -65,6 +66,13 @@ test('package smoke cli parser accepts an explicit app path', () => {
     {
       app: 'D:\\AIGShell\\AIGShell.exe'
     }
+  )
+})
+
+test('package smoke missing-package guidance names the command that creates win-unpacked', () => {
+  assert.equal(
+    buildMissingPackageMessage('C:\\work\\aigshell\\dist\\win-unpacked\\ShellPilot.exe'),
+    'ShellPilot.exe package not found: C:\\work\\aigshell\\dist\\win-unpacked\\ShellPilot.exe. Run npm run package:win:dir first.'
   )
 })
 

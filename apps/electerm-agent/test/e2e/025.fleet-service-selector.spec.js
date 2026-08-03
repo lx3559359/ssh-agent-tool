@@ -226,6 +226,7 @@ test('checks selected servers, filters and multi-selects services, cancels, and 
     await page.evaluate(() => {
       window.store.rightPanelVisible = true
       window.store.rightPanelPinned = false
+      window.store.rightPanelAutoExpanded = true
       window.store.rightPanelWidth = 320
     })
     await setShortWindow(electronApp, page)

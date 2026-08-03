@@ -31,6 +31,37 @@ export function cancelRunCmd (pid, executionId) {
   })
 }
 
+export function startSshTunnel (pid, tunnel) {
+  return fetch({
+    pid,
+    tunnel,
+    action: 'ssh-tunnel-start'
+  })
+}
+
+export function stopSshTunnel (pid, tunnelId) {
+  return fetch({
+    pid,
+    tunnelId,
+    action: 'ssh-tunnel-stop'
+  })
+}
+
+export function listSshTunnels (pid) {
+  return fetch({
+    pid,
+    action: 'ssh-tunnel-list'
+  })
+}
+
+export function testSshTunnel (pid, tunnelId) {
+  return fetch({
+    pid,
+    tunnelId,
+    action: 'ssh-tunnel-test'
+  })
+}
+
 export function resizeTerm (pid, cols, rows) {
   const size = normalizeTerminalResizeSize(cols, rows)
   return fetch({

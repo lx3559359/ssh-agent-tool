@@ -29,12 +29,54 @@
     opacity 1
 
 .quick-connect-wizard-body
-  min-height 258px
-  padding 22px 0 8px
+  min-height 238px
+  padding 16px 0 8px
   > p
-    margin 0 0 14px
+    margin 0 0 10px
     color var(--text-dark)
     font-size 13px
+
+.quick-connect-endpoint-fields
+  display grid
+  grid-template-columns 110px minmax(0, 1fr) 96px
+  gap 10px
+  align-items end
+
+.quick-connect-field
+  min-width 0
+  margin-bottom 10px
+  > label
+    display flex
+    gap 5px
+    margin-bottom 4px
+    color var(--sp-text)
+    font-size 12px
+    font-weight 600
+    > span
+      color var(--sp-text-muted)
+      font-weight 400
+  .ant-select,
+  .ant-input,
+  .ant-input-affix-wrapper
+    width 100%
+
+.quick-connect-save-field
+  display grid
+  grid-template-columns minmax(0, 1fr) auto
+  gap 2px 8px
+  align-items center
+  margin-bottom 10px
+  > label
+    color var(--sp-text)
+    font-weight 600
+    > span
+      color var(--sp-text-muted)
+      font-weight 400
+  > p
+    grid-column 1 / -1
+    margin 0
+    color var(--sp-text-muted)
+    font-size 12px
 
 .quick-connect-wizard-summary
   padding 14px
@@ -55,6 +97,18 @@
   .ant-collapse-header
     padding-left 0 !important
     padding-right 0 !important
+
+.quick-connect-group-field
+  margin-top 8px
+
+.quick-connect-group-field > label
+  display block
+  margin-bottom 6px
+  color var(--sp-text)
+  font-weight 600
+  > span
+    color var(--sp-text-muted)
+    font-weight 400
   .ant-collapse-content-box
     padding-left 0 !important
     padding-right 0 !important
@@ -69,6 +123,10 @@
 @media (max-width: 700px)
   .quick-connect-wizard
     max-width calc(100vw - 24px)
+  .quick-connect-group-field
+    width 100%
+  .quick-connect-endpoint-fields
+    grid-template-columns 1fr
 
 @media (max-height: 560px)
   .quick-connect-wizard

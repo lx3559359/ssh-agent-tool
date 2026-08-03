@@ -381,10 +381,10 @@ test('AI startup migrates completed global legacy traces before persistence watc
     loadData,
     /refsStatic\.add\('oldState-' \+ name, dt\)[\s\S]{0,600}normalizeAIChatHistoryOnStartup\(dt\)/
   )
-  assert.match(
-    loadData,
-    /Object\.assign\(store, ext\)[\s\S]{0,400}initWatch\(store\)/
-  )
+  const storeAssignmentIndex = loadData.indexOf('Object.assign(store, ext)')
+  const persistenceWatchIndex = loadData.indexOf('initWatch(store)')
+  assert.ok(storeAssignmentIndex > -1)
+  assert.ok(persistenceWatchIndex > storeAssignmentIndex)
 
   const { persistStateSnapshot } = await import(pathToFileURL(path.resolve(
     __dirname,

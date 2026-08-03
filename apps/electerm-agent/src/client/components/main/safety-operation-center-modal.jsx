@@ -4,6 +4,7 @@ import {
   Empty,
   Input,
   Modal,
+  Progress,
   Select,
   Space,
   Spin,
@@ -14,6 +15,9 @@ import {
   CheckOutlined,
   CloseOutlined,
   DownOutlined,
+  HistoryOutlined,
+  PauseOutlined,
+  PlayCircleOutlined,
   RightOutlined,
   ReloadOutlined,
   SafetyCertificateOutlined,
@@ -34,6 +38,14 @@ import {
   listOperations,
   listTasks
 } from '../../common/safety-transactions/transaction-store.js'
+import {
+  listOperationTasks,
+  operationTaskUpdatedEvent
+} from '../../common/operation-tasks/task-store.js'
+import {
+  operationTaskKinds,
+  operationTaskStatuses
+} from '../../common/operation-tasks/models.js'
 import { executeSafetyCenterAction } from './safety-operation-center-actions.js'
 import SafetyTaskProgress from './safety-task-progress.jsx'
 import {
@@ -54,11 +66,20 @@ import {
   safetyRecordActionLockKey,
   subscribeSafetyCenterRefresh
 } from './safety-operation-center-model.js'
+import {
+  buildOperationTaskView,
+  buildTransferResumeItem,
+  findLiveTransferTask,
+  operationTaskStatusPresentations
+} from './safety-center-operation-tasks.js'
+import { loadSafetyCenterRecords } from './safety-operation-center-loader.js'
+import { formatShellPilotTranslation } from '../../common/shellpilot-i18n-overrides.js'
 import './safety-operation-center-modal.styl'
 
 export { groupSafetyCenterRecords }
 
 const e = window.translate
+const tf = (key, replacements) => formatShellPilotTranslation(e, key, replacements)
 
 const sourceLabelKeys = {
   terminal: 'shellpilotSafetySourceTerminal',
@@ -75,6 +96,8 @@ const sourceColors = {
   'server-status': 'cyan',
   sftp: 'geekblue'
 }
+sourceLabelKeys['ssh-tunnel'] = 'shellpilotTopbarSshTunnel'
+sourceColors['ssh-tunnel'] = 'cyan'
 
 const providerLabelKeys = {
   file: 'shellpilotSafetyProviderFile',
@@ -89,7 +112,8 @@ const providerLabelKeys = {
 
 const statusLabels = {
   ...safetyOperationStatusPresentations,
-  ...safetyTaskStatusPresentations
+  ...safetyTaskStatusPresentations,
+  ...operationTaskStatusPresentations
 }
 const statusLabelKeys = {
   preparing: 'shellpilotSafetyStatusPreparing',
@@ -156,7 +180,9 @@ function formatTime (value) {
 }
 
 function recordStatus (record) {
-  return record.recordType === 'task' ? record.status : record.state
+  return ['task', 'operation-task'].includes(record.recordType)
+    ? record.status
+    : record.state
 }
 
 function reportError (error) {
@@ -196,6 +222,7 @@ function confirmSafetyAction (action, view) {
 export default function SafetyOperationCenterModal ({ open, onClose, store }) {
   const [records, setRecords] = useState([])
   const [tasks, setTasks] = useState([])
+  const [operationTasks, setOperationTasks] = useState([])
   const [integrityResults, setIntegrityResults] = useState(() => new Map())
   const [activeTab, setActiveTab] = useState('running')
   const [keyword, setKeyword] = useState('')
@@ -218,20 +245,24 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
     setIntegrityResults(new Map())
     setLoading(true)
     try {
-      const [nextRecords, nextTasks] = await Promise.all([
-        listOperations(),
-        listTasks()
-      ])
-      const safeRecords = Array.isArray(nextRecords) ? nextRecords : []
-      const nextIntegrityResults = await buildSafetyRecoveryIntegrityResults(safeRecords)
+      const loaded = await loadSafetyCenterRecords({
+        listOperations,
+        listTasks,
+        listOperationTasks,
+        buildIntegrityResults: buildSafetyRecoveryIntegrityResults,
+        onOptionalError: error => {
+          console.warn('Operation task history unavailable:', error)
+        }
+      })
       if (version !== refreshVersion.current) return
-      setRecords(safeRecords)
-      setTasks(Array.isArray(nextTasks) ? nextTasks : [])
-      setIntegrityResults(nextIntegrityResults)
+      setRecords(loaded.records)
+      setTasks(loaded.tasks)
+      setOperationTasks(loaded.operationTasks)
+      setIntegrityResults(loaded.integrityResults)
       setLoadError('')
     } catch (error) {
       if (version !== refreshVersion.current) return
-      setLoadError('安全记录加载失败。')
+      setLoadError(e('shellpilotSafetyLoadFailed'))
       reportError(error)
     } finally {
       if (version === refreshVersion.current) {
@@ -241,8 +272,13 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
   }, [])
 
   const groups = useMemo(() => {
-    return groupSafetyCenterRecords(records, tasks, integrityResults)
-  }, [records, tasks, integrityResults])
+    return groupSafetyCenterRecords(
+      records,
+      tasks,
+      integrityResults,
+      operationTasks
+    )
+  }, [records, tasks, integrityResults, operationTasks])
 
   useEffect(() => {
     if (open) refreshRecords()
@@ -254,6 +290,20 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
       eventTarget: window,
       refresh: refreshRecords
     })
+  }, [open, refreshRecords])
+
+  useEffect(() => {
+    if (!open) return
+    let timer
+    const refresh = () => {
+      window.clearTimeout(timer)
+      timer = window.setTimeout(refreshRecords, 240)
+    }
+    window.addEventListener(operationTaskUpdatedEvent, refresh)
+    return () => {
+      window.clearTimeout(timer)
+      window.removeEventListener(operationTaskUpdatedEvent, refresh)
+    }
   }, [open, refreshRecords])
 
   const allRecords = useMemo(() => {
@@ -542,7 +592,7 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
       : view.status
     const auditExpanded = expandedAuditId === record.id
     return (
-      <article className='safety-center-record' key={record.id}>
+      <article className='safety-center-record' role='listitem' key={record.id}>
         <div className='safety-center-record-header'>
           <div className='safety-center-record-title'>
             <Tag color={sourceColors[view.source] || 'default'}>
@@ -619,7 +669,156 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
     )
   }
 
+  const findConnectedTaskTab = task => {
+    return (Array.isArray(store.tabs) ? store.tabs : []).find(tab => {
+      const endpoint = task.endpoint || {}
+      const sameEndpoint = endpoint.host === tab.host &&
+        Number(endpoint.port || 22) === Number(tab.port || 22) &&
+        String(endpoint.username || '') === String(tab.username || tab.user || '')
+      return sameEndpoint && refs.get('sftp-' + tab.id)?.sftp
+    })
+  }
+
+  const handleTransferTaskAction = async (task, action) => {
+    const live = findLiveTransferTask(task.id)
+    try {
+      if (action === 'pause') {
+        if (!live?.pause) throw new Error('当前传输实例已结束')
+        live.pause()
+        return
+      }
+      if (live?.resume) {
+        live.resume()
+        return
+      }
+      const tab = findConnectedTaskTab(task)
+      if (!tab) throw new Error('请先连接原服务器，再恢复传输')
+      const transfer = buildTransferResumeItem(task, tab)
+      store.addTransferList([transfer])
+      message.success('传输已重新加入队列，将从暂停位置继续')
+    } catch (error) {
+      reportError(error)
+      message.error(error?.message || '传输操作失败')
+    } finally {
+      window.setTimeout(refreshRecords, 350)
+    }
+  }
+
+  const showTunnelTaskHistory = task => {
+    const view = buildOperationTaskView(task)
+    Modal.info({
+      title: `${view.title} · ${e('shellpilotSafetyTunnelHistory')}`,
+      width: 680,
+      okText: e('confirm'),
+      content: view.events.length
+        ? (
+          <div className='safety-center-operation-events'>
+            {view.events.slice().reverse().map((event, index) => (
+              <div key={`${event.at}-${index}`}>
+                <Tag color={event.state === 'healthy' ? 'success' : 'warning'}>
+                  {event.state}
+                </Tag>
+                <time>{formatTime(event.at)}</time>
+                <strong>{event.message}</strong>
+                <code>{event.code}</code>
+              </div>
+            ))}
+          </div>
+          )
+        : <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description={e('shellpilotSafetyTunnelNoEvents')}
+          />
+    })
+  }
+
+  const renderOperationTask = record => {
+    const view = buildOperationTaskView(record)
+    const liveTransfer = record.kind === operationTaskKinds.sftpTransfer
+      ? findLiveTransferTask(record.id)
+      : null
+    const resumable = record.kind === operationTaskKinds.sftpTransfer &&
+      [operationTaskStatuses.paused, operationTaskStatuses.interrupted]
+        .includes(record.status)
+    return (
+      <article className='safety-center-record safety-center-operation-task' role='listitem' key={record.id}>
+        <div className='safety-center-record-header'>
+          <div className='safety-center-record-title'>
+            <Tag color={sourceColors[record.source] || 'default'}>
+              {view.kindLabel}
+            </Tag>
+            <strong>{view.title}</strong>
+            <Tag color={view.statusColor}>{view.statusLabel}</Tag>
+          </div>
+          <Space wrap>
+            {record.kind === operationTaskKinds.sftpTransfer &&
+              record.status === operationTaskStatuses.running &&
+              liveTransfer?.pause
+              ? (
+                <Button
+                  icon={<PauseOutlined />}
+                  onClick={() => handleTransferTaskAction(record, 'pause')}
+                >
+                  {e('shellpilotSafetyTransferPause')}
+                </Button>
+                )
+              : null}
+            {resumable
+              ? (
+                <Button
+                  type='primary'
+                  icon={<PlayCircleOutlined />}
+                  onClick={() => handleTransferTaskAction(record, 'resume')}
+                >
+                  {e('shellpilotSafetyTransferResume')}
+                </Button>
+                )
+              : null}
+            {record.kind === operationTaskKinds.sshTunnel
+              ? (
+                <Button
+                  icon={<HistoryOutlined />}
+                  onClick={() => showTunnelTaskHistory(record)}
+                >
+                  {e('shellpilotSafetyTunnelEvents')}
+                </Button>
+                )
+              : null}
+          </Space>
+        </div>
+        <div className='safety-center-record-grid'>
+          <span className='safety-center-label'>{e('shellpilotSafetyServer')}</span>
+          <span>{view.endpoint}</span>
+          <span className='safety-center-label'>{e('shellpilotSafetyDetails')}</span>
+          <span className='safety-center-path'>{view.detail || e('shellpilotNone')}</span>
+          <span className='safety-center-label'>{e('shellpilotSafetyUpdatedAt')}</span>
+          <span>{formatTime(view.updatedAt)}</span>
+        </div>
+        {record.kind === operationTaskKinds.sftpTransfer
+          ? (
+            <div className='safety-center-transfer-progress'>
+              <Progress
+                percent={view.progress.percent}
+                size='small'
+                status={record.status === operationTaskStatuses.failed
+                  ? 'exception'
+                  : undefined}
+              />
+              <span>
+                {view.progress.transferred} / {view.progress.total}{' '}
+                {e('shellpilotSafetyBytes')}
+              </span>
+            </div>
+            )
+          : null}
+      </article>
+    )
+  }
+
   const renderRecord = record => {
+    if (record.recordType === 'operation-task') {
+      return renderOperationTask(record)
+    }
     if (record.recordType !== 'task') return renderOperation(record)
     const capability = getTaskCancelCapability(record)
     const taskProgress = (
@@ -631,9 +830,17 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
         onCancel={() => handleSafetyAction(record, 'cancel')}
       />
     )
-    return record.riskTransaction
-      ? <div className='safety-center-agent-risk-record'>{taskProgress}</div>
-      : taskProgress
+    return (
+      <div
+        className={record.riskTransaction
+          ? 'safety-center-task-record safety-center-agent-risk-record'
+          : 'safety-center-task-record'}
+        role='listitem'
+        key={record.id}
+      >
+        {taskProgress}
+      </div>
+    )
   }
 
   const tabItems = [
@@ -643,8 +850,22 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
     ['legacy', 'shellpilotSafetyLegacy']
   ].map(([key, labelKey]) => ({
     key,
-    label: `${e(labelKey)} ${groups[key].length}`
+    label: (
+      <span className='safety-center-tab-label'>
+        {e(labelKey)}
+        <span
+          className='safety-center-tab-count'
+          aria-label={tf('shellpilotSafetyTabCount', { count: groups[key].length })}
+        >
+          {groups[key].length}
+        </span>
+      </span>
+    )
   }))
+
+  const resultStatusText = loading
+    ? e('shellpilotSafetyLoadingRecords')
+    : loadError || tf('shellpilotSafetyResultCount', { count: filteredRecords.length })
 
   return (
     <Modal
@@ -656,7 +877,7 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
       destroyOnClose={false}
       className='safety-operation-center-modal'
     >
-      <div className='safety-center-summary'>
+      <div className='safety-center-summary' aria-label={e('shellpilotSafetySummary')}>
         <span>{e('shellpilotSafetyRunning')} <strong>{groups.running.length}</strong></span>
         <span>{e('shellpilotSafetyRollbackAvailable')} <strong>{groups.rollback.length}</strong></span>
         <span>{e('shellpilotSafetyHistoryShort')} <strong>{groups.history.length}</strong></span>
@@ -672,6 +893,7 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
       <div className='safety-center-filters'>
         <Input.Search
           placeholder={e('shellpilotSafetySearchPlaceholder')}
+          aria-label={e('shellpilotSafetySearchPlaceholder')}
           allowClear
           value={keyword}
           onChange={event => setKeyword(event.target.value)}
@@ -702,7 +924,9 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
             { value: '', label: e('shellpilotSafetyAllStatuses') },
             ...statuses.map(value => ({
               value,
-              label: statusLabelKeys[value] ? e(statusLabelKeys[value]) : value
+              label: statusLabelKeys[value]
+                ? e(statusLabelKeys[value])
+                : statusLabels[value]?.[0] || value
             }))
           ]}
         />
@@ -716,9 +940,22 @@ export default function SafetyOperationCenterModal ({ open, onClose, store }) {
       </div>
 
       <div className='safety-center-records'>
-        <div className='safety-center-record-list'>
+        <div
+          className='safety-center-result-status'
+          role='status'
+          aria-live='polite'
+          aria-atomic='true'
+        >
+          {resultStatusText}
+        </div>
+        <div
+          className='safety-center-record-list'
+          role='list'
+          aria-label={e('shellpilotSafetyRecords')}
+          aria-busy={loading}
+        >
           {loading
-            ? <div className='safety-center-loading'><Spin /></div>
+            ? <div className='safety-center-loading'><Spin aria-hidden='true' /></div>
             : filteredRecords.length
               ? filteredRecords.map(renderRecord)
               : <Empty description={loadError || e('shellpilotSafetyNoRecords')} />}

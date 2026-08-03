@@ -1,6 +1,6 @@
 {
   "name": "ssh-agent-tool",
-  "version": "0.4.15",
+  "version": "0.4.27",
   "productName": "ShellPilot",
   "description": "面向 Windows 的 SSH、SFTP 与 AI 运维客户端",
   "main": "app.js",
@@ -12,7 +12,6 @@
     "app": "node build/bin/app",
     "build": "node build/bin/build.js",
     "start": "node build/bin/start.js",
-    "icon": "node build/bin/icon",
     "clean": "node.exe build/bin/clean",
     "compile": "node.exe build/bin/build.js",
     "vite-build": "node.exe build/bin/vite-build.js",
@@ -37,7 +36,10 @@
     "test-performance-e2e": "playwright test test/e2e/029.performance-baseline.spec.js --workers=1",
     "test-real-server-e2e": "playwright test test/e2e/030.real-server-regression.spec.js --workers=1",
     "test-agent-readonly-real-server": "playwright test test/e2e/031.agent-readonly-real-server.spec.js --workers=1",
+    "test-real-server-external-acceptance": "playwright test test/e2e/034.real-server-external-acceptance.spec.js --workers=1",
+    "test-ssh-tunnel": "node --test test/unit-ci/ssh-tunnel-*.spec.js && playwright test test/e2e/033.ssh-tunnel-manager.spec.js --workers=1",
     "b": "npm run clean && npm run compile && npm run prepare-file",
+    "package:win:dir": "npm run b && npm run pb && cross-env PYTHONUTF8=1 electron-builder --win --x64 --dir --publish never",
     "r": "./build/bin/release",
     "release:github": "node build/bin/release-github.js",
     "release:github:dry": "node build/bin/release-github.js --dry-run",
@@ -71,7 +73,7 @@
   "homepage": "https://github.com/lx3559359/ssh-agent-tool",
   "releases": "https://github.com/lx3559359/ssh-agent-tool/releases",
   "engines": {
-    "node": ">=16.0.0"
+    "node": "^20.19.0 || >=22.12.0"
   },
   "preferGlobal": true,
   "devDependencies": {
@@ -81,6 +83,7 @@
     "@electerm/electerm-resource": "2.1.7",
     "@fontsource/maple-mono": "^5.2.5",
     "@novnc/novnc": "1.7.0",
+    "@playwright/test": "1.61.1",
     "@serialport/binding-mock": "^10.2.2",
     "@types/node": "22.12.0",
     "@vitejs/plugin-react": "^5.2.0",
@@ -99,7 +102,7 @@
     "dotenv": "16.4.5",
     "electerm-icons": "1.0.1",
     "electron": "41.2.0",
-    "electron-builder": "26.9.0",
+    "electron-builder": "26.15.3",
     "filesize": "10.1.6",
     "filesize-parser": "1.5.1",
     "glob": "^13.0.6",
@@ -144,11 +147,13 @@
     "iconv-lite": "^0.7.2",
     "json-deep-copy": "1.3.1",
     "jsonwebtoken": "^9.0.1",
+    "jszip": "^3.10.1",
     "nanoid": "3.3.8",
     "node-bash": "5.0.1",
     "node-forge": "1.4.0",
     "node-pty": "1.1.0-beta34",
     "os-locale-s": "1.1.3",
+    "pdf-parse": "^1.1.1",
     "serialport": "13.0.0",
     "socks": "2.8.9",
     "socks-proxy-agent": "8.0.1",
@@ -159,6 +164,18 @@
     "trzsz2": "1.2.0",
     "yauzl": "2.10.0",
     "zmodem2": "1.4.0"
+  },
+  "overrides": {
+    "minimatch@3.1.5": {
+      "brace-expansion": "1.1.18"
+    },
+    "minimatch@5.1.9": {
+      "brace-expansion": "2.1.4"
+    },
+    "exceljs": {
+      "unzipper": "0.12.5",
+      "uuid": "11.1.1"
+    }
   },
   "files": [
     "npm",

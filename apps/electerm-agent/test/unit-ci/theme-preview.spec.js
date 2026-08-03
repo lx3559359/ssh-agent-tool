@@ -478,6 +478,16 @@ test('theme components consume the tested model without global preview writes', 
   assert.match(tab, /controller\.clear\(\{ notify: false \}\)/)
 })
 
+test('terminal theme entry only toggles off while its setting drawer is actually open', () => {
+  const settingStore = read('store/setting.js')
+  const openThemeBlock = settingStore.slice(
+    settingStore.indexOf('Store.prototype.openTerminalThemes'),
+    settingStore.indexOf('Store.prototype.openSettingModal')
+  )
+
+  assert.match(openThemeBlock, /store\.showModal === modals\.setting/)
+})
+
 test('theme tab separates dependency clears from the unmount-only silent clear', () => {
   const tab = read('components/setting-panel/tab-themes.jsx')
 

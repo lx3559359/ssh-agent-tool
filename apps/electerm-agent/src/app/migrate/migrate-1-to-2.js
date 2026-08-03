@@ -17,13 +17,15 @@ const tables = [
   'profiles',
   'safetyOperations',
   'agentTasks',
-  'agentArtifacts'
+  'agentArtifacts',
+  'operationTasks'
 ]
 
 const safetyTables = new Set([
   'safetyOperations',
   'agentTasks',
-  'agentArtifacts'
+  'agentArtifacts',
+  'operationTasks'
 ])
 
 function createMigration (options = {}) {

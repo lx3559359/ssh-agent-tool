@@ -108,6 +108,40 @@ test('selected SFTP file analysis rejects directory selection', async () => {
   assert.match(result.message, /目录/)
 })
 
+test('creates unified SFTP attachments for documents and images', async () => {
+  const {
+    createSftpFileAttachments
+  } = await import(pathToFileURL(
+    path.join(root, 'src/client/components/ai/ai-attachments.js')
+  ).href)
+
+  const attachments = createSftpFileAttachments([
+    {
+      type: 'remote',
+      path: '/var/reports',
+      name: '巡检报告.pdf',
+      size: 2048
+    },
+    {
+      type: 'remote',
+      path: '/var/screenshots',
+      name: '错误截图.png',
+      size: 1024
+    },
+    {
+      type: 'remote',
+      path: '/var/reports',
+      name: 'archive',
+      isDirectory: true
+    }
+  ])
+
+  assert.equal(attachments.length, 2)
+  assert.equal(attachments[0].source, 'sftp')
+  assert.equal(attachments[0].name, '巡检报告.pdf')
+  assert.equal(attachments[1].name, '错误截图.png')
+})
+
 test('SFTP file context menu exposes AI analysis wording', async () => {
   const { buildSftpFileContextItems } = await import(pathToFileURL(
     path.join(root, 'src/client/components/sftp/sftp-file-context-menu.js')

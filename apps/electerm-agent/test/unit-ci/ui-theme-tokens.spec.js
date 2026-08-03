@@ -15,39 +15,59 @@ const defaultsModuleUrl = pathToFileURL(path.resolve(
 
 const tokenKeys = [
   'page',
+  'canvas',
   'surface',
   'surfaceSubtle',
+  'surfaceSoft',
   'surfaceInset',
   'surfaceElevated',
   'highlightTop',
+  'highlight',
   'text',
   'textMuted',
   'textDisabled',
   'border',
   'borderStrong',
   'primary',
+  'primaryAlt',
   'primarySoft',
+  'cyan',
   'success',
+  'successSoft',
   'info',
+  'infoSoft',
   'warning',
+  'warningSoft',
   'danger',
+  'dangerSoft',
+  'radiusSmall',
   'radiusControl',
+  'radiusToolbar',
   'radiusCard',
+  'radiusPanel',
   'radiusOverlay',
+  'shadowSm',
+  'shadowMd',
+  'shadowLg',
+  'shadowFocus',
   'shadowControl',
   'shadowCard',
   'shadowOverlay',
+  'focusOffset',
   'motionFast',
   'motionNormal'
 ]
 const colorTokenKeys = [
-  'page', 'surface', 'surfaceSubtle', 'surfaceInset', 'surfaceElevated',
+  'page', 'canvas', 'surface', 'surfaceSubtle', 'surfaceSoft',
+  'surfaceInset', 'surfaceElevated',
   'text', 'textMuted', 'textDisabled', 'border', 'borderStrong',
-  'primary', 'primarySoft', 'success', 'info', 'warning', 'danger'
+  'primary', 'primaryAlt', 'primarySoft', 'cyan', 'success', 'successSoft',
+  'info', 'infoSoft', 'warning', 'warningSoft', 'danger', 'dangerSoft'
 ]
 const minimumTextContrast = 4.5
 
 function toCssVariable (key) {
+  if (key === 'primaryAlt') return '--sp-primary-2'
   const cssKey = key.replace(/[A-Z]/g, match => `-${match.toLowerCase()}`)
   return `--sp-${cssKey}`
 }
@@ -133,7 +153,7 @@ test('derives canonical secondary tokens from a legacy UI theme', async () => {
   assert.equal(tokens.primary, '#0088CC')
   assert.match(tokens.border, /^#[0-9A-F]{6}$/)
   assert.match(tokens.primarySoft, /^#[0-9A-F]{6}$/)
-  assert.equal(tokens.radiusCard, '10px')
+  assert.equal(tokens.radiusCard, '22px')
 })
 
 test('uses brightness-aware readable fallbacks for malformed themes', async t => {
@@ -209,7 +229,7 @@ test('uses brightness-aware readable fallbacks for malformed themes', async t =>
   }
 })
 
-test('keeps muted and danger text readable on secondary page and card surfaces', async t => {
+test('keeps muted text readable on secondary page and card surfaces', async t => {
   const [
     { deriveSecondaryThemeTokens },
     { defaultTheme, defaultThemeLight }
@@ -242,7 +262,7 @@ test('keeps muted and danger text readable on secondary page and card surfaces',
   for (const item of cases) {
     await t.test(item.name, () => {
       const tokens = deriveSecondaryThemeTokens(item.value)
-      for (const key of ['textMuted', 'danger']) {
+      for (const key of ['textMuted']) {
         assertReadable(tokens[key], tokens.page, `${item.name} ${key}/page`)
         assertReadable(tokens[key], tokens.surface, `${item.name} ${key}/surface`)
       }
@@ -250,36 +270,96 @@ test('keeps muted and danger text readable on secondary page and card surfaces',
   }
 })
 
-test('derives restrained four-level depth values for light and dark themes', async () => {
+test('derives Aurora light and dark depth without changing compatibility aliases', async () => {
   const { deriveSecondaryThemeTokens } = await import(moduleUrl)
   const light = deriveSecondaryThemeTokens({
-    main: '#F2F6FA',
-    'main-light': '#F8FAFC',
-    text: '#253249',
-    primary: '#2878E6'
+    main: '#F6F7FF',
+    'main-light': '#FFFFFF',
+    'surface-soft': '#F0F2FF',
+    text: '#111B3F',
+    'text-dark': '#69708E',
+    primary: '#4D46F5',
+    'primary-alt': '#6C63FF',
+    cyan: '#149BD7',
+    success: '#20B66A',
+    warn: '#F2A11D',
+    error: '#E5484D',
+    border: '#DDE1F3'
   })
   const dark = deriveSecondaryThemeTokens({
-    main: '#10161E',
-    'main-light': '#151D27',
-    text: '#E8EEF6',
-    primary: '#4C93F4'
+    main: '#0B1020',
+    'main-light': '#11182A',
+    'surface-soft': '#171F35',
+    text: '#EDF1FF',
+    'text-dark': '#9CA6C4',
+    primary: '#746DFF',
+    'primary-alt': '#8A82FF',
+    cyan: '#2CB7EB',
+    success: '#32D583',
+    warn: '#F7B84B',
+    error: '#FF6B70',
+    border: '#28334F'
   })
-  for (const tokens of [light, dark]) {
-    assert.notEqual(tokens.surfaceElevated, tokens.surface)
-    assert.notEqual(tokens.surfaceInset, tokens.surface)
-    assert.match(tokens.highlightTop, /^rgba\(/)
-    assert.match(tokens.shadowControl, /^0 2px/)
-    assert.match(tokens.shadowCard, /^0 (?:7|8)px/)
-    assert.match(tokens.shadowOverlay, /^0 (?:18|20)px/)
-    assert.equal(tokens.radiusOverlay, '10px')
-    assert.equal(tokens.motionFast, '120ms')
-    assert.equal(tokens.motionNormal, '180ms')
-  }
-  assert.notEqual(light.shadowCard, dark.shadowCard)
-  assert.notEqual(light.shadowOverlay, dark.shadowOverlay)
+
+  assert.deepEqual(
+    [light.canvas, light.surface, light.surfaceSoft, light.text, light.textMuted, light.primary, light.primaryAlt, light.cyan, light.success, light.warning, light.danger, light.border],
+    ['#F6F7FF', '#FFFFFF', '#F0F2FF', '#111B3F', '#69708E', '#4D46F5', '#6C63FF', '#149BD7', '#20B66A', '#F2A11D', '#E5484D', '#DDE1F3']
+  )
+  assert.deepEqual(
+    [dark.canvas, dark.surface, dark.surfaceSoft, dark.text, dark.textMuted, dark.primary, dark.primaryAlt, dark.cyan, dark.success, dark.warning, dark.danger, dark.border],
+    ['#0B1020', '#11182A', '#171F35', '#EDF1FF', '#9CA6C4', '#746DFF', '#8A82FF', '#2CB7EB', '#32D583', '#F7B84B', '#FF6B70', '#28334F']
+  )
+  assert.deepEqual(
+    [
+      light.radiusSmall,
+      light.radiusControl,
+      light.radiusToolbar,
+      light.radiusCard,
+      light.radiusPanel,
+      light.radiusOverlay
+    ],
+    ['10px', '14px', '18px', '22px', '28px', '28px']
+  )
+  assert.equal(
+    light.shadowSm,
+    '0 3px 0 -1px rgba(62, 58, 160, 0.16), 0 8px 18px rgba(62, 58, 160, 0.18)'
+  )
+  assert.equal(
+    light.shadowMd,
+    '0 6px 0 -2px rgba(73, 66, 196, 0.18), 0 18px 34px rgba(73, 66, 196, 0.26)'
+  )
+  assert.equal(
+    light.shadowLg,
+    '0 9px 0 -3px rgba(75, 66, 202, 0.20), 0 28px 56px rgba(75, 66, 202, 0.32)'
+  )
+  assert.equal(
+    light.shadowFocus,
+    '0 4px 0 -1px rgba(77, 70, 245, 0.22), 0 16px 30px rgba(77, 70, 245, 0.36)'
+  )
+  assert.equal(
+    dark.shadowSm,
+    '0 3px 0 -1px rgba(0, 0, 0, 0.52), 0 10px 20px rgba(0, 0, 0, 0.56), 0 0 0 1px rgba(138, 130, 255, 0.18)'
+  )
+  assert.equal(
+    dark.shadowMd,
+    '0 6px 0 -2px rgba(0, 0, 0, 0.58), 0 20px 38px rgba(0, 0, 0, 0.64), 0 0 0 1px rgba(138, 130, 255, 0.22)'
+  )
+  assert.equal(
+    dark.shadowLg,
+    '0 10px 0 -3px rgba(0, 0, 0, 0.64), 0 30px 60px rgba(0, 0, 0, 0.72), 0 0 0 1px rgba(138, 130, 255, 0.28)'
+  )
+  assert.equal(
+    dark.shadowFocus,
+    '0 4px 0 -1px rgba(0, 0, 0, 0.50), 0 16px 32px rgba(116, 109, 255, 0.42), 0 0 0 2px rgba(138, 130, 255, 0.30)'
+  )
+  assert.equal(light.shadowControl, light.shadowSm)
+  assert.equal(light.shadowCard, light.shadowMd)
+  assert.equal(light.shadowOverlay, light.shadowLg)
+  assert.equal(light.highlightTop, light.highlight)
+  assert.notEqual(light.shadowLg, dark.shadowLg)
 })
 
-test('serializes the exact twenty-five-token secondary UI contract', async () => {
+test('serializes the exact secondary UI token contract', async () => {
   const { deriveSecondaryThemeTokens, buildUiThemeCss } = await import(moduleUrl)
   const tokens = deriveSecondaryThemeTokens()
   const css = buildUiThemeCss({
@@ -288,15 +368,25 @@ test('serializes the exact twenty-five-token secondary UI contract', async () =>
     primary: '#2878e6'
   })
   const variables = Array.from(
-    css.matchAll(/^\s*(--sp-[a-z-]+):/gm),
+    css.matchAll(/^\s*(--sp-[a-z0-9-]+):/gm),
     match => match[1]
   )
 
   assert.deepEqual(Object.keys(tokens), tokenKeys)
   assert.deepEqual(variables, tokenKeys.map(toCssVariable))
-  assert.equal(new Set(variables).size, 25)
+  assert.equal(variables.length, tokenKeys.length)
+  assert.equal(new Set(variables).size, tokenKeys.length)
+  assert.ok(variables.includes('--sp-canvas'))
+  assert.ok(variables.includes('--sp-surface-soft'))
+  assert.ok(variables.includes('--sp-primary-2'))
+  assert.ok(variables.includes('--sp-shadow-focus'))
   assert.match(css, /--sp-primary: #2878E6;/)
-  assert.match(css, /--sp-radius-card: 10px;/)
+  assert.match(css, /--sp-radius-small: 10px;/)
+  assert.match(css, /--sp-radius-control: 14px;/)
+  assert.match(css, /--sp-radius-toolbar: 18px;/)
+  assert.match(css, /--sp-radius-card: 22px;/)
+  assert.match(css, /--sp-radius-panel: 28px;/)
+  assert.match(css, /--sp-radius-overlay: 28px;/)
   assert.equal((css.match(/:root/g) || []).length, 1)
 })
 

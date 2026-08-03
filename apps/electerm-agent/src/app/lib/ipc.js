@@ -114,10 +114,42 @@ const {
 const {
   artifactFilename
 } = require('./ai-artifacts/filename-utils')
+const {
+  createIncidentDatabase
+} = require('./incidents/incident-database')
+const {
+  createIncidentRepository
+} = require('./incidents/incident-repository')
+const {
+  createIncidentArchiveService
+} = require('./incidents/incident-service')
+const {
+  ingestBuffer,
+  MAX_INPUT_BYTES
+} = require('./ai-content/content-ingestion')
+const {
+  createWebAccessGrantRepository,
+  createWebAccessGrants
+} = require('./ai-content/web-access-grants')
+const {
+  createElectronWebReaderAdapter
+} = require('./ai-content/electron-web-reader-adapter')
+const {
+  createAuthenticatedWebReader
+} = require('./ai-content/authenticated-web-reader')
+const {
+  createWebAccessService
+} = require('./ai-content/web-access-service')
+const {
+  isWebAccessError,
+  serializeWebAccessError
+} = require('./ai-content/web-access-errors')
 
 let agentSkillServices
 let agentSkillMigrationPromise
 let aiArtifactService
+let incidentArchiveService
+let webAccessService
 
 function getAgentSkillServices () {
   if (agentSkillServices) return agentSkillServices
@@ -213,6 +245,112 @@ function safeAIArtifactResult (operation) {
         }
       }
     })
+}
+
+function getIncidentArchiveService () {
+  if (incidentArchiveService) return incidentArchiveService
+  const dataRoot = process.env.DATA_PATH || path.resolve(appPath, 'electerm')
+  const database = createIncidentDatabase({
+    rootPath: path.resolve(dataRoot, 'incident-archives')
+  })
+  incidentArchiveService = createIncidentArchiveService({
+    database,
+    repository: createIncidentRepository({
+      getDatabase: () => database.db
+    })
+  })
+  return incidentArchiveService
+}
+
+function safeIncidentResult (operation) {
+  return Promise.resolve()
+    .then(operation)
+    .then(value => ({
+      ok: true,
+      value: JSON.parse(JSON.stringify(value))
+    }))
+    .catch(error => {
+      const isIncidentError = String(error?.code || '')
+        .startsWith('INCIDENT_')
+      return {
+        ok: false,
+        error: {
+          code: isIncidentError ? error.code : 'INCIDENT_IPC_ERROR',
+          message: isIncidentError
+            ? error.message
+            : 'Incident archive operation failed.'
+        }
+      }
+    })
+}
+
+function safeAIContentResult (operation) {
+  return Promise.resolve()
+    .then(operation)
+    .then(value => ({
+      ok: true,
+      value: JSON.parse(JSON.stringify(value))
+    }))
+    .catch(error => {
+      if (isWebAccessError(error)) {
+        return {
+          ok: false,
+          error: serializeWebAccessError(error)
+        }
+      }
+      return {
+        ok: false,
+        error: {
+          code: 'AI_CONTENT_READ_FAILED',
+          message: String(error?.message || '内容读取失败。')
+        }
+      }
+    })
+}
+
+function getWebAccessService () {
+  if (webAccessService) return webAccessService
+  const adapter = createElectronWebReaderAdapter({
+    parentWindow: globalState.get('win')
+  })
+  const grants = createWebAccessGrants({
+    repository: createWebAccessGrantRepository({
+      filePath: path.join(
+        app.getPath('userData'),
+        'ai-web-access',
+        'grants.json'
+      )
+    })
+  })
+  webAccessService = createWebAccessService({
+    browserReader: createAuthenticatedWebReader({ adapter }),
+    clearSessionData: () => adapter.clearSessionData(),
+    grants
+  })
+  return webAccessService
+}
+
+function ingestAIContent (payload = {}, senderId) {
+  if (payload?.kind === 'url') {
+    return getWebAccessService().read({
+      url: payload.url,
+      readId: payload.readId,
+      senderId
+    })
+  }
+  const encoded = String(payload?.dataBase64 || '')
+  if (!encoded) {
+    throw new Error('没有收到可读取的文件内容。')
+  }
+  const estimatedBytes = Math.ceil(encoded.length * 3 / 4)
+  if (estimatedBytes > MAX_INPUT_BYTES + 3) {
+    throw new Error('文件超过 10 MB 读取上限。')
+  }
+  return ingestBuffer({
+    name: String(payload.name || 'attachment'),
+    mimeType: String(payload.mimeType || ''),
+    buffer: Buffer.from(encoded, 'base64')
+  })
 }
 
 // Security: whitelist of safe environment variables for Linux/Mac/Windows
@@ -475,9 +613,47 @@ function initIpc () {
     }),
     deleteAIArtifact: id => safeAIArtifactResult(() => getAIArtifactService().deleteAIArtifact(id))
   }
+  const incidentArchiveAsyncGlobals = {
+    listIncidentArchives: filters => safeIncidentResult(() => getIncidentArchiveService().list(filters)),
+    getIncidentArchive: id => safeIncidentResult(() => getIncidentArchiveService().get(id)),
+    listIncidentCandidates: filters => safeIncidentResult(() => getIncidentArchiveService().listCandidates(filters)),
+    captureIncidentCandidate: draft => safeIncidentResult(() => getIncidentArchiveService().captureCandidate(draft)),
+    dismissIncidentCandidate: id => safeIncidentResult(() => getIncidentArchiveService().dismissCandidate(id)),
+    reopenIncidentCandidate: id => safeIncidentResult(() => getIncidentArchiveService().reopenCandidate(id)),
+    convertIncidentCandidate: (id, draft) => safeIncidentResult(() => getIncidentArchiveService().convertCandidate(id, draft)),
+    appendIncidentTimelineEvent: (id, draft) => safeIncidentResult(() => getIncidentArchiveService().appendTimelineEvent(id, draft)),
+    createIncidentArchive: draft => safeIncidentResult(() => getIncidentArchiveService().create(draft)),
+    updateIncidentArchive: (id, patch) => safeIncidentResult(() => getIncidentArchiveService().update(id, patch)),
+    transitionIncidentArchive: (id, input) => safeIncidentResult(() => getIncidentArchiveService().transition(id, input)),
+    addIncidentNote: (id, body) => safeIncidentResult(() => getIncidentArchiveService().addNote(id, body)),
+    deleteIncidentNote: (id, noteId) => safeIncidentResult(() => getIncidentArchiveService().deleteNote(id, noteId)),
+    deleteIncidentArchive: id => safeIncidentResult(() => getIncidentArchiveService().delete(id)),
+    exportIncidentArchive: (id, format) => safeIncidentResult(async () => {
+      const exported = getIncidentArchiveService().export(id, { format })
+      const win = globalState.get('win')
+      const result = await dialog.showSaveDialog(win, {
+        title: '导出故障档案',
+        defaultPath: `incident-${String(id || '').slice(0, 36)}.${exported.extension}`,
+        filters: [{
+          name: exported.format.toUpperCase(),
+          extensions: [exported.extension]
+        }]
+      })
+      if (result.canceled || !result.filePath) return { canceled: true }
+      await fsp.writeFile(result.filePath, exported.content, 'utf8')
+      return {
+        canceled: false,
+        filename: path.basename(result.filePath),
+        format: exported.format,
+        bytes: Buffer.byteLength(exported.content, 'utf8')
+      }
+    }),
+    getIncidentArchiveSummary: () => safeIncidentResult(() => getIncidentArchiveService().summary())
+  }
   const asyncGlobals = {
     ...agentSkillAsyncGlobals,
     ...aiArtifactAsyncGlobals,
+    ...incidentArchiveAsyncGlobals,
     confirmExit: () => {
       globalState.set('confirmExit', true)
     },
@@ -599,7 +775,39 @@ function initIpc () {
       )
     }
   }
-  ipcMain.handle('async', (event, { name, args }) => {
+  const contextualAsyncGlobals = {
+    ingestAIContent: (event, payload) => safeAIContentResult(
+      () => ingestAIContent(payload, event.sender.id)
+    ),
+    authorizeAIWebTarget: (event, payload) => safeAIContentResult(
+      () => getWebAccessService().authorize({
+        ...payload,
+        senderId: event.sender.id
+      })
+    ),
+    listAIWebGrants: () => safeAIContentResult(
+      () => getWebAccessService().listGrants()
+    ),
+    revokeAIWebGrant: (_event, payload) => safeAIContentResult(
+      () => getWebAccessService().revokeGrant(payload)
+    ),
+    clearAIWebGrants: () => safeAIContentResult(
+      () => getWebAccessService().clearGrants()
+    ),
+    clearAIWebSessionData: () => safeAIContentResult(
+      () => getWebAccessService().clearSessionData()
+    ),
+    cancelAIWebRead: (event, payload) => safeAIContentResult(
+      () => getWebAccessService().cancelRead({
+        ...payload,
+        senderId: event.sender.id
+      })
+    )
+  }
+  ipcMain.handle('async', (event, { name, args = [] }) => {
+    if (Object.hasOwn(contextualAsyncGlobals, name)) {
+      return contextualAsyncGlobals[name](event, ...args)
+    }
     return asyncGlobals[name](...args)
   })
   ipcMain.handle('show-open-dialog-sync', async (event, ...args) => {

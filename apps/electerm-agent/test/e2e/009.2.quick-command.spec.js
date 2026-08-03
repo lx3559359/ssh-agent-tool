@@ -18,8 +18,16 @@ describe('quick commands execution', function () {
     const electronApp = await electron.launch(appOptions)
     const client = await electronApp.firstWindow()
     extendClient(client, electronApp)
-
-    await delay(3500)
+    await client.waitForFunction(
+      () => window.store?.configLoaded === true,
+      { timeout: 20000 }
+    )
+    await client.locator('.no-sessions').waitFor({
+      state: 'visible',
+      timeout: 20000
+    })
+    await client.locator('.add-new-tab-btn').click()
+    await client.locator('.term-wrap:visible').waitFor({ timeout: 20000 })
 
     const commandName = `E2E 快捷命令 ${Date.now()}`
     await client.evaluate(() => {

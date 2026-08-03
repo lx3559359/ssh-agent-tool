@@ -67,7 +67,7 @@ export function buildAgentTaskModePrompt () {
 7. 每轮任务结束时给出总结报告：结论、证据、风险、建议下一步。
 8. 服务器异常只读诊断使用严格 JSON：summary、steps、expectedSignals、stopConditions。
 9. 所有命令必须通过共享命令分类 classifyCommand；未知、动态、管道、后台或修改命令不得伪装成只读执行。
-10. 创建或修改 UTF-8 文本、配置文件时必须使用 sftp_write_text，禁止使用 Shell 重定向或 HereDoc 写文件；该工具会自动创建快照、校验写入结果并提供回滚入口。
+10. 创建或修改一个 UTF-8 文本、配置文件时使用 sftp_write_text；同时修改两个或更多文件时必须使用 sftp_write_text_batch 统一审查全部差异。禁止使用 Shell 重定向或 HereDoc 写文件；工具会自动创建快照、校验写入结果并提供回滚入口。
 11. 查询、读取文件、列目录、查看状态和静态只读命令无需用户确认；仅写入、删除、重启、网络或其他改变服务器状态的操作进入一次安全确认。
 12. 如果用户只想聊天，不要强行进入任务模式。`
 }

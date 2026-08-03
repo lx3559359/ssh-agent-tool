@@ -74,29 +74,54 @@ export function deriveSecondaryThemeTokens (theme = {}) {
   const surfaceMixRatio = relativeLuminance(page) < 0.5 ? 0.12 : 0.84
   const surface = expandHex(theme['main-light'], mix(page, '#FFFFFF', surfaceMixRatio))
   const darkSurface = relativeLuminance(surface) < 0.5
+  const surfaceSoft = expandHex(theme['surface-soft'], mix(surface, page, 0.55))
   const surfaceElevated = mix(surface, '#FFFFFF', darkSurface ? 0.06 : 0.34)
   const surfaceInset = mix(surface, page, darkSurface ? 0.42 : 0.58)
-  const highlightTop = darkSurface
-    ? 'rgba(255, 255, 255, 0.06)'
-    : 'rgba(255, 255, 255, 0.88)'
+  const highlight = darkSurface
+    ? 'rgba(255, 255, 255, 0.08)'
+    : 'rgba(255, 255, 255, 0.82)'
   const backgrounds = [page, surface]
   const disabledTextBackgrounds = [...backgrounds, surfaceElevated]
   const textFallback = relativeLuminance(surface) < 0.5 ? '#FFFFFF' : '#253249'
   const text = ensureTextContrast(expandHex(theme.text, textFallback), backgrounds)
   const primary = expandHex(theme.primary, '#2878E6')
+  const primaryAlt = expandHex(
+    theme['primary-alt'],
+    mix(primary, '#FFFFFF', darkSurface ? 0.18 : 0.12)
+  )
+  const cyan = expandHex(theme.cyan, darkSurface ? '#2CB7EB' : '#149BD7')
+  const border = expandHex(theme.border, mix(text, surface, 0.84))
   const textMuted = ensureTextContrast(
     expandHex(theme['text-dark'], mix(text, page, 0.52)),
     backgrounds
   )
-  const danger = ensureTextContrast(expandHex(theme.error, '#CF3F50'), backgrounds)
+  const success = expandHex(theme.success, '#168A74')
+  const info = expandHex(theme.info, cyan)
+  const warning = expandHex(theme.warn, '#C56A20')
+  const danger = expandHex(theme.error, '#CF3F50')
+  const shadowSm = darkSurface
+    ? '0 3px 0 -1px rgba(0, 0, 0, 0.52), 0 10px 20px rgba(0, 0, 0, 0.56), 0 0 0 1px rgba(138, 130, 255, 0.18)'
+    : '0 3px 0 -1px rgba(62, 58, 160, 0.16), 0 8px 18px rgba(62, 58, 160, 0.18)'
+  const shadowMd = darkSurface
+    ? '0 6px 0 -2px rgba(0, 0, 0, 0.58), 0 20px 38px rgba(0, 0, 0, 0.64), 0 0 0 1px rgba(138, 130, 255, 0.22)'
+    : '0 6px 0 -2px rgba(73, 66, 196, 0.18), 0 18px 34px rgba(73, 66, 196, 0.26)'
+  const shadowLg = darkSurface
+    ? '0 10px 0 -3px rgba(0, 0, 0, 0.64), 0 30px 60px rgba(0, 0, 0, 0.72), 0 0 0 1px rgba(138, 130, 255, 0.28)'
+    : '0 9px 0 -3px rgba(75, 66, 202, 0.20), 0 28px 56px rgba(75, 66, 202, 0.32)'
+  const shadowFocus = darkSurface
+    ? '0 4px 0 -1px rgba(0, 0, 0, 0.50), 0 16px 32px rgba(116, 109, 255, 0.42), 0 0 0 2px rgba(138, 130, 255, 0.30)'
+    : '0 4px 0 -1px rgba(77, 70, 245, 0.22), 0 16px 30px rgba(77, 70, 245, 0.36)'
 
   return {
     page,
+    canvas: page,
     surface,
-    surfaceSubtle: mix(surface, page, 0.55),
+    surfaceSubtle: surfaceSoft,
+    surfaceSoft,
     surfaceInset,
     surfaceElevated,
-    highlightTop,
+    highlightTop: highlight,
+    highlight,
     text,
     textMuted,
     textDisabled: ensureContrast(
@@ -104,26 +129,34 @@ export function deriveSecondaryThemeTokens (theme = {}) {
       disabledTextBackgrounds,
       3
     ),
-    border: mix(text, surface, 0.84),
+    border,
     borderStrong: mix(text, surface, 0.72),
     primary,
+    primaryAlt,
     primarySoft: mix(primary, surface, 0.88),
-    success: expandHex(theme.success, '#168A74'),
-    info: expandHex(theme.info, '#2878E6'),
-    warning: expandHex(theme.warn, '#C56A20'),
+    cyan,
+    success,
+    successSoft: mix(success, surface, 0.88),
+    info,
+    infoSoft: mix(info, surface, 0.88),
+    warning,
+    warningSoft: mix(warning, surface, 0.88),
     danger,
-    radiusControl: '7px',
-    radiusCard: '10px',
-    radiusOverlay: '10px',
-    shadowControl: darkSurface
-      ? '0 2px 6px rgba(0, 0, 0, 0.28)'
-      : '0 2px 5px rgba(28, 50, 78, 0.10)',
-    shadowCard: darkSurface
-      ? '0 8px 20px rgba(0, 0, 0, 0.30)'
-      : '0 7px 18px rgba(30, 58, 95, 0.11)',
-    shadowOverlay: darkSurface
-      ? '0 20px 46px rgba(0, 0, 0, 0.48)'
-      : '0 18px 40px rgba(26, 44, 70, 0.24)',
+    dangerSoft: mix(danger, surface, 0.88),
+    radiusSmall: '10px',
+    radiusControl: '14px',
+    radiusToolbar: '18px',
+    radiusCard: '22px',
+    radiusPanel: '28px',
+    radiusOverlay: '28px',
+    shadowSm,
+    shadowMd,
+    shadowLg,
+    shadowFocus,
+    shadowControl: shadowSm,
+    shadowCard: shadowMd,
+    shadowOverlay: shadowLg,
+    focusOffset: '2px',
     motionFast: '120ms',
     motionNormal: '180ms'
   }
@@ -132,7 +165,9 @@ export function deriveSecondaryThemeTokens (theme = {}) {
 export function buildUiThemeCss (theme) {
   const tokens = deriveSecondaryThemeTokens(theme)
   const variables = Object.entries(tokens).map(([key, value]) => {
-    const cssKey = key.replace(/[A-Z]/g, match => `-${match.toLowerCase()}`)
+    const cssKey = key === 'primaryAlt'
+      ? 'primary-2'
+      : key.replace(/[A-Z]/g, match => `-${match.toLowerCase()}`)
     return `--sp-${cssKey}: ${value};`
   }).join('\n')
   return `:root {\n${variables}\n}`

@@ -12,10 +12,11 @@
   position relative
   line-height 26px
   padding-left 5px
-  border-radius 3px
+  border-radius var(--sp-radius-small)
   overflow hidden
   white-space nowrap
   text-overflow ellipsis
+  transition background-color var(--sp-motion-fast) ease, color var(--sp-motion-fast) ease
   &.is-category
     .tree-item-title
       font-weight bold
@@ -26,8 +27,8 @@
   &.selected
   &.item-dragover
   &:hover
-    background #000
-    color #eee
+    background var(--sp-primary-soft)
+    color var(--sp-text)
     cursor pointer
   &.item-dragover-top
     border 2px solid var(--primary)
@@ -111,10 +112,10 @@
   margin-top 4px
   background var(--main-dark)
   border 1px solid var(--main)
-  border-radius 4px
+  border-radius var(--sp-radius-overlay)
   padding 4px
   z-index 100
-  box-shadow 0 2px 8px rgba(0,0,0,.1)
+  box-shadow var(--sp-shadow-overlay)
 &.open
   .tree-sort-dropdown
     display block
@@ -128,7 +129,7 @@
 
 .tree-sort-popover-item
   padding 4px 8px
-  border-radius 3px
+  border-radius var(--sp-radius-small)
   cursor pointer
   white-space nowrap
   font-size 12px
@@ -225,7 +226,8 @@
   padding 8px 10px
   margin-bottom 10px
   border 1px solid var(--main-darker)
-  border-radius 6px
+  border-radius var(--sp-radius-toolbar)
+  box-shadow var(--sp-shadow-sm)
   color var(--text-color-2)
   background var(--main-light)
   font-size 13px
@@ -245,8 +247,9 @@
   gap 12px
   padding 10px
   border 1px solid var(--main-darker)
-  border-radius 6px
+  border-radius var(--sp-radius-card)
   background var(--main)
+  box-shadow var(--sp-shadow-md)
 
 .connection-inventory-main
   min-width 0

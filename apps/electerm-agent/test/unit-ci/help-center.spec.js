@@ -50,12 +50,36 @@ test('top bar exposes an in-client Chinese help center', () => {
   assert.match(help, /24 个只读工具/)
   assert.match(help, /已安装服务/)
   assert.match(help, /停止任务/)
+  assert.match(help, /多级分组/)
+  assert.match(help, /状态总览/)
+  assert.match(help, /暂停或继续/)
+  assert.match(help, /待确认异常/)
+  assert.match(help, /确认建档/)
+  assert.match(help, /成果物中心/)
+  assert.match(help, /Markdown、HTML、DOCX 和 PDF/)
+  assert.match(help, /回到最新/)
+  assert.match(help, /未读消息/)
+  assert.match(help, /崩溃恢复/)
+})
+
+test('help center keeps its chapter flow while exposing a readable heading hierarchy', () => {
+  const source = read('src/client/components/main/help-center-modal.jsx')
+  const styles = read('src/client/components/main/help-center-modal.styl')
+
+  assert.match(source, /defaultActiveKey=\{\['start'\]\}/)
+  assert.match(source, /label:\s*<h2/)
+  assert.match(source, /<h1 className='shellpilot-help-heading-title'/)
+  assert.match(source, /<aside[\s\S]*shellpilot-help-safety/)
+  assert.doesNotMatch(source, /<(?:Input|Anchor)\b/)
+  assert.doesNotMatch(source, /help-(?:search|toc)/)
+  assert.match(styles, /\.shellpilot-help-heading-title[\s\S]*font-size/)
+  assert.match(styles, /\.shellpilot-help-section-title[\s\S]*font-size/)
 })
 
 test('repository includes an offline Chinese user guide', () => {
   const guide = read('docs/USER_GUIDE_ZH.md')
 
-  assert.match(guide, /# ShellPilot 中文使用帮助/)
+  assert.match(guide, /# ShellPilot 中文使用手册/)
   assert.match(guide, /SSH 终端/)
   assert.match(guide, /SFTP/)
   assert.match(guide, /更新源/)
@@ -66,6 +90,15 @@ test('repository includes an offline Chinese user guide', () => {
   assert.match(guide, /常见问题/)
   assert.match(guide, /服务器状态中心/)
   assert.match(guide, /平台与服务自动识别/)
+  assert.match(guide, /多级分组/)
+  assert.match(guide, /状态总览/)
+  assert.match(guide, /SFTP 传输任务/)
+  assert.match(guide, /待确认异常/)
+  assert.match(guide, /成果物中心/)
+  assert.match(guide, /Markdown/)
+  assert.match(guide, /AI 对话与 Agent/)
+  assert.match(guide, /崩溃恢复/)
+  assert.match(guide, /发布版本与在线更新/)
 })
 
 test('AI configuration uses ShellPilot inline guidance without upstream wiki branding', () => {

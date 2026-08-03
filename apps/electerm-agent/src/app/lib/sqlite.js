@@ -19,7 +19,8 @@ const ENC_TABLES = new Set([
   'aiChatHistory',
   'safetyOperations',
   'agentTasks',
-  'agentArtifacts'
+  'agentArtifacts',
+  'operationTasks'
 ])
 
 // Within the 'data' table, only this specific record is encrypted
@@ -66,6 +67,7 @@ function createDb (appPath, defaultUserName, { enc, dec } = {}) {
     'safetyOperations',
     'agentTasks',
     'agentArtifacts',
+    'operationTasks',
     'autoRunWidgets'
   ]
 

@@ -18,6 +18,8 @@ test('Chinese help explains the complete safety transaction workflow and limits'
     read('src/client/components/main/help-center-modal.jsx'),
     read('src/client/common/shellpilot-i18n-overrides.js')
   ].join('\n')
+  const guide = read('docs/USER_GUIDE_ZH.md')
+  const englishHelp = read('src/client/common/shellpilot-help-content.js')
 
   for (const text of [
     '服务器与 SSH 终端',
@@ -27,7 +29,7 @@ test('Chinese help explains the complete safety transaction workflow and limits'
     '确认计划',
     '实时进度',
     '取消任务',
-    '终端手工修改与自动恢复',
+    '受控命令的安全事务与恢复',
     'vim、nano',
     '无法自动回滚',
     '安全操作中心',
@@ -50,21 +52,32 @@ test('Chinese help explains the complete safety transaction workflow and limits'
 
   assert.match(help, /FTP[^。\n]*(不支持|无法)[^。\n]*自动回滚/)
   assert.match(help, /SFTP[^。\n]*(上传|下载|覆盖|复制|移动)/)
-  assert.match(help, /只有普通只读命令[^。；\n]*常规终端直达/)
-  assert.match(help, /已识别修改[^。；\n]*判断[^。；\n]*能否建立恢复点/)
+  assert.match(help, /手工 SSH 终端输入[^。；\n]*原生会话直达/)
+  assert.match(help, /不会在回车前拦截或分类/)
+  assert.match(help, /受控入口[^。；\n]*只读[^。；\n]*可恢复修改/)
   assert.match(help, /可恢复修改[^。；\n]*恢复点验证[^。；\n]*等待确认/)
   assert.match(help, /不可恢复修改[^。\n]*风险确认[^。\n]*阻止/)
-  assert.doesNotMatch(help, /已识别修改[^。；\n]*先建立恢复点/)
   assert.doesNotMatch(help, /未纳入保护的输入[^。\n]*直达/)
+  assert.doesNotMatch(help, /手工输入[^。\n]*按命令分类进入对应流程/)
+  assert.doesNotMatch(help, /终端会在回车提交前识别/)
   assert.match(help, /vim、nano[^。\n]*无法预快照[^。\n]*警告/)
   assert.match(help, /回滚完成后[^。\n]*回滚验证/)
-  assert.doesNotMatch(help, /手工(?:输入的)?\s*(?:SSH\s*)?命令(?:会)?直接执行/)
   assert.match(help, /只读诊断[^。\n]*(?:无需|不需要|不要求)二次确认/)
   assert.doesNotMatch(
     help,
     /(?:有风险|已识别修改|不可恢复修改)[^。\n]*(?:无需|不需要|不要求)二次确认/
   )
   assert.doesNotMatch(help, /electerm\/electerm\/wiki/i)
+
+  assert.match(guide, /手工终端输入[^。\n]*原生 SSH[^。\n]*直接发送/)
+  assert.match(guide, /不会在回车前拦截、分类或自动建立恢复点/)
+  assert.match(guide, /AI、快捷命令、运维工具[^。\n]*受控入口[^。\n]*安全流程/)
+  assert.doesNotMatch(guide, /回车前，客户端会尝试区分/)
+  assert.match(englishHelp, /Manual SSH terminal input[^.\n]*direct/)
+  assert.match(englishHelp, /does not intercept or classify Enter/)
+  assert.match(englishHelp, /controlled entry points[^.\n]*safety classification/)
+  assert.doesNotMatch(englishHelp, /manual input all remain subject to the same safety classification/)
+  assert.doesNotMatch(englishHelp, /Before a supported one-line change is sent/)
 })
 
 test('architecture document records states, support boundaries, performance and recovery', () => {

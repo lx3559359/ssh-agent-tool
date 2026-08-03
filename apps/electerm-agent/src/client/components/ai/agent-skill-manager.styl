@@ -4,6 +4,14 @@
   max-height min(76vh, 780px)
   overflow-y auto
 
+  .ant-btn,
+  .ant-input,
+  .ant-input-affix-wrapper,
+  .ant-select-selector,
+  textarea
+    border-radius var(--sp-radius-control) !important
+    box-shadow var(--sp-shadow-sm)
+
 .agent-skill-manager-actions
   position sticky
   top 0
@@ -11,6 +19,8 @@
   width 100%
   padding 8px 0 12px
   background var(--main-light)
+  border-radius var(--sp-radius-toolbar)
+  box-shadow var(--sp-shadow-md)
 
 .agent-skill-manager-body
   display grid
@@ -23,12 +33,15 @@
   max-height 65vh
   overflow-y auto
   border 1px solid var(--border)
-  border-radius 6px
+  border-radius var(--sp-radius-panel)
   padding 8px
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-lg)
 
   .ant-list-item
     cursor pointer
     padding 10px 8px
+    border-radius var(--sp-radius-small)
+    box-shadow none
 
     &.is-selected
       background var(--sp-primary-soft)
@@ -46,8 +59,9 @@
   max-height 65vh
   overflow auto
   border 1px solid var(--border)
-  border-radius 6px
+  border-radius var(--sp-radius-panel)
   padding 10px
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-lg)
 
 .agent-skill-editor-toolbar
   width 100%
@@ -71,7 +85,8 @@
   margin-bottom 10px
   padding 8px
   border 1px solid var(--border)
-  border-radius 6px
+  border-radius var(--sp-radius-card)
+  box-shadow var(--sp-shadow-md)
 
 .agent-skill-create-message
   margin-bottom 6px
@@ -94,7 +109,9 @@
   padding 14px 16px
   margin-bottom 10px
   border-left 3px solid var(--primary)
+  border-radius var(--sp-radius-card)
   background var(--main-light)
+  box-shadow var(--sp-shadow-md)
 
   .ant-typography
     margin-bottom 0

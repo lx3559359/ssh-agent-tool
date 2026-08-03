@@ -1,5 +1,6 @@
 import InputNumberConfirm from '../common/input-number-confirm'
 import { isNumber, isNaN } from 'lodash-es'
+import { useId } from 'react'
 
 export default function NumberConfig ({
   min,
@@ -13,6 +14,11 @@ export default function NumberConfig ({
   extraDesc,
   width = 136
 }) {
+  const generatedId = useId().replace(/:/g, '')
+  const helpId = title || extraDesc
+    ? `setting-number-${generatedId}-help`
+    : undefined
+  const description = [title, extraDesc].filter(Boolean).join(' · ')
   const opts = {
     step,
     value,
@@ -22,7 +28,7 @@ export default function NumberConfig ({
     placeholder: defaultValue
   }
   if (title) {
-    opts.formatter = v => `${title}${extraDesc || ''}: ${v}`
+    opts.formatter = v => `${description}: ${v}`
     opts.parser = (v) => {
       let vv = isNumber(v)
         ? v
@@ -40,7 +46,15 @@ export default function NumberConfig ({
     <div className={`pd2b ${cls || ''}`}>
       <InputNumberConfirm
         {...opts}
+        aria-describedby={helpId}
+        aria-label={title}
+        aria-valuemax={max}
+        aria-valuemin={min}
+        aria-valuenow={value}
       />
+      {helpId
+        ? <small className='setting-number-help' id={helpId}>{description}</small>
+        : null}
     </div>
   )
 }

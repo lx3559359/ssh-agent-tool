@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Alert, Button, Input, Modal, Segmented, message } from 'antd'
 import {
+  DeleteOutlined,
   DownloadOutlined,
   FolderOpenOutlined,
   FileTextOutlined,
@@ -115,6 +116,17 @@ export default function ArtifactPreview ({ artifact, store }) {
     }
   }
 
+  const deleteArtifact = () => {
+    Modal.confirm({
+      title: e('shellpilotArtifactDeleteConfirm'),
+      content: e('shellpilotArtifactDeleteLocalOnly'),
+      okText: e('delete'),
+      cancelText: e('cancel'),
+      okButtonProps: { danger: true },
+      onOk: () => store.deleteArtifact(artifact.id)
+    })
+  }
+
   if (!artifact) {
     return (
       <section className='artifact-preview artifact-preview-empty'>
@@ -163,6 +175,14 @@ export default function ArtifactPreview ({ artifact, store }) {
             onClick={openUploadDialog}
           >
             {e('shellpilotArtifactUploadServer')}
+          </Button>
+          <Button
+            danger
+            icon={<DeleteOutlined />}
+            disabled={saving || uploading}
+            onClick={deleteArtifact}
+          >
+            {e('delete')}
           </Button>
         </div>
       </header>

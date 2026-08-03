@@ -94,7 +94,7 @@ test('selected-file analysis helper carries terminal and byte truncation context
   assert.match(result.prompt, /仅安全读取前 4096 字节/)
 })
 
-test('AI chat selected-file flows use the complete analysis prompt helper', () => {
+test('AI chat selected-file flows use bounded unified attachments', () => {
   const source = fs.readFileSync(
     path.join(root, 'src/client/components/ai/ai-chat.jsx'),
     'utf8'
@@ -108,10 +108,9 @@ test('AI chat selected-file flows use the complete analysis prompt helper', () =
     source.indexOf('function handleQuoteMcpServers')
   )
 
-  assert.match(source, /buildSelectedSftpFileAnalysisPrompt/)
-  assert.match(submitSource, /buildSelectedSftpFileAnalysisPrompt/)
-  assert.match(submitSource, /termRef:\s*getActiveTerminalRef/)
-  assert.match(quoteSource, /buildSelectedSftpFileAnalysisPrompt/)
-  assert.match(quoteSource, /termRef:\s*getActiveTerminalRef/)
-  assert.doesNotMatch(quoteSource, /buildSftpFileContextPrompt/)
+  assert.match(source, /createSftpFileAttachments/)
+  assert.match(submitSource, /buildAttachmentAIContent/)
+  assert.match(submitSource, /getSingleSftpAttachment/)
+  assert.match(quoteSource, /appendAttachments\(\[selected\.attachment\]\)/)
+  assert.doesNotMatch(quoteSource, /readFile|readFilePreview/)
 })

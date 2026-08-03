@@ -1295,6 +1295,36 @@ test('SFTP adapter rejects forged ids before constructing a transaction director
   }
 })
 
+test('SFTP adapter can resolve its connection asynchronously', async () => {
+  const { createSftpTransactionAdapter } = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/components/sftp/sftp-transaction-adapter.js'
+  )).href)
+  const sftp = createFakeSftp({
+    '/srv/app/data.txt': { type: 'file', content: 'data' }
+  })
+  let resolveCount = 0
+  const adapter = createSftpTransactionAdapter({
+    getSftp: async () => {
+      resolveCount += 1
+      return sftp
+    }
+  })
+  const operation = await buildSftpOperation({
+    id: 'adapter-async-connection',
+    action: 'delete',
+    paths: { source: '/srv/app/data.txt' },
+    type: 'file',
+    expected: { absent: true }
+  })
+
+  const prepared = await adapter.prepare(operation)
+
+  assert.equal(prepared.plan.action, 'delete')
+  assert.equal(resolveCount, 1)
+  assert.equal(sftp.calls.some(call => call[0] === 'writeFile'), true)
+})
+
 async function runExternalSftpTransfer ({ operation, sftp, mutate }) {
   const context = await createRealSftpTransactionRunner(operation, sftp)
   await context.runner.prepare(operation)
@@ -1679,6 +1709,56 @@ test('SFTP adapter snapshots and verifies editor saves with bounded chunk reads'
   await adapter.verifyRollback(operation)
   assert.equal(sftp.text('/srv/app/config.json'), oldText)
   assert.equal(sftp.text(prepared.artifacts.target), oldText)
+})
+
+test('SFTP adapter validates every prepared editor save before batch execution', async () => {
+  const {
+    createSftpTransactionAdapter,
+    digestSftpText
+  } = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/components/sftp/sftp-transaction-adapter.js'
+  )).href)
+  const sftp = createFakeSftp({
+    '/srv/app/a.conf': {
+      type: 'file',
+      content: 'a=1\n',
+      mode: 0o640
+    },
+    '/srv/app/b.conf': {
+      type: 'file',
+      content: 'b=1\n',
+      mode: 0o640
+    }
+  })
+  const adapter = createSftpTransactionAdapter({ getSftp: () => sftp })
+  const operations = []
+  for (const [id, target, text] of [
+    ['validate-a', '/srv/app/a.conf', 'a=2\n'],
+    ['validate-b', '/srv/app/b.conf', 'b=2\n']
+  ]) {
+    const operation = await buildSftpOperation({
+      id,
+      action: 'editor-save',
+      paths: { target },
+      type: 'file',
+      requestedMode: 0o640,
+      expected: await digestSftpText(text)
+    })
+    Object.assign(operation, await adapter.prepare(operation))
+    operations.push(operation)
+  }
+
+  assert.deepEqual(await adapter.validatePrepared(operations[0]), {
+    verified: true
+  })
+  await sftp.writeFile('/srv/app/b.conf', 'external-change\n', 0o640)
+  await assert.rejects(
+    adapter.validatePrepared(operations[1]),
+    /changed|external|original|变化|未执行/i
+  )
+  assert.equal(sftp.text('/srv/app/a.conf'), 'a=1\n')
+  assert.equal(sftp.text('/srv/app/b.conf'), 'external-change\n')
 })
 
 test('SFTP adapter forwards lifecycle AbortSignal to snapshot copy and recursive delete', async () => {
@@ -2170,6 +2250,23 @@ test('SFTP adapter snapshots both rename paths and blocks cross-filesystem or sp
     getSftp: () => noDeviceIds
   })
   await sameDirectoryAdapter.prepare(sameDirectoryOperation)
+
+  const noDeviceIdsAcrossDirectories = createFakeSftp({
+    '/srv/app/source.txt': { type: 'file', content: 'source' },
+    '/srv/app/archive': { type: 'directory' }
+  }, { omitDev: true })
+  const acrossDirectoriesOperation = await buildSftpOperation({
+    id: 'adapter-rename-no-device-id-across-directories',
+    action: 'rename',
+    paths: {
+      source: '/srv/app/source.txt',
+      target: '/srv/app/archive/source.txt'
+    },
+    type: 'file'
+  })
+  await createSftpTransactionAdapter({
+    getSftp: () => noDeviceIdsAcrossDirectories
+  }).prepare(acrossDirectoriesOperation)
 })
 
 test('SFTP adapter snapshots and restores complete delete trees', async () => {
@@ -2447,6 +2544,7 @@ test('SFTP UI routes editor save chmod rename and delete through modern transact
   ]) {
     assert.match(entrySource, new RegExp(method))
   }
+  assert.match(entrySource, /getSftp:\s*\(\)\s*=>\s*this\.sftp/)
 })
 
 test('safety center routes modern SFTP records to SFTP capability and summarizes effects', async () => {

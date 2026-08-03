@@ -36,7 +36,15 @@ export default Store => {
     window.store.pauseAllTransfer = true
     const len = fileTransfers.length
     for (let i = 0; i < len; i++) {
-      fileTransfers[i].pausing = true
+      const transfer = fileTransfers[i]
+      if (
+        transfer.inited &&
+        !['paused', 'pausing', 'resuming'].includes(transfer.status)
+      ) {
+        transfer.pausing = true
+        transfer.paused = false
+        transfer.status = 'pausing'
+      }
     }
   }
 
@@ -45,7 +53,12 @@ export default Store => {
     window.store.pauseAllTransfer = false
     const len = fileTransfers.length
     for (let i = 0; i < len; i++) {
-      fileTransfers[i].pausing = false
+      const transfer = fileTransfers[i]
+      if (transfer.status === 'paused' || transfer.paused) {
+        transfer.pausing = false
+        transfer.paused = false
+        transfer.status = 'resuming'
+      }
     }
   }
 

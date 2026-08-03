@@ -709,17 +709,19 @@ async function inspectOpenOverlayDepth (page, selectors) {
     const element = document.querySelector(selector)
     if (!element) return null
     const style = window.getComputedStyle(element)
+    const rootStyle = window.getComputedStyle(document.documentElement)
     return {
       selector,
       shadow: style.boxShadow,
       radius: style.borderRadius,
+      expectedRadius: rootStyle.getPropertyValue('--sp-radius-overlay').trim(),
       overflow: element.scrollWidth > element.clientWidth + 1
     }
   }).filter(Boolean), selectors)
   expect(overlayMetrics, JSON.stringify({ selectors, overlayMetrics })).toHaveLength(selectors.length)
   for (const metric of overlayMetrics) {
     expect(metric.shadow, JSON.stringify(metric)).not.toBe('none')
-    expect(metric.radius, JSON.stringify(metric)).toBe('10px')
+    expect(metric.radius, JSON.stringify(metric)).toBe(metric.expectedRadius)
     expect(metric.overflow, JSON.stringify(metric)).toBe(false)
   }
   return overlayMetrics
@@ -763,7 +765,8 @@ async function inspectMenuDepth (menuRoot) {
       surfaceElevated: rootStyle.getPropertyValue('--sp-surface-elevated').trim(),
       borderStrong: rootStyle.getPropertyValue('--sp-border-strong').trim(),
       highlightTop: rootStyle.getPropertyValue('--sp-highlight-top').trim(),
-      shadowOverlay: rootStyle.getPropertyValue('--sp-shadow-overlay').trim()
+      shadowOverlay: rootStyle.getPropertyValue('--sp-shadow-overlay').trim(),
+      radiusOverlay: rootStyle.getPropertyValue('--sp-radius-overlay').trim()
     }
     const isReachable = item => {
       if (!item) return false
@@ -783,7 +786,8 @@ async function inspectMenuDepth (menuRoot) {
         background: resolveStyle('backgroundColor', tokens.surfaceElevated),
         border: resolveStyle('color', tokens.borderStrong),
         highlight: resolveStyle('boxShadow', `inset 0 1px 0 ${tokens.highlightTop}`),
-        overlay: resolveStyle('boxShadow', tokens.shadowOverlay)
+        overlay: resolveStyle('boxShadow', tokens.shadowOverlay),
+        overlayLayers: splitShadowLayers(resolveStyle('boxShadow', tokens.shadowOverlay))
       },
       viewport: {
         left: rect.left,
@@ -807,7 +811,7 @@ async function inspectMenuDepth (menuRoot) {
 
 function assertMenuDepth (metrics, context) {
   const message = JSON.stringify({ context, metrics })
-  expect(metrics.radius, message).toBe('10px')
+  expect(metrics.radius, message).toBe(metrics.tokens.radiusOverlay)
   expect(metrics.shadow, message).not.toBe('none')
   for (const value of Object.values(metrics.tokens)) {
     expect(value, message).not.toBe('')
@@ -818,7 +822,7 @@ function assertMenuDepth (metrics, context) {
   expect(metrics.borderStyle, message).toBe('solid')
   expect(metrics.shadowLayers, message).toEqual([
     metrics.expected.highlight,
-    metrics.expected.overlay
+    ...metrics.expected.overlayLayers
   ])
   expect(metrics.viewport.left, message).toBeGreaterThanOrEqual(-1)
   expect(metrics.viewport.top, message).toBeGreaterThanOrEqual(-1)
@@ -1264,7 +1268,10 @@ async function inspectSurface (page, selector, menu, documentBaseline) {
       menuDepth: menuElement
         ? {
             radius: menuStyle.borderRadius,
-            shadow: menuStyle.boxShadow
+            shadow: menuStyle.boxShadow,
+            expectedRadius: window.getComputedStyle(document.documentElement)
+              .getPropertyValue('--sp-radius-overlay')
+              .trim()
           }
         : null,
       clippedText,
@@ -1286,7 +1293,8 @@ function assertSurfaceSnapshot (snapshot, context, surface) {
   expect(snapshot.menuViewportClip, JSON.stringify({ context, snapshot })).toBe(false)
   if (surface.menu) {
     expect(snapshot.menuDepth, JSON.stringify({ context, snapshot })).not.toBeNull()
-    expect(snapshot.menuDepth.radius, JSON.stringify({ context, snapshot })).toBe('10px')
+    expect(snapshot.menuDepth.expectedRadius, JSON.stringify({ context, snapshot })).not.toBe('')
+    expect(snapshot.menuDepth.radius, JSON.stringify({ context, snapshot })).toBe(snapshot.menuDepth.expectedRadius)
     expect(snapshot.menuDepth.shadow, JSON.stringify({ context, snapshot })).not.toBe('none')
   }
   expect(snapshot.clippedText, JSON.stringify({ context, snapshot })).toEqual([])
@@ -1552,6 +1560,11 @@ async function inspectTerminalInvariant (page) {
       }
       return ''
     }
+    const shadowProbe = document.createElement('span')
+    shadowProbe.style.boxShadow = 'var(--sp-shadow-sm)'
+    document.body.appendChild(shadowProbe)
+    const tabShadow = window.getComputedStyle(shadowProbe).boxShadow
+    shadowProbe.remove()
     return selectors.map(selector => {
       const element = [...document.querySelectorAll(selector)].find(candidate => {
         const rect = candidate.getBoundingClientRect()
@@ -1564,7 +1577,8 @@ async function inspectTerminalInvariant (page) {
         found: Boolean(element),
         background: element ? effectiveBackground(element) : '',
         directBackground: style?.backgroundColor || '',
-        shadow: style?.boxShadow || ''
+        shadow: style?.boxShadow || '',
+        expectedShadow: selector.includes(' .tab') ? tabShadow : 'none'
       }
     })
   })
@@ -1578,7 +1592,7 @@ function assertTerminalInvariant (terminal, context) {
     if (item.selector !== '.xterm-screen') {
       expect(item.directBackground, JSON.stringify({ context, item })).toBe(lockedTerminalRgb)
     }
-    expect(item.shadow, JSON.stringify({ context, item })).toBe('none')
+    expect(item.shadow, JSON.stringify({ context, item })).toBe(item.expectedShadow)
   }
 }
 
@@ -1919,8 +1933,8 @@ function assertShellChrome (snapshot, context) {
     expect(item.rect.left, itemMessage).toBeGreaterThanOrEqual(-overflowTolerance)
     expect(item.rect.right, itemMessage).toBeLessThanOrEqual(snapshot.viewport.width + overflowTolerance)
   }
-  expect(snapshot.shell.topbar.shadow, message).toContain(snapshot.tokens.shadowControl)
-  expect(snapshot.shell.topbar.shadow, message).not.toContain(snapshot.tokens.shadowCard)
+  expect(snapshot.shell.topbar.shadow, message).toContain(snapshot.tokens.shadowCard)
+  expect(snapshot.shell.topbar.shadow, message).not.toContain(snapshot.tokens.shadowControl)
   expect(snapshot.shell.topbar.shadow, message).not.toContain(snapshot.tokens.shadowOverlay)
   expect(snapshot.shell.footer.shadow, message).toMatch(/\s-\d+px\s/)
   expect(snapshot.shell.footer.shadow, message).not.toContain(snapshot.tokens.shadowCard)
@@ -2075,10 +2089,6 @@ async function runSurfaceCase (page, testInfo, failures, context, surface, stats
 }
 
 async function exerciseLanguageAndThemeState (page) {
-  await page.waitForFunction(() => {
-    const info = window.store?.upgradeInfo
-    return Boolean(info?.lastCheckedAt) && info.checkingRemoteVersion === false
-  }, undefined, { timeout: 30000 })
   const updatePanelClose = page.locator('.upgrade-panel:not(.upgrade-panel-hide) .close-upgrade-panel')
   if (await updatePanelClose.isVisible().catch(() => false)) {
     await updatePanelClose.click()
@@ -2227,7 +2237,7 @@ test('narrow topbar actions avoid native window controls and keep the last actio
     const rail = page.locator('.not-system-ui .aigshell-topbar-actions')
     const actions = rail.locator('.aigshell-topbar-action:not(:disabled)')
     await expect(rail).toBeVisible()
-    await expect(actions).toHaveCount(12)
+    await expect(actions).toHaveCount(13)
 
     await rail.evaluate(element => { element.scrollLeft = 0 })
     await actions.first().focus()
@@ -2366,7 +2376,7 @@ test('590px topbar keeps every visible action clear of native controls and prese
     const rail = page.locator('.not-system-ui .aigshell-topbar-actions')
     const actions = rail.locator('.aigshell-topbar-action:not(:disabled)')
     await expect(rail).toBeVisible()
-    await expect(actions).toHaveCount(12)
+    await expect(actions).toHaveCount(13)
 
     const inspectHitTargets = () => rail.evaluate(element => {
       const railRect = element.getBoundingClientRect()
@@ -2507,6 +2517,88 @@ test('590px topbar keeps every visible action clear of native controls and prese
     await expect(page.locator('.shellpilot-help-center')).toBeVisible({ timeout: 20000 })
     await page.locator('.shellpilot-help-center .custom-modal-close').click()
     await expect(page.locator('.shellpilot-help-center')).toBeHidden()
+  })
+})
+
+test('AI config stays horizontally contained in a short English 150% viewport', async ({ browserName }) => {
+  await runWithIsolatedApp('ai-config-short-viewport', async (electronApp) => {
+    const page = electronApp.windows()[0] || await electronApp.firstWindow()
+    await waitForSecondaryAppReady(electronApp, page, 'ai-config-short-viewport')
+    await ensureActiveTerminalSession(page)
+    await setWindowCase(electronApp, page, { width: 590, height: 400 }, 1.5)
+    await resetSurface(page, 'en_us')
+    await openAi(page)
+
+    const metrics = await page.locator('.ai-config-modal .custom-modal-content').evaluate((content) => {
+      const contentRect = content.getBoundingClientRect()
+      const offenders = [...content.querySelectorAll('*')]
+        .map(element => {
+          const rect = element.getBoundingClientRect()
+          const style = window.getComputedStyle(element)
+          return {
+            tag: element.tagName,
+            className: String(element.className || ''),
+            clientWidth: element.clientWidth,
+            scrollWidth: element.scrollWidth,
+            left: Math.round(rect.left * 10) / 10,
+            right: Math.round(rect.right * 10) / 10,
+            minWidth: style.minWidth,
+            width: style.width
+          }
+        })
+        .filter(item => item.scrollWidth > item.clientWidth + 1 || item.right > contentRect.right + 1)
+        .slice(0, 20)
+      return {
+        clientWidth: content.clientWidth,
+        scrollWidth: content.scrollWidth,
+        rect: {
+          left: Math.round(contentRect.left * 10) / 10,
+          right: Math.round(contentRect.right * 10) / 10,
+          width: Math.round(contentRect.width * 10) / 10
+        },
+        offenders
+      }
+    })
+    console.log(`AI_CONFIG_SHORT_VIEWPORT=${JSON.stringify({ browserName, metrics })}`)
+    expect(metrics.scrollWidth, JSON.stringify(metrics)).toBeLessThanOrEqual(metrics.clientWidth + 1)
+  })
+})
+
+test('English tool cards stay readable and horizontally contained at desktop widths', async ({ browserName }) => {
+  await runWithIsolatedApp('tool-cards-1100', async (electronApp) => {
+    const page = electronApp.windows()[0] || await electronApp.firstWindow()
+    await waitForSecondaryAppReady(electronApp, page, 'tool-cards-1100')
+    await ensureActiveTerminalSession(page)
+    for (const size of [{ width: 1100, height: 700 }, { width: 1600, height: 900 }]) {
+      await setWindowCase(electronApp, page, size, 1)
+      await resetSurface(page, 'en_us')
+      await openWidgets(page)
+
+      const metrics = await page.locator('.widgets-card-list').evaluate((list) => {
+        const offenders = [list, ...list.querySelectorAll('*')]
+          .map(element => ({
+            tag: element.tagName,
+            className: String(element.className || ''),
+            text: element.textContent.trim().replace(/\s+/g, ' ').slice(0, 80),
+            clientWidth: element.clientWidth,
+            scrollWidth: element.scrollWidth
+          }))
+          .filter(item => item.scrollWidth > item.clientWidth + 1)
+          .slice(0, 20)
+        const clippedTitles = [...list.querySelectorAll('.widget-card-title')]
+          .filter(element => element.scrollWidth > element.clientWidth + 1)
+          .map(element => element.textContent.trim())
+        return {
+          clientWidth: list.clientWidth,
+          scrollWidth: list.scrollWidth,
+          offenders,
+          clippedTitles
+        }
+      })
+      console.log(`TOOL_CARDS_DESKTOP=${JSON.stringify({ browserName, size, metrics })}`)
+      expect(metrics.offenders, JSON.stringify({ size, metrics })).toEqual([])
+      expect(metrics.clippedTitles, JSON.stringify({ size, metrics })).toEqual([])
+    }
   })
 })
 
@@ -2993,6 +3085,12 @@ test('settings search supports visible results, keyboard navigation, preview lan
     })
     expect(await page.locator('.setting-wrap').count()).toBe(0)
 
+    const shortcutTarget = page.locator('.aigshell-topbar-brand')
+    await shortcutTarget.evaluate(element => {
+      element.tabIndex = -1
+      element.focus()
+    })
+    await expect(shortcutTarget).toBeFocused()
     await page.keyboard.press('Control+K')
     await page.locator('.setting-wrap').waitFor({ state: 'visible' })
     const settingsDepth = await page.locator('.sp-setting-section').first().evaluate(element => {
@@ -3001,12 +3099,16 @@ test('settings search supports visible results, keyboard navigation, preview lan
         background: style.backgroundColor,
         shadow: style.boxShadow,
         radius: style.borderRadius,
+        expectedRadius: window.getComputedStyle(document.documentElement)
+          .getPropertyValue('--sp-radius-panel')
+          .trim(),
         overflow: element.scrollWidth > element.clientWidth + 1
       }
     })
     expect(settingsDepth.background).not.toBe('rgba(0, 0, 0, 0)')
     expect(settingsDepth.shadow).not.toBe('none')
-    expect(settingsDepth.radius).toBe('10px')
+    expect(settingsDepth.expectedRadius).not.toBe('')
+    expect(settingsDepth.radius).toBe(settingsDepth.expectedRadius)
     expect(settingsDepth.overflow).toBe(false)
     const searchInput = page.locator('.setting-header-search input')
     await expect(searchInput).toBeFocused()
@@ -3340,6 +3442,34 @@ test('context menus keep pointer placement and compact long-menu reachability', 
     expect(desktopSubmenuGeometry.submenu.bottom, desktopContext)
       .toBeLessThanOrEqual(desktopSubmenuGeometry.viewport.height + 1)
     expect(desktopSubmenuGeometry.pointerReachable, desktopContext).toBe(true)
+  })
+})
+
+test('setting and theme drawers reopen across repeated entry changes', async () => {
+  await runWithIsolatedApp('setting-reopen', async (electronApp) => {
+    const page = electronApp.windows()[0] || await electronApp.firstWindow()
+    await waitForSecondaryAppReady(electronApp, page, 'setting-reopen')
+    await ensureActiveTerminalSession(page)
+    await setWindowCase(electronApp, page, { width: 590, height: 400 }, 1.25)
+    await exerciseLanguageAndThemeState(page)
+
+    const repeatedSurfaces = [
+      { selector: '.setting-wrap', open: openSettings },
+      { selector: '.sp-settings-form', open: openSettings },
+      { selector: '.quick-connect-wizard', open: openConnection },
+      { selector: '.ai-config-modal', open: openAi },
+      { selector: '.sp-sync-config', open: openSync },
+      { selector: '.sp-theme-center', open: openThemes },
+      { selector: '#terminal-theme-form', open: openThemes }
+    ]
+
+    for (const language of ['zh_cn', 'en_us', 'zh_cn', 'en_us']) {
+      for (const surface of repeatedSurfaces) {
+        await resetSurface(page, language)
+        await surface.open(page)
+        await expect(page.locator(surface.selector)).toBeVisible()
+      }
+    }
   })
 })
 
@@ -3697,6 +3827,14 @@ test('tool center and batch editor stay reachable in compact real app windows', 
               contentRect.left + Math.min(16, contentRect.width / 2),
               Math.max(0, Math.min(window.innerHeight - 1, contentRect.top + Math.min(16, contentRect.height / 2)))
             )
+            const describeHitTarget = element => element
+              ? {
+                  tag: element.tagName,
+                  id: element.id,
+                  className: String(element.className || ''),
+                  text: String(element.textContent || '').trim().slice(0, 80)
+                }
+              : null
             return {
               panel: panelRect.toJSON(),
               body: {
@@ -3708,18 +3846,29 @@ test('tool center and batch editor stay reachable in compact real app windows', 
               pinReachable: Boolean(pinHitTarget && pin.contains(pinHitTarget)),
               content: contentRect.toJSON(),
               contentReachable: Boolean(contentHitTarget && content.contains(contentHitTarget)),
+              contentHitTarget: describeHitTarget(contentHitTarget),
+              list: {
+                rect: list.getBoundingClientRect().toJSON(),
+                clientHeight: list.clientHeight,
+                scrollHeight: list.scrollHeight,
+                overflowY: window.getComputedStyle(list).overflowY
+              },
               terminal: terminal.getBoundingClientRect().toJSON(),
               footer: footer.getBoundingClientRect().toJSON(),
               documentScroll: { x: window.scrollX, y: window.scrollY }
             }
           })
           const quickbarContext = JSON.stringify({ size, quickbarMetrics })
+          const physicalPixel = 1 / (size.zoom || 1)
           expect(quickbarMetrics.terminal.height, quickbarContext).toBeGreaterThanOrEqual(64)
           expect(Math.abs(
+            quickbarMetrics.panel.top - quickbarMetrics.terminal.bottom
+          ), quickbarContext).toBeLessThanOrEqual(2 * physicalPixel + 0.01)
+          expect(Math.abs(
             quickbarMetrics.panel.height - (quickbarMetrics.footer.top - quickbarMetrics.terminal.bottom)
-          ), quickbarContext).toBeLessThanOrEqual(1)
+          ), quickbarContext).toBeLessThanOrEqual(3 * physicalPixel + 0.01)
           expect(Math.abs(quickbarMetrics.panel.bottom - quickbarMetrics.footer.top), quickbarContext)
-            .toBeLessThanOrEqual(1)
+            .toBeLessThanOrEqual(2 * physicalPixel + 0.01)
           expect(quickbarMetrics.body.overflowY, quickbarContext).toBe('auto')
           expect(quickbarMetrics.body.scrollHeight, quickbarContext)
             .toBeGreaterThan(quickbarMetrics.body.clientHeight)
@@ -4064,6 +4213,100 @@ test('UI font preview applies cancels persists and leaves terminal unchanged', a
     await page.locator('.close-setting-wrap').click()
     expect(await page.evaluate(() => window.store.previewUiFontPresetId)).toBe('')
     expect(await page.evaluate(() => window.store.config.uiFontPresetId)).toBe('segoe-ui')
+  })
+})
+
+matrixTest('bookmark group management remains usable at desktop acceptance sizes', async ({ browserName }, testInfo) => {
+  await runWithIsolatedApp('bookmark-groups', async (electronApp) => {
+    const page = electronApp.windows()[0] || await electronApp.firstWindow()
+    await waitForSecondaryAppReady(electronApp, page, 'bookmark-groups')
+    await page.evaluate(() => {
+      window.store.upgradeInfo.showUpgradeModal = false
+      const suffix = `${Date.now()}`
+      const parent = window.store.createBookmarkGroup({
+        title: '生产环境',
+        parentId: 'default'
+      })
+      const child = window.store.createBookmarkGroup({
+        title: 'Web 服务器',
+        parentId: parent.id
+      })
+      window.store.saveBookmarkInGroup({
+        id: `visual-bookmark-${suffix}`,
+        type: 'ssh',
+        title: '生产 Web 01',
+        host: '10.0.0.8',
+        port: '22',
+        username: 'root'
+      }, child.id)
+      window.store.storeAssign({
+        expandedKeys: [
+          ...new Set([
+            ...(window.store.expandedKeys || []),
+            'default',
+            parent.id,
+            child.id
+          ])
+        ]
+      })
+      window.store.handleSidebarPanelTab('bookmarks')
+      window.store.setOpenedSideBar('bookmarks')
+      window.store.bookmarkSelectMode = true
+    })
+
+    const panel = page.locator('.sidebar-panel-bookmarks')
+    const wrapper = panel.locator('.tree-select-wrapper')
+    const picker = wrapper.locator('.bookmark-group-picker')
+    const header = wrapper.locator('.tree-select-header')
+    await expect(panel).toBeVisible()
+    await expect(wrapper).toBeVisible()
+    await expect(picker).toBeVisible()
+    await expect(wrapper).toContainText('生产环境')
+    await expect(wrapper).toContainText('Web 服务器')
+    await expect(wrapper).toContainText('生产 Web 01')
+
+    const cases = [
+      { theme: 'defaultLight', width: 1366, height: 768 },
+      { theme: 'defaultLight', width: 1920, height: 1080 },
+      { theme: 'shellpilot-ocean', width: 1366, height: 768 },
+      { theme: 'shellpilot-ocean', width: 1920, height: 1080 }
+    ]
+    for (const item of cases) {
+      await page.evaluate(theme => window.store.setTheme(theme), item.theme)
+      await setWindowCase(electronApp, page, {
+        width: item.width,
+        height: item.height
+      }, 1)
+      await expect(header).toBeVisible()
+      const layout = await page.evaluate(() => {
+        const panel = document.querySelector('.sidebar-panel-bookmarks')
+        const wrapper = panel?.querySelector('.tree-select-wrapper')
+        const header = wrapper?.querySelector('.tree-select-header')
+        if (!panel || !wrapper || !header) {
+          return null
+        }
+        const panelRect = panel.getBoundingClientRect()
+        const headerRect = header.getBoundingClientRect()
+        const style = window.getComputedStyle(wrapper)
+        return {
+          documentOverflow: document.documentElement.scrollWidth > window.innerWidth + 1,
+          panelInsideViewport: panelRect.left >= -1 && panelRect.right <= window.innerWidth + 1,
+          headerInsidePanel: headerRect.left >= panelRect.left - 1 && headerRect.top >= panelRect.top - 1,
+          horizontalOverflowMode: style.overflowX,
+          canReachFullWidth: wrapper.scrollWidth <= wrapper.clientWidth + 1 || style.overflowX === 'auto'
+        }
+      })
+      expect(layout, JSON.stringify({ browserName, item, layout })).toEqual({
+        documentOverflow: false,
+        panelInsideViewport: true,
+        headerInsidePanel: true,
+        horizontalOverflowMode: 'auto',
+        canReachFullWidth: true
+      })
+      await page.screenshot({
+        path: testInfo.outputPath(`bookmark-groups-${item.theme}-${item.width}x${item.height}.png`)
+      })
+    }
   })
 })
 

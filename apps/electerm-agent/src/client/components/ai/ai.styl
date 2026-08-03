@@ -4,24 +4,30 @@
   flex-direction column
 
 .ai-chat-unconfigured
-  gap 10px
+  gap 8px
   min-height 0
-  padding 32px 20px
+  padding 24px 20px
   color var(--text-dark)
   text-align center
+  .ant-btn
+    margin-top 4px
+
+.ai-chat-unconfigured-status
+  display flex
+  align-items center
+  flex-direction column
+  gap 8px
   > strong
     color var(--text-light)
     font-size 15px
   > span
-    max-width 280px
+    max-width 260px
     font-size 12px
     line-height 1.65
-  .ant-btn
-    margin-top 4px
 
 .ai-chat-unconfigured-icon
   color var(--primary)
-  font-size 28px
+  font-size 24px
 
 .ai-chat-history
   flex 1 1 auto
@@ -50,7 +56,7 @@
   padding 10px 8px 4px
   .ant-btn
     max-width calc(100% - 16px)
-    border-radius 6px
+    border-radius var(--sp-radius-control)
 .ai-history-back-to-latest
   position absolute
   z-index 3
@@ -68,7 +74,7 @@
   height 18px
   margin-left 6px
   padding 0 5px
-  border-radius 9px
+  border-radius 999px
   background rgba(255, 255, 255, 0.2)
   color inherit
   font-size 11px
@@ -80,6 +86,11 @@
   position relative
   content-visibility auto
   contain-intrinsic-size auto 220px
+  > .mg1y .ant-alert
+    border 1px solid var(--sp-border)
+    border-radius var(--sp-radius-toolbar)
+    background var(--sp-surface-elevated)
+    box-shadow var(--sp-shadow-sm)
   > .ai-stop-icon-square
     position absolute
     bottom 8px
@@ -88,7 +99,7 @@
   .code-block
     border 1px dashed var(--main-darker)
     padding 5px
-    border-radius 3px
+    border-radius var(--sp-radius-small)
     pre
       margin-bottom 0
     // .code-block-actions
@@ -129,9 +140,9 @@
   align-items center
   gap 6px
   color var(--text)
-  background var(--main-light)
-  border 1px solid var(--main-darker)
-  border-radius 6px
+  background var(--sp-surface-soft)
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-control)
   cursor pointer
   > span
     max-width 210px
@@ -156,9 +167,10 @@
 
   .ant-input
     padding 10px 44px 34px 10px
-    border-color var(--main-darker)
-    border-radius 8px
-    background var(--main-light)
+    border-color var(--sp-border)
+    border-radius var(--sp-radius-control)
+    background var(--sp-surface-elevated)
+    box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
     color var(--text)
     resize none
   .ai-chat-terminals > .ant-flex:first-child
@@ -192,9 +204,9 @@
   gap 4px
   height 24px
   padding 0 8px
-  border 1px solid var(--main-darker)
-  border-radius 6px
-  background var(--main-light)
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-control)
+  background var(--sp-surface-soft)
   color var(--text)
   font-size 12px
   line-height 22px
@@ -220,9 +232,9 @@
   max-width 100%
   height 24px
   padding 0 7px
-  border 1px solid var(--main-darker)
-  border-radius 6px
-  background var(--main-light)
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-control)
+  background var(--sp-surface-soft)
   color var(--text)
   font-size 12px
   cursor default
@@ -246,7 +258,8 @@
   height 24px
   padding 0 8px
   border 1px solid var(--primary)
-  border-radius 6px
+  border-radius var(--sp-radius-control)
+  box-shadow var(--sp-shadow-sm)
   background var(--main)
   color var(--primary)
   font-size 12px
@@ -307,7 +320,8 @@
   gap 5px
   padding 2px 7px
   border 1px solid var(--main-darker)
-  border-radius 6px
+  border-radius var(--sp-radius-control)
+  box-shadow var(--sp-shadow-sm)
   background var(--main)
   color var(--text)
   font-size 11px
@@ -388,8 +402,9 @@
   margin 12px 0
   padding 12px
   border 1px solid var(--main-darker)
-  border-radius 7px
+  border-radius var(--sp-radius-card)
   background var(--main-light)
+  box-shadow var(--sp-shadow-md)
   dt
     color var(--text-dark)
   dd
@@ -414,9 +429,10 @@
 .agent-risk-warning
   padding 10px 12px
   border 1px solid #ff7875
-  border-radius 6px
+  border-radius var(--sp-radius-card)
   color #cf1322
   background rgba(255, 77, 79, .08)
+  box-shadow var(--sp-shadow-md)
 
 .agent-risk-details
   display grid
@@ -440,7 +456,7 @@
     overflow auto
     white-space pre-wrap
     word-break break-all
-    border-radius 4px
+    border-radius var(--sp-radius-small)
     background var(--main-dark)
 
 @media (max-width: 780px)
@@ -480,7 +496,8 @@
   justify-content center
   width 28px
   height 28px
-  border-radius 7px
+  border-radius var(--sp-radius-control)
+  box-shadow var(--sp-shadow-sm)
   color var(--primary-contrast)
   background var(--primary)
   font-size 14px
@@ -504,7 +521,8 @@
   flex 0 0 28px
   padding 0
   border 0
-  border-radius 7px
+  border-radius var(--sp-radius-control)
+  box-shadow var(--sp-shadow-sm)
   display flex
   align-items center
   justify-content center
@@ -545,9 +563,14 @@
 .agent-tool-calls
   margin 8px 0
 
+.agent-tool-call-card,
+.agent-tool-readonly-card
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-card)
+  background var(--sp-surface-soft)
+  box-shadow var(--sp-shadow-md)
+
 .agent-tool-call-card
-  border 1px solid var(--main-darker)
-  border-radius 4px
   margin-bottom 6px
   font-size 13px
   max-width 100%
@@ -783,12 +806,49 @@
 .sp-ai-config-primary-fields
   max-width 760px
   margin 0 auto
+  counter-reset sp-ai-config-step
+
+.sp-ai-config-primary-head
+  margin-bottom 18px
+  h2
+    margin 0
+    color var(--text-light)
+    font-size 18px
+    line-height 1.4
+  p
+    margin 6px 0 0
+    color var(--text-dark)
+    font-size 12px
+    line-height 1.6
+
+.sp-ai-config-step
+  position relative
+  padding-left 34px
+  counter-increment sp-ai-config-step
+  &::before
+    content counter(sp-ai-config-step)
+    position absolute
+    top 1px
+    left 0
+    display flex
+    align-items center
+    justify-content center
+    width 22px
+    height 22px
+    border 1px solid var(--sp-border-strong)
+    border-radius 50%
+    color var(--primary)
+    background var(--sp-surface-subtle)
+    font-size 12px
+    font-weight 700
 
 .sp-ai-provider-guide
   max-width 900px
-  margin 8px auto 18px
-  padding-top 18px
-  border-top 1px solid var(--sp-border)
+  margin 14px auto 18px
+  padding 14px 16px
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-card)
+  background var(--sp-surface-subtle)
 
 .sp-ai-provider-guide-head
   display flex
@@ -798,7 +858,7 @@
   margin-bottom 8px
 
 .sp-ai-provider-guide-title
-  color var(--text-light)
+  color var(--text)
   font-size 14px
   font-weight 700
 
@@ -836,13 +896,22 @@
   border-bottom 1px solid var(--sp-border)
 
 .sp-ai-provider-item-main
+  flex 1 1 auto
   min-width 0
+  max-width 100%
 
 .sp-ai-provider-name-row
   display flex
   align-items center
+  flex-wrap wrap
   gap 6px
+  min-width 0
   color var(--text-light)
+  .ant-tag
+    max-width 100%
+    height auto
+    white-space normal
+    overflow-wrap anywhere
 
 .sp-ai-provider-description
   margin-top 3px
@@ -865,6 +934,10 @@
   flex 0 0 auto
   a
     display inline-flex
+
+.sp-ai-provider-website
+  align-items center
+  justify-content center
 
 .sp-ai-config-advanced
   margin-top 6px
@@ -918,3 +991,36 @@
   .sp-ai-provider-item
     align-items flex-start
     flex-direction column
+  .sp-ai-provider-item-main
+    width 100%
+
+.shellpilot-ai-web-url-hint
+  margin-top 10px
+  color var(--text-dark)
+  font-size 12px
+  line-height 1.6
+
+.shellpilot-ai-web-access-content
+  width 100%
+
+.shellpilot-ai-web-access-origin
+  display flex
+  flex-direction column
+  gap 6px
+  color var(--text-dark)
+  code
+    overflow-wrap anywhere
+    padding 8px 10px
+    border 1px solid var(--sp-border)
+    border-radius var(--sp-radius-control)
+    color var(--text)
+    background var(--background)
+
+.shellpilot-ai-web-access-disclosure
+  color var(--text-dark)
+  font-size 12px
+  line-height 1.6
+
+.shellpilot-ai-web-access-actions
+  width 100%
+  justify-content flex-end

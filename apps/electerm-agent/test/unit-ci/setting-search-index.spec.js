@@ -27,6 +27,8 @@ test('settings search maps Chinese and English terms to current tabs and items',
   const cases = [
     ['终端', 'setting', 'setting-terminal'],
     ['model', 'setting', 'setting-ai'],
+    ['内网', 'setting', 'setting-ai-web-access'],
+    ['localhost', 'setting', 'setting-ai-web-access'],
     ['backup', 'setting', 'setting-sync'],
     ['书签', 'bookmarks', ''],
     ['theme', 'terminalThemes', ''],
@@ -97,6 +99,7 @@ test('settings search metadata agrees with the current constants contract', asyn
     'settingShortcutsId',
     'settingSyncId',
     'settingAiId',
+    'settingAiWebAccessId',
     'settingPasswordsId'
   ].map(name => name ? getStringConstant(constantsSource, name) : ''))
 

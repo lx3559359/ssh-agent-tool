@@ -417,6 +417,20 @@ async function setupSshConnection (client, options = {}) {
     await openNewConnectionForm(client)
   }
 
+  const wizard = client.locator('.quick-connect-wizard')
+  if (await wizard.isVisible({ timeout: 3000 }).catch(() => false)) {
+    await wizard.locator('input:not([readonly])').first().fill(host)
+    await wizard.locator('.quick-connect-port').fill(String(port))
+    await wizard.locator('.quick-connect-wizard-footer button.ant-btn-primary').click()
+    await wizard.locator('input:not([readonly])').first().fill(username)
+    await wizard.locator('input[type="password"]').fill(password)
+    await wizard.locator('.quick-connect-wizard-footer button.ant-btn-primary').click()
+    await wizard.locator('.quick-connect-wizard-footer button.ant-btn-primary').click()
+    await confirmSshHostKeyVerificationIfNeeded(client, hostKeyModalTimeout)
+    await delay(waitAfterConnect)
+    return
+  }
+
   await client.setValue('#ssh-form_host', host)
   await client.setValue('#ssh-form_username', username)
   await client.setValue('#ssh-form_password', password)
@@ -589,19 +603,40 @@ async function verifySelectionCount (client, type, expectedCount) {
  * @param {number} [timeout=30000] - Max wait time in ms
  * @param {number} [interval=1000] - Poll interval in ms
  */
-async function verifyFileTransfersComplete (client, timeout = 30000, interval = 1000) {
+async function verifyFileTransfersComplete (client, timeout = 90000, interval = 1000) {
   const start = Date.now()
   let isEmpty = false
+  let snapshot = []
   while (Date.now() - start < timeout) {
-    isEmpty = await client.evaluate(() => {
-      return window.store.fileTransfers.length === 0
+    snapshot = await client.evaluate(() => {
+      return window.store.fileTransfers.map(transfer => {
+        const instance = [...window.refsTransfers.values()].find(item => (
+          item?.props?.transfer?.id === transfer.id
+        ))
+        return {
+          id: transfer.id,
+          name: transfer.name || transfer.fromFile?.name || '',
+          percent: transfer.percent,
+          status: transfer.status,
+          inited: transfer.inited,
+          retrying: transfer.retrying,
+          finishing: instance?.finishing,
+          safetyStarted: instance?.transferSafety?.started,
+          operationId: instance?.transferSafety?.operationId
+        }
+      })
     })
+    isEmpty = snapshot.length === 0
     if (isEmpty) {
       break
     }
     await delay(interval)
   }
-  expect(isEmpty).toBe(true, `Expected fileTransfers array to be empty after operations complete (waited ${timeout}ms)`)
+  if (!isEmpty) {
+    throw new Error(
+      `Expected fileTransfers array to be empty after operations complete (waited ${timeout}ms). Remaining transfers: ${JSON.stringify(snapshot)}`
+    )
+  }
 }
 
 async function closeApp (electronApp, fileName) {

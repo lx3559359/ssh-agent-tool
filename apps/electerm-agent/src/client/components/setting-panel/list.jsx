@@ -7,7 +7,6 @@ import { Popconfirm } from 'antd'
 import Search from '../common/search'
 import createName, { createTitleTag } from '../../common/create-title'
 import classnames from 'classnames'
-import { noop } from 'lodash-es'
 import highlight from '../common/highlight'
 import { settingSyncId, settingCommonId, staticNewItemTabs } from '../../common/constants'
 import getInitItem from '../../common/init-setting-item'
@@ -43,13 +42,20 @@ export default class ItemList extends React.PureComponent {
   }
 
   del = (item, e) => {
-    e.stopPropagation()
+    e?.stopPropagation()
     this.props.store.delItem(item, this.props.type)
   }
 
   editItem = (e, item, isGroup) => {
-    e.stopPropagation()
+    e?.stopPropagation()
     this.props.store.openBookmarkEdit(item)
+  }
+
+  handleItemKeyDown = (event, item, type) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      this.props.onClickItem(item, type)
+    }
   }
 
   renderSearch = () => {
@@ -69,15 +75,19 @@ export default class ItemList extends React.PureComponent {
     }
     const { shouldConfirmDel } = this.props
     const icon = (
-      <CloseOutlined
+      <button
+        aria-label={e('del')}
         title={e('del')}
-        className='pointer list-item-remove'
+        className='pointer list-item-action list-item-remove'
         onClick={
           shouldConfirmDel
-            ? noop
+            ? e => e.stopPropagation()
             : e => this.del(item, e)
         }
-      />
+        type='button'
+      >
+        <CloseOutlined aria-hidden='true' />
+      </button>
     )
     if (shouldConfirmDel) {
       return (
@@ -126,14 +136,22 @@ export default class ItemList extends React.PureComponent {
       <div
         key={id}
         className={cls}
-        onClick={() => onClickItem(item, type)}
+        role='presentation'
       >
-        <div
+        <button
+          aria-selected={activeItemId === id}
+          className='item-list-option'
+          onClick={() => onClickItem(item, type)}
+          onKeyDown={event => this.handleItemKeyDown(event, item, type)}
+          role='option'
+          tabIndex={activeItemId === id ? 0 : -1}
           title={title}
-          className='elli pd1y pd2x list-item-title'
+          type='button'
         >
-          {tag}{titleHighlight || e('new')}
-        </div>
+          <span className='elli pd1y pd2x list-item-title'>
+            {tag}{titleHighlight || e('new')}
+          </span>
+        </button>
         {this.renderDelBtn(item)}
         {this.renderEditBtn(item, isGroup)}
       </div>
@@ -157,11 +175,15 @@ export default class ItemList extends React.PureComponent {
       return null
     }
     return (
-      <EditOutlined
+      <button
+        aria-label={e('edit')}
         title={e('edit')}
         onClick={(e) => this.editItem(e, item, isGroup)}
-        className='pointer list-item-edit'
-      />
+        className='pointer list-item-action list-item-edit'
+        type='button'
+      >
+        <EditOutlined aria-hidden='true' />
+      </button>
     )
   }
 
@@ -185,7 +207,12 @@ export default class ItemList extends React.PureComponent {
         {this.renderTransport ? this.renderTransport() : null}
         {this.renderLabels ? this.renderLabels() : null}
         {this.renderSearch()}
-        <div className='item-list-wrap' style={listStyle}>
+        <div
+          aria-label={e(type)}
+          className='item-list-wrap'
+          role='listbox'
+          style={listStyle}
+        >
           {this.renderNewItem()}
           {
             list.map(this.renderItem)

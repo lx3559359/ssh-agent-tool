@@ -30,6 +30,7 @@ import mcpHandlerExtend from './mcp-handler'
 import workspaceExtend from './workspace'
 import operationsToolkitExtend from './operations-toolkit'
 import aiArtifactsExtend from './ai-artifacts'
+import incidentArchivesExtend from './incident-archives'
 import isColorDark from '../common/is-color-dark'
 import { getReverseColor } from '../common/reverse-color'
 import { uniq } from 'lodash-es'
@@ -336,5 +337,6 @@ mcpHandlerExtend(Store)
 workspaceExtend(Store)
 operationsToolkitExtend(Store)
 aiArtifactsExtend(Store)
+incidentArchivesExtend(Store)
 
 export const StateStore = Store

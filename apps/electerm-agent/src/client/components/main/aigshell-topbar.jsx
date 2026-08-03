@@ -3,6 +3,7 @@ import {
   CodeOutlined,
   DashboardOutlined,
   FolderAddOutlined,
+  LinkOutlined,
   MessageOutlined,
   MoonOutlined,
   PlusCircleOutlined,
@@ -36,6 +37,7 @@ import './aigshell-topbar.styl'
 const UpdateCenterModal = lazy(() => import('./update-center-modal'))
 const HelpCenterModal = lazy(() => import('./help-center-modal'))
 const ServerStatusModal = lazy(() => import('../server-status/server-status-modal'))
+const SshTunnelModal = lazy(() => import('../ssh-tunnel/ssh-tunnel-modal'))
 const e = window.translate
 
 export default auto(function AIGShellTopBar ({ store }) {
@@ -44,9 +46,11 @@ export default auto(function AIGShellTopBar ({ store }) {
   const [showHelpCenter, setShowHelpCenter] = useState(false)
   const [showSafetyCenter, setShowSafetyCenter] = useState(false)
   const [showServerStatus, setShowServerStatus] = useState(false)
+  const [showSshTunnel, setShowSshTunnel] = useState(false)
   const [showConnectionWizard, setShowConnectionWizard] = useState(false)
   const [connectionInfoBookmark, setConnectionInfoBookmark] = useState(null)
   const titleBarDraggingRef = useRef(false)
+  const serverStatusTriggerRef = useRef(null)
   const currentTab = store.tabs.find(tab => tab.id === store.activeTabId) || store.currentTab || {}
   const title = currentTab.title || currentTab.name || currentTab.host || e('shellpilotTopbarDisconnected')
   const online = currentTab.status === statusMap.success
@@ -115,6 +119,18 @@ export default auto(function AIGShellTopBar ({ store }) {
     setShowUpdateCenter(true)
     window.store.upgradeInfo.showUpdateCenter = true
     window.store.onCheckUpdate(true)
+  }
+
+  function handleOpenServerStatus (event) {
+    serverStatusTriggerRef.current = event.currentTarget
+    setShowServerStatus(true)
+  }
+
+  function handleCloseServerStatus () {
+    setShowServerStatus(false)
+    window.requestAnimationFrame(() => {
+      serverStatusTriggerRef.current?.focus()
+    })
   }
 
   function handleCloseUpdateCenter () {
@@ -222,19 +238,22 @@ export default auto(function AIGShellTopBar ({ store }) {
   const actions = [
     {
       key: 'serverStatus',
+      group: 'connection',
       label: e('shellpilotTopbarServerStatus'),
       icon: <DashboardOutlined />,
-      onClick: () => setShowServerStatus(true),
+      onClick: handleOpenServerStatus,
       disabled: !serverStatusAvailable
     },
     {
       key: 'new',
+      group: 'connection',
       label: e('shellpilotTopbarNewConnection'),
       icon: <PlusCircleOutlined />,
       onClick: window.store.onNewSsh
     },
     {
       key: 'quick',
+      group: 'connection',
       label: e('shellpilotTopbarQuickConnect'),
       icon: <ThunderboltOutlined />,
       popover: <QuickConnect formOnly />,
@@ -242,49 +261,64 @@ export default auto(function AIGShellTopBar ({ store }) {
     },
     {
       key: 'quickCommands',
+      group: 'work',
       label: e('shellpilotTopbarQuickCommands'),
       icon: <CodeOutlined />,
       onClick: handleOpenQuickCommands,
       primary: true
     },
     {
+      key: 'sshTunnel',
+      group: 'work',
+      label: e('shellpilotTopbarSshTunnel'),
+      icon: <LinkOutlined />,
+      onClick: () => setShowSshTunnel(true)
+    },
+    {
       key: 'ai',
+      group: 'work',
       label: e('shellpilotTopbarAiAssistant'),
       icon: <MessageOutlined />,
       onClick: window.store.handleOpenAIPanel
     },
     {
       key: 'model',
+      group: 'work',
       label: e('shellpilotTopbarModelApi'),
       icon: <ApiOutlined />,
       onClick: window.store.toggleAIConfig
     },
     {
       key: 'backup',
+      group: 'manage',
       label: e('shellpilotTopbarBackupSync'),
       icon: <FolderAddOutlined />,
       onClick: window.store.openSettingSync
     },
     {
       key: 'connections',
+      group: 'manage',
       label: e('shellpilotTopbarConnectionInfo'),
       icon: <ProfileOutlined />,
       onClick: handleOpenConnectionInventory
     },
     {
       key: 'safetyCenter',
+      group: 'manage',
       label: e('shellpilotTopbarSafetyCenter'),
       icon: <SafetyCertificateOutlined />,
       onClick: () => setShowSafetyCenter(true)
     },
     {
       key: 'update',
+      group: 'system',
       label: e('shellpilotTopbarCheckUpdates'),
       icon: <ReloadOutlined />,
       onClick: handleCheckUpdate
     },
     {
       key: 'theme',
+      group: 'system',
       label: isLightTheme
         ? e('shellpilotTopbarDarkMode')
         : e('shellpilotTopbarLightMode'),
@@ -293,12 +327,14 @@ export default auto(function AIGShellTopBar ({ store }) {
     },
     {
       key: 'setting',
+      group: 'system',
       label: e('shellpilotTopbarSettings'),
       icon: <SettingOutlined />,
       onClick: window.store.openSetting
     },
     {
       key: 'help',
+      group: 'system',
       label: e('shellpilotTopbarHelp'),
       icon: <QuestionCircleOutlined />,
       onClick: () => setShowHelpCenter(true)
@@ -359,7 +395,17 @@ export default auto(function AIGShellTopBar ({ store }) {
             ? e('shellpilotTopbarConnected')
             : e('shellpilotTopbarDisconnected')}
         >
-          <span className={'aigshell-topbar-dot ' + (online ? 'online' : '')} />
+          <span className='aigshell-topbar-status'>
+            <span
+              className={'aigshell-topbar-dot ' + (online ? 'online' : '')}
+              aria-hidden='true'
+            />
+            <span className='aigshell-topbar-status-text'>
+              {online
+                ? e('shellpilotTopbarConnected')
+                : e('shellpilotTopbarDisconnected')}
+            </span>
+          </span>
         </Tooltip>
       </div>
       <div
@@ -368,8 +414,16 @@ export default auto(function AIGShellTopBar ({ store }) {
         onFocusCapture={handleActionRailFocus}
       >
         {
-          actions.map(item => (
-            <span key={item.key} className='aigshell-topbar-action-wrap'>
+          actions.map((item, index) => (
+            <span
+              key={item.key}
+              data-action-group={item.group}
+              className={'aigshell-topbar-action-wrap' + (
+                index > 0 && actions[index - 1].group !== item.group
+                  ? ' aigshell-topbar-action-group-boundary'
+                  : ''
+              )}
+            >
               {renderAction(item)}
             </span>
           ))
@@ -437,7 +491,23 @@ export default auto(function AIGShellTopBar ({ store }) {
               <Suspense fallback={null}>
                 <ServerStatusModal
                   open
-                  onClose={() => setShowServerStatus(false)}
+                  onClose={handleCloseServerStatus}
+                  store={store}
+                  tab={currentTab}
+                />
+              </Suspense>
+            </LazyModuleBoundary>
+            )
+          : null
+      }
+      {
+        showSshTunnel
+          ? (
+            <LazyModuleBoundary moduleName={e('shellpilotTopbarSshTunnel')} fallback={null}>
+              <Suspense fallback={null}>
+                <SshTunnelModal
+                  open
+                  onClose={() => setShowSshTunnel(false)}
                   store={store}
                   tab={currentTab}
                 />

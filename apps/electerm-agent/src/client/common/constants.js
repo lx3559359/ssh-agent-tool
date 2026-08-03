@@ -217,6 +217,7 @@ export const settingSyncId = 'setting-sync'
 export const settingTerminalId = 'setting-terminal'
 export const settingShortcutsId = 'setting-shortcuts'
 export const settingAiId = 'setting-ai'
+export const settingAiWebAccessId = 'setting-ai-web-access'
 export const settingCommonId = 'setting-common'
 export const settingPasswordsId = 'setting-passwords'
 export const defaultEnvLang = 'en_US.UTF-8'
@@ -282,8 +283,10 @@ export const instSftpKeys = [
   'chown',
   'readFile',
   'readFilePreview',
+  'readFileBase64Preview',
   'readFileRange',
   'readFileChunk',
+  'describeResumeEntry',
   'searchFileText',
   'listArchive',
   'readArchiveTextEntry',

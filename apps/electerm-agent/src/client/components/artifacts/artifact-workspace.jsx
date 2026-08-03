@@ -1,7 +1,7 @@
 import { auto } from 'manate/react'
 import { useEffect } from 'react'
 import classnames from 'classnames'
-import { Alert, Button } from 'antd'
+import { Alert, Button, Modal } from 'antd'
 import { CloseOutlined, ReloadOutlined } from '@ant-design/icons'
 import ArtifactList from './artifact-list'
 import ArtifactPreview from './artifact-preview'
@@ -17,6 +17,17 @@ export default auto(function ArtifactWorkspace ({
   useEffect(() => {
     if (active) store.loadArtifacts()
   }, [active])
+
+  const deleteArtifact = artifact => {
+    Modal.confirm({
+      title: e('shellpilotArtifactDeleteConfirm'),
+      content: e('shellpilotArtifactDeleteLocalOnly'),
+      okText: e('delete'),
+      cancelText: e('cancel'),
+      okButtonProps: { danger: true },
+      onOk: () => store.deleteArtifact(artifact.id)
+    })
+  }
 
   return (
     <main
@@ -60,7 +71,7 @@ export default auto(function ArtifactWorkspace ({
         />
       )}
       <div className='artifact-workspace-grid'>
-        <ArtifactList store={store} />
+        <ArtifactList store={store} onDelete={deleteArtifact} />
         <ArtifactPreview artifact={store.activeArtifact} store={store} />
       </div>
     </main>

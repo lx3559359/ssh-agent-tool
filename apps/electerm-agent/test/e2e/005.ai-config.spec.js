@@ -76,6 +76,9 @@ describe('AI Config and Suggestions', function () {
   })
 
   it.beforeEach(async () => {
+    acquired = undefined
+    electronApp = undefined
+    client = undefined
     acquired = await acquireIsolatedApp({
       createProfileRoot: () => fs.mkdtemp(resolve(tmpdir(), profilePrefix)),
       validateProfileRoot: assertSafeProfileRoot,
@@ -103,10 +106,12 @@ describe('AI Config and Suggestions', function () {
     } catch (error) {
       primaryError = error
     }
-    await cleanupPreservingPrimaryError(
-      () => closeIsolatedApp(electronApp, acquired.profileRoot),
-      primaryError
-    )
+    if (acquired?.profileRoot) {
+      await cleanupPreservingPrimaryError(
+        () => closeIsolatedApp(electronApp, acquired.profileRoot),
+        primaryError
+      )
+    }
     if (primaryError) throw primaryError
   })
 
@@ -175,7 +180,9 @@ describe('AI Config and Suggestions', function () {
     await client.waitForTimeout(250)
 
     const testCommand = 'test'
-    await client.locator('.xterm-helper-textarea').first().evaluate(element => element.focus())
+    await client.locator(
+      '.session-current .xterm-helper-textarea'
+    ).evaluate(element => element.focus())
     await client.keyboard.type(testCommand)
     await client.keyboard.press('ArrowRight')
     await client.keyboard.press('ArrowRight')

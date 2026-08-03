@@ -34,6 +34,7 @@ import {
   captureLocalTransferSource,
   verifyLocalTransferSource
 } from '../components/file-transfer/file-transfer-safety.js'
+import { installMcpRequestListener } from './mcp-request-listener.js'
 
 function mcpAbortError (message = 'MCP operation cancelled') {
   const error = new Error(message)
@@ -101,12 +102,13 @@ function abortableMcpOperation (operation, signal, message) {
 export default Store => {
   // Initialize MCP handler - called when MCP widget is started
   Store.prototype.initMcpHandler = function () {
-    const { ipcOnEvent } = window.pre
-    // Listen for MCP requests from main process
-    ipcOnEvent('mcp-request', (event, request) => {
-      const { requestId, action, data } = request
-      if (action === 'tool-call') {
-        window.store.handleMcpToolCall(requestId, data.toolName, data.args)
+    const { ipcOnEvent, ipcOffEvent } = window.pre
+    this.mcpRequestListener = installMcpRequestListener({
+      ipcOnEvent,
+      ipcOffEvent,
+      previousListener: this.mcpRequestListener,
+      handleToolCall: (requestId, toolName, args) => {
+        this.handleMcpToolCall(requestId, toolName, args)
       }
     })
   }
@@ -1171,6 +1173,8 @@ export default Store => {
         path: remotePath,
         text: content,
         mode: requestedMode
+      }, {
+        signal: options.signal
       }),
       options.signal,
       'SFTP text write cancelled'
@@ -1189,6 +1193,62 @@ export default Store => {
           ? 'Remote text file saved. FTP does not provide a rollback snapshot.'
           : '远程文本文件已保存，快照与回滚入口已记录到安全操作中心。'
         : '用户已取消远程文本文件写入。'
+    }
+  }
+
+  Store.prototype.mcpSftpWriteTextBatch = async function (args, options = {}) {
+    assertMcpActive(options.signal, 'SFTP multi-file write cancelled')
+    const { sftpEntry, tab, tabId } = window.store.mcpGetSshSftpRef(args.tabId)
+    if (!Array.isArray(args.files) || args.files.length < 2 ||
+      args.files.length > 50) {
+      throw new Error('files must contain between 2 and 50 text files')
+    }
+    let totalCharacters = 0
+    const paths = new Set()
+    const files = args.files.map(file => {
+      const remotePath = String(file?.remotePath || '').trim()
+      const content = file?.content
+      if (!isSingleRemotePath(remotePath)) {
+        throw new Error('each remotePath must be a single remote file path')
+      }
+      if (paths.has(remotePath)) {
+        throw new Error(`duplicate remotePath: ${remotePath}`)
+      }
+      paths.add(remotePath)
+      if (typeof content !== 'string' || content.length > 256 * 1024) {
+        throw new Error('each content must be UTF-8 text no larger than 256 KiB')
+      }
+      totalCharacters += content.length
+      if (totalCharacters > 1024 * 1024) {
+        throw new Error('multi-file content must not exceed 1 MiB in total')
+      }
+      const mode = file.mode === undefined || file.mode === null ||
+        file.mode === ''
+        ? undefined
+        : Number(file.mode)
+      if (mode !== undefined && (
+        !Number.isSafeInteger(mode) || mode < 0 || mode > 0o7777
+      )) {
+        throw new Error('mode must be a permission value between 0 and 07777')
+      }
+      return {
+        path: remotePath,
+        text: content,
+        mode
+      }
+    })
+    const result = await abortableMcpOperation(
+      sftpEntry.saveRemoteEditorFiles(files, {
+        signal: options.signal
+      }),
+      options.signal,
+      'SFTP multi-file write cancelled'
+    )
+    assertMcpActive(options.signal, 'SFTP multi-file write cancelled')
+    return {
+      ...result,
+      tabId,
+      host: tab.host
     }
   }
 

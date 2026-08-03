@@ -37,10 +37,12 @@
   flex-direction column
   gap 10px
   padding-right 2px
+  overflow-x hidden
 
 .widget-card
   display flex
   gap 12px
+  min-width 0
   padding 13px
   border 1px solid var(--main-darker)
   background rgba(255, 255, 255, .035)
@@ -68,42 +70,62 @@
 
 .widget-card-main
   min-width 0
+  max-width 100%
   flex 1
 
 .widget-card-head
   display flex
-  align-items center
+  align-items flex-start
+  flex-wrap wrap
   gap 8px
   min-width 0
 
 .widget-card-title
-  flex 1
+  flex 1 1 100%
   min-width 0
   font-weight 700
   line-height 1.5
+  white-space normal
+  overflow visible
+  text-overflow clip
+  overflow-wrap anywhere
 
 .widget-card-tag
   margin-inline-end 0
+  max-width 100%
+  height auto
+  white-space normal
+  overflow-wrap anywhere
 
 .widget-card-desc
   margin-top 4px
   line-height 1.55
   font-size 12px
   opacity .76
+  overflow-wrap anywhere
 
 .widget-card-meta
   display flex
+  flex-wrap wrap
   gap 8px
+  min-width 0
   margin-top 10px
   span
     display inline-flex
     align-items center
-    height 22px
+    flex 1 1 100%
+    width 100%
+    max-width 100%
+    min-height 22px
+    height auto
     padding 0 8px
+    box-sizing border-box
     border-radius 4px
     background rgba(255, 255, 255, .06)
     font-size 12px
     opacity .86
+    white-space normal
+    overflow-wrap anywhere
 
 .widget-form
   max-width 860px
@@ -171,6 +193,11 @@
   .widgets-panel-title
   .widget-form-hero
     padding 14px
+  .setting-tabs-widgets
+    .widget-card
+      flex-direction column
+    .widget-card-main
+      width 100%
 
 @media (max-width: 820px)
   .setting-tabs-widgets

@@ -202,7 +202,15 @@ test('bookmark context menus add normalized visual groups without changing basel
         isGroup: true,
         staticList: false
       },
-      signature: []
+      signature: ['openAll', '|', 'addSubCat']
+    },
+    {
+      args: {
+        item: { id: 'default' },
+        isGroup: true,
+        staticList: true
+      },
+      signature: ['openAll']
     }
   ]
 

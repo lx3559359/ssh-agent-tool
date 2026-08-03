@@ -13,6 +13,10 @@ const {
   resize,
   runCmd,
   cancelRunCmd,
+  startSshTunnel,
+  stopSshTunnel,
+  listSshTunnels,
+  testSshTunnel,
   toggleTerminalLog,
   toggleTerminalLogTimestamp,
   setTerminalLogPath,
@@ -123,6 +127,14 @@ const initWs = function (app) {
           runCmd(ws, msg)
         } else if (action === 'cancel-run-cmd') {
           cancelRunCmd(ws, msg)
+        } else if (action === 'ssh-tunnel-start') {
+          startSshTunnel(ws, msg)
+        } else if (action === 'ssh-tunnel-stop') {
+          stopSshTunnel(ws, msg)
+        } else if (action === 'ssh-tunnel-list') {
+          listSshTunnels(ws, msg)
+        } else if (action === 'ssh-tunnel-test') {
+          testSshTunnel(ws, msg)
         } else if (action === 'collect-fleet-status') {
           await collectFleetStatus(ws, msg)
         } else if (action === 'collect-fleet-service-inventory') {

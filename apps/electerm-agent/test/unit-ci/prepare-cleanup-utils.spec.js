@@ -5,8 +5,34 @@ const os = require('node:os')
 const path = require('node:path')
 
 const {
+  removeOptionalNativeResidue,
   removePackagedBatchScripts
 } = require(path.resolve(__dirname, '../../build/bin/prepare-cleanup-utils'))
+
+test('optional cpu feature cleanup removes its orphaned build helper only', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shellpilot-optional-native-'))
+  const removable = [
+    'node_modules/cpu-features',
+    'node_modules/buildcheck',
+    'work/app/node_modules/cpu-features',
+    'work/app/node_modules/buildcheck'
+  ]
+  const keep = path.join(root, 'node_modules', 'node-pty')
+
+  try {
+    for (const relativePath of removable) {
+      fs.mkdirSync(path.join(root, relativePath), { recursive: true })
+    }
+    fs.mkdirSync(keep, { recursive: true })
+
+    const removed = removeOptionalNativeResidue(root)
+
+    assert.deepEqual(removed.sort(), removable.sort())
+    assert.equal(fs.existsSync(keep), true)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
 
 test('package prepare cleanup removes batch scripts from packaged node modules', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aigshell-prepare-cleanup-'))

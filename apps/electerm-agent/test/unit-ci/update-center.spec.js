@@ -24,6 +24,30 @@ test('update center shows the complete user-facing update state', () => {
   assert.match(source, /setConfig/)
 })
 
+test('update center renders structured state and semantic Markdown release notes', () => {
+  const source = readSource('client/components/main/update-center-modal.jsx')
+  const styles = readSource('client/components/main/update-center-modal.styl')
+  const markdown = readSource('client/components/common/markdown.jsx')
+  const markdownStyles = readSource('client/components/common/markdown.styl')
+
+  assert.match(source, /<dl className='update-center-summary'/)
+  assert.match(source, /<dt>/)
+  assert.match(source, /<dd>/)
+  assert.match(source, /role='status'/)
+  assert.match(source, /<h2 className='update-center-section-title'/)
+  assert.match(source, /<Markdown text=\{info\.releaseInfo\.body\} \/>/)
+  assert.doesNotMatch(source, /<pre[^>]*>\{info\.releaseInfo\.body\}/)
+  assert.match(markdown, /ReactMarkdown/)
+  assert.match(markdown, /import Link from '\.\/external-link'/)
+  assert.match(markdown, /components=\{markdownComponents\}/)
+  assert.match(markdown, /<Link to=\{href\}>/)
+  assert.match(markdown, /import '\.\/markdown\.styl'/)
+  assert.match(markdownStyles, /\.markdown-wrap[\s\S]*h1[\s\S]*h2/)
+  assert.match(markdownStyles, /ul,[\s\S]*ol/)
+  assert.match(markdownStyles, /p/)
+  assert.match(styles, /\.update-center-summary[\s\S]*grid-template-columns/)
+})
+
 test('top bar opens the update center before checking for updates', () => {
   const source = readSource('client/components/main/aigshell-topbar.jsx')
 

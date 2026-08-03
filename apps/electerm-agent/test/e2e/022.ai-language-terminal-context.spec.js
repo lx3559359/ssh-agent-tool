@@ -12,7 +12,23 @@ test('English AI copy and the xterm helper use the terminal context menu', async
     run = await launchQualityApp(electron)
     const { page } = run
 
-    await page.evaluate(() => {
+    await page.evaluate(async () => {
+      const profile = {
+        id: 'language-copy-ai',
+        nameAI: 'Language Copy AI',
+        baseURLAI: 'http://localhost:43434',
+        apiPathAI: '/chat/completions',
+        modelAI: 'language-copy-model',
+        apiKeyAI: 'language-copy-test-key',
+        authHeaderNameAI: 'Authorization: Bearer',
+        roleAI: '',
+        languageAI: 'English'
+      }
+      await window.store.setConfig({
+        activeAIProfileId: profile.id,
+        aiProfiles: [profile],
+        ...profile
+      })
       window.store.previewLanguage = 'en_us'
       window.store.upgradeInfo.showUpgradeModal = false
       window.store.handleOpenAIPanel()
@@ -33,8 +49,11 @@ test('English AI copy and the xterm helper use the terminal context menu', async
       'Clear AI conversation history'
     )
 
-    const terminalInput = page.locator('.term-wrap:visible .xterm-helper-textarea').last()
-    await terminalInput.waitFor({ state: 'attached', timeout: 20000 })
+    await page.locator('.add-new-tab-btn').click()
+    const terminalInput = page.locator(
+      '.session-current .term-wrap .xterm-helper-textarea'
+    )
+    await terminalInput.waitFor({ state: 'visible', timeout: 20000 })
     await terminalInput.evaluate(element => {
       const terminal = element.closest('.term-wrap')
       const rect = terminal.getBoundingClientRect()

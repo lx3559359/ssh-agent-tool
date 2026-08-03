@@ -3,7 +3,7 @@
  */
 import { useRef } from 'react'
 import Tag from '../sftp/transfer-tag'
-import { Flex } from 'antd'
+import { Flex, Progress } from 'antd'
 import {
   CloseCircleOutlined,
   PlayCircleOutlined,
@@ -13,6 +13,7 @@ import {
 import { action } from 'manate'
 import { addClass, removeClass } from '../../common/class'
 import { refsStatic } from '../common/ref'
+import { filesize } from 'filesize'
 import './transfer.styl'
 
 const e = window.translate
@@ -28,10 +29,16 @@ export default function Transporter (props) {
     typeFrom,
     percent,
     speed,
-    pausing = false,
+    paused = false,
+    status,
+    transferred = 0,
+    total: transferTotal,
     leftTime,
     passedTime,
     error,
+    retrying,
+    retryMode,
+    retryPreservedBytes,
     inited,
     id
   } = props.transfer
@@ -51,12 +58,26 @@ export default function Transporter (props) {
     )
   }
   function handlePauseOrResume () {
+    if (status === 'pausing' || status === 'resuming') {
+      return
+    }
+    const shouldResume = status === 'paused' ||
+      status === 'interrupted' ||
+      paused
     refsStatic.get('transfer-queue')?.addToQueue(
       'update',
       id,
-      {
-        pausing: !pausing
-      }
+      shouldResume
+        ? {
+            status: 'resuming',
+            pausing: false,
+            paused: false
+          }
+        : {
+            status: 'pausing',
+            pausing: true,
+            paused: false
+          }
     )
   }
 
@@ -145,11 +166,21 @@ export default function Transporter (props) {
     e && e.dataTransfer && e.dataTransfer.clearData()
   }
   const isTransfer = typeTo !== typeFrom
-  const Icon = !pausing ? PauseCircleOutlined : PlayCircleOutlined
-  const pauseTitle = pausing ? e('resume') : e('pause')
+  const isPaused = status === 'paused' || paused
+  const isWaiting = status === 'pausing' || status === 'resuming'
+  const Icon = isPaused ? PlayCircleOutlined : PauseCircleOutlined
+  const pauseTitle = isWaiting
+    ? (status === 'pausing' ? '正在暂停' : '正在恢复')
+    : (isPaused ? e('resume') : e('pause'))
   const cls = 'sftp-transport mg1b pd1x'
   const typeFromTitle = e(typeFrom)
   const typeToTitle = e(typeTo)
+  const total = Math.max(0, Number(transferTotal) || Number(props.transfer.fromFile?.size) || 0)
+  const transferredBytes = Math.max(0, Number(transferred) || 0)
+  const safePercent = Math.max(0, Math.min(100, Number(percent) || 0))
+  const progressText = retrying && retryMode === 'restart'
+    ? `${e('shellpilotTransferRestarting')} ${filesize(retryPreservedBytes || 0)}`
+    : `${filesize(transferredBytes)} / ${filesize(total)} | ${speed || '-'} | ${leftTime || '-'}`
   const title = `${typeFromTitle}→${typeToTitle}: ${fromPath} -> ${toPath} ${speed || ''} ${percent || 0}%`
   const cancelIcon = (
     <CloseCircleOutlined
@@ -172,6 +203,7 @@ export default function Transporter (props) {
         className='flex-child transfer-control-icon pointer hover-black font14'
         onClick={handlePauseOrResume}
         title={pauseTitle}
+        disabled={isWaiting}
       />
       )
     : null
@@ -224,19 +256,16 @@ export default function Transporter (props) {
         >{toPathReal || toPath}
         </span>
       </Flex>
-      <Flex>
-        <span
-          className='sftp-file-percent'
-        >
-          {percent || 0}%
-          {speed ? `(${speed})` : null}
-        </span>
-      </Flex>
-      <Flex>
-        <span
-          className='sftp-file-percent'
-        >
-          {passedTime || '-'}|{leftTime || '-'}
+      <Flex vertical className='transfer-progress-block'>
+        <Progress
+          percent={safePercent}
+          showInfo={false}
+          size='small'
+          status={error ? 'exception' : 'active'}
+        />
+        <span className='transfer-progress-meta'>
+          {progressText}
+          {passedTime ? ` | ${passedTime}` : ''}
         </span>
       </Flex>
       <Flex>{controlIcon}</Flex>

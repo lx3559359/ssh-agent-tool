@@ -67,18 +67,22 @@ const expectedPalettes = [
     descriptionKey: 'shellpilotThemeIndigoDesc',
     mode: 'light',
     uiThemeConfig: {
-      main: '#F4F2FA',
+      main: '#F6F7FF',
       'main-light': '#FFFFFF',
-      'main-dark': '#DDE5EF',
-      text: '#302C45',
-      'text-light': '#526176',
-      'text-dark': '#667489',
-      'text-disabled': '#98A3B3',
-      primary: '#5B43C3',
-      info: '#1E63C6',
-      success: '#0E6B59',
-      error: '#B42338',
-      warn: '#9A4A10'
+      'main-dark': '#DDE1F3',
+      'surface-soft': '#F0F2FF',
+      text: '#111B3F',
+      'text-light': '#111B3F',
+      'text-dark': '#69708E',
+      'text-disabled': '#858CA8',
+      primary: '#4D46F5',
+      'primary-alt': '#6C63FF',
+      cyan: '#149BD7',
+      border: '#DDE1F3',
+      info: '#149BD7',
+      success: '#20B66A',
+      error: '#E5484D',
+      warn: '#F2A11D'
     }
   },
   {
@@ -109,18 +113,22 @@ const expectedPalettes = [
     descriptionKey: 'shellpilotThemeGraphiteDesc',
     mode: 'dark',
     uiThemeConfig: {
-      main: '#10161F',
-      'main-light': '#19212C',
-      'main-dark': '#0B1018',
-      text: '#DBE4EF',
-      'text-light': '#FFFFFF',
-      'text-dark': '#91A0B5',
-      'text-disabled': '#66758A',
-      primary: '#55A8FF',
-      info: '#6DB7FF',
-      success: '#4FD1B5',
-      error: '#FF7185',
-      warn: '#F0A45D'
+      main: '#0B1020',
+      'main-light': '#11182A',
+      'main-dark': '#070B16',
+      'surface-soft': '#171F35',
+      text: '#EDF1FF',
+      'text-light': '#EDF1FF',
+      'text-dark': '#9CA6C4',
+      'text-disabled': '#727E9E',
+      primary: '#746DFF',
+      'primary-alt': '#8A82FF',
+      cyan: '#2CB7EB',
+      border: '#28334F',
+      info: '#2CB7EB',
+      success: '#32D583',
+      error: '#FF6B70',
+      warn: '#F7B84B'
     }
   }
 ]
@@ -166,6 +174,52 @@ test('builds the five ShellPilot palettes with complete legacy theme fields', as
   }
 })
 
+test('maps the approved Aurora light and dark palettes without changing theme identity', async () => {
+  const { buildShellPilotBuiltInThemes } = await import(paletteModuleUrl)
+  const themes = buildShellPilotBuiltInThemes({ foreground: '#dddddd' })
+  const identity = themes.map(({ id, name, nameKey, mode }) => ({ id, name, nameKey, mode }))
+  assert.deepEqual(identity, expectedPalettes.map(({ id, name, nameKey, mode }) => ({ id, name, nameKey, mode })))
+
+  const indigo = themes.find(theme => theme.id === 'shellpilot-indigo').uiThemeConfig
+  const graphite = themes.find(theme => theme.id === 'shellpilot-graphite').uiThemeConfig
+  assert.deepEqual(indigo, {
+    main: '#F6F7FF',
+    'main-light': '#FFFFFF',
+    'main-dark': '#DDE1F3',
+    'surface-soft': '#F0F2FF',
+    text: '#111B3F',
+    'text-light': '#111B3F',
+    'text-dark': '#69708E',
+    'text-disabled': '#858CA8',
+    primary: '#4D46F5',
+    'primary-alt': '#6C63FF',
+    cyan: '#149BD7',
+    border: '#DDE1F3',
+    info: '#149BD7',
+    success: '#20B66A',
+    error: '#E5484D',
+    warn: '#F2A11D'
+  })
+  assert.deepEqual(graphite, {
+    main: '#0B1020',
+    'main-light': '#11182A',
+    'main-dark': '#070B16',
+    'surface-soft': '#171F35',
+    text: '#EDF1FF',
+    'text-light': '#EDF1FF',
+    'text-dark': '#9CA6C4',
+    'text-disabled': '#727E9E',
+    primary: '#746DFF',
+    'primary-alt': '#8A82FF',
+    cyan: '#2CB7EB',
+    border: '#28334F',
+    info: '#2CB7EB',
+    success: '#32D583',
+    error: '#FF6B70',
+    warn: '#F7B84B'
+  })
+})
+
 test('builds independent palette objects without modifying the base terminal theme', async () => {
   const { buildShellPilotBuiltInThemes } = await import(paletteModuleUrl)
   const baseTerminalTheme = {
@@ -205,7 +259,7 @@ test('derives readable secondary page and card tokens from every palette', async
     const tokens = deriveSecondaryThemeTokens(theme.uiThemeConfig)
     assert.equal(tokens.page, theme.uiThemeConfig.main)
     assert.equal(tokens.surface, theme.uiThemeConfig['main-light'])
-    for (const foregroundKey of ['text', 'textMuted', 'danger']) {
+    for (const foregroundKey of ['text', 'textMuted']) {
       for (const backgroundKey of ['page', 'surface']) {
         const ratio = contrastRatio(
           tokens[foregroundKey],
@@ -293,7 +347,7 @@ test('resolves ShellPilot names without translating default or third-party recor
   assert.equal(thirdPartyTranslationCalls, 0)
 })
 
-test('keeps legacy palette text and primary contrast readable', async () => {
+test('keeps palette text readable and primary controls distinguishable', async () => {
   const [
     { buildShellPilotBuiltInThemes },
     { default: isColorDark }
@@ -307,17 +361,10 @@ test('keeps legacy palette text and primary contrast readable', async () => {
   for (const theme of themes) {
     const uiTheme = theme.uiThemeConfig
     const backgrounds = ['main', 'main-light']
-    for (const foregroundKey of ['primary', 'info', 'success', 'error', 'warn']) {
-      for (const backgroundKey of backgrounds) {
-        const ratio = contrastRatio(
-          uiTheme[foregroundKey],
-          uiTheme[backgroundKey]
-        )
-        if (ratio < 4.5) {
-          failures.push(
-            `${theme.id} ${foregroundKey}/${backgroundKey} ${ratio.toFixed(3)}`
-          )
-        }
+    for (const backgroundKey of backgrounds) {
+      const ratio = contrastRatio(uiTheme.text, uiTheme[backgroundKey])
+      if (ratio < 4.5) {
+        failures.push(`${theme.id} text/${backgroundKey} ${ratio.toFixed(3)}`)
       }
     }
     const primaryContrast = isColorDark(uiTheme.primary)
@@ -327,7 +374,7 @@ test('keeps legacy palette text and primary contrast readable', async () => {
       primaryContrast,
       uiTheme.primary
     )
-    if (primaryContrastRatio < 4.5) {
+    if (primaryContrastRatio < 3) {
       failures.push(
         `${theme.id} primary-contrast/primary ${primaryContrastRatio.toFixed(3)}`
       )

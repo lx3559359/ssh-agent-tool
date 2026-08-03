@@ -8,6 +8,11 @@ const {
   normalizeAIModelBaseURL
 } = require('../common/ai-endpoint')
 const { createTraceContext } = require('./quality/trace-context')
+const {
+  normalizeAIMessageRequestContent,
+  normalizeAIRequestMessages,
+  getAIMessageText
+} = require('./ai-content/message-content')
 
 // Store for ongoing streaming sessions
 const streamingSessions = new Map()
@@ -1025,6 +1030,8 @@ exports.AIModels = async (baseURL, apiKey, proxy, authHeaderName) => {
   }
 }
 
+exports.normalizeAIMessageRequestContent = normalizeAIMessageRequestContent
+
 exports.AIchatWithTools = async (messages, model, baseURL, path, apiKey, proxy, tools, authHeaderName, requestId, traceContext) => {
   let endpoint
   let errorContext = { model, baseURL, apiPath: path, apiKey, proxy }
@@ -1053,7 +1060,7 @@ exports.AIchatWithTools = async (messages, model, baseURL, path, apiKey, proxy, 
     })
     const requestData = {
       model,
-      messages,
+      messages: normalizeAIRequestMessages(messages),
       stream: false
     }
     if (tools && tools.length) {
@@ -1134,21 +1141,18 @@ exports.AIchat = async (
     })
 
     const conversationMessages = Array.isArray(promptOrMessages)
-      ? promptOrMessages
-        .filter(message => (
-          message &&
-            ['user', 'assistant'].includes(message.role) &&
-            String(message.content || '').trim()
-        ))
-        .map(message => ({
-          role: message.role,
-          content: String(message.content)
-        }))
-      : [{ role: 'user', content: String(promptOrMessages || '') }]
+      ? normalizeAIRequestMessages(
+        promptOrMessages,
+        new Set(['user', 'assistant'])
+      )
+      : [{
+          role: 'user',
+          content: normalizeAIMessageRequestContent(promptOrMessages)
+        }]
     const latestUserMessage = [...conversationMessages]
       .reverse()
       .find(message => message.role === 'user')
-    const prompt = latestUserMessage?.content || ''
+    const prompt = getAIMessageText(latestUserMessage?.content)
 
     // Determine if we should use streaming based on the prompt content
     // Command suggestions should not use streaming for quick response

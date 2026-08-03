@@ -41,7 +41,8 @@ const { session, test: sshTest } = require('../../src/app/server/session-ssh')
 const USERNAME = 'agent-tester'
 
 // A fresh server host key for every test run.
-const HOST_KEY = utils.generateKeyPairSync('ed25519', {
+const HOST_KEY = utils.generateKeyPairSync('rsa', {
+  bits: 2048,
   comment: 'electerm-agent-test-host'
 })
 

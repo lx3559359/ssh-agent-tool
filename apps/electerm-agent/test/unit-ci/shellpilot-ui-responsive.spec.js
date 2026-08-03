@@ -50,6 +50,19 @@ function assertRuleSelectors (rule, expectedSelectors) {
   }
 }
 
+test('Ant Design Space uses the current orientation property', () => {
+  for (const relativePath of [
+    'components/ai/ai-config.jsx',
+    'components/tabs/workspace-save-modal.jsx'
+  ]) {
+    assert.doesNotMatch(
+      readClient(relativePath),
+      /<Space\b[^>]*\bdirection=/,
+      relativePath
+    )
+  }
+})
+
 test('ShellPilot top bar and AI panel use theme variables in day and night modes', () => {
   const topbar = readClient('components/main/aigshell-topbar.styl')
   const panel = readClient('components/side-panel-r/right-side-panel.styl')
@@ -315,18 +328,18 @@ test('settings depth tokens stay scoped to cards, inset controls and selected na
   assert.match(section[1], /min-width 0/)
   assert.match(section[1], /background var\(--sp-surface-elevated\)/)
   assert.match(section[1], /border 1px solid var\(--sp-border\)/)
-  assert.match(section[1], /border-radius var\(--sp-radius-card\)/)
-  assert.match(section[1], /box-shadow inset 0 1px 0 var\(--sp-highlight-top\), var\(--sp-shadow-card\)/)
+  assert.match(section[1], /border-radius var\(--sp-radius-panel\)/)
+  assert.match(section[1], /box-shadow inset 0 1px 0 var\(--sp-highlight\), var\(--sp-shadow-md\)/)
   assert.match(insetControls.body, /background var\(--sp-surface-inset\) !important/)
   assert.match(insetControls.body, /border-color var\(--sp-border\) !important/)
-  assert.match(insetControls.body, /box-shadow inset 0 2px 4px rgba\(0, 0, 0, \.08\)/)
+  assert.match(insetControls.body, /box-shadow inset 0 1px 0 var\(--sp-highlight\), var\(--sp-shadow-sm\)/)
   assert.match(shell[1], /background var\(--sp-page\)/)
-  assert.match(headerLevel[1], /background var\(--sp-surface\)/)
+  assert.match(headerLevel[1], /background var\(--sp-surface-elevated\)/)
   assert.match(headerLevel[1], /border 1px solid var\(--sp-border\)/)
-  assert.match(headerLevel[1], /border-radius var\(--sp-radius-control\)/)
-  assert.match(headerLevel[1], /box-shadow inset 0 1px 0 var\(--sp-highlight-top\), var\(--sp-shadow-control\)/)
-  assert.doesNotMatch(headerLevel[1], /var\(--sp-shadow-card\)/)
-  assert.match(tabs[1], /\.ant-tabs-tab-active[\s\S]*background var\(--sp-primary-soft\)/)
+  assert.match(headerLevel[1], /border-radius var\(--sp-radius-toolbar\)/)
+  assert.match(headerLevel[1], /box-shadow inset 0 1px 0 var\(--sp-highlight\), var\(--sp-shadow-md\)/)
+  assert.doesNotMatch(headerLevel[1], /var\(--sp-shadow-lg\)/)
+  assert.match(tabs[1], /\.ant-tabs-tab-active[\s\S]*background linear-gradient\(145deg, var\(--sp-primary-soft\), var\(--sp-surface-elevated\)\)/)
 })
 
 test('settings inset controls restore scoped hover focus error and disabled states', () => {
@@ -334,7 +347,7 @@ test('settings inset controls restore scoped hover focus error and disabled stat
   const form = setting.match(/\.sp-settings-form\r?\n([\s\S]*?)\r?\n\.sp-settings-page-header/)
   const formBlock = form && form[1]
   const hover = findNestedRuleByDeclaration(formBlock, /border-color var\(--sp-primary\) !important/)
-  const focus = findNestedRuleByDeclaration(formBlock, /box-shadow 0 0 0 2px var\(--sp-primary-soft\) !important/)
+  const focus = findNestedRuleByDeclaration(formBlock, /box-shadow var\(--sp-shadow-focus\) !important/)
   const error = findNestedRuleByDeclaration(formBlock, /border-color var\(--sp-danger\) !important/)
   const disabled = findNestedRuleByDeclaration(formBlock, /background var\(--sp-surface-subtle\) !important/)
   const affixInner = findNestedRuleByDeclaration(formBlock, /background transparent !important/)
@@ -377,7 +390,7 @@ test('settings inset controls restore scoped hover focus error and disabled stat
     '.ant-input-affix-wrapper > .ant-input:focus:not([disabled]):not(.ant-input-status-error)'
   ])
   assert.match(focus.body, /border-color var\(--sp-primary\) !important/)
-  assert.match(focus.body, /box-shadow 0 0 0 2px var\(--sp-primary-soft\) !important/)
+  assert.match(focus.body, /box-shadow var\(--sp-shadow-focus\) !important/)
   assert.match(error.body, /border-color var\(--sp-danger\) !important/)
   assert.match(error.body, /box-shadow 0 0 0 1px var\(--sp-danger\) !important/)
   assert.match(disabled.body, /background var\(--sp-surface-subtle\) !important/)

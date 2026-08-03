@@ -9,6 +9,7 @@ const { resolve } = require('path')
 const { version } = pack
 const { mkdir, rm, exec, echo, cp } = require('shelljs')
 const { execFileSync } = require('child_process')
+const { removeOptionalNativeResidue } = require('./prepare-cleanup-utils')
 const dir = 'dist/v' + version
 const cwd = process.cwd()
 
@@ -44,7 +45,7 @@ rm('-rf', 'work/app/localstorage.json')
 rm('-rf', 'work/app/nohup.out')
 rm('-rf', 'work/app/assets/js/index*')
 rm('-rf', 'work/app/assets/js/*.txt')
-rm('-rf', 'node_modules/cpu-features')
+removeOptionalNativeResidue(cwd)
 
 fs.writeFileSync(
   resolve(__dirname, '../../work/app/package.json'),
@@ -91,9 +92,8 @@ rm('-rf', 'work/app/node_modules/axios/dist/node/*.map')
 rm('-rf', 'work/app/node_modules/axios/index.d.cts')
 rm('-rf', 'work/app/node_modules/axios/lib')
 
-// Remove cpu-features after npm prune to prevent rebuild issues
-rm('-rf', 'node_modules/cpu-features')
-rm('-rf', 'work/app/node_modules/cpu-features')
+// Remove the optional native probe and its orphaned helper after installation.
+removeOptionalNativeResidue(cwd)
 
 // Clean up node-pty platform-specific files to reduce bundle size
 if (isWin) {

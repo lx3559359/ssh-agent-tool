@@ -177,6 +177,57 @@ function readRemoteFilePreview (sftp, path, maxBytes) {
   })
 }
 
+function readRemoteFileBase64Preview (sftp, path, maxBytes) {
+  const limit = Math.min(
+    10 * 1024 * 1024,
+    Math.max(1, Number(maxBytes) || 10 * 1024 * 1024)
+  )
+  return new Promise((resolve, reject) => {
+    const chunks = []
+    let collectedBytes = 0
+    let settled = false
+    const readStream = sftp.createReadStream(path, {
+      start: 0,
+      end: limit,
+      highWaterMark: Math.min(limit + 1, 64 * 1024)
+    })
+    const settle = (error) => {
+      if (settled) return
+      settled = true
+      readStream.removeAllListeners()
+      if (error) {
+        reject(error)
+        return
+      }
+      const value = Buffer.concat(chunks)
+      resolve({
+        base64: value.subarray(0, limit).toString('base64'),
+        bytesRead: Math.min(value.length, limit),
+        truncated: collectedBytes > limit
+      })
+    }
+    readStream.on('data', data => {
+      if (settled) return
+      const value = Buffer.from(data)
+      const remaining = limit + 1 - collectedBytes
+      if (remaining > 0) {
+        const part = value.subarray(0, remaining)
+        chunks.push(part)
+        collectedBytes += part.length
+      }
+      if (collectedBytes > limit) {
+        settle()
+        readStream.destroy()
+      }
+    })
+    readStream.on('end', () => settle())
+    readStream.on('close', () => {
+      if (!settled) settle(new Error('SFTP 文件读取流提前关闭。'))
+    })
+    readStream.on('error', settle)
+  })
+}
+
 function openRemoteFile (sftp, path) {
   return new Promise((resolve, reject) => {
     sftp.open(path, 'r', (err, fileHandle) => {
@@ -413,6 +464,7 @@ function readRemoteArchiveTextEntry (sftp, remotePath, entryPath, options = {}) 
 module.exports = {
   readRemoteFile,
   readRemoteFilePreview,
+  readRemoteFileBase64Preview,
   readRemoteFileRange,
   readRemoteFileChunk,
   listRemoteArchive,

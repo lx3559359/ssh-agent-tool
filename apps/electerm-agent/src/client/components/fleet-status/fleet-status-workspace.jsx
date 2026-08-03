@@ -9,6 +9,7 @@ import { createFleetServiceSelectorStore } from './fleet-service-selector-store.
 import FleetServiceSelector from './fleet-service-selector.jsx'
 import FleetStatusToolbar from './fleet-status-toolbar.jsx'
 import FleetStatusTable from './fleet-status-table.jsx'
+import { createFleetIncidentCandidates } from '../incidents/incident-capture.js'
 import './fleet-status.styl'
 
 const e = window.translate
@@ -28,7 +29,13 @@ export default auto(function FleetStatusWorkspace ({
       bookmarks: store.bookmarks,
       bookmarkGroups: store.bookmarkGroups,
       getBookmarks: () => store.bookmarks,
-      getBookmarkGroups: () => store.bookmarkGroups
+      getBookmarkGroups: () => store.bookmarkGroups,
+      onCollectionComplete: rows => {
+        const candidates = createFleetIncidentCandidates({ rows })
+        candidates.forEach(candidate => {
+          store.captureIncidentCandidateSafely(candidate)
+        })
+      }
     })
   }
   if (!serviceSelectorStoreRef.current) {

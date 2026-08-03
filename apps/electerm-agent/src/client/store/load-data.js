@@ -14,11 +14,19 @@ import safeParse from '../common/parse-json-safe'
 import initWatch from './watch'
 import { parseQuickConnect } from '../common/parse-quick-connect'
 import { normalizeAIChatHistoryOnStartup } from '../components/ai/ai-chat-actions'
-import { recordPerformanceMark } from '../common/quality/quality-events.js'
+import {
+  recordPerformanceMark,
+  recordQualityEvent
+} from '../common/quality/quality-events.js'
+import { createTraceContext } from '../common/quality/trace-context.js'
 import {
   buildClientRecoveryPlan,
   createRecoveredTabs
 } from '../common/recovery/client-recovery-state.js'
+import {
+  dismissRecoveryPlanOperation,
+  loadRecoveryPlanOperation
+} from '../common/recovery/recovery-plan-operations.js'
 import deepCopy from 'json-deep-copy'
 import * as safetyTransactionStore from '../common/safety-transactions/transaction-store.js'
 import {
@@ -29,6 +37,17 @@ import {
   agentTaskRegistry,
   recoverOrphanedAgentTasks
 } from '../components/ai/agent-task-registry.js'
+import {
+  markUnfinishedOperationTasksInterrupted
+} from '../common/operation-tasks/task-store.js'
+
+function recordRecoveryOperationEvent (event) {
+  const action = String(event?.action || 'unknown')
+  return recordQualityEvent(
+    createTraceContext({ module: 'recovery', action }),
+    event
+  )
+}
 
 function getHost (argv, opts) {
   const arr = argv
@@ -188,12 +207,12 @@ export default (Store) => {
   }
   Store.prototype.loadRecoveryPlan = async function () {
     const { store } = window
-    let plan = null
-    try {
-      plan = buildClientRecoveryPlan(
-        await window.pre.runGlobalAsync('getRecoveryPlan')
-      )
-    } catch (error) {}
+    const recoveryResult = await loadRecoveryPlanOperation({
+      loadPlan: () => window.pre.runGlobalAsync('getRecoveryPlan'),
+      buildPlan: buildClientRecoveryPlan,
+      recordEvent: recordRecoveryOperationEvent
+    })
+    let plan = recoveryResult.plan
     const [commands, agents] = await Promise.all([
       recoverOrphanedCommandOperationsOnce({
         store: safetyTransactionStore,
@@ -282,10 +301,13 @@ export default (Store) => {
   }
   Store.prototype.dismissRecoveryNotice = async function () {
     const { store } = window
-    try {
-      await window.pre.runGlobalAsync('dismissRecoveryPlan')
-    } catch (error) {}
-    store.recoveryPlan = null
+    const result = await dismissRecoveryPlanOperation({
+      dismissPlan: () => window.pre.runGlobalAsync('dismissRecoveryPlan'),
+      clearPlan: () => { store.recoveryPlan = null },
+      recordEvent: recordRecoveryOperationEvent
+    })
+    if (!result.dismissed) store.onError(result.error)
+    return result.dismissed
   }
   Store.prototype.initApp = async function () {
     const { store } = window
@@ -331,6 +353,19 @@ export default (Store) => {
       ext.lastDataUpdateTime = await getData('lastDataUpdateTime') || 0
       ext.initLoadingData = false
       Object.assign(store, ext)
+      const interruptedOperationTasks = await markUnfinishedOperationTasksInterrupted()
+        .catch(error => {
+          console.warn('Failed to recover operation tasks:', error)
+          return []
+        })
+      if (interruptedOperationTasks.length) {
+        const interruptedById = new Map(
+          interruptedOperationTasks.map(task => [task.id, task])
+        )
+        store.operationTasks = (store.operationTasks || []).map(task => {
+          return interruptedById.get(task.id) || task
+        })
+      }
       await store.loadRecoveryPlan()
       store.loadFontList()
       store.fetchItermThemes()

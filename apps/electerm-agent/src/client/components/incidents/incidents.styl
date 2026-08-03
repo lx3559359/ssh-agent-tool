@@ -1,0 +1,780 @@
+.terminal-workspace-layer.incident-archives-active
+  > *:not(.main-footer)
+    visibility hidden
+    pointer-events none
+
+  > .main-footer
+    pointer-events none
+
+.incident-workspace
+  display flex
+  flex-direction column
+  position absolute
+  z-index 90
+  min-width 0
+  min-height 0
+  overflow hidden
+  visibility hidden
+  opacity 0
+  pointer-events none
+  color var(--text)
+  background var(--main)
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-panel)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-lg)
+
+  .ant-btn,
+  .ant-input,
+  .ant-input-affix-wrapper,
+  .ant-select-selector,
+  textarea
+    border-radius var(--sp-radius-control) !important
+    box-shadow var(--sp-shadow-sm)
+
+.incident-home-summary
+  margin-bottom 24px
+  overflow hidden
+  border 1px solid var(--sp-border, var(--main-darker))
+  border-radius var(--sp-radius-card)
+  background var(--sp-surface-elevated, var(--main-light))
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
+
+  > header
+    min-height 44px
+    padding 0 14px
+    border-bottom 1px solid var(--sp-border, var(--main-darker))
+    display flex
+    align-items center
+    justify-content space-between
+    gap 12px
+
+    > span
+      display inline-flex
+      align-items center
+      gap 8px
+
+    > button
+      border 0
+      background transparent
+      color var(--sp-primary, var(--primary))
+      cursor pointer
+
+      .anticon
+        margin-left 6px
+
+.incident-home-summary-body
+  min-height 68px
+  padding 12px 14px
+  display grid
+  grid-template-columns auto auto minmax(0, 1fr)
+  align-items center
+  gap 8px
+
+  > strong
+    color var(--sp-primary, var(--primary))
+    font-size 19px
+
+  > span
+    color var(--sp-text-muted, var(--text-light))
+    font-size 12px
+
+  > div
+    min-width 0
+    display flex
+    justify-content flex-end
+    gap 8px
+
+    > button
+      min-width 0
+      max-width 190px
+      padding 7px 9px
+      border 1px solid var(--sp-border, var(--main-darker))
+      border-radius var(--sp-radius-card)
+      background transparent
+      box-shadow var(--sp-shadow-md)
+      color var(--sp-text, var(--text))
+      cursor pointer
+      text-align left
+
+      &:hover
+        border-color var(--sp-primary, var(--primary))
+
+      span,
+      small
+        display block
+        overflow hidden
+        text-overflow ellipsis
+        white-space nowrap
+
+      small
+        margin-top 2px
+        color var(--sp-text-muted, var(--text-light))
+
+.incident-workspace-active
+  visibility visible
+  opacity 1
+  pointer-events auto
+
+.incident-workspace-header
+  min-height 64px
+  padding 10px 14px
+  display flex
+  align-items center
+  justify-content space-between
+  gap 12px
+  border-bottom 1px solid var(--main-darker)
+  border-radius var(--sp-radius-toolbar)
+  background var(--sp-surface-elevated)
+  box-shadow var(--sp-shadow-md)
+
+  h1
+    margin 0
+    font-size 18px
+    line-height 24px
+
+  p
+    margin 2px 0 0
+    color var(--text-light)
+    font-size 12px
+
+.incident-workspace-actions,
+.incident-list-primary-actions
+  display flex
+  align-items center
+  gap 8px
+
+.incident-workspace-error
+  margin 8px 14px 0
+
+.incident-workspace-grid
+  flex 1
+  min-height 0
+  display grid
+  grid-template-columns minmax(260px, 340px) minmax(0, 1fr)
+
+.incident-candidate-workspace
+  flex 1
+  min-height 0
+  display grid
+  grid-template-columns minmax(280px, 360px) minmax(0, 1fr)
+
+.incident-candidate-list
+  min-width 0
+  min-height 0
+  display flex
+  flex-direction column
+  border-right 1px solid var(--main-darker)
+
+  > header
+    min-height 64px
+    padding 10px 12px
+    border-bottom 1px solid var(--main-darker)
+    display flex
+    align-items center
+    justify-content space-between
+    gap 10px
+
+    > div:first-child
+      min-width 0
+      display flex
+      flex-direction column
+      gap 3px
+
+    span
+      color var(--text-light)
+      font-size 11px
+
+.incident-candidate-list-scroll
+  flex 1
+  min-height 0
+  overflow auto
+  padding 8px
+
+  > button
+    width 100%
+    min-height 82px
+    margin-bottom 7px
+    padding 10px
+    border 1px solid transparent
+    border-radius var(--sp-radius-small)
+    box-shadow none
+    color var(--text)
+    background transparent
+    text-align left
+    display grid
+    grid-template-columns 4px minmax(0, 1fr)
+    gap 9px
+    cursor pointer
+
+    &:hover,
+    &.active
+      border-color var(--primary)
+      background var(--main-light)
+
+    > span
+      min-width 0
+      display flex
+      flex-direction column
+      gap 4px
+
+    strong,
+    small,
+    em
+      overflow hidden
+      text-overflow ellipsis
+      white-space nowrap
+
+    small,
+    em
+      color var(--text-light)
+      font-size 11px
+      font-style normal
+
+.incident-candidate-review
+  min-width 0
+  min-height 0
+  overflow auto
+  padding 18px
+
+  > header
+    display flex
+    align-items flex-start
+    justify-content space-between
+    gap 12px
+
+    h2
+      margin 0
+      font-size 17px
+
+    p
+      margin 4px 0 0
+      color var(--text-light)
+      font-size 12px
+
+  > footer
+    margin-top 16px
+    padding-top 14px
+    border-top 1px solid var(--main-darker)
+    display flex
+    justify-content flex-end
+    gap 8px
+
+.incident-candidate-form
+  margin-top 18px
+  display grid
+  grid-template-columns minmax(0, 1fr) 160px
+  gap 12px
+
+  label
+    min-width 0
+    display flex
+    flex-direction column
+    gap 6px
+
+    > span
+      color var(--text-light)
+      font-size 12px
+
+.incident-candidate-form-wide
+  grid-column 1 / -1
+
+.incident-candidate-evidence
+  margin-top 16px
+  padding: 12px
+  border 1px solid var(--main-darker)
+  border-radius var(--sp-radius-card)
+  background var(--main-light)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
+
+  h3
+    margin 0 0 9px
+    font-size 13px
+
+  dl
+    margin 0
+    display grid
+    grid-template-columns repeat(2, minmax(0, 1fr))
+    gap 7px 14px
+
+  dl > div
+    min-width 0
+    display grid
+    grid-template-columns 100px minmax(0, 1fr)
+    gap 8px
+
+  dt
+    color var(--text-light)
+
+  dd
+    margin 0
+    overflow-wrap anywhere
+
+.incident-candidate-loading,
+.incident-candidate-empty
+  flex 1
+  min-height 0
+  display grid
+  place-items center
+
+.incident-candidate-empty
+  align-content center
+  gap 12px
+
+.incident-candidate-status-select
+  width 132px
+  flex none
+
+.incident-timeline
+  display flex
+  flex-direction column
+  gap 0
+
+  article
+    display grid
+    grid-template-columns 10px minmax(0, 1fr)
+    gap 10px
+    padding-bottom 14px
+
+    > i
+      width 8px
+      height 8px
+      margin-top 6px
+      border 2px solid var(--primary)
+      border-radius 50%
+
+    header
+      display flex
+      align-items center
+      justify-content space-between
+      gap 10px
+
+    time,
+    small
+      color var(--text-light)
+      font-size 11px
+
+    p
+      margin 4px 0
+      white-space pre-wrap
+      overflow-wrap anywhere
+
+.incident-timeline-empty
+  color var(--text-light)
+
+.incident-list-panel
+  min-width 0
+  overflow hidden
+  display flex
+  flex-direction column
+  border-right 1px solid var(--main-darker)
+
+.incident-list-toolbar
+  padding 10px
+  display flex
+  flex-direction column
+  gap 8px
+  border-bottom 1px solid var(--main-darker)
+
+.incident-list-filter-grid
+  display grid
+  grid-template-columns repeat(2, minmax(0, 1fr))
+  gap 8px
+
+.incident-favorite-filter
+  min-height 24px
+  display flex
+  align-items center
+  gap 8px
+  color var(--text-light)
+  font-size 12px
+
+.incident-list-scroll
+  flex 1
+  min-height 0
+  overflow auto
+  padding 8px
+
+.incident-list-item
+  width 100%
+  min-height 76px
+  margin-bottom 6px
+  padding 10px
+  border 1px solid transparent
+  border-radius var(--sp-radius-small)
+  box-shadow none
+  color var(--text)
+  background transparent
+  text-align left
+  display grid
+  grid-template-columns 4px minmax(0, 1fr)
+  gap 9px
+  cursor pointer
+
+  &:hover
+    background var(--main-light)
+
+  &.active
+    border-color var(--primary)
+    background var(--main-light)
+
+.incident-severity
+  width 4px
+  height 100%
+  min-height 50px
+  border-radius 4px
+  background #8c8c8c
+
+.incident-severity-critical
+  background #cf1322
+
+.incident-severity-high
+  background #d46b08
+
+.incident-severity-medium
+  background #d4b106
+
+.incident-severity-low
+  background #389e0d
+
+.incident-list-copy
+  min-width 0
+  display flex
+  flex-direction column
+  gap 4px
+
+  strong
+    overflow hidden
+    text-overflow ellipsis
+    white-space nowrap
+    font-size 13px
+
+    .anticon
+      margin-right 5px
+      color #d48806
+
+  small
+    overflow hidden
+    text-overflow ellipsis
+    white-space nowrap
+    color var(--text-light)
+
+  > span
+    display flex
+    align-items center
+    justify-content space-between
+    gap 8px
+
+  time
+    color var(--text-light)
+    font-size 11px
+
+.incident-list-empty
+  padding 28px 8px
+
+.incident-list-panel > .ant-pagination
+  flex none
+  padding 8px 10px
+  border-top 1px solid var(--main-darker)
+
+.incident-detail-panel
+  min-width 0
+  min-height 0
+  overflow auto
+  padding 16px
+
+  > .ant-empty
+    margin-top 80px
+
+.incident-mobile-back
+  display none
+
+.incident-detail-header
+  min-height 42px
+  margin-bottom 12px
+  display flex
+  align-items flex-start
+  justify-content space-between
+  gap 12px
+
+  h2
+    margin 0
+    font-size 17px
+    line-height 24px
+
+  span
+    color var(--text-light)
+    font-size 12px
+
+.incident-detail-actions
+  display flex
+  align-items center
+  gap 8px
+
+.incident-form-section
+  padding 14px 0
+  border-top 1px solid var(--main-darker)
+
+  h3
+    margin 0 0 10px
+    font-size 14px
+
+  label
+    min-width 0
+    display flex
+    flex-direction column
+    gap 6px
+
+    > span
+      color var(--text-light)
+      font-size 12px
+
+.incident-form-basics
+  display grid
+  grid-template-columns repeat(2, minmax(0, 1fr))
+  gap 12px
+
+.incident-form-wide
+  grid-column 1 / -1
+
+.incident-flag-controls
+  display flex
+  align-items center
+  gap 18px
+
+  label
+    flex-direction row
+    align-items center
+    gap 6px
+    color var(--text-light)
+
+.incident-analysis-grid
+  display grid
+  grid-template-columns repeat(2, minmax(0, 1fr))
+  gap 12px
+
+.incident-current-state
+  margin-bottom 10px
+  display flex
+  align-items center
+  gap 8px
+  color var(--text-light)
+
+.incident-verification-select
+  max-width 380px
+  margin-bottom 10px
+
+.incident-transition-actions
+  display flex
+  flex-wrap wrap
+  gap 8px
+
+.incident-note-submit
+  margin-top 8px
+  display flex
+  align-items center
+  justify-content space-between
+  gap 10px
+
+  span
+    color var(--text-light)
+    font-size 11px
+
+.incident-notes
+  margin-top 12px
+  display flex
+  flex-direction column
+  gap 8px
+
+.incident-note
+  padding 9px 10px
+  border-left 2px solid var(--primary)
+  border-radius var(--sp-radius-small)
+  background var(--main-light)
+  box-shadow none
+
+  header
+    display flex
+    align-items center
+    justify-content space-between
+
+  time
+    color var(--text-light)
+    font-size 11px
+
+  p
+    margin 4px 0 0
+    white-space pre-wrap
+    overflow-wrap anywhere
+
+.incident-storage-summary
+  display grid
+  grid-template-columns repeat(4, minmax(0, 1fr))
+  gap 8px
+
+  > div
+    min-width 0
+    padding 10px
+    border 1px solid var(--main-darker)
+    border-radius var(--sp-radius-card)
+    background var(--sp-surface-elevated, var(--main-light))
+    box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
+    display flex
+    flex-direction column
+    gap 4px
+
+  span
+    color var(--text-light)
+    font-size 11px
+
+  strong
+    overflow hidden
+    text-overflow ellipsis
+    white-space nowrap
+
+.incident-storage-toolbar
+  margin-top 12px
+  padding-bottom 10px
+  border-bottom 1px solid var(--main-darker)
+  display flex
+  align-items center
+  justify-content space-between
+  gap 10px
+  color var(--text-light)
+
+.incident-backup-list
+  max-height 240px
+  overflow auto
+
+.incident-backup-row
+  min-height 54px
+  padding 8px 0
+  border-bottom 1px solid var(--main-darker)
+  display flex
+  align-items center
+  justify-content space-between
+  gap 10px
+
+  > span
+    min-width 0
+    display flex
+    flex-direction column
+    gap 3px
+
+  strong
+    overflow hidden
+    text-overflow ellipsis
+    white-space nowrap
+
+  small
+    color var(--text-light)
+
+.incident-storage-empty
+  padding 24px
+  color var(--text-light)
+  text-align center
+
+.incident-restore-confirmation
+  margin-top 12px
+  display flex
+  flex-direction column
+  gap 10px
+
+  label
+    display flex
+    flex-direction column
+    gap 6px
+
+  > div:last-child
+    display flex
+    justify-content flex-end
+
+@media (max-width: 1180px)
+  .incident-workspace-grid
+    grid-template-columns minmax(240px, 300px) minmax(0, 1fr)
+
+  .incident-form-basics,
+  .incident-analysis-grid
+    grid-template-columns minmax(0, 1fr)
+
+  .incident-form-wide
+    grid-column auto
+
+  .incident-storage-summary
+    grid-template-columns repeat(2, minmax(0, 1fr))
+
+@media (max-width: 900px)
+  .incident-workspace-header
+    min-height 56px
+    padding 8px 10px
+
+  .incident-workspace-actions
+    gap 4px
+
+    .ant-btn
+      padding-inline 8px
+
+  .incident-workspace-grid
+    grid-template-columns minmax(0, 1fr)
+
+  .incident-candidate-workspace
+    grid-template-columns minmax(0, 1fr)
+
+  .incident-candidate-list
+    max-height 36%
+    border-right 0
+    border-bottom 1px solid var(--main-darker)
+
+  .incident-candidate-form,
+  .incident-candidate-evidence dl
+    grid-template-columns minmax(0, 1fr)
+
+  .incident-candidate-form-wide
+    grid-column auto
+
+  .incident-list-panel
+    border-right 0
+
+  .incident-detail-panel
+    display none
+    padding 12px
+
+  .incident-workspace-grid.incident-workspace-show-detail
+    .incident-list-panel
+      display none
+
+    .incident-detail-panel
+      display block
+
+  .incident-mobile-back
+    display inline-flex
+    margin 0 0 8px -8px
+
+  .incident-home-summary-body
+    grid-template-columns auto minmax(0, 1fr)
+
+    > div
+      grid-column 1 / -1
+      justify-content flex-start
+      overflow auto
+
+@media (max-height: 760px)
+  .incident-workspace-header
+    min-height 52px
+    padding-block 6px
+
+    p
+      display none
+
+  .incident-list-toolbar
+    padding 8px
+    gap 6px
+
+  .incident-list-item
+    min-height 68px
+    padding 8px
+
+  .incident-detail-panel
+    padding-top 10px
+
+  .incident-form-section
+    padding 10px 0

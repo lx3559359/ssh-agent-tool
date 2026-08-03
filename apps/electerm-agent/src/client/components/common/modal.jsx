@@ -5,10 +5,14 @@
 
 import { CloseOutlined } from '@ant-design/icons'
 import classnames from 'classnames'
-import React, { useEffect, useRef } from 'react'
+import React, { useEffect, useId, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { createRoot } from 'react-dom/client'
+import { useDialogBackgroundIsolation } from '../../common/dialog-background-isolation.js'
 import { resolveShellPilotModalCopy } from '../../common/shellpilot-i18n-overrides.js'
 import './modal.styl'
+
+const e = window.translate
 
 function getFocusableElements (container) {
   if (!container) return []
@@ -39,7 +43,14 @@ export default function Modal (props) {
     keyboardConfirm = true,
     onCancel
   } = props
+  const overlayRef = useRef(null)
   const contentRef = useRef(null)
+  const onCancelRef = useRef(onCancel)
+  const keyboardConfirmRef = useRef(keyboardConfirm)
+  const titleId = useId()
+  onCancelRef.current = onCancel
+  keyboardConfirmRef.current = keyboardConfirm
+  useDialogBackgroundIsolation(open, overlayRef)
 
   function handleMaskClick (e) {
     if (e.target === e.currentTarget && maskClosable && onCancel) {
@@ -60,8 +71,8 @@ export default function Modal (props) {
 
     const handleKeyDown = (e) => {
       if (e.key === 'Escape') {
-        if (onCancel) {
-          onCancel()
+        if (onCancelRef.current) {
+          onCancelRef.current()
           e.preventDefault()
         }
       } else if (e.key === 'Tab') {
@@ -81,7 +92,7 @@ export default function Modal (props) {
           e.preventDefault()
           first.focus()
         }
-      } else if (keyboardConfirm && (e.key === 'Enter' || e.key === ' ')) {
+      } else if (keyboardConfirmRef.current && (e.key === 'Enter' || e.key === ' ')) {
         // For confirm, Enter/Space confirms
         const okBtn = document.querySelector('.custom-modal-ok-btn')
         if (okBtn) {
@@ -98,7 +109,7 @@ export default function Modal (props) {
       document.removeEventListener('keydown', handleKeyDown)
       if (previouslyFocused?.isConnected) previouslyFocused.focus()
     }
-  }, [keyboardConfirm, open, onCancel])
+  }, [open])
 
   if (!open) {
     return null
@@ -118,8 +129,8 @@ export default function Modal (props) {
     className
   )
 
-  return (
-    <div className={cls} style={modalStyle}>
+  return createPortal((
+    <div ref={overlayRef} className={cls} style={modalStyle}>
       <div
         className='custom-modal-mask'
         onClick={handleMaskClick}
@@ -131,19 +142,25 @@ export default function Modal (props) {
           style={contentStyle}
           role='dialog'
           aria-modal='true'
-          aria-label={typeof title === 'string' ? title : undefined}
+          aria-labelledby={titleId}
           tabIndex={-1}
         >
           {title && (
             <div className='custom-modal-header'>
-              <div className='custom-modal-title'>{title}</div>
+              <div id={titleId} className='custom-modal-title'>{title}</div>
               <button
                 type='button'
                 className='custom-modal-close'
+                aria-label={e('shellpilotCloseDialog')}
                 onClick={handleClose}
               >
-                <CloseOutlined />
+                <CloseOutlined aria-hidden='true' />
               </button>
+            </div>
+          )}
+          {!title && (
+            <div id={titleId} className='custom-modal-accessible-title'>
+              {e('shellpilotDialog')}
             </div>
           )}
           <div className='custom-modal-body'>
@@ -157,7 +174,7 @@ export default function Modal (props) {
         </div>
       </div>
     </div>
-  )
+  ), document.body)
 }
 
 Modal.displayName = 'Modal'

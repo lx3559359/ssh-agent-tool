@@ -3,12 +3,12 @@
  */
 
 import React from 'react'
-import { Button } from 'antd'
+import { Alert, Button, Input } from 'antd'
 import message from '../common/message'
 import { PlusOutlined } from '@ant-design/icons'
 import Modal from '../common/modal'
 import { refsStatic } from '../common/ref'
-import AICategorySelect from './common/ai-category-select.jsx'
+import BookmarkGroupPicker from './common/bookmark-group-picker.jsx'
 import generate from '../../common/uid'
 import copy from 'json-deep-copy'
 
@@ -18,7 +18,11 @@ export default class BookmarkFromHistoryModal extends React.PureComponent {
   state = {
     visible: false,
     tab: null,
-    selectedCategory: 'default'
+    selectedCategory: 'default',
+    title: '',
+    host: '',
+    port: '',
+    username: ''
   }
 
   componentDidMount () {
@@ -26,10 +30,15 @@ export default class BookmarkFromHistoryModal extends React.PureComponent {
   }
 
   show (tab) {
+    const selectedCategory = window.store.getLastBookmarkGroup?.() || 'default'
     this.setState({
       visible: true,
       tab: copy(tab),
-      selectedCategory: 'default'
+      selectedCategory,
+      title: tab.title || createHistoryBookmarkTitle(tab),
+      host: tab.host || '',
+      port: String(tab.port || defaultPortForType(tab.type)),
+      username: tab.username || ''
     })
   }
 
@@ -37,7 +46,11 @@ export default class BookmarkFromHistoryModal extends React.PureComponent {
     this.setState({
       visible: false,
       tab: null,
-      selectedCategory: 'default'
+      selectedCategory: 'default',
+      title: '',
+      host: '',
+      port: '',
+      username: ''
     })
   }
 
@@ -55,47 +68,52 @@ export default class BookmarkFromHistoryModal extends React.PureComponent {
   }
 
   handleConfirm = () => {
-    const { tab, selectedCategory } = this.state
+    const {
+      tab,
+      selectedCategory,
+      title,
+      host,
+      port,
+      username
+    } = this.state
     if (!tab) {
       return
     }
 
-    const { store } = window
-    const { addItem } = store
-
-    // Create bookmark from tab data
-    const bookmark = this.buildBookmark()
-
-    // Add bookmark
-    addItem(bookmark, 'bookmarks')
-
-    // Ensure the bookmark id is registered in its group
-    try {
-      const groupId = selectedCategory || 'default'
-      const group = window.store.bookmarkGroups.find(g => g.id === groupId)
-      if (group) {
-        group.bookmarkIds = [
-          ...new Set([...(group.bookmarkIds || []), bookmark.id])
-        ]
-        bookmark.color = group.color
-      }
-    } catch (err) {
-      console.error('Failed to update bookmark group:', err)
+    const bookmark = {
+      ...this.buildBookmark(),
+      title: title.trim(),
+      host: host.trim(),
+      port: String(port).trim(),
+      username: username.trim()
     }
 
+    window.store.saveBookmarkInGroup(bookmark, selectedCategory)
     message.success(e('Done'))
     this.handleClose()
   }
 
   render () {
-    const { visible, selectedCategory } = this.state
+    const {
+      visible,
+      tab,
+      selectedCategory,
+      title,
+      host,
+      port,
+      username
+    } = this.state
 
     if (!visible) {
       return null
     }
 
-    const bookmark = this.buildBookmark()
-    const bookmarkJson = JSON.stringify(bookmark, null, 2)
+    const hasAuthentication = Boolean(
+      tab?.password ||
+      tab?.privateKey ||
+      tab?.profile
+    )
+    const canSave = Boolean(title.trim() && host.trim() && port.trim())
 
     const modalProps = {
       open: visible,
@@ -112,7 +130,11 @@ export default class BookmarkFromHistoryModal extends React.PureComponent {
           <Button onClick={this.handleClose}>
             {e('cancel')}
           </Button>
-          <Button type='primary' onClick={this.handleConfirm}>
+          <Button
+            type='primary'
+            disabled={!canSave}
+            onClick={this.handleConfirm}
+          >
             {e('confirm')}
           </Button>
         </div>
@@ -122,20 +144,63 @@ export default class BookmarkFromHistoryModal extends React.PureComponent {
     return (
       <Modal {...modalProps}>
         <div className='bookmark-from-history-modal pd2'>
+          {!hasAuthentication
+            ? (
+              <Alert
+                className='mg2b'
+                type='warning'
+                showIcon
+                message={e('shellpilotAuthenticationNeedsCompletion')}
+              />
+              )
+            : null}
           <div className='pd1b'>
-            <AICategorySelect
-              bookmarkGroups={window.store.bookmarkGroups}
-              value={selectedCategory}
-              onChange={(val) => this.setState({ selectedCategory: val })}
+            <label>{e('name')}</label>
+            <Input
+              value={title}
+              onChange={event => this.setState({ title: event.target.value })}
             />
           </div>
           <div className='pd1b'>
-            <pre className='bookmark-json-preview'>
-              {bookmarkJson}
-            </pre>
+            <label>{e('host')}</label>
+            <Input
+              value={host}
+              onChange={event => this.setState({ host: event.target.value })}
+            />
+          </div>
+          <div className='pd1b'>
+            <label>{e('port')}</label>
+            <Input
+              value={port}
+              inputMode='numeric'
+              onChange={event => this.setState({ port: event.target.value })}
+            />
+          </div>
+          <div className='pd1b'>
+            <label>{e('username')}</label>
+            <Input
+              value={username}
+              onChange={event => this.setState({ username: event.target.value })}
+            />
+          </div>
+          <div className='pd1b'>
+            <label>{e('shellpilotSelectServerGroup')}</label>
+            <BookmarkGroupPicker
+              value={selectedCategory}
+              onChange={val => this.setState({ selectedCategory: val })}
+            />
           </div>
         </div>
       </Modal>
     )
   }
+}
+
+function defaultPortForType (type) {
+  return String(type).toLowerCase() === 'telnet' ? 23 : 22
+}
+
+function createHistoryBookmarkTitle (tab) {
+  const account = [tab.username, tab.host].filter(Boolean).join('@')
+  return account || e('bookmarks')
 }

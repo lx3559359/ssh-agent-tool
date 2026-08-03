@@ -21,8 +21,8 @@
   max-height calc(100vh - 88px)
   bottom 44px
   border 1px solid var(--main-darker)
-  border-radius 14px
-  box-shadow 0 -12px 28px rgba(0, 0, 0, .18)
+  border-radius var(--sp-radius-overlay)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-lg)
   overflow hidden
   .pd2
     box-sizing border-box
@@ -109,10 +109,10 @@
   text-align left
   white-space normal
   border-color var(--main-darker)
-  border-radius 8px
+  border-radius var(--sp-radius-card)
   background var(--main)
   vertical-align top
-  box-shadow inset 0 1px 0 rgba(255, 255, 255, .04)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
   &:hover
     border-color var(--primary)
     background var(--main-light)
@@ -221,6 +221,8 @@
     flex-direction column
     max-height calc(100vh - 48px)
     overflow hidden
+    border-radius var(--sp-radius-overlay)
+    box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-lg)
   .ant-modal-header,
   .ant-modal-footer
     flex 0 0 auto
@@ -243,8 +245,9 @@
   margin 0 0 10px 0
   padding 10px 12px
   border 1px solid var(--main-darker)
-  border-radius 10px
+  border-radius var(--sp-radius-card)
   background var(--main)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
 
 .qm-command-modal-tips-title
   margin-bottom 6px
@@ -263,9 +266,9 @@
   margin 0 0 12px 0
   padding 12px
   border 1px solid var(--primary)
-  border-radius 12px
+  border-radius var(--sp-radius-card)
   background var(--main-light)
-  box-shadow inset 0 1px 0 rgba(255, 255, 255, .04)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
 
 .qm-command-param-title
   margin-bottom 8px
@@ -305,7 +308,8 @@
 
 .qm-command-preview-toggle
   margin-top 4px
-  border-radius 8px
+  border-radius var(--sp-radius-control)
+  box-shadow var(--sp-shadow-sm)
 
 .qm-command-preview-toggle-inline
   margin-top 0
@@ -318,8 +322,9 @@
   margin-bottom 10px
   padding 10px 12px
   border 1px solid var(--primary)
-  border-radius 8px
+  border-radius var(--sp-radius-card)
   background var(--main-light)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
 
 .qm-network-probe-error
   border-color var(--warn)
@@ -346,8 +351,9 @@
   margin-bottom 10px
   padding 10px 12px
   border 1px solid var(--primary)
-  border-radius 8px
+  border-radius var(--sp-radius-card)
   background var(--main-light)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
 
 .qm-target-discovery-error
   border-color var(--warn)
@@ -367,9 +373,10 @@
   margin 0 0 10px
   padding 10px 12px
   border 1px solid var(--success)
-  border-radius 8px
+  border-radius var(--sp-radius-card)
   color var(--text)
   background var(--main)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
   font-size 12px
   line-height 1.6
 
@@ -400,8 +407,9 @@
   margin 10px 0
   padding 10px 12px
   border 1px solid var(--warn)
-  border-radius 8px
+  border-radius var(--sp-radius-card)
   background var(--main-light)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
 
 .qm-rollback-record-title
   color var(--text-light)

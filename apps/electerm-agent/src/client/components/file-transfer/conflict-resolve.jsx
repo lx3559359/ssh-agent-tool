@@ -191,6 +191,7 @@ export default class ConfirmModalStore extends Component {
         <Button
           type='dashed'
           className='mg1l'
+          data-testid='transfer-conflict-cancel-all'
           onClick={() => this.act(fileActions.skipAll)}
         >
           {e('cancel')}
@@ -225,6 +226,7 @@ export default class ConfirmModalStore extends Component {
             type='dashed'
             danger
             className='mg1l'
+            data-testid='transfer-conflict-apply-all'
             title={
               isDirectory
                 ? e('mergeDesc')
@@ -239,6 +241,7 @@ export default class ConfirmModalStore extends Component {
           <Button
             type='primary'
             className='mg1l'
+            data-testid='transfer-conflict-rename-all'
             title={e('renameDesc')}
             onClick={
               () => this.act(fileActions.renameAll)
@@ -249,6 +252,7 @@ export default class ConfirmModalStore extends Component {
           <Button
             type='primary'
             className='mg1l'
+            data-testid='transfer-conflict-skip-all'
             title={e('skipAll')}
             onClick={
               () => this.act(fileActions.skipAll)

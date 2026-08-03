@@ -39,6 +39,7 @@ export const dbNames = [
   'safetyOperations',
   'agentTasks',
   'agentArtifacts',
+  'operationTasks',
   'autoRunWidgets'
 ]
 export const dbNamesForSync = [
@@ -57,6 +58,7 @@ export const dbNamesForWatch = [
   'safetyOperations',
   'agentTasks',
   'agentArtifacts',
+  'operationTasks',
   'autoRunWidgets'
 ]
 

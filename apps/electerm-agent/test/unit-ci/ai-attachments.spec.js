@@ -36,6 +36,19 @@ test('AI attachments parse SFTP drop payloads into file attachments', async () =
   assert.equal(attachments[0].file.path, '/var/log')
 })
 
+test('web attachments receive a stable logical read ID', async () => {
+  const {
+    createWebAttachment
+  } = await import(attachmentsUrl)
+  const attachment = createWebAttachment(
+    'http://kb.internal/app#/sharingPath'
+  )
+
+  assert.equal(attachment.source, 'url')
+  assert.equal(typeof attachment.readId, 'string')
+  assert.ok(attachment.readId.length > 0)
+})
+
 test('AI attachments build bounded context for local and SFTP files', async () => {
   const {
     buildAttachmentContextPrompt
@@ -87,6 +100,65 @@ test('AI attachments build bounded context for local and SFTP files', async () =
   assert.match(prompt, /local:C:\/tmp\/app\.log/)
   assert.match(prompt, /error\.log/)
   assert.match(prompt, /remote:\/var\/log\/error\.log/)
+})
+
+test('pathless browser text attachments use their File payload instead of a disk path', async () => {
+  const {
+    buildAttachmentAIContent,
+    createLocalFileAttachments
+  } = await import(attachmentsUrl)
+  const originalWindow = global.window
+  let pathReads = 0
+  const payload = 'browser payload'
+
+  global.window = {
+    pre: {
+      runGlobalAsync: async (operation, input) => {
+        assert.equal(operation, 'ingestAIContent')
+        assert.equal(
+          Buffer.from(input.dataBase64, 'base64').toString('utf8'),
+          payload
+        )
+        return {
+          ok: true,
+          value: {
+            kind: 'text',
+            name: input.name,
+            mimeType: input.mimeType,
+            bytes: Buffer.byteLength(payload),
+            text: payload,
+            truncated: false
+          }
+        }
+      }
+    }
+  }
+
+  try {
+    const file = {
+      name: 'browser.txt',
+      size: Buffer.byteLength(payload),
+      type: 'text/plain',
+      arrayBuffer: async () => Uint8Array.from(
+        Buffer.from(payload)
+      ).buffer
+    }
+    const result = await buildAttachmentAIContent({
+      attachments: createLocalFileAttachments([file]),
+      fsApi: {
+        readFilePreview: async () => {
+          pathReads += 1
+          throw new Error('pathless browser files must not use disk reads')
+        }
+      }
+    })
+
+    assert.equal(pathReads, 0)
+    assert.deepEqual(result.errors, [])
+    assert.match(result.prompt, /browser payload/)
+  } finally {
+    global.window = originalWindow
+  }
 })
 
 test('AI attachments explain continuation and archive member context', async () => {
@@ -150,6 +222,6 @@ test('AI chat component wires local paste drag and SFTP drop attachment UI', () 
   assert.match(source, /type='file'/)
   assert.match(source, /ai-attachment-upload-button/)
   assert.doesNotMatch(source, /ai-attachment-pick-icon/)
-  assert.match(source, /buildAttachmentContextPrompt/)
+  assert.match(source, /buildAttachmentAIContent/)
   assert.match(source, /parseSftpDropPayload/)
 })

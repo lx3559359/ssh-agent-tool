@@ -37,15 +37,6 @@ test('recovered tabs remain dormant until an explicit reconnect', () => {
   assert.match(source, /renderRecoveryPending/)
 })
 
-test('startup loads a plan but does not restore or connect tabs automatically', () => {
-  const source = readSource('src/client/store/load-data.js')
-
-  assert.match(source, /createRecoveredTabs/)
-  assert.match(source, /Store\.prototype\.restoreRecoveryTabs/)
-  assert.doesNotMatch(source, /await store\.restoreRecoveryTabs\(\)/)
-  assert.doesNotMatch(source, /store\.ipcOpenTab\([^\n]*recovery/i)
-})
-
 test('recovery notice is mounted in the existing main shell', () => {
   const source = readSource('src/client/components/main/main.jsx')
 

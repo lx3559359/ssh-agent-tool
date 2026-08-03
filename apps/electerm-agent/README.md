@@ -22,11 +22,17 @@ The complete Chinese user guide is available in [docs/USER_GUIDE_ZH.md](docs/USE
 
 ## Development
 
-Requirements: Node.js and npm on Windows.
+Requirements: Windows, Node.js 20.19+ or 22.12+, and npm.
 
 ```bash
 npm install
-npm run dev
+npm start
+```
+
+Keep the Vite server running. In a second terminal, start Electron:
+
+```bash
+npm run app
 ```
 
 Common verification commands:

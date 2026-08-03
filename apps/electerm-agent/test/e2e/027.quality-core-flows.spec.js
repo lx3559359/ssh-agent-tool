@@ -94,7 +94,13 @@ test('isolated client completes SSH, SFTP, AI, update and rollback quality flows
     await acceptHostKey(page)
 
     await expect.poll(() => sshServer.state.shellCount, { timeout: 20000 }).toBeGreaterThan(0)
+    const terminalInput = page.locator('.session-current .xterm-helper-textarea')
+    await expect(terminalInput).toBeVisible({ timeout: 20000 })
+    await expect.poll(() => page.evaluate(() => Boolean(
+      window.refs.get('term-' + window.store.activeTabId)?.term
+    )), { timeout: 20000 }).toBe(true)
     await page.evaluate(() => window.refs.get('term-' + window.store.activeTabId)?.term?.focus())
+    await expect(terminalInput).toBeFocused()
     await page.keyboard.type('echo shellpilot-e2e')
     await page.keyboard.press('Enter')
     await expect.poll(() => terminalText(page), { timeout: 20000 }).toContain('shellpilot-e2e')

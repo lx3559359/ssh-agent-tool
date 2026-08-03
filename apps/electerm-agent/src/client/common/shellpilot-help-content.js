@@ -37,19 +37,20 @@ export const shellpilotEnglishHelpItems = Object.freeze([
   {
     key: 'terminal',
     labelKey: 'shellpilotHelpTerminal',
-    intro: 'Read-only commands run normally; recognized changes use recovery or risk confirmation when available.',
+    intro: 'Manual SSH terminal input goes directly to the native session; ShellPilot does not intercept or classify Enter.',
     tips: [
       'Use Ctrl+C to interrupt a command and the configured copy and paste shortcuts for terminal text.',
       'Multiple tabs, split panes, search, session logs, and context-menu actions are supported.',
       'Use tmux, screen, or nohup for long-running work that must survive a network interruption.',
-      'AI, quick commands, and manual input all remain subject to the same safety classification.'
+      'AI, quick commands, operations tools, and other controlled entry points remain subject to safety classification.'
     ]
   },
   {
     key: 'terminal-recovery',
     labelKey: 'shellpilotHelpTerminalRecovery',
-    intro: 'Before a supported one-line change is sent, ShellPilot can prepare and verify a recovery point.',
+    intro: 'Controlled entry points classify commands before dispatch and can prepare and verify recovery for supported changes.',
     tips: [
+      'Manual SSH input does not use this classification or recovery-point flow; review and back up manual changes yourself.',
       'Only statically understood effects can receive automatic recovery.',
       'Interactive editors, dynamic scripts, aliases, and unknown executables may require risk confirmation without rollback.',
       'A recovery record is bound to the original host, port, account, and session capability.',
@@ -77,6 +78,24 @@ export const shellpilotEnglishHelpItems = Object.freeze([
       'Downloads only change the local destination and are not remote rollback operations.',
       'Use Quick Backup before deleting, overwriting, or moving important files.'
     ]
+  },
+  {
+    key: 'incident-archives',
+    labelKey: 'shellpilotHelpIncidentArchives',
+    intro: 'Incident Archive turns a troubleshooting session into a searchable, verifiable local record for follow-up and review.',
+    steps: [
+      'Review pending anomalies before confirming an incident; candidates never create remote work by themselves.',
+      'Record the title, affected server, severity, symptoms, impact, root cause, resolution, verification, and review notes.',
+      'Link relevant tasks, recovery records, and artifacts so the timeline preserves evidence without duplicate entries.',
+      'Mark an incident resolved only after recording manual or automatic verification.',
+      'Export bounded Markdown, HTML, or JSON when you need to migrate or share the record.'
+    ],
+    tips: [
+      'Incident data stays on this computer and must not contain passwords, API keys, private keys, or other credentials.',
+      'Generated postmortem artifacts should be reviewed in the Artifacts workspace before sharing.',
+      'The client keeps internal automatic storage protection but does not expose manual database backup or restore actions.'
+    ],
+    warning: 'A resolved incident record does not replace monitoring, business acceptance, or formal change auditing.'
   },
   {
     key: 'safety',

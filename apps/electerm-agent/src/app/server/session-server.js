@@ -20,6 +20,10 @@ const {
   resize,
   runCmd,
   cancelRunCmd,
+  startSshTunnel,
+  stopSshTunnel,
+  listSshTunnels,
+  testSshTunnel,
   toggleTerminalLog,
   toggleTerminalLogTimestamp,
   setTerminalLogPath,
@@ -34,6 +38,7 @@ const { trzszManager } = require('./trzsz')
 const { xmodemManager } = require('./xmodem')
 const { parseTerminalControlMessage } = require('./terminal-control-message')
 const { serializeRunCmdError } = require('./session-common')
+const { serializeTunnelError } = require('./ssh-tunnel-runtime')
 
 const {
   tokenElecterm,
@@ -391,9 +396,13 @@ if (type === 'rdp') {
             })
         }
       } else if (action === 'sftp-destroy') {
-        const { id } = msg
-        ws.close()
-        onDestroySftp(id)
+        const { id, uid } = msg
+        Promise.resolve(onDestroySftp(id, true))
+          .catch(() => {})
+          .finally(() => {
+            if (uid) ws.s({ id: uid, data: true })
+            ws.close()
+          })
       }
     })
     // end
@@ -484,6 +493,14 @@ process.on('message', async (message) => {
       promise = runCmd(body)
     } else if (action === 'cancel-run-cmd') {
       promise = cancelRunCmd(body)
+    } else if (action === 'ssh-tunnel-start') {
+      promise = startSshTunnel(body)
+    } else if (action === 'ssh-tunnel-stop') {
+      promise = stopSshTunnel(body)
+    } else if (action === 'ssh-tunnel-list') {
+      promise = listSshTunnels(body)
+    } else if (action === 'ssh-tunnel-test') {
+      promise = testSshTunnel(body)
     }
 
     const result = await promise
@@ -497,7 +514,9 @@ process.on('message', async (message) => {
         log.error('common message error', err)
         return {
           id,
-          error: serializeRunCmdError(err)
+          error: action.startsWith('ssh-tunnel-')
+            ? serializeTunnelError(err)
+            : serializeRunCmdError(err)
         }
       })
 

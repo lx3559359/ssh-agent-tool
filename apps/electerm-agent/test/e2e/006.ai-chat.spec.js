@@ -128,6 +128,139 @@ describe('AI Config and Suggestions', function () {
     await expect(client.locator('.chat-history-item')).toHaveCount(0, { timeout: 10000 })
   })
 
+  it('should upload paste drop remove and safely submit local attachments', async function () {
+    await client.evaluate(() => {
+      window.store.aiChatHistory = []
+      const profile = {
+        id: 'e2e-ai-attachments',
+        nameAI: 'E2E AI Attachments',
+        baseURLAI: 'http://localhost:43434',
+        apiPathAI: '/chat/completions',
+        modelAI: 'gpt-3.5-turbo',
+        apiKeyAI: 'test-api-key',
+        authHeaderNameAI: 'Authorization: Bearer',
+        roleAI: '',
+        languageAI: 'English'
+      }
+      window.store.setConfig({
+        activeAIProfileId: profile.id,
+        aiProfiles: [profile],
+        ...profile
+      })
+      window.store.handleOpenAIPanel()
+    })
+
+    const composer = client.locator('.ai-chat-input')
+    const uploadButton = composer.locator('.ai-attachment-upload-button')
+    await expect(uploadButton).toBeVisible({ timeout: 10000 })
+
+    const chooserPromise = client.waitForEvent('filechooser')
+    await uploadButton.click()
+    const chooser = await chooserPromise
+    await chooser.setFiles({
+      name: 'upload.txt',
+      mimeType: 'text/plain',
+      buffer: Buffer.from('uploaded attachment payload')
+    })
+    await expect(composer.locator('.ai-attachment-chip')).toContainText('upload.txt')
+    await composer.locator('.ai-attachment-remove').click()
+    await expect(composer.locator('.ai-attachment-queue')).toHaveCount(0)
+
+    const textarea = composer.locator('.ai-chat-textarea')
+    await textarea.evaluate(element => {
+      const clipboard = new window.DataTransfer()
+      clipboard.items.add(new window.File(
+        ['pasted attachment payload'],
+        'pasted.txt',
+        { type: 'text/plain' }
+      ))
+      element.dispatchEvent(new window.ClipboardEvent('paste', {
+        bubbles: true,
+        clipboardData: clipboard
+      }))
+
+      const dropped = new window.DataTransfer()
+      dropped.items.add(new window.File(
+        ['dropped attachment payload'],
+        'dropped.txt',
+        { type: 'text/plain' }
+      ))
+      element.dispatchEvent(new window.DragEvent('drop', {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer: dropped
+      }))
+    })
+    await expect(composer.locator('.ai-attachment-chip')).toHaveCount(2)
+    await expect(composer.locator('.ai-attachment-queue')).toContainText('pasted.txt')
+    await expect(composer.locator('.ai-attachment-queue')).toContainText('dropped.txt')
+
+    await textarea.fill('Review both local attachments.')
+    await composer.locator('.send-to-ai-icon').click()
+    await expect(composer.locator('.ai-attachment-queue')).toHaveCount(0)
+    await expect(client.locator('.chat-history-item')).toHaveCount(1, { timeout: 10000 })
+    await expect(client.locator('.chat-history-item').last()).toContainText(
+      'Response to your query',
+      { timeout: 10000 }
+    )
+    await expect.poll(() => client.evaluate(() => (
+      window.store.aiChatHistory.at(-1)?.prompt || ''
+    ))).toContain('pasted attachment payload')
+    await expect.poll(() => client.evaluate(() => (
+      window.store.aiChatHistory.at(-1)?.prompt || ''
+    ))).toContain('dropped attachment payload')
+
+    await client.evaluate(() => {
+      const runGlobalAsync = window.pre.runGlobalAsync.bind(window.pre)
+      window.__attachmentIngestionPayloads = []
+      window.pre.runGlobalAsync = (name, ...args) => {
+        const operation = runGlobalAsync(name, ...args)
+        if (name !== 'ingestAIContent') {
+          return operation
+        }
+        const record = { payload: args[0], result: null }
+        window.__attachmentIngestionPayloads.push(record)
+        return operation.then(result => {
+          record.result = result
+          return result
+        })
+      }
+    })
+    await textarea.evaluate(element => {
+      const dropped = new window.DataTransfer()
+      const file = new window.File(
+        ['<svg xmlns="http://www.w3.org/2000/svg"/>'],
+        'spoofed.png',
+        { type: 'image/svg+xml' }
+      )
+      window.__spoofedAttachmentMime = file.type
+      dropped.items.add(file)
+      element.dispatchEvent(new window.DragEvent('drop', {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer: dropped
+      }))
+    })
+    await expect(composer.locator('.ai-attachment-chip')).toContainText(
+      'spoofed.png'
+    )
+    expect(await client.evaluate(() => window.__spoofedAttachmentMime)).toBe(
+      'image/svg+xml'
+    )
+    await composer.locator('.send-to-ai-icon').click()
+    await expect.poll(() => client.evaluate(() => (
+      window.__attachmentIngestionPayloads.at(-1)?.payload?.mimeType || ''
+    ))).toBe('image/svg+xml')
+    await expect.poll(() => client.evaluate(() => (
+      window.__attachmentIngestionPayloads.at(-1)?.result?.ok
+    ))).toBe(false)
+    await expect(client.locator('.message-item.warning').last()).toContainText(
+      'spoofed.png',
+      { timeout: 10000 }
+    )
+    await expect(client.locator('.chat-history-item')).toHaveCount(1)
+  })
+
   it('should render normalized legacy object fields without failing the AI panel', async function () {
     await client.evaluate(() => {
       window.__aiRendererErrors = []

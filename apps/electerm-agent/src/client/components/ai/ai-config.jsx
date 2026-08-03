@@ -12,7 +12,6 @@ import {
 } from 'antd'
 import {
   DownloadOutlined,
-  GlobalOutlined,
   MinusCircleOutlined,
   PlusOutlined,
   UploadOutlined
@@ -706,10 +705,12 @@ export default function AIConfigForm ({ initialValues, languageVersion, onSubmit
               value={providerQuery}
               onChange={event => setProviderQuery(event.target.value)}
               placeholder={e('shellpilotAiSearchProviders')}
+              aria-label={e('shellpilotAiSearchProviders')}
             />
             <Select
               value={providerRegion}
               onChange={setProviderRegion}
+              aria-label={e('shellpilotAiProviderRegionFilter')}
               options={[
                 { value: 'all', label: e('shellpilotAiProviderRegionAll') },
                 { value: 'domestic', label: e('shellpilotAiProviderRegionDomestic') },
@@ -735,10 +736,12 @@ export default function AIConfigForm ({ initialValues, languageVersion, onSubmit
                 <Button size='small' onClick={() => handlePresetChange(provider.preset)}>
                   {e('shellpilotAiUseProviderTemplate')}
                 </Button>
-                <Link to={provider.website}>
-                  <Button size='small' type='text' icon={<GlobalOutlined />}>
-                    {e('shellpilotAiOpenProviderWebsite')}
-                  </Button>
+                <Link
+                  to={provider.website}
+                  className='ant-btn ant-btn-text ant-btn-sm sp-ai-provider-website'
+                  aria-label={tf('shellpilotAiOpenProviderWebsiteNamed', { provider: provider.name })}
+                >
+                  {e('shellpilotAiOpenProviderWebsite')}
                 </Link>
               </Space>
             </div>
@@ -762,52 +765,75 @@ export default function AIConfigForm ({ initialValues, languageVersion, onSubmit
         layout='vertical'
         className='ai-config-form sp-card sp-configuration-section sp-ai-config-form'
       >
-        <div className='sp-ai-config-primary-fields'>
-          <Form.Item
-            label={renderApiUrlLabel()}
-            name='baseURLAI'
-            required
-            extra={e('shellpilotAiApiAddressHelp')}
-            rules={[
-              { required: true, message: e('shellpilotAiApiAddressRequired') },
-              { type: 'url', message: e('shellpilotValidUrlRequired') }
-            ]}
-          >
-            <Input placeholder={e('shellpilotAiApiAddressPlaceholder')} />
-          </Form.Item>
+        <section
+          className='sp-ai-config-primary-fields'
+          aria-labelledby='sp-ai-config-primary-title'
+          aria-describedby='sp-ai-config-primary-description'
+        >
+          <header className='sp-ai-config-primary-head'>
+            <h2 id='sp-ai-config-primary-title'>{e('shellpilotAiEssentialSetup')}</h2>
+            <p id='sp-ai-config-primary-description'>{e('shellpilotAiEssentialSetupDescription')}</p>
+          </header>
 
-          <Form.Item
-            label={e('shellpilotAiApiKey')}
-            name='apiKeyAI'
-            extra={e('shellpilotAiApiKeyExtra')}
-            rules={[{ required: true, message: e('shellpilotAiApiKeyRequired') }]}
-          >
-            <Password placeholder={e('shellpilotAiApiKeyPlaceholder')} />
-          </Form.Item>
+          <div className='sp-ai-config-step'>
+            <Form.Item
+              label={renderApiUrlLabel()}
+              name='baseURLAI'
+              required
+              extra={e('shellpilotAiApiAddressHelp')}
+              rules={[
+                { required: true, message: e('shellpilotAiApiAddressRequired') },
+                { type: 'url', message: e('shellpilotValidUrlRequired') }
+              ]}
+            >
+              <Input placeholder={e('shellpilotAiApiAddressPlaceholder')} />
+            </Form.Item>
+          </div>
 
-          <Form.Item
-            label={e('modelAi')}
-            extra={e('shellpilotAiModelExtra')}
-          >
-            <Space.Compact className='width-100'>
-              <Form.Item name='modelAI' noStyle>
-                <AutoComplete
-                  options={modelOptions}
-                  filterOption={filter}
-                  style={{ width: '72%' }}
+          <div className='sp-ai-config-step'>
+            <Form.Item
+              label={e('shellpilotAiApiKey')}
+              name='apiKeyAI'
+              extra={e('shellpilotAiApiKeyExtra')}
+              rules={[{ required: true, message: e('shellpilotAiApiKeyRequired') }]}
+            >
+              <Password
+                placeholder={e('shellpilotAiApiKeyPlaceholder')}
+                aria-label={e('shellpilotAiApiKey')}
+              />
+            </Form.Item>
+          </div>
+
+          <div className='sp-ai-config-step'>
+            <Form.Item
+              label={e('modelAi')}
+              extra={e('shellpilotAiModelExtra')}
+            >
+              <Space.Compact className='width-100'>
+                <Form.Item name='modelAI' noStyle>
+                  <AutoComplete
+                    options={modelOptions}
+                    filterOption={filter}
+                    style={{ width: '72%' }}
+                  >
+                    <Input
+                      placeholder={e('shellpilotAiModelPlaceholder')}
+                      aria-label={e('modelAi')}
+                    />
+                  </AutoComplete>
+                </Form.Item>
+                <Button
+                  loading={loadingModels}
+                  aria-busy={loadingModels}
+                  aria-label={e('shellpilotAiLoadModels')}
+                  onClick={handleLoadModels}
+                  style={{ width: '28%' }}
                 >
-                  <Input placeholder={e('shellpilotAiModelPlaceholder')} />
-                </AutoComplete>
-              </Form.Item>
-              <Button
-                loading={loadingModels}
-                onClick={handleLoadModels}
-                style={{ width: '28%' }}
-              >
-                {e('shellpilotAiLoadModels')}
-              </Button>
-            </Space.Compact>
-          </Form.Item>
+                  {e('shellpilotAiLoadModels')}
+                </Button>
+              </Space.Compact>
+            </Form.Item>
+          </div>
 
           <Form.Item>
             <Space>
@@ -820,13 +846,14 @@ export default function AIConfigForm ({ initialValues, languageVersion, onSubmit
             </Space>
             <div className='sp-ai-config-save-hint'>{e('shellpilotAiSaveTestHint')}</div>
           </Form.Item>
-        </div>
+        </section>
 
         {renderRecommendedProviders()}
 
         <Collapse
           ghost
           className='sp-ai-config-advanced'
+          aria-label={e('shellpilotAiAdvancedOptions')}
           activeKey={advancedOpen ? ['advanced'] : []}
           onChange={keys => setAdvancedOpen(Array.isArray(keys) ? keys.includes('advanced') : keys === 'advanced')}
           items={[{
@@ -992,59 +1019,59 @@ export default function AIConfigForm ({ initialValues, languageVersion, onSubmit
                 >
                   <Form.List name='mcpServers'>
                     {(fields, { add, remove }) => (
-                      <Space direction='vertical' className='width-100'>
+                      <Space orientation='vertical' className='width-100'>
                         {
-                  fields.map(({ key, name }) => (
-                    <div className='pd1 border' key={key}>
-                      <Space align='start' className='width-100'>
-                        <Form.Item
-                          name={[name, 'transport']}
-                          label={e('shellpilotAiConnectionMethod')}
-                          className='width-100'
-                        >
-                          <Select options={mcpTransportOptions} />
-                        </Form.Item>
-                        <Form.Item
-                          name={[name, 'disabled']}
-                          label={e('shellpilotStatus')}
-                          valuePropName='checked'
-                        >
-                          <Checkbox>{e('shellpilotDisabled')}</Checkbox>
-                        </Form.Item>
-                        <Button
-                          danger
-                          icon={<MinusCircleOutlined />}
-                          onClick={() => remove(name)}
-                        >
-                          {e('shellpilotDelete')}
-                        </Button>
-                      </Space>
-                      <Space align='start' className='width-100'>
-                        {
-                          mcpServerFields.map(item => (
-                            <Form.Item
-                              key={item.name}
-                              name={[name, item.name]}
-                              label={e(item.labelKey)}
-                              rules={item.required
-                                ? [{ required: true, message: tf('shellpilotFieldRequired', { field: e(item.labelKey) }) }]
-                                : []}
-                              className='flex1'
-                            >
-                              <Input placeholder={e(item.placeholderKey)} />
-                            </Form.Item>
+                          fields.map(({ key, name }) => (
+                            <div className='pd1 border' key={key}>
+                              <Space align='start' className='width-100'>
+                                <Form.Item
+                                  name={[name, 'transport']}
+                                  label={e('shellpilotAiConnectionMethod')}
+                                  className='width-100'
+                                >
+                                  <Select options={mcpTransportOptions} />
+                                </Form.Item>
+                                <Form.Item
+                                  name={[name, 'disabled']}
+                                  label={e('shellpilotStatus')}
+                                  valuePropName='checked'
+                                >
+                                  <Checkbox>{e('shellpilotDisabled')}</Checkbox>
+                                </Form.Item>
+                                <Button
+                                  danger
+                                  icon={<MinusCircleOutlined />}
+                                  onClick={() => remove(name)}
+                                >
+                                  {e('shellpilotDelete')}
+                                </Button>
+                              </Space>
+                              <Space align='start' className='width-100'>
+                                {
+                                  mcpServerFields.map(item => (
+                                    <Form.Item
+                                      key={item.name}
+                                      name={[name, item.name]}
+                                      label={e(item.labelKey)}
+                                      rules={item.required
+                                        ? [{ required: true, message: tf('shellpilotFieldRequired', { field: e(item.labelKey) }) }]
+                                        : []}
+                                      className='flex1'
+                                    >
+                                      <Input placeholder={e(item.placeholderKey)} />
+                                    </Form.Item>
+                                  ))
+                                }
+                              </Space>
+                              <Form.Item
+                                name={[name, 'args']}
+                                label={e('shellpilotAiStartArguments')}
+                              >
+                                <Input placeholder={e('shellpilotAiStartArgumentsPlaceholder')} />
+                              </Form.Item>
+                            </div>
                           ))
                         }
-                      </Space>
-                      <Form.Item
-                        name={[name, 'args']}
-                        label={e('shellpilotAiStartArguments')}
-                      >
-                        <Input placeholder={e('shellpilotAiStartArgumentsPlaceholder')} />
-                      </Form.Item>
-                    </div>
-                  ))
-                }
                         <Button
                           icon={<PlusOutlined />}
                           onClick={() => add({

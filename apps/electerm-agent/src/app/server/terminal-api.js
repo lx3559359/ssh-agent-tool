@@ -4,6 +4,7 @@
 
 const { testConnection, terminal, terminals } = require('./session-process')
 const { serializeRunCmdError } = require('./session-common')
+const { serializeTunnelError } = require('./ssh-tunnel-runtime')
 
 async function runCmd (ws, msg) {
   const {
@@ -50,6 +51,45 @@ async function cancelRunCmd (ws, msg) {
       error: serializeRunCmdError(err)
     })
   }
+}
+
+async function handleSshTunnel (ws, msg, operation) {
+  const { id, pid } = msg
+  try {
+    const term = terminals(pid)
+    if (!term) {
+      const error = new Error('SSH 会话不存在或已经断开')
+      error.code = 'SSH_TUNNEL_SESSION_NOT_FOUND'
+      throw error
+    }
+    ws.s({ id, data: await operation(term) })
+  } catch (error) {
+    ws.s({ id, error: serializeTunnelError(error) })
+  }
+}
+
+function startSshTunnel (ws, msg) {
+  return handleSshTunnel(ws, msg, term => {
+    return term.startSshTunnel(msg.tunnel, msg.id)
+  })
+}
+
+function stopSshTunnel (ws, msg) {
+  return handleSshTunnel(ws, msg, term => {
+    return term.stopSshTunnel(msg.tunnelId, msg.id)
+  })
+}
+
+function listSshTunnels (ws, msg) {
+  return handleSshTunnel(ws, msg, term => {
+    return term.listSshTunnels(msg.id)
+  })
+}
+
+function testSshTunnel (ws, msg) {
+  return handleSshTunnel(ws, msg, term => {
+    return term.testSshTunnel(msg.tunnelId, msg.id)
+  })
 }
 
 function resize (ws, msg) {
@@ -173,6 +213,10 @@ exports.testTerm = testTerm
 exports.resize = resize
 exports.runCmd = runCmd
 exports.cancelRunCmd = cancelRunCmd
+exports.startSshTunnel = startSshTunnel
+exports.stopSshTunnel = stopSshTunnel
+exports.listSshTunnels = listSshTunnels
+exports.testSshTunnel = testSshTunnel
 exports.toggleTerminalLog = toggleTerminalLog
 exports.toggleTerminalLogTimestamp = toggleTerminalLogTimestamp
 exports.setTerminalLogPath = setTerminalLogPath

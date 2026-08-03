@@ -17,6 +17,9 @@
 
 .type-tab
   display inline-block
+  border 0
+  background transparent
+  color var(--text)
   vertical-align middle
   line-height 30px
   padding 0 20px 0 0
@@ -29,6 +32,33 @@
   &.active
     .type-tab-line
       display inline-block
+
+.type-tab:focus-visible
+  outline 2px solid var(--sp-primary)
+  outline-offset var(--sp-focus-offset)
+
+.session-icon-button
+  display inline-flex
+  align-items center
+  justify-content center
+  min-width 28px
+  min-height 28px
+  padding 4px
+  border 0
+  border-radius var(--sp-radius-control)
+  color var(--text)
+  background transparent
+  cursor pointer
+  &:hover
+    color var(--text-light)
+    background var(--sp-surface-elevated)
+  &[aria-pressed='true']
+    color var(--success)
+    background var(--sp-primary-soft)
+
+.session-icon-button:focus-visible
+  outline 2px solid var(--sp-primary)
+  outline-offset var(--sp-focus-offset)
 
 .is-transporting
   .type-tab.sftp

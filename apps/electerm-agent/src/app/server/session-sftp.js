@@ -4,6 +4,7 @@
 const {
   readRemoteFile,
   readRemoteFilePreview,
+  readRemoteFileBase64Preview,
   readRemoteFileRange,
   readRemoteFileChunk,
   listRemoteArchive,
@@ -15,6 +16,7 @@ const { TerminalBase } = require('./session-base.js')
 const { Transform } = require('stream')
 const { pipeline } = require('stream/promises')
 const { posix: pathPosix } = require('path')
+const crypto = require('crypto')
 const {
   getSizeCount,
   getSizeCountWin
@@ -64,6 +66,51 @@ function isMissingSftpError (error) {
   return error?.code === 2 || error?.code === 'ENOENT' ||
     error?.code === 'SFTP_NO_SUCH_FILE' ||
     /no such|not found|does not exist/i.test(String(error?.message || error))
+}
+
+async function closeSftpChannel (channel, timeoutMs = 1000) {
+  if (!channel) return true
+  if (typeof channel.end !== 'function') {
+    channel.destroy?.()
+    return false
+  }
+  if (typeof channel.once !== 'function') {
+    try {
+      channel.end()
+      return true
+    } catch {
+      channel.destroy?.()
+      return false
+    }
+  }
+
+  const graceful = await new Promise(resolve => {
+    let settled = false
+    const finish = value => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      channel.removeListener?.('close', onClosed)
+      channel.removeListener?.('end', onClosed)
+      resolve(value)
+    }
+    const onClosed = () => finish(true)
+    const timer = setTimeout(() => finish(false), timeoutMs)
+    channel.once('close', onClosed)
+    channel.once('end', onClosed)
+    try {
+      channel.end()
+    } catch {
+      finish(false)
+    }
+  })
+
+  if (!graceful) {
+    try {
+      channel.destroy?.()
+    } catch {}
+  }
+  return graceful
 }
 
 class Sftp extends TerminalBase {
@@ -137,6 +184,23 @@ class Sftp extends TerminalBase {
     delete this.sftp
     delete this.initOptions
     this.onEndConn()
+  }
+
+  async destroyGracefully () {
+    if (this.destroyPromise) return this.destroyPromise
+    this.destroyPromise = (async () => {
+      const keys = Object.keys(this.transfers || {})
+      for (const key of keys) {
+        const transfer = this.transfers[key]
+        transfer && transfer.destroy && transfer.destroy()
+        delete this.transfers[key]
+      }
+      await closeSftpChannel(this.sftp)
+      delete this.sftp
+      delete this.initOptions
+      this.onEndConn()
+    })()
+    return this.destroyPromise
   }
 
   cancelOperation (cancelToken) {
@@ -643,8 +707,7 @@ class Sftp extends TerminalBase {
    * @return {Promise}
    */
   mv (from, to) {
-    return this.buildRemoteCommand('mv', from, to)
-      .then(cmd => this.runExec(cmd))
+    return this.rename(from, to)
       .then(() => 1)
   }
 
@@ -916,6 +979,10 @@ class Sftp extends TerminalBase {
     return readRemoteFilePreview(this.sftp, remotePath, maxBytes)
   }
 
+  readFileBase64Preview (remotePath, maxBytes) {
+    return readRemoteFileBase64Preview(this.sftp, remotePath, maxBytes)
+  }
+
   readFileRange (remotePath, options) {
     return readRemoteFileRange(this.sftp, remotePath, options)
   }
@@ -934,6 +1001,39 @@ class Sftp extends TerminalBase {
 
   readFileChunk (remotePath, options) {
     return readRemoteFileChunk(this.sftp, remotePath, options)
+  }
+
+  async describeResumeEntry (remotePath, boundarySize = 64 * 1024) {
+    const limit = Math.min(
+      64 * 1024,
+      Math.max(1, Number(boundarySize) || 64 * 1024)
+    )
+    const stat = await this.lstat(remotePath)
+    const size = Math.max(0, Number(stat?.size) || 0)
+    const readHash = async offset => {
+      const chunk = await this.readFileChunk(remotePath, {
+        offset,
+        maxBytes: limit
+      })
+      return crypto
+        .createHash('sha256')
+        .update(Buffer.from(chunk.base64 || '', 'base64'))
+        .digest('hex')
+    }
+    const firstSha256 = await readHash(0)
+    const lastSha256 = size > limit
+      ? await readHash(size - limit)
+      : firstSha256
+    const mtimeMs = stat?.mtime instanceof Date
+      ? stat.mtime.getTime()
+      : Number(stat?.mtime || 0) * 1000
+    return {
+      size,
+      mtimeMs,
+      firstSha256,
+      lastSha256,
+      boundarySha256: lastSha256
+    }
   }
 
   searchFileText (remotePath, options) {
@@ -964,3 +1064,4 @@ class Sftp extends TerminalBase {
 }
 
 exports.Sftp = commonExtends(Sftp)
+exports.closeSftpChannel = closeSftpChannel

@@ -12,22 +12,19 @@ class Transfer {
     onData,
     onEnd,
     onError,
+    onPaused,
     ...rest
   }) {
     const id = generate()
     this.id = id
     const th = this
+    this.onPaused = onPaused
     const {
       sftpId,
       isFtp,
       port
     } = rest
     const ws = await initWs('transfer', id, sftpId, undefined, port)
-    ws.s({
-      action: 'transfer-new',
-      ...rest,
-      id
-    })
     keys.forEach(func => {
       th[func] = (...args) => {
         ws.s({
@@ -38,7 +35,7 @@ class Transfer {
           sftpId,
           args
         })
-        if (func === 'destroy') {
+        if (['cancel', 'interrupt', 'destroy'].includes(func)) {
           th.onDestroy(ws)
         }
       }
@@ -52,16 +49,26 @@ class Transfer {
       }
     }
     ws.addEventListener('message', this.onData)
-    ws.once((arg) => {
-      onEnd(arg)
-      th.onDestroy(ws)
-    }, 'transfer:end:' + id)
-    ws.once((arg) => {
-      console.debug('sftp transfer error')
-      console.debug(arg.error.stack)
-      onError(new Error(arg.error.message))
-      th.onDestroy(ws)
-    }, 'transfer:err:' + id)
+    await Promise.all([
+      ws.once((arg) => {
+        onEnd(arg)
+        th.onDestroy(ws)
+      }, 'transfer:end:' + id),
+      ws.once((arg) => {
+        console.debug('sftp transfer error')
+        console.debug(arg.error.stack)
+        onError(new Error(arg.error.message))
+        th.onDestroy(ws)
+      }, 'transfer:err:' + id),
+      ws.once((arg) => {
+        this.onPaused?.(arg)
+      }, 'transfer:paused:' + id)
+    ])
+    ws.s({
+      action: 'transfer-new',
+      ...rest,
+      id
+    })
   }
 
   onDestroy (ws) {

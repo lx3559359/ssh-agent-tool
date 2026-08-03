@@ -18,11 +18,11 @@
   display flex
   flex-direction column
   overflow hidden
-  color var(--text)
-  background var(--main)
-  border 1px solid var(--main-darker)
-  border-radius 10px
-  box-shadow 0 -12px 28px rgba(0, 0, 0, .2)
+  color var(--sp-text)
+  background var(--sp-page)
+  border 1px solid var(--sp-border-strong)
+  border-radius var(--sp-radius-panel)
+  box-shadow var(--sp-shadow-lg)
 
 .operations-workspace-head
   min-height 48px
@@ -30,8 +30,9 @@
   display flex
   align-items center
   justify-content space-between
-  border-bottom 1px solid var(--main-darker)
-  background var(--main-light)
+  border-bottom 1px solid var(--sp-border)
+  background var(--sp-surface-elevated)
+  box-shadow var(--sp-shadow-md)
   > div
     min-width 0
     display flex
@@ -54,8 +55,12 @@
   align-items center
   gap 8px
   overflow-x auto
-  color var(--text-dark)
-  border-bottom 1px solid var(--main-darker)
+  padding 8px 10px
+  color var(--sp-text-muted)
+  background var(--sp-surface-elevated)
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-toolbar)
+  box-shadow var(--sp-shadow-md)
   font-size 12px
   > span
     flex 0 0 auto
@@ -67,7 +72,8 @@
     min-width max-content
   .ant-btn
     color var(--text)
-    border-radius 5px
+    border-radius var(--sp-radius-control)
+    box-shadow var(--sp-shadow-sm)
     &:hover,
     &:focus-visible
       color var(--primary)
@@ -130,7 +136,7 @@
     color var(--text-dark)
     background transparent
     border 0
-    border-radius 4px
+    border-radius var(--sp-radius-small)
     cursor pointer
     &.active
       color var(--primary)
@@ -139,8 +145,9 @@
 .operations-tool-list
   flex 1
   min-height 0
-  display flex
-  flex-direction column
+  display grid
+  grid-template-columns repeat(auto-fit, minmax(190px, 1fr))
+  align-content start
   gap 7px
   overflow-y auto
   > button
@@ -150,16 +157,22 @@
     flex-direction column
     gap 4px
     text-align left
-    color var(--text)
-    background var(--main)
-    border 1px solid var(--main-darker)
-    border-radius 6px
+    color var(--sp-text)
+    background var(--sp-surface)
+    border 1px solid var(--sp-border)
+    border-radius var(--sp-radius-small)
+    box-shadow none
     cursor pointer
+    &:focus-visible
+      outline 2px solid var(--sp-primary)
+      outline-offset 2px
     &:hover
-      border-color var(--primary)
+      border-color var(--sp-primary)
+      background var(--sp-surface-soft)
     &.active
-      border-color var(--primary)
-      box-shadow inset 3px 0 0 var(--primary)
+      border-color var(--sp-primary)
+      background linear-gradient(145deg, var(--sp-primary-soft), var(--sp-surface-elevated))
+      box-shadow var(--sp-shadow-focus)
     strong
       font-size 13px
     span
@@ -177,6 +190,10 @@
   min-width 0
   padding 16px
   overflow-y auto
+  background var(--sp-surface-elevated)
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-panel)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-lg)
 
 .operations-tool-title
   display flex
@@ -201,7 +218,8 @@
   color var(--text-dark)
   background var(--main-light)
   border 1px solid var(--main-darker)
-  border-radius 6px
+  border-radius var(--sp-radius-toolbar)
+  box-shadow var(--sp-shadow-sm)
   > span
     width 7px
     height 7px
@@ -219,7 +237,8 @@
   color var(--error)
   background var(--main-light)
   border 1px solid var(--error)
-  border-radius 6px
+  border-radius var(--sp-radius-card)
+  box-shadow var(--sp-shadow-md)
 
 .operations-parameter-grid
   display grid
@@ -244,7 +263,8 @@
   padding 14px
   color var(--text-dark)
   border 1px dashed var(--main-darker)
-  border-radius 6px
+  border-radius var(--sp-radius-card)
+  box-shadow var(--sp-shadow-md)
 
 .operations-run-actions
   margin 14px 0
@@ -282,8 +302,11 @@
 
 .operations-task-panel
   margin-top 14px
-  padding-top 14px
-  border-top 1px solid var(--main-darker)
+  padding 14px
+  background var(--sp-surface-elevated)
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-card)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
   > header
     display flex
     justify-content space-between
@@ -310,7 +333,7 @@
     color var(--text-dark)
     background var(--main-light)
     border 1px solid var(--main-darker)
-    border-radius 4px
+    border-radius var(--sp-radius-small)
     &.done
       color #22b573
     &.running
@@ -321,7 +344,7 @@
   overflow auto
   background #0d1117
   border 1px solid #273244
-  border-radius 6px
+  border-radius var(--sp-radius-small)
   pre
     box-sizing border-box
     min-width 100%
@@ -352,9 +375,12 @@
   display flex
   align-items center
   gap 8px
-  background var(--main-light)
-  border 1px solid var(--main-darker)
-  border-radius 6px
+  background var(--sp-surface)
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-small)
+  box-shadow none
+  &:hover
+    background var(--sp-surface-soft)
   > button
     flex 1
     min-width 0
@@ -382,7 +408,8 @@
   color var(--text)
   background var(--main-light)
   border 1px solid var(--main-darker)
-  border-radius 8px
+  border-radius var(--sp-radius-card)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
   > strong
     display block
     margin-bottom 8px
@@ -412,9 +439,10 @@
   display flex
   align-items center
   gap 12px
-  border 1px solid var(--main-darker)
-  border-radius 8px
-  background var(--main-light)
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-card)
+  background var(--sp-surface-elevated)
+  box-shadow var(--sp-shadow-md)
   > button
     flex 0 0 auto
 
@@ -446,12 +474,28 @@
         font-size 11px
         line-height 1.4
 
+  .operations-maintenance-contract
+    grid-column 1 / -1
+    align-items center
+    flex-wrap wrap
+    padding-top 8px
+    border-top 1px solid var(--sp-border)
+    > span
+      display block
+      color var(--text-dark)
+      font-size 11px
+      line-height 1.5
+
+.operations-toolkit-workspace .qm-list-wrap
+  grid-template-columns repeat(auto-fit, minmax(230px, 1fr))
+
 .operations-maintenance-catalog
   flex 1
   min-height 0
   overflow hidden
   border: 1px solid var(--main-darker)
-  border-radius 8px
+  border-radius var(--sp-radius-panel)
+  box-shadow var(--sp-shadow-lg)
   .qm-wrap-embedded
     background var(--main-light)
 
@@ -470,8 +514,39 @@
   .operations-script-steps ol
     grid-template-columns 1fr
 
+@media (max-width: 680px)
+  .operations-toolkit-workspace
+    left 8px !important
+    z-index 210
+  .operations-diagnostic
+    display flex
+    flex-direction column
+    overflow-y auto
+  .operations-catalog
+    flex 0 0 auto
+    max-height 310px
+    overflow visible
+    border-right 0
+    border-bottom 1px solid var(--main-darker)
+  .operations-tool-list
+    max-height 210px
+    grid-template-columns 1fr
+  .operations-tool-detail
+    flex 0 0 auto
+    overflow visible
+  .operations-maintenance-safety
+    align-items stretch
+    flex-direction column
+  .operations-toolkit-workspace .qm-list-wrap
+    grid-template-columns 1fr
+
 @media (max-height: 620px)
   .operations-toolkit-workspace
     height calc(100vh - 68px)
     max-height none
+    min-height 0
     bottom 34px
+  .operations-workspace-body
+    min-height 0
+    overflow-y auto
+    overscroll-behavior contain

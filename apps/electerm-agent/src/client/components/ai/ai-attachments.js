@@ -3,6 +3,11 @@ import {
   AI_FILE_PREVIEW_MAX_BYTES,
   readSftpFileContext
 } from './ai-chat-context-actions.js'
+import { readAIWebContent } from './ai-web-access-client.js'
+
+const MAX_AI_CONTENT_BYTES = 10 * 1024 * 1024
+const LEGACY_TEXT_FILE_PATTERN = /\.(?:txt|log|md|json|csv|xml|ya?ml|ini|conf|cfg|sh|bash|zsh|fish|ps1|bat|cmd|sql|html?|css|js|jsx|ts|tsx|py|rb|php|java|go|rs|c|cc|cpp|h|hpp)$/i
+const ARCHIVE_FILE_PATTERN = /\.(?:zip|tgz|tar\.gz|gz)$/i
 
 function splitLocalPath (filePath = '', fallbackName = '') {
   const value = String(filePath || '')
@@ -19,6 +24,182 @@ function splitLocalPath (filePath = '', fallbackName = '') {
   }
 }
 
+function joinAttachmentPath (attachment = {}) {
+  const file = attachment.file || {}
+  const base = String(file.path || attachment.path || '')
+  const name = String(file.name || attachment.name || '')
+  if (!base) return name
+  if (
+    base === name ||
+    base.endsWith(`/${name}`) ||
+    base.endsWith(`\\${name}`)
+  ) {
+    return base
+  }
+  const separator = base.includes('\\') && !base.includes('/') ? '\\' : '/'
+  return `${base.replace(/[\\/]$/, '')}${separator}${name}`
+}
+
+function arrayBufferToBase64 (buffer) {
+  const bytes = new Uint8Array(buffer)
+  const chunkSize = 0x8000
+  let binary = ''
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(
+      ...bytes.subarray(offset, offset + chunkSize)
+    )
+  }
+  return btoa(binary)
+}
+
+async function unwrapIngestionResult (operation) {
+  const result = await operation
+  if (!result?.ok) {
+    const error = new Error(result?.error?.message || '内容读取失败。')
+    error.code = result?.error?.code
+    error.details = result?.error?.details
+    throw error
+  }
+  return result.value
+}
+
+async function ingestAIContent (payload) {
+  return unwrapIngestionResult(
+    window.pre.runGlobalAsync('ingestAIContent', payload)
+  )
+}
+
+async function readBrowserFilePayload (attachment) {
+  const file = attachment.file
+  if (typeof file?.arrayBuffer !== 'function') {
+    throw new Error('本地文件缺少可读取内容。')
+  }
+  if (Number(file.size || 0) > MAX_AI_CONTENT_BYTES) {
+    throw new Error('文件超过 10 MB 读取上限。')
+  }
+  const value = await file.arrayBuffer()
+  if (value.byteLength > MAX_AI_CONTENT_BYTES) {
+    throw new Error('文件超过 10 MB 读取上限。')
+  }
+  return {
+    name: attachment.name,
+    mimeType: attachment.mimeType || file.type || '',
+    dataBase64: arrayBufferToBase64(value)
+  }
+}
+
+async function readPathFilePayload (attachment, reader) {
+  if (typeof reader?.readFileBase64Preview !== 'function') {
+    throw new Error('当前连接不支持安全读取该文件，请重新连接或升级客户端。')
+  }
+  const result = await reader.readFileBase64Preview(
+    joinAttachmentPath(attachment),
+    MAX_AI_CONTENT_BYTES
+  )
+  if (result?.truncated) {
+    throw new Error('文件超过 10 MB 读取上限。')
+  }
+  return {
+    name: attachment.name,
+    mimeType: attachment.mimeType || attachment.file?.mimeType || '',
+    dataBase64: result?.base64 || ''
+  }
+}
+
+async function ingestAttachment (
+  attachment,
+  { fsApi, sftpRef, requestWebAccessAuthorization }
+) {
+  if (attachment.source === 'url') {
+    return readAIWebContent({
+      url: attachment.url,
+      readId: attachment.readId,
+      requestAuthorization: requestWebAccessAuthorization
+    })
+  }
+  let payload
+  if (attachment.source === 'sftp') {
+    payload = await readPathFilePayload(attachment, sftpRef?.sftp)
+  } else if (attachment.path) {
+    payload = await readPathFilePayload(attachment, fsApi)
+  } else {
+    payload = await readBrowserFilePayload(attachment)
+  }
+  return ingestAIContent({
+    kind: 'file',
+    ...payload
+  })
+}
+
+function getLegacyAttachmentFile (attachment = {}) {
+  if (attachment.file?.name) return attachment.file
+  const value = splitLocalPath(attachment.path, attachment.name)
+  return {
+    name: attachment.name || value.name,
+    path: value.path,
+    type: attachment.source === 'sftp' ? 'remote' : 'local',
+    size: attachment.size,
+    isDirectory: false
+  }
+}
+
+function shouldUseLegacyFileReader (attachment = {}, { fsApi, sftpRef } = {}) {
+  if (!['local', 'sftp'].includes(attachment.source)) return false
+  if (attachment.source === 'local' && !attachment.path) return false
+  const reader = attachment.source === 'sftp' ? sftpRef?.sftp : fsApi
+  const name = String(attachment.name || attachment.path || '')
+  if (ARCHIVE_FILE_PATTERN.test(name)) {
+    return typeof reader?.listArchive === 'function' &&
+      typeof reader?.readArchiveTextEntry === 'function'
+  }
+  return LEGACY_TEXT_FILE_PATTERN.test(name) &&
+    typeof reader?.readFilePreview === 'function'
+}
+
+async function readLegacyAttachmentContext (
+  attachment,
+  { fsApi, sftpRef, maxBytes }
+) {
+  const context = await readSftpFileContext({
+    file: getLegacyAttachmentFile(attachment),
+    sftp: sftpRef?.sftp,
+    fsApi,
+    maxBytes
+  })
+  if (!context?.ok) {
+    throw new Error(context?.message || '文件读取失败。')
+  }
+  return context
+}
+
+function formatLegacyFileContext (context) {
+  const details = []
+  if (context.archiveType) {
+    details.push(`压缩包类型：${context.archiveType}`)
+  }
+  if (context.truncated) {
+    details.push('内容状态：当前为安全预览，文件仍有后续内容，可继续读取（支持分段）。')
+  }
+  return `文件：${context.path}
+来源：${context.source}
+${details.length ? `${details.join('\n')}\n` : ''}
+\`\`\`text
+${context.content}
+\`\`\``
+}
+
+function formatTextContent (content) {
+  const status = content.truncated
+    ? '\n内容状态：已按安全上限截断。'
+    : ''
+  return `文件：${content.name}
+来源：${content.url ? `网页 ${content.url}` : '附件'}${status}
+
+\`\`\`text
+${content.text}
+\`\`\``
+}
+
 export function createLocalFileAttachments (fileList = []) {
   return Array.from(fileList || []).map(file => ({
     id: uid(),
@@ -26,14 +207,27 @@ export function createLocalFileAttachments (fileList = []) {
     name: file.name || splitLocalPath(file.path).name,
     path: file.path || '',
     size: file.size,
+    mimeType: file.type || '',
     file
   })).filter(item => item.name)
 }
 
+export function createWebAttachment (url) {
+  const value = String(url || '').trim()
+  return value
+    ? {
+        id: uid(),
+        source: 'url',
+        name: value,
+        path: value,
+        url: value,
+        readId: uid()
+      }
+    : null
+}
+
 export function parseSftpDropPayload (payload = '') {
-  if (!payload) {
-    return []
-  }
+  if (!payload) return []
   let files = []
   try {
     files = JSON.parse(payload)
@@ -41,94 +235,86 @@ export function parseSftpDropPayload (payload = '') {
     return []
   }
   return files
-    .filter(file => file && !file.isDirectory)
+    ? createSftpFileAttachments(files)
+    : []
+}
+
+export function createSftpFileAttachments (files = []) {
+  return Array.from(files || [])
+    .filter(file => file && !file.isDirectory && file.name)
     .map(file => ({
       id: uid(),
       source: 'sftp',
       name: file.name,
       path: file.path,
       size: file.size,
+      mimeType: file.mimeType || '',
       file
     }))
 }
 
-async function readBrowserFileAttachment (attachment, maxBytes) {
-  if (typeof attachment.file?.text !== 'function') {
-    return {
-      ok: false,
-      message: '本地文件缺少可读取路径，无法引用。'
-    }
-  }
-  const text = await attachment.file.text()
-  const content = text.slice(0, maxBytes)
-  return {
-    ok: true,
-    source: '本地文件',
-    path: attachment.name,
-    size: attachment.size,
-    content,
-    truncated: text.length > content.length,
-    bytesRead: content.length
-  }
-}
-
-async function readLocalAttachment (attachment, fsApi, maxBytes) {
-  if (!attachment.path) {
-    return readBrowserFileAttachment(attachment, maxBytes)
-  }
-  const localPath = splitLocalPath(attachment.path, attachment.name)
-  return readSftpFileContext({
-    file: {
-      name: localPath.name,
-      path: localPath.path,
-      type: 'local',
-      size: attachment.size,
-      isDirectory: false
-    },
-    fsApi,
-    maxBytes
-  })
-}
-
-async function readSftpAttachment (attachment, sftpRef, fsApi, maxBytes) {
-  return readSftpFileContext({
-    file: attachment.file,
-    sftp: sftpRef?.sftp,
-    fsApi,
-    maxBytes
-  })
-}
-
-function formatAttachmentContext (context) {
-  const truncated = context.truncated
-    ? `\n内容状态：已读取前 ${context.bytesRead || '-'} 字节，后续内容未全部发送；如需更多上下文，请继续读取下一段或按关键词搜索。`
-    : ''
-  return `文件：${context.path}
-来源：${context.source}${context.size ? `\n大小：${context.size}` : ''}${truncated}
-
-\`\`\`text
-${context.content}
-\`\`\``
-}
-
-export async function buildAttachmentContextPrompt ({
+export async function buildAttachmentAIContent ({
   attachments = [],
   fsApi,
   sftpRef,
+  requestWebAccessAuthorization,
   maxBytes = AI_FILE_PREVIEW_MAX_BYTES
 } = {}) {
   const blocks = []
+  const imageParts = []
+  const errors = []
   for (const attachment of attachments) {
-    const context = attachment.source === 'sftp'
-      ? await readSftpAttachment(attachment, sftpRef, fsApi, maxBytes)
-      : await readLocalAttachment(attachment, fsApi, maxBytes)
-    if (!context.ok) {
-      blocks.push(`文件：${attachment.name}\n读取失败：${context.message}`)
-      continue
+    try {
+      if (shouldUseLegacyFileReader(attachment, { fsApi, sftpRef })) {
+        const context = await readLegacyAttachmentContext(attachment, {
+          fsApi,
+          sftpRef,
+          maxBytes
+        })
+        blocks.push(formatLegacyFileContext(context))
+        continue
+      }
+      const content = await ingestAttachment(attachment, {
+        fsApi,
+        sftpRef,
+        requestWebAccessAuthorization
+      })
+      if (content.kind === 'image') {
+        blocks.push(`图片：${content.name}（已作为视觉内容发送）`)
+        imageParts.push({
+          type: 'image_url',
+          image_url: {
+            url: content.dataUrl,
+            detail: 'auto'
+          }
+        })
+      } else if (content.kind === 'web') {
+        blocks.push(formatTextContent({
+          ...content,
+          name: content.title || content.url
+        }))
+      } else {
+        blocks.push(formatTextContent(content))
+      }
+    } catch (error) {
+      if (error?.code === 'WEB_ACCESS_CANCELLED') {
+        continue
+      }
+      errors.push(
+        `${attachment.name}：${error?.message || '读取失败'}`
+      )
     }
-    blocks.push(formatAttachmentContext(context))
   }
-  return blocks.length
-    ? `请结合以下附件内容回答用户问题。\n\n${blocks.join('\n\n---\n\n')}`
-    : ''
+  return {
+    prompt: blocks.length
+      ? `请结合以下内容回答用户问题。\n\n${blocks.join('\n\n---\n\n')}`
+      : '',
+    aiContentParts: imageParts,
+    errors
+  }
+}
+
+export async function buildAttachmentContextPrompt (options = {}) {
+  const result = await buildAttachmentAIContent(options)
+  return result.prompt
 }

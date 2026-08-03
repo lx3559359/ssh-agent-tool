@@ -1,0 +1,93 @@
+.ai-file-change-review
+  color var(--text)
+
+.ai-file-change-review-summary
+  margin-bottom 12px
+  color var(--text-light)
+  line-height 1.6
+
+.ai-file-change-review-body
+  display grid
+  grid-template-columns minmax(220px, 30%) minmax(0, 1fr)
+  min-height 380px
+  max-height 62vh
+  border 1px solid var(--border)
+  border-radius var(--sp-radius-panel)
+  box-shadow var(--sp-shadow-md)
+  overflow hidden
+
+.ai-file-change-review-list
+  overflow auto
+  border-right 1px solid var(--border)
+  background var(--main-light)
+
+  button
+    display grid
+    grid-template-columns 22px minmax(0, 1fr)
+    gap 4px 8px
+    width 100%
+    min-height 46px
+    padding 9px 10px
+    border 0
+    border-bottom 1px solid var(--border)
+    border-radius 0
+    color var(--text)
+    background transparent
+    text-align left
+    cursor pointer
+
+    &:hover,
+    &.is-active
+      background var(--primary-bg)
+
+    input
+      grid-row 1 / span 2
+      align-self center
+
+    span
+      overflow hidden
+      text-overflow ellipsis
+      white-space nowrap
+
+    small
+      color var(--warning, var(--warn))
+
+.ai-file-change-review-diff
+  display flex
+  flex-direction column
+  min-width 0
+  overflow hidden
+
+  pre
+    flex 1
+    min-height 0
+    margin 0
+    padding 12px
+    overflow auto
+    color var(--text)
+    background var(--main)
+    font-size 12px
+    line-height 1.55
+    white-space pre
+
+.ai-file-change-review-path
+  padding 9px 12px
+  overflow hidden
+  border-bottom 1px solid var(--border)
+  color var(--text)
+  background var(--main-light)
+  text-overflow ellipsis
+  white-space nowrap
+
+.ai-file-change-review-footer
+  margin-top 10px
+  color var(--text-light)
+
+@media (max-width: 760px)
+  .ai-file-change-review-body
+    grid-template-columns 1fr
+    grid-template-rows minmax(120px, 34%) minmax(220px, 1fr)
+
+  .ai-file-change-review-list
+    border-right 0
+    border-bottom 1px solid var(--border)

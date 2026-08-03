@@ -17,6 +17,8 @@ export default function TransportsUI (props) {
       inited: t.inited,
       cancel: t.cancel,
       pausing: t.pausing,
+      paused: t.paused,
+      status: t.status,
       config: props.config
     }
     return (

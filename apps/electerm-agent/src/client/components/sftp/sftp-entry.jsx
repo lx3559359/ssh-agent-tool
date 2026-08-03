@@ -6,13 +6,12 @@ import { Spin, Button } from 'antd'
 import { notification } from '../common/notification'
 import Modal from '../common/modal'
 import clone from '../../common/to-simple-obj'
-import { isEqual, last, isNumber, some, isArray, pick, uniq, debounce } from 'lodash-es'
+import { isEqual, some, isArray, pick, uniq, debounce } from 'lodash-es'
 import FileSection from './file-item'
 import resolve from '../../common/resolve'
 import wait from '../../common/wait'
 import isAbsPath from '../../common/is-absolute-path'
 import classnames from 'classnames'
-import sorterIndex from '../../common/index-sorter'
 import { handleErr } from '../../common/fetch'
 import { getLocalFileInfo, getRemoteFileInfo, getFolderFromFilePath } from './file-read'
 import {
@@ -50,7 +49,30 @@ import {
   createSftpTransactionAdapter,
   digestSftpText
 } from './sftp-transaction-adapter.js'
-import { reconcileSelectedFileIds } from './file-selection.js'
+import {
+  buildSftpTextChangePreview,
+  readSftpSnapshotText
+} from './sftp-text-change-preview.js'
+import {
+  createAiFileChangeSet,
+  formatAiFileChangeDiffPreview
+} from '../ai/ai-file-change-set.js'
+import {
+  requestAiFileChangeReview
+} from '../ai/ai-file-change-review-modal.jsx'
+import {
+  nextSftpSelectionId,
+  preserveSftpDraftItems,
+  reconcileSelectedFileIds
+} from './file-selection.js'
+import {
+  destroySftpClient,
+  disposeSftpEntryClient,
+  disposeSftpEntryScheduling,
+  reconnectSftpEntryRemote,
+  replaceSftpEntryTimer,
+  shouldRetryUnexpectedSftpPacket
+} from './sftp-entry-lifecycle.js'
 import { createTransactionRunner } from '../../common/safety-transactions/transaction-runner.js'
 import { buildSideEffectSafetyRequest } from '../../common/safety-transactions/side-effect-model.js'
 import { assertSameSessionEndpoint } from '../../common/safety-transactions/endpoint-guard.js'
@@ -107,7 +129,7 @@ export default class Sftp extends Component {
     if (this.props.isFtp) {
       this.initFtpData()
     }
-    this.timer = setTimeout(() => {
+    replaceSftpEntryTimer(this, 'timer', () => {
       this.setState({
         ready: true
       })
@@ -115,10 +137,19 @@ export default class Sftp extends Component {
   }
 
   componentDidUpdate (prevProps, prevState) {
-    if (
-      this.props.config.autoRefreshWhenSwitchToSftp &&
+    const switchedToSftp =
       prevProps.pane !== this.props.pane &&
-      this.props.pane === paneMap.fileManager &&
+      this.props.pane === paneMap.fileManager
+    if (
+      switchedToSftp &&
+      !this.state.inited &&
+      !this.state.loadingSftp &&
+      !this.state.remoteLoading
+    ) {
+      this.initRemoteAll()
+    } else if (
+      this.props.config.autoRefreshWhenSwitchToSftp &&
+      switchedToSftp &&
       this.state.inited
     ) {
       this.onGoto(typeMap.local)
@@ -149,12 +180,8 @@ export default class Sftp extends Component {
 
   componentWillUnmount () {
     refs.remove(this.id)
-    this.sftp && this.sftp.destroy()
-    this.sftp = null
-    clearTimeout(this.timer4)
-    this.timer4 = null
-    clearTimeout(this.timer5)
-    this.timer5 = null
+    disposeSftpEntryClient(this)
+    disposeSftpEntryScheduling(this)
     // Clear sort cache to prevent memory leaks
     this._sortCache?.clear()
     this._lastSortArgs = null
@@ -398,58 +425,29 @@ export default class Sftp extends Component {
     })
   }
 
-  selectNext = type => {
+  selectNext = (type, currentId, onSelected) => {
     const { selectedFiles } = this.state
     const fileList = this.getFileList(type)
-    if (!fileList.length) {
-      return
-    }
-
-    // Convert Set of IDs to array of indices
-    const fileIndices = Array.from(selectedFiles)
-      .map(id => fileList.findIndex(f => f.id === id))
-      .filter(index => index !== -1)
-      .sort(sorterIndex)
-
-    const lastOne = last(fileIndices)
-    let next = 0
-    if (isNumber(lastOne)) {
-      next = (lastOne + 1) % fileList.length
-    }
-
-    const nextFile = fileList[next]
+    const nextId = nextSftpSelectionId(fileList, selectedFiles, 'next', currentId)
+    const nextFile = fileList.find(file => file.id === nextId)
     if (nextFile) {
       this.setState({
         selectedFiles: new Set([nextFile.id])
-      })
+      }, () => onSelected?.(nextFile.id))
+      return nextFile.id
     }
   }
 
-  selectPrev = type => {
+  selectPrev = (type, currentId, onSelected) => {
     const { selectedFiles } = this.state
     const fileList = this.getFileList(type)
-    if (!fileList.length) {
-      return
-    }
-
-    // Convert Set of IDs to array of indices
-    const fileIndices = Array.from(selectedFiles)
-      .map(id => fileList.findIndex(f => f.id === id))
-      .filter(index => index !== -1)
-      .sort(sorterIndex)
-
-    const firstOne = fileIndices[0]
-    let next = 0
-    const len = fileList.length
-    if (isNumber(firstOne)) {
-      next = (firstOne - 1 + len) % len
-    }
-
-    const nextFile = fileList[next]
+    const nextId = nextSftpSelectionId(fileList, selectedFiles, 'previous', currentId)
+    const nextFile = fileList.find(file => file.id === nextId)
     if (nextFile) {
       this.setState({
         selectedFiles: new Set([nextFile.id])
-      })
+      }, () => onSelected?.(nextFile.id))
+      return nextFile.id
     }
   }
 
@@ -562,11 +560,76 @@ export default class Sftp extends Component {
     return this.sftpSafetyRunner.cancel(id)
   }
 
-  confirmPreparedSftpOperation = (title) => {
+  confirmPreparedSftpOperation = (title, confirmationDetails) => {
+    const preview = confirmationDetails?.preview
+    const prefix = {
+      add: '+',
+      remove: '-',
+      context: ' '
+    }
     return new Promise(resolve => {
       Modal.confirm({
         title,
-        content: e('shellpilotSftpRestoreConfirmDescription'),
+        content: (
+          <div className='sftp-safety-confirmation'>
+            <div>{e('shellpilotSftpRestoreConfirmDescription')}</div>
+            {
+              confirmationDetails && (
+                <div className='sftp-text-change-confirmation'>
+                  <div className='sftp-text-change-path'>
+                    {confirmationDetails.path}
+                  </div>
+                  {
+                    preview
+                      ? (
+                        <>
+                          <div className='sftp-text-change-summary'>
+                            {formatShellPilotTranslation(
+                              e,
+                              'shellpilotSftpTextChangeSummary',
+                              {
+                                added: preview.addedLines,
+                                removed: preview.removedLines
+                              }
+                            )}
+                          </div>
+                          {
+                            preview.lines.length > 0 && (
+                              <pre className='sftp-text-change-preview'>
+                                {
+                                  preview.lines.map((line, index) => (
+                                    <div
+                                      className={`sftp-text-change-line is-${line.type}`}
+                                      key={`${line.type}-${line.oldLine || 0}-${line.newLine || 0}-${index}`}
+                                    >
+                                      <span>{prefix[line.type]}</span>
+                                      <code>{line.text || ' '}</code>
+                                    </div>
+                                  ))
+                                }
+                              </pre>
+                            )
+                          }
+                          {
+                            preview.truncated && (
+                              <div className='sftp-text-change-note'>
+                                {e('shellpilotSftpTextChangeTruncated')}
+                              </div>
+                            )
+                          }
+                        </>
+                        )
+                      : (
+                        <div className='sftp-text-change-note'>
+                          {e('shellpilotSftpTextChangeUnavailable')}
+                        </div>
+                        )
+                  }
+                </div>
+              )
+            }
+          </div>
+        ),
         okText: e('shellpilotSftpConfirmExecute'),
         cancelText: e('cancel'),
         onOk: () => resolve(true),
@@ -582,7 +645,8 @@ export default class Sftp extends Component {
     requestedMode,
     expected,
     title,
-    signal
+    signal,
+    metadata
   }) => {
     const request = buildSideEffectSafetyRequest({
       id: `sftp-${action}-${Date.now()}-${generate()}`,
@@ -598,7 +662,10 @@ export default class Sftp extends Component {
         requestedMode,
         expected: expected || {}
       },
-      metadata: { sftpSafetyTransaction: true }
+      metadata: {
+        sftpSafetyTransaction: true,
+        ...metadata
+      }
     })
     request.signal = signal
     return this.sftpSafetyRunner.prepare(request)
@@ -664,8 +731,23 @@ export default class Sftp extends Component {
 
   runSftpSafetyOperation = async (spec, options = {}) => {
     const operation = await this.prepareSftpSafetyOperation(spec)
+    let confirmationDetails = options.confirmationDetails
+    if (!confirmationDetails && options.buildConfirmationDetails) {
+      try {
+        confirmationDetails = await options.buildConfirmationDetails(operation)
+      } catch (error) {
+        if (error?.name === 'AbortError') {
+          await this.sftpSafetyRunner.cancel(operation.id)
+          throw error
+        }
+        confirmationDetails = {
+          path: Object.values(spec.paths || {})[0] || ''
+        }
+      }
+    }
     const confirmed = await this.confirmPreparedSftpOperation(
-      options.confirmTitle || `确认${spec.title || '执行 SFTP 修改'}？`
+      options.confirmTitle || `确认${spec.title || '执行 SFTP 修改'}？`,
+      options.confirmationDetails || confirmationDetails
     )
     if (!confirmed) {
       await this.sftpSafetyRunner.cancel(operation.id)
@@ -673,7 +755,8 @@ export default class Sftp extends Component {
     }
     return this.sftpSafetyRunner.execute(operation.id, {
       confirmed: true,
-      sideEffectInput: options.input
+      sideEffectInput: options.input,
+      signal: options.signal
     })
   }
 
@@ -706,7 +789,7 @@ export default class Sftp extends Component {
     return result
   }
 
-  saveRemoteEditorFile = async ({ path, text, mode }) => {
+  saveRemoteEditorFile = async ({ path, text, mode }, options = {}) => {
     if (this.props.isFtp) {
       await this.sftp.writeFile(path, text, mode)
       return true
@@ -719,12 +802,184 @@ export default class Sftp extends Component {
       type: 'file',
       requestedMode,
       expected,
-      title: e('shellpilotSftpEditorSave')
+      title: e('shellpilotSftpEditorSave'),
+      signal: options.signal
     }, {
-      input: { text }
+      input: { text },
+      signal: options.signal,
+      buildConfirmationDetails: async operation => {
+        const resource = operation.plan?.resources?.[0]
+        if (!resource) return { path }
+        const snapshot = await readSftpSnapshotText(this.sftp, resource, {
+          signal: options.signal
+        })
+        if (!snapshot.available) return { path }
+        return {
+          path,
+          preview: buildSftpTextChangePreview({
+            path,
+            beforeText: snapshot.text,
+            afterText: text,
+            existed: snapshot.existed
+          })
+        }
+      }
     })
     if (result) message.success(e('shellpilotSftpEditorSaveVerified'))
     return result
+  }
+
+  saveRemoteEditorFiles = async (files, options = {}) => {
+    if (this.props.isFtp) {
+      throw new Error('AI 多文件统一审查仅支持可创建恢复点的 SSH/SFTP 会话。')
+    }
+    if (!Array.isArray(files) || files.length < 2 || files.length > 50) {
+      throw new Error('AI 多文件修改数量必须在 2 到 50 之间。')
+    }
+    const changeSetId = `ai-file-change-${Date.now()}-${generate()}`
+    const prepared = []
+    try {
+      for (const file of files) {
+        const expected = await digestSftpText(file.text)
+        const requestedMode = file.mode === undefined
+          ? undefined
+          : Number(file.mode) & 0o7777
+        const operation = await this.prepareSftpSafetyOperation({
+          action: 'editor-save',
+          paths: { target: file.path },
+          type: 'file',
+          requestedMode,
+          expected,
+          title: e('shellpilotSftpEditorSave'),
+          signal: options.signal,
+          metadata: {
+            aiFileChangeSetId: changeSetId,
+            aiFileChangeCount: files.length
+          }
+        })
+        const resource = operation.plan?.resources?.[0]
+        const snapshot = resource
+          ? await readSftpSnapshotText(this.sftp, resource, {
+            signal: options.signal
+          })
+          : { available: false, existed: false, text: '' }
+        const preview = snapshot.available
+          ? buildSftpTextChangePreview({
+            path: file.path,
+            beforeText: snapshot.text,
+            afterText: file.text,
+            existed: snapshot.existed
+          })
+          : null
+        prepared.push({
+          file,
+          operation,
+          originalFingerprint: {
+            existed: resource?.original?.absent !== true,
+            size: resource?.original?.size || 0,
+            digest: resource?.original?.digest || '',
+            digestAlgorithm: resource?.original?.digestAlgorithm || ''
+          },
+          proposedFingerprint: {
+            existed: true,
+            ...expected
+          },
+          diffPreview: formatAiFileChangeDiffPreview(preview)
+        })
+      }
+    } catch (error) {
+      await Promise.allSettled(prepared.map(item => (
+        this.sftpSafetyRunner.cancel(item.operation.id)
+      )))
+      throw error
+    }
+
+    const review = await requestAiFileChangeReview(createAiFileChangeSet({
+      id: changeSetId,
+      files: prepared.map(item => ({
+        path: item.file.path,
+        originalFingerprint: item.originalFingerprint,
+        proposedFingerprint: item.proposedFingerprint,
+        diffPreview: item.diffPreview
+      }))
+    }), { signal: options.signal })
+    const selectedPaths = new Set(
+      review.changeSet.files.filter(file => file.selected).map(file => file.path)
+    )
+    const selected = prepared.filter(item => selectedPaths.has(item.file.path))
+    const excluded = prepared.filter(item => !selectedPaths.has(item.file.path))
+    await Promise.allSettled(excluded.map(item => (
+      this.sftpSafetyRunner.cancel(item.operation.id)
+    )))
+    if (!review.accepted || !selected.length) {
+      await Promise.allSettled(selected.map(item => (
+        this.sftpSafetyRunner.cancel(item.operation.id)
+      )))
+      return {
+        success: false,
+        cancelled: true,
+        status: 'cancelled',
+        files: []
+      }
+    }
+
+    try {
+      for (const item of selected) {
+        await this.assertSftpSafetyOperationEndpoint(item.operation.id)
+        await this.sftpSafetyAdapter.validatePrepared(item.operation, {
+          signal: options.signal
+        })
+      }
+    } catch (cause) {
+      await Promise.allSettled(selected.map(item => (
+        this.sftpSafetyRunner.cancel(item.operation.id)
+      )))
+      const error = new Error('文件在审查后发生变化，已停止全部 AI 文件修改。')
+      error.code = 'AI_FILE_CHANGED_SINCE_REVIEW'
+      error.cause = cause
+      throw error
+    }
+
+    const results = []
+    for (let index = 0; index < selected.length; index += 1) {
+      const item = selected[index]
+      try {
+        await this.sftpSafetyRunner.execute(item.operation.id, {
+          confirmed: true,
+          sideEffectInput: { text: item.file.text },
+          signal: options.signal
+        })
+        results.push({
+          path: item.file.path,
+          status: 'completed',
+          recoveryOperationId: item.operation.id
+        })
+      } catch (error) {
+        results.push({
+          path: item.file.path,
+          status: 'failed',
+          message: error?.message || String(error)
+        })
+        await Promise.allSettled(selected.slice(index + 1).map(pending => (
+          this.sftpSafetyRunner.cancel(pending.operation.id)
+        )))
+        return {
+          success: false,
+          cancelled: false,
+          status: results.some(result => result.status === 'completed')
+            ? 'partially-completed'
+            : 'failed',
+          files: results
+        }
+      }
+    }
+    message.success(`已安全修改 ${results.length} 个远程文件。`)
+    return {
+      success: true,
+      cancelled: false,
+      status: 'completed',
+      files: results
+    }
   }
 
   deleteRemoteFilesWithSafety = async (files, options = {}) => {
@@ -990,7 +1245,7 @@ export default class Sftp extends Component {
 
   onInputBlur = (type) => {
     this.inputFocus = false
-    this.timer4 = setTimeout(() => {
+    replaceSftpEntryTimer(this, 'timer4', () => {
       this.setState({
         [type + 'InputFocus']: false
       })
@@ -1026,6 +1281,20 @@ export default class Sftp extends Component {
   shouldRenderRemote = () => {
     const { props } = this
     return props.tab?.host && props.tab?.type !== terminalSerialType
+  }
+
+  isSftpVisible = () => {
+    const { isFtp, pane, sshSftpSplitView } = this.props
+    return isFtp || pane === paneMap.fileManager || sshSftpSplitView
+  }
+
+  normalizeSftpError = error => {
+    const message = typeof error?.message === 'string'
+      ? error.message.trim()
+      : ''
+    return message && message !== 'Error'
+      ? error
+      : new Error(e('shellpilotSftpUnavailable'))
   }
 
   initLocalAll = () => {
@@ -1205,17 +1474,17 @@ export default class Sftp extends Component {
         })
         const r = await sftp.connect(opts)
           .catch(e => {
-            if (
-              e &&
-              e.message.includes(unexpectedPacketErrorDesc) && this.retryCount
-            ) {
-              this.retryHandler = setTimeout(
-                () => this.initData(
-                  true
-                ),
+            if (shouldRetryUnexpectedSftpPacket(e, {
+              expectedMessage: unexpectedPacketErrorDesc,
+              retryCount: this.retryCount
+            })) {
+              this.retryCount++
+              replaceSftpEntryTimer(
+                this,
+                'retryHandler',
+                () => reconnectSftpEntryRemote(this),
                 sftpRetryInterval
               )
-              this.retryCount++
             } else {
               throw e
             }
@@ -1226,12 +1495,13 @@ export default class Sftp extends Component {
           }
         })
         if (!r) {
-          sftp.destroy()
+          await destroySftpClient(sftp)
           return this.props.editTab(tab.id, {
             sftpCreated: false
           })
         } else {
           this.sftp = sftp
+          this.retryCount = 0
         }
       }
 
@@ -1267,16 +1537,24 @@ export default class Sftp extends Component {
         ]).slice(0, maxSftpHistory)
       }
       this.setState(prevState => {
+        const nextRemote = preserveSftpDraftItems(prevState.remote, remote)
+        const nextUpdate = nextRemote === remote
+          ? update
+          : {
+              ...update,
+              remote: nextRemote,
+              remoteFileTree: this.buildTree(nextRemote, typeMap.remote)
+            }
         return prevState.selectedType === typeMap.remote
           ? {
-              ...update,
+              ...nextUpdate,
               selectedFiles: reconcileSelectedFileIds(
                 prevState.remote,
-                remote,
+                nextRemote,
                 prevState.selectedFiles
               )
             }
-          : update
+          : nextUpdate
       }, () => {
         if (this.type !== 'ftp') {
           this.updateRemoteList(remote, remotePath, sftp)
@@ -1285,7 +1563,7 @@ export default class Sftp extends Component {
           sftpCreated: true
         })
       })
-      this.timer5 = setTimeout(() => {
+      replaceSftpEntryTimer(this, 'timer5', () => {
         if (this.type !== 'ftp') {
           this.updateRemoteList(remote, remotePath, sftp)
         }
@@ -1293,7 +1571,13 @@ export default class Sftp extends Component {
           sftpCreated: true
         })
       }, 1000)
-    } catch (e) {
+    } catch (error) {
+      if (sftp && sftp !== this.sftp) {
+        await sftp.destroy().catch(() => {})
+        this.props.editTab(tab.id, {
+          sftpCreated: false
+        })
+      }
       const update = {
         remoteLoading: false,
         remote: oldRemote,
@@ -1304,7 +1588,9 @@ export default class Sftp extends Component {
         update.remotePathTemp = oldPath
       }
       this.setState(update)
-      this.onError(e)
+      if (this.isSftpVisible()) {
+        this.onError(this.normalizeSftpError(error))
+      }
     }
   }
 
@@ -1353,16 +1639,24 @@ export default class Sftp extends Component {
       remoteFileTree: this.buildTree(remote, typeMap.remote)
     }
     this.setState(prevState => {
+      const nextRemote = preserveSftpDraftItems(prevState.remote, remote)
+      const nextUpdate = nextRemote === remote
+        ? update
+        : {
+            ...update,
+            remote: nextRemote,
+            remoteFileTree: this.buildTree(nextRemote, typeMap.remote)
+          }
       return prevState.selectedType === typeMap.remote
         ? {
-            ...update,
+            ...nextUpdate,
             selectedFiles: reconcileSelectedFileIds(
               prevState.remote,
-              remote,
+              nextRemote,
               prevState.selectedFiles
             )
           }
-        : update
+        : nextUpdate
     })
   }
 
@@ -1418,16 +1712,24 @@ export default class Sftp extends Component {
         ]).slice(0, maxSftpHistory)
       }
       this.setState(prevState => {
+        const nextLocal = preserveSftpDraftItems(prevState.local, local)
+        const nextUpdate = nextLocal === local
+          ? update
+          : {
+              ...update,
+              local: nextLocal,
+              localFileTree: this.buildTree(nextLocal, typeMap.local)
+            }
         return prevState.selectedType === typeMap.local
           ? {
-              ...update,
+              ...nextUpdate,
               selectedFiles: reconcileSelectedFileIds(
                 prevState.local,
-                local,
+                nextLocal,
                 prevState.selectedFiles
               )
             }
-          : update
+          : nextUpdate
       })
     } catch (e) {
       const update = {
@@ -1465,10 +1767,7 @@ export default class Sftp extends Component {
   }
 
   handleReloadRemoteSftp = async () => {
-    if (this.sftp) {
-      this.sftp.destroy()
-      this.sftp = null
-    }
+    await disposeSftpEntryClient(this)
     this.setState({
       remoteLoading: true,
       remote: [],
@@ -1526,7 +1825,7 @@ export default class Sftp extends Component {
   onGoto = async (type, e) => {
     e && e.preventDefault()
     if (type === typeMap.remote && !this.sftp) {
-      return this.initData(true)
+      return reconnectSftpEntryRemote(this)
     }
     const n = `${type}Path`
     const nt = n + 'Temp'
@@ -1582,6 +1881,8 @@ export default class Sftp extends Component {
         'delFiles',
         'getIndex',
         'selectAll',
+        'selectPrev',
+        'selectNext',
         'getFileList',
         'onGoto',
         'addTransferList',
@@ -1729,6 +2030,10 @@ export default class Sftp extends Component {
               type='text'
               icon={<SaveOutlined />}
               disabled={!selectedCount}
+              aria-label={selectedCount
+                ? formatShellPilotTranslation(e, 'shellpilotSftpQuickBackupCount', { count: selectedCount })
+                : e('shellpilotSftpSelectFilesForBackup')}
+              title={!selectedCount ? e('shellpilotSftpSelectFilesForBackup') : undefined}
               onClick={this.handleQuickBackupSelected}
             >
               {selectedCount

@@ -60,6 +60,8 @@
   .ant-segmented
     flex 0 1 auto
     max-width 100%
+    border-radius var(--sp-radius-control)
+    box-shadow var(--sp-shadow-sm)
   .ant-segmented-item-label
     min-height 28px
     height auto
@@ -85,7 +87,7 @@
   background var(--sp-surface)
   border 1px solid var(--sp-border)
   border-radius var(--sp-radius-card)
-  box-shadow var(--sp-shadow-card)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
   &.active
     border-color var(--sp-success)
   &.previewing
@@ -146,6 +148,8 @@
     min-width 0
     max-width 100%
     height auto
+    border-radius var(--sp-radius-control)
+    box-shadow var(--sp-shadow-sm)
     white-space normal
   .ant-popconfirm
     max-width 100%
@@ -163,8 +167,8 @@
   color var(--sp-text)
   background var(--sp-page)
   border 1px solid var(--sp-border)
-  border-radius var(--sp-radius-card)
-  box-shadow var(--sp-shadow-card)
+  border-radius var(--sp-radius-panel)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-lg)
 
 .sp-theme-preview-heading
   flex-wrap wrap
@@ -210,6 +214,7 @@
   background var(--sp-surface)
   border 1px solid var(--sp-border)
   border-radius var(--sp-radius-card)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
 
 .sp-theme-preview-action
   display inline-flex
@@ -221,6 +226,7 @@
   background var(--sp-primary)
   border 1px solid var(--sp-primary)
   border-radius var(--sp-radius-control)
+  box-shadow var(--sp-shadow-sm)
 
 .sp-theme-preview-field
   display flex
@@ -247,7 +253,7 @@
   display flex
   flex-direction column
   gap 3px
-  box-shadow var(--sp-shadow-overlay)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-lg)
   span
     min-width 0
     padding 6px 8px

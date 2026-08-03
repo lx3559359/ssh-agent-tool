@@ -1,9 +1,10 @@
 /**
  * post install script
  */
-const { cp, exec, rm } = require('shelljs')
+const { cp, exec } = require('shelljs')
 const { existsSync } = require('fs')
 const { resolve } = require('path')
+const { removeOptionalNativeResidue } = require('./prepare-cleanup-utils')
 const prePushPath = resolve(__dirname, '../../.git/hooks/pre-push')
 const prePushPathFrom = resolve(__dirname, 'pre-push')
 const os = require('os')
@@ -19,20 +20,12 @@ if (isWin && process.env.CI) {
 
 // Remove optional native module that may fail to rebuild
 try {
-  // Check multiple potential locations for cpu-features
-  const cpuFeaturesPaths = [
-    resolve(__dirname, '../../node_modules/cpu-features'),
-    resolve(__dirname, '../../work/app/node_modules/cpu-features')
-  ]
-
-  cpuFeaturesPaths.forEach(cpuFeaturesPath => {
-    if (existsSync(cpuFeaturesPath)) {
-      rm('-rf', cpuFeaturesPath)
-      console.log('Removed optional module:', cpuFeaturesPath)
-    }
-  })
+  const projectRoot = resolve(__dirname, '../..')
+  for (const relativePath of removeOptionalNativeResidue(projectRoot)) {
+    console.log('Removed optional module residue:', relativePath)
+  }
 } catch (e) {
-  console.warn('Failed to remove cpu-features:', e?.message || e)
+  console.warn('Failed to remove optional native residue:', e?.message || e)
 }
 
 exec(resolve('./node_modules/.bin/electron-rebuild'))

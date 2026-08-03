@@ -258,6 +258,7 @@ export function createFleetStatusStore (options = {}) {
   const now = typeof options.now === 'function' ? options.now : Date.now
   const createTaskId = options.createTaskId || defaultTaskId
   const createSnapshot = options.createSnapshot || createFleetStatusSnapshot
+  const onCollectionComplete = options.onCollectionComplete
   const concurrency = options.concurrency || defaultFleetStatusConcurrency
   const cacheTtlMs = options.cacheTtlMs || defaultFleetStatusCacheTtlMs
 
@@ -463,6 +464,17 @@ export function createFleetStatusStore (options = {}) {
     })
   }
 
+  function reportCollectionComplete (targets, token) {
+    if (token.cancelled || typeof onCollectionComplete !== 'function') return
+    const targetIds = new Set(targets.map(target => bookmarkId(target)))
+    const rows = allRows().filter(row => targetIds.has(row.id))
+    try {
+      Promise.resolve(onCollectionComplete(rows)).catch(() => {})
+    } catch {
+      // Incident capture is advisory and must never block fleet refresh.
+    }
+  }
+
   function collectTargets (targets) {
     const taskId = createTaskId()
     const token = { taskId, cancelled: false }
@@ -504,6 +516,7 @@ export function createFleetStatusStore (options = {}) {
             token
           )
         })
+        reportCollectionComplete(targets, token)
       })
       .catch(() => {
         for (const target of targets) {

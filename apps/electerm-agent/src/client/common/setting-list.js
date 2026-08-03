@@ -3,6 +3,7 @@ import {
   settingShortcutsId,
   settingTerminalId,
   settingAiId,
+  settingAiWebAccessId,
   settingPasswordsId
 } from '../common/constants'
 
@@ -24,6 +25,10 @@ export default () => ([
   {
     id: settingAiId,
     title: 'AI'
+  },
+  {
+    id: settingAiWebAccessId,
+    title: e('shellpilotAiWebAccessSettings')
   },
   {
     id: settingPasswordsId,

@@ -46,3 +46,17 @@ test('终端基础体验矩阵覆盖常规客户端操作', () => {
   assertEvidence(all, /copySelectionToClipboard[\s\S]*term\.getSelection/, 'selected text copy')
   assertEvidence(all, /onPaste\s*=\s*async[\s\S]*term\.paste/, 'clipboard paste')
 })
+
+test('session chrome exposes keyboard tabs and named icon buttons', () => {
+  const source = readFile('../../src/client/components/session/session.jsx')
+
+  assertEvidence(source, /role='tablist'[\s\S]*role='tab'/, 'terminal and SFTP tab semantics')
+  assertEvidence(source, /aria-selected=\{types\[i\] === pane\}/, 'selected tab state')
+  assertEvidence(source, /tabIndex=\{types\[i\] === pane \? 0 : -1\}/, 'roving tab stop')
+  assertEvidence(source, /aria-controls=\{`session-pane-/, 'controlled pane reference')
+  assertEvidence(source, /aria-label=\{title\}/, 'named icon controls')
+  assertEvidence(source, /aria-pressed=\{sshSftpSplitView\}/, 'split-view pressed state')
+  assertEvidence(source, /aria-pressed=\{sftpPathFollowSsh\}/, 'path-follow pressed state')
+  assertEvidence(source, /aria-pressed=\{keepaliveEnabled\}/, 'keepalive pressed state')
+  assertEvidence(source, /aria-pressed=\{broadcastInput\}/, 'broadcast pressed state')
+})

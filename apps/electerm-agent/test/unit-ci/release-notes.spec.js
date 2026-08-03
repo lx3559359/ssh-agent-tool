@@ -15,6 +15,22 @@ test('current release notes clearly separate added fixed and changed items', () 
   assert.match(notes, /^## \[改动\]/m)
 })
 
+test('v0.4.27 release notes document accessibility, external acceptance and boundaries', () => {
+  const notes = read('docs/releases/v0.4.27.md')
+
+  for (const phrase of [
+    '无障碍',
+    'SFTP',
+    '三轮',
+    'TUN-06',
+    'REL-13',
+    'x-ui',
+    'v0.4.26'
+  ]) {
+    assert.match(notes, new RegExp(phrase))
+  }
+})
+
 test('v0.4.6 release metadata documents the readonly Agent usability release', () => {
   const notes = read('docs/releases/v0.4.6.md')
   for (const section of ['新增', '修复', '改动']) {

@@ -1,6 +1,24 @@
 const fs = require('fs')
 const path = require('path')
 
+function removeOptionalNativeResidue (projectRoot = process.cwd()) {
+  const removable = [
+    'node_modules/cpu-features',
+    'node_modules/buildcheck',
+    'work/app/node_modules/cpu-features',
+    'work/app/node_modules/buildcheck'
+  ]
+  const removed = []
+
+  for (const relativePath of removable) {
+    const target = path.join(projectRoot, relativePath)
+    if (!fs.existsSync(target)) continue
+    fs.rmSync(target, { recursive: true, force: true })
+    removed.push(relativePath)
+  }
+  return removed
+}
+
 function removePackagedBatchScripts (projectRoot = process.cwd()) {
   const root = path.join(projectRoot, 'resources', 'app.asar.unpacked', 'node_modules')
   const removed = []
@@ -47,5 +65,6 @@ function patchPackagedUpdateConfig (
 
 module.exports = {
   patchPackagedUpdateConfig,
+  removeOptionalNativeResidue,
   removePackagedBatchScripts
 }
