@@ -179,6 +179,56 @@ test('diagnostic controller creates confirms and runs only after explicit confir
   assert.equal(registry.size, 0)
 })
 
+test('diagnostic observer records plan request, task running, and one terminal event', async () => {
+  const { createAgentTaskRegistry } = await import(registryUrl)
+  const {
+    createAgentTaskController,
+    requestDiagnosticPlanText
+  } = await import(controllerUrl)
+  const events = []
+  const observer = {
+    start: () => events.push(['start']),
+    phase: value => events.push(['phase', value]),
+    error: (stage, error) => events.push(['error', stage, error?.code]),
+    finish: (status, reason) => events.push(['finish', status, reason])
+  }
+  const text = await requestDiagnosticPlanText({
+    prompt: 'diagnose nginx',
+    config: {
+      baseURLAI: 'https://example.test/v1',
+      apiKeyAI: 'secret',
+      modelAI: 'model-a'
+    },
+    observer,
+    runGlobalAsync: async action => {
+      assert.equal(action, 'AIchat')
+      return '{"summary":"plan"}'
+    }
+  })
+  assert.equal(text, '{"summary":"plan"}')
+
+  const controller = createAgentTaskController({
+    store: createTaskStore(),
+    registry: createAgentTaskRegistry(),
+    observer,
+    pid: 1001,
+    endpoint: endpoint(),
+    getCurrentEndpoint: async () => endpoint(),
+    runCmd: async () => ({ stdout: 'evidence', code: 0 }),
+    cancelRunCmd: async () => true
+  })
+  await controller.confirmAndRun(diagnosticPlan({
+    steps: [diagnosticPlan().steps[0]]
+  }))
+
+  assert.deepEqual(events, [
+    ['phase', 'plan_request'],
+    ['start'],
+    ['phase', 'task_running'],
+    ['finish', 'completed', undefined]
+  ])
+})
+
 test('real Agent task persistence keeps only the parent trace id in metadata', async () => {
   const { createAgentTaskRegistry } = await import(registryUrl)
   const { createAgentTaskController } = await import(controllerUrl)

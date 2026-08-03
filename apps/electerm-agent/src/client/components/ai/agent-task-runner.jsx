@@ -31,6 +31,7 @@ import {
 import { agentTaskRegistry } from './agent-task-registry.js'
 import { handoffAgentPromptToAi } from './agent-task-handoff.js'
 import { getAgentTaskViewState } from './agent-task-view-state.js'
+import { createAgentRunObserver } from './agent-run-observer.js'
 import * as transactionStore from '../../common/safety-transactions/transaction-store.js'
 import { createTraceContext } from '../../common/quality/trace-context.js'
 import { cancelRunCmd, runCmd } from '../terminal/terminal-apis.js'
@@ -98,6 +99,7 @@ export default function AgentTaskRunner ({
   const activeRunRef = useRef(0)
   const mountedRef = useRef(true)
   const taskTraceContextRef = useRef(null)
+  const runObserverRef = useRef(null)
   const handoffCancelRef = useRef(null)
   const uiLifecycle = useMemo(() => createAgentTaskUiLifecycle({
     abortGeneration: () => generationAbortRef.current?.abort(),
@@ -121,6 +123,10 @@ export default function AgentTaskRunner ({
       module: 'agent',
       action: 'agent-task'
     })
+    runObserverRef.current = createAgentRunObserver({
+      context: taskTraceContextRef.current
+    })
+    runObserverRef.current.start()
     generationAbortRef.current?.abort()
     const controller = new AbortController()
     generationAbortRef.current = controller
@@ -138,6 +144,7 @@ export default function AgentTaskRunner ({
           prompt,
           config: getActiveAIConfig(store?.config || {}),
           signal: controller.signal,
+          observer: runObserverRef.current,
           runGlobalAsync: window.pre?.runGlobalAsync?.bind(window.pre)
         })
         const nextPlan = parseDiagnosticPlan(text, { endpoint, target })
@@ -148,6 +155,7 @@ export default function AgentTaskRunner ({
         if (!mountedRef.current || controller.signal.aborted || generationRequestRef.current !== generationToken) return
         setError(displayError(requestError, e('shellpilotAgentTaskPlanFailed')))
         setPhase('error')
+        runObserverRef.current?.finish?.('failed', requestError?.code)
       }
     }
 
@@ -191,6 +199,7 @@ export default function AgentTaskRunner ({
       const controller = createAgentTaskController({
         store: transactionStore,
         registry: agentTaskRegistry,
+        observer: runObserverRef.current,
         traceContext: taskTraceContextRef.current,
         endpoint: plan.endpoint,
         pid: terminal.pid,
@@ -225,12 +234,24 @@ export default function AgentTaskRunner ({
   async function handleCancelTask () {
     if (!task?.id || !agentTaskRegistry.has(task.id)) return
     setCancelling(true)
+    runObserverRef.current?.cancellation?.('cancelling')
     try {
       const cancelled = await agentTaskRegistry.cancel(task.id)
+      runObserverRef.current?.cancellation?.('cancel_confirmed')
+      runObserverRef.current?.finish?.('cancelled')
       if (!mountedRef.current) return
       setTask(cancelled)
       setPhase('finished')
     } catch (cancelError) {
+      runObserverRef.current?.cancellation?.(
+        'cancel_failed',
+        cancelError?.code || 'AGENT_CANCELLATION_FAILED'
+      )
+      runObserverRef.current?.error?.('cancellation', cancelError)
+      runObserverRef.current?.finish?.(
+        'cancel_failed',
+        cancelError?.code || 'AGENT_CANCELLATION_FAILED'
+      )
       if (mountedRef.current) setError(displayError(cancelError, e('shellpilotAgentTaskCancelFailed')))
     } finally {
       if (mountedRef.current) setCancelling(false)

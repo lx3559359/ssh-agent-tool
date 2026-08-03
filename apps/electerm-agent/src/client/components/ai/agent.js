@@ -49,6 +49,7 @@ import {
   createAgentRunBudget,
   resolveAgentRunLimits
 } from './agent-run-budget.js'
+import { createAgentRunObserver } from './agent-run-observer.js'
 
 const MAX_ITERATIONS = 150
 const agentRunEncoder = new TextEncoder()
@@ -153,6 +154,15 @@ function isAgentBudgetError (error) {
   return error?.code === 'AGENT_BUDGET_EXCEEDED'
 }
 
+function getAgentErrorStage (error, fallback = 'tool_execution') {
+  const code = String(error?.code || '')
+  if (code.includes('ENDPOINT') || code === 'AI_TAKEOVER_REQUIRED') return 'endpoint'
+  if (code.includes('ARGUMENT')) return 'tool_arguments'
+  if (code.includes('POLICY') || code.includes('RISK')) return 'tool_policy'
+  if (code.includes('CANCEL')) return 'cancellation'
+  return fallback
+}
+
 function getAgentBudgetExceededText () {
   const key = 'shellpilotAiAgentBudgetExceeded'
   const translated = window.translate?.(key)
@@ -189,8 +199,14 @@ export async function runAgentLoop (
   history = [],
   traceContext,
   onQualityTerminal,
-  budgetDependencies
+  services = {}
 ) {
+  const serviceOptions = services && typeof services === 'object' ? services : {}
+  const budgetDependencies = serviceOptions.budgetDependencies || (
+    serviceOptions.now || serviceOptions.setTimeout || serviceOptions.clearTimeout
+      ? serviceOptions
+      : undefined
+  )
   const runtimeLimits = resolveAgentRunLimits(config.agentLimits)
   const budget = createAgentRunBudget(config.agentLimits, budgetDependencies)
   const parentTrace = traceContext?.traceId
@@ -214,6 +230,7 @@ export async function runAgentLoop (
   let activeCancellation
   let cancellationFailure
   let budgetFailure
+  let currentErrorStage = 'ui_handoff'
   const taskId = String(chatEntry.id || '')
   const sourceTabId = String(chatEntry.sourceTabId || '')
   const taskScopeId = String(
@@ -242,12 +259,17 @@ export async function runAgentLoop (
       cancellationFailure = error
     }
   }
+  const observer = serviceOptions.observer || createAgentRunObserver({
+    context: parentTrace,
+    ...(serviceOptions.observerOptions || {})
+  })
 
   const cancellationController = createAgentRunCancellationController({
     abort: () => {
       abortRef.current = true
       controller.abort()
-    }
+    },
+    observer
   })
   cancellationController.register(() => (
     cancelAgentRuntimeOperations(agentRuntime)
@@ -268,6 +290,7 @@ export async function runAgentLoop (
     return activeCancellation
   }
   abortRef.cancelCurrent = cancelCurrent
+  observer.start?.()
   try {
     agentTaskRegistry.register({
       taskId,
@@ -296,9 +319,12 @@ export async function runAgentLoop (
       completionStatus: 'failed'
     })
     finishQuality('failed', 'failed')
+    observer.error?.('ui_handoff', error)
+    observer.finish?.('failed', error?.code)
     return lockedResult
   }
   function reportCancellationPersistenceError (error) {
+    observer.error?.('persistence', error)
     try {
       window.store.onError?.(error)
     } catch {}
@@ -372,6 +398,10 @@ export async function runAgentLoop (
       reportCancellationPersistenceError(error)
     }
     if (!terminalAlreadyRecorded) finishQuality('cancelled', 'cancelled')
+    observer.finish?.(
+      cancellationFailure ? 'cancel_failed' : 'cancelled',
+      cancellationFailure?.code
+    )
   }
 
   function finalizeBudgetToolCalls (error, notice) {
@@ -411,6 +441,7 @@ export async function runAgentLoop (
       cancellationFailure = settledError
     }
     const notice = getAgentBudgetExceededText()
+    observer.budgetExceeded?.(error)
     finalizeBudgetToolCalls(error, notice)
     const snapshot = budget.snapshot()
     const response = accumulatedContent
@@ -435,6 +466,7 @@ export async function runAgentLoop (
       budget: snapshot
     })
     finishQuality('failed', 'failed')
+    observer.finish?.('failed', error.code)
     return result
   }
 
@@ -462,6 +494,8 @@ export async function runAgentLoop (
         response: message,
         completionStatus: 'failed'
       })
+      observer.error?.('ui_handoff', failure)
+      observer.finish?.('failed', failure.code || 'AGENT_SKILL_SELECTION_REQUIRED')
       finishQuality('failed', 'failed')
       return {
         ok: false,
@@ -484,8 +518,10 @@ export async function runAgentLoop (
         return
       }
 
+      currentErrorStage = 'model'
       budget.assertTime()
       budget.reserveModelRequest()
+      observer.modelRequest?.()
       activeBackendRequestId = `agent-${chatEntry.id}-${iteration}-${Date.now()}`
       const requestTraceContext = createTraceContext({
         ...(parentTrace?.traceId ? { traceId: parentTrace.traceId } : {}),
@@ -518,6 +554,13 @@ export async function runAgentLoop (
           response: accumulatedContent + `\n\n**${aiAgentCopy.errorLabel}:** ${safeAgentError}`,
           completionStatus: 'failed'
         })
+        observer.error?.('model', {
+          code: agentResult.errorCode || 'AGENT_MODEL_REQUEST_FAILED'
+        })
+        observer.finish?.(
+          'failed',
+          agentResult.errorCode || 'AGENT_MODEL_REQUEST_FAILED'
+        )
         finishQuality('failed', 'failed')
         return { ...agentResult, error: safeAgentError }
       }
@@ -530,6 +573,8 @@ export async function runAgentLoop (
           response: accumulatedContent || aiAgentCopy.noResponseText,
           completionStatus: 'failed'
         })
+        observer.error?.('model', { code: 'AGENT_MODEL_RESPONSE_EMPTY' })
+        observer.finish?.('failed', 'AGENT_MODEL_RESPONSE_EMPTY')
         finishQuality('failed', 'failed')
         return
       }
@@ -550,10 +595,12 @@ export async function runAgentLoop (
           artifactIds: [...agentRuntime.createdArtifactIds],
           completionStatus: 'completed'
         })
+        observer.finish?.('completed')
         finishQuality('completed', 'completed')
         return
       }
 
+      currentErrorStage = 'tool_policy'
       budget.reserveToolCalls(assistantMessage.tool_calls.length)
       await runValidatedAgentToolCalls({
         toolCalls: assistantMessage.tool_calls,
@@ -569,6 +616,7 @@ export async function runAgentLoop (
         }),
         prepare: parsedCalls => prepareAgentRiskBatch(parsedCalls, agentRuntime),
         onInvalid: (toolCall, error) => {
+          observer.error?.('tool_arguments', error)
           const name = String(toolCall?.function?.name || '')
           const safeError = sanitizeAIStoredText(error?.message || error)
           const failureResult = boundAgentToolResult(JSON.stringify({
@@ -600,6 +648,7 @@ export async function runAgentLoop (
         },
         execute: async parsed => {
           if (abortRef && abortRef.current) throw createAgentAbortError()
+          observer.toolCall?.()
           const { id, name, args } = parsed
           const safeArgs = sanitizeAIChatHistory([{ args }])[0]?.args || {}
           const toolEntry = {
@@ -654,6 +703,7 @@ export async function runAgentLoop (
           } catch (err) {
             if (abortRef && abortRef.current) throw createAgentAbortError()
             if (isAgentBudgetError(err)) throw err
+            observer.error?.(getAgentErrorStage(err), err)
             await failAgentRiskBatch(agentRuntime, err, {
               toolName: name,
               args
@@ -695,6 +745,8 @@ export async function runAgentLoop (
       response: accumulatedContent + `\n\n*(${aiAgentCopy.maxIterationsText})*`,
       completionStatus: 'failed'
     })
+    observer.error?.('model', { code: 'AGENT_MAX_ITERATIONS' })
+    observer.finish?.('failed', 'AGENT_MAX_ITERATIONS')
     finishQuality('failed', 'failed')
   } catch (error) {
     const exceeded = budgetFailure || (isAgentBudgetError(error) ? error : null)
@@ -706,12 +758,14 @@ export async function runAgentLoop (
       return
     }
     const safeError = sanitizeAIStoredText(error?.message || error)
+    observer.error?.(getAgentErrorStage(error, currentErrorStage), error)
     setIsStreaming(false)
     updateChatEntry(chatEntry, {
       response: accumulatedContent + `\n\n**${aiAgentCopy.errorLabel}:** ${safeError}`,
       completionStatus: 'failed'
     })
     finishQuality('failed', 'failed')
+    observer.finish?.('failed', error?.code || 'AGENT_ERROR')
     return { ok: false, data: null, error: safeError }
   } finally {
     budget.dispose()

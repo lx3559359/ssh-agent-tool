@@ -127,6 +127,38 @@ test('backend cancellation rejects false acknowledgement and deduplicates caller
   assert.equal(controller.state, 'cancel_failed')
 })
 
+test('cancellation observer reports confirmation only after every acknowledgement', async () => {
+  const { createAgentRunCancellationController } = await import(cancellationControllerUrl)
+  const events = []
+  const observer = {
+    cancellation: (status, reasonCode) => events.push([status, reasonCode])
+  }
+  const confirmed = createAgentRunCancellationController({
+    abort: () => {},
+    observer
+  })
+  confirmed.register(async () => ({ cancelled: true }), {
+    confirm: value => value?.cancelled === true
+  })
+  await confirmed.cancel()
+
+  const failed = createAgentRunCancellationController({
+    abort: () => {},
+    observer
+  })
+  failed.register(async () => ({ cancelled: false }), {
+    confirm: value => value?.cancelled === true
+  })
+  await assert.rejects(failed.cancel())
+
+  assert.deepEqual(events, [
+    ['cancelling', undefined],
+    ['cancel_confirmed', undefined],
+    ['cancelling', undefined],
+    ['cancel_failed', 'AGENT_CANCELLATION_FAILED']
+  ])
+})
+
 test('agent loop preserves backend AIAgentCancel and terminal signal wiring', () => {
   const agentSource = fs.readFileSync(path.join(aiRoot, 'agent.js'), 'utf8')
   const terminalSource = fs.readFileSync(path.join(aiRoot, 'agent-terminal-command.js'), 'utf8')

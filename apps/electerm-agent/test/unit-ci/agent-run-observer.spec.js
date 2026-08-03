@@ -23,6 +23,7 @@ test('Agent observer records counters, monotonic phases, and one terminal event'
   })
 
   observer.start()
+  observer.start()
   now = 125
   observer.phase('plan_request')
   now = 180

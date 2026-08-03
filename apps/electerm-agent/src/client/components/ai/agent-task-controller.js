@@ -4,6 +4,7 @@ import { createTraceContext } from '../../common/quality/trace-context.js'
 import {
   agentTaskRegistry
 } from './agent-task-registry.js'
+import { createAgentRunObserver } from './agent-run-observer.js'
 
 function requireFunction (value, label) {
   if (typeof value !== 'function') throw new Error(`${label} 必须是函数。`)
@@ -37,6 +38,7 @@ export async function requestDiagnosticPlanText ({
   prompt,
   config = {},
   signal,
+  observer,
   pollIntervalMs = 200,
   runGlobalAsync = globalThis.window?.pre?.runGlobalAsync
 } = {}) {
@@ -88,6 +90,7 @@ export async function requestDiagnosticPlanText ({
 
   const raceAbort = promise => Promise.race([Promise.resolve(promise), abortPromise])
   try {
+    observer?.phase?.('plan_request')
     if (aborted) throw cancelledRequestError()
     const initialRequest = Promise.resolve().then(() => invoke(
       'AIchat',
@@ -134,6 +137,9 @@ export async function requestDiagnosticPlanText ({
     if (!content.trim()) throw new Error('AI 未返回诊断计划。')
     return content
   } catch (error) {
+    try {
+      observer?.error?.(error?.cancelled ? 'cancellation' : 'model', error)
+    } catch (observerError) {}
     let stopError
     if (sessionId) {
       try {
@@ -183,6 +189,9 @@ export function createAgentTaskController (options = {}) {
   const onTaskChange = typeof options.onTaskChange === 'function'
     ? options.onTaskChange
     : () => {}
+  const observer = options.observer || createAgentRunObserver({
+    context: options.traceContext
+  })
   if (!pid) throw new Error('诊断任务缺少终端 pid。')
 
   function notifyTaskChange (task) {
@@ -204,6 +213,7 @@ export function createAgentTaskController (options = {}) {
   })
 
   async function confirmAndRun (plan) {
+    observer.start?.()
     const {
       traceContext: planTraceContext,
       ...taskPlan
@@ -235,16 +245,26 @@ export function createAgentTaskController (options = {}) {
     })
     notifyTaskChange({ ...task })
     try {
+      observer.phase?.('task_running')
       const completed = await runner.run(task.id, { signal: controller.signal })
       notifyTaskChange(completed)
+      observer.finish?.(completed.status || 'completed')
       return completed
     } catch (error) {
+      const errorStage = error?.code === 'AGENT_ENDPOINT_CHANGED'
+        ? 'endpoint'
+        : (error?.cancelled ? 'cancellation' : 'tool_execution')
+      observer.error?.(errorStage, error)
       const get = store?.getTask || store?.get
       if (typeof get === 'function') {
         const current = await get.call(store, task.id)
         if (current) notifyTaskChange(current)
-        if (error?.cancelled) return current
+        if (error?.cancelled) {
+          observer.finish?.('cancelled', error.code)
+          return current
+        }
       }
+      observer.finish?.('failed', error.code)
       throw error
     } finally {
       registry.unregister(task.id)

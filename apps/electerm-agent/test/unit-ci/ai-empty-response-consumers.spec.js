@@ -227,6 +227,21 @@ const settleAgentCancellation = async activeCancellation => {
       `import { createAgentRunBudget, resolveAgentRunLimits } from ${JSON.stringify(runBudgetUrl)}\n`
     )
     .replace(
+      /^import \{ createAgentRunObserver \} from '\.\/agent-run-observer\.js'\r?\n/m,
+      `const createAgentRunObserver = () => ({
+  start: () => {},
+  phase: () => {},
+  modelRequest: () => {},
+  toolCall: () => {},
+  budgetExceeded: () => {},
+  cancellation: () => {},
+  error: () => {},
+  finish: () => {},
+  snapshot: () => ({ endpointFingerprint: 'endpoint-test' })
+})
+`
+    )
+    .replace(
       /^import aiAgentCopy from '\.\/ai-agent-copy\.json'\r?\n/m,
       `const aiAgentCopy = ${JSON.stringify({
         agentPromptRules: [],
@@ -1013,6 +1028,7 @@ test('cancel finalization update failure reports the error and still releases th
     markToolStarted = resolve
   })
   const errors = []
+  const observerErrors = []
   const chatEntry = {
     id: 'cancel-update-failure',
     sourceTabId: 'tab-a',
@@ -1070,7 +1086,28 @@ test('cancel finalization update failure reports the error and still releases th
   }
 
   try {
-    const pending = runAgentLoop(chatEntry, {}, abortRef, () => {})
+    const pending = runAgentLoop(
+      chatEntry,
+      {},
+      abortRef,
+      () => {},
+      [],
+      undefined,
+      undefined,
+      {
+        observer: {
+          start: () => {},
+          phase: () => {},
+          modelRequest: () => {},
+          toolCall: () => {},
+          budgetExceeded: () => {},
+          cancellation: () => {},
+          error: (stage, error) => observerErrors.push([stage, error?.message]),
+          finish: () => {},
+          snapshot: () => ({ endpointFingerprint: 'endpoint-test' })
+        }
+      }
+    )
     await toolStarted
     await abortRef.cancelCurrent()
     await assert.doesNotReject(pending)
@@ -1080,6 +1117,10 @@ test('cancel finalization update failure reports the error and still releases th
     assert.equal(window.store.aiChatHistory[0].toolCalls[0].status, 'cancelled')
     assert.equal(errors.length, 1)
     assert.match(errors[0].message, /cancel evidence update failed/)
+    assert.deepEqual(observerErrors, [[
+      'persistence',
+      'cancel evidence update failed'
+    ]])
   } finally {
     delete global.__agentEndpoint
     delete global.__executeToolCall
@@ -1371,4 +1412,71 @@ test('Agent replaces oversized tool results with a truncated observation', async
   assert.equal(observation.truncated, true)
   assert.match(observation.data, /originalBytes/)
   assert.ok(Buffer.byteLength(observation.data) < 64 * 1024)
+})
+
+test('chat Agent observer records model, tool, and one completed terminal event', async () => {
+  const { runAgentLoop } = await importAgentModule()
+  const chatEntry = { id: 'agent-observer', prompt: 'observe run' }
+  const events = []
+  let backendCalls = 0
+  global.__executeToolCall = async () => 'evidence'
+  global.window = {
+    pre: {
+      runGlobalAsync: async () => {
+        backendCalls += 1
+        return backendCalls === 1
+          ? {
+              message: {
+                role: 'assistant',
+                content: '',
+                tool_calls: [{
+                  id: 'observer-tool-1',
+                  function: { name: 'get_terminal_status', arguments: '{}' }
+                }]
+              }
+            }
+          : {
+              message: {
+                role: 'assistant',
+                content: 'done',
+                tool_calls: []
+              }
+            }
+      }
+    },
+    store: {
+      aiChatHistory: [chatEntry],
+      config: {},
+      getLangName: () => 'English'
+    }
+  }
+  const observer = {
+    start: () => events.push('started'),
+    phase: value => events.push(value),
+    modelRequest: () => events.push('model_request'),
+    toolCall: () => events.push('tool_execution'),
+    error: stage => events.push(`error:${stage}`),
+    budgetExceeded: () => events.push('budget_exceeded'),
+    finish: value => events.push(`finish:${value}`),
+    snapshot: () => ({ endpointFingerprint: 'endpoint-test' })
+  }
+
+  await runAgentLoop(
+    chatEntry,
+    {},
+    { current: false },
+    () => {},
+    [],
+    undefined,
+    undefined,
+    { observer }
+  )
+
+  assert.deepEqual(events, [
+    'started',
+    'model_request',
+    'tool_execution',
+    'model_request',
+    'finish:completed'
+  ])
 })

@@ -43,6 +43,7 @@ export function createAgentRunObserver ({
   let modelRequests = 0
   let toolCalls = 0
   let terminal = false
+  let started = false
 
   function durationMs () {
     return Math.max(0, Math.round(safeNow(now) - startedAt))
@@ -75,6 +76,8 @@ export function createAgentRunObserver ({
   }
 
   function start () {
+    if (started || terminal) return false
+    started = true
     return setPhase('started', 'running', { result: 'pending' })
   }
 

@@ -4,7 +4,7 @@ function cancellationFailure (errors) {
   return error
 }
 
-export function createAgentRunCancellationController ({ abort } = {}) {
+export function createAgentRunCancellationController ({ abort, observer } = {}) {
   const stops = new Set()
   let state = 'running'
   let cancellation
@@ -22,6 +22,9 @@ export function createAgentRunCancellationController ({ abort } = {}) {
     cancel () {
       if (cancellation) return cancellation
       state = 'cancelling'
+      try {
+        observer?.cancellation?.('cancelling')
+      } catch (error) {}
       abort?.()
       cancellation = Promise.allSettled(
         [...stops].map(entry => Promise.resolve()
@@ -38,9 +41,16 @@ export function createAgentRunCancellationController ({ abort } = {}) {
         ))
         if (errors.length) {
           state = 'cancel_failed'
-          throw cancellationFailure(errors)
+          const error = cancellationFailure(errors)
+          try {
+            observer?.cancellation?.('cancel_failed', error.code)
+          } catch (observerError) {}
+          throw error
         }
         state = 'cancelled'
+        try {
+          observer?.cancellation?.('cancel_confirmed')
+        } catch (error) {}
         return { cancelled: true, status: 'cancelled' }
       })
       return cancellation
