@@ -131,6 +131,8 @@ export const agentTools = withAgentToolPolicy(withAgentToolScopes([
   {
     type: 'function',
     scheduling: {
+      readonly: true,
+      stateful: false,
       parallelSafe: true,
       coalesce: true
     },
@@ -193,6 +195,8 @@ export const agentTools = withAgentToolPolicy(withAgentToolScopes([
   {
     type: 'function',
     scheduling: {
+      readonly: true,
+      stateful: false,
       parallelSafe: true,
       coalesce: true
     },

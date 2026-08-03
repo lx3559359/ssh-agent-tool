@@ -45,6 +45,7 @@ import {
 } from './agent-cancellation-status.js'
 import { buildAgentToolPresentation } from './agent-tool-presentation.js'
 import { runValidatedAgentToolCalls } from './agent-tool-call-parser.js'
+import { scheduleAgentToolCalls } from './agent-tool-scheduler.js'
 import {
   createAgentRunBudget,
   resolveAgentRunLimits
@@ -799,27 +800,56 @@ export async function runAgentLoop (
             content: failureResult
           })
         },
+        schedule: async (parsedCalls, executeParsed) => {
+          const toolEntries = parsedCalls.map(({ id, name, args }) => {
+            observe('toolCall')
+            const safeArgs = sanitizeAIChatHistory([{ args }])[0]?.args || {}
+            return {
+              id,
+              name,
+              args: safeArgs,
+              status: 'running',
+              result: null,
+              presentation: buildAgentToolPresentation(
+                name,
+                args,
+                null,
+                { endpoint: agentRuntime.endpoint }
+              )
+            }
+          })
+          toolCallsLog.push(...toolEntries)
+          updateChatEntry(chatEntry, { toolCalls: [...toolCallsLog] })
+          const outcomes = await scheduleAgentToolCalls(
+            parsedCalls,
+            executeParsed,
+            {
+              maxParallel: 4,
+              signal: controller.signal
+            }
+          )
+          for (let index = 0; index < outcomes.length; index += 1) {
+            const outcome = outcomes[index]
+            const toolEntry = toolEntries[index]
+            toolEntry.status = outcome.status
+            toolEntry.result = outcome.result
+            toolEntry.presentation = outcome.presentation
+            runtimeMessages.push({
+              role: 'tool',
+              tool_call_id: parsedCalls[index].id,
+              content: outcome.modelContent
+            })
+          }
+          updateChatEntry(chatEntry, { toolCalls: [...toolCallsLog] })
+          return outcomes.map(outcome => outcome.toolResult)
+        },
         execute: async parsed => {
           if (abortRef && abortRef.current) throw createAgentAbortError()
-          observe('toolCall')
-          const { id, name, args } = parsed
-          const safeArgs = sanitizeAIChatHistory([{ args }])[0]?.args || {}
-          const toolEntry = {
-            id,
-            name,
-            args: safeArgs,
-            status: 'running',
-            result: null,
-            presentation: buildAgentToolPresentation(
-              name,
-              args,
-              null,
-              { endpoint: agentRuntime.endpoint }
-            )
-          }
-          toolCallsLog.push(toolEntry)
-          updateChatEntry(chatEntry, { toolCalls: [...toolCallsLog] })
-
+          const { name, args } = parsed
+          let status = 'completed'
+          let presentation
+          let storedResult
+          let modelContent
           let toolResult
           try {
             toolResult = await waitForAgentOperation(
@@ -839,7 +869,7 @@ export async function runAgentLoop (
               }
               toolResult = boundedResult.value
             }
-            toolEntry.presentation = buildAgentToolPresentation(
+            presentation = buildAgentToolPresentation(
               name,
               args,
               toolResult,
@@ -850,9 +880,9 @@ export async function runAgentLoop (
               toolResult,
               agentRuntime
             )
-            toolEntry.status = 'completed'
-            toolEntry.result = boundAgentToolResult(JSON.stringify(observation))
+            storedResult = boundAgentToolResult(JSON.stringify(observation))
             toolResult = serializeAgentObservationForModel(observation)
+            modelContent = toolResult
           } catch (err) {
             if (abortRef && abortRef.current) throw createAgentAbortError()
             if (isAgentBudgetError(err)) throw err
@@ -862,8 +892,8 @@ export async function runAgentLoop (
               toolName: name,
               args
             })
-            toolEntry.status = 'error'
-            toolEntry.presentation = buildAgentToolPresentation(
+            status = 'error'
+            presentation = buildAgentToolPresentation(
               name,
               args,
               { error: sanitizeAIStoredText(err.message) },
@@ -877,19 +907,17 @@ export async function runAgentLoop (
               },
               agentRuntime
             )
-            toolEntry.result = boundAgentToolResult(JSON.stringify(observation))
+            storedResult = boundAgentToolResult(JSON.stringify(observation))
             toolResult = serializeAgentObservationForModel(observation)
+            modelContent = storedResult
           }
-
-          updateChatEntry(chatEntry, { toolCalls: [...toolCallsLog] })
-          runtimeMessages.push({
-            role: 'tool',
-            tool_call_id: id,
-            content: toolEntry.status === 'completed'
-              ? toolResult
-              : toolEntry.result
-          })
-          return toolResult
+          return {
+            status,
+            result: storedResult,
+            presentation,
+            modelContent,
+            toolResult
+          }
         }
       })
     }

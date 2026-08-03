@@ -59,6 +59,7 @@ export async function runValidatedAgentToolCalls ({
   maxArgumentBytes,
   normalize,
   prepare,
+  schedule,
   execute,
   onInvalid
 } = {}) {
@@ -79,6 +80,10 @@ export async function runValidatedAgentToolCalls ({
 
   if (!parsedCalls.length) return { parsedCalls, failures, results: [] }
   await prepare?.(parsedCalls)
+  if (typeof schedule === 'function') {
+    const results = await schedule(parsedCalls, execute)
+    return { parsedCalls, failures, results }
+  }
   const results = []
   for (const parsed of parsedCalls) {
     results.push(await execute?.(parsed))

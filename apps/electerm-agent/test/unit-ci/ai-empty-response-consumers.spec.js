@@ -34,6 +34,10 @@ const runtimeServicesUrl = pathToFileURL(path.join(
   root,
   'src/client/components/ai/agent-runtime-services.js'
 )).href
+const toolSchedulerUrl = pathToFileURL(path.join(
+  root,
+  'src/client/components/ai/agent-tool-scheduler.js'
+)).href
 
 function toDataUrl (source) {
   return `data:text/javascript;base64,${Buffer.from(source).toString('base64')}`
@@ -73,6 +77,10 @@ async function importAgentModule () {
   let source = read('src/client/components/ai/agent.js')
   source = source
     .replace(
+      /^import \{ scheduleAgentToolCalls \} from '\.\/agent-tool-scheduler\.js'\r?\n/m,
+      `import { scheduleAgentToolCalls } from ${JSON.stringify(toolSchedulerUrl)}\n`
+    )
+    .replace(
       /^import \{ createAgentRuntimeServices \} from '\.\/agent-runtime-services\.js'\r?\n/m,
       `import { createAgentRuntimeServices } from ${JSON.stringify(runtimeServicesUrl)}\n`
     )
@@ -82,6 +90,7 @@ async function importAgentModule () {
       'const executeToolCall = (...args) => globalThis.__executeToolCall?.(...args) ?? \'\'\n' +
       'const failAgentRiskBatch = async () => null\n' +
       'const getAgentToolDescriptor = name => ({\n' +
+      '  ...globalThis.__agentToolDescriptors?.[name],\n' +
       '  name, function: { name, parameters: { type: \'object\', additionalProperties: true } }\n' +
       '})\n' +
       'const prepareAgentRiskBatch = async () => null\n'
@@ -1194,6 +1203,100 @@ test('agent cancellation releases the lock without waiting for a hung tool call'
     assert.equal(window.store.aiChatHistory[0].completionStatus, 'cancelled')
   } finally {
     delete global.__executeToolCall
+  }
+})
+
+test('agent loop coalesces duplicate safe reads and preserves every tool call id in order', async () => {
+  const { runAgentLoop } = await importAgentModule()
+  const chatEntry = { id: 'agent-safe-read-scheduling', prompt: 'list local state' }
+  const backendMessages = []
+  let backendCalls = 0
+  let executions = 0
+  let active = 0
+  let maxActive = 0
+  global.__agentToolDescriptors = {
+    list_tabs: {
+      scope: 'conversation',
+      scheduling: {
+        readonly: true,
+        stateful: false,
+        parallelSafe: true,
+        coalesce: true
+      }
+    },
+    list_bookmarks: {
+      scope: 'conversation',
+      scheduling: {
+        readonly: true,
+        stateful: false,
+        parallelSafe: true,
+        coalesce: true
+      }
+    }
+  }
+  global.__executeToolCall = async name => {
+    executions += 1
+    active += 1
+    maxActive = Math.max(maxActive, active)
+    await new Promise(resolve => setTimeout(resolve, 5))
+    active -= 1
+    return `${name}:result`
+  }
+  global.window = {
+    pre: {
+      runGlobalAsync: async (action, messages) => {
+        assert.equal(action, 'AIchatWithTools')
+        backendMessages.push(messages)
+        backendCalls += 1
+        if (backendCalls === 1) {
+          return {
+            message: {
+              role: 'assistant',
+              content: '',
+              tool_calls: [
+                {
+                  id: 'tabs-a',
+                  function: { name: 'list_tabs', arguments: '{}' }
+                },
+                {
+                  id: 'tabs-b',
+                  function: { name: 'list_tabs', arguments: '{}' }
+                },
+                {
+                  id: 'bookmarks-a',
+                  function: { name: 'list_bookmarks', arguments: '{}' }
+                }
+              ]
+            }
+          }
+        }
+        return { message: { role: 'assistant', content: 'done' } }
+      }
+    },
+    store: {
+      aiChatHistory: [chatEntry],
+      config: {},
+      getLangName: () => 'English'
+    }
+  }
+
+  try {
+    await runAgentLoop(chatEntry, {}, { current: false }, () => {})
+    assert.equal(executions, 2)
+    assert.equal(maxActive, 2)
+    const secondRequestTools = backendMessages[1]
+      .filter(message => message.role === 'tool')
+    assert.deepEqual(
+      secondRequestTools.map(message => message.tool_call_id),
+      ['tabs-a', 'tabs-b', 'bookmarks-a']
+    )
+    assert.deepEqual(
+      window.store.aiChatHistory[0].toolCalls.map(call => call.id),
+      ['tabs-a', 'tabs-b', 'bookmarks-a']
+    )
+  } finally {
+    delete global.__executeToolCall
+    delete global.__agentToolDescriptors
   }
 })
 

@@ -75,6 +75,8 @@ test('extracted catalog is descriptor-compatible with the facade', async () => {
     error => error?.code === 'UNKNOWN_AGENT_TOOL'
   )
   assert.deepEqual(catalog.getAgentToolDescriptor('list_tabs').scheduling, {
+    readonly: true,
+    stateful: false,
     parallelSafe: true,
     coalesce: true
   })
