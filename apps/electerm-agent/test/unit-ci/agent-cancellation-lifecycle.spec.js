@@ -99,6 +99,27 @@ test('late resource cancellation failure is reported by the joined barrier', asy
   ))
 })
 
+test('failed cancellation keeps the resource locked until owner cleanup', async () => {
+  const { createAgentTaskRegistry } = await import(taskRegistryUrl)
+  const registry = createAgentTaskRegistry()
+  registry.register({
+    taskId: 'task-a',
+    endpoint: endpoint(),
+    scopeId: 'tab-a',
+    runner: { cancel: async () => { throw new Error('stop unconfirmed') } }
+  })
+  await assert.rejects(registry.cancel('task-a'), /stop unconfirmed/)
+  assert.equal(registry.has('task-a'), true)
+  assert.equal(registry.unregister('task-a'), false)
+  assert.throws(() => registry.register({
+    taskId: 'task-b',
+    endpoint: endpoint(),
+    scopeId: 'tab-a',
+    runner: { cancel: async () => ({ status: 'cancelled' }) }
+  }), error => error.code === 'AI_AGENT_SESSION_BUSY')
+  assert.equal(registry.forceUnregister('task-a'), true)
+})
+
 test('lifecycle reports cancellation failure but still revokes authorization', async () => {
   const { handleAgentTakeoverLifecycleEvent } = await import(lifecycleUrl)
   const { createTakeoverRegistry } = await import(registryUrl)
@@ -125,4 +146,34 @@ test('lifecycle reports cancellation failure but still revokes authorization', a
 
   assert.equal(result.errors.length, 1)
   assert.equal(takeoverRegistry.get(endpoint()), undefined)
+  assert.equal(taskRegistry.has('task-a'), true)
+  taskRegistry.forceUnregister('task-a')
+})
+
+test('endpoint destruction force releases a lock after failed cancellation', async () => {
+  const { handleAgentTakeoverLifecycleEvent } = await import(lifecycleUrl)
+  const { createTakeoverRegistry } = await import(registryUrl)
+  const { createAgentTaskRegistry } = await import(taskRegistryUrl)
+  const takeoverRegistry = createTakeoverRegistry()
+  const taskRegistry = createAgentTaskRegistry()
+  takeoverRegistry.enable(endpoint())
+  takeoverRegistry.transition(endpoint(), 'active-idle')
+  taskRegistry.register({
+    taskId: 'task-a',
+    endpoint: endpoint(),
+    scopeId: 'tab-a',
+    runner: {
+      cancel: async () => {
+        throw new Error('remote stop could not be confirmed')
+      }
+    }
+  })
+
+  const result = await handleAgentTakeoverLifecycleEvent({
+    type: 'disconnect',
+    endpoint: endpoint()
+  }, { takeoverRegistry, taskRegistry })
+
+  assert.equal(result.errors.length, 1)
+  assert.equal(taskRegistry.has('task-a'), false)
 })

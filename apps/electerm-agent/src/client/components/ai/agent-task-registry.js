@@ -33,6 +33,13 @@ function entriesConflict (left, right) {
   return sameScope || sameEndpoint(left.endpoint, right.endpoint)
 }
 
+function cancellationConfirmed (result) {
+  return result === true ||
+    result?.cancelled === true ||
+    result?.stopped === true ||
+    result?.status === 'cancelled'
+}
+
 export function createAgentTaskRegistry () {
   const entries = new Map()
   const listeners = new Set()
@@ -72,6 +79,7 @@ export function createAgentTaskRegistry () {
       scopeId,
       kind: String(options.kind || 'diagnostic'),
       pid: options.pid,
+      cancellationFailed: false,
       registeredAt: new Date().toISOString()
     }
     entries.set(taskId, entry)
@@ -79,13 +87,18 @@ export function createAgentTaskRegistry () {
     return entry
   }
 
-  function unregister (id) {
+  function unregister (id, options = {}) {
     const taskId = String(id || '')
     const entry = entries.get(taskId)
     if (!entry) return false
+    if (entry.cancellationFailed && options.force !== true) return false
     entries.delete(taskId)
     notify({ type: 'unregistered', taskId, entry })
     return true
+  }
+
+  function forceUnregister (id) {
+    return unregister(id, { force: true })
   }
 
   function canCancel (task = {}) {
@@ -108,9 +121,18 @@ export function createAgentTaskRegistry () {
     const cancellation = (async () => {
       entry.controller?.abort?.()
       try {
-        return await entry.runner.cancel(taskId)
-      } finally {
-        unregister(taskId)
+        const result = await entry.runner.cancel(taskId)
+        if (!cancellationConfirmed(result)) {
+          const error = new Error('Agent task cancellation was not confirmed by the backend.')
+          error.code = 'AGENT_CANCELLATION_FAILED'
+          throw error
+        }
+        entry.cancellationFailed = false
+        forceUnregister(taskId)
+        return result
+      } catch (error) {
+        entry.cancellationFailed = true
+        throw error
       }
     })()
     cancellations.set(taskId, cancellation)
@@ -161,6 +183,7 @@ export function createAgentTaskRegistry () {
   return {
     register,
     unregister,
+    forceUnregister,
     has: id => entries.has(String(id || '')),
     get: id => entries.get(String(id || '')),
     list: () => [...entries.values()],

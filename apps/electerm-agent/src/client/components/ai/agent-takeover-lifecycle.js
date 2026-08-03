@@ -17,6 +17,14 @@ const supportedEvents = new Set([
   'manual-stop'
 ])
 
+const ownerDestroyedEvents = new Set([
+  'disconnect',
+  'reconnect-start',
+  'tab-close',
+  'endpoint-change',
+  'app-before-quit'
+])
+
 function sameEndpoint (expected, actual) {
   try {
     assertSameSessionEndpoint(expected, actual)
@@ -52,6 +60,16 @@ function requestTaskCancellation (event, taskRegistry) {
   return tabId ? taskRegistry.cancelByScope(tabId) : Promise.resolve([])
 }
 
+function matchingTasks (event, taskRegistry) {
+  if (event.type === 'app-before-quit') return taskRegistry.list?.() || []
+  if (event.endpoint) {
+    const exactTasks = taskRegistry.listByEndpoint(event.endpoint)
+    if (exactTasks.length) return exactTasks
+  }
+  const tabId = String(event.tabId || event.endpoint?.tabId || '')
+  return tabId ? taskRegistry.listByScope?.(tabId) || [] : []
+}
+
 export async function handleAgentTakeoverLifecycleEvent (
   event = {},
   dependencies = {}
@@ -62,6 +80,7 @@ export async function handleAgentTakeoverLifecycleEvent (
   const takeoverRegistry = dependencies.takeoverRegistry || agentTakeoverRegistry
   const taskRegistry = dependencies.taskRegistry || agentTaskRegistry
   const records = matchingRecords(event, takeoverRegistry)
+  const tasks = matchingTasks(event, taskRegistry)
   const cancellation = requestTaskCancellation(event, taskRegistry)
 
   for (const record of records) {
@@ -77,6 +96,11 @@ export async function handleAgentTakeoverLifecycleEvent (
   } catch (error) {
     errors.push(error)
   } finally {
+    if (ownerDestroyedEvents.has(event.type)) {
+      for (const task of tasks) {
+        taskRegistry.forceUnregister?.(task.taskId)
+      }
+    }
     for (const record of records) {
       takeoverRegistry.disable(record.endpoint, event.type)
     }
