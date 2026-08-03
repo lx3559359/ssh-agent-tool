@@ -54,16 +54,16 @@ final result: passed
 # AI Attachment Composer Design QA
 
 - Source visual truth: `C:\Users\luojixiang1\.codex\visualizations\2026\08\03\019fc628-1062-7fd2-ade2-0b1961f0f6b7\attachment-ui-audit\01-reference.png`
-- Implementation screenshot: captured and directly inspected through Windows.Graphics.Capture in the Codex Computer Use session
-- Intended comparison viewport: 1920 x 1080 px
+- Implementation screenshots: initially captured through Windows.Graphics.Capture, then re-captured from the final `v0.4.29` production bundle through the Electron acceptance driver
+- Intended comparison viewports: 1920 x 1080 px reference and 1440 x 900 px final release-candidate window
 - Source pixels: 1920 x 1080 px
-- Implementation pixels: 1920 x 1032 px
-- CSS viewport and density normalization: maximized Windows desktop application at native capture scale; comparison focuses on the right-side AI composer region
+- Implementation pixels: 1920 x 1032 px initial capture and 1440 x 900 px final `v0.4.29` capture
+- CSS viewport and density normalization: native-scale Windows desktop captures; comparison focuses on the right-side AI composer region
 - State: AI composer with one local image and one JSON document attached before submission
 
 ## Full-view comparison evidence
 
-Passed. The isolated packaged Electron build (`v0.4.28`) was opened alongside the reference. The full view showed the composer, attachment surface, action row, and surrounding AI panel without clipping or horizontal overflow.
+Passed. The final isolated production bundle (`v0.4.29`) was opened alongside the reference. The visible top bar and runtime DOM both reported `v0.4.29`; the full view showed the composer, attachment surface, action row, and surrounding AI panel without clipping or horizontal overflow.
 
 ## Focused region comparison evidence
 
@@ -88,6 +88,7 @@ Passed. The image thumbnail, document card, both remove buttons, prompt area, mo
 - Unit contracts cover safe image classification, unsupported MIME fallback, document/web metadata, object URL creation/revocation, and accessible removal.
 - The focused Electron E2E for click upload, paste, drag/drop, multi-attachment, remove, ingestion, and send passed.
 - Runtime accessibility inspection exposed both attachment names and accessible remove buttons; no modal, overflow, or focus obstruction was visible.
+- Final `v0.4.29` runtime inspection confirmed a `blob:` image preview, a `JSON · 7.5 KB` document card, no document-level horizontal overflow, and independent removal transitions from two cards to one and then zero.
 
 ## Comparison history
 
@@ -96,6 +97,7 @@ Passed. The image thumbnail, document card, both remove buttons, prompt area, mo
 3. Safer local HTTP attempt: `http://127.0.0.1:4173/` blocked by the in-app browser client.
 4. A dedicated `ShellPilotReview` package was launched with the repository's `NODE_TEST + DATA_PATH` isolation path so the installed application and user data remained untouched.
 5. The reference PNG and `package.json` were uploaded in the live Electron UI; full-view and focused composer inspection passed at 1920 x 1032 px.
+6. After the version bump and formal package gates, the final `v0.4.29` production bundle was opened again at 1440 x 900 px. The top bar showed `v0.4.29`; mixed PNG/JSON cards, metadata, accessible removal, and zero horizontal overflow were reconfirmed before release.
 
 ## Implementation checklist
 
