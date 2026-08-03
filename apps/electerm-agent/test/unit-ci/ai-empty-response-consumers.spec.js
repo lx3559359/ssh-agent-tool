@@ -839,6 +839,136 @@ test('agent cancellation releases the lock without waiting for a hung backend re
   assert.equal(cancelledRequests.length, 1)
 })
 
+test('chat Agent retries backend cancellation after an unconfirmed first attempt', async () => {
+  const { runAgentLoop } = await importAgentModule()
+  let markRequestStarted
+  const requestStarted = new Promise(resolve => {
+    markRequestStarted = resolve
+  })
+  const neverFinishes = new Promise(() => {})
+  let cancelCalls = 0
+  const chatEntry = {
+    id: 'retry-agent-cancellation',
+    sourceTabId: 'tab-a',
+    prompt: 'check status'
+  }
+  const abortRef = { current: false }
+  global.window = {
+    pre: {
+      runGlobalAsync: async action => {
+        if (action === 'AIchatWithTools') {
+          markRequestStarted()
+          return neverFinishes
+        }
+        if (action === 'AIAgentCancel') {
+          cancelCalls += 1
+          if (cancelCalls === 1) {
+            const error = new Error('remote cancellation not confirmed')
+            error.code = 'AGENT_CANCELLATION_FAILED'
+            throw error
+          }
+          return { cancelled: true }
+        }
+        throw new Error(`unexpected action: ${action}`)
+      }
+    },
+    store: {
+      agentRunning: false,
+      aiChatHistory: [chatEntry],
+      config: {},
+      getLangName: () => 'English'
+    }
+  }
+
+  const pending = runAgentLoop(chatEntry, {}, abortRef, () => {})
+  await requestStarted
+  const cancel = abortRef.cancelCurrent
+  const first = cancel()
+  const duplicate = cancel()
+  assert.equal(first, duplicate)
+  await assert.rejects(first, /remote cancellation not confirmed/)
+  assert.equal(cancelCalls, 1)
+
+  await assert.doesNotReject(cancel())
+  assert.equal(cancelCalls, 2)
+  await pending
+})
+
+test('chat Agent retry reaches an unresolved remote tool cancellation again', async () => {
+  const { runAgentLoop } = await importAgentModule()
+  let markToolStarted
+  const toolStarted = new Promise(resolve => {
+    markToolStarted = resolve
+  })
+  const neverFinishes = new Promise(() => {})
+  let remoteCancelCalls = 0
+  let backendCancelCalls = 0
+  const chatEntry = {
+    id: 'retry-agent-remote-tool-cancellation',
+    sourceTabId: 'tab-a',
+    prompt: 'check disk'
+  }
+  const abortRef = { current: false }
+  global.__executeToolCall = async (_name, _args, runtime) => {
+    runtime.cancellations.add(() => {
+      remoteCancelCalls += 1
+      if (remoteCancelCalls === 1) {
+        throw new Error('remote tool stop not confirmed')
+      }
+      return { cancelled: true }
+    })
+    markToolStarted()
+    return neverFinishes
+  }
+  global.window = {
+    pre: {
+      runGlobalAsync: async action => {
+        if (action === 'AIchatWithTools') {
+          return {
+            message: {
+              role: 'assistant',
+              content: '',
+              tool_calls: [{
+                id: 'tool-retry-cancel',
+                function: {
+                  name: 'run_readonly_command',
+                  arguments: '{"command":"df -h"}'
+                }
+              }]
+            }
+          }
+        }
+        if (action === 'AIAgentCancel') {
+          backendCancelCalls += 1
+          return { cancelled: true }
+        }
+        throw new Error(`unexpected action: ${action}`)
+      }
+    },
+    store: {
+      agentRunning: false,
+      aiChatHistory: [chatEntry],
+      config: {},
+      getLangName: () => 'English'
+    }
+  }
+
+  try {
+    const pending = runAgentLoop(chatEntry, {}, abortRef, () => {})
+    await toolStarted
+    const cancel = abortRef.cancelCurrent
+    await assert.rejects(cancel(), /remote tool stop not confirmed/)
+    await pending
+    assert.equal(remoteCancelCalls, 1)
+
+    await assert.doesNotReject(cancel())
+    assert.equal(remoteCancelCalls, 2)
+    assert.equal(backendCancelCalls, 0)
+  } finally {
+    delete global.__executeToolCall
+  }
+})
+
 test('takeover stop cancels only the Agent run bound to that terminal scope', async () => {
   const {
     cancelAgentRunsForScope,

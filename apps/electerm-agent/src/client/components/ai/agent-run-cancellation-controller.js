@@ -1,11 +1,50 @@
+const DEFAULT_CANCELLATION_TIMEOUT_MS = 30 * 1000
+
 function cancellationFailure (errors) {
   const error = new AggregateError(errors, 'Agent cancellation was not confirmed')
   error.code = 'AGENT_CANCELLATION_FAILED'
   return error
 }
 
-export function createAgentRunCancellationController ({ abort, observer } = {}) {
+function cancellationTimeoutFailure (timeoutMs) {
+  const error = new Error(`Agent cancellation timed out after ${timeoutMs} ms`)
+  error.code = 'AGENT_CANCELLATION_TIMEOUT'
+  error.timeoutMs = timeoutMs
+  return error
+}
+
+function normalizeCancellationTimeout (value) {
+  return Number.isFinite(value) && value > 0
+    ? value
+    : DEFAULT_CANCELLATION_TIMEOUT_MS
+}
+
+export function waitForAgentCancellationDeadline (value, {
+  cancellationTimeoutMs,
+  setTimeout: scheduleTimeout = (callback, delay) => globalThis.setTimeout(callback, delay),
+  clearTimeout: cancelTimeout = handle => globalThis.clearTimeout(handle)
+} = {}) {
+  const timeoutMs = normalizeCancellationTimeout(cancellationTimeoutMs)
+  let timeoutHandle
+  const timeout = new Promise((resolve, reject) => {
+    timeoutHandle = scheduleTimeout(
+      () => reject(cancellationTimeoutFailure(timeoutMs)),
+      timeoutMs
+    )
+  })
+  return Promise.race([Promise.resolve(value), timeout])
+    .finally(() => cancelTimeout(timeoutHandle))
+}
+
+export function createAgentRunCancellationController ({
+  abort,
+  observer,
+  cancellationTimeoutMs,
+  setTimeout: scheduleTimeout = (callback, delay) => globalThis.setTimeout(callback, delay),
+  clearTimeout: cancelTimeout = handle => globalThis.clearTimeout(handle)
+} = {}) {
   const stops = new Set()
+  const timeoutMs = normalizeCancellationTimeout(cancellationTimeoutMs)
   let state = 'running'
   let cancellation
 
@@ -26,7 +65,7 @@ export function createAgentRunCancellationController ({ abort, observer } = {}) 
         observer?.cancellation?.('cancelling')
       } catch (error) {}
       abort?.()
-      cancellation = Promise.allSettled(
+      const stopBarrier = Promise.allSettled(
         [...stops].map(entry => Promise.resolve()
           .then(entry.stop)
           .then(value => {
@@ -35,25 +74,39 @@ export function createAgentRunCancellationController ({ abort, observer } = {}) 
             }
             return value
           }))
-      ).then(results => {
+      )
+      const attempt = waitForAgentCancellationDeadline(stopBarrier, {
+        cancellationTimeoutMs: timeoutMs,
+        setTimeout: scheduleTimeout,
+        clearTimeout: cancelTimeout
+      }).then(results => {
         const errors = results.flatMap(result => (
           result.status === 'rejected' ? [result.reason] : []
         ))
         if (errors.length) {
-          state = 'cancel_failed'
-          const error = cancellationFailure(errors)
-          try {
-            observer?.cancellation?.('cancel_failed', error.code)
-          } catch (observerError) {}
-          throw error
+          throw cancellationFailure(errors)
         }
         state = 'cancelled'
         try {
           observer?.cancellation?.('cancel_confirmed')
         } catch (error) {}
         return { cancelled: true, status: 'cancelled' }
+      }).catch(error => {
+        state = 'cancel_failed'
+        const failure = error?.code === 'AGENT_CANCELLATION_FAILED'
+          ? error
+          : cancellationFailure([error])
+        try {
+          observer?.cancellation?.('cancel_failed', failure.code)
+        } catch (observerError) {}
+        throw failure
+      }).finally(() => {
+        if (state === 'cancel_failed' && cancellation === attempt) {
+          cancellation = undefined
+        }
       })
-      return cancellation
+      cancellation = attempt
+      return attempt
     }
   }
 }

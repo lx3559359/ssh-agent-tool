@@ -88,27 +88,66 @@ test('aborting a gateway call stops before a later executor begins', async () =>
   assert.equal(executorCalls, 0)
 })
 
-test('registered cancellation runs once and failed remote stop is not success', async () => {
+test('registered cancellation retries after a failed remote stop', async () => {
   const {
     cancelAgentRuntimeOperations,
     registerAgentCancellation
   } = await import(runtimeUrl)
   const runtime = { cancellations: new Set() }
   let calls = 0
+  let rejectFirst
+  const firstAttempt = new Promise((resolve, reject) => {
+    rejectFirst = reject
+  })
   registerAgentCancellation(runtime, async () => {
     calls += 1
-    const error = new Error('remote stop could not be confirmed')
-    error.remoteState = 'unknown'
-    throw error
+    if (calls === 1) {
+      return firstAttempt
+    }
+    return { cancelled: true }
   })
 
-  await assert.rejects(cancelAgentRuntimeOperations(runtime), error => {
+  const first = cancelAgentRuntimeOperations(runtime)
+  const duplicate = cancelAgentRuntimeOperations(runtime)
+  assert.equal(calls, 1)
+  const unconfirmed = new Error('remote stop could not be confirmed')
+  unconfirmed.remoteState = 'unknown'
+  rejectFirst(unconfirmed)
+
+  const isUnconfirmed = error => {
     assert.equal(error.code, 'AGENT_CANCELLATION_FAILED')
     assert.equal(error.remoteState, 'unknown')
     return true
-  })
-  await cancelAgentRuntimeOperations(runtime)
-  assert.equal(calls, 1)
+  }
+  await assert.rejects(first, isUnconfirmed)
+  await assert.rejects(duplicate, isUnconfirmed)
+  await assert.doesNotReject(cancelAgentRuntimeOperations(runtime))
+  assert.equal(calls, 2)
+  assert.equal(runtime.cancellations.size, 0)
+})
+
+test('legacy active tool cancellation is retained until a stop succeeds', async () => {
+  const { cancelAgentRuntimeOperations } = await import(runtimeUrl)
+  let calls = 0
+  const cancelActiveTool = async () => {
+    calls += 1
+    if (calls === 1) throw new Error('active tool stop failed')
+    return { cancelled: true }
+  }
+  const runtime = {
+    cancellations: new Set(),
+    cancelActiveTool
+  }
+
+  await assert.rejects(
+    cancelAgentRuntimeOperations(runtime),
+    error => error.errors?.[0]?.message === 'active tool stop failed'
+  )
+  assert.equal(runtime.cancelActiveTool, cancelActiveTool)
+
+  await assert.doesNotReject(cancelAgentRuntimeOperations(runtime))
+  assert.equal(calls, 2)
+  assert.equal(runtime.cancelActiveTool, null)
 })
 
 test('backend cancellation rejects false acknowledgement and deduplicates callers', async () => {
@@ -125,6 +164,72 @@ test('backend cancellation rejects false acknowledgement and deduplicates caller
   await assert.rejects(second, error => error.code === 'AGENT_CANCELLATION_FAILED')
   assert.equal(calls, 1)
   assert.equal(controller.state, 'cancel_failed')
+})
+
+test('cancellation times out a hung backend stop and reports failure', async () => {
+  const { createAgentRunCancellationController } = await import(cancellationControllerUrl)
+  const events = []
+  let scheduled
+  let cleared = 0
+  const controller = createAgentRunCancellationController({
+    abort: () => {},
+    observer: {
+      cancellation: (status, reasonCode) => events.push([status, reasonCode])
+    },
+    cancellationTimeoutMs: 25,
+    setTimeout: (callback, delay) => {
+      scheduled = { callback, delay }
+      return 17
+    },
+    clearTimeout: id => {
+      assert.equal(id, 17)
+      cleared += 1
+    }
+  })
+  controller.register(() => new Promise(() => {}))
+
+  const cancellation = controller.cancel()
+  await Promise.resolve()
+  assert.equal(scheduled?.delay, 25)
+  scheduled.callback()
+
+  await assert.rejects(cancellation, error => {
+    assert.equal(error.code, 'AGENT_CANCELLATION_FAILED')
+    assert.equal(error.errors?.[0]?.code, 'AGENT_CANCELLATION_TIMEOUT')
+    return true
+  })
+  assert.equal(controller.state, 'cancel_failed')
+  assert.equal(cleared, 1)
+  assert.deepEqual(events, [
+    ['cancelling', undefined],
+    ['cancel_failed', 'AGENT_CANCELLATION_FAILED']
+  ])
+})
+
+test('cancellation retries after an unconfirmed cancellation while concurrent callers deduplicate', async () => {
+  const { createAgentRunCancellationController } = await import(cancellationControllerUrl)
+  let calls = 0
+  const controller = createAgentRunCancellationController({ abort: () => {} })
+  controller.register(async () => {
+    calls += 1
+    return { cancelled: calls > 1 }
+  }, { confirm: value => value?.cancelled === true })
+
+  const first = controller.cancel()
+  const duplicate = controller.cancel()
+  assert.equal(first, duplicate)
+  await assert.rejects(first, error => error.code === 'AGENT_CANCELLATION_FAILED')
+  assert.equal(calls, 1)
+  assert.equal(controller.state, 'cancel_failed')
+
+  const retried = await controller.cancel()
+  assert.deepEqual(retried, { cancelled: true, status: 'cancelled' })
+  assert.equal(calls, 2)
+  assert.equal(controller.state, 'cancelled')
+
+  const repeatedSuccess = await controller.cancel()
+  assert.deepEqual(repeatedSuccess, retried)
+  assert.equal(calls, 2)
 })
 
 test('cancellation observer reports confirmation only after every acknowledgement', async () => {

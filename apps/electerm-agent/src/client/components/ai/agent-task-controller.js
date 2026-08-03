@@ -5,6 +5,9 @@ import {
   agentTaskRegistry
 } from './agent-task-registry.js'
 import { createAgentRunObserver } from './agent-run-observer.js'
+import {
+  waitForAgentCancellationDeadline
+} from './agent-run-cancellation-controller.js'
 import { createAgentRuntimeServices } from './agent-runtime-services.js'
 
 function requireFunction (value, label) {
@@ -41,6 +44,9 @@ export async function requestDiagnosticPlanText ({
   signal,
   observer,
   pollIntervalMs = 200,
+  cancellationTimeoutMs,
+  setTimeout: scheduleCancellationTimeout,
+  clearTimeout: clearCancellationTimeout,
   runGlobalAsync,
   services
 } = {}) {
@@ -67,14 +73,18 @@ export async function requestDiagnosticPlanText ({
     const id = String(value || '')
     if (!id) return Promise.resolve({ stopped: true })
     if (stopPromises.has(id)) return stopPromises.get(id)
-    const stopping = Promise.resolve()
+    const stopping = waitForAgentCancellationDeadline(Promise.resolve()
       .then(() => invoke('stopStream', id))
       .then(result => {
         if (result === true || result?.stopped === true) return result
         const error = new Error('AI diagnostic stream cancellation was not confirmed.')
         error.code = 'AGENT_CANCELLATION_FAILED'
         throw error
-      })
+      }), {
+      cancellationTimeoutMs,
+      setTimeout: scheduleCancellationTimeout,
+      clearTimeout: clearCancellationTimeout
+    })
     stopPromises.set(id, stopping)
     return stopping
   }
@@ -113,7 +123,11 @@ export async function requestDiagnosticPlanText ({
     ))
     initialRequest.then(initial => {
       if (aborted && initial?.isStream) {
-        stopStream(initial.sessionId).catch(() => {})
+        stopStream(initial.sessionId).catch(error => {
+          try {
+            observer?.error?.('cancellation', error)
+          } catch (observerError) {}
+        })
       }
     }, () => {})
     const initial = await raceAbort(initialRequest)
@@ -145,7 +159,10 @@ export async function requestDiagnosticPlanText ({
     return content
   } catch (error) {
     try {
-      observer?.error?.(error?.cancelled ? 'cancellation' : 'model', error)
+      observer?.error?.(
+        aborted || error?.cancelled ? 'cancellation' : 'model',
+        error
+      )
     } catch (observerError) {}
     let stopError
     if (sessionId) {

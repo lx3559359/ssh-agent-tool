@@ -411,11 +411,19 @@ export async function runAgentLoop (
 
   function cancelCurrent () {
     if (activeCancellation) return activeCancellation
-    activeCancellation = cancellationController.cancel().catch(error => {
+    cancellationFailure = undefined
+    let attemptFailed = false
+    const attempt = cancellationController.cancel().catch(error => {
+      attemptFailed = true
       cancellationFailure = error
       throw error
+    }).finally(() => {
+      if (attemptFailed && activeCancellation === attempt) {
+        activeCancellation = undefined
+      }
     })
-    return activeCancellation
+    activeCancellation = attempt
+    return attempt
   }
   abortRef.cancelCurrent = cancelCurrent
   observe('start')
@@ -968,7 +976,9 @@ export async function runAgentLoop (
     return { ok: false, data: null, error: safeError }
   } finally {
     budget.dispose()
-    agentRuntime.cancellations.clear()
+    if (!controller.signal.aborted) {
+      agentRuntime.cancellations.clear()
+    }
     if (abortRef.cancelCurrent === cancelCurrent) {
       delete abortRef.cancelCurrent
     }

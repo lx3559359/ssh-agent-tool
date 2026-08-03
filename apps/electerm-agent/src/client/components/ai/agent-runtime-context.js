@@ -373,14 +373,23 @@ export function registerAgentCancellation (runtime = {}, cancel) {
   let cancellation
   const wrappedCancel = () => {
     if (!active) return cancellation || Promise.resolve()
-    active = false
-    cancellations.delete(wrappedCancel)
+    if (cancellation) return cancellation
+    let attempt
     try {
-      cancellation = Promise.resolve(cancel())
+      attempt = Promise.resolve(cancel())
     } catch (error) {
-      cancellation = Promise.reject(error)
+      attempt = Promise.reject(error)
     }
-    return cancellation
+    const settled = attempt.then(value => {
+      active = false
+      cancellations.delete(wrappedCancel)
+      return value
+    }, error => {
+      if (cancellation === settled) cancellation = undefined
+      throw error
+    })
+    cancellation = settled
+    return settled
   }
   cancellations.add(wrappedCancel)
   if (runtime.signal?.aborted) {
@@ -420,18 +429,27 @@ export function registerDeferredAgentCancellation (
 
 export async function cancelAgentRuntimeOperations (runtime = {}) {
   const pending = []
-  if (typeof runtime.cancelActiveTool === 'function') {
+  const activeToolCancellation = typeof runtime.cancelActiveTool === 'function'
+    ? runtime.cancelActiveTool
+    : null
+  if (activeToolCancellation) {
     try {
-      pending.push(Promise.resolve(runtime.cancelActiveTool()))
+      pending.push(Promise.resolve(activeToolCancellation()))
     } catch (error) {
       pending.push(Promise.reject(error))
     }
   }
-  runtime.cancelActiveTool = null
   for (const cancel of [...(runtime.cancellations || [])]) {
     pending.push(cancel())
   }
   const settled = await Promise.allSettled(pending)
+  if (
+    activeToolCancellation &&
+    settled[0]?.status === 'fulfilled' &&
+    runtime.cancelActiveTool === activeToolCancellation
+  ) {
+    runtime.cancelActiveTool = null
+  }
   const errors = settled
     .filter(result => result.status === 'rejected')
     .map(result => result.reason)

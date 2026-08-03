@@ -691,10 +691,70 @@ test('AI plan request abort awaits stopStream acknowledgement', async () => {
   assert.equal(settled, true)
 })
 
+test('AI plan request abort times out a hung stopStream as a cancellation failure', async () => {
+  const { requestDiagnosticPlanText } = await import(controllerUrl)
+  const abort = new AbortController()
+  const observerErrors = []
+  let polling = false
+  let scheduled
+  let cleared = 0
+  const request = requestDiagnosticPlanText({
+    prompt: 'target-only-prompt',
+    config: {
+      modelAI: 'selected-model',
+      baseURLAI: 'https://relay.example.com',
+      apiKeyAI: 'selected-key'
+    },
+    signal: abort.signal,
+    observer: {
+      phase: () => {},
+      modelRequest: () => {},
+      error: (stage, error) => observerErrors.push([stage, error?.code])
+    },
+    pollIntervalMs: 0,
+    cancellationTimeoutMs: 25,
+    setTimeout: (callback, delay) => {
+      scheduled = { callback, delay }
+      return 19
+    },
+    clearTimeout: id => {
+      assert.equal(id, 19)
+      cleared += 1
+    },
+    runGlobalAsync: (...args) => {
+      if (args[0] === 'AIchat') {
+        return { isStream: true, sessionId: 'hung-diagnostic-stream', content: '' }
+      }
+      if (args[0] === 'getStreamContent') {
+        polling = true
+        return new Promise(() => {})
+      }
+      if (args[0] === 'stopStream') return new Promise(() => {})
+      throw new Error(`unexpected action: ${args[0]}`)
+    }
+  })
+  await waitFor(() => polling)
+
+  abort.abort()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(scheduled?.delay, 25)
+  scheduled.callback()
+
+  await assert.rejects(request, error => (
+    error.code === 'AGENT_CANCELLATION_TIMEOUT'
+  ))
+  assert.equal(cleared, 1)
+  assert.deepEqual(observerErrors, [[
+    'cancellation',
+    'AGENT_CANCELLATION_TIMEOUT'
+  ]])
+})
+
 test('AI plan request stops a stream that arrives after initial IPC cancellation exactly once', async () => {
   const { requestDiagnosticPlanText } = await import(controllerUrl)
   const abort = new AbortController()
   const calls = []
+  const observerErrors = []
   let resolveInitial
   const initialResponse = new Promise(resolve => { resolveInitial = resolve })
   const request = requestDiagnosticPlanText({
@@ -705,6 +765,14 @@ test('AI plan request stops a stream that arrives after initial IPC cancellation
       apiKeyAI: 'selected-key'
     },
     signal: abort.signal,
+    observer: {
+      phase: () => {},
+      modelRequest: () => {},
+      error: (stage, error) => observerErrors.push([
+        stage,
+        error?.message
+      ])
+    },
     pollIntervalMs: 0,
     runGlobalAsync: (...args) => {
       calls.push(args)
@@ -723,6 +791,9 @@ test('AI plan request stops a stream that arrives after initial IPC cancellation
 
   assert.equal(calls.filter(call => call[0] === 'stopStream').length, 1)
   assert.deepEqual(calls.at(-1), ['stopStream', 'late-diagnostic-stream'])
+  assert.equal(observerErrors.some(([stage, message]) => (
+    stage === 'cancellation' && message === 'late stop failure'
+  )), true)
 })
 
 test('AI plan request stops an established stream once for every polling failure', async t => {
