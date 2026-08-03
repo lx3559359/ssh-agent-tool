@@ -201,7 +201,7 @@ test('Zmodem safety cancellation leaves no control selection for a later manual 
 test('quick, AI, Agent and MCP callers contain no naked terminal command send', () => {
   const quick = readClientSource('store/quick-command.js')
   const ai = readClientSource('components/ai/ai-ssh-context.js')
-  const agent = readClientSource('components/ai/agent-tools.js')
+  const agent = readClientSource('components/ai/agent-tool-execution.js')
   const mcp = readClientSource('store/mcp-handler.js')
 
   assert.match(quick, /Store\.prototype\.runSafetyCommand/)
