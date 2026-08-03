@@ -337,6 +337,14 @@ test('surfaces navigation authorization challenges with safe details', async () 
   while (!harness.getGuardOptions()) {
     await new Promise(resolve => setImmediate(resolve))
   }
+  harness.shell.remote.emit(
+    'did-fail-load',
+    {},
+    -20,
+    'ERR_BLOCKED_BY_CLIENT',
+    'http://second.internal/app',
+    true
+  )
   harness.getGuardOptions().onAuthorizationRequired({
     origin: 'http://second.internal',
     addressClass: 'private',

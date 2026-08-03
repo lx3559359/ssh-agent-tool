@@ -125,6 +125,12 @@ function waitForLoad ({
       isMainFrame
     ) {
       if (isMainFrame === false) return
+      if (
+        errorCode === -20 ||
+        /ERR_BLOCKED_BY_CLIENT/i.test(String(errorDescription || ''))
+      ) {
+        return
+      }
       const certificateFailure = /CERT/i.test(
         String(errorDescription || '')
       ) || (errorCode <= -200 && errorCode >= -299)

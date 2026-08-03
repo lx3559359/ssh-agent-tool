@@ -513,6 +513,7 @@ export default function AIChat (props) {
     }
     return (
       <SendOutlined
+        data-testid='ai-chat-submit'
         onClick={composerActionState.disabled ? undefined : handleSubmit}
         aria-disabled={composerActionState.disabled}
         className={`mg1l send-to-ai-icon ${
@@ -571,6 +572,7 @@ export default function AIChat (props) {
             <button
               key={item.key}
               type='button'
+              data-testid={item.key === 'web' ? 'ai-web-add-url' : undefined}
               className='ai-context-action'
               onClick={item.handleClick}
               onFocus={handleHorizontalRailFocus}
@@ -807,6 +809,7 @@ export default function AIChat (props) {
         cancelText={e('cancel')}
         onOk={handleConfirmWebUrl}
         onCancel={() => setWebUrlDialogOpen(false)}
+        okButtonProps={{ 'data-testid': 'ai-web-url-confirm' }}
         destroyOnClose
       >
         <Input
@@ -814,6 +817,7 @@ export default function AIChat (props) {
           onChange={event => setWebUrl(event.target.value)}
           onPressEnter={handleConfirmWebUrl}
           placeholder='https://example.com/article'
+          data-testid='ai-web-url-input'
           autoFocus
         />
         <div className='shellpilot-ai-web-url-hint'>

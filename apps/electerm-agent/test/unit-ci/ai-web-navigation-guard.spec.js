@@ -215,7 +215,7 @@ test('installs one shared session guard and disposes per-view listeners', async 
 
   assert.equal(session.beforeRequestRegistrations, 1)
   assert.equal(first.listenerCount('will-navigate'), 1)
-  assert.equal(first.listenerCount('did-redirect-navigation'), 1)
+  assert.equal(first.listenerCount('did-redirect-navigation'), 0)
   assert.deepEqual(first.windowOpenHandler(), { action: 'deny' })
   assert.equal(session.permissionCheckHandler(), false)
   let permissionResult
@@ -252,7 +252,6 @@ test('installs one shared session guard and disposes per-view listeners', async 
   disposeFirst()
   disposeFirst()
   assert.equal(first.listenerCount('will-navigate'), 0)
-  assert.equal(first.listenerCount('did-redirect-navigation'), 0)
   assert.deepEqual(await runBeforeRequest(session, {
     webContentsId: first.id,
     url: 'http://second.internal/app',
@@ -261,22 +260,19 @@ test('installs one shared session guard and disposes per-view listeners', async 
 
   disposeSecond()
   assert.equal(second.listenerCount('will-navigate'), 0)
-  assert.equal(second.listenerCount('did-redirect-navigation'), 0)
 })
 
-test('prevents unapproved client navigation before asynchronous inspection', async () => {
+test('preserves HTTP form navigation while the request guard evaluates it', async () => {
   const session = new FakeSession()
   const webContents = new FakeWebContents(21)
-  let resolveInspection
-  const inspection = new Promise(resolve => {
-    resolveInspection = resolve
-  })
   const dispose = installWebNavigationGuard({
     session,
     webContents,
     readId: 'read-1',
-    inspectTarget: async () => inspection,
-    isOriginGranted: async () => false
+    inspectTarget: createInspector({
+      'http://kb.internal': 'private'
+    }),
+    isOriginGranted: async ({ origin }) => origin === 'http://kb.internal'
   })
 
   let prevented = false
@@ -284,20 +280,45 @@ test('prevents unapproved client navigation before asynchronous inspection', asy
     preventDefault: () => {
       prevented = true
     }
-  }, 'https://example.com/next')
-  assert.equal(prevented, true)
+  }, 'http://kb.internal/login')
+  assert.equal(prevented, false)
   assert.deepEqual(webContents.loadedUrls, [])
+  assert.deepEqual(await runBeforeRequest(session, {
+    webContentsId: webContents.id,
+    url: 'http://kb.internal/login',
+    method: 'POST',
+    resourceType: 'mainFrame'
+  }), {})
+  dispose()
+})
 
-  resolveInspection({
-    decision: 'allow-public',
-    target: {
-      origin: 'https://example.com',
-      addressClass: 'public'
-    },
-    reason: 'public-target'
+test('cancels a blocked redirect request without stopping navigation twice', async () => {
+  const session = new FakeSession()
+  const webContents = new FakeWebContents(22)
+  const challenges = []
+  const dispose = installWebNavigationGuard({
+    session,
+    webContents,
+    readId: 'read-1',
+    inspectTarget: createInspector({
+      'http://second.internal': 'private'
+    }),
+    isOriginGranted: async () => false,
+    onAuthorizationRequired: target => challenges.push(target)
   })
-  await new Promise(resolve => setImmediate(resolve))
-  assert.deepEqual(webContents.loadedUrls, ['https://example.com/next'])
+
+  assert.equal(webContents.listenerCount('did-redirect-navigation'), 0)
+  assert.deepEqual(await runBeforeRequest(session, {
+    webContentsId: webContents.id,
+    url: 'http://second.internal/app',
+    resourceType: 'mainFrame'
+  }), { cancel: true })
+
+  assert.equal(webContents.stopped, undefined)
+  assert.deepEqual(challenges, [{
+    origin: 'http://second.internal',
+    addressClass: 'private'
+  }])
   dispose()
 })
 

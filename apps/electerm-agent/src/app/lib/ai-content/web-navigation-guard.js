@@ -169,7 +169,6 @@ function installWebNavigationGuard ({
   }
   const registry = getSessionRegistry(session)
   const context = {
-    approvedNavigations: new Set(),
     decide: createWebRequestDecision({
       inspectTarget,
       isOriginGranted
@@ -184,64 +183,25 @@ function installWebNavigationGuard ({
   webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
 
   function handleWillNavigate (event, url) {
-    if (context.approvedNavigations.delete(url)) return
-    event.preventDefault()
-    Promise.resolve(context.decide({
-      url,
-      resourceType: MAIN_FRAME_RESOURCE,
-      readId: context.readId
-    })).then(decision => {
-      if (context.disposed) return
-      if (decision.action === 'allow') {
-        context.approvedNavigations.add(url)
-        return webContents.loadURL(url)
-      }
-      notifyDecision(context, decision)
-    }).catch(() => {
+    if (unsupportedProtocol(url)) {
+      event.preventDefault()
       notifyDecision(context, {
         action: 'block',
-        code: 'WEB_NETWORK_ERROR',
-        reason: 'inspection-failed'
+        code: 'WEB_ACCESS_BLOCKED',
+        reason: 'unsupported-protocol'
       })
-    })
-  }
-
-  function handleRedirect (_event, url, _isInPlace, isMainFrame) {
-    if (!isMainFrame) return
-    Promise.resolve(context.decide({
-      url,
-      resourceType: MAIN_FRAME_RESOURCE,
-      readId: context.readId
-    })).then(decision => {
-      if (context.disposed || decision.action === 'allow') return
-      webContents.stop()
-      notifyDecision(context, decision)
-    }).catch(() => {
-      if (context.disposed) return
-      webContents.stop()
-      notifyDecision(context, {
-        action: 'block',
-        code: 'WEB_NETWORK_ERROR',
-        reason: 'inspection-failed'
-      })
-    })
+    }
   }
 
   webContents.on('will-navigate', handleWillNavigate)
-  webContents.on('did-redirect-navigation', handleRedirect)
 
   return function dispose () {
     if (context.disposed) return
     context.disposed = true
-    context.approvedNavigations.clear()
     if (registry.contexts.get(webContents.id) === context) {
       registry.contexts.delete(webContents.id)
     }
     webContents.removeListener('will-navigate', handleWillNavigate)
-    webContents.removeListener(
-      'did-redirect-navigation',
-      handleRedirect
-    )
   }
 }
 

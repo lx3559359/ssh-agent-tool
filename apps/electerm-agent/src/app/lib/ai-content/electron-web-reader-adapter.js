@@ -54,6 +54,7 @@ function buildToolbarHtml (origin) {
   return [
     '<!doctype html>',
     '<html><head><meta charset="utf-8">',
+    '<title>ShellPilot AI Web Reader</title>',
     '<meta http-equiv="Content-Security-Policy" ',
     'content="default-src \'none\'; style-src \'unsafe-inline\'; ',
     'script-src \'unsafe-inline\';">',
@@ -71,9 +72,11 @@ function buildToolbarHtml (origin) {
     '<div class="origin"><strong>',
     safeOrigin,
     '</strong><span id="status">Loading page…</span></div>',
-    '<button type="button" onclick="shellPilotWebReader.cancel()">',
+    '<button type="button" data-testid="ai-web-reader-cancel" ',
+    'onclick="shellPilotWebReader.cancel()">',
     'Cancel / 取消</button>',
     '<button type="button" class="primary" ',
+    'data-testid="ai-web-reader-read-current" ',
     'onclick="shellPilotWebReader.complete()">',
     'Read Current Page / 读取当前页面</button>',
     '</div></body></html>'

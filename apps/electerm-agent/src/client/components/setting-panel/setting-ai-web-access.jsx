@@ -137,6 +137,7 @@ export default function SettingAiWebAccess () {
           <Button
             danger
             size='small'
+            data-testid='ai-web-revoke'
             disabled={Boolean(operation)}
             loading={operation === `revoke:${grant.origin}`}
           >
@@ -162,6 +163,7 @@ export default function SettingAiWebAccess () {
           >
             <Button
               danger
+              data-testid='ai-web-clear-grants'
               disabled={Boolean(operation) || !grants.length}
               loading={operation === 'clear-grants'}
             >
@@ -175,6 +177,7 @@ export default function SettingAiWebAccess () {
             cancelText={e('cancel')}
           >
             <Button
+              data-testid='ai-web-clear-session'
               disabled={Boolean(operation)}
               loading={operation === 'clear-session'}
             >
