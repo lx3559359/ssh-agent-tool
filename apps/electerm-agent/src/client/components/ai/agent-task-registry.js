@@ -16,6 +16,23 @@ function taskStoreMethod (store, genericName, taskName) {
   return method.bind(store)
 }
 
+function sameEndpoint (left, right) {
+  if (!left || !right) return false
+  try {
+    assertSameSessionEndpoint(left, right)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function entriesConflict (left, right) {
+  const sameScope = Boolean(
+    left.scopeId && right.scopeId && left.scopeId === right.scopeId
+  )
+  return sameScope || sameEndpoint(left.endpoint, right.endpoint)
+}
+
 export function createAgentTaskRegistry () {
   const entries = new Map()
   const listeners = new Set()
@@ -37,17 +54,10 @@ export function createAgentTaskRegistry () {
     if (entries.has(taskId)) throw new Error(`Agent 任务已注册：${taskId}`)
     const scopeId = String(options.scopeId || options.endpoint?.tabId || '')
     const endpoint = options.endpoint
-    const conflicting = [...entries.values()].find(entry => {
-      if (endpoint && entry.endpoint) {
-        try {
-          assertSameSessionEndpoint(entry.endpoint, endpoint)
-          return true
-        } catch {
-          return false
-        }
-      }
-      return !endpoint && !entry.endpoint && scopeId && entry.scopeId === scopeId
-    })
+    const candidate = { endpoint, scopeId }
+    const conflicting = [...entries.values()].find(entry => (
+      entriesConflict(entry, candidate)
+    ))
     if (conflicting) {
       const error = new Error('当前 SSH 会话已有 Agent 任务正在运行。')
       error.code = 'AI_AGENT_SESSION_BUSY'
@@ -112,13 +122,7 @@ export function createAgentTaskRegistry () {
   }
 
   function matchesEndpoint (entry, endpoint) {
-    if (!entry?.endpoint || !endpoint) return false
-    try {
-      assertSameSessionEndpoint(entry.endpoint, endpoint)
-      return true
-    } catch {
-      return false
-    }
+    return sameEndpoint(entry?.endpoint, endpoint)
   }
 
   function listByEndpoint (endpoint) {

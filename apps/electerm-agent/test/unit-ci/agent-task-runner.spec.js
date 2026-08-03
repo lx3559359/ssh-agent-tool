@@ -275,6 +275,47 @@ test('registry cancellation reaches cancelRunCmd with the active execution id af
   assert.equal(registry.size, 0)
 })
 
+test('task registry rejects endpoint and scope-only tasks that share a tab', async () => {
+  const { createAgentTaskRegistry } = await import(registryUrl)
+  for (const endpointFirst of [true, false]) {
+    const registry = createAgentTaskRegistry()
+    const endpointEntry = {
+      taskId: endpointFirst ? 'first' : 'second',
+      endpoint: endpoint(),
+      scopeId: 'tab-a',
+      runner: { cancel: async () => ({ status: 'cancelled' }) }
+    }
+    const scopeEntry = {
+      taskId: endpointFirst ? 'second' : 'first',
+      scopeId: 'tab-a',
+      runner: { cancel: async () => ({ status: 'cancelled' }) }
+    }
+    registry.register(endpointFirst ? endpointEntry : scopeEntry)
+    assert.throws(
+      () => registry.register(endpointFirst ? scopeEntry : endpointEntry),
+      error => error.code === 'AI_AGENT_SESSION_BUSY'
+    )
+    assert.equal(registry.size, 1)
+  }
+})
+
+test('task registry allows mixed tasks with different scopes', async () => {
+  const { createAgentTaskRegistry } = await import(registryUrl)
+  const registry = createAgentTaskRegistry()
+  registry.register({
+    taskId: 'endpoint-task',
+    endpoint: endpoint(),
+    scopeId: 'tab-a',
+    runner: { cancel: async () => ({ status: 'cancelled' }) }
+  })
+  registry.register({
+    taskId: 'scope-task',
+    scopeId: 'tab-b',
+    runner: { cancel: async () => ({ status: 'cancelled' }) }
+  })
+  assert.equal(registry.size, 2)
+})
+
 test('task registry isolates concurrent tasks and only allows the same running endpoint', async () => {
   const { createAgentTaskRegistry } = await import(registryUrl)
   const registry = createAgentTaskRegistry()
