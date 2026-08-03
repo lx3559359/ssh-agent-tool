@@ -218,7 +218,10 @@ test('risk transaction grant binds exact args endpoint and verification', async 
 })
 
 test('post-risk verification is mandatory and command checks use readonly exec', () => {
-  const source = fs.readFileSync(path.join(aiRoot, 'agent-tools.js'), 'utf8')
+  const source = fs.readFileSync(
+    path.join(aiRoot, 'agent-tool-risk-lifecycle.js'),
+    'utf8'
+  )
   const verification = source.match(
     /async function verifyPreparedAgentRisk[\s\S]*?\n}/
   )?.[0] || ''
@@ -230,7 +233,10 @@ test('post-risk verification is mandatory and command checks use readonly exec',
 })
 
 test('risk batch consumes validated parsed entries without reparsing arguments', () => {
-  const source = fs.readFileSync(path.join(aiRoot, 'agent-tools.js'), 'utf8')
+  const source = fs.readFileSync(
+    path.join(aiRoot, 'agent-tool-risk-lifecycle.js'),
+    'utf8'
+  )
   const batch = source.slice(
     source.indexOf('export async function prepareAgentRiskBatch'),
     source.indexOf('async function prepareResolvedAgentTool')
@@ -242,7 +248,10 @@ test('risk batch consumes validated parsed entries without reparsing arguments',
 })
 
 test('delegated command risk reaches only the lower safety transaction', () => {
-  const source = fs.readFileSync(path.join(aiRoot, 'agent-tools.js'), 'utf8')
+  const source = fs.readFileSync(
+    path.join(aiRoot, 'agent-tool-risk-lifecycle.js'),
+    'utf8'
+  )
   const terminalSource = fs.readFileSync(path.join(aiRoot, 'agent-terminal-command.js'), 'utf8')
   const preparation = source.match(
     /async function prepareResolvedAgentTool[\s\S]*?\n}/

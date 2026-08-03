@@ -80,3 +80,15 @@ test('extracted catalog is descriptor-compatible with the facade', async () => {
   })
   assert.equal(catalog.getAgentToolDescriptor('sftp_list').scheduling, undefined)
 })
+
+test('direct module parity keeps focused exports identical to the facade', async () => {
+  const facade = await server.ssrLoadModule('/src/client/components/ai/agent-tools.js')
+  const risk = await server.ssrLoadModule('/src/client/components/ai/agent-tool-risk-lifecycle.js')
+  const execution = await server.ssrLoadModule('/src/client/components/ai/agent-tool-execution.js')
+
+  assert.equal(risk.prepareAgentRiskArgs, facade.prepareAgentRiskArgs)
+  assert.equal(risk.prepareAgentRiskBatch, facade.prepareAgentRiskBatch)
+  assert.equal(risk.failAgentRiskBatch, facade.failAgentRiskBatch)
+  assert.equal(execution.runReadonlyTool, facade.runReadonlyTool)
+  assert.equal(execution.executeToolCall, facade.executeToolCall)
+})

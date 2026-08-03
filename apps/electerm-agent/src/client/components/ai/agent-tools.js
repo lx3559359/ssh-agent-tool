@@ -4,8 +4,10 @@ export {
 } from './agent-tool-catalog.js'
 export {
   executeToolCall,
-  failAgentRiskBatch,
-  prepareAgentRiskArgs,
-  prepareAgentRiskBatch,
   runReadonlyTool
 } from './agent-tool-execution.js'
+export {
+  failAgentRiskBatch,
+  prepareAgentRiskArgs,
+  prepareAgentRiskBatch
+} from './agent-tool-risk-lifecycle.js'

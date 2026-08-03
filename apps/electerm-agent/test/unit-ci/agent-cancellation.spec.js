@@ -256,7 +256,10 @@ test('terminal cancellation carries the dispatched safety operation identity', a
   })
 
   assert.equal(dispatched.operationId, 'operation-a')
-  const agentTools = fs.readFileSync(path.join(aiRoot, 'agent-tools.js'), 'utf8')
+  const agentTools = fs.readFileSync(
+    path.join(aiRoot, 'agent-tool-execution.js'),
+    'utf8'
+  )
   const terminalTool = agentTools.slice(
     agentTools.indexOf('async function runTerminalTool'),
     agentTools.indexOf('export async function runReadonlyTool')
@@ -353,19 +356,29 @@ test('production handlers use abortable waits and prepare upload recovery before
   )
   assert.match(describeUpload, /assertMcpActive\(options\.signal[\s\S]*cancelTransferSafetyOperation/)
 
-  const agentTools = fs.readFileSync(path.join(aiRoot, 'agent-tools.js'), 'utf8')
-  const prepareArgs = agentTools.slice(
-    agentTools.indexOf('export async function prepareAgentRiskArgs'),
-    agentTools.indexOf('function batchPreparationFor')
+  const riskSource = fs.readFileSync(
+    path.join(aiRoot, 'agent-tool-risk-lifecycle.js'),
+    'utf8'
   )
-  const invalidate = agentTools.slice(
-    agentTools.indexOf('invalidateRisky:'),
-    agentTools.indexOf('execute: async', agentTools.indexOf('invalidateRisky:'))
+  const executionSource = fs.readFileSync(
+    path.join(aiRoot, 'agent-tool-execution.js'),
+    'utf8'
+  )
+  const prepareArgs = riskSource.slice(
+    riskSource.indexOf('export async function prepareAgentRiskArgs'),
+    riskSource.indexOf('function batchPreparationFor')
+  )
+  const invalidate = executionSource.slice(
+    executionSource.indexOf('invalidateRisky:'),
+    executionSource.indexOf(
+      'execute: async',
+      executionSource.indexOf('invalidateRisky:')
+    )
   )
   assert.match(prepareArgs, /catch[\s\S]*cancelPreparedRiskArtifacts/)
   assert.ok(
     invalidate.indexOf('cancelPreparedRiskArtifacts') <
-      invalidate.indexOf('failAgentRiskPreparation')
+      invalidate.indexOf('failPreparedAgentRisk')
   )
 })
 
@@ -382,16 +395,22 @@ test('agent cancellation settles an open risk batch before returning', () => {
       cancellation.indexOf('settleAgentCancellation')
   )
 
-  const agentTools = fs.readFileSync(path.join(aiRoot, 'agent-tools.js'), 'utf8')
-  const failBatch = agentTools.slice(
-    agentTools.indexOf('export async function failAgentRiskBatch'),
-    agentTools.indexOf('function parseToolResult')
+  const riskSource = fs.readFileSync(
+    path.join(aiRoot, 'agent-tool-risk-lifecycle.js'),
+    'utf8'
+  )
+  const failBatch = riskSource.slice(
+    riskSource.indexOf('export async function failAgentRiskBatch'),
+    riskSource.indexOf('export function failPreparedAgentRisk')
   )
   assert.match(failBatch, /error\?\.name === 'AbortError' && !dispatched[\s\S]*'cancelled'/)
 })
 
 test('upload preparation failures clean recovery and remain not dispatched', () => {
-  const agentSource = fs.readFileSync(path.join(aiRoot, 'agent-tools.js'), 'utf8')
+  const agentSource = fs.readFileSync(
+    path.join(aiRoot, 'agent-tool-execution.js'),
+    'utf8'
+  )
   const uploadCase = agentSource.slice(
     agentSource.indexOf("case 'sftp_upload'"),
     agentSource.indexOf("case 'sftp_download'")

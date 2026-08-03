@@ -223,14 +223,21 @@ test('read_file_range rejects stale evidence when its exact endpoint changes', a
 
 test('ordinary and risk verification file reads share signal and endpoint boundaries', () => {
   const aiRoot = path.resolve(__dirname, '../../src/client/components/ai')
-  const source = fs.readFileSync(path.join(aiRoot, 'agent-tools.js'), 'utf8')
-  const ordinary = source.slice(
-    source.indexOf('async function executeResolvedAgentTool'),
-    source.indexOf("case 'send_terminal_command'")
+  const executionSource = fs.readFileSync(
+    path.join(aiRoot, 'agent-tool-execution.js'),
+    'utf8'
   )
-  const verification = source.slice(
-    source.indexOf('async function verifyPreparedAgentRisk'),
-    source.indexOf('function completePreparedAgentRisk')
+  const riskSource = fs.readFileSync(
+    path.join(aiRoot, 'agent-tool-risk-lifecycle.js'),
+    'utf8'
+  )
+  const ordinary = executionSource.slice(
+    executionSource.indexOf('async function executeResolvedAgentTool'),
+    executionSource.indexOf("case 'send_terminal_command'")
+  )
+  const verification = riskSource.slice(
+    riskSource.indexOf('async function verifyPreparedAgentRisk'),
+    riskSource.indexOf('export function completePreparedAgentRisk')
   )
   for (const boundary of [ordinary, verification]) {
     assert.match(boundary, /signal:\s*runtime\.signal/)
