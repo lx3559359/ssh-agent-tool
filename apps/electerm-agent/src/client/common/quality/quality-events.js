@@ -11,6 +11,9 @@ const EVENT_STRING_LIMITS = {
   messageCode: 128,
   reasonCode: 128,
   status: 64,
+  errorStage: 64,
+  budgetType: 64,
+  endpointFingerprint: 64,
   type: 64,
   metric: 64,
   unit: 32
@@ -24,6 +27,8 @@ const EVENT_NUMBER_FIELDS = new Set([
   'inputLength',
   'outputLength',
   'attachmentCount',
+  'modelRequests',
+  'toolCalls',
   'value'
 ])
 

@@ -562,6 +562,48 @@ test('main and renderer normalization contracts stay aligned', async () => {
   }
 })
 
+test('Agent observation fields keep renderer and main normalization contracts safe', async () => {
+  const { normalizeQualityEvent: normalizeMain } = require(qualityLogPath)
+  const { normalizeQualityEvent: normalizeRenderer } = await import(
+    `${pathToFileURL(clientEventsPath).href}?agent-observation`
+  )
+  const input = {
+    module: 'agent',
+    action: 'run',
+    phase: 'budget_exceeded',
+    errorStage: 'tool_execution',
+    budgetType: 'tool_calls',
+    endpointFingerprint: 'endpoint-12ab34cd',
+    modelRequests: 7,
+    toolCalls: 11,
+    host: 'private.example',
+    username: 'private-user',
+    hostKey: 'SHA256:private-host-key',
+    path: '/private/file',
+    command: 'cat /etc/shadow',
+    output: 'private output',
+    apiKey: 'sk-private-secret',
+    message: 'private conversation text'
+  }
+  const expected = {
+    module: 'agent',
+    action: 'run',
+    phase: 'budget_exceeded',
+    errorStage: 'tool_execution',
+    budgetType: 'tool_calls',
+    endpointFingerprint: 'endpoint-12ab34cd',
+    modelRequests: 7,
+    toolCalls: 11
+  }
+
+  assert.deepEqual(normalizeRenderer(input), expected)
+  assert.deepEqual(normalizeMain(input), expected)
+  assert.doesNotMatch(
+    JSON.stringify(normalizeRenderer(input)),
+    /private|shadow|sk-/i
+  )
+})
+
 test('main quality events reject credential-shaped strings', () => {
   const {
     normalizeQualityEvent
