@@ -128,13 +128,28 @@ const {
   MAX_INPUT_BYTES
 } = require('./ai-content/content-ingestion')
 const {
-  readPublicWebPage
-} = require('./ai-content/web-reader')
+  createWebAccessGrantRepository,
+  createWebAccessGrants
+} = require('./ai-content/web-access-grants')
+const {
+  createElectronWebReaderAdapter
+} = require('./ai-content/electron-web-reader-adapter')
+const {
+  createAuthenticatedWebReader
+} = require('./ai-content/authenticated-web-reader')
+const {
+  createWebAccessService
+} = require('./ai-content/web-access-service')
+const {
+  isWebAccessError,
+  serializeWebAccessError
+} = require('./ai-content/web-access-errors')
 
 let agentSkillServices
 let agentSkillMigrationPromise
 let aiArtifactService
 let incidentArchiveService
+let webAccessService
 
 function getAgentSkillServices () {
   if (agentSkillServices) return agentSkillServices
@@ -276,18 +291,52 @@ function safeAIContentResult (operation) {
       ok: true,
       value: JSON.parse(JSON.stringify(value))
     }))
-    .catch(error => ({
-      ok: false,
-      error: {
-        code: 'AI_CONTENT_READ_FAILED',
-        message: String(error?.message || '内容读取失败。')
+    .catch(error => {
+      if (isWebAccessError(error)) {
+        return {
+          ok: false,
+          error: serializeWebAccessError(error)
+        }
       }
-    }))
+      return {
+        ok: false,
+        error: {
+          code: 'AI_CONTENT_READ_FAILED',
+          message: String(error?.message || '内容读取失败。')
+        }
+      }
+    })
 }
 
-function ingestAIContent (payload = {}) {
+function getWebAccessService () {
+  if (webAccessService) return webAccessService
+  const adapter = createElectronWebReaderAdapter({
+    parentWindow: globalState.get('win')
+  })
+  const grants = createWebAccessGrants({
+    repository: createWebAccessGrantRepository({
+      filePath: path.join(
+        app.getPath('userData'),
+        'ai-web-access',
+        'grants.json'
+      )
+    })
+  })
+  webAccessService = createWebAccessService({
+    browserReader: createAuthenticatedWebReader({ adapter }),
+    clearSessionData: () => adapter.clearSessionData(),
+    grants
+  })
+  return webAccessService
+}
+
+function ingestAIContent (payload = {}, senderId) {
   if (payload?.kind === 'url') {
-    return readPublicWebPage(payload.url)
+    return getWebAccessService().read({
+      url: payload.url,
+      readId: payload.readId,
+      senderId
+    })
   }
   const encoded = String(payload?.dataBase64 || '')
   if (!encoded) {
@@ -689,9 +738,6 @@ function initIpc () {
     saveRecoverySnapshot,
     getRecoveryPlan,
     dismissRecoveryPlan,
-    ingestAIContent: payload => safeAIContentResult(
-      () => ingestAIContent(payload)
-    ),
     reportRendererError: (payload) => reportRendererError(payload, log),
     nativeUpdateCheck,
     nativeUpdateDownload,
@@ -729,7 +775,39 @@ function initIpc () {
       )
     }
   }
-  ipcMain.handle('async', (event, { name, args }) => {
+  const contextualAsyncGlobals = {
+    ingestAIContent: (event, payload) => safeAIContentResult(
+      () => ingestAIContent(payload, event.sender.id)
+    ),
+    authorizeAIWebTarget: (event, payload) => safeAIContentResult(
+      () => getWebAccessService().authorize({
+        ...payload,
+        senderId: event.sender.id
+      })
+    ),
+    listAIWebGrants: () => safeAIContentResult(
+      () => getWebAccessService().listGrants()
+    ),
+    revokeAIWebGrant: (_event, payload) => safeAIContentResult(
+      () => getWebAccessService().revokeGrant(payload)
+    ),
+    clearAIWebGrants: () => safeAIContentResult(
+      () => getWebAccessService().clearGrants()
+    ),
+    clearAIWebSessionData: () => safeAIContentResult(
+      () => getWebAccessService().clearSessionData()
+    ),
+    cancelAIWebRead: (event, payload) => safeAIContentResult(
+      () => getWebAccessService().cancelRead({
+        ...payload,
+        senderId: event.sender.id
+      })
+    )
+  }
+  ipcMain.handle('async', (event, { name, args = [] }) => {
+    if (Object.hasOwn(contextualAsyncGlobals, name)) {
+      return contextualAsyncGlobals[name](event, ...args)
+    }
     return asyncGlobals[name](...args)
   })
   ipcMain.handle('show-open-dialog-sync', async (event, ...args) => {
