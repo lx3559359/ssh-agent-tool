@@ -52,3 +52,31 @@ test('AI profile import preserves existing credentials and provider-specific mod
   assert.equal(merged.aiProfiles.some(profile => profile.id === 'local'), true)
   assert.equal(JSON.stringify(merged).includes('must-drop'), false)
 })
+
+test('Agent limits round-trip through profile export and import', async () => {
+  const {
+    createAIProfileExport,
+    mergeAIProfileImport
+  } = await import('../../src/client/components/ai/ai-profile-transfer.js')
+  const agentLimits = {
+    maxDurationMinutes: 10,
+    maxModelRequests: 12,
+    maxToolCalls: 24,
+    maxToolCallsPerTurn: 6,
+    maxModelResponseMiB: 4,
+    maxToolArgumentKiB: 64,
+    maxToolResultMiB: 3
+  }
+  const exported = createAIProfileExport({
+    activeAIProfileId: 'bounded',
+    aiProfiles: [{
+      id: 'bounded',
+      baseURLAI: 'http://127.0.0.1:11434/v1',
+      agentLimits
+    }]
+  })
+  const imported = mergeAIProfileImport({}, exported)
+
+  assert.deepEqual(exported.profiles[0].agentLimits, agentLimits)
+  assert.deepEqual(imported.aiProfiles[0].agentLimits, agentLimits)
+})

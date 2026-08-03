@@ -87,6 +87,30 @@ test('AI config keeps only address key model and save in the primary section', (
   assert.match(source, /shellpilotAiAdvancedOptions/)
 })
 
+test('Agent limits are default-enabled controls in the advanced section only', () => {
+  const source = fs.readFileSync(path.resolve(__dirname, '../../src/client/components/ai/ai-config.jsx'), 'utf8')
+  const primaryStart = source.indexOf("className='sp-ai-config-primary-fields'")
+  const advancedStart = source.indexOf("className='sp-ai-config-advanced-fields'")
+  const primarySource = source.slice(primaryStart, advancedStart)
+  const advancedSource = source.slice(advancedStart)
+  const fields = [
+    'maxDurationMinutes',
+    'maxModelRequests',
+    'maxToolCalls',
+    'maxToolCallsPerTurn',
+    'maxModelResponseMiB',
+    'maxToolArgumentKiB',
+    'maxToolResultMiB'
+  ]
+
+  assert.doesNotMatch(primarySource, /agentLimits/)
+  assert.match(advancedSource, /shellpilotAiAgentLimitsDefaultEnabled/)
+  assert.match(source, /InputNumber/)
+  for (const field of fields) {
+    assert.match(advancedSource, new RegExp(`name=\\{\\['agentLimits', '${field}'\\]\\}`))
+  }
+})
+
 test('AI config presents the essential setup before optional provider guidance', () => {
   const source = fs.readFileSync(path.resolve(__dirname, '../../src/client/components/ai/ai-config.jsx'), 'utf8')
   const primaryStart = source.indexOf("className='sp-ai-config-primary-fields'")

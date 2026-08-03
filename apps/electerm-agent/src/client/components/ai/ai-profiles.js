@@ -1,4 +1,5 @@
 import { normalizeAIChatRole } from './ai-role.js'
+import { normalizeAgentLimitConfig } from './agent-run-budget.js'
 
 const PROFILE_KEYS = [
   'id',
@@ -15,6 +16,7 @@ const PROFILE_KEYS = [
   'aiStatusAt',
   'aiStatusFingerprint',
   'credentialRevisionAI',
+  'agentLimits',
   'agentSkills',
   'mcpServers',
   'languageAI',
@@ -104,6 +106,7 @@ export function normalizeAIProfile (profile = {}) {
   next.nameAI = next.nameAI || next.modelAI || next.baseURLAI || ''
   next.apiPathAI = next.apiPathAI || ''
   next.modelOptionsAI = normalizeModelOptions(next.modelOptionsAI)
+  next.agentLimits = normalizeAgentLimitConfig(next.agentLimits)
   next.agentSkills = Array.isArray(next.agentSkills) ? next.agentSkills : []
   next.mcpServers = Array.isArray(next.mcpServers) ? next.mcpServers : []
   return next
@@ -262,6 +265,7 @@ const AI_PROFILE_REQUEST_KEYS = [
   'modelAI',
   'modelOptionsAI',
   'roleAI',
+  'agentLimits',
   'agentSkills',
   'mcpServers',
   'languageAI',

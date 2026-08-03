@@ -6,6 +6,7 @@ import {
   Alert,
   Checkbox,
   Collapse,
+  InputNumber,
   Space,
   Select,
   Tag
@@ -426,6 +427,7 @@ export default function AIConfigForm ({ initialValues, languageVersion, onSubmit
       authHeaderNameAI: 'Authorization: Bearer',
       languageAI: saved.languageAI || window.store.getLangName(),
       credentialRevisionAI: '',
+      agentLimits: saved.agentLimits,
       agentSkills: saved.agentSkills || [],
       mcpServers: saved.mcpServers || [],
       proxyAI: saved.proxyAI || ''
@@ -1002,6 +1004,90 @@ export default function AIConfigForm ({ initialValues, languageVersion, onSubmit
                       placeholder={e('language')}
                     />
                   </AutoComplete>
+                </Form.Item>
+
+                <Alert
+                  title={e('shellpilotAiAgentLimits')}
+                  description={e('shellpilotAiAgentLimitsDefaultEnabled')}
+                  type='info'
+                  className='mg2y'
+                />
+                <Form.Item
+                  label={e('shellpilotAiAgentLimitDuration')}
+                  name={['agentLimits', 'maxDurationMinutes']}
+                >
+                  <InputNumber
+                    min={1}
+                    max={1440}
+                    addonAfter={e('shellpilotMinutesUnit')}
+                    className='width-100'
+                  />
+                </Form.Item>
+                <Form.Item
+                  label={e('shellpilotAiAgentLimitModelRequests')}
+                  name={['agentLimits', 'maxModelRequests']}
+                >
+                  <InputNumber
+                    min={1}
+                    max={1000}
+                    addonAfter={e('shellpilotRequestsUnit')}
+                    className='width-100'
+                  />
+                </Form.Item>
+                <Form.Item
+                  label={e('shellpilotAiAgentLimitToolCalls')}
+                  name={['agentLimits', 'maxToolCalls']}
+                >
+                  <InputNumber
+                    min={1}
+                    max={4096}
+                    addonAfter={e('shellpilotCallsUnit')}
+                    className='width-100'
+                  />
+                </Form.Item>
+                <Form.Item
+                  label={e('shellpilotAiAgentLimitToolCallsPerTurn')}
+                  name={['agentLimits', 'maxToolCallsPerTurn']}
+                >
+                  <InputNumber
+                    min={1}
+                    max={128}
+                    addonAfter={e('shellpilotCallsUnit')}
+                    className='width-100'
+                  />
+                </Form.Item>
+                <Form.Item
+                  label={e('shellpilotAiAgentLimitModelResponse')}
+                  name={['agentLimits', 'maxModelResponseMiB']}
+                >
+                  <InputNumber
+                    min={1}
+                    max={64}
+                    addonAfter='MiB'
+                    className='width-100'
+                  />
+                </Form.Item>
+                <Form.Item
+                  label={e('shellpilotAiAgentLimitToolArguments')}
+                  name={['agentLimits', 'maxToolArgumentKiB']}
+                >
+                  <InputNumber
+                    min={1}
+                    max={1024}
+                    addonAfter='KiB'
+                    className='width-100'
+                  />
+                </Form.Item>
+                <Form.Item
+                  label={e('shellpilotAiAgentLimitToolResult')}
+                  name={['agentLimits', 'maxToolResultMiB']}
+                >
+                  <InputNumber
+                    min={1}
+                    max={64}
+                    addonAfter='MiB'
+                    className='width-100'
+                  />
                 </Form.Item>
 
                 <Form.Item

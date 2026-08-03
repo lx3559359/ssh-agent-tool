@@ -8,6 +8,59 @@ const profilesUrl = pathToFileURL(
   path.resolve(__dirname, '../../src/client/components/ai/ai-profiles.js')
 ).href
 
+const defaultAgentLimits = {
+  maxDurationMinutes: 60,
+  maxModelRequests: 100,
+  maxToolCalls: 256,
+  maxToolCallsPerTurn: 32,
+  maxModelResponseMiB: 8,
+  maxToolArgumentKiB: 256,
+  maxToolResultMiB: 8
+}
+
+test('old AI profiles receive default Agent limits without changing required fields', async () => {
+  const { normalizeAIProfile } = await import(profilesUrl)
+  const profile = normalizeAIProfile({
+    id: 'legacy',
+    baseURLAI: 'https://example.test/v1',
+    apiKeyAI: 'secret'
+  })
+
+  assert.deepEqual(profile.agentLimits, defaultAgentLimits)
+  assert.equal(profile.baseURLAI, 'https://example.test/v1')
+  assert.equal(profile.apiKeyAI, 'secret')
+})
+
+test('Agent limits normalize invalid values and survive profile upserts', async () => {
+  const {
+    getActiveAIConfig,
+    upsertAIProfile
+  } = await import(profilesUrl)
+  const configured = upsertAIProfile({}, {
+    id: 'bounded',
+    baseURLAI: 'https://example.test/v1',
+    apiKeyAI: 'secret',
+    agentLimits: {
+      maxDurationMinutes: 5,
+      maxModelRequests: -1,
+      maxToolCalls: 10,
+      maxToolCallsPerTurn: '2',
+      maxModelResponseMiB: 4,
+      maxToolArgumentKiB: NaN,
+      maxToolResultMiB: 2
+    }
+  })
+  const limits = getActiveAIConfig(configured).agentLimits
+
+  assert.deepEqual(limits, {
+    ...defaultAgentLimits,
+    maxDurationMinutes: 5,
+    maxToolCalls: 10,
+    maxModelResponseMiB: 4,
+    maxToolResultMiB: 2
+  })
+})
+
 test('migrates old single AI config into one active profile without losing fields', async () => {
   const {
     migrateAIProfiles,

@@ -71,6 +71,15 @@ module.exports = exports.default = {
   apiPathAI: '',
   authHeaderNameAI: 'Authorization: Bearer',
   proxyAI: '',
+  agentLimits: {
+    maxDurationMinutes: 60,
+    maxModelRequests: 100,
+    maxToolCalls: 256,
+    maxToolCallsPerTurn: 32,
+    maxModelResponseMiB: 8,
+    maxToolArgumentKiB: 256,
+    maxToolResultMiB: 8
+  },
   sessionLogPath: '',
   sshSftpSplitView: false,
   showCmdSuggestions: false,
