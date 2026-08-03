@@ -7,12 +7,14 @@ import SettingAi from '../ai/ai-config'
 import SyncSetting from '../setting-sync/setting-sync'
 import Shortcuts from '../shortcuts/shortcuts'
 import SettingPasswords from './setting-passwords'
+import SettingAiWebAccess from './setting-ai-web-access'
 import List from './list'
 import {
   settingMap,
   settingSyncId,
   settingTerminalId,
   settingAiId,
+  settingAiWebAccessId,
   settingShortcutsId,
   settingPasswordsId
 } from '../../common/constants'
@@ -66,6 +68,8 @@ export default auto(function TabSettings (props) {
     elem = <SyncSetting {...syncProps} />
   } else if (sid === settingAiId) {
     elem = <SettingAi {...aiConfProps} languageVersion={languageVersion} />
+  } else if (sid === settingAiWebAccessId) {
+    elem = <SettingAiWebAccess languageVersion={languageVersion} />
   } else if (sid === settingTerminalId) {
     elem = <SettingTerminal {...listProps} config={store.config} />
   } else if (sid === settingShortcutsId) {

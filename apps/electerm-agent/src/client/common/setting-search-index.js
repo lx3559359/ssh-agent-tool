@@ -32,6 +32,12 @@ export const settingSearchEntries = Object.freeze([
   }),
   createEntry({
     tab: 'setting',
+    itemId: 'setting-ai-web-access',
+    labelKey: 'shellpilotAiWebAccessSettings',
+    terms: ['网页访问', '内网', '本机', '授权', '登录会话', 'web access', 'intranet', 'private network', 'localhost', 'grant', 'login session']
+  }),
+  createEntry({
+    tab: 'setting',
     itemId: 'setting-sync',
     labelKey: 'syncAndBackup',
     terms: ['同步', '备份', 'sync', 'backup', 'webdav', 'gist', 'github', 'gitee', 'cloud']
