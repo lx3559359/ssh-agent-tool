@@ -190,7 +190,8 @@ export default function AgentTaskRunner ({
           action: 'agent-task'
         })
         runObserverRef.current = createAgentRunObserver({
-          context: taskTraceContextRef.current
+          context: taskTraceContextRef.current,
+          reportError: runtimeServices.reportError
         })
         runObserverRef.current.start()
         await generatePlan(endpoint)

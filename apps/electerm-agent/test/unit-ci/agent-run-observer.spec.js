@@ -194,11 +194,15 @@ test('Agent observer endpoint ids are random-token based and redact all source d
 
 test('Agent observer never interrupts runs when its local writer fails', async () => {
   const { createAgentRunObserver } = await import(observerUrl)
+  const syncDiagnostics = []
+  const asyncDiagnostics = []
   const syncObserver = createAgentRunObserver({
-    writeEvent: () => { throw new Error('disk unavailable') }
+    writeEvent: () => { throw new Error('disk unavailable') },
+    reportError: error => syncDiagnostics.push(error)
   })
   const asyncObserver = createAgentRunObserver({
-    writeEvent: async () => { throw new Error('queue unavailable') }
+    writeEvent: async () => { throw new Error('queue unavailable') },
+    reportError: error => asyncDiagnostics.push(error)
   })
 
   assert.doesNotThrow(() => {
@@ -210,4 +214,36 @@ test('Agent observer never interrupts runs when its local writer fails', async (
   await new Promise(resolve => setImmediate(resolve))
   assert.equal(syncObserver.snapshot().terminal, true)
   assert.equal(asyncObserver.snapshot().terminal, true)
+  assert.deepEqual(
+    [syncDiagnostics.length, asyncDiagnostics.length],
+    [1, 1]
+  )
+  assert.doesNotMatch(
+    JSON.stringify([syncDiagnostics, asyncDiagnostics]),
+    /disk|queue|unavailable/i
+  )
+})
+
+test('Agent observer reports writer failures once without leaking their details', async () => {
+  const { createAgentRunObserver } = await import(observerUrl)
+  const diagnostics = []
+  const observer = createAgentRunObserver({
+    writeEvent: () => Promise.resolve(false),
+    reportError: error => diagnostics.push(error)
+  })
+
+  assert.doesNotThrow(() => {
+    observer.start()
+    observer.phase('model_request')
+    observer.finish('completed')
+  })
+  await new Promise(resolve => setImmediate(resolve))
+
+  assert.equal(diagnostics.length, 1)
+  assert.equal(diagnostics[0]?.code, 'AGENT_OBSERVER_WRITE_FAILED')
+  assert.doesNotMatch(
+    JSON.stringify(diagnostics),
+    /credential|command|conversation|private/i
+  )
+  assert.equal(observer.snapshot().terminal, true)
 })

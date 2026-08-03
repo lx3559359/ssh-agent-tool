@@ -300,6 +300,7 @@ export async function runAgentLoop (
   }
   const observer = serviceOptions.observer || createAgentRunObserver({
     context: parentTrace,
+    reportError: runtimeServices.reportError,
     ...(serviceOptions.observerOptions || {})
   })
 

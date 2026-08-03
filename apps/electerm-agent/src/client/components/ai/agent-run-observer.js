@@ -33,7 +33,8 @@ export function createAgentRunObserver ({
   context = {},
   token,
   now = Date.now,
-  writeEvent = recordQualityEvent
+  writeEvent = recordQualityEvent,
+  reportError
 } = {}) {
   const safeContext = normalizeTraceContext(context)
   const endpointFingerprint = createAgentEndpointFingerprint({ token })
@@ -44,6 +45,19 @@ export function createAgentRunObserver ({
   let toolCalls = 0
   let terminal = false
   let started = false
+  let writeFailureReported = false
+
+  function reportWriteFailure () {
+    if (writeFailureReported || typeof reportError !== 'function') return
+    writeFailureReported = true
+    const diagnostic = new Error('Agent observer write failed')
+    diagnostic.code = 'AGENT_OBSERVER_WRITE_FAILED'
+    try {
+      Promise.resolve(reportError(diagnostic)).catch(() => false)
+    } catch {
+      return false
+    }
+  }
 
   function durationMs () {
     return Math.max(0, Math.round(safeNow(now) - startedAt))
@@ -62,8 +76,15 @@ export function createAgentRunObserver ({
       ...event
     }
     try {
-      Promise.resolve(writeEvent(safeContext, safeEvent)).catch(() => false)
-    } catch (error) {}
+      Promise.resolve(writeEvent(safeContext, safeEvent)).then(
+        accepted => {
+          if (accepted === false) reportWriteFailure()
+        },
+        reportWriteFailure
+      )
+    } catch (error) {
+      reportWriteFailure()
+    }
     return safeEvent
   }
 

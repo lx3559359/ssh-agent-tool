@@ -1,5 +1,6 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
+const fs = require('node:fs')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
 
@@ -59,6 +60,17 @@ test('runtime services retain browser defaults and local fallbacks', async () =>
   assert.doesNotThrow(() => local.reportError(new Error('ignored')))
 })
 
+test('diagnostic task UI wires observer diagnostics to runtime services', () => {
+  const source = fs.readFileSync(
+    path.join(aiRoot, 'agent-task-runner.jsx'),
+    'utf8'
+  )
+  assert.match(
+    source,
+    /createAgentRunObserver\(\{\s*context: taskTraceContextRef\.current,\s*reportError: runtimeServices\.reportError\s*\}\)/
+  )
+})
+
 test('Agent paths run with injected services while window is absent', async () => {
   const { createServer } = await import('vite')
   const previousWindow = global.window
@@ -113,13 +125,14 @@ test('Agent paths run with injected services while window is absent', async () =
         ? { setPrompt: value => { refs.prompt = value } }
         : undefined
     }
+    const diagnostics = []
     const services = servicesModule.createAgentRuntimeServices({
       store,
       pre,
       refs,
       translate: key => key,
       now: () => 123,
-      reportError: error => { throw error }
+      reportError: error => diagnostics.push(error)
     })
 
     assert.equal(
@@ -162,6 +175,11 @@ test('Agent paths run with injected services while window is absent', async () =
     assert.deepEqual(streaming, [true, false])
     assert.equal(store.aiChatHistory[0].completionStatus, 'completed')
     assert.equal(store.aiChatHistory[0].response, 'injected result')
+    await new Promise(resolve => setImmediate(resolve))
+    assert.deepEqual(
+      diagnostics.map(error => error?.code),
+      ['AGENT_OBSERVER_WRITE_FAILED']
+    )
 
     const plan = await taskController.requestDiagnosticPlanText({
       prompt: 'plan',

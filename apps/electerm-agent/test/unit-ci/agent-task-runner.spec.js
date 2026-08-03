@@ -179,6 +179,34 @@ test('diagnostic controller creates confirms and runs only after explicit confir
   assert.equal(registry.size, 0)
 })
 
+test('diagnostic controller reports unavailable observer storage once', async () => {
+  const { createAgentTaskRegistry } = await import(registryUrl)
+  const { createAgentTaskController } = await import(controllerUrl)
+  const diagnostics = []
+  const controller = createAgentTaskController({
+    store: createTaskStore(),
+    registry: createAgentTaskRegistry(),
+    pid: 1001,
+    endpoint: endpoint(),
+    getCurrentEndpoint: async () => endpoint(),
+    runCmd: async () => ({ stdout: 'evidence', code: 0 }),
+    cancelRunCmd: async () => true,
+    services: {
+      reportError: error => diagnostics.push(error)
+    }
+  })
+
+  await controller.confirmAndRun(diagnosticPlan({
+    steps: [diagnosticPlan().steps[0]]
+  }))
+  await new Promise(resolve => setImmediate(resolve))
+
+  assert.deepEqual(
+    diagnostics.map(error => error?.code),
+    ['AGENT_OBSERVER_WRITE_FAILED']
+  )
+})
+
 test('diagnostic observer records plan request, task running, and one terminal event', async () => {
   const { createAgentTaskRegistry } = await import(registryUrl)
   const {

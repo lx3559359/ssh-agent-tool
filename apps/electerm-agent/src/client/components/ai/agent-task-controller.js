@@ -198,7 +198,8 @@ export function createAgentTaskController (options = {}) {
     ? options.onTaskChange
     : () => {}
   const observer = options.observer || createAgentRunObserver({
-    context: options.traceContext
+    context: options.traceContext,
+    reportError: services.reportError
   })
   const kind = String(options.kind || 'diagnostic')
   const diagnosticKey = String(options.diagnosticKey || '')
