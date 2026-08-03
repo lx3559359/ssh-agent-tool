@@ -9,7 +9,6 @@ import {
   CodeOutlined,
   FileTextOutlined,
   HighlightOutlined,
-  CloseOutlined,
   PaperClipOutlined,
   SettingOutlined,
   LoadingOutlined,
@@ -72,6 +71,7 @@ import { resolveAgentRuntimeEndpoint } from './agent-runtime-context.js'
 import { createAIRequestCredentialReference } from './ai-request-credentials'
 import message from '../common/message'
 import CreateArtifactMenu from '../artifacts/create-artifact-menu'
+import AIAttachmentCard from './ai-attachment-card'
 import './ai.styl'
 
 const { TextArea } = Input
@@ -595,20 +595,13 @@ export default function AIChat (props) {
       <Flex className='ai-attachment-queue' wrap='wrap' gap={6} onWheel={handleHorizontalRailWheel}>
         {
           attachmentQueue.map(item => (
-            <button
+            <AIAttachmentCard
               key={item.id}
-              type='button'
-              className='ai-attachment-chip'
+              attachment={item}
               onFocus={handleHorizontalRailFocus}
-              title={item.path || item.name}
-            >
-              <FileTextOutlined />
-              <span>{item.name}</span>
-              <CloseOutlined
-                onClick={() => removeAttachment(item.id)}
-                className='ai-attachment-remove'
-              />
-            </button>
+              onRemove={removeAttachment}
+              removeLabel={e('remove')}
+            />
           ))
         }
       </Flex>
@@ -759,16 +752,18 @@ export default function AIChat (props) {
           onDragOver={handleDragOverAttachments}
         >
           {renderContextActions()}
-          {renderAttachments()}
-          <TextArea
-            ref={composerRef}
-            value={prompt}
-            onChange={handlePromptChange}
-            onPressEnter={handleKeyPress}
-            placeholder={e('shellpilotAiInputPlaceholder')}
-            autoSize={{ minRows: 3, maxRows: 10 }}
-            className='ai-chat-textarea'
-          />
+          <div className={`ai-composer-surface${attachmentQueue.length ? ' ai-composer-surface-with-attachments' : ''}`}>
+            {renderAttachments()}
+            <TextArea
+              ref={composerRef}
+              value={prompt}
+              onChange={handlePromptChange}
+              onPressEnter={handleKeyPress}
+              placeholder={e('shellpilotAiInputPlaceholder')}
+              autoSize={{ minRows: 3, maxRows: 10 }}
+              className='ai-chat-textarea'
+            />
+          </div>
           <input
             ref={fileInputRef}
             type='file'

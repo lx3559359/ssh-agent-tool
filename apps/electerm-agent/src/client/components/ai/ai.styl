@@ -165,14 +165,30 @@
   margin-top 10px
   padding-top 0
 
-  .ant-input
-    padding 10px 44px 34px 10px
-    border-color var(--sp-border)
+  .ai-composer-surface
+    position relative
+    overflow hidden
+    border 1px solid var(--sp-border)
     border-radius var(--sp-radius-control)
     background var(--sp-surface-elevated)
     box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
+    transition border-color 160ms ease, box-shadow 160ms ease
+    &:focus-within
+      border-color var(--primary)
+      box-shadow 0 0 0 2px var(--sp-primary-soft), var(--sp-shadow-md)
+
+  .ant-input
+    padding 10px 44px 34px 10px
+    border 0
+    border-radius 0
+    background transparent
+    box-shadow none
     color var(--text)
     resize none
+    &:focus,
+    &:focus-within
+      border 0
+      box-shadow none
   .ai-chat-terminals > .ant-flex:first-child
     min-width 0
     flex-wrap nowrap
@@ -220,35 +236,113 @@
 .ai-attachment-queue
   display flex
   flex-wrap wrap
-  gap 4px
-  max-height 58px
+  align-items flex-start
+  gap 8px
+  max-height 152px
   overflow-y auto
-  margin-bottom 6px
+  padding 9px 9px 2px
 
 .ai-attachment-chip
-  display inline-flex
+  position relative
+  display flex
   align-items center
-  gap 4px
-  max-width 100%
-  height 24px
-  padding 0 7px
+  flex 0 0 auto
   border 1px solid var(--sp-border)
-  border-radius var(--sp-radius-control)
+  border-radius calc(var(--sp-radius-control) + 2px)
   background var(--sp-surface-soft)
   color var(--text)
   font-size 12px
   cursor default
-  span
-    max-width 160px
+  box-shadow var(--sp-shadow-sm)
+
+.ai-attachment-card-image
+  width 72px
+  height 72px
+  overflow hidden
+  background var(--main)
+
+.ai-attachment-preview
+  display flex
+  align-items center
+  justify-content center
+  width 100%
+  height 100%
+
+.ai-attachment-preview-image
+  display block
+  width 100%
+  height 100%
+  object-fit cover
+
+.ai-attachment-preview-fallback
+  color var(--primary)
+  font-size 26px
+
+.ai-attachment-card-file,
+.ai-attachment-card-web
+  gap 9px
+  width unquote('min(196px, calc(100vw - 72px))')
+  min-width 0
+  height 58px
+  padding 8px 30px 8px 9px
+
+.ai-attachment-file-icon
+  display inline-flex
+  align-items center
+  justify-content center
+  flex 0 0 36px
+  width 36px
+  height 36px
+  border-radius var(--sp-radius-control)
+  background var(--sp-primary-soft)
+  color var(--primary)
+  font-size 19px
+
+.ai-attachment-file-copy
+  display flex
+  flex-direction column
+  min-width 0
+  line-height 1.25
+  strong
     overflow hidden
+    color var(--text)
+    font-size 12px
+    font-weight 600
+    text-overflow ellipsis
+    white-space nowrap
+  small
+    margin-top 4px
+    overflow hidden
+    color var(--text-dark)
+    font-size 10px
     text-overflow ellipsis
     white-space nowrap
 
 .ai-attachment-remove
+  position absolute
+  top 4px
+  right 4px
+  display inline-flex
+  align-items center
+  justify-content center
+  width 22px
+  height 22px
+  padding 0
+  border 1px solid var(--sp-border)
+  border-radius 50%
+  background var(--main)
   cursor pointer
-  color var(--text-dark)
+  color var(--text)
+  font-size 10px
+  opacity 0.82
+  transition opacity 140ms ease, color 140ms ease, background 140ms ease
   &:hover
+    background var(--main)
     color var(--danger)
+    opacity 1
+  &:focus-visible
+    outline 2px solid var(--primary)
+    outline-offset 1px
 
 .ai-attachment-upload-button
   display inline-flex
@@ -280,8 +374,7 @@
         max-height 52px !important
         padding 6px 40px 30px 8px
         overflow-y auto !important
-      .ai-context-actions,
-      .ai-attachment-queue
+      .ai-context-actions
         flex 0 0 24px
         flex-wrap nowrap
         max-height 24px
@@ -290,6 +383,20 @@
         overflow-y hidden
         &::-webkit-scrollbar
           height 0
+      .ai-attachment-queue
+        flex-wrap nowrap
+        max-height 64px
+        overflow-x auto
+        overflow-y hidden
+        padding 6px 6px 0
+        &::-webkit-scrollbar
+          height 0
+      .ai-attachment-card-image
+        width 54px
+        height 54px
+      .ai-attachment-card-file,
+      .ai-attachment-card-web
+        height 54px
 
 .ai-config-inline-help
   display grid

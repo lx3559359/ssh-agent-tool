@@ -8,6 +8,55 @@ import { readAIWebContent } from './ai-web-access-client.js'
 const MAX_AI_CONTENT_BYTES = 10 * 1024 * 1024
 const LEGACY_TEXT_FILE_PATTERN = /\.(?:txt|log|md|json|csv|xml|ya?ml|ini|conf|cfg|sh|bash|zsh|fish|ps1|bat|cmd|sql|html?|css|js|jsx|ts|tsx|py|rb|php|java|go|rs|c|cc|cpp|h|hpp)$/i
 const ARCHIVE_FILE_PATTERN = /\.(?:zip|tgz|tar\.gz|gz)$/i
+const SAFE_IMAGE_MIME_TYPES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+  'image/gif'
+])
+const SAFE_IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif'])
+
+function getAttachmentExtension (name = '') {
+  const match = String(name).trim().toLowerCase().match(/\.([a-z0-9]+)$/)
+  return match?.[1] || ''
+}
+
+function formatAttachmentSize (value) {
+  const bytes = Number(value)
+  if (!Number.isFinite(bytes) || bytes < 0) return ''
+  if (bytes < 1024) return `${bytes} B`
+  const kilobytes = bytes / 1024
+  if (kilobytes < 1024) {
+    return `${Number(kilobytes.toFixed(1))} KB`
+  }
+  return `${Number((kilobytes / 1024).toFixed(1))} MB`
+}
+
+export function getAIAttachmentPresentation (attachment = {}) {
+  const extension = getAttachmentExtension(attachment.name)
+  const mimeType = String(
+    attachment.mimeType || attachment.file?.type || ''
+  ).trim().toLowerCase()
+  const hasSupportedImageMime = SAFE_IMAGE_MIME_TYPES.has(mimeType)
+  const hasSupportedImageExtension = !mimeType && SAFE_IMAGE_EXTENSIONS.has(extension)
+  const kind = attachment.source === 'url'
+    ? 'web'
+    : (hasSupportedImageMime || hasSupportedImageExtension ? 'image' : 'file')
+  const typeLabel = kind === 'web'
+    ? 'WEB'
+    : (extension ? extension.toUpperCase() : 'FILE')
+  const sizeLabel = formatAttachmentSize(
+    attachment.size ?? attachment.file?.size
+  )
+
+  return {
+    kind,
+    extension,
+    typeLabel,
+    sizeLabel,
+    meta: [typeLabel, sizeLabel].filter(Boolean).join(' · ')
+  }
+}
 
 function splitLocalPath (filePath = '', fallbackName = '') {
   const value = String(filePath || '')
