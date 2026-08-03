@@ -120,6 +120,28 @@ test('Agent observer emits stable budget cancellation and error fields', async (
   ])
 })
 
+test('Agent observer writes bounded context compaction metrics', async () => {
+  const { createAgentRunObserver } = await import(observerUrl)
+  const events = []
+  const observer = createAgentRunObserver({
+    token: 'run-token-context',
+    writeEvent: (context, event) => events.push(event)
+  })
+
+  observer.start()
+  assert.equal(observer.metric('context_omitted_groups', 12), true)
+  assert.equal(observer.metric('context omitted secrets', 5), false)
+  assert.equal(observer.metric('context_omitted_messages', 24), true)
+
+  assert.deepEqual(events.slice(1).map(event => ({
+    metric: event.metric,
+    value: event.value
+  })), [
+    { metric: 'context_omitted_groups', value: 12 },
+    { metric: 'context_omitted_messages', value: 24 }
+  ])
+})
+
 test('Agent observer endpoint ids are random-token based and redact all source data', async () => {
   const {
     createAgentEndpointFingerprint,

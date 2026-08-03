@@ -27,7 +27,7 @@ import {
   boundAgentToolResult,
   boundAgentToolResultToBudget,
   bindAgentToolArgs,
-  buildBoundedAgentMessages,
+  buildAgentContextWindow,
   cancelAgentRuntimeOperations,
   captureAgentRuntimeEndpoint,
   resolveAgentRuntimeEndpoint
@@ -675,9 +675,23 @@ export async function runAgentLoop (
         module: 'ai',
         action: 'agent-request'
       })
+      const contextWindow = buildAgentContextWindow(
+        baseMessages,
+        runtimeMessages
+      )
+      if (contextWindow.omittedGroups > 0) {
+        observe('metric', [
+          'context_omitted_groups',
+          contextWindow.omittedGroups
+        ])
+        observe('metric', [
+          'context_omitted_messages',
+          contextWindow.omittedMessages
+        ])
+      }
       const backendResult = await waitForAgentOperation(
         callBackendAIchatWithTools(
-          buildBoundedAgentMessages(baseMessages, runtimeMessages),
+          contextWindow.messages,
           config,
           activeBackendRequestId,
           requestTraceContext,

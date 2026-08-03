@@ -84,3 +84,63 @@ test('large history sends only capped recent observations to the model', async (
   assert.equal(messages[0].role, 'system')
   assert.ok(messages.at(-1).content.length <= 16 * 1024)
 })
+
+test('context window emits one bounded content-free omission notice', async () => {
+  const { buildAgentContextWindow } = await import(runtimeUrl)
+  const runtimeMessages = []
+  for (let index = 0; index < 40; index += 1) {
+    const id = `secret-call-${index}`
+    runtimeMessages.push({
+      role: 'assistant',
+      content: `private-command-${index} /private/path/${index}`,
+      tool_calls: [{
+        id,
+        function: {
+          name: 'list_tabs',
+          arguments: `{"privateArgument":"argument-${index}"}`
+        }
+      }]
+    }, {
+      role: 'tool',
+      tool_call_id: id,
+      content: JSON.stringify({
+        output: `private-output-${index}-${'x'.repeat(4096)}`,
+        nextCursor: `cursor-${index}`
+      })
+    })
+  }
+
+  const context = buildAgentContextWindow(
+    [{ role: 'system', content: 'system' }],
+    runtimeMessages
+  )
+  const notices = context.messages.filter(message => (
+    message.role === 'system' && /context window omitted/.test(message.content)
+  ))
+  const retainedAssistants = context.messages.filter(message => (
+    message.role === 'assistant' && message.tool_calls?.length
+  ))
+  const retainedToolIds = new Set(context.messages
+    .filter(message => message.role === 'tool')
+    .map(message => message.tool_call_id))
+
+  assert.ok(context.omittedGroups > 0)
+  assert.ok(context.omittedMessages >= context.omittedGroups * 2)
+  assert.equal(context.retainedMessages, retainedAssistants.length * 2)
+  assert.equal(notices.length, 1)
+  assert.ok(notices[0].content.length < 256)
+  for (const assistant of retainedAssistants) {
+    for (const call of assistant.tool_calls) {
+      assert.equal(retainedToolIds.has(call.id), true)
+    }
+  }
+  for (const secret of [
+    'private-command-',
+    '/private/path/',
+    'privateArgument',
+    'private-output-',
+    'cursor-'
+  ]) {
+    assert.doesNotMatch(notices[0].content, new RegExp(secret))
+  }
+})

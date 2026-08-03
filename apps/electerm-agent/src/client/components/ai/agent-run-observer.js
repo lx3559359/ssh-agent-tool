@@ -93,6 +93,17 @@ export function createAgentRunObserver ({
     return setPhase('tool_execution')
   }
 
+  function metric (name, value) {
+    if (terminal) return false
+    const metric = stableField(name)
+    const numericValue = Number(value)
+    if (!metric || !Number.isFinite(numericValue) || numericValue < 0) {
+      return false
+    }
+    emit({ metric, value: Math.round(numericValue) })
+    return true
+  }
+
   function budgetExceeded (error = {}) {
     return setPhase('budget_exceeded', 'failed', {
       result: 'failed',
@@ -153,6 +164,7 @@ export function createAgentRunObserver ({
     phase: setPhase,
     modelRequest,
     toolCall,
+    metric,
     budgetExceeded,
     cancellation,
     error,

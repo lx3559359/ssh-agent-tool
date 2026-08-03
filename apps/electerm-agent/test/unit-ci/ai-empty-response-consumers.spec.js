@@ -150,11 +150,13 @@ async function importAgentModule () {
       "const buildAIConversationMessages = (history, entry) => [{ role: 'user', content: entry.prompt }]\n"
     )
     .replace(
-      /^import \{\r?\n\s*boundAgentToolResult,\r?\n\s*boundAgentToolResultToBudget,\r?\n\s*bindAgentToolArgs,\r?\n\s*buildBoundedAgentMessages,\r?\n\s*cancelAgentRuntimeOperations,\r?\n\s*captureAgentRuntimeEndpoint,\r?\n\s*resolveAgentRuntimeEndpoint\r?\n\} from '\.\/agent-runtime-context\.js'\r?\n/m,
+      /^import \{\r?\n\s*boundAgentToolResult,\r?\n\s*boundAgentToolResultToBudget,\r?\n\s*bindAgentToolArgs,\r?\n\s*buildAgentContextWindow,\r?\n\s*cancelAgentRuntimeOperations,\r?\n\s*captureAgentRuntimeEndpoint,\r?\n\s*resolveAgentRuntimeEndpoint\r?\n\} from '\.\/agent-runtime-context\.js'\r?\n/m,
       `import { boundAgentToolResultToBudget } from ${JSON.stringify(runtimeContextUrl)}\n` +
       'const boundAgentToolResult = value => typeof value === \'string\' ? value : JSON.stringify(value)\n' +
       'const bindAgentToolArgs = (name, args) => args\n' +
-      'const buildBoundedAgentMessages = (base, runtime) => [...base, ...runtime]\n' +
+      'const buildAgentContextWindow = (base, runtime) => ({\n' +
+      '  messages: [...base, ...runtime], omittedGroups: 0, omittedMessages: 0\n' +
+      '})\n' +
       'const cancelAgentRuntimeOperations = runtime => {\n' +
       '  for (const cancel of runtime.cancellations || []) cancel()\n' +
       '}\n' +

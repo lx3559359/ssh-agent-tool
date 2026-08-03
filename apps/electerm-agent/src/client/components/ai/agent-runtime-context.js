@@ -198,26 +198,69 @@ export function boundAgentToolResult (value) {
   return boundedText(text)
 }
 
-export function buildBoundedAgentMessages (baseMessages = [], runtimeMessages = []) {
+function contextOmissionNotice (omittedGroups) {
+  return boundedMessage({
+    role: 'system',
+    content: 'Agent context window omitted ' + omittedGroups +
+      ' older tool groups. Re-read paginated resources with their cursor when needed.'
+  })
+}
+
+export function buildAgentContextWindow (baseMessages = [], runtimeMessages = []) {
   const system = boundedMessage(baseMessages[0] || { role: 'system', content: '' })
   const base = takeRecentMessages(baseMessages.slice(1), MAX_AGENT_BASE_CHARS)
   const fixed = [system, ...base]
-  let remainingChars = Math.max(
+  const availableChars = Math.max(
     MAX_AGENT_MESSAGE_CHARS,
     MAX_AGENT_CONTEXT_CHARS - serializedLength(fixed)
   )
+  let remainingChars = availableChars
   let remainingMessages = MAX_AGENT_RUNTIME_MESSAGES
   const selectedGroups = []
   const groups = groupRuntimeMessages(runtimeMessages)
+  let selectedStart = groups.length
   for (let index = groups.length - 1; index >= 0; index -= 1) {
     const group = groups[index].map(boundedMessage)
     const size = serializedLength(group)
     if (group.length > remainingMessages || size > remainingChars) break
     selectedGroups.unshift(group)
+    selectedStart = index
     remainingChars -= size
     remainingMessages -= group.length
   }
-  return [...fixed, ...selectedGroups.flat()]
+  let notice
+  while (selectedStart > 0) {
+    notice = contextOmissionNotice(selectedStart)
+    const selectedMessages = selectedGroups.flat()
+    if (
+      selectedMessages.length + 1 <= MAX_AGENT_RUNTIME_MESSAGES &&
+      serializedLength([notice, ...selectedMessages]) <= availableChars
+    ) break
+    if (!selectedGroups.length) break
+    selectedGroups.shift()
+    selectedStart += 1
+  }
+  const retained = selectedGroups.flat()
+  const omittedGroups = selectedStart
+  const omittedMessages = groups
+    .slice(0, selectedStart)
+    .reduce((total, group) => total + group.length, 0)
+  return Object.freeze({
+    messages: Object.freeze([
+      ...fixed,
+      ...(omittedGroups > 0
+        ? [notice || contextOmissionNotice(omittedGroups)]
+        : []),
+      ...retained
+    ]),
+    omittedGroups,
+    omittedMessages,
+    retainedMessages: retained.length
+  })
+}
+
+export function buildBoundedAgentMessages (baseMessages = [], runtimeMessages = []) {
+  return buildAgentContextWindow(baseMessages, runtimeMessages).messages
 }
 
 export function bindAgentToolArgs (toolName, args = {}, runtime = {}) {
