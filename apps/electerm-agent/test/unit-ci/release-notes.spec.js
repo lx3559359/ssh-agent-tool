@@ -15,6 +15,22 @@ test('current release notes clearly separate added fixed and changed items', () 
   assert.match(notes, /^## \[改动\]/m)
 })
 
+test('v0.4.28 release notes document authorized intranet web reading and isolation', () => {
+  const notes = read('docs/releases/v0.4.28.md')
+
+  for (const phrase of [
+    '内网',
+    '单次授权',
+    '长期授权',
+    'HttpOnly',
+    'SPA',
+    '隔离',
+    '跨源跳转'
+  ]) {
+    assert.match(notes, new RegExp(phrase))
+  }
+})
+
 test('v0.4.27 release notes document accessibility, external acceptance and boundaries', () => {
   const notes = read('docs/releases/v0.4.27.md')
 
