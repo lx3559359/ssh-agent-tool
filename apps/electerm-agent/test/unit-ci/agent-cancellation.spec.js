@@ -10,6 +10,10 @@ const gatewayUrl = pathToFileURL(path.join(aiRoot, 'agent-tool-gateway.js')).hre
 const registryUrl = pathToFileURL(path.join(aiRoot, 'agent-takeover-registry.js')).href
 const runtimeUrl = pathToFileURL(path.join(aiRoot, 'agent-runtime-context.js')).href
 const terminalUrl = pathToFileURL(path.join(aiRoot, 'agent-terminal-command.js')).href
+const cancellationControllerUrl = pathToFileURL(path.join(
+  aiRoot,
+  'agent-run-cancellation-controller.js'
+)).href
 
 function endpoint () {
   return {
@@ -107,10 +111,29 @@ test('registered cancellation runs once and failed remote stop is not success', 
   assert.equal(calls, 1)
 })
 
+test('backend cancellation rejects false acknowledgement and deduplicates callers', async () => {
+  const { createAgentRunCancellationController } = await import(cancellationControllerUrl)
+  let calls = 0
+  const controller = createAgentRunCancellationController({ abort: () => {} })
+  controller.register(async () => {
+    calls += 1
+    return { cancelled: false }
+  }, { confirm: value => value?.cancelled === true })
+  const first = controller.cancel()
+  const second = controller.cancel()
+  await assert.rejects(first, error => error.code === 'AGENT_CANCELLATION_FAILED')
+  await assert.rejects(second, error => error.code === 'AGENT_CANCELLATION_FAILED')
+  assert.equal(calls, 1)
+  assert.equal(controller.state, 'cancel_failed')
+})
+
 test('agent loop preserves backend AIAgentCancel and terminal signal wiring', () => {
   const agentSource = fs.readFileSync(path.join(aiRoot, 'agent.js'), 'utf8')
   const terminalSource = fs.readFileSync(path.join(aiRoot, 'agent-terminal-command.js'), 'utf8')
   assert.match(agentSource, /runGlobalAsync\('AIAgentCancel', activeBackendRequestId\)/)
+  assert.match(agentSource, /createAgentRunCancellationController/)
+  assert.match(agentSource, /confirm:\s*value\s*=>\s*value\?\.cancelled\s*===\s*true/)
+  assert.doesNotMatch(agentSource, /runGlobalAsync\('AIAgentCancel'[\s\S]{0,160}\.catch\(\(\)\s*=>\s*\{\}\)/)
   assert.match(terminalSource, /runSafetyCommand\([\s\S]*signal/)
 })
 

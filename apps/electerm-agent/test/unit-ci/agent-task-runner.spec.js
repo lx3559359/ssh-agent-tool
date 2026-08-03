@@ -526,6 +526,54 @@ test('AI plan request uses the selected profile and truly stops an active stream
   assert.deepEqual(calls.at(-1), ['stopStream', 'diagnostic-stream'])
 })
 
+test('AI plan request abort awaits stopStream acknowledgement', async () => {
+  const { requestDiagnosticPlanText } = await import(controllerUrl)
+  const abort = new AbortController()
+  let polling = false
+  let stopCalled = false
+  let releaseStop
+  const request = requestDiagnosticPlanText({
+    prompt: 'target-only-prompt',
+    config: {
+      modelAI: 'selected-model',
+      baseURLAI: 'https://relay.example.com',
+      apiKeyAI: 'selected-key'
+    },
+    signal: abort.signal,
+    pollIntervalMs: 0,
+    runGlobalAsync: (...args) => {
+      if (args[0] === 'AIchat') {
+        return { isStream: true, sessionId: 'diagnostic-stream', content: '' }
+      }
+      if (args[0] === 'getStreamContent') {
+        polling = true
+        return new Promise(() => {})
+      }
+      if (args[0] === 'stopStream') {
+        stopCalled = true
+        return new Promise(resolve => { releaseStop = resolve })
+      }
+      throw new Error(`unexpected action: ${args[0]}`)
+    }
+  })
+  await waitFor(() => polling)
+  let settled = false
+  const observed = request.then(
+    value => ({ value }),
+    error => ({ error })
+  ).finally(() => { settled = true })
+
+  abort.abort()
+  await waitFor(() => stopCalled)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(settled, false)
+
+  releaseStop(true)
+  const outcome = await observed
+  assert.match(outcome.error.message, /取消/)
+  assert.equal(settled, true)
+})
+
 test('AI plan request stops a stream that arrives after initial IPC cancellation exactly once', async () => {
   const { requestDiagnosticPlanText } = await import(controllerUrl)
   const abort = new AbortController()

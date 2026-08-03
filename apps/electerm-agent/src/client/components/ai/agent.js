@@ -33,6 +33,9 @@ import {
 } from './agent-takeover-registry.js'
 import { agentTaskRegistry } from './agent-task-registry.js'
 import {
+  createAgentRunCancellationController
+} from './agent-run-cancellation-controller.js'
+import {
   buildAgentCancellationUpdate,
   settleAgentCancellation
 } from './agent-cancellation-status.js'
@@ -188,26 +191,28 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
     }
   }
 
-  function cancelCurrent () {
-    if (activeCancellation) return activeCancellation
-    activeCancellation = (async () => {
+  const cancellationController = createAgentRunCancellationController({
+    abort: () => {
       abortRef.current = true
       controller.abort()
-      const operationCancellation = cancelAgentRuntimeOperations(agentRuntime)
-      let backendCancellation = Promise.resolve()
-      if (activeBackendRequestId) {
-        backendCancellation = window.pre
-          .runGlobalAsync('AIAgentCancel', activeBackendRequestId)
-          .catch(() => {})
-      }
-      await backendCancellation
-      try {
-        return await operationCancellation
-      } catch (error) {
-        cancellationFailure = error
-        throw error
-      }
-    })()
+    }
+  })
+  cancellationController.register(() => (
+    cancelAgentRuntimeOperations(agentRuntime)
+  ))
+  cancellationController.register(() => {
+    if (!activeBackendRequestId) return { cancelled: true }
+    return window.pre.runGlobalAsync('AIAgentCancel', activeBackendRequestId)
+  }, {
+    confirm: value => value?.cancelled === true
+  })
+
+  function cancelCurrent () {
+    if (activeCancellation) return activeCancellation
+    activeCancellation = cancellationController.cancel().catch(error => {
+      cancellationFailure = error
+      throw error
+    })
     return activeCancellation
   }
   abortRef.cancelCurrent = cancelCurrent
@@ -219,10 +224,7 @@ export async function runAgentLoop (chatEntry, config, abortRef, setIsStreaming,
       kind: 'chat-agent',
       controller,
       runner: {
-        cancel: async () => {
-          await cancelCurrent()
-          return { id: taskId, status: 'cancelling' }
-        }
+        cancel: () => cancelCurrent()
       }
     })
   } catch (error) {

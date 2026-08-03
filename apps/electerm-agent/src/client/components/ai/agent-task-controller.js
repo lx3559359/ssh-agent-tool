@@ -53,23 +53,36 @@ export async function requestDiagnosticPlanText ({
   let sessionId = ''
   let aborted = Boolean(signal?.aborted)
   let abortReject
-  const stoppedSessionIds = new Set()
+  const stopPromises = new Map()
 
-  const stopStream = async (value = sessionId) => {
+  const stopStream = (value = sessionId) => {
     const id = String(value || '')
-    if (!id || stoppedSessionIds.has(id)) return
-    stoppedSessionIds.add(id)
-    try {
-      await invoke('stopStream', id)
-    } catch {}
+    if (!id) return Promise.resolve({ stopped: true })
+    if (stopPromises.has(id)) return stopPromises.get(id)
+    const stopping = Promise.resolve()
+      .then(() => invoke('stopStream', id))
+      .then(result => {
+        if (result === true || result?.stopped === true) return result
+        const error = new Error('AI diagnostic stream cancellation was not confirmed.')
+        error.code = 'AGENT_CANCELLATION_FAILED'
+        throw error
+      })
+    stopPromises.set(id, stopping)
+    return stopping
   }
   const abortPromise = new Promise((resolve, reject) => {
     abortReject = reject
   })
   const onAbort = () => {
     aborted = true
-    stopStream()
-    abortReject(cancelledRequestError())
+    if (!sessionId) {
+      abortReject(cancelledRequestError())
+      return
+    }
+    stopStream().then(
+      () => abortReject(cancelledRequestError()),
+      abortReject
+    )
   }
   signal?.addEventListener('abort', onAbort, { once: true })
 
@@ -89,7 +102,9 @@ export async function requestDiagnosticPlanText ({
       config.authHeaderNameAI
     ))
     initialRequest.then(initial => {
-      if (aborted && initial?.isStream) stopStream(initial.sessionId)
+      if (aborted && initial?.isStream) {
+        stopStream(initial.sessionId).catch(() => {})
+      }
     }, () => {})
     const initial = await raceAbort(initialRequest)
     if (initial?.error) {
@@ -119,8 +134,18 @@ export async function requestDiagnosticPlanText ({
     if (!content.trim()) throw new Error('AI 未返回诊断计划。')
     return content
   } catch (error) {
-    if (sessionId) await stopStream(sessionId)
-    if (aborted || error?.cancelled) throw cancelledRequestError()
+    let stopError
+    if (sessionId) {
+      try {
+        await stopStream(sessionId)
+      } catch (failure) {
+        stopError = failure
+      }
+    }
+    if (aborted || error?.cancelled) {
+      if (stopError) throw stopError
+      throw cancelledRequestError()
+    }
     throw requestError(error, 'AI 诊断计划请求失败。')
   } finally {
     signal?.removeEventListener('abort', onAbort)
