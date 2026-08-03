@@ -189,6 +189,8 @@ test('diagnostic observer records plan request, task running, and one terminal e
   const observer = {
     start: () => events.push(['start']),
     phase: value => events.push(['phase', value]),
+    modelRequest: () => events.push(['model_request']),
+    toolCall: () => events.push(['tool_call']),
     error: (stage, error) => events.push(['error', stage, error?.code]),
     finish: (status, reason) => events.push(['finish', status, reason])
   }
@@ -223,8 +225,10 @@ test('diagnostic observer records plan request, task running, and one terminal e
 
   assert.deepEqual(events, [
     ['phase', 'plan_request'],
+    ['model_request'],
     ['start'],
     ['phase', 'task_running'],
+    ['tool_call'],
     ['finish', 'completed', undefined]
   ])
 })

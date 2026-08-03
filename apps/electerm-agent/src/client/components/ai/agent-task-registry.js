@@ -232,6 +232,8 @@ export async function recoverOrphanedAgentTasks ({
       steps,
       status: completed ? taskStatuses.partiallyCompleted : taskStatuses.failed,
       error,
+      terminationReason: 'orphaned',
+      errorCode: 'AGENT_TASK_ORPHANED',
       completedAt: timestamp(),
       updatedAt: timestamp()
     })

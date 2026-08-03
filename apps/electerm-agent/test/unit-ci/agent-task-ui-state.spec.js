@@ -9,39 +9,113 @@ const handoffUrl = pathToFileURL(path.join(aiRoot, 'agent-task-handoff.js')).hre
 
 test('run creation failure is visible without a task object', async () => {
   const { getAgentTaskViewState } = await import(viewStateUrl)
-  assert.deepEqual(getAgentTaskViewState({
+  const view = getAgentTaskViewState({
     phase: 'run-error',
     task: null,
     error: 'create failed'
-  }), { kind: 'error', message: 'create failed', retryable: true })
+  })
+  assert.equal(view.kind, 'error')
+  assert.equal(view.status, 'failed')
+  assert.equal(view.canRetry, true)
+  assert.equal(view.showEvidence, false)
 })
 
-test('task view distinguishes creation from a real task', async () => {
+test('task view model covers every Agent diagnostic lifecycle state', async () => {
   const { getAgentTaskViewState } = await import(viewStateUrl)
-  assert.deepEqual(getAgentTaskViewState({ phase: 'running' }), {
-    kind: 'creating'
-  })
-  const task = { id: 'task-a', status: 'running-readonly' }
-  assert.deepEqual(getAgentTaskViewState({ phase: 'running', task }), {
-    kind: 'task',
-    task
-  })
-})
+  const cases = [{
+    name: 'creating',
+    input: { phase: 'generating' },
+    expected: ['creating', 'shellpilotAgentTaskStateCreating', 'info', true, false, true, false]
+  }, {
+    name: 'running',
+    input: {
+      phase: 'running',
+      task: { id: 'running', status: 'running-readonly' },
+      runState: {
+        phase: 'tool_execution',
+        durationMs: 1200,
+        modelRequests: 2,
+        toolCalls: 3,
+        endpointFingerprint: 'endpoint-12345678'
+      }
+    },
+    expected: ['running', 'shellpilotAgentTaskStateRunning', 'info', true, false, true, true]
+  }, {
+    name: 'cancelling',
+    input: {
+      phase: 'running',
+      cancelling: true,
+      task: { id: 'cancelling', status: 'running-readonly' }
+    },
+    expected: ['cancelling', 'shellpilotAgentTaskStateCancelling', 'warning', false, false, true, true]
+  }, {
+    name: 'cancel_failed',
+    input: {
+      phase: 'cancel_failed',
+      task: { id: 'cancel-failed', status: 'running-readonly' }
+    },
+    expected: ['cancel_failed', 'shellpilotAgentTaskStateCancelFailed', 'error', true, false, true, true]
+  }, {
+    name: 'budget_exceeded',
+    input: {
+      phase: 'finished',
+      task: { id: 'budget', status: 'failed', terminationReason: 'budget_exceeded' }
+    },
+    expected: ['budget_exceeded', 'shellpilotAgentTaskStateBudgetExceeded', 'warning', false, true, true, true]
+  }, {
+    name: 'endpoint_changed',
+    input: {
+      phase: 'finished',
+      task: { id: 'endpoint', status: 'failed', errorCode: 'AGENT_ENDPOINT_CHANGED' }
+    },
+    expected: ['endpoint_changed', 'shellpilotAgentTaskStateEndpointChanged', 'error', false, true, true, true]
+  }, {
+    name: 'failed',
+    input: {
+      phase: 'finished',
+      task: { id: 'failed', status: 'failed' }
+    },
+    expected: ['failed', 'shellpilotAgentTaskStateFailed', 'error', false, true, true, true]
+  }, {
+    name: 'orphan',
+    input: {
+      phase: 'finished',
+      task: {
+        id: 'orphan',
+        status: 'failed',
+        terminationReason: 'orphaned',
+        errorCode: 'AGENT_TASK_ORPHANED'
+      }
+    },
+    expected: ['orphan', 'shellpilotAgentTaskStateOrphaned', 'error', false, true, true, true]
+  }, {
+    name: 'finished',
+    input: {
+      phase: 'finished',
+      task: { id: 'finished', status: 'completed' }
+    },
+    expected: ['finished', 'shellpilotAgentTaskStateFinished', 'success', false, true, true, true]
+  }]
 
-test('recovered failed diagnostic renders error evidence instead of creation spinner', async () => {
-  const { getAgentTaskViewState } = await import(viewStateUrl)
-  const task = {
-    id: 'recovered-orphan',
-    status: 'failed',
-    error: 'executor unavailable after restart',
-    steps: [{ id: 'evidence', status: 'completed', output: 'partial evidence' }]
+  for (const item of cases) {
+    const view = getAgentTaskViewState(item.input)
+    assert.deepEqual([
+      view.status,
+      view.titleKey,
+      view.severity,
+      view.canCancel,
+      view.canRetry,
+      view.canClose,
+      view.showEvidence
+    ], item.expected, item.name)
   }
-  const view = getAgentTaskViewState({ phase: 'finished', task })
 
-  assert.equal(view.kind, 'task')
-  assert.equal(view.severity, 'error')
-  assert.equal(view.showEvidence, true)
-  assert.equal(view.task, task)
+  const running = getAgentTaskViewState(cases[1].input)
+  assert.equal(running.phase, 'tool_execution')
+  assert.equal(running.elapsedMs, 1200)
+  assert.equal(running.modelRequests, 2)
+  assert.equal(running.toolCalls, 3)
+  assert.equal(running.endpointFingerprint, 'endpoint-12345678')
 })
 
 test('AI prompt handoff waits until the chat composer is ready', async () => {

@@ -98,6 +98,7 @@ export default function AgentTaskRunner ({
   const [task, setTask] = useState(null)
   const [error, setError] = useState('')
   const [cancelling, setCancelling] = useState(false)
+  const [retryRevision, setRetryRevision] = useState(0)
   const generationAbortRef = useRef(null)
   const generationRequestRef = useRef(0)
   const activeRunRef = useRef(0)
@@ -105,6 +106,7 @@ export default function AgentTaskRunner ({
   const taskTraceContextRef = useRef(null)
   const runObserverRef = useRef(null)
   const handoffCancelRef = useRef(null)
+  const skipRecoveryRef = useRef(false)
   const diagnosticKey = createAgentDiagnosticKey(target)
   const uiLifecycle = useMemo(() => createAgentTaskUiLifecycle({
     abortGeneration: () => generationAbortRef.current?.abort(),
@@ -157,13 +159,17 @@ export default function AgentTaskRunner ({
     async function restoreOrGenerate () {
       try {
         const endpoint = terminal.getTerminalSafetyEndpoint()
-        const restored = await restoreAgentDiagnosticTask({
-          registry: agentTaskRegistry,
-          store: transactionStore,
-          scopeId: endpoint.tabId,
-          endpoint,
-          diagnosticKey
-        })
+        const skipRecovery = skipRecoveryRef.current
+        skipRecoveryRef.current = false
+        const restored = skipRecovery
+          ? null
+          : await restoreAgentDiagnosticTask({
+            registry: agentTaskRegistry,
+            store: transactionStore,
+            scopeId: endpoint.tabId,
+            endpoint,
+            diagnosticKey
+          })
         if (!mountedRef.current || controller.signal.aborted || generationRequestRef.current !== generationToken) return
         if (restored) {
           setPlan(restored.task)
@@ -192,7 +198,7 @@ export default function AgentTaskRunner ({
 
     restoreOrGenerate()
     return () => controller.abort()
-  }, [open, diagnosticKey])
+  }, [open, diagnosticKey, retryRevision])
 
   const progress = useMemo(() => {
     const steps = task?.steps || plan?.steps || []
@@ -261,7 +267,21 @@ export default function AgentTaskRunner ({
     } catch (runError) {
       if (!mountedRef.current || activeRunRef.current !== runToken) return
       setError(displayError(runError, e('shellpilotAgentTaskRunFailed')))
-      setPhase(createdTask ? 'finished' : 'run-error')
+      const terminalPhase = runError?.code === 'AGENT_ENDPOINT_CHANGED'
+        ? 'endpoint_changed'
+        : runError?.code === 'AGENT_BUDGET_EXCEEDED'
+          ? 'budget_exceeded'
+          : createdTask ? 'finished' : 'run-error'
+      if (createdTask) {
+        setTask({
+          ...createdTask,
+          errorCode: runError?.code || createdTask.errorCode,
+          terminationReason: terminalPhase === 'finished'
+            ? createdTask.terminationReason
+            : terminalPhase
+        })
+      }
+      setPhase(terminalPhase)
     }
   }
 
@@ -286,7 +306,10 @@ export default function AgentTaskRunner ({
         'cancel_failed',
         cancelError?.code || 'AGENT_CANCELLATION_FAILED'
       )
-      if (mountedRef.current) setError(displayError(cancelError, e('shellpilotAgentTaskCancelFailed')))
+      if (mountedRef.current) {
+        setError(displayError(cancelError, e('shellpilotAgentTaskCancelFailed')))
+        setPhase('cancel_failed')
+      }
     } finally {
       if (mountedRef.current) setCancelling(false)
     }
@@ -313,6 +336,52 @@ export default function AgentTaskRunner ({
         message.warning(e('shellpilotAgentTaskHandoffTimeout'))
       }
     })
+  }
+
+  function handleRetryTask () {
+    skipRecoveryRef.current = true
+    setRetryRevision(value => value + 1)
+  }
+
+  const runState = runObserverRef.current?.snapshot?.() || null
+  const viewState = getAgentTaskViewState({
+    phase,
+    task,
+    error,
+    cancelling,
+    runState
+  })
+
+  function taskStateMetrics () {
+    return e('shellpilotAgentTaskStateMetrics')
+      .replace('{phase}', viewState.phase)
+      .replace('{elapsed}', (viewState.elapsedMs / 1000).toFixed(1))
+      .replace('{modelRequests}', viewState.modelRequests)
+      .replace('{toolCalls}', viewState.toolCalls)
+  }
+
+  function renderTaskState () {
+    return (
+      <div className={`agent-task-state agent-task-state-${viewState.severity}`}>
+        <Alert
+          type={viewState.severity}
+          showIcon
+          message={e(viewState.titleKey)}
+          description={viewState.status === 'cancel_failed'
+            ? e('shellpilotAgentTaskCancelFailedWarning')
+            : null}
+        />
+        <div className='agent-task-state-meta'>
+          <span>{taskStateMetrics()}</span>
+          {viewState.terminationReason
+            ? <span>{e('shellpilotAgentTaskEndingReason').replace('{reason}', viewState.terminationReason)}</span>
+            : null}
+          {viewState.endpointFingerprint
+            ? <code>{viewState.endpointFingerprint}</code>
+            : null}
+        </div>
+      </div>
+    )
   }
 
   function renderPlan () {
@@ -347,16 +416,28 @@ export default function AgentTaskRunner ({
   }
 
   function renderTask () {
-    const viewState = getAgentTaskViewState({ phase, task, error })
     if (viewState.kind === 'error') {
-      return <Alert type='error' showIcon message={viewState.message || e('shellpilotAgentTaskCreationFailed')} />
+      return (
+        <div>
+          {renderTaskState()}
+          {viewState.message
+            ? <Alert type='error' showIcon message={viewState.message} />
+            : null}
+        </div>
+      )
     }
     if (viewState.kind === 'creating') {
-      return <Spin tip={e('shellpilotAgentTaskCreatingAudit')}><div className='agent-task-loading-space' /></Spin>
+      return (
+        <div>
+          {renderTaskState()}
+          <Spin tip={e('shellpilotAgentTaskCreatingAudit')}><div className='agent-task-loading-space' /></Spin>
+        </div>
+      )
     }
     const finished = finalStatuses.has(task.status)
     return (
       <div className='agent-task-progress'>
+        {renderTaskState()}
         <div className='agent-task-progress-head'>
           <div>
             <strong>{finished ? e('shellpilotAgentTaskReport') : e('shellpilotAgentTaskLiveProgress')}</strong>
@@ -365,22 +446,26 @@ export default function AgentTaskRunner ({
           <Progress percent={progress} size='small' status={task.status === 'failed' ? 'exception' : undefined} />
         </div>
         {error || task.error ? <Alert type='error' showIcon message={error || task.error} /> : null}
-        <div className='agent-task-step-list'>
-          {(task.steps || []).map((step, index) => {
-            const meta = stepStatusMeta[step.status] || [step.status || 'shellpilotSafetyStepPending', 'default']
-            const audit = step.audit?.at(-1)
-            return (
-              <section className={`agent-task-step ${step.status || 'pending'}`} key={step.id}>
-                <header><strong>{index + 1}. {step.title}</strong><Tag color={meta[1]}>{meta[0].startsWith('shellpilot') ? e(meta[0]) : meta[0]}</Tag></header>
-                <p>{step.purpose}</p>
-                <pre>{step.command}</pre>
-                {audit ? <small>{e('shellpilotExitCode')}：{Number.isFinite(audit.code) ? audit.code : e('shellpilotAgentTaskNoExitCode')}</small> : null}
-                {step.output ? <div className='agent-task-output'><span>{e('shellpilotAgentTaskEvidencePreview')}</span><pre>{step.output}</pre></div> : null}
-                {step.error ? <div className='agent-task-step-error'>{step.error}</div> : null}
-              </section>
+        {viewState.showEvidence
+          ? (
+            <div className='agent-task-step-list'>
+              {(task.steps || []).map((step, index) => {
+                const meta = stepStatusMeta[step.status] || [step.status || 'shellpilotSafetyStepPending', 'default']
+                const audit = step.audit?.at(-1)
+                return (
+                  <section className={`agent-task-step ${step.status || 'pending'}`} key={step.id}>
+                    <header><strong>{index + 1}. {step.title}</strong><Tag color={meta[1]}>{meta[0].startsWith('shellpilot') ? e(meta[0]) : meta[0]}</Tag></header>
+                    <p>{step.purpose}</p>
+                    <pre>{step.command}</pre>
+                    {audit ? <small>{e('shellpilotExitCode')}：{Number.isFinite(audit.code) ? audit.code : e('shellpilotAgentTaskNoExitCode')}</small> : null}
+                    {step.output ? <div className='agent-task-output'><span>{e('shellpilotAgentTaskEvidencePreview')}</span><pre>{step.output}</pre></div> : null}
+                    {step.error ? <div className='agent-task-step-error'>{step.error}</div> : null}
+                  </section>
+                )
+              })}
+            </div>
             )
-          })}
-        </div>
+          : null}
         {finished
           ? (
             <div className='agent-task-final'>
@@ -410,34 +495,33 @@ export default function AgentTaskRunner ({
         </Tooltip>
       </Space>
       )
-    : phase === 'running'
-      ? (
-        <Space wrap>
-          <Tooltip title={e('shellpilotAgentTaskCloseHint')}><Button onClick={handleClose}>{e('shellpilotAgentTaskCloseWindow')}</Button></Tooltip>
-          <Tooltip title={e('shellpilotAgentTaskCancelHint')}>
-            <Button danger icon={<StopOutlined />} loading={cancelling} disabled={!task?.id || !agentTaskRegistry.has(task.id)} onClick={handleCancelTask}>{e('shellpilotSafetyCancelTask')}</Button>
-          </Tooltip>
-        </Space>
-        )
-      : phase === 'finished'
-        ? (
-          <Space wrap>
-            <Button onClick={handleClose}>{e('close')}</Button>
+    : (
+      <Space wrap className='agent-task-state-actions'>
+        {viewState.canClose
+          ? <Button onClick={handleClose}>{e('close')}</Button>
+          : null}
+        {viewState.canCancel && viewState.status === 'creating'
+          ? <Tooltip title={e('shellpilotAgentTaskCancelGenerationHint')}><Button danger icon={<StopOutlined />} onClick={handleClose}>{e('shellpilotAgentTaskCancelGeneration')}</Button></Tooltip>
+          : null}
+        {viewState.canCancel && task
+          ? (
+            <Tooltip title={e('shellpilotAgentTaskCancelHint')}>
+              <Button danger icon={<StopOutlined />} loading={cancelling} disabled={!agentTaskRegistry.has(task.id)} onClick={handleCancelTask}>{e('shellpilotSafetyCancelTask')}</Button>
+            </Tooltip>
+            )
+          : null}
+        {viewState.canRetry
+          ? <Button type='primary' onClick={handleRetryTask}>{e('shellpilotAgentTaskRetryRun')}</Button>
+          : null}
+        {viewState.showEvidence && !['running', 'cancelling', 'cancel_failed'].includes(viewState.status)
+          ? (
             <Tooltip title={e('shellpilotAgentTaskSendHint')}>
               <Button icon={<SendOutlined />} disabled={!task} onClick={handleSendToAi}>{e('shellpilotAgentTaskSendToAi')}</Button>
             </Tooltip>
-          </Space>
-          )
-        : phase === 'run-error'
-          ? (
-            <Space wrap>
-              <Button onClick={handleClose}>{e('close')}</Button>
-              <Button type='primary' onClick={handleConfirm}>{e('shellpilotAgentTaskRetryRun')}</Button>
-            </Space>
             )
-          : phase === 'generating'
-            ? <Tooltip title={e('shellpilotAgentTaskCancelGenerationHint')}><Button danger icon={<StopOutlined />} onClick={handleClose}>{e('shellpilotAgentTaskCancelGeneration')}</Button></Tooltip>
-            : <Button onClick={handleClose}>{e('close')}</Button>
+          : null}
+      </Space>
+      )
 
   return (
     <Modal

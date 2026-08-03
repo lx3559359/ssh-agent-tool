@@ -91,6 +91,7 @@ export async function requestDiagnosticPlanText ({
   const raceAbort = promise => Promise.race([Promise.resolve(promise), abortPromise])
   try {
     observer?.phase?.('plan_request')
+    observer?.modelRequest?.()
     if (aborted) throw cancelledRequestError()
     const initialRequest = Promise.resolve().then(() => invoke(
       'AIchat',
@@ -210,7 +211,16 @@ export function createAgentTaskController (options = {}) {
       if (cancelled !== true) throw new Error('远程命令已不在运行，无法确认取消结果。')
     },
     getCurrentEndpoint,
-    onEvent: options.onEvent,
+    onEvent: event => {
+      if (event?.status === 'running') {
+        try {
+          observer.toolCall?.()
+        } catch (error) {}
+      }
+      try {
+        options.onEvent?.(event)
+      } catch (error) {}
+    },
     now: options.now
   })
 

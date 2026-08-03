@@ -96,12 +96,29 @@ test('diagnostic UI exposes run creation errors and uses bounded AI handoff', ()
   const modal = readSource('src/client/components/server-status/server-status-modal.jsx')
 
   assert.match(runner, /getAgentTaskViewState/)
-  assert.match(runner, /setPhase\(createdTask \? 'finished' : 'run-error'\)/)
+  assert.match(runner, /const terminalPhase = runError\?\.code/)
+  assert.match(runner, /setPhase\(terminalPhase\)/)
   assert.match(runner, /shellpilotAgentTaskRetryRun/)
   assert.match(runner, /handoffAgentPromptToAi/)
   assert.match(modal, /handoffAgentPromptToAi/)
   assert.doesNotMatch(runner, /setTimeout\([\s\S]{0,240},\s*120\)/)
   assert.doesNotMatch(modal, /setTimeout\([\s\S]{0,240},\s*120\)/)
+})
+
+test('diagnostic UI renders phase metrics endpoint and recovery actions from the task view model', () => {
+  const runner = readSource('src/client/components/ai/agent-task-runner.jsx')
+  const styles = readSource('src/client/components/ai/agent-task-runner.styl')
+
+  assert.match(runner, /getAgentTaskViewState\(\{[\s\S]*cancelling[\s\S]*runState/)
+  assert.match(runner, /viewState\.titleKey/)
+  assert.match(runner, /viewState\.endpointFingerprint/)
+  assert.match(runner, /shellpilotAgentTaskStateMetrics/)
+  assert.match(runner, /viewState\.canCancel/)
+  assert.match(runner, /viewState\.canRetry/)
+  assert.match(runner, /viewState\.canClose/)
+  assert.match(runner, /viewState\.showEvidence/)
+  assert.match(styles, /agent-task-state-meta/)
+  assert.match(styles, /agent-task-state-actions/)
 })
 
 test('production AgentTaskRunner passes an internal parent trace only to the task controller', () => {
