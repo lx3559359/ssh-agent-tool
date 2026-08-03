@@ -9,6 +9,7 @@ import {
 } from './agent-runtime-context.js'
 import { getAgentToolDescriptor } from './agent-tool-catalog.js'
 import { classifyAgentCall } from './agent-tool-policy.js'
+import { createAgentRuntimeServices } from './agent-runtime-services.js'
 import { classifyCommand } from '../../common/safety-transactions/command-classifier.js'
 import {
   buildRiskTransaction,
@@ -132,14 +133,18 @@ export async function prepareAgentRiskArgs (
   toolName,
   args,
   runtime,
-  store = window.store,
+  store,
   options = {}
 ) {
   if (toolName !== 'sftp_upload') return args
+  const resolvedStore = createAgentRuntimeServices({
+    ...runtime?.services,
+    ...(store ? { store } : {})
+  }).store
   assertAgentRuntimeActive(runtime)
   let prepared
   try {
-    prepared = await store.mcpDescribeSftpUploadSource(args, {
+    prepared = await resolvedStore.mcpDescribeSftpUploadSource(args, {
       signal: runtime.signal,
       prepareRecovery: options.prepareRecovery !== false
     })
@@ -154,14 +159,15 @@ export async function prepareAgentRiskArgs (
   } catch (error) {
     await cancelPreparedRiskArtifacts({
       preparedTransfer: prepared?.preparedTransfer
-    }, store)
+    }, resolvedStore)
     throw error
   }
 }
 
-export async function cancelPreparedRiskArtifacts (args, store = window.store) {
+export async function cancelPreparedRiskArtifacts (args, store) {
   if (!args?.preparedTransfer?.safetyOperationId) return
-  await store.mcpCancelPreparedSftpUpload(args.preparedTransfer)
+  const resolvedStore = createAgentRuntimeServices({ store }).store
+  await resolvedStore.mcpCancelPreparedSftpUpload(args.preparedTransfer)
 }
 
 function batchPreparationFor (runtime) {
@@ -229,7 +235,7 @@ export async function prepareAgentRiskBatch (toolCalls, runtime = {}) {
       toolName,
       boundArgs,
       runtime,
-      window.store,
+      createAgentRuntimeServices(runtime?.services).store,
       { prepareRecovery: false }
     )
     if (shouldDelegateAgentSafetyConfirmation(toolName, args, { endpoint })) {
@@ -336,10 +342,18 @@ export async function prepareResolvedAgentTool (toolName, args, runtime, context
         settle: settleRiskTransactionTask
       })
     }
-    await cancelPreparedRiskArtifacts(confirmedArgs)
+    await cancelPreparedRiskArtifacts(
+      confirmedArgs,
+      createAgentRuntimeServices(runtime?.services).store
+    )
     throw error
   }
-  if (!confirmation.accepted) await cancelPreparedRiskArtifacts(confirmedArgs)
+  if (!confirmation.accepted) {
+    await cancelPreparedRiskArtifacts(
+      confirmedArgs,
+      createAgentRuntimeServices(runtime?.services).store
+    )
+  }
   return confirmation.accepted
     ? {
         riskTransaction: transaction,
@@ -354,7 +368,10 @@ const structuredVerificationTools = new Set(agentVerificationToolNames)
 
 async function verifyPreparedAgentRisk (preparation, endpoint, runtime, services = {}) {
   const runReadonlyTool = services.runReadonlyTool
-  const store = services.store || window.store
+  const store = createAgentRuntimeServices({
+    ...runtime?.services,
+    ...services
+  }).store
   if (typeof runReadonlyTool !== 'function') {
     throw new TypeError('Agent risk verification requires a readonly executor')
   }

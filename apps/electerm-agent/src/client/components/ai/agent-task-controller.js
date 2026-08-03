@@ -5,6 +5,7 @@ import {
   agentTaskRegistry
 } from './agent-task-registry.js'
 import { createAgentRunObserver } from './agent-run-observer.js'
+import { createAgentRuntimeServices } from './agent-runtime-services.js'
 
 function requireFunction (value, label) {
   if (typeof value !== 'function') throw new Error(`${label} 必须是函数。`)
@@ -40,7 +41,8 @@ export async function requestDiagnosticPlanText ({
   signal,
   observer,
   pollIntervalMs = 200,
-  runGlobalAsync = globalThis.window?.pre?.runGlobalAsync
+  runGlobalAsync,
+  services
 } = {}) {
   if (!String(config.baseURLAI || '').trim() || !String(config.apiKeyAI || '').trim()) {
     throw new Error('请先配置当前 AI 的 API 地址和 API Key。')
@@ -48,7 +50,11 @@ export async function requestDiagnosticPlanText ({
   if (!String(config.modelAI || '').trim()) {
     throw new Error('请先配置当前 AI 模型。')
   }
-  const invoke = requireFunction(runGlobalAsync, 'AIchat 调用器')
+  const runtimeServices = createAgentRuntimeServices(services)
+  const invoke = requireFunction(
+    runGlobalAsync || runtimeServices.pre?.runGlobalAsync?.bind(runtimeServices.pre),
+    'AIchat 调用器'
+  )
   const requestError = (value, fallback) => {
     return sanitizedRequestError(value, fallback, [config.apiKeyAI])
   }
@@ -180,7 +186,8 @@ export function createAgentTaskUiLifecycle (options = {}) {
 }
 
 export function createAgentTaskController (options = {}) {
-  const store = options.store
+  const services = createAgentRuntimeServices(options.services)
+  const store = options.store || services.store
   const registry = options.registry || agentTaskRegistry
   const runCmd = requireFunction(options.runCmd, 'runCmd')
   const cancelRunCmd = requireFunction(options.cancelRunCmd, 'cancelRunCmd')
@@ -221,7 +228,7 @@ export function createAgentTaskController (options = {}) {
         options.onEvent?.(event)
       } catch (error) {}
     },
-    now: options.now
+    now: options.now || services.now
   })
 
   async function confirmAndRun (plan) {

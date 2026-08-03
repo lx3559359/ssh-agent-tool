@@ -32,6 +32,7 @@ import { agentTaskRegistry } from './agent-task-registry.js'
 import { handoffAgentPromptToAi } from './agent-task-handoff.js'
 import { getAgentTaskViewState } from './agent-task-view-state.js'
 import { createAgentRunObserver } from './agent-run-observer.js'
+import { createAgentRuntimeServices } from './agent-runtime-services.js'
 import {
   createAgentDiagnosticKey,
   restoreAgentDiagnosticTask
@@ -43,7 +44,7 @@ import { refsStatic } from '../common/ref'
 import message from '../common/message'
 import './agent-task-runner.styl'
 
-const e = window.translate
+const e = key => createAgentRuntimeServices().translate(key)
 
 const finalStatuses = new Set([
   'completed',
@@ -93,6 +94,12 @@ export default function AgentTaskRunner ({
   terminal,
   getCurrentEndpoint
 }) {
+  const runtimeServices = useMemo(() => createAgentRuntimeServices({
+    store,
+    refs: refsStatic,
+    pre: globalThis.window?.pre,
+    translate: globalThis.window?.translate
+  }), [store])
   const [phase, setPhase] = useState('idle')
   const [plan, setPlan] = useState(null)
   const [task, setTask] = useState(null)
@@ -142,7 +149,7 @@ export default function AgentTaskRunner ({
           config: getActiveAIConfig(store?.config || {}),
           signal: controller.signal,
           observer: runObserverRef.current,
-          runGlobalAsync: window.pre?.runGlobalAsync?.bind(window.pre)
+          services: runtimeServices
         })
         const nextPlan = parseDiagnosticPlan(text, { endpoint, target })
         if (!mountedRef.current || controller.signal.aborted || generationRequestRef.current !== generationToken) return
@@ -258,7 +265,8 @@ export default function AgentTaskRunner ({
         onTaskChange: nextTask => {
           createdTask = nextTask
           if (mountedRef.current && activeRunRef.current === runToken) setTask(nextTask)
-        }
+        },
+        services: runtimeServices
       })
       const completed = await controller.confirmAndRun(plan)
       if (!mountedRef.current || activeRunRef.current !== runToken) return
@@ -326,7 +334,7 @@ export default function AgentTaskRunner ({
     handoffCancelRef.current?.()
     handoffCancelRef.current = handoffAgentPromptToAi({
       prompt,
-      getAiChat: () => refsStatic.get('AIChat'),
+      getAiChat: () => runtimeServices.refs?.get('AIChat'),
       onReady: () => {
         handoffCancelRef.current = null
         handleClose()

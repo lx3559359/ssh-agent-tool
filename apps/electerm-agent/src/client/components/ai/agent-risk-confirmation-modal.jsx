@@ -1,6 +1,8 @@
 import { useMemo } from 'react'
 
-const e = window.translate
+const e = (key, ...args) => (
+  globalThis.window?.translate?.(key, ...args) ?? key
+)
 
 function textOrUnknown (value) {
   const text = String(value ?? '').trim()

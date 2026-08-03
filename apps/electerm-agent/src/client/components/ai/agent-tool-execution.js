@@ -11,6 +11,7 @@ import {
 import { executeAgentTool } from './agent-tool-gateway.js'
 import { getAgentToolDescriptor } from './agent-tool-catalog.js'
 import { classifyAgentCall } from './agent-tool-policy.js'
+import { createAgentRuntimeServices } from './agent-runtime-services.js'
 import {
   beginPreparedRiskBatchCall,
   cancelPreparedRiskArtifacts,
@@ -35,9 +36,10 @@ function createAgentOperationId (prefix) {
 }
 
 function registerAgentTransferCancellation (runtime, transferPromise, tabId) {
+  const { store } = createAgentRuntimeServices(runtime?.services)
   registerDeferredAgentCancellation(runtime, transferPromise, result => {
     if (!result?.transferId) return undefined
-    return window.store.mcpSftpCancelTransfer({
+    return store.mcpSftpCancelTransfer({
       transferId: result.transferId,
       tabId
     })
@@ -94,8 +96,12 @@ export async function runReadonlyTool (args, endpoint, runtime = {}) {
   })
 }
 
-function riskLifecycleServices (store = window.store) {
-  return { store, runReadonlyTool }
+function riskLifecycleServices (runtime, store) {
+  const services = createAgentRuntimeServices({
+    ...runtime?.services,
+    ...(store ? { store } : {})
+  })
+  return { ...services, runReadonlyTool }
 }
 
 function isTerminalSessionNavigationCommand (command) {
@@ -105,7 +111,8 @@ function isTerminalSessionNavigationCommand (command) {
 }
 
 async function executeResolvedAgentTool (toolName, args, runtime, endpoint, preparation) {
-  const store = window.store
+  const services = createAgentRuntimeServices(runtime?.services)
+  const { store, pre } = services
   if (isArtifactAgentTool(toolName)) {
     return JSON.stringify(await executeArtifactAgentTool(
       toolName,
@@ -213,7 +220,7 @@ async function executeResolvedAgentTool (toolName, args, runtime, endpoint, prep
           preparation,
           endpoint,
           runtime,
-          riskLifecycleServices(store)
+          riskLifecycleServices(runtime, store)
         )
       }))
       registerAgentTransferCancellation(runtime, transfer, args.tabId)
@@ -242,7 +249,7 @@ async function executeResolvedAgentTool (toolName, args, runtime, endpoint, prep
           preparation,
           endpoint,
           runtime,
-          riskLifecycleServices(store)
+          riskLifecycleServices(runtime, store)
         )
       }))
       registerAgentTransferCancellation(runtime, transfer, args.tabId)
@@ -259,16 +266,16 @@ async function executeResolvedAgentTool (toolName, args, runtime, endpoint, prep
     case 'cancel_terminal_command':
       return JSON.stringify(await store.mcpCancelTerminalCommand(args))
     case 'list_local_cli_tools':
-      return JSON.stringify(await window.pre.runGlobalAsync('getAllowedLocalCliTools'))
+      return JSON.stringify(await pre.runGlobalAsync('getAllowedLocalCliTools'))
     case 'get_codex_cli_status':
-      return JSON.stringify(await window.pre.runGlobalAsync('getCodexCliStatus'))
+      return JSON.stringify(await pre.runGlobalAsync('getCodexCliStatus'))
     case 'run_local_cli': {
       const requestId = createAgentOperationId('local-cli')
       const clearCancellation = registerAgentCancellation(runtime, () => (
-        window.pre.runGlobalAsync('cancelLocalCli', requestId)
+        pre.runGlobalAsync('cancelLocalCli', requestId)
       ))
       try {
-        const result = await window.pre.runGlobalAsync('runLocalCli', {
+        const result = await pre.runGlobalAsync('runLocalCli', {
           ...args,
           requestId
         })
@@ -286,7 +293,7 @@ async function executeResolvedAgentTool (toolName, args, runtime, endpoint, prep
           preparation,
           endpoint,
           runtime,
-          riskLifecycleServices(store)
+          riskLifecycleServices(runtime, store)
         )
       }))
       registerDeferredAgentCancellation(runtime, backgroundTask, result => {
@@ -438,7 +445,7 @@ export async function executeToolCall (
             dispatched: error?.mutationDispatched !== false
           })
         } catch (settleError) {
-          window.store?.onError?.(settleError)
+          createAgentRuntimeServices(runtime?.services).reportError(settleError)
         }
         throw error
       }
@@ -463,7 +470,7 @@ export async function executeToolCall (
           preparation,
           verifiedEndpoint,
           runtime,
-          riskLifecycleServices()
+          riskLifecycleServices(runtime)
         )
       } catch (error) {
         error.verificationFailed = true

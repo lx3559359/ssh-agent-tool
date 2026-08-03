@@ -50,6 +50,7 @@ import {
   resolveAgentRunLimits
 } from './agent-run-budget.js'
 import { createAgentRunObserver } from './agent-run-observer.js'
+import { createAgentRuntimeServices } from './agent-runtime-services.js'
 
 const MAX_ITERATIONS = 150
 const agentRunEncoder = new TextEncoder()
@@ -75,15 +76,16 @@ export function cancelAgentRunsForScope (sourceTabId) {
   return agentTaskRegistry.cancelByScope(sourceTabId)
 }
 
-function buildAgentSystemPrompt (config, skillSelection) {
-  const lang = config.languageAI || window.store.getLangName() || '简体中文'
+function buildAgentSystemPrompt (config, skillSelection, services) {
+  const { store } = createAgentRuntimeServices(services)
+  const lang = config.languageAI || store?.getLangName?.() || '简体中文'
   const baseRole = config.roleAI || '你是一个中文 SSH 运维排查助手。'
   const skillPrompt = buildAgentSkillPrompt({
     catalog: skillSelection?.catalog || [],
     selectedSkills: skillSelection?.selected || []
   })
   const mcpServerPrompt = buildAgentMcpServerPrompt({
-    mcpServers: config.mcpServers || window.store.config?.mcpServers || []
+    mcpServers: config.mcpServers || store?.config?.mcpServers || []
   })
   const localCliPrompt = buildAgentLocalCliPrompt()
   const taskModePrompt = buildAgentTaskModePrompt()
@@ -111,12 +113,42 @@ ${taskModePrompt}
 请使用${lang}回答。`
 }
 
-function updateChatEntry (chatEntry, updates) {
-  updateAIChatHistoryEntry(window.store, chatEntry.id, updates)
+function persistAgentChatEntry (chatEntry, updates, services) {
+  const { store } = createAgentRuntimeServices(services)
+  updateAIChatHistoryEntry(store, chatEntry.id, updates)
 }
 
-async function callBackendAIchatWithTools (messages, config, requestId, traceContext, runtimeLimits) {
-  return window.pre.runGlobalAsync(
+function createRuntimeSkillClient (services) {
+  const { pre } = createAgentRuntimeServices(services)
+  const invoke = async (method, ...args) => {
+    const result = await pre.runGlobalAsync(method, ...args)
+    if (result?.ok) return result.value
+    const error = new Error(
+      result?.error?.message || 'Agent Skill operation failed.'
+    )
+    error.code = result?.error?.code || 'SKILL_IPC_ERROR'
+    error.validation = result?.error?.validation
+    throw error
+  }
+  return Object.freeze({
+    listAgentSkills: () => invoke('listAgentSkills'),
+    getAgentSkillMetadata: id => invoke('getAgentSkillMetadata', id),
+    readAgentSkillFile: (id, relativePath) => (
+      invoke('readAgentSkillFile', id, relativePath)
+    )
+  })
+}
+
+async function callBackendAIchatWithTools (
+  messages,
+  config,
+  requestId,
+  traceContext,
+  runtimeLimits,
+  services
+) {
+  const { pre } = createAgentRuntimeServices(services)
+  return pre.runGlobalAsync(
     'AIchatWithTools',
     messages,
     config.modelAI,
@@ -163,9 +195,9 @@ function getAgentErrorStage (error, fallback = 'tool_execution') {
   return fallback
 }
 
-function getAgentBudgetExceededText () {
+function getAgentBudgetExceededText (services) {
   const key = 'shellpilotAiAgentBudgetExceeded'
-  const translated = window.translate?.(key)
+  const translated = createAgentRuntimeServices(services).translate(key)
   return translated && translated !== key
     ? translated
     : aiAgentCopy.budgetExceededText
@@ -202,6 +234,11 @@ export async function runAgentLoop (
   services = {}
 ) {
   const serviceOptions = services && typeof services === 'object' ? services : {}
+  const runtimeServices = createAgentRuntimeServices(serviceOptions)
+  const { store, pre } = runtimeServices
+  const updateChatEntry = (entry, updates) => (
+    persistAgentChatEntry(entry, updates, runtimeServices)
+  )
   const budgetDependencies = serviceOptions.budgetDependencies || (
     serviceOptions.now || serviceOptions.setTimeout || serviceOptions.clearTimeout
       ? serviceOptions
@@ -248,6 +285,7 @@ export async function runAgentLoop (
     endpoint,
     resolveEndpoint,
     takeoverRegistry: agentTakeoverRegistry,
+    services: runtimeServices,
     signal: controller.signal,
     budget: Object.freeze({
       limits: budget.limits,
@@ -265,7 +303,7 @@ export async function runAgentLoop (
   })
 
   function currentRunState () {
-    return window.store.aiChatHistory?.find(item => item?.id === chatEntry.id)
+    return store?.aiChatHistory?.find(item => item?.id === chatEntry.id)
       ?.runState || {}
   }
 
@@ -316,7 +354,7 @@ export async function runAgentLoop (
       })
     } catch (error) {
       try {
-        window.store.onError?.(error)
+        runtimeServices.reportError(error)
       } catch {}
     }
   }
@@ -364,7 +402,7 @@ export async function runAgentLoop (
   ))
   cancellationController.register(() => {
     if (!activeBackendRequestId) return { cancelled: true }
-    return window.pre.runGlobalAsync('AIAgentCancel', activeBackendRequestId)
+    return pre.runGlobalAsync('AIAgentCancel', activeBackendRequestId)
   }, {
     confirm: value => value?.cancelled === true
   })
@@ -414,7 +452,7 @@ export async function runAgentLoop (
   function reportCancellationPersistenceError (error) {
     observe('error', ['persistence', error], observationErrorPatch('persistence', error))
     try {
-      window.store.onError?.(error)
+      runtimeServices.reportError(error)
     } catch {}
   }
 
@@ -465,7 +503,7 @@ export async function runAgentLoop (
       cancellationFailure = settledError
     }
     finalizeCancelledToolCalls()
-    const current = window.store.aiChatHistory?.find(item => (
+    const current = store?.aiChatHistory?.find(item => (
       item?.id === chatEntry.id
     ))
     const terminalAlreadyRecorded = !current ||
@@ -531,7 +569,7 @@ export async function runAgentLoop (
     if (settledError && !cancellationFailure) {
       cancellationFailure = settledError
     }
-    const notice = getAgentBudgetExceededText()
+    const notice = getAgentBudgetExceededText(runtimeServices)
     observe('budgetExceeded', [error], {
       terminationReason: 'budget_exceeded',
       errorCode: error.code
@@ -578,7 +616,10 @@ export async function runAgentLoop (
         ? { metadata: { traceId: parentTrace.traceId } }
         : {})
     })
-    const skillSelection = await selectAgentSkills({ prompt: chatEntry.prompt })
+    const skillSelection = await selectAgentSkills({
+      prompt: chatEntry.prompt,
+      client: createRuntimeSkillClient(runtimeServices)
+    })
     if (skillSelection.requiresUserChoice) {
       const failure = skillSelection.failure || {}
       const message = `${failure.message || 'The requested Skill could not be loaded.'} ` +
@@ -609,7 +650,10 @@ export async function runAgentLoop (
     agentRuntime.selectedSkillBindings = skillSelection.skillBindings
     agentRuntime.selectedSkillArtifactDigests = skillSelection.artifactDigests
     const baseMessages = [
-      { role: 'system', content: buildAgentSystemPrompt(config, skillSelection) },
+      {
+        role: 'system',
+        content: buildAgentSystemPrompt(config, skillSelection, runtimeServices)
+      },
       ...buildAIConversationMessages(history, chatEntry)
     ]
     const runtimeMessages = []
@@ -623,7 +667,7 @@ export async function runAgentLoop (
       budget.assertTime()
       budget.reserveModelRequest()
       observe('modelRequest')
-      activeBackendRequestId = `agent-${chatEntry.id}-${iteration}-${Date.now()}`
+      activeBackendRequestId = `agent-${chatEntry.id}-${iteration}-${runtimeServices.now()}`
       const requestTraceContext = createTraceContext({
         ...(parentTrace?.traceId ? { traceId: parentTrace.traceId } : {}),
         requestId: activeBackendRequestId,
@@ -636,7 +680,8 @@ export async function runAgentLoop (
           config,
           activeBackendRequestId,
           requestTraceContext,
-          runtimeLimits
+          runtimeLimits,
+          runtimeServices
         ),
         controller.signal
       )

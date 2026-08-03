@@ -30,6 +30,10 @@ const runtimeContextUrl = pathToFileURL(path.join(
   root,
   'src/client/components/ai/agent-runtime-context.js'
 )).href
+const runtimeServicesUrl = pathToFileURL(path.join(
+  root,
+  'src/client/components/ai/agent-runtime-services.js'
+)).href
 
 function toDataUrl (source) {
   return `data:text/javascript;base64,${Buffer.from(source).toString('base64')}`
@@ -68,6 +72,10 @@ async function importStreamConsumer () {
 async function importAgentModule () {
   let source = read('src/client/components/ai/agent.js')
   source = source
+    .replace(
+      /^import \{ createAgentRuntimeServices \} from '\.\/agent-runtime-services\.js'\r?\n/m,
+      `import { createAgentRuntimeServices } from ${JSON.stringify(runtimeServicesUrl)}\n`
+    )
     .replace(
       /^import \{\r?\n\s*agentTools,\r?\n\s*executeToolCall,\r?\n\s*failAgentRiskBatch,\r?\n\s*getAgentToolDescriptor,\r?\n\s*prepareAgentRiskBatch\r?\n\} from '\.\/agent-tools'\r?\n/m,
       'const agentTools = []\n' +
