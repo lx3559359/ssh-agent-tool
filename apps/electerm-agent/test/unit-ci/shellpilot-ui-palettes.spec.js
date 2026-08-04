@@ -19,6 +19,78 @@ const isColorDarkModuleUrl = pathToFileURL(path.join(
 )).href
 const expectedPalettes = [
   {
+    id: 'shellpilot-glacier',
+    name: 'Glacier Silver',
+    nameKey: 'shellpilotThemeGlacier',
+    descriptionKey: 'shellpilotThemeGlacierDesc',
+    mode: 'light',
+    uiThemeConfig: {
+      main: '#EDF5FB',
+      'main-light': '#F6FAFC',
+      'main-dark': '#CFDCE7',
+      'surface-soft': '#EAF1F6',
+      text: '#14243F',
+      'text-light': '#14243F',
+      'text-dark': '#65738A',
+      'text-disabled': '#718096',
+      primary: '#5C5BE9',
+      'primary-alt': '#5547A6',
+      cyan: '#247FC2',
+      border: '#CFDCE7',
+      'page-dot': '#537EB2',
+      'card-start': '#F6FAFC',
+      'card-mid': '#EAF1F6',
+      'card-end': '#DCE6EE',
+      'panel-start': '#F3F8FB',
+      'panel-mid': '#E7EFF5',
+      'panel-end': '#D9E4EC',
+      flat: '#EAF1F6',
+      'topbar-start': '#306290',
+      'topbar-mid': '#40588E',
+      'topbar-end': '#5547A6',
+      info: '#247FC2',
+      success: '#168A74',
+      error: '#C43F55',
+      warn: '#B86620'
+    }
+  },
+  {
+    id: 'shellpilot-graphite-silver',
+    name: 'Graphite Silver',
+    nameKey: 'shellpilotThemeGraphiteSilver',
+    descriptionKey: 'shellpilotThemeGraphiteSilverDesc',
+    mode: 'dark',
+    uiThemeConfig: {
+      main: '#101722',
+      'main-light': '#2A3543',
+      'main-dark': '#0B1018',
+      'surface-soft': '#202A37',
+      text: '#EDF3FA',
+      'text-light': '#EDF3FA',
+      'text-dark': '#AAB6C5',
+      'text-disabled': '#8391A3',
+      primary: '#8583FF',
+      'primary-alt': '#A094FF',
+      cyan: '#4DB8E8',
+      border: '#3A495C',
+      'page-dot': '#536B8A',
+      'card-start': '#2A3543',
+      'card-mid': '#202A37',
+      'card-end': '#18212C',
+      'panel-start': '#26313E',
+      'panel-mid': '#1D2733',
+      'panel-end': '#151D27',
+      flat: '#18212C',
+      'topbar-start': '#263F63',
+      'topbar-mid': '#37477A',
+      'topbar-end': '#493A87',
+      info: '#4DB8E8',
+      success: '#4FD1B5',
+      error: '#FF7185',
+      warn: '#F0A45D'
+    }
+  },
+  {
     id: 'shellpilot-ocean',
     name: 'Ocean Blue',
     nameKey: 'shellpilotThemeOcean',
@@ -151,7 +223,7 @@ function contrastRatio (foreground, background) {
   return (luminances[0] + 0.05) / (luminances[1] + 0.05)
 }
 
-test('builds the five ShellPilot palettes with complete legacy theme fields', async () => {
+test('builds the seven ShellPilot palettes with complete legacy theme fields', async () => {
   const { buildShellPilotBuiltInThemes } = await import(paletteModuleUrl)
   const themes = buildShellPilotBuiltInThemes({
     foreground: '#dddddd',
@@ -240,9 +312,9 @@ test('builds independent palette objects without modifying the base terminal the
   themes[0].themeConfig.foreground = '#000000'
   themes[0].uiThemeConfig.main = '#000000'
   assert.equal(themes[1].themeConfig.foreground, '#dddddd')
-  assert.equal(themes[1].uiThemeConfig.main, '#EFF7F5')
+  assert.equal(themes[1].uiThemeConfig.main, '#101722')
   assert.equal(nextThemes[0].themeConfig.foreground, '#dddddd')
-  assert.equal(nextThemes[0].uiThemeConfig.main, '#F3F6FB')
+  assert.equal(nextThemes[0].uiThemeConfig.main, '#EDF5FB')
 })
 
 test('derives readable secondary page and card tokens from every palette', async () => {

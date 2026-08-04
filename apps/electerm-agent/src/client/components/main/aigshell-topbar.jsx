@@ -25,13 +25,22 @@ import WindowControl from '../tabs/window-control'
 import ConnectionInventoryModal from '../tree-list/connection-inventory-modal'
 import ConnectionInfoModal from '../tree-list/connection-info-modal'
 import SafetyOperationCenterModal from './safety-operation-center-modal'
-import { logoPath1, packInfo, statusMap } from '../../common/constants'
+import {
+  logoPath1,
+  packInfo,
+  settingMap,
+  statusMap
+} from '../../common/constants'
 import * as safetyTransactionStore from '../../common/safety-transactions/transaction-store.js'
 import {
   commandOrphanRecoveryStartedAt,
   recoverOrphanedCommandOperationsOnce
 } from '../../common/safety-transactions/command-orphan-recovery.js'
 import { formatShellPilotTranslation } from '../../common/shellpilot-i18n-overrides.js'
+import {
+  getThemeToggleTarget,
+  isLightUiTheme
+} from '../../common/ui-theme-pairing.js'
 import './aigshell-topbar.styl'
 
 const UpdateCenterModal = lazy(() => import('./update-center-modal'))
@@ -154,10 +163,11 @@ export default auto(function AIGShellTopBar ({ store }) {
     setConnectionInfoBookmark(null)
   }
 
-  const isLightTheme = store.config.theme === 'defaultLight'
+  const activeThemes = store.getSidebarList(settingMap.terminalThemes)
+  const isLightTheme = isLightUiTheme(store.config.theme, activeThemes)
 
   function handleToggleTheme () {
-    window.store.setTheme(isLightTheme ? 'default' : 'defaultLight')
+    window.store.setTheme(getThemeToggleTarget(store.config.theme))
   }
 
   function handleOpenQuickCommands () {

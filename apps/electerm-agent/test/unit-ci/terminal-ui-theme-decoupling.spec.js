@@ -108,6 +108,40 @@ test('switching ShellPilot UI palettes preserves custom terminal foreground, cur
   assert.equal(store.getThemeConfig().brightCyan, '#00A1A1')
 })
 
+test('switching the Glacier Silver pair preserves custom terminal colors', async () => {
+  const customTheme = {
+    id: 'custom-glacier-terminal',
+    name: 'Custom Glacier Terminal',
+    uiThemeConfig: { main: '#223344', text: '#ffffff' },
+    themeConfig: {
+      background: '#ffffff',
+      foreground: '#ABCDEF',
+      cursor: '#102030',
+      selectionBackground: '#405060',
+      black: '#010101',
+      red: '#A10000',
+      brightCyan: '#00A1A1'
+    }
+  }
+  const store = await createStore({ theme: customTheme.id }, [customTheme])
+  const expected = store.getThemeConfig()
+  const builtInIds = store.getSidebarList('terminalThemes').map(theme => theme.id)
+
+  assert.ok(builtInIds.includes('shellpilot-glacier'))
+  assert.ok(builtInIds.includes('shellpilot-graphite-silver'))
+
+  store.setTheme('shellpilot-glacier')
+  store.setTheme('shellpilot-graphite-silver')
+
+  assert.equal(store.config.theme, 'shellpilot-graphite-silver')
+  assert.equal(store.config.terminalTheme, customTheme.id)
+  assert.deepEqual(store.getThemeConfig(), expected)
+  assert.equal(store.getThemeConfig().background, '#0E0F12')
+  assert.equal(store.getThemeConfig().foreground, '#ABCDEF')
+  assert.equal(store.getThemeConfig().cursor, '#102030')
+  assert.equal(store.getThemeConfig().selectionBackground, '#405060')
+})
+
 test('old persisted configs without terminalTheme keep a non-ShellPilot theme and safely fall back from a ShellPilot theme', async () => {
   const legacyLight = await createStore({ theme: 'defaultLight' })
   const defaultLightTerminal = legacyLight.getSidebarList('terminalThemes')

@@ -10,7 +10,8 @@ module.exports = exports.default = {
   enableGlobalProxy: false,
   zoom: 1,
   debug: false,
-  theme: 'default',
+  theme: 'shellpilot-glacier',
+  terminalTheme: 'default',
   syncSetting: {
     lastUpdateTime: Date.now(),
     autoSync: false,
