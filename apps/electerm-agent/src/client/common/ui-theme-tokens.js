@@ -217,6 +217,103 @@ export function deriveSecondaryThemeTokens (theme = {}) {
   }
 }
 
+export function buildAntdThemeConfig (theme = {}) {
+  const tokens = deriveSecondaryThemeTokens(theme)
+  return {
+    token: {
+      borderRadius: 12,
+      borderRadiusSM: 8,
+      borderRadiusLG: 18,
+      colorPrimary: tokens.primary,
+      colorBgBase: tokens.page,
+      colorBgContainer: tokens.surface,
+      colorBgElevated: tokens.surfaceElevated,
+      colorBgContainerDisabled: tokens.surfaceInset,
+      colorTextBase: tokens.text,
+      colorText: tokens.text,
+      colorTextSecondary: tokens.textMuted,
+      colorTextPlaceholder: tokens.textMuted,
+      colorTextDisabled: tokens.textDisabled,
+      colorTextLightSolid: '#FFFFFF',
+      colorBorder: tokens.border,
+      colorBorderSecondary: tokens.border,
+      colorError: tokens.danger,
+      colorInfo: tokens.info,
+      colorSuccess: tokens.success,
+      colorWarning: tokens.warning,
+      colorLink: tokens.primary,
+      motion: false
+    },
+    components: {
+      Button: {
+        primaryColor: '#FFFFFF',
+        solidTextColor: '#FFFFFF',
+        defaultColor: tokens.text,
+        defaultBg: tokens.surface,
+        defaultBorderColor: tokens.border,
+        defaultBgDisabled: tokens.surfaceInset,
+        defaultShadow: tokens.shadowControl,
+        primaryShadow: tokens.shadowControl
+      },
+      Input: {
+        addonBg: tokens.surfaceSoft,
+        hoverBg: tokens.surfaceElevated,
+        activeBg: tokens.surfaceElevated,
+        hoverBorderColor: tokens.primary,
+        activeBorderColor: tokens.primary,
+        activeShadow: tokens.shadowFocus
+      },
+      Select: {
+        selectorBg: tokens.surface,
+        clearBg: tokens.surface,
+        optionSelectedColor: tokens.text,
+        optionSelectedBg: tokens.primarySoft,
+        optionActiveBg: tokens.surfaceSoft,
+        multipleItemBg: tokens.surfaceSoft,
+        multipleItemBorderColor: tokens.border,
+        multipleSelectorBgDisabled: tokens.surfaceInset,
+        multipleItemColorDisabled: tokens.textDisabled,
+        multipleItemBorderColorDisabled: tokens.border,
+        hoverBorderColor: tokens.primary,
+        activeBorderColor: tokens.primary,
+        activeOutlineColor: tokens.primarySoft
+      },
+      Tag: {
+        defaultBg: tokens.surfaceSoft,
+        defaultColor: tokens.text,
+        solidTextColor: '#FFFFFF'
+      },
+      Segmented: {
+        trackBg: tokens.surfaceInset,
+        itemColor: tokens.textMuted,
+        itemHoverColor: tokens.text,
+        itemHoverBg: tokens.surfaceSoft,
+        itemActiveBg: tokens.primarySoft,
+        itemSelectedBg: tokens.surfaceElevated,
+        itemSelectedColor: tokens.text
+      },
+      Tabs: {
+        cardBg: tokens.surfaceSoft,
+        itemColor: tokens.textMuted,
+        itemHoverColor: tokens.primary,
+        itemActiveColor: tokens.primary,
+        itemSelectedColor: tokens.primary,
+        inkBarColor: tokens.primary
+      },
+      Pagination: {
+        itemBg: tokens.surface,
+        itemLinkBg: tokens.surface,
+        itemActiveBg: tokens.surfaceElevated,
+        itemActiveColor: tokens.primary,
+        itemActiveColorHover: tokens.primaryAlt,
+        itemActiveBgDisabled: tokens.surfaceInset,
+        itemActiveColorDisabled: tokens.textDisabled,
+        itemInputBg: tokens.surface
+      }
+    }
+  }
+}
+
 export function buildUiThemeCss (theme) {
   const tokens = deriveSecondaryThemeTokens(theme)
   const variables = Object.entries(tokens).map(([key, value]) => {

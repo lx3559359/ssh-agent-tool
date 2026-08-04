@@ -32,6 +32,7 @@ import operationsToolkitExtend from './operations-toolkit'
 import aiArtifactsExtend from './ai-artifacts'
 import incidentArchivesExtend from './incident-archives'
 import isColorDark from '../common/is-color-dark'
+import { buildAntdThemeConfig } from '../common/ui-theme-tokens'
 import { getReverseColor } from '../common/reverse-color'
 import { uniq } from 'lodash-es'
 import deepCopy from 'json-deep-copy'
@@ -257,18 +258,7 @@ class Store {
     const { store } = window
     const themeConf = store.getUiThemeConfig()
     return {
-      token: {
-        borderRadius: 3,
-        colorPrimary: themeConf.primary,
-        colorBgBase: themeConf.main,
-        colorError: themeConf.error,
-        colorInfo: themeConf.info,
-        colorSuccess: themeConf.success,
-        colorWarning: themeConf.warn,
-        colorTextBase: themeConf.text,
-        colorLink: themeConf['text-light'],
-        motion: false
-      },
+      ...buildAntdThemeConfig(themeConf),
       algorithm: isColorDark(themeConf.main) ? theme.darkAlgorithm : theme.defaultAlgorithm
     }
   }

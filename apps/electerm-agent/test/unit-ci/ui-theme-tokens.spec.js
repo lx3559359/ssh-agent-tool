@@ -425,6 +425,44 @@ test('derives the approved Glacier and Graphite Silver material layers', async (
   assert.equal(dark.flatBackground, '#17212C')
 })
 
+test('maps semantic ShellPilot surfaces and readable states into Ant Design', async () => {
+  const { buildAntdThemeConfig } = await import(moduleUrl)
+  const config = buildAntdThemeConfig({
+    main: '#EDF5FB',
+    'main-light': '#F8FBFD',
+    'surface-soft': '#E7EEF4',
+    text: '#14243F',
+    'text-dark': '#65738A',
+    'text-disabled': '#718096',
+    primary: '#5C5BE9',
+    border: '#CFDCE7'
+  })
+
+  assert.equal(config.token.borderRadius, 12)
+  assert.equal(config.token.borderRadiusSM, 8)
+  assert.equal(config.token.borderRadiusLG, 18)
+  assert.equal(config.token.colorBgContainer, '#F8FBFD')
+  assert.equal(config.token.colorTextSecondary, '#637087')
+  assert.equal(config.token.colorTextPlaceholder, '#637087')
+  assert.equal(config.token.colorTextDisabled, '#718096')
+  assert.equal(config.token.colorTextLightSolid, '#FFFFFF')
+  assert.equal(config.components.Button.primaryColor, '#FFFFFF')
+  assert.equal(config.components.Tag.defaultColor, '#14243F')
+  assert.equal(config.components.Segmented.itemSelectedColor, '#14243F')
+  assert.equal(config.components.Select.selectorBg, '#F8FBFD')
+})
+
+test('store consumes the semantic Ant Design theme bridge', () => {
+  const source = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/store/store.js'
+  ), 'utf8')
+
+  assert.match(source, /import \{ buildAntdThemeConfig \} from '\.\.\/common\/ui-theme-tokens'/)
+  assert.match(source, /\.\.\.buildAntdThemeConfig\(themeConf\)/)
+  assert.doesNotMatch(source, /borderRadius:\s*3/)
+})
+
 test('serializes the exact secondary UI token contract', async () => {
   const { deriveSecondaryThemeTokens, buildUiThemeCss } = await import(moduleUrl)
   const tokens = deriveSecondaryThemeTokens()
