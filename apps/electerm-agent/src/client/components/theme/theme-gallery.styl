@@ -4,6 +4,7 @@
   min-width 0
   min-height 0
   overflow-x hidden
+  background-image var(--sp-panel-background)
   .setting-col
     grid-template-columns minmax(360px, 42%) minmax(0, 1fr)
   .setting-row-left
@@ -61,7 +62,8 @@
     flex 0 1 auto
     max-width 100%
     border-radius var(--sp-radius-control)
-    box-shadow var(--sp-shadow-sm)
+    background-image var(--sp-control-background)
+    box-shadow var(--sp-shadow-control)
   .ant-segmented-item-label
     min-height 28px
     height auto
@@ -84,10 +86,10 @@
   min-width 0
   padding 12px
   box-sizing border-box
-  background var(--sp-surface)
+  background-image var(--sp-card-background)
   border 1px solid var(--sp-border)
   border-radius var(--sp-radius-card)
-  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-card)
   &.active
     border-color var(--sp-success)
   &.previewing
@@ -149,7 +151,8 @@
     max-width 100%
     height auto
     border-radius var(--sp-radius-control)
-    box-shadow var(--sp-shadow-sm)
+    background-image var(--sp-control-background)
+    box-shadow var(--sp-shadow-control)
     white-space normal
   .ant-popconfirm
     max-width 100%
@@ -165,7 +168,7 @@
   padding 16px
   box-sizing border-box
   color var(--sp-text)
-  background var(--sp-page)
+  background-image var(--sp-panel-background)
   border 1px solid var(--sp-border)
   border-radius var(--sp-radius-panel)
   box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-lg)
@@ -192,7 +195,7 @@
   max-width 100%
   padding 5px 9px
   color var(--sp-success)
-  background var(--sp-surface)
+  background-image var(--sp-control-background)
   border 1px solid var(--sp-success)
   border-radius var(--sp-radius-control)
   white-space normal
@@ -211,10 +214,10 @@
   padding 12px
   box-sizing border-box
   color var(--sp-text)
-  background var(--sp-surface)
+  background-image var(--sp-card-background)
   border 1px solid var(--sp-border)
   border-radius var(--sp-radius-card)
-  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-card)
 
 .sp-theme-preview-action
   display inline-flex
@@ -245,7 +248,7 @@
     flex 0 1 86px
     width 86px
     height 28px
-    background var(--sp-surface-subtle)
+    background-image var(--sp-control-background)
     border 1px solid var(--sp-border)
     border-radius var(--sp-radius-control)
 
@@ -273,6 +276,8 @@
   overflow hidden
   border 1px solid #272A31
   border-radius var(--sp-radius-control)
+  box-shadow none
+  filter none
   code
     display block
     min-width 0

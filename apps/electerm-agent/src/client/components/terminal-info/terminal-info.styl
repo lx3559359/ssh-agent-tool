@@ -9,9 +9,10 @@
   top 100px
   bottom 0
   width 500px
-  background var(--main)
-  border 1px solid var(--main-darker)
-  border-radius 5px 0 0 5px
+  background-image var(--sp-panel-background)
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-panel) 0 0 var(--sp-radius-panel)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-overlay)
   border-right none
   color var(--text)
   z-index 100
@@ -23,6 +24,9 @@
     display block
 .terminal-info-section
   padding 10px 0
+  tbody tr
+    background var(--sp-flat-background)
+    box-shadow none
 .terminal-info-act
 .terminal-info-disk
 .terminal-info-network
@@ -32,6 +36,8 @@
   max-height 1.6em
   line-height 1.6
   overflow hidden
+  background var(--sp-flat-background)
+  box-shadow none
   &:hover
     max-height none
 .info-panel-wrap-pin

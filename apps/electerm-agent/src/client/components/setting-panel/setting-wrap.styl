@@ -1,11 +1,13 @@
 .setting-wrap
   --sp-setting-header-height 64px
-  background var(--sp-page)
+  background-color var(--sp-page)
+  background-image var(--sp-page-background)
   color var(--sp-text)
   overflow-x hidden
   .custom-drawer-content-wrapper
   .custom-drawer-content
-    background var(--sp-page)
+    background-color var(--sp-page)
+    background-image var(--sp-page-background)
     color var(--sp-text)
     min-width 0
     overflow-x hidden
@@ -30,10 +32,10 @@
   min-height var(--sp-setting-header-height)
   gap 10px !important
   padding 12px 20px !important
-  background var(--sp-surface-elevated)
+  background-image var(--sp-panel-background)
   border 1px solid var(--sp-border)
   border-radius var(--sp-radius-toolbar)
-  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-lg)
   > *
     min-width 0
   h2
@@ -63,10 +65,10 @@
     flex-direction column
     max-height min(320px, 52vh)
     padding 6px
-    background var(--sp-surface)
+    background-image var(--sp-overlay-background)
     border 1px solid var(--sp-border)
     border-radius var(--sp-radius-overlay)
-    box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-lg)
+    box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-overlay)
     overflow-x hidden
     overflow-y auto
     button
@@ -109,7 +111,8 @@
   max-width 100%
   margin 0
   padding 8px 20px 0
-  background var(--sp-page)
+  background-color var(--sp-page)
+  background-image var(--sp-page-background)
   overflow-x hidden
   .ant-tabs-nav
     width 100%
@@ -130,9 +133,9 @@
   .ant-tabs-content-holder
     display none
   .ant-tabs-tab-active
-    background linear-gradient(145deg, var(--sp-primary-soft), var(--sp-surface-elevated))
+    background-image var(--sp-control-background)
     border-radius var(--sp-radius-control)
-    box-shadow var(--sp-shadow-sm)
+    box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-control)
 
 .setting-tabs-setting
 .setting-tabs-bookmarks
@@ -166,7 +169,8 @@
   display flex
   flex-direction column
   padding 16px 12px
-  background var(--sp-surface-soft)
+  background-image var(--sp-panel-background)
+  box-shadow inset -1px 0 0 var(--sp-highlight), var(--sp-shadow-lg)
   border-right 1px solid var(--sp-border)
   overflow-x hidden
   overflow-y auto

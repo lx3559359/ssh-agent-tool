@@ -3,11 +3,14 @@
   flex-direction: column
   justify-content: center
   align-items: center
+  background-image var(--sp-panel-background)
   .session-v-info
     position: absolute
     top: 0
     left: 0
     width: 100%
+    background-image var(--sp-control-background)
+    box-shadow var(--sp-shadow-control)
   &.scale-viewport
     .rdp-scroll-wrapper canvas
       width: 100% !important
@@ -29,8 +32,13 @@
     background var(--main-darker)
 .rdp-scroll-wrapper
   position relative
-  background var(--main)
+  background var(--sp-flat-background)
+  box-shadow none
   z-index 299
+  canvas
+    background var(--sp-flat-background)
+    box-shadow none
+    filter none
 
 .rdp-file-transfer-btn
   font-size: 16px

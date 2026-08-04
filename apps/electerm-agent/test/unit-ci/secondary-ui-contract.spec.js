@@ -107,7 +107,7 @@ function assertCssRule (blocks, selector, expectedDeclarations) {
   }
 }
 
-const protectedDenseSelector = /(?:\.xterm(?:-screen|-viewport)?|\.term-wrap|\.sftp-item|tbody\s+tr|\.batch-op-log-entry|\.operations-history\s+article|\.incident-list-item|\.ssh-tunnel-history-item|\.agent-tool-(?:output|pre)|\.agent-readonly-(?:command|output|raw)|\.agent-task-(?:step\s*>\s*pre|output\s+pre)|\.ai-file-change(?:-review)?-diff|\.code-block\s+pre)/i
+const protectedDenseSelector = /(?:\.xterm(?:-screen|-viewport)?|\.term-wrap|\.sftp-item|tbody\s+tr|\.batch-op-log-entry|\.operations-history\s+article|\.incident-list-item|\.ssh-tunnel-history-item|\.agent-tool-(?:output|pre)|\.agent-readonly-(?:command|output|raw)|\.agent-task-(?:step\s*>\s*pre|output\s+pre)|\.ai-file-change(?:-review)?-diff|\.code-block\s+pre|\.cmd-history-item|\.widget-instances-list\s+\.item-list-unit|(?:\.rdp-scroll-wrapper|\.vnc-scroll-wrapper|\.spice-scroll-wrapper)\s+canvas)/i
 
 function assertNoProtectedDenseElevation (css, filename) {
   const visit = source => {
@@ -1004,7 +1004,12 @@ test('client styles cannot decorate protected dense surfaces with semantic UI ma
     'components/ssh-tunnel/ssh-tunnel-modal.styl',
     'components/ai/ai.styl',
     'components/ai/agent-task-runner.styl',
-    'components/ai/ai-file-change-review-modal.styl'
+    'components/ai/ai-file-change-review-modal.styl',
+    'components/footer/cmd-history.styl',
+    'components/widgets/widgets.styl',
+    'components/rdp/rdp.styl',
+    'components/vnc/vnc.styl',
+    'components/spice/spice.styl'
   ]
   for (const file of protectedSurfaceFiles) {
     assertNoProtectedDenseElevation(await compileStylus(file), file)
@@ -1040,7 +1045,12 @@ test('dense surface guard covers every protected selector and semantic material'
     '.agent-task-output pre',
     '.ai-file-change-diff',
     '.ai-file-change-review-diff',
-    '.code-block pre'
+    '.code-block pre',
+    '.cmd-history-item',
+    '.widget-instances-list .item-list-unit',
+    '.rdp-scroll-wrapper canvas',
+    '.vnc-scroll-wrapper canvas',
+    '.spice-scroll-wrapper canvas'
   ]
   const states = ['', ':hover', ':focus-visible', '.active', '[data-state="active"]']
   const shadows = [

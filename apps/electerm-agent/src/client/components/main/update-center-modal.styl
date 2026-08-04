@@ -1,13 +1,19 @@
 .update-center-modal
   color var(--text)
+  .custom-modal-content
+    background-image var(--sp-overlay-background)
+    box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-overlay)
 
 .update-center-summary
   margin 0
   display grid
   grid-template-columns repeat(auto-fit, minmax(150px, 1fr))
   gap 12px 20px
-  padding-bottom 16px
-  border-bottom 1px solid var(--main-darker)
+  padding 14px 16px
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-card)
+  background-image var(--sp-card-background)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-card)
 
   div
     display grid
@@ -49,6 +55,10 @@
   align-items center
   gap 12px
   margin 16px 0
+  padding 10px 12px
+  border-radius var(--sp-radius-control)
+  background-image var(--sp-control-background)
+  box-shadow var(--sp-shadow-control)
 
 @media (max-width: 560px)
   .update-center-source
@@ -56,4 +66,7 @@
 
 .update-center-changelog
   max-height min(38vh, 360px)
+  padding 10px
   overflow auto
+  background var(--sp-flat-background)
+  box-shadow none

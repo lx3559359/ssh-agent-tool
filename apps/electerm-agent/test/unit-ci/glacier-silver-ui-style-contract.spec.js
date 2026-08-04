@@ -73,7 +73,26 @@ const shellStyleFiles = [
   'components/ai/ai.styl',
   'components/ai/agent-skill-manager.styl',
   'components/ai/agent-task-runner.styl',
-  'components/ai/ai-file-change-review-modal.styl'
+  'components/ai/ai-file-change-review-modal.styl',
+  'components/setting-panel/setting-wrap.styl',
+  'components/setting-panel/setting.styl',
+  'components/setting-panel/list.styl',
+  'components/setting-panel/ui-font-picker.styl',
+  'components/theme/theme-gallery.styl',
+  'components/theme/theme-form.styl',
+  'components/theme/terminal-theme-list.styl',
+  'components/main/help-center-modal.styl',
+  'components/main/update-center-modal.styl',
+  'components/main/upgrade.styl',
+  'components/main/crash-recovery-notice.styl',
+  'components/sidebar/info.styl',
+  'components/terminal-info/terminal-info.styl',
+  'components/footer/cmd-history.styl',
+  'components/widgets/widgets.styl',
+  'components/auth/login.styl',
+  'components/rdp/rdp.styl',
+  'components/vnc/vnc.styl',
+  'components/spice/spice.styl'
 ]
 
 test('Glacier Silver shell Stylus files compile', async () => {
@@ -375,6 +394,75 @@ test('AI task skill and file-review overlays keep logs editors and diffs flat', 
   assert.match(review, /\.ai-file-change-review-list[\s\S]{0,360}background-image var\(--sp-control-background\)/)
   assert.match(review, /button[\s\S]{0,420}background var\(--sp-flat-background\)[\s\S]{0,180}box-shadow none/)
   assert.match(review, /\.ai-file-change-review-diff[\s\S]{0,420}background var\(--sp-flat-background\)[\s\S]{0,520}pre[\s\S]{0,360}background var\(--sp-flat-background\)[\s\S]{0,180}box-shadow none/)
+})
+
+test('settings and theme editing use grouped silver material instead of per-field cards', () => {
+  const wrap = readClient('components/setting-panel/setting-wrap.styl')
+  const setting = readClient('components/setting-panel/setting.styl')
+  const font = readClient('components/setting-panel/ui-font-picker.styl')
+  const theme = readClient('components/theme/theme-gallery.styl')
+
+  assert.match(wrap, /\.setting-wrap[\s\S]{0,320}background-image var\(--sp-page-background\)/)
+  assert.match(wrap, /\.setting-header[\s\S]{0,420}background-image var\(--sp-panel-background\)/)
+  assert.match(wrap, /\.setting-search-results[\s\S]{0,420}background-image var\(--sp-overlay-background\)/)
+  assert.match(wrap, /\.setting-row-left[\s\S]{0,360}background-image var\(--sp-panel-background\)/)
+  assert.match(setting, /\.sp-setting-section[\s\S]{0,420}background-image var\(--sp-card-background\)/)
+  assert.match(setting, /\.setting-passwords[\s\S]{0,420}background-image var\(--sp-panel-background\)/)
+  assert.match(setting, /\.sp-sync-config-form[\s\S]{0,420}background-image var\(--sp-panel-background\)/)
+  assert.doesNotMatch(setting, /\.sp-setting-field[\s\S]{0,220}(?:background-image var\(--sp-card-background\)|box-shadow var\(--sp-shadow-card\))/)
+
+  assert.match(font, /\.sp-ui-font-option[\s\S]{0,420}background-image var\(--sp-card-background\)/)
+  assert.match(font, /\.sp-ui-font-preview[\s\S]{0,420}background-image var\(--sp-card-background\)/)
+  assert.match(font, /code[\s\S]{0,260}background var\(--sp-flat-background\)[\s\S]{0,160}box-shadow none/)
+  assert.match(theme, /\.sp-theme-card[\s\S]{0,420}background-image var\(--sp-card-background\)/)
+  assert.match(theme, /\.sp-theme-preview-scope[\s\S]{0,420}background-image var\(--sp-panel-background\)/)
+  assert.match(theme, /\.sp-theme-preview-card[\s\S]{0,420}background-image var\(--sp-card-background\)/)
+})
+
+test('support widget and authentication shells share Glacier material while rows stay flat', () => {
+  const help = readClient('components/main/help-center-modal.styl')
+  const update = readClient('components/main/update-center-modal.styl')
+  const upgrade = readClient('components/main/upgrade.styl')
+  const recovery = readClient('components/main/crash-recovery-notice.styl')
+  const info = readClient('components/sidebar/info.styl')
+  const terminalInfo = readClient('components/terminal-info/terminal-info.styl')
+  const history = readClient('components/footer/cmd-history.styl')
+  const widgets = readClient('components/widgets/widgets.styl')
+  const login = readClient('components/auth/login.styl')
+
+  assert.match(help, /\.shellpilot-help-center[\s\S]{0,360}\.custom-modal-content[\s\S]{0,300}background-image var\(--sp-overlay-background\)/)
+  assert.match(help, /\.shellpilot-help-heading[\s\S]{0,360}background-image var\(--sp-card-background\)/)
+  assert.match(update, /\.update-center-modal[\s\S]{0,360}\.custom-modal-content[\s\S]{0,300}background-image var\(--sp-overlay-background\)/)
+  assert.match(update, /\.update-center-summary[\s\S]{0,420}background-image var\(--sp-card-background\)/)
+  assert.match(update, /\.update-center-changelog[\s\S]{0,320}background var\(--sp-flat-background\)[\s\S]{0,180}box-shadow none/)
+  assert.match(upgrade, /\.upgrade-panel[\s\S]{0,420}background-image var\(--sp-overlay-background\)/)
+  assert.match(upgrade, /\.markdown-wrap[\s\S]{0,300}background var\(--sp-flat-background\)[\s\S]{0,180}box-shadow none/)
+  assert.match(recovery, /\.crash-recovery-notice[\s\S]{0,520}background-image var\(--sp-overlay-background\)/)
+  assert.match(info, /\.info-modal \.custom-modal-content[\s\S]{0,360}background-image var\(--sp-overlay-background\)/)
+  assert.match(info, /\.info-modal pre[\s\S]{0,360}background var\(--sp-flat-background\)[\s\S]{0,180}box-shadow none/)
+  assert.match(terminalInfo, /\.info-panel-wrap[\s\S]{0,420}background-image var\(--sp-panel-background\)/)
+  assert.match(terminalInfo, /tbody tr[\s\S]{0,220}background var\(--sp-flat-background\)[\s\S]{0,180}box-shadow none/)
+  assert.match(history, /\.cmd-history-popover-content[\s\S]{0,360}background-image var\(--sp-panel-background\)/)
+  assert.match(history, /\.cmd-history-item[\s\S]{0,320}background var\(--sp-flat-background\)[\s\S]{0,180}box-shadow none/)
+  assert.match(widgets, /\.widgets-shell[\s\S]{0,360}background-image var\(--sp-panel-background\)/)
+  assert.match(widgets, /\.widget-card[\s\S]{0,420}background-image var\(--sp-card-background\)/)
+  assert.match(widgets, /\.widget-form-hero[\s\S]{0,420}background-image var\(--sp-card-background\)/)
+  assert.match(widgets, /\.widget-instances-list[\s\S]{0,420}\.item-list-unit[\s\S]{0,260}background var\(--sp-flat-background\)[\s\S]{0,180}box-shadow none/)
+  assert.match(login, /\.login-wrap[\s\S]{0,360}background-image var\(--sp-page-background\)/)
+  assert.match(login, /> \.pd3\.aligncenter[\s\S]{0,420}background-image var\(--sp-card-background\)/)
+})
+
+test('remote client chrome uses semantic surfaces without decorating pixel canvases', () => {
+  const rdp = readClient('components/rdp/rdp.styl')
+  const vnc = readClient('components/vnc/vnc.styl')
+  const spice = readClient('components/spice/spice.styl')
+
+  assert.match(rdp, /\.rdp-session-wrap[\s\S]{0,360}background-image var\(--sp-panel-background\)/)
+  assert.match(vnc, /\.vnc-session-wrap[\s\S]{0,360}background-image var\(--sp-panel-background\)/)
+  assert.match(spice, /\.spice-session-wrap[\s\S]{0,360}background-image var\(--sp-panel-background\)/)
+  for (const [name, source] of [['rdp', rdp], ['vnc', vnc], ['spice', spice]]) {
+    assert.match(source, /canvas[\s\S]{0,260}background var\(--sp-flat-background\)[\s\S]{0,180}box-shadow none[\s\S]{0,120}filter none/, name)
+  }
 })
 
 test('Glacier material recipes remain centralized in semantic tokens', () => {

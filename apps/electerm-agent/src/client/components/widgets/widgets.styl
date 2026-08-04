@@ -2,6 +2,7 @@
   min-width 0
   width 100%
   padding 0 0 12px
+  background-image var(--sp-panel-background)
   .ant-tabs-nav
     margin 0 0 14px
   .ant-tabs-tab
@@ -10,8 +11,10 @@
 .widgets-panel-title
   margin 0 0 14px
   padding 14px 16px
-  border 1px solid var(--main-darker)
-  background rgba(255, 255, 255, .03)
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-card)
+  background-image var(--sp-card-background)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-card)
   h3
     margin 0 0 4px
     font-size 16px
@@ -44,8 +47,10 @@
   gap 12px
   min-width 0
   padding 13px
-  border 1px solid var(--main-darker)
-  background rgba(255, 255, 255, .035)
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-card)
+  background-image var(--sp-card-background)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-card)
   cursor pointer
   transition background .16s ease, border-color .16s ease
   &:hover
@@ -121,7 +126,8 @@
     padding 0 8px
     box-sizing border-box
     border-radius 4px
-    background rgba(255, 255, 255, .06)
+    background-image var(--sp-control-background)
+    box-shadow var(--sp-shadow-control)
     font-size 12px
     opacity .86
     white-space normal
@@ -136,8 +142,10 @@
   gap 16px
   margin 0 0 18px
   padding 18px
-  border 1px solid var(--main-darker)
-  background rgba(255, 255, 255, .035)
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-card)
+  background-image var(--sp-card-background)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-card)
   h3
     margin 2px 0 8px
     font-size 20px
@@ -168,9 +176,11 @@
 .widget-control-empty-inner
   max-width 420px
   padding 28px
-  border 1px dashed var(--main-darker)
+  border 1px dashed var(--sp-border-strong)
+  border-radius var(--sp-radius-card)
   text-align center
-  background rgba(255, 255, 255, .025)
+  background-image var(--sp-card-background)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-card)
   h3
     margin 0 0 10px
     font-size 18px
@@ -186,6 +196,9 @@
   display flex
   flex-direction column
   gap 8px
+  .item-list-unit
+    background var(--sp-flat-background)
+    box-shadow none
 
 @media (max-width: 1100px)
   .widget-form

@@ -3,11 +3,14 @@
   flex-direction: column
   justify-content: center
   align-items: center
+  background-image var(--sp-panel-background)
   .session-v-info
     position: absolute
     top: 0
     left: 0
     width: 100%
+    background-image var(--sp-control-background)
+    box-shadow var(--sp-shadow-control)
   &.scale-viewport
     .rdp-scroll-wrapper canvas
       width: 100% !important
@@ -15,3 +18,11 @@
       object-fit: contain
   > div
     background: transparent !important
+
+.vnc-scroll-wrapper
+  background var(--sp-flat-background)
+  box-shadow none
+  canvas
+    background var(--sp-flat-background)
+    box-shadow none
+    filter none
