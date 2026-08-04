@@ -9,7 +9,8 @@
   z-index 200
   width 0
   overflow-y scroll
-  background var(--sp-surface)
+  background-color var(--sp-surface)
+  background-image var(--sp-panel-background)
   border-right 0 solid var(--sp-border)
   box-shadow var(--sp-shadow-lg)
   .item-list-unit:hover
@@ -24,7 +25,8 @@
   width 72px
   z-index 100
   bottom 0
-  background var(--sp-surface)
+  background-color var(--sp-surface)
+  background-image var(--sp-panel-background)
   border-right 1px solid var(--sp-border)
   box-shadow var(--sp-shadow-sm)
 
@@ -60,7 +62,8 @@
     position sticky
     top 0
     z-index 10
-    background var(--main)
+    background-color var(--sp-flat-background)
+    background-image none
     .history-clear-icon
       margin-left auto
       margin-right 0
@@ -134,13 +137,15 @@
   box-shadow none
   transition background-color var(--sp-motion-fast) ease, box-shadow var(--sp-motion-fast) ease, color var(--sp-motion-fast) ease
   &:hover
-    background var(--sp-surface-elevated)
-    box-shadow var(--sp-shadow-md)
+    background-color var(--sp-surface)
+    background-image var(--sp-control-background)
+    box-shadow var(--sp-shadow-control)
     .control-icon
     .control-icon-label
       color var(--sp-primary)
   &.active
-    background linear-gradient(145deg, var(--sp-primary-soft), var(--sp-surface-elevated))
+    background-color var(--sp-surface)
+    background-image var(--sp-control-background)
     box-shadow var(--sp-shadow-focus)
 .sidebar .control-icon-wrap:focus-visible
   outline 2px solid var(--sp-primary)
@@ -167,7 +172,8 @@
       color var(--success)
 //btns
 .btns
-  background var(--sp-surface)
+  background-color var(--sp-surface)
+  background-image var(--sp-panel-background)
   border-color var(--sp-border)
   .control-icon-wrap
     padding 8px 0

@@ -3,7 +3,8 @@
   position relative
   height 36px
   overflow hidden
-  background var(--main-dark)
+  background-color var(--sp-flat-background)
+  background-image none
   z-index 12
   ::-webkit-scrollbar
     width 0
@@ -35,6 +36,7 @@
   background var(--shellpilot-terminal-background)
   .tab
     background var(--shellpilot-terminal-background)
+    box-shadow none
   .tab.active
     background var(--shellpilot-terminal-background)
     &::after
@@ -56,9 +58,10 @@
   max-width 200px
   line-height 36px
   margin 0 1px 0 0
-  border-radius 3px 3px 0 0
-  background var(--main-dark)
-  box-shadow var(--sp-shadow-sm)
+  border-radius var(--sp-radius-small) var(--sp-radius-small) 0 0
+  background-color var(--sp-flat-background)
+  background-image none
+  box-shadow none
   text-align center
   color var(--text-dark)
   &.tab-last
@@ -67,7 +70,8 @@
     display none
   &.active
     color var(--text)
-    background var(--main)
+    background-color var(--sp-surface)
+    background-image var(--sp-control-background)
   &.active-all
     font-weight bold
     .tab-count
@@ -239,9 +243,11 @@
 
 // Layout and Workspace dropdown styles
 .layout-workspace-dropdown
-  background var(--main)
-  border-radius 4px
-  box-shadow 0 2px 8px rgba(0, 0, 0, 0.15)
+  background-color var(--sp-surface-elevated)
+  background-image var(--sp-overlay-background)
+  border 1px solid var(--sp-border-strong)
+  border-radius var(--sp-radius-overlay)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-overlay)
   min-width 200px
   padding 8px
   .ant-tabs-nav
@@ -254,13 +260,13 @@
 .layout-menu-item
   padding 6px 12px
   cursor pointer
-  border-radius 4px
+  border-radius var(--sp-radius-small)
   display flex
   align-items center
   gap 8px
   color var(--text)
   &:hover
-    background var(--main-dark)
+    background var(--sp-flat-background)
   &.active
     background var(--primary)
     color #fff
@@ -280,13 +286,13 @@
 .workspace-item
   padding 6px 12px
   cursor pointer
-  border-radius 4px
+  border-radius var(--sp-radius-small)
   display flex
   align-items center
   justify-content space-between
   color var(--text)
   &:hover
-    background var(--main-dark)
+    background var(--sp-flat-background)
   .workspace-delete-icon
     opacity 0
     color var(--text-dark)

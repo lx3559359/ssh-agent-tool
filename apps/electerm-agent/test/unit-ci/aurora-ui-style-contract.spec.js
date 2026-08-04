@@ -94,7 +94,7 @@ test('Aurora Lift shared chrome uses the approved radius hierarchy', () => {
   const panel = readClient('components/side-panel-r/right-side-panel.styl')
   const ai = readClient('components/ai/ai.styl')
 
-  assertSelectorUsesRadius(shared, '.sp-level-1', 'small')
+  assertSelectorUsesRadius(shared, '.sp-level-1', 'control')
   assertSelectorUsesRadius(shared, '.sp-card', 'card')
   assertSelectorUsesRadius(shared, '.sp-level-3', 'overlay')
   assertSelectorUsesRadius(topbar, '.aigshell-topbar-action', 'control')

@@ -899,14 +899,16 @@ test('client chrome maps concrete shell selectors to restrained semantic depth',
 
   const topbarBlocks = topLevelCssBlocks(await compileStylus(files[0]))
   assertCssRule(topbarBlocks, '.aigshell-topbar', {
-    background: 'var(--sp-surface-elevated)',
-    'border-bottom': '1px solid var(--sp-border)',
-    'box-shadow': 'inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)'
+    'background-color': '#306290',
+    'background-image': 'var(--sp-topbar-background)',
+    'border-bottom': '1px solid rgba(255,255,255,0.2)',
+    'box-shadow': '0 8px 22px rgba(38,63,99,0.18)'
   })
 
   const sidebarBlocks = topLevelCssBlocks(await compileStylus(files[1]))
   assertCssRule(sidebarBlocks, '.sidebar', {
-    background: 'var(--sp-surface)',
+    'background-color': 'var(--sp-surface)',
+    'background-image': 'var(--sp-panel-background)',
     'border-right': '1px solid var(--sp-border)',
     'box-shadow': 'var(--sp-shadow-sm)'
   })
@@ -914,11 +916,13 @@ test('client chrome maps concrete shell selectors to restrained semantic depth',
     'box-shadow': 'none'
   })
   assertCssRule(sidebarBlocks, '.sidebar .control-icon-wrap:hover', {
-    background: 'var(--sp-surface-elevated)',
-    'box-shadow': 'var(--sp-shadow-md)'
+    'background-color': 'var(--sp-surface)',
+    'background-image': 'var(--sp-control-background)',
+    'box-shadow': 'var(--sp-shadow-control)'
   })
   assertCssRule(sidebarBlocks, '.sidebar .control-icon-wrap.active', {
-    background: 'linear-gradient(145deg, var(--sp-primary-soft), var(--sp-surface-elevated))',
+    'background-color': 'var(--sp-surface)',
+    'background-image': 'var(--sp-control-background)',
     'box-shadow': 'var(--sp-shadow-focus)'
   })
   assertCssRule(sidebarBlocks, '.sidebar .control-icon-wrap:focus-visible', {
@@ -928,18 +932,21 @@ test('client chrome maps concrete shell selectors to restrained semantic depth',
 
   const panelBlocks = topLevelCssBlocks(await compileStylus(files[2]))
   assertCssRule(panelBlocks, '.right-side-panel', {
-    background: 'var(--sp-surface)',
+    'background-color': 'var(--sp-surface)',
+    'background-image': 'var(--sp-panel-background)',
     'border-left': '1px solid var(--sp-border)',
     'border-radius': 'var(--sp-radius-panel) 0 0 var(--sp-radius-panel)',
     'box-shadow': 'var(--sp-shadow-lg)'
   })
   assertCssRule(panelBlocks, '.right-panel-title', {
-    background: 'var(--sp-surface)',
+    'background-color': 'var(--sp-surface)',
+    'background-image': 'var(--sp-control-background)',
     'border-bottom': '1px solid var(--sp-border)',
-    'box-shadow': 'inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-sm)'
+    'box-shadow': 'inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-control)'
   })
   assertCssRule(panelBlocks, '.right-panel-ai-config-card', {
-    background: 'var(--sp-surface-elevated)',
+    'background-color': 'var(--sp-surface-elevated)',
+    'background-image': 'var(--sp-card-background)',
     border: '1px solid var(--sp-border)',
     'border-radius': 'var(--sp-radius-card)',
     'box-shadow': 'inset 0 1px 0 var(--sp-highlight-top), var(--sp-shadow-card)'
@@ -950,9 +957,10 @@ test('client chrome maps concrete shell selectors to restrained semantic depth',
 
   const footerBlocks = topLevelCssBlocks(await compileStylus(files[3]))
   assertCssRule(footerBlocks, '.main-footer', {
-    background: 'var(--sp-surface-elevated)',
+    'background-color': 'var(--sp-flat-background)',
+    'background-image': 'none',
     'border-top': '1px solid var(--sp-border)',
-    'box-shadow': '0 -4px 12px rgba(73,66,196,0.12)'
+    'box-shadow': '0 -1px 0 var(--sp-highlight)'
   })
 })
 

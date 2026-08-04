@@ -9,10 +9,11 @@
   align-items center
   justify-content space-between
   padding 0 14px
-  background var(--sp-surface-elevated)
-  border-bottom 1px solid var(--sp-border)
-  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
-  color var(--text)
+  background-color #306290
+  background-image var(--sp-topbar-background)
+  border-bottom 1px solid rgba(255, 255, 255, .2)
+  box-shadow 0 8px 22px rgba(38, 63, 99, .18)
+  color rgba(255, 255, 255, .9)
   -webkit-app-region drag
 
 .aigshell-topbar-brand
@@ -30,7 +31,7 @@
 
 .aigshell-topbar-name
   font-weight 650
-  color var(--text-light)
+  color rgba(255, 255, 255, .96)
   white-space nowrap
 
 .aigshell-topbar-version
@@ -38,8 +39,9 @@
   line-height 20px
   padding 0 7px
   border-radius 999px
-  color var(--primary)
-  background var(--main)
+  color rgba(255, 255, 255, .94)
+  background rgba(255, 255, 255, .14)
+  border 1px solid rgba(255, 255, 255, .2)
   font-size 12px
   font-weight 600
   white-space nowrap
@@ -48,7 +50,7 @@
 .aigshell-topbar-separator
   width 1px
   height 18px
-  background var(--main-darker)
+  background rgba(255, 255, 255, .22)
   flex none
 
 .aigshell-topbar-current
@@ -56,14 +58,14 @@
   overflow hidden
   text-overflow ellipsis
   white-space nowrap
-  color var(--text)
+  color rgba(255, 255, 255, .82)
   font-weight 500
 
 .aigshell-topbar-dot
   width 7px
   height 7px
   border-radius 50%
-  background var(--text-disabled)
+  background rgba(255, 255, 255, .44)
   flex none
   &.online
     background var(--success)
@@ -91,6 +93,7 @@
   min-width 0
   height 100%
   padding-right 138px
+  background transparent
   -webkit-app-region no-drag
 
 .aigshell-topbar-action-wrap
@@ -98,39 +101,43 @@
   align-items center
 
 .aigshell-topbar-action-group-boundary
-  border-left 1px solid var(--sp-border-strong)
+  border-left 1px solid rgba(255, 255, 255, .22)
   padding-left 6px
   margin-left 2px
 
 .aigshell-topbar-action
   height 30px
   padding 0 10px
-  color var(--text)
+  color rgba(255, 255, 255, .9)
+  background rgba(255, 255, 255, .08)
+  border 1px solid rgba(255, 255, 255, .18)
   border-radius var(--sp-radius-control)
-  box-shadow var(--sp-shadow-sm)
+  box-shadow none
   font-size 13px
   font-weight 500
   &:hover
-    color var(--primary) !important
-    background var(--main) !important
+    color #fff !important
+    background rgba(255, 255, 255, .16) !important
+    border-color rgba(255, 255, 255, .34) !important
   &:active
-    color var(--sp-primary) !important
-    background var(--sp-primary-soft) !important
-    box-shadow inset 0 1px 3px var(--sp-border-strong)
+    color #fff !important
+    background rgba(255, 255, 255, .22) !important
+    box-shadow inset 0 1px 3px rgba(28, 41, 80, .32)
   &:disabled
-    color var(--sp-text-disabled) !important
-    background var(--sp-surface) !important
+    color rgba(255, 255, 255, .42) !important
+    background rgba(255, 255, 255, .04) !important
+    border-color rgba(255, 255, 255, .1) !important
     box-shadow none
 
 .aigshell-topbar-action-primary
-  border 1px solid var(--primary)
-  color var(--primary)
-  background var(--main)
-  box-shadow var(--sp-shadow-focus)
+  border-color rgba(255, 255, 255, .38)
+  color #fff
+  background rgba(255, 255, 255, .18)
+  box-shadow 0 4px 12px rgba(22, 31, 67, .16)
   &:hover
-    border-color var(--primary) !important
-    color var(--primary) !important
-    background var(--main-light) !important
+    border-color rgba(255, 255, 255, .5) !important
+    color #fff !important
+    background rgba(255, 255, 255, .24) !important
 
 .aigshell-topbar
   .window-controls
@@ -152,10 +159,10 @@
     display flex
     align-items center
     justify-content center
-    color var(--text)
+    color rgba(255, 255, 255, .9)
     &:hover
-      color var(--primary)
-      background var(--main)
+      color #fff
+      background rgba(255, 255, 255, .14)
   .window-control-close:hover
     color var(--primary-contrast)
     background var(--error)
