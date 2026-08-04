@@ -87,7 +87,7 @@ export function buildPacketCaptureCommands (params = {}, capabilities = {}) {
     '[ -w "$PARENT" ] || { echo "当前用户不能在抓包父目录创建文件"; exit 1; }',
     '[ ! -e "$TARGET" ] && [ ! -L "$TARGET" ] || { echo "抓包文件已存在，拒绝覆盖"; exit 1; }',
     '[ ' + interfaceName + ' = any ] || ip link show dev ' + interfaceName + ' >/dev/null 2>&1 || { echo "网卡不存在"; exit 1; }',
-    'if [ "$(id -u)" != 0 ]; then command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1 || { echo "抓包需要 root 或免密 sudo"; exit 1; }; fi'
+    'if [ "$(id -u)" != 0 ]; then command -v sudo >/dev/null 2>&1 && sudo -n tcpdump --version >/dev/null 2>&1 || { echo "抓包需要 root 或免密 sudo tcpdump 权限"; exit 1; }; fi'
   ].join('\n')
   const capture = [
     'set -u',
@@ -105,7 +105,14 @@ export function buildPacketCaptureCommands (params = {}, capabilities = {}) {
     '    printf "无法确认临时抓包文件归属，已保留: %s\\n" "$TEMP"',
     '  fi',
     '}',
-    'trap cleanup_capture EXIT HUP INT TERM',
+    'abort_capture () {',
+    '  trap - HUP INT TERM',
+    '  cleanup_capture',
+    '  trap - EXIT',
+    '  exit 130',
+    '}',
+    'trap cleanup_capture EXIT',
+    'trap abort_capture HUP INT TERM',
     'RUN_AS=""',
     'if [ "$(id -u)" != 0 ]; then RUN_AS="sudo -n"; fi',
     'set +e',
