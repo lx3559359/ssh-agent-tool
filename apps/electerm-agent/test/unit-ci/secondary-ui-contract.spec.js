@@ -157,6 +157,14 @@ async function assertUiElevationContracts (source) {
     'border-radius': 'var(--sp-radius-card)',
     'box-shadow': 'inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-card)'
   })
+  assertCssRule(blocks, '.sp-level-panel, .sp-panel', {
+    color: 'var(--sp-text)',
+    'background-color': 'var(--sp-surface)',
+    'background-image': 'var(--sp-panel-background)',
+    border: '1px solid var(--sp-border)',
+    'border-radius': 'var(--sp-radius-panel)',
+    'box-shadow': 'inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-panel)'
+  })
   assertCssRule(blocks, '.sp-level-3', {
     color: 'var(--sp-text)',
     'background-color': 'var(--sp-surface-elevated)',
@@ -863,6 +871,15 @@ test('defines L0-L3 contracts without styling terminal canvases', async () => {
   const source = readClient('css/includes/secondary-ui.styl')
   await assertUiElevationContracts(source)
   assertNoTerminalCanvasSelectors(source)
+})
+
+test('shared controls keep nested depth and readable text in every state', () => {
+  const source = readClient('css/includes/secondary-ui.styl')
+
+  assert.doesNotMatch(source, /\.sp-card \.sp-card\s*\r?\n\s*box-shadow none/)
+  assert.match(source, /\.ant-select-selection-placeholder[\s\S]{0,180}color var\(--sp-text-muted\) !important[\s\S]{0,100}opacity 1/)
+  assert.match(source, /\.ant-btn-primary[\s\S]{0,180}color #FFFFFF !important/)
+  assert.match(source, /\.ant-btn:disabled[\s\S]{0,220}color var\(--sp-text-disabled\) !important[\s\S]{0,100}opacity 1/)
 })
 
 test('elevation contract validator rejects tokens assigned to the wrong levels', async () => {

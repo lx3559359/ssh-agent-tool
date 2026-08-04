@@ -25,6 +25,15 @@
   border-radius var(--sp-radius-card)
   box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-card)
 
+.sp-level-panel,
+.sp-panel
+  color var(--sp-text)
+  background-color var(--sp-surface)
+  background-image var(--sp-panel-background)
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-panel)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-panel)
+
 .sp-level-3
   color var(--sp-text)
   background-color var(--sp-surface-elevated)
@@ -38,9 +47,6 @@
   background-color var(--sp-flat-background)
   background-image none
   border 1px solid var(--sp-border)
-  box-shadow none
-
-.sp-card .sp-card
   box-shadow none
 
 .sp-lift-interactive
@@ -80,14 +86,36 @@
 .custom-modal-content,
 .sidebar-panel,
 .right-side-panel
-  .ant-btn:not(.ant-btn-text):not(.ant-btn-link),
+  .ant-btn:not(.ant-btn-text):not(.ant-btn-link):not(.ant-btn-primary),
   .ant-input,
   .ant-input-affix-wrapper,
   .ant-input-number,
   .ant-picker,
   .ant-select-selector
+    color var(--sp-text)
+    background-color var(--sp-surface)
+    background-image var(--sp-control-background)
+    border-color var(--sp-border)
     border-radius var(--sp-radius-control)
     box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-control)
+
+  .ant-btn-primary
+    color #FFFFFF !important
+
+  .ant-btn.ant-btn-disabled,
+  .ant-input:disabled,
+  .ant-select-disabled .ant-select-selector,
+  .ant-btn:disabled
+    color var(--sp-text-disabled) !important
+    opacity 1
+    background-color var(--sp-surface-inset) !important
+    border-color var(--sp-border) !important
+
+  .ant-input::placeholder,
+  textarea::placeholder,
+  .ant-select-selection-placeholder
+    color var(--sp-text-muted) !important
+    opacity 1
 
   .ant-btn:not(.ant-btn-text):not(.ant-btn-link):focus-visible,
   .ant-input:focus,
