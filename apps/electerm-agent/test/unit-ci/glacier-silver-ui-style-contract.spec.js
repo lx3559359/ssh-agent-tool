@@ -21,6 +21,26 @@ function compileStylus (relativePath) {
   })
 }
 
+function listStylusFiles (directory) {
+  return fs.readdirSync(directory, { withFileTypes: true })
+    .flatMap(entry => {
+      const absolute = path.join(directory, entry.name)
+      return entry.isDirectory()
+        ? listStylusFiles(absolute)
+        : entry.name.endsWith('.styl') ? [absolute] : []
+    })
+}
+
+const componentStyleFiles = listStylusFiles(path.join(clientRoot, 'components'))
+  .map(filename => path.relative(clientRoot, filename).replaceAll('\\', '/'))
+  .sort()
+
+const structuralPrimitiveStyles = new Set([
+  'components/common/highlight.styl',
+  'components/common/logo.styl',
+  'components/icons/ai-icon.styl'
+])
+
 const shellStyleFiles = [
   'components/main/aigshell-topbar.styl',
   'components/sidebar/sidebar.styl',
@@ -98,6 +118,15 @@ const shellStyleFiles = [
 test('Glacier Silver shell Stylus files compile', async () => {
   for (const file of shellStyleFiles) {
     assert.ok((await compileStylus(file)).length > 0, file)
+  }
+})
+
+test('every visible component style compiles and participates in the semantic surface system', async () => {
+  for (const file of componentStyleFiles) {
+    assert.ok((await compileStylus(file)).length > 0, `${file} must compile`)
+    if (!structuralPrimitiveStyles.has(file)) {
+      assert.match(readClient(file), /var\(--sp-/, `${file} must reference a ShellPilot semantic token`)
+    }
   }
 })
 
@@ -466,7 +495,7 @@ test('remote client chrome uses semantic surfaces without decorating pixel canva
 })
 
 test('Glacier material recipes remain centralized in semantic tokens', () => {
-  const componentSource = shellStyleFiles
+  const componentSource = componentStyleFiles
     .map(readClient)
     .join('\n')
 
