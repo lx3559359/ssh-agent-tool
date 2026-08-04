@@ -1,9 +1,11 @@
 import { defineOperationsTool } from '../shared/definition.js'
 import { systemStorageTools } from './diagnostics/system-storage.js'
 import { networkSecurityTools } from './diagnostics/network-security.js'
+import { packetCaptureTools } from './diagnostics/packet-capture.js'
 import { udpCheckTools } from './diagnostics/udp-check.js'
 import { servicesPlatformTools } from './diagnostics/services-platform.js'
 import { getOperationsRunbooks } from './scripts/index.js'
+import { resolveLegacyOperationsTool } from './migrations.js'
 
 export function buildOperationsCatalog (groups = []) {
   const toolIds = new Set()
@@ -31,6 +33,7 @@ export function buildOperationsCatalog (groups = []) {
 let operationsCatalog = buildOperationsCatalog([
   systemStorageTools,
   networkSecurityTools,
+  packetCaptureTools,
   udpCheckTools,
   servicesPlatformTools,
   getOperationsRunbooks()
@@ -46,7 +49,10 @@ export function getOperationsCatalog () {
 }
 
 export function getOperationsTool (id) {
+  const resolvedId = resolveLegacyOperationsTool(id)
   return operationsCatalog.find(tool => {
-    return tool.id === id || tool.legacyIds?.includes(id)
+    return tool.id === id ||
+      tool.id === resolvedId ||
+      tool.legacyIds?.includes(id)
   }) || null
 }
