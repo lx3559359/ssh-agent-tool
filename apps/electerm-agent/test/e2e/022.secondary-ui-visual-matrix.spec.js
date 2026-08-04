@@ -1803,6 +1803,7 @@ async function inspectShellChrome (page) {
         border: resolveToken('--sp-border', 'borderTopColor'),
         shadowControl: resolveToken('--sp-shadow-control', 'boxShadow'),
         shadowCard: resolveToken('--sp-shadow-card', 'boxShadow'),
+        shadowPanel: resolveToken('--sp-shadow-panel', 'boxShadow'),
         shadowOverlay: resolveToken('--sp-shadow-overlay', 'boxShadow')
       }
     }
@@ -1966,12 +1967,14 @@ function assertShellChrome (snapshot, context) {
   expect(snapshot.shell.topbar.shadow, message).not.toBe('none')
   expect(snapshot.shell.topbar.shadow, message).not.toContain(snapshot.tokens.shadowControl)
   expect(snapshot.shell.topbar.shadow, message).not.toContain(snapshot.tokens.shadowCard)
+  expect(snapshot.shell.topbar.shadow, message).not.toContain(snapshot.tokens.shadowPanel)
   expect(snapshot.shell.topbar.shadow, message).not.toContain(snapshot.tokens.shadowOverlay)
-  expect(snapshot.shell.sidebar.shadow, message).toBe(snapshot.tokens.shadowControl)
-  expect(snapshot.shell.rightPanel.shadow, message).toBe(snapshot.tokens.shadowOverlay)
+  expect(snapshot.shell.sidebar.shadow, message).toBe(snapshot.tokens.shadowPanel)
+  expect(snapshot.shell.rightPanel.shadow, message).toBe(snapshot.tokens.shadowPanel)
   expect(snapshot.shell.footer.background, message).toBe(snapshot.tokens.flatBackground)
   expect(snapshot.shell.footer.shadow, message).toMatch(/\s-\d+px\s/)
   expect(snapshot.shell.footer.shadow, message).not.toContain(snapshot.tokens.shadowCard)
+  expect(snapshot.shell.footer.shadow, message).not.toContain(snapshot.tokens.shadowPanel)
   expect(snapshot.shell.footer.shadow, message).not.toContain(snapshot.tokens.shadowOverlay)
   for (const item of snapshot.documentWidths) {
     const itemMessage = JSON.stringify({ context, item })

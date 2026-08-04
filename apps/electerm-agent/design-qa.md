@@ -1,3 +1,86 @@
+# ShellPilot Glacier Silver Consistency Design QA
+
+## Scope
+
+- Baseline: v0.4.32 / `faf17bf`
+- Target: option B, Glacier Silver + Graphite Silver
+- Reference viewport: 1920×1080 at 100%
+- Layout policy: preserve the current client layout; cardize outer panels while keeping terminals, SFTP tables, logs, history, and dense output rows compact and flat.
+
+## Iterations
+
+### Iteration 1
+
+Reference images:
+
+- `C:\Users\LUOJIX~1\AppData\Local\Temp\codex-clipboard-c603d8c9-51f3-468f-97c3-9fa10c1bf6d5.png`
+- `C:\Users\LUOJIX~1\AppData\Local\Temp\codex-clipboard-706aaeb0-2b57-4081-ac0f-90ff55150815.png`
+- `C:\Users\LUOJIX~1\AppData\Local\Temp\codex-clipboard-28f23e5b-c6aa-4cb4-8e14-1b890c3db23e.png`
+- `C:\Users\LUOJIX~1\AppData\Local\Temp\codex-clipboard-4fda605b-8cd5-4bba-84cd-80b17a7a476e.png`
+- `C:\Users\LUOJIX~1\AppData\Local\Temp\codex-clipboard-86f08cf4-dfa0-440a-aa3c-03313371e624.png`
+- `C:\Users\LUOJIX~1\AppData\Local\Temp\codex-clipboard-e8f8b379-8400-448b-a6d3-dbbfa147ed57.png`
+- `C:\Users\LUOJIX~1\AppData\Local\Temp\codex-clipboard-738a777b-5455-444e-88b1-277212d897d1.png`
+
+Implementation captures:
+
+- `test-results/glacier-silver-consistency-qa/01-home-glacier.png`
+- `test-results/glacier-silver-consistency-qa/02-fleet-glacier.png`
+- `test-results/glacier-silver-consistency-qa/03-artifacts-glacier.png`
+- `test-results/glacier-silver-consistency-qa/04-incidents-glacier.png`
+- `test-results/glacier-silver-consistency-qa/05-server-sidebar-glacier.png`
+- `test-results/glacier-silver-consistency-qa/06-operations-quick-glacier.png`
+- `test-results/glacier-silver-consistency-qa/07-operations-diagnostic-glacier.png`
+- `test-results/glacier-silver-consistency-qa/08-home-graphite.png`
+
+Same-view comparisons:
+
+- `test-results/glacier-silver-consistency-qa/comparisons/01-home-comparison.png`
+- `test-results/glacier-silver-consistency-qa/comparisons/02-fleet-comparison.png`
+- `test-results/glacier-silver-consistency-qa/comparisons/03-artifacts-comparison.png`
+- `test-results/glacier-silver-consistency-qa/comparisons/04-incidents-comparison.png`
+- `test-results/glacier-silver-consistency-qa/comparisons/05-server-sidebar-comparison.png`
+- `test-results/glacier-silver-consistency-qa/comparisons/06-operations-quick-comparison.png`
+- `test-results/glacier-silver-consistency-qa/comparisons/07-operations-diagnostic-comparison.png`
+
+Findings:
+
+- P0: none.
+- P1: none.
+- P2: two stale automated visual expectations still described the pre-refresh palette and depth hierarchy. These were test-contract issues rather than production visual defects and have been updated.
+- P3: none.
+
+Fixes and visual judgment:
+
+- Migrated the secondary visual matrix from the obsolete control/overlay shadow aliases to the approved panel-depth contract.
+- Migrated the Glacier Silver and Graphite Silver gradient expectations to the approved palettes.
+- Outer cards and panels now share rounded geometry, option-B depth, and a smooth white-to-cool-silver material gradient.
+- Buttons, labels, tags, placeholders, disabled controls, and AI model selectors remain readable in both themes.
+- Dense terminal, SFTP, table, log, history, and output rows retain compact flat treatment.
+- The top bar remains one continuous blue-purple surface.
+
+## Regression matrix
+
+- Themes: Glacier Silver, Graphite Silver, and the built-in smoke theme matrix.
+- Desktop reference: 1920×1080 at 100%.
+- Responsive and zoom checks: 590×400, 820×600, 1100×700, 1600×900, 175%, and 200% where applicable.
+- Languages and states: Chinese, English, empty, populated, focused, active, disabled, sidebar-open, AI-panel-open, quick-command, diagnostic, settings-search, and compact tool-center states.
+- Focused UI unit audit: 107 passed.
+- Full unit suite: 3315 passed, 0 failed, 6 skipped.
+- Lint: passed.
+- Production Vite build: passed.
+- Fleet, operations, and incident E2E set: 6 passed.
+- Focused secondary visual matrix: 6 passed after contract migration.
+- Smoke visual matrix: 24 surfaces, 24 focus checks, 15 disabled-contrast checks, 0 added overflow, 0 visual failures.
+- Glacier/Graphite palette and screenshot capture E2E: 2 passed.
+
+## Remaining P3 notes
+
+- None.
+
+final result: passed
+
+---
+
 # ShellPilot v0.4.32 Glacier Silver Card UI Design QA
 
 - Source design spec: `docs/superpowers/specs/2026-08-04-shellpilot-v031-glacier-silver-card-ui-design.md`.
