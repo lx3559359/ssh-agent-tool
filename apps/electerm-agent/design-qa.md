@@ -1,3 +1,46 @@
+# ShellPilot v0.4.31 Glacier Silver Card UI Design QA
+
+- Source design spec: `docs/superpowers/specs/2026-08-04-shellpilot-v031-glacier-silver-card-ui-design.md`.
+- Implementation commits: `534b9ef` through `443aba8` on `codex/glacier-silver-card-ui`.
+- Screenshot evidence: `F:\SSH工具开发\.worktrees\glacier-silver-card-ui\apps\electerm-agent\release-verification\glacier-silver-card-ui-2026-08-04` (six final Glacier/Graphite Silver primary-workspace captures).
+- Inspected screenshot surfaces: continuous top bar, sidebar navigation, session tabs, terminal canvas, footer status, right AI panel, AI message cards, composer controls, and light/dark pairing.
+- Computed-style/Electron surfaces: settings shell and forms, connection wizard, AI configuration, sync configuration, theme center/editor, tool center, batch editor, menus, notifications, dialogs, terminal/SFTP/log/task/diff fixtures, and remote-client canvas fixtures.
+
+## Acceptance matrix
+
+- Window sizes: `590x400`, `920x600`, `1100x700`, `1600x900`, and `1920x1080`.
+- Zoom levels: `75%`, `100%`, `125%`, `150%`, and `200%`.
+- Languages: Simplified Chinese and English.
+- Themes: Glacier Silver, Graphite Silver, Ocean, Jade, Indigo, Amber, and Graphite.
+- States: default, hover, focus, selected, disabled, loading, empty, success, warning, and error.
+- Full visual run: 600 dimension checks + 168 theme checks = 768 surface checks; `SECONDARY_VISUAL_FAILURES=0` and `SECONDARY_OVERFLOW_ADDED=0`.
+- Visual/snapshot command: 18/18 Playwright tests passed in 37.1 minutes, including the six refreshed primary-workspace snapshots and Glacier/Graphite dense-surface isolation.
+
+## Measured verification
+
+- Unit CI: 3316 tests across 19 suites; 3310 passed, 0 failed, 6 skipped.
+- Focused Glacier theme toggle: 1/1 passed.
+- Applicable Electron regression outside the already-complete visual run: 22/24 passed on the combined run; the quality core flow passed on isolated retry, leaving 23/24 effective checks passed.
+- Known non-visual baseline gate: `035.v0427-ui-accessibility.spec.js` still fails because the existing server-status lazy module does not open and shows its module-load failure fallback. This behavior-layer failure is outside the visual-only change set; no store/API/server-status behavior file was changed or suppressed.
+- Lint: passed.
+- Production build: passed; only the documented bundle-size warning remains.
+- Whitespace check: passed.
+- Scope audit: no protected artifact JSX/state or dirty AI tests changed; non-style production changes are limited to the default theme, pairing, palette/tokens/i18n, and the top-bar pairing call; no approved gradient constants are duplicated in component styles.
+
+## Design findings
+
+- The light default uses cool-silver diffuse gradients rather than plain white; Graphite Silver provides the paired dark hierarchy.
+- The top bar is one continuous blue-to-purple strip, including action and window-control regions.
+- Outer panels, settings, AI surfaces, help/update surfaces, and overlays share the semantic card system.
+- Terminal canvases, SFTP rows, tables, logs, history, task output, code, and diffs remain compact and flat.
+- P0 visual findings: none.
+- P1 visual findings: none.
+- P2 visual findings: none.
+
+final result: visual acceptance passed; repository-wide Electron gate blocked by the pre-existing server-status module-load failure
+
+---
+
 # Aurora Lift Design QA
 
 - 设计目标：B 版 Aurora Lift，年轻化、强双层立体阴影、大圆角。
