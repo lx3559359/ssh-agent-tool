@@ -1,7 +1,7 @@
-# ShellPilot v0.4.31 Glacier Silver Card UI Design QA
+# ShellPilot v0.4.32 Glacier Silver Card UI Design QA
 
 - Source design spec: `docs/superpowers/specs/2026-08-04-shellpilot-v031-glacier-silver-card-ui-design.md`.
-- Implementation commits: `534b9ef` through `443aba8` on `codex/glacier-silver-card-ui`.
+- Implementation commits: `534b9ef` through `303d11d` on `codex/glacier-silver-card-ui`.
 - Screenshot evidence: `F:\SSH工具开发\.worktrees\glacier-silver-card-ui\apps\electerm-agent\release-verification\glacier-silver-card-ui-2026-08-04` (six final Glacier/Graphite Silver primary-workspace captures).
 - Inspected screenshot surfaces: continuous top bar, sidebar navigation, session tabs, terminal canvas, footer status, right AI panel, AI message cards, composer controls, and light/dark pairing.
 - Computed-style/Electron surfaces: settings shell and forms, connection wizard, AI configuration, sync configuration, theme center/editor, tool center, batch editor, menus, notifications, dialogs, terminal/SFTP/log/task/diff fixtures, and remote-client canvas fixtures.
@@ -18,10 +18,11 @@
 
 ## Measured verification
 
-- Unit CI: 3316 tests across 19 suites; 3310 passed, 0 failed, 6 skipped.
+- Unit CI: 3317 tests across 19 suites; 3311 passed, 0 failed, 6 skipped.
 - Focused Glacier theme toggle: 1/1 passed.
-- Applicable Electron regression outside the already-complete visual run: 22/24 passed on the combined run; the quality core flow passed on isolated retry, leaving 23/24 effective checks passed.
-- Known non-visual baseline gate: `035.v0427-ui-accessibility.spec.js` still fails because the existing server-status lazy module does not open and shows its module-load failure fallback. This behavior-layer failure is outside the visual-only change set; no store/API/server-status behavior file was changed or suppressed.
+- Applicable Electron regression: the combined run passed 41/42 tests and all 768 visual checks. Its only failure exposed zero-delay terminal typing under sustained load; after switching that check to paced sequential input plus a server-side full-command assertion, the complete SSH/SFTP/AI/update/rollback flow passed 6/6 consecutive reruns. All 42 applicable checks therefore have passing evidence.
+- Server-status regression: the closed diagnostic runner now accepts its null target; the focused unit contract passed 7/7 and `035.v0427-ui-accessibility.spec.js` passed in the combined Electron run.
+- Release contracts: 32/32 passed for notes, version consistency, baseline ancestry, update sources, assets, and update UX.
 - Lint: passed.
 - Production build: passed; only the documented bundle-size warning remains.
 - Whitespace check: passed.
@@ -37,7 +38,7 @@
 - P1 visual findings: none.
 - P2 visual findings: none.
 
-final result: visual acceptance passed; repository-wide Electron gate blocked by the pre-existing server-status module-load failure
+final result: passed
 
 ---
 
