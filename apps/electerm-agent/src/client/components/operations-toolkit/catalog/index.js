@@ -1,5 +1,6 @@
 import { defineOperationsTool } from '../shared/definition.js'
 import { systemStorageTools } from './diagnostics/system-storage.js'
+import { advancedSystemTools } from './diagnostics/advanced-system.js'
 import { networkSecurityTools } from './diagnostics/network-security.js'
 import { packetCaptureTools } from './diagnostics/packet-capture.js'
 import { udpCheckTools } from './diagnostics/udp-check.js'
@@ -32,6 +33,7 @@ export function buildOperationsCatalog (groups = []) {
 
 let operationsCatalog = buildOperationsCatalog([
   systemStorageTools,
+  advancedSystemTools,
   networkSecurityTools,
   packetCaptureTools,
   udpCheckTools,

@@ -12,9 +12,9 @@ test('operations catalog keeps diagnostics and runbooks complete and safely clas
   const diagnostics = catalog.filter(tool => tool.type === 'diagnostic')
   const runbooks = catalog.filter(tool => tool.type === 'script')
 
-  assert.equal(diagnostics.length, 25)
+  assert.equal(diagnostics.length, 30)
   assert.equal(runbooks.length, 10)
-  assert.equal(catalog.length, 35)
+  assert.equal(catalog.length, 40)
   assert.equal(new Set(catalog.map(tool => tool.id)).size, catalog.length)
   assert.deepEqual(
     catalog
