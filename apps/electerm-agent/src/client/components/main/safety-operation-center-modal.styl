@@ -1,4 +1,9 @@
 .safety-operation-center-modal
+  .ant-modal-content
+    background-color var(--sp-surface-elevated)
+    background-image var(--sp-overlay-background)
+    box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-overlay)
+
   .ant-modal-body
     max-height calc(100vh - 160px)
     overflow hidden
@@ -13,7 +18,9 @@
   border 1px solid var(--sp-border)
   border-radius var(--sp-radius-card)
   color var(--text-light)
-  background var(--sp-border)
+  background-color var(--sp-surface-elevated)
+  background-image var(--sp-card-background)
+  box-shadow var(--sp-shadow-card)
   font-size 12px
 
 .safety-center-summary > span
@@ -22,7 +29,8 @@
   justify-content space-between
   gap 8px
   padding 9px 12px
-  background var(--sp-surface)
+  background var(--sp-flat-background)
+  box-shadow none
 
 .safety-center-summary strong
   color var(--sp-text)
@@ -65,7 +73,8 @@
   z-index 1
   padding 5px 2px 8px
   color var(--sp-text-muted)
-  background var(--main)
+  background-color var(--sp-surface)
+  background-image var(--sp-control-background)
   font-size 11px
 
 .safety-center-record-list
@@ -83,8 +92,9 @@
   margin-bottom 8px
   padding 12px
   border 1px solid var(--main-darker)
-  border-radius 6px
-  background var(--main)
+  border-radius var(--sp-radius-small)
+  background var(--sp-flat-background)
+  box-shadow none
 
 .safety-center-record-header
   display flex
@@ -114,7 +124,8 @@
   padding 6px 8px
   overflow hidden
   color var(--text)
-  background var(--main-light)
+  background var(--sp-flat-background)
+  box-shadow none
   font-size 12px
   line-height 1.45
   text-overflow ellipsis
@@ -184,6 +195,8 @@
   align-items start
   padding 8px 0
   border-bottom 1px solid var(--main-darker)
+  background var(--sp-flat-background)
+  box-shadow none
 
 .safety-center-operation-events time,
 .safety-center-operation-events code
@@ -207,7 +220,8 @@
   padding 8px
   overflow auto
   color var(--text)
-  background var(--main-light)
+  background var(--sp-flat-background)
+  box-shadow none
   font-size 11px
   line-height 1.5
   white-space pre-wrap
@@ -226,7 +240,8 @@
   max-height 96px
   padding 6px
   overflow auto
-  background var(--main-light)
+  background var(--sp-flat-background)
+  box-shadow none
   white-space pre-wrap
   word-break break-word
 

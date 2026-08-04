@@ -54,7 +54,22 @@ const shellStyleFiles = [
   'components/fleet-status/fleet-status.styl',
   'components/fleet-status/fleet-service-selector.styl',
   'components/artifacts/artifacts.styl',
-  'components/incidents/incidents.styl'
+  'components/incidents/incidents.styl',
+  'components/terminal/terminal.styl',
+  'components/terminal/terminal-command-safety-modal.styl',
+  'components/terminal/term-search.styl',
+  'components/sftp/sftp.styl',
+  'components/sftp/address-bookmark.styl',
+  'components/sftp/transfer-tag.styl',
+  'components/sidebar/transfer.styl',
+  'components/sidebar/transfer-history.styl',
+  'components/file-transfer/transfer.styl',
+  'components/operations-toolkit/workspace/operations-workspace.styl',
+  'components/quick-commands/qm.styl',
+  'components/ssh-tunnel/ssh-tunnel-modal.styl',
+  'components/server-status/server-status-modal.styl',
+  'components/main/safety-operation-center-modal.styl',
+  'components/main/safety-task-progress.styl'
 ]
 
 test('Glacier Silver shell Stylus files compile', async () => {
@@ -249,6 +264,70 @@ test('artifact and incident panes use panels while activity rows remain flat', (
   assert.match(incidents, /\.incident-list-item[\s\S]{0,360}background var\(--sp-flat-background\)/)
   assert.match(incidents, /\.incident-list-item[\s\S]{0,260}box-shadow none/)
   assert.match(incidents, /\.incident-note[\s\S]{0,260}background var\(--sp-flat-background\)[\s\S]{0,120}box-shadow none/)
+})
+
+test('terminal SFTP and transfer shells use material while rendered data stays flat', () => {
+  const terminal = readClient('components/terminal/terminal.styl')
+  const termSearch = readClient('components/terminal/term-search.styl')
+  const sftp = readClient('components/sftp/sftp.styl')
+  const transferPopover = readClient('components/sidebar/transfer.styl')
+  const transfer = readClient('components/file-transfer/transfer.styl')
+
+  assert.match(terminal, /\.terminal-workspace-layer[\s\S]{0,360}background-image var\(--sp-panel-background\)/)
+  assert.match(terminal, /\.terminal-normal-buffer[\s\S]{0,360}background-image var\(--sp-overlay-background\)/)
+  assert.match(terminal, /\.term-wrap\r?\n[\s\S]{0,100}background shellPilotTerminalBackground/)
+  assert.match(termSearch, /\.term-search-wrap[\s\S]{0,320}background-image var\(--sp-overlay-background\)/)
+
+  assert.match(sftp, /\.sftp-section[\s\S]{0,320}background-image var\(--sp-panel-background\)/)
+  assert.match(sftp, /\.sftp-safety-summary[\s\S]{0,360}background-image var\(--sp-card-background\)/)
+  assert.match(sftp, /\.sftp-item[\s\S]{0,360}background var\(--sp-flat-background\)[\s\S]{0,180}box-shadow none/)
+  assert.match(sftp, /\.sftp-safety-record[\s\S]{0,360}background var\(--sp-flat-background\)[\s\S]{0,180}box-shadow none/)
+
+  assert.match(transferPopover, /\.ant-popover-inner[\s\S]{0,420}background-image var\(--sp-overlay-background\)/)
+  assert.match(transfer, /\.transports-dd[\s\S]{0,320}background-image var\(--sp-panel-background\)/)
+  assert.match(transfer, /\.sftp-transport[\s\S]{0,360}background var\(--sp-flat-background\)[\s\S]{0,180}box-shadow none/)
+})
+
+test('operations and quick-command shells use material while history and output stay flat', () => {
+  const operations = readClient('components/operations-toolkit/workspace/operations-workspace.styl')
+  const quickCommands = readClient('components/quick-commands/qm.styl')
+
+  assert.match(operations, /\.operations-toolkit-workspace[\s\S]{0,420}background-image var\(--sp-panel-background\)/)
+  assert.match(operations, /\.operations-workspace-head[\s\S]{0,360}background-image var\(--sp-control-background\)/)
+  assert.match(operations, /\.operations-recommended-flow[\s\S]{0,420}background-image var\(--sp-card-background\)/)
+  assert.match(operations, /\.operations-tool-detail[\s\S]{0,360}background-image var\(--sp-panel-background\)/)
+  assert.match(operations, /\.operations-history article[\s\S]{0,360}background var\(--sp-flat-background\)[\s\S]{0,180}box-shadow none/)
+  assert.doesNotMatch(operations, /\.operations-virtual-log[\s\S]{0,420}var\(--sp-(?:card|panel|overlay)-background\)/)
+
+  assert.match(quickCommands, /\.qm-wrap-tooltip[\s\S]{0,420}background-image var\(--sp-overlay-background\)/)
+  assert.match(quickCommands, /\.qm-command-modal[\s\S]{0,560}background-image var\(--sp-overlay-background\)/)
+  assert.match(quickCommands, /\.qm-command-param-section[\s\S]{0,360}background-image var\(--sp-card-background\)/)
+  assert.match(quickCommands, /\.qm-item[\s\S]{0,420}background var\(--sp-flat-background\)[\s\S]{0,180}box-shadow none/)
+})
+
+test('tunnel server and safety shells lift summaries while diagnostics and task rows stay flat', () => {
+  const tunnel = readClient('components/ssh-tunnel/ssh-tunnel-modal.styl')
+  const server = readClient('components/server-status/server-status-modal.styl')
+  const safety = readClient('components/main/safety-operation-center-modal.styl')
+  const progress = readClient('components/main/safety-task-progress.styl')
+
+  assert.match(tunnel, /\.ssh-tunnel-modal[\s\S]{0,360}\.ant-modal-content[\s\S]{0,320}background-image var\(--sp-overlay-background\)/)
+  assert.match(tunnel, /\.ssh-tunnel-editor,[\s\S]{0,360}background-image var\(--sp-panel-background\)/)
+  assert.match(tunnel, /\.ssh-tunnel-history-item[\s\S]{0,360}background var\(--sp-flat-background\)[\s\S]{0,180}box-shadow none/)
+
+  assert.match(server, /\.server-status-modal[\s\S]{0,360}\.ant-modal-content[\s\S]{0,320}background-image var\(--sp-overlay-background\)/)
+  assert.match(server, /\.server-status-summary[\s\S]{0,420}background-image var\(--sp-card-background\)/)
+  assert.match(server, /\.server-status-section[\s\S]{0,420}background-image var\(--sp-panel-background\)/)
+  assert.match(server, /\.server-status-row[\s\S]{0,360}background var\(--sp-flat-background\)[\s\S]{0,180}box-shadow none/)
+  assert.match(server, /\.server-status-pre[\s\S]{0,360}background var\(--sp-flat-background\)[\s\S]{0,180}box-shadow none/)
+
+  assert.match(safety, /\.safety-operation-center-modal[\s\S]{0,360}\.ant-modal-content[\s\S]{0,320}background-image var\(--sp-overlay-background\)/)
+  assert.match(safety, /\.safety-center-summary[\s\S]{0,420}background-image var\(--sp-card-background\)/)
+  assert.match(safety, /\.safety-center-record[\s\S]{0,360}background var\(--sp-flat-background\)[\s\S]{0,180}box-shadow none/)
+  assert.match(safety, /\.safety-center-audit-output[\s\S]{0,360}background var\(--sp-flat-background\)[\s\S]{0,180}box-shadow none/)
+  assert.match(progress, /\.safety-task-progress[\s\S]{0,360}background-image var\(--sp-panel-background\)/)
+  assert.match(progress, /\.safety-task-progress-step[\s\S]{0,360}background var\(--sp-flat-background\)[\s\S]{0,180}box-shadow none/)
+  assert.match(progress, /\.safety-task-progress-output[\s\S]{0,360}background var\(--sp-flat-background\)[\s\S]{0,180}box-shadow none/)
 })
 
 test('Glacier material recipes remain centralized in semantic tokens', () => {

@@ -8,7 +8,8 @@ shellPilotTerminalActiveForeground = #FFFFFF
   --shellpilot-terminal-background shellPilotTerminalBackground
 
 .terminal-workspace-layer:not(.fleet-status-active):not(.artifacts-active):not(.incident-archives-active)
-  background var(--shellpilot-terminal-background)
+  background-color var(--sp-surface)
+  background-image var(--sp-panel-background)
   border-radius var(--sp-radius-panel)
   box-shadow inset 0 0 0 1px var(--sp-border-strong), var(--sp-shadow-lg)
 
@@ -81,7 +82,8 @@ shellPilotTerminalActiveForeground = #FFFFFF
   left 0
   top 0
   width 100%
-  background var(--main)
+  background-color var(--sp-surface-elevated)
+  background-image var(--sp-overlay-background)
   color var(--text)
   border-radius var(--sp-radius-overlay)
   box-shadow var(--sp-shadow-lg)
@@ -117,8 +119,10 @@ shellPilotTerminalActiveForeground = #FFFFFF
   box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-lg)
   display flex
   flex-direction column
-  background var(--main)
-  border-radius var(--sp-radius-card)
+  background-color var(--sp-surface-elevated)
+  background-image var(--sp-overlay-background)
+  border 1px solid var(--sp-border-strong)
+  border-radius var(--sp-radius-overlay)
   &.reverse .terminal-suggestions-list
     border-top 1px solid var(--main-lighter)
     border-bottom none
@@ -198,8 +202,9 @@ shellPilotTerminalActiveForeground = #FFFFFF
   padding 7px 9px
   border 1px solid var(--main-lighter)
   border-radius var(--sp-radius-card)
-  background var(--main)
-  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
+  background-color var(--sp-surface-elevated)
+  background-image var(--sp-card-background)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-card)
   color var(--text)
   font-size 12px
   line-height 20px
@@ -245,7 +250,10 @@ shellPilotTerminalActiveForeground = #FFFFFF
   left 0
   top 0
   z-index 100
-  background var(--main)
+  background-color var(--sp-surface-elevated)
+  background-image var(--sp-card-background)
+  border-radius var(--sp-radius-card)
+  box-shadow var(--sp-shadow-card)
   max-width calc(100% - 24px)
 
 .terminal-error-tips

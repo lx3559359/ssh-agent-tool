@@ -107,15 +107,21 @@ function assertCssRule (blocks, selector, expectedDeclarations) {
   }
 }
 
-function assertNoProtectedTerminalElevation (css, filename) {
-  const protectedTerminalSelector = /(?:\.tabs\.terminal-session-tabs|\.terms-box|\.terminal-control|\.term-wrap|\.xterm(?:-screen|-viewport)?)(?=$|[\s,>+~.:[#])/i
+const protectedDenseSelector = /(?:\.xterm(?:-screen|-viewport)?|\.term-wrap|\.sftp-item|tbody\s+tr|\.batch-op-log-entry|\.operations-history\s+article|\.incident-list-item|\.ssh-tunnel-history-item|\.agent-tool-output|\.ai-file-change-diff)/i
+
+function assertNoProtectedDenseElevation (css, filename) {
   const visit = source => {
     for (const block of topLevelCssBlocks(source)) {
       if (block.header.startsWith('@')) {
         visit(block.body)
         continue
       }
-      if (!protectedTerminalSelector.test(block.header)) continue
+      if (!protectedDenseSelector.test(block.header)) continue
+      assert.doesNotMatch(
+        block.body,
+        /background(?:-image)?\s*:[^;]*var\(--sp-(?:card|panel|overlay)-background\)/i,
+        `${filename} must not apply semantic UI material to ${block.header}`
+      )
       assert.doesNotMatch(
         block.body,
         /box-shadow\s*:[^;]*--sp-shadow-[a-z0-9-]+/i,
@@ -977,7 +983,7 @@ test('Aurora hover depth never translates layout boxes', () => {
   }
 })
 
-test('client chrome cannot decorate protected terminal surfaces with semantic UI elevation', async () => {
+test('client styles cannot decorate protected dense surfaces with semantic UI material or elevation', async () => {
   const chromeFiles = [
     'components/main/aigshell-topbar.styl',
     'components/sidebar/sidebar.styl',
@@ -986,11 +992,19 @@ test('client chrome cannot decorate protected terminal surfaces with semantic UI
   ]
   const protectedSurfaceFiles = [
     ...chromeFiles,
+    'components/main/wrapper.styl',
+    'components/main/term-fullscreen.styl',
     'components/tabs/tabs.styl',
-    'components/terminal/terminal.styl'
+    'components/terminal/terminal.styl',
+    'components/sftp/sftp.styl',
+    'components/fleet-status/fleet-status.styl',
+    'components/fleet-status/fleet-service-selector.styl',
+    'components/operations-toolkit/workspace/operations-workspace.styl',
+    'components/incidents/incidents.styl',
+    'components/ssh-tunnel/ssh-tunnel-modal.styl'
   ]
   for (const file of protectedSurfaceFiles) {
-    assertNoProtectedTerminalElevation(await compileStylus(file), file)
+    assertNoProtectedDenseElevation(await compileStylus(file), file)
   }
 
   const tabs = readClient('components/tabs/tabs.styl')
@@ -1002,15 +1016,20 @@ test('client chrome cannot decorate protected terminal surfaces with semantic UI
   assert.match(terminal, /#container[\s\S]*?\.xterm\s*\n\s*background shellPilotTerminalBackground/)
 })
 
-test('terminal elevation guard covers every rendered terminal layer and semantic shadow', () => {
+test('dense surface guard covers every protected selector and semantic material', () => {
   const selectors = [
-    '.tabs.terminal-session-tabs',
-    '.terms-box',
-    '.terminal-control',
     '.term-wrap',
     '.xterm',
     '.xterm-screen',
-    '.xterm-viewport'
+    '.xterm-viewport',
+    '.sftp-item',
+    'tbody tr',
+    '.batch-op-log-entry',
+    '.operations-history article',
+    '.incident-list-item',
+    '.ssh-tunnel-history-item',
+    '.agent-tool-output',
+    '.ai-file-change-diff'
   ]
   const states = ['', ':hover', ':focus-visible', '.active', '[data-state="active"]']
   const shadows = [
@@ -1023,16 +1042,27 @@ test('terminal elevation guard covers every rendered terminal layer and semantic
     for (const state of states) {
       for (const shadow of shadows) {
         assert.throws(
-          () => assertNoProtectedTerminalElevation(
+          () => assertNoProtectedDenseElevation(
             `${selector}${state} { box-shadow: var(${shadow}); }`,
-            'terminal-shadow-mutation.css'
+            'dense-shadow-mutation.css'
           ),
           `${selector}${state} must reject ${shadow}`
         )
       }
     }
   }
-  assert.doesNotThrow(() => assertNoProtectedTerminalElevation(
+  for (const selector of selectors) {
+    for (const material of ['card', 'panel', 'overlay']) {
+      assert.throws(
+        () => assertNoProtectedDenseElevation(
+          `${selector} { background-image: var(--sp-${material}-background); }`,
+          'dense-material-mutation.css'
+        ),
+        `${selector} must reject ${material} material`
+      )
+    }
+  }
+  assert.doesNotThrow(() => assertNoProtectedDenseElevation(
     '.terminal-workspace-layer { box-shadow: var(--sp-shadow-lg); }',
     'terminal-outer-frame.css'
   ))

@@ -4,13 +4,15 @@
 .sftp-section
   flex 1
   box-sizing border-box
-  background var(--sp-surface)
+  background-color var(--sp-surface)
+  background-image var(--sp-panel-background)
   border 1px solid var(--sp-border)
   border-radius var(--sp-radius-panel)
   box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
 .sftp-title-wrap
   position relative
-  background var(--sp-surface-soft)
+  background-color var(--sp-surface)
+  background-image var(--sp-control-background)
   border-bottom 1px solid var(--sp-border)
 .sftp-panel-title-remote
   display flex
@@ -40,8 +42,9 @@
   margin-bottom 12px
   border 1px solid var(--primary)
   border-radius var(--sp-radius-card)
-  background var(--main-lighter)
-  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
+  background-color var(--sp-surface-elevated)
+  background-image var(--sp-card-background)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-card)
 .sftp-safety-confirmation
   line-height 1.65
 .sftp-text-change-confirmation
@@ -49,8 +52,9 @@
   border 1px solid var(--main-darker)
   border-radius var(--sp-radius-card)
   overflow hidden
-  background var(--main)
-  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
+  background-color var(--sp-surface)
+  background-image var(--sp-panel-background)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-lg)
 .sftp-text-change-path
   padding 7px 10px
   overflow hidden
@@ -70,7 +74,8 @@
   padding 6px 0
   overflow auto
   color var(--text)
-  background var(--main)
+  background var(--sp-flat-background)
+  box-shadow none
 .sftp-text-change-line
   display flex
   min-width max-content
@@ -102,9 +107,9 @@
   padding 12px
   margin-bottom 8px
   border 1px solid var(--main-darker)
-  border-radius var(--sp-radius-card)
-  background var(--main)
-  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
+  border-radius var(--sp-radius-small)
+  background var(--sp-flat-background)
+  box-shadow none
 .sftp-safety-record-main
   flex 1
   min-width 0
@@ -135,6 +140,7 @@
   user-select none
   margin-bottom 4px
   border-bottom 1px solid var(--sp-border)
+  background var(--sp-flat-background)
   box-shadow none
   &:nth-child(even)
     .sftp-file-prop
@@ -165,7 +171,8 @@
   box-shadow none
   border none
   height 0
-  background var(--main)
+  background-color var(--sp-surface-elevated)
+  background-image var(--sp-overlay-background)
   overflow hidden
   border-radius var(--sp-radius-overlay)
   &.focused
@@ -228,7 +235,7 @@
   height 32px
   line-height 30px
   padding 0 5px
-  background var(--main)
+  background var(--sp-flat-background)
   overflow hidden
   white-space nowrap
   text-overflow ellipsis
@@ -248,7 +255,7 @@
   height 28px
   line-height 25px
   padding 0 5px
-  background var(--main)
+  background var(--sp-flat-background)
   overflow hidden
   white-space nowrap
   text-overflow ellipsis
@@ -257,7 +264,8 @@
 
 .sftp-file-table-header
   height 30px
-  background var(--sp-surface-soft)
+  background-color var(--sp-surface)
+  background-image var(--sp-control-background)
   border-bottom 1px solid var(--sp-border)
 .sftp-table
   z-index 2
@@ -291,7 +299,8 @@
 
 //sftp
 .sftp-panel
-  background var(--main)
+  background-color var(--sp-surface)
+  background-image var(--sp-panel-background)
 
 .file-list
   ::-webkit-scrollbar-thumb
@@ -309,7 +318,7 @@
     bottom 0
     left 0
     width 100%
-    background var(--main)
+    background var(--sp-flat-background)
     height 40px
     border-top 1px solid var(--main-darker)
 

@@ -15,7 +15,11 @@
   right 0
   overflow-y scroll
   z-index 11
-  background var(--main)
+  background-color var(--sp-surface)
+  background-image var(--sp-panel-background)
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-panel)
+  box-shadow var(--sp-shadow-lg)
 
 .transports-wrap
   .transports-dd
@@ -33,6 +37,9 @@
   display flex
   align-items center
   padding 8px 5px
+  border-bottom 1px solid var(--sp-border)
+  background var(--sp-flat-background)
+  box-shadow none
   &:hover
     font-weight bold
   .transfer-control-icon

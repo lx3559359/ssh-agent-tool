@@ -1,7 +1,9 @@
 .server-status-modal
   .ant-modal-content
+    background-color var(--sp-surface-elevated)
+    background-image var(--sp-overlay-background)
     border-radius var(--sp-radius-overlay)
-    box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-lg)
+    box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-overlay)
 
   .ant-btn,
   .ant-input,
@@ -44,8 +46,9 @@
   border 1px solid var(--main-darker)
   border-radius var(--sp-radius-card)
   overflow hidden
-  background var(--main)
-  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
+  background-color var(--sp-surface-elevated)
+  background-image var(--sp-card-background)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-card)
 
 .server-status-summary-item
   min-width 0
@@ -80,7 +83,9 @@
   border-left 3px solid var(--sp-info)
   border-radius var(--sp-radius-card)
   color var(--sp-text)
-  background var(--sp-surface-subtle)
+  background-color var(--sp-surface-elevated)
+  background-image var(--sp-card-background)
+  box-shadow var(--sp-shadow-card)
   font-size 12px
   line-height 1.5
   &.healthy
@@ -158,13 +163,16 @@
   border 1px solid var(--main-darker)
   border-radius var(--sp-radius-card)
   overflow hidden
-  background var(--main)
+  background-color var(--sp-surface)
+  background-image var(--sp-panel-background)
   box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
 
 .server-status-section header
   flex none
   padding 9px 12px
   border-bottom 1px solid var(--main-darker)
+  background-color var(--sp-surface)
+  background-image var(--sp-control-background)
   color var(--text)
   font-weight 600
 
@@ -219,6 +227,7 @@
   border-top 1px solid var(--main-darker)
   color var(--text-light)
   font-size 12px
+  background var(--sp-flat-background)
   box-shadow none
 
 .server-status-row.has-diagnostic
@@ -241,8 +250,8 @@
   padding 8px 10px
   border-left 3px solid var(--warning)
   border-radius var(--sp-radius-card)
-  background var(--main-light)
-  box-shadow var(--sp-shadow-md)
+  background var(--sp-flat-background)
+  box-shadow none
   color var(--text-light)
   font-size 12px
   line-height 1.5
@@ -277,17 +286,22 @@
   white-space pre-wrap
   overflow-wrap anywhere
   color var(--text-light)
-  background var(--main)
+  background var(--sp-flat-background)
+  box-shadow none
   font-size 12px
 
 .server-status-raw-list
   height 100%
   border 1px solid var(--main-darker)
   border-radius var(--sp-radius-panel)
+  background-color var(--sp-surface)
+  background-image var(--sp-panel-background)
   box-shadow var(--sp-shadow-lg)
 
 .server-status-raw-probe
   border-bottom 1px solid var(--main-darker)
+  background var(--sp-flat-background)
+  box-shadow none
 
 .server-status-raw-probe summary
   display flex
@@ -323,8 +337,9 @@
   padding 10px 12px
   border 1px solid var(--main-darker)
   border-radius var(--sp-radius-card)
-  background var(--main-light)
-  box-shadow var(--sp-shadow-md)
+  background-color var(--sp-surface-elevated)
+  background-image var(--sp-card-background)
+  box-shadow var(--sp-shadow-card)
   color var(--text-light)
   line-height 1.6
 
@@ -358,6 +373,7 @@
   gap 12px
   padding 10px 4px
   border-bottom 1px solid var(--main-darker)
+  background var(--sp-flat-background)
   box-shadow none
 
 .server-status-rule-row > div

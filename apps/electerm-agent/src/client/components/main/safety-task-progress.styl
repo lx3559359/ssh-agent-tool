@@ -2,8 +2,10 @@
   min-width 0
   padding 12px
   border 1px solid var(--main-darker)
-  border-radius 6px
-  background var(--main)
+  border-radius var(--sp-radius-panel)
+  background-color var(--sp-surface)
+  background-image var(--sp-panel-background)
+  box-shadow var(--sp-shadow-lg)
 
 .safety-task-progress-header
   display flex
@@ -76,6 +78,8 @@
   min-width 0
   padding 8px 2px
   border-bottom 1px solid var(--main-darker)
+  background var(--sp-flat-background)
+  box-shadow none
 
 .safety-task-progress-step-line
   display grid
@@ -104,7 +108,8 @@
   padding 6px 8px
   overflow auto
   color var(--text)
-  background var(--main-light)
+  background var(--sp-flat-background)
+  box-shadow none
   font-size 11px
   line-height 1.45
   white-space pre-wrap
