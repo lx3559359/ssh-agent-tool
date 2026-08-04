@@ -3,6 +3,7 @@ import { auto } from 'manate/react'
 import {
   Button,
   Empty,
+  Modal,
   Segmented,
   Spin,
   Tag
@@ -24,9 +25,15 @@ import {
 } from '../catalog/maintenance.js'
 import { hiddenQuickActionIds } from '../catalog/migrations'
 import { buildOperationsAIContext } from '../shared/ai-context'
+import {
+  createOperationsResourceConfirmation
+} from '../shared/resource-confirmation.js'
 import { formatShellPilotTranslation } from '../../../common/shellpilot-i18n-overrides.js'
 import ToolCatalog from './tool-catalog'
 import ParameterForm, { buildParameterDefaults } from './parameter-form'
+import {
+  normalizeOperationsParameterDependencies
+} from './parameter-value.js'
 import TaskPanel from './task-panel'
 import ResultViewer from './result-viewer'
 import './operations-workspace.styl'
@@ -105,16 +112,58 @@ function OperationsWorkspace (props) {
   }, [endpointKey])
 
   function handleParamChange (id, value) {
-    setParams(current => ({ ...current, [id]: value }))
+    setParams(current => normalizeOperationsParameterDependencies(
+      selectedTool,
+      { ...current, [id]: value }
+    ))
   }
 
-  function handleRun (tool = selectedTool, values = params) {
+  function executeRun (tool, values, confirmation) {
     try {
-      const active = store.runOperationsTool(tool.id, values)
+      const active = store.runOperationsTool(
+        tool.id,
+        values,
+        confirmation ? { confirmation } : {}
+      )
       active.completion.catch(error => window.store.onError(error))
     } catch (error) {
       message.warning(error?.message || String(error))
     }
+  }
+
+  function handleRun (tool = selectedTool, values = params) {
+    if (tool.risk !== 'resource-sensitive') {
+      executeRun(tool, values)
+      return
+    }
+    Modal.confirm({
+      title: e('shellpilotOperationsCaptureConfirmTitle'),
+      content: (
+        <div className='operations-sensitive-confirmation'>
+          <p>{e('shellpilotOperationsCaptureConfirmHint')}</p>
+          <dl>
+            <dt>{e('shellpilotOperationsCurrentServerLabel')}</dt>
+            <dd>{endpointKey}</dd>
+            {(tool.parameters || []).map(parameter => (
+              <div key={parameter.id}>
+                <dt>{parameter.label}</dt>
+                <dd>{String(values[parameter.id] ?? '')}</dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+      ),
+      okText: e('shellpilotOperationsConfirmCapture'),
+      cancelText: e('cancel'),
+      onOk: () => {
+        const confirmation = createOperationsResourceConfirmation({
+          toolId: tool.id,
+          endpointKey,
+          params: values
+        })
+        executeRun(tool, values, confirmation)
+      }
+    })
   }
 
   function handleAnalyze (task) {
@@ -206,12 +255,14 @@ function OperationsWorkspace (props) {
               <h3>{tool.title}</h3>
               <p>{tool.description}</p>
             </div>
-            <Tag color='green'>
-              {script
-                ? tf('shellpilotOperationsRunbookStepCount', {
-                  count: tool.steps.length
-                })
-                : e('shellpilotOperationsReadonly')}
+            <Tag color={tool.risk === 'resource-sensitive' ? 'orange' : 'green'}>
+              {tool.risk === 'resource-sensitive'
+                ? e('shellpilotOperationsResourceSensitive')
+                : (script
+                    ? tf('shellpilotOperationsRunbookStepCount', {
+                      count: tool.steps.length
+                    })
+                    : e('shellpilotOperationsReadonly'))}
             </Tag>
           </header>
           <div className='operations-connection-status'>
@@ -276,16 +327,20 @@ function OperationsWorkspace (props) {
             >
               {!endpoint
                 ? e('shellpilotOperationsConnectAndRun')
-                : (script
-                    ? e('shellpilotOperationsRunScript')
-                    : e('shellpilotOperationsRunReadonly'))}
+                : (tool.risk === 'resource-sensitive'
+                    ? e('shellpilotOperationsRunSensitive')
+                    : (script
+                        ? e('shellpilotOperationsRunScript')
+                        : e('shellpilotOperationsRunReadonly')))}
             </Button>
             <span>
               {!endpoint
                 ? e('shellpilotOperationsDisconnectedHint')
-                : (script
-                    ? e('shellpilotOperationsRunbookNoConfirmation')
-                    : e('shellpilotOperationsNoConfirmation'))}
+                : (tool.risk === 'resource-sensitive'
+                    ? e('shellpilotOperationsSensitiveConfirmationRequired')
+                    : (script
+                        ? e('shellpilotOperationsRunbookNoConfirmation')
+                        : e('shellpilotOperationsNoConfirmation')))}
             </span>
           </div>
           {visibleTask
