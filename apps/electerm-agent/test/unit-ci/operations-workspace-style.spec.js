@@ -8,10 +8,17 @@ test('keeps the operations primary action readable in every theme', () => {
     __dirname,
     '../../src/client/components/operations-toolkit/workspace/operations-workspace.styl'
   ), 'utf8')
+  const actionStyles = styles.match(
+    /\.operations-run-actions\r?\n[\s\S]+?(?=\r?\n\.operations-no-task)/
+  )?.[0] || ''
 
   assert.match(
-    styles,
-    /\.operations-run-actions[\s\S]*?\.ant-btn-primary[\s\S]*?color\s+#fff/
+    actionStyles,
+    /> span\r?\n\s+color\s+var\(--text-dark\)/
+  )
+  assert.match(
+    actionStyles,
+    /\.ant-btn-primary[\s\S]*?color\s+#fff/
   )
 })
 

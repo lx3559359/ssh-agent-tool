@@ -213,8 +213,28 @@ describe('terminal OSC color query helpers', () => {
       /:root\r?\n {2}--shellpilot-terminal-background shellPilotTerminalBackground/
     )
     assert.match(
+      terminalSource,
+      /--shellpilot-terminal-foreground shellPilotTerminalForeground/
+    )
+    assert.match(
+      terminalSource,
+      /--shellpilot-terminal-muted-foreground shellPilotTerminalMutedForeground/
+    )
+    assert.match(
+      terminalSource,
+      /--shellpilot-terminal-active-foreground shellPilotTerminalActiveForeground/
+    )
+    assert.match(
       tabsSource,
-      /\.tabs\.terminal-session-tabs\r?\n {2}background var\(--shellpilot-terminal-background\)\r?\n {2}\.tab\r?\n {4}background var\(--shellpilot-terminal-background\)[\s\S]*? {2}\.tab\.active\r?\n {4}background var\(--shellpilot-terminal-background\)/
+      /\.tabs\.terminal-session-tabs\r?\n[\s\S]*? {2}background var\(--shellpilot-terminal-background\)[\s\S]*? {2}\.tab\r?\n[\s\S]*? {4}background var\(--shellpilot-terminal-background\)[\s\S]*? {2}\.tab\.active\r?\n[\s\S]*? {4}background var\(--shellpilot-terminal-background\)/
+    )
+    assert.match(
+      tabsSource,
+      /\.tabs\.terminal-session-tabs[\s\S]*?\.tab\r?\n[\s\S]*?color var\(--shellpilot-terminal-muted-foreground\)[\s\S]*?\.tab\.active\r?\n[\s\S]*?color var\(--shellpilot-terminal-active-foreground\)/
+    )
+    assert.match(
+      tabsSource,
+      /\.tabs-add-btn,[\s\S]*?\.tab-scroll-icon,[\s\S]*?\.tabs-dd-icon[\s\S]*?color var\(--shellpilot-terminal-muted-foreground\)[\s\S]*?&:hover,[\s\S]*?&:focus-visible[\s\S]*?color var\(--shellpilot-terminal-active-foreground\)/
     )
     assert.match(layoutSource, /className='terminal-session-tabs'/)
     assert.match(tabsComponentSource, /className=\{classNames\('tabs', this\.props\.className\)\}/)

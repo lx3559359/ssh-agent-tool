@@ -34,11 +34,17 @@
   z-index 3
 .tabs.terminal-session-tabs
   background var(--shellpilot-terminal-background)
+  color var(--shellpilot-terminal-muted-foreground)
   .tab
     background var(--shellpilot-terminal-background)
     box-shadow none
+    color var(--shellpilot-terminal-muted-foreground)
+    &:hover,
+    &:focus-visible
+      color var(--shellpilot-terminal-foreground)
   .tab.active
     background var(--shellpilot-terminal-background)
+    color var(--shellpilot-terminal-active-foreground)
     &::after
       position absolute
       right 12px
@@ -48,6 +54,13 @@
       border-radius 2px 2px 0 0
       background var(--sp-primary)
       content ''
+  .tabs-add-btn,
+  .tab-scroll-icon,
+  .tabs-dd-icon
+    color var(--shellpilot-terminal-muted-foreground)
+    &:hover,
+    &:focus-visible
+      color var(--shellpilot-terminal-active-foreground)
 .tab
   display inline-block
   vertical-align middle
