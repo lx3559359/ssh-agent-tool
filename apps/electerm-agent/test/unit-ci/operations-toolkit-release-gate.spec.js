@@ -33,6 +33,7 @@ test('public operations completion waits for history synchronization', () => {
   assert.match(source, /const completion = active\.completion\.then/)
   assert.match(source, /store\.operationsHistory = .*taskStore\.list\(\)/)
   assert.match(source, /return \{ \.\.\.active, completion \}/)
+  assert.match(source, /confirmation:\s*options\.confirmation/)
   assert.match(source, /createOperationsIncidentCandidate/)
   assert.match(source, /captureIncidentCandidateSafely/)
   assert.match(source, /appendIncidentTimelineEvent/)
