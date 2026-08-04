@@ -31,9 +31,10 @@ function timestamp (value) {
 }
 
 export function createAgentDiagnosticKey (target = {}) {
-  const requestId = normalizedKeyPart(target.requestId, 128)
-  const kind = normalizedKeyPart(target.type || target.kind, 40)
-  const name = normalizedKeyPart(getDiagnosticTargetName(target), 160)
+  const normalizedTarget = target || {}
+  const requestId = normalizedKeyPart(normalizedTarget.requestId, 128)
+  const kind = normalizedKeyPart(normalizedTarget.type || normalizedTarget.kind, 40)
+  const name = normalizedKeyPart(getDiagnosticTargetName(normalizedTarget), 160)
   return `diagnostic:${JSON.stringify([requestId, kind, name])}`
 }
 

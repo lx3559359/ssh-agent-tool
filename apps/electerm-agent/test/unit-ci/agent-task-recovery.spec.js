@@ -72,6 +72,12 @@ test('diagnostic key uses request id kind and normalized target name only', asyn
   assert.doesNotMatch(left, /must-not-be-used|different-observation-id/)
 })
 
+test('diagnostic key accepts the closed-runner null target', async () => {
+  const { createAgentDiagnosticKey } = await import(moduleUrl)
+
+  assert.equal(createAgentDiagnosticKey(null), createAgentDiagnosticKey())
+})
+
 test('live matching diagnostic registry task wins over persisted history', async () => {
   const { restoreAgentDiagnosticTask } = await import(moduleUrl)
   const live = task({ id: 'live-task', status: 'running-readonly' })
