@@ -128,6 +128,10 @@ function buildLocalApprovedAssets ({
 function downloadAssetDigest (rawUrl, options = {}, redirectCount = 0) {
   const timeoutMs = options.timeoutMs || 30000
   const maxRedirects = options.maxRedirects ?? 5
+  const maxReconnects = options.maxReconnects ?? 2
+  const reconnectCount = options.reconnectCount || 0
+  const hash = options.hash || crypto.createHash('sha256')
+  let size = options.downloadedSize || 0
   let url
   try {
     url = new URL(rawUrl)
@@ -146,9 +150,25 @@ function downloadAssetDigest (rawUrl, options = {}, redirectCount = 0) {
       settled = true
       handler(value)
     }
+    const retryOrReject = error => {
+      if (settled) return
+      const message = error?.message || String(error)
+      const retryable = /aborted|closed before completion|socket|ECONNRESET|EPIPE|ETIMEDOUT|timed out/i.test(message)
+      if (!retryable || reconnectCount >= maxReconnects) {
+        finish(reject, error)
+        return
+      }
+      finish(resolve, downloadAssetDigest(rawUrl, {
+        ...options,
+        hash,
+        downloadedSize: size,
+        reconnectCount: reconnectCount + 1
+      }))
+    }
     const request = transport.get(url, {
       headers: {
-        'User-Agent': 'ShellPilot update byte verifier'
+        'User-Agent': 'ShellPilot update byte verifier',
+        ...(size > 0 ? { Range: `bytes=${size}-` } : {})
       }
     }, response => {
       const statusCode = response.statusCode || 0
@@ -166,16 +186,37 @@ function downloadAssetDigest (rawUrl, options = {}, redirectCount = 0) {
         finish(resolve, downloadAssetDigest(redirectUrl, options, redirectCount + 1))
         return
       }
+      if (size > 0 && statusCode === 200) {
+        response.resume()
+        if (reconnectCount >= maxReconnects) {
+          finish(reject, new Error(`Server ignored resume range for ${url}`))
+          return
+        }
+        finish(resolve, downloadAssetDigest(rawUrl, {
+          ...options,
+          hash: crypto.createHash('sha256'),
+          downloadedSize: 0,
+          reconnectCount: reconnectCount + 1
+        }))
+        return
+      }
       if (statusCode < 200 || statusCode >= 300) {
         response.resume()
         finish(reject, new Error(`HTTP ${statusCode} while downloading ${url}`))
         return
       }
+      if (size > 0) {
+        const contentRange = /^bytes (\d+)-(\d+)\/(\d+|\*)$/i.exec(response.headers['content-range'] || '')
+        if (statusCode !== 206 || Number(contentRange?.[1]) !== size) {
+          response.resume()
+          finish(reject, new Error(`Invalid resume range for ${url}`))
+          return
+        }
+      }
 
-      const hash = crypto.createHash('sha256')
-      let size = 0
       let ended = false
       response.on('data', chunk => {
+        if (settled) return
         size += chunk.length
         hash.update(chunk)
         if (options.expectedSize && size > options.expectedSize) {
@@ -183,10 +224,11 @@ function downloadAssetDigest (rawUrl, options = {}, redirectCount = 0) {
         }
       })
       response.once('aborted', () => {
-        finish(reject, new Error(`Response aborted while downloading ${url}`))
+        retryOrReject(new Error(`Response aborted while downloading ${url}`))
       })
-      response.once('error', error => finish(reject, error))
+      response.once('error', retryOrReject)
       response.once('end', () => {
+        if (settled) return
         ended = true
         finish(resolve, {
           size,
@@ -195,14 +237,14 @@ function downloadAssetDigest (rawUrl, options = {}, redirectCount = 0) {
       })
       response.once('close', () => {
         if (!ended) {
-          finish(reject, new Error(`Response closed before completion for ${url}`))
+          retryOrReject(new Error(`Response closed before completion for ${url}`))
         }
       })
     })
     request.setTimeout(timeoutMs, () => {
       request.destroy(new Error(`Request timed out after ${timeoutMs}ms for ${url}`))
     })
-    request.once('error', error => finish(reject, error))
+    request.once('error', retryOrReject)
   })
 }
 

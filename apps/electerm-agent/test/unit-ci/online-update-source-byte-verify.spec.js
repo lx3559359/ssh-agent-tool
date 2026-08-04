@@ -39,8 +39,17 @@ function prepareFixture (version) {
   return distDir
 }
 
-async function startReleaseServer ({ version, distDir, tamperedAsset = '', failGitHub = false, invalidMetadata = false }) {
+async function startReleaseServer ({
+  version,
+  distDir,
+  tamperedAsset = '',
+  abortOnceAsset = '',
+  failGitHub = false,
+  invalidMetadata = false
+}) {
   const releaseState = {}
+  const requestCounts = new Map()
+  const requestRanges = []
   const server = http.createServer((request, response) => {
     const url = new URL(request.url, 'http://127.0.0.1')
     if (url.pathname === '/modelscope/shellpilot-release.json') {
@@ -67,14 +76,44 @@ async function startReleaseServer ({ version, distDir, tamperedAsset = '', failG
       return
     }
     const name = decodeURIComponent(url.pathname.slice(prefix.length))
-    if (name === tamperedAsset) {
-      response.end('tampered bytes')
-      return
-    }
     const filePath = path.join(distDir, name)
     if (!fs.existsSync(filePath)) {
       response.writeHead(404)
       response.end('not found')
+      return
+    }
+    const requestCount = (requestCounts.get(name) || 0) + 1
+    requestCounts.set(name, requestCount)
+    requestRanges.push({ name, range: request.headers.range || '' })
+    if (name === abortOnceAsset && requestCount === 1) {
+      const bytes = fs.readFileSync(filePath)
+      const partial = bytes.subarray(0, Math.max(1, Math.floor(bytes.length / 2)))
+      response.writeHead(200, {
+        'accept-ranges': 'bytes',
+        'content-length': bytes.length
+      })
+      response.write(partial, () => response.socket.destroy())
+      return
+    }
+    if (name === abortOnceAsset && request.headers.range) {
+      const bytes = fs.readFileSync(filePath)
+      const match = /^bytes=(\d+)-$/.exec(request.headers.range)
+      const start = Number(match?.[1])
+      if (!Number.isSafeInteger(start) || start < 0 || start >= bytes.length) {
+        response.writeHead(416)
+        response.end('invalid range')
+        return
+      }
+      response.writeHead(206, {
+        'accept-ranges': 'bytes',
+        'content-length': bytes.length - start,
+        'content-range': `bytes ${start}-${bytes.length - 1}/${bytes.length}`
+      })
+      response.end(bytes.subarray(start))
+      return
+    }
+    if (name === tamperedAsset) {
+      response.end('tampered bytes')
       return
     }
     fs.createReadStream(filePath).pipe(response)
@@ -108,6 +147,8 @@ async function startReleaseServer ({ version, distDir, tamperedAsset = '', failG
 
   return {
     server,
+    requestCounts,
+    requestRanges,
     sources: [
       {
         id: 'modelscope',
@@ -146,6 +187,36 @@ test('strict release verification streams and verifies every byte from both upda
     assert.equal(report.checked.length, 2)
     assert.equal(report.checked.every(result => result.ok), true)
     assert.deepEqual(report.checked.map(result => result.verifiedAssetCount), [8, 8])
+  } finally {
+    await closeServer(fixture.server)
+    fs.rmSync(distDir, { recursive: true, force: true })
+  }
+})
+
+test('strict release verification retries an asset after one interrupted response', async () => {
+  const version = '3.15.109'
+  const distDir = prepareFixture(version)
+  const installerName = `ShellPilot-${version}-win-x64-installer.exe`
+  const fixture = await startReleaseServer({
+    version,
+    distDir,
+    abortOnceAsset: installerName
+  })
+  try {
+    const report = await buildOnlineUpdateSourceReport({
+      currentVersion: '3.15.108',
+      version,
+      distDir,
+      sources: [fixture.sources[0]],
+      fetchJson,
+      strictAllSources: true,
+      verifyBytes: true
+    })
+
+    assert.equal(report.ok, true)
+    assert.equal(fixture.requestCounts.get(installerName), 2)
+    const installerRequests = fixture.requestRanges.filter(item => item.name === installerName)
+    assert.match(installerRequests[1].range, /^bytes=\d+-$/)
   } finally {
     await closeServer(fixture.server)
     fs.rmSync(distDir, { recursive: true, force: true })
