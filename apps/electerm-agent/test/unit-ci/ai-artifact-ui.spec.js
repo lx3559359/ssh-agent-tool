@@ -50,5 +50,5 @@ test('artifact workspace provides filters, source preview and responsive layout'
   assert.match(styles, /\.artifact-workspace[\s\S]*z-index 90/)
   assert.match(styles, /\.artifact-list-panel[\s\S]*var\(--sp-shadow-lg\)/)
   assert.match(styles, /\.artifact-preview[\s\S]*var\(--sp-shadow-lg\)/)
-  assert.match(styles, /\.artifact-list-item\.active[\s\S]*var\(--sp-shadow-focus\)/)
+  assert.match(styles, /\.artifact-list-item\.active[\s\S]*background var\(--sp-primary-soft\)[\s\S]*box-shadow none/)
 })

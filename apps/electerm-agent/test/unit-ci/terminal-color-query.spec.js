@@ -190,7 +190,7 @@ describe('terminal OSC color query helpers', () => {
     )
   })
 
-  test('terminal session tab container and active or inactive tabs reuse the locked background in layout scope', () => {
+  test('terminal session tabs keep the locked background while ordinary tabs use flat UI surfaces', () => {
     const terminalSource = fs.readFileSync(
       path.resolve(__dirname, '../../src/client/components/terminal/terminal.styl'),
       'utf8'
@@ -214,11 +214,11 @@ describe('terminal OSC color query helpers', () => {
     )
     assert.match(
       tabsSource,
-      /\.tabs\.terminal-session-tabs\r?\n {2}background var\(--shellpilot-terminal-background\)\r?\n {2}\.tab\r?\n {4}background var\(--shellpilot-terminal-background\)/
+      /\.tabs\.terminal-session-tabs\r?\n {2}background var\(--shellpilot-terminal-background\)\r?\n {2}\.tab\r?\n {4}background var\(--shellpilot-terminal-background\)[\s\S]*? {2}\.tab\.active\r?\n {4}background var\(--shellpilot-terminal-background\)/
     )
     assert.match(layoutSource, /className='terminal-session-tabs'/)
     assert.match(tabsComponentSource, /className=\{classNames\('tabs', this\.props\.className\)\}/)
-    assert.match(tabsSource, /&\.active\r?\n {4}color var\(--text\)\r?\n {4}background var\(--main\)/)
+    assert.match(tabsSource, /&\.active\r?\n {4}color var\(--text\)\r?\n {4}background-color var\(--sp-surface\)\r?\n {4}background-image var\(--sp-control-background\)/)
     assert.doesNotMatch(tabsSource, /\.ant-tabs[^\n]*--shellpilot-terminal-background/)
   })
 

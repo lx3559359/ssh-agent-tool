@@ -72,12 +72,13 @@ test('ShellPilot top bar and AI panel use theme variables in day and night modes
 
   assert.ok(topbarShell)
   assert.ok(panelShell)
-  assert.match(topbarShell[1], /background var\(--sp-surface-elevated\)/)
-  assert.match(topbarShell[1], /color var\(--text\)/)
-  assert.match(panelShell[1], /background var\(--sp-surface\)/)
+  assert.match(topbarShell[1], /background-image var\(--sp-topbar-background\)/)
+  assert.match(topbarShell[1], /color rgba\(255, 255, 255, \.9\)/)
+  assert.match(panelShell[1], /background-image var\(--sp-panel-background\)/)
   assert.match(panelShell[1], /color var\(--text\)/)
-  assert.match(ai, /\.ai-chat-input[\s\S]*background var\(--main-light\)/)
-  assert.match(ai, /\.ai-context-action[\s\S]*color var\(--text\)/)
+  assert.match(ai, /\.ai-chat-container[\s\S]*background-image var\(--sp-panel-background\)/)
+  assert.match(ai, /\.ai-composer-surface[\s\S]*background-image var\(--sp-control-background\)/)
+  assert.match(ai, /\.ai-context-action[\s\S]*background-image var\(--sp-control-background\)[\s\S]*color var\(--text\)/)
 })
 
 test('top bar collapses long bilingual labels before 1600px can overflow', () => {
@@ -285,7 +286,7 @@ test('settings layout replaces fixed coordinates with bounded responsive regions
 
   assert.ok(pageContainer)
   assert.ok(searchOverlay)
-  assert.match(source, /\.setting-wrap[\s\S]*background var\(--sp-page\)[\s\S]*color var\(--sp-text\)/)
+  assert.match(source, /\.setting-wrap[\s\S]*background-color var\(--sp-page\)[\s\S]*background-image var\(--sp-page-background\)[\s\S]*color var\(--sp-text\)/)
   assert.match(searchOverlay[0], /position absolute/)
   assert.doesNotMatch(source.replace(searchOverlay[0], ''), /position absolute/)
   assert.match(source, /\.setting-header[\s\S]*position sticky[\s\S]*top 0[\s\S]*z-index 10/)
@@ -307,7 +308,7 @@ test('settings depth tokens stay scoped to cards, inset controls and selected na
   const form = setting.match(/\.sp-settings-form\r?\n([\s\S]*?)\r?\n\.sp-settings-page-header/)
   const insetControls = findNestedRuleByDeclaration(
     form && form[1],
-    /background var\(--sp-surface-inset\) !important/
+    /background-image var\(--sp-control-background\) !important/
   )
   const shell = wrap.match(/\.setting-wrap\r?\n([\s\S]*?)\r?\n\.setting-header/)
   const headerLevel = wrap.match(/\.setting-header\r?\n([\s\S]*?)\r?\n {2}> \*/)
@@ -326,20 +327,20 @@ test('settings depth tokens stay scoped to cards, inset controls and selected na
   assert.ok(headerLevel)
   assert.ok(tabs)
   assert.match(section[1], /min-width 0/)
-  assert.match(section[1], /background var\(--sp-surface-elevated\)/)
+  assert.match(section[1], /background-image var\(--sp-card-background\)/)
   assert.match(section[1], /border 1px solid var\(--sp-border\)/)
   assert.match(section[1], /border-radius var\(--sp-radius-panel\)/)
-  assert.match(section[1], /box-shadow inset 0 1px 0 var\(--sp-highlight\), var\(--sp-shadow-md\)/)
-  assert.match(insetControls.body, /background var\(--sp-surface-inset\) !important/)
+  assert.match(section[1], /box-shadow inset 0 1px 0 var\(--sp-highlight\), var\(--sp-shadow-card\)/)
+  assert.match(insetControls.body, /background-image var\(--sp-control-background\) !important/)
   assert.match(insetControls.body, /border-color var\(--sp-border\) !important/)
-  assert.match(insetControls.body, /box-shadow inset 0 1px 0 var\(--sp-highlight\), var\(--sp-shadow-sm\)/)
-  assert.match(shell[1], /background var\(--sp-page\)/)
-  assert.match(headerLevel[1], /background var\(--sp-surface-elevated\)/)
+  assert.match(insetControls.body, /box-shadow inset 0 1px 0 var\(--sp-highlight\), var\(--sp-shadow-control\)/)
+  assert.match(shell[1], /background-image var\(--sp-page-background\)/)
+  assert.match(headerLevel[1], /background-image var\(--sp-panel-background\)/)
   assert.match(headerLevel[1], /border 1px solid var\(--sp-border\)/)
   assert.match(headerLevel[1], /border-radius var\(--sp-radius-toolbar\)/)
-  assert.match(headerLevel[1], /box-shadow inset 0 1px 0 var\(--sp-highlight\), var\(--sp-shadow-md\)/)
-  assert.doesNotMatch(headerLevel[1], /var\(--sp-shadow-lg\)/)
-  assert.match(tabs[1], /\.ant-tabs-tab-active[\s\S]*background linear-gradient\(145deg, var\(--sp-primary-soft\), var\(--sp-surface-elevated\)\)/)
+  assert.match(headerLevel[1], /box-shadow inset 0 1px 0 var\(--sp-highlight\), var\(--sp-shadow-lg\)/)
+  assert.doesNotMatch(headerLevel[1], /var\(--sp-shadow-overlay\)/)
+  assert.match(tabs[1], /\.ant-tabs-tab-active[\s\S]*background-image var\(--sp-control-background\)[\s\S]*var\(--sp-shadow-control\)/)
 })
 
 test('settings inset controls restore scoped hover focus error and disabled states', () => {

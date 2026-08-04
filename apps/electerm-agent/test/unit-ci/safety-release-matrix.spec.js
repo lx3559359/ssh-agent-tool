@@ -355,7 +355,7 @@ test('help center scrolling targets the custom modal body', () => {
 
   assert.match(
     style,
-    /\.shellpilot-help-center\s*\r?\n\s+\.custom-modal-body\s*\r?\n\s+max-height 78vh\s*\r?\n\s+overflow-y auto/
+    /\.shellpilot-help-center[\s\S]*?\.custom-modal-content\s*\r?\n\s+background-image var\(--sp-overlay-background\)[\s\S]*?\.custom-modal-body\s*\r?\n\s+max-height 78vh\s*\r?\n\s+overflow-y auto/
   )
   assert.doesNotMatch(style, /\.shellpilot-help-center\s*\r?\n\s+\.ant-modal-body/)
 })

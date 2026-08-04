@@ -267,7 +267,7 @@ test('configuration styles compile and constrain cards, sticky actions and local
   assert.match(bookmark, /\.sp-configuration-actions[\s\S]*position sticky[\s\S]*bottom 0[\s\S]*flex-wrap wrap/)
   assert.match(bookmark, /@media \(max-width: 760px\)[\s\S]*\.sp-configuration-tabs[\s\S]*overflow-x auto/)
   assert.match(bookmark, /@media \(max-width: 760px\) and \(max-height: 520px\)[\s\S]*padding-bottom 16px[\s\S]*\.sp-configuration-actions[\s\S]*position static/)
-  assert.match(ai, /\.sp-ai-config-form[\s\S]*var\(--sp-surface\)[\s\S]*overflow-wrap/)
+  assert.match(ai, /\.sp-ai-config-form[\s\S]*background-image var\(--sp-panel-background\)[\s\S]*overflow-wrap/)
   assert.match(ai, /@media \(max-width: 680px\)[\s\S]*\.sp-ai-config-form[\s\S]*\.ant-space-compact[\s\S]*flex-wrap wrap/)
   assert.match(setting, /\.sp-sync-config[\s\S]*overflow-x hidden/)
   assert.match(setting, /\.sp-sync-config-form[\s\S]*var\(--sp-border\)[\s\S]*min-width 0/)
