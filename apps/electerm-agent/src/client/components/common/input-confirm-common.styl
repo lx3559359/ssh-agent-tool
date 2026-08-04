@@ -3,3 +3,15 @@
   display flex
   .ant-input-number
     flex 1
+  .ant-input-number,
+  .ant-input,
+  .ant-input-affix-wrapper
+    background-color var(--sp-surface)
+    background-image var(--sp-control-background)
+    border-color var(--sp-border)
+    border-radius var(--sp-radius-control)
+    box-shadow var(--sp-shadow-control)
+    &:focus,
+    &:focus-within
+      border-color var(--sp-primary)
+      box-shadow var(--sp-shadow-focus)

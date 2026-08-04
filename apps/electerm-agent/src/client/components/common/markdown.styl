@@ -39,18 +39,35 @@
     padding 1px 4px
     border-radius var(--sp-radius-small)
     color var(--sp-text)
-    background var(--sp-surface-inset)
+    background var(--sp-flat-background)
+    box-shadow none
 
   pre
     padding 10px
     overflow auto
     border 1px solid var(--sp-border)
     border-radius var(--sp-radius-small)
-    background var(--sp-surface-inset)
+    background var(--sp-flat-background)
+    box-shadow none
 
     code
       padding 0
       background transparent
+      box-shadow none
+
+  table
+    width 100%
+    border-collapse collapse
+    table-layout fixed
+    background var(--sp-flat-background)
+    box-shadow none
+
+  th,
+  td
+    padding 6px 8px
+    border 1px solid var(--sp-border)
+    text-align left
+    overflow-wrap anywhere
 
   blockquote
     margin 8px 0

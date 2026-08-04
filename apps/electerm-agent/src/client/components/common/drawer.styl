@@ -17,16 +17,22 @@
   position absolute
   top 0
   bottom 0
-  background var(--main)
-  box-shadow 2px 0 8px rgba(0, 0, 0, 0.15)
+  box-sizing border-box
+  background-color var(--sp-surface-elevated)
+  background-image var(--sp-overlay-background)
+  border 1px solid var(--sp-border-strong)
+  border-radius var(--sp-radius-overlay)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-overlay)
   overflow auto
   color var(--text)
 
 .custom-drawer-left .custom-drawer-content-wrapper
   left 0
+  border-radius 0 var(--sp-radius-overlay) var(--sp-radius-overlay) 0
 
 .custom-drawer-right .custom-drawer-content-wrapper
   right 0
+  border-radius var(--sp-radius-overlay) 0 0 var(--sp-radius-overlay)
 
 .custom-drawer-content
   position relative

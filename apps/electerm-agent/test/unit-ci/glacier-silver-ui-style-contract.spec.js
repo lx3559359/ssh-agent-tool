@@ -30,7 +30,18 @@ const shellStyleFiles = [
   'components/footer/footer.styl',
   'components/layout/layout.styl',
   'components/main/wrapper.styl',
-  'components/main/term-fullscreen.styl'
+  'components/main/term-fullscreen.styl',
+  'components/common/modal.styl',
+  'components/common/drawer.styl',
+  'components/common/context-menu.styl',
+  'components/common/message.styl',
+  'components/common/notification.styl',
+  'components/common/input-confirm-common.styl',
+  'components/common/drag-handle.styl',
+  'components/common/remote-float-control.styl',
+  'components/common/lazy-module-boundary.styl',
+  'components/common/markdown.styl',
+  'components/sys-menu/sys-menu.styl'
 ]
 
 test('Glacier Silver shell Stylus files compile', async () => {
@@ -112,6 +123,56 @@ test('latest client shell geometry and responsive breakpoints are preserved', ()
   assert.match(sidebar, /\.sidebar-list\r?\n[\s\S]{0,120}left 72px\r?\n\s+top 44px/)
   assert.match(footer, /\.main-footer\r?\n[\s\S]{0,160}height 36px[\s\S]{0,120}left 72px/)
   assert.match(rightPanel, /\.right-side-panel\r?\n[\s\S]{0,120}right 0\r?\n\s+top 44px\r?\n\s+bottom 0/)
+})
+
+test('shared modal drawer and menu shells use overlay material with flat rows', () => {
+  const modal = readClient('components/common/modal.styl')
+  const drawer = readClient('components/common/drawer.styl')
+  const contextMenu = readClient('components/common/context-menu.styl')
+  const systemMenu = readClient('components/sys-menu/sys-menu.styl')
+
+  assert.match(modal, /\.custom-modal-content[\s\S]{0,300}background-image var\(--sp-overlay-background\)[\s\S]{0,220}var\(--sp-shadow-overlay\)/)
+  assert.match(drawer, /\.custom-drawer-content-wrapper[\s\S]{0,300}background-image var\(--sp-overlay-background\)[\s\S]{0,220}var\(--sp-shadow-overlay\)/)
+  assert.match(contextMenu, /\.ant-dropdown-menu[\s\S]{0,520}background-image var\(--sp-overlay-background\)[\s\S]{0,260}var\(--sp-shadow-overlay\)/)
+  assert.match(contextMenu, /\.ant-dropdown-menu-item,[\s\S]{0,260}box-shadow none/)
+  assert.match(systemMenu, /\.context-menu[\s\S]{0,360}background-image var\(--sp-overlay-background\)[\s\S]{0,220}var\(--sp-shadow-overlay\)/)
+  assert.match(systemMenu, /\.context-item[\s\S]{0,300}box-shadow none/)
+  assert.match(systemMenu, /\.sub-context-menu-item[\s\S]{0,220}box-shadow none/)
+})
+
+test('messages notifications and lazy failures use card material', () => {
+  const message = readClient('components/common/message.styl')
+  const notification = readClient('components/common/notification.styl')
+  const lazy = readClient('components/common/lazy-module-boundary.styl')
+
+  assert.match(message, /\.message-item[\s\S]{0,300}background-image var\(--sp-card-background\)[\s\S]{0,180}border-radius var\(--sp-radius-card\)[\s\S]{0,180}var\(--sp-shadow-card\)/)
+  assert.match(notification, /\.notification[\s\S]{0,300}background-image var\(--sp-card-background\)[\s\S]{0,220}var\(--sp-shadow-card\)/)
+  assert.match(lazy, /\.lazy-module-error[\s\S]{0,420}background-image var\(--sp-card-background\)[\s\S]{0,220}var\(--sp-shadow-card\)/)
+})
+
+test('shared compact controls expose semantic focus and reduced motion states', () => {
+  const modal = readClient('components/common/modal.styl')
+  const confirm = readClient('components/common/input-confirm-common.styl')
+  const drag = readClient('components/common/drag-handle.styl')
+  const remote = readClient('components/common/remote-float-control.styl')
+  const message = readClient('components/common/message.styl')
+
+  assert.match(modal, /\.custom-modal-close[\s\S]{0,620}&:focus-visible[\s\S]{0,180}box-shadow var\(--sp-shadow-focus\)/)
+  assert.match(modal, /\.custom-modal-ok-btn,[\s\S]{0,460}&:focus-visible[\s\S]{0,180}var\(--sp-shadow-focus\)/)
+  assert.match(confirm, /\.input-confirm[\s\S]{0,360}var\(--sp-control-background\)[\s\S]{0,260}var\(--sp-shadow-focus\)/)
+  assert.match(remote, /\.remote-float-btn[\s\S]{0,360}var\(--sp-control-background\)[\s\S]{0,360}&:focus-visible[\s\S]{0,180}var\(--sp-shadow-focus\)/)
+  assert.match(drag, /&\.dragging\r?\n\s+background var\(--sp-primary\)/)
+  assert.match(message, /@media \(prefers-reduced-motion: reduce\)[\s\S]{0,160}animation none/)
+  assert.match(remote, /@media \(prefers-reduced-motion: reduce\)[\s\S]{0,160}transition none/)
+})
+
+test('markdown code and tables stay flat inside cardized panels', () => {
+  const markdown = readClient('components/common/markdown.styl')
+
+  assert.match(markdown, /code[\s\S]{0,220}background var\(--sp-flat-background\)[\s\S]{0,120}box-shadow none/)
+  assert.match(markdown, /pre[\s\S]{0,300}background var\(--sp-flat-background\)[\s\S]{0,120}box-shadow none/)
+  assert.match(markdown, /table[\s\S]{0,300}background var\(--sp-flat-background\)[\s\S]{0,120}box-shadow none/)
+  assert.doesNotMatch(markdown, /var\(--sp-(?:card|panel|overlay)-background\)/)
 })
 
 test('Glacier material recipes remain centralized in semantic tokens', () => {

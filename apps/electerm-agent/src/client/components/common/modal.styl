@@ -28,10 +28,11 @@
   position relative
   min-width 0
   color var(--sp-text)
-  background var(--sp-surface-elevated)
+  background-color var(--sp-surface-elevated)
+  background-image var(--sp-overlay-background)
   border 1px solid var(--sp-border-strong)
   border-radius var(--sp-radius-overlay)
-  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-lg)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-overlay)
   margin-top 50px
   max-width calc(100vw - 48px)
 
@@ -80,13 +81,15 @@
   cursor pointer
   transition background-color 0.2s
   &:hover
-    background var(--main-darker)
+    background-color var(--sp-surface)
+    background-image var(--sp-control-background)
   &:focus
     outline none
   &:focus-visible
     outline 2px solid var(--sp-primary)
     outline-offset 2px
     background var(--sp-primary-soft)
+    box-shadow var(--sp-shadow-focus)
 
 .custom-modal-body
   min-width 0
@@ -116,11 +119,16 @@
   cursor pointer
   font-size 14px
   transition background-color 0.2s
+  &:focus-visible
+    outline 2px solid var(--sp-primary)
+    outline-offset 2px
+    box-shadow var(--sp-shadow-focus)
 
 .custom-modal-ok-btn
   background var(--primary)
   color var(--primary-contrast)
 
 .custom-modal-cancel-btn
-  background var(--main)
+  background-color var(--sp-surface)
+  background-image var(--sp-control-background)
   color var(--text)

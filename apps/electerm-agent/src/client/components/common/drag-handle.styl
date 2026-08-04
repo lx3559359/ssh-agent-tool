@@ -10,4 +10,8 @@
   z-index 201
   overflow hidden
   &.dragging
-    background #08c
+    background var(--sp-primary)
+  &:focus-visible
+    outline 2px solid var(--sp-primary)
+    outline-offset -2px
+    box-shadow var(--sp-shadow-focus)
