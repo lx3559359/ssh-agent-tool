@@ -505,6 +505,36 @@ test('remote client chrome uses semantic surfaces without decorating pixel canva
   }
 })
 
+test('settings overlays and AI keep elevated shells without hidden readable copy', () => {
+  const modal = readClient('components/common/modal.styl')
+  const drawer = readClient('components/common/drawer.styl')
+  const contextMenu = readClient('components/common/context-menu.styl')
+  const setting = readClient('components/setting-panel/setting.styl')
+  const ai = readClient('components/ai/ai.styl')
+  const touched = [
+    'css/includes/secondary-ui.styl',
+    'components/quick-commands/qm.styl',
+    'components/operations-toolkit/workspace/operations-workspace.styl',
+    'components/fleet-status/fleet-status.styl',
+    'components/artifacts/artifacts.styl',
+    'components/incidents/incidents.styl',
+    'components/side-panel-r/right-side-panel.styl',
+    'components/sidebar/sidebar.styl',
+    'components/tree-list/tree-list.styl',
+    'components/ai/ai.styl'
+  ].map(readClient).join('\n')
+
+  assert.match(modal, /\.custom-modal-content[\s\S]{0,320}var\(--sp-shadow-overlay\)/)
+  assert.match(drawer, /\.custom-drawer-content-wrapper[\s\S]{0,320}var\(--sp-shadow-overlay\)/)
+  assert.match(contextMenu, /\.ant-dropdown-menu[\s\S]{0,560}var\(--sp-shadow-overlay\)/)
+  assert.match(setting, /\.sp-setting-section[\s\S]{0,420}background-image var\(--sp-card-background\)/)
+  assert.match(ai, /\.sp-ai-config-form[\s\S]{0,420}background-image var\(--sp-panel-background\)/)
+  assert.match(ai, /\.ai-composer-surface[\s\S]{0,420}background-image var\(--sp-control-background\)/)
+  assert.doesNotMatch(touched, /(?:^|[\r\n])[ \t]*color\s*:?[ \t]+transparent\b/im)
+  assert.doesNotMatch(touched, /\.(?:[^\r\n]*(?:label|title|tag))\r?\n(?:[ \t]+[^\r\n]*\r?\n){0,8}[ \t]+opacity\s+0(?:\D|$)/i)
+  assert.doesNotMatch(touched, /\.sp-card \.sp-card\s*\r?\n\s*box-shadow none/)
+})
+
 test('Glacier material recipes remain centralized in semantic tokens', () => {
   const componentSource = componentStyleFiles
     .map(readClient)

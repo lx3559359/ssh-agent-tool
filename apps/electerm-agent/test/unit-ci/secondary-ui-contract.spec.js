@@ -1073,6 +1073,7 @@ test('dense surface guard covers every protected selector and semantic material'
   const shadows = [
     '--sp-shadow-control',
     '--sp-shadow-card',
+    '--sp-shadow-panel',
     '--sp-shadow-overlay',
     '--sp-shadow-future-token'
   ]
