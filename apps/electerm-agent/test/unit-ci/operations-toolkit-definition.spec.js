@@ -41,6 +41,46 @@ test('operations tool definition is normalized and deeply frozen', async () => {
   assert.equal(Object.isFrozen(tool.steps[0]), true)
 })
 
+test('resource-sensitive tools require explicit confirmation metadata', async () => {
+  const {
+    defineOperationsTool,
+    operationsRiskTypes
+  } = await importModule(
+    'src/client/components/operations-toolkit/shared/definition.js'
+  )
+  assert.equal(
+    operationsRiskTypes.resourceSensitive,
+    'resource-sensitive'
+  )
+  const tool = defineOperationsTool({
+    ...validTool,
+    risk: 'resource-sensitive',
+    requiresConfirmation: true,
+    parameters: [{
+      id: 'protocol',
+      options: [{ label: 'TCP', value: 'tcp' }],
+      enabledWhen: { parameterId: 'mode', values: ['capture'] }
+    }],
+    aiContext: {
+      parameterIds: ['protocol'],
+      stepIds: ['collect']
+    }
+  })
+  assert.equal(tool.requiresConfirmation, true)
+  assert.equal(Object.isFrozen(tool.aiContext), true)
+  assert.equal(Object.isFrozen(tool.aiContext.parameterIds), true)
+  assert.equal(Object.isFrozen(tool.aiContext.stepIds), true)
+  assert.equal(Object.isFrozen(tool.parameters[0]), true)
+  assert.equal(Object.isFrozen(tool.parameters[0].options), true)
+  assert.equal(Object.isFrozen(tool.parameters[0].options[0]), true)
+  assert.equal(Object.isFrozen(tool.parameters[0].enabledWhen), true)
+  assert.equal(Object.isFrozen(tool.parameters[0].enabledWhen.values), true)
+  assert.throws(() => defineOperationsTool({
+    ...validTool,
+    risk: 'resource-sensitive'
+  }), /必须确认/)
+})
+
 test('catalog rejects duplicate tool and legacy ids', async () => {
   const { buildOperationsCatalog } = await importModule(
     'src/client/components/operations-toolkit/catalog/index.js'
