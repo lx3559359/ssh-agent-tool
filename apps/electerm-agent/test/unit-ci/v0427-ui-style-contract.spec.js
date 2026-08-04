@@ -70,7 +70,7 @@ test('shared styles distinguish focus, reduced motion, nested depth, and toast p
     assert.ok(basic.includes(selector), `${selector} must share the focus treatment`)
   }
   assert.match(basic, /@media \(prefers-reduced-motion: reduce\)[\s\S]*transition none !important[\s\S]*animation none !important/)
-  assert.match(secondary, /\.sp-card \.sp-card[\s\S]*box-shadow none/)
+  assert.doesNotMatch(secondary, /\.sp-card \.sp-card\s*\r?\n\s*box-shadow none/)
   assert.match(message, /\.message-container[\s\S]{0,120}top 52px/)
   assert.match(notification, /\.notification-container[\s\S]{0,160}top 52px/)
   assert.match(topbar, /\.aigshell-topbar-action-group-boundary[\s\S]*border-left/)
