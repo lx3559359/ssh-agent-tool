@@ -16,6 +16,7 @@
   overflow hidden
   white-space nowrap
   text-overflow ellipsis
+  box-shadow none
   transition background-color var(--sp-motion-fast) ease, color var(--sp-motion-fast) ease
   &.is-category
     .tree-item-title
@@ -110,7 +111,8 @@
   right 0
   top 100%
   margin-top 4px
-  background var(--main-dark)
+  background-color var(--sp-surface-elevated)
+  background-image var(--sp-overlay-background)
   border 1px solid var(--main)
   border-radius var(--sp-radius-overlay)
   padding 4px
@@ -133,6 +135,7 @@
   cursor pointer
   white-space nowrap
   font-size 12px
+  box-shadow none
   &:hover
     background var(--hover-bg, rgba(0,0,0,.04))
   &.active
@@ -227,9 +230,10 @@
   margin-bottom 10px
   border 1px solid var(--main-darker)
   border-radius var(--sp-radius-toolbar)
-  box-shadow var(--sp-shadow-sm)
+  box-shadow var(--sp-shadow-control)
   color var(--text-color-2)
-  background var(--main-light)
+  background-color var(--sp-surface)
+  background-image var(--sp-control-background)
   font-size 13px
 
 .connection-inventory-list
@@ -247,9 +251,9 @@
   gap 12px
   padding 10px
   border 1px solid var(--main-darker)
-  border-radius var(--sp-radius-card)
-  background var(--main)
-  box-shadow var(--sp-shadow-md)
+  border-radius var(--sp-radius-small)
+  background var(--sp-flat-background)
+  box-shadow none
 
 .connection-inventory-main
   min-width 0

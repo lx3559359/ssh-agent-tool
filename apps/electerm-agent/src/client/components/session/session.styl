@@ -51,7 +51,8 @@
   cursor pointer
   &:hover
     color var(--text-light)
-    background var(--sp-surface-elevated)
+    background-color var(--sp-surface)
+    background-image var(--sp-control-background)
   &[aria-pressed='true']
     color var(--success)
     background var(--sp-primary-soft)
@@ -76,7 +77,7 @@
 
 .sessions
   position absolute
-  background var(--main)
+  background var(--sp-flat-background)
 .session-wrap
   display none
   position absolute
@@ -91,7 +92,7 @@
   height 100%
 .web-session-wrap
   height 100%
-  background var(--main)
+  background var(--sp-flat-background)
   overflow hidden
   display flex
   flex-direction column
@@ -141,7 +142,7 @@
   box-sizing border-box
   padding 24px
   color var(--text)
-  background var(--main)
+  background var(--sp-flat-background)
   text-align center
   h3
     margin 0

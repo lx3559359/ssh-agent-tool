@@ -25,7 +25,7 @@ function assertSelectorUsesRadius (source, selector, token) {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   assert.match(
     source,
-    new RegExp(`${escaped}[\\s\\S]{0,320}border-radius\\s+var\\(--sp-radius-${token}\\)`),
+    new RegExp(`${escaped}[\\s\\S]{0,420}border-radius\\s+var\\(--sp-radius-${token}\\)`),
     `${selector} should use --sp-radius-${token}`
   )
 }
@@ -77,7 +77,7 @@ test('connection server history and AI surfaces use semantic Aurora depth', () =
   const sidebar = readClient('components/sidebar/sidebar.styl')
   const tree = readClient('components/tree-list/tree-list.styl')
   const ai = readClient('components/ai/ai.styl')
-  assert.match(home, /\.no-session-action[\s\S]*var\(--sp-shadow-md\)/)
+  assert.match(home, /\.no-session-action[\s\S]*var\(--sp-shadow-card\)/)
   assert.match(home, /\.no-session-recents[\s\S]*var\(--sp-shadow-lg\)/)
   assert.match(sidebar, /\.sidebar-panel[\s\S]*var\(--sp-shadow-lg\)/)
   assert.match(tree, /\.tree-item[\s\S]*var\(--sp-primary-soft\)/)
@@ -191,7 +191,7 @@ test('specialist workspaces use lifted panels and cards while activity rows stay
   assertSelectorUsesRadius(operations, '.operations-tool-detail', 'panel')
   assertSelectorUsesRadius(incidents, '.incident-workspace', 'panel')
   assertSelectorUsesRadius(incidents, '.incident-home-summary', 'card')
-  assert.match(incidents, /\.incident-home-summary[\s\S]{0,420}var\(--sp-shadow-md\)/)
+  assert.match(incidents, /\.incident-home-summary[\s\S]{0,420}var\(--sp-shadow-card\)/)
   assert.match(incidents, /\.incident-list-item[\s\S]{0,320}box-shadow none/)
   assert.match(tunnel, /\.ssh-tunnel-modal[\s\S]{0,420}\.ant-modal-content[\s\S]{0,320}border-radius var\(--sp-radius-overlay\)/)
   assertSelectorUsesRadius(tunnel, '.ssh-tunnel-editor', 'panel')

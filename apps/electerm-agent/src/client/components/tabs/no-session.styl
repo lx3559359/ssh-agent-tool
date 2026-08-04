@@ -1,5 +1,6 @@
 .no-sessions
-  background var(--sp-page, var(--main))
+  background-color var(--sp-page, var(--main))
+  background-image var(--sp-page-background)
   color var(--sp-text, var(--text))
   position absolute
   top 36px
@@ -111,8 +112,9 @@
   height 86px
   border 1px solid var(--sp-border, var(--main-darker))
   border-radius var(--sp-radius-card)
-  background var(--sp-surface-elevated, var(--main-light))
-  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
+  background-color var(--sp-surface-elevated, var(--main-light))
+  background-image var(--sp-card-background)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-card)
   transition background-color var(--sp-motion-fast) ease, border-color var(--sp-motion-fast) ease, box-shadow var(--sp-motion-fast) ease
 
 .no-session-action.ant-btn
@@ -209,7 +211,8 @@
     max-width calc(100vw - 80px)
     border 1px solid var(--sp-border-strong, var(--main-darker))
     border-radius var(--sp-radius-overlay)
-    background var(--sp-surface-elevated, var(--main))
+    background-color var(--sp-surface-elevated, var(--main))
+    background-image var(--sp-overlay-background)
     box-shadow var(--sp-shadow-overlay, 0 14px 34px rgba(0, 0, 0, .2))
 
 .no-session-quick-connect-primary
@@ -234,7 +237,8 @@
   overflow hidden
   border 1px solid var(--sp-border, var(--main-darker))
   border-radius var(--sp-radius-panel)
-  background var(--sp-surface-elevated, var(--main-light))
+  background-color var(--sp-surface, var(--main-light))
+  background-image var(--sp-panel-background)
   box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-lg)
 
 .no-session-recents-heading
@@ -286,6 +290,8 @@
     min-height 48px
     margin 0
     border-bottom 1px solid var(--sp-border, var(--main-darker))
+    background var(--sp-flat-background)
+    box-shadow none
     color var(--sp-text, var(--text))
     &:last-child
       border-bottom 0

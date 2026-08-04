@@ -14,7 +14,8 @@
   min-height 0
   overflow hidden
   color var(--sp-text)
-  background var(--sp-page)
+  background-color var(--sp-page)
+  background-image var(--sp-page-background)
 
 .artifact-workspace-active
   display flex
@@ -29,8 +30,9 @@
   justify-content space-between
   gap 16px
   border-bottom 1px solid var(--sp-border)
-  background var(--sp-surface-elevated)
-  box-shadow var(--sp-shadow-md)
+  background-color var(--sp-surface)
+  background-image var(--sp-control-background)
+  box-shadow var(--sp-shadow-control)
 
 .artifact-workspace-header h1
   margin 0
@@ -61,7 +63,8 @@
   min-width 0
   overflow auto
   padding 12px
-  background var(--sp-surface)
+  background-color var(--sp-surface)
+  background-image var(--sp-panel-background)
   border 1px solid var(--sp-border)
   border-radius var(--sp-radius-panel)
   box-shadow var(--sp-shadow-lg)
@@ -72,8 +75,9 @@
   margin-bottom 12px
   padding 10px
   border-radius var(--sp-radius-toolbar)
-  background var(--sp-surface-soft)
-  box-shadow var(--sp-shadow-sm)
+  background-color var(--sp-surface)
+  background-image var(--sp-control-background)
+  box-shadow var(--sp-shadow-control)
 
 .artifact-list-items
   display grid
@@ -89,7 +93,7 @@
   border-radius var(--sp-radius-small)
   box-shadow none
   color var(--text)
-  background transparent
+  background var(--sp-flat-background)
   text-align left
   overflow hidden
 
@@ -98,8 +102,8 @@
 
 .artifact-list-item.active
   border-color var(--sp-primary)
-  background linear-gradient(145deg, var(--sp-primary-soft), var(--sp-surface-elevated))
-  box-shadow var(--sp-shadow-focus)
+  background var(--sp-primary-soft)
+  box-shadow none
 
 .artifact-list-item-main
   min-width 0
@@ -148,7 +152,8 @@
   flex-direction column
   padding 16px
   overflow hidden
-  background var(--sp-surface)
+  background-color var(--sp-surface)
+  background-image var(--sp-panel-background)
   border 1px solid var(--sp-border)
   border-radius var(--sp-radius-panel)
   box-shadow var(--sp-shadow-lg)
@@ -174,8 +179,9 @@
   margin-bottom 12px
   padding 10px
   border-radius var(--sp-radius-toolbar)
-  background var(--sp-surface-soft)
-  box-shadow var(--sp-shadow-md)
+  background-color var(--sp-surface)
+  background-image var(--sp-control-background)
+  box-shadow var(--sp-shadow-control)
 
 .artifact-preview-header h2
   margin 0
@@ -355,8 +361,9 @@
   border 1px solid var(--main-darker)
   border-radius var(--sp-radius-card)
   color var(--text)
-  background var(--main-light)
-  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
+  background-color var(--sp-surface-elevated)
+  background-image var(--sp-card-background)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-card)
 
 .artifact-card-icon
   color var(--primary)

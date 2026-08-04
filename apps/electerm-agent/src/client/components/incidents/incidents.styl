@@ -18,7 +18,8 @@
   opacity 0
   pointer-events none
   color var(--text)
-  background var(--main)
+  background-color var(--sp-surface)
+  background-image var(--sp-panel-background)
   border 1px solid var(--sp-border)
   border-radius var(--sp-radius-panel)
   box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-lg)
@@ -36,8 +37,9 @@
   overflow hidden
   border 1px solid var(--sp-border, var(--main-darker))
   border-radius var(--sp-radius-card)
-  background var(--sp-surface-elevated, var(--main-light))
-  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
+  background-color var(--sp-surface-elevated, var(--main-light))
+  background-image var(--sp-card-background)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-card)
 
   > header
     min-height 44px
@@ -90,8 +92,9 @@
       padding 7px 9px
       border 1px solid var(--sp-border, var(--main-darker))
       border-radius var(--sp-radius-card)
-      background transparent
-      box-shadow var(--sp-shadow-md)
+      background-color var(--sp-surface)
+      background-image var(--sp-control-background)
+      box-shadow var(--sp-shadow-control)
       color var(--sp-text, var(--text))
       cursor pointer
       text-align left
@@ -124,8 +127,9 @@
   gap 12px
   border-bottom 1px solid var(--main-darker)
   border-radius var(--sp-radius-toolbar)
-  background var(--sp-surface-elevated)
-  box-shadow var(--sp-shadow-md)
+  background-color var(--sp-surface)
+  background-image var(--sp-control-background)
+  box-shadow var(--sp-shadow-control)
 
   h1
     margin 0
@@ -164,6 +168,8 @@
   display flex
   flex-direction column
   border-right 1px solid var(--main-darker)
+  background-color var(--sp-surface)
+  background-image var(--sp-panel-background)
 
   > header
     min-height 64px
@@ -199,7 +205,7 @@
     border-radius var(--sp-radius-small)
     box-shadow none
     color var(--text)
-    background transparent
+    background var(--sp-flat-background)
     text-align left
     display grid
     grid-template-columns 4px minmax(0, 1fr)
@@ -235,6 +241,8 @@
   min-height 0
   overflow auto
   padding 18px
+  background-color var(--sp-surface)
+  background-image var(--sp-panel-background)
 
   > header
     display flex
@@ -283,8 +291,9 @@
   padding: 12px
   border 1px solid var(--main-darker)
   border-radius var(--sp-radius-card)
-  background var(--main-light)
-  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
+  background-color var(--sp-surface-elevated)
+  background-image var(--sp-card-background)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-card)
 
   h3
     margin 0 0 9px
@@ -334,6 +343,7 @@
     grid-template-columns 10px minmax(0, 1fr)
     gap 10px
     padding-bottom 14px
+    box-shadow none
 
     > i
       width 8px
@@ -367,6 +377,8 @@
   display flex
   flex-direction column
   border-right 1px solid var(--main-darker)
+  background-color var(--sp-surface)
+  background-image var(--sp-panel-background)
 
 .incident-list-toolbar
   padding 10px
@@ -403,7 +415,7 @@
   border-radius var(--sp-radius-small)
   box-shadow none
   color var(--text)
-  background transparent
+  background var(--sp-flat-background)
   text-align left
   display grid
   grid-template-columns 4px minmax(0, 1fr)
@@ -481,6 +493,8 @@
   min-height 0
   overflow auto
   padding 16px
+  background-color var(--sp-surface)
+  background-image var(--sp-panel-background)
 
   > .ant-empty
     margin-top 80px
@@ -589,7 +603,7 @@
   padding 9px 10px
   border-left 2px solid var(--primary)
   border-radius var(--sp-radius-small)
-  background var(--main-light)
+  background var(--sp-flat-background)
   box-shadow none
 
   header
@@ -616,8 +630,9 @@
     padding 10px
     border 1px solid var(--main-darker)
     border-radius var(--sp-radius-card)
-    background var(--sp-surface-elevated, var(--main-light))
-    box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
+    background-color var(--sp-surface-elevated, var(--main-light))
+    background-image var(--sp-card-background)
+    box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-card)
     display flex
     flex-direction column
     gap 4px

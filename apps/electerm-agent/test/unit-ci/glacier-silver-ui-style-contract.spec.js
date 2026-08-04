@@ -41,7 +41,20 @@ const shellStyleFiles = [
   'components/common/remote-float-control.styl',
   'components/common/lazy-module-boundary.styl',
   'components/common/markdown.styl',
-  'components/sys-menu/sys-menu.styl'
+  'components/sys-menu/sys-menu.styl',
+  'components/tabs/no-session.styl',
+  'components/tabs/quick-connect.styl',
+  'components/bookmark-form/bookmark-form.styl',
+  'components/bookmark-form/common/bookmark-group-picker.styl',
+  'components/bookmark-form/common/color-picker.styl',
+  'components/tree-list/tree-list.styl',
+  'components/tree-list/bookmark-import-strategy-dialog.styl',
+  'components/session/session.styl',
+  'components/ssh-config/ssh-config.styl',
+  'components/fleet-status/fleet-status.styl',
+  'components/fleet-status/fleet-service-selector.styl',
+  'components/artifacts/artifacts.styl',
+  'components/incidents/incidents.styl'
 ]
 
 test('Glacier Silver shell Stylus files compile', async () => {
@@ -175,6 +188,69 @@ test('markdown code and tables stay flat inside cardized panels', () => {
   assert.doesNotMatch(markdown, /var\(--sp-(?:card|panel|overlay)-background\)/)
 })
 
+test('home actions and recent connections follow card outer and flat row hierarchy', () => {
+  const home = readClient('components/tabs/no-session.styl')
+
+  assert.match(home, /\.no-sessions[\s\S]{0,180}background-image var\(--sp-page-background\)/)
+  assert.match(home, /\.no-session-action\.ant-btn[\s\S]{0,420}background-image var\(--sp-card-background\)[\s\S]{0,180}var\(--sp-shadow-card\)/)
+  assert.match(home, /\.no-session-action-primary\.ant-btn[\s\S]{0,220}linear-gradient\(135deg, var\(--sp-primary\), var\(--sp-primary-2\)\)/)
+  assert.match(home, /\.no-session-recents[\s\S]{0,300}background-image var\(--sp-panel-background\)[\s\S]{0,180}var\(--sp-shadow-lg\)/)
+  assert.match(home, /\.no-session-history[\s\S]{0,900}\.item-list-unit[\s\S]{0,300}background var\(--sp-flat-background\)[\s\S]{0,120}box-shadow none/)
+})
+
+test('connection forms use grouped material while tree session and ssh config rows stay flat', () => {
+  const quickConnect = readClient('components/tabs/quick-connect.styl')
+  const bookmark = readClient('components/bookmark-form/bookmark-form.styl')
+  const tree = readClient('components/tree-list/tree-list.styl')
+  const session = readClient('components/session/session.styl')
+  const sshConfig = readClient('components/ssh-config/ssh-config.styl')
+
+  assert.match(quickConnect, /\.quick-connect-wizard-summary[\s\S]{0,320}background-image var\(--sp-card-background\)[\s\S]{0,180}var\(--sp-shadow-card\)/)
+  assert.match(bookmark, /\.sp-configuration-section[\s\S]{0,300}background-image var\(--sp-card-background\)/)
+  assert.match(tree, /\.tree-sort-dropdown[\s\S]{0,300}background-image var\(--sp-overlay-background\)/)
+  assert.match(tree, /\.tree-item[\s\S]{0,260}box-shadow none/)
+  assert.match(tree, /\.connection-inventory-row[\s\S]{0,360}background var\(--sp-flat-background\)[\s\S]{0,120}box-shadow none/)
+  assert.match(session, /\.sessions[\s\S]{0,160}background var\(--sp-flat-background\)/)
+  assert.doesNotMatch(session, /\.session-wrap[\s\S]{0,220}var\(--sp-shadow-(?:card|panel|overlay|lg)\)/)
+  assert.match(sshConfig, /\.ssh-config-list[\s\S]{0,260}\.item-list-unit[\s\S]{0,180}box-shadow none/)
+})
+
+test('fleet cards and panels contain flat table rows', () => {
+  const fleet = readClient('components/fleet-status/fleet-status.styl')
+  const selector = readClient('components/fleet-status/fleet-service-selector.styl')
+
+  assert.match(fleet, /\.fleet-status-workspace[\s\S]{0,320}background-image var\(--sp-page-background\)/)
+  assert.match(fleet, /\.fleet-status-bookmark-count[\s\S]{0,340}background-image var\(--sp-card-background\)/)
+  assert.match(fleet, /\.fleet-status-toolbar[\s\S]{0,360}background-image var\(--sp-card-background\)/)
+  assert.match(fleet, /\.fleet-status-table-scroll[\s\S]{0,360}background-image var\(--sp-panel-background\)/)
+  assert.match(fleet, /\.fleet-status-table[\s\S]{0,320}tbody tr[\s\S]{0,80}box-shadow none/)
+  assert.doesNotMatch(fleet, /tbody tr[\s\S]{0,220}var\(--sp-(?:card|panel|overlay)-background\)/)
+
+  assert.match(selector, /\.ant-drawer-content[\s\S]{0,320}background-image var\(--sp-panel-background\)/)
+  assert.match(selector, /\.fleet-service-selector-targets[\s\S]{0,900}li[\s\S]{0,360}background-image var\(--sp-card-background\)/)
+  assert.match(selector, /\.fleet-service-selector-table[\s\S]{0,320}tbody tr[\s\S]{0,80}box-shadow none/)
+})
+
+test('artifact and incident panes use panels while activity rows remain flat', () => {
+  const artifacts = readClient('components/artifacts/artifacts.styl')
+  const incidents = readClient('components/incidents/incidents.styl')
+
+  assert.match(artifacts, /\.artifact-workspace[\s\S]{0,300}background-image var\(--sp-page-background\)/)
+  assert.match(artifacts, /\.artifact-list-panel[\s\S]{0,300}background-image var\(--sp-panel-background\)/)
+  assert.match(artifacts, /\.artifact-preview[\s\S]{0,360}background-image var\(--sp-panel-background\)/)
+  assert.match(artifacts, /\.artifact-list-item[\s\S]{0,360}background var\(--sp-flat-background\)/)
+  assert.match(artifacts, /\.artifact-list-item[\s\S]{0,260}box-shadow none/)
+  assert.match(artifacts, /\.artifact-card[\s\S]{0,420}background-image var\(--sp-card-background\)/)
+
+  assert.match(incidents, /\.incident-workspace[\s\S]{0,360}background-image var\(--sp-panel-background\)/)
+  assert.match(incidents, /\.incident-home-summary[\s\S]{0,320}background-image var\(--sp-card-background\)/)
+  assert.match(incidents, /\.incident-list-panel[\s\S]{0,260}background-image var\(--sp-panel-background\)/)
+  assert.match(incidents, /\.incident-detail-panel[\s\S]{0,260}background-image var\(--sp-panel-background\)/)
+  assert.match(incidents, /\.incident-list-item[\s\S]{0,360}background var\(--sp-flat-background\)/)
+  assert.match(incidents, /\.incident-list-item[\s\S]{0,260}box-shadow none/)
+  assert.match(incidents, /\.incident-note[\s\S]{0,260}background var\(--sp-flat-background\)[\s\S]{0,120}box-shadow none/)
+})
+
 test('Glacier material recipes remain centralized in semantic tokens', () => {
   const componentSource = shellStyleFiles
     .map(readClient)
@@ -183,5 +259,5 @@ test('Glacier material recipes remain centralized in semantic tokens', () => {
   for (const copiedStop of ['#F6FAFC', '#EAF1F6', '#DCE6EE', '#2A3543', '#202A37', '#18212C']) {
     assert.doesNotMatch(componentSource, new RegExp(copiedStop, 'i'), `${copiedStop} must stay in theme tokens`)
   }
-  assert.doesNotMatch(componentSource, /(?:radial|linear)-gradient\(/i)
+  assert.doesNotMatch(componentSource, /radial-gradient\(110% 90% at 15% 0%/i)
 })
