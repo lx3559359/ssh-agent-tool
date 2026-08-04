@@ -8,12 +8,24 @@ export function buildOperationsAIContext ({
   maxCharacters = defaultMaxCharacters
 } = {}) {
   const parts = [
-    '请分析下面的只读运维诊断结果，并用中文说明：异常点、可能原因、建议的下一步只读检查。不要假设已执行任何修复。',
+    '请分析下面的运维诊断结果，并用中文说明：异常点、可能原因、建议的下一步只读检查。不要假设已执行任何修复。',
     `诊断工具：${tool?.title || task?.toolId || '未知'}`,
     `服务器：${task?.endpointKey || '未知'}`,
     `状态：${task?.status || '未知'}`
   ]
+  const sensitive = tool?.risk === 'resource-sensitive'
+  const allowedParameterIds = new Set(tool?.aiContext?.parameterIds || [])
+  if (sensitive) {
+    for (const parameter of tool?.parameters || []) {
+      if (!allowedParameterIds.has(parameter.id)) continue
+      const value = task?.params?.[parameter.id]
+      if (value === undefined || value === null || value === '') continue
+      parts.push(`${parameter.label}：${String(value)}`)
+    }
+  }
+  const allowedStepIds = new Set(tool?.aiContext?.stepIds || [])
   for (const step of task?.steps || []) {
+    if (sensitive && !allowedStepIds.has(step.id)) continue
     parts.push(`\n## ${step.title || step.id}\n${step.output || '无输出'}`)
   }
   if (task?.error) parts.push(`\n错误：${task.error}`)
