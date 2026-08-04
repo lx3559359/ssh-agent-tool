@@ -1,32 +1,44 @@
 .sp-secondary-page
-  background var(--sp-page)
   color var(--sp-text)
+  background-color var(--sp-page)
+  background-image var(--sp-page-background)
 
 .sp-level-0
   color var(--sp-text)
-  background var(--sp-page)
+  background-color var(--sp-page)
+  background-image var(--sp-page-background)
 
 .sp-level-1
   color var(--sp-text)
-  background var(--sp-surface)
+  background-color var(--sp-surface)
+  background-image var(--sp-control-background)
   border 1px solid var(--sp-border)
-  border-radius var(--sp-radius-small)
-  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-sm)
+  border-radius var(--sp-radius-control)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-control)
 
 .sp-level-2,
 .sp-card
   color var(--sp-text)
-  background var(--sp-surface-elevated)
+  background-color var(--sp-surface-elevated)
+  background-image var(--sp-card-background)
   border 1px solid var(--sp-border)
   border-radius var(--sp-radius-card)
-  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-card)
 
 .sp-level-3
   color var(--sp-text)
-  background var(--sp-surface-elevated)
+  background-color var(--sp-surface-elevated)
+  background-image var(--sp-overlay-background)
   border 1px solid var(--sp-border-strong)
   border-radius var(--sp-radius-overlay)
-  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-lg)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-overlay)
+
+.sp-flat-data
+  color var(--sp-text)
+  background-color var(--sp-flat-background)
+  background-image none
+  border 1px solid var(--sp-border)
+  box-shadow none
 
 .sp-card .sp-card
   box-shadow none
@@ -75,7 +87,7 @@
   .ant-picker,
   .ant-select-selector
     border-radius var(--sp-radius-control)
-    box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-sm)
+    box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-control)
 
   .ant-btn:not(.ant-btn-text):not(.ant-btn-link):focus-visible,
   .ant-input:focus,

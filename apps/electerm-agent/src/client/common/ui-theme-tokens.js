@@ -18,6 +18,14 @@ function mix (left, right, ratio) {
   return `#${rgb.map(value => value.toString(16).padStart(2, '0')).join('')}`.toUpperCase()
 }
 
+function hexToRgba (hex, alpha) {
+  const channels = expandHex(hex, '#000000')
+    .slice(1)
+    .match(/.{2}/g)
+    .map(value => parseInt(value, 16))
+  return `rgba(${channels.join(', ')}, ${alpha})`
+}
+
 function relativeLuminance (hex) {
   const channels = hex.slice(1).match(/.{2}/g).map(value => {
     const channel = parseInt(value, 16) / 255
@@ -99,18 +107,51 @@ export function deriveSecondaryThemeTokens (theme = {}) {
   const info = expandHex(theme.info, cyan)
   const warning = expandHex(theme.warn, '#C56A20')
   const danger = expandHex(theme.error, '#CF3F50')
+  const pageDot = expandHex(theme['page-dot'], mix(primary, page, 0.58))
+  const cardStart = expandHex(theme['card-start'], surfaceElevated)
+  const cardMid = expandHex(theme['card-mid'], surfaceSoft)
+  const cardEnd = expandHex(theme['card-end'], surfaceInset)
+  const panelStart = expandHex(
+    theme['panel-start'],
+    mix(cardStart, page, 0.18)
+  )
+  const panelMid = expandHex(
+    theme['panel-mid'],
+    mix(cardMid, page, 0.16)
+  )
+  const panelEnd = expandHex(
+    theme['panel-end'],
+    mix(cardEnd, page, 0.14)
+  )
+  const flatBackground = expandHex(theme.flat, surfaceInset)
+  const topbarStart = expandHex(theme['topbar-start'], primary)
+  const topbarMid = expandHex(
+    theme['topbar-mid'],
+    mix(primary, primaryAlt, 0.5)
+  )
+  const topbarEnd = expandHex(theme['topbar-end'], primaryAlt)
+  const pageBackground = `radial-gradient(circle at 1px 1px, ${hexToRgba(pageDot, darkSurface ? '0.18' : '0.30')} 1px, transparent 1.2px), linear-gradient(180deg, ${page} 0%, ${mix(page, surface, 0.12)} 100%)`
+  const topbarBackground = `linear-gradient(100deg, ${topbarStart} 0%, ${topbarMid} 52%, ${topbarEnd} 100%)`
+  const controlBackground = `linear-gradient(145deg, ${cardStart} 0%, ${cardMid} 100%)`
+  const cardBackground = darkSurface
+    ? `radial-gradient(110% 90% at 15% 0%, rgba(255, 255, 255, 0.10) 0%, rgba(255, 255, 255, 0.04) 35%, transparent 72%), linear-gradient(150deg, ${cardStart} 0%, ${cardMid} 58%, ${cardEnd} 100%)`
+    : `radial-gradient(110% 90% at 15% 0%, #FFFFFF 0%, rgba(255, 255, 255, 0.82) 35%, transparent 72%), linear-gradient(150deg, ${cardStart} 0%, ${cardMid} 58%, ${cardEnd} 100%)`
+  const panelBackground = `linear-gradient(150deg, ${panelStart} 0%, ${panelMid} 58%, ${panelEnd} 100%)`
+  const overlayBackground = darkSurface
+    ? `linear-gradient(150deg, ${cardStart} 0%, ${cardMid} 52%, ${cardEnd} 100%)`
+    : cardBackground
   const shadowSm = darkSurface
-    ? '0 3px 0 -1px rgba(0, 0, 0, 0.52), 0 10px 20px rgba(0, 0, 0, 0.56), 0 0 0 1px rgba(138, 130, 255, 0.18)'
-    : '0 3px 0 -1px rgba(62, 58, 160, 0.16), 0 8px 18px rgba(62, 58, 160, 0.18)'
+    ? '0 1px 2px rgba(0, 0, 0, 0.30), 0 8px 16px rgba(0, 0, 0, 0.28), 0 0 0 1px rgba(160, 148, 255, 0.10)'
+    : '0 1px 2px rgba(56, 78, 104, 0.10), 0 6px 14px rgba(68, 91, 118, 0.10)'
   const shadowMd = darkSurface
-    ? '0 6px 0 -2px rgba(0, 0, 0, 0.58), 0 20px 38px rgba(0, 0, 0, 0.64), 0 0 0 1px rgba(138, 130, 255, 0.22)'
-    : '0 6px 0 -2px rgba(73, 66, 196, 0.18), 0 18px 34px rgba(73, 66, 196, 0.26)'
+    ? '0 2px 4px rgba(0, 0, 0, 0.34), 0 16px 30px rgba(0, 0, 0, 0.34), 0 0 0 1px rgba(160, 148, 255, 0.14)'
+    : '0 2px 4px rgba(56, 78, 104, 0.10), 0 14px 28px rgba(68, 91, 118, 0.14)'
   const shadowLg = darkSurface
-    ? '0 10px 0 -3px rgba(0, 0, 0, 0.64), 0 30px 60px rgba(0, 0, 0, 0.72), 0 0 0 1px rgba(138, 130, 255, 0.28)'
-    : '0 9px 0 -3px rgba(75, 66, 202, 0.20), 0 28px 56px rgba(75, 66, 202, 0.32)'
+    ? '0 4px 8px rgba(0, 0, 0, 0.38), 0 24px 48px rgba(0, 0, 0, 0.42), 0 0 0 1px rgba(160, 148, 255, 0.18)'
+    : '0 4px 8px rgba(49, 68, 91, 0.12), 0 24px 48px rgba(55, 75, 99, 0.18)'
   const shadowFocus = darkSurface
-    ? '0 4px 0 -1px rgba(0, 0, 0, 0.50), 0 16px 32px rgba(116, 109, 255, 0.42), 0 0 0 2px rgba(138, 130, 255, 0.30)'
-    : '0 4px 0 -1px rgba(77, 70, 245, 0.22), 0 16px 30px rgba(77, 70, 245, 0.36)'
+    ? '0 0 0 3px rgba(133, 131, 255, 0.28), 0 10px 24px rgba(0, 0, 0, 0.36)'
+    : '0 0 0 3px rgba(92, 91, 233, 0.24), 0 8px 20px rgba(68, 91, 118, 0.14)'
 
   return {
     page,
@@ -120,6 +161,13 @@ export function deriveSecondaryThemeTokens (theme = {}) {
     surfaceSoft,
     surfaceInset,
     surfaceElevated,
+    pageBackground,
+    topbarBackground,
+    controlBackground,
+    cardBackground,
+    panelBackground,
+    overlayBackground,
+    flatBackground,
     highlightTop: highlight,
     highlight,
     text,
@@ -143,12 +191,12 @@ export function deriveSecondaryThemeTokens (theme = {}) {
     warningSoft: mix(warning, surface, 0.88),
     danger,
     dangerSoft: mix(danger, surface, 0.88),
-    radiusSmall: '10px',
-    radiusControl: '14px',
-    radiusToolbar: '18px',
-    radiusCard: '22px',
-    radiusPanel: '28px',
-    radiusOverlay: '28px',
+    radiusSmall: '8px',
+    radiusControl: '10px',
+    radiusToolbar: '12px',
+    radiusCard: '16px',
+    radiusPanel: '20px',
+    radiusOverlay: '22px',
     shadowSm,
     shadowMd,
     shadowLg,

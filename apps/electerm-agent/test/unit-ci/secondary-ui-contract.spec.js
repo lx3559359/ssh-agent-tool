@@ -132,28 +132,39 @@ async function assertUiElevationContracts (source) {
   const blocks = topLevelCssBlocks(css)
   assertCssRule(blocks, '.sp-level-0', {
     color: 'var(--sp-text)',
-    background: 'var(--sp-page)'
+    'background-color': 'var(--sp-page)',
+    'background-image': 'var(--sp-page-background)'
   })
   assertCssRule(blocks, '.sp-level-1', {
     color: 'var(--sp-text)',
-    background: 'var(--sp-surface)',
+    'background-color': 'var(--sp-surface)',
+    'background-image': 'var(--sp-control-background)',
     border: '1px solid var(--sp-border)',
-    'border-radius': 'var(--sp-radius-small)',
-    'box-shadow': 'inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-sm)'
+    'border-radius': 'var(--sp-radius-control)',
+    'box-shadow': 'inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-control)'
   })
   assertCssRule(blocks, '.sp-level-2, .sp-card', {
     color: 'var(--sp-text)',
-    background: 'var(--sp-surface-elevated)',
+    'background-color': 'var(--sp-surface-elevated)',
+    'background-image': 'var(--sp-card-background)',
     border: '1px solid var(--sp-border)',
     'border-radius': 'var(--sp-radius-card)',
-    'box-shadow': 'inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)'
+    'box-shadow': 'inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-card)'
   })
   assertCssRule(blocks, '.sp-level-3', {
     color: 'var(--sp-text)',
-    background: 'var(--sp-surface-elevated)',
+    'background-color': 'var(--sp-surface-elevated)',
+    'background-image': 'var(--sp-overlay-background)',
     border: '1px solid var(--sp-border-strong)',
     'border-radius': 'var(--sp-radius-overlay)',
-    'box-shadow': 'inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-lg)'
+    'box-shadow': 'inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-overlay)'
+  })
+  assertCssRule(blocks, '.sp-flat-data', {
+    color: 'var(--sp-text)',
+    'background-color': 'var(--sp-flat-background)',
+    'background-image': 'none',
+    border: '1px solid var(--sp-border)',
+    'box-shadow': 'none'
   })
   assertCssRule(blocks, '.sp-lift-interactive', {
     transition: 'background-color var(--sp-motion-fast) ease, border-color var(--sp-motion-fast) ease, box-shadow var(--sp-motion-fast) ease, opacity var(--sp-motion-fast) ease'
@@ -851,9 +862,9 @@ test('defines L0-L3 contracts without styling terminal canvases', async () => {
 test('elevation contract validator rejects tokens assigned to the wrong levels', async () => {
   const source = readClient('css/includes/secondary-ui.styl')
   const misplacedTokens = source
-    .replace('var(--sp-shadow-sm)', '__SMALL_SHADOW__')
-    .replace('var(--sp-shadow-lg)', 'var(--sp-shadow-sm)')
-    .replace('__SMALL_SHADOW__', 'var(--sp-shadow-lg)')
+    .replace('var(--sp-shadow-control)', '__CONTROL_SHADOW__')
+    .replace('var(--sp-shadow-overlay)', 'var(--sp-shadow-control)')
+    .replace('__CONTROL_SHADOW__', 'var(--sp-shadow-overlay)')
   await assert.rejects(assertUiElevationContracts(misplacedTokens))
 })
 
