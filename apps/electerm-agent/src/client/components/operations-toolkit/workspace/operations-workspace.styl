@@ -23,7 +23,7 @@
   background-image var(--sp-panel-background)
   border 1px solid var(--sp-border-strong)
   border-radius var(--sp-radius-panel)
-  box-shadow var(--sp-shadow-lg)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-panel)
 
 .operations-workspace-head
   min-height 48px
@@ -162,21 +162,25 @@
     gap 4px
     text-align left
     color var(--sp-text)
-    background var(--sp-flat-background)
+    background-color var(--sp-surface-elevated)
+    background-image var(--sp-card-background)
     border 1px solid var(--sp-border)
-    border-radius var(--sp-radius-small)
-    box-shadow none
+    border-radius var(--sp-radius-card)
+    box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-card)
+    transition border-color var(--sp-motion-fast) ease, box-shadow var(--sp-motion-fast) ease, background-color var(--sp-motion-fast) ease
     cursor pointer
     &:focus-visible
       outline 2px solid var(--sp-primary)
       outline-offset 2px
+      box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-panel)
     &:hover
       border-color var(--sp-primary)
-      background var(--sp-surface-soft)
+      box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-panel)
     &.active
       border-color var(--sp-primary)
-      background var(--sp-primary-soft)
-      box-shadow none
+      background-color var(--sp-primary-soft)
+      background-image var(--sp-card-background)
+      box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-card), 0 0 0 2px var(--sp-primary-soft)
     strong
       font-size 13px
     span
@@ -198,7 +202,7 @@
   background-image var(--sp-panel-background)
   border 1px solid var(--sp-border)
   border-radius var(--sp-radius-panel)
-  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-lg)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-panel)
 
 .operations-tool-title
   display flex
@@ -506,7 +510,7 @@
   overflow hidden
   border: 1px solid var(--main-darker)
   border-radius var(--sp-radius-panel)
-  box-shadow var(--sp-shadow-lg)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-panel)
   background-color var(--sp-surface)
   background-image var(--sp-panel-background)
   .qm-wrap-embedded

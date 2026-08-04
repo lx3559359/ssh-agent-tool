@@ -933,7 +933,7 @@ test('client chrome maps concrete shell selectors to restrained semantic depth',
     'background-color': 'var(--sp-surface)',
     'background-image': 'var(--sp-panel-background)',
     'border-right': '1px solid var(--sp-border)',
-    'box-shadow': 'var(--sp-shadow-sm)'
+    'box-shadow': 'var(--sp-shadow-panel)'
   })
   assertCssRule(sidebarBlocks, '.sidebar .control-icon-wrap', {
     'box-shadow': 'none'
@@ -959,7 +959,7 @@ test('client chrome maps concrete shell selectors to restrained semantic depth',
     'background-image': 'var(--sp-panel-background)',
     'border-left': '1px solid var(--sp-border)',
     'border-radius': 'var(--sp-radius-panel) 0 0 var(--sp-radius-panel)',
-    'box-shadow': 'var(--sp-shadow-lg)'
+    'box-shadow': 'var(--sp-shadow-panel)'
   })
   assertCssRule(panelBlocks, '.right-panel-title', {
     'background-color': 'var(--sp-surface)',

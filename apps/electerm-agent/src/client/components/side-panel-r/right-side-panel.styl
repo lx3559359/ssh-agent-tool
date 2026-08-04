@@ -11,7 +11,7 @@
   color var(--text)
   border-left 1px solid var(--sp-border)
   border-radius var(--sp-radius-panel) 0 0 var(--sp-radius-panel)
-  box-shadow var(--sp-shadow-lg)
+  box-shadow var(--sp-shadow-panel)
   &.right-side-panel-pinned
     top 44px
 
@@ -94,7 +94,9 @@
   .ant-select-selector
     min-height 24px
     border-color var(--main-darker) !important
-    background var(--sp-flat-background) !important
+    background-color var(--sp-surface) !important
+    background-image var(--sp-control-background) !important
+    box-shadow var(--sp-shadow-control) !important
     color var(--text) !important
   .ant-select-selection-item
     color var(--text)
@@ -120,7 +122,10 @@
   flex 0 0 auto
   border-color var(--success)
   color var(--success)
-  background var(--main)
+  background-color var(--sp-surface)
+  background-image var(--sp-control-background)
+  border-radius var(--sp-radius-control)
+  box-shadow var(--sp-shadow-control)
   display inline-flex
   align-items center
   gap 4px

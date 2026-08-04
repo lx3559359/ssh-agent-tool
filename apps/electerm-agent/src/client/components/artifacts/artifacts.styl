@@ -67,17 +67,18 @@
   background-image var(--sp-panel-background)
   border 1px solid var(--sp-border)
   border-radius var(--sp-radius-panel)
-  box-shadow var(--sp-shadow-lg)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-panel)
 
 .artifact-list-filters
   display grid
   gap 8px
   margin-bottom 12px
   padding 10px
+  background-color var(--sp-surface-elevated)
+  background-image var(--sp-card-background)
+  border 1px solid var(--sp-border)
   border-radius var(--sp-radius-toolbar)
-  background-color var(--sp-surface)
-  background-image var(--sp-control-background)
-  box-shadow var(--sp-shadow-control)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-card)
 
 .artifact-list-items
   display grid
@@ -156,7 +157,7 @@
   background-image var(--sp-panel-background)
   border 1px solid var(--sp-border)
   border-radius var(--sp-radius-panel)
-  box-shadow var(--sp-shadow-lg)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-panel)
 
 .artifact-preview-empty
   align-items center

@@ -15,15 +15,17 @@ test('keeps the operations primary action readable in every theme', () => {
   )
 })
 
-test('uses Aurora depth on containers while keeping operations rows flat', () => {
+test('uses panel depth and action cards while keeping operations history flat', () => {
   const styles = fs.readFileSync(path.resolve(
     __dirname,
     '../../src/client/components/operations-toolkit/workspace/operations-workspace.styl'
   ), 'utf8')
   assert.match(styles, /\.operations-toolkit-workspace[\s\S]*border-radius\s+var\(--sp-radius-panel\)/)
-  assert.match(styles, /\.operations-toolkit-workspace[\s\S]*box-shadow\s+var\(--sp-shadow-lg\)/)
-  assert.match(styles, /\.operations-workspace-head[\s\S]*box-shadow\s+var\(--sp-shadow-md\)/)
-  assert.match(styles, /\.operations-tool-list[\s\S]*box-shadow\s+none/)
+  assert.match(styles, /\.operations-toolkit-workspace[\s\S]{0,520}box-shadow\s+(?:inset[^\r\n]+,\s*)?var\(--sp-shadow-panel\)/)
+  assert.match(styles, /\.operations-tool-list[\s\S]{0,820}> button[\s\S]{0,420}background-image var\(--sp-card-background\)[\s\S]{0,180}border-radius var\(--sp-radius-card\)[\s\S]{0,180}var\(--sp-shadow-card\)/)
+  assert.doesNotMatch(styles, /\.operations-tool-list[\s\S]{0,260}> button[\s\S]{0,260}box-shadow none/)
+  assert.match(styles, /\.operations-tool-detail[\s\S]{0,420}var\(--sp-shadow-panel\)/)
+  assert.match(styles, /\.operations-history article[\s\S]{0,260}background var\(--sp-flat-background\)[\s\S]{0,120}box-shadow none/)
 })
 
 test('operations catalogs reflow and short windows scroll inside the workspace', () => {

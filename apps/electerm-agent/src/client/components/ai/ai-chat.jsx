@@ -474,6 +474,7 @@ export default function AIChat (props) {
   function renderModeSwitch () {
     return (
       <Segmented
+        className='ai-mode-segmented'
         size='small'
         value={mode}
         onChange={value => setMode(value)}

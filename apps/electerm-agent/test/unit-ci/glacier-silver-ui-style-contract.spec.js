@@ -165,7 +165,9 @@ test('shell outer frames use Glacier panels while compact chrome stays flat', ()
   assert.match(sidebar, /\.sidebar \.control-icon-wrap[\s\S]{0,420}background-image var\(--sp-control-background\)/)
 
   assert.match(rightPanel, /\.right-side-panel\r?\n[\s\S]{0,300}background-color var\(--sp-surface\)\r?\n\s+background-image var\(--sp-panel-background\)/)
+  assert.match(rightPanel, /\.right-side-panel[\s\S]{0,360}var\(--sp-shadow-panel\)/)
   assert.match(rightPanel, /\.right-panel-ai-config-card[\s\S]{0,260}background-image var\(--sp-card-background\)/)
+  assert.match(rightPanel, /\.right-panel-ai-model-select[\s\S]{0,620}background-image var\(--sp-control-background\) !important/)
 
   assert.match(tabs, /\.tabs\r?\n[\s\S]{0,180}background-color var\(--sp-flat-background\)\r?\n\s+background-image none/)
   assert.match(tabs, /\.tab\r?\n[\s\S]{0,360}background-color var\(--sp-flat-background\)[\s\S]{0,100}box-shadow none/)
@@ -274,6 +276,7 @@ test('connection forms use grouped material while tree session and ssh config ro
 
   assert.match(quickConnect, /\.quick-connect-wizard-summary[\s\S]{0,320}background-image var\(--sp-card-background\)[\s\S]{0,180}var\(--sp-shadow-card\)/)
   assert.match(bookmark, /\.sp-configuration-section[\s\S]{0,300}background-image var\(--sp-card-background\)/)
+  assert.match(tree, /\.tree-list-action-toolbar,[\s\S]{0,420}background-image var\(--sp-card-background\)[\s\S]{0,180}var\(--sp-shadow-card\)/)
   assert.match(tree, /\.tree-sort-dropdown[\s\S]{0,300}background-image var\(--sp-overlay-background\)/)
   assert.match(tree, /\.tree-item[\s\S]{0,260}box-shadow none/)
   assert.match(tree, /\.connection-inventory-row[\s\S]{0,360}background var\(--sp-flat-background\)[\s\S]{0,120}box-shadow none/)
@@ -288,7 +291,7 @@ test('fleet cards and panels contain flat table rows', () => {
 
   assert.match(fleet, /\.fleet-status-workspace[\s\S]{0,320}background-image var\(--sp-page-background\)/)
   assert.match(fleet, /\.fleet-status-bookmark-count[\s\S]{0,340}background-image var\(--sp-card-background\)/)
-  assert.match(fleet, /\.fleet-status-toolbar[\s\S]{0,360}background-image var\(--sp-card-background\)/)
+  assert.match(fleet, /\.fleet-status-toolbar[\s\S]{0,420}background-image var\(--sp-card-background\)[\s\S]{0,180}border-radius var\(--sp-radius-toolbar\)[\s\S]{0,180}var\(--sp-shadow-card\)/)
   assert.match(fleet, /\.fleet-status-table-scroll[\s\S]{0,360}background-image var\(--sp-panel-background\)/)
   assert.match(fleet, /\.fleet-status-table[\s\S]{0,320}tbody tr[\s\S]{0,80}box-shadow none/)
   assert.doesNotMatch(fleet, /tbody tr[\s\S]{0,220}var\(--sp-(?:card|panel|overlay)-background\)/)
@@ -304,12 +307,17 @@ test('artifact and incident panes use panels while activity rows remain flat', (
 
   assert.match(artifacts, /\.artifact-workspace[\s\S]{0,300}background-image var\(--sp-page-background\)/)
   assert.match(artifacts, /\.artifact-list-panel[\s\S]{0,300}background-image var\(--sp-panel-background\)/)
+  assert.match(artifacts, /\.artifact-list-panel[\s\S]{0,360}var\(--sp-shadow-panel\)/)
   assert.match(artifacts, /\.artifact-preview[\s\S]{0,360}background-image var\(--sp-panel-background\)/)
+  assert.match(artifacts, /\.artifact-preview[\s\S]{0,420}var\(--sp-shadow-panel\)/)
+  assert.match(artifacts, /\.artifact-list-filters[\s\S]{0,360}background-image var\(--sp-card-background\)[\s\S]{0,180}var\(--sp-shadow-card\)/)
   assert.match(artifacts, /\.artifact-list-item[\s\S]{0,360}background var\(--sp-flat-background\)/)
   assert.match(artifacts, /\.artifact-list-item[\s\S]{0,260}box-shadow none/)
   assert.match(artifacts, /\.artifact-card[\s\S]{0,420}background-image var\(--sp-card-background\)/)
 
   assert.match(incidents, /\.incident-workspace[\s\S]{0,360}background-image var\(--sp-panel-background\)/)
+  assert.match(incidents, /\.incident-workspace[\s\S]{0,520}var\(--sp-shadow-panel\)/)
+  assert.match(incidents, /\.incident-list-toolbar[\s\S]{0,420}background-image var\(--sp-card-background\)[\s\S]{0,180}var\(--sp-shadow-card\)/)
   assert.match(incidents, /\.incident-home-summary[\s\S]{0,320}background-image var\(--sp-card-background\)/)
   assert.match(incidents, /\.incident-list-panel[\s\S]{0,260}background-image var\(--sp-panel-background\)/)
   assert.match(incidents, /\.incident-detail-panel[\s\S]{0,260}background-image var\(--sp-panel-background\)/)
@@ -354,7 +362,7 @@ test('operations and quick-command shells use material while history and output 
   assert.match(quickCommands, /\.qm-wrap-tooltip[\s\S]{0,420}background-image var\(--sp-overlay-background\)/)
   assert.match(quickCommands, /\.qm-command-modal[\s\S]{0,560}background-image var\(--sp-overlay-background\)/)
   assert.match(quickCommands, /\.qm-command-param-section[\s\S]{0,360}background-image var\(--sp-card-background\)/)
-  assert.match(quickCommands, /\.qm-item[\s\S]{0,420}background var\(--sp-flat-background\)[\s\S]{0,180}box-shadow none/)
+  assert.match(quickCommands, /\.qm-item[\s\S]{0,520}background-image var\(--sp-card-background\)[\s\S]{0,240}var\(--sp-shadow-card\)/)
 })
 
 test('tunnel server and safety shells lift summaries while diagnostics and task rows stay flat', () => {
@@ -384,12 +392,15 @@ test('tunnel server and safety shells lift summaries while diagnostics and task 
 
 test('AI chat and configuration use material shells with flat generated output', () => {
   const ai = readClient('components/ai/ai.styl')
+  const chat = readClient('components/ai/ai-chat.jsx')
 
   assert.match(ai, /\.ai-chat-container[\s\S]{0,320}background-image var\(--sp-panel-background\)/)
   assert.match(ai, /\.ai-chat-unconfigured[\s\S]{0,360}background-image var\(--sp-card-background\)/)
   assert.match(ai, /\.chat-history-item[\s\S]{0,520}\.ant-alert[\s\S]{0,320}background-image var\(--sp-card-background\)/)
   assert.match(ai, /\.ai-generated-artifact[\s\S]{0,360}background-image var\(--sp-card-background\)/)
   assert.match(ai, /\.ai-composer-surface[\s\S]{0,420}background-image var\(--sp-control-background\)/)
+  assert.match(ai, /\.ai-mode-segmented[\s\S]{0,420}color var\(--sp-text\)/)
+  assert.match(chat, /<Segmented\s+className='ai-mode-segmented'/)
   assert.match(ai, /\.ai-attachment-chip[\s\S]{0,420}background-image var\(--sp-card-background\)/)
   assert.match(ai, /\.agent-tool-call-card,[\s\S]{0,420}background-image var\(--sp-card-background\)/)
   assert.match(ai, /\.agent-tool-pre[\s\S]{0,360}background var\(--sp-flat-background\)[\s\S]{0,180}box-shadow none/)

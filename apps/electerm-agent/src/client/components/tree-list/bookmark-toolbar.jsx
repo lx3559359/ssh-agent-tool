@@ -188,7 +188,7 @@ export default function BookmarkToolbar (props) {
 
   return (
 
-    <div className='pd1b pd1r'>
+    <div className='pd1b pd1r tree-list-action-toolbar'>
       <Flex justify='space-between' align='center'>
         <div>
           <Space.Compact>

@@ -434,7 +434,7 @@ export default class ItemListTree extends Component {
 
   renderSearch = () => {
     return (
-      <div className='pd1y'>
+      <div className='pd1y tree-list-search-toolbar'>
         <TreeSearch
           onSearch={this.handleChange}
           keyword={this.state.keyword}
