@@ -378,7 +378,7 @@
 @media (max-height: 560px)
   .right-side-panel-content-ai
     .ai-chat-input
-      margin-top 4px
+      margin-top 2px
       .ant-input.ai-chat-textarea
         height 52px !important
         min-height 52px !important
@@ -396,18 +396,26 @@
           height 0
       .ai-attachment-queue
         flex-wrap nowrap
-        max-height 64px
+        max-height 36px
         overflow-x auto
         overflow-y hidden
-        padding 6px 6px 0
+        padding 4px 4px 0
         &::-webkit-scrollbar
           height 0
       .ai-attachment-card-image
-        width 54px
-        height 54px
+        width 32px
+        height 32px
       .ai-attachment-card-file,
       .ai-attachment-card-web
-        height 54px
+        height 32px
+        padding 2px 26px 2px 5px
+      .ai-attachment-file-icon
+        flex-basis 24px
+        width 24px
+        height 24px
+        font-size 14px
+      .ai-attachment-file-copy small
+        display none
 
 .ai-config-inline-help
   display grid
@@ -1145,6 +1153,8 @@
   .sp-ai-provider-guide-controls
     width 100%
     min-width 0
+    .ant-input-search
+      min-width 0
   .sp-ai-provider-item
     align-items flex-start
     flex-direction column

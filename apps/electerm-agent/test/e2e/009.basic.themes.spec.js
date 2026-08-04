@@ -17,6 +17,23 @@ describe('terminal themes', function () {
     extendClient(client, electronApp)
     await delay(3500)
 
+    const freshState = await client.evaluate(() => ({
+      theme: window.store.config.theme,
+      terminalTheme: window.store.config.terminalTheme
+    }))
+    expect(freshState.theme).equal('shellpilot-glacier')
+    expect(freshState.terminalTheme).equal('default')
+
+    const themeToggle = '.aigshell-topbar-action[data-action-key="theme"]'
+    await client.click(themeToggle)
+    await delay(300)
+    expect(await client.evaluate(() => window.store.config.theme)).equal('shellpilot-graphite-silver')
+    expect(await client.evaluate(() => window.store.config.terminalTheme)).equal('default')
+    await client.click(themeToggle)
+    await delay(300)
+    expect(await client.evaluate(() => window.store.config.theme)).equal('shellpilot-glacier')
+    expect(await client.evaluate(() => window.store.config.terminalTheme)).equal('default')
+
     log('open settings and select UI themes')
     await client.click('.aigshell-topbar-action .anticon-setting')
     await delay(500)
@@ -38,6 +55,12 @@ describe('terminal themes', function () {
     expect(v).equal(editorState.name)
     expect(await client.countElem('.setting-wrap .sp-theme-card.active')).equal(1)
     expect(await client.countElem('.setting-wrap .sp-theme-card.selected')).equal(0)
+    const builtInIds = await client.evaluate(() => (
+      window.store.getSidebarList('terminalThemes').map(theme => theme.id)
+    ))
+    expect(builtInIds.includes('shellpilot-glacier')).equal(true)
+    expect(builtInIds.includes('shellpilot-graphite-silver')).equal(true)
+    expect(await client.countElem('.setting-wrap .sp-theme-card') >= 7).equal(true)
 
     // create theme
     log('create theme')

@@ -10,12 +10,12 @@ const {
 
 const profilePrefix = 'shellpilot-primary-regression-'
 const viewportCases = [
-  { width: 1366, height: 768, zoom: 1, theme: 'default', label: '1366-dark-100' },
-  { width: 1366, height: 768, zoom: 1.25, theme: 'defaultLight', label: '1366-light-125' },
-  { width: 1366, height: 768, zoom: 1.5, theme: 'default', label: '1366-dark-150' },
-  { width: 1920, height: 1080, zoom: 1, theme: 'defaultLight', label: '1920-light-100' },
-  { width: 1920, height: 1080, zoom: 1.25, theme: 'default', label: '1920-dark-125' },
-  { width: 1920, height: 1080, zoom: 1.5, theme: 'defaultLight', label: '1920-light-150' }
+  { width: 1366, height: 768, zoom: 1, theme: 'shellpilot-graphite-silver', label: '1366-graphite-silver-100' },
+  { width: 1366, height: 768, zoom: 1.25, theme: 'shellpilot-glacier', label: '1366-glacier-silver-125' },
+  { width: 1366, height: 768, zoom: 1.5, theme: 'shellpilot-graphite-silver', label: '1366-graphite-silver-150' },
+  { width: 1920, height: 1080, zoom: 1, theme: 'shellpilot-glacier', label: '1920-glacier-silver-100' },
+  { width: 1920, height: 1080, zoom: 1.25, theme: 'shellpilot-graphite-silver', label: '1920-graphite-silver-125' },
+  { width: 1920, height: 1080, zoom: 1.5, theme: 'shellpilot-glacier', label: '1920-glacier-silver-150' }
 ]
 
 test.setTimeout(5 * 60 * 1000)

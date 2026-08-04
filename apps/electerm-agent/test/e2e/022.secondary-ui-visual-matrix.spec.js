@@ -10,13 +10,16 @@ const {
 
 const sizes = [
   { width: 590, height: 400 },
-  { width: 820, height: 600 },
+  { width: 920, height: 600 },
   { width: 1100, height: 700 },
-  { width: 1600, height: 900 }
+  { width: 1600, height: 900 },
+  { width: 1920, height: 1080 }
 ]
-const zooms = [1, 1.25, 1.5]
+const zooms = [0.75, 1, 1.25, 1.5, 2]
 const languages = ['zh_cn', 'en_us']
 const themeIds = [
+  'shellpilot-glacier',
+  'shellpilot-graphite-silver',
   'shellpilot-ocean',
   'shellpilot-jade',
   'shellpilot-indigo',
@@ -57,7 +60,7 @@ const matrixTest = test.extend({
   }, { scope: 'worker', auto: true }]
 })
 
-test.setTimeout(20 * 60 * 1000)
+test.setTimeout(40 * 60 * 1000)
 
 function launchOptions (profileRoot) {
   return {
@@ -273,9 +276,9 @@ function assertMatrixConfiguration () {
     expect(expected.theme).toBe(dimensionOnly ? 0 : 12)
     expect(expected.total).toBe(dimensionOnly ? 12 : 24)
   } else if (!requestedSize && requestedZoomValue === undefined && requestedLanguage === undefined && !dimensionOnly) {
-    expect(expected.dimension).toBe(288)
-    expect(expected.theme).toBe(120)
-    expect(expected.total).toBe(408)
+    expect(expected.dimension).toBe(600)
+    expect(expected.theme).toBe(168)
+    expect(expected.total).toBe(768)
   }
   if (dimensionOnly) {
     expect(expected.theme).toBe(0)
@@ -380,6 +383,7 @@ async function inspectSettingsControlStates (page) {
         const style = window.getComputedStyle(element)
         return {
           background: style.backgroundColor,
+          backgroundImage: style.backgroundImage,
           border: style.borderTopColor,
           color: style.color,
           shadow: style.boxShadow
@@ -499,7 +503,7 @@ async function inspectSettingsControlStates (page) {
         tokens: {
           primary: resolveToken('--sp-primary', 'color'),
           danger: resolveToken('--sp-danger', 'color'),
-          surfaceInset: resolveToken('--sp-surface-inset', 'backgroundColor'),
+          controlBackground: resolveToken('--sp-control-background', 'backgroundImage'),
           surfaceSubtle: resolveToken('--sp-surface-subtle', 'backgroundColor'),
           textDisabled: resolveToken('--sp-text-disabled', 'color')
         }
@@ -513,6 +517,7 @@ async function inspectSettingsControlStates (page) {
         const style = window.getComputedStyle(element)
         return {
           background: style.backgroundColor,
+          backgroundImage: style.backgroundImage,
           border: style.borderTopColor,
           color: style.color,
           shadow: style.boxShadow
@@ -544,7 +549,7 @@ function assertSettingsControlStates (snapshot, context) {
   expect(snapshot.focusRestored, context).toBe(true)
   for (const [kind, states] of Object.entries(snapshot.controls)) {
     const stateContext = JSON.stringify({ context, kind, states, tokens: snapshot.tokens })
-    expect(states.normal.background, stateContext).toBe(snapshot.tokens.surfaceInset)
+    expect(states.normal.backgroundImage, stateContext).toBe(snapshot.tokens.controlBackground)
     expect(states.normal.shadow, stateContext).toContain('inset')
     expect(states.focus.border, stateContext).not.toBe(states.normal.border)
     expect(states.focus.border, stateContext).toBe(snapshot.tokens.primary)
@@ -710,17 +715,41 @@ async function inspectOpenOverlayDepth (page, selectors) {
     if (!element) return null
     const style = window.getComputedStyle(element)
     const rootStyle = window.getComputedStyle(document.documentElement)
+    const elementRect = element.getBoundingClientRect()
+    const overflowChildren = [...element.querySelectorAll('*')].flatMap(child => {
+      const rect = child.getBoundingClientRect()
+      if (rect.right <= elementRect.right + 1 && rect.width <= element.clientWidth + 1) return []
+      return [{
+        tag: child.tagName,
+        className: String(child.className || ''),
+        left: rect.left,
+        right: rect.right,
+        width: rect.width,
+        scrollWidth: child.scrollWidth,
+        clientWidth: child.clientWidth
+      }]
+    }).slice(0, 12)
+    const cardRole = selector === '.notification'
+    const shadowProbe = document.createElement('span')
+    shadowProbe.style.boxShadow = cardRole ? 'var(--sp-shadow-card)' : 'var(--sp-shadow-overlay)'
+    document.body.appendChild(shadowProbe)
+    const expectedShadow = window.getComputedStyle(shadowProbe).boxShadow
+    shadowProbe.remove()
     return {
       selector,
       shadow: style.boxShadow,
       radius: style.borderRadius,
-      expectedRadius: rootStyle.getPropertyValue('--sp-radius-overlay').trim(),
-      overflow: element.scrollWidth > element.clientWidth + 1
+      expectedRadius: rootStyle.getPropertyValue(cardRole ? '--sp-radius-card' : '--sp-radius-overlay').trim(),
+      expectedShadow,
+      overflow: element.scrollWidth > element.clientWidth + 1,
+      scrollWidth: element.scrollWidth,
+      clientWidth: element.clientWidth,
+      overflowChildren
     }
   }).filter(Boolean), selectors)
   expect(overlayMetrics, JSON.stringify({ selectors, overlayMetrics })).toHaveLength(selectors.length)
   for (const metric of overlayMetrics) {
-    expect(metric.shadow, JSON.stringify(metric)).not.toBe('none')
+    expect(metric.shadow, JSON.stringify(metric)).toContain(metric.expectedShadow)
     expect(metric.radius, JSON.stringify(metric)).toBe(metric.expectedRadius)
     expect(metric.overflow, JSON.stringify(metric)).toBe(false)
   }
@@ -1560,11 +1589,6 @@ async function inspectTerminalInvariant (page) {
       }
       return ''
     }
-    const shadowProbe = document.createElement('span')
-    shadowProbe.style.boxShadow = 'var(--sp-shadow-sm)'
-    document.body.appendChild(shadowProbe)
-    const tabShadow = window.getComputedStyle(shadowProbe).boxShadow
-    shadowProbe.remove()
     return selectors.map(selector => {
       const element = [...document.querySelectorAll(selector)].find(candidate => {
         const rect = candidate.getBoundingClientRect()
@@ -1577,8 +1601,7 @@ async function inspectTerminalInvariant (page) {
         found: Boolean(element),
         background: element ? effectiveBackground(element) : '',
         directBackground: style?.backgroundColor || '',
-        shadow: style?.boxShadow || '',
-        expectedShadow: selector.includes(' .tab') ? tabShadow : 'none'
+        shadow: style?.boxShadow || ''
       }
     })
   })
@@ -1592,7 +1615,7 @@ function assertTerminalInvariant (terminal, context) {
     if (item.selector !== '.xterm-screen') {
       expect(item.directBackground, JSON.stringify({ context, item })).toBe(lockedTerminalRgb)
     }
-    expect(item.shadow, JSON.stringify({ context, item })).toBe(item.expectedShadow)
+    expect(item.shadow, JSON.stringify({ context, item })).toBe('none')
   }
 }
 
@@ -1722,6 +1745,7 @@ async function inspectShellChrome (page) {
         selector,
         found: true,
         background: style.backgroundColor,
+        backgroundImage: style.backgroundImage,
         border: style[borderProperty],
         shadow: style.boxShadow,
         overflowX: style.overflowX,
@@ -1773,7 +1797,9 @@ async function inspectShellChrome (page) {
       },
       tokens: {
         surface: resolveToken('--sp-surface', 'backgroundColor'),
-        surfaceElevated: resolveToken('--sp-surface-elevated', 'backgroundColor'),
+        topbarBackground: resolveToken('--sp-topbar-background', 'backgroundImage'),
+        panelBackground: resolveToken('--sp-panel-background', 'backgroundImage'),
+        flatBackground: resolveToken('--sp-flat-background', 'backgroundColor'),
         border: resolveToken('--sp-border', 'borderTopColor'),
         shadowControl: resolveToken('--sp-shadow-control', 'boxShadow'),
         shadowCard: resolveToken('--sp-shadow-card', 'boxShadow'),
@@ -1914,18 +1940,22 @@ async function exerciseRightPanelScroll (page) {
 
 function assertShellChrome (snapshot, context) {
   const message = JSON.stringify({ context, snapshot })
-  const expectedBackgrounds = {
-    topbar: snapshot.tokens.surfaceElevated,
-    sidebar: snapshot.tokens.surface,
-    rightPanel: snapshot.tokens.surface,
-    footer: snapshot.tokens.surfaceElevated
+  const expectedBackgroundImages = {
+    topbar: snapshot.tokens.topbarBackground,
+    sidebar: snapshot.tokens.panelBackground,
+    rightPanel: snapshot.tokens.panelBackground,
+    footer: 'none'
   }
   for (const [name, item] of Object.entries(snapshot.shell)) {
     const itemMessage = JSON.stringify({ context, name, item, tokens: snapshot.tokens })
     expect(item.found, itemMessage).toBe(true)
-    expect(item.background, itemMessage).toBe(expectedBackgrounds[name])
+    expect(item.backgroundImage, itemMessage).toBe(expectedBackgroundImages[name])
     expect(item.background, itemMessage).not.toBe('rgba(0, 0, 0, 0)')
-    expect(item.border, itemMessage).toBe(snapshot.tokens.border)
+    if (name === 'topbar') {
+      expect(item.border, itemMessage).not.toBe('rgba(0, 0, 0, 0)')
+    } else {
+      expect(item.border, itemMessage).toBe(snapshot.tokens.border)
+    }
     expect(item.horizontalOverflow, itemMessage).toBe(false)
     if (name === 'topbar' || name === 'footer') {
       expect(item.unreachableInteractive, itemMessage).toEqual([])
@@ -1933,9 +1963,13 @@ function assertShellChrome (snapshot, context) {
     expect(item.rect.left, itemMessage).toBeGreaterThanOrEqual(-overflowTolerance)
     expect(item.rect.right, itemMessage).toBeLessThanOrEqual(snapshot.viewport.width + overflowTolerance)
   }
-  expect(snapshot.shell.topbar.shadow, message).toContain(snapshot.tokens.shadowCard)
+  expect(snapshot.shell.topbar.shadow, message).not.toBe('none')
   expect(snapshot.shell.topbar.shadow, message).not.toContain(snapshot.tokens.shadowControl)
+  expect(snapshot.shell.topbar.shadow, message).not.toContain(snapshot.tokens.shadowCard)
   expect(snapshot.shell.topbar.shadow, message).not.toContain(snapshot.tokens.shadowOverlay)
+  expect(snapshot.shell.sidebar.shadow, message).toBe(snapshot.tokens.shadowControl)
+  expect(snapshot.shell.rightPanel.shadow, message).toBe(snapshot.tokens.shadowOverlay)
+  expect(snapshot.shell.footer.background, message).toBe(snapshot.tokens.flatBackground)
   expect(snapshot.shell.footer.shadow, message).toMatch(/\s-\d+px\s/)
   expect(snapshot.shell.footer.shadow, message).not.toContain(snapshot.tokens.shadowCard)
   expect(snapshot.shell.footer.shadow, message).not.toContain(snapshot.tokens.shadowOverlay)
@@ -2205,7 +2239,11 @@ async function exerciseLanguageAndThemeState (page) {
   const initialTheme = await page.evaluate(() => window.store.config.theme)
   const themeCards = page.locator('.sp-theme-card')
   await expect.poll(() => themeCards.count(), { timeout: 20000 }).toBeGreaterThanOrEqual(7)
-  const oceanCard = themeCards.nth(2)
+  const oceanIndex = await page.evaluate(() => {
+    return window.store.getSidebarList('terminalThemes').findIndex(item => item.id === 'shellpilot-ocean')
+  })
+  expect(oceanIndex).toBeGreaterThanOrEqual(0)
+  const oceanCard = themeCards.nth(oceanIndex)
   const oceanActions = oceanCard.locator('.sp-theme-card-actions button')
   await oceanActions.nth(1).click()
   expect(await page.evaluate(() => window.store.config.theme)).toBe(initialTheme)
