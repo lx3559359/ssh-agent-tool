@@ -2,11 +2,16 @@
   height 100%
   display flex
   flex-direction column
+  background-image var(--sp-panel-background)
 
 .ai-chat-unconfigured
   gap 8px
   min-height 0
   padding 24px 20px
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-card)
+  background-image var(--sp-card-background)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-card)
   color var(--text-dark)
   text-align center
   .ant-btn
@@ -89,8 +94,8 @@
   > .mg1y .ant-alert
     border 1px solid var(--sp-border)
     border-radius var(--sp-radius-toolbar)
-    background var(--sp-surface-elevated)
-    box-shadow var(--sp-shadow-sm)
+    background-image var(--sp-card-background)
+    box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-card)
   > .ai-stop-icon-square
     position absolute
     bottom 8px
@@ -102,6 +107,8 @@
     border-radius var(--sp-radius-small)
     pre
       margin-bottom 0
+      background var(--sp-flat-background)
+      box-shadow none
     // .code-block-actions
     //   display block
     // &:hover
@@ -114,6 +121,8 @@
 
 .ai-stream-plain-output
   margin 0
+  background var(--sp-flat-background)
+  box-shadow none
   white-space pre-wrap
   overflow-wrap anywhere
   font-family inherit
@@ -140,9 +149,10 @@
   align-items center
   gap 6px
   color var(--text)
-  background var(--sp-surface-soft)
+  background-image var(--sp-card-background)
   border 1px solid var(--sp-border)
   border-radius var(--sp-radius-control)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-card)
   cursor pointer
   > span
     max-width 210px
@@ -170,12 +180,12 @@
     overflow hidden
     border 1px solid var(--sp-border)
     border-radius var(--sp-radius-control)
-    background var(--sp-surface-elevated)
-    box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-md)
+    background-image var(--sp-control-background)
+    box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-control)
     transition border-color 160ms ease, box-shadow 160ms ease
     &:focus-within
       border-color var(--primary)
-      box-shadow 0 0 0 2px var(--sp-primary-soft), var(--sp-shadow-md)
+      box-shadow 0 0 0 2px var(--sp-primary-soft), var(--sp-shadow-control)
 
   .ant-input
     padding 10px 44px 34px 10px
@@ -222,7 +232,8 @@
   padding 0 8px
   border 1px solid var(--sp-border)
   border-radius var(--sp-radius-control)
-  background var(--sp-surface-soft)
+  background-image var(--sp-control-background)
+  box-shadow var(--sp-shadow-control)
   color var(--text)
   font-size 12px
   line-height 22px
@@ -249,11 +260,11 @@
   flex 0 0 auto
   border 1px solid var(--sp-border)
   border-radius calc(var(--sp-radius-control) + 2px)
-  background var(--sp-surface-soft)
+  background-image var(--sp-card-background)
   color var(--text)
   font-size 12px
   cursor default
-  box-shadow var(--sp-shadow-sm)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-card)
 
 .ai-attachment-card-image
   width 72px
@@ -428,8 +439,8 @@
   padding 2px 7px
   border 1px solid var(--main-darker)
   border-radius var(--sp-radius-control)
-  box-shadow var(--sp-shadow-sm)
-  background var(--main)
+  box-shadow var(--sp-shadow-control)
+  background-image var(--sp-control-background)
   color var(--text)
   font-size 11px
   line-height 18px
@@ -510,8 +521,8 @@
   padding 12px
   border 1px solid var(--main-darker)
   border-radius var(--sp-radius-card)
-  background var(--main-light)
-  box-shadow var(--sp-shadow-md)
+  background-image var(--sp-card-background)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-card)
   dt
     color var(--text-dark)
   dd
@@ -564,7 +575,8 @@
     white-space pre-wrap
     word-break break-all
     border-radius var(--sp-radius-small)
-    background var(--main-dark)
+    background var(--sp-flat-background)
+    box-shadow none
 
 @media (max-width: 780px)
   .agent-takeover-controls
@@ -679,7 +691,8 @@
   padding 6px 8px
   border 1px solid var(--sp-border)
   border-radius var(--sp-radius-control)
-  background var(--sp-surface-soft)
+  background-image var(--sp-card-background)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-card)
   color var(--text-dark)
   font-size 11px
   strong
@@ -699,8 +712,8 @@
 .agent-tool-readonly-card
   border 1px solid var(--sp-border)
   border-radius var(--sp-radius-card)
-  background var(--sp-surface-soft)
-  box-shadow var(--sp-shadow-md)
+  background-image var(--sp-card-background)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-card)
 
 .agent-tool-call-card
   margin-bottom 6px
@@ -749,7 +762,8 @@
   color var(--text-color-2)
 
 .agent-tool-pre
-  background var(--main-dark)
+  background var(--sp-flat-background)
+  box-shadow none
   padding 6px 8px
   border-radius 3px
   font-size 12px
@@ -789,7 +803,8 @@
   min-width 0
   padding 2px 5px
   border-radius 3px
-  background var(--main-dark)
+  background var(--sp-flat-background)
+  box-shadow none
   color var(--text-color)
   white-space pre-wrap
   overflow-wrap anywhere
@@ -865,11 +880,15 @@
 
 .agent-readonly-output
   margin-top 4px
+  background var(--sp-flat-background)
+  box-shadow none
   overflow auto
 
 .agent-readonly-raw
   border-top 1px dashed var(--main-darker)
   padding-top 4px
+  background var(--sp-flat-background)
+  box-shadow none
 
 @keyframes spin
   from
@@ -891,7 +910,10 @@
   padding 24px
   box-sizing border-box
   color var(--sp-text)
-  background var(--sp-surface)
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-panel)
+  background-image var(--sp-panel-background)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-lg)
   .ant-form-item
   .ant-form-item-control
   .ant-form-item-control-input
@@ -980,7 +1002,8 @@
   padding 14px 16px
   border 1px solid var(--sp-border)
   border-radius var(--sp-radius-card)
-  background var(--sp-surface-subtle)
+  background-image var(--sp-card-background)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-card)
 
 .sp-ai-provider-guide-head
   display flex
@@ -1026,6 +1049,8 @@
   min-width 0
   padding 12px 0
   border-bottom 1px solid var(--sp-border)
+  background var(--sp-flat-background)
+  box-shadow none
 
 .sp-ai-provider-item-main
   flex 1 1 auto
@@ -1146,7 +1171,8 @@
     border 1px solid var(--sp-border)
     border-radius var(--sp-radius-control)
     color var(--text)
-    background var(--background)
+    background var(--sp-flat-background)
+    box-shadow none
 
 .shellpilot-ai-web-access-disclosure
   color var(--text-dark)

@@ -107,7 +107,7 @@ function assertCssRule (blocks, selector, expectedDeclarations) {
   }
 }
 
-const protectedDenseSelector = /(?:\.xterm(?:-screen|-viewport)?|\.term-wrap|\.sftp-item|tbody\s+tr|\.batch-op-log-entry|\.operations-history\s+article|\.incident-list-item|\.ssh-tunnel-history-item|\.agent-tool-output|\.ai-file-change-diff)/i
+const protectedDenseSelector = /(?:\.xterm(?:-screen|-viewport)?|\.term-wrap|\.sftp-item|tbody\s+tr|\.batch-op-log-entry|\.operations-history\s+article|\.incident-list-item|\.ssh-tunnel-history-item|\.agent-tool-(?:output|pre)|\.agent-readonly-(?:command|output|raw)|\.agent-task-(?:step\s*>\s*pre|output\s+pre)|\.ai-file-change(?:-review)?-diff|\.code-block\s+pre)/i
 
 function assertNoProtectedDenseElevation (css, filename) {
   const visit = source => {
@@ -1001,7 +1001,10 @@ test('client styles cannot decorate protected dense surfaces with semantic UI ma
     'components/fleet-status/fleet-service-selector.styl',
     'components/operations-toolkit/workspace/operations-workspace.styl',
     'components/incidents/incidents.styl',
-    'components/ssh-tunnel/ssh-tunnel-modal.styl'
+    'components/ssh-tunnel/ssh-tunnel-modal.styl',
+    'components/ai/ai.styl',
+    'components/ai/agent-task-runner.styl',
+    'components/ai/ai-file-change-review-modal.styl'
   ]
   for (const file of protectedSurfaceFiles) {
     assertNoProtectedDenseElevation(await compileStylus(file), file)
@@ -1029,7 +1032,15 @@ test('dense surface guard covers every protected selector and semantic material'
     '.incident-list-item',
     '.ssh-tunnel-history-item',
     '.agent-tool-output',
-    '.ai-file-change-diff'
+    '.agent-tool-pre',
+    '.agent-readonly-command',
+    '.agent-readonly-output',
+    '.agent-readonly-raw',
+    '.agent-task-step > pre',
+    '.agent-task-output pre',
+    '.ai-file-change-diff',
+    '.ai-file-change-review-diff',
+    '.code-block pre'
   ]
   const states = ['', ':hover', ':focus-visible', '.active', '[data-state="active"]']
   const shadows = [

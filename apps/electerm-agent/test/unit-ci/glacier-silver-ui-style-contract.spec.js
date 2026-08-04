@@ -69,7 +69,11 @@ const shellStyleFiles = [
   'components/ssh-tunnel/ssh-tunnel-modal.styl',
   'components/server-status/server-status-modal.styl',
   'components/main/safety-operation-center-modal.styl',
-  'components/main/safety-task-progress.styl'
+  'components/main/safety-task-progress.styl',
+  'components/ai/ai.styl',
+  'components/ai/agent-skill-manager.styl',
+  'components/ai/agent-task-runner.styl',
+  'components/ai/ai-file-change-review-modal.styl'
 ]
 
 test('Glacier Silver shell Stylus files compile', async () => {
@@ -328,6 +332,49 @@ test('tunnel server and safety shells lift summaries while diagnostics and task 
   assert.match(progress, /\.safety-task-progress[\s\S]{0,360}background-image var\(--sp-panel-background\)/)
   assert.match(progress, /\.safety-task-progress-step[\s\S]{0,360}background var\(--sp-flat-background\)[\s\S]{0,180}box-shadow none/)
   assert.match(progress, /\.safety-task-progress-output[\s\S]{0,360}background var\(--sp-flat-background\)[\s\S]{0,180}box-shadow none/)
+})
+
+test('AI chat and configuration use material shells with flat generated output', () => {
+  const ai = readClient('components/ai/ai.styl')
+
+  assert.match(ai, /\.ai-chat-container[\s\S]{0,320}background-image var\(--sp-panel-background\)/)
+  assert.match(ai, /\.ai-chat-unconfigured[\s\S]{0,360}background-image var\(--sp-card-background\)/)
+  assert.match(ai, /\.chat-history-item[\s\S]{0,520}\.ant-alert[\s\S]{0,320}background-image var\(--sp-card-background\)/)
+  assert.match(ai, /\.ai-generated-artifact[\s\S]{0,360}background-image var\(--sp-card-background\)/)
+  assert.match(ai, /\.ai-composer-surface[\s\S]{0,420}background-image var\(--sp-control-background\)/)
+  assert.match(ai, /\.ai-attachment-chip[\s\S]{0,420}background-image var\(--sp-card-background\)/)
+  assert.match(ai, /\.agent-tool-call-card,[\s\S]{0,420}background-image var\(--sp-card-background\)/)
+  assert.match(ai, /\.agent-tool-pre[\s\S]{0,360}background var\(--sp-flat-background\)[\s\S]{0,180}box-shadow none/)
+  assert.match(ai, /\.agent-readonly-command[\s\S]{0,360}background var\(--sp-flat-background\)[\s\S]{0,180}box-shadow none/)
+  assert.match(ai, /\.agent-readonly-output[\s\S]{0,300}background var\(--sp-flat-background\)[\s\S]{0,180}box-shadow none/)
+  assert.match(ai, /\.sp-ai-config-form[\s\S]{0,420}background-image var\(--sp-panel-background\)/)
+  assert.match(ai, /\.sp-ai-provider-guide[\s\S]{0,420}background-image var\(--sp-card-background\)/)
+  assert.match(ai, /\.sp-ai-provider-item[\s\S]{0,360}background var\(--sp-flat-background\)[\s\S]{0,180}box-shadow none/)
+  assert.match(ai, /\.send-to-ai-icon\.disabled[\s\S]{0,100}cursor not-allowed/)
+  assert.match(ai, /\.agent-send-disabled[\s\S]{0,100}cursor not-allowed/)
+})
+
+test('AI task skill and file-review overlays keep logs editors and diffs flat', () => {
+  const skills = readClient('components/ai/agent-skill-manager.styl')
+  const tasks = readClient('components/ai/agent-task-runner.styl')
+  const review = readClient('components/ai/ai-file-change-review-modal.styl')
+
+  assert.match(skills, /\.agent-skill-manager-actions[\s\S]{0,360}background-image var\(--sp-control-background\)/)
+  assert.match(skills, /\.agent-skill-manager-list[\s\S]{0,360}background-image var\(--sp-panel-background\)/)
+  assert.match(skills, /\.agent-skill-editor-files,[\s\S]{0,420}background-image var\(--sp-panel-background\)/)
+  assert.match(skills, /\.ant-list-item[\s\S]{0,360}background var\(--sp-flat-background\)[\s\S]{0,180}box-shadow none/)
+  assert.match(skills, /\.agent-skill-draft-summary[\s\S]{0,420}background-image var\(--sp-card-background\)/)
+
+  assert.match(tasks, /\.agent-task-runner-modal[\s\S]{0,360}\.ant-modal-content[\s\S]{0,320}background-image var\(--sp-overlay-background\)/)
+  assert.match(tasks, /\.agent-task-summary[\s\S]{0,360}background-image var\(--sp-card-background\)/)
+  assert.match(tasks, /\.agent-task-step[\s\S]{0,420}background-image var\(--sp-card-background\)/)
+  assert.match(tasks, /\.agent-task-step > pre[\s\S]{0,360}background var\(--sp-flat-background\)[\s\S]{0,180}box-shadow none/)
+  assert.match(tasks, /\.agent-task-output pre[\s\S]{0,360}background var\(--sp-flat-background\)[\s\S]{0,180}box-shadow none/)
+
+  assert.match(review, /\.ai-file-change-review-body[\s\S]{0,420}background-image var\(--sp-panel-background\)/)
+  assert.match(review, /\.ai-file-change-review-list[\s\S]{0,360}background-image var\(--sp-control-background\)/)
+  assert.match(review, /button[\s\S]{0,420}background var\(--sp-flat-background\)[\s\S]{0,180}box-shadow none/)
+  assert.match(review, /\.ai-file-change-review-diff[\s\S]{0,420}background var\(--sp-flat-background\)[\s\S]{0,520}pre[\s\S]{0,360}background var\(--sp-flat-background\)[\s\S]{0,180}box-shadow none/)
 })
 
 test('Glacier material recipes remain centralized in semantic tokens', () => {
