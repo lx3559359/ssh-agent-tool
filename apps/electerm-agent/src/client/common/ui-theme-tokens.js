@@ -134,21 +134,27 @@ export function deriveSecondaryThemeTokens (theme = {}) {
   const topbarBackground = `linear-gradient(100deg, ${topbarStart} 0%, ${topbarMid} 52%, ${topbarEnd} 100%)`
   const controlBackground = `linear-gradient(145deg, ${cardStart} 0%, ${cardMid} 100%)`
   const cardBackground = darkSurface
-    ? `radial-gradient(110% 90% at 15% 0%, rgba(255, 255, 255, 0.10) 0%, rgba(255, 255, 255, 0.04) 35%, transparent 72%), linear-gradient(150deg, ${cardStart} 0%, ${cardMid} 58%, ${cardEnd} 100%)`
-    : `radial-gradient(110% 90% at 15% 0%, #FFFFFF 0%, rgba(255, 255, 255, 0.82) 35%, transparent 72%), linear-gradient(150deg, ${cardStart} 0%, ${cardMid} 58%, ${cardEnd} 100%)`
+    ? `radial-gradient(110% 90% at 15% 0%, rgba(255, 255, 255, 0.10) 0%, rgba(255, 255, 255, 0.04) 34%, transparent 72%), linear-gradient(150deg, ${cardStart} 0%, ${cardMid} 54%, ${cardEnd} 100%)`
+    : `radial-gradient(110% 90% at 15% 0%, #FFFFFF 0%, rgba(255, 255, 255, 0.72) 34%, transparent 72%), linear-gradient(150deg, ${cardStart} 0%, ${cardMid} 54%, ${cardEnd} 100%)`
   const panelBackground = `linear-gradient(150deg, ${panelStart} 0%, ${panelMid} 58%, ${panelEnd} 100%)`
   const overlayBackground = darkSurface
     ? `linear-gradient(150deg, ${cardStart} 0%, ${cardMid} 52%, ${cardEnd} 100%)`
     : cardBackground
-  const shadowSm = darkSurface
-    ? '0 1px 2px rgba(0, 0, 0, 0.30), 0 8px 16px rgba(0, 0, 0, 0.28), 0 0 0 1px rgba(160, 148, 255, 0.10)'
-    : '0 1px 2px rgba(56, 78, 104, 0.10), 0 6px 14px rgba(68, 91, 118, 0.10)'
-  const shadowMd = darkSurface
-    ? '0 2px 4px rgba(0, 0, 0, 0.34), 0 16px 30px rgba(0, 0, 0, 0.34), 0 0 0 1px rgba(160, 148, 255, 0.14)'
-    : '0 2px 4px rgba(56, 78, 104, 0.10), 0 14px 28px rgba(68, 91, 118, 0.14)'
-  const shadowLg = darkSurface
-    ? '0 4px 8px rgba(0, 0, 0, 0.38), 0 24px 48px rgba(0, 0, 0, 0.42), 0 0 0 1px rgba(160, 148, 255, 0.18)'
-    : '0 4px 8px rgba(49, 68, 91, 0.12), 0 24px 48px rgba(55, 75, 99, 0.18)'
+  const shadowControl = darkSurface
+    ? '0 2px 4px rgba(0, 0, 0, 0.34), 0 8px 18px rgba(0, 0, 0, 0.30), 0 0 0 1px rgba(160, 148, 255, 0.12)'
+    : '0 2px 4px rgba(44, 62, 84, 0.10), 0 7px 15px rgba(54, 77, 103, 0.14)'
+  const shadowCard = darkSurface
+    ? '0 3px 6px rgba(0, 0, 0, 0.38), 0 16px 32px rgba(0, 0, 0, 0.38), 0 0 0 1px rgba(160, 148, 255, 0.16)'
+    : '0 3px 6px rgba(44, 62, 84, 0.13), 0 14px 27px rgba(54, 77, 103, 0.20)'
+  const shadowPanel = darkSurface
+    ? '0 5px 10px rgba(0, 0, 0, 0.42), 0 22px 44px rgba(0, 0, 0, 0.46), 0 0 0 1px rgba(160, 148, 255, 0.20)'
+    : '0 4px 8px rgba(44, 62, 84, 0.15), 0 20px 40px rgba(54, 77, 103, 0.23)'
+  const shadowOverlay = darkSurface
+    ? '0 8px 16px rgba(0, 0, 0, 0.46), 0 30px 58px rgba(0, 0, 0, 0.54), 0 0 0 1px rgba(160, 148, 255, 0.24)'
+    : '0 6px 12px rgba(38, 54, 74, 0.18), 0 28px 52px rgba(49, 70, 96, 0.28)'
+  const shadowSm = shadowControl
+  const shadowMd = shadowCard
+  const shadowLg = shadowOverlay
   const shadowFocus = darkSurface
     ? '0 0 0 3px rgba(133, 131, 255, 0.28), 0 10px 24px rgba(0, 0, 0, 0.36)'
     : '0 0 0 3px rgba(92, 91, 233, 0.24), 0 8px 20px rgba(68, 91, 118, 0.14)'
@@ -192,18 +198,19 @@ export function deriveSecondaryThemeTokens (theme = {}) {
     danger,
     dangerSoft: mix(danger, surface, 0.88),
     radiusSmall: '8px',
-    radiusControl: '10px',
-    radiusToolbar: '12px',
-    radiusCard: '16px',
-    radiusPanel: '20px',
-    radiusOverlay: '22px',
+    radiusControl: '12px',
+    radiusToolbar: '16px',
+    radiusCard: '18px',
+    radiusPanel: '22px',
+    radiusOverlay: '24px',
     shadowSm,
     shadowMd,
     shadowLg,
     shadowFocus,
-    shadowControl: shadowSm,
-    shadowCard: shadowMd,
-    shadowOverlay: shadowLg,
+    shadowControl,
+    shadowCard,
+    shadowPanel,
+    shadowOverlay,
     focusOffset: '2px',
     motionFast: '120ms',
     motionNormal: '180ms'

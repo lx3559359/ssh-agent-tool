@@ -59,6 +59,7 @@ const tokenKeys = [
   'shadowFocus',
   'shadowControl',
   'shadowCard',
+  'shadowPanel',
   'shadowOverlay',
   'focusOffset',
   'motionFast',
@@ -160,7 +161,7 @@ test('derives canonical secondary tokens from a legacy UI theme', async () => {
   assert.equal(tokens.primary, '#0088CC')
   assert.match(tokens.border, /^#[0-9A-F]{6}$/)
   assert.match(tokens.primarySoft, /^#[0-9A-F]{6}$/)
-  assert.equal(tokens.radiusCard, '16px')
+  assert.equal(tokens.radiusCard, '18px')
 })
 
 test('uses brightness-aware readable fallbacks for malformed themes', async t => {
@@ -325,64 +326,60 @@ test('derives restrained light and dark depth without changing compatibility ali
       light.radiusPanel,
       light.radiusOverlay
     ],
-    ['8px', '10px', '12px', '16px', '20px', '22px']
+    ['8px', '12px', '16px', '18px', '22px', '24px']
   )
   assert.equal(
-    light.shadowSm,
-    '0 1px 2px rgba(56, 78, 104, 0.10), 0 6px 14px rgba(68, 91, 118, 0.10)'
+    light.shadowControl,
+    '0 2px 4px rgba(44, 62, 84, 0.10), 0 7px 15px rgba(54, 77, 103, 0.14)'
   )
   assert.equal(
-    light.shadowMd,
-    '0 2px 4px rgba(56, 78, 104, 0.10), 0 14px 28px rgba(68, 91, 118, 0.14)'
+    light.shadowCard,
+    '0 3px 6px rgba(44, 62, 84, 0.13), 0 14px 27px rgba(54, 77, 103, 0.20)'
   )
   assert.equal(
-    light.shadowLg,
-    '0 4px 8px rgba(49, 68, 91, 0.12), 0 24px 48px rgba(55, 75, 99, 0.18)'
+    light.shadowPanel,
+    '0 4px 8px rgba(44, 62, 84, 0.15), 0 20px 40px rgba(54, 77, 103, 0.23)'
+  )
+  assert.equal(
+    light.shadowOverlay,
+    '0 6px 12px rgba(38, 54, 74, 0.18), 0 28px 52px rgba(49, 70, 96, 0.28)'
   )
   assert.equal(
     light.shadowFocus,
     '0 0 0 3px rgba(92, 91, 233, 0.24), 0 8px 20px rgba(68, 91, 118, 0.14)'
   )
-  assert.equal(
-    dark.shadowSm,
-    '0 1px 2px rgba(0, 0, 0, 0.30), 0 8px 16px rgba(0, 0, 0, 0.28), 0 0 0 1px rgba(160, 148, 255, 0.10)'
-  )
-  assert.equal(
-    dark.shadowMd,
-    '0 2px 4px rgba(0, 0, 0, 0.34), 0 16px 30px rgba(0, 0, 0, 0.34), 0 0 0 1px rgba(160, 148, 255, 0.14)'
-  )
-  assert.equal(
-    dark.shadowLg,
-    '0 4px 8px rgba(0, 0, 0, 0.38), 0 24px 48px rgba(0, 0, 0, 0.42), 0 0 0 1px rgba(160, 148, 255, 0.18)'
-  )
+  assert.match(dark.shadowControl, /rgba\(0, 0, 0, 0\.34\)/)
+  assert.match(dark.shadowCard, /rgba\(0, 0, 0, 0\.38\)/)
+  assert.match(dark.shadowPanel, /rgba\(0, 0, 0, 0\.46\)/)
+  assert.match(dark.shadowOverlay, /rgba\(0, 0, 0, 0\.54\)/)
   assert.equal(
     dark.shadowFocus,
     '0 0 0 3px rgba(133, 131, 255, 0.28), 0 10px 24px rgba(0, 0, 0, 0.36)'
   )
-  assert.equal(light.shadowControl, light.shadowSm)
-  assert.equal(light.shadowCard, light.shadowMd)
-  assert.equal(light.shadowOverlay, light.shadowLg)
+  assert.equal(light.shadowSm, light.shadowControl)
+  assert.equal(light.shadowMd, light.shadowCard)
+  assert.equal(light.shadowLg, light.shadowOverlay)
   assert.equal(light.highlightTop, light.highlight)
-  assert.notEqual(light.shadowLg, dark.shadowLg)
+  assert.notEqual(light.shadowOverlay, dark.shadowOverlay)
 })
 
 test('derives the approved Glacier and Graphite Silver material layers', async () => {
   const { deriveSecondaryThemeTokens } = await import(moduleUrl)
   const light = deriveSecondaryThemeTokens({
     main: '#EDF5FB',
-    'main-light': '#F6FAFC',
-    'surface-soft': '#EAF1F6',
+    'main-light': '#F8FBFD',
+    'surface-soft': '#E7EEF4',
     text: '#14243F',
     'text-dark': '#65738A',
     primary: '#5C5BE9',
     'primary-alt': '#5547A6',
     'page-dot': '#537EB2',
-    'card-start': '#F6FAFC',
-    'card-mid': '#EAF1F6',
-    'card-end': '#DCE6EE',
-    'panel-start': '#F3F8FB',
-    'panel-mid': '#E7EFF5',
-    'panel-end': '#D9E4EC',
+    'card-start': '#F8FBFD',
+    'card-mid': '#E7EEF4',
+    'card-end': '#D8E4EC',
+    'panel-start': '#F5F9FC',
+    'panel-mid': '#E8F0F5',
+    'panel-end': '#DAE5ED',
     flat: '#EAF1F6',
     'topbar-start': '#306290',
     'topbar-mid': '#40588E',
@@ -390,20 +387,20 @@ test('derives the approved Glacier and Graphite Silver material layers', async (
   })
   const dark = deriveSecondaryThemeTokens({
     main: '#101722',
-    'main-light': '#2A3543',
+    'main-light': '#2B3745',
     'surface-soft': '#202A37',
     text: '#EDF3FA',
     'text-dark': '#AAB6C5',
     primary: '#8583FF',
     'primary-alt': '#A094FF',
     'page-dot': '#536B8A',
-    'card-start': '#2A3543',
+    'card-start': '#2B3745',
     'card-mid': '#202A37',
-    'card-end': '#18212C',
-    'panel-start': '#26313E',
+    'card-end': '#17212C',
+    'panel-start': '#27323F',
     'panel-mid': '#1D2733',
-    'panel-end': '#151D27',
-    flat: '#18212C',
+    'panel-end': '#141D27',
+    flat: '#17212C',
     'topbar-start': '#263F63',
     'topbar-mid': '#37477A',
     'topbar-end': '#493A87'
@@ -415,17 +412,17 @@ test('derives the approved Glacier and Graphite Silver material layers', async (
   )
   assert.equal(
     light.cardBackground,
-    'radial-gradient(110% 90% at 15% 0%, #FFFFFF 0%, rgba(255, 255, 255, 0.82) 35%, transparent 72%), linear-gradient(150deg, #F6FAFC 0%, #EAF1F6 58%, #DCE6EE 100%)'
+    'radial-gradient(110% 90% at 15% 0%, #FFFFFF 0%, rgba(255, 255, 255, 0.72) 34%, transparent 72%), linear-gradient(150deg, #F8FBFD 0%, #E7EEF4 54%, #D8E4EC 100%)'
   )
   assert.equal(
     light.panelBackground,
-    'linear-gradient(150deg, #F3F8FB 0%, #E7EFF5 58%, #D9E4EC 100%)'
+    'linear-gradient(150deg, #F5F9FC 0%, #E8F0F5 58%, #DAE5ED 100%)'
   )
   assert.equal(light.flatBackground, '#EAF1F6')
   assert.match(light.pageBackground, /rgba\(83, 126, 178, 0\.30\)/)
-  assert.match(dark.cardBackground, /#2A3543 0%.*#202A37 58%.*#18212C 100%/)
-  assert.doesNotMatch(dark.cardBackground, /#F6FAFC|#EAF1F6|#DCE6EE/)
-  assert.equal(dark.flatBackground, '#18212C')
+  assert.match(dark.cardBackground, /#2B3745 0%.*#202A37 54%.*#17212C 100%/)
+  assert.doesNotMatch(dark.cardBackground, /#F8FBFD|#E7EEF4|#D8E4EC/)
+  assert.equal(dark.flatBackground, '#17212C')
 })
 
 test('serializes the exact secondary UI token contract', async () => {
@@ -456,13 +453,14 @@ test('serializes the exact secondary UI token contract', async () => {
   assert.ok(variables.includes('--sp-panel-background'))
   assert.ok(variables.includes('--sp-overlay-background'))
   assert.ok(variables.includes('--sp-flat-background'))
+  assert.ok(variables.includes('--sp-shadow-panel'))
   assert.match(css, /--sp-primary: #2878E6;/)
   assert.match(css, /--sp-radius-small: 8px;/)
-  assert.match(css, /--sp-radius-control: 10px;/)
-  assert.match(css, /--sp-radius-toolbar: 12px;/)
-  assert.match(css, /--sp-radius-card: 16px;/)
-  assert.match(css, /--sp-radius-panel: 20px;/)
-  assert.match(css, /--sp-radius-overlay: 22px;/)
+  assert.match(css, /--sp-radius-control: 12px;/)
+  assert.match(css, /--sp-radius-toolbar: 16px;/)
+  assert.match(css, /--sp-radius-card: 18px;/)
+  assert.match(css, /--sp-radius-panel: 22px;/)
+  assert.match(css, /--sp-radius-overlay: 24px;/)
   assert.equal((css.match(/:root/g) || []).length, 1)
 })
 
