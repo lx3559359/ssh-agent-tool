@@ -50,3 +50,30 @@ export function assertAbsolutePath (value, label = '路径') {
   }
   return normalized
 }
+
+export function assertOptionalHost (value, label = '主机') {
+  const normalized = String(value || '').trim()
+  return normalized ? assertHost(normalized, label) : ''
+}
+
+export function assertOptionalPort (value, label = '端口') {
+  if (value === undefined || value === null || value === '') return ''
+  return assertPort(value, label)
+}
+
+export function assertEnumValue (value, allowed, label = '选项') {
+  const normalized = String(value || '').trim()
+  if (!allowed.includes(normalized)) invalid(label)
+  return normalized
+}
+
+export function assertPid (value, label = 'PID') {
+  if (value === undefined || value === null || value === '') return 0
+  return assertIntegerRange(value, 1, 4194304, label)
+}
+
+export function assertPcapPath (value, label = '抓包文件') {
+  const normalized = assertAbsolutePath(value, label)
+  if (!/\.pcap$/i.test(normalized)) invalid(label)
+  return normalized
+}
