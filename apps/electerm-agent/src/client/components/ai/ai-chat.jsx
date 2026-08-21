@@ -32,7 +32,7 @@ import { cancelAgentRun } from './agent'
 import { cancelDetachedAIStream } from './ai-chat-history-item'
 import {
   cancelScopedAIChatRun,
-  getActiveScopedAIChatRun
+  getActiveAIChatRun
 } from './ai-run-cancellation.js'
 import {
   buildCommandSuggestionPrompt,
@@ -61,6 +61,7 @@ import AIWebAccessModal from './ai-web-access-modal'
 import {
   getActiveAIConfig
 } from './ai-profiles'
+import { haveSameAIConfig } from './ai-chat-entry-props.js'
 import {
   aiHealthCoordinator,
   getAIHealthRequestKey,
@@ -112,6 +113,11 @@ export default function AIChat (props) {
   const composerRef = useRef(null)
   const webAccessResolverRef = useRef(null)
   const submittedHealthChecksRef = useRef(new Map())
+  const stableConfigRef = useRef(props.config)
+  if (!haveSameAIConfig(stableConfigRef.current, props.config)) {
+    stableConfigRef.current = props.config
+  }
+  const stableConfig = stableConfigRef.current
   const [, setAgentTaskVersion] = useState(0)
   const isAgent = mode === 'agent'
   const conversationScopeId = String(
@@ -121,13 +127,16 @@ export default function AIChat (props) {
   const agentRunning = activeEndpoint
     ? agentTaskRegistry.isEndpointBusy(activeEndpoint)
     : agentTaskRegistry.isScopeBusy(conversationScopeId)
-  const visibleHistory = getAIChatHistoryForScope(
-    props.aiChatHistory,
-    conversationScopeId
+  const visibleHistory = useMemo(
+    () => getAIChatHistoryForScope(
+      props.aiChatHistory,
+      conversationScopeId
+    ),
+    [props.aiChatHistory, conversationScopeId]
   )
-  const activeRun = getActiveScopedAIChatRun(
-    props.aiChatHistory,
-    conversationScopeId
+  const activeRun = useMemo(
+    () => getActiveAIChatRun(visibleHistory),
+    [visibleHistory]
   )
   const submitDisabled = Boolean(activeRun) || (isAgent && agentRunning)
   const composerActionState = getAgentComposerActionState({
@@ -137,8 +146,8 @@ export default function AIChat (props) {
     disabled: submitDisabled
   })
   const activeAIConfig = useMemo(
-    () => getActiveAIConfig(props.config),
-    [props.config]
+    () => getActiveAIConfig(stableConfig),
+    [stableConfig]
   )
   useEffect(() => {
     if (props.activeTabId) {
@@ -313,6 +322,7 @@ export default function AIChat (props) {
       <AiChatHistory
         history={visibleHistory}
         agentRunning={agentRunning}
+        config={stableConfig}
       />
     )
   }
@@ -678,9 +688,7 @@ export default function AIChat (props) {
     }
   }, [handleSubmit])
 
-  if (props.rightPanelTab !== 'ai') {
-    return null
-  }
+  const aiPanelVisible = props.rightPanelTab === 'ai'
 
   const aiConfigured = Boolean(
     String(activeAIConfig.baseURLAI || '').trim() &&
@@ -691,7 +699,10 @@ export default function AIChat (props) {
     return (
       <Flex
         vertical
-        className='ai-chat-container ai-chat-unconfigured'
+        className={'ai-chat-container ai-chat-unconfigured' +
+          (aiPanelVisible ? '' : ' ai-chat-container-hidden')}
+        aria-hidden={!aiPanelVisible}
+        inert={!aiPanelVisible}
         align='center'
         justify='center'
       >
@@ -740,7 +751,13 @@ export default function AIChat (props) {
 
   return (
     <>
-      <Flex vertical className='ai-chat-container'>
+      <Flex
+        vertical
+        className={'ai-chat-container' +
+          (aiPanelVisible ? '' : ' ai-chat-container-hidden')}
+        aria-hidden={!aiPanelVisible}
+        inert={!aiPanelVisible}
+      >
         <Flex className='ai-chat-history' flex='auto'>
           {renderHistory()}
         </Flex>
@@ -800,7 +817,7 @@ export default function AIChat (props) {
       </Flex>
       <Modal
         title={e('shellpilotAiReadWebUrl')}
-        open={webUrlDialogOpen}
+        open={aiPanelVisible && webUrlDialogOpen}
         okText={e('shellpilotAiAddWebUrl')}
         cancelText={e('cancel')}
         onOk={handleConfirmWebUrl}
@@ -821,7 +838,7 @@ export default function AIChat (props) {
         </div>
       </Modal>
       <AIWebAccessModal
-        challenge={webAccessChallenge}
+        challenge={aiPanelVisible ? webAccessChallenge : null}
         activeAIName={activeAIConfig.nameAI || activeAIConfig.modelAI || 'AI'}
         onDecision={resolveWebAccessAuthorization}
         onCancel={() => resolveWebAccessAuthorization(null)}

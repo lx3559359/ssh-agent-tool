@@ -21,7 +21,11 @@ import { formatShellPilotTranslation } from '../../common/shellpilot-i18n-overri
 
 const e = window.translate
 
-export default auto(function AIChatHistory ({ history, agentRunning }) {
+export default auto(function AIChatHistory ({
+  history,
+  agentRunning,
+  config = {}
+}) {
   const historyRef = useRef(null)
   const stickToBottomRef = useRef(true)
   const list = Array.isArray(history) ? history : []
@@ -32,7 +36,6 @@ export default auto(function AIChatHistory ({ history, agentRunning }) {
     clampAIHistoryWindow(AI_HISTORY_PAGE_SIZE, list.length)
   ))
   const visibleList = getVisibleAIHistory(list, visibleCount)
-  const config = window.store?.config || {}
   const configRevisionKey = [
     config.activeAIProfileId,
     config.credentialRevisionAI,

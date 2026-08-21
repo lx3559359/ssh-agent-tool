@@ -248,10 +248,13 @@ async function measureInputLatency (page, {
     state.listener = () => {
       const started = performance.now()
       state.pending += 1
-      requestAnimationFrame(() => requestAnimationFrame(() => {
-        state.samples.push(performance.now() - started)
-        state.pending -= 1
-      }))
+      requestAnimationFrame(() => {
+        const presentedAt = performance.now()
+        requestAnimationFrame(() => {
+          state.samples.push(presentedAt - started)
+          state.pending -= 1
+        })
+      })
     }
     input.addEventListener('input', state.listener, true)
     window.__shellpilotInputLatencyProbe = state

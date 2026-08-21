@@ -181,3 +181,14 @@ test('keeps completed state when completion wins the cancellation race', async (
   assert.equal(store.aiChatHistory[0].completionStatus, 'completed')
   assert.equal(store.aiChatHistory[0].response, 'final answer')
 })
+
+test('selects the newest active run from an already scoped history', async () => {
+  const { getActiveAIChatRun } = await import(moduleUrl)
+  const done = { id: 'done', completionStatus: 'completed' }
+  const pending = { id: 'pending', completionStatus: 'pending' }
+  const stopping = { id: 'stopping', completionStatus: 'stopping' }
+  const scoped = [done, pending, stopping]
+
+  assert.equal(getActiveAIChatRun(scoped), stopping)
+  assert.equal(getActiveAIChatRun([done]), null)
+})

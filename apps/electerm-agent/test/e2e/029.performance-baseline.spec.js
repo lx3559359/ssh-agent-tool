@@ -104,7 +104,7 @@ test('enforces startup, terminal, memory and AI performance budgets', async () =
       window.refs.get('term-' + window.store.activeTabId)?.term?.focus()
     ))
     await expect(terminalInput).toBeFocused()
-    await page.keyboard.type('echo shellpilot-performance-ready')
+    await page.keyboard.type('echo shellpilot-performance-ready', { delay: 5 })
     await page.keyboard.press('Enter')
     await expect.poll(() => terminalText(page), {
       timeout: 20000

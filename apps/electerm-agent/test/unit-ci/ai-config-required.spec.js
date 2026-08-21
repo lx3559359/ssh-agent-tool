@@ -132,11 +132,12 @@ test('AI config presents the essential setup before optional provider guidance',
 
 test('unconfigured AI chat is a compact status with one API configuration action', () => {
   const source = fs.readFileSync(path.resolve(__dirname, '../../src/client/components/ai/ai-chat.jsx'), 'utf8')
-  const start = source.indexOf("className='ai-chat-container ai-chat-unconfigured'")
+  const start = source.indexOf('if (!aiConfigured)')
   const end = source.indexOf('const handleKeyPress', start)
   const emptyState = source.slice(start, end)
 
   assert.ok(start > -1)
+  assert.match(emptyState, /ai-chat-container ai-chat-unconfigured/)
   assert.match(emptyState, /role='status'/)
   assert.match(emptyState, /aria-labelledby='ai-chat-unconfigured-title'/)
   assert.match(emptyState, /aria-describedby='ai-chat-unconfigured-description'/)

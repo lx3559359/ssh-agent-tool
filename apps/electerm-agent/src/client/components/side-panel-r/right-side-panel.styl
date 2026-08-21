@@ -20,6 +20,10 @@
     right auto
     display block
 
+.right-side-panel-hidden
+  visibility hidden
+  pointer-events none
+
 .right-panel-title
   flex 0 0 auto
   min-height 68px
@@ -191,10 +195,22 @@
   overflow-y auto
   position static
 
-.right-side-panel-content-ai
+.right-side-panel-content-stacked
+  display grid
+  grid-template-columns minmax(0, 1fr)
+  grid-template-rows minmax(0, 1fr)
   overflow hidden
-  display flex
-  flex-direction column
+  > .ai-chat-container,
+  > .right-side-panel-terminal-info
+    grid-area 1 / 1
+    min-width 0
+    min-height 0
+  > .ai-chat-container
+    height 100%
+  > .right-side-panel-terminal-info
+    overflow-y auto
+
+.right-side-panel-content-ai
   border-top 1px solid var(--main)
 
 .animate-fast

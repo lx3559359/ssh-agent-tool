@@ -1017,6 +1017,54 @@ test('AI chat scoped selection preserves trusted message identities', async () =
   assert.equal(scoped[1], matching)
 })
 
+test('AI chat scoped selection repairs malformed legacy entries without touching trusted entries', async () => {
+  const {
+    clearAIChatContext,
+    getAIChatHistoryForScope
+  } = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/components/ai/ai-chat-actions.js'
+  )))
+  const trusted = {
+    id: 'trusted',
+    prompt: 'prompt',
+    displayPrompt: 'prompt',
+    response: 'answer',
+    toolCalls: [],
+    artifactIds: []
+  }
+  const malformed = {
+    id: 'malformed',
+    prompt: { text: 'prompt' },
+    displayPrompt: { content: 'visible prompt' },
+    response: { content: 'visible answer' },
+    toolCalls: {},
+    artifactIds: 'artifact'
+  }
+
+  const scoped = getAIChatHistoryForScope(
+    [null, 'broken', {}, trusted, malformed],
+    'global'
+  )
+
+  assert.deepEqual(scoped.map(item => item.id), ['trusted', 'malformed'])
+  assert.equal(scoped[0], trusted)
+  assert.notEqual(scoped[1], malformed)
+  assert.equal(scoped[1].displayPrompt, 'visible prompt')
+  assert.equal(scoped[1].response, 'visible answer')
+  assert.deepEqual(scoped[1].toolCalls, [])
+  assert.deepEqual(scoped[1].artifactIds, [])
+
+  const store = {
+    aiChatHistory: [null, trusted, {
+      id: 'other',
+      conversationScopeId: 'tab-b'
+    }]
+  }
+  assert.doesNotThrow(() => clearAIChatContext(store, 'global'))
+  assert.deepEqual(store.aiChatHistory.map(item => item.id), ['other'])
+})
+
 test('AI chat append sanitizes only the new entry and preserves retained identities', async () => {
   const { appendAIChatHistory } = await import(pathToFileURL(path.resolve(
     __dirname,

@@ -251,7 +251,7 @@ export function createRetryChatEntry (item = {}, {
 }
 
 function getAIChatScopeId (item = {}) {
-  return String(item.conversationScopeId || item.sourceTabId || 'global')
+  return String(item?.conversationScopeId || item?.sourceTabId || 'global')
 }
 
 export function getInterruptedAIChatUpdate (item = {}, {
@@ -338,12 +338,31 @@ export function normalizeAIChatHistoryOnStartup (history = [], options = {}) {
 }
 
 function isLegacyAIChatEntry (item = {}) {
-  return !item.conversationScopeId && !item.sourceTabId
+  return !item?.conversationScopeId && !item?.sourceTabId
+}
+
+function isTrustedAIChatHistoryItem (item) {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return false
+  if (typeof item.id !== 'string' || !item.id.trim()) return false
+  const textFields = ['prompt', 'displayPrompt', 'response']
+  if (textFields.some(field => (
+    Object.hasOwn(item, field) && typeof item[field] !== 'string'
+  ))) return false
+  const listFields = ['toolCalls', 'artifactIds']
+  return listFields.every(field => (
+    !Object.hasOwn(item, field) || Array.isArray(item[field])
+  ))
 }
 
 export function getAIChatHistoryForScope (history, scopeId) {
   const scope = String(scopeId || 'global')
   return (Array.isArray(history) ? history : [])
+    .map(item => (
+      isTrustedAIChatHistoryItem(item)
+        ? item
+        : normalizeAIChatHistoryItem(item)
+    ))
+    .filter(Boolean)
     .filter(item => isLegacyAIChatEntry(item) || getAIChatScopeId(item) === scope)
 }
 
@@ -549,8 +568,8 @@ export function appendAIChatHistory (store, entry, maxHistory = 100) {
 }
 
 function isActiveAIChatEntry (item = {}) {
-  return item.pending === true ||
-    ['pending', 'running', 'stopping'].includes(item.completionStatus)
+  return item?.pending === true ||
+    ['pending', 'running', 'stopping'].includes(item?.completionStatus)
 }
 
 export function getAIChatStreamSessionId (item = {}, store) {

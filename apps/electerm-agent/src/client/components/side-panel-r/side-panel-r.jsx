@@ -25,11 +25,11 @@ export default memo(function RightSidePanel ({
   config = {}
 }) {
   const panelRef = useRef(null)
+  const hasBeenVisibleRef = useRef(rightPanelVisible)
   const isAI = rightPanelTab === 'ai'
 
-  if (!rightPanelVisible) {
-    return null
-  }
+  if (rightPanelVisible) hasBeenVisibleRef.current = true
+  if (!hasBeenVisibleRef.current) return null
 
   const tag = isAI
     ? <Tag className='mg1r aigshell-ai-tag'>AI</Tag>
@@ -57,7 +57,10 @@ export default memo(function RightSidePanel ({
     className: 'right-side-panel animate-fast' +
       (rightPanelPinned ? ' right-side-panel-pinned' : '') +
       (rightPanelAutoCollapsed ? ' right-side-panel-auto-collapsed' : '') +
-      (isAI ? ' right-side-panel-ai' : ''),
+      (isAI ? ' right-side-panel-ai' : '') +
+      (!rightPanelVisible ? ' right-side-panel-hidden' : ''),
+    'aria-hidden': !rightPanelVisible,
+    inert: !rightPanelVisible,
     ref: panelRef,
     style: { width: `${width}px` }
   }
@@ -125,7 +128,7 @@ export default memo(function RightSidePanel ({
           />
         </Flex>
       </Flex>
-      <div className={'right-side-panel-content' + (isAI ? ' right-side-panel-content-ai' : '')}>
+      <div className={'right-side-panel-content right-side-panel-content-stacked' + (isAI ? ' right-side-panel-content-ai' : '')}>
         {children}
       </div>
     </div>
