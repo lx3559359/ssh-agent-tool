@@ -278,7 +278,9 @@ for (const fixture of [
       `${call.args.command}; exit $LASTEXITCODE`
     ], {
       encoding: 'utf8',
-      timeout: 15000,
+      // This verifies wrapper quoting, not interpreter startup latency. CI can
+      // briefly delay a newly installed Python process while tests run in parallel.
+      timeout: 30000,
       env: { ...process.env, Path: pathValue }
     })
 
