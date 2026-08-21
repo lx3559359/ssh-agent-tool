@@ -288,6 +288,7 @@ test('AI chat history migrates legacy trace fields to metadata-only persistence'
   const {
     appendAIChatHistory,
     getAIChatTraceId,
+    normalizeAIChatHistoryOnStartup,
     updateAIChatHistoryEntry
   } = await import(pathToFileURL(path.resolve(__dirname, '../../src/client/components/ai/ai-chat-actions.js')))
   const legacyTraceId = 'sp-1784304000000-12345678'
@@ -309,6 +310,7 @@ test('AI chat history migrates legacy trace fields to metadata-only persistence'
   }
 
   assert.equal(getAIChatTraceId(store.aiChatHistory[0]), legacyTraceId)
+  store.aiChatHistory = normalizeAIChatHistoryOnStartup(store.aiChatHistory)
   updateAIChatHistoryEntry(store, 'active-trace-write', { response: 'updated' })
   assert.equal(store.aiChatHistory[0].traceId, undefined)
   assert.equal(store.aiChatHistory[0].traceContext, undefined)
@@ -986,4 +988,115 @@ test('AI chat actions resolve the latest stream session id from store history', 
 
   assert.equal(getAIChatStreamSessionId(item, store), 'stream-current')
   assert.equal(getAIChatStreamSessionId({ id: 'chat-2', sessionId: 'stream-original' }, store), 'stream-original')
+})
+
+test('AI chat scoped selection preserves trusted message identities', async () => {
+  const { getAIChatHistoryForScope } = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/components/ai/ai-chat-actions.js'
+  )))
+  const legacy = { id: 'legacy', response: 'legacy answer' }
+  const matching = {
+    id: 'matching',
+    conversationScopeId: 'tab-a',
+    response: 'matching answer'
+  }
+  const other = {
+    id: 'other',
+    conversationScopeId: 'tab-b',
+    response: 'other answer'
+  }
+
+  const scoped = getAIChatHistoryForScope(
+    [legacy, matching, other],
+    'tab-a'
+  )
+
+  assert.deepEqual(scoped.map(item => item.id), ['legacy', 'matching'])
+  assert.equal(scoped[0], legacy)
+  assert.equal(scoped[1], matching)
+})
+
+test('AI chat append sanitizes only the new entry and preserves retained identities', async () => {
+  const { appendAIChatHistory } = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/components/ai/ai-chat-actions.js'
+  )))
+  const retained = {
+    id: 'retained',
+    conversationScopeId: 'tab-a',
+    response: 'existing safe answer'
+  }
+  const store = { aiChatHistory: [retained] }
+
+  appendAIChatHistory(store, {
+    id: 'new-entry',
+    conversationScopeId: 'tab-a',
+    response: 'new answer\nAuthorization: Bearer append-secret'
+  })
+
+  assert.equal(store.aiChatHistory[0], retained)
+  assert.match(store.aiChatHistory[1].response, /new answer/)
+  assert.doesNotMatch(store.aiChatHistory[1].response, /append-secret/)
+})
+
+test('AI chat update preserves traced entries that did not change', async () => {
+  const { updateAIChatHistoryEntry } = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/components/ai/ai-chat-actions.js'
+  )))
+  const traced = {
+    id: 'traced-untouched',
+    response: 'stable answer',
+    metadata: { traceId: 'sp-1784304000099-12345678' }
+  }
+  const store = {
+    aiChatHistory: [traced, { id: 'active', response: '' }]
+  }
+
+  assert.equal(updateAIChatHistoryEntry(store, 'active', {
+    response: 'next chunk'
+  }), true)
+  assert.equal(store.aiChatHistory[0], traced)
+  assert.equal(store.aiChatHistory[1].response, 'next chunk')
+})
+
+test('AI chat scoped clear preserves entries from other scopes', async () => {
+  const { clearAIChatContext } = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/components/ai/ai-chat-actions.js'
+  )))
+  const keep = {
+    id: 'keep-other-scope',
+    conversationScopeId: 'tab-b',
+    response: 'stable answer',
+    metadata: { traceId: 'sp-1784304000100-12345678' }
+  }
+  const store = {
+    aiChatHistory: [
+      { id: 'remove-current-scope', conversationScopeId: 'tab-a' },
+      keep
+    ]
+  }
+
+  clearAIChatContext(store, 'tab-a')
+  assert.deepEqual(store.aiChatHistory.map(item => item.id), ['keep-other-scope'])
+  assert.equal(store.aiChatHistory[0], keep)
+})
+
+test('AI chat removal replaces the array and preserves remaining identities', async () => {
+  const { removeAIChatHistoryEntry } = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/components/ai/ai-chat-actions.js'
+  )))
+  const keep = { id: 'keep', response: 'keep me' }
+  const remove = { id: 'remove', response: 'remove me' }
+  const previous = [keep, remove]
+  const store = { aiChatHistory: previous }
+
+  assert.equal(removeAIChatHistoryEntry(store, 'remove'), true)
+  assert.notEqual(store.aiChatHistory, previous)
+  assert.deepEqual(store.aiChatHistory.map(item => item.id), ['keep'])
+  assert.equal(store.aiChatHistory[0], keep)
+  assert.equal(removeAIChatHistoryEntry(store, 'missing'), false)
 })

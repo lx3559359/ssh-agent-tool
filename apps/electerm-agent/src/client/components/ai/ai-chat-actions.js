@@ -343,7 +343,7 @@ function isLegacyAIChatEntry (item = {}) {
 
 export function getAIChatHistoryForScope (history, scopeId) {
   const scope = String(scopeId || 'global')
-  return normalizeAIChatHistoryForStorage(history)
+  return (Array.isArray(history) ? history : [])
     .filter(item => isLegacyAIChatEntry(item) || getAIChatScopeId(item) === scope)
 }
 
@@ -427,7 +427,15 @@ export function clearAIChatContext (store, scopeId) {
     : []
   )
     .filter(item => getAIChatScopeId(item) !== scope)
-    .map(normalizeAIChatTraceStorage)
+}
+
+export function removeAIChatHistoryEntry (store, id) {
+  if (!store || !id) return false
+  const history = Array.isArray(store.aiChatHistory) ? store.aiChatHistory : []
+  const next = history.filter(item => item?.id !== id)
+  if (next.length === history.length) return false
+  store.aiChatHistory = next
+  return true
 }
 
 export async function cancelAndClearAIChatContext (store, scopeId, {
@@ -501,19 +509,19 @@ export function updateAIChatHistoryEntry (
     }
   }
   next[index] = normalizeAIChatHistoryItem(merged)
-  store.aiChatHistory = next.map(normalizeAIChatTraceStorage)
+  store.aiChatHistory = next
   return true
 }
 
 export function appendAIChatHistory (store, entry, maxHistory = 100) {
-  if (!store || !entry) {
-    return
-  }
+  if (!store || !entry) return
+  const safeEntry = normalizeAIChatHistoryForStorage([entry])[0]
+  if (!safeEntry) return
   const history = [
     ...(Array.isArray(store.aiChatHistory) ? store.aiChatHistory : []),
-    entry
+    safeEntry
   ]
-  const entryScope = getAIChatScopeId(entry)
+  const entryScope = getAIChatScopeId(safeEntry)
   const matchingIndexes = history.reduce((indexes, item, index) => {
     if (getAIChatScopeId(item) === entryScope) indexes.push(index)
     return indexes
@@ -537,7 +545,7 @@ export function appendAIChatHistory (store, entry, maxHistory = 100) {
     const removed = new Set(removable.slice(0, globalOverflow))
     retainedHistory = retainedHistory.filter((item, index) => !removed.has(index))
   }
-  store.aiChatHistory = normalizeAIChatHistoryForStorage(retainedHistory)
+  store.aiChatHistory = retainedHistory
 }
 
 function isActiveAIChatEntry (item = {}) {
