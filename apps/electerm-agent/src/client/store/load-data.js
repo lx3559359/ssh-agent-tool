@@ -386,7 +386,7 @@ export default (Store) => {
         },
         2000
       )
-      if (store.config.checkUpdateOnStart) {
+      if (store.config.checkUpdateOnStart && !window.pre.isTest) {
         store.onCheckUpdate(false)
       }
       store.startAutoRunWidgets().catch(err => {

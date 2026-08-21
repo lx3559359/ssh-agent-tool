@@ -82,15 +82,16 @@ export default Store => {
 
   Store.prototype.openSetting = function () {
     const { store } = window
-    if (
+    const commonSelected =
       store.settingTab === settingMap.setting &&
-      store.settingItem.id === settingCommonId &&
-      store.showModal === modals.setting
-    ) {
-      return store.hideSettingModal()
+      store.settingItem.id === settingCommonId
+    if (commonSelected && store.showModal === modals.setting) {
+      return store.hideSettingModal(true)
     }
-    store.settingTab = settingMap.setting
-    store.setSettingItem(getInitItem([], settingMap.setting))
+    if (!commonSelected) {
+      store.settingTab = settingMap.setting
+      store.setSettingItem(getInitItem([], settingMap.setting))
+    }
     store.openSettingModal()
   }
 
@@ -136,10 +137,12 @@ export default Store => {
     store.showModal = modals.setting
   }
 
-  Store.prototype.hideSettingModal = function () {
+  Store.prototype.hideSettingModal = function (preserveSelection = false) {
     const { store } = window
     store.showModal = modals.hide
-    store.setSettingItem({})
+    if (!preserveSelection) {
+      store.setSettingItem({})
+    }
   }
 
   Store.prototype.loadFontList = async function () {

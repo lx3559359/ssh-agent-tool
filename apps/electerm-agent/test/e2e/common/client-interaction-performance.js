@@ -111,6 +111,7 @@ async function measureStoreInteraction (page, {
       window.PerformanceObserver.supportedEntryTypes?.includes('longtask')
     )
     let observer = null
+    let milestoneObserver = null
     const collectLongTasks = entries => {
       for (const entry of entries) {
         longTasks.push({
@@ -128,10 +129,41 @@ async function measureStoreInteraction (page, {
 
     try {
       const started = performance.now()
+      const milestoneSelectors = action === 'open-settings'
+        ? {
+            shell: '.setting-wrap .setting-tabs',
+            hotkey: '.sp-setting-section-startup .edit-shortcut-button',
+            session: '.sp-setting-startup-session',
+            numbers: '.sp-setting-startup-numbers',
+            language: '.setting-header-language-select',
+            network: '.sp-setting-section-network:not(.sp-setting-section-placeholder)',
+            interface: '.sp-setting-section-interface:not(.sp-setting-section-placeholder)',
+            advanced: '.sp-setting-section-advanced:not(.sp-setting-section-placeholder)'
+          }
+        : {}
+      const milestoneOffsetsMs = {}
+      const recordMilestones = () => {
+        for (const [name, milestoneSelector] of Object.entries(milestoneSelectors)) {
+          if (
+            milestoneOffsetsMs[name] === undefined &&
+            document.querySelector(milestoneSelector)
+          ) {
+            milestoneOffsetsMs[name] = performance.now() - started
+          }
+        }
+      }
+      milestoneObserver = action === 'open-settings'
+        ? new window.MutationObserver(recordMilestones)
+        : null
+      milestoneObserver?.observe(document.documentElement, {
+        childList: true,
+        subtree: true
+      })
       if (action === 'open-ai') window.store.handleOpenAIPanel()
       else if (action === 'switch-ai') window.store.handleOpenAIPanel()
       else if (action === 'open-settings') window.store.openSetting()
       else throw new Error(`Unsupported interaction action: ${action}`)
+      recordMilestones()
       const actionCompleted = performance.now()
 
       while (!visible(document.querySelector(selector))) {
@@ -154,15 +186,21 @@ async function measureStoreInteraction (page, {
       const stableAt = performance.now()
 
       if (observer) collectLongTasks(observer.takeRecords())
+      recordMilestones()
+      milestoneObserver?.disconnect()
       const measuredLongTasks = longTasks.filter(entry => (
         entry.startTime >= started && entry.startTime <= stableAt
-      ))
+      )).map(entry => ({
+        ...entry,
+        startOffsetMs: entry.startTime - started
+      }))
       return {
         totalMs: stableAt - started,
         actionMs: actionCompleted - started,
         visibleMs: visibleAt - actionCompleted,
         contentReadyMs: contentReadyAt - visibleAt,
         stableFrameMs: stableAt - visibleAt,
+        milestoneOffsetsMs,
         longTaskSupported,
         longTasks: measuredLongTasks,
         maxLongTaskMs: measuredLongTasks.length
@@ -171,6 +209,7 @@ async function measureStoreInteraction (page, {
       }
     } finally {
       observer?.disconnect()
+      milestoneObserver?.disconnect()
     }
   }, { action, selector, readySelector, readyCount, timeoutMs })
 }

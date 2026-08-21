@@ -17,7 +17,7 @@ import {
 import deepCopy from 'json-deep-copy'
 import Password from '../common/password'
 import InputConfirm from '../common/input-confirm'
-import InputNumberConfirm from '../common/input-number-confirm'
+import NativeNumberConfirm from './native-number-confirm'
 import TextareaConfirm from '../common/textarea-confirm'
 import {
   settingMap,
@@ -25,8 +25,9 @@ import {
 } from '../../common/constants'
 import defaultSettings from '../../common/default-setting'
 import Link from '../common/external-link'
-import { isNumber, isNaN } from 'lodash-es'
+import { isNumber } from 'lodash-es'
 import { getThemeDisplayName } from '../../common/shellpilot-ui-palettes.js'
+import { createFrameBatchedMount } from '../../common/frame-batched-mount.js'
 import StartSession from './start-session-select'
 import HelpIcon from '../common/help-icon'
 import delay from '../../common/wait.js'
@@ -42,24 +43,163 @@ const e = window.translate
 
 export default class SettingCommon extends Component {
   state = {
-    ready: false,
+    mountedSectionIndexes: [1],
+    mountedStartupDetails: [],
     submittingPass: false,
     passInputFocused: false,
     placeholderLogin: window.pre.requireAuth ? '********' : e('notSet'),
     loginPass: ''
   }
 
+  sectionPlaceholders = new Map()
+
+  visibleSectionIndexes = new Set()
+
+  sectionMountEnabled = false
+
   componentDidMount () {
-    this.timer = setTimeout(() => {
-      this.setState({
-        ready: true
-      })
-    }, 0)
+    this.startSectionMount()
+    this.startStartupDetailsMount()
   }
 
   componentWillUnmount () {
-    clearTimeout(this.timer)
     clearTimeout(this.timer1)
+    clearTimeout(this.sectionFallbackTimer)
+    clearTimeout(this.startupDetailsTimer)
+    if (
+      this.startupDetailsIdleId !== undefined &&
+      typeof window.cancelIdleCallback === 'function'
+    ) {
+      window.cancelIdleCallback(this.startupDetailsIdleId)
+    }
+    this.sectionScheduler?.cancel()
+    this.startupDetailsScheduler?.cancel()
+    this.sectionObserver?.disconnect()
+    this.sectionRoot?.removeEventListener('scroll', this.handleSectionScroll)
+  }
+
+  mountStartupDetail = detail => {
+    this.setState(state => ({
+      mountedStartupDetails: state.mountedStartupDetails.includes(detail)
+        ? state.mountedStartupDetails
+        : [...state.mountedStartupDetails, detail]
+    }), () => {
+      if (detail === 'hotkey') this.scheduleStartupDetails()
+    })
+  }
+
+  scheduleStartupDetails = () => {
+    if (this.startupDetailsTimer !== undefined) return
+    const mountDetails = () => {
+      this.startupDetailsIdleId = undefined
+      this.mountStartupDetail('session')
+      this.mountStartupDetail('numbers')
+    }
+    this.startupDetailsTimer = window.setTimeout(() => {
+      if (typeof window.requestIdleCallback === 'function') {
+        this.startupDetailsIdleId = window.requestIdleCallback(mountDetails, { timeout: 600 })
+      } else {
+        mountDetails()
+      }
+    }, 160)
+  }
+
+  startStartupDetailsMount = () => {
+    this.startupDetailsScheduler = createFrameBatchedMount({
+      onMount: this.mountStartupDetail
+    })
+    this.startupDetailsScheduler.start()
+    this.startupDetailsScheduler.request('hotkey')
+  }
+
+  startSectionMount = () => {
+    this.sectionScheduler = createFrameBatchedMount({
+      onMount: index => this.setState(state => ({
+        mountedSectionIndexes: state.mountedSectionIndexes.includes(index)
+          ? state.mountedSectionIndexes
+          : [...state.mountedSectionIndexes, index]
+      }))
+    })
+    this.sectionScheduler.start([1])
+    this.sectionRoot = this.formRoot?.closest('.setting-col-content')
+    if (window.IntersectionObserver) {
+      this.sectionObserver = new window.IntersectionObserver(entries => {
+        for (const entry of entries) {
+          const index = Number(entry.target.dataset.sectionIndex)
+          if (entry.isIntersecting) this.visibleSectionIndexes.add(index)
+          else this.visibleSectionIndexes.delete(index)
+        }
+        if (this.sectionMountEnabled) this.requestVisibleSections()
+      }, {
+        root: this.sectionRoot,
+        rootMargin: '0px 0px -50% 0px'
+      })
+      this.sectionRoot?.addEventListener('scroll', this.handleSectionScroll, {
+        passive: true
+      })
+      for (const node of this.sectionPlaceholders.values()) {
+        this.sectionObserver.observe(node)
+      }
+      return
+    }
+    this.sectionFallbackTimer = window.setTimeout(() => {
+      [2, 3, 4].forEach(index => this.sectionScheduler.request(index))
+    }, 100)
+  }
+
+  requestVisibleSections = () => {
+    for (const index of this.visibleSectionIndexes) {
+      this.sectionScheduler.request(index)
+    }
+  }
+
+  handleSectionScroll = () => {
+    if (this.sectionMountEnabled || !this.sectionRoot) return
+    if (this.sectionRoot.scrollTop <= 0) return
+    this.sectionMountEnabled = true
+    this.requestVisibleSections()
+  }
+
+  setSectionPlaceholder = (index, node) => {
+    const previous = this.sectionPlaceholders.get(index)
+    if (previous) this.sectionObserver?.unobserve(previous)
+    if (!node) {
+      this.sectionPlaceholders.delete(index)
+      return
+    }
+    this.sectionPlaceholders.set(index, node)
+    this.sectionObserver?.observe(node)
+  }
+
+  renderDeferredSection = ({
+    index,
+    name,
+    title,
+    description,
+    renderBody
+  }) => {
+    const className = `sp-setting-section-${name}`
+    if (this.state.mountedSectionIndexes.includes(index)) {
+      return (
+        <SettingSection
+          key={name}
+          className={className}
+          title={title}
+          description={description}
+        >
+          {renderBody()}
+        </SettingSection>
+      )
+    }
+    return (
+      <div
+        key={name}
+        aria-hidden='true'
+        className={`sp-setting-section-placeholder ${className}`}
+        data-section-index={index}
+        ref={node => this.setSectionPlaceholder(index, node)}
+      />
+    )
   }
 
   handleLoginSubmit = async () => {
@@ -190,6 +330,7 @@ export default class SettingCommon extends Component {
       value = options.valueParser(value)
     }
     const defaultValue = defaultSettings[name]
+    const inputId = `setting-number-${name}`
     const helpId = `setting-number-${name}-help`
     const description = [title, options.extraDesc].filter(Boolean).join(' · ')
     const {
@@ -209,22 +350,12 @@ export default class SettingCommon extends Component {
       onChange,
       placeholder: defaultValue
     }
-    if (title) {
-      opts.formatter = v => `${description}: ${v}`
-      opts.parser = (v) => {
-        let vv = isNumber(v)
-          ? v
-          : Number(v.split(': ')[1], 10)
-        if (isNaN(vv)) {
-          vv = defaultValue
-        }
-        return vv
-      }
-    }
     return (
-      <div className={`sp-setting-field pd2b ${cls || ''}`}>
-        <InputNumberConfirm
+      <div className={`sp-setting-field sp-setting-number-field pd2b ${cls || ''}`}>
+        <label htmlFor={inputId}>{description}</label>
+        <NativeNumberConfirm
           {...opts}
+          id={inputId}
           aria-describedby={helpId}
           aria-label={title}
           aria-valuemax={max}
@@ -582,14 +713,6 @@ export default class SettingCommon extends Component {
   }
 
   render () {
-    const { ready } = this.state
-    if (!ready) {
-      return (
-        <div className='pd3 aligncenter'>
-          <LoadingOutlined />
-        </div>
-      )
-    }
     const { props } = this
     const {
       hotkey,
@@ -609,64 +732,98 @@ export default class SettingCommon extends Component {
       onSaveConfig: this.saveConfig
     }
     return (
-      <div className='form-wrap sp-settings-form'>
+      <div
+        className='form-wrap sp-settings-form'
+        ref={node => { this.formRoot = node }}
+      >
         <header className='sp-settings-page-header'>
           <h1>{e('generalSettings')}</h1>
           <p>{e('generalSettingsDescription')}</p>
         </header>
-        <SettingSection
-          title={e('startupAndConnection')}
-          description={e('startupAndConnectionDescription')}
-        >
-          <HotkeySetting
-            {...hotkeyProps}
-          />
-          <div className='sp-setting-field sp-setting-field-stacked'>
-            <div className='pd1b'>{e('onStartBookmarks')}</div>
-            <div className='pd2b'>
-              <StartSession
-                {...pops}
-              />
-            </div>
-          </div>
-          {
-            this.renderNumber('sshReadyTimeout', {
-              step: 200,
-              min: 100,
-              cls: 'timeout-desc',
-              extraDesc: e('shellpilotMillisecondsUnit')
-            }, e('timeoutDesc'))
-          }
-          {
-            this.renderNumber('keepaliveInterval', {
-              step: 1000,
-              min: 0,
-              max: 20000000,
-              cls: 'keepalive-interval-desc',
-              extraDesc: e('shellpilotMillisecondsUnit')
-            }, e('keepaliveIntervalDesc'))
-          }
-        </SettingSection>
-        <SettingSection
-          title={e('networkAndUpdates')}
-          description={e('networkAndUpdatesDescription')}
-        >
-          {this.renderProxy()}
-          {this.renderUpdateChannel()}
-          {this.renderUpdateSource()}
-        </SettingSection>
-        <SettingSection
-          title={e('interfaceAndLanguage')}
-          description={e('interfaceAndLanguageDescription')}
-        >
-          {this.renderAppearanceFields(terminalThemes, theme, customCss)}
-        </SettingSection>
-        <SettingSection
-          title={e('advancedSettings')}
-          description={e('advancedSettingsDescription')}
-        >
-          {this.renderAdvancedFields()}
-        </SettingSection>
+        {this.renderDeferredSection({
+          index: 1,
+          name: 'startup',
+          title: e('startupAndConnection'),
+          description: e('startupAndConnectionDescription'),
+          renderBody: () => (
+            <>
+              {this.state.mountedStartupDetails.includes('hotkey')
+                ? <HotkeySetting {...hotkeyProps} />
+                : (
+                  <div
+                    aria-hidden='true'
+                    className='sp-setting-startup-detail-placeholder sp-setting-startup-hotkey-placeholder'
+                  />
+                  )}
+              {this.state.mountedStartupDetails.includes('session')
+                ? (
+                  <div className='sp-setting-field sp-setting-field-stacked sp-setting-startup-session'>
+                    <div className='pd1b'>{e('onStartBookmarks')}</div>
+                    <div className='pd2b'>
+                      <StartSession {...pops} />
+                    </div>
+                  </div>
+                  )
+                : (
+                  <div
+                    aria-hidden='true'
+                    className='sp-setting-startup-detail-placeholder sp-setting-startup-session-placeholder'
+                  />
+                  )}
+              {this.state.mountedStartupDetails.includes('numbers')
+                ? (
+                  <div className='sp-setting-startup-numbers'>
+                    {this.renderNumber('sshReadyTimeout', {
+                      step: 200,
+                      min: 100,
+                      cls: 'timeout-desc',
+                      extraDesc: e('shellpilotMillisecondsUnit')
+                    }, e('timeoutDesc'))}
+                    {this.renderNumber('keepaliveInterval', {
+                      step: 1000,
+                      min: 0,
+                      max: 20000000,
+                      cls: 'keepalive-interval-desc',
+                      extraDesc: e('shellpilotMillisecondsUnit')
+                    }, e('keepaliveIntervalDesc'))}
+                  </div>
+                  )
+                : (
+                  <div
+                    aria-hidden='true'
+                    className='sp-setting-startup-detail-placeholder sp-setting-startup-numbers-placeholder'
+                  />
+                  )}
+            </>
+          )
+        })}
+        {this.renderDeferredSection({
+          index: 2,
+          name: 'network',
+          title: e('networkAndUpdates'),
+          description: e('networkAndUpdatesDescription'),
+          renderBody: () => (
+            <>
+              {this.renderProxy()}
+              {this.renderUpdateChannel()}
+              {this.renderUpdateSource()}
+            </>
+          )
+        })}
+        {this.renderDeferredSection({
+          index: 3,
+          name: 'interface',
+          title: e('interfaceAndLanguage'),
+          description: e('interfaceAndLanguageDescription'),
+          renderBody: () => this.renderAppearanceFields(terminalThemes, theme, customCss)
+        })}
+        {this.renderDeferredSection({
+          index: 4,
+          name: 'advanced',
+          title: e('advancedSettings'),
+          description: e('advancedSettingsDescription'),
+          renderBody: this.renderAdvancedFields
+        })}
       </div>
     )
   }

@@ -227,15 +227,15 @@ test('common settings keep every control while grouping them into four cards', (
   assert.match(source, /className='form-wrap sp-settings-form'/)
   assert.match(source, /e\('generalSettings'\)/)
   assert.match(source, /e\('generalSettingsDescription'\)/)
-  assert.equal((source.match(/<SettingSection/g) || []).length, 4)
+  assert.equal((source.match(/this\.renderDeferredSection\(\{/g) || []).length, 4)
   for (const key of [
     'startupAndConnection',
     'networkAndUpdates',
     'interfaceAndLanguage',
     'advancedSettings'
   ]) {
-    assert.match(source, new RegExp(`title=\\{e\\('${key}'\\)\\}`))
-    assert.match(source, new RegExp(`description=\\{e\\('${key}Description'\\)\\}`))
+    assert.match(source, new RegExp(`title: e\\('${key}'\\)`))
+    assert.match(source, new RegExp(`description: e\\('${key}Description'\\)`))
   }
   for (const key of preservedConfigKeys) {
     assert.match(source, new RegExp(`['"]${key}['"]|\\.${key}\\b`), `${key} must remain wired`)
@@ -282,7 +282,7 @@ test('settings header is the only language and close entry point', () => {
 test('settings layout replaces fixed coordinates with bounded responsive regions', () => {
   const source = readClient('components/setting-panel/setting-wrap.styl')
   const pageContainer = source.match(/\.setting-wrap\r?\n([\s\S]*?)\r?\n\.setting-header/)
-  const searchOverlay = source.match(/ {2}\.setting-search-results\r?\n[\s\S]*?\r?\n {2}\.ant-select/)
+  const searchOverlay = source.match(/ {2}\.setting-search-results\r?\n[\s\S]*?\r?\n {2}\.setting-header-language-select/)
 
   assert.ok(pageContainer)
   assert.ok(searchOverlay)
@@ -415,7 +415,7 @@ test('settings depth migration preserves compact wrapping and internal scrolling
   assert.match(compact820[1], /\.setting-row-left[\s\S]*overflow-x auto[\s\S]*overflow-y hidden/)
   assert.match(compact820[1], /\.setting-col-content[\s\S]*overflow-x hidden[\s\S]*overflow-y auto/)
   assert.match(compact590[1], /\.setting-header[\s\S]*flex-wrap wrap/)
-  assert.match(compact590[1], /\.ant-select[\s\S]*min-width 0/)
+  assert.match(compact590[1], /\.setting-header-language-select[\s\S]*min-width 0/)
   assert.match(compact590[1], /\.ant-btn[\s\S]*min-width 0[\s\S]*height auto/)
 })
 
@@ -432,7 +432,7 @@ test('590px settings header keeps a mouse-accessible search icon and expands wit
   assert.match(narrow[1], /\.setting-header-search(?!-)[\s\S]*display none/)
   assert.match(narrow[1], /\.setting-header-search(?!-)[\s\S]*flex-basis 100%/)
   assert.match(narrow[1], /&\.is-expanded[\s\S]*display block/)
-  assert.match(narrow[1], /\.ant-select[\s\S]*min-width 0/)
+  assert.match(narrow[1], /\.setting-header-language-select[\s\S]*min-width 0/)
   assert.match(narrow[1], /\.ant-btn[\s\S]*min-width 0/)
   assert.match(narrow[1], /\.ant-btn[\s\S]*height auto/)
 })
