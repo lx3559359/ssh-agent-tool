@@ -240,6 +240,46 @@ node --test test/unit-ci/frame-batched-mount.spec.js test/unit-ci/shellpilot-cli
 
 Expected: 全部 PASS，0 fail。
 
+### Task 2A: 细分首屏控件并替换重型导航页签
+
+**Files:**
+- Modify: `apps/electerm-agent/test/unit-ci/shellpilot-client-ux-performance.spec.js`
+- Modify: `apps/electerm-agent/src/client/components/setting-panel/setting-modal.jsx`
+- Modify: `apps/electerm-agent/src/client/components/setting-panel/setting-common.jsx`
+- Modify: `apps/electerm-agent/src/client/components/setting-panel/setting-wrap.styl`
+
+- [ ] **Step 1: 写入轻量页签和首屏细分 RED 契约**
+
+加入源码断言：`setting-modal.jsx` 必须包含 `SettingsTabNavigation`、原生 `role='tablist'`、方向键/Home/End 和 roving `tabIndex`，且不再渲染 `<Tabs>`；`setting-common.jsx` 不得包含 `LoadingOutlined`、`ready` 或诊断全局变量，并必须包含 `mountedStartupDetails: []`、160ms 延迟、`session`/`numbers` 两个调度请求和对应稳定占位。
+
+- [ ] **Step 2: 运行 RED 契约**
+
+Run: `node --test test/unit-ci/shellpilot-client-ux-performance.spec.js`
+
+Expected: FAIL，诊断实现仍包含 Ant Design Tabs、加载二次提交和 A/B 开关。
+
+- [ ] **Step 3: 实现原生可访问页签**
+
+`SettingsTabNavigation` 输出 `.setting-tabs > .setting-tabs-native-list`，每个按钮使用 `role='tab'`、`aria-selected` 和活动项 `tabIndex=0`。ArrowLeft/ArrowUp、ArrowRight/ArrowDown、Home、End 计算目标索引，调用 `onChange(items[nextIndex].key)`，并在下一帧聚焦目标按钮。删除 `Tabs` import 和诊断条件分支。
+
+- [ ] **Step 4: 首次直接提交快捷键，分帧补齐其余启动控件**
+
+删除 `ready` 状态、加载图标和零延时提交。新增 `mountedStartupDetails: []`，组件挂载时启动第二个 `createFrameBatchedMount`；160ms 定时器依次请求字符串键 `session`、`numbers`。快捷键同步渲染；启动会话和数值项未挂载时分别渲染不可聚焦的等高占位，挂载后保留原业务组件和处理函数。卸载时清理定时器并取消两个调度器。
+
+- [ ] **Step 5: 添加原生页签与启动占位样式**
+
+`.setting-tabs-native-list` 使用横向 flex 和可滚动溢出；tab 按钮使用现有主题背景、边框、圆角和 focus-visible token；`[aria-selected='true']` 使用选中态。启动会话和数值占位的高度之和保持首个区块原来的约 300px 内容范围。
+
+- [ ] **Step 6: 运行 GREEN 单元测试**
+
+Run:
+
+```powershell
+node --test test/unit-ci/frame-batched-mount.spec.js test/unit-ci/shellpilot-client-ux-performance.spec.js test/unit-ci/shellpilot-ui-responsive.spec.js
+```
+
+Expected: 全部 PASS，诊断全局变量和条件分支均不存在。
+
 ### Task 3: 将性能就绪信号与离屏功能回归分开
 
 **Files:**
@@ -250,7 +290,7 @@ Expected: 全部 PASS，0 fail。
 两处测量统一改为：
 
 ```js
-readySelector: '.sp-settings-form .sp-setting-section-startup',
+readySelector: '.sp-setting-section-startup .edit-shortcut-button',
 readyCount: 1
 ```
 
@@ -277,6 +317,8 @@ await expect(page.locator('.sp-settings-form .sp-setting-section')).toHaveCount(
 ```
 
 保留高级区块稳定位置、焦点、`Ctrl+K` 搜索、关闭重开和 `rendererErrors` 断言；关闭重开后的就绪断言改为启动区块可见。
+
+在滚动离屏区块前等待 `.sp-setting-startup-session` 和 `.sp-setting-startup-numbers`，确认 160ms 后的两组启动控件都已自动补齐。
 
 - [ ] **Step 3: 构建并运行一次真实性能门禁**
 
@@ -365,4 +407,3 @@ Expected: `git diff --check` 无输出；实现提交后工作树干净；差异
 - [ ] **Step 7: 合并并发布更新**
 
 仅在 Step 1-6 全部通过后，使用 `superpowers:finishing-a-development-branch` 选择本地合并路径，将 `codex/settings-render-performance` 合并到主分支；随后按仓库现有版本与发布脚本创建更新提交、标签和发布产物，并验证远端分支、标签及发布页面均已更新。
-
