@@ -47,7 +47,7 @@ async function assertRunbookLayout (electronApp, page, viewport) {
   expect(layout.bodyOverflow).toBeLessThanOrEqual(1)
 }
 
-test('operations workspace exposes quick actions and readonly diagnostics without a connection', async () => {
+test('operations workspace exposes quick actions and diagnostics without a connection', async () => {
   let run
   let primaryError
   try {
@@ -63,7 +63,7 @@ test('operations workspace exposes quick actions and readonly diagnostics withou
     await expect(workspace.locator('.operations-workspace-tabs')).toContainText('安全维护')
     await expect(workspace.locator('.operations-workspace-tabs')).toContainText('脚本中心')
     await expect(workspace.locator('.operations-workspace-tabs')).toContainText('执行记录')
-    await expect(workspace.locator('.operations-tool-list button')).toHaveCount(24)
+    await expect(workspace.locator('.operations-tool-list button')).toHaveCount(30)
     await expect(workspace.locator('.operations-connection-status')).toContainText('尚未连接 SSH')
     await expect(workspace.getByRole('button', { name: '连接服务器' })).toBeVisible()
     await expect(workspace.getByRole('button', { name: '连接后运行' })).toBeVisible()
@@ -71,6 +71,20 @@ test('operations workspace exposes quick actions and readonly diagnostics withou
     await workspace.locator('.operations-run-actions button').click()
     await expect(page.locator('.quick-connect-wizard')).toBeVisible()
     await page.keyboard.press('Escape')
+
+    await workspace.locator('.operations-tool-list').getByText('网络抓包与报文采样').click()
+    await expect(workspace.locator('.operations-tool-title')).toContainText('网络抓包与报文采样')
+    await expect(workspace.locator('.operations-tool-title')).toContainText('资源敏感')
+    await expect(workspace.locator('label')).toContainText([
+      '网卡',
+      '协议',
+      '主机过滤（可选）',
+      '端口过滤（可选）',
+      '最多抓包数量',
+      '最长时长（秒）',
+      '保存路径'
+    ])
+    await expect(workspace.locator('.operations-run-actions')).toContainText('连接后运行')
 
     await workspace.locator('.operations-workspace-tabs').getByText('脚本中心').click()
     await expect(workspace.locator('.operations-script-center')).toBeVisible()

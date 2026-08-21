@@ -20,6 +20,25 @@ const tool = {
   ]
 }
 
+const sensitiveTool = {
+  ...tool,
+  id: 'network.packet-capture',
+  risk: 'resource-sensitive',
+  requiresConfirmation: true
+}
+
+async function confirmationFor (params = {}, nonce = 'capture-confirmation') {
+  const { createOperationsResourceConfirmation } = await importModule(
+    'src/client/components/operations-toolkit/shared/resource-confirmation.js'
+  )
+  return createOperationsResourceConfirmation({
+    toolId: sensitiveTool.id,
+    endpointKey: 'root@example.com:22',
+    params,
+    createNonce: () => nonce
+  })
+}
+
 test('runner completes readonly task and releases endpoint slot', async () => {
   const { createOperationsTaskRunner } = await importModule(
     'src/client/components/operations-toolkit/runtime/task-runner.js'
@@ -90,6 +109,87 @@ test('runner rejects invalid endpoint and non-readonly tool', async () => {
       tool: { ...tool, risk: 'reversible-change' },
       endpoint
     }),
-    /仅允许只读工具/
+    /只读或资源敏感/
   )
+})
+
+test('runner requires and consumes a matching sensitive confirmation', async () => {
+  const { createOperationsTaskRunner } = await importModule(
+    'src/client/components/operations-toolkit/runtime/task-runner.js'
+  )
+  const runner = createOperationsTaskRunner({
+    channel: { execute: async () => ({ exitCode: 0 }) },
+    discover: async () => ({})
+  })
+  assert.throws(
+    () => runner.run({ tool: sensitiveTool, endpoint, params: {} }),
+    /确认/
+  )
+  const confirmation = await confirmationFor()
+  const completed = await runner.run({
+    tool: sensitiveTool,
+    endpoint,
+    params: {},
+    confirmation
+  }).completion
+  assert.equal(completed.status, 'completed')
+  assert.throws(
+    () => runner.run({
+      tool: sensitiveTool,
+      endpoint,
+      params: {},
+      confirmation
+    }),
+    /已经使用/
+  )
+})
+
+test('runner permits only one sensitive task per endpoint', async () => {
+  const { createOperationsTaskRunner } = await importModule(
+    'src/client/components/operations-toolkit/runtime/task-runner.js'
+  )
+  const runner = createOperationsTaskRunner({
+    channel: {
+      execute: ({ signal }) => new Promise((resolve, reject) => {
+        signal.addEventListener('abort', () => {
+          const error = new Error('cancelled')
+          error.name = 'AbortError'
+          reject(error)
+        }, { once: true })
+      })
+    },
+    discover: async () => ({})
+  })
+  const first = runner.run({
+    tool: sensitiveTool,
+    endpoint,
+    confirmation: await confirmationFor({}, 'capture-1')
+  })
+  const secondConfirmation = await confirmationFor({}, 'capture-2')
+  assert.throws(() => runner.run({
+    tool: sensitiveTool,
+    endpoint,
+    confirmation: secondConfirmation
+  }), /资源敏感任务/)
+  await runner.cancel(first.taskId)
+  assert.equal(runner.getSensitiveActiveCount('root@example.com:22'), 0)
+})
+
+test('runner releases sensitive slot when synchronous task setup fails', async () => {
+  const { createOperationsTaskRunner } = await importModule(
+    'src/client/components/operations-toolkit/runtime/task-runner.js'
+  )
+  const runner = createOperationsTaskRunner({
+    channel: { execute: async () => ({ exitCode: 0 }) },
+    discover: async () => ({}),
+    createTaskId: () => { throw new Error('task setup failed') }
+  })
+  const confirmation = await confirmationFor({}, 'capture-setup-failure')
+
+  assert.throws(() => runner.run({
+    tool: sensitiveTool,
+    endpoint,
+    confirmation
+  }), /task setup failed/)
+  assert.equal(runner.getSensitiveActiveCount('root@example.com:22'), 0)
 })

@@ -83,6 +83,6 @@ test('chat Agent concurrency and UI busy state derive from the task registry', (
   assert.match(chat, /agentTaskRegistry\.subscribe/)
   assert.match(chat, /agentTaskRegistry\.isEndpointBusy/)
   assert.match(chat, /agentTaskRegistry\.isScopeBusy/)
-  assert.match(history, /function AIChatHistory \(\{ history, agentRunning \}\)/)
+  assert.match(history, /function AIChatHistory \(\{\s*history,\s*agentRunning,\s*config = \{\}\s*\}\)/)
   assert.doesNotMatch(history, /window\.store\?\.agentRunning/)
 })

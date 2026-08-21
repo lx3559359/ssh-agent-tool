@@ -149,7 +149,12 @@ export default Store => {
     if (!endpoint) throw new Error('连接 SSH 服务器后才可执行运维工具')
     const tool = getOperationsTool(toolId)
     if (!tool) throw new Error('未找到指定的运维工具')
-    const active = ensureRuntime(store).runner.run({ tool, params, endpoint })
+    const active = ensureRuntime(store).runner.run({
+      tool,
+      params,
+      endpoint,
+      confirmation: options.confirmation
+    })
     store.activeOperationsTaskId = active.taskId
     const completion = active.completion.then(task => {
       store.operationsHistory = ensureRuntime(store).taskStore.list()

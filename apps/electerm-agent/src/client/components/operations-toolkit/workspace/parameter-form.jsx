@@ -1,5 +1,8 @@
 import { Input, InputNumber, Select } from 'antd'
-import { normalizeOperationsParameterValue } from './parameter-value.js'
+import {
+  isOperationsParameterEnabled,
+  normalizeOperationsParameterValue
+} from './parameter-value.js'
 
 const e = window.translate
 
@@ -52,12 +55,13 @@ export default function ParameterForm ({
     <div className='operations-parameter-grid'>
       {tool.parameters.map(parameter => {
         const options = optionsFor(parameter, capabilities)
+        const parameterEnabled = isOperationsParameterEnabled(parameter, values)
         const inputId = `operations-parameter-${tool.id}-${parameter.id}`
           .replace(/[^a-zA-Z0-9_-]/g, '-')
         const helpId = parameter.help ? `${inputId}-help` : undefined
         const common = {
           'aria-label': parameter.label,
-          disabled,
+          disabled: disabled || !parameterEnabled,
           id: inputId,
           value: values[parameter.id],
           onChange: value => onChange(

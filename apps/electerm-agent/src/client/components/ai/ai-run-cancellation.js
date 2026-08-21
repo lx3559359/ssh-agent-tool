@@ -19,10 +19,13 @@ function currentEntry (store, id) {
   return store?.aiChatHistory?.find(item => item?.id === id) || null
 }
 
-export function getActiveScopedAIChatRun (history, scopeId) {
-  const active = getAIChatHistoryForScope(history, scopeId)
-    .filter(isActiveRun)
+export function getActiveAIChatRun (history) {
+  const active = (Array.isArray(history) ? history : []).filter(isActiveRun)
   return active.at(-1) || null
+}
+
+export function getActiveScopedAIChatRun (history, scopeId) {
+  return getActiveAIChatRun(getAIChatHistoryForScope(history, scopeId))
 }
 
 async function settleOperations (operations) {

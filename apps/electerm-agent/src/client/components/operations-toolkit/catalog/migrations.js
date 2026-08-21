@@ -16,7 +16,7 @@ const legacyToolMap = Object.freeze({
   'builtin-server-connectivity-check': 'network.loss-latency',
   'builtin-server-firewall-status': 'security.firewall-exposure',
   'builtin-server-ssh-security-events': 'security.ssh-login',
-  'builtin-server-packet-capture': 'network.udp-comprehensive-check',
+  'builtin-server-packet-capture': 'network.packet-capture',
   'builtin-server-service-status': 'service.inventory-health',
   'builtin-server-service-logs': 'service.failed-related-logs',
   'builtin-server-log-search': 'logs.system-anomaly-summary',

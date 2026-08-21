@@ -5,6 +5,9 @@ import {
   transitionOperationsTask
 } from './task-model.js'
 import { createOutputBuffer } from './output-buffer.js'
+import {
+  assertOperationsResourceConfirmation
+} from '../shared/resource-confirmation.js'
 
 const capabilityCacheTtlMs = 5 * 60 * 1000
 
@@ -43,6 +46,8 @@ export function createOperationsTaskRunner ({
   const controllers = new Map()
   const completions = new Map()
   const activeCounts = new Map()
+  const sensitiveCounts = new Map()
+  const consumedConfirmations = new Set()
   const capabilityCache = new Map()
 
   function setTask (task) {
@@ -62,25 +67,56 @@ export function createOperationsTaskRunner ({
     return value
   }
 
-  function run ({ tool, params = {}, endpoint }) {
-    if (tool?.risk !== 'read-only') {
-      throw new Error('阶段一运维任务仅允许只读工具')
+  function releaseEndpointSlot (countMap, key) {
+    const remaining = Math.max(0, (countMap.get(key) || 1) - 1)
+    if (remaining) countMap.set(key, remaining)
+    else countMap.delete(key)
+  }
+
+  function run ({ tool, params = {}, endpoint, confirmation }) {
+    const resourceSensitive = tool?.risk === 'resource-sensitive'
+    if (tool?.risk !== 'read-only' && !resourceSensitive) {
+      throw new Error('运维任务只允许只读或资源敏感诊断工具')
     }
     const key = assertEndpoint(endpoint)
-    if ((activeCounts.get(key) || 0) >= maxReadonlyPerEndpoint) {
-      throw new Error('当前服务器同时运行的只读任务已达到上限')
+    if (resourceSensitive) {
+      if ((sensitiveCounts.get(key) || 0) >= 1) {
+        throw new Error('当前服务器已有资源敏感任务正在运行')
+      }
+      assertOperationsResourceConfirmation({
+        confirmation,
+        toolId: tool.id,
+        endpointKey: key,
+        params,
+        consumedNonces: consumedConfirmations
+      })
+      sensitiveCounts.set(key, (sensitiveCounts.get(key) || 0) + 1)
+    } else {
+      if ((activeCounts.get(key) || 0) >= maxReadonlyPerEndpoint) {
+        throw new Error('当前服务器同时运行的只读任务已达到上限')
+      }
+      activeCounts.set(key, (activeCounts.get(key) || 0) + 1)
     }
-    const taskId = createTaskId()
-    const controller = new AbortController()
-    controllers.set(taskId, controller)
-    activeCounts.set(key, (activeCounts.get(key) || 0) + 1)
-    let task = setTask(createOperationsTask({
-      id: taskId,
-      toolId: tool.id,
-      endpointKey: key,
-      endpoint: { ...endpoint },
-      params: structuredClone(params)
-    }))
+    const countMap = resourceSensitive ? sensitiveCounts : activeCounts
+    let taskId
+    let controller
+    let task
+    try {
+      taskId = createTaskId()
+      controller = new AbortController()
+      controllers.set(taskId, controller)
+      task = setTask(createOperationsTask({
+        id: taskId,
+        toolId: tool.id,
+        endpointKey: key,
+        endpoint: { ...endpoint },
+        params: structuredClone(params)
+      }))
+    } catch (error) {
+      if (taskId) controllers.delete(taskId)
+      releaseEndpointSlot(countMap, key)
+      throw error
+    }
 
     const completion = (async () => {
       try {
@@ -180,9 +216,7 @@ export function createOperationsTaskRunner ({
         return task
       } finally {
         controllers.delete(taskId)
-        const remaining = Math.max(0, (activeCounts.get(key) || 1) - 1)
-        if (remaining) activeCounts.set(key, remaining)
-        else activeCounts.delete(key)
+        releaseEndpointSlot(countMap, key)
       }
     })()
     completions.set(taskId, completion)
@@ -216,6 +250,7 @@ export function createOperationsTaskRunner ({
     },
     get: taskId => tasks.get(taskId) || null,
     list: () => Array.from(tasks.values()),
-    getActiveCount: key => activeCounts.get(key) || 0
+    getActiveCount: key => activeCounts.get(key) || 0,
+    getSensitiveActiveCount: key => sensitiveCounts.get(key) || 0
   })
 }

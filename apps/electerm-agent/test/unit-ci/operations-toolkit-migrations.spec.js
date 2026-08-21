@@ -11,7 +11,7 @@ test('legacy diagnostics resolve without deleting stored quick commands', async 
   )
   assert.equal(
     resolveLegacyOperationsTool('builtin-server-packet-capture'),
-    'network.udp-comprehensive-check'
+    'network.packet-capture'
   )
   assert.equal(
     resolveLegacyOperationsTool('builtin-server-service-status'),
@@ -19,4 +19,12 @@ test('legacy diagnostics resolve without deleting stored quick commands', async 
   )
   assert.equal(hiddenQuickActionIds.has('builtin-server-packet-capture'), true)
   assert.equal(resolveLegacyOperationsTool('user-command'), null)
+
+  const { getOperationsTool } = await importModule(
+    'src/client/components/operations-toolkit/catalog/index.js'
+  )
+  assert.equal(
+    getOperationsTool('builtin-server-packet-capture').id,
+    'network.packet-capture'
+  )
 })

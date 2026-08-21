@@ -29,6 +29,7 @@ import {
   buildFleetStatusAiPrompt,
   handoffFleetStatusPromptToAi
 } from '../components/fleet-status/fleet-status-ai-context'
+import { removeAIChatHistoryEntry } from '../components/ai/ai-chat-actions'
 
 const e = window.translate
 const { assign } = Object
@@ -294,12 +295,7 @@ export default Store => {
   }
 
   Store.prototype.removeAiHistory = function (id) {
-    const { store } = window
-    const index = store.aiChatHistory.findIndex(d => d?.id === id)
-    if (index === -1) {
-      return
-    }
-    window.store.aiChatHistory.splice(index, 1)
+    return removeAIChatHistoryEntry(window.store, id)
   }
 
   Store.prototype.getLangName = function (

@@ -455,7 +455,9 @@ export default auto(function Index (props) {
         <InfoModal {...infoModalProps} />
         <RightSidePanel {...rightPanelProps}>
           <AIChat {...aiChatProps} />
-          <TerminalInfo key={activeTabId} {...terminalInfoProps} />
+          <div className='right-side-panel-terminal-info'>
+            <TerminalInfo key={activeTabId} {...terminalInfoProps} />
+          </div>
         </RightSidePanel>
         <SshConfigLoadNotify {...sshConfigProps} />
         <LoadSshConfigs
