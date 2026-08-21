@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Input, Select, Button } from 'antd'
+import { Button } from 'antd'
 import { SearchOutlined, CloseOutlined } from '@ant-design/icons'
 import { notification } from '../common/notification'
 import { isMacJs } from '../../common/constants.js'
@@ -72,6 +72,12 @@ export default function SettingHeader (props) {
   function handleSearchChange (event) {
     setActiveResultIndex(-1)
     onQueryChange(event.target.value)
+  }
+
+  function handleClearSearch () {
+    setActiveResultIndex(-1)
+    onQueryChange('')
+    requestAnimationFrame(() => searchInputRef.current?.focus())
   }
 
   function closeSearchResults () {
@@ -148,32 +154,48 @@ export default function SettingHeader (props) {
       }}
     >
       <h2 style={{ margin: 0, whiteSpace: 'nowrap' }}>{e('settingsCenter')}</h2>
-      <Button
+      <button
         className='setting-header-search-toggle'
         aria-label={e('searchSettings')}
         title={formatSettingsSearchShortcutTitle(e, isMacJs)}
-        icon={<SearchOutlined />}
-        type='text'
+        type='button'
         onClick={focusSearch}
-      />
+      >
+        <SearchOutlined />
+      </button>
       <div
         className={`setting-header-search ${searchExpanded ? 'is-expanded' : ''}`.trim()}
       >
-        <Input
-          ref={searchInputRef}
-          allowClear
-          role='combobox'
-          aria-label={e('searchSettings')}
-          aria-autocomplete='list'
-          aria-controls={searchListboxId}
-          aria-expanded={resultsOpen}
-          aria-activedescendant={activeResultId}
-          placeholder={e('searchSettings')}
-          prefix={<SearchOutlined />}
-          value={query}
-          onChange={handleSearchChange}
-          onKeyDown={handleSearchKeyDown}
-        />
+        <div className='setting-header-search-field'>
+          <SearchOutlined aria-hidden='true' />
+          <input
+            ref={searchInputRef}
+            role='combobox'
+            aria-label={e('searchSettings')}
+            aria-autocomplete='list'
+            aria-controls={searchListboxId}
+            aria-expanded={resultsOpen}
+            aria-activedescendant={activeResultId}
+            placeholder={e('searchSettings')}
+            value={query}
+            onChange={handleSearchChange}
+            onKeyDown={handleSearchKeyDown}
+          />
+          {
+            query
+              ? (
+                <button
+                  aria-label={e('clear')}
+                  className='setting-header-search-clear'
+                  type='button'
+                  onClick={handleClearSearch}
+                >
+                  <CloseOutlined />
+                </button>
+                )
+              : null
+          }
+        </div>
         {
           resultsOpen
             ? (
@@ -205,17 +227,18 @@ export default function SettingHeader (props) {
         }
       </div>
       <span className='setting-header-auto-saved'>{e('autoSaved')}</span>
-      <Select
+      <select
         aria-label={e('language')}
-        popupMatchSelectWidth={false}
+        className='setting-header-language-select'
+        onChange={event => handlePreviewLanguage(event.target.value)}
         value={store.previewLanguage || store.config.language}
-        onChange={handlePreviewLanguage}
-        options={languages.map(language => ({
-          value: language.id,
-          label: language.name
-        }))}
-        style={{ minWidth: 140 }}
-      />
+      >
+        {languages.map(language => (
+          <option key={language.id} value={language.id}>
+            {language.name}
+          </option>
+        ))}
+      </select>
       {
         store.previewLanguage
           ? (
@@ -239,13 +262,14 @@ export default function SettingHeader (props) {
             )
           : null
       }
-      <Button
+      <button
         className='close-setting-wrap close-setting-wrap-icon'
         aria-label={e('close')}
-        icon={<CloseOutlined />}
-        type='text'
+        type='button'
         onClick={handleClose}
-      />
+      >
+        <CloseOutlined />
+      </button>
     </header>
   )
 }

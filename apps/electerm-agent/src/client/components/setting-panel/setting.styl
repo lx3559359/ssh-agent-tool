@@ -123,10 +123,53 @@
   margin 0 0 16px
   padding 20px
   box-sizing border-box
+  content-visibility auto
   background-image var(--sp-card-background)
   border 1px solid var(--sp-border)
   border-radius var(--sp-radius-panel)
   box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-card)
+
+.sp-setting-section-startup
+  contain-intrinsic-size auto 480px
+
+.sp-setting-section-network
+  contain-intrinsic-size auto 360px
+
+.sp-setting-section-interface
+  contain-intrinsic-size auto 520px
+
+.sp-setting-section-advanced
+  contain-intrinsic-size auto 920px
+
+.sp-setting-section-placeholder
+  width 100%
+  min-width 0
+  margin 0 0 16px
+  box-sizing border-box
+
+.sp-setting-section-placeholder.sp-setting-section-network
+  min-height 360px
+
+.sp-setting-section-placeholder.sp-setting-section-interface
+  min-height 520px
+
+.sp-setting-section-placeholder.sp-setting-section-advanced
+  min-height 920px
+
+.sp-setting-startup-detail-placeholder
+  width 100%
+  box-sizing border-box
+
+.sp-setting-startup-hotkey-placeholder
+  min-height 72px
+
+.sp-setting-startup-session
+.sp-setting-startup-session-placeholder
+  min-height 112px
+
+.sp-setting-startup-numbers
+.sp-setting-startup-numbers-placeholder
+  min-height 128px
 
 .sp-setting-section-header
   min-width 0
@@ -256,6 +299,64 @@
   clip rect(0, 0, 0, 0)
   white-space nowrap
   border 0
+
+.sp-native-number-confirm
+  display inline-flex
+  align-items center
+  max-width 100%
+  min-height 32px
+  color var(--sp-text)
+  background var(--sp-surface)
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-control)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-control)
+  &:focus-within
+    border-color var(--sp-primary)
+    box-shadow var(--sp-shadow-focus)
+
+.sp-setting-number-field
+  display flex
+  flex-wrap wrap
+  align-items center
+  gap 8px 12px
+  > label
+    min-width 220px
+    color var(--sp-text)
+
+.sp-native-number-confirm-input
+  width 180px
+  max-width 100%
+  min-height 30px
+  padding 4px 10px
+  color inherit
+  font inherit
+  background transparent
+  border 0
+  outline 0
+
+.sp-native-number-confirm-actions
+  display inline-flex
+  align-items center
+  padding-right 4px
+  button
+    display inline-flex
+    align-items center
+    justify-content center
+    width 28px
+    height 28px
+    padding 0
+    color var(--sp-text-muted)
+    background transparent
+    border 0
+    border-radius var(--sp-radius-control)
+    cursor pointer
+    &:hover
+    &:focus-visible
+      color var(--sp-text)
+      background var(--sp-primary-soft)
+    &:focus-visible
+      outline 2px solid var(--sp-primary)
+      outline-offset -2px
 
 .sp-sync-config
   width 100%

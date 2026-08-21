@@ -4,7 +4,7 @@
  */
 
 import classnames from 'classnames'
-import { useEffect, useId, useRef } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useDialogBackgroundIsolation } from '../../common/dialog-background-isolation.js'
 import './drawer.styl'
@@ -35,6 +35,7 @@ export default function Drawer (props) {
     className,
     title,
     children,
+    keepMounted = false,
     styles = {},
     onClose
   } = props
@@ -44,6 +45,22 @@ export default function Drawer (props) {
   const titleId = useId()
   onCloseRef.current = onClose
   useDialogBackgroundIsolation(open, overlayRef)
+
+  useLayoutEffect(() => {
+    if (!open) return
+    const overlay = overlayRef.current
+    if (!overlay) return
+    overlay.removeAttribute('inert')
+    overlay.removeAttribute('aria-hidden')
+  }, [open])
+
+  useEffect(() => {
+    if (open) return
+    const overlay = overlayRef.current
+    if (!overlay) return
+    overlay.setAttribute('inert', '')
+    overlay.setAttribute('aria-hidden', 'true')
+  }, [open])
 
   function handleMaskClick (e) {
     if (e.target === e.currentTarget && onClose) {
@@ -92,12 +109,15 @@ export default function Drawer (props) {
     }
   }, [open])
 
-  if (!open) {
+  if (!open && !keepMounted) {
     return null
   }
 
   const drawerStyle = {
-    zIndex
+    zIndex,
+    opacity: open ? 1 : 0,
+    willChange: keepMounted ? 'opacity' : undefined,
+    pointerEvents: open ? 'auto' : 'none'
   }
 
   const contentStyle = {
@@ -112,7 +132,11 @@ export default function Drawer (props) {
   )
 
   return createPortal((
-    <div ref={overlayRef} className={cls} style={drawerStyle}>
+    <div
+      ref={overlayRef}
+      className={cls}
+      style={drawerStyle}
+    >
       <div
         className='custom-drawer-mask'
         onClick={handleMaskClick}

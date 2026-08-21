@@ -123,7 +123,7 @@ export default class HotkeySetting extends Component {
         index: 0
       },
       updateConfig: this.onChangeHotkey,
-      keysTaken: this.getKeysTaken(hotkey),
+      getKeysTaken: () => this.getKeysTaken(hotkey),
       handleClear: this.handleClear,
       renderClear: true
     }

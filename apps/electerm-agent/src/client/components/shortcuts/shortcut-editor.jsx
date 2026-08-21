@@ -16,7 +16,8 @@ export default class ShortcutEdit extends PureComponent {
   state = {
     editMode: false,
     shortcut: '',
-    data: null
+    data: null,
+    keysTaken: null
   }
 
   containerRef = createRef()
@@ -45,8 +46,12 @@ export default class ShortcutEdit extends PureComponent {
   }
 
   handleEditClick = () => {
+    const keysTaken = typeof this.props.getKeysTaken === 'function'
+      ? this.props.getKeysTaken()
+      : this.props.keysTaken
     this.setState({
-      editMode: true
+      editMode: true,
+      keysTaken: keysTaken || {}
     }, this.addEventListener)
   }
 
@@ -106,7 +111,7 @@ export default class ShortcutEdit extends PureComponent {
       (shiftKey ? 'shift+' : '') +
       (altKey ? 'alt+' : '') +
       codeK.toLowerCase()
-    if (this.props.keysTaken[r]) {
+    if (this.state.keysTaken[r]) {
       return this.warnExist()
     }
     this.setState({

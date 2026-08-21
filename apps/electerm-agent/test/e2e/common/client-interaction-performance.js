@@ -8,6 +8,19 @@ function percentile (values, ratio) {
   return sorted[index]
 }
 
+function maxOrZero (values) {
+  return values.length ? Math.max(...values) : 0
+}
+
+function summarizeInteractionSamples (samples) {
+  return {
+    sampleCount: samples.length,
+    totalP95Ms: percentile(samples.map(sample => sample.totalMs), 0.95),
+    stableFrameMaxMs: maxOrZero(samples.map(sample => sample.stableFrameMs)),
+    maxLongTaskMs: maxOrZero(samples.map(sample => sample.maxLongTaskMs || 0))
+  }
+}
+
 async function measureInputLatency (page, {
   selector,
   text
@@ -71,9 +84,17 @@ async function measureInputLatency (page, {
 async function measureStoreInteraction (page, {
   action,
   selector,
+  readySelector = selector,
+  readyCount = 1,
   timeoutMs = 3000
 }) {
-  return page.evaluate(async ({ action, selector, timeoutMs }) => {
+  return page.evaluate(async ({
+    action,
+    selector,
+    readySelector,
+    readyCount,
+    timeoutMs
+  }) => {
     const waitFrame = () => new Promise(resolve => requestAnimationFrame(resolve))
     const visible = element => {
       if (!element) return false
@@ -84,34 +105,128 @@ async function measureStoreInteraction (page, {
         rect.width > 0 &&
         rect.height > 0
     }
-    const started = performance.now()
-    if (action === 'open-ai') window.store.handleOpenAIPanel()
-    else if (action === 'switch-ai') window.store.handleOpenAIPanel()
-    else if (action === 'open-settings') window.store.openSetting()
-    else throw new Error(`Unsupported interaction action: ${action}`)
-    const actionCompleted = performance.now()
-
-    while (!visible(document.querySelector(selector))) {
-      if (performance.now() - started > timeoutMs) {
-        throw new Error(`Interaction timed out: ${action}`)
+    const longTasks = []
+    const longTaskSupported = Boolean(
+      window.PerformanceObserver &&
+      window.PerformanceObserver.supportedEntryTypes?.includes('longtask')
+    )
+    let observer = null
+    let milestoneObserver = null
+    const collectLongTasks = entries => {
+      for (const entry of entries) {
+        longTasks.push({
+          startTime: entry.startTime,
+          duration: entry.duration
+        })
       }
+    }
+    if (longTaskSupported) {
+      observer = new window.PerformanceObserver(list => {
+        collectLongTasks(list.getEntries())
+      })
+      observer.observe({ type: 'longtask' })
+    }
+
+    try {
+      const started = performance.now()
+      const milestoneSelectors = action === 'open-settings'
+        ? {
+            shell: '.setting-wrap .setting-tabs',
+            hotkey: '.sp-setting-section-startup .edit-shortcut-button',
+            session: '.sp-setting-startup-session',
+            numbers: '.sp-setting-startup-numbers',
+            language: '.setting-header-language-select',
+            network: '.sp-setting-section-network:not(.sp-setting-section-placeholder)',
+            interface: '.sp-setting-section-interface:not(.sp-setting-section-placeholder)',
+            advanced: '.sp-setting-section-advanced:not(.sp-setting-section-placeholder)'
+          }
+        : {}
+      const milestoneOffsetsMs = {}
+      const recordMilestones = () => {
+        for (const [name, milestoneSelector] of Object.entries(milestoneSelectors)) {
+          if (
+            milestoneOffsetsMs[name] === undefined &&
+            document.querySelector(milestoneSelector)
+          ) {
+            milestoneOffsetsMs[name] = performance.now() - started
+          }
+        }
+      }
+      milestoneObserver = action === 'open-settings'
+        ? new window.MutationObserver(recordMilestones)
+        : null
+      milestoneObserver?.observe(document.documentElement, {
+        childList: true,
+        subtree: true
+      })
+      if (action === 'open-ai') window.store.handleOpenAIPanel()
+      else if (action === 'switch-ai') window.store.handleOpenAIPanel()
+      else if (action === 'open-settings') window.store.openSetting()
+      else throw new Error(`Unsupported interaction action: ${action}`)
+      recordMilestones()
+      const actionCompleted = performance.now()
+
+      while (!visible(document.querySelector(selector))) {
+        if (performance.now() - started > timeoutMs) {
+          throw new Error(`Interaction timed out before visible: ${action}`)
+        }
+        await waitFrame()
+      }
+      const visibleAt = performance.now()
+
+      while (document.querySelectorAll(readySelector).length < readyCount) {
+        if (performance.now() - started > timeoutMs) {
+          throw new Error(`Interaction timed out before ready: ${action}`)
+        }
+        await waitFrame()
+      }
+      const contentReadyAt = performance.now()
+      await waitFrame()
+      await waitFrame()
+      const stableAt = performance.now()
+
+      if (observer) collectLongTasks(observer.takeRecords())
+      recordMilestones()
+      milestoneObserver?.disconnect()
+      const measuredLongTasks = longTasks.filter(entry => (
+        entry.startTime >= started && entry.startTime <= stableAt
+      )).map(entry => ({
+        ...entry,
+        startOffsetMs: entry.startTime - started
+      }))
+      return {
+        totalMs: stableAt - started,
+        actionMs: actionCompleted - started,
+        visibleMs: visibleAt - actionCompleted,
+        contentReadyMs: contentReadyAt - visibleAt,
+        stableFrameMs: stableAt - visibleAt,
+        milestoneOffsetsMs,
+        longTaskSupported,
+        longTasks: measuredLongTasks,
+        maxLongTaskMs: measuredLongTasks.length
+          ? Math.max(...measuredLongTasks.map(entry => entry.duration))
+          : 0
+      }
+    } finally {
+      observer?.disconnect()
+      milestoneObserver?.disconnect()
+    }
+  }, { action, selector, readySelector, readyCount, timeoutMs })
+}
+
+async function waitForStableFrames (page, frameCount = 2) {
+  await page.evaluate(async (frameCount) => {
+    const waitFrame = () => new Promise(resolve => requestAnimationFrame(resolve))
+    for (let index = 0; index < frameCount; index += 1) {
       await waitFrame()
     }
-    const visibleAt = performance.now()
-    await waitFrame()
-    await waitFrame()
-    const stableAt = performance.now()
-    return {
-      totalMs: stableAt - started,
-      actionMs: actionCompleted - started,
-      visibleMs: visibleAt - actionCompleted,
-      stableFrameMs: stableAt - visibleAt
-    }
-  }, { action, selector, timeoutMs })
+  }, frameCount)
 }
 
 module.exports = {
   measureInputLatency,
   measureStoreInteraction,
-  percentile
+  percentile,
+  summarizeInteractionSamples,
+  waitForStableFrames
 }

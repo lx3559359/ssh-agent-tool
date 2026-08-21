@@ -50,9 +50,76 @@
     flex 1 1 240px
     width 100%
     max-width 320px
-    > .ant-input-affix-wrapper
+    > .setting-header-search-field
       width 100%
-      max-width none !important
+  .setting-header-search-field
+    display flex
+    align-items center
+    gap 7px
+    min-height 32px
+    padding 0 10px
+    color var(--sp-text-muted)
+    background var(--sp-surface)
+    border 1px solid var(--sp-border)
+    border-radius var(--sp-radius-control)
+    box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-control)
+    &:focus-within
+      color var(--sp-text)
+      border-color var(--sp-primary)
+      box-shadow var(--sp-shadow-focus)
+    > input
+      flex 1 1 auto
+      width 100%
+      min-width 0
+      padding 0
+      color var(--sp-text)
+      font inherit
+      line-height 30px
+      background transparent
+      border 0
+      outline 0
+      &::placeholder
+        color var(--sp-text-muted)
+  .setting-header-search-clear
+    appearance none
+    display inline-flex
+    align-items center
+    justify-content center
+    flex 0 0 auto
+    width 24px
+    min-height 24px
+    padding 0
+    color var(--sp-text-muted)
+    background transparent
+    border 0
+    border-radius var(--sp-radius-control)
+    cursor pointer
+    &:hover
+    &:focus-visible
+      color var(--sp-text)
+      background var(--sp-primary-soft)
+      outline 2px solid var(--sp-primary)
+      outline-offset -2px
+  .setting-header-search-toggle
+  .close-setting-wrap-icon
+    appearance none
+    align-items center
+    justify-content center
+    flex 0 0 auto
+    min-width 32px
+    min-height 32px
+    padding 6px
+    color var(--sp-text)
+    font inherit
+    background transparent
+    border 1px solid transparent
+    border-radius var(--sp-radius-control)
+    cursor pointer
+    &:hover
+      background var(--sp-primary-soft)
+    &:focus-visible
+      outline 2px solid var(--sp-primary)
+      outline-offset -2px
   .setting-header-search-toggle
     display none
   .setting-search-results
@@ -94,9 +161,22 @@
         background var(--sp-primary-soft)
         outline 2px solid var(--sp-primary)
         outline-offset -2px
-  .ant-select
+  .setting-header-language-select
     flex 0 1 180px
+    min-width 140px
+    min-height 32px
     max-width 220px
+    padding 4px 28px 4px 10px
+    color var(--sp-text)
+    font inherit
+    background var(--sp-surface)
+    border 1px solid var(--sp-border)
+    border-radius var(--sp-radius-control)
+    box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-control)
+    &:focus-visible
+      border-color var(--sp-primary)
+      outline 2px solid var(--sp-primary)
+      outline-offset 1px
   .setting-header-auto-saved
     color var(--sp-text-muted)
     overflow-wrap break-word
@@ -136,6 +216,47 @@
     background-image var(--sp-control-background)
     border-radius var(--sp-radius-control)
     box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-control)
+  .setting-tabs-native-list
+    display flex
+    align-items center
+    gap 6px
+    width 100%
+    min-width 0
+    padding 0 0 8px
+    overflow-x auto
+    overflow-y hidden
+  .setting-tabs-native-tab
+    appearance none
+    flex 0 0 auto
+    min-height 36px
+    padding 7px 14px
+    color var(--sp-text-muted)
+    font inherit
+    background transparent
+    border 1px solid transparent
+    border-radius var(--sp-radius-control)
+    cursor pointer
+    white-space nowrap
+    &:hover
+      color var(--sp-text)
+      background var(--sp-primary-soft)
+    &:focus-visible
+      color var(--sp-text)
+      outline 2px solid var(--sp-primary)
+      outline-offset -2px
+    &[aria-selected='true']
+      color var(--sp-text)
+      background-image var(--sp-control-background)
+      border-color var(--sp-border)
+      box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-control)
+
+.setting-tab-panel
+  display flex
+  flex-direction column
+  flex 1 1 auto
+  min-width 0
+  min-height 0
+  overflow hidden
 
 .setting-tabs-setting
 .setting-tabs-bookmarks
@@ -281,10 +402,10 @@
       max-width none !important
       &.is-expanded
         display block
-    .ant-select
+    .setting-header-language-select
       order 4
       flex 1 1 132px
-      min-width 0 !important
+      min-width 0
       max-width 100%
     .ant-btn
       order 4
@@ -296,7 +417,7 @@
       order 1
       display inline-flex
       flex 0 0 auto
-    > .ant-btn:last-child
+    > .close-setting-wrap
       order 2
       flex 0 0 auto
       margin-left auto
@@ -326,10 +447,10 @@
     .setting-header-search-toggle
       order 1
       flex 0 0 auto
-    .ant-select
+    .setting-header-language-select
       order 2
       flex 0 0 116px
-      min-width 116px !important
+      min-width 116px
     .ant-btn
       order 3
       flex 0 0 auto

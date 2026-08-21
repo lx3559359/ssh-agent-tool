@@ -3,34 +3,49 @@ const {
   cleanupQualityApp,
   launchQualityApp
 } = require('./common/quality-e2e-app')
+const { startLocalAiServer } = require('./common/ai-api')
 const {
   measureInputLatency,
   measureStoreInteraction,
-  percentile
+  percentile,
+  summarizeInteractionSamples,
+  waitForStableFrames
 } = require('./common/client-interaction-performance')
 
 const BUDGETS = {
   aiInputP95Ms: Number(process.env.SHELLPILOT_BUDGET_AI_INPUT_P95_MS || 50),
   aiPanelOpenMs: Number(process.env.SHELLPILOT_BUDGET_AI_PANEL_OPEN_MS || 250),
   rightPanelSwitchMs: Number(process.env.SHELLPILOT_BUDGET_RIGHT_PANEL_SWITCH_MS || 250),
-  settingsOpenMs: Number(process.env.SHELLPILOT_BUDGET_SETTINGS_OPEN_MS || 500)
+  settingsColdOpenMs: Number(process.env.SHELLPILOT_BUDGET_SETTINGS_COLD_OPEN_MS || 250),
+  settingsWarmOpenP95Ms: Number(process.env.SHELLPILOT_BUDGET_SETTINGS_WARM_OPEN_P95_MS || 150),
+  settingsStableFrameMs: Number(process.env.SHELLPILOT_BUDGET_SETTINGS_STABLE_FRAME_MS || 100),
+  settingsLongTaskMs: Number(process.env.SHELLPILOT_BUDGET_SETTINGS_LONG_TASK_MS || 100)
 }
 
 test.setTimeout(120000)
 
 test('enforces long-history typing and loaded client interaction budgets', async () => {
   let run
+  let aiServer
   let primaryError
   try {
+    aiServer = await startLocalAiServer()
     run = await launchQualityApp(electron)
     const page = run.page
+    const rendererErrors = []
+    page.on('pageerror', error => {
+      rendererErrors.push(String(error?.stack || error))
+    })
+    page.on('console', message => {
+      if (message.type() === 'error') rendererErrors.push(message.text())
+    })
     await page.bringToFront()
-    await page.evaluate(() => {
+    await page.evaluate((baseURLAI) => {
       const response = '# Historical response\n' + 'status: ok\n'.repeat(1400)
       const profile = {
         id: 'interaction-performance-ai',
         nameAI: 'Interaction Performance Model',
-        baseURLAI: 'http://127.0.0.1:43434',
+        baseURLAI,
         apiPathAI: '/chat/completions',
         modelAI: 'interaction-performance-model',
         apiKeyAI: 'interaction-performance-token',
@@ -57,7 +72,7 @@ test('enforces long-history typing and loaded client interaction budgets', async
         ...profile
       })
       window.store.handleOpenAIPanel()
-    })
+    }, aiServer.baseURL)
 
     const input = page.locator('.ai-chat-textarea')
     await expect(input).toBeVisible({ timeout: 20000 })
@@ -144,12 +159,145 @@ test('enforces long-history typing and loaded client interaction budgets', async
 
     await page.evaluate(() => window.store.hideSettingModal())
     await expect(page.locator('.setting-wrap')).toHaveCount(0)
-    const settingsOpen = await measureStoreInteraction(page, {
+    await waitForStableFrames(page)
+    const settingsColdOpen = await measureStoreInteraction(page, {
       action: 'open-settings',
-      selector: '.setting-wrap .setting-tabs'
+      selector: '.setting-wrap .setting-tabs',
+      readySelector: '.sp-setting-section-startup .edit-shortcut-button',
+      readyCount: 1
     })
-    console.log(`[client-interaction] ${JSON.stringify({ settingsOpen })}`)
-    expect(settingsOpen.totalMs).toBeLessThanOrEqual(BUDGETS.settingsOpenMs)
+    console.log(`[client-interaction] ${JSON.stringify({ settingsColdOpen })}`)
+    expect(settingsColdOpen.totalMs).toBeLessThanOrEqual(BUDGETS.settingsColdOpenMs)
+    expect(settingsColdOpen.stableFrameMs).toBeLessThanOrEqual(BUDGETS.settingsStableFrameMs)
+    if (settingsColdOpen.longTaskSupported) {
+      expect(settingsColdOpen.maxLongTaskMs).toBeLessThanOrEqual(BUDGETS.settingsLongTaskMs)
+    }
+
+    const settingsWarmSamples = []
+    for (let index = 0; index < 10; index += 1) {
+      await page.evaluate(() => window.store.hideSettingModal(true))
+      await expect.poll(() => page.locator('.setting-wrap').evaluate(element => ({
+        ariaHidden: element.getAttribute('aria-hidden'),
+        inert: element.inert,
+        opacity: window.getComputedStyle(element).opacity
+      }))).toEqual({ ariaHidden: 'true', inert: true, opacity: '0' })
+      await waitForStableFrames(page)
+      settingsWarmSamples.push(await measureStoreInteraction(page, {
+        action: 'open-settings',
+        selector: '.setting-wrap .setting-tabs',
+        readySelector: '.sp-setting-section-startup .edit-shortcut-button',
+        readyCount: 1
+      }))
+    }
+    const settingsWarm = summarizeInteractionSamples(settingsWarmSamples)
+    console.log(`[client-interaction] ${JSON.stringify({
+      settingsWarm,
+      settingsWarmSamples
+    })}`)
+    expect(settingsWarm.totalP95Ms)
+      .toBeLessThanOrEqual(BUDGETS.settingsWarmOpenP95Ms)
+    expect(settingsWarm.stableFrameMaxMs)
+      .toBeLessThanOrEqual(BUDGETS.settingsStableFrameMs)
+    if (settingsWarmSamples.some(sample => sample.longTaskSupported)) {
+      expect(settingsWarm.maxLongTaskMs)
+        .toBeLessThanOrEqual(BUDGETS.settingsLongTaskMs)
+    }
+
+    await expect(page.locator(
+      '.sp-setting-section.sp-setting-section-startup'
+    )).toBeVisible()
+    await expect(page.locator('.sp-setting-startup-session')).toBeAttached()
+    await expect(page.locator('.sp-setting-startup-numbers')).toBeAttached()
+    const timeoutInput = page.locator('#setting-number-sshReadyTimeout')
+    const originalTimeout = await page.evaluate(() => (
+      window.store.config.sshReadyTimeout
+    ))
+    const committedTimeout = Math.max(100, Number(originalTimeout) + 200)
+    await timeoutInput.fill(String(committedTimeout))
+    await timeoutInput.press('Enter')
+    await expect.poll(() => page.evaluate(() => (
+      window.store.config.sshReadyTimeout
+    ))).toBe(committedTimeout)
+    await timeoutInput.fill(String(committedTimeout + 200))
+    await timeoutInput.press('Escape')
+    await expect(timeoutInput).toHaveValue(String(committedTimeout))
+    await timeoutInput.fill('')
+    await timeoutInput.press('Enter')
+    await expect(timeoutInput).toHaveValue(String(committedTimeout))
+    await timeoutInput.fill(String(originalTimeout))
+    await timeoutInput.press('Enter')
+    await expect.poll(() => page.evaluate(() => (
+      window.store.config.sshReadyTimeout
+    ))).toBe(originalTimeout)
+    for (const name of ['network', 'interface', 'advanced']) {
+      const section = page.locator(
+        `.sp-setting-section.sp-setting-section-${name}`
+      )
+      if (await section.count() === 0) {
+        const placeholder = page.locator(
+          `.sp-setting-section-placeholder.sp-setting-section-${name}`
+        )
+        await expect(placeholder).toBeAttached()
+        await placeholder.evaluate(element => {
+          element.scrollIntoView({ block: 'center' })
+        })
+      }
+      await expect(section).toBeAttached()
+      await section.scrollIntoViewIfNeeded()
+      await expect(section).toBeVisible()
+    }
+    const sections = page.locator('.sp-settings-form .sp-setting-section')
+    await expect(sections).toHaveCount(4)
+    const advancedSection = page.locator(
+      '.sp-setting-section.sp-setting-section-advanced'
+    )
+    await advancedSection.scrollIntoViewIfNeeded()
+    await expect(advancedSection).toBeVisible()
+    const advancedTopBeforeStable = await advancedSection.evaluate(element => (
+      element.getBoundingClientRect().top
+    ))
+    await waitForStableFrames(page)
+    const advancedTopAfterStable = await advancedSection.evaluate(element => (
+      element.getBoundingClientRect().top
+    ))
+    expect(Math.abs(advancedTopAfterStable - advancedTopBeforeStable))
+      .toBeLessThanOrEqual(8)
+    const advancedControl = advancedSection.locator('input, button, [tabindex]').first()
+    await advancedControl.focus()
+    await expect(advancedControl).toBeFocused()
+
+    const closeButton = page.locator('.setting-wrap .close-setting-wrap-icon')
+    await closeButton.focus()
+    await expect(closeButton).toBeFocused()
+    await page.keyboard.press('Control+K')
+    const settingsSearch = page.locator('.setting-header-search input')
+    await expect(settingsSearch).toBeFocused()
+    await settingsSearch.fill('proxy')
+    const generalResult = page.locator('.setting-search-results [role="option"]')
+    await expect(generalResult).toHaveCount(1)
+    await generalResult.click()
+    await expect(page.locator('.sp-setting-section-network')).toBeAttached()
+
+    await closeButton.click()
+    await expect.poll(() => page.locator('.setting-wrap').evaluate(element => ({
+      ariaHidden: element.getAttribute('aria-hidden'),
+      inert: element.inert,
+      opacity: window.getComputedStyle(element).opacity
+    }))).toEqual({ ariaHidden: 'true', inert: true, opacity: '0' })
+    await page.evaluate(() => window.store.openSetting())
+    await expect(page.locator(
+      '.sp-setting-section-startup .edit-shortcut-button'
+    )).toBeVisible()
+    const generalTab = page.locator('#setting-tab-setting')
+    const themesTab = page.locator('#setting-tab-terminalThemes')
+    await generalTab.focus()
+    await page.keyboard.press('ArrowRight')
+    await expect(themesTab).toHaveAttribute('aria-selected', 'true')
+    await expect(themesTab).toBeFocused()
+    await page.keyboard.press('ArrowLeft')
+    await expect(generalTab).toHaveAttribute('aria-selected', 'true')
+    await expect(generalTab).toBeFocused()
+    expect(rendererErrors, rendererErrors.join('\n')).toEqual([])
 
     const metrics = {
       budgets: BUDGETS,
@@ -159,7 +307,9 @@ test('enforces long-history typing and loaded client interaction budgets', async
         aiInputMaxMs: Math.max(...inputResult.samples),
         aiPanelOpen,
         rightPanelSwitch,
-        settingsOpen
+        settingsColdOpen,
+        settingsWarm,
+        settingsWarmSamples
       },
       historyItems: 100,
       historyCharacters: 100 * ('# Historical response\n'.length + 'status: ok\n'.length * 1400)
@@ -172,10 +322,17 @@ test('enforces long-history typing and loaded client interaction budgets', async
     primaryError = error
     throw error
   } finally {
+    let cleanupError
     if (run) {
       await cleanupQualityApp(run.electronApp, run.profileRoot).catch(error => {
-        if (!primaryError) throw error
+        cleanupError = error
       })
     }
+    if (aiServer) {
+      await aiServer.close().catch(error => {
+        cleanupError ||= error
+      })
+    }
+    if (!primaryError && cleanupError) await Promise.reject(cleanupError)
   }
 })

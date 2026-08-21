@@ -2142,83 +2142,13 @@ async function exerciseLanguageAndThemeState (page) {
   const targetText = await page.evaluate((language) => {
     return window.et.langs.find(item => item.id === language)?.name || ''
   }, targetLanguage)
-  const targetIndex = await page.evaluate((language) => {
-    return window.et.langs.findIndex(item => item.id === language)
-  }, targetLanguage)
-  const initialIndex = await page.evaluate((language) => {
-    return window.et.langs.findIndex(item => item.id === language)
-  }, initial.language)
   expect(targetText).not.toBe('')
-  expect(targetIndex).toBeGreaterThanOrEqual(0)
-  expect(initialIndex).toBeGreaterThanOrEqual(0)
-  const languageSelect = page.locator('.setting-header .ant-select')
-  const languageCombobox = languageSelect.getByRole('combobox')
+  const languageCombobox = page.locator('.setting-header-language-select')
   const chooseTargetOption = async () => {
-    const dropdown = page.locator('.ant-select-dropdown:visible')
-    for (let attempt = 0; attempt < 3 && await dropdown.count() !== 1; attempt += 1) {
-      await languageCombobox.focus()
-      await languageCombobox.press('ArrowDown')
-      await expect(languageCombobox).toHaveAttribute('aria-expanded', 'true', { timeout: 5000 })
-      await dropdown.waitFor({ state: 'visible', timeout: 2000 }).catch(() => {})
-    }
-    await expect(dropdown).toHaveCount(1)
-    await expect(dropdown.getByRole('listbox')).toHaveCount(1)
-    const holder = dropdown.locator('.rc-virtual-list-holder')
-    await expect(holder).toBeVisible()
-    const targetOption = dropdown.locator('.ant-select-item-option').filter({ hasText: targetText })
-    const wheelDelta = targetIndex < initialIndex ? -480 : 480
-    for (let attempt = 0; attempt < 12; attempt += 1) {
-      const ready = await targetOption.count() === 1 && await targetOption.evaluate(option => {
-        const holder = option.closest('.rc-virtual-list-holder')
-        if (!holder) return false
-        const optionRect = option.getBoundingClientRect()
-        const holderRect = holder.getBoundingClientRect()
-        const visibleLeft = Math.max(holderRect.left, 0)
-        const visibleRight = Math.min(holderRect.right, window.innerWidth)
-        const visibleTop = Math.max(holderRect.top, 0)
-        const visibleBottom = Math.min(holderRect.bottom, window.innerHeight)
-        const hit = document.elementFromPoint(
-          (Math.max(optionRect.left, visibleLeft) + Math.min(optionRect.right, visibleRight)) / 2,
-          (Math.max(optionRect.top, visibleTop) + Math.min(optionRect.bottom, visibleBottom)) / 2
-        )
-        return optionRect.left >= visibleLeft && optionRect.right <= visibleRight &&
-          optionRect.top >= visibleTop && optionRect.bottom <= visibleBottom &&
-          Boolean(hit && option.contains(hit))
-      })
-      if (ready) break
-      const holderBox = await holder.boundingBox()
-      expect(holderBox).not.toBeNull()
-      const viewport = await page.evaluate(() => ({
-        width: window.innerWidth,
-        height: window.innerHeight
-      }))
-      const visibleLeft = Math.max(holderBox.x, 0)
-      const visibleRight = Math.min(holderBox.x + holderBox.width, viewport.width)
-      const visibleTop = Math.max(holderBox.y, 0)
-      const visibleBottom = Math.min(holderBox.y + holderBox.height, viewport.height)
-      expect(visibleRight - visibleLeft).toBeGreaterThan(2)
-      expect(visibleBottom - visibleTop).toBeGreaterThan(2)
-      await page.mouse.move(
-        (visibleLeft + visibleRight) / 2,
-        (visibleTop + visibleBottom) / 2
-      )
-      await page.mouse.wheel(0, wheelDelta)
-      await page.waitForTimeout(80)
-    }
-    await expect(targetOption).toHaveCount(1)
-    await expect(targetOption).toHaveText(targetText)
-    await expect(targetOption).toBeVisible()
-    await expect(targetOption).toBeEnabled()
-    const firstBox = await targetOption.boundingBox()
-    expect(firstBox).not.toBeNull()
-    await page.waitForTimeout(120)
-    const stableBox = await targetOption.boundingBox()
-    expect(stableBox).not.toBeNull()
-    expect(Math.abs(stableBox.x - firstBox.x)).toBeLessThan(1)
-    expect(Math.abs(stableBox.y - firstBox.y)).toBeLessThan(1)
-    await targetOption.click({ trial: true })
-    await targetOption.click()
-    await expect(languageCombobox).toHaveAttribute('aria-expanded', 'false', { timeout: 5000 })
+    await languageCombobox.selectOption(targetLanguage)
+    await expect(languageCombobox).toHaveValue(targetLanguage)
+    await expect(languageCombobox.locator(`option[value="${targetLanguage}"]`))
+      .toHaveText(targetText)
   }
   await chooseTargetOption()
   expect(await page.evaluate(() => window.store.previewLanguage)).toBe(targetLanguage)
@@ -2549,7 +2479,8 @@ test('590px topbar keeps every visible action clear of native controls and prese
     await settingAction.click()
     await expect(page.locator('.setting-wrap')).toBeVisible()
     await page.locator('.setting-header .close-setting-wrap-icon').click()
-    await expect(page.locator('.setting-wrap')).toBeHidden()
+    await expect(page.locator('.setting-wrap')).toHaveAttribute('inert', '')
+    await expect(page.locator('.setting-wrap')).toHaveCSS('opacity', '0')
 
     const helpAction = rail.locator('button:has(.anticon-question-circle)')
     await expect(helpAction).toHaveCount(1)

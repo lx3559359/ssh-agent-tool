@@ -62,7 +62,8 @@ describe('bookmarks', function () {
       artifacts.bookmarkIds.push(bookmarkId)
 
       await client.locator('.setting-wrap .close-setting-wrap-icon').click()
-      await expect(client.locator('.setting-wrap')).toBeHidden()
+      await expect(client.locator('.setting-wrap')).toHaveAttribute('inert', '')
+      await expect(client.locator('.setting-wrap')).toHaveCSS('opacity', '0')
       await openBookmarksSidebar(client)
       let menu = await openContextMenu(client, bookmarkId)
       await menu.locator('[role="menuitem"]').nth(2).click()
@@ -73,7 +74,8 @@ describe('bookmarks', function () {
       await expect.poll(() => bookmarkIdByTitle(client, editedTitle)).toBe(bookmarkId)
 
       await client.locator('.setting-wrap .close-setting-wrap-icon').click()
-      await expect(client.locator('.setting-wrap')).toBeHidden()
+      await expect(client.locator('.setting-wrap')).toHaveAttribute('inert', '')
+      await expect(client.locator('.setting-wrap')).toHaveCSS('opacity', '0')
       await openBookmarksSidebar(client)
       await client.locator('.sidebar-panel-bookmarks .tree-sort-wrap input').fill(editedTitle)
       const result = client.locator(`.sidebar-panel-bookmarks .tree-item[data-item-id="${bookmarkId}"]`)
