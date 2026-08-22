@@ -368,6 +368,9 @@ test('skip-aware planner rejects pinned skips with invalid relative paths', asyn
     '.',
     './locked.txt',
     '../locked.txt',
+    'C:locked.txt',
+    'C:.\\locked.txt',
+    'C:folder/locked.txt',
     'nested//locked.txt',
     'nested/../locked.txt',
     path.resolve(root, 'locked.txt')
