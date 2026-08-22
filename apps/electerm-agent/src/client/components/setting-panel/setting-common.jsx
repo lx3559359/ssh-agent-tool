@@ -1,4 +1,5 @@
 import React, { Component } from 'react'
+import { flushSync } from 'react-dom'
 import {
   ArrowRightOutlined,
   LoadingOutlined,
@@ -106,7 +107,9 @@ export default class SettingCommon extends Component {
 
   startStartupDetailsMount = () => {
     this.startupDetailsScheduler = createFrameBatchedMount({
-      onMount: this.mountStartupDetail
+      onMount: detail => {
+        flushSync(() => this.mountStartupDetail(detail))
+      }
     })
     this.startupDetailsScheduler.start()
     this.startupDetailsScheduler.request('hotkey')

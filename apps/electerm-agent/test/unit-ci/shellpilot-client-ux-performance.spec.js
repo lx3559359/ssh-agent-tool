@@ -258,6 +258,11 @@ test('general settings isolate offscreen section rendering with stable size hint
   assert.match(common, /mountedSectionIndexes: \[1\]/)
   assert.match(common, /mountedStartupDetails: \[\]/)
   assert.match(common, /this\.startupDetailsScheduler\.request\('hotkey'\)/)
+  assert.match(common, /import \{ flushSync \} from 'react-dom'/)
+  assert.match(
+    common,
+    /onMount: detail => \{[\s\S]{0,100}flushSync\(\(\) => this\.mountStartupDetail\(detail\)\)/
+  )
   assert.match(common, /this\.mountStartupDetail\('session'\)/)
   assert.match(common, /this\.mountStartupDetail\('numbers'\)/)
   assert.doesNotMatch(common, /this\.startupDetailsScheduler\.request\('session'\)/)
