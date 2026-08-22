@@ -457,6 +457,8 @@ export default class TransportAction extends Component {
     up.transferred = transferredValue
     this.lastTransferred = transferredValue
     up.startTime = this.startTime
+    const elapsedSeconds = Math.max(0.001, (Date.now() - up.startTime) / 1000)
+    up.speedBytesPerSecond = transferredValue / elapsedSeconds
     up.speed = format(transferredValue, up.startTime)
     assign(
       up,
@@ -464,11 +466,10 @@ export default class TransportAction extends Component {
     )
     up.passedTime = computePassedTime(up.startTime)
     this.update(up)
-    const elapsedSeconds = Math.max(0.001, (Date.now() - up.startTime) / 1000)
     this.runTransferTask('onProgress', {
       transferred: transferredValue,
       total,
-      speed: transferredValue / elapsedSeconds,
+      speed: up.speedBytesPerSecond,
       etaSeconds: Math.max(0, Number(up.leftTimeInt) || 0) / 1000
     })
   }
@@ -1039,6 +1040,8 @@ export default class TransportAction extends Component {
     up.status = 'running'
     up.transferred = this.transferred
     up.startTime = this.startTime
+    const elapsedSeconds = Math.max(0.001, (Date.now() - up.startTime) / 1000)
+    up.speedBytesPerSecond = this.transferred / elapsedSeconds
     up.speed = format(this.transferred, up.startTime)
     assign(
       up,
