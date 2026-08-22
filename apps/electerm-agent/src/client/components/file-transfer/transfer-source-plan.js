@@ -21,6 +21,39 @@ function stablePlanValue (plan) {
   })
 }
 
+export function resolveLocalTransferSourcePlan (transfer = {}, sourcePlan = null) {
+  if (sourcePlan) return sourcePlan
+  if (transfer?.sourcePlan) return transfer.sourcePlan
+  if (transfer?.sourceDescriptor) {
+    return {
+      descriptor: transfer.sourceDescriptor,
+      skipped: []
+    }
+  }
+  return null
+}
+
+export function bindRuntimeLocalTransferPlan (transfer = {}, sourcePlan = null) {
+  const descriptorEnumerable = Object.prototype.propertyIsEnumerable.call(
+    transfer,
+    'sourceDescriptor'
+  )
+  const boundSourcePlan = sourcePlan || null
+  Object.defineProperty(transfer, 'sourcePlan', {
+    configurable: true,
+    enumerable: false,
+    writable: true,
+    value: boundSourcePlan
+  })
+  Object.defineProperty(transfer, 'sourceDescriptor', {
+    configurable: true,
+    enumerable: descriptorEnumerable,
+    writable: true,
+    value: boundSourcePlan?.descriptor || null
+  })
+  return boundSourcePlan
+}
+
 export function assertSameLocalTransferPlan (expected, actual) {
   if (stablePlanValue(expected) !== stablePlanValue(actual)) {
     throw new Error('本地上传源在传输期间发生变化，远程目标可执行回滚。')

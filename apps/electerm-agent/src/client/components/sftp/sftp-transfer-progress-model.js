@@ -19,6 +19,8 @@ const statusPriority = {
   failed: 6,
   exception: 6
 }
+const successfulTerminalStatuses = new Set(['success', 'completed', 'skipped'])
+const failedTerminalStatuses = new Set(['failed', 'exception'])
 
 function finiteNumber (value) {
   const number = Number(value)
@@ -193,8 +195,9 @@ export function createSftpProgressPublishGate ({
           .map(item => summary.terminalStatusById?.[item.id])
           .filter(Boolean)
         const completed = statuses.length === previous.items.length &&
-          statuses.every(status => ['success', 'completed'].includes(status))
-        const failed = statuses.some(status => ['failed', 'exception'].includes(status))
+          statuses.every(status => successfulTerminalStatuses.has(status))
+        const failed = statuses.some(status => failedTerminalStatuses.has(status))
+        const hasSkipped = statuses.some(status => status === 'skipped')
         if (completed || failed) {
           cancelPending()
           latest = {
@@ -202,7 +205,7 @@ export function createSftpProgressPublishGate ({
             status: completed ? 'completed' : 'failed',
             statusKey: `${completed ? 'completed' : 'failed'}:${previous.statusKey}`,
             speedBytesPerSecond: 0,
-            ...(completed && previous.determinate
+            ...(completed && previous.determinate && !hasSkipped
               ? {
                   transferred: previous.total,
                   percent: 100

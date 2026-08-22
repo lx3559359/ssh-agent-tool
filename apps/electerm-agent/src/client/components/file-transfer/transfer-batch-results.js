@@ -21,6 +21,13 @@ function normalizeExpectedCount (value) {
   return value
 }
 
+export function canRecordTransferBatchResult (result = {}) {
+  return String(result.batchId || '') !== '' &&
+    String(result.transferId || '') !== '' &&
+    Number.isSafeInteger(result.expected) &&
+    result.expected > 0
+}
+
 function normalizeTransferResult (result = {}) {
   return {
     batchId: String(result.batchId || ''),
@@ -82,7 +89,8 @@ export function createTransferBatchResultCollector () {
 
       const batch = batches.get(batchId) || {
         expected,
-        results: new Map()
+        results: new Map(),
+        tombstones: new Set()
       }
       if (!batches.has(batchId)) {
         batches.set(batchId, batch)
@@ -90,9 +98,9 @@ export function createTransferBatchResultCollector () {
         throw new Error('上传批次数量发生变化，无法汇总传输结果。')
       }
 
-      if (!batch.results.has(transferId)) {
-        batch.results.set(transferId, normalized)
-      }
+      if (batch.tombstones.has(transferId)) return null
+      batch.tombstones.add(transferId)
+      batch.results.set(transferId, normalized)
 
       if (batch.results.size !== batch.expected) {
         return null

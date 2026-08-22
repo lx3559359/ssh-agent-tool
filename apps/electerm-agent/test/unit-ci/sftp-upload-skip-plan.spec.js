@@ -55,6 +55,58 @@ test('filtered directory entries do not expose mutable descriptor children', asy
   )
 })
 
+test('runtime-bound local source plans stay non-enumerable while direct access still works', async () => {
+  const {
+    bindRuntimeLocalTransferPlan,
+    resolveLocalTransferSourcePlan
+  } = await import(sourcePlanUrl)
+  const sourcePlan = {
+    descriptor: { type: 'directory', entries: [{ name: 'ok.txt', entry: { type: 'file', size: 2 } }] },
+    skipped: [{ relativePath: 'locked.dat', code: 'EBUSY', reason: 'locked' }]
+  }
+  const transfer = { id: 'ui-upload' }
+
+  assert.equal(bindRuntimeLocalTransferPlan(transfer, sourcePlan), sourcePlan)
+  assert.equal(resolveLocalTransferSourcePlan(transfer), sourcePlan)
+  assert.equal(transfer.sourcePlan, sourcePlan)
+  assert.deepEqual(transfer.sourceDescriptor, sourcePlan.descriptor)
+  assert.equal(Object.prototype.propertyIsEnumerable.call(transfer, 'sourcePlan'), false)
+  assert.equal(Object.prototype.propertyIsEnumerable.call(transfer, 'sourceDescriptor'), false)
+  assert.deepEqual(JSON.parse(JSON.stringify(transfer)), {
+    id: 'ui-upload'
+  })
+  assert.deepEqual({ ...transfer }, {
+    id: 'ui-upload'
+  })
+})
+
+test('strict MCP descriptors resolve into an initial plan without changing enumerable descriptor compatibility', async () => {
+  const {
+    bindRuntimeLocalTransferPlan,
+    resolveLocalTransferSourcePlan
+  } = await import(sourcePlanUrl)
+  const descriptor = { type: 'file', size: 3, digest: 'abc' }
+  const transfer = {
+    id: 'mcp-upload',
+    sourceDescriptor: descriptor
+  }
+
+  const sourcePlan = resolveLocalTransferSourcePlan(transfer)
+
+  assert.deepEqual(sourcePlan, {
+    descriptor,
+    skipped: []
+  })
+  bindRuntimeLocalTransferPlan(transfer, sourcePlan)
+  assert.equal(Object.prototype.propertyIsEnumerable.call(transfer, 'sourcePlan'), false)
+  assert.equal(Object.prototype.propertyIsEnumerable.call(transfer, 'sourceDescriptor'), true)
+  assert.deepEqual(JSON.parse(JSON.stringify(transfer)), {
+    id: 'mcp-upload',
+    sourceDescriptor: descriptor
+  })
+  assert.equal(transfer.sourceDescriptor, descriptor)
+})
+
 test('source plan verification binds both descriptors and pinned skips', async () => {
   const { assertSameLocalTransferPlan } = await import(sourcePlanUrl)
   const expected = {
@@ -117,6 +169,26 @@ test('batch collector emits one terminal summary after every item settles', asyn
     status: 'skipped'
   }), null)
   assert.equal(collector.size, 0)
+})
+
+test('batch result metadata helper ignores legacy unbatched transfers', async () => {
+  const { canRecordTransferBatchResult } = await import(batchUrl)
+
+  assert.equal(canRecordTransferBatchResult({
+    batchId: '',
+    transferId: 'legacy-transfer',
+    expected: 1
+  }), false)
+  assert.equal(canRecordTransferBatchResult({
+    batchId: 'batch-1',
+    transferId: 'legacy-transfer',
+    expected: undefined
+  }), false)
+  assert.equal(canRecordTransferBatchResult({
+    batchId: 'batch-1',
+    transferId: 'legacy-transfer',
+    expected: 1
+  }), true)
 })
 
 test('batch collector keeps skipped child entries on an otherwise successful transfer', async () => {
@@ -329,7 +401,8 @@ test('transfer completion records batch results once and reserves skipped warnin
     '../../src/client/components/file-transfer/transfer.jsx'
   ), 'utf8')
 
-  assert.match(source, /sharedTransferBatchResultCollector\.record\(\{/)
+  assert.match(source, /canRecordTransferBatchResult/)
+  assert.match(source, /sharedTransferBatchResultCollector\.record\(result\)/)
   assert.match(source, /batchId:\s*transfer\.transferBatch/)
   assert.match(source, /transferId:\s*transfer\.id/)
   assert.match(source, /expected:\s*transfer\.transferBatchSize/)

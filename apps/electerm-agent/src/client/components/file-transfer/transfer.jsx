@@ -33,8 +33,15 @@ import {
   verifyCrossHostSourcePreflight,
   verifyLocalTransferPlan
 } from './file-transfer-safety.js'
-import { filterPlannedDirectoryEntries } from './transfer-source-plan.js'
-import { sharedTransferBatchResultCollector } from './transfer-batch-results.js'
+import {
+  bindRuntimeLocalTransferPlan,
+  filterPlannedDirectoryEntries,
+  resolveLocalTransferSourcePlan
+} from './transfer-source-plan.js'
+import {
+  canRecordTransferBatchResult,
+  sharedTransferBatchResultCollector
+} from './transfer-batch-results.js'
 import {
   zipCmd,
   unzipCmd,
@@ -73,9 +80,9 @@ export default class TransportAction extends Component {
     this.transferAttempts = createTransferAttemptGuard()
     this.subTransports = new Set()
     this.folderItemResults = []
-    this.localSourcePlan = props.transfer?.sourcePlan || null
-    this.localSourceDescriptor = props.transfer?.sourceDescriptor ||
-      this.localSourcePlan?.descriptor ||
+    this.localSourcePlan = resolveLocalTransferSourcePlan(props.transfer)
+    this.localSourceDescriptor = this.localSourcePlan?.descriptor ||
+      props.transfer?.sourceDescriptor ||
       null
     this.agentRiskTerminalPromise = null
     this.transferTaskAdapter = createTransferTaskAdapter()
@@ -121,9 +128,24 @@ export default class TransportAction extends Component {
     this.activeAttemptToken = null
     clearTimeout(this.retryTimer)
     this.retryTimer = null
+    const transferStillQueued = window.store?.fileTransfers?.some(
+      item => item.id === this.props.transfer.id
+    )
+    const externallyRemoved = !this.queueRemoved &&
+      !this.userCancelling &&
+      !this.finishing &&
+      transferStillQueued === false
     if (!this.queueRemoved && !this.userCancelling && !this.finishing) {
-      this.transport?.interrupt()
-      this.runTransferTask('onInterrupted', 'client-unmounted')
+      if (externallyRemoved) {
+        this.recordTransferBatchResult(this.props.transfer, {
+          status: 'cancelled'
+        })
+        this.transport?.cancel()
+        this.runTransferTask('onCancelled')
+      } else {
+        this.transport?.interrupt()
+        this.runTransferTask('onInterrupted', 'client-unmounted')
+      }
     } else {
       this.transport?.destroy()
     }
@@ -218,10 +240,14 @@ export default class TransportAction extends Component {
   }
 
   syncLocalSourcePlan = (transfer, sourcePlan = null) => {
-    transfer.sourcePlan = sourcePlan || null
-    this.localSourcePlan = transfer.sourcePlan
-    transfer.sourceDescriptor = this.localSourcePlan?.descriptor || null
-    this.localSourceDescriptor = transfer.sourceDescriptor
+    const nextSourcePlan = sourcePlan || null
+    if (nextSourcePlan) {
+      bindRuntimeLocalTransferPlan(transfer, nextSourcePlan)
+    }
+    this.localSourcePlan = nextSourcePlan
+    this.localSourceDescriptor = nextSourcePlan?.descriptor ||
+      transfer?.sourceDescriptor ||
+      null
     return this.localSourcePlan
   }
 
@@ -235,7 +261,10 @@ export default class TransportAction extends Component {
 
   prepareLocalSource = async (transfer = this.props.transfer) => {
     const sourceTransfer = this.getLocalSourceTransfer(transfer)
-    const sourcePlan = transfer.sourcePlan || this.localSourcePlan
+    const sourcePlan = resolveLocalTransferSourcePlan(
+      transfer,
+      transfer.sourcePlan || this.localSourcePlan
+    )
     if (sourcePlan) {
       this.bindLocalSourcePlan(transfer, sourcePlan)
       await verifyLocalTransferPlan({
@@ -259,10 +288,13 @@ export default class TransportAction extends Component {
   }
 
   verifyLocalSource = (transfer = this.props.transfer) => {
-    const sourcePlan = this.syncLocalSourcePlan(
+    const sourcePlan = resolveLocalTransferSourcePlan(
       transfer,
       transfer.sourcePlan || this.localSourcePlan
     )
+    if (sourcePlan) {
+      this.syncLocalSourcePlan(transfer, sourcePlan)
+    }
     return verifyLocalTransferPlan({
       transfer: this.getLocalSourceTransfer(transfer),
       sourcePlan,
@@ -358,15 +390,18 @@ export default class TransportAction extends Component {
   }
 
   recordTransferBatchResult = (transfer, update = {}) => {
-    if (this.batchResultRecorded) return null
-    this.batchResultRecorded = true
-    const summary = sharedTransferBatchResultCollector.record({
+    const result = {
       batchId: transfer.transferBatch,
       transferId: transfer.id,
       expected: transfer.transferBatchSize,
       status: update.status || 'success',
       skipped: update.skipped || []
-    })
+    }
+    if (this.batchResultRecorded || !canRecordTransferBatchResult(result)) {
+      return null
+    }
+    const summary = sharedTransferBatchResultCollector.record(result)
+    this.batchResultRecorded = true
     if (summary?.skippedCount > 0) {
       const warningText = summary.exceptionCount > 0
         ? `上传部分完成：成功 ${summary.completed} 项，跳过 ${summary.skippedCount} 项，失败 ${summary.exceptionCount} 项。`
@@ -608,6 +643,9 @@ export default class TransportAction extends Component {
   }
 
   cancelProtectedTransport = async () => {
+    this.recordTransferBatchResult(this.props.transfer, {
+      status: 'cancelled'
+    })
     await this.runTransferTask('onCancelled')
     await this.finishTransfer(undefined, 'cancelled')
   }
@@ -627,6 +665,9 @@ export default class TransportAction extends Component {
             transferId: this.props.transfer.id
           })
         } finally {
+          this.recordTransferBatchResult(this.props.transfer, {
+            status: 'cancelled'
+          })
           await this.runTransferTask('onCancelled')
           await this.finishTransfer(undefined, 'cancelled')
         }

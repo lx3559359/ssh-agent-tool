@@ -324,6 +324,59 @@ test('SFTP progress gate briefly publishes a verified successful terminal state'
   assert.equal(published.at(-1).count, 0)
 })
 
+test('SFTP progress gate holds a root-skipped transfer as completed without inventing uploaded bytes', async () => {
+  const { createSftpProgressPublishGate } = await importModel()
+  let currentTime = 0
+  const scheduled = []
+  const published = []
+  const gate = createSftpProgressPublishGate({
+    now: () => currentTime,
+    setTimer: (callback, delay) => {
+      const timer = { callback, delay, cancelled: false }
+      scheduled.push(timer)
+      return timer
+    },
+    clearTimer: timer => {
+      timer.cancelled = true
+    },
+    onPublish: summary => published.push(summary)
+  })
+  gate.update({
+    count: 1,
+    statusKey: 'root-skip:queued:',
+    status: 'queued',
+    transferred: 0,
+    total: 128,
+    determinate: true,
+    percent: 0,
+    items: [{ id: 'root-skip' }]
+  })
+
+  currentTime = 20
+  gate.update({
+    count: 0,
+    statusKey: '',
+    status: '',
+    transferred: 0,
+    total: 0,
+    determinate: false,
+    percent: null,
+    items: [],
+    terminalStatusById: { 'root-skip': 'skipped' }
+  })
+
+  assert.equal(published.at(-1).status, 'completed')
+  assert.equal(published.at(-1).transferred, 0)
+  assert.equal(published.at(-1).percent, 0)
+  assert.equal(published.at(-1).total, 128)
+  assert.equal(scheduled.filter(timer => !timer.cancelled).length, 1)
+  assert.equal(scheduled.at(-1).delay, 2000)
+
+  currentTime = 2020
+  scheduled.at(-1).callback()
+  assert.equal(published.at(-1).count, 0)
+})
+
 test('SFTP progress never reports a cancelled transfer as completed', async () => {
   const { createSftpProgressPublishGate } = await importModel()
   const published = []
