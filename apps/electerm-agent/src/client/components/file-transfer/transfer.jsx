@@ -217,11 +217,16 @@ export default class TransportAction extends Component {
       : []
   }
 
-  bindLocalSourcePlan = (transfer, sourcePlan = null) => {
+  syncLocalSourcePlan = (transfer, sourcePlan = null) => {
     transfer.sourcePlan = sourcePlan || null
     this.localSourcePlan = transfer.sourcePlan
     transfer.sourceDescriptor = this.localSourcePlan?.descriptor || null
     this.localSourceDescriptor = transfer.sourceDescriptor
+    return this.localSourcePlan
+  }
+
+  bindLocalSourcePlan = (transfer, sourcePlan = null) => {
+    this.syncLocalSourcePlan(transfer, sourcePlan)
     this.folderItemResults = createSkippedFolderResults(
       this.getLocalSourceSkippedResults()
     )
@@ -254,10 +259,13 @@ export default class TransportAction extends Component {
   }
 
   verifyLocalSource = (transfer = this.props.transfer) => {
-    this.bindLocalSourcePlan(transfer, transfer.sourcePlan || this.localSourcePlan)
+    const sourcePlan = this.syncLocalSourcePlan(
+      transfer,
+      transfer.sourcePlan || this.localSourcePlan
+    )
     return verifyLocalTransferPlan({
       transfer: this.getLocalSourceTransfer(transfer),
-      sourcePlan: this.localSourcePlan,
+      sourcePlan,
       prepareLocal: (fromPath, options = {}) => window.fs.prepareTransferEntry(
         fromPath,
         {

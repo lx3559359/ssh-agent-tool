@@ -1989,6 +1989,26 @@ test('transfer component integrates skip-aware local upload planning into protec
   assert.doesNotMatch(source, /\.folderTransfer\(/)
 })
 
+test('final local source verification does not reseed folder item results', () => {
+  const source = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/components/file-transfer/transfer.jsx'
+  ), 'utf8')
+  const bindBody = source.slice(
+    source.indexOf('bindLocalSourcePlan ='),
+    source.indexOf('prepareLocalSource =', source.indexOf('bindLocalSourcePlan ='))
+  )
+  const verifyBody = source.slice(
+    source.indexOf('verifyLocalSource ='),
+    source.indexOf('getTransferRuntimeTransport =', source.indexOf('verifyLocalSource ='))
+  )
+
+  assert.match(bindBody, /this\.folderItemResults\s*=\s*createSkippedFolderResults\(/)
+  assert.match(verifyBody, /verifyLocalTransferPlan\(/)
+  assert.doesNotMatch(verifyBody, /bindLocalSourcePlan\(/)
+  assert.doesNotMatch(verifyBody, /createSkippedFolderResults\(/)
+})
+
 test('transfer component keeps native queue progress pause resume retry and adds safety hooks', () => {
   const fs = require('node:fs')
   const source = fs.readFileSync(path.resolve(
