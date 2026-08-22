@@ -50,6 +50,27 @@ test('SFTP transfer progress aggregates only the current tab by bytes', async ()
   assert.equal(result.current.id, 'a')
 })
 
+test('SFTP transfer progress visibly starts after the first transferred bytes', async () => {
+  const { buildSftpTransferProgress } = await importModel()
+  const started = buildSftpTransferProgress([{
+    id: 'large-upload',
+    tabId: 'tab-a',
+    status: 'running',
+    transferred: 32 * 1024,
+    total: 64 * 1024 * 1024
+  }], 'tab-a')
+  const queued = buildSftpTransferProgress([{
+    id: 'queued-upload',
+    tabId: 'tab-a',
+    status: 'queued',
+    transferred: 0,
+    total: 64 * 1024 * 1024
+  }], 'tab-a')
+
+  assert.equal(started.percent, 1)
+  assert.equal(queued.percent, 0)
+})
+
 test('SFTP progress classifies upload and download direction', async () => {
   const { getSftpTransferDirection } = await importModel()
 
