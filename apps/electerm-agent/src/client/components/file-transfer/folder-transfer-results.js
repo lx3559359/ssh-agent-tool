@@ -30,3 +30,17 @@ export function collectFolderTransferResults (files, settledResults) {
 
   return { items, completedBytes, failed }
 }
+
+export function createSkippedFolderResults (skipped = []) {
+  return skipped.map(item => {
+    const relativePath = String(item?.relativePath || '')
+    const name = relativePath.split('/').filter(Boolean).pop() || relativePath
+    return {
+      name,
+      relativePath,
+      size: 0,
+      status: 'skipped',
+      error: String(item?.code || '')
+    }
+  })
+}

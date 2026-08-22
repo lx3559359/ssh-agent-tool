@@ -186,6 +186,7 @@ function createModalInstance (type, options) {
     content,
     onOk,
     onCancel,
+    okButtonProps,
     ...rest
   } = options
   const { okText, cancelText } = modalCopy
@@ -231,7 +232,9 @@ function createModalInstance (type, options) {
       )}
       <button
         type='button'
-        className='custom-modal-ok-btn'
+        className={classnames('custom-modal-ok-btn', {
+          'is-danger': okButtonProps?.danger
+        })}
         onClick={handleOk}
       >
         {okText}
@@ -258,6 +261,7 @@ function createModalInstance (type, options) {
       content: newContent,
       onOk: newOnOk,
       onCancel: newOnCancel,
+      okButtonProps: newOkButtonProps,
       ...newRest
     } = updatedOptions
     const {
@@ -292,7 +296,9 @@ function createModalInstance (type, options) {
         )}
         <button
           type='button'
-          className='custom-modal-ok-btn'
+          className={classnames('custom-modal-ok-btn', {
+            'is-danger': newOkButtonProps?.danger
+          })}
           onClick={newHandleOk}
         >
           {newOkText}

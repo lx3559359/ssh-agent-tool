@@ -31,6 +31,8 @@ export default class FileListTable extends Component {
       scrollTop: 0
     }
     this.contextMenuId = createContextMenuId('sftp-list-menu')
+    this.openContextMenuFile = null
+    this.openContextMenuItems = null
   }
 
   containerRef = createRef()
@@ -325,13 +327,20 @@ export default class FileListTable extends Component {
 
   handleDropdownOpenChange = (open) => {
     if (open) {
+      this.openContextMenuFile = this.getClickedFile()
+      this.openContextMenuItems = this.openContextMenuFile
+        ? this.openContextMenuFile.renderContextMenu()
+        : []
       this.forceUpdate()
+    } else {
+      this.openContextMenuItems = null
     }
   }
 
   onContextMenuFile = ({ key }) => {
     if (key !== 'more-submenu') {
-      const inst = this.getClickedFile()
+      const inst = this.openContextMenuFile || this.getClickedFile()
+      this.openContextMenuFile = null
       if (inst) {
         inst[key]()
       }
@@ -375,7 +384,7 @@ export default class FileListTable extends Component {
     const ddProps = {
       menu: {
         id: this.contextMenuId,
-        items: this.renderContextMenuFile(),
+        items: this.openContextMenuItems || this.renderContextMenuFile(),
         onClick: this.onContextMenuFile
       },
       trigger: ['contextMenu'],
