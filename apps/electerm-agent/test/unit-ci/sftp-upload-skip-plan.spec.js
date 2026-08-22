@@ -12,11 +12,6 @@ const batchUrl = pathToFileURL(path.resolve(
   __dirname,
   '../../src/client/components/file-transfer/transfer-batch-results.js'
 )).href
-const transferListUrl = pathToFileURL(path.resolve(
-  __dirname,
-  '../../src/client/store/transfer-list.js'
-)).href
-
 test('local upload listing is restricted to the verified descriptor tree', async () => {
   const { filterPlannedDirectoryEntries } = await import(sourcePlanUrl)
   const descriptor = {
@@ -86,10 +81,63 @@ test('batch collector emits one terminal summary after every item settles', asyn
   })
   assert.equal(collector.record({
     batchId: 'b1',
-    transferId: 't3',
-    expected: 1,
+    transferId: 't1',
+    expected: 2,
     status: 'completed'
-  }).completed, 1)
+  }), null)
+  assert.equal(collector.record({
+    batchId: 'b1',
+    transferId: 't2',
+    expected: 2,
+    status: 'skipped'
+  }), null)
+  assert.equal(collector.size, 0)
+})
+
+test('batch collector rejects inconsistent or invalid expected counts', async () => {
+  const { createTransferBatchResultCollector } = await import(batchUrl)
+  const collector = createTransferBatchResultCollector()
+
+  assert.equal(collector.record({
+    batchId: 'b3',
+    transferId: 't1',
+    expected: 3,
+    status: 'completed'
+  }), null)
+  assert.throws(
+    () => collector.record({
+      batchId: 'b3',
+      transferId: 't2',
+      expected: 1,
+      status: 'completed'
+    }),
+    /批次数量/
+  )
+  assert.equal(collector.record({
+    batchId: 'b3',
+    transferId: 't2',
+    expected: 3,
+    status: 'completed'
+  }), null)
+  assert.equal(collector.record({
+    batchId: 'b3',
+    transferId: 't3',
+    expected: 3,
+    status: 'completed'
+  }).completed, 3)
+  assert.equal(collector.size, 0)
+
+  for (const expected of [0, -1, 1.5, '2', null]) {
+    assert.throws(
+      () => collector.record({
+        batchId: `invalid-${String(expected)}`,
+        transferId: 't1',
+        expected,
+        status: 'completed'
+      }),
+      /批次数量/
+    )
+  }
   assert.equal(collector.size, 0)
 })
 

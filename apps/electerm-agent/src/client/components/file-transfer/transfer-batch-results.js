@@ -1,9 +1,12 @@
 const maxSkippedItems = 1000
+const maxCompletedBatches = 1000
 const completedStatuses = new Set(['completed', 'success'])
 
 function normalizeExpectedCount (value) {
-  const expected = Number(value)
-  return Number.isInteger(expected) && expected > 0 ? expected : 1
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error('上传批次数量无效，无法汇总传输结果。')
+  }
+  return value
 }
 
 function normalizeTransferResult (result = {}) {
@@ -47,12 +50,21 @@ function summarizeBatchResults ({ batchId, expected, results }) {
 
 export function createTransferBatchResultCollector () {
   const batches = new Map()
+  const completedBatches = new Map()
+
+  function rememberCompletedBatch (batchId) {
+    completedBatches.set(batchId, true)
+    if (completedBatches.size > maxCompletedBatches) {
+      completedBatches.delete(completedBatches.keys().next().value)
+    }
+  }
 
   return {
     record (result = {}) {
       const normalized = normalizeTransferResult(result)
       const { batchId, transferId, expected } = normalized
       if (!batchId || !transferId) return null
+      if (completedBatches.has(batchId)) return null
 
       const batch = batches.get(batchId) || {
         expected,
@@ -61,18 +73,19 @@ export function createTransferBatchResultCollector () {
       if (!batches.has(batchId)) {
         batches.set(batchId, batch)
       } else if (batch.expected !== expected) {
-        batch.expected = expected
+        throw new Error('上传批次数量发生变化，无法汇总传输结果。')
       }
 
       if (!batch.results.has(transferId)) {
         batch.results.set(transferId, normalized)
       }
 
-      if (batch.results.size < batch.expected) {
+      if (batch.results.size !== batch.expected) {
         return null
       }
 
       batches.delete(batchId)
+      rememberCompletedBatch(batchId)
       return summarizeBatchResults({
         batchId,
         expected: batch.expected,
