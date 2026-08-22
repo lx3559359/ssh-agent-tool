@@ -2655,6 +2655,14 @@ test('SFTP permanent fast delete validates, confirms once, bypasses recovery, an
     __dirname,
     '../../src/client/components/sftp/sftp-entry.jsx'
   ), 'utf8')
+  const modalSource = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/components/common/modal.jsx'
+  ), 'utf8')
+  const modalStyles = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/components/common/modal.styl'
+  ), 'utf8')
   const start = entrySource.indexOf('quickDeleteRemoteFiles = async')
   const end = entrySource.indexOf('\n  quickBackupRemoteFiles =', start)
   const methodSource = entrySource.slice(start, end)
@@ -2685,6 +2693,9 @@ test('SFTP permanent fast delete validates, confirms once, bypasses recovery, an
   assert.match(confirmSource, /shellpilotSftpFastDeleteConfirmBody/)
   assert.match(confirmSource, /okButtonProps:\s*\{\s*danger:\s*true\s*\}/)
   assert.equal((confirmSource.match(/Modal\.confirm/g) || []).length, 1)
+  assert.match(modalSource, /okButtonProps\?\.danger/)
+  assert.match(modalSource, /'is-danger'/)
+  assert.match(modalStyles, /\.custom-modal-ok-btn[\s\S]{0,240}&\.is-danger[\s\S]{0,120}var\(--sp-danger\)/)
 
   assert.match(
     itemSource,
