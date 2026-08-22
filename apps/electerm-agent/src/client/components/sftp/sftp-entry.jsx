@@ -82,6 +82,10 @@ import { buildSftpSafetyEndpoint } from './sftp-safety-endpoint.js'
 import * as sftpSafetyStore from '../../common/safety-transactions/transaction-store.js'
 import { formatShellPilotTranslation } from '../../common/shellpilot-i18n-overrides.js'
 import {
+  buildFastDeleteTargets,
+  executeFastRemoteDelete
+} from './sftp-fast-delete.js'
+import {
   mergeSafetyOperationRecords,
   matchesSafetyOperationEndpoint,
   readSafetyOperationRecords,
@@ -1069,6 +1073,104 @@ export default class Sftp extends Component {
     })
   }
 
+  confirmQuickDelete = (files) => {
+    return new Promise(resolve => {
+      let settled = false
+      const settle = value => {
+        if (settled) return
+        settled = true
+        resolve(value)
+      }
+      Modal.confirm({
+        title: formatShellPilotTranslation(
+          e,
+          'shellpilotSftpFastDeleteConfirmTitle'
+        ),
+        content: (
+          <div className='wordbreak'>
+            {formatShellPilotTranslation(
+              e,
+              'shellpilotSftpFastDeleteConfirmBody',
+              { count: files.length }
+            )}
+          </div>
+        ),
+        okText: e('shellpilotSftpFastDeleteConfirmAction'),
+        cancelText: e('cancel'),
+        okButtonProps: { danger: true },
+        onOk: () => settle(true),
+        onCancel: () => settle(false)
+      })
+    })
+  }
+
+  quickDeleteRemoteFiles = async (files = this.getSelectedFiles()) => {
+    const targets = Array.isArray(files) ? files : []
+    if (!targets.length) return false
+
+    try {
+      buildFastDeleteTargets(targets)
+    } catch (error) {
+      window.store.onError(error)
+      return false
+    }
+
+    const confirmed = await this.confirmQuickDelete(targets)
+    if (!confirmed) return false
+
+    this.onDelete = true
+    let result
+    try {
+      result = await executeFastRemoteDelete({
+        sftp: this.sftp,
+        files: targets,
+        concurrency: 4
+      })
+    } catch (error) {
+      window.store.onError(error)
+    } finally {
+      this.onDelete = false
+    }
+
+    this.setState({ selectedFiles: new Set(), selectedType: '' })
+    await this.remoteList()
+    if (!result) return false
+    if (result.failed.length === 0) {
+      message.success(formatShellPilotTranslation(
+        e,
+        'shellpilotSftpFastDeleteSucceeded',
+        { count: result.completed.length }
+      ))
+      return true
+    }
+    const failedItems = result.failed
+      .slice(0, 3)
+      .map(item => item.file?.name || item.path)
+      .join(e('shellpilotListSeparator')) +
+      (result.failed.length > 3 ? '…' : '')
+    if (result.completed.length === 0) {
+      message.error(formatShellPilotTranslation(
+        e,
+        'shellpilotSftpFastDeleteFailed',
+        {
+          failed: result.failed.length,
+          items: failedItems
+        }
+      ))
+      return false
+    }
+    message.error(formatShellPilotTranslation(
+      e,
+      'shellpilotSftpFastDeletePartial',
+      {
+        completed: result.completed.length,
+        failed: result.failed.length,
+        items: failedItems
+      }
+    ))
+    return false
+  }
+
   quickBackupRemoteFiles = async (files = this.getSelectedFiles(), options = {}) => {
     const targets = this.getRemoteSafetyTargets(files)
     if (!targets.length) {
@@ -1899,6 +2001,7 @@ export default class Sftp extends Component {
         'renderDelConfirmTitle',
         'getSelectedFiles',
         'getFileItemById',
+        'quickDeleteRemoteFiles',
         'quickBackupRemoteFiles',
         'changeRemoteFileMode',
         'renameRemoteFile',

@@ -100,6 +100,55 @@ test('sftp file context menu uses safe AI analysis outside the edit-size guard',
   assert.doesNotMatch(methodSource, /fetchEditorText\(filePath,\s*type\)/)
 })
 
+test('remote context menu keeps recoverable delete and adds explicit permanent fast delete', async () => {
+  const { buildSftpFileContextItems } = await import(pathToFileURL(
+    path.resolve(__dirname, '../../src/client/components/sftp/sftp-file-context-menu.js')
+  ).href)
+  const items = buildSftpFileContextItems({
+    file: {
+      id: 'remote-1',
+      type: 'remote',
+      path: '/srv',
+      name: 'cache',
+      isDirectory: true
+    },
+    selectedFiles: new Set(['remote-1']),
+    tab: { host: 'server.example' },
+    translate: key => key
+  })
+  const safeIndex = items.findIndex(item => item.func === 'del')
+  const fastIndex = items.findIndex(item => item.func === 'quickDelete')
+
+  assert.ok(safeIndex > -1)
+  assert.equal(fastIndex, safeIndex + 1)
+  assert.equal(items[fastIndex].requireConfirm, true)
+  assert.equal(items[fastIndex].text, 'Fast Delete (Permanent)')
+
+  const selectedItems = buildSftpFileContextItems({
+    file: {
+      id: 'remote-1',
+      type: 'remote',
+      path: '/srv',
+      name: 'cache',
+      isDirectory: true
+    },
+    selectedFiles: new Set(['remote-1', 'remote-2']),
+    tab: { host: 'server.example' },
+    translate: key => key
+  })
+  assert.equal(
+    selectedItems.find(item => item.func === 'quickDelete').text,
+    'Fast Delete Selected (2, Permanent)'
+  )
+
+  const localItems = buildSftpFileContextItems({
+    file: { id: 'local-1', type: 'local', path: 'C:\\tmp', name: 'cache' },
+    selectedFiles: new Set(['local-1']),
+    translate: key => key
+  })
+  assert.equal(localItems.some(item => item.func === 'quickDelete'), false)
+})
+
 test('all application context menu surfaces use the shared overlay class', () => {
   const contracts = [
     ['src/client/components/tree-list/tree-list-row.jsx', /overlayClassName:\s*'shellpilot-context-menu'/],

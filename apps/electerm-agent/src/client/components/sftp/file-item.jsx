@@ -958,6 +958,10 @@ export default class FileSection extends React.Component {
       : [file]
   }
 
+  quickDelete = async () => {
+    await this.props.quickDeleteRemoteFiles(this.getSftpSafetyTargets())
+  }
+
   quickBackup = async () => {
     await this.props.quickBackupRemoteFiles(this.getSftpSafetyTargets())
   }

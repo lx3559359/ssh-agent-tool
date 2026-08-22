@@ -70,6 +70,7 @@ test('real SFTP file menu builder preserves action order while labels follow pre
     'openSafetyCenter',
     'editFile',
     'del',
+    'quickDelete',
     'onCopy',
     'onCut',
     'onPaste',
@@ -89,6 +90,8 @@ test('real SFTP file menu builder preserves action order while labels follow pre
   assert.equal(enItems.find(item => item.func === 'askAiAboutFile').text, 'Analyze This File with AI')
   assert.equal(zhItems.find(item => item.func === 'del').text, '安全删除（可恢复）')
   assert.equal(enItems.find(item => item.func === 'del').text, 'Safe Delete (Recoverable)')
+  assert.equal(zhItems.find(item => item.func === 'quickDelete').text, '快速删除（不可恢复）')
+  assert.equal(enItems.find(item => item.func === 'quickDelete').text, 'Fast Delete (Permanent)')
   assert.equal(zhItems.find(item => item.func === 'restoreLatestBackup').disabled, false)
   assert.equal(enItems.find(item => item.func === 'restoreLatestBackup').disabled, false)
 })
@@ -107,4 +110,33 @@ test('SFTP file menu component delegates labels to the builder and target files 
   assert.match(fileItem, /renderContextItems \(\)[\s\S]*return buildSftpFileContextItems/)
   assert.doesNotMatch(fileItem, /[\u3400-\u9fff]/)
   assert.doesNotMatch(listTable, /[\u3400-\u9fff]/)
+})
+
+test('permanent fast delete confirmation and result copy has Chinese and English coverage', async () => {
+  const i18n = await import(i18nUrl)
+  const keys = [
+    'shellpilotSftpFastDeleteSelected',
+    'shellpilotSftpFastDeletePermanent',
+    'shellpilotSftpFastDeleteConfirmTitle',
+    'shellpilotSftpFastDeleteConfirmBody',
+    'shellpilotSftpFastDeleteConfirmAction',
+    'shellpilotSftpFastDeleteSucceeded',
+    'shellpilotSftpFastDeletePartial',
+    'shellpilotSftpFastDeleteFailed'
+  ]
+
+  for (const key of keys) {
+    const zh = i18n.getShellPilotTranslation(key, 'zh_cn')
+    const en = i18n.getShellPilotTranslation(key, 'en_us')
+    assert.match(zh, /[\u3400-\u9fff]/, `${key} must have Chinese copy`)
+    assert.match(en, /[A-Za-z]/, `${key} must have English copy`)
+    assert.notEqual(zh, en)
+  }
+  for (const key of [
+    'shellpilotSftpFastDeletePartial',
+    'shellpilotSftpFastDeleteFailed'
+  ]) {
+    assert.match(i18n.getShellPilotTranslation(key, 'zh_cn'), /\{items\}/)
+    assert.match(i18n.getShellPilotTranslation(key, 'en_us'), /\{items\}/)
+  }
 })
