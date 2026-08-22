@@ -230,6 +230,27 @@ test('SFTP workspace mounts an accessible tab-scoped progress dock', () => {
   assert.match(i18n, /shellpilotSftpTransferDownloading/)
 })
 
+test('SFTP transfer dock keeps an obvious active progress presentation', () => {
+  const dock = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/components/sftp/sftp-transfer-progress-dock.jsx'
+  ), 'utf8')
+  const styles = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/components/sftp/sftp.styl'
+  ), 'utf8')
+
+  assert.match(styles, /height calc\(100% - 64px\) !important/)
+  assert.match(styles, /\.sftp-transfer-progress-dock\s+[\s\S]*?min-height 50px/)
+  assert.match(styles, /\.sftp-transfer-dock-leading\s+[\s\S]*?display flex/)
+  assert.match(styles, /\.sftp-transfer-dock-direction\s+[\s\S]*?background var\(--sp-primary-soft\)/)
+  assert.match(styles, /\.sftp-transfer-dock-progress\s+[\s\S]*?height 8px/)
+  assert.match(styles, /\.sftp-transfer-progress-dock-running,[\s\S]*?border-color var\(--sp-primary\)/)
+  assert.match(dock, /sftp-transfer-dock-percent/)
+  assert.match(dock, /sftp-transfer-dock-metrics-detail/)
+  assert.match(styles, /@media \(max-width: 760px\)[\s\S]*?\.sftp-transfer-dock-metrics-detail\s+[\s\S]*?display none/)
+})
+
 test('SFTP progress gate briefly publishes a verified successful terminal state', async () => {
   const { createSftpProgressPublishGate } = await importModel()
   let currentTime = 0

@@ -16,11 +16,16 @@ const directionTranslationKeys = {
   transfer: 'shellpilotSftpTransferring'
 }
 
-function formatProgressText (summary) {
-  if (!summary.determinate) {
-    return `${filesize(summary.transferred)} · ${e('shellpilotSftpTransferUnknownTotal')}`
-  }
-  return `${summary.percent}% · ${filesize(summary.transferred)} / ${filesize(summary.total)}`
+function formatProgressPercent (summary) {
+  return summary.determinate
+    ? `${summary.percent}%`
+    : e('shellpilotSftpTransferUnknownTotal')
+}
+
+function formatProgressDetail (summary) {
+  return summary.determinate
+    ? `${filesize(summary.transferred)} / ${filesize(summary.total)}`
+    : filesize(summary.transferred)
 }
 
 function formatSpeed (speedBytesPerSecond) {
@@ -91,8 +96,13 @@ export default auto(function SftpTransferProgressDock ({ tabId }) {
           {currentPath}
         </span>
         <span className='sftp-transfer-dock-metrics'>
-          {formatProgressText(published)}
-          {speedText ? ` · ${speedText}` : ''}
+          <span className='sftp-transfer-dock-percent'>
+            {formatProgressPercent(published)}
+          </span>
+          <span className='sftp-transfer-dock-metrics-detail'>
+            {` · ${formatProgressDetail(published)}`}
+            {speedText ? ` · ${speedText}` : ''}
+          </span>
         </span>
         <button
           type='button'
