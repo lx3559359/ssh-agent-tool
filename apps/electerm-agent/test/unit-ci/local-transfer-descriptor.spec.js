@@ -101,6 +101,32 @@ test('skip-aware planner omits an EBUSY child while describing readable siblings
   }])
 })
 
+test('skip-aware planner fails closed when enumerating a child directory returns EACCES', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'shellpilot-plan-child-readdir-'))
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  const nested = path.join(root, 'nested')
+  await fs.mkdir(nested)
+  await fs.writeFile(path.join(nested, 'secret.txt'), 'hidden')
+
+  const io = {
+    lstat: (...args) => fs.lstat(...args),
+    readdir: async (filePath, ...args) => {
+      if (filePath === nested) {
+        const error = new Error('nested unreadable')
+        error.code = 'EACCES'
+        throw error
+      }
+      return fs.readdir(filePath, ...args)
+    },
+    createReadStream: (...args) => fileSystem.createReadStream(...args)
+  }
+
+  await assert.rejects(
+    fsExport.prepareTransferEntry(root, { io }),
+    error => error && error.code === 'EACCES'
+  )
+})
+
 test('skip-aware planner returns a null descriptor when the root is locked', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'shellpilot-plan-root-'))
   t.after(() => fs.rm(root, { recursive: true, force: true }))
@@ -162,7 +188,7 @@ test('skip-aware planner consumes pinned skips before reading an exact child', a
   assert.deepEqual(plan.skipped, [pinnedSkip])
 })
 
-test('strict transfer description ignores pinned skips for existing children', async t => {
+test('strict transfer description ignores invalid pinned skips for existing children', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'shellpilot-strict-pinned-'))
   t.after(() => fs.rm(root, { recursive: true, force: true }))
   const readable = path.join(root, 'readable.txt')
@@ -174,8 +200,8 @@ test('strict transfer description ignores pinned skips for existing children', a
     pinnedSkips: [{
       path: locked,
       relativePath: 'locked.txt',
-      code: 'EBUSY',
-      reason: 'locked'
+      code: 'EIO',
+      reason: 'fatal'
     }]
   })
 

@@ -207,11 +207,7 @@ async function scanTransferSourceLstat (context, filePath) {
 }
 
 async function scanTransferSourceReaddir (context, filePath) {
-  try {
-    return await context.io.readdir(filePath)
-  } catch (error) {
-    return maybeSkipTransferSourceError(context, filePath, error)
-  }
+  return context.io.readdir(filePath)
 }
 
 async function scanTransferSourceStream (context, filePath, digest) {
@@ -315,7 +311,7 @@ async function describeTransferPlan (filePath, options = {}, allowSkips) {
   const context = {
     rootPath: filePath,
     allowSkips,
-    pinned: createPinnedTransferSkipMap(options.pinnedSkips),
+    pinned: allowSkips ? createPinnedTransferSkipMap(options.pinnedSkips) : new Map(),
     skipped: [],
     io: createTransferPlanIo(options.io),
     budget: {
