@@ -136,7 +136,11 @@ test('permanent fast delete confirmation and result copy has Chinese and English
     'shellpilotSftpFastDeletePartial',
     'shellpilotSftpFastDeleteFailed'
   ]) {
-    assert.match(i18n.getShellPilotTranslation(key, 'zh_cn'), /\{items\}/)
-    assert.match(i18n.getShellPilotTranslation(key, 'en_us'), /\{items\}/)
+    const zh = i18n.getShellPilotTranslation(key, 'zh_cn')
+    const en = i18n.getShellPilotTranslation(key, 'en_us')
+    assert.match(zh, /\{items\}/)
+    assert.match(en, /\{items\}/)
+    assert.match(zh, /刷新/)
+    assert.match(en, /refresh/i)
   }
 })
