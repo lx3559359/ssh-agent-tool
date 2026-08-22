@@ -116,8 +116,9 @@ function normalizeTransferRelativePathKey (relativePath) {
 }
 
 function transferRootRelativePath (rootPath) {
-  const resolved = path.resolve(rootPath).replace(/[\\/]+$/, '')
-  return path.basename(resolved) || resolved
+  const resolved = path.resolve(rootPath)
+  const trimmed = resolved.replace(/[\\/]+$/, '')
+  return path.basename(trimmed) || path.parse(resolved).root || resolved
 }
 
 function transferRelativePath (rootPath, filePath) {
@@ -142,7 +143,7 @@ function createTransferSkipRecord (rootPath, filePath, error) {
 }
 
 function invalidPinnedTransferSkipError (entry) {
-  const relativePath = normalizeTransferRelativePathKey(entry && entry.relativePath)
+  const relativePath = String((entry && entry.relativePath) || '')
   const code = normalizeTransferSourceErrorCode(entry && entry.code)
   const error = new Error(
     `Invalid pinned transfer skip for "${relativePath || '<unknown>'}" with code "${code || '<missing>'}".`
@@ -151,22 +152,68 @@ function invalidPinnedTransferSkipError (entry) {
   return error
 }
 
-function createPinnedTransferSkipMap (entries = []) {
+function foldTransferPathCase (filePath) {
+  return process.platform === 'win32'
+    ? String(filePath).toLowerCase()
+    : String(filePath)
+}
+
+function validatePinnedTransferRelativePath (rootPath, relativePath) {
+  const rawPath = String(relativePath || '')
+  const normalizedSeparators = rawPath.replace(/\\/g, '/')
+  if (
+    !normalizedSeparators ||
+    path.isAbsolute(rawPath) ||
+    path.posix.isAbsolute(normalizedSeparators) ||
+    path.win32.isAbsolute(rawPath)
+  ) {
+    return null
+  }
+  const segments = normalizedSeparators.split('/')
+  if (segments.some(segment => !segment || segment === '.' || segment === '..')) {
+    return null
+  }
+  const rootAbsolutePath = path.resolve(rootPath)
+  const absolutePath = path.resolve(rootAbsolutePath, ...segments)
+  const relativeToRoot = path.relative(rootAbsolutePath, absolutePath)
+  if (
+    !relativeToRoot ||
+    relativeToRoot === '..' ||
+    relativeToRoot.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relativeToRoot)
+  ) {
+    return null
+  }
+  return {
+    absolutePath,
+    relativePath: segments.join('/')
+  }
+}
+
+function pinnedTransferSkipComparisonKey (rootPath, filePath) {
+  return foldTransferPathCase(path.normalize(path.resolve(rootPath, filePath)))
+}
+
+function createPinnedTransferSkipMap (rootPath, entries = []) {
   const pinned = new Map()
   for (const entry of entries) {
     if (!entry || typeof entry !== 'object') {
       continue
     }
-    const key = normalizeTransferRelativePathKey(entry.relativePath)
-    if (!key) {
-      continue
+    const validatedPath = validatePinnedTransferRelativePath(rootPath, entry.relativePath)
+    if (!validatedPath) {
+      throw invalidPinnedTransferSkipError(entry)
     }
     const code = normalizeTransferSourceErrorCode(entry.code)
     if (!SKIPPABLE_TRANSFER_SOURCE_CODES.has(code)) {
       throw invalidPinnedTransferSkipError(entry)
     }
+    const key = pinnedTransferSkipComparisonKey(rootPath, validatedPath.absolutePath)
+    if (pinned.has(key)) {
+      throw invalidPinnedTransferSkipError(entry)
+    }
     pinned.set(key, {
-      relativePath: key,
+      relativePath: validatedPath.relativePath,
       code
     })
   }
@@ -177,10 +224,8 @@ function consumePinnedTransferSkip (context, filePath) {
   if (!context.allowSkips) {
     return null
   }
-  const key = normalizeTransferRelativePathKey(
-    transferRelativePath(context.rootPath, filePath)
-  )
-  if (!key || !context.pinned.has(key)) {
+  const key = pinnedTransferSkipComparisonKey(context.rootPath, filePath)
+  if (!context.pinned.has(key)) {
     return null
   }
   const pinned = context.pinned.get(key)
@@ -228,9 +273,6 @@ async function scanTransferSourceStream (context, filePath, digest) {
 }
 
 async function describeTransferEntryInternal (filePath, context, depth) {
-  if (consumePinnedTransferSkip(context, filePath)) {
-    return null
-  }
   if (depth > context.budget.maxDepth) {
     throw new Error('本地上传目录超过允许的深度上限。')
   }
@@ -238,6 +280,9 @@ async function describeTransferEntryInternal (filePath, context, depth) {
     throw new Error('本地上传目录超过允许的节点上限。')
   }
   context.budget.remainingNodes -= 1
+  if (consumePinnedTransferSkip(context, filePath)) {
+    return null
+  }
 
   const before = await scanTransferSourceLstat(context, filePath)
   if (before === SKIPPED_ENTRY) {
@@ -315,7 +360,7 @@ async function describeTransferPlan (filePath, options = {}, allowSkips) {
   const context = {
     rootPath: filePath,
     allowSkips,
-    pinned: allowSkips ? createPinnedTransferSkipMap(options.pinnedSkips) : new Map(),
+    pinned: allowSkips ? createPinnedTransferSkipMap(filePath, options.pinnedSkips) : new Map(),
     skipped: [],
     io: createTransferPlanIo(options.io),
     budget: {

@@ -5,9 +5,37 @@ const fs = require('node:fs/promises')
 const os = require('node:os')
 const path = require('node:path')
 const { Readable } = require('node:stream')
+const vm = require('node:vm')
 
 process.env.NODE_ENV = 'development'
 const { fsExport } = require('../../src/app/lib/fs')
+
+function loadLocalTransferSourcePlanForTest (overrides = {}) {
+  const modulePath = path.resolve(
+    __dirname,
+    '../../src/app/lib/local-transfer-source-plan.js'
+  )
+  const source = fileSystem.readFileSync(modulePath, 'utf8') + `
+module.exports.__test = { transferRootRelativePath }
+`
+  const module = { exports: {} }
+  vm.runInNewContext(source, {
+    module,
+    exports: module.exports,
+    require: (specifier) => {
+      if (Object.prototype.hasOwnProperty.call(overrides, specifier)) {
+        return overrides[specifier]
+      }
+      return require(specifier)
+    },
+    __dirname: path.dirname(modulePath),
+    __filename: modulePath,
+    Buffer,
+    process,
+    console
+  }, { filename: modulePath })
+  return module.exports.__test
+}
 
 test('local transfer descriptor streams file digests and detects same-size changes', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'shellpilot-descriptor-'))
@@ -264,6 +292,129 @@ test('skip-aware planner canonicalizes pinned skip records from scanned children
     code: 'EACCES',
     reason: 'unreadable'
   }])
+})
+
+test('skip-aware planner matches pinned skips case-insensitively on Windows canonical paths', {
+  skip: process.platform !== 'win32'
+}, async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'shellpilot-pinned-win32-'))
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  const readable = path.join(root, 'readable.txt')
+  const locked = path.join(root, 'locked.txt')
+  await fs.writeFile(readable, 'ok')
+  await fs.writeFile(locked, 'locked')
+  let lockedReads = 0
+
+  const plan = await fsExport.prepareTransferEntry(root, {
+    io: {
+      lstat: async (filePath) => {
+        if (filePath === locked) {
+          lockedReads += 1
+        }
+        return fs.lstat(filePath)
+      },
+      readdir: (...args) => fs.readdir(...args),
+      createReadStream: (...args) => fileSystem.createReadStream(...args)
+    },
+    pinnedSkips: [{
+      path: path.join(root, 'caller-cased.txt'),
+      relativePath: 'LOCKED.TXT',
+      code: 'ebusy',
+      reason: 'caller supplied'
+    }]
+  })
+
+  assert.equal(lockedReads, 0)
+  assert.deepEqual(plan.descriptor.entries.map(item => item.name), ['readable.txt'])
+  assert.deepEqual(plan.skipped, [{
+    path: locked,
+    relativePath: 'locked.txt',
+    code: 'EBUSY',
+    reason: 'locked'
+  }])
+})
+
+test('skip-aware planner rejects duplicate pinned skips after Windows canonicalization', {
+  skip: process.platform !== 'win32'
+}, async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'shellpilot-pinned-duplicate-'))
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  await fs.writeFile(path.join(root, 'locked.txt'), 'locked')
+
+  await assert.rejects(
+    fsExport.prepareTransferEntry(root, {
+      pinnedSkips: [{
+        relativePath: 'locked.txt',
+        code: 'EBUSY'
+      }, {
+        relativePath: 'LOCKED.TXT',
+        code: 'EACCES'
+      }]
+    }),
+    error => {
+      assert.equal(error && error.code, 'TRANSFER_PINNED_SKIP_INVALID')
+      return true
+    }
+  )
+})
+
+test('skip-aware planner rejects pinned skips with invalid relative paths', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'shellpilot-pinned-invalid-path-'))
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  await fs.writeFile(path.join(root, 'locked.txt'), 'locked')
+
+  for (const relativePath of [
+    '',
+    '.',
+    './locked.txt',
+    '../locked.txt',
+    'nested//locked.txt',
+    'nested/../locked.txt',
+    path.resolve(root, 'locked.txt')
+  ]) {
+    await assert.rejects(
+      fsExport.prepareTransferEntry(root, {
+        pinnedSkips: [{
+          relativePath,
+          code: 'EBUSY'
+        }]
+      }),
+      error => {
+        assert.equal(error && error.code, 'TRANSFER_PINNED_SKIP_INVALID')
+        return true
+      },
+      `expected ${JSON.stringify(relativePath)} to be rejected`
+    )
+  }
+})
+
+test('skip-aware planner counts pinned children against the node budget', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'shellpilot-pinned-budget-'))
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  await fs.writeFile(path.join(root, 'locked-a.txt'), 'a')
+  await fs.writeFile(path.join(root, 'locked-b.txt'), 'b')
+
+  await assert.rejects(
+    fsExport.prepareTransferEntry(root, {
+      maxNodes: 2,
+      pinnedSkips: [{
+        relativePath: 'locked-a.txt',
+        code: 'EBUSY'
+      }, {
+        relativePath: 'locked-b.txt',
+        code: 'EBUSY'
+      }]
+    }),
+    /节点上限/
+  )
+})
+
+test('transfer root relative path preserves the platform root marker', () => {
+  const { transferRootRelativePath } = loadLocalTransferSourcePlanForTest({
+    path: require('node:path').posix
+  })
+
+  assert.equal(transferRootRelativePath('/'), '/')
 })
 
 test('strict transfer description still fails on non-skippable stream errors', async t => {
