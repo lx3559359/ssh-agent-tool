@@ -74,7 +74,7 @@ function OperationsWorkspace (props) {
   const selectedScript = getOperationsTool(selectedScriptId) || scriptTools[0]
   const endpoint = store.getCurrentOperationsEndpoint?.()
   const endpointKey = endpoint
-    ? `${endpoint.username}@${endpoint.host}:${endpoint.port}`
+    ? `${endpoint.connectionUsername || endpoint.username}@${endpoint.host}:${endpoint.port}`
     : ''
   const activeTask = useMemo(() => {
     return store.operationsTasks.find(item => {
@@ -356,7 +356,7 @@ function OperationsWorkspace (props) {
               <div className='operations-no-task'>
                 <SafetyCertificateOutlined />
                 <strong>{e('shellpilotOperationsAwaiting')}</strong>
-                <span>{e('shellpilotOperationsIndependentTaskHint')}</span>
+                <span>{e('shellpilotOperationsCurrentTerminalTaskHint')}</span>
               </div>
               )}
         </main>
