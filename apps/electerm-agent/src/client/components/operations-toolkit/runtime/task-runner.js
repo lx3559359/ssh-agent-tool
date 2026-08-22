@@ -1,6 +1,7 @@
 import { createTrustedOperationId } from '../../../common/safety-transactions/operation-id.js'
 import {
   createOperationsTask,
+  normalizeOperationsRuntimeIdentity,
   operationsTaskStatuses,
   transitionOperationsTask
 } from './task-model.js'
@@ -9,21 +10,44 @@ import {
   assertOperationsResourceConfirmation
 } from '../shared/resource-confirmation.js'
 
-const capabilityCacheTtlMs = 5 * 60 * 1000
-
 function endpointKey (endpoint) {
-  return `${endpoint.username}@${endpoint.host}:${endpoint.port}`
+  const username = endpoint.connectionUsername || endpoint.username
+  return `${username}@${endpoint.host}:${endpoint.port}`
 }
 
-function assertEndpoint (endpoint) {
-  for (const key of ['tabId', 'pid', 'host', 'port', 'username']) {
+function normalizeTaskEndpoint (providedEndpoint = {}) {
+  const connectionUsername = String(
+    providedEndpoint.connectionUsername || providedEndpoint.username || ''
+  ).trim()
+  const username = String(providedEndpoint.username || connectionUsername).trim()
+  const endpoint = {
+    ...providedEndpoint,
+    username: connectionUsername,
+    connectionUsername,
+    sessionType: String(providedEndpoint.sessionType || '').toLowerCase(),
+    port: Number(providedEndpoint.port)
+  }
+  for (const key of [
+    'tabId', 'pid', 'terminalPid', 'sessionType', 'host', 'port',
+    'username', 'connectionUsername', 'hostKeyFingerprint'
+  ]) {
     if (endpoint?.[key] === undefined ||
       endpoint?.[key] === null ||
       endpoint?.[key] === '') {
       throw new Error('SSH 运维任务端点信息不完整')
     }
   }
-  return endpointKey(endpoint)
+  if (username !== connectionUsername) {
+    throw new Error('SSH 运维任务登录用户端点不一致')
+  }
+  if (!Number.isInteger(endpoint.port) || endpoint.port < 1 ||
+    endpoint.port > 65535) {
+    throw new Error('SSH 运维任务端口无效')
+  }
+  if (endpoint.sessionType !== 'ssh') {
+    throw new Error('SSH 运维任务端点会话类型无效')
+  }
+  return endpoint
 }
 
 function disconnectedError (error) {
@@ -37,34 +61,23 @@ export function createOperationsTaskRunner ({
   taskStore,
   discover = async () => ({}),
   maxReadonlyPerEndpoint = 2,
-  now = Date.now,
   createTaskId = () => createTrustedOperationId('operations'),
   onTaskChange = () => {}
 } = {}) {
-  if (!channel?.execute) throw new Error('运维任务执行通道不可用')
+  if (typeof channel?.acquire !== 'function') {
+    throw new Error('运维任务执行通道不可用')
+  }
   const tasks = new Map()
   const controllers = new Map()
   const completions = new Map()
   const activeCounts = new Map()
   const sensitiveCounts = new Map()
   const consumedConfirmations = new Set()
-  const capabilityCache = new Map()
 
   function setTask (task) {
     tasks.set(task.id, task)
     onTaskChange(task)
     return task
-  }
-
-  async function capabilitiesFor (endpoint, key) {
-    const cached = capabilityCache.get(key)
-    const timestamp = Number(now())
-    if (cached && timestamp - cached.timestamp < capabilityCacheTtlMs) {
-      return cached.value
-    }
-    const value = await discover(endpoint)
-    capabilityCache.set(key, { timestamp, value })
-    return value
   }
 
   function releaseEndpointSlot (countMap, key) {
@@ -78,7 +91,8 @@ export function createOperationsTaskRunner ({
     if (tool?.risk !== 'read-only' && !resourceSensitive) {
       throw new Error('运维任务只允许只读或资源敏感诊断工具')
     }
-    const key = assertEndpoint(endpoint)
+    const taskEndpoint = normalizeTaskEndpoint(endpoint)
+    const key = endpointKey(taskEndpoint)
     if (resourceSensitive) {
       if ((sensitiveCounts.get(key) || 0) >= 1) {
         throw new Error('当前服务器已有资源敏感任务正在运行')
@@ -109,7 +123,7 @@ export function createOperationsTaskRunner ({
         id: taskId,
         toolId: tool.id,
         endpointKey: key,
-        endpoint: { ...endpoint },
+        endpoint: { ...taskEndpoint },
         params: structuredClone(params)
       }))
     } catch (error) {
@@ -119,12 +133,51 @@ export function createOperationsTaskRunner ({
     }
 
     const completion = (async () => {
+      let lease
       try {
         task = setTask(transitionOperationsTask(
           task,
           operationsTaskStatuses.discovering
         ))
-        const capabilities = await capabilitiesFor(endpoint, key)
+        lease = await channel.acquire({
+          endpoint: taskEndpoint,
+          taskId,
+          signal: controller.signal
+        })
+        if (typeof lease?.execute !== 'function' ||
+          typeof lease?.release !== 'function') {
+          throw new Error('PTY 运维任务租约不可用')
+        }
+        const onIdentity = identity => {
+          const runtimeIdentity = normalizeOperationsRuntimeIdentity(identity)
+          if (task.runtimeIdentity && (
+            task.runtimeIdentity.effectiveUid !== runtimeIdentity.effectiveUid ||
+            task.runtimeIdentity.effectiveUsername !==
+              runtimeIdentity.effectiveUsername
+          )) {
+            throw new Error('当前 Shell 有效身份在任务执行期间发生变化')
+          }
+          if (!task.runtimeIdentity) {
+            task = setTask({ ...task, runtimeIdentity })
+          }
+          return runtimeIdentity
+        }
+        const execute = async options => {
+          const result = await lease.execute(options)
+          onIdentity(result?.identity)
+          return result
+        }
+        if (controller.signal.aborted) {
+          const error = new Error('cancelled')
+          error.name = 'AbortError'
+          throw error
+        }
+        const capabilities = await discover(taskEndpoint, {
+          taskId,
+          signal: controller.signal,
+          execute,
+          onIdentity
+        })
         task = setTask(transitionOperationsTask(
           task,
           operationsTaskStatuses.running,
@@ -156,9 +209,7 @@ export function createOperationsTaskRunner ({
             activeStepId: step.id,
             steps: structuredClone(steps)
           })
-          const result = await channel.execute({
-            pid: endpoint.pid,
-            taskId: `${taskId}-${step.id}`,
+          const result = await execute({
             script: command,
             timeoutMs: step.timeoutMs,
             signal: controller.signal,
@@ -188,36 +239,55 @@ export function createOperationsTaskRunner ({
               operationsTaskStatuses.partiallyCompleted,
               { steps }
             ))
-            taskStore?.save(task)
-            return task
+            break
           }
         }
-        task = setTask(transitionOperationsTask(
-          task,
-          operationsTaskStatuses.completed,
-          { steps }
-        ))
-        taskStore?.save(task)
-        return task
+        if (!task.completedAt) {
+          task = setTask(transitionOperationsTask(
+            task,
+            operationsTaskStatuses.completed,
+            { steps }
+          ))
+        }
       } catch (error) {
-        const status = error?.name === 'AbortError'
-          ? operationsTaskStatuses.cancelled
-          : error?.name === 'TimeoutError'
-            ? operationsTaskStatuses.timedOut
-            : disconnectedError(error)
-              ? operationsTaskStatuses.disconnected
-              : operationsTaskStatuses.failed
+        const cancellationUnknown = error?.name === 'CancellationUnknownError'
+        const status = cancellationUnknown
+          ? operationsTaskStatuses.cancellationUnknown
+          : error?.name === 'AbortError'
+            ? operationsTaskStatuses.cancelled
+            : error?.name === 'TimeoutError'
+              ? operationsTaskStatuses.timedOut
+              : disconnectedError(error)
+                ? operationsTaskStatuses.disconnected
+                : operationsTaskStatuses.failed
         if (!task.completedAt) {
           task = setTask(transitionOperationsTask(task, status, {
-            error: String(error?.message || error)
+            error: String(error?.message || error),
+            ...(cancellationUnknown
+              ? { terminalRecoveryRequired: true }
+              : {})
           }))
         }
-        taskStore?.save(task)
-        return task
       } finally {
+        if (lease) {
+          try {
+            const released = await lease.release()
+            if (released === false) {
+              task = setTask({ ...task, terminalRecoveryRequired: true })
+            }
+          } catch (error) {
+            task = setTask({
+              ...task,
+              terminalRecoveryRequired: true,
+              releaseError: String(error?.message || error)
+            })
+          }
+        }
+        if (task.completedAt) taskStore?.save(task)
         controllers.delete(taskId)
         releaseEndpointSlot(countMap, key)
       }
+      return task
     })()
     completions.set(taskId, completion)
     completion.finally(() => {
@@ -229,9 +299,27 @@ export function createOperationsTaskRunner ({
 
   return Object.freeze({
     run,
-    async discover (endpoint) {
-      const key = assertEndpoint(endpoint)
-      return capabilitiesFor(endpoint, key)
+    async discover (providedEndpoint) {
+      const endpoint = normalizeTaskEndpoint(providedEndpoint)
+      const taskId = createTaskId()
+      const controller = new AbortController()
+      let lease
+      try {
+        lease = await channel.acquire({ endpoint, taskId, signal: controller.signal })
+        const execute = async options => {
+          const result = await lease.execute(options)
+          normalizeOperationsRuntimeIdentity(result?.identity)
+          return result
+        }
+        return await discover(endpoint, {
+          taskId,
+          signal: controller.signal,
+          execute,
+          onIdentity: normalizeOperationsRuntimeIdentity
+        })
+      } finally {
+        await lease?.release()
+      }
     },
     async cancel (taskId) {
       const controller = controllers.get(taskId)
@@ -245,8 +333,7 @@ export function createOperationsTaskRunner ({
       }
       const completion = completions.get(taskId)
       controller.abort()
-      await completion
-      return true
+      return completion ? await completion : tasks.get(taskId) || false
     },
     get: taskId => tasks.get(taskId) || null,
     list: () => Array.from(tasks.values()),

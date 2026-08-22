@@ -7,6 +7,7 @@ export const operationsTaskStatuses = Object.freeze({
   completed: 'completed',
   cancelling: 'cancelling',
   cancelled: 'cancelled',
+  cancellationUnknown: 'cancellation-unknown',
   timedOut: 'timed-out',
   failed: 'failed',
   disconnected: 'disconnected',
@@ -16,6 +17,7 @@ export const operationsTaskStatuses = Object.freeze({
 export const finalOperationsTaskStatuses = Object.freeze(new Set([
   operationsTaskStatuses.completed,
   operationsTaskStatuses.cancelled,
+  operationsTaskStatuses.cancellationUnknown,
   operationsTaskStatuses.timedOut,
   operationsTaskStatuses.failed,
   operationsTaskStatuses.disconnected,
@@ -23,6 +25,20 @@ export const finalOperationsTaskStatuses = Object.freeze(new Set([
 ]))
 
 const statusValues = new Set(Object.values(operationsTaskStatuses))
+
+export function normalizeOperationsRuntimeIdentity (identity = {}) {
+  const effectiveUid = String(identity.uid ?? '')
+  const effectiveUsername = String(identity.username ?? '').trim()
+  if (!/^\d+$/.test(effectiveUid) || !effectiveUsername ||
+    effectiveUsername.length > 256) {
+    throw new Error('运维任务当前 Shell 身份无效')
+  }
+  return Object.freeze({
+    channel: 'pty',
+    effectiveUid,
+    effectiveUsername
+  })
+}
 
 export function createOperationsTask ({
   id,
