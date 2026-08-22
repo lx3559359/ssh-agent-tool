@@ -1,8 +1,10 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
+const fileSystem = require('node:fs')
 const fs = require('node:fs/promises')
 const os = require('node:os')
 const path = require('node:path')
+const { Readable } = require('node:stream')
 
 process.env.NODE_ENV = 'development'
 const { fsExport } = require('../../src/app/lib/fs')
@@ -66,10 +68,128 @@ test('local transfer descriptor fails closed for symlinks and exhausted budgets'
   )
 })
 
-test('local transfer descriptor is exposed through the renderer fs allowlist', async () => {
+test('skip-aware planner omits an EBUSY child while describing readable siblings', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'shellpilot-plan-child-'))
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  const readable = path.join(root, 'readable.txt')
+  const busy = path.join(root, 'busy.txt')
+  await fs.writeFile(readable, 'ok')
+  await fs.writeFile(busy, 'busy')
+
+  const io = {
+    lstat: async (filePath) => {
+      if (filePath === busy) {
+        const error = new Error('locked child')
+        error.code = 'ebusy'
+        throw error
+      }
+      return fs.lstat(filePath)
+    },
+    readdir: (...args) => fs.readdir(...args),
+    createReadStream: (...args) => fileSystem.createReadStream(...args)
+  }
+
+  const plan = await fsExport.prepareTransferEntry(root, { io })
+  assert.equal(plan.descriptor.type, 'directory')
+  assert.deepEqual(plan.descriptor.entries.map(item => item.name), ['readable.txt'])
+  assert.equal(plan.descriptor.entries[0].entry.type, 'file')
+  assert.deepEqual(plan.skipped, [{
+    path: busy,
+    relativePath: 'busy.txt',
+    code: 'EBUSY',
+    reason: 'locked'
+  }])
+})
+
+test('skip-aware planner returns a null descriptor when the root is locked', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'shellpilot-plan-root-'))
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  const io = {
+    lstat: async (filePath) => {
+      if (filePath === root) {
+        const error = new Error('root locked')
+        error.code = 'EBUSY'
+        throw error
+      }
+      return fs.lstat(filePath)
+    },
+    readdir: (...args) => fs.readdir(...args),
+    createReadStream: (...args) => fileSystem.createReadStream(...args)
+  }
+
+  const plan = await fsExport.prepareTransferEntry(root, { io })
+  assert.equal(plan.descriptor, null)
+  assert.deepEqual(plan.skipped, [{
+    path: root,
+    relativePath: path.basename(root),
+    code: 'EBUSY',
+    reason: 'locked'
+  }])
+})
+
+test('skip-aware planner consumes pinned skips before reading an exact child', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'shellpilot-plan-pinned-'))
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  const readable = path.join(root, 'readable.txt')
+  const locked = path.join(root, 'locked.txt')
+  await fs.writeFile(readable, 'ok')
+  await fs.writeFile(locked, 'locked')
+  let lockedReads = 0
+  const pinnedSkip = {
+    path: locked,
+    relativePath: 'locked.txt',
+    code: 'EBUSY',
+    reason: 'locked'
+  }
+  const io = {
+    lstat: async (filePath) => {
+      if (filePath === locked) {
+        lockedReads += 1
+      }
+      return fs.lstat(filePath)
+    },
+    readdir: (...args) => fs.readdir(...args),
+    createReadStream: (...args) => fileSystem.createReadStream(...args)
+  }
+
+  const plan = await fsExport.prepareTransferEntry(root, {
+    io,
+    pinnedSkips: [pinnedSkip]
+  })
+
+  assert.equal(lockedReads, 0)
+  assert.deepEqual(plan.descriptor.entries.map(item => item.name), ['readable.txt'])
+  assert.deepEqual(plan.skipped, [pinnedSkip])
+})
+
+test('strict transfer description still fails on non-skippable stream errors', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'shellpilot-plan-eio-'))
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  const file = path.join(root, 'data.txt')
+  await fs.writeFile(file, 'abc')
+
+  await assert.rejects(
+    fsExport.describeTransferEntry(file, {
+      io: {
+        lstat: (...args) => fs.lstat(...args),
+        readdir: (...args) => fs.readdir(...args),
+        createReadStream: () => Readable.from((async function * () {
+          yield Buffer.from('a')
+          const error = new Error('device failure')
+          error.code = 'EIO'
+          throw error
+        })())
+      }
+    }),
+    error => error && error.code === 'EIO'
+  )
+})
+
+test('local transfer descriptor planner is exposed through the renderer fs allowlist', async () => {
   const ipcSource = await fs.readFile(path.resolve(
     __dirname,
     '../../src/app/lib/ipc-sync.js'
   ), 'utf8')
   assert.match(ipcSource, /'describeTransferEntry'/)
+  assert.match(ipcSource, /'describeTransferEntry',\s*'prepareTransferEntry',/)
 })
