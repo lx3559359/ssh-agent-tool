@@ -78,7 +78,7 @@ test('cancellation unknown is a final state requiring terminal recovery', async 
   )
 })
 
-test('legacy task records remain readable without runtime identity', async () => {
+test('task history preserves runtime identity and accepts legacy records without it', async () => {
   const { createOperationsTaskRecordStore } = await importModule(
     'src/client/components/operations-toolkit/runtime/task-record-store.js'
   )
@@ -88,15 +88,42 @@ test('legacy task records remain readable without runtime identity', async () =>
     endpoint: { username: 'hik' },
     steps: []
   }
+  let persisted = [legacy]
   const records = createOperationsTaskRecordStore({
     storage: {
-      read: () => [legacy],
-      write: () => {}
+      read: () => persisted,
+      write: value => { persisted = value }
     }
+  })
+
+  records.save({
+    id: 'root-task',
+    status: 'completed',
+    endpoint: {
+      username: 'hik',
+      connectionUsername: 'hik'
+    },
+    runtimeIdentity: {
+      channel: 'pty',
+      effectiveUid: '0',
+      effectiveUsername: 'root'
+    },
+    steps: []
   })
 
   assert.deepEqual(records.get('legacy-task'), legacy)
   assert.equal(records.get('legacy-task').runtimeIdentity, undefined)
+  assert.equal(records.get('root-task').endpoint.username, 'hik')
+  assert.equal(records.get('root-task').endpoint.connectionUsername, 'hik')
+  assert.deepEqual(records.get('root-task').runtimeIdentity, {
+    channel: 'pty',
+    effectiveUid: '0',
+    effectiveUsername: 'root'
+  })
+  assert.deepEqual(
+    persisted.map(record => record.id),
+    ['root-task', 'legacy-task']
+  )
 })
 
 test('output buffer keeps 5000 lines and marks truncation', async () => {

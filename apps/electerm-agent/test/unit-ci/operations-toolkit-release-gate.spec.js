@@ -48,6 +48,8 @@ test('public operations completion waits for history synchronization', () => {
   assert.match(source, /createOperationsIncidentCandidate/)
   assert.match(source, /captureIncidentCandidateSafely/)
   assert.match(source, /appendIncidentTimelineEvent/)
+  assert.match(source, /createPtyTaskChannel/)
+  assert.doesNotMatch(source, /createSshTaskChannel|cancelRunCmd/)
 })
 
 test('incident archive listens to safety transaction changes without blocking them', () => {
