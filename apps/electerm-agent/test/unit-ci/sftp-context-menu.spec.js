@@ -174,7 +174,8 @@ test('existing destructive SFTP and tab actions are marked dangerous without cha
   for (const key of ['handleClose', 'closeOther', 'closeTabsRight']) {
     assert.match(tabSource, new RegExp(`key: '${key}'[\\s\\S]{0,180}danger: true`))
   }
-  assert.match(listSource, /if \(key !== 'more-submenu'\)[\s\S]{0,120}inst\[key\]\(\)/)
+  assert.match(listSource, /this\.openContextMenuFile = this\.getClickedFile\(\)/)
+  assert.match(listSource, /const inst = this\.openContextMenuFile \|\| this\.getClickedFile\(\)[\s\S]{0,100}inst\[key\]\(\)/)
   assert.match(fileItemSource, /if \(key !== 'more-submenu'\)[\s\S]{0,100}this\[key\]\(\)/)
 })
 
