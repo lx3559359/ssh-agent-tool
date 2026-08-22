@@ -756,17 +756,24 @@ export default class FileSection extends React.Component {
   }
 
   onSubmitEditFile = async (mode, type, path, text, noClose) => {
-    const r = typeMap.remote === type
-      ? await this.props.saveRemoteEditorFile({
-        path,
-        text,
-        mode
-      }).catch(window.store.onError)
-      : await window.fs.writeFile(
-        path,
-        text,
-        mode
-      ).catch(window.store.onError)
+    let r
+    try {
+      r = typeMap.remote === type
+        ? await this.props.saveRemoteEditorFile({
+          path,
+          text,
+          mode
+        })
+        : await window.fs.writeFile(
+          path,
+          text,
+          mode
+        )
+    } catch (error) {
+      window.store.onError(error)
+      this.editor?.setState({ loading: false })
+      return false
+    }
     const data = {
       loading: false
     }
@@ -774,12 +781,13 @@ export default class FileSection extends React.Component {
       data.id = ''
       data.file = null
       data.text = ''
+      this.clearRef()
     }
-    this.clearRef()
     this.editor?.setState(data)
     if (r && !noClose) {
       this.props[`${type}List`]()
     }
+    return r
   }
 
   editFile = () => {

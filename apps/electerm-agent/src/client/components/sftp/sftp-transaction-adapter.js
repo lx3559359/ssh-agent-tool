@@ -1,4 +1,5 @@
 import { assertTrustedOperationId } from '../../common/safety-transactions/operation-id.js'
+import { markSftpEditorStage } from './sftp-editor-permission-error.js'
 
 const digestChunkBytes = 64 * 1024
 const maxManifestBytes = 256 * 1024
@@ -66,6 +67,14 @@ function runProtectedMutation (context, work, options) {
     return context.runMutation(work, options)
   }
   return work()
+}
+
+async function runEditorStage (stage, work) {
+  try {
+    return await work()
+  } catch (error) {
+    throw markSftpEditorStage(stage, error)
+  }
 }
 
 function bytesFromBase64 (value) {
@@ -1081,9 +1090,14 @@ export function createSftpTransactionAdapter ({ getSftp } = {}) {
     },
 
     async prepare (operation, context = {}) {
-      const sftp = await requireSftp(operation)
-      const existing = await loadManifest(sftp, operation, context.signal)
-      return existing || prepareNewManifest(sftp, operation, context.signal)
+      const prepare = async () => {
+        const sftp = await requireSftp(operation)
+        const existing = await loadManifest(sftp, operation, context.signal)
+        return existing || prepareNewManifest(sftp, operation, context.signal)
+      }
+      return operation.effect.action === 'editor-save'
+        ? runEditorStage('snapshot', prepare)
+        : prepare()
     },
 
     async validatePrepared (operation, context = {}) {
@@ -1101,13 +1115,22 @@ export function createSftpTransactionAdapter ({ getSftp } = {}) {
     },
 
     async beforeExecute (operation, context = {}) {
-      const sftp = await requireSftp(operation)
-      const { signal } = context
-      await requireManifest(sftp, operation, signal)
-      for (const resource of operation.plan.resources) {
-        await assertOriginalState(sftp, resource, operation.effect.action, signal)
-      }
       const action = operation.effect.action
+      const sftp = action === 'editor-save'
+        ? await runEditorStage('transaction', () => requireSftp(operation))
+        : await requireSftp(operation)
+      const { signal } = context
+      const validateSnapshot = async () => {
+        await requireManifest(sftp, operation, signal)
+        for (const resource of operation.plan.resources) {
+          await assertOriginalState(sftp, resource, action, signal)
+        }
+      }
+      if (action === 'editor-save') {
+        await runEditorStage('snapshot', validateSnapshot)
+      } else {
+        await validateSnapshot()
+      }
       if (['upload', 'copy', 'move'].includes(action)) {
         throw new Error('SFTP 文件传输必须由原有 transfer transport 执行。')
       }
@@ -1123,38 +1146,58 @@ export function createSftpTransactionAdapter ({ getSftp } = {}) {
         const resource = operation.plan.resources[0]
         const mode = operation.effect.requestedMode ??
           (resource.original.absent ? undefined : resource.original.mode)
-        if (await lstatOrAbsent(sftp, resource.executionPath, signal) ||
-          await lstatOrAbsent(sftp, resource.executionPreviousPath, signal)) {
+        const stagingOccupied = await runEditorStage('staging', async () => (
+          await lstatOrAbsent(sftp, resource.executionPath, signal) ||
+          await lstatOrAbsent(sftp, resource.executionPreviousPath, signal)
+        ))
+        if (stagingOccupied) {
           throw new Error('SFTP 编辑器事务置换路径已被占用，未修改目标文件。')
         }
-        await runProtectedMutation(
+        await runEditorStage('staging', () => runProtectedMutation(
           context,
           () => sftp.writeFile(resource.executionPath, text, mode)
-        )
+        ))
         if (resource.original.absent !== true) {
-          if (typeof sftp.chown !== 'function') {
-            throw new Error('当前 SFTP 连接不支持 chown，未修改目标文件。')
-          }
-          await runProtectedMutation(
-            context,
-            () => sftp.chown(
-              resource.executionPath,
-              resource.original.uid,
-              resource.original.gid
+          let stagedStat = await runEditorStage(
+            'metadata',
+            () => sftp.lstat(resource.executionPath)
+          )
+          const ownershipMismatch = stagedStat.uid !== resource.original.uid ||
+            stagedStat.gid !== resource.original.gid
+          if (ownershipMismatch) {
+            if (typeof sftp.chown !== 'function') {
+              throw markSftpEditorStage(
+                'metadata',
+                new Error('当前 SFTP 连接不支持 chown，未修改目标文件。')
+              )
+            }
+            await runEditorStage('metadata', () => runProtectedMutation(
+              context,
+              () => sftp.chown(
+                resource.executionPath,
+                resource.original.uid,
+                resource.original.gid
+              )
+            ))
+            stagedStat = await runEditorStage(
+              'metadata',
+              () => sftp.lstat(resource.executionPath)
             )
-          )
-          await runProtectedMutation(
-            context,
-            () => sftp.chmod(resource.executionPath, mode)
-          )
+          }
+          if (mode !== undefined && safeMode(stagedStat) !== mode) {
+            await runEditorStage('metadata', () => runProtectedMutation(
+              context,
+              () => sftp.chmod(resource.executionPath, mode)
+            ))
+          }
         }
-        const staged = await describeEntry(
+        const staged = await runEditorStage('staging', () => describeEntry(
           sftp,
           resource.executionPath,
           createDescriptorBudget(),
           0,
           signal
-        )
+        ))
         if (!matchesExpected(staged, {
           ...operation.effect.expected,
           type: 'file',
@@ -1165,17 +1208,20 @@ export function createSftpTransactionAdapter ({ getSftp } = {}) {
         })) {
           throw new Error('SFTP 编辑器暂存文件验证失败，未修改目标文件。')
         }
-        await assertOriginalState(sftp, resource, action, signal)
+        await runEditorStage(
+          'replace',
+          () => assertOriginalState(sftp, resource, action, signal)
+        )
         if (resource.original.absent !== true) {
-          await runProtectedMutation(
+          await runEditorStage('replace', () => runProtectedMutation(
             context,
             () => sftp.rename(resource.path, resource.executionPreviousPath)
-          )
+          ))
         }
-        await runProtectedMutation(
+        await runEditorStage('replace', () => runProtectedMutation(
           context,
           () => sftp.rename(resource.executionPath, resource.path)
-        )
+        ))
       } else if (action === 'chmod') {
         await runProtectedMutation(
           context,

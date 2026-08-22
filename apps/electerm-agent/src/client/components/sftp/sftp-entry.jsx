@@ -49,6 +49,7 @@ import {
   createSftpTransactionAdapter,
   digestSftpText
 } from './sftp-transaction-adapter.js'
+import { formatSftpEditorSaveError } from './sftp-editor-permission-error.js'
 import {
   buildSftpTextChangePreview,
   readSftpSnapshotText
@@ -796,35 +797,43 @@ export default class Sftp extends Component {
     }
     const expected = await digestSftpText(text)
     const requestedMode = mode === undefined ? undefined : Number(mode) & 0o7777
-    const result = await this.runSftpSafetyOperation({
-      action: 'editor-save',
-      paths: { target: path },
-      type: 'file',
-      requestedMode,
-      expected,
-      title: e('shellpilotSftpEditorSave'),
-      signal: options.signal
-    }, {
-      input: { text },
-      signal: options.signal,
-      buildConfirmationDetails: async operation => {
-        const resource = operation.plan?.resources?.[0]
-        if (!resource) return { path }
-        const snapshot = await readSftpSnapshotText(this.sftp, resource, {
-          signal: options.signal
-        })
-        if (!snapshot.available) return { path }
-        return {
-          path,
-          preview: buildSftpTextChangePreview({
-            path,
-            beforeText: snapshot.text,
-            afterText: text,
-            existed: snapshot.existed
+    let result
+    try {
+      result = await this.runSftpSafetyOperation({
+        action: 'editor-save',
+        paths: { target: path },
+        type: 'file',
+        requestedMode,
+        expected,
+        title: e('shellpilotSftpEditorSave'),
+        signal: options.signal
+      }, {
+        input: { text },
+        signal: options.signal,
+        buildConfirmationDetails: async operation => {
+          const resource = operation.plan?.resources?.[0]
+          if (!resource) return { path }
+          const snapshot = await readSftpSnapshotText(this.sftp, resource, {
+            signal: options.signal
           })
+          if (!snapshot.available) return { path }
+          return {
+            path,
+            preview: buildSftpTextChangePreview({
+              path,
+              beforeText: snapshot.text,
+              afterText: text,
+              existed: snapshot.existed
+            })
+          }
         }
-      }
-    })
+      })
+    } catch (error) {
+      throw formatSftpEditorSaveError(error, {
+        path,
+        username: this.props.tab.username
+      })
+    }
     if (result) message.success(e('shellpilotSftpEditorSaveVerified'))
     return result
   }

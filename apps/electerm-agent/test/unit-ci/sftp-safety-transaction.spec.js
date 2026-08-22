@@ -1711,6 +1711,89 @@ test('SFTP adapter snapshots and verifies editor saves with bounded chunk reads'
   assert.equal(sftp.text(prepared.artifacts.target), oldText)
 })
 
+test('SFTP editor save skips no-op ownership writes rejected by the server', async () => {
+  const {
+    createSftpTransactionAdapter,
+    digestSftpText
+  } = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/components/sftp/sftp-transaction-adapter.js'
+  )).href)
+  const newText = 'enabled=true\n'
+  const sftp = createFakeSftp({
+    '/srv/app/example.conf': {
+      type: 'file',
+      content: 'enabled=false\n',
+      mode: 0o640,
+      uid: 1000,
+      gid: 1000
+    }
+  })
+  const operation = await buildSftpOperation({
+    id: 'adapter-editor-noop-metadata',
+    action: 'editor-save',
+    paths: { target: '/srv/app/example.conf' },
+    type: 'file',
+    requestedMode: 0o640,
+    expected: await digestSftpText(newText)
+  })
+  const adapter = createSftpTransactionAdapter({ getSftp: () => sftp })
+  const prepared = await adapter.prepare(operation)
+  operation.plan = prepared.plan
+  operation.artifacts = prepared.artifacts
+  const callsBeforeExecute = sftp.calls.length
+  sftp.chown = async () => {
+    throw new Error('Permission denied')
+  }
+
+  await adapter.beforeExecute(operation, { input: { text: newText } })
+  await adapter.verifyExecute(operation)
+
+  assert.equal(sftp.text('/srv/app/example.conf'), newText)
+  assert.equal(sftp.calls.slice(callsBeforeExecute).some(call => call[0] === 'chown'), false)
+})
+
+test('SFTP editor save fails closed when ownership really differs', async () => {
+  const {
+    createSftpTransactionAdapter,
+    digestSftpText
+  } = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/components/sftp/sftp-transaction-adapter.js'
+  )).href)
+  const newText = 'enabled=true\n'
+  const sftp = createFakeSftp({
+    '/srv/app/example.conf': {
+      type: 'file',
+      content: 'enabled=false\n',
+      mode: 0o640,
+      uid: 0,
+      gid: 0
+    }
+  })
+  const operation = await buildSftpOperation({
+    id: 'adapter-editor-real-ownership-change',
+    action: 'editor-save',
+    paths: { target: '/srv/app/example.conf' },
+    type: 'file',
+    requestedMode: 0o640,
+    expected: await digestSftpText(newText)
+  })
+  const adapter = createSftpTransactionAdapter({ getSftp: () => sftp })
+  const prepared = await adapter.prepare(operation)
+  operation.plan = prepared.plan
+  operation.artifacts = prepared.artifacts
+  sftp.chown = async () => {
+    throw new Error('Permission denied')
+  }
+
+  await assert.rejects(
+    adapter.beforeExecute(operation, { input: { text: newText } }),
+    /SFTP_EDITOR_STAGE:metadata.*Permission denied/
+  )
+  assert.equal(sftp.text('/srv/app/example.conf'), 'enabled=false\n')
+})
+
 test('SFTP adapter validates every prepared editor save before batch execution', async () => {
   const {
     createSftpTransactionAdapter,
@@ -2480,10 +2563,20 @@ test('SFTP UI routes editor save chmod rename and delete through modern transact
     __dirname,
     '../../src/client/components/sftp/sftp-entry.jsx'
   ), 'utf8')
+  const editorSubmitSource = itemSource.slice(
+    itemSource.indexOf('onSubmitEditFile = async'),
+    itemSource.indexOf('\n  editFile =', itemSource.indexOf('onSubmitEditFile = async'))
+  )
 
   assert.match(itemSource, /changeRemoteFileMode/)
   assert.match(itemSource, /renameRemoteFile/)
   assert.match(itemSource, /saveRemoteEditorFile/)
+  assert.match(editorSubmitSource, /catch \(error\)/)
+  assert.doesNotMatch(editorSubmitSource, /\.catch\(window\.store\.onError\)/)
+  assert.match(
+    editorSubmitSource,
+    /if \(r && !noClose\) \{[\s\S]{0,180}this\.clearRef\(\)/
+  )
   assert.match(itemSource, /Number\.parseInt\(String\(permission\), 8\)/)
   assert.match(
     itemSource,
@@ -2492,6 +2585,11 @@ test('SFTP UI routes editor save chmod rename and delete through modern transact
   assert.doesNotMatch(itemSource, /recordSftpMutationRecovery/)
   assert.match(entrySource, /createTransactionRunner/)
   assert.match(entrySource, /createSftpTransactionAdapter/)
+  assert.match(entrySource, /formatSftpEditorSaveError/)
+  assert.match(
+    entrySource,
+    /saveRemoteEditorFile[\s\S]{0,1400}catch \(error\)[\s\S]{0,200}formatSftpEditorSaveError\(error,[\s\S]{0,140}username/
+  )
   assert.match(entrySource, /buildSideEffectSafetyRequest/)
   assert.match(entrySource, /runSftpSafetyOperation/)
   assert.match(entrySource, /deleteRemoteFilesWithSafety/)
