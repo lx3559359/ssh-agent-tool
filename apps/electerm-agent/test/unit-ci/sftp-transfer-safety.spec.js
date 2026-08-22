@@ -1,6 +1,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const path = require('node:path')
+const fs = require('node:fs')
 const { pathToFileURL } = require('node:url')
 
 const transactionRoot = path.resolve(
@@ -419,6 +420,116 @@ test('protected uploads bind and recheck a full local source descriptor', async 
     }),
     /本地上传源.*变化/
   )
+})
+
+test('protected uploads capture and verify a skip-aware local source plan', async () => {
+  const {
+    captureLocalTransferPlan,
+    verifyLocalTransferPlan
+  } = await import(transferSafetyUrl)
+  const transfer = {
+    id: 'skip-aware-upload',
+    typeFrom: 'local',
+    typeTo: 'remote',
+    fromPath: 'C:/Users/example/Desktop',
+    toPath: '/srv/Desktop',
+    fromFile: { isDirectory: true }
+  }
+  const sourcePlan = {
+    descriptor: {
+      type: 'directory',
+      entries: [{ name: 'ok.txt', entry: transferFileDescriptor('d'.repeat(64), 2) }]
+    },
+    skipped: [{ relativePath: 'locked.dat', code: 'EBUSY', reason: 'locked' }]
+  }
+  let prepareCalls = 0
+  let asserted = false
+  const prepared = await captureLocalTransferPlan({
+    transfer,
+    prepareLocal: async filePath => {
+      prepareCalls += 1
+      assert.equal(filePath, transfer.fromPath)
+      return sourcePlan
+    }
+  })
+
+  assert.deepEqual(prepared, sourcePlan)
+  assert.equal(prepareCalls, 1)
+
+  const verified = await verifyLocalTransferPlan({
+    transfer,
+    sourcePlan,
+    prepareLocal: async (filePath, options) => {
+      prepareCalls += 1
+      assert.equal(filePath, transfer.fromPath)
+      assert.deepEqual(options, {
+        pinnedSkips: sourcePlan.skipped
+      })
+      return structuredClone(sourcePlan)
+    },
+    assertSame: (expected, actual) => {
+      asserted = true
+      assert.deepEqual(expected, sourcePlan)
+      assert.deepEqual(actual, sourcePlan)
+      return 'verified'
+    }
+  })
+
+  assert.equal(verified, 'verified')
+  assert.equal(prepareCalls, 2)
+  assert.equal(asserted, true)
+
+  await assert.rejects(
+    captureLocalTransferPlan({ transfer }),
+    error => {
+      assert.equal(
+        error.message,
+        '受保护上传缺少本地源计划能力，已停止远程写入。'
+      )
+      return true
+    }
+  )
+})
+
+test('skip-aware local source planning bypasses unrelated transfers', async () => {
+  const {
+    captureLocalTransferPlan,
+    verifyLocalTransferPlan
+  } = await import(transferSafetyUrl)
+  let calls = 0
+  const prepareLocal = async () => {
+    calls += 1
+    return { descriptor: null, skipped: [] }
+  }
+
+  assert.equal(await captureLocalTransferPlan({
+    transfer: {
+      typeFrom: 'remote',
+      typeTo: 'local',
+      fromPath: '/srv/app',
+      toPath: 'C:/Temp/app'
+    },
+    prepareLocal
+  }), null)
+
+  assert.equal(await verifyLocalTransferPlan({
+    transfer: {
+      typeFrom: 'remote',
+      typeTo: 'local',
+      fromPath: '/srv/app',
+      toPath: 'C:/Temp/app'
+    },
+    sourcePlan: {
+      descriptor: { type: 'file', size: 1 },
+      skipped: []
+    },
+    prepareLocal,
+    assertSame: () => {
+      throw new Error('should not compare bypassed transfers')
+    }
+  }), true)
+
+  assert.equal(calls, 0)
 })
 
 test('transfer attempt generations reject late callbacks and serialize completion', async () => {
@@ -1841,6 +1952,41 @@ test('SFTP directory zip optimization falls back to native protected transfer', 
   ), 'utf8')
   assert.match(source, /shouldUseLegacyZipOptimization/)
   assert.match(source, /shouldUseLegacyZipOptimization\(\{\s*zip,\s*isFtp:\s*this\.isFtp\s*\}\)/)
+})
+
+test('transfer component integrates skip-aware local upload planning into protected uploads', () => {
+  const source = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/components/file-transfer/transfer.jsx'
+  ), 'utf8')
+  const start = source.slice(
+    source.indexOf('startTransfer = async'),
+    source.indexOf('assertCurrentAttempt =', source.indexOf('startTransfer = async'))
+  )
+
+  assert.match(source, /captureLocalTransferPlan/)
+  assert.match(source, /verifyLocalTransferPlan/)
+  assert.match(source, /filterPlannedDirectoryEntries/)
+  assert.match(source, /sharedTransferBatchResultCollector/)
+  assert.match(source, /window\.fs\.prepareTransferEntry/)
+  assert.match(source, /transfer\.sourcePlan\s*=/)
+  assert.match(source, /transfer\.sourceDescriptor\s*=/)
+  assert.match(source, /this\.localSourcePlan\s*=\s*transfer\.sourcePlan/)
+  assert.match(source, /this\.folderItemResults\s*=\s*createSkippedFolderResults\(/)
+  assert.match(start, /if\s*\(!this\.localSourcePlan\?\.descriptor\)/)
+  assert.match(start, /status:\s*'skipped'/)
+  assert.ok(
+    start.indexOf("status: 'skipped'") < start.indexOf('this.transferSafety.begin()')
+  )
+  assert.match(source, /pinnedSkips:\s*this\.localSourcePlan\.skipped/)
+  assert.match(source, /filterPlannedDirectoryEntries\(list,\s*transfer\.sourceDescriptor\)/)
+  assert.match(source, /sourceDescriptor:\s*file\.sourceDescriptor/)
+  assert.match(source, /sourceDescriptor:\s*folder\.sourceDescriptor/)
+  assert.match(
+    start,
+    /transfer\.typeFrom === typeMap\.local[\s\S]*transfer\.typeTo === typeMap\.remote[\s\S]*!this\.isFtp[\s\S]*transferFolderRecursive/
+  )
+  assert.doesNotMatch(source, /\.folderTransfer\(/)
 })
 
 test('transfer component keeps native queue progress pause resume retry and adds safety hooks', () => {

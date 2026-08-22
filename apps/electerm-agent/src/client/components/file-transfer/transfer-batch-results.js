@@ -44,17 +44,19 @@ function summarizeBatchResults ({ batchId, expected, results }) {
   for (const result of results.values()) {
     if (completedStatuses.has(result.status)) {
       summary.completed += 1
-      continue
-    }
-    if (result.status === 'skipped') {
+    } else if (result.status === 'skipped') {
+      // Root-skipped transfers are terminal but not completed uploads.
       summary.skippedCount += result.skipped.length || 1
-      for (const item of result.skipped) {
-        if (summary.skipped.length >= maxSkippedItems) break
-        summary.skipped.push(item)
-      }
-      continue
+    } else {
+      summary.exceptionCount += 1
     }
-    summary.exceptionCount += 1
+    if (result.skipped.length > 0 && result.status !== 'skipped') {
+      summary.skippedCount += result.skipped.length
+    }
+    for (const item of result.skipped) {
+      if (summary.skipped.length >= maxSkippedItems) break
+      summary.skipped.push(item)
+    }
   }
 
   return summary

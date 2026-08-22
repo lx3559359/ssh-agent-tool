@@ -119,6 +119,28 @@ test('batch collector emits one terminal summary after every item settles', asyn
   assert.equal(collector.size, 0)
 })
 
+test('batch collector keeps skipped child entries on an otherwise successful transfer', async () => {
+  const { createTransferBatchResultCollector } = await import(batchUrl)
+  const collector = createTransferBatchResultCollector()
+
+  const summary = collector.record({
+    batchId: 'mixed-success',
+    transferId: 'directory-transfer',
+    expected: 1,
+    status: 'success',
+    skipped: [{ relativePath: 'locked.dat', code: 'EBUSY', reason: 'locked' }]
+  })
+
+  assert.deepEqual(summary, {
+    batchId: 'mixed-success',
+    expected: 1,
+    completed: 1,
+    skippedCount: 1,
+    exceptionCount: 0,
+    skipped: [{ relativePath: 'locked.dat', code: 'EBUSY', reason: 'locked' }]
+  })
+})
+
 test('batch collector snapshots skipped items when each record is stored', async () => {
   const { createTransferBatchResultCollector } = await import(batchUrl)
   const collector = createTransferBatchResultCollector()
@@ -299,4 +321,19 @@ test('transfer list annotates every queued item with shared batch metadata', asy
   assert.equal(window.store.fileTransfers[0], items[0])
   assert.equal(window.store.fileTransfers[1], items[1])
   delete global.window
+})
+
+test('transfer completion records batch results once and reserves skipped warnings for the final summary', async () => {
+  const source = await fs.readFile(path.resolve(
+    __dirname,
+    '../../src/client/components/file-transfer/transfer.jsx'
+  ), 'utf8')
+
+  assert.match(source, /sharedTransferBatchResultCollector\.record\(\{/)
+  assert.match(source, /batchId:\s*transfer\.transferBatch/)
+  assert.match(source, /transferId:\s*transfer\.id/)
+  assert.match(source, /expected:\s*transfer\.transferBatchSize/)
+  assert.match(source, /status:\s*update\.status\s*\|\|\s*'success'/)
+  assert.match(source, /skipped:\s*update\.skipped\s*\|\|\s*\[\]/)
+  assert.match(source, /message\.warning\(/)
 })

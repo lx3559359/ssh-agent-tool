@@ -1,13 +1,14 @@
 import { Component } from 'react'
+import { message } from 'antd'
 import copy from 'json-deep-copy'
 import { isFunction } from 'lodash-es'
 import generate from '../../common/uid'
 import { typeMap, transferTypeMap, fileOperationsMap, fileActions } from '../../common/constants'
 import format, { computeLeftTime, computePassedTime } from './transfer-speed-format'
 import {
+  getFolderFromFilePath,
   getLocalFileInfo,
-  getRemoteFileInfo,
-  getFolderFromFilePath
+  getRemoteFileInfo
 } from '../sftp/file-read'
 import resolve from '../../common/resolve'
 import { refsTransfers, refsStatic, refs } from '../common/ref'
@@ -16,9 +17,12 @@ import {
   createTransferRetryState,
   shouldRetryTransfer
 } from '../../common/transfer-retry'
-import { collectFolderTransferResults } from './folder-transfer-results.js'
 import {
-  captureLocalTransferSource,
+  collectFolderTransferResults,
+  createSkippedFolderResults
+} from './folder-transfer-results.js'
+import {
+  captureLocalTransferPlan,
   createTransferAttemptGuard,
   createTransferSafetyController,
   getTransferSafetyCompletionFailure,
@@ -27,8 +31,10 @@ import {
   shouldUseLegacyZipOptimization,
   verifyCrossHostSourceContent,
   verifyCrossHostSourcePreflight,
-  verifyLocalTransferSource
+  verifyLocalTransferPlan
 } from './file-transfer-safety.js'
+import { filterPlannedDirectoryEntries } from './transfer-source-plan.js'
+import { sharedTransferBatchResultCollector } from './transfer-batch-results.js'
 import {
   zipCmd,
   unzipCmd,
@@ -67,10 +73,14 @@ export default class TransportAction extends Component {
     this.transferAttempts = createTransferAttemptGuard()
     this.subTransports = new Set()
     this.folderItemResults = []
-    this.localSourceDescriptor = props.transfer?.sourceDescriptor || null
+    this.localSourcePlan = props.transfer?.sourcePlan || null
+    this.localSourceDescriptor = props.transfer?.sourceDescriptor ||
+      this.localSourcePlan?.descriptor ||
+      null
     this.agentRiskTerminalPromise = null
     this.transferTaskAdapter = createTransferTaskAdapter()
     this.transferTaskStarted = false
+    this.batchResultRecorded = false
     this.transferSafety = createTransferSafetyController({
       getTransfer: this.getTransferSafetyInput,
       getCapability: () => refs.get('sftp-' + this.tabId),
@@ -201,27 +211,60 @@ export default class TransportAction extends Component {
     isFtp: this.isFtp
   })
 
+  getLocalSourceSkippedResults = () => {
+    return Array.isArray(this.localSourcePlan?.skipped)
+      ? this.localSourcePlan.skipped
+      : []
+  }
+
+  bindLocalSourcePlan = (transfer, sourcePlan = null) => {
+    transfer.sourcePlan = sourcePlan || null
+    this.localSourcePlan = transfer.sourcePlan
+    transfer.sourceDescriptor = this.localSourcePlan?.descriptor || null
+    this.localSourceDescriptor = transfer.sourceDescriptor
+    this.folderItemResults = createSkippedFolderResults(
+      this.getLocalSourceSkippedResults()
+    )
+    return this.localSourcePlan
+  }
+
   prepareLocalSource = async (transfer = this.props.transfer) => {
     const sourceTransfer = this.getLocalSourceTransfer(transfer)
-    if (this.localSourceDescriptor) {
-      await verifyLocalTransferSource({
+    const sourcePlan = transfer.sourcePlan || this.localSourcePlan
+    if (sourcePlan) {
+      this.bindLocalSourcePlan(transfer, sourcePlan)
+      await verifyLocalTransferPlan({
         transfer: sourceTransfer,
-        sourceDescriptor: this.localSourceDescriptor,
-        describeLocal: window.fs.describeTransferEntry
+        sourcePlan: this.localSourcePlan,
+        prepareLocal: (fromPath, options = {}) => window.fs.prepareTransferEntry(
+          fromPath,
+          {
+            ...options,
+            pinnedSkips: this.localSourcePlan.skipped
+          }
+        )
       })
-      return
+      return this.localSourcePlan
     }
-    this.localSourceDescriptor = await captureLocalTransferSource({
+    const plannedSource = await captureLocalTransferPlan({
       transfer: sourceTransfer,
-      describeLocal: window.fs.describeTransferEntry
+      prepareLocal: window.fs.prepareTransferEntry
     })
+    return this.bindLocalSourcePlan(transfer, plannedSource)
   }
 
   verifyLocalSource = (transfer = this.props.transfer) => {
-    return verifyLocalTransferSource({
+    this.bindLocalSourcePlan(transfer, transfer.sourcePlan || this.localSourcePlan)
+    return verifyLocalTransferPlan({
       transfer: this.getLocalSourceTransfer(transfer),
-      sourceDescriptor: this.localSourceDescriptor,
-      describeLocal: window.fs.describeTransferEntry
+      sourcePlan: this.localSourcePlan,
+      prepareLocal: (fromPath, options = {}) => window.fs.prepareTransferEntry(
+        fromPath,
+        {
+          ...options,
+          pinnedSkips: this.localSourcePlan.skipped
+        }
+      )
     })
   }
 
@@ -306,6 +349,25 @@ export default class TransportAction extends Component {
     window.store.localList(this.tabId)
   }
 
+  recordTransferBatchResult = (transfer, update = {}) => {
+    if (this.batchResultRecorded) return null
+    this.batchResultRecorded = true
+    const summary = sharedTransferBatchResultCollector.record({
+      batchId: transfer.transferBatch,
+      transferId: transfer.id,
+      expected: transfer.transferBatchSize,
+      status: update.status || 'success',
+      skipped: update.skipped || []
+    })
+    if (summary?.skippedCount > 0) {
+      const warningText = summary.exceptionCount > 0
+        ? `上传部分完成：成功 ${summary.completed} 项，跳过 ${summary.skippedCount} 项，失败 ${summary.exceptionCount} 项。`
+        : `上传完成：成功 ${summary.completed} 项，跳过 ${summary.skippedCount} 项。`
+      message.warning(warningText)
+    }
+    return summary
+  }
+
   onEnd = async (update = {}, attemptToken) => {
     const protectedAttempt = attemptToken !== undefined
     if (protectedAttempt && !this.transferAttempts.beginCompletion(attemptToken)) {
@@ -320,8 +382,10 @@ export default class TransportAction extends Component {
       return
     }
     this.finishing = true
+    update.skipped = update.skipped || this.getLocalSourceSkippedResults()
+    const skipSourceVerification = update.skipSourceVerification === true
     let failed = update.status === 'exception' || Boolean(update.error)
-    if (!failed) {
+    if (!failed && !skipSourceVerification) {
       try {
         await this.verifyLocalSource()
         if (this.props.transfer.remote2remoteStep === 1) {
@@ -373,7 +437,9 @@ export default class TransportAction extends Component {
     if (taskFailed) {
       await this.runTransferTask('onFailed', update.error || 'SFTP transfer failed')
     } else {
-      const size = update.size ?? update.transferred ?? this.total
+      const size = update.size ??
+        update.transferred ??
+        (update.status === 'skipped' ? 0 : this.total)
       await this.runTransferTask('onCompleted', {
         transferred: size,
         total: this.total || size,
@@ -391,7 +457,9 @@ export default class TransportAction extends Component {
     const finishTime = Date.now()
     if (!config.disableTransferHistory) {
       const fromFile = transfer.fromFile || this.fromFile
-      const size = update.size ?? update.transferred ?? fromFile.size
+      const size = update.size ??
+        update.transferred ??
+        (update.status === 'skipped' ? 0 : fromFile.size)
       const r = copy(transfer)
       assign(r, {
         ...(this.verifiedCrossHostSource
@@ -420,6 +488,7 @@ export default class TransportAction extends Component {
         r
       )
     }
+    this.recordTransferBatchResult(transfer, update)
     const cbs = [
       this[typeTo + 'List']
     ]
@@ -954,6 +1023,19 @@ export default class TransportAction extends Component {
       }
       await this.beginTransferTask(fromFile)
       await this.prepareLocalSource(transfer)
+      if (
+        transfer.typeFrom === typeMap.local &&
+        transfer.typeTo === typeMap.remote &&
+        !this.isFtp
+      ) {
+        if (!this.localSourcePlan?.descriptor) {
+          return await this.onEnd({
+            status: 'skipped',
+            skipped: this.getLocalSourceSkippedResults(),
+            skipSourceVerification: true
+          }, attemptToken)
+        }
+      }
       if (transfer.remote2remoteStep === 1 && !this.crossHostSourcePin) {
         const sourcePreflight = await verifyCrossHostSourcePreflight({
           transfer: {
@@ -973,7 +1055,13 @@ export default class TransportAction extends Component {
       if (shouldUseLegacyZipOptimization({ zip, isFtp: this.isFtp })) {
         return await this.zipTransferFolder(attemptToken)
       }
-      if (!this.isFtp) {
+      if (
+        transfer.typeFrom === typeMap.local &&
+        transfer.typeTo === typeMap.remote &&
+        !this.isFtp
+      ) {
+        await this.transferFolderRecursive(this.getDefaultTransfer(), true, attemptToken)
+      } else if (!this.isFtp) {
         return await this.transferFile(transfer, undefined, attemptToken)
       } else {
         await this.transferFolderRecursive(this.getDefaultTransfer(), true, attemptToken)
@@ -1172,7 +1260,8 @@ export default class TransportAction extends Component {
           ...transfer,
           fromPath: fromItemPath,
           toPath: toItemPath,
-          fromFile: file
+          fromFile: file,
+          sourceDescriptor: file.sourceDescriptor
         }
 
         return this.transferFileAsSubTransfer(itemTransfer, attemptToken)
@@ -1221,7 +1310,8 @@ export default class TransportAction extends Component {
         const createTransfer = {
           ...transfer,
           toPath: toItemPath,
-          fromFile: folder
+          fromFile: folder,
+          sourceDescriptor: folder.sourceDescriptor
         }
 
         return this.mkdir(createTransfer, attemptToken)
@@ -1245,7 +1335,8 @@ export default class TransportAction extends Component {
         ...transfer,
         fromPath: fromItemPath,
         toPath: toItemPath,
-        fromFile: folder
+        fromFile: folder,
+        sourceDescriptor: folder.sourceDescriptor
       }
 
       // Transfer folder contents (set createFolder = false since we already created it)
@@ -1274,7 +1365,15 @@ export default class TransportAction extends Component {
       }
     }
 
-    const list = await this.list(typeFrom, fromPath, tabId, transfer, attemptToken)
+    let list = await this.list(typeFrom, fromPath, tabId, transfer, attemptToken)
+    if (
+      transfer.typeFrom === typeMap.local &&
+      transfer.typeTo === typeMap.remote &&
+      !this.isFtp &&
+      transfer.sourceDescriptor
+    ) {
+      list = filterPlannedDirectoryEntries(list, transfer.sourceDescriptor)
+    }
     const bigFileSize = 1024 * 1024
     const smallFilesBatch = 30
     const BigFilesBatch = 3

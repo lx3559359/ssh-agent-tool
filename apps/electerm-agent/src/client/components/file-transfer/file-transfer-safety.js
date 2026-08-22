@@ -3,6 +3,7 @@ import { describeSftpTransferEntry } from '../sftp/sftp-transaction-adapter.js'
 import { createTraceContext } from '../../common/quality/trace-context.js'
 import { recordQualityEvent } from '../../common/quality/quality-events.js'
 import { attachTraceToOperation } from '../../common/safety-transactions/transaction-store.js'
+import { assertSameLocalTransferPlan } from './transfer-source-plan.js'
 
 const bypassPolicies = new Set(['skip', 'cancel'])
 const completedTerminalStates = new Set([
@@ -65,6 +66,33 @@ export async function verifyLocalTransferSource ({
     throw new Error('本地上传源在传输期间发生变化，远程目标可执行回滚。')
   }
   return true
+}
+
+export async function captureLocalTransferPlan ({
+  transfer = {},
+  prepareLocal
+} = {}) {
+  if (!needsLocalSourceDescriptor(transfer)) return null
+  if (typeof prepareLocal !== 'function') {
+    throw new Error('受保护上传缺少本地源计划能力，已停止远程写入。')
+  }
+  return prepareLocal(transfer.fromPath)
+}
+
+export async function verifyLocalTransferPlan ({
+  transfer = {},
+  sourcePlan,
+  prepareLocal,
+  assertSame = assertSameLocalTransferPlan
+} = {}) {
+  if (!sourcePlan || !needsLocalSourceDescriptor(transfer)) return true
+  if (typeof prepareLocal !== 'function') {
+    throw new Error('受保护上传缺少本地源计划能力，已停止远程写入。')
+  }
+  const current = await prepareLocal(transfer.fromPath, {
+    pinnedSkips: sourcePlan.skipped || []
+  })
+  return assertSame(sourcePlan, current)
 }
 
 export function createTransferAttemptGuard () {
