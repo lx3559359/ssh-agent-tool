@@ -420,6 +420,7 @@ test('isolated client completes SSH, SFTP, AI, update and rollback quality flows
     await expect(permanentDeleteButton).toHaveClass(/is-danger/)
     await permanentDeleteButton.click()
     await expect.poll(() => pathExists(fastDeletePath), { timeout: 30000 }).toBe(false)
+    await expect(fastDeleteRow).toHaveCount(0, { timeout: 30000 })
 
     const safeDeleteName = 'quality-safe-delete.txt'
     const safeDeletePath = fixture.resolve(`/${safeDeleteName}`)
@@ -433,6 +434,7 @@ test('isolated client completes SSH, SFTP, AI, update and rollback quality flows
     await expect(safeDeleteRow).toBeVisible({ timeout: 20000 })
     await safeDeleteRow.click({ button: 'right' })
     const safeDeleteMenu = page.locator('.ant-dropdown:visible').last()
+    await expect(safeDeleteMenu).toBeVisible()
     await safeDeleteMenu.getByText(/安全删除.*可恢复|Safe Delete.*Recoverable/i).click()
     const safeDeleteConfirm = page.locator('.custom-modal-wrap:visible').last()
     await expect(safeDeleteConfirm).toContainText(/恢复快照已验证|Recovery snapshot/i, {
