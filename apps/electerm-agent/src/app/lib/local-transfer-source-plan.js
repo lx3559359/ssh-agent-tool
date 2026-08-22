@@ -207,7 +207,11 @@ async function scanTransferSourceLstat (context, filePath) {
 }
 
 async function scanTransferSourceReaddir (context, filePath) {
-  return context.io.readdir(filePath)
+  try {
+    return await context.io.readdir(filePath)
+  } catch (error) {
+    return maybeSkipTransferSourceError(context, filePath, error)
+  }
 }
 
 async function scanTransferSourceStream (context, filePath, digest) {

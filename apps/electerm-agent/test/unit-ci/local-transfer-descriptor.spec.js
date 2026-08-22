@@ -101,12 +101,13 @@ test('skip-aware planner omits an EBUSY child while describing readable siblings
   }])
 })
 
-test('skip-aware planner fails closed when enumerating a child directory returns EACCES', async t => {
+test('skip-aware planner omits an unreadable child directory while preserving readable siblings', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'shellpilot-plan-child-readdir-'))
   t.after(() => fs.rm(root, { recursive: true, force: true }))
   const nested = path.join(root, 'nested')
   await fs.mkdir(nested)
   await fs.writeFile(path.join(nested, 'secret.txt'), 'hidden')
+  await fs.writeFile(path.join(root, 'readable.txt'), 'visible')
 
   const io = {
     lstat: (...args) => fs.lstat(...args),
@@ -121,10 +122,16 @@ test('skip-aware planner fails closed when enumerating a child directory returns
     createReadStream: (...args) => fileSystem.createReadStream(...args)
   }
 
-  await assert.rejects(
-    fsExport.prepareTransferEntry(root, { io }),
-    error => error && error.code === 'EACCES'
-  )
+  const plan = await fsExport.prepareTransferEntry(root, { io })
+  assert.equal(plan.descriptor.type, 'directory')
+  assert.deepEqual(plan.descriptor.entries.map(item => item.name), ['readable.txt'])
+  assert.equal(plan.descriptor.entries[0].entry.type, 'file')
+  assert.deepEqual(plan.skipped, [{
+    path: nested,
+    relativePath: 'nested',
+    code: 'EACCES',
+    reason: 'unreadable'
+  }])
 })
 
 test('skip-aware planner returns a null descriptor when the root is locked', async t => {
