@@ -1,0 +1,150 @@
+const test = require('node:test')
+const assert = require('node:assert/strict')
+const fs = require('node:fs/promises')
+const path = require('node:path')
+const { pathToFileURL } = require('node:url')
+
+const sourcePlanUrl = pathToFileURL(path.resolve(
+  __dirname,
+  '../../src/client/components/file-transfer/transfer-source-plan.js'
+)).href
+const batchUrl = pathToFileURL(path.resolve(
+  __dirname,
+  '../../src/client/components/file-transfer/transfer-batch-results.js'
+)).href
+const transferListUrl = pathToFileURL(path.resolve(
+  __dirname,
+  '../../src/client/store/transfer-list.js'
+)).href
+
+test('local upload listing is restricted to the verified descriptor tree', async () => {
+  const { filterPlannedDirectoryEntries } = await import(sourcePlanUrl)
+  const descriptor = {
+    type: 'directory',
+    entries: [{ name: 'allowed.txt', entry: { type: 'file', size: 7 } }]
+  }
+  const result = filterPlannedDirectoryEntries([
+    { name: 'allowed.txt', size: 7 },
+    { name: 'unlocked-later.dat', size: 9 }
+  ], descriptor)
+
+  assert.deepEqual(result, [{
+    name: 'allowed.txt',
+    size: 7,
+    sourceDescriptor: { type: 'file', size: 7 }
+  }])
+})
+
+test('source plan verification binds both descriptors and pinned skips', async () => {
+  const { assertSameLocalTransferPlan } = await import(sourcePlanUrl)
+  const expected = {
+    descriptor: { type: 'file', size: 3, digest: 'abc' },
+    skipped: [{ relativePath: 'locked.dat', code: 'EBUSY', reason: 'locked' }]
+  }
+  assert.equal(assertSameLocalTransferPlan(expected, structuredClone(expected)), true)
+  assert.throws(
+    () => assertSameLocalTransferPlan(expected, { ...expected, skipped: [] }),
+    /发生变化/
+  )
+})
+
+test('batch collector emits one terminal summary after every item settles', async () => {
+  const { createTransferBatchResultCollector } = await import(batchUrl)
+  const collector = createTransferBatchResultCollector()
+
+  assert.equal(collector.record({
+    batchId: 'b1',
+    transferId: 't1',
+    expected: 2,
+    status: 'completed'
+  }), null)
+  assert.equal(collector.record({
+    batchId: 'b1',
+    transferId: 't1',
+    expected: 2,
+    status: 'exception'
+  }), null)
+
+  const summary = collector.record({
+    batchId: 'b1',
+    transferId: 't2',
+    expected: 2,
+    status: 'skipped',
+    skipped: [{ relativePath: 'NTUSER.DAT', code: 'EBUSY', reason: 'locked' }]
+  })
+
+  assert.deepEqual(summary, {
+    batchId: 'b1',
+    expected: 2,
+    completed: 1,
+    skippedCount: 1,
+    exceptionCount: 0,
+    skipped: [{ relativePath: 'NTUSER.DAT', code: 'EBUSY', reason: 'locked' }]
+  })
+  assert.equal(collector.record({
+    batchId: 'b1',
+    transferId: 't3',
+    expected: 1,
+    status: 'completed'
+  }).completed, 1)
+  assert.equal(collector.size, 0)
+})
+
+test('batch collector keeps at most 1000 flattened skipped entries', async () => {
+  const { createTransferBatchResultCollector } = await import(batchUrl)
+  const collector = createTransferBatchResultCollector()
+  const skipped = Array.from({ length: 1005 }, (_, index) => ({
+    relativePath: `locked-${index}.dat`,
+    code: 'EBUSY',
+    reason: 'locked'
+  }))
+
+  const summary = collector.record({
+    batchId: 'b2',
+    transferId: 't1',
+    expected: 1,
+    status: 'skipped',
+    skipped
+  })
+
+  assert.equal(summary.skippedCount, 1005)
+  assert.equal(summary.skipped.length, 1000)
+  assert.equal(summary.skipped[0].relativePath, 'locked-0.dat')
+  assert.equal(summary.skipped.at(-1).relativePath, 'locked-999.dat')
+})
+
+test('transfer list annotates every queued item with shared batch metadata', async () => {
+  const source = await fs.readFile(path.resolve(
+    __dirname,
+    '../../src/client/store/transfer-list.js'
+  ), 'utf8')
+  const normalized = source.replace(
+    "import uid from '../common/uid'",
+    `import uid from ${JSON.stringify(pathToFileURL(path.resolve(
+      __dirname,
+      '../../src/client/common/uid.js'
+    )).href)}`
+  )
+  const { default: attachTransferList } = await import(
+    `data:text/javascript,${encodeURIComponent(normalized)}`
+  )
+  const Store = function () {}
+  global.window = {
+    store: {
+      fileTransfers: []
+    }
+  }
+  attachTransferList(Store)
+
+  const store = new Store()
+  const items = [{ id: 'a' }, { id: 'b' }]
+  store.addTransferList(items)
+
+  assert.equal(window.store.fileTransfers.length, 2)
+  assert.equal(window.store.fileTransfers[0].transferBatch, window.store.fileTransfers[1].transferBatch)
+  assert.equal(window.store.fileTransfers[0].transferBatchSize, 2)
+  assert.equal(window.store.fileTransfers[1].transferBatchSize, 2)
+  assert.equal(window.store.fileTransfers[0], items[0])
+  assert.equal(window.store.fileTransfers[1], items[1])
+  delete global.window
+})
