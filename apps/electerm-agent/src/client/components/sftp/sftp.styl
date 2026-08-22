@@ -3,14 +3,14 @@
   flex-direction row
   &:has(> .sftp-transfer-progress-dock)
     .sftp-section
-      height calc(100% - 54px) !important
+      height calc(100% - 64px) !important
 .sftp-transfer-progress-dock
   position absolute
   z-index 20
   left 10px
   right 10px
   bottom 8px
-  min-height 42px
+  min-height 50px
   color var(--sp-text)
   background-color var(--sp-surface-elevated)
   background-image var(--sp-overlay-background)
@@ -23,8 +23,20 @@
   grid-template-columns auto minmax(80px, 1fr) auto auto
   align-items center
   gap 10px
-  min-height 34px
-  padding 4px 8px
+  min-height 40px
+  padding 5px 10px
+.sftp-transfer-dock-leading
+  display flex
+  align-items center
+  gap 7px
+  min-width 0
+.sftp-transfer-dock-direction
+  padding 2px 7px
+  color var(--sp-primary)
+  background var(--sp-primary-soft)
+  border-radius var(--sp-radius-control)
+  font-weight 650
+  white-space nowrap
 .sftp-transfer-dock-count
   font-weight 650
   white-space nowrap
@@ -38,6 +50,9 @@
   color var(--sp-text-muted)
   font-variant-numeric tabular-nums
   white-space nowrap
+.sftp-transfer-dock-percent
+  color var(--sp-primary)
+  font-weight 650
 .sftp-transfer-dock-toggle
   padding 3px 8px
   color var(--sp-text)
@@ -52,7 +67,7 @@
     outline-offset 2px
 .sftp-transfer-dock-progress
   position relative
-  height 5px
+  height 8px
   background var(--sp-surface-soft)
   overflow hidden
   > span
@@ -65,6 +80,11 @@
   > span
     width 35%
     animation sftp-transfer-progress-indeterminate 1.1s ease-in-out infinite
+.sftp-transfer-progress-dock-running,
+.sftp-transfer-progress-dock-resuming,
+.sftp-transfer-progress-dock-pausing,
+.sftp-transfer-progress-dock-queued
+  border-color var(--sp-primary)
 .sftp-transfer-progress-dock-paused,
 .sftp-transfer-progress-dock-interrupted
   .sftp-transfer-dock-progress > span
@@ -94,8 +114,8 @@
 
 @media (max-width: 760px)
   .sftp-transfer-dock-summary
-    grid-template-columns auto minmax(60px, 1fr) auto
-  .sftp-transfer-dock-metrics
+    grid-template-columns auto minmax(60px, 1fr) auto auto
+  .sftp-transfer-dock-metrics-detail
     display none
 .sftp-section
   flex 1

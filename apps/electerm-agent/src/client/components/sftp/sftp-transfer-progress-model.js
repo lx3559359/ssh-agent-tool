@@ -89,6 +89,16 @@ function buildTerminalStatusById (history, tabId) {
   return result
 }
 
+export function getSftpTransferDirection (current = {}) {
+  if (current.typeFrom === 'local' && current.typeTo === 'remote') {
+    return 'upload'
+  }
+  if (current.typeFrom === 'remote' && current.typeTo === 'local') {
+    return 'download'
+  }
+  return 'transfer'
+}
+
 export function buildSftpTransferProgress (transfers, tabId, history) {
   const items = (Array.isArray(transfers) ? transfers : [])
     .filter(transfer => String(transfer?.tabId || '') === String(tabId || ''))
@@ -101,7 +111,10 @@ export function buildSftpTransferProgress (transfers, tabId, history) {
   const total = items.reduce((sum, item) => sum + item.total, 0)
   const determinate = items.length > 0 && items.every(item => item.total > 0)
   const percent = determinate
-    ? Math.max(0, Math.min(100, Math.floor(transferred / total * 100)))
+    ? Math.min(100, Math.max(
+      transferred > 0 ? 1 : 0,
+      Math.floor(transferred / total * 100)
+    ))
     : null
   const speedBytesPerSecond = items.reduce(
     (sum, item) => sum + item.speedBytesPerSecond,
