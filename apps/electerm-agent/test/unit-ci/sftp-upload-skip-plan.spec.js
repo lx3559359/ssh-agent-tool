@@ -127,7 +127,14 @@ test('batch collector rejects inconsistent or invalid expected counts', async ()
   }).completed, 3)
   assert.equal(collector.size, 0)
 
-  for (const expected of [0, -1, 1.5, '2', null]) {
+  for (const expected of [
+    0,
+    -1,
+    1.5,
+    Number.MAX_SAFE_INTEGER + 1,
+    '2',
+    null
+  ]) {
     assert.throws(
       () => collector.record({
         batchId: `invalid-${String(expected)}`,
@@ -138,6 +145,36 @@ test('batch collector rejects inconsistent or invalid expected counts', async ()
       /批次数量/
     )
   }
+  assert.equal(collector.size, 0)
+})
+
+test('batch collector bounds completed-batch memory without leaking active state', async () => {
+  const { createTransferBatchResultCollector } = await import(batchUrl)
+  const collector = createTransferBatchResultCollector()
+
+  for (let index = 0; index <= 1000; index += 1) {
+    assert.equal(collector.record({
+      batchId: `bounded-${index}`,
+      transferId: 't1',
+      expected: 1,
+      status: 'completed'
+    }).completed, 1)
+    assert.equal(collector.size, 0)
+  }
+
+  assert.equal(collector.record({
+    batchId: 'bounded-0',
+    transferId: 't1',
+    expected: 2,
+    status: 'completed'
+  }), null)
+  assert.equal(collector.size, 1)
+  assert.equal(collector.record({
+    batchId: 'bounded-0',
+    transferId: 't2',
+    expected: 2,
+    status: 'completed'
+  }).completed, 2)
   assert.equal(collector.size, 0)
 })
 
