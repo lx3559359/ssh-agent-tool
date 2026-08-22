@@ -163,7 +163,7 @@ function validatePinnedTransferRelativePath (rootPath, relativePath) {
   const normalizedSeparators = rawPath.replace(/\\/g, '/')
   if (
     !normalizedSeparators ||
-    /^[a-zA-Z]:/.test(rawPath) ||
+    (process.platform === 'win32' && /^[a-zA-Z]:/.test(rawPath)) ||
     path.isAbsolute(rawPath) ||
     path.posix.isAbsolute(normalizedSeparators) ||
     path.win32.isAbsolute(rawPath)

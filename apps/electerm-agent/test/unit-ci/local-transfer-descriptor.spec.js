@@ -11,27 +11,30 @@ process.env.NODE_ENV = 'development'
 const { fsExport } = require('../../src/app/lib/fs')
 
 function loadLocalTransferSourcePlanForTest (overrides = {}) {
+  const processOverride = overrides.process || process
+  const requireOverrides = { ...overrides }
+  delete requireOverrides.process
   const modulePath = path.resolve(
     __dirname,
     '../../src/app/lib/local-transfer-source-plan.js'
   )
   const source = fileSystem.readFileSync(modulePath, 'utf8') + `
-module.exports.__test = { transferRootRelativePath }
+module.exports.__test = { transferRootRelativePath, validatePinnedTransferRelativePath }
 `
   const module = { exports: {} }
   vm.runInNewContext(source, {
     module,
     exports: module.exports,
     require: (specifier) => {
-      if (Object.prototype.hasOwnProperty.call(overrides, specifier)) {
-        return overrides[specifier]
+      if (Object.prototype.hasOwnProperty.call(requireOverrides, specifier)) {
+        return requireOverrides[specifier]
       }
       return require(specifier)
     },
     __dirname: path.dirname(modulePath),
     __filename: modulePath,
     Buffer,
-    process,
+    process: processOverride,
     console
   }, { filename: modulePath })
   return module.exports.__test
@@ -368,9 +371,6 @@ test('skip-aware planner rejects pinned skips with invalid relative paths', asyn
     '.',
     './locked.txt',
     '../locked.txt',
-    'C:locked.txt',
-    'C:.\\locked.txt',
-    'C:folder/locked.txt',
     'nested//locked.txt',
     'nested/../locked.txt',
     path.resolve(root, 'locked.txt')
@@ -389,6 +389,32 @@ test('skip-aware planner rejects pinned skips with invalid relative paths', asyn
       `expected ${JSON.stringify(relativePath)} to be rejected`
     )
   }
+})
+
+test('pinned skip validation rejects drive-relative Windows paths without rejecting POSIX names', () => {
+  const windowsPlan = loadLocalTransferSourcePlanForTest({
+    path: require('node:path').win32,
+    process: { ...process, platform: 'win32' }
+  })
+  for (const relativePath of [
+    'C:locked.txt',
+    'C:.\\locked.txt',
+    'C:folder/locked.txt'
+  ]) {
+    assert.equal(
+      windowsPlan.validatePinnedTransferRelativePath('C:\\root', relativePath),
+      null,
+      `expected ${JSON.stringify(relativePath)} to be rejected on Windows`
+    )
+  }
+
+  const posixPlan = loadLocalTransferSourcePlanForTest({
+    path: require('node:path').posix,
+    process: { ...process, platform: 'linux' }
+  })
+  const posixName = posixPlan.validatePinnedTransferRelativePath('/root', 'C:locked.txt')
+  assert.equal(posixName.absolutePath, '/root/C:locked.txt')
+  assert.equal(posixName.relativePath, 'C:locked.txt')
 })
 
 test('skip-aware planner counts pinned children against the node budget', async t => {
