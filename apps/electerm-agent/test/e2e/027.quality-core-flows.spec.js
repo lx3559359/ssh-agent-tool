@@ -421,6 +421,7 @@ test('isolated client completes SSH, SFTP, AI, update and rollback quality flows
     await permanentDeleteButton.click()
     await expect.poll(() => pathExists(fastDeletePath), { timeout: 30000 }).toBe(false)
     await expect(fastDeleteRow).toHaveCount(0, { timeout: 30000 })
+    await expect(page.locator('.ant-dropdown:visible')).toHaveCount(0, { timeout: 5000 })
 
     const safeDeleteName = 'quality-safe-delete.txt'
     const safeDeletePath = fixture.resolve(`/${safeDeleteName}`)
