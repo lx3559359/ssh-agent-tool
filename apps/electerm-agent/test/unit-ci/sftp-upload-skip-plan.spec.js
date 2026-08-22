@@ -80,6 +80,24 @@ test('runtime-bound local source plans stay non-enumerable while direct access s
   })
 })
 
+test('runtime transfer restores a verified descriptor lost by observable copying', async () => {
+  const { withRuntimeLocalTransferDescriptor } = await import(sourcePlanUrl)
+  const descriptor = {
+    type: 'directory',
+    entries: [{ name: 'normal.txt', entry: { type: 'file', size: 4 } }]
+  }
+  const copiedTransfer = { id: 'folder-upload', fromPath: 'C:\\upload' }
+
+  const restored = withRuntimeLocalTransferDescriptor(copiedTransfer, descriptor)
+
+  assert.notEqual(restored, copiedTransfer)
+  assert.equal(restored.sourceDescriptor, descriptor)
+  assert.equal(
+    withRuntimeLocalTransferDescriptor(restored, descriptor),
+    restored
+  )
+})
+
 test('strict MCP descriptors resolve into an initial plan without changing enumerable descriptor compatibility', async () => {
   const {
     bindRuntimeLocalTransferPlan,

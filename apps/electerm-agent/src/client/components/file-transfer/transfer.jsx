@@ -36,7 +36,8 @@ import {
 import {
   bindRuntimeLocalTransferPlan,
   filterPlannedDirectoryEntries,
-  resolveLocalTransferSourcePlan
+  resolveLocalTransferSourcePlan,
+  withRuntimeLocalTransferDescriptor
 } from './transfer-source-plan.js'
 import {
   canRecordTransferBatchResult,
@@ -1269,7 +1270,10 @@ export default class TransportAction extends Component {
   }
 
   getDefaultTransfer = () => {
-    const transfer = this.props.transfer
+    const transfer = withRuntimeLocalTransferDescriptor(
+      this.props.transfer,
+      this.localSourceDescriptor
+    )
     if (this.newPath) {
       const modifiedTransfer = {
         ...transfer,

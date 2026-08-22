@@ -54,6 +54,14 @@ export function bindRuntimeLocalTransferPlan (transfer = {}, sourcePlan = null) 
   return boundSourcePlan
 }
 
+export function withRuntimeLocalTransferDescriptor (transfer = {}, descriptor) {
+  if (!descriptor || transfer.sourceDescriptor) return transfer
+  return {
+    ...transfer,
+    sourceDescriptor: descriptor
+  }
+}
+
 export function assertSameLocalTransferPlan (expected, actual) {
   if (stablePlanValue(expected) !== stablePlanValue(actual)) {
     throw new Error('本地上传源在传输期间发生变化，远程目标可执行回滚。')
