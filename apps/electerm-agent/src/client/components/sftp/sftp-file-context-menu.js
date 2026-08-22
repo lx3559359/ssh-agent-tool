@@ -131,6 +131,18 @@ export function buildSftpFileContextItems (options = {}) {
       text: deleteText,
       requireConfirm: true
     })
+    if (isRemote) {
+      result.push({
+        func: 'quickDelete',
+        icon: 'DeleteOutlined',
+        text: format(
+          translate,
+          selected ? 'shellpilotSftpFastDeleteSelected' : 'shellpilotSftpFastDeletePermanent',
+          { count: selectedCount }
+        ),
+        requireConfirm: true
+      })
+    }
     result.push({
       func: 'onCopy',
       icon: 'CopyOutlined',

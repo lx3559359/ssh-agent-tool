@@ -19,6 +19,8 @@ const statusPriority = {
   failed: 6,
   exception: 6
 }
+const successfulTerminalStatuses = new Set(['success', 'completed', 'skipped'])
+const failedTerminalStatuses = new Set(['failed', 'exception'])
 
 function finiteNumber (value) {
   const number = Number(value)
@@ -89,6 +91,16 @@ function buildTerminalStatusById (history, tabId) {
   return result
 }
 
+export function getSftpTransferDirection (current = {}) {
+  if (current.typeFrom === 'local' && current.typeTo === 'remote') {
+    return 'upload'
+  }
+  if (current.typeFrom === 'remote' && current.typeTo === 'local') {
+    return 'download'
+  }
+  return 'transfer'
+}
+
 export function buildSftpTransferProgress (transfers, tabId, history) {
   const items = (Array.isArray(transfers) ? transfers : [])
     .filter(transfer => String(transfer?.tabId || '') === String(tabId || ''))
@@ -101,7 +113,10 @@ export function buildSftpTransferProgress (transfers, tabId, history) {
   const total = items.reduce((sum, item) => sum + item.total, 0)
   const determinate = items.length > 0 && items.every(item => item.total > 0)
   const percent = determinate
-    ? Math.max(0, Math.min(100, Math.floor(transferred / total * 100)))
+    ? Math.min(100, Math.max(
+      transferred > 0 ? 1 : 0,
+      Math.floor(transferred / total * 100)
+    ))
     : null
   const speedBytesPerSecond = items.reduce(
     (sum, item) => sum + item.speedBytesPerSecond,
@@ -180,8 +195,9 @@ export function createSftpProgressPublishGate ({
           .map(item => summary.terminalStatusById?.[item.id])
           .filter(Boolean)
         const completed = statuses.length === previous.items.length &&
-          statuses.every(status => ['success', 'completed'].includes(status))
-        const failed = statuses.some(status => ['failed', 'exception'].includes(status))
+          statuses.every(status => successfulTerminalStatuses.has(status))
+        const failed = statuses.some(status => failedTerminalStatuses.has(status))
+        const hasSkipped = statuses.some(status => status === 'skipped')
         if (completed || failed) {
           cancelPending()
           latest = {
@@ -189,7 +205,7 @@ export function createSftpProgressPublishGate ({
             status: completed ? 'completed' : 'failed',
             statusKey: `${completed ? 'completed' : 'failed'}:${previous.statusKey}`,
             speedBytesPerSecond: 0,
-            ...(completed && previous.determinate
+            ...(completed && previous.determinate && !hasSkipped
               ? {
                   transferred: previous.total,
                   percent: 100

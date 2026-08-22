@@ -110,10 +110,11 @@ function createClock () {
   return () => new Date(Date.UTC(2026, 6, 13, 10, 0, tick++))
 }
 
-async function waitFor (predicate) {
-  for (let attempt = 0; attempt < 1000; attempt += 1) {
+async function waitFor (predicate, timeoutMs = 2000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
     if (predicate()) return
-    await new Promise(resolve => setImmediate(resolve))
+    await new Promise(resolve => setTimeout(resolve, 1))
   }
   throw new Error('timed out waiting for test condition')
 }

@@ -1,8 +1,10 @@
 import { Button, Progress, Tag } from 'antd'
 import { StopOutlined } from '@ant-design/icons'
+import { formatShellPilotTranslation } from '../../../common/shellpilot-i18n-overrides.js'
 import VirtualLog from './virtual-log'
 
 const e = window.translate
+const tf = (key, replacements) => formatShellPilotTranslation(e, key, replacements)
 const statusLabels = {
   created: '已创建',
   discovering: '正在识别环境',
@@ -12,6 +14,7 @@ const statusLabels = {
   completed: '已完成',
   cancelling: '正在取消',
   cancelled: '已取消',
+  'cancellation-unknown': '取消结果未知',
   'timed-out': '已超时',
   failed: '执行失败',
   disconnected: '连接已断开',
@@ -51,6 +54,21 @@ export default function TaskPanel ({ task, tool, onCancel, onAnalyze }) {
         <div>
           <strong id='operations-task-panel-title'>{tool?.title || task.toolId}</strong>
           <span>{task.endpointKey}</span>
+          <div className='operations-task-identities'>
+            <span>
+              {tf('shellpilotOperationsLoginUser', {
+                username: task.endpoint?.connectionUsername ||
+                  task.endpoint?.username ||
+                  e('shellpilotOperationsEffectiveIdentityUnknown')
+              })}
+            </span>
+            <span>
+              {tf('shellpilotOperationsCurrentShell', {
+                username: task.runtimeIdentity?.effectiveUsername ||
+                  e('shellpilotOperationsEffectiveIdentityUnknown')
+              })}
+            </span>
+          </div>
         </div>
         <Tag color={task.status === 'completed' ? 'success' : running ? 'processing' : 'error'}>
           {statusLabels[task.status] || task.status}
@@ -71,6 +89,13 @@ export default function TaskPanel ({ task, tool, onCancel, onAnalyze }) {
           )
         })}
       </div>
+      {task.status === 'cancellation-unknown'
+        ? (
+          <div className='operations-task-recovery-required'>
+            {e('shellpilotOperationsCancellationUnknown')}
+          </div>
+          )
+        : null}
       {task.error ? <div className='operations-task-error'>{task.error}</div> : null}
       <VirtualLog text={taskOutput(task)} />
       <footer>

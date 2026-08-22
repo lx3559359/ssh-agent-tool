@@ -76,6 +76,7 @@ function createDirectAttachHarness () {
   const safetyCalls = []
   const parent = {
     agentTakeoverActive: true,
+    notifyOnData: () => {},
     requestTerminalSafetyConfirmation: command => {
       safetyCalls.push({ type: 'confirmation', command })
     },
@@ -90,9 +91,115 @@ function createDirectAttachHarness () {
   return importAttachAddon().then(AttachAddon => {
     const addon = new AttachAddon(term, {}, false)
     addon._sendData = data => sent.push(data)
-    return { addon, safetyCalls, sent }
+    return { addon, safetyCalls, sent, parent, term }
   })
 }
+
+test('AttachAddon publishes remote output and blocks managed terminal input', async () => {
+  const { addon, sent, parent, term } = await createDirectAttachHarness()
+  const writes = []
+  const output = []
+  term.write = value => writes.push(value)
+  parent.handleManagedPtyInput = data => ({
+    handled: true,
+    send: data === '\x03'
+  })
+  const subscription = addon.onRemoteOutput(chunk => output.push(chunk))
+
+  addon.writeToTerminal('root output\r\n')
+  addon.sendToServer('x')
+  addon.sendToServer('\x03')
+  subscription.dispose()
+  addon.writeToTerminal('after dispose')
+
+  assert.deepEqual(output, ['root output\r\n'])
+  assert.deepEqual(writes, ['root output\r\n', 'after dispose'])
+  assert.deepEqual(sent, ['\x03'])
+})
+
+test('AttachAddon streams split UTF-8 bytes once to managed output listeners', async () => {
+  const { addon, term } = await createDirectAttachHarness()
+  const writes = []
+  const output = []
+  term.write = value => writes.push(value)
+  term.parent.notifyOnData = () => {}
+  addon.onRemoteOutput(chunk => output.push(chunk))
+  const bytes = new TextEncoder().encode('A中文B')
+
+  addon.onRead({ target: { result: bytes.slice(0, 2).buffer } })
+  addon.onRead({ target: { result: bytes.slice(2, 5).buffer } })
+  addon.onRead({ target: { result: bytes.slice(5).buffer } })
+
+  assert.equal(output.join(''), 'A中文B')
+  assert.equal(output.join('').includes('�'), false)
+  assert.equal(writes.join('').includes('A'), true)
+})
+
+test('AttachAddon exposes controller-only managed submit and interrupt methods', async () => {
+  const { addon, sent } = await createDirectAttachHarness()
+
+  assert.equal(addon.submitManagedPtyCommand('printf root'), true)
+  assert.equal(addon.submitManagedPtyCommand('  '), false)
+  assert.equal(addon.interruptManagedPtyCommand(), true)
+  assert.deepEqual(sent, ['printf root\r', '\x03'])
+})
+
+test('AttachAddon exposes password state without publishing suppressed integration output', async () => {
+  const { addon, term } = await createDirectAttachHarness()
+  const output = []
+  term.write = () => {}
+  addon.onRemoteOutput(chunk => output.push(chunk))
+  addon._passwordPromptDetected = true
+  addon.startOutputSuppression(1000)
+
+  addon.writeToTerminal('hidden integration command')
+
+  assert.equal(addon.isPasswordPromptDetected(), true)
+  assert.deepEqual(output, [])
+  await addon.stopOutputSuppression(true)
+})
+
+test('current child shell integration clears inherited stale state and reuses nonce', async () => {
+  const {
+    getCurrentShellIntegrationCommand
+  } = await importShellIntegration()
+  const command = getCurrentShellIntegrationCommand(testTrackerNonce)
+
+  assert.match(command, /unset ELECTERM_SHELL_INTEGRATION/)
+  assert.match(command, /BASH_VERSION/)
+  assert.match(command, /ZSH_VERSION/)
+  assert.equal(command.split(testTrackerNonce).length > 2, true)
+  assert.equal(command.endsWith('\r'), true)
+  assert.doesNotMatch(command, /detectRemoteShell|runCmd/)
+})
+
+test('shell transition detection is conservative about interactive child shells', async () => {
+  const { isInteractiveShellTransitionCommand } =
+    await importShellIntegration()
+  const accepted = [
+    'su root',
+    'su - root',
+    'sudo -i',
+    'sudo -u root -s',
+    'bash',
+    '/bin/zsh -l'
+  ]
+  const rejected = [
+    'sleep 60',
+    'sudo tcpdump -i eth0',
+    'su root -c id',
+    'bash -c id',
+    'sudo -i whoami',
+    'su root; id'
+  ]
+
+  for (const command of accepted) {
+    assert.equal(isInteractiveShellTransitionCommand(command), true, command)
+  }
+  for (const command of rejected) {
+    assert.equal(isInteractiveShellTransitionCommand(command), false, command)
+  }
+})
 
 test('shell integration detection forwards authenticated OSC data after hidden injection echo', async () => {
   const writes = []
@@ -1195,6 +1302,34 @@ test('terminal exposes the unified command safety entrypoint without replacing m
   assert.match(source, /commandSafetyEntrypoint\.handleCommandFinished/)
   assert.match(source, /commandSafetyEntrypoint\.inputChanged/)
   assert.doesNotMatch(source, /beforeTerminalEnter\s*=/)
+})
+
+test('terminal wires managed PTY tasks through authenticated tracker lifecycle', () => {
+  const source = readClientFile('components/terminal/terminal.jsx')
+
+  assert.match(source, /createManagedPtyTaskController/)
+  assert.match(source, /createPtyTaskToken/)
+  assert.match(source, /ensureReady:\s*this\.ensureOperationsPtyTrackerReady/)
+  assert.match(source, /subscribeOutput:\s*listener\s*=>\s*this\.attachAddon\.onRemoteOutput\(listener\)/)
+  assert.match(source, /cmdAddon\.onPromptStarted\(this\.handleTerminalPromptStarted\)/)
+  assert.match(source, /operationsPtyTaskController\.handleCommandFinished\(event\)/)
+  assert.match(source, /operationsPtyTaskController\.handlePromptStarted\(\)/)
+  assert.match(source, /acquireOperationsPtyTask\s*=/)
+  assert.match(source, /handleManagedPtyInput\s*=/)
+  assert.match(source, /operationsPtyTaskController\.isBusy\(\)/)
+})
+
+test('terminal invalidates managed PTY leases and can rearm the current child shell only', () => {
+  const source = readClientFile('components/terminal/terminal.jsx')
+
+  assert.match(source, /isInteractiveShellTransitionCommand/)
+  assert.match(source, /getCurrentShellIntegrationCommand/)
+  assert.match(source, /forceCurrentShell/)
+  assert.match(source, /shellTransitionCandidate/)
+  assert.match(source, /outputObservedAt/)
+  assert.match(source, /outputObservedSequence/)
+  assert.match(source, /operationsPtyTaskController\.invalidate\(/)
+  assert.match(source, /attachAddon\?\.isPasswordPromptDetected\?\.\(\)/)
 })
 
 test('terminal command tracking no longer routes through the manual safety controller', () => {

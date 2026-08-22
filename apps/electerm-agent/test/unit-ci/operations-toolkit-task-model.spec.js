@@ -22,6 +22,110 @@ test('operations task cannot leave a final state', async () => {
   assert.equal(completed.completedAt > 0, true)
 })
 
+test('runtime identity is normalized separately from the SSH login endpoint', async () => {
+  const {
+    normalizeOperationsRuntimeIdentity
+  } = await importModule(
+    'src/client/components/operations-toolkit/runtime/task-model.js'
+  )
+
+  assert.deepEqual(normalizeOperationsRuntimeIdentity({
+    uid: 0,
+    username: 'root'
+  }), {
+    channel: 'pty',
+    effectiveUid: '0',
+    effectiveUsername: 'root'
+  })
+  for (const identity of [
+    {},
+    { uid: 'root', username: 'root' },
+    { uid: '0', username: '' },
+    { uid: '-1', username: 'root' },
+    { uid: '0', username: 'x'.repeat(257) }
+  ]) {
+    assert.throws(
+      () => normalizeOperationsRuntimeIdentity(identity),
+      /身份无效/
+    )
+  }
+})
+
+test('cancellation unknown is a final state requiring terminal recovery', async () => {
+  const {
+    createOperationsTask,
+    operationsTaskStatuses,
+    transitionOperationsTask
+  } = await importModule(
+    'src/client/components/operations-toolkit/runtime/task-model.js'
+  )
+  const task = createOperationsTask({
+    id: 'ops-unknown',
+    toolId: 'system.overview',
+    endpointKey: 'hik@example.com:22'
+  })
+  const unknown = transitionOperationsTask(
+    task,
+    operationsTaskStatuses.cancellationUnknown,
+    { terminalRecoveryRequired: true }
+  )
+
+  assert.equal(unknown.status, 'cancellation-unknown')
+  assert.equal(unknown.terminalRecoveryRequired, true)
+  assert.throws(
+    () => transitionOperationsTask(unknown, operationsTaskStatuses.cancelled),
+    /终态/
+  )
+})
+
+test('task history preserves runtime identity and accepts legacy records without it', async () => {
+  const { createOperationsTaskRecordStore } = await importModule(
+    'src/client/components/operations-toolkit/runtime/task-record-store.js'
+  )
+  const legacy = {
+    id: 'legacy-task',
+    status: 'completed',
+    endpoint: { username: 'hik' },
+    steps: []
+  }
+  let persisted = [legacy]
+  const records = createOperationsTaskRecordStore({
+    storage: {
+      read: () => persisted,
+      write: value => { persisted = value }
+    }
+  })
+
+  records.save({
+    id: 'root-task',
+    status: 'completed',
+    endpoint: {
+      username: 'hik',
+      connectionUsername: 'hik'
+    },
+    runtimeIdentity: {
+      channel: 'pty',
+      effectiveUid: '0',
+      effectiveUsername: 'root'
+    },
+    steps: []
+  })
+
+  assert.deepEqual(records.get('legacy-task'), legacy)
+  assert.equal(records.get('legacy-task').runtimeIdentity, undefined)
+  assert.equal(records.get('root-task').endpoint.username, 'hik')
+  assert.equal(records.get('root-task').endpoint.connectionUsername, 'hik')
+  assert.deepEqual(records.get('root-task').runtimeIdentity, {
+    channel: 'pty',
+    effectiveUid: '0',
+    effectiveUsername: 'root'
+  })
+  assert.deepEqual(
+    persisted.map(record => record.id),
+    ['root-task', 'legacy-task']
+  )
+})
+
 test('output buffer keeps 5000 lines and marks truncation', async () => {
   const { createOutputBuffer } = await importModule(
     'src/client/components/operations-toolkit/runtime/output-buffer.js'

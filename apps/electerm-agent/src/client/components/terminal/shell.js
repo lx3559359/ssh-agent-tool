@@ -23,6 +23,51 @@ function requireSessionNonce (nonce) {
   return value
 }
 
+function quoteShellValue (value) {
+  return `'${String(value).replace(/'/g, "'\\''")}'`
+}
+
+function commandName (value) {
+  return String(value || '').replaceAll('\\', '/').split('/').at(-1)
+}
+
+export function isInteractiveShellTransitionCommand (value) {
+  const command = String(value || '').trim()
+  if (!command || /[;&|<>\r\n]/.test(command)) return false
+  const tokens = command.split(/\s+/)
+  const name = commandName(tokens.shift())
+  if (name === 'bash' || name === 'zsh') {
+    return !tokens.some(token => token === '-c' ||
+      token === '--command' || token.startsWith('--command=')) &&
+      tokens.every(token => token.startsWith('-'))
+  }
+  if (name === 'su') {
+    if (tokens.some(token => token === '-c' || token === '--command' ||
+      token.startsWith('--command='))) return false
+    return tokens.filter(token => !token.startsWith('-')).length <= 1
+  }
+  if (name !== 'sudo') return false
+
+  let shellMode = false
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index]
+    if (['-i', '--login', '-s', '--shell'].includes(token)) {
+      shellMode = true
+      continue
+    }
+    if (['-u', '--user', '-g', '--group'].includes(token)) {
+      index += 1
+      if (index >= tokens.length) return false
+      continue
+    }
+    if (token.startsWith('--user=') || token.startsWith('--group=') ||
+      token.startsWith('-')) continue
+    const nested = tokens.slice(index).join(' ')
+    return shellMode ? false : isInteractiveShellTransitionCommand(nested)
+  }
+  return shellMode
+}
+
 /**
  * Get inline shell integration command for bash (one-liner format)
  * Properly formatted for semicolon joining
@@ -165,6 +210,25 @@ export function wrapSilent (cmd, shellType) {
 export function getShellIntegrationCommand (shellType = 'bash', sessionNonce) {
   const cmd = getInlineShellIntegration(shellType, sessionNonce)
   return wrapSilent(cmd, shellType)
+}
+
+export function getCurrentShellIntegrationCommand (sessionNonce) {
+  const nonce = requireSessionNonce(sessionNonce)
+  const bashIntegration = quoteShellValue(
+    getInlineShellIntegration('bash', nonce)
+  )
+  const zshIntegration = quoteShellValue(
+    getInlineShellIntegration('zsh', nonce)
+  )
+  return [
+    ' unset ELECTERM_SHELL_INTEGRATION;',
+    'if [ -n "${BASH_VERSION:-}" ]; then',
+    `eval ${bashIntegration};`,
+    'elif [ -n "${ZSH_VERSION:-}" ]; then',
+    `eval ${zshIntegration};`,
+    'else false;',
+    'fi\r'
+  ].join(' ')
 }
 
 export function shouldInjectShellIntegration (options = {}) {

@@ -9,11 +9,13 @@ export function buildTerminalSafetyEndpoint (
   const pid = terminalPid === undefined || terminalPid === null
     ? ''
     : terminalPid
+  const username = tab.username || tab.user || ''
   const endpoint = {
     tabId: tab.id,
     host: tab.host,
     port: Number(tab.port || 22),
-    username: tab.username || tab.user || '',
+    username,
+    connectionUsername: username,
     title: tab.title || tab.name || '',
     pid,
     terminalPid: pid,

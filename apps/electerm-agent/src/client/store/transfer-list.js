@@ -24,8 +24,10 @@ export default Store => {
     // console.log('addTransferList', JSON.stringify(items, null, 2))
     const { fileTransfers } = window.store
     const transferBatch = uid()
+    const transferBatchSize = items.length
     const nextItems = items.map(t => {
       t.transferBatch = transferBatch
+      t.transferBatchSize = transferBatchSize
       return t
     })
     fileTransfers.push(...nextItems)

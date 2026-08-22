@@ -2,6 +2,7 @@ const { once } = require('node:events')
 const { generateKeyPairSync } = require('node:crypto')
 const fs = require('node:fs')
 const path = require('node:path')
+const { StringDecoder } = require('node:string_decoder')
 const { Server, utils } = require('@electerm/ssh2')
 const { resolveVirtualPath } = require('./local-sftp-fixture')
 
@@ -48,27 +49,137 @@ function writeTrackedPrompt (stream, nonce) {
   )
 }
 
-function runCommand (stream, command, state, sessionId) {
+function managedPtyMarker (token, phase, ...fields) {
+  return `\u001b]697;SHELLPILOT_OPS;${token};${phase};${fields.join(';')}\u0007`
+}
+
+function encodeMarkerField (value) {
+  return Buffer.from(String(value), 'utf8').toString('base64')
+}
+
+function parseManagedPtyCommand (command) {
+  const token = /__sp_token='([a-f0-9]{32,128})'/.exec(command)?.[1]
+  const encodedScript = /__sp_script='([A-Za-z0-9+/=]+)'/.exec(command)?.[1]
+  if (!token || !encodedScript) return null
+  return {
+    token,
+    script: Buffer.from(encodedScript, 'base64').toString('utf8')
+  }
+}
+
+function operationsDiscoveryOutput (script) {
+  const nonce = /__SHELLPILOT_OPERATIONS_BEGIN__:([a-zA-Z0-9_-]{16,128})/
+    .exec(script)?.[1]
+  if (!nonce) return ''
+  return [
+    `__SHELLPILOT_OPERATIONS_BEGIN__:${nonce}`,
+    'os.id=shellpilot-fixture',
+    'os.idLike=debian',
+    'os.version=1',
+    'kernel=6.8.0-fixture',
+    'arch=x86_64',
+    'init=systemd',
+    'tool=awk',
+    'tool=df',
+    'tool=free',
+    'tool=ip',
+    'tool=systemctl',
+    'tool=tcpdump',
+    'interface=eth0|UP||1500',
+    'interface-address=eth0|192.0.2.10/24',
+    'route=eth0|192.0.2.1',
+    'service=nginx.service|loaded|active|enabled',
+    `__SHELLPILOT_OPERATIONS_END__:${nonce}`,
+    ''
+  ].join('\r\n')
+}
+
+function writeManagedPtyResult (
+  stream,
+  managed,
+  state,
+  sessionId,
+  shellState
+) {
+  const identity = { ...shellState.identity }
+  state.managedPtyScripts.push({
+    sessionId,
+    token: managed.token,
+    script: managed.script,
+    identity
+  })
+  stream.write(managedPtyMarker(
+    managed.token,
+    'start',
+    encodeMarkerField(identity.uid),
+    encodeMarkerField(identity.username)
+  ))
+  const discovery = operationsDiscoveryOutput(managed.script)
+  stream.write(discovery || (
+    `managed_user=${identity.username} managed_uid=${identity.uid}\r\n`
+  ))
+  stream.write(managedPtyMarker(managed.token, 'end', '0'))
+}
+
+function runCommand (stream, command, state, sessionId, shellState, options) {
   const integration = command.match(/__e_nonce=[\s\S]*?([a-f0-9]{32})/)
   if (integration) {
-    state.shellIntegrationNonce = integration[1]
+    shellState.shellIntegrationNonce = integration[1]
+    shellState.shellIntegrationActive = true
+    state.shellIntegrationNonce = shellState.shellIntegrationNonce
+    if (/^unset ELECTERM_SHELL_INTEGRATION;/.test(command)) {
+      state.shellIntegrationRearms += 1
+    }
     // The client intentionally discards the first OSC chunk while ending
     // output suppression. A real shell emits the next prompt separately.
-    stream.write(osc633(state.shellIntegrationNonce, 'A'))
-    setTimeout(() => writeTrackedPrompt(stream, state.shellIntegrationNonce), 20)
+    stream.write(osc633(shellState.shellIntegrationNonce, 'A'))
+    setTimeout(() => {
+      writeTrackedPrompt(stream, shellState.shellIntegrationNonce)
+    }, 20)
     return
   }
 
   state.commands.push(command)
   state.commandEvents.push({ sessionId, command })
-  const nonce = state.shellIntegrationNonce
+  const managed = options.managedPtyTasks
+    ? parseManagedPtyCommand(command)
+    : null
+  const nonce = shellState.shellIntegrationActive
+    ? shellState.shellIntegrationNonce
+    : ''
   if (nonce) {
     stream.write(
       osc633(nonce, 'E', command.replace(/\\/g, '\\\\').replace(/;/g, '\\x3b')) +
       osc633(nonce, 'C')
     )
   }
-  if (command === 'echo shellpilot-e2e') {
+  if (command === 'su root') {
+    shellState.identity = { uid: '0', username: 'root' }
+    shellState.shellIntegrationActive = false
+    state.effectiveIdentity = { ...shellState.identity }
+    setTimeout(() => {
+      if (!stream.destroyed) {
+        stream.write('root shell active\r\nroot@fixture:# ')
+      }
+    }, 30)
+    return
+  }
+  if (command === 'exit' && shellState.identity.uid === '0') {
+    shellState.identity = {
+      uid: String(options.loginUid || 1000),
+      username: options.loginUsername || TEST_USERNAME
+    }
+    state.effectiveIdentity = { ...shellState.identity }
+    stream.write('login shell active\r\n')
+  } else if (managed) {
+    writeManagedPtyResult(
+      stream,
+      managed,
+      state,
+      sessionId,
+      shellState
+    )
+  } else if (command === 'echo shellpilot-e2e') {
     stream.write('shellpilot-e2e\r\n')
   } else if (command === 'pwd') {
     stream.write('/home/shellpilot\r\n')
@@ -83,44 +194,68 @@ function runCommand (stream, command, state, sessionId) {
   }
 }
 
-function attachShell (stream, state, sessionId) {
+function attachShell (stream, state, sessionId, options) {
   let line = ''
   let lastWasCarriageReturn = false
+  const inputDecoder = new StringDecoder('utf8')
+  const shellState = {
+    identity: {
+      uid: String(options.loginUid || 1000),
+      username: options.loginUsername || TEST_USERNAME
+    },
+    shellIntegrationNonce: '',
+    shellIntegrationActive: false
+  }
+  state.effectiveIdentity = { ...shellState.identity }
 
-  stream.write('ShellPilot E2E ready\r\n$ ')
   stream.on('error', () => {})
+  setTimeout(() => {
+    if (stream.destroyed) return
+    state.shellCount += 1
+    stream.write('ShellPilot E2E ready\r\n$ ')
+  }, Number(options.initialPromptDelayMs ?? 250))
   stream.on('data', chunk => {
-    for (const byte of chunk) {
-      if (byte === 3) {
+    const input = typeof chunk === 'string'
+      ? chunk
+      : inputDecoder.write(chunk)
+    for (const char of input) {
+      const code = char.codePointAt(0)
+      if (code === 3) {
         state.ctrlCCount += 1
         line = ''
         stream.write('^C')
-        if (state.shellIntegrationNonce) {
-          writeTrackedPrompt(stream, state.shellIntegrationNonce)
+        if (shellState.shellIntegrationActive) {
+          writeTrackedPrompt(stream, shellState.shellIntegrationNonce)
         } else {
           writePrompt(stream)
         }
         lastWasCarriageReturn = false
         continue
       }
-      if (byte === 13 || byte === 10) {
-        if (byte === 10 && lastWasCarriageReturn) {
+      if (code === 13 || code === 10) {
+        if (code === 10 && lastWasCarriageReturn) {
           lastWasCarriageReturn = false
           continue
         }
-        lastWasCarriageReturn = byte === 13
+        lastWasCarriageReturn = code === 13
         stream.write('\r\n')
-        runCommand(stream, line.trim(), state, sessionId)
+        runCommand(
+          stream,
+          line.trim(),
+          state,
+          sessionId,
+          shellState,
+          options
+        )
         line = ''
         continue
       }
       lastWasCarriageReturn = false
-      if (byte === 8 || byte === 127) {
+      if (code === 8 || code === 127) {
         line = line.slice(0, -1)
         stream.write('\b \b')
         continue
       }
-      const char = String.fromCharCode(byte)
       line += char
       stream.write(char)
     }
@@ -358,6 +493,7 @@ async function startLocalSshServer (options = {}) {
   let nextConnectionId = 1
   const state = {
     authenticationCount: 0,
+    authenticatedUsernames: [],
     acceptedCount: 0,
     readyCount: 0,
     shellCount: 0,
@@ -366,6 +502,9 @@ async function startLocalSshServer (options = {}) {
     sftpWrites: 0,
     sftpRenames: 0,
     shellIntegrationNonce: '',
+    shellIntegrationRearms: 0,
+    effectiveIdentity: null,
+    managedPtyScripts: [],
     execCommands: [],
     cancelledExecCommands: [],
     commands: [],
@@ -389,6 +528,7 @@ async function startLocalSshServer (options = {}) {
         ctx.password === TEST_PASSWORD
       ) {
         state.acceptedCount += 1
+        state.authenticatedUsernames.push(ctx.username)
         ctx.accept()
         return
       }
@@ -412,9 +552,14 @@ async function startLocalSshServer (options = {}) {
         session.on('exec', (acceptExec, rejectExec, info) => {
           state.execCommands.push(info.command)
           const stream = acceptExec()
-          const result = /\$SHELL/.test(info.command)
-            ? ['/bin/bash\n', 0]
-            : options.execResults?.[info.command] || execResults[info.command]
+          const discovery = options.managedPtyTasks
+            ? operationsDiscoveryOutput(info.command)
+            : ''
+          const result = discovery
+            ? [discovery, 0]
+            : /\$SHELL/.test(info.command)
+              ? ['/bin/bash\n', 0]
+              : options.execResults?.[info.command] || execResults[info.command]
           const delayMs = Math.max(
             0,
             Number(options.execDelayMsByCommand?.[info.command]) || 0
@@ -456,9 +601,8 @@ async function startLocalSshServer (options = {}) {
           }
         })
         session.on('shell', acceptShell => {
-          state.shellCount += 1
           state.shellSessionIds.push(sessionId)
-          attachShell(acceptShell(), state, sessionId)
+          attachShell(acceptShell(), state, sessionId, options)
         })
         if (options.sftpRoot) {
           session.on('sftp', acceptSftp => {

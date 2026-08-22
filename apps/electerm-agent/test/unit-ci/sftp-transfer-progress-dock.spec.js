@@ -50,6 +50,45 @@ test('SFTP transfer progress aggregates only the current tab by bytes', async ()
   assert.equal(result.current.id, 'a')
 })
 
+test('SFTP transfer progress visibly starts after the first transferred bytes', async () => {
+  const { buildSftpTransferProgress } = await importModel()
+  const started = buildSftpTransferProgress([{
+    id: 'large-upload',
+    tabId: 'tab-a',
+    status: 'running',
+    transferred: 32 * 1024,
+    total: 64 * 1024 * 1024
+  }], 'tab-a')
+  const queued = buildSftpTransferProgress([{
+    id: 'queued-upload',
+    tabId: 'tab-a',
+    status: 'queued',
+    transferred: 0,
+    total: 64 * 1024 * 1024
+  }], 'tab-a')
+
+  assert.equal(started.percent, 1)
+  assert.equal(queued.percent, 0)
+})
+
+test('SFTP progress classifies upload and download direction', async () => {
+  const { getSftpTransferDirection } = await importModel()
+
+  assert.equal(getSftpTransferDirection({
+    typeFrom: 'local',
+    typeTo: 'remote'
+  }), 'upload')
+  assert.equal(getSftpTransferDirection({
+    typeFrom: 'remote',
+    typeTo: 'local'
+  }), 'download')
+  assert.equal(getSftpTransferDirection({
+    typeFrom: 'remote',
+    typeTo: 'remote'
+  }), 'transfer')
+  assert.equal(getSftpTransferDirection(), 'transfer')
+})
+
 test('SFTP transfer progress is indeterminate when an active total is unknown', async () => {
   const { buildSftpTransferProgress } = await importModel()
   const result = buildSftpTransferProgress([
@@ -191,6 +230,10 @@ test('SFTP workspace mounts an accessible tab-scoped progress dock', () => {
     __dirname,
     '../../src/client/components/sftp/sftp-transfer-progress-dock.jsx'
   ), 'utf8')
+  const i18n = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/common/shellpilot-i18n-overrides.js'
+  ), 'utf8')
 
   assert.match(entry, /SftpTransferProgressDock/)
   assert.match(entry, /tabId=\{this\.props\.tab\.id\}/)
@@ -202,6 +245,31 @@ test('SFTP workspace mounts an accessible tab-scoped progress dock', () => {
   assert.match(dock, /Transporter/)
   assert.match(dock, /compact/)
   assert.match(dock, /readOnly=\{terminal\}/)
+  assert.match(dock, /getSftpTransferDirection/)
+  assert.match(dock, /sftp-transfer-dock-direction/)
+  assert.match(i18n, /shellpilotSftpTransferUploading/)
+  assert.match(i18n, /shellpilotSftpTransferDownloading/)
+})
+
+test('SFTP transfer dock keeps an obvious active progress presentation', () => {
+  const dock = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/components/sftp/sftp-transfer-progress-dock.jsx'
+  ), 'utf8')
+  const styles = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/components/sftp/sftp.styl'
+  ), 'utf8')
+
+  assert.match(styles, /height calc\(100% - 64px\) !important/)
+  assert.match(styles, /\.sftp-transfer-progress-dock\s+[\s\S]*?min-height 50px/)
+  assert.match(styles, /\.sftp-transfer-dock-leading\s+[\s\S]*?display flex/)
+  assert.match(styles, /\.sftp-transfer-dock-direction\s+[\s\S]*?background var\(--sp-primary-soft\)/)
+  assert.match(styles, /\.sftp-transfer-dock-progress\s+[\s\S]*?height 8px/)
+  assert.match(styles, /\.sftp-transfer-progress-dock-running,[\s\S]*?border-color var\(--sp-primary\)/)
+  assert.match(dock, /sftp-transfer-dock-percent/)
+  assert.match(dock, /sftp-transfer-dock-metrics-detail/)
+  assert.match(styles, /@media \(max-width: 760px\)[\s\S]*?\.sftp-transfer-dock-metrics-detail\s+[\s\S]*?display none/)
 })
 
 test('SFTP progress gate briefly publishes a verified successful terminal state', async () => {
@@ -248,6 +316,59 @@ test('SFTP progress gate briefly publishes a verified successful terminal state'
   assert.equal(published.at(-1).status, 'completed')
   assert.equal(published.at(-1).percent, 100)
   assert.equal(published.at(-1).transferred, 100)
+  assert.equal(scheduled.filter(timer => !timer.cancelled).length, 1)
+  assert.equal(scheduled.at(-1).delay, 2000)
+
+  currentTime = 2020
+  scheduled.at(-1).callback()
+  assert.equal(published.at(-1).count, 0)
+})
+
+test('SFTP progress gate holds a root-skipped transfer as completed without inventing uploaded bytes', async () => {
+  const { createSftpProgressPublishGate } = await importModel()
+  let currentTime = 0
+  const scheduled = []
+  const published = []
+  const gate = createSftpProgressPublishGate({
+    now: () => currentTime,
+    setTimer: (callback, delay) => {
+      const timer = { callback, delay, cancelled: false }
+      scheduled.push(timer)
+      return timer
+    },
+    clearTimer: timer => {
+      timer.cancelled = true
+    },
+    onPublish: summary => published.push(summary)
+  })
+  gate.update({
+    count: 1,
+    statusKey: 'root-skip:queued:',
+    status: 'queued',
+    transferred: 0,
+    total: 128,
+    determinate: true,
+    percent: 0,
+    items: [{ id: 'root-skip' }]
+  })
+
+  currentTime = 20
+  gate.update({
+    count: 0,
+    statusKey: '',
+    status: '',
+    transferred: 0,
+    total: 0,
+    determinate: false,
+    percent: null,
+    items: [],
+    terminalStatusById: { 'root-skip': 'skipped' }
+  })
+
+  assert.equal(published.at(-1).status, 'completed')
+  assert.equal(published.at(-1).transferred, 0)
+  assert.equal(published.at(-1).percent, 0)
+  assert.equal(published.at(-1).total, 128)
   assert.equal(scheduled.filter(timer => !timer.cancelled).length, 1)
   assert.equal(scheduled.at(-1).delay, 2000)
 

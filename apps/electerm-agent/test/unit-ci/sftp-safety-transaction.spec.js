@@ -2645,6 +2645,69 @@ test('SFTP UI routes editor save chmod rename and delete through modern transact
   assert.match(entrySource, /getSftp:\s*\(\)\s*=>\s*this\.sftp/)
 })
 
+test('SFTP permanent fast delete validates, confirms once, bypasses recovery, and refreshes once', () => {
+  const fs = require('node:fs')
+  const itemSource = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/components/sftp/file-item.jsx'
+  ), 'utf8')
+  const entrySource = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/components/sftp/sftp-entry.jsx'
+  ), 'utf8')
+  const modalSource = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/components/common/modal.jsx'
+  ), 'utf8')
+  const modalStyles = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/components/common/modal.styl'
+  ), 'utf8')
+  const start = entrySource.indexOf('quickDeleteRemoteFiles = async')
+  const end = entrySource.indexOf('\n  quickBackupRemoteFiles =', start)
+  const methodSource = entrySource.slice(start, end)
+  const confirmStart = entrySource.indexOf('confirmQuickDelete =')
+  const confirmEnd = entrySource.indexOf('\n  quickDeleteRemoteFiles =', confirmStart)
+  const confirmSource = entrySource.slice(confirmStart, confirmEnd)
+
+  assert.ok(start > -1)
+  assert.ok(end > start)
+  assert.match(entrySource, /buildFastDeleteTargets/)
+  assert.match(entrySource, /executeFastRemoteDelete/)
+  assert.match(methodSource, /const targets = Array\.isArray\(files\) \? files : \[\]/)
+  assert.doesNotMatch(methodSource, /getRemoteSafetyTargets/)
+  assert.ok(methodSource.indexOf('buildFastDeleteTargets') < methodSource.indexOf('confirmQuickDelete'))
+  assert.ok(methodSource.indexOf('confirmQuickDelete') < methodSource.indexOf('executeFastRemoteDelete'))
+  assert.match(methodSource, /concurrency:\s*4/)
+  assert.doesNotMatch(methodSource, /prepareSftpSafetyOperation|sftpSafetyRunner|wait\(500\)/)
+  assert.equal((methodSource.match(/this\.remoteList\(\)/g) || []).length, 1)
+  assert.match(methodSource, /selectedFiles:\s*new Set\(\),\s*selectedType:\s*''/)
+  assert.match(methodSource, /window\.store\.onError\(error\)/)
+  assert.match(methodSource, /shellpilotSftpFastDeleteSucceeded/)
+  assert.match(methodSource, /shellpilotSftpFastDeletePartial/)
+  assert.match(methodSource, /failedItems/)
+  assert.match(methodSource, /shellpilotListSeparator/)
+
+  assert.match(confirmSource, /Modal\.confirm\(\{/)
+  assert.match(confirmSource, /shellpilotSftpFastDeleteConfirmTitle/)
+  assert.match(confirmSource, /shellpilotSftpFastDeleteConfirmBody/)
+  assert.match(confirmSource, /okButtonProps:\s*\{\s*danger:\s*true\s*\}/)
+  assert.equal((confirmSource.match(/Modal\.confirm/g) || []).length, 1)
+  assert.match(modalSource, /okButtonProps\?\.danger/)
+  assert.match(modalSource, /'is-danger'/)
+  assert.match(modalStyles, /\.custom-modal-ok-btn[\s\S]{0,240}&\.is-danger[\s\S]{0,120}var\(--sp-danger\)/)
+
+  assert.match(
+    itemSource,
+    /quickDelete\s*=\s*async[\s\S]{0,180}quickDeleteRemoteFiles\(this\.getSftpSafetyTargets\(\)\)/
+  )
+  assert.match(
+    entrySource,
+    /pick\(this,\s*\[[\s\S]{0,900}'quickDeleteRemoteFiles'/
+  )
+  assert.match(entrySource, /delFiles[\s\S]{0,500}deleteRemoteFilesWithSafety/)
+})
+
 test('safety center routes modern SFTP records to SFTP capability and summarizes effects', async () => {
   const centerRoot = path.resolve(__dirname, '../../src/client/components/main')
   const {

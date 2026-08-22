@@ -1,17 +1,14 @@
 import * as ls from '../common/safe-local-storage'
 import { pinnedQuickCommandBarKey } from '../common/constants'
 import { refs } from '../components/common/ref'
-import {
-  cancelRunCmd,
-  runCmd
-} from '../components/terminal/terminal-apis.js'
+import { runCmd } from '../components/terminal/terminal-apis.js'
 import {
   buildOperationsDiscoveryCommand,
   parseOperationsDiscoveryOutput
 } from '../components/operations-toolkit/shared/capability-discovery.js'
 import { getOperationsTool } from '../components/operations-toolkit/catalog/index.js'
 import { createOperationsTaskRecordStore } from '../components/operations-toolkit/runtime/task-record-store.js'
-import { createSshTaskChannel } from '../components/operations-toolkit/runtime/ssh-task-channel.js'
+import { createPtyTaskChannel } from '../components/operations-toolkit/runtime/pty-task-channel.js'
 import { createOperationsTaskRunner } from '../components/operations-toolkit/runtime/task-runner.js'
 import {
   createOperationsIncidentCandidate,
@@ -22,6 +19,7 @@ const historyStorageKey = 'shellpilot-operations-task-history-v1'
 const finalOperationsTaskStatuses = new Set([
   'completed',
   'cancelled',
+  'cancellation-unknown',
   'timed-out',
   'failed',
   'disconnected',
@@ -47,15 +45,64 @@ function resolveCurrentEndpoint () {
   const tab = store.currentTab
   const terminal = tab?.id ? refs.get('term-' + tab.id) : null
   if (!terminal?.pid || terminal.isSsh?.() !== true) return null
-  if (!endpointsMatch(tab, terminal.props?.tab || {})) return null
+  if (typeof terminal.getTerminalSafetyEndpoint !== 'function') return null
+  const safetyEndpoint = terminal.getTerminalSafetyEndpoint()
+  if (!safetyEndpoint?.hostKeyFingerprint ||
+    !endpointsMatch(tab, safetyEndpoint)) return null
   return {
-    tabId: tab.id,
-    pid: terminal.pid,
-    host: tab.host,
-    port: Number(tab.port || 22),
-    username: endpointUser(tab),
+    tabId: safetyEndpoint.tabId,
+    pid: safetyEndpoint.pid,
+    terminalPid: safetyEndpoint.terminalPid,
+    sessionType: safetyEndpoint.sessionType,
+    host: safetyEndpoint.host,
+    port: safetyEndpoint.port,
+    username: safetyEndpoint.username,
+    connectionUsername: safetyEndpoint.username,
+    hostKeyFingerprint: safetyEndpoint.hostKeyFingerprint,
     title: tab.title || tab.name || tab.host
   }
+}
+
+function createDiscoveryNonce () {
+  const bytes = new Uint8Array(16)
+  globalThis.crypto.getRandomValues(bytes)
+  return Array.from(
+    bytes,
+    byte => byte.toString(16).padStart(2, '0')
+  ).join('')
+}
+
+function commandOutput (response) {
+  return typeof response === 'string'
+    ? response
+    : response?.stdout || ''
+}
+
+async function previewOperationsCapabilities (endpoint) {
+  const nonce = createDiscoveryNonce()
+  const command = buildOperationsDiscoveryCommand(nonce)
+  const response = await runCmd(endpoint.pid, command, {
+    timeoutMs: 30000,
+    maxOutputBytes: 1024 * 1024
+  })
+  return parseOperationsDiscoveryOutput(commandOutput(response), nonce)
+}
+
+async function executeOperationsDiscoveryThroughPty (_endpoint, context) {
+  const nonce = createDiscoveryNonce()
+  let output = ''
+  const result = await context.execute({
+    taskId: `${context.taskId}-discovery`,
+    script: buildOperationsDiscoveryCommand(nonce),
+    timeoutMs: 30000,
+    signal: context.signal,
+    onChunk: chunk => { output += chunk }
+  })
+  context.onIdentity(result.identity)
+  if (result.exitCode !== 0) {
+    throw new Error('当前终端环境探测失败')
+  }
+  return parseOperationsDiscoveryOutput(output, nonce)
 }
 
 function createStorageAdapter () {
@@ -95,7 +142,9 @@ function createRuntime (store) {
     storage: createStorageAdapter(),
     storageKey: historyStorageKey
   })
-  const channel = createSshTaskChannel({ runCmd, cancelRunCmd })
+  const channel = createPtyTaskChannel({
+    getTerminal: tabId => refs.get('term-' + tabId)
+  })
   const runner = createOperationsTaskRunner({
     channel,
     taskStore,
@@ -104,18 +153,7 @@ function createRuntime (store) {
       store.operationsTasks = [task, ...current]
       captureCompletedOperationsTask(store, task)
     },
-    discover: async endpoint => {
-      const nonce = `ops${Date.now()}${Math.random().toString(36).slice(2)}`
-      const command = buildOperationsDiscoveryCommand(nonce)
-      const response = await runCmd(endpoint.pid, command, {
-        timeoutMs: 30000,
-        maxOutputBytes: 1024 * 1024
-      })
-      return parseOperationsDiscoveryOutput(
-        typeof response === 'string' ? response : response?.stdout || '',
-        nonce
-      )
-    }
+    discover: executeOperationsDiscoveryThroughPty
   })
   store.operationsHistory = taskStore.list()
   return { runner, taskStore }
@@ -175,10 +213,10 @@ export default Store => {
     store.operationsDiscoveryStatus = 'loading'
     store.operationsDiscoveryError = ''
     try {
-      const capabilities = await ensureRuntime(store).runner.discover(endpoint)
+      const capabilities = await previewOperationsCapabilities(endpoint)
       store.operationsCapabilities = capabilities
       store.operationsCapabilitiesEndpointKey =
-        `${endpoint.username}@${endpoint.host}:${endpoint.port}`
+        `${endpoint.connectionUsername}@${endpoint.host}:${endpoint.port}`
       store.operationsDiscoveryStatus = 'ready'
       return capabilities
     } catch (error) {

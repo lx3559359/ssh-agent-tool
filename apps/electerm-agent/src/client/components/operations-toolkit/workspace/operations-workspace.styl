@@ -335,6 +335,22 @@
     display flex
     justify-content flex-end
 
+.operations-task-identities,
+.operations-history-identities
+  display flex
+  flex-wrap wrap
+  gap 4px 12px
+  color var(--text-dark)
+  font-size 12px
+
+.operations-task-recovery-required
+  margin 8px 0
+  padding 8px 10px
+  color #d97706
+  background rgba(217, 119, 6, .08)
+  border 1px solid rgba(217, 119, 6, .28)
+  border-radius var(--sp-radius-small)
+
 .operations-task-steps
   margin 8px 0
   display flex
@@ -408,6 +424,8 @@
     span,
     small
       color var(--text-dark)
+    .operations-history-identities
+      flex-direction row
 
 .operations-placeholder
   height 100%

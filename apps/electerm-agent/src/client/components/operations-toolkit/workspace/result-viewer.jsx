@@ -7,6 +7,7 @@ const tf = (key, replacements) => formatShellPilotTranslation(e, key, replacemen
 const statusLabels = {
   completed: '已完成',
   cancelled: '已取消',
+  'cancellation-unknown': e('shellpilotOperationsCancellationUnknown'),
   'timed-out': '已超时',
   failed: '失败',
   disconnected: '连接断开',
@@ -50,6 +51,21 @@ export default function ResultViewer ({
             >
               <strong>{tool?.title || record.toolId}</strong>
               <span>{record.endpointKey}</span>
+              <div className='operations-history-identities'>
+                <span>
+                  {tf('shellpilotOperationsLoginUser', {
+                    username: record.endpoint?.connectionUsername ||
+                      record.endpoint?.username ||
+                      e('shellpilotOperationsEffectiveIdentityUnknown')
+                  })}
+                </span>
+                <span>
+                  {tf('shellpilotOperationsCurrentShell', {
+                    username: record.runtimeIdentity?.effectiveUsername ||
+                      e('shellpilotOperationsEffectiveIdentityUnknown')
+                  })}
+                </span>
+              </div>
               <small>
                 {statusLabels[record.status] || record.status}
                 {' · '}
