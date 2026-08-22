@@ -42,7 +42,7 @@ export default function Transporter (props) {
     inited,
     id
   } = props.transfer
-  const { index, compact = false } = props
+  const { index, compact = false, readOnly = false } = props
   const onDragCls = 'ondrag-tr'
   const onDragOverCls = 'dragover-tr'
   function moveToTop () {
@@ -182,14 +182,16 @@ export default function Transporter (props) {
     ? `${e('shellpilotTransferRestarting')} ${filesize(retryPreservedBytes || 0)}`
     : `${filesize(transferredBytes)} / ${filesize(total)} | ${speed || '-'} | ${leftTime || '-'}`
   const title = `${typeFromTitle}→${typeToTitle}: ${fromPath} -> ${toPath} ${speed || ''} ${percent || 0}%`
-  const cancelIcon = (
-    <CloseCircleOutlined
-      className='transfer-control-icon transfer-control-cancel pointer hover-black font14'
-      onClick={cancel}
-      title={e('cancel')}
-    />
-  )
-  const toTopIcon = compact || index === 0
+  const cancelIcon = readOnly
+    ? null
+    : (
+      <CloseCircleOutlined
+        className='transfer-control-icon transfer-control-cancel pointer hover-black font14'
+        onClick={cancel}
+        title={e('cancel')}
+      />
+      )
+  const toTopIcon = readOnly || compact || index === 0
     ? null
     : (
       <VerticalAlignTopOutlined
@@ -197,7 +199,7 @@ export default function Transporter (props) {
         onClick={moveToTop}
       />
       )
-  const controlIcon = isTransfer
+  const controlIcon = !readOnly && isTransfer
     ? (
       <Icon
         className='flex-child transfer-control-icon pointer hover-black font14'
@@ -214,7 +216,7 @@ export default function Transporter (props) {
     ref: dom,
     id: `transfer-unit-${id}`,
     'data-id': id,
-    ...(compact
+    ...(compact || readOnly
       ? {}
       : {
           draggable: true,

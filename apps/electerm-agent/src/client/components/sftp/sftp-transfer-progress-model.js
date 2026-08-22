@@ -77,7 +77,19 @@ function summaryStatus (items) {
   return ''
 }
 
-export function buildSftpTransferProgress (transfers, tabId) {
+function buildTerminalStatusById (history, tabId) {
+  const result = {}
+  const items = Array.isArray(history) ? history.slice(-1000) : []
+  for (const item of items) {
+    if (String(item?.tabId || '') !== String(tabId || '')) continue
+    const status = String(item.status || (item.error ? 'failed' : ''))
+    if (item.id) result[item.id] = status
+    if (item.originalId) result[item.originalId] = status
+  }
+  return result
+}
+
+export function buildSftpTransferProgress (transfers, tabId, history) {
   const items = (Array.isArray(transfers) ? transfers : [])
     .filter(transfer => String(transfer?.tabId || '') === String(tabId || ''))
     .map(normalizeTransfer)
@@ -107,7 +119,8 @@ export function buildSftpTransferProgress (transfers, tabId) {
     status,
     statusKey: items.map(item => `${item.id}:${item.status}:${item.error || ''}`)
       .join('|'),
-    current: selectCurrent(items)
+    current: selectCurrent(items),
+    terminalStatusById: buildTerminalStatusById(history, tabId)
   }
 }
 
@@ -116,11 +129,15 @@ export function shouldPublishSftpProgress ({
   nextStatus = '',
   previousCount,
   nextCount,
+  previousTransferred,
+  nextTransferred,
   elapsedMs = 0
 } = {}) {
   if (previousStatus !== nextStatus) return true
   if (previousCount !== undefined && nextCount !== undefined &&
     previousCount !== nextCount) return true
+  if (finiteNumber(previousTransferred) <= 0 &&
+    finiteNumber(nextTransferred) > 0) return true
   return finiteNumber(elapsedMs) >= 100
 }
 
@@ -129,7 +146,8 @@ export function createSftpProgressPublishGate ({
   setTimer = setTimeout,
   clearTimer = clearTimeout,
   onPublish,
-  intervalMs = 100
+  intervalMs = 100,
+  terminalHoldMs = 2000
 } = {}) {
   if (typeof onPublish !== 'function') {
     throw new Error('SFTP 进度发布器缺少发布回调。')
@@ -157,6 +175,35 @@ export function createSftpProgressPublishGate ({
   return {
     update (summary) {
       if (disposed) return
+      if (summary.count === 0 && previous?.count > 0) {
+        const statuses = previous.items
+          .map(item => summary.terminalStatusById?.[item.id])
+          .filter(Boolean)
+        const completed = statuses.length === previous.items.length &&
+          statuses.every(status => ['success', 'completed'].includes(status))
+        const failed = statuses.some(status => ['failed', 'exception'].includes(status))
+        if (completed || failed) {
+          cancelPending()
+          latest = {
+            ...previous,
+            status: completed ? 'completed' : 'failed',
+            statusKey: `${completed ? 'completed' : 'failed'}:${previous.statusKey}`,
+            speedBytesPerSecond: 0,
+            ...(completed && previous.determinate
+              ? {
+                  transferred: previous.total,
+                  percent: 100
+                }
+              : {})
+          }
+          publish()
+          timer = setTimer(() => {
+            latest = summary
+            publish()
+          }, terminalHoldMs)
+          return
+        }
+      }
       latest = summary
       const elapsedMs = now() - lastPublishedAt
       const immediate = !previous || shouldPublishSftpProgress({
@@ -164,6 +211,8 @@ export function createSftpProgressPublishGate ({
         nextStatus: summary.statusKey,
         previousCount: previous.count,
         nextCount: summary.count,
+        previousTransferred: previous.transferred,
+        nextTransferred: summary.transferred,
         elapsedMs
       })
       if (immediate) {

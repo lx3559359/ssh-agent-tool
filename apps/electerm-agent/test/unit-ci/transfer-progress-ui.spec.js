@@ -18,4 +18,5 @@ test('transfer rows render a progress bar, bytes, speed, ETA and Chinese control
   assert.match(source, /transfer-progress-meta/)
   assert.match(source, /compact/)
   assert.match(source, /sftp-transport-compact/)
+  assert.match(source, /readOnly/)
 })

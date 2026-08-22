@@ -25,7 +25,8 @@ function formatSpeed (speedBytesPerSecond) {
 
 export default auto(function SftpTransferProgressDock ({ tabId }) {
   const transfers = window.store.fileTransfers || []
-  const observed = buildSftpTransferProgress(transfers, tabId)
+  const history = window.store.transferHistory || []
+  const observed = buildSftpTransferProgress(transfers, tabId, history)
   const [published, setPublished] = useState(() => (
     buildSftpTransferProgress([], tabId)
   ))
@@ -59,6 +60,7 @@ export default auto(function SftpTransferProgressDock ({ tabId }) {
   const currentPath = published.current?.fromPathReal ||
     published.current?.fromPath || ''
   const speedText = formatSpeed(published.speedBytesPerSecond)
+  const terminal = ['completed', 'failed'].includes(published.status)
   const progressProps = published.determinate
     ? { 'aria-valuenow': published.percent }
     : {}
@@ -86,9 +88,13 @@ export default auto(function SftpTransferProgressDock ({ tabId }) {
           aria-controls={`sftp-transfer-details-${tabId}`}
           onClick={() => setExpanded(value => !value)}
         >
-          {expanded
-            ? e('shellpilotSftpTransferCollapse')
-            : e('shellpilotSftpTransferExpand')}
+          {terminal
+            ? e(published.status === 'completed'
+              ? 'shellpilotSftpTransferCompleted'
+              : 'shellpilotSftpTransferFailed')
+            : (expanded
+                ? e('shellpilotSftpTransferCollapse')
+                : e('shellpilotSftpTransferExpand'))}
         </button>
       </div>
       <div
@@ -116,6 +122,7 @@ export default auto(function SftpTransferProgressDock ({ tabId }) {
                 transfer={transfer}
                 index={index}
                 compact
+                readOnly={terminal}
               />
             ))}
           </div>

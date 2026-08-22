@@ -119,6 +119,13 @@ test('SFTP progress publishes status transitions immediately and throttles bytes
     elapsedMs: 100
   }), true)
   assert.equal(shouldPublishSftpProgress({
+    previousStatus: 'running',
+    nextStatus: 'running',
+    previousTransferred: 0,
+    nextTransferred: 1,
+    elapsedMs: 5
+  }), true)
+  assert.equal(shouldPublishSftpProgress({
     previousStatus: '',
     nextStatus: 'queued',
     elapsedMs: 0
@@ -159,15 +166,16 @@ test('SFTP progress publish gate coalesces byte updates but flushes status chang
   currentTime = 40
   gate.update({ count: 1, statusKey: 'a:running:', transferred: 20 })
 
-  assert.equal(published.length, 1)
+  assert.equal(published.length, 2)
+  assert.equal(published.at(-1).transferred, 10)
   assert.equal(scheduled.filter(timer => !timer.cancelled).length, 1)
   assert.equal(scheduled[0].delay, 80)
 
-  currentTime = 100
+  currentTime = 120
   scheduled[0].callback()
   assert.equal(published.at(-1).transferred, 20)
 
-  currentTime = 105
+  currentTime = 125
   gate.update({ count: 1, statusKey: 'a:paused:', transferred: 20 })
   assert.equal(published.at(-1).statusKey, 'a:paused:')
 
@@ -193,4 +201,57 @@ test('SFTP workspace mounts an accessible tab-scoped progress dock', () => {
   assert.match(dock, /aria-valuemax=\{100\}/)
   assert.match(dock, /Transporter/)
   assert.match(dock, /compact/)
+  assert.match(dock, /readOnly=\{terminal\}/)
+})
+
+test('SFTP progress gate briefly publishes a verified successful terminal state', async () => {
+  const { createSftpProgressPublishGate } = await importModel()
+  let currentTime = 0
+  const scheduled = []
+  const published = []
+  const gate = createSftpProgressPublishGate({
+    now: () => currentTime,
+    setTimer: (callback, delay) => {
+      const timer = { callback, delay, cancelled: false }
+      scheduled.push(timer)
+      return timer
+    },
+    clearTimer: timer => {
+      timer.cancelled = true
+    },
+    onPublish: summary => published.push(summary)
+  })
+  gate.update({
+    count: 1,
+    statusKey: 'upload:running:',
+    status: 'running',
+    transferred: 0,
+    total: 100,
+    determinate: true,
+    percent: 0,
+    items: [{ id: 'upload' }]
+  })
+
+  currentTime = 20
+  gate.update({
+    count: 0,
+    statusKey: '',
+    status: '',
+    transferred: 0,
+    total: 0,
+    determinate: false,
+    percent: null,
+    items: [],
+    terminalStatusById: { upload: 'success' }
+  })
+
+  assert.equal(published.at(-1).status, 'completed')
+  assert.equal(published.at(-1).percent, 100)
+  assert.equal(published.at(-1).transferred, 100)
+  assert.equal(scheduled.filter(timer => !timer.cancelled).length, 1)
+  assert.equal(scheduled.at(-1).delay, 2000)
+
+  currentTime = 2020
+  scheduled.at(-1).callback()
+  assert.equal(published.at(-1).count, 0)
 })

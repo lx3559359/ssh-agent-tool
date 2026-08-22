@@ -10,7 +10,7 @@ const {
   launchQualityApp
 } = require('./common/quality-e2e-app')
 
-test.setTimeout(180000)
+test.setTimeout(240000)
 
 async function acceptHostKey (page) {
   const modal = page.locator('.custom-modal-wrap').last()
@@ -56,6 +56,63 @@ async function readRemoteTextOrNull (page, remotePath) {
   }
 }
 
+async function waitForTransferComplete (page, transferId) {
+  await expect.poll(() => page.evaluate(id => (
+    window.store.fileTransfers.some(item => item.id === id)
+  ), transferId), { timeout: 30000 }).toBe(false)
+}
+
+async function expectVisibleTransferProgress (page, expectedPath, expectedDirection) {
+  const dock = page.locator('.sftp-transfer-progress-dock')
+  await expect(dock).toBeVisible({ timeout: 20000 })
+  await expect(dock).toContainText(expectedPath)
+  const toggle = dock.locator('.sftp-transfer-dock-toggle')
+  if (await toggle.getAttribute('aria-expanded') !== 'true') {
+    await toggle.click()
+  }
+  const details = dock.locator('.sftp-transfer-dock-details')
+  await expect(details.locator('.sftp-transport')).toBeVisible()
+  await expect(details).toContainText(expectedDirection)
+  const progress = dock.locator('.sftp-transfer-dock-progress')
+  let transferSnapshot
+  try {
+    await expect.poll(async () => {
+      transferSnapshot = await page.evaluate(pathPart => {
+        const transfer = window.store.fileTransfers.find(item => (
+          String(item.fromPath || '').includes(pathPart) ||
+          String(item.toPath || '').includes(pathPart)
+        ))
+        return {
+          transfer: transfer
+            ? {
+                id: transfer.id,
+                inited: transfer.inited,
+                status: transfer.status,
+                transferred: transfer.transferred,
+                total: transfer.total,
+                percent: transfer.percent,
+                error: transfer.error
+              }
+            : null,
+          history: window.store.transferHistory.slice(-2).map(item => ({
+            id: item.id,
+            status: item.status,
+            error: item.error
+          }))
+        }
+      }, expectedPath)
+      return Number(await progress.getAttribute('aria-valuenow') || 0)
+    }, {
+      timeout: 20000,
+      intervals: [10, 20, 50, 100]
+    }).toBeGreaterThan(0)
+  } catch (error) {
+    error.message += `\nTransfer snapshot: ${JSON.stringify(transferSnapshot)}`
+    throw error
+  }
+  return dock
+}
+
 async function collectProfileLogs (root) {
   const entries = await fs.promises.readdir(root, { recursive: true, withFileTypes: true })
   const files = entries
@@ -78,8 +135,14 @@ test('isolated client completes SSH, SFTP, AI, update and rollback quality flows
     const page = run.page
     const localRoot = path.join(run.profileRoot, 'local-transfer')
     const localBody = 'ShellPilot local quality transfer\n'
+    const largeUpload = Buffer.alloc(64 * 1024 * 1024, 0x5a)
+    const largeDownload = Buffer.alloc(64 * 1024 * 1024, 0xa5)
+    const uploadPath = path.join(localRoot, 'quality-progress-upload.bin')
+    const downloadPath = path.join(localRoot, 'quality-progress-download.bin')
     await fs.promises.mkdir(localRoot, { recursive: true })
     await fs.promises.writeFile(path.join(localRoot, 'local-seed.txt'), localBody)
+    await fs.promises.writeFile(uploadPath, largeUpload)
+    await fs.promises.writeFile(fixture.resolve('/quality-progress-download.bin'), largeDownload)
 
     await page.locator('.aigshell-topbar-action .anticon-plus-circle').click()
     const wizard = page.locator('.quick-connect-wizard')
@@ -157,6 +220,44 @@ test('isolated client completes SSH, SFTP, AI, update and rollback quality flows
     }, { remotePath: '/quality-upload.txt', body: localBody })
     await expect.poll(() => readRemoteText(page, '/quality-upload.txt')).toBe(localBody)
     assertHashEqual(await readRemoteText(page, '/remote-seed.txt'), fixture.fixtureHash)
+
+    const upload = await page.evaluate(({ localPath, remotePath }) => (
+      window.store.mcpSftpUpload({
+        tabId: window.store.activeTabId,
+        localPath,
+        remotePath
+      })
+    ), {
+      localPath: uploadPath,
+      remotePath: '/quality-progress-upload.bin'
+    })
+    await expectVisibleTransferProgress(
+      page,
+      'quality-progress-upload.bin',
+      /本地|Local/
+    )
+    await waitForTransferComplete(page, upload.transferId)
+    expect(await fixture.hashFile('/quality-progress-upload.bin'))
+      .toBe(crypto.createHash('sha256').update(largeUpload).digest('hex'))
+
+    const download = await page.evaluate(({ remotePath, localPath }) => (
+      window.store.mcpSftpDownload({
+        tabId: window.store.activeTabId,
+        remotePath,
+        localPath
+      })
+    ), {
+      remotePath: '/quality-progress-download.bin',
+      localPath: downloadPath
+    })
+    await expectVisibleTransferProgress(
+      page,
+      'quality-progress-download.bin',
+      /远程|Remote/
+    )
+    await waitForTransferComplete(page, download.transferId)
+    expect(crypto.createHash('sha256').update(await fs.promises.readFile(downloadPath)).digest('hex'))
+      .toBe(crypto.createHash('sha256').update(largeDownload).digest('hex'))
 
     await page.evaluate(async () => {
       const entry = window.refs.get('sftp-' + window.store.activeTabId)
