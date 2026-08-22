@@ -1,6 +1,98 @@
 .sftp-wrap
   display flex
   flex-direction row
+  &:has(> .sftp-transfer-progress-dock)
+    .sftp-section
+      height calc(100% - 54px) !important
+.sftp-transfer-progress-dock
+  position absolute
+  z-index 20
+  left 10px
+  right 10px
+  bottom 8px
+  min-height 42px
+  color var(--sp-text)
+  background-color var(--sp-surface-elevated)
+  background-image var(--sp-overlay-background)
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-card)
+  box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-lg)
+  overflow hidden
+.sftp-transfer-dock-summary
+  display grid
+  grid-template-columns auto minmax(80px, 1fr) auto auto
+  align-items center
+  gap 10px
+  min-height 34px
+  padding 4px 8px
+.sftp-transfer-dock-count
+  font-weight 650
+  white-space nowrap
+.sftp-transfer-dock-current
+  min-width 0
+  color var(--sp-text-muted)
+  overflow hidden
+  text-overflow ellipsis
+  white-space nowrap
+.sftp-transfer-dock-metrics
+  color var(--sp-text-muted)
+  font-variant-numeric tabular-nums
+  white-space nowrap
+.sftp-transfer-dock-toggle
+  padding 3px 8px
+  color var(--sp-text)
+  background var(--sp-control-background)
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-control)
+  cursor pointer
+  &:hover
+    border-color var(--sp-primary)
+  &:focus-visible
+    outline 2px solid var(--sp-primary)
+    outline-offset 2px
+.sftp-transfer-dock-progress
+  position relative
+  height 5px
+  background var(--sp-surface-soft)
+  overflow hidden
+  > span
+    display block
+    height 100%
+    min-width 2px
+    background var(--sp-primary)
+    transition width .1s linear
+.sftp-transfer-dock-progress-indeterminate
+  > span
+    width 35%
+    animation sftp-transfer-progress-indeterminate 1.1s ease-in-out infinite
+.sftp-transfer-progress-dock-paused,
+.sftp-transfer-progress-dock-interrupted
+  .sftp-transfer-dock-progress > span
+    background var(--warning)
+.sftp-transfer-progress-dock-failed
+  border-color var(--error)
+  .sftp-transfer-dock-progress > span
+    background var(--error)
+.sftp-transfer-dock-details
+  max-height 220px
+  padding 6px 8px 2px
+  overflow auto
+  border-top 1px solid var(--sp-border)
+  .sftp-transport-compact
+    margin-bottom 5px
+    background var(--sp-flat-background)
+
+@keyframes sftp-transfer-progress-indeterminate
+  from
+    transform translateX(-110%)
+  to
+    transform translateX(310%)
+
+@media (max-width: 760px)
+  .sftp-transfer-dock-summary
+    grid-template-columns auto minmax(60px, 1fr) auto
+  .sftp-transfer-dock-metrics
+    display none
 .sftp-section
   flex 1
   box-sizing border-box

@@ -134,3 +134,63 @@ test('file and folder transfer callbacks expose numeric byte speed', () => {
 
   assert.ok(speedFields.length >= 2)
 })
+
+test('SFTP progress publish gate coalesces byte updates but flushes status changes', async () => {
+  const { createSftpProgressPublishGate } = await importModel()
+  let currentTime = 0
+  const scheduled = []
+  const published = []
+  const gate = createSftpProgressPublishGate({
+    now: () => currentTime,
+    setTimer: (callback, delay) => {
+      const timer = { callback, delay, cancelled: false }
+      scheduled.push(timer)
+      return timer
+    },
+    clearTimer: timer => {
+      timer.cancelled = true
+    },
+    onPublish: summary => published.push(summary)
+  })
+
+  gate.update({ count: 1, statusKey: 'a:running:', transferred: 0 })
+  currentTime = 20
+  gate.update({ count: 1, statusKey: 'a:running:', transferred: 10 })
+  currentTime = 40
+  gate.update({ count: 1, statusKey: 'a:running:', transferred: 20 })
+
+  assert.equal(published.length, 1)
+  assert.equal(scheduled.filter(timer => !timer.cancelled).length, 1)
+  assert.equal(scheduled[0].delay, 80)
+
+  currentTime = 100
+  scheduled[0].callback()
+  assert.equal(published.at(-1).transferred, 20)
+
+  currentTime = 105
+  gate.update({ count: 1, statusKey: 'a:paused:', transferred: 20 })
+  assert.equal(published.at(-1).statusKey, 'a:paused:')
+
+  gate.dispose()
+})
+
+test('SFTP workspace mounts an accessible tab-scoped progress dock', () => {
+  const entry = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/components/sftp/sftp-entry.jsx'
+  ), 'utf8')
+  const dock = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/components/sftp/sftp-transfer-progress-dock.jsx'
+  ), 'utf8')
+
+  assert.match(entry, /SftpTransferProgressDock/)
+  assert.match(entry, /tabId=\{this\.props\.tab\.id\}/)
+  assert.match(dock, /buildSftpTransferProgress/)
+  assert.match(dock, /createSftpProgressPublishGate/)
+  assert.match(dock, /aria-expanded/)
+  assert.match(dock, /role='progressbar'/)
+  assert.match(dock, /aria-valuemax=\{100\}/)
+  assert.match(dock, /Transporter/)
+  assert.match(dock, /compact/)
+})

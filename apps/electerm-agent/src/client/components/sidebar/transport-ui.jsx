@@ -42,7 +42,7 @@ export default function Transporter (props) {
     inited,
     id
   } = props.transfer
-  const { index } = props
+  const { index, compact = false } = props
   const onDragCls = 'ondrag-tr'
   const onDragOverCls = 'dragover-tr'
   function moveToTop () {
@@ -172,7 +172,7 @@ export default function Transporter (props) {
   const pauseTitle = isWaiting
     ? (status === 'pausing' ? '正在暂停' : '正在恢复')
     : (isPaused ? e('resume') : e('pause'))
-  const cls = 'sftp-transport mg1b pd1x'
+  const cls = `sftp-transport mg1b pd1x${compact ? ' sftp-transport-compact' : ''}`
   const typeFromTitle = e(typeFrom)
   const typeToTitle = e(typeTo)
   const total = Math.max(0, Number(transferTotal) || Number(props.transfer.fromFile?.size) || 0)
@@ -189,7 +189,7 @@ export default function Transporter (props) {
       title={e('cancel')}
     />
   )
-  const toTopIcon = index === 0
+  const toTopIcon = compact || index === 0
     ? null
     : (
       <VerticalAlignTopOutlined
@@ -213,16 +213,20 @@ export default function Transporter (props) {
     title,
     ref: dom,
     id: `transfer-unit-${id}`,
-    draggable: true,
     'data-id': id,
-    onDrag,
-    onDragEnter,
-    onDragExit,
-    onDragLeave,
-    onDragOver,
-    onDragStart,
-    onDrop,
-    onDragEnd
+    ...(compact
+      ? {}
+      : {
+          draggable: true,
+          onDrag,
+          onDragEnter,
+          onDragExit,
+          onDragLeave,
+          onDragOver,
+          onDragStart,
+          onDrop,
+          onDragEnd
+        })
   }
   return (
     <Flex

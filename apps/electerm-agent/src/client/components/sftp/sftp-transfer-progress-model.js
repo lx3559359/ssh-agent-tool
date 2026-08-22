@@ -123,3 +123,61 @@ export function shouldPublishSftpProgress ({
     previousCount !== nextCount) return true
   return finiteNumber(elapsedMs) >= 100
 }
+
+export function createSftpProgressPublishGate ({
+  now = Date.now,
+  setTimer = setTimeout,
+  clearTimer = clearTimeout,
+  onPublish,
+  intervalMs = 100
+} = {}) {
+  if (typeof onPublish !== 'function') {
+    throw new Error('SFTP 进度发布器缺少发布回调。')
+  }
+  let previous = null
+  let latest = null
+  let timer = null
+  let lastPublishedAt = Number.NEGATIVE_INFINITY
+  let disposed = false
+
+  const publish = () => {
+    timer = null
+    if (disposed || !latest) return
+    previous = latest
+    lastPublishedAt = now()
+    onPublish(latest)
+  }
+
+  const cancelPending = () => {
+    if (!timer) return
+    clearTimer(timer)
+    timer = null
+  }
+
+  return {
+    update (summary) {
+      if (disposed) return
+      latest = summary
+      const elapsedMs = now() - lastPublishedAt
+      const immediate = !previous || shouldPublishSftpProgress({
+        previousStatus: previous.statusKey,
+        nextStatus: summary.statusKey,
+        previousCount: previous.count,
+        nextCount: summary.count,
+        elapsedMs
+      })
+      if (immediate) {
+        cancelPending()
+        publish()
+      } else if (!timer) {
+        timer = setTimer(publish, Math.max(0, intervalMs - elapsedMs))
+      }
+    },
+    dispose () {
+      disposed = true
+      cancelPending()
+      latest = null
+      previous = null
+    }
+  }
+}

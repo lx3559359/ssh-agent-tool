@@ -50,6 +50,7 @@ import {
   digestSftpText
 } from './sftp-transaction-adapter.js'
 import { formatSftpEditorSaveError } from './sftp-editor-permission-error.js'
+import SftpTransferProgressDock from './sftp-transfer-progress-dock.jsx'
 import {
   buildSftpTextChangePreview,
   readSftpSnapshotText
@@ -2219,6 +2220,14 @@ export default class Sftp extends Component {
         {
           this.renderSections()
         }
+        {this.isActive()
+          ? (
+            <SftpTransferProgressDock
+              tabId={this.props.tab.id}
+              username={this.props.tab.username}
+            />
+            )
+          : null}
       </div>
     )
   }
