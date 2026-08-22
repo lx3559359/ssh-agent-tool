@@ -30,6 +30,31 @@ test('local upload listing is restricted to the verified descriptor tree', async
   }])
 })
 
+test('filtered directory entries do not expose mutable descriptor children', async () => {
+  const { filterPlannedDirectoryEntries } = await import(sourcePlanUrl)
+  const descriptor = {
+    type: 'directory',
+    entries: [{
+      name: 'allowed-dir',
+      entry: {
+        type: 'directory',
+        entries: [{ name: 'nested.txt', entry: { type: 'file', size: 7 } }]
+      }
+    }]
+  }
+
+  const [result] = filterPlannedDirectoryEntries([
+    { name: 'allowed-dir' }
+  ], descriptor)
+
+  result.sourceDescriptor.entries[0].entry.size = 99
+
+  assert.equal(
+    descriptor.entries[0].entry.entries[0].entry.size,
+    7
+  )
+})
+
 test('source plan verification binds both descriptors and pinned skips', async () => {
   const { assertSameLocalTransferPlan } = await import(sourcePlanUrl)
   const expected = {
@@ -92,6 +117,45 @@ test('batch collector emits one terminal summary after every item settles', asyn
     status: 'skipped'
   }), null)
   assert.equal(collector.size, 0)
+})
+
+test('batch collector snapshots skipped items when each record is stored', async () => {
+  const { createTransferBatchResultCollector } = await import(batchUrl)
+  const collector = createTransferBatchResultCollector()
+  const skipped = [
+    { relativePath: 'locked-a.dat', code: 'EBUSY', reason: 'locked' },
+    { relativePath: 'locked-b.dat', code: 'EPERM', reason: 'denied' }
+  ]
+
+  assert.equal(collector.record({
+    batchId: 'snapshot-batch',
+    transferId: 't1',
+    expected: 2,
+    status: 'skipped',
+    skipped
+  }), null)
+
+  skipped[0].relativePath = 'mutated.dat'
+  skipped.length = 0
+
+  const summary = collector.record({
+    batchId: 'snapshot-batch',
+    transferId: 't2',
+    expected: 2,
+    status: 'completed'
+  })
+
+  assert.deepEqual(summary, {
+    batchId: 'snapshot-batch',
+    expected: 2,
+    completed: 1,
+    skippedCount: 2,
+    exceptionCount: 0,
+    skipped: [
+      { relativePath: 'locked-a.dat', code: 'EBUSY', reason: 'locked' },
+      { relativePath: 'locked-b.dat', code: 'EPERM', reason: 'denied' }
+    ]
+  })
 })
 
 test('batch collector rejects inconsistent or invalid expected counts', async () => {

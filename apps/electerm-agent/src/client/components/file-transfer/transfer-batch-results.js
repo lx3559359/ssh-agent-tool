@@ -2,6 +2,18 @@ const maxSkippedItems = 1000
 const maxCompletedBatches = 1000
 const completedStatuses = new Set(['completed', 'success'])
 
+function clonePlainValue (value) {
+  if (Array.isArray(value)) {
+    return value.map(item => clonePlainValue(item))
+  }
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, clonePlainValue(item)])
+    )
+  }
+  return value
+}
+
 function normalizeExpectedCount (value) {
   if (!Number.isSafeInteger(value) || value <= 0) {
     throw new Error('上传批次数量无效，无法汇总传输结果。')
@@ -15,7 +27,7 @@ function normalizeTransferResult (result = {}) {
     transferId: String(result.transferId || ''),
     expected: normalizeExpectedCount(result.expected),
     status: String(result.status || ''),
-    skipped: Array.isArray(result.skipped) ? result.skipped : []
+    skipped: Array.isArray(result.skipped) ? clonePlainValue(result.skipped) : []
   }
 }
 

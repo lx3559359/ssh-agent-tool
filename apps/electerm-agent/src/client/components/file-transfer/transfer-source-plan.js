@@ -2,6 +2,18 @@ function stableValue (value) {
   return JSON.stringify(value ?? null)
 }
 
+function clonePlainValue (value) {
+  if (Array.isArray(value)) {
+    return value.map(item => clonePlainValue(item))
+  }
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, clonePlainValue(item)])
+    )
+  }
+  return value
+}
+
 function stablePlanValue (plan) {
   return stableValue({
     descriptor: plan?.descriptor ?? null,
@@ -27,6 +39,6 @@ export function filterPlannedDirectoryEntries (liveEntries = [], descriptor) {
     .filter(item => allowed.has(item?.name))
     .map(item => ({
       ...item,
-      sourceDescriptor: allowed.get(item.name)
+      sourceDescriptor: clonePlainValue(allowed.get(item.name))
     }))
 }
