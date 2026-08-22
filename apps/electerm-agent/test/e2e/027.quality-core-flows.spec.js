@@ -1,10 +1,12 @@
 const crypto = require('node:crypto')
+const { spawn } = require('node:child_process')
 const fs = require('node:fs')
 const path = require('node:path')
 const { _electron: electron, expect, test } = require('@playwright/test')
 const { startLocalAiServer } = require('./common/ai-api')
 const { startLocalSshServer } = require('./common/local-ssh-server')
 const { createLocalSftpFixture } = require('./common/local-sftp-fixture')
+const { setLocalSftpPath } = require('./common/common')
 const {
   cleanupQualityApp,
   launchQualityApp
@@ -56,13 +58,97 @@ async function readRemoteTextOrNull (page, remotePath) {
   }
 }
 
+async function pathExists (targetPath) {
+  try {
+    await fs.promises.stat(targetPath)
+    return true
+  } catch (error) {
+    if (error?.code === 'ENOENT') return false
+    throw error
+  }
+}
+
+async function lockWindowsFile (targetPath) {
+  if (process.platform !== 'win32') return async () => {}
+  const powershell = path.join(
+    process.env.SystemRoot || 'C:\\Windows',
+    'System32',
+    'WindowsPowerShell',
+    'v1.0',
+    'powershell.exe'
+  )
+  const lockScript = [
+    '$stream = [System.IO.File]::Open($env:SHELLPILOT_E2E_LOCK_FILE, "Open", "ReadWrite", "None")',
+    '[Console]::Out.WriteLine("READY")',
+    '[Console]::Out.Flush()',
+    '[Console]::In.ReadLine() | Out-Null',
+    '$stream.Dispose()'
+  ].join('; ')
+  const child = spawn(powershell, [
+    '-NoLogo',
+    '-NoProfile',
+    '-NonInteractive',
+    '-Command',
+    lockScript
+  ], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+    windowsHide: true,
+    env: {
+      ...process.env,
+      SHELLPILOT_E2E_LOCK_FILE: targetPath
+    }
+  })
+  let stderr = ''
+  child.stderr.on('data', chunk => { stderr += chunk.toString() })
+  await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      child.kill()
+      reject(new Error(`Timed out locking ${targetPath}: ${stderr}`))
+    }, 10000)
+    const onData = chunk => {
+      if (!chunk.toString().includes('READY')) return
+      clearTimeout(timeout)
+      child.stdout.off('data', onData)
+      resolve()
+    }
+    child.stdout.on('data', onData)
+    child.once('error', error => {
+      clearTimeout(timeout)
+      reject(error)
+    })
+    child.once('exit', code => {
+      if (code === 0) return
+      clearTimeout(timeout)
+      reject(new Error(`File lock helper exited with ${code}: ${stderr}`))
+    })
+  })
+  let released = false
+  return async () => {
+    if (released) return
+    released = true
+    if (child.exitCode !== null) return
+    const exited = new Promise(resolve => child.once('exit', resolve))
+    if (!child.stdin.destroyed) child.stdin.end('\n')
+    await Promise.race([
+      exited,
+      new Promise(resolve => setTimeout(resolve, 5000))
+    ])
+    if (child.exitCode === null) child.kill()
+  }
+}
+
 async function waitForTransferComplete (page, transferId) {
   await expect.poll(() => page.evaluate(id => (
     window.store.fileTransfers.some(item => item.id === id)
   ), transferId), { timeout: 30000 }).toBe(false)
 }
 
-async function expectVisibleTransferProgress (page, expectedPath, expectedDirection) {
+async function expectVisibleTransferProgress (
+  page,
+  expectedPath,
+  expectedDirection,
+  { allowIndeterminate = false } = {}
+) {
   const dock = page.locator('.sftp-transfer-progress-dock')
   await expect(dock).toBeVisible({ timeout: 20000 })
   await expect(dock).toContainText(expectedPath)
@@ -101,7 +187,12 @@ async function expectVisibleTransferProgress (page, expectedPath, expectedDirect
           }))
         }
       }, expectedPath)
-      return Number(await progress.getAttribute('aria-valuenow') || 0)
+      const value = Number(await progress.getAttribute('aria-valuenow') || 0)
+      if (value > 0) return value
+      if (allowIndeterminate && await progress.evaluate(node => (
+        node.classList.contains('sftp-transfer-dock-progress-indeterminate')
+      ))) return 1
+      return 0
     }, {
       timeout: 20000,
       intervals: [10, 20, 50, 100]
@@ -129,20 +220,28 @@ test('isolated client completes SSH, SFTP, AI, update and rollback quality flows
   let run
   let appClosed = false
   let primaryError
+  let releaseLockedFile = async () => {}
 
   try {
     run = await launchQualityApp(electron)
     const page = run.page
     const localRoot = path.join(run.profileRoot, 'local-transfer')
     const localBody = 'ShellPilot local quality transfer\n'
-    const largeUpload = Buffer.alloc(64 * 1024 * 1024, 0x5a)
-    const largeDownload = Buffer.alloc(64 * 1024 * 1024, 0xa5)
+    const largeUpload = Buffer.alloc(16 * 1024 * 1024, 0x5a)
+    const largeDownload = Buffer.alloc(16 * 1024 * 1024, 0xa5)
     const uploadPath = path.join(localRoot, 'quality-progress-upload.bin')
     const downloadPath = path.join(localRoot, 'quality-progress-download.bin')
     await fs.promises.mkdir(localRoot, { recursive: true })
     await fs.promises.writeFile(path.join(localRoot, 'local-seed.txt'), localBody)
     await fs.promises.writeFile(uploadPath, largeUpload)
     await fs.promises.writeFile(fixture.resolve('/quality-progress-download.bin'), largeDownload)
+    const lockedUploadName = 'quality-locked-upload'
+    const lockedUploadPath = path.join(localRoot, lockedUploadName)
+    const lockedFilePath = path.join(lockedUploadPath, 'locked.dat')
+    await fs.promises.mkdir(lockedUploadPath, { recursive: true })
+    await fs.promises.writeFile(path.join(lockedUploadPath, 'normal.txt'), largeUpload)
+    await fs.promises.writeFile(lockedFilePath, 'locked upload\n')
+    releaseLockedFile = await lockWindowsFile(lockedFilePath)
 
     await page.locator('.aigshell-topbar-action .anticon-plus-circle').click()
     const wizard = page.locator('.quick-connect-wizard')
@@ -259,6 +358,96 @@ test('isolated client completes SSH, SFTP, AI, update and rollback quality flows
     expect(crypto.createHash('sha256').update(await fs.promises.readFile(downloadPath)).digest('hex'))
       .toBe(crypto.createHash('sha256').update(largeDownload).digest('hex'))
 
+    if (process.platform === 'win32') {
+      await setLocalSftpPath(page, localRoot)
+      const lockedUploadRow = page.locator(
+        `.session-current .file-list.local .sftp-item[title="${lockedUploadName}"]`
+      )
+      await expect(lockedUploadRow).toBeVisible({ timeout: 20000 })
+      await lockedUploadRow.click({ button: 'right' })
+      const uploadMenu = page.locator('.ant-dropdown:visible').last()
+      await expect(uploadMenu).toBeVisible()
+      const skippedWarning = page.locator('.ant-message-notice').filter({
+        hasText: /跳过\s*1|skipped\s*1/i
+      })
+      const skippedWarningSeen = expect(skippedWarning).toBeVisible({
+        timeout: 30000
+      })
+      await uploadMenu.locator('.anticon-cloud-upload').click()
+
+      const lockedDock = await expectVisibleTransferProgress(
+        page,
+        lockedUploadName,
+        /本地|Local/,
+        { allowIndeterminate: true }
+      )
+      await skippedWarningSeen
+      await expect(lockedDock).toHaveClass(/sftp-transfer-progress-dock-completed/)
+      await expect.poll(() => pathExists(
+        fixture.resolve(`/${lockedUploadName}/normal.txt`)
+      ), { timeout: 30000 }).toBe(true)
+      await expect.poll(() => pathExists(
+        fixture.resolve(`/${lockedUploadName}/locked.dat`)
+      )).toBe(false)
+      await expect(page.locator('.notification.error').filter({ hasText: /EBUSY/i }))
+        .toHaveCount(0)
+      await releaseLockedFile()
+      releaseLockedFile = async () => {}
+    }
+
+    const fastDeleteName = 'quality-fast-delete'
+    const fastDeletePath = fixture.resolve(`/${fastDeleteName}`)
+    await fs.promises.mkdir(fastDeletePath, { recursive: true })
+    await Promise.all(Array.from({ length: 5 }, (_, index) => (
+      fs.promises.writeFile(path.join(fastDeletePath, `item-${index}.txt`), `item ${index}\n`)
+    )))
+    await page.evaluate(async () => {
+      await window.refs.get('sftp-' + window.store.activeTabId).remoteList()
+    })
+    const fastDeleteRow = page.locator(
+      `.session-current .file-list.remote .sftp-item[title="${fastDeleteName}"]`
+    )
+    await expect(fastDeleteRow).toBeVisible({ timeout: 20000 })
+    await fastDeleteRow.click({ button: 'right' })
+    const fastDeleteMenu = page.locator('.ant-dropdown:visible').last()
+    await fastDeleteMenu.getByText(/快速删除.*不可恢复|Fast Delete.*Permanent/i).click()
+    const fastDeleteConfirm = page.locator('.custom-modal-wrap:visible').last()
+    await expect(fastDeleteConfirm).toContainText(/不会创建恢复快照|No recovery snapshot/)
+    await expect(page.locator('.custom-modal-wrap:visible')).toHaveCount(1)
+    const permanentDeleteButton = fastDeleteConfirm.getByRole('button', {
+      name: /永久删除|Delete Permanently/i
+    })
+    await expect(permanentDeleteButton).toHaveClass(/is-danger/)
+    await permanentDeleteButton.click()
+    await expect.poll(() => pathExists(fastDeletePath), { timeout: 30000 }).toBe(false)
+
+    const safeDeleteName = 'quality-safe-delete.txt'
+    const safeDeletePath = fixture.resolve(`/${safeDeleteName}`)
+    await fs.promises.writeFile(safeDeletePath, 'recoverable delete\n')
+    await page.evaluate(async () => {
+      await window.refs.get('sftp-' + window.store.activeTabId).remoteList()
+    })
+    const safeDeleteRow = page.locator(
+      `.session-current .file-list.remote .sftp-item[title="${safeDeleteName}"]`
+    )
+    await expect(safeDeleteRow).toBeVisible({ timeout: 20000 })
+    await safeDeleteRow.click({ button: 'right' })
+    const safeDeleteMenu = page.locator('.ant-dropdown:visible').last()
+    await safeDeleteMenu.getByText(/安全删除.*可恢复|Safe Delete.*Recoverable/i).click()
+    const safeDeleteConfirm = page.locator('.custom-modal-wrap:visible').last()
+    await expect(safeDeleteConfirm).toContainText(/恢复快照已验证|Recovery snapshot/i, {
+      timeout: 30000
+    })
+    await safeDeleteConfirm.locator('button.custom-modal-ok-btn').click()
+    await expect.poll(() => pathExists(safeDeletePath), { timeout: 30000 }).toBe(false)
+    await page.evaluate(() => window.dispatchEvent(new CustomEvent('shellpilot-open-safety-center')))
+    const deleteSafetyCenter = page.locator('.safety-operation-center-modal')
+    await expect(deleteSafetyCenter).toBeVisible({ timeout: 20000 })
+    await deleteSafetyCenter.getByRole('tab', { name: /可回滚|Rollback/ }).click()
+    await expect(deleteSafetyCenter).toContainText('SFTP 删除')
+    await expect(deleteSafetyCenter).toContainText(safeDeleteName)
+    await deleteSafetyCenter.locator('.ant-modal-close').click()
+
     await page.evaluate(async () => {
       const entry = window.refs.get('sftp-' + window.store.activeTabId)
       await entry.sftp.writeFile('/rollback-before.txt', 'rollback source\n')
@@ -350,6 +539,7 @@ test('isolated client completes SSH, SFTP, AI, update and rollback quality flows
     primaryError = error
     throw error
   } finally {
+    await releaseLockedFile().catch(() => {})
     if (run) {
       await cleanupQualityApp(appClosed ? null : run.electronApp, run.profileRoot).catch(error => {
         if (!primaryError) throw error
