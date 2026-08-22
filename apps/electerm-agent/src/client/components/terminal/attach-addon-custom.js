@@ -28,6 +28,8 @@ export default class AttachAddonCustom {
     this._echoCheckTimer = null
     this._pendingTerminalEnter = null
     this._terminalPastePending = false
+    this._remoteOutputListeners = new Set()
+    this._remoteOutputDecoder = new TextDecoder('utf-8')
   }
 
   _initBase = async () => {
@@ -42,6 +44,30 @@ export default class AttachAddonCustom {
     } else {
       this.onInitialDataCallback = callback
     }
+  }
+
+  onRemoteOutput = (listener) => {
+    if (typeof listener !== 'function') {
+      throw new TypeError('Remote output listener is required')
+    }
+    this._remoteOutputListeners.add(listener)
+    return {
+      dispose: () => this._remoteOutputListeners.delete(listener)
+    }
+  }
+
+  _publishRemoteOutput = (value) => {
+    let text
+    if (typeof value === 'string') {
+      text = value
+    } else {
+      const bytes = value instanceof ArrayBuffer
+        ? new Uint8Array(value)
+        : new Uint8Array(value.buffer, value.byteOffset, value.byteLength)
+      text = this._remoteOutputDecoder.decode(bytes, { stream: true })
+    }
+    if (!text) return
+    for (const listener of [...this._remoteOutputListeners]) listener(text)
   }
 
   startOutputSuppression = (timeout = 3000, onEnd = null, discardOnTimeout = false) => {
@@ -155,6 +181,10 @@ export default class AttachAddonCustom {
     )
   }
 
+  isPasswordPromptDetected = () => {
+    return this._passwordPromptDetected === true
+  }
+
   _onEchoCheckTimeout = () => {
     // No echo received within timeout → confirms password mode
     this._pendingEchoCheck = null
@@ -252,6 +282,7 @@ export default class AttachAddonCustom {
 
     if (typeof data === 'string') {
       term?.parent?.notifyOnData()
+      this._publishRemoteOutput(data)
       return term.write(data)
     }
     data = new Uint8Array(data)
@@ -264,6 +295,7 @@ export default class AttachAddonCustom {
     const data = ev.target.result
     const { term } = this
     term?.parent?.notifyOnData()
+    this._publishRemoteOutput(data)
     const str = this.decoder.decode(data)
     term?.write(str)
   }
@@ -301,8 +333,25 @@ export default class AttachAddonCustom {
     return true
   }
 
+  submitManagedPtyCommand = (command) => {
+    if (!String(command || '').trim()) return false
+    this._sendToServerDirect(`${command}\r`)
+    return true
+  }
+
+  interruptManagedPtyCommand = () => {
+    this._sendToServerDirect('\x03')
+    return true
+  }
+
   sendToServer = (data) => {
     this._lastInputTime = Date.now()
+    const managed = this.term?.parent?.handleManagedPtyInput?.(data)
+    if (managed?.handled === true) {
+      return managed.send === true
+        ? this._sendToServerDirect(data)
+        : undefined
+    }
     if (this.outputSuppressed) {
       this.pendingInput.push(data)
       return
@@ -437,6 +486,8 @@ export default class AttachAddonCustom {
     this._echoCheckTimer = null
     this._pendingTerminalEnter = null
     this._terminalPastePending = false
+    this._remoteOutputListeners.clear()
+    this._remoteOutputDecoder = new TextDecoder('utf-8')
     this.term = null
     this._disposables.forEach(d => d.dispose())
     this._disposables.length = 0

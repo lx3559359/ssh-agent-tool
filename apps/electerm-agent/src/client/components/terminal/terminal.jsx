@@ -52,10 +52,16 @@ import {
 } from '@ant-design/icons'
 import {
   getShellIntegrationCommand,
+  getCurrentShellIntegrationCommand,
   detectRemoteShell,
   detectShellType,
+  isInteractiveShellTransitionCommand,
   shouldInjectShellIntegration
 } from './shell.js'
+import { createManagedPtyTaskController } from './managed-pty-task-controller.js'
+import {
+  createPtyTaskToken
+} from '../operations-toolkit/runtime/pty-task-protocol.js'
 import iconsMap from '../sys-menu/icons-map.jsx'
 import { refs, refsStatic } from '../common/ref.js'
 import ExternalLink from '../common/external-link.jsx'
@@ -134,6 +140,34 @@ class Term extends Component {
     this.currentInput = ''
     this.shellInjected = false
     this.shellType = null
+    this.shellTransitionCandidate = null
+    this.lastTerminalRemoteOutputAt = 0
+    this.terminalRemoteOutputSequence = 0
+    this.operationsPtyTaskController = createManagedPtyTaskController({
+      ensureReady: this.ensureOperationsPtyTrackerReady,
+      getTerminalState: () => ({
+        alternateBuffer: this.term?.buffer?.active?.type === 'alternate',
+        passwordPrompt: this.attachAddon?.isPasswordPromptDetected?.() === true,
+        shellIntegrationActive: this.cmdAddon?.hasShellIntegration?.() === true,
+        commandInputActive: this.cmdAddon?.isCommandInputActive?.() === true,
+        currentInput: this.cmdAddon?.getCurrentCommandInput?.()
+      }),
+      expectSubmission: command => this.cmdAddon?.expectExternalSubmission(command),
+      armSubmission: token => (
+        this.cmdAddon?.markExpectedSubmissionReleased(token) === true
+      ),
+      cancelSubmission: token => (
+        this.cmdAddon?.cancelExpectedSubmission(token) === true
+      ),
+      submitCommand: command => (
+        this.attachAddon?.submitManagedPtyCommand(command) === true
+      ),
+      interrupt: () => (
+        this.attachAddon?.interruptManagedPtyCommand() === true
+      ),
+      subscribeOutput: listener => this.attachAddon.onRemoteOutput(listener),
+      createToken: createPtyTaskToken
+    })
     this.terminalSafetyRunner = createTransactionRunner({
       runRemote: (command, options) => runCmd(this.pid, command, options),
       cancelRemote: async executionId => {
@@ -269,6 +303,7 @@ class Term extends Component {
       endpoint: this.getTerminalSafetyEndpoint()
     })
     this.onClose = true
+    this.operationsPtyTaskController.invalidate('终端标签页已关闭').catch(() => {})
     this.commandSafetyEntrypoint.invalidateSession().catch(() => {})
     refs.remove(this.id)
     if (window.store.activeTerminalId === this.props.tab.id) {
@@ -1090,9 +1125,21 @@ class Term extends Component {
     this.term.focus()
   }
 
-  notifyOnData = debounce(() => {
+  notifyTabOnData = debounce(() => {
     window.store.notifyTabOnData(this.props.tab.id)
   }, 1000)
+
+  notifyOnData = () => {
+    const observedAt = Date.now()
+    this.terminalRemoteOutputSequence += 1
+    this.lastTerminalRemoteOutputAt = observedAt
+    if (this.shellTransitionCandidate) {
+      this.shellTransitionCandidate.outputObservedAt = observedAt
+      this.shellTransitionCandidate.outputObservedSequence =
+        this.terminalRemoteOutputSequence
+    }
+    this.notifyTabOnData()
+  }
 
   parse (rawText) {
     let result = ''
@@ -1207,6 +1254,18 @@ class Term extends Component {
     // Handle Enter - add command to history
     if (d === '\r' || d === '\n') {
       const currentCmd = this.getCurrentInput()
+      if (isInteractiveShellTransitionCommand(currentCmd)) {
+        this.shellTransitionCandidate = {
+          command: currentCmd.trim(),
+          observedAt: Date.now(),
+          observedOutputSequence: this.terminalRemoteOutputSequence,
+          outputObservedAt: 0,
+          outputObservedSequence: this.terminalRemoteOutputSequence,
+          authenticated: false
+        }
+      } else if (currentCmd?.trim()) {
+        this.shellTransitionCandidate = null
+      }
       if (currentCmd && currentCmd.trim() && this.shouldUseManualHistory()) {
         window.store.addCmdHistory(currentCmd.trim())
       }
@@ -1270,7 +1329,20 @@ class Term extends Component {
         new Error('当前终端未连接，命令尚未发送。')
       )
     }
+    if (this.operationsPtyTaskController.isBusy()) {
+      return Promise.reject(
+        new Error('当前终端正在执行运维任务，请等待任务完成。')
+      )
+    }
     return this.commandSafetyEntrypoint.runSafetyCommand(command, options)
+  }
+
+  acquireOperationsPtyTask = ownerId => {
+    return this.operationsPtyTaskController.acquire(ownerId)
+  }
+
+  handleManagedPtyInput = data => {
+    return this.operationsPtyTaskController.handleUserInput(data)
   }
 
   isCommandSafetyTrackerReady = () => {
@@ -1300,6 +1372,73 @@ class Term extends Component {
 
     this.shellInjected = false
     throw new Error('Shell Integration 未就绪，无法可靠跟踪命令，命令尚未发送。')
+  }
+
+  canRearmCurrentShellIntegration = () => {
+    const candidate = this.shellTransitionCandidate
+    return this.isSsh() && Boolean(candidate?.authenticated) &&
+      candidate.outputObservedSequence > candidate.observedOutputSequence &&
+      !this.isCommandSafetyTrackerReady() &&
+      this.term?.buffer?.active?.type !== 'alternate' &&
+      this.attachAddon?.isPasswordPromptDetected?.() !== true &&
+      Boolean(this.term && this.attachAddon && this.pid && !this.onClose)
+  }
+
+  waitForCurrentShellOutputQuiet = async (candidate, quietMs = 250) => {
+    const deadline = Date.now() + 2500
+    while (Date.now() < deadline) {
+      if (candidate !== this.shellTransitionCandidate ||
+        !this.canRearmCurrentShellIntegration()) {
+        throw new Error('无法确认当前子 Shell 已进入可用提示符，运维任务尚未开始。')
+      }
+      if (Date.now() - candidate.outputObservedAt >= quietMs) return true
+      await new Promise(resolve => setTimeout(resolve, 50))
+    }
+    throw new Error('当前子 Shell 输出仍在变化，运维任务尚未开始。')
+  }
+
+  ensureOperationsPtyTrackerReady = async () => {
+    if (this.commandSafetyEntrypoint.hasPending()) {
+      throw new Error('当前终端已有安全命令正在处理，请等待完成。')
+    }
+    if (this.isCommandSafetyTrackerReady()) return true
+    if (!this.term || !this.attachAddon || !this.pid || this.onClose) {
+      throw new Error('当前终端未连接，运维任务尚未开始。')
+    }
+    if (this.term.buffer?.active?.type === 'alternate') {
+      throw new Error('当前交互程序无法执行受控 PTY 运维任务。')
+    }
+    if (this.attachAddon.isPasswordPromptDetected?.() === true) {
+      throw new Error('当前终端正在等待密码，运维任务尚未开始。')
+    }
+
+    const candidate = this.shellTransitionCandidate
+    if (this.canRearmCurrentShellIntegration()) {
+      await this.waitForCurrentShellOutputQuiet(candidate)
+      await this.injectShellIntegration({
+        forceForSafety: true,
+        forceCurrentShell: true
+      })
+    } else {
+      if (this.cmdAddon?.shellPhase === 'executing') {
+        throw new Error('当前终端命令仍在执行，运维任务尚未开始。')
+      }
+      await this.ensureCommandSafetyTrackerReady()
+    }
+
+    const deadline = Date.now() + (this.isSsh() ? 6000 : 4000)
+    while (Date.now() < deadline) {
+      if (this.isCommandSafetyTrackerReady()) {
+        this.shellTransitionCandidate = null
+        return true
+      }
+      if (!this.term || !this.attachAddon || !this.pid || this.onClose) {
+        throw new Error('终端连接已断开，运维任务尚未开始。')
+      }
+      await new Promise(resolve => setTimeout(resolve, 50))
+    }
+    this.shellInjected = false
+    throw new Error('当前 Shell 无法建立可靠命令跟踪，运维任务尚未开始。')
   }
 
   getTerminalSafetyEndpoint = () => {
@@ -1359,7 +1498,16 @@ class Term extends Component {
   }
 
   handleTerminalCommandFinished = event => {
+    if (this.operationsPtyTaskController.handleCommandFinished(event)) {
+      return true
+    }
     return this.commandSafetyEntrypoint.handleCommandFinished(event)
+  }
+
+  handleTerminalPromptStarted = () => {
+    const handled = this.operationsPtyTaskController.handlePromptStarted()
+    this.shellTransitionCandidate = null
+    return handled
   }
 
   loadRenderer = async (term, config) => {
@@ -1444,9 +1592,30 @@ class Term extends Component {
     this.cmdAddon = new CommandTrackerAddon()
     this.cmdAddon.onCommandExecuted((cmd) => {
       if (cmd && cmd.trim()) {
-        window.store.addCmdHistory(cmd.trim())
+        const command = cmd.trim()
+        const candidate = this.shellTransitionCandidate
+        if (isInteractiveShellTransitionCommand(command)) {
+          if (candidate?.command === command) {
+            candidate.authenticated = true
+            candidate.authenticatedAt = Date.now()
+          } else {
+            this.shellTransitionCandidate = {
+              command,
+              observedAt: Date.now(),
+              observedOutputSequence: this.terminalRemoteOutputSequence,
+              outputObservedAt: 0,
+              outputObservedSequence: this.terminalRemoteOutputSequence,
+              authenticated: true,
+              authenticatedAt: Date.now()
+            }
+          }
+        } else if (candidate) {
+          this.shellTransitionCandidate = null
+        }
+        window.store.addCmdHistory(command)
       }
     })
+    this.cmdAddon.onPromptStarted(this.handleTerminalPromptStarted)
     this.cmdAddon.onCommandFinished(this.handleTerminalCommandFinished)
     this.cmdAddon.onCwdChanged((cwd) => {
       this.setCwd(cwd)
@@ -1604,42 +1773,53 @@ class Term extends Component {
    */
   injectShellIntegration = async (options = {}) => {
     const forceForSafety = options.forceForSafety === true
-    if (this.shellInjected) {
+    const forceCurrentShell = options.forceCurrentShell === true
+    if (this.shellInjected && !forceCurrentShell) {
       return Promise.resolve()
     }
 
-    let shellType
-    if (this.isLocal()) {
-      const { config } = this.props
-      const localShell = isMac ? config.execMac : config.execLinux
-      shellType = detectShellType(localShell)
-    } else if (this.isSsh()) {
-      shellType = await detectRemoteShell(this.pid)
-    }
-
-    this.shellType = shellType
-    if (shellType === 'fish') {
-      if (this.props.sftpPathFollowSsh) {
-        this.warnSftpFollowUnsupported()
+    let integrationCmd
+    if (forceCurrentShell) {
+      if (!this.isSsh()) {
+        throw new Error('仅 SSH 终端支持重装当前子 Shell 命令跟踪。')
       }
-      if (forceForSafety) {
-        throw new Error('Fish shell 暂不支持可靠命令跟踪，命令尚未发送。')
+      integrationCmd = getCurrentShellIntegrationCommand(
+        this.cmdAddon.getSessionNonce()
+      )
+    } else {
+      let shellType
+      if (this.isLocal()) {
+        const { config } = this.props
+        const localShell = isMac ? config.execMac : config.execLinux
+        shellType = detectShellType(localShell)
+      } else if (this.isSsh()) {
+        shellType = await detectRemoteShell(this.pid)
       }
-      return Promise.resolve()
-    }
 
-    // Don't inject for sh type shells unless sftpPathFollowSsh is true
-    if (shellType === 'sh' && !this.props.sftpPathFollowSsh) {
-      if (forceForSafety) {
-        throw new Error('当前 shell 暂不支持可靠命令跟踪，命令尚未发送。')
+      this.shellType = shellType
+      if (shellType === 'fish') {
+        if (this.props.sftpPathFollowSsh) {
+          this.warnSftpFollowUnsupported()
+        }
+        if (forceForSafety) {
+          throw new Error('Fish shell 暂不支持可靠命令跟踪，命令尚未发送。')
+        }
+        return Promise.resolve()
       }
-      return Promise.resolve()
-    }
 
-    const integrationCmd = getShellIntegrationCommand(
-      shellType,
-      this.cmdAddon.getSessionNonce()
-    )
+      // Don't inject for sh type shells unless sftpPathFollowSsh is true
+      if (shellType === 'sh' && !this.props.sftpPathFollowSsh) {
+        if (forceForSafety) {
+          throw new Error('当前 shell 暂不支持可靠命令跟踪，命令尚未发送。')
+        }
+        return Promise.resolve()
+      }
+
+      integrationCmd = getShellIntegrationCommand(
+        shellType,
+        this.cmdAddon.getSessionNonce()
+      )
+    }
 
     return new Promise((resolve) => {
       // Wait for initial data (prompt/banner) to arrive before injecting
@@ -1705,6 +1885,10 @@ class Term extends Component {
   }
 
   remoteInit = async (term = this.term) => {
+    this.operationsPtyTaskController.invalidate('终端正在重新连接').catch(() => {})
+    this.shellTransitionCandidate = null
+    this.lastTerminalRemoteOutputAt = 0
+    this.terminalRemoteOutputSequence = 0
     const previousEndpoint = this.hostKeyFingerprint && this.pid
       ? this.getTerminalSafetyEndpoint()
       : null
@@ -1982,6 +2166,10 @@ class Term extends Component {
       tabId: this.props.tab.id,
       endpoint: this.getTerminalSafetyEndpoint()
     })
+    this.operationsPtyTaskController.invalidate('终端连接已断开').catch(error => {
+      if (!this.onClose) window.store.onError(error)
+    })
+    this.shellTransitionCandidate = null
     this.commandSafetyEntrypoint.invalidateSession().catch(error => {
       if (!this.onClose) window.store.onError(error)
     })
