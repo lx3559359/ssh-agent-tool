@@ -89,6 +89,16 @@ function buildTerminalStatusById (history, tabId) {
   return result
 }
 
+export function getSftpTransferDirection (current = {}) {
+  if (current.typeFrom === 'local' && current.typeTo === 'remote') {
+    return 'upload'
+  }
+  if (current.typeFrom === 'remote' && current.typeTo === 'local') {
+    return 'download'
+  }
+  return 'transfer'
+}
+
 export function buildSftpTransferProgress (transfers, tabId, history) {
   const items = (Array.isArray(transfers) ? transfers : [])
     .filter(transfer => String(transfer?.tabId || '') === String(tabId || ''))

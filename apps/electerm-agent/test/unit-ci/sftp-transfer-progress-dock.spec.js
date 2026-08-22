@@ -50,6 +50,24 @@ test('SFTP transfer progress aggregates only the current tab by bytes', async ()
   assert.equal(result.current.id, 'a')
 })
 
+test('SFTP progress classifies upload and download direction', async () => {
+  const { getSftpTransferDirection } = await importModel()
+
+  assert.equal(getSftpTransferDirection({
+    typeFrom: 'local',
+    typeTo: 'remote'
+  }), 'upload')
+  assert.equal(getSftpTransferDirection({
+    typeFrom: 'remote',
+    typeTo: 'local'
+  }), 'download')
+  assert.equal(getSftpTransferDirection({
+    typeFrom: 'remote',
+    typeTo: 'remote'
+  }), 'transfer')
+  assert.equal(getSftpTransferDirection(), 'transfer')
+})
+
 test('SFTP transfer progress is indeterminate when an active total is unknown', async () => {
   const { buildSftpTransferProgress } = await importModel()
   const result = buildSftpTransferProgress([
@@ -191,6 +209,10 @@ test('SFTP workspace mounts an accessible tab-scoped progress dock', () => {
     __dirname,
     '../../src/client/components/sftp/sftp-transfer-progress-dock.jsx'
   ), 'utf8')
+  const i18n = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/common/shellpilot-i18n-overrides.js'
+  ), 'utf8')
 
   assert.match(entry, /SftpTransferProgressDock/)
   assert.match(entry, /tabId=\{this\.props\.tab\.id\}/)
@@ -202,6 +224,10 @@ test('SFTP workspace mounts an accessible tab-scoped progress dock', () => {
   assert.match(dock, /Transporter/)
   assert.match(dock, /compact/)
   assert.match(dock, /readOnly=\{terminal\}/)
+  assert.match(dock, /getSftpTransferDirection/)
+  assert.match(dock, /sftp-transfer-dock-direction/)
+  assert.match(i18n, /shellpilotSftpTransferUploading/)
+  assert.match(i18n, /shellpilotSftpTransferDownloading/)
 })
 
 test('SFTP progress gate briefly publishes a verified successful terminal state', async () => {

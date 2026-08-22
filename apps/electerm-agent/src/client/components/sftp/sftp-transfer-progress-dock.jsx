@@ -5,10 +5,16 @@ import Transporter from '../sidebar/transport-ui.jsx'
 import { formatShellPilotTranslation } from '../../common/shellpilot-i18n-overrides.js'
 import {
   buildSftpTransferProgress,
-  createSftpProgressPublishGate
+  createSftpProgressPublishGate,
+  getSftpTransferDirection
 } from './sftp-transfer-progress-model.js'
 
 const e = window.translate
+const directionTranslationKeys = {
+  upload: 'shellpilotSftpTransferUploading',
+  download: 'shellpilotSftpTransferDownloading',
+  transfer: 'shellpilotSftpTransferring'
+}
 
 function formatProgressText (summary) {
   if (!summary.determinate) {
@@ -60,6 +66,8 @@ export default auto(function SftpTransferProgressDock ({ tabId }) {
   const currentPath = published.current?.fromPathReal ||
     published.current?.fromPath || ''
   const speedText = formatSpeed(published.speedBytesPerSecond)
+  const direction = getSftpTransferDirection(published.current)
+  const directionText = e(directionTranslationKeys[direction])
   const terminal = ['completed', 'failed'].includes(published.status)
   const progressProps = published.determinate
     ? { 'aria-valuenow': published.percent }
@@ -73,7 +81,12 @@ export default auto(function SftpTransferProgressDock ({ tabId }) {
   return (
     <section className={dockClass} aria-label={e('shellpilotSftpTransferProgress')}>
       <div className='sftp-transfer-dock-summary'>
-        <span className='sftp-transfer-dock-count'>{countText}</span>
+        <span className='sftp-transfer-dock-leading'>
+          <span className={`sftp-transfer-dock-direction is-${direction}`}>
+            {directionText}
+          </span>
+          <span className='sftp-transfer-dock-count'>{countText}</span>
+        </span>
         <span className='sftp-transfer-dock-current' title={currentPath}>
           {currentPath}
         </span>
