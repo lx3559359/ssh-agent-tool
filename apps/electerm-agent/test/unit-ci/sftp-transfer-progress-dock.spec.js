@@ -255,3 +255,65 @@ test('SFTP progress gate briefly publishes a verified successful terminal state'
   scheduled.at(-1).callback()
   assert.equal(published.at(-1).count, 0)
 })
+
+test('SFTP progress never reports a cancelled transfer as completed', async () => {
+  const { createSftpProgressPublishGate } = await importModel()
+  const published = []
+  const gate = createSftpProgressPublishGate({
+    onPublish: summary => published.push(summary)
+  })
+  gate.update({
+    count: 1,
+    statusKey: 'cancel:running:',
+    status: 'running',
+    transferred: 25,
+    total: 100,
+    determinate: true,
+    percent: 25,
+    items: [{ id: 'cancel' }]
+  })
+  gate.update({
+    count: 0,
+    statusKey: '',
+    status: '',
+    transferred: 0,
+    total: 0,
+    determinate: false,
+    percent: null,
+    items: [],
+    terminalStatusById: { cancel: 'cancelled' }
+  })
+
+  assert.equal(published.at(-1).count, 0)
+  assert.notEqual(published.at(-1).status, 'completed')
+  gate.dispose()
+})
+
+test('SFTP progress reads the newest bounded transfer history entries', async () => {
+  const { buildSftpTransferProgress } = await importModel()
+  const history = [
+    { id: 'fresh', tabId: 'tab-a', status: 'success' },
+    ...Array.from({ length: 1000 }, (_, index) => ({
+      id: `old-${index}`,
+      tabId: 'tab-a',
+      status: 'success'
+    }))
+  ]
+
+  const result = buildSftpTransferProgress([], 'tab-a', history)
+
+  assert.equal(result.terminalStatusById.fresh, 'success')
+  assert.equal(result.terminalStatusById['old-999'], undefined)
+})
+
+test('SFTP progress treats a history error as failed even with stale running status', async () => {
+  const { buildSftpTransferProgress } = await importModel()
+  const result = buildSftpTransferProgress([], 'tab-a', [{
+    id: 'failed-upload',
+    tabId: 'tab-a',
+    status: 'running',
+    error: 'Permission denied'
+  }])
+
+  assert.equal(result.terminalStatusById['failed-upload'], 'failed')
+})

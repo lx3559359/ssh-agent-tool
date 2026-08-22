@@ -79,10 +79,10 @@ function summaryStatus (items) {
 
 function buildTerminalStatusById (history, tabId) {
   const result = {}
-  const items = Array.isArray(history) ? history.slice(-1000) : []
+  const items = Array.isArray(history) ? history.slice(0, 100) : []
   for (const item of items) {
     if (String(item?.tabId || '') !== String(tabId || '')) continue
-    const status = String(item.status || (item.error ? 'failed' : ''))
+    const status = String(item.error ? 'failed' : (item.status || ''))
     if (item.id) result[item.id] = status
     if (item.originalId) result[item.originalId] = status
   }
