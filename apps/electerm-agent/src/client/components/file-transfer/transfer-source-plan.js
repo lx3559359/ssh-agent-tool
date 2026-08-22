@@ -11,7 +11,7 @@ function stablePlanValue (plan) {
 
 export function assertSameLocalTransferPlan (expected, actual) {
   if (stablePlanValue(expected) !== stablePlanValue(actual)) {
-    throw new Error('本地上传源计划在传输期间发生变化，远程目标可执行回滚。')
+    throw new Error('本地上传源在传输期间发生变化，远程目标可执行回滚。')
   }
   return true
 }

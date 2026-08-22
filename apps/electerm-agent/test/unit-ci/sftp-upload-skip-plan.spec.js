@@ -44,7 +44,10 @@ test('source plan verification binds both descriptors and pinned skips', async (
   assert.equal(assertSameLocalTransferPlan(expected, structuredClone(expected)), true)
   assert.throws(
     () => assertSameLocalTransferPlan(expected, { ...expected, skipped: [] }),
-    /发生变化/
+    error => {
+      assert.equal(error.message, '本地上传源在传输期间发生变化，远程目标可执行回滚。')
+      return true
+    }
   )
 })
 
