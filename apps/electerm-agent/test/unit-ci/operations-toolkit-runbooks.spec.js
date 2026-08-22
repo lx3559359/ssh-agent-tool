@@ -110,15 +110,31 @@ test('runbook executes every step, persists history, and produces AI context', a
   )
   const saved = []
   const scripts = []
+  let acquireCount = 0
+  let releaseCount = 0
   const tool = getOperationsRunbooks().find(item => (
     item.id === 'runbook.health.baseline'
   ))
   const runner = createOperationsTaskRunner({
     channel: {
-      execute: async ({ script, onChunk }) => {
-        scripts.push(script)
-        onChunk(`result:${scripts.length}`)
-        return { exitCode: 0 }
+      acquire: async () => {
+        acquireCount += 1
+        return {
+          execute: async ({ script, onChunk }) => {
+            scripts.push(script)
+            onChunk(`result:${scripts.length}`)
+            return {
+              exitCode: 0,
+              identity: {
+                uid: 0,
+                username: 'root'
+              }
+            }
+          },
+          release: async () => {
+            releaseCount += 1
+          }
+        }
       }
     },
     discover: async () => ({
@@ -135,9 +151,13 @@ test('runbook executes every step, persists history, and produces AI context', a
     endpoint: {
       tabId: 'tab-runbook',
       pid: 42,
+      terminalPid: 42,
+      sessionType: 'ssh',
       host: 'server.example',
       port: 22,
-      username: 'root'
+      username: 'root',
+      connectionUsername: 'root',
+      hostKeyFingerprint: 'SHA256:test-runbook'
     }
   })
   const completed = await active.completion
@@ -151,6 +171,8 @@ test('runbook executes every step, persists history, and produces AI context', a
   assert.equal(completed.steps.length, tool.steps.length)
   assert.ok(completed.steps.every(step => step.status === 'completed'))
   assert.equal(scripts.length, tool.steps.length)
+  assert.equal(acquireCount, 1)
+  assert.equal(releaseCount, 1)
   assert.equal(saved.length, 1)
   assert.equal(saved[0].id, completed.id)
   assert.match(context, /服务器综合健康巡检/)
