@@ -98,6 +98,10 @@ function normalizeTransferSourceErrorCode (code) {
   return String(code || '').trim().toUpperCase()
 }
 
+function transferSkipReasonForCode (code) {
+  return code === 'EBUSY' ? 'locked' : 'unreadable'
+}
+
 function isSkippableTransferSourceError (error) {
   return SKIPPABLE_TRANSFER_SOURCE_CODES.has(
     normalizeTransferSourceErrorCode(error && error.code)
@@ -123,14 +127,28 @@ function transferRelativePath (rootPath, filePath) {
   return normalizeTransferRelativePathKey(path.relative(rootPath, filePath))
 }
 
-function createTransferSkipRecord (rootPath, filePath, error) {
-  const code = normalizeTransferSourceErrorCode(error && error.code)
+function createTransferSkipRecordForCode (rootPath, filePath, code) {
+  const normalizedCode = normalizeTransferSourceErrorCode(code)
   return {
     path: filePath,
     relativePath: transferRelativePath(rootPath, filePath),
-    code,
-    reason: code === 'EBUSY' ? 'locked' : 'unreadable'
+    code: normalizedCode,
+    reason: transferSkipReasonForCode(normalizedCode)
   }
+}
+
+function createTransferSkipRecord (rootPath, filePath, error) {
+  return createTransferSkipRecordForCode(rootPath, filePath, error && error.code)
+}
+
+function invalidPinnedTransferSkipError (entry) {
+  const relativePath = normalizeTransferRelativePathKey(entry && entry.relativePath)
+  const code = normalizeTransferSourceErrorCode(entry && entry.code)
+  const error = new Error(
+    `Invalid pinned transfer skip for "${relativePath || '<unknown>'}" with code "${code || '<missing>'}".`
+  )
+  error.code = 'TRANSFER_PINNED_SKIP_INVALID'
+  return error
 }
 
 function createPinnedTransferSkipMap (entries = []) {
@@ -143,17 +161,22 @@ function createPinnedTransferSkipMap (entries = []) {
     if (!key) {
       continue
     }
+    const code = normalizeTransferSourceErrorCode(entry.code)
+    if (!SKIPPABLE_TRANSFER_SOURCE_CODES.has(code)) {
+      throw invalidPinnedTransferSkipError(entry)
+    }
     pinned.set(key, {
-      path: entry.path,
-      relativePath: normalizeTransferRelativePathKey(entry.relativePath),
-      code: normalizeTransferSourceErrorCode(entry.code),
-      reason: entry.reason
+      relativePath: key,
+      code
     })
   }
   return pinned
 }
 
 function consumePinnedTransferSkip (context, filePath) {
+  if (!context.allowSkips) {
+    return null
+  }
   const key = normalizeTransferRelativePathKey(
     transferRelativePath(context.rootPath, filePath)
   )
@@ -162,12 +185,7 @@ function consumePinnedTransferSkip (context, filePath) {
   }
   const pinned = context.pinned.get(key)
   context.pinned.delete(key)
-  const record = {
-    ...pinned,
-    path: pinned.path || filePath,
-    relativePath: transferRelativePath(context.rootPath, filePath),
-    code: normalizeTransferSourceErrorCode(pinned.code)
-  }
+  const record = createTransferSkipRecordForCode(context.rootPath, filePath, pinned.code)
   context.skipped.push(record)
   return record
 }

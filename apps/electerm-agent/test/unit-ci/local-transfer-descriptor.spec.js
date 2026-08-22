@@ -162,6 +162,77 @@ test('skip-aware planner consumes pinned skips before reading an exact child', a
   assert.deepEqual(plan.skipped, [pinnedSkip])
 })
 
+test('strict transfer description ignores pinned skips for existing children', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'shellpilot-strict-pinned-'))
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  const readable = path.join(root, 'readable.txt')
+  const locked = path.join(root, 'locked.txt')
+  await fs.writeFile(readable, 'ok')
+  await fs.writeFile(locked, 'locked')
+
+  const descriptor = await fsExport.describeTransferEntry(root, {
+    pinnedSkips: [{
+      path: locked,
+      relativePath: 'locked.txt',
+      code: 'EBUSY',
+      reason: 'locked'
+    }]
+  })
+
+  assert.equal(descriptor.type, 'directory')
+  assert.deepEqual(descriptor.entries.map(item => item.name), ['locked.txt', 'readable.txt'])
+})
+
+test('skip-aware planner rejects invalid pinned skip codes', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'shellpilot-invalid-pinned-'))
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  const locked = path.join(root, 'locked.txt')
+  await fs.writeFile(locked, 'locked')
+
+  await assert.rejects(
+    fsExport.prepareTransferEntry(root, {
+      pinnedSkips: [{
+        path: locked,
+        relativePath: 'locked.txt',
+        code: 'EIO',
+        reason: 'fatal'
+      }]
+    }),
+    error => {
+      assert.equal(error && error.code, 'TRANSFER_PINNED_SKIP_INVALID')
+      assert.match(String(error && error.message), /pinned/i)
+      return true
+    }
+  )
+})
+
+test('skip-aware planner canonicalizes pinned skip records from scanned children', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'shellpilot-pinned-canonical-'))
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  const readable = path.join(root, 'readable.txt')
+  const unreadable = path.join(root, 'unreadable.txt')
+  await fs.writeFile(readable, 'ok')
+  await fs.writeFile(unreadable, 'hidden')
+
+  const plan = await fsExport.prepareTransferEntry(root, {
+    pinnedSkips: [{
+      path: path.join(root, 'fake-caller-path.txt'),
+      relativePath: 'unreadable.txt',
+      code: 'eacces',
+      reason: 'caller supplied'
+    }]
+  })
+
+  assert.equal(plan.descriptor.type, 'directory')
+  assert.deepEqual(plan.descriptor.entries.map(item => item.name), ['readable.txt'])
+  assert.deepEqual(plan.skipped, [{
+    path: unreadable,
+    relativePath: 'unreadable.txt',
+    code: 'EACCES',
+    reason: 'unreadable'
+  }])
+})
+
 test('strict transfer description still fails on non-skippable stream errors', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'shellpilot-plan-eio-'))
   t.after(() => fs.rm(root, { recursive: true, force: true }))
