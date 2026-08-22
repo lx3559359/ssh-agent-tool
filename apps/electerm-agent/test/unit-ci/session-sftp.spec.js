@@ -325,6 +325,59 @@ describe('session-sftp transport flows', () => {
     assert.equal(channel.listenerCount('end'), 0)
   })
 
+  test('applySftpCopyMetadata skips no-op ownership and mode writes', async () => {
+    const sftp = Object.create(Sftp.prototype)
+    let chownCalls = 0
+    let chmodCalls = 0
+    sftp.lstat = async () => ({
+      uid: 1000,
+      gid: 1000,
+      mode: 0o100640
+    })
+    sftp.chown = async () => {
+      chownCalls += 1
+      throw new Error('Permission denied')
+    }
+    sftp.chmod = async () => {
+      chmodCalls += 1
+      throw new Error('Permission denied')
+    }
+
+    await sftp.applySftpCopyMetadata('/snapshot.txt', {
+      uid: 1000,
+      gid: 1000,
+      mode: 0o100640
+    }, true)
+
+    assert.equal(chownCalls, 0)
+    assert.equal(chmodCalls, 0)
+  })
+
+  test('applySftpCopyMetadata still requires mismatched ownership', async () => {
+    const sftp = Object.create(Sftp.prototype)
+    let chownCalls = 0
+    sftp.lstat = async () => ({
+      uid: 1000,
+      gid: 1000,
+      mode: 0o100640
+    })
+    sftp.chown = async () => {
+      chownCalls += 1
+      throw new Error('Permission denied')
+    }
+    sftp.chmod = async () => 1
+
+    await assert.rejects(
+      sftp.applySftpCopyMetadata('/snapshot.txt', {
+        uid: 0,
+        gid: 0,
+        mode: 0o100640
+      }, true),
+      /Permission denied/
+    )
+    assert.equal(chownCalls, 1)
+  })
+
   test('copyEntry meters actual streamed bytes and cleans a growing partial target', async () => {
     const sftp = Object.create(Sftp.prototype)
     const removed = []

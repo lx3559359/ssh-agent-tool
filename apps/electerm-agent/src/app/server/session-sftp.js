@@ -540,21 +540,33 @@ class Sftp extends TerminalBase {
 
   async applySftpCopyMetadata (path, stat, preserveOwnership, signal) {
     throwIfSftpOperationAborted(signal)
-    if (preserveOwnership) {
-      const { uid, gid } = requiredSftpOwnership(stat)
-      await this.chown(path, uid, gid)
-      throwIfSftpOperationAborted(signal)
-    }
-    await this.chmod(path, Number(stat.mode) & 0o7777)
+    const expectedMode = Number(stat.mode) & 0o7777
+    let copied = await this.lstat(path)
     throwIfSftpOperationAborted(signal)
     if (preserveOwnership) {
-      const copied = await this.lstat(path)
+      const expected = requiredSftpOwnership(stat)
+      const actual = requiredSftpOwnership(copied)
+      if (actual.uid !== expected.uid || actual.gid !== expected.gid) {
+        await this.chown(path, expected.uid, expected.gid)
+        throwIfSftpOperationAborted(signal)
+        copied = await this.lstat(path)
+        throwIfSftpOperationAborted(signal)
+      }
+    }
+    if ((Number(copied.mode) & 0o7777) !== expectedMode) {
+      await this.chmod(path, expectedMode)
       throwIfSftpOperationAborted(signal)
+    }
+    copied = await this.lstat(path)
+    throwIfSftpOperationAborted(signal)
+    if (preserveOwnership) {
       const { uid, gid } = requiredSftpOwnership(copied)
       if (uid !== stat.uid || gid !== stat.gid ||
-        (Number(copied.mode) & 0o7777) !== (Number(stat.mode) & 0o7777)) {
+        (Number(copied.mode) & 0o7777) !== expectedMode) {
         throw new Error('SFTP 复制后的 ownership 或 mode 校验失败。')
       }
+    } else if ((Number(copied.mode) & 0o7777) !== expectedMode) {
+      throw new Error('SFTP 复制后的 mode 校验失败。')
     }
   }
 
