@@ -244,7 +244,7 @@ test('SFTP workspace mounts an accessible tab-scoped progress dock', () => {
   assert.match(dock, /aria-valuemax=\{100\}/)
   assert.match(dock, /Transporter/)
   assert.match(dock, /compact/)
-  assert.match(dock, /readOnly=\{terminal\}/)
+  assert.match(dock, /formatTerminalTransferDetail/)
   assert.match(dock, /getSftpTransferDirection/)
   assert.match(dock, /sftp-transfer-dock-direction/)
   assert.match(i18n, /shellpilotSftpTransferUploading/)
@@ -270,6 +270,26 @@ test('SFTP transfer dock keeps an obvious active progress presentation', () => {
   assert.match(dock, /sftp-transfer-dock-percent/)
   assert.match(dock, /sftp-transfer-dock-metrics-detail/)
   assert.match(styles, /@media \(max-width: 760px\)[\s\S]*?\.sftp-transfer-dock-metrics-detail\s+[\s\S]*?display none/)
+})
+
+test('SFTP transfer dock renders terminal outcomes without unknown totals', () => {
+  const dock = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/components/sftp/sftp-transfer-progress-dock.jsx'
+  ), 'utf8')
+  const styles = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/components/sftp/sftp.styl'
+  ), 'utf8')
+
+  assert.match(dock, /published\.status === 'partial'/)
+  assert.match(dock, /published\.outcomeCounts/)
+  assert.match(dock, /Boolean\(published\.outcomeCounts\)/)
+  assert.match(dock, /aria-live='polite'/)
+  assert.match(dock, /gateRef\.current\.dismiss\(\)/)
+  assert.match(dock, /shellpilotSftpTransferViewDetails/)
+  assert.match(styles, /\.sftp-transfer-progress-dock-partial/)
+  assert.match(styles, /var\(--warning\)/)
 })
 
 test('SFTP progress gate briefly publishes a verified successful terminal state', async () => {

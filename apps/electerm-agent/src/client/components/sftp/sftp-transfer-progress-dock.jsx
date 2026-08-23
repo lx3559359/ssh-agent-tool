@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { auto } from 'manate/react'
 import { filesize } from 'filesize'
+import { CloseOutlined } from '@ant-design/icons'
 import Transporter from '../sidebar/transport-ui.jsx'
 import { formatShellPilotTranslation } from '../../common/shellpilot-i18n-overrides.js'
 import {
@@ -17,15 +18,41 @@ const directionTranslationKeys = {
 }
 
 function formatProgressPercent (summary) {
+  if (summary.outcomeCounts) return ''
   return summary.determinate
     ? `${summary.percent}%`
     : e('shellpilotSftpTransferUnknownTotal')
 }
 
 function formatProgressDetail (summary) {
-  return summary.determinate
-    ? `${filesize(summary.transferred)} / ${filesize(summary.total)}`
-    : filesize(summary.transferred)
+  if (summary.outcomeCounts) return ''
+  if (!summary.determinate) {
+    return summary.transferred > 0 ? filesize(summary.transferred) : ''
+  }
+  return `${filesize(summary.transferred)} / ${filesize(summary.total)}`
+}
+
+function formatOutcome (summary) {
+  const counts = summary.outcomeCounts || {}
+  return formatShellPilotTranslation(e, summary.status === 'partial'
+    ? 'shellpilotSftpTransferPartialSummary'
+    : summary.status === 'failed'
+      ? 'shellpilotSftpTransferFailedSummary'
+      : 'shellpilotSftpTransferCompletedSummary', {
+    successful: counts.successful || 0,
+    skipped: counts.skipped || 0,
+    failed: counts.failed || 0
+  })
+}
+
+function formatTerminalTransferDetail (transfer) {
+  const status = String(transfer.status || '')
+  const error = String(transfer.error || '')
+  if (status === 'skipped' && /EBUSY|resource busy|locked|being used|占用/i.test(error)) {
+    return e('shellpilotSftpTransferSkippedLocked')
+  }
+  const statusText = e(status || 'failed')
+  return error ? `${statusText}: ${error}` : statusText
 }
 
 function formatSpeed (speedBytesPerSecond) {
@@ -72,8 +99,19 @@ export default auto(function SftpTransferProgressDock ({ tabId }) {
     published.current?.fromPath || ''
   const speedText = formatSpeed(published.speedBytesPerSecond)
   const direction = getSftpTransferDirection(published.current)
-  const directionText = e(directionTranslationKeys[direction])
-  const terminal = ['completed', 'failed'].includes(published.status)
+  const terminal = Boolean(published.outcomeCounts)
+  const directionText = terminal
+    ? e(published.status === 'partial'
+      ? 'shellpilotSftpTransferPartial'
+      : published.status === 'completed'
+        ? 'shellpilotSftpTransferCompleted'
+        : 'shellpilotSftpTransferFailed')
+    : e(directionTranslationKeys[direction])
+  const progressPercentText = formatProgressPercent(published)
+  const progressDetailText = formatProgressDetail(published)
+  const outcomeText = terminal && published.outcomeCounts
+    ? formatOutcome(published)
+    : ''
   const progressProps = published.determinate
     ? { 'aria-valuenow': published.percent }
     : {}
@@ -92,18 +130,33 @@ export default auto(function SftpTransferProgressDock ({ tabId }) {
           </span>
           <span className='sftp-transfer-dock-count'>{countText}</span>
         </span>
-        <span className='sftp-transfer-dock-current' title={currentPath}>
-          {currentPath}
-        </span>
-        <span className='sftp-transfer-dock-metrics'>
-          <span className='sftp-transfer-dock-percent'>
-            {formatProgressPercent(published)}
-          </span>
-          <span className='sftp-transfer-dock-metrics-detail'>
-            {` · ${formatProgressDetail(published)}`}
-            {speedText ? ` · ${speedText}` : ''}
-          </span>
-        </span>
+        {terminal
+          ? (
+            <span
+              className='sftp-transfer-dock-outcome'
+              role='status'
+              aria-live='polite'
+              aria-atomic='true'
+            >
+              {outcomeText}
+            </span>
+            )
+          : (
+            <>
+              <span className='sftp-transfer-dock-current' title={currentPath}>
+                {currentPath}
+              </span>
+              <span className='sftp-transfer-dock-metrics'>
+                <span className='sftp-transfer-dock-percent'>
+                  {progressPercentText}
+                </span>
+                <span className='sftp-transfer-dock-metrics-detail'>
+                  {progressDetailText ? ` · ${progressDetailText}` : ''}
+                  {speedText ? ` · ${speedText}` : ''}
+                </span>
+              </span>
+            </>
+            )}
         <button
           type='button'
           className='sftp-transfer-dock-toggle'
@@ -111,43 +164,70 @@ export default auto(function SftpTransferProgressDock ({ tabId }) {
           aria-controls={`sftp-transfer-details-${tabId}`}
           onClick={() => setExpanded(value => !value)}
         >
-          {terminal
-            ? e(published.status === 'completed'
-              ? 'shellpilotSftpTransferCompleted'
-              : 'shellpilotSftpTransferFailed')
-            : (expanded
-                ? e('shellpilotSftpTransferCollapse')
-                : e('shellpilotSftpTransferExpand'))}
+          {expanded
+            ? e('shellpilotSftpTransferCollapse')
+            : e(terminal
+              ? 'shellpilotSftpTransferViewDetails'
+              : 'shellpilotSftpTransferExpand')}
         </button>
+        {terminal
+          ? (
+            <button
+              type='button'
+              className='sftp-transfer-dock-dismiss'
+              aria-label={e('shellpilotSftpTransferDismiss')}
+              onClick={() => gateRef.current.dismiss()}
+            >
+              <CloseOutlined aria-hidden='true' />
+            </button>
+            )
+          : null}
       </div>
-      <div
-        className={`sftp-transfer-dock-progress${published.determinate ? '' : ' sftp-transfer-dock-progress-indeterminate'}`}
-        role='progressbar'
-        aria-label={e('shellpilotSftpTransferProgress')}
-        aria-valuemin={0}
-        aria-valuemax={100}
-        {...progressProps}
-      >
-        <span style={published.determinate
-          ? { width: `${published.percent}%` }
-          : undefined}
-        />
-      </div>
+      {terminal
+        ? null
+        : (
+          <div
+            className={`sftp-transfer-dock-progress${published.determinate ? '' : ' sftp-transfer-dock-progress-indeterminate'}`}
+            role='progressbar'
+            aria-label={e('shellpilotSftpTransferProgress')}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            {...progressProps}
+          >
+            <span style={published.determinate
+              ? { width: `${published.percent}%` }
+              : undefined}
+            />
+          </div>
+          )}
       {expanded
         ? (
           <div
             className='sftp-transfer-dock-details'
             id={`sftp-transfer-details-${tabId}`}
           >
-            {published.items.map((transfer, index) => (
-              <Transporter
-                key={transfer.id}
-                transfer={transfer}
-                index={index}
-                compact
-                readOnly={terminal}
-              />
-            ))}
+            {published.items.map((transfer, index) => terminal
+              ? (
+                <div className='sftp-transfer-dock-terminal-item' key={transfer.id}>
+                  <span className='sftp-transfer-dock-terminal-path'>
+                    {transfer.fromPathReal || transfer.fromPath}
+                    <span aria-hidden='true'> → </span>
+                    {transfer.toPathReal || transfer.toPath}
+                  </span>
+                  <span className={`sftp-transfer-dock-terminal-status is-${transfer.status}`}>
+                    {formatTerminalTransferDetail(transfer)}
+                  </span>
+                </div>
+                )
+              : (
+                <Transporter
+                  key={transfer.id}
+                  transfer={transfer}
+                  index={index}
+                  compact
+                  readOnly={false}
+                />
+                ))}
           </div>
           )
         : null}
