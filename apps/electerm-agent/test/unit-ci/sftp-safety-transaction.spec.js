@@ -1096,6 +1096,9 @@ function createFakeSftp (initial = {}, options = {}) {
         failCopy = false
         throw new Error('No space left on device')
       }
+      if (options.copyDelay) {
+        await new Promise(resolve => setTimeout(resolve, options.copyDelay))
+      }
       if (exists(to)) throw new Error('Target already exists')
       cloneTree(from, to)
       if (failChown) {
@@ -1244,6 +1247,76 @@ async function buildSftpOperation ({
     }
   })
 }
+
+test('SFTP bounded digest reports actual monotonic bytes', async () => {
+  const { digestRemoteFile } = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/components/sftp/sftp-transaction-adapter.js'
+  )).href)
+  const sftp = createFakeSftp({
+    '/srv/app/big.bin': { type: 'file', content: Buffer.alloc(180000, 7) }
+  })
+  const progress = []
+  const result = await digestRemoteFile(
+    sftp,
+    '/srv/app/big.bin',
+    180000,
+    undefined,
+    bytes => progress.push(bytes)
+  )
+  assert.equal(result.size, 180000)
+  assert.deepEqual(progress, [65536, 65536, 48928])
+})
+
+test('SFTP delete prepare reads source and staging once without rereading final snapshot', async () => {
+  const { createSftpTransactionAdapter } = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/components/sftp/sftp-transaction-adapter.js'
+  )).href)
+  const sftp = createFakeSftp({
+    '/srv/app/big.bin': { type: 'file', content: Buffer.alloc(180000, 7) }
+  })
+  const progress = []
+  const timers = []
+  const clearedTimers = []
+  const operation = await buildSftpOperation({
+    id: 'adapter-delete-progress',
+    action: 'delete',
+    paths: { source: '/srv/app/big.bin' },
+    type: 'file',
+    expected: { absent: true }
+  })
+  const adapter = createSftpTransactionAdapter({
+    getSftp: () => sftp,
+    onProgress: (current, value) => progress.push({ id: current.id, ...value }),
+    setTimer: (callback, delay) => {
+      const timer = { callback, delay }
+      timers.push(timer)
+      return timer
+    },
+    clearTimer: timer => clearedTimers.push(timer)
+  })
+  const prepared = await adapter.prepare(operation)
+  const resource = prepared.plan.resources[0]
+  const reads = remotePath => sftp.calls.filter(call => (
+    call[0] === 'readFileChunk' && call[1] === remotePath
+  )).length
+  assert.equal(reads(resource.path), 3)
+  assert.equal(reads(resource.stagingPath), 3)
+  assert.equal(reads(resource.snapshotPath), 0)
+  assert.deepEqual(timers.map(timer => timer.delay), [250])
+  assert.deepEqual(clearedTimers, timers)
+  assert.deepEqual([...new Set(progress.map(item => item.phase))], [
+    'source-scan',
+    'snapshot-copy',
+    'snapshot-verify'
+  ])
+  for (const phase of ['source-scan', 'snapshot-copy', 'snapshot-verify']) {
+    const bytes = progress.filter(item => item.phase === phase)
+      .map(item => item.completedBytes)
+    assert.deepEqual(bytes, [...bytes].sort((left, right) => left - right))
+  }
+})
 
 async function createRealSftpTransactionRunner (operation, sftp) {
   const { createTransactionRunner } = await importTransactionModule(

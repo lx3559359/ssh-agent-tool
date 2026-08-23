@@ -179,7 +179,13 @@ export async function digestSftpText (text) {
   return digest.finish()
 }
 
-async function digestRemoteFile (sftp, path, expectedSize, signal) {
+async function digestRemoteFile (
+  sftp,
+  path,
+  expectedSize,
+  signal,
+  onBytes
+) {
   if (typeof sftp.readFileChunk !== 'function') {
     throw new Error('当前 SFTP 连接不支持有界文件摘要读取。')
   }
@@ -209,6 +215,9 @@ async function digestRemoteFile (sftp, path, expectedSize, signal) {
       throw new Error('SFTP 分块读取长度无效，已停止摘要计算。')
     }
     await digest.update(bytes)
+    if (typeof onBytes === 'function' && bytes.byteLength > 0) {
+      onBytes(bytes.byteLength)
+    }
     offset = chunk.nextOffset
   } while (offset < totalBytes)
   const result = await digest.finish()
@@ -278,12 +287,51 @@ async function describeModeEntry (sftp, path, signal) {
   return { type, mode: safeMode(stat), ...safeOwnership(stat) }
 }
 
+async function describeEntryMetadata (sftp, path, signal) {
+  const stat = await lstatOrAbsent(sftp, path, signal)
+  if (!stat) return { absent: true }
+  const type = typeFromStat(stat)
+  assertSupportedType(type)
+  return {
+    type,
+    mode: safeMode(stat),
+    ...safeOwnership(stat),
+    ...(type === 'file' ? { size: Number(stat.size) } : {})
+  }
+}
+
+function createByteProgress (onProgress, phase, knownTotal = null) {
+  let completedBytes = 0
+  let totalBytes = Number.isFinite(knownTotal) && knownTotal >= 0
+    ? knownTotal
+    : null
+  const publish = () => onProgress?.({ phase, completedBytes, totalBytes })
+  publish()
+  return {
+    setKnownTotal (value) {
+      if (Number.isFinite(value) && value >= 0) totalBytes = value
+      publish()
+    },
+    addBytes (value) {
+      const bytes = Number(value)
+      if (!Number.isFinite(bytes) || bytes <= 0) return
+      completedBytes += bytes
+      publish()
+    },
+    finish () {
+      if (totalBytes !== null) completedBytes = totalBytes
+      publish()
+    }
+  }
+}
+
 async function describeEntry (
   sftp,
   path,
   budget = createDescriptorBudget(),
   depth = 0,
-  signal
+  signal,
+  byteProgress
 ) {
   throwIfAborted(signal)
   if (depth > maxDescriptorDepth || budget.remainingNodes <= 0) {
@@ -305,7 +353,14 @@ async function describeEntry (
       throw new Error('SFTP 文件树超过总字节上限，已拒绝继续操作。')
     }
     budget.remainingBytes -= stat.size
-    const digest = await digestRemoteFile(sftp, path, Number(stat.size), signal)
+    if (depth === 0) byteProgress?.setKnownTotal(Number(stat.size))
+    const digest = await digestRemoteFile(
+      sftp,
+      path,
+      Number(stat.size),
+      signal,
+      bytes => byteProgress?.addBytes(bytes)
+    )
     return { ...descriptor, ...digest }
   }
   const entries = await sftp.list(path)
@@ -327,7 +382,8 @@ async function describeEntry (
         joinRemotePath(path, name),
         budget,
         depth + 1,
-        signal
+        signal,
+        byteProgress
       )
     })
   }
@@ -351,6 +407,29 @@ export async function describeSftpTransferEntry (sftp, path, signal) {
 
 function sameDescriptor (left, right) {
   return JSON.stringify(left) === JSON.stringify(right)
+}
+
+function descriptorMetadata (descriptor) {
+  if (descriptor.absent) return { absent: true }
+  return {
+    type: descriptor.type,
+    mode: descriptor.mode,
+    uid: descriptor.uid,
+    gid: descriptor.gid,
+    ...(descriptor.type === 'file' ? { size: descriptor.size } : {})
+  }
+}
+
+async function verifySnapshotMetadata (sftp, resource, descriptor, signal) {
+  const actual = await describeEntryMetadata(
+    sftp,
+    resource.snapshotPath,
+    signal
+  )
+  if (!sameDescriptor(actual, descriptorMetadata(descriptor))) {
+    throw new Error('SFTP 快照元数据发生变化，已拒绝继续操作。')
+  }
+  return actual
 }
 
 function copyComparableDescriptor (descriptor) {
@@ -542,7 +621,13 @@ async function verifySnapshot (sftp, resource, signal) {
   }
 }
 
-async function validateManifest (sftp, operation, manifest, signal) {
+async function validateManifest (
+  sftp,
+  operation,
+  manifest,
+  signal,
+  { verifySnapshots = true } = {}
+) {
   throwIfAborted(signal)
   const expected = buildPlanSkeleton(operation)
   if (manifest?.schemaVersion !== 1 || manifest?.complete !== true ||
@@ -574,7 +659,9 @@ async function validateManifest (sftp, operation, manifest, signal) {
         throw new Error('SFTP 恢复清单资源路径已被修改。')
       }
     }
-    if (manifest.plan.action !== 'chmod') await verifySnapshot(sftp, actual, signal)
+    if (verifySnapshots && manifest.plan.action !== 'chmod') {
+      await verifySnapshot(sftp, actual, signal)
+    }
   }
   const artifacts = buildArtifacts(manifest.plan)
   if (!sameDescriptor(artifacts, manifest.artifacts)) {
@@ -588,7 +675,7 @@ async function validateManifest (sftp, operation, manifest, signal) {
   }
 }
 
-async function loadManifest (sftp, operation, signal) {
+async function loadManifest (sftp, operation, signal, options = {}) {
   const plan = buildPlanSkeleton(operation)
   if (!await lstatOrAbsent(sftp, plan.manifestPath, signal)) return null
   let manifest
@@ -597,12 +684,67 @@ async function loadManifest (sftp, operation, signal) {
   } catch (error) {
     throw new Error(`SFTP 恢复清单读取失败：${error?.message || error}`)
   }
-  return validateManifest(sftp, operation, manifest, signal)
+  return validateManifest(sftp, operation, manifest, signal, options)
 }
 
-async function copyVerifiedSnapshot (sftp, resource, signal) {
+function monitorSnapshotCopy ({
+  sftp,
+  resource,
+  signal,
+  onProgress,
+  setTimer = setTimeout,
+  clearTimer = clearTimeout
+}) {
+  let stopped = false
+  let timer = null
+  let lastBytes = 0
+  const totalBytes = resource.original.type === 'file'
+    ? resource.original.size
+    : null
+  const poll = async () => {
+    if (stopped || signal?.aborted) return
+    try {
+      const stat = await lstatOrAbsent(sftp, resource.stagingPath, signal)
+      if (stopped) return
+      if (stat && totalBytes !== null) {
+        lastBytes = Math.max(
+          lastBytes,
+          Math.min(Number(stat.size) || 0, totalBytes)
+        )
+        onProgress?.({
+          phase: 'snapshot-copy',
+          completedBytes: lastBytes,
+          totalBytes
+        })
+      }
+    } catch (error) {
+      if (!isMissingError(error)) stopped = true
+    }
+    if (!stopped) timer = setTimer(poll, 250)
+  }
+  onProgress?.({ phase: 'snapshot-copy', completedBytes: 0, totalBytes })
+  timer = setTimer(poll, 250)
+  return () => {
+    stopped = true
+    if (timer !== null) clearTimer(timer)
+  }
+}
+
+async function copyVerifiedSnapshot (
+  sftp,
+  resource,
+  signal,
+  progressOptions = {}
+) {
   if (resource.snapshotRequired === false) return
   if (resource.original.absent === true) return
+  const {
+    onProgress,
+    setTimer = setTimeout,
+    clearTimer = clearTimeout,
+    lightweightFinalVerify = false
+  } = progressOptions
+  const publish = value => onProgress?.(value)
   const existing = await lstatOrAbsent(sftp, resource.snapshotPath, signal)
   if (existing) {
     await verifySnapshot(sftp, resource, signal)
@@ -612,36 +754,80 @@ async function copyVerifiedSnapshot (sftp, resource, signal) {
   if (typeof sftp.copyEntry !== 'function') {
     throw new Error('当前 SFTP 连接不支持纯 SFTP 快照复制。')
   }
-  await sftp.copyEntry(resource.path, resource.stagingPath, { signal })
+  const stopMonitoring = monitorSnapshotCopy({
+    sftp,
+    resource,
+    signal,
+    onProgress: publish,
+    setTimer,
+    clearTimer
+  })
+  try {
+    await sftp.copyEntry(resource.path, resource.stagingPath, { signal })
+  } finally {
+    stopMonitoring()
+  }
+  publish({
+    phase: 'snapshot-copy',
+    completedBytes: resource.original.type === 'file'
+      ? resource.original.size
+      : 0,
+    totalBytes: resource.original.type === 'file'
+      ? resource.original.size
+      : null
+  })
+  const snapshotProgress = createByteProgress(
+    publish,
+    'snapshot-verify',
+    resource.original.type === 'file' ? resource.original.size : null
+  )
   const staged = await describeEntry(
     sftp,
     resource.stagingPath,
     createDescriptorBudget(),
     0,
-    signal
+    signal,
+    snapshotProgress
   )
+  snapshotProgress.finish()
   if (!sameDescriptor(staged, resource.original)) {
     throw new Error('SFTP 快照复制不完整，已拒绝生成恢复清单。')
   }
   throwIfAborted(signal)
   await sftp.rename(resource.stagingPath, resource.snapshotPath)
   throwIfAborted(signal)
-  await verifySnapshot(sftp, resource, signal)
+  if (lightweightFinalVerify) {
+    await verifySnapshotMetadata(sftp, resource, staged, signal)
+  } else {
+    await verifySnapshot(sftp, resource, signal)
+  }
+  return staged
 }
 
-async function prepareNewManifest (sftp, operation, signal) {
+async function prepareNewManifest (
+  sftp,
+  operation,
+  signal,
+  progressOptions = {}
+) {
   const plan = buildPlanSkeleton(operation)
+  const { onProgress } = progressOptions
   for (const resource of plan.resources) {
     throwIfAborted(signal)
-    resource.original = operation.effect.action === 'chmod'
-      ? await describeModeEntry(sftp, resource.path, signal)
-      : await describeEntry(
+    if (operation.effect.action === 'chmod') {
+      resource.original = await describeModeEntry(sftp, resource.path, signal)
+    } else {
+      const sourceProgress = createByteProgress(onProgress, 'source-scan')
+      resource.original = await describeEntry(
         sftp,
         resource.path,
         createDescriptorBudget(),
         0,
-        signal
+        signal,
+        sourceProgress
       )
+      sourceProgress.finish()
+    }
     if (resource.original.absent !== true) {
       if (resource.original.type !== operation.effect.type) {
         throw new Error('SFTP 资源类型与请求不一致，已拒绝操作。')
@@ -681,7 +867,10 @@ async function prepareNewManifest (sftp, operation, signal) {
     await ensureDirectory(sftp, plan.operationDir, signal)
     if (operation.effect.action !== 'chmod') {
       for (const resource of plan.resources) {
-        await copyVerifiedSnapshot(sftp, resource, signal)
+        await copyVerifiedSnapshot(sftp, resource, signal, {
+          ...progressOptions,
+          lightweightFinalVerify: operation.effect.action === 'delete'
+        })
       }
     }
     manifestText = serializeBoundedManifest(manifest)
@@ -704,7 +893,9 @@ async function prepareNewManifest (sftp, operation, signal) {
     } catch {}
     throw error
   }
-  const verified = await loadManifest(sftp, operation, signal)
+  const verified = await loadManifest(sftp, operation, signal, {
+    verifySnapshots: operation.effect.action !== 'delete'
+  })
   if (!verified) throw new Error('SFTP 恢复清单提交失败。')
   return {
     ...verified,
@@ -712,8 +903,8 @@ async function prepareNewManifest (sftp, operation, signal) {
   }
 }
 
-async function requireManifest (sftp, operation, signal) {
-  const prepared = await loadManifest(sftp, operation, signal)
+async function requireManifest (sftp, operation, signal, options = {}) {
+  const prepared = await loadManifest(sftp, operation, signal, options)
   const preparedArtifacts = { ...(operation.artifacts || {}) }
   delete preparedArtifacts.postMutation
   if (!prepared || !sameDescriptor(prepared.plan, operation.plan) ||
@@ -1063,9 +1254,22 @@ function postExpectedFor (operation, resource) {
   return { absent: true }
 }
 
-export function createSftpTransactionAdapter ({ getSftp } = {}) {
+export function createSftpTransactionAdapter ({
+  getSftp,
+  onProgress,
+  setTimer = setTimeout,
+  clearTimer = clearTimeout
+} = {}) {
   if (typeof getSftp !== 'function') {
     throw new Error('SFTP 安全事务缺少连接解析器。')
+  }
+
+  const reportProgress = (operation, progress) => {
+    if (operation.effect.action !== 'delete' ||
+      typeof onProgress !== 'function') return
+    try {
+      onProgress(operation, progress)
+    } catch {}
   }
 
   async function requireSftp (operation) {
@@ -1093,7 +1297,12 @@ export function createSftpTransactionAdapter ({ getSftp } = {}) {
       const prepare = async () => {
         const sftp = await requireSftp(operation)
         const existing = await loadManifest(sftp, operation, context.signal)
-        return existing || prepareNewManifest(sftp, operation, context.signal)
+        if (existing) return existing
+        return prepareNewManifest(sftp, operation, context.signal, {
+          onProgress: value => reportProgress(operation, value),
+          setTimer,
+          clearTimer
+        })
       }
       return operation.effect.action === 'editor-save'
         ? runEditorStage('snapshot', prepare)
