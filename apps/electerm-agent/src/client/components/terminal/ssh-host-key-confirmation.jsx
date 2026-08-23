@@ -40,7 +40,7 @@ export default function SshHostKeyConfirmation ({
             {translate('shellpilotCopyHostFingerprint')}
           </Button>
         </dd>
-        <dt>known_hosts</dt>
+        <dt>{translate('shellpilotKnownHostsFile')}</dt>
         <dd className='ssh-host-key-copy-row'>
           <code>{details.knownHostsPath}</code>
           <Button
