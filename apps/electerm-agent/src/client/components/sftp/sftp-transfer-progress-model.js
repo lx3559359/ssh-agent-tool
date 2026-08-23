@@ -84,14 +84,38 @@ function summaryStatus (items) {
   return ''
 }
 
+function countItemOutcomes (itemResults) {
+  if (!Array.isArray(itemResults) || itemResults.length === 0) return null
+  const counts = {
+    successful: 0,
+    skipped: 0,
+    failed: 0
+  }
+  for (const item of itemResults) {
+    const status = String(item?.status || '')
+    if (successfulTerminalStatuses.has(status)) {
+      counts.successful += 1
+    } else if (status === 'skipped') {
+      counts.skipped += 1
+    } else if (failedTerminalStatuses.has(status)) {
+      counts.failed += 1
+    } else {
+      return null
+    }
+  }
+  return counts
+}
+
 function buildTerminalRecordById (history, tabId) {
   const result = {}
   const items = Array.isArray(history) ? history.slice(0, 100) : []
   for (const item of items) {
     if (String(item?.tabId || '') !== String(tabId || '')) continue
+    const outcomeCounts = countItemOutcomes(item.itemResults)
     const record = {
       status: String(item.error ? 'failed' : (item.status || '')),
-      error: String(item.error || '')
+      error: String(item.error || ''),
+      ...(outcomeCounts ? { outcomeCounts } : {})
     }
     if (item.id) result[item.id] = record
     if (item.originalId) result[item.originalId] = record
@@ -106,15 +130,24 @@ function terminalOutcome (previous, recordById) {
   if (records.some(record => !recognizedTerminalStatuses.has(record.status))) {
     return null
   }
-  const outcomeCounts = {
-    successful: records.filter(record => (
-      successfulTerminalStatuses.has(record.status)
-    )).length,
-    skipped: records.filter(record => record.status === 'skipped').length,
-    failed: records.filter(record => (
-      failedTerminalStatuses.has(record.status)
-    )).length
-  }
+  const outcomeCounts = records.reduce((counts, record) => {
+    if (record.outcomeCounts) {
+      counts.successful += record.outcomeCounts.successful
+      counts.skipped += record.outcomeCounts.skipped
+      counts.failed += record.outcomeCounts.failed
+    } else if (successfulTerminalStatuses.has(record.status)) {
+      counts.successful += 1
+    } else if (record.status === 'skipped') {
+      counts.skipped += 1
+    } else if (failedTerminalStatuses.has(record.status)) {
+      counts.failed += 1
+    }
+    return counts
+  }, {
+    successful: 0,
+    skipped: 0,
+    failed: 0
+  })
   const status = outcomeCounts.failed > 0
     ? 'failed'
     : outcomeCounts.skipped > 0
@@ -128,7 +161,8 @@ function terminalOutcome (previous, recordById) {
     items: previous.items.map(item => ({
       ...item,
       status: recordById[item.id]?.status || item.status,
-      error: recordById[item.id]?.error || item.error
+      error: recordById[item.id]?.error || item.error,
+      outcomeCounts: recordById[item.id]?.outcomeCounts || null
     })),
     speedBytesPerSecond: 0,
     determinate: status === 'completed' && previous.determinate,

@@ -46,6 +46,14 @@ function formatOutcome (summary) {
 }
 
 function formatTerminalTransferDetail (transfer) {
+  if (transfer.outcomeCounts) {
+    const status = transfer.outcomeCounts.failed > 0
+      ? 'failed'
+      : transfer.outcomeCounts.skipped > 0
+        ? 'partial'
+        : 'completed'
+    return formatOutcome({ status, outcomeCounts: transfer.outcomeCounts })
+  }
   const status = String(transfer.status || '')
   const error = String(transfer.error || '')
   if (status === 'skipped' && /EBUSY|resource busy|locked|being used|占用/i.test(error)) {

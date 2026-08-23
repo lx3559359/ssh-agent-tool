@@ -447,6 +447,48 @@ test('SFTP progress publishes skipped work as a persistent partial outcome', asy
   assert.equal(scheduled.length, 0)
 })
 
+test('SFTP progress counts skipped files inside one completed folder transfer', async () => {
+  const {
+    buildSftpTransferProgress,
+    createSftpProgressPublishGate
+  } = await importModel()
+  const published = []
+  const gate = createSftpProgressPublishGate({
+    onPublish: summary => published.push(summary)
+  })
+
+  gate.update(buildSftpTransferProgress([{
+    id: 'folder-upload',
+    tabId: 'tab-a',
+    status: 'running',
+    fromPath: 'C:\\quality-upload',
+    toPath: '/',
+    transferred: 8,
+    total: 8
+  }], 'tab-a', []))
+  gate.update(buildSftpTransferProgress([], 'tab-a', [{
+    id: 'folder-upload',
+    tabId: 'tab-a',
+    status: 'success',
+    itemResults: [
+      { name: 'normal.txt', status: 'completed' },
+      { name: 'locked.dat', status: 'skipped', error: 'EBUSY' }
+    ]
+  }]))
+
+  assert.equal(published.at(-1).status, 'partial')
+  assert.deepEqual(published.at(-1).outcomeCounts, {
+    successful: 1,
+    skipped: 1,
+    failed: 0
+  })
+  assert.deepEqual(published.at(-1).items[0].outcomeCounts, {
+    successful: 1,
+    skipped: 1,
+    failed: 0
+  })
+})
+
 test('SFTP progress dismisses a persistent terminal outcome explicitly', async () => {
   const { createSftpProgressPublishGate } = await importModel()
   const published = []
