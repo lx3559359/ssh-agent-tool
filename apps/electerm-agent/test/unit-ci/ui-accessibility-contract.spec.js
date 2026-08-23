@@ -34,6 +34,8 @@ test('custom modal and drawer expose complete dialog semantics', () => {
   assert.match(modal, /aria-label=\{e\('shellpilotCloseDialog'\)\}/)
   assert.match(modal, /onCancelRef\.current = onCancel/)
   assert.match(modal, /keyboardConfirmRef\.current = keyboardConfirm/)
+  assert.match(modal, /initialFocusSelector/)
+  assert.match(modal, /okButtonProps\?\.disabled/)
   assert.match(modal, /\}, \[open\]\)/)
   assert.match(drawer, /createPortal/)
   assert.match(drawer, /role='dialog'/)

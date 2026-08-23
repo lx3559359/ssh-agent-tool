@@ -41,6 +41,7 @@ export default function Modal (props) {
     footer,
     maskClosable = true,
     keyboardConfirm = true,
+    initialFocusSelector,
     onCancel
   } = props
   const overlayRef = useRef(null)
@@ -94,7 +95,7 @@ export default function Modal (props) {
         }
       } else if (keyboardConfirmRef.current && (e.key === 'Enter' || e.key === ' ')) {
         // For confirm, Enter/Space confirms
-        const okBtn = document.querySelector('.custom-modal-ok-btn')
+        const okBtn = content?.querySelector('.custom-modal-ok-btn')
         if (okBtn) {
           okBtn.click()
           e.preventDefault()
@@ -103,7 +104,10 @@ export default function Modal (props) {
     }
 
     document.addEventListener('keydown', handleKeyDown)
-    const initialFocus = getFocusableElements(content)[0] || content
+    const requestedFocus = initialFocusSelector
+      ? content?.querySelector(initialFocusSelector)
+      : null
+    const initialFocus = requestedFocus || getFocusableElements(content)[0] || content
     initialFocus?.focus()
     return () => {
       document.removeEventListener('keydown', handleKeyDown)
@@ -235,6 +239,7 @@ function createModalInstance (type, options) {
         className={classnames('custom-modal-ok-btn', {
           'is-danger': okButtonProps?.danger
         })}
+        disabled={okButtonProps?.disabled}
         onClick={handleOk}
       >
         {okText}
@@ -299,6 +304,7 @@ function createModalInstance (type, options) {
           className={classnames('custom-modal-ok-btn', {
             'is-danger': newOkButtonProps?.danger
           })}
+          disabled={newOkButtonProps?.disabled}
           onClick={newHandleOk}
         >
           {newOkText}

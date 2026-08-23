@@ -165,6 +165,28 @@
 .sftp-transfer-dock-terminal-status.is-failed,
 .sftp-transfer-dock-terminal-status.is-exception
   color var(--error)
+.sftp-fast-delete-confirmation
+  display grid
+  gap 10px
+.sftp-delete-risk-badge
+  width max-content
+  padding 3px 8px
+  color var(--sp-danger)
+  background unquote('color-mix(in srgb, var(--sp-danger) 12%, transparent)')
+  border 1px solid var(--sp-danger)
+  border-radius var(--sp-radius-control)
+  font-weight 700
+.sftp-delete-targets
+  display block
+  max-height 96px
+  padding 8px 10px
+  color var(--sp-text)
+  background var(--sp-flat-background)
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-control)
+  overflow auto
+  overflow-wrap anywhere
+  white-space normal
 
 @keyframes sftp-transfer-progress-indeterminate
   from

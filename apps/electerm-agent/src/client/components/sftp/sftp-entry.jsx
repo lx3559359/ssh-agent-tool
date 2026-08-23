@@ -85,6 +85,7 @@ import {
   buildFastDeleteTargets,
   executeFastRemoteDelete
 } from './sftp-fast-delete.js'
+import { buildDeleteTargetPreview } from './sftp-delete-dialog-model.js'
 import {
   mergeSafetyOperationRecords,
   matchesSafetyOperationEndpoint,
@@ -1074,6 +1075,9 @@ export default class Sftp extends Component {
   }
 
   confirmQuickDelete = (files) => {
+    const preview = buildDeleteTargetPreview(files, {
+      separator: e('shellpilotListSeparator')
+    })
     return new Promise(resolve => {
       let settled = false
       const settle = value => {
@@ -1087,17 +1091,34 @@ export default class Sftp extends Component {
           'shellpilotSftpFastDeleteConfirmTitle'
         ),
         content: (
-          <div className='wordbreak'>
-            {formatShellPilotTranslation(
-              e,
-              'shellpilotSftpFastDeleteConfirmBody',
-              { count: files.length }
+          <div className='sftp-fast-delete-confirmation'>
+            <div className='sftp-delete-risk-badge'>
+              {e('shellpilotSftpFastDeleteRisk')}
+            </div>
+            <div>
+              {formatShellPilotTranslation(
+                e,
+                'shellpilotSftpFastDeleteConfirmBody',
+                { count: preview.count }
+              )}
+            </div>
+            <code className='sftp-delete-targets'>{preview.names}</code>
+            {preview.remaining > 0 && (
+              <div>
+                {formatShellPilotTranslation(
+                  e,
+                  'shellpilotSftpDeleteMoreTargets',
+                  { count: preview.remaining }
+                )}
+              </div>
             )}
           </div>
         ),
         okText: e('shellpilotSftpFastDeleteConfirmAction'),
         cancelText: e('cancel'),
         okButtonProps: { danger: true },
+        keyboardConfirm: false,
+        initialFocusSelector: '.custom-modal-cancel-btn',
         onOk: () => settle(true),
         onCancel: () => settle(false)
       })
