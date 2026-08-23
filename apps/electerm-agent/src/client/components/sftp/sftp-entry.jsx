@@ -1377,6 +1377,7 @@ export default class Sftp extends Component {
     try {
       await this.remoteList(false, undefined, undefined, {
         rethrow: true,
+        suppressLoading: true,
         suppressVisibleError: true
       })
     } catch (error) {
@@ -1680,7 +1681,7 @@ export default class Sftp extends Component {
     if (noPathInit) {
       remotePath = noPathInit
     }
-    if (!returnList) {
+    if (!returnList && !options.suppressLoading) {
       this.setState({
         remoteLoading: true
       })
