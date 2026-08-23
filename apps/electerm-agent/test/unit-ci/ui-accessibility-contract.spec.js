@@ -160,6 +160,19 @@ test('session pane tabs and icon controls expose native keyboard semantics', () 
   assert.match(styles, /\.session-icon-button:focus-visible[\s\S]*outline/)
 })
 
+test('SSH host key confirmation defaults focus to rejecting the connection', () => {
+  const interactive = readClient('components/terminal/terminal-interactive-ui.jsx')
+  const confirmation = readClient('components/terminal/ssh-host-key-confirmation.jsx')
+
+  assert.match(interactive, /keyboardConfirm=\{false\}/)
+  assert.match(interactive, /initialFocusSelector='\.terminal-interactive-cancel'/)
+  assert.ok(
+    interactive.indexOf("className='terminal-interactive-cancel'") <
+    interactive.indexOf("className='terminal-interactive-confirm'")
+  )
+  assert.match(confirmation, /role='alert'/)
+})
+
 test('SFTP uses grid, row, column-header, and roving-focus semantics', () => {
   const table = readClient('components/sftp/list-table-ui.jsx')
   const row = readClient('components/sftp/file-item.jsx')
