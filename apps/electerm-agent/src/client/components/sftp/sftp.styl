@@ -187,6 +187,21 @@
   overflow auto
   overflow-wrap anywhere
   white-space normal
+.sftp-safe-delete-dialog
+  display grid
+  gap 10px
+.sftp-safe-delete-state
+  padding 9px 10px
+  color var(--sp-text)
+  background var(--sp-primary-soft)
+  border-left 3px solid var(--sp-primary)
+  border-radius var(--sp-radius-control)
+.sftp-safe-delete-dialog.is-ready .sftp-safe-delete-state
+  color var(--success)
+  border-left-color var(--success)
+.sftp-safe-delete-dialog.is-failed .sftp-safe-delete-state
+  color var(--error)
+  border-left-color var(--error)
 
 @keyframes sftp-transfer-progress-indeterminate
   from

@@ -9,3 +9,16 @@ export function buildDeleteTargetPreview (files = [], options = {}) {
     remaining: Math.max(0, files.length - names.length)
   }
 }
+
+export function redactDeletePreparationError (error) {
+  return String(error?.message || error || '')
+    .replace(/([a-z][a-z0-9+.-]*:\/\/)([^/\s@]+)@/gi, '$1***@')
+    .replace(
+      /\bauthorization\s*[:=]\s*(?:bearer\s+)?[^\s;,]+/gi,
+      'Authorization=***'
+    )
+    .replace(
+      /\b(password|passwd|token|secret)\s*[:=]\s*("[^"]*"|'[^']*'|[^\s;,]+)/gi,
+      '$1=***'
+    )
+}
