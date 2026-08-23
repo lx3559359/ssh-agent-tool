@@ -49,6 +49,18 @@ test('custom modal and drawer expose complete dialog semantics', () => {
   assert.match(isolation, /activeOwners\.size/)
 })
 
+test('custom confirm can stay open after an explicit action', () => {
+  const source = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/components/common/modal.jsx'
+  ), 'utf8')
+  assert.match(source, /closeOnOk\s*=\s*true/)
+  assert.match(source, /let currentOptions = options/)
+  assert.match(source, /currentOptions = \{ \.\.\.currentOptions, \.\.\.newOptions \}/)
+  assert.match(source, /if \(closeOnOk\) destroy\(\)/)
+  assert.match(source, /if \(newCloseOnOk\) destroy\(\)/)
+})
+
 test('foreground notifications stay operable while a dialog is open', () => {
   const notification = readClient('components/common/notification.jsx')
 
