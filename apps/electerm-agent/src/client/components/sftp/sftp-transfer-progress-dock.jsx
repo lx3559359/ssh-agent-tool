@@ -10,6 +10,7 @@ import {
   getSftpTransferDirection,
   sanitizeSftpTransferError
 } from './sftp-transfer-progress-model.js'
+import { computeSftpTransferDockLayout } from './sftp-transfer-dock-layout.js'
 
 const e = window.translate
 const directionTranslationKeys = {
@@ -80,6 +81,13 @@ export default auto(function SftpTransferProgressDock ({ tabId }) {
     buildSftpTransferProgress([], tabId)
   ))
   const [expanded, setExpanded] = useState(false)
+  const dockRef = useRef(null)
+  const [dockLayout, setDockLayout] = useState(() => (
+    computeSftpTransferDockLayout({
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight
+    })
+  ))
   const gateRef = useRef()
   if (!gateRef.current) {
     gateRef.current = createSftpProgressPublishGate({
@@ -98,6 +106,29 @@ export default auto(function SftpTransferProgressDock ({ tabId }) {
   ])
 
   useEffect(() => () => gateRef.current?.dispose(), [])
+
+  useEffect(() => {
+    if (!published.count) return undefined
+    const dock = dockRef.current
+    const workspace = dock?.closest('.sftp-wrap')
+    const measure = () => {
+      setDockLayout(computeSftpTransferDockLayout({
+        containerRect: workspace?.getBoundingClientRect(),
+        viewportWidth: window.innerWidth,
+        viewportHeight: window.innerHeight
+      }))
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    const observer = typeof window.ResizeObserver === 'function'
+      ? new window.ResizeObserver(measure)
+      : null
+    if (workspace) observer?.observe(workspace)
+    return () => {
+      window.removeEventListener('resize', measure)
+      observer?.disconnect()
+    }
+  }, [published.count, expanded])
 
   if (!published.count) return null
 
@@ -133,7 +164,12 @@ export default auto(function SftpTransferProgressDock ({ tabId }) {
   ].filter(Boolean).join(' ')
 
   return (
-    <section className={dockClass} aria-label={e('shellpilotSftpTransferProgress')}>
+    <section
+      ref={dockRef}
+      className={dockClass}
+      style={dockLayout}
+      aria-label={e('shellpilotSftpTransferProgress')}
+    >
       <div className='sftp-transfer-dock-summary'>
         <span className='sftp-transfer-dock-leading'>
           <span className={`sftp-transfer-dock-direction is-${direction}`}>

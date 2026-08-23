@@ -5,11 +5,12 @@
     .sftp-section
       height calc(100% - 64px) !important
 .sftp-transfer-progress-dock
-  position absolute
+  position fixed
   z-index 20
   left 10px
   right 10px
   bottom 8px
+  max-width calc(100vw - 20px)
   min-height 50px
   color var(--sp-text)
   background-color var(--sp-surface-elevated)

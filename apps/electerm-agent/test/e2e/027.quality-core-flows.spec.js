@@ -208,6 +208,24 @@ async function expectVisibleTransferProgress (
   return dock
 }
 
+async function expectDockInsideViewport (dock) {
+  const geometry = await dock.evaluate(element => {
+    const rect = element.getBoundingClientRect()
+    return {
+      top: rect.top,
+      right: rect.right,
+      bottom: rect.bottom,
+      left: rect.left,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight
+    }
+  })
+  expect(geometry.left).toBeGreaterThanOrEqual(0)
+  expect(geometry.top).toBeGreaterThanOrEqual(0)
+  expect(geometry.right).toBeLessThanOrEqual(geometry.viewportWidth)
+  expect(geometry.bottom).toBeLessThanOrEqual(geometry.viewportHeight)
+}
+
 async function collectProfileLogs (root) {
   const entries = await fs.promises.readdir(root, { recursive: true, withFileTypes: true })
   const files = entries
@@ -347,31 +365,48 @@ test('isolated client completes SSH, SFTP, AI, update and rollback quality flows
       localPath: uploadPath,
       remotePath: '/quality-progress-upload.bin'
     })
-    await expectVisibleTransferProgress(
+    const uploadDock = await expectVisibleTransferProgress(
       page,
       'quality-progress-upload.bin',
       /本地|Local/
     )
+    await expectDockInsideViewport(uploadDock)
     await waitForTransferComplete(page, upload.transferId)
     expect(await fixture.hashFile('/quality-progress-upload.bin'))
       .toBe(crypto.createHash('sha256').update(largeUpload).digest('hex'))
 
-    const download = await page.evaluate(({ remotePath, localPath }) => (
-      window.store.mcpSftpDownload({
-        tabId: window.store.activeTabId,
-        remotePath,
-        localPath
+    const originalBounds = await run.electronApp.evaluate(({ BrowserWindow }) => (
+      BrowserWindow.getAllWindows()[0].getBounds()
+    ))
+    let download
+    try {
+      await run.electronApp.evaluate(({ BrowserWindow }) => {
+        const window = BrowserWindow.getAllWindows()[0]
+        const bounds = window.getBounds()
+        window.setBounds({ ...bounds, height: 820 })
       })
-    ), {
-      remotePath: '/quality-progress-download.bin',
-      localPath: downloadPath
-    })
-    await expectVisibleTransferProgress(
-      page,
-      'quality-progress-download.bin',
-      /远程|Remote/
-    )
-    await waitForTransferComplete(page, download.transferId)
+      download = await page.evaluate(({ remotePath, localPath }) => (
+        window.store.mcpSftpDownload({
+          tabId: window.store.activeTabId,
+          remotePath,
+          localPath
+        })
+      ), {
+        remotePath: '/quality-progress-download.bin',
+        localPath: downloadPath
+      })
+      const downloadDock = await expectVisibleTransferProgress(
+        page,
+        'quality-progress-download.bin',
+        /远程|Remote/
+      )
+      await expectDockInsideViewport(downloadDock)
+      await waitForTransferComplete(page, download.transferId)
+    } finally {
+      await run.electronApp.evaluate(({ BrowserWindow }, bounds) => {
+        BrowserWindow.getAllWindows()[0].setBounds(bounds)
+      }, originalBounds)
+    }
     expect(crypto.createHash('sha256').update(await fs.promises.readFile(downloadPath)).digest('hex'))
       .toBe(crypto.createHash('sha256').update(largeDownload).digest('hex'))
 
