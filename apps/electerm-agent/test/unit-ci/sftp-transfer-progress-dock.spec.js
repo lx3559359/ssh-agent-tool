@@ -317,14 +317,14 @@ test('SFTP progress gate briefly publishes a verified successful terminal state'
   assert.equal(published.at(-1).percent, 100)
   assert.equal(published.at(-1).transferred, 100)
   assert.equal(scheduled.filter(timer => !timer.cancelled).length, 1)
-  assert.equal(scheduled.at(-1).delay, 2000)
+  assert.equal(scheduled.at(-1).delay, 8000)
 
   currentTime = 2020
   scheduled.at(-1).callback()
   assert.equal(published.at(-1).count, 0)
 })
 
-test('SFTP progress gate holds a root-skipped transfer as completed without inventing uploaded bytes', async () => {
+test('SFTP progress gate holds a root-skipped transfer as partial without inventing uploaded bytes', async () => {
   const { createSftpProgressPublishGate } = await importModel()
   let currentTime = 0
   const scheduled = []
@@ -365,16 +365,86 @@ test('SFTP progress gate holds a root-skipped transfer as completed without inve
     terminalStatusById: { 'root-skip': 'skipped' }
   })
 
-  assert.equal(published.at(-1).status, 'completed')
+  assert.equal(published.at(-1).status, 'partial')
   assert.equal(published.at(-1).transferred, 0)
-  assert.equal(published.at(-1).percent, 0)
+  assert.equal(published.at(-1).determinate, false)
+  assert.equal(published.at(-1).percent, null)
   assert.equal(published.at(-1).total, 128)
-  assert.equal(scheduled.filter(timer => !timer.cancelled).length, 1)
-  assert.equal(scheduled.at(-1).delay, 2000)
+  assert.deepEqual(published.at(-1).outcomeCounts, {
+    successful: 0,
+    skipped: 1,
+    failed: 0
+  })
+  assert.equal(scheduled.filter(timer => !timer.cancelled).length, 0)
+})
 
-  currentTime = 2020
-  scheduled.at(-1).callback()
+test('SFTP progress publishes skipped work as a persistent partial outcome', async () => {
+  const { createSftpProgressPublishGate } = await importModel()
+  const published = []
+  const scheduled = []
+  const gate = createSftpProgressPublishGate({
+    setTimer: (callback, delay) => {
+      scheduled.push({ callback, delay })
+      return scheduled.at(-1)
+    },
+    clearTimer: () => {},
+    onPublish: summary => published.push(summary)
+  })
+
+  gate.update({
+    count: 2,
+    status: 'running',
+    statusKey: 'ok:running:|busy:running:',
+    transferred: 8,
+    total: 12,
+    determinate: true,
+    percent: 66,
+    items: [{ id: 'ok' }, { id: 'busy' }]
+  })
+  gate.update({
+    count: 0,
+    status: '',
+    statusKey: '',
+    transferred: 0,
+    total: 0,
+    determinate: false,
+    percent: null,
+    items: [],
+    terminalRecordById: {
+      ok: { status: 'success', error: '' },
+      busy: { status: 'skipped', error: 'EBUSY' }
+    }
+  })
+
+  assert.equal(published.at(-1).status, 'partial')
+  assert.deepEqual(published.at(-1).outcomeCounts, {
+    successful: 1,
+    skipped: 1,
+    failed: 0
+  })
+  assert.equal(published.at(-1).determinate, false)
+  assert.equal(published.at(-1).percent, null)
+  assert.equal(scheduled.length, 0)
+})
+
+test('SFTP progress dismisses a persistent terminal outcome explicitly', async () => {
+  const { createSftpProgressPublishGate } = await importModel()
+  const published = []
+  const gate = createSftpProgressPublishGate({
+    onPublish: summary => published.push(summary)
+  })
+
+  gate.update({
+    count: 1,
+    status: 'failed',
+    statusKey: 'a:failed:',
+    transferred: 1,
+    items: [{ id: 'a' }]
+  })
+  gate.dismiss()
+
   assert.equal(published.at(-1).count, 0)
+  assert.equal(published.at(-1).status, '')
 })
 
 test('SFTP progress never reports a cancelled transfer as completed', async () => {
@@ -437,4 +507,8 @@ test('SFTP progress treats a history error as failed even with stale running sta
   }])
 
   assert.equal(result.terminalStatusById['failed-upload'], 'failed')
+  assert.deepEqual(result.terminalRecordById['failed-upload'], {
+    status: 'failed',
+    error: 'Permission denied'
+  })
 })
