@@ -1,3 +1,5 @@
+import { sanitizeRendererErrorMessage } from '../../common/error-diagnostics.js'
+
 const visibleStatuses = new Set([
   'queued',
   'running',
@@ -82,6 +84,10 @@ function summaryStatus (items) {
     if (items.some(item => item.status === status)) return status
   }
   return ''
+}
+
+export function sanitizeSftpTransferError (error) {
+  return sanitizeRendererErrorMessage(error)
 }
 
 function countItemOutcomes (itemResults) {

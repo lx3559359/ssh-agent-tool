@@ -7,7 +7,8 @@ import { formatShellPilotTranslation } from '../../common/shellpilot-i18n-overri
 import {
   buildSftpTransferProgress,
   createSftpProgressPublishGate,
-  getSftpTransferDirection
+  getSftpTransferDirection,
+  sanitizeSftpTransferError
 } from './sftp-transfer-progress-model.js'
 
 const e = window.translate
@@ -60,7 +61,9 @@ function formatTerminalTransferDetail (transfer) {
     return e('shellpilotSftpTransferSkippedLocked')
   }
   const statusText = e(status || 'failed')
-  return error ? `${statusText}: ${error}` : statusText
+  return error
+    ? `${statusText}: ${sanitizeSftpTransferError(error)}`
+    : statusText
 }
 
 function formatSpeed (speedBytesPerSecond) {

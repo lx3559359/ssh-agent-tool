@@ -574,3 +574,14 @@ test('SFTP progress treats a history error as failed even with stale running sta
     error: 'Permission denied'
   })
 })
+
+test('SFTP progress redacts local paths from terminal failure details', async () => {
+  const { sanitizeSftpTransferError } = await importModel()
+  const safeError = sanitizeSftpTransferError(
+    "EBUSY: resource busy or locked, open 'C:\\Users\\alice\\private\\busy.log'"
+  )
+
+  assert.match(safeError, /EBUSY: resource busy or locked/)
+  assert.match(safeError, /\[local path hidden\]/)
+  assert.doesNotMatch(safeError, /alice|private|busy\.log/)
+})
