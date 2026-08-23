@@ -2762,10 +2762,6 @@ test('SFTP UI routes editor save chmod rename and delete through modern transact
   )
   assert.match(
     entrySource,
-    /deleteRemoteFilesWithSafety[\s\S]{0,900}openSafeDeleteDialog\([\s\S]{0,500}Promise\.allSettled\(targets\.map\(async file[\s\S]{0,700}prepareSftpSafetyOperation\(\{[\s\S]{0,400}signal:\s*dialog\.signal/
-  )
-  assert.match(
-    entrySource,
     /confirmDelete\s*=\s*\(files,\s*\{\s*signal\s*\}\s*=\s*\{\}\)/
   )
   assert.match(entrySource, /signal\?\.addEventListener\('abort',\s*onAbort/)
@@ -2774,15 +2770,19 @@ test('SFTP UI routes editor save chmod rename and delete through modern transact
     entrySource.indexOf('deleteRemoteFilesWithSafety = async'),
     entrySource.indexOf('\n  getRemoteSafetyTargets =', entrySource.indexOf('deleteRemoteFilesWithSafety = async'))
   )
+  assert.match(safeDeleteSource, /prepareSftpSafetyOperation\(\{[\s\S]*signal:\s*dialog\.signal/)
   assert.ok(safeDeleteSource.indexOf('openSafeDeleteDialog') < safeDeleteSource.indexOf('prepareSftpSafetyOperation'))
   assert.match(safeDeleteSource, /openSafeDeleteDialog\([\s\S]{0,300}await wait\(0\)[\s\S]{0,120}dialog\.signal\.aborted/)
   assert.ok(safeDeleteSource.indexOf('dialog.ready') < safeDeleteSource.indexOf('sftpSafetyRunner.execute'))
+  assert.ok(safeDeleteSource.indexOf('bindPreparedProof') < safeDeleteSource.indexOf('dialog.ready'))
+  assert.match(safeDeleteSource, /onProgress:\s*progress\s*=>\s*dialog\.progress/)
+  assert.match(safeDeleteSource, /sftpSafetyProgressHandlers\.delete\(operation\.id\)/)
+  assert.match(safeDeleteSource, /discardPreparedProof\(operation\.id\)/)
+  assert.match(safeDeleteSource, /dialog\.complete\(\)/)
   assert.match(safeDeleteSource, /while \(targets\.length\)/)
   assert.match(safeDeleteSource, /if \(await dialog\.decision === 'retry'\) continue/)
-  assert.match(
-    entrySource,
-    /for \(let index = 0; index < operations\.length; index \+= 1\)[\s\S]{0,450}sftpSafetyRunner\.cancel/
-  )
+  assert.match(safeDeleteSource, /cancelOperations\s*=\s*async operations[\s\S]*sftpSafetyRunner\.cancel/)
+  assert.match(safeDeleteSource, /catch \(error\)[\s\S]*cancelOperations\(operations\.slice\(index\)\)/)
   assert.match(entrySource, /mode === undefined \? undefined : Number\(mode\) & 0o7777/)
   assert.match(entrySource, /renameRemoteFile[\s\S]{0,300}this\.props\.isFtp/)
   assert.match(entrySource, /saveRemoteEditorFile[\s\S]{0,300}this\.props\.isFtp/)

@@ -71,6 +71,7 @@ import {
   destroySftpClient,
   disposeSftpEntryClient,
   disposeSftpEntryScheduling,
+  removeDeletedRemoteEntries,
   reconnectSftpEntryRemote,
   replaceSftpEntryTimer,
   shouldRetryUnexpectedSftpPacket
@@ -114,8 +115,12 @@ export default class Sftp extends Component {
       sftpRecoveryRecords: readSafetyOperationRecords(ls)
     }
     this.retryCount = 0
+    this.sftpSafetyProgressHandlers = new Map()
     this.sftpSafetyAdapter = createSftpTransactionAdapter({
-      getSftp: () => this.sftp
+      getSftp: () => this.sftp,
+      onProgress: (operation, progress) => {
+        this.sftpSafetyProgressHandlers.get(operation.id)?.(progress)
+      }
     })
     this.sftpSafetyRunner = createTransactionRunner({
       runRemote: async () => {
@@ -188,6 +193,8 @@ export default class Sftp extends Component {
 
   componentWillUnmount () {
     refs.remove(this.id)
+    this.sftpSafetyProgressHandlers.clear()
+    this.sftpSafetyAdapter.discardAllPreparedProofs()
     disposeSftpEntryClient(this)
     disposeSftpEntryScheduling(this)
     // Clear sort cache to prevent memory leaks
@@ -654,7 +661,8 @@ export default class Sftp extends Component {
     expected,
     title,
     signal,
-    metadata
+    metadata,
+    onProgress
   }) => {
     const request = buildSideEffectSafetyRequest({
       id: `sftp-${action}-${Date.now()}-${generate()}`,
@@ -676,7 +684,16 @@ export default class Sftp extends Component {
       }
     })
     request.signal = signal
-    return this.sftpSafetyRunner.prepare(request)
+    if (typeof onProgress === 'function') {
+      this.sftpSafetyProgressHandlers.set(request.id, onProgress)
+    }
+    try {
+      return await this.sftpSafetyRunner.prepare(request)
+    } catch (error) {
+      this.sftpSafetyProgressHandlers.delete(request.id)
+      this.sftpSafetyAdapter.discardPreparedProof(request.id)
+      throw error
+    }
   }
 
   prepareTransferSafetyOperation = async (plan) => {
@@ -1006,7 +1023,11 @@ export default class Sftp extends Component {
         if (options.signal?.aborted) return false
         await this.remoteDel(file)
       }
-      return true
+      return {
+        deletedPaths: files.map(file => resolve(file.path, file.name)),
+        operationCount: files.length,
+        recoverable: false
+      }
     }
     if (options.signal?.aborted) return false
     const targets = this.getRemoteSafetyTargets(files)
@@ -1018,7 +1039,17 @@ export default class Sftp extends Component {
       })
       await wait(0)
       if (dialog.signal.aborted) return false
-      const prepared = await Promise.allSettled(targets.map(async file => {
+      const discardOperation = operation => {
+        this.sftpSafetyProgressHandlers.delete(operation.id)
+        this.sftpSafetyAdapter.discardPreparedProof(operation.id)
+      }
+      const cancelOperations = async operations => {
+        await Promise.allSettled(operations.map(operation => (
+          this.sftpSafetyRunner.cancel(operation.id)
+        )))
+        operations.forEach(discardOperation)
+      }
+      const prepared = await Promise.allSettled(targets.map(async (file, index) => {
         const source = resolve(file.path, file.name)
         return this.prepareSftpSafetyOperation({
           action: 'delete',
@@ -1026,7 +1057,12 @@ export default class Sftp extends Component {
           type: file.isDirectory ? 'directory' : 'file',
           expected: { absent: true },
           title: e('shellpilotSftpDelete'),
-          signal: dialog.signal
+          signal: dialog.signal,
+          onProgress: progress => dialog.progress({
+            ...progress,
+            targetIndex: index + 1,
+            targetCount: targets.length
+          })
         })
       }))
       const operations = prepared
@@ -1035,50 +1071,65 @@ export default class Sftp extends Component {
       const failed = prepared.find(item => item.status === 'rejected')
 
       if (dialog.signal.aborted) {
-        await Promise.allSettled(operations.map(operation => (
-          this.sftpSafetyRunner.cancel(operation.id)
-        )))
+        await cancelOperations(operations)
         return false
       }
 
       if (failed) {
-        await Promise.allSettled(operations.map(operation => (
-          this.sftpSafetyRunner.cancel(operation.id)
-        )))
+        await cancelOperations(operations)
         dialog.fail(failed.reason)
+        if (await dialog.decision === 'retry') continue
+        return false
+      }
+
+      try {
+        operations.forEach(operation => {
+          this.sftpSafetyAdapter.bindPreparedProof(operation)
+        })
+      } catch (error) {
+        await cancelOperations(operations)
+        dialog.fail(error)
         if (await dialog.decision === 'retry') continue
         return false
       }
 
       dialog.ready(operations.length)
       if (await dialog.decision !== 'confirm') {
-        await Promise.allSettled(operations.map(operation => (
-          this.sftpSafetyRunner.cancel(operation.id)
-        )))
+        await cancelOperations(operations)
         return false
       }
 
       for (let index = 0; index < operations.length; index += 1) {
         const operation = operations[index]
         try {
+          dialog.progress({
+            phase: 'deleting',
+            completedBytes: 0,
+            totalBytes: null,
+            targetIndex: index + 1,
+            targetCount: operations.length
+          })
           await this.sftpSafetyRunner.execute(operation.id, {
             confirmed: true,
-            signal: options.signal
+            signal: dialog.signal
           })
+          discardOperation(operation)
         } catch (error) {
-          await Promise.allSettled(operations.slice(index).map(pending => (
-            this.sftpSafetyRunner.cancel(pending.id)
-          )))
+          await cancelOperations(operations.slice(index))
           if (!options.signal?.aborted && error?.name !== 'AbortError') {
+            dialog.fail(error, { retryable: false })
             throw error
           }
           return false
         }
       }
-      message.success(formatShellPilotTranslation(e, 'shellpilotSftpDeletedWithRecovery', {
-        count: operations.length
-      }))
-      return true
+      const deletedPaths = targets.map(file => resolve(file.path, file.name))
+      dialog.complete()
+      return {
+        deletedPaths,
+        operationCount: operations.length,
+        recoverable: true
+      }
     }
     return false
   }
@@ -1304,13 +1355,43 @@ export default class Sftp extends Component {
     this.quickBackupRemoteFiles()
   }
 
+  applyOptimisticRemoteDelete = (deletedPaths) => {
+    return new Promise(resolve => {
+      this.setState(prevState => {
+        const remote = removeDeletedRemoteEntries(
+          prevState.remote,
+          deletedPaths
+        )
+        return {
+          remote,
+          remoteFileTree: this.buildTree(remote, typeMap.remote),
+          selectedFiles: new Set(),
+          selectedType: '',
+          lastClickedFile: null
+        }
+      }, resolve)
+    })
+  }
+
+  calibrateRemoteAfterSafeDelete = async () => {
+    try {
+      await this.remoteList(false, undefined, undefined, {
+        rethrow: true,
+        suppressVisibleError: true
+      })
+    } catch (error) {
+      message.warning(e('shellpilotSftpStateCalibrationFailed'))
+    }
+  }
+
   delFiles = async (_type, files = this.getSelectedFiles(), options = {}) => {
     const type = files[0]?.type || _type
     if (type === typeMap.remote) {
       this.onDelete = true
+      let result
       try {
-        const deleted = await this.deleteRemoteFilesWithSafety(files, options)
-        if (!deleted) return false
+        result = await this.deleteRemoteFilesWithSafety(files, options)
+        if (!result) return false
       } catch (err) {
         window.store.onError(err)
         message.error(e('shellpilotSftpDeleteFailedRecoveryRetained'))
@@ -1318,8 +1399,15 @@ export default class Sftp extends Component {
       } finally {
         this.onDelete = false
       }
-      await wait(500)
-      await this.remoteList()
+      await this.applyOptimisticRemoteDelete(result.deletedPaths)
+      if (result.recoverable) {
+        message.success(formatShellPilotTranslation(
+          e,
+          'shellpilotSftpDeletedWithRecovery',
+          { count: result.operationCount }
+        ))
+      }
+      this.calibrateRemoteAfterSafeDelete()
       return true
     }
 
@@ -1582,7 +1670,8 @@ export default class Sftp extends Component {
   remoteList = async (
     returnList = false,
     remotePathReal,
-    oldPath
+    oldPath,
+    options = {}
   ) => {
     const { tab, sessionOptions } = this.props
     const { username, startDirectory } = tab
@@ -1736,9 +1825,12 @@ export default class Sftp extends Component {
         update.remotePathTemp = oldPath
       }
       this.setState(update)
-      if (this.isSftpVisible()) {
-        this.onError(this.normalizeSftpError(error))
+      if (!options.suppressVisibleError) {
+        if (this.isSftpVisible()) {
+          this.onError(this.normalizeSftpError(error))
+        }
       }
+      if (options.rethrow) throw error
     }
   }
 
@@ -1915,6 +2007,8 @@ export default class Sftp extends Component {
   }
 
   handleReloadRemoteSftp = async () => {
+    this.sftpSafetyProgressHandlers.clear()
+    this.sftpSafetyAdapter.discardAllPreparedProofs()
     await disposeSftpEntryClient(this)
     this.setState({
       remoteLoading: true,

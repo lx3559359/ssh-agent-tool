@@ -114,13 +114,17 @@ export function openSafeDeleteDialog ({ files, externalSignal, translate }) {
       translate={translate}
     />
   )
+  const detachExternalSignal = () => {
+    externalSignal?.removeEventListener('abort', onExternalAbort)
+  }
   const settle = value => {
     if (settled) return
     settled = true
-    externalSignal?.removeEventListener('abort', onExternalAbort)
+    if (value !== 'confirm') detachExternalSignal()
     resolveDecision(value)
   }
   const cancel = () => {
+    detachExternalSignal()
     progressGate?.dispose()
     controller.abort()
     settle('cancel')
@@ -202,16 +206,19 @@ export function openSafeDeleteDialog ({ files, externalSignal, translate }) {
         okButtonProps: { disabled: false },
         closeOnOk: true,
         onOk: () => {
+          detachExternalSignal()
           progressGate.dispose()
           if (retryable) settle('retry')
         }
       })
     },
     complete () {
+      detachExternalSignal()
       progressGate.dispose()
       modal.destroy()
     },
     destroy () {
+      detachExternalSignal()
       progressGate.dispose()
       modal.destroy()
       controller.abort()
