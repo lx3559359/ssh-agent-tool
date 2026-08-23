@@ -298,7 +298,14 @@ function buildUnknownHostPrompt (options) {
     prompts: [],
     submitText: '信任并保存',
     cancelText: '拒绝连接',
-    confirmResult: 'trust'
+    confirmResult: 'trust',
+    hostKeyDetails: {
+      target,
+      keyType: meta.keyType,
+      fingerprint: formatSha256Fingerprint(meta.sha256),
+      knownHostsPath,
+      hostKeyChanged: false
+    }
   }
 }
 
@@ -346,7 +353,14 @@ function buildHostMismatchPrompt (options) {
     prompts: [],
     submitText: '更新指纹',
     cancelText: '拒绝连接',
-    confirmResult: 'trust'
+    confirmResult: 'trust',
+    hostKeyDetails: {
+      target,
+      keyType: meta.keyType,
+      fingerprint: formatSha256Fingerprint(meta.sha256),
+      knownHostsPath,
+      hostKeyChanged: true
+    }
   }
 }
 

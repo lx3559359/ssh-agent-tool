@@ -85,6 +85,8 @@ import {
   buildFastDeleteTargets,
   executeFastRemoteDelete
 } from './sftp-fast-delete.js'
+import { buildDeleteTargetPreview } from './sftp-delete-dialog-model.js'
+import { openSafeDeleteDialog } from './sftp-delete-dialog.jsx'
 import {
   mergeSafetyOperationRecords,
   matchesSafetyOperationEndpoint,
@@ -1006,65 +1008,79 @@ export default class Sftp extends Component {
       }
       return true
     }
-    const operations = []
-    try {
-      for (const file of this.getRemoteSafetyTargets(files)) {
-        if (options.signal?.aborted) break
+    if (options.signal?.aborted) return false
+    const targets = this.getRemoteSafetyTargets(files)
+    while (targets.length) {
+      const dialog = openSafeDeleteDialog({
+        files: targets,
+        externalSignal: options.signal,
+        translate: e
+      })
+      await wait(0)
+      if (dialog.signal.aborted) return false
+      const prepared = await Promise.allSettled(targets.map(async file => {
         const source = resolve(file.path, file.name)
-        operations.push(await this.prepareSftpSafetyOperation({
+        return this.prepareSftpSafetyOperation({
           action: 'delete',
           paths: { source },
           type: file.isDirectory ? 'directory' : 'file',
           expected: { absent: true },
           title: e('shellpilotSftpDelete'),
-          signal: options.signal
-        }))
-      }
-    } catch (error) {
-      await Promise.allSettled(operations.map(operation => (
-        this.sftpSafetyRunner.cancel(operation.id)
-      )))
-      throw error
-    }
-    if (!operations.length) return false
-    if (options.signal?.aborted) {
-      await Promise.allSettled(operations.map(operation => (
-        this.sftpSafetyRunner.cancel(operation.id)
-      )))
-      return false
-    }
-    const confirmed = await this.confirmDelete(files, { signal: options.signal })
-    if (!confirmed || options.signal?.aborted) {
-      await Promise.allSettled(operations.map(operation => (
-        this.sftpSafetyRunner.cancel(operation.id)
-      )))
-      return false
-    }
-    for (let index = 0; index < operations.length; index += 1) {
-      const operation = operations[index]
-      if (options.signal?.aborted) {
-        await Promise.allSettled(operations.slice(index).map(pending => (
-          this.sftpSafetyRunner.cancel(pending.id)
-        )))
-        return false
-      }
-      try {
-        await this.sftpSafetyRunner.execute(operation.id, {
-          confirmed: true,
-          signal: options.signal
+          signal: dialog.signal
         })
-      } catch (error) {
-        if (!options.signal?.aborted && error?.name !== 'AbortError') throw error
-        await Promise.allSettled(operations.slice(index).map(pending => (
-          this.sftpSafetyRunner.cancel(pending.id)
+      }))
+      const operations = prepared
+        .filter(item => item.status === 'fulfilled')
+        .map(item => item.value)
+      const failed = prepared.find(item => item.status === 'rejected')
+
+      if (dialog.signal.aborted) {
+        await Promise.allSettled(operations.map(operation => (
+          this.sftpSafetyRunner.cancel(operation.id)
         )))
         return false
       }
+
+      if (failed) {
+        await Promise.allSettled(operations.map(operation => (
+          this.sftpSafetyRunner.cancel(operation.id)
+        )))
+        dialog.fail(failed.reason)
+        if (await dialog.decision === 'retry') continue
+        return false
+      }
+
+      dialog.ready(operations.length)
+      if (await dialog.decision !== 'confirm') {
+        await Promise.allSettled(operations.map(operation => (
+          this.sftpSafetyRunner.cancel(operation.id)
+        )))
+        return false
+      }
+
+      for (let index = 0; index < operations.length; index += 1) {
+        const operation = operations[index]
+        try {
+          await this.sftpSafetyRunner.execute(operation.id, {
+            confirmed: true,
+            signal: options.signal
+          })
+        } catch (error) {
+          await Promise.allSettled(operations.slice(index).map(pending => (
+            this.sftpSafetyRunner.cancel(pending.id)
+          )))
+          if (!options.signal?.aborted && error?.name !== 'AbortError') {
+            throw error
+          }
+          return false
+        }
+      }
+      message.success(formatShellPilotTranslation(e, 'shellpilotSftpDeletedWithRecovery', {
+        count: operations.length
+      }))
+      return true
     }
-    message.success(formatShellPilotTranslation(e, 'shellpilotSftpDeletedWithRecovery', {
-      count: operations.length
-    }))
-    return true
+    return false
   }
 
   getRemoteSafetyTargets = (files = this.getSelectedFiles()) => {
@@ -1074,6 +1090,9 @@ export default class Sftp extends Component {
   }
 
   confirmQuickDelete = (files) => {
+    const preview = buildDeleteTargetPreview(files, {
+      separator: e('shellpilotListSeparator')
+    })
     return new Promise(resolve => {
       let settled = false
       const settle = value => {
@@ -1087,17 +1106,34 @@ export default class Sftp extends Component {
           'shellpilotSftpFastDeleteConfirmTitle'
         ),
         content: (
-          <div className='wordbreak'>
-            {formatShellPilotTranslation(
-              e,
-              'shellpilotSftpFastDeleteConfirmBody',
-              { count: files.length }
+          <div className='sftp-fast-delete-confirmation'>
+            <div className='sftp-delete-risk-badge'>
+              {e('shellpilotSftpFastDeleteRisk')}
+            </div>
+            <div>
+              {formatShellPilotTranslation(
+                e,
+                'shellpilotSftpFastDeleteConfirmBody',
+                { count: preview.count }
+              )}
+            </div>
+            <code className='sftp-delete-targets'>{preview.names}</code>
+            {preview.remaining > 0 && (
+              <div>
+                {formatShellPilotTranslation(
+                  e,
+                  'shellpilotSftpDeleteMoreTargets',
+                  { count: preview.remaining }
+                )}
+              </div>
             )}
           </div>
         ),
         okText: e('shellpilotSftpFastDeleteConfirmAction'),
         cancelText: e('cancel'),
         okButtonProps: { danger: true },
+        keyboardConfirm: false,
+        initialFocusSelector: '.custom-modal-cancel-btn',
         onOk: () => settle(true),
         onCancel: () => settle(false)
       })

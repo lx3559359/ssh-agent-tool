@@ -244,7 +244,7 @@ test('SFTP workspace mounts an accessible tab-scoped progress dock', () => {
   assert.match(dock, /aria-valuemax=\{100\}/)
   assert.match(dock, /Transporter/)
   assert.match(dock, /compact/)
-  assert.match(dock, /readOnly=\{terminal\}/)
+  assert.match(dock, /formatTerminalTransferDetail/)
   assert.match(dock, /getSftpTransferDirection/)
   assert.match(dock, /sftp-transfer-dock-direction/)
   assert.match(i18n, /shellpilotSftpTransferUploading/)
@@ -270,6 +270,26 @@ test('SFTP transfer dock keeps an obvious active progress presentation', () => {
   assert.match(dock, /sftp-transfer-dock-percent/)
   assert.match(dock, /sftp-transfer-dock-metrics-detail/)
   assert.match(styles, /@media \(max-width: 760px\)[\s\S]*?\.sftp-transfer-dock-metrics-detail\s+[\s\S]*?display none/)
+})
+
+test('SFTP transfer dock renders terminal outcomes without unknown totals', () => {
+  const dock = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/components/sftp/sftp-transfer-progress-dock.jsx'
+  ), 'utf8')
+  const styles = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/components/sftp/sftp.styl'
+  ), 'utf8')
+
+  assert.match(dock, /published\.status === 'partial'/)
+  assert.match(dock, /published\.outcomeCounts/)
+  assert.match(dock, /Boolean\(published\.outcomeCounts\)/)
+  assert.match(dock, /aria-live='polite'/)
+  assert.match(dock, /gateRef\.current\.dismiss\(\)/)
+  assert.match(dock, /shellpilotSftpTransferViewDetails/)
+  assert.match(styles, /\.sftp-transfer-progress-dock-partial/)
+  assert.match(styles, /var\(--warning\)/)
 })
 
 test('SFTP progress gate briefly publishes a verified successful terminal state', async () => {
@@ -317,14 +337,14 @@ test('SFTP progress gate briefly publishes a verified successful terminal state'
   assert.equal(published.at(-1).percent, 100)
   assert.equal(published.at(-1).transferred, 100)
   assert.equal(scheduled.filter(timer => !timer.cancelled).length, 1)
-  assert.equal(scheduled.at(-1).delay, 2000)
+  assert.equal(scheduled.at(-1).delay, 8000)
 
   currentTime = 2020
   scheduled.at(-1).callback()
   assert.equal(published.at(-1).count, 0)
 })
 
-test('SFTP progress gate holds a root-skipped transfer as completed without inventing uploaded bytes', async () => {
+test('SFTP progress gate holds a root-skipped transfer as partial without inventing uploaded bytes', async () => {
   const { createSftpProgressPublishGate } = await importModel()
   let currentTime = 0
   const scheduled = []
@@ -365,16 +385,128 @@ test('SFTP progress gate holds a root-skipped transfer as completed without inve
     terminalStatusById: { 'root-skip': 'skipped' }
   })
 
-  assert.equal(published.at(-1).status, 'completed')
+  assert.equal(published.at(-1).status, 'partial')
   assert.equal(published.at(-1).transferred, 0)
-  assert.equal(published.at(-1).percent, 0)
+  assert.equal(published.at(-1).determinate, false)
+  assert.equal(published.at(-1).percent, null)
   assert.equal(published.at(-1).total, 128)
-  assert.equal(scheduled.filter(timer => !timer.cancelled).length, 1)
-  assert.equal(scheduled.at(-1).delay, 2000)
+  assert.deepEqual(published.at(-1).outcomeCounts, {
+    successful: 0,
+    skipped: 1,
+    failed: 0
+  })
+  assert.equal(scheduled.filter(timer => !timer.cancelled).length, 0)
+})
 
-  currentTime = 2020
-  scheduled.at(-1).callback()
+test('SFTP progress publishes skipped work as a persistent partial outcome', async () => {
+  const { createSftpProgressPublishGate } = await importModel()
+  const published = []
+  const scheduled = []
+  const gate = createSftpProgressPublishGate({
+    setTimer: (callback, delay) => {
+      scheduled.push({ callback, delay })
+      return scheduled.at(-1)
+    },
+    clearTimer: () => {},
+    onPublish: summary => published.push(summary)
+  })
+
+  gate.update({
+    count: 2,
+    status: 'running',
+    statusKey: 'ok:running:|busy:running:',
+    transferred: 8,
+    total: 12,
+    determinate: true,
+    percent: 66,
+    items: [{ id: 'ok' }, { id: 'busy' }]
+  })
+  gate.update({
+    count: 0,
+    status: '',
+    statusKey: '',
+    transferred: 0,
+    total: 0,
+    determinate: false,
+    percent: null,
+    items: [],
+    terminalRecordById: {
+      ok: { status: 'success', error: '' },
+      busy: { status: 'skipped', error: 'EBUSY' }
+    }
+  })
+
+  assert.equal(published.at(-1).status, 'partial')
+  assert.deepEqual(published.at(-1).outcomeCounts, {
+    successful: 1,
+    skipped: 1,
+    failed: 0
+  })
+  assert.equal(published.at(-1).determinate, false)
+  assert.equal(published.at(-1).percent, null)
+  assert.equal(scheduled.length, 0)
+})
+
+test('SFTP progress counts skipped files inside one completed folder transfer', async () => {
+  const {
+    buildSftpTransferProgress,
+    createSftpProgressPublishGate
+  } = await importModel()
+  const published = []
+  const gate = createSftpProgressPublishGate({
+    onPublish: summary => published.push(summary)
+  })
+
+  gate.update(buildSftpTransferProgress([{
+    id: 'folder-upload',
+    tabId: 'tab-a',
+    status: 'running',
+    fromPath: 'C:\\quality-upload',
+    toPath: '/',
+    transferred: 8,
+    total: 8
+  }], 'tab-a', []))
+  gate.update(buildSftpTransferProgress([], 'tab-a', [{
+    id: 'folder-upload',
+    tabId: 'tab-a',
+    status: 'success',
+    itemResults: [
+      { name: 'normal.txt', status: 'completed' },
+      { name: 'locked.dat', status: 'skipped', error: 'EBUSY' }
+    ]
+  }]))
+
+  assert.equal(published.at(-1).status, 'partial')
+  assert.deepEqual(published.at(-1).outcomeCounts, {
+    successful: 1,
+    skipped: 1,
+    failed: 0
+  })
+  assert.deepEqual(published.at(-1).items[0].outcomeCounts, {
+    successful: 1,
+    skipped: 1,
+    failed: 0
+  })
+})
+
+test('SFTP progress dismisses a persistent terminal outcome explicitly', async () => {
+  const { createSftpProgressPublishGate } = await importModel()
+  const published = []
+  const gate = createSftpProgressPublishGate({
+    onPublish: summary => published.push(summary)
+  })
+
+  gate.update({
+    count: 1,
+    status: 'failed',
+    statusKey: 'a:failed:',
+    transferred: 1,
+    items: [{ id: 'a' }]
+  })
+  gate.dismiss()
+
   assert.equal(published.at(-1).count, 0)
+  assert.equal(published.at(-1).status, '')
 })
 
 test('SFTP progress never reports a cancelled transfer as completed', async () => {
@@ -437,4 +569,19 @@ test('SFTP progress treats a history error as failed even with stale running sta
   }])
 
   assert.equal(result.terminalStatusById['failed-upload'], 'failed')
+  assert.deepEqual(result.terminalRecordById['failed-upload'], {
+    status: 'failed',
+    error: 'Permission denied'
+  })
+})
+
+test('SFTP progress redacts local paths from terminal failure details', async () => {
+  const { sanitizeSftpTransferError } = await importModel()
+  const safeError = sanitizeSftpTransferError(
+    "EBUSY: resource busy or locked, open 'C:\\Users\\alice\\private\\busy.log'"
+  )
+
+  assert.match(safeError, /EBUSY: resource busy or locked/)
+  assert.match(safeError, /\[local path hidden\]/)
+  assert.doesNotMatch(safeError, /alice|private|busy\.log/)
 })

@@ -28,6 +28,10 @@ const fileItemSource = fs.readFileSync(
   path.resolve(__dirname, '../../src/client/components/sftp/file-item.jsx'),
   'utf8'
 )
+const listTableSource = fs.readFileSync(
+  path.resolve(__dirname, '../../src/client/components/sftp/list-table-ui.jsx'),
+  'utf8'
+)
 
 function createItems (count) {
   return Array.from({ length: count }, (_, index) => ({
@@ -60,6 +64,7 @@ test('sftp context menu accepts localized more copy when it would overflow', asy
   assert.equal(result.length, 6)
   assert.equal(more.key, 'more-submenu')
   assert.equal(more.label, '更多')
+  assert.equal(more.popupClassName, 'shellpilot-context-menu')
   assert.deepEqual(more.children, items.slice(5))
   assert.deepEqual(result.slice(0, 5), items.slice(0, 5))
 })
@@ -149,6 +154,38 @@ test('remote context menu keeps recoverable delete and adds explicit permanent f
   assert.equal(localItems.some(item => item.func === 'quickDelete'), false)
 })
 
+test('remote SFTP menu keeps both delete actions direct and groups secondary actions', async () => {
+  const { buildSftpFileContextItems } = await import(pathToFileURL(
+    path.resolve(__dirname, '../../src/client/components/sftp/sftp-file-context-menu.js')
+  ).href)
+  const items = buildSftpFileContextItems({
+    file: { id: 'remote', type: 'remote', path: '/', name: 'logs', isDirectory: true },
+    selectedFiles: new Set(['remote']),
+    tab: { host: 'server.example', enableSsh: true },
+    hasRecovery: true,
+    translate: key => key
+  })
+
+  assert.ok(items.find(item => item.func === 'del'))
+  assert.ok(items.find(item => item.func === 'quickDelete'))
+  assert.equal(items.find(item => item.func === 'del').tone, 'warning')
+  assert.equal(items.find(item => item.func === 'quickDelete').tone, 'danger')
+  assert.deepEqual(
+    items.find(item => item.func === 'backupRecoveryMenu').children.map(item => item.func),
+    ['quickBackup', 'restoreLatestBackup', 'openSafetyCenter']
+  )
+  assert.ok(items.find(item => item.func === 'moreActionsMenu').children.length > 0)
+})
+
+test('SFTP file rows expose a keyboard context-menu path', () => {
+  assert.match(fileItemSource, /event\.shiftKey && event\.key === 'F10'/)
+  assert.match(fileItemSource, /event\.key === 'ContextMenu'/)
+  assert.match(fileItemSource, /new MouseEvent\('contextmenu'/)
+  assert.match(listTableSource, /contextMenuOpenedByKeyboard/)
+  assert.match(listTableSource, /requestAnimationFrame/)
+  assert.match(listTableSource, /domRef\?\.current\?\.focus\(\)/)
+})
+
 test('all application context menu surfaces use the shared overlay class', () => {
   const contracts = [
     ['src/client/components/tree-list/tree-list-row.jsx', /overlayClassName:\s*'shellpilot-context-menu'/],
@@ -158,7 +195,7 @@ test('all application context menu surfaces use the shared overlay class', () =>
     ['src/client/components/tabs/tab.jsx', /overlayClassName:\s*'shellpilot-context-menu'/],
     ['src/client/components/common/input-context-menu.jsx', /overlayClassName='shellpilot-context-menu'/],
     ['src/client/components/sidebar/transfer-list.jsx', /overlayClassName:\s*'transfer-list-card shellpilot-context-menu shellpilot-transfer-history-popover'/],
-    ['src/client/components/sftp/file-item.jsx', /popupClassName:\s*'shellpilot-context-menu'/]
+    ['src/client/components/sftp/file-item.jsx', /popupClassName\s*=\s*'shellpilot-context-menu'/]
   ]
 
   for (const [relativePath, pattern] of contracts) {
@@ -170,13 +207,15 @@ test('existing destructive SFTP and tab actions are marked dangerous without cha
   const tabSource = read('src/client/components/tabs/tab.jsx')
   const listSource = read('src/client/components/sftp/list-table-ui.jsx')
 
-  assert.match(fileItemSource, /key:\s*func,[\s\S]{0,180}danger:\s*requireConfirm/)
+  assert.match(fileItemSource, /danger:\s*item\.tone === 'danger'/)
+  assert.match(fileItemSource, /sftp-menu-item-warning/)
   for (const key of ['handleClose', 'closeOther', 'closeTabsRight']) {
     assert.match(tabSource, new RegExp(`key: '${key}'[\\s\\S]{0,180}danger: true`))
   }
   assert.match(listSource, /this\.openContextMenuFile = this\.getClickedFile\(\)/)
-  assert.match(listSource, /const inst = this\.openContextMenuFile \|\| this\.getClickedFile\(\)[\s\S]{0,100}inst\[key\]\(\)/)
-  assert.match(fileItemSource, /if \(key !== 'more-submenu'\)[\s\S]{0,100}this\[key\]\(\)/)
+  assert.match(listSource, /const inst = this\.openContextMenuFile \|\| this\.getClickedFile\(\)/)
+  assert.match(listSource, /typeof inst\?\.\[key\] !== 'function'/)
+  assert.match(fileItemSource, /typeof this\[key\] === 'function'/)
 })
 
 test('shared and system menu styles compile with viewport-safe wrapping contracts', async () => {

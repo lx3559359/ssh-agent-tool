@@ -14,6 +14,12 @@ const i18nUrl = pathToFileURL(path.join(
   'common/shellpilot-i18n-overrides.js'
 )).href
 
+function flattenActions (items) {
+  return items.flatMap(item => item?.children?.length
+    ? flattenActions(item.children)
+    : item?.func ? [item.func] : [])
+}
+
 test('real SFTP file menu builder preserves action order while labels follow preview language', async () => {
   const menuModule = await import(builderUrl).catch(() => ({}))
   assert.equal(typeof menuModule.buildSftpFileContextItems, 'function')
@@ -65,17 +71,17 @@ test('real SFTP file menu builder preserves action order while labels follow pre
   const expectedActions = [
     'doTransfer',
     'askAiAboutFile',
-    'quickBackup',
-    'restoreLatestBackup',
-    'openSafetyCenter',
     'editFile',
     'del',
     'quickDelete',
+    'doRename',
+    'onCopyPath',
+    'quickBackup',
+    'restoreLatestBackup',
+    'openSafetyCenter',
     'onCopy',
     'onCut',
     'onPaste',
-    'doRename',
-    'onCopyPath',
     'newFile',
     'newDirectory',
     'selectAll',
@@ -84,16 +90,24 @@ test('real SFTP file menu builder preserves action order while labels follow pre
     'showInfo'
   ]
 
-  assert.deepEqual(zhItems.map(item => item.func), expectedActions)
-  assert.deepEqual(enItems.map(item => item.func), expectedActions)
+  assert.deepEqual(flattenActions(zhItems), expectedActions)
+  assert.deepEqual(flattenActions(enItems), expectedActions)
+  assert.deepEqual(
+    zhItems.map(item => item.type || item.func),
+    enItems.map(item => item.type || item.func)
+  )
   assert.equal(zhItems.find(item => item.func === 'askAiAboutFile').text, '让 AI 分析此文件')
   assert.equal(enItems.find(item => item.func === 'askAiAboutFile').text, 'Analyze This File with AI')
   assert.equal(zhItems.find(item => item.func === 'del').text, '安全删除（可恢复）')
   assert.equal(enItems.find(item => item.func === 'del').text, 'Safe Delete (Recoverable)')
   assert.equal(zhItems.find(item => item.func === 'quickDelete').text, '快速删除（不可恢复）')
   assert.equal(enItems.find(item => item.func === 'quickDelete').text, 'Fast Delete (Permanent)')
-  assert.equal(zhItems.find(item => item.func === 'restoreLatestBackup').disabled, false)
-  assert.equal(enItems.find(item => item.func === 'restoreLatestBackup').disabled, false)
+  const zhBackup = zhItems.find(item => item.func === 'backupRecoveryMenu')
+  const enBackup = enItems.find(item => item.func === 'backupRecoveryMenu')
+  assert.equal(zhBackup.children.find(item => item.func === 'restoreLatestBackup').disabled, false)
+  assert.equal(enBackup.children.find(item => item.func === 'restoreLatestBackup').disabled, false)
+  assert.equal(zhBackup.text, '备份与恢复')
+  assert.equal(enBackup.text, 'Backup & Recovery')
 })
 
 test('SFTP file menu component delegates labels to the builder and target files contain no hardcoded Chinese copy', () => {

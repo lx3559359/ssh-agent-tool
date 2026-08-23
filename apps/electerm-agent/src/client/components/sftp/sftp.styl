@@ -46,6 +46,13 @@
   overflow hidden
   text-overflow ellipsis
   white-space nowrap
+.sftp-transfer-dock-outcome
+  min-width 0
+  color var(--sp-text)
+  font-weight 650
+  overflow hidden
+  text-overflow ellipsis
+  white-space nowrap
 .sftp-transfer-dock-metrics
   color var(--sp-text-muted)
   font-variant-numeric tabular-nums
@@ -62,6 +69,25 @@
   cursor pointer
   &:hover
     border-color var(--sp-primary)
+  &:focus-visible
+    outline 2px solid var(--sp-primary)
+    outline-offset 2px
+.sftp-transfer-dock-dismiss
+  display inline-flex
+  width 32px
+  height 32px
+  padding 0
+  align-items center
+  justify-content center
+  color var(--sp-text-muted)
+  background transparent
+  border 1px solid transparent
+  border-radius var(--sp-radius-control)
+  cursor pointer
+  &:hover
+    color var(--sp-text)
+    background var(--sp-control-background)
+    border-color var(--sp-border)
   &:focus-visible
     outline 2px solid var(--sp-primary)
     outline-offset 2px
@@ -91,10 +117,23 @@
     background var(--warning)
 .sftp-transfer-progress-dock-failed
   border-color var(--error)
+  .sftp-transfer-dock-direction
+    color var(--error)
+    background unquote('color-mix(in srgb, var(--error) 14%, transparent)')
   .sftp-transfer-dock-progress > span
     background var(--error)
+.sftp-transfer-progress-dock-partial
+  border-color var(--warning)
+  .sftp-transfer-dock-direction
+    color var(--warning)
+    background unquote('color-mix(in srgb, var(--warning) 14%, transparent)')
+  .sftp-transfer-dock-progress > span
+    background var(--warning)
 .sftp-transfer-progress-dock-completed
   border-color var(--success)
+  .sftp-transfer-dock-direction
+    color var(--success)
+    background unquote('color-mix(in srgb, var(--success) 14%, transparent)')
   .sftp-transfer-dock-progress > span
     background var(--success)
 .sftp-transfer-dock-details
@@ -105,6 +144,64 @@
   .sftp-transport-compact
     margin-bottom 5px
     background var(--sp-flat-background)
+.sftp-transfer-dock-terminal-item
+  display grid
+  grid-template-columns minmax(140px, 1fr) minmax(180px, 1.4fr)
+  gap 12px
+  align-items center
+  min-height 38px
+  margin-bottom 5px
+  padding 5px 8px
+  background var(--sp-flat-background)
+  border-radius var(--sp-radius-control)
+.sftp-transfer-dock-terminal-path,
+.sftp-transfer-dock-terminal-status
+  min-width 0
+  overflow-wrap anywhere
+.sftp-transfer-dock-terminal-status
+  color var(--sp-text-muted)
+.sftp-transfer-dock-terminal-status.is-skipped
+  color var(--warning)
+.sftp-transfer-dock-terminal-status.is-failed,
+.sftp-transfer-dock-terminal-status.is-exception
+  color var(--error)
+.sftp-fast-delete-confirmation
+  display grid
+  gap 10px
+.sftp-delete-risk-badge
+  width max-content
+  padding 3px 8px
+  color var(--sp-danger)
+  background unquote('color-mix(in srgb, var(--sp-danger) 12%, transparent)')
+  border 1px solid var(--sp-danger)
+  border-radius var(--sp-radius-control)
+  font-weight 700
+.sftp-delete-targets
+  display block
+  max-height 96px
+  padding 8px 10px
+  color var(--sp-text)
+  background var(--sp-flat-background)
+  border 1px solid var(--sp-border)
+  border-radius var(--sp-radius-control)
+  overflow auto
+  overflow-wrap anywhere
+  white-space normal
+.sftp-safe-delete-dialog
+  display grid
+  gap 10px
+.sftp-safe-delete-state
+  padding 9px 10px
+  color var(--sp-text)
+  background var(--sp-primary-soft)
+  border-left 3px solid var(--sp-primary)
+  border-radius var(--sp-radius-control)
+.sftp-safe-delete-dialog.is-ready .sftp-safe-delete-state
+  color var(--success)
+  border-left-color var(--success)
+.sftp-safe-delete-dialog.is-failed .sftp-safe-delete-state
+  color var(--error)
+  border-left-color var(--error)
 
 @keyframes sftp-transfer-progress-indeterminate
   from
@@ -117,6 +214,9 @@
     grid-template-columns auto minmax(60px, 1fr) auto auto
   .sftp-transfer-dock-metrics-detail
     display none
+  .sftp-transfer-dock-terminal-item
+    grid-template-columns 1fr
+    gap 3px
 .sftp-section
   flex 1
   box-sizing border-box

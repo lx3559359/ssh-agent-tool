@@ -329,3 +329,32 @@ test('provides bilingual UI font picker copy', async () => {
     assert.equal(getShellPilotTranslation(key, 'en_us'), english)
   }
 })
+
+test('provides bilingual SFTP terminal outcome copy', async () => {
+  const { getShellPilotTranslation } = await import(moduleUrl)
+  const expected = {
+    shellpilotSftpTransferPartialSummary: [
+      '传输结束：成功 {successful} 项，跳过 {skipped} 项',
+      'Transfer finished: {successful} succeeded, {skipped} skipped'
+    ],
+    shellpilotSftpTransferCompletedSummary: [
+      '传输完成：成功 {successful} 项',
+      'Completed: {successful} succeeded'
+    ],
+    shellpilotSftpTransferFailedSummary: [
+      '传输失败：失败 {failed} 项',
+      'Transfer failed: {failed} failed'
+    ],
+    shellpilotSftpTransferViewDetails: ['查看详情', 'View details'],
+    shellpilotSftpTransferDismiss: ['关闭传输结果', 'Dismiss transfer result'],
+    shellpilotSftpTransferSkippedLocked: [
+      '已跳过：文件正在被其他程序占用。关闭占用后可重新上传。',
+      'Skipped: the file is in use by another program. Close it and upload again.'
+    ]
+  }
+
+  for (const [key, [chinese, english]] of Object.entries(expected)) {
+    assert.equal(getShellPilotTranslation(key, 'zh_cn'), chinese)
+    assert.equal(getShellPilotTranslation(key, 'en_us'), english)
+  }
+})

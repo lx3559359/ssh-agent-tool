@@ -5,6 +5,7 @@
 import { Form, Button } from 'antd'
 import Modal from '../common/modal'
 import InputAutoFocus from '../common/input-auto-focus'
+import SshHostKeyConfirmation from './ssh-host-key-confirmation'
 
 const e = window.translate
 const FormItem = Form.Item
@@ -77,31 +78,31 @@ export default function TermInteractiveUI ({
     )
   }
   function renderConfirmBody () {
-    const instructions = opts.options.instructions || []
     return (
-      <div>
-        {
-          instructions.map((note, index) => {
-            return <pre key={note + index}>{note}</pre>
-          })
-        }
-        <FormItem>
-          <Button
-            type='primary'
-            onClick={onConfirm}
-          >
-            {opts.options.submitText || e('save')}
-          </Button>
-          <Button
-            className='mg1l'
-            onClick={onCancel}
-          >
-            {opts.options.cancelText || e('cancel')}
-          </Button>
-        </FormItem>
-      </div>
+      <SshHostKeyConfirmation
+        details={opts.options.hostKeyDetails}
+        instructions={opts.options.instructions}
+        translate={e}
+      />
     )
   }
+  const confirmFooter = (
+    <div className='terminal-interactive-confirm-actions'>
+      <Button
+        className='terminal-interactive-cancel'
+        onClick={onCancel}
+      >
+        {opts.options.cancelText || e('cancel')}
+      </Button>
+      <Button
+        type='primary'
+        className='terminal-interactive-confirm'
+        onClick={onConfirm}
+      >
+        {opts.options.submitText || e('save')}
+      </Button>
+    </div>
+  )
   const props = {
     maskClosable: false,
     okText: e('submit'),
@@ -110,11 +111,13 @@ export default function TermInteractiveUI ({
     closable: false,
     open: true,
     title: opts.options?.name || '?',
-    footer: null
+    footer: opts.options?.mode === 'confirm' ? confirmFooter : null
   }
   return (
     <Modal
       {...props}
+      keyboardConfirm={false}
+      initialFocusSelector='.terminal-interactive-cancel'
     >
       {
         opts.options?.mode === 'confirm'

@@ -241,6 +241,13 @@ describe('ssh known_hosts verification', () => {
     assert.match(unknownPrompt.name, /信任 SSH 主机指纹/)
     assert.ok(unknownPrompt.instructions.some(i => i.includes('首次连接')))
     assert.ok(unknownPrompt.instructions.some(i => i.includes('SHA256:AAABBBCCC123')))
+    assert.deepEqual(unknownPrompt.hostKeyDetails, {
+      target: 'new-host.test',
+      keyType: 'ssh-ed25519',
+      fingerprint: 'SHA256:AAABBBCCC123',
+      knownHostsPath: 'C:\\Users\\test\\.ssh\\known_hosts',
+      hostKeyChanged: false
+    })
 
     const mismatchPrompt = buildHostMismatchPrompt({
       host: 'router.test',
@@ -252,6 +259,8 @@ describe('ssh known_hosts verification', () => {
     assert.equal(mismatchPrompt.cancelText, '拒绝连接')
     assert.match(mismatchPrompt.name, /SSH 主机指纹已变化/)
     assert.ok(mismatchPrompt.instructions.some(i => i.includes('中间人攻击')))
+    assert.equal(mismatchPrompt.hostKeyDetails.hostKeyChanged, true)
+    assert.equal(mismatchPrompt.hostKeyDetails.target, '[router.test]:2222')
 
     const mismatchError = buildHostMismatchError({
       host: 'router.test',

@@ -34,6 +34,8 @@ test('custom modal and drawer expose complete dialog semantics', () => {
   assert.match(modal, /aria-label=\{e\('shellpilotCloseDialog'\)\}/)
   assert.match(modal, /onCancelRef\.current = onCancel/)
   assert.match(modal, /keyboardConfirmRef\.current = keyboardConfirm/)
+  assert.match(modal, /initialFocusSelector/)
+  assert.match(modal, /okButtonProps\?\.disabled/)
   assert.match(modal, /\}, \[open\]\)/)
   assert.match(drawer, /createPortal/)
   assert.match(drawer, /role='dialog'/)
@@ -156,6 +158,19 @@ test('session pane tabs and icon controls expose native keyboard semantics', () 
   assert.match(session, /aria-pressed=\{broadcastInput\}/)
   assert.match(styles, /\.type-tab:focus-visible[\s\S]*outline/)
   assert.match(styles, /\.session-icon-button:focus-visible[\s\S]*outline/)
+})
+
+test('SSH host key confirmation defaults focus to rejecting the connection', () => {
+  const interactive = readClient('components/terminal/terminal-interactive-ui.jsx')
+  const confirmation = readClient('components/terminal/ssh-host-key-confirmation.jsx')
+
+  assert.match(interactive, /keyboardConfirm=\{false\}/)
+  assert.match(interactive, /initialFocusSelector='\.terminal-interactive-cancel'/)
+  assert.ok(
+    interactive.indexOf("className='terminal-interactive-cancel'") <
+    interactive.indexOf("className='terminal-interactive-confirm'")
+  )
+  assert.match(confirmation, /role='alert'/)
 })
 
 test('SFTP uses grid, row, column-header, and roving-focus semantics', () => {

@@ -1,3 +1,5 @@
+import { sanitizeRendererErrorMessage } from '../../common/error-diagnostics.js'
+
 const visibleStatuses = new Set([
   'queued',
   'running',
@@ -19,8 +21,13 @@ const statusPriority = {
   failed: 6,
   exception: 6
 }
-const successfulTerminalStatuses = new Set(['success', 'completed', 'skipped'])
+const successfulTerminalStatuses = new Set(['success', 'completed'])
 const failedTerminalStatuses = new Set(['failed', 'exception'])
+const recognizedTerminalStatuses = new Set([
+  ...successfulTerminalStatuses,
+  'skipped',
+  ...failedTerminalStatuses
+])
 
 function finiteNumber (value) {
   const number = Number(value)
@@ -79,16 +86,97 @@ function summaryStatus (items) {
   return ''
 }
 
-function buildTerminalStatusById (history, tabId) {
+export function sanitizeSftpTransferError (error) {
+  return sanitizeRendererErrorMessage(error)
+}
+
+function countItemOutcomes (itemResults) {
+  if (!Array.isArray(itemResults) || itemResults.length === 0) return null
+  const counts = {
+    successful: 0,
+    skipped: 0,
+    failed: 0
+  }
+  for (const item of itemResults) {
+    const status = String(item?.status || '')
+    if (successfulTerminalStatuses.has(status)) {
+      counts.successful += 1
+    } else if (status === 'skipped') {
+      counts.skipped += 1
+    } else if (failedTerminalStatuses.has(status)) {
+      counts.failed += 1
+    } else {
+      return null
+    }
+  }
+  return counts
+}
+
+function buildTerminalRecordById (history, tabId) {
   const result = {}
   const items = Array.isArray(history) ? history.slice(0, 100) : []
   for (const item of items) {
     if (String(item?.tabId || '') !== String(tabId || '')) continue
-    const status = String(item.error ? 'failed' : (item.status || ''))
-    if (item.id) result[item.id] = status
-    if (item.originalId) result[item.originalId] = status
+    const outcomeCounts = countItemOutcomes(item.itemResults)
+    const record = {
+      status: String(item.error ? 'failed' : (item.status || '')),
+      error: String(item.error || ''),
+      ...(outcomeCounts ? { outcomeCounts } : {})
+    }
+    if (item.id) result[item.id] = record
+    if (item.originalId) result[item.originalId] = record
   }
   return result
+}
+
+function terminalOutcome (previous, recordById) {
+  const records = previous.items.map(item => (
+    recordById[item.id] || { status: '', error: '' }
+  ))
+  if (records.some(record => !recognizedTerminalStatuses.has(record.status))) {
+    return null
+  }
+  const outcomeCounts = records.reduce((counts, record) => {
+    if (record.outcomeCounts) {
+      counts.successful += record.outcomeCounts.successful
+      counts.skipped += record.outcomeCounts.skipped
+      counts.failed += record.outcomeCounts.failed
+    } else if (successfulTerminalStatuses.has(record.status)) {
+      counts.successful += 1
+    } else if (record.status === 'skipped') {
+      counts.skipped += 1
+    } else if (failedTerminalStatuses.has(record.status)) {
+      counts.failed += 1
+    }
+    return counts
+  }, {
+    successful: 0,
+    skipped: 0,
+    failed: 0
+  })
+  const status = outcomeCounts.failed > 0
+    ? 'failed'
+    : outcomeCounts.skipped > 0
+      ? 'partial'
+      : 'completed'
+  return {
+    ...previous,
+    status,
+    statusKey: `${status}:${previous.statusKey}`,
+    outcomeCounts,
+    items: previous.items.map(item => ({
+      ...item,
+      status: recordById[item.id]?.status || item.status,
+      error: recordById[item.id]?.error || item.error,
+      outcomeCounts: recordById[item.id]?.outcomeCounts || null
+    })),
+    speedBytesPerSecond: 0,
+    determinate: status === 'completed' && previous.determinate,
+    percent: status === 'completed' && previous.determinate ? 100 : null,
+    transferred: status === 'completed' && previous.determinate
+      ? previous.total
+      : previous.transferred
+  }
 }
 
 export function getSftpTransferDirection (current = {}) {
@@ -123,6 +211,7 @@ export function buildSftpTransferProgress (transfers, tabId, history) {
     0
   )
   const status = summaryStatus(items)
+  const terminalRecordById = buildTerminalRecordById(history, tabId)
   return {
     items,
     count: items.length,
@@ -135,7 +224,13 @@ export function buildSftpTransferProgress (transfers, tabId, history) {
     statusKey: items.map(item => `${item.id}:${item.status}:${item.error || ''}`)
       .join('|'),
     current: selectCurrent(items),
-    terminalStatusById: buildTerminalStatusById(history, tabId)
+    terminalRecordById,
+    terminalStatusById: Object.fromEntries(
+      Object.entries(terminalRecordById).map(([id, record]) => [
+        id,
+        record.status
+      ])
+    )
   }
 }
 
@@ -162,7 +257,7 @@ export function createSftpProgressPublishGate ({
   clearTimer = clearTimeout,
   onPublish,
   intervalMs = 100,
-  terminalHoldMs = 2000
+  terminalHoldMs = 8000
 } = {}) {
   if (typeof onPublish !== 'function') {
     throw new Error('SFTP 进度发布器缺少发布回调。')
@@ -191,32 +286,23 @@ export function createSftpProgressPublishGate ({
     update (summary) {
       if (disposed) return
       if (summary.count === 0 && previous?.count > 0) {
-        const statuses = previous.items
-          .map(item => summary.terminalStatusById?.[item.id])
-          .filter(Boolean)
-        const completed = statuses.length === previous.items.length &&
-          statuses.every(status => successfulTerminalStatuses.has(status))
-        const failed = statuses.some(status => failedTerminalStatuses.has(status))
-        const hasSkipped = statuses.some(status => status === 'skipped')
-        if (completed || failed) {
+        const recordById = summary.terminalRecordById || Object.fromEntries(
+          Object.entries(summary.terminalStatusById || {}).map(([id, status]) => [
+            id,
+            { status, error: '' }
+          ])
+        )
+        const outcome = terminalOutcome(previous, recordById)
+        if (outcome) {
           cancelPending()
-          latest = {
-            ...previous,
-            status: completed ? 'completed' : 'failed',
-            statusKey: `${completed ? 'completed' : 'failed'}:${previous.statusKey}`,
-            speedBytesPerSecond: 0,
-            ...(completed && previous.determinate && !hasSkipped
-              ? {
-                  transferred: previous.total,
-                  percent: 100
-                }
-              : {})
-          }
+          latest = outcome
           publish()
-          timer = setTimer(() => {
-            latest = summary
-            publish()
-          }, terminalHoldMs)
+          if (outcome.status === 'completed') {
+            timer = setTimer(() => {
+              latest = summary
+              publish()
+            }, terminalHoldMs)
+          }
           return
         }
       }
@@ -237,6 +323,26 @@ export function createSftpProgressPublishGate ({
       } else if (!timer) {
         timer = setTimer(publish, Math.max(0, intervalMs - elapsedMs))
       }
+    },
+    dismiss () {
+      cancelPending()
+      const empty = {
+        items: [],
+        count: 0,
+        transferred: 0,
+        total: 0,
+        determinate: false,
+        percent: null,
+        speedBytesPerSecond: 0,
+        status: '',
+        statusKey: '',
+        current: null,
+        terminalRecordById: {},
+        terminalStatusById: {}
+      }
+      latest = empty
+      previous = empty
+      onPublish(empty)
     },
     dispose () {
       disposed = true
