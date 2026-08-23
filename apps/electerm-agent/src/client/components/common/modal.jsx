@@ -184,6 +184,7 @@ export default function Modal (props) {
 Modal.displayName = 'Modal'
 
 function createModalInstance (type, options) {
+  let currentOptions = options
   const modalCopy = resolveShellPilotModalCopy(options, window.translate)
   const {
     title,
@@ -191,8 +192,9 @@ function createModalInstance (type, options) {
     onOk,
     onCancel,
     okButtonProps,
+    closeOnOk = true,
     ...rest
-  } = options
+  } = currentOptions
   const { okText, cancelText } = modalCopy
 
   const container = document.createElement('div')
@@ -211,7 +213,7 @@ function createModalInstance (type, options) {
     if (onOk) {
       onOk()
     }
-    destroy()
+    if (closeOnOk) destroy()
   }
 
   const handleCancel = () => {
@@ -259,7 +261,8 @@ function createModalInstance (type, options) {
   root.render(<Modal {...modalProps} />)
 
   const update = (newOptions) => {
-    const updatedOptions = { ...options, ...newOptions }
+    currentOptions = { ...currentOptions, ...newOptions }
+    const updatedOptions = currentOptions
     const updatedCopy = resolveShellPilotModalCopy(updatedOptions, window.translate)
     const {
       title: newTitle,
@@ -267,6 +270,7 @@ function createModalInstance (type, options) {
       onOk: newOnOk,
       onCancel: newOnCancel,
       okButtonProps: newOkButtonProps,
+      closeOnOk: newCloseOnOk = closeOnOk,
       ...newRest
     } = updatedOptions
     const {
@@ -278,7 +282,7 @@ function createModalInstance (type, options) {
       if (newOnOk) {
         newOnOk()
       }
-      destroy()
+      if (newCloseOnOk) destroy()
     }
 
     const newHandleCancel = () => {

@@ -5,11 +5,12 @@
     .sftp-section
       height calc(100% - 64px) !important
 .sftp-transfer-progress-dock
-  position absolute
+  position fixed
   z-index 20
   left 10px
   right 10px
   bottom 8px
+  max-width calc(100vw - 20px)
   min-height 50px
   color var(--sp-text)
   background-color var(--sp-surface-elevated)
@@ -202,6 +203,25 @@
 .sftp-safe-delete-dialog.is-failed .sftp-safe-delete-state
   color var(--error)
   border-left-color var(--error)
+.sftp-safe-delete-progress
+  position relative
+  height 8px
+  margin 12px 0 6px
+  overflow hidden
+  background var(--sp-control-background)
+  border-radius 999px
+  > span
+    display block
+    height 100%
+    background var(--sp-primary)
+    transition width 100ms linear
+  &.is-indeterminate > span
+    width 35%
+    animation sftp-transfer-progress-indeterminate 1.1s ease-in-out infinite
+.sftp-safe-delete-bytes
+  min-height 20px
+  color var(--sp-text-muted)
+  font-variant-numeric tabular-nums
 
 @keyframes sftp-transfer-progress-indeterminate
   from
