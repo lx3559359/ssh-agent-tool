@@ -40,6 +40,9 @@ function SafeDeleteDialogBody ({ progress, files, count, error, translate }) {
       }
     )
   const inProgress = !['ready', 'failed'].includes(normalized.phase)
+  const progressProps = normalized.determinate
+    ? { 'aria-valuenow': normalized.percent }
+    : {}
 
   return (
     <div
@@ -60,9 +63,7 @@ function SafeDeleteDialogBody ({ progress, files, count, error, translate }) {
           role='progressbar'
           aria-valuemin={0}
           aria-valuemax={100}
-          {...(normalized.determinate
-            ? { 'aria-valuenow': normalized.percent }
-            : {})}
+          {...progressProps}
         >
           <span
             style={normalized.determinate

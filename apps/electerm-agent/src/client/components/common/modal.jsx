@@ -185,7 +185,7 @@ Modal.displayName = 'Modal'
 
 function createModalInstance (type, options) {
   let currentOptions = options
-  const modalCopy = resolveShellPilotModalCopy(currentOptions, window.translate)
+  const modalCopy = resolveShellPilotModalCopy(options, window.translate)
   const {
     title,
     content,
