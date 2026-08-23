@@ -17,6 +17,10 @@ test.setTimeout(240000)
 async function acceptHostKey (page) {
   const modal = page.locator('.custom-modal-wrap').last()
   await expect(modal).toBeVisible({ timeout: 20000 })
+  await expect(modal).toContainText(/主机指纹|Host fingerprint/i)
+  await expect(modal.locator('.ssh-host-key-copy-row')).toHaveCount(2)
+  await expect(modal.locator('code').filter({ hasText: 'SHA256:' })).toHaveCount(1)
+  await expect(modal.locator('.terminal-interactive-cancel')).toBeFocused()
   await modal.locator('button.ant-btn-primary').last().click()
 }
 
@@ -320,6 +324,19 @@ test('isolated client completes SSH, SFTP, AI, update and rollback quality flows
     await expect.poll(() => readRemoteText(page, '/quality-upload.txt')).toBe(localBody)
     assertHashEqual(await readRemoteText(page, '/remote-seed.txt'), fixture.fixtureHash)
 
+    const remoteSeed = page.locator(
+      '.session-current .file-list.remote .sftp-item[title="remote-seed.txt"]'
+    )
+    await expect(remoteSeed).toBeVisible({ timeout: 20000 })
+    await remoteSeed.focus()
+    await page.keyboard.press('Shift+F10')
+    const keyboardMenu = page.locator('.ant-dropdown:visible').last()
+    await expect(keyboardMenu).toBeVisible()
+    await expect(keyboardMenu.getByText(/安全删除.*可恢复|Safe Delete.*Recoverable/i)).toBeVisible()
+    await expect(keyboardMenu.getByText(/快速删除.*不可恢复|Fast Delete.*Permanent/i)).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(remoteSeed).toBeFocused()
+
     const upload = await page.evaluate(({ localPath, remotePath }) => (
       window.store.mcpSftpUpload({
         tabId: window.store.activeTabId,
@@ -382,7 +399,12 @@ test('isolated client completes SSH, SFTP, AI, update and rollback quality flows
         { allowIndeterminate: true }
       )
       await skippedWarningSeen
-      await expect(lockedDock).toHaveClass(/sftp-transfer-progress-dock-completed/)
+      await expect(lockedDock).toHaveClass(/sftp-transfer-progress-dock-partial/)
+      await expect(lockedDock).toContainText(/成功\s*1.*跳过\s*1|1 successful.*1 skipped/i)
+      await expect(lockedDock).not.toContainText(/总量计算中|Calculating total|\/\s*0 B/i)
+      await expect(lockedDock.getByRole('button', {
+        name: /关闭传输结果|Dismiss transfer result/i
+      })).toBeVisible()
       await expect.poll(() => pathExists(
         fixture.resolve(`/${lockedUploadName}/normal.txt`)
       ), { timeout: 30000 }).toBe(true)
@@ -438,9 +460,13 @@ test('isolated client completes SSH, SFTP, AI, update and rollback quality flows
     await expect(safeDeleteMenu).toBeVisible()
     await safeDeleteMenu.getByText(/安全删除.*可恢复|Safe Delete.*Recoverable/i).click()
     const safeDeleteConfirm = page.locator('.custom-modal-wrap:visible').last()
-    await expect(safeDeleteConfirm).toContainText(/恢复快照已验证|Recovery snapshot/i, {
+    await expect(safeDeleteConfirm).toBeVisible({ timeout: 1000 })
+    await expect(safeDeleteConfirm).toContainText(/正在创建并验证恢复快照|Creating and verifying recovery snapshot/i)
+    await expect(safeDeleteConfirm.locator('.custom-modal-ok-btn')).toBeDisabled()
+    await expect(safeDeleteConfirm).toContainText(/恢复快照已验证|Recovery snapshot verified/i, {
       timeout: 30000
     })
+    await expect(safeDeleteConfirm.locator('.custom-modal-ok-btn')).toBeEnabled()
     await safeDeleteConfirm.locator('button.custom-modal-ok-btn').click()
     await expect.poll(() => pathExists(safeDeletePath), { timeout: 30000 }).toBe(false)
     await page.evaluate(() => window.dispatchEvent(new CustomEvent('shellpilot-open-safety-center')))
