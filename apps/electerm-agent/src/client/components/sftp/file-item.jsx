@@ -6,8 +6,7 @@ import React from 'react'
 import ExtIcon from './file-icon'
 import {
   FolderOutlined,
-  FileOutlined,
-  ArrowRightOutlined
+  FileOutlined
 } from '@ant-design/icons'
 import classnames from 'classnames'
 import copy from 'json-deep-copy'
@@ -499,6 +498,21 @@ export default class FileSection extends React.Component {
   }
 
   handleRowKeyDown = (event) => {
+    const openContextMenu = (
+      (event.shiftKey && event.key === 'F10') || event.key === 'ContextMenu'
+    )
+    if (openContextMenu) {
+      event.preventDefault()
+      this.contextMenuOpenedByKeyboard = true
+      const rect = this.domRef.current?.getBoundingClientRect()
+      this.domRef.current?.dispatchEvent(new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        clientX: rect ? rect.left + 24 : 0,
+        clientY: rect ? rect.bottom : 0
+      }))
+      return
+    }
     const { id: currentId, type } = this.state.file
     const focusSelectedRow = nextId => {
       document.getElementById('file-' + nextId)?.focus()
@@ -1063,35 +1077,32 @@ export default class FileSection extends React.Component {
     }
   }
 
-  itemToMenuFormat = (r) => {
-    const { func, text, disabled, icon, subText, requireConfirm } = r
-    const IconCom = iconsMap[icon]
-    return {
-      key: func,
-      label: text,
-      disabled,
-      icon: <IconCom />,
-      extra: subText,
-      danger: requireConfirm
+  itemToMenuFormat = (item) => {
+    if (item.type === 'divider') return { type: 'divider' }
+    const IconCom = iconsMap[item.icon]
+    const result = {
+      key: item.func,
+      label: item.text,
+      disabled: item.disabled,
+      icon: IconCom ? <IconCom /> : null,
+      extra: item.subText,
+      danger: item.tone === 'danger',
+      className: item.tone === 'warning'
+        ? 'sftp-menu-item-warning'
+        : undefined
     }
+    if (item.children?.length) {
+      result.popupClassName = 'shellpilot-context-menu'
+      result.children = item.children.map(this.itemToMenuFormat)
+    }
+    return result
   }
 
   renderContextMenu = () => {
-    const items = this.renderContextItems()
+    const items = this.renderContextItems().map(this.itemToMenuFormat)
     const clientY = this.contextMenuPosition?.clientY
     const windowHeight = typeof window === 'undefined' ? 0 : window.innerHeight
     return splitOverflowMenu({ items, clientY, windowHeight })
-      .map(item => {
-        if (item.key !== 'more-submenu') {
-          return this.itemToMenuFormat(item)
-        }
-        return {
-          ...item,
-          icon: <ArrowRightOutlined />,
-          popupClassName: 'shellpilot-context-menu',
-          children: item.children.map(this.itemToMenuFormat)
-        }
-      })
   }
 
   renderContextItems () {
@@ -1119,10 +1130,7 @@ export default class FileSection extends React.Component {
   }
 
   onContextMenu = ({ key }) => {
-    // If it's not the submenu itself
-    if (key !== 'more-submenu') {
-      this[key]()
-    }
+    if (typeof this[key] === 'function') this[key]()
   }
 
   renderEditing (file) {

@@ -1,4 +1,5 @@
 import { formatShellPilotTranslation } from '../../common/shellpilot-i18n-overrides.js'
+import { groupSftpContextItems } from './context-menu-utils.js'
 
 function format (translate, key, values = {}) {
   return formatShellPilotTranslation(translate, key, values)
@@ -129,7 +130,8 @@ export function buildSftpFileContextItems (options = {}) {
       func: 'del',
       icon: 'CloseCircleOutlined',
       text: deleteText,
-      requireConfirm: true
+      requireConfirm: true,
+      tone: isRemote ? 'warning' : 'danger'
     })
     if (isRemote) {
       result.push({
@@ -140,7 +142,8 @@ export function buildSftpFileContextItems (options = {}) {
           selected ? 'shellpilotSftpFastDeleteSelected' : 'shellpilotSftpFastDeletePermanent',
           { count: selectedCount }
         ),
-        requireConfirm: true
+        requireConfirm: true,
+        tone: 'danger'
       })
     }
     result.push({
@@ -188,5 +191,10 @@ export function buildSftpFileContextItems (options = {}) {
   if (isRealFile) {
     result.push({ func: 'showInfo', icon: 'InfoCircleOutlined', text: translate('info') })
   }
-  return result
+  return groupSftpContextItems({
+    items: result,
+    isRemote,
+    isRealFile,
+    translate
+  })
 }

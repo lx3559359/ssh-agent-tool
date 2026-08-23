@@ -333,18 +333,22 @@ export default class FileListTable extends Component {
         : []
       this.forceUpdate()
     } else {
+      const contextMenuFile = this.openContextMenuFile
       this.openContextMenuItems = null
+      this.openContextMenuFile = null
+      if (contextMenuFile?.contextMenuOpenedByKeyboard) {
+        contextMenuFile.contextMenuOpenedByKeyboard = false
+        requestAnimationFrame(() => {
+          contextMenuFile.domRef?.current?.focus()
+        })
+      }
     }
   }
 
   onContextMenuFile = ({ key }) => {
-    if (key !== 'more-submenu') {
-      const inst = this.openContextMenuFile || this.getClickedFile()
-      this.openContextMenuFile = null
-      if (inst) {
-        inst[key]()
-      }
-    }
+    const inst = this.openContextMenuFile || this.getClickedFile()
+    if (typeof inst?.[key] !== 'function') return
+    inst[key]()
   }
 
   renderContextMenuFile = () => {
