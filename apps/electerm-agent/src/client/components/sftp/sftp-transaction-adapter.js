@@ -309,7 +309,9 @@ function createByteProgress (onProgress, phase, knownTotal = null) {
   publish()
   return {
     setKnownTotal (value) {
-      if (Number.isFinite(value) && value >= 0) totalBytes = value
+      if (totalBytes === null && Number.isFinite(value) && value >= 0) {
+        totalBytes = value
+      }
       publish()
     },
     addBytes (value) {
@@ -606,19 +608,21 @@ async function readBoundedText (sftp, path, signal) {
   return new TextDecoder().decode(concatBytes(...chunks))
 }
 
-async function verifySnapshot (sftp, resource, signal) {
-  if (resource.snapshotRequired === false) return
-  if (resource.original.absent === true) return
+async function verifySnapshot (sftp, resource, signal, byteProgress) {
+  if (resource.snapshotRequired === false) return resource.original
+  if (resource.original.absent === true) return resource.original
   const snapshot = await describeEntry(
     sftp,
     resource.snapshotPath,
     createDescriptorBudget(),
     0,
-    signal
+    signal,
+    byteProgress
   )
   if (!sameDescriptor(snapshot, resource.original)) {
     throw new Error('SFTP 快照校验失败，已拒绝继续操作。')
   }
+  return snapshot
 }
 
 async function validateManifest (
@@ -989,10 +993,23 @@ async function assertPostMutationUnchanged (sftp, operation, signal) {
   }
 }
 
-async function assertOriginalState (sftp, resource, action, signal) {
+async function assertOriginalState (
+  sftp,
+  resource,
+  action,
+  signal,
+  byteProgress
+) {
   const current = action === 'chmod'
     ? await describeModeEntry(sftp, resource.path, signal)
-    : await describeEntry(sftp, resource.path, createDescriptorBudget(), 0, signal)
+    : await describeEntry(
+      sftp,
+      resource.path,
+      createDescriptorBudget(),
+      0,
+      signal,
+      byteProgress
+    )
   if (!sameDescriptor(current, resource.original)) {
     throw new Error('SFTP 资源在确认前已发生变化，未执行修改。')
   }
@@ -1272,6 +1289,73 @@ export function createSftpTransactionAdapter ({
     } catch {}
   }
 
+  const preparedProofs = new Map()
+
+  function cloneProofValue (value) {
+    return JSON.parse(JSON.stringify(value))
+  }
+
+  function proofPayload (operation) {
+    return {
+      operationId: operation.id,
+      effectKey: operation.effectKey,
+      endpointKey: operation.endpointKey,
+      recoveryBinding: operation.recoveryBinding || null,
+      resources: operation.plan.resources.map(resource => ({
+        path: resource.path,
+        snapshotPath: resource.snapshotPath,
+        original: resource.original
+      }))
+    }
+  }
+
+  function rememberPreparedProof (operation, prepared) {
+    if (operation.effect.action !== 'delete') return
+    preparedProofs.set(operation.id, {
+      operationId: operation.id,
+      effectKey: operation.effectKey,
+      endpointKey: operation.endpointKey,
+      recoveryBinding: null,
+      resources: cloneProofValue(prepared.plan.resources.map(resource => ({
+        path: resource.path,
+        snapshotPath: resource.snapshotPath,
+        original: resource.original
+      })))
+    })
+  }
+
+  function consumePreparedProof (operation) {
+    const proof = preparedProofs.get(operation.id)
+    preparedProofs.delete(operation.id)
+    if (!proof || !sameDescriptor(proof, proofPayload(operation))) {
+      throw new Error('SFTP 准备证明与当前执行事务不匹配。')
+    }
+    return proof
+  }
+
+  function requireExecutionProof (operation, executeResult) {
+    const proof = executeResult?.snapshotProof
+    if (!proof || proof.operationId !== operation.id ||
+      proof.effectKey !== operation.effectKey ||
+      proof.endpointKey !== operation.endpointKey ||
+      !sameDescriptor(proof.recoveryBinding, operation.recoveryBinding) ||
+      !Array.isArray(proof.resources) ||
+      proof.resources.length !== operation.plan.resources.length) {
+      throw new Error('SFTP 执行证明与当前事务不匹配。')
+    }
+    const seenPaths = new Set()
+    for (const resource of operation.plan.resources) {
+      const item = proof.resources.find(value => value.path === resource.path)
+      if (!item || seenPaths.has(item.path) ||
+        item.snapshotPath !== resource.snapshotPath ||
+        !sameDescriptor(item.descriptor, resource.original)) {
+        throw new Error('SFTP 执行证明资源不匹配。')
+      }
+      seenPaths.add(item.path)
+    }
+    return proof
+  }
+
   async function requireSftp (operation) {
     const sftp = await getSftp(operation)
     if (!sftp) throw new Error('当前 SFTP 连接已断开，未执行远程修改。')
@@ -1279,6 +1363,27 @@ export function createSftpTransactionAdapter ({
   }
 
   return {
+    bindPreparedProof (operation) {
+      const proof = preparedProofs.get(operation.id)
+      const expected = proofPayload(operation)
+      const comparable = { ...expected, recoveryBinding: null }
+      if (!proof || !sameDescriptor(proof, comparable) ||
+        !operation.recoveryBinding) {
+        preparedProofs.delete(operation.id)
+        throw new Error('SFTP 准备证明与恢复绑定不匹配。')
+      }
+      proof.recoveryBinding = cloneProofValue(operation.recoveryBinding)
+      return true
+    },
+
+    discardPreparedProof (operationId) {
+      preparedProofs.delete(operationId)
+    },
+
+    discardAllPreparedProofs () {
+      preparedProofs.clear()
+    },
+
     supports (operation) {
       return operation?.operationKind === 'side-effect' &&
         operation?.effect?.adapter === 'sftp' &&
@@ -1297,12 +1402,18 @@ export function createSftpTransactionAdapter ({
       const prepare = async () => {
         const sftp = await requireSftp(operation)
         const existing = await loadManifest(sftp, operation, context.signal)
-        if (existing) return existing
-        return prepareNewManifest(sftp, operation, context.signal, {
-          onProgress: value => reportProgress(operation, value),
-          setTimer,
-          clearTimer
-        })
+        const prepared = existing || await prepareNewManifest(
+          sftp,
+          operation,
+          context.signal,
+          {
+            onProgress: value => reportProgress(operation, value),
+            setTimer,
+            clearTimer
+          }
+        )
+        rememberPreparedProof(operation, prepared)
+        return prepared
       }
       return operation.effect.action === 'editor-save'
         ? runEditorStage('snapshot', prepare)
@@ -1329,16 +1440,55 @@ export function createSftpTransactionAdapter ({
         ? await runEditorStage('transaction', () => requireSftp(operation))
         : await requireSftp(operation)
       const { signal } = context
-      const validateSnapshot = async () => {
-        await requireManifest(sftp, operation, signal)
+      const verifiedSnapshots = []
+      if (action === 'delete') {
+        if (operation.recoveryBinding) consumePreparedProof(operation)
+        await requireManifest(sftp, operation, signal, {
+          verifySnapshots: false
+        })
+        const knownDeleteBytes = operation.plan.resources.every(resource => (
+          resource.original.type === 'file'
+        ))
+          ? operation.plan.resources.reduce((sum, resource) => (
+            sum + resource.original.size * 2
+          ), 0)
+          : null
+        const deleteProgress = createByteProgress(
+          value => reportProgress(operation, value),
+          'deleting',
+          knownDeleteBytes
+        )
         for (const resource of operation.plan.resources) {
-          await assertOriginalState(sftp, resource, action, signal)
+          verifiedSnapshots.push({
+            resource,
+            descriptor: await verifySnapshot(
+              sftp,
+              resource,
+              signal,
+              deleteProgress
+            )
+          })
+          await assertOriginalState(
+            sftp,
+            resource,
+            action,
+            signal,
+            deleteProgress
+          )
         }
-      }
-      if (action === 'editor-save') {
-        await runEditorStage('snapshot', validateSnapshot)
+        deleteProgress.finish()
       } else {
-        await validateSnapshot()
+        const validateSnapshot = async () => {
+          await requireManifest(sftp, operation, signal)
+          for (const resource of operation.plan.resources) {
+            await assertOriginalState(sftp, resource, action, signal)
+          }
+        }
+        if (action === 'editor-save') {
+          await runEditorStage('snapshot', validateSnapshot)
+        } else {
+          await validateSnapshot()
+        }
       }
       if (['upload', 'copy', 'move'].includes(action)) {
         throw new Error('SFTP 文件传输必须由原有 transfer transport 执行。')
@@ -1455,6 +1605,7 @@ export function createSftpTransactionAdapter ({
         if (await lstatOrAbsent(sftp, resource.executionPath, signal)) {
           throw new Error('SFTP 删除事务执行路径已被占用，未修改源资源。')
         }
+        throwIfAborted(signal)
         await runProtectedMutation(
           context,
           () => sftp.rename(resource.path, resource.executionPath)
@@ -1465,7 +1616,21 @@ export function createSftpTransactionAdapter ({
           { commitPoint: false }
         )
       }
-      return { summary: `SFTP ${action} 已执行，等待验证。` }
+      return {
+        summary: `SFTP ${action} 已执行，等待验证。`,
+        ...(action === 'delete'
+          ? {
+              snapshotProof: {
+                ...proofPayload(operation),
+                resources: verifiedSnapshots.map(({ resource, descriptor }) => ({
+                  path: resource.path,
+                  snapshotPath: resource.snapshotPath,
+                  descriptor
+                }))
+              }
+            }
+          : {})
+      }
     },
 
     async beforeExternalExecute (operation, context = {}) {
@@ -1486,8 +1651,37 @@ export function createSftpTransactionAdapter ({
 
     async verifyExecute (operation, context = {}) {
       const sftp = await requireSftp(operation)
-      await requireManifest(sftp, operation, context.signal)
-      await verifyExecuteState(sftp, operation, context.signal)
+      if (operation.effect.action === 'delete' && context.executeResult) {
+        const proof = requireExecutionProof(operation, context.executeResult)
+        await requireManifest(sftp, operation, context.signal, {
+          verifySnapshots: false
+        })
+        reportProgress(operation, {
+          phase: 'result-verify',
+          completedBytes: 0,
+          totalBytes: null
+        })
+        await verifyExecuteState(sftp, operation, context.signal)
+        for (const item of proof.resources) {
+          const resource = operation.plan.resources.find(value => (
+            value.path === item.path
+          ))
+          await verifySnapshotMetadata(
+            sftp,
+            resource,
+            item.descriptor,
+            context.signal
+          )
+        }
+        reportProgress(operation, {
+          phase: 'result-verify',
+          completedBytes: 1,
+          totalBytes: null
+        })
+      } else {
+        await requireManifest(sftp, operation, context.signal)
+        await verifyExecuteState(sftp, operation, context.signal)
+      }
       const postMutation = await describePostMutation(
         sftp,
         operation,

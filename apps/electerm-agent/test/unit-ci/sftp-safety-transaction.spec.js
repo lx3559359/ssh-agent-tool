@@ -1318,6 +1318,86 @@ test('SFTP delete prepare reads source and staging once without rereading final 
   }
 })
 
+test('SFTP delete reuses only an execution proof bound to the same recovery', async () => {
+  const { createSftpTransactionAdapter } = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/components/sftp/sftp-transaction-adapter.js'
+  )).href)
+  const sftp = createFakeSftp({
+    '/srv/app/big.bin': { type: 'file', content: Buffer.alloc(180000, 9) }
+  })
+  const operation = await buildSftpOperation({
+    id: 'adapter-delete-proof',
+    action: 'delete',
+    paths: { source: '/srv/app/big.bin' },
+    type: 'file',
+    expected: { absent: true }
+  })
+  const adapter = createSftpTransactionAdapter({ getSftp: () => sftp })
+  Object.assign(operation, await adapter.prepare(operation), {
+    recoveryBinding: {
+      schemaVersion: 2,
+      algorithm: 'SHA-256',
+      fingerprint: 'a'.repeat(64)
+    }
+  })
+  assert.equal(adapter.bindPreparedProof(operation), true)
+  sftp.calls.length = 0
+  const executeResult = await adapter.beforeExecute(operation)
+  const resource = operation.plan.resources[0]
+  const snapshotReadsBeforeVerify = sftp.calls.filter(call => (
+    call[0] === 'readFileChunk' && call[1] === resource.snapshotPath
+  )).length
+  assert.equal(snapshotReadsBeforeVerify, 3)
+  await adapter.verifyExecute(operation, { executeResult })
+  assert.equal(sftp.calls.filter(call => (
+    call[0] === 'readFileChunk' && call[1] === resource.snapshotPath
+  )).length, snapshotReadsBeforeVerify)
+  assert.equal(sftp.exists(resource.path), false)
+})
+
+test('SFTP prepared proof rejects endpoint, recovery, path, and descriptor changes', async t => {
+  const { createSftpTransactionAdapter } = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/components/sftp/sftp-transaction-adapter.js'
+  )).href)
+  const cases = [
+    ['endpoint', operation => { operation.endpointKey = `${operation.endpointKey}-changed` }],
+    ['recovery', operation => { operation.recoveryBinding.fingerprint = 'b'.repeat(64) }],
+    ['path', operation => { operation.plan.resources[0].snapshotPath += '.changed' }],
+    ['descriptor', operation => { operation.plan.resources[0].original.size += 1 }]
+  ]
+  for (const [caseIndex, [name, mutation]] of cases.entries()) {
+    await t.test(name, async () => {
+      const sftp = createFakeSftp({
+        '/srv/app/file.txt': { type: 'file', content: 'original' }
+      })
+      const operation = await buildSftpOperation({
+        id: `adapter-proof-mismatch-${caseIndex}`,
+        action: 'delete',
+        paths: { source: '/srv/app/file.txt' },
+        type: 'file',
+        expected: { absent: true }
+      })
+      const adapter = createSftpTransactionAdapter({ getSftp: () => sftp })
+      Object.assign(operation, await adapter.prepare(operation), {
+        recoveryBinding: {
+          schemaVersion: 2,
+          algorithm: 'SHA-256',
+          fingerprint: 'a'.repeat(64)
+        }
+      })
+      adapter.bindPreparedProof(operation)
+      mutation(operation)
+      await assert.rejects(
+        adapter.beforeExecute(operation),
+        /proof|证明|绑定|不匹配/i
+      )
+      assert.equal(sftp.exists('/srv/app/file.txt'), true)
+    })
+  }
+})
+
 async function createRealSftpTransactionRunner (operation, sftp) {
   const { createTransactionRunner } = await importTransactionModule(
     'transaction-runner.js'
@@ -1336,7 +1416,7 @@ async function createRealSftpTransactionRunner (operation, sftp) {
     sideEffectAdapter: adapter,
     store
   })
-  return { runner, store }
+  return { runner, store, adapter }
 }
 
 test('SFTP adapter rejects forged ids before constructing a transaction directory', async () => {
@@ -2127,8 +2207,14 @@ test('SFTP action cancellation after mutation start remains immediately rollback
         action: definition.action,
         ...definition.operation
       })
-      const { runner } = await createRealSftpTransactionRunner(operation, sftp)
-      await runner.prepare(operation)
+      const { runner, adapter } = await createRealSftpTransactionRunner(
+        operation,
+        sftp
+      )
+      const preparedOperation = await runner.prepare(operation)
+      if (definition.action === 'delete') {
+        adapter.bindPreparedProof(preparedOperation)
+      }
       const executing = runner.execute(operation.id, {
         confirmed: true,
         sideEffectInput: definition.input
