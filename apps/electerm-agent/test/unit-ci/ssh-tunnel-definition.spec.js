@@ -105,7 +105,7 @@ test('SSH tunnel templates, normalization, and bookmarks keep only supported usa
 })
 
 test('SSH tunnel validation rejects unsupported types and invalid ports', async () => {
-  const { validateTunnel } = await loadDefinitions()
+  const { normalizeTunnel, validateTunnel } = await loadDefinitions()
 
   assert.throws(() => validateTunnel({
     sshTunnel: 'forwardLocalToRemote',
@@ -122,6 +122,56 @@ test('SSH tunnel validation rejects unsupported types and invalid ports', async 
     sshTunnelLocalPort: 1080,
     name: 'x'.repeat(81)
   }), /名称/)
+  assert.equal(normalizeTunnel({ sshTunnel: false }).sshTunnel, false)
+  assert.throws(() => validateTunnel({
+    sshTunnel: false,
+    sshTunnelLocalPort: 8080,
+    sshTunnelRemotePort: 80
+  }), /类型/)
+})
+
+test('SSH tunnel ports accept only finite integers or decimal integer strings', async () => {
+  const {
+    normalizeTunnel,
+    normalizeTunnelPort,
+    serializeTunnelForBookmark,
+    validateTunnel
+  } = await loadDefinitions()
+  const invalidPorts = [
+    true,
+    [80],
+    {},
+    '0x50',
+    '8e2',
+    '80.5',
+    '+80',
+    '-80',
+    80.5,
+    NaN,
+    0,
+    65536
+  ]
+
+  assert.equal(normalizeTunnelPort('080'), 80)
+  assert.equal(normalizeTunnelPort(80), 80)
+  for (const port of invalidPorts) {
+    assert.equal(normalizeTunnelPort(port), undefined)
+    assert.equal(normalizeTunnel({
+      sshTunnelLocalPort: port
+    }).sshTunnelLocalPort, undefined)
+    assert.throws(() => validateTunnel({
+      sshTunnelLocalPort: port,
+      sshTunnelRemotePort: 80
+    }), /端口/)
+    assert.throws(() => validateTunnel({
+      sshTunnelLocalPort: 8080,
+      sshTunnelRemotePort: port
+    }), /端口/)
+    assert.throws(() => serializeTunnelForBookmark({
+      sshTunnelLocalPort: port,
+      sshTunnelRemotePort: 80
+    }), /端口/)
+  }
 })
 
 test('bookmark serialization strips runtime-only fields and preserves legacy auto-start', async () => {

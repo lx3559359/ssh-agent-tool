@@ -1,3 +1,8 @@
+import {
+  normalizeTunnelPort,
+  tunnelTypes
+} from './ssh-tunnel-definition.js'
+
 const usageProfiles = new Set([
   'http',
   'https',
@@ -17,17 +22,6 @@ const legacyProfiles = Object.freeze({
   SOCKS5: 'socks5'
 })
 
-function normalizePort (value) {
-  if (value === undefined || value === null || String(value).trim() === '') {
-    return undefined
-  }
-  return Number(value)
-}
-
-function isValidPort (port) {
-  return Number.isInteger(port) && port >= 1 && port <= 65535
-}
-
 function isValidIPv6 (host) {
   const [address, ...zones] = host.split('%')
   if (zones.length > 1 || (zones.length === 1 && !/^[A-Za-z0-9_.-]+$/.test(zones[0]))) {
@@ -39,6 +33,15 @@ function isValidIPv6 (host) {
   try {
     const parsed = new URL(`http://[${address}]`)
     return Boolean(parsed.hostname)
+  } catch {
+    return false
+  }
+}
+
+function isUnspecifiedIPv6 (host) {
+  if (host.includes('%')) return false
+  try {
+    return new URL(`http://[${host}]`).hostname === '[::]'
   } catch {
     return false
   }
@@ -77,17 +80,23 @@ function normalizeAccessHost (value, local) {
   if (host.startsWith('[') || host.endsWith(']')) {
     if (!host.startsWith('[') || !host.endsWith(']')) return undefined
     const unbracketed = host.slice(1, -1)
-    return isValidIPv6(unbracketed) ? `[${unbracketed}]` : undefined
+    if (!isValidIPv6(unbracketed)) return undefined
+    return local && isUnspecifiedIPv6(unbracketed)
+      ? '[::1]'
+      : `[${unbracketed}]`
   }
   if (host.includes('[') || host.includes(']')) return undefined
-  if (host.includes(':')) return isValidIPv6(host) ? `[${host}]` : undefined
+  if (host.includes(':')) {
+    if (!isValidIPv6(host)) return undefined
+    return local && isUnspecifiedIPv6(host) ? '[::1]' : `[${host}]`
+  }
   return isValidHostName(host) ? host : undefined
 }
 
 function normalizeAccessAddress (hostValue, portValue, { local = false } = {}) {
   const host = normalizeAccessHost(hostValue, local)
-  const port = normalizePort(portValue)
-  if (!host || !isValidPort(port)) return { host, port }
+  const port = normalizeTunnelPort(portValue)
+  if (!host || port === undefined) return { host, port }
   return { host, port, endpoint: `${host}:${port}` }
 }
 
@@ -138,7 +147,14 @@ function getWebUrl (profile, address) {
 }
 
 export function getTunnelUsage (definition = {}) {
-  const type = definition.sshTunnel || 'forwardLocalToRemote'
+  const type = definition.sshTunnel === undefined ||
+    definition.sshTunnel === null ||
+    definition.sshTunnel === ''
+    ? 'forwardLocalToRemote'
+    : definition.sshTunnel
+  if (!tunnelTypes.includes(type)) {
+    return getUsageBase('tcp', 'generic', {}, false)
+  }
   if (type === 'dynamicForward') {
     const address = normalizeAccessAddress(
       definition.sshTunnelLocalHost,

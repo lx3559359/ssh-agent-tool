@@ -90,9 +90,15 @@ function normalizeHost (value, fallback = '127.0.0.1') {
   return host || fallback
 }
 
-function normalizePort (value) {
-  if (value === '' || value === undefined || value === null) return undefined
-  return Number(value)
+export function normalizeTunnelPort (value) {
+  const port = typeof value === 'number'
+    ? value
+    : typeof value === 'string' && /^\d+$/.test(value.trim())
+      ? Number(value.trim())
+      : undefined
+  return Number.isInteger(port) && port >= 1 && port <= 65535
+    ? port
+    : undefined
 }
 
 function normalizeUsageProfile (value) {
@@ -135,11 +141,15 @@ function validatePort (port, label) {
 export function normalizeTunnel (input = {}) {
   const tunnel = {
     ...input,
-    sshTunnel: input.sshTunnel || 'forwardLocalToRemote',
+    sshTunnel: input.sshTunnel === undefined ||
+      input.sshTunnel === null ||
+      input.sshTunnel === ''
+      ? 'forwardLocalToRemote'
+      : input.sshTunnel,
     sshTunnelLocalHost: normalizeHost(input.sshTunnelLocalHost),
-    sshTunnelLocalPort: normalizePort(input.sshTunnelLocalPort),
+    sshTunnelLocalPort: normalizeTunnelPort(input.sshTunnelLocalPort),
     sshTunnelRemoteHost: normalizeHost(input.sshTunnelRemoteHost),
-    sshTunnelRemotePort: normalizePort(input.sshTunnelRemotePort),
+    sshTunnelRemotePort: normalizeTunnelPort(input.sshTunnelRemotePort),
     usageProfile: normalizeUsageProfile(input.usageProfile),
     name: String(input.name || '').trim().slice(0, 80),
     autoStart: input.autoStart !== false

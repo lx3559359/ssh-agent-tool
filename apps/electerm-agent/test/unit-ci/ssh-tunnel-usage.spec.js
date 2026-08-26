@@ -276,6 +276,60 @@ test('web URLs accept canonical IPv6 parsing and protocol default ports', async 
   }
 })
 
+test('IPv6 wildcard addresses are converted semantically without changing other IPv6 hosts', async () => {
+  const { getTunnelUsage } = await loadUsage()
+  const expandedWildcard = '0:0:0:0:0:0:0:0'
+
+  for (const sshTunnelLocalHost of [expandedWildcard, `[${expandedWildcard}]`]) {
+    const usage = getTunnelUsage({
+      usageProfile: 'http',
+      sshTunnelLocalHost,
+      sshTunnelLocalPort: 8080
+    })
+    assert.equal(usage.host, '[::1]')
+    assert.equal(usage.endpoint, '[::1]:8080')
+    assert.equal(usage.url, 'http://[::1]:8080')
+    assert.equal(usage.canOpen, true)
+  }
+  const nonWildcard = getTunnelUsage({
+    usageProfile: 'http',
+    sshTunnelLocalHost: '0:0:0:0:0:0:0:1',
+    sshTunnelLocalPort: 8080
+  })
+  assert.equal(nonWildcard.host, '[0:0:0:0:0:0:0:1]')
+  assert.notEqual(nonWildcard.host, '[::1]')
+})
+
+test('usage rejects ambiguous port syntax and explicit unknown tunnel types', async () => {
+  const { getTunnelUsage } = await loadUsage()
+  const invalidPorts = [true, [80], {}, '0x50', '8e2', '80.5', '+80', '-80']
+
+  for (const sshTunnelLocalPort of invalidPorts) {
+    const usage = getTunnelUsage({
+      usageProfile: 'https',
+      sshTunnelLocalHost: '127.0.0.1',
+      sshTunnelLocalPort
+    })
+    assert.equal(usage.canOpen, false)
+    assert.equal('endpoint' in usage, false)
+    assert.equal('url' in usage, false)
+  }
+  const bogus = getTunnelUsage({
+    sshTunnel: 'ForwardLocalToRemote',
+    usageProfile: 'https',
+    sshTunnelLocalHost: '127.0.0.1',
+    sshTunnelLocalPort: 8443
+  })
+  assert.deepEqual(bogus, {
+    kind: 'tcp',
+    profile: 'generic',
+    host: undefined,
+    port: undefined,
+    requiresProxy: false,
+    canOpen: false
+  })
+})
+
 test('tunnel types control their usage profile and valid output structure', async () => {
   const { getTunnelUsage } = await loadUsage()
   const usages = [
