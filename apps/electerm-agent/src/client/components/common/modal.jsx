@@ -41,6 +41,7 @@ export default function Modal (props) {
     footer,
     maskClosable = true,
     keyboardConfirm = true,
+    initialFocusSelector,
     onCancel
   } = props
   const overlayRef = useRef(null)
@@ -94,7 +95,7 @@ export default function Modal (props) {
         }
       } else if (keyboardConfirmRef.current && (e.key === 'Enter' || e.key === ' ')) {
         // For confirm, Enter/Space confirms
-        const okBtn = document.querySelector('.custom-modal-ok-btn')
+        const okBtn = content?.querySelector('.custom-modal-ok-btn')
         if (okBtn) {
           okBtn.click()
           e.preventDefault()
@@ -103,7 +104,10 @@ export default function Modal (props) {
     }
 
     document.addEventListener('keydown', handleKeyDown)
-    const initialFocus = getFocusableElements(content)[0] || content
+    const requestedFocus = initialFocusSelector
+      ? content?.querySelector(initialFocusSelector)
+      : null
+    const initialFocus = requestedFocus || getFocusableElements(content)[0] || content
     initialFocus?.focus()
     return () => {
       document.removeEventListener('keydown', handleKeyDown)
@@ -180,6 +184,7 @@ export default function Modal (props) {
 Modal.displayName = 'Modal'
 
 function createModalInstance (type, options) {
+  let currentOptions = options
   const modalCopy = resolveShellPilotModalCopy(options, window.translate)
   const {
     title,
@@ -187,8 +192,9 @@ function createModalInstance (type, options) {
     onOk,
     onCancel,
     okButtonProps,
+    closeOnOk = true,
     ...rest
-  } = options
+  } = currentOptions
   const { okText, cancelText } = modalCopy
 
   const container = document.createElement('div')
@@ -207,7 +213,7 @@ function createModalInstance (type, options) {
     if (onOk) {
       onOk()
     }
-    destroy()
+    if (closeOnOk) destroy()
   }
 
   const handleCancel = () => {
@@ -235,6 +241,7 @@ function createModalInstance (type, options) {
         className={classnames('custom-modal-ok-btn', {
           'is-danger': okButtonProps?.danger
         })}
+        disabled={okButtonProps?.disabled}
         onClick={handleOk}
       >
         {okText}
@@ -254,7 +261,8 @@ function createModalInstance (type, options) {
   root.render(<Modal {...modalProps} />)
 
   const update = (newOptions) => {
-    const updatedOptions = { ...options, ...newOptions }
+    currentOptions = { ...currentOptions, ...newOptions }
+    const updatedOptions = currentOptions
     const updatedCopy = resolveShellPilotModalCopy(updatedOptions, window.translate)
     const {
       title: newTitle,
@@ -262,6 +270,7 @@ function createModalInstance (type, options) {
       onOk: newOnOk,
       onCancel: newOnCancel,
       okButtonProps: newOkButtonProps,
+      closeOnOk: newCloseOnOk = closeOnOk,
       ...newRest
     } = updatedOptions
     const {
@@ -273,7 +282,7 @@ function createModalInstance (type, options) {
       if (newOnOk) {
         newOnOk()
       }
-      destroy()
+      if (newCloseOnOk) destroy()
     }
 
     const newHandleCancel = () => {
@@ -299,6 +308,7 @@ function createModalInstance (type, options) {
           className={classnames('custom-modal-ok-btn', {
             'is-danger': newOkButtonProps?.danger
           })}
+          disabled={newOkButtonProps?.disabled}
           onClick={newHandleOk}
         >
           {newOkText}

@@ -1,3 +1,6 @@
+import resolve from '../../common/resolve.js'
+import normalizeRemotePath from '../../common/normalize-remote-path.js'
+
 const TIMER_KEYS = ['timer', 'timer4', 'timer5', 'retryHandler']
 const DEBOUNCE_KEYS = ['remoteListDebounce', 'localListDebounce']
 
@@ -63,4 +66,33 @@ export function disposeSftpEntryClient (entry) {
 
 export function reconnectSftpEntryRemote (entry) {
   return entry.initRemoteAll()
+}
+
+function canonicalRemotePath (value) {
+  const normalized = normalizeRemotePath(String(value || ''))
+  if (!normalized) return ''
+  const homeRelative = normalized === '~' || normalized.startsWith('~/')
+  const parts = []
+  const source = homeRelative ? normalized.slice(2) : normalized
+  for (const part of source.split('/')) {
+    if (!part || part === '.') continue
+    if (part === '..') parts.pop()
+    else parts.push(part)
+  }
+  return homeRelative ? ['~', ...parts].join('/') : `/${parts.join('/')}`
+}
+
+export function removeDeletedRemoteEntries (remote = [], deletedPaths = []) {
+  const targets = new Set(deletedPaths
+    .map(canonicalRemotePath)
+    .filter(Boolean))
+  if (!targets.size) return remote
+  return remote.filter(file => {
+    if (!file || file.isParent || file.isEmpty || file.isEditing) return true
+    const absolutePath = canonicalRemotePath(resolve(
+      String(file.path || ''),
+      String(file.name || '')
+    ))
+    return !targets.has(absolutePath)
+  })
 }

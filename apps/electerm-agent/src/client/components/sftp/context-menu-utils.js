@@ -11,6 +11,80 @@ function currentMoreLabel () {
   return 'More'
 }
 
+function compactMenuItems (items) {
+  const result = []
+  for (const item of items) {
+    if (!item) continue
+    if (item.type === 'divider' && (
+      result.length === 0 || result.at(-1)?.type === 'divider'
+    )) continue
+    result.push(item)
+  }
+  if (result.at(-1)?.type === 'divider') result.pop()
+  return result
+}
+
+export function groupSftpContextItems ({
+  items = [],
+  isRemote = false,
+  isRealFile = false,
+  translate = key => key
+} = {}) {
+  const take = func => items.find(item => item.func === func)
+  const directFunctions = [
+    'doEnterDirectory',
+    'doTransferSelected',
+    'gotoFolderInTerminal',
+    'doTransfer',
+    'transferOrEnterDirectory',
+    'showInDefaultFileManager',
+    'downloadFromBrowser',
+    'askAiAboutFile',
+    'editFile'
+  ]
+  const reserved = new Set([
+    ...directFunctions,
+    'del',
+    'quickDelete',
+    'doRename',
+    'onCopyPath',
+    'quickBackup',
+    'restoreLatestBackup',
+    'openSafetyCenter'
+  ])
+  const backup = [
+    'quickBackup',
+    'restoreLatestBackup',
+    'openSafetyCenter'
+  ].map(take).filter(Boolean)
+  const more = items.filter(item => !reserved.has(item.func))
+  return compactMenuItems([
+    ...directFunctions.map(take).filter(Boolean),
+    isRealFile ? { type: 'divider' } : null,
+    take('del'),
+    isRemote ? take('quickDelete') : null,
+    isRealFile ? { type: 'divider' } : null,
+    take('doRename'),
+    take('onCopyPath'),
+    backup.length
+      ? {
+          func: 'backupRecoveryMenu',
+          icon: 'SaveOutlined',
+          text: translate('shellpilotSftpBackupRecoveryMenu'),
+          children: backup
+        }
+      : null,
+    more.length
+      ? {
+          func: 'moreActionsMenu',
+          icon: 'AppstoreOutlined',
+          text: translate('shellpilotSftpMoreActionsMenu'),
+          children: more
+        }
+      : null
+  ])
+}
+
 export function splitOverflowMenu ({
   items = [],
   clientY,
@@ -36,6 +110,7 @@ export function splitOverflowMenu ({
     {
       key: 'more-submenu',
       label: moreLabel,
+      popupClassName: 'shellpilot-context-menu',
       children: items.slice(splitIndex)
     }
   ]

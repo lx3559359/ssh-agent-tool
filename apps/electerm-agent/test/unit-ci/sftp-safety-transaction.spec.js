@@ -1096,6 +1096,9 @@ function createFakeSftp (initial = {}, options = {}) {
         failCopy = false
         throw new Error('No space left on device')
       }
+      if (options.copyDelay) {
+        await new Promise(resolve => setTimeout(resolve, options.copyDelay))
+      }
       if (exists(to)) throw new Error('Target already exists')
       cloneTree(from, to)
       if (failChown) {
@@ -1245,6 +1248,156 @@ async function buildSftpOperation ({
   })
 }
 
+test('SFTP bounded digest reports actual monotonic bytes', async () => {
+  const { digestRemoteFile } = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/components/sftp/sftp-transaction-adapter.js'
+  )).href)
+  const sftp = createFakeSftp({
+    '/srv/app/big.bin': { type: 'file', content: Buffer.alloc(180000, 7) }
+  })
+  const progress = []
+  const result = await digestRemoteFile(
+    sftp,
+    '/srv/app/big.bin',
+    180000,
+    undefined,
+    bytes => progress.push(bytes)
+  )
+  assert.equal(result.size, 180000)
+  assert.deepEqual(progress, [65536, 65536, 48928])
+})
+
+test('SFTP delete prepare reads source and staging once without rereading final snapshot', async () => {
+  const { createSftpTransactionAdapter } = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/components/sftp/sftp-transaction-adapter.js'
+  )).href)
+  const sftp = createFakeSftp({
+    '/srv/app/big.bin': { type: 'file', content: Buffer.alloc(180000, 7) }
+  })
+  const progress = []
+  const timers = []
+  const clearedTimers = []
+  const operation = await buildSftpOperation({
+    id: 'adapter-delete-progress',
+    action: 'delete',
+    paths: { source: '/srv/app/big.bin' },
+    type: 'file',
+    expected: { absent: true }
+  })
+  const adapter = createSftpTransactionAdapter({
+    getSftp: () => sftp,
+    onProgress: (current, value) => progress.push({ id: current.id, ...value }),
+    setTimer: (callback, delay) => {
+      const timer = { callback, delay }
+      timers.push(timer)
+      return timer
+    },
+    clearTimer: timer => clearedTimers.push(timer)
+  })
+  const prepared = await adapter.prepare(operation)
+  const resource = prepared.plan.resources[0]
+  const reads = remotePath => sftp.calls.filter(call => (
+    call[0] === 'readFileChunk' && call[1] === remotePath
+  )).length
+  assert.equal(reads(resource.path), 3)
+  assert.equal(reads(resource.stagingPath), 3)
+  assert.equal(reads(resource.snapshotPath), 0)
+  assert.deepEqual(timers.map(timer => timer.delay), [250])
+  assert.deepEqual(clearedTimers, timers)
+  assert.deepEqual([...new Set(progress.map(item => item.phase))], [
+    'source-scan',
+    'snapshot-copy',
+    'snapshot-verify'
+  ])
+  for (const phase of ['source-scan', 'snapshot-copy', 'snapshot-verify']) {
+    const bytes = progress.filter(item => item.phase === phase)
+      .map(item => item.completedBytes)
+    assert.deepEqual(bytes, [...bytes].sort((left, right) => left - right))
+  }
+})
+
+test('SFTP delete reuses only an execution proof bound to the same recovery', async () => {
+  const { createSftpTransactionAdapter } = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/components/sftp/sftp-transaction-adapter.js'
+  )).href)
+  const sftp = createFakeSftp({
+    '/srv/app/big.bin': { type: 'file', content: Buffer.alloc(180000, 9) }
+  })
+  const operation = await buildSftpOperation({
+    id: 'adapter-delete-proof',
+    action: 'delete',
+    paths: { source: '/srv/app/big.bin' },
+    type: 'file',
+    expected: { absent: true }
+  })
+  const adapter = createSftpTransactionAdapter({ getSftp: () => sftp })
+  Object.assign(operation, await adapter.prepare(operation), {
+    recoveryBinding: {
+      schemaVersion: 2,
+      algorithm: 'SHA-256',
+      fingerprint: 'a'.repeat(64)
+    }
+  })
+  assert.equal(adapter.bindPreparedProof(operation), true)
+  sftp.calls.length = 0
+  const executeResult = await adapter.beforeExecute(operation)
+  const resource = operation.plan.resources[0]
+  const snapshotReadsBeforeVerify = sftp.calls.filter(call => (
+    call[0] === 'readFileChunk' && call[1] === resource.snapshotPath
+  )).length
+  assert.equal(snapshotReadsBeforeVerify, 3)
+  await adapter.verifyExecute(operation, { executeResult })
+  assert.equal(sftp.calls.filter(call => (
+    call[0] === 'readFileChunk' && call[1] === resource.snapshotPath
+  )).length, snapshotReadsBeforeVerify)
+  assert.equal(sftp.exists(resource.path), false)
+})
+
+test('SFTP prepared proof rejects endpoint, recovery, path, and descriptor changes', async t => {
+  const { createSftpTransactionAdapter } = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/components/sftp/sftp-transaction-adapter.js'
+  )).href)
+  const cases = [
+    ['endpoint', operation => { operation.endpointKey = `${operation.endpointKey}-changed` }],
+    ['recovery', operation => { operation.recoveryBinding.fingerprint = 'b'.repeat(64) }],
+    ['path', operation => { operation.plan.resources[0].snapshotPath += '.changed' }],
+    ['descriptor', operation => { operation.plan.resources[0].original.size += 1 }]
+  ]
+  for (const [caseIndex, [name, mutation]] of cases.entries()) {
+    await t.test(name, async () => {
+      const sftp = createFakeSftp({
+        '/srv/app/file.txt': { type: 'file', content: 'original' }
+      })
+      const operation = await buildSftpOperation({
+        id: `adapter-proof-mismatch-${caseIndex}`,
+        action: 'delete',
+        paths: { source: '/srv/app/file.txt' },
+        type: 'file',
+        expected: { absent: true }
+      })
+      const adapter = createSftpTransactionAdapter({ getSftp: () => sftp })
+      Object.assign(operation, await adapter.prepare(operation), {
+        recoveryBinding: {
+          schemaVersion: 2,
+          algorithm: 'SHA-256',
+          fingerprint: 'a'.repeat(64)
+        }
+      })
+      adapter.bindPreparedProof(operation)
+      mutation(operation)
+      await assert.rejects(
+        adapter.beforeExecute(operation),
+        /proof|证明|绑定|不匹配/i
+      )
+      assert.equal(sftp.exists('/srv/app/file.txt'), true)
+    })
+  }
+})
+
 async function createRealSftpTransactionRunner (operation, sftp) {
   const { createTransactionRunner } = await importTransactionModule(
     'transaction-runner.js'
@@ -1263,7 +1416,7 @@ async function createRealSftpTransactionRunner (operation, sftp) {
     sideEffectAdapter: adapter,
     store
   })
-  return { runner, store }
+  return { runner, store, adapter }
 }
 
 test('SFTP adapter rejects forged ids before constructing a transaction directory', async () => {
@@ -2054,8 +2207,14 @@ test('SFTP action cancellation after mutation start remains immediately rollback
         action: definition.action,
         ...definition.operation
       })
-      const { runner } = await createRealSftpTransactionRunner(operation, sftp)
-      await runner.prepare(operation)
+      const { runner, adapter } = await createRealSftpTransactionRunner(
+        operation,
+        sftp
+      )
+      const preparedOperation = await runner.prepare(operation)
+      if (definition.action === 'delete') {
+        adapter.bindPreparedProof(preparedOperation)
+      }
       const executing = runner.execute(operation.id, {
         confirmed: true,
         sideEffectInput: definition.input
@@ -2603,22 +2762,27 @@ test('SFTP UI routes editor save chmod rename and delete through modern transact
   )
   assert.match(
     entrySource,
-    /deleteRemoteFilesWithSafety[\s\S]{0,1200}options\.signal\?\.aborted[\s\S]{0,800}prepareSftpSafetyOperation\(\{[\s\S]{0,400}signal:\s*options\.signal/
-  )
-  assert.match(
-    entrySource,
     /confirmDelete\s*=\s*\(files,\s*\{\s*signal\s*\}\s*=\s*\{\}\)/
   )
   assert.match(entrySource, /signal\?\.addEventListener\('abort',\s*onAbort/)
   assert.match(entrySource, /modalRef\.current\?\.destroy\(\)/)
-  assert.match(
-    entrySource,
-    /deleteRemoteFilesWithSafety[\s\S]{0,1600}confirmDelete\(files,\s*\{\s*signal:\s*options\.signal\s*\}\)/
+  const safeDeleteSource = entrySource.slice(
+    entrySource.indexOf('deleteRemoteFilesWithSafety = async'),
+    entrySource.indexOf('\n  getRemoteSafetyTargets =', entrySource.indexOf('deleteRemoteFilesWithSafety = async'))
   )
-  assert.match(
-    entrySource,
-    /for \(let index = 0; index < operations\.length; index \+= 1\)[\s\S]{0,300}options\.signal\?\.aborted[\s\S]{0,300}sftpSafetyRunner\.cancel/
-  )
+  assert.match(safeDeleteSource, /prepareSftpSafetyOperation\(\{[\s\S]*signal:\s*dialog\.signal/)
+  assert.ok(safeDeleteSource.indexOf('openSafeDeleteDialog') < safeDeleteSource.indexOf('prepareSftpSafetyOperation'))
+  assert.match(safeDeleteSource, /openSafeDeleteDialog\([\s\S]{0,300}await wait\(0\)[\s\S]{0,120}dialog\.signal\.aborted/)
+  assert.ok(safeDeleteSource.indexOf('dialog.ready') < safeDeleteSource.indexOf('sftpSafetyRunner.execute'))
+  assert.ok(safeDeleteSource.indexOf('bindPreparedProof') < safeDeleteSource.indexOf('dialog.ready'))
+  assert.match(safeDeleteSource, /onProgress:\s*progress\s*=>\s*dialog\.progress/)
+  assert.match(safeDeleteSource, /sftpSafetyProgressHandlers\.delete\(operation\.id\)/)
+  assert.match(safeDeleteSource, /discardPreparedProof\(operation\.id\)/)
+  assert.match(safeDeleteSource, /dialog\.complete\(\)/)
+  assert.match(safeDeleteSource, /while \(targets\.length\)/)
+  assert.match(safeDeleteSource, /if \(await dialog\.decision === 'retry'\) continue/)
+  assert.match(safeDeleteSource, /cancelOperations\s*=\s*async operations[\s\S]*sftpSafetyRunner\.cancel/)
+  assert.match(safeDeleteSource, /catch \(error\)[\s\S]*cancelOperations\(operations\.slice\(index\)\)/)
   assert.match(entrySource, /mode === undefined \? undefined : Number\(mode\) & 0o7777/)
   assert.match(entrySource, /renameRemoteFile[\s\S]{0,300}this\.props\.isFtp/)
   assert.match(entrySource, /saveRemoteEditorFile[\s\S]{0,300}this\.props\.isFtp/)
@@ -2691,6 +2855,11 @@ test('SFTP permanent fast delete validates, confirms once, bypasses recovery, an
   assert.match(confirmSource, /Modal\.confirm\(\{/)
   assert.match(confirmSource, /shellpilotSftpFastDeleteConfirmTitle/)
   assert.match(confirmSource, /shellpilotSftpFastDeleteConfirmBody/)
+  assert.match(confirmSource, /buildDeleteTargetPreview/)
+  assert.match(confirmSource, /shellpilotSftpFastDeleteRisk/)
+  assert.match(confirmSource, /shellpilotSftpDeleteMoreTargets/)
+  assert.match(confirmSource, /keyboardConfirm:\s*false/)
+  assert.match(confirmSource, /initialFocusSelector:\s*'\.custom-modal-cancel-btn'/)
   assert.match(confirmSource, /okButtonProps:\s*\{\s*danger:\s*true\s*\}/)
   assert.equal((confirmSource.match(/Modal\.confirm/g) || []).length, 1)
   assert.match(modalSource, /okButtonProps\?\.danger/)

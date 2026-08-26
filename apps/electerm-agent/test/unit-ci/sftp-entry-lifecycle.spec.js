@@ -114,3 +114,21 @@ test('SFTP client disposal detaches first and absorbs destroy rejection', async 
   assert.equal(entry.sftp, null)
   assert.equal(await disposal, false)
 })
+
+test('safe delete removes matching absolute paths from a 1000 item remote list', async () => {
+  const { removeDeletedRemoteEntries } = await loadModule()
+  const remote = Array.from({ length: 1000 }, (_, index) => ({
+    id: `remote-${index}`,
+    type: 'remote',
+    path: '/srv/app',
+    name: `item-${index}.txt`
+  }))
+  const next = removeDeletedRemoteEntries(remote, [
+    '/srv/app/item-10.txt',
+    '/srv/app/./item-999.txt'
+  ])
+  assert.equal(next.length, 998)
+  assert.equal(next.some(file => file.name === 'item-10.txt'), false)
+  assert.equal(next.some(file => file.name === 'item-999.txt'), false)
+  assert.equal(next[0], remote[0])
+})
