@@ -693,11 +693,13 @@ SOCKS5 没有固定的远程目标，浏览器或应用每次请求时才把目�
 
 **Chrome 和 Edge**
 
-这两个浏览器在 Windows 上可使用受信任的代理扩展，或手动复制下方命令到“命令提示符（CMD）”，启动一个独立浏览器配置。命令中的 `--user-data-dir` 与日常浏览器分开，避免复用已启动且没有代理的进程。
+这两个浏览器在 Windows 上可使用受信任的代理扩展。需要命令时，**优先在运行卡片点击“浏览器 SOCKS5 设置”，复制页面按当前代理地址生成的 Chrome 或 Edge 命令**。本机监听地址或端口一旦改变，必须回到该页面复制新命令，不要复用旧命令。
+
+命令中的 `--user-data-dir` 是当前完整代理地址的安全标识，与日常浏览器分开，也避免不同 SOCKS5 地址复用同一个浏览器进程。下方是 `127.0.0.1:1080` 的完整示例，可手动复制到“命令提示符（CMD）”：
 
 ```bat
-start "" chrome.exe --user-data-dir="%TEMP%\shellpilot-chrome-socks-1080" --proxy-server="socks5://127.0.0.1:1080"
-start "" msedge.exe --user-data-dir="%TEMP%\shellpilot-edge-socks-1080" --proxy-server="socks5://127.0.0.1:1080"
+start "" chrome.exe --user-data-dir="%TEMP%\shellpilot-chrome-socks-52796f316e9ac839093702032fdfb862fe048e24dff4ce93f068bee1f10bf63a" --proxy-server="socks5://127.0.0.1:1080"
+start "" msedge.exe --user-data-dir="%TEMP%\shellpilot-edge-socks-52796f316e9ac839093702032fdfb862fe048e24dff4ce93f068bee1f10bf63a" --proxy-server="socks5://127.0.0.1:1080"
 ```
 
 上述命令只供用户手动复制，ShellPilot 不会执行。如果一个应用只支持 HTTP 代理而不支持 SOCKS5，它不能直接使用这条隧道。
@@ -745,7 +747,7 @@ SOCKS5 的最后一层是真实代理流量，远程转发的最后一层是服�
 
 ### 14.8 服务器禁止转发的安全检查
 
-看到 `SSH_TUNNEL_FORWARDING_PROHIBITED` 时，说明 SSH 已连接，但服务器策略拒绝了转发。ShellPilot 不会修改服务器配置。请把错误代码和以下只读检查交给服务器管理员：
+看到 `SSH_TUNNEL_FORWARDING_PROHIBITED` 时，说明 SSH 已连接，但服务器策略拒绝了转发。ShellPilot 不会修改服务器配置。请把错误代码和以下只读检查交给服务器管理员。特别注意：检查 `~/.ssh/authorized_keys` 时必须处于受影响的 `SSH_LOGIN_USER` 账号上下文，不能误查管理员自己的 `~`。如果管理员不切换账号，应先按该账号的有效 `AuthorizedKeysFile` 规则解析实际路径，再只读检查该路径：
 
 ```sh
 # 查看全局基线；-T 只输出有效配置，不会修改配置
@@ -754,7 +756,10 @@ sudo sshd -T | grep -Ei 'allowtcpforwarding|permitopen|permitlisten|disableforwa
 # 按真实登录上下文检查 Match 规则；请替换占位值
 sudo sshd -T -C user=SSH_LOGIN_USER,addr=CLIENT_IP,host=CLIENT_RESOLVED_HOST,laddr=SSH_SERVER_IP,lport=SSH_SERVER_PORT | grep -Ei 'allowtcpforwarding|permitopen|permitlisten|disableforwarding|gatewayports'
 
-# 只读查看当前账号密钥是否带限制
+# 管理员先查看受影响账号的有效 AuthorizedKeysFile 规则
+sudo sshd -T -C user=SSH_LOGIN_USER,addr=CLIENT_IP,host=CLIENT_RESOLVED_HOST,laddr=SSH_SERVER_IP,lport=SSH_SERVER_PORT | grep -Ei '^authorizedkeysfile '
+
+# 仅在已切换到受影响 SSH_LOGIN_USER 账号后执行；此时 ~ 才属于该账号
 grep -nE 'restrict|no-port-forwarding|permitopen|permitlisten' ~/.ssh/authorized_keys
 ```
 

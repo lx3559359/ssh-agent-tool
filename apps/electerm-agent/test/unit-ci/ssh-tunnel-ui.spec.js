@@ -273,7 +273,7 @@ test('SSH tunnel validation messages and flow previews are readable Chinese', ()
   assert.match(definition, /本机 .*SSH 服务器/)
 })
 
-test('help center explains tunnel lifecycle, safety and common failures', () => {
+test('help center explains tunnel lifecycle, safety and common failures', async () => {
   const help = source('src/client/components/main/help-center-modal.jsx')
   const guide = source('docs/USER_GUIDE_ZH.md')
   const translations = source('src/client/common/shellpilot-i18n-overrides.js')
@@ -324,6 +324,14 @@ test('help center explains tunnel lifecycle, safety and common failures', () => 
     const headingIndex = guide.indexOf(heading)
     assert.ok(headingIndex > previousHeadingIndex, `missing or out-of-order SSH tunnel heading: ${heading}`)
     previousHeadingIndex = headingIndex
+  }
+  const { getTunnelGuideData } = await loadTunnelUsage()
+  const defaultSocksGuide = getTunnelGuideData().socks
+  for (const command of [
+    defaultSocksGuide.chromeCommand,
+    defaultSocksGuide.edgeCommand
+  ]) {
+    assert.ok(guide.includes(`start "" ${command}`), `offline guide command drifted from tunnel usage: ${command}`)
   }
   assert.match(translations, /shellpilotHelpForwarding: 'SSH 隧道'/)
 })
