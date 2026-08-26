@@ -275,6 +275,7 @@ test('SSH tunnel validation messages and flow previews are readable Chinese', ()
 
 test('help center explains tunnel lifecycle, safety and common failures', () => {
   const help = source('src/client/components/main/help-center-modal.jsx')
+  const guide = source('docs/USER_GUIDE_ZH.md')
   const translations = source('src/client/common/shellpilot-i18n-overrides.js')
 
   for (const text of [
@@ -288,6 +289,41 @@ test('help center explains tunnel lifecycle, safety and common failures', () => 
     '目标服务拒绝连接'
   ]) {
     assert.match(help, new RegExp(text))
+  }
+  const beginnerDocumentation = `${help}\n${guide}`
+  for (const text of [
+    '我想访问服务器上的网页或数据库',
+    '直接在本机浏览器打开，不需要设置代理',
+    'SOCKS5 需要在浏览器或应用中设置代理',
+    '不会修改 Windows 全局代理',
+    '远程目标地址相对于 SSH 服务器',
+    'AllowTcpForwarding',
+    'PermitOpen',
+    'DisableForwarding',
+    'no-port-forwarding',
+    'GatewayPorts',
+    'HTTPS 证书警告不等于隧道失败',
+    'SSH_TUNNEL_FORWARDING_PROHIBITED',
+    'SSH_TUNNEL_DESTINATION_REFUSED'
+  ]) {
+    assert.ok(beginnerDocumentation.includes(text), `missing beginner SSH tunnel guidance: ${text}`)
+  }
+  let previousHeadingIndex = -1
+  for (const heading of [
+    '### 14.1 三秒选择正确类型',
+    '### 14.2 本地转发：访问服务器网页和数据库',
+    '### 14.3 本地转发启动后怎么访问',
+    '### 14.4 SOCKS5：让浏览器或应用流量经过服务器',
+    '### 14.5 Firefox、Chrome 和 Edge 的 SOCKS5 设置',
+    '### 14.6 远程转发：从服务器访问本机服务',
+    '### 14.7 三层检测结果怎么看',
+    '### 14.8 服务器禁止转发的安全检查',
+    '### 14.9 目标拒绝、端口占用、超时和证书警告',
+    '### 14.10 安全清单与术语'
+  ]) {
+    const headingIndex = guide.indexOf(heading)
+    assert.ok(headingIndex > previousHeadingIndex, `missing or out-of-order SSH tunnel heading: ${heading}`)
+    previousHeadingIndex = headingIndex
   }
   assert.match(translations, /shellpilotHelpForwarding: 'SSH 隧道'/)
 })
