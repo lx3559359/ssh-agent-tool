@@ -19,13 +19,32 @@ export const readClipboardAsync = () => {
   return readClipboardSync ? readClipboardSync() : Promise.resolve(readClipboard())
 }
 
+export function copyTextWithFeedback (str, writeClipboard, notifyCopied) {
+  try {
+    const result = writeClipboard(str)
+    if (result && typeof result.then === 'function') {
+      return result.then(() => {
+        notifyCopied()
+        return true
+      }, () => false)
+    }
+    notifyCopied()
+    return true
+  } catch {
+    return false
+  }
+}
+
 export const copy = (str) => {
-  message.success({
-    content: window.translate('copied'),
-    duation: 2,
-    key: 'copy-message'
-  })
-  window.pre.writeClipboard(str)
+  return copyTextWithFeedback(
+    str,
+    value => window.pre.writeClipboard(value),
+    () => message.success({
+      content: window.translate('copied'),
+      duation: 2,
+      key: 'copy-message'
+    })
+  )
 }
 
 export const cut = (str, itemTitle = '') => {

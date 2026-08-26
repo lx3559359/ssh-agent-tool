@@ -100,6 +100,33 @@ function normalizeAccessAddress (hostValue, portValue, { local = false } = {}) {
   return { host, port, endpoint: `${host}:${port}` }
 }
 
+function normalizeBindAddress (hostValue, portValue) {
+  const raw = hostValue === undefined || hostValue === null
+    ? ''
+    : String(hostValue)
+  if (raw === '*') {
+    const port = normalizeTunnelPort(portValue)
+    return port === undefined
+      ? { host: '*', port }
+      : { host: '*', port, endpoint: `*:${port}` }
+  }
+  return normalizeAccessAddress(hostValue, portValue)
+}
+
+function isWildcardBindHost (host) {
+  if (host === '0.0.0.0' || host === '*') return true
+  if (typeof host !== 'string') return false
+  const unbracketed = host.startsWith('[') && host.endsWith(']')
+    ? host.slice(1, -1)
+    : host
+  return isValidIPv6(unbracketed) && isUnspecifiedIPv6(unbracketed)
+}
+
+function connectHostForBind (bindHost) {
+  if (bindHost === '0.0.0.0' || bindHost === '*') return '127.0.0.1'
+  return isWildcardBindHost(bindHost) ? '[::1]' : bindHost
+}
+
 function getProfile (definition) {
   const profile = String(definition.usageProfile || '').trim().toLowerCase()
   if (usageProfiles.has(profile)) return profile
@@ -165,11 +192,23 @@ export function getTunnelUsage (definition = {}) {
   }
 
   if (type === 'forwardRemoteToLocal') {
-    const address = normalizeAccessAddress(
+    const bindAddress = normalizeBindAddress(
       definition.sshTunnelRemoteHost,
       definition.sshTunnelRemotePort
     )
-    return getUsageBase('remote', 'generic', address, false)
+    const usesWildcardBind = isWildcardBindHost(bindAddress.host)
+    const address = normalizeAccessAddress(
+      connectHostForBind(bindAddress.host),
+      bindAddress.port
+    )
+    return {
+      ...getUsageBase('remote', 'generic', address, false),
+      bindHost: bindAddress.host,
+      bindPort: bindAddress.port,
+      ...(bindAddress.endpoint ? { bindEndpoint: bindAddress.endpoint } : {}),
+      usesWildcardBind,
+      requiresServerAddressForExternalAccess: usesWildcardBind
+    }
   }
 
   const requestedProfile = getProfile(definition)
@@ -191,4 +230,77 @@ export function getTunnelUsage (definition = {}) {
     ? 'database'
     : 'tcp'
   return getUsageBase(kind, profile, address, false)
+}
+
+function browserCommandsFor (endpoint) {
+  if (!endpoint) return {}
+  const proxyArgument = `--proxy-server="socks5://${endpoint}"`
+  return {
+    chromeCommand: `chrome.exe --user-data-dir="%TEMP%\\shellpilot-chrome-socks" ${proxyArgument}`,
+    edgeCommand: `msedge.exe --user-data-dir="%TEMP%\\shellpilot-edge-socks" ${proxyArgument}`
+  }
+}
+
+function socksGuideData (definition) {
+  const current = getTunnelUsage(definition)
+  const isCurrent = current.kind === 'proxy' && Boolean(current.endpoint)
+  const usage = isCurrent
+    ? current
+    : getTunnelUsage({
+      sshTunnel: 'dynamicForward',
+      sshTunnelLocalHost: '127.0.0.1',
+      sshTunnelLocalPort: 1080
+    })
+  return {
+    ...usage,
+    ...browserCommandsFor(usage.endpoint),
+    isExample: !isCurrent
+  }
+}
+
+function remoteTargetFor (definition) {
+  return getTunnelUsage({
+    sshTunnel: 'forwardLocalToRemote',
+    usageProfile: 'generic',
+    sshTunnelLocalHost: definition.sshTunnelLocalHost,
+    sshTunnelLocalPort: definition.sshTunnelLocalPort
+  })
+}
+
+function remoteGuideData (definition) {
+  const current = getTunnelUsage(definition)
+  const currentTarget = remoteTargetFor(definition)
+  const isCurrent = current.kind === 'remote' &&
+    Boolean(current.bindEndpoint) && Boolean(current.endpoint) &&
+    Boolean(currentTarget.endpoint)
+  const usage = isCurrent
+    ? current
+    : getTunnelUsage({
+      sshTunnel: 'forwardRemoteToLocal',
+      sshTunnelRemoteHost: '127.0.0.1',
+      sshTunnelRemotePort: 18080
+    })
+  const target = isCurrent
+    ? currentTarget
+    : remoteTargetFor({
+      sshTunnelLocalHost: '127.0.0.1',
+      sshTunnelLocalPort: 8080
+    })
+  return {
+    ...usage,
+    targetHost: target.host,
+    targetPort: target.port,
+    targetEndpoint: target.endpoint,
+    isExample: !isCurrent
+  }
+}
+
+export function getTunnelGuideData (context = {}) {
+  const definition = context?.definition && typeof context.definition === 'object'
+    ? context.definition
+    : {}
+  return {
+    socks: socksGuideData(definition),
+    remote: remoteGuideData(definition)
+  }
 }

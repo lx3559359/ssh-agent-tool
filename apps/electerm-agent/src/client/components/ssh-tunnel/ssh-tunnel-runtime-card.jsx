@@ -15,6 +15,7 @@ import {
 } from '@ant-design/icons'
 import { copy } from '../../common/clipboard'
 import { formatShellPilotTranslation } from '../../common/shellpilot-i18n-overrides.js'
+import message from '../common/message'
 import { getTunnelFlowText, validateTunnel } from './ssh-tunnel-definition.js'
 import { getTunnelDiagnostic } from './ssh-tunnel-diagnostics.js'
 import { getTunnelUsage } from './ssh-tunnel-usage.js'
@@ -171,8 +172,7 @@ export async function copyTextSafely (text, runtimeWindow, copyFunction) {
     return false
   }
   try {
-    await copyFunction(text)
-    return true
+    return (await copyFunction(text)) !== false
   } catch {
     return false
   }
@@ -203,8 +203,9 @@ function copyButton (text, label) {
       icon={<CopyOutlined />}
       aria-label={label}
       disabled={!canCopy}
-      onClick={() => {
-        copyTextSafely(text, runtimeWindow, copy)
+      onClick={async () => {
+        const copied = await copyTextSafely(text, runtimeWindow, copy)
+        if (!copied) message.error(e('shellpilotTunnelCopyFailed'))
       }}
     >
       {label}
@@ -296,8 +297,16 @@ function AccessPanel ({ usage, definition, onOpenGuide }) {
     return (
       <section className='ssh-tunnel-access-panel ssh-tunnel-access-panel--remote'>
         <span>{e('shellpilotTunnelRemoteAccessTitle')}</span>
-        <strong>{usage.endpoint}</strong>
+        <dl className='ssh-tunnel-access-fields'>
+          <div><dt>{e('shellpilotTunnelRemoteBindAddress')}</dt><dd><code>{usage.bindEndpoint}</code></dd></div>
+          <div><dt>{e('shellpilotTunnelRemoteServerLocalAddress')}</dt><dd><code>{usage.endpoint}</code></dd></div>
+        </dl>
         <p>{e('shellpilotTunnelRemoteAccessFromServer')}</p>
+        {
+          usage.requiresServerAddressForExternalAccess
+            ? <p>{e('shellpilotTunnelRemoteWildcardExternalHint')}</p>
+            : null
+        }
         <Space wrap>
           {copyButton(usage.endpoint, e('shellpilotTunnelCopyAddress'))}
           <Button size='small' icon={<ReadOutlined />} onClick={() => openGuide(onOpenGuide, guideRequestFor(usage, null, definition))}>
@@ -384,8 +393,9 @@ function DiagnosticPanel ({ diagnostic, definition, onOpenGuide }) {
                           icon={<CopyOutlined />}
                           aria-label={e('shellpilotTunnelCopyChecks')}
                           disabled={!canCopyFor(diagnostic.checksText, runtimeWindow)}
-                          onClick={() => {
-                            copyTextSafely(diagnostic.checksText, runtimeWindow, copy)
+                          onClick={async () => {
+                            const copied = await copyTextSafely(diagnostic.checksText, runtimeWindow, copy)
+                            if (!copied) message.error(e('shellpilotTunnelCopyFailed'))
                           }}
                         />
                       </header>
@@ -406,8 +416,9 @@ function DiagnosticPanel ({ diagnostic, definition, onOpenGuide }) {
                           icon={<CopyOutlined />}
                           aria-label={e('shellpilotTunnelCopyDiagnosticConfig')}
                           disabled={!canCopyFor(diagnostic.configExample, runtimeWindow)}
-                          onClick={() => {
-                            copyTextSafely(diagnostic.configExample, runtimeWindow, copy)
+                          onClick={async () => {
+                            const copied = await copyTextSafely(diagnostic.configExample, runtimeWindow, copy)
+                            if (!copied) message.error(e('shellpilotTunnelCopyFailed'))
                           }}
                         />
                       </header>

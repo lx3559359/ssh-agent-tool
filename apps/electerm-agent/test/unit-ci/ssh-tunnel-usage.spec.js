@@ -95,9 +95,89 @@ test('remote forwarding describes the SSH-server endpoint without a local URL', 
     host: '[2001:db8::10]',
     port: 9000,
     endpoint: '[2001:db8::10]:9000',
+    bindHost: '[2001:db8::10]',
+    bindPort: 9000,
+    bindEndpoint: '[2001:db8::10]:9000',
+    usesWildcardBind: false,
+    requiresServerAddressForExternalAccess: false,
     requiresProxy: false,
     canOpen: false
   })
+})
+
+test('remote wildcard listeners expose a server-local connect endpoint without copying the wildcard', async () => {
+  const { getTunnelUsage } = await loadUsage()
+  const cases = [
+    ['0.0.0.0', '0.0.0.0:18080', '127.0.0.1:18080'],
+    ['*', '*:18080', '127.0.0.1:18080'],
+    ['::', '[::]:18080', '[::1]:18080'],
+    ['[::]', '[::]:18080', '[::1]:18080'],
+    ['0:0:0:0:0:0:0:0', '[0:0:0:0:0:0:0:0]:18080', '[::1]:18080']
+  ]
+
+  for (const [sshTunnelRemoteHost, bindEndpoint, endpoint] of cases) {
+    const usage = getTunnelUsage({
+      sshTunnel: 'forwardRemoteToLocal',
+      sshTunnelRemoteHost,
+      sshTunnelRemotePort: 18080
+    })
+    assert.equal(usage.bindEndpoint, bindEndpoint)
+    assert.equal(usage.endpoint, endpoint)
+    assert.equal(usage.usesWildcardBind, true)
+    assert.equal(usage.requiresServerAddressForExternalAccess, true)
+    assert.notEqual(usage.endpoint, usage.bindEndpoint)
+  }
+})
+
+test('guide data uses current safe SOCKS and remote settings and labels fallbacks as examples', async () => {
+  const { getTunnelGuideData } = await loadUsage()
+
+  const socks = getTunnelGuideData({
+    definition: {
+      sshTunnel: 'dynamicForward',
+      sshTunnelLocalHost: '127.0.0.1',
+      sshTunnelLocalPort: 19090
+    }
+  }).socks
+  assert.equal(socks.isExample, false)
+  assert.equal(socks.host, '127.0.0.1')
+  assert.equal(socks.port, 19090)
+  assert.equal(socks.endpoint, '127.0.0.1:19090')
+  assert.equal(
+    socks.chromeCommand,
+    'chrome.exe --user-data-dir="%TEMP%\\shellpilot-chrome-socks" --proxy-server="socks5://127.0.0.1:19090"'
+  )
+  assert.equal(
+    socks.edgeCommand,
+    'msedge.exe --user-data-dir="%TEMP%\\shellpilot-edge-socks" --proxy-server="socks5://127.0.0.1:19090"'
+  )
+
+  const remote = getTunnelGuideData({
+    definition: {
+      sshTunnel: 'forwardRemoteToLocal',
+      sshTunnelRemoteHost: '0.0.0.0',
+      sshTunnelRemotePort: 28080,
+      sshTunnelLocalHost: '127.0.0.1',
+      sshTunnelLocalPort: 9080
+    }
+  }).remote
+  assert.equal(remote.isExample, false)
+  assert.equal(remote.bindEndpoint, '0.0.0.0:28080')
+  assert.equal(remote.endpoint, '127.0.0.1:28080')
+  assert.equal(remote.targetHost, '127.0.0.1')
+  assert.equal(remote.targetPort, 9080)
+  assert.equal(remote.targetEndpoint, '127.0.0.1:9080')
+
+  const fallback = getTunnelGuideData({
+    definition: {
+      sshTunnel: 'dynamicForward',
+      sshTunnelLocalHost: '127.0.0.1; shutdown',
+      sshTunnelLocalPort: '1080 && whoami'
+    }
+  }).socks
+  assert.equal(fallback.isExample, true)
+  assert.equal(fallback.endpoint, '127.0.0.1:1080')
+  assert.doesNotMatch(fallback.chromeCommand, /shutdown|whoami|&&|;/)
 })
 
 test('legacy names are matched exactly and unknown services stay generic', async () => {

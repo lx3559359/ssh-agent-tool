@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Modal } from 'antd'
+import { formatShellPilotTranslation } from '../../common/shellpilot-i18n-overrides.js'
+import { getTunnelGuideData } from './ssh-tunnel-usage.js'
 
 const e = window.translate
 
@@ -60,6 +62,7 @@ export function currentTunnelTypeFor (context = {}) {
 
 function GuideContent ({ section, context, focusError }) {
   const currentTunnelType = currentTunnelTypeFor(context)
+  const guideData = getTunnelGuideData(context)
   if (section === 'local-forward') {
     return (
       <section className='ssh-tunnel-guide-section'>
@@ -107,29 +110,55 @@ function GuideContent ({ section, context, focusError }) {
     return (
       <section className='ssh-tunnel-guide-section'>
         <h3>{e('shellpilotTunnelGuideSocksBrowser')}</h3>
-        <code className='ssh-tunnel-guide-flow'>{e('shellpilotTunnelGuideSocksFlow')}</code>
+        {
+          guideData.socks.isExample
+            ? <p className='ssh-tunnel-guide-context'>{e('shellpilotTunnelGuideExampleValues')}</p>
+            : null
+        }
+        <code className='ssh-tunnel-guide-flow'>
+          {formatShellPilotTranslation(e, 'shellpilotTunnelGuideSocksFlow', { endpoint: guideData.socks.endpoint })}
+        </code>
         <dl className='ssh-tunnel-guide-profile-list'>
-          <div><dt>{e('shellpilotTunnelGuideSocksLocalHost')}</dt><dd><code>127.0.0.1</code></dd></div>
-          <div><dt>{e('shellpilotTunnelGuideSocksLocalPort')}</dt><dd><code>1080</code></dd></div>
+          <div><dt>{e('shellpilotTunnelGuideSocksLocalHost')}</dt><dd><code>{guideData.socks.host}</code></dd></div>
+          <div><dt>{e('shellpilotTunnelGuideSocksLocalPort')}</dt><dd><code>{guideData.socks.port}</code></dd></div>
           <div><dt>{e('shellpilotTunnelGuideSocksNoRemoteTarget')}</dt><dd>{e('shellpilotTunnelGuideSocksNoRemoteTargetValue')}</dd></div>
         </dl>
         <ol>
           <li>{e('shellpilotTunnelGuideSocksStartProof')}</li>
-          <li>{e('shellpilotTunnelGuideSocksConfigureApps')}</li>
+          <li>
+            {formatShellPilotTranslation(e, 'shellpilotTunnelGuideSocksConfigureApps', {
+              host: guideData.socks.host,
+              port: guideData.socks.port
+            })}
+          </li>
           <li>{e('shellpilotTunnelGuideSocksFirstFailure')}</li>
         </ol>
         <div className='ssh-tunnel-guide-topic-grid'>
           <article>
             <strong>{e('shellpilotTunnelGuideFirefox')}</strong>
-            <p>{e('shellpilotTunnelGuideFirefoxSteps')}</p>
+            <p>
+              {formatShellPilotTranslation(e, 'shellpilotTunnelGuideFirefoxSteps', {
+                host: guideData.socks.host,
+                port: guideData.socks.port
+              })}
+            </p>
           </article>
           <article>
             <strong>{e('shellpilotTunnelGuideChromium')}</strong>
             <p>{e('shellpilotTunnelGuideChromiumSteps')}</p>
+            <strong>{e('shellpilotTunnelGuideChromeCommand')}</strong>
+            <code>{guideData.socks.chromeCommand}</code>
+            <strong>{e('shellpilotTunnelGuideEdgeCommand')}</strong>
+            <code>{guideData.socks.edgeCommand}</code>
           </article>
           <article>
             <strong>{e('shellpilotTunnelGuideOtherApps')}</strong>
-            <p>{e('shellpilotTunnelGuideOtherAppsSteps')}</p>
+            <p>
+              {formatShellPilotTranslation(e, 'shellpilotTunnelGuideOtherAppsSteps', {
+                host: guideData.socks.host,
+                port: guideData.socks.port
+              })}
+            </p>
           </article>
         </div>
         <div className='ssh-tunnel-guide-callout ssh-tunnel-guide-callout--warning'>
@@ -145,13 +174,29 @@ function GuideContent ({ section, context, focusError }) {
       <section className='ssh-tunnel-guide-section'>
         <h3>{e('shellpilotTunnelGuideRemoteSafety')}</h3>
         <p>{e('shellpilotTunnelGuideRemoteAccessMeaning')}</p>
+        {
+          guideData.remote.isExample
+            ? <p className='ssh-tunnel-guide-context'>{e('shellpilotTunnelGuideExampleValues')}</p>
+            : null
+        }
         <dl className='ssh-tunnel-guide-profile-list'>
-          <div><dt>{e('shellpilotTunnelGuideRemoteServerHost')}</dt><dd><code>127.0.0.1</code></dd></div>
-          <div><dt>{e('shellpilotTunnelGuideRemoteServerPort')}</dt><dd><code>18080</code></dd></div>
-          <div><dt>{e('shellpilotTunnelGuideRemoteClientTargetHost')}</dt><dd><code>127.0.0.1</code></dd></div>
-          <div><dt>{e('shellpilotTunnelGuideRemoteClientTargetPort')}</dt><dd><code>8080</code></dd></div>
+          <div><dt>{e('shellpilotTunnelGuideRemoteServerHost')}</dt><dd><code>{guideData.remote.bindHost}</code></dd></div>
+          <div><dt>{e('shellpilotTunnelGuideRemoteServerPort')}</dt><dd><code>{guideData.remote.bindPort}</code></dd></div>
+          <div><dt>{e('shellpilotTunnelGuideRemoteClientTargetHost')}</dt><dd><code>{guideData.remote.targetHost}</code></dd></div>
+          <div><dt>{e('shellpilotTunnelGuideRemoteClientTargetPort')}</dt><dd><code>{guideData.remote.targetPort}</code></dd></div>
         </dl>
-        <p>{e('shellpilotTunnelGuideRemoteFlow')}</p>
+        <p>
+          {formatShellPilotTranslation(e, 'shellpilotTunnelGuideRemoteFlow', {
+            bindEndpoint: guideData.remote.bindEndpoint,
+            targetEndpoint: guideData.remote.targetEndpoint
+          })}
+        </p>
+        <p>{e('shellpilotTunnelRemoteServerLocalAddress')}: <code>{guideData.remote.endpoint}</code></p>
+        {
+          guideData.remote.requiresServerAddressForExternalAccess
+            ? <p>{e('shellpilotTunnelRemoteWildcardExternalHint')}</p>
+            : null
+        }
         <ol>
           <li>{e('shellpilotTunnelGuideRemoteStartProof')}</li>
           <li>{e('shellpilotTunnelGuideRemoteExternalAccess')}</li>

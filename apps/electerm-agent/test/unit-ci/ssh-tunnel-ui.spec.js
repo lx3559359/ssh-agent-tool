@@ -586,9 +586,11 @@ test('web and clipboard actions share defensive capability gates', async () => {
   assert.equal(await copyTextSafely('blocked', { pre: {} }, () => { throw new Error('must not run') }), false)
   assert.equal(await copyTextSafely('sync failure', clipboardWindow, () => { throw new Error('failed') }), false)
   assert.equal(await copyTextSafely('async failure', clipboardWindow, () => Promise.reject(new Error('failed'))), false)
+  assert.equal(await copyTextSafely('reported failure', clipboardWindow, () => false), false)
   assert.match(card, /disabled=\{!canOpenWeb\}[\s\S]*if \(canOpenWeb\)/)
   assert.match(card, /typeof runtimeWindow\?\.pre\?\.writeClipboard === 'function'/)
-  assert.match(card, /disabled=\{!canCopy\}[\s\S]*copyTextSafely\(text, runtimeWindow, copy\)/)
+  assert.match(card, /disabled=\{!canCopy\}[\s\S]*await copyTextSafely\(text, runtimeWindow, copy\)/)
+  assert.match(card, /message\.error\(e\('shellpilotTunnelCopyFailed'\)\)/)
 })
 
 test('beginner guide has seven synchronized sections and safe error mapping', () => {
@@ -717,10 +719,18 @@ test('SOCKS and remote guides render every field, success boundary and first che
     'shellpilotTunnelGuideRemoteFirstFailure'
   ]
   for (const key of requiredKeys) {
-    assert.match(guide, new RegExp(`e\\('${key}'\\)`), key)
+    assert.match(guide, new RegExp(`['"]${key}['"]`), key)
   }
-  assert.match(guide, /shellpilotTunnelGuideSocksLocalHost[\s\S]*?<code>127\.0\.0\.1<\/code>/)
-  assert.match(guide, /shellpilotTunnelGuideSocksLocalPort[\s\S]*?<code>1080<\/code>/)
+  assert.match(guide, /const guideData = getTunnelGuideData\(context\)/)
+  assert.match(guide, /shellpilotTunnelGuideSocksLocalHost[\s\S]*?<code>\{guideData\.socks\.host\}<\/code>/)
+  assert.match(guide, /shellpilotTunnelGuideSocksLocalPort[\s\S]*?<code>\{guideData\.socks\.port\}<\/code>/)
+  assert.match(guide, /<code>\{guideData\.socks\.chromeCommand\}<\/code>/)
+  assert.match(guide, /<code>\{guideData\.socks\.edgeCommand\}<\/code>/)
+  assert.match(guide, /shellpilotTunnelGuideRemoteServerHost[\s\S]*?<code>\{guideData\.remote\.bindHost\}<\/code>/)
+  assert.match(guide, /shellpilotTunnelGuideRemoteServerPort[\s\S]*?<code>\{guideData\.remote\.bindPort\}<\/code>/)
+  assert.match(guide, /shellpilotTunnelGuideRemoteClientTargetHost[\s\S]*?<code>\{guideData\.remote\.targetHost\}<\/code>/)
+  assert.match(guide, /shellpilotTunnelGuideRemoteClientTargetPort[\s\S]*?<code>\{guideData\.remote\.targetPort\}<\/code>/)
+  assert.match(guide, /guideData\.(?:socks|remote)\.isExample/)
   assert.doesNotMatch(guide, /\.write\(|sendText|runCmd/)
 
   const { getShellPilotTranslation } = await loadTunnelCatalog()
@@ -728,12 +738,12 @@ test('SOCKS and remote guides render every field, success boundary and first che
   const enSocks = requiredKeys.slice(0, 8).map(key => getShellPilotTranslation(key, 'en_us')).join('\n')
   const zhRemote = requiredKeys.slice(8).map(key => getShellPilotTranslation(key, 'zh_cn')).join('\n')
   const enRemote = requiredKeys.slice(8).map(key => getShellPilotTranslation(key, 'en_us')).join('\n')
-  assert.match(zhSocks, /127\.0\.0\.1/)
-  assert.match(zhSocks, /1080/)
+  assert.match(zhSocks, /\{endpoint\}|\{host\}.*\{port\}/s)
   assert.match(zhSocks, /没有固定的远端目标/)
   assert.match(zhSocks, /监听.*握手.*SSH 策略/s)
   assert.match(zhSocks, /启动成功只证明.*监听.*握手.*检测.*通过/s)
   assert.match(zhSocks, /proxy-traffic.*未验证.*总体.*未验证.*真实 SOCKS 请求.*SSH.*可用/is)
+  assert.match(enSocks, /\{endpoint\}|\{host\}.*\{port\}/s)
   assert.match(enSocks, /no fixed remote target/i)
   assert.match(enSocks, /listener.*handshake.*SSH policy/is)
   assert.match(enSocks, /successful start proves only.*listener.*handshake.*check.*pass/is)
@@ -746,6 +756,16 @@ test('SOCKS and remote guides render every field, success boundary and first che
   assert.match(enRemote, /GatewayPorts.*firewall.*authentication/is)
   assert.match(enRemote, /successful start proves only.*server listener.*local target.*check.*pass/is)
   assert.match(enRemote, /end-to-end.*not verified.*overall.*not verified.*real incoming forwarded connection.*client target.*Available/is)
+})
+
+test('remote access card separates the bind listener from a connectable server-local endpoint', () => {
+  const card = source('src/client/components/ssh-tunnel/ssh-tunnel-runtime-card.jsx')
+
+  assert.match(card, /shellpilotTunnelRemoteBindAddress[\s\S]*usage\.bindEndpoint/)
+  assert.match(card, /shellpilotTunnelRemoteServerLocalAddress[\s\S]*usage\.endpoint/)
+  assert.match(card, /usage\.requiresServerAddressForExternalAccess[\s\S]*shellpilotTunnelRemoteWildcardExternalHint/)
+  assert.doesNotMatch(card, /copyButton\(usage\.bindEndpoint/)
+  assert.match(card, /copyButton\(usage\.endpoint, e\('shellpilotTunnelCopyAddress'\)\)/)
 })
 
 test('runtime guidance styles match the approved hierarchy responsively', () => {
@@ -1191,11 +1211,15 @@ test('Chrome and Edge SOCKS guidance gives a concrete non-button setup path', as
   const { getShellPilotTranslation } = await loadTunnelCatalog()
   for (const langId of ['zh_cn', 'en_us']) {
     const steps = getShellPilotTranslation('shellpilotTunnelGuideChromiumSteps', langId)
-    assert.match(steps, /--proxy-server="socks5:\/\/127\.0\.0\.1:1080"/)
+    assert.match(steps, /--user-data-dir/)
     assert.match(steps, langId === 'zh_cn' ? /受信任的代理扩展/ : /trusted proxy extension/i)
-    assert.match(steps, langId === 'zh_cn' ? /只作示例，不会执行，也不会修改系统代理/ : /example only.*does not execute.*does not change the system proxy/i)
+    assert.match(steps, langId === 'zh_cn' ? /只供复制参考.*不会执行.*不会修改系统代理/s : /copy-only examples.*does not execute.*change the system proxy/is)
   }
   const guide = source('src/client/components/ssh-tunnel/ssh-tunnel-guide-modal.jsx')
+  const usage = source('src/client/components/ssh-tunnel/ssh-tunnel-usage.js')
+  assert.match(usage, /chrome\.exe --user-data-dir="%TEMP%\\\\shellpilot-chrome-socks"/)
+  assert.match(usage, /msedge\.exe --user-data-dir="%TEMP%\\\\shellpilot-edge-socks"/)
+  assert.match(usage, /--proxy-server="socks5:\/\/\$\{endpoint\}"/)
   assert.doesNotMatch(guide, /runCmd|sendText|\.write\(/)
 })
 
