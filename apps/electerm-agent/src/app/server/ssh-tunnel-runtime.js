@@ -3,6 +3,11 @@ const {
   appendTunnelEvent,
   classifyTunnelFailure
 } = require('./ssh-tunnel-health')
+const {
+  createProbeResult,
+  createProbeStage,
+  probeStagesForError
+} = require('./ssh-tunnel-probe')
 
 const safeDetailKeys = [
   'requestedPort',
@@ -41,7 +46,13 @@ function serializableState (entry) {
     definition: { ...entry.definition },
     startedAt: entry.startedAt,
     lastTestAt: entry.lastTestAt || null,
-    lastTest: entry.lastTest ? { ...entry.lastTest } : null,
+    lastTest: entry.lastTest
+      ? {
+          ...entry.lastTest,
+          stages: entry.lastTest.stages.map(stage => ({ ...stage }))
+        }
+      : null,
+    testState: entry.testState,
     reconnectAttempt: entry.reconnectAttempt || 0,
     events: Array.isArray(entry.events)
       ? entry.events.map(event => ({ ...event }))
@@ -51,7 +62,6 @@ function serializableState (entry) {
 
 function createSshTunnelRuntime ({
   startController,
-  probe = async () => ({ ok: true }),
   schedule = (callback, delay) => setTimeout(callback, delay),
   cancelSchedule = timer => clearTimeout(timer),
   now = () => Date.now()
@@ -60,6 +70,109 @@ function createSshTunnelRuntime ({
     throw new TypeError('startController is required')
   }
   const controllers = new Map()
+
+  function normalizeProbeResult (value) {
+    const source = value && typeof value === 'object' ? value : {}
+    return createProbeResult(source.stages, {
+      checkedAt: Number.isFinite(source.checkedAt) ? source.checkedAt : now(),
+      summary: source.summary,
+      latencyMs: source.latencyMs
+    })
+  }
+
+  function unavailableProbeResult () {
+    return createProbeResult([
+      createProbeStage(
+        'tunnel',
+        'unverified',
+        'SSH_TUNNEL_PROBE_UNAVAILABLE',
+        '当前隧道控制器不支持连通性检测'
+      )
+    ], { checkedAt: now() })
+  }
+
+  function applyProbeResult (entry, value, controller, generation) {
+    if (
+      entry.manualStopping ||
+      controllers.get(entry.definition.id) !== entry ||
+      entry.controller !== controller ||
+      entry.probeGeneration !== generation
+    ) return null
+    const result = normalizeProbeResult(value)
+    entry.lastTest = result
+    entry.lastTestAt = now()
+    entry.testState = result.verdict
+    return result
+  }
+
+  function invalidateProbe (entry, error) {
+    entry.probeGeneration += 1
+    if (!error) {
+      entry.lastTest = null
+      entry.lastTestAt = null
+      entry.testState = 'untested'
+      return
+    }
+    const result = createProbeResult(
+      probeStagesForError(entry.definition.sshTunnel, error),
+      { checkedAt: now() }
+    )
+    entry.lastTest = result
+    entry.lastTestAt = now()
+    entry.testState = result.verdict
+  }
+
+  function runProbe (entry) {
+    if (entry.probePromise) return entry.probePromise
+    const controller = entry.controller
+    const generation = entry.probeGeneration
+    entry.testState = 'testing'
+    const operation = typeof controller?.probe === 'function'
+      ? Promise.resolve().then(() => controller.probe())
+      : Promise.resolve(unavailableProbeResult())
+    const promise = operation
+      .catch(error => createProbeResult(
+        probeStagesForError(entry.definition.sshTunnel, {
+          code: String(error?.code || 'SSH_TUNNEL_TEST_FAILED'),
+          message: String(error?.message || 'SSH 隧道连通性检测失败')
+        }),
+        { checkedAt: now() }
+      ))
+      .then(result => {
+        const applied = applyProbeResult(
+          entry,
+          result,
+          controller,
+          generation
+        )
+        if (applied) return applied
+        if (
+          controllers.get(entry.definition.id) === entry &&
+          entry.lastTest
+        ) return normalizeProbeResult(entry.lastTest)
+        throw tunnelError(
+          'SSH_TUNNEL_PROBE_INVALIDATED',
+          'SSH 隧道状态已变化，请重新检测'
+        )
+      })
+      .finally(() => {
+        if (entry.probePromise === promise) entry.probePromise = null
+      })
+    entry.probePromise = promise
+    return promise
+  }
+
+  function queueProbe (entry) {
+    const controller = entry.controller
+    const generation = entry.probeGeneration
+    queueMicrotask(() => {
+      if (
+        entry.controller !== controller ||
+        entry.probeGeneration !== generation
+      ) return
+      runProbe(entry).catch(() => {})
+    })
+  }
 
   function recordState (entry, state, event = {}) {
     entry.state = state
@@ -84,6 +197,7 @@ function createSshTunnelRuntime ({
       off('listening', handlers.listening)
       off('error', handlers.error)
       off('close', handlers.close)
+      off('evidence', handlers.evidence)
     }
     entry.controllerHandlers = null
   }
@@ -110,12 +224,22 @@ function createSshTunnelRuntime ({
       close: reason => handleControllerFailure(entry, {
         code: reason?.code || 'SSH_CONNECTION_CLOSED',
         message: reason?.message || 'SSH 会话已断开'
-      })
+      }),
+      evidence: value => {
+        entry.probeGeneration += 1
+        applyProbeResult(
+          entry,
+          value,
+          controller,
+          entry.probeGeneration
+        )
+      }
     }
     entry.controllerHandlers = handlers
     controller.on('listening', handlers.listening)
     controller.on('error', handlers.error)
     controller.on('close', handlers.close)
+    controller.on('evidence', handlers.evidence)
   }
 
   async function reconnect (entry) {
@@ -128,6 +252,7 @@ function createSshTunnelRuntime ({
       code: 'SSH_TUNNEL_RECONNECTING',
       message: `正在进行第 ${entry.reconnectAttempt} 次重连`
     })
+    invalidateProbe(entry)
     detachControllerEvents(entry)
     try {
       await entry.controller.close()
@@ -148,6 +273,8 @@ function createSshTunnelRuntime ({
         return
       }
       entry.controller = controller
+      entry.probeGeneration += 1
+      entry.probePromise = null
       entry.definition = {
         ...entry.definition,
         ...(controller.descriptor || {})
@@ -158,6 +285,7 @@ function createSshTunnelRuntime ({
         code: 'SSH_TUNNEL_RECONNECTED',
         message: 'SSH 隧道已恢复'
       })
+      queueProbe(entry)
     } catch (error) {
       handleControllerFailure(entry, error)
     }
@@ -185,6 +313,7 @@ function createSshTunnelRuntime ({
       entry.manualStopping ||
       controllers.get(entry.definition.id) !== entry
     ) return
+    invalidateProbe(entry, error)
     const state = classifyTunnelFailure(error)
     recordState(entry, state, {
       code: error.code || 'SSH_TUNNEL_FAILURE',
@@ -232,6 +361,9 @@ function createSshTunnelRuntime ({
       startedAt: now(),
       lastTestAt: null,
       lastTest: null,
+      testState: 'untested',
+      probePromise: null,
+      probeGeneration: 0,
       reconnectAttempt: 0,
       reconnectTimer: null,
       controllerHandlers: null,
@@ -244,6 +376,7 @@ function createSshTunnelRuntime ({
       code: 'SSH_TUNNEL_STARTED',
       message: 'SSH 隧道已启动'
     })
+    queueProbe(entry)
     return serializableState(entry)
   }
 
@@ -254,6 +387,8 @@ function createSshTunnelRuntime ({
       return { id: key, state: 'stopped', notFound: true }
     }
     entry.manualStopping = true
+    entry.probeGeneration += 1
+    entry.probePromise = null
     cancelReconnect(entry)
     detachControllerEvents(entry)
     controllers.delete(key)
@@ -279,18 +414,7 @@ function createSshTunnelRuntime ({
     if (!entry) {
       throw tunnelError('SSH_TUNNEL_NOT_FOUND', '未找到正在运行的 SSH 隧道')
     }
-    let result
-    try {
-      result = await probe({ ...entry.definition })
-    } catch (cause) {
-      result = {
-        ok: false,
-        code: String(cause?.code || 'SSH_TUNNEL_TEST_FAILED'),
-        message: String(cause?.message || 'SSH 隧道连通性检测失败')
-      }
-    }
-    entry.lastTestAt = now()
-    entry.lastTest = { ...result }
+    const result = await runProbe(entry)
     return {
       id: key,
       ...result
@@ -304,6 +428,8 @@ function createSshTunnelRuntime ({
     let failed = 0
     await Promise.all(entries.map(async ([, entry]) => {
       entry.manualStopping = true
+      entry.probeGeneration += 1
+      entry.probePromise = null
       cancelReconnect(entry)
       detachControllerEvents(entry)
       try {

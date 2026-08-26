@@ -169,30 +169,12 @@ test('SSH sessions preserve legacy tunnel bookmarks and isolate auto-start selec
   }).map(item => item.id), ['auto'])
 })
 
-test('SSH session probes the local tunnel endpoint and reports latency', async () => {
-  const { TerminalSshBase } = require('../../src/app/server/session-ssh')
-  assert.equal(typeof TerminalSshBase, 'function')
-  const server = net.createServer(socket => socket.end())
-  await new Promise((resolve, reject) => {
-    server.once('error', reject)
-    server.listen(0, '127.0.0.1', resolve)
-  })
-  const port = server.address().port
-  const session = new TerminalSshBase({
-    uid: 'ssh-tunnel-probe',
-    type: 'ssh'
-  })
+test('SSH tunnel detection is supplied by controllers instead of listener-only session probes', () => {
+  const contents = source('src/app/server/session-ssh.js')
 
-  try {
-    const result = await session.probeSshTunnel({
-      sshTunnelLocalHost: '127.0.0.1',
-      sshTunnelLocalPort: port
-    })
-    assert.equal(result.ok, true)
-    assert.equal(Number.isInteger(result.latencyMs), true)
-  } finally {
-    await new Promise(resolve => server.close(resolve))
-  }
+  assert.doesNotMatch(contents, /probeSshTunnel \(/)
+  assert.doesNotMatch(contents, /probe:\s*definition => this\.probeSshTunnel/)
+  assert.match(contents, /createSshTunnelRuntime\(\{[\s\S]*startController:/)
 })
 
 test('SSH session rejects an occupied local tunnel port before starting its controller', async () => {
