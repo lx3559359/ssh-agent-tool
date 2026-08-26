@@ -44,7 +44,65 @@ async function installFakeSshSession (page) {
     const state = {
       tunnels: [],
       failNext: false,
-      portConflictNext: false
+      portConflictNext: false,
+      testScenario: 'passed'
+    }
+    const layeredTestResult = (scenario, tunnelId) => {
+      const checkedAt = Date.now()
+      if (scenario === 'prohibited') {
+        return {
+          id: tunnelId,
+          ok: false,
+          verdict: 'limited',
+          summary: 'SSH 服务器禁止端口转发',
+          checkedAt,
+          stages: [
+            { id: 'local-listener', status: 'passed', code: 'SSH_TUNNEL_LOCAL_LISTENER_READY', message: '本机监听正常' },
+            { id: 'ssh-forwarding', status: 'limited', code: 'SSH_TUNNEL_FORWARDING_PROHIBITED', message: 'SSH 服务器禁止端口转发' },
+            { id: 'target-service', status: 'unverified', code: 'SSH_TUNNEL_STAGE_NOT_REACHED', message: '尚未检测目标服务' }
+          ]
+        }
+      }
+      if (scenario === 'refused') {
+        return {
+          id: tunnelId,
+          ok: false,
+          verdict: 'failed',
+          summary: '目标服务拒绝连接',
+          checkedAt,
+          stages: [
+            { id: 'local-listener', status: 'passed', code: 'SSH_TUNNEL_LOCAL_LISTENER_READY', message: '本机监听正常' },
+            { id: 'ssh-forwarding', status: 'passed', code: 'SSH_TUNNEL_FORWARDING_READY', message: 'SSH 转发正常' },
+            { id: 'target-service', status: 'failed', code: 'SSH_TUNNEL_DESTINATION_REFUSED', message: '目标服务拒绝连接' }
+          ]
+        }
+      }
+      if (scenario === 'unverified') {
+        return {
+          id: tunnelId,
+          ok: false,
+          verdict: 'unverified',
+          summary: '尚未通过真实流量验证',
+          checkedAt,
+          stages: [
+            { id: 'local-listener', status: 'passed', code: 'SSH_TUNNEL_LOCAL_LISTENER_READY', message: '本机监听正常' },
+            { id: 'ssh-forwarding', status: 'passed', code: 'SSH_TUNNEL_FORWARDING_READY', message: 'SSH 转发正常' },
+            { id: 'proxy-traffic', status: 'unverified', code: 'SSH_TUNNEL_PROXY_TRAFFIC_UNVERIFIED', message: '尚未通过真实流量验证' }
+          ]
+        }
+      }
+      return {
+        id: tunnelId,
+        ok: true,
+        verdict: 'passed',
+        summary: '三层检测全部通过',
+        checkedAt,
+        stages: [
+          { id: 'local-listener', status: 'passed', code: 'SSH_TUNNEL_LOCAL_LISTENER_READY', message: '本机监听正常' },
+          { id: 'ssh-forwarding', status: 'passed', code: 'SSH_TUNNEL_FORWARDING_READY', message: 'SSH 转发正常' },
+          { id: 'target-service', status: 'passed', code: 'SSH_TUNNEL_TARGET_SERVICE_READY', message: '目标服务正常' }
+        ]
+      }
     }
     const pending = new Map()
     window.__sshTunnelE2E = state
@@ -86,7 +144,9 @@ async function installFakeSshSession (page) {
             const entry = {
               id: request.tunnel.id,
               definition: request.tunnel,
-              state: 'running'
+              state: 'running',
+              testState: 'unverified',
+              lastTest: null
             }
             state.tunnels = state.tunnels
               .filter(item => item.id !== entry.id)
@@ -101,13 +161,20 @@ async function installFakeSshSession (page) {
             return
           }
           if (request.action === 'ssh-tunnel-test') {
-            deliver({
-              data: {
-                id: request.tunnelId,
-                ok: true,
-                latencyMs: 7
+            const result = layeredTestResult(state.testScenario, request.tunnelId)
+            state.tunnels = state.tunnels.map(entry => {
+              if (entry.id !== request.tunnelId) return entry
+              return {
+                ...entry,
+                state: ['prohibited', 'refused'].includes(state.testScenario)
+                  ? 'failed'
+                  : 'running',
+                testState: result.verdict,
+                lastTestAt: result.checkedAt,
+                lastTest: result
               }
             })
+            deliver({ data: result })
             return
           }
           deliver({ data: state.tunnels })
@@ -204,6 +271,90 @@ test('SSH tunnel manager supports disconnected planning and connected lifecycle'
     await modal.getByRole('button', { name: '刷新状态' }).click()
     await failureNotice
     await expect(modal.getByRole('button', { name: '刷新状态' })).toBeEnabled()
+  } catch (error) {
+    primaryError = error
+    throw error
+  } finally {
+    if (run) {
+      await cleanupQualityApp(run.electronApp, run.profileRoot).catch(error => {
+        if (!primaryError) throw error
+      })
+    }
+  }
+})
+
+test('SSH tunnel manager explains direct HTTPS access, policy failures, and SOCKS5 browser setup', async () => {
+  let run
+  let primaryError
+  try {
+    run = await launchQualityApp(electron)
+    const page = run.page
+    await dismissStartupModals(page)
+    await installFakeSshSession(page)
+
+    const modal = await openTunnelManager(page)
+    await modal.locator('.ssh-tunnel-template-row .ant-select').click()
+    await page.getByText('HTTPS', { exact: true }).last().click()
+    await modal.getByLabel('本机监听端口').fill('16060')
+    await expect(modal.getByLabel('本机监听端口')).toHaveValue('16060')
+
+    await modal.getByRole('button', { name: '启动隧道' }).click()
+    let card = modal.locator('.ssh-tunnel-running-card')
+    await expect(card).toHaveCount(1)
+
+    await page.evaluate(() => {
+      window.__sshTunnelE2E.testScenario = 'passed'
+    })
+    await card.getByRole('button', { name: '测试' }).click()
+    await expect(card).toContainText('https://127.0.0.1:16060')
+    await expect(card).toContainText('无需配置浏览器代理')
+    await expect(card.locator('.ssh-tunnel-availability')).toHaveText('可用')
+
+    await page.evaluate(() => {
+      window.__sshTunnelE2E.testScenario = 'prohibited'
+    })
+    await card.getByRole('button', { name: '测试' }).click()
+    card = modal.locator('.ssh-tunnel-running-card')
+    await expect(card).toContainText('SSH_TUNNEL_FORWARDING_PROHIBITED')
+    await expect(card).toContainText('SSH 服务器禁止端口转发')
+    await expect(card).toContainText('尚未检测目标服务')
+    await expect(card).not.toContainText('最近测试正常')
+    await expect(card.locator('.ssh-tunnel-availability')).not.toHaveText('可用')
+    await expect(card.getByRole('button', { name: '停止' })).toBeVisible()
+
+    await card.getByRole('button', { name: '查看完整修复说明' }).click()
+    let guide = page.locator('.ssh-tunnel-guide-modal')
+    await expect(guide).toBeVisible()
+    await expect(guide).toContainText('AllowTcpForwarding')
+    await expect(guide).toContainText('PermitOpen')
+    await expect(guide).toContainText(/ShellPilot.*不会.*服务器配置/)
+    await guide.locator('.ant-modal-close').click()
+    await expect(guide).toBeHidden()
+
+    await card.getByRole('button', { name: '停止' }).click()
+    await expect(modal.locator('.ssh-tunnel-running-card')).toHaveCount(0)
+
+    await modal.getByRole('button', { name: 'SOCKS5 动态代理' }).click()
+    await modal.getByLabel('本机监听端口').fill('1080')
+    await expect(modal.getByLabel('本机监听端口')).toHaveValue('1080')
+    await modal.getByRole('button', { name: '启动隧道' }).click()
+    card = modal.locator('.ssh-tunnel-running-card')
+    await expect(card).toContainText(/SOCKS5[\s\S]*127\.0\.0\.1:1080/)
+    await expect(card).toContainText('需要在浏览器或应用中设置 SOCKS5 代理')
+
+    await card.getByRole('button', { name: '浏览器 SOCKS5 设置' }).click()
+    guide = page.locator('.ssh-tunnel-guide-modal')
+    await expect(guide).toBeVisible()
+    await expect(guide).toContainText('浏览器 SOCKS5 设置')
+    await expect(guide).toContainText('Firefox')
+    await expect(guide).toContainText('Chrome')
+    await expect(guide).toContainText('Edge')
+    await expect(guide).toContainText('--proxy-server="socks5://127.0.0.1:1080"')
+    await guide.locator('.ant-modal-close').click()
+    await expect(guide).toBeHidden()
+
+    await card.getByRole('button', { name: '停止' }).click()
+    await expect(modal.locator('.ssh-tunnel-running-card')).toHaveCount(0)
   } catch (error) {
     primaryError = error
     throw error
