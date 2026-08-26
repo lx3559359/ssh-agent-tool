@@ -39,18 +39,19 @@ function isSafeIpv4 (host) {
 }
 
 function canonicalIpv6Host (host) {
-  const hasOpeningBracket = host.startsWith('[')
-  const hasClosingBracket = host.endsWith(']')
-  if (hasOpeningBracket !== hasClosingBracket) {
+  if (host.startsWith('[') || host.endsWith(']')) {
     return undefined
   }
-  const address = hasOpeningBracket ? host.slice(1, -1) : host
-  if (!address.includes(':') || address.includes('%') ||
-    !/^[0-9A-Fa-f:.]+$/.test(address)) {
+  if (!host.includes(':') || host.includes('%') ||
+    !/^[0-9A-Fa-f:.]+$/.test(host)) {
     return undefined
   }
   try {
-    return new URL(`http://[${address}]/`).hostname
+    const parsed = new URL(`http://[${host}]/`)
+    if (!parsed.hostname) {
+      return undefined
+    }
+    return host
   } catch {
     return undefined
   }
@@ -83,7 +84,12 @@ function hostStatus (input, key, fallback = loopbackHost) {
   if (!hasOwn(input, key)) {
     return { value: fallback, valid: true }
   }
-  const host = normalizedSafeHost(input[key])
+  const value = input[key]
+  if (typeof value === 'string' && value.startsWith('[') && value.endsWith(']') &&
+    canonicalIpv6Host(value.slice(1, -1))) {
+    return { value: undefined, valid: false, unsupportedRepresentation: true }
+  }
+  const host = normalizedSafeHost(value)
   return host ? { value: host, valid: true } : { value: undefined, valid: false }
 }
 
@@ -126,11 +132,21 @@ function hasInvalidTarget (definition) {
   return invalidFieldNames(definition).length > 0
 }
 
+function hasUnsupportedRepresentation (definition) {
+  return [definition.localHost, definition.remoteHost].some(status => {
+    return status.unsupportedRepresentation === true
+  })
+}
+
 function isLoopbackHost (host) {
   if (host === 'localhost' || host === '[::1]') {
     return true
   }
   return /^127\.(?:\d{1,3}\.){2}\d{1,3}$/.test(host)
+}
+
+function configHost (host) {
+  return host.includes(':') ? `[${host}]` : host
 }
 
 function forwardingConfigExample (definition) {
@@ -143,14 +159,14 @@ function forwardingConfigExample (definition) {
       header,
       'Match User ssh-login-user',
       '    AllowTcpForwarding remote',
-      `    PermitListen ${definition.remoteHost.value}:${definition.remotePort.value}`
+      `    PermitListen ${configHost(definition.remoteHost.value)}:${definition.remotePort.value}`
     ].join('\n')
   }
   return [
     header,
     'Match User ssh-login-user',
     '    AllowTcpForwarding local',
-    `    PermitOpen ${definition.remoteHost.value}:${definition.remotePort.value}`
+    `    PermitOpen ${configHost(definition.remoteHost.value)}:${definition.remotePort.value}`
   ].join('\n')
 }
 
@@ -207,6 +223,9 @@ function policySteps (definition) {
     steps.push(step('sshTunnel.diagnostic.forwardingProhibited.invalidTarget', {
       fields: invalidFieldNames(definition)
     }))
+  }
+  if (hasUnsupportedRepresentation(definition)) {
+    steps.push(step('sshTunnel.diagnostic.forwardingProhibited.unsupportedTargetRepresentation'))
   }
   return steps
 }

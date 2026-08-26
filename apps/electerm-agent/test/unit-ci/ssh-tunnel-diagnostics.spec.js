@@ -102,7 +102,7 @@ test('forwarding prohibited scopes remote policy checks and keeps dynamic forwar
     { code: 'SSH_TUNNEL_FORWARDING_PROHIBITED' },
     localDefinition({
       sshTunnel: 'forwardRemoteToLocal',
-      sshTunnelRemoteHost: '[fe80::1]',
+      sshTunnelRemoteHost: 'fe80::1',
       sshTunnelRemotePort: 26060
     })
   )
@@ -347,7 +347,7 @@ test('diagnostics reject explicit malformed hosts instead of changing a policy t
     ['203.0.113.7', '203.0.113.7'],
     ['db.example.com', 'db.example.com'],
     ['2001:db8::1', '[2001:db8::1]'],
-    ['[2001:db8::1]', '[2001:db8::1]']
+    ['2001:db8::1', '[2001:db8::1]']
   ]) {
     const diagnostic = getTunnelDiagnostic(
       { code: 'SSH_TUNNEL_FORWARDING_PROHIBITED' },
@@ -355,6 +355,42 @@ test('diagnostics reject explicit malformed hosts instead of changing a policy t
     )
     assert.match(diagnostic.configExample, new RegExp(`PermitOpen ${expected.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:6060`))
   }
+})
+
+test('policy examples preserve safe bare IPv6 literals while rendering one config bracket layer', async () => {
+  const { getTunnelDiagnostic } = await loadDiagnostics()
+  const localLiteral = '2001:0DB8:0:0::1'
+  const remoteLiteral = 'FE80:0:0:0::1'
+  const local = getTunnelDiagnostic(
+    { code: 'SSH_TUNNEL_FORWARDING_PROHIBITED' },
+    localDefinition({ sshTunnelRemoteHost: localLiteral })
+  )
+  const remote = getTunnelDiagnostic(
+    { code: 'SSH_TUNNEL_FORWARDING_PROHIBITED' },
+    localDefinition({
+      sshTunnel: 'forwardRemoteToLocal',
+      sshTunnelRemoteHost: remoteLiteral
+    })
+  )
+
+  assert.match(local.configExample, /PermitOpen \[2001:0DB8:0:0::1\]:6060/)
+  assert.match(remote.configExample, /PermitListen \[FE80:0:0:0::1\]:6060/)
+})
+
+test('policy examples fail closed for bracketed IPv6 definition literals', async () => {
+  const { getTunnelDiagnostic } = await loadDiagnostics()
+  const literal = '[2001:db8::1]'
+  const diagnostic = getTunnelDiagnostic(
+    { code: 'SSH_TUNNEL_FORWARDING_PROHIBITED' },
+    localDefinition({ sshTunnelRemoteHost: literal })
+  )
+
+  assert.equal(diagnostic.configExample, '')
+  assert.equal(JSON.stringify(diagnostic).includes(literal), false)
+  assert.equal(
+    hasStep(diagnostic, 'sshTunnel.diagnostic.forwardingProhibited.unsupportedTargetRepresentation'),
+    true
+  )
 })
 
 test('diagnostics do not turn explicit invalid ports into authorization examples', async () => {
