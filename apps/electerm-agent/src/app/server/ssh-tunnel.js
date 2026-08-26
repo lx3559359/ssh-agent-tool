@@ -1,5 +1,6 @@
 const log = require('../common/log')
 const { EventEmitter } = require('node:events')
+const { isIP } = require('node:net')
 const {
   createProbeResult,
   createProbeStage,
@@ -9,6 +10,101 @@ const {
 
 const probeTimeoutMs = 3000
 const maxProbeTimeoutMs = 10000
+const remoteBindingsByConnection = new WeakMap()
+
+function normalizeRemoteBindHost (value) {
+  const host = String(value ?? '').trim()
+  const bracketed = host.startsWith('[') && host.endsWith(']')
+  const candidate = bracketed ? host.slice(1, -1) : host
+  const zoneIndex = candidate.indexOf('%')
+  const address = zoneIndex === -1
+    ? candidate
+    : candidate.slice(0, zoneIndex)
+  const zone = zoneIndex === -1 ? '' : candidate.slice(zoneIndex)
+
+  if (isIP(address) === 4 && !zone) {
+    return {
+      key: `ipv4:${address}`,
+      family: 4,
+      wildcard: address === '0.0.0.0'
+    }
+  }
+  if (isIP(address) === 6) {
+    try {
+      const canonical = new URL(`http://[${address}]/`).hostname.slice(1, -1)
+      return {
+        key: `ipv6:${canonical}${zone}`,
+        family: 6,
+        wildcard: canonical === '::' && !zone
+      }
+    } catch {}
+  }
+
+  // Hostnames are intentionally exact after trimming. Resolving or folding an
+  // unknown name here could route a channel to the wrong remote bind.
+  return {
+    key: `name:${host}`,
+    family: 0,
+    wildcard: host === '*'
+  }
+}
+
+function registerRemoteBinding (conn, host, port) {
+  let bindings = remoteBindingsByConnection.get(conn)
+  if (!bindings) {
+    bindings = new Set()
+    remoteBindingsByConnection.set(conn, bindings)
+  }
+  const binding = {
+    host: normalizeRemoteBindHost(host),
+    port: Number(port)
+  }
+  bindings.add(binding)
+  return {
+    binding,
+    remove: () => {
+      bindings.delete(binding)
+      if (!bindings.size) remoteBindingsByConnection.delete(conn)
+    }
+  }
+}
+
+function remoteBindingDecision (conn, info = {}) {
+  const bindings = remoteBindingsByConnection.get(conn)
+  if (!bindings) return {}
+  const port = Number(info.destPort)
+  const portBindings = Array.from(bindings).filter(candidate => {
+    return candidate.port === port
+  })
+  if (!portBindings.length) return {}
+
+  if (info.destIP !== undefined && info.destIP !== null && info.destIP !== '') {
+    const destination = normalizeRemoteBindHost(info.destIP)
+    const scored = portBindings.map(binding => {
+      let specificity = 0
+      if (binding.host.key === destination.key) {
+        specificity = 3
+      } else if (destination.family && binding.host.wildcard) {
+        if (binding.host.family === destination.family) specificity = 2
+        else if (!binding.host.family) specificity = 1
+      }
+      return { binding, specificity }
+    })
+    const highestSpecificity = Math.max(...scored.map(item => item.specificity))
+    if (highestSpecificity) {
+      const selected = scored.filter(item => {
+        return item.specificity === highestSpecificity
+      })
+      return selected.length === 1
+        ? { route: selected[0].binding }
+        : { rejectOwner: portBindings[0] }
+    }
+  }
+
+  return portBindings.length === 1
+    ? { route: portBindings[0] }
+    : { rejectOwner: portBindings[0] }
+}
 
 function normalizeProbeTimeout (value) {
   return Number.isFinite(value) && value >= 1 && value <= maxProbeTimeoutMs
@@ -291,14 +387,27 @@ function forwardRemoteToLocal (options, probeDependencies = {}) {
   lifecycle.on('error', () => {})
 
   return new Promise((resolve, reject) => {
+    const remoteBinding = registerRemoteBinding(
+      conn,
+      sshTunnelRemoteHost,
+      sshTunnelRemotePort
+    )
     const trackSocket = socket => {
       if (!socket) return socket
       sockets.add(socket)
       socket.once?.('close', () => sockets.delete(socket))
       return socket
     }
-    const handleTcpConnection = (info, accept) => {
-      if (Number(info.destPort) !== Number(sshTunnelRemotePort)) return
+    const handleTcpConnection = (info, accept, reject) => {
+      const decision = remoteBindingDecision(conn, info)
+      if (decision.route !== remoteBinding.binding) {
+        if (
+          !decision.route &&
+          decision.rejectOwner === remoteBinding.binding &&
+          typeof reject === 'function'
+        ) reject()
+        return
+      }
       const source = trackSocket(accept())
       if (!source) {
         log.error(`Failed to accept connection for tunnel ${result}`)
@@ -343,6 +452,7 @@ function forwardRemoteToLocal (options, probeDependencies = {}) {
     const detach = () => {
       conn.removeListener('tcp connection', handleTcpConnection)
       conn.removeListener('close', handleConnectionClose)
+      remoteBinding.remove()
     }
     conn.on('tcp connection', handleTcpConnection)
     conn.on('close', handleConnectionClose)

@@ -15,6 +15,11 @@ const safeDetailKeys = [
   'host',
   'tunnelId'
 ]
+const probeRecoverableStates = new Set([
+  'failed',
+  'port-conflict',
+  'session-lost'
+])
 
 function safeTunnelErrorDetails (details) {
   if (!details || typeof details !== 'object' || Array.isArray(details)) {
@@ -126,6 +131,14 @@ function createSshTunnelRuntime ({
       entry.trafficEvidencePassed = result.ok && result.stages.length >= 3
     } else if (result.verdict === 'limited' || result.verdict === 'failed') {
       entry.trafficEvidencePassed = false
+    }
+    if (result.ok && probeRecoverableStates.has(entry.state)) {
+      cancelReconnect(entry)
+      entry.reconnectAttempt = 0
+      recordState(entry, 'healthy', {
+        code: 'SSH_TUNNEL_PROBE_RECOVERED',
+        message: 'SSH 隧道检测已恢复正常'
+      })
     }
     return result
   }

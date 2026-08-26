@@ -88,7 +88,11 @@ function loadRuntimeGuidanceLogic (context = {}) {
     'copyTextSafely',
     'copyableFlowFor',
     'diagnosticValueKeyByToken',
-    'localizedDiagnosticValues'
+    'localizedDiagnosticValues',
+    'stageMessageKeyByCode',
+    'stageMessageKeyByIdentity',
+    'safeUnknownStageMessage',
+    'localizedStageMessage'
   ])
   const body = []
   const foundExports = []
@@ -98,6 +102,11 @@ function loadRuntimeGuidanceLogic (context = {}) {
       t.isIdentifier(declaration.id) && names.has(declaration.id.name)
     ))) {
       body.push(node)
+      for (const declaration of node.declarations) {
+        if (t.isIdentifier(declaration.id) && names.has(declaration.id.name)) {
+          foundExports.push(declaration.id.name)
+        }
+      }
     }
     if (
       t.isExportNamedDeclaration(node) &&
@@ -827,14 +836,124 @@ test('SOCKS and remote guides render every field, success boundary and first che
   assert.match(enRemote, /end-to-end.*not verified.*overall.*not verified.*real incoming forwarded connection.*client target.*Available/is)
 })
 
-test('remote access card separates the bind listener from a connectable server-local endpoint', () => {
+test('remote access card shows only the requested listener and always requires server verification', async () => {
   const card = source('src/client/components/ssh-tunnel/ssh-tunnel-runtime-card.jsx')
+  const manual = source('docs/USER_GUIDE_ZH.md')
+  const { getShellPilotTranslation } = await loadTunnelCatalog()
+  const remoteBranch = card.match(/if \(usage\.kind === 'remote'\) \{([\s\S]*?)\n {2}\}\n\n {2}return \(/)?.[1] || ''
 
-  assert.match(card, /shellpilotTunnelRemoteBindAddress[\s\S]*usage\.bindEndpoint/)
-  assert.match(card, /shellpilotTunnelRemoteServerLocalAddress[\s\S]*usage\.endpoint/)
-  assert.match(card, /usage\.requiresServerAddressForExternalAccess[\s\S]*shellpilotTunnelRemoteWildcardExternalHint/)
-  assert.doesNotMatch(card, /copyButton\(usage\.bindEndpoint/)
-  assert.match(card, /copyButton\(usage\.endpoint, e\('shellpilotTunnelCopyAddress'\)\)/)
+  assert.match(remoteBranch, /shellpilotTunnelRemoteRequestedListenAddress[\s\S]*usage\.requestedListenEndpoint/)
+  assert.match(remoteBranch, /shellpilotTunnelRemoteListenVerification/)
+  assert.doesNotMatch(remoteBranch, /usage\.requiresServerAddressForExternalAccess/)
+  assert.doesNotMatch(remoteBranch, /shellpilotTunnelRemoteServerLocalAddress[\s\S]*usage\.endpoint/)
+  assert.doesNotMatch(remoteBranch, /copyButton\(usage\.(?:endpoint|requestedListenEndpoint)/)
+
+  for (const langId of ['zh_cn', 'en_us']) {
+    const requested = getShellPilotTranslation('shellpilotTunnelRemoteRequestedListenAddress', langId)
+    const verification = getShellPilotTranslation('shellpilotTunnelRemoteListenVerification', langId)
+    assert.match(requested, langId === 'zh_cn' ? /请求/ : /requested/i)
+    assert.match(verification, /GatewayPorts/i)
+    assert.match(verification, langId === 'zh_cn' ? /有效配置.*防火墙.*服务器.*验证/s : /effective configuration.*firewall.*verify.*server/is)
+  }
+  assert.match(manual, /请求的服务器监听地址/)
+  assert.match(manual, /所有远程转发.*实际监听范围.*GatewayPorts.*有效配置.*防火墙.*服务器.*验证/s)
+})
+
+test('stage grid localizes known stage codes and safely bounds only unknown raw messages', async () => {
+  const card = source('src/client/components/ssh-tunnel/ssh-tunnel-runtime-card.jsx')
+  const { getShellPilotTranslation } = await loadTunnelCatalog()
+  const {
+    localizedStageMessage,
+    stageMessageKeyByCode,
+    stageMessageKeyByIdentity
+  } = loadRuntimeGuidanceLogic()
+  const en = key => getShellPilotTranslation(key, 'en_us')
+
+  const knownStages = [
+    {
+      id: 'local-listener',
+      code: 'SSH_TUNNEL_LOCAL_LISTENER_READY',
+      message: '本机监听正常',
+      expected: 'Local listener is ready'
+    },
+    {
+      id: 'ssh-forwarding',
+      code: 'SSH_TUNNEL_FORWARDING_PROHIBITED',
+      message: 'SSH 服务器禁止端口转发',
+      expected: 'The SSH server prohibits port forwarding'
+    },
+    {
+      id: 'target-service',
+      code: 'SSH_TUNNEL_STAGE_NOT_REACHED',
+      message: 'SSH 转发失败，尚未检测目标服务',
+      expected: 'Target service was not checked because SSH forwarding did not pass'
+    },
+    {
+      id: 'proxy-traffic',
+      code: 'SSH_TUNNEL_STAGE_NOT_REACHED',
+      message: '尚无真实代理请求验证转发流量',
+      expected: 'Real SOCKS5 proxy traffic has not been verified'
+    }
+  ]
+  for (const stage of knownStages) {
+    const localized = localizedStageMessage(stage, en)
+    assert.equal(localized, stage.expected)
+    assert.doesNotMatch(localized, /[\u3400-\u9fff]/)
+  }
+  for (const code of Object.keys(stageMessageKeyByCode)) {
+    assert.doesNotMatch(localizedStageMessage({
+      id: 'catalog-check',
+      status: 'failed',
+      code,
+      message: '不应显示的后端中文'
+    }, en), /[\u3400-\u9fff]/, code)
+  }
+  for (const identity of Object.keys(stageMessageKeyByIdentity)) {
+    const separator = identity.indexOf(':')
+    const id = identity.slice(0, separator)
+    const code = identity.slice(separator + 1)
+    assert.doesNotMatch(localizedStageMessage({
+      id,
+      status: 'unverified',
+      code,
+      message: '不应显示的后端中文'
+    }, en), /[\u3400-\u9fff]/, identity)
+  }
+
+  const raw = `\u0000\u001b\u061c\u200e\u200fUnknown backend detail ${'x'.repeat(400)}`
+  const fallback = localizedStageMessage({
+    id: 'vendor-stage',
+    status: 'failed',
+    code: 'VENDOR_UNKNOWN_STAGE',
+    message: raw
+  }, en)
+  assert.ok(fallback.startsWith('Unknown backend detail'))
+  assert.ok(fallback.length <= 240)
+  assert.equal(Array.from(fallback).some(character => {
+    const code = character.charCodeAt(0)
+    return code <= 31 || code === 127 || [1564, 8206, 8207].includes(code)
+  }), false)
+  assert.equal(localizedStageMessage({
+    id: 'vendor-stage',
+    status: 'passed',
+    code: 'VENDOR_UNKNOWN_STAGE',
+    message: '后端自定义成功说明'
+  }, en), 'No details are available')
+  assert.equal(localizedStageMessage({
+    id: 'vendor-stage',
+    status: 'limited',
+    code: 'VENDOR_UNKNOWN_STAGE',
+    message: '后端自定义受限说明'
+  }, en), 'No details are available')
+  assert.equal(localizedStageMessage({
+    id: 'vendor-stage',
+    status: 'failed',
+    code: 'toString',
+    message: 'Safe vendor error'
+  }, en), 'Safe vendor error')
+
+  assert.match(card, /localizedStageMessage\(stage\)/)
+  assert.doesNotMatch(card, /stage\.message\s*\|\|/)
 })
 
 test('SOCKS access card shows wildcard exposure separately from the loopback proxy endpoint', () => {

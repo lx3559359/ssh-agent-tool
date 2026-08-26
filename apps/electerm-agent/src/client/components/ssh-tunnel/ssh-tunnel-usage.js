@@ -216,9 +216,19 @@ export function getTunnelUsage (definition = {}) {
       definition.sshTunnelRemotePort,
       false
     )
+    const {
+      bindHost: requestedListenHost,
+      bindPort: requestedListenPort,
+      bindEndpoint: requestedListenEndpoint,
+      ...baseUsage
+    } = usage
     return {
-      ...usage,
-      requiresServerAddressForExternalAccess: usage.usesWildcardBind
+      ...baseUsage,
+      requestedListenHost,
+      requestedListenPort,
+      ...(requestedListenEndpoint ? { requestedListenEndpoint } : {}),
+      requiresServerListenVerification: true,
+      requiresServerAddressForExternalAccess: true
     }
   }
 
@@ -377,7 +387,7 @@ function remoteGuideData (definition) {
   const current = getTunnelUsage(definition)
   const currentTarget = remoteTargetFor(definition)
   const isCurrent = current.kind === 'remote' &&
-    Boolean(current.bindEndpoint) && Boolean(current.endpoint) &&
+    Boolean(current.requestedListenEndpoint) && Boolean(current.endpoint) &&
     Boolean(currentTarget.endpoint)
   const usage = isCurrent
     ? current
@@ -394,6 +404,12 @@ function remoteGuideData (definition) {
     })
   return {
     ...usage,
+    host: usage.requestedListenHost,
+    port: usage.requestedListenPort,
+    endpoint: usage.requestedListenEndpoint,
+    bindHost: usage.requestedListenHost,
+    bindPort: usage.requestedListenPort,
+    bindEndpoint: usage.requestedListenEndpoint,
     targetHost: target.host,
     targetPort: target.port,
     targetEndpoint: target.endpoint,

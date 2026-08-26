@@ -1028,6 +1028,61 @@ test('runtime invalidates passed evidence immediately after a controller failure
   assert.equal(state.testState, 'limited')
 })
 
+test('runtime successful manual probe recovers a failed lifecycle', async () => {
+  const controller = new EventEmitter()
+  controller.descriptor = { id: 'probe-recovery', sshTunnel: 'forwardLocalToRemote' }
+  controller.close = async () => {}
+  controller.probe = async () => passedLocalProbe(25)
+  const runtime = createSshTunnelRuntime({
+    startController: async () => controller
+  })
+
+  await runtime.start(controller.descriptor)
+  await new Promise(resolve => setImmediate(resolve))
+  controller.emit('error', Object.assign(new Error('temporary failure'), {
+    code: 'SSH_TUNNEL_TEST_FAILED'
+  }))
+  assert.equal(runtime.list()[0].state, 'failed')
+
+  const result = await runtime.test('probe-recovery')
+  const recovered = runtime.list()[0]
+  assert.equal(result.verdict, 'passed')
+  assert.equal(recovered.lastTest.verdict, 'passed')
+  assert.equal(recovered.testState, 'passed')
+  assert.equal(recovered.state, 'healthy')
+  assert.equal(recovered.events.at(-1).code, 'SSH_TUNNEL_PROBE_RECOVERED')
+})
+
+test('runtime successful probe cancels a stale reconnect after recovery', async () => {
+  const scheduled = []
+  const controller = new EventEmitter()
+  controller.descriptor = { id: 'probe-reconnect-recovery', sshTunnel: 'forwardLocalToRemote' }
+  controller.close = async () => {}
+  controller.probe = async () => passedLocalProbe(26)
+  const runtime = createSshTunnelRuntime({
+    startController: async () => controller,
+    schedule: (callback, delay) => {
+      const task = { callback, delay, cancelled: false }
+      scheduled.push(task)
+      return task
+    },
+    cancelSchedule: task => {
+      task.cancelled = true
+    }
+  })
+
+  await runtime.start(controller.descriptor)
+  await new Promise(resolve => setImmediate(resolve))
+  controller.emit('close', { code: 'SSH_CONNECTION_CLOSED' })
+  assert.equal(runtime.list()[0].state, 'session-lost')
+  assert.equal(scheduled.length, 1)
+
+  assert.equal((await runtime.test('probe-reconnect-recovery')).verdict, 'passed')
+  assert.equal(runtime.list()[0].state, 'healthy')
+  assert.equal(runtime.list()[0].reconnectAttempt, 0)
+  assert.equal(scheduled[0].cancelled, true)
+})
+
 test('runtime returns current failure evidence to a probe invalidated while pending', async () => {
   const controller = new EventEmitter()
   controller.descriptor = { id: 'invalidated-return', sshTunnel: 'forwardLocalToRemote' }

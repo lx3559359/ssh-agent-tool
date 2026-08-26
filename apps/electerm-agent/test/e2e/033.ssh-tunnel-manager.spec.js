@@ -280,7 +280,7 @@ test('SSH tunnel manager supports disconnected planning and connected lifecycle'
   }
 })
 
-test('SSH tunnel manager explains direct HTTPS access, policy failures, and SOCKS5 browser setup', async () => {
+test('SSH tunnel manager explains HTTPS, SOCKS5, remote access, and policy failures', async () => {
   let run
   let primaryError
   try {
@@ -348,6 +348,28 @@ test('SSH tunnel manager explains direct HTTPS access, policy failures, and SOCK
     await expect(guide).toContainText('Chrome')
     await expect(guide).toContainText('Edge')
     await expect(guide).toContainText('--proxy-server="socks5://127.0.0.1:1080"')
+    await guide.locator('.ant-modal-close').click()
+    await expect(guide).toBeHidden()
+
+    await card.getByRole('button', { name: '停止' }).click()
+    await expect(modal.locator('.ssh-tunnel-running-card')).toHaveCount(0)
+
+    await modal.getByRole('button', { name: '远程转发' }).click()
+    await modal.getByLabel('本机目标端口').fill('3000')
+    await modal.getByLabel('远程监听端口').fill('19090')
+    await modal.getByRole('button', { name: '启动隧道' }).click()
+    card = modal.locator('.ssh-tunnel-running-card')
+    await expect(card).toContainText('请求的服务器监听地址')
+    await expect(card).toContainText('127.0.0.1:19090')
+    await expect(card).toContainText('GatewayPorts')
+    await expect(card).toContainText(/必须.*服务器.*验证/)
+    await expect(card).not.toContainText('当前监听所有网络接口')
+
+    await card.getByRole('button', { name: '远程转发安全' }).click()
+    guide = page.locator('.ssh-tunnel-guide-modal')
+    await expect(guide).toBeVisible()
+    await expect(guide).toContainText('请求的服务器监听地址')
+    await expect(guide).toContainText(/GatewayPorts.*有效配置.*防火墙/s)
     await guide.locator('.ant-modal-close').click()
     await expect(guide).toBeHidden()
 

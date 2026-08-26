@@ -29,6 +29,79 @@ const stagePresentation = {
   unverified: { icon: <QuestionCircleOutlined />, label: 'shellpilotTunnelStageUnverified' }
 }
 
+const stageMessageKeyByCode = Object.freeze({
+  SSH_TUNNEL_LOCAL_LISTENER_READY: 'shellpilotTunnelStageMessageLocalListenerReady',
+  SSH_TUNNEL_FORWARDING_READY: 'shellpilotTunnelStageMessageForwardingReady',
+  SSH_TUNNEL_TARGET_READY: 'shellpilotTunnelStageMessageTargetReady',
+  SSH_TUNNEL_TARGET_SERVICE_READY: 'shellpilotTunnelStageMessageTargetReady',
+  SSH_TUNNEL_SERVER_LISTENER_READY: 'shellpilotTunnelStageMessageServerRequestAccepted',
+  SSH_TUNNEL_LOCAL_TARGET_READY: 'shellpilotTunnelStageMessageLocalTargetReady',
+  SSH_TUNNEL_END_TO_END_READY: 'shellpilotTunnelStageMessageEndToEndReady',
+  SSH_TUNNEL_PROXY_PROTOCOL_READY: 'shellpilotTunnelStageMessageProxyProtocolReady',
+  SSH_TUNNEL_PROXY_TRAFFIC_READY: 'shellpilotTunnelStageMessageProxyTrafficReady',
+  SSH_TUNNEL_PROXY_TRAFFIC_UNVERIFIED: 'shellpilotTunnelStageMessageProxyTrafficUnverified',
+  SSH_TUNNEL_FORWARDING_PROHIBITED: 'shellpilotTunnelStageMessageForwardingProhibited',
+  SSH_TUNNEL_DESTINATION_REFUSED: 'shellpilotTunnelStageMessageDestinationRefused',
+  ECONNREFUSED: 'shellpilotTunnelStageMessageDestinationRefused',
+  SSH_TUNNEL_LOCAL_TARGET_CLOSED: 'shellpilotTunnelStageMessageLocalTargetClosed',
+  SSH_TUNNEL_PROXY_PROTOCOL_FAILED: 'shellpilotTunnelStageMessageProxyProtocolFailed',
+  SSH_TUNNEL_PROXY_CONNECTION_CLOSED: 'shellpilotTunnelStageMessageProxyConnectionClosed',
+  SSH_TUNNEL_TEST_TIMEOUT: 'shellpilotTunnelStageMessageTestTimeout',
+  SSH_TUNNEL_PROBE_CANCELLED: 'shellpilotTunnelStageMessageProbeCancelled',
+  SSH_TUNNEL_PROBE_UNAVAILABLE: 'shellpilotTunnelStageMessageProbeUnavailable',
+  SSH_TUNNEL_FORWARDING_FAILED: 'shellpilotTunnelStageMessageForwardingFailed',
+  SSH_TUNNEL_TEST_FAILED: 'shellpilotTunnelStageMessageTestFailed',
+  SSH_TUNNEL_PORT_IN_USE: 'shellpilotTunnelStageMessagePortInUse',
+  EADDRINUSE: 'shellpilotTunnelStageMessagePortInUse',
+  SSH_TUNNEL_STAGE_NOT_REACHED: 'shellpilotTunnelStageMessageNotReached'
+})
+
+const stageMessageKeyByIdentity = Object.freeze({
+  'target-service:SSH_TUNNEL_STAGE_NOT_REACHED': 'shellpilotTunnelStageMessageTargetNotReached',
+  'proxy-protocol:SSH_TUNNEL_STAGE_NOT_REACHED': 'shellpilotTunnelStageMessageProxyProtocolNotReached',
+  'proxy-traffic:SSH_TUNNEL_STAGE_NOT_REACHED': 'shellpilotTunnelStageMessageProxyTrafficUnverified',
+  'end-to-end:SSH_TUNNEL_STAGE_NOT_REACHED': 'shellpilotTunnelStageMessageEndToEndUnverified'
+})
+
+export function safeUnknownStageMessage (value) {
+  const normalized = Array.from(String(value || ''), character => {
+    const code = character.charCodeAt(0)
+    const isControl = code <= 31 ||
+      (code >= 127 && code <= 159) ||
+      code === 1564 ||
+      code === 8206 ||
+      code === 8207 ||
+      (code >= 8234 && code <= 8238) ||
+      (code >= 8294 && code <= 8297)
+    return isControl ? ' ' : character
+  }).join('')
+    .replace(/\s+/g, ' ')
+    .trim()
+  let truncated = normalized.slice(0, 240)
+  if (/[\uD800-\uDBFF]/.test(truncated.slice(-1))) truncated = truncated.slice(0, -1)
+  return truncated
+}
+
+export function localizedStageMessage (stage = {}, translate = e) {
+  const identity = `${String(stage.id || '')}:${String(stage.code || '')}`
+  const identityKey = Object.hasOwn(stageMessageKeyByIdentity, identity)
+    ? stageMessageKeyByIdentity[identity]
+    : undefined
+  const codeKey = Object.hasOwn(stageMessageKeyByCode, stage.code)
+    ? stageMessageKeyByCode[stage.code]
+    : undefined
+  const key = identityKey || codeKey
+  if (key) {
+    const translated = translate(key)
+    return translated && translated !== key
+      ? translated
+      : translate('shellpilotTunnelStageNoDetail')
+  }
+  const canUseRawFallback = stage.status === 'failed'
+  return (canUseRawFallback && safeUnknownStageMessage(stage.message)) ||
+    translate('shellpilotTunnelStageNoDetail')
+}
+
 const availabilityPresentation = {
   passed: { icon: <CheckCircleOutlined />, label: 'shellpilotTunnelAvailabilityPassed' },
   checking: { icon: <LoadingOutlined spin />, label: 'shellpilotTunnelAvailabilityChecking' },
@@ -301,17 +374,11 @@ function AccessPanel ({ usage, definition, onOpenGuide }) {
       <section className='ssh-tunnel-access-panel ssh-tunnel-access-panel--remote'>
         <span>{e('shellpilotTunnelRemoteAccessTitle')}</span>
         <dl className='ssh-tunnel-access-fields'>
-          <div><dt>{e('shellpilotTunnelRemoteBindAddress')}</dt><dd><code>{usage.bindEndpoint}</code></dd></div>
-          <div><dt>{e('shellpilotTunnelRemoteServerLocalAddress')}</dt><dd><code>{usage.endpoint}</code></dd></div>
+          <div><dt>{e('shellpilotTunnelRemoteRequestedListenAddress')}</dt><dd><code>{usage.requestedListenEndpoint}</code></dd></div>
         </dl>
         <p>{e('shellpilotTunnelRemoteAccessFromServer')}</p>
-        {
-          usage.requiresServerAddressForExternalAccess
-            ? <p>{e('shellpilotTunnelRemoteWildcardExternalHint')}</p>
-            : null
-        }
+        <p>{e('shellpilotTunnelRemoteListenVerification')}</p>
         <Space wrap>
-          {copyButton(usage.endpoint, e('shellpilotTunnelCopyAddress'))}
           <Button size='small' icon={<ReadOutlined />} onClick={() => openGuide(onOpenGuide, guideRequestFor(usage, null, definition))}>
             {e('shellpilotTunnelGuideRemoteSafety')}
           </Button>
@@ -350,7 +417,7 @@ function StageGrid ({ stages }) {
                 <span aria-hidden='true'>{presentation.icon}</span>
                 <strong>{e(presentation.label)}</strong>
               </span>
-              <span>{stage.message || e('shellpilotTunnelStageNoDetail')}</span>
+              <span>{localizedStageMessage(stage)}</span>
             </div>
           )
         })

@@ -113,7 +113,7 @@ test('database profiles provide local endpoints without a browser action', async
   }
 })
 
-test('remote forwarding describes the SSH-server endpoint without a local URL', async () => {
+test('remote forwarding labels the requested server listener as unverified server scope', async () => {
   const { getTunnelUsage } = await loadUsage()
 
   assert.deepEqual(getTunnelUsage({
@@ -127,17 +127,18 @@ test('remote forwarding describes the SSH-server endpoint without a local URL', 
     host: '[2001:db8::10]',
     port: 9000,
     endpoint: '[2001:db8::10]:9000',
-    bindHost: '[2001:db8::10]',
-    bindPort: 9000,
-    bindEndpoint: '[2001:db8::10]:9000',
+    requestedListenHost: '[2001:db8::10]',
+    requestedListenPort: 9000,
+    requestedListenEndpoint: '[2001:db8::10]:9000',
     usesWildcardBind: false,
-    requiresServerAddressForExternalAccess: false,
+    requiresServerListenVerification: true,
+    requiresServerAddressForExternalAccess: true,
     requiresProxy: false,
     canOpen: false
   })
 })
 
-test('remote wildcard listeners expose a server-local connect endpoint without copying the wildcard', async () => {
+test('every remote listener requires server verification regardless of the requested host', async () => {
   const { getTunnelUsage } = await loadUsage()
   const cases = [
     ['0.0.0.0', '0.0.0.0:18080', '127.0.0.1:18080'],
@@ -153,12 +154,22 @@ test('remote wildcard listeners expose a server-local connect endpoint without c
       sshTunnelRemoteHost,
       sshTunnelRemotePort: 18080
     })
-    assert.equal(usage.bindEndpoint, bindEndpoint)
+    assert.equal(usage.requestedListenEndpoint, bindEndpoint)
     assert.equal(usage.endpoint, endpoint)
     assert.equal(usage.usesWildcardBind, true)
+    assert.equal(usage.requiresServerListenVerification, true)
     assert.equal(usage.requiresServerAddressForExternalAccess, true)
-    assert.notEqual(usage.endpoint, usage.bindEndpoint)
+    assert.notEqual(usage.endpoint, usage.requestedListenEndpoint)
   }
+
+  const loopback = getTunnelUsage({
+    sshTunnel: 'forwardRemoteToLocal',
+    sshTunnelRemoteHost: '127.0.0.1',
+    sshTunnelRemotePort: 18080
+  })
+  assert.equal(loopback.requestedListenEndpoint, '127.0.0.1:18080')
+  assert.equal(loopback.requiresServerListenVerification, true)
+  assert.equal(loopback.requiresServerAddressForExternalAccess, true)
 })
 
 test('guide data uses current safe SOCKS and remote settings and labels fallbacks as examples', async () => {
@@ -238,8 +249,9 @@ test('guide data uses current safe SOCKS and remote settings and labels fallback
     }
   }).remote
   assert.equal(remote.isExample, false)
-  assert.equal(remote.bindEndpoint, '0.0.0.0:28080')
-  assert.equal(remote.endpoint, '127.0.0.1:28080')
+  assert.equal(remote.requestedListenEndpoint, '0.0.0.0:28080')
+  assert.equal(remote.endpoint, '0.0.0.0:28080')
+  assert.equal(remote.endpoint, remote.requestedListenEndpoint)
   assert.equal(remote.targetHost, '127.0.0.1')
   assert.equal(remote.targetPort, 9080)
   assert.equal(remote.targetEndpoint, '127.0.0.1:9080')
