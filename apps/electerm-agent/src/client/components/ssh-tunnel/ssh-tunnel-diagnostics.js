@@ -139,8 +139,15 @@ function hasUnsupportedRepresentation (definition) {
 }
 
 function isLoopbackHost (host) {
-  if (host === 'localhost' || host === '[::1]') {
+  if (host === 'localhost') {
     return true
+  }
+  if (host.includes(':')) {
+    try {
+      return new URL(`http://[${host}]/`).hostname === '[::1]'
+    } catch {
+      return false
+    }
   }
   return /^127\.(?:\d{1,3}\.){2}\d{1,3}$/.test(host)
 }

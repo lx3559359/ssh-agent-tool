@@ -164,6 +164,33 @@ test('destination refused does not suggest an SSH-server listener command for an
   )
 })
 
+test('destination refused recognizes bare and expanded IPv6 loopback targets without rewriting them', async () => {
+  const { getTunnelDiagnostic } = await loadDiagnostics()
+  for (const host of ['::1', '0:0:0:0:0:0:0:1']) {
+    const local = getTunnelDiagnostic(
+      { code: 'SSH_TUNNEL_DESTINATION_REFUSED' },
+      localDefinition({ sshTunnelRemoteHost: host })
+    )
+    const remote = getTunnelDiagnostic(
+      { code: 'SSH_TUNNEL_DESTINATION_REFUSED' },
+      localDefinition({
+        sshTunnel: 'forwardRemoteToLocal',
+        sshTunnelLocalHost: host
+      })
+    )
+    assert.equal(local.checksText, "ss -lntp | grep ':6060'")
+    assert.equal(
+      remote.checksText,
+      'Get-NetTCPConnection -LocalPort 16060 -ErrorAction SilentlyContinue'
+    )
+  }
+  const external = getTunnelDiagnostic(
+    { code: 'SSH_TUNNEL_DESTINATION_REFUSED' },
+    localDefinition({ sshTunnelRemoteHost: '2001:db8::1' })
+  )
+  assert.equal(external.checksText, '')
+})
+
 test('destination refused checks a remote forward loopback target from the local Windows machine', async () => {
   const { getTunnelDiagnostic } = await loadDiagnostics()
   const diagnostic = getTunnelDiagnostic(
