@@ -21,6 +21,10 @@ function localDefinition (overrides = {}) {
   }
 }
 
+function hasStep (diagnostic, key) {
+  return diagnostic.steps.some(step => step.key === key)
+}
+
 test('forwarding prohibited uses a read-only check and separate scoped local policy example', async () => {
   const { getTunnelDiagnostic } = await loadDiagnostics()
   const diagnostic = getTunnelDiagnostic(
@@ -50,7 +54,7 @@ test('forwarding prohibited uses a read-only check and separate scoped local pol
   assert.equal(diagnostic.steps.every(step => typeof step.key === 'string' && step.values && typeof step.values === 'object'), true)
 })
 
-test('forwarding prohibited supplies only a scoped remote policy or a conservative dynamic hint', async () => {
+test('forwarding prohibited scopes remote policy checks and keeps dynamic forwarding unconfigured', async () => {
   const { getTunnelDiagnostic } = await loadDiagnostics()
   const remote = getTunnelDiagnostic(
     { code: 'SSH_TUNNEL_FORWARDING_PROHIBITED' },
@@ -67,11 +71,23 @@ test('forwarding prohibited supplies only a scoped remote policy or a conservati
 
   assert.match(remote.configExample, /AllowTcpForwarding remote/)
   assert.match(remote.configExample, /PermitListen \[fe80::1\]:26060/)
-  assert.match(dynamic.configExample, /AllowTcpForwarding local/)
-  assert.doesNotMatch(dynamic.configExample, /PermitOpen|PermitListen/)
+  assert.equal(
+    remote.checksText,
+    "sudo sshd -T | grep -Ei 'allowtcpforwarding|permitlisten|disableforwarding'"
+  )
+  assert.equal(dynamic.configExample, '')
+  assert.equal(dynamic.checksText, "sudo sshd -T | grep -Ei 'allowtcpforwarding|permitopen|disableforwarding'")
+  assert.equal(
+    hasStep(dynamic, 'sshTunnel.diagnostic.forwardingProhibited.dynamicNeedsApprovedTargetScope'),
+    true
+  )
+  assert.equal(
+    hasStep(remote, 'sshTunnel.diagnostic.forwardingProhibited.reviewLoginContextRestrictions'),
+    true
+  )
 })
 
-test('destination refused checks the valid remote listener from the SSH server perspective', async () => {
+test('destination refused checks only a local SSH-server target from the SSH server perspective', async () => {
   const { getTunnelDiagnostic } = await loadDiagnostics()
   const diagnostic = getTunnelDiagnostic(
     { code: 'SSH_TUNNEL_DESTINATION_REFUSED' },
@@ -82,6 +98,59 @@ test('destination refused checks the valid remote listener from the SSH server p
   assert.equal(diagnostic.severity, 'error')
   assert.equal(diagnostic.checksText, "ss -lntp | grep ':6060'")
   assert.equal(diagnostic.configExample, '')
+  assert.equal(
+    hasStep(diagnostic, 'sshTunnel.diagnostic.destinationRefused.checkTargetFromSshServer'),
+    true
+  )
+})
+
+test('destination refused does not suggest an SSH-server listener command for an external target', async () => {
+  const { getTunnelDiagnostic } = await loadDiagnostics()
+  const diagnostic = getTunnelDiagnostic(
+    { code: 'SSH_TUNNEL_DESTINATION_REFUSED' },
+    localDefinition({ sshTunnelRemoteHost: 'db.example.com' })
+  )
+
+  assert.equal(diagnostic.checksText, '')
+  assert.equal(
+    hasStep(diagnostic, 'sshTunnel.diagnostic.destinationRefused.checkTargetFromSshServer'),
+    true
+  )
+})
+
+test('destination refused checks a remote forward target from the local Windows machine', async () => {
+  const { getTunnelDiagnostic } = await loadDiagnostics()
+  const diagnostic = getTunnelDiagnostic(
+    { code: 'SSH_TUNNEL_DESTINATION_REFUSED' },
+    localDefinition({
+      sshTunnel: 'forwardRemoteToLocal',
+      sshTunnelLocalHost: '127.0.0.1',
+      sshTunnelLocalPort: 16060
+    })
+  )
+
+  assert.equal(
+    diagnostic.checksText,
+    'Get-NetTCPConnection -LocalPort 16060 -ErrorAction SilentlyContinue'
+  )
+  assert.equal(
+    hasStep(diagnostic, 'sshTunnel.diagnostic.destinationRefused.checkTargetFromLocalMachine'),
+    true
+  )
+})
+
+test('destination refused leaves a dynamic target command empty', async () => {
+  const { getTunnelDiagnostic } = await loadDiagnostics()
+  const diagnostic = getTunnelDiagnostic(
+    { code: 'SSH_TUNNEL_DESTINATION_REFUSED' },
+    localDefinition({ sshTunnel: 'dynamicForward' })
+  )
+
+  assert.equal(diagnostic.checksText, '')
+  assert.equal(
+    hasStep(diagnostic, 'sshTunnel.diagnostic.destinationRefused.reviewActualDynamicTarget'),
+    true
+  )
 })
 
 test('port-in-use reads only the valid Windows local listener port', async () => {
@@ -152,21 +221,38 @@ test('untrusted ports hosts and error text never reach rendered diagnostics', as
   for (const forbidden of [payload, hostPayload, errorPayload, 'systemctl restart', 'private key']) {
     assert.doesNotMatch(serialized, new RegExp(forbidden.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
   }
-  assert.match(diagnostic.configExample, /127\.0\.0\.1:6060/)
-  assert.equal(refused.checksText, "ss -lntp | grep ':6060'")
+  assert.equal(diagnostic.configExample, '')
+  assert.equal(refused.checksText, '')
+  assert.equal(
+    hasStep(diagnostic, 'sshTunnel.diagnostic.forwardingProhibited.invalidTarget'),
+    true
+  )
 })
 
-test('diagnostics reject malformed hosts and canonicalize valid IPv6 without shell text', async () => {
+test('diagnostics reject explicit malformed hosts instead of changing a policy target', async () => {
   const { getTunnelDiagnostic } = await loadDiagnostics()
-  const invalidHosts = ['::::', '999.1.1.1', 'a..b', '[2001:db8::1', '[::1]]']
+  const invalidHosts = [
+    '::::',
+    '999.1.1.1',
+    'a..b',
+    '[2001:db8::1',
+    '[::1]]',
+    'fe80::1%12',
+    'db.example.com.',
+    'db_name.example'
+  ]
 
   for (const host of invalidHosts) {
     const diagnostic = getTunnelDiagnostic(
       { code: 'SSH_TUNNEL_FORWARDING_PROHIBITED' },
       localDefinition({ sshTunnelRemoteHost: host })
     )
-    assert.match(diagnostic.configExample, /PermitOpen 127\.0\.0\.1:6060/)
+    assert.equal(diagnostic.configExample, '')
     assert.equal(diagnostic.configExample.includes(host), false)
+    assert.equal(
+      hasStep(diagnostic, 'sshTunnel.diagnostic.forwardingProhibited.invalidTarget'),
+      true
+    )
   }
 
   for (const [host, expected] of [
@@ -181,6 +267,24 @@ test('diagnostics reject malformed hosts and canonicalize valid IPv6 without she
       localDefinition({ sshTunnelRemoteHost: host })
     )
     assert.match(diagnostic.configExample, new RegExp(`PermitOpen ${expected.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:6060`))
+  }
+})
+
+test('diagnostics do not turn explicit invalid ports into authorization examples', async () => {
+  const { getTunnelDiagnostic } = await loadDiagnostics()
+  const invalidPorts = ['0', '65536', '6060; PermitOpen *:*', 80.5]
+
+  for (const port of invalidPorts) {
+    const diagnostic = getTunnelDiagnostic(
+      { code: 'SSH_TUNNEL_FORWARDING_PROHIBITED' },
+      localDefinition({ sshTunnelRemotePort: port })
+    )
+    assert.equal(diagnostic.configExample, '')
+    assert.equal(JSON.stringify(diagnostic).includes(String(port)), false)
+    assert.equal(
+      hasStep(diagnostic, 'sshTunnel.diagnostic.forwardingProhibited.invalidTarget'),
+      true
+    )
   }
 })
 
