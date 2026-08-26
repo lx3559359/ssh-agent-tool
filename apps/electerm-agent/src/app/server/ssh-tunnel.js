@@ -8,6 +8,100 @@ const {
 } = require('./ssh-tunnel-probe')
 
 const probeTimeoutMs = 3000
+const maxProbeTimeoutMs = 10000
+
+function normalizeProbeTimeout (value) {
+  return Number.isFinite(value) && value >= 1 && value <= maxProbeTimeoutMs
+    ? value
+    : probeTimeoutMs
+}
+
+function probeCancelledError (stage) {
+  const error = new Error('SSH 隧道检测已取消')
+  error.code = 'SSH_TUNNEL_PROBE_CANCELLED'
+  error.stage = stage
+  return error
+}
+
+function createProbeManager () {
+  const cancellations = new Set()
+  let closed = false
+  return {
+    add (cancel) {
+      if (closed) {
+        cancel()
+        return () => {}
+      }
+      cancellations.add(cancel)
+      return () => cancellations.delete(cancel)
+    },
+    cancelAll () {
+      if (closed) return
+      closed = true
+      for (const cancel of Array.from(cancellations)) cancel()
+      cancellations.clear()
+    }
+  }
+}
+
+function createProbeOperation ({ manager, stage, start, disposer }) {
+  let cancel = () => {}
+  const promise = new Promise((resolve, reject) => {
+    let settled = false
+    let completionScheduled = false
+    let resource
+    let disposedResource
+    let unregister = () => {}
+    const disposeOnce = value => {
+      if (!value || disposedResource === value) return
+      disposedResource = value
+      disposer(value)
+    }
+    const finish = (error, value) => {
+      if (settled) {
+        if (value) disposeOnce(value)
+        return
+      }
+      if (error) {
+        settled = true
+        unregister()
+        if (resource) disposeOnce(resource)
+        reject(error)
+        return
+      }
+      if (completionScheduled) {
+        if (value && value !== resource) disposeOnce(value)
+        return
+      }
+      completionScheduled = true
+      resource = value
+      queueMicrotask(() => {
+        if (settled) return
+        settled = true
+        unregister()
+        resolve(value)
+      })
+    }
+    cancel = (reason = probeCancelledError(stage)) => {
+      if (settled) return
+      settled = true
+      unregister()
+      reject(reason)
+      if (resource) disposeOnce(resource)
+    }
+    unregister = manager.add(() => cancel())
+    if (settled) return
+    try {
+      start(
+        (error, value) => finish(error, value),
+        value => { resource = value }
+      )
+    } catch (error) {
+      finish(error)
+    }
+  })
+  return { promise, cancel }
+}
 
 function tunnelDescriptor (options) {
   return {
@@ -78,6 +172,7 @@ function createController ({
   descriptor,
   close,
   probe,
+  cancelProbes,
   lifecycle = new EventEmitter()
 }) {
   let closed = false
@@ -87,6 +182,7 @@ function createController ({
   lifecycle.close = async () => {
     if (closed) return
     closed = true
+    cancelProbes?.()
     await close()
   }
   return lifecycle
@@ -106,7 +202,13 @@ function passedProbe (stages, startedAt) {
   )
 }
 
-function probeSocksHandshake (host, port, netImpl, timeoutMs = probeTimeoutMs) {
+function probeSocksHandshake (
+  host,
+  port,
+  netImpl,
+  timeoutMs = probeTimeoutMs,
+  probeManager
+) {
   return new Promise((resolve, reject) => {
     let settled = false
     let connected = false
@@ -117,11 +219,13 @@ function probeSocksHandshake (host, port, netImpl, timeoutMs = probeTimeoutMs) {
       error.code = 'SSH_TUNNEL_TEST_TIMEOUT'
       error.stage = connected ? 'proxy-protocol' : 'local-listener'
       finish(reject, error)
-    }, timeoutMs)
+    }, normalizeProbeTimeout(timeoutMs))
+    let unregister = () => {}
     const finish = (callback, value) => {
       if (settled) return
       settled = true
-      clearTimeout(timer)
+      if (timer) clearTimeout(timer)
+      unregister()
       destroySocket(socket)
       callback(value)
     }
@@ -154,19 +258,26 @@ function probeSocksHandshake (host, port, netImpl, timeoutMs = probeTimeoutMs) {
       error.stage = connected ? 'proxy-protocol' : 'local-listener'
       finish(reject, error)
     })
+    if (probeManager) {
+      unregister = probeManager.add(() => {
+        finish(reject, probeCancelledError(
+          connected ? 'proxy-protocol' : 'local-listener'
+        ))
+      })
+    }
   })
 }
 
-function forwardRemoteToLocal (options) {
+function forwardRemoteToLocal (options, probeDependencies = {}) {
   const {
     conn,
     sshTunnelRemotePort,
     sshTunnelLocalPort,
     sshTunnelRemoteHost = '127.0.0.1',
     sshTunnelLocalHost = '127.0.0.1',
-    probeTimeoutMs: timeoutMs = probeTimeoutMs,
     netImpl = require('net')
   } = options
+  const timeoutMs = normalizeProbeTimeout(probeDependencies.probeTimeoutMs)
   const descriptor = tunnelDescriptor({
     ...options,
     sshTunnel: 'forwardRemoteToLocal'
@@ -175,6 +286,7 @@ function forwardRemoteToLocal (options) {
   const sockets = new Set()
   let connectionClosed = false
   let trafficEvidenceEmitted = false
+  const probeManager = createProbeManager()
   const lifecycle = new EventEmitter()
   lifecycle.on('error', () => {})
 
@@ -245,23 +357,28 @@ function forwardRemoteToLocal (options) {
         lifecycle,
         probe: async () => {
           const startedAt = Date.now()
-          let targetSocket
+          const operation = createProbeOperation({
+            manager: probeManager,
+            stage: 'local-target',
+            disposer: destroySocket,
+            start: (finish, setResource) => {
+              const socket = netImpl.connect(
+                sshTunnelLocalPort,
+                sshTunnelLocalHost
+              )
+              setResource(socket)
+              socket.once('connect', () => finish(null, socket))
+              socket.once('error', finish)
+              socket.once('close', () => {
+                const error = new Error('本地目标连接提前关闭')
+                error.code = 'SSH_TUNNEL_LOCAL_TARGET_CLOSED'
+                finish(error)
+              })
+            }
+          })
           try {
             const target = await withProbeTimeout(
-              new Promise((resolve, reject) => {
-                const socket = netImpl.connect(
-                  sshTunnelLocalPort,
-                  sshTunnelLocalHost
-                )
-                targetSocket = socket
-                socket.once('connect', () => resolve(socket))
-                socket.once('error', reject)
-                socket.once('close', () => {
-                  const error = new Error('本地目标连接提前关闭')
-                  error.code = 'SSH_TUNNEL_LOCAL_TARGET_CLOSED'
-                  reject(error)
-                })
-              }),
+              operation.promise,
               timeoutMs,
               'local-target',
               destroySocket
@@ -275,8 +392,8 @@ function forwardRemoteToLocal (options) {
                 : { id: 'end-to-end', status: 'unverified', code: 'SSH_TUNNEL_STAGE_NOT_REACHED', message: '尚无真实远程流量验证完整链路' }
             ], startedAt)
           } catch (error) {
+            operation.cancel(error)
             trafficEvidenceEmitted = false
-            destroySocket(targetSocket)
             const normalized = normalizeForwardingError(error)
             return createProbeResult([
               createProbeStage('server-listener', 'passed', 'SSH_TUNNEL_SERVER_LISTENER_READY', 'SSH 远程监听正常'),
@@ -285,6 +402,7 @@ function forwardRemoteToLocal (options) {
             ])
           }
         },
+        cancelProbes: () => probeManager.cancelAll(),
         close: async () => {
           detach()
           for (const socket of sockets) destroySocket(socket)
@@ -303,16 +421,16 @@ function forwardRemoteToLocal (options) {
   })
 }
 
-function forwardLocalToRemote (options) {
+function forwardLocalToRemote (options, probeDependencies = {}) {
   const {
     conn,
     sshTunnelRemotePort,
     sshTunnelLocalPort,
     sshTunnelRemoteHost = '127.0.0.1',
     sshTunnelLocalHost = '127.0.0.1',
-    probeTimeoutMs: timeoutMs = probeTimeoutMs,
     netImpl = require('net')
   } = options
+  const timeoutMs = normalizeProbeTimeout(probeDependencies.probeTimeoutMs)
   const descriptor = tunnelDescriptor({
     ...options,
     sshTunnel: 'forwardLocalToRemote'
@@ -321,6 +439,7 @@ function forwardLocalToRemote (options) {
   let ready = false
   let resourcesClosed = false
   const lifecycle = new EventEmitter()
+  const probeManager = createProbeManager()
   lifecycle.on('error', () => {})
 
   return new Promise((resolve, reject) => {
@@ -390,20 +509,26 @@ function forwardLocalToRemote (options) {
           lifecycle,
           probe: async () => {
             const startedAt = Date.now()
+            const operation = createProbeOperation({
+              manager: probeManager,
+              stage: 'ssh-forwarding',
+              disposer: destroySocket,
+              start: finish => {
+                conn.forwardOut(
+                  sshTunnelLocalHost,
+                  sshTunnelLocalPort,
+                  sshTunnelRemoteHost,
+                  sshTunnelRemotePort,
+                  (error, stream) => finish(
+                    error ? normalizeForwardingError(error) : null,
+                    stream
+                  )
+                )
+              }
+            })
             try {
               const remoteSocket = await withProbeTimeout(
-                new Promise((resolve, reject) => {
-                  conn.forwardOut(
-                    sshTunnelLocalHost,
-                    sshTunnelLocalPort,
-                    sshTunnelRemoteHost,
-                    sshTunnelRemotePort,
-                    (error, stream) => {
-                      if (error) return reject(normalizeForwardingError(error))
-                      resolve(stream)
-                    }
-                  )
-                }),
+                operation.promise,
                 timeoutMs,
                 'ssh-forwarding',
                 destroySocket
@@ -415,12 +540,14 @@ function forwardLocalToRemote (options) {
                 { id: 'target-service', status: 'passed', code: 'SSH_TUNNEL_TARGET_READY', message: '目标服务可连接' }
               ], startedAt)
             } catch (error) {
+              operation.cancel(error)
               const normalized = normalizeForwardingError(error)
               return createProbeResult(
                 probeStagesForError('forwardLocalToRemote', normalized)
               )
             }
           },
+          cancelProbes: () => probeManager.cancelAll(),
           close: async () => {
             conn.removeListener('close', handleConnectionClose)
             localServer.removeListener('error', handleServerError)
@@ -432,15 +559,15 @@ function forwardLocalToRemote (options) {
   })
 }
 
-function dynamicForward (options) {
+function dynamicForward (options, probeDependencies = {}) {
   const {
     conn,
     sshTunnelLocalPort,
     sshTunnelLocalHost = '127.0.0.1',
-    probeTimeoutMs: timeoutMs = probeTimeoutMs,
     socksImpl = require('socksv5-server'),
     netImpl = require('net')
   } = options
+  const timeoutMs = normalizeProbeTimeout(probeDependencies.probeTimeoutMs)
   const descriptor = tunnelDescriptor({
     ...options,
     sshTunnel: 'dynamicForward'
@@ -450,6 +577,7 @@ function dynamicForward (options) {
   let resourcesClosed = false
   const lifecycle = new EventEmitter()
   let trafficEvidenceEmitted = false
+  const probeManager = createProbeManager()
   lifecycle.on('error', () => {})
 
   return new Promise((resolve, reject) => {
@@ -546,7 +674,8 @@ function dynamicForward (options) {
                 probeHost,
                 sshTunnelLocalPort,
                 netImpl,
-                timeoutMs
+                timeoutMs,
+                probeManager
               )
               return passedProbe([
                 { id: 'local-listener', status: 'passed', code: 'SSH_TUNNEL_LOCAL_LISTENER_READY', message: '本机监听正常' },
@@ -575,6 +704,7 @@ function dynamicForward (options) {
               ])
             }
           },
+          cancelProbes: () => probeManager.cancelAll(),
           close: async () => {
             conn.removeListener('close', handleConnectionClose)
             proxyServer.removeListener('error', handleServerError)

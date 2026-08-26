@@ -39,6 +39,12 @@ function tunnelError (code, message, cause) {
   return error
 }
 
+function runtimeTunnelDefinition (definition) {
+  const safe = { ...definition }
+  delete safe.probeTimeoutMs
+  return safe
+}
+
 function serializableState (entry) {
   return {
     id: entry.definition.id,
@@ -355,9 +361,10 @@ function createSshTunnelRuntime ({
     if (controllers.has(id)) {
       throw tunnelError('SSH_TUNNEL_EXISTS', '该 SSH 隧道已经在运行')
     }
+    const runtimeDefinition = runtimeTunnelDefinition({ ...definition, id })
     let controller
     try {
-      controller = await startController({ ...definition, id })
+      controller = await startController(runtimeDefinition)
     } catch (cause) {
       throw tunnelError(
         String(cause?.code || 'SSH_TUNNEL_START_FAILED'),
@@ -373,11 +380,11 @@ function createSshTunnelRuntime ({
     }
     const entry = {
       controller,
-      definition: {
-        ...definition,
+      definition: runtimeTunnelDefinition({
+        ...runtimeDefinition,
         ...(controller.descriptor || {}),
         id
-      },
+      }),
       state: 'starting',
       startedAt: now(),
       lastTestAt: null,

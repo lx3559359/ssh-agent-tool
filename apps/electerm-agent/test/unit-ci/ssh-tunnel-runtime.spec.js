@@ -37,6 +37,16 @@ function createSocket () {
   return socket
 }
 
+function observeDestroyCalls (socket) {
+  const destroy = socket.destroy.bind(socket)
+  let calls = 0
+  socket.destroy = () => {
+    calls += 1
+    destroy()
+  }
+  return () => calls
+}
+
 function passedLocalProbe (checkedAt = 1) {
   return createProbeResult([
     createProbeStage('local-listener', 'passed', 'SSH_TUNNEL_LOCAL_LISTENER_READY', '本机监听正常'),
@@ -258,6 +268,44 @@ test('local probe passes every stage and releases its forwarding stream', async 
   await controller.close()
 })
 
+test('controller close wins a synchronous forwardOut callback race', async () => {
+  const conn = new EventEmitter()
+  const stream = createSocket()
+  const destroyCalls = observeDestroyCalls(stream)
+  conn.forwardOut = (srcHost, srcPort, host, port, callback) => {
+    callback(null, stream)
+  }
+  let finishServerClose
+  const netImpl = {
+    createServer (handler) {
+      const server = createServer(handler)
+      server.close = callback => { finishServerClose = callback }
+      return server
+    }
+  }
+  const controller = await forwardLocalToRemote({
+    id: 'local-probe-close-race',
+    conn,
+    sshTunnelLocalHost: '127.0.0.1',
+    sshTunnelLocalPort: 44012,
+    sshTunnelRemoteHost: 'service.internal',
+    sshTunnelRemotePort: 443,
+    netImpl
+  })
+
+  const probePromise = controller.probe()
+  const closing = controller.close()
+  const destroyCountAtClose = stream.destroyCount
+  finishServerClose()
+  await closing
+  const result = await probePromise
+
+  assert.equal(destroyCountAtClose, 1)
+  assert.equal(result.stages[1].code, 'SSH_TUNNEL_PROBE_CANCELLED')
+  assert.equal(stream.destroyCount, 1)
+  assert.equal(destroyCalls(), 1)
+})
+
 test('local probe times out quickly and disposes a late forwarding stream once', async () => {
   const conn = new EventEmitter()
   let finishForward
@@ -271,9 +319,8 @@ test('local probe times out quickly and disposes a late forwarding stream once',
     sshTunnelLocalPort: 44011,
     sshTunnelRemoteHost: 'service.internal',
     sshTunnelRemotePort: 443,
-    probeTimeoutMs: 5,
     netImpl: { createServer }
-  })
+  }, { probeTimeoutMs: 5 })
 
   const probePromise = controller.probe()
   const outcome = await Promise.race([
@@ -292,9 +339,11 @@ test('local probe times out quickly and disposes a late forwarding stream once',
   assert.equal(outcome.stages[1].code, 'SSH_TUNNEL_TEST_TIMEOUT')
 
   const lateStream = createSocket()
+  const destroyCalls = observeDestroyCalls(lateStream)
   finishForward(null, lateStream)
   await new Promise(resolve => setImmediate(resolve))
   assert.equal(lateStream.destroyCount, 1)
+  assert.equal(destroyCalls(), 1)
   await controller.close()
 })
 
@@ -628,6 +677,241 @@ test('SOCKS5 handshake accepts a fragmented no-auth response and settles once', 
   assert.equal(await pending, true)
   socket.emit('data', Buffer.from([5, 255]))
   assert.equal(socket.destroyCount, 1)
+})
+
+test('public tunnel definitions cannot override the production probe timeout', async () => {
+  for (const value of [-1, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER]) {
+    const conn = new EventEmitter()
+    let finishForward
+    conn.forwardOut = (srcHost, srcPort, host, port, callback) => {
+      finishForward = callback
+    }
+    const controller = await forwardLocalToRemote({
+      id: `timeout-definition-${String(value)}`,
+      conn,
+      sshTunnelLocalHost: '127.0.0.1',
+      sshTunnelLocalPort: 44100,
+      sshTunnelRemoteHost: 'service.internal',
+      sshTunnelRemotePort: 443,
+      probeTimeoutMs: value,
+      netImpl: { createServer }
+    })
+    const pending = controller.probe()
+    const outcome = await Promise.race([
+      pending,
+      new Promise(resolve => setTimeout(() => resolve('still-pending'), 15))
+    ])
+    await controller.close()
+    if (outcome === 'still-pending') {
+      finishForward(Object.assign(new Error('cleanup'), {
+        code: 'SSH_TUNNEL_PROBE_CANCELLED'
+      }))
+      await pending
+    }
+
+    assert.equal(outcome, 'still-pending')
+    assert.equal('probeTimeoutMs' in controller.descriptor, false)
+  }
+})
+
+test('runtime stop cancels an automatic local probe and disposes its late stream once', async () => {
+  let finishForward
+  let probePromise
+  let controllerDefinition
+  const conn = new EventEmitter()
+  conn.forwardOut = (srcHost, srcPort, host, port, callback) => {
+    finishForward = callback
+  }
+  const runtime = createSshTunnelRuntime({
+    startController: async definition => {
+      controllerDefinition = definition
+      const controller = await forwardLocalToRemote({
+        ...definition,
+        conn,
+        sshTunnelLocalHost: '127.0.0.1',
+        sshTunnelLocalPort: 44110,
+        sshTunnelRemoteHost: 'service.internal',
+        sshTunnelRemotePort: 443,
+        netImpl: { createServer }
+      })
+      const probe = controller.probe.bind(controller)
+      controller.probe = () => {
+        probePromise = probe()
+        return probePromise
+      }
+      return controller
+    }
+  })
+
+  const started = await runtime.start({
+    id: 'cancel-local',
+    sshTunnel: 'forwardLocalToRemote',
+    probeTimeoutMs: Number.MAX_SAFE_INTEGER
+  })
+  await new Promise(resolve => setImmediate(resolve))
+  await runtime.stop('cancel-local')
+  const outcome = await Promise.race([
+    probePromise,
+    new Promise(resolve => setTimeout(() => resolve('still-pending'), 30))
+  ])
+  if (outcome === 'still-pending') {
+    finishForward(Object.assign(new Error('cleanup'), {
+      code: 'SSH_TUNNEL_PROBE_CANCELLED'
+    }))
+    await probePromise
+  }
+
+  assert.notEqual(outcome, 'still-pending')
+  assert.equal(outcome.stages[1].code, 'SSH_TUNNEL_PROBE_CANCELLED')
+  const lateStream = createSocket()
+  const destroyCalls = observeDestroyCalls(lateStream)
+  finishForward(null, lateStream)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(lateStream.destroyCount, 1)
+  assert.equal(destroyCalls(), 1)
+  assert.equal('probeTimeoutMs' in started.definition, false)
+  assert.equal('probeTimeoutMs' in controllerDefinition, false)
+})
+
+test('runtime closeAll cancels SOCKS and remote probes and destroys their sockets', async () => {
+  const probePromises = new Map()
+  const remoteSocket = createSocket()
+  const socksSocket = createSocket()
+  const remoteConn = new EventEmitter()
+  remoteConn.forwardIn = (host, port, callback) => callback()
+  remoteConn.unforwardIn = (host, port, callback) => callback()
+  const socksConn = new EventEmitter()
+  const socksServer = new EventEmitter()
+  socksServer.useAuth = () => socksServer
+  socksServer.listen = (port, host, callback) => queueMicrotask(callback)
+  socksServer.close = callback => callback?.()
+  const runtime = createSshTunnelRuntime({
+    startController: async definition => {
+      const controller = definition.sshTunnel === 'forwardRemoteToLocal'
+        ? await forwardRemoteToLocal({
+          ...definition,
+          conn: remoteConn,
+          sshTunnelLocalPort: 44120,
+          sshTunnelRemotePort: 44121,
+          netImpl: { connect: () => remoteSocket }
+        })
+        : await dynamicForward({
+          ...definition,
+          conn: socksConn,
+          sshTunnelLocalPort: 44122,
+          socksImpl: {
+            auth: { None: () => ({}) },
+            createServer: () => socksServer
+          },
+          netImpl: { connect: () => socksSocket }
+        })
+      const probe = controller.probe.bind(controller)
+      controller.probe = () => {
+        const promise = probe()
+        probePromises.set(definition.id, promise)
+        return promise
+      }
+      return controller
+    }
+  })
+
+  await runtime.start({ id: 'cancel-remote', sshTunnel: 'forwardRemoteToLocal' })
+  await runtime.start({ id: 'cancel-socks', sshTunnel: 'dynamicForward' })
+  await new Promise(resolve => setImmediate(resolve))
+  const closed = await runtime.closeAll('test-cleanup')
+  const destroyCountsAfterClose = [
+    remoteSocket.destroyCount,
+    socksSocket.destroyCount
+  ]
+  if (!remoteSocket.destroyCount) {
+    remoteSocket.emit('error', Object.assign(new Error('cleanup'), {
+      code: 'SSH_TUNNEL_PROBE_CANCELLED'
+    }))
+  }
+  if (!socksSocket.destroyCount) {
+    socksSocket.emit('error', Object.assign(new Error('cleanup'), {
+      code: 'SSH_TUNNEL_PROBE_CANCELLED'
+    }))
+  }
+  const [remoteResult, socksResult] = await Promise.all([
+    probePromises.get('cancel-remote'),
+    probePromises.get('cancel-socks')
+  ])
+
+  assert.deepEqual(closed, { reason: 'test-cleanup', closed: 2, failed: 0 })
+  assert.deepEqual(destroyCountsAfterClose, [1, 1])
+  assert.equal(remoteResult.stages[1].code, 'SSH_TUNNEL_PROBE_CANCELLED')
+  assert.equal(socksResult.stages[0].code, 'SSH_TUNNEL_PROBE_CANCELLED')
+})
+
+test('runtime reconnect cancels the old controller probe and its late stream', async () => {
+  const scheduled = []
+  const finishForwards = []
+  const probePromises = []
+  const controllers = []
+  const runtime = createSshTunnelRuntime({
+    startController: async definition => {
+      const conn = new EventEmitter()
+      conn.forwardOut = (srcHost, srcPort, host, port, callback) => {
+        finishForwards.push(callback)
+      }
+      const controller = await forwardLocalToRemote({
+        ...definition,
+        conn,
+        sshTunnelLocalHost: '127.0.0.1',
+        sshTunnelLocalPort: 44130,
+        sshTunnelRemoteHost: 'service.internal',
+        sshTunnelRemotePort: 443,
+        netImpl: { createServer }
+      })
+      const probe = controller.probe.bind(controller)
+      controller.probe = () => {
+        const promise = probe()
+        probePromises.push(promise)
+        return promise
+      }
+      controllers.push(controller)
+      return controller
+    },
+    schedule: (callback, delay) => {
+      const task = { callback, delay }
+      scheduled.push(task)
+      return task
+    }
+  })
+
+  await runtime.start({
+    id: 'cancel-reconnect',
+    sshTunnel: 'forwardLocalToRemote'
+  })
+  await new Promise(resolve => setImmediate(resolve))
+  controllers[0].emit('close', { code: 'SSH_CONNECTION_CLOSED' })
+  await scheduled[0].callback()
+  const oldOutcome = await Promise.race([
+    probePromises[0],
+    new Promise(resolve => setTimeout(() => resolve('still-pending'), 30))
+  ])
+  if (oldOutcome === 'still-pending') {
+    finishForwards[0](Object.assign(new Error('cleanup'), {
+      code: 'SSH_TUNNEL_PROBE_CANCELLED'
+    }))
+    await probePromises[0]
+  }
+
+  assert.notEqual(oldOutcome, 'still-pending')
+  assert.equal(oldOutcome.stages[1].code, 'SSH_TUNNEL_PROBE_CANCELLED')
+  const lateStream = createSocket()
+  const destroyCalls = observeDestroyCalls(lateStream)
+  finishForwards[0](null, lateStream)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(destroyCalls(), 1)
+
+  await runtime.stop('cancel-reconnect')
+  if (finishForwards[1]) {
+    finishForwards[1](Object.assign(new Error('cleanup'), {
+      code: 'SSH_TUNNEL_PROBE_CANCELLED'
+    }))
+  }
 })
 
 test('runtime isolates controllers, rejects duplicates, and serializes state', async () => {
