@@ -48,7 +48,17 @@ export function focusErrorFor (requestedSection, context = {}) {
   )
 }
 
+export function currentTunnelTypeFor (context = {}) {
+  return (
+    context?.tunnelType ||
+    context?.definition?.sshTunnel ||
+    context?.definition?.type ||
+    ''
+  )
+}
+
 function GuideContent ({ section, context, focusError }) {
+  const currentTunnelType = currentTunnelTypeFor(context)
   if (section === 'local-forward') {
     return (
       <section className='ssh-tunnel-guide-section'>
@@ -189,7 +199,7 @@ function GuideContent ({ section, context, focusError }) {
           <p>{e('shellpilotTunnelGuideChooseRemote')}</p>
         </article>
       </div>
-      {context?.tunnelType ? <p className='ssh-tunnel-guide-context'>{e('shellpilotTunnelGuideCurrentType')}: {String(context.tunnelType)}</p> : null}
+      {currentTunnelType ? <p className='ssh-tunnel-guide-context'>{e('shellpilotTunnelGuideCurrentType')}: {String(currentTunnelType)}</p> : null}
     </section>
   )
 }

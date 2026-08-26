@@ -97,9 +97,15 @@ export function guideRequestFor (usage = {}, diagnostic = null, definition = {})
     context: {
       definition,
       errorCode: diagnostic?.code,
-      helpSection: diagnostic?.helpSection
+      helpSection: diagnostic?.helpSection,
+      tunnelType: definition?.sshTunnel || definition?.type
     }
   }
+}
+
+export function openGuide (onOpenGuide, request = {}) {
+  if (typeof onOpenGuide !== 'function') return
+  onOpenGuide(request.section, request.context)
 }
 
 export function canOpenWebFor (usage = {}, runtimeWindow) {
@@ -109,8 +115,20 @@ export function canOpenWebFor (usage = {}, runtimeWindow) {
   )
 }
 
-export function canCopyFor (text, copyFunction) {
-  return Boolean(text) && typeof copyFunction === 'function'
+export function canCopyFor (text, runtimeWindow) {
+  return Boolean(text) && typeof runtimeWindow?.pre?.writeClipboard === 'function'
+}
+
+export async function copyTextSafely (text, runtimeWindow, copyFunction) {
+  if (!canCopyFor(text, runtimeWindow) || typeof copyFunction !== 'function') {
+    return false
+  }
+  try {
+    await copyFunction(text)
+    return true
+  } catch {
+    return false
+  }
 }
 
 function tunnelName (entry) {
@@ -118,7 +136,8 @@ function tunnelName (entry) {
 }
 
 function copyButton (text, label) {
-  const canCopy = canCopyFor(text, copy)
+  const runtimeWindow = typeof window === 'undefined' ? null : window
+  const canCopy = canCopyFor(text, runtimeWindow)
   return (
     <Button
       size='small'
@@ -126,7 +145,7 @@ function copyButton (text, label) {
       aria-label={label}
       disabled={!canCopy}
       onClick={() => {
-        if (canCopy) copy(text)
+        copyTextSafely(text, runtimeWindow, copy)
       }}
     >
       {label}
@@ -187,7 +206,7 @@ function AccessPanel ({ usage, definition, onOpenGuide }) {
           <Button
             size='small'
             icon={<ReadOutlined />}
-            onClick={() => onOpenGuide?.(guideRequestFor(usage, null, definition))}
+            onClick={() => openGuide(onOpenGuide, guideRequestFor(usage, null, definition))}
           >
             {e('shellpilotTunnelGuideSocksBrowser')}
           </Button>
@@ -206,7 +225,7 @@ function AccessPanel ({ usage, definition, onOpenGuide }) {
         </dl>
         <Space wrap>
           {copyButton(usage.endpoint, e('shellpilotTunnelCopyEndpoint'))}
-          <Button size='small' icon={<ReadOutlined />} onClick={() => onOpenGuide?.(guideRequestFor(usage, null, definition))}>
+          <Button size='small' icon={<ReadOutlined />} onClick={() => openGuide(onOpenGuide, guideRequestFor(usage, null, definition))}>
             {e('shellpilotTunnelGuideHowToAccess')}
           </Button>
         </Space>
@@ -222,7 +241,7 @@ function AccessPanel ({ usage, definition, onOpenGuide }) {
         <p>{e('shellpilotTunnelRemoteAccessFromServer')}</p>
         <Space wrap>
           {copyButton(usage.endpoint, e('shellpilotTunnelCopyEndpoint'))}
-          <Button size='small' icon={<ReadOutlined />} onClick={() => onOpenGuide?.(guideRequestFor(usage, null, definition))}>
+          <Button size='small' icon={<ReadOutlined />} onClick={() => openGuide(onOpenGuide, guideRequestFor(usage, null, definition))}>
             {e('shellpilotTunnelGuideRemoteSafety')}
           </Button>
         </Space>
@@ -271,6 +290,7 @@ function StageGrid ({ stages }) {
 
 function DiagnosticPanel ({ diagnostic, definition, onOpenGuide }) {
   if (!diagnostic) return null
+  const runtimeWindow = typeof window === 'undefined' ? null : window
   return (
     <section className={`ssh-tunnel-diagnostic ssh-tunnel-diagnostic--${diagnostic.severity}`}>
       <span>{e('shellpilotTunnelFailureNextStep')}</span>
@@ -304,10 +324,9 @@ function DiagnosticPanel ({ diagnostic, definition, onOpenGuide }) {
                           size='small'
                           icon={<CopyOutlined />}
                           aria-label={e('shellpilotTunnelCopyDiagnosticChecks')}
-                          disabled={!canCopyFor(diagnostic.checksText, copy)}
+                          disabled={!canCopyFor(diagnostic.checksText, runtimeWindow)}
                           onClick={() => {
-                            const canCopy = canCopyFor(diagnostic.checksText, copy)
-                            if (canCopy) copy(diagnostic.checksText)
+                            copyTextSafely(diagnostic.checksText, runtimeWindow, copy)
                           }}
                         />
                       </header>
@@ -327,10 +346,9 @@ function DiagnosticPanel ({ diagnostic, definition, onOpenGuide }) {
                           size='small'
                           icon={<CopyOutlined />}
                           aria-label={e('shellpilotTunnelCopyDiagnosticConfig')}
-                          disabled={!canCopyFor(diagnostic.configExample, copy)}
+                          disabled={!canCopyFor(diagnostic.configExample, runtimeWindow)}
                           onClick={() => {
-                            const canCopy = canCopyFor(diagnostic.configExample, copy)
-                            if (canCopy) copy(diagnostic.configExample)
+                            copyTextSafely(diagnostic.configExample, runtimeWindow, copy)
                           }}
                         />
                       </header>
@@ -346,7 +364,7 @@ function DiagnosticPanel ({ diagnostic, definition, onOpenGuide }) {
       <Button
         size='small'
         icon={<ReadOutlined />}
-        onClick={() => onOpenGuide?.(guideRequestFor({}, diagnostic, definition))}
+        onClick={() => openGuide(onOpenGuide, guideRequestFor({}, diagnostic, definition))}
       >
         {e('shellpilotTunnelOpenFixGuide')}
       </Button>
@@ -400,7 +418,7 @@ export default function SshTunnelRuntimeCard ({
           size='small'
           icon={<ReadOutlined />}
           className='ssh-tunnel-runtime-guide-button'
-          onClick={() => onOpenGuide?.(guideRequestFor(usage, diagnostic, entry?.definition))}
+          onClick={() => openGuide(onOpenGuide, guideRequestFor(usage, diagnostic, entry?.definition))}
         >
           {e('shellpilotTunnelOpenFullGuide')}
         </Button>

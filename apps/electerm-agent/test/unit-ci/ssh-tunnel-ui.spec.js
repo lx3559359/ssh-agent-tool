@@ -28,8 +28,10 @@ function loadRuntimeGuidanceLogic () {
     'currentFailureFor',
     'guideSectionFor',
     'guideRequestFor',
+    'openGuide',
     'canOpenWebFor',
-    'canCopyFor'
+    'canCopyFor',
+    'copyTextSafely'
   ])
   const body = []
   const foundExports = []
@@ -67,7 +69,8 @@ function loadGuideLogic () {
     'errorFocusByHelpSection',
     'errorFocusByCode',
     'normalizeSection',
-    'focusErrorFor'
+    'focusErrorFor',
+    'currentTunnelTypeFor'
   ])
   const body = []
   const foundExports = []
@@ -280,7 +283,7 @@ test('runtime guidance card derives truthful availability and safe access action
   assert.match(card, /failureStates\.has\(entry\?\.state\)[\s\S]*?entry\?\.testState === 'checking'[\s\S]*?entry\?\.lastTest\?\.verdict \|\| 'unverified'/)
   assert.match(card, /canOpenWebFor\(usage, runtimeWindow\)/)
   assert.match(card, /runtimeWindow\.openLink\(usage\.url\)/)
-  assert.match(card, /canCopyFor\(text, copy\)/)
+  assert.match(card, /canCopyFor\(text, runtimeWindow\)/)
   assert.match(card, /data-stage=\{stage\.id\}/)
   for (const status of ['passed', 'limited', 'failed', 'unverified']) {
     assert.match(card, new RegExp(`${status}: \\{ icon:`))
@@ -385,10 +388,10 @@ test('runtime guidance keeps diagnostics separate and callbacks defensive', () =
 
   assert.match(card, /className='ssh-tunnel-diagnostic-checks'/)
   assert.match(card, /className='ssh-tunnel-diagnostic-config'/)
-  assert.match(card, /copy\(diagnostic\.checksText\)/)
-  assert.match(card, /copy\(diagnostic\.configExample\)/)
+  assert.match(card, /copyTextSafely\(diagnostic\.checksText, runtimeWindow, copy\)/)
+  assert.match(card, /copyTextSafely\(diagnostic\.configExample, runtimeWindow, copy\)/)
   assert.doesNotMatch(card, /checksText\s*\+|configExample\s*\+/)
-  assert.match(card, /onOpenGuide\?\.\(guideRequestFor\([^)]*diagnostic[^)]*definition[^)]*\)\)/)
+  assert.match(card, /openGuide\(onOpenGuide, guideRequestFor\([^)]*diagnostic[^)]*definition[^)]*\)\)/)
   for (const callback of [
     'onTest',
     'onEdit',
@@ -402,7 +405,8 @@ test('runtime guidance keeps diagnostics separate and callbacks defensive', () =
 })
 
 test('every runtime card exposes a safe guide action with context mapping', () => {
-  const { guideSectionFor, guideRequestFor } = loadRuntimeGuidanceLogic()
+  const { guideSectionFor, guideRequestFor, openGuide } = loadRuntimeGuidanceLogic()
+  const { normalizeSection, focusErrorFor } = loadGuideLogic()
   const card = source('src/client/components/ssh-tunnel/ssh-tunnel-runtime-card.jsx')
 
   assert.equal(typeof guideSectionFor, 'function')
@@ -421,23 +425,40 @@ test('every runtime card exposes a safe guide action with context mapping', () =
         code: 'SSH_TUNNEL_FORWARDING_PROHIBITED',
         helpSection: 'forwarding-prohibited'
       },
-      { type: 'local', remoteHost: '127.0.0.1' }
+      { sshTunnel: 'forwardLocalToRemote', remoteHost: '127.0.0.1' }
     ))),
     {
       section: 'forwarding-prohibited',
       context: {
-        definition: { type: 'local', remoteHost: '127.0.0.1' },
+        definition: { sshTunnel: 'forwardLocalToRemote', remoteHost: '127.0.0.1' },
         errorCode: 'SSH_TUNNEL_FORWARDING_PROHIBITED',
-        helpSection: 'forwarding-prohibited'
+        helpSection: 'forwarding-prohibited',
+        tunnelType: 'forwardLocalToRemote'
       }
     }
   )
+  let callbackArguments = null
+  openGuide((...args) => { callbackArguments = args }, guideRequestFor(
+    { kind: 'web' },
+    {
+      code: 'SSH_TUNNEL_FORWARDING_PROHIBITED',
+      helpSection: 'forwarding-prohibited'
+    },
+    { sshTunnel: 'forwardLocalToRemote' }
+  ))
+  assert.equal(callbackArguments.length, 2)
+  assert.equal(callbackArguments[0], 'forwarding-prohibited')
+  assert.equal(callbackArguments[1].helpSection, 'forwarding-prohibited')
+  assert.equal(callbackArguments[1].tunnelType, 'forwardLocalToRemote')
+  assert.equal(normalizeSection(callbackArguments[0]), 'errors')
+  assert.equal(focusErrorFor(callbackArguments[0], callbackArguments[1]), 'forwarding-prohibited')
   assert.match(card, /className='ssh-tunnel-runtime-guide-button'/)
-  assert.match(card, /onOpenGuide\?\.\(guideRequestFor\(usage, diagnostic, entry\?\.definition\)\)/)
+  assert.match(card, /openGuide\(onOpenGuide, guideRequestFor\(usage, diagnostic, entry\?\.definition\)\)/)
+  assert.doesNotMatch(card, /onOpenGuide\?\.\(guideRequestFor/)
 })
 
-test('web and clipboard actions share defensive capability gates', () => {
-  const { canOpenWebFor, canCopyFor } = loadRuntimeGuidanceLogic()
+test('web and clipboard actions share defensive capability gates', async () => {
+  const { canOpenWebFor, canCopyFor, copyTextSafely } = loadRuntimeGuidanceLogic()
   const card = source('src/client/components/ssh-tunnel/ssh-tunnel-runtime-card.jsx')
 
   assert.equal(canOpenWebFor({ canOpen: true, url: 'http://127.0.0.1:16060' }, undefined), false)
@@ -445,11 +466,20 @@ test('web and clipboard actions share defensive capability gates', () => {
   assert.equal(canOpenWebFor({ canOpen: false, url: 'http://127.0.0.1:16060' }, { openLink () {} }), false)
   assert.equal(canOpenWebFor({ canOpen: true }, { openLink () {} }), false)
   assert.equal(canOpenWebFor({ canOpen: true, url: 'http://127.0.0.1:16060' }, { openLink () {} }), true)
-  assert.equal(canCopyFor('127.0.0.1:16060', () => {}), true)
-  assert.equal(canCopyFor('', () => {}), false)
+  const clipboardWindow = { pre: { writeClipboard () {} } }
+  assert.equal(canCopyFor('127.0.0.1:16060', clipboardWindow), true)
+  assert.equal(canCopyFor('', clipboardWindow), false)
   assert.equal(canCopyFor('127.0.0.1:16060', undefined), false)
+  assert.equal(canCopyFor('127.0.0.1:16060', { pre: {} }), false)
+  let copied = ''
+  assert.equal(await copyTextSafely('127.0.0.1:16060', clipboardWindow, value => { copied = value }), true)
+  assert.equal(copied, '127.0.0.1:16060')
+  assert.equal(await copyTextSafely('blocked', { pre: {} }, () => { throw new Error('must not run') }), false)
+  assert.equal(await copyTextSafely('sync failure', clipboardWindow, () => { throw new Error('failed') }), false)
+  assert.equal(await copyTextSafely('async failure', clipboardWindow, () => Promise.reject(new Error('failed'))), false)
   assert.match(card, /disabled=\{!canOpenWeb\}[\s\S]*if \(canOpenWeb\)/)
-  assert.match(card, /disabled=\{!canCopy\}[\s\S]*if \(canCopy\)/)
+  assert.match(card, /typeof runtimeWindow\?\.pre\?\.writeClipboard === 'function'/)
+  assert.match(card, /disabled=\{!canCopy\}[\s\S]*copyTextSafely\(text, runtimeWindow, copy\)/)
 })
 
 test('beginner guide has seven synchronized sections and safe error mapping', () => {
@@ -497,6 +527,18 @@ test('guide section labels translate at render time', () => {
   assert.equal(guideSections.some(section => Object.hasOwn(section, 'label')), false)
   assert.match(guide, /\{e\(item\.labelKey\)\}/)
   assert.doesNotMatch(guide, /label: e\(/)
+})
+
+test('guide derives the current type from explicit and definition context', () => {
+  const guide = source('src/client/components/ssh-tunnel/ssh-tunnel-guide-modal.jsx')
+  const { currentTunnelTypeFor } = loadGuideLogic()
+
+  assert.equal(currentTunnelTypeFor({ tunnelType: 'explicit', definition: { sshTunnel: 'ignored' } }), 'explicit')
+  assert.equal(currentTunnelTypeFor({ definition: { sshTunnel: 'dynamicForward', type: 'ignored' } }), 'dynamicForward')
+  assert.equal(currentTunnelTypeFor({ definition: { type: 'remote' } }), 'remote')
+  assert.equal(currentTunnelTypeFor({}), '')
+  assert.match(guide, /const currentTunnelType = currentTunnelTypeFor\(context\)/)
+  assert.match(guide, /currentTunnelType \? <p className='ssh-tunnel-guide-context'/)
 })
 
 test('beginner guide uses the planned localized content contract', () => {
@@ -556,6 +598,10 @@ test('runtime guidance styles match the approved hierarchy responsively', () => 
   assert.doesNotMatch(styles, /\.ssh-tunnel-stage--(?:passed|limited|failed)\r?\n\s+color var\(--sp-(?:success|warning|danger),/)
   assert.doesNotMatch(styles, /&--(?:passed|limited|failed)\r?\n\s+color var\(--sp-(?:success|warning|danger),/)
   assert.doesNotMatch(styles, /color #(?:067647|b54708|b42318)/i)
+  assert.match(styles, /\.ssh-tunnel-guide-nav[\s\S]*button[\s\S]*color var\(--sp-text\)/)
+  assert.match(styles, /\.ssh-tunnel-guide-kicker[\s\S]*font-size 12px[\s\S]*color var\(--sp-text-muted\)/)
+  assert.doesNotMatch(styles, /\.ssh-tunnel-guide-nav[\s\S]*?color #1677ff/)
+  assert.doesNotMatch(styles, /\.ssh-tunnel-guide-kicker[\s\S]*?color #1677ff/)
 })
 
 test('both unconnected JSX components parse in the production syntax contract', () => {

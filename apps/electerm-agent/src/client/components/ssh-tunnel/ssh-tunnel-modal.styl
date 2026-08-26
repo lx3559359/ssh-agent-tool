@@ -595,7 +595,7 @@
     width 100%
     padding 9px 10px
     text-align left
-    color inherit
+    color var(--sp-text)
     background transparent
     border 1px solid transparent
     border-radius var(--sp-radius-small)
@@ -604,9 +604,9 @@
 
     &:hover,
     &.active
-      color #1677ff
-      background rgba(22, 119, 255, .08)
-      border-color rgba(22, 119, 255, .22)
+      color var(--sp-text)
+      background var(--sp-primary-soft, rgba(22, 119, 255, .08))
+      border-color var(--sp-primary, #2878e6)
 
 .ssh-tunnel-guide-content
   min-width 0
@@ -630,7 +630,7 @@
 .ssh-tunnel-guide-kicker
   font-size 12px
   font-weight 600
-  color #1677ff
+  color var(--sp-text-muted)
 
 .ssh-tunnel-guide-flow
   display block
