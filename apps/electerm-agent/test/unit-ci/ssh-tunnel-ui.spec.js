@@ -3,6 +3,7 @@ const assert = require('node:assert/strict')
 const fs = require('fs')
 const path = require('path')
 const vm = require('node:vm')
+const { pathToFileURL } = require('node:url')
 const parser = require('@babel/parser')
 const generate = require('@babel/generator').default
 const t = require('@babel/types')
@@ -20,6 +21,53 @@ function parseJsx (relativePath) {
   })
 }
 
+function findFunction (relativePath, functionName) {
+  const ast = parseJsx(relativePath)
+  let found = null
+  t.traverseFast(ast, node => {
+    if (!found && t.isFunctionDeclaration(node) && node.id?.name === functionName) {
+      found = node
+    }
+  })
+  assert.ok(found, `${functionName} must exist in ${relativePath}`)
+  return found
+}
+
+function loadModalFunction (functionName, context = {}) {
+  const declaration = findFunction(
+    'src/client/components/ssh-tunnel/ssh-tunnel-modal.jsx',
+    functionName
+  )
+  const assignment = parser.parse(`module.exports = ${functionName}`).program.body[0]
+  const module = { exports: null }
+  vm.runInNewContext(
+    generate(t.file(t.program([declaration, assignment]))).code,
+    { module, ...context },
+    { filename: `ssh-tunnel-modal.${functionName}.js` }
+  )
+  return module.exports
+}
+
+async function loadTunnelCatalog () {
+  const filename = path.join(root, 'src/client/common/shellpilot-i18n-overrides.js')
+  return import(`${pathToFileURL(filename).href}?tunnel-ui=${Date.now()}-${Math.random()}`)
+}
+
+function referencedTunnelTranslationKeys () {
+  const files = [
+    'src/client/components/ssh-tunnel/ssh-tunnel-modal.jsx',
+    'src/client/components/ssh-tunnel/ssh-tunnel-runtime-card.jsx',
+    'src/client/components/ssh-tunnel/ssh-tunnel-guide-modal.jsx',
+    'src/client/components/ssh-tunnel/ssh-tunnel-diagnostics.js'
+  ]
+  const pattern = /['"]((?:shellpilotTunnel[A-Za-z0-9]+)|(?:sshTunnel\.diagnostic\.[A-Za-z0-9.]+))['"]/g
+  const keys = new Set()
+  for (const file of files) {
+    for (const match of source(file).matchAll(pattern)) keys.add(match[1])
+  }
+  return [...keys].sort()
+}
+
 function loadRuntimeGuidanceLogic () {
   const ast = parseJsx('src/client/components/ssh-tunnel/ssh-tunnel-runtime-card.jsx')
   const names = new Set([
@@ -31,7 +79,9 @@ function loadRuntimeGuidanceLogic () {
     'openGuide',
     'canOpenWebFor',
     'canCopyFor',
-    'copyTextSafely'
+    'copyTextSafely',
+    'diagnosticValueKeyByToken',
+    'localizedDiagnosticValues'
   ])
   const body = []
   const foundExports = []
@@ -144,9 +194,10 @@ test('top bar exposes a lazy-loaded SSH tunnel manager', () => {
 
 test('SSH tunnel manager covers three tunnel types and common templates', () => {
   const modal = source('src/client/components/ssh-tunnel/ssh-tunnel-modal.jsx')
+  const runtimeCard = source('src/client/components/ssh-tunnel/ssh-tunnel-runtime-card.jsx')
   const definition = source('src/client/components/ssh-tunnel/ssh-tunnel-definition.js')
   const translations = source('src/client/common/shellpilot-i18n-overrides.js')
-  const combined = `${modal}\n${definition}\n${translations}`
+  const combined = `${modal}\n${runtimeCard}\n${definition}\n${translations}`
 
   for (const label of [
     '本地转发',
@@ -161,9 +212,9 @@ test('SSH tunnel manager covers three tunnel types and common templates', () => 
     assert.match(combined, new RegExp(label))
   }
   assert.match(modal, /shellpilotTunnelConnectToStart/)
-  assert.match(modal, /shellpilotTunnelCopyDescription/)
-  assert.match(modal, /shellpilotTunnelEditAndRestart/)
-  assert.match(modal, /shellpilotTunnelStop/)
+  assert.match(runtimeCard, /shellpilotTunnelCopyAddress/)
+  assert.match(runtimeCard, /shellpilotTunnelEditAndRestart/)
+  assert.match(runtimeCard, /shellpilotTunnelStop/)
 })
 
 test('SSH tunnel manager calls the native session API without terminal command injection', () => {
@@ -262,12 +313,12 @@ test('SSH tunnel manager shows health states and bounded disconnect history', ()
   assert.match(translations, /shellpilotTunnelDisconnectHistory: '断线记录'/)
 })
 
-test('SSH tunnel manager surfaces the latest actionable runtime failure', () => {
-  const modal = source('src/client/components/ssh-tunnel/ssh-tunnel-modal.jsx')
+test('SSH tunnel runtime card surfaces the current actionable failure', () => {
+  const card = source('src/client/components/ssh-tunnel/ssh-tunnel-runtime-card.jsx')
 
-  assert.match(modal, /latestTunnelFailure/)
-  assert.match(modal, /ssh-tunnel-runtime-failure/)
-  assert.match(modal, /latestFailure\.message/)
+  assert.match(card, /currentFailureFor/)
+  assert.match(card, /ssh-tunnel-diagnostic/)
+  assert.match(card, /diagnostic\.summaryKey/)
 })
 
 test('runtime guidance card derives truthful availability and safe access actions', () => {
@@ -289,6 +340,32 @@ test('runtime guidance card derives truthful availability and safe access action
     assert.match(card, new RegExp(`${status}: \\{ icon:`))
   }
   assert.doesNotMatch(card, /lastTest\.stages\.map/)
+})
+
+test('runtime guidance uses the planned public translation keys instead of aliases', () => {
+  const card = source('src/client/components/ssh-tunnel/ssh-tunnel-runtime-card.jsx')
+  const modal = source('src/client/components/ssh-tunnel/ssh-tunnel-modal.jsx')
+  for (const key of [
+    'shellpilotTunnelHowToUse',
+    'shellpilotTunnelNoBrowserProxy',
+    'shellpilotTunnelNeedsSocksProxy',
+    'shellpilotTunnelOpenBrowser',
+    'shellpilotTunnelCopyAddress',
+    'shellpilotTunnelCopyChecks',
+    'shellpilotTunnelFullGuide'
+  ]) {
+    assert.match(`${card}\n${modal}`, new RegExp(key), key)
+  }
+  for (const alias of [
+    'shellpilotTunnelAccessTitle',
+    'shellpilotTunnelSocksRequiresAppProxy',
+    'shellpilotTunnelOpenInBrowser',
+    'shellpilotTunnelCopyEndpoint',
+    'shellpilotTunnelCopyDiagnosticChecks',
+    'shellpilotTunnelOpenFullGuide'
+  ]) {
+    assert.doesNotMatch(`${card}\n${modal}`, new RegExp(alias), alias)
+  }
 })
 
 test('runtime guidance pure logic preserves every availability state', () => {
@@ -364,7 +441,7 @@ test('diagnostic steps use the shared placeholder formatter with values', () => 
     'Check 127.0.0.1:16060 at ssh-forwarding'
   )
   assert.match(card, /import \{ formatShellPilotTranslation \} from '\.\.\/\.\.\/common\/shellpilot-i18n-overrides\.js'/)
-  assert.match(card, /formatShellPilotTranslation\(e, step\.key, step\.values\)/)
+  assert.match(card, /formatShellPilotTranslation\(e, step\.key, localizedDiagnosticValues\(step\.values\)\)/)
   assert.doesNotMatch(card, /dangerouslySetInnerHTML/)
 })
 
@@ -607,4 +684,410 @@ test('runtime guidance styles match the approved hierarchy responsively', () => 
 test('both unconnected JSX components parse in the production syntax contract', () => {
   assert.doesNotThrow(() => parseJsx('src/client/components/ssh-tunnel/ssh-tunnel-runtime-card.jsx'))
   assert.doesNotThrow(() => parseJsx('src/client/components/ssh-tunnel/ssh-tunnel-guide-modal.jsx'))
+})
+
+test('SSH tunnel modal wires one layered runtime card and one stateful guide modal', () => {
+  const modal = source('src/client/components/ssh-tunnel/ssh-tunnel-modal.jsx')
+
+  assert.match(modal, /import SshTunnelRuntimeCard from '\.\/ssh-tunnel-runtime-card\.jsx'/)
+  assert.match(modal, /import SshTunnelGuideModal from '\.\/ssh-tunnel-guide-modal\.jsx'/)
+  assert.match(modal, /useState\(\{\s*open: false,\s*section: 'choose-type',\s*context: \{\}\s*\}\)/)
+  assert.equal((modal.match(/<SshTunnelRuntimeCard\b/g) || []).length, 1)
+  assert.equal((modal.match(/<SshTunnelGuideModal\b/g) || []).length, 1)
+  assert.match(modal, /<SshTunnelRuntimeCard[\s\S]*?key=\{entry\.id\}[\s\S]*?entry=\{runtimeEntryForCard\(entry\)\}[\s\S]*?busy=\{actionId\}[\s\S]*?onTest=\{handleTest\}[\s\S]*?onEdit=\{\(\) => handleEdit\(entry\)\}[\s\S]*?onEditAndRestart=\{\(\) => handleEditAndRestart\(entry\)\}[\s\S]*?onStop=\{handleStop\}[\s\S]*?onOpenGuide=\{\(section, context\) => openGuide\(section, context\)\}[\s\S]*?onShowHistory=\{\(\) => showDisconnectHistory\(entry\)\}/)
+  assert.match(modal, /<SshTunnelGuideModal[\s\S]*?open=\{guideState\.open\}[\s\S]*?activeSection=\{guideState\.section\}[\s\S]*?context=\{guideState\.context\}/)
+  assert.match(modal, /setGuideState\(current => \(\{[\s\S]*?\.\.\.current,[\s\S]*?open: false[\s\S]*?\}\)\)/)
+  assert.doesNotMatch(modal, /function TunnelRuntimeFailure/)
+  assert.doesNotMatch(modal, /className='ssh-tunnel-test-result/)
+  assert.doesNotMatch(modal, /<article className='ssh-tunnel-running-card'/)
+})
+
+test('runtime card keeps a truthful lifecycle label without mutating the callback entry', () => {
+  const entry = {
+    id: 'tunnel-1',
+    state: 'running',
+    definition: { name: 'MySQL', usageProfile: 'mysql' }
+  }
+  const runtimeEntryForCard = loadModalFunction('runtimeEntryForCard', {
+    tunnelName: value => value.definition.name,
+    healthPresentation: () => ({ label: 'shellpilotTunnelRunningStatus' }),
+    e: key => key === 'shellpilotTunnelRunningStatus' ? '运行中' : key
+  })
+  const presentationEntry = runtimeEntryForCard(entry)
+
+  assert.notEqual(presentationEntry, entry)
+  assert.notEqual(presentationEntry.definition, entry.definition)
+  assert.equal(presentationEntry.definition.name, 'MySQL · 运行中')
+  assert.equal(entry.definition.name, 'MySQL')
+  assert.equal(presentationEntry.definition.usageProfile, 'mysql')
+})
+
+test('guide handler normalizes section and merges the supported runtime context', () => {
+  let guideState = {
+    open: false,
+    section: 'choose-type',
+    context: { definition: { name: 'old' }, tunnelType: 'old', errorCode: 'old', helpSection: 'old' }
+  }
+  const openGuide = loadModalFunction('openGuide', {
+    setGuideState: updater => {
+      guideState = typeof updater === 'function' ? updater(guideState) : updater
+    }
+  })
+
+  openGuide(42, {
+    definition: { sshTunnel: 'dynamicForward', name: 'proxy' },
+    tunnelType: 'dynamicForward',
+    errorCode: 'SSH_TUNNEL_TEST_TIMEOUT',
+    helpSection: 'test-timeout',
+    ignored: 'not copied'
+  })
+  assert.equal(guideState.open, true)
+  assert.equal(guideState.section, 'choose-type')
+  assert.deepEqual(JSON.parse(JSON.stringify(guideState.context)), {
+    definition: { sshTunnel: 'dynamicForward', name: 'proxy' },
+    tunnelType: 'dynamicForward',
+    errorCode: 'SSH_TUNNEL_TEST_TIMEOUT',
+    helpSection: 'test-timeout'
+  })
+})
+
+test('editor guide action maps the current draft type and passes definition context', () => {
+  const modal = source('src/client/components/ssh-tunnel/ssh-tunnel-modal.jsx')
+  const guideSectionForDraft = loadModalFunction('guideSectionForDraft')
+
+  assert.equal(guideSectionForDraft({ sshTunnel: 'dynamicForward' }), 'socks-browser')
+  assert.equal(guideSectionForDraft({ sshTunnel: 'forwardRemoteToLocal' }), 'remote-safety')
+  assert.equal(guideSectionForDraft({ sshTunnel: 'forwardLocalToRemote' }), 'how-to-access')
+  assert.equal(guideSectionForDraft({}), 'choose-type')
+  assert.match(modal, /<Button[\s\S]*?onClick=\{\(\) => openGuide\(guideSectionForDraft\(draft\), \{[\s\S]*?definition: draft,[\s\S]*?tunnelType: draft\.sshTunnel[\s\S]*?\}\)\}[\s\S]*?shellpilotTunnelFullGuide/)
+})
+
+test('template and type selection keep usage profiles truthful without persisting UI template state', async () => {
+  let draft = { id: 'old', name: 'old', usageProfile: 'mysql' }
+  let selectedTemplate = ''
+  let savedEditingId = 'saved'
+  const stateContext = {
+    draft,
+    typeOptions: [
+      { value: 'forwardLocalToRemote', label: 'Local' },
+      { value: 'forwardRemoteToLocal', label: 'Remote' },
+      { value: 'dynamicForward', label: 'Dynamic' }
+    ],
+    tunnelTemplates: {
+      HTTPSPreset: { name: 'HTTPS Custom', usageProfile: 'https' }
+    },
+    getTunnelTemplate: name => ({
+      id: 'generated',
+      name: 'normalized',
+      usageProfile: name === 'HTTPSPreset' ? 'https' : 'generic',
+      sshTunnel: 'forwardLocalToRemote',
+      sshTunnelLocalHost: '127.0.0.1',
+      sshTunnelLocalPort: 8443,
+      sshTunnelRemoteHost: '127.0.0.1',
+      sshTunnelRemotePort: 443
+    }),
+    setPortConflict: () => {},
+    setDraft: updater => {
+      draft = typeof updater === 'function' ? updater(draft) : updater
+      stateContext.draft = draft
+    },
+    setSelectedTemplate: value => { selectedTemplate = value },
+    setSavedEditingId: value => { savedEditingId = value }
+  }
+  const applyTemplate = loadModalFunction('applyTemplate', stateContext)
+  applyTemplate('HTTPSPreset')
+  assert.deepEqual(JSON.parse(JSON.stringify(draft)), {
+    id: '',
+    name: 'HTTPS Custom',
+    usageProfile: 'https',
+    sshTunnel: 'forwardLocalToRemote',
+    sshTunnelLocalHost: '127.0.0.1',
+    sshTunnelLocalPort: 8443,
+    sshTunnelRemoteHost: '127.0.0.1',
+    sshTunnelRemotePort: 443
+  })
+  assert.equal(selectedTemplate, 'HTTPSPreset')
+  assert.equal(savedEditingId, '')
+
+  const expectedProfiles = {
+    dynamicForward: 'socks5',
+    forwardLocalToRemote: 'generic',
+    forwardRemoteToLocal: 'generic'
+  }
+  for (const [sshTunnel, usageProfile] of Object.entries(expectedProfiles)) {
+    draft = {
+      id: 'old',
+      name: 'old',
+      usageProfile: 'mysql',
+      sshTunnelLocalHost: '127.0.0.1',
+      sshTunnelLocalPort: 8080,
+      sshTunnelRemoteHost: '127.0.0.1',
+      sshTunnelRemotePort: 80
+    }
+    stateContext.draft = draft
+    const selectType = loadModalFunction('selectType', stateContext)
+    selectType(sshTunnel)
+    assert.equal(draft.usageProfile, usageProfile, sshTunnel)
+    assert.equal(draft.id, '', sshTunnel)
+  }
+
+  const modal = source('src/client/components/ssh-tunnel/ssh-tunnel-modal.jsx')
+  assert.match(modal, /function handleEdit \(entry\)[\s\S]*?setDraft\(\{[\s\S]*?\.\.\.entry\.definition,[\s\S]*?id: ''/)
+  assert.match(modal, /serializeTunnelForBookmark\(draft\)/)
+  assert.doesNotMatch(modal, /\btemplate:\s*(?:templateName|'')/)
+  const definitionPath = path.join(root, 'src/client/components/ssh-tunnel/ssh-tunnel-definition.js')
+  const { serializeTunnelForBookmark } = await import(
+    `${pathToFileURL(definitionPath).href}?tunnel-ui=${Date.now()}-${Math.random()}`
+  )
+  const serialized = serializeTunnelForBookmark(draft)
+  assert.equal(Object.hasOwn(serialized, 'template'), false)
+  assert.equal(serialized.usageProfile, 'generic')
+})
+
+test('test result messages route only by final verdict', async () => {
+  const modal = source('src/client/components/ssh-tunnel/ssh-tunnel-modal.jsx')
+  const expectedChannel = {
+    passed: 'success',
+    limited: 'warning',
+    failed: 'error',
+    unverified: 'info',
+    checking: 'info'
+  }
+
+  for (const [verdict, channel] of Object.entries(expectedChannel)) {
+    const calls = []
+    const handleTest = loadModalFunction('handleTest', {
+      store: {},
+      tab: {},
+      setActionId: () => {},
+      testSshTunnelRuntime: async () => ({
+        verdict,
+        ok: verdict !== 'passed',
+        message: 'internal stack must not surface',
+        stack: 'secret stack'
+      }),
+      message: {
+        success: value => calls.push(['success', value]),
+        warning: value => calls.push(['warning', value]),
+        error: value => calls.push(['error', value]),
+        info: value => calls.push(['info', value])
+      },
+      e: key => key,
+      refresh: async () => {},
+      readableError: error => String(error?.message || 'failed')
+    })
+    await handleTest('tunnel-1')
+    assert.deepEqual(calls, [[channel, `shellpilotTunnelTest${verdict === 'passed' ? 'Passed' : verdict === 'limited' ? 'Limited' : verdict === 'failed' ? 'Failed' : 'Unverified'}`]], verdict)
+  }
+  const handleTestSource = generate(findFunction(
+    'src/client/components/ssh-tunnel/ssh-tunnel-modal.jsx',
+    'handleTest'
+  )).code
+  assert.doesNotMatch(handleTestSource, /result\??\.ok|result\??\.message|result\??\.stack/)
+  assert.match(modal, /switch \(result\?\.verdict\)/)
+})
+
+test('every tunnel guidance translation resolves in both catalogs with matching placeholders', async () => {
+  const {
+    getShellPilotCatalogKeys,
+    getShellPilotTranslation,
+    formatShellPilotTranslation
+  } = await loadTunnelCatalog()
+  const keys = referencedTunnelTranslationKeys()
+  assert.ok(keys.length > 80, 'the scanner must cover the full runtime and guide surface')
+  assert.deepEqual(getShellPilotCatalogKeys('zh_cn'), getShellPilotCatalogKeys('en_us'))
+
+  for (const key of keys) {
+    const zh = getShellPilotTranslation(key, 'zh_cn')
+    const en = getShellPilotTranslation(key, 'en_us')
+    assert.ok(zh?.trim(), `${key} must have Chinese copy`)
+    assert.ok(en?.trim(), `${key} must have English copy`)
+    assert.notEqual(zh, key, `${key} must not leak in Chinese`)
+    assert.notEqual(en, key, `${key} must not leak in English`)
+    const placeholders = value => [...value.matchAll(/\{([A-Za-z0-9]+)\}/g)].map(match => match[1]).sort()
+    assert.deepEqual(placeholders(zh), placeholders(en), `${key} placeholders`)
+    const replacements = Object.fromEntries(placeholders(en).map(name => [name, `value-${name}`]))
+    assert.doesNotMatch(
+      formatShellPilotTranslation(candidate => getShellPilotTranslation(candidate, 'zh_cn'), key, replacements),
+      /\{[A-Za-z0-9]+\}/,
+      `${key} formatted Chinese`
+    )
+    assert.doesNotMatch(
+      formatShellPilotTranslation(candidate => getShellPilotTranslation(candidate, 'en_us'), key, replacements),
+      /\{[A-Za-z0-9]+\}/,
+      `${key} formatted English`
+    )
+  }
+
+  const diagnosticsPath = path.join(
+    root,
+    'src/client/components/ssh-tunnel/ssh-tunnel-diagnostics.js'
+  )
+  const { getTunnelDiagnostic } = await import(
+    `${pathToFileURL(diagnosticsPath).href}?tunnel-ui=${Date.now()}-${Math.random()}`
+  )
+  const definitions = {
+    local: {
+      sshTunnel: 'forwardLocalToRemote',
+      sshTunnelLocalHost: '127.0.0.1',
+      sshTunnelLocalPort: 16060,
+      sshTunnelRemoteHost: '127.0.0.1',
+      sshTunnelRemotePort: 6060
+    },
+    remote: {
+      sshTunnel: 'forwardRemoteToLocal',
+      sshTunnelLocalHost: '127.0.0.1',
+      sshTunnelLocalPort: 6060,
+      sshTunnelRemoteHost: '127.0.0.1',
+      sshTunnelRemotePort: 16060
+    },
+    dynamic: {
+      sshTunnel: 'dynamicForward',
+      sshTunnelLocalHost: '127.0.0.1',
+      sshTunnelLocalPort: 1080
+    }
+  }
+  const diagnostics = [
+    getTunnelDiagnostic({ code: 'SSH_TUNNEL_FORWARDING_PROHIBITED' }, definitions.local),
+    getTunnelDiagnostic({ code: 'SSH_TUNNEL_FORWARDING_PROHIBITED' }, definitions.dynamic),
+    getTunnelDiagnostic({ code: 'SSH_TUNNEL_FORWARDING_PROHIBITED' }, {
+      ...definitions.local,
+      sshTunnelRemoteHost: 'bad host'
+    }),
+    getTunnelDiagnostic({ code: 'SSH_TUNNEL_FORWARDING_PROHIBITED' }, {
+      ...definitions.local,
+      sshTunnelRemoteHost: '[::1]'
+    }),
+    getTunnelDiagnostic({ code: 'SSH_TUNNEL_DESTINATION_REFUSED' }, definitions.local),
+    getTunnelDiagnostic({ code: 'SSH_TUNNEL_DESTINATION_REFUSED' }, definitions.remote),
+    getTunnelDiagnostic({ code: 'SSH_TUNNEL_DESTINATION_REFUSED' }, definitions.dynamic),
+    getTunnelDiagnostic({ code: 'SSH_TUNNEL_DESTINATION_REFUSED' }, {
+      ...definitions.local,
+      sshTunnelRemoteHost: 'bad host'
+    }),
+    getTunnelDiagnostic({ code: 'SSH_TUNNEL_PORT_IN_USE' }, definitions.local),
+    getTunnelDiagnostic({ code: 'SSH_TUNNEL_PORT_IN_USE' }, {
+      ...definitions.local,
+      sshTunnelLocalPort: 'not-a-port'
+    }),
+    getTunnelDiagnostic({ code: 'SSH_TUNNEL_TEST_TIMEOUT', stage: 'ssh-forwarding' }, definitions.local),
+    getTunnelDiagnostic({ code: 'SSH_TUNNEL_UNEXPECTED' }, definitions.local)
+  ]
+  const { localizedDiagnosticValues } = loadRuntimeGuidanceLogic()
+  for (const diagnostic of diagnostics) {
+    for (const step of diagnostic.steps) {
+      for (const langId of ['zh_cn', 'en_us']) {
+        const translate = candidate => getShellPilotTranslation(candidate, langId)
+        const formatted = formatShellPilotTranslation(
+          translate,
+          step.key,
+          localizedDiagnosticValues(step.values, translate)
+        )
+        assert.doesNotMatch(formatted, /\{[A-Za-z0-9]+\}/, `${langId} ${step.key}`)
+      }
+    }
+  }
+
+  const zhTranslate = candidate => getShellPilotTranslation(candidate, 'zh_cn')
+  const enTranslate = candidate => getShellPilotTranslation(candidate, 'en_us')
+  assert.equal(
+    formatShellPilotTranslation(
+      zhTranslate,
+      'sshTunnel.diagnostic.forwardingProhibited.globalBaseline',
+      localizedDiagnosticValues({ scope: 'global-baseline' }, zhTranslate)
+    ),
+    '请管理员先查看 sshd 的全局基础设置，确认当前账号是否允许端口转发。'
+  )
+  assert.equal(
+    formatShellPilotTranslation(
+      zhTranslate,
+      'sshTunnel.diagnostic.timeout.checkStage',
+      localizedDiagnosticValues({ layer: 'ssh-forwarding' }, zhTranslate)
+    ),
+    '检测停在 SSH 转发阶段。请先检查这个阶段对应的网络、SSH 策略或目标服务。'
+  )
+  assert.equal(
+    formatShellPilotTranslation(
+      zhTranslate,
+      'sshTunnel.diagnostic.portInUse.checkListener',
+      localizedDiagnosticValues({ localPort: 16060 }, zhTranslate)
+    ),
+    '查看哪个程序正在使用本机端口 16060，确认后再决定关闭程序还是换端口。'
+  )
+  assert.equal(
+    formatShellPilotTranslation(
+      enTranslate,
+      'sshTunnel.diagnostic.portInUse.checkListener',
+      localizedDiagnosticValues({ localPort: 16060 }, enTranslate)
+    ),
+    'Identify the program using local port 16060, then decide whether to stop it or choose another port.'
+  )
+  for (const internalValue of ['global-baseline', 'ssh-forwarding', 'local-host', 'local-port']) {
+    const renderedChinese = diagnostics.flatMap(diagnostic => diagnostic.steps).map(step => (
+      formatShellPilotTranslation(
+        zhTranslate,
+        step.key,
+        localizedDiagnosticValues(step.values, zhTranslate)
+      )
+    )).join('\n')
+    assert.doesNotMatch(renderedChinese, new RegExp(internalValue), internalValue)
+  }
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(localizedDiagnosticValues({
+      scope: 'global-baseline',
+      layer: 'ssh-forwarding',
+      fields: ['local-host', 'local-port'],
+      restrictions: ['restrict', 'permitopen']
+    }, zhTranslate))),
+    {
+      scope: '全局基础设置',
+      layer: 'SSH 转发',
+      fields: '本机地址、本机端口',
+      restrictions: 'restrict、permitopen'
+    }
+  )
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(localizedDiagnosticValues({
+      scope: 'global-baseline',
+      layer: 'ssh-forwarding',
+      fields: ['local-host', 'local-port'],
+      restrictions: ['restrict', 'permitopen']
+    }, enTranslate))),
+    {
+      scope: 'global baseline settings',
+      layer: 'SSH forwarding',
+      fields: 'local host, local port',
+      restrictions: 'restrict, permitopen'
+    }
+  )
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(localizedDiagnosticValues({
+      localHost: 'unknown',
+      remoteHost: 'proxy',
+      localPort: 1080,
+      commandTemplate: 'target-service'
+    }, zhTranslate))),
+    {
+      localHost: 'unknown',
+      remoteHost: 'proxy',
+      localPort: 1080,
+      commandTemplate: 'target-service'
+    }
+  )
+})
+
+test('Chrome and Edge SOCKS guidance gives a concrete non-button setup path', async () => {
+  const { getShellPilotTranslation } = await loadTunnelCatalog()
+  for (const langId of ['zh_cn', 'en_us']) {
+    const steps = getShellPilotTranslation('shellpilotTunnelGuideChromiumSteps', langId)
+    assert.match(steps, /--proxy-server="socks5:\/\/127\.0\.0\.1:1080"/)
+    assert.match(steps, langId === 'zh_cn' ? /受信任的代理扩展/ : /trusted proxy extension/i)
+    assert.match(steps, langId === 'zh_cn' ? /只作示例，不会执行，也不会修改系统代理/ : /example only.*does not execute.*does not change the system proxy/i)
+  }
+  const guide = source('src/client/components/ssh-tunnel/ssh-tunnel-guide-modal.jsx')
+  assert.doesNotMatch(guide, /runCmd|sendText|\.write\(/)
+})
+
+test('connected SSH tunnel modal parses in the production syntax contract', () => {
+  assert.doesNotThrow(() => parseJsx('src/client/components/ssh-tunnel/ssh-tunnel-modal.jsx'))
 })

@@ -37,6 +37,42 @@ const availabilityPresentation = {
   unverified: { icon: <QuestionCircleOutlined />, label: 'shellpilotTunnelAvailabilityUnverified' }
 }
 
+const diagnosticValueKeyByToken = {
+  'global-baseline': 'sshTunnel.diagnostic.value.globalBaseline',
+  'local-listener': 'sshTunnel.diagnostic.value.localListener',
+  'ssh-forwarding': 'sshTunnel.diagnostic.value.sshForwarding',
+  'target-service': 'sshTunnel.diagnostic.value.targetService',
+  proxy: 'sshTunnel.diagnostic.value.proxy',
+  unknown: 'sshTunnel.diagnostic.value.unknown',
+  'local-host': 'sshTunnel.diagnostic.value.localHost',
+  'local-port': 'sshTunnel.diagnostic.value.localPort',
+  'remote-host': 'sshTunnel.diagnostic.value.remoteHost',
+  'remote-port': 'sshTunnel.diagnostic.value.remotePort'
+}
+
+export function localizedDiagnosticValues (values = {}, translate = e) {
+  const separatorKey = 'sshTunnel.diagnostic.value.listSeparator'
+  const translatedSeparator = translate(separatorKey)
+  const separator = translatedSeparator && translatedSeparator !== separatorKey
+    ? translatedSeparator
+    : ', '
+  const localize = (name, value) => {
+    const shouldTranslate = name === 'scope' || name === 'layer' || name === 'fields'
+    if (Array.isArray(value)) {
+      return value.map(item => localize(name, item)).join(separator)
+    }
+    const key = shouldTranslate && typeof value === 'string'
+      ? diagnosticValueKeyByToken[value]
+      : undefined
+    if (!key) return value
+    const translated = translate(key)
+    return translated && translated !== key ? translated : value
+  }
+  return Object.fromEntries(
+    Object.entries(values).map(([name, value]) => [name, localize(name, value)])
+  )
+}
+
 export function availabilityFor (entry = {}) {
   if (failureStates.has(entry?.state)) return 'failed'
   if (entry?.testState === 'checking' || entry?.testState === 'testing') return 'checking'
@@ -161,7 +197,7 @@ function AccessPanel ({ usage, definition, onOpenGuide }) {
   if (!hasEndpoint) {
     return (
       <section className='ssh-tunnel-access-panel ssh-tunnel-access-panel--invalid'>
-        <span>{e('shellpilotTunnelAccessTitle')}</span>
+        <span>{e('shellpilotTunnelHowToUse')}</span>
         <strong>{e('shellpilotTunnelAccessUnavailable')}</strong>
         <p>{e('shellpilotTunnelAccessUnavailableHint')}</p>
       </section>
@@ -171,10 +207,10 @@ function AccessPanel ({ usage, definition, onOpenGuide }) {
   if (usage.kind === 'web') {
     return (
       <section className='ssh-tunnel-access-panel ssh-tunnel-access-panel--web'>
-        <span>{e('shellpilotTunnelAccessTitle')}</span>
+        <span>{e('shellpilotTunnelHowToUse')}</span>
         <strong>{usage.endpoint}</strong>
         <code>{usage.url}</code>
-        <p>{e('shellpilotTunnelGuideNoBrowserProxy')}</p>
+        <p>{e('shellpilotTunnelNoBrowserProxy')}</p>
         <Space wrap>
           <Button
             type='primary'
@@ -185,9 +221,9 @@ function AccessPanel ({ usage, definition, onOpenGuide }) {
               if (canOpenWeb) runtimeWindow.openLink(usage.url)
             }}
           >
-            {e('shellpilotTunnelOpenInBrowser')}
+            {e('shellpilotTunnelOpenBrowser')}
           </Button>
-          {copyButton(usage.endpoint, e('shellpilotTunnelCopyEndpoint'))}
+          {copyButton(usage.endpoint, e('shellpilotTunnelCopyAddress'))}
           {copyButton(usage.url, e('shellpilotTunnelCopyUrl'))}
         </Space>
       </section>
@@ -197,9 +233,9 @@ function AccessPanel ({ usage, definition, onOpenGuide }) {
   if (usage.kind === 'proxy') {
     return (
       <section className='ssh-tunnel-access-panel ssh-tunnel-access-panel--proxy'>
-        <span>{e('shellpilotTunnelAccessTitle')}</span>
+        <span>{e('shellpilotTunnelHowToUse')}</span>
         <strong>SOCKS5 {usage.endpoint}</strong>
-        <p>{e('shellpilotTunnelSocksRequiresAppProxy')}</p>
+        <p>{e('shellpilotTunnelNeedsSocksProxy')}</p>
         <p>{e('shellpilotTunnelGuideSocksNoSystemProxy')}</p>
         <Space wrap>
           {copyButton(usage.endpoint, e('shellpilotTunnelCopyProxyAddress'))}
@@ -224,7 +260,7 @@ function AccessPanel ({ usage, definition, onOpenGuide }) {
           <div><dt>{e('shellpilotTunnelAccessPort')}</dt><dd><code>{usage.port}</code></dd></div>
         </dl>
         <Space wrap>
-          {copyButton(usage.endpoint, e('shellpilotTunnelCopyEndpoint'))}
+          {copyButton(usage.endpoint, e('shellpilotTunnelCopyAddress'))}
           <Button size='small' icon={<ReadOutlined />} onClick={() => openGuide(onOpenGuide, guideRequestFor(usage, null, definition))}>
             {e('shellpilotTunnelGuideHowToAccess')}
           </Button>
@@ -240,7 +276,7 @@ function AccessPanel ({ usage, definition, onOpenGuide }) {
         <strong>{usage.endpoint}</strong>
         <p>{e('shellpilotTunnelRemoteAccessFromServer')}</p>
         <Space wrap>
-          {copyButton(usage.endpoint, e('shellpilotTunnelCopyEndpoint'))}
+          {copyButton(usage.endpoint, e('shellpilotTunnelCopyAddress'))}
           <Button size='small' icon={<ReadOutlined />} onClick={() => openGuide(onOpenGuide, guideRequestFor(usage, null, definition))}>
             {e('shellpilotTunnelGuideRemoteSafety')}
           </Button>
@@ -254,7 +290,7 @@ function AccessPanel ({ usage, definition, onOpenGuide }) {
       <span>{e('shellpilotTunnelTcpAccessTitle')}</span>
       <strong>{usage.endpoint}</strong>
       <p>{e('shellpilotTunnelTcpAccessHint')}</p>
-      {copyButton(usage.endpoint, e('shellpilotTunnelCopyEndpoint'))}
+      {copyButton(usage.endpoint, e('shellpilotTunnelCopyAddress'))}
     </section>
   )
 }
@@ -302,7 +338,7 @@ function DiagnosticPanel ({ diagnostic, definition, onOpenGuide }) {
             <ol>
               {diagnostic.steps.map((step, index) => (
                 <li key={`${step.key}-${index}`}>
-                  {formatShellPilotTranslation(e, step.key, step.values)}
+                  {formatShellPilotTranslation(e, step.key, localizedDiagnosticValues(step.values))}
                 </li>
               ))}
             </ol>
@@ -323,7 +359,7 @@ function DiagnosticPanel ({ diagnostic, definition, onOpenGuide }) {
                           type='text'
                           size='small'
                           icon={<CopyOutlined />}
-                          aria-label={e('shellpilotTunnelCopyDiagnosticChecks')}
+                          aria-label={e('shellpilotTunnelCopyChecks')}
                           disabled={!canCopyFor(diagnostic.checksText, runtimeWindow)}
                           onClick={() => {
                             copyTextSafely(diagnostic.checksText, runtimeWindow, copy)
@@ -420,7 +456,7 @@ export default function SshTunnelRuntimeCard ({
           className='ssh-tunnel-runtime-guide-button'
           onClick={() => openGuide(onOpenGuide, guideRequestFor(usage, diagnostic, entry?.definition))}
         >
-          {e('shellpilotTunnelOpenFullGuide')}
+          {e('shellpilotTunnelFullGuide')}
         </Button>
         <Button size='small' icon={<ReloadOutlined />} loading={loading} onClick={() => onTest?.(entry?.id)}>
           {e('shellpilotTunnelTest')}
