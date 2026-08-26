@@ -849,8 +849,10 @@ test('runtime reconnect cancels the old controller probe and its late stream', a
   const finishForwards = []
   const probePromises = []
   const controllers = []
+  const controllerDefinitions = []
   const runtime = createSshTunnelRuntime({
     startController: async definition => {
+      controllerDefinitions.push(definition)
       const conn = new EventEmitter()
       conn.forwardOut = (srcHost, srcPort, host, port, callback) => {
         finishForwards.push(callback)
@@ -870,6 +872,13 @@ test('runtime reconnect cancels the old controller probe and its late stream', a
         probePromises.push(promise)
         return promise
       }
+      if (controllers.length) {
+        controller.descriptor = {
+          ...controller.descriptor,
+          probeTimeoutMs: Number.MAX_SAFE_INTEGER,
+          probeHarness: 'reconnect-only'
+        }
+      }
       controllers.push(controller)
       return controller
     },
@@ -882,7 +891,8 @@ test('runtime reconnect cancels the old controller probe and its late stream', a
 
   await runtime.start({
     id: 'cancel-reconnect',
-    sshTunnel: 'forwardLocalToRemote'
+    sshTunnel: 'forwardLocalToRemote',
+    probeTimeoutMs: Number.POSITIVE_INFINITY
   })
   await new Promise(resolve => setImmediate(resolve))
   controllers[0].emit('close', { code: 'SSH_CONNECTION_CLOSED' })
@@ -906,12 +916,22 @@ test('runtime reconnect cancels the old controller probe and its late stream', a
   await new Promise(resolve => setImmediate(resolve))
   assert.equal(destroyCalls(), 1)
 
+  const reconnectedDefinition = runtime.list()[0].definition
   await runtime.stop('cancel-reconnect')
   if (finishForwards[1]) {
     finishForwards[1](Object.assign(new Error('cleanup'), {
       code: 'SSH_TUNNEL_PROBE_CANCELLED'
     }))
   }
+  assert.equal(
+    controllerDefinitions.some(definition => 'probeTimeoutMs' in definition),
+    false
+  )
+  assert.equal('probeTimeoutMs' in reconnectedDefinition, false)
+  assert.equal(reconnectedDefinition.id, 'cancel-reconnect')
+  assert.equal(reconnectedDefinition.sshTunnel, 'forwardLocalToRemote')
+  assert.equal(reconnectedDefinition.sshTunnelLocalPort, 44130)
+  assert.equal(reconnectedDefinition.sshTunnelRemotePort, 443)
 })
 
 test('runtime isolates controllers, rejects duplicates, and serializes state', async () => {

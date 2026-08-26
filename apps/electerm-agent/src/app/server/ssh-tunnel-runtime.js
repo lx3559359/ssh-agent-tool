@@ -302,10 +302,10 @@ function createSshTunnelRuntime ({
       entry.controller = controller
       entry.probeGeneration += 1
       entry.probePromise = null
-      entry.definition = {
+      entry.definition = runtimeTunnelDefinition({
         ...entry.definition,
         ...(controller.descriptor || {})
-      }
+      })
       entry.reconnectAttempt = 0
       attachControllerEvents(entry)
       recordState(entry, 'healthy', {
