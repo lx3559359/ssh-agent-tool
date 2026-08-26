@@ -145,3 +145,106 @@ test('SSH tunnel manager surfaces the latest actionable runtime failure', () => 
   assert.match(modal, /ssh-tunnel-runtime-failure/)
   assert.match(modal, /latestFailure\.message/)
 })
+
+test('runtime guidance card derives truthful availability and safe access actions', () => {
+  const card = source('src/client/components/ssh-tunnel/ssh-tunnel-runtime-card.jsx')
+
+  assert.match(card, /import \{ getTunnelUsage \} from '\.\/ssh-tunnel-usage\.js'/)
+  assert.match(card, /import \{ getTunnelDiagnostic \} from '\.\/ssh-tunnel-diagnostics\.js'/)
+  assert.match(card, /import \{ copy \} from '\.\.\/\.\.\/common\/clipboard'/)
+  assert.match(card, /export default function SshTunnelRuntimeCard \(\{\s*entry,\s*busy,\s*onTest,\s*onEdit,\s*onEditAndRestart,\s*onStop,\s*onOpenGuide,\s*onShowHistory\s*\}\)/)
+  assert.match(card, /const usage = getTunnelUsage\(entry\?\.definition \|\| \{\}\)/)
+  assert.match(card, /const diagnostic = latestFailure\s*\? getTunnelDiagnostic\(latestFailure, entry\?\.definition\)\s*: null/)
+  assert.match(card, /failureStates\.has\(entry\?\.state\)[\s\S]*?entry\?\.testState === 'checking'[\s\S]*?entry\?\.lastTest\?\.verdict \|\| 'unverified'/)
+  assert.match(card, /usage\.canOpen === true && usage\.url &&\s*typeof window\?\.openLink === 'function'/)
+  assert.match(card, /window\.openLink\(usage\.url\)/)
+  assert.match(card, /disabled=\{!usage\.endpoint\}/)
+  assert.match(card, /data-stage=\{stage\.id\}/)
+  for (const status of ['passed', 'limited', 'failed', 'unverified']) {
+    assert.match(card, new RegExp(`${status}: \\{ icon:`))
+  }
+  assert.doesNotMatch(card, /lastTest\.stages\.map/)
+})
+
+test('runtime guidance keeps diagnostics separate and callbacks defensive', () => {
+  const card = source('src/client/components/ssh-tunnel/ssh-tunnel-runtime-card.jsx')
+
+  assert.match(card, /className='ssh-tunnel-diagnostic-checks'/)
+  assert.match(card, /className='ssh-tunnel-diagnostic-config'/)
+  assert.match(card, /copy\(diagnostic\.checksText\)/)
+  assert.match(card, /copy\(diagnostic\.configExample\)/)
+  assert.doesNotMatch(card, /checksText\s*\+|configExample\s*\+/)
+  assert.match(card, /onOpenGuide\?\.\(diagnostic\.helpSection\)/)
+  for (const callback of [
+    'onTest',
+    'onEdit',
+    'onEditAndRestart',
+    'onStop',
+    'onShowHistory'
+  ]) {
+    assert.match(card, new RegExp(`${callback}\\?\\.\\(`))
+  }
+  assert.doesNotMatch(card, /\.write\(|sendText|runCmd/)
+})
+
+test('beginner guide has seven synchronized sections and safe error mapping', () => {
+  const guide = source('src/client/components/ssh-tunnel/ssh-tunnel-guide-modal.jsx')
+
+  assert.match(guide, /import \{ Modal \} from 'antd'/)
+  assert.match(guide, /export default function SshTunnelGuideModal \(\{\s*open,\s*activeSection = 'choose-type',\s*context = \{\},\s*onClose\s*\}\)/)
+  const sectionIds = [
+    'choose-type',
+    'local-forward',
+    'how-to-access',
+    'socks-browser',
+    'remote-safety',
+    'errors',
+    'glossary'
+  ]
+  for (const id of sectionIds) {
+    assert.match(guide, new RegExp(`id: '${id}'`))
+  }
+  assert.equal((guide.match(/id: '(?:choose-type|local-forward|how-to-access|socks-browser|remote-safety|errors|glossary)'/g) || []).length, 7)
+  assert.match(guide, /const errorHelpSections = new Set\(\[/)
+  assert.match(guide, /errorHelpSections\.has\(section\) \? 'errors' : 'choose-type'/)
+  assert.match(guide, /useEffect\(\(\) => \{\s*if \(open\) setSection\(normalizeSection\(activeSection\)\)\s*\}, \[activeSection, open\]\)/)
+  assert.match(guide, /aria-current=\{section === item\.id \? 'page' : undefined\}/)
+  assert.match(guide, /127\.0\.0\.1:16060[\s\S]*SSH[\s\S]*server 127\.0\.0\.1:6060/)
+  assert.doesNotMatch(guide, /\.write\(|sendText|runCmd|window\.openLink/)
+})
+
+test('beginner guide uses the planned localized content contract', () => {
+  const guide = source('src/client/components/ssh-tunnel/ssh-tunnel-guide-modal.jsx')
+  const requiredKeys = [
+    'shellpilotTunnelGuideChooseType',
+    'shellpilotTunnelGuideLocalScenario',
+    'shellpilotTunnelGuideHowToAccess',
+    'shellpilotTunnelGuideSocksBrowser',
+    'shellpilotTunnelGuideRemoteSafety',
+    'shellpilotTunnelGuideErrors',
+    'shellpilotTunnelGuideGlossary'
+  ]
+
+  for (const key of requiredKeys) {
+    assert.match(guide, new RegExp(`e\\('${key}'\\)`))
+  }
+  assert.match(guide, /shellpilotTunnelGuideNoBrowserProxy/)
+  assert.match(guide, /shellpilotTunnelGuideSocksNoSystemProxy/)
+  assert.match(guide, /shellpilotTunnelGuideGatewayPorts/)
+})
+
+test('runtime guidance styles match the approved hierarchy responsively', () => {
+  const styles = source('src/client/components/ssh-tunnel/ssh-tunnel-modal.styl')
+
+  assert.match(styles, /\.ssh-tunnel-access-panel[\s\S]*background rgba\(22, 119, 255, \.07\)[\s\S]*border 1px solid rgba\(22, 119, 255, \.24\)/)
+  assert.match(styles, /\.ssh-tunnel-stage-grid[\s\S]*grid-template-columns repeat\(3, minmax\(0, 1fr\)\)/)
+  for (const modifier of ['passed', 'limited', 'failed', 'unverified']) {
+    assert.match(styles, new RegExp(`\\.ssh-tunnel-stage--${modifier}`))
+  }
+  assert.match(styles, /\.ssh-tunnel-diagnostic-split[\s\S]*grid-template-columns repeat\(2, minmax\(0, 1fr\)\)/)
+  assert.match(styles, /\.ssh-tunnel-guide-layout[\s\S]*grid-template-columns 220px minmax\(0, 1fr\)/)
+  assert.match(styles, /@media \(max-width: 760px\)[\s\S]*\.ssh-tunnel-guide-layout[\s\S]*grid-template-columns 1fr/)
+  assert.match(styles, /overflow-wrap anywhere/)
+  assert.doesNotMatch(styles, /gradient\(/)
+  assert.doesNotMatch(styles, /max-height min\(/)
+})
