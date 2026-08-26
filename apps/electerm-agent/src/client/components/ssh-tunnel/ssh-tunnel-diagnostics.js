@@ -163,11 +163,21 @@ function policyCheckCommand (type) {
 function policySteps (definition) {
   const steps = [
     step('sshTunnel.diagnostic.forwardingProhibited.checkPolicy', {
-      scope: 'global-baseline'
+      scope: 'global-baseline',
+      requiresSshdDashCContext: true
     }),
-    step('sshTunnel.diagnostic.forwardingProhibited.reviewLoginContextRestrictions', {
-      matchConditions: 'user-address',
-      credentialRestrictions: 'no-port-forwarding,permitopen,permitlisten',
+    step('sshTunnel.diagnostic.forwardingProhibited.reviewKeyRestrictions', {
+      authorizedKeys: [
+        'restrict',
+        'no-port-forwarding',
+        'permitopen',
+        'permitlisten'
+      ],
+      certificateOptions: [
+        'no-port-forwarding',
+        'permitopen',
+        'permitlisten'
+      ],
       requiresAdministratorReview: true
     })
   ]
@@ -211,13 +221,19 @@ function destinationRefusedDiagnostic (code, tunnel) {
     return diagnostic(...common, [invalidDestinationStep(tunnel)], '')
   }
   if (tunnel.type === 'remote') {
+    const isClientLocalTarget = isLoopbackHost(tunnel.localHost.value)
+    const stepKey = isClientLocalTarget
+      ? 'sshTunnel.diagnostic.destinationRefused.checkTargetFromLocalMachine'
+      : 'sshTunnel.diagnostic.destinationRefused.checkTargetFromClientMachine'
     return diagnostic(
       ...common,
-      [step('sshTunnel.diagnostic.destinationRefused.checkTargetFromLocalMachine', {
+      [step(stepKey, {
         localHost: tunnel.localHost.value,
         localPort: tunnel.localPort.value
       })],
-      `Get-NetTCPConnection -LocalPort ${tunnel.localPort.value} -ErrorAction SilentlyContinue`
+      isClientLocalTarget
+        ? `Get-NetTCPConnection -LocalPort ${tunnel.localPort.value} -ErrorAction SilentlyContinue`
+        : ''
     )
   }
   return diagnostic(

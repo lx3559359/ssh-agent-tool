@@ -25,6 +25,10 @@ function hasStep (diagnostic, key) {
   return diagnostic.steps.some(step => step.key === key)
 }
 
+function findStep (diagnostic, key) {
+  return diagnostic.steps.find(step => step.key === key)
+}
+
 test('forwarding prohibited uses a read-only check and separate scoped local policy example', async () => {
   const { getTunnelDiagnostic } = await loadDiagnostics()
   const diagnostic = getTunnelDiagnostic(
@@ -52,6 +56,27 @@ test('forwarding prohibited uses a read-only check and separate scoped local pol
   ].join('\n'))
   assert.notEqual(diagnostic.checksText, diagnostic.configExample)
   assert.equal(diagnostic.steps.every(step => typeof step.key === 'string' && step.values && typeof step.values === 'object'), true)
+  const baseline = findStep(
+    diagnostic,
+    'sshTunnel.diagnostic.forwardingProhibited.checkPolicy'
+  )
+  const restrictions = findStep(
+    diagnostic,
+    'sshTunnel.diagnostic.forwardingProhibited.reviewKeyRestrictions'
+  )
+  assert.equal(baseline.values.scope, 'global-baseline')
+  assert.equal(baseline.values.requiresSshdDashCContext, true)
+  assert.deepEqual(restrictions.values.authorizedKeys, [
+    'restrict',
+    'no-port-forwarding',
+    'permitopen',
+    'permitlisten'
+  ])
+  assert.deepEqual(restrictions.values.certificateOptions, [
+    'no-port-forwarding',
+    'permitopen',
+    'permitlisten'
+  ])
 })
 
 test('forwarding prohibited scopes remote policy checks and keeps dynamic forwarding unconfigured', async () => {
@@ -82,7 +107,7 @@ test('forwarding prohibited scopes remote policy checks and keeps dynamic forwar
     true
   )
   assert.equal(
-    hasStep(remote, 'sshTunnel.diagnostic.forwardingProhibited.reviewLoginContextRestrictions'),
+    hasStep(remote, 'sshTunnel.diagnostic.forwardingProhibited.reviewKeyRestrictions'),
     true
   )
 })
@@ -118,7 +143,7 @@ test('destination refused does not suggest an SSH-server listener command for an
   )
 })
 
-test('destination refused checks a remote forward target from the local Windows machine', async () => {
+test('destination refused checks a remote forward loopback target from the local Windows machine', async () => {
   const { getTunnelDiagnostic } = await loadDiagnostics()
   const diagnostic = getTunnelDiagnostic(
     { code: 'SSH_TUNNEL_DESTINATION_REFUSED' },
@@ -135,6 +160,47 @@ test('destination refused checks a remote forward target from the local Windows 
   )
   assert.equal(
     hasStep(diagnostic, 'sshTunnel.diagnostic.destinationRefused.checkTargetFromLocalMachine'),
+    true
+  )
+})
+
+test('destination refused does not claim an external remote-forward target is local', async () => {
+  const { getTunnelDiagnostic } = await loadDiagnostics()
+  const diagnostic = getTunnelDiagnostic(
+    { code: 'SSH_TUNNEL_DESTINATION_REFUSED' },
+    localDefinition({
+      sshTunnel: 'forwardRemoteToLocal',
+      sshTunnelLocalHost: 'db.example.com',
+      sshTunnelLocalPort: 16060
+    })
+  )
+
+  assert.equal(diagnostic.checksText, '')
+  assert.equal(
+    hasStep(diagnostic, 'sshTunnel.diagnostic.destinationRefused.checkTargetFromClientMachine'),
+    true
+  )
+  assert.equal(
+    hasStep(diagnostic, 'sshTunnel.diagnostic.destinationRefused.checkTargetFromLocalMachine'),
+    false
+  )
+})
+
+test('destination refused does not disclose invalid remote-forward local targets', async () => {
+  const { getTunnelDiagnostic } = await loadDiagnostics()
+  const invalidHost = 'db.example.com; read secret'
+  const diagnostic = getTunnelDiagnostic(
+    { code: 'SSH_TUNNEL_DESTINATION_REFUSED' },
+    localDefinition({
+      sshTunnel: 'forwardRemoteToLocal',
+      sshTunnelLocalHost: invalidHost
+    })
+  )
+
+  assert.equal(diagnostic.checksText, '')
+  assert.equal(JSON.stringify(diagnostic).includes(invalidHost), false)
+  assert.equal(
+    hasStep(diagnostic, 'sshTunnel.diagnostic.destinationRefused.invalidTarget'),
     true
   )
 })
