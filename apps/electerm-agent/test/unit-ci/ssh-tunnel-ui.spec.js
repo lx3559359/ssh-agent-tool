@@ -53,6 +53,11 @@ async function loadTunnelCatalog () {
   return import(`${pathToFileURL(filename).href}?tunnel-ui=${Date.now()}-${Math.random()}`)
 }
 
+async function loadTunnelUsage () {
+  const filename = path.join(root, 'src/client/components/ssh-tunnel/ssh-tunnel-usage.js')
+  return import(`${pathToFileURL(filename).href}?tunnel-usage=${Date.now()}-${Math.random()}`)
+}
+
 function referencedTunnelTranslationKeys () {
   const files = [
     'src/client/components/ssh-tunnel/ssh-tunnel-modal.jsx',
@@ -68,7 +73,7 @@ function referencedTunnelTranslationKeys () {
   return [...keys].sort()
 }
 
-function loadRuntimeGuidanceLogic () {
+function loadRuntimeGuidanceLogic (context = {}) {
   const ast = parseJsx('src/client/components/ssh-tunnel/ssh-tunnel-runtime-card.jsx')
   const names = new Set([
     'failureStates',
@@ -80,6 +85,7 @@ function loadRuntimeGuidanceLogic () {
     'canOpenWebFor',
     'canCopyFor',
     'copyTextSafely',
+    'copyableFlowFor',
     'diagnosticValueKeyByToken',
     'localizedDiagnosticValues'
   ])
@@ -104,7 +110,7 @@ function loadRuntimeGuidanceLogic () {
 
   body.push(parser.parse(`module.exports = { ${foundExports.join(', ')} }`).program.body[0])
   const module = { exports: {} }
-  vm.runInNewContext(generate(t.file(t.program(body))).code, { module }, {
+  vm.runInNewContext(generate(t.file(t.program(body))).code, { module, ...context }, {
     filename: 'ssh-tunnel-runtime-card.logic.js'
   })
   return module.exports
@@ -335,11 +341,37 @@ test('runtime guidance card derives truthful availability and safe access action
   assert.match(card, /canOpenWebFor\(usage, runtimeWindow\)/)
   assert.match(card, /runtimeWindow\.openLink\(usage\.url\)/)
   assert.match(card, /canCopyFor\(text, runtimeWindow\)/)
+  assert.match(card, /const flowText = copyableFlowFor\(entry\?\.definition\)/)
+  assert.match(card, /copyButton\(flowText, e\('shellpilotTunnelCopyFlow'\)\)/)
   assert.match(card, /data-stage=\{stage\.id\}/)
   for (const status of ['passed', 'limited', 'failed', 'unverified']) {
     assert.match(card, new RegExp(`${status}: \\{ icon:`))
   }
   assert.doesNotMatch(card, /lastTest\.stages\.map/)
+})
+
+test('runtime flow copy is validated and uses the guarded clipboard bridge', async () => {
+  const card = source('src/client/components/ssh-tunnel/ssh-tunnel-runtime-card.jsx')
+  const { copyableFlowFor, canCopyFor, copyTextSafely } = loadRuntimeGuidanceLogic()
+  const validDefinition = {
+    sshTunnel: 'forwardLocalToRemote',
+    sshTunnelLocalHost: '127.0.0.1',
+    sshTunnelLocalPort: 16060,
+    sshTunnelRemoteHost: '127.0.0.1',
+    sshTunnelRemotePort: 6060
+  }
+  assert.equal(
+    copyableFlowFor(validDefinition, value => value, () => 'safe flow'),
+    'safe flow'
+  )
+  assert.equal(
+    copyableFlowFor({}, () => { throw new Error('invalid') }, () => 'must not copy'),
+    ''
+  )
+  assert.equal(canCopyFor('safe flow', { pre: { writeClipboard () {} } }), true)
+  assert.equal(canCopyFor('safe flow', { pre: {} }), false)
+  assert.equal(await copyTextSafely('safe flow', { pre: {} }, () => { throw new Error('must not run') }), false)
+  assert.match(card, /disabled=\{!canCopy\}/)
 })
 
 test('runtime guidance uses the planned public translation keys instead of aliases', () => {
@@ -583,6 +615,8 @@ test('beginner guide has seven synchronized sections and safe error mapping', ()
   assert.equal(focusErrorFor('errors', { helpSection: 'destination-refused' }), 'destination-refused')
   assert.equal(focusErrorFor('errors', { errorCode: 'SSH_TUNNEL_PORT_IN_USE' }), 'port-conflict')
   assert.equal(focusErrorFor('errors', { errorCode: 'SSH_TUNNEL_TEST_TIMEOUT' }), 'timeout')
+  assert.equal(focusErrorFor('unknown'), 'unknown')
+  assert.equal(focusErrorFor('errors', { errorCode: 'SSH_TUNNEL_UNKNOWN' }), 'unknown')
   assert.match(guide, /const errorHelpSections = new Set\(\[/)
   assert.match(guide, /errorHelpSections\.has\(section\) \? 'errors' : 'choose-type'/)
   assert.match(guide, /const \[requestedSection, setRequestedSection\] = useState/)
@@ -591,6 +625,15 @@ test('beginner guide has seven synchronized sections and safe error mapping', ()
   assert.match(guide, /aria-current=\{section === item\.id \? 'page' : undefined\}/)
   assert.match(guide, /data-error='forwarding-prohibited'/)
   assert.match(guide, /focusError === 'forwarding-prohibited' \? 'active' : ''/)
+  assert.match(guide, /data-error='unknown'/)
+  assert.match(guide, /focusError === 'unknown' \? 'active' : ''/)
+  for (const key of [
+    'shellpilotTunnelGuideErrorUnknown',
+    'shellpilotTunnelGuideErrorUnknownCause',
+    'shellpilotTunnelGuideErrorUnknownFix'
+  ]) {
+    assert.match(guide, new RegExp(`e\\('${key}'\\)`))
+  }
   assert.match(guide, /127\.0\.0\.1:16060[\s\S]*SSH[\s\S]*server 127\.0\.0\.1:6060/)
   assert.doesNotMatch(guide, /\.write\(|sendText|runCmd|window\.openLink/)
 })
@@ -653,6 +696,54 @@ test('access guide distinguishes web schemes and database profiles', () => {
   assert.match(guide, /host: 127\.0\.0\.1, port: 16060/)
 })
 
+test('SOCKS and remote guides render every field, success boundary and first checks', async () => {
+  const guide = source('src/client/components/ssh-tunnel/ssh-tunnel-guide-modal.jsx')
+  const requiredKeys = [
+    'shellpilotTunnelGuideSocksLocalHost',
+    'shellpilotTunnelGuideSocksLocalPort',
+    'shellpilotTunnelGuideSocksFlow',
+    'shellpilotTunnelGuideSocksNoRemoteTarget',
+    'shellpilotTunnelGuideSocksNoRemoteTargetValue',
+    'shellpilotTunnelGuideSocksStartProof',
+    'shellpilotTunnelGuideSocksConfigureApps',
+    'shellpilotTunnelGuideSocksFirstFailure',
+    'shellpilotTunnelGuideRemoteServerHost',
+    'shellpilotTunnelGuideRemoteServerPort',
+    'shellpilotTunnelGuideRemoteClientTargetHost',
+    'shellpilotTunnelGuideRemoteClientTargetPort',
+    'shellpilotTunnelGuideRemoteFlow',
+    'shellpilotTunnelGuideRemoteStartProof',
+    'shellpilotTunnelGuideRemoteExternalAccess',
+    'shellpilotTunnelGuideRemoteFirstFailure'
+  ]
+  for (const key of requiredKeys) {
+    assert.match(guide, new RegExp(`e\\('${key}'\\)`), key)
+  }
+  assert.match(guide, /shellpilotTunnelGuideSocksLocalHost[\s\S]*?<code>127\.0\.0\.1<\/code>/)
+  assert.match(guide, /shellpilotTunnelGuideSocksLocalPort[\s\S]*?<code>1080<\/code>/)
+  assert.doesNotMatch(guide, /\.write\(|sendText|runCmd/)
+
+  const { getShellPilotTranslation } = await loadTunnelCatalog()
+  const zhSocks = requiredKeys.slice(0, 8).map(key => getShellPilotTranslation(key, 'zh_cn')).join('\n')
+  const enSocks = requiredKeys.slice(0, 8).map(key => getShellPilotTranslation(key, 'en_us')).join('\n')
+  const zhRemote = requiredKeys.slice(8).map(key => getShellPilotTranslation(key, 'zh_cn')).join('\n')
+  const enRemote = requiredKeys.slice(8).map(key => getShellPilotTranslation(key, 'en_us')).join('\n')
+  assert.match(zhSocks, /127\.0\.0\.1/)
+  assert.match(zhSocks, /1080/)
+  assert.match(zhSocks, /没有固定的远端目标/)
+  assert.match(zhSocks, /监听.*握手.*SSH 策略/s)
+  assert.match(zhSocks, /启动成功只证明.*监听.*握手.*检测.*通过/s)
+  assert.match(enSocks, /no fixed remote target/i)
+  assert.match(enSocks, /listener.*handshake.*SSH policy/is)
+  assert.match(enSocks, /successful start proves only.*listener.*handshake.*check.*pass/is)
+  assert.match(zhRemote, /服务器监听地址.*服务器监听端口.*客户端本地目标地址.*客户端本地目标端口/s)
+  assert.match(zhRemote, /GatewayPorts.*防火墙.*认证/s)
+  assert.match(zhRemote, /启动成功只证明.*服务器监听.*本地目标.*检测.*通过/s)
+  assert.match(enRemote, /server listen host.*server listen port.*client local target host.*client local target port/is)
+  assert.match(enRemote, /GatewayPorts.*firewall.*authentication/is)
+  assert.match(enRemote, /successful start proves only.*server listener.*local target.*check.*pass/is)
+})
+
 test('runtime guidance styles match the approved hierarchy responsively', () => {
   const styles = source('src/client/components/ssh-tunnel/ssh-tunnel-modal.styl')
 
@@ -694,7 +785,7 @@ test('SSH tunnel modal wires one layered runtime card and one stateful guide mod
   assert.match(modal, /useState\(\{\s*open: false,\s*section: 'choose-type',\s*context: \{\}\s*\}\)/)
   assert.equal((modal.match(/<SshTunnelRuntimeCard\b/g) || []).length, 1)
   assert.equal((modal.match(/<SshTunnelGuideModal\b/g) || []).length, 1)
-  assert.match(modal, /<SshTunnelRuntimeCard[\s\S]*?key=\{entry\.id\}[\s\S]*?entry=\{runtimeEntryForCard\(entry\)\}[\s\S]*?busy=\{actionId\}[\s\S]*?onTest=\{handleTest\}[\s\S]*?onEdit=\{\(\) => handleEdit\(entry\)\}[\s\S]*?onEditAndRestart=\{\(\) => handleEditAndRestart\(entry\)\}[\s\S]*?onStop=\{handleStop\}[\s\S]*?onOpenGuide=\{\(section, context\) => openGuide\(section, context\)\}[\s\S]*?onShowHistory=\{\(\) => showDisconnectHistory\(entry\)\}/)
+  assert.match(modal, /<SshTunnelRuntimeCard[\s\S]*?key=\{entry\.id\}[\s\S]*?entry=\{entry\}[\s\S]*?busy=\{actionId\}[\s\S]*?onTest=\{handleTest\}[\s\S]*?onEdit=\{\(\) => handleEdit\(entry\)\}[\s\S]*?onEditAndRestart=\{\(\) => handleEditAndRestart\(entry\)\}[\s\S]*?onStop=\{handleStop\}[\s\S]*?onOpenGuide=\{\(section, context\) => openGuide\(section, context\)\}[\s\S]*?onShowHistory=\{\(\) => showDisconnectHistory\(entry\)\}/)
   assert.match(modal, /<SshTunnelGuideModal[\s\S]*?open=\{guideState\.open\}[\s\S]*?activeSection=\{guideState\.section\}[\s\S]*?context=\{guideState\.context\}/)
   assert.match(modal, /setGuideState\(current => \(\{[\s\S]*?\.\.\.current,[\s\S]*?open: false[\s\S]*?\}\)\)/)
   assert.doesNotMatch(modal, /function TunnelRuntimeFailure/)
@@ -702,24 +793,40 @@ test('SSH tunnel modal wires one layered runtime card and one stateful guide mod
   assert.doesNotMatch(modal, /<article className='ssh-tunnel-running-card'/)
 })
 
-test('runtime card keeps a truthful lifecycle label without mutating the callback entry', () => {
-  const entry = {
-    id: 'tunnel-1',
-    state: 'running',
-    definition: { name: 'MySQL', usageProfile: 'mysql' }
+test('modal preserves legacy usage identity while the runtime card renders lifecycle separately', async () => {
+  const modal = source('src/client/components/ssh-tunnel/ssh-tunnel-modal.jsx')
+  const card = source('src/client/components/ssh-tunnel/ssh-tunnel-runtime-card.jsx')
+  const { getTunnelUsage } = await loadTunnelUsage()
+  const baseDefinition = {
+    sshTunnel: 'forwardLocalToRemote',
+    sshTunnelLocalHost: '127.0.0.1',
+    sshTunnelLocalPort: 16060,
+    sshTunnelRemoteHost: '127.0.0.1',
+    sshTunnelRemotePort: 6060
   }
-  const runtimeEntryForCard = loadModalFunction('runtimeEntryForCard', {
-    tunnelName: value => value.definition.name,
-    healthPresentation: () => ({ label: 'shellpilotTunnelRunningStatus' }),
-    e: key => key === 'shellpilotTunnelRunningStatus' ? '运行中' : key
-  })
-  const presentationEntry = runtimeEntryForCard(entry)
+  const httpEntry = { id: 'http-1', state: 'running', definition: { ...baseDefinition, name: 'HTTP' } }
+  const mysqlEntry = { id: 'mysql-1', state: 'running', definition: { ...baseDefinition, name: 'MySQL' } }
 
-  assert.notEqual(presentationEntry, entry)
-  assert.notEqual(presentationEntry.definition, entry.definition)
-  assert.equal(presentationEntry.definition.name, 'MySQL · 运行中')
-  assert.equal(entry.definition.name, 'MySQL')
-  assert.equal(presentationEntry.definition.usageProfile, 'mysql')
+  assert.deepEqual(
+    { ...getTunnelUsage(httpEntry.definition) },
+    {
+      kind: 'web',
+      profile: 'http',
+      host: '127.0.0.1',
+      port: 16060,
+      endpoint: '127.0.0.1:16060',
+      requiresProxy: false,
+      canOpen: true,
+      url: 'http://127.0.0.1:16060'
+    }
+  )
+  assert.equal(getTunnelUsage(mysqlEntry.definition).kind, 'database')
+  assert.equal(getTunnelUsage(mysqlEntry.definition).profile, 'mysql')
+  assert.match(modal, /entry=\{entry\}/)
+  assert.doesNotMatch(modal, /runtimeEntryForCard|definition:\s*\{[\s\S]*?name:/)
+  assert.match(card, /lifecyclePresentation/)
+  assert.match(card, /e\(lifecycle\.label\)/)
+  assert.match(card, /getTunnelUsage\(entry\?\.definition \|\| \{\}\)/)
 })
 
 test('guide handler normalizes section and merges the supported runtime context', () => {

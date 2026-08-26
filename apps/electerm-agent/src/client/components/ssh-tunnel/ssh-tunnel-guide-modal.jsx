@@ -20,18 +20,19 @@ const errorFocusByHelpSection = {
   'local-port-in-use': 'port-conflict',
   'port-conflict': 'port-conflict',
   'test-timeout': 'timeout',
-  timeout: 'timeout'
+  timeout: 'timeout',
+  unknown: 'unknown'
 }
 const errorFocusByCode = {
   SSH_TUNNEL_FORWARDING_PROHIBITED: 'forwarding-prohibited',
   SSH_TUNNEL_DESTINATION_REFUSED: 'destination-refused',
   SSH_TUNNEL_PORT_IN_USE: 'port-conflict',
   EADDRINUSE: 'port-conflict',
-  SSH_TUNNEL_TEST_TIMEOUT: 'timeout'
+  SSH_TUNNEL_TEST_TIMEOUT: 'timeout',
+  SSH_TUNNEL_UNKNOWN: 'unknown'
 }
 const errorHelpSections = new Set([
-  ...Object.keys(errorFocusByHelpSection),
-  'unknown'
+  ...Object.keys(errorFocusByHelpSection)
 ])
 
 export function normalizeSection (section) {
@@ -106,6 +107,17 @@ function GuideContent ({ section, context, focusError }) {
     return (
       <section className='ssh-tunnel-guide-section'>
         <h3>{e('shellpilotTunnelGuideSocksBrowser')}</h3>
+        <code className='ssh-tunnel-guide-flow'>{e('shellpilotTunnelGuideSocksFlow')}</code>
+        <dl className='ssh-tunnel-guide-profile-list'>
+          <div><dt>{e('shellpilotTunnelGuideSocksLocalHost')}</dt><dd><code>127.0.0.1</code></dd></div>
+          <div><dt>{e('shellpilotTunnelGuideSocksLocalPort')}</dt><dd><code>1080</code></dd></div>
+          <div><dt>{e('shellpilotTunnelGuideSocksNoRemoteTarget')}</dt><dd>{e('shellpilotTunnelGuideSocksNoRemoteTargetValue')}</dd></div>
+        </dl>
+        <ol>
+          <li>{e('shellpilotTunnelGuideSocksStartProof')}</li>
+          <li>{e('shellpilotTunnelGuideSocksConfigureApps')}</li>
+          <li>{e('shellpilotTunnelGuideSocksFirstFailure')}</li>
+        </ol>
         <div className='ssh-tunnel-guide-topic-grid'>
           <article>
             <strong>{e('shellpilotTunnelGuideFirefox')}</strong>
@@ -133,6 +145,18 @@ function GuideContent ({ section, context, focusError }) {
       <section className='ssh-tunnel-guide-section'>
         <h3>{e('shellpilotTunnelGuideRemoteSafety')}</h3>
         <p>{e('shellpilotTunnelGuideRemoteAccessMeaning')}</p>
+        <dl className='ssh-tunnel-guide-profile-list'>
+          <div><dt>{e('shellpilotTunnelGuideRemoteServerHost')}</dt><dd><code>127.0.0.1</code></dd></div>
+          <div><dt>{e('shellpilotTunnelGuideRemoteServerPort')}</dt><dd><code>18080</code></dd></div>
+          <div><dt>{e('shellpilotTunnelGuideRemoteClientTargetHost')}</dt><dd><code>127.0.0.1</code></dd></div>
+          <div><dt>{e('shellpilotTunnelGuideRemoteClientTargetPort')}</dt><dd><code>8080</code></dd></div>
+        </dl>
+        <p>{e('shellpilotTunnelGuideRemoteFlow')}</p>
+        <ol>
+          <li>{e('shellpilotTunnelGuideRemoteStartProof')}</li>
+          <li>{e('shellpilotTunnelGuideRemoteExternalAccess')}</li>
+          <li>{e('shellpilotTunnelGuideRemoteFirstFailure')}</li>
+        </ol>
         <ul>
           <li>{e('shellpilotTunnelGuideGatewayPorts')}</li>
           <li>{e('shellpilotTunnelGuideRemoteFirewall')}</li>
@@ -160,6 +184,13 @@ function GuideContent ({ section, context, focusError }) {
           </div>
           <div data-error='timeout' className={focusError === 'timeout' ? 'active' : ''}>
             <dt>{e('shellpilotTunnelGuideErrorTimeout')}</dt><dd>{e('shellpilotTunnelGuideErrorTimeoutFix')}</dd>
+          </div>
+          <div data-error='unknown' className={focusError === 'unknown' ? 'active' : ''}>
+            <dt>{e('shellpilotTunnelGuideErrorUnknown')}</dt>
+            <dd>
+              <p>{e('shellpilotTunnelGuideErrorUnknownCause')}</p>
+              <p>{e('shellpilotTunnelGuideErrorUnknownFix')}</p>
+            </dd>
           </div>
           <div><dt>{e('shellpilotTunnelGuideErrorCertificate')}</dt><dd>{e('shellpilotTunnelGuideErrorCertificateFix')}</dd></div>
         </dl>

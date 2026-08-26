@@ -15,7 +15,7 @@ import {
 } from '@ant-design/icons'
 import { copy } from '../../common/clipboard'
 import { formatShellPilotTranslation } from '../../common/shellpilot-i18n-overrides.js'
-import { getTunnelFlowText } from './ssh-tunnel-definition.js'
+import { getTunnelFlowText, validateTunnel } from './ssh-tunnel-definition.js'
 import { getTunnelDiagnostic } from './ssh-tunnel-diagnostics.js'
 import { getTunnelUsage } from './ssh-tunnel-usage.js'
 
@@ -35,6 +35,17 @@ const availabilityPresentation = {
   limited: { icon: <ExclamationCircleOutlined />, label: 'shellpilotTunnelAvailabilityLimited' },
   failed: { icon: <CloseCircleOutlined />, label: 'shellpilotTunnelAvailabilityFailed' },
   unverified: { icon: <QuestionCircleOutlined />, label: 'shellpilotTunnelAvailabilityUnverified' }
+}
+
+const lifecyclePresentation = {
+  running: { label: 'shellpilotTunnelRunningStatus' },
+  starting: { label: 'shellpilotTunnelHealthStarting' },
+  healthy: { label: 'shellpilotTunnelHealthHealthy' },
+  reconnecting: { label: 'shellpilotTunnelHealthReconnecting' },
+  'port-conflict': { label: 'shellpilotTunnelHealthPortConflict' },
+  'session-lost': { label: 'shellpilotTunnelHealthSessionLost' },
+  stopped: { label: 'shellpilotTunnelHealthStopped' },
+  failed: { label: 'shellpilotTunnelHealthFailed' }
 }
 
 const diagnosticValueKeyByToken = {
@@ -164,6 +175,18 @@ export async function copyTextSafely (text, runtimeWindow, copyFunction) {
     return true
   } catch {
     return false
+  }
+}
+
+export function copyableFlowFor (
+  definition = {},
+  validate = validateTunnel,
+  format = getTunnelFlowText
+) {
+  try {
+    return format(validate(definition))
+  } catch {
+    return ''
   }
 }
 
@@ -426,14 +449,17 @@ export default function SshTunnelRuntimeCard ({
     : null
   const availability = availabilityFor(entry)
   const presentation = availabilityPresentation[availability] || availabilityPresentation.unverified
+  const lifecycle = lifecyclePresentation[entry?.state] || lifecyclePresentation.failed
   const stages = Array.isArray(entry?.lastTest?.stages) ? entry.lastTest.stages : []
   const loading = busy === true || busy === entry?.id
+  const flowText = copyableFlowFor(entry?.definition)
 
   return (
     <article className={`ssh-tunnel-running-card ssh-tunnel-runtime-card ssh-tunnel-runtime-card--${availability}`}>
       <header className='ssh-tunnel-runtime-card-header'>
         <div>
           <strong>{tunnelName(entry)}</strong>
+          <span className='ssh-tunnel-runtime-lifecycle'>{e(lifecycle.label)}</span>
           <span>{getTunnelFlowText(entry?.definition || {})}</span>
         </div>
         <Tag
@@ -450,6 +476,7 @@ export default function SshTunnelRuntimeCard ({
       <DiagnosticPanel diagnostic={diagnostic} definition={entry?.definition} onOpenGuide={onOpenGuide} />
 
       <div className='ssh-tunnel-runtime-card-actions'>
+        {copyButton(flowText, e('shellpilotTunnelCopyFlow'))}
         <Button
           size='small'
           icon={<ReadOutlined />}

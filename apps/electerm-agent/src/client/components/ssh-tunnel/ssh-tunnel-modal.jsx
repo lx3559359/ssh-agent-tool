@@ -118,16 +118,6 @@ function guideSectionForDraft (definition = {}) {
   return 'choose-type'
 }
 
-function runtimeEntryForCard (entry = {}) {
-  return {
-    ...entry,
-    definition: {
-      ...entry.definition,
-      name: `${tunnelName(entry)} · ${e(healthPresentation(entry.state).label)}`
-    }
-  }
-}
-
 function showDisconnectHistory (entry) {
   const events = Array.isArray(entry.events) ? entry.events : []
   Modal.info({
@@ -819,7 +809,7 @@ export default function SshTunnelModal ({
                   runtime.tunnels.map(entry => (
                     <SshTunnelRuntimeCard
                       key={entry.id}
-                      entry={runtimeEntryForCard(entry)}
+                      entry={entry}
                       busy={actionId}
                       onTest={handleTest}
                       onEdit={() => handleEdit(entry)}
