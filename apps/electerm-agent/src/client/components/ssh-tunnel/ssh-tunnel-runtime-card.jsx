@@ -14,6 +14,7 @@ import {
   StopOutlined
 } from '@ant-design/icons'
 import { copy } from '../../common/clipboard'
+import { formatShellPilotTranslation } from '../../common/shellpilot-i18n-overrides.js'
 import { getTunnelFlowText } from './ssh-tunnel-definition.js'
 import { getTunnelDiagnostic } from './ssh-tunnel-diagnostics.js'
 import { getTunnelUsage } from './ssh-tunnel-usage.js'
@@ -49,10 +50,19 @@ export function currentFailureFor (entry = {}) {
   const lastTest = entry?.lastTest && typeof entry.lastTest === 'object'
     ? entry.lastTest
     : null
-  if (lastTest?.verdict === availability && Array.isArray(lastTest.stages)) {
-    const decisiveStage = lastTest.stages.find(stage => {
-      return stage && typeof stage === 'object' && stage.status === availability
-    })
+  if (Array.isArray(lastTest?.stages)) {
+    const decisiveStatuses = [lastTest.verdict, availability]
+      .filter((status, index, statuses) => {
+        return (
+          (status === 'limited' || status === 'failed') &&
+          statuses.indexOf(status) === index
+        )
+      })
+    const decisiveStage = decisiveStatuses
+      .map(status => lastTest.stages.find(stage => {
+        return stage && typeof stage === 'object' && stage.status === status
+      }))
+      .find(Boolean)
     if (decisiveStage) {
       return {
         code: decisiveStage.code,
@@ -81,27 +91,53 @@ export function guideSectionFor (usage = {}, diagnostic = null) {
   return 'how-to-access'
 }
 
+export function guideRequestFor (usage = {}, diagnostic = null, definition = {}) {
+  return {
+    section: guideSectionFor(usage, diagnostic),
+    context: {
+      definition,
+      errorCode: diagnostic?.code,
+      helpSection: diagnostic?.helpSection
+    }
+  }
+}
+
+export function canOpenWebFor (usage = {}, runtimeWindow) {
+  return Boolean(
+    usage.canOpen === true && usage.url &&
+    typeof runtimeWindow?.openLink === 'function'
+  )
+}
+
+export function canCopyFor (text, copyFunction) {
+  return Boolean(text) && typeof copyFunction === 'function'
+}
+
 function tunnelName (entry) {
   return entry?.definition?.name || e('shellpilotTopbarSshTunnel')
 }
 
 function copyButton (text, label) {
+  const canCopy = canCopyFor(text, copy)
   return (
     <Button
       size='small'
       icon={<CopyOutlined />}
       aria-label={label}
-      disabled={!text}
-      onClick={() => text && copy(text)}
+      disabled={!canCopy}
+      onClick={() => {
+        if (canCopy) copy(text)
+      }}
     >
       {label}
     </Button>
   )
 }
 
-function AccessPanel ({ usage, onOpenGuide }) {
+function AccessPanel ({ usage, definition, onOpenGuide }) {
   const hasEndpoint = Boolean(usage.endpoint)
-  const canOpenWeb = usage.canOpen === true && Boolean(usage.url)
+  const runtimeWindow = typeof window === 'undefined' ? null : window
+  const canOpenWeb = canOpenWebFor(usage, runtimeWindow)
 
   if (!hasEndpoint) {
     return (
@@ -127,34 +163,13 @@ function AccessPanel ({ usage, onOpenGuide }) {
             icon={<LinkOutlined />}
             disabled={!canOpenWeb}
             onClick={() => {
-              if (
-                usage.canOpen === true && usage.url &&
-                typeof window?.openLink === 'function'
-              ) {
-                window.openLink(usage.url)
-              }
+              if (canOpenWeb) runtimeWindow.openLink(usage.url)
             }}
           >
             {e('shellpilotTunnelOpenInBrowser')}
           </Button>
-          <Button
-            size='small'
-            icon={<CopyOutlined />}
-            aria-label={e('shellpilotTunnelCopyEndpoint')}
-            disabled={!usage.endpoint}
-            onClick={() => usage.endpoint && copy(usage.endpoint)}
-          >
-            {e('shellpilotTunnelCopyEndpoint')}
-          </Button>
-          <Button
-            size='small'
-            icon={<CopyOutlined />}
-            aria-label={e('shellpilotTunnelCopyUrl')}
-            disabled={!usage.url}
-            onClick={() => usage.url && copy(usage.url)}
-          >
-            {e('shellpilotTunnelCopyUrl')}
-          </Button>
+          {copyButton(usage.endpoint, e('shellpilotTunnelCopyEndpoint'))}
+          {copyButton(usage.url, e('shellpilotTunnelCopyUrl'))}
         </Space>
       </section>
     )
@@ -172,7 +187,7 @@ function AccessPanel ({ usage, onOpenGuide }) {
           <Button
             size='small'
             icon={<ReadOutlined />}
-            onClick={() => onOpenGuide?.('socks-browser')}
+            onClick={() => onOpenGuide?.(guideRequestFor(usage, null, definition))}
           >
             {e('shellpilotTunnelGuideSocksBrowser')}
           </Button>
@@ -191,7 +206,7 @@ function AccessPanel ({ usage, onOpenGuide }) {
         </dl>
         <Space wrap>
           {copyButton(usage.endpoint, e('shellpilotTunnelCopyEndpoint'))}
-          <Button size='small' icon={<ReadOutlined />} onClick={() => onOpenGuide?.('how-to-access')}>
+          <Button size='small' icon={<ReadOutlined />} onClick={() => onOpenGuide?.(guideRequestFor(usage, null, definition))}>
             {e('shellpilotTunnelGuideHowToAccess')}
           </Button>
         </Space>
@@ -207,7 +222,7 @@ function AccessPanel ({ usage, onOpenGuide }) {
         <p>{e('shellpilotTunnelRemoteAccessFromServer')}</p>
         <Space wrap>
           {copyButton(usage.endpoint, e('shellpilotTunnelCopyEndpoint'))}
-          <Button size='small' icon={<ReadOutlined />} onClick={() => onOpenGuide?.('remote-safety')}>
+          <Button size='small' icon={<ReadOutlined />} onClick={() => onOpenGuide?.(guideRequestFor(usage, null, definition))}>
             {e('shellpilotTunnelGuideRemoteSafety')}
           </Button>
         </Space>
@@ -254,7 +269,7 @@ function StageGrid ({ stages }) {
   )
 }
 
-function DiagnosticPanel ({ diagnostic, onOpenGuide }) {
+function DiagnosticPanel ({ diagnostic, definition, onOpenGuide }) {
   if (!diagnostic) return null
   return (
     <section className={`ssh-tunnel-diagnostic ssh-tunnel-diagnostic--${diagnostic.severity}`}>
@@ -265,7 +280,11 @@ function DiagnosticPanel ({ diagnostic, onOpenGuide }) {
         Array.isArray(diagnostic.steps) && diagnostic.steps.length
           ? (
             <ol>
-              {diagnostic.steps.map((step, index) => <li key={`${step.key}-${index}`}>{e(step.key)}</li>)}
+              {diagnostic.steps.map((step, index) => (
+                <li key={`${step.key}-${index}`}>
+                  {formatShellPilotTranslation(e, step.key, step.values)}
+                </li>
+              ))}
             </ol>
             )
           : null
@@ -285,7 +304,11 @@ function DiagnosticPanel ({ diagnostic, onOpenGuide }) {
                           size='small'
                           icon={<CopyOutlined />}
                           aria-label={e('shellpilotTunnelCopyDiagnosticChecks')}
-                          onClick={() => copy(diagnostic.checksText)}
+                          disabled={!canCopyFor(diagnostic.checksText, copy)}
+                          onClick={() => {
+                            const canCopy = canCopyFor(diagnostic.checksText, copy)
+                            if (canCopy) copy(diagnostic.checksText)
+                          }}
                         />
                       </header>
                       <pre><code>{diagnostic.checksText}</code></pre>
@@ -304,7 +327,11 @@ function DiagnosticPanel ({ diagnostic, onOpenGuide }) {
                           size='small'
                           icon={<CopyOutlined />}
                           aria-label={e('shellpilotTunnelCopyDiagnosticConfig')}
-                          onClick={() => copy(diagnostic.configExample)}
+                          disabled={!canCopyFor(diagnostic.configExample, copy)}
+                          onClick={() => {
+                            const canCopy = canCopyFor(diagnostic.configExample, copy)
+                            if (canCopy) copy(diagnostic.configExample)
+                          }}
                         />
                       </header>
                       <pre><code>{diagnostic.configExample}</code></pre>
@@ -316,7 +343,11 @@ function DiagnosticPanel ({ diagnostic, onOpenGuide }) {
             )
           : null
       }
-      <Button size='small' icon={<ReadOutlined />} onClick={() => onOpenGuide?.(diagnostic.helpSection)}>
+      <Button
+        size='small'
+        icon={<ReadOutlined />}
+        onClick={() => onOpenGuide?.(guideRequestFor({}, diagnostic, definition))}
+      >
         {e('shellpilotTunnelOpenFixGuide')}
       </Button>
       <code className='ssh-tunnel-diagnostic-code'>{diagnostic.code}</code>
@@ -360,16 +391,16 @@ export default function SshTunnelRuntimeCard ({
         </Tag>
       </header>
 
-      <AccessPanel usage={usage} onOpenGuide={onOpenGuide} />
+      <AccessPanel usage={usage} definition={entry?.definition} onOpenGuide={onOpenGuide} />
       <StageGrid stages={stages} />
-      <DiagnosticPanel diagnostic={diagnostic} onOpenGuide={onOpenGuide} />
+      <DiagnosticPanel diagnostic={diagnostic} definition={entry?.definition} onOpenGuide={onOpenGuide} />
 
       <div className='ssh-tunnel-runtime-card-actions'>
         <Button
           size='small'
           icon={<ReadOutlined />}
           className='ssh-tunnel-runtime-guide-button'
-          onClick={() => onOpenGuide?.(guideSectionFor(usage, diagnostic))}
+          onClick={() => onOpenGuide?.(guideRequestFor(usage, diagnostic, entry?.definition))}
         >
           {e('shellpilotTunnelOpenFullGuide')}
         </Button>

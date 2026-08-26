@@ -3,31 +3,52 @@ import { Modal } from 'antd'
 
 const e = window.translate
 
-const sections = [
-  { id: 'choose-type', label: e('shellpilotTunnelGuideChooseType') },
-  { id: 'local-forward', label: e('shellpilotTunnelGuideLocalScenario') },
-  { id: 'how-to-access', label: e('shellpilotTunnelGuideHowToAccess') },
-  { id: 'socks-browser', label: e('shellpilotTunnelGuideSocksBrowser') },
-  { id: 'remote-safety', label: e('shellpilotTunnelGuideRemoteSafety') },
-  { id: 'errors', label: e('shellpilotTunnelGuideErrors') },
-  { id: 'glossary', label: e('shellpilotTunnelGuideGlossary') }
+export const guideSections = [
+  { id: 'choose-type', labelKey: 'shellpilotTunnelGuideChooseType' },
+  { id: 'local-forward', labelKey: 'shellpilotTunnelGuideLocalScenario' },
+  { id: 'how-to-access', labelKey: 'shellpilotTunnelGuideHowToAccess' },
+  { id: 'socks-browser', labelKey: 'shellpilotTunnelGuideSocksBrowser' },
+  { id: 'remote-safety', labelKey: 'shellpilotTunnelGuideRemoteSafety' },
+  { id: 'errors', labelKey: 'shellpilotTunnelGuideErrors' },
+  { id: 'glossary', labelKey: 'shellpilotTunnelGuideGlossary' }
 ]
 
-const sectionIds = new Set(sections.map(item => item.id))
+const sectionIds = new Set(guideSections.map(item => item.id))
+const errorFocusByHelpSection = {
+  'forwarding-prohibited': 'forwarding-prohibited',
+  'destination-refused': 'destination-refused',
+  'local-port-in-use': 'port-conflict',
+  'port-conflict': 'port-conflict',
+  'test-timeout': 'timeout',
+  timeout: 'timeout'
+}
+const errorFocusByCode = {
+  SSH_TUNNEL_FORWARDING_PROHIBITED: 'forwarding-prohibited',
+  SSH_TUNNEL_DESTINATION_REFUSED: 'destination-refused',
+  SSH_TUNNEL_PORT_IN_USE: 'port-conflict',
+  EADDRINUSE: 'port-conflict',
+  SSH_TUNNEL_TEST_TIMEOUT: 'timeout'
+}
 const errorHelpSections = new Set([
-  'forwarding-prohibited',
-  'destination-refused',
-  'local-port-in-use',
-  'test-timeout',
+  ...Object.keys(errorFocusByHelpSection),
   'unknown'
 ])
 
-function normalizeSection (section) {
+export function normalizeSection (section) {
   if (sectionIds.has(section)) return section
   return errorHelpSections.has(section) ? 'errors' : 'choose-type'
 }
 
-function GuideContent ({ section, context }) {
+export function focusErrorFor (requestedSection, context = {}) {
+  return (
+    errorFocusByHelpSection[requestedSection] ||
+    errorFocusByHelpSection[context?.helpSection] ||
+    errorFocusByCode[context?.errorCode] ||
+    null
+  )
+}
+
+function GuideContent ({ section, context, focusError }) {
   if (section === 'local-forward') {
     return (
       <section className='ssh-tunnel-guide-section'>
@@ -118,10 +139,18 @@ function GuideContent ({ section, context }) {
         <h3>{e('shellpilotTunnelGuideErrors')}</h3>
         {context?.errorCode ? <code className='ssh-tunnel-guide-context-code'>{String(context.errorCode)}</code> : null}
         <dl className='ssh-tunnel-guide-error-list'>
-          <div><dt>{e('shellpilotTunnelGuideErrorPortInUse')}</dt><dd>{e('shellpilotTunnelGuideErrorPortInUseFix')}</dd></div>
-          <div><dt>{e('shellpilotTunnelGuideErrorProhibited')}</dt><dd>{e('shellpilotTunnelGuideErrorProhibitedFix')}</dd></div>
-          <div><dt>{e('shellpilotTunnelGuideErrorRefused')}</dt><dd>{e('shellpilotTunnelGuideErrorRefusedFix')}</dd></div>
-          <div><dt>{e('shellpilotTunnelGuideErrorTimeout')}</dt><dd>{e('shellpilotTunnelGuideErrorTimeoutFix')}</dd></div>
+          <div data-error='port-conflict' className={focusError === 'port-conflict' ? 'active' : ''}>
+            <dt>{e('shellpilotTunnelGuideErrorPortInUse')}</dt><dd>{e('shellpilotTunnelGuideErrorPortInUseFix')}</dd>
+          </div>
+          <div data-error='forwarding-prohibited' className={focusError === 'forwarding-prohibited' ? 'active' : ''}>
+            <dt>{e('shellpilotTunnelGuideErrorProhibited')}</dt><dd>{e('shellpilotTunnelGuideErrorProhibitedFix')}</dd>
+          </div>
+          <div data-error='destination-refused' className={focusError === 'destination-refused' ? 'active' : ''}>
+            <dt>{e('shellpilotTunnelGuideErrorRefused')}</dt><dd>{e('shellpilotTunnelGuideErrorRefusedFix')}</dd>
+          </div>
+          <div data-error='timeout' className={focusError === 'timeout' ? 'active' : ''}>
+            <dt>{e('shellpilotTunnelGuideErrorTimeout')}</dt><dd>{e('shellpilotTunnelGuideErrorTimeoutFix')}</dd>
+          </div>
           <div><dt>{e('shellpilotTunnelGuideErrorCertificate')}</dt><dd>{e('shellpilotTunnelGuideErrorCertificateFix')}</dd></div>
         </dl>
       </section>
@@ -171,10 +200,12 @@ export default function SshTunnelGuideModal ({
   context = {},
   onClose
 }) {
-  const [section, setSection] = useState(() => normalizeSection(activeSection))
+  const [requestedSection, setRequestedSection] = useState(() => activeSection)
+  const section = normalizeSection(requestedSection)
+  const focusError = focusErrorFor(requestedSection, context)
 
   useEffect(() => {
-    if (open) setSection(normalizeSection(activeSection))
+    if (open) setRequestedSection(activeSection)
   }, [activeSection, open])
 
   return (
@@ -189,20 +220,20 @@ export default function SshTunnelGuideModal ({
     >
       <div className='ssh-tunnel-guide-layout'>
         <nav className='ssh-tunnel-guide-nav' aria-label={e('shellpilotTunnelGuideDirectory')}>
-          {sections.map(item => (
+          {guideSections.map(item => (
             <button
               type='button'
               key={item.id}
               className={section === item.id ? 'active' : ''}
               aria-current={section === item.id ? 'page' : undefined}
-              onClick={() => setSection(item.id)}
+              onClick={() => setRequestedSection(item.id)}
             >
-              {item.label}
+              {e(item.labelKey)}
             </button>
           ))}
         </nav>
         <main className='ssh-tunnel-guide-content'>
-          <GuideContent section={section} context={context} />
+          <GuideContent section={section} context={context} focusError={focusError} />
         </main>
       </div>
     </Modal>

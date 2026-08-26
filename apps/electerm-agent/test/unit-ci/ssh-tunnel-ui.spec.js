@@ -26,7 +26,10 @@ function loadRuntimeGuidanceLogic () {
     'failureStates',
     'availabilityFor',
     'currentFailureFor',
-    'guideSectionFor'
+    'guideSectionFor',
+    'guideRequestFor',
+    'canOpenWebFor',
+    'canCopyFor'
   ])
   const body = []
   const foundExports = []
@@ -52,6 +55,78 @@ function loadRuntimeGuidanceLogic () {
   vm.runInNewContext(generate(t.file(t.program(body))).code, { module }, {
     filename: 'ssh-tunnel-runtime-card.logic.js'
   })
+  return module.exports
+}
+
+function loadGuideLogic () {
+  const ast = parseJsx('src/client/components/ssh-tunnel/ssh-tunnel-guide-modal.jsx')
+  const names = new Set([
+    'guideSections',
+    'sectionIds',
+    'errorHelpSections',
+    'errorFocusByHelpSection',
+    'errorFocusByCode',
+    'normalizeSection',
+    'focusErrorFor'
+  ])
+  const body = []
+  const foundExports = []
+
+  for (const node of ast.program.body) {
+    if (t.isVariableDeclaration(node) && node.declarations.some(declaration => (
+      t.isIdentifier(declaration.id) && names.has(declaration.id.name)
+    ))) {
+      body.push(node)
+    }
+    if (t.isExportNamedDeclaration(node)) {
+      if (t.isVariableDeclaration(node.declaration)) {
+        body.push(node.declaration)
+        for (const declaration of node.declaration.declarations) {
+          if (t.isIdentifier(declaration.id) && names.has(declaration.id.name)) {
+            foundExports.push(declaration.id.name)
+          }
+        }
+      }
+      if (
+        t.isFunctionDeclaration(node.declaration) &&
+        names.has(node.declaration.id.name)
+      ) {
+        body.push(node.declaration)
+        foundExports.push(node.declaration.id.name)
+      }
+    }
+  }
+
+  body.push(parser.parse(`module.exports = { ${foundExports.join(', ')} }`).program.body[0])
+  const module = { exports: {} }
+  vm.runInNewContext(generate(t.file(t.program(body))).code, { module }, {
+    filename: 'ssh-tunnel-guide-modal.logic.js'
+  })
+  return module.exports
+}
+
+function loadFormatShellPilotTranslation () {
+  const ast = parser.parse(
+    source('src/client/common/shellpilot-i18n-overrides.js'),
+    { sourceType: 'module' }
+  )
+  const exported = ast.program.body.find(node => (
+    t.isExportNamedDeclaration(node) &&
+    t.isFunctionDeclaration(node.declaration) &&
+    node.declaration.id.name === 'formatShellPilotTranslation'
+  ))
+  assert.ok(exported, 'formatShellPilotTranslation export must exist')
+  const assignment = parser.parse('module.exports = formatShellPilotTranslation').program.body[0]
+  const module = { exports: null }
+  vm.runInNewContext(
+    generate(t.file(t.program([exported.declaration, assignment]))).code,
+    {
+      module,
+      getShellPilotTranslation: () => '',
+      isMeaningfulString: value => typeof value === 'string' && value.trim() !== ''
+    },
+    { filename: 'shellpilot-i18n-overrides.format.js' }
+  )
   return module.exports
 }
 
@@ -203,9 +278,9 @@ test('runtime guidance card derives truthful availability and safe access action
   assert.match(card, /const currentFailure = currentFailureFor\(entry\)/)
   assert.match(card, /const diagnostic = currentFailure\s*\? getTunnelDiagnostic\(currentFailure, entry\?\.definition\)\s*: null/)
   assert.match(card, /failureStates\.has\(entry\?\.state\)[\s\S]*?entry\?\.testState === 'checking'[\s\S]*?entry\?\.lastTest\?\.verdict \|\| 'unverified'/)
-  assert.match(card, /usage\.canOpen === true && usage\.url &&\s*typeof window\?\.openLink === 'function'/)
-  assert.match(card, /window\.openLink\(usage\.url\)/)
-  assert.match(card, /disabled=\{!usage\.endpoint\}/)
+  assert.match(card, /canOpenWebFor\(usage, runtimeWindow\)/)
+  assert.match(card, /runtimeWindow\.openLink\(usage\.url\)/)
+  assert.match(card, /canCopyFor\(text, copy\)/)
   assert.match(card, /data-stage=\{stage\.id\}/)
   for (const status of ['passed', 'limited', 'failed', 'unverified']) {
     assert.match(card, new RegExp(`${status}: \\{ icon:`))
@@ -257,6 +332,37 @@ test('current failure logic clears recovered history and derives active limited 
   assert.equal(limited.code, 'SSH_TUNNEL_FORWARDING_PROHIBITED')
   assert.equal(limited.message, 'policy denied')
   assert.equal(limited.stage, 'ssh-forwarding')
+
+  const failedWithLimitedEvidence = currentFailureFor({
+    state: 'failed',
+    lastTest: {
+      verdict: 'limited',
+      stages: [
+        { id: 'local-listener', status: 'passed', code: 'SSH_TUNNEL_LOCAL_LISTENER_READY', message: 'ready' },
+        { id: 'ssh-forwarding', status: 'limited', code: 'SSH_TUNNEL_FORWARDING_PROHIBITED', message: 'policy denied' }
+      ]
+    }
+  })
+  assert.equal(failedWithLimitedEvidence.code, 'SSH_TUNNEL_FORWARDING_PROHIBITED')
+  assert.equal(failedWithLimitedEvidence.message, 'policy denied')
+  assert.equal(failedWithLimitedEvidence.stage, 'ssh-forwarding')
+})
+
+test('diagnostic steps use the shared placeholder formatter with values', () => {
+  const card = source('src/client/components/ssh-tunnel/ssh-tunnel-runtime-card.jsx')
+  const format = loadFormatShellPilotTranslation()
+
+  assert.equal(
+    format(
+      () => 'Check {host}:{port} at {layer}',
+      'sshTunnel.diagnostic.test',
+      { host: '127.0.0.1', port: 16060, layer: 'ssh-forwarding' }
+    ),
+    'Check 127.0.0.1:16060 at ssh-forwarding'
+  )
+  assert.match(card, /import \{ formatShellPilotTranslation \} from '\.\.\/\.\.\/common\/shellpilot-i18n-overrides\.js'/)
+  assert.match(card, /formatShellPilotTranslation\(e, step\.key, step\.values\)/)
+  assert.doesNotMatch(card, /dangerouslySetInnerHTML/)
 })
 
 test('overall availability uses labels independent from stage labels', () => {
@@ -282,7 +388,7 @@ test('runtime guidance keeps diagnostics separate and callbacks defensive', () =
   assert.match(card, /copy\(diagnostic\.checksText\)/)
   assert.match(card, /copy\(diagnostic\.configExample\)/)
   assert.doesNotMatch(card, /checksText\s*\+|configExample\s*\+/)
-  assert.match(card, /onOpenGuide\?\.\(diagnostic\.helpSection\)/)
+  assert.match(card, /onOpenGuide\?\.\(guideRequestFor\([^)]*diagnostic[^)]*definition[^)]*\)\)/)
   for (const callback of [
     'onTest',
     'onEdit',
@@ -296,7 +402,7 @@ test('runtime guidance keeps diagnostics separate and callbacks defensive', () =
 })
 
 test('every runtime card exposes a safe guide action with context mapping', () => {
-  const { guideSectionFor } = loadRuntimeGuidanceLogic()
+  const { guideSectionFor, guideRequestFor } = loadRuntimeGuidanceLogic()
   const card = source('src/client/components/ssh-tunnel/ssh-tunnel-runtime-card.jsx')
 
   assert.equal(typeof guideSectionFor, 'function')
@@ -308,12 +414,47 @@ test('every runtime card exposes a safe guide action with context mapping', () =
     guideSectionFor({ kind: 'web' }, { helpSection: 'forwarding-prohibited' }),
     'forwarding-prohibited'
   )
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(guideRequestFor(
+      { kind: 'web' },
+      {
+        code: 'SSH_TUNNEL_FORWARDING_PROHIBITED',
+        helpSection: 'forwarding-prohibited'
+      },
+      { type: 'local', remoteHost: '127.0.0.1' }
+    ))),
+    {
+      section: 'forwarding-prohibited',
+      context: {
+        definition: { type: 'local', remoteHost: '127.0.0.1' },
+        errorCode: 'SSH_TUNNEL_FORWARDING_PROHIBITED',
+        helpSection: 'forwarding-prohibited'
+      }
+    }
+  )
   assert.match(card, /className='ssh-tunnel-runtime-guide-button'/)
-  assert.match(card, /onClick=\{\(\) => onOpenGuide\?\.\(guideSectionFor\(usage, diagnostic\)\)\}/)
+  assert.match(card, /onOpenGuide\?\.\(guideRequestFor\(usage, diagnostic, entry\?\.definition\)\)/)
+})
+
+test('web and clipboard actions share defensive capability gates', () => {
+  const { canOpenWebFor, canCopyFor } = loadRuntimeGuidanceLogic()
+  const card = source('src/client/components/ssh-tunnel/ssh-tunnel-runtime-card.jsx')
+
+  assert.equal(canOpenWebFor({ canOpen: true, url: 'http://127.0.0.1:16060' }, undefined), false)
+  assert.equal(canOpenWebFor({ canOpen: true, url: 'http://127.0.0.1:16060' }, {}), false)
+  assert.equal(canOpenWebFor({ canOpen: false, url: 'http://127.0.0.1:16060' }, { openLink () {} }), false)
+  assert.equal(canOpenWebFor({ canOpen: true }, { openLink () {} }), false)
+  assert.equal(canOpenWebFor({ canOpen: true, url: 'http://127.0.0.1:16060' }, { openLink () {} }), true)
+  assert.equal(canCopyFor('127.0.0.1:16060', () => {}), true)
+  assert.equal(canCopyFor('', () => {}), false)
+  assert.equal(canCopyFor('127.0.0.1:16060', undefined), false)
+  assert.match(card, /disabled=\{!canOpenWeb\}[\s\S]*if \(canOpenWeb\)/)
+  assert.match(card, /disabled=\{!canCopy\}[\s\S]*if \(canCopy\)/)
 })
 
 test('beginner guide has seven synchronized sections and safe error mapping', () => {
   const guide = source('src/client/components/ssh-tunnel/ssh-tunnel-guide-modal.jsx')
+  const { normalizeSection, focusErrorFor } = loadGuideLogic()
 
   assert.match(guide, /import \{ Modal \} from 'antd'/)
   assert.match(guide, /export default function SshTunnelGuideModal \(\{\s*open,\s*activeSection = 'choose-type',\s*context = \{\},\s*onClose\s*\}\)/)
@@ -330,12 +471,32 @@ test('beginner guide has seven synchronized sections and safe error mapping', ()
     assert.match(guide, new RegExp(`id: '${id}'`))
   }
   assert.equal((guide.match(/id: '(?:choose-type|local-forward|how-to-access|socks-browser|remote-safety|errors|glossary)'/g) || []).length, 7)
+  assert.equal(normalizeSection('forwarding-prohibited'), 'errors')
+  assert.equal(focusErrorFor('forwarding-prohibited'), 'forwarding-prohibited')
+  assert.equal(focusErrorFor('errors', { helpSection: 'destination-refused' }), 'destination-refused')
+  assert.equal(focusErrorFor('errors', { errorCode: 'SSH_TUNNEL_PORT_IN_USE' }), 'port-conflict')
+  assert.equal(focusErrorFor('errors', { errorCode: 'SSH_TUNNEL_TEST_TIMEOUT' }), 'timeout')
   assert.match(guide, /const errorHelpSections = new Set\(\[/)
   assert.match(guide, /errorHelpSections\.has\(section\) \? 'errors' : 'choose-type'/)
-  assert.match(guide, /useEffect\(\(\) => \{\s*if \(open\) setSection\(normalizeSection\(activeSection\)\)\s*\}, \[activeSection, open\]\)/)
+  assert.match(guide, /const \[requestedSection, setRequestedSection\] = useState/)
+  assert.match(guide, /const section = normalizeSection\(requestedSection\)/)
+  assert.match(guide, /focusErrorFor\(requestedSection, context\)/)
   assert.match(guide, /aria-current=\{section === item\.id \? 'page' : undefined\}/)
+  assert.match(guide, /data-error='forwarding-prohibited'/)
+  assert.match(guide, /focusError === 'forwarding-prohibited' \? 'active' : ''/)
   assert.match(guide, /127\.0\.0\.1:16060[\s\S]*SSH[\s\S]*server 127\.0\.0\.1:6060/)
   assert.doesNotMatch(guide, /\.write\(|sendText|runCmd|window\.openLink/)
+})
+
+test('guide section labels translate at render time', () => {
+  const guide = source('src/client/components/ssh-tunnel/ssh-tunnel-guide-modal.jsx')
+  const { guideSections } = loadGuideLogic()
+
+  assert.equal(guideSections.length, 7)
+  assert.equal(guideSections.every(section => typeof section.labelKey === 'string'), true)
+  assert.equal(guideSections.some(section => Object.hasOwn(section, 'label')), false)
+  assert.match(guide, /\{e\(item\.labelKey\)\}/)
+  assert.doesNotMatch(guide, /label: e\(/)
 })
 
 test('beginner guide uses the planned localized content contract', () => {
@@ -387,10 +548,13 @@ test('runtime guidance styles match the approved hierarchy responsively', () => 
   assert.match(styles, /overflow-wrap anywhere/)
   assert.doesNotMatch(styles, /gradient\(/)
   assert.doesNotMatch(styles, /max-height min\(/)
-  assert.match(styles, /\.ssh-tunnel-stage--passed[\s\S]*color var\(--sp-success,[\s\S]*border-color var\(--sp-success,/)
-  assert.match(styles, /\.ssh-tunnel-stage--limited[\s\S]*color var\(--sp-warning,[\s\S]*border-color var\(--sp-warning,/)
-  assert.match(styles, /\.ssh-tunnel-stage--failed[\s\S]*color var\(--sp-danger,[\s\S]*border-color var\(--sp-danger,/)
-  assert.match(styles, /\.ssh-tunnel-stage--unverified[\s\S]*color var\(--sp-text-muted,[\s\S]*border-color var\(--sp-border,/)
+  assert.match(styles, /\.ssh-tunnel-stage\s+[\s\S]*color var\(--sp-text\)[\s\S]*> span:last-child[\s\S]*color var\(--sp-text-muted\)/)
+  assert.match(styles, /\.ssh-tunnel-stage--passed[\s\S]*border-color var\(--sp-success,/)
+  assert.match(styles, /\.ssh-tunnel-stage--limited[\s\S]*border-color var\(--sp-warning,/)
+  assert.match(styles, /\.ssh-tunnel-stage--failed[\s\S]*border-color var\(--sp-danger,/)
+  assert.match(styles, /\.ssh-tunnel-stage--unverified[\s\S]*border-color var\(--sp-border,/)
+  assert.doesNotMatch(styles, /\.ssh-tunnel-stage--(?:passed|limited|failed)\r?\n\s+color var\(--sp-(?:success|warning|danger),/)
+  assert.doesNotMatch(styles, /&--(?:passed|limited|failed)\r?\n\s+color var\(--sp-(?:success|warning|danger),/)
   assert.doesNotMatch(styles, /color #(?:067647|b54708|b42318)/i)
 })
 
