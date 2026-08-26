@@ -164,7 +164,7 @@ function policyContextTemplate (type) {
   const policyNames = type === 'remote'
     ? 'allowtcpforwarding|permitlisten|disableforwarding'
     : 'allowtcpforwarding|permitopen|disableforwarding'
-  return `sudo sshd -T -C user=SSH_LOGIN_USER,addr=CLIENT_IP,host=SSH_SERVER_HOST | grep -Ei '${policyNames}'`
+  return `sudo sshd -T -C user=SSH_LOGIN_USER,addr=CLIENT_IP,host=CLIENT_RESOLVED_HOST,laddr=SSH_SERVER_IP,lport=SSH_SERVER_PORT | grep -Ei '${policyNames}'`
 }
 
 function policySteps (definition) {
@@ -173,9 +173,12 @@ function policySteps (definition) {
       scope: 'global-baseline'
     }),
     step('sshTunnel.diagnostic.forwardingProhibited.matchContext', {
-      requiredContext: ['user', 'addr', 'host'],
+      requiredContext: ['user', 'addr', 'host', 'laddr', 'lport'],
       commandTemplate: policyContextTemplate(definition.type),
-      replaceWithRealSshContext: true
+      replaceWithRealSshContext: true,
+      hostMeaning: 'client-resolved-host',
+      laddrMeaning: 'ssh-server-ip',
+      lportMeaning: 'ssh-server-port'
     }),
     step('sshTunnel.diagnostic.forwardingProhibited.authorizedKeysRestrictions', {
       restrictions: [

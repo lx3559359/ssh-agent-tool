@@ -73,11 +73,16 @@ test('forwarding prohibited uses a read-only check and separate scoped local pol
     'sshTunnel.diagnostic.forwardingProhibited.certificateRestrictions'
   )
   assert.equal(globalBaseline.values.scope, 'global-baseline')
-  assert.deepEqual(matchContext.values.requiredContext, ['user', 'addr', 'host'])
+  assert.deepEqual(matchContext.values.requiredContext, [
+    'user', 'addr', 'host', 'laddr', 'lport'
+  ])
   assert.equal(matchContext.values.replaceWithRealSshContext, true)
+  assert.equal(matchContext.values.hostMeaning, 'client-resolved-host')
+  assert.equal(matchContext.values.laddrMeaning, 'ssh-server-ip')
+  assert.equal(matchContext.values.lportMeaning, 'ssh-server-port')
   assert.equal(
     matchContext.values.commandTemplate,
-    "sudo sshd -T -C user=SSH_LOGIN_USER,addr=CLIENT_IP,host=SSH_SERVER_HOST | grep -Ei 'allowtcpforwarding|permitopen|disableforwarding'"
+    "sudo sshd -T -C user=SSH_LOGIN_USER,addr=CLIENT_IP,host=CLIENT_RESOLVED_HOST,laddr=SSH_SERVER_IP,lport=SSH_SERVER_PORT | grep -Ei 'allowtcpforwarding|permitopen|disableforwarding'"
   )
   assert.deepEqual(authorizedKeys.values.restrictions, [
     'restrict',
@@ -124,7 +129,7 @@ test('forwarding prohibited scopes remote policy checks and keeps dynamic forwar
   )
   assert.equal(
     findStep(remote, 'sshTunnel.diagnostic.forwardingProhibited.matchContext').values.commandTemplate,
-    "sudo sshd -T -C user=SSH_LOGIN_USER,addr=CLIENT_IP,host=SSH_SERVER_HOST | grep -Ei 'allowtcpforwarding|permitlisten|disableforwarding'"
+    "sudo sshd -T -C user=SSH_LOGIN_USER,addr=CLIENT_IP,host=CLIENT_RESOLVED_HOST,laddr=SSH_SERVER_IP,lport=SSH_SERVER_PORT | grep -Ei 'allowtcpforwarding|permitlisten|disableforwarding'"
   )
 })
 
