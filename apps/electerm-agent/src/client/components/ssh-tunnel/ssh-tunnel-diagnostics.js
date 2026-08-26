@@ -30,32 +30,42 @@ function isSafeIpv4 (host) {
   })
 }
 
-function isSafeIpv6 (host) {
-  const zoneIndex = host.indexOf('%')
-  const address = zoneIndex === -1 ? host : host.slice(0, zoneIndex)
-  const zone = zoneIndex === -1 ? '' : host.slice(zoneIndex + 1)
-  return address.includes(':') &&
-    /^[0-9A-Fa-f:.]+$/.test(address) &&
-    (!zone || /^[A-Za-z0-9._-]{1,32}$/.test(zone))
-}
-
-function normalizeBracketedIpv6 (host) {
-  if (!host.startsWith('[') || !host.endsWith(']')) {
+function canonicalIpv6Host (host) {
+  const hasOpeningBracket = host.startsWith('[')
+  const hasClosingBracket = host.endsWith(']')
+  if (hasOpeningBracket !== hasClosingBracket) {
     return undefined
   }
-  const unwrapped = host.slice(1, -1)
-  return isSafeIpv6(unwrapped) ? host : undefined
+  const address = hasOpeningBracket ? host.slice(1, -1) : host
+  if (!address.includes(':') || address.includes('%') ||
+    !/^[0-9A-Fa-f:.]+$/.test(address)) {
+    return undefined
+  }
+  try {
+    return new URL(`http://[${address}]/`).hostname
+  } catch {
+    return undefined
+  }
 }
 
 function safeHost (value, fallback = loopbackHost) {
   if (typeof value !== 'string' || value.length === 0 || value.length > 255) {
     return fallback
   }
-  const bracketed = normalizeBracketedIpv6(value)
-  if (bracketed) {
-    return bracketed
+  const ipv6 = canonicalIpv6Host(value)
+  if (ipv6) {
+    return ipv6
   }
-  if (isSafeIpv4(value) || isSafeDnsName(value) || isSafeIpv6(value)) {
+  if (value.includes('[') || value.includes(']') || /[:%]/.test(value)) {
+    return fallback
+  }
+  if (isSafeIpv4(value)) {
+    return value
+  }
+  if (/^[0-9.]+$/.test(value)) {
+    return fallback
+  }
+  if (isSafeDnsName(value)) {
     return value
   }
   return fallback
@@ -150,10 +160,11 @@ export function getTunnelDiagnostic (error = {}, definition = {}) {
       [
         step('sshTunnel.diagnostic.forwardingProhibited.checkPolicy'),
         step('sshTunnel.diagnostic.forwardingProhibited.reviewExample', {
-          forwarding: tunnel.type
+          forwarding: tunnel.type,
+          requiresAdministratorReview: true
         })
       ],
-      "Read-only SSH server policy check: sudo sshd -T | grep -Ei 'allowtcpforwarding|permitopen|disableforwarding'. The separate configuration example is only a minimal template and needs administrator review.",
+      "sudo sshd -T | grep -Ei 'allowtcpforwarding|permitopen|disableforwarding'",
       forwardingConfigExample(tunnel)
     )
   }
@@ -172,7 +183,7 @@ export function getTunnelDiagnostic (error = {}, definition = {}) {
         }),
         step('sshTunnel.diagnostic.destinationRefused.confirmTarget')
       ],
-      `From the SSH server, read the target listener: ss -lntp | grep ':${tunnel.remotePort}'`
+      `ss -lntp | grep ':${tunnel.remotePort}'`
     )
   }
 
@@ -190,7 +201,7 @@ export function getTunnelDiagnostic (error = {}, definition = {}) {
         }),
         step('sshTunnel.diagnostic.portInUse.chooseDifferentPort')
       ],
-      `Windows read-only listener check: Get-NetTCPConnection -LocalPort ${tunnel.localPort} -ErrorAction SilentlyContinue`
+      `Get-NetTCPConnection -LocalPort ${tunnel.localPort} -ErrorAction SilentlyContinue`
     )
   }
 
@@ -207,7 +218,7 @@ export function getTunnelDiagnostic (error = {}, definition = {}) {
         step('sshTunnel.diagnostic.timeout.checkStage', { layer }),
         step('sshTunnel.diagnostic.timeout.retrySafely')
       ],
-      'No action was run. Confirm the selected endpoint and retry the tunnel test when the network is stable.'
+      ''
     )
   }
 
@@ -222,6 +233,6 @@ export function getTunnelDiagnostic (error = {}, definition = {}) {
       step('sshTunnel.diagnostic.unknown.reviewDefinition'),
       step('sshTunnel.diagnostic.unknown.retrySafely')
     ],
-    'No action was run. Review the tunnel definition and retry after confirming the endpoint.'
+    ''
   )
 }

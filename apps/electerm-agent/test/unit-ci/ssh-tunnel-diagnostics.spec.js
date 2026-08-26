@@ -36,7 +36,10 @@ test('forwarding prohibited uses a read-only check and separate scoped local pol
   assert.equal(diagnostic.layer, 'ssh-forwarding')
   assert.equal(diagnostic.severity, 'warning')
   assert.equal(diagnostic.helpSection, 'forwarding-prohibited')
-  assert.match(diagnostic.checksText, /sudo sshd -T \| grep -Ei 'allowtcpforwarding\|permitopen\|disableforwarding'/)
+  assert.equal(
+    diagnostic.checksText.trim(),
+    "sudo sshd -T | grep -Ei 'allowtcpforwarding|permitopen|disableforwarding'"
+  )
   assert.equal(diagnostic.configExample, [
     '# Minimal scoped example; replace ssh-login-user before use:',
     'Match User ssh-login-user',
@@ -77,7 +80,7 @@ test('destination refused checks the valid remote listener from the SSH server p
 
   assert.equal(diagnostic.layer, 'target-service')
   assert.equal(diagnostic.severity, 'error')
-  assert.match(diagnostic.checksText, /ss -lntp \| grep ':6060'/)
+  assert.equal(diagnostic.checksText, "ss -lntp | grep ':6060'")
   assert.equal(diagnostic.configExample, '')
 })
 
@@ -94,7 +97,10 @@ test('port-in-use reads only the valid Windows local listener port', async () =>
 
   assert.equal(diagnostic.layer, 'local-listener')
   assert.equal(diagnostic.severity, 'error')
-  assert.match(diagnostic.checksText, /Get-NetTCPConnection -LocalPort 16060 -ErrorAction SilentlyContinue/)
+  assert.equal(
+    diagnostic.checksText,
+    'Get-NetTCPConnection -LocalPort 16060 -ErrorAction SilentlyContinue'
+  )
   assert.equal(alias.code, 'SSH_TUNNEL_PORT_IN_USE')
 })
 
@@ -116,7 +122,7 @@ test('timeout maps known stages and offers warning-only safe retry guidance', as
     assert.equal(diagnostic.layer, layer)
     assert.equal(diagnostic.severity, 'warning')
     assert.equal(diagnostic.configExample, '')
-    assert.equal(diagnostic.checksText.includes('restart'), false)
+    assert.equal(diagnostic.checksText, '')
   }
 })
 
@@ -147,7 +153,35 @@ test('untrusted ports hosts and error text never reach rendered diagnostics', as
     assert.doesNotMatch(serialized, new RegExp(forbidden.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
   }
   assert.match(diagnostic.configExample, /127\.0\.0\.1:6060/)
-  assert.match(refused.checksText, /ss -lntp \| grep ':6060'/)
+  assert.equal(refused.checksText, "ss -lntp | grep ':6060'")
+})
+
+test('diagnostics reject malformed hosts and canonicalize valid IPv6 without shell text', async () => {
+  const { getTunnelDiagnostic } = await loadDiagnostics()
+  const invalidHosts = ['::::', '999.1.1.1', 'a..b', '[2001:db8::1', '[::1]]']
+
+  for (const host of invalidHosts) {
+    const diagnostic = getTunnelDiagnostic(
+      { code: 'SSH_TUNNEL_FORWARDING_PROHIBITED' },
+      localDefinition({ sshTunnelRemoteHost: host })
+    )
+    assert.match(diagnostic.configExample, /PermitOpen 127\.0\.0\.1:6060/)
+    assert.equal(diagnostic.configExample.includes(host), false)
+  }
+
+  for (const [host, expected] of [
+    ['localhost', 'localhost'],
+    ['203.0.113.7', '203.0.113.7'],
+    ['db.example.com', 'db.example.com'],
+    ['2001:db8::1', '[2001:db8::1]'],
+    ['[2001:db8::1]', '[2001:db8::1]']
+  ]) {
+    const diagnostic = getTunnelDiagnostic(
+      { code: 'SSH_TUNNEL_FORWARDING_PROHIBITED' },
+      localDefinition({ sshTunnelRemoteHost: host })
+    )
+    assert.match(diagnostic.configExample, new RegExp(`PermitOpen ${expected.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:6060`))
+  }
 })
 
 test('unknown failures are bounded, do not expose error details, and module has no execution dependency', async () => {
@@ -164,6 +198,7 @@ test('unknown failures are bounded, do not expose error details, and module has 
   assert.equal(diagnostic.layer, 'unknown')
   assert.equal(diagnostic.severity, 'error')
   assert.equal(diagnostic.configExample, '')
+  assert.equal(diagnostic.checksText, '')
   assert.doesNotMatch(JSON.stringify(diagnostic), /leak-me|leak-stack/)
   assert.ok(JSON.stringify(diagnostic).length <= 4000)
   assert.doesNotMatch(source, /child_process|node-pty|session\s*\.|\.exec\s*\(/i)
