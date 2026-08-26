@@ -127,6 +127,22 @@ function connectHostForBind (bindHost) {
   return isWildcardBindHost(bindHost) ? '[::1]' : bindHost
 }
 
+function getBoundUsage (kind, profile, hostValue, portValue, requiresProxy) {
+  const bindAddress = normalizeBindAddress(hostValue, portValue)
+  const usesWildcardBind = isWildcardBindHost(bindAddress.host)
+  const address = normalizeAccessAddress(
+    connectHostForBind(bindAddress.host),
+    bindAddress.port
+  )
+  return {
+    ...getUsageBase(kind, profile, address, requiresProxy),
+    bindHost: bindAddress.host,
+    bindPort: bindAddress.port,
+    ...(bindAddress.endpoint ? { bindEndpoint: bindAddress.endpoint } : {}),
+    usesWildcardBind
+  }
+}
+
 function getProfile (definition) {
   const profile = String(definition.usageProfile || '').trim().toLowerCase()
   if (usageProfiles.has(profile)) return profile
@@ -183,31 +199,26 @@ export function getTunnelUsage (definition = {}) {
     return getUsageBase('tcp', 'generic', {}, false)
   }
   if (type === 'dynamicForward') {
-    const address = normalizeAccessAddress(
+    return getBoundUsage(
+      'proxy',
+      'socks5',
       definition.sshTunnelLocalHost,
       definition.sshTunnelLocalPort,
-      { local: true }
+      true
     )
-    return getUsageBase('proxy', 'socks5', address, true)
   }
 
   if (type === 'forwardRemoteToLocal') {
-    const bindAddress = normalizeBindAddress(
+    const usage = getBoundUsage(
+      'remote',
+      'generic',
       definition.sshTunnelRemoteHost,
-      definition.sshTunnelRemotePort
-    )
-    const usesWildcardBind = isWildcardBindHost(bindAddress.host)
-    const address = normalizeAccessAddress(
-      connectHostForBind(bindAddress.host),
-      bindAddress.port
+      definition.sshTunnelRemotePort,
+      false
     )
     return {
-      ...getUsageBase('remote', 'generic', address, false),
-      bindHost: bindAddress.host,
-      bindPort: bindAddress.port,
-      ...(bindAddress.endpoint ? { bindEndpoint: bindAddress.endpoint } : {}),
-      usesWildcardBind,
-      requiresServerAddressForExternalAccess: usesWildcardBind
+      ...usage,
+      requiresServerAddressForExternalAccess: usage.usesWildcardBind
     }
   }
 
@@ -232,12 +243,22 @@ export function getTunnelUsage (definition = {}) {
   return getUsageBase(kind, profile, address, false)
 }
 
+function endpointProfileId (endpoint) {
+  let hash = 2166136261
+  for (let index = 0; index < endpoint.length; index += 1) {
+    hash ^= endpoint.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0')
+}
+
 function browserCommandsFor (endpoint) {
   if (!endpoint) return {}
+  const profileId = endpointProfileId(endpoint)
   const proxyArgument = `--proxy-server="socks5://${endpoint}"`
   return {
-    chromeCommand: `chrome.exe --user-data-dir="%TEMP%\\shellpilot-chrome-socks" ${proxyArgument}`,
-    edgeCommand: `msedge.exe --user-data-dir="%TEMP%\\shellpilot-edge-socks" ${proxyArgument}`
+    chromeCommand: `chrome.exe --user-data-dir="%TEMP%\\shellpilot-chrome-socks-${profileId}" ${proxyArgument}`,
+    edgeCommand: `msedge.exe --user-data-dir="%TEMP%\\shellpilot-edge-socks-${profileId}" ${proxyArgument}`
   }
 }
 

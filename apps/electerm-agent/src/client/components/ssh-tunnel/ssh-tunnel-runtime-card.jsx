@@ -15,7 +15,6 @@ import {
 } from '@ant-design/icons'
 import { copy } from '../../common/clipboard'
 import { formatShellPilotTranslation } from '../../common/shellpilot-i18n-overrides.js'
-import message from '../common/message'
 import { getTunnelFlowText, validateTunnel } from './ssh-tunnel-definition.js'
 import { getTunnelDiagnostic } from './ssh-tunnel-diagnostics.js'
 import { getTunnelUsage } from './ssh-tunnel-usage.js'
@@ -204,8 +203,7 @@ function copyButton (text, label) {
       aria-label={label}
       disabled={!canCopy}
       onClick={async () => {
-        const copied = await copyTextSafely(text, runtimeWindow, copy)
-        if (!copied) message.error(e('shellpilotTunnelCopyFailed'))
+        await copyTextSafely(text, runtimeWindow, copy)
       }}
     >
       {label}
@@ -258,8 +256,12 @@ function AccessPanel ({ usage, definition, onOpenGuide }) {
     return (
       <section className='ssh-tunnel-access-panel ssh-tunnel-access-panel--proxy'>
         <span>{e('shellpilotTunnelHowToUse')}</span>
-        <strong>SOCKS5 {usage.endpoint}</strong>
+        <dl className='ssh-tunnel-access-fields'>
+          <div><dt>{e('shellpilotTunnelSocksBindAddress')}</dt><dd><code>{usage.bindEndpoint}</code></dd></div>
+          <div><dt>{e('shellpilotTunnelSocksConnectAddress')}</dt><dd><code>{usage.endpoint}</code></dd></div>
+        </dl>
         <p>{e('shellpilotTunnelNeedsSocksProxy')}</p>
+        {usage.usesWildcardBind ? <p>{e('shellpilotTunnelSocksWildcardExposureHint')}</p> : null}
         <p>{e('shellpilotTunnelGuideSocksNoSystemProxy')}</p>
         <Space wrap>
           {copyButton(usage.endpoint, e('shellpilotTunnelCopyProxyAddress'))}
@@ -394,8 +396,7 @@ function DiagnosticPanel ({ diagnostic, definition, onOpenGuide }) {
                           aria-label={e('shellpilotTunnelCopyChecks')}
                           disabled={!canCopyFor(diagnostic.checksText, runtimeWindow)}
                           onClick={async () => {
-                            const copied = await copyTextSafely(diagnostic.checksText, runtimeWindow, copy)
-                            if (!copied) message.error(e('shellpilotTunnelCopyFailed'))
+                            await copyTextSafely(diagnostic.checksText, runtimeWindow, copy)
                           }}
                         />
                       </header>
@@ -417,8 +418,7 @@ function DiagnosticPanel ({ diagnostic, definition, onOpenGuide }) {
                           aria-label={e('shellpilotTunnelCopyDiagnosticConfig')}
                           disabled={!canCopyFor(diagnostic.configExample, runtimeWindow)}
                           onClick={async () => {
-                            const copied = await copyTextSafely(diagnostic.configExample, runtimeWindow, copy)
-                            if (!copied) message.error(e('shellpilotTunnelCopyFailed'))
+                            await copyTextSafely(diagnostic.configExample, runtimeWindow, copy)
                           }}
                         />
                       </header>

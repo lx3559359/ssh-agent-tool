@@ -19,19 +19,32 @@ export const readClipboardAsync = () => {
   return readClipboardSync ? readClipboardSync() : Promise.resolve(readClipboard())
 }
 
-export function copyTextWithFeedback (str, writeClipboard, notifyCopied) {
+export function copyTextWithFeedback (
+  str,
+  writeClipboard,
+  notifyCopied,
+  notifyCopyFailed
+) {
+  const fail = () => {
+    try {
+      notifyCopyFailed()
+    } catch {
+      // Clipboard failure reporting is best-effort.
+    }
+    return false
+  }
   try {
     const result = writeClipboard(str)
     if (result && typeof result.then === 'function') {
       return result.then(() => {
         notifyCopied()
         return true
-      }, () => false)
+      }, fail)
     }
     notifyCopied()
     return true
   } catch {
-    return false
+    return fail()
   }
 }
 
@@ -41,7 +54,12 @@ export const copy = (str) => {
     value => window.pre.writeClipboard(value),
     () => message.success({
       content: window.translate('copied'),
-      duation: 2,
+      duration: 2,
+      key: 'copy-message'
+    }),
+    () => message.error({
+      content: window.translate('shellpilotTunnelCopyFailed'),
+      duration: 3,
       key: 'copy-message'
     })
   )

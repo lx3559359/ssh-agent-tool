@@ -119,10 +119,16 @@ function GuideContent ({ section, context, focusError }) {
           {formatShellPilotTranslation(e, 'shellpilotTunnelGuideSocksFlow', { endpoint: guideData.socks.endpoint })}
         </code>
         <dl className='ssh-tunnel-guide-profile-list'>
-          <div><dt>{e('shellpilotTunnelGuideSocksLocalHost')}</dt><dd><code>{guideData.socks.host}</code></dd></div>
-          <div><dt>{e('shellpilotTunnelGuideSocksLocalPort')}</dt><dd><code>{guideData.socks.port}</code></dd></div>
+          <div><dt>{e('shellpilotTunnelGuideSocksLocalHost')}</dt><dd><code>{guideData.socks.bindHost}</code></dd></div>
+          <div><dt>{e('shellpilotTunnelGuideSocksLocalPort')}</dt><dd><code>{guideData.socks.bindPort}</code></dd></div>
+          <div><dt>{e('shellpilotTunnelGuideSocksConnectAddress')}</dt><dd><code>{guideData.socks.endpoint}</code></dd></div>
           <div><dt>{e('shellpilotTunnelGuideSocksNoRemoteTarget')}</dt><dd>{e('shellpilotTunnelGuideSocksNoRemoteTargetValue')}</dd></div>
         </dl>
+        {
+          guideData.socks.usesWildcardBind
+            ? <p>{e('shellpilotTunnelSocksWildcardExposureHint')}</p>
+            : null
+        }
         <ol>
           <li>{e('shellpilotTunnelGuideSocksStartProof')}</li>
           <li>

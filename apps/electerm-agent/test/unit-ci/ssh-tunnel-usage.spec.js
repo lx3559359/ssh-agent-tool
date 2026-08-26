@@ -55,9 +55,40 @@ test('dynamic forwarding is always a SOCKS5 proxy and cannot be opened as a page
     host: '[::1]',
     port: 1080,
     endpoint: '[::1]:1080',
+    bindHost: '[::]',
+    bindPort: 1080,
+    bindEndpoint: '[::]:1080',
+    usesWildcardBind: true,
     requiresProxy: true,
     canOpen: false
   })
+})
+
+test('dynamic wildcard listeners preserve exposure while commands use a loopback connect endpoint', async () => {
+  const { getTunnelGuideData, getTunnelUsage } = await loadUsage()
+
+  for (const [sshTunnelLocalHost, bindEndpoint, endpoint] of [
+    ['0.0.0.0', '0.0.0.0:19090', '127.0.0.1:19090'],
+    ['*', '*:19090', '127.0.0.1:19090'],
+    ['::', '[::]:19090', '[::1]:19090']
+  ]) {
+    const definition = {
+      sshTunnel: 'dynamicForward',
+      sshTunnelLocalHost,
+      sshTunnelLocalPort: 19090
+    }
+    const usage = getTunnelUsage(definition)
+    assert.equal(usage.bindEndpoint, bindEndpoint)
+    assert.equal(usage.endpoint, endpoint)
+    assert.equal(usage.usesWildcardBind, true)
+
+    const guide = getTunnelGuideData({ definition }).socks
+    assert.equal(guide.isExample, false)
+    assert.equal(guide.bindEndpoint, bindEndpoint)
+    assert.equal(guide.endpoint, endpoint)
+    const escapedEndpoint = endpoint.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    assert.match(guide.chromeCommand, new RegExp(`--proxy-server="socks5://${escapedEndpoint}"`))
+  }
 })
 
 test('database profiles provide local endpoints without a browser action', async () => {
@@ -143,14 +174,20 @@ test('guide data uses current safe SOCKS and remote settings and labels fallback
   assert.equal(socks.host, '127.0.0.1')
   assert.equal(socks.port, 19090)
   assert.equal(socks.endpoint, '127.0.0.1:19090')
-  assert.equal(
-    socks.chromeCommand,
-    'chrome.exe --user-data-dir="%TEMP%\\shellpilot-chrome-socks" --proxy-server="socks5://127.0.0.1:19090"'
-  )
-  assert.equal(
-    socks.edgeCommand,
-    'msedge.exe --user-data-dir="%TEMP%\\shellpilot-edge-socks" --proxy-server="socks5://127.0.0.1:19090"'
-  )
+  assert.equal(socks.bindEndpoint, '127.0.0.1:19090')
+  assert.match(socks.chromeCommand, /^chrome\.exe --user-data-dir="%TEMP%\\shellpilot-chrome-socks-[0-9a-f]{8}" --proxy-server="socks5:\/\/127\.0\.0\.1:19090"$/)
+  assert.match(socks.edgeCommand, /^msedge\.exe --user-data-dir="%TEMP%\\shellpilot-edge-socks-[0-9a-f]{8}" --proxy-server="socks5:\/\/127\.0\.0\.1:19090"$/)
+
+  const otherSocks = getTunnelGuideData({
+    definition: {
+      sshTunnel: 'dynamicForward',
+      sshTunnelLocalHost: '127.0.0.1',
+      sshTunnelLocalPort: 1080
+    }
+  }).socks
+  const profileDirectory = command => command.match(/--user-data-dir="([^"]+)"/)[1]
+  assert.notEqual(profileDirectory(socks.chromeCommand), profileDirectory(otherSocks.chromeCommand))
+  assert.notEqual(profileDirectory(socks.edgeCommand), profileDirectory(otherSocks.edgeCommand))
 
   const remote = getTunnelGuideData({
     definition: {

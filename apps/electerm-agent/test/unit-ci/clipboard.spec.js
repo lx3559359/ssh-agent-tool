@@ -48,11 +48,14 @@ test('clipboard success appears only after synchronous write succeeds', () => {
 test('clipboard failures never report success', async () => {
   const copyTextWithFeedback = loadCopyTextWithFeedback()
   let successes = 0
+  let failures = 0
   const notify = () => { successes += 1 }
+  const notifyFailure = () => { failures += 1 }
 
-  assert.equal(copyTextWithFeedback('sync', () => { throw new Error('denied') }, notify), false)
-  assert.equal(await copyTextWithFeedback('async', () => Promise.reject(new Error('denied')), notify), false)
+  assert.equal(copyTextWithFeedback('sync', () => { throw new Error('denied') }, notify, notifyFailure), false)
+  assert.equal(await copyTextWithFeedback('async', () => Promise.reject(new Error('denied')), notify, notifyFailure), false)
   assert.equal(successes, 0)
+  assert.equal(failures, 2)
 })
 
 test('clipboard asynchronous success reports only after resolution', async () => {

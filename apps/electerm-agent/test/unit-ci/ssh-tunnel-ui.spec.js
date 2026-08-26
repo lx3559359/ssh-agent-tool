@@ -60,6 +60,7 @@ async function loadTunnelUsage () {
 
 function referencedTunnelTranslationKeys () {
   const files = [
+    'src/client/common/clipboard.js',
     'src/client/components/ssh-tunnel/ssh-tunnel-modal.jsx',
     'src/client/components/ssh-tunnel/ssh-tunnel-runtime-card.jsx',
     'src/client/components/ssh-tunnel/ssh-tunnel-guide-modal.jsx',
@@ -569,6 +570,7 @@ test('every runtime card exposes a safe guide action with context mapping', () =
 test('web and clipboard actions share defensive capability gates', async () => {
   const { canOpenWebFor, canCopyFor, copyTextSafely } = loadRuntimeGuidanceLogic()
   const card = source('src/client/components/ssh-tunnel/ssh-tunnel-runtime-card.jsx')
+  const clipboard = source('src/client/common/clipboard.js')
 
   assert.equal(canOpenWebFor({ canOpen: true, url: 'http://127.0.0.1:16060' }, undefined), false)
   assert.equal(canOpenWebFor({ canOpen: true, url: 'http://127.0.0.1:16060' }, {}), false)
@@ -590,7 +592,8 @@ test('web and clipboard actions share defensive capability gates', async () => {
   assert.match(card, /disabled=\{!canOpenWeb\}[\s\S]*if \(canOpenWeb\)/)
   assert.match(card, /typeof runtimeWindow\?\.pre\?\.writeClipboard === 'function'/)
   assert.match(card, /disabled=\{!canCopy\}[\s\S]*await copyTextSafely\(text, runtimeWindow, copy\)/)
-  assert.match(card, /message\.error\(e\('shellpilotTunnelCopyFailed'\)\)/)
+  assert.doesNotMatch(card, /message\.error\(e\('shellpilotTunnelCopyFailed'\)\)/)
+  assert.match(clipboard, /window\.translate\('shellpilotTunnelCopyFailed'\)/)
 })
 
 test('beginner guide has seven synchronized sections and safe error mapping', () => {
@@ -722,8 +725,10 @@ test('SOCKS and remote guides render every field, success boundary and first che
     assert.match(guide, new RegExp(`['"]${key}['"]`), key)
   }
   assert.match(guide, /const guideData = getTunnelGuideData\(context\)/)
-  assert.match(guide, /shellpilotTunnelGuideSocksLocalHost[\s\S]*?<code>\{guideData\.socks\.host\}<\/code>/)
-  assert.match(guide, /shellpilotTunnelGuideSocksLocalPort[\s\S]*?<code>\{guideData\.socks\.port\}<\/code>/)
+  assert.match(guide, /shellpilotTunnelGuideSocksLocalHost[\s\S]*?<code>\{guideData\.socks\.bindHost\}<\/code>/)
+  assert.match(guide, /shellpilotTunnelGuideSocksLocalPort[\s\S]*?<code>\{guideData\.socks\.bindPort\}<\/code>/)
+  assert.match(guide, /shellpilotTunnelGuideSocksConnectAddress[\s\S]*?<code>\{guideData\.socks\.endpoint\}<\/code>/)
+  assert.match(guide, /guideData\.socks\.usesWildcardBind[\s\S]*shellpilotTunnelSocksWildcardExposureHint/)
   assert.match(guide, /<code>\{guideData\.socks\.chromeCommand\}<\/code>/)
   assert.match(guide, /<code>\{guideData\.socks\.edgeCommand\}<\/code>/)
   assert.match(guide, /shellpilotTunnelGuideRemoteServerHost[\s\S]*?<code>\{guideData\.remote\.bindHost\}<\/code>/)
@@ -766,6 +771,16 @@ test('remote access card separates the bind listener from a connectable server-l
   assert.match(card, /usage\.requiresServerAddressForExternalAccess[\s\S]*shellpilotTunnelRemoteWildcardExternalHint/)
   assert.doesNotMatch(card, /copyButton\(usage\.bindEndpoint/)
   assert.match(card, /copyButton\(usage\.endpoint, e\('shellpilotTunnelCopyAddress'\)\)/)
+})
+
+test('SOCKS access card shows wildcard exposure separately from the loopback proxy endpoint', () => {
+  const card = source('src/client/components/ssh-tunnel/ssh-tunnel-runtime-card.jsx')
+
+  assert.match(card, /shellpilotTunnelSocksBindAddress[\s\S]*usage\.bindEndpoint/)
+  assert.match(card, /shellpilotTunnelSocksConnectAddress[\s\S]*usage\.endpoint/)
+  assert.match(card, /usage\.usesWildcardBind[\s\S]*shellpilotTunnelSocksWildcardExposureHint/)
+  assert.doesNotMatch(card, /copyButton\(usage\.bindEndpoint/)
+  assert.match(card, /copyButton\(usage\.endpoint, e\('shellpilotTunnelCopyProxyAddress'\)\)/)
 })
 
 test('runtime guidance styles match the approved hierarchy responsively', () => {
@@ -1217,8 +1232,8 @@ test('Chrome and Edge SOCKS guidance gives a concrete non-button setup path', as
   }
   const guide = source('src/client/components/ssh-tunnel/ssh-tunnel-guide-modal.jsx')
   const usage = source('src/client/components/ssh-tunnel/ssh-tunnel-usage.js')
-  assert.match(usage, /chrome\.exe --user-data-dir="%TEMP%\\\\shellpilot-chrome-socks"/)
-  assert.match(usage, /msedge\.exe --user-data-dir="%TEMP%\\\\shellpilot-edge-socks"/)
+  assert.match(usage, /chrome\.exe --user-data-dir="%TEMP%\\\\shellpilot-chrome-socks-\$\{profileId\}"/)
+  assert.match(usage, /msedge\.exe --user-data-dir="%TEMP%\\\\shellpilot-edge-socks-\$\{profileId\}"/)
   assert.match(usage, /--proxy-server="socks5:\/\/\$\{endpoint\}"/)
   assert.doesNotMatch(guide, /runCmd|sendText|\.write\(/)
 })
