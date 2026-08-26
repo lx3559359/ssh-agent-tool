@@ -68,7 +68,7 @@ function GuideContent ({ section, context, focusError }) {
       <section className='ssh-tunnel-guide-section'>
         <span className='ssh-tunnel-guide-kicker'>{e('shellpilotTunnelGuideLocalScenario')}</span>
         <h3>{e('shellpilotTunnelGuideLocalTitle')}</h3>
-        <code className='ssh-tunnel-guide-flow'>127.0.0.1:16060 → SSH → server 127.0.0.1:6060</code>
+        <code className='ssh-tunnel-guide-flow'>{e('shellpilotTunnelGuideLocalFlowExample')}</code>
         <ol>
           <li>{e('shellpilotTunnelGuideLocalListenHost')}</li>
           <li>{e('shellpilotTunnelGuideLocalListenPort')}</li>
@@ -98,9 +98,9 @@ function GuideContent ({ section, context, focusError }) {
         <h4>{e('shellpilotTunnelGuideDatabaseAccess')}</h4>
         <p>{e('shellpilotTunnelGuideDatabaseHostPort')}</p>
         <dl className='ssh-tunnel-guide-profile-list'>
-          <div><dt>{e('shellpilotTunnelGuideMySqlProfile')}</dt><dd><code>host: 127.0.0.1, port: 16060</code></dd></div>
-          <div><dt>{e('shellpilotTunnelGuidePostgreSqlProfile')}</dt><dd><code>host: 127.0.0.1, port: 16060</code></dd></div>
-          <div><dt>{e('shellpilotTunnelGuideRedisProfile')}</dt><dd><code>host: 127.0.0.1, port: 16060</code></dd></div>
+          <div><dt>{e('shellpilotTunnelGuideMySqlProfile')}</dt><dd><code>{e('shellpilotTunnelGuideDatabaseConnectionExample')}</code></dd></div>
+          <div><dt>{e('shellpilotTunnelGuidePostgreSqlProfile')}</dt><dd><code>{e('shellpilotTunnelGuideDatabaseConnectionExample')}</code></dd></div>
+          <div><dt>{e('shellpilotTunnelGuideRedisProfile')}</dt><dd><code>{e('shellpilotTunnelGuideDatabaseConnectionExample')}</code></dd></div>
         </dl>
       </section>
     )
@@ -256,8 +256,8 @@ function GuideContent ({ section, context, focusError }) {
         <dl className='ssh-tunnel-guide-glossary'>
           <div><dt><code>127.0.0.1</code></dt><dd>{e('shellpilotTunnelGuideGlossaryLoopback')}</dd></div>
           <div><dt><code>0.0.0.0</code></dt><dd>{e('shellpilotTunnelGuideGlossaryAllInterfaces')}</dd></div>
-          <div><dt><code>SOCKS5</code></dt><dd>{e('shellpilotTunnelGuideGlossarySocks')}</dd></div>
-          <div><dt><code>GatewayPorts</code></dt><dd>{e('shellpilotTunnelGuideGlossaryGatewayPorts')}</dd></div>
+          <div><dt><code>{e('shellpilotTunnelGuideGlossarySocksLabel')}</code></dt><dd>{e('shellpilotTunnelGuideGlossarySocks')}</dd></div>
+          <div><dt><code>{e('shellpilotTunnelGuideGlossaryGatewayPortsLabel')}</code></dt><dd>{e('shellpilotTunnelGuideGlossaryGatewayPorts')}</dd></div>
         </dl>
       </section>
     )

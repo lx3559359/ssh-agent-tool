@@ -683,7 +683,6 @@ test('beginner guide has seven synchronized sections and safe error mapping', ()
   ]) {
     assert.match(guide, new RegExp(`e\\('${key}'\\)`))
   }
-  assert.match(guide, /127\.0\.0\.1:16060[\s\S]*SSH[\s\S]*server 127\.0\.0\.1:6060/)
   assert.doesNotMatch(guide, /\.write\(|sendText|runCmd|window\.openLink/)
 })
 
@@ -719,7 +718,11 @@ test('beginner guide uses the planned localized content contract', () => {
     'shellpilotTunnelGuideSocksBrowser',
     'shellpilotTunnelGuideRemoteSafety',
     'shellpilotTunnelGuideErrors',
-    'shellpilotTunnelGuideGlossary'
+    'shellpilotTunnelGuideGlossary',
+    'shellpilotTunnelGuideLocalFlowExample',
+    'shellpilotTunnelGuideDatabaseConnectionExample',
+    'shellpilotTunnelGuideGlossarySocksLabel',
+    'shellpilotTunnelGuideGlossaryGatewayPortsLabel'
   ]
 
   for (const key of requiredKeys) {
@@ -728,6 +731,10 @@ test('beginner guide uses the planned localized content contract', () => {
   assert.match(guide, /shellpilotTunnelGuideNoBrowserProxy/)
   assert.match(guide, /shellpilotTunnelGuideSocksNoSystemProxy/)
   assert.match(guide, /shellpilotTunnelGuideGatewayPorts/)
+  assert.doesNotMatch(guide, />127\.0\.0\.1:16060 → SSH/)
+  assert.doesNotMatch(guide, />host: 127\.0\.0\.1, port: 16060</)
+  assert.doesNotMatch(guide, /<code>SOCKS5<\/code>/)
+  assert.doesNotMatch(guide, /<code>GatewayPorts<\/code>/)
 })
 
 test('forwarding-prohibited guidance states the server configuration boundary', async () => {
@@ -755,7 +762,7 @@ test('access guide distinguishes web schemes and database profiles', () => {
   ]) {
     assert.match(guide, new RegExp(`e\\('${key}'\\)`))
   }
-  assert.match(guide, /host: 127\.0\.0\.1, port: 16060/)
+  assert.match(guide, /shellpilotTunnelGuideDatabaseConnectionExample/)
 })
 
 test('SOCKS and remote guides render every field, success boundary and first checks', async () => {
@@ -1099,6 +1106,10 @@ test('every tunnel guidance translation resolves in both catalogs with matching 
   const keys = referencedTunnelTranslationKeys()
   assert.ok(keys.length > 80, 'the scanner must cover the full runtime and guide surface')
   assert.deepEqual(getShellPilotCatalogKeys('zh_cn'), getShellPilotCatalogKeys('en_us'))
+  assert.equal(
+    getShellPilotTranslation('sshTunnel.diagnostic.value.listSeparator', 'en_us'),
+    ','
+  )
 
   for (const key of keys) {
     const zh = getShellPilotTranslation(key, 'zh_cn')

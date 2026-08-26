@@ -64,9 +64,10 @@ const diagnosticValueKeyByToken = {
 export function localizedDiagnosticValues (values = {}, translate = e) {
   const separatorKey = 'sshTunnel.diagnostic.value.listSeparator'
   const translatedSeparator = translate(separatorKey)
-  const separator = translatedSeparator && translatedSeparator !== separatorKey
+  const catalogSeparator = translatedSeparator && translatedSeparator !== separatorKey
     ? translatedSeparator
     : ', '
+  const separator = catalogSeparator === ',' ? ', ' : catalogSeparator
   const localize = (name, value) => {
     const shouldTranslate = name === 'scope' || name === 'layer' || name === 'fields'
     if (Array.isArray(value)) {
