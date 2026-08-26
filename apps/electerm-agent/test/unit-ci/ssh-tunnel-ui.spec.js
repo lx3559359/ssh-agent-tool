@@ -1232,9 +1232,9 @@ test('Chrome and Edge SOCKS guidance gives a concrete non-button setup path', as
   }
   const guide = source('src/client/components/ssh-tunnel/ssh-tunnel-guide-modal.jsx')
   const usage = source('src/client/components/ssh-tunnel/ssh-tunnel-usage.js')
-  assert.match(usage, /chrome\.exe --user-data-dir="%TEMP%\\\\shellpilot-chrome-socks-\$\{profileId\}"/)
-  assert.match(usage, /msedge\.exe --user-data-dir="%TEMP%\\\\shellpilot-edge-socks-\$\{profileId\}"/)
-  assert.match(usage, /--proxy-server="socks5:\/\/\$\{endpoint\}"/)
+  assert.match(usage, /chrome\.exe --user-data-dir="%TEMP%\\\\shellpilot-chrome-socks\\\\\$\{profilePath\}"/)
+  assert.match(usage, /msedge\.exe --user-data-dir="%TEMP%\\\\shellpilot-edge-socks\\\\\$\{profilePath\}"/)
+  assert.match(usage, /--proxy-server="socks5:\/\/\$\{usage\.endpoint\}"/)
   assert.doesNotMatch(guide, /runCmd|sendText|\.write\(/)
 })
 

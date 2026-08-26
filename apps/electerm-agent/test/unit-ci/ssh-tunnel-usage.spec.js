@@ -175,8 +175,14 @@ test('guide data uses current safe SOCKS and remote settings and labels fallback
   assert.equal(socks.port, 19090)
   assert.equal(socks.endpoint, '127.0.0.1:19090')
   assert.equal(socks.bindEndpoint, '127.0.0.1:19090')
-  assert.match(socks.chromeCommand, /^chrome\.exe --user-data-dir="%TEMP%\\shellpilot-chrome-socks-[0-9a-f]{8}" --proxy-server="socks5:\/\/127\.0\.0\.1:19090"$/)
-  assert.match(socks.edgeCommand, /^msedge\.exe --user-data-dir="%TEMP%\\shellpilot-edge-socks-[0-9a-f]{8}" --proxy-server="socks5:\/\/127\.0\.0\.1:19090"$/)
+  assert.equal(
+    socks.chromeCommand,
+    'chrome.exe --user-data-dir="%TEMP%\\shellpilot-chrome-socks\\h-127_d0_d0_d1\\p-19090" --proxy-server="socks5://127.0.0.1:19090"'
+  )
+  assert.equal(
+    socks.edgeCommand,
+    'msedge.exe --user-data-dir="%TEMP%\\shellpilot-edge-socks\\h-127_d0_d0_d1\\p-19090" --proxy-server="socks5://127.0.0.1:19090"'
+  )
 
   const otherSocks = getTunnelGuideData({
     definition: {
@@ -188,6 +194,18 @@ test('guide data uses current safe SOCKS and remote settings and labels fallback
   const profileDirectory = command => command.match(/--user-data-dir="([^"]+)"/)[1]
   assert.notEqual(profileDirectory(socks.chromeCommand), profileDirectory(otherSocks.chromeCommand))
   assert.notEqual(profileDirectory(socks.edgeCommand), profileDirectory(otherSocks.edgeCommand))
+
+  const formerlyColliding = [
+    ['127.0.0.6', 56398],
+    ['127.0.0.8', 30936]
+  ].map(([sshTunnelLocalHost, sshTunnelLocalPort]) => getTunnelGuideData({
+    definition: {
+      sshTunnel: 'dynamicForward',
+      sshTunnelLocalHost,
+      sshTunnelLocalPort
+    }
+  }).socks.chromeCommand)
+  assert.notEqual(profileDirectory(formerlyColliding[0]), profileDirectory(formerlyColliding[1]))
 
   const remote = getTunnelGuideData({
     definition: {

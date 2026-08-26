@@ -243,22 +243,28 @@ export function getTunnelUsage (definition = {}) {
   return getUsageBase(kind, profile, address, false)
 }
 
-function endpointProfileId (endpoint) {
-  let hash = 2166136261
-  for (let index = 0; index < endpoint.length; index += 1) {
-    hash ^= endpoint.charCodeAt(index)
-    hash = Math.imul(hash, 16777619)
-  }
-  return (hash >>> 0).toString(16).padStart(8, '0')
+function profileHostPath (host) {
+  const encoded = host
+    .replaceAll('_', '__')
+    .replace(/[A-Z]/g, character => `_u${character.toLowerCase()}`)
+    .replaceAll('%', '_p')
+    .replaceAll('[', '_l')
+    .replaceAll(']', '_r')
+    .replaceAll(':', '_c')
+    .replaceAll('.', '_d')
+    .replaceAll('-', '_h')
+  return encoded.match(/.{1,100}/g)
+    .map(component => `h-${component}`)
+    .join('\\')
 }
 
-function browserCommandsFor (endpoint) {
-  if (!endpoint) return {}
-  const profileId = endpointProfileId(endpoint)
-  const proxyArgument = `--proxy-server="socks5://${endpoint}"`
+function browserCommandsFor (usage) {
+  if (!usage.endpoint || !usage.host || !usage.port) return {}
+  const profilePath = `${profileHostPath(usage.host)}\\p-${usage.port}`
+  const proxyArgument = `--proxy-server="socks5://${usage.endpoint}"`
   return {
-    chromeCommand: `chrome.exe --user-data-dir="%TEMP%\\shellpilot-chrome-socks-${profileId}" ${proxyArgument}`,
-    edgeCommand: `msedge.exe --user-data-dir="%TEMP%\\shellpilot-edge-socks-${profileId}" ${proxyArgument}`
+    chromeCommand: `chrome.exe --user-data-dir="%TEMP%\\shellpilot-chrome-socks\\${profilePath}" ${proxyArgument}`,
+    edgeCommand: `msedge.exe --user-data-dir="%TEMP%\\shellpilot-edge-socks\\${profilePath}" ${proxyArgument}`
   }
 }
 
@@ -274,7 +280,7 @@ function socksGuideData (definition) {
     })
   return {
     ...usage,
-    ...browserCommandsFor(usage.endpoint),
+    ...browserCommandsFor(usage),
     isExample: !isCurrent
   }
 }
