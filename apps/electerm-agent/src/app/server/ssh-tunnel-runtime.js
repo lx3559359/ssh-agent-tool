@@ -91,7 +91,13 @@ function createSshTunnelRuntime ({
     ], { checkedAt: now() })
   }
 
-  function applyProbeResult (entry, value, controller, generation) {
+  function applyProbeResult (
+    entry,
+    value,
+    controller,
+    generation,
+    source = 'probe'
+  ) {
     if (
       entry.manualStopping ||
       controllers.get(entry.definition.id) !== entry ||
@@ -99,14 +105,28 @@ function createSshTunnelRuntime ({
       entry.probeGeneration !== generation
     ) return null
     const result = normalizeProbeResult(value)
+    if (
+      source === 'probe' &&
+      entry.trafficEvidencePassed &&
+      result.verdict === 'unverified'
+    ) {
+      entry.testState = entry.lastTest.verdict
+      return entry.lastTest
+    }
     entry.lastTest = result
     entry.lastTestAt = now()
     entry.testState = result.verdict
+    if (source === 'evidence') {
+      entry.trafficEvidencePassed = result.ok && result.stages.length >= 3
+    } else if (result.verdict === 'limited' || result.verdict === 'failed') {
+      entry.trafficEvidencePassed = false
+    }
     return result
   }
 
   function invalidateProbe (entry, error) {
     entry.probeGeneration += 1
+    entry.trafficEvidencePassed = false
     if (!error) {
       entry.lastTest = null
       entry.lastTestAt = null
@@ -231,7 +251,8 @@ function createSshTunnelRuntime ({
           entry,
           value,
           controller,
-          entry.probeGeneration
+          entry.probeGeneration,
+          'evidence'
         )
       }
     }
@@ -364,6 +385,7 @@ function createSshTunnelRuntime ({
       testState: 'untested',
       probePromise: null,
       probeGeneration: 0,
+      trafficEvidencePassed: false,
       reconnectAttempt: 0,
       reconnectTimer: null,
       controllerHandlers: null,

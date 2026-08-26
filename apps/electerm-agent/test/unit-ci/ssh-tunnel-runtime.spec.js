@@ -7,7 +7,8 @@ process.env.NODE_ENV = 'development'
 const {
   dynamicForward,
   forwardLocalToRemote,
-  forwardRemoteToLocal
+  forwardRemoteToLocal,
+  probeSocksHandshake
 } = require('../../src/app/server/ssh-tunnel')
 const {
   createSshTunnelRuntime,
@@ -71,6 +72,48 @@ test('socket test double models idempotent Node socket destruction', () => {
 
   assert.equal(socket.destroyCount, 1)
   assert.equal(closeCount, 1)
+})
+
+test('all three tunnel factories expose controller-owned probes', async () => {
+  const localConn = new EventEmitter()
+  localConn.forwardOut = () => {}
+  const remoteConn = new EventEmitter()
+  remoteConn.forwardIn = (host, port, callback) => callback()
+  remoteConn.unforwardIn = (host, port, callback) => callback()
+  const socksConn = new EventEmitter()
+  const socksServer = new EventEmitter()
+  socksServer.useAuth = () => socksServer
+  socksServer.listen = (port, host, callback) => queueMicrotask(callback)
+  socksServer.close = callback => callback?.()
+
+  const controllers = await Promise.all([
+    forwardLocalToRemote({
+      conn: localConn,
+      sshTunnelLocalPort: 44001,
+      sshTunnelRemotePort: 80,
+      netImpl: { createServer }
+    }),
+    forwardRemoteToLocal({
+      conn: remoteConn,
+      sshTunnelLocalPort: 44002,
+      sshTunnelRemotePort: 44003,
+      netImpl: { connect: createSocket }
+    }),
+    dynamicForward({
+      conn: socksConn,
+      sshTunnelLocalPort: 44004,
+      socksImpl: {
+        auth: { None: () => ({}) },
+        createServer: () => socksServer
+      },
+      netImpl: { connect: createSocket }
+    })
+  ])
+
+  assert.deepEqual(controllers.map(controller => typeof controller.probe), [
+    'function', 'function', 'function'
+  ])
+  await Promise.all(controllers.map(controller => controller.close()))
 })
 
 test('local forwarding returns an idempotent closeable controller', async () => {
@@ -186,6 +229,72 @@ test('local probe waits for SSH forwardOut and reports policy prohibition', asyn
   ])
   assert.equal(result.stages[1].code, 'SSH_TUNNEL_FORWARDING_PROHIBITED')
   assert.equal(JSON.stringify(result).includes('Channel open failure'), false)
+  await controller.close()
+})
+
+test('local probe passes every stage and releases its forwarding stream', async () => {
+  const conn = new EventEmitter()
+  const stream = createSocket()
+  conn.forwardOut = (srcHost, srcPort, host, port, callback) => {
+    callback(null, stream)
+  }
+  const controller = await forwardLocalToRemote({
+    id: 'local-probe-passed',
+    conn,
+    sshTunnelLocalHost: '127.0.0.1',
+    sshTunnelLocalPort: 44010,
+    sshTunnelRemoteHost: 'service.internal',
+    sshTunnelRemotePort: 443,
+    netImpl: { createServer }
+  })
+
+  const result = await controller.probe()
+
+  assert.equal(result.verdict, 'passed')
+  assert.deepEqual(result.stages.map(stage => stage.status), [
+    'passed', 'passed', 'passed'
+  ])
+  assert.equal(stream.destroyCount, 1)
+  await controller.close()
+})
+
+test('local probe times out quickly and disposes a late forwarding stream once', async () => {
+  const conn = new EventEmitter()
+  let finishForward
+  conn.forwardOut = (srcHost, srcPort, host, port, callback) => {
+    finishForward = callback
+  }
+  const controller = await forwardLocalToRemote({
+    id: 'local-probe-timeout',
+    conn,
+    sshTunnelLocalHost: '127.0.0.1',
+    sshTunnelLocalPort: 44011,
+    sshTunnelRemoteHost: 'service.internal',
+    sshTunnelRemotePort: 443,
+    probeTimeoutMs: 5,
+    netImpl: { createServer }
+  })
+
+  const probePromise = controller.probe()
+  const outcome = await Promise.race([
+    probePromise,
+    new Promise(resolve => setTimeout(() => resolve('still-pending'), 30))
+  ])
+  if (outcome === 'still-pending') {
+    finishForward(null, createSocket())
+    await probePromise
+  }
+  assert.notEqual(outcome, 'still-pending')
+  assert.equal(outcome.verdict, 'failed')
+  assert.deepEqual(outcome.stages.map(stage => stage.status), [
+    'passed', 'failed', 'unverified'
+  ])
+  assert.equal(outcome.stages[1].code, 'SSH_TUNNEL_TEST_TIMEOUT')
+
+  const lateStream = createSocket()
+  finishForward(null, lateStream)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(lateStream.destroyCount, 1)
   await controller.close()
 })
 
@@ -456,6 +565,71 @@ test('SOCKS5 probe connects to loopback when the listener uses a wildcard addres
   await controller.close()
 })
 
+test('SOCKS5 handshake timeout settles once and cleans its socket', async () => {
+  const socket = createSocket()
+  const pending = probeSocksHandshake('127.0.0.1', 1080, {
+    connect: () => socket
+  }, 5)
+  const outcome = await Promise.race([
+    pending.then(() => ({ passed: true }), error => error),
+    new Promise(resolve => setTimeout(() => resolve('still-pending'), 30))
+  ])
+  if (outcome === 'still-pending') socket.emit('close')
+
+  assert.notEqual(outcome, 'still-pending')
+  assert.equal(outcome.code, 'SSH_TUNNEL_TEST_TIMEOUT')
+  assert.equal(outcome.stage, 'local-listener')
+  socket.emit('data', Buffer.from([5, 0]))
+  assert.equal(socket.destroyCount, 1)
+})
+
+test('SOCKS5 handshake socket error settles once without a false pass', async () => {
+  const socket = createSocket()
+  const pending = probeSocksHandshake('127.0.0.1', 1080, {
+    connect: () => socket
+  }, 50)
+  const failure = Object.assign(new Error('listener refused'), {
+    code: 'ECONNREFUSED'
+  })
+  socket.emit('error', failure)
+
+  await assert.rejects(pending, error => (
+    error === failure && error.stage === 'local-listener'
+  ))
+  socket.emit('data', Buffer.from([5, 0]))
+  assert.equal(socket.destroyCount, 1)
+})
+
+test('SOCKS5 handshake early close settles once without a false pass', async () => {
+  const socket = createSocket()
+  const pending = probeSocksHandshake('127.0.0.1', 1080, {
+    connect: () => socket
+  }, 50)
+  socket.emit('close')
+
+  await assert.rejects(pending, error => (
+    error.code === 'SSH_TUNNEL_PROXY_CONNECTION_CLOSED' &&
+    error.stage === 'local-listener'
+  ))
+  socket.emit('data', Buffer.from([5, 0]))
+  assert.equal(socket.destroyCount, 1)
+})
+
+test('SOCKS5 handshake accepts a fragmented no-auth response and settles once', async () => {
+  const socket = createSocket()
+  const pending = probeSocksHandshake('127.0.0.1', 1080, {
+    connect: () => socket
+  }, 50)
+  socket.emit('connect')
+  assert.deepEqual(socket.lastWrite, Buffer.from([5, 1, 0]))
+  socket.emit('data', Buffer.from([5]))
+  socket.emit('data', Buffer.from([0]))
+
+  assert.equal(await pending, true)
+  socket.emit('data', Buffer.from([5, 255]))
+  assert.equal(socket.destroyCount, 1)
+})
+
 test('runtime isolates controllers, rejects duplicates, and serializes state', async () => {
   const closed = []
   const runtime = createSshTunnelRuntime({
@@ -629,6 +803,36 @@ test('runtime does not let an older probe overwrite stronger traffic evidence', 
 
   assert.equal(runtime.list()[0].lastTest.verdict, 'passed')
   assert.equal(runtime.list()[0].testState, 'passed')
+})
+
+test('runtime preserves traffic evidence against a newly started weaker probe but accepts failure', async () => {
+  const controller = new EventEmitter()
+  controller.descriptor = { id: 'evidence-strength', sshTunnel: 'dynamicForward' }
+  controller.close = async () => {}
+  const runtime = createSshTunnelRuntime({ startController: async () => controller })
+  await runtime.start(controller.descriptor)
+  await new Promise(resolve => setImmediate(resolve))
+
+  controller.emit('evidence', createProbeResult([
+    createProbeStage('local-listener', 'passed', 'SSH_TUNNEL_LOCAL_LISTENER_READY', '本机监听正常'),
+    createProbeStage('proxy-protocol', 'passed', 'SSH_TUNNEL_PROXY_PROTOCOL_READY', 'SOCKS5 协议握手正常'),
+    createProbeStage('proxy-traffic', 'passed', 'SSH_TUNNEL_PROXY_TRAFFIC_READY', '真实代理流量已成功转发')
+  ]))
+  controller.probe = async () => createProbeResult([
+    createProbeStage('local-listener', 'passed', 'SSH_TUNNEL_LOCAL_LISTENER_READY', '本机监听正常'),
+    createProbeStage('proxy-protocol', 'passed', 'SSH_TUNNEL_PROXY_PROTOCOL_READY', 'SOCKS5 协议握手正常'),
+    createProbeStage('proxy-traffic', 'unverified', 'SSH_TUNNEL_STAGE_NOT_REACHED', '尚无新的真实代理请求')
+  ])
+
+  assert.equal((await runtime.test('evidence-strength')).verdict, 'passed')
+  assert.equal(runtime.list()[0].lastTest.verdict, 'passed')
+  assert.equal(runtime.list()[0].testState, 'passed')
+
+  controller.probe = async () => createProbeResult([
+    createProbeStage('proxy-protocol', 'failed', 'SSH_TUNNEL_PROXY_PROTOCOL_FAILED', 'SOCKS5 协议握手失败')
+  ])
+  assert.equal((await runtime.test('evidence-strength')).verdict, 'failed')
+  assert.equal(runtime.list()[0].lastTest.verdict, 'failed')
 })
 
 test('runtime reports unavailable probes and ignores late results from replaced controllers', async () => {

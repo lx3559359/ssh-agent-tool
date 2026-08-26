@@ -106,7 +106,7 @@ function passedProbe (stages, startedAt) {
   )
 }
 
-function probeSocksHandshake (host, port, netImpl) {
+function probeSocksHandshake (host, port, netImpl, timeoutMs = probeTimeoutMs) {
   return new Promise((resolve, reject) => {
     let settled = false
     let connected = false
@@ -117,7 +117,7 @@ function probeSocksHandshake (host, port, netImpl) {
       error.code = 'SSH_TUNNEL_TEST_TIMEOUT'
       error.stage = connected ? 'proxy-protocol' : 'local-listener'
       finish(reject, error)
-    }, probeTimeoutMs)
+    }, timeoutMs)
     const finish = (callback, value) => {
       if (settled) return
       settled = true
@@ -164,6 +164,7 @@ function forwardRemoteToLocal (options) {
     sshTunnelLocalPort,
     sshTunnelRemoteHost = '127.0.0.1',
     sshTunnelLocalHost = '127.0.0.1',
+    probeTimeoutMs: timeoutMs = probeTimeoutMs,
     netImpl = require('net')
   } = options
   const descriptor = tunnelDescriptor({
@@ -261,7 +262,7 @@ function forwardRemoteToLocal (options) {
                   reject(error)
                 })
               }),
-              probeTimeoutMs,
+              timeoutMs,
               'local-target',
               destroySocket
             )
@@ -309,6 +310,7 @@ function forwardLocalToRemote (options) {
     sshTunnelLocalPort,
     sshTunnelRemoteHost = '127.0.0.1',
     sshTunnelLocalHost = '127.0.0.1',
+    probeTimeoutMs: timeoutMs = probeTimeoutMs,
     netImpl = require('net')
   } = options
   const descriptor = tunnelDescriptor({
@@ -402,7 +404,7 @@ function forwardLocalToRemote (options) {
                     }
                   )
                 }),
-                probeTimeoutMs,
+                timeoutMs,
                 'ssh-forwarding',
                 destroySocket
               )
@@ -435,6 +437,7 @@ function dynamicForward (options) {
     conn,
     sshTunnelLocalPort,
     sshTunnelLocalHost = '127.0.0.1',
+    probeTimeoutMs: timeoutMs = probeTimeoutMs,
     socksImpl = require('socksv5-server'),
     netImpl = require('net')
   } = options
@@ -542,7 +545,8 @@ function dynamicForward (options) {
               await probeSocksHandshake(
                 probeHost,
                 sshTunnelLocalPort,
-                netImpl
+                netImpl,
+                timeoutMs
               )
               return passedProbe([
                 { id: 'local-listener', status: 'passed', code: 'SSH_TUNNEL_LOCAL_LISTENER_READY', message: '本机监听正常' },

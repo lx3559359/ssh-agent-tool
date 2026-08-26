@@ -169,14 +169,6 @@ test('SSH sessions preserve legacy tunnel bookmarks and isolate auto-start selec
   }).map(item => item.id), ['auto'])
 })
 
-test('SSH tunnel detection is supplied by controllers instead of listener-only session probes', () => {
-  const contents = source('src/app/server/session-ssh.js')
-
-  assert.doesNotMatch(contents, /probeSshTunnel \(/)
-  assert.doesNotMatch(contents, /probe:\s*definition => this\.probeSshTunnel/)
-  assert.match(contents, /createSshTunnelRuntime\(\{[\s\S]*startController:/)
-})
-
 test('SSH session rejects an occupied local tunnel port before starting its controller', async () => {
   const { TerminalSshBase } = require('../../src/app/server/session-ssh')
   const occupied = net.createServer()
