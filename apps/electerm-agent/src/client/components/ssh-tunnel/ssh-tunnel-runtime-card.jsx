@@ -21,15 +21,47 @@ import { getTunnelUsage } from './ssh-tunnel-usage.js'
 const e = window.translate
 const failureStates = new Set(['failed', 'port-conflict', 'session-lost'])
 
-const statusPresentation = {
+const stagePresentation = {
   passed: { icon: <CheckCircleOutlined />, label: 'shellpilotTunnelStagePassed' },
   limited: { icon: <ExclamationCircleOutlined />, label: 'shellpilotTunnelStageLimited' },
   failed: { icon: <CloseCircleOutlined />, label: 'shellpilotTunnelStageFailed' },
-  unverified: { icon: <QuestionCircleOutlined />, label: 'shellpilotTunnelStageUnverified' },
-  checking: { icon: <LoadingOutlined spin />, label: 'shellpilotTunnelStageChecking' }
+  unverified: { icon: <QuestionCircleOutlined />, label: 'shellpilotTunnelStageUnverified' }
 }
 
-function latestRuntimeFailure (entry = {}) {
+const availabilityPresentation = {
+  passed: { icon: <CheckCircleOutlined />, label: 'shellpilotTunnelAvailabilityPassed' },
+  checking: { icon: <LoadingOutlined spin />, label: 'shellpilotTunnelAvailabilityChecking' },
+  limited: { icon: <ExclamationCircleOutlined />, label: 'shellpilotTunnelAvailabilityLimited' },
+  failed: { icon: <CloseCircleOutlined />, label: 'shellpilotTunnelAvailabilityFailed' },
+  unverified: { icon: <QuestionCircleOutlined />, label: 'shellpilotTunnelAvailabilityUnverified' }
+}
+
+export function availabilityFor (entry = {}) {
+  if (failureStates.has(entry?.state)) return 'failed'
+  if (entry?.testState === 'checking' || entry?.testState === 'testing') return 'checking'
+  return entry?.lastTest?.verdict || 'unverified'
+}
+
+export function currentFailureFor (entry = {}) {
+  const availability = availabilityFor(entry)
+  if (availability !== 'limited' && availability !== 'failed') return null
+
+  const lastTest = entry?.lastTest && typeof entry.lastTest === 'object'
+    ? entry.lastTest
+    : null
+  if (lastTest?.verdict === availability && Array.isArray(lastTest.stages)) {
+    const decisiveStage = lastTest.stages.find(stage => {
+      return stage && typeof stage === 'object' && stage.status === availability
+    })
+    if (decisiveStage) {
+      return {
+        code: decisiveStage.code,
+        message: decisiveStage.message,
+        stage: decisiveStage.id
+      }
+    }
+  }
+
   if (entry.latestFailure && typeof entry.latestFailure === 'object') {
     return entry.latestFailure
   }
@@ -42,10 +74,11 @@ function latestRuntimeFailure (entry = {}) {
     .sort((left, right) => Number(right.at || 0) - Number(left.at || 0))[0] || null
 }
 
-function tunnelAvailability (entry) {
-  if (failureStates.has(entry?.state)) return 'failed'
-  if (entry?.testState === 'checking' || entry?.testState === 'testing') return 'checking'
-  return entry?.lastTest?.verdict || 'unverified'
+export function guideSectionFor (usage = {}, diagnostic = null) {
+  if (diagnostic?.helpSection) return diagnostic.helpSection
+  if (usage.kind === 'proxy') return 'socks-browser'
+  if (usage.kind === 'remote') return 'remote-safety'
+  return 'how-to-access'
 }
 
 function tunnelName (entry) {
@@ -200,8 +233,8 @@ function StageGrid ({ stages }) {
     <div className='ssh-tunnel-stage-grid'>
       {
         stages.map(stage => {
-          const presentation = statusPresentation[stage.status] || statusPresentation.unverified
-          const stageStatus = statusPresentation[stage.status] ? stage.status : 'unverified'
+          const presentation = stagePresentation[stage.status] || stagePresentation.unverified
+          const stageStatus = stagePresentation[stage.status] ? stage.status : 'unverified'
           return (
             <div
               className={`ssh-tunnel-stage ssh-tunnel-stage--${stageStatus}`}
@@ -302,12 +335,12 @@ export default function SshTunnelRuntimeCard ({
   onShowHistory
 }) {
   const usage = getTunnelUsage(entry?.definition || {})
-  const latestFailure = latestRuntimeFailure(entry)
-  const diagnostic = latestFailure
-    ? getTunnelDiagnostic(latestFailure, entry?.definition)
+  const currentFailure = currentFailureFor(entry)
+  const diagnostic = currentFailure
+    ? getTunnelDiagnostic(currentFailure, entry?.definition)
     : null
-  const availability = tunnelAvailability(entry)
-  const availabilityPresentation = statusPresentation[availability] || statusPresentation.unverified
+  const availability = availabilityFor(entry)
+  const presentation = availabilityPresentation[availability] || availabilityPresentation.unverified
   const stages = Array.isArray(entry?.lastTest?.stages) ? entry.lastTest.stages : []
   const loading = busy === true || busy === entry?.id
 
@@ -319,11 +352,11 @@ export default function SshTunnelRuntimeCard ({
           <span>{getTunnelFlowText(entry?.definition || {})}</span>
         </div>
         <Tag
-          icon={availabilityPresentation.icon}
+          icon={presentation.icon}
           className={`ssh-tunnel-availability ssh-tunnel-availability--${availability}`}
-          aria-label={e(availabilityPresentation.label)}
+          aria-label={e(presentation.label)}
         >
-          {e(availabilityPresentation.label)}
+          {e(presentation.label)}
         </Tag>
       </header>
 
@@ -332,6 +365,14 @@ export default function SshTunnelRuntimeCard ({
       <DiagnosticPanel diagnostic={diagnostic} onOpenGuide={onOpenGuide} />
 
       <div className='ssh-tunnel-runtime-card-actions'>
+        <Button
+          size='small'
+          icon={<ReadOutlined />}
+          className='ssh-tunnel-runtime-guide-button'
+          onClick={() => onOpenGuide?.(guideSectionFor(usage, diagnostic))}
+        >
+          {e('shellpilotTunnelOpenFullGuide')}
+        </Button>
         <Button size='small' icon={<ReloadOutlined />} loading={loading} onClick={() => onTest?.(entry?.id)}>
           {e('shellpilotTunnelTest')}
         </Button>

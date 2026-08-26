@@ -2,11 +2,57 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('fs')
 const path = require('path')
+const vm = require('node:vm')
+const parser = require('@babel/parser')
+const generate = require('@babel/generator').default
+const t = require('@babel/types')
 
 const root = path.resolve(__dirname, '../..')
 
 function source (relativePath) {
   return fs.readFileSync(path.join(root, relativePath), 'utf8')
+}
+
+function parseJsx (relativePath) {
+  return parser.parse(source(relativePath), {
+    sourceType: 'module',
+    plugins: ['jsx', 'optionalChaining']
+  })
+}
+
+function loadRuntimeGuidanceLogic () {
+  const ast = parseJsx('src/client/components/ssh-tunnel/ssh-tunnel-runtime-card.jsx')
+  const names = new Set([
+    'failureStates',
+    'availabilityFor',
+    'currentFailureFor',
+    'guideSectionFor'
+  ])
+  const body = []
+  const foundExports = []
+
+  for (const node of ast.program.body) {
+    if (t.isVariableDeclaration(node) && node.declarations.some(declaration => (
+      t.isIdentifier(declaration.id) && names.has(declaration.id.name)
+    ))) {
+      body.push(node)
+    }
+    if (
+      t.isExportNamedDeclaration(node) &&
+      t.isFunctionDeclaration(node.declaration) &&
+      names.has(node.declaration.id.name)
+    ) {
+      body.push(node.declaration)
+      foundExports.push(node.declaration.id.name)
+    }
+  }
+
+  body.push(parser.parse(`module.exports = { ${foundExports.join(', ')} }`).program.body[0])
+  const module = { exports: {} }
+  vm.runInNewContext(generate(t.file(t.program(body))).code, { module }, {
+    filename: 'ssh-tunnel-runtime-card.logic.js'
+  })
+  return module.exports
 }
 
 test('top bar exposes a lazy-loaded SSH tunnel manager', () => {
@@ -154,7 +200,8 @@ test('runtime guidance card derives truthful availability and safe access action
   assert.match(card, /import \{ copy \} from '\.\.\/\.\.\/common\/clipboard'/)
   assert.match(card, /export default function SshTunnelRuntimeCard \(\{\s*entry,\s*busy,\s*onTest,\s*onEdit,\s*onEditAndRestart,\s*onStop,\s*onOpenGuide,\s*onShowHistory\s*\}\)/)
   assert.match(card, /const usage = getTunnelUsage\(entry\?\.definition \|\| \{\}\)/)
-  assert.match(card, /const diagnostic = latestFailure\s*\? getTunnelDiagnostic\(latestFailure, entry\?\.definition\)\s*: null/)
+  assert.match(card, /const currentFailure = currentFailureFor\(entry\)/)
+  assert.match(card, /const diagnostic = currentFailure\s*\? getTunnelDiagnostic\(currentFailure, entry\?\.definition\)\s*: null/)
   assert.match(card, /failureStates\.has\(entry\?\.state\)[\s\S]*?entry\?\.testState === 'checking'[\s\S]*?entry\?\.lastTest\?\.verdict \|\| 'unverified'/)
   assert.match(card, /usage\.canOpen === true && usage\.url &&\s*typeof window\?\.openLink === 'function'/)
   assert.match(card, /window\.openLink\(usage\.url\)/)
@@ -164,6 +211,67 @@ test('runtime guidance card derives truthful availability and safe access action
     assert.match(card, new RegExp(`${status}: \\{ icon:`))
   }
   assert.doesNotMatch(card, /lastTest\.stages\.map/)
+})
+
+test('runtime guidance pure logic preserves every availability state', () => {
+  const { availabilityFor } = loadRuntimeGuidanceLogic()
+
+  assert.equal(typeof availabilityFor, 'function')
+  assert.equal(availabilityFor({ state: 'failed' }), 'failed')
+  assert.equal(availabilityFor({ state: 'port-conflict' }), 'failed')
+  assert.equal(availabilityFor({ state: 'session-lost' }), 'failed')
+  assert.equal(availabilityFor({ state: 'healthy', testState: 'checking' }), 'checking')
+  assert.equal(availabilityFor({ state: 'healthy', lastTest: { verdict: 'passed' } }), 'passed')
+  assert.equal(availabilityFor({ state: 'healthy', lastTest: { verdict: 'limited' } }), 'limited')
+  assert.equal(availabilityFor({ state: 'healthy', lastTest: { verdict: 'unverified' } }), 'unverified')
+  assert.equal(availabilityFor({ state: 'healthy' }), 'unverified')
+})
+
+test('current failure logic clears recovered history and derives active limited evidence', () => {
+  const { currentFailureFor } = loadRuntimeGuidanceLogic()
+  assert.equal(typeof currentFailureFor, 'function')
+  const recovered = currentFailureFor({
+    state: 'healthy',
+    events: [
+      { at: 1, state: 'failed', code: 'SSH_TUNNEL_FORWARDING_PROHIBITED', message: 'old failure' },
+      { at: 2, state: 'healthy', code: 'SSH_TUNNEL_STARTED', message: 'recovered' }
+    ],
+    lastTest: {
+      verdict: 'passed',
+      stages: [{ id: 'ssh-forwarding', status: 'passed', code: 'SSH_TUNNEL_FORWARDING_READY', message: 'ready' }]
+    }
+  })
+  assert.equal(recovered, null)
+
+  const limited = currentFailureFor({
+    state: 'healthy',
+    lastTest: {
+      verdict: 'limited',
+      stages: [
+        { id: 'local-listener', status: 'passed', code: 'SSH_TUNNEL_LOCAL_LISTENER_READY', message: 'ready' },
+        { id: 'ssh-forwarding', status: 'limited', code: 'SSH_TUNNEL_FORWARDING_PROHIBITED', message: 'policy denied' },
+        { id: 'target-service', status: 'unverified', code: 'SSH_TUNNEL_STAGE_NOT_REACHED', message: 'not reached' }
+      ]
+    }
+  })
+  assert.equal(limited.code, 'SSH_TUNNEL_FORWARDING_PROHIBITED')
+  assert.equal(limited.message, 'policy denied')
+  assert.equal(limited.stage, 'ssh-forwarding')
+})
+
+test('overall availability uses labels independent from stage labels', () => {
+  const card = source('src/client/components/ssh-tunnel/ssh-tunnel-runtime-card.jsx')
+
+  for (const [status, key] of Object.entries({
+    passed: 'shellpilotTunnelAvailabilityPassed',
+    checking: 'shellpilotTunnelAvailabilityChecking',
+    limited: 'shellpilotTunnelAvailabilityLimited',
+    failed: 'shellpilotTunnelAvailabilityFailed',
+    unverified: 'shellpilotTunnelAvailabilityUnverified'
+  })) {
+    assert.match(card, new RegExp(`${status}: \\{ icon:.*label: '${key}'`))
+  }
+  assert.match(card, /const stagePresentation = \{[\s\S]*shellpilotTunnelStagePassed/)
 })
 
 test('runtime guidance keeps diagnostics separate and callbacks defensive', () => {
@@ -185,6 +293,23 @@ test('runtime guidance keeps diagnostics separate and callbacks defensive', () =
     assert.match(card, new RegExp(`${callback}\\?\\.\\(`))
   }
   assert.doesNotMatch(card, /\.write\(|sendText|runCmd/)
+})
+
+test('every runtime card exposes a safe guide action with context mapping', () => {
+  const { guideSectionFor } = loadRuntimeGuidanceLogic()
+  const card = source('src/client/components/ssh-tunnel/ssh-tunnel-runtime-card.jsx')
+
+  assert.equal(typeof guideSectionFor, 'function')
+  assert.equal(guideSectionFor({ kind: 'proxy' }), 'socks-browser')
+  assert.equal(guideSectionFor({ kind: 'remote' }), 'remote-safety')
+  assert.equal(guideSectionFor({ kind: 'web' }), 'how-to-access')
+  assert.equal(guideSectionFor({ kind: 'tcp' }), 'how-to-access')
+  assert.equal(
+    guideSectionFor({ kind: 'web' }, { helpSection: 'forwarding-prohibited' }),
+    'forwarding-prohibited'
+  )
+  assert.match(card, /className='ssh-tunnel-runtime-guide-button'/)
+  assert.match(card, /onClick=\{\(\) => onOpenGuide\?\.\(guideSectionFor\(usage, diagnostic\)\)\}/)
 })
 
 test('beginner guide has seven synchronized sections and safe error mapping', () => {
@@ -233,6 +358,21 @@ test('beginner guide uses the planned localized content contract', () => {
   assert.match(guide, /shellpilotTunnelGuideGatewayPorts/)
 })
 
+test('access guide distinguishes web schemes and database profiles', () => {
+  const guide = source('src/client/components/ssh-tunnel/ssh-tunnel-guide-modal.jsx')
+
+  assert.match(guide, /http:\/\/127\.0\.0\.1:16060/)
+  assert.match(guide, /https:\/\/127\.0\.0\.1:16060/)
+  for (const key of [
+    'shellpilotTunnelGuideMySqlProfile',
+    'shellpilotTunnelGuidePostgreSqlProfile',
+    'shellpilotTunnelGuideRedisProfile'
+  ]) {
+    assert.match(guide, new RegExp(`e\\('${key}'\\)`))
+  }
+  assert.match(guide, /host: 127\.0\.0\.1, port: 16060/)
+})
+
 test('runtime guidance styles match the approved hierarchy responsively', () => {
   const styles = source('src/client/components/ssh-tunnel/ssh-tunnel-modal.styl')
 
@@ -247,4 +387,14 @@ test('runtime guidance styles match the approved hierarchy responsively', () => 
   assert.match(styles, /overflow-wrap anywhere/)
   assert.doesNotMatch(styles, /gradient\(/)
   assert.doesNotMatch(styles, /max-height min\(/)
+  assert.match(styles, /\.ssh-tunnel-stage--passed[\s\S]*color var\(--sp-success,[\s\S]*border-color var\(--sp-success,/)
+  assert.match(styles, /\.ssh-tunnel-stage--limited[\s\S]*color var\(--sp-warning,[\s\S]*border-color var\(--sp-warning,/)
+  assert.match(styles, /\.ssh-tunnel-stage--failed[\s\S]*color var\(--sp-danger,[\s\S]*border-color var\(--sp-danger,/)
+  assert.match(styles, /\.ssh-tunnel-stage--unverified[\s\S]*color var\(--sp-text-muted,[\s\S]*border-color var\(--sp-border,/)
+  assert.doesNotMatch(styles, /color #(?:067647|b54708|b42318)/i)
+})
+
+test('both unconnected JSX components parse in the production syntax contract', () => {
+  assert.doesNotThrow(() => parseJsx('src/client/components/ssh-tunnel/ssh-tunnel-runtime-card.jsx'))
+  assert.doesNotThrow(() => parseJsx('src/client/components/ssh-tunnel/ssh-tunnel-guide-modal.jsx'))
 })

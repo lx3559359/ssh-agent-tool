@@ -49,16 +49,24 @@ function GuideContent ({ section, context }) {
     return (
       <section className='ssh-tunnel-guide-section'>
         <h3>{e('shellpilotTunnelGuideHowToAccess')}</h3>
-        <div className='ssh-tunnel-guide-callout ssh-tunnel-guide-callout--safe'>
-          <strong>{e('shellpilotTunnelGuideWebAccess')}</strong>
-          <p>{e('shellpilotTunnelGuideNoBrowserProxy')}</p>
-          <code>https://127.0.0.1:16060</code>
+        <p>{e('shellpilotTunnelGuideNoBrowserProxy')}</p>
+        <div className='ssh-tunnel-guide-topic-grid ssh-tunnel-guide-web-profiles'>
+          <article>
+            <strong>{e('shellpilotTunnelGuideHttpProfile')}</strong>
+            <code>http://127.0.0.1:16060</code>
+          </article>
+          <article>
+            <strong>{e('shellpilotTunnelGuideHttpsProfile')}</strong>
+            <code>https://127.0.0.1:16060</code>
+          </article>
         </div>
-        <div className='ssh-tunnel-guide-callout'>
-          <strong>{e('shellpilotTunnelGuideDatabaseAccess')}</strong>
-          <p>{e('shellpilotTunnelGuideDatabaseHostPort')}</p>
-          <code>host: 127.0.0.1, port: 16060</code>
-        </div>
+        <h4>{e('shellpilotTunnelGuideDatabaseAccess')}</h4>
+        <p>{e('shellpilotTunnelGuideDatabaseHostPort')}</p>
+        <dl className='ssh-tunnel-guide-profile-list'>
+          <div><dt>{e('shellpilotTunnelGuideMySqlProfile')}</dt><dd><code>host: 127.0.0.1, port: 16060</code></dd></div>
+          <div><dt>{e('shellpilotTunnelGuidePostgreSqlProfile')}</dt><dd><code>host: 127.0.0.1, port: 16060</code></dd></div>
+          <div><dt>{e('shellpilotTunnelGuideRedisProfile')}</dt><dd><code>host: 127.0.0.1, port: 16060</code></dd></div>
+        </dl>
       </section>
     )
   }

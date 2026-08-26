@@ -337,25 +337,29 @@
   margin-inline-end 0
 
   &--passed
-    color #067647
-    background rgba(18, 183, 106, .12)
-    border-color rgba(18, 183, 106, .3)
+    color var(--sp-success, #168a74)
+    background var(--sp-success-soft, rgba(18, 183, 106, .12))
+    border-color var(--sp-success, #168a74)
 
   &--limited
-    color #b54708
-    background rgba(247, 144, 9, .12)
-    border-color rgba(247, 144, 9, .32)
+    color var(--sp-warning, #c56a20)
+    background var(--sp-warning-soft, rgba(247, 144, 9, .12))
+    border-color var(--sp-warning, #c56a20)
 
   &--failed
-    color #b42318
-    background rgba(240, 68, 56, .11)
-    border-color rgba(240, 68, 56, .3)
+    color var(--sp-danger, #cf3f50)
+    background var(--sp-danger-soft, rgba(240, 68, 56, .11))
+    border-color var(--sp-danger, #cf3f50)
 
-  &--unverified,
   &--checking
-    color inherit
-    background rgba(127, 127, 127, .1)
-    border-color var(--border-color, rgba(127, 127, 127, .25))
+    color var(--sp-primary, #2878e6)
+    background var(--sp-primary-soft, rgba(22, 119, 255, .1))
+    border-color var(--sp-primary, #2878e6)
+
+  &--unverified
+    color var(--sp-text-muted, rgba(127, 127, 127, .9))
+    background var(--sp-surface-soft, rgba(127, 127, 127, .1))
+    border-color var(--sp-border, rgba(127, 127, 127, .25))
 
 .ssh-tunnel-access-panel
   min-width 0
@@ -440,24 +444,24 @@
     font-size 13px
 
 .ssh-tunnel-stage--passed
-  color #067647
-  background rgba(18, 183, 106, .1)
-  border-color rgba(18, 183, 106, .24)
+  color var(--sp-success, #168a74)
+  background var(--sp-success-soft, rgba(18, 183, 106, .1))
+  border-color var(--sp-success, #168a74)
 
 .ssh-tunnel-stage--limited
-  color #b54708
-  background rgba(247, 144, 9, .1)
-  border-color rgba(247, 144, 9, .28)
+  color var(--sp-warning, #c56a20)
+  background var(--sp-warning-soft, rgba(247, 144, 9, .1))
+  border-color var(--sp-warning, #c56a20)
 
 .ssh-tunnel-stage--failed
-  color #b42318
-  background rgba(240, 68, 56, .09)
-  border-color rgba(240, 68, 56, .25)
+  color var(--sp-danger, #cf3f50)
+  background var(--sp-danger-soft, rgba(240, 68, 56, .09))
+  border-color var(--sp-danger, #cf3f50)
 
 .ssh-tunnel-stage--unverified
-  color inherit
-  background rgba(127, 127, 127, .08)
-  border-color var(--border-color, rgba(127, 127, 127, .2))
+  color var(--sp-text-muted, rgba(127, 127, 127, .9))
+  background var(--sp-surface-soft, rgba(127, 127, 127, .08))
+  border-color var(--sp-border, rgba(127, 127, 127, .2))
 
 .ssh-tunnel-stage-empty
   margin 0
@@ -469,9 +473,9 @@
 .ssh-tunnel-diagnostic
   min-width 0
   padding 14px
-  border 1px solid rgba(240, 68, 56, .25)
+  border 1px solid var(--sp-danger, #cf3f50)
   border-radius var(--sp-radius-card)
-  background rgba(240, 68, 56, .07)
+  background var(--sp-danger-soft, rgba(240, 68, 56, .07))
 
   > span,
   > strong
@@ -494,8 +498,8 @@
     padding-left 20px
 
   &--warning
-    border-color rgba(247, 144, 9, .3)
-    background rgba(247, 144, 9, .08)
+    border-color var(--sp-warning, #c56a20)
+    background var(--sp-warning-soft, rgba(247, 144, 9, .08))
 
 .ssh-tunnel-diagnostic-split
   display grid
@@ -656,7 +660,8 @@
     border-color rgba(247, 144, 9, .28)
 
 .ssh-tunnel-guide-error-list,
-.ssh-tunnel-guide-glossary
+.ssh-tunnel-guide-glossary,
+.ssh-tunnel-guide-profile-list
   display grid
   gap 10px
 
