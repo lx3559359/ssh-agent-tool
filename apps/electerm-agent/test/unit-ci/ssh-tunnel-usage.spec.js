@@ -1,5 +1,6 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
+const { createHash } = require('node:crypto')
 const { importModule } = require('./helpers/import-esm')
 
 async function loadUsage () {
@@ -177,11 +178,11 @@ test('guide data uses current safe SOCKS and remote settings and labels fallback
   assert.equal(socks.bindEndpoint, '127.0.0.1:19090')
   assert.equal(
     socks.chromeCommand,
-    'chrome.exe --user-data-dir="%TEMP%\\shellpilot-chrome-socks\\h-127_d0_d0_d1\\p-19090" --proxy-server="socks5://127.0.0.1:19090"'
+    'chrome.exe --user-data-dir="%TEMP%\\shellpilot-chrome-socks-44ea3bca125703eeeed71d2a80388f0c18d49b810a0f08cfb7b9eb6c2ef751c4" --proxy-server="socks5://127.0.0.1:19090"'
   )
   assert.equal(
     socks.edgeCommand,
-    'msedge.exe --user-data-dir="%TEMP%\\shellpilot-edge-socks\\h-127_d0_d0_d1\\p-19090" --proxy-server="socks5://127.0.0.1:19090"'
+    'msedge.exe --user-data-dir="%TEMP%\\shellpilot-edge-socks-44ea3bca125703eeeed71d2a80388f0c18d49b810a0f08cfb7b9eb6c2ef751c4" --proxy-server="socks5://127.0.0.1:19090"'
   )
 
   const otherSocks = getTunnelGuideData({
@@ -206,6 +207,26 @@ test('guide data uses current safe SOCKS and remote settings and labels fallback
     }
   }).socks.chromeCommand)
   assert.notEqual(profileDirectory(formerlyColliding[0]), profileDirectory(formerlyColliding[1]))
+
+  const longestLegalHost = [63, 63, 63, 58]
+    .map(length => 'A'.repeat(length))
+    .join('.')
+  const longHostCommand = getTunnelGuideData({
+    definition: {
+      sshTunnel: 'dynamicForward',
+      sshTunnelLocalHost: longestLegalHost,
+      sshTunnelLocalPort: 65535
+    }
+  }).socks.chromeCommand
+  const longProfileDirectory = profileDirectory(longHostCommand)
+  const longEndpointDigest = createHash('sha256')
+    .update(`${longestLegalHost}:65535`)
+    .digest('hex')
+  assert.equal(
+    longProfileDirectory,
+    `%TEMP%\\shellpilot-chrome-socks-${longEndpointDigest}`
+  )
+  assert.ok(longProfileDirectory.length < 120)
 
   const remote = getTunnelGuideData({
     definition: {
