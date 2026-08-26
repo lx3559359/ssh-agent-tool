@@ -56,26 +56,38 @@ test('forwarding prohibited uses a read-only check and separate scoped local pol
   ].join('\n'))
   assert.notEqual(diagnostic.checksText, diagnostic.configExample)
   assert.equal(diagnostic.steps.every(step => typeof step.key === 'string' && step.values && typeof step.values === 'object'), true)
-  const baseline = findStep(
+  const globalBaseline = findStep(
     diagnostic,
-    'sshTunnel.diagnostic.forwardingProhibited.checkPolicy'
+    'sshTunnel.diagnostic.forwardingProhibited.globalBaseline'
   )
-  const restrictions = findStep(
+  const matchContext = findStep(
     diagnostic,
-    'sshTunnel.diagnostic.forwardingProhibited.reviewKeyRestrictions'
+    'sshTunnel.diagnostic.forwardingProhibited.matchContext'
   )
-  assert.equal(baseline.values.scope, 'global-baseline')
-  assert.equal(baseline.values.requiresSshdDashCContext, true)
-  assert.deepEqual(restrictions.values.authorizedKeys, [
+  const authorizedKeys = findStep(
+    diagnostic,
+    'sshTunnel.diagnostic.forwardingProhibited.authorizedKeysRestrictions'
+  )
+  const certificate = findStep(
+    diagnostic,
+    'sshTunnel.diagnostic.forwardingProhibited.certificateRestrictions'
+  )
+  assert.equal(globalBaseline.values.scope, 'global-baseline')
+  assert.deepEqual(matchContext.values.requiredContext, ['user', 'addr', 'host'])
+  assert.equal(matchContext.values.replaceWithRealSshContext, true)
+  assert.equal(
+    matchContext.values.commandTemplate,
+    "sudo sshd -T -C user=SSH_LOGIN_USER,addr=CLIENT_IP,host=SSH_SERVER_HOST | grep -Ei 'allowtcpforwarding|permitopen|disableforwarding'"
+  )
+  assert.deepEqual(authorizedKeys.values.restrictions, [
     'restrict',
     'no-port-forwarding',
     'permitopen',
     'permitlisten'
   ])
-  assert.deepEqual(restrictions.values.certificateOptions, [
+  assert.deepEqual(certificate.values.restrictions, [
     'no-port-forwarding',
-    'permitopen',
-    'permitlisten'
+    'permit-port-forwarding'
   ])
 })
 
@@ -107,8 +119,12 @@ test('forwarding prohibited scopes remote policy checks and keeps dynamic forwar
     true
   )
   assert.equal(
-    hasStep(remote, 'sshTunnel.diagnostic.forwardingProhibited.reviewKeyRestrictions'),
+    hasStep(remote, 'sshTunnel.diagnostic.forwardingProhibited.matchContext'),
     true
+  )
+  assert.equal(
+    findStep(remote, 'sshTunnel.diagnostic.forwardingProhibited.matchContext').values.commandTemplate,
+    "sudo sshd -T -C user=SSH_LOGIN_USER,addr=CLIENT_IP,host=SSH_SERVER_HOST | grep -Ei 'allowtcpforwarding|permitlisten|disableforwarding'"
   )
 })
 

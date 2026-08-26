@@ -160,23 +160,36 @@ function policyCheckCommand (type) {
     : "sudo sshd -T | grep -Ei 'allowtcpforwarding|permitopen|disableforwarding'"
 }
 
+function policyContextTemplate (type) {
+  const policyNames = type === 'remote'
+    ? 'allowtcpforwarding|permitlisten|disableforwarding'
+    : 'allowtcpforwarding|permitopen|disableforwarding'
+  return `sudo sshd -T -C user=SSH_LOGIN_USER,addr=CLIENT_IP,host=SSH_SERVER_HOST | grep -Ei '${policyNames}'`
+}
+
 function policySteps (definition) {
   const steps = [
-    step('sshTunnel.diagnostic.forwardingProhibited.checkPolicy', {
-      scope: 'global-baseline',
-      requiresSshdDashCContext: true
+    step('sshTunnel.diagnostic.forwardingProhibited.globalBaseline', {
+      scope: 'global-baseline'
     }),
-    step('sshTunnel.diagnostic.forwardingProhibited.reviewKeyRestrictions', {
-      authorizedKeys: [
+    step('sshTunnel.diagnostic.forwardingProhibited.matchContext', {
+      requiredContext: ['user', 'addr', 'host'],
+      commandTemplate: policyContextTemplate(definition.type),
+      replaceWithRealSshContext: true
+    }),
+    step('sshTunnel.diagnostic.forwardingProhibited.authorizedKeysRestrictions', {
+      restrictions: [
         'restrict',
         'no-port-forwarding',
         'permitopen',
         'permitlisten'
       ],
-      certificateOptions: [
+      requiresAdministratorReview: true
+    }),
+    step('sshTunnel.diagnostic.forwardingProhibited.certificateRestrictions', {
+      restrictions: [
         'no-port-forwarding',
-        'permitopen',
-        'permitlisten'
+        'permit-port-forwarding'
       ],
       requiresAdministratorReview: true
     })
