@@ -55,6 +55,14 @@ function passedLocalProbe (checkedAt = 1) {
   ], { checkedAt })
 }
 
+function passedSocksProbe (checkedAt = 1) {
+  return createProbeResult([
+    createProbeStage('local-listener', 'passed', 'SSH_TUNNEL_LOCAL_LISTENER_READY', '本机监听正常'),
+    createProbeStage('proxy-protocol', 'passed', 'SSH_TUNNEL_PROXY_PROTOCOL_READY', 'SOCKS5 协议握手正常'),
+    createProbeStage('proxy-traffic', 'passed', 'SSH_TUNNEL_PROXY_TRAFFIC_READY', '真实代理流量已成功转发')
+  ], { checkedAt })
+}
+
 function createServer (onConnection) {
   const server = new EventEmitter()
   server.closeCount = 0
@@ -1081,6 +1089,61 @@ test('runtime successful probe cancels a stale reconnect after recovery', async 
   assert.equal(runtime.list()[0].state, 'healthy')
   assert.equal(runtime.list()[0].reconnectAttempt, 0)
   assert.equal(scheduled[0].cancelled, true)
+})
+
+test('runtime ignores late traffic evidence after the SSH session is lost', async () => {
+  const scheduled = []
+  const controller = new EventEmitter()
+  controller.descriptor = { id: 'late-evidence', sshTunnel: 'forwardLocalToRemote' }
+  controller.close = async () => {}
+  controller.probe = async () => passedLocalProbe(27)
+  const runtime = createSshTunnelRuntime({
+    startController: async () => controller,
+    schedule: (callback, delay) => {
+      const task = { callback, delay, cancelled: false }
+      scheduled.push(task)
+      return task
+    },
+    cancelSchedule: task => {
+      task.cancelled = true
+    }
+  })
+
+  await runtime.start(controller.descriptor)
+  await new Promise(resolve => setImmediate(resolve))
+  controller.emit('close', { code: 'SSH_CONNECTION_CLOSED' })
+  const lost = runtime.list()[0]
+  assert.equal(lost.state, 'session-lost')
+  assert.equal(lost.lastTest.verdict, 'failed')
+  assert.equal(scheduled.length, 1)
+
+  controller.emit('evidence', passedLocalProbe(28))
+  controller.emit('listening')
+  const afterLateEvidence = runtime.list()[0]
+  assert.equal(afterLateEvidence.state, 'session-lost')
+  assert.equal(afterLateEvidence.lastTest.verdict, 'failed')
+  assert.equal(scheduled[0].cancelled, false)
+})
+
+test('runtime accepts fresh SOCKS traffic evidence after a transient target failure', async () => {
+  const controller = new EventEmitter()
+  controller.descriptor = { id: 'socks-traffic-recovery', sshTunnel: 'dynamicForward' }
+  controller.close = async () => {}
+  const runtime = createSshTunnelRuntime({ startController: async () => controller })
+
+  await runtime.start(controller.descriptor)
+  controller.emit('error', Object.assign(new Error('target refused'), {
+    code: 'SSH_TUNNEL_TARGET_REFUSED'
+  }))
+  assert.equal(runtime.list()[0].state, 'failed')
+  assert.equal(runtime.list()[0].lastTest.verdict, 'failed')
+
+  controller.emit('evidence', passedSocksProbe(29))
+  controller.emit('listening')
+  const recovered = runtime.list()[0]
+  assert.equal(recovered.state, 'healthy')
+  assert.equal(recovered.lastTest.verdict, 'passed')
+  assert.equal(recovered.testState, 'passed')
 })
 
 test('runtime returns current failure evidence to a probe invalidated while pending', async () => {

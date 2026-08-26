@@ -20,6 +20,10 @@ const probeRecoverableStates = new Set([
   'port-conflict',
   'session-lost'
 ])
+const untrustedControllerStates = new Set([
+  'port-conflict',
+  'session-lost'
+])
 
 function safeTunnelErrorDetails (details) {
   if (!details || typeof details !== 'object' || Array.isArray(details)) {
@@ -132,7 +136,11 @@ function createSshTunnelRuntime ({
     } else if (result.verdict === 'limited' || result.verdict === 'failed') {
       entry.trafficEvidencePassed = false
     }
-    if (result.ok && probeRecoverableStates.has(entry.state)) {
+    if (
+      source === 'probe' &&
+      result.ok &&
+      probeRecoverableStates.has(entry.state)
+    ) {
       cancelReconnect(entry)
       entry.reconnectAttempt = 0
       recordState(entry, 'healthy', {
@@ -252,7 +260,10 @@ function createSshTunnelRuntime ({
     if (!controller || typeof controller.on !== 'function') return
     const handlers = {
       listening: () => {
-        if (entry.manualStopping) return
+        if (
+          entry.manualStopping ||
+          untrustedControllerStates.has(entry.state)
+        ) return
         entry.reconnectAttempt = 0
         recordState(entry, 'healthy', {
           code: 'SSH_TUNNEL_LISTENING',
@@ -265,6 +276,7 @@ function createSshTunnelRuntime ({
         message: reason?.message || 'SSH 会话已断开'
       }),
       evidence: value => {
+        if (untrustedControllerStates.has(entry.state)) return
         entry.probeGeneration += 1
         applyProbeResult(
           entry,
