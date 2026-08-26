@@ -208,7 +208,7 @@ test('guide data uses current safe SOCKS and remote settings and labels fallback
   }).socks.chromeCommand)
   assert.notEqual(profileDirectory(formerlyColliding[0]), profileDirectory(formerlyColliding[1]))
 
-  const longestLegalHost = [63, 63, 63, 58]
+  const longestLegalHost = [63, 63, 63, 61]
     .map(length => 'A'.repeat(length))
     .join('.')
   const longHostCommand = getTunnelGuideData({
