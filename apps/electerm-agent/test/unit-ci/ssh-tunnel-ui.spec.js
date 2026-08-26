@@ -686,6 +686,19 @@ test('beginner guide uses the planned localized content contract', () => {
   assert.match(guide, /shellpilotTunnelGuideGatewayPorts/)
 })
 
+test('forwarding-prohibited guidance states the server configuration boundary', async () => {
+  const { getShellPilotTranslation } = await loadTunnelCatalog()
+  const zh = getShellPilotTranslation('shellpilotTunnelGuideErrorProhibitedFix', 'zh_cn')
+  const en = getShellPilotTranslation('shellpilotTunnelGuideErrorProhibitedFix', 'en_us')
+
+  assert.match(zh, /AllowTcpForwarding/)
+  assert.match(zh, /PermitOpen/)
+  assert.match(zh, /ShellPilot 不会修改服务器配置/)
+  assert.match(en, /AllowTcpForwarding/)
+  assert.match(en, /PermitOpen/)
+  assert.match(en, /ShellPilot does not change server configuration/i)
+})
+
 test('access guide distinguishes web schemes and database profiles', () => {
   const guide = source('src/client/components/ssh-tunnel/ssh-tunnel-guide-modal.jsx')
 
