@@ -166,9 +166,6 @@ async function installFakeSshSession (page) {
               if (entry.id !== request.tunnelId) return entry
               return {
                 ...entry,
-                state: ['prohibited', 'refused'].includes(state.testScenario)
-                  ? 'failed'
-                  : 'running',
                 testState: result.verdict,
                 lastTestAt: result.checkedAt,
                 lastTest: result
@@ -319,7 +316,8 @@ test('SSH tunnel manager explains direct HTTPS access, policy failures, and SOCK
     await expect(card).toContainText('SSH 服务器禁止端口转发')
     await expect(card).toContainText('尚未检测目标服务')
     await expect(card).not.toContainText('最近测试正常')
-    await expect(card.locator('.ssh-tunnel-availability')).not.toHaveText('可用')
+    await expect(card.locator('.ssh-tunnel-availability')).toHaveText('受限')
+    await expect(card.locator('.ssh-tunnel-runtime-lifecycle')).toHaveText('运行中')
     await expect(card.getByRole('button', { name: '停止' })).toBeVisible()
 
     await card.getByRole('button', { name: '查看完整修复说明' }).click()
