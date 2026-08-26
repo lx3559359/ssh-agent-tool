@@ -61,6 +61,49 @@ test('SSH tunnel templates cover common services and SOCKS5', async () => {
   assert.notStrictEqual(getTunnelTemplate('http'), getTunnelTemplate('http'))
 })
 
+test('SSH tunnel templates, normalization, and bookmarks keep only supported usage profiles', async () => {
+  const {
+    getTunnelTemplate,
+    normalizeTunnel,
+    serializeTunnelForBookmark
+  } = await loadDefinitions()
+
+  const expectedProfiles = {
+    http: 'http',
+    https: 'https',
+    mysql: 'mysql',
+    postgresql: 'postgresql',
+    redis: 'redis',
+    socks5: 'socks5'
+  }
+  for (const [template, profile] of Object.entries(expectedProfiles)) {
+    assert.equal(getTunnelTemplate(template).usageProfile, profile)
+  }
+
+  const legacyInput = {
+    sshTunnelLocalPort: 8080,
+    sshTunnelRemotePort: 80,
+    name: 'HTTP'
+  }
+  const legacy = normalizeTunnel(legacyInput)
+  const profiled = normalizeTunnel({
+    ...legacyInput,
+    usageProfile: 'http'
+  })
+  assert.equal(profiled.id, legacy.id)
+  assert.equal(normalizeTunnel({ usageProfile: 'generic' }).usageProfile, 'generic')
+  assert.equal(normalizeTunnel({ usageProfile: 'custom-service' }).usageProfile, undefined)
+  assert.equal(normalizeTunnel({ usageProfile: '' }).usageProfile, undefined)
+  assert.equal(serializeTunnelForBookmark({
+    ...profiled,
+    usageProfile: 'https'
+  }).usageProfile, 'https')
+  assert.equal('usageProfile' in serializeTunnelForBookmark({
+    ...profiled,
+    usageProfile: 'untrusted'
+  }), false)
+})
+
 test('SSH tunnel validation rejects unsupported types and invalid ports', async () => {
   const { validateTunnel } = await loadDefinitions()
 
