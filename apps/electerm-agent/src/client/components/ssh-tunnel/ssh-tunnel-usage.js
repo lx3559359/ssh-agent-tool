@@ -114,13 +114,19 @@ function getWebUrl (profile, address) {
   if (!address.endpoint) return undefined
   try {
     const parsed = new URL(`${profile}://${address.endpoint}`)
+    const isIPv6 = address.host.startsWith('[') && address.host.endsWith(']')
     const expectedPort = (profile === 'http' && address.port === 80) ||
       (profile === 'https' && address.port === 443)
       ? ''
       : String(address.port)
     if (
       parsed.protocol !== `${profile}:` ||
-      parsed.hostname.toLowerCase() !== address.host.toLowerCase() ||
+      (!isIPv6 && parsed.hostname.toLowerCase() !== address.host.toLowerCase()) ||
+      parsed.username ||
+      parsed.password ||
+      parsed.pathname !== '/' ||
+      parsed.search ||
+      parsed.hash ||
       parsed.port !== expectedPort
     ) {
       return undefined

@@ -247,6 +247,35 @@ test('IPv6 access addresses are bracketed once and zone IDs remain copyable', as
   assert.equal('url' in zoned, false)
 })
 
+test('web URLs accept canonical IPv6 parsing and protocol default ports', async () => {
+  const { getTunnelUsage } = await loadUsage()
+
+  assert.deepEqual(getTunnelUsage({
+    usageProfile: 'https',
+    sshTunnelLocalHost: '2001:0db8::1',
+    sshTunnelLocalPort: 8443
+  }), {
+    kind: 'web',
+    profile: 'https',
+    host: '[2001:0db8::1]',
+    port: 8443,
+    endpoint: '[2001:0db8::1]:8443',
+    url: 'https://[2001:0db8::1]:8443',
+    requiresProxy: false,
+    canOpen: true
+  })
+  for (const [profile, port] of [['http', 80], ['https', 443]]) {
+    const usage = getTunnelUsage({
+      usageProfile: profile,
+      sshTunnelLocalHost: '127.0.0.1',
+      sshTunnelLocalPort: port
+    })
+    assert.equal(usage.endpoint, `127.0.0.1:${port}`)
+    assert.equal(usage.url, `${profile}://127.0.0.1:${port}`)
+    assert.equal(usage.canOpen, true)
+  }
+})
+
 test('tunnel types control their usage profile and valid output structure', async () => {
   const { getTunnelUsage } = await loadUsage()
   const usages = [
