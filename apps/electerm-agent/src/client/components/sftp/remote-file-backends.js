@@ -945,8 +945,6 @@ export async function createPrivilegedFileBackend ({
     async writeFile (path, value, requestedMode) {
       const targetPath = canonicalFilePath(path, 'targetPath')
       await invalidateReadStreams(targetPath)
-      const bytes = inputBytes(value)
-      const digest = await sha256Hex(bytes)
       let targetMetadata
       try {
         targetMetadata = await rawFacade.lstat(targetPath)
@@ -955,7 +953,14 @@ export async function createPrivilegedFileBackend ({
       }
       if (targetMetadata) {
         requireBoundMetadata(targetMetadata, targetPath, 'write target')
+        const error = new Error(
+          'root 文件后端 writeFile 仅允许写入缺失目标；既有目标必须通过安全事务'
+        )
+        error.code = 'EEXIST'
+        throw error
       }
+      const bytes = inputBytes(value)
+      const digest = await sha256Hex(bytes)
       const targetParentPath = parentFilePath(targetPath)
       const targetParentMetadata = requireBoundMetadata(
         await rawFacade.lstat(targetParentPath),
@@ -967,10 +972,10 @@ export async function createPrivilegedFileBackend ({
       }
       const targetMode = normalizeMode(
         requestedMode,
-        targetMetadata ? targetMetadata.mode & 0o7777 : 0o600
+        0o600
       )
-      const targetUid = targetMetadata?.uid ?? 0
-      const targetGid = targetMetadata?.gid ?? 0
+      const targetUid = 0
+      const targetGid = 0
       const stage = staging.allocate('upload')
       let operationError
       let cleanStage = true
@@ -1010,10 +1015,10 @@ export async function createPrivilegedFileBackend ({
           targetMode: targetMode.toString(8),
           targetUid: String(targetUid),
           targetGid: String(targetGid),
-          mustBeAbsent: targetMetadata ? '0' : '1',
+          mustBeAbsent: '1',
           ...targetParentBindingArgs(targetParentPath, targetParentMetadata),
-          targetDevice: String(targetMetadata?.device ?? 0),
-          targetInode: String(targetMetadata?.inode ?? 0)
+          targetDevice: '0',
+          targetInode: '0'
         }), 'stage-import')
         if (imported.sha256 !== digest || imported.size !== bytes.byteLength) {
           throw new Error('root 文件后端 stage-import 摘要或大小不匹配')

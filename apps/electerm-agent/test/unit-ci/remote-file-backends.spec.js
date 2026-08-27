@@ -264,6 +264,9 @@ function createBackendHarness (options = {}) {
     if (request.operation === 'stage-import') {
       if (options.importFailure) throw new Error('stage import failed')
       const bytes = nodes.get(`${args.rootPath}/${args.objectName}`).content
+      if (args.mustBeAbsent !== '1') {
+        throw new Error('stage import requires an absent target')
+      }
       if (options.privilegedTree) {
         const parent = ensurePrivilegedBinding(privilegedNodes.get(
           args.targetParentRealPath
@@ -273,15 +276,8 @@ function createBackendHarness (options = {}) {
           parent.inode !== args.targetParentInode) {
           throw new Error('stage import target parent binding changed')
         }
-        if (args.mustBeAbsent === '1' && privilegedNodes.has(args.targetPath)) {
+        if (privilegedNodes.has(args.targetPath)) {
           throw new Error('stage import target already exists')
-        }
-        if (args.mustBeAbsent === '0') {
-          const current = ensurePrivilegedBinding(privilegedNodes.get(args.targetPath))
-          if (!current || current.device !== args.targetDevice ||
-            current.inode !== args.targetInode) {
-            throw new Error('stage import target binding changed')
-          }
         }
         if (options.failImportTarget === args.targetPath) {
           privilegedNodes.set(args.targetPath, {
@@ -1064,7 +1060,7 @@ test('privileged mutations invalidate related logical read stages before changin
   const cleanupBefore = harness.requests.filter(request =>
     request.operation === 'stage-cleanup').length
 
-  await backend.sftp.writeFile('/root/file', 'ABCDEFGH', 0o640)
+  await backend.sftp.rm('/root/file')
   assert.ok(harness.requests.filter(request =>
     request.operation === 'stage-cleanup').length > cleanupBefore)
   await assert.rejects(
@@ -1113,13 +1109,19 @@ test('privileged writes upload exclusive bytes then import only digest size and 
     rootFiles: { '/root/existing-target': 'old' }
   })
   const existing = await createRootBackend(existingHarness)
-  await existing.sftp.writeFile('/root/existing-target', secret)
-  const existingImport = existingHarness.requests.find(
-    request => request.operation === 'stage-import'
+  const createsBefore = existingHarness.events.filter(
+    event => event.startsWith('sftp:create:')
+  ).length
+  await assert.rejects(
+    existing.sftp.writeFile('/root/existing-target', secret),
+    /安全事务|缺失目标/
   )
-  assert.equal(existingImport.args.targetMode, '640')
-  assert.equal(existingImport.args.targetUid, '3')
-  assert.equal(existingImport.args.targetGid, '4')
+  assert.equal(existingHarness.events.filter(
+    event => event.startsWith('sftp:create:')
+  ).length, createsBefore)
+  assert.equal(existingHarness.requests.some(
+    request => request.operation === 'stage-import'
+  ), false)
   await existing.release()
 
   const failedHarness = createBackendHarness({
