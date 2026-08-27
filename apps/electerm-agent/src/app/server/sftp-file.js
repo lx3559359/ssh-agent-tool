@@ -116,23 +116,14 @@ function createExclusiveRemoteFile (sftp, path, base64, mode = 0o600) {
         settle(writeError)
         return
       }
-      const finish = (cleanupError, cleanupAttempted) => {
-        writeError.code = 'SFTP_EXCLUSIVE_WRITE_FAILED'
-        writeError.claimed = true
-        writeError.cleanupAttempted = cleanupAttempted
-        writeError.cleanupSucceeded = cleanupAttempted && !cleanupError
-        writeError.cleanupError = cleanupError || null
-        settle(writeError)
-      }
-      if (typeof sftp.unlink !== 'function') {
-        finish(new Error('SFTP exclusive claim cleanup is unavailable.'), false)
-        return
-      }
-      try {
-        sftp.unlink(path, error => finish(error || null, true))
-      } catch (error) {
-        finish(error, true)
-      }
+      writeError.code = 'SFTP_EXCLUSIVE_WRITE_FAILED'
+      writeError.claimed = true
+      writeError.cleanupAttempted = false
+      writeError.cleanupSucceeded = false
+      writeError.cleanupError = new Error(
+        'SFTP v3 cannot safely unlink an unverified exclusive claim.'
+      )
+      settle(writeError)
     }
     let writeStream
     try {

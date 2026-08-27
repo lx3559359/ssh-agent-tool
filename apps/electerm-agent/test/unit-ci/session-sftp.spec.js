@@ -185,6 +185,10 @@ async function startSftpServer (root, options = {}) {
             handles.delete(handle.toString('hex'))
             if (options.failClosePath && item?.localPath ===
               toLocalPath(root, options.failClosePath)) {
+              if (options.replaceOnFailedClose) {
+                fs.renameSync(item.localPath, `${item.localPath}.claimed`)
+                fs.writeFileSync(item.localPath, 'foreign replacement')
+              }
               return sftp.status(reqId, STATUS_CODE.FAILURE, 'injected close failure')
             }
             sftp.status(reqId, STATUS_CODE.OK)
@@ -391,20 +395,20 @@ describe('session-sftp transport flows', () => {
       claimed: true,
       code: 'SFTP_EXCLUSIVE_WRITE_FAILED',
       message: 'remote write failed',
-      cleanupAttempted: true,
-      cleanupSucceeded: true,
-      cleanupError: null
+      cleanupAttempted: false,
+      cleanupSucceeded: false,
+      cleanupError: 'SFTP v3 cannot safely unlink an unverified exclusive claim.'
     })
     assert.deepEqual(await sftp.createExclusiveFile('/stage/cleanup-fails', base64), {
       ok: false,
       claimed: true,
       code: 'SFTP_EXCLUSIVE_WRITE_FAILED',
       message: 'remote write failed',
-      cleanupAttempted: true,
+      cleanupAttempted: false,
       cleanupSucceeded: false,
-      cleanupError: 'remote unlink failed'
+      cleanupError: 'SFTP v3 cannot safely unlink an unverified exclusive claim.'
     })
-    assert.deepEqual(unlinked, ['/stage/broken', '/stage/cleanup-fails'])
+    assert.deepEqual(unlinked, [])
   })
 
   test('exclusive staging creation never succeeds without an open claim', async () => {
@@ -1129,7 +1133,8 @@ describe('session-sftp transport flows', () => {
   test('safe staging primitives preserve binary bytes and reject occupied directories', async () => {
     const root = makeTmpDir()
     const server = await startSftpServer(root, {
-      failClosePath: '/stage/partial.bin'
+      failClosePath: '/stage/partial.bin',
+      replaceOnFailedClose: true
     })
     let term
     let sftp
@@ -1160,11 +1165,20 @@ describe('session-sftp transport flows', () => {
         claimed: true,
         code: 'SFTP_EXCLUSIVE_WRITE_FAILED',
         message: 'injected close failure',
-        cleanupAttempted: true,
-        cleanupSucceeded: true,
-        cleanupError: null
+        cleanupAttempted: false,
+        cleanupSucceeded: false,
+        cleanupError: 'SFTP v3 cannot safely unlink an unverified exclusive claim.'
       })
-      assert.equal(fs.existsSync(toLocalPath(root, '/stage/partial.bin')), false)
+      assert.equal(
+        fs.readFileSync(toLocalPath(root, '/stage/partial.bin'), 'utf8'),
+        'foreign replacement'
+      )
+      assert.equal(
+        fs.readFileSync(toLocalPath(root, '/stage/partial.bin.claimed'), 'utf8'),
+        'partial payload'
+      )
+      await sftp.rm('/stage/partial.bin')
+      await sftp.rm('/stage/partial.bin.claimed')
 
       const payload = createPatternBuffer(4097, 29)
       const objectPath = '/stage/object.bin'
