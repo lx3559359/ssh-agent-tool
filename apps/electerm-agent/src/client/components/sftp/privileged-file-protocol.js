@@ -28,25 +28,69 @@ const allowedOperations = new Set([
 
 const requiredStageCapabilities = Object.freeze({
   'stage-handshake': Object.freeze([
-    'cleanShell', 'stat', 'base64', 'sha256', 'procFd', 'noclobber', 'gnuStat',
-    'realpath', 'chown'
+    'cleanShell', 'printf', 'id', 'tr', 'stat', 'base64', 'sha256', 'procFd',
+    'noclobber', 'gnuStat', 'realpath', 'chown'
   ]),
   'stage-export': Object.freeze([
-    'cleanShell', 'stat', 'base64', 'sha256', 'procFd', 'noclobber', 'cat',
-    'gnuStat', 'realpath', 'chown', 'chmod', 'rm'
+    'cleanShell', 'printf', 'id', 'tr', 'stat', 'base64', 'sha256', 'procFd',
+    'noclobber', 'cat', 'gnuStat', 'realpath', 'chown', 'chmod', 'rm'
   ]),
   'stage-import': Object.freeze([
-    'cleanShell', 'stat', 'base64', 'sha256', 'procFd', 'noclobber', 'cat',
-    'gnuStat', 'gnuMv', 'realpath', 'chown', 'chmod', 'rm'
+    'cleanShell', 'printf', 'id', 'tr', 'stat', 'base64', 'sha256', 'procFd',
+    'noclobber', 'cat', 'gnuStat', 'gnuMv', 'realpath', 'chown', 'chmod', 'rm'
   ]),
   'stage-cleanup': Object.freeze([
-    'cleanShell', 'stat', 'base64', 'procFd', 'noclobber', 'gnuStat',
-    'realpath', 'rm'
+    'cleanShell', 'printf', 'id', 'tr', 'stat', 'base64', 'procFd',
+    'noclobber', 'gnuStat', 'realpath', 'rm'
+  ])
+})
+
+const requiredOperationCapabilities = Object.freeze({
+  ...requiredStageCapabilities,
+  lstat: Object.freeze([
+    'cleanShell', 'printf', 'id', 'tr', 'base64', 'stat', 'gnuStat'
+  ]),
+  stat: Object.freeze([
+    'cleanShell', 'printf', 'id', 'tr', 'base64', 'stat', 'gnuStat'
+  ]),
+  readlink: Object.freeze([
+    'cleanShell', 'printf', 'id', 'tr', 'base64', 'readlink'
+  ]),
+  realpath: Object.freeze([
+    'cleanShell', 'printf', 'id', 'tr', 'base64', 'realpath'
+  ]),
+  rename: Object.freeze([
+    'cleanShell', 'printf', 'id', 'tr', 'base64', 'gnuMv'
+  ]),
+  rm: Object.freeze([
+    'cleanShell', 'printf', 'id', 'tr', 'base64', 'rm'
+  ]),
+  rmdir: Object.freeze([
+    'cleanShell', 'printf', 'id', 'tr', 'base64', 'rm'
+  ]),
+  chmod: Object.freeze([
+    'cleanShell', 'printf', 'id', 'tr', 'base64', 'chmod'
+  ]),
+  chown: Object.freeze([
+    'cleanShell', 'printf', 'id', 'tr', 'base64', 'chown'
+  ]),
+  'remove-entry': Object.freeze([
+    'cleanShell', 'printf', 'id', 'tr', 'base64', 'rm'
+  ]),
+  sha256: Object.freeze([
+    'cleanShell', 'printf', 'id', 'tr', 'base64', 'sha256', 'stat', 'gnuStat'
+  ]),
+  list: Object.freeze([
+    'cleanShell', 'printf', 'id', 'tr', 'base64', 'stat', 'gnuStat',
+    'find', 'head', 'wc'
   ])
 })
 
 const capabilityShellVariables = Object.freeze({
   cleanShell: '__sp_clean_shell_cap',
+  printf: '__sp_printf_cap',
+  id: '__sp_id_cap',
+  tr: '__sp_tr_cap',
   stat: '__sp_stat_cap',
   base64: '__sp_base64_cap',
   sha256: '__sp_sha256_cap',
@@ -56,9 +100,13 @@ const capabilityShellVariables = Object.freeze({
   gnuStat: '__sp_gnu_stat_cap',
   gnuMv: '__sp_gnu_mv_cap',
   realpath: '__sp_realpath_cap',
+  readlink: '__sp_readlink_cap',
   chown: '__sp_chown_cap',
   chmod: '__sp_chmod_cap',
-  rm: '__sp_rm_cap'
+  rm: '__sp_rm_cap',
+  find: '__sp_find_cap',
+  head: '__sp_head_cap',
+  wc: '__sp_wc_cap'
 })
 
 function encodeUtf8Base64 (value) {
@@ -66,6 +114,10 @@ function encodeUtf8Base64 (value) {
   let binary = ''
   for (const byte of bytes) binary += String.fromCharCode(byte)
   return btoa(binary)
+}
+
+function utf8ByteLength (value) {
+  return new TextEncoder().encode(value).byteLength
 }
 
 function decodeUtf8Base64 (value, label = '字段') {
@@ -107,6 +159,10 @@ function hasUnpairedSurrogate (value) {
 function isCanonicalStageRootPath (value) {
   if (!value.startsWith('/') || value === '/' || value.endsWith('/')) return false
   return value.slice(1).split('/').every(part => part && part !== '.' && part !== '..')
+}
+
+function isCanonicalAbsoluteFilePath (value) {
+  return isCanonicalStageRootPath(value)
 }
 
 const operationArguments = Object.freeze({
@@ -252,19 +308,25 @@ function decodeCondition (request) {
 }
 
 const listBody = [
+  '__sp_preflightCount="$(find "$__sp_path" -mindepth 1 -maxdepth 1 -printf x 2>/dev/null | head -c 20001 | wc -c | tr -d " \\r\\n")" || return $?;',
+  'case "$__sp_preflightCount" in ""|*[!0-9]*) return 1 ;; esac;',
+  '[ "$__sp_preflightCount" -le 20000 ] || return 1;',
   'set +f || return $?;',
   '__sp_total=0;',
   'for __sp_entry in "$__sp_path"/.[!.]* "$__sp_path"/..?* "$__sp_path"/*; do',
   '  [ -e "$__sp_entry" ] || [ -L "$__sp_entry" ] || continue;',
   '  __sp_total=$((__sp_total + 1));',
+  '  [ "$__sp_total" -le 20000 ] || return 1;',
   'done;',
   '__sp_seq=0;',
+  '__sp_metadataBytes=0;',
   'for __sp_entry in "$__sp_path"/.[!.]* "$__sp_path"/..?* "$__sp_path"/*; do',
   '  [ -e "$__sp_entry" ] || [ -L "$__sp_entry" ] || continue;',
   '  __sp_seq=$((__sp_seq + 1));',
+  '  [ "$__sp_seq" -le "$__sp_total" ] && [ "$__sp_seq" -le 20000 ] || return 1;',
   '  __sp_name=$' + '{__sp_entry##*/};',
   '  __sp_stat="$(stat -c "%f;%s;%X;%Y;%u;%g" -- "$__sp_entry")" || return $?;',
-  '  __sp_emit_entry "$__sp_seq" "$__sp_total" "$__sp_name" "$__sp_stat";',
+  '  __sp_emit_entry "$__sp_seq" "$__sp_total" "$__sp_name" "$__sp_stat" || return $?;',
   'done'
 ].join(' ')
 
@@ -331,6 +393,7 @@ const stageExportBody = [
 ].join('; ')
 
 const stageImportBody = [
+  '[ "$__sp_uid_effective" = 0 ] || return 1',
   '__sp_bind_root || return $?',
   '[ ! -L "./$__sp_objectName" ] && [ -f "./$__sp_objectName" ] || return 1',
   'exec 3< "./$__sp_objectName" || return $?',
@@ -339,26 +402,50 @@ const stageImportBody = [
   '__sp_objectInode="$(stat -L -c %i -- "$__sp_fd3")" || { exec 3<&-; return 1; }',
   '[ "$(stat -c %d -- "./$__sp_objectName")" = "$__sp_objectDevice" ] || { exec 3<&-; return 1; }',
   '[ "$(stat -c %i -- "./$__sp_objectName")" = "$__sp_objectInode" ] || { exec 3<&-; return 1; }',
-  '__sp_tempPath="$__sp_targetPath.shellpilot-$__sp_token"',
-  '[ ! -e "$__sp_tempPath" ] && [ ! -L "$__sp_tempPath" ] || { exec 3<&-; return 1; }',
-  'set -C || return $?',
-  'exec 4> "$__sp_tempPath" || { exec 3<&-; return 1; }',
+  '__sp_targetParent="$' + '{__sp_targetPath%/*}"',
+  '[ -n "$__sp_targetParent" ] || __sp_targetParent=/',
+  '__sp_targetName="$' + '{__sp_targetPath##*/}"',
+  '__sp_valid_name "$__sp_targetName" || { exec 3<&-; return 1; }',
+  '__sp_targetParentReal="$(realpath -- "$__sp_targetParent")" || { exec 3<&-; return 1; }',
+  '__sp_targetParentReal=$' + '{__sp_targetParentReal%?}',
+  '__sp_targetParentReal=$' + '{__sp_targetParentReal%?}',
+  '[ "$__sp_targetParentReal" = "$__sp_targetParent" ] || { exec 3<&-; return 1; }',
+  '[ ! -L "$__sp_targetParent" ] && [ -d "$__sp_targetParent" ] || { exec 3<&-; return 1; }',
+  'cd -- "$__sp_targetParent" || { exec 3<&-; return 1; }',
+  '[ "$(pwd -P)" = "$__sp_targetParentReal" ] || { exec 3<&-; return 1; }',
+  '__sp_targetParentDevice="$(stat -c %d -- .)" || { exec 3<&-; return 1; }',
+  '__sp_targetParentInode="$(stat -c %i -- .)" || { exec 3<&-; return 1; }',
+  'if [ -e "./$__sp_targetName" ] || [ -L "./$__sp_targetName" ]; then [ ! -L "./$__sp_targetName" ] && [ -f "./$__sp_targetName" ] || { exec 3<&-; return 1; }; fi',
+  '__sp_tempName=".shellpilot-$__sp_token.tmp"',
+  '[ ! -e "./$__sp_tempName" ] && [ ! -L "./$__sp_tempName" ] || { exec 3<&-; return 1; }',
+  'umask 077',
+  'set -C || { exec 3<&-; return 1; }',
+  'exec 4> "./$__sp_tempName" || { exec 3<&-; return 1; }',
   '__sp_fd4="/proc/$$/fd/4"',
-  'if ! cat <&3 >&4; then exec 3<&- 4>&-; rm -f -- "$__sp_tempPath"; return 1; fi',
+  '__sp_tempDevice="$(stat -L -c %d -- "$__sp_fd4")" || { exec 3<&- 4>&-; return 1; }',
+  '__sp_tempInode="$(stat -L -c %i -- "$__sp_fd4")" || { exec 3<&- 4>&-; return 1; }',
+  '[ "$(stat -L -c %a -- "$__sp_fd4")" = 600 ] || { __sp_cleanup_temp; exec 3<&- 4>&-; return 1; }',
+  '__sp_path_matches_fd "./$__sp_tempName" "$__sp_tempDevice" "$__sp_tempInode" || { exec 3<&- 4>&-; return 1; }',
+  'if ! cat <&3 >&4; then __sp_cleanup_temp; exec 3<&- 4>&-; return 1; fi',
   'exec 3<&-',
-  '__sp_installedDigest="$(__sp_sha256_raw "$__sp_fd4")" || { exec 4>&-; rm -f -- "$__sp_tempPath"; return 1; }',
-  '__sp_installedSize="$(stat -L -c %s -- "$__sp_fd4")" || { exec 4>&-; rm -f -- "$__sp_tempPath"; return 1; }',
-  '[ "$__sp_installedDigest" = "$__sp_expectedSha256" ] && [ "$__sp_installedSize" = "$__sp_expectedSize" ] || { exec 4>&-; rm -f -- "$__sp_tempPath"; return 1; }',
-  'chown -- "$__sp_targetUid:$__sp_targetGid" "$__sp_fd4" || { exec 4>&-; rm -f -- "$__sp_tempPath"; return 1; }',
-  'chmod -- "$__sp_targetMode" "$__sp_fd4" || { exec 4>&-; rm -f -- "$__sp_tempPath"; return 1; }',
-  '__sp_tempDevice="$(stat -L -c %d -- "$__sp_fd4")" || { exec 4>&-; rm -f -- "$__sp_tempPath"; return 1; }',
-  '__sp_tempInode="$(stat -L -c %i -- "$__sp_fd4")" || { exec 4>&-; rm -f -- "$__sp_tempPath"; return 1; }',
-  '[ ! -L "$__sp_tempPath" ] && [ -f "$__sp_tempPath" ] || { exec 4>&-; rm -f -- "$__sp_tempPath"; return 1; }',
-  '[ "$(stat -c %d -- "$__sp_tempPath")" = "$__sp_tempDevice" ] || { exec 4>&-; rm -f -- "$__sp_tempPath"; return 1; }',
-  '[ "$(stat -c %i -- "$__sp_tempPath")" = "$__sp_tempInode" ] || { exec 4>&-; rm -f -- "$__sp_tempPath"; return 1; }',
-  'exec 4>&-',
-  'mv -fT -- "$__sp_tempPath" "$__sp_targetPath" || { rm -f -- "$__sp_tempPath"; return 1; }',
-  '__sp_emit_digest "$__sp_installedDigest" "$__sp_installedSize"'
+  '__sp_installedDigest="$(__sp_sha256_raw "$__sp_fd4")" || { __sp_cleanup_temp; exec 4>&-; return 1; }',
+  '__sp_installedSize="$(stat -L -c %s -- "$__sp_fd4")" || { __sp_cleanup_temp; exec 4>&-; return 1; }',
+  '[ "$__sp_installedDigest" = "$__sp_expectedSha256" ] && [ "$__sp_installedSize" = "$__sp_expectedSize" ] || { __sp_cleanup_temp; exec 4>&-; return 1; }',
+  '[ "$(stat -c %d -- .)" = "$__sp_targetParentDevice" ] && [ "$(stat -c %i -- .)" = "$__sp_targetParentInode" ] || { __sp_cleanup_temp; exec 4>&-; return 1; }',
+  '__sp_path_matches_fd "./$__sp_tempName" "$__sp_tempDevice" "$__sp_tempInode" || { exec 4>&-; return 1; }',
+  'mv -fT -- "./$__sp_tempName" "./$__sp_targetName" || { __sp_cleanup_temp; exec 4>&-; return 1; }',
+  '__sp_path_matches_fd "./$__sp_targetName" "$__sp_tempDevice" "$__sp_tempInode" || { exec 4>&-; return 1; }',
+  'chown -- "$__sp_targetUid:$__sp_targetGid" "$__sp_fd4" || { __sp_secure_installed; exec 4>&-; return 1; }',
+  'chmod -- "$__sp_targetMode" "$__sp_fd4" || { __sp_secure_installed; exec 4>&-; return 1; }',
+  '__sp_path_matches_fd "./$__sp_targetName" "$__sp_tempDevice" "$__sp_tempInode" || { __sp_secure_installed; exec 4>&-; return 1; }',
+  '__sp_finalDigest="$(__sp_sha256_raw "$__sp_fd4")" || { __sp_secure_installed; exec 4>&-; return 1; }',
+  '__sp_finalSize="$(stat -L -c %s -- "$__sp_fd4")" || { __sp_secure_installed; exec 4>&-; return 1; }',
+  '__sp_finalUid="$(stat -L -c %u -- "$__sp_fd4")" || { __sp_secure_installed; exec 4>&-; return 1; }',
+  '__sp_finalGid="$(stat -L -c %g -- "$__sp_fd4")" || { __sp_secure_installed; exec 4>&-; return 1; }',
+  '__sp_finalMode="$(stat -L -c %a -- "$__sp_fd4")" || { __sp_secure_installed; exec 4>&-; return 1; }',
+  '[ "$__sp_finalDigest" = "$__sp_expectedSha256" ] && [ "$__sp_finalSize" = "$__sp_expectedSize" ] && [ "$__sp_finalUid" = "$__sp_targetUid" ] && [ "$__sp_finalGid" = "$__sp_targetGid" ] && [ "$__sp_finalMode" = "$__sp_targetMode" ] || { __sp_secure_installed; exec 4>&-; return 1; }',
+  '__sp_emit_digest "$__sp_finalDigest" "$__sp_finalSize" || { exec 4>&-; return 1; }',
+  'exec 4>&-'
 ].join('; ')
 
 const stageCleanupBody = [
@@ -428,6 +515,11 @@ export function createPrivilegedFileRequest ({ operation, args = {} } = {}) {
       normalized.rootRealPath !== normalized.rootPath)) {
     throw new Error('root 文件操作 rootRealPath 与 rootPath 不匹配')
   }
+  if (operation === 'stage-import' &&
+    Object.hasOwn(normalized, 'targetPath') &&
+    !isCanonicalAbsoluteFilePath(normalized.targetPath)) {
+    throw new Error('root 文件操作 targetPath 必须为规范绝对路径')
+  }
   return Object.freeze({
     operation,
     args: Object.freeze(normalized)
@@ -439,24 +531,52 @@ export function buildPrivilegedFileCommand ({ token: providedToken, request }) {
   const normalized = assertRequestContract(createPrivilegedFileRequest(request))
   const decodeArguments = decodeCondition(normalized)
   const prepare = decodeArguments ? `${decodeArguments} && ` : ''
-  const capabilityGuard = (requiredStageCapabilities[normalized.operation] || [])
+  const capabilityGuard = (requiredOperationCapabilities[normalized.operation] || [])
     .map(name => `[ "$${capabilityShellVariables[name]}" = 1 ]`)
     .join(' && ') || ':'
   const marker = '\\033]698;SHELLPILOT_FILE;%s'
+  const functionalCapabilityProbe = [
+    '__sp_clean_shell_cap=1;',
+    '__sp_printf_cap=0; [ "$(printf %s shellpilot)" = shellpilot ] && __sp_printf_cap=1;',
+    '__sp_id_cap=0; __sp_uid_effective="$(id -u 2>/dev/null)" && __sp_user_effective="$(id -un 2>/dev/null)" && __sp_gid_effective="$(id -g 2>/dev/null)" && case "$__sp_uid_effective:$__sp_gid_effective" in *[!0-9:]*|:*) : ;; *) [ -n "$__sp_user_effective" ] && __sp_id_cap=1 ;; esac;',
+    '__sp_tr_cap=0; [ "$(printf x | tr x y 2>/dev/null)" = y ] && __sp_tr_cap=1;',
+    '__sp_base64_cap=0; [ "$(printf shellpilot | base64 2>/dev/null | base64 -d 2>/dev/null)" = shellpilot ] && __sp_base64_cap=1;',
+    '__sp_stat_cap=0; __sp_gnu_stat_cap=0; __sp_probe_stat="$(stat -c "%f;%s;%X;%Y;%u;%g" -- /dev/null 2>/dev/null)"; case "$__sp_probe_stat" in *";"*";"*";"*";"*";"*) __sp_stat_cap=1; __sp_gnu_stat_cap=1 ;; esac;',
+    '__sp_sha256_cap=0; __sp_sha256_tool=none; __sp_probe_hash="$(printf x | sha256sum 2>/dev/null)"; case "$__sp_probe_hash" in 2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881*) __sp_sha256_cap=1; __sp_sha256_tool=sha256sum ;; *) __sp_probe_hash="$(printf x | shasum -a 256 2>/dev/null)"; case "$__sp_probe_hash" in 2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881*) __sp_sha256_cap=1; __sp_sha256_tool=shasum ;; esac ;; esac;',
+    '__sp_realpath_cap=0; [ "$(realpath -- / 2>/dev/null)" = / ] && __sp_realpath_cap=1;',
+    '__sp_find_cap=0; [ "$(find /dev/null -maxdepth 0 -printf x 2>/dev/null)" = x ] && __sp_find_cap=1;',
+    '__sp_head_cap=0; [ "$(printf abc | head -c 1 2>/dev/null)" = a ] && __sp_head_cap=1;',
+    '__sp_wc_cap=0; [ "$(printf x | wc -c 2>/dev/null | tr -d " \\r\\n")" = 1 ] && __sp_wc_cap=1;',
+    '__sp_proc_fd_cap=0; __sp_readlink_cap=0; if exec 9</dev/null; then [ -r "/proc/$$/fd/9" ] && stat -L -c %i -- "/proc/$$/fd/9" >/dev/null 2>&1 && __sp_proc_fd_cap=1; [ -n "$(readlink -- "/proc/$$/fd/9" 2>/dev/null)" ] && __sp_readlink_cap=1; exec 9<&-; fi;',
+    '__sp_noclobber_cap=0; __sp_cat_cap=0; __sp_gnu_mv_cap=0; __sp_chown_cap=0; __sp_chmod_cap=0; __sp_rm_cap=0;',
+    '__sp_probe_a="/tmp/.shellpilot-probe-$__sp_token-$$-a"; __sp_probe_b="/tmp/.shellpilot-probe-$__sp_token-$$-b";',
+    'if [ ! -e "$__sp_probe_a" ] && [ ! -L "$__sp_probe_a" ] && [ ! -e "$__sp_probe_b" ] && [ ! -L "$__sp_probe_b" ] && ( umask 077; set -C; printf x > "$__sp_probe_a" ) 2>/dev/null; then',
+    '  if ! ( set -C; : > "$__sp_probe_a" ) 2>/dev/null; then __sp_noclobber_cap=1; fi;',
+    '  [ "$(cat -- "$__sp_probe_a" 2>/dev/null)" = x ] && __sp_cat_cap=1;',
+    '  chmod -- 600 "$__sp_probe_a" 2>/dev/null && [ "$(stat -c %a -- "$__sp_probe_a" 2>/dev/null)" = 600 ] && __sp_chmod_cap=1;',
+    '  chown -- "$__sp_uid_effective:$__sp_gid_effective" "$__sp_probe_a" 2>/dev/null && [ "$(stat -c %u:%g -- "$__sp_probe_a" 2>/dev/null)" = "$__sp_uid_effective:$__sp_gid_effective" ] && __sp_chown_cap=1;',
+    '  mv -T -- "$__sp_probe_a" "$__sp_probe_b" 2>/dev/null && [ -f "$__sp_probe_b" ] && __sp_gnu_mv_cap=1;',
+    'fi;',
+    'rm -f -- "$__sp_probe_a" "$__sp_probe_b" 2>/dev/null && [ ! -e "$__sp_probe_a" ] && [ ! -L "$__sp_probe_a" ] && [ ! -e "$__sp_probe_b" ] && [ ! -L "$__sp_probe_b" ] && __sp_rm_cap=1;'
+  ].join(' ')
   const innerScript = [
     '__sp_token="$SHELLPILOT_TOKEN";',
+    functionalCapabilityProbe,
     '__sp_decode() { printf %s "$1" | base64 -d || return $?; printf .; };',
     '__sp_encode() { printf %s "$1" | base64 | tr -d "\\r\\n"; };',
     'readlink() { command readlink "$@" || return $?; printf .; };',
     'realpath() { command realpath "$@" || return $?; printf .; };',
-    '__sp_sha256_raw() { if command -v sha256sum >/dev/null 2>&1; then __sp_hash="$(sha256sum -- "$1")" || return $?; else __sp_hash="$(shasum -a 256 -- "$1")" || return $?; fi; printf %s "$' + '{__sp_hash%% *}"; };',
-    '__sp_sha256_text() { if command -v sha256sum >/dev/null 2>&1; then __sp_hash="$(printf %s "$1" | sha256sum)" || return $?; else __sp_hash="$(printf %s "$1" | shasum -a 256)" || return $?; fi; printf %s "$' + '{__sp_hash%% *}"; };',
+    '__sp_sha256_raw() { case "$__sp_sha256_tool" in sha256sum) __sp_hash="$(sha256sum -- "$1")" || return $? ;; shasum) __sp_hash="$(shasum -a 256 -- "$1")" || return $? ;; *) return 1 ;; esac; printf %s "$' + '{__sp_hash%% *}"; };',
+    '__sp_sha256_text() { case "$__sp_sha256_tool" in sha256sum) __sp_hash="$(printf %s "$1" | sha256sum)" || return $? ;; shasum) __sp_hash="$(printf %s "$1" | shasum -a 256)" || return $? ;; *) return 1 ;; esac; printf %s "$' + '{__sp_hash%% *}"; };',
     '__sp_valid_name() { case "$1" in ""|"."|".."|*/*) return 1 ;; *) return 0 ;; esac; };',
     '__sp_bind_root() { __sp_valid_name "$__sp_objectName" || return 1; [ -d "/proc/$$/fd" ] || return 1; __sp_boundRealPath="$(realpath -- "$__sp_rootPath")" || return $?; __sp_boundRealPath=$' + '{__sp_boundRealPath%?}; __sp_boundRealPath=$' + '{__sp_boundRealPath%?}; [ "$__sp_boundRealPath" = "$__sp_rootPath" ] || return 1; [ "$__sp_boundRealPath" = "$__sp_rootRealPath" ] || return 1; [ ! -L "$__sp_rootPath" ] && [ -d "$__sp_rootPath" ] || return 1; cd -- "$__sp_rootPath" || return $?; [ "$(pwd -P)" = "$__sp_boundRealPath" ] || return 1; [ "$(stat -c %d -- .)" = "$__sp_rootDevice" ] || return 1; [ "$(stat -c %i -- .)" = "$__sp_rootInode" ] || return 1; [ "$(stat -c %a -- .)" = "$__sp_rootMode" ] || return 1; [ "$(stat -c %u -- .)" = "$__sp_rootUid" ] || return 1; [ "$(stat -c %g -- .)" = "$__sp_rootGid" ] || return 1; };',
+    '__sp_path_matches_fd() { [ ! -L "$1" ] && [ -f "$1" ] && [ "$(stat -c %d -- "$1")" = "$2" ] && [ "$(stat -c %i -- "$1")" = "$3" ]; };',
+    '__sp_cleanup_temp() { if __sp_path_matches_fd "./$__sp_tempName" "$__sp_tempDevice" "$__sp_tempInode"; then rm -f -- "./$__sp_tempName"; fi; };',
+    '__sp_secure_installed() { chmod -- 600 "$__sp_fd4" >/dev/null 2>&1; chown -- 0:0 "$__sp_fd4" >/dev/null 2>&1; chmod -- 600 "$__sp_fd4" >/dev/null 2>&1; };',
     `__sp_emit_data1() { printf '${marker};data;%s;%s;%s;%s\\007' "$__sp_token" "$1" "$2" "$3" "$4"; };`,
     `__sp_emit_data2() { printf '${marker};data;%s;%s;%s;%s;%s\\007' "$__sp_token" "$1" "$2" "$3" "$4" "$5"; };`,
     `__sp_emit_data7() { printf '${marker};data;1;1;%s;%s;%s;%s;%s;%s;%s;%s\\007' "$__sp_token" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8"; };`,
-    '__sp_emit_entry() { __sp_emit_data2 "$1" "$2" entry "$(__sp_encode "$3")" "$(__sp_encode "$4")"; };',
+    '__sp_emit_entry() { __sp_name64="$(__sp_encode "$3")" || return $?; __sp_stat64="$(__sp_encode "$4")" || return $?; __sp_metadataBytes=$((__sp_metadataBytes + $' + '{#__sp_name64} + $' + '{#__sp_stat64} + 128)); [ "$__sp_metadataBytes" -le 4194304 ] || return 1; __sp_emit_data2 "$1" "$2" entry "$__sp_name64" "$__sp_stat64"; };',
     '__sp_emit_stat() { if [ "$2" = stat ]; then __sp_value="$(stat -L -c "%f;%s;%X;%Y;%u;%g" -- "$1")" || return $?; else __sp_value="$(stat -c "%f;%s;%X;%Y;%u;%g" -- "$1")" || return $?; fi; __sp_emit_data1 1 1 metadata "$(__sp_encode "$__sp_value")"; };',
     '__sp_emit_text() { __sp_value=$' + '{1%?}; __sp_value=$' + '{__sp_value%?}; [ -n "$__sp_value" ] || return 1; __sp_emit_data1 1 1 text "$(__sp_encode "$__sp_value")"; };',
     '__sp_emit_digest() { __sp_emit_data2 1 1 digest "$(__sp_encode "$1")" "$(__sp_encode "$2")"; };',
@@ -464,21 +584,8 @@ export function buildPrivilegedFileCommand ({ token: providedToken, request }) {
     '__sp_emit_sha256() { __sp_digest="$(__sp_sha256_raw "$1")" || return $?; __sp_size="$(stat -c %s -- "$1")" || return $?; __sp_emit_digest "$__sp_digest" "$__sp_size"; };',
     `__sp_run_operation() { ${operationBodies[normalized.operation]}; };`,
     '__sp_status=125;',
-    `if ${prepare}__sp_uid_effective="$(id -u 2>/dev/null)" && __sp_user_effective="$(id -un 2>/dev/null)" && [ -n "$__sp_uid_effective" ] && [ -n "$__sp_user_effective" ]; then`,
-    '  __sp_clean_shell_cap=1;',
-    '  __sp_stat_cap=0; command -v stat >/dev/null 2>&1 && __sp_stat_cap=1;',
-    '  __sp_base64_cap=0; command -v base64 >/dev/null 2>&1 && __sp_base64_cap=1;',
-    '  __sp_sha256_cap=0; { command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1; } && __sp_sha256_cap=1;',
-    '  __sp_proc_fd_cap=0; [ -d "/proc/$$/fd" ] && __sp_proc_fd_cap=1;',
-    '  __sp_noclobber_cap=0; ( set -C ) 2>/dev/null && __sp_noclobber_cap=1;',
-    '  __sp_cat_cap=0; command -v cat >/dev/null 2>&1 && __sp_cat_cap=1;',
-    '  __sp_gnu_stat_cap=0; stat --version >/dev/null 2>&1 && __sp_gnu_stat_cap=1;',
-    '  __sp_gnu_mv_cap=0; mv --version >/dev/null 2>&1 && __sp_gnu_mv_cap=1;',
-    '  __sp_realpath_cap=0; command -v realpath >/dev/null 2>&1 && __sp_realpath_cap=1;',
-    '  __sp_chown_cap=0; command -v chown >/dev/null 2>&1 && __sp_chown_cap=1;',
-    '  __sp_chmod_cap=0; command -v chmod >/dev/null 2>&1 && __sp_chmod_cap=1;',
-    '  __sp_rm_cap=0; command -v rm >/dev/null 2>&1 && __sp_rm_cap=1;',
-    '  __sp_caps="sh=1,cleanShell=$__sp_clean_shell_cap,stat=$__sp_stat_cap,base64=$__sp_base64_cap,sha256=$__sp_sha256_cap,procFd=$__sp_proc_fd_cap,noclobber=$__sp_noclobber_cap,cat=$__sp_cat_cap,gnuStat=$__sp_gnu_stat_cap,gnuMv=$__sp_gnu_mv_cap,realpath=$__sp_realpath_cap,chown=$__sp_chown_cap,chmod=$__sp_chmod_cap,rm=$__sp_rm_cap";',
+    `if [ "$__sp_printf_cap" = 1 ] && [ "$__sp_id_cap" = 1 ] && [ "$__sp_tr_cap" = 1 ] && [ "$__sp_base64_cap" = 1 ] && ${prepare}:; then`,
+    '  __sp_caps="sh=1,cleanShell=$__sp_clean_shell_cap,printf=$__sp_printf_cap,id=$__sp_id_cap,tr=$__sp_tr_cap,stat=$__sp_stat_cap,base64=$__sp_base64_cap,sha256=$__sp_sha256_cap,procFd=$__sp_proc_fd_cap,noclobber=$__sp_noclobber_cap,cat=$__sp_cat_cap,gnuStat=$__sp_gnu_stat_cap,gnuMv=$__sp_gnu_mv_cap,realpath=$__sp_realpath_cap,readlink=$__sp_readlink_cap,chown=$__sp_chown_cap,chmod=$__sp_chmod_cap,rm=$__sp_rm_cap,find=$__sp_find_cap,head=$__sp_head_cap,wc=$__sp_wc_cap";',
     `  printf '${marker};start;%s;%s;%s\\007' "$__sp_token" "$(__sp_encode "$__sp_uid_effective")" "$(__sp_encode "$__sp_user_effective")" "$(__sp_encode "$__sp_caps")";`,
     `  if ${capabilityGuard}; then __sp_run_operation; __sp_status=$?; else __sp_status=126; fi;`,
     `  printf '${marker};end;%s\\007' "$__sp_token" "$__sp_status";`,
@@ -724,8 +831,9 @@ export function createPrivilegedFileParser ({ token: providedToken, request }) {
     const exitCode = Number(fields[1])
     const requiresData = !mutationOperations.has(normalized.operation) &&
       normalized.operation !== 'list'
-    const missingCapability = (requiredStageCapabilities[normalized.operation] || [])
-      .some(name => capabilities[name] !== true)
+    const requiredCapabilities = requiredOperationCapabilities[normalized.operation] || []
+    const missingCapability = requiredCapabilities.some(name =>
+      capabilities[name] !== true)
     if (exitCode === 0 && missingCapability) {
       throw new Error('root 文件协议缺少必要能力')
     }
@@ -746,8 +854,7 @@ export function createPrivilegedFileParser ({ token: providedToken, request }) {
     throw new Error('root 文件协议边界阶段无效')
   }
 
-  function push (chunk) {
-    pending += String(chunk || '')
+  function consumePending () {
     while (pending) {
       const markerStart = pending.indexOf(namespacePrefix)
       if (markerStart < 0) {
@@ -759,12 +866,13 @@ export function createPrivilegedFileParser ({ token: providedToken, request }) {
       pending = pending.slice(markerStart)
       const markerEnd = pending.indexOf('\u0007')
       if (markerEnd < 0) {
-        if (pending.length > 2048) {
+        if (utf8ByteLength(pending) > 2048) {
           throw new Error('root 文件协议边界过长')
         }
         break
       }
-      if (markerEnd + 1 > 2048) {
+      const markerBytes = utf8ByteLength(pending.slice(0, markerEnd + 1))
+      if (markerBytes > 2048) {
         throw new Error('root 文件协议边界过长')
       }
       const markerPayload = pending.slice(namespacePrefix.length, markerEnd)
@@ -774,11 +882,19 @@ export function createPrivilegedFileParser ({ token: providedToken, request }) {
         throw new Error('root 文件协议 token 不匹配')
       }
       const marker = markerPayload.slice(tokenEnd + 1)
-      trustedMetadataBytes += namespacePrefix.length + markerPayload.length + 1
+      trustedMetadataBytes += markerBytes
       if (trustedMetadataBytes > 4 * 1024 * 1024) {
         throw new Error('root 文件协议累计元数据过大')
       }
       consumeMarker(marker)
+    }
+  }
+
+  function push (chunk) {
+    const input = String(chunk || '')
+    for (let offset = 0; offset < input.length; offset += 1024) {
+      pending = pending + input.slice(offset, offset + 1024)
+      consumePending()
     }
     return { output: [] }
   }

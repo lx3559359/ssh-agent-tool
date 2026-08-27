@@ -19,6 +19,8 @@ const bashAvailable = spawnSync(
   ['--noprofile', '--norc', '-c', ':'],
   { encoding: 'utf8' }
 ).status === 0
+const linuxRootOnly = process.platform !== 'linux' ||
+  typeof process.getuid !== 'function' || process.getuid() !== 0
 
 function runBash (script) {
   return spawnSync(
@@ -43,11 +45,16 @@ function toBashPath (nativePath) {
   return result.stdout.trim()
 }
 
-const allStageCapabilities = [
-  'sh=1', 'cleanShell=1', 'stat=1', 'base64=1', 'sha256=1', 'procFd=1',
+const allCapabilities = [
+  'sh=1', 'cleanShell=1', 'printf=1', 'id=1', 'tr=1', 'stat=1',
+  'base64=1', 'sha256=1', 'procFd=1',
   'noclobber=1', 'cat=1', 'gnuStat=1', 'gnuMv=1',
-  'realpath=1', 'chown=1', 'chmod=1', 'rm=1'
+  'realpath=1', 'readlink=1', 'chown=1', 'chmod=1', 'rm=1',
+  'find=1', 'head=1', 'wc=1'
 ].join(',')
+const allCapabilityObject = Object.fromEntries(
+  allCapabilities.split(',').map(value => [value.split('=')[0], true])
+)
 
 function encodeMarkerField (value) {
   return Buffer.from(String(value), 'utf8').toString('base64')
@@ -57,7 +64,7 @@ function fileMarker (token, phase, ...fields) {
   return `\u001b]698;SHELLPILOT_FILE;${token};${phase};${fields.join(';')}\u0007`
 }
 
-function startMarker (token, capabilities = 'sh=1,stat=1') {
+function startMarker (token, capabilities = allCapabilities) {
   return fileMarker(
     token,
     'start',
@@ -107,6 +114,73 @@ async function listNamesFromRealBash (prelude, token) {
     return parser.result().entries.map(entry => entry.name)
   } finally {
     fs.rmSync(nativeRoot, { recursive: true, force: true })
+  }
+}
+
+async function runRealProtocolOperation ({
+  operation,
+  args,
+  token,
+  umask = '022',
+  prelude = ''
+}) {
+  const {
+    buildPrivilegedFileCommand,
+    createPrivilegedFileParser,
+    createPrivilegedFileRequest
+  } = await importModule(protocolModule)
+  const request = createPrivilegedFileRequest({ operation, args })
+  const command = buildPrivilegedFileCommand({ token, request })
+  const execution = runBash(`umask ${umask}\n${prelude}\n${command}`)
+  const parser = createPrivilegedFileParser({ token, request })
+  parser.push(execution.stdout)
+  return { execution, parser, result: parser.result() }
+}
+
+function sha256Text (value) {
+  return createHash('sha256').update(value).digest('hex')
+}
+
+async function createLinuxStageFixture (nativeRoot, suffix) {
+  const rootPath = path.join(nativeRoot, `stage-${suffix}`)
+  fs.mkdirSync(rootPath, { mode: 0o700 })
+  fs.chmodSync(rootPath, 0o700)
+  const challengeName = `challenge-${suffix}`
+  const responseName = `response-${suffix}`
+  const challengeText = `challenge:${suffix}`
+  fs.writeFileSync(path.join(rootPath, challengeName), challengeText, { mode: 0o600 })
+  const rootStat = fs.statSync(rootPath, { bigint: true })
+  const handshake = await runRealProtocolOperation({
+    operation: 'stage-handshake',
+    token: `${suffix}0`.repeat(24).slice(0, 48),
+    args: {
+      rootPath,
+      challengeName,
+      responseName,
+      challenge: sha256Text(challengeText),
+      rootUid: String(rootStat.uid),
+      rootGid: String(rootStat.gid),
+      rootMode: '700'
+    }
+  })
+  assert.equal(
+    handshake.execution.status,
+    0,
+    handshake.execution.stdout + handshake.execution.stderr
+  )
+  assert.equal(handshake.result.kind, 'stage-handshake')
+  return {
+    rootPath,
+    responseName,
+    binding: {
+      rootPath,
+      rootRealPath: handshake.result.rootRealPath,
+      rootDevice: handshake.result.rootDevice,
+      rootInode: handshake.result.rootInode,
+      rootUid: handshake.result.uid,
+      rootGid: handshake.result.gid,
+      rootMode: handshake.result.mode
+    }
   }
 }
 
@@ -161,7 +235,7 @@ test('privileged file parser accepts split ordered list metadata', async () => {
     'start',
     encodeMarkerField('0'),
     encodeMarkerField('root'),
-    encodeMarkerField('sh=1,stat=1')
+    encodeMarkerField(allCapabilities)
   )
   const entry = fileMarker(
     token,
@@ -182,7 +256,7 @@ test('privileged file parser accepts split ordered list metadata', async () => {
   assert.equal(parser.exitCode(), 0)
   assert.deepEqual(protocol.readResult(parser), {
     kind: 'list',
-    capabilities: { sh: true, stat: true },
+    capabilities: allCapabilityObject,
     entries: [{
       name: "a\n'b",
       mode: 0o100644,
@@ -212,6 +286,25 @@ test('list clears inherited dotglob without duplicating hidden entries', {
     await listNamesFromRealBash('shopt -s dotglob', '8'.repeat(48)),
     ['.hidden', 'visible']
   )
+})
+
+test('list producer enforces count and encoded metadata bounds before glob expansion', async () => {
+  const { buildPrivilegedFileCommand } = await importModule(protocolModule)
+  const command = buildPrivilegedFileCommand({
+    token: '81'.repeat(24),
+    request: { operation: 'list', args: { path: '/root' } }
+  })
+  const preflight = command.indexOf('find "$__sp_path"')
+  const firstGlob = command.indexOf('"$__sp_path"/.[!.]*')
+
+  assert.equal(preflight >= 0 && preflight < firstGlob, true)
+  assert.match(command, /find "\$__sp_path"[^;]+head -c 20001[^;]+wc -c/)
+  assert.match(command, /"\$__sp_preflightCount" -le 20000/)
+  assert.match(command, /"\$__sp_seq" -le "\$__sp_total".*"\$__sp_seq" -le 20000/)
+  assert.match(command, /__sp_metadataBytes=0/)
+  assert.match(command, /__sp_metadataBytes=.*#__sp_name64.*#__sp_stat64/)
+  assert.match(command, /"\$__sp_metadataBytes" -le 4194304/)
+  assert.match(command, /__sp_emit_entry[^;]+\|\| return/)
 })
 
 test('list ignores inherited GLOBIGNORE and startup environment pollution', {
@@ -313,6 +406,89 @@ test('probe ignores exported functions and reports its clean shell boundary', {
     assert.equal(fs.readFileSync(nativeLog, 'utf8'), '')
   } finally {
     fs.rmSync(nativeRoot, { recursive: true, force: true })
+  }
+})
+
+test('capabilities use functional probes before pathname wrappers', {
+  skip: !bashAvailable
+}, async () => {
+  const {
+    buildPrivilegedFileCommand,
+    createPrivilegedFileParser,
+    createPrivilegedFileRequest
+  } = await importModule(protocolModule)
+  const token = 'b2'.repeat(24)
+  const request = createPrivilegedFileRequest({ operation: 'probe' })
+  const command = buildPrivilegedFileCommand({ token, request })
+
+  assert.doesNotMatch(command, /command -v/)
+  assert.match(command, /__sp_base64_cap=.*base64.*base64 -d/)
+  assert.match(command, /__sp_gnu_stat_cap=.*stat -c/)
+  assert.match(command, /__sp_sha256_cap=.*(?:sha256sum|shasum)/)
+  assert.match(command, /__sp_realpath_cap=.*realpath -- \/|realpath \/ /)
+  assert.match(command, /__sp_find_cap=.*find /)
+  assert.match(command, /__sp_head_cap=.*head /)
+  assert.match(command, /__sp_wc_cap=.*wc /)
+  assert.match(command, /__sp_proc_fd_cap=.*\/proc\/\$\$\/fd/)
+  assert.match(command, /__sp_noclobber_cap=.*set -C/)
+  assert.equal(command.indexOf('__sp_base64_cap=') < command.indexOf('realpath() {'), true)
+
+  const execution = runBash(command)
+  assert.equal(execution.status, 0, execution.stdout + execution.stderr)
+  const parser = createPrivilegedFileParser({ token, request })
+  parser.push(execution.stdout)
+  const capabilities = parser.result().capabilities
+  for (const name of [
+    'cleanShell', 'printf', 'id', 'tr', 'base64', 'stat', 'gnuStat',
+    'sha256', 'realpath', 'find', 'head', 'wc', 'procFd', 'noclobber'
+  ]) {
+    assert.equal(capabilities[name], true, name)
+  }
+})
+
+test('list parser rejects forged success when a producer capability is false', async () => {
+  const { createPrivilegedFileParser } = await importModule(protocolModule)
+  const token = 'b3'.repeat(24)
+  const parser = createPrivilegedFileParser({
+    token,
+    request: { operation: 'list', args: { path: '/root' } }
+  })
+  parser.push(startMarker(token, 'sh=1,stat=1,find=0,head=1,wc=1'))
+  assert.throws(
+    () => parser.push(fileMarker(token, 'end', '0')),
+    /缺少必要能力/
+  )
+  const missing = createPrivilegedFileParser({
+    token,
+    request: { operation: 'list', args: { path: '/root' } }
+  })
+  missing.push(startMarker(token, 'sh=1,stat=1'))
+  assert.throws(
+    () => missing.push(fileMarker(token, 'end', '0')),
+    /缺少必要能力/
+  )
+})
+
+test('parser rejects explicit false capabilities used by fixed operation bodies', async () => {
+  const { createPrivilegedFileParser } = await importModule(protocolModule)
+  for (const [operation, capability] of [
+    ['stat', 'gnuStat'],
+    ['readlink', 'readlink'],
+    ['realpath', 'realpath'],
+    ['rename', 'gnuMv'],
+    ['chmod', 'chmod'],
+    ['chown', 'chown'],
+    ['rm', 'rm'],
+    ['sha256', 'sha256']
+  ]) {
+    const token = sha256Text(`${operation}:${capability}`).slice(0, 48)
+    const parser = createPrivilegedFileParser({ token, request: { operation } })
+    parser.push(startMarker(token, `sh=1,${capability}=0`))
+    assert.throws(
+      () => parser.push(fileMarker(token, 'end', '0')),
+      /缺少必要能力/,
+      `${operation}:${capability}`
+    )
   }
 })
 
@@ -482,10 +658,7 @@ test('privileged parser normalizes every fixed result shape', async () => {
 
   function parse (operation, kind, values = [], exitCode = 0) {
     const parser = createPrivilegedFileParser({ token, request: { operation } })
-    const capabilities = operation.startsWith('stage-')
-      ? allStageCapabilities
-      : 'sh=1,stat=1'
-    parser.push(startMarker(token, capabilities))
+    parser.push(startMarker(token, allCapabilities))
     if (kind) {
       parser.push(fileMarker(
         token,
@@ -502,17 +675,17 @@ test('privileged parser normalizes every fixed result shape', async () => {
 
   assert.deepEqual(parse('probe'), {
     kind: 'probe',
-    capabilities: { sh: true, stat: true },
+    capabilities: allCapabilityObject,
     ok: true
   })
   assert.deepEqual(parse('mkdir'), {
     kind: 'mkdir',
-    capabilities: { sh: true, stat: true },
+    capabilities: allCapabilityObject,
     ok: true
   })
   assert.deepEqual(parse('stat', 'metadata', ['41ed;4;1;2;3;4']), {
     kind: 'stat',
-    capabilities: { sh: true, stat: true },
+    capabilities: allCapabilityObject,
     metadata: {
       mode: 0o40755,
       type: 'directory',
@@ -525,7 +698,7 @@ test('privileged parser normalizes every fixed result shape', async () => {
   })
   assert.deepEqual(parse('readlink', 'text', ["target\n'"]), {
     kind: 'readlink',
-    capabilities: { sh: true, stat: true },
+    capabilities: allCapabilityObject,
     text: "target\n'"
   })
   assert.deepEqual(parse('stage-handshake', 'handshake', [
@@ -533,7 +706,7 @@ test('privileged parser normalizes every fixed result shape', async () => {
   ]), {
     kind: 'stage-handshake',
     capabilities: Object.fromEntries(
-      allStageCapabilities.split(',').map(value => [value.split('=')[0], true])
+      allCapabilities.split(',').map(value => [value.split('=')[0], true])
     ),
     response: 'a'.repeat(64),
     uid: '1000',
@@ -546,11 +719,7 @@ test('privileged parser normalizes every fixed result shape', async () => {
   for (const operation of ['stage-export', 'stage-import', 'sha256']) {
     assert.deepEqual(parse(operation, 'digest', ['b'.repeat(64), '12']), {
       kind: operation,
-      capabilities: operation.startsWith('stage-')
-        ? Object.fromEntries(
-          allStageCapabilities.split(',').map(value => [value.split('=')[0], true])
-        )
-        : { sh: true, stat: true },
+      capabilities: allCapabilityObject,
       sha256: 'b'.repeat(64),
       size: 12
     })
@@ -561,21 +730,28 @@ test('stage parser rejects forged success when a required capability is false', 
   const { createPrivilegedFileParser } = await importModule(protocolModule)
   const token = '4'.repeat(48)
   const cases = [
-    ['stage-handshake', ['cleanShell', 'procFd', 'noclobber', 'realpath', 'chown'], [
+    ['stage-handshake', [
+      'cleanShell', 'printf', 'id', 'tr', 'stat', 'base64', 'sha256',
+      'procFd', 'noclobber', 'gnuStat', 'realpath', 'chown'
+    ], [
       'handshake', 'a'.repeat(64), '1000', '1001', '700',
       '/real/stage', '2049', '12345'
     ]],
     ['stage-export', [
-      'cleanShell', 'procFd', 'noclobber', 'cat', 'realpath', 'chown', 'chmod'
+      'cleanShell', 'printf', 'id', 'tr', 'stat', 'base64', 'sha256',
+      'procFd', 'noclobber', 'cat', 'gnuStat', 'realpath', 'chown',
+      'chmod', 'rm'
     ], [
       'digest', 'b'.repeat(64), '12'
     ]],
     ['stage-import', [
-      'cleanShell', 'procFd', 'noclobber', 'cat', 'gnuMv', 'realpath',
-      'chown', 'chmod'
+      'cleanShell', 'printf', 'id', 'tr', 'stat', 'base64', 'sha256',
+      'procFd', 'noclobber', 'cat', 'gnuStat', 'gnuMv', 'realpath',
+      'chown', 'chmod', 'rm'
     ], ['digest', 'b'.repeat(64), '12']],
     ['stage-cleanup', [
-      'cleanShell', 'procFd', 'noclobber', 'realpath', 'rm'
+      'cleanShell', 'printf', 'id', 'tr', 'stat', 'base64', 'procFd',
+      'noclobber', 'gnuStat', 'realpath', 'rm'
     ], null]
   ]
 
@@ -584,7 +760,7 @@ test('stage parser rejects forged success when a required capability is false', 
       const parser = createPrivilegedFileParser({ token, request: { operation } })
       parser.push(startMarker(
         token,
-        allStageCapabilities.replace(`${capability}=1`, `${capability}=0`)
+        allCapabilities.replace(`${capability}=1`, `${capability}=0`)
       ))
       if (data) {
         parser.push(fileMarker(
@@ -818,6 +994,16 @@ test('privileged parser bounds markers entries and cumulative trusted metadata',
     ),
     /边界过长/
   )
+  const oversizedUtf8 = createPrivilegedFileParser({
+    token,
+    request: { operation: 'list' }
+  })
+  assert.throws(
+    () => oversizedUtf8.push(
+      `\u001b]698;SHELLPILOT_FILE;${token};${'中'.repeat(700)}\u0007`
+    ),
+    /边界过长/
+  )
 
   const tooMany = createPrivilegedFileParser({
     token,
@@ -845,6 +1031,33 @@ test('privileged parser bounds markers entries and cumulative trusted metadata',
       ))
     }
   }, /元数据过大/)
+})
+
+test('parser incrementally scans giant untrusted chunks before retaining data', async () => {
+  const { createPrivilegedFileParser } = await importModule(protocolModule)
+  const source = fs.readFileSync(
+    path.resolve(__dirname, '../../src/client/components/sftp/privileged-file-protocol.js'),
+    'utf8'
+  )
+  assert.doesNotMatch(source, /pending\s*\+=\s*String\(chunk/)
+
+  const token = 'd1'.repeat(24)
+  const parser = createPrivilegedFileParser({ token, request: { operation: 'probe' } })
+  parser.push('ordinary-output'.repeat(600000))
+  parser.push(startMarker(token))
+  parser.push(fileMarker(token, 'end', '0'))
+  assert.equal(parser.result().ok, true)
+
+  const oversized = createPrivilegedFileParser({
+    token,
+    request: { operation: 'probe' }
+  })
+  assert.throws(
+    () => oversized.push(
+      `noise\u001b]698;SHELLPILOT_FILE;${token};start;${'A'.repeat(5 * 1024 * 1024)}`
+    ),
+    /边界过长/
+  )
 })
 
 test('privileged parser rejects malformed encodings identities capabilities and exit codes', async () => {
@@ -1018,10 +1231,29 @@ test('staging operations bind one safe object to the handshaken root inode', asy
     true
   )
   assert.match(importCommand, /exec 3< "\.\/\$__sp_objectName"/)
-  assert.match(importCommand, /exec 4> "\$__sp_tempPath"/)
+  assert.match(importCommand, /__sp_targetParent="\$\{__sp_targetPath%\/\*\}"/)
+  assert.match(importCommand, /__sp_targetName="\$\{__sp_targetPath##\*\/\}"/)
+  assert.match(importCommand, /__sp_targetParentReal=.*realpath/)
+  assert.match(importCommand, /cd -- "\$__sp_targetParent"/)
+  assert.match(importCommand, /stat -c %d -- \./)
+  assert.match(importCommand, /stat -c %i -- \./)
+  assert.match(importCommand, /__sp_tempName="\.shellpilot-\$__sp_token\.tmp"/)
+  assert.match(importCommand, /umask 077.*set -C.*exec 4> "\.\/\$__sp_tempName"/)
+  assert.match(importCommand, /stat -L -c %a -- "\$__sp_fd4".*= 600/)
+  assert.match(importCommand, /cat <&3 >&4/)
   assert.match(importCommand, /"\$__sp_expectedSize"/)
-  assert.match(importCommand, /mv -fT -- "\$__sp_tempPath" "\$__sp_targetPath"/)
-  assert.match(importCommand, /mv -fT[^;]+\|\| \{ rm -f -- "\$__sp_tempPath"; return 1; \}/)
+  assert.match(importCommand, /mv -fT -- "\.\/\$__sp_tempName" "\.\/\$__sp_targetName"/)
+  assert.equal(
+    importCommand.indexOf('mv -fT --') <
+      importCommand.indexOf('chown -- "$__sp_targetUid:$__sp_targetGid" "$__sp_fd4"'),
+    true
+  )
+  assert.equal(importCommand.lastIndexOf('exec 4>&-') > importCommand.indexOf('mv -fT --'), true)
+  assert.match(importCommand, /__sp_path_matches_fd "\.\/\$__sp_targetName" "\$__sp_tempDevice" "\$__sp_tempInode"/)
+  assert.match(importCommand, /__sp_finalDigest=.*__sp_sha256_raw "\$__sp_fd4"/)
+  assert.match(importCommand, /__sp_finalMode=.*stat -L -c %a -- "\$__sp_fd4"/)
+  assert.match(importCommand, /__sp_cleanup_temp.*__sp_tempDevice.*__sp_tempInode/)
+  assert.doesNotMatch(importCommand, /rm -f -- "\$__sp_tempPath"/)
   assert.match(cleanupCommand, /rm -f -- "\.\/\$__sp_objectName"/)
   assert.doesNotMatch(cleanupCommand, /rm -rf/)
 
@@ -1042,4 +1274,266 @@ test('staging operations bind one safe object to the handshaken root inode', asy
     }),
     /参数合同|缺少必要参数/
   )
+  for (const targetPath of ['/root/target/', '/root/./target', '/root/a/../target']) {
+    assert.throws(
+      () => buildPrivilegedFileCommand({
+        token,
+        request: {
+          operation: 'stage-import',
+          args: {
+            ...binding,
+            targetPath,
+            sha256: 'a'.repeat(64),
+            size: '12',
+            targetMode: '600',
+            targetUid: '0',
+            targetGid: '0'
+          }
+        }
+      }),
+      /targetPath/
+    )
+  }
+})
+
+test('linux staging handshake export import and cleanup preserve content metadata and atomic replacement', {
+  skip: linuxRootOnly
+}, async () => {
+  const nativeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-linux-stage-ok-'))
+  try {
+    const fixture = await createLinuxStageFixture(nativeRoot, 'l1')
+    const objectName = 'export-object'
+    const content = 'root payload\nwith trailing newline\n'
+    const sourcePath = path.join(nativeRoot, 'source')
+    fs.writeFileSync(sourcePath, content, { mode: 0o600 })
+    const exported = await runRealProtocolOperation({
+      operation: 'stage-export',
+      token: 'e1'.repeat(24),
+      args: { ...fixture.binding, objectName, sourcePath }
+    })
+    assert.equal(exported.execution.status, 0, exported.execution.stderr)
+    assert.equal(exported.result.sha256, sha256Text(content))
+    assert.equal(exported.result.size, Buffer.byteLength(content))
+    const stagedPath = path.join(fixture.rootPath, objectName)
+    assert.equal(fs.readFileSync(stagedPath, 'utf8'), content)
+    assert.equal(fs.statSync(stagedPath).mode & 0o7777, 0o600)
+
+    const targetParent = path.join(nativeRoot, 'target-parent')
+    fs.mkdirSync(targetParent, { mode: 0o700 })
+    const targetPath = path.join(targetParent, 'installed')
+    fs.writeFileSync(targetPath, 'old target', { mode: 0o600 })
+    const oldInode = fs.statSync(targetPath, { bigint: true }).ino
+    const imported = await runRealProtocolOperation({
+      operation: 'stage-import',
+      token: 'e2'.repeat(24),
+      umask: '000',
+      args: {
+        ...fixture.binding,
+        objectName,
+        targetPath,
+        sha256: sha256Text(content),
+        size: String(Buffer.byteLength(content)),
+        targetMode: '640',
+        targetUid: '0',
+        targetGid: '0'
+      }
+    })
+    assert.equal(imported.execution.status, 0, imported.execution.stderr)
+    assert.equal(fs.readFileSync(targetPath, 'utf8'), content)
+    const installedStat = fs.statSync(targetPath, { bigint: true })
+    assert.notEqual(installedStat.ino, oldInode)
+    assert.equal(Number(installedStat.mode & 0o7777n), 0o640)
+    assert.equal(installedStat.uid, 0n)
+    assert.equal(installedStat.gid, 0n)
+    assert.deepEqual(
+      fs.readdirSync(targetParent).filter(name => name.startsWith('.shellpilot-')),
+      []
+    )
+
+    const cleaned = await runRealProtocolOperation({
+      operation: 'stage-cleanup',
+      token: 'e3'.repeat(24),
+      args: { ...fixture.binding, objectName }
+    })
+    assert.equal(cleaned.execution.status, 0, cleaned.execution.stderr)
+    assert.equal(fs.existsSync(stagedPath), false)
+  } finally {
+    fs.rmSync(nativeRoot, { recursive: true, force: true })
+  }
+})
+
+test('linux stage import rejects digest mismatch special entries directories and replaced temp names', {
+  skip: linuxRootOnly
+}, async () => {
+  const nativeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-linux-stage-reject-'))
+  try {
+    const fixture = await createLinuxStageFixture(nativeRoot, 'l2')
+    const targetParent = path.join(nativeRoot, 'target-parent')
+    fs.mkdirSync(targetParent, { mode: 0o700 })
+    const targetPath = path.join(targetParent, 'installed')
+    fs.writeFileSync(targetPath, 'unchanged', { mode: 0o600 })
+    const targetInode = fs.statSync(targetPath, { bigint: true }).ino
+    const baseArgs = {
+      ...fixture.binding,
+      targetPath,
+      sha256: sha256Text('trusted'),
+      size: '7',
+      targetMode: '600',
+      targetUid: '0',
+      targetGid: '0'
+    }
+
+    fs.writeFileSync(path.join(fixture.rootPath, 'digest-object'), 'different')
+    const mismatch = await runRealProtocolOperation({
+      operation: 'stage-import',
+      token: 'f1'.repeat(24),
+      args: { ...baseArgs, objectName: 'digest-object' }
+    })
+    assert.notEqual(mismatch.execution.status, 0)
+    assert.equal(fs.readFileSync(targetPath, 'utf8'), 'unchanged')
+    assert.equal(fs.statSync(targetPath, { bigint: true }).ino, targetInode)
+
+    fs.symlinkSync('digest-object', path.join(fixture.rootPath, 'link-object'))
+    fs.mkdirSync(path.join(fixture.rootPath, 'directory-object'))
+    const fifoPath = path.join(fixture.rootPath, 'fifo-object')
+    assert.equal(spawnSync('mkfifo', [fifoPath]).status, 0)
+    for (const objectName of ['link-object', 'directory-object', 'fifo-object']) {
+      const rejected = await runRealProtocolOperation({
+        operation: 'stage-import',
+        token: sha256Text(objectName).slice(0, 48),
+        args: { ...baseArgs, objectName }
+      })
+      assert.notEqual(rejected.execution.status, 0, objectName)
+      assert.equal(fs.readFileSync(targetPath, 'utf8'), 'unchanged')
+    }
+    const linkCleanup = await runRealProtocolOperation({
+      operation: 'stage-cleanup',
+      token: 'f0'.repeat(24),
+      args: { ...fixture.binding, objectName: 'link-object' }
+    })
+    assert.equal(linkCleanup.execution.status, 0, linkCleanup.execution.stderr)
+    assert.equal(fs.existsSync(path.join(fixture.rootPath, 'link-object')), false)
+    assert.equal(fs.readFileSync(path.join(fixture.rootPath, 'digest-object'), 'utf8'), 'different')
+
+    const directoryTarget = path.join(targetParent, 'directory-target')
+    fs.mkdirSync(directoryTarget)
+    const directoryRejected = await runRealProtocolOperation({
+      operation: 'stage-import',
+      token: 'f2'.repeat(24),
+      args: { ...baseArgs, objectName: 'digest-object', targetPath: directoryTarget }
+    })
+    assert.notEqual(directoryRejected.execution.status, 0)
+    assert.equal(fs.statSync(directoryTarget).isDirectory(), true)
+
+    const symlinkTarget = path.join(targetParent, 'symlink-target')
+    fs.symlinkSync('installed', symlinkTarget)
+    const symlinkTargetRejected = await runRealProtocolOperation({
+      operation: 'stage-import',
+      token: 'f6'.repeat(24),
+      args: { ...baseArgs, objectName: 'digest-object', targetPath: symlinkTarget }
+    })
+    assert.notEqual(symlinkTargetRejected.execution.status, 0)
+    assert.equal(fs.readlinkSync(symlinkTarget), 'installed')
+
+    const symlinkParent = path.join(nativeRoot, 'target-parent-link')
+    fs.symlinkSync(targetParent, symlinkParent)
+    const symlinkParentRejected = await runRealProtocolOperation({
+      operation: 'stage-import',
+      token: 'f7'.repeat(24),
+      args: {
+        ...baseArgs,
+        objectName: 'digest-object',
+        targetPath: path.join(symlinkParent, 'through-link')
+      }
+    })
+    assert.notEqual(symlinkParentRejected.execution.status, 0)
+    assert.equal(fs.existsSync(path.join(targetParent, 'through-link')), false)
+
+    const replacementToken = 'f3'.repeat(24)
+    const replacementName = `.shellpilot-${replacementToken}.tmp`
+    const replacementPath = path.join(targetParent, replacementName)
+    fs.writeFileSync(replacementPath, 'foreign inode', { mode: 0o600 })
+    const replacementInode = fs.statSync(replacementPath, { bigint: true }).ino
+    const replacementRejected = await runRealProtocolOperation({
+      operation: 'stage-import',
+      token: replacementToken,
+      args: { ...baseArgs, objectName: 'digest-object' }
+    })
+    assert.notEqual(replacementRejected.execution.status, 0)
+    assert.equal(fs.readFileSync(replacementPath, 'utf8'), 'foreign inode')
+    assert.equal(fs.statSync(replacementPath, { bigint: true }).ino, replacementInode)
+    assert.equal(fs.readFileSync(targetPath, 'utf8'), 'unchanged')
+
+    fs.rmSync(replacementPath)
+    const raceObject = path.join(fixture.rootPath, 'race-object')
+    fs.writeFileSync(raceObject, Buffer.alloc(32 * 1024 * 1024, 0x61), { mode: 0o600 })
+    const raceToken = 'f5'.repeat(24)
+    const raceTempPath = path.join(targetParent, `.shellpilot-${raceToken}.tmp`)
+    const raceLog = path.join(nativeRoot, 'race-replaced')
+    const raced = await runRealProtocolOperation({
+      operation: 'stage-import',
+      token: raceToken,
+      prelude: [
+        '(',
+        '  __sp_test_i=0',
+        `  while [ ! -e ${quoteForBash(raceTempPath)} ] && [ "$__sp_test_i" -lt 10000 ]; do __sp_test_i=$((__sp_test_i + 1)); sleep 0.001; done`,
+        `  if [ -e ${quoteForBash(raceTempPath)} ]; then rm -f -- ${quoteForBash(raceTempPath)}; printf foreign > ${quoteForBash(raceTempPath)}; printf replaced > ${quoteForBash(raceLog)}; fi`,
+        ') >/dev/null 2>&1 &'
+      ].join('\n'),
+      args: {
+        ...baseArgs,
+        objectName: 'race-object',
+        sha256: sha256Text(Buffer.alloc(32 * 1024 * 1024, 0x61)),
+        size: String(32 * 1024 * 1024)
+      }
+    })
+    assert.notEqual(raced.execution.status, 0)
+    assert.equal(fs.readFileSync(raceLog, 'utf8'), 'replaced')
+    assert.equal(fs.readFileSync(raceTempPath, 'utf8'), 'foreign')
+    assert.equal(fs.readFileSync(targetPath, 'utf8'), 'unchanged')
+  } finally {
+    fs.rmSync(nativeRoot, { recursive: true, force: true })
+  }
+})
+
+test('linux stage import metadata failure leaves installed data root-owned mode 0600 without protocol temp', {
+  skip: linuxRootOnly
+}, async () => {
+  const nativeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-linux-stage-metadata-'))
+  try {
+    const fixture = await createLinuxStageFixture(nativeRoot, 'l3')
+    const objectName = 'metadata-object'
+    const content = 'verified before metadata'
+    fs.writeFileSync(path.join(fixture.rootPath, objectName), content, { mode: 0o600 })
+    const targetParent = path.join(nativeRoot, 'target-parent')
+    fs.mkdirSync(targetParent, { mode: 0o700 })
+    const targetPath = path.join(targetParent, 'installed')
+    const rejected = await runRealProtocolOperation({
+      operation: 'stage-import',
+      token: 'f4'.repeat(24),
+      umask: '000',
+      args: {
+        ...fixture.binding,
+        objectName,
+        targetPath,
+        sha256: sha256Text(content),
+        size: String(Buffer.byteLength(content)),
+        targetMode: '777',
+        targetUid: '4294967296',
+        targetGid: '0'
+      }
+    })
+    assert.notEqual(rejected.execution.status, 0)
+    assert.equal(fs.readFileSync(targetPath, 'utf8'), content)
+    const installedStat = fs.statSync(targetPath, { bigint: true })
+    assert.equal(Number(installedStat.mode & 0o7777n), 0o600)
+    assert.equal(installedStat.uid, 0n)
+    assert.equal(installedStat.gid, 0n)
+    assert.deepEqual(
+      fs.readdirSync(targetParent).filter(name => name.startsWith('.shellpilot-')),
+      []
+    )
+  } finally {
+    fs.rmSync(nativeRoot, { recursive: true, force: true })
+  }
 })
