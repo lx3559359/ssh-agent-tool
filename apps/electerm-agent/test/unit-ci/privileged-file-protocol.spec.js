@@ -50,7 +50,7 @@ const allCapabilities = [
   'base64=1', 'sha256=1', 'procFd=1',
   'noclobber=1', 'cat=1', 'gnuStat=1', 'gnuMv=1',
   'realpath=1', 'readlink=1', 'chown=1', 'chmod=1', 'rm=1',
-  'rmdir=1', 'find=1', 'head=1', 'wc=1'
+  'rmdir=1', 'find=1', 'head=1', 'wc=1', 'gnuDd=1', 'mkfifo=1'
 ].join(',')
 const allCapabilityObject = Object.fromEntries(
   allCapabilities.split(',').map(value => [value.split('=')[0], true])
@@ -110,6 +110,8 @@ function sourceStageBinding (overrides = {}) {
     sourceParentInode: '3002',
     sourceDevice: '3003',
     sourceInode: '3004',
+    expectedSize: '12',
+    maxSize: '12',
     ...overrides
   })
 }
@@ -127,11 +129,38 @@ function sourceEntryBinding (overrides = {}) {
   }
 }
 
+function boundedDigestBinding (overrides = {}) {
+  return {
+    ...stageBinding(),
+    ...sourceEntryBinding(),
+    expectedSize: '12',
+    maxSize: '12',
+    ...overrides
+  }
+}
+
 function targetEntryBinding (overrides = {}) {
   const targetPath = overrides.targetPath || '/root/target'
   return {
     targetPath,
     targetParentRealPath: parentRemotePath(targetPath),
+    targetParentDevice: '4001',
+    targetParentInode: '4002',
+    ...overrides
+  }
+}
+
+function renameBinding (overrides = {}) {
+  return {
+    sourcePath: '/root/source',
+    sourceParentRealPath: '/root',
+    sourceParentDevice: '4001',
+    sourceParentInode: '4002',
+    sourceDevice: '4001',
+    sourceInode: '4003',
+    sourceType: 'file',
+    targetPath: '/root/target',
+    targetParentRealPath: '/root',
     targetParentDevice: '4001',
     targetParentInode: '4002',
     ...overrides
@@ -881,6 +910,103 @@ test('request constructor immediately rejects script and every unknown argument'
   }
 })
 
+test('rename-bound fixes both parent and entry bindings around a no-clobber move', async () => {
+  const {
+    buildPrivilegedFileCommand,
+    createPrivilegedFileRequest
+  } = await importModule(protocolModule)
+  const request = createPrivilegedFileRequest({
+    operation: 'rename-bound',
+    args: renameBinding()
+  })
+  const command = buildPrivilegedFileCommand({
+    token: 'db'.repeat(24),
+    request
+  })
+
+  assert.match(command, /mv -nT/)
+  assert.doesNotMatch(command, /mv -fT|cp -a|rm -rf/)
+  assert.match(command, /__sp_sourceDevice/)
+  assert.match(command, /__sp_sourceInode/)
+  assert.match(command, /__sp_sourceType/)
+  assert.match(command, /__sp_sourceParentRealPath/)
+  assert.match(command, /__sp_targetParentRealPath/)
+  assert.match(command, /__sp_rollback_rename/)
+})
+
+test('bounded source producers require trusted sizes and expose only fixed range operations', async () => {
+  const {
+    buildPrivilegedFileCommand,
+    createPrivilegedFileRequest
+  } = await importModule(protocolModule)
+  const token = 'dc'.repeat(24)
+  const source = sourceStageBinding({
+    expectedSize: '1048576',
+    maxSize: '1073741824'
+  })
+  const fullExport = buildPrivilegedFileCommand({
+    token,
+    request: createPrivilegedFileRequest({
+      operation: 'stage-export',
+      args: source
+    })
+  })
+  const rangeExport = buildPrivilegedFileCommand({
+    token,
+    request: createPrivilegedFileRequest({
+      operation: 'stage-export-range',
+      args: {
+        ...source,
+        offset: '983040',
+        maxBytes: '65536'
+      }
+    })
+  })
+  const wholeDigest = buildPrivilegedFileCommand({
+    token,
+    request: createPrivilegedFileRequest({
+      operation: 'sha256-bound',
+      args: {
+        ...boundedDigestBinding(),
+        expectedSize: '1048576',
+        maxSize: '1073741824'
+      }
+    })
+  })
+  const rangeDigest = buildPrivilegedFileCommand({
+    token,
+    request: createPrivilegedFileRequest({
+      operation: 'sha256-range-bound',
+      args: {
+        ...boundedDigestBinding(),
+        expectedSize: '1048576',
+        maxSize: '1073741824',
+        offset: '983040',
+        maxBytes: '65536'
+      }
+    })
+  })
+
+  for (const command of [fullExport, rangeExport, wholeDigest, rangeDigest]) {
+    assert.match(command, /__sp_expectedSize/)
+    assert.match(command, /__sp_maxSize/)
+    assert.match(command, /__sp_openSourceSize/)
+    assert.match(command, /__sp_sourceDevice/)
+    assert.match(command, /__sp_sourceInode/)
+  }
+  assert.match(fullExport, /count="\$__sp_windowSize"/)
+  assert.doesNotMatch(fullExport, /cat <&4 >&3/)
+  assert.match(rangeExport, /__sp_offset/)
+  assert.match(rangeExport, /__sp_maxBytes/)
+  assert.match(rangeExport, /65536/)
+  assert.match(wholeDigest, /__sp_bounded_digest/)
+  assert.match(rangeDigest, /__sp_bounded_digest/)
+  assert.throws(() => createPrivilegedFileRequest({
+    operation: 'stage-export-range',
+    args: { ...source, offset: '0', maxBytes: '65537' }
+  }), /maxBytes|范围|参数/)
+})
+
 test('privileged command builder exposes every fixed operation and fails closed on arguments', async () => {
   const {
     buildPrivilegedFileCommand,
@@ -906,6 +1032,7 @@ test('privileged command builder exposes every fixed operation and fails closed 
     ['mkdir', { path: '/x' }, 'mkdir -- "$__sp_path"'],
     ['touch', { path: '/x' }, '( umask 077; : > "$__sp_path" )'],
     ['rename', { source: '/a', target: '/b' }, 'mv -- "$__sp_source" "$__sp_target"'],
+    ['rename-bound', renameBinding(), 'mv -nT -- "$__sp_sourceRef"'],
     ['rm', { path: '/x' }, 'rm -- "$__sp_path"'],
     ['rmdir', { path: '/x' }, 'rm -rf -- "$__sp_path"'],
     ['chmod', { path: '/x', mode: '600' }, 'chmod -- "$__sp_mode" "$__sp_path"'],
@@ -920,7 +1047,10 @@ test('privileged command builder exposes every fixed operation and fails closed 
       targetDevice: '4003', targetInode: '4004', targetType: 'file'
     }), '__sp_entry_matches "./$__sp_boundName"'],
     ['sha256', { path: '/x' }, '__sp_emit_sha256 "$__sp_path"'],
-    ['sha256-bound', sourceEntryBinding(), '__sp_sha256_raw "$__sp_fd3"']
+    ['sha256-bound', boundedDigestBinding(), '__sp_bounded_digest'],
+    ['sha256-range-bound', boundedDigestBinding({
+      offset: '0', maxBytes: '12'
+    }), '__sp_bounded_digest']
   ]
 
   for (const [operation, args, source] of cases) {
@@ -947,6 +1077,9 @@ test('privileged command builder exposes every fixed operation and fails closed 
     ['stage-export', sourceStageBinding({
       sourcePath: '/root/secret'
     }), /exec 3>/],
+    ['stage-export-range', sourceStageBinding({
+      sourcePath: '/root/secret', offset: '0', maxBytes: '12'
+    }), /iflag=skip_bytes,count_bytes/],
     ['stage-import', targetStageBinding({
       targetPath: '/root/target',
       sha256: 'b'.repeat(64),
@@ -1069,7 +1202,10 @@ test('privileged parser normalizes every fixed result shape', async () => {
     rootDevice: '2049',
     rootInode: '12345'
   })
-  for (const operation of ['stage-export', 'sha256', 'sha256-bound']) {
+  for (const operation of [
+    'stage-export', 'stage-export-range', 'sha256', 'sha256-bound',
+    'sha256-range-bound'
+  ]) {
     assert.deepEqual(parse(operation, 'digest', ['b'.repeat(64), '12']), {
       kind: operation,
       capabilities: allCapabilityObject,
@@ -1108,7 +1244,7 @@ test('stage parser rejects forged success when a required capability is false', 
     ]],
     ['stage-export', [
       'cleanShell', 'printf', 'id', 'tr', 'stat', 'base64', 'sha256',
-      'procFd', 'noclobber', 'cat', 'gnuStat', 'realpath', 'chown',
+      'procFd', 'noclobber', 'gnuDd', 'gnuStat', 'realpath', 'chown',
       'chmod', 'rm'
     ], [
       'digest', 'b'.repeat(64), '12'
@@ -1202,7 +1338,9 @@ test('stage export never calls an exported outer set function', {
         sourceParentDevice,
         sourceParentInode,
         sourceDevice,
-        sourceInode
+        sourceInode,
+        expectedSize: '6',
+        maxSize: '6'
       })
     })
     const command = buildPrivilegedFileCommand({
@@ -1851,7 +1989,8 @@ test('staging operations bind one safe object to the handshaken root inode', asy
   assert.match(exportCommand, /__sp_bind_entry_parent "\$__sp_sourcePath"/)
   assert.match(exportCommand, /exec 4< "\.\/\$__sp_boundName"/)
   assert.match(exportCommand, /\/proc\/\$\$\/fd\/4/)
-  assert.match(exportCommand, /cat <&4 >&3/)
+  assert.match(exportCommand, /dd if="\$__sp_fd4" of="\$__sp_fd3"/)
+  assert.match(exportCommand, /count="\$__sp_windowSize"/)
   assert.match(exportCommand, /stat -L -c %i -- "\$__sp_fd4"/)
   assert.doesNotMatch(exportCommand, /cp -a -- "\$__sp_sourcePath" "\$__sp_stagePath"/)
   assert.equal(
@@ -1881,19 +2020,22 @@ test('staging operations bind one safe object to the handshaken root inode', asy
   assert.match(importCommand, /"\$__sp_expectedSize"/)
   assert.match(importCommand, /mv -nT -- "\.\/\$__sp_tempName" "\.\/\$__sp_targetName"/)
   assert.doesNotMatch(importCommand, /mv -fT/)
+  const installIndex = importCommand.indexOf(
+    'mv -nT -- "./$__sp_tempName" "./$__sp_targetName"'
+  )
   assert.equal(
     importCommand.indexOf('chown -- "$__sp_targetUid:$__sp_targetGid" "$__sp_fd4"') <
-      importCommand.indexOf('mv -nT --'),
+      installIndex,
     true
   )
   assert.equal(
     importCommand.indexOf('__sp_readyMode=') <
-      importCommand.indexOf('mv -nT --'),
+      installIndex,
     true
   )
   assert.equal(
     importCommand.lastIndexOf('__sp_path_matches_fd "./$__sp_tempName"') <
-      importCommand.indexOf('mv -nT --'),
+      installIndex,
     true
   )
   assert.equal(
@@ -1901,7 +2043,7 @@ test('staging operations bind one safe object to the handshaken root inode', asy
       importCommand.indexOf('__sp_readyMode='),
     true
   )
-  assert.equal(importCommand.lastIndexOf('exec 4>&-') > importCommand.indexOf('mv -nT --'), true)
+  assert.equal(importCommand.lastIndexOf('exec 4>&-') > installIndex, true)
   assert.match(importCommand, /__sp_path_matches_fd "\.\/\$__sp_targetName" "\$__sp_tempDevice" "\$__sp_tempInode"/)
   assert.match(importCommand, /__sp_parent_path_matches\(\).*realpath -- "\$1"/)
   assert.match(
@@ -1956,6 +2098,90 @@ test('staging operations bind one safe object to the handshaken root inode', asy
       }),
       /targetPath|绑定/
     )
+  }
+})
+
+test('bounded range export and digest read only the requested real source window', {
+  skip: !bashAvailable || process.platform === 'win32'
+}, async () => {
+  const nativeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-range-real-'))
+  try {
+    const nativeStage = path.join(nativeRoot, 'stage')
+    const nativeSource = path.join(nativeRoot, 'source')
+    const content = Buffer.from('0123456789abcdefghijklmnopqrstuvwxyz')
+    fs.mkdirSync(nativeStage, { mode: 0o700 })
+    fs.writeFileSync(nativeSource, content, { mode: 0o600 })
+    const rootPath = toBashPath(nativeStage)
+    const sourcePath = toBashPath(nativeSource)
+    const metadata = runBash([
+      `chmod 700 -- ${quoteForBash(rootPath)}`,
+      `printf "%s\n%s\n%s\n%s\n" "$(stat -c %d -- ${quoteForBash(rootPath)})" "$(stat -c %i -- ${quoteForBash(rootPath)})" "$(id -u)" "$(id -g)"`
+    ].join('\n'))
+    assert.equal(metadata.status, 0, metadata.stderr)
+    const [rootDevice, rootInode, rootUid, rootGid] =
+      metadata.stdout.trim().split('\n')
+    const rootBinding = {
+      rootPath,
+      rootRealPath: rootPath,
+      rootDevice,
+      rootInode,
+      rootUid,
+      rootGid,
+      rootMode: '700'
+    }
+    const sourceBinding = nativeSourceBinding(nativeSource)
+    sourceBinding.sourceParentRealPath = toBashPath(path.dirname(nativeSource))
+    const common = {
+      ...rootBinding,
+      sourcePath,
+      ...sourceBinding,
+      expectedSize: String(content.length),
+      maxSize: String(content.length),
+      offset: '7',
+      maxBytes: '11'
+    }
+    const exported = await runRealProtocolOperation({
+      operation: 'stage-export-range',
+      token: '67'.repeat(24),
+      args: { ...common, objectName: 'range-export' }
+    })
+    assert.equal(exported.execution.status, 0, exported.execution.stderr)
+    const expected = content.subarray(7, 18)
+    assert.equal(exported.result.size, expected.length)
+    assert.equal(exported.result.sha256, sha256Text(expected))
+    assert.deepEqual(fs.readFileSync(path.join(nativeStage, 'range-export')), expected)
+
+    const cleaned = await runRealProtocolOperation({
+      operation: 'stage-cleanup',
+      token: '68'.repeat(24),
+      args: {
+        ...rootBinding,
+        objectName: 'range-export',
+        sha256: exported.result.sha256,
+        size: String(exported.result.size)
+      }
+    })
+    assert.equal(cleaned.execution.status, 0, cleaned.execution.stderr)
+    const digested = await runRealProtocolOperation({
+      operation: 'sha256-range-bound',
+      token: '69'.repeat(24),
+      args: {
+        ...rootBinding,
+        objectName: 'range-digest',
+        path: sourcePath,
+        ...sourceBinding,
+        expectedSize: String(content.length),
+        maxSize: String(content.length),
+        offset: '7',
+        maxBytes: '11'
+      }
+    })
+    assert.equal(digested.execution.status, 0, digested.execution.stderr)
+    assert.equal(digested.result.size, expected.length)
+    assert.equal(digested.result.sha256, sha256Text(expected))
+    assert.equal(fs.existsSync(path.join(nativeStage, 'range-digest')), false)
+  } finally {
+    fs.rmSync(nativeRoot, { recursive: true, force: true })
   }
 })
 
@@ -2168,7 +2394,9 @@ test('linux staging handshake export import and cleanup preserve content metadat
         ...fixture.binding,
         objectName,
         sourcePath,
-        ...nativeSourceBinding(sourcePath)
+        ...nativeSourceBinding(sourcePath),
+        expectedSize: String(Buffer.byteLength(content)),
+        maxSize: String(Buffer.byteLength(content))
       }
     })
     assert.equal(exported.execution.status, 0, exported.execution.stderr)

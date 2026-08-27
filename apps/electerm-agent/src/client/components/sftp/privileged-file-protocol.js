@@ -16,6 +16,7 @@ const allowedOperations = new Set([
   'mkdir-bound',
   'touch',
   'rename',
+  'rename-bound',
   'rm',
   'rmdir',
   'chmod',
@@ -26,10 +27,12 @@ const allowedOperations = new Set([
   'remove-bound',
   'stage-handshake',
   'stage-export',
+  'stage-export-range',
   'stage-import',
   'stage-cleanup',
   'sha256',
-  'sha256-bound'
+  'sha256-bound',
+  'sha256-range-bound'
 ])
 
 const requiredStageCapabilities = Object.freeze({
@@ -39,7 +42,11 @@ const requiredStageCapabilities = Object.freeze({
   ]),
   'stage-export': Object.freeze([
     'cleanShell', 'printf', 'id', 'tr', 'stat', 'base64', 'sha256', 'procFd',
-    'noclobber', 'cat', 'gnuStat', 'realpath', 'chown', 'chmod', 'rm'
+    'noclobber', 'gnuDd', 'gnuStat', 'realpath', 'chown', 'chmod', 'rm'
+  ]),
+  'stage-export-range': Object.freeze([
+    'cleanShell', 'printf', 'id', 'tr', 'stat', 'base64', 'sha256', 'procFd',
+    'noclobber', 'gnuDd', 'gnuStat', 'realpath', 'chown', 'chmod', 'rm'
   ]),
   'stage-import': Object.freeze([
     'cleanShell', 'printf', 'id', 'tr', 'stat', 'base64', 'sha256', 'procFd',
@@ -73,6 +80,10 @@ const requiredOperationCapabilities = Object.freeze({
   rename: Object.freeze([
     'cleanShell', 'printf', 'id', 'tr', 'base64', 'gnuMv'
   ]),
+  'rename-bound': Object.freeze([
+    'cleanShell', 'printf', 'id', 'tr', 'base64', 'gnuMv', 'stat',
+    'gnuStat', 'realpath', 'procFd'
+  ]),
   rm: Object.freeze([
     'cleanShell', 'printf', 'id', 'tr', 'base64', 'rm'
   ]),
@@ -101,7 +112,11 @@ const requiredOperationCapabilities = Object.freeze({
   ]),
   'sha256-bound': Object.freeze([
     'cleanShell', 'printf', 'id', 'tr', 'base64', 'stat', 'gnuStat',
-    'realpath', 'sha256', 'procFd'
+    'realpath', 'sha256', 'procFd', 'gnuDd', 'mkfifo', 'rm'
+  ]),
+  'sha256-range-bound': Object.freeze([
+    'cleanShell', 'printf', 'id', 'tr', 'base64', 'stat', 'gnuStat',
+    'realpath', 'sha256', 'procFd', 'gnuDd', 'mkfifo', 'rm'
   ]),
   sha256: Object.freeze([
     'cleanShell', 'printf', 'id', 'tr', 'base64', 'sha256', 'stat', 'gnuStat'
@@ -137,7 +152,9 @@ const capabilityShellVariables = Object.freeze({
   rmdir: '__sp_rmdir_cap',
   find: '__sp_find_cap',
   head: '__sp_head_cap',
-  wc: '__sp_wc_cap'
+  wc: '__sp_wc_cap',
+  gnuDd: '__sp_gnu_dd_cap',
+  mkfifo: '__sp_mkfifo_cap'
 })
 
 function encodeUtf8Base64 (value) {
@@ -226,6 +243,12 @@ const operationArguments = Object.freeze({
   ],
   touch: ['path'],
   rename: ['source', 'target'],
+  'rename-bound': [
+    'sourcePath', 'sourceParentRealPath', 'sourceParentDevice',
+    'sourceParentInode', 'sourceDevice', 'sourceInode', 'sourceType',
+    'targetPath', 'targetParentRealPath', 'targetParentDevice',
+    'targetParentInode'
+  ],
   rm: ['path'],
   rmdir: ['path'],
   chmod: ['path', 'mode'],
@@ -245,7 +268,14 @@ const operationArguments = Object.freeze({
     'rootPath', 'rootRealPath', 'rootDevice', 'rootInode',
     'rootUid', 'rootGid', 'rootMode', 'objectName', 'sourcePath',
     'sourceParentRealPath', 'sourceParentDevice', 'sourceParentInode',
-    'sourceDevice', 'sourceInode'
+    'sourceDevice', 'sourceInode', 'expectedSize', 'maxSize'
+  ],
+  'stage-export-range': [
+    'rootPath', 'rootRealPath', 'rootDevice', 'rootInode',
+    'rootUid', 'rootGid', 'rootMode', 'objectName', 'sourcePath',
+    'sourceParentRealPath', 'sourceParentDevice', 'sourceParentInode',
+    'sourceDevice', 'sourceInode', 'expectedSize', 'maxSize',
+    'offset', 'maxBytes'
   ],
   'stage-import': [
     'rootPath', 'rootRealPath', 'rootDevice', 'rootInode',
@@ -260,8 +290,17 @@ const operationArguments = Object.freeze({
   ],
   sha256: ['path'],
   'sha256-bound': [
-    'path', 'sourceParentRealPath', 'sourceParentDevice',
-    'sourceParentInode', 'sourceDevice', 'sourceInode'
+    'rootPath', 'rootRealPath', 'rootDevice', 'rootInode',
+    'rootUid', 'rootGid', 'rootMode', 'objectName', 'path',
+    'sourceParentRealPath', 'sourceParentDevice', 'sourceParentInode',
+    'sourceDevice', 'sourceInode', 'expectedSize', 'maxSize'
+  ],
+  'sha256-range-bound': [
+    'rootPath', 'rootRealPath', 'rootDevice', 'rootInode',
+    'rootUid', 'rootGid', 'rootMode', 'objectName', 'path',
+    'sourceParentRealPath', 'sourceParentDevice', 'sourceParentInode',
+    'sourceDevice', 'sourceInode', 'expectedSize', 'maxSize',
+    'offset', 'maxBytes'
   ]
 })
 
@@ -289,6 +328,7 @@ const argumentVariables = Object.freeze({
   sourceParentInode: '__sp_sourceParentInode',
   sourceDevice: '__sp_sourceDevice',
   sourceInode: '__sp_sourceInode',
+  sourceType: '__sp_sourceType',
   targetPath: '__sp_targetPath',
   sha256: '__sp_expectedSha256',
   size: '__sp_expectedSize',
@@ -301,7 +341,11 @@ const argumentVariables = Object.freeze({
   targetParentInode: '__sp_targetParentInode',
   targetDevice: '__sp_targetDevice',
   targetInode: '__sp_targetInode',
-  targetType: '__sp_targetType'
+  targetType: '__sp_targetType',
+  expectedSize: '__sp_expectedSize',
+  maxSize: '__sp_maxSize',
+  offset: '__sp_offset',
+  maxBytes: '__sp_maxBytes'
 })
 
 const argumentEnvironmentVariables = Object.freeze({
@@ -328,6 +372,7 @@ const argumentEnvironmentVariables = Object.freeze({
   sourceParentInode: 'SHELLPILOT_ARG_SOURCE_PARENT_INODE',
   sourceDevice: 'SHELLPILOT_ARG_SOURCE_DEVICE',
   sourceInode: 'SHELLPILOT_ARG_SOURCE_INODE',
+  sourceType: 'SHELLPILOT_ARG_SOURCE_TYPE',
   targetPath: 'SHELLPILOT_ARG_TARGET_PATH',
   sha256: 'SHELLPILOT_ARG_SHA256',
   size: 'SHELLPILOT_ARG_SIZE',
@@ -340,7 +385,11 @@ const argumentEnvironmentVariables = Object.freeze({
   targetParentInode: 'SHELLPILOT_ARG_TARGET_PARENT_INODE',
   targetDevice: 'SHELLPILOT_ARG_TARGET_DEVICE',
   targetInode: 'SHELLPILOT_ARG_TARGET_INODE',
-  targetType: 'SHELLPILOT_ARG_TARGET_TYPE'
+  targetType: 'SHELLPILOT_ARG_TARGET_TYPE',
+  expectedSize: 'SHELLPILOT_ARG_EXPECTED_SIZE',
+  maxSize: 'SHELLPILOT_ARG_MAX_SIZE',
+  offset: 'SHELLPILOT_ARG_OFFSET',
+  maxBytes: 'SHELLPILOT_ARG_MAX_BYTES'
 })
 
 function assertRequestContract (request) {
@@ -354,7 +403,8 @@ function assertRequestContract (request) {
   }
   for (const key of [
     'uid', 'gid', 'rootDevice', 'rootInode', 'rootUid', 'rootGid',
-    'size', 'targetUid', 'targetGid', 'sourceParentDevice',
+    'size', 'expectedSize', 'maxSize', 'offset', 'maxBytes',
+    'targetUid', 'targetGid', 'sourceParentDevice',
     'sourceParentInode', 'sourceDevice', 'sourceInode',
     'targetParentDevice', 'targetParentInode', 'targetDevice', 'targetInode'
   ]) {
@@ -373,11 +423,33 @@ function assertRequestContract (request) {
     request.args.mustBeAbsent !== '1') {
     throw new Error('root 文件操作参数值无效：mustBeAbsent')
   }
-  if (Object.hasOwn(request.args, 'targetType') &&
-    !['file', 'directory'].includes(request.args.targetType)) {
-    throw new Error('root 文件操作参数值无效：targetType')
+  for (const key of ['sourceType', 'targetType']) {
+    if (Object.hasOwn(request.args, key) &&
+      !['file', 'directory'].includes(request.args[key])) {
+      throw new Error(`root 文件操作参数值无效：${key}`)
+    }
   }
-  if (request.operation.startsWith('stage-') && request.args.rootMode !== '700') {
+  for (const key of ['expectedSize', 'maxSize', 'offset', 'maxBytes']) {
+    if (Object.hasOwn(request.args, key) &&
+      !Number.isSafeInteger(Number(request.args[key]))) {
+      throw new Error(`root 文件操作参数值无效：${key}`)
+    }
+  }
+  if (Object.hasOwn(request.args, 'expectedSize') &&
+    Number(request.args.expectedSize) > Number(request.args.maxSize)) {
+    throw new Error('root 文件操作 expectedSize 超过 maxSize')
+  }
+  if (Object.hasOwn(request.args, 'maxBytes') &&
+    (Number(request.args.maxBytes) < 1 || Number(request.args.maxBytes) > 65536)) {
+    throw new Error('root 文件操作 maxBytes 超过 65536')
+  }
+  if (Object.hasOwn(request.args, 'offset') &&
+    Number(request.args.offset) > Number(request.args.expectedSize)) {
+    throw new Error('root 文件操作 offset 超过 expectedSize')
+  }
+  if ((request.operation.startsWith('stage-') ||
+    ['sha256-bound', 'sha256-range-bound'].includes(request.operation)) &&
+    request.args.rootMode !== '700') {
     throw new Error('root 文件操作握手 mode 必须为 700')
   }
   for (const key of ['challenge', 'sha256']) {
@@ -519,37 +591,55 @@ const stageHandshakeBody = [
   '__sp_emit_handshake "$__sp_response" "$__sp_rootUid" "$__sp_rootGid" "$__sp_actualMode" "$__sp_actualRealPath" "$__sp_actualDevice" "$__sp_actualInode"'
 ].join(' && ')
 
-const stageExportBody = [
-  '__sp_bind_root || return $?',
-  '[ ! -e "./$__sp_objectName" ] && [ ! -L "./$__sp_objectName" ] || return 1',
-  '__sp_bind_entry_parent "$__sp_sourcePath" "$__sp_sourceParentRealPath" "$__sp_sourceParentDevice" "$__sp_sourceParentInode" || return $?',
-  '__sp_entry_matches "./$__sp_boundName" "$__sp_sourceDevice" "$__sp_sourceInode" file || return 1',
-  'exec 4< "./$__sp_boundName" || return $?',
-  '__sp_fd4="/proc/$$/fd/4"',
-  '[ -f "$__sp_fd4" ] || { exec 4<&-; return 1; }',
-  '__sp_openSourceDevice="$(stat -L -c %d -- "$__sp_fd4")" || { exec 4<&-; return 1; }',
-  '__sp_openSourceInode="$(stat -L -c %i -- "$__sp_fd4")" || { exec 4<&-; return 1; }',
-  '[ "$__sp_openSourceDevice" = "$__sp_sourceDevice" ] && [ "$__sp_openSourceInode" = "$__sp_sourceInode" ] || { exec 4<&-; return 1; }',
-  '__sp_entry_matches "./$__sp_boundName" "$__sp_openSourceDevice" "$__sp_openSourceInode" file || { exec 4<&-; return 1; }',
-  '__sp_bind_root || { exec 4<&-; return 1; }',
-  'umask 077',
-  'set -C || return $?',
-  'exec 3> "./$__sp_objectName" || { exec 4<&-; return 1; }',
-  '__sp_fd3="/proc/$$/fd/3"',
-  '__sp_objectDevice="$(stat -L -c %d -- "$__sp_fd3")" || { exec 3>&- 4<&-; return 1; }',
-  '__sp_objectInode="$(stat -L -c %i -- "$__sp_fd3")" || { exec 3>&- 4<&-; return 1; }',
-  'if ! cat <&4 >&3; then __sp_cleanup_export; exec 3>&- 4<&-; return 1; fi',
-  '__sp_parent_path_matches "$__sp_sourceParentRealPath" "$__sp_sourceParentDevice" "$__sp_sourceParentInode" || { __sp_cleanup_export; exec 3>&- 4<&-; return 1; }',
-  '__sp_entry_matches "$__sp_sourcePath" "$__sp_sourceDevice" "$__sp_sourceInode" file || { __sp_cleanup_export; exec 3>&- 4<&-; return 1; }',
-  'exec 4<&-',
-  '__sp_digest="$(__sp_sha256_raw "$__sp_fd3")" || { __sp_cleanup_export; exec 3>&-; return 1; }',
-  '__sp_size="$(stat -L -c %s -- "$__sp_fd3")" || { __sp_cleanup_export; exec 3>&-; return 1; }',
-  'chown -- "$__sp_rootUid:$__sp_rootGid" "$__sp_fd3" || { __sp_cleanup_export; exec 3>&-; return 1; }',
-  'chmod -- 600 "$__sp_fd3" || { __sp_cleanup_export; exec 3>&-; return 1; }',
-  '__sp_path_matches_fd "./$__sp_objectName" "$__sp_objectDevice" "$__sp_objectInode" || { exec 3>&-; return 1; }',
-  'exec 3>&-',
-  '__sp_emit_digest "$__sp_digest" "$__sp_size"'
-].join('; ')
+function createStageExportBody (range) {
+  const sizeSetup = range
+    ? [
+        '[ "$__sp_offset" -le "$__sp_expectedSize" ] || return 1',
+        '__sp_windowSize=$((__sp_expectedSize - __sp_offset))',
+        '[ "$__sp_windowSize" -le "$__sp_maxBytes" ] || __sp_windowSize="$__sp_maxBytes"'
+      ]
+    : ['__sp_offset=0', '__sp_windowSize="$__sp_expectedSize"']
+  return [
+    '__sp_bind_root || return $?',
+    '[ ! -e "./$__sp_objectName" ] && [ ! -L "./$__sp_objectName" ] || return 1',
+    '[ "$__sp_expectedSize" -le "$__sp_maxSize" ] || return 1',
+    ...sizeSetup,
+    '__sp_bind_entry_parent "$__sp_sourcePath" "$__sp_sourceParentRealPath" "$__sp_sourceParentDevice" "$__sp_sourceParentInode" || return $?',
+    '__sp_entry_matches "./$__sp_boundName" "$__sp_sourceDevice" "$__sp_sourceInode" file || return 1',
+    'exec 4< "./$__sp_boundName" || return $?',
+    '__sp_fd4="/proc/$$/fd/4"',
+    '[ -f "$__sp_fd4" ] || { exec 4<&-; return 1; }',
+    '__sp_openSourceDevice="$(stat -L -c %d -- "$__sp_fd4")" || { exec 4<&-; return 1; }',
+    '__sp_openSourceInode="$(stat -L -c %i -- "$__sp_fd4")" || { exec 4<&-; return 1; }',
+    '__sp_openSourceSize="$(stat -L -c %s -- "$__sp_fd4")" || { exec 4<&-; return 1; }',
+    '[ "$__sp_openSourceDevice" = "$__sp_sourceDevice" ] && [ "$__sp_openSourceInode" = "$__sp_sourceInode" ] || { exec 4<&-; return 1; }',
+    '[ "$__sp_openSourceSize" = "$__sp_expectedSize" ] || { exec 4<&-; return 1; }',
+    '__sp_entry_matches "./$__sp_boundName" "$__sp_openSourceDevice" "$__sp_openSourceInode" file || { exec 4<&-; return 1; }',
+    '__sp_bind_root || { exec 4<&-; return 1; }',
+    'umask 077',
+    'set -C || return $?',
+    'exec 3> "./$__sp_objectName" || { exec 4<&-; return 1; }',
+    '__sp_fd3="/proc/$$/fd/3"',
+    '__sp_objectDevice="$(stat -L -c %d -- "$__sp_fd3")" || { exec 3>&- 4<&-; return 1; }',
+    '__sp_objectInode="$(stat -L -c %i -- "$__sp_fd3")" || { exec 3>&- 4<&-; return 1; }',
+    'if ! dd if="$__sp_fd4" of="$__sp_fd3" bs=65536 iflag=skip_bytes,count_bytes skip="$__sp_offset" count="$__sp_windowSize" status=none; then __sp_cleanup_export; exec 3>&- 4<&-; return 1; fi',
+    '[ "$(stat -L -c %s -- "$__sp_fd4")" = "$__sp_expectedSize" ] || { __sp_cleanup_export; exec 3>&- 4<&-; return 1; }',
+    '__sp_parent_path_matches "$__sp_sourceParentRealPath" "$__sp_sourceParentDevice" "$__sp_sourceParentInode" || { __sp_cleanup_export; exec 3>&- 4<&-; return 1; }',
+    '__sp_entry_matches "$__sp_sourcePath" "$__sp_sourceDevice" "$__sp_sourceInode" file || { __sp_cleanup_export; exec 3>&- 4<&-; return 1; }',
+    'exec 4<&-',
+    '__sp_digest="$(__sp_sha256_raw "$__sp_fd3")" || { __sp_cleanup_export; exec 3>&-; return 1; }',
+    '__sp_size="$(stat -L -c %s -- "$__sp_fd3")" || { __sp_cleanup_export; exec 3>&-; return 1; }',
+    '[ "$__sp_size" = "$__sp_windowSize" ] || { __sp_cleanup_export; exec 3>&-; return 1; }',
+    'chown -- "$__sp_rootUid:$__sp_rootGid" "$__sp_fd3" || { __sp_cleanup_export; exec 3>&-; return 1; }',
+    'chmod -- 600 "$__sp_fd3" || { __sp_cleanup_export; exec 3>&-; return 1; }',
+    '__sp_path_matches_fd "./$__sp_objectName" "$__sp_objectDevice" "$__sp_objectInode" || { exec 3>&-; return 1; }',
+    'exec 3>&-',
+    '__sp_emit_digest "$__sp_digest" "$__sp_size"'
+  ].join('; ')
+}
+
+const stageExportBody = createStageExportBody(false)
+const stageExportRangeBody = createStageExportBody(true)
 
 const stageImportBody = [
   '[ "$__sp_uid_effective" = 0 ] || return 1',
@@ -677,21 +767,39 @@ const lstatBoundBody = [
   'fi'
 ].join(' ')
 
-const sha256BoundBody = [
-  '__sp_bind_entry_parent "$__sp_path" "$__sp_sourceParentRealPath" "$__sp_sourceParentDevice" "$__sp_sourceParentInode"',
-  '__sp_entry_matches "./$__sp_boundName" "$__sp_sourceDevice" "$__sp_sourceInode" file',
-  'exec 3< "./$__sp_boundName"',
-  '__sp_fd3="/proc/$$/fd/3"',
-  '[ "$(stat -L -c %d -- "$__sp_fd3")" = "$__sp_sourceDevice" ]',
-  '[ "$(stat -L -c %i -- "$__sp_fd3")" = "$__sp_sourceInode" ]',
-  '__sp_entry_matches "./$__sp_boundName" "$__sp_sourceDevice" "$__sp_sourceInode" file',
-  '__sp_digest="$(__sp_sha256_raw "$__sp_fd3")"',
-  '__sp_size="$(stat -L -c %s -- "$__sp_fd3")"',
-  '__sp_entry_matches "./$__sp_boundName" "$__sp_sourceDevice" "$__sp_sourceInode" file',
-  '__sp_parent_path_matches "$__sp_sourceParentRealPath" "$__sp_sourceParentDevice" "$__sp_sourceParentInode"',
-  '__sp_emit_digest "$__sp_digest" "$__sp_size"',
-  'exec 3<&-'
-].join(' && ')
+function createSha256BoundBody (range) {
+  const sizeSetup = range
+    ? [
+        '[ "$__sp_offset" -le "$__sp_expectedSize" ] || { exec 3<&-; return 1; }',
+        '__sp_windowSize=$((__sp_expectedSize - __sp_offset))',
+        '[ "$__sp_windowSize" -le "$__sp_maxBytes" ] || __sp_windowSize="$__sp_maxBytes"'
+      ]
+    : ['__sp_offset=0', '__sp_windowSize="$__sp_expectedSize"']
+  return [
+    '[ "$__sp_expectedSize" -le "$__sp_maxSize" ] || return 1',
+    '__sp_bind_entry_parent "$__sp_path" "$__sp_sourceParentRealPath" "$__sp_sourceParentDevice" "$__sp_sourceParentInode" || return $?',
+    '__sp_entry_matches "./$__sp_boundName" "$__sp_sourceDevice" "$__sp_sourceInode" file || return 1',
+    'exec 3< "./$__sp_boundName" || return $?',
+    '__sp_fd3="/proc/$$/fd/3"',
+    '[ "$(stat -L -c %d -- "$__sp_fd3")" = "$__sp_sourceDevice" ] || { exec 3<&-; return 1; }',
+    '[ "$(stat -L -c %i -- "$__sp_fd3")" = "$__sp_sourceInode" ] || { exec 3<&-; return 1; }',
+    '__sp_openSourceSize="$(stat -L -c %s -- "$__sp_fd3")" || { exec 3<&-; return 1; }',
+    '[ "$__sp_openSourceSize" = "$__sp_expectedSize" ] || { exec 3<&-; return 1; }',
+    ...sizeSetup,
+    '__sp_bind_root || { exec 3<&-; return 1; }',
+    '__sp_digest="$(__sp_bounded_digest "$__sp_fd3" "$__sp_offset" "$__sp_windowSize")" || { exec 3<&-; return 1; }',
+    '[ "$(stat -L -c %s -- "$__sp_fd3")" = "$__sp_expectedSize" ] || { exec 3<&-; return 1; }',
+    '[ "$(stat -L -c %d -- "$__sp_fd3")" = "$__sp_sourceDevice" ] || { exec 3<&-; return 1; }',
+    '[ "$(stat -L -c %i -- "$__sp_fd3")" = "$__sp_sourceInode" ] || { exec 3<&-; return 1; }',
+    '__sp_entry_matches "$__sp_path" "$__sp_sourceDevice" "$__sp_sourceInode" file || { exec 3<&-; return 1; }',
+    '__sp_parent_path_matches "$__sp_sourceParentRealPath" "$__sp_sourceParentDevice" "$__sp_sourceParentInode" || { exec 3<&-; return 1; }',
+    '__sp_emit_digest "$__sp_digest" "$__sp_windowSize" || { exec 3<&-; return 1; }',
+    'exec 3<&-'
+  ].join('; ')
+}
+
+const sha256BoundBody = createSha256BoundBody(false)
+const sha256RangeBoundBody = createSha256BoundBody(true)
 
 const mkdirBoundBody = [
   '[ "$__sp_uid_effective" = 0 ] || return 1',
@@ -726,6 +834,36 @@ const removeBoundBody = [
   'if [ "$__sp_targetType" = file ]; then rm -- "./$__sp_boundName"; else rmdir -- "./$__sp_boundName"; fi'
 ].join(' && ')
 
+const renameBoundBody = [
+  '[ "$__sp_uid_effective" = 0 ] || return 1',
+  '__sp_bind_entry_parent "$__sp_sourcePath" "$__sp_sourceParentRealPath" "$__sp_sourceParentDevice" "$__sp_sourceParentInode" || return $?',
+  '__sp_sourceName="$__sp_boundName"',
+  'exec 8< . || return $?',
+  '__sp_fd8="/proc/$$/fd/8"',
+  '[ -d "$__sp_fd8" ] && [ "$(stat -L -c %d -- "$__sp_fd8")" = "$__sp_sourceParentDevice" ] && [ "$(stat -L -c %i -- "$__sp_fd8")" = "$__sp_sourceParentInode" ] || { exec 8<&-; return 1; }',
+  '__sp_sourceRef="$__sp_fd8/$__sp_sourceName"',
+  '__sp_entry_matches "$__sp_sourceRef" "$__sp_sourceDevice" "$__sp_sourceInode" "$__sp_sourceType" || { exec 8<&-; return 1; }',
+  'exec 7< "$__sp_sourceRef" || { exec 8<&-; return 1; }',
+  '__sp_fd7="/proc/$$/fd/7"',
+  '[ "$(stat -L -c %d -- "$__sp_fd7")" = "$__sp_sourceDevice" ] && [ "$(stat -L -c %i -- "$__sp_fd7")" = "$__sp_sourceInode" ] || { exec 7<&- 8<&-; return 1; }',
+  '__sp_bind_entry_parent "$__sp_targetPath" "$__sp_targetParentRealPath" "$__sp_targetParentDevice" "$__sp_targetParentInode" || { exec 7<&- 8<&-; return 1; }',
+  '__sp_targetName="$__sp_boundName"',
+  'exec 9< . || { exec 7<&- 8<&-; return 1; }',
+  '__sp_fd9="/proc/$$/fd/9"',
+  '[ -d "$__sp_fd9" ] && [ "$(stat -L -c %d -- "$__sp_fd9")" = "$__sp_targetParentDevice" ] && [ "$(stat -L -c %i -- "$__sp_fd9")" = "$__sp_targetParentInode" ] || { exec 7<&- 8<&- 9<&-; return 1; }',
+  '__sp_targetRef="$__sp_fd9/$__sp_targetName"',
+  '[ "$__sp_sourceDevice" = "$__sp_sourceParentDevice" ] && [ "$__sp_sourceDevice" = "$__sp_targetParentDevice" ] || { exec 7<&- 8<&- 9<&-; return 1; }',
+  '__sp_rename_parents_match() { [ "$(stat -L -c %d -- "$__sp_fd8")" = "$__sp_sourceParentDevice" ] && [ "$(stat -L -c %i -- "$__sp_fd8")" = "$__sp_sourceParentInode" ] && [ "$(stat -L -c %d -- "$__sp_fd9")" = "$__sp_targetParentDevice" ] && [ "$(stat -L -c %i -- "$__sp_fd9")" = "$__sp_targetParentInode" ] && __sp_parent_path_matches "$__sp_sourceParentRealPath" "$__sp_sourceParentDevice" "$__sp_sourceParentInode" && __sp_parent_path_matches "$__sp_targetParentRealPath" "$__sp_targetParentDevice" "$__sp_targetParentInode"; }',
+  '__sp_rollback_rename() { [ ! -e "$__sp_sourceRef" ] && [ ! -L "$__sp_sourceRef" ] || return 0; [ ! -L "$__sp_targetRef" ] || return 0; case "$__sp_sourceType" in file) [ -f "$__sp_targetRef" ] ;; directory) [ -d "$__sp_targetRef" ] ;; *) return 0 ;; esac || return 0; __sp_wrongDevice="$(stat -c %d -- "$__sp_targetRef")" || return 0; __sp_wrongInode="$(stat -c %i -- "$__sp_targetRef")" || return 0; __sp_entry_matches "$__sp_targetRef" "$__sp_wrongDevice" "$__sp_wrongInode" "$__sp_sourceType" || return 0; mv -nT -- "$__sp_targetRef" "$__sp_sourceRef" >/dev/null 2>&1 || return 0; }',
+  '__sp_rename_parents_match || { exec 7<&- 8<&- 9<&-; return 1; }',
+  '__sp_entry_matches "$__sp_sourceRef" "$__sp_sourceDevice" "$__sp_sourceInode" "$__sp_sourceType" || { exec 7<&- 8<&- 9<&-; return 1; }',
+  '[ ! -e "$__sp_targetRef" ] && [ ! -L "$__sp_targetRef" ] || { exec 7<&- 8<&- 9<&-; return 1; }',
+  'mv -nT -- "$__sp_sourceRef" "$__sp_targetRef" || { exec 7<&- 8<&- 9<&-; return 1; }',
+  'if [ ! -e "$__sp_sourceRef" ] && [ ! -L "$__sp_sourceRef" ] && __sp_entry_matches "$__sp_targetRef" "$__sp_sourceDevice" "$__sp_sourceInode" "$__sp_sourceType" && __sp_rename_parents_match; then __sp_status=0; else __sp_status=1; __sp_rollback_rename; fi',
+  'exec 7<&- 8<&- 9<&-',
+  'return "$__sp_status"'
+].join('; ')
+
 const operationBodies = Object.freeze({
   probe: ':',
   list: listBody,
@@ -739,6 +877,7 @@ const operationBodies = Object.freeze({
   'mkdir-bound': mkdirBoundBody,
   touch: '( umask 077; : > "$__sp_path" )',
   rename: 'mv -- "$__sp_source" "$__sp_target"',
+  'rename-bound': renameBoundBody,
   rm: 'rm -- "$__sp_path"',
   rmdir: 'rm -rf -- "$__sp_path"',
   chmod: 'chmod -- "$__sp_mode" "$__sp_path"',
@@ -749,10 +888,12 @@ const operationBodies = Object.freeze({
   'remove-bound': removeBoundBody,
   'stage-handshake': stageHandshakeBody,
   'stage-export': stageExportBody,
+  'stage-export-range': stageExportRangeBody,
   'stage-import': stageImportBody,
   'stage-cleanup': stageCleanupBody,
   sha256: '__sp_emit_sha256 "$__sp_path"',
-  'sha256-bound': sha256BoundBody
+  'sha256-bound': sha256BoundBody,
+  'sha256-range-bound': sha256RangeBoundBody
 })
 
 export function createPrivilegedFileRequest ({ operation, args = {} } = {}) {
@@ -797,6 +938,25 @@ export function createPrivilegedFileRequest ({ operation, args = {} } = {}) {
       throw new Error(`root 文件操作 ${parentKey} 绑定无效`)
     }
   }
+  for (const key of ['expectedSize', 'maxSize', 'offset', 'maxBytes']) {
+    if (Object.hasOwn(normalized, key) &&
+      (!/^(?:0|[1-9]\d*)$/.test(normalized[key]) ||
+        !Number.isSafeInteger(Number(normalized[key])))) {
+      throw new Error(`root 文件操作参数值无效：${key}`)
+    }
+  }
+  if (Object.hasOwn(normalized, 'expectedSize') &&
+    Number(normalized.expectedSize) > Number(normalized.maxSize)) {
+    throw new Error('root 文件操作 expectedSize 超过 maxSize')
+  }
+  if (Object.hasOwn(normalized, 'maxBytes') &&
+    (Number(normalized.maxBytes) < 1 || Number(normalized.maxBytes) > 65536)) {
+    throw new Error('root 文件操作 maxBytes 超过 65536')
+  }
+  if (Object.hasOwn(normalized, 'offset') &&
+    Number(normalized.offset) > Number(normalized.expectedSize)) {
+    throw new Error('root 文件操作 offset 超过 expectedSize')
+  }
   if (operation === 'stage-import' &&
     normalized.mustBeAbsent !== '1') {
     throw new Error('root 文件操作参数值无效：mustBeAbsent')
@@ -805,12 +965,14 @@ export function createPrivilegedFileRequest ({ operation, args = {} } = {}) {
     !operationArguments[operation].includes(key))) {
     throw new Error('root 文件操作参数合同无效')
   }
-  if (operation.startsWith('stage-') &&
+  if ((operation.startsWith('stage-') ||
+    ['sha256-bound', 'sha256-range-bound'].includes(operation)) &&
     Object.hasOwn(normalized, 'rootPath') &&
     !isCanonicalStageRootPath(normalized.rootPath)) {
     throw new Error('root 文件操作 rootPath 必须为规范绝对路径')
   }
-  if (operation.startsWith('stage-') &&
+  if ((operation.startsWith('stage-') ||
+    ['sha256-bound', 'sha256-range-bound'].includes(operation)) &&
     Object.hasOwn(normalized, 'rootRealPath') &&
     (!isCanonicalStageRootPath(normalized.rootRealPath) ||
       normalized.rootRealPath !== normalized.rootPath)) {
@@ -849,14 +1011,17 @@ export function buildPrivilegedFileCommand ({ token: providedToken, request }) {
     '__sp_head_cap=0; [ "$(printf abc | head -c 1 2>/dev/null)" = a ] && __sp_head_cap=1;',
     '__sp_wc_cap=0; [ "$(printf x | wc -c 2>/dev/null | tr -d " \\r\\n")" = 1 ] && __sp_wc_cap=1;',
     '__sp_proc_fd_cap=0; __sp_readlink_cap=0; if exec 9</dev/null; then [ -r "/proc/$$/fd/9" ] && stat -L -c %i -- "/proc/$$/fd/9" >/dev/null 2>&1 && __sp_proc_fd_cap=1; [ -n "$(readlink -- "/proc/$$/fd/9" 2>/dev/null)" ] && __sp_readlink_cap=1; exec 9<&-; fi;',
-    '__sp_noclobber_cap=0; __sp_cat_cap=0; __sp_gnu_mv_cap=0; __sp_chown_cap=0; __sp_chmod_cap=0; __sp_rm_cap=0; __sp_rmdir_cap=0;',
-    '__sp_probe_a="/tmp/.shellpilot-probe-$__sp_token-$$-a"; __sp_probe_b="/tmp/.shellpilot-probe-$__sp_token-$$-b"; __sp_probe_d="/tmp/.shellpilot-probe-$__sp_token-$$-d";',
+    '__sp_noclobber_cap=0; __sp_cat_cap=0; __sp_gnu_mv_cap=0; __sp_chown_cap=0; __sp_chmod_cap=0; __sp_rm_cap=0; __sp_rmdir_cap=0; __sp_gnu_dd_cap=0; __sp_mkfifo_cap=0;',
+    '__sp_probe_a="/tmp/.shellpilot-probe-$__sp_token-$$-a"; __sp_probe_b="/tmp/.shellpilot-probe-$__sp_token-$$-b"; __sp_probe_d="/tmp/.shellpilot-probe-$__sp_token-$$-d"; __sp_probe_f="/tmp/.shellpilot-probe-$__sp_token-$$-f";',
+    'dd if=/dev/null of=/dev/null bs=1 iflag=skip_bytes,count_bytes skip=0 count=0 status=none 2>/dev/null && __sp_gnu_dd_cap=1;',
+    'if [ ! -e "$__sp_probe_f" ] && [ ! -L "$__sp_probe_f" ] && mkfifo -m 600 -- "$__sp_probe_f" 2>/dev/null; then [ -p "$__sp_probe_f" ] && [ "$(stat -c %a -- "$__sp_probe_f" 2>/dev/null)" = 600 ] && __sp_mkfifo_cap=1; fi;',
+    'rm -f -- "$__sp_probe_f" 2>/dev/null;',
     'if [ ! -e "$__sp_probe_a" ] && [ ! -L "$__sp_probe_a" ] && [ ! -e "$__sp_probe_b" ] && [ ! -L "$__sp_probe_b" ] && ( umask 077; set -C; printf x > "$__sp_probe_a" ) 2>/dev/null; then',
     '  if ! ( set -C; : > "$__sp_probe_a" ) 2>/dev/null; then __sp_noclobber_cap=1; fi;',
     '  [ "$(cat -- "$__sp_probe_a" 2>/dev/null)" = x ] && __sp_cat_cap=1;',
     '  chmod -- 600 "$__sp_probe_a" 2>/dev/null && [ "$(stat -c %a -- "$__sp_probe_a" 2>/dev/null)" = 600 ] && __sp_chmod_cap=1;',
     '  chown -- "$__sp_uid_effective:$__sp_gid_effective" "$__sp_probe_a" 2>/dev/null && [ "$(stat -c %u:%g -- "$__sp_probe_a" 2>/dev/null)" = "$__sp_uid_effective:$__sp_gid_effective" ] && __sp_chown_cap=1;',
-    '  mv -T -- "$__sp_probe_a" "$__sp_probe_b" 2>/dev/null && [ -f "$__sp_probe_b" ] && __sp_gnu_mv_cap=1;',
+    '  if mv -T -- "$__sp_probe_a" "$__sp_probe_b" 2>/dev/null && [ -f "$__sp_probe_b" ] && ( umask 077; set -C; printf yy > "$__sp_probe_a" ) 2>/dev/null; then mv -nT -- "$__sp_probe_a" "$__sp_probe_b" 2>/dev/null && [ -f "$__sp_probe_a" ] && [ "$(stat -c %s -- "$__sp_probe_a" 2>/dev/null)" = 2 ] && [ "$(stat -c %s -- "$__sp_probe_b" 2>/dev/null)" = 1 ] && __sp_gnu_mv_cap=1; fi;',
     'fi;',
     'rm -f -- "$__sp_probe_a" "$__sp_probe_b" 2>/dev/null && [ ! -e "$__sp_probe_a" ] && [ ! -L "$__sp_probe_a" ] && [ ! -e "$__sp_probe_b" ] && [ ! -L "$__sp_probe_b" ] && __sp_rm_cap=1;',
     'if [ ! -e "$__sp_probe_d" ] && [ ! -L "$__sp_probe_d" ] && mkdir -- "$__sp_probe_d" 2>/dev/null; then rmdir -- "$__sp_probe_d" 2>/dev/null && [ ! -e "$__sp_probe_d" ] && [ ! -L "$__sp_probe_d" ] && __sp_rmdir_cap=1; fi;'
@@ -870,6 +1035,7 @@ export function buildPrivilegedFileCommand ({ token: providedToken, request }) {
     'realpath() { command realpath "$@" || return $?; printf .; };',
     '__sp_sha256_raw() { case "$__sp_sha256_tool" in sha256sum) __sp_hash="$(sha256sum -- "$1")" || return $? ;; shasum) __sp_hash="$(shasum -a 256 -- "$1")" || return $? ;; *) return 1 ;; esac; printf %s "$' + '{__sp_hash%% *}"; };',
     '__sp_sha256_text() { case "$__sp_sha256_tool" in sha256sum) __sp_hash="$(printf %s "$1" | sha256sum)" || return $? ;; shasum) __sp_hash="$(printf %s "$1" | shasum -a 256)" || return $? ;; *) return 1 ;; esac; printf %s "$' + '{__sp_hash%% *}"; };',
+    '__sp_bounded_digest() { __sp_digestInput="$1"; __sp_digestOffset="$2"; __sp_digestCount="$3"; __sp_digestFifo="./$__sp_objectName"; [ ! -e "$__sp_digestFifo" ] && [ ! -L "$__sp_digestFifo" ] || return 1; umask 077; mkfifo -m 600 -- "$__sp_digestFifo" || return $?; __sp_fifoDevice="$(stat -c %d -- "$__sp_digestFifo")" || return 1; __sp_fifoInode="$(stat -c %i -- "$__sp_digestFifo")" || return 1; __sp_fifo_matches() { [ ! -L "$__sp_digestFifo" ] && [ -p "$__sp_digestFifo" ] && [ "$(stat -c %d -- "$__sp_digestFifo")" = "$__sp_fifoDevice" ] && [ "$(stat -c %i -- "$__sp_digestFifo")" = "$__sp_fifoInode" ]; }; __sp_fifo_matches || return 1; dd if="$__sp_digestInput" of="$__sp_digestFifo" bs=65536 iflag=skip_bytes,count_bytes skip="$__sp_digestOffset" count="$__sp_digestCount" status=none & __sp_producerPid=$!; __sp_digestValue="$(__sp_sha256_raw "$__sp_digestFifo")"; __sp_hashStatus=$?; wait "$__sp_producerPid"; __sp_producerStatus=$?; if __sp_fifo_matches; then rm -f -- "$__sp_digestFifo" || return $?; else return 1; fi; [ "$__sp_hashStatus" -eq 0 ] && [ "$__sp_producerStatus" -eq 0 ] || return 1; printf %s "$__sp_digestValue"; };',
     '__sp_valid_name() { case "$1" in ""|"."|".."|*/*) return 1 ;; *) return 0 ;; esac; };',
     '__sp_bind_entry_parent() { __sp_boundPath="$1"; __sp_boundExpectedParent="$2"; __sp_boundExpectedDevice="$3"; __sp_boundExpectedInode="$4"; __sp_boundParent="$' + '{__sp_boundPath%/*}"; [ -n "$__sp_boundParent" ] || __sp_boundParent=/; __sp_boundName="$' + '{__sp_boundPath##*/}"; __sp_valid_name "$__sp_boundName" || return 1; [ "$__sp_boundParent" = "$__sp_boundExpectedParent" ] || return 1; __sp_boundActualReal="$(realpath -- "$__sp_boundParent")" || return $?; __sp_boundActualReal=$' + '{__sp_boundActualReal%?}; __sp_boundActualReal=$' + '{__sp_boundActualReal%?}; [ "$__sp_boundActualReal" = "$__sp_boundExpectedParent" ] || return 1; [ ! -L "$__sp_boundParent" ] && [ -d "$__sp_boundParent" ] || return 1; cd -- "$__sp_boundParent" || return $?; [ "$(pwd -P)" = "$__sp_boundExpectedParent" ] || return 1; [ "$(stat -c %d -- .)" = "$__sp_boundExpectedDevice" ] || return 1; [ "$(stat -c %i -- .)" = "$__sp_boundExpectedInode" ] || return 1; };',
     '__sp_entry_matches() { [ ! -L "$1" ] || return 1; case "$4" in file) [ -f "$1" ] ;; directory) [ -d "$1" ] ;; *) return 1 ;; esac && [ "$(stat -c %d -- "$1")" = "$2" ] && [ "$(stat -c %i -- "$1")" = "$3" ]; };',
@@ -895,7 +1061,7 @@ export function buildPrivilegedFileCommand ({ token: providedToken, request }) {
     `__sp_run_operation() { ${operationBodies[normalized.operation]}; };`,
     '__sp_status=125;',
     `if [ "$__sp_printf_cap" = 1 ] && [ "$__sp_id_cap" = 1 ] && [ "$__sp_tr_cap" = 1 ] && [ "$__sp_base64_cap" = 1 ] && ${prepare}:; then`,
-    '  __sp_caps="sh=1,cleanShell=$__sp_clean_shell_cap,printf=$__sp_printf_cap,id=$__sp_id_cap,tr=$__sp_tr_cap,stat=$__sp_stat_cap,base64=$__sp_base64_cap,sha256=$__sp_sha256_cap,procFd=$__sp_proc_fd_cap,noclobber=$__sp_noclobber_cap,cat=$__sp_cat_cap,gnuStat=$__sp_gnu_stat_cap,gnuMv=$__sp_gnu_mv_cap,realpath=$__sp_realpath_cap,readlink=$__sp_readlink_cap,chown=$__sp_chown_cap,chmod=$__sp_chmod_cap,rm=$__sp_rm_cap,rmdir=$__sp_rmdir_cap,find=$__sp_find_cap,head=$__sp_head_cap,wc=$__sp_wc_cap";',
+    '  __sp_caps="sh=1,cleanShell=$__sp_clean_shell_cap,printf=$__sp_printf_cap,id=$__sp_id_cap,tr=$__sp_tr_cap,stat=$__sp_stat_cap,base64=$__sp_base64_cap,sha256=$__sp_sha256_cap,procFd=$__sp_proc_fd_cap,noclobber=$__sp_noclobber_cap,cat=$__sp_cat_cap,gnuStat=$__sp_gnu_stat_cap,gnuMv=$__sp_gnu_mv_cap,realpath=$__sp_realpath_cap,readlink=$__sp_readlink_cap,chown=$__sp_chown_cap,chmod=$__sp_chmod_cap,rm=$__sp_rm_cap,rmdir=$__sp_rmdir_cap,find=$__sp_find_cap,head=$__sp_head_cap,wc=$__sp_wc_cap,gnuDd=$__sp_gnu_dd_cap,mkfifo=$__sp_mkfifo_cap";',
     `  printf '${marker};start;%s;%s;%s\\007' "$__sp_token" "$(__sp_encode "$__sp_uid_effective")" "$(__sp_encode "$__sp_user_effective")" "$(__sp_encode "$__sp_caps")";`,
     `  if ${capabilityGuard}; then __sp_run_operation; __sp_status=$?; else __sp_status=126; fi;`,
     `  printf '${marker};end;%s\\007' "$__sp_token" "$__sp_status";`,
@@ -1029,6 +1195,7 @@ export function createPrivilegedFileParser ({ token: providedToken, request }) {
   const mutationOperations = new Set([
     'probe', 'mkdir', 'touch', 'rename', 'rm', 'rmdir', 'chmod', 'chown',
     'copy-entry', 'remove-entry', 'remove-empty-directory', 'remove-bound',
+    'rename-bound',
     'stage-cleanup'
   ])
 
@@ -1158,7 +1325,8 @@ export function createPrivilegedFileParser ({ token: providedToken, request }) {
       })
       return
     }
-    if (['stage-export', 'sha256', 'sha256-bound'].includes(normalized.operation)) {
+    if (['stage-export', 'stage-export-range', 'sha256', 'sha256-bound',
+      'sha256-range-bound'].includes(normalized.operation)) {
       if (kind !== 'digest' || payload.length !== 2) {
         throw new Error('root 文件协议数据类型无效')
       }

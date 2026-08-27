@@ -47,6 +47,14 @@ function createBackendHarness (options = {}) {
     if (!node.inode) node.inode = String(nextPrivilegedInode++)
     return node
   }
+  function privilegedBytes (node, offset = 0, length = node?.size ?? 0) {
+    const size = Number(node?.size ?? node?.content?.length ?? 0)
+    const available = Math.max(0, Math.min(length, size - offset))
+    if (node?.virtualByte !== undefined) {
+      return Buffer.alloc(available, node.virtualByte)
+    }
+    return Buffer.from(node?.content || '').subarray(offset, offset + available)
+  }
   if (options.privilegedTree) {
     ensurePrivilegedBinding(privilegedNodes.get('/') || (() => {
       const node = { type: 'directory', mode: 0o755, uid: 0, gid: 0 }
@@ -251,12 +259,57 @@ function createBackendHarness (options = {}) {
       const bytes = options.privilegedTree
         ? Buffer.from(privilegedNodes.get(args.sourcePath)?.content || '')
         : Buffer.from(rootFiles.get(args.sourcePath) || '')
+      const totalSize = options.privilegedTree
+        ? Number(privilegedNodes.get(args.sourcePath)?.size ?? bytes.length)
+        : bytes.length
+      if (String(totalSize) !== args.expectedSize ||
+        totalSize > Number(args.maxSize)) {
+        throw new Error('stage export source size changed')
+      }
       nodes.set(`${args.rootPath}/${args.objectName}`, {
         type: 'file', mode: 0o600, uid: 1000, gid: 1000, content: bytes
       })
       return {
         exitCode: 0,
         kind: 'stage-export',
+        sha256: options.exportDigest || sha256(bytes),
+        size: options.exportSize ?? bytes.length
+      }
+    }
+    if (request.operation === 'stage-export-range') {
+      const source = options.privilegedTree
+        ? ensurePrivilegedBinding(privilegedNodes.get(args.sourcePath))
+        : null
+      const parent = options.privilegedTree
+        ? ensurePrivilegedBinding(privilegedNodes.get(
+          args.sourceParentRealPath
+        ))
+        : null
+      if (options.privilegedTree && (!source || source.type !== 'file' ||
+        source.device !== args.sourceDevice || source.inode !== args.sourceInode ||
+        parent.device !== args.sourceParentDevice ||
+        parent.inode !== args.sourceParentInode)) {
+        throw new Error('stage export range source binding changed')
+      }
+      const bytes = options.privilegedTree
+        ? privilegedBytes(source, Number(args.offset), Number(args.maxBytes))
+        : Buffer.from(rootFiles.get(args.sourcePath) || '').subarray(
+          Number(args.offset),
+          Number(args.offset) + Number(args.maxBytes)
+        )
+      const totalSize = options.privilegedTree
+        ? Number(source?.size ?? source?.content?.length ?? 0)
+        : Buffer.from(rootFiles.get(args.sourcePath) || '').length
+      if (String(totalSize) !== args.expectedSize ||
+        totalSize > Number(args.maxSize)) {
+        throw new Error('stage export range source size changed')
+      }
+      nodes.set(`${args.rootPath}/${args.objectName}`, {
+        type: 'file', mode: 0o600, uid: 1000, gid: 1000, content: bytes
+      })
+      return {
+        exitCode: 0,
+        kind: 'stage-export-range',
         sha256: options.exportDigest || sha256(bytes),
         size: options.exportSize ?? bytes.length
       }
@@ -415,13 +468,16 @@ function createBackendHarness (options = {}) {
         throw missing(args.path)
       }
       const isDirectoryPath = ['/', '/root', '/srv', '/srv/app'].includes(args.path)
+      const rootFile = rootFiles.get(args.path)
       return {
         exitCode: 0,
         kind: request.operation,
         metadata: {
           mode: isDirectoryPath ? 0o40755 : 0o100640,
           type: isDirectoryPath ? 'directory' : 'file',
-          size: isDirectoryPath ? 0 : 12,
+          size: isDirectoryPath
+            ? 0
+            : rootFile === undefined ? 12 : Buffer.from(rootFile).length,
           atime: 1,
           mtime: 2,
           uid: 3,
@@ -441,22 +497,42 @@ function createBackendHarness (options = {}) {
       const bytes = Buffer.from(rootFiles.get(args.path) || '')
       return { exitCode: 0, kind: 'sha256', sha256: sha256(bytes), size: bytes.length }
     }
-    if (options.privilegedTree && request.operation === 'sha256-bound') {
-      const node = ensurePrivilegedBinding(privilegedNodes.get(args.path))
-      const parent = ensurePrivilegedBinding(privilegedNodes.get(
-        args.sourceParentRealPath
-      ))
-      if (!node || node.type !== 'file' ||
+    if (request.operation === 'sha256-bound' ||
+      request.operation === 'sha256-range-bound') {
+      const node = options.privilegedTree
+        ? ensurePrivilegedBinding(privilegedNodes.get(args.path))
+        : null
+      const parent = options.privilegedTree
+        ? ensurePrivilegedBinding(privilegedNodes.get(args.sourceParentRealPath))
+        : null
+      if (options.privilegedTree && (!node || node.type !== 'file' ||
         node.device !== args.sourceDevice || node.inode !== args.sourceInode ||
         parent.device !== args.sourceParentDevice ||
-        parent.inode !== args.sourceParentInode) {
+        parent.inode !== args.sourceParentInode)) {
         throw new Error('sha256 source binding changed')
       }
+      const totalSize = options.privilegedTree
+        ? Number(node.size ?? node.content?.length ?? 0)
+        : Buffer.from(rootFiles.get(args.path) || '').length
+      if (String(totalSize) !== args.expectedSize ||
+        totalSize > Number(args.maxSize)) {
+        throw new Error('sha256 source size changed')
+      }
+      const bytes = request.operation === 'sha256-range-bound'
+        ? options.privilegedTree
+          ? privilegedBytes(node, Number(args.offset), Number(args.maxBytes))
+          : Buffer.from(rootFiles.get(args.path) || '').subarray(
+            Number(args.offset),
+            Number(args.offset) + Number(args.maxBytes)
+          )
+        : options.privilegedTree
+          ? privilegedBytes(node, 0, totalSize)
+          : Buffer.from(rootFiles.get(args.path) || '')
       return {
         exitCode: 0,
-        kind: 'sha256-bound',
-        sha256: sha256(node.content),
-        size: node.size ?? node.content.length
+        kind: request.operation,
+        sha256: sha256(bytes),
+        size: bytes.length
       }
     }
     if (options.privilegedTree && request.operation === 'mkdir') {
@@ -497,6 +573,52 @@ function createBackendHarness (options = {}) {
       privilegedNodes.get(args.path).uid = Number(args.uid)
       privilegedNodes.get(args.path).gid = Number(args.gid)
       return { exitCode: 0, kind: 'chown', ok: true }
+    }
+    if (request.operation === 'rename-bound') {
+      if (!options.privilegedTree) {
+        return { exitCode: 0, kind: 'rename-bound', ok: true }
+      }
+      if (options.replaceRenameSourceBeforeBound === args.sourcePath) {
+        privilegedNodes.set(args.sourcePath, ensurePrivilegedBinding({
+          type: args.sourceType,
+          mode: 0o600,
+          uid: 99,
+          gid: 99,
+          content: Buffer.from('foreign source')
+        }))
+      }
+      if (options.raceRenameTarget === args.targetPath) {
+        privilegedNodes.set(args.targetPath, ensurePrivilegedBinding({
+          type: 'file',
+          mode: 0o600,
+          uid: 99,
+          gid: 99,
+          content: Buffer.from('foreign target')
+        }))
+      }
+      const source = ensurePrivilegedBinding(privilegedNodes.get(args.sourcePath))
+      const sourceParent = ensurePrivilegedBinding(privilegedNodes.get(
+        args.sourceParentRealPath
+      ))
+      const targetParent = ensurePrivilegedBinding(privilegedNodes.get(
+        args.targetParentRealPath
+      ))
+      if (!source || source.device !== args.sourceDevice ||
+        source.inode !== args.sourceInode || source.type !== args.sourceType ||
+        sourceParent.device !== args.sourceParentDevice ||
+        sourceParent.inode !== args.sourceParentInode ||
+        targetParent.device !== args.targetParentDevice ||
+        targetParent.inode !== args.targetParentInode ||
+        privilegedNodes.has(args.targetPath)) {
+        throw new Error('rename bound race rejected')
+      }
+      const moved = [...privilegedNodes.entries()].filter(([remotePath]) =>
+        remotePath === args.sourcePath || remotePath.startsWith(`${args.sourcePath}/`))
+      for (const [remotePath] of moved) privilegedNodes.delete(remotePath)
+      for (const [remotePath, node] of moved) {
+        privilegedNodes.set(`${args.targetPath}${remotePath.slice(args.sourcePath.length)}`, node)
+      }
+      return { exitCode: 0, kind: 'rename-bound', ok: true }
     }
     if (options.privilegedTree && request.operation === 'rename') {
       if (privilegedNodes.has(args.target)) throw new Error('Target exists')
@@ -769,7 +891,10 @@ test('privileged backend serializes every PTY request and release waits for acce
 })
 
 test('privileged facade maps fixed metadata and mutation methods to protocol requests', async () => {
-  const harness = createBackendHarness({ rootFiles: { '/root/file': 'content' } })
+  const harness = createBackendHarness({
+    rootFiles: { '/root/file': 'content' },
+    missingLstatResult: true
+  })
   const backend = await createRootBackend(harness)
   const facade = backend.sftp
   assert.equal(Object.isFrozen(backend), true)
@@ -789,7 +914,7 @@ test('privileged facade maps fixed metadata and mutation methods to protocol req
   assert.deepEqual(await facade.lstat('/root/file'), {
     mode: 0o100640,
     type: 'file',
-    size: 12,
+    size: 7,
     atime: 1,
     mtime: 2,
     uid: 3,
@@ -807,12 +932,12 @@ test('privileged facade maps fixed metadata and mutation methods to protocol req
 
   await facade.mkdir('/root/new-dir')
   await facade.touch('/root/new-file')
-  await facade.rename('/root/a', '/root/b')
+  await facade.rename('/root/a', '/root/missing-b')
   await facade.rm('/root/file')
   await facade.rmdir('/root/dir')
   await facade.chmod('/root/file', 0o640)
   await facade.chown('/root/file', 10, 11)
-  await facade.mv('/root/d', '/root/e')
+  await facade.mv('/root/d', '/root/missing-e')
   assert.equal(typeof facade.copyEntry, 'function')
   assert.equal(typeof facade.removeEntry, 'function')
   assert.equal(typeof facade.cp, 'function')
@@ -828,13 +953,147 @@ test('privileged facade maps fixed metadata and mutation methods to protocol req
       ['realpath', { path: '/root/file' }],
       ['mkdir', { path: '/root/new-dir' }],
       ['touch', { path: '/root/new-file' }],
-      ['rename', { source: '/root/a', target: '/root/b' }],
+      ['lstat', { path: '/root/a' }],
+      ['lstat', { path: '/root/missing-b' }],
+      ['lstat', { path: '/root' }],
+      ['rename-bound', {
+        sourcePath: '/root/a',
+        sourceParentRealPath: '/root',
+        sourceParentDevice: '1',
+        sourceParentInode: '99',
+        sourceDevice: '1',
+        sourceInode: '100',
+        sourceType: 'file',
+        targetPath: '/root/missing-b',
+        targetParentRealPath: '/root',
+        targetParentDevice: '1',
+        targetParentInode: '100'
+      }],
       ['rm', { path: '/root/file' }],
       ['rmdir', { path: '/root/dir' }],
       ['chmod', { path: '/root/file', mode: '640' }],
       ['chown', { path: '/root/file', uid: '10', gid: '11' }],
-      ['rename', { source: '/root/d', target: '/root/e' }]
+      ['lstat', { path: '/root/d' }],
+      ['lstat', { path: '/root/missing-e' }],
+      ['lstat', { path: '/root' }],
+      ['rename-bound', {
+        sourcePath: '/root/d',
+        sourceParentRealPath: '/root',
+        sourceParentDevice: '1',
+        sourceParentInode: '99',
+        sourceDevice: '1',
+        sourceInode: '100',
+        sourceType: 'file',
+        targetPath: '/root/missing-e',
+        targetParentRealPath: '/root',
+        targetParentDevice: '1',
+        targetParentInode: '100'
+      }]
     ]
+  )
+  await backend.release()
+})
+
+test('privileged rename binds both parents and preserves raced foreign entries', async () => {
+  const success = createBackendHarness({
+    privilegedTree: {
+      '/root/source': { type: 'file', content: 'owned' }
+    }
+  })
+  const successBackend = await createRootBackend(success)
+  assert.equal(await successBackend.sftp.rename('/root/source', '/root/target'), 1)
+  assert.equal(success.privilegedNodes.has('/root/source'), false)
+  assert.equal(success.privilegedNodes.get('/root/target').content.toString(), 'owned')
+  const request = success.requests.find(item => item.operation === 'rename-bound')
+  assert.equal(request.args.sourceDevice, request.args.sourceParentDevice)
+  assert.equal(request.args.sourceDevice, request.args.targetParentDevice)
+  await successBackend.release()
+
+  const sourceRace = createBackendHarness({
+    replaceRenameSourceBeforeBound: '/root/source',
+    privilegedTree: {
+      '/root/source': { type: 'file', content: 'owned' }
+    }
+  })
+  const sourceRaceBackend = await createRootBackend(sourceRace)
+  await assert.rejects(
+    sourceRaceBackend.sftp.rename('/root/source', '/root/target'),
+    /rename|binding|race|操作失败/i
+  )
+  assert.equal(sourceRace.privilegedNodes.has('/root/target'), false)
+  assert.equal(
+    sourceRace.privilegedNodes.get('/root/source').content.toString(),
+    'foreign source'
+  )
+  await sourceRaceBackend.release()
+
+  const targetRace = createBackendHarness({
+    raceRenameTarget: '/root/target',
+    privilegedTree: {
+      '/root/source': { type: 'file', content: 'owned' }
+    }
+  })
+  const targetRaceBackend = await createRootBackend(targetRace)
+  await assert.rejects(
+    targetRaceBackend.sftp.rename('/root/source', '/root/target'),
+    /rename|exists|race|操作失败/i
+  )
+  assert.equal(targetRace.privilegedNodes.get('/root/source').content.toString(), 'owned')
+  assert.equal(targetRace.privilegedNodes.get('/root/target').content.toString(), 'foreign target')
+  await targetRaceBackend.release()
+})
+
+test('real transaction adapter cannot overwrite a target raced into bound rename', async () => {
+  const { createSftpTransactionAdapter } = await importModule(
+    'src/client/components/sftp/sftp-transaction-adapter.js'
+  )
+  const { buildSideEffectSafetyRequest } = await importModule(
+    'src/client/common/safety-transactions/side-effect-model.js'
+  )
+  const sourcePath = '/srv/app/source.txt'
+  const targetPath = '/srv/app/target.txt'
+  const harness = createBackendHarness({
+    raceRenameTarget: targetPath,
+    privilegedTree: {
+      [sourcePath]: { type: 'file', content: 'owned source' }
+    }
+  })
+  const backend = await createRootBackend(harness)
+  const operation = await buildSideEffectSafetyRequest({
+    id: 'privileged-rename-raced-target',
+    source: 'sftp',
+    title: 'privileged rename race',
+    endpoint: {
+      host: 'prod.example.com',
+      port: 22,
+      username: 'root',
+      tabId: 'tab-1',
+      pid: 1001,
+      sessionType: 'sftp'
+    },
+    effect: {
+      adapter: 'sftp',
+      action: 'rename',
+      paths: { source: sourcePath, target: targetPath },
+      resources: [
+        { path: sourcePath, type: 'file' },
+        { path: targetPath, type: 'file' }
+      ],
+      type: 'file',
+      expected: {}
+    }
+  })
+  const adapter = createSftpTransactionAdapter({ getSftp: () => backend.sftp })
+  Object.assign(operation, await adapter.prepare(operation))
+
+  await assert.rejects(adapter.beforeExecute(operation), /rename|race|操作失败/i)
+  assert.equal(
+    harness.privilegedNodes.get(sourcePath).content.toString(),
+    'owned source'
+  )
+  assert.equal(
+    harness.privilegedNodes.get(targetPath).content.toString(),
+    'foreign target'
   )
   await backend.release()
 })
@@ -876,11 +1135,13 @@ test('privileged reads use bounded logical streams and never send secrets throug
     lastSha256: sha256(secret.subarray(secret.length - 4)),
     boundarySha256: sha256(secret.subarray(secret.length - 4))
   })
-  assert.equal(harness.requests.filter(request => request.operation === 'stage-export').length, 4)
+  assert.equal(harness.requests.filter(request => request.operation === 'stage-export').length, 0)
+  assert.equal(harness.requests.filter(request => request.operation === 'stage-export-range').length, 5)
+  assert.equal(harness.requests.filter(request => request.operation === 'sha256-range-bound').length, 2)
   assert.equal(harness.requests.filter(request => (
     request.operation === 'stage-cleanup' &&
     request.args.objectName.startsWith('download-')
-  )).length, 4)
+  )).length, 5)
   assert.equal(JSON.stringify(harness.requests).includes('TOP-SECRET'), false)
   assert.equal(JSON.stringify(harness.requests).includes(secret.toString('base64')), false)
   await backend.release()
@@ -900,6 +1161,49 @@ test('privileged reads use bounded logical streams and never send secrets throug
     )
     await assert.rejects(rejected.release(), /cleanup proof|摘要|大小/i)
   }
+})
+
+test('privileged resume fingerprints a huge declared file with exactly two bounded digest windows', async () => {
+  const hugeSize = 1024 * 1024 * 1024 * 1024
+  const boundary = 64 * 1024
+  const harness = createBackendHarness({
+    privilegedTree: {
+      '/root/huge': {
+        type: 'file',
+        size: hugeSize,
+        virtualByte: 7,
+        content: ''
+      }
+    }
+  })
+  const backend = await createRootBackend(harness)
+  const initialSftpReads = harness.sftpReads.length
+  const result = await backend.sftp.describeResumeEntry('/root/huge', boundary)
+  const expectedDigest = sha256(Buffer.alloc(boundary, 7))
+
+  assert.equal(result.size, hugeSize)
+  assert.equal(result.firstSha256, expectedDigest)
+  assert.equal(result.lastSha256, expectedDigest)
+  const ranges = harness.requests.filter(request =>
+    request.operation === 'sha256-range-bound')
+  assert.equal(ranges.length, 2)
+  assert.deepEqual(ranges.map(request => ({
+    offset: request.args.offset,
+    maxBytes: request.args.maxBytes,
+    expectedSize: request.args.expectedSize
+  })), [
+    { offset: '0', maxBytes: String(boundary), expectedSize: String(hugeSize) },
+    {
+      offset: String(hugeSize - boundary),
+      maxBytes: String(boundary),
+      expectedSize: String(hugeSize)
+    }
+  ])
+  assert.equal(harness.requests.some(request =>
+    request.operation === 'stage-export' ||
+    request.operation === 'stage-export-range'), false)
+  assert.equal(harness.sftpReads.length, initialSftpReads)
+  await backend.release()
 })
 
 test('privileged chunk streams re-export after EOF and observe same-size source changes', async () => {
@@ -931,13 +1235,13 @@ test('privileged chunk streams re-export after EOF and observe same-size source 
   })
   assert.equal(Buffer.from(second.base64, 'base64').toString(), replacement.toString())
   assert.equal(harness.requests.filter(request =>
-    request.operation === 'stage-export' &&
+    request.operation === 'stage-export-range' &&
     request.args.sourcePath === '/root/changing'
-  ).length, 2)
+  ).length, 3)
   assert.equal(harness.requests.filter(request =>
     request.operation === 'stage-cleanup' &&
     request.args.objectName.startsWith('download-')
-  ).length, 2)
+  ).length, 3)
   await backend.release()
 })
 
@@ -981,7 +1285,7 @@ test('real transaction adapter re-exports a privileged source and refuses same-s
   const adapter = createSftpTransactionAdapter({ getSftp: () => backend.sftp })
   Object.assign(operation, await adapter.prepare(operation))
   const exportsAfterPrepare = harness.requests.filter(request =>
-    request.operation === 'stage-export' &&
+    request.operation === 'stage-export-range' &&
     request.args.sourcePath === sourcePath).length
 
   harness.privilegedNodes.get(sourcePath).content = Buffer.from('BBBB')
@@ -991,7 +1295,7 @@ test('real transaction adapter re-exports a privileged source and refuses same-s
   )
   assert.equal(harness.privilegedNodes.get(sourcePath).content.toString(), 'BBBB')
   assert.ok(harness.requests.filter(request =>
-    request.operation === 'stage-export' &&
+    request.operation === 'stage-export-range' &&
     request.args.sourcePath === sourcePath).length > exportsAfterPrepare)
   await backend.release()
 })
@@ -1009,12 +1313,10 @@ test('privileged readFile rejects files over 8 MiB without unbounded reads', asy
   const contentReads = harness.sftpReads.filter(read =>
     read.remotePath.includes('/download-')
   )
-  assert.equal(contentReads.length, 1)
-  assert.equal(contentReads[0].maxBytes, 64 * 1024)
-  assert.equal(harness.requests.some(request => (
-    request.operation === 'stage-cleanup' &&
-    request.args.objectName.startsWith('download-')
-  )), true)
+  assert.equal(contentReads.length, 0)
+  assert.equal(harness.requests.some(request =>
+    request.operation === 'stage-export' ||
+    request.operation === 'stage-export-range'), false)
   await backend.release()
 })
 
@@ -1038,7 +1340,7 @@ test('privileged chunk streams reject non-contiguous offsets and replace active 
     /offset|连续|logical|逻辑/i
   )
   assert.equal(harness.requests.filter(request =>
-    request.operation === 'stage-export' &&
+    request.operation === 'stage-export-range' &&
     request.args.sourcePath === '/root/stream'
   ).length, 2)
   assert.equal(harness.requests.filter(request =>
@@ -1050,7 +1352,8 @@ test('privileged chunk streams reject non-contiguous offsets and replace active 
 
 test('privileged mutations invalidate related logical read stages before changing paths', async () => {
   const harness = createBackendHarness({
-    rootFiles: { '/root/file': 'abcdefgh' }
+    rootFiles: { '/root/file': 'abcdefgh' },
+    missingLstatResult: true
   })
   const backend = await createRootBackend(harness)
   const first = await backend.sftp.readFileChunk('/root/file', {
@@ -1061,8 +1364,8 @@ test('privileged mutations invalidate related logical read stages before changin
     request.operation === 'stage-cleanup').length
 
   await backend.sftp.rm('/root/file')
-  assert.ok(harness.requests.filter(request =>
-    request.operation === 'stage-cleanup').length > cleanupBefore)
+  assert.equal(harness.requests.filter(request =>
+    request.operation === 'stage-cleanup').length, cleanupBefore)
   await assert.rejects(
     backend.sftp.readFileChunk('/root/file', {
       offset: first.nextOffset,
@@ -1075,7 +1378,7 @@ test('privileged mutations invalidate related logical read stages before changin
     offset: 0,
     maxBytes: 2
   })
-  await backend.sftp.rename('/root/file', '/root/renamed')
+  await backend.sftp.rename('/root/file', '/root/missing-renamed')
   await assert.rejects(
     backend.sftp.readFileChunk('/root/file', {
       offset: renamed.nextOffset,
@@ -1344,7 +1647,11 @@ test('privileged release closes first continues cleanup and lease release and is
     cleanupFailure: 'download-'
   })
   const backend = await createRootBackend(harness)
-  await backend.sftp.readFileChunk('/root/secret', { offset: 0, maxBytes: 1 })
+  const residual = backend.staging.allocate('download')
+  backend.staging.remember(residual.path, {
+    sha256: sha256(Buffer.from('secret')),
+    size: '6'
+  })
   await assert.rejects(backend.release(), /stage cleanup failed/)
   assert.equal(harness.leaseReleases, 1)
   assert.equal(harness.events.at(-1), 'lease:release')
@@ -1397,6 +1704,12 @@ test('privileged copyEntry copies a bounded tree without recursive shell operati
   assert.equal(harness.requests.some(request => request.operation === 'remove-entry'), false)
   assert.ok(harness.requests.filter(request => request.operation === 'stage-import')
     .every(request => request.args.mustBeAbsent === '1'))
+  assert.ok(harness.requests.filter(request => request.operation === 'stage-export')
+    .every(request => Number(request.args.expectedSize) <=
+      Number(request.args.maxSize)))
+  assert.ok(harness.requests.filter(request => request.operation === 'sha256-bound')
+    .every(request => Number(request.args.expectedSize) <=
+      Number(request.args.maxSize)))
   const publicExecutions = harness.executions.slice(start).filter(({ request }) =>
     request.operation !== 'stage-cleanup')
   assert.ok(publicExecutions.length > 0)

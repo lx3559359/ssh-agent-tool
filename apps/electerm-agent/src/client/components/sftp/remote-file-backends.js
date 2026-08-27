@@ -377,115 +377,161 @@ export async function createPrivilegedFileBackend ({
     return true
   }
 
-  async function createReadStream (path) {
-    const stage = staging.allocate('download')
-    let exported
-    try {
-      const metadata = requireBoundMetadata(
-        await rawFacade.lstat(path),
-        path,
-        'read source'
-      )
-      if (metadata.type !== 'file') {
-        throw new Error('root 文件后端 read source 必须为普通文件')
-      }
-      exported = digestResult(await executeRequest('stage-export', {
-        ...staging.rootBinding,
-        objectName: stage.objectName,
-        sourcePath: path,
-        ...sourceBindingArgs(metadata)
-      }), 'stage-export')
-      staging.remember(stage.path, {
-        sha256: exported.sha256,
-        size: String(exported.size)
-      })
-      return {
-        path,
-        stage,
-        proof: exported,
-        nextOffset: 0,
-        digest: createStreamingSha256()
-      }
-    } catch (error) {
-      if (!exported) {
-        try { staging.preserve(stage.path) } catch (preserveError) {
-          if (!error.cleanupError) error.cleanupError = preserveError
-        }
-      }
-      throw error
+  async function createReadStream (path, signal, maxTotalSize) {
+    const metadata = requireBoundMetadata(
+      await rawFacade.lstat(path, { signal }),
+      path,
+      'read source'
+    )
+    if (metadata.type !== 'file') {
+      throw new Error('root 文件后端 read source 必须为普通文件')
+    }
+    if (metadata.size > maxTotalSize) {
+      throw new Error('root 文件后端 readFile 超过 8 MiB 安全上限')
+    }
+    return {
+      path,
+      metadata,
+      nextOffset: 0,
+      digest: createStreamingSha256()
     }
   }
 
   async function closeReadStream (stream, primaryError) {
     if (readStreams.get(stream.path) === stream) readStreams.delete(stream.path)
-    try {
-      await staging.cleanup(stream.stage.path)
-    } catch (cleanupError) {
-      if (primaryError) primaryError.cleanupError ||= cleanupError
-      else throw cleanupError
-    }
     if (primaryError) throw primaryError
     return true
   }
 
-  async function readStreamChunk (stream, maxBytes) {
-    staging.assertCurrent()
-    const chunk = await sftp.readFileChunk(stream.stage.path, {
-      offset: stream.nextOffset,
-      maxBytes
-    })
-    staging.assertCurrent()
-    if (!chunk || chunk.offset !== stream.nextOffset ||
-      !Number.isSafeInteger(chunk.nextOffset) ||
-      !Number.isSafeInteger(chunk.totalBytes) || chunk.totalBytes < 0 ||
-      chunk.totalBytes !== stream.proof.size) {
-      return closeReadStream(
-        stream,
-        new Error('root 文件后端 SFTP stage 分块结果无效')
-      )
-    }
-    const bytes = bytesFromBase64(chunk.base64)
-    if (bytes.byteLength !== chunk.bytesRead || bytes.byteLength > maxBytes ||
-      chunk.nextOffset !== stream.nextOffset + bytes.byteLength ||
-      chunk.nextOffset > chunk.totalBytes ||
-      chunk.hasMore !== (chunk.nextOffset < chunk.totalBytes) ||
-      (chunk.hasMore && bytes.byteLength === 0)) {
-      return closeReadStream(
-        stream,
-        new Error('root 文件后端 SFTP stage 分块长度无效')
-      )
-    }
-    stream.digest.update(bytes)
-    stream.nextOffset = chunk.nextOffset
-    if (!chunk.hasMore) {
-      const proofError = stream.digest.size !== stream.proof.size ||
-        stream.digest.digestHex() !== stream.proof.sha256
-        ? new Error('root 文件后端 SFTP stage 摘要或大小不匹配')
-        : null
-      await closeReadStream(stream, proofError)
-    }
-    return {
-      base64: chunk.base64,
-      offset: chunk.offset,
-      nextOffset: chunk.nextOffset,
-      bytesRead: chunk.bytesRead,
-      totalBytes: chunk.totalBytes,
-      hasMore: chunk.hasMore
+  async function boundDigest (stream, operation, offset, maxBytes, signal) {
+    const scratch = staging.allocate('download')
+    try {
+      const result = digestResult(await executeRequest(operation, {
+        ...staging.rootBinding,
+        objectName: scratch.objectName,
+        path: stream.path,
+        ...sourceBindingArgs(stream.metadata),
+        expectedSize: String(stream.metadata.size),
+        maxSize: String(stream.maxSize ?? stream.metadata.size),
+        ...(operation === 'sha256-range-bound'
+          ? { offset: String(offset), maxBytes: String(maxBytes) }
+          : {})
+      }, { signal }), operation)
+      staging.abandon(scratch.path)
+      return result
+    } catch (error) {
+      try { staging.preserve(scratch.path) } catch (preserveError) {
+        error.cleanupError ||= preserveError
+      }
+      throw error
     }
   }
 
-  async function readLogicalChunk (path, requestedOffset, requestedMaxBytes) {
+  async function readStreamChunk (stream, maxBytes, signal) {
+    const stage = staging.allocate('download')
+    let hasProof = false
+    let primaryError
+    let response
+    try {
+      const proof = digestResult(await executeRequest('stage-export-range', {
+        ...staging.rootBinding,
+        objectName: stage.objectName,
+        sourcePath: stream.path,
+        ...sourceBindingArgs(stream.metadata),
+        expectedSize: String(stream.metadata.size),
+        maxSize: String(stream.metadata.size),
+        offset: String(stream.nextOffset),
+        maxBytes: String(maxBytes)
+      }, { signal }), 'stage-export-range')
+      staging.remember(stage.path, {
+        sha256: proof.sha256,
+        size: String(proof.size)
+      })
+      hasProof = true
+      if (proof.size > maxBytes ||
+        proof.size !== Math.min(maxBytes, stream.metadata.size - stream.nextOffset)) {
+        throw new Error('root 文件后端 range stage 大小无效')
+      }
+      staging.assertCurrent()
+      const chunk = await sftp.readFileChunk(stage.path, {
+        offset: 0,
+        maxBytes
+      })
+      staging.assertCurrent()
+      if (!chunk || chunk.offset !== 0 ||
+        !Number.isSafeInteger(chunk.nextOffset) ||
+        !Number.isSafeInteger(chunk.totalBytes) || chunk.totalBytes < 0 ||
+        chunk.totalBytes !== proof.size) {
+        throw new Error('root 文件后端 SFTP range stage 分块结果无效')
+      }
+      const bytes = bytesFromBase64(chunk.base64)
+      if (bytes.byteLength !== chunk.bytesRead || bytes.byteLength !== proof.size ||
+        chunk.nextOffset !== bytes.byteLength || chunk.hasMore ||
+        await sha256Hex(bytes) !== proof.sha256) {
+        throw new Error('root 文件后端 SFTP range stage 摘要或大小不匹配')
+      }
+      const offset = stream.nextOffset
+      stream.digest.update(bytes)
+      stream.nextOffset += bytes.byteLength
+      const hasMore = stream.nextOffset < stream.metadata.size
+      if (!hasMore) {
+        const whole = await boundDigest(
+          stream,
+          'sha256-bound',
+          0,
+          readChunkBytes,
+          signal
+        )
+        if (whole.size !== stream.metadata.size ||
+          whole.sha256 !== stream.digest.digestHex()) {
+          throw new Error('root 文件后端源文件摘要或大小发生变化')
+        }
+      }
+      response = {
+        base64: chunk.base64,
+        offset,
+        nextOffset: stream.nextOffset,
+        bytesRead: bytes.byteLength,
+        totalBytes: stream.metadata.size,
+        hasMore
+      }
+    } catch (error) {
+      primaryError = error
+    }
+    if (hasProof) {
+      try { await staging.cleanup(stage.path) } catch (cleanupError) {
+        if (primaryError) primaryError.cleanupError ||= cleanupError
+        else primaryError = cleanupError
+      }
+    } else {
+      try { staging.preserve(stage.path) } catch (preserveError) {
+        if (primaryError) primaryError.cleanupError ||= preserveError
+        else primaryError = preserveError
+      }
+    }
+    if (primaryError) return closeReadStream(stream, primaryError)
+    if (!response.hasMore) await closeReadStream(stream)
+    return response
+  }
+
+  async function readLogicalChunk (
+    path,
+    requestedOffset,
+    requestedMaxBytes,
+    signal,
+    maxTotalSize = Number.MAX_SAFE_INTEGER
+  ) {
     return withReadLock(path, async () => {
       let stream = readStreams.get(path)
       if (requestedOffset === 0) {
         if (stream) await closeReadStream(stream)
-        stream = await createReadStream(path)
+        stream = await createReadStream(path, signal, maxTotalSize)
         readStreams.set(path, stream)
       } else if (!stream || stream.nextOffset !== requestedOffset) {
         if (stream) await closeReadStream(stream)
         throw new Error('root 文件后端 readFileChunk offset 与当前逻辑读取不连续')
       }
-      return readStreamChunk(stream, requestedMaxBytes)
+      return readStreamChunk(stream, requestedMaxBytes, signal)
     })
   }
 
@@ -565,6 +611,7 @@ export async function createPrivilegedFileBackend ({
         throw new Error('root 文件后端拒绝复制或删除特殊文件类型')
       }
       nodes += 1
+      const remainingBytes = copyLimits.maxTotalBytes - totalBytes
       totalBytes += metadata.type === 'file' ? metadata.size : 0
       if (nodes > copyLimits.maxNodes) {
         throw new Error('root 文件后端节点数超过安全预算')
@@ -574,15 +621,13 @@ export async function createPrivilegedFileBackend ({
         throw new Error('root 文件后端总字节数超过安全预算')
       }
       const proof = metadata.type === 'file'
-        ? digestResult(await executeRequest('sha256-bound', {
-          path,
-          ...sourceBindingArgs(metadata)
-        }, { signal }), 'sha256-bound')
+        ? await boundDigest({ path, metadata, maxSize: remainingBytes },
+          'sha256-bound', 0, readChunkBytes, signal)
         : null
       if (proof && proof.size !== metadata.size) {
         throw new Error('root 文件后端 manifest 文件大小发生变化')
       }
-      const entry = { path, depth, metadata, proof }
+      const entry = { path, depth, metadata, proof, maxSize: remainingBytes }
       manifest.push(entry)
       if (metadata.type === 'directory') {
         const children = await boundList(path, metadata, signal)
@@ -626,7 +671,9 @@ export async function createPrivilegedFileBackend ({
         ...staging.rootBinding,
         objectName: stage.objectName,
         sourcePath: entry.path,
-        ...sourceBindingArgs(entry.metadata)
+        ...sourceBindingArgs(entry.metadata),
+        expectedSize: String(entry.metadata.size),
+        maxSize: String(entry.maxSize)
       }, { signal }), 'stage-export')
       staging.remember(stage.path, {
         sha256: exported.sha256,
@@ -899,24 +946,31 @@ export async function createPrivilegedFileBackend ({
     },
     async readFile (path) {
       const remotePath = canonicalFilePath(path)
+      const initial = requireBoundMetadata(
+        await rawFacade.lstat(remotePath),
+        remotePath,
+        'read source'
+      )
+      if (initial.type !== 'file') {
+        throw new Error('root 文件后端 read source 必须为普通文件')
+      }
+      if (initial.size > maxReadFileBytes) {
+        throw new Error('root 文件后端 readFile 超过 8 MiB 安全上限')
+      }
       const parts = []
       let length = 0
       let offset = 0
       let hasMore
       do {
-        const chunk = await rawFacade.readFileChunk(remotePath, {
+        const chunk = await readLogicalChunk(
+          remotePath,
           offset,
-          maxBytes: readChunkBytes
-        })
+          readChunkBytes,
+          undefined,
+          maxReadFileBytes
+        )
         if (chunk.totalBytes > maxReadFileBytes) {
-          const error = new Error('root 文件后端 readFile 超过 8 MiB 安全上限')
-          const stream = readStreams.get(remotePath)
-          if (stream) {
-            try { await closeReadStream(stream) } catch (cleanupError) {
-              error.cleanupError = cleanupError
-            }
-          }
-          throw error
+          throw new Error('root 文件后端 readFile 超过 8 MiB 安全上限')
         }
         const bytes = bytesFromBase64(chunk.base64)
         parts.push(bytes)
@@ -928,6 +982,13 @@ export async function createPrivilegedFileBackend ({
     },
     async readFileChunk (path, options = {}) {
       const remotePath = canonicalFilePath(path)
+      if (!options || typeof options !== 'object' || Array.isArray(options) ||
+        Object.keys(options).some(key => !['offset', 'maxBytes', 'signal'].includes(key))) {
+        throw new Error('root 文件后端 readFileChunk options 无效')
+      }
+      const { signal } = normalizeCancellableOptions(
+        Object.hasOwn(options, 'signal') ? { signal: options.signal } : undefined
+      )
       const requestedOffset = options.offset === undefined ? 0 : Number(options.offset)
       const requestedMaxBytes = options.maxBytes === undefined
         ? readChunkBytes
@@ -939,7 +1000,8 @@ export async function createPrivilegedFileBackend ({
       return readLogicalChunk(
         remotePath,
         requestedOffset,
-        Math.min(requestedMaxBytes, readChunkBytes)
+        Math.min(requestedMaxBytes, readChunkBytes),
+        signal
       )
     },
     async writeFile (path, value, requestedMode) {
@@ -1045,13 +1107,49 @@ export async function createPrivilegedFileBackend ({
       const remotePath = canonicalFilePath(path)
       return fixedMutation('touch', { path: remotePath }, [remotePath])
     },
-    rename: (source, target) => {
+    async rename (source, target, options) {
+      const { signal } = normalizeCancellableOptions(options)
       const sourcePath = canonicalFilePath(source, 'source')
       const targetPath = canonicalFilePath(target, 'target')
-      return fixedMutation('rename', {
-        source: sourcePath,
-        target: targetPath
-      }, [sourcePath, targetPath])
+      if (sourcePath === targetPath) return 1
+      throwIfAborted(signal)
+      const sourceMetadata = requireBoundMetadata(
+        await rawFacade.lstat(sourcePath, { signal }),
+        sourcePath,
+        'rename source'
+      )
+      if (!['file', 'directory'].includes(sourceMetadata.type)) {
+        throw new Error('root 文件后端 rename source 必须为普通文件或目录')
+      }
+      if (await lstatOrMissing(targetPath, signal)) {
+        const error = new Error(`root 文件后端 rename target 已存在：${targetPath}`)
+        error.code = 'EEXIST'
+        throw error
+      }
+      const targetParentPath = parentFilePath(targetPath)
+      const targetParent = requireBoundMetadata(
+        await rawFacade.lstat(targetParentPath, { signal }),
+        targetParentPath,
+        'rename target parent'
+      )
+      if (targetParent.type !== 'directory') {
+        throw new Error('root 文件后端 rename target parent 不是目录')
+      }
+      if (String(sourceMetadata.device) !== String(sourceMetadata.parentDevice) ||
+        String(sourceMetadata.device) !== String(targetParent.device)) {
+        const error = new Error('root 文件后端 rename 不允许跨文件系统')
+        error.code = 'EXDEV'
+        throw error
+      }
+      await invalidateReadStreams(sourcePath, targetPath)
+      await executeRequest('rename-bound', {
+        sourcePath,
+        ...sourceBindingArgs(sourceMetadata),
+        sourceType: sourceMetadata.type,
+        targetPath,
+        ...targetParentBindingArgs(targetParentPath, targetParent)
+      }, { signal })
+      return 1
     },
     rm: path => {
       const remotePath = canonicalFilePath(path)
@@ -1073,52 +1171,36 @@ export async function createPrivilegedFileBackend ({
     copyEntry: copyTree,
     removeEntry: removeTree,
     cp: copyTree,
-    mv: (source, target) => rawFacade.rename(source, target),
+    mv: (source, target, options) => rawFacade.rename(source, target, options),
     async describeResumeEntry (path, boundarySize = 64 * 1024) {
       const remotePath = canonicalFilePath(path)
       const limit = Math.min(
         readChunkBytes,
         Math.max(1, Number(boundarySize) || readChunkBytes)
       )
-      let offset = 0
-      let hasMore
-      let totalBytes = 0
-      let first = new Uint8Array(0)
-      let last = new Uint8Array(0)
-      do {
-        const chunk = await rawFacade.readFileChunk(remotePath, {
-          offset,
-          maxBytes: readChunkBytes
-        })
-        const bytes = bytesFromBase64(chunk.base64)
-        if (first.byteLength < limit) {
-          const needed = limit - first.byteLength
-          first = concatBytes([
-            first,
-            bytes.subarray(0, needed)
-          ], Math.min(limit, first.byteLength + bytes.byteLength))
-        }
-        if (bytes.byteLength >= limit) {
-          last = bytes.subarray(bytes.byteLength - limit)
-        } else {
-          const retained = last.subarray(Math.max(0, last.byteLength + bytes.byteLength - limit))
-          last = concatBytes([retained, bytes], retained.byteLength + bytes.byteLength)
-        }
-        offset = chunk.nextOffset
-        totalBytes = chunk.totalBytes
-        hasMore = chunk.hasMore
-      } while (hasMore)
-      const stat = await rawFacade.lstat(remotePath)
-      const [firstSha256, lastSha256] = await Promise.all([
-        sha256Hex(first),
-        sha256Hex(last)
-      ])
+      const stat = requireBoundMetadata(
+        await rawFacade.lstat(remotePath),
+        remotePath,
+        'resume source'
+      )
+      if (stat.type !== 'file') {
+        throw new Error('root 文件后端 resume source 必须为普通文件')
+      }
+      const first = await boundDigest(
+        { path: remotePath, metadata: stat },
+        'sha256-range-bound', 0, limit
+      )
+      const lastOffset = Math.max(0, stat.size - limit)
+      const last = await boundDigest(
+        { path: remotePath, metadata: stat },
+        'sha256-range-bound', lastOffset, limit
+      )
       return {
-        size: totalBytes,
+        size: stat.size,
         mtimeMs: stat.mtime * 1000,
-        firstSha256,
-        lastSha256,
-        boundarySha256: lastSha256
+        firstSha256: first.sha256,
+        lastSha256: last.sha256,
+        boundarySha256: last.sha256
       }
     }
   }
