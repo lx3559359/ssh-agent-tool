@@ -934,6 +934,89 @@ test('rename-bound fixes both parent and entry bindings around a no-clobber move
   assert.match(command, /__sp_rollback_rename/)
 })
 
+test('rename-bound rollback never moves an unproven post-move target replacement', async () => {
+  const { buildPrivilegedFileCommand } = await importModule(protocolModule)
+  const command = buildPrivilegedFileCommand({
+    token: 'dd'.repeat(24),
+    request: {
+      operation: 'rename-bound',
+      args: renameBinding()
+    }
+  })
+  const start = command.indexOf('__sp_rollback_rename()')
+  const end = command.indexOf(' };', start)
+  assert.ok(start >= 0 && end > start)
+  const rollback = command.slice(start, end)
+
+  assert.match(
+    rollback,
+    /__sp_entry_matches "\$__sp_targetRef" "\$__sp_sourceDevice" "\$__sp_sourceInode" "\$__sp_sourceType"/
+  )
+  assert.match(rollback, /__sp_rename_parents_match/)
+  assert.doesNotMatch(rollback, /__sp_wrongDevice|__sp_wrongInode/)
+  assert.equal(
+    rollback.indexOf('__sp_entry_matches "$__sp_targetRef"') <
+      rollback.indexOf('mv -nT -- "$__sp_targetRef" "$__sp_sourceRef"'),
+    true
+  )
+})
+
+test('rename-bound rollback shell preserves a foreign inode and restores only the expected source inode', {
+  skip: !bashAvailable
+}, async () => {
+  const { buildPrivilegedFileCommand } = await importModule(protocolModule)
+  const command = buildPrivilegedFileCommand({
+    token: 'de'.repeat(24),
+    request: { operation: 'rename-bound', args: renameBinding() }
+  })
+  const start = command.indexOf('__sp_rollback_rename()')
+  const end = command.indexOf(' };', start)
+  assert.ok(start >= 0 && end > start)
+  const rollbackFunction = command.slice(start, end + 2)
+  const nativeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-rename-rollback-'))
+  try {
+    const sourcePath = toBashPath(path.join(nativeRoot, 'source'))
+    const targetPath = toBashPath(path.join(nativeRoot, 'target'))
+    const expectedPath = toBashPath(path.join(nativeRoot, 'expected'))
+    fs.writeFileSync(path.join(nativeRoot, 'expected'), 'expected source')
+    fs.writeFileSync(path.join(nativeRoot, 'target'), 'foreign target')
+    const binding = runBash(
+      `stat -c '%d;%i' -- ${quoteForBash(expectedPath)}`
+    )
+    assert.equal(binding.status, 0, binding.stderr)
+    const [sourceDevice, sourceInode] = binding.stdout.trim().split(';')
+    const common = [
+      `__sp_sourceRef=${quoteForBash(sourcePath)}`,
+      `__sp_targetRef=${quoteForBash(targetPath)}`,
+      '__sp_sourceType=file',
+      `__sp_sourceDevice=${quoteForBash(sourceDevice)}`,
+      `__sp_sourceInode=${quoteForBash(sourceInode)}`,
+      '__sp_entry_matches() { [ ! -L "$1" ] && [ -f "$1" ] && [ "$(stat -c %d -- "$1")" = "$2" ] && [ "$(stat -c %i -- "$1")" = "$3" ]; }',
+      '__sp_rename_parents_match() { return 0; }',
+      rollbackFunction
+    ]
+    const foreign = runBash([
+      ...common,
+      '__sp_rollback_rename',
+      '[ ! -e "$__sp_sourceRef" ] && [ ! -L "$__sp_sourceRef" ]',
+      '[ "$(cat -- "$__sp_targetRef")" = "foreign target" ]'
+    ].join('\n'))
+    assert.equal(foreign.status, 0, foreign.stdout + foreign.stderr)
+
+    fs.rmSync(path.join(nativeRoot, 'target'))
+    fs.renameSync(path.join(nativeRoot, 'expected'), path.join(nativeRoot, 'target'))
+    const expected = runBash([
+      ...common,
+      '__sp_rollback_rename',
+      '[ "$(cat -- "$__sp_sourceRef")" = "expected source" ]',
+      '[ ! -e "$__sp_targetRef" ] && [ ! -L "$__sp_targetRef" ]'
+    ].join('\n'))
+    assert.equal(expected.status, 0, expected.stdout + expected.stderr)
+  } finally {
+    fs.rmSync(nativeRoot, { recursive: true, force: true })
+  }
+})
+
 test('bounded source producers require trusted sizes and expose only fixed range operations', async () => {
   const {
     buildPrivilegedFileCommand,
