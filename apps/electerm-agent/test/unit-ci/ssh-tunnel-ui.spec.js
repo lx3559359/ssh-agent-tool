@@ -840,7 +840,7 @@ test('remote access card shows only the requested listener and always requires s
   const card = source('src/client/components/ssh-tunnel/ssh-tunnel-runtime-card.jsx')
   const manual = source('docs/USER_GUIDE_ZH.md')
   const { getShellPilotTranslation } = await loadTunnelCatalog()
-  const remoteBranch = card.match(/if \(usage\.kind === 'remote'\) \{([\s\S]*?)\n {2}\}\n\n {2}return \(/)?.[1] || ''
+  const remoteBranch = card.match(/if \(usage\.kind === 'remote'\) \{([\s\S]*?)\r?\n {2}\}\r?\n\r?\n {2}return \(/)?.[1] || ''
 
   assert.match(remoteBranch, /shellpilotTunnelRemoteRequestedListenAddress[\s\S]*usage\.requestedListenEndpoint/)
   assert.match(remoteBranch, /shellpilotTunnelRemoteListenVerification/)
