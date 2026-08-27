@@ -146,6 +146,22 @@ function createFakeSftp (options = {}) {
       if (!node) throw missing(remotePath)
       return node.content.toString('utf8')
     },
+    async readFileChunk (remotePath, readOptions = {}) {
+      calls.push(['readFileChunk', remotePath, readOptions])
+      const node = nodes.get(remotePath)
+      if (!node) throw missing(remotePath)
+      const offset = readOptions.offset || 0
+      const maxBytes = readOptions.maxBytes || 64 * 1024
+      const bytes = node.content.subarray(offset, offset + maxBytes)
+      return {
+        base64: bytes.toString('base64'),
+        offset,
+        nextOffset: offset + bytes.length,
+        bytesRead: bytes.length,
+        totalBytes: node.content.length,
+        hasMore: offset + bytes.length < node.content.length
+      }
+    },
     async rm (remotePath) {
       calls.push(['rm', remotePath])
       const node = nodes.get(remotePath)
@@ -284,6 +300,9 @@ test('staging handshake binds one canonical private root and cleans it idempoten
   assert.equal(handshake.operation, 'stage-handshake')
   assert.equal(Object.isFrozen(handshake), true)
   assert.equal(handshake.args.rootPath, session.root)
+  assert.equal(sftp.calls.some(call => call[0] === 'readFile'), false)
+  assert.deepEqual(sftp.calls.filter(call => call[0] === 'readFileChunk')
+    .map(call => call[2].maxBytes), [65, 49])
 
   const upload = session.allocate('upload')
   const download = session.allocate('download')

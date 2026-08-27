@@ -39,11 +39,16 @@ function encodeBase64 (bytes) {
   return btoa(binary)
 }
 
-function decodeText (value) {
-  if (typeof value === 'string') return value
-  if (value instanceof Uint8Array) return new TextDecoder().decode(value)
-  if (value instanceof ArrayBuffer) return new TextDecoder().decode(value)
-  return String(value ?? '')
+function decodeBase64Bytes (value) {
+  const text = String(value ?? '')
+  if (text.length % 4 !== 0 ||
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(text)) {
+    throw new Error('特权暂存区 SFTP Base64 无效')
+  }
+  const binary = atob(text)
+  const bytes = Uint8Array.from(binary, char => char.charCodeAt(0))
+  if (encodeBase64(bytes) !== text) throw new Error('特权暂存区 SFTP Base64 非规范')
+  return bytes
 }
 
 async function sha256Hex (value) {
@@ -63,6 +68,25 @@ async function lstatOrNull (sftp, path) {
     if (isMissingError(error)) return null
     throw error
   }
+}
+
+async function readExactFile (sftp, path, expectedBytes, assertCurrent) {
+  assertCurrent()
+  const chunk = await sftp.readFileChunk(path, {
+    offset: 0,
+    maxBytes: expectedBytes + 1
+  })
+  assertCurrent()
+  if (!chunk || chunk.offset !== 0 || chunk.nextOffset !== expectedBytes ||
+    chunk.bytesRead !== expectedBytes || chunk.totalBytes !== expectedBytes ||
+    chunk.hasMore !== false) {
+    throw new Error('特权暂存区 SFTP bounded file 长度无效')
+  }
+  const bytes = decodeBase64Bytes(chunk.base64)
+  if (bytes.byteLength !== expectedBytes) {
+    throw new Error('特权暂存区 SFTP bounded file bytes 无效')
+  }
+  return bytes
 }
 
 function statType (stat) {
@@ -199,6 +223,7 @@ export async function createPrivilegedStagingSession ({
   if (!sftp || typeof sftp.getHomeDir !== 'function' ||
     typeof sftp.realpath !== 'function' || typeof sftp.lstat !== 'function' ||
     typeof sftp.list !== 'function' || typeof sftp.mkdir !== 'function' ||
+    typeof sftp.readFileChunk !== 'function' ||
     typeof sftp.createExclusiveFile !== 'function' ||
     typeof sftp.removeEmptyDirectory !== 'function') {
     throw new Error('特权暂存区缺少安全 SFTP 合同')
@@ -413,10 +438,15 @@ export async function createPrivilegedStagingSession ({
       'response'
     )
     assertCurrentEndpoint()
-    if (decodeText(await sftp.readFile(responsePath)) !== expectedResponse) {
+    const responseBytes = await readExactFile(
+      sftp,
+      responsePath,
+      64,
+      assertCurrentEndpoint
+    )
+    if (new TextDecoder().decode(responseBytes) !== expectedResponse) {
       throw new Error('特权暂存区 response 文件响应不匹配')
     }
-    assertCurrentEndpoint()
     const reboundRoot = requirePrivateDirectory(
       await sftp.lstat(root),
       '握手后 session root'
@@ -432,7 +462,13 @@ export async function createPrivilegedStagingSession ({
       '握手后 challenge'
     )
     assertCurrentEndpoint()
-    if (await sha256Hex(decodeText(await sftp.readFile(challengePath))) !== challenge) {
+    const reboundChallenge = await readExactFile(
+      sftp,
+      challengePath,
+      challengeBytes.byteLength,
+      assertCurrentEndpoint
+    )
+    if (await sha256Hex(reboundChallenge) !== challenge) {
       throw new Error('特权暂存区握手后 challenge 摘要不匹配')
     }
     assertCurrentEndpoint()

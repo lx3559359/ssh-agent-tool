@@ -29,6 +29,7 @@ function createBackendHarness (options = {}) {
   const rootFiles = new Map(Object.entries(options.rootFiles || {}))
   const requests = []
   const events = []
+  const sftpReads = []
   let leaseReleases = 0
   const sftp = {
     id: 'sftp-1',
@@ -109,6 +110,7 @@ function createBackendHarness (options = {}) {
     },
     async readFileChunk (remotePath, readOptions = {}) {
       events.push(`sftp:read:${remotePath}`)
+      sftpReads.push({ remotePath, ...readOptions })
       const node = nodes.get(remotePath)
       if (!node) throw missing(remotePath)
       const offset = readOptions.offset || 0
@@ -264,6 +266,7 @@ function createBackendHarness (options = {}) {
     lease,
     requests,
     events,
+    sftpReads,
     rootFiles,
     nodes,
     get leaseReleases () { return leaseReleases }
@@ -455,14 +458,18 @@ test('privileged facade maps fixed metadata and mutation methods to protocol req
   await backend.release()
 })
 
-test('privileged reads export once cache verified stage bytes and never send secrets through PTY', async () => {
+test('privileged reads use bounded logical streams and never send secrets through PTY', async () => {
   const secret = Buffer.from('TOP-SECRET\u0000bytes')
   const harness = createBackendHarness({ rootFiles: { '/root/secret': secret } })
   const backend = await createRootBackend(harness)
 
   assert.equal(await backend.sftp.readFile('/root/secret'), secret.toString('utf8'))
+  const prefix = await backend.sftp.readFileChunk('/root/secret', {
+    offset: 0,
+    maxBytes: 4
+  })
   const chunk = await backend.sftp.readFileChunk('/root/secret', {
-    offset: 4,
+    offset: prefix.nextOffset,
     maxBytes: 6
   })
   assert.deepEqual(chunk, {
@@ -473,20 +480,13 @@ test('privileged reads export once cache verified stage bytes and never send sec
     totalBytes: secret.length,
     hasMore: true
   })
+  const suffix = await backend.sftp.readFileChunk('/root/secret', {
+    offset: chunk.nextOffset,
+    maxBytes: 64 * 1024
+  })
+  assert.equal(suffix.hasMore, false)
   assert.equal(await backend.sftp.readFile('/root/secret'), secret.toString('utf8'))
   assert.equal((await backend.sftp.list('/')).length, 3)
-  const eof = await backend.sftp.readFileChunk('/root/secret', {
-    offset: secret.length + 100,
-    maxBytes: 128 * 1024
-  })
-  assert.deepEqual(eof, {
-    base64: '',
-    offset: secret.length,
-    nextOffset: secret.length,
-    bytesRead: 0,
-    totalBytes: secret.length,
-    hasMore: false
-  })
   const resume = await backend.sftp.describeResumeEntry('/root/secret', 4)
   assert.deepEqual(resume, {
     size: secret.length,
@@ -495,7 +495,11 @@ test('privileged reads export once cache verified stage bytes and never send sec
     lastSha256: sha256(secret.subarray(secret.length - 4)),
     boundarySha256: sha256(secret.subarray(secret.length - 4))
   })
-  assert.equal(harness.requests.filter(request => request.operation === 'stage-export').length, 1)
+  assert.equal(harness.requests.filter(request => request.operation === 'stage-export').length, 4)
+  assert.equal(harness.requests.filter(request => (
+    request.operation === 'stage-cleanup' &&
+    request.args.objectName.startsWith('download-')
+  )).length, 4)
   assert.equal(JSON.stringify(harness.requests).includes('TOP-SECRET'), false)
   assert.equal(JSON.stringify(harness.requests).includes(secret.toString('base64')), false)
   await backend.release()
@@ -509,9 +513,103 @@ test('privileged reads export once cache verified stage bytes and never send sec
       ...mismatch
     })
     const rejected = await createRootBackend(rejectedHarness)
-    await assert.rejects(rejected.sftp.readFile('/root/secret'), /SHA|digest|摘要|size|大小/i)
+    await assert.rejects(
+      rejected.sftp.readFile('/root/secret'),
+      /SHA|digest|摘要|size|大小|chunk|分块/i
+    )
     await assert.rejects(rejected.release(), /cleanup proof|摘要|大小/i)
   }
+})
+
+test('privileged chunk streams re-export after EOF and observe same-size source changes', async () => {
+  const original = Buffer.from('AAAA-BBBB-CCCC')
+  const replacement = Buffer.from('ZZZZ-YYYY-XXXX')
+  assert.equal(replacement.length, original.length)
+  const harness = createBackendHarness({
+    rootFiles: { '/root/changing': original }
+  })
+  const backend = await createRootBackend(harness)
+
+  const firstA = await backend.sftp.readFileChunk('/root/changing', {
+    offset: 0,
+    maxBytes: 5
+  })
+  const firstB = await backend.sftp.readFileChunk('/root/changing', {
+    offset: firstA.nextOffset,
+    maxBytes: 64 * 1024
+  })
+  assert.equal(Buffer.concat([
+    Buffer.from(firstA.base64, 'base64'),
+    Buffer.from(firstB.base64, 'base64')
+  ]).toString(), original.toString())
+
+  harness.rootFiles.set('/root/changing', replacement)
+  const second = await backend.sftp.readFileChunk('/root/changing', {
+    offset: 0,
+    maxBytes: 64 * 1024
+  })
+  assert.equal(Buffer.from(second.base64, 'base64').toString(), replacement.toString())
+  assert.equal(harness.requests.filter(request =>
+    request.operation === 'stage-export' &&
+    request.args.sourcePath === '/root/changing'
+  ).length, 2)
+  assert.equal(harness.requests.filter(request =>
+    request.operation === 'stage-cleanup' &&
+    request.args.objectName.startsWith('download-')
+  ).length, 2)
+  await backend.release()
+})
+
+test('privileged readFile rejects files over 8 MiB without unbounded reads', async () => {
+  const harness = createBackendHarness({
+    rootFiles: { '/root/too-large': Buffer.alloc(8 * 1024 * 1024 + 1, 7) }
+  })
+  const backend = await createRootBackend(harness)
+
+  await assert.rejects(
+    backend.sftp.readFile('/root/too-large'),
+    /8 MiB|上限|limit/i
+  )
+  const contentReads = harness.sftpReads.filter(read =>
+    read.remotePath.includes('/download-')
+  )
+  assert.equal(contentReads.length, 1)
+  assert.equal(contentReads[0].maxBytes, 64 * 1024)
+  assert.equal(harness.requests.some(request => (
+    request.operation === 'stage-cleanup' &&
+    request.args.objectName.startsWith('download-')
+  )), true)
+  await backend.release()
+})
+
+test('privileged chunk streams reject non-contiguous offsets and replace active zero-offset reads', async () => {
+  const content = Buffer.from('0123456789')
+  const harness = createBackendHarness({ rootFiles: { '/root/stream': content } })
+  const backend = await createRootBackend(harness)
+
+  const first = await backend.sftp.readFileChunk('/root/stream', {
+    offset: 0,
+    maxBytes: 3
+  })
+  assert.equal(first.nextOffset, 3)
+  const restarted = await backend.sftp.readFileChunk('/root/stream', {
+    offset: 0,
+    maxBytes: 2
+  })
+  assert.equal(restarted.nextOffset, 2)
+  await assert.rejects(
+    backend.sftp.readFileChunk('/root/stream', { offset: 1, maxBytes: 2 }),
+    /offset|连续|logical|逻辑/i
+  )
+  assert.equal(harness.requests.filter(request =>
+    request.operation === 'stage-export' &&
+    request.args.sourcePath === '/root/stream'
+  ).length, 2)
+  assert.equal(harness.requests.filter(request =>
+    request.operation === 'stage-cleanup' &&
+    request.args.objectName.startsWith('download-')
+  ).length, 2)
+  await backend.release()
 })
 
 test('privileged writes upload exclusive bytes then import only digest size and metadata', async () => {
@@ -738,7 +836,7 @@ test('privileged release closes first continues cleanup and lease release and is
     cleanupFailure: 'download-'
   })
   const backend = await createRootBackend(harness)
-  await backend.sftp.readFile('/root/secret')
+  await backend.sftp.readFileChunk('/root/secret', { offset: 0, maxBytes: 1 })
   await assert.rejects(backend.release(), /stage cleanup failed/)
   assert.equal(harness.leaseReleases, 1)
   assert.equal(harness.events.at(-1), 'lease:release')
