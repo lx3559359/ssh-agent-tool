@@ -316,7 +316,10 @@ const listBody = [
   '__sp_requestedDevice="$(stat -c %d -- "$__sp_path")" || return $?;',
   '__sp_requestedInode="$(stat -c %i -- "$__sp_path")" || return $?;',
   'cd -- "$__sp_path" || return $?;',
-  '__sp_listPwd="$(pwd -P)" || return $?;',
+  '__sp_listPwd="$(pwd -P && printf .)" || return $?;',
+  '__sp_pwdSentinel="$(printf "\\n.")" || return $?;',
+  'case "$__sp_listPwd" in *"$__sp_pwdSentinel") __sp_listPwd=$' +
+    '{__sp_listPwd%"$__sp_pwdSentinel"} ;; *) return 1 ;; esac;',
   '__sp_listCwdReal="$(realpath -- .)" || return $?;',
   '__sp_listCwdReal=$' + '{__sp_listCwdReal%?};',
   '__sp_listCwdReal=$' + '{__sp_listCwdReal%?};',

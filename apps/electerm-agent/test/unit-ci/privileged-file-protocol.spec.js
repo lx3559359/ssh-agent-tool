@@ -352,6 +352,32 @@ test('list rejects non-directories and directory symlinks but accepts an empty d
   }
 })
 
+test('list preserves multiple trailing newlines in the bound directory path', {
+  skip: !bashAvailable || process.platform === 'win32'
+}, async () => {
+  const nativeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-list-newline-'))
+  try {
+    const rootPath = toBashPath(nativeRoot)
+    const directoryPath = `${rootPath}/directory\n\n`
+    const create = runBash([
+      `mkdir -- ${quoteForBash(directoryPath)} || exit`,
+      `: > ${quoteForBash(`${directoryPath}/entry`)} || exit`
+    ].join('\n'))
+    assert.equal(create.status, 0, create.stderr)
+
+    const listed = await runRealProtocolOperation({
+      operation: 'list',
+      token: 'a9'.repeat(24),
+      args: { path: directoryPath }
+    })
+    assert.equal(listed.execution.status, 0, listed.execution.stderr)
+    assert.equal(listed.parser.exitCode(), 0)
+    assert.deepEqual(listed.result.entries.map(entry => entry.name), ['entry'])
+  } finally {
+    fs.rmSync(nativeRoot, { recursive: true, force: true })
+  }
+})
+
 test('list rejects more than 20000 real directory entries before emitting data', {
   skip: !bashAvailable
 }, async () => {
@@ -398,6 +424,10 @@ test('list binds one real directory and propagates producer status before glob e
   assert.match(command, /__sp_requestedDevice=.*stat -c %d -- "\$__sp_path"/)
   assert.match(command, /__sp_requestedInode=.*stat -c %i -- "\$__sp_path"/)
   assert.match(command, /__sp_listPwd=.*pwd -P/)
+  assert.match(command, /__sp_listPwd="\$\(pwd -P && printf \.\)" \|\| return \$\?/)
+  assert.match(command, /__sp_pwdSentinel="\$\(printf "\\n\."\)" \|\| return \$\?/)
+  assert.match(command, /case "\$__sp_listPwd" in \*"\$__sp_pwdSentinel"\)/)
+  assert.match(command, /__sp_listPwd=\$\{__sp_listPwd%"\$__sp_pwdSentinel"\}/)
   assert.match(command, /__sp_listCwdReal=.*realpath -- \./)
   assert.match(command, /"\$__sp_listCwdReal" = "\$__sp_listPwd"/)
   assert.match(command, /__sp_listDevice=.*stat -c %d -- \./)
