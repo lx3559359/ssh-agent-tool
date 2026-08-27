@@ -1,9 +1,53 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
+const { spawnSync } = require('node:child_process')
+const { createHash } = require('node:crypto')
+const fs = require('node:fs')
+const os = require('node:os')
+const path = require('node:path')
 const { importModule } = require('./helpers/import-esm')
 
 const protocolModule =
   'src/client/components/sftp/privileged-file-protocol.js'
+
+const bashExecutable = process.env.SHELLPILOT_TEST_BASH ||
+  (process.platform === 'win32'
+    ? 'C:/Program Files/Git/bin/bash.exe'
+    : 'bash')
+const bashAvailable = spawnSync(
+  bashExecutable,
+  ['--noprofile', '--norc', '-c', ':'],
+  { encoding: 'utf8' }
+).status === 0
+
+function runBash (script) {
+  return spawnSync(
+    bashExecutable,
+    ['--noprofile', '--norc', '-c', script],
+    { encoding: 'utf8' }
+  )
+}
+
+function quoteForBash (value) {
+  const quote = String.fromCharCode(39)
+  return quote + String(value).replaceAll(
+    quote,
+    `${quote}"${quote}"${quote}`
+  ) + quote
+}
+
+function toBashPath (nativePath) {
+  if (process.platform !== 'win32') return nativePath
+  const result = runBash(`cygpath -u ${quoteForBash(nativePath)}`)
+  assert.equal(result.status, 0, result.stderr)
+  return result.stdout.trim()
+}
+
+const allStageCapabilities = [
+  'sh=1', 'stat=1', 'base64=1', 'sha256=1', 'procFd=1',
+  'noclobber=1', 'cat=1', 'gnuStat=1', 'gnuMv=1',
+  'realpath=1', 'chown=1', 'chmod=1', 'rm=1'
+].join(',')
 
 function encodeMarkerField (value) {
   return Buffer.from(String(value), 'utf8').toString('base64')
@@ -34,6 +78,32 @@ function stageBinding (overrides = {}) {
     rootMode: '700',
     objectName: 'operation-token',
     ...overrides
+  }
+}
+
+async function listNamesFromRealBash (prelude, token) {
+  const {
+    buildPrivilegedFileCommand,
+    createPrivilegedFileParser,
+    createPrivilegedFileRequest
+  } = await importModule(protocolModule)
+  const nativeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-list-glob-'))
+  try {
+    fs.writeFileSync(path.join(nativeRoot, '.hidden'), 'hidden')
+    fs.writeFileSync(path.join(nativeRoot, 'visible'), 'visible')
+    const rootPath = toBashPath(nativeRoot)
+    const request = createPrivilegedFileRequest({
+      operation: 'list',
+      args: { path: rootPath }
+    })
+    const command = buildPrivilegedFileCommand({ token, request })
+    const result = runBash(`${prelude}\n${command}`)
+    assert.equal(result.status, 0, result.stdout + result.stderr)
+    const parser = createPrivilegedFileParser({ token, request })
+    parser.push(result.stdout)
+    return parser.result().entries.map(entry => entry.name)
+  } finally {
+    fs.rmSync(nativeRoot, { recursive: true, force: true })
   }
 }
 
@@ -109,6 +179,24 @@ test('privileged file parser accepts split ordered list metadata', async () => {
   })
 })
 
+test('list restores pathname expansion after inherited set -f', {
+  skip: !bashAvailable
+}, async () => {
+  assert.deepEqual(
+    await listNamesFromRealBash('set -f', '7'.repeat(48)),
+    ['.hidden', 'visible']
+  )
+})
+
+test('list clears inherited dotglob without duplicating hidden entries', {
+  skip: !bashAvailable
+}, async () => {
+  assert.deepEqual(
+    await listNamesFromRealBash('shopt -s dotglob', '8'.repeat(48)),
+    ['.hidden', 'visible']
+  )
+})
+
 test('privileged requests are deeply frozen and validate argument contracts', async () => {
   const { createPrivilegedFileRequest } = await importModule(protocolModule)
   const request = createPrivilegedFileRequest({
@@ -157,6 +245,20 @@ test('privileged requests are deeply frozen and validate argument contracts', as
     }),
     /参数值无效/
   )
+})
+
+test('request constructor immediately rejects script and every unknown argument', async () => {
+  const { createPrivilegedFileRequest } = await importModule(protocolModule)
+  for (const args of [
+    { script: 'touch /tmp/pwn' },
+    { shellCode: 'touch /tmp/pwn' },
+    { path: '/allowed', command: 'touch /tmp/pwn' }
+  ]) {
+    assert.throws(
+      () => createPrivilegedFileRequest({ operation: 'lstat', args }),
+      /参数合同/
+    )
+  }
 })
 
 test('privileged command builder exposes every fixed operation and fails closed on arguments', async () => {
@@ -261,7 +363,10 @@ test('privileged parser normalizes every fixed result shape', async () => {
 
   function parse (operation, kind, values = [], exitCode = 0) {
     const parser = createPrivilegedFileParser({ token, request: { operation } })
-    parser.push(startMarker(token))
+    const capabilities = operation.startsWith('stage-')
+      ? allStageCapabilities
+      : 'sh=1,stat=1'
+    parser.push(startMarker(token, capabilities))
     if (kind) {
       parser.push(fileMarker(
         token,
@@ -308,7 +413,9 @@ test('privileged parser normalizes every fixed result shape', async () => {
     'a'.repeat(64), '1000', '1001', '700', '/real/stage', '2049', '12345'
   ]), {
     kind: 'stage-handshake',
-    capabilities: { sh: true, stat: true },
+    capabilities: Object.fromEntries(
+      allStageCapabilities.split(',').map(value => [value.split('=')[0], true])
+    ),
     response: 'a'.repeat(64),
     uid: '1000',
     gid: '1001',
@@ -320,14 +427,192 @@ test('privileged parser normalizes every fixed result shape', async () => {
   for (const operation of ['stage-export', 'stage-import', 'sha256']) {
     assert.deepEqual(parse(operation, 'digest', ['b'.repeat(64), '12']), {
       kind: operation,
-      capabilities: { sh: true, stat: true },
+      capabilities: operation.startsWith('stage-')
+        ? Object.fromEntries(
+          allStageCapabilities.split(',').map(value => [value.split('=')[0], true])
+        )
+        : { sh: true, stat: true },
       sha256: 'b'.repeat(64),
       size: 12
     })
   }
 })
 
-test('privileged parser enforces boundary order and ignores other namespaces and tokens', async () => {
+test('stage parser rejects forged success when a required capability is false', async () => {
+  const { createPrivilegedFileParser } = await importModule(protocolModule)
+  const token = '4'.repeat(48)
+  const cases = [
+    ['stage-handshake', ['procFd', 'noclobber', 'realpath', 'chown'], [
+      'handshake', 'a'.repeat(64), '1000', '1001', '700',
+      '/real/stage', '2049', '12345'
+    ]],
+    ['stage-export', ['procFd', 'noclobber', 'cat', 'realpath', 'chown', 'chmod'], [
+      'digest', 'b'.repeat(64), '12'
+    ]],
+    ['stage-import', [
+      'procFd', 'noclobber', 'cat', 'gnuMv', 'realpath', 'chown', 'chmod'
+    ], ['digest', 'b'.repeat(64), '12']],
+    ['stage-cleanup', ['procFd', 'noclobber', 'realpath', 'rm'], null]
+  ]
+
+  for (const [operation, required, data] of cases) {
+    for (const capability of required) {
+      const parser = createPrivilegedFileParser({ token, request: { operation } })
+      parser.push(startMarker(
+        token,
+        allStageCapabilities.replace(`${capability}=1`, `${capability}=0`)
+      ))
+      if (data) {
+        parser.push(fileMarker(
+          token,
+          'data',
+          '1',
+          '1',
+          data[0],
+          ...data.slice(1).map(encodeMarkerField)
+        ))
+      }
+      assert.throws(
+        () => parser.push(fileMarker(token, 'end', '0')),
+        /能力/,
+        `${operation}:${capability}`
+      )
+    }
+  }
+})
+
+test('stage handshake shell fails when noclobber cannot be enabled', {
+  skip: !bashAvailable
+}, async () => {
+  const {
+    buildPrivilegedFileCommand,
+    createPrivilegedFileRequest
+  } = await importModule(protocolModule)
+  const setup = runBash([
+    '__test_root="$(mktemp -d)" || exit $?',
+    'printf challenge > "$__test_root/challenge-token" || exit $?',
+    'printf "%s\\n%s\\n%s\\n%s\\n" "$__test_root" "$(id -u)" "$(id -g)" "$(sha256sum "$__test_root/challenge-token" | cut -d " " -f 1)"'
+  ].join('; '))
+  assert.equal(setup.status, 0, setup.stderr)
+  const [rootPath, rootUid, rootGid, challenge] = setup.stdout.trim().split('\n')
+  const response = createHash('sha256')
+    .update(`${challenge}:root`)
+    .digest('hex')
+  const command = buildPrivilegedFileCommand({
+    token: '5'.repeat(48),
+    request: createPrivilegedFileRequest({
+      operation: 'stage-handshake',
+      args: {
+        rootPath,
+        challengeName: 'challenge-token',
+        responseName: 'response-token',
+        challenge,
+        rootUid,
+        rootGid,
+        rootMode: '700'
+      }
+    })
+  })
+  const result = runBash([
+    'set () { return 17; }',
+    `sha256sum () { if [ "$1" = -- ] && [ "$2" = ./response-token ]; then printf '%s  *%s\\n' ${quoteForBash(response)} "$2"; else command sha256sum "$@"; fi; }`,
+    'stat () {',
+    '  if [ "$1" = -c ] && [ "$2" = %a ] && [ "$3" = -- ]; then',
+    '    case "$4" in .) printf "700\\n"; return 0 ;; ./response-token) printf "600\\n"; return 0 ;; esac',
+    '  fi',
+    '  command stat "$@"',
+    '}',
+    command,
+    '__test_status=$?',
+    `rm -rf -- ${quoteForBash(rootPath)}`,
+    'exit "$__test_status"'
+  ].join('\n'))
+  assert.notEqual(result.status, 0, result.stdout + result.stderr)
+  assert.equal(result.stdout.includes(';end;0\u0007'), false)
+})
+
+test('stage request rejects a non-canonical root path', async () => {
+  const { createPrivilegedFileRequest } = await importModule(protocolModule)
+  const common = {
+    challengeName: 'challenge-token',
+    responseName: 'response-token',
+    challenge: 'a'.repeat(64),
+    rootUid: '1000',
+    rootGid: '1000',
+    rootMode: '700'
+  }
+  assert.throws(
+    () => createPrivilegedFileRequest({
+      operation: 'stage-handshake',
+      args: { ...common, rootPath: '/stage/session/' }
+    }),
+    /rootPath/
+  )
+})
+
+test('stage handshake shell rejects direct and intermediate directory symlinks', {
+  skip: !bashAvailable
+}, async () => {
+  const {
+    buildPrivilegedFileCommand,
+    createPrivilegedFileRequest
+  } = await importModule(protocolModule)
+  const common = {
+    challengeName: 'challenge-token',
+    responseName: 'response-token',
+    challenge: 'a'.repeat(64),
+    rootUid: '1000',
+    rootGid: '1000',
+    rootMode: '700'
+  }
+  const nativeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-stage-link-'))
+  try {
+    const nativeReal = path.join(nativeRoot, 'real')
+    const nativeChild = path.join(nativeReal, 'child')
+    const nativeLink = path.join(nativeRoot, 'link')
+    fs.mkdirSync(nativeChild, { recursive: true })
+    fs.symlinkSync(nativeReal, nativeLink, process.platform === 'win32' ? 'junction' : 'dir')
+    fs.writeFileSync(path.join(nativeChild, 'challenge-token'), 'challenge')
+    const bashLink = toBashPath(nativeLink)
+    const identity = runBash('printf "%s\\n%s\\n" "$(id -u)" "$(id -g)"')
+    assert.equal(identity.status, 0, identity.stderr)
+    const [rootUid, rootGid] = identity.stdout.trim().split('\n')
+    const challenge = createHash('sha256').update('challenge').digest('hex')
+    const response = createHash('sha256').update(`${challenge}:root`).digest('hex')
+
+    for (const rootPath of [bashLink, `${bashLink}/child`]) {
+      const command = buildPrivilegedFileCommand({
+        token: '6'.repeat(48),
+        request: createPrivilegedFileRequest({
+          operation: 'stage-handshake',
+          args: {
+            ...common,
+            rootPath,
+            challenge,
+            rootUid,
+            rootGid
+          }
+        })
+      })
+      const result = runBash([
+        `sha256sum () { if [ "$1" = -- ] && [ "$2" = ./response-token ]; then printf '%s  *%s\\n' ${quoteForBash(response)} "$2"; else command sha256sum "$@"; fi; }`,
+        'stat () {',
+        '  if [ "$1" = -c ] && [ "$2" = %a ] && [ "$3" = -- ]; then',
+        '    case "$4" in .) printf "700\\n"; return 0 ;; ./response-token) printf "600\\n"; return 0 ;; esac',
+        '  fi',
+        '  command stat "$@"',
+        '}',
+        command
+      ].join('\n'))
+      assert.notEqual(result.status, 0, `${rootPath}\n${result.stdout}${result.stderr}`)
+      assert.equal(result.stdout.includes(';end;0\u0007'), false)
+    }
+  } finally {
+    fs.rmSync(nativeRoot, { recursive: true, force: true })
+  }
+})
+
+test('privileged parser rejects its namespace wrong token and ignores other namespaces', async () => {
   const { createPrivilegedFileParser } = await importModule(protocolModule)
   const { createPtyTaskOutputParser } = await importModule(
     'src/client/components/operations-toolkit/runtime/pty-task-protocol.js'
@@ -336,7 +621,10 @@ test('privileged parser enforces boundary order and ignores other namespaces and
   const request = { operation: 'list' }
   const parser = createPrivilegedFileParser({ token, request })
 
-  parser.push(fileMarker('f'.repeat(48), 'start', 'bad', 'bad', 'bad'))
+  assert.throws(
+    () => parser.push(fileMarker('f'.repeat(48), 'start', 'bad', 'bad', 'bad')),
+    /token/
+  )
   parser.push(`\u001b]697;SHELLPILOT_OPS;${token};start;bad;bad\u0007`)
   assert.equal(parser.started(), false)
   parser.push(startMarker(token))

@@ -26,6 +26,39 @@ const allowedOperations = new Set([
   'sha256'
 ])
 
+const requiredStageCapabilities = Object.freeze({
+  'stage-handshake': Object.freeze([
+    'stat', 'base64', 'sha256', 'procFd', 'noclobber', 'gnuStat',
+    'realpath', 'chown'
+  ]),
+  'stage-export': Object.freeze([
+    'stat', 'base64', 'sha256', 'procFd', 'noclobber', 'cat', 'gnuStat',
+    'realpath', 'chown', 'chmod', 'rm'
+  ]),
+  'stage-import': Object.freeze([
+    'stat', 'base64', 'sha256', 'procFd', 'noclobber', 'cat', 'gnuStat',
+    'gnuMv', 'realpath', 'chown', 'chmod', 'rm'
+  ]),
+  'stage-cleanup': Object.freeze([
+    'stat', 'base64', 'procFd', 'noclobber', 'gnuStat', 'realpath', 'rm'
+  ])
+})
+
+const capabilityShellVariables = Object.freeze({
+  stat: '__sp_stat_cap',
+  base64: '__sp_base64_cap',
+  sha256: '__sp_sha256_cap',
+  procFd: '__sp_proc_fd_cap',
+  noclobber: '__sp_noclobber_cap',
+  cat: '__sp_cat_cap',
+  gnuStat: '__sp_gnu_stat_cap',
+  gnuMv: '__sp_gnu_mv_cap',
+  realpath: '__sp_realpath_cap',
+  chown: '__sp_chown_cap',
+  chmod: '__sp_chmod_cap',
+  rm: '__sp_rm_cap'
+})
+
 function encodeUtf8Base64 (value) {
   const bytes = new TextEncoder().encode(String(value))
   let binary = ''
@@ -67,6 +100,11 @@ function hasUnpairedSurrogate (value) {
     }
   }
   return false
+}
+
+function isCanonicalStageRootPath (value) {
+  if (!value.startsWith('/') || value === '/' || value.endsWith('/')) return false
+  return value.slice(1).split('/').every(part => part && part !== '.' && part !== '..')
 }
 
 const operationArguments = Object.freeze({
@@ -185,6 +223,22 @@ function decodeCondition (request) {
 }
 
 const listBody = [
+  'set +f || return $?;',
+  'if [ -n "$' + '{BASH_VERSION-}" ]; then',
+  '  builtin shopt -u dotglob || return $?;',
+  '  builtin shopt -u nullglob || return $?;',
+  '  builtin shopt -u failglob || return $?;',
+  '  builtin shopt -u nocaseglob || return $?;',
+  '  builtin shopt -s globskipdots 2>/dev/null || :;',
+  'fi;',
+  'if [ -n "$' + '{ZSH_VERSION-}" ]; then',
+  '  unsetopt GLOB_DOTS || return $?;',
+  '  unsetopt NULL_GLOB || return $?;',
+  '  unsetopt CSH_NULL_GLOB || return $?;',
+  '  unsetopt NOMATCH || return $?;',
+  '  unsetopt NO_CASE_GLOB || return $?;',
+  '  unsetopt NUMERIC_GLOB_SORT || return $?;',
+  'fi;',
   '__sp_total=0;',
   'for __sp_entry in "$__sp_path"/.[!.]* "$__sp_path"/..?* "$__sp_path"/*; do',
   '  [ -e "$__sp_entry" ] || [ -L "$__sp_entry" ] || continue;',
@@ -203,11 +257,13 @@ const listBody = [
 const stageHandshakeBody = [
   '__sp_valid_name "$__sp_challengeName"',
   '__sp_valid_name "$__sp_responseName"',
-  '[ ! -L "$__sp_rootPath" ] && [ -d "$__sp_rootPath" ]',
   '__sp_actualRealPath="$(realpath -- "$__sp_rootPath")"',
   '__sp_actualRealPath=$' + '{__sp_actualRealPath%?}',
   '__sp_actualRealPath=$' + '{__sp_actualRealPath%?}',
+  '[ "$__sp_actualRealPath" = "$__sp_rootPath" ]',
+  '[ ! -L "$__sp_rootPath" ] && [ -d "$__sp_rootPath" ]',
   'cd -- "$__sp_rootPath"',
+  '[ "$(pwd -P)" = "$__sp_actualRealPath" ]',
   '__sp_actualMode="$(stat -c %a -- .)"',
   '__sp_actualUid="$(stat -c %u -- .)"',
   '__sp_actualGid="$(stat -c %g -- .)"',
@@ -220,7 +276,7 @@ const stageHandshakeBody = [
   '__sp_actualChallenge="$(__sp_sha256_raw "./$__sp_challengeName")"',
   '[ "$__sp_actualChallenge" = "$__sp_challenge" ]',
   '__sp_response="$(__sp_sha256_text "$__sp_challenge:root")"',
-  '( umask 077; set -C; printf %s "$__sp_response" > "./$__sp_responseName" )',
+  '( umask 077; set -C || exit $?; printf %s "$__sp_response" > "./$__sp_responseName" )',
   'chown -h -- "$__sp_rootUid:$__sp_rootGid" "./$__sp_responseName"',
   '[ ! -L "./$__sp_responseName" ] && [ -f "./$__sp_responseName" ]',
   '[ "$(stat -c %u -- "./$__sp_responseName")" = "$__sp_rootUid" ]',
@@ -242,7 +298,7 @@ const stageExportBody = [
   '[ "$(stat -c %d -- "$__sp_sourcePath")" = "$__sp_sourceDevice" ] || { exec 4<&-; return 1; }',
   '[ "$(stat -c %i -- "$__sp_sourcePath")" = "$__sp_sourceInode" ] || { exec 4<&-; return 1; }',
   'umask 077',
-  'set -C',
+  'set -C || return $?',
   'exec 3> "./$__sp_objectName" || { exec 4<&-; return 1; }',
   '__sp_fd3="/proc/$$/fd/3"',
   'if ! cat <&4 >&3; then exec 3>&- 4<&-; rm -f -- "./$__sp_objectName"; return 1; fi',
@@ -271,7 +327,7 @@ const stageImportBody = [
   '[ "$(stat -c %i -- "./$__sp_objectName")" = "$__sp_objectInode" ] || { exec 3<&-; return 1; }',
   '__sp_tempPath="$__sp_targetPath.shellpilot-$__sp_token"',
   '[ ! -e "$__sp_tempPath" ] && [ ! -L "$__sp_tempPath" ] || { exec 3<&-; return 1; }',
-  'set -C',
+  'set -C || return $?',
   'exec 4> "$__sp_tempPath" || { exec 3<&-; return 1; }',
   '__sp_fd4="/proc/$$/fd/4"',
   'if ! cat <&3 >&4; then exec 3<&- 4>&-; rm -f -- "$__sp_tempPath"; return 1; fi',
@@ -343,6 +399,21 @@ export function createPrivilegedFileRequest ({ operation, args = {} } = {}) {
     }
     normalized[key] = text
   }
+  if (Object.keys(normalized).some(key =>
+    !operationArguments[operation].includes(key))) {
+    throw new Error('root 文件操作参数合同无效')
+  }
+  if (operation.startsWith('stage-') &&
+    Object.hasOwn(normalized, 'rootPath') &&
+    !isCanonicalStageRootPath(normalized.rootPath)) {
+    throw new Error('root 文件操作 rootPath 必须为规范绝对路径')
+  }
+  if (operation.startsWith('stage-') &&
+    Object.hasOwn(normalized, 'rootRealPath') &&
+    (!isCanonicalStageRootPath(normalized.rootRealPath) ||
+      normalized.rootRealPath !== normalized.rootPath)) {
+    throw new Error('root 文件操作 rootRealPath 与 rootPath 不匹配')
+  }
   return Object.freeze({
     operation,
     args: Object.freeze(normalized)
@@ -354,6 +425,9 @@ export function buildPrivilegedFileCommand ({ token: providedToken, request }) {
   const normalized = assertRequestContract(createPrivilegedFileRequest(request))
   const decodeArguments = decodeCondition(normalized)
   const prepare = decodeArguments ? `${decodeArguments} && ` : ''
+  const capabilityGuard = (requiredStageCapabilities[normalized.operation] || [])
+    .map(name => `[ "$${capabilityShellVariables[name]}" = 1 ]`)
+    .join(' && ') || ':'
   const marker = '\\033]698;SHELLPILOT_FILE;%s'
   return [
     `__sp_token=${shellQuote(token)};`,
@@ -364,7 +438,7 @@ export function buildPrivilegedFileCommand ({ token: providedToken, request }) {
     '__sp_sha256_raw() { if command -v sha256sum >/dev/null 2>&1; then __sp_hash="$(sha256sum -- "$1")" || return $?; else __sp_hash="$(shasum -a 256 -- "$1")" || return $?; fi; printf %s "$' + '{__sp_hash%% *}"; };',
     '__sp_sha256_text() { if command -v sha256sum >/dev/null 2>&1; then __sp_hash="$(printf %s "$1" | sha256sum)" || return $?; else __sp_hash="$(printf %s "$1" | shasum -a 256)" || return $?; fi; printf %s "$' + '{__sp_hash%% *}"; };',
     '__sp_valid_name() { case "$1" in ""|"."|".."|*/*) return 1 ;; *) return 0 ;; esac; };',
-    '__sp_bind_root() { __sp_valid_name "$__sp_objectName" || return 1; [ -d "/proc/$$/fd" ] || return 1; [ ! -L "$__sp_rootPath" ] && [ -d "$__sp_rootPath" ] || return 1; __sp_boundRealPath="$(realpath -- "$__sp_rootPath")" || return $?; __sp_boundRealPath=$' + '{__sp_boundRealPath%?}; __sp_boundRealPath=$' + '{__sp_boundRealPath%?}; [ "$__sp_boundRealPath" = "$__sp_rootRealPath" ] || return 1; cd -- "$__sp_rootPath" || return $?; [ "$(stat -c %d -- .)" = "$__sp_rootDevice" ] || return 1; [ "$(stat -c %i -- .)" = "$__sp_rootInode" ] || return 1; [ "$(stat -c %a -- .)" = "$__sp_rootMode" ] || return 1; [ "$(stat -c %u -- .)" = "$__sp_rootUid" ] || return 1; [ "$(stat -c %g -- .)" = "$__sp_rootGid" ] || return 1; };',
+    '__sp_bind_root() { __sp_valid_name "$__sp_objectName" || return 1; [ -d "/proc/$$/fd" ] || return 1; __sp_boundRealPath="$(realpath -- "$__sp_rootPath")" || return $?; __sp_boundRealPath=$' + '{__sp_boundRealPath%?}; __sp_boundRealPath=$' + '{__sp_boundRealPath%?}; [ "$__sp_boundRealPath" = "$__sp_rootPath" ] || return 1; [ "$__sp_boundRealPath" = "$__sp_rootRealPath" ] || return 1; [ ! -L "$__sp_rootPath" ] && [ -d "$__sp_rootPath" ] || return 1; cd -- "$__sp_rootPath" || return $?; [ "$(pwd -P)" = "$__sp_boundRealPath" ] || return 1; [ "$(stat -c %d -- .)" = "$__sp_rootDevice" ] || return 1; [ "$(stat -c %i -- .)" = "$__sp_rootInode" ] || return 1; [ "$(stat -c %a -- .)" = "$__sp_rootMode" ] || return 1; [ "$(stat -c %u -- .)" = "$__sp_rootUid" ] || return 1; [ "$(stat -c %g -- .)" = "$__sp_rootGid" ] || return 1; };',
     `__sp_emit_data1() { printf '${marker};data;%s;%s;%s;%s\\007' "$__sp_token" "$1" "$2" "$3" "$4"; };`,
     `__sp_emit_data2() { printf '${marker};data;%s;%s;%s;%s;%s\\007' "$__sp_token" "$1" "$2" "$3" "$4" "$5"; };`,
     `__sp_emit_data7() { printf '${marker};data;1;1;%s;%s;%s;%s;%s;%s;%s;%s\\007' "$__sp_token" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8"; };`,
@@ -385,9 +459,13 @@ export function buildPrivilegedFileCommand ({ token: providedToken, request }) {
     '  __sp_cat_cap=0; command -v cat >/dev/null 2>&1 && __sp_cat_cap=1;',
     '  __sp_gnu_stat_cap=0; stat --version >/dev/null 2>&1 && __sp_gnu_stat_cap=1;',
     '  __sp_gnu_mv_cap=0; mv --version >/dev/null 2>&1 && __sp_gnu_mv_cap=1;',
-    '  __sp_caps="sh=1,stat=$__sp_stat_cap,base64=$__sp_base64_cap,sha256=$__sp_sha256_cap,procFd=$__sp_proc_fd_cap,noclobber=$__sp_noclobber_cap,cat=$__sp_cat_cap,gnuStat=$__sp_gnu_stat_cap,gnuMv=$__sp_gnu_mv_cap";',
+    '  __sp_realpath_cap=0; command -v realpath >/dev/null 2>&1 && __sp_realpath_cap=1;',
+    '  __sp_chown_cap=0; command -v chown >/dev/null 2>&1 && __sp_chown_cap=1;',
+    '  __sp_chmod_cap=0; command -v chmod >/dev/null 2>&1 && __sp_chmod_cap=1;',
+    '  __sp_rm_cap=0; command -v rm >/dev/null 2>&1 && __sp_rm_cap=1;',
+    '  __sp_caps="sh=1,stat=$__sp_stat_cap,base64=$__sp_base64_cap,sha256=$__sp_sha256_cap,procFd=$__sp_proc_fd_cap,noclobber=$__sp_noclobber_cap,cat=$__sp_cat_cap,gnuStat=$__sp_gnu_stat_cap,gnuMv=$__sp_gnu_mv_cap,realpath=$__sp_realpath_cap,chown=$__sp_chown_cap,chmod=$__sp_chmod_cap,rm=$__sp_rm_cap";',
     `  printf '${marker};start;%s;%s;%s\\007' "$__sp_token" "$(__sp_encode "$__sp_uid_effective")" "$(__sp_encode "$__sp_user_effective")" "$(__sp_encode "$__sp_caps")";`,
-    '  __sp_run_operation; __sp_status=$?;',
+    `  if ${capabilityGuard}; then __sp_run_operation; __sp_status=$?; else __sp_status=126; fi;`,
     `  printf '${marker};end;%s\\007' "$__sp_token" "$__sp_status";`,
     'else printf "root 文件操作参数或有效身份无效\\n"; fi;',
     'sh -c "exit $__sp_status"'
@@ -473,7 +551,7 @@ function parseMetadata (encoded) {
 export function createPrivilegedFileParser ({ token: providedToken, request }) {
   const token = assertPtyTaskToken(providedToken)
   const normalized = createPrivilegedFileRequest(request)
-  const prefix = `\u001b]698;SHELLPILOT_FILE;${token};`
+  const namespacePrefix = '\u001b]698;SHELLPILOT_FILE;'
   let pending = ''
   let hasStarted = false
   let hasEnded = false
@@ -614,6 +692,11 @@ export function createPrivilegedFileParser ({ token: providedToken, request }) {
     const exitCode = Number(fields[1])
     const requiresData = !mutationOperations.has(normalized.operation) &&
       normalized.operation !== 'list'
+    const missingCapability = (requiredStageCapabilities[normalized.operation] || [])
+      .some(name => capabilities[name] !== true)
+    if (exitCode === 0 && missingCapability) {
+      throw new Error('root 文件协议缺少必要能力')
+    }
     if (!Number.isInteger(exitCode) || exitCode < 0 || exitCode > 255 ||
       (expectedTotal !== null && nextSequence !== expectedTotal + 1) ||
       (exitCode === 0 && requiresData && structuredData === null)) {
@@ -634,9 +717,11 @@ export function createPrivilegedFileParser ({ token: providedToken, request }) {
   function push (chunk) {
     pending += String(chunk || '')
     while (pending) {
-      const markerStart = pending.indexOf(prefix)
+      const markerStart = pending.indexOf(namespacePrefix)
       if (markerStart < 0) {
-        pending = pending.slice(Math.max(0, pending.length - prefix.length + 1))
+        pending = pending.slice(
+          Math.max(0, pending.length - namespacePrefix.length + 1)
+        )
         break
       }
       pending = pending.slice(markerStart)
@@ -650,9 +735,14 @@ export function createPrivilegedFileParser ({ token: providedToken, request }) {
       if (markerEnd + 1 > 2048) {
         throw new Error('root 文件协议边界过长')
       }
-      const marker = pending.slice(prefix.length, markerEnd)
+      const markerPayload = pending.slice(namespacePrefix.length, markerEnd)
       pending = pending.slice(markerEnd + 1)
-      trustedMetadataBytes += prefix.length + marker.length + 1
+      const tokenEnd = markerPayload.indexOf(';')
+      if (tokenEnd < 0 || markerPayload.slice(0, tokenEnd) !== token) {
+        throw new Error('root 文件协议 token 不匹配')
+      }
+      const marker = markerPayload.slice(tokenEnd + 1)
+      trustedMetadataBytes += namespacePrefix.length + markerPayload.length + 1
       if (trustedMetadataBytes > 4 * 1024 * 1024) {
         throw new Error('root 文件协议累计元数据过大')
       }
