@@ -21,6 +21,10 @@ const bashAvailable = spawnSync(
 ).status === 0
 const linuxRootOnly = process.platform !== 'linux' ||
   typeof process.getuid !== 'function' || process.getuid() !== 0
+const linuxNobodyRaceUnavailable = linuxRootOnly ||
+  spawnSync('id', ['-u', 'nobody']).status !== 0 ||
+  spawnSync('runuser', ['-u', 'nobody', '--', 'true']).status !== 0 ||
+  spawnSync('timeout', ['1', 'true']).status !== 0
 
 function runBash (script) {
   return spawnSync(
@@ -1142,7 +1146,7 @@ test('bounded source producers require trusted sizes and expose only fixed range
   }), /maxBytes|范围|参数/)
 })
 
-test('bounded digest opens verified FIFO endpoints once and checks the producer byte count', async () => {
+test('bounded digest isolates both FIFO endpoints and independently meters hash input', async () => {
   const { buildPrivilegedFileCommand } = await importModule(protocolModule)
   const command = buildPrivilegedFileCommand({
     token: 'df'.repeat(24),
@@ -1156,84 +1160,124 @@ test('bounded digest opens verified FIFO endpoints once and checks the producer 
   assert.ok(helperStart >= 0 && helperEnd > helperStart)
   const helper = command.slice(helperStart, helperEnd)
 
-  assert.match(helper, /exec 5<> "\$__sp_digestFifo"/)
-  assert.match(helper, /exec 6< "\$__sp_digestFifo"/)
-  assert.match(helper, /exec 7> "\$__sp_digestFifo"/)
-  assert.match(helper, /__sp_sha256_stdin <&6/)
-  assert.match(helper, /dd .*<&3 .*>&7 2>&8/)
-  assert.match(helper, /__sp_fd8="\/proc\/\$\$\/fd\/8"/)
-  assert.match(helper, /stat -L -c %d -- "\$__sp_fd8".*__sp_reportDevice/)
-  assert.match(helper, /stat -L -c %i -- "\$__sp_fd8".*__sp_reportInode/)
-  assert.match(helper, /__sp_actualBytes.*__sp_digestCount/)
-  assert.doesNotMatch(helper, /of="\$__sp_digestFifo"/)
-  assert.doesNotMatch(helper, /__sp_sha256_raw "\$__sp_digestFifo"/)
+  assert.match(helper, /__sp_scratchParent=\/tmp/)
+  assert.match(helper, /stat -c %u -- "\$__sp_scratchParent".*= 0/)
+  assert.match(helper, /& 01000/)
+  assert.match(helper, /mkdir -- "\$__sp_scratch"/)
+  assert.match(helper, /stat -c %u -- "\$__sp_scratch".*= 0/)
+  assert.match(helper, /stat -c %a -- "\$__sp_scratch".*= 700/)
+  assert.match(helper, /mkfifo -m 600 -- "\$__sp_inputFifo"/)
+  assert.match(helper, /mkfifo -m 600 -- "\$__sp_hashFifo"/)
+  assert.ok(helper.indexOf('mkdir -- "$__sp_scratch"') <
+    helper.indexOf('mkfifo -m 600 -- "$__sp_inputFifo"'))
+  assert.match(helper, /__sp_inputInode=.*stat -c %i -- "\$__sp_inputFifo"/)
+  assert.ok(helper.indexOf('__sp_inputInode=') <
+    helper.indexOf('exec 5<> "$__sp_inputFifo"'))
+  assert.match(helper, /dd .*<&3 .*>&7 2> "\$__sp_producerReport"/)
+  assert.match(helper, /dd .*<&6 .*>&4 2> "\$__sp_consumerReport"/)
+  assert.match(helper, /__sp_sha256_stdin <&9/)
+  assert.match(helper, /__sp_fd4="\/dev\/fd\/4"/)
+  assert.doesNotMatch(helper, /\/proc\/\$\$\/fd/)
+  assert.match(helper, /__sp_producerActualBytes.*__sp_digestCount/)
+  assert.match(helper, /__sp_consumerActualBytes.*__sp_digestCount/)
+  assert.match(helper, /__sp_scratch_matches.*rmdir -- "\$__sp_scratch"/)
+  assert.doesNotMatch(helper, /rm -rf/)
+  assert.doesNotMatch(helper, /\.\/\$__sp_objectName(?:\.count)?/)
 })
 
-test('bounded digest rejects short producers and preserves a raced FIFO replacement', {
-  skip: !bashAvailable || process.platform === 'win32'
+test('bounded digest rejects independently short producer and consumer streams', {
+  skip: linuxRootOnly
 }, async () => {
   const { buildPrivilegedFileCommand } = await importModule(protocolModule)
   const nativeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-digest-fd-race-'))
   try {
     const rootPath = toBashPath(nativeRoot)
     const sourcePath = path.join(nativeRoot, 'source')
-    fs.writeFileSync(sourcePath, 'abc')
-    for (const [operation, extra] of [
-      ['sha256-bound', {}],
-      ['sha256-range-bound', { offset: '0', maxBytes: '4' }]
-    ]) {
-      const command = buildPrivilegedFileCommand({
-        token: 'ef'.repeat(24),
-        request: {
-          operation,
-          args: boundedDigestBinding(extra)
-        }
-      })
-      const helperStart = command.indexOf('__sp_bounded_digest()')
-      const helperEnd = command.indexOf(' }; __sp_valid_name()', helperStart)
-      const helper = command.slice(helperStart, helperEnd + 3)
-      const objectName = operation === 'sha256-bound'
-        ? 'whole-proof'
-        : 'range-proof'
-      const short = runBash([
-        `cd -- ${quoteForBash(rootPath)}`,
-        '__sp_sha256_tool=sha256sum',
-        '__sp_sha256_stdin() { __sp_hash="$(sha256sum)" || return $?; printf %s "$' + '{__sp_hash%% *}"; }',
-        '__sp_path_matches_fd() { [ ! -L "$1" ] && [ -f "$1" ] && [ "$(stat -c %d -- "$1")" = "$2" ] && [ "$(stat -c %i -- "$1")" = "$3" ]; }',
-        `__sp_objectName=${quoteForBash(objectName)}`,
-        `exec 3< ${quoteForBash(toBashPath(sourcePath))}`,
-        helper,
-        '__sp_bounded_digest 0 4 >/dev/null 2>&1; [ "$?" -ne 0 ]',
-        `[ ! -e ${quoteForBash(`${rootPath}/${objectName}`)} ]`,
-        `[ ! -e ${quoteForBash(`${rootPath}/${objectName}.count`)} ]`
-      ].join('\n'))
-      assert.equal(short.status, 0, short.stdout + short.stderr)
-    }
-
-    const raceCommand = buildPrivilegedFileCommand({
-      token: 'f0'.repeat(24),
+    fs.writeFileSync(sourcePath, 'abcdef')
+    const token = 'ef'.repeat(24)
+    const command = buildPrivilegedFileCommand({
+      token,
       request: {
         operation: 'sha256-range-bound',
-        args: boundedDigestBinding({ offset: '0', maxBytes: '3' })
+        args: boundedDigestBinding({ offset: '0', maxBytes: '4' })
       }
     })
-    const helperStart = raceCommand.indexOf('__sp_bounded_digest()')
-    const helperEnd = raceCommand.indexOf(' }; __sp_valid_name()', helperStart)
-    const helper = raceCommand.slice(helperStart, helperEnd + 3)
-    const counterPath = `${rootPath}/stat-count`
-    const raced = runBash([
+    const helperStart = command.indexOf('__sp_bounded_digest()')
+    const helperEnd = command.indexOf(' }; __sp_valid_name()', helperStart)
+    const helper = command.slice(helperStart, helperEnd + 3)
+    const common = [
       `cd -- ${quoteForBash(rootPath)}`,
+      `__sp_token=${quoteForBash(token)}`,
       '__sp_sha256_tool=sha256sum',
       '__sp_sha256_stdin() { __sp_hash="$(sha256sum)" || return $?; printf %s "$' + '{__sp_hash%% *}"; }',
-      '__sp_path_matches_fd() { [ ! -L "$1" ] && [ -f "$1" ] && [ "$(stat -c %d -- "$1")" = "$2" ] && [ "$(stat -c %i -- "$1")" = "$3" ]; }',
-      '__sp_objectName=race-proof',
-      `__sp_test_counter=${quoteForBash(counterPath)}`,
-      'printf 0 > "$__sp_test_counter"',
-      'stat() { __sp_test_last=""; for __sp_test_arg do __sp_test_last="$__sp_test_arg"; done; if [ "$__sp_test_last" = "./race-proof" ]; then __sp_test_count="$(cat "$__sp_test_counter")"; __sp_test_count=$((__sp_test_count + 1)); printf %s "$__sp_test_count" > "$__sp_test_counter"; if [ "$__sp_test_count" -eq 4 ]; then __sp_test_value="$(/usr/bin/stat "$@")"; __sp_test_status=$?; rm -f -- ./race-proof; printf foreign > ./race-proof; printf "%s\\n" "$__sp_test_value"; return "$__sp_test_status"; fi; fi; /usr/bin/stat "$@"; }',
+      'realpath() { command realpath "$@" || return $?; printf .; }',
+      '__sp_objectName=short-proof',
+      `exec 3< ${quoteForBash(toBashPath(sourcePath))}`,
+      helper
+    ]
+    const shortProducer = runBash([
+      ...common,
+      '__sp_bounded_digest 0 7 >/dev/null 2>&1; [ "$?" -ne 0 ]',
+      `[ ! -e ${quoteForBash(`/tmp/.shellpilot-digest-${token}-short-proof`)} ]`
+    ].join('\n'))
+    assert.equal(shortProducer.status, 0,
+      shortProducer.stdout + shortProducer.stderr)
+
+    const shortConsumer = runBash([
+      ...common,
+      'dd() { case " $* " in *" skip="*) command dd "$@" ;; *) command dd bs=65536 iflag=count_bytes count=2 ;; esac; }',
+      '__sp_bounded_digest 0 4 >/dev/null 2>&1; [ "$?" -ne 0 ]',
+      `[ ! -e ${quoteForBash(`/tmp/.shellpilot-digest-${token}-short-proof`)} ]`
+    ].join('\n'))
+    assert.equal(shortConsumer.status, 0,
+      shortConsumer.stdout + shortConsumer.stderr)
+  } finally {
+    fs.rmSync(nativeRoot, { recursive: true, force: true })
+  }
+})
+
+test('linux root scratch blocks pre-open FIFO replacement and extra endpoints', {
+  skip: linuxNobodyRaceUnavailable
+}, async () => {
+  const { buildPrivilegedFileCommand } = await importModule(protocolModule)
+  const nativeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-root-fifo-race-'))
+  try {
+    const token = 'f0'.repeat(24)
+    const objectName = 'race-proof'
+    const scratchPath = `/tmp/.shellpilot-digest-${token}-${objectName}`
+    const sourcePath = path.join(nativeRoot, 'source')
+    const raceLog = path.join(nativeRoot, 'race-log')
+    fs.writeFileSync(sourcePath, 'root-only-fifo')
+    const command = buildPrivilegedFileCommand({
+      token,
+      request: {
+        operation: 'sha256-range-bound',
+        args: boundedDigestBinding({ offset: '0', maxBytes: '14' })
+      }
+    })
+    const helperStart = command.indexOf('__sp_bounded_digest()')
+    const helperEnd = command.indexOf(' }; __sp_valid_name()', helperStart)
+    const helper = command.slice(helperStart, helperEnd + 3)
+    const raced = runBash([
+      `__sp_token=${quoteForBash(token)}`,
+      `__sp_objectName=${quoteForBash(objectName)}`,
+      `__sp_raceLog=${quoteForBash(toBashPath(raceLog))}`,
+      '__sp_sha256_tool=sha256sum',
+      '__sp_sha256_stdin() { __sp_hash="$(sha256sum)" || return $?; printf %s "$' + '{__sp_hash%% *}"; }',
+      'realpath() { command realpath "$@" || return $?; printf .; }',
+      '__sp_mkfifoCount=0',
+      'mkfifo() { command mkfifo "$@" || return $?; __sp_mkfifoCount=$((__sp_mkfifoCount + 1)); __sp_fifoPath=""; for __sp_fifoArg do __sp_fifoPath="$__sp_fifoArg"; done; if [ "$__sp_mkfifoCount" -eq 1 ]; then runuser -u nobody -- sh -c \'rm -f -- "$1" && mkfifo -m 600 -- "$1"\' sh "$__sp_fifoPath" >/dev/null 2>&1; printf "replace=%s\\n" "$?" >> "$__sp_raceLog"; else timeout 1 runuser -u nobody -- sh -c \'dd if="$1" of=/dev/null bs=1 count=1 status=none\' sh "$__sp_inputFifo" >/dev/null 2>&1; printf "reader=%s\\n" "$?" >> "$__sp_raceLog"; timeout 1 runuser -u nobody -- sh -c \'printf x > "$1"\' sh "$__sp_inputFifo" >/dev/null 2>&1; printf "writer=%s\\n" "$?" >> "$__sp_raceLog"; fi; return 0; }',
       `exec 3< ${quoteForBash(toBashPath(sourcePath))}`,
       helper,
-      '__sp_bounded_digest 0 3 >/dev/null 2>&1; [ "$?" -ne 0 ]',
-      '[ "$(cat -- ./race-proof)" = foreign ]'
+      '__sp_result="$(__sp_bounded_digest 0 14)"',
+      '__sp_status=$?',
+      'exec 3<&-',
+      '[ "$__sp_status" -eq 0 ]',
+      `[ "$__sp_result" = ${quoteForBash(createHash('sha256').update('root-only-fifo').digest('hex'))} ]`,
+      `grep -Eq '^replace=[1-9][0-9]*$' ${quoteForBash(toBashPath(raceLog))}`,
+      `grep -Eq '^reader=[1-9][0-9]*$' ${quoteForBash(toBashPath(raceLog))}`,
+      `grep -Eq '^writer=[1-9][0-9]*$' ${quoteForBash(toBashPath(raceLog))}`,
+      `[ ! -e ${quoteForBash(scratchPath)} ]`
     ].join('\n'))
     assert.equal(raced.status, 0, raced.stdout + raced.stderr)
   } finally {
