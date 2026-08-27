@@ -28,23 +28,25 @@ const allowedOperations = new Set([
 
 const requiredStageCapabilities = Object.freeze({
   'stage-handshake': Object.freeze([
-    'stat', 'base64', 'sha256', 'procFd', 'noclobber', 'gnuStat',
+    'cleanShell', 'stat', 'base64', 'sha256', 'procFd', 'noclobber', 'gnuStat',
     'realpath', 'chown'
   ]),
   'stage-export': Object.freeze([
-    'stat', 'base64', 'sha256', 'procFd', 'noclobber', 'cat', 'gnuStat',
-    'realpath', 'chown', 'chmod', 'rm'
+    'cleanShell', 'stat', 'base64', 'sha256', 'procFd', 'noclobber', 'cat',
+    'gnuStat', 'realpath', 'chown', 'chmod', 'rm'
   ]),
   'stage-import': Object.freeze([
-    'stat', 'base64', 'sha256', 'procFd', 'noclobber', 'cat', 'gnuStat',
-    'gnuMv', 'realpath', 'chown', 'chmod', 'rm'
+    'cleanShell', 'stat', 'base64', 'sha256', 'procFd', 'noclobber', 'cat',
+    'gnuStat', 'gnuMv', 'realpath', 'chown', 'chmod', 'rm'
   ]),
   'stage-cleanup': Object.freeze([
-    'stat', 'base64', 'procFd', 'noclobber', 'gnuStat', 'realpath', 'rm'
+    'cleanShell', 'stat', 'base64', 'procFd', 'noclobber', 'gnuStat',
+    'realpath', 'rm'
   ])
 })
 
 const capabilityShellVariables = Object.freeze({
+  cleanShell: '__sp_clean_shell_cap',
   stat: '__sp_stat_cap',
   base64: '__sp_base64_cap',
   sha256: '__sp_sha256_cap',
@@ -170,6 +172,33 @@ const argumentVariables = Object.freeze({
   targetGid: '__sp_targetGid'
 })
 
+const argumentEnvironmentVariables = Object.freeze({
+  path: 'SHELLPILOT_ARG_PATH',
+  source: 'SHELLPILOT_ARG_SOURCE',
+  target: 'SHELLPILOT_ARG_TARGET',
+  mode: 'SHELLPILOT_ARG_MODE',
+  uid: 'SHELLPILOT_ARG_UID',
+  gid: 'SHELLPILOT_ARG_GID',
+  rootPath: 'SHELLPILOT_ARG_ROOT_PATH',
+  rootRealPath: 'SHELLPILOT_ARG_ROOT_REAL_PATH',
+  rootDevice: 'SHELLPILOT_ARG_ROOT_DEVICE',
+  rootInode: 'SHELLPILOT_ARG_ROOT_INODE',
+  rootUid: 'SHELLPILOT_ARG_ROOT_UID',
+  rootGid: 'SHELLPILOT_ARG_ROOT_GID',
+  rootMode: 'SHELLPILOT_ARG_ROOT_MODE',
+  challengeName: 'SHELLPILOT_ARG_CHALLENGE_NAME',
+  responseName: 'SHELLPILOT_ARG_RESPONSE_NAME',
+  challenge: 'SHELLPILOT_ARG_CHALLENGE',
+  objectName: 'SHELLPILOT_ARG_OBJECT_NAME',
+  sourcePath: 'SHELLPILOT_ARG_SOURCE_PATH',
+  targetPath: 'SHELLPILOT_ARG_TARGET_PATH',
+  sha256: 'SHELLPILOT_ARG_SHA256',
+  size: 'SHELLPILOT_ARG_SIZE',
+  targetMode: 'SHELLPILOT_ARG_TARGET_MODE',
+  targetUid: 'SHELLPILOT_ARG_TARGET_UID',
+  targetGid: 'SHELLPILOT_ARG_TARGET_GID'
+})
+
 function assertRequestContract (request) {
   const expected = operationArguments[request.operation]
   const actual = Object.keys(request.args)
@@ -216,29 +245,14 @@ function assertRequestContract (request) {
 function decodeCondition (request) {
   return operationArguments[request.operation].map(key => {
     const variable = argumentVariables[key]
-    const encoded = encodeUtf8Base64(request.args[key])
-    return `${variable}="$(__sp_decode ${shellQuote(encoded)})" && ` +
+    const environmentVariable = argumentEnvironmentVariables[key]
+    return `${variable}="$(__sp_decode "$${environmentVariable}")" && ` +
       `${variable}=$` + `{${variable}%?}`
   }).join(' && ')
 }
 
 const listBody = [
   'set +f || return $?;',
-  'if [ -n "$' + '{BASH_VERSION-}" ]; then',
-  '  builtin shopt -u dotglob || return $?;',
-  '  builtin shopt -u nullglob || return $?;',
-  '  builtin shopt -u failglob || return $?;',
-  '  builtin shopt -u nocaseglob || return $?;',
-  '  builtin shopt -s globskipdots 2>/dev/null || :;',
-  'fi;',
-  'if [ -n "$' + '{ZSH_VERSION-}" ]; then',
-  '  unsetopt GLOB_DOTS || return $?;',
-  '  unsetopt NULL_GLOB || return $?;',
-  '  unsetopt CSH_NULL_GLOB || return $?;',
-  '  unsetopt NOMATCH || return $?;',
-  '  unsetopt NO_CASE_GLOB || return $?;',
-  '  unsetopt NUMERIC_GLOB_SORT || return $?;',
-  'fi;',
   '__sp_total=0;',
   'for __sp_entry in "$__sp_path"/.[!.]* "$__sp_path"/..?* "$__sp_path"/*; do',
   '  [ -e "$__sp_entry" ] || [ -L "$__sp_entry" ] || continue;',
@@ -429,8 +443,8 @@ export function buildPrivilegedFileCommand ({ token: providedToken, request }) {
     .map(name => `[ "$${capabilityShellVariables[name]}" = 1 ]`)
     .join(' && ') || ':'
   const marker = '\\033]698;SHELLPILOT_FILE;%s'
-  return [
-    `__sp_token=${shellQuote(token)};`,
+  const innerScript = [
+    '__sp_token="$SHELLPILOT_TOKEN";',
     '__sp_decode() { printf %s "$1" | base64 -d || return $?; printf .; };',
     '__sp_encode() { printf %s "$1" | base64 | tr -d "\\r\\n"; };',
     'readlink() { command readlink "$@" || return $?; printf .; };',
@@ -451,6 +465,7 @@ export function buildPrivilegedFileCommand ({ token: providedToken, request }) {
     `__sp_run_operation() { ${operationBodies[normalized.operation]}; };`,
     '__sp_status=125;',
     `if ${prepare}__sp_uid_effective="$(id -u 2>/dev/null)" && __sp_user_effective="$(id -un 2>/dev/null)" && [ -n "$__sp_uid_effective" ] && [ -n "$__sp_user_effective" ]; then`,
+    '  __sp_clean_shell_cap=1;',
     '  __sp_stat_cap=0; command -v stat >/dev/null 2>&1 && __sp_stat_cap=1;',
     '  __sp_base64_cap=0; command -v base64 >/dev/null 2>&1 && __sp_base64_cap=1;',
     '  __sp_sha256_cap=0; { command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1; } && __sp_sha256_cap=1;',
@@ -463,12 +478,26 @@ export function buildPrivilegedFileCommand ({ token: providedToken, request }) {
     '  __sp_chown_cap=0; command -v chown >/dev/null 2>&1 && __sp_chown_cap=1;',
     '  __sp_chmod_cap=0; command -v chmod >/dev/null 2>&1 && __sp_chmod_cap=1;',
     '  __sp_rm_cap=0; command -v rm >/dev/null 2>&1 && __sp_rm_cap=1;',
-    '  __sp_caps="sh=1,stat=$__sp_stat_cap,base64=$__sp_base64_cap,sha256=$__sp_sha256_cap,procFd=$__sp_proc_fd_cap,noclobber=$__sp_noclobber_cap,cat=$__sp_cat_cap,gnuStat=$__sp_gnu_stat_cap,gnuMv=$__sp_gnu_mv_cap,realpath=$__sp_realpath_cap,chown=$__sp_chown_cap,chmod=$__sp_chmod_cap,rm=$__sp_rm_cap";',
+    '  __sp_caps="sh=1,cleanShell=$__sp_clean_shell_cap,stat=$__sp_stat_cap,base64=$__sp_base64_cap,sha256=$__sp_sha256_cap,procFd=$__sp_proc_fd_cap,noclobber=$__sp_noclobber_cap,cat=$__sp_cat_cap,gnuStat=$__sp_gnu_stat_cap,gnuMv=$__sp_gnu_mv_cap,realpath=$__sp_realpath_cap,chown=$__sp_chown_cap,chmod=$__sp_chmod_cap,rm=$__sp_rm_cap";',
     `  printf '${marker};start;%s;%s;%s\\007' "$__sp_token" "$(__sp_encode "$__sp_uid_effective")" "$(__sp_encode "$__sp_user_effective")" "$(__sp_encode "$__sp_caps")";`,
     `  if ${capabilityGuard}; then __sp_run_operation; __sp_status=$?; else __sp_status=126; fi;`,
     `  printf '${marker};end;%s\\007' "$__sp_token" "$__sp_status";`,
     'else printf "root 文件操作参数或有效身份无效\\n"; fi;',
-    'sh -c "exit $__sp_status"'
+    'exit "$__sp_status"'
+  ].join(' ')
+  const argumentEnvironment = operationArguments[normalized.operation].map(key =>
+    `${argumentEnvironmentVariables[key]}=${shellQuote(
+      encodeUtf8Base64(normalized.args[key])
+    )}`)
+  return [
+    '/usr/bin/env',
+    '-i',
+    'PATH=/usr/bin:/bin',
+    `SHELLPILOT_TOKEN=${shellQuote(token)}`,
+    ...argumentEnvironment,
+    '/bin/sh',
+    '-c',
+    shellQuote(innerScript)
   ].join(' ')
 }
 

@@ -23,8 +23,8 @@ const bashAvailable = spawnSync(
 function runBash (script) {
   return spawnSync(
     bashExecutable,
-    ['--noprofile', '--norc', '-c', script],
-    { encoding: 'utf8' }
+    ['--noprofile', '--norc'],
+    { encoding: 'utf8', input: script }
   )
 }
 
@@ -44,7 +44,7 @@ function toBashPath (nativePath) {
 }
 
 const allStageCapabilities = [
-  'sh=1', 'stat=1', 'base64=1', 'sha256=1', 'procFd=1',
+  'sh=1', 'cleanShell=1', 'stat=1', 'base64=1', 'sha256=1', 'procFd=1',
   'noclobber=1', 'cat=1', 'gnuStat=1', 'gnuMv=1',
   'realpath=1', 'chown=1', 'chmod=1', 'rm=1'
 ].join(',')
@@ -97,7 +97,10 @@ async function listNamesFromRealBash (prelude, token) {
       args: { path: rootPath }
     })
     const command = buildPrivilegedFileCommand({ token, request })
-    const result = runBash(`${prelude}\n${command}`)
+    const outerPrelude = typeof prelude === 'function'
+      ? prelude(rootPath)
+      : prelude
+    const result = runBash(`${outerPrelude}\n${command}`)
     assert.equal(result.status, 0, result.stdout + result.stderr)
     const parser = createPrivilegedFileParser({ token, request })
     parser.push(result.stdout)
@@ -124,7 +127,21 @@ test('privileged file protocol accepts only fixed operations and never interpola
 
   assert.doesNotMatch(command, /touch \/tmp\/pwn/)
   assert.doesNotMatch(command, /中文/)
-  assert.equal(command.includes(Buffer.from(hostile).toString('base64')), true)
+  const encodedHostile = Buffer.from(hostile).toString('base64')
+  assert.equal(command.includes(`SHELLPILOT_ARG_PATH='${encodedHostile}'`), true)
+  assert.match(command, /^\/usr\/bin\/env -i /)
+  assert.match(command, /PATH=\/usr\/bin:\/bin/)
+  assert.match(command, /SHELLPILOT_TOKEN=/)
+  assert.match(command, /SHELLPILOT_ARG_PATH=/)
+  assert.match(command, / \/bin\/sh -c /)
+  assert.doesNotMatch(
+    command,
+    /\$(?:BASH_ENV|ENV|SHELLOPTS|BASHOPTS|GLOBIGNORE|CDPATH|IFS)\b/
+  )
+  assert.doesNotMatch(
+    command.slice(0, command.indexOf(' /bin/sh -c ')),
+    /\b(?:BASH_ENV|ENV|SHELLOPTS|BASHOPTS|GLOBIGNORE|CDPATH|IFS)=/
+  )
   assert.throws(
     () => createPrivilegedFileRequest({ operation: 'shell', args: {} }),
     /不支持的 root 文件操作/
@@ -195,6 +212,53 @@ test('list clears inherited dotglob without duplicating hidden entries', {
     await listNamesFromRealBash('shopt -s dotglob', '8'.repeat(48)),
     ['.hidden', 'visible']
   )
+})
+
+test('list ignores inherited GLOBIGNORE and startup environment pollution', {
+  skip: !bashAvailable
+}, async () => {
+  assert.deepEqual(
+    await listNamesFromRealBash(rootPath => [
+      `export GLOBIGNORE=${quoteForBash(`${rootPath}/visible`)}`,
+      'export BASH_ENV=/definitely/not/a/shellpilot/startup/file',
+      'export ENV=/definitely/not/a/shellpilot/startup/file'
+    ].join('\n'), '9'.repeat(48)),
+    ['.hidden', 'visible']
+  )
+})
+
+test('probe ignores exported functions and reports its clean shell boundary', {
+  skip: !bashAvailable
+}, async () => {
+  const {
+    buildPrivilegedFileCommand,
+    createPrivilegedFileParser,
+    createPrivilegedFileRequest
+  } = await importModule(protocolModule)
+  const nativeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-probe-env-'))
+  try {
+    const nativeLog = path.join(nativeRoot, 'outer-set.log')
+    fs.writeFileSync(nativeLog, '')
+    const logPath = toBashPath(nativeLog)
+    const token = 'a0'.repeat(24)
+    const request = createPrivilegedFileRequest({ operation: 'probe' })
+    const command = buildPrivilegedFileCommand({ token, request })
+    const result = runBash([
+      `__test_set_log=${quoteForBash(logPath)}`,
+      'set () { printf "called\\n" >> "$__test_set_log"; return 0; }',
+      'export -f set',
+      'export GLOBIGNORE=*',
+      'export BASH_ENV=/definitely/not/a/shellpilot/startup/file',
+      command
+    ].join('\n'))
+    assert.equal(result.status, 0, result.stdout + result.stderr)
+    const parser = createPrivilegedFileParser({ token, request })
+    parser.push(result.stdout)
+    assert.equal(parser.result().capabilities.cleanShell, true)
+    assert.equal(fs.readFileSync(nativeLog, 'utf8'), '')
+  } finally {
+    fs.rmSync(nativeRoot, { recursive: true, force: true })
+  }
 })
 
 test('privileged requests are deeply frozen and validate argument contracts', async () => {
@@ -442,17 +506,22 @@ test('stage parser rejects forged success when a required capability is false', 
   const { createPrivilegedFileParser } = await importModule(protocolModule)
   const token = '4'.repeat(48)
   const cases = [
-    ['stage-handshake', ['procFd', 'noclobber', 'realpath', 'chown'], [
+    ['stage-handshake', ['cleanShell', 'procFd', 'noclobber', 'realpath', 'chown'], [
       'handshake', 'a'.repeat(64), '1000', '1001', '700',
       '/real/stage', '2049', '12345'
     ]],
-    ['stage-export', ['procFd', 'noclobber', 'cat', 'realpath', 'chown', 'chmod'], [
+    ['stage-export', [
+      'cleanShell', 'procFd', 'noclobber', 'cat', 'realpath', 'chown', 'chmod'
+    ], [
       'digest', 'b'.repeat(64), '12'
     ]],
     ['stage-import', [
-      'procFd', 'noclobber', 'cat', 'gnuMv', 'realpath', 'chown', 'chmod'
+      'cleanShell', 'procFd', 'noclobber', 'cat', 'gnuMv', 'realpath',
+      'chown', 'chmod'
     ], ['digest', 'b'.repeat(64), '12']],
-    ['stage-cleanup', ['procFd', 'noclobber', 'realpath', 'rm'], null]
+    ['stage-cleanup', [
+      'cleanShell', 'procFd', 'noclobber', 'realpath', 'rm'
+    ], null]
   ]
 
   for (const [operation, required, data] of cases) {
@@ -481,54 +550,60 @@ test('stage parser rejects forged success when a required capability is false', 
   }
 })
 
-test('stage handshake shell fails when noclobber cannot be enabled', {
+test('stage export never calls an exported outer set function', {
   skip: !bashAvailable
 }, async () => {
   const {
     buildPrivilegedFileCommand,
     createPrivilegedFileRequest
   } = await importModule(protocolModule)
-  const setup = runBash([
-    '__test_root="$(mktemp -d)" || exit $?',
-    'printf challenge > "$__test_root/challenge-token" || exit $?',
-    'printf "%s\\n%s\\n%s\\n%s\\n" "$__test_root" "$(id -u)" "$(id -g)" "$(sha256sum "$__test_root/challenge-token" | cut -d " " -f 1)"'
-  ].join('; '))
-  assert.equal(setup.status, 0, setup.stderr)
-  const [rootPath, rootUid, rootGid, challenge] = setup.stdout.trim().split('\n')
-  const response = createHash('sha256')
-    .update(`${challenge}:root`)
-    .digest('hex')
-  const command = buildPrivilegedFileCommand({
-    token: '5'.repeat(48),
-    request: createPrivilegedFileRequest({
-      operation: 'stage-handshake',
-      args: {
+  const nativeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-stage-env-'))
+  try {
+    const nativeSource = path.join(nativeRoot, 'source')
+    const nativeStage = path.join(nativeRoot, 'stage')
+    const nativeLog = path.join(nativeRoot, 'outer-set.log')
+    fs.writeFileSync(nativeSource, 'source')
+    fs.mkdirSync(nativeStage)
+    fs.writeFileSync(nativeLog, '')
+    const sourcePath = toBashPath(nativeSource)
+    const rootPath = toBashPath(nativeStage)
+    const logPath = toBashPath(nativeLog)
+    const metadata = runBash([
+      `cd -- ${quoteForBash(rootPath)} || exit $?`,
+      'printf "%s\\n%s\\n%s\\n%s\\n" "$(stat -c %d -- .)" "$(stat -c %i -- .)" "$(id -u)" "$(id -g)"'
+    ].join('\n'))
+    assert.equal(metadata.status, 0, metadata.stderr)
+    const [rootDevice, rootInode, rootUid, rootGid] =
+      metadata.stdout.trim().split('\n')
+    const request = createPrivilegedFileRequest({
+      operation: 'stage-export',
+      args: stageBinding({
         rootPath,
-        challengeName: 'challenge-token',
-        responseName: 'response-token',
-        challenge,
+        rootRealPath: rootPath,
+        rootDevice,
+        rootInode,
         rootUid,
         rootGid,
-        rootMode: '700'
-      }
+        sourcePath
+      })
     })
-  })
-  const result = runBash([
-    'set () { return 17; }',
-    `sha256sum () { if [ "$1" = -- ] && [ "$2" = ./response-token ]; then printf '%s  *%s\\n' ${quoteForBash(response)} "$2"; else command sha256sum "$@"; fi; }`,
-    'stat () {',
-    '  if [ "$1" = -c ] && [ "$2" = %a ] && [ "$3" = -- ]; then',
-    '    case "$4" in .) printf "700\\n"; return 0 ;; ./response-token) printf "600\\n"; return 0 ;; esac',
-    '  fi',
-    '  command stat "$@"',
-    '}',
-    command,
-    '__test_status=$?',
-    `rm -rf -- ${quoteForBash(rootPath)}`,
-    'exit "$__test_status"'
-  ].join('\n'))
-  assert.notEqual(result.status, 0, result.stdout + result.stderr)
-  assert.equal(result.stdout.includes(';end;0\u0007'), false)
+    const command = buildPrivilegedFileCommand({
+      token: '0'.repeat(48),
+      request
+    })
+    const result = runBash([
+      `__test_set_log=${quoteForBash(logPath)}`,
+      'set () { printf "called\\n" >> "$__test_set_log"; return 0; }',
+      'export -f set',
+      'stat () { if [ "$1" = -c ] && [ "$2" = %a ] && [ "$3" = -- ] && [ "$4" = . ]; then printf "700\\n"; else command stat "$@"; fi; }',
+      'export -f stat',
+      command
+    ].join('\n'))
+    assert.match(result.stdout, /;end;[0-9]+/)
+    assert.equal(fs.readFileSync(nativeLog, 'utf8'), '')
+  } finally {
+    fs.rmSync(nativeRoot, { recursive: true, force: true })
+  }
 })
 
 test('stage request rejects a non-canonical root path', async () => {
