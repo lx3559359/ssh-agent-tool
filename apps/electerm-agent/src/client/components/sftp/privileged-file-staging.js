@@ -7,8 +7,7 @@ const canonicalDigest = /^[a-f0-9]{64}$/
 const missingCodes = new Set([2, 'ENOENT', 'SFTP_NO_SUCH_FILE'])
 
 function isMissingError (error) {
-  return missingCodes.has(error?.code) ||
-    /no such|not found|does not exist/i.test(String(error?.message || error))
+  return missingCodes.has(error?.code)
 }
 
 function canonicalRemotePath (value, label) {

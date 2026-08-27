@@ -45,7 +45,12 @@ function createFakeSftp (options = {}) {
     async lstat (remotePath) {
       calls.push(['lstat', remotePath])
       const node = nodes.get(remotePath)
-      if (!node) throw missing(remotePath)
+      if (!node) {
+        if (options.messageOnlyMissing) {
+          throw new Error(`transport permission denied; not found: ${remotePath}`)
+        }
+        throw missing(remotePath)
+      }
       return {
         mode: ({ file: 0o100000, directory: 0o040000, symlink: 0o120000 })[node.type] |
           node.mode,
@@ -271,6 +276,21 @@ function createHandshakeExecutor (sftp, overrides = {}) {
   execute.requests = requests
   return execute
 }
+
+test('staging trusts only authoritative missing codes', async () => {
+  const { createPrivilegedStagingSession } = await importModule(stagingModule)
+  const sftp = createFakeSftp({ messageOnlyMissing: true })
+
+  await assert.rejects(
+    createPrivilegedStagingSession({
+      sftp,
+      execute: createHandshakeExecutor(sftp),
+      createToken: createTokenFactory()
+    }),
+    /transport permission denied/
+  )
+  assert.equal(sftp.calls.some(call => call[0] === 'mkdir'), false)
+})
 
 test('staging handshake binds one canonical private root and cleans it idempotently', async () => {
   const { createPrivilegedStagingSession } = await importModule(stagingModule)

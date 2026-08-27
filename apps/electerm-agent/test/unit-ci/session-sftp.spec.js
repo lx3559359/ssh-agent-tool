@@ -543,6 +543,26 @@ describe('session-sftp transport flows', () => {
     assert.equal(chownCalls, 1)
   })
 
+  test('copy cleanup trusts only authoritative missing status codes', async () => {
+    const sftp = Object.create(Sftp.prototype)
+    sftp.copySftpEntryWithinBudget = async (from, to, options) => {
+      options.ownedEntries.push({ path: '/snapshot.txt', type: 'file' })
+      throw new Error('primary copy failure')
+    }
+    sftp.rm = async () => {
+      throw new Error('permission transport failure: target not found')
+    }
+
+    const error = await sftp.copyEntry('/source.txt', '/snapshot.txt', {
+      cleanupOnFailure: true
+    }).catch(error => error)
+    assert.equal(error.message, 'primary copy failure')
+    assert.equal(
+      error.cleanupError?.message,
+      'permission transport failure: target not found'
+    )
+  })
+
   test('copyEntry meters actual streamed bytes and cleans a growing partial target', async () => {
     const sftp = Object.create(Sftp.prototype)
     const removed = []

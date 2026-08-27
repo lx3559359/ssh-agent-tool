@@ -65,8 +65,7 @@ function validateSftpCancelToken (value) {
 
 function isMissingSftpError (error) {
   return error?.code === 2 || error?.code === 'ENOENT' ||
-    error?.code === 'SFTP_NO_SUCH_FILE' ||
-    /no such|not found|does not exist/i.test(String(error?.message || error))
+    error?.code === 'SFTP_NO_SUCH_FILE'
 }
 
 async function closeSftpChannel (channel, timeoutMs = 1000) {

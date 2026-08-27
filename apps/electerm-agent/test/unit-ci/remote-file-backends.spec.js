@@ -502,6 +502,7 @@ function createBackendHarness (options = {}) {
     }
     if (request.operation === 'sha256-bound' ||
       request.operation === 'sha256-range-bound') {
+      if (options.digestFailure) throw new Error('bounded digest failed')
       const node = options.privilegedTree
         ? ensurePrivilegedBinding(privilegedNodes.get(args.path))
         : null
@@ -537,6 +538,14 @@ function createBackendHarness (options = {}) {
         sha256: sha256(bytes),
         size: bytes.length
       }
+    }
+    if (request.operation === 'digest-cleanup') {
+      events.push(`pty:digest-cleanup:${args.objectName}`)
+      if (options.digestCleanupFailures > 0) {
+        options.digestCleanupFailures -= 1
+        throw new Error('digest scratch cleanup failed')
+      }
+      return { exitCode: 0, kind: 'digest-cleanup', ok: true }
     }
     if (options.privilegedTree && request.operation === 'mkdir') {
       if (privilegedNodes.has(args.path)) throw new Error('Target exists')
@@ -609,6 +618,33 @@ function createBackendHarness (options = {}) {
       node.gid = Number(args.targetGid)
       node.mode = Number.parseInt(args.targetMode, 8)
       return { exitCode: 0, kind: 'metadata-bound', ok: true }
+    }
+    if (options.privilegedTree && request.operation === 'touch-bound') {
+      if (options.replaceTouchTargetBeforeBound === args.targetPath) {
+        privilegedNodes.set(args.targetPath, ensurePrivilegedBinding({
+          type: 'file',
+          mode: 0o600,
+          uid: 99,
+          gid: 99,
+          content: Buffer.from('foreign touch target')
+        }))
+        options.replaceTouchTargetBeforeBound = undefined
+      }
+      const parent = ensurePrivilegedBinding(privilegedNodes.get(
+        args.targetParentRealPath
+      ))
+      const node = ensurePrivilegedBinding(privilegedNodes.get(args.targetPath))
+      if (!parent || !node || parent.device !== args.targetParentDevice ||
+        parent.inode !== args.targetParentInode ||
+        String(parent.uid) !== args.targetParentUid ||
+        (parent.mode & 0o7777).toString(8) !== args.targetParentMode ||
+        parent.uid !== 0 || (parent.mode & 0o022) !== 0 ||
+        node.device !== args.targetDevice || node.inode !== args.targetInode ||
+        node.type !== args.targetType) {
+        throw new Error('touch target binding changed')
+      }
+      node.touched = true
+      return { exitCode: 0, kind: 'touch-bound', ok: true }
     }
     if (options.privilegedTree && request.operation === 'chmod') {
       privilegedNodes.get(args.path).mode = Number.parseInt(args.mode, 8)
@@ -710,6 +746,9 @@ function createBackendHarness (options = {}) {
       const node = ensurePrivilegedBinding(privilegedNodes.get(args.targetPath))
       if (!parent || !node || parent.device !== args.targetParentDevice ||
         parent.inode !== args.targetParentInode ||
+        String(parent.uid) !== args.targetParentUid ||
+        (parent.mode & 0o7777).toString(8) !== args.targetParentMode ||
+        parent.uid !== 0 || (parent.mode & 0o022) !== 0 ||
         node.device !== args.targetDevice || node.inode !== args.targetInode ||
         node.type !== args.targetType) {
         throw new Error('remove entry binding changed')
@@ -981,13 +1020,7 @@ test('privileged facade maps fixed metadata and mutation methods to protocol req
   assert.equal(await facade.readlink('/root/link'), '/result/root/link')
   assert.equal(await facade.realpath('/root/file'), '/result/root/file')
 
-  await facade.mkdir('/root/new-dir')
-  await facade.touch('/root/new-file')
   await facade.rename('/root/a', '/root/missing-b')
-  await facade.rm('/root/file')
-  await facade.rmdir('/root/dir')
-  await facade.chmod('/root/file', 0o640)
-  await facade.chown('/root/file', 10, 11)
   await facade.mv('/root/d', '/root/missing-e')
   assert.equal(typeof facade.copyEntry, 'function')
   assert.equal(typeof facade.removeEntry, 'function')
@@ -1002,8 +1035,6 @@ test('privileged facade maps fixed metadata and mutation methods to protocol req
       ['stat', { path: '/root/file' }],
       ['readlink', { path: '/root/link' }],
       ['realpath', { path: '/root/file' }],
-      ['mkdir', { path: '/root/new-dir' }],
-      ['touch', { path: '/root/new-file' }],
       ['lstat', { path: '/root/a' }],
       ['lstat', { path: '/root/missing-b' }],
       ['lstat', { path: '/root' }],
@@ -1024,10 +1055,6 @@ test('privileged facade maps fixed metadata and mutation methods to protocol req
         targetParentUid: '0',
         targetParentMode: '755'
       }],
-      ['rm', { path: '/root/file' }],
-      ['rmdir', { path: '/root/dir' }],
-      ['chmod', { path: '/root/file', mode: '640' }],
-      ['chown', { path: '/root/file', uid: '10', gid: '11' }],
       ['lstat', { path: '/root/d' }],
       ['lstat', { path: '/root/missing-e' }],
       ['lstat', { path: '/root' }],
@@ -1051,6 +1078,80 @@ test('privileged facade maps fixed metadata and mutation methods to protocol req
     ]
   )
   await backend.release()
+})
+
+test('privileged public mutations route only through bound operations', async () => {
+  const harness = createBackendHarness({
+    privilegedTree: {
+      '/root': { type: 'directory', mode: 0o755, uid: 0, gid: 0 },
+      '/root/file': { type: 'file', mode: 0o640, uid: 3, gid: 4, content: 'x' },
+      '/root/touched': { type: 'file', mode: 0o600, uid: 0, gid: 0, content: 'x' },
+      '/root/empty': { type: 'directory', mode: 0o700, uid: 0, gid: 0 }
+    }
+  })
+  const backend = await createRootBackend(harness)
+
+  await backend.sftp.mkdir('/root/new-dir')
+  await backend.sftp.touch('/root/touched')
+  await backend.sftp.touch('/root/new-file')
+  await backend.sftp.chmod('/root/file', 0o600)
+  await backend.sftp.chown('/root/file', 10, 11)
+  await backend.sftp.rm('/root/file')
+  await backend.sftp.rmdir('/root/empty')
+
+  const operations = harness.requests.map(request => request.operation)
+  for (const operation of ['mkdir', 'touch', 'rm', 'rmdir', 'chmod', 'chown']) {
+    assert.equal(operations.includes(operation), false, operation)
+  }
+  assert.equal(operations.includes('mkdir-bound'), true)
+  assert.equal(operations.includes('touch-bound'), true)
+  assert.ok(operations.filter(operation => operation === 'metadata-bound').length >= 2)
+  assert.ok(operations.filter(operation => operation === 'remove-bound').length >= 2)
+  assert.equal(harness.privilegedNodes.get('/root/new-dir').type, 'directory')
+  assert.equal(harness.privilegedNodes.get('/root/new-file').content.length, 0)
+  assert.equal(harness.privilegedNodes.has('/root/file'), false)
+  assert.equal(harness.privilegedNodes.has('/root/empty'), false)
+  await backend.release()
+})
+
+test('privileged public bound mutations preserve replacements and reject untrusted parents', async () => {
+  const parentRace = createBackendHarness({
+    privilegedTree: {
+      '/root': { type: 'directory', mode: 0o755, uid: 0, gid: 0 }
+    },
+    onPrivilegedLstat (remotePath, nodes) {
+      if (remotePath === '/root/new-dir') nodes.get('/root').mode = 0o777
+    }
+  })
+  const parentRaceBackend = await createRootBackend(parentRace)
+  await assert.rejects(
+    parentRaceBackend.sftp.mkdir('/root/new-dir'),
+    /parent|binding|操作失败/i
+  )
+  assert.equal(parentRace.privilegedNodes.has('/root/new-dir'), false)
+  await parentRaceBackend.release()
+
+  const targetRace = createBackendHarness({
+    replaceTouchTargetBeforeBound: '/root/file',
+    replaceMetadataTargetBeforeBound: '/root/dir',
+    redirectRm: { '/root/remove': '/root/foreign' },
+    privilegedTree: {
+      '/root': { type: 'directory', mode: 0o755, uid: 0, gid: 0 },
+      '/root/file': { type: 'file', mode: 0o600, uid: 0, gid: 0, content: 'owned' },
+      '/root/dir': { type: 'directory', mode: 0o700, uid: 0, gid: 0 },
+      '/root/remove': { type: 'file', mode: 0o600, uid: 0, gid: 0, content: 'owned' },
+      '/root/foreign': { type: 'file', mode: 0o600, uid: 99, gid: 99, content: 'foreign' }
+    }
+  })
+  const targetRaceBackend = await createRootBackend(targetRace)
+  await assert.rejects(targetRaceBackend.sftp.touch('/root/file'), /binding|操作失败/i)
+  assert.equal(targetRace.privilegedNodes.get('/root/file').content.toString(), 'foreign touch target')
+  await assert.rejects(targetRaceBackend.sftp.chmod('/root/dir', 0o755), /binding|操作失败/i)
+  assert.equal(targetRace.privilegedNodes.get('/root/dir').uid, 99)
+  await assert.rejects(targetRaceBackend.sftp.rm('/root/remove'), /binding|操作失败/i)
+  assert.equal(targetRace.privilegedNodes.get('/root/remove').content.toString(), 'owned')
+  assert.equal(targetRace.privilegedNodes.get('/root/foreign').content.toString(), 'foreign')
+  await targetRaceBackend.release()
 })
 
 test('privileged rename binds both parents and preserves raced foreign entries', async () => {
@@ -1144,6 +1245,11 @@ test('real transaction adapter cannot overwrite a target raced into bound rename
   })
   const adapter = createSftpTransactionAdapter({ getSftp: () => backend.sftp })
   Object.assign(operation, await adapter.prepare(operation))
+  assert.equal(harness.requests.some(request => request.operation === 'mkdir-bound'), true)
+  assert.equal(harness.requests.some(request =>
+    ['mkdir', 'touch', 'rm', 'rmdir', 'chmod', 'chown'].includes(
+      request.operation
+    )), false)
 
   await assert.rejects(adapter.beforeExecute(operation), /rename|race|操作失败/i)
   assert.equal(
@@ -1263,6 +1369,29 @@ test('privileged resume fingerprints a huge declared file with exactly two bound
     request.operation === 'stage-export-range'), false)
   assert.equal(harness.sftpReads.length, initialSftpReads)
   await backend.release()
+})
+
+test('bounded digest failures track scratch cleanup without preserving a fake stage object', async () => {
+  const harness = createBackendHarness({
+    digestFailure: true,
+    digestCleanupFailures: 1,
+    privilegedTree: {
+      '/root/huge': { type: 'file', size: 1024, virtualByte: 0x61 }
+    }
+  })
+  const backend = await createRootBackend(harness)
+  await assert.rejects(
+    backend.sftp.describeResumeEntry('/root/huge'),
+    /bounded digest failed/
+  )
+  assert.equal(harness.requests.filter(request =>
+    request.operation === 'digest-cleanup').length, 1)
+  assert.equal(harness.requests.some(request =>
+    request.operation === 'stage-cleanup' &&
+    request.args.objectName.startsWith('download-')), false)
+  assert.equal(await backend.release(), true)
+  assert.equal(harness.requests.filter(request =>
+    request.operation === 'digest-cleanup').length, 2)
 })
 
 test('privileged chunk streams re-export after EOF and observe same-size source changes', async () => {
@@ -2000,7 +2129,7 @@ test('privileged removeEntry builds a bounded manifest, propagates AbortSignal, 
       if (removed.length === 1) controller.abort(new Error('stop tree removal'))
     },
     privilegedTree: {
-      '/root/tree': { type: 'directory' },
+      '/root/tree': { type: 'directory', mode: 0o700, uid: 0, gid: 0 },
       '/root/tree/a': { type: 'file', content: 'a' },
       '/root/tree/b': { type: 'file', content: 'b' }
     }
@@ -2016,7 +2145,8 @@ test('privileged removeEntry builds a bounded manifest, propagates AbortSignal, 
   assert.equal([...harness.privilegedNodes.keys()].filter(path =>
     path.startsWith('/root/tree/')).length, 1)
   const mutationExecutions = harness.executions.slice(start).filter(({ request }) =>
-    ['rm', 'remove-empty-directory'].includes(request.operation))
+    request.operation === 'remove-bound')
+  assert.equal(mutationExecutions.length, 1)
   assert.ok(mutationExecutions.every(execution => execution.signal === controller.signal))
   await assert.rejects(
     backend.sftp.removeEntry('/root/tree', { signal: {} }),
@@ -2035,7 +2165,7 @@ test('privileged remove never follows a replaced manifest parent into a foreign 
   const harness = createBackendHarness({
     redirectRm: { '/root/tree/victim': '/foreign/victim' },
     privilegedTree: {
-      '/root/tree': { type: 'directory' },
+      '/root/tree': { type: 'directory', mode: 0o700, uid: 0, gid: 0 },
       '/root/tree/victim': { type: 'file', content: 'owned' },
       '/foreign': { type: 'directory' },
       '/foreign/victim': { type: 'file', content: 'foreign' }

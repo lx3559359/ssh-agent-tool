@@ -374,6 +374,7 @@ export async function createPrivilegedFileBackend ({
 
   const readStreams = new Map()
   const readLocks = new Map()
+  const pendingDigestCleanups = new Set()
 
   function withReadLock (path, work) {
     const previous = readLocks.get(path) || Promise.resolve()
@@ -448,6 +449,7 @@ export async function createPrivilegedFileBackend ({
 
   async function boundDigest (stream, operation, offset, maxBytes, signal) {
     const scratch = staging.allocate('download')
+    pendingDigestCleanups.add(scratch.objectName)
     try {
       const result = digestResult(await executeRequest(operation, {
         ...staging.rootBinding,
@@ -460,11 +462,22 @@ export async function createPrivilegedFileBackend ({
           ? { offset: String(offset), maxBytes: String(maxBytes) }
           : {})
       }, { signal }), operation)
+      pendingDigestCleanups.delete(scratch.objectName)
       staging.abandon(scratch.path)
       return result
     } catch (error) {
-      try { staging.preserve(scratch.path) } catch (preserveError) {
-        error.cleanupError ||= preserveError
+      try { staging.abandon(scratch.path) } catch (abandonError) {
+        error.cleanupError ||= abandonError
+      }
+      try {
+        staging.assertCurrent()
+        await executeRequest('digest-cleanup', {
+          ...staging.rootBinding,
+          objectName: scratch.objectName
+        })
+        pendingDigestCleanups.delete(scratch.objectName)
+      } catch (cleanupError) {
+        error.cleanupError ||= cleanupError
       }
       throw error
     }
@@ -578,12 +591,6 @@ export async function createPrivilegedFileBackend ({
     })
   }
 
-  async function fixedMutation (operation, args, affectedPaths = []) {
-    if (affectedPaths.length) await invalidateReadStreams(...affectedPaths)
-    await executeRequest(operation, args)
-    return 1
-  }
-
   async function invalidateReadStreams (...affectedPaths) {
     const candidates = [...readStreams.keys()].filter(sourcePath =>
       affectedPaths.some(affectedPath =>
@@ -603,6 +610,70 @@ export async function createPrivilegedFileBackend ({
     } catch (error) {
       if (error?.code === 'ENOENT') return null
       throw error
+    }
+  }
+
+  async function boundMutationEntry (path, label, signal) {
+    if (path === '/') {
+      throw new Error(`root 文件后端不允许对根目录执行 ${label}`)
+    }
+    const metadata = requireBoundMetadata(
+      await rawFacade.lstat(path, { signal }),
+      path,
+      label
+    )
+    const parentPath = parentFilePath(path)
+    const parent = requireBoundMetadata(
+      await rawFacade.lstat(parentPath, { signal }),
+      parentPath,
+      `${label} parent`
+    )
+    if (parent.type !== 'directory' ||
+      String(parent.device) !== String(metadata.parentDevice) ||
+      String(parent.inode) !== String(metadata.parentInode)) {
+      throw new Error(`root 文件后端 ${label} parent binding 发生变化`)
+    }
+    return { metadata, parent, parentPath }
+  }
+
+  async function boundAbsentParent (path, label, signal) {
+    if (path === '/') {
+      throw new Error(`root 文件后端不允许对根目录执行 ${label}`)
+    }
+    if (await lstatOrMissing(path, signal)) {
+      const error = new Error(`root 文件后端 ${label} target 已存在：${path}`)
+      error.code = 'EEXIST'
+      throw error
+    }
+    const parentPath = parentFilePath(path)
+    const parent = requireBoundMetadata(
+      await rawFacade.lstat(parentPath, { signal }),
+      parentPath,
+      `${label} parent`
+    )
+    if (parent.type !== 'directory') {
+      throw new Error(`root 文件后端 ${label} parent 不是目录`)
+    }
+    return { parent, parentPath }
+  }
+
+  function boundTargetArgs (path, entry) {
+    return {
+      targetPath: path,
+      ...targetParentBindingArgs(entry.parentPath, entry.parent),
+      targetDevice: String(entry.metadata.device),
+      targetInode: String(entry.metadata.inode),
+      targetType: entry.metadata.type
+    }
+  }
+
+  function boundRemovalArgs (path, entry) {
+    return {
+      targetPath: path,
+      ...targetParentBindingArgs(entry.parentPath, entry.parent),
+      targetDevice: String(entry.metadata.device),
+      targetInode: String(entry.metadata.inode),
+      targetType: entry.metadata.type
     }
   }
 
@@ -896,7 +967,7 @@ export async function createPrivilegedFileBackend ({
             'remove-bound',
             {
               targetPath: entry.path,
-              ...targetParentIdentityArgs(
+              ...targetParentBindingArgs(
                 parentFilePath(entry.path),
                 entry.parentBinding
               ),
@@ -922,19 +993,20 @@ export async function createPrivilegedFileBackend ({
     await invalidateReadStreams(remotePath)
     for (const entry of manifest.reverse()) {
       throwIfAborted(signal)
-      await executeRequest(
-        'remove-bound',
-        {
-          targetPath: entry.path,
-          targetParentRealPath: entry.metadata.parentRealPath,
-          targetParentDevice: String(entry.metadata.parentDevice),
-          targetParentInode: String(entry.metadata.parentInode),
-          targetDevice: String(entry.metadata.device),
-          targetInode: String(entry.metadata.inode),
-          targetType: entry.metadata.type
-        },
-        { signal }
+      const current = await boundMutationEntry(
+        entry.path,
+        'removeEntry',
+        signal
       )
+      for (const key of ['device', 'inode', 'type']) {
+        if (current.metadata[key] !== entry.metadata[key]) {
+          throw new Error('root 文件后端 removeEntry binding 发生变化')
+        }
+      }
+      await executeRequest('remove-bound', boundRemovalArgs(
+        entry.path,
+        current
+      ), { signal })
     }
     return 1
   }
@@ -1168,13 +1240,33 @@ export async function createPrivilegedFileBackend ({
       if (operationError) throw operationError
       return 1
     },
-    mkdir: path => {
+    async mkdir (path) {
       const remotePath = canonicalFilePath(path)
-      return fixedMutation('mkdir', { path: remotePath }, [remotePath])
+      const { parent, parentPath } = await boundAbsentParent(
+        remotePath,
+        'mkdir'
+      )
+      await invalidateReadStreams(remotePath)
+      await executeRequest('mkdir-bound', {
+        targetPath: remotePath,
+        ...targetParentBindingArgs(parentPath, parent),
+        targetMode: '700',
+        targetUid: '0',
+        targetGid: '0'
+      })
+      return 1
     },
-    touch: path => {
+    async touch (path) {
       const remotePath = canonicalFilePath(path)
-      return fixedMutation('touch', { path: remotePath }, [remotePath])
+      const current = await lstatOrMissing(remotePath)
+      if (!current) return rawFacade.writeFile(remotePath, new Uint8Array(), 0o600)
+      const entry = await boundMutationEntry(remotePath, 'touch')
+      if (entry.metadata.type !== 'file') {
+        throw new Error('root 文件后端 touch target 必须为普通文件')
+      }
+      await invalidateReadStreams(remotePath)
+      await executeRequest('touch-bound', boundTargetArgs(remotePath, entry))
+      return 1
     },
     async rename (source, target, options) {
       const { signal } = normalizeCancellableOptions(options)
@@ -1234,23 +1326,49 @@ export async function createPrivilegedFileBackend ({
       }, { signal })
       return 1
     },
-    rm: path => {
+    async rm (path) {
       const remotePath = canonicalFilePath(path)
-      return fixedMutation('rm', { path: remotePath }, [remotePath])
+      const entry = await boundMutationEntry(remotePath, 'rm')
+      if (entry.metadata.type !== 'file') {
+        throw new Error('root 文件后端 rm target 必须为普通文件')
+      }
+      await invalidateReadStreams(remotePath)
+      await executeRequest('remove-bound', boundRemovalArgs(remotePath, entry))
+      return 1
     },
-    rmdir: path => {
+    async rmdir (path) {
       const remotePath = canonicalFilePath(path)
-      return fixedMutation('rmdir', { path: remotePath }, [remotePath])
+      const entry = await boundMutationEntry(remotePath, 'rmdir')
+      if (entry.metadata.type !== 'directory') {
+        throw new Error('root 文件后端 rmdir target 必须为目录')
+      }
+      await invalidateReadStreams(remotePath)
+      await executeRequest('remove-bound', boundRemovalArgs(remotePath, entry))
+      return 1
     },
-    chmod: (path, mode) => fixedMutation('chmod', {
-      path: canonicalFilePath(path),
-      mode: normalizeMode(mode).toString(8)
-    }),
-    chown: (path, uid, gid) => fixedMutation('chown', {
-      path: canonicalFilePath(path),
-      uid: String(uid),
-      gid: String(gid)
-    }),
+    async chmod (path, mode) {
+      const remotePath = canonicalFilePath(path)
+      const targetMode = normalizeMode(mode).toString(8)
+      const entry = await boundMutationEntry(remotePath, 'chmod')
+      await executeRequest('metadata-bound', {
+        ...boundTargetArgs(remotePath, entry),
+        targetMode,
+        targetUid: String(entry.metadata.uid),
+        targetGid: String(entry.metadata.gid)
+      })
+      return 1
+    },
+    async chown (path, uid, gid) {
+      const remotePath = canonicalFilePath(path)
+      const entry = await boundMutationEntry(remotePath, 'chown')
+      await executeRequest('metadata-bound', {
+        ...boundTargetArgs(remotePath, entry),
+        targetMode: normalizeMode(entry.metadata.mode & 0o7777).toString(8),
+        targetUid: String(uid),
+        targetGid: String(gid)
+      })
+      return 1
+    },
     copyEntry: copyTree,
     removeEntry: removeTree,
     cp: copyTree,
@@ -1323,6 +1441,18 @@ export async function createPrivilegedFileBackend ({
         let firstError
         await Promise.allSettled([...activePublicOperations])
         await executeTail.catch(() => {})
+        for (const objectName of [...pendingDigestCleanups]) {
+          try {
+            staging.assertCurrent()
+            await executeRequest('digest-cleanup', {
+              ...staging.rootBinding,
+              objectName
+            })
+            pendingDigestCleanups.delete(objectName)
+          } catch (error) {
+            firstError ||= error
+          }
+        }
         try { await staging.release() } catch (error) { firstError ||= error }
         try {
           const released = await lease.release()
