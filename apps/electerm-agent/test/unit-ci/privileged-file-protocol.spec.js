@@ -96,6 +96,87 @@ function cleanupBinding (overrides = {}) {
   })
 }
 
+function parentRemotePath (remotePath) {
+  const index = remotePath.lastIndexOf('/')
+  return index <= 0 ? '/' : remotePath.slice(0, index)
+}
+
+function sourceStageBinding (overrides = {}) {
+  const sourcePath = overrides.sourcePath || '/root/source'
+  return stageBinding({
+    sourcePath,
+    sourceParentRealPath: parentRemotePath(sourcePath),
+    sourceParentDevice: '3001',
+    sourceParentInode: '3002',
+    sourceDevice: '3003',
+    sourceInode: '3004',
+    ...overrides
+  })
+}
+
+function sourceEntryBinding (overrides = {}) {
+  const remotePath = overrides.path || '/root/source'
+  return {
+    path: remotePath,
+    sourceParentRealPath: parentRemotePath(remotePath),
+    sourceParentDevice: '3001',
+    sourceParentInode: '3002',
+    sourceDevice: '3003',
+    sourceInode: '3004',
+    ...overrides
+  }
+}
+
+function targetEntryBinding (overrides = {}) {
+  const targetPath = overrides.targetPath || '/root/target'
+  return {
+    targetPath,
+    targetParentRealPath: parentRemotePath(targetPath),
+    targetParentDevice: '4001',
+    targetParentInode: '4002',
+    ...overrides
+  }
+}
+
+function targetStageBinding (overrides = {}) {
+  const targetPath = overrides.targetPath || '/root/target'
+  return stageBinding({
+    targetPath,
+    targetParentRealPath: parentRemotePath(targetPath),
+    targetParentDevice: '4001',
+    targetParentInode: '4002',
+    targetDevice: '4003',
+    targetInode: '4004',
+    ...overrides
+  })
+}
+
+function nativeSourceBinding (remotePath) {
+  const parentPath = path.dirname(remotePath)
+  const parentStat = fs.statSync(parentPath, { bigint: true })
+  const entryStat = fs.lstatSync(remotePath, { bigint: true })
+  return {
+    sourceParentRealPath: fs.realpathSync(parentPath),
+    sourceParentDevice: String(parentStat.dev),
+    sourceParentInode: String(parentStat.ino),
+    sourceDevice: String(entryStat.dev),
+    sourceInode: String(entryStat.ino)
+  }
+}
+
+function nativeTargetBinding (remotePath, absent = false) {
+  const parentPath = path.dirname(remotePath)
+  const parentStat = fs.statSync(parentPath, { bigint: true })
+  const entryStat = absent ? null : fs.lstatSync(remotePath, { bigint: true })
+  return {
+    targetParentRealPath: fs.realpathSync(parentPath),
+    targetParentDevice: String(parentStat.dev),
+    targetParentInode: String(parentStat.ino),
+    targetDevice: String(entryStat?.dev ?? 0),
+    targetInode: String(entryStat?.ino ?? 0)
+  }
+}
+
 async function listNamesFromRealBash (prelude, token) {
   const {
     buildPrivilegedFileCommand,
@@ -716,15 +797,14 @@ test('request constructor canonicalizes octal modes and SHA-256 fields', async (
   ]) {
     const request = createPrivilegedFileRequest({
       operation: 'stage-import',
-      args: {
-        ...stageBinding(),
+      args: targetStageBinding({
         targetPath: '/root/target',
         sha256: upperSha256,
         size: '0',
         targetMode: input,
         targetUid: '0',
         targetGid: '0'
-      }
+      })
     })
     assert.equal(request.args.targetMode, canonical)
     assert.equal(request.args.sha256, upperSha256.toLowerCase())
@@ -750,8 +830,7 @@ test('request constructor canonicalizes octal modes and SHA-256 fields', async (
 
   const noClobber = createPrivilegedFileRequest({
     operation: 'stage-import',
-    args: {
-      ...stageBinding(),
+    args: targetStageBinding({
       targetPath: '/root/target',
       sha256: upperSha256,
       size: '0',
@@ -759,7 +838,7 @@ test('request constructor canonicalizes octal modes and SHA-256 fields', async (
       targetUid: '0',
       targetGid: '0',
       mustBeAbsent: '1'
-    }
+    })
   })
   assert.equal(noClobber.args.mustBeAbsent, '1')
   assert.match(buildPrivilegedFileCommand({ token, request: noClobber }), /mv -nT/)
@@ -793,7 +872,15 @@ test('privileged command builder exposes every fixed operation and fails closed 
   const cases = [
     ['probe', {}, ':'],
     ['list', { path: '/x' }, './.[!.]* ./..?* ./*'],
+    ['list-bound', sourceEntryBinding({ path: '/root/source' }),
+      '__sp_entry_matches "./$__sp_boundName"'],
     ['lstat', { path: '/x' }, '__sp_lstatParentReal'],
+    ['lstat-bound', {
+      path: '/root/source',
+      sourceParentRealPath: '/root',
+      sourceParentDevice: '3001',
+      sourceParentInode: '3002'
+    }, '__sp_bind_entry_parent "$__sp_path"'],
     ['stat', { path: '/x' }, '__sp_emit_stat "$__sp_path" stat'],
     ['readlink', { path: '/x' }, '__sp_emit_text "$(readlink -- "$__sp_path")"'],
     ['realpath', { path: '/x' }, '__sp_emit_text "$(realpath -- "$__sp_path")"'],
@@ -807,7 +894,14 @@ test('privileged command builder exposes every fixed operation and fails closed 
     ['copy-entry', { source: '/a', target: '/b' }, 'cp -a -- "$__sp_source" "$__sp_target"'],
     ['remove-entry', { path: '/x' }, 'rm -rf -- "$__sp_path"'],
     ['remove-empty-directory', { path: '/x' }, 'rmdir -- "$__sp_path"'],
-    ['sha256', { path: '/x' }, '__sp_emit_sha256 "$__sp_path"']
+    ['mkdir-bound', targetEntryBinding({
+      targetMode: '700', targetUid: '0', targetGid: '0'
+    }), 'mkdir -- "./$__sp_boundName"'],
+    ['remove-bound', targetEntryBinding({
+      targetDevice: '4003', targetInode: '4004', targetType: 'file'
+    }), '__sp_entry_matches "./$__sp_boundName"'],
+    ['sha256', { path: '/x' }, '__sp_emit_sha256 "$__sp_path"'],
+    ['sha256-bound', sourceEntryBinding(), '__sp_sha256_raw "$__sp_fd3"']
   ]
 
   for (const [operation, args, source] of cases) {
@@ -831,10 +925,10 @@ test('privileged command builder exposes every fixed operation and fails closed 
       rootGid: '1000',
       rootMode: '700'
     }, /challenge|response/],
-    ['stage-export', stageBinding({
+    ['stage-export', sourceStageBinding({
       sourcePath: '/root/secret'
     }), /exec 3>/],
-    ['stage-import', stageBinding({
+    ['stage-import', targetStageBinding({
       targetPath: '/root/target',
       sha256: 'b'.repeat(64),
       size: '12',
@@ -944,7 +1038,7 @@ test('privileged parser normalizes every fixed result shape', async () => {
     rootDevice: '2049',
     rootInode: '12345'
   })
-  for (const operation of ['stage-export', 'stage-import', 'sha256']) {
+  for (const operation of ['stage-export', 'sha256', 'sha256-bound']) {
     assert.deepEqual(parse(operation, 'digest', ['b'.repeat(64), '12']), {
       kind: operation,
       capabilities: allCapabilityObject,
@@ -952,6 +1046,22 @@ test('privileged parser normalizes every fixed result shape', async () => {
       size: 12
     })
   }
+  assert.deepEqual(parse('stage-import', 'installed', [
+    'b'.repeat(64), '12', '4003', '4004'
+  ]), {
+    kind: 'stage-import',
+    capabilities: allCapabilityObject,
+    sha256: 'b'.repeat(64),
+    size: 12,
+    targetDevice: '4003',
+    targetInode: '4004'
+  })
+  assert.deepEqual(parse('mkdir-bound', 'binding', ['4003', '4004']), {
+    kind: 'mkdir-bound',
+    capabilities: allCapabilityObject,
+    device: '4003',
+    inode: '4004'
+  })
 })
 
 test('stage parser rejects forged success when a required capability is false', async () => {
@@ -976,7 +1086,7 @@ test('stage parser rejects forged success when a required capability is false', 
       'cleanShell', 'printf', 'id', 'tr', 'stat', 'base64', 'sha256',
       'procFd', 'noclobber', 'cat', 'gnuStat', 'gnuMv', 'realpath',
       'chown', 'chmod', 'rm'
-    ], ['digest', 'b'.repeat(64), '12']],
+    ], ['installed', 'b'.repeat(64), '12', '4003', '4004']],
     ['stage-cleanup', [
       'cleanShell', 'printf', 'id', 'tr', 'stat', 'base64', 'sha256', 'procFd',
       'noclobber', 'gnuStat', 'realpath', 'rm'
@@ -1029,21 +1139,27 @@ test('stage export never calls an exported outer set function', {
     const logPath = toBashPath(nativeLog)
     const metadata = runBash([
       `cd -- ${quoteForBash(rootPath)} || exit $?`,
-      'printf "%s\\n%s\\n%s\\n%s\\n" "$(stat -c %d -- .)" "$(stat -c %i -- .)" "$(id -u)" "$(id -g)"'
+      `printf "%s\\n%s\\n%s\\n%s\\n%s\\n%s\\n%s\\n%s\\n" "$(stat -c %d -- .)" "$(stat -c %i -- .)" "$(id -u)" "$(id -g)" "$(stat -c %d -- ${quoteForBash(toBashPath(nativeRoot))})" "$(stat -c %i -- ${quoteForBash(toBashPath(nativeRoot))})" "$(stat -c %d -- ${quoteForBash(sourcePath)})" "$(stat -c %i -- ${quoteForBash(sourcePath)})"`
     ].join('\n'))
     assert.equal(metadata.status, 0, metadata.stderr)
-    const [rootDevice, rootInode, rootUid, rootGid] =
+    const [rootDevice, rootInode, rootUid, rootGid,
+      sourceParentDevice, sourceParentInode, sourceDevice, sourceInode] =
       metadata.stdout.trim().split('\n')
     const request = createPrivilegedFileRequest({
       operation: 'stage-export',
-      args: stageBinding({
+      args: sourceStageBinding({
         rootPath,
         rootRealPath: rootPath,
         rootDevice,
         rootInode,
         rootUid,
         rootGid,
-        sourcePath
+        sourcePath,
+        sourceParentRealPath: toBashPath(nativeRoot),
+        sourceParentDevice,
+        sourceParentInode,
+        sourceDevice,
+        sourceInode
       })
     })
     const command = buildPrivilegedFileCommand({
@@ -1124,6 +1240,93 @@ test('lstat emits a trusted missing result only for an absent path', {
     })
     assert.notEqual(loop.execution.status, 0,
       'an ELOOP parent must not become trusted missing')
+  } finally {
+    fs.rmSync(nativeRoot, { recursive: true, force: true })
+  }
+})
+
+test('bound manifest operations reject replaced directories and entries', {
+  skip: !bashAvailable
+}, async () => {
+  const nativeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-bound-manifest-'))
+  try {
+    const nativeDirectory = path.join(nativeRoot, 'source')
+    const nativeFile = path.join(nativeDirectory, 'file')
+    fs.mkdirSync(nativeDirectory)
+    fs.writeFileSync(nativeFile, 'trusted')
+    const bashRoot = toBashPath(nativeRoot)
+    const canonicalRoot = runBash(
+      `cd -- ${quoteForBash(bashRoot)} && pwd -P`
+    ).stdout.trim()
+    const bashDirectory = `${canonicalRoot}/source`
+    const bashFile = `${bashDirectory}/file`
+    const metadata = runBash([
+      `cd -- ${quoteForBash(bashRoot)} || exit $?`,
+      'printf "%s\\n%s\\n" "$(stat -c %d -- .)" "$(stat -c %i -- .)"',
+      `printf "%s\\n%s\\n" "$(stat -c %d -- ${quoteForBash(bashDirectory)})" "$(stat -c %i -- ${quoteForBash(bashDirectory)})"`,
+      `printf "%s\\n%s\\n" "$(stat -c %d -- ${quoteForBash(bashFile)})" "$(stat -c %i -- ${quoteForBash(bashFile)})"`
+    ].join('\n'))
+    assert.equal(metadata.status, 0, metadata.stderr)
+    const [rootDevice, rootInode, directoryDevice, directoryInode,
+      fileDevice, fileInode] = metadata.stdout.trim().split('\n')
+
+    const listed = await runRealProtocolOperation({
+      operation: 'list-bound',
+      token: '35'.repeat(24),
+      args: {
+        path: bashDirectory,
+        sourceParentRealPath: canonicalRoot,
+        sourceParentDevice: rootDevice,
+        sourceParentInode: rootInode,
+        sourceDevice: directoryDevice,
+        sourceInode: directoryInode
+      }
+    })
+    assert.equal(listed.execution.status, 0, listed.execution.stderr)
+    assert.deepEqual(listed.result.entries.map(entry => entry.name), ['file'])
+
+    const replacedDirectory = await runRealProtocolOperation({
+      operation: 'list-bound',
+      token: '36'.repeat(24),
+      args: {
+        path: bashDirectory,
+        sourceParentRealPath: canonicalRoot,
+        sourceParentDevice: rootDevice,
+        sourceParentInode: rootInode,
+        sourceDevice: directoryDevice,
+        sourceInode: String(BigInt(directoryInode) + 1n)
+      }
+    })
+    assert.notEqual(replacedDirectory.execution.status, 0)
+
+    const boundEntry = await runRealProtocolOperation({
+      operation: 'lstat-bound',
+      token: '37'.repeat(24),
+      args: {
+        path: bashFile,
+        sourceParentRealPath: bashDirectory,
+        sourceParentDevice: directoryDevice,
+        sourceParentInode: directoryInode
+      }
+    })
+    assert.equal(boundEntry.execution.status, 0, boundEntry.execution.stderr)
+    assert.equal(boundEntry.result.metadata.inode, fileInode)
+
+    const protectedRemoval = await runRealProtocolOperation({
+      operation: 'remove-bound',
+      token: '38'.repeat(24),
+      args: {
+        targetPath: bashFile,
+        targetParentRealPath: bashDirectory,
+        targetParentDevice: directoryDevice,
+        targetParentInode: directoryInode,
+        targetDevice: fileDevice,
+        targetInode: String(BigInt(fileInode) + 1n),
+        targetType: 'file'
+      }
+    })
+    assert.notEqual(protectedRemoval.execution.status, 0)
+    assert.equal(fs.readFileSync(nativeFile, 'utf8'), 'trusted')
   } finally {
     fs.rmSync(nativeRoot, { recursive: true, force: true })
   }
@@ -1512,7 +1715,7 @@ test('staging shell bodies fail closed before emitting trusted results', async (
     token,
     request: {
       operation: 'stage-import',
-      args: stageBinding({
+      args: targetStageBinding({
         targetPath: '/root/target',
         sha256: 'a'.repeat(64),
         size: '12',
@@ -1569,14 +1772,14 @@ test('staging operations bind one safe object to the handshaken root inode', asy
     token,
     request: {
       operation: 'stage-export',
-      args: { ...binding, sourcePath: '/root/secret' }
+      args: sourceStageBinding({ ...binding, sourcePath: '/root/secret' })
     }
   })
   const importCommand = buildPrivilegedFileCommand({
     token,
     request: {
       operation: 'stage-import',
-      args: {
+      args: targetStageBinding({
         ...binding,
         targetPath: '/root/target',
         sha256: 'a'.repeat(64),
@@ -1584,7 +1787,7 @@ test('staging operations bind one safe object to the handshaken root inode', asy
         targetMode: '600',
         targetUid: '0',
         targetGid: '0'
-      }
+      })
     }
   })
   const cleanupCommand = buildPrivilegedFileCommand({
@@ -1602,7 +1805,8 @@ test('staging operations bind one safe object to the handshaken root inode', asy
   }
   assert.match(exportCommand, /exec 3> "\.\/\$__sp_objectName"/)
   assert.match(exportCommand, /\/proc\/\$\$\/fd\/3/)
-  assert.match(exportCommand, /exec 4< "\$__sp_sourcePath"/)
+  assert.match(exportCommand, /__sp_bind_entry_parent "\$__sp_sourcePath"/)
+  assert.match(exportCommand, /exec 4< "\.\/\$__sp_boundName"/)
   assert.match(exportCommand, /\/proc\/\$\$\/fd\/4/)
   assert.match(exportCommand, /cat <&4 >&3/)
   assert.match(exportCommand, /stat -L -c %i -- "\$__sp_fd4"/)
@@ -1613,10 +1817,10 @@ test('staging operations bind one safe object to the handshaken root inode', asy
     true
   )
   assert.match(importCommand, /exec 3< "\.\/\$__sp_objectName"/)
-  assert.match(importCommand, /__sp_targetParent="\$\{__sp_targetPath%\/\*\}"/)
-  assert.match(importCommand, /__sp_targetName="\$\{__sp_targetPath##\*\/\}"/)
-  assert.match(importCommand, /__sp_targetParentReal=.*realpath/)
-  assert.match(importCommand, /cd -- "\$__sp_targetParent"/)
+  assert.match(importCommand, /__sp_bind_entry_parent "\$__sp_targetPath"/)
+  assert.match(importCommand, /__sp_targetParent="\$__sp_targetParentRealPath"/)
+  assert.match(importCommand, /__sp_targetName="\$__sp_boundName"/)
+  assert.match(importCommand, /cd -- "\$__sp_boundParent"/)
   assert.match(importCommand, /stat -c %d -- \./)
   assert.match(importCommand, /stat -c %i -- \./)
   assert.match(importCommand, /__sp_targetParentTrusted=0/)
@@ -1685,7 +1889,7 @@ test('staging operations bind one safe object to the handshaken root inode', asy
         token,
         request: {
           operation: 'stage-import',
-          args: {
+          args: targetStageBinding({
             ...binding,
             targetPath,
             sha256: 'a'.repeat(64),
@@ -1693,10 +1897,10 @@ test('staging operations bind one safe object to the handshaken root inode', asy
             targetMode: '600',
             targetUid: '0',
             targetGid: '0'
-          }
+          })
         }
       }),
-      /targetPath/
+      /targetPath|绑定/
     )
   }
 })
@@ -1729,7 +1933,7 @@ test('stage cleanup requires content proof and binds deletion to one opened inod
   assert.match(command, /__sp_path_matches_fd "\.\/\$__sp_objectName"/)
   assert.equal(
     command.lastIndexOf('__sp_path_matches_fd "./$__sp_objectName"') <
-      command.indexOf('rm -f -- "./$__sp_objectName"'),
+      command.lastIndexOf('rm -f -- "./$__sp_objectName"'),
     true
   )
   assert.doesNotMatch(command, /rm -rf/)
@@ -1841,7 +2045,12 @@ test('linux staging handshake export import and cleanup preserve content metadat
     const exported = await runRealProtocolOperation({
       operation: 'stage-export',
       token: 'e1'.repeat(24),
-      args: { ...fixture.binding, objectName, sourcePath }
+      args: {
+        ...fixture.binding,
+        objectName,
+        sourcePath,
+        ...nativeSourceBinding(sourcePath)
+      }
     })
     assert.equal(exported.execution.status, 0, exported.execution.stderr)
     assert.equal(exported.result.sha256, sha256Text(content))
@@ -1867,7 +2076,9 @@ test('linux staging handshake export import and cleanup preserve content metadat
         size: String(Buffer.byteLength(content)),
         targetMode: '0640',
         targetUid: '0',
-        targetGid: '0'
+        targetGid: '0',
+        mustBeAbsent: '0',
+        ...nativeTargetBinding(targetPath)
       }
     })
     assert.equal(imported.execution.status, 0, imported.execution.stderr)
@@ -1897,7 +2108,8 @@ test('linux staging handshake export import and cleanup preserve content metadat
         targetMode: '600',
         targetUid: '0',
         targetGid: '0',
-        mustBeAbsent: '1'
+        mustBeAbsent: '1',
+        ...nativeTargetBinding(noClobberPath, true)
       }
     })
     assert.notEqual(noClobber.execution.status, 0)
@@ -1939,7 +2151,9 @@ test('linux stage import rejects digest mismatch special entries directories and
       size: '7',
       targetMode: '600',
       targetUid: '0',
-      targetGid: '0'
+      targetGid: '0',
+      mustBeAbsent: '0',
+      ...nativeTargetBinding(targetPath)
     }
 
     fs.writeFileSync(path.join(fixture.rootPath, 'digest-object'), 'different')
@@ -2002,7 +2216,12 @@ test('linux stage import rejects digest mismatch special entries directories and
     const directoryRejected = await runRealProtocolOperation({
       operation: 'stage-import',
       token: 'f2'.repeat(24),
-      args: { ...baseArgs, objectName: 'digest-object', targetPath: directoryTarget }
+      args: {
+        ...baseArgs,
+        objectName: 'digest-object',
+        targetPath: directoryTarget,
+        ...nativeTargetBinding(directoryTarget)
+      }
     })
     assert.notEqual(directoryRejected.execution.status, 0)
     assert.equal(fs.statSync(directoryTarget).isDirectory(), true)
@@ -2012,7 +2231,12 @@ test('linux stage import rejects digest mismatch special entries directories and
     const symlinkTargetRejected = await runRealProtocolOperation({
       operation: 'stage-import',
       token: 'f6'.repeat(24),
-      args: { ...baseArgs, objectName: 'digest-object', targetPath: symlinkTarget }
+      args: {
+        ...baseArgs,
+        objectName: 'digest-object',
+        targetPath: symlinkTarget,
+        ...nativeTargetBinding(symlinkTarget)
+      }
     })
     assert.notEqual(symlinkTargetRejected.execution.status, 0)
     assert.equal(fs.readlinkSync(symlinkTarget), 'installed')
@@ -2025,7 +2249,13 @@ test('linux stage import rejects digest mismatch special entries directories and
       args: {
         ...baseArgs,
         objectName: 'digest-object',
-        targetPath: path.join(symlinkParent, 'through-link')
+        targetPath: path.join(symlinkParent, 'through-link'),
+        targetParentRealPath: symlinkParent,
+        targetParentDevice: baseArgs.targetParentDevice,
+        targetParentInode: baseArgs.targetParentInode,
+        targetDevice: '0',
+        targetInode: '0',
+        mustBeAbsent: '1'
       }
     })
     assert.notEqual(symlinkParentRejected.execution.status, 0)
@@ -2106,7 +2336,9 @@ test('linux stage import metadata failure preserves the old target and removes i
         size: String(Buffer.byteLength(content)),
         targetMode: '777',
         targetUid: '4294967296',
-        targetGid: '0'
+        targetGid: '0',
+        mustBeAbsent: '0',
+        ...nativeTargetBinding(targetPath)
       }
     })
     assert.notEqual(rejected.execution.status, 0)
