@@ -14,6 +14,7 @@ const allowedOperations = new Set([
   'realpath',
   'mkdir',
   'mkdir-bound',
+  'metadata-bound',
   'touch',
   'rename',
   'rename-bound',
@@ -50,7 +51,7 @@ const requiredStageCapabilities = Object.freeze({
   ]),
   'stage-import': Object.freeze([
     'cleanShell', 'printf', 'id', 'tr', 'stat', 'base64', 'sha256', 'procFd',
-    'noclobber', 'cat', 'gnuStat', 'gnuMv', 'realpath', 'chown', 'chmod', 'rm'
+    'noclobber', 'cat', 'gnuStat', 'realpath', 'chown', 'chmod', 'rm'
   ]),
   'stage-cleanup': Object.freeze([
     'cleanShell', 'printf', 'id', 'tr', 'stat', 'base64', 'sha256', 'procFd',
@@ -106,17 +107,21 @@ const requiredOperationCapabilities = Object.freeze({
     'cleanShell', 'printf', 'id', 'tr', 'base64', 'stat', 'gnuStat',
     'realpath', 'chown', 'chmod', 'rmdir', 'procFd'
   ]),
+  'metadata-bound': Object.freeze([
+    'cleanShell', 'printf', 'id', 'tr', 'base64', 'stat', 'gnuStat',
+    'realpath', 'chown', 'chmod', 'procFd'
+  ]),
   'remove-bound': Object.freeze([
     'cleanShell', 'printf', 'id', 'tr', 'base64', 'stat', 'gnuStat',
     'realpath', 'rm', 'rmdir'
   ]),
   'sha256-bound': Object.freeze([
     'cleanShell', 'printf', 'id', 'tr', 'base64', 'stat', 'gnuStat',
-    'realpath', 'sha256', 'procFd', 'gnuDd', 'mkfifo', 'rm'
+    'realpath', 'sha256', 'procFd', 'gnuDd', 'mkfifo', 'rm', 'cat'
   ]),
   'sha256-range-bound': Object.freeze([
     'cleanShell', 'printf', 'id', 'tr', 'base64', 'stat', 'gnuStat',
-    'realpath', 'sha256', 'procFd', 'gnuDd', 'mkfifo', 'rm'
+    'realpath', 'sha256', 'procFd', 'gnuDd', 'mkfifo', 'rm', 'cat'
   ]),
   sha256: Object.freeze([
     'cleanShell', 'printf', 'id', 'tr', 'base64', 'sha256', 'stat', 'gnuStat'
@@ -239,15 +244,23 @@ const operationArguments = Object.freeze({
   mkdir: ['path'],
   'mkdir-bound': [
     'targetPath', 'targetParentRealPath', 'targetParentDevice',
-    'targetParentInode', 'targetMode', 'targetUid', 'targetGid'
+    'targetParentInode', 'targetParentUid', 'targetParentMode',
+    'targetMode', 'targetUid', 'targetGid'
+  ],
+  'metadata-bound': [
+    'targetPath', 'targetParentRealPath', 'targetParentDevice',
+    'targetParentInode', 'targetParentUid', 'targetParentMode',
+    'targetDevice', 'targetInode', 'targetType', 'targetMode',
+    'targetUid', 'targetGid'
   ],
   touch: ['path'],
   rename: ['source', 'target'],
   'rename-bound': [
     'sourcePath', 'sourceParentRealPath', 'sourceParentDevice',
-    'sourceParentInode', 'sourceDevice', 'sourceInode', 'sourceType',
+    'sourceParentInode', 'sourceParentUid', 'sourceParentMode',
+    'sourceDevice', 'sourceInode', 'sourceType',
     'targetPath', 'targetParentRealPath', 'targetParentDevice',
-    'targetParentInode'
+    'targetParentInode', 'targetParentUid', 'targetParentMode'
   ],
   rm: ['path'],
   rmdir: ['path'],
@@ -282,7 +295,7 @@ const operationArguments = Object.freeze({
     'rootUid', 'rootGid', 'rootMode', 'objectName', 'targetPath',
     'sha256', 'size', 'targetMode', 'targetUid', 'targetGid', 'mustBeAbsent',
     'targetParentRealPath', 'targetParentDevice', 'targetParentInode',
-    'targetDevice', 'targetInode'
+    'targetParentUid', 'targetParentMode', 'targetDevice', 'targetInode'
   ],
   'stage-cleanup': [
     'rootPath', 'rootRealPath', 'rootDevice', 'rootInode',
@@ -326,6 +339,8 @@ const argumentVariables = Object.freeze({
   sourceParentRealPath: '__sp_sourceParentRealPath',
   sourceParentDevice: '__sp_sourceParentDevice',
   sourceParentInode: '__sp_sourceParentInode',
+  sourceParentUid: '__sp_sourceParentUid',
+  sourceParentMode: '__sp_sourceParentMode',
   sourceDevice: '__sp_sourceDevice',
   sourceInode: '__sp_sourceInode',
   sourceType: '__sp_sourceType',
@@ -339,6 +354,8 @@ const argumentVariables = Object.freeze({
   targetParentRealPath: '__sp_targetParentRealPath',
   targetParentDevice: '__sp_targetParentDevice',
   targetParentInode: '__sp_targetParentInode',
+  targetParentUid: '__sp_targetParentUid',
+  targetParentMode: '__sp_targetParentMode',
   targetDevice: '__sp_targetDevice',
   targetInode: '__sp_targetInode',
   targetType: '__sp_targetType',
@@ -370,6 +387,8 @@ const argumentEnvironmentVariables = Object.freeze({
   sourceParentRealPath: 'SHELLPILOT_ARG_SOURCE_PARENT_REAL_PATH',
   sourceParentDevice: 'SHELLPILOT_ARG_SOURCE_PARENT_DEVICE',
   sourceParentInode: 'SHELLPILOT_ARG_SOURCE_PARENT_INODE',
+  sourceParentUid: 'SHELLPILOT_ARG_SOURCE_PARENT_UID',
+  sourceParentMode: 'SHELLPILOT_ARG_SOURCE_PARENT_MODE',
   sourceDevice: 'SHELLPILOT_ARG_SOURCE_DEVICE',
   sourceInode: 'SHELLPILOT_ARG_SOURCE_INODE',
   sourceType: 'SHELLPILOT_ARG_SOURCE_TYPE',
@@ -383,6 +402,8 @@ const argumentEnvironmentVariables = Object.freeze({
   targetParentRealPath: 'SHELLPILOT_ARG_TARGET_PARENT_REAL_PATH',
   targetParentDevice: 'SHELLPILOT_ARG_TARGET_PARENT_DEVICE',
   targetParentInode: 'SHELLPILOT_ARG_TARGET_PARENT_INODE',
+  targetParentUid: 'SHELLPILOT_ARG_TARGET_PARENT_UID',
+  targetParentMode: 'SHELLPILOT_ARG_TARGET_PARENT_MODE',
   targetDevice: 'SHELLPILOT_ARG_TARGET_DEVICE',
   targetInode: 'SHELLPILOT_ARG_TARGET_INODE',
   targetType: 'SHELLPILOT_ARG_TARGET_TYPE',
@@ -404,16 +425,18 @@ function assertRequestContract (request) {
   for (const key of [
     'uid', 'gid', 'rootDevice', 'rootInode', 'rootUid', 'rootGid',
     'size', 'expectedSize', 'maxSize', 'offset', 'maxBytes',
-    'targetUid', 'targetGid', 'sourceParentDevice',
+    'targetUid', 'targetGid', 'sourceParentDevice', 'sourceParentUid',
     'sourceParentInode', 'sourceDevice', 'sourceInode',
-    'targetParentDevice', 'targetParentInode', 'targetDevice', 'targetInode'
+    'targetParentDevice', 'targetParentInode', 'targetParentUid',
+    'targetDevice', 'targetInode'
   ]) {
     if (Object.hasOwn(request.args, key) &&
       !/^(?:0|[1-9]\d*)$/.test(request.args[key])) {
       throw new Error(`root 文件操作参数值无效：${key}`)
     }
   }
-  for (const key of ['mode', 'rootMode', 'targetMode']) {
+  for (const key of ['mode', 'rootMode', 'targetMode', 'sourceParentMode',
+    'targetParentMode']) {
     if (Object.hasOwn(request.args, key) &&
       !/^(?:0|[1-7][0-7]{0,3})$/.test(request.args[key])) {
       throw new Error(`root 文件操作参数值无效：${key}`)
@@ -651,58 +674,44 @@ const stageImportBody = [
   '__sp_objectInode="$(stat -L -c %i -- "$__sp_fd3")" || { exec 3<&-; return 1; }',
   '[ "$(stat -c %d -- "./$__sp_objectName")" = "$__sp_objectDevice" ] || { exec 3<&-; return 1; }',
   '[ "$(stat -c %i -- "./$__sp_objectName")" = "$__sp_objectInode" ] || { exec 3<&-; return 1; }',
+  '__sp_sourceDigest="$(__sp_sha256_raw "$__sp_fd3")" || { exec 3<&-; return 1; }',
+  '__sp_sourceSize="$(stat -L -c %s -- "$__sp_fd3")" || { exec 3<&-; return 1; }',
+  '[ "$__sp_sourceDigest" = "$__sp_expectedSha256" ] && [ "$__sp_sourceSize" = "$__sp_expectedSize" ] || { exec 3<&-; return 1; }',
   '__sp_bind_entry_parent "$__sp_targetPath" "$__sp_targetParentRealPath" "$__sp_targetParentDevice" "$__sp_targetParentInode" || { exec 3<&-; return 1; }',
-  '__sp_targetParent="$__sp_targetParentRealPath"',
   '__sp_targetName="$__sp_boundName"',
-  '__sp_targetParentTrusted=0',
-  '__sp_targetParentUid="$(stat -c %u -- .)" || { exec 3<&-; return 1; }',
-  '__sp_targetParentMode="$(stat -c %a -- .)" || { exec 3<&-; return 1; }',
-  'case "$__sp_targetParentMode" in ""|*[!0-7]*) exec 3<&-; return 1 ;; esac',
-  'if [ "$__sp_targetParentUid" = 0 ] && [ "$((0$__sp_targetParentMode & 022))" -eq 0 ]; then __sp_targetParentTrusted=1; fi',
+  '__sp_trusted_parent_fd . "$__sp_targetParentDevice" "$__sp_targetParentInode" "$__sp_targetParentUid" "$__sp_targetParentMode" || { exec 3<&-; return 1; }',
+  '__sp_trusted_parent_path_matches "$__sp_targetParentRealPath" "$__sp_targetParentDevice" "$__sp_targetParentInode" "$__sp_targetParentUid" "$__sp_targetParentMode" || { exec 3<&-; return 1; }',
+  '__sp_targetParentTrusted=1',
   '[ "$__sp_mustBeAbsent" = 1 ] || { exec 3<&-; return 1; }',
   '[ ! -e "./$__sp_targetName" ] && [ ! -L "./$__sp_targetName" ] || { exec 3<&-; return 1; }',
-  '__sp_tempName=".shellpilot-$__sp_token.tmp"',
-  '[ ! -e "./$__sp_tempName" ] && [ ! -L "./$__sp_tempName" ] || { exec 3<&-; return 1; }',
   'umask 077',
   'set -C || { exec 3<&-; return 1; }',
-  'exec 4> "./$__sp_tempName" || { exec 3<&-; return 1; }',
+  '__sp_trusted_parent_path_matches "$__sp_targetParentRealPath" "$__sp_targetParentDevice" "$__sp_targetParentInode" "$__sp_targetParentUid" "$__sp_targetParentMode" || { exec 3<&-; return 1; }',
+  'exec 4> "./$__sp_targetName" || { exec 3<&-; return 1; }',
   '__sp_fd4="/proc/$$/fd/4"',
-  '__sp_tempDevice="$(stat -L -c %d -- "$__sp_fd4")" || { exec 3<&- 4>&-; return 1; }',
-  '__sp_tempInode="$(stat -L -c %i -- "$__sp_fd4")" || { exec 3<&- 4>&-; return 1; }',
-  '[ "$(stat -L -c %a -- "$__sp_fd4")" = 600 ] || { __sp_cleanup_temp; exec 3<&- 4>&-; return 1; }',
-  '__sp_path_matches_fd "./$__sp_tempName" "$__sp_tempDevice" "$__sp_tempInode" || { exec 3<&- 4>&-; return 1; }',
-  'if ! cat <&3 >&4; then __sp_cleanup_temp; exec 3<&- 4>&-; return 1; fi',
+  '__sp_installedDevice="$(stat -L -c %d -- "$__sp_fd4")" || { exec 3<&- 4>&-; return 1; }',
+  '__sp_installedInode="$(stat -L -c %i -- "$__sp_fd4")" || { exec 3<&- 4>&-; return 1; }',
+  '[ "$(stat -L -c %a -- "$__sp_fd4")" = 600 ] || { __sp_cleanup_installed; exec 3<&- 4>&-; return 1; }',
+  '__sp_path_matches_fd "./$__sp_targetName" "$__sp_installedDevice" "$__sp_installedInode" || { exec 3<&- 4>&-; return 1; }',
+  'if ! cat <&3 >&4; then __sp_cleanup_installed; exec 3<&- 4>&-; return 1; fi',
+  '__sp_afterSourceDigest="$(__sp_sha256_raw "$__sp_fd3")" || { __sp_cleanup_installed; exec 3<&- 4>&-; return 1; }',
+  '__sp_afterSourceSize="$(stat -L -c %s -- "$__sp_fd3")" || { __sp_cleanup_installed; exec 3<&- 4>&-; return 1; }',
+  '[ "$__sp_afterSourceDigest" = "$__sp_expectedSha256" ] && [ "$__sp_afterSourceSize" = "$__sp_expectedSize" ] || { __sp_cleanup_installed; exec 3<&- 4>&-; return 1; }',
   'exec 3<&-',
-  '__sp_installedDigest="$(__sp_sha256_raw "$__sp_fd4")" || { __sp_cleanup_temp; exec 4>&-; return 1; }',
-  '__sp_installedSize="$(stat -L -c %s -- "$__sp_fd4")" || { __sp_cleanup_temp; exec 4>&-; return 1; }',
-  '[ "$__sp_installedDigest" = "$__sp_expectedSha256" ] && [ "$__sp_installedSize" = "$__sp_expectedSize" ] || { __sp_cleanup_temp; exec 4>&-; return 1; }',
-  '[ "$(stat -c %d -- .)" = "$__sp_targetParentDevice" ] && [ "$(stat -c %i -- .)" = "$__sp_targetParentInode" ] || { __sp_cleanup_temp; exec 4>&-; return 1; }',
-  '__sp_path_matches_fd "./$__sp_tempName" "$__sp_tempDevice" "$__sp_tempInode" || { exec 4>&-; return 1; }',
-  'chown -- "$__sp_targetUid:$__sp_targetGid" "$__sp_fd4" || { __sp_cleanup_temp; exec 4>&-; return 1; }',
-  'chmod -- "$__sp_targetMode" "$__sp_fd4" || { __sp_cleanup_temp; exec 4>&-; return 1; }',
-  '__sp_path_matches_fd "./$__sp_tempName" "$__sp_tempDevice" "$__sp_tempInode" || { exec 4>&-; return 1; }',
-  '__sp_readyDigest="$(__sp_sha256_raw "$__sp_fd4")" || { __sp_cleanup_temp; exec 4>&-; return 1; }',
-  '__sp_readySize="$(stat -L -c %s -- "$__sp_fd4")" || { __sp_cleanup_temp; exec 4>&-; return 1; }',
-  '__sp_readyUid="$(stat -L -c %u -- "$__sp_fd4")" || { __sp_cleanup_temp; exec 4>&-; return 1; }',
-  '__sp_readyGid="$(stat -L -c %g -- "$__sp_fd4")" || { __sp_cleanup_temp; exec 4>&-; return 1; }',
-  '__sp_readyMode="$(stat -L -c %a -- "$__sp_fd4")" || { __sp_cleanup_temp; exec 4>&-; return 1; }',
-  '[ "$__sp_readyDigest" = "$__sp_expectedSha256" ] && [ "$__sp_readySize" = "$__sp_expectedSize" ] && [ "$__sp_readyUid" = "$__sp_targetUid" ] && [ "$__sp_readyGid" = "$__sp_targetGid" ] && [ "$__sp_readyMode" = "$__sp_targetMode" ] || { __sp_cleanup_temp; exec 4>&-; return 1; }',
-  '[ "$(stat -c %d -- .)" = "$__sp_targetParentDevice" ] && [ "$(stat -c %i -- .)" = "$__sp_targetParentInode" ] || { __sp_cleanup_temp; exec 4>&-; return 1; }',
-  '__sp_parent_path_matches "$__sp_targetParentRealPath" "$__sp_targetParentDevice" "$__sp_targetParentInode" || { __sp_cleanup_temp; exec 4>&-; return 1; }',
-  '[ ! -e "./$__sp_targetName" ] && [ ! -L "./$__sp_targetName" ] || { __sp_cleanup_temp; exec 4>&-; return 1; }',
-  '__sp_path_matches_fd "./$__sp_tempName" "$__sp_tempDevice" "$__sp_tempInode" || { exec 4>&-; return 1; }',
-  'mv -nT -- "./$__sp_tempName" "./$__sp_targetName" || { __sp_cleanup_temp; exec 4>&-; return 1; }',
-  '__sp_path_matches_fd "./$__sp_targetName" "$__sp_tempDevice" "$__sp_tempInode" || { __sp_cleanup_temp; exec 4>&-; return 1; }',
-  '__sp_parent_path_matches "$__sp_targetParentRealPath" "$__sp_targetParentDevice" "$__sp_targetParentInode" || { __sp_cleanup_installed; exec 4>&-; return 1; }',
+  '__sp_installedDigest="$(__sp_sha256_raw "$__sp_fd4")" || { __sp_cleanup_installed; exec 4>&-; return 1; }',
+  '__sp_installedSize="$(stat -L -c %s -- "$__sp_fd4")" || { __sp_cleanup_installed; exec 4>&-; return 1; }',
+  '[ "$__sp_installedDigest" = "$__sp_expectedSha256" ] && [ "$__sp_installedSize" = "$__sp_expectedSize" ] || { __sp_cleanup_installed; exec 4>&-; return 1; }',
+  'chown -- "$__sp_targetUid:$__sp_targetGid" "$__sp_fd4" || { __sp_cleanup_installed; exec 4>&-; return 1; }',
+  'chmod -- "$__sp_targetMode" "$__sp_fd4" || { __sp_cleanup_installed; exec 4>&-; return 1; }',
   '__sp_finalDigest="$(__sp_sha256_raw "$__sp_fd4")" || { __sp_cleanup_installed; exec 4>&-; return 1; }',
   '__sp_finalSize="$(stat -L -c %s -- "$__sp_fd4")" || { __sp_cleanup_installed; exec 4>&-; return 1; }',
   '__sp_finalUid="$(stat -L -c %u -- "$__sp_fd4")" || { __sp_cleanup_installed; exec 4>&-; return 1; }',
   '__sp_finalGid="$(stat -L -c %g -- "$__sp_fd4")" || { __sp_cleanup_installed; exec 4>&-; return 1; }',
   '__sp_finalMode="$(stat -L -c %a -- "$__sp_fd4")" || { __sp_cleanup_installed; exec 4>&-; return 1; }',
   '[ "$__sp_finalDigest" = "$__sp_expectedSha256" ] && [ "$__sp_finalSize" = "$__sp_expectedSize" ] && [ "$__sp_finalUid" = "$__sp_targetUid" ] && [ "$__sp_finalGid" = "$__sp_targetGid" ] && [ "$__sp_finalMode" = "$__sp_targetMode" ] || { __sp_cleanup_installed; exec 4>&-; return 1; }',
-  '__sp_path_matches_fd "./$__sp_targetName" "$__sp_tempDevice" "$__sp_tempInode" || { exec 4>&-; return 1; }',
-  '__sp_parent_path_matches "$__sp_targetParentRealPath" "$__sp_targetParentDevice" "$__sp_targetParentInode" || { __sp_cleanup_installed; exec 4>&-; return 1; }',
-  '__sp_emit_install "$__sp_finalDigest" "$__sp_finalSize" "$__sp_tempDevice" "$__sp_tempInode" || { __sp_cleanup_installed; exec 4>&-; return 1; }',
+  '__sp_path_matches_fd "./$__sp_targetName" "$__sp_installedDevice" "$__sp_installedInode" || { exec 4>&-; return 1; }',
+  '__sp_trusted_parent_path_matches "$__sp_targetParentRealPath" "$__sp_targetParentDevice" "$__sp_targetParentInode" "$__sp_targetParentUid" "$__sp_targetParentMode" || { __sp_cleanup_installed; exec 4>&-; return 1; }',
+  '__sp_emit_install "$__sp_finalDigest" "$__sp_finalSize" "$__sp_installedDevice" "$__sp_installedInode" || { __sp_cleanup_installed; exec 4>&-; return 1; }',
   'exec 4>&-'
 ].join('; ')
 
@@ -787,7 +796,7 @@ function createSha256BoundBody (range) {
     '[ "$__sp_openSourceSize" = "$__sp_expectedSize" ] || { exec 3<&-; return 1; }',
     ...sizeSetup,
     '__sp_bind_root || { exec 3<&-; return 1; }',
-    '__sp_digest="$(__sp_bounded_digest "$__sp_fd3" "$__sp_offset" "$__sp_windowSize")" || { exec 3<&-; return 1; }',
+    '__sp_digest="$(__sp_bounded_digest "$__sp_offset" "$__sp_windowSize")" || { exec 3<&-; return 1; }',
     '[ "$(stat -L -c %s -- "$__sp_fd3")" = "$__sp_expectedSize" ] || { exec 3<&-; return 1; }',
     '[ "$(stat -L -c %d -- "$__sp_fd3")" = "$__sp_sourceDevice" ] || { exec 3<&-; return 1; }',
     '[ "$(stat -L -c %i -- "$__sp_fd3")" = "$__sp_sourceInode" ] || { exec 3<&-; return 1; }',
@@ -804,26 +813,48 @@ const sha256RangeBoundBody = createSha256BoundBody(true)
 const mkdirBoundBody = [
   '[ "$__sp_uid_effective" = 0 ] || return 1',
   '__sp_bind_entry_parent "$__sp_targetPath" "$__sp_targetParentRealPath" "$__sp_targetParentDevice" "$__sp_targetParentInode" || return $?',
+  '__sp_trusted_parent_fd . "$__sp_targetParentDevice" "$__sp_targetParentInode" "$__sp_targetParentUid" "$__sp_targetParentMode" || return 1',
   '[ ! -e "./$__sp_boundName" ] && [ ! -L "./$__sp_boundName" ] || return 1',
-  '__sp_parent_path_matches "$__sp_targetParentRealPath" "$__sp_targetParentDevice" "$__sp_targetParentInode" || return 1',
+  '__sp_trusted_parent_path_matches "$__sp_targetParentRealPath" "$__sp_targetParentDevice" "$__sp_targetParentInode" "$__sp_targetParentUid" "$__sp_targetParentMode" || return 1',
+  'umask 077',
   'mkdir -- "./$__sp_boundName" || return $?',
   'exec 5< "./$__sp_boundName" || return $?',
   '__sp_fd5="/proc/$$/fd/5"',
   '[ -d "$__sp_fd5" ] || { exec 5<&-; return 1; }',
   '__sp_createdDevice="$(stat -L -c %d -- "$__sp_fd5")" || { exec 5<&-; return 1; }',
   '__sp_createdInode="$(stat -L -c %i -- "$__sp_fd5")" || { exec 5<&-; return 1; }',
+  '[ "$(stat -L -c %a -- "$__sp_fd5")" = 700 ] || { __sp_cleanup_created_directory; exec 5<&-; return 1; }',
   '__sp_entry_matches "./$__sp_boundName" "$__sp_createdDevice" "$__sp_createdInode" directory || { exec 5<&-; return 1; }',
-  '__sp_parent_path_matches "$__sp_targetParentRealPath" "$__sp_targetParentDevice" "$__sp_targetParentInode" || { __sp_cleanup_created_directory; exec 5<&-; return 1; }',
+  '__sp_trusted_parent_path_matches "$__sp_targetParentRealPath" "$__sp_targetParentDevice" "$__sp_targetParentInode" "$__sp_targetParentUid" "$__sp_targetParentMode" || { __sp_cleanup_created_directory; exec 5<&-; return 1; }',
   'chown -- "$__sp_targetUid:$__sp_targetGid" "$__sp_fd5" || { __sp_cleanup_created_directory; exec 5<&-; return 1; }',
-  '__sp_parent_path_matches "$__sp_targetParentRealPath" "$__sp_targetParentDevice" "$__sp_targetParentInode" || { __sp_cleanup_created_directory; exec 5<&-; return 1; }',
+  '__sp_trusted_parent_path_matches "$__sp_targetParentRealPath" "$__sp_targetParentDevice" "$__sp_targetParentInode" "$__sp_targetParentUid" "$__sp_targetParentMode" || { __sp_cleanup_created_directory; exec 5<&-; return 1; }',
   'chmod -- "$__sp_targetMode" "$__sp_fd5" || { __sp_cleanup_created_directory; exec 5<&-; return 1; }',
   '__sp_entry_matches "./$__sp_boundName" "$__sp_createdDevice" "$__sp_createdInode" directory || { exec 5<&-; return 1; }',
   '[ "$(stat -L -c %u -- "$__sp_fd5")" = "$__sp_targetUid" ] || { __sp_cleanup_created_directory; exec 5<&-; return 1; }',
   '[ "$(stat -L -c %g -- "$__sp_fd5")" = "$__sp_targetGid" ] || { __sp_cleanup_created_directory; exec 5<&-; return 1; }',
   '[ "$(stat -L -c %a -- "$__sp_fd5")" = "$__sp_targetMode" ] || { __sp_cleanup_created_directory; exec 5<&-; return 1; }',
   '__sp_entry_matches "./$__sp_boundName" "$__sp_createdDevice" "$__sp_createdInode" directory || { exec 5<&-; return 1; }',
-  '__sp_parent_path_matches "$__sp_targetParentRealPath" "$__sp_targetParentDevice" "$__sp_targetParentInode" || { __sp_cleanup_created_directory; exec 5<&-; return 1; }',
+  '__sp_trusted_parent_path_matches "$__sp_targetParentRealPath" "$__sp_targetParentDevice" "$__sp_targetParentInode" "$__sp_targetParentUid" "$__sp_targetParentMode" || { __sp_cleanup_created_directory; exec 5<&-; return 1; }',
   '__sp_emit_binding "$__sp_createdDevice" "$__sp_createdInode" || { __sp_cleanup_created_directory; exec 5<&-; return 1; }',
+  'exec 5<&-'
+].join('; ')
+
+const metadataBoundBody = [
+  '[ "$__sp_uid_effective" = 0 ] || return 1',
+  '__sp_bind_entry_parent "$__sp_targetPath" "$__sp_targetParentRealPath" "$__sp_targetParentDevice" "$__sp_targetParentInode" || return $?',
+  '__sp_trusted_parent_fd . "$__sp_targetParentDevice" "$__sp_targetParentInode" "$__sp_targetParentUid" "$__sp_targetParentMode" || return 1',
+  '__sp_trusted_parent_path_matches "$__sp_targetParentRealPath" "$__sp_targetParentDevice" "$__sp_targetParentInode" "$__sp_targetParentUid" "$__sp_targetParentMode" || return 1',
+  '__sp_entry_matches "./$__sp_boundName" "$__sp_targetDevice" "$__sp_targetInode" "$__sp_targetType" || return 1',
+  'exec 5< "./$__sp_boundName" || return $?',
+  '__sp_fd5="/proc/$$/fd/5"',
+  '__sp_fd_entry_matches "$__sp_fd5" "$__sp_targetDevice" "$__sp_targetInode" "$__sp_targetType" || { exec 5<&-; return 1; }',
+  '__sp_entry_matches "./$__sp_boundName" "$__sp_targetDevice" "$__sp_targetInode" "$__sp_targetType" || { exec 5<&-; return 1; }',
+  '__sp_trusted_parent_path_matches "$__sp_targetParentRealPath" "$__sp_targetParentDevice" "$__sp_targetParentInode" "$__sp_targetParentUid" "$__sp_targetParentMode" || { exec 5<&-; return 1; }',
+  'chown -- "$__sp_targetUid:$__sp_targetGid" "$__sp_fd5" || { exec 5<&-; return 1; }',
+  'chmod -- "$__sp_targetMode" "$__sp_fd5" || { exec 5<&-; return 1; }',
+  '[ "$(stat -L -c %u -- "$__sp_fd5")" = "$__sp_targetUid" ] && [ "$(stat -L -c %g -- "$__sp_fd5")" = "$__sp_targetGid" ] && [ "$(stat -L -c %a -- "$__sp_fd5")" = "$__sp_targetMode" ] || { exec 5<&-; return 1; }',
+  '__sp_entry_matches "./$__sp_boundName" "$__sp_targetDevice" "$__sp_targetInode" "$__sp_targetType" || { exec 5<&-; return 1; }',
+  '__sp_trusted_parent_path_matches "$__sp_targetParentRealPath" "$__sp_targetParentDevice" "$__sp_targetParentInode" "$__sp_targetParentUid" "$__sp_targetParentMode" || { exec 5<&-; return 1; }',
   'exec 5<&-'
 ].join('; ')
 
@@ -840,7 +871,7 @@ const renameBoundBody = [
   '__sp_sourceName="$__sp_boundName"',
   'exec 8< . || return $?',
   '__sp_fd8="/proc/$$/fd/8"',
-  '[ -d "$__sp_fd8" ] && [ "$(stat -L -c %d -- "$__sp_fd8")" = "$__sp_sourceParentDevice" ] && [ "$(stat -L -c %i -- "$__sp_fd8")" = "$__sp_sourceParentInode" ] || { exec 8<&-; return 1; }',
+  '__sp_trusted_parent_fd "$__sp_fd8" "$__sp_sourceParentDevice" "$__sp_sourceParentInode" "$__sp_sourceParentUid" "$__sp_sourceParentMode" || { exec 8<&-; return 1; }',
   '__sp_sourceRef="$__sp_fd8/$__sp_sourceName"',
   '__sp_entry_matches "$__sp_sourceRef" "$__sp_sourceDevice" "$__sp_sourceInode" "$__sp_sourceType" || { exec 8<&-; return 1; }',
   'exec 7< "$__sp_sourceRef" || { exec 8<&-; return 1; }',
@@ -850,10 +881,10 @@ const renameBoundBody = [
   '__sp_targetName="$__sp_boundName"',
   'exec 9< . || { exec 7<&- 8<&-; return 1; }',
   '__sp_fd9="/proc/$$/fd/9"',
-  '[ -d "$__sp_fd9" ] && [ "$(stat -L -c %d -- "$__sp_fd9")" = "$__sp_targetParentDevice" ] && [ "$(stat -L -c %i -- "$__sp_fd9")" = "$__sp_targetParentInode" ] || { exec 7<&- 8<&- 9<&-; return 1; }',
+  '__sp_trusted_parent_fd "$__sp_fd9" "$__sp_targetParentDevice" "$__sp_targetParentInode" "$__sp_targetParentUid" "$__sp_targetParentMode" || { exec 7<&- 8<&- 9<&-; return 1; }',
   '__sp_targetRef="$__sp_fd9/$__sp_targetName"',
   '[ "$__sp_sourceDevice" = "$__sp_sourceParentDevice" ] && [ "$__sp_sourceDevice" = "$__sp_targetParentDevice" ] || { exec 7<&- 8<&- 9<&-; return 1; }',
-  '__sp_rename_parents_match() { [ "$(stat -L -c %d -- "$__sp_fd8")" = "$__sp_sourceParentDevice" ] && [ "$(stat -L -c %i -- "$__sp_fd8")" = "$__sp_sourceParentInode" ] && [ "$(stat -L -c %d -- "$__sp_fd9")" = "$__sp_targetParentDevice" ] && [ "$(stat -L -c %i -- "$__sp_fd9")" = "$__sp_targetParentInode" ] && __sp_parent_path_matches "$__sp_sourceParentRealPath" "$__sp_sourceParentDevice" "$__sp_sourceParentInode" && __sp_parent_path_matches "$__sp_targetParentRealPath" "$__sp_targetParentDevice" "$__sp_targetParentInode"; }',
+  '__sp_rename_parents_match() { __sp_trusted_parent_fd "$__sp_fd8" "$__sp_sourceParentDevice" "$__sp_sourceParentInode" "$__sp_sourceParentUid" "$__sp_sourceParentMode" && __sp_trusted_parent_fd "$__sp_fd9" "$__sp_targetParentDevice" "$__sp_targetParentInode" "$__sp_targetParentUid" "$__sp_targetParentMode" && __sp_trusted_parent_path_matches "$__sp_sourceParentRealPath" "$__sp_sourceParentDevice" "$__sp_sourceParentInode" "$__sp_sourceParentUid" "$__sp_sourceParentMode" && __sp_trusted_parent_path_matches "$__sp_targetParentRealPath" "$__sp_targetParentDevice" "$__sp_targetParentInode" "$__sp_targetParentUid" "$__sp_targetParentMode"; }',
   '__sp_rollback_rename() { [ ! -e "$__sp_sourceRef" ] && [ ! -L "$__sp_sourceRef" ] || return 0; __sp_entry_matches "$__sp_targetRef" "$__sp_sourceDevice" "$__sp_sourceInode" "$__sp_sourceType" || return 0; __sp_rename_parents_match || return 0; [ ! -e "$__sp_sourceRef" ] && [ ! -L "$__sp_sourceRef" ] || return 0; __sp_entry_matches "$__sp_targetRef" "$__sp_sourceDevice" "$__sp_sourceInode" "$__sp_sourceType" || return 0; mv -nT -- "$__sp_targetRef" "$__sp_sourceRef" >/dev/null 2>&1 || return 0; }',
   '__sp_rename_parents_match || { exec 7<&- 8<&- 9<&-; return 1; }',
   '__sp_entry_matches "$__sp_sourceRef" "$__sp_sourceDevice" "$__sp_sourceInode" "$__sp_sourceType" || { exec 7<&- 8<&- 9<&-; return 1; }',
@@ -875,6 +906,7 @@ const operationBodies = Object.freeze({
   realpath: '__sp_emit_text "$(realpath -- "$__sp_path")"',
   mkdir: 'mkdir -- "$__sp_path"',
   'mkdir-bound': mkdirBoundBody,
+  'metadata-bound': metadataBoundBody,
   touch: '( umask 077; : > "$__sp_path" )',
   rename: 'mv -- "$__sp_source" "$__sp_target"',
   'rename-bound': renameBoundBody,
@@ -915,7 +947,8 @@ export function createPrivilegedFileRequest ({ operation, args = {} } = {}) {
     if (text.length > 1024 * 1024) {
       throw new Error(`root 文件操作参数过长：${key}`)
     }
-    if (['mode', 'rootMode', 'targetMode'].includes(key) &&
+    if (['mode', 'rootMode', 'targetMode', 'sourceParentMode',
+      'targetParentMode'].includes(key) &&
       /^[0-7]{1,4}$/.test(text)) {
       text = text.replace(/^0+(?=[0-7])/, '')
     }
@@ -1035,17 +1068,20 @@ export function buildPrivilegedFileCommand ({ token: providedToken, request }) {
     'realpath() { command realpath "$@" || return $?; printf .; };',
     '__sp_sha256_raw() { case "$__sp_sha256_tool" in sha256sum) __sp_hash="$(sha256sum -- "$1")" || return $? ;; shasum) __sp_hash="$(shasum -a 256 -- "$1")" || return $? ;; *) return 1 ;; esac; printf %s "$' + '{__sp_hash%% *}"; };',
     '__sp_sha256_text() { case "$__sp_sha256_tool" in sha256sum) __sp_hash="$(printf %s "$1" | sha256sum)" || return $? ;; shasum) __sp_hash="$(printf %s "$1" | shasum -a 256)" || return $? ;; *) return 1 ;; esac; printf %s "$' + '{__sp_hash%% *}"; };',
-    '__sp_bounded_digest() { __sp_digestInput="$1"; __sp_digestOffset="$2"; __sp_digestCount="$3"; __sp_digestFifo="./$__sp_objectName"; [ ! -e "$__sp_digestFifo" ] && [ ! -L "$__sp_digestFifo" ] || return 1; umask 077; mkfifo -m 600 -- "$__sp_digestFifo" || return $?; __sp_fifoDevice="$(stat -c %d -- "$__sp_digestFifo")" || return 1; __sp_fifoInode="$(stat -c %i -- "$__sp_digestFifo")" || return 1; __sp_fifo_matches() { [ ! -L "$__sp_digestFifo" ] && [ -p "$__sp_digestFifo" ] && [ "$(stat -c %d -- "$__sp_digestFifo")" = "$__sp_fifoDevice" ] && [ "$(stat -c %i -- "$__sp_digestFifo")" = "$__sp_fifoInode" ]; }; __sp_fifo_matches || return 1; dd if="$__sp_digestInput" of="$__sp_digestFifo" bs=65536 iflag=skip_bytes,count_bytes skip="$__sp_digestOffset" count="$__sp_digestCount" status=none & __sp_producerPid=$!; __sp_digestValue="$(__sp_sha256_raw "$__sp_digestFifo")"; __sp_hashStatus=$?; wait "$__sp_producerPid"; __sp_producerStatus=$?; if __sp_fifo_matches; then rm -f -- "$__sp_digestFifo" || return $?; else return 1; fi; [ "$__sp_hashStatus" -eq 0 ] && [ "$__sp_producerStatus" -eq 0 ] || return 1; printf %s "$__sp_digestValue"; };',
+    '__sp_sha256_stdin() { case "$__sp_sha256_tool" in sha256sum) __sp_hash="$(sha256sum)" || return $? ;; shasum) __sp_hash="$(shasum -a 256)" || return $? ;; *) return 1 ;; esac; printf %s "$' + '{__sp_hash%% *}"; };',
+    '__sp_bounded_digest() { __sp_digestOffset="$1"; __sp_digestCount="$2"; __sp_digestFifo="./$__sp_objectName"; __sp_digestReport="./$__sp_objectName.count"; [ ! -e "$__sp_digestFifo" ] && [ ! -L "$__sp_digestFifo" ] && [ ! -e "$__sp_digestReport" ] && [ ! -L "$__sp_digestReport" ] || return 1; umask 077; mkfifo -m 600 -- "$__sp_digestFifo" || return $?; exec 5<> "$__sp_digestFifo" || return 1; __sp_fd5="/proc/$$/fd/5"; [ -p "$__sp_fd5" ] || { exec 5>&-; return 1; }; __sp_fifoDevice="$(stat -L -c %d -- "$__sp_fd5")" || { exec 5>&-; return 1; }; __sp_fifoInode="$(stat -L -c %i -- "$__sp_fd5")" || { exec 5>&-; return 1; }; exec 6< "$__sp_digestFifo" || { exec 5>&-; return 1; }; exec 7> "$__sp_digestFifo" || { exec 5>&- 6<&-; return 1; }; __sp_fd6="/proc/$$/fd/6"; __sp_fd7="/proc/$$/fd/7"; [ -p "$__sp_fd6" ] && [ -p "$__sp_fd7" ] && [ "$(stat -L -c %d -- "$__sp_fd6")" = "$__sp_fifoDevice" ] && [ "$(stat -L -c %i -- "$__sp_fd6")" = "$__sp_fifoInode" ] && [ "$(stat -L -c %d -- "$__sp_fd7")" = "$__sp_fifoDevice" ] && [ "$(stat -L -c %i -- "$__sp_fd7")" = "$__sp_fifoInode" ] || { exec 5>&- 6<&- 7>&-; return 1; }; __sp_fifo_matches() { [ ! -L "$__sp_digestFifo" ] && [ -p "$__sp_digestFifo" ] && [ "$(stat -c %d -- "$__sp_digestFifo")" = "$__sp_fifoDevice" ] && [ "$(stat -c %i -- "$__sp_digestFifo")" = "$__sp_fifoInode" ]; }; __sp_fifo_matches || { exec 5>&- 6<&- 7>&-; return 1; }; set -C || { exec 5>&- 6<&- 7>&-; return 1; }; exec 8> "$__sp_digestReport" || { exec 5>&- 6<&- 7>&-; return 1; }; __sp_fd8="/proc/$$/fd/8"; [ -f "$__sp_fd8" ] || { exec 5>&- 6<&- 7>&- 8>&-; return 1; }; __sp_reportDevice="$(stat -L -c %d -- "$__sp_fd8")" || { exec 5>&- 6<&- 7>&- 8>&-; return 1; }; __sp_reportInode="$(stat -L -c %i -- "$__sp_fd8")" || { exec 5>&- 6<&- 7>&- 8>&-; return 1; }; [ "$(stat -L -c %a -- "$__sp_fd8")" = 600 ] || { exec 5>&- 6<&- 7>&- 8>&-; return 1; }; __sp_path_matches_fd "$__sp_digestReport" "$__sp_reportDevice" "$__sp_reportInode" || { exec 5>&- 6<&- 7>&- 8>&-; return 1; }; exec 9< "$__sp_digestReport" || { exec 5>&- 6<&- 7>&- 8>&-; return 1; }; __sp_fd9="/proc/$$/fd/9"; [ -f "$__sp_fd9" ] && [ "$(stat -L -c %d -- "$__sp_fd9")" = "$__sp_reportDevice" ] && [ "$(stat -L -c %i -- "$__sp_fd9")" = "$__sp_reportInode" ] || { exec 5>&- 6<&- 7>&- 8>&- 9<&-; return 1; }; __sp_path_matches_fd "$__sp_digestReport" "$__sp_reportDevice" "$__sp_reportInode" || { exec 5>&- 6<&- 7>&- 8>&- 9<&-; return 1; }; __sp_fifo_matches || { exec 5>&- 6<&- 7>&- 8>&- 9<&-; return 1; }; LC_ALL=C dd bs=65536 iflag=skip_bytes,count_bytes skip="$__sp_digestOffset" count="$__sp_digestCount" <&3 >&7 2>&8 & __sp_producerPid=$!; exec 5>&- 7>&- 8>&-; __sp_digestValue="$(__sp_sha256_stdin <&6)"; __sp_hashStatus=$?; exec 6<&-; wait "$__sp_producerPid"; __sp_producerStatus=$?; __sp_ddReport="$(cat <&9)"; __sp_reportStatus=$?; exec 9<&-; __sp_lineBreak="$(printf "\\nx")"; __sp_lineBreak="$' + '{__sp_lineBreak%x}"; __sp_ddLast="$' + '{__sp_ddReport##*"$__sp_lineBreak"}"; __sp_actualBytes="$' + '{__sp_ddLast%% *}"; case "$__sp_actualBytes" in ""|*[!0-9]*) __sp_countStatus=1 ;; *) [ "$__sp_actualBytes" = "$__sp_digestCount" ]; __sp_countStatus=$? ;; esac; __sp_cleanupStatus=0; if __sp_fifo_matches; then rm -f -- "$__sp_digestFifo" || __sp_cleanupStatus=$?; else __sp_cleanupStatus=1; fi; if __sp_path_matches_fd "$__sp_digestReport" "$__sp_reportDevice" "$__sp_reportInode"; then rm -f -- "$__sp_digestReport" || __sp_cleanupStatus=$?; else __sp_cleanupStatus=1; fi; [ "$__sp_hashStatus" -eq 0 ] && [ "$__sp_producerStatus" -eq 0 ] && [ "$__sp_reportStatus" -eq 0 ] && [ "$__sp_countStatus" -eq 0 ] && [ "$__sp_cleanupStatus" -eq 0 ] || return 1; printf %s "$__sp_digestValue"; };',
     '__sp_valid_name() { case "$1" in ""|"."|".."|*/*) return 1 ;; *) return 0 ;; esac; };',
     '__sp_bind_entry_parent() { __sp_boundPath="$1"; __sp_boundExpectedParent="$2"; __sp_boundExpectedDevice="$3"; __sp_boundExpectedInode="$4"; __sp_boundParent="$' + '{__sp_boundPath%/*}"; [ -n "$__sp_boundParent" ] || __sp_boundParent=/; __sp_boundName="$' + '{__sp_boundPath##*/}"; __sp_valid_name "$__sp_boundName" || return 1; [ "$__sp_boundParent" = "$__sp_boundExpectedParent" ] || return 1; __sp_boundActualReal="$(realpath -- "$__sp_boundParent")" || return $?; __sp_boundActualReal=$' + '{__sp_boundActualReal%?}; __sp_boundActualReal=$' + '{__sp_boundActualReal%?}; [ "$__sp_boundActualReal" = "$__sp_boundExpectedParent" ] || return 1; [ ! -L "$__sp_boundParent" ] && [ -d "$__sp_boundParent" ] || return 1; cd -- "$__sp_boundParent" || return $?; [ "$(pwd -P)" = "$__sp_boundExpectedParent" ] || return 1; [ "$(stat -c %d -- .)" = "$__sp_boundExpectedDevice" ] || return 1; [ "$(stat -c %i -- .)" = "$__sp_boundExpectedInode" ] || return 1; };',
     '__sp_entry_matches() { [ ! -L "$1" ] || return 1; case "$4" in file) [ -f "$1" ] ;; directory) [ -d "$1" ] ;; *) return 1 ;; esac && [ "$(stat -c %d -- "$1")" = "$2" ] && [ "$(stat -c %i -- "$1")" = "$3" ]; };',
+    '__sp_fd_entry_matches() { case "$4" in file) [ -f "$1" ] ;; directory) [ -d "$1" ] ;; *) return 1 ;; esac && [ "$(stat -L -c %d -- "$1")" = "$2" ] && [ "$(stat -L -c %i -- "$1")" = "$3" ]; };',
     '__sp_parent_path_matches() { [ ! -L "$1" ] && [ -d "$1" ] || return 1; __sp_parentActualReal="$(realpath -- "$1")" || return $?; __sp_parentActualReal=$' + '{__sp_parentActualReal%?}; __sp_parentActualReal=$' + '{__sp_parentActualReal%?}; [ "$__sp_parentActualReal" = "$1" ] && [ "$(stat -c %d -- "$1")" = "$2" ] && [ "$(stat -c %i -- "$1")" = "$3" ]; };',
+    '__sp_trusted_parent_fd() { case "$5" in ""|*[!0-7]*) return 1 ;; esac; [ "$4" = 0 ] && [ "$((0$5 & 022))" -eq 0 ] && [ -d "$1" ] && [ "$(stat -L -c %d -- "$1")" = "$2" ] && [ "$(stat -L -c %i -- "$1")" = "$3" ] && [ "$(stat -L -c %u -- "$1")" = "$4" ] && [ "$(stat -L -c %a -- "$1")" = "$5" ]; };',
+    '__sp_trusted_parent_path_matches() { __sp_parent_path_matches "$1" "$2" "$3" && __sp_trusted_parent_fd "$1" "$2" "$3" "$4" "$5"; };',
     '__sp_cleanup_created_directory() { if __sp_entry_matches "./$__sp_boundName" "$__sp_createdDevice" "$__sp_createdInode" directory; then rmdir -- "./$__sp_boundName"; fi; };',
     '__sp_bind_root() { __sp_valid_name "$__sp_objectName" || return 1; [ -d "/proc/$$/fd" ] || return 1; __sp_boundRealPath="$(realpath -- "$__sp_rootPath")" || return $?; __sp_boundRealPath=$' + '{__sp_boundRealPath%?}; __sp_boundRealPath=$' + '{__sp_boundRealPath%?}; [ "$__sp_boundRealPath" = "$__sp_rootPath" ] || return 1; [ "$__sp_boundRealPath" = "$__sp_rootRealPath" ] || return 1; [ ! -L "$__sp_rootPath" ] && [ -d "$__sp_rootPath" ] || return 1; cd -- "$__sp_rootPath" || return $?; [ "$(pwd -P)" = "$__sp_boundRealPath" ] || return 1; [ "$(stat -c %d -- .)" = "$__sp_rootDevice" ] || return 1; [ "$(stat -c %i -- .)" = "$__sp_rootInode" ] || return 1; [ "$(stat -c %a -- .)" = "$__sp_rootMode" ] || return 1; [ "$(stat -c %u -- .)" = "$__sp_rootUid" ] || return 1; [ "$(stat -c %g -- .)" = "$__sp_rootGid" ] || return 1; };',
     '__sp_path_matches_fd() { [ ! -L "$1" ] && [ -f "$1" ] && [ "$(stat -c %d -- "$1")" = "$2" ] && [ "$(stat -c %i -- "$1")" = "$3" ]; };',
     '__sp_cleanup_export() { if __sp_path_matches_fd "./$__sp_objectName" "$__sp_objectDevice" "$__sp_objectInode"; then rm -f -- "./$__sp_objectName"; fi; };',
-    '__sp_cleanup_temp() { [ "$__sp_targetParentTrusted" = 1 ] || return 0; if __sp_path_matches_fd "./$__sp_tempName" "$__sp_tempDevice" "$__sp_tempInode"; then rm -f -- "./$__sp_tempName"; fi; };',
-    '__sp_cleanup_installed() { [ "$__sp_targetParentTrusted" = 1 ] || return 0; if __sp_path_matches_fd "./$__sp_targetName" "$__sp_tempDevice" "$__sp_tempInode"; then rm -f -- "./$__sp_targetName"; fi; };',
+    '__sp_cleanup_installed() { [ "$__sp_targetParentTrusted" = 1 ] || return 0; __sp_trusted_parent_path_matches "$__sp_targetParentRealPath" "$__sp_targetParentDevice" "$__sp_targetParentInode" "$__sp_targetParentUid" "$__sp_targetParentMode" || return 0; if __sp_path_matches_fd "./$__sp_targetName" "$__sp_installedDevice" "$__sp_installedInode"; then rm -f -- "./$__sp_targetName"; fi; };',
     `__sp_emit_data1() { printf '${marker};data;%s;%s;%s;%s\\007' "$__sp_token" "$1" "$2" "$3" "$4"; };`,
     `__sp_emit_data2() { printf '${marker};data;%s;%s;%s;%s;%s\\007' "$__sp_token" "$1" "$2" "$3" "$4" "$5"; };`,
     `__sp_emit_data4() { printf '${marker};data;%s;%s;%s;%s;%s;%s;%s\\007' "$__sp_token" "$1" "$2" "$3" "$4" "$5" "$6" "$7"; };`,
@@ -1195,7 +1231,7 @@ export function createPrivilegedFileParser ({ token: providedToken, request }) {
   const mutationOperations = new Set([
     'probe', 'mkdir', 'touch', 'rename', 'rm', 'rmdir', 'chmod', 'chown',
     'copy-entry', 'remove-entry', 'remove-empty-directory', 'remove-bound',
-    'rename-bound',
+    'rename-bound', 'metadata-bound',
     'stage-cleanup'
   ])
 

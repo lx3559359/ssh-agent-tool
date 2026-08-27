@@ -65,10 +65,38 @@ async function sha256Hex (bytes) {
     .join('')
 }
 
-function inputBytes (value) {
-  if (value instanceof Uint8Array) return new Uint8Array(value)
-  if (value instanceof ArrayBuffer) return new Uint8Array(value.slice(0))
-  return new TextEncoder().encode(String(value ?? ''))
+function inputBytes (value, maxBytes) {
+  const failOversize = () => {
+    throw new Error('root 文件后端 writeFile 超过 8 MiB 安全上限')
+  }
+  if (value instanceof Uint8Array) {
+    if (value.byteLength > maxBytes) failOversize()
+    return new Uint8Array(value)
+  }
+  if (value instanceof ArrayBuffer) {
+    if (value.byteLength > maxBytes) failOversize()
+    return new Uint8Array(value.slice(0))
+  }
+  const text = String(value ?? '')
+  if (text.length > maxBytes) failOversize()
+  let encodedLength = 0
+  for (let index = 0; index < text.length; index += 1) {
+    const first = text.charCodeAt(index)
+    if (first <= 0x7F) encodedLength += 1
+    else if (first <= 0x7FF) encodedLength += 2
+    else if (first >= 0xD800 && first <= 0xDBFF && index + 1 < text.length &&
+      text.charCodeAt(index + 1) >= 0xDC00 &&
+      text.charCodeAt(index + 1) <= 0xDFFF) {
+      encodedLength += 4
+      index += 1
+    } else encodedLength += 3
+    if (encodedLength > maxBytes) failOversize()
+  }
+  const bytes = new TextEncoder().encode(text)
+  if (bytes.byteLength !== encodedLength || bytes.byteLength > maxBytes) {
+    failOversize()
+  }
+  return bytes
 }
 
 function normalizeMode (value, fallback = 0o600) {
@@ -158,11 +186,26 @@ function sourceBindingArgs (metadata) {
   }
 }
 
-function targetParentBindingArgs (parentPath, metadata) {
+function targetParentIdentityArgs (parentPath, metadata) {
   return {
     targetParentRealPath: parentPath,
     targetParentDevice: String(metadata.device),
     targetParentInode: String(metadata.inode)
+  }
+}
+
+function targetParentBindingArgs (parentPath, metadata) {
+  return {
+    ...targetParentIdentityArgs(parentPath, metadata),
+    targetParentUid: String(metadata.uid),
+    targetParentMode: normalizeMode(metadata.mode & 0o7777).toString(8)
+  }
+}
+
+function sourceParentTrustArgs (metadata) {
+  return {
+    sourceParentUid: String(metadata.uid),
+    sourceParentMode: normalizeMode(metadata.mode & 0o7777).toString(8)
   }
 }
 
@@ -755,10 +798,7 @@ export async function createPrivilegedFileBackend ({
     const created = []
     const createdDirectories = new Map([[
       targetParentPath,
-      {
-        device: targetParentMetadata.device,
-        inode: targetParentMetadata.inode
-      }
+      targetParentMetadata
     ]])
     let primaryError
     try {
@@ -775,9 +815,9 @@ export async function createPrivilegedFileBackend ({
           const binding = await executeRequest('mkdir-bound', {
             targetPath: destination,
             ...targetParentBindingArgs(destinationParent, parentBinding),
-            targetMode: normalizeMode(entry.metadata.mode & 0o7777).toString(8),
-            targetUid: String(entry.metadata.uid),
-            targetGid: String(entry.metadata.gid)
+            targetMode: '700',
+            targetUid: '0',
+            targetGid: '0'
           }, { signal })
           if (!/^(?:0|[1-9]\d{0,19})$/.test(binding.device) ||
             !/^(?:0|[1-9]\d{0,19})$/.test(binding.inode)) {
@@ -787,9 +827,16 @@ export async function createPrivilegedFileBackend ({
             path: destination,
             type: 'directory',
             parentBinding,
-            binding
+            binding: {
+              ...binding,
+              type: 'directory',
+              mode: 0o40700,
+              uid: 0,
+              gid: 0
+            },
+            desiredMetadata: entry.metadata
           })
-          createdDirectories.set(destination, binding)
+          createdDirectories.set(destination, created.at(-1).binding)
         } else {
           try {
             const binding = await copyFileFromManifest(
@@ -817,6 +864,28 @@ export async function createPrivilegedFileBackend ({
           }
         }
       }
+      for (const entry of created.filter(entry =>
+        entry.type === 'directory').reverse()) {
+        throwIfAborted(signal)
+        await executeRequest('metadata-bound', {
+          targetPath: entry.path,
+          ...targetParentBindingArgs(
+            parentFilePath(entry.path),
+            entry.parentBinding
+          ),
+          targetDevice: String(entry.binding.device),
+          targetInode: String(entry.binding.inode),
+          targetType: 'directory',
+          targetMode: normalizeMode(
+            entry.desiredMetadata.mode & 0o7777
+          ).toString(8),
+          targetUid: String(entry.desiredMetadata.uid),
+          targetGid: String(entry.desiredMetadata.gid)
+        }, { signal })
+        entry.binding.mode = entry.desiredMetadata.mode
+        entry.binding.uid = entry.desiredMetadata.uid
+        entry.binding.gid = entry.desiredMetadata.gid
+      }
     } catch (error) {
       primaryError = error
     }
@@ -827,7 +896,7 @@ export async function createPrivilegedFileBackend ({
             'remove-bound',
             {
               targetPath: entry.path,
-              ...targetParentBindingArgs(
+              ...targetParentIdentityArgs(
                 parentFilePath(entry.path),
                 entry.parentBinding
               ),
@@ -1006,6 +1075,7 @@ export async function createPrivilegedFileBackend ({
     },
     async writeFile (path, value, requestedMode) {
       const targetPath = canonicalFilePath(path, 'targetPath')
+      const bytes = inputBytes(value, maxReadFileBytes)
       await invalidateReadStreams(targetPath)
       let targetMetadata
       try {
@@ -1021,7 +1091,6 @@ export async function createPrivilegedFileBackend ({
         error.code = 'EEXIST'
         throw error
       }
-      const bytes = inputBytes(value)
       const digest = await sha256Hex(bytes)
       const targetParentPath = parentFilePath(targetPath)
       const targetParentMetadata = requireBoundMetadata(
@@ -1135,6 +1204,19 @@ export async function createPrivilegedFileBackend ({
       if (targetParent.type !== 'directory') {
         throw new Error('root 文件后端 rename target parent 不是目录')
       }
+      const sourceParentPath = parentFilePath(sourcePath)
+      const sourceParent = sourceParentPath === targetParentPath
+        ? targetParent
+        : requireBoundMetadata(
+          await rawFacade.lstat(sourceParentPath, { signal }),
+          sourceParentPath,
+          'rename source parent'
+        )
+      if (sourceParent.type !== 'directory' ||
+        String(sourceParent.device) !== String(sourceMetadata.parentDevice) ||
+        String(sourceParent.inode) !== String(sourceMetadata.parentInode)) {
+        throw new Error('root 文件后端 rename source parent binding 发生变化')
+      }
       if (String(sourceMetadata.device) !== String(sourceMetadata.parentDevice) ||
         String(sourceMetadata.device) !== String(targetParent.device)) {
         const error = new Error('root 文件后端 rename 不允许跨文件系统')
@@ -1145,6 +1227,7 @@ export async function createPrivilegedFileBackend ({
       await executeRequest('rename-bound', {
         sourcePath,
         ...sourceBindingArgs(sourceMetadata),
+        ...sourceParentTrustArgs(sourceParent),
         sourceType: sourceMetadata.type,
         targetPath,
         ...targetParentBindingArgs(targetParentPath, targetParent)

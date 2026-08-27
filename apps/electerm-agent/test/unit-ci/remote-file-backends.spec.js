@@ -326,7 +326,10 @@ function createBackendHarness (options = {}) {
         ))
         if (!parent || parent.type !== 'directory' ||
           parent.device !== args.targetParentDevice ||
-          parent.inode !== args.targetParentInode) {
+          parent.inode !== args.targetParentInode ||
+          String(parent.uid) !== args.targetParentUid ||
+          (parent.mode & 0o7777).toString(8) !== args.targetParentMode ||
+          parent.uid !== 0 || (parent.mode & 0o022) !== 0) {
           throw new Error('stage import target parent binding changed')
         }
         if (privilegedNodes.has(args.targetPath)) {
@@ -480,13 +483,13 @@ function createBackendHarness (options = {}) {
             : rootFile === undefined ? 12 : Buffer.from(rootFile).length,
           atime: 1,
           mtime: 2,
-          uid: 3,
-          gid: 4,
+          uid: isDirectoryPath ? 0 : 3,
+          gid: isDirectoryPath ? 0 : 4,
           device: '1',
           inode: '100',
           parentRealPath: args.path.slice(0, args.path.lastIndexOf('/')) || '/',
           parentDevice: '1',
-          parentInode: '99'
+          parentInode: '100'
         }
       }
     }
@@ -548,6 +551,9 @@ function createBackendHarness (options = {}) {
       ))
       if (!parent || parent.device !== args.targetParentDevice ||
         parent.inode !== args.targetParentInode ||
+        String(parent.uid) !== args.targetParentUid ||
+        (parent.mode & 0o7777).toString(8) !== args.targetParentMode ||
+        parent.uid !== 0 || (parent.mode & 0o022) !== 0 ||
         privilegedNodes.has(args.targetPath)) {
         throw new Error('mkdir target parent binding changed')
       }
@@ -564,6 +570,45 @@ function createBackendHarness (options = {}) {
         device: node.device,
         inode: node.inode
       }
+    }
+    if (options.privilegedTree && request.operation === 'metadata-bound') {
+      if (options.replaceMetadataTargetBeforeBound === args.targetPath) {
+        for (const remotePath of [...privilegedNodes.keys()]) {
+          if (remotePath === args.targetPath ||
+            remotePath.startsWith(`${args.targetPath}/`)) {
+            privilegedNodes.delete(remotePath)
+          }
+        }
+        privilegedNodes.set(args.targetPath, ensurePrivilegedBinding({
+          type: 'directory', mode: 0o755, uid: 99, gid: 99
+        }))
+        privilegedNodes.set(`${args.targetPath}/foreign-sentinel`,
+          ensurePrivilegedBinding({
+            type: 'file',
+            mode: 0o600,
+            uid: 99,
+            gid: 99,
+            content: Buffer.from('foreign')
+          }))
+        options.replaceMetadataTargetBeforeBound = undefined
+      }
+      const parent = ensurePrivilegedBinding(privilegedNodes.get(
+        args.targetParentRealPath
+      ))
+      const node = ensurePrivilegedBinding(privilegedNodes.get(args.targetPath))
+      if (!parent || !node || parent.device !== args.targetParentDevice ||
+        parent.inode !== args.targetParentInode ||
+        String(parent.uid) !== args.targetParentUid ||
+        (parent.mode & 0o7777).toString(8) !== args.targetParentMode ||
+        parent.uid !== 0 || (parent.mode & 0o022) !== 0 ||
+        node.device !== args.targetDevice || node.inode !== args.targetInode ||
+        node.type !== args.targetType) {
+        throw new Error('metadata target binding changed')
+      }
+      node.uid = Number(args.targetUid)
+      node.gid = Number(args.targetGid)
+      node.mode = Number.parseInt(args.targetMode, 8)
+      return { exitCode: 0, kind: 'metadata-bound', ok: true }
     }
     if (options.privilegedTree && request.operation === 'chmod') {
       privilegedNodes.get(args.path).mode = Number.parseInt(args.mode, 8)
@@ -607,8 +652,14 @@ function createBackendHarness (options = {}) {
         source.inode !== args.sourceInode || source.type !== args.sourceType ||
         sourceParent.device !== args.sourceParentDevice ||
         sourceParent.inode !== args.sourceParentInode ||
+        String(sourceParent.uid) !== args.sourceParentUid ||
+        (sourceParent.mode & 0o7777).toString(8) !== args.sourceParentMode ||
+        sourceParent.uid !== 0 || (sourceParent.mode & 0o022) !== 0 ||
         targetParent.device !== args.targetParentDevice ||
         targetParent.inode !== args.targetParentInode ||
+        String(targetParent.uid) !== args.targetParentUid ||
+        (targetParent.mode & 0o7777).toString(8) !== args.targetParentMode ||
+        targetParent.uid !== 0 || (targetParent.mode & 0o022) !== 0 ||
         privilegedNodes.has(args.targetPath)) {
         throw new Error('rename bound race rejected')
       }
@@ -923,7 +974,7 @@ test('privileged facade maps fixed metadata and mutation methods to protocol req
     inode: '100',
     parentRealPath: '/root',
     parentDevice: '1',
-    parentInode: '99',
+    parentInode: '100',
     isDirectory: false
   })
   assert.equal((await facade.stat('/root/file')).type, 'file')
@@ -960,14 +1011,18 @@ test('privileged facade maps fixed metadata and mutation methods to protocol req
         sourcePath: '/root/a',
         sourceParentRealPath: '/root',
         sourceParentDevice: '1',
-        sourceParentInode: '99',
+        sourceParentInode: '100',
+        sourceParentUid: '0',
+        sourceParentMode: '755',
         sourceDevice: '1',
         sourceInode: '100',
         sourceType: 'file',
         targetPath: '/root/missing-b',
         targetParentRealPath: '/root',
         targetParentDevice: '1',
-        targetParentInode: '100'
+        targetParentInode: '100',
+        targetParentUid: '0',
+        targetParentMode: '755'
       }],
       ['rm', { path: '/root/file' }],
       ['rmdir', { path: '/root/dir' }],
@@ -980,14 +1035,18 @@ test('privileged facade maps fixed metadata and mutation methods to protocol req
         sourcePath: '/root/d',
         sourceParentRealPath: '/root',
         sourceParentDevice: '1',
-        sourceParentInode: '99',
+        sourceParentInode: '100',
+        sourceParentUid: '0',
+        sourceParentMode: '755',
         sourceDevice: '1',
         sourceInode: '100',
         sourceType: 'file',
         targetPath: '/root/missing-e',
         targetParentRealPath: '/root',
         targetParentDevice: '1',
-        targetParentInode: '100'
+        targetParentInode: '100',
+        targetParentUid: '0',
+        targetParentMode: '755'
       }]
     ]
   )
@@ -1389,6 +1448,64 @@ test('privileged mutations invalidate related logical read stages before changin
   await backend.release()
 })
 
+test('privileged write rejects oversized bytes and strings before hashing or Base64 encoding', async () => {
+  const harness = createBackendHarness({ missingLstatResult: true })
+  const backend = await createRootBackend(harness)
+  const cryptoDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'crypto')
+  const originalBtoa = globalThis.btoa
+  const originalDigest = globalThis.crypto.subtle.digest.bind(
+    globalThis.crypto.subtle
+  )
+  let hashCalls = 0
+  let base64Calls = 0
+  Object.defineProperty(globalThis, 'crypto', {
+    configurable: true,
+    value: {
+      subtle: {
+        digest (...args) {
+          hashCalls += 1
+          return originalDigest(...args)
+        }
+      }
+    }
+  })
+  globalThis.btoa = () => {
+    base64Calls += 1
+    throw new Error('unexpected Base64 encoding')
+  }
+  try {
+    await assert.rejects(
+      backend.sftp.writeFile(
+        '/root/missing-large-bytes',
+        new Uint8Array(8 * 1024 * 1024 + 1)
+      ),
+      /8 MiB|上限|limit/i
+    )
+    await assert.rejects(
+      backend.sftp.writeFile(
+        '/root/missing-large-string',
+        'x'.repeat(8 * 1024 * 1024 + 1)
+      ),
+      /8 MiB|上限|limit/i
+    )
+    await assert.rejects(
+      backend.sftp.writeFile(
+        '/root/missing-large-unicode',
+        '\u0800'.repeat(Math.floor((8 * 1024 * 1024) / 3) + 1)
+      ),
+      /8 MiB|上限|limit/i
+    )
+    assert.equal(hashCalls, 0)
+    assert.equal(base64Calls, 0)
+    assert.equal(harness.requests.some(request =>
+      request.operation === 'stage-import'), false)
+  } finally {
+    globalThis.btoa = originalBtoa
+    Object.defineProperty(globalThis, 'crypto', cryptoDescriptor)
+    await backend.release()
+  }
+})
+
 test('privileged writes upload exclusive bytes then import only digest size and metadata', async () => {
   const secret = Buffer.from('WRITE-SECRET\u0000bytes')
   const harness = createBackendHarness({ missingLstatResult: true })
@@ -1710,6 +1827,19 @@ test('privileged copyEntry copies a bounded tree without recursive shell operati
   assert.ok(harness.requests.filter(request => request.operation === 'sha256-bound')
     .every(request => Number(request.args.expectedSize) <=
       Number(request.args.maxSize)))
+  const directories = harness.requests.filter(request =>
+    request.operation === 'mkdir-bound')
+  assert.ok(directories.length > 0)
+  assert.ok(directories.every(request =>
+    request.args.targetMode === '700' &&
+    request.args.targetUid === '0' &&
+    request.args.targetGid === '0'))
+  const metadata = harness.requests.filter(request =>
+    request.operation === 'metadata-bound')
+  assert.deepEqual(metadata.map(request => request.args.targetPath), [
+    '/root/copied/sub',
+    '/root/copied'
+  ])
   const publicExecutions = harness.executions.slice(start).filter(({ request }) =>
     request.operation !== 'stage-cleanup')
   assert.ok(publicExecutions.length > 0)
@@ -1819,6 +1949,28 @@ test('privileged copyEntry rolls back a proven imported target when stage cleanu
   )
   assert.equal(harness.privilegedNodes.has('/root/copied'), false)
   options.cleanupFailure = undefined
+  await backend.release()
+})
+
+test('privileged copy never mutates a directory child replaced before deferred metadata', async () => {
+  const harness = createBackendHarness({
+    replaceMetadataTargetBeforeBound: '/root/copied',
+    privilegedTree: {
+      '/root/source': { type: 'directory', mode: 0o755 },
+      '/root/source/file': { type: 'file', content: 'owned' }
+    }
+  })
+  const backend = await createRootBackend(harness)
+
+  await assert.rejects(
+    backend.sftp.copyEntry('/root/source', '/root/copied', {}),
+    /metadata|binding|changed|操作失败/i
+  )
+  assert.equal(
+    harness.privilegedNodes.get('/root/copied/foreign-sentinel').content.toString(),
+    'foreign'
+  )
+  assert.equal(harness.privilegedNodes.get('/root/copied').uid, 99)
   await backend.release()
 })
 

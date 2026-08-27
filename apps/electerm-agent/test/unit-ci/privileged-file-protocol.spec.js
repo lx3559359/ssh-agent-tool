@@ -146,6 +146,8 @@ function targetEntryBinding (overrides = {}) {
     targetParentRealPath: parentRemotePath(targetPath),
     targetParentDevice: '4001',
     targetParentInode: '4002',
+    targetParentUid: '0',
+    targetParentMode: '755',
     ...overrides
   }
 }
@@ -156,6 +158,8 @@ function renameBinding (overrides = {}) {
     sourceParentRealPath: '/root',
     sourceParentDevice: '4001',
     sourceParentInode: '4002',
+    sourceParentUid: '0',
+    sourceParentMode: '755',
     sourceDevice: '4001',
     sourceInode: '4003',
     sourceType: 'file',
@@ -163,6 +167,8 @@ function renameBinding (overrides = {}) {
     targetParentRealPath: '/root',
     targetParentDevice: '4001',
     targetParentInode: '4002',
+    targetParentUid: '0',
+    targetParentMode: '755',
     ...overrides
   }
 }
@@ -174,6 +180,8 @@ function targetStageBinding (overrides = {}) {
     targetParentRealPath: parentRemotePath(targetPath),
     targetParentDevice: '4001',
     targetParentInode: '4002',
+    targetParentUid: '0',
+    targetParentMode: '755',
     targetDevice: '4003',
     targetInode: '4004',
     mustBeAbsent: '1',
@@ -202,6 +210,8 @@ function nativeTargetBinding (remotePath, absent = false) {
     targetParentRealPath: fs.realpathSync(parentPath),
     targetParentDevice: String(parentStat.dev),
     targetParentInode: String(parentStat.ino),
+    targetParentUid: String(parentStat.uid),
+    targetParentMode: (parentStat.mode & 0o7777n).toString(8),
     targetDevice: String(entryStat?.dev ?? 0),
     targetInode: String(entryStat?.ino ?? 0)
   }
@@ -1017,6 +1027,48 @@ test('rename-bound rollback shell preserves a foreign inode and restores only th
   }
 })
 
+test('linux rename-bound rejects a same-type source replacement under its trusted parent', {
+  skip: linuxRootOnly
+}, async () => {
+  const nativeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-rename-source-swap-'))
+  try {
+    fs.chmodSync(nativeRoot, 0o700)
+    const sourcePath = path.join(nativeRoot, 'source')
+    const originalPath = path.join(nativeRoot, 'original')
+    const targetPath = path.join(nativeRoot, 'target')
+    fs.writeFileSync(sourcePath, 'owned', { mode: 0o600 })
+    const sourceBinding = nativeSourceBinding(sourcePath)
+    const parentStat = fs.statSync(nativeRoot, { bigint: true })
+    fs.renameSync(sourcePath, originalPath)
+    fs.writeFileSync(sourcePath, 'foreign', { mode: 0o600 })
+
+    const result = await runRealProtocolOperation({
+      operation: 'rename-bound',
+      token: 'df'.repeat(24),
+      args: {
+        sourcePath,
+        ...sourceBinding,
+        sourceParentUid: String(parentStat.uid),
+        sourceParentMode: (parentStat.mode & 0o7777n).toString(8),
+        sourceType: 'file',
+        targetPath,
+        targetParentRealPath: nativeRoot,
+        targetParentDevice: String(parentStat.dev),
+        targetParentInode: String(parentStat.ino),
+        targetParentUid: String(parentStat.uid),
+        targetParentMode: (parentStat.mode & 0o7777n).toString(8)
+      }
+    })
+
+    assert.notEqual(result.execution.status, 0)
+    assert.equal(fs.readFileSync(sourcePath, 'utf8'), 'foreign')
+    assert.equal(fs.readFileSync(originalPath, 'utf8'), 'owned')
+    assert.equal(fs.existsSync(targetPath), false)
+  } finally {
+    fs.rmSync(nativeRoot, { recursive: true, force: true })
+  }
+})
+
 test('bounded source producers require trusted sizes and expose only fixed range operations', async () => {
   const {
     buildPrivilegedFileCommand,
@@ -1090,6 +1142,252 @@ test('bounded source producers require trusted sizes and expose only fixed range
   }), /maxBytes|范围|参数/)
 })
 
+test('bounded digest opens verified FIFO endpoints once and checks the producer byte count', async () => {
+  const { buildPrivilegedFileCommand } = await importModule(protocolModule)
+  const command = buildPrivilegedFileCommand({
+    token: 'df'.repeat(24),
+    request: {
+      operation: 'sha256-range-bound',
+      args: boundedDigestBinding({ offset: '1', maxBytes: '4' })
+    }
+  })
+  const helperStart = command.indexOf('__sp_bounded_digest()')
+  const helperEnd = command.indexOf(' }; __sp_valid_name()', helperStart)
+  assert.ok(helperStart >= 0 && helperEnd > helperStart)
+  const helper = command.slice(helperStart, helperEnd)
+
+  assert.match(helper, /exec 5<> "\$__sp_digestFifo"/)
+  assert.match(helper, /exec 6< "\$__sp_digestFifo"/)
+  assert.match(helper, /exec 7> "\$__sp_digestFifo"/)
+  assert.match(helper, /__sp_sha256_stdin <&6/)
+  assert.match(helper, /dd .*<&3 .*>&7 2>&8/)
+  assert.match(helper, /__sp_fd8="\/proc\/\$\$\/fd\/8"/)
+  assert.match(helper, /stat -L -c %d -- "\$__sp_fd8".*__sp_reportDevice/)
+  assert.match(helper, /stat -L -c %i -- "\$__sp_fd8".*__sp_reportInode/)
+  assert.match(helper, /__sp_actualBytes.*__sp_digestCount/)
+  assert.doesNotMatch(helper, /of="\$__sp_digestFifo"/)
+  assert.doesNotMatch(helper, /__sp_sha256_raw "\$__sp_digestFifo"/)
+})
+
+test('bounded digest rejects short producers and preserves a raced FIFO replacement', {
+  skip: !bashAvailable || process.platform === 'win32'
+}, async () => {
+  const { buildPrivilegedFileCommand } = await importModule(protocolModule)
+  const nativeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-digest-fd-race-'))
+  try {
+    const rootPath = toBashPath(nativeRoot)
+    const sourcePath = path.join(nativeRoot, 'source')
+    fs.writeFileSync(sourcePath, 'abc')
+    for (const [operation, extra] of [
+      ['sha256-bound', {}],
+      ['sha256-range-bound', { offset: '0', maxBytes: '4' }]
+    ]) {
+      const command = buildPrivilegedFileCommand({
+        token: 'ef'.repeat(24),
+        request: {
+          operation,
+          args: boundedDigestBinding(extra)
+        }
+      })
+      const helperStart = command.indexOf('__sp_bounded_digest()')
+      const helperEnd = command.indexOf(' }; __sp_valid_name()', helperStart)
+      const helper = command.slice(helperStart, helperEnd + 3)
+      const objectName = operation === 'sha256-bound'
+        ? 'whole-proof'
+        : 'range-proof'
+      const short = runBash([
+        `cd -- ${quoteForBash(rootPath)}`,
+        '__sp_sha256_tool=sha256sum',
+        '__sp_sha256_stdin() { __sp_hash="$(sha256sum)" || return $?; printf %s "$' + '{__sp_hash%% *}"; }',
+        '__sp_path_matches_fd() { [ ! -L "$1" ] && [ -f "$1" ] && [ "$(stat -c %d -- "$1")" = "$2" ] && [ "$(stat -c %i -- "$1")" = "$3" ]; }',
+        `__sp_objectName=${quoteForBash(objectName)}`,
+        `exec 3< ${quoteForBash(toBashPath(sourcePath))}`,
+        helper,
+        '__sp_bounded_digest 0 4 >/dev/null 2>&1; [ "$?" -ne 0 ]',
+        `[ ! -e ${quoteForBash(`${rootPath}/${objectName}`)} ]`,
+        `[ ! -e ${quoteForBash(`${rootPath}/${objectName}.count`)} ]`
+      ].join('\n'))
+      assert.equal(short.status, 0, short.stdout + short.stderr)
+    }
+
+    const raceCommand = buildPrivilegedFileCommand({
+      token: 'f0'.repeat(24),
+      request: {
+        operation: 'sha256-range-bound',
+        args: boundedDigestBinding({ offset: '0', maxBytes: '3' })
+      }
+    })
+    const helperStart = raceCommand.indexOf('__sp_bounded_digest()')
+    const helperEnd = raceCommand.indexOf(' }; __sp_valid_name()', helperStart)
+    const helper = raceCommand.slice(helperStart, helperEnd + 3)
+    const counterPath = `${rootPath}/stat-count`
+    const raced = runBash([
+      `cd -- ${quoteForBash(rootPath)}`,
+      '__sp_sha256_tool=sha256sum',
+      '__sp_sha256_stdin() { __sp_hash="$(sha256sum)" || return $?; printf %s "$' + '{__sp_hash%% *}"; }',
+      '__sp_path_matches_fd() { [ ! -L "$1" ] && [ -f "$1" ] && [ "$(stat -c %d -- "$1")" = "$2" ] && [ "$(stat -c %i -- "$1")" = "$3" ]; }',
+      '__sp_objectName=race-proof',
+      `__sp_test_counter=${quoteForBash(counterPath)}`,
+      'printf 0 > "$__sp_test_counter"',
+      'stat() { __sp_test_last=""; for __sp_test_arg do __sp_test_last="$__sp_test_arg"; done; if [ "$__sp_test_last" = "./race-proof" ]; then __sp_test_count="$(cat "$__sp_test_counter")"; __sp_test_count=$((__sp_test_count + 1)); printf %s "$__sp_test_count" > "$__sp_test_counter"; if [ "$__sp_test_count" -eq 4 ]; then __sp_test_value="$(/usr/bin/stat "$@")"; __sp_test_status=$?; rm -f -- ./race-proof; printf foreign > ./race-proof; printf "%s\\n" "$__sp_test_value"; return "$__sp_test_status"; fi; fi; /usr/bin/stat "$@"; }',
+      `exec 3< ${quoteForBash(toBashPath(sourcePath))}`,
+      helper,
+      '__sp_bounded_digest 0 3 >/dev/null 2>&1; [ "$?" -ne 0 ]',
+      '[ "$(cat -- ./race-proof)" = foreign ]'
+    ].join('\n'))
+    assert.equal(raced.status, 0, raced.stdout + raced.stderr)
+  } finally {
+    fs.rmSync(nativeRoot, { recursive: true, force: true })
+  }
+})
+
+test('bound pathname mutations require trusted parent uid and mode proofs and import directly into an exclusive final FD', async () => {
+  const { buildPrivilegedFileCommand } = await importModule(protocolModule)
+  const token = 'e0'.repeat(24)
+  const renameCommand = buildPrivilegedFileCommand({
+    token,
+    request: {
+      operation: 'rename-bound',
+      args: renameBinding({
+        sourceParentUid: '0',
+        sourceParentMode: '755',
+        targetParentUid: '0',
+        targetParentMode: '755'
+      })
+    }
+  })
+  const importCommand = buildPrivilegedFileCommand({
+    token,
+    request: {
+      operation: 'stage-import',
+      args: targetStageBinding({
+        sha256: 'a'.repeat(64),
+        size: '12',
+        targetMode: '600',
+        targetUid: '0',
+        targetGid: '0',
+        targetParentUid: '0',
+        targetParentMode: '755'
+      })
+    }
+  })
+  const mkdirCommand = buildPrivilegedFileCommand({
+    token,
+    request: {
+      operation: 'mkdir-bound',
+      args: targetEntryBinding({
+        targetMode: '700',
+        targetUid: '0',
+        targetGid: '0',
+        targetParentUid: '0',
+        targetParentMode: '755'
+      })
+    }
+  })
+
+  for (const command of [renameCommand, importCommand, mkdirCommand]) {
+    assert.match(command, /__sp_targetParentUid/)
+    assert.match(command, /__sp_targetParentMode/)
+    assert.match(command, /& 022/)
+  }
+  assert.match(renameCommand, /__sp_sourceParentUid/)
+  assert.match(renameCommand, /__sp_sourceParentMode/)
+  assert.doesNotMatch(importCommand, /mv -nT.*__sp_tempName/)
+  assert.match(importCommand, /exec 4> "\.\/\$__sp_targetName"/)
+  assert.match(importCommand, /set -C/)
+})
+
+test('metadata-bound is the only deferred directory metadata operation', async () => {
+  const { buildPrivilegedFileCommand } = await importModule(protocolModule)
+  const command = buildPrivilegedFileCommand({
+    token: 'e1'.repeat(24),
+    request: {
+      operation: 'metadata-bound',
+      args: {
+        targetPath: '/root/copied',
+        targetParentRealPath: '/root',
+        targetParentDevice: '1',
+        targetParentInode: '2',
+        targetParentUid: '0',
+        targetParentMode: '755',
+        targetDevice: '1',
+        targetInode: '3',
+        targetType: 'directory',
+        targetMode: '750',
+        targetUid: '21',
+        targetGid: '22'
+      }
+    }
+  })
+  assert.match(command, /__sp_entry_matches/)
+  assert.match(
+    command,
+    /__sp_fd_entry_matches "\$__sp_fd5" "\$__sp_targetDevice" "\$__sp_targetInode" "\$__sp_targetType"/
+  )
+  assert.doesNotMatch(
+    command,
+    /__sp_entry_matches "\$__sp_fd5" "\$__sp_targetDevice"/
+  )
+  assert.equal(
+    command.lastIndexOf('chown -- "$__sp_targetUid') <
+      command.lastIndexOf('chmod -- "$__sp_targetMode'),
+    true
+  )
+})
+
+test('new bound mutation and digest commands have valid outer and inner shell syntax', {
+  skip: !bashAvailable
+}, async () => {
+  const { buildPrivilegedFileCommand } = await importModule(protocolModule)
+  const requests = [
+    { operation: 'sha256-bound', args: boundedDigestBinding() },
+    {
+      operation: 'stage-import',
+      args: targetStageBinding({
+        sha256: 'a'.repeat(64),
+        size: '12',
+        targetMode: '600',
+        targetUid: '0',
+        targetGid: '0'
+      })
+    },
+    { operation: 'rename-bound', args: renameBinding() },
+    {
+      operation: 'metadata-bound',
+      args: targetEntryBinding({
+        targetDevice: '4003',
+        targetInode: '4004',
+        targetType: 'directory',
+        targetMode: '750',
+        targetUid: '21',
+        targetGid: '22'
+      })
+    }
+  ]
+  for (const request of requests) {
+    const command = buildPrivilegedFileCommand({
+      token: 'e2'.repeat(24),
+      request
+    })
+    const outer = spawnSync(
+      bashExecutable,
+      ['--noprofile', '--norc', '-n'],
+      { encoding: 'utf8', input: command }
+    )
+    assert.equal(outer.status, 0, `${request.operation}: ${outer.stderr}`)
+    const extracted = runBash(
+      `set -- ${command}\n` + 'printf \'%s\' "$' + '{!#}"'
+    )
+    assert.equal(extracted.status, 0, `${request.operation}: ${extracted.stderr}`)
+    const inner = spawnSync(
+      bashExecutable,
+      ['--noprofile', '--norc', '-n'],
+      { encoding: 'utf8', input: extracted.stdout }
+    )
+    assert.equal(inner.status, 0, `${request.operation}: ${inner.stderr}`)
+  }
+})
+
 test('privileged command builder exposes every fixed operation and fails closed on arguments', async () => {
   const {
     buildPrivilegedFileCommand,
@@ -1126,9 +1424,23 @@ test('privileged command builder exposes every fixed operation and fails closed 
     ['mkdir-bound', targetEntryBinding({
       targetMode: '700', targetUid: '0', targetGid: '0'
     }), 'mkdir -- "./$__sp_boundName"'],
-    ['remove-bound', targetEntryBinding({
-      targetDevice: '4003', targetInode: '4004', targetType: 'file'
-    }), '__sp_entry_matches "./$__sp_boundName"'],
+    ['metadata-bound', targetEntryBinding({
+      targetDevice: '4003',
+      targetInode: '4004',
+      targetType: 'directory',
+      targetMode: '750',
+      targetUid: '21',
+      targetGid: '22'
+    }), 'chown -- "$__sp_targetUid:$__sp_targetGid" "$__sp_fd5"'],
+    ['remove-bound', {
+      targetPath: '/root/target',
+      targetParentRealPath: '/root',
+      targetParentDevice: '4001',
+      targetParentInode: '4002',
+      targetDevice: '4003',
+      targetInode: '4004',
+      targetType: 'file'
+    }, '__sp_entry_matches "./$__sp_boundName"'],
     ['sha256', { path: '/x' }, '__sp_emit_sha256 "$__sp_path"'],
     ['sha256-bound', boundedDigestBinding(), '__sp_bounded_digest'],
     ['sha256-range-bound', boundedDigestBinding({
@@ -1170,7 +1482,7 @@ test('privileged command builder exposes every fixed operation and fails closed 
       targetMode: '600',
       targetUid: '0',
       targetGid: '0'
-    }), /mv -nT/],
+    }), /exec 4> "\.\/\$__sp_targetName"/],
     ['stage-cleanup', cleanupBinding(), /rm -f/]
   ]
   for (const [operation, args, source] of stageCases) {
@@ -1334,7 +1646,7 @@ test('stage parser rejects forged success when a required capability is false', 
     ]],
     ['stage-import', [
       'cleanShell', 'printf', 'id', 'tr', 'stat', 'base64', 'sha256',
-      'procFd', 'noclobber', 'cat', 'gnuStat', 'gnuMv', 'realpath',
+      'procFd', 'noclobber', 'cat', 'gnuStat', 'realpath',
       'chown', 'chmod', 'rm'
     ], ['installed', 'b'.repeat(64), '12', '4003', '4004']],
     ['stage-cleanup', [
@@ -2083,65 +2395,47 @@ test('staging operations bind one safe object to the handshaken root inode', asy
   )
   assert.match(importCommand, /exec 3< "\.\/\$__sp_objectName"/)
   assert.match(importCommand, /__sp_bind_entry_parent "\$__sp_targetPath"/)
-  assert.match(importCommand, /__sp_targetParent="\$__sp_targetParentRealPath"/)
   assert.match(importCommand, /__sp_targetName="\$__sp_boundName"/)
   assert.match(importCommand, /cd -- "\$__sp_boundParent"/)
   assert.match(importCommand, /stat -c %d -- \./)
   assert.match(importCommand, /stat -c %i -- \./)
-  assert.match(importCommand, /__sp_targetParentTrusted=0/)
-  assert.match(importCommand, /__sp_targetParentUid=.*stat -c %u -- \./)
-  assert.match(importCommand, /__sp_targetParentMode=.*stat -c %a -- \./)
-  assert.match(importCommand, /0\$__sp_targetParentMode & 022/)
-  assert.match(
-    importCommand,
-    /__sp_cleanup_temp\(\) \{ \[ "\$__sp_targetParentTrusted" = 1 \] \|\| return 0; if __sp_path_matches_fd/
-  )
-  assert.match(importCommand, /__sp_tempName="\.shellpilot-\$__sp_token\.tmp"/)
-  assert.match(importCommand, /umask 077.*set -C.*exec 4> "\.\/\$__sp_tempName"/)
+  assert.match(importCommand, /__sp_targetParentTrusted=1/)
+  assert.match(importCommand, /__sp_trusted_parent_fd/)
+  assert.match(importCommand, /0\$5 & 022/)
+  assert.doesNotMatch(importCommand, /__sp_cleanup_temp/)
+  assert.doesNotMatch(importCommand, /__sp_tempName/)
+  assert.match(importCommand, /umask 077.*set -C.*exec 4> "\.\/\$__sp_targetName"/)
   assert.match(importCommand, /stat -L -c %a -- "\$__sp_fd4".*= 600/)
   assert.match(importCommand, /cat <&3 >&4/)
   assert.match(importCommand, /"\$__sp_expectedSize"/)
-  assert.match(importCommand, /mv -nT -- "\.\/\$__sp_tempName" "\.\/\$__sp_targetName"/)
+  assert.doesNotMatch(
+    importCommand,
+    /mv -nT -- "\.\/\$__sp_tempName" "\.\/\$__sp_targetName"/
+  )
   assert.doesNotMatch(importCommand, /mv -fT/)
   const installIndex = importCommand.indexOf(
-    'mv -nT -- "./$__sp_tempName" "./$__sp_targetName"'
+    'exec 4> "./$__sp_targetName"'
   )
   assert.equal(
-    importCommand.indexOf('chown -- "$__sp_targetUid:$__sp_targetGid" "$__sp_fd4"') <
+    importCommand.indexOf('chown -- "$__sp_targetUid:$__sp_targetGid" "$__sp_fd4"') >
       installIndex,
-    true
-  )
-  assert.equal(
-    importCommand.indexOf('__sp_readyMode=') <
-      installIndex,
-    true
-  )
-  assert.equal(
-    importCommand.lastIndexOf('__sp_path_matches_fd "./$__sp_tempName"') <
-      installIndex,
-    true
-  )
-  assert.equal(
-    importCommand.lastIndexOf('__sp_path_matches_fd "./$__sp_tempName"') >
-      importCommand.indexOf('__sp_readyMode='),
     true
   )
   assert.equal(importCommand.lastIndexOf('exec 4>&-') > installIndex, true)
-  assert.match(importCommand, /__sp_path_matches_fd "\.\/\$__sp_targetName" "\$__sp_tempDevice" "\$__sp_tempInode"/)
+  assert.match(importCommand, /__sp_path_matches_fd "\.\/\$__sp_targetName" "\$__sp_installedDevice" "\$__sp_installedInode"/)
   assert.match(importCommand, /__sp_parent_path_matches\(\).*realpath -- "\$1"/)
   assert.match(
     importCommand,
-    /__sp_cleanup_installed\(\).*__sp_path_matches_fd "\.\/\$__sp_targetName".*rm -f -- "\.\/\$__sp_targetName"/
+    /__sp_cleanup_installed\(\).*__sp_trusted_parent_path_matches.*__sp_path_matches_fd "\.\/\$__sp_targetName".*rm -f -- "\.\/\$__sp_targetName"/
   )
   assert.equal(
-    importCommand.lastIndexOf('__sp_parent_path_matches "$__sp_targetParentRealPath"') >
-      importCommand.indexOf('mv -nT --'),
+    importCommand.lastIndexOf('__sp_trusted_parent_path_matches "$__sp_targetParentRealPath"') >
+      installIndex,
     true
   )
   assert.match(importCommand, /__sp_finalDigest=.*__sp_sha256_raw "\$__sp_fd4"/)
   assert.match(importCommand, /__sp_finalMode=.*stat -L -c %a -- "\$__sp_fd4"/)
-  assert.match(importCommand, /__sp_cleanup_temp.*__sp_tempDevice.*__sp_tempInode/)
-  assert.doesNotMatch(importCommand, /rm -f -- "\$__sp_tempPath"/)
+  assert.doesNotMatch(importCommand, /__sp_tempDevice|__sp_tempInode/)
   assert.match(cleanupCommand, /rm -f -- "\.\/\$__sp_objectName"/)
   assert.doesNotMatch(cleanupCommand, /rm -rf/)
 
@@ -2282,11 +2576,13 @@ test('mkdir-bound revalidates its canonical parent around every created-entry mu
       })
     }
   })
-  const parentCheck = '__sp_parent_path_matches "$__sp_targetParentRealPath"'
+  const parentCheck = '__sp_trusted_parent_path_matches "$__sp_targetParentRealPath"'
   const checks = command.split(parentCheck).length - 1
 
   assert.ok(checks >= 4)
   assert.ok(command.indexOf(parentCheck) < command.indexOf('mkdir -- "./$__sp_boundName"'))
+  assert.ok(command.indexOf('umask 077') < command.indexOf('mkdir -- "./$__sp_boundName"'))
+  assert.match(command, /stat -L -c %a -- "\$__sp_fd5"\)" = 700/)
   assert.ok(command.lastIndexOf(parentCheck) > command.indexOf('chmod -- "$__sp_targetMode"'))
   assert.match(command, /__sp_cleanup_created_directory/)
 })
@@ -2606,14 +2902,14 @@ test('linux stage import rejects a canonical parent replacement after installati
     assert.notEqual(result.execution.status, 0)
     assert.equal(fs.readFileSync(raceLog, 'utf8'), 'raced')
     assert.equal(fs.readFileSync(foreignSentinel, 'utf8'), 'foreign')
-    assert.equal(fs.existsSync(movedTarget), false)
+    assert.equal(fs.readFileSync(movedTarget, 'utf8'), content)
     assert.equal(fs.existsSync(targetPath), false)
   } finally {
     fs.rmSync(nativeRoot, { recursive: true, force: true })
   }
 })
 
-test('linux stage import rejects digest mismatch special entries directories and replaced temp names', {
+test('linux stage import rejects digest mismatch special entries and final-path replacements', {
   skip: linuxRootOnly
 }, async () => {
   const nativeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-linux-stage-reject-'))
@@ -2642,14 +2938,10 @@ test('linux stage import rejects digest mismatch special entries directories and
     })
     assert.notEqual(mismatch.execution.status, 0)
     assert.equal(fs.existsSync(targetPath), false)
-    assert.equal(fs.existsSync(path.join(targetParent, `.shellpilot-${'f1'.repeat(24)}.tmp`)), false)
+    assert.deepEqual(fs.readdirSync(targetParent), [])
 
     fs.chmodSync(targetParent, 0o777)
     const untrustedToken = 'fa'.repeat(24)
-    const abandonedTemp = path.join(
-      targetParent,
-      `.shellpilot-${untrustedToken}.tmp`
-    )
     const untrustedMismatch = await runRealProtocolOperation({
       operation: 'stage-import',
       token: untrustedToken,
@@ -2657,8 +2949,7 @@ test('linux stage import rejects digest mismatch special entries directories and
     })
     assert.notEqual(untrustedMismatch.execution.status, 0)
     assert.equal(fs.existsSync(targetPath), false)
-    assert.equal(fs.readFileSync(abandonedTemp, 'utf8'), 'different')
-    fs.rmSync(abandonedTemp)
+    assert.deepEqual(fs.readdirSync(targetParent), [])
     fs.chmodSync(targetParent, 0o700)
 
     fs.symlinkSync('digest-object', path.join(fixture.rootPath, 'link-object'))
@@ -2757,7 +3048,6 @@ test('linux stage import rejects digest mismatch special entries directories and
     const raceObject = path.join(fixture.rootPath, 'race-object')
     fs.writeFileSync(raceObject, Buffer.alloc(32 * 1024 * 1024, 0x61), { mode: 0o600 })
     const raceToken = 'f5'.repeat(24)
-    const raceTempPath = path.join(targetParent, `.shellpilot-${raceToken}.tmp`)
     const raceLog = path.join(nativeRoot, 'race-replaced')
     const raced = await runRealProtocolOperation({
       operation: 'stage-import',
@@ -2765,8 +3055,8 @@ test('linux stage import rejects digest mismatch special entries directories and
       prelude: [
         '(',
         '  __sp_test_i=0',
-        `  while [ ! -e ${quoteForBash(raceTempPath)} ] && [ "$__sp_test_i" -lt 10000 ]; do __sp_test_i=$((__sp_test_i + 1)); sleep 0.001; done`,
-        `  if [ -e ${quoteForBash(raceTempPath)} ]; then rm -f -- ${quoteForBash(raceTempPath)}; printf foreign > ${quoteForBash(raceTempPath)}; printf replaced > ${quoteForBash(raceLog)}; fi`,
+        `  while [ ! -e ${quoteForBash(targetPath)} ] && [ "$__sp_test_i" -lt 10000 ]; do __sp_test_i=$((__sp_test_i + 1)); sleep 0.001; done`,
+        `  if [ -e ${quoteForBash(targetPath)} ]; then rm -f -- ${quoteForBash(targetPath)}; printf foreign > ${quoteForBash(targetPath)}; printf replaced > ${quoteForBash(raceLog)}; fi`,
         ') >/dev/null 2>&1 &'
       ].join('\n'),
       args: {
@@ -2778,26 +3068,18 @@ test('linux stage import rejects digest mismatch special entries directories and
     })
     assert.notEqual(raced.execution.status, 0)
     assert.equal(fs.readFileSync(raceLog, 'utf8'), 'replaced')
-    assert.equal(fs.readFileSync(raceTempPath, 'utf8'), 'foreign')
-    assert.equal(fs.existsSync(targetPath), false)
+    assert.equal(fs.readFileSync(targetPath, 'utf8'), 'foreign')
 
-    fs.rmSync(raceTempPath)
+    fs.rmSync(targetPath)
     const targetRaceToken = 'fb'.repeat(24)
-    const targetRaceTempPath = path.join(
-      targetParent,
-      `.shellpilot-${targetRaceToken}.tmp`
-    )
     const targetRacePath = path.join(targetParent, 'raced-target')
     const targetRaceLog = path.join(nativeRoot, 'target-raced')
     const targetRaced = await runRealProtocolOperation({
       operation: 'stage-import',
       token: targetRaceToken,
       prelude: [
-        '(',
-        '  __sp_test_i=0',
-        `  while [ ! -e ${quoteForBash(targetRaceTempPath)} ] && [ "$__sp_test_i" -lt 10000 ]; do __sp_test_i=$((__sp_test_i + 1)); sleep 0.001; done`,
-        `  if [ -e ${quoteForBash(targetRaceTempPath)} ]; then printf foreign > ${quoteForBash(targetRacePath)}; printf raced > ${quoteForBash(targetRaceLog)}; fi`,
-        ') >/dev/null 2>&1 &'
+        `printf foreign > ${quoteForBash(targetRacePath)}`,
+        `printf raced > ${quoteForBash(targetRaceLog)}`
       ].join('\n'),
       args: {
         ...baseArgs,
@@ -2811,13 +3093,12 @@ test('linux stage import rejects digest mismatch special entries directories and
     assert.notEqual(targetRaced.execution.status, 0)
     assert.equal(fs.readFileSync(targetRaceLog, 'utf8'), 'raced')
     assert.equal(fs.readFileSync(targetRacePath, 'utf8'), 'foreign')
-    assert.equal(fs.existsSync(targetRaceTempPath), false)
   } finally {
     fs.rmSync(nativeRoot, { recursive: true, force: true })
   }
 })
 
-test('linux stage import metadata failure leaves an absent target absent and removes its matching temp', {
+test('linux stage import metadata failure removes only its proven final target', {
   skip: linuxRootOnly
 }, async () => {
   const nativeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-linux-stage-metadata-'))
