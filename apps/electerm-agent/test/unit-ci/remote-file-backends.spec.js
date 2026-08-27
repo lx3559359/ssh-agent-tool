@@ -1,0 +1,463 @@
+const test = require('node:test')
+const assert = require('node:assert/strict')
+const { createHash } = require('node:crypto')
+const { importModule } = require('./helpers/import-esm')
+
+const backendsModule =
+  'src/client/components/sftp/remote-file-backends.js'
+
+function sha256 (value) {
+  return createHash('sha256').update(value).digest('hex')
+}
+
+function createTokenFactory () {
+  let sequence = 0
+  return () => (++sequence).toString(16).padStart(48, '0')
+}
+
+function missing (remotePath) {
+  const error = new Error(`No such file: ${remotePath}`)
+  error.code = 'SFTP_NO_SUCH_FILE'
+  return error
+}
+
+function createBackendHarness (options = {}) {
+  const home = '/home/login'
+  const nodes = new Map([[home, {
+    type: 'directory', mode: 0o700, uid: 1000, gid: 1000
+  }]])
+  const rootFiles = new Map(Object.entries(options.rootFiles || {}))
+  const requests = []
+  const events = []
+  let leaseReleases = 0
+  const sftp = {
+    id: 'sftp-1',
+    terminalId: 'term-1',
+    async getHomeDir () { return home },
+    async realpath (remotePath) { return remotePath || home },
+    async lstat (remotePath) {
+      const node = nodes.get(remotePath)
+      if (!node) throw missing(remotePath)
+      return {
+        mode: ({ file: 0o100000, directory: 0o040000, symlink: 0o120000 })[node.type] |
+          node.mode,
+        size: node.type === 'file' ? node.content.length : 0,
+        uid: node.uid,
+        gid: node.gid,
+        isDirectory: node.type === 'directory'
+      }
+    },
+    async list (remotePath) {
+      const prefix = `${remotePath}/`
+      return [...nodes.keys()]
+        .filter(path => path.startsWith(prefix) && !path.slice(prefix.length).includes('/'))
+        .map(path => ({ name: path.slice(prefix.length) }))
+    },
+    async mkdir (remotePath, attrs = {}) {
+      if (nodes.has(remotePath)) throw new Error('Already exists')
+      nodes.set(remotePath, {
+        type: 'directory', mode: attrs.mode ?? 0o700, uid: 1000, gid: 1000
+      })
+      return 1
+    },
+    async chmod (remotePath, mode) {
+      nodes.get(remotePath).mode = mode
+      return 1
+    },
+    async createExclusiveFile (remotePath, base64, mode) {
+      if (nodes.has(remotePath)) throw new Error('Target exists')
+      nodes.set(remotePath, {
+        type: 'file',
+        mode,
+        uid: 1000,
+        gid: 1000,
+        content: Buffer.from(base64, 'base64')
+      })
+      events.push(`sftp:create:${remotePath}`)
+      return 1
+    },
+    async readFile (remotePath) {
+      const node = nodes.get(remotePath)
+      if (!node) throw missing(remotePath)
+      return node.content.toString('utf8')
+    },
+    async readFileChunk (remotePath, readOptions = {}) {
+      const node = nodes.get(remotePath)
+      if (!node) throw missing(remotePath)
+      const offset = readOptions.offset || 0
+      const maxBytes = readOptions.maxBytes || 64 * 1024
+      const bytes = node.content.subarray(offset, offset + maxBytes)
+      return {
+        base64: bytes.toString('base64'),
+        offset,
+        nextOffset: offset + bytes.length,
+        bytesRead: bytes.length,
+        totalBytes: node.content.length,
+        hasMore: offset + bytes.length < node.content.length
+      }
+    },
+    async rm (remotePath) {
+      if (!nodes.has(remotePath)) throw missing(remotePath)
+      nodes.delete(remotePath)
+      events.push(`sftp:rm:${remotePath}`)
+      return 1
+    },
+    async removeEmptyDirectory (remotePath) {
+      if ([...nodes.keys()].some(path => path.startsWith(`${remotePath}/`))) {
+        throw new Error('Directory not empty')
+      }
+      if (!nodes.has(remotePath)) throw missing(remotePath)
+      nodes.delete(remotePath)
+      events.push(`sftp:rmdir:${remotePath}`)
+      return 1
+    }
+  }
+
+  async function execute ({ request, protocol }) {
+    assert.equal(typeof protocol?.buildCommand, 'function')
+    requests.push(request)
+    const args = request.args
+    if (request.operation === 'stage-handshake') {
+      if (options.badHandshake) throw new Error('handshake rejected')
+      const response = sha256(`${args.challenge}:root`)
+      nodes.set(`${args.rootPath}/${args.responseName}`, {
+        type: 'file',
+        mode: 0o600,
+        uid: 1000,
+        gid: 1000,
+        content: Buffer.from(response)
+      })
+      return {
+        exitCode: 0,
+        identity: { uid: '0', username: 'root' },
+        kind: 'stage-handshake',
+        response,
+        uid: '1000',
+        gid: '1000',
+        mode: '700',
+        rootRealPath: args.rootPath,
+        rootDevice: '2049',
+        rootInode: '777'
+      }
+    }
+    if (request.operation === 'stage-cleanup') {
+      events.push(`pty:cleanup:${args.objectName}`)
+      if (options.cleanupFailure && args.objectName.startsWith(options.cleanupFailure)) {
+        throw new Error('stage cleanup failed')
+      }
+      nodes.delete(`${args.rootPath}/${args.objectName}`)
+      return { exitCode: 0, kind: 'stage-cleanup', ok: true }
+    }
+    if (request.operation === 'stage-export') {
+      const bytes = Buffer.from(rootFiles.get(args.sourcePath) || '')
+      nodes.set(`${args.rootPath}/${args.objectName}`, {
+        type: 'file', mode: 0o600, uid: 1000, gid: 1000, content: bytes
+      })
+      return {
+        exitCode: 0,
+        kind: 'stage-export',
+        sha256: options.exportDigest || sha256(bytes),
+        size: options.exportSize ?? bytes.length
+      }
+    }
+    if (request.operation === 'stage-import') {
+      if (options.importFailure) throw new Error('stage import failed')
+      const bytes = nodes.get(`${args.rootPath}/${args.objectName}`).content
+      rootFiles.set(args.targetPath, Buffer.from(bytes))
+      return {
+        exitCode: 0,
+        kind: 'stage-import',
+        sha256: sha256(bytes),
+        size: bytes.length
+      }
+    }
+    if (request.operation === 'list') {
+      return {
+        exitCode: 0,
+        kind: 'list',
+        entries: [
+          { name: 'file.txt', type: 'file', mode: 0o100640, size: 12, atime: 1, mtime: 2, uid: 3, gid: 4 },
+          { name: 'dir', type: 'directory', mode: 0o40750, size: 0, atime: 5, mtime: 6, uid: 7, gid: 8 },
+          { name: 'link', type: 'symlink', mode: 0o120777, size: 3, atime: 9, mtime: 10, uid: 11, gid: 12 }
+        ]
+      }
+    }
+    if (request.operation === 'lstat' || request.operation === 'stat') {
+      if (!rootFiles.has(args.path) && args.path.includes('/missing')) {
+        if (options.missingLstatResult) {
+          return { exitCode: 1, kind: request.operation, ok: false }
+        }
+        throw missing(args.path)
+      }
+      return {
+        exitCode: 0,
+        kind: request.operation,
+        metadata: {
+          mode: 0o100640,
+          type: 'file',
+          size: 12,
+          atime: 1,
+          mtime: 2,
+          uid: 3,
+          gid: 4
+        }
+      }
+    }
+    if (request.operation === 'readlink' || request.operation === 'realpath') {
+      return { exitCode: 0, kind: request.operation, text: `/result${args.path}` }
+    }
+    if (request.operation === 'sha256') {
+      const bytes = Buffer.from(rootFiles.get(args.path) || '')
+      return { exitCode: 0, kind: 'sha256', sha256: sha256(bytes), size: bytes.length }
+    }
+    return { exitCode: 0, kind: request.operation, ok: true }
+  }
+
+  const lease = {
+    execute,
+    async release () {
+      leaseReleases += 1
+      events.push('lease:release')
+      if (options.leaseReleaseFailure) throw new Error('lease release failed')
+      return true
+    }
+  }
+  return {
+    sftp,
+    lease,
+    requests,
+    events,
+    rootFiles,
+    nodes,
+    get leaseReleases () { return leaseReleases }
+  }
+}
+
+async function createRootBackend (harness, options = {}) {
+  const { createPrivilegedFileBackend } = await importModule(backendsModule)
+  return createPrivilegedFileBackend({
+    sftp: harness.sftp,
+    lease: harness.lease,
+    identity: options.identity || { uid: '0', username: 'root' },
+    createToken: createTokenFactory()
+  })
+}
+
+test('native backend preserves the original SFTP object identity', async () => {
+  const { createNativeSftpFileBackend } = await importModule(backendsModule)
+  const sftp = { marker: true }
+  const backend = createNativeSftpFileBackend(sftp)
+  assert.equal(Object.isFrozen(backend), true)
+  assert.equal(backend.channel, 'sftp')
+  assert.equal(backend.runtimeIdentity, null)
+  assert.equal(backend.sftp, sftp)
+  assert.equal(backend.backend, sftp)
+  assert.equal(await backend.release(), true)
+  assert.throws(() => createNativeSftpFileBackend(), /SFTP|sftp/)
+})
+
+test('privileged backend validates root identity and bounded lease and releases failed creation', async () => {
+  const { createPrivilegedFileBackend } = await importModule(backendsModule)
+  const harness = createBackendHarness({ badHandshake: true })
+  await assert.rejects(
+    createPrivilegedFileBackend({
+      sftp: harness.sftp,
+      lease: harness.lease,
+      identity: { uid: '0', username: 'root' },
+      createToken: createTokenFactory()
+    }),
+    /handshake rejected/
+  )
+  assert.equal(harness.leaseReleases, 1)
+  for (const value of [
+    { sftp: harness.sftp, lease: {}, identity: { uid: '0', username: 'root' } },
+    { sftp: harness.sftp, lease: harness.lease, identity: { uid: '1000', username: 'login' } },
+    { sftp: harness.sftp, lease: harness.lease, identity: { uid: '0', username: '' } }
+  ]) {
+    await assert.rejects(createPrivilegedFileBackend(value), /lease|租约|root|身份|username/i)
+  }
+})
+
+test('privileged facade maps fixed metadata and mutation methods to protocol requests', async () => {
+  const harness = createBackendHarness({ rootFiles: { '/root/file': 'content' } })
+  const backend = await createRootBackend(harness)
+  const facade = backend.sftp
+  assert.equal(Object.isFrozen(backend), true)
+  assert.equal(Object.isFrozen(backend.runtimeIdentity), true)
+  assert.deepEqual(backend.runtimeIdentity, {
+    channel: 'pty-root', effectiveUid: '0', effectiveUsername: 'root'
+  })
+  assert.equal(backend.channel, 'pty-root')
+  assert.equal(backend.backend, facade)
+  assert.equal(Object.isFrozen(facade), true)
+
+  assert.deepEqual(await facade.list('/root'), [
+    { name: 'file.txt', type: '-', size: 12, accessTime: 1000, modifyTime: 2000, mode: 0o100640, owner: 3, group: 4 },
+    { name: 'dir', type: 'd', size: 0, accessTime: 5000, modifyTime: 6000, mode: 0o40750, owner: 7, group: 8 },
+    { name: 'link', type: 'l', size: 3, accessTime: 9000, modifyTime: 10000, mode: 0o120777, owner: 11, group: 12 }
+  ])
+  assert.deepEqual(await facade.lstat('/root/file'), {
+    mode: 0o100640,
+    type: 'file',
+    size: 12,
+    atime: 1,
+    mtime: 2,
+    uid: 3,
+    gid: 4,
+    isDirectory: false
+  })
+  assert.equal((await facade.stat('/root/file')).type, 'file')
+  assert.equal(await facade.readlink('/root/link'), '/result/root/link')
+  assert.equal(await facade.realpath('/root/file'), '/result/root/file')
+
+  await facade.mkdir('/root/new-dir')
+  await facade.touch('/root/new-file')
+  await facade.rename('/root/a', '/root/b')
+  await facade.rm('/root/file')
+  await facade.rmdir('/root/dir')
+  await facade.chmod('/root/file', 0o640)
+  await facade.chown('/root/file', 10, 11)
+  await facade.copyEntry('/root/a', '/root/c', { signal: {} })
+  await facade.removeEntry('/root/c', { signal: {} })
+  await facade.cp('/root/a', '/root/d')
+  await facade.mv('/root/d', '/root/e')
+
+  assert.deepEqual(
+    harness.requests.filter(request => !request.operation.startsWith('stage-'))
+      .map(request => [request.operation, request.args]),
+    [
+      ['list', { path: '/root' }],
+      ['lstat', { path: '/root/file' }],
+      ['stat', { path: '/root/file' }],
+      ['readlink', { path: '/root/link' }],
+      ['realpath', { path: '/root/file' }],
+      ['mkdir', { path: '/root/new-dir' }],
+      ['touch', { path: '/root/new-file' }],
+      ['rename', { source: '/root/a', target: '/root/b' }],
+      ['rm', { path: '/root/file' }],
+      ['rmdir', { path: '/root/dir' }],
+      ['chmod', { path: '/root/file', mode: '640' }],
+      ['chown', { path: '/root/file', uid: '10', gid: '11' }],
+      ['copy-entry', { source: '/root/a', target: '/root/c' }],
+      ['remove-entry', { path: '/root/c' }],
+      ['copy-entry', { source: '/root/a', target: '/root/d' }],
+      ['rename', { source: '/root/d', target: '/root/e' }]
+    ]
+  )
+  await backend.release()
+})
+
+test('privileged reads export once cache verified stage bytes and never send secrets through PTY', async () => {
+  const secret = Buffer.from('TOP-SECRET\u0000bytes')
+  const harness = createBackendHarness({ rootFiles: { '/root/secret': secret } })
+  const backend = await createRootBackend(harness)
+
+  assert.equal(await backend.sftp.readFile('/root/secret'), secret.toString('utf8'))
+  const chunk = await backend.sftp.readFileChunk('/root/secret', {
+    offset: 4,
+    maxBytes: 6
+  })
+  assert.deepEqual(chunk, {
+    base64: secret.subarray(4, 10).toString('base64'),
+    offset: 4,
+    nextOffset: 10,
+    bytesRead: 6,
+    totalBytes: secret.length,
+    hasMore: true
+  })
+  assert.equal(await backend.sftp.readFile('/root/secret'), secret.toString('utf8'))
+  assert.equal((await backend.sftp.list('/')).length, 3)
+  const eof = await backend.sftp.readFileChunk('/root/secret', {
+    offset: secret.length + 100,
+    maxBytes: 128 * 1024
+  })
+  assert.deepEqual(eof, {
+    base64: '',
+    offset: secret.length,
+    nextOffset: secret.length,
+    bytesRead: 0,
+    totalBytes: secret.length,
+    hasMore: false
+  })
+  const resume = await backend.sftp.describeResumeEntry('/root/secret', 4)
+  assert.deepEqual(resume, {
+    size: secret.length,
+    mtimeMs: 2000,
+    firstSha256: sha256(secret.subarray(0, 4)),
+    lastSha256: sha256(secret.subarray(secret.length - 4)),
+    boundarySha256: sha256(secret.subarray(secret.length - 4))
+  })
+  assert.equal(harness.requests.filter(request => request.operation === 'stage-export').length, 1)
+  assert.equal(JSON.stringify(harness.requests).includes('TOP-SECRET'), false)
+  assert.equal(JSON.stringify(harness.requests).includes(secret.toString('base64')), false)
+  await backend.release()
+
+  for (const mismatch of [
+    { exportDigest: 'f'.repeat(64) },
+    { exportSize: secret.length + 1 }
+  ]) {
+    const rejectedHarness = createBackendHarness({
+      rootFiles: { '/root/secret': secret },
+      ...mismatch
+    })
+    const rejected = await createRootBackend(rejectedHarness)
+    await assert.rejects(rejected.sftp.readFile('/root/secret'), /SHA|digest|摘要|size|大小/i)
+    await rejected.release()
+  }
+})
+
+test('privileged writes upload exclusive bytes then import only digest size and metadata', async () => {
+  const secret = Buffer.from('WRITE-SECRET\u0000bytes')
+  const harness = createBackendHarness({ missingLstatResult: true })
+  const backend = await createRootBackend(harness)
+  assert.equal(await backend.sftp.writeFile('/root/missing-target', secret, 0o640), 1)
+  assert.deepEqual(harness.rootFiles.get('/root/missing-target'), secret)
+  const imported = harness.requests.find(request => request.operation === 'stage-import')
+  assert.equal(imported.args.targetPath, '/root/missing-target')
+  assert.equal(imported.args.sha256, sha256(secret))
+  assert.equal(imported.args.size, String(secret.length))
+  assert.equal(imported.args.targetMode, '640')
+  assert.equal(imported.args.targetUid, '0')
+  assert.equal(imported.args.targetGid, '0')
+  assert.equal(JSON.stringify(harness.requests).includes('WRITE-SECRET'), false)
+  assert.equal(JSON.stringify(harness.requests).includes(secret.toString('base64')), false)
+  assert.equal(harness.requests.some(request => request.operation === 'stage-cleanup'), true)
+  await backend.release()
+
+  const existingHarness = createBackendHarness({
+    rootFiles: { '/root/existing-target': 'old' }
+  })
+  const existing = await createRootBackend(existingHarness)
+  await existing.sftp.writeFile('/root/existing-target', secret)
+  const existingImport = existingHarness.requests.find(
+    request => request.operation === 'stage-import'
+  )
+  assert.equal(existingImport.args.targetMode, '640')
+  assert.equal(existingImport.args.targetUid, '3')
+  assert.equal(existingImport.args.targetGid, '4')
+  await existing.release()
+
+  const failedHarness = createBackendHarness({ importFailure: true })
+  const failed = await createRootBackend(failedHarness)
+  await assert.rejects(
+    failed.sftp.writeFile('/root/missing-target', secret, 0o600),
+    /stage import failed/
+  )
+  assert.equal(failedHarness.requests.some(request => request.operation === 'stage-cleanup'), true)
+  await failed.release()
+})
+
+test('privileged release closes first continues cleanup and lease release and is idempotent', async () => {
+  const harness = createBackendHarness({
+    rootFiles: { '/root/secret': 'secret' },
+    cleanupFailure: 'download-'
+  })
+  const backend = await createRootBackend(harness)
+  await backend.sftp.readFile('/root/secret')
+  await assert.rejects(backend.release(), /stage cleanup failed/)
+  assert.equal(harness.leaseReleases, 1)
+  assert.equal(harness.events.at(-1), 'lease:release')
+  await assert.rejects(backend.release(), /stage cleanup failed/)
+  assert.equal(harness.leaseReleases, 1)
+  await assert.rejects(backend.sftp.list('/root'), /released|释放|关闭/i)
+})
