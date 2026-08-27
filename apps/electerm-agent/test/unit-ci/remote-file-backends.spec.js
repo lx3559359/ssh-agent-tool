@@ -67,16 +67,30 @@ function createBackendHarness (options = {}) {
     async createExclusiveFile (remotePath, base64, mode) {
       if (nodes.has(remotePath)) throw new Error('Target exists')
       if (options.uploadCreateFailure && remotePath.includes('/upload-')) {
+        const cleanupSucceeded = options.uploadCleanupSucceeded !== false
+        if (!cleanupSucceeded) {
+          nodes.set(remotePath, {
+            type: 'file',
+            mode,
+            uid: 1000,
+            gid: 1000,
+            content: options.uploadResidualMatches
+              ? Buffer.from(base64, 'base64')
+              : Buffer.from('partial upload')
+          })
+        }
         if (options.uploadCreateEndpointChange) sftp.id = 'sftp-2'
-        return {
+        const failure = Object.assign(new Error('remote upload write failed'), {
           ok: false,
           claimed: true,
           code: 'SFTP_EXCLUSIVE_WRITE_FAILED',
           message: 'remote upload write failed',
           cleanupAttempted: true,
-          cleanupSucceeded: true,
-          cleanupError: null
-        }
+          cleanupSucceeded,
+          cleanupError: cleanupSucceeded ? null : 'remote unlink failed'
+        })
+        if (options.uploadCreateThrows) throw failure
+        return failure
       }
       nodes.set(remotePath, {
         type: 'file',
@@ -94,6 +108,7 @@ function createBackendHarness (options = {}) {
       return node.content.toString('utf8')
     },
     async readFileChunk (remotePath, readOptions = {}) {
+      events.push(`sftp:read:${remotePath}`)
       const node = nodes.get(remotePath)
       if (!node) throw missing(remotePath)
       const offset = readOptions.offset || 0
@@ -157,7 +172,14 @@ function createBackendHarness (options = {}) {
       if (options.cleanupFailure && args.objectName.startsWith(options.cleanupFailure)) {
         throw new Error('stage cleanup failed')
       }
-      nodes.delete(`${args.rootPath}/${args.objectName}`)
+      const remotePath = `${args.rootPath}/${args.objectName}`
+      const node = nodes.get(remotePath)
+      if (!node) return { exitCode: 0, kind: 'stage-cleanup', ok: true }
+      if (node.type !== 'file' || sha256(node.content) !== args.sha256 ||
+        String(node.content.length) !== args.size) {
+        throw new Error('stage cleanup proof failed')
+      }
+      nodes.delete(remotePath)
       return { exitCode: 0, kind: 'stage-cleanup', ok: true }
     }
     if (request.operation === 'stage-export') {
@@ -488,7 +510,7 @@ test('privileged reads export once cache verified stage bytes and never send sec
     })
     const rejected = await createRootBackend(rejectedHarness)
     await assert.rejects(rejected.sftp.readFile('/root/secret'), /SHA|digest|摘要|size|大小/i)
-    await rejected.release()
+    await assert.rejects(rejected.release(), /cleanup proof|摘要|大小/i)
   }
 })
 
@@ -588,11 +610,52 @@ test('privileged write rejects a claimed upload stage failure before import', as
   await backend.release()
 })
 
-test('privileged write keeps its create error when abandoning the stage fails', async () => {
+test('privileged write retains an unclean claimed upload for immediate and release cleanup', async () => {
+  for (const uploadCreateThrows of [false, true]) {
+    const harness = createBackendHarness({
+      missingLstatResult: true,
+      uploadCreateFailure: true,
+      uploadCleanupSucceeded: false,
+      uploadResidualMatches: true,
+      uploadCreateThrows,
+      cleanupFailure: 'upload-'
+    })
+    const backend = await createRootBackend(harness)
+
+    const error = await backend.sftp.writeFile(
+      '/root/missing-target',
+      Buffer.from('secret'),
+      0o600
+    ).catch(error => error)
+    assert.equal(error.message, 'remote upload write failed')
+    assert.match(error.cleanupError?.message || '', /remote unlink failed/)
+    assert.match(error.cleanupRetryError?.message || '', /stage cleanup failed/)
+    assert.equal(harness.requests.filter(request =>
+      request.operation === 'stage-cleanup' &&
+      request.args.objectName.startsWith('upload-')
+    ).length, 1)
+    const cleanup = harness.requests.find(request =>
+      request.operation === 'stage-cleanup' &&
+      request.args.objectName.startsWith('upload-')
+    )
+    assert.equal(cleanup.args.sha256, sha256(Buffer.from('secret')))
+    assert.equal(cleanup.args.size, '6')
+
+    await assert.rejects(backend.release(), /stage cleanup failed/)
+    assert.equal(harness.requests.filter(request =>
+      request.operation === 'stage-cleanup' &&
+      request.args.objectName.startsWith('upload-')
+    ).length, 2)
+    assert.equal(harness.leaseReleases, 1)
+  }
+})
+
+test('successful immediate cleanup removes an unclean claimed upload record', async () => {
   const harness = createBackendHarness({
     missingLstatResult: true,
     uploadCreateFailure: true,
-    uploadCreateEndpointChange: true
+    uploadCleanupSucceeded: false,
+    uploadResidualMatches: true
   })
   const backend = await createRootBackend(harness)
 
@@ -602,9 +665,69 @@ test('privileged write keeps its create error when abandoning the stage fails', 
     0o600
   ).catch(error => error)
   assert.equal(error.message, 'remote upload write failed')
-  assert.match(error.cleanupError?.message || '', /session|endpoint|会话|端点/i)
+  assert.equal(harness.requests.filter(request =>
+    request.operation === 'stage-cleanup' &&
+    request.args.objectName.startsWith('upload-')
+  ).length, 1)
+  assert.equal(await backend.release(), true)
+  assert.equal(harness.requests.filter(request =>
+    request.operation === 'stage-cleanup' &&
+    request.args.objectName.startsWith('upload-')
+  ).length, 1)
+})
+
+test('privileged write preserves an unverified partial upload without cleanup proof', async () => {
+  const harness = createBackendHarness({
+    missingLstatResult: true,
+    uploadCreateFailure: true,
+    uploadCleanupSucceeded: false
+  })
+  const backend = await createRootBackend(harness)
+
+  const error = await backend.sftp.writeFile(
+    '/root/missing-target',
+    Buffer.from('secret'),
+    0o600
+  ).catch(error => error)
+  assert.equal(error.message, 'remote upload write failed')
+  assert.match(error.cleanupRetryError?.message || '', /摘要|大小|digest|size/i)
+  assert.equal(harness.requests.some(request =>
+    request.operation === 'stage-cleanup' &&
+    request.args.objectName.startsWith('upload-')
+  ), false)
+  assert.equal([...harness.nodes.values()].some(node =>
+    node.type === 'file' && node.content?.toString() === 'partial upload'
+  ), true)
+  await assert.rejects(backend.release(), /residual|验证|保留/i)
+  assert.equal(harness.leaseReleases, 1)
+})
+
+test('privileged write keeps its create error when abandoning the stage fails', async () => {
+  const harness = createBackendHarness({
+    missingLstatResult: true,
+    uploadCreateFailure: true,
+    uploadCleanupSucceeded: false,
+    uploadCreateEndpointChange: true
+  })
+  const backend = await createRootBackend(harness)
+  const readsBefore = harness.events.filter(event =>
+    event.startsWith('sftp:read:')
+  ).length
+
+  const error = await backend.sftp.writeFile(
+    '/root/missing-target',
+    Buffer.from('secret'),
+    0o600
+  ).catch(error => error)
+  assert.equal(error.message, 'remote upload write failed')
+  assert.match(error.cleanupError?.message || '', /remote unlink failed/)
+  assert.match(error.cleanupRetryError?.message || '', /session|endpoint|会话|端点/i)
   assert.equal(harness.requests.some(request => request.operation === 'stage-import'), false)
   assert.equal(harness.requests.some(request => request.operation === 'stage-cleanup'), false)
+  assert.equal(harness.events.filter(event =>
+    event.startsWith('sftp:read:')
+  ).length, readsBefore)
+  assert.equal([...harness.nodes.keys()].some(path => path.includes('/upload-')), true)
   await assert.rejects(backend.release(), /session|endpoint|会话|端点/i)
   assert.equal(harness.leaseReleases, 1)
 })

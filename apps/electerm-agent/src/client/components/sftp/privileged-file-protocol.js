@@ -40,7 +40,7 @@ const requiredStageCapabilities = Object.freeze({
     'noclobber', 'cat', 'gnuStat', 'gnuMv', 'realpath', 'chown', 'chmod', 'rm'
   ]),
   'stage-cleanup': Object.freeze([
-    'cleanShell', 'printf', 'id', 'tr', 'stat', 'base64', 'procFd',
+    'cleanShell', 'printf', 'id', 'tr', 'stat', 'base64', 'sha256', 'procFd',
     'noclobber', 'gnuStat', 'realpath', 'rm'
   ])
 })
@@ -196,7 +196,7 @@ const operationArguments = Object.freeze({
   ],
   'stage-cleanup': [
     'rootPath', 'rootRealPath', 'rootDevice', 'rootInode',
-    'rootUid', 'rootGid', 'rootMode', 'objectName'
+    'rootUid', 'rootGid', 'rootMode', 'objectName', 'sha256', 'size'
   ],
   sha256: ['path']
 })
@@ -490,12 +490,20 @@ const stageImportBody = [
 ].join('; ')
 
 const stageCleanupBody = [
-  '__sp_bind_root || return $?;',
-  'if [ -e "./$__sp_objectName" ] || [ -L "./$__sp_objectName" ]; then',
-  '  [ -L "./$__sp_objectName" ] || [ -f "./$__sp_objectName" ] || return 1;',
-  '  rm -f -- "./$__sp_objectName" || return $?;',
-  'fi'
-].join(' ')
+  '__sp_bind_root || return $?',
+  'if [ ! -e "./$__sp_objectName" ] && [ ! -L "./$__sp_objectName" ]; then return 0; fi',
+  '[ ! -L "./$__sp_objectName" ] && [ -f "./$__sp_objectName" ] || return 1',
+  'exec 3< "./$__sp_objectName" || return $?',
+  '__sp_fd3="/proc/$$/fd/3"',
+  '__sp_objectDevice="$(stat -L -c %d -- "$__sp_fd3")" || { exec 3<&-; return 1; }',
+  '__sp_objectInode="$(stat -L -c %i -- "$__sp_fd3")" || { exec 3<&-; return 1; }',
+  '__sp_digest="$(__sp_sha256_raw "$__sp_fd3")" || { exec 3<&-; return 1; }',
+  '__sp_size="$(stat -L -c %s -- "$__sp_fd3")" || { exec 3<&-; return 1; }',
+  '[ "$__sp_digest" = "$__sp_expectedSha256" ] && [ "$__sp_size" = "$__sp_expectedSize" ] || { exec 3<&-; return 1; }',
+  '__sp_path_matches_fd "./$__sp_objectName" "$__sp_objectDevice" "$__sp_objectInode" || { exec 3<&-; return 1; }',
+  'rm -f -- "./$__sp_objectName" || { __sp_status=$?; exec 3<&-; return "$__sp_status"; }',
+  'exec 3<&-'
+].join('; ')
 
 const operationBodies = Object.freeze({
   probe: ':',

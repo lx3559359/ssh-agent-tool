@@ -88,6 +88,14 @@ function stageBinding (overrides = {}) {
   }
 }
 
+function cleanupBinding (overrides = {}) {
+  return stageBinding({
+    sha256: 'c'.repeat(64),
+    size: '12',
+    ...overrides
+  })
+}
+
 async function listNamesFromRealBash (prelude, token) {
   const {
     buildPrivilegedFileCommand,
@@ -812,7 +820,7 @@ test('privileged command builder exposes every fixed operation and fails closed 
       targetUid: '0',
       targetGid: '0'
     }), /mv -fT/],
-    ['stage-cleanup', stageBinding(), /rm -f/]
+    ['stage-cleanup', cleanupBinding(), /rm -f/]
   ]
   for (const [operation, args, source] of stageCases) {
     const command = buildPrivilegedFileCommand({
@@ -948,7 +956,7 @@ test('stage parser rejects forged success when a required capability is false', 
       'chown', 'chmod', 'rm'
     ], ['digest', 'b'.repeat(64), '12']],
     ['stage-cleanup', [
-      'cleanShell', 'printf', 'id', 'tr', 'stat', 'base64', 'procFd',
+      'cleanShell', 'printf', 'id', 'tr', 'stat', 'base64', 'sha256', 'procFd',
       'noclobber', 'gnuStat', 'realpath', 'rm'
     ], null]
   ]
@@ -1500,7 +1508,7 @@ test('staging operations bind one safe object to the handshaken root inode', asy
   })
   const cleanupCommand = buildPrivilegedFileCommand({
     token,
-    request: { operation: 'stage-cleanup', args: binding }
+    request: { operation: 'stage-cleanup', args: cleanupBinding(binding) }
   })
 
   for (const command of [exportCommand, importCommand, cleanupCommand]) {
@@ -1578,7 +1586,7 @@ test('staging operations bind one safe object to the handshaken root inode', asy
       token,
       request: {
         operation: 'stage-cleanup',
-        args: { ...binding, objectName: '../escape' }
+        args: cleanupBinding({ ...binding, objectName: '../escape' })
       }
     }),
     /objectName/
@@ -1609,6 +1617,133 @@ test('staging operations bind one safe object to the handshaken root inode', asy
       }),
       /targetPath/
     )
+  }
+})
+
+test('stage cleanup requires content proof and binds deletion to one opened inode', async () => {
+  const {
+    buildPrivilegedFileCommand,
+    createPrivilegedFileRequest
+  } = await importModule(protocolModule)
+  const token = '7'.repeat(48)
+  const args = cleanupBinding()
+
+  assert.throws(() => buildPrivilegedFileCommand({
+    token,
+    request: createPrivilegedFileRequest({
+      operation: 'stage-cleanup',
+      args: stageBinding()
+    })
+  }), /缺少必要参数|sha256|size/i)
+  const request = createPrivilegedFileRequest({
+    operation: 'stage-cleanup',
+    args
+  })
+  const command = buildPrivilegedFileCommand({ token, request })
+  assert.match(command, /exec 3< "\.\/\$__sp_objectName"/)
+  assert.match(command, /__sp_sha256_raw "\$__sp_fd3"/)
+  assert.match(command, /stat -L -c %s -- "\$__sp_fd3"/)
+  assert.match(command, /"\$__sp_expectedSha256"/)
+  assert.match(command, /"\$__sp_expectedSize"/)
+  assert.match(command, /__sp_path_matches_fd "\.\/\$__sp_objectName"/)
+  assert.equal(
+    command.lastIndexOf('__sp_path_matches_fd "./$__sp_objectName"') <
+      command.indexOf('rm -f -- "./$__sp_objectName"'),
+    true
+  )
+  assert.doesNotMatch(command, /rm -rf/)
+})
+
+test('stage cleanup proof preserves mismatches links special entries and replacements', {
+  skip: !bashAvailable || process.platform === 'win32'
+}, async () => {
+  const nativeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-cleanup-proof-'))
+  try {
+    const rootPath = toBashPath(nativeRoot)
+    const metadata = runBash([
+      `chmod 700 -- ${quoteForBash(rootPath)}`,
+      `printf '%s\n' "$(realpath -- ${quoteForBash(rootPath)})"`,
+      `stat -c '%d;%i;%u;%g;%a' -- ${quoteForBash(rootPath)}`
+    ].join('\n'))
+    assert.equal(metadata.status, 0, metadata.stderr)
+    const [rootRealPath, statLine] = metadata.stdout.trim().split('\n')
+    const [rootDevice, rootInode, rootUid, rootGid, rootMode] = statLine.split(';')
+    const binding = {
+      rootPath,
+      rootRealPath,
+      rootDevice,
+      rootInode,
+      rootUid,
+      rootGid,
+      rootMode
+    }
+    const trusted = Buffer.from('trusted cleanup bytes')
+    const trustedProof = {
+      sha256: sha256Text(trusted),
+      size: String(trusted.length)
+    }
+    const runCleanup = (objectName, proof, token) => runRealProtocolOperation({
+      operation: 'stage-cleanup',
+      token,
+      args: { ...binding, objectName, ...proof }
+    })
+
+    const mismatchPath = path.join(nativeRoot, 'mismatch-object')
+    fs.writeFileSync(mismatchPath, trusted)
+    const digestMismatch = await runCleanup(
+      'mismatch-object',
+      { ...trustedProof, sha256: 'f'.repeat(64) },
+      '81'.repeat(24)
+    )
+    assert.notEqual(digestMismatch.execution.status, 0)
+    assert.deepEqual(fs.readFileSync(mismatchPath), trusted)
+    const sizeMismatch = await runCleanup(
+      'mismatch-object',
+      { ...trustedProof, size: String(trusted.length + 1) },
+      '82'.repeat(24)
+    )
+    assert.notEqual(sizeMismatch.execution.status, 0)
+    assert.deepEqual(fs.readFileSync(mismatchPath), trusted)
+
+    const linkPath = path.join(nativeRoot, 'link-object')
+    fs.symlinkSync('mismatch-object', linkPath)
+    const linkRejected = await runCleanup(
+      'link-object',
+      trustedProof,
+      '83'.repeat(24)
+    )
+    assert.notEqual(linkRejected.execution.status, 0)
+    assert.equal(fs.lstatSync(linkPath).isSymbolicLink(), true)
+
+    const directoryPath = path.join(nativeRoot, 'directory-object')
+    fs.mkdirSync(directoryPath)
+    const directoryRejected = await runCleanup(
+      'directory-object',
+      { sha256: sha256Text(''), size: '0' },
+      '84'.repeat(24)
+    )
+    assert.notEqual(directoryRejected.execution.status, 0)
+    assert.equal(fs.statSync(directoryPath).isDirectory(), true)
+
+    const replacementPath = path.join(nativeRoot, 'replacement-object')
+    fs.writeFileSync(replacementPath, 'foreign replacement')
+    const replacementRejected = await runCleanup(
+      'replacement-object',
+      trustedProof,
+      '85'.repeat(24)
+    )
+    assert.notEqual(replacementRejected.execution.status, 0)
+    assert.equal(fs.readFileSync(replacementPath, 'utf8'), 'foreign replacement')
+
+    const correctPath = path.join(nativeRoot, 'correct-object')
+    fs.writeFileSync(correctPath, trusted)
+    const cleaned = await runCleanup('correct-object', trustedProof, '86'.repeat(24))
+    assert.equal(cleaned.execution.status, 0, cleaned.execution.stderr)
+    assert.equal(fs.existsSync(correctPath), false)
+    const missing = await runCleanup('missing-object', trustedProof, '87'.repeat(24))
+    assert.equal(missing.execution.status, 0, missing.execution.stderr)
+  } finally {
+    fs.rmSync(nativeRoot, { recursive: true, force: true })
   }
 })
 
@@ -1669,7 +1804,12 @@ test('linux staging handshake export import and cleanup preserve content metadat
     const cleaned = await runRealProtocolOperation({
       operation: 'stage-cleanup',
       token: 'e3'.repeat(24),
-      args: { ...fixture.binding, objectName }
+      args: cleanupBinding({
+        ...fixture.binding,
+        objectName,
+        sha256: sha256Text(content),
+        size: String(Buffer.byteLength(content))
+      })
     })
     assert.equal(cleaned.execution.status, 0, cleaned.execution.stderr)
     assert.equal(fs.existsSync(stagedPath), false)
@@ -1743,10 +1883,15 @@ test('linux stage import rejects digest mismatch special entries directories and
     const linkCleanup = await runRealProtocolOperation({
       operation: 'stage-cleanup',
       token: 'f0'.repeat(24),
-      args: { ...fixture.binding, objectName: 'link-object' }
+      args: cleanupBinding({
+        ...fixture.binding,
+        objectName: 'link-object',
+        sha256: sha256Text('different'),
+        size: '9'
+      })
     })
-    assert.equal(linkCleanup.execution.status, 0, linkCleanup.execution.stderr)
-    assert.equal(fs.existsSync(path.join(fixture.rootPath, 'link-object')), false)
+    assert.notEqual(linkCleanup.execution.status, 0)
+    assert.equal(fs.lstatSync(path.join(fixture.rootPath, 'link-object')).isSymbolicLink(), true)
     assert.equal(fs.readFileSync(path.join(fixture.rootPath, 'digest-object'), 'utf8'), 'different')
 
     const directoryTarget = path.join(targetParent, 'directory-target')

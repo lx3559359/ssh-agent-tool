@@ -110,6 +110,31 @@ function exclusiveCreateFailure (result, label) {
   return error
 }
 
+function normalizeCreateFailure (value) {
+  if (value instanceof Error &&
+    (!value.cleanupError || value.cleanupError instanceof Error)) {
+    return value
+  }
+  const error = new Error(String(value?.message || value))
+  for (const key of [
+    'code', 'claimed', 'cleanupAttempted', 'cleanupSucceeded'
+  ]) {
+    if (value?.[key] !== undefined) error[key] = value[key]
+  }
+  if (value?.cleanupError) {
+    error.cleanupError = new Error(String(
+      value.cleanupError.message || value.cleanupError
+    ))
+  }
+  return error
+}
+
+function attachCleanupFailure (error, cleanupError) {
+  if (!error.cleanupError) error.cleanupError = cleanupError
+  else if (!error.cleanupRetryError) error.cleanupRetryError = cleanupError
+  else if (!error.abandonError) error.abandonError = cleanupError
+}
+
 function requireIdentity (identity) {
   const uid = String(identity?.effectiveUid ?? identity?.uid ?? '')
   const username = String(identity?.username ?? identity?.effectiveUsername ?? '')
@@ -200,10 +225,12 @@ export async function createPrivilegedFileBackend ({
     let offset = 0
     let totalBytes
     do {
+      staging.assertCurrent()
       const chunk = await sftp.readFileChunk(stage.path, {
         offset,
         maxBytes: 64 * 1024
       })
+      staging.assertCurrent()
       if (!chunk || chunk.offset !== offset ||
         !Number.isSafeInteger(chunk.nextOffset) || chunk.nextOffset < offset ||
         !Number.isSafeInteger(chunk.totalBytes) || chunk.totalBytes < 0 ||
@@ -234,15 +261,26 @@ export async function createPrivilegedFileBackend ({
     if (readStages.has(path)) return readStages.get(path)
     const pending = (async () => {
       const stage = staging.allocate('download')
+      let exported
       try {
-        const exported = digestResult(await executeRequest('stage-export', {
+        exported = digestResult(await executeRequest('stage-export', {
           ...staging.rootBinding,
           objectName: stage.objectName,
           sourcePath: path
         }), 'stage-export')
+        staging.remember(stage.path, {
+          sha256: exported.sha256,
+          size: String(exported.size)
+        })
         const bytes = await readWholeStage(stage, exported)
         return Object.freeze({ stage, bytes })
       } catch (error) {
+        if (!exported) {
+          try { staging.preserve(stage.path) } catch (preserveError) {
+            if (!error.cleanupError) error.cleanupError = preserveError
+          }
+          throw error
+        }
         return cleanupStageAfterError(stage, error)
       }
     })()
@@ -260,13 +298,28 @@ export async function createPrivilegedFileBackend ({
     return 1
   }
 
-  function abandonUnconfirmedStage (stage, error) {
-    const primaryError = error instanceof Error ? error : new Error(String(error))
+  async function handleUploadCreateFailure (stage, error, expected) {
+    const primaryError = normalizeCreateFailure(error)
+    if (primaryError.claimed === true &&
+      primaryError.cleanupSucceeded !== true) {
+      try {
+        staging.preserve(stage.path)
+        staging.assertCurrent()
+        const bytes = await readWholeStage(stage, expected)
+        staging.remember(stage.path, {
+          sha256: await sha256Hex(bytes),
+          size: String(bytes.byteLength)
+        })
+        await staging.cleanup(stage.path)
+      } catch (verificationOrCleanupError) {
+        attachCleanupFailure(primaryError, verificationOrCleanupError)
+      }
+      return primaryError
+    }
     try {
       staging.abandon(stage.path)
     } catch (abandonError) {
-      if (!primaryError.cleanupError) primaryError.cleanupError = abandonError
-      else if (!primaryError.abandonError) primaryError.abandonError = abandonError
+      attachCleanupFailure(primaryError, abandonError)
     }
     return primaryError
   }
@@ -379,13 +432,23 @@ export async function createPrivilegedFileBackend ({
           )
         } catch (error) {
           cleanStage = false
-          throw abandonUnconfirmedStage(stage, error)
+          throw await handleUploadCreateFailure(stage, error, {
+            sha256: digest,
+            size: bytes.byteLength
+          })
         }
         const createError = exclusiveCreateFailure(createResult, 'upload stage')
         if (createError) {
           cleanStage = false
-          throw abandonUnconfirmedStage(stage, createError)
+          throw await handleUploadCreateFailure(stage, createError, {
+            sha256: digest,
+            size: bytes.byteLength
+          })
         }
+        staging.remember(stage.path, {
+          sha256: digest,
+          size: String(bytes.byteLength)
+        })
         const imported = digestResult(await executeRequest('stage-import', {
           ...staging.rootBinding,
           objectName: stage.objectName,

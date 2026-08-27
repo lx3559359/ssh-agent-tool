@@ -110,10 +110,11 @@ function createFakeSftp (options = {}) {
             mode,
             uid: 1000,
             gid: 1000,
-            content: Buffer.from('partial challenge')
+            content: Buffer.from('partial challenge'),
+            failRemove: options.challengeRetryCleanupFailure === true
           })
         }
-        return {
+        const result = {
           ok: false,
           claimed: true,
           code: 'SFTP_EXCLUSIVE_WRITE_FAILED',
@@ -124,6 +125,10 @@ function createFakeSftp (options = {}) {
             ? null
             : 'remote unlink failed'
         }
+        if (options.challengeCreateThrows) {
+          throw Object.assign(new Error(result.message), result)
+        }
+        return result
       }
       nodes.set(remotePath, {
         type: options.challengeSymlink && isChallenge ? 'symlink' : 'file',
@@ -185,6 +190,9 @@ function createHandshakeExecutor (sftp, overrides = {}) {
   const execute = async request => {
     requests.push(request)
     if (request.operation === 'stage-handshake') {
+      if (overrides.throwBeforeResponse) {
+        throw new Error('handshake failed before response')
+      }
       const root = sftp.nodes.get(request.args.rootPath)
       const response = sha256(`${request.args.challenge}:root`)
       const responsePath = `${request.args.rootPath}/${request.args.responseName}`
@@ -232,7 +240,13 @@ function createHandshakeExecutor (sftp, overrides = {}) {
     if (request.operation === 'stage-cleanup') {
       const remotePath = `${request.args.rootPath}/${request.args.objectName}`
       const node = sftp.nodes.get(remotePath)
+      if (!node) return { kind: 'stage-cleanup', ok: true }
       if (node?.failProtocolCleanup) throw new Error(`protocol cleanup failed: ${remotePath}`)
+      if (node.type !== 'file' ||
+        sha256(node.content) !== request.args.sha256 ||
+        String(node.content.length) !== request.args.size) {
+        throw new Error(`protocol cleanup proof failed: ${remotePath}`)
+      }
       sftp.nodes.delete(remotePath)
       return { kind: 'stage-cleanup', ok: true }
     }
@@ -277,7 +291,16 @@ test('staging handshake binds one canonical private root and cleans it idempoten
   assert.match(upload.objectName, /^upload-[a-f0-9]{48}$/)
   assert.match(download.objectName, /^download-[a-f0-9]{48}$/)
   assert.equal(upload.path, `${session.root}/${upload.objectName}`)
-  assert.equal(session.remember(upload.path), upload.path)
+  assert.throws(() => session.remember(upload.path), /proof|sha256|摘要|大小/i)
+  await assert.rejects(session.cleanup(upload.path), /记录|owned|proof|证明/i)
+  const uploadBytes = Buffer.from('upload proof')
+  sftp.nodes.set(upload.path, {
+    type: 'file', mode: 0o600, uid: 1000, gid: 1000, content: uploadBytes
+  })
+  assert.equal(session.remember(upload.path, {
+    sha256: sha256(uploadBytes),
+    size: String(uploadBytes.length)
+  }), upload.path)
   await session.cleanup(upload.path)
   const cleanup = execute.requests.find(request => (
     request.operation === 'stage-cleanup' &&
@@ -285,7 +308,9 @@ test('staging handshake binds one canonical private root and cleans it idempoten
   ))
   assert.deepEqual(cleanup.args, {
     ...session.rootBinding,
-    objectName: upload.objectName
+    objectName: upload.objectName,
+    sha256: sha256(uploadBytes),
+    size: String(uploadBytes.length)
   })
 
   assert.equal(await session.release(), true)
@@ -300,11 +325,11 @@ test('staging rejects preexisting roots symlinks mismatched paths identities mod
   const { createPrivilegedStagingSession } = await importModule(stagingModule)
   const cases = [
     ['preexisting root', { sftp: { preexistingRoot: true } }, {}, /exist|存在|占用|预存/i, true],
-    ['base owner mismatch', { sftp: { preexistingBaseUid: 2000 } }, {}, /base|uid|所有|身份/i, false],
-    ['root symlink', { sftp: { rootSymlink: true } }, {}, /symlink|目录|符号/i, false],
+    ['base owner mismatch', { sftp: { preexistingBaseUid: 2000 } }, {}, /base|uid|所有|身份/i, true],
+    ['root symlink', { sftp: { rootSymlink: true } }, {}, /symlink|目录|符号/i, true],
     ['challenge symlink', { sftp: { challengeSymlink: true } }, {}, /symlink|文件|符号/i, true],
     ['response symlink', {}, { responseSymlink: true }, /symlink|文件|符号/i, true],
-    ['SFTP realpath mismatch', { sftp: { realpathMismatch: true } }, {}, /realpath|路径|规范/i, false],
+    ['SFTP realpath mismatch', { sftp: { realpathMismatch: true } }, {}, /realpath|路径|规范/i, true],
     ['root path mismatch', {}, { rootRealPath: '/different/stage' }, /路径|root/i, true],
     ['non-root PTY identity', {}, { identity: { uid: '1000', username: 'login' } }, /root|身份|uid/i, true],
     ['uid mismatch', {}, { uid: 0 }, /uid|身份/i, true],
@@ -347,9 +372,31 @@ test('failed creation never cleans through a changed SFTP endpoint', async () =>
     sftp,
     execute,
     createToken: createTokenFactory()
-  }), /响应|response|握手/i)
+  }), /endpoint|session|会话|端点/i)
   assert.equal(sftp.calls.some(call => call[0] === 'rm'), false)
   assert.equal(sftp.calls.some(call => call[0] === 'removeEmptyDirectory'), false)
+})
+
+test('staging preserves a proven challenge when no root binding exists yet', async () => {
+  const { createPrivilegedStagingSession } = await importModule(stagingModule)
+  const sftp = createFakeSftp()
+  const execute = createHandshakeExecutor(sftp, { throwBeforeResponse: true })
+
+  await assert.rejects(createPrivilegedStagingSession({
+    sftp,
+    execute,
+    createToken: createTokenFactory()
+  }), /handshake failed before response/)
+  const challengeCreate = sftp.calls.find(call =>
+    call[0] === 'createExclusiveFile' && call[1].includes('/challenge-')
+  )
+  assert.equal(sftp.calls.some(call =>
+    call[0] === 'rm' && call[1] === challengeCreate[1]
+  ), false)
+  assert.equal(sftp.nodes.has(challengeCreate[1]), true)
+  assert.equal(execute.requests.some(request =>
+    request.operation === 'stage-cleanup'
+  ), false)
 })
 
 test('failed handshake preserves an unconfirmed response instead of deleting by path', async () => {
@@ -365,6 +412,7 @@ test('failed handshake preserves an unconfirmed response instead of deleting by 
   const response = [...sftp.nodes.entries()].find(([path]) => path.includes('/response-'))
   assert.equal(response[1].content.length, 64)
   assert.equal(sftp.calls.some(call => call[0] === 'rm' && call[1] === response[0]), false)
+  assert.equal([...sftp.nodes.keys()].some(path => path.includes('/challenge-')), true)
   assert.equal([...sftp.nodes.keys()].some(path => path.includes('/.shellpilot-privileged-transfers/')), true)
 })
 
@@ -385,10 +433,10 @@ test('failed response exclusive claim never deletes a foreign raced object', asy
 
 test('staging handles explicit exclusive challenge claim failure ownership', async () => {
   const { createPrivilegedStagingSession } = await importModule(stagingModule)
-  for (const [failure, rootRemains] of [
-    ['unclaimed', true],
-    ['claimed-cleaned', false],
-    ['claimed-uncleaned', true]
+  for (const [failure, challengeRemains, rootRemains] of [
+    ['unclaimed', true, true],
+    ['claimed-cleaned', false, true],
+    ['claimed-uncleaned', true, true]
   ]) {
     const sftp = createFakeSftp({ challengeCreateFailure: failure })
     const execute = createHandshakeExecutor(sftp)
@@ -401,24 +449,99 @@ test('staging handles explicit exclusive challenge claim failure ownership', asy
       ? /Target exists/
       : /remote write failed/)
     const challenge = [...sftp.nodes.entries()].find(([path]) => path.includes('/challenge-'))
-    assert.equal(Boolean(challenge), rootRemains)
+    assert.equal(Boolean(challenge), challengeRemains)
     assert.equal(
       [...sftp.nodes.keys()].some(path => path.includes(
         '/000000000000000000000000000000000000000000000001'
       )),
       rootRemains
     )
-    if (challenge) {
-      assert.equal(sftp.calls.some(call => call[0] === 'rm' && call[1] === challenge[0]), false)
+    const challengePath = sftp.calls.find(call =>
+      call[0] === 'createExclusiveFile' && call[1].includes('/challenge-')
+    )[1]
+    if (failure === 'unclaimed') {
+      assert.equal(sftp.calls.some(call =>
+        call[0] === 'rm' && call[1] === challengePath
+      ), false)
     }
     if (failure === 'claimed-uncleaned') {
       assert.match(error.cleanupError?.message || '', /remote unlink failed/)
-      assert.equal(sftp.calls.some(call =>
-        call[0] === 'removeEmptyDirectory' &&
-        call[1].includes('/000000000000000000000000000000000000000000000001')
-      ), false)
+      assert.equal(sftp.calls.filter(call =>
+        call[0] === 'rm' && call[1] === challengePath
+      ).length, 0)
     }
   }
+})
+
+test('failed claimed challenge cleanup preserves its residual and primary error', async () => {
+  const { createPrivilegedStagingSession } = await importModule(stagingModule)
+  const sftp = createFakeSftp({
+    challengeCreateFailure: 'claimed-uncleaned',
+    challengeRetryCleanupFailure: true
+  })
+  const error = await createPrivilegedStagingSession({
+    sftp,
+    execute: createHandshakeExecutor(sftp),
+    createToken: createTokenFactory()
+  }).catch(error => error)
+  const challenge = [...sftp.nodes.entries()].find(([path]) => path.includes('/challenge-'))
+
+  assert.equal(error.message, 'remote write failed')
+  assert.match(error.cleanupError?.message || '', /remote unlink failed/)
+  assert.equal(error.cleanupRetryError, undefined)
+  assert.equal(sftp.calls.filter(call =>
+    call[0] === 'rm' && call[1] === challenge[0]
+  ).length, 0)
+  assert.equal([...sftp.nodes.keys()].some(path => path.includes(
+    '/000000000000000000000000000000000000000000000001'
+  )), true)
+})
+
+test('staging preserves a thrown claimed partial challenge without content proof', async () => {
+  const { createPrivilegedStagingSession } = await importModule(stagingModule)
+  const sftp = createFakeSftp({
+    challengeCreateFailure: 'claimed-uncleaned',
+    challengeCreateThrows: true
+  })
+  const error = await createPrivilegedStagingSession({
+    sftp,
+    execute: createHandshakeExecutor(sftp),
+    createToken: createTokenFactory()
+  }).catch(error => error)
+  const challengePath = sftp.calls.find(call =>
+    call[0] === 'createExclusiveFile' && call[1].includes('/challenge-')
+  )[1]
+
+  assert.equal(error.message, 'remote write failed')
+  assert.equal(sftp.calls.filter(call =>
+    call[0] === 'rm' && call[1] === challengePath
+  ).length, 0)
+  assert.equal(sftp.nodes.has(challengePath), true)
+})
+
+test('staging construction cleanup uses root binding and content proof only', async () => {
+  const { createPrivilegedStagingSession } = await importModule(stagingModule)
+  const sftp = createFakeSftp()
+  const execute = createHandshakeExecutor(sftp, { responseFile: 'f'.repeat(64) })
+
+  await assert.rejects(createPrivilegedStagingSession({
+    sftp,
+    execute,
+    createToken: createTokenFactory()
+  }), /response|响应/i)
+
+  const challengeCreate = sftp.calls.find(call =>
+    call[0] === 'createExclusiveFile' && call[1].includes('/challenge-')
+  )
+  const challengeName = challengeCreate[1].split('/').at(-1)
+  const cleanup = execute.requests.find(request =>
+    request.operation === 'stage-cleanup' && request.args.objectName === challengeName
+  )
+  assert.equal(cleanup.args.sha256, sha256(Buffer.from(challengeCreate[2], 'base64')))
+  assert.equal(cleanup.args.size, '48')
+  assert.equal(sftp.nodes.has(challengeCreate[1]), false)
+  assert.equal([...sftp.nodes.keys()].some(path => path.includes('/response-')), true)
+  assert.equal(sftp.calls.some(call => call[0] === 'rm'), false)
 })
 
 test('staging rejects escapes and endpoint changes without deleting foreign paths', async () => {
@@ -470,6 +593,14 @@ test('staging release continues cleanup after a partial failure and preserves th
     gid: 1000,
     content: Buffer.from('second')
   })
+  session.remember(first.path, {
+    sha256: sha256(Buffer.from('first')),
+    size: '5'
+  })
+  session.remember(second.path, {
+    sha256: sha256(Buffer.from('second')),
+    size: '6'
+  })
 
   await assert.rejects(session.release(), /protocol cleanup failed/)
   assert.equal(execute.requests.some(request => (
@@ -496,6 +627,10 @@ test('staging release stops before touching a changed endpoint and stays idempot
     gid: 2000,
     content: Buffer.from('foreign replacement')
   })
+  session.remember(upload.path, {
+    sha256: sha256(Buffer.from('owned original')),
+    size: String(Buffer.byteLength('owned original'))
+  })
   const callsBefore = sftp.calls.length
   const requestsBefore = execute.requests.length
   sftp.id = 'sftp-session-2'
@@ -510,4 +645,30 @@ test('staging release stops before touching a changed endpoint and stays idempot
   assert.equal(secondError, firstError)
   assert.equal(sftp.calls.length, callsBefore)
   assert.equal(execute.requests.length, requestsBefore)
+})
+
+test('staging release preserves unknown root content and reports incomplete cleanup', async () => {
+  const { createPrivilegedStagingSession } = await importModule(stagingModule)
+  const sftp = createFakeSftp()
+  const execute = createHandshakeExecutor(sftp)
+  const session = await createPrivilegedStagingSession({
+    sftp,
+    execute,
+    createToken: createTokenFactory()
+  })
+  const foreignPath = `${session.root}/foreign-object`
+  sftp.nodes.set(foreignPath, {
+    type: 'file',
+    mode: 0o600,
+    uid: 1000,
+    gid: 1000,
+    content: Buffer.from('foreign')
+  })
+
+  await assert.rejects(session.release(), /安全|证明|非空|保留|cleanup/i)
+  assert.equal(sftp.nodes.get(foreignPath).content.toString(), 'foreign')
+  assert.equal(sftp.nodes.has(session.root), true)
+  assert.equal(sftp.calls.some(call =>
+    call[0] === 'removeEmptyDirectory' && call[1] === session.root
+  ), false)
 })
