@@ -2859,7 +2859,71 @@ test('mkdir-bound revalidates its canonical parent around every created-entry mu
   assert.match(command, /stat -L -c %a -- "\$__sp_fd5"\)" = 700/)
   assert.ok(command.lastIndexOf(parentCheck) > command.indexOf('chmod -- "$__sp_targetMode"'))
   assert.match(command, /__sp_cleanup_created_directory/)
+  const mkdirIndex = command.indexOf('mkdir -- "./$__sp_boundName"')
+  const claimedIndex = command.indexOf('__sp_mkdirClaimed=1')
+  const bindIndex = command.indexOf('exec 5< "./$__sp_boundName"')
+  assert.match(command, /__sp_mkdirClaimed=0/)
+  assert.ok(mkdirIndex < claimedIndex && claimedIndex < bindIndex)
+  assert.match(
+    command,
+    /__sp_mkdir_cleanup\(\).*__sp_mkdirClaimed.*__sp_createdDevice.*__sp_createdInode.*__sp_cleanup_created_directory/
+  )
 })
+
+for (const scenario of [
+  { name: 'raced creator EEXIST', claimed: '0' },
+  { name: 'create before inode proof replacement', claimed: '1' }
+]) {
+  test(`mkdir-bound cleanup preserves a foreign root-owned directory after ${scenario.name}`, async () => {
+    const { buildPrivilegedFileCommand } = await importModule(protocolModule)
+    const command = buildPrivilegedFileCommand({
+      token: '6a'.repeat(24),
+      request: {
+        operation: 'mkdir-bound',
+        args: targetEntryBinding({
+          targetPath: '/root/new-directory',
+          targetMode: '700',
+          targetUid: '0',
+          targetGid: '0'
+        })
+      }
+    })
+    const cleanupStart = command.indexOf('__sp_mkdir_cleanup()')
+    const cleanupEnd = command.indexOf(' };', cleanupStart)
+    assert.ok(cleanupStart >= 0 && cleanupEnd > cleanupStart)
+    const cleanup = command.slice(cleanupStart, cleanupEnd + 2)
+    const nativeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-mkdir-cleanup-'))
+    try {
+      const foreign = path.join(nativeRoot, 'foreign')
+      const deleteLog = path.join(nativeRoot, 'delete-log')
+      fs.mkdirSync(foreign, { mode: 0o700 })
+      const result = runBash([
+        `cd -- ${quoteForBash(toBashPath(nativeRoot))}`,
+        `__sp_mkdirClaimed=${scenario.claimed}`,
+        '__sp_createdDevice=',
+        '__sp_createdInode=',
+        '__sp_boundName=foreign',
+        '__sp_targetParentDevice=1',
+        '__sp_targetParentInode=2',
+        '__sp_targetParentUid=0',
+        '__sp_targetParentMode=700',
+        '__sp_trusted_parent_fd() { return 0; }',
+        '__sp_cleanup_created_directory() { return 0; }',
+        'stat() { case "$*" in *"%u"*) printf 0 ;; *"%a"*) printf 700 ;; *) return 1 ;; esac; }',
+        `rmdir() { printf deleted > ${quoteForBash(toBashPath(deleteLog))}; command rmdir "$@"; }`,
+        cleanup,
+        '__sp_mkdir_cleanup',
+        '__sp_cleanup_status=$?',
+        '[ "$__sp_cleanup_status" -ne 0 ]',
+        '[ -d ./foreign ]',
+        `[ ! -e ${quoteForBash(toBashPath(deleteLog))} ]`
+      ].join('\n'))
+      assert.equal(result.status, 0, result.stdout + result.stderr)
+    } finally {
+      fs.rmSync(nativeRoot, { recursive: true, force: true })
+    }
+  })
+}
 
 test('linux mkdir-bound fails when its canonical parent is replaced after creation', {
   skip: linuxRootOnly
