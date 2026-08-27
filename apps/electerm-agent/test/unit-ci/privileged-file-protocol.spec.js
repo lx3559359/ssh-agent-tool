@@ -164,7 +164,7 @@ async function createLinuxStageFixture (nativeRoot, suffix) {
       rootPath,
       challengeName,
       responseName,
-      challenge: sha256Text(challengeText),
+      challenge: sha256Text(challengeText).toUpperCase(),
       rootUid: String(rootStat.uid),
       rootGid: String(rootStat.gid),
       rootMode: '700'
@@ -559,6 +559,54 @@ test('privileged requests are deeply frozen and validate argument contracts', as
     }),
     /参数值无效/
   )
+})
+
+test('request constructor canonicalizes octal modes and SHA-256 fields', async () => {
+  const {
+    buildPrivilegedFileCommand,
+    createPrivilegedFileRequest
+  } = await importModule(protocolModule)
+  const token = 'd4'.repeat(24)
+  const upperSha256 = 'AB'.repeat(32)
+  const mixedChallenge = 'aB'.repeat(32)
+
+  for (const [input, canonical] of [
+    ['0640', '640'],
+    ['000', '0'],
+    ['640', '640']
+  ]) {
+    const request = createPrivilegedFileRequest({
+      operation: 'stage-import',
+      args: {
+        ...stageBinding(),
+        targetPath: '/root/target',
+        sha256: upperSha256,
+        size: '0',
+        targetMode: input,
+        targetUid: '0',
+        targetGid: '0'
+      }
+    })
+    assert.equal(request.args.targetMode, canonical)
+    assert.equal(request.args.sha256, upperSha256.toLowerCase())
+    assert.doesNotThrow(() => buildPrivilegedFileCommand({ token, request }))
+  }
+
+  const handshake = createPrivilegedFileRequest({
+    operation: 'stage-handshake',
+    args: {
+      rootPath: '/stage',
+      challengeName: 'challenge',
+      responseName: 'response',
+      challenge: mixedChallenge,
+      rootUid: '0',
+      rootGid: '0',
+      rootMode: '0700'
+    }
+  })
+  assert.equal(handshake.args.challenge, mixedChallenge.toLowerCase())
+  assert.equal(handshake.args.rootMode, '700')
+  assert.doesNotThrow(() => buildPrivilegedFileCommand({ token, request: handshake }))
 })
 
 test('request constructor immediately rejects script and every unknown argument', async () => {
@@ -1256,6 +1304,14 @@ test('staging operations bind one safe object to the handshaken root inode', asy
   assert.match(importCommand, /cd -- "\$__sp_targetParent"/)
   assert.match(importCommand, /stat -c %d -- \./)
   assert.match(importCommand, /stat -c %i -- \./)
+  assert.match(importCommand, /__sp_targetParentTrusted=0/)
+  assert.match(importCommand, /__sp_targetParentUid=.*stat -c %u -- \./)
+  assert.match(importCommand, /__sp_targetParentMode=.*stat -c %a -- \./)
+  assert.match(importCommand, /0\$__sp_targetParentMode & 022/)
+  assert.match(
+    importCommand,
+    /__sp_cleanup_temp\(\) \{ \[ "\$__sp_targetParentTrusted" = 1 \] \|\| return 0; if __sp_path_matches_fd/
+  )
   assert.match(importCommand, /__sp_tempName="\.shellpilot-\$__sp_token\.tmp"/)
   assert.match(importCommand, /umask 077.*set -C.*exec 4> "\.\/\$__sp_tempName"/)
   assert.match(importCommand, /stat -L -c %a -- "\$__sp_fd4".*= 600/)
@@ -1365,9 +1421,9 @@ test('linux staging handshake export import and cleanup preserve content metadat
         ...fixture.binding,
         objectName,
         targetPath,
-        sha256: sha256Text(content),
+        sha256: sha256Text(content).toUpperCase(),
         size: String(Buffer.byteLength(content)),
-        targetMode: '640',
+        targetMode: '0640',
         targetUid: '0',
         targetGid: '0'
       }
@@ -1426,6 +1482,24 @@ test('linux stage import rejects digest mismatch special entries directories and
     assert.notEqual(mismatch.execution.status, 0)
     assert.equal(fs.readFileSync(targetPath, 'utf8'), 'unchanged')
     assert.equal(fs.statSync(targetPath, { bigint: true }).ino, targetInode)
+    assert.equal(fs.existsSync(path.join(targetParent, `.shellpilot-${'f1'.repeat(24)}.tmp`)), false)
+
+    fs.chmodSync(targetParent, 0o777)
+    const untrustedToken = 'fa'.repeat(24)
+    const abandonedTemp = path.join(
+      targetParent,
+      `.shellpilot-${untrustedToken}.tmp`
+    )
+    const untrustedMismatch = await runRealProtocolOperation({
+      operation: 'stage-import',
+      token: untrustedToken,
+      args: { ...baseArgs, objectName: 'digest-object' }
+    })
+    assert.notEqual(untrustedMismatch.execution.status, 0)
+    assert.equal(fs.readFileSync(targetPath, 'utf8'), 'unchanged')
+    assert.equal(fs.readFileSync(abandonedTemp, 'utf8'), 'different')
+    fs.rmSync(abandonedTemp)
+    fs.chmodSync(targetParent, 0o700)
 
     fs.symlinkSync('digest-object', path.join(fixture.rootPath, 'link-object'))
     fs.mkdirSync(path.join(fixture.rootPath, 'directory-object'))

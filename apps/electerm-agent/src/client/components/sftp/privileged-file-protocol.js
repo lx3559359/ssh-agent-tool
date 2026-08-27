@@ -275,7 +275,7 @@ function assertRequestContract (request) {
   }
   for (const key of ['mode', 'rootMode', 'targetMode']) {
     if (Object.hasOwn(request.args, key) &&
-      !/^[0-7]{3,4}$/.test(request.args[key])) {
+      !/^(?:0|[1-7][0-7]{0,3})$/.test(request.args[key])) {
       throw new Error(`root 文件操作参数值无效：${key}`)
     }
   }
@@ -415,6 +415,11 @@ const stageImportBody = [
   '[ "$(pwd -P)" = "$__sp_targetParentReal" ] || { exec 3<&-; return 1; }',
   '__sp_targetParentDevice="$(stat -c %d -- .)" || { exec 3<&-; return 1; }',
   '__sp_targetParentInode="$(stat -c %i -- .)" || { exec 3<&-; return 1; }',
+  '__sp_targetParentTrusted=0',
+  '__sp_targetParentUid="$(stat -c %u -- .)" || { exec 3<&-; return 1; }',
+  '__sp_targetParentMode="$(stat -c %a -- .)" || { exec 3<&-; return 1; }',
+  'case "$__sp_targetParentMode" in ""|*[!0-7]*) exec 3<&-; return 1 ;; esac',
+  'if [ "$__sp_targetParentUid" = 0 ] && [ "$((0$__sp_targetParentMode & 022))" -eq 0 ]; then __sp_targetParentTrusted=1; fi',
   'if [ -e "./$__sp_targetName" ] || [ -L "./$__sp_targetName" ]; then [ ! -L "./$__sp_targetName" ] && [ -f "./$__sp_targetName" ] || { exec 3<&-; return 1; }; fi',
   '__sp_tempName=".shellpilot-$__sp_token.tmp"',
   '[ ! -e "./$__sp_tempName" ] && [ ! -L "./$__sp_tempName" ] || { exec 3<&-; return 1; }',
@@ -500,12 +505,20 @@ export function createPrivilegedFileRequest ({ operation, args = {} } = {}) {
     if (!/^[a-z][a-zA-Z0-9]{0,31}$/.test(key)) {
       throw new Error('root 文件操作参数名无效')
     }
-    const text = String(value ?? '')
+    let text = String(value ?? '')
     if (text.includes('\u0000') || hasUnpairedSurrogate(text)) {
       throw new Error(`root 文件操作参数值无效：${key}`)
     }
     if (text.length > 1024 * 1024) {
       throw new Error(`root 文件操作参数过长：${key}`)
+    }
+    if (['mode', 'rootMode', 'targetMode'].includes(key) &&
+      /^[0-7]{1,4}$/.test(text)) {
+      text = text.replace(/^0+(?=[0-7])/, '')
+    }
+    if (['challenge', 'sha256'].includes(key) &&
+      /^[a-fA-F0-9]{64}$/.test(text)) {
+      text = text.toLowerCase()
     }
     normalized[key] = text
   }
@@ -580,7 +593,7 @@ export function buildPrivilegedFileCommand ({ token: providedToken, request }) {
     '__sp_valid_name() { case "$1" in ""|"."|".."|*/*) return 1 ;; *) return 0 ;; esac; };',
     '__sp_bind_root() { __sp_valid_name "$__sp_objectName" || return 1; [ -d "/proc/$$/fd" ] || return 1; __sp_boundRealPath="$(realpath -- "$__sp_rootPath")" || return $?; __sp_boundRealPath=$' + '{__sp_boundRealPath%?}; __sp_boundRealPath=$' + '{__sp_boundRealPath%?}; [ "$__sp_boundRealPath" = "$__sp_rootPath" ] || return 1; [ "$__sp_boundRealPath" = "$__sp_rootRealPath" ] || return 1; [ ! -L "$__sp_rootPath" ] && [ -d "$__sp_rootPath" ] || return 1; cd -- "$__sp_rootPath" || return $?; [ "$(pwd -P)" = "$__sp_boundRealPath" ] || return 1; [ "$(stat -c %d -- .)" = "$__sp_rootDevice" ] || return 1; [ "$(stat -c %i -- .)" = "$__sp_rootInode" ] || return 1; [ "$(stat -c %a -- .)" = "$__sp_rootMode" ] || return 1; [ "$(stat -c %u -- .)" = "$__sp_rootUid" ] || return 1; [ "$(stat -c %g -- .)" = "$__sp_rootGid" ] || return 1; };',
     '__sp_path_matches_fd() { [ ! -L "$1" ] && [ -f "$1" ] && [ "$(stat -c %d -- "$1")" = "$2" ] && [ "$(stat -c %i -- "$1")" = "$3" ]; };',
-    '__sp_cleanup_temp() { if __sp_path_matches_fd "./$__sp_tempName" "$__sp_tempDevice" "$__sp_tempInode"; then rm -f -- "./$__sp_tempName"; fi; };',
+    '__sp_cleanup_temp() { [ "$__sp_targetParentTrusted" = 1 ] || return 0; if __sp_path_matches_fd "./$__sp_tempName" "$__sp_tempDevice" "$__sp_tempInode"; then rm -f -- "./$__sp_tempName"; fi; };',
     `__sp_emit_data1() { printf '${marker};data;%s;%s;%s;%s\\007' "$__sp_token" "$1" "$2" "$3" "$4"; };`,
     `__sp_emit_data2() { printf '${marker};data;%s;%s;%s;%s;%s\\007' "$__sp_token" "$1" "$2" "$3" "$4" "$5"; };`,
     `__sp_emit_data7() { printf '${marker};data;1;1;%s;%s;%s;%s;%s;%s;%s;%s\\007' "$__sp_token" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8"; };`,
