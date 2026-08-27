@@ -86,6 +86,28 @@ function requireManagedProtocol (value, fallback) {
   return protocol
 }
 
+function requireManagedCommand (value) {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error('受控 PTY 命令无效')
+  }
+  return value
+}
+
+function requireManagedParser (value) {
+  for (const field of [
+    'push',
+    'identity',
+    'exitCode',
+    'started',
+    'ended'
+  ]) {
+    if (typeof value?.[field] !== 'function') {
+      throw new Error(`受控 PTY parser 缺少 ${field}`)
+    }
+  }
+  return value
+}
+
 export function createManagedPtyTaskController ({
   ensureReady,
   getTerminalState,
@@ -167,6 +189,15 @@ export function createManagedPtyTaskController ({
 
   function settleIfComplete (execution) {
     if (execution.settled) return
+    try {
+      settleIfCompleteUnsafe(execution)
+    } catch (error) {
+      rejectExecution(execution, error, { cancelExpected: true })
+    }
+  }
+
+  function settleIfCompleteUnsafe (execution) {
+    if (execution.settled) return
     if (execution.cancelRequested) {
       if (execution.commandFinished && execution.promptReturned) {
         rejectExecution(execution, execution.cancelError)
@@ -195,7 +226,11 @@ export function createManagedPtyTaskController ({
       rejectExecution(execution, new Error('PTY 运维任务缺少有效身份'))
       return
     }
-    const protocolResult = execution.protocol.readResult(execution.parser)
+    const protocolResult = {
+      ...(execution.protocol.readResult(execution.parser) || {})
+    }
+    delete protocolResult.exitCode
+    delete protocolResult.identity
     resolveExecution(execution, {
       exitCode: markerExitCode,
       identity,
@@ -259,8 +294,12 @@ export function createManagedPtyTaskController ({
     const protocol = requireManagedProtocol(options.protocol, defaultProtocol)
     const token = protocol.createToken()
     const request = options.request || { script: options.script }
-    const command = protocol.buildCommand({ token, request })
-    const parser = protocol.createParser({ token, request })
+    const command = requireManagedCommand(
+      protocol.buildCommand({ token, request })
+    )
+    const parser = requireManagedParser(
+      protocol.createParser({ token, request })
+    )
     const submissionToken = expectSubmission(command)
     if (!submissionToken) {
       throw new Error('无法建立 PTY 运维命令追踪，命令尚未发送')
@@ -308,7 +347,7 @@ export function createManagedPtyTaskController ({
             for (const output of parsed?.output || []) options.onChunk?.(output)
             settleIfComplete(execution)
           } catch (error) {
-            requestCancellation(execution, error)
+            rejectExecution(execution, error, { cancelExpected: true })
           }
         })
         if (armSubmission(submissionToken) !== true) {
