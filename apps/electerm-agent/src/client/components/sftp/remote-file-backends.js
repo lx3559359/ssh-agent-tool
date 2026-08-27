@@ -7,6 +7,11 @@ import { createStreamingSha256 } from './streaming-sha256.js'
 
 const readChunkBytes = 64 * 1024
 const maxReadFileBytes = 8 * 1024 * 1024
+const copyLimits = Object.freeze({
+  maxDepth: 128,
+  maxNodes: 10000,
+  maxTotalBytes: 8 * 1024 * 1024 * 1024
+})
 
 const fileTypeChars = Object.freeze({
   file: '-',
@@ -67,15 +72,98 @@ function inputBytes (value) {
 }
 
 function normalizeMode (value, fallback = 0o600) {
-  const mode = value === undefined || value === null
-    ? fallback
-    : typeof value === 'string'
-      ? Number.parseInt(value, 8)
-      : Number(value)
-  if (!Number.isInteger(mode) || mode < 0 || mode > 0o7777) {
+  let mode
+  if (value === undefined || value === null) mode = fallback
+  else if (typeof value === 'string') {
+    if (!/^[0-7]{1,4}$/.test(value)) {
+      throw new Error('root 文件后端 mode 无效')
+    }
+    mode = Number.parseInt(value, 8)
+  } else {
+    mode = value
+  }
+  if (!Number.isSafeInteger(mode) || mode < 0 || mode > 0o7777) {
     throw new Error('root 文件后端 mode 无效')
   }
   return mode
+}
+
+function normalizeCancellableOptions (value) {
+  if (value === undefined) return Object.freeze({ signal: undefined })
+  if (!value || typeof value !== 'object' || Array.isArray(value) ||
+    ![Object.prototype, null].includes(Object.getPrototypeOf(value)) ||
+    Object.keys(value).some(key => key !== 'signal')) {
+    throw new Error('root 文件后端 options 无效')
+  }
+  const signal = value.signal
+  if (signal !== undefined &&
+    (!signal || typeof signal !== 'object' ||
+      typeof signal.aborted !== 'boolean' ||
+      typeof signal.addEventListener !== 'function' ||
+      typeof signal.removeEventListener !== 'function')) {
+    throw new Error('root 文件后端 signal 必须为 AbortSignal')
+  }
+  return Object.freeze({ signal })
+}
+
+function throwIfAborted (signal) {
+  if (!signal?.aborted) return
+  if (signal.reason instanceof Error) throw signal.reason
+  const error = new Error('root 文件操作已取消')
+  error.name = 'AbortError'
+  error.code = 'ABORT_ERR'
+  throw error
+}
+
+function childFilePath (parent, name) {
+  if (typeof name !== 'string' || !name || name === '.' || name === '..' ||
+    name.includes('/') || name.includes('\u0000')) {
+    throw new Error('root 文件后端目录项名称无效')
+  }
+  return canonicalFilePath(parent === '/' ? `/${name}` : `${parent}/${name}`)
+}
+
+function isSameOrChildPath (candidate, parent) {
+  return candidate === parent || (parent === '/'
+    ? candidate.startsWith('/')
+    : candidate.startsWith(`${parent}/`))
+}
+
+function parentFilePath (value) {
+  const index = value.lastIndexOf('/')
+  return index <= 0 ? '/' : value.slice(0, index)
+}
+
+function requireBoundMetadata (metadata, path, label = 'entry') {
+  for (const key of [
+    'device', 'inode', 'parentDevice', 'parentInode'
+  ]) {
+    if (!/^(?:0|[1-9]\d{0,19})$/.test(String(metadata?.[key] ?? ''))) {
+      throw new Error(`root 文件后端 ${label} ${key} binding 无效`)
+    }
+  }
+  if (metadata.parentRealPath !== parentFilePath(path)) {
+    throw new Error(`root 文件后端 ${label} parent binding 无效`)
+  }
+  return metadata
+}
+
+function sourceBindingArgs (metadata) {
+  return {
+    sourceParentRealPath: metadata.parentRealPath,
+    sourceParentDevice: String(metadata.parentDevice),
+    sourceParentInode: String(metadata.parentInode),
+    sourceDevice: String(metadata.device),
+    sourceInode: String(metadata.inode)
+  }
+}
+
+function targetParentBindingArgs (parentPath, metadata) {
+  return {
+    targetParentRealPath: parentPath,
+    targetParentDevice: String(metadata.device),
+    targetParentInode: String(metadata.inode)
+  }
 }
 
 function metadataResult (result) {
@@ -148,6 +236,20 @@ function requireIdentity (identity) {
   return { uid, username }
 }
 
+function normalizeCapabilities (value) {
+  if (value === undefined || value === null) return null
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('root 文件后端 capabilities 必须为 boolean map')
+  }
+  const entries = Object.entries(value)
+  if (entries.length > 128 || entries.some(([key, enabled]) =>
+    !/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(key) ||
+    typeof enabled !== 'boolean')) {
+    throw new Error('root 文件后端 capabilities 必须为 boolean map')
+  }
+  return Object.freeze(Object.fromEntries(entries))
+}
+
 export function createNativeSftpFileBackend (sftp) {
   if (!sftp) throw new Error('原生文件后端缺少 SFTP')
   return Object.freeze({
@@ -170,6 +272,7 @@ export async function createPrivilegedFileBackend ({
   let staging
   let releasePromise
   let rootIdentity
+  let normalizedCapabilities
   let protocol
   let executeTail = Promise.resolve()
   const activePublicOperations = new Set()
@@ -213,6 +316,7 @@ export async function createPrivilegedFileBackend ({
       throw new Error('root 文件后端缺少 bounded lease 合同')
     }
     rootIdentity = requireIdentity(identity)
+    normalizedCapabilities = normalizeCapabilities(capabilities)
     protocol = createPrivilegedFileProtocol()
     staging = await createPrivilegedStagingSession({
       sftp,
@@ -277,10 +381,19 @@ export async function createPrivilegedFileBackend ({
     const stage = staging.allocate('download')
     let exported
     try {
+      const metadata = requireBoundMetadata(
+        await rawFacade.lstat(path),
+        path,
+        'read source'
+      )
+      if (metadata.type !== 'file') {
+        throw new Error('root 文件后端 read source 必须为普通文件')
+      }
       exported = digestResult(await executeRequest('stage-export', {
         ...staging.rootBinding,
         objectName: stage.objectName,
-        sourcePath: path
+        sourcePath: path,
+        ...sourceBindingArgs(metadata)
       }), 'stage-export')
       staging.remember(stage.path, {
         sha256: exported.sha256,
@@ -376,8 +489,337 @@ export async function createPrivilegedFileBackend ({
     })
   }
 
-  async function fixedMutation (operation, args) {
+  async function fixedMutation (operation, args, affectedPaths = []) {
+    if (affectedPaths.length) await invalidateReadStreams(...affectedPaths)
     await executeRequest(operation, args)
+    return 1
+  }
+
+  async function invalidateReadStreams (...affectedPaths) {
+    const candidates = [...readStreams.keys()].filter(sourcePath =>
+      affectedPaths.some(affectedPath =>
+        isSameOrChildPath(sourcePath, affectedPath) ||
+        isSameOrChildPath(affectedPath, sourcePath)))
+    for (const sourcePath of candidates) {
+      await withReadLock(sourcePath, async () => {
+        const stream = readStreams.get(sourcePath)
+        if (stream) await closeReadStream(stream)
+      })
+    }
+  }
+
+  async function lstatOrMissing (path, signal) {
+    try {
+      return await rawFacade.lstat(path, { signal })
+    } catch (error) {
+      if (error?.code === 'ENOENT') return null
+      throw error
+    }
+  }
+
+  async function boundLstat (path, parentMetadata, signal) {
+    const result = await executeRequest('lstat-bound', {
+      path,
+      sourceParentRealPath: parentFilePath(path),
+      sourceParentDevice: String(parentMetadata.device),
+      sourceParentInode: String(parentMetadata.inode)
+    }, { signal })
+    if (result.missing === true) {
+      const error = new Error(`No such privileged file: ${path}`)
+      error.code = 'ENOENT'
+      throw error
+    }
+    return requireBoundMetadata(metadataResult(result), path, 'bound entry')
+  }
+
+  async function boundList (path, metadata, signal) {
+    const result = await executeRequest('list-bound', {
+      path,
+      ...sourceBindingArgs(metadata)
+    }, { signal })
+    if (!Array.isArray(result.entries)) {
+      throw new Error('root 文件后端 bound list 结果无效')
+    }
+    return result.entries
+  }
+
+  async function buildTreeManifest (rootPath, signal) {
+    if (rootPath === '/') throw new Error('root 文件后端不允许递归操作根目录')
+    const manifest = []
+    let nodes = 0
+    let totalBytes = 0
+    async function visit (path, depth, expectedParent) {
+      throwIfAborted(signal)
+      if (depth > copyLimits.maxDepth) {
+        throw new Error('root 文件后端目录深度超过安全预算')
+      }
+      const metadata = requireBoundMetadata(
+        expectedParent
+          ? await boundLstat(path, expectedParent, signal)
+          : await rawFacade.lstat(path, { signal }),
+        path,
+        'manifest entry'
+      )
+      throwIfAborted(signal)
+      if (metadata.type !== 'file' && metadata.type !== 'directory') {
+        throw new Error('root 文件后端拒绝复制或删除特殊文件类型')
+      }
+      nodes += 1
+      totalBytes += metadata.type === 'file' ? metadata.size : 0
+      if (nodes > copyLimits.maxNodes) {
+        throw new Error('root 文件后端节点数超过安全预算')
+      }
+      if (!Number.isSafeInteger(totalBytes) ||
+        totalBytes > copyLimits.maxTotalBytes) {
+        throw new Error('root 文件后端总字节数超过安全预算')
+      }
+      const proof = metadata.type === 'file'
+        ? digestResult(await executeRequest('sha256-bound', {
+          path,
+          ...sourceBindingArgs(metadata)
+        }, { signal }), 'sha256-bound')
+        : null
+      if (proof && proof.size !== metadata.size) {
+        throw new Error('root 文件后端 manifest 文件大小发生变化')
+      }
+      const entry = { path, depth, metadata, proof }
+      manifest.push(entry)
+      if (metadata.type === 'directory') {
+        const children = await boundList(path, metadata, signal)
+        throwIfAborted(signal)
+        for (const child of children) {
+          await visit(childFilePath(path, child.name), depth + 1, metadata)
+        }
+      }
+    }
+    await visit(rootPath, 0)
+    return manifest
+  }
+
+  function targetForManifestEntry (entry, sourceRoot, targetRoot) {
+    return entry.path === sourceRoot
+      ? targetRoot
+      : canonicalFilePath(`${targetRoot}${entry.path.slice(sourceRoot.length)}`)
+  }
+
+  async function assertManifestEntryCurrent (entry, signal) {
+    const current = await boundLstat(entry.path, {
+      device: entry.metadata.parentDevice,
+      inode: entry.metadata.parentInode
+    }, signal)
+    for (const key of ['device', 'inode', 'type', 'mode', 'size', 'mtime', 'uid', 'gid']) {
+      if (current[key] !== entry.metadata[key]) {
+        throw new Error('root 文件后端 manifest entry binding 或 metadata 发生变化')
+      }
+    }
+    return current
+  }
+
+  async function copyFileFromManifest (entry, targetPath, parentBinding, signal) {
+    const stage = staging.allocate('download')
+    let hasProof = false
+    let targetCreated = false
+    let operationError
+    try {
+      throwIfAborted(signal)
+      const exported = digestResult(await executeRequest('stage-export', {
+        ...staging.rootBinding,
+        objectName: stage.objectName,
+        sourcePath: entry.path,
+        ...sourceBindingArgs(entry.metadata)
+      }, { signal }), 'stage-export')
+      staging.remember(stage.path, {
+        sha256: exported.sha256,
+        size: String(exported.size)
+      })
+      hasProof = true
+      if (exported.size !== entry.proof.size ||
+        exported.sha256 !== entry.proof.sha256) {
+        throw new Error('root 文件后端复制源在清单后发生变化')
+      }
+      throwIfAborted(signal)
+      const imported = digestResult(await executeRequest('stage-import', {
+        ...staging.rootBinding,
+        objectName: stage.objectName,
+        targetPath,
+        sha256: exported.sha256,
+        size: String(exported.size),
+        targetMode: normalizeMode(entry.metadata.mode & 0o7777).toString(8),
+        targetUid: String(entry.metadata.uid),
+        targetGid: String(entry.metadata.gid),
+        mustBeAbsent: '1',
+        ...targetParentBindingArgs(parentFilePath(targetPath), parentBinding),
+        targetDevice: '0',
+        targetInode: '0'
+      }, { signal }), 'stage-import')
+      if (imported.sha256 !== exported.sha256 || imported.size !== exported.size) {
+        throw new Error('root 文件后端复制导入摘要或大小不匹配')
+      }
+      targetCreated = {
+        device: imported.targetDevice,
+        inode: imported.targetInode
+      }
+    } catch (error) {
+      operationError = error
+    } finally {
+      if (hasProof) {
+        try { await staging.cleanup(stage.path) } catch (cleanupError) {
+          if (operationError) operationError.cleanupError ||= cleanupError
+          else operationError = cleanupError
+        }
+      } else {
+        try { staging.preserve(stage.path) } catch (preserveError) {
+          if (operationError) operationError.cleanupError ||= preserveError
+          else operationError = preserveError
+        }
+      }
+    }
+    if (operationError) {
+      if (targetCreated) operationError.targetCreated = targetCreated
+      throw operationError
+    }
+    return targetCreated
+  }
+
+  async function copyTree (source, target, options) {
+    const { signal } = normalizeCancellableOptions(options)
+    const sourcePath = canonicalFilePath(source, 'source')
+    const targetPath = canonicalFilePath(target, 'target')
+    if (isSameOrChildPath(targetPath, sourcePath)) {
+      throw new Error('root 文件后端复制目标不能位于复制源内部')
+    }
+    throwIfAborted(signal)
+    const manifest = await buildTreeManifest(sourcePath, signal)
+    if (await lstatOrMissing(targetPath, signal)) {
+      const error = new Error(`root 文件后端复制目标已存在：${targetPath}`)
+      error.code = 'EEXIST'
+      throw error
+    }
+    const targetParentPath = parentFilePath(targetPath)
+    const targetParentMetadata = requireBoundMetadata(
+      await rawFacade.lstat(targetParentPath, { signal }),
+      targetParentPath,
+      'copy target parent'
+    )
+    if (targetParentMetadata.type !== 'directory') {
+      throw new Error('root 文件后端复制目标 parent 不是目录')
+    }
+    await invalidateReadStreams(targetPath)
+    const created = []
+    const createdDirectories = new Map([[
+      targetParentPath,
+      {
+        device: targetParentMetadata.device,
+        inode: targetParentMetadata.inode
+      }
+    ]])
+    let primaryError
+    try {
+      for (const entry of manifest) {
+        throwIfAborted(signal)
+        await assertManifestEntryCurrent(entry, signal)
+        const destination = targetForManifestEntry(entry, sourcePath, targetPath)
+        const destinationParent = parentFilePath(destination)
+        const parentBinding = createdDirectories.get(destinationParent)
+        if (!parentBinding) {
+          throw new Error('root 文件后端复制目标 parent binding 缺失')
+        }
+        if (entry.metadata.type === 'directory') {
+          const binding = await executeRequest('mkdir-bound', {
+            targetPath: destination,
+            ...targetParentBindingArgs(destinationParent, parentBinding),
+            targetMode: normalizeMode(entry.metadata.mode & 0o7777).toString(8),
+            targetUid: String(entry.metadata.uid),
+            targetGid: String(entry.metadata.gid)
+          }, { signal })
+          if (!/^(?:0|[1-9]\d{0,19})$/.test(binding.device) ||
+            !/^(?:0|[1-9]\d{0,19})$/.test(binding.inode)) {
+            throw new Error('root 文件后端 mkdir binding 结果无效')
+          }
+          created.push({
+            path: destination,
+            type: 'directory',
+            parentBinding,
+            binding
+          })
+          createdDirectories.set(destination, binding)
+        } else {
+          try {
+            const binding = await copyFileFromManifest(
+              entry,
+              destination,
+              parentBinding,
+              signal
+            )
+            created.push({
+              path: destination,
+              type: 'file',
+              parentBinding,
+              binding
+            })
+          } catch (error) {
+            if (error.targetCreated) {
+              created.push({
+                path: destination,
+                type: 'file',
+                parentBinding,
+                binding: error.targetCreated
+              })
+            }
+            throw error
+          }
+        }
+      }
+    } catch (error) {
+      primaryError = error
+    }
+    if (primaryError) {
+      for (const entry of created.reverse()) {
+        try {
+          await executeRequest(
+            'remove-bound',
+            {
+              targetPath: entry.path,
+              ...targetParentBindingArgs(
+                parentFilePath(entry.path),
+                entry.parentBinding
+              ),
+              targetDevice: entry.binding.device,
+              targetInode: entry.binding.inode,
+              targetType: entry.type
+            }
+          )
+        } catch (rollbackError) {
+          primaryError.rollbackError ||= rollbackError
+        }
+      }
+      throw primaryError
+    }
+    return 1
+  }
+
+  async function removeTree (path, options) {
+    const { signal } = normalizeCancellableOptions(options)
+    const remotePath = canonicalFilePath(path)
+    throwIfAborted(signal)
+    const manifest = await buildTreeManifest(remotePath, signal)
+    await invalidateReadStreams(remotePath)
+    for (const entry of manifest.reverse()) {
+      throwIfAborted(signal)
+      await executeRequest(
+        'remove-bound',
+        {
+          targetPath: entry.path,
+          targetParentRealPath: entry.metadata.parentRealPath,
+          targetParentDevice: String(entry.metadata.parentDevice),
+          targetParentInode: String(entry.metadata.parentInode),
+          targetDevice: String(entry.metadata.device),
+          targetInode: String(entry.metadata.inode),
+          targetType: entry.metadata.type
+        },
+        { signal }
+      )
+    }
     return 1
   }
 
@@ -408,10 +850,10 @@ export async function createPrivilegedFileBackend ({
   }
 
   const rawFacade = {
-    async list (path) {
+    async list (path, options = {}) {
       const result = await executeRequest('list', {
         path: canonicalFilePath(path)
-      })
+      }, options)
       if (!Array.isArray(result.entries)) {
         throw new Error('root 文件后端 list 结果无效')
       }
@@ -426,9 +868,9 @@ export async function createPrivilegedFileBackend ({
         group: entry.gid
       }))
     },
-    async lstat (path) {
+    async lstat (path, options = {}) {
       const remotePath = canonicalFilePath(path)
-      const result = await executeRequest('lstat', { path: remotePath })
+      const result = await executeRequest('lstat', { path: remotePath }, options)
       if (result.missing === true) {
         const error = new Error(`No such privileged file: ${remotePath}`)
         error.code = 'ENOENT'
@@ -436,10 +878,10 @@ export async function createPrivilegedFileBackend ({
       }
       return metadataResult(result)
     },
-    async stat (path) {
+    async stat (path, options = {}) {
       return metadataResult(await executeRequest('stat', {
         path: canonicalFilePath(path)
-      }))
+      }, options))
     },
     async readlink (path) {
       const result = await executeRequest('readlink', {
@@ -502,6 +944,7 @@ export async function createPrivilegedFileBackend ({
     },
     async writeFile (path, value, requestedMode) {
       const targetPath = canonicalFilePath(path, 'targetPath')
+      await invalidateReadStreams(targetPath)
       const bytes = inputBytes(value)
       const digest = await sha256Hex(bytes)
       let targetMetadata
@@ -509,6 +952,18 @@ export async function createPrivilegedFileBackend ({
         targetMetadata = await rawFacade.lstat(targetPath)
       } catch (error) {
         if (error?.code !== 'ENOENT') throw error
+      }
+      if (targetMetadata) {
+        requireBoundMetadata(targetMetadata, targetPath, 'write target')
+      }
+      const targetParentPath = parentFilePath(targetPath)
+      const targetParentMetadata = requireBoundMetadata(
+        await rawFacade.lstat(targetParentPath),
+        targetParentPath,
+        'write target parent'
+      )
+      if (targetParentMetadata.type !== 'directory') {
+        throw new Error('root 文件后端 write target parent 不是目录')
       }
       const targetMode = normalizeMode(
         requestedMode,
@@ -554,7 +1009,11 @@ export async function createPrivilegedFileBackend ({
           size: String(bytes.byteLength),
           targetMode: targetMode.toString(8),
           targetUid: String(targetUid),
-          targetGid: String(targetGid)
+          targetGid: String(targetGid),
+          mustBeAbsent: targetMetadata ? '0' : '1',
+          ...targetParentBindingArgs(targetParentPath, targetParentMetadata),
+          targetDevice: String(targetMetadata?.device ?? 0),
+          targetInode: String(targetMetadata?.inode ?? 0)
         }), 'stage-import')
         if (imported.sha256 !== digest || imported.size !== bytes.byteLength) {
           throw new Error('root 文件后端 stage-import 摘要或大小不匹配')
@@ -573,14 +1032,30 @@ export async function createPrivilegedFileBackend ({
       if (operationError) throw operationError
       return 1
     },
-    mkdir: path => fixedMutation('mkdir', { path: canonicalFilePath(path) }),
-    touch: path => fixedMutation('touch', { path: canonicalFilePath(path) }),
-    rename: (source, target) => fixedMutation('rename', {
-      source: canonicalFilePath(source, 'source'),
-      target: canonicalFilePath(target, 'target')
-    }),
-    rm: path => fixedMutation('rm', { path: canonicalFilePath(path) }),
-    rmdir: path => fixedMutation('rmdir', { path: canonicalFilePath(path) }),
+    mkdir: path => {
+      const remotePath = canonicalFilePath(path)
+      return fixedMutation('mkdir', { path: remotePath }, [remotePath])
+    },
+    touch: path => {
+      const remotePath = canonicalFilePath(path)
+      return fixedMutation('touch', { path: remotePath }, [remotePath])
+    },
+    rename: (source, target) => {
+      const sourcePath = canonicalFilePath(source, 'source')
+      const targetPath = canonicalFilePath(target, 'target')
+      return fixedMutation('rename', {
+        source: sourcePath,
+        target: targetPath
+      }, [sourcePath, targetPath])
+    },
+    rm: path => {
+      const remotePath = canonicalFilePath(path)
+      return fixedMutation('rm', { path: remotePath }, [remotePath])
+    },
+    rmdir: path => {
+      const remotePath = canonicalFilePath(path)
+      return fixedMutation('rmdir', { path: remotePath }, [remotePath])
+    },
     chmod: (path, mode) => fixedMutation('chmod', {
       path: canonicalFilePath(path),
       mode: normalizeMode(mode).toString(8)
@@ -590,21 +1065,10 @@ export async function createPrivilegedFileBackend ({
       uid: String(uid),
       gid: String(gid)
     }),
-    copyEntry: (source, target) => fixedMutation('copy-entry', {
-      source: canonicalFilePath(source, 'source'),
-      target: canonicalFilePath(target, 'target')
-    }),
-    removeEntry: path => fixedMutation('remove-entry', {
-      path: canonicalFilePath(path)
-    }),
-    cp: (source, target) => fixedMutation('copy-entry', {
-      source: canonicalFilePath(source, 'source'),
-      target: canonicalFilePath(target, 'target')
-    }),
-    mv: (source, target) => fixedMutation('rename', {
-      source: canonicalFilePath(source, 'source'),
-      target: canonicalFilePath(target, 'target')
-    }),
+    copyEntry: copyTree,
+    removeEntry: removeTree,
+    cp: copyTree,
+    mv: (source, target) => rawFacade.rename(source, target),
     async describeResumeEntry (path, boundarySize = 64 * 1024) {
       const remotePath = canonicalFilePath(path)
       const limit = Math.min(
@@ -681,7 +1145,7 @@ export async function createPrivilegedFileBackend ({
     sftp: facade,
     backend: facade,
     staging,
-    capabilities: capabilities || null,
+    capabilities: normalizedCapabilities,
     release () {
       if (releasePromise) return releasePromise
       closed = true
