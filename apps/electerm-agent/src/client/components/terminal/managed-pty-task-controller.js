@@ -59,6 +59,33 @@ function normalizeTimeout (value) {
   return timeout
 }
 
+function createDefaultProtocol ({ createToken }) {
+  return Object.freeze({
+    createToken,
+    buildCommand: ({ token, request }) => buildPtyTaskCommand({
+      token,
+      script: request.script
+    }),
+    createParser: ({ token }) => createPtyTaskOutputParser({ token }),
+    readResult: () => ({})
+  })
+}
+
+function requireManagedProtocol (value, fallback) {
+  const protocol = value || fallback
+  for (const field of [
+    'createToken',
+    'buildCommand',
+    'createParser',
+    'readResult'
+  ]) {
+    if (typeof protocol?.[field] !== 'function') {
+      throw new Error(`受控 PTY 协议缺少 ${field}`)
+    }
+  }
+  return protocol
+}
+
 export function createManagedPtyTaskController ({
   ensureReady,
   getTerminalState,
@@ -79,6 +106,7 @@ export function createManagedPtyTaskController ({
   let promptSequence = 0
   let firstIdentity = null
   let recoveryLocked = false
+  const defaultProtocol = createDefaultProtocol({ createToken })
 
   function safeCancelSubmission (token) {
     if (!token) return
@@ -167,7 +195,12 @@ export function createManagedPtyTaskController ({
       rejectExecution(execution, new Error('PTY 运维任务缺少有效身份'))
       return
     }
-    resolveExecution(execution, { exitCode: markerExitCode, identity })
+    const protocolResult = execution.protocol.readResult(execution.parser)
+    resolveExecution(execution, {
+      exitCode: markerExitCode,
+      identity,
+      ...protocolResult
+    })
   }
 
   function beginRecoveryDeadline (execution) {
@@ -223,9 +256,11 @@ export function createManagedPtyTaskController ({
     assertRunnableTerminalState(getTerminalState())
     if (options.signal?.aborted) throw abortError()
     const timeoutMs = normalizeTimeout(options.timeoutMs)
-    const token = createToken()
-    const command = buildPtyTaskCommand({ token, script: options.script })
-    const parser = createPtyTaskOutputParser({ token })
+    const protocol = requireManagedProtocol(options.protocol, defaultProtocol)
+    const token = protocol.createToken()
+    const request = options.request || { script: options.script }
+    const command = protocol.buildCommand({ token, request })
+    const parser = protocol.createParser({ token, request })
     const submissionToken = expectSubmission(command)
     if (!submissionToken) {
       throw new Error('无法建立 PTY 运维命令追踪，命令尚未发送')
@@ -235,6 +270,8 @@ export function createManagedPtyTaskController ({
       const execution = {
         owner,
         command,
+        protocol,
+        request,
         parser,
         submissionToken,
         signal: options.signal,
@@ -268,7 +305,7 @@ export function createManagedPtyTaskController ({
           try {
             const parsed = parser.push(chunk)
             if (!validateIdentity(execution)) return
-            for (const output of parsed.output) options.onChunk?.(output)
+            for (const output of parsed?.output || []) options.onChunk?.(output)
             settleIfComplete(execution)
           } catch (error) {
             requestCancellation(execution, error)

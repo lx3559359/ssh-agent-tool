@@ -423,3 +423,109 @@ test('disconnect rejects the active command and ignores late terminal output', a
   harness.emitManagedEnd(0)
   assert.equal(await lease.release(), true)
 })
+
+test('bounded custom protocol uses its own command parser and result', async () => {
+  const customToken = 'c'.repeat(48)
+  let createTokenCalls = 0
+  const protocol = {
+    createToken: () => {
+      createTokenCalls += 1
+      return customToken
+    },
+    buildCommand: ({ token, request }) => `file:${token}:${request.operation}`,
+    createParser: ({ token }) => {
+      let pending = ''
+      let effectiveIdentity = null
+      let completedExitCode = null
+      let result = null
+      let started = false
+      let ended = false
+      return {
+        push: chunk => {
+          pending += String(chunk || '')
+          let newlineIndex = pending.indexOf('\n')
+          while (newlineIndex >= 0) {
+            const line = pending.slice(0, newlineIndex)
+            pending = pending.slice(newlineIndex + 1)
+            const fields = line.split(':')
+            assert.equal(fields[0], 'file')
+            assert.equal(fields[1], token)
+            if (fields[2] === 'start') {
+              effectiveIdentity = { uid: fields[3], username: fields[4] }
+              started = true
+            } else if (fields[2] === 'result') {
+              result = {
+                kind: fields[3],
+                capabilities: fields[4].split(',')
+              }
+            } else if (fields[2] === 'end') {
+              completedExitCode = Number(fields[3])
+              ended = true
+            }
+            newlineIndex = pending.indexOf('\n')
+          }
+          return {}
+        },
+        identity: () => effectiveIdentity,
+        exitCode: () => completedExitCode,
+        started: () => started,
+        ended: () => ended,
+        result: () => result
+      }
+    },
+    readResult: parser => parser.result()
+  }
+  const harness = await createControllerHarness()
+  const lease = await harness.controller.acquire('files-1')
+  const running = lease.execute({
+    request: { operation: 'probe' },
+    protocol,
+    timeoutMs: 1000
+  })
+
+  assert.equal(createTokenCalls, 1)
+  assert.equal(customToken.length, 48)
+  assert.equal(harness.submissions.at(-1).command, `file:${customToken}:probe`)
+  harness.emit(`file:${customToken}:start:0:`)
+  harness.emit(`root\nfile:${customToken}:result:probe:stat,base64\n`)
+  harness.emit(`file:${customToken}:end:0\n`)
+  harness.emitCommandFinished(0)
+  harness.emitPromptStarted()
+
+  assert.deepEqual(await running, {
+    exitCode: 0,
+    identity: { uid: '0', username: 'root' },
+    kind: 'probe',
+    capabilities: ['stat', 'base64']
+  })
+  assert.equal(await lease.release(), true)
+})
+
+test('missing managed protocol methods fail before reserving execution state', async () => {
+  const harness = await createControllerHarness()
+  const lease = await harness.controller.acquire('files-invalid-protocol')
+
+  for (const field of [
+    'createToken',
+    'buildCommand',
+    'createParser',
+    'readResult'
+  ]) {
+    const protocol = {
+      createToken: () => 'c'.repeat(48),
+      buildCommand: () => 'file:command',
+      createParser: () => ({}),
+      readResult: () => ({})
+    }
+    delete protocol[field]
+    await assert.rejects(
+      lease.execute({ protocol, request: { operation: 'probe' } }),
+      new RegExp(`受控 PTY 协议缺少 ${field}`)
+    )
+    assert.equal(harness.controller.isBusy(), true)
+    assert.equal(harness.submissions.length, 0)
+  }
+
+  assert.equal(await lease.release(), true)
+  assert.equal(harness.controller.isBusy(), false)
+})
