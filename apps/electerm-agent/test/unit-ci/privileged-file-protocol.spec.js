@@ -50,7 +50,7 @@ const allCapabilities = [
   'base64=1', 'sha256=1', 'procFd=1',
   'noclobber=1', 'cat=1', 'gnuStat=1', 'gnuMv=1',
   'realpath=1', 'readlink=1', 'chown=1', 'chmod=1', 'rm=1',
-  'find=1', 'head=1', 'wc=1'
+  'rmdir=1', 'find=1', 'head=1', 'wc=1'
 ].join(',')
 const allCapabilityObject = Object.fromEntries(
   allCapabilities.split(',').map(value => [value.split('=')[0], true])
@@ -728,6 +728,7 @@ test('request constructor canonicalizes octal modes and SHA-256 fields', async (
     })
     assert.equal(request.args.targetMode, canonical)
     assert.equal(request.args.sha256, upperSha256.toLowerCase())
+    assert.equal(request.args.mustBeAbsent, '0')
     assert.doesNotThrow(() => buildPrivilegedFileCommand({ token, request }))
   }
 
@@ -746,6 +747,26 @@ test('request constructor canonicalizes octal modes and SHA-256 fields', async (
   assert.equal(handshake.args.challenge, mixedChallenge.toLowerCase())
   assert.equal(handshake.args.rootMode, '700')
   assert.doesNotThrow(() => buildPrivilegedFileCommand({ token, request: handshake }))
+
+  const noClobber = createPrivilegedFileRequest({
+    operation: 'stage-import',
+    args: {
+      ...stageBinding(),
+      targetPath: '/root/target',
+      sha256: upperSha256,
+      size: '0',
+      targetMode: '600',
+      targetUid: '0',
+      targetGid: '0',
+      mustBeAbsent: '1'
+    }
+  })
+  assert.equal(noClobber.args.mustBeAbsent, '1')
+  assert.match(buildPrivilegedFileCommand({ token, request: noClobber }), /mv -nT/)
+  assert.throws(() => createPrivilegedFileRequest({
+    operation: 'stage-import',
+    args: { ...noClobber.args, mustBeAbsent: 'true' }
+  }).args, /mustBeAbsent/)
 })
 
 test('request constructor immediately rejects script and every unknown argument', async () => {
@@ -772,7 +793,7 @@ test('privileged command builder exposes every fixed operation and fails closed 
   const cases = [
     ['probe', {}, ':'],
     ['list', { path: '/x' }, './.[!.]* ./..?* ./*'],
-    ['lstat', { path: '/x' }, '__sp_emit_stat "$__sp_path" lstat'],
+    ['lstat', { path: '/x' }, '__sp_lstatParentReal'],
     ['stat', { path: '/x' }, '__sp_emit_stat "$__sp_path" stat'],
     ['readlink', { path: '/x' }, '__sp_emit_text "$(readlink -- "$__sp_path")"'],
     ['realpath', { path: '/x' }, '__sp_emit_text "$(realpath -- "$__sp_path")"'],
@@ -785,6 +806,7 @@ test('privileged command builder exposes every fixed operation and fails closed 
     ['chown', { path: '/x', uid: '1', gid: '2' }, 'chown -- "$__sp_uid:$__sp_gid" "$__sp_path"'],
     ['copy-entry', { source: '/a', target: '/b' }, 'cp -a -- "$__sp_source" "$__sp_target"'],
     ['remove-entry', { path: '/x' }, 'rm -rf -- "$__sp_path"'],
+    ['remove-empty-directory', { path: '/x' }, 'rmdir -- "$__sp_path"'],
     ['sha256', { path: '/x' }, '__sp_emit_sha256 "$__sp_path"']
   ]
 
@@ -1067,7 +1089,11 @@ test('lstat emits a trusted missing result only for an absent path', {
 }, async () => {
   const nativeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-lstat-missing-'))
   try {
-    const missingPath = toBashPath(path.join(nativeRoot, 'absent'))
+    const bashRoot = toBashPath(nativeRoot)
+    const canonicalRoot = runBash(
+      `cd -- ${quoteForBash(bashRoot)} && pwd -P`
+    ).stdout.trim()
+    const missingPath = `${canonicalRoot}/absent`
     const missing = await runRealProtocolOperation({
       operation: 'lstat',
       token: '3'.repeat(48),
@@ -1079,6 +1105,61 @@ test('lstat emits a trusted missing result only for an absent path', {
     assert.equal(missing.result.missing, true)
     assert.equal(missing.result.capabilities.stat, true)
     assert.equal(missing.result.capabilities.gnuStat, true)
+    assert.equal(missing.result.capabilities.realpath, true)
+
+    const absentParent = await runRealProtocolOperation({
+      operation: 'lstat',
+      token: '31'.repeat(24),
+      args: { path: `${missingPath}/child` }
+    })
+    assert.notEqual(absentParent.execution.status, 0,
+      'an unresolved parent must not become trusted missing')
+
+    const loopPath = path.join(nativeRoot, 'loop')
+    fs.symlinkSync('loop', loopPath, 'dir')
+    const loop = await runRealProtocolOperation({
+      operation: 'lstat',
+      token: '32'.repeat(24),
+      args: { path: `${canonicalRoot}/loop/child` }
+    })
+    assert.notEqual(loop.execution.status, 0,
+      'an ELOOP parent must not become trusted missing')
+  } finally {
+    fs.rmSync(nativeRoot, { recursive: true, force: true })
+  }
+})
+
+test('remove-empty-directory preserves unknown content and removes only an empty directory', {
+  skip: !bashAvailable
+}, async () => {
+  const nativeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-empty-dir-'))
+  try {
+    const bashRoot = toBashPath(nativeRoot)
+    const canonicalRoot = runBash(
+      `cd -- ${quoteForBash(bashRoot)} && pwd -P`
+    ).stdout.trim()
+    const nonemptyNative = path.join(nativeRoot, 'nonempty')
+    const emptyNative = path.join(nativeRoot, 'empty')
+    fs.mkdirSync(nonemptyNative)
+    fs.mkdirSync(emptyNative)
+    fs.writeFileSync(path.join(nonemptyNative, 'foreign'), 'preserve')
+
+    const nonempty = await runRealProtocolOperation({
+      operation: 'remove-empty-directory',
+      token: '33'.repeat(24),
+      args: { path: `${canonicalRoot}/nonempty` }
+    })
+    assert.notEqual(nonempty.execution.status, 0)
+    assert.equal(fs.readFileSync(path.join(nonemptyNative, 'foreign'), 'utf8'), 'preserve')
+
+    const empty = await runRealProtocolOperation({
+      operation: 'remove-empty-directory',
+      token: '34'.repeat(24),
+      args: { path: `${canonicalRoot}/empty` }
+    })
+    assert.equal(empty.execution.status, 0, empty.execution.stderr)
+    assert.equal(empty.result.ok, true)
+    assert.equal(fs.existsSync(emptyNative), false)
   } finally {
     fs.rmSync(nativeRoot, { recursive: true, force: true })
   }
@@ -1800,6 +1881,28 @@ test('linux staging handshake export import and cleanup preserve content metadat
       fs.readdirSync(targetParent).filter(name => name.startsWith('.shellpilot-')),
       []
     )
+
+    const noClobberPath = path.join(targetParent, 'no-clobber')
+    fs.writeFileSync(noClobberPath, 'foreign', { mode: 0o600 })
+    const noClobberInode = fs.statSync(noClobberPath, { bigint: true }).ino
+    const noClobber = await runRealProtocolOperation({
+      operation: 'stage-import',
+      token: 'e4'.repeat(24),
+      args: {
+        ...fixture.binding,
+        objectName,
+        targetPath: noClobberPath,
+        sha256: sha256Text(content),
+        size: String(Buffer.byteLength(content)),
+        targetMode: '600',
+        targetUid: '0',
+        targetGid: '0',
+        mustBeAbsent: '1'
+      }
+    })
+    assert.notEqual(noClobber.execution.status, 0)
+    assert.equal(fs.readFileSync(noClobberPath, 'utf8'), 'foreign')
+    assert.equal(fs.statSync(noClobberPath, { bigint: true }).ino, noClobberInode)
 
     const cleaned = await runRealProtocolOperation({
       operation: 'stage-cleanup',
