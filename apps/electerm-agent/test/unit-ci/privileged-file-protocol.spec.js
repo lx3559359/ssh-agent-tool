@@ -141,6 +141,13 @@ function sha256Text (value) {
   return createHash('sha256').update(value).digest('hex')
 }
 
+function linuxStageFixtureToken (suffix) {
+  return createHash('sha256')
+    .update(`shellpilot-linux-stage-fixture:${suffix}`)
+    .digest('hex')
+    .slice(0, 48)
+}
+
 async function createLinuxStageFixture (nativeRoot, suffix) {
   const rootPath = path.join(nativeRoot, `stage-${suffix}`)
   fs.mkdirSync(rootPath, { mode: 0o700 })
@@ -152,7 +159,7 @@ async function createLinuxStageFixture (nativeRoot, suffix) {
   const rootStat = fs.statSync(rootPath, { bigint: true })
   const handshake = await runRealProtocolOperation({
     operation: 'stage-handshake',
-    token: `${suffix}0`.repeat(24).slice(0, 48),
+    token: linuxStageFixtureToken(suffix),
     args: {
       rootPath,
       challengeName,
@@ -183,6 +190,18 @@ async function createLinuxStageFixture (nativeRoot, suffix) {
     }
   }
 }
+
+test('linux stage fixture tokens satisfy the protocol token contract before platform skips', async () => {
+  const { buildPrivilegedFileCommand } = await importModule(protocolModule)
+  for (const suffix of ['l1', 'l2', 'l3']) {
+    const token = linuxStageFixtureToken(suffix)
+    assert.match(token, /^[a-f0-9]{48}$/)
+    assert.doesNotThrow(() => buildPrivilegedFileCommand({
+      token,
+      request: { operation: 'probe', args: {} }
+    }))
+  }
+})
 
 test('privileged file protocol accepts only fixed operations and never interpolates raw paths', async () => {
   const {
@@ -1244,8 +1263,23 @@ test('staging operations bind one safe object to the handshaken root inode', asy
   assert.match(importCommand, /"\$__sp_expectedSize"/)
   assert.match(importCommand, /mv -fT -- "\.\/\$__sp_tempName" "\.\/\$__sp_targetName"/)
   assert.equal(
-    importCommand.indexOf('mv -fT --') <
-      importCommand.indexOf('chown -- "$__sp_targetUid:$__sp_targetGid" "$__sp_fd4"'),
+    importCommand.indexOf('chown -- "$__sp_targetUid:$__sp_targetGid" "$__sp_fd4"') <
+      importCommand.indexOf('mv -fT --'),
+    true
+  )
+  assert.equal(
+    importCommand.indexOf('__sp_readyMode=') <
+      importCommand.indexOf('mv -fT --'),
+    true
+  )
+  assert.equal(
+    importCommand.lastIndexOf('__sp_path_matches_fd "./$__sp_tempName"') <
+      importCommand.indexOf('mv -fT --'),
+    true
+  )
+  assert.equal(
+    importCommand.lastIndexOf('__sp_path_matches_fd "./$__sp_tempName"') >
+      importCommand.indexOf('__sp_readyMode='),
     true
   )
   assert.equal(importCommand.lastIndexOf('exec 4>&-') > importCommand.indexOf('mv -fT --'), true)
@@ -1496,7 +1530,7 @@ test('linux stage import rejects digest mismatch special entries directories and
   }
 })
 
-test('linux stage import metadata failure leaves installed data root-owned mode 0600 without protocol temp', {
+test('linux stage import metadata failure preserves the old target and removes its matching temp', {
   skip: linuxRootOnly
 }, async () => {
   const nativeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-linux-stage-metadata-'))
@@ -1508,6 +1542,10 @@ test('linux stage import metadata failure leaves installed data root-owned mode 
     const targetParent = path.join(nativeRoot, 'target-parent')
     fs.mkdirSync(targetParent, { mode: 0o700 })
     const targetPath = path.join(targetParent, 'installed')
+    const oldContent = 'old target must remain'
+    fs.writeFileSync(targetPath, oldContent, { mode: 0o640 })
+    fs.chmodSync(targetPath, 0o640)
+    const oldStat = fs.statSync(targetPath, { bigint: true })
     const rejected = await runRealProtocolOperation({
       operation: 'stage-import',
       token: 'f4'.repeat(24),
@@ -1524,11 +1562,12 @@ test('linux stage import metadata failure leaves installed data root-owned mode 
       }
     })
     assert.notEqual(rejected.execution.status, 0)
-    assert.equal(fs.readFileSync(targetPath, 'utf8'), content)
-    const installedStat = fs.statSync(targetPath, { bigint: true })
-    assert.equal(Number(installedStat.mode & 0o7777n), 0o600)
-    assert.equal(installedStat.uid, 0n)
-    assert.equal(installedStat.gid, 0n)
+    assert.equal(fs.readFileSync(targetPath, 'utf8'), oldContent)
+    const preservedStat = fs.statSync(targetPath, { bigint: true })
+    assert.equal(preservedStat.ino, oldStat.ino)
+    assert.equal(Number(preservedStat.mode & 0o7777n), Number(oldStat.mode & 0o7777n))
+    assert.equal(preservedStat.uid, oldStat.uid)
+    assert.equal(preservedStat.gid, oldStat.gid)
     assert.deepEqual(
       fs.readdirSync(targetParent).filter(name => name.startsWith('.shellpilot-')),
       []
