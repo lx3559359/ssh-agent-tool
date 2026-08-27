@@ -265,6 +265,8 @@ export const instSftpKeys = [
   'download',
   'upload',
   'mkdir',
+  'createExclusiveFile',
+  'removeEmptyDirectory',
   'getFolderSize',
   'getHomeDir',
   'rmdir',

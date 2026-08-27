@@ -264,8 +264,12 @@ async function startSftpServer (root) {
             sftp.status(reqId, STATUS_CODE.OK)
           })
           sftp.on('RMDIR', (reqId, remotePath) => {
-            fs.rmdirSync(toLocalPath(root, remotePath))
-            sftp.status(reqId, STATUS_CODE.OK)
+            try {
+              fs.rmdirSync(toLocalPath(root, remotePath))
+              sftp.status(reqId, STATUS_CODE.OK)
+            } catch (error) {
+              sftp.status(reqId, STATUS_CODE.FAILURE, error.message)
+            }
           })
         })
       })
@@ -289,6 +293,100 @@ async function startSftpServer (root) {
 }
 
 describe('session-sftp transport flows', () => {
+  test('exclusive staging file creation uses wx and validates encoded bytes and mode', async () => {
+    const sftp = Object.create(Sftp.prototype)
+    const calls = []
+    let written = Buffer.alloc(0)
+    sftp.sftp = {
+      createWriteStream (remotePath, options) {
+        calls.push([remotePath, options])
+        return new Writable({
+          write (chunk, encoding, callback) {
+            written = Buffer.concat([written, Buffer.from(chunk)])
+            callback()
+          }
+        })
+      }
+    }
+    const payload = Buffer.from([0, 1, 2, 0xfe, 0xff])
+
+    assert.equal(
+      await sftp.createExclusiveFile('/stage/object', payload.toString('base64')),
+      1
+    )
+    assert.deepEqual(written, payload)
+    assert.equal(calls.length, 1)
+    assert.equal(calls[0][0], '/stage/object')
+    assert.equal(calls[0][1].flags, 'wx')
+    assert.equal(calls[0][1].mode, 0o600)
+
+    for (const [base64, mode] of [
+      ['not-base64', 0o600],
+      [Buffer.from('secret').toString('base64'), 0o640],
+      [Buffer.from('secret').toString('base64'), 0o100600]
+    ]) {
+      await assert.rejects(
+        sftp.createExclusiveFile('/stage/rejected', base64, mode),
+        /Base64|mode|权限/i
+      )
+    }
+    assert.equal(calls.length, 1)
+    await assert.rejects(
+      sftp.createExclusiveFile(
+        '/stage/oversized',
+        Buffer.alloc(8 * 1024 * 1024 + 1).toString('base64')
+      ),
+      /exclusive file exceeds the size limit/i
+    )
+    assert.equal(calls.length, 1)
+  })
+
+  test('exclusive staging file creation propagates claim and stream failures', async () => {
+    const sftp = Object.create(Sftp.prototype)
+    let attempt = 0
+    sftp.sftp = {
+      createWriteStream () {
+        attempt += 1
+        if (attempt === 1) {
+          const error = new Error('Target exists')
+          error.code = 'EEXIST'
+          throw error
+        }
+        return new Writable({
+          write (chunk, encoding, callback) {
+            callback(new Error('remote write failed'))
+          }
+        })
+      }
+    }
+    const base64 = Buffer.from('secret').toString('base64')
+
+    await assert.rejects(
+      sftp.createExclusiveFile('/stage/existing', base64),
+      /Target exists/
+    )
+    await assert.rejects(
+      sftp.createExclusiveFile('/stage/broken', base64),
+      /remote write failed/
+    )
+  })
+
+  test('empty staging directory removal delegates only to atomic SFTP rmdir', async () => {
+    const sftp = Object.create(Sftp.prototype)
+    const calls = []
+    sftp.rmFolder = async remotePath => {
+      calls.push(['rmFolder', remotePath])
+      return 1
+    }
+    sftp.rmdir = async remotePath => {
+      calls.push(['rmdir', remotePath])
+      throw new Error('recursive rmdir must not be used')
+    }
+
+    assert.equal(await sftp.removeEmptyDirectory('/stage/session'), 1)
+    assert.deepEqual(calls, [['rmFolder', '/stage/session']])
+  })
+
   test('same-endpoint move uses atomic SFTP rename instead of shell mv', async () => {
     const sftp = Object.create(Sftp.prototype)
     const renamed = []
@@ -957,6 +1055,55 @@ describe('session-sftp transport flows', () => {
         ['build.log', '-']
       ])
       assert.equal(await sftp.readFile(`${normalizedReleasePath}/build.log`), 'release ok')
+    } finally {
+      sftp && sftp.kill()
+      term && term.kill()
+      await server.close()
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('safe staging primitives preserve binary bytes and reject occupied directories', async () => {
+    const root = makeTmpDir()
+    const server = await startSftpServer(root)
+    let term
+    let sftp
+    try {
+      term = await session({
+        host: '127.0.0.1',
+        port: server.port,
+        username: USERNAME,
+        password: PASSWORD,
+        useSshAgent: false,
+        enableSsh: true,
+        readyTimeout: 5000
+      }, createPromptWs())
+      sftp = new Sftp({
+        uid: 'sftp-safe-staging-session-ci',
+        terminalId: term.pid,
+        enableSsh: true
+      })
+      await sftp.connect(sftp.initOptions)
+      await sftp.mkdir('/stage')
+
+      const payload = createPatternBuffer(4097, 29)
+      const objectPath = '/stage/object.bin'
+      await sftp.createExclusiveFile(objectPath, payload.toString('base64'))
+      assert.deepEqual(fs.readFileSync(toLocalPath(root, objectPath)), payload)
+
+      await assert.rejects(
+        sftp.createExclusiveFile(
+          objectPath,
+          Buffer.from('replacement').toString('base64')
+        )
+      )
+      assert.deepEqual(fs.readFileSync(toLocalPath(root, objectPath)), payload)
+
+      await assert.rejects(sftp.removeEmptyDirectory('/stage'))
+      assert.deepEqual(fs.readFileSync(toLocalPath(root, objectPath)), payload)
+      await sftp.rm(objectPath)
+      assert.equal(await sftp.removeEmptyDirectory('/stage'), 1)
+      assert.equal(fs.existsSync(toLocalPath(root, '/stage')), false)
     } finally {
       sftp && sftp.kill()
       term && term.kill()

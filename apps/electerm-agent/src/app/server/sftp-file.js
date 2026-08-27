@@ -20,6 +20,9 @@ const {
 const uid = require('../common/uid')
 
 const MAX_REMOTE_ARCHIVE_BYTES = 2 * 1024 * 1024 * 1024
+const MAX_EXCLUSIVE_FILE_BYTES = 8 * 1024 * 1024
+const MAX_EXCLUSIVE_FILE_BASE64_LENGTH =
+  4 * Math.ceil(MAX_EXCLUSIVE_FILE_BYTES / 3)
 
 function createReadStreamFromString (str) {
   const s = new Readable()
@@ -54,6 +57,72 @@ function writeRemoteFile (sftp, path, str, mode) {
       reject(e)
     })
     createReadStreamFromString(str).pipe(writeStream)
+  })
+}
+
+function decodeCanonicalBase64 (value) {
+  if (typeof value !== 'string') {
+    throw new Error('SFTP exclusive file Base64 is invalid.')
+  }
+  if (value.length > MAX_EXCLUSIVE_FILE_BASE64_LENGTH) {
+    throw new Error('SFTP exclusive file exceeds the size limit.')
+  }
+  const padding = value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0
+  const decodedLength = value.length / 4 * 3 - padding
+  if (Number.isInteger(decodedLength) &&
+    decodedLength > MAX_EXCLUSIVE_FILE_BYTES) {
+    throw new Error('SFTP exclusive file exceeds the size limit.')
+  }
+  if (value.length % 4 !== 0 ||
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) {
+    throw new Error('SFTP exclusive file Base64 is invalid.')
+  }
+  const bytes = Buffer.from(value, 'base64')
+  if (bytes.toString('base64') !== value) {
+    throw new Error('SFTP exclusive file Base64 is not canonical.')
+  }
+  if (bytes.byteLength > MAX_EXCLUSIVE_FILE_BYTES) {
+    throw new Error('SFTP exclusive file exceeds the size limit.')
+  }
+  return bytes
+}
+
+function createExclusiveRemoteFile (sftp, path, base64, mode = 0o600) {
+  if (!sftp || typeof sftp.createWriteStream !== 'function') {
+    throw new Error('SFTP exclusive file transport is unavailable.')
+  }
+  if (typeof path !== 'string' || !path) {
+    throw new Error('SFTP exclusive file path is invalid.')
+  }
+  if (!Number.isInteger(mode) || mode < 0o100 || mode > 0o700 ||
+    (mode & 0o077) !== 0) {
+    throw new Error('SFTP exclusive file mode is unsafe.')
+  }
+  const bytes = decodeCanonicalBase64(base64)
+  return new Promise((resolve, reject) => {
+    let settled = false
+    const settle = (error) => {
+      if (settled) return
+      settled = true
+      if (error) reject(error)
+      else resolve(1)
+    }
+    let writeStream
+    try {
+      writeStream = sftp.createWriteStream(path, {
+        flags: 'wx',
+        highWaterMark: 64 * 1024,
+        mode
+      })
+    } catch (error) {
+      settle(error)
+      return
+    }
+    writeStream.once('error', settle)
+    writeStream.once('close', () => settle())
+    const source = Readable.from([bytes])
+    source.once('error', settle)
+    source.pipe(writeStream)
   })
 }
 
@@ -469,5 +538,6 @@ module.exports = {
   readRemoteFileChunk,
   listRemoteArchive,
   readRemoteArchiveTextEntry,
+  createExclusiveRemoteFile,
   writeRemoteFile
 }

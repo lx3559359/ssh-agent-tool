@@ -9,6 +9,7 @@ const {
   readRemoteFileChunk,
   listRemoteArchive,
   readRemoteArchiveTextEntry,
+  createExclusiveRemoteFile,
   writeRemoteFile
 } = require('./sftp-file')
 const { commonExtends } = require('./session-common.js')
@@ -959,6 +960,10 @@ class Sftp extends TerminalBase {
     })
   }
 
+  removeEmptyDirectory (remotePath) {
+    return this.rmFolder(remotePath)
+  }
+
   /**
    * rm delete single file
    *
@@ -1071,6 +1076,11 @@ class Sftp extends TerminalBase {
    */
   writeFile (remotePath, str, mode) {
     return writeRemoteFile(this.sftp, remotePath, str, mode)
+  }
+
+  async createExclusiveFile (remotePath, base64, mode = 0o600) {
+    await createExclusiveRemoteFile(this.sftp, remotePath, base64, mode)
+    return 1
   }
   // end
 }
