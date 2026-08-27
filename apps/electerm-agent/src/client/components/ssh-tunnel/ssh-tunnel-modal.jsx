@@ -14,18 +14,13 @@ import {
   Tooltip
 } from 'antd'
 import {
-  CheckCircleOutlined,
-  CopyOutlined,
   DeleteOutlined,
-  HistoryOutlined,
   LinkOutlined,
   PlayCircleOutlined,
   ReloadOutlined,
-  SaveOutlined,
-  StopOutlined
+  SaveOutlined
 } from '@ant-design/icons'
 import message from '../common/message'
-import { copy } from '../../common/clipboard'
 import {
   getTunnelFlowText,
   getTunnelRisk,
@@ -47,6 +42,8 @@ import {
   stopSshTunnelRuntime,
   testSshTunnelRuntime
 } from './ssh-tunnel-api.js'
+import SshTunnelRuntimeCard from './ssh-tunnel-runtime-card.jsx'
+import SshTunnelGuideModal from './ssh-tunnel-guide-modal.jsx'
 import './ssh-tunnel-modal.styl'
 
 const e = window.translate
@@ -114,24 +111,11 @@ function healthPresentation (state) {
   return tunnelHealthPresentation[state] || tunnelHealthPresentation.failed
 }
 
-function latestTunnelFailure (entry = {}) {
-  const failureStates = new Set(['failed', 'port-conflict', 'session-lost'])
-  const events = Array.isArray(entry.events) ? entry.events : []
-  return events.slice().reverse().find(event => failureStates.has(event.state)) || null
-}
-
-function TunnelRuntimeFailure ({ entry }) {
-  const latestFailure = latestTunnelFailure(entry)
-  if (!latestFailure || entry.state === 'healthy') return null
-  return (
-    <Alert
-      showIcon
-      type='error'
-      className='ssh-tunnel-runtime-failure'
-      message={latestFailure.message}
-      description={latestFailure.code}
-    />
-  )
+function guideSectionForDraft (definition = {}) {
+  if (definition.sshTunnel === 'dynamicForward') return 'socks-browser'
+  if (definition.sshTunnel === 'forwardRemoteToLocal') return 'remote-safety'
+  if (definition.sshTunnel === 'forwardLocalToRemote') return 'how-to-access'
+  return 'choose-type'
 }
 
 function showDisconnectHistory (entry) {
@@ -215,6 +199,11 @@ export default function SshTunnelModal ({
   const [actionId, setActionId] = useState('')
   const [selectedTemplate, setSelectedTemplate] = useState('http')
   const [portConflict, setPortConflict] = useState(null)
+  const [guideState, setGuideState] = useState({
+    open: false,
+    section: 'choose-type',
+    context: {}
+  })
   const connected = runtime.session.connected
   const currentBookmark = findBookmarkForTab(store?.bookmarks || [], tab)
 
@@ -262,6 +251,24 @@ export default function SshTunnelModal ({
     }))
   }
 
+  function openGuide (section = 'choose-type', context = {}) {
+    const safeContext = context && typeof context === 'object' ? context : {}
+    const definition = safeContext.definition && typeof safeContext.definition === 'object'
+      ? safeContext.definition
+      : {}
+    setGuideState(current => ({
+      ...current,
+      open: true,
+      section: typeof section === 'string' ? section : 'choose-type',
+      context: {
+        definition,
+        tunnelType: safeContext.tunnelType || definition.sshTunnel || '',
+        errorCode: safeContext.errorCode || '',
+        helpSection: safeContext.helpSection || ''
+      }
+    }))
+  }
+
   function selectType (sshTunnel) {
     setPortConflict(null)
     const currentPort = Number(draft.sshTunnelLocalPort || 0)
@@ -269,6 +276,7 @@ export default function SshTunnelModal ({
       ...current,
       id: '',
       sshTunnel,
+      usageProfile: sshTunnel === 'dynamicForward' ? 'socks5' : 'generic',
       name: typeOptions.find(item => item.value === sshTunnel)?.label || '',
       sshTunnelLocalHost: current.sshTunnelLocalHost || '127.0.0.1',
       sshTunnelLocalPort: currentPort || (sshTunnel === 'dynamicForward' ? 1080 : 8080),
@@ -281,12 +289,14 @@ export default function SshTunnelModal ({
 
   function applyTemplate (templateName) {
     setPortConflict(null)
+    const template = tunnelTemplates[templateName]
     const next = getTunnelTemplate(templateName)
     setSelectedTemplate(templateName)
     setDraft({
       ...next,
       id: '',
-      name: tunnelTemplates[templateName].name
+      name: template.name,
+      usageProfile: template.usageProfile
     })
     setSavedEditingId('')
   }
@@ -375,10 +385,20 @@ export default function SshTunnelModal ({
     setActionId(id)
     try {
       const result = await testSshTunnelRuntime(store, tab, id)
-      if (result?.ok) {
-        message.success(`${e('shellpilotTunnelTestHealthy')}${Number.isFinite(result.latencyMs) ? ` · ${result.latencyMs} ms` : ''}`)
-      } else {
-        message.warning(result?.message || e('shellpilotTunnelUnavailable'))
+      switch (result?.verdict) {
+        case 'passed':
+          message.success(e('shellpilotTunnelTestPassed'))
+          break
+        case 'limited':
+          message.warning(e('shellpilotTunnelTestLimited'))
+          break
+        case 'failed':
+          message.error(e('shellpilotTunnelTestFailed'))
+          break
+        case 'unverified':
+        case 'checking':
+        default:
+          message.info(e('shellpilotTunnelTestUnverified'))
       }
       await refresh(true)
     } catch (error) {
@@ -507,6 +527,15 @@ export default function SshTunnelModal ({
                   <strong>{e('shellpilotTunnelNew')}</strong>
                   <span>{e('shellpilotTunnelNewHint')}</span>
                 </div>
+                <Button
+                  size='small'
+                  onClick={() => openGuide(guideSectionForDraft(draft), {
+                    definition: draft,
+                    tunnelType: draft.sshTunnel
+                  })}
+                >
+                  {e('shellpilotTunnelFullGuide')}
+                </Button>
               </div>
 
               <TunnelTypeCards
@@ -778,70 +807,17 @@ export default function SshTunnelModal ({
                 <div className='ssh-tunnel-running-list'>
                   {
                   runtime.tunnels.map(entry => (
-                    <article className='ssh-tunnel-running-card' key={entry.id}>
-                      <header>
-                        <div>
-                          <strong>{tunnelName(entry)}</strong>
-                          <Tag color={healthPresentation(entry.state).color}>
-                            {e(healthPresentation(entry.state).label)}
-                          </Tag>
-                        </div>
-                        <Tooltip title={e('shellpilotTunnelCopyFlow')}>
-                          <Button
-                            type='text'
-                            size='small'
-                            aria-label={e('shellpilotTunnelCopyDescription')}
-                            icon={<CopyOutlined />}
-                            onClick={() => copy(getTunnelFlowText(entry.definition))}
-                          />
-                        </Tooltip>
-                      </header>
-                      <p>{getTunnelFlowText(entry.definition)}</p>
-                      <TunnelRuntimeFailure entry={entry} />
-                      {
-                        entry.lastTest
-                          ? (
-                            <div className={'ssh-tunnel-test-result ' + (entry.lastTest.ok ? 'ok' : 'failed')}>
-                              <CheckCircleOutlined />
-                              {entry.lastTest.ok
-                                ? `${e('shellpilotTunnelLastTestHealthy')}${Number.isFinite(entry.lastTest.latencyMs) ? ` · ${entry.lastTest.latencyMs} ms` : ''}`
-                                : entry.lastTest.message || e('shellpilotTunnelLastTestFailed')}
-                            </div>
-                            )
-                          : null
-                      }
-                      <Space wrap>
-                        <Button
-                          size='small'
-                          loading={actionId === entry.id}
-                          onClick={() => handleTest(entry.id)}
-                        >
-                          {e('shellpilotTunnelTest')}
-                        </Button>
-                        <Button size='small' onClick={() => handleEdit(entry)}>
-                          {e('shellpilotTunnelEdit')}
-                        </Button>
-                        <Button size='small' onClick={() => handleEditAndRestart(entry)}>
-                          {e('shellpilotTunnelEditAndRestart')}
-                        </Button>
-                        <Button
-                          size='small'
-                          icon={<HistoryOutlined />}
-                          onClick={() => showDisconnectHistory(entry)}
-                        >
-                          {e('shellpilotTunnelDisconnectHistory')}
-                        </Button>
-                        <Button
-                          size='small'
-                          danger
-                          icon={<StopOutlined />}
-                          loading={actionId === entry.id}
-                          onClick={() => handleStop(entry.id)}
-                        >
-                          {e('shellpilotTunnelStop')}
-                        </Button>
-                      </Space>
-                    </article>
+                    <SshTunnelRuntimeCard
+                      key={entry.id}
+                      entry={entry}
+                      busy={actionId}
+                      onTest={handleTest}
+                      onEdit={() => handleEdit(entry)}
+                      onEditAndRestart={() => handleEditAndRestart(entry)}
+                      onStop={handleStop}
+                      onOpenGuide={(section, context) => openGuide(section, context)}
+                      onShowHistory={() => showDisconnectHistory(entry)}
+                    />
                   ))
                 }
                 </div>
@@ -850,6 +826,15 @@ export default function SshTunnelModal ({
           </div>
         </div>
       </Spin>
+      <SshTunnelGuideModal
+        open={guideState.open}
+        activeSection={guideState.section}
+        context={guideState.context}
+        onClose={() => setGuideState(current => ({
+          ...current,
+          open: false
+        }))}
+      />
     </Modal>
   )
 }

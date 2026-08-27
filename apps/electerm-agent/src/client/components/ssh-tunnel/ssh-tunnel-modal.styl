@@ -308,6 +308,408 @@
   code
     overflow-wrap anywhere
 
+.ssh-tunnel-runtime-card
+  display grid
+  gap 12px
+  padding 16px
+
+.ssh-tunnel-runtime-card-header
+  display flex
+  align-items flex-start
+  justify-content space-between
+  gap 12px
+
+  > div
+    min-width 0
+
+  strong,
+  span
+    display block
+
+  > div > span
+    margin-top 4px
+    line-height 1.45
+    opacity .7
+    overflow-wrap anywhere
+
+.ssh-tunnel-availability
+  flex none
+  margin-inline-end 0
+  color var(--sp-text)
+
+  &--passed
+    background var(--sp-success-soft, rgba(18, 183, 106, .12))
+    border-color var(--sp-success, #168a74)
+
+    .anticon
+      color var(--sp-success, #168a74)
+
+  &--limited
+    background var(--sp-warning-soft, rgba(247, 144, 9, .12))
+    border-color var(--sp-warning, #c56a20)
+
+    .anticon
+      color var(--sp-warning, #c56a20)
+
+  &--failed
+    background var(--sp-danger-soft, rgba(240, 68, 56, .11))
+    border-color var(--sp-danger, #cf3f50)
+
+    .anticon
+      color var(--sp-danger, #cf3f50)
+
+  &--checking
+    background var(--sp-primary-soft, rgba(22, 119, 255, .1))
+    border-color var(--sp-primary, #2878e6)
+
+    .anticon
+      color var(--sp-primary, #2878e6)
+
+  &--unverified
+    background var(--sp-surface-soft, rgba(127, 127, 127, .1))
+    border-color var(--sp-border, rgba(127, 127, 127, .25))
+
+    .anticon
+      color var(--sp-text-muted)
+
+.ssh-tunnel-access-panel
+  min-width 0
+  padding 14px
+  background rgba(22, 119, 255, .07)
+  border 1px solid rgba(22, 119, 255, .24)
+  border-radius var(--sp-radius-card)
+
+  > span,
+  > strong,
+  > code
+    display block
+
+  > span
+    font-size 12px
+    font-weight 600
+    opacity .72
+
+  > strong
+    margin-top 6px
+    font-size 17px
+    overflow-wrap anywhere
+
+  > code
+    margin-top 5px
+    overflow-wrap anywhere
+
+  > p
+    margin 8px 0
+    line-height 1.55
+    opacity .76
+
+  &--invalid
+    background rgba(127, 127, 127, .07)
+    border-color var(--border-color, rgba(127, 127, 127, .24))
+
+  &--remote
+    background rgba(247, 144, 9, .08)
+    border-color rgba(247, 144, 9, .28)
+
+.ssh-tunnel-access-fields
+  display flex
+  flex-wrap wrap
+  gap 12px 22px
+  margin 10px 0
+
+  div
+    display flex
+    align-items baseline
+    gap 6px
+
+  dt
+    opacity .68
+
+  dd
+    margin 0
+
+.ssh-tunnel-stage-grid
+  display grid
+  grid-template-columns repeat(3, minmax(0, 1fr))
+  gap 8px
+
+.ssh-tunnel-stage
+  min-width 0
+  padding 10px
+  color var(--sp-text)
+  border 1px solid transparent
+  border-radius var(--sp-radius-small)
+
+  > span:last-child
+    display block
+    margin-top 6px
+    font-size 12px
+    line-height 1.45
+    color var(--sp-text-muted)
+    overflow-wrap anywhere
+
+.ssh-tunnel-stage-status
+  display flex
+  align-items center
+  gap 6px
+
+  strong
+    font-size 13px
+
+.ssh-tunnel-stage--passed
+  background var(--sp-success-soft, rgba(18, 183, 106, .1))
+  border-color var(--sp-success, #168a74)
+
+  .ssh-tunnel-stage-status > span
+    color var(--sp-success, #168a74)
+
+.ssh-tunnel-stage--limited
+  background var(--sp-warning-soft, rgba(247, 144, 9, .1))
+  border-color var(--sp-warning, #c56a20)
+
+  .ssh-tunnel-stage-status > span
+    color var(--sp-warning, #c56a20)
+
+.ssh-tunnel-stage--failed
+  background var(--sp-danger-soft, rgba(240, 68, 56, .09))
+  border-color var(--sp-danger, #cf3f50)
+
+  .ssh-tunnel-stage-status > span
+    color var(--sp-danger, #cf3f50)
+
+.ssh-tunnel-stage--unverified
+  background var(--sp-surface-soft, rgba(127, 127, 127, .08))
+  border-color var(--sp-border, rgba(127, 127, 127, .2))
+
+  .ssh-tunnel-stage-status > span
+    color var(--sp-text-muted)
+
+.ssh-tunnel-stage-empty
+  margin 0
+  padding 10px
+  border-radius var(--sp-radius-small)
+  background rgba(127, 127, 127, .07)
+  opacity .7
+
+.ssh-tunnel-diagnostic
+  min-width 0
+  padding 14px
+  border 1px solid var(--sp-danger, #cf3f50)
+  border-radius var(--sp-radius-card)
+  background var(--sp-danger-soft, rgba(240, 68, 56, .07))
+
+  > span,
+  > strong
+    display block
+
+  > span
+    font-size 12px
+    font-weight 600
+    opacity .72
+
+  > strong
+    margin-top 5px
+    font-size 16px
+
+  > p,
+  > ol
+    line-height 1.55
+
+  > ol
+    padding-left 20px
+
+  &--warning
+    border-color var(--sp-warning, #c56a20)
+    background var(--sp-warning-soft, rgba(247, 144, 9, .08))
+
+.ssh-tunnel-diagnostic-split
+  display grid
+  grid-template-columns repeat(2, minmax(0, 1fr))
+  gap 10px
+  margin 12px 0
+
+.ssh-tunnel-diagnostic-checks,
+.ssh-tunnel-diagnostic-config
+  min-width 0
+  padding 10px
+  border 1px solid var(--border-color, rgba(127, 127, 127, .22))
+  border-radius var(--sp-radius-small)
+  background var(--sp-flat-background)
+
+  header
+    display flex
+    align-items center
+    justify-content space-between
+    gap 8px
+
+  pre
+    max-width 100%
+    margin 8px 0 0
+    white-space pre-wrap
+    overflow-wrap anywhere
+
+  code
+    overflow-wrap anywhere
+
+.ssh-tunnel-diagnostic-code
+  display block
+  margin-top 10px
+  font-size 12px
+  opacity .68
+  overflow-wrap anywhere
+
+.ssh-tunnel-runtime-card-actions
+  display flex
+  flex-wrap wrap
+  gap 8px
+
+.ssh-tunnel-guide-modal
+  .ant-modal-content
+    overflow hidden
+    background-color var(--sp-surface-elevated)
+    border-radius var(--sp-radius-overlay)
+    box-shadow inset 0 1px 0 var(--sp-highlight), var(--sp-shadow-overlay)
+
+  .ant-modal-body
+    min-width 0
+
+.ssh-tunnel-guide-layout
+  display grid
+  grid-template-columns 220px minmax(0, 1fr)
+  gap 18px
+  min-width 0
+  max-height calc(100vh - 180px)
+
+.ssh-tunnel-guide-nav
+  display flex
+  min-width 0
+  flex-direction column
+  gap 5px
+  padding 8px
+  border 1px solid var(--border-color, rgba(127, 127, 127, .24))
+  border-radius var(--sp-radius-card)
+  background var(--sp-flat-background)
+  overflow-y auto
+
+  button
+    width 100%
+    padding 9px 10px
+    text-align left
+    color var(--sp-text)
+    background transparent
+    border 1px solid transparent
+    border-radius var(--sp-radius-small)
+    cursor pointer
+    overflow-wrap anywhere
+
+    &:hover,
+    &.active
+      color var(--sp-text)
+      background var(--sp-primary-soft, rgba(22, 119, 255, .08))
+      border-color var(--sp-primary, #2878e6)
+
+.ssh-tunnel-guide-content
+  min-width 0
+  overflow-y auto
+  padding-right 4px
+
+.ssh-tunnel-guide-section
+  min-width 0
+
+  h3
+    margin 6px 0 14px
+
+  p,
+  li,
+  dd
+    line-height 1.65
+
+  code
+    overflow-wrap anywhere
+
+.ssh-tunnel-guide-kicker
+  font-size 12px
+  font-weight 600
+  color var(--sp-text-muted)
+
+.ssh-tunnel-guide-flow
+  display block
+  padding 12px
+  margin 8px 0 14px
+  white-space normal
+  border-radius var(--sp-radius-small)
+  background rgba(127, 127, 127, .08)
+  overflow-wrap anywhere
+
+.ssh-tunnel-guide-scenarios,
+.ssh-tunnel-guide-topic-grid
+  display grid
+  grid-template-columns repeat(3, minmax(0, 1fr))
+  gap 10px
+
+  article
+    min-width 0
+    padding 12px
+    border 1px solid var(--border-color, rgba(127, 127, 127, .24))
+    border-radius var(--sp-radius-card)
+    background var(--sp-flat-background)
+
+  p
+    margin 6px 0 0
+
+.ssh-tunnel-guide-scenarios article:first-child
+  background rgba(22, 119, 255, .07)
+  border-color rgba(22, 119, 255, .28)
+
+.ssh-tunnel-guide-callout
+  min-width 0
+  padding 12px
+  margin-bottom 10px
+  border 1px solid var(--border-color, rgba(127, 127, 127, .24))
+  border-radius var(--sp-radius-card)
+  background var(--sp-flat-background)
+
+  p
+    margin 5px 0
+
+  &--safe
+    background rgba(18, 183, 106, .08)
+    border-color rgba(18, 183, 106, .26)
+
+  &--warning
+    background rgba(247, 144, 9, .08)
+    border-color rgba(247, 144, 9, .28)
+
+.ssh-tunnel-guide-error-list,
+.ssh-tunnel-guide-glossary,
+.ssh-tunnel-guide-profile-list
+  display grid
+  gap 10px
+
+  > div
+    min-width 0
+    padding 11px
+    border 1px solid var(--border-color, rgba(127, 127, 127, .22))
+    border-radius var(--sp-radius-small)
+    background var(--sp-flat-background)
+
+  dt
+    font-weight 600
+
+  dd
+    margin 5px 0 0
+    opacity .76
+
+.ssh-tunnel-guide-error-list > div.active
+  border-color var(--sp-warning, #c56a20)
+  background var(--sp-warning-soft, rgba(247, 144, 9, .1))
+
+.ssh-tunnel-guide-context,
+.ssh-tunnel-guide-context-code
+  display block
+  margin-top 14px
+  overflow-wrap anywhere
+
 @media (max-width: 1100px)
   .ssh-tunnel-layout
     grid-template-columns 1fr
@@ -317,3 +719,22 @@
 
   .ssh-tunnel-form-grid
     grid-template-columns 1fr
+
+@media (max-width: 760px)
+  .ssh-tunnel-stage-grid,
+  .ssh-tunnel-diagnostic-split,
+  .ssh-tunnel-guide-layout,
+  .ssh-tunnel-guide-scenarios,
+  .ssh-tunnel-guide-topic-grid
+    grid-template-columns 1fr
+
+  .ssh-tunnel-guide-layout
+    max-height none
+
+  .ssh-tunnel-guide-nav,
+  .ssh-tunnel-guide-content
+    max-width 100%
+    overflow-x hidden
+
+  .ssh-tunnel-runtime-card-header
+    flex-direction column

@@ -4,9 +4,22 @@ export const tunnelTypes = Object.freeze([
   'dynamicForward'
 ])
 
+export const tunnelUsageProfiles = Object.freeze([
+  'http',
+  'https',
+  'mysql',
+  'postgresql',
+  'redis',
+  'socks5',
+  'generic'
+])
+
+const tunnelUsageProfileSet = new Set(tunnelUsageProfiles)
+
 const templateSource = {
   http: {
     name: 'HTTP',
+    usageProfile: 'http',
     sshTunnel: 'forwardLocalToRemote',
     sshTunnelLocalPort: 8080,
     sshTunnelRemoteHost: '127.0.0.1',
@@ -14,6 +27,7 @@ const templateSource = {
   },
   https: {
     name: 'HTTPS',
+    usageProfile: 'https',
     sshTunnel: 'forwardLocalToRemote',
     sshTunnelLocalPort: 8443,
     sshTunnelRemoteHost: '127.0.0.1',
@@ -21,6 +35,7 @@ const templateSource = {
   },
   mysql: {
     name: 'MySQL',
+    usageProfile: 'mysql',
     sshTunnel: 'forwardLocalToRemote',
     sshTunnelLocalPort: 3307,
     sshTunnelRemoteHost: '127.0.0.1',
@@ -28,6 +43,7 @@ const templateSource = {
   },
   postgresql: {
     name: 'PostgreSQL',
+    usageProfile: 'postgresql',
     sshTunnel: 'forwardLocalToRemote',
     sshTunnelLocalPort: 5433,
     sshTunnelRemoteHost: '127.0.0.1',
@@ -35,6 +51,7 @@ const templateSource = {
   },
   redis: {
     name: 'Redis',
+    usageProfile: 'redis',
     sshTunnel: 'forwardLocalToRemote',
     sshTunnelLocalPort: 6380,
     sshTunnelRemoteHost: '127.0.0.1',
@@ -42,6 +59,7 @@ const templateSource = {
   },
   socks5: {
     name: 'SOCKS5',
+    usageProfile: 'socks5',
     sshTunnel: 'dynamicForward',
     sshTunnelLocalPort: 1080
   }
@@ -72,9 +90,20 @@ function normalizeHost (value, fallback = '127.0.0.1') {
   return host || fallback
 }
 
-function normalizePort (value) {
-  if (value === '' || value === undefined || value === null) return undefined
-  return Number(value)
+export function normalizeTunnelPort (value) {
+  const port = typeof value === 'number'
+    ? value
+    : typeof value === 'string' && /^\d+$/.test(value.trim())
+      ? Number(value.trim())
+      : undefined
+  return Number.isInteger(port) && port >= 1 && port <= 65535
+    ? port
+    : undefined
+}
+
+function normalizeUsageProfile (value) {
+  const profile = String(value || '').trim().toLowerCase()
+  return tunnelUsageProfileSet.has(profile) ? profile : undefined
 }
 
 function stableTunnelId (tunnel) {
@@ -112,11 +141,16 @@ function validatePort (port, label) {
 export function normalizeTunnel (input = {}) {
   const tunnel = {
     ...input,
-    sshTunnel: input.sshTunnel || 'forwardLocalToRemote',
+    sshTunnel: input.sshTunnel === undefined ||
+      input.sshTunnel === null ||
+      input.sshTunnel === ''
+      ? 'forwardLocalToRemote'
+      : input.sshTunnel,
     sshTunnelLocalHost: normalizeHost(input.sshTunnelLocalHost),
-    sshTunnelLocalPort: normalizePort(input.sshTunnelLocalPort),
+    sshTunnelLocalPort: normalizeTunnelPort(input.sshTunnelLocalPort),
     sshTunnelRemoteHost: normalizeHost(input.sshTunnelRemoteHost),
-    sshTunnelRemotePort: normalizePort(input.sshTunnelRemotePort),
+    sshTunnelRemotePort: normalizeTunnelPort(input.sshTunnelRemotePort),
+    usageProfile: normalizeUsageProfile(input.usageProfile),
     name: String(input.name || '').trim().slice(0, 80),
     autoStart: input.autoStart !== false
   }

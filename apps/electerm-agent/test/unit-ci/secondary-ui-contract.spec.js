@@ -441,7 +441,31 @@ const expectedSecondaryCopy = Object.freeze({
   shellpilotWidgetRunSucceededWithDetail: ['工具运行成功：{detail}', 'Tool completed successfully: {detail}'],
   shellpilotIdLabel: ['ID', 'ID'],
   shellpilotInvalidLogFolder: ['日志目录无效或不可写', 'The log folder is invalid or not writable'],
-  shellpilotHostOrIp: ['主机名或 IP 地址', 'Hostname or IP address']
+  shellpilotHostOrIp: ['主机名或 IP 地址', 'Hostname or IP address'],
+  shellpilotTunnelAvailabilityChecking: ['检测中', 'Checking'],
+  shellpilotTunnelAvailabilityPassed: ['可用', 'Available'],
+  shellpilotTunnelAvailabilityLimited: ['受限', 'Limited'],
+  shellpilotTunnelAvailabilityFailed: ['不可用', 'Unavailable'],
+  shellpilotTunnelAvailabilityUnverified: ['未验证', 'Not verified'],
+  shellpilotTunnelStagePassed: ['通过', 'Passed'],
+  shellpilotTunnelStageLimited: ['受限', 'Limited'],
+  shellpilotTunnelStageFailed: ['失败', 'Failed'],
+  shellpilotTunnelStageUnverified: ['未验证', 'Not verified'],
+  shellpilotTunnelGuideNoBrowserProxy: ['无需配置浏览器代理', 'No browser proxy required'],
+  shellpilotTunnelGuideChooseType: ['选择隧道类型', 'Choose a tunnel type'],
+  shellpilotTunnelGuideLocalScenario: ['本地转发', 'Local forwarding'],
+  shellpilotTunnelGuideHowToAccess: ['如何访问', 'How to access'],
+  shellpilotTunnelGuideSocksBrowser: ['浏览器 SOCKS5 设置', 'SOCKS5 browser setup'],
+  shellpilotTunnelGuideRemoteSafety: ['远程转发安全', 'Remote forwarding safety'],
+  shellpilotTunnelGuideErrors: ['常见错误', 'Common errors'],
+  shellpilotTunnelGuideGlossary: ['术语说明', 'Glossary'],
+  shellpilotTunnelHowToUse: ['现在这样使用', 'How to use'],
+  shellpilotTunnelNoBrowserProxy: ['无需配置浏览器代理', 'No browser proxy required'],
+  shellpilotTunnelNeedsSocksProxy: ['需要在浏览器或应用中设置 SOCKS5 代理', 'Configure this SOCKS5 proxy in your browser or app'],
+  shellpilotTunnelOpenBrowser: ['在浏览器中打开', 'Open in browser'],
+  shellpilotTunnelCopyAddress: ['复制地址', 'Copy address'],
+  shellpilotTunnelCopyChecks: ['复制检查内容', 'Copy checks'],
+  shellpilotTunnelFullGuide: ['完整使用说明', 'Complete usage guide']
 })
 
 test('secondary copy catalogs resolve the same explicit key set in Chinese and English', async () => {

@@ -100,12 +100,15 @@ test('ExcelJS streaming reader remains compatible with patched unzipper', async 
   try {
     await workbook.xlsx.writeFile(workbookPath)
     const reader = new ExcelJS.stream.xlsx.WorkbookReader(workbookPath)
+    const worksheets = []
     const rows = []
     for await (const worksheet of reader) {
+      worksheets.push(worksheet.name)
       for await (const row of worksheet) {
         rows.push(row.values.slice(1))
       }
     }
+    assert.deepEqual(worksheets, ['Audit'])
     assert.deepEqual(rows, [['streaming', 42]])
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true })

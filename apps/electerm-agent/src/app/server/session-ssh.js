@@ -688,36 +688,6 @@ class TerminalSshBase extends TerminalBase {
     }
   }
 
-  probeSshTunnel (definition) {
-    const hostValue = String(definition.sshTunnelLocalHost || '127.0.0.1')
-    let host = hostValue
-    if (['0.0.0.0', '*'].includes(hostValue)) host = '127.0.0.1'
-    if (['::', '[::]'].includes(hostValue)) host = '::1'
-    const port = Number(definition.sshTunnelLocalPort)
-    return new Promise((resolve, reject) => {
-      const startedAt = Date.now()
-      const socket = net.connect({ host, port })
-      const timeout = setTimeout(() => {
-        const error = new Error('SSH 隧道连通性检测超时')
-        error.code = 'SSH_TUNNEL_TEST_TIMEOUT'
-        socket.destroy()
-        reject(error)
-      }, 3000)
-      const finish = callback => value => {
-        clearTimeout(timeout)
-        socket.destroy()
-        callback(value)
-      }
-      socket.once('connect', () => {
-        finish(resolve)({
-          ok: true,
-          latencyMs: Date.now() - startedAt
-        })
-      })
-      socket.once('error', finish(reject))
-    })
-  }
-
   ensureSshTunnelRuntime () {
     if (!this.sshTunnelRuntime) {
       this.sshTunnelRuntime = createSshTunnelRuntime({
@@ -732,8 +702,7 @@ class TerminalSshBase extends TerminalBase {
             ...tunnel,
             conn: this.conn
           })
-        },
-        probe: definition => this.probeSshTunnel(definition)
+        }
       })
     }
     return this.sshTunnelRuntime
