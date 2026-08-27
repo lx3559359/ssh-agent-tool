@@ -395,6 +395,7 @@ export async function createPrivilegedStagingSession ({
         challengeName,
         responseName,
         challenge,
+        challengeSize: String(challengeBytes.byteLength),
         rootUid: String(rootStat.uid),
         rootGid: String(rootStat.gid),
         rootMode: '700'

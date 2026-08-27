@@ -336,7 +336,7 @@ function runTrackedImportCleanup ({
       '__sp_trusted_parent_path_matches() { return 0; }',
       '__sp_path_matches_fd() { return 0; }',
       '__sp_fd_entry_matches() { return 0; }',
-      '__sp_sha256_raw() { sha256sum -- "$1" | cut -d" " -f1; }',
+      '__sp_bounded_digest() { dd bs=65536 iflag=count_bytes count="$2" <&3 2>/dev/null | sha256sum | cut -d" " -f1; }',
       `rm() { printf deleted > ${quoteForBash(toBashPath(deleteLog))}; command rm "$@"; }`,
       cleanup,
       '__sp_import_cleanup',
@@ -383,6 +383,7 @@ async function createLinuxStageFixture (nativeRoot, suffix) {
       challengeName,
       responseName,
       challenge: sha256Text(challengeText).toUpperCase(),
+      challengeSize: String(Buffer.byteLength(challengeText)),
       rootUid: String(rootStat.uid),
       rootGid: String(rootStat.gid),
       rootMode: '700'
@@ -949,6 +950,7 @@ test('request constructor canonicalizes octal modes and SHA-256 fields', async (
       challengeName: 'challenge',
       responseName: 'response',
       challenge: mixedChallenge,
+      challengeSize: '48',
       rootUid: '0',
       rootGid: '0',
       rootMode: '0700'
@@ -1435,11 +1437,11 @@ test('bound pathname mutations require trusted parent proofs and import through 
   assert.ok(zeroModeIndex > 0 && zeroModeIndex < installIndex)
   assert.ok(chownIndex > installIndex && chownIndex < finalModeIndex)
   assert.ok(
-    importCommand.indexOf('__sp_finalDigest="$(__sp_sha256_raw "$__sp_fd4")"') >
+    importCommand.indexOf('__sp_finalDigest="$(__sp_bounded_digest 0 "$__sp_expectedSize")"') >
       chownIndex
   )
   assert.ok(
-    importCommand.lastIndexOf('__sp_finalDigest="$(__sp_sha256_raw "$__sp_fd4")"') >
+    importCommand.lastIndexOf('__sp_finalDigest="$(__sp_bounded_digest 0 "$__sp_expectedSize")"') >
       finalModeIndex
   )
 })
@@ -1469,7 +1471,7 @@ test('remove-bound accepts a fixed non-root parent and requires exact file conte
 
   assert.match(command, /__sp_parent_path_matches .*__sp_targetParentDevice.*__sp_targetParentInode/)
   assert.doesNotMatch(command, /__sp_trusted_parent_fd \. .*__sp_targetParentUid/)
-  assert.match(command, /__sp_sha256_raw "\$__sp_fd5"/)
+  assert.match(command, /__sp_bounded_digest 0 "\$__sp_expectedSize"/)
   assert.match(command, /"\$__sp_expectedSha256"/)
   assert.match(command, /"\$__sp_expectedSize"/)
   const removeIndex = command.indexOf('rm -- "./$__sp_boundName"')
@@ -1545,7 +1547,7 @@ test('stage-import trap cleanup preserves same-inode content changed after chmod
       '__sp_trusted_parent_path_matches() { return 0; }',
       '__sp_path_matches_fd() { return 0; }',
       '__sp_fd_entry_matches() { return 0; }',
-      '__sp_sha256_raw() { sha256sum -- "$1" | cut -d" " -f1; }',
+      '__sp_bounded_digest() { dd bs=65536 iflag=count_bytes count="$2" <&3 2>/dev/null | sha256sum | cut -d" " -f1; }',
       `rm() { printf deleted > ${quoteForBash(toBashPath(deleteLog))}; command rm "$@"; }`,
       cleanup,
       '__sp_import_cleanup',
@@ -1869,7 +1871,7 @@ test('privileged command builder exposes every fixed operation and fails closed 
       size: '12'
     }, '__sp_entry_matches "./$__sp_boundName"'],
     ['digest-cleanup', stageBinding(), '__sp_digestScratch'],
-    ['sha256', { path: '/x' }, '__sp_emit_sha256 "$__sp_path"'],
+    ['sha256', { path: '/x' }, '__sp_run_operation() { return 1; }'],
     ['sha256-bound', boundedDigestBinding(), '__sp_bounded_digest'],
     ['sha256-range-bound', boundedDigestBinding({
       offset: '0', maxBytes: '12'
@@ -1893,6 +1895,7 @@ test('privileged command builder exposes every fixed operation and fails closed 
       challengeName: 'challenge-token',
       responseName: 'response-token',
       challenge: 'a'.repeat(64),
+      challengeSize: '48',
       rootUid: '1000',
       rootGid: '1000',
       rootMode: '700'
@@ -2278,6 +2281,7 @@ test('stage request rejects a non-canonical root path', async () => {
     challengeName: 'challenge-token',
     responseName: 'response-token',
     challenge: 'a'.repeat(64),
+    challengeSize: '48',
     rootUid: '1000',
     rootGid: '1000',
     rootMode: '700'
@@ -2508,6 +2512,7 @@ test('stage handshake command verifies the exact 64-byte response content', asyn
         challengeName: 'challenge-token',
         responseName: 'response-token',
         challenge: 'a'.repeat(64),
+        challengeSize: '48',
         rootUid: '1000',
         rootGid: '1000',
         rootMode: '700'
@@ -2522,7 +2527,7 @@ test('stage handshake command verifies the exact 64-byte response content', asyn
     '__sp_expectedResponseDigest="$(__sp_sha256_text "$__sp_response")"'
   ), true)
   assert.equal(command.includes(
-    '[ "$(__sp_sha256_raw "./$__sp_responseName")" = "$__sp_expectedResponseDigest" ]'
+    '__sp_actualResponseDigest="$(__sp_bounded_digest 0 64)"'
   ), true)
 })
 
@@ -2542,6 +2547,7 @@ test('stage handshake command has valid outer and inner shell syntax', {
         challengeName: 'challenge-token',
         responseName: 'response-token',
         challenge: 'a'.repeat(64),
+        challengeSize: '48',
         rootUid: '1000',
         rootGid: '1000',
         rootMode: '700'
@@ -2578,6 +2584,7 @@ test('stage handshake shell rejects direct and intermediate directory symlinks',
     challengeName: 'challenge-token',
     responseName: 'response-token',
     challenge: 'a'.repeat(64),
+    challengeSize: '48',
     rootUid: '1000',
     rootGid: '1000',
     rootMode: '700'
@@ -2934,7 +2941,8 @@ test('staging operations bind one safe object to the handshaken root inode', asy
   assert.match(exportCommand, /__sp_bind_entry_parent "\$__sp_sourcePath"/)
   assert.match(exportCommand, /exec 4< "\.\/\$__sp_boundName"/)
   assert.match(exportCommand, /\/proc\/\$\$\/fd\/4/)
-  assert.match(exportCommand, /dd if="\$__sp_fd4" of="\$__sp_fd3"/)
+  assert.match(exportCommand, /dd .*<&4 2>&1 >&3/)
+  assert.match(exportCommand, /__sp_copyActualBytes=.*__sp_parse_dd_report_text/)
   assert.match(exportCommand, /count="\$__sp_windowSize"/)
   assert.match(exportCommand, /stat -L -c %i -- "\$__sp_fd4"/)
   assert.doesNotMatch(exportCommand, /cp -a -- "\$__sp_sourcePath" "\$__sp_stagePath"/)
@@ -2943,7 +2951,7 @@ test('staging operations bind one safe object to the handshaken root inode', asy
       exportCommand.indexOf('chown -- "$__sp_rootUid:$__sp_rootGid"'),
     true
   )
-  assert.match(importCommand, /exec 3< "\.\/\$__sp_objectName"/)
+  assert.match(importCommand, /exec 5< "\.\/\$__sp_objectName"/)
   assert.match(importCommand, /__sp_bind_entry_parent "\$__sp_targetPath"/)
   assert.match(importCommand, /__sp_targetName="\$__sp_boundName"/)
   assert.match(importCommand, /cd -- "\$__sp_boundParent"/)
@@ -2956,7 +2964,7 @@ test('staging operations bind one safe object to the handshaken root inode', asy
   assert.match(importCommand, /__sp_importTempName/)
   assert.match(importCommand, /umask 077.*set -C.*exec 4> "\.\/\$__sp_importTempName"/)
   assert.match(importCommand, /stat -L -c %a -- "\$__sp_fd4".*= 600/)
-  assert.match(importCommand, /cat <&3 >&4/)
+  assert.match(importCommand, /dd .*count="\$__sp_expectedSize" <&5 2>&1 >&4/)
   assert.match(importCommand, /"\$__sp_expectedSize"/)
   assert.match(
     importCommand,
@@ -2980,7 +2988,7 @@ test('staging operations bind one safe object to the handshaken root inode', asy
       installIndex,
     true
   )
-  assert.match(importCommand, /__sp_finalDigest=.*__sp_sha256_raw "\$__sp_fd4"/)
+  assert.match(importCommand, /__sp_finalDigest=.*__sp_bounded_digest 0 "\$__sp_expectedSize"/)
   assert.match(importCommand, /__sp_finalMode=.*stat -L -c %a -- "\$__sp_fd4"/)
   assert.match(importCommand, /__sp_tempDevice.*__sp_tempInode/)
   assert.match(cleanupCommand, /rm -f -- "\.\/\$__sp_objectName"/)
@@ -3261,7 +3269,7 @@ test('stage cleanup requires content proof and binds deletion to one opened inod
   })
   const command = buildPrivilegedFileCommand({ token, request })
   assert.match(command, /exec 3< "\.\/\$__sp_objectName"/)
-  assert.match(command, /__sp_sha256_raw "\$__sp_fd3"/)
+  assert.match(command, /__sp_bounded_digest 0 "\$__sp_expectedSize"/)
   assert.match(command, /stat -L -c %s -- "\$__sp_fd3"/)
   assert.match(command, /"\$__sp_expectedSha256"/)
   assert.match(command, /"\$__sp_expectedSize"/)
@@ -3272,6 +3280,187 @@ test('stage cleanup requires content proof and binds deletion to one opened inod
     true
   )
   assert.doesNotMatch(command, /rm -rf/)
+})
+
+test('proof reads and import copies are bounded to their declared byte counts', async () => {
+  const {
+    buildPrivilegedFileCommand,
+    createPrivilegedFileRequest
+  } = await importModule(protocolModule)
+  const token = 'bd'.repeat(24)
+  const handshake = buildPrivilegedFileCommand({
+    token,
+    request: {
+      operation: 'stage-handshake',
+      args: {
+        rootPath: '/stage/session',
+        challengeName: 'challenge',
+        responseName: 'response',
+        challenge: 'a'.repeat(64),
+        challengeSize: '48',
+        rootUid: '1000',
+        rootGid: '1000',
+        rootMode: '700'
+      }
+    }
+  })
+  const imported = buildPrivilegedFileCommand({
+    token,
+    request: {
+      operation: 'stage-import',
+      args: targetStageBinding({
+        sha256: 'a'.repeat(64),
+        size: '12',
+        targetMode: '600',
+        targetUid: '0',
+        targetGid: '0'
+      })
+    }
+  })
+  const cleanup = buildPrivilegedFileCommand({
+    token,
+    request: {
+      operation: 'stage-cleanup',
+      args: cleanupBinding()
+    }
+  })
+  const removed = buildPrivilegedFileCommand({
+    token,
+    request: {
+      operation: 'remove-bound',
+      args: {
+        targetPath: '/root/file',
+        targetParentRealPath: '/root',
+        targetParentDevice: '4001',
+        targetParentInode: '4002',
+        targetDevice: '4003',
+        targetInode: '4004',
+        targetType: 'file',
+        targetMode: '600',
+        targetUid: '1000',
+        targetGid: '1000',
+        sha256: 'a'.repeat(64),
+        size: '12'
+      }
+    }
+  })
+
+  assert.doesNotMatch(handshake, /__sp_sha256_raw "\.\/\$__sp_(?:challenge|response)Name"/)
+  assert.match(handshake, /__sp_bounded_digest 0 "\$__sp_challengeSize"/)
+  assert.match(handshake, /__sp_bounded_digest 0 64/)
+  assert.doesNotMatch(imported, /cat <&3 >&4/)
+  assert.match(imported, /dd .*iflag=count_bytes.*count="\$__sp_expectedSize"/)
+  assert.match(imported, /__sp_copyActualBytes=.*__sp_parse_dd_report_text/)
+  assert.match(imported, /__sp_copyActualBytes" = "\$__sp_expectedSize"/)
+  assert.match(imported, /__sp_bounded_digest 0 "?\$__sp_expectedSize"?/)
+  assert.doesNotMatch(imported, /__sp_sha256_raw "\$__sp_fd[346]"/)
+  assert.match(cleanup, /__sp_bounded_digest 0 "?\$__sp_expectedSize"?/)
+  assert.doesNotMatch(cleanup, /__sp_sha256_raw "\$__sp_fd3"/)
+  assert.match(removed, /__sp_bounded_digest 0 "?\$__sp_expectedSize"?/)
+  assert.doesNotMatch(removed, /__sp_sha256_raw "\$__sp_fd5"/)
+
+  const overTransferLimit = String((8 * 1024 * 1024 * 1024) + 1)
+  for (const request of [
+    {
+      operation: 'stage-import',
+      args: targetStageBinding({
+        sha256: 'a'.repeat(64),
+        size: overTransferLimit,
+        targetMode: '600',
+        targetUid: '0',
+        targetGid: '0'
+      })
+    },
+    {
+      operation: 'stage-cleanup',
+      args: cleanupBinding({ size: overTransferLimit })
+    },
+    {
+      operation: 'remove-bound',
+      args: {
+        targetPath: '/root/file',
+        targetParentRealPath: '/root',
+        targetParentDevice: '4001',
+        targetParentInode: '4002',
+        targetDevice: '4003',
+        targetInode: '4004',
+        targetType: 'file',
+        targetMode: '600',
+        targetUid: '1000',
+        targetGid: '1000',
+        sha256: 'a'.repeat(64),
+        size: overTransferLimit
+      }
+    }
+  ]) {
+    assert.throws(
+      () => createPrivilegedFileRequest(request),
+      /size|上限|无效/
+    )
+  }
+  assert.throws(() => createPrivilegedFileRequest({
+    operation: 'stage-cleanup',
+    args: cleanupBinding({ size: '9007199254740992' })
+  }), /size|无效/)
+  assert.throws(() => createPrivilegedFileRequest({
+    operation: 'stage-handshake',
+    args: {
+      rootPath: '/stage/session',
+      challengeName: 'challenge',
+      responseName: 'response',
+      challenge: 'a'.repeat(64),
+      challengeSize: '129',
+      rootUid: '1000',
+      rootGid: '1000',
+      rootMode: '700'
+    }
+  }), /challengeSize|128/)
+})
+
+test('bounded digest returns without consuming a concurrently growing tail', {
+  skip: linuxRootOnly
+}, async () => {
+  const { buildPrivilegedFileCommand } = await importModule(protocolModule)
+  const command = buildPrivilegedFileCommand({
+    token: 'be'.repeat(24),
+    request: {
+      operation: 'sha256-range-bound',
+      args: boundedDigestBinding({ objectName: 'growing-source-proof' })
+    }
+  })
+  const helperStart = command.indexOf('__sp_bounded_digest()')
+  const helperEnd = command.indexOf('; __sp_valid_name()', helperStart)
+  assert.ok(helperStart >= 0 && helperEnd > helperStart)
+  const helper = command.slice(helperStart, helperEnd)
+  const nativeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-growing-digest-'))
+  try {
+    const source = toBashPath(path.join(nativeRoot, 'source'))
+    const result = runBash([
+      `printf fixed > ${quoteForBash(source)}`,
+      `exec 3< ${quoteForBash(source)}`,
+      '__sp_rootDevice=1',
+      '__sp_rootInode=2',
+      '__sp_objectName=growing-source-proof',
+      '__sp_sha256_tool=sha256sum',
+      '__sp_sha256_stdin() { __sp_hash="$(sha256sum)" || return $?; printf %s "$' + '{__sp_hash%% *}"; }',
+      helper,
+      `( while :; do printf tail >> ${quoteForBash(source)}; done ) &`,
+      '__sp_writer=$!',
+      '( sleep 2; kill "$__sp_writer" 2>/dev/null || : ) &',
+      '__sp_watchdog=$!',
+      '__sp_digest="$(__sp_bounded_digest 0 5)"',
+      '__sp_status=$?',
+      'kill "$__sp_writer" 2>/dev/null || :',
+      'wait "$__sp_writer" 2>/dev/null || :',
+      'kill "$__sp_watchdog" 2>/dev/null || :',
+      'wait "$__sp_watchdog" 2>/dev/null || :',
+      '[ "$__sp_status" -eq 0 ]',
+      `[ "$__sp_digest" = ${quoteForBash(sha256Text('fixed'))} ]`
+    ].join('\n'))
+    assert.equal(result.status, 0, result.stdout + result.stderr)
+  } finally {
+    fs.rmSync(nativeRoot, { recursive: true, force: true })
+  }
 })
 
 test('stage cleanup proof preserves mismatches links special entries and replacements', {

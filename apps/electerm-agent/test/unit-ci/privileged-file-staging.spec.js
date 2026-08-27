@@ -320,6 +320,7 @@ test('staging handshake binds one canonical private root and cleans it idempoten
   assert.equal(handshake.operation, 'stage-handshake')
   assert.equal(Object.isFrozen(handshake), true)
   assert.equal(handshake.args.rootPath, session.root)
+  assert.equal(handshake.args.challengeSize, '48')
   assert.equal(sftp.calls.some(call => call[0] === 'readFile'), false)
   assert.deepEqual(sftp.calls.filter(call => call[0] === 'readFileChunk')
     .map(call => call[2].maxBytes), [65, 49])
