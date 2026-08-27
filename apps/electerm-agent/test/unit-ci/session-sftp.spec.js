@@ -112,7 +112,7 @@ function waitForTransfer (buildTransfer, endId) {
   }))
 }
 
-async function startSftpServer (root) {
+async function startSftpServer (root, options = {}) {
   const clients = new Set()
   const handles = new Map()
   let handleId = 0
@@ -181,7 +181,12 @@ async function startSftpServer (root) {
             sftp.name(reqId, names)
           })
           sftp.on('CLOSE', (reqId, handle) => {
+            const item = handles.get(handle.toString('hex'))
             handles.delete(handle.toString('hex'))
+            if (options.failClosePath && item?.localPath ===
+              toLocalPath(root, options.failClosePath)) {
+              return sftp.status(reqId, STATUS_CODE.FAILURE, 'injected close failure')
+            }
             sftp.status(reqId, STATUS_CODE.OK)
           })
           sftp.on('OPEN', (reqId, remotePath, flags) => {
@@ -196,7 +201,10 @@ async function startSftpServer (root) {
               fs.writeFileSync(localPath, '')
             }
             const handle = Buffer.from(`file:${++handleId}`)
-            handles.set(handle.toString('hex'), { type: 'file', localPath })
+            handles.set(handle.toString('hex'), {
+              type: 'file',
+              localPath
+            })
             sftp.handle(reqId, handle)
           })
           sftp.on('READ', (reqId, handle, offset, length) => {
@@ -300,12 +308,14 @@ describe('session-sftp transport flows', () => {
     sftp.sftp = {
       createWriteStream (remotePath, options) {
         calls.push([remotePath, options])
-        return new Writable({
+        const stream = new Writable({
           write (chunk, encoding, callback) {
             written = Buffer.concat([written, Buffer.from(chunk)])
             callback()
           }
         })
+        queueMicrotask(() => stream.emit('open', Buffer.from('claimed-handle')))
+        return stream
       }
     }
     const payload = Buffer.from([0, 1, 2, 0xfe, 0xff])
@@ -341,22 +351,33 @@ describe('session-sftp transport flows', () => {
     assert.equal(calls.length, 1)
   })
 
-  test('exclusive staging file creation propagates claim and stream failures', async () => {
+  test('exclusive staging creation distinguishes unclaimed and claimed stream failures', async () => {
     const sftp = Object.create(Sftp.prototype)
     let attempt = 0
+    const unlinked = []
     sftp.sftp = {
-      createWriteStream () {
+      createWriteStream (remotePath) {
         attempt += 1
         if (attempt === 1) {
           const error = new Error('Target exists')
           error.code = 'EEXIST'
           throw error
         }
-        return new Writable({
+        const stream = new Writable({
           write (chunk, encoding, callback) {
-            callback(new Error('remote write failed'))
+            setImmediate(() => callback(new Error('remote write failed')))
           }
         })
+        queueMicrotask(() => stream.emit('open', Buffer.from(`handle-${attempt}`)))
+        return stream
+      },
+      unlink (remotePath, callback) {
+        unlinked.push(remotePath)
+        if (remotePath === '/stage/cleanup-fails') {
+          callback(new Error('remote unlink failed'))
+        } else {
+          callback()
+        }
       }
     }
     const base64 = Buffer.from('secret').toString('base64')
@@ -365,10 +386,52 @@ describe('session-sftp transport flows', () => {
       sftp.createExclusiveFile('/stage/existing', base64),
       /Target exists/
     )
+    assert.deepEqual(await sftp.createExclusiveFile('/stage/broken', base64), {
+      ok: false,
+      claimed: true,
+      code: 'SFTP_EXCLUSIVE_WRITE_FAILED',
+      message: 'remote write failed',
+      cleanupAttempted: true,
+      cleanupSucceeded: true,
+      cleanupError: null
+    })
+    assert.deepEqual(await sftp.createExclusiveFile('/stage/cleanup-fails', base64), {
+      ok: false,
+      claimed: true,
+      code: 'SFTP_EXCLUSIVE_WRITE_FAILED',
+      message: 'remote write failed',
+      cleanupAttempted: true,
+      cleanupSucceeded: false,
+      cleanupError: 'remote unlink failed'
+    })
+    assert.deepEqual(unlinked, ['/stage/broken', '/stage/cleanup-fails'])
+  })
+
+  test('exclusive staging creation never succeeds without an open claim', async () => {
+    const sftp = Object.create(Sftp.prototype)
+    const unlinked = []
+    sftp.sftp = {
+      createWriteStream () {
+        return new Writable({
+          write (chunk, encoding, callback) {
+            callback()
+          }
+        })
+      },
+      unlink (remotePath, callback) {
+        unlinked.push(remotePath)
+        callback()
+      }
+    }
+
     await assert.rejects(
-      sftp.createExclusiveFile('/stage/broken', base64),
-      /remote write failed/
+      sftp.createExclusiveFile(
+        '/stage/unconfirmed',
+        Buffer.from('secret').toString('base64')
+      ),
+      /claim|open|确认/i
     )
+    assert.deepEqual(unlinked, [])
   })
 
   test('empty staging directory removal delegates only to atomic SFTP rmdir', async () => {
@@ -1065,7 +1128,9 @@ describe('session-sftp transport flows', () => {
 
   test('safe staging primitives preserve binary bytes and reject occupied directories', async () => {
     const root = makeTmpDir()
-    const server = await startSftpServer(root)
+    const server = await startSftpServer(root, {
+      failClosePath: '/stage/partial.bin'
+    })
     let term
     let sftp
     try {
@@ -1085,6 +1150,21 @@ describe('session-sftp transport flows', () => {
       })
       await sftp.connect(sftp.initOptions)
       await sftp.mkdir('/stage')
+
+      const partial = await sftp.createExclusiveFile(
+        '/stage/partial.bin',
+        Buffer.from('partial payload').toString('base64')
+      )
+      assert.deepEqual(partial, {
+        ok: false,
+        claimed: true,
+        code: 'SFTP_EXCLUSIVE_WRITE_FAILED',
+        message: 'injected close failure',
+        cleanupAttempted: true,
+        cleanupSucceeded: true,
+        cleanupError: null
+      })
+      assert.equal(fs.existsSync(toLocalPath(root, '/stage/partial.bin')), false)
 
       const payload = createPatternBuffer(4097, 29)
       const objectPath = '/stage/object.bin'

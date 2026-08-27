@@ -101,11 +101,38 @@ function createExclusiveRemoteFile (sftp, path, base64, mode = 0o600) {
   const bytes = decodeCanonicalBase64(base64)
   return new Promise((resolve, reject) => {
     let settled = false
+    let claimed = false
+    let failureStarted = false
     const settle = (error) => {
       if (settled) return
       settled = true
       if (error) reject(error)
       else resolve(1)
+    }
+    const failClaimedWrite = (writeError) => {
+      if (failureStarted || settled) return
+      failureStarted = true
+      if (!claimed) {
+        settle(writeError)
+        return
+      }
+      const finish = (cleanupError, cleanupAttempted) => {
+        writeError.code = 'SFTP_EXCLUSIVE_WRITE_FAILED'
+        writeError.claimed = true
+        writeError.cleanupAttempted = cleanupAttempted
+        writeError.cleanupSucceeded = cleanupAttempted && !cleanupError
+        writeError.cleanupError = cleanupError || null
+        settle(writeError)
+      }
+      if (typeof sftp.unlink !== 'function') {
+        finish(new Error('SFTP exclusive claim cleanup is unavailable.'), false)
+        return
+      }
+      try {
+        sftp.unlink(path, error => finish(error || null, true))
+      } catch (error) {
+        finish(error, true)
+      }
     }
     let writeStream
     try {
@@ -118,10 +145,20 @@ function createExclusiveRemoteFile (sftp, path, base64, mode = 0o600) {
       settle(error)
       return
     }
-    writeStream.once('error', settle)
-    writeStream.once('close', () => settle())
+    writeStream.once('open', () => { claimed = true })
+    writeStream.once('error', failClaimedWrite)
+    writeStream.once('close', () => {
+      if (failureStarted) return
+      if (!claimed) {
+        const error = new Error('SFTP exclusive file claim was not confirmed by open.')
+        error.code = 'SFTP_EXCLUSIVE_CLAIM_UNCONFIRMED'
+        settle(error)
+        return
+      }
+      settle()
+    })
     const source = Readable.from([bytes])
-    source.once('error', settle)
+    source.once('error', failClaimedWrite)
     source.pipe(writeStream)
   })
 }

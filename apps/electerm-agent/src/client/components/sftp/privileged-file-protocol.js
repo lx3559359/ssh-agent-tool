@@ -500,7 +500,7 @@ const stageCleanupBody = [
 const operationBodies = Object.freeze({
   probe: ':',
   list: listBody,
-  lstat: '__sp_emit_stat "$__sp_path" lstat',
+  lstat: 'if [ ! -e "$__sp_path" ] && [ ! -L "$__sp_path" ]; then __sp_emit_data1 1 1 missing "$(__sp_encode 1)"; else __sp_emit_stat "$__sp_path" lstat; fi',
   stat: '__sp_emit_stat "$__sp_path" stat',
   readlink: '__sp_emit_text "$(readlink -- "$__sp_path")"',
   realpath: '__sp_emit_text "$(realpath -- "$__sp_path")"',
@@ -805,6 +805,11 @@ export function createPrivilegedFileParser ({ token: providedToken, request }) {
       throw new Error('root 文件协议数据数量无效')
     }
     if (normalized.operation === 'lstat' || normalized.operation === 'stat') {
+      if (normalized.operation === 'lstat' && kind === 'missing' &&
+        payload.length === 1 && decodeUtf8Base64(payload[0], '缺失标记') === '1') {
+        structuredData = Object.freeze({ missing: true })
+        return
+      }
       if (kind !== 'metadata' || payload.length !== 1) {
         throw new Error('root 文件协议数据类型无效')
       }

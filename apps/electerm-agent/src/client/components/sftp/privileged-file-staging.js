@@ -102,6 +102,24 @@ function requirePrivateFile (stat, uid, gid, label) {
   return stat
 }
 
+function exclusiveCreateFailure (result, label) {
+  if (result === 1) return null
+  if (result?.ok !== false || result.claimed !== true ||
+    result.code !== 'SFTP_EXCLUSIVE_WRITE_FAILED' ||
+    typeof result.message !== 'string' || !result.message) {
+    return new Error(`特权暂存区 ${label} exclusive create 结果无效`)
+  }
+  const error = new Error(result.message)
+  error.code = result.code
+  error.claimed = true
+  error.cleanupAttempted = result.cleanupAttempted === true
+  error.cleanupSucceeded = result.cleanupSucceeded === true
+  if (result.cleanupError) {
+    error.cleanupError = new Error(String(result.cleanupError))
+  }
+  return error
+}
+
 function captureEndpoint (sftp) {
   return Object.freeze(Object.fromEntries(
     ['id', 'terminalId', 'port', 'type'].map(key => [key, sftp[key]])
@@ -111,19 +129,26 @@ function captureEndpoint (sftp) {
 function assertEndpoint (sftp, endpoint) {
   for (const [key, value] of Object.entries(endpoint)) {
     if (sftp[key] !== value) {
-      throw new Error('特权暂存区 SFTP endpoint/session 已变化')
+      const error = new Error('特权暂存区 SFTP endpoint/session 已变化')
+      error.code = 'PRIVILEGED_STAGING_ENDPOINT_CHANGED'
+      throw error
     }
   }
 }
 
-async function removeKnownFile (sftp, path) {
+async function removeKnownFile (sftp, path, assertCurrent = () => {}) {
+  assertCurrent()
   if (!await lstatOrNull(sftp, path)) return
+  assertCurrent()
   await sftp.rm(path)
 }
 
-async function removeKnownEmptyDirectory (sftp, path) {
+async function removeKnownEmptyDirectory (sftp, path, assertCurrent = () => {}) {
+  assertCurrent()
   if (!await lstatOrNull(sftp, path)) return false
+  assertCurrent()
   const entries = await sftp.list(path)
+  assertCurrent()
   if (!Array.isArray(entries) || entries.length !== 0) return false
   await sftp.removeEmptyDirectory(path)
   return true
@@ -189,12 +214,16 @@ export async function createPrivilegedStagingSession ({
     if (await lstatOrNull(sftp, challengePath) || await lstatOrNull(sftp, responsePath)) {
       throw new Error('特权暂存区 challenge/response 已存在')
     }
-    await sftp.createExclusiveFile(
+    const challengeCreateResult = await sftp.createExclusiveFile(
       challengePath,
       encodeBase64(challengeBytes),
       0o600
     )
-    createdFiles.push(challengePath)
+    const challengeCreateError = exclusiveCreateFailure(
+      challengeCreateResult,
+      'challenge'
+    )
+    if (challengeCreateError) throw challengeCreateError
     requirePrivateFile(
       await sftp.lstat(challengePath),
       rootStat.uid,
@@ -216,7 +245,6 @@ export async function createPrivilegedStagingSession ({
         rootMode: '700'
       }
     })
-    createdFiles.push(responsePath)
     const handshake = await execute(request)
     const expectedResponse = await sha256Hex(`${challenge}:root`)
     if (handshake?.exitCode !== 0 || handshake?.identity?.uid !== '0' ||
@@ -261,6 +289,7 @@ export async function createPrivilegedStagingSession ({
     if (await sftp.realpath(root) !== root) {
       throw new Error('特权暂存区握手后 root realpath 不匹配')
     }
+    createdFiles.push(challengePath, responsePath)
     rootBinding = Object.freeze({
       rootPath: root,
       rootRealPath: handshake.rootRealPath,
@@ -279,13 +308,30 @@ export async function createPrivilegedStagingSession ({
     }
     if (sameEndpoint) {
       for (const path of [...createdFiles].reverse()) {
-        try { await removeKnownFile(sftp, path) } catch (current) { cleanupError ||= current }
+        try {
+          await removeKnownFile(sftp, path, () => assertEndpoint(sftp, endpoint))
+        } catch (current) {
+          cleanupError ||= current
+          if (current?.code === 'PRIVILEGED_STAGING_ENDPOINT_CHANGED') {
+            sameEndpoint = false
+            break
+          }
+        }
       }
-      if (createdRoot) {
-        try { await removeKnownEmptyDirectory(sftp, root) } catch (current) { cleanupError ||= current }
+      if (sameEndpoint && createdRoot) {
+        try {
+          await removeKnownEmptyDirectory(sftp, root, () => assertEndpoint(sftp, endpoint))
+        } catch (current) {
+          cleanupError ||= current
+          if (current?.code === 'PRIVILEGED_STAGING_ENDPOINT_CHANGED') sameEndpoint = false
+        }
       }
-      if (createdBase) {
-        try { await removeKnownEmptyDirectory(sftp, base) } catch (current) { cleanupError ||= current }
+      if (sameEndpoint && createdBase) {
+        try {
+          await removeKnownEmptyDirectory(sftp, base, () => assertEndpoint(sftp, endpoint))
+        } catch (current) {
+          cleanupError ||= current
+        }
       }
     }
     if (cleanupError && !error.cleanupError) error.cleanupError = cleanupError
@@ -325,6 +371,7 @@ export async function createPrivilegedStagingSession ({
       args: { ...rootBinding, objectName: owned.objectName }
     })
     const result = await execute(request)
+    assertEndpoint(sftp, endpoint)
     if (result?.kind !== 'stage-cleanup' || result.ok !== true) {
       throw new Error('特权暂存区对象清理失败')
     }
@@ -355,6 +402,15 @@ export async function createPrivilegedStagingSession ({
       records.set(owned.path, owned.objectName)
       return owned.path
     },
+    abandon (value) {
+      assertActive()
+      const owned = normalizeOwnedPath(value)
+      if (!records.has(owned.path)) {
+        throw new Error('特权暂存区对象未由本 session 记录')
+      }
+      records.delete(owned.path)
+      return true
+    },
     cleanup (value) {
       return cleanupOwned(value)
     },
@@ -363,14 +419,46 @@ export async function createPrivilegedStagingSession ({
       state = 'releasing'
       releasePromise = (async () => {
         let firstError
-        for (const path of [...records.keys()]) {
-          try { await cleanupOwned(path, false) } catch (error) { firstError ||= error }
+        let endpointValid = true
+        try { assertEndpoint(sftp, endpoint) } catch (error) {
+          firstError = error
+          endpointValid = false
         }
-        if (records.size === 0) {
-          try { await removeKnownEmptyDirectory(sftp, root) } catch (error) { firstError ||= error }
+        for (const path of endpointValid ? [...records.keys()] : []) {
+          try {
+            await cleanupOwned(path, false)
+          } catch (error) {
+            firstError ||= error
+            if (error?.code === 'PRIVILEGED_STAGING_ENDPOINT_CHANGED') {
+              endpointValid = false
+              break
+            }
+          }
         }
-        if (createdBase && !await lstatOrNull(sftp, root)) {
-          try { await removeKnownEmptyDirectory(sftp, base) } catch (error) { firstError ||= error }
+        if (endpointValid && records.size === 0) {
+          try {
+            await removeKnownEmptyDirectory(
+              sftp,
+              root,
+              () => assertEndpoint(sftp, endpoint)
+            )
+          } catch (error) {
+            firstError ||= error
+            if (error?.code === 'PRIVILEGED_STAGING_ENDPOINT_CHANGED') {
+              endpointValid = false
+            }
+          }
+        }
+        if (endpointValid && createdBase && records.size === 0) {
+          try {
+            await removeKnownEmptyDirectory(
+              sftp,
+              base,
+              () => assertEndpoint(sftp, endpoint)
+            )
+          } catch (error) {
+            firstError ||= error
+          }
         }
         state = 'released'
         if (firstError) throw firstError

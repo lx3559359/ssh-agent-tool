@@ -66,6 +66,18 @@ function createBackendHarness (options = {}) {
     },
     async createExclusiveFile (remotePath, base64, mode) {
       if (nodes.has(remotePath)) throw new Error('Target exists')
+      if (options.uploadCreateFailure && remotePath.includes('/upload-')) {
+        if (options.uploadCreateEndpointChange) sftp.id = 'sftp-2'
+        return {
+          ok: false,
+          claimed: true,
+          code: 'SFTP_EXCLUSIVE_WRITE_FAILED',
+          message: 'remote upload write failed',
+          cleanupAttempted: true,
+          cleanupSucceeded: true,
+          cleanupError: null
+        }
+      }
       nodes.set(remotePath, {
         type: 'file',
         mode,
@@ -184,8 +196,11 @@ function createBackendHarness (options = {}) {
     }
     if (request.operation === 'lstat' || request.operation === 'stat') {
       if (!rootFiles.has(args.path) && args.path.includes('/missing')) {
-        if (options.missingLstatResult) {
+        if (options.genericLstatFailure) {
           return { exitCode: 1, kind: request.operation, ok: false }
+        }
+        if (options.missingLstatResult) {
+          return { exitCode: 0, kind: request.operation, missing: true }
         }
         throw missing(args.path)
       }
@@ -276,6 +291,77 @@ test('privileged backend validates root identity and bounded lease and releases 
   ]) {
     await assert.rejects(createPrivilegedFileBackend(value), /lease|租约|root|身份|username/i)
   }
+})
+
+test('privileged backend releases every releasable lease after construction validation fails', async () => {
+  const { createPrivilegedFileBackend } = await importModule(backendsModule)
+  const harness = createBackendHarness()
+  for (const setup of [
+    {
+      label: 'missing SFTP',
+      pattern: /SFTP|sftp/,
+      build: lease => ({
+        lease,
+        identity: { uid: '0', username: 'root' }
+      })
+    },
+    {
+      label: 'non-root identity',
+      pattern: /root|身份/,
+      build: lease => ({
+        sftp: harness.sftp,
+        lease,
+        identity: { uid: '1000', username: 'login' }
+      })
+    },
+    {
+      label: 'missing execute',
+      pattern: /lease|租约/,
+      build: lease => ({
+        sftp: harness.sftp,
+        lease: { release: lease.release },
+        identity: { uid: '0', username: 'root' }
+      })
+    }
+  ]) {
+    let releases = 0
+    const lease = {
+      async execute () {},
+      async release () {
+        releases += 1
+        return true
+      }
+    }
+    await assert.rejects(
+      createPrivilegedFileBackend(setup.build(lease)),
+      setup.pattern,
+      setup.label
+    )
+    assert.equal(releases, 1, setup.label)
+  }
+
+  let releases = 0
+  const releaseFailure = new Error('validation cleanup failed')
+  const validationError = await createPrivilegedFileBackend({
+    sftp: harness.sftp,
+    lease: {
+      async execute () {},
+      async release () {
+        releases += 1
+        throw releaseFailure
+      }
+    },
+    identity: { uid: '1000', username: 'login' }
+  }).catch(error => error)
+  assert.match(validationError.message, /root|身份/)
+  assert.equal(validationError.releaseError, releaseFailure)
+  assert.equal(releases, 1)
+
+  await assert.rejects(createPrivilegedFileBackend({
+    sftp: harness.sftp,
+    lease: { execute () {} },
+    identity: { uid: '0', username: 'root' }
+  }), /lease|租约/)
 })
 
 test('privileged facade maps fixed metadata and mutation methods to protocol requests', async () => {
@@ -437,7 +523,10 @@ test('privileged writes upload exclusive bytes then import only digest size and 
   assert.equal(existingImport.args.targetGid, '4')
   await existing.release()
 
-  const failedHarness = createBackendHarness({ importFailure: true })
+  const failedHarness = createBackendHarness({
+    importFailure: true,
+    missingLstatResult: true
+  })
   const failed = await createRootBackend(failedHarness)
   await assert.rejects(
     failed.sftp.writeFile('/root/missing-target', secret, 0o600),
@@ -445,6 +534,79 @@ test('privileged writes upload exclusive bytes then import only digest size and 
   )
   assert.equal(failedHarness.requests.some(request => request.operation === 'stage-cleanup'), true)
   await failed.release()
+})
+
+test('privileged lstat maps only trusted missing results to transaction ENOENT', async () => {
+  const { describeSftpTransferEntry } = await importModule(
+    'src/client/components/sftp/sftp-transaction-adapter.js'
+  )
+  const harness = createBackendHarness({ missingLstatResult: true })
+  const backend = await createRootBackend(harness)
+
+  await assert.rejects(
+    backend.sftp.lstat('/root/missing-target'),
+    error => error?.code === 'ENOENT' &&
+      error.message === 'No such privileged file: /root/missing-target'
+  )
+  assert.deepEqual(
+    await describeSftpTransferEntry(backend.sftp, '/root/missing-target'),
+    { absent: true }
+  )
+  await backend.release()
+})
+
+test('privileged write fails closed on an indeterminate lstat error', async () => {
+  const harness = createBackendHarness({ genericLstatFailure: true })
+  const backend = await createRootBackend(harness)
+  const createsBefore = harness.events.filter(
+    event => event.startsWith('sftp:create:')
+  ).length
+
+  await assert.rejects(
+    backend.sftp.writeFile('/root/missing-target', Buffer.from('secret'), 0o600),
+    /root 文件操作失败：lstat/
+  )
+  assert.equal(harness.events.filter(
+    event => event.startsWith('sftp:create:')
+  ).length, createsBefore)
+  assert.equal(harness.requests.some(request => request.operation === 'stage-import'), false)
+  await backend.release()
+})
+
+test('privileged write rejects a claimed upload stage failure before import', async () => {
+  const harness = createBackendHarness({
+    missingLstatResult: true,
+    uploadCreateFailure: true
+  })
+  const backend = await createRootBackend(harness)
+
+  await assert.rejects(
+    backend.sftp.writeFile('/root/missing-target', Buffer.from('secret'), 0o600),
+    /remote upload write failed/
+  )
+  assert.equal(harness.requests.some(request => request.operation === 'stage-import'), false)
+  await backend.release()
+})
+
+test('privileged write keeps its create error when abandoning the stage fails', async () => {
+  const harness = createBackendHarness({
+    missingLstatResult: true,
+    uploadCreateFailure: true,
+    uploadCreateEndpointChange: true
+  })
+  const backend = await createRootBackend(harness)
+
+  const error = await backend.sftp.writeFile(
+    '/root/missing-target',
+    Buffer.from('secret'),
+    0o600
+  ).catch(error => error)
+  assert.equal(error.message, 'remote upload write failed')
+  assert.match(error.cleanupError?.message || '', /session|endpoint|会话|端点/i)
+  assert.equal(harness.requests.some(request => request.operation === 'stage-import'), false)
+  assert.equal(harness.requests.some(request => request.operation === 'stage-cleanup'), false)
+  await assert.rejects(backend.release(), /session|endpoint|会话|端点/i)
+  assert.equal(harness.leaseReleases, 1)
 })
 
 test('privileged release closes first continues cleanup and lease release and is idempotent', async () => {
@@ -460,4 +622,21 @@ test('privileged release closes first continues cleanup and lease release and is
   await assert.rejects(backend.release(), /stage cleanup failed/)
   assert.equal(harness.leaseReleases, 1)
   await assert.rejects(backend.sftp.list('/root'), /released|释放|关闭/i)
+})
+
+test('privileged backend still releases its lease when staging endpoint changed', async () => {
+  const harness = createBackendHarness()
+  const backend = await createRootBackend(harness)
+  const requestsBefore = harness.requests.length
+  harness.sftp.id = 'sftp-2'
+
+  const firstError = await backend.release().catch(error => error)
+  assert.match(firstError.message, /session|endpoint|会话|端点/i)
+  assert.equal(harness.requests.length, requestsBefore)
+  assert.equal(harness.leaseReleases, 1)
+  assert.equal(harness.events.at(-1), 'lease:release')
+
+  const secondError = await backend.release().catch(error => error)
+  assert.equal(secondError, firstError)
+  assert.equal(harness.leaseReleases, 1)
 })

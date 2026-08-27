@@ -9,13 +9,6 @@ const fileTypeChars = Object.freeze({
   directory: 'd',
   symlink: 'l'
 })
-const missingCodes = new Set([2, 'ENOENT', 'SFTP_NO_SUCH_FILE'])
-
-function isMissingError (error) {
-  return missingCodes.has(error?.code) ||
-    /no such|not found|does not exist/i.test(String(error?.message || error))
-}
-
 function canonicalFilePath (value, label = 'path') {
   const path = String(value ?? '')
   if (path === '/') return path
@@ -102,6 +95,21 @@ function digestResult (result, kind) {
   return result
 }
 
+function exclusiveCreateFailure (result, label) {
+  if (result === 1) return null
+  if (result?.ok !== false || result.claimed !== true ||
+    result.code !== 'SFTP_EXCLUSIVE_WRITE_FAILED' ||
+    typeof result.message !== 'string' || !result.message) {
+    return new Error(`root 文件后端 ${label} exclusive create 结果无效`)
+  }
+  const error = new Error(result.message)
+  error.code = result.code
+  error.claimed = true
+  error.cleanupSucceeded = result.cleanupSucceeded === true
+  if (result.cleanupError) error.cleanupError = new Error(String(result.cleanupError))
+  return error
+}
+
 function requireIdentity (identity) {
   const uid = String(identity?.effectiveUid ?? identity?.uid ?? '')
   const username = String(identity?.username ?? identity?.effectiveUsername ?? '')
@@ -129,15 +137,12 @@ export async function createPrivilegedFileBackend ({
   capabilities,
   createToken
 } = {}) {
-  if (!sftp) throw new Error('root 文件后端缺少 SFTP')
-  if (typeof lease?.execute !== 'function' || typeof lease?.release !== 'function') {
-    throw new Error('root 文件后端缺少 bounded lease 合同')
-  }
-  const rootIdentity = requireIdentity(identity)
-  const protocol = createPrivilegedFileProtocol()
   let closed = false
   let staging
   let releasePromise
+  let rootIdentity
+  let protocol
+  const canReleaseLease = typeof lease?.release === 'function'
 
   async function releaseLeaseAfterFailure (error) {
     try {
@@ -162,6 +167,12 @@ export async function createPrivilegedFileBackend ({
   }
 
   try {
+    if (!sftp) throw new Error('root 文件后端缺少 SFTP')
+    if (typeof lease?.execute !== 'function' || !canReleaseLease) {
+      throw new Error('root 文件后端缺少 bounded lease 合同')
+    }
+    rootIdentity = requireIdentity(identity)
+    protocol = createPrivilegedFileProtocol()
     staging = await createPrivilegedStagingSession({
       sftp,
       execute: request => lease.execute({ protocol, request }),
@@ -169,7 +180,7 @@ export async function createPrivilegedFileBackend ({
     })
   } catch (error) {
     closed = true
-    await releaseLeaseAfterFailure(error)
+    if (canReleaseLease) await releaseLeaseAfterFailure(error)
     throw error
   }
 
@@ -249,6 +260,17 @@ export async function createPrivilegedFileBackend ({
     return 1
   }
 
+  function abandonUnconfirmedStage (stage, error) {
+    const primaryError = error instanceof Error ? error : new Error(String(error))
+    try {
+      staging.abandon(stage.path)
+    } catch (abandonError) {
+      if (!primaryError.cleanupError) primaryError.cleanupError = abandonError
+      else if (!primaryError.abandonError) primaryError.abandonError = abandonError
+    }
+    return primaryError
+  }
+
   const facade = {
     async list (path) {
       const result = await executeRequest('list', {
@@ -269,9 +291,14 @@ export async function createPrivilegedFileBackend ({
       }))
     },
     async lstat (path) {
-      return metadataResult(await executeRequest('lstat', {
-        path: canonicalFilePath(path)
-      }))
+      const remotePath = canonicalFilePath(path)
+      const result = await executeRequest('lstat', { path: remotePath })
+      if (result.missing === true) {
+        const error = new Error(`No such privileged file: ${remotePath}`)
+        error.code = 'ENOENT'
+        throw error
+      }
+      return metadataResult(result)
     },
     async stat (path) {
       return metadataResult(await executeRequest('stat', {
@@ -331,9 +358,7 @@ export async function createPrivilegedFileBackend ({
       try {
         targetMetadata = await facade.lstat(targetPath)
       } catch (error) {
-        const absentResult = error?.code === 'PRIVILEGED_FILE_OPERATION_FAILED' &&
-          error.operation === 'lstat'
-        if (!isMissingError(error) && !absentResult) throw error
+        if (error?.code !== 'ENOENT') throw error
       }
       const targetMode = normalizeMode(
         requestedMode,
@@ -343,8 +368,24 @@ export async function createPrivilegedFileBackend ({
       const targetGid = targetMetadata?.gid ?? 0
       const stage = staging.allocate('upload')
       let operationError
+      let cleanStage = true
       try {
-        await sftp.createExclusiveFile(stage.path, bytesToBase64(bytes), 0o600)
+        let createResult
+        try {
+          createResult = await sftp.createExclusiveFile(
+            stage.path,
+            bytesToBase64(bytes),
+            0o600
+          )
+        } catch (error) {
+          cleanStage = false
+          throw abandonUnconfirmedStage(stage, error)
+        }
+        const createError = exclusiveCreateFailure(createResult, 'upload stage')
+        if (createError) {
+          cleanStage = false
+          throw abandonUnconfirmedStage(stage, createError)
+        }
         const imported = digestResult(await executeRequest('stage-import', {
           ...staging.rootBinding,
           objectName: stage.objectName,
@@ -361,11 +402,13 @@ export async function createPrivilegedFileBackend ({
       } catch (error) {
         operationError = error
       }
-      try {
-        await staging.cleanup(stage.path)
-      } catch (cleanupError) {
-        if (operationError) operationError.cleanupError ||= cleanupError
-        else operationError = cleanupError
+      if (cleanStage) {
+        try {
+          await staging.cleanup(stage.path)
+        } catch (cleanupError) {
+          if (operationError) operationError.cleanupError ||= cleanupError
+          else operationError = cleanupError
+        }
       }
       if (operationError) throw operationError
       return 1

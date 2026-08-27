@@ -1054,6 +1054,28 @@ test('stage request rejects a non-canonical root path', async () => {
   )
 })
 
+test('lstat emits a trusted missing result only for an absent path', {
+  skip: !bashAvailable
+}, async () => {
+  const nativeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-lstat-missing-'))
+  try {
+    const missingPath = toBashPath(path.join(nativeRoot, 'absent'))
+    const missing = await runRealProtocolOperation({
+      operation: 'lstat',
+      token: '3'.repeat(48),
+      args: { path: missingPath }
+    })
+    assert.equal(missing.execution.status, 0, missing.execution.stderr)
+    assert.equal(missing.parser.exitCode(), 0)
+    assert.equal(missing.result.kind, 'lstat')
+    assert.equal(missing.result.missing, true)
+    assert.equal(missing.result.capabilities.stat, true)
+    assert.equal(missing.result.capabilities.gnuStat, true)
+  } finally {
+    fs.rmSync(nativeRoot, { recursive: true, force: true })
+  }
+})
+
 test('stage handshake command verifies the exact 64-byte response content', async () => {
   const {
     buildPrivilegedFileCommand,

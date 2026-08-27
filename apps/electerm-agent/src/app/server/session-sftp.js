@@ -1079,8 +1079,23 @@ class Sftp extends TerminalBase {
   }
 
   async createExclusiveFile (remotePath, base64, mode = 0o600) {
-    await createExclusiveRemoteFile(this.sftp, remotePath, base64, mode)
-    return 1
+    try {
+      await createExclusiveRemoteFile(this.sftp, remotePath, base64, mode)
+      return 1
+    } catch (error) {
+      if (error?.claimed !== true) throw error
+      return Object.freeze({
+        ok: false,
+        claimed: true,
+        code: 'SFTP_EXCLUSIVE_WRITE_FAILED',
+        message: String(error.message || 'SFTP exclusive file write failed.'),
+        cleanupAttempted: error.cleanupAttempted === true,
+        cleanupSucceeded: error.cleanupSucceeded === true,
+        cleanupError: error.cleanupError
+          ? String(error.cleanupError.message || error.cleanupError)
+          : null
+      })
+    }
   }
   // end
 }
