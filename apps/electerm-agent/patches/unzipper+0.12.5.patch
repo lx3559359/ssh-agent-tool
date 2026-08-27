@@ -1,0 +1,20 @@
+diff --git a/node_modules/unzipper/lib/parse.js b/node_modules/unzipper/lib/parse.js
+index 0921f4a..3265bd7 100644
+--- a/node_modules/unzipper/lib/parse.js
++++ b/node_modules/unzipper/lib/parse.js
+@@ -22,9 +22,12 @@ function Parse(opts) {
+   PullStream.call(self, self._opts);
++  const reading = self._readRecord();
+   self.on('finish', function() {
+-    self.emit('end');
+-    self.emit('close');
++    reading.then(function() {
++      if (!self._readableState.ended)
++        self.push(null);
++    }).catch(function() {});
+   });
+-  self._readRecord().catch(function(e) {
++  reading.catch(function(e) {
+     if (!self.__emittedError || self.__emittedError !== e)
+       self.emit('error', e);
+   });
