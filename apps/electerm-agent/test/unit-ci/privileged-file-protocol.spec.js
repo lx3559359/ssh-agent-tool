@@ -307,17 +307,107 @@ test('list clears inherited dotglob without duplicating hidden entries', {
   )
 })
 
-test('list producer enforces count and encoded metadata bounds before glob expansion', async () => {
+test('list rejects non-directories and directory symlinks but accepts an empty directory', {
+  skip: !bashAvailable
+}, async () => {
+  const nativeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-list-target-'))
+  try {
+    const emptyPath = path.join(nativeRoot, 'empty')
+    const filePath = path.join(nativeRoot, 'file')
+    const missingPath = path.join(nativeRoot, 'missing')
+    const linkPath = path.join(nativeRoot, 'link')
+    fs.mkdirSync(emptyPath)
+    fs.writeFileSync(filePath, 'not a directory')
+    fs.symlinkSync(
+      emptyPath,
+      linkPath,
+      process.platform === 'win32' ? 'junction' : 'dir'
+    )
+
+    for (const [name, targetPath, token] of [
+      ['missing', missingPath, 'a4'.repeat(24)],
+      ['file', filePath, 'a5'.repeat(24)],
+      ['symlink', linkPath, 'a6'.repeat(24)]
+    ]) {
+      const rejected = await runRealProtocolOperation({
+        operation: 'list',
+        token,
+        args: { path: toBashPath(targetPath) }
+      })
+      assert.notEqual(rejected.execution.status, 0, name)
+      assert.equal(rejected.parser.ended(), true, name)
+      assert.notEqual(rejected.parser.exitCode(), 0, name)
+    }
+
+    const empty = await runRealProtocolOperation({
+      operation: 'list',
+      token: 'a7'.repeat(24),
+      args: { path: toBashPath(emptyPath) }
+    })
+    assert.equal(empty.execution.status, 0, empty.execution.stderr)
+    assert.equal(empty.parser.exitCode(), 0)
+    assert.deepEqual(empty.result.entries, [])
+  } finally {
+    fs.rmSync(nativeRoot, { recursive: true, force: true })
+  }
+})
+
+test('list rejects more than 20000 real directory entries before emitting data', {
+  skip: !bashAvailable
+}, async () => {
+  const nativeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-list-limit-'))
+  try {
+    const rootPath = toBashPath(nativeRoot)
+    const populate = runBash([
+      `cd -- ${quoteForBash(rootPath)} || exit`,
+      '__sp_test_i=0',
+      'while [ "$__sp_test_i" -lt 20001 ]; do',
+      '  : > "$__sp_test_i" || exit',
+      '  __sp_test_i=$((__sp_test_i + 1))',
+      'done'
+    ].join('\n'))
+    assert.equal(populate.status, 0, populate.stderr)
+
+    const rejected = await runRealProtocolOperation({
+      operation: 'list',
+      token: 'a8'.repeat(24),
+      args: { path: rootPath }
+    })
+    assert.notEqual(rejected.execution.status, 0)
+    assert.notEqual(rejected.parser.exitCode(), 0)
+    assert.doesNotMatch(rejected.execution.stdout, /;data;/)
+  } finally {
+    fs.rmSync(nativeRoot, { recursive: true, force: true })
+  }
+})
+
+test('list binds one real directory and propagates producer status before glob expansion', async () => {
   const { buildPrivilegedFileCommand } = await importModule(protocolModule)
   const command = buildPrivilegedFileCommand({
     token: '81'.repeat(24),
     request: { operation: 'list', args: { path: '/root' } }
   })
-  const preflight = command.indexOf('find "$__sp_path"')
-  const firstGlob = command.indexOf('"$__sp_path"/.[!.]*')
+  const bind = command.indexOf('__sp_listReal=')
+  const producerCheck = command.indexOf('find . -mindepth 1')
+  const firstGlob = command.indexOf('./.[!.]*')
 
-  assert.equal(preflight >= 0 && preflight < firstGlob, true)
-  assert.match(command, /find "\$__sp_path"[^;]+head -c 20001[^;]+wc -c/)
+  assert.equal(bind >= 0 && bind < producerCheck && producerCheck < firstGlob, true)
+  assert.match(command, /__sp_listReal=.*realpath -- "\$__sp_path"/)
+  assert.match(command, /\[ ! -L "\$__sp_path" \].*\[ -d "\$__sp_path" \]/)
+  assert.match(command, /cd -- "\$__sp_path"/)
+  assert.match(command, /__sp_requestedDevice=.*stat -c %d -- "\$__sp_path"/)
+  assert.match(command, /__sp_requestedInode=.*stat -c %i -- "\$__sp_path"/)
+  assert.match(command, /__sp_listPwd=.*pwd -P/)
+  assert.match(command, /__sp_listCwdReal=.*realpath -- \./)
+  assert.match(command, /"\$__sp_listCwdReal" = "\$__sp_listPwd"/)
+  assert.match(command, /__sp_listDevice=.*stat -c %d -- \./)
+  assert.match(command, /__sp_listInode=.*stat -c %i -- \./)
+  assert.doesNotMatch(command, /find "\$__sp_path"/)
+  assert.match(command, /find \. -mindepth 1 -maxdepth 1 -print >\/dev\/null 2>&1 \|\| return/)
+  assert.match(command, /find \. -mindepth 1 -maxdepth 1 -printf x 2>\/dev\/null; __sp_findStatus=\$\?/)
+  assert.match(command, /head -c 20001/)
+  assert.match(command, /__sp_preflightEntries=.*__sp_preflight%\?/)
+  assert.match(command, /__sp_preflightCount=\$\{#__sp_preflightEntries\}/)
   assert.match(command, /"\$__sp_preflightCount" -le 20000/)
   assert.match(command, /"\$__sp_seq" -le "\$__sp_total".*"\$__sp_seq" -le 20000/)
   assert.match(command, /__sp_metadataBytes=0/)
@@ -632,7 +722,7 @@ test('privileged command builder exposes every fixed operation and fails closed 
   const token = 'c'.repeat(48)
   const cases = [
     ['probe', {}, ':'],
-    ['list', { path: '/x' }, '"$__sp_path"/.[!.]* "$__sp_path"/..?* "$__sp_path"/*'],
+    ['list', { path: '/x' }, './.[!.]* ./..?* ./*'],
     ['lstat', { path: '/x' }, '__sp_emit_stat "$__sp_path" lstat'],
     ['stat', { path: '/x' }, '__sp_emit_stat "$__sp_path" stat'],
     ['readlink', { path: '/x' }, '__sp_emit_text "$(readlink -- "$__sp_path")"'],

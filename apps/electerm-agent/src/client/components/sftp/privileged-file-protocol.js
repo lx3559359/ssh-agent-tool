@@ -82,7 +82,7 @@ const requiredOperationCapabilities = Object.freeze({
   ]),
   list: Object.freeze([
     'cleanShell', 'printf', 'id', 'tr', 'base64', 'stat', 'gnuStat',
-    'find', 'head', 'wc'
+    'find', 'head', 'wc', 'realpath'
   ])
 })
 
@@ -308,19 +308,41 @@ function decodeCondition (request) {
 }
 
 const listBody = [
-  '__sp_preflightCount="$(find "$__sp_path" -mindepth 1 -maxdepth 1 -printf x 2>/dev/null | head -c 20001 | wc -c | tr -d " \\r\\n")" || return $?;',
-  'case "$__sp_preflightCount" in ""|*[!0-9]*) return 1 ;; esac;',
+  '__sp_listReal="$(realpath -- "$__sp_path")" || return $?;',
+  '__sp_listReal=$' + '{__sp_listReal%?};',
+  '__sp_listReal=$' + '{__sp_listReal%?};',
+  '[ "$__sp_listReal" = "$__sp_path" ] || return 1;',
+  '[ ! -L "$__sp_path" ] && [ -d "$__sp_path" ] || return 1;',
+  '__sp_requestedDevice="$(stat -c %d -- "$__sp_path")" || return $?;',
+  '__sp_requestedInode="$(stat -c %i -- "$__sp_path")" || return $?;',
+  'cd -- "$__sp_path" || return $?;',
+  '__sp_listPwd="$(pwd -P)" || return $?;',
+  '__sp_listCwdReal="$(realpath -- .)" || return $?;',
+  '__sp_listCwdReal=$' + '{__sp_listCwdReal%?};',
+  '__sp_listCwdReal=$' + '{__sp_listCwdReal%?};',
+  '[ "$__sp_listCwdReal" = "$__sp_listPwd" ] || return 1;',
+  '__sp_listDevice="$(stat -c %d -- .)" || return $?;',
+  '__sp_listInode="$(stat -c %i -- .)" || return $?;',
+  '[ "$__sp_requestedDevice" = "$__sp_listDevice" ] || return 1;',
+  '[ "$__sp_requestedInode" = "$__sp_listInode" ] || return 1;',
+  '[ "$(stat -c %d -- "$__sp_path")" = "$__sp_listDevice" ] || return 1;',
+  '[ "$(stat -c %i -- "$__sp_path")" = "$__sp_listInode" ] || return 1;',
+  'find . -mindepth 1 -maxdepth 1 -print >/dev/null 2>&1 || return $?;',
+  '__sp_preflight="$( ( find . -mindepth 1 -maxdepth 1 -printf x 2>/dev/null; __sp_findStatus=$?; if [ "$__sp_findStatus" -eq 0 ]; then printf 0; else printf 1; fi ) | head -c 20001 )" || return $?;',
+  'case "$__sp_preflight" in *0) __sp_preflightEntries=$' + '{__sp_preflight%?} ;; *) return 1 ;; esac;',
+  'case "$__sp_preflightEntries" in *[!x]*) return 1 ;; esac;',
+  '__sp_preflightCount=$' + '{#__sp_preflightEntries};',
   '[ "$__sp_preflightCount" -le 20000 ] || return 1;',
   'set +f || return $?;',
   '__sp_total=0;',
-  'for __sp_entry in "$__sp_path"/.[!.]* "$__sp_path"/..?* "$__sp_path"/*; do',
+  'for __sp_entry in ./.[!.]* ./..?* ./*; do',
   '  [ -e "$__sp_entry" ] || [ -L "$__sp_entry" ] || continue;',
   '  __sp_total=$((__sp_total + 1));',
   '  [ "$__sp_total" -le 20000 ] || return 1;',
   'done;',
   '__sp_seq=0;',
   '__sp_metadataBytes=0;',
-  'for __sp_entry in "$__sp_path"/.[!.]* "$__sp_path"/..?* "$__sp_path"/*; do',
+  'for __sp_entry in ./.[!.]* ./..?* ./*; do',
   '  [ -e "$__sp_entry" ] || [ -L "$__sp_entry" ] || continue;',
   '  __sp_seq=$((__sp_seq + 1));',
   '  [ "$__sp_seq" -le "$__sp_total" ] && [ "$__sp_seq" -le 20000 ] || return 1;',
