@@ -383,7 +383,9 @@ const stageHandshakeBody = [
   '[ "$(stat -c %u -- "./$__sp_responseName")" = "$__sp_rootUid" ]',
   '[ "$(stat -c %g -- "./$__sp_responseName")" = "$__sp_rootGid" ]',
   '[ "$(stat -c %a -- "./$__sp_responseName")" = 600 ]',
-  '[ "$(__sp_sha256_raw "./$__sp_responseName")" = "$__sp_response" ]',
+  '[ "$(stat -c %s -- "./$__sp_responseName")" = 64 ]',
+  '__sp_expectedResponseDigest="$(__sp_sha256_text "$__sp_response")"',
+  '[ "$(__sp_sha256_raw "./$__sp_responseName")" = "$__sp_expectedResponseDigest" ]',
   '__sp_emit_handshake "$__sp_response" "$__sp_rootUid" "$__sp_rootGid" "$__sp_actualMode" "$__sp_actualRealPath" "$__sp_actualDevice" "$__sp_actualInode"'
 ].join(' && ')
 

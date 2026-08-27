@@ -176,6 +176,17 @@ async function createLinuxStageFixture (nativeRoot, suffix) {
     handshake.execution.stdout + handshake.execution.stderr
   )
   assert.equal(handshake.result.kind, 'stage-handshake')
+  const expectedResponse = sha256Text(`${sha256Text(challengeText)}:root`)
+  const responsePath = path.join(rootPath, responseName)
+  const responseStat = fs.lstatSync(responsePath)
+  assert.equal(handshake.result.response, expectedResponse)
+  assert.equal(fs.readFileSync(responsePath, 'utf8'), expectedResponse)
+  assert.equal(responseStat.isFile(), true)
+  assert.equal(responseStat.isSymbolicLink(), false)
+  assert.equal(responseStat.size, 64)
+  assert.equal(responseStat.mode & 0o7777, 0o600)
+  assert.equal(String(responseStat.uid), String(rootStat.uid))
+  assert.equal(String(responseStat.gid), String(rootStat.gid))
   return {
     rootPath,
     responseName,
@@ -1041,6 +1052,79 @@ test('stage request rejects a non-canonical root path', async () => {
     }),
     /rootPath/
   )
+})
+
+test('stage handshake command verifies the exact 64-byte response content', async () => {
+  const {
+    buildPrivilegedFileCommand,
+    createPrivilegedFileRequest
+  } = await importModule(protocolModule)
+  const command = buildPrivilegedFileCommand({
+    token: '5'.repeat(48),
+    request: createPrivilegedFileRequest({
+      operation: 'stage-handshake',
+      args: {
+        rootPath: '/stage/session',
+        challengeName: 'challenge-token',
+        responseName: 'response-token',
+        challenge: 'a'.repeat(64),
+        rootUid: '1000',
+        rootGid: '1000',
+        rootMode: '700'
+      }
+    })
+  })
+
+  assert.equal(command.includes(
+    '[ "$(stat -c %s -- "./$__sp_responseName")" = 64 ]'
+  ), true)
+  assert.equal(command.includes(
+    '__sp_expectedResponseDigest="$(__sp_sha256_text "$__sp_response")"'
+  ), true)
+  assert.equal(command.includes(
+    '[ "$(__sp_sha256_raw "./$__sp_responseName")" = "$__sp_expectedResponseDigest" ]'
+  ), true)
+})
+
+test('stage handshake command has valid outer and inner shell syntax', {
+  skip: !bashAvailable
+}, async () => {
+  const {
+    buildPrivilegedFileCommand,
+    createPrivilegedFileRequest
+  } = await importModule(protocolModule)
+  const command = buildPrivilegedFileCommand({
+    token: '4'.repeat(48),
+    request: createPrivilegedFileRequest({
+      operation: 'stage-handshake',
+      args: {
+        rootPath: '/stage/session',
+        challengeName: 'challenge-token',
+        responseName: 'response-token',
+        challenge: 'a'.repeat(64),
+        rootUid: '1000',
+        rootGid: '1000',
+        rootMode: '700'
+      }
+    })
+  })
+  const outer = spawnSync(
+    bashExecutable,
+    ['--noprofile', '--norc', '-n'],
+    { encoding: 'utf8', input: command }
+  )
+  assert.equal(outer.status, 0, outer.stderr)
+  const extracted = runBash(
+    `set -- ${command}\n` + 'printf \'%s\' "$' + '{!#}"'
+  )
+  assert.equal(extracted.status, 0, extracted.stderr)
+  assert.equal(extracted.stdout.includes('__sp_expectedResponseDigest='), true)
+  const inner = spawnSync(
+    bashExecutable,
+    ['--noprofile', '--norc', '-n'],
+    { encoding: 'utf8', input: extracted.stdout }
+  )
+  assert.equal(inner.status, 0, inner.stderr)
 })
 
 test('stage handshake shell rejects direct and intermediate directory symlinks', {
