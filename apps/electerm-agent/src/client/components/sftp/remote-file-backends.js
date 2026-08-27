@@ -171,9 +171,18 @@ export async function createPrivilegedFileBackend ({
   let releasePromise
   let rootIdentity
   let protocol
+  let executeTail = Promise.resolve()
+  const activePublicOperations = new Set()
   const canReleaseLease = typeof lease?.release === 'function'
 
+  function queueLeaseExecute (options) {
+    const result = executeTail.catch(() => {}).then(() => lease.execute(options))
+    executeTail = result.catch(() => {})
+    return result
+  }
+
   async function releaseLeaseAfterFailure (error) {
+    await executeTail.catch(() => {})
     try {
       const released = await lease.release()
       if (released !== true) throw new Error('root 文件后端 PTY lease 释放失败')
@@ -182,10 +191,13 @@ export async function createPrivilegedFileBackend ({
     }
   }
 
-  async function executeRequest (operation, args = {}, allowClosed = false) {
-    if (closed && !allowClosed) throw new Error('root 文件后端已经释放')
+  async function executeRequest (operation, args = {}, options = {}) {
     const request = createPrivilegedFileRequest({ operation, args })
-    const result = await lease.execute({ protocol, request })
+    const result = await queueLeaseExecute({
+      protocol,
+      request,
+      ...(options.signal ? { signal: options.signal } : {})
+    })
     if (!result || result.exitCode !== 0 || result.kind !== operation || result.ok === false) {
       const error = new Error(`root 文件操作失败：${operation}`)
       error.code = 'PRIVILEGED_FILE_OPERATION_FAILED'
@@ -204,7 +216,7 @@ export async function createPrivilegedFileBackend ({
     protocol = createPrivilegedFileProtocol()
     staging = await createPrivilegedStagingSession({
       sftp,
-      execute: request => lease.execute({ protocol, request }),
+      execute: request => queueLeaseExecute({ protocol, request }),
       ...(createToken ? { createToken } : {})
     })
   } catch (error) {
@@ -395,7 +407,7 @@ export async function createPrivilegedFileBackend ({
     return primaryError
   }
 
-  const facade = {
+  const rawFacade = {
     async list (path) {
       const result = await executeRequest('list', {
         path: canonicalFilePath(path)
@@ -450,7 +462,7 @@ export async function createPrivilegedFileBackend ({
       let offset = 0
       let hasMore
       do {
-        const chunk = await facade.readFileChunk(remotePath, {
+        const chunk = await rawFacade.readFileChunk(remotePath, {
           offset,
           maxBytes: readChunkBytes
         })
@@ -473,7 +485,6 @@ export async function createPrivilegedFileBackend ({
       return new TextDecoder().decode(concatBytes(parts, length))
     },
     async readFileChunk (path, options = {}) {
-      if (closed) throw new Error('root 文件后端已经释放')
       const remotePath = canonicalFilePath(path)
       const requestedOffset = options.offset === undefined ? 0 : Number(options.offset)
       const requestedMaxBytes = options.maxBytes === undefined
@@ -490,13 +501,12 @@ export async function createPrivilegedFileBackend ({
       )
     },
     async writeFile (path, value, requestedMode) {
-      if (closed) throw new Error('root 文件后端已经释放')
       const targetPath = canonicalFilePath(path, 'targetPath')
       const bytes = inputBytes(value)
       const digest = await sha256Hex(bytes)
       let targetMetadata
       try {
-        targetMetadata = await facade.lstat(targetPath)
+        targetMetadata = await rawFacade.lstat(targetPath)
       } catch (error) {
         if (error?.code !== 'ENOENT') throw error
       }
@@ -607,7 +617,7 @@ export async function createPrivilegedFileBackend ({
       let first = new Uint8Array(0)
       let last = new Uint8Array(0)
       do {
-        const chunk = await facade.readFileChunk(remotePath, {
+        const chunk = await rawFacade.readFileChunk(remotePath, {
           offset,
           maxBytes: readChunkBytes
         })
@@ -629,7 +639,7 @@ export async function createPrivilegedFileBackend ({
         totalBytes = chunk.totalBytes
         hasMore = chunk.hasMore
       } while (hasMore)
-      const stat = await facade.lstat(remotePath)
+      const stat = await rawFacade.lstat(remotePath)
       const [firstSha256, lastSha256] = await Promise.all([
         sha256Hex(first),
         sha256Hex(last)
@@ -643,7 +653,21 @@ export async function createPrivilegedFileBackend ({
       }
     }
   }
-  Object.freeze(facade)
+  function runPublicOperation (work) {
+    if (closed) return Promise.reject(new Error('root 文件后端已经释放'))
+    const operation = Promise.resolve().then(work)
+    activePublicOperations.add(operation)
+    operation.finally(() => activePublicOperations.delete(operation))
+      .catch(() => {})
+    return operation
+  }
+
+  const facade = Object.freeze(Object.fromEntries(
+    Object.entries(rawFacade).map(([name, operation]) => [
+      name,
+      (...args) => runPublicOperation(() => operation(...args))
+    ])
+  ))
 
   const runtimeIdentity = Object.freeze({
     channel: 'pty-root',
@@ -663,6 +687,8 @@ export async function createPrivilegedFileBackend ({
       closed = true
       releasePromise = (async () => {
         let firstError
+        await Promise.allSettled([...activePublicOperations])
+        await executeTail.catch(() => {})
         try { await staging.release() } catch (error) { firstError ||= error }
         try {
           const released = await lease.release()

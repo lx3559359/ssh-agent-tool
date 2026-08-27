@@ -31,6 +31,8 @@ function createBackendHarness (options = {}) {
   const events = []
   const sftpReads = []
   let leaseReleases = 0
+  let activeLeaseExecutions = 0
+  let peakLeaseExecutions = 0
   const sftp = {
     id: 'sftp-1',
     terminalId: 'term-1',
@@ -142,7 +144,7 @@ function createBackendHarness (options = {}) {
     }
   }
 
-  async function execute ({ request, protocol }) {
+  async function executeCore ({ request, protocol }) {
     assert.equal(typeof protocol?.buildCommand, 'function')
     requests.push(request)
     const args = request.args
@@ -253,7 +255,24 @@ function createBackendHarness (options = {}) {
   }
 
   const lease = {
-    execute,
+    async execute (payload) {
+      activeLeaseExecutions += 1
+      peakLeaseExecutions = Math.max(peakLeaseExecutions, activeLeaseExecutions)
+      events.push(`lease:start:${payload.request.operation}`)
+      if (options.strictSingleActive && activeLeaseExecutions > 1) {
+        activeLeaseExecutions -= 1
+        throw new Error('strict lease active conflict')
+      }
+      try {
+        if (options.executeDelayMs) {
+          await new Promise(resolve => setTimeout(resolve, options.executeDelayMs))
+        }
+        return await executeCore(payload)
+      } finally {
+        events.push(`lease:end:${payload.request.operation}`)
+        activeLeaseExecutions -= 1
+      }
+    },
     async release () {
       leaseReleases += 1
       events.push('lease:release')
@@ -269,6 +288,7 @@ function createBackendHarness (options = {}) {
     sftpReads,
     rootFiles,
     nodes,
+    get peakLeaseExecutions () { return peakLeaseExecutions },
     get leaseReleases () { return leaseReleases }
   }
 }
@@ -387,6 +407,29 @@ test('privileged backend releases every releasable lease after construction vali
     lease: { execute () {} },
     identity: { uid: '0', username: 'root' }
   }), /lease|租约/)
+})
+
+test('privileged backend serializes every PTY request and release waits for accepted work', async () => {
+  const harness = createBackendHarness({
+    strictSingleActive: true,
+    executeDelayMs: 5
+  })
+  const backend = await createRootBackend(harness)
+
+  await Promise.all([
+    backend.sftp.list('/root'),
+    backend.sftp.stat('/root/file'),
+    backend.sftp.realpath('/root/file')
+  ])
+  assert.equal(harness.peakLeaseExecutions, 1)
+
+  const accepted = backend.sftp.list('/root')
+  const release = backend.release()
+  assert.equal((await accepted).length, 3)
+  assert.equal(await release, true)
+  assert.equal(harness.peakLeaseExecutions, 1)
+  assert.equal(harness.events.at(-1), 'lease:release')
+  await assert.rejects(backend.sftp.stat('/root/file'), /released|释放|关闭/i)
 })
 
 test('privileged facade maps fixed metadata and mutation methods to protocol requests', async () => {
