@@ -283,6 +283,82 @@ function sha256Text (value) {
   return createHash('sha256').update(value).digest('hex')
 }
 
+function stageImportCleanupFunctions (command) {
+  const cleanupStart = command.indexOf('__sp_import_cleanup_candidate()')
+  const cleanupEnd = command.indexOf('; __sp_import_trap()', cleanupStart)
+  assert.ok(cleanupStart >= 0 && cleanupEnd > cleanupStart)
+  return command.slice(cleanupStart, cleanupEnd)
+}
+
+function runTrackedImportCleanup ({
+  cleanup,
+  actualMode,
+  trackedMode,
+  targetMode,
+  targetIdentityMatches,
+  expectDeleted
+}) {
+  const nativeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-import-state-'))
+  try {
+    const deleteLog = path.join(nativeRoot, 'delete-log')
+    const result = runBash([
+      `cd -- ${quoteForBash(toBashPath(nativeRoot))}`,
+      'printf safe > target',
+      `chmod ${actualMode} target`,
+      '__sp_importTempName=temp',
+      '__sp_targetName=target',
+      '__sp_importTempCreated=0',
+      '__sp_importInstalled=1',
+      '__sp_tempDevice="$(stat -c %d -- target)"',
+      '__sp_tempInode="$(stat -c %i -- target)"',
+      `__sp_expectedSha256=${sha256Text('safe')}`,
+      '__sp_expectedSize=4',
+      '__sp_actualUid="$(stat -c %u -- target)"',
+      '__sp_actualGid="$(stat -c %g -- target)"',
+      '__sp_actualMode="$(stat -c %a -- target)"',
+      `__sp_targetUid=${targetIdentityMatches
+        ? '"$__sp_actualUid"'
+        : '"$((__sp_actualUid + 1))"'}`,
+      `__sp_targetGid=${targetIdentityMatches
+        ? '"$__sp_actualGid"'
+        : '"$((__sp_actualGid + 1))"'}`,
+      `__sp_targetMode=${targetMode}`,
+      '__sp_importMetadataKnown=1',
+      '__sp_importMetadataUid="$__sp_actualUid"',
+      '__sp_importMetadataGid="$__sp_actualGid"',
+      `__sp_importMetadataMode=${trackedMode}`,
+      '__sp_gid_effective="$__sp_actualGid"',
+      '__sp_targetParentRealPath=.',
+      '__sp_targetParentDevice=1',
+      '__sp_targetParentInode=2',
+      '__sp_targetParentUid=0',
+      '__sp_targetParentMode=700',
+      '__sp_trusted_parent_path_matches() { return 0; }',
+      '__sp_path_matches_fd() { return 0; }',
+      '__sp_fd_entry_matches() { return 0; }',
+      '__sp_sha256_raw() { sha256sum -- "$1" | cut -d" " -f1; }',
+      `rm() { printf deleted > ${quoteForBash(toBashPath(deleteLog))}; command rm "$@"; }`,
+      cleanup,
+      '__sp_import_cleanup',
+      '__sp_cleanup_status=$?',
+      ...(expectDeleted
+        ? [
+            '[ "$__sp_cleanup_status" -eq 0 ]',
+            '[ ! -e ./target ]',
+            `[ -e ${quoteForBash(toBashPath(deleteLog))} ]`
+          ]
+        : [
+            '[ "$__sp_cleanup_status" -ne 0 ]',
+            '[ -f ./target ]',
+            `[ ! -e ${quoteForBash(toBashPath(deleteLog))} ]`
+          ])
+    ].join('\n'))
+    assert.equal(result.status, 0, result.stdout + result.stderr)
+  } finally {
+    fs.rmSync(nativeRoot, { recursive: true, force: true })
+  }
+}
+
 function linuxStageFixtureToken (suffix) {
   return createHash('sha256')
     .update(`shellpilot-linux-stage-fixture:${suffix}`)
@@ -1436,10 +1512,7 @@ test('stage-import trap cleanup preserves same-inode content changed after chmod
       })
     }
   })
-  const cleanupStart = command.indexOf('__sp_import_cleanup()')
-  const cleanupEnd = command.indexOf(' };', cleanupStart)
-  assert.ok(cleanupStart >= 0 && cleanupEnd > cleanupStart)
-  const cleanup = command.slice(cleanupStart, cleanupEnd + 2)
+  const cleanup = stageImportCleanupFunctions(command)
   const nativeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-import-proof-'))
   try {
     const target = path.join(nativeRoot, 'target')
@@ -1459,6 +1532,10 @@ test('stage-import trap cleanup preserves same-inode content changed after chmod
       `__sp_targetUid=${stat.uid}`,
       `__sp_targetGid=${stat.gid}`,
       `__sp_targetMode=${(stat.mode & 0o7777n).toString(8)}`,
+      '__sp_importMetadataKnown=1',
+      `__sp_importMetadataUid=${stat.uid}`,
+      `__sp_importMetadataGid=${stat.gid}`,
+      `__sp_importMetadataMode=${(stat.mode & 0o7777n).toString(8)}`,
       '__sp_gid_effective=0',
       '__sp_targetParentRealPath=.',
       '__sp_targetParentDevice=1',
@@ -1482,6 +1559,115 @@ test('stage-import trap cleanup preserves same-inode content changed after chmod
   } finally {
     fs.rmSync(nativeRoot, { recursive: true, force: true })
   }
+})
+
+test('stage-import records metadata only after each successful transition', async () => {
+  const { buildPrivilegedFileCommand } = await importModule(protocolModule)
+  const command = buildPrivilegedFileCommand({
+    token: 'e0'.repeat(24),
+    request: {
+      operation: 'stage-import',
+      args: targetStageBinding({
+        sha256: sha256Text('safe'),
+        size: '4',
+        targetMode: '640',
+        targetUid: '1',
+        targetGid: '2'
+      })
+    }
+  })
+  const initialProof = command.indexOf('__sp_importMetadataMode=600')
+  const lockedDown = command.indexOf('__sp_importMetadataMode=0', initialProof + 1)
+  const chown = command.indexOf(
+    'chown -- "$__sp_targetUid:$__sp_targetGid" "$__sp_fd4"'
+  )
+  const chownRecorded = command.indexOf(
+    '__sp_importMetadataUid="$__sp_targetUid"', chown
+  )
+  const chmod = command.indexOf('chmod -- "$__sp_targetMode" "$__sp_fd4"')
+  const chmodRecorded = command.indexOf(
+    '__sp_importMetadataMode="$__sp_targetMode"', chmod
+  )
+
+  assert.ok(initialProof > command.indexOf('stat -L -c %g -- "$__sp_fd4"'))
+  assert.ok(lockedDown > command.indexOf('chmod -- 0 "$__sp_fd4"'))
+  assert.ok(chownRecorded > chown)
+  assert.ok(chmodRecorded > chmod)
+})
+
+test('stage-import trap cleanup removes the exact target after chown failure', async () => {
+  const { buildPrivilegedFileCommand } = await importModule(protocolModule)
+  const command = buildPrivilegedFileCommand({
+    token: 'e1'.repeat(24),
+    request: {
+      operation: 'stage-import',
+      args: targetStageBinding({
+        sha256: sha256Text('safe'),
+        size: '4',
+        targetMode: '600',
+        targetUid: '1',
+        targetGid: '1'
+      })
+    }
+  })
+  runTrackedImportCleanup({
+    cleanup: stageImportCleanupFunctions(command),
+    actualMode: '000',
+    trackedMode: '"$__sp_actualMode"',
+    targetMode: '600',
+    targetIdentityMatches: false,
+    expectDeleted: true
+  })
+})
+
+test('stage-import trap cleanup removes the exact target after chmod failure', async () => {
+  const { buildPrivilegedFileCommand } = await importModule(protocolModule)
+  const command = buildPrivilegedFileCommand({
+    token: 'e2'.repeat(24),
+    request: {
+      operation: 'stage-import',
+      args: targetStageBinding({
+        sha256: sha256Text('safe'),
+        size: '4',
+        targetMode: '600',
+        targetUid: '0',
+        targetGid: '0'
+      })
+    }
+  })
+  runTrackedImportCleanup({
+    cleanup: stageImportCleanupFunctions(command),
+    actualMode: '000',
+    trackedMode: '"$__sp_actualMode"',
+    targetMode: '600',
+    targetIdentityMatches: true,
+    expectDeleted: true
+  })
+})
+
+test('stage-import trap cleanup preserves metadata changed from its tracked state', async () => {
+  const { buildPrivilegedFileCommand } = await importModule(protocolModule)
+  const command = buildPrivilegedFileCommand({
+    token: 'e3'.repeat(24),
+    request: {
+      operation: 'stage-import',
+      args: targetStageBinding({
+        sha256: sha256Text('safe'),
+        size: '4',
+        targetMode: '600',
+        targetUid: '0',
+        targetGid: '0'
+      })
+    }
+  })
+  runTrackedImportCleanup({
+    cleanup: stageImportCleanupFunctions(command),
+    actualMode: '600',
+    trackedMode: '0',
+    targetMode: '"$__sp_actualMode"',
+    targetIdentityMatches: true,
+    expectDeleted: false
+  })
 })
 
 test('digest cleanup identity is stable across PTY request tokens', async () => {
