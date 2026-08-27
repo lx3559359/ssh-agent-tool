@@ -1363,50 +1363,125 @@ test('bound pathname mutations require trusted parent proofs and import through 
       chownIndex
   )
   assert.ok(
-    importCommand.indexOf('__sp_finalDigest="$(__sp_sha256_raw "$__sp_fd4")"') <
+    importCommand.lastIndexOf('__sp_finalDigest="$(__sp_sha256_raw "$__sp_fd4")"') >
       finalModeIndex
   )
 })
 
-test('remove-bound requires a trusted parent binding immediately before deletion', async () => {
+test('remove-bound accepts a fixed non-root parent and requires exact file content proof', async () => {
   const { buildPrivilegedFileCommand } = await importModule(protocolModule)
   const command = buildPrivilegedFileCommand({
     token: 'ea'.repeat(24),
     request: {
       operation: 'remove-bound',
-      args: targetEntryBinding({
+      args: {
         targetPath: '/root/file',
         targetParentRealPath: '/root',
-        targetParentUid: '0',
-        targetParentMode: '755',
+        targetParentDevice: '4001',
+        targetParentInode: '4002',
         targetDevice: '4003',
         targetInode: '4004',
-        targetType: 'file'
-      })
+        targetType: 'file',
+        targetMode: '640',
+        targetUid: '1000',
+        targetGid: '1000',
+        sha256: 'a'.repeat(64),
+        size: '12'
+      }
     }
   })
 
-  assert.match(command, /__sp_trusted_parent_fd \. .*__sp_targetParentUid.*__sp_targetParentMode/)
+  assert.match(command, /__sp_parent_path_matches .*__sp_targetParentDevice.*__sp_targetParentInode/)
+  assert.doesNotMatch(command, /__sp_trusted_parent_fd \. .*__sp_targetParentUid/)
+  assert.match(command, /__sp_sha256_raw "\$__sp_fd5"/)
+  assert.match(command, /"\$__sp_expectedSha256"/)
+  assert.match(command, /"\$__sp_expectedSize"/)
   const removeIndex = command.indexOf('rm -- "./$__sp_boundName"')
   const finalParentCheck = command.lastIndexOf(
-    '__sp_trusted_parent_path_matches "$__sp_targetParentRealPath"'
+    '__sp_parent_path_matches "$__sp_targetParentRealPath"'
   )
   assert.ok(removeIndex > 0 && finalParentCheck > 0 && finalParentCheck < removeIndex)
   assert.throws(() => buildPrivilegedFileCommand({
     token: 'eb'.repeat(24),
     request: {
       operation: 'remove-bound',
-      args: targetEntryBinding({
+      args: {
         targetPath: '/root/file',
         targetParentRealPath: '/root',
-        targetParentUid: undefined,
-        targetParentMode: undefined,
+        targetParentDevice: '4001',
+        targetParentInode: '4002',
         targetDevice: '4003',
         targetInode: '4004',
-        targetType: 'file'
+        targetType: 'file',
+        targetMode: '640',
+        targetUid: '1000',
+        targetGid: '1000'
+      }
+    }
+  }), /sha256|size|参数合同|缺少必要参数/i)
+})
+
+test('stage-import trap cleanup preserves same-inode content changed after chmod', async () => {
+  const { buildPrivilegedFileCommand } = await importModule(protocolModule)
+  const command = buildPrivilegedFileCommand({
+    token: 'ee'.repeat(24),
+    request: {
+      operation: 'stage-import',
+      args: targetStageBinding({
+        sha256: sha256Text('safe'),
+        size: '4',
+        targetMode: '600',
+        targetUid: '0',
+        targetGid: '0'
       })
     }
-  }), /参数合同|缺少必要参数/)
+  })
+  const cleanupStart = command.indexOf('__sp_import_cleanup()')
+  const cleanupEnd = command.indexOf(' };', cleanupStart)
+  assert.ok(cleanupStart >= 0 && cleanupEnd > cleanupStart)
+  const cleanup = command.slice(cleanupStart, cleanupEnd + 2)
+  const nativeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-import-proof-'))
+  try {
+    const target = path.join(nativeRoot, 'target')
+    const deleteLog = path.join(nativeRoot, 'delete-log')
+    fs.writeFileSync(target, 'evil', { mode: 0o600 })
+    const stat = fs.statSync(target, { bigint: true })
+    const result = runBash([
+      `cd -- ${quoteForBash(toBashPath(nativeRoot))}`,
+      '__sp_importTempName=temp',
+      '__sp_targetName=target',
+      '__sp_importTempCreated=0',
+      '__sp_importInstalled=1',
+      `__sp_tempDevice=${stat.dev}`,
+      `__sp_tempInode=${stat.ino}`,
+      `__sp_expectedSha256=${sha256Text('safe')}`,
+      '__sp_expectedSize=4',
+      `__sp_targetUid=${stat.uid}`,
+      `__sp_targetGid=${stat.gid}`,
+      `__sp_targetMode=${(stat.mode & 0o7777n).toString(8)}`,
+      '__sp_gid_effective=0',
+      '__sp_targetParentRealPath=.',
+      '__sp_targetParentDevice=1',
+      '__sp_targetParentInode=2',
+      '__sp_targetParentUid=0',
+      '__sp_targetParentMode=700',
+      '__sp_trusted_parent_path_matches() { return 0; }',
+      '__sp_path_matches_fd() { return 0; }',
+      '__sp_fd_entry_matches() { return 0; }',
+      '__sp_sha256_raw() { sha256sum -- "$1" | cut -d" " -f1; }',
+      `rm() { printf deleted > ${quoteForBash(toBashPath(deleteLog))}; command rm "$@"; }`,
+      cleanup,
+      '__sp_import_cleanup',
+      '__sp_cleanup_status=$?',
+      '[ "$__sp_cleanup_status" -ne 0 ]',
+      '[ -f ./target ]',
+      `[ ! -e ${quoteForBash(toBashPath(deleteLog))} ]`
+    ].join('\n'))
+    assert.equal(result.status, 0, result.stdout + result.stderr)
+    assert.equal(fs.readFileSync(target, 'utf8'), 'evil')
+  } finally {
+    fs.rmSync(nativeRoot, { recursive: true, force: true })
+  }
 })
 
 test('digest cleanup identity is stable across PTY request tokens', async () => {
@@ -1598,11 +1673,14 @@ test('privileged command builder exposes every fixed operation and fails closed 
       targetParentRealPath: '/root',
       targetParentDevice: '4001',
       targetParentInode: '4002',
-      targetParentUid: '0',
-      targetParentMode: '755',
       targetDevice: '4003',
       targetInode: '4004',
-      targetType: 'file'
+      targetType: 'file',
+      targetMode: '640',
+      targetUid: '21',
+      targetGid: '22',
+      sha256: 'd'.repeat(64),
+      size: '12'
     }, '__sp_entry_matches "./$__sp_boundName"'],
     ['digest-cleanup', stageBinding(), '__sp_digestScratch'],
     ['sha256', { path: '/x' }, '__sp_emit_sha256 "$__sp_path"'],
@@ -2147,11 +2225,14 @@ test('bound manifest operations reject replaced directories and entries', {
         targetParentRealPath: bashDirectory,
         targetParentDevice: directoryDevice,
         targetParentInode: directoryInode,
-        targetParentUid: String(fs.statSync(nativeDirectory).uid),
-        targetParentMode: (fs.statSync(nativeDirectory).mode & 0o7777).toString(8),
         targetDevice: fileDevice,
         targetInode: String(BigInt(fileInode) + 1n),
-        targetType: 'file'
+        targetType: 'file',
+        targetMode: (fs.statSync(nativeFile).mode & 0o7777).toString(8),
+        targetUid: String(fs.statSync(nativeFile).uid),
+        targetGid: String(fs.statSync(nativeFile).gid),
+        sha256: sha256Text('trusted'),
+        size: String(Buffer.byteLength('trusted'))
       }
     })
     assert.notEqual(protectedRemoval.execution.status, 0)
@@ -2186,11 +2267,14 @@ test('remove-bound preserves unknown content and removes only its exact empty di
         targetParentRealPath: nonemptyBinding.targetParentRealPath,
         targetParentDevice: nonemptyBinding.targetParentDevice,
         targetParentInode: nonemptyBinding.targetParentInode,
-        targetParentUid: nonemptyBinding.targetParentUid,
-        targetParentMode: nonemptyBinding.targetParentMode,
         targetDevice: nonemptyBinding.targetDevice,
         targetInode: nonemptyBinding.targetInode,
-        targetType: 'directory'
+        targetType: 'directory',
+        targetMode: (fs.statSync(nonemptyNative).mode & 0o7777).toString(8),
+        targetUid: String(fs.statSync(nonemptyNative).uid),
+        targetGid: String(fs.statSync(nonemptyNative).gid),
+        sha256: '0'.repeat(64),
+        size: '0'
       }
     })
     assert.notEqual(nonempty.execution.status, 0)
@@ -2206,11 +2290,14 @@ test('remove-bound preserves unknown content and removes only its exact empty di
         targetParentRealPath: emptyBinding.targetParentRealPath,
         targetParentDevice: emptyBinding.targetParentDevice,
         targetParentInode: emptyBinding.targetParentInode,
-        targetParentUid: emptyBinding.targetParentUid,
-        targetParentMode: emptyBinding.targetParentMode,
         targetDevice: emptyBinding.targetDevice,
         targetInode: emptyBinding.targetInode,
-        targetType: 'directory'
+        targetType: 'directory',
+        targetMode: (fs.statSync(emptyNative).mode & 0o7777).toString(8),
+        targetUid: String(fs.statSync(emptyNative).uid),
+        targetGid: String(fs.statSync(emptyNative).gid),
+        sha256: '0'.repeat(64),
+        size: '0'
       }
     })
     assert.equal(empty.execution.status, 0, empty.execution.stderr)

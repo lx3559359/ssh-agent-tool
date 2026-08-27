@@ -7,6 +7,7 @@ import { createStreamingSha256 } from './streaming-sha256.js'
 
 const readChunkBytes = 64 * 1024
 const maxReadFileBytes = 8 * 1024 * 1024
+const directoryRemovalDigest = '0'.repeat(64)
 const copyLimits = Object.freeze({
   maxDepth: 128,
   maxNodes: 10000,
@@ -667,14 +668,58 @@ export async function createPrivilegedFileBackend ({
     }
   }
 
-  function boundRemovalArgs (path, entry) {
+  function boundRemovalArgs (path, entry, proof) {
     return {
       targetPath: path,
-      ...targetParentBindingArgs(entry.parentPath, entry.parent),
+      ...targetParentIdentityArgs(entry.parentPath, entry.parent),
       targetDevice: String(entry.metadata.device),
       targetInode: String(entry.metadata.inode),
-      targetType: entry.metadata.type
+      targetType: entry.metadata.type,
+      targetMode: normalizeMode(entry.metadata.mode & 0o7777).toString(8),
+      targetUid: String(entry.metadata.uid),
+      targetGid: String(entry.metadata.gid),
+      sha256: proof?.sha256 ?? directoryRemovalDigest,
+      size: String(proof?.size ?? 0)
     }
+  }
+
+  function removalMetadataMatches (current, expected) {
+    const keys = ['device', 'inode', 'type', 'mode', 'uid', 'gid']
+    if (current.type === 'file') {
+      keys.push('size')
+      if (Object.hasOwn(expected, 'mtime')) keys.push('mtime')
+    }
+    return keys.every(key => current[key] === expected[key])
+  }
+
+  async function prepareBoundRemoval (
+    path,
+    expectedMetadata,
+    expectedProof,
+    label,
+    signal
+  ) {
+    const entry = await boundMutationEntry(path, label, signal)
+    const candidates = Array.isArray(expectedMetadata)
+      ? expectedMetadata
+      : [expectedMetadata]
+    if (!candidates.some(expected =>
+      removalMetadataMatches(entry.metadata, expected))) {
+      throw new Error(`root 文件后端 ${label} metadata 或 binding 发生变化`)
+    }
+    let proof
+    if (entry.metadata.type === 'file') {
+      proof = await boundDigest({
+        path,
+        metadata: entry.metadata,
+        maxSize: entry.metadata.size
+      }, 'sha256-bound', 0, readChunkBytes, signal)
+      if (expectedProof && (proof.sha256 !== expectedProof.sha256 ||
+        proof.size !== expectedProof.size)) {
+        throw new Error(`root 文件后端 ${label} content proof 发生变化`)
+      }
+    }
+    return boundRemovalArgs(path, entry, proof)
   }
 
   async function boundLstat (path, parentMetadata, signal) {
@@ -818,7 +863,16 @@ export async function createPrivilegedFileBackend ({
       }
       targetCreated = {
         device: imported.targetDevice,
-        inode: imported.targetInode
+        inode: imported.targetInode,
+        type: 'file',
+        mode: entry.metadata.mode,
+        uid: entry.metadata.uid,
+        gid: entry.metadata.gid,
+        size: imported.size,
+        proof: {
+          sha256: imported.sha256,
+          size: imported.size
+        }
       }
     } catch (error) {
       operationError = error
@@ -963,19 +1017,21 @@ export async function createPrivilegedFileBackend ({
     if (primaryError) {
       for (const entry of created.reverse()) {
         try {
-          await executeRequest(
-            'remove-bound',
-            {
-              targetPath: entry.path,
-              ...targetParentBindingArgs(
-                parentFilePath(entry.path),
-                entry.parentBinding
-              ),
-              targetDevice: entry.binding.device,
-              targetInode: entry.binding.inode,
-              targetType: entry.type
-            }
-          )
+          const expectedMetadata = [entry.binding]
+          if (entry.desiredMetadata) {
+            expectedMetadata.push({
+              ...entry.binding,
+              mode: entry.desiredMetadata.mode,
+              uid: entry.desiredMetadata.uid,
+              gid: entry.desiredMetadata.gid
+            })
+          }
+          await executeRequest('remove-bound', await prepareBoundRemoval(
+            entry.path,
+            expectedMetadata,
+            entry.binding.proof,
+            'copy rollback'
+          ))
         } catch (rollbackError) {
           primaryError.rollbackError ||= rollbackError
         }
@@ -993,20 +1049,14 @@ export async function createPrivilegedFileBackend ({
     await invalidateReadStreams(remotePath)
     for (const entry of manifest.reverse()) {
       throwIfAborted(signal)
-      const current = await boundMutationEntry(
+      const args = await prepareBoundRemoval(
         entry.path,
+        entry.metadata,
+        entry.proof,
         'removeEntry',
         signal
       )
-      for (const key of ['device', 'inode', 'type']) {
-        if (current.metadata[key] !== entry.metadata[key]) {
-          throw new Error('root 文件后端 removeEntry binding 发生变化')
-        }
-      }
-      await executeRequest('remove-bound', boundRemovalArgs(
-        entry.path,
-        current
-      ), { signal })
+      await executeRequest('remove-bound', args, { signal })
     }
     return 1
   }
@@ -1333,7 +1383,12 @@ export async function createPrivilegedFileBackend ({
         throw new Error('root 文件后端 rm target 必须为普通文件')
       }
       await invalidateReadStreams(remotePath)
-      await executeRequest('remove-bound', boundRemovalArgs(remotePath, entry))
+      await executeRequest('remove-bound', await prepareBoundRemoval(
+        remotePath,
+        entry.metadata,
+        null,
+        'rm'
+      ))
       return 1
     },
     async rmdir (path) {
@@ -1343,7 +1398,12 @@ export async function createPrivilegedFileBackend ({
         throw new Error('root 文件后端 rmdir target 必须为目录')
       }
       await invalidateReadStreams(remotePath)
-      await executeRequest('remove-bound', boundRemovalArgs(remotePath, entry))
+      await executeRequest('remove-bound', await prepareBoundRemoval(
+        remotePath,
+        entry.metadata,
+        null,
+        'rmdir'
+      ))
       return 1
     },
     async chmod (path, mode) {

@@ -47,7 +47,11 @@ function createBackendHarness (options = {}) {
     if (!node.inode) node.inode = String(nextPrivilegedInode++)
     return node
   }
-  function privilegedBytes (node, offset = 0, length = node?.size ?? 0) {
+  function privilegedBytes (
+    node,
+    offset = 0,
+    length = node?.size ?? node?.content?.length ?? 0
+  ) {
     const size = Number(node?.size ?? node?.content?.length ?? 0)
     const available = Math.max(0, Math.min(length, size - offset))
     if (node?.virtualByte !== undefined) {
@@ -617,6 +621,10 @@ function createBackendHarness (options = {}) {
       node.uid = Number(args.targetUid)
       node.gid = Number(args.targetGid)
       node.mode = Number.parseInt(args.targetMode, 8)
+      if (options.failMetadataAfterApply === args.targetPath) {
+        options.failMetadataAfterApply = undefined
+        throw new Error('metadata cancelled after apply')
+      }
       return { exitCode: 0, kind: 'metadata-bound', ok: true }
     }
     if (options.privilegedTree && request.operation === 'touch-bound') {
@@ -744,14 +752,26 @@ function createBackendHarness (options = {}) {
         args.targetParentRealPath
       ))
       const node = ensurePrivilegedBinding(privilegedNodes.get(args.targetPath))
+      const mutatedContent = options.mutateBeforeRemoveBound?.[args.targetPath]
+      if (mutatedContent !== undefined && node?.type === 'file') {
+        node.content = Buffer.from(mutatedContent)
+        node.size = node.content.length
+        delete options.mutateBeforeRemoveBound[args.targetPath]
+      }
       if (!parent || !node || parent.device !== args.targetParentDevice ||
         parent.inode !== args.targetParentInode ||
-        String(parent.uid) !== args.targetParentUid ||
-        (parent.mode & 0o7777).toString(8) !== args.targetParentMode ||
-        parent.uid !== 0 || (parent.mode & 0o022) !== 0 ||
         node.device !== args.targetDevice || node.inode !== args.targetInode ||
-        node.type !== args.targetType) {
+        node.type !== args.targetType ||
+        (node.mode & 0o7777).toString(8) !== args.targetMode ||
+        String(node.uid) !== args.targetUid ||
+        String(node.gid) !== args.targetGid) {
         throw new Error('remove entry binding changed')
+      }
+      if (node.type === 'file' && (
+        sha256(privilegedBytes(node)) !== args.sha256 ||
+        String(node.size ?? node.content.length) !== args.size
+      )) {
+        throw new Error('remove content proof changed')
       }
       if (node.type === 'directory' && [...privilegedNodes.keys()].some(path =>
         path.startsWith(`${args.targetPath}/`))) {
@@ -1260,6 +1280,67 @@ test('real transaction adapter cannot overwrite a target raced into bound rename
     harness.privilegedNodes.get(targetPath).content.toString(),
     'foreign target'
   )
+  await backend.release()
+})
+
+test('real transaction adapter cleans a non-root-owned snapshot staging tree', async () => {
+  const { createSftpTransactionAdapter } = await importModule(
+    'src/client/components/sftp/sftp-transaction-adapter.js'
+  )
+  const { buildSideEffectSafetyRequest } = await importModule(
+    'src/client/common/safety-transactions/side-effect-model.js'
+  )
+  const sourcePath = '/srv/app/tree'
+  const operationId = 'privileged-non-root-snapshot-cleanup'
+  const operationDir = `/srv/app/.shellpilot-transactions/${operationId}`
+  const snapshotPath = `${operationDir}/source`
+  const stagingPath = `${snapshotPath}.preparing`
+  const harness = createBackendHarness({
+    raceRenameTarget: snapshotPath,
+    privilegedTree: {
+      [sourcePath]: {
+        type: 'directory', mode: 0o750, uid: 1000, gid: 1000
+      },
+      [`${sourcePath}/nested`]: {
+        type: 'directory', mode: 0o750, uid: 1001, gid: 1001
+      },
+      [`${sourcePath}/nested/file`]: {
+        type: 'file', mode: 0o640, uid: 1002, gid: 1002, content: 'snapshot'
+      }
+    }
+  })
+  const backend = await createRootBackend(harness)
+  const operation = await buildSideEffectSafetyRequest({
+    id: operationId,
+    source: 'sftp',
+    title: 'privileged non-root snapshot cleanup',
+    endpoint: {
+      host: 'prod.example.com',
+      port: 22,
+      username: 'root',
+      tabId: 'tab-1',
+      pid: 1001,
+      sessionType: 'sftp'
+    },
+    effect: {
+      adapter: 'sftp',
+      action: 'delete',
+      paths: { source: sourcePath },
+      resources: [{ path: sourcePath, type: 'directory' }],
+      type: 'directory',
+      expected: { absent: true }
+    }
+  })
+  const adapter = createSftpTransactionAdapter({ getSftp: () => backend.sftp })
+
+  await assert.rejects(adapter.prepare(operation), /rename|race|操作失败/i)
+  assert.deepEqual(
+    [...harness.privilegedNodes.keys()].filter(path =>
+      path === stagingPath || path.startsWith(`${stagingPath}/`)),
+    []
+  )
+  assert.equal(harness.privilegedNodes.has(snapshotPath), true,
+    'the raced snapshot target remains foreign and must not be removed')
   await backend.release()
 })
 
@@ -2081,6 +2162,50 @@ test('privileged copyEntry rolls back a proven imported target when stage cleanu
   await backend.release()
 })
 
+test('privileged copy rollback preserves a same-inode target modified after import', async () => {
+  const options = {
+    cleanupFailure: 'download-',
+    mutateBeforeRemoveBound: { '/root/copied': 'evil!' },
+    privilegedTree: {
+      '/root/source': { type: 'file', mode: 0o640, content: 'owned' }
+    }
+  }
+  const harness = createBackendHarness(options)
+  const backend = await createRootBackend(harness)
+
+  await assert.rejects(
+    backend.sftp.copyEntry('/root/source', '/root/copied', {}),
+    /stage cleanup failed/
+  )
+  assert.equal(
+    harness.privilegedNodes.get('/root/copied').content.toString(),
+    'evil!'
+  )
+  options.cleanupFailure = undefined
+  await backend.release()
+})
+
+test('privileged copy rollback removes children after deferred metadata changed parent ownership', async () => {
+  const harness = createBackendHarness({
+    failMetadataAfterApply: '/root/copied',
+    privilegedTree: {
+      '/root/source': { type: 'directory', mode: 0o750, uid: 41, gid: 42 },
+      '/root/source/sub': { type: 'directory', mode: 0o750, uid: 43, gid: 44 },
+      '/root/source/sub/file': { type: 'file', mode: 0o640, uid: 45, gid: 46, content: 'owned' }
+    }
+  })
+  const backend = await createRootBackend(harness)
+
+  await assert.rejects(
+    backend.sftp.copyEntry('/root/source', '/root/copied', {}),
+    /metadata cancelled/
+  )
+  const residuals = [...harness.privilegedNodes.keys()].filter(path =>
+    path === '/root/copied' || path.startsWith('/root/copied/'))
+  assert.deepEqual(residuals, [])
+  await backend.release()
+})
+
 test('privileged copy never mutates a directory child replaced before deferred metadata', async () => {
   const harness = createBackendHarness({
     replaceMetadataTargetBeforeBound: '/root/copied',
@@ -2158,6 +2283,39 @@ test('privileged removeEntry builds a bounded manifest, propagates AbortSignal, 
       /options/i
     )
   }
+  await backend.release()
+})
+
+test('privileged removeEntry preserves a same-inode file rewritten after its manifest proof', async () => {
+  const harness = createBackendHarness({
+    mutateBeforeRemoveBound: { '/root/file': 'evil' },
+    privilegedTree: {
+      '/root/file': { type: 'file', mode: 0o640, content: 'safe' }
+    }
+  })
+  const originalInode = harness.privilegedNodes.get('/root/file').inode
+  const backend = await createRootBackend(harness)
+
+  await assert.rejects(
+    backend.sftp.removeEntry('/root/file', {}),
+    /digest|摘要|content|proof|变化/i
+  )
+  assert.equal(harness.privilegedNodes.get('/root/file').inode, originalInode)
+  assert.equal(harness.privilegedNodes.get('/root/file').content.toString(), 'evil')
+  await backend.release()
+})
+
+test('privileged bounded remove accepts a non-root-owned parent', async () => {
+  const harness = createBackendHarness({
+    privilegedTree: {
+      '/srv/user': { type: 'directory', mode: 0o750, uid: 1000, gid: 1000 },
+      '/srv/user/snapshot': { type: 'file', mode: 0o600, uid: 1000, gid: 1000, content: 'snapshot' }
+    }
+  })
+  const backend = await createRootBackend(harness)
+
+  assert.equal(await backend.sftp.rm('/srv/user/snapshot'), 1)
+  assert.equal(harness.privilegedNodes.has('/srv/user/snapshot'), false)
   await backend.release()
 })
 
