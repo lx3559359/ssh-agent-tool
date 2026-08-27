@@ -489,7 +489,10 @@ export function buildPrivilegedFileCommand ({ token: providedToken, request }) {
     `${argumentEnvironmentVariables[key]}=${shellQuote(
       encodeUtf8Base64(normalized.args[key])
     )}`)
+  // `command` bypasses a shell function named /usr/bin/env. An effective-root
+  // shell that replaces `command` or forges OSC is outside this PTY trust model.
   return [
+    'command',
     '/usr/bin/env',
     '-i',
     'PATH=/usr/bin:/bin',

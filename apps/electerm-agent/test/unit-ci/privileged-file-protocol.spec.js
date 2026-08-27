@@ -129,7 +129,7 @@ test('privileged file protocol accepts only fixed operations and never interpola
   assert.doesNotMatch(command, /中文/)
   const encodedHostile = Buffer.from(hostile).toString('base64')
   assert.equal(command.includes(`SHELLPILOT_ARG_PATH='${encodedHostile}'`), true)
-  assert.match(command, /^\/usr\/bin\/env -i /)
+  assert.match(command, /^command \/usr\/bin\/env -i /)
   assert.match(command, /PATH=\/usr\/bin:\/bin/)
   assert.match(command, /SHELLPILOT_TOKEN=/)
   assert.match(command, /SHELLPILOT_ARG_PATH=/)
@@ -225,6 +225,61 @@ test('list ignores inherited GLOBIGNORE and startup environment pollution', {
     ].join('\n'), '9'.repeat(48)),
     ['.hidden', 'visible']
   )
+})
+
+test('clean bootstrap bypasses an absolute-path env function', {
+  skip: !bashAvailable
+}, async () => {
+  const nativeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-env-function-'))
+  try {
+    const nativeLog = path.join(nativeRoot, 'env-function.log')
+    fs.writeFileSync(nativeLog, '')
+    const logPath = toBashPath(nativeLog)
+    const names = await listNamesFromRealBash(rootPath => [
+      `__test_env_log=${quoteForBash(logPath)}`,
+      'function /usr/bin/env { printf "called\\n" >> "$__test_env_log"; if [ "$1" = -i ]; then shift; fi; command /usr/bin/env "$@"; }',
+      'export -f /usr/bin/env 2>/dev/null || :',
+      'stat () { command stat "$@"; }',
+      'export -f stat',
+      `export GLOBIGNORE=${quoteForBash(`${rootPath}/visible`)}`,
+      'export BASHOPTS'
+    ].join('\n'), 'b0'.repeat(24))
+    assert.deepEqual(names, ['.hidden', 'visible'])
+    assert.equal(fs.readFileSync(nativeLog, 'utf8'), '')
+  } finally {
+    fs.rmSync(nativeRoot, { recursive: true, force: true })
+  }
+})
+
+test('ordinary env alias cannot replace the absolute clean bootstrap target', {
+  skip: !bashAvailable
+}, async () => {
+  const {
+    buildPrivilegedFileCommand,
+    createPrivilegedFileParser,
+    createPrivilegedFileRequest
+  } = await importModule(protocolModule)
+  const nativeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-env-alias-'))
+  try {
+    const nativeLog = path.join(nativeRoot, 'env-alias.log')
+    fs.writeFileSync(nativeLog, '')
+    const logPath = toBashPath(nativeLog)
+    const token = 'b1'.repeat(24)
+    const request = createPrivilegedFileRequest({ operation: 'probe' })
+    const command = buildPrivilegedFileCommand({ token, request })
+    const result = runBash([
+      'shopt -s expand_aliases',
+      `alias env='printf called >> ${quoteForBash(logPath)}; false'`,
+      command
+    ].join('\n'))
+    assert.equal(result.status, 0, result.stdout + result.stderr)
+    const parser = createPrivilegedFileParser({ token, request })
+    parser.push(result.stdout)
+    assert.equal(parser.result().capabilities.cleanShell, true)
+    assert.equal(fs.readFileSync(nativeLog, 'utf8'), '')
+  } finally {
+    fs.rmSync(nativeRoot, { recursive: true, force: true })
+  }
 })
 
 test('probe ignores exported functions and reports its clean shell boundary', {
