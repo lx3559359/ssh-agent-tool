@@ -31,7 +31,11 @@ function taskMarker (token, phase, ...fields) {
   return `\u001b]697;SHELLPILOT_OPS;${token};${phase};${fields.join(';')}\u0007`
 }
 
-function createBoundedProbeProtocol ({ token = 'c'.repeat(48), readResult } = {}) {
+function createBoundedProbeProtocol ({
+  token = 'c'.repeat(48),
+  readResult,
+  output = []
+} = {}) {
   return {
     createToken: () => token,
     buildCommand: ({ token, request }) => `file:${token}:${request.operation}`,
@@ -66,7 +70,7 @@ function createBoundedProbeProtocol ({ token = 'c'.repeat(48), readResult } = {}
             }
             newlineIndex = pending.indexOf('\n')
           }
-          return {}
+          return { output }
         },
         identity: () => effectiveIdentity,
         exitCode: () => completedExitCode,
@@ -79,8 +83,8 @@ function createBoundedProbeProtocol ({ token = 'c'.repeat(48), readResult } = {}
   }
 }
 
-function createThrowingAccessorProtocol (field) {
-  const protocol = createBoundedProbeProtocol({ token: 'e'.repeat(48) })
+function createThrowingAccessorProtocol (field, token = 'e'.repeat(48)) {
+  const protocol = createBoundedProbeProtocol({ token })
   if (field === 'readResult') {
     protocol.readResult = () => {
       throw new Error(`custom protocol ${field} failed`)
@@ -561,7 +565,6 @@ test('custom protocol cannot override authoritative completion fields', async ()
 
 test('protocol completion accessor failures reject immediately and release cleanly', async () => {
   for (const field of [
-    'identity',
     'started',
     'ended',
     'exitCode',
@@ -591,6 +594,47 @@ test('protocol completion accessor failures reject immediately and release clean
     assert.match(outcome.message, new RegExp(`custom protocol ${field} failed`))
     assert.equal(harness.interrupts, 0)
     assert.equal(harness.disposedListeners, 1)
+    assert.equal(await lease.release(), true)
+  }
+})
+
+test('running protocol output failures cancel once and retain the lease through recovery', async () => {
+  for (const field of ['identity', 'push', 'onChunk']) {
+    const token = 'o'.repeat(48)
+    const harness = await createControllerHarness()
+    const lease = await harness.controller.acquire(`files-output-${field}`)
+    const protocol = field === 'onChunk'
+      ? createBoundedProbeProtocol({ token, output: ['visible'] })
+      : createThrowingAccessorProtocol(field, token)
+    const running = lease.execute({
+      request: { operation: 'probe' },
+      protocol,
+      timeoutMs: 1000,
+      onChunk: field === 'onChunk'
+        ? () => { throw new Error('custom protocol onChunk failed') }
+        : undefined
+    })
+
+    harness.emit(`file:${token}:start:0:root\n`)
+    if (field === 'onChunk') {
+      harness.emit(`file:${token}:result:probe:stat,base64\n`)
+    }
+    assert.equal(harness.interrupts, 1)
+    assert.equal(harness.controller.isBusy(), true)
+    await assert.rejects(
+      harness.controller.acquire(`files-output-next-${field}`),
+      /当前终端已有运维任务/
+    )
+    await assert.rejects(lease.release(), /PTY 运维命令仍在执行/)
+
+    harness.emitCommandFinished(130)
+    harness.emitPromptStarted()
+    await assert.rejects(
+      running,
+      error => error.message === `custom protocol ${field} failed`
+    )
+    await delay(20)
+    assert.equal(harness.interrupts, 1)
     assert.equal(await lease.release(), true)
   }
 })

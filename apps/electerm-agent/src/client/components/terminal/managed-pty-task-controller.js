@@ -347,7 +347,7 @@ export function createManagedPtyTaskController ({
             for (const output of parsed?.output || []) options.onChunk?.(output)
             settleIfComplete(execution)
           } catch (error) {
-            rejectExecution(execution, error, { cancelExpected: true })
+            requestCancellation(execution, error)
           }
         })
         if (armSubmission(submissionToken) !== true) {
