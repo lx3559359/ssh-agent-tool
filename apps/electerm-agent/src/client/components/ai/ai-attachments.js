@@ -155,9 +155,27 @@ async function readPathFilePayload (attachment, reader) {
   }
 }
 
+async function readRemoteFilePayload (attachment, sftpRef, signal) {
+  if (typeof sftpRef?.readRemoteFileAttachment !== 'function') {
+    throw new Error('当前连接不支持安全读取该文件，请重新连接或升级客户端。')
+  }
+  const result = await sftpRef.readRemoteFileAttachment(
+    getLegacyAttachmentFile(attachment),
+    { maxBytes: MAX_AI_CONTENT_BYTES, signal }
+  )
+  if (result?.truncated) {
+    throw new Error('文件超过 10 MB 读取上限。')
+  }
+  return {
+    name: attachment.name,
+    mimeType: attachment.mimeType || attachment.file?.mimeType || '',
+    dataBase64: result?.base64 || ''
+  }
+}
+
 async function ingestAttachment (
   attachment,
-  { fsApi, sftpRef, requestWebAccessAuthorization }
+  { fsApi, sftpRef, requestWebAccessAuthorization, signal }
 ) {
   if (attachment.source === 'url') {
     return readAIWebContent({
@@ -168,7 +186,7 @@ async function ingestAttachment (
   }
   let payload
   if (attachment.source === 'sftp') {
-    payload = await readPathFilePayload(attachment, sftpRef?.sftp)
+    payload = await readRemoteFilePayload(attachment, sftpRef, signal)
   } else if (attachment.path) {
     payload = await readPathFilePayload(attachment, fsApi)
   } else {
@@ -192,11 +210,14 @@ function getLegacyAttachmentFile (attachment = {}) {
   }
 }
 
-function shouldUseLegacyFileReader (attachment = {}, { fsApi, sftpRef } = {}) {
+function shouldUseLegacyFileReader (attachment = {}, { fsApi } = {}) {
   if (!['local', 'sftp'].includes(attachment.source)) return false
   if (attachment.source === 'local' && !attachment.path) return false
-  const reader = attachment.source === 'sftp' ? sftpRef?.sftp : fsApi
   const name = String(attachment.name || attachment.path || '')
+  if (attachment.source === 'sftp') {
+    return LEGACY_TEXT_FILE_PATTERN.test(name) || ARCHIVE_FILE_PATTERN.test(name)
+  }
+  const reader = fsApi
   if (ARCHIVE_FILE_PATTERN.test(name)) {
     return typeof reader?.listArchive === 'function' &&
       typeof reader?.readArchiveTextEntry === 'function'
@@ -207,11 +228,23 @@ function shouldUseLegacyFileReader (attachment = {}, { fsApi, sftpRef } = {}) {
 
 async function readLegacyAttachmentContext (
   attachment,
-  { fsApi, sftpRef, maxBytes }
+  { fsApi, sftpRef, maxBytes, signal }
 ) {
+  if (attachment.source === 'sftp') {
+    if (typeof sftpRef?.readRemoteFileContext !== 'function') {
+      throw new Error('当前连接不支持安全读取该文件，请重新连接或升级客户端。')
+    }
+    const context = await sftpRef.readRemoteFileContext(
+      getLegacyAttachmentFile(attachment),
+      { maxBytes, signal }
+    )
+    if (!context?.ok) {
+      throw new Error(context?.message || '文件读取失败。')
+    }
+    return context
+  }
   const context = await readSftpFileContext({
     file: getLegacyAttachmentFile(attachment),
-    sftp: sftpRef?.sftp,
     fsApi,
     maxBytes
   })
@@ -307,7 +340,8 @@ export async function buildAttachmentAIContent ({
   fsApi,
   sftpRef,
   requestWebAccessAuthorization,
-  maxBytes = AI_FILE_PREVIEW_MAX_BYTES
+  maxBytes = AI_FILE_PREVIEW_MAX_BYTES,
+  signal
 } = {}) {
   const blocks = []
   const imageParts = []
@@ -318,7 +352,8 @@ export async function buildAttachmentAIContent ({
         const context = await readLegacyAttachmentContext(attachment, {
           fsApi,
           sftpRef,
-          maxBytes
+          maxBytes,
+          signal
         })
         blocks.push(formatLegacyFileContext(context))
         continue
@@ -326,7 +361,8 @@ export async function buildAttachmentAIContent ({
       const content = await ingestAttachment(attachment, {
         fsApi,
         sftpRef,
-        requestWebAccessAuthorization
+        requestWebAccessAuthorization,
+        signal
       })
       if (content.kind === 'image') {
         blocks.push(`图片：${content.name}（已作为视觉内容发送）`)

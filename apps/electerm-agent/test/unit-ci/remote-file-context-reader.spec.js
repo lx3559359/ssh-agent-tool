@@ -88,6 +88,46 @@ test('bounded remote preview uses only lstat and readFileChunk with AbortSignal'
   assert.equal(calls.every(call => call.at(-1) === controller.signal), true)
 })
 
+test('bounded remote attachment reads chunks under a hard cap and observes abort', async () => {
+  const {
+    readRemoteFileBase64Preview
+  } = await import(moduleUrl)
+  const contents = Buffer.alloc(70 * 1024, 65)
+  const calls = []
+  const controller = new AbortController()
+  const backend = backendFor(contents, calls)
+  const originalRead = backend.readFileChunk
+  backend.readFileChunk = async (...args) => {
+    const result = await originalRead(...args)
+    if (calls.filter(call => call[0] === 'readFileChunk').length === 1) {
+      controller.abort(new DOMException('stopped', 'AbortError'))
+    }
+    return result
+  }
+
+  await assert.rejects(
+    readRemoteFileBase64Preview(backend, '/root/data.bin', {
+      signal: controller.signal,
+      maxBytes: contents.length
+    }),
+    error => error?.name === 'AbortError'
+  )
+  assert.equal(calls.filter(call => call[0] === 'readFileChunk').length, 1)
+
+  let reads = 0
+  const oversized = {
+    lstat: async () => ({ type: 'f', size: 11 }),
+    readFileChunk: async () => { reads += 1 }
+  }
+  assert.deepEqual(
+    await readRemoteFileBase64Preview(oversized, '/root/large.bin', {
+      maxBytes: 10
+    }),
+    { base64: '', truncated: true, bytesRead: 0, totalBytes: 11 }
+  )
+  assert.equal(reads, 0)
+})
+
 test('bounded remote archive reader supports zip and enforces entry limits', async () => {
   const { createRemoteFileContextReader } = await import(moduleUrl)
   const zip = new JSZip()

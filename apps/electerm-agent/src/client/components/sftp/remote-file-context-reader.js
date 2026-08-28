@@ -4,6 +4,7 @@ export const REMOTE_CONTEXT_PREVIEW_MAX_BYTES = 64 * 1024
 export const REMOTE_CONTEXT_ARCHIVE_MAX_BYTES = 8 * 1024 * 1024
 export const REMOTE_CONTEXT_EXPANDED_MAX_BYTES = 8 * 1024 * 1024
 export const REMOTE_CONTEXT_ARCHIVE_MAX_ENTRIES = 512
+export const REMOTE_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024
 
 const REMOTE_CONTEXT_ARCHIVE_ENTRY_MAX_BYTES = 8 * 1024 * 1024
 const REMOTE_CONTEXT_READ_CHUNK_BYTES = 64 * 1024
@@ -40,6 +41,72 @@ function concatBytes (parts, length) {
     offset += part.byteLength
   }
   return result
+}
+
+function bytesBase64 (bytes) {
+  const chunkSize = 0x8000
+  let binary = ''
+  for (let offset = 0; offset < bytes.byteLength; offset += chunkSize) {
+    binary += String.fromCharCode(
+      ...bytes.subarray(offset, offset + chunkSize)
+    )
+  }
+  return btoa(binary)
+}
+
+export async function readRemoteFileBase64Preview (
+  backend,
+  filePath,
+  { signal, maxBytes = REMOTE_ATTACHMENT_MAX_BYTES } = {}
+) {
+  const limit = boundedInteger(
+    maxBytes,
+    REMOTE_ATTACHMENT_MAX_BYTES,
+    REMOTE_ATTACHMENT_MAX_BYTES
+  )
+  throwIfAborted(signal)
+  const stat = await backend.lstat(filePath, { signal })
+  throwIfAborted(signal)
+  const size = Number(stat?.size)
+  if (!Number.isSafeInteger(size) || size < 0) {
+    throw new Error('远程文件大小无效')
+  }
+  if (size > limit) {
+    return { base64: '', truncated: true, bytesRead: 0, totalBytes: size }
+  }
+  const parts = []
+  let offset = 0
+  while (offset < size) {
+    throwIfAborted(signal)
+    const chunk = await backend.readFileChunk(filePath, {
+      offset,
+      maxBytes: Math.min(REMOTE_CONTEXT_READ_CHUNK_BYTES, size - offset),
+      signal
+    })
+    throwIfAborted(signal)
+    const bytes = base64Bytes(chunk?.base64)
+    const nextOffset = Number(chunk?.nextOffset)
+    const bytesRead = Number(chunk?.bytesRead)
+    const totalBytes = Number(chunk?.totalBytes)
+    if (!bytes.byteLength ||
+      bytes.byteLength > REMOTE_CONTEXT_READ_CHUNK_BYTES ||
+      (Number.isFinite(bytesRead) && bytesRead !== bytes.byteLength) ||
+      (Number.isFinite(totalBytes) && totalBytes !== size) ||
+      !Number.isSafeInteger(nextOffset) ||
+      nextOffset !== offset + bytes.byteLength ||
+      nextOffset > size) {
+      throw new Error('远程文件分块响应无效')
+    }
+    parts.push(bytes)
+    offset = nextOffset
+  }
+  const bytes = concatBytes(parts, size)
+  return {
+    base64: bytesBase64(bytes),
+    truncated: false,
+    bytesRead: size,
+    totalBytes: size
+  }
 }
 
 function binaryPreview (bytes) {

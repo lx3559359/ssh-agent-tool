@@ -192,8 +192,15 @@ export function isCurrentSftpEntryRemoteTask (entry, token) {
     entry.sftpRemoteRequestEpoch === token.requestEpoch
 }
 
-export async function commitSftpEntryRemoteClient (entry, token, client) {
-  if (!isCurrentSftpEntryRemoteTask(entry, token)) {
+export async function commitSftpEntryRemoteClient (
+  entry,
+  token,
+  client,
+  generation
+) {
+  if (!isCurrentSftpEntryRemoteTask(entry, token) ||
+    (generation && (!generation.accepting ||
+      !isCurrentRemoteFileGeneration(entry, generation)))) {
     if (client && client !== entry.sftp) {
       await destroySftpEntryClientOnce(entry, client)
     }

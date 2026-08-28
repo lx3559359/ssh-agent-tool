@@ -179,7 +179,7 @@ function createBackend (calls, name = 'backend', options = {}) {
   }
 }
 
-function createEntryHarness ({ acquire, replaceTimer } = {}) {
+function createEntryHarness ({ acquire, replaceTimer, client } = {}) {
   const stateWrites = []
   const entry = {
     props: {
@@ -205,6 +205,7 @@ function createEntryHarness ({ acquire, replaceTimer } = {}) {
     remoteFileOperations: new Set(),
     remoteFileUnmounted: false,
     buildTree: remote => new Map(remote.map(file => [file.id, file])),
+    updateRemoteList: async remote => remote,
     normalizeSftpError: error => error,
     isSftpVisible: () => false,
     onError: () => {},
@@ -246,8 +247,18 @@ function createEntryHarness ({ acquire, replaceTimer } = {}) {
   return importModule('src/client/components/sftp/sftp-entry-lifecycle.js')
     .then(lifecycle => {
       installClassField(entry, 'remoteList', {
+        Client: client || (async () => {
+          throw new Error('unexpected SFTP client construction')
+        }),
+        refs: { get: () => null },
+        getProxy: () => null,
+        buildSftpSafetyEndpoint: () => ({}),
+        shouldRetryUnexpectedSftpPacket: () => false,
+        reconnectSftpEntryRemote: lifecycle.reconnectSftpEntryRemote,
         beginSftpEntryRemoteTask: lifecycle.beginSftpEntryRemoteTask,
         isCurrentSftpEntryRemoteTask: lifecycle.isCurrentSftpEntryRemoteTask,
+        isCurrentRemoteFileGeneration: lifecycle.isCurrentRemoteFileGeneration,
+        initializeRemoteFileGeneration: lifecycle.initializeRemoteFileGeneration,
         commitSftpEntryRemoteClient: lifecycle.commitSftpEntryRemoteClient,
         destroySftpEntryClientOnce: lifecycle.destroySftpEntryClientOnce,
         deepCopy: value => structuredClone(value),
@@ -257,13 +268,125 @@ function createEntryHarness ({ acquire, replaceTimer } = {}) {
         preserveSftpDraftItems: (_oldRemote, remote) => remote,
         reconcileSelectedFileIds: (_oldRemote, _remote, selected) => selected,
         remoteFileOperationUnmounted,
+        remoteFileOperationStale,
         replaceSftpEntryTimer: replaceTimer || (() => 1),
         unexpectedPacketErrorDesc: 'unexpected packet',
         sftpRetryInterval: 1
       })
-      return { entry, stateWrites }
+      return { entry, stateWrites, lifecycle }
     })
 }
+
+test('remoteList rejects before constructing a client while its generation drains', async () => {
+  let clientCalls = 0
+  const { entry, lifecycle } = await createEntryHarness({
+    acquire: async () => { throw new Error('unexpected capability acquire') },
+    client: async () => {
+      clientCalls += 1
+      return null
+    }
+  })
+  entry.sftp = null
+  lifecycle.initializeRemoteFileGeneration(entry)
+  const drain = lifecycle.drainRemoteFileGeneration(entry)
+
+  await assert.rejects(
+    entry.remoteList(false, '/root', undefined, { rethrow: true }),
+    error => error?.name === 'AbortError'
+  )
+  assert.equal(clientCalls, 0)
+  await drain.promise
+})
+
+test('a client resolving after generation drain is destroyed once and never committed', async () => {
+  const candidateReady = deferred()
+  let destroys = 0
+  const candidate = {
+    connect: async () => true,
+    destroy: async () => { destroys += 1 }
+  }
+  const { entry, lifecycle } = await createEntryHarness({
+    acquire: async () => { throw new Error('unexpected capability acquire') },
+    client: async () => candidateReady.promise
+  })
+  entry.sftp = null
+  lifecycle.initializeRemoteFileGeneration(entry)
+  const listing = entry.remoteList(false, '/root', undefined, { rethrow: true })
+  const drain = lifecycle.drainRemoteFileGeneration(entry)
+  candidateReady.resolve(candidate)
+
+  await assert.rejects(listing, error => error?.name === 'AbortError')
+  await drain.promise
+  assert.equal(entry.sftp, null)
+  assert.equal(destroys, 1)
+})
+
+test('queued remoteList state updaters commit nothing after generation drain', async () => {
+  const clientReady = deferred()
+  const queued = []
+  const candidate = {
+    connect: async () => true,
+    destroy: async () => true
+  }
+  const { entry, lifecycle } = await createEntryHarness({
+    acquire: async () => { throw new Error('unexpected capability acquire') },
+    client: async () => clientReady.promise
+  })
+  entry.sftp = null
+  entry.setState = update => queued.push(update)
+  lifecycle.initializeRemoteFileGeneration(entry)
+  const listing = entry.remoteList(false, '/root', undefined, { rethrow: true })
+  assert.equal(queued.length, 1)
+  const drain = lifecycle.drainRemoteFileGeneration(entry)
+
+  assert.equal(queued[0](entry.state), null)
+  clientReady.resolve(candidate)
+  await assert.rejects(listing, error => error?.name === 'AbortError')
+  await drain.promise
+})
+
+test('old client init cannot overwrite the explicitly activated next generation', async () => {
+  const oldReady = deferred()
+  let call = 0
+  let oldDestroys = 0
+  let newDestroys = 0
+  const oldClient = {
+    connect: async () => true,
+    destroy: async () => { oldDestroys += 1 }
+  }
+  const newClient = {
+    connect: async () => true,
+    destroy: async () => { newDestroys += 1 }
+  }
+  const acquire = async () => ({
+    backend: { list: async () => [] },
+    release: async () => true
+  })
+  const { entry, lifecycle } = await createEntryHarness({
+    acquire,
+    client: async () => ++call === 1 ? oldReady.promise : newClient
+  })
+  entry.sftp = null
+  lifecycle.initializeRemoteFileGeneration(entry)
+  const oldListing = entry.remoteList(false, '/old', undefined, {
+    rethrow: true,
+    skipCompensation: true
+  })
+  const drain = lifecycle.drainRemoteFileGeneration(entry)
+  await drain.promise
+  assert.equal(lifecycle.activateRemoteFileGeneration(entry, drain.generation), true)
+  const newListing = entry.remoteList(false, '/new', undefined, {
+    rethrow: true,
+    skipCompensation: true
+  })
+  oldReady.resolve(oldClient)
+
+  await assert.rejects(oldListing, error => error?.name === 'AbortError')
+  await newListing
+  assert.equal(entry.sftp, newClient)
+  assert.equal(oldDestroys, 1)
+  assert.equal(newDestroys, 0)
+})
 
 test('root file mode routes list metadata read and create through one capability per operation', async () => {
   const calls = []
@@ -376,6 +499,58 @@ test('root AI preview stays inside one bounded capability and releases last', as
   assert.deepEqual(calls.map(call => call[0]), [
     'lstat', 'readFileChunk', 'release'
   ])
+})
+
+test('root AI binary attachment stays inside one bounded capability', async () => {
+  const calls = []
+  let released = false
+  const contents = Buffer.from('privileged attachment')
+  const acquire = async () => ({
+    backend: {
+      async lstat (filePath, options) {
+        assert.equal(released, false)
+        calls.push(['lstat', filePath, options.signal])
+        return { type: 'f', size: contents.length }
+      },
+      async readFileChunk (filePath, options) {
+        assert.equal(released, false)
+        calls.push(['readFileChunk', filePath, options.signal])
+        return {
+          base64: contents.toString('base64'),
+          nextOffset: contents.length,
+          totalBytes: contents.length
+        }
+      }
+    },
+    release: async () => {
+      released = true
+      calls.push(['release'])
+    }
+  })
+  const { entry } = await createEntryHarness({ acquire })
+  const contextReader = await importModule(
+    'src/client/components/sftp/remote-file-context-reader.js'
+  )
+  installClassField(entry, 'readRemoteFileAttachment', {
+    REMOTE_ATTACHMENT_MAX_BYTES: contextReader.REMOTE_ATTACHMENT_MAX_BYTES,
+    readRemoteFileBase64Preview: contextReader.readRemoteFileBase64Preview,
+    abortRemoteFileOperation,
+    resolve: (base, name) => `${base}/${name}`
+  })
+  const controller = new AbortController()
+  const result = await entry.readRemoteFileAttachment({
+    name: 'artifact.bin',
+    path: '/root'
+  }, { signal: controller.signal })
+
+  assert.equal(
+    Buffer.from(result.base64, 'base64').toString('utf8'),
+    'privileged attachment'
+  )
+  assert.deepEqual(calls.map(call => call[0]), [
+    'lstat', 'readFileChunk', 'release'
+  ])
+  assert.ok(calls.slice(0, 2).every(call => call[2] === controller.signal))
 })
 
 test('unmount waits for an active root AI preview before transport destroy', async () => {
@@ -1058,7 +1233,7 @@ test('unmount owns the captured remoteList transport and destroys it once', asyn
   assert.equal(calls.includes('destroy-client'), false)
   listGate.resolve()
 
-  await listing
+  await assert.rejects(listing, error => error.code === 'ABORT_ERR')
   await disposal
   assert.deepEqual(calls, ['list', 'cleanup-stage', 'destroy-client'])
   assert.equal(stateWrites.length, writesAtUnmount)

@@ -386,17 +386,18 @@ test('SFTP entry validates the latest lifecycle before transport and list writes
   const method = source.slice(start, end)
 
   assert.match(method, /beginSftpEntryRemoteTask\(this\)/)
+  assert.match(method, /const generation = initializeRemoteFileGeneration\(this\)/)
   assert.match(
     method,
-    /sftp = await Client\([\s\S]{0,300}!isCurrentSftpEntryRemoteTask\(this, task\)[\s\S]{0,160}destroySftpEntryClientOnce\(this, sftp\)/
+    /sftp = await Client\([\s\S]{0,300}candidateSftp = sftp[\s\S]{0,200}assertCurrentGeneration\(\)[\s\S]{0,160}destroyCandidate\(\)/
   )
   assert.match(
     method,
-    /await sftp\.connect\(opts\)[\s\S]{0,700}!isCurrentSftpEntryRemoteTask\(this, task\)/
+    /await sftp\.connect\(opts\)[\s\S]{0,1300}!isCurrentSftpEntryRemoteTask\(this, task\)/
   )
   assert.match(
     method,
-    /await this\.sftpList\(sftp, remotePath\)[\s\S]{0,180}commitSftpEntryRemoteClient\(this, task, sftp\)/
+    /await this\.sftpList\(sftp, remotePath\)[\s\S]{0,300}commitSftpEntryRemoteClient\([\s\S]{0,100}generation/
   )
   assert.doesNotMatch(method, /this\.sftp\s*=\s*sftp/)
   assert.match(method, /updateRemoteList\(remote, remotePath, sftp, task\)/)

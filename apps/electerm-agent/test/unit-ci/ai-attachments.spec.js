@@ -85,14 +85,15 @@ test('AI attachments build bounded context for local and SFTP files', async () =
       })
     },
     sftpRef: {
-      sftp: {
-        readFilePreview: async filePath => ({
-          content: `remote:${filePath}`,
-          binary: false,
-          truncated: false,
-          bytesRead: 30
-        })
-      }
+      readRemoteFileContext: async file => ({
+        ok: true,
+        path: `${file.path}/${file.name}`,
+        source: 'remote',
+        content: `remote:${file.path}/${file.name}`,
+        binary: false,
+        truncated: false,
+        bytesRead: 30
+      })
     }
   })
 
@@ -182,24 +183,16 @@ test('AI attachments explain continuation and archive member context', async () 
       }
     ],
     sftpRef: {
-      sftp: {
-        listArchive: async filePath => ({
-          type: 'tar.gz',
-          entries: [
-            { path: 'nginx/error.log', size: 2048 }
-          ],
-          filePath
-        }),
-        readArchiveTextEntry: async (filePath, entryPath) => ({
-          archiveType: 'tar.gz',
-          entryPath,
-          content: 'nginx bind failed',
-          binary: false,
-          bytesRead: 16,
-          hasMore: true,
-          nextOffset: 16
-        })
-      }
+      readRemoteFileContext: async file => ({
+        ok: true,
+        archiveType: 'tar.gz',
+        path: `${file.path}/${file.name}#nginx/error.log`,
+        source: 'remote',
+        content: 'nginx bind failed',
+        binary: false,
+        bytesRead: 16,
+        truncated: true
+      })
     }
   })
 
@@ -207,6 +200,103 @@ test('AI attachments explain continuation and archive member context', async () 
   assert.match(prompt, /logs\.tar\.gz#nginx\/error\.log/)
   assert.match(prompt, /nginx bind failed/)
   assert.match(prompt, /继续读取/)
+})
+
+test('all SFTP text and archive attachments use the public bounded entry route', async () => {
+  const { buildAttachmentAIContent } = await import(attachmentsUrl)
+  const names = ['notes.txt', 'bundle.zip', 'single.log.gz', 'logs.tgz']
+  const calls = []
+  const raw = {}
+  Object.defineProperty(raw, 'sftp', {
+    get () {
+      throw new Error('raw SFTP attachment access is forbidden')
+    }
+  })
+  raw.readRemoteFileContext = async (file, options) => {
+    calls.push([file.name, options])
+    return {
+      ok: true,
+      path: `/root/${file.name}`,
+      source: 'remote',
+      archiveType: file.name.endsWith('.txt') ? undefined : 'archive',
+      content: `bounded:${file.name}`,
+      binary: false,
+      truncated: false,
+      bytesRead: 10
+    }
+  }
+  const controller = new AbortController()
+  const result = await buildAttachmentAIContent({
+    attachments: names.map(name => ({
+      source: 'sftp',
+      name,
+      file: { name, path: '/root', type: 'remote', isDirectory: false }
+    })),
+    sftpRef: raw,
+    signal: controller.signal
+  })
+
+  assert.deepEqual(result.errors, [])
+  assert.equal(calls.length, names.length)
+  assert.ok(calls.every(([, options]) => options.signal === controller.signal))
+  for (const name of names) assert.match(result.prompt, new RegExp(`bounded:${name.replace('.', '\\.')}`))
+})
+
+test('SFTP binary attachments use the public bounded payload route and fail closed without it', async () => {
+  const { buildAttachmentAIContent } = await import(attachmentsUrl)
+  const originalWindow = global.window
+  const calls = []
+  global.window = {
+    pre: {
+      runGlobalAsync: async (_operation, input) => ({
+        ok: true,
+        value: {
+          kind: 'text',
+          name: input.name,
+          text: Buffer.from(input.dataBase64, 'base64').toString('utf8'),
+          truncated: false
+        }
+      })
+    }
+  }
+  try {
+    const attachment = {
+      source: 'sftp',
+      name: 'artifact.bin',
+      file: { name: 'artifact.bin', path: '/root', type: 'remote' }
+    }
+    const result = await buildAttachmentAIContent({
+      attachments: [attachment],
+      sftpRef: {
+        readRemoteFileAttachment: async (file, options) => {
+          calls.push([file, options])
+          return { base64: Buffer.from('bounded payload').toString('base64') }
+        }
+      }
+    })
+    assert.deepEqual(result.errors, [])
+    assert.match(result.prompt, /bounded payload/)
+    assert.equal(calls.length, 1)
+
+    const missing = await buildAttachmentAIContent({
+      attachments: [attachment],
+      sftpRef: { sftp: { readFileBase64Preview: async () => ({}) } }
+    })
+    assert.equal(missing.prompt, '')
+    assert.match(missing.errors[0], /安全读取/)
+  } finally {
+    global.window = originalWindow
+  }
+})
+
+test('AI attachment source never reaches through SftpEntry to raw SFTP', () => {
+  const source = fs.readFileSync(
+    path.join(root, 'src/client/components/ai/ai-attachments.js'),
+    'utf8'
+  )
+  assert.doesNotMatch(source, /sftpRef\??\.sftp/)
+  assert.match(source, /readRemoteFileContext/)
+  assert.match(source, /readRemoteFileAttachment/)
 })
 
 test('AI chat component wires local paste drag and SFTP drop attachment UI', () => {
